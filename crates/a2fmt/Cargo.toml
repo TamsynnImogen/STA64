@@ -1,0 +1,22 @@
+[package]
+name = "a2fmt"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Readers for Star Trek: Armada II's asset formats (SOD, TGA, .spr, ODF), no_std"
+license = "MIT"
+# Vendored from Armada II Refit (https://github.com/cedrichaase/armada2-refit),
+# render3d/a2fmt at 37d60079169b086dba4216fe55e05cd6015d66c0. Copyright (c) 2026
+# Cedric Haase, MIT licence (see LICENSE). Local changes: workspace membership;
+# stock test reads only A2_GAME. See VENDORED.md.
+
+[lib]
+name = "a2fmt"
+path = "src/lib.rs"
+
+[dependencies]
+libm = "0.2"
+
+# Vendored code: keep it close to upstream rather than restyling for clippy.
+[lints.clippy]
+all = { level = "allow", priority = -1 }

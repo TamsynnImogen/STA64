@@ -63,16 +63,35 @@ not where new native features go.
 
 ## Formats
 
+Every legacy format stays supported. New native content uses modern open
+formats. Where each legacy format came from:
+
+| Origin | Models | Textures |
+|---|---|---|
+| Armada II (stock) | SOD | TGA (`Textures/RGB/`) |
+| Fleet Operations | — | DDS (mostly `Textures/`) |
+| A2FOExtensions | M3D (Star Trek: Legacy), converted at load | — |
+| STA64 native | glTF / GLB | KTX2 (PNG fallback) |
+
+Lookup by bare name (as ODFs and SODs reference assets): a file in a
+higher-priority mod layer always wins. Within one layer the newest format
+wins: KTX2 > DDS > TGA > PNG, and GLB > glTF > SOD > M3D. This matches
+A2FOExtensions: an M3D in a child mod overrides a parent's SOD, but a SOD
+beside an M3D in the same mod wins.
+
 | Kind | Legacy (read) | Native (read/write) |
 |---|---|---|
 | Data/config | ODF, cfg, spr, techtree, `info.ini` | JSON5 |
-| Models | SOD | glTF/GLB (SODX deferred) |
-| Textures | TGA, DDS (incl. Borg `_b`, animated `_1.._9`) | KTX2 (PNG fallback) |
+| Models | SOD (1.4–1.93), M3D | glTF/GLB (SODX deferred) |
+| Textures | TGA (incl. colour-mapped), DDS, Borg `_b`, animated `_1.._9`, named mip chains | KTX2 (PNG fallback) |
 | Maps | BZN | JSON5 scene + glTF |
 | Archives | FPQ v2 (raw/LZO) | plain folders |
 | Audio | WAV, MP3 | OGG |
 | Video | BIK (via FFmpeg) | WebM/AV1 |
 | Scripts | FO Lua | Lua (same API, extended) |
+
+`crates/a2fmt` is vendored from Armada II Refit (MIT, see its `VENDORED.md`)
+and provides the SOD, TGA, sprite-table and ODF readers.
 
 ## Legal boundary
 

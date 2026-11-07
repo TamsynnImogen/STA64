@@ -33,7 +33,7 @@ hard-coded.
 
 | Feature | Source | STA64 system | Status |
 |---|---|---|---|
-| SOD loading, node hierarchy, animation timing | FOH, Refit `a2fmt` | `sta_sod` → Bevy scene | todo |
+| SOD loading, node hierarchy, animation timing | stock, Refit `a2fmt` | `a2fmt` + `sod_scene` → Bevy | wip |
 | Team colours, Borg `_b` textures, animated `_1.._9` | A2X `texture_variants`, `rgb_textures`, Refit | material system | todo |
 | DOT3 bump maps | A2X `amd_dot3_compat` | PBR normal maps | todo |
 | Texture variants and legacy texture paths | A2X `texture_variants`, A1 legacy textures | `sta_tex` | todo |
@@ -49,6 +49,9 @@ hard-coded.
 
 | Feature | Source | STA64 system | Status |
 |---|---|---|---|
+| **Front end = Refit's 3D menu scene**: a live map behind every menu (main view, per-campaign views with camera blends, Klingon group decloaking on its view, warp departure into the loading screen) | Refit `render3d/src/menu`, `menus/map.ini`, `ui/src/menus` | Bevy menu scene + UI panels over it; scene recipe in data | todo |
+| Refit screen layouts (main, single player, campaign/mission select, game setup, lobby, settings, saves, admiral's log, tech tree) and LCARS glass panel style | Refit `ui/src/menus/screens`, `ui/STYLE.md` | Bevy UI, per-race themes | todo |
+| Loading screen: map's own skybox backdrop, briefing, objectives, players, progress | Refit `ui/LOADING.md` | loading state | todo |
 | cfg/spr-driven HUD, three info-panel heights | FO, Refit `ui` | data-driven UI | todo |
 | Build tooltips | A2X `build_tooltips` | UI | todo |
 | Command grid layout | Refit `grid` | UI | todo |
@@ -90,10 +93,11 @@ hard-coded.
 
 | Feature | Source | STA64 system | Status |
 |---|---|---|---|
-| FO Lua mission scripting | FO, A2X `missions` | Lua (mlua) with FO API | todo |
+| FO Lua mission scripting (MMM, `mmm_loader.dll`) | FO, A2X `missions` | integrated MMM Lua runtime, see [MISSIONS.md](MISSIONS.md) | todo |
+| Stock DLL missions (`*R.drl` / `*S.dsl`) | stock | not loadable natively; Lua conversion or silent fallback | design |
 | SOL maps | A2X `sol_maps` | map loader | todo |
 | BZN maps | stock | `sta_bzn` | todo |
-| M3D | A2X `m3d` | importer | todo |
+| M3D (Star Trek: Legacy) models; child-mod M3D overrides parent SOD | A2X `m3d` (`modules/A2FOM3D`) | `sta_assets` M3D reader | todo |
 | Scene command vocabulary, event marks | Refit `Scene.asi` | headless scenario tests | todo |
 
 ## Multiplayer

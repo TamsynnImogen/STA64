@@ -29,6 +29,8 @@ into STA64 as first-class, data-driven systems instead. See
 | `sta_vfs` | Install/mod mounting: `Data` + `ParentMod` chain, FPQ archives, case-insensitive lookup | no |
 | `sta_fpq` | FPQ v2 archive reader + bounds-checked LZO1X decoder (`--example fpq` lists/extracts) | no |
 | `sta_odf` | ODF parser, `#include` resolution, typed accessors | no |
+| `a2fmt` | SOD / TGA / sprite-table / ODF readers, vendored from Armada II Refit (MIT) | no |
+| `sta_assets` | Layer-aware model/texture lookup and decoding over the VFS | no |
 | `sta_sim` | Deterministic fixed-point lockstep simulation | no |
 | `sta64` | The game: rendering, UI, audio, input, glue | yes |
 
@@ -39,8 +41,16 @@ reused by tools, and kept bit-identical across platforms.
 
 ```sh
 cargo test --workspace --exclude sta64   # fast, no Bevy
-cargo run -p sta64 -- --install-root "/path/to/Fleet Ops" --mod "Fleet Ops 4.0"
+cargo run -p sta64 -- --install-root "/path/to/Fleet Ops" --mod "Fleet Ops 4.0" [--view fdefiant]
 ```
+
+For now `sta64` opens a model viewer over every model the mounted install
+exposes. Left/Right steps through models, T cycles team colour, left-drag
+orbits, right-drag pans, the wheel zooms and R resets the view.
+
+Optional checks against real installs (skipped when unset):
+`A2_GAME=<Armada II dir>` for `a2fmt`, `STA64_TEST_INSTALL` + `STA64_TEST_MOD`
+for `sta_vfs`/`sta_assets`, `STA64_TEST_FPQ=<file.fpq>` for `sta_fpq`.
 
 The toolchain is pinned in `rust-toolchain.toml`. Linux builds need the usual
 Bevy system packages (`alsa-lib-devel`, `systemd-devel`/`libudev`, Wayland/X11
@@ -50,4 +60,5 @@ headers).
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — engine structure and rules
 - [docs/NATIVE_FEATURES.md](docs/NATIVE_FEATURES.md) — FleetOpsHook / A2FOExtensions / Refit → native systems
+- [docs/MISSIONS.md](docs/MISSIONS.md) — mission scripts without DLLs (integrated MMM Lua)
 - [docs/ROADMAP.md](docs/ROADMAP.md) — milestones

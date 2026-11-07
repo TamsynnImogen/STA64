@@ -1,0 +1,10 @@
+[package]
+name = "sta_assets"
+description = "Asset lookup and decoding (SOD, TGA, DDS, glTF, KTX2) over the STA64 VFS"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+a2fmt.workspace = true
+sta_vfs.workspace = true
