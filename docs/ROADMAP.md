@@ -8,7 +8,7 @@
 - [x] `sta64`: Bevy window, mounts the install and reports what it found
 
 ## M1: See the content
-- `sta_fpq` (FPQ v2 archives) mounted in the VFS
+- [x] `sta_fpq` (FPQ v2 archives) mounted in the VFS — byte-identical to liblzo2 on Sigma's 2,872-entry `ODF.fpq`
 - ODF index across all ODF folders and A1 `addon/`, with duplicate warnings
 - `sta_tex`: TGA/DDS (+ Borg/animated variants), KTX2
 - `sta_sod`: SOD → Bevy mesh/scene, node animation

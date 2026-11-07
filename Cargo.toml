@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/sta_vfs", "crates/sta_odf", "crates/sta_sim", "crates/sta64"]
+members = ["crates/sta_vfs", "crates/sta_fpq", "crates/sta_odf", "crates/sta_sim", "crates/sta64"]
 
 [workspace.package]
 version = "0.1.0"
@@ -11,6 +11,7 @@ repository = "https://github.com/TamsynnImogen/STA64"
 
 [workspace.dependencies]
 sta_vfs = { path = "crates/sta_vfs" }
+sta_fpq = { path = "crates/sta_fpq" }
 sta_odf = { path = "crates/sta_odf" }
 sta_sim = { path = "crates/sta_sim" }
 bevy = "0.20.1"

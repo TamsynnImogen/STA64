@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=STA64 — Fleet Operations
+Comment=Native Armada-compatible space RTS engine
+Exec=sta64
+Icon=sta64
+StartupWMClass=sta64
+Terminal=false
+Categories=Game;StrategyGame;

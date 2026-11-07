@@ -19,6 +19,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: rustup show active-toolchain
       - run: cargo test --workspace --exclude sta64
+      - run: cargo clippy --workspace --exclude sta64 --all-targets -- -D warnings
 
   game:
     name: sta64 (${{ matrix.os }})

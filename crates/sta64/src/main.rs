@@ -48,10 +48,14 @@ fn mount(cfg: &LaunchConfig) -> String {
         Ok(vfs) => {
             let chain: Vec<_> = vfs.layers().iter().map(|l| l.name()).collect();
             let odfs = vfs.list("odf").iter().filter(|p| p.ends_with(".odf")).count();
+            let archives: Vec<_> = vfs.layers().iter().flat_map(|l| &l.archives).collect();
+            let packed: usize = archives.iter().map(|(_, f)| f.len()).sum();
             format!(
-                "Install: {}\nMounted: {}\n{} ODF files visible",
+                "Install: {}\nMounted: {}\n{} FPQ archives ({} entries)\n{} ODF files visible",
                 root.display(),
                 chain.join(" -> "),
+                archives.len(),
+                packed,
                 odfs
             )
         }
@@ -81,6 +85,9 @@ fn main() {
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "STA64".into(),
+                // Wayland app_id / X11 WM_CLASS: lets the desktop match
+                // sta64.desktop and show the STA64 icon.
+                name: Some("sta64".into()),
                 ..default()
             }),
             ..default()

@@ -1,0 +1,9 @@
+[package]
+name = "sta_fpq"
+description = "Fleet Operations FPQ v2 archive reader with a safe LZO1X decoder"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true

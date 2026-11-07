@@ -26,7 +26,8 @@ into STA64 as first-class, data-driven systems instead. See
 
 | Crate | Purpose | Bevy? |
 |---|---|---|
-| `sta_vfs` | Install/mod mounting: `Data` + `ParentMod` chain, case-insensitive lookup, FPQ later | no |
+| `sta_vfs` | Install/mod mounting: `Data` + `ParentMod` chain, FPQ archives, case-insensitive lookup | no |
+| `sta_fpq` | FPQ v2 archive reader + bounds-checked LZO1X decoder (`--example fpq` lists/extracts) | no |
 | `sta_odf` | ODF parser, `#include` resolution, typed accessors | no |
 | `sta_sim` | Deterministic fixed-point lockstep simulation | no |
 | `sta64` | The game: rendering, UI, audio, input, glue | yes |

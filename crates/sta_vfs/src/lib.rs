@@ -5,7 +5,9 @@
 //! every platform, because Armada-era content mixes case freely and was only
 //! ever tested on Windows.
 //!
-//! FPQ archive layers are planned; the `Layer` enum is where they will plug in.
+//! Each layer is a directory plus any `*.fpq` archives at its root. An archive
+//! named `odf.fpq` is mounted under `odf/`. Inside one layer, loose files win
+//! over archive entries, matching Fleet Operations.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -19,6 +21,11 @@ pub enum VfsError {
     ModNotFound(String),
     #[error("ParentMod cycle: {0}")]
     ParentCycle(String),
+    #[error("archive {path}: {source}")]
+    Archive {
+        path: PathBuf,
+        source: sta_fpq::FpqError,
+    },
     #[error("io error at {path}: {source}")]
     Io {
         path: PathBuf,
@@ -26,19 +33,34 @@ pub enum VfsError {
     },
 }
 
-/// One mounted source of files.
-#[derive(Debug, Clone)]
-pub enum Layer {
-    /// A loose directory on disk.
-    Dir { name: String, root: PathBuf },
+/// One mounted layer: a directory and the FPQ archives at its root.
+pub struct Layer {
+    pub name: String,
+    pub root: PathBuf,
+    pub archives: Vec<(PathBuf, sta_fpq::Fpq)>,
 }
 
 impl Layer {
     pub fn name(&self) -> &str {
-        match self {
-            Layer::Dir { name, .. } => name,
-        }
+        &self.name
     }
+}
+
+impl std::fmt::Debug for Layer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Layer")
+            .field("name", &self.name)
+            .field("root", &self.root)
+            .field("archives", &self.archives.iter().map(|(p, _)| p).collect::<Vec<_>>())
+            .finish()
+    }
+}
+
+/// Where a virtual file physically lives.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Source {
+    Loose(PathBuf),
+    Packed { archive: usize, entry: usize },
 }
 
 /// Normalise a virtual path: forward slashes, lower case, no leading slash.
@@ -51,8 +73,8 @@ pub fn normalize(path: &str) -> String {
 #[derive(Debug, Default)]
 pub struct Vfs {
     layers: Vec<Layer>,
-    /// Per layer: normalised virtual path -> real path. Built at mount time.
-    index: Vec<HashMap<String, PathBuf>>,
+    /// Per layer: normalised virtual path -> source. Built at mount time.
+    index: Vec<HashMap<String, Source>>,
 }
 
 impl Vfs {
@@ -73,11 +95,39 @@ impl Vfs {
         Ok(vfs)
     }
 
-    /// Append a lower-priority directory layer.
+    /// Append a lower-priority layer: a directory plus its root `*.fpq` archives.
     pub fn push_dir(&mut self, name: String, root: PathBuf) -> Result<(), VfsError> {
         let mut map = HashMap::new();
         index_dir(&root, &root, &mut map)?;
-        self.layers.push(Layer::Dir { name, root });
+
+        let mut fpqs: Vec<PathBuf> = fs::read_dir(&root)
+            .map_err(|source| VfsError::Io { path: root.clone(), source })?
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_file() && p.extension().is_some_and(|x| x.eq_ignore_ascii_case("fpq")))
+            .collect();
+        fpqs.sort();
+        let mut archives = Vec::new();
+        for path in fpqs {
+            let fpq = sta_fpq::Fpq::open(&path).map_err(|source| VfsError::Archive {
+                path: path.clone(),
+                source,
+            })?;
+            let stem = path.file_stem().unwrap_or_default().to_string_lossy().to_ascii_lowercase();
+            let archive = archives.len();
+            for entry in 0..fpq.len() {
+                let rel = fpq.path(entry).map_err(|source| VfsError::Archive {
+                    path: path.clone(),
+                    source,
+                })?;
+                let key = normalize(&format!("{stem}/{rel}"));
+                // Loose files were indexed first and keep priority.
+                map.entry(key).or_insert(Source::Packed { archive, entry });
+            }
+            archives.push((path, fpq));
+        }
+
+        self.layers.push(Layer { name, root, archives });
         self.index.push(map);
         Ok(())
     }
@@ -86,24 +136,31 @@ impl Vfs {
         &self.layers
     }
 
-    /// Resolve a virtual path to the highest-priority real file.
-    pub fn resolve(&self, path: &str) -> Option<&Path> {
+    /// The highest-priority source for `path`, with its layer index.
+    pub fn resolve(&self, path: &str) -> Option<(usize, &Source)> {
         let key = normalize(path);
-        self.index.iter().find_map(|m| m.get(&key).map(PathBuf::as_path))
+        self.index.iter().enumerate().find_map(|(i, m)| m.get(&key).map(|s| (i, s)))
     }
 
     /// All layers providing `path`, highest priority first (for override diagnostics).
-    pub fn resolve_all(&self, path: &str) -> Vec<(&str, &Path)> {
+    pub fn resolve_all(&self, path: &str) -> Vec<(&str, &Source)> {
         let key = normalize(path);
         self.layers
             .iter()
             .zip(&self.index)
-            .filter_map(|(l, m)| m.get(&key).map(|p| (l.name(), p.as_path())))
+            .filter_map(|(l, m)| m.get(&key).map(|s| (l.name(), s)))
             .collect()
     }
 
     pub fn read(&self, path: &str) -> Option<std::io::Result<Vec<u8>>> {
-        self.resolve(path).map(fs::read)
+        let (layer, source) = self.resolve(path)?;
+        Some(match source {
+            Source::Loose(p) => fs::read(p),
+            Source::Packed { archive, entry } => self.layers[layer].archives[*archive]
+                .1
+                .read(*entry)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+        })
     }
 
     /// Every visible virtual path under `dir` (after overrides), sorted.
@@ -158,11 +215,11 @@ pub fn parent_mod(ini: &str) -> Option<String> {
         if !in_mod {
             continue;
         }
-        if let Some((k, v)) = line.split_once('=') {
-            if k.trim().eq_ignore_ascii_case("ParentMod") {
-                let v = v.trim().trim_matches('"').trim();
-                return (!v.is_empty()).then(|| v.to_owned());
-            }
+        if let Some((k, v)) = line.split_once('=')
+            && k.trim().eq_ignore_ascii_case("ParentMod")
+        {
+            let v = v.trim().trim_matches('"').trim();
+            return (!v.is_empty()).then(|| v.to_owned());
         }
     }
     None
@@ -181,7 +238,7 @@ fn find_child_ci(dir: &Path, name: &str) -> Option<PathBuf> {
     })
 }
 
-fn index_dir(root: &Path, dir: &Path, out: &mut HashMap<String, PathBuf>) -> Result<(), VfsError> {
+fn index_dir(root: &Path, dir: &Path, out: &mut HashMap<String, Source>) -> Result<(), VfsError> {
     let rd = fs::read_dir(dir).map_err(|source| VfsError::Io {
         path: dir.to_path_buf(),
         source,
@@ -201,7 +258,7 @@ fn index_dir(root: &Path, dir: &Path, out: &mut HashMap<String, PathBuf>) -> Res
         } else if let Ok(rel) = path.strip_prefix(root) {
             let key = normalize(&rel.to_string_lossy());
             // Within one layer, keep the first spelling encountered.
-            out.entry(key).or_insert(path);
+            out.entry(key).or_insert(Source::Loose(path));
         }
     }
     Ok(())
@@ -259,5 +316,25 @@ mod tests {
             Vfs::mount_install(&root, Some("A")),
             Err(VfsError::ParentCycle(_))
         ));
+    }
+
+    /// Mounts a real install when STA64_TEST_INSTALL / STA64_TEST_MOD are set.
+    #[test]
+    fn real_install_if_available() {
+        let (Ok(root), Ok(m)) = (std::env::var("STA64_TEST_INSTALL"), std::env::var("STA64_TEST_MOD")) else {
+            return;
+        };
+        let vfs = Vfs::mount_install(Path::new(&root), Some(&m)).unwrap();
+        let packed: usize = vfs.layers().iter().flat_map(|l| &l.archives).map(|(_, f)| f.len()).sum();
+        let odfs: Vec<_> = vfs.list("odf").into_iter().filter(|p| p.ends_with(".odf")).collect();
+        let mut from_archive = 0;
+        for p in &odfs {
+            if matches!(vfs.resolve(p), Some((_, Source::Packed { .. }))) {
+                from_archive += 1;
+                assert!(!vfs.read(p).unwrap().unwrap().is_empty(), "{p}");
+            }
+        }
+        eprintln!("{} layers, {packed} packed entries, {} odfs, {from_archive} served from FPQ", vfs.layers().len(), odfs.len());
+        assert!(packed == 0 || from_archive > 0);
     }
 }

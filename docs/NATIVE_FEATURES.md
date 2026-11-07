@@ -21,7 +21,7 @@ hard-coded.
 |---|---|---|---|---|
 | Mod chain (`info.ini` `[Mod]`, ParentMod, standalone) | FOH | `sta_vfs` | all | wip |
 | 28 virtual directories, AppData/install/FPQ precedence | FOH | `sta_vfs` | all | todo |
-| FPQ v2 archives (raw + LZO, 3 filename hashes) | FOH | `sta_fpq` | all | todo |
+| FPQ v2 archives (raw + LZO, 3 filename hashes) | FOH | `sta_fpq` | all | done |
 | Recursive ODF folders | A2X `odf_variants`, `info_ini` | `sta_vfs` ODF index | all | todo |
 | ODF variants | A2X `odf_variants` | content DB | all | todo |
 | Large memory and object limits | FOH (RAM patches) | native 64-bit, no fixed pools | all | by design |
