@@ -1,0 +1,10 @@
+[package]
+name = "sta_sim"
+description = "Deterministic, renderer-independent STA64 game simulation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Deliberately no Bevy dependency: the simulation must run headless, in tests,
+# on dedicated servers, and stay bit-identical across platforms for lockstep.
+[dependencies]

@@ -1,0 +1,28 @@
+[workspace]
+resolver = "3"
+members = ["crates/sta_vfs", "crates/sta_odf", "crates/sta_sim", "crates/sta64"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97.1"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/TamsynnImogen/STA64"
+
+[workspace.dependencies]
+sta_vfs = { path = "crates/sta_vfs" }
+sta_odf = { path = "crates/sta_odf" }
+sta_sim = { path = "crates/sta_sim" }
+bevy = "0.20.1"
+thiserror = "2"
+
+# Bevy is slow unoptimised; optimise dependencies even in dev builds.
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

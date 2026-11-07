@@ -1,0 +1,16 @@
+[package]
+name = "sta64"
+description = "STA64 — native 64-bit Star Trek Armada II / Fleet Operations engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bevy.workspace = true
+sta_vfs.workspace = true
+sta_odf.workspace = true
+sta_sim.workspace = true
+
+[features]
+# Faster incremental linking during development: `cargo run --features dev`.
+dev = ["bevy/dynamic_linking"]

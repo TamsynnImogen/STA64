@@ -1,0 +1,9 @@
+[package]
+name = "sta_vfs"
+description = "Layered virtual filesystem for Armada II / Fleet Operations installs and STA64 mods"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true

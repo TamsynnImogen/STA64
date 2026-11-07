@@ -1,0 +1,9 @@
+[package]
+name = "sta_odf"
+description = "Armada / Fleet Operations ODF parser with #include resolution"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
