@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use sta_content::{ContentDb, MoveStats, Region, StartPos};
 use sta_core::{ContentKey, EntityId, Fixed, PlayerId, SEAM_REV, TeamId, Vec3};
 
+use crate::combat::weapons::{Weapons, WeaponsRec};
 use crate::movement::{Course, Movement};
 use crate::view::UnitFlags;
 use crate::world::{Entities, Entity, EntityKind, Shields, Table};
@@ -31,7 +32,7 @@ use crate::{Rng, Sim, SimEvent};
 
 pub const MAGIC: [u8; 4] = *b"STAS";
 /// Bumped whenever [`Body`] (or anything in it) changes layout.
-pub const FORMAT_VERSION: u16 = 1;
+pub const FORMAT_VERSION: u16 = 2;
 
 const HEADER: usize = 4 + 2 + 4 + 8;
 
@@ -123,6 +124,8 @@ struct Body {
     events: Vec<SimEvent>,
     /// SIM-02 courses and formations.
     courses: Vec<(EntityId, CourseRec)>,
+    /// SIM-04 mounts, attack orders and projectiles in flight.
+    weapons: WeaponsRec,
 }
 
 fn kind_from(b: u8) -> Option<EntityKind> {
@@ -229,6 +232,7 @@ impl Sim {
                     )
                 })
                 .collect(),
+            weapons: self.weapons.to_rec(),
         };
         let mut out = Vec::new();
         out.extend_from_slice(&MAGIC);
@@ -290,6 +294,7 @@ impl Sim {
             })
             .collect();
         let movement = Movement::from_rows(courses).ok_or_else(|| corrupt("courses"))?;
+        let weapons = Weapons::from_rec(b.weapons).ok_or_else(|| corrupt("weapons"))?;
         Ok(Sim {
             tick: b.tick,
             rng: Rng(b.rng),
@@ -301,6 +306,7 @@ impl Sim {
             regions: b.regions,
             events: b.events,
             movement,
+            weapons,
         })
     }
 }
@@ -310,6 +316,7 @@ mod tests {
     use super::*;
     use crate::WorldSource;
     use crate::command::{Command, CommandKind, Order};
+    use sta_core::TeamId;
 
     fn v(x: i32, y: i32, z: i32) -> Vec3 {
         Vec3 {
@@ -392,6 +399,65 @@ mod tests {
         }
         assert_eq!(loaded.digest(), live.digest());
         assert_eq!(loaded.tick, live.tick);
+    }
+
+    /// A cruiser attacking a frigate: a torpedo is in flight at the snapshot.
+    #[test]
+    fn mid_combat_snapshot_continues_identically() {
+        use crate::setup::{Control, GameOptions, GameSetup, PlayerSetup};
+        let seat = |id| PlayerSetup {
+            id: PlayerId(id),
+            team: TeamId(id),
+            race: "fx".into(),
+            control: Control::Idle,
+        };
+        let db = sta_content::fake::db();
+        let (cruiser, frigate) = (db.key("fx_cruiser").unwrap(), db.key("fx_frigate").unwrap());
+        let db = Arc::new(db);
+        let setup = GameSetup {
+            seed: 7,
+            map: Arc::new(sta_content::MapDef::empty()),
+            content: Arc::clone(&db),
+            players: vec![seat(1), seat(2)],
+            options: GameOptions::default(),
+        };
+        let mut live = Sim::from_setup(&setup);
+        let ahead = (Fixed::ZERO, Fixed::ONE);
+        let s = live
+            .spawn_def(cruiser, PlayerId(1), v(2000, 0, 2000), ahead)
+            .unwrap();
+        let t = live
+            .spawn_def(frigate, PlayerId(2), v(2000, 0, 2350), ahead)
+            .unwrap();
+        let attack = Command {
+            player: PlayerId(1),
+            seq: 0,
+            kind: CommandKind::Order(Order::Attack {
+                units: vec![s],
+                target: t,
+            }),
+        };
+        live.step(&[attack]);
+        for _ in 0..5 {
+            live.step(&[]);
+        }
+        assert!(
+            live.weapons.shots_in_flight() > 0,
+            "snapshot should catch a shot in flight"
+        );
+        assert_eq!(live.weapons.attack_of(s), Some(t));
+        let mut loaded = Sim::from_snapshot(&live.snapshot(), Some(Arc::clone(&db))).unwrap();
+        assert_eq!(loaded.digest(), live.digest());
+        let mut events = 0;
+        for tick in 0..300 {
+            let a = live.step(&[]);
+            let b = loaded.step(&[]);
+            assert_eq!(a.view.digest, b.view.digest, "tick {tick}");
+            assert_eq!(a.events, b.events, "tick {tick}");
+            events += a.events.len();
+        }
+        assert!(events > 0, "combat should produce events");
+        assert_eq!(loaded.snapshot(), live.snapshot());
     }
 
     #[test]
