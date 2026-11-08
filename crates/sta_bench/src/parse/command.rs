@@ -188,6 +188,11 @@ pub enum BenchCommand {
         team: i32,
     },
     Kill(String),
+    /// `team <name> <team>`: hand an object to another team.
+    Team {
+        name: String,
+        team: i32,
+    },
     Damage {
         name: String,
         amount: f64,
@@ -528,6 +533,13 @@ fn parse_words(w: &[&str], text: &str) -> Result<BenchCommand, String> {
                     .transpose()?
                     .unwrap_or(0.0),
                 team: a.get(6).map(|s| int(s, "team")).transpose()?.unwrap_or(1),
+            }
+        }
+        "team" => {
+            arity(a, 2, 2, "team <name> <team>")?;
+            BenchCommand::Team {
+                name: a[0].to_owned(),
+                team: int(a[1], "team")?,
             }
         }
         "kill" => {
@@ -894,6 +906,13 @@ mod tests {
             }
         );
         assert_eq!(cmd("kill sov"), BenchCommand::Kill("sov".into()));
+        assert_eq!(
+            cmd("team yard2 2"),
+            BenchCommand::Team {
+                name: "yard2".into(),
+                team: 2
+            }
+        );
         assert_eq!(
             cmd("damage sov 50.5"),
             BenchCommand::Damage {
