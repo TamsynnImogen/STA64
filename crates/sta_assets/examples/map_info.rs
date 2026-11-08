@@ -35,7 +35,7 @@ fn main() {
     }
     let mut v: Vec<_> = by.into_iter().collect();
     v.sort_by_key(|e| std::cmp::Reverse(e.1 .0));
-    for (k, (n, class, keys)) in v.iter().take(40) {
+    for (k, (n, class, keys)) in v.iter() {
         let sod = sta_assets::find_model(&vfs, k).map(|x| x.0).unwrap_or_default();
         println!("{n:5} {k:28} {class:18} sod={sod:28} {}", &keys[..keys.len().min(110)]);
     }

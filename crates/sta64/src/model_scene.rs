@@ -95,6 +95,9 @@ fn blend(group: &Group) -> (AlphaMode, bool) {
         "additive" | "wormhole" => (AlphaMode::Add, true),
         "alphathreshold" => (AlphaMode::Mask(0.5), false),
         "translucent" | "alpha" | "transparent" => (AlphaMode::Blend, false),
+        // FO's planet SODs: a cloud shell over the ground sphere, blended by the
+        // texture's alpha (mostly clear) and lit, as the engine's planet shells are.
+        "atmosphere" => (AlphaMode::Blend, false),
         _ => (AlphaMode::Opaque, false),
     }
 }
@@ -536,6 +539,15 @@ mod tests {
         let n = sta_assets::pixels::height_to_normal(&img);
         let i = ((3 * 8 + 3) * 4) as usize;
         [n.pixels[i], n.pixels[i + 1], n.pixels[i + 2]]
+    }
+
+    #[test]
+    fn planet_atmosphere_shells_are_see_through() {
+        let g = |b: &str| Group { material: String::new(), blend: b.into(), maps: Default::default(), faces: vec![] };
+        // FO's planet SODs: the cloud shell over the ground must not hide it.
+        assert!(matches!(blend(&g("atmosphere")), (AlphaMode::Blend, false)));
+        assert!(matches!(blend(&g("default")), (AlphaMode::Opaque, false)));
+        assert!(matches!(blend(&g("Additive")), (AlphaMode::Add, true)));
     }
 
     #[test]
