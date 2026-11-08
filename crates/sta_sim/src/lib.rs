@@ -29,6 +29,7 @@ pub mod fake;
 pub mod movement;
 pub mod replay;
 pub mod setup;
+pub mod snapshot;
 pub mod sensors;
 pub mod source;
 pub mod spatial;
