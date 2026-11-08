@@ -16,7 +16,8 @@
 //!    built-in folders (`odf/system` for FO; `commands`, `other`, `ships`,
 //!    `special_weapons`, `stations`, `weapons` for Armada II), then any other
 //!    folder.
-//! 3. Loose before packed, then path order, so the pick is deterministic.
+//! 3. Loose before packed (FPQ or A1 ZFS), then path order, so the pick is
+//!    deterministic.
 //!
 //! Two files of the same name in one root are ambiguous and give a
 //! [`Warning`]; a child overriding a parent is normal and does not.
@@ -100,7 +101,7 @@ impl OdfIndex {
             let rank = folder_rank(&path);
             for (layer_name, source) in vfs.resolve_all(&path) {
                 let Some(&layer) = layer_of.get(layer_name) else { continue };
-                let packed = matches!(source, Source::Packed { .. });
+                let packed = !matches!(source, Source::Loose(_));
                 let entry = OdfEntry { path: path.clone(), layer };
                 found.entry(stem.clone()).or_default().push(((layer, rank, packed, path.clone()), entry));
             }
@@ -111,10 +112,13 @@ impl OdfIndex {
         for (stem, mut all) in found {
             all.sort_by(|a, b| a.0.cmp(&b.0));
             // Distinct files per root; a loose file over its own packed copy is one.
+            // So is an `addon/` file over a packed copy: patching the archives
+            // (A1's `assets.zfs`) is what `addon/` is for.
             let mut by_layer: BTreeMap<usize, Vec<&str>> = BTreeMap::new();
-            for (_, e) in &all {
+            for ((_, rank, packed, _), e) in &all {
                 let paths = by_layer.entry(e.layer).or_default();
-                if !paths.iter().any(|p| odf_rel(p) == odf_rel(&e.path)) {
+                let patched = *packed && paths.first().is_some_and(|p| folder_rank(p) == 0) && *rank > 0;
+                if !patched && !paths.iter().any(|p| odf_rel(p) == odf_rel(&e.path)) {
                     paths.push(&e.path);
                 }
             }
@@ -156,10 +160,7 @@ impl OdfIndex {
     pub fn read(vfs: &Vfs, entry: &OdfEntry) -> Option<Vec<u8>> {
         let layer = vfs.layers().get(entry.layer)?;
         let (_, source) = vfs.resolve_all(&entry.path).into_iter().find(|(n, _)| *n == layer.name())?;
-        match source {
-            Source::Loose(p) => std::fs::read(p).ok(),
-            Source::Packed { archive, entry } => layer.archives.get(*archive)?.1.read(*entry).ok(),
-        }
+        vfs.read_from(entry.layer, source).ok()
     }
 
     /// Text of `name`'s `version`-th file, for `sta_odf::resolve_layered`.

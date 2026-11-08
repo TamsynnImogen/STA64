@@ -5,13 +5,18 @@
 //! every platform, because Armada-era content mixes case freely and was only
 //! ever tested on Windows.
 //!
-//! Each layer is a directory plus any `*.fpq` archives at its root. An archive
-//! named `odf.fpq` is mounted under `odf/`. Inside one layer, loose files win
-//! over archive entries, matching Fleet Operations.
+//! Each layer is a directory plus any `*.fpq` and Armada I `*.zfs` archives at
+//! its root. An archive named `odf.fpq` is mounted under `odf/`. ZFS archives
+//! have no folders; their entries mount where Armada II keeps each type:
+//! `.odf` under `odf/`, `.tt` under `techtree/`, anything else at the root.
+//! Inside one layer, loose files win over FPQ entries, which win over ZFS
+//! entries, matching Fleet Operations for FPQ.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+
+pub mod zfs;
 
 #[derive(Debug, thiserror::Error)]
 pub enum VfsError {
@@ -26,6 +31,11 @@ pub enum VfsError {
         path: PathBuf,
         source: sta_fpq::FpqError,
     },
+    #[error("archive {path}: {source}")]
+    Zfs {
+        path: PathBuf,
+        source: zfs::ZfsError,
+    },
     #[error("io error at {path}: {source}")]
     Io {
         path: PathBuf,
@@ -33,11 +43,12 @@ pub enum VfsError {
     },
 }
 
-/// One mounted layer: a directory and the FPQ archives at its root.
+/// One mounted layer: a directory and the FPQ and ZFS archives at its root.
 pub struct Layer {
     pub name: String,
     pub root: PathBuf,
     pub archives: Vec<(PathBuf, sta_fpq::Fpq)>,
+    pub zfs: Vec<(PathBuf, zfs::Zfs)>,
 }
 
 impl Layer {
@@ -52,6 +63,7 @@ impl std::fmt::Debug for Layer {
             .field("name", &self.name)
             .field("root", &self.root)
             .field("archives", &self.archives.iter().map(|(p, _)| p).collect::<Vec<_>>())
+            .field("zfs", &self.zfs.iter().map(|(p, _)| p).collect::<Vec<_>>())
             .finish()
     }
 }
@@ -60,7 +72,21 @@ impl std::fmt::Debug for Layer {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Source {
     Loose(PathBuf),
+    /// An entry of the layer's `archives[archive]` (FPQ).
     Packed { archive: usize, entry: usize },
+    /// An entry of the layer's `zfs[archive]` (Armada I).
+    Zfs { archive: usize, entry: usize },
+}
+
+/// Where a ZFS entry's flat name mounts (lower-cased): Armada II's folder for
+/// its type.
+fn zfs_mount_path(name: &str) -> String {
+    let lower = name.to_ascii_lowercase();
+    match lower.rsplit_once('.').map(|(_, e)| e) {
+        Some("odf") => format!("odf/{lower}"),
+        Some("tt") => format!("techtree/{lower}"),
+        _ => lower,
+    }
 }
 
 /// Normalise a virtual path: forward slashes, lower case, no leading slash.
@@ -127,7 +153,25 @@ impl Vfs {
             archives.push((path, fpq));
         }
 
-        self.layers.push(Layer { name, root, archives });
+        let mut zfs_paths: Vec<PathBuf> = fs::read_dir(&root)
+            .map_err(|source| VfsError::Io { path: root.clone(), source })?
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_file() && p.extension().is_some_and(|x| x.eq_ignore_ascii_case("zfs")))
+            .collect();
+        zfs_paths.sort();
+        let mut zfs_archives = Vec::new();
+        for path in zfs_paths {
+            let z = zfs::Zfs::open(&path).map_err(|source| VfsError::Zfs { path: path.clone(), source })?;
+            let archive = zfs_archives.len();
+            for entry in 0..z.len() {
+                // Loose files and FPQ entries were indexed first and keep priority.
+                map.entry(zfs_mount_path(&z.entry(entry).name)).or_insert(Source::Zfs { archive, entry });
+            }
+            zfs_archives.push((path, z));
+        }
+
+        self.layers.push(Layer { name, root, archives, zfs: zfs_archives });
         self.index.push(map);
         Ok(())
     }
@@ -154,13 +198,30 @@ impl Vfs {
 
     pub fn read(&self, path: &str) -> Option<std::io::Result<Vec<u8>>> {
         let (layer, source) = self.resolve(path)?;
-        Some(match source {
+        Some(self.read_from(layer, source))
+    }
+
+    /// Read one source of layer `layer` (as [`Vfs::resolve`] and
+    /// [`Vfs::resolve_all`] hand them out), whichever layer wins its path.
+    pub fn read_from(&self, layer: usize, source: &Source) -> std::io::Result<Vec<u8>> {
+        let invalid = |e: String| std::io::Error::new(std::io::ErrorKind::InvalidData, e);
+        let l = self.layers.get(layer).ok_or_else(|| invalid(format!("no layer {layer}")))?;
+        match source {
             Source::Loose(p) => fs::read(p),
-            Source::Packed { archive, entry } => self.layers[layer].archives[*archive]
-                .1
-                .read(*entry)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
-        })
+            Source::Packed { archive, entry } => {
+                let (_, fpq) = l.archives.get(*archive).ok_or_else(|| invalid(format!("no archive {archive}")))?;
+                fpq.read(*entry).map_err(|e| invalid(e.to_string()))
+            }
+            Source::Zfs { archive, entry } => {
+                let (_, z) = l.zfs.get(*archive).ok_or_else(|| invalid(format!("no zfs {archive}")))?;
+                z.read(*entry).map_err(|e| invalid(e.to_string()))
+            }
+        }
+    }
+
+    /// Index of the layer named `name` (layer names are unique).
+    pub fn layer_index(&self, name: &str) -> Option<usize> {
+        self.layers.iter().position(|l| l.name == name)
     }
 
     /// Every visible virtual path under `dir` (after overrides), sorted.
@@ -278,6 +339,31 @@ mod tests {
     fn write(p: PathBuf, s: &str) {
         fs::create_dir_all(p.parent().unwrap()).unwrap();
         fs::write(p, s).unwrap();
+    }
+
+    #[test]
+    fn zfs_entries_mount_by_type_below_loose_files() {
+        let root = tmp("zfs");
+        let zfs = crate::zfs::tests::build(
+            &[("Fed.odf", b"classLabel = \"craft\""), ("borg4.tt", b"bbase.odf 0"), ("b1ob1.txt", b"OBJ"), ("over.odf", b"zfs")],
+            0x9466_279b,
+            100,
+        );
+        fs::write(root.join("assets.zfs"), zfs).unwrap();
+        write(root.join("odf/over.odf"), "loose");
+        let mut vfs = Vfs::default();
+        vfs.push_dir("A1".into(), root.clone()).unwrap();
+        assert_eq!(vfs.read("odf/fed.odf").unwrap().unwrap(), b"classLabel = \"craft\"");
+        assert_eq!(vfs.read("techtree/BORG4.tt").unwrap().unwrap(), b"bbase.odf 0");
+        assert_eq!(vfs.read("b1ob1.txt").unwrap().unwrap(), b"OBJ");
+        assert_eq!(vfs.read("odf/over.odf").unwrap().unwrap(), b"loose");
+        assert!(matches!(vfs.resolve("odf/fed.odf"), Some((0, Source::Zfs { archive: 0, entry: 0 }))));
+        let all = vfs.resolve_all("odf/over.odf");
+        assert_eq!(all.len(), 1, "one source per layer and path");
+        assert_eq!(vfs.list("odf"), ["odf/fed.odf", "odf/over.odf"]);
+        let (_, src) = vfs.resolve("techtree/borg4.tt").unwrap();
+        assert_eq!(vfs.read_from(vfs.layer_index("A1").unwrap(), src).unwrap(), b"bbase.odf 0");
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

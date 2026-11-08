@@ -9,13 +9,7 @@ use sta_odf::{OdfError, resolve_layered};
 use sta_vfs::{Source, Vfs};
 
 fn read(vfs: &Vfs, layer: &str, src: &Source) -> Option<Vec<u8>> {
-    match src {
-        Source::Loose(p) => std::fs::read(p).ok(),
-        Source::Packed { archive, entry } => {
-            let l = vfs.layers().iter().find(|l| l.name() == layer)?;
-            l.archives[*archive].1.read(*entry).ok()
-        }
-    }
+    vfs.read_from(vfs.layer_index(layer)?, src).ok()
 }
 
 #[test]
