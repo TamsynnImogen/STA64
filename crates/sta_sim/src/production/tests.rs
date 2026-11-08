@@ -346,6 +346,22 @@ fn two_yards_build_in_parallel_and_the_digest_is_pinned() {
 
 const PINNED_DIGEST: u64 = 0x1f6ba950228b3166;
 
+/// A yard 600 ticks into a cruiser (frigate queued behind) and a rig 600
+/// ticks into welding a station; for the snapshot test.
+pub(crate) fn mid_build() -> (Sim, Arc<ContentDb>) {
+    let mut sim = game(true);
+    let yard = spawn(&mut sim, "fx_yard", v(0, 0));
+    let rig = spawn(&mut sim, "fx_rig", v(-300, 0));
+    fund(&mut sim, 5000);
+    build(&mut sim, yard, "fx_cruiser", None);
+    build(&mut sim, yard, "fx_frigate", None);
+    build(&mut sim, rig, "fx_station", Some(v(-300, 20)));
+    let mut log = Vec::new();
+    run(&mut sim, 600, &mut log);
+    let db = Arc::clone(sim.content().unwrap());
+    (sim, db)
+}
+
 #[test]
 fn records_round_trip() {
     let mut sim = game(true);

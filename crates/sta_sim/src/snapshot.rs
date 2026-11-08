@@ -32,7 +32,7 @@ use crate::{Rng, Sim, SimEvent};
 
 pub const MAGIC: [u8; 4] = *b"STAS";
 /// Bumped whenever [`Body`] (or anything in it) changes layout.
-pub const FORMAT_VERSION: u16 = 2;
+pub const FORMAT_VERSION: u16 = 3;
 
 const HEADER: usize = 4 + 2 + 4 + 8;
 
@@ -126,6 +126,10 @@ struct Body {
     courses: Vec<(EntityId, CourseRec)>,
     /// SIM-04 mounts, attack orders and projectiles in flight.
     weapons: WeaponsRec,
+    /// SIM-07 stock, nodes and miners (build costs and refunds use the stock).
+    economy: crate::economy::EconomyRec,
+    /// SIM-08 yard queues, rig deploys and welds.
+    production: crate::production::ProductionRec,
 }
 
 fn kind_from(b: u8) -> Option<EntityKind> {
@@ -233,6 +237,8 @@ impl Sim {
                 })
                 .collect(),
             weapons: self.weapons.to_rec(),
+            economy: self.economy.to_rec(),
+            production: self.production.to_rec(),
         };
         let mut out = Vec::new();
         out.extend_from_slice(&MAGIC);
@@ -307,6 +313,8 @@ impl Sim {
             events: b.events,
             movement,
             weapons,
+            economy: crate::economy::Economy::from_rec(&b.economy),
+            production: crate::production::Production::from_rec(&b.production),
         })
     }
 }
@@ -457,6 +465,27 @@ mod tests {
             events += a.events.len();
         }
         assert!(events > 0, "combat should produce events");
+        assert_eq!(loaded.snapshot(), live.snapshot());
+    }
+
+    /// A yard half through two ships and a rig welding: loaded matches live
+    /// across a `Built`.
+    #[test]
+    fn mid_build_snapshot_continues_identically() {
+        use crate::production::tests::mid_build;
+        let (mut live, db) = mid_build();
+        assert!(!live.production.is_empty());
+        let mut loaded = Sim::from_snapshot(&live.snapshot(), Some(Arc::clone(&db))).unwrap();
+        assert_eq!(loaded.digest(), live.digest());
+        let mut built = 0;
+        for tick in 0..400 {
+            let a = live.step(&[]);
+            let b = loaded.step(&[]);
+            assert_eq!(a.view.digest, b.view.digest, "tick {tick}");
+            assert_eq!(a.events, b.events, "tick {tick}");
+            built += a.events.iter().filter(|e| matches!(e, SimEvent::Built { .. })).count();
+        }
+        assert!(built >= 1, "a build should finish after the snapshot");
         assert_eq!(loaded.snapshot(), live.snapshot());
     }
 
