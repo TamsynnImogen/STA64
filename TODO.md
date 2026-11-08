@@ -12,6 +12,7 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 - [?] Recipe planets (class D/H/J/K/L/M) switch to detailed generated ground with relief, drifting clouds and cloud shadows a few seconds after a map loads (first time only; then cached) — 7c8c421
 - [?] Asteroids and dilithium moons with generated rock (craters, relief, highlights, rim); moons' cracks glow blue — 7c8c421
 - [?] Movement smoothness after the sprite-material fix — 19b7300
+- [?] Nebulae as volumetric gas (Mutara purple/pink etc.) instead of billboards; ships inside show correctly; FPS when zoomed into a big nebula — e4eb7c7
 
 ## Checked earlier (morning list)
 
@@ -34,7 +35,8 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
   - [x] Planet look (Lighting.asi via Refit's world_planet shader) — 4fc4a88
   - [x] Recipe surfaces (Surfaces.asi): planets PB_CLSS*, moons Mdmoon, asteroid rock Master1/2 — 7c8c421
   - [ ] Moon cracks' ravine parallax (Refit rock shader), moon glow shell and nimbus
-  - [ ] Volumetric nebulae (Nebulae.asi): ray-marched gas lit by the key with ship shadows
+  - [x] Volumetric nebulae (Nebulae.asi): ray-marched gas fields per class — e4eb7c7
+  - [ ] Nebulae extras: lightning (mnebula7), ring/pulse (latinum), swirl (mnebula10), ship shadows, baked volume + temporal smoothing for speed
   - [ ] Planet glow lights on nearby ships (Refit `lights.rs`); planet city lights (need colony population)
 - [ ] Nebula billboards meanwhile: near fade, occlusion intensity
 - [x] Asteroid fields: rocks from the engine's table (`master*`), count/radius/speeds from the ODF
