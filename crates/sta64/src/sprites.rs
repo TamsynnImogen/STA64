@@ -126,7 +126,7 @@ pub fn animate(
 
 /// Turn billboard quads to face the camera, whatever their parents' rotation.
 pub fn face_camera(
-    camera: Query<&GlobalTransform, With<Camera3d>>,
+    camera: Query<&GlobalTransform, crate::map::MainCamera>,
     parents: Query<&GlobalTransform, Without<Billboard>>,
     mut boards: Query<(&mut Transform, &ChildOf), With<Billboard>>,
 ) {

@@ -134,7 +134,7 @@ fn select(
     buttons: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
     window: Query<&Window, With<PrimaryWindow>>,
-    camera: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
+    camera: Query<(&Camera, &GlobalTransform), crate::map::MainCamera>,
     units: Query<(Entity, &Unit, &GlobalTransform)>,
     selected: Query<Entity, With<Selected>>,
     mut drag: ResMut<Drag>,
@@ -203,7 +203,7 @@ fn order(
     buttons: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
     window: Query<&Window, With<PrimaryWindow>>,
-    camera: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
+    camera: Query<(&Camera, &GlobalTransform), crate::map::MainCamera>,
     selected: Query<&Unit, With<Selected>>,
     mut game: ResMut<Game>,
 ) {

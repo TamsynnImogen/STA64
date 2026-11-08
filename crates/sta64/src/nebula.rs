@@ -275,7 +275,7 @@ pub fn spawn_field(
 
 /// Each frame: the camera, the key light, the flow's drift and the edge-on dimming.
 fn update(
-    camera: Query<(&GlobalTransform, &Projection), With<Camera3d>>,
+    camera: Query<(&GlobalTransform, &Projection), crate::map::MainCamera>,
     lights: Query<(&GlobalTransform, &DirectionalLight)>,
     fields: Query<&NebulaField>,
     mut materials: ResMut<Assets<NebulaMaterial>>,

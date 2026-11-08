@@ -94,6 +94,9 @@ pub fn sky_faces(
     found
 }
 
+/// How far off a star's `scale` is measured (see [`starfield`]).
+const STAR_DISTANCE: f32 = 5000.0;
+
 /// Small deterministic generator for star placement.
 struct Lcg(u64);
 impl Lcg {
@@ -105,6 +108,12 @@ impl Lcg {
 
 /// Spawn the starfield under `parent` at `radius`. `entries` are the starfield
 /// ODF's `(sprite, count, scale)`. Returns the number of stars.
+///
+/// Stock builds its stars as world-space quads at random distances about the map
+/// (`Starfield::mCreateStarSprite`), and how big they are is not recorded. Here a
+/// star's `scale` is read as its half size in world units seen from
+/// [`STAR_DISTANCE`] away: FO's point stars (scale 4-8) come out a few pixels wide,
+/// its star clouds (250) about six degrees across.
 #[allow(clippy::too_many_arguments)]
 pub fn starfield(
     commands: &mut Commands,
@@ -128,7 +137,7 @@ pub fn starfield(
     for (sprite_name, count, scale) in entries {
         let Some(sprite) = table.sprite(sprite_name) else { continue };
         let uv = sta_assets::spr_anim::sprite_uv(table, sprite, 0.0);
-        let half = radius * 0.004 * scale;
+        let half = radius * scale / STAR_DISTANCE;
         let b = batches.entry(sprite.texture.to_ascii_lowercase()).or_default();
         for _ in 0..*count {
             // Uniform direction on the sphere.

@@ -12,7 +12,9 @@ use crate::model_scene::{self, PartCache, SpawnCtx, to_bevy};
 use crate::sprites::SpriteTables;
 use crate::textures::{Loader, TextureCache};
 use crate::viewer::{Mounted, Orbit, TeamColours};
-use bevy::camera::{PerspectiveProjection, Projection};
+use bevy::app::{HierarchyPropagatePlugin, Propagate};
+use bevy::camera::visibility::RenderLayers;
+use bevy::camera::{ClearColorConfig, PerspectiveProjection, Projection};
 use bevy::image::CompressedImageFormats;
 use bevy::prelude::*;
 use bevy::render::renderer::RenderDevice;
@@ -140,8 +142,28 @@ impl CameraLimits {
     }
 }
 
+/// The render layer of what is drawn before the scene: the sky, the starfield and
+/// the background objects. Stock draws them, then clears the depth for the scene, so
+/// they never hide it; here the background camera draws this layer and the main
+/// camera draws the scene over it with its own depth.
+pub const BACKGROUND_LAYER: usize = 1;
+
+/// The camera that draws [`BACKGROUND_LAYER`], a child of the main camera.
 #[derive(Component)]
+pub struct BackgroundCamera;
+
+/// The main (scene) camera, for queries that want the one camera the player moves.
+pub type MainCamera = (With<Camera3d>, Without<BackgroundCamera>);
+
+#[derive(Component)]
+#[require(Propagate<RenderLayers> = Propagate(RenderLayers::layer(BACKGROUND_LAYER)))]
 struct Sky;
+
+/// A `background_obj` (suns, background planets, wrecks, gates) at its place in the
+/// map, drawn before the scene.
+#[derive(Component)]
+#[require(Propagate<RenderLayers> = Propagate(RenderLayers::layer(BACKGROUND_LAYER)))]
+struct BackgroundObject;
 
 #[derive(Component)]
 struct MapHud;
@@ -162,8 +184,6 @@ struct Spin {
     speed: f32,
 }
 
-/// How far out background objects are drawn (inside the starfield and the sky).
-const BACKGROUND_DISTANCE: f32 = 90_000.0;
 
 /// The rock models an asteroid field draws from (the engine's fixed table).
 const ROCKS: [&str; 8] = ["master", "master1", "master2", "master3", "master4", "master5", "master4", "master7"];
@@ -218,6 +238,7 @@ impl Plugin for MapPlugin {
             .add_plugins(crate::rock::RockPlugin)
             .add_plugins(crate::nebula::NebulaPlugin)
             .add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default())
+            .add_plugins(HierarchyPropagatePlugin::<RenderLayers>::new(PostUpdate))
             .add_systems(Startup, setup)
             .add_systems(
                 Update,
@@ -242,26 +263,36 @@ impl Plugin for MapPlugin {
 }
 
 fn setup(mut commands: Commands) {
-    commands.spawn((
-        Camera3d::default(),
-        // The nebulae's march stops at the scene's depth.
-        bevy::core_pipeline::prepass::DepthPrepass,
-        Projection::Perspective(PerspectiveProjection {
-            near: 1.0,
-            far: 400_000.0,
-            ..default()
-        }),
-        Transform::from_xyz(0.0, 3000.0, 6000.0).looking_at(Vec3::ZERO, Vec3::Y),
-        Orbit {
-            focus: Vec3::ZERO,
-            yaw: 0.0,
-            pitch: 0.9,
-            dist: 8000.0,
-            home: (Vec3::ZERO, 8000.0),
-        },
-    ));
+    let projection = Projection::Perspective(PerspectiveProjection {
+        near: 1.0,
+        far: 400_000.0,
+        ..default()
+    });
+    // The scene, drawn over the background camera's picture with its own depth.
+    commands
+        .spawn((
+            Camera3d::default(),
+            Camera {
+                order: 1,
+                clear_color: ClearColorConfig::None,
+                ..default()
+            },
+            // The nebulae's march stops at the scene's depth.
+            bevy::core_pipeline::prepass::DepthPrepass,
+            projection.clone(),
+            Transform::from_xyz(0.0, 3000.0, 6000.0).looking_at(Vec3::ZERO, Vec3::Y),
+            Orbit {
+                focus: Vec3::ZERO,
+                yaw: 0.0,
+                pitch: 0.9,
+                dist: 8000.0,
+                home: (Vec3::ZERO, 8000.0),
+            },
+        ))
+        .with_child((BackgroundCamera, Camera3d::default(), Camera { order: 0, ..default() }, projection, RenderLayers::layer(BACKGROUND_LAYER)));
     commands.spawn((
         MapLight(0),
+        RenderLayers::from_layers(&[0, BACKGROUND_LAYER]),
         DirectionalLight {
             illuminance: 6000.0,
             ..default()
@@ -270,6 +301,7 @@ fn setup(mut commands: Commands) {
     ));
     commands.spawn((
         MapLight(1),
+        RenderLayers::from_layers(&[0, BACKGROUND_LAYER]),
         DirectionalLight {
             illuminance: 1500.0,
             ..default()
@@ -373,7 +405,7 @@ fn spin(time: Res<Time>, mut q: Query<(&Spin, &mut Transform)>) {
     }
 }
 
-fn sky_follows_camera(camera: Query<&Transform, (With<Camera3d>, Without<Sky>)>, mut sky: Query<&mut Transform, With<Sky>>) {
+fn sky_follows_camera(camera: Query<&Transform, (MainCamera, Without<Sky>)>, mut sky: Query<&mut Transform, With<Sky>>) {
     let Ok(cam) = camera.single() else { return };
     for mut t in &mut sky {
         t.translation = cam.translation;
@@ -441,8 +473,6 @@ fn rebuild(
     let mut map_lights: Vec<(Vec3, Option<[f32; 3]>)> = Vec::new();
     let mut nebulae = 0usize;
     let mut units = 0usize;
-    // The camera-following parent of the map's background objects (made on first use).
-    let mut background: Option<Entity> = None;
     // Nebula classes drawn as gas: (recipe, radius, positions in Bevy space).
     let mut gas: std::collections::BTreeMap<String, (sta_surface::nebula::NebulaRecipe, f32, Vec<[f32; 3]>)> = Default::default();
     let mut hidden = 0usize;
@@ -599,24 +629,14 @@ fn rebuild(
         };
         let scale = odf.f32("ScaleSOD").filter(|s| *s > 0.0).unwrap_or(1.0);
         // ScaleSOD goes to the model's positions, not to the object's transform.
-        let mut tf = to_bevy(&Matrix34 { m: o.transform });
-        // Background objects (suns, distant wrecks and gates) are drawn about the eye
-        // before the scene and never hide it: they follow the camera like the sky,
-        // pushed far out along their direction and scaled up by the same factor, so
-        // they keep their size on screen and lie behind everything.
+        let tf = to_bevy(&Matrix34 { m: o.transform });
+        // Background objects (suns, background planets, wrecks, gates) stay where the
+        // map puts them but are drawn before the scene, which they never hide.
         let background_obj = odf.class_label().is_some_and(|c| c.eq_ignore_ascii_case("background_obj"));
-        let parent = if background_obj {
-            let d = tf.translation.length();
-            if d > 1.0 {
-                let k = BACKGROUND_DISTANCE / d;
-                tf.translation *= k;
-                tf.scale *= k;
-            }
-            *background.get_or_insert_with(|| commands.spawn((Sky, Transform::IDENTITY, Visibility::default())).id())
-        } else {
-            root
-        };
-        let entity = commands.spawn((tf, Visibility::default(), ChildOf(parent))).id();
+        let entity = commands.spawn((tf, Visibility::default(), ChildOf(root))).id();
+        if background_obj {
+            commands.entity(entity).insert(BackgroundObject);
+        }
         // Craft with a physics ODF move: they become simulation units.
         if let Some(phys) = odf.str("physicsFile").filter(|p| !p.is_empty()).map(|p| p.trim_end_matches(".odf").to_owned())
             && let Some(ph) = catalogue.odf(&vfs.0, &phys)

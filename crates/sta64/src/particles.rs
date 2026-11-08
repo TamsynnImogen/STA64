@@ -249,7 +249,7 @@ pub fn draw(
     mut commands: Commands,
     mut sys: ResMut<Particles>,
     tables: Res<SpriteTables>,
-    camera: Query<&GlobalTransform, With<Camera3d>>,
+    camera: Query<&GlobalTransform, crate::map::MainCamera>,
     emitters: Query<(&Emitter, &InheritedVisibility)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,

@@ -119,7 +119,7 @@ fn apply(
 
 /// Each frame: the instance's axes and centre, the camera and the lights.
 fn update(
-    camera: Query<&GlobalTransform, With<Camera3d>>,
+    camera: Query<&GlobalTransform, crate::map::MainCamera>,
     lights: Query<(&GlobalTransform, &DirectionalLight)>,
     parts: Query<(Ref<GlobalTransform>, &RockPart, Ref<RockMat>)>,
     mut materials: ResMut<Assets<RockMaterial>>,

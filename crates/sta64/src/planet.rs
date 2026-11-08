@@ -355,7 +355,7 @@ fn place_glows(
 }
 
 fn update(
-    camera: Query<&GlobalTransform, With<Camera3d>>,
+    camera: Query<&GlobalTransform, crate::map::MainCamera>,
     lights: Query<(&GlobalTransform, &DirectionalLight)>,
     planets: Query<(&GlobalTransform, &PlanetBody)>,
     mut materials: ResMut<Assets<PlanetMaterial>>,
