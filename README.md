@@ -68,5 +68,6 @@ headers).
 - [docs/TESTBENCH.md](docs/TESTBENCH.md) — test bench plan: scenes, scenarios, determinism, parity with stock
 - [docs/ROADMAP.md](docs/ROADMAP.md) — milestones
 - [docs/WORKPLAN.md](docs/WORKPLAN.md) — seams and parallel work packages for M2–M5
+- [docs/STA_ARCHIVE.md](docs/STA_ARCHIVE.md) — the open `.sta` mod archive format (draft)
 - [AGENTS.md](AGENTS.md) — rules for agent sessions: claiming packages, freezes, builds
 - [docs/data/](docs/data/README.md) — every ODF/TT/XML/CFG/AIP feature in A1, A2 and FO, with what STA64 reads (`tools/data_inventory.py`)
