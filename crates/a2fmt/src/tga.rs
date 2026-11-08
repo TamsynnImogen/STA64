@@ -5,7 +5,7 @@
 //! of the descriptor byte, and stock mixes both, even within one skybox set. This
 //! decoder also takes the run-length type 10, 8-bit greyscale (types 3 and 11) and 15/16
 //! bits, which stock does not use, so a replacement written by another tool still
-//! loads. Colour-mapped images are refused.
+//! loads. (STA64: colour-mapped types 1 and 9 are decoded too; see VENDORED.md.)
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -14,7 +14,7 @@ use alloc::vec::Vec;
 pub enum Error {
     /// Shorter than its header says.
     Truncated,
-    /// An unknown image type.
+    /// A colour-mapped or unknown image type.
     UnsupportedType(u8),
     UnsupportedDepth(u8),
     /// Zero width or height.
@@ -130,7 +130,11 @@ pub fn decode(data: &[u8]) -> Result<Image, Error> {
         return Err(Error::Truncated);
     }
     let src = &data[start..];
-    let count = w * ht;
+    // Checked: on a 32-bit build a header like 32768x32768 wraps `count * 4` to zero and
+    // the pixel loop would then index past an empty buffer.
+    let count = w.checked_mul(ht).ok_or(Error::Truncated)?;
+    let file_len = count.checked_mul(bytes_pp).ok_or(Error::Truncated)?;
+    let out_len = count.checked_mul(4).ok_or(Error::Truncated)?;
 
     // Raw pixels in file order, still in the file's bytes per pixel.
     let raw: Vec<u8>;
@@ -140,33 +144,35 @@ pub fn decode(data: &[u8]) -> Result<Image, Error> {
         if count / 128 > src.len() {
             return Err(Error::Truncated);
         }
-        let mut out = Vec::with_capacity(count * bytes_pp);
+        let mut out = Vec::with_capacity(file_len);
         let mut i = 0;
-        while out.len() < count * bytes_pp {
+        while out.len() < file_len {
             let Some(&c) = src.get(i) else { return Err(Error::Truncated) };
             i += 1;
             let n = (c & 0x7f) as usize + 1;
             if c & 0x80 != 0 {
-                let px = src.get(i..i + bytes_pp).ok_or(Error::Truncated)?;
-                i += bytes_pp;
+                let end = i.checked_add(bytes_pp).ok_or(Error::Truncated)?;
+                let px = src.get(i..end).ok_or(Error::Truncated)?;
+                i = end;
                 for _ in 0..n {
                     out.extend_from_slice(px);
                 }
             } else {
-                let px = src.get(i..i + n * bytes_pp).ok_or(Error::Truncated)?;
-                i += n * bytes_pp;
+                let end = i.checked_add(n * bytes_pp).ok_or(Error::Truncated)?;
+                let px = src.get(i..end).ok_or(Error::Truncated)?;
+                i = end;
                 out.extend_from_slice(px);
             }
         }
         // A run may cross the image's end; the excess is dropped.
-        out.truncate(count * bytes_pp);
+        out.truncate(file_len);
         raw = out;
         &raw
     } else {
-        src.get(..count * bytes_pp).ok_or(Error::Truncated)?
+        src.get(..file_len).ok_or(Error::Truncated)?
     };
 
-    let mut pixels = alloc::vec![0u8; count * 4];
+    let mut pixels = alloc::vec![0u8; out_len];
     for fy in 0..ht {
         let y = if h.top_down() { fy } else { ht - 1 - fy };
         for fx in 0..w {
@@ -232,6 +238,24 @@ fn colour_map(data: &[u8], h: &Header) -> Result<(usize, Vec<[u8; 4]>), Error> {
 struct Entry {
     stem_lower: String,
     file: String,
+    /// Position of its extension in the index's list (lower wins a name present twice).
+    rank: usize,
+}
+
+/// A file name without its extension (everything from the last dot).
+fn stem_of(file: &str) -> &str {
+    file.rfind('.').map_or(file, |i| &file[..i])
+}
+
+/// `name` without the first of `exts` it ends with (case-insensitively), else whole.
+fn strip_ext<'a>(name: &'a str, exts: &[String]) -> &'a str {
+    for e in exts {
+        let n = name.len();
+        if n > e.len() && name.get(n - e.len()..).is_some_and(|x| x.eq_ignore_ascii_case(e)) {
+            return &name[..n - e.len()];
+        }
+    }
+    name
 }
 
 /// An index over the file names of a texture directory (`Textures/RGB`), for looking
@@ -243,6 +267,7 @@ struct Entry {
 #[derive(Clone, Debug, Default)]
 pub struct TexIndex {
     entries: Vec<Entry>,
+    exts: Vec<String>,
 }
 
 impl TexIndex {
@@ -253,23 +278,37 @@ impl TexIndex {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
+        Self::with_extensions(names, &[".tga"])
+    }
+
+    /// Like [`new`](Self::new) for several extensions (each with its dot, any case in
+    /// the file names), such as `&[".tga", ".dds"]`. A name present with more than one
+    /// is the file whose extension comes first in `exts`. `find` takes a name with
+    /// any of them or none.
+    pub fn with_extensions<I, S>(names: I, exts: &[&str]) -> TexIndex
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let exts: Vec<String> = exts.iter().map(|e| e.to_ascii_lowercase()).collect();
         let mut entries: Vec<Entry> = names
             .into_iter()
             .filter_map(|n| {
                 let n = n.as_ref();
-                if n.len() > 4 && n.get(n.len() - 4..).is_some_and(|e| e.eq_ignore_ascii_case(".tga")) {
-                    Some(Entry {
-                        stem_lower: n[..n.len() - 4].to_ascii_lowercase(),
-                        file: String::from(n),
-                    })
-                } else {
-                    None
+                let stem = strip_ext(n, &exts);
+                if stem.len() == n.len() {
+                    return None;
                 }
+                let ext = &n[stem.len()..];
+                let rank = exts.iter().position(|e| e.eq_ignore_ascii_case(ext))?;
+                Some(Entry { stem_lower: stem.to_ascii_lowercase(), file: String::from(n), rank })
             })
             .collect();
-        entries.sort_by(|a, b| a.stem_lower.cmp(&b.stem_lower).then(a.file.cmp(&b.file)));
+        entries.sort_by(|a, b| {
+            a.stem_lower.cmp(&b.stem_lower).then(a.rank.cmp(&b.rank)).then(a.file.cmp(&b.file))
+        });
         entries.dedup_by(|a, b| a.stem_lower == b.stem_lower);
-        TexIndex { entries }
+        TexIndex { entries, exts }
     }
 
     pub fn len(&self) -> usize {
@@ -282,12 +321,7 @@ impl TexIndex {
 
     /// The file name for a texture name (with or without an extension), any case.
     pub fn find(&self, name: &str) -> Option<&str> {
-        let stem = match name.len() {
-            n if n > 4 && name.get(n - 4..).is_some_and(|e| e.eq_ignore_ascii_case(".tga")) => {
-                &name[..n - 4]
-            }
-            _ => name,
-        };
+        let stem = strip_ext(name, &self.exts);
         let want = stem.to_ascii_lowercase();
         self.entries
             .binary_search_by(|e| e.stem_lower.as_str().cmp(want.as_str()))
@@ -312,7 +346,7 @@ impl TexIndex {
             return None;
         }
         let want = bw >> level;
-        let stem = &base_file[..base_file.len() - 4];
+        let stem = stem_of(base_file);
         for sep in ["_", ""] {
             let mut cand = String::from(stem);
             cand.push_str(sep);
@@ -351,11 +385,11 @@ impl TexIndex {
         F: FnMut(&str) -> Option<u32>,
     {
         let Some(base_file) = self.find(base) else { return Vec::new() };
-        let stem = base_file[..base_file.len() - 4].to_ascii_lowercase();
+        let stem = stem_of(base_file).to_ascii_lowercase();
         let chain = self.mip_chain(base, &mut width_of);
         let bare = chain
             .first()
-            .map(|f| !f[..f.len() - 4].to_ascii_lowercase().ends_with("_1"))
+            .map(|f| !stem_of(f).to_ascii_lowercase().ends_with("_1"))
             .unwrap_or(false);
         let mut out = Vec::new();
         for e in &self.entries {
@@ -454,5 +488,35 @@ mod tests {
         assert_eq!(idx.mip_strays("Fsensor_B", w), ["Fsensor_B_1.tga", "Fsensor_B_2.tga"]);
         assert_eq!(idx.mip_chain("fdestroy", w), ["fdestroy_1.tga"]);
         assert!(idx.mip_strays("fdestroy", w).is_empty());
+    }
+
+    #[test]
+    fn extensions() {
+        let names = ["a.tga", "A.DDS", "b.dds", "c.TGA", "c.dds", "d.png", "b_1.dds", "b.dds.a2neb-backup"];
+        // Stock behaviour: TGA only.
+        let t = TexIndex::new(names);
+        assert_eq!(t.len(), 2);
+        assert_eq!(t.find("b"), None);
+        assert_eq!(t.find("a.DDS"), None);
+        let idx = TexIndex::with_extensions(names, &[".tga", ".dds"]);
+        assert_eq!(idx.len(), 4);
+        assert_eq!(idx.find("a"), Some("a.tga"));
+        assert_eq!(idx.find("A.dds"), Some("a.tga"));
+        assert_eq!(idx.find("B.TGA"), Some("b.dds"));
+        assert_eq!(idx.find("c"), Some("c.TGA"));
+        assert_eq!(idx.find("d"), None);
+        let dds_first = TexIndex::with_extensions(names, &[".dds", ".tga"]);
+        assert_eq!(dds_first.find("a"), Some("A.DDS"));
+        assert_eq!(dds_first.find("c"), Some("c.dds"));
+        let w = |f: &str| -> Option<u32> {
+            Some(match f {
+                "b.dds" => 256,
+                "b_1.dds" => 128,
+                _ => return None,
+            })
+        };
+        assert_eq!(idx.mip_chain("b", w), ["b_1.dds"]);
+        assert_eq!(idx.mip_level("b.dds", 1, w), Some("b_1.dds"));
+        assert!(idx.mip_strays("b", w).is_empty());
     }
 }
