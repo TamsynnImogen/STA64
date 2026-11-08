@@ -444,6 +444,10 @@ seam rather than writes.
 | CON-13 | Mod discovery: list mods (`info.ini`), chain, metadata | `sta_vfs/src/mods.rs` | — | temp dirs | UI-07 | Unit tests; lists installed mods | S | Haiku |
 | CON-14 | AIP files (`docs/data/aip.md`) → typed AI params | `sta_content/src/aip.rs` | R0-2 | — | AI-02 | All installed `.aip` parse | S | Haiku |
 | CON-15 | Armada I `.zfs` archives: reader, mounted per layer (`.odf` → `odf/`, `.tt` → `techtree/`, rest at root; loose > FPQ > ZFS), `Source::Zfs`, `Vfs::read_from` | `sta_vfs/src/zfs.rs`, ZFS mount in `sta_vfs/src/lib.rs` | — | synthetic archives | A1 content in CON-02/03/06 | Synthetic-archive tests; install-gated: A1 retail `assets.zfs` 516 entries, `objtxt.zfs` 81; `odf_index` resolves every A1 retail ODF | S | Sonnet |
+| CON-16 | `.sta` reader and VFS mount ([STA_ARCHIVE.md](STA_ARCHIVE.md)): header, index, binary search by key, stored + Zstandard entries, per-file SHA-256, whiteouts; a mod folder's `*.sta` mounts in its layer below its loose files | `crates/sta_vfs/src/sta.rs`, the `.sta` mount in `sta_vfs/src/lib.rs` | — | hand-built archives | CON-17, CON-18, EDT-08 | Spec examples parse; every refusal in "Reading safely" has a test; a mounted `.sta` serves files and the ODF index finds its ODFs | M | Sonnet |
+| CON-17 | `.sta` writer: reproducible packing (key order, fixed Zstandard level, no timestamps), store-when-not-smaller, `content_hash` | `crates/sta_vfs/src/sta_write.rs` | CON-16 | — | EDT-08 | Same folder packs to the same bytes twice; same files packed stored vs compressed give the same `content_hash`; write → read round trip | S | Sonnet |
+| CON-18 | Mod manifests and load order: `manifest.toml` parse, `info.ini` `ParentMod` as a dependency, semver checks, cycle refusal, topological order with `[load]` hints; mod identity (`content_hash`) into `ContentDb::hash` | `crates/sta_vfs/src/manifest.rs`, `sta_vfs/src/order.rs` | CON-13, CON-16 | temp dirs | UI-07 (mod select), NET handshake | Table tests for ordering, missing/wrong-version dependencies and cycles; installed Roots mods order as `mod_chain` does today | M | Sonnet |
+| CON-19 | `.sta` signatures: Ed25519 sign/verify of header + `content_hash`, trust store, status (trusted / unknown key / unsigned / tampered) | `crates/sta_vfs/src/sta_sign.rs` | CON-16, CON-17 | — | UI-07 | Sign → verify; a flipped byte in any file, the index or the header reports tampered | S | Sonnet |
 
 ### Simulation (SIM)
 
@@ -575,6 +579,7 @@ READMEs; the A2FOExtensions sources are Immy's own and may be adapted.
 | EDT-05 | UI Editor: A1/A2/FO `gui_*.cfg` + `gui_*.spr` layout editor, A1 640×480 vs A2 `screenWidth`/`screenHeight`, recursive `#include` effective values | `crates/sta_tools/src/bin/ui_editor/` | EDT-01, CON-12 | — | UI-04 (shared reading of layouts) | Opens stock A1, A2 and FO interfaces; edit → save → reload equal | L | Sonnet |
 | EDT-06 | ODF formatter (`format_odfs.py` → Rust): lossless ODF syntax tree in `sta_odf` (comments, order, continuation rows kept), grouped layout after the FO Guide templates; dry run by default, `--write` atomic, `--report` JSON | `crates/sta_odf/src/cst.rs`, `crates/sta_tools/src/bin/odf_fmt.rs` | CON-01 (merged) | — | — | Every installed ODF round-trips byte-identically unformatted; formatted output resolves to the same values (`resolve_layered`) as the input | M | Sonnet |
 | EDT-07 | Archive tool `sta-archive`: info/list/extract/cat/find/pack for FPQ v1 (FO 3.x, FPQEdit 3.2.7) and v2 (FO 4.0/Roots, FPQEdit 4.0) and A1 ZFS, format auto-detected, nested archives opened in place, safe extraction paths. FPQ v1 read (hash = MPQ string hash with a zero crypt table over the name minus its last character, stored as both hashes; no folders); FPQ v1/v2 and ZFS writers (LZO1X via MIT `lzokay-native`, raw when not smaller) | `crates/sta_fpq/`, ZFS writer in `sta_vfs/src/zfs.rs`, `crates/sta_vfs/src/bin/sta_archive.rs` | CON-15 | — | modders; repacking for tests | Every installed FPQ (v1 and v2) and ZFS lists, extracts and validates; pack → read round-trips every installed archive (same paths, same bytes, hash lookups agree); repacked archive opens in the matching FPQEdit/game (manual check line) | M | Sonnet |
+| EDT-08 | `sta-archive` for `.sta`: `pack`, `convert` (FPQ/ZFS-based mod folder → `.sta` with a generated manifest from `info.ini`), `verify`, `sign`, and `info`/`list`/`extract` on `.sta` | `crates/sta_vfs/src/bin/sta-archive.rs` (the `.sta` parts) | EDT-07, CON-17 (CON-19 for `sign`) | — | modders | Converting an installed Roots mod and mounting the result serves the same files (same ODF index winners) as the folder | S | Sonnet |
 
 ### Integration (INT)
 
@@ -589,8 +594,8 @@ and fixes seams through seam PRs.
 | INT-M4 | Front end → Instant Action → game → back | UI-06..09, AUD-04, CON-13, TOOL-09 | Scenario reaches each screen by state and starts a match from setup | M | Sonnet |
 | INT-M5 | Multiplayer with AI and missions | NET-02, NET-03, UI-11, AI-02, LUA-04 | Two-process match with an AI and a Lua mission, no desync over 30 min | M | Sonnet |
 
-Counts: CON 15, SIM 14, RND 14, UI 11, AUD 5, TOOL 9, LUA 4, AI 3, NET 3,
-EDT 7, INT 4 (99), plus 3 in round 0.
+Counts: CON 19, SIM 14, RND 14, UI 11, AUD 5, TOOL 9, LUA 4, AI 3, NET 3,
+EDT 8, INT 4 (104), plus 3 in round 0.
 
 ## Dependency graph
 
@@ -611,6 +616,7 @@ graph LR
   SIM08 --> AI02; CON14 --> AI02
   NET01 --> NET02 & NET03; SIM11 --> NET02
   CON02 --> EDT01 --> EDT02 & EDT03 & EDT04 & EDT05; SIM04 --> EDT02; CON12 --> EDT03 & EDT05; CON11 --> EDT04; CON01 --> EDT06; CON15 --> EDT07
+  CON16 --> CON17 & CON18; CON13 --> CON18; CON16 & CON17 --> CON19; EDT07 & CON17 --> EDT08
   LUA02 --> LUA01 --> LUA03 --> LUA04
   CON07 & SIM02 & RND01 & TOOL05 --> INTM2[INT-M2]
   SIM05 & SIM08 & RND09 & UI04 & AI01 --> INTM3[INT-M3]
