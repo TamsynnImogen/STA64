@@ -27,8 +27,10 @@ pub mod economy;
 pub mod event;
 pub mod fake;
 pub mod movement;
+pub mod production;
 pub mod replay;
 pub mod setup;
+pub mod snapshot;
 pub mod sensors;
 pub mod source;
 pub mod spatial;
@@ -99,6 +101,8 @@ pub struct Sim {
     movement: movement::Movement,
     /// Stock, nodes and freighters (SIM-07); in the digest once any exists.
     economy: economy::Economy,
+    /// Yard queues and rig deploys (SIM-08); in the digest once any exists.
+    production: production::Production,
 }
 
 fn dt() -> Fixed {
@@ -214,6 +218,7 @@ impl Sim {
             weapons: Default::default(),
             movement: movement::Movement::default(),
             economy: Default::default(),
+            production: Default::default(),
         }
     }
 
@@ -257,6 +262,9 @@ impl Sim {
             Order::Move { units, queue, .. } => {
                 if !queue {
                     self.economy.cancel(&self.units, c.player, units);
+                    if let Some(db) = self.content.clone() {
+                        self.production.cancel(&db, &self.units, &mut self.economy, c.player, units);
+                    }
                 }
                 self.apply_movement(c.player, order)
             }
@@ -269,7 +277,14 @@ impl Sim {
                 // A stop also drops the attack order of the units it reaches.
                 self.weapons.stop_attack(&self.units, c.player, units);
                 self.economy.cancel(&self.units, c.player, units);
+                if let Some(db) = self.content.clone() {
+                    self.production.cancel(&db, &self.units, &mut self.economy, c.player, units);
+                }
                 self.apply_movement(c.player, order)
+            }
+            Order::Build { builder, what, at } => {
+                let Some(db) = self.content.clone() else { return false };
+                self.production.order_build(&db, &mut self.units, &mut self.economy, c.player, *builder, *what, *at)
             }
             Order::Attack { units, target } => {
                 let Some(db) = self.content.clone() else { return false };
@@ -294,6 +309,7 @@ impl Sim {
         }
         if let Some(db) = &self.content {
             self.economy.step(&mut self.units, db, &mut self.events);
+            self.production.step(&mut self.units, db, &mut self.economy, &mut self.events);
         }
         self.advance_courses();
         self.tick += 1;
@@ -348,6 +364,9 @@ impl Sim {
         }
         if !self.economy.is_empty() {
             self.economy.hash_into(&mut h);
+        }
+        if !self.production.is_empty() {
+            self.production.hash_into(&mut h);
         }
         h.0
     }
