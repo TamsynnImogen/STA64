@@ -29,6 +29,10 @@ impl Fixed {
         self.0 as f32 / (1u64 << FRAC) as f32
     }
 
+    pub fn abs(self) -> Self {
+        Fixed(self.0.wrapping_abs())
+    }
+
     /// Integer square root on the raw representation; exact and portable.
     pub fn sqrt(self) -> Self {
         if self.0 <= 0 {

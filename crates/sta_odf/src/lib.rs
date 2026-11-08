@@ -88,6 +88,11 @@ fn unquote(s: &str) -> &str {
 }
 
 /// A fully resolved ODF: includes flattened, last assignment wins.
+fn number(value: &str) -> Option<&str> {
+    let first = value.split_whitespace().next()?;
+    Some(first.trim_end_matches(';').trim_end_matches(['f', 'F']).trim_end_matches(';'))
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Odf {
     pub name: String,
@@ -114,12 +119,14 @@ impl Odf {
         self.raw(key).map(unquote)
     }
 
+    /// First number of the value. Accepts the suffixes stock files use: `1.0f`,
+    /// a trailing `;` (physics ODFs: `forwardAccel = 1;`), and both.
     pub fn f32(&self, key: &str) -> Option<f32> {
-        self.str(key)?.split_whitespace().next()?.trim_end_matches('f').parse().ok()
+        number(self.str(key)?)?.parse().ok()
     }
 
     pub fn i64(&self, key: &str) -> Option<i64> {
-        let first = self.str(key)?.split_whitespace().next()?;
+        let first = number(self.str(key)?)?;
         first.parse().ok().or_else(|| first.parse::<f64>().ok().map(|f| f as i64))
     }
 
@@ -217,6 +224,10 @@ mod tests {
         assert_eq!(odf.i64("maxHealth"), Some(900));
         assert_eq!(odf.f32("speed"), Some(1.5));
         assert_eq!(odf.list("buildList"), ["a", "b", "c"]);
+        let phys = resolve("p", &mut |_| Some("forwardAccel = 1;\nturnOmega = .5f;\nmaxCount = 3;\n".into())).unwrap();
+        assert_eq!(phys.f32("forwardAccel"), Some(1.0));
+        assert_eq!(phys.f32("turnOmega"), Some(0.5));
+        assert_eq!(phys.i64("maxCount"), Some(3));
     }
 
     #[test]
