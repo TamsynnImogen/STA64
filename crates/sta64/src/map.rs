@@ -162,6 +162,9 @@ struct Spin {
     speed: f32,
 }
 
+/// How far out background objects are drawn (inside the starfield and the sky).
+const BACKGROUND_DISTANCE: f32 = 90_000.0;
+
 /// The rock models an asteroid field draws from (the engine's fixed table).
 const ROCKS: [&str; 8] = ["master", "master1", "master2", "master3", "master4", "master5", "master4", "master7"];
 
@@ -438,6 +441,8 @@ fn rebuild(
     let mut map_lights: Vec<(Vec3, Option<[f32; 3]>)> = Vec::new();
     let mut nebulae = 0usize;
     let mut units = 0usize;
+    // The camera-following parent of the map's background objects (made on first use).
+    let mut background: Option<Entity> = None;
     // Nebula classes drawn as gas: (recipe, radius, positions in Bevy space).
     let mut gas: std::collections::BTreeMap<String, (sta_surface::nebula::NebulaRecipe, f32, Vec<[f32; 3]>)> = Default::default();
     let mut hidden = 0usize;
@@ -594,8 +599,24 @@ fn rebuild(
         };
         let scale = odf.f32("ScaleSOD").filter(|s| *s > 0.0).unwrap_or(1.0);
         // ScaleSOD goes to the model's positions, not to the object's transform.
-        let tf = to_bevy(&Matrix34 { m: o.transform });
-        let entity = commands.spawn((tf, Visibility::default(), ChildOf(root))).id();
+        let mut tf = to_bevy(&Matrix34 { m: o.transform });
+        // Background objects (suns, distant wrecks and gates) are drawn about the eye
+        // before the scene and never hide it: they follow the camera like the sky,
+        // pushed far out along their direction and scaled up by the same factor, so
+        // they keep their size on screen and lie behind everything.
+        let background_obj = odf.class_label().is_some_and(|c| c.eq_ignore_ascii_case("background_obj"));
+        let parent = if background_obj {
+            let d = tf.translation.length();
+            if d > 1.0 {
+                let k = BACKGROUND_DISTANCE / d;
+                tf.translation *= k;
+                tf.scale *= k;
+            }
+            *background.get_or_insert_with(|| commands.spawn((Sky, Transform::IDENTITY, Visibility::default())).id())
+        } else {
+            root
+        };
+        let entity = commands.spawn((tf, Visibility::default(), ChildOf(parent))).id();
         // Craft with a physics ODF move: they become simulation units.
         if let Some(phys) = odf.str("physicsFile").filter(|p| !p.is_empty()).map(|p| p.trim_end_matches(".odf").to_owned())
             && let Some(ph) = catalogue.odf(&vfs.0, &phys)
