@@ -29,13 +29,27 @@ If Bevy ever stops fitting, only the `sta64` crate has to change.
                               |
         sta_odf / sta_sod / sta_tex / sta_spr / sta_bzn / json5 loaders
                               |
-                    content database (typed, validated)
-                       /                         \
-         sta_sim (fixed-point, lockstep)     sta64 client (Bevy)
-         commands in, state + digest out     render / UI / audio / input
-                       \                         /
-                        net (lockstep command relay)
+     sta_core (Fixed, Vec3, ids, ticks)   <- shared by everything below
+                              |
+              sta_content: content database (typed, validated, maps)
+                              |
+              sta_sim (fixed-point, lockstep)
+              commands in, views + events + digest out
+                /          |           |            \
+           sta_ai     sta_mission   sta_net       sta_bench
+          (players)   (Lua, as a   (lockstep     (scenes, scenarios,
+                      controller)   relay)        in-process runner)
+                \          |           |            /
+                     sta64 client (Bevy, the only Bevy crate)
+                     render / UI / audio / input, sim link
 ```
+
+Dependencies only point down this picture, enforced by `Cargo.toml`. The
+format crates (`a2fmt`, `sta_fpq`, `sta_vfs`, `sta_odf`, `sta_bzn`,
+`sta_assets`, `sta_surface`) do not depend on `sta_core`; `sta_sim` never
+depends on `sta_ai`, `sta_mission` or `sta_net`, which plug in through its
+traits. The seams between these crates are specified in
+[WORKPLAN.md](WORKPLAN.md), "Seams".
 
 ## Simulation rules
 
