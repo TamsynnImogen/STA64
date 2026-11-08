@@ -574,6 +574,7 @@ READMEs; the A2FOExtensions sources are Immy's own and may be adapted.
 | EDT-04 | Tooltip Lab: `Dynamic_Localized_Strings.h` editor with validation and a live preview from the mod's own `FontSmall.spr` glyph map (resolved through `ParentMod`) | `crates/sta_tools/src/bin/tooltip_lab/` | EDT-01, CON-11 | — | — | Round-trips every installed strings file byte-identically when unchanged; preview uses the mod's glyph table | M | Sonnet |
 | EDT-05 | UI Editor: A1/A2/FO `gui_*.cfg` + `gui_*.spr` layout editor, A1 640×480 vs A2 `screenWidth`/`screenHeight`, recursive `#include` effective values | `crates/sta_tools/src/bin/ui_editor/` | EDT-01, CON-12 | — | UI-04 (shared reading of layouts) | Opens stock A1, A2 and FO interfaces; edit → save → reload equal | L | Sonnet |
 | EDT-06 | ODF formatter (`format_odfs.py` → Rust): lossless ODF syntax tree in `sta_odf` (comments, order, continuation rows kept), grouped layout after the FO Guide templates; dry run by default, `--write` atomic, `--report` JSON | `crates/sta_odf/src/cst.rs`, `crates/sta_tools/src/bin/odf_fmt.rs` | CON-01 (merged) | — | — | Every installed ODF round-trips byte-identically unformatted; formatted output resolves to the same values (`resolve_layered`) as the input | M | Sonnet |
+| EDT-07 | Archive tool `sta-archive`: info/list/extract/cat/find/pack for FPQ v1 (FO 3.x, FPQEdit 3.2.7) and v2 (FO 4.0/Roots, FPQEdit 4.0) and A1 ZFS, format auto-detected, nested archives opened in place, safe extraction paths. FPQ v1 read (hash = MPQ string hash with a zero crypt table over the name minus its last character, stored as both hashes; no folders); FPQ v1/v2 and ZFS writers (LZO1X via MIT `lzokay-native`, raw when not smaller) | `crates/sta_fpq/`, ZFS writer in `sta_vfs/src/zfs.rs`, `crates/sta_vfs/src/bin/sta_archive.rs` | CON-15 | — | modders; repacking for tests | Every installed FPQ (v1 and v2) and ZFS lists, extracts and validates; pack → read round-trips every installed archive (same paths, same bytes, hash lookups agree); repacked archive opens in the matching FPQEdit/game (manual check line) | M | Sonnet |
 
 ### Integration (INT)
 
@@ -589,7 +590,7 @@ and fixes seams through seam PRs.
 | INT-M5 | Multiplayer with AI and missions | NET-02, NET-03, UI-11, AI-02, LUA-04 | Two-process match with an AI and a Lua mission, no desync over 30 min | M | Sonnet |
 
 Counts: CON 15, SIM 14, RND 14, UI 11, AUD 5, TOOL 9, LUA 4, AI 3, NET 3,
-EDT 6, INT 4 (98), plus 3 in round 0.
+EDT 7, INT 4 (99), plus 3 in round 0.
 
 ## Dependency graph
 
@@ -609,7 +610,7 @@ graph LR
   CON07 --> TOOL05; SIM01 --> TOOL05
   SIM08 --> AI02; CON14 --> AI02
   NET01 --> NET02 & NET03; SIM11 --> NET02
-  CON02 --> EDT01 --> EDT02 & EDT03 & EDT04 & EDT05; SIM04 --> EDT02; CON12 --> EDT03 & EDT05; CON11 --> EDT04; CON01 --> EDT06
+  CON02 --> EDT01 --> EDT02 & EDT03 & EDT04 & EDT05; SIM04 --> EDT02; CON12 --> EDT03 & EDT05; CON11 --> EDT04; CON01 --> EDT06; CON15 --> EDT07
   LUA02 --> LUA01 --> LUA03 --> LUA04
   CON07 & SIM02 & RND01 & TOOL05 --> INTM2[INT-M2]
   SIM05 & SIM08 & RND09 & UI04 & AI01 --> INTM3[INT-M3]
