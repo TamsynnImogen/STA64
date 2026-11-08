@@ -151,6 +151,22 @@ impl Model {
         own + self.nodes[node].children.iter().map(|&c| self.face_count(c)).sum::<usize>()
     }
 
+    /// The damage-state nodes the engine hides on a healthy craft: the first node
+    /// named after each system (`shields`, `engines`, `target`, `sensors`, `life`,
+    /// matched as `CraftClass::InitializeDamageNodes` finds them), plus the
+    /// `damage` and `crew` groups (hull breaches, fires, venting).
+    pub fn damage_nodes(&self) -> Vec<usize> {
+        ["shields", "engines", "target", "sensors", "life", "damage", "crew"]
+            .iter()
+            .filter_map(|want| self.nodes.iter().position(|n| n.name.eq_ignore_ascii_case(want)))
+            .collect()
+    }
+
+    /// The `borg` node: shown only while the craft is assimilated.
+    pub fn borg_node(&self) -> Option<usize> {
+        self.nodes.iter().position(|n| n.name.eq_ignore_ascii_case("borg"))
+    }
+
     /// Nodes to hide so only the most detailed level of each LOD switch shows:
     /// every `lod*` child of a `geometry*` node except the one with most faces.
     pub fn coarse_lods(&self) -> Vec<usize> {

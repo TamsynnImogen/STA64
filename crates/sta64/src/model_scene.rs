@@ -86,6 +86,8 @@ pub struct SpawnCtx<'a, 'w, 's> {
     /// Use Borg-assimilated `_b` texture variants where they exist.
     pub borg: bool,
     pub sprites: &'a SpriteTable,
+    /// Show damage-state nodes (breaches, fires, venting) as on a crippled craft.
+    pub damaged: bool,
 }
 
 /// Spawn `model` under `root`. Only the finest LOD level of each LOD switch is shown.
@@ -93,7 +95,13 @@ pub fn spawn(ctx: &mut SpawnCtx, model: &Model, root: Entity) -> SpawnStats {
     let mut stats = SpawnStats::default();
 
     // Hide every LOD level except the most detailed.
-    let hidden: HashSet<usize> = model.coarse_lods().into_iter().collect();
+    let mut hidden: HashSet<usize> = model.coarse_lods().into_iter().collect();
+    if !ctx.damaged {
+        hidden.extend(model.damage_nodes());
+    }
+    if !ctx.borg {
+        hidden.extend(model.borg_node());
+    }
 
     let anims: HashMap<String, &sta_assets::model::Channel> =
         model.channels.iter().map(|c| (c.node.to_ascii_lowercase(), c)).collect();

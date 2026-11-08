@@ -1,7 +1,8 @@
 //! Model viewer: browse every model visible through the mounted install.
 //!
 //! Controls: Left/Right previous/next model, PageUp/PageDown jump 10, Home first,
-//! T cycle team colour, B toggle Borg `_b` textures, left-drag orbit, right-drag pan, wheel zoom, R reset view.
+//! T cycle team colour, B toggle Borg (`_b` textures, `borg` node), D toggle
+//! damage-state nodes, left-drag orbit, right-drag pan, wheel zoom, R reset view.
 
 use crate::model_scene::{self, SpawnCtx, TeamPart};
 use crate::sprites::{self, SpriteTables};
@@ -21,6 +22,7 @@ pub struct Browser {
     pub index: usize,
     pub team: usize,
     pub borg: bool,
+    pub damaged: bool,
     /// Set when the shown model must be rebuilt.
     pub dirty: bool,
     pub mount_summary: String,
@@ -60,7 +62,7 @@ impl Plugin for ViewerPlugin {
             .insert_resource(ClearColor(Color::srgb(0.01, 0.01, 0.025)))
             .insert_resource(GlobalAmbientLight {
                 color: Color::WHITE,
-                brightness: 250.0,
+                brightness: 60.0,
                 ..default()
             })
             .add_systems(Startup, setup)
@@ -97,6 +99,7 @@ pub fn browser(vfs: &sta_vfs::Vfs, initial: Option<&str>, mount_summary: String)
         index,
         team: 0,
         borg: false,
+        damaged: false,
         dirty: true,
         mount_summary,
         info: String::new(),
@@ -188,6 +191,10 @@ fn input(
         browser.borg = !browser.borg;
         browser.dirty = true;
     }
+    if keys.just_pressed(KeyCode::KeyD) {
+        browser.damaged = !browser.damaged;
+        browser.dirty = true;
+    }
     if keys.just_pressed(KeyCode::KeyR) {
         for mut o in &mut orbit {
             (o.focus, o.dist) = o.home;
@@ -256,6 +263,7 @@ fn rebuild(
         team: TEAM_COLOURS[browser.team].1,
         borg: browser.borg,
         sprites: &tables.0,
+        damaged: browser.damaged,
     };
     let stats = model_scene::spawn(&mut ctx, &model, root);
 
@@ -330,14 +338,15 @@ fn hud(browser: Res<Browser>, mut q: Query<&mut Text, With<Hud>>) {
     }
     for mut t in &mut q {
         t.0 = format!(
-            "STA64 {} model viewer\n{}\n\n{}\nteam colour: {}   Borg textures: {}\n\n\
-             Left/Right model  PgUp/PgDn x10  Home first  T team colour  B Borg textures\n\
+            "STA64 {} model viewer\n{}\n\n{}\nteam colour: {}   Borg: {}   damage: {}\n\n\
+             Left/Right model  PgUp/PgDn x10  Home first  T team colour  B Borg  D damage\n\
              left-drag orbit  right-drag pan  wheel zoom  R reset view",
             env!("CARGO_PKG_VERSION"),
             browser.mount_summary,
             browser.info,
             TEAM_COLOURS[browser.team].0,
             if browser.borg { "on" } else { "off" },
+            if browser.damaged { "shown" } else { "hidden" },
         );
     }
 }

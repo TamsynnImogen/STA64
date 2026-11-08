@@ -998,13 +998,23 @@ pub fn load(input: &[u8]) -> Result<crate::model::Model, String> {
                         .map(|g| MGroup {
                             material: text(&g.material),
                             blend: text(sod_material(&g.shader)),
-                            maps: Maps {
-                                diffuse: map(&g.diffuse),
-                                height: None,
-                                bump: map(&g.bump),
-                                specular: map(&g.specular),
-                                glow: map(&g.glow),
-                                detail: map(&g.detail),
+                            maps: {
+                                // Shipped STL models put their `*_glow` texture in the
+                                // slot after specular (read here as `detail`); take a
+                                // glow texture as the glow map whichever slot it is in.
+                                let is_glow = |t: &Option<String>| t.as_ref().is_some_and(|n| n.to_ascii_lowercase().ends_with("_glow"));
+                                let (mut glow, mut detail) = (map(&g.glow), map(&g.detail));
+                                if glow.is_none() && is_glow(&detail) {
+                                    glow = detail.take();
+                                }
+                                Maps {
+                                    diffuse: map(&g.diffuse),
+                                    height: None,
+                                    bump: map(&g.bump),
+                                    specular: map(&g.specular),
+                                    glow,
+                                    detail,
+                                }
                             },
                             // M3D winds the other way from SOD (A2FOM3D writes [0, 2, 1]).
                             faces: g
