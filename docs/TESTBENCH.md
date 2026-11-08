@@ -9,7 +9,8 @@ its interface and what it learned, and none of its machinery.
 ## Goals
 
 - Load a **scene** (map, objects, camera, seed) straight into the engine,
-  headless or windowed, and drive it with **commands** (orbit, pause, select,
+  headless or windowed, starting from an empty map, an installed map, a
+  sim snapshot or a replay, and drive it with **commands** (orbit, pause, select,
   kill, heal, goto, ...).
 - Run **scenarios** (plain-text steps and checks) as ordinary tests, in
   parallel, with a report per run.
@@ -23,6 +24,12 @@ its interface and what it learned, and none of its machinery.
 - Driving STA64 through OS-level input, OCR or click-by-text.
 - Running STA64 under Wine, in install clones or under a headless compositor.
 - Shipping game-derived frames, baselines or scenes that embed game data.
+- Importing stock Armada II / Fleet Ops `.sav` files as fixtures. As far as we
+  know (unverified) they are close to a dump of the old engine's internal
+  state, tied to that executable, and would not map onto `sta_sim`. Only worth
+  doing if save import becomes a player-facing feature, which is separate from
+  the bench. Starting points come from maps and from STA64's own state
+  ("Starting points").
 - Replacing `cargo test`: the bench produces `cargo test` cases and a runner
   for the cases that need a process.
 
@@ -64,7 +71,8 @@ What is tied to the old engine and changes:
 
 | Refit | STA64 |
 |---|---|
-| Always the map the game was launched on (`-nointro a2_borg01`); objects outside its quadrant are not drawn | new key `Map=`: a BZN from the install, or STA64's built-in empty map (default). Parity runs set `Map=a2_borg01` |
+| Always the map the game was launched on (`-nointro a2_borg01`); objects outside its quadrant are not drawn | new key `Map=`: a BZN from the install **with its own objects**, or STA64's built-in empty map (default). The scene is an overlay on top ("Starting points"). Parity runs set `Map=a2_borg01` |
+| (none: the launch map's own objects are always there) | new key `MapObjects=keep\|strip`, default `strip` when the scene file lists objects, `keep` when it lists none |
 | `Delay=30`: mission ticks before the scene is built, so the engine settles | accepted; default 0. The scene is built on tick 0 after the map loads |
 | `Step=<ms>`: forces the engine's variable tick to a fixed length | the sim tick is always 1/`TICK_HZ`. `Step=` becomes the **render frame** length under the bench clock (frames per tick, and so interpolation, fixed) |
 | `Pause=<tick>`, `pause-at`, `tick`: counted in the old engine's ticks | counted in STA64 ticks. Cross-engine scenes use seconds: `Pause=3.2s` (see open questions) |
@@ -73,6 +81,36 @@ What is tied to the old engine and changes:
 | `Hud`, `Grid`, `Cursor`, `Notices`, `Tooltips`, `Hover`, `ShieldFx`, `Music`, `Captions`, `Race` | the same switches on STA64's own systems, as each system lands. Until then the key answers `! unsupported: <system>` in the log, like Refit's stood-down hooks, and the scene still loads |
 | `Enable=0` (patch nothing but music/captions) | dropped |
 | Profile-dependent behaviour (a hook stands down on Roots) | none. A scene may name a content profile (`Profile=FO4`) instead |
+
+### Starting points
+
+A scene starts from one of four things, set by `Map=` or `Start=`:
+
+| Start | What loads | Use |
+|---|---|---|
+| (none) | STA64's built-in empty map; the scene file spawns everything | unit-level tests: one ship, one weapon |
+| `Map=<name>` | the BZN **and its objects**: placed units, start positions, resources, and the mission name (resolved as in `MISSIONS.md`) | "the real map at tick 0"; parity; the map corpus test |
+| `Start=snapshot:<file>` | the sim state serialised at tick N | "minute 12 of a 4-player battle" without replaying 12 minutes. Arrives with player save/load (M3) |
+| `Start=replay:<file>` | a map plus a command log, replayed from tick 0 | lockstep desync test; bug repro format (M5) |
+
+The scene file is an overlay on whichever start is chosen: its `[Object.*]`
+sections spawn on top, its bench edits and `Seed=` apply after load. Snapshots
+and replays are STA64's own state and carry no game data beyond what the map
+already names; they live under `$XDG_DATA_HOME/sta64/bench/`, not in a checkout.
+
+**`MapObjects`.** `keep` leaves the map's contents in place; `strip` removes
+them and keeps only terrain, bounds and sky, which is the old backdrop-only
+behaviour. The default follows who wrote the scene: a hand-made scene that
+lists its own objects wants a clean stage, so a placed station or a start
+position cannot hit its shot or its count (`Expect 3 ships on team 1`); a
+scene that lists none and names a map wants that map's play. The key is
+explicit in every scene that is checked in. `strip` is for tests *of* a thing,
+`keep` for tests *on* a map.
+
+**Why maps help parity.** Same `Map=`, same `Seed=`, compared after N seconds
+needs no coordinates to agree between engines: the map places its own objects
+and the object lists are matched by name. Positions in a hand-made scene still
+need Refit's quadrant to line up (open questions).
 
 ## Commands
 
@@ -211,6 +249,11 @@ Today `model_scene::animate`, `sprites::animate` and `particles::simulate`
 read `Res<Time>`, and particles share one RNG advanced per frame. Moving them
 onto `AnimClock` is the first deliverable.
 
+**Replays.** A `Start=replay:` file is a map, a seed and the command log, with
+the digest at chosen ticks. Replaying it and comparing digests is the same
+check as the lockstep tests below, on a recorded run instead of a scripted
+one, and a desync report from a real game is a replay a developer can run.
+
 **Lockstep tests.** Refit's `bench-determinism` (one scene, seeded, paused at
 tick 200, shot twice in one run and once in a second run, compared within 0
 and 0.01) is the model. STA64's version is stronger and cheaper: two
@@ -222,7 +265,11 @@ render half (two `--headless` runs, frame at tick N, within 0) runs locally.
 ## Checks, strongest first
 
 1. **Sim state and digest.** `objects.jsonl`, `query`, digest per tick.
-   Exact, fast, cross-platform. Prefer this for every behaviour check.
+   Exact, fast, cross-platform. Prefer this for every behaviour check. The
+   **map corpus test** is the widest case of it: every map in the install
+   loads and ticks N times without a panic, and the digest is the same on two
+   runs. It covers stock and FO 4.0 maps and finds loader and sim faults on
+   content nobody wrote a scene for.
 2. **Structured logs and events.** Marks and `bench.log` answers, keyed by
    tick. For timing (weapon bursts, cloak duration, build time) and for
    render-side facts that are not pixels (what was culled, which LOD was
@@ -243,7 +290,8 @@ both engines:
    with `Mod: stock`, `Clock: bench`, `Seed=`, `Step=`, `Pause=`. It writes
    `Scene.objects.jsonl`, `Scene.marks` and frames.
 2. STA64: `sta-bench run` on the same file with `Map=a2_borg01`, the same
-   install and mod.
+   install and mod. With `MapObjects=keep` and no spawned objects, the same map
+   and seed can be compared after N seconds without any coordinates agreeing.
 3. `sta-bench diff`: object lists by name (positions after T seconds, hull
    over time, who is dying), marks by kind on a common sim-seconds axis, and
    frames side by side with a heat map.
@@ -284,16 +332,18 @@ The matrix in `.github/workflows/ci.yml` has no game install, so:
   bench/scenes/synthetic.ini --ticks 300` checks the scene path end to end.
 - Scenarios that need the install run locally and skip when
   `STA64_TEST_INSTALL` is unset, as the format crates' optional checks do.
+  The **map corpus test** is one of them: it needs the install and a mod
+  (stock, or FO 4.0), and runs once per mod.
 - Tier-2 frames in CI wait on a software GPU (open questions).
 
 ## Plan
 
 | Milestone | Bench work | First deliverables |
 |---|---|---|
-| **M2** | Clock, scene loader, headless mode, minimal runner | `AnimClock` and the three systems moved onto it; `sta_bench` parsers with Refit's `firing.ini` and `planet.ini` as fixtures; `sta64 --scene --headless --clock bench --ticks`; commands `orbit`, `camera`, `center`, `zoom`, `pause`, `resume`, `pause-at`, `tick`, `seed`, `query`, `objects`, `select`, `selection`, `goto`, `stop`, `spawn`; `Scene`/`Expect scene`/`Run N ticks`/object phrases/`Take a screenshot`/`Expect digest`; report dir; `planet`: built, two objects listed, same digest and same frame on two runs; `firing`: built, `Attack` accepted and the shooter turns to its target (fire answers `! unsupported: weapons` until M3) |
-| **M3** | Combat and economy scenes; marks; parity runs | bench edits (`kill`, `damage`, `heal`, `immortal`, `energy`, `special`, `cargo`, `build`, `tech`, `colonize`); fire/death marks; `firing`, `beam-pass`, `impacts`, `shields`, `explosion`, `factions`, `mining`, `construction`, `freighters`; first parity report vs stock (weapon timing from `firing`, cull distances from `planet`); golden digests in CI |
+| **M2** | Clock, scene loader, headless mode, minimal runner | **map corpus test, first after BZN loading lands** (every installed map loads, ticks N times without panic, digest stable across two runs; stock and FO 4.0; install-gated); `Map=` / `MapObjects=`; `AnimClock` and the three systems moved onto it; `sta_bench` parsers with Refit's `firing.ini` and `planet.ini` as fixtures; `sta64 --scene --headless --clock bench --ticks`; commands `orbit`, `camera`, `center`, `zoom`, `pause`, `resume`, `pause-at`, `tick`, `seed`, `query`, `objects`, `select`, `selection`, `goto`, `stop`, `spawn`; `Scene`/`Expect scene`/`Run N ticks`/object phrases/`Take a screenshot`/`Expect digest`; report dir; `planet`: built, two objects listed, same digest and same frame on two runs; `firing`: built, `Attack` accepted and the shooter turns to its target (fire answers `! unsupported: weapons` until M3) |
+| **M3** | Combat and economy scenes; marks; parity runs | bench edits (`kill`, `damage`, `heal`, `immortal`, `energy`, `special`, `cargo`, `build`, `tech`, `colonize`); fire/death marks; `firing`, `beam-pass`, `impacts`, `shields`, `explosion`, `factions`, `mining`, `construction`, `freighters`; first parity report vs stock (weapon timing from `firing`, cull distances from `planet`); golden digests in CI; `Start=snapshot:` with player save/load (snapshot at tick N, reloaded digest equals the continued run) |
 | **M4** | UI and front end | `Hud`/`Cursor`/`Tooltips`/`Hover`/`Race` keys; Bevy input-event injection for UI steps; `stations`, `ui-hud-layout`, `ui-colonize`, `zoom`; front-end screens reached by state, not clicks; UI frame baselines with tolerances |
-| **M5** | Lockstep, Lua, AI | two sims in one process exchanging commands, digests compared per tick (`bench-determinism` generalised); desync injection; replays from the command log; headless run of every installed `missions/*.lua` (`MISSIONS.md`); AI-vs-AI soak; `Players:` header |
+| **M5** | Lockstep, Lua, AI | two sims in one process exchanging commands, digests compared per tick (`bench-determinism` generalised); desync injection; `Start=replay:` (replays from the command log, digests checked at chosen ticks; desync reports become replays); headless run of every installed `missions/*.lua` (`MISSIONS.md`); AI-vs-AI soak; `Players:` header |
 
 ## Open questions
 
@@ -309,9 +359,11 @@ The matrix in `.github/workflows/ci.yml` has no game install, so:
 - **Bench edits in the sim.** A `Command::Bench` variant in the command log,
   or a separate debug API outside the digest? The plan assumes the former so
   edited runs replay.
-- **Empty map.** STA64's built-in empty map needs bounds and a sky; should
-  its coordinates match `a2_borg01`'s quadrant so Refit's positions
-  (around 2000,0,2000) mean the same on both?
+- **Empty map.** Parity no longer needs it: map-based parity (`Map=` with
+  `keep`) compares what the map places. It still matters for hand-made scenes
+  with fixed coordinates: STA64's built-in empty map needs bounds and a sky,
+  and should probably match `a2_borg01`'s quadrant so Refit's positions
+  (around 2000,0,2000) mean the same on both. Only if those scenes stay.
 - **Axes and units.** Confirm STA64's world axes, heading and units equal
   Refit's (Y up, heading 0 faces +z, a Galaxy class ~100 units) once BZN
   loading lands.
