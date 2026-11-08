@@ -262,8 +262,13 @@ impl Sim {
         for u in self.units.iter_mut().filter(|u| u.mobile()) {
             u.step();
         }
-        if let Some(db) = &self.content {
-            self.weapons.step(self.tick, &self.units, db, &self.players, &mut self.events);
+        if let Some(db) = self.content.clone() {
+            combat::damage::recharge(&mut self.units, &db);
+            let from = self.events.len();
+            self.weapons.step(self.tick, &self.units, &db, &self.players, &mut self.events);
+            for (id, by) in combat::damage::apply(&mut self.units, &mut self.events, from) {
+                self.despawn(id, by);
+            }
         }
         self.advance_courses();
         self.tick += 1;
