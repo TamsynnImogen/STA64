@@ -9,6 +9,7 @@
 mod particles;
 mod map;
 mod model_scene;
+mod space;
 mod sprites;
 mod textures;
 mod viewer;

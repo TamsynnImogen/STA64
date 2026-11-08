@@ -40,8 +40,8 @@ pub struct PartCache {
     map: HashMap<PartKey, CachedPart>,
 }
 
-/// Model, node, group, team colour, Borg, normal maps.
-type PartKey = (String, usize, usize, [u8; 3], bool, bool);
+/// Model, node, group, team colour, Borg, normal maps, ScaleSOD bits.
+type PartKey = (String, usize, usize, [u8; 3], bool, bool, u32);
 
 #[derive(Clone)]
 struct CachedPart {
@@ -115,6 +115,9 @@ pub struct SpawnCtx<'a, 'w, 's> {
     pub model_key: String,
     /// Draw everything unlit (skyboxes).
     pub unlit: bool,
+    /// The ODF's `ScaleSOD`. As in the engine it scales the model's positions
+    /// (node offsets and vertices) but not sprite sizes or particles.
+    pub scale: f32,
 }
 
 /// Spawn `model` under `root`. Only the finest LOD level of each LOD switch is shown.
@@ -153,7 +156,8 @@ pub fn spawn(ctx: &mut SpawnCtx, model: &Model, root: Entity) -> SpawnStats {
             continue;
         }
         let parent = node.parent.and_then(|p| entities[p]).unwrap_or(root);
-        let base = to_bevy(&node.transform);
+        let mut base = to_bevy(&node.transform);
+        base.translation *= ctx.scale;
         let mut e = ctx.commands.spawn((Name::new(node.name.clone()), base, Visibility::default(), ChildOf(parent)));
 
         let key_count = anims.get(&node.name.to_ascii_lowercase()).map_or(0, |c| match &c.keys {
@@ -165,7 +169,15 @@ pub fn spawn(ctx: &mut SpawnCtx, model: &Model, root: Entity) -> SpawnStats {
             && ch.period > 0.0
         {
             let keys = match &ch.keys {
-                Keys::Matrix(k) => AnimKeys::Matrix(k.iter().map(to_bevy).collect()),
+                Keys::Matrix(k) => AnimKeys::Matrix(
+                    k.iter()
+                        .map(|m| {
+                            let mut t = to_bevy(m);
+                            t.translation *= ctx.scale;
+                            t
+                        })
+                        .collect(),
+                ),
                 Keys::Scale(k) => AnimKeys::Scale(k.clone()),
             };
             e.insert(NodeAnim {
@@ -181,7 +193,7 @@ pub fn spawn(ctx: &mut SpawnCtx, model: &Model, root: Entity) -> SpawnStats {
         if let NodeKind::Mesh(mesh) = &node.kind {
             let world = model.model_transform(i);
             for p in &mesh.positions {
-                let w = Vec3::from(mirror(world.transform_point(*p)));
+                let w = Vec3::from(mirror(world.transform_point(*p))) * ctx.scale;
                 min = min.min(w);
                 max = max.max(w);
             }
@@ -292,7 +304,15 @@ fn spawn_mesh(
         if group.faces.is_empty() {
             continue;
         }
-        let cache_key = (ctx.model_key.clone(), node_index, group_index, team_rgb, ctx.borg, ctx.normal_maps || ctx.unlit);
+        let cache_key = (
+            ctx.model_key.clone(),
+            node_index,
+            group_index,
+            team_rgb,
+            ctx.borg,
+            ctx.normal_maps || ctx.unlit,
+            ctx.scale.to_bits(),
+        );
         if let Some(part) = ctx.parts.as_ref().and_then(|c| c.map.get(&cache_key)).cloned() {
             spawn_part(ctx, &part, parent, flipbook, stats);
             bumped |= part.bumped;
@@ -336,7 +356,7 @@ fn spawn_mesh(
                     continue;
                 };
                 let idx = *remap.entry((p, u)).or_insert_with(|| {
-                    positions.push(mirror(*pos));
+                    positions.push(mirror(pos.map(|v| v * ctx.scale)));
                     uvs.push(*uv);
                     (positions.len() - 1) as u32
                 });

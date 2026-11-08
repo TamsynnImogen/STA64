@@ -297,7 +297,7 @@ fn rebuild(
 
     let neutral = teams.0.first().map(|t| t.1).unwrap_or(Color::WHITE);
     let root = commands.spawn((MapRoot, Transform::IDENTITY, Visibility::default())).id();
-    let (mut drawn, mut no_model, mut no_odf, mut tris) = (0usize, 0usize, 0usize, 0usize);
+    let (mut drawn, mut no_model, mut no_odf, mut tris, mut planets) = (0usize, 0usize, 0usize, 0usize, 0usize);
     let mut missing: Vec<String> = Vec::new();
 
     for o in &map.objects {
@@ -310,13 +310,37 @@ fn rebuild(
             no_model += 1;
             continue;
         }
+        if odf.class_label().is_some_and(|c| c.eq_ignore_ascii_case("planet")) {
+            // Planets are bodies the engine builds itself; the SOD's sphere only
+            // gives the radius.
+            let scale = odf.f32("ScaleSOD").filter(|s| *s > 0.0).unwrap_or(1.0);
+            let radius = catalogue
+                .model(&vfs.0, &o.odf)
+                .and_then(|(_, m)| m.bounds())
+                .map(|(lo, hi)| (Vec3::from(hi) - Vec3::from(lo)).max_element() * 0.5)
+                .unwrap_or(500.0)
+                * scale;
+            let ground = odf.str("groundTextureName").unwrap_or("").to_owned();
+            let atmo = odf.str("atmosphereTextureName").filter(|a| !a.is_empty()).unwrap_or("PA_ECFR0").to_owned();
+            let entity = commands.spawn((to_bevy(&Matrix34 { m: o.transform }), Visibility::default(), ChildOf(root))).id();
+            let mut loader = Loader {
+                vfs: &vfs.0,
+                cache: &mut cache,
+                images: &mut images,
+                formats,
+            };
+            missing.extend(crate::space::planet(&mut commands, &mut meshes, &mut materials, &mut loader, &ground, &atmo, radius, entity));
+            planets += 1;
+            drawn += 1;
+            continue;
+        }
         let Some((path, model)) = catalogue.model(&vfs.0, &o.odf) else {
             no_model += 1;
             continue;
         };
         let scale = odf.f32("ScaleSOD").filter(|s| *s > 0.0).unwrap_or(1.0);
-        let mut tf = to_bevy(&Matrix34 { m: o.transform });
-        tf.scale *= scale;
+        // ScaleSOD goes to the model's positions, not to the object's transform.
+        let tf = to_bevy(&Matrix34 { m: o.transform });
         let entity = commands.spawn((tf, Visibility::default(), ChildOf(root))).id();
         let team = if o.team > 0 { teams.0.get(o.team as usize).map(|t| t.1).unwrap_or(neutral) } else { neutral };
         let mut ctx = SpawnCtx {
@@ -337,17 +361,31 @@ fn rebuild(
             parts: Some(&mut parts),
             model_key: path,
             unlit: false,
+            scale,
         };
         let stats = model_scene::spawn(&mut ctx, &model, entity);
         tris += stats.triangles;
         drawn += 1;
     }
 
-    // Skybox: the BackgroundArt SOD around the camera, unlit, far out.
+    // Skybox: the BackgroundArt cube SOD, or six prefix faces, unlit, about the camera.
     let mut sky_note = String::from("none");
     if !map.background.is_empty() {
         sky_note = format!("{} (not found)", map.background);
-        if let Some((path, model)) = catalogue.model(&vfs.0, &map.background) {
+        let cube = if map.background.to_ascii_lowercase().ends_with(".sod") { catalogue.model(&vfs.0, &map.background) } else { None };
+        if cube.is_none() {
+            let prefix = map.background.trim_end_matches(".sod").trim_end_matches(".SOD").to_owned();
+            let sky = commands.spawn((Sky, Transform::from_scale(Vec3::splat(1500.0)), Visibility::default())).id();
+            let mut loader = Loader {
+                vfs: &vfs.0,
+                cache: &mut cache,
+                images: &mut images,
+                formats,
+            };
+            let faces = crate::space::sky_faces(&mut commands, &mut meshes, &mut materials, &mut loader, &prefix, sky);
+            sky_note = format!("{prefix} ({faces}/6 faces)");
+        }
+        if let Some((path, model)) = cube {
             let radius = model
                 .bounds()
                 .map(|(lo, hi)| (Vec3::from(hi) - Vec3::from(lo)).length() * 0.5)
@@ -372,10 +410,35 @@ fn rebuild(
                 parts: Some(&mut parts),
                 model_key: format!("sky:{path}"),
                 unlit: true,
+                scale: 1.0,
             };
             model_scene::spawn(&mut ctx, &model, sky);
             sky_note = path;
         }
+    }
+
+    // Starfield: the map's starfield ODF, `<sprite> = count` and `<sprite>.scale`.
+    let mut star_note = format!("{} (not found)", map.starfield_odf);
+    let star_odf = map.starfield_odf.trim_end_matches(".odf").trim_end_matches(".ODF").to_owned();
+    if let Some(sf) = catalogue.odf(&vfs.0, &star_odf) {
+        let entries: Vec<(String, u32, f32)> = sf
+            .keys()
+            .filter(|k| !k.to_ascii_lowercase().ends_with(".scale"))
+            .filter_map(|k| {
+                let n = sf.i64(k)?;
+                let scale = sf.f32(&format!("{k}.scale")).unwrap_or(1.0);
+                (n > 0).then(|| (k.to_owned(), n as u32, scale))
+            })
+            .collect();
+        let stars = commands.spawn((Sky, Transform::IDENTITY, Visibility::default())).id();
+        let mut loader = Loader {
+            vfs: &vfs.0,
+            cache: &mut cache,
+            images: &mut images,
+            formats,
+        };
+        let n = crate::space::starfield(&mut commands, &mut meshes, &mut materials, &mut loader, &tables.0, &entries, 100_000.0, stars);
+        star_note = format!("{} ({n} stars)", map.starfield_odf);
     }
 
     // Frame the playable area (SOD space: mirror Z).
@@ -392,7 +455,7 @@ fn rebuild(
     missing.sort();
     missing.dedup();
     let mut info = format!(
-        "{header}\n{}  v{}  {}\nsize {:.0} x {:.0}   race {}   tech tree {}   scripts {:?}\nsky {}   starfield {}\n{} objects: {} drawn, {} without a model, {} without an ODF   {} triangles",
+        "{header}\n{}  v{}  {}\nsize {:.0} x {:.0}   race {}   tech tree {}   scripts {:?}\nsky {}   starfield {}\n{} objects: {} drawn ({} planets), {} without a model, {} without an ODF   {} triangles",
         map.description,
         map.version,
         if map.binary { "binary" } else { "text" },
@@ -402,15 +465,16 @@ fn rebuild(
         map.tech_tree_file,
         map.scripts,
         sky_note,
-        map.starfield_odf,
+        star_note,
         map.objects.len(),
         drawn,
+        planets,
         no_model,
         no_odf,
         tris
     );
     if !missing.is_empty() {
-        info.push_str(&format!("\nno ODF: {}", missing.iter().take(12).cloned().collect::<Vec<_>>().join(", ")));
+        info.push_str(&format!("\nnot found: {}", missing.iter().take(12).cloned().collect::<Vec<_>>().join(", ")));
     }
     browser.info = info;
 }
