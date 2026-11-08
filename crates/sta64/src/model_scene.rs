@@ -32,6 +32,26 @@ pub enum AnimKeys {
     Scale(Vec<f32>),
 }
 
+/// Built meshes and materials shared by every copy of a model (maps place
+/// hundreds of the same nebula or ship). Key: model, node, group, team colour,
+/// Borg and normal-map switches.
+#[derive(Resource, Default)]
+pub struct PartCache {
+    map: HashMap<PartKey, CachedPart>,
+}
+
+/// Model, node, group, team colour, Borg, normal maps.
+type PartKey = (String, usize, usize, [u8; 3], bool, bool);
+
+#[derive(Clone)]
+struct CachedPart {
+    mesh: Handle<Mesh>,
+    material: Handle<StandardMaterial>,
+    team: bool,
+    bumped: bool,
+    triangles: usize,
+}
+
 /// Face groups that take the owner's team colour.
 #[derive(Component)]
 pub struct TeamPart;
@@ -90,6 +110,11 @@ pub struct SpawnCtx<'a, 'w, 's> {
     pub damaged: bool,
     /// Use normal maps (N in the viewer, for comparing).
     pub normal_maps: bool,
+    /// Share built parts between copies of the same model (`model_key`).
+    pub parts: Option<&'a mut PartCache>,
+    pub model_key: String,
+    /// Draw everything unlit (skyboxes).
+    pub unlit: bool,
 }
 
 /// Spawn `model` under `root`. Only the finest LOD level of each LOD switch is shown.
@@ -161,7 +186,7 @@ pub fn spawn(ctx: &mut SpawnCtx, model: &Model, root: Entity) -> SpawnStats {
                 max = max.max(w);
             }
             let flip = flipbooks.get(&node.name.to_ascii_lowercase());
-            spawn_mesh(ctx, model, mesh, id, flip, &mut stats);
+            spawn_mesh(ctx, model, i, mesh, id, flip, &mut stats);
         }
         match &node.kind {
             NodeKind::Sprite => spawn_sprite_node(ctx, node.sprite_node_id(), id, &quad, &mut stats),
@@ -246,9 +271,11 @@ fn spawn_sprite_node(ctx: &mut SpawnCtx, id: &str, parent: Entity, quad: &Handle
     stats.sprite_nodes += 1;
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_mesh(
     ctx: &mut SpawnCtx,
     model: &Model,
+    node_index: usize,
     mesh: &ModelMesh,
     parent: Entity,
     flipbook: Option<&(String, f32)>,
@@ -257,8 +284,18 @@ fn spawn_mesh(
     let two_sided = mesh.two_sided;
     let mut bumped = false;
 
-    for group in &mesh.groups {
+    let team_rgb = {
+        let c = ctx.team.to_srgba();
+        [c.red, c.green, c.blue].map(|v| (v * 255.0) as u8)
+    };
+    for (group_index, group) in mesh.groups.iter().enumerate() {
         if group.faces.is_empty() {
+            continue;
+        }
+        let cache_key = (ctx.model_key.clone(), node_index, group_index, team_rgb, ctx.borg, ctx.normal_maps || ctx.unlit);
+        if let Some(part) = ctx.parts.as_ref().and_then(|c| c.map.get(&cache_key)).cloned() {
+            spawn_part(ctx, &part, parent, flipbook, stats);
+            bumped |= part.bumped;
             continue;
         }
         let maps = &group.maps;
@@ -325,8 +362,7 @@ fn spawn_mesh(
             .map(|p| by_pos[&key(*p)].normalize_or(Vec3::Y).to_array())
             .collect();
 
-        stats.triangles += indices.len() / 3;
-        stats.meshes += 1;
+        let triangles = indices.len() / 3;
 
         let mut bevy_mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
             .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
@@ -334,7 +370,8 @@ fn spawn_mesh(
             .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
             .with_inserted_indices(Indices::U32(indices));
         let normal = normal.filter(|_| bevy_mesh.generate_tangents().is_ok());
-        bumped |= normal.is_some();
+        let normal_present = normal.is_some();
+        bumped |= normal_present;
 
         let lm = model.lighting_material(&group.material);
         let team = group.material.to_ascii_lowercase().starts_with("team");
@@ -349,33 +386,48 @@ fn spawn_mesh(
             emissive: if glow.is_some() { LinearRgba::WHITE } else { LinearRgba::BLACK },
             emissive_texture: glow,
             alpha_mode,
-            unlit: additive || self_illum,
+            unlit: additive || self_illum || ctx.unlit,
             double_sided: two_sided,
             cull_mode: if two_sided { None } else { Some(Face::Back) },
             reflectance: 0.3,
             ..default()
         };
-        let material = ctx.materials.add(material);
-        let mut e = ctx.commands.spawn((
-            Mesh3d(ctx.meshes.add(bevy_mesh)),
-            MeshMaterial3d(material.clone()),
-            Transform::IDENTITY,
-            ChildOf(parent),
-        ));
-        if team {
-            e.insert(TeamPart);
+        let part = CachedPart {
+            mesh: ctx.meshes.add(bevy_mesh),
+            material: ctx.materials.add(material),
+            team,
+            bumped: normal_present,
+            triangles,
+        };
+        if let Some(cache) = ctx.parts.as_mut() {
+            cache.map.insert(cache_key, part.clone());
         }
-        if let Some((animation, offset)) = flipbook {
-            e.insert(UvFlipbook {
-                animation: animation.clone(),
-                offset: *offset,
-                material,
-            });
-            stats.flipbooks += 1;
-        }
+        spawn_part(ctx, &part, parent, flipbook, stats);
     }
     if bumped {
         stats.bump_meshes += 1;
+    }
+}
+
+fn spawn_part(ctx: &mut SpawnCtx, part: &CachedPart, parent: Entity, flipbook: Option<&(String, f32)>, stats: &mut SpawnStats) {
+    stats.triangles += part.triangles;
+    stats.meshes += 1;
+    let mut e = ctx.commands.spawn((
+        Mesh3d(part.mesh.clone()),
+        MeshMaterial3d(part.material.clone()),
+        Transform::IDENTITY,
+        ChildOf(parent),
+    ));
+    if part.team {
+        e.insert(TeamPart);
+    }
+    if let Some((animation, offset)) = flipbook {
+        e.insert(UvFlipbook {
+            animation: animation.clone(),
+            offset: *offset,
+            material: part.material.clone(),
+        });
+        stats.flipbooks += 1;
     }
 }
 

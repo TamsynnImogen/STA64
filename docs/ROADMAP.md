@@ -23,7 +23,12 @@
 - glTF/GLB models in the viewer
 
 ## M2: A map you can fly in
-- BZN map loading (starfield, nebulae, asteroid fields, planets)
+- [x] `sta_bzn`: text and binary BZN (typed-record stream); all 517 installed maps
+  parse, binary object counts match the declared counts exactly
+- [x] Map view: every object's model placed by its BZN transform, `ScaleSOD`,
+  team colours, skybox (`BackgroundArt`), shared parts across copies
+- Starfield (`StarfieldOdf`), asteroid fields (`dont_load_SOD` fields), planet
+  bodies from `groundTextureName`, nebula volumes, map lights (`dlight`)
 - RTS camera, selection, move orders through `sta_sim`
 - Renderer interpolation between sim ticks
 

@@ -31,6 +31,7 @@ into STA64 as first-class, data-driven systems instead. See
 | `sta_odf` | ODF parser, `#include` resolution, typed accessors | no |
 | `a2fmt` | SOD / TGA / sprite-table / ODF readers, vendored from Armada II Refit (MIT) | no |
 | `sta_assets` | Layer-aware model/texture lookup and decoding over the VFS | no |
+| `sta_bzn` | BZN maps, text and binary | no |
 | `sta_sim` | Deterministic fixed-point lockstep simulation | no |
 | `sta64` | The game: rendering, UI, audio, input, glue | yes |
 
@@ -43,6 +44,9 @@ reused by tools, and kept bit-identical across platforms.
 cargo test --workspace --exclude sta64   # fast, no Bevy
 cargo run -p sta64 -- --install-root "/path/to/Fleet Ops" --mod "Fleet Ops 4.0" [--view fdefiant]
 ```
+
+`--map [<name>]` opens the map view instead (Left/Right steps through maps,
+WASD pans).
 
 For now `sta64` opens a model viewer over every model the mounted install
 exposes. Left/Right steps through models, T cycles team colour, left-drag

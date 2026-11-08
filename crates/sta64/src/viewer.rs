@@ -79,12 +79,12 @@ struct Hud;
 struct KeyLight;
 
 #[derive(Component)]
-struct Orbit {
-    focus: Vec3,
-    yaw: f32,
-    pitch: f32,
-    dist: f32,
-    home: (Vec3, f32),
+pub struct Orbit {
+    pub focus: Vec3,
+    pub yaw: f32,
+    pub pitch: f32,
+    pub dist: f32,
+    pub home: (Vec3, f32),
 }
 
 pub struct ViewerPlugin;
@@ -318,6 +318,9 @@ fn rebuild(
         sprites: &tables.0,
         damaged: browser.damaged,
         normal_maps: browser.normal_maps,
+        parts: None,
+        model_key: name.clone(),
+        unlit: false,
     };
     let stats = model_scene::spawn(&mut ctx, &model, root);
 
@@ -355,7 +358,7 @@ fn rebuild(
     }
 }
 
-fn orbit_camera(
+pub fn orbit_camera(
     buttons: Res<ButtonInput<MouseButton>>,
     motion: Res<AccumulatedMouseMotion>,
     scroll: Res<AccumulatedMouseScroll>,

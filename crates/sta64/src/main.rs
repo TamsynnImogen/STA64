@@ -1,12 +1,13 @@
 //! STA64 game executable.
 //!
-//! Usage: `sta64 [--install-root <path>] [--mod <name>] [--view <model>]`
+//! Usage: `sta64 [--install-root <path>] [--mod <name>] [--view <model> | --map [<map>]]`
 //!
 //! The install root is a user-owned Armada II / Fleet Operations install. No
 //! original game content ships with STA64; it is read from that install at run
 //! time. Until gameplay exists, the executable opens the model viewer.
 
 mod particles;
+mod map;
 mod model_scene;
 mod sprites;
 mod textures;
@@ -20,6 +21,7 @@ struct LaunchConfig {
     install_root: Option<PathBuf>,
     active_mod: Option<String>,
     view: Option<String>,
+    map: Option<String>,
 }
 
 fn parse_args() -> LaunchConfig {
@@ -30,6 +32,7 @@ fn parse_args() -> LaunchConfig {
             "--install-root" => cfg.install_root = args.next().map(PathBuf::from),
             "--mod" => cfg.active_mod = args.next(),
             "--view" => cfg.view = args.next(),
+            "--map" => cfg.map = Some(args.next().unwrap_or_default()),
             _ => eprintln!("ignoring unknown argument {a:?}"),
         }
     }
@@ -80,8 +83,8 @@ fn main() {
         table.animations.len()
     );
 
-    App::new()
-        .add_plugins(
+    let mut app = App::new();
+    app.add_plugins(
             DefaultPlugins
                 .set(WindowPlugin {
                     primary_window: Some(Window {
@@ -95,10 +98,14 @@ fn main() {
                 })
                 .set(ImagePlugin::default_linear()),
         )
-        .insert_resource(viewer::Mounted(vfs))
-        .insert_resource(browser)
-        .insert_resource(teams)
         .insert_resource(sprites::SpriteTables(std::sync::Arc::new(table)))
-        .add_plugins(viewer::ViewerPlugin)
-        .run();
+        .insert_resource(teams);
+    if let Some(m) = &cfg.map {
+        let maps = map::browser(&vfs, Some(m.as_str()).filter(|m| !m.is_empty()), browser.mount_summary.clone());
+        println!("{} maps visible", maps.maps.len());
+        app.insert_resource(viewer::Mounted(vfs)).insert_resource(maps).add_plugins(map::MapPlugin);
+    } else {
+        app.insert_resource(viewer::Mounted(vfs)).insert_resource(browser).add_plugins(viewer::ViewerPlugin);
+    }
+    app.run();
 }

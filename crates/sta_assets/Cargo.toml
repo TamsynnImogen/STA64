@@ -9,3 +9,7 @@ license.workspace = true
 a2fmt.workspace = true
 ddsfile = "0.6"
 sta_vfs.workspace = true
+
+[dev-dependencies]
+sta_bzn.workspace = true
+sta_odf.workspace = true

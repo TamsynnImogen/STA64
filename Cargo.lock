@@ -5036,6 +5036,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "sta_assets",
+ "sta_bzn",
  "sta_odf",
  "sta_sim",
  "sta_vfs",
@@ -5048,7 +5049,16 @@ version = "0.1.0"
 dependencies = [
  "a2fmt",
  "ddsfile",
+ "sta_bzn",
+ "sta_odf",
  "sta_vfs",
+]
+
+[[package]]
+name = "sta_bzn"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.21",
 ]
 
 [[package]]

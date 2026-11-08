@@ -1,0 +1,9 @@
+[package]
+name = "sta_bzn"
+description = "Armada / Fleet Operations BZN map reader (text and binary)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
