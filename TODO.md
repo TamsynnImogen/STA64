@@ -12,6 +12,7 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 - [?] Recipe planets (class D/H/J/K/L/M) switch to detailed generated ground with relief, drifting clouds and cloud shadows a few seconds after a map loads (first time only; then cached) — 7c8c421
 - [?] Asteroids and dilithium moons with generated rock (craters, relief, highlights, rim); moons' cracks glow blue — 7c8c421
 - [?] Movement smoothness after the sprite-material fix — 19b7300
+- [?] Suns and other background objects stay in the sky (follow the camera, never in front of ships) — dee4e4b
 - [?] Ships near a planet's day side / inside nebulae take their coloured light (planet glow, nebula lights); not overpowering? — 8a95cee
 - [?] Nebulae as volumetric gas (Mutara purple/pink etc.) instead of billboards; ships inside show correctly; FPS when zoomed into a big nebula — e4eb7c7
 
@@ -38,6 +39,7 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
   - [ ] Moon cracks' ravine parallax (Refit rock shader), moon glow shell and nimbus
   - [x] Volumetric nebulae (Nebulae.asi): ray-marched gas fields per class — e4eb7c7
   - [ ] Nebulae extras: lightning (mnebula7), ring/pulse (latinum), swirl (mnebula10), ship shadows, baked volume + temporal smoothing for speed
+  - [x] Background objects (suns, wrecks, gates) drawn about the eye — dee4e4b
   - [x] Planet glow lights and nebula lights (Refit `lights.rs`) — 8a95cee
   - [ ] Planet city lights (need colony population)
 - [ ] Nebula billboards meanwhile: near fade, occlusion intensity
