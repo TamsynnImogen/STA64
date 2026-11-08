@@ -13,6 +13,7 @@
 //! written yet and answer [`ContentError::Unsupported`]; [`ContentDb::builder`]
 //! and [`fake`] work today.
 
+pub mod aip;
 pub mod db;
 pub mod def;
 pub mod fake;
@@ -20,6 +21,7 @@ pub mod features;
 pub mod index;
 pub mod map;
 
+pub use aip::{Aip, AipList, AipValue, AipVar, BuildItem};
 pub use db::{ContentBuilder, ContentDb};
 pub use def::{BuildDef, ClassLabel, DefRef, FireArc, FxRefs, Hardpoint, MoveStats, ShieldDef, SoundRefs, UnitDef, WeaponDef, WeaponKind};
 pub use features::{Features, Profile};
