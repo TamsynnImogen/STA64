@@ -282,7 +282,7 @@ fn rec_round_trips_mid_trip() {
     spawn(&mut sim, "fx_station", PlayerId(0), v(0, 0));
     let m = spawn(&mut sim, "fx_miner", PlayerId(0), v(0, 0));
     assert!(mine(&mut sim, 0, m, moon));
-    run(&mut sim, 450);
+    run(&mut sim, 1000);
     let rec = sim.economy.to_rec();
     let back = Economy::from_rec(&rec);
     assert_eq!(back, sim.economy);
@@ -308,4 +308,16 @@ fn dead_node_or_miner_drops_the_order() {
     )]);
     run(&mut sim, 2);
     assert!(!sim.economy.is_mining(m));
+}
+
+/// A freighter 1000 ticks into its first trip, loaded and heading for the station, for the snapshot test.
+pub(crate) fn mid_mining() -> (Sim, Arc<sta_content::ContentDb>) {
+    let mut sim = game();
+    let moon = spawn(&mut sim, "fx_moon", NEUTRAL, v(0, 0));
+    spawn(&mut sim, "fx_station", PlayerId(0), v(1500, 0));
+    let m = spawn(&mut sim, "fx_miner", PlayerId(0), v(0, 0));
+    assert!(mine(&mut sim, 0, m, moon));
+    run(&mut sim, 1000);
+    let db = Arc::clone(sim.content().unwrap());
+    (sim, db)
 }
