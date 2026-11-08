@@ -9,7 +9,7 @@
 //!   projectile flies at `shot_speed` toward its target's current position and
 //!   hits on the tick it arrives; its first move is the tick after it fired.
 //! - Targets: an `Attack` order, else the nearest enemy in the weapon's range
-//!   (ties to the lowest id). Point-defence weapons do not shoot at units.
+//!   (ties to the lowest id). Point-defence weapons do not shoot at units (`pd.rs` runs them).
 //! - `Hit` carries the weapon's damage as `hull` and zero `shield`: applying
 //!   it (shields, hull, destruction) is `damage.rs`, which rewrites the split.
 //!
@@ -22,11 +22,12 @@ use serde::{Deserialize, Serialize};
 use sta_content::{ContentDb, FireArc, WeaponKind};
 use sta_core::{ContentKey, EntityId, Fixed, PlayerId, TICK_HZ, TeamId, Vec3};
 
+use super::pd::{Pd, PdRec};
 use crate::event::{SimEvent, Target};
 use crate::world::{Entities, Entity, Fnv, Table};
 
 /// The XZ-plane direction from `from` to `to`, normalised, and the distance.
-fn flat(from: Vec3, to: Vec3) -> ((Fixed, Fixed), Fixed) {
+pub(super) fn flat(from: Vec3, to: Vec3) -> ((Fixed, Fixed), Fixed) {
     let (dx, dz) = (to.x - from.x, to.z - from.z);
     let d = (dx * dx + dz * dz).sqrt();
     if d == Fixed::ZERO {
@@ -75,15 +76,15 @@ struct Mount {
 
 /// A projectile in flight.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-struct Shot {
-    id: u32,
-    shooter: EntityId,
-    weapon: ContentKey,
-    target: EntityId,
-    pos: Vec3,
+pub(super) struct Shot {
+    pub(super) id: u32,
+    pub(super) shooter: EntityId,
+    pub(super) weapon: ContentKey,
+    pub(super) target: EntityId,
+    pub(super) pos: Vec3,
     /// Units per tick.
-    step: Fixed,
-    damage: Fixed,
+    pub(super) step: Fixed,
+    pub(super) damage: Fixed,
 }
 
 /// Weapon state of the whole sim.
@@ -94,6 +95,7 @@ pub struct Weapons {
     mounts: Table<Vec<Mount>>,
     shots: Vec<Shot>,
     next_shot: u32,
+    pd: Pd,
 }
 
 /// [`Weapons`] as the snapshot stores it (SIM-10).
@@ -103,6 +105,8 @@ pub(crate) struct WeaponsRec {
     mounts: Vec<(EntityId, Vec<Mount>)>,
     shots: Vec<Shot>,
     next_shot: u32,
+    /// Point-defence cycle timers (SIM-06); a format change for snapshot.rs.
+    pd: PdRec,
 }
 
 impl Weapons {
@@ -112,6 +116,7 @@ impl Weapons {
             mounts: self.mounts.iter().map(|(id, m)| (id, m.clone())).collect(),
             shots: self.shots.clone(),
             next_shot: self.next_shot,
+            pd: self.pd.to_rec(),
         }
     }
 
@@ -122,6 +127,7 @@ impl Weapons {
             mounts: Table::from_rows(r.mounts)?,
             shots: r.shots,
             next_shot: r.next_shot,
+            pd: Pd::from_rec(r.pd)?,
         })
     }
 
@@ -145,6 +151,7 @@ impl Weapons {
             && self.mounts.is_empty()
             && self.shots.is_empty()
             && self.next_shot == 0
+            && self.pd.is_empty()
     }
 
     pub(crate) fn hash_into(&self, h: &mut Fnv) {
@@ -171,6 +178,9 @@ impl Weapons {
             }
         }
         h.u64(self.next_shot as u64);
+        if !self.pd.is_empty() {
+            self.pd.hash_into(h);
+        }
     }
 
     /// One tick of weapons at tick `tick` (the tick being computed).
@@ -201,6 +211,9 @@ impl Weapons {
         for id in gone {
             self.mounts.remove(id);
         }
+
+        self.pd
+            .step(tick, units, db, teams, &mut self.shots, events);
 
         // Shots in flight home on the target's current position.
         let mut flying = Vec::with_capacity(self.shots.len());
