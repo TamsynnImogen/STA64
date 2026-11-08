@@ -26,6 +26,7 @@ pub mod event;
 pub mod fake;
 pub mod movement;
 pub mod setup;
+pub mod snapshot;
 pub mod source;
 pub mod spatial;
 pub mod spawn;

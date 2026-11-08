@@ -1,0 +1,465 @@
+//! Snapshot save/load (SIM-10): the whole simulation as bytes, so a game can
+//! be saved, a mission can `Start=snapshot:`, and a bench can rewind.
+//!
+//! Layout: `MAGIC`, [`FORMAT_VERSION`] (u16 LE), the seam revision (u32 LE),
+//! the content hash (u64 LE), then the [`Body`] in `postcard`. The header is
+//! read first so a wrong file, version or content set is refused before
+//! anything else is parsed.
+//!
+//! The [`ContentDb`] is not stored (it is not serialisable, and the files
+//! are the player's own): the snapshot keeps its hash and [`Sim::from_snapshot`]
+//! takes the database from the caller and refuses one that hashes differently.
+//!
+//! Adding a subsystem's state (weapons from SIM-04, say) is one field on
+//! [`Body`], filled in [`Sim::snapshot`] and read back in
+//! [`Sim::from_snapshot`], plus a [`FORMAT_VERSION`] bump. Old snapshots are
+//! refused, not migrated: a save is only good for the build that wrote it.
+//!
+//! The state types of other crates (`MoveStats`) have no serde, so the body
+//! uses small mirror records here instead of touching those crates.
+
+use std::sync::Arc;
+
+use serde::{Deserialize, Serialize};
+use sta_content::{ContentDb, MoveStats, Region, StartPos};
+use sta_core::{ContentKey, EntityId, Fixed, PlayerId, SEAM_REV, TeamId, Vec3};
+
+use crate::movement::{Course, Movement};
+use crate::view::UnitFlags;
+use crate::world::{Entities, Entity, EntityKind, Shields, Table};
+use crate::{Rng, Sim, SimEvent};
+
+pub const MAGIC: [u8; 4] = *b"STAS";
+/// Bumped whenever [`Body`] (or anything in it) changes layout.
+pub const FORMAT_VERSION: u16 = 1;
+
+const HEADER: usize = 4 + 2 + 4 + 8;
+
+/// Why a snapshot could not be loaded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SnapshotError {
+    /// Not a snapshot (wrong or missing magic).
+    BadMagic,
+    /// Written by a different layout of this file.
+    FormatVersion { found: u16 },
+    /// Written against a different seam revision.
+    SeamRev { found: u32 },
+    /// The content database is not the one the snapshot was taken with
+    /// (hash 0 means none).
+    ContentMismatch { saved: u64, given: u64 },
+    /// Truncated, garbled, or inconsistent (ids out of order).
+    Corrupt(String),
+}
+
+impl std::fmt::Display for SnapshotError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SnapshotError::BadMagic => write!(f, "not a snapshot"),
+            SnapshotError::FormatVersion { found } => {
+                write!(f, "snapshot format {found}, expected {FORMAT_VERSION}")
+            }
+            SnapshotError::SeamRev { found } => {
+                write!(f, "snapshot seam revision {found}, expected {SEAM_REV}")
+            }
+            SnapshotError::ContentMismatch { saved, given } => {
+                write!(
+                    f,
+                    "snapshot content hash {saved:#018x}, given database {given:#018x}"
+                )
+            }
+            SnapshotError::Corrupt(why) => write!(f, "corrupt snapshot: {why}"),
+        }
+    }
+}
+
+impl std::error::Error for SnapshotError {}
+
+#[derive(Serialize, Deserialize)]
+struct StatsRec {
+    max_speed: Fixed,
+    forward_accel: Fixed,
+    turn_omega: Fixed,
+    turn_alpha: Fixed,
+    turn_at_rest: Fixed,
+}
+
+#[derive(Serialize, Deserialize)]
+struct EntityRec {
+    id: EntityId,
+    kind: u8,
+    def: ContentKey,
+    owner: PlayerId,
+    pos: Vec3,
+    heading: (Fixed, Fixed),
+    speed: Fixed,
+    omega: Fixed,
+    target: Option<Vec3>,
+    stats: StatsRec,
+    hull: [Fixed; 2],
+    shields_now: [Fixed; 4],
+    shields_max: Fixed,
+    shields_directional: bool,
+    flags: UnitFlags,
+    progress: Option<Fixed>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct CourseRec {
+    waypoints: Vec<Vec3>,
+    formation: u8,
+}
+
+/// Everything in [`Sim`] but the content database. One field per subsystem.
+#[derive(Serialize, Deserialize)]
+struct Body {
+    tick: u64,
+    rng: u64,
+    players: Vec<(PlayerId, TeamId)>,
+    starts: Vec<StartPos>,
+    regions: Vec<Region>,
+    next_entity: u32,
+    entities: Vec<EntityRec>,
+    labels: Vec<(EntityId, String)>,
+    events: Vec<SimEvent>,
+    /// SIM-02 courses and formations.
+    courses: Vec<(EntityId, CourseRec)>,
+}
+
+fn kind_from(b: u8) -> Option<EntityKind> {
+    Some(match b {
+        0 => EntityKind::Craft,
+        1 => EntityKind::Station,
+        2 => EntityKind::Resource,
+        3 => EntityKind::Projectile,
+        4 => EntityKind::Prop,
+        _ => return None,
+    })
+}
+
+impl EntityRec {
+    fn of(e: &Entity) -> EntityRec {
+        EntityRec {
+            id: e.id,
+            kind: e.kind as u8,
+            def: e.def,
+            owner: e.owner,
+            pos: e.pos,
+            heading: e.heading,
+            speed: e.speed,
+            omega: e.omega,
+            target: e.target,
+            stats: StatsRec {
+                max_speed: e.stats.max_speed,
+                forward_accel: e.stats.forward_accel,
+                turn_omega: e.stats.turn_omega,
+                turn_alpha: e.stats.turn_alpha,
+                turn_at_rest: e.stats.turn_at_rest,
+            },
+            hull: e.hull,
+            shields_now: e.shields.now,
+            shields_max: e.shields.max,
+            shields_directional: e.shields.directional,
+            flags: e.flags,
+            progress: e.progress,
+        }
+    }
+
+    fn into_entity(self) -> Result<Entity, SnapshotError> {
+        let kind = kind_from(self.kind)
+            .ok_or_else(|| SnapshotError::Corrupt(format!("entity kind {}", self.kind)))?;
+        let s = self.stats;
+        Ok(Entity {
+            id: self.id,
+            kind,
+            def: self.def,
+            owner: self.owner,
+            pos: self.pos,
+            heading: self.heading,
+            speed: self.speed,
+            omega: self.omega,
+            target: self.target,
+            stats: MoveStats {
+                max_speed: s.max_speed,
+                forward_accel: s.forward_accel,
+                turn_omega: s.turn_omega,
+                turn_alpha: s.turn_alpha,
+                turn_at_rest: s.turn_at_rest,
+            },
+            hull: self.hull,
+            shields: Shields {
+                now: self.shields_now,
+                max: self.shields_max,
+                directional: self.shields_directional,
+            },
+            flags: self.flags,
+            progress: self.progress,
+        })
+    }
+}
+
+fn corrupt(what: &str) -> SnapshotError {
+    SnapshotError::Corrupt(format!("{what} out of order"))
+}
+
+impl Sim {
+    /// The whole simulation as bytes. Loading them with the same content
+    /// database gives a sim that steps exactly as this one would.
+    pub fn snapshot(&self) -> Vec<u8> {
+        let body = Body {
+            tick: self.tick,
+            rng: self.rng.0,
+            players: self.players.clone(),
+            starts: self.starts.clone(),
+            regions: self.regions.clone(),
+            next_entity: self.units.next_id().0,
+            entities: self.units.iter().map(EntityRec::of).collect(),
+            labels: self.labels.iter().map(|(id, l)| (id, l.clone())).collect(),
+            events: self.events.clone(),
+            courses: self
+                .movement
+                .rows()
+                .into_iter()
+                .map(|(id, c)| {
+                    (
+                        id,
+                        CourseRec {
+                            waypoints: c.waypoints,
+                            formation: c.formation,
+                        },
+                    )
+                })
+                .collect(),
+        };
+        let mut out = Vec::new();
+        out.extend_from_slice(&MAGIC);
+        out.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
+        out.extend_from_slice(&SEAM_REV.to_le_bytes());
+        out.extend_from_slice(&self.content.as_ref().map_or(0, |c| c.hash()).to_le_bytes());
+        out.extend(postcard::to_allocvec(&body).expect("snapshot serialises"));
+        out
+    }
+
+    /// Rebuild a sim from [`Sim::snapshot`]. `content` must be the database
+    /// the snapshot was taken with (`None` for a sim that had none); its hash
+    /// is checked.
+    pub fn from_snapshot(
+        bytes: &[u8],
+        content: Option<Arc<ContentDb>>,
+    ) -> Result<Sim, SnapshotError> {
+        if bytes.len() < HEADER || bytes[..4] != MAGIC {
+            return Err(SnapshotError::BadMagic);
+        }
+        let found = u16::from_le_bytes([bytes[4], bytes[5]]);
+        if found != FORMAT_VERSION {
+            return Err(SnapshotError::FormatVersion { found });
+        }
+        let seam = u32::from_le_bytes(bytes[6..10].try_into().unwrap());
+        if seam != SEAM_REV {
+            return Err(SnapshotError::SeamRev { found: seam });
+        }
+        let saved = u64::from_le_bytes(bytes[10..18].try_into().unwrap());
+        let given = content.as_ref().map_or(0, |c| c.hash());
+        if saved != given {
+            return Err(SnapshotError::ContentMismatch { saved, given });
+        }
+        let (b, rest): (Body, &[u8]) = postcard::take_from_bytes(&bytes[HEADER..])
+            .map_err(|e| SnapshotError::Corrupt(e.to_string()))?;
+        if !rest.is_empty() {
+            return Err(SnapshotError::Corrupt("trailing bytes".into()));
+        }
+
+        let list = b
+            .entities
+            .into_iter()
+            .map(EntityRec::into_entity)
+            .collect::<Result<Vec<_>, _>>()?;
+        let units =
+            Entities::from_parts(list, b.next_entity).ok_or_else(|| corrupt("entity ids"))?;
+        let labels = Table::from_rows(b.labels).ok_or_else(|| corrupt("labels"))?;
+        let courses = b
+            .courses
+            .into_iter()
+            .map(|(id, c)| {
+                (
+                    id,
+                    Course {
+                        waypoints: c.waypoints,
+                        formation: c.formation,
+                    },
+                )
+            })
+            .collect();
+        let movement = Movement::from_rows(courses).ok_or_else(|| corrupt("courses"))?;
+        Ok(Sim {
+            tick: b.tick,
+            rng: Rng(b.rng),
+            units,
+            labels,
+            players: b.players,
+            content,
+            starts: b.starts,
+            regions: b.regions,
+            events: b.events,
+            movement,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::WorldSource;
+    use crate::command::{Command, CommandKind, Order};
+
+    fn v(x: i32, y: i32, z: i32) -> Vec3 {
+        Vec3 {
+            x: Fixed::from_int(x),
+            y: Fixed::from_int(y),
+            z: Fixed::from_int(z),
+        }
+    }
+
+    fn cmd(seq: u32, o: Order) -> Command {
+        Command {
+            player: PlayerId(0),
+            seq,
+            kind: CommandKind::Order(o),
+        }
+    }
+
+    /// A few units with queued waypoints and a formation, mid-flight.
+    fn busy_sim() -> Sim {
+        let mut sim = Sim::new(7);
+        let st = MoveStats::from_f32(140.0, 1.0, 1.0, 1.0, 0.2);
+        let ids: Vec<_> = (0..4)
+            .map(|i| sim.spawn(0, v(i * 50, 0, 0), (Fixed::ZERO, Fixed::ONE), st))
+            .collect();
+        sim.labels.insert(ids[1], "flagship".into());
+        sim.step(&[
+            cmd(
+                0,
+                Order::Formation {
+                    units: ids.clone(),
+                    kind: 1,
+                },
+            ),
+            cmd(
+                1,
+                Order::Move {
+                    units: ids.clone(),
+                    to: v(400, 0, 300),
+                    queue: false,
+                },
+            ),
+            cmd(
+                2,
+                Order::Move {
+                    units: ids.clone(),
+                    to: v(-300, 20, 900),
+                    queue: true,
+                },
+            ),
+        ]);
+        for _ in 0..40 {
+            sim.rng.next_u64();
+            sim.step(&[]);
+        }
+        sim
+    }
+
+    #[test]
+    fn reloaded_digest_equals_continued_run_300_ticks_on() {
+        let mut live = busy_sim();
+        let mut loaded = Sim::from_snapshot(&live.snapshot(), None).unwrap();
+        assert_eq!(loaded.digest(), live.digest());
+        // Orders issued after the load, too.
+        for t in 0..300 {
+            let cmds = if t == 100 {
+                vec![cmd(
+                    0,
+                    Order::Move {
+                        units: vec![EntityId(2)],
+                        to: v(0, 0, -500),
+                        queue: false,
+                    },
+                )]
+            } else {
+                vec![]
+            };
+            let a = live.step(&cmds);
+            let b = loaded.step(&cmds);
+            assert_eq!(a.view.digest, b.view.digest, "tick {t}");
+        }
+        assert_eq!(loaded.digest(), live.digest());
+        assert_eq!(loaded.tick, live.tick);
+    }
+
+    #[test]
+    fn snapshot_is_stable_and_round_trips_bytes() {
+        let sim = busy_sim();
+        let bytes = sim.snapshot();
+        assert_eq!(bytes, sim.snapshot());
+        assert_eq!(Sim::from_snapshot(&bytes, None).unwrap().snapshot(), bytes);
+    }
+
+    #[test]
+    fn keeps_pending_events_and_removed_ids() {
+        let mut sim = busy_sim();
+        sim.despawn(EntityId(2), None);
+        let next = sim.units.next_id();
+        let mut loaded = Sim::from_snapshot(&sim.snapshot(), None).unwrap();
+        assert_eq!(loaded.units.next_id(), next);
+        assert!(loaded.unit(EntityId(2)).is_none());
+        assert_eq!(loaded.step(&[]).events, sim.step(&[]).events);
+    }
+
+    #[test]
+    fn content_is_checked_by_hash() {
+        let db = Arc::new(sta_content::fake::db());
+        let mut sim = busy_sim();
+        sim.content = Some(Arc::clone(&db));
+        let bytes = sim.snapshot();
+        let loaded = Sim::from_snapshot(&bytes, Some(Arc::clone(&db))).unwrap();
+        assert_eq!(loaded.digest(), sim.digest());
+        assert!(matches!(
+            Sim::from_snapshot(&bytes, None),
+            Err(SnapshotError::ContentMismatch { .. })
+        ));
+        let plain = busy_sim().snapshot();
+        assert!(matches!(
+            Sim::from_snapshot(&plain, Some(db)),
+            Err(SnapshotError::ContentMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn refuses_bad_input() {
+        let bytes = busy_sim().snapshot();
+        assert_eq!(
+            Sim::from_snapshot(b"nope", None).unwrap_err(),
+            SnapshotError::BadMagic
+        );
+        let mut b = bytes.clone();
+        b[4] = 99;
+        assert_eq!(
+            Sim::from_snapshot(&b, None).unwrap_err(),
+            SnapshotError::FormatVersion { found: 99 }
+        );
+        let mut b = bytes.clone();
+        b[6] ^= 0xff;
+        assert!(matches!(
+            Sim::from_snapshot(&b, None),
+            Err(SnapshotError::SeamRev { .. })
+        ));
+        assert!(matches!(
+            Sim::from_snapshot(&bytes[..bytes.len() - 5], None),
+            Err(SnapshotError::Corrupt(_))
+        ));
+        let mut b = bytes;
+        b.push(0);
+        assert!(matches!(
+            Sim::from_snapshot(&b, None),
+            Err(SnapshotError::Corrupt(_))
+        ));
+    }
+}
