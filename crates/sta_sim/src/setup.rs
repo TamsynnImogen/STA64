@@ -63,15 +63,11 @@ pub trait Controller: Send {
 }
 
 impl Sim {
-    /// A sim at tick 0 for `s`. Minimal until SIM-01: seeds the random
-    /// sequence and records the players, but spawns nothing from the map.
+    /// A sim at tick 0 for `s`: seeded, with the players and the map's
+    /// objects (`crate::spawn`). Objects it cannot resolve are skipped;
+    /// [`Sim::from_setup_with_warnings`] lists them.
     pub fn from_setup(s: &GameSetup) -> Sim {
-        let mut sim = Sim::new(s.seed);
-        let mut players: Vec<_> = s.players.iter().map(|p| (p.id, p.team)).collect();
-        players.sort();
-        players.dedup_by_key(|p| p.0);
-        sim.players = players;
-        sim
+        Sim::from_setup_with_warnings(s).0
     }
 }
 
