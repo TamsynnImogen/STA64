@@ -1,10 +1,12 @@
-//! Combat: weapons today (SIM-04); damage (SIM-05) and point defence
-//! (SIM-06) join here.
+//! Combat: weapons (SIM-04), damage (SIM-05), point defence (SIM-06).
 
 pub mod damage;
+pub mod pd;
 pub mod weapons;
 
 #[cfg(test)]
 mod damage_tests;
+#[cfg(test)]
+mod pd_tests;
 #[cfg(test)]
 mod weapons_tests;
