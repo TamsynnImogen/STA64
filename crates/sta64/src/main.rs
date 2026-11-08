@@ -12,6 +12,7 @@ pub mod clock;
 pub mod plugins;
 pub mod sim_link;
 
+mod input;
 mod map;
 mod render;
 mod viewer;
@@ -125,18 +126,17 @@ fn main() {
         )
         .insert_resource(render::sprites::SpriteTables(std::sync::Arc::new(table)))
         .insert_resource(teams);
-    // Sets and the sim link; idle until a `SimLink` exists (R0-3).
-    plugins::add_plugins(&mut app, &cfg);
     if let Some(m) = &cfg.map {
         let maps = map::browser(&vfs, Some(m.as_str()).filter(|m| !m.is_empty()), browser.mount_summary.clone());
         println!("{} maps visible", maps.maps.len());
         let rts = vfs.read("RTS_CFG.h").and_then(Result::ok).map(|b| sta_assets::cfg_h::CfgH::parse(&String::from_utf8_lossy(&b)));
         app.insert_resource(map::CameraLimits::from_cfg(rts.as_ref()))
             .insert_resource(viewer::Mounted(vfs))
-            .insert_resource(maps)
-            .add_plugins(map::MapPlugin);
+            .insert_resource(maps);
     } else {
-        app.insert_resource(viewer::Mounted(vfs)).insert_resource(browser).add_plugins(viewer::ViewerPlugin);
+        app.insert_resource(viewer::Mounted(vfs)).insert_resource(browser);
     }
+    // Sets, the sim link and the lanes' plugins for the mode.
+    plugins::add_plugins(&mut app, &cfg);
     app.run();
 }

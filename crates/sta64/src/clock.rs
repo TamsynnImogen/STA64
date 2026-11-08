@@ -11,8 +11,6 @@
 //! The clock also decides how many sim ticks a frame runs; the sim link
 //! asks it with [`AnimClock::begin_frame`] and reports each tick it ran.
 
-#![allow(dead_code)] // Seam: the client moves onto it in R0-3 and RND-01.
-
 use bevy::prelude::*;
 use sta_sim::{EntityId, TICK_HZ, Tick};
 

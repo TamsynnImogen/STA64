@@ -7,8 +7,6 @@
 //! - The sets run in a fixed order each frame: bench, input, sim link,
 //!   interpolate, then render, UI and audio.
 
-#![allow(dead_code)] // Seam: modes and states are used from R0-3 and INT-M2 on.
-
 use std::path::PathBuf;
 
 use bevy::prelude::*;

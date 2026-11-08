@@ -18,6 +18,7 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 - [?] Starfield star size (estimate: ODF `.scale` = world units seen from 5k): point stars a few px, FO star clouds ~6° — b6bc4f8
 - [?] Ships near a planet's day side / inside nebulae take their coloured light (planet glow, nebula lights); not overpowering? — 8a95cee
 - [?] Nebulae as volumetric gas (Mutara purple/pink etc.) instead of billboards; ships inside show correctly; FPS when zoomed into a big nebula — e4eb7c7
+- [?] R0-3 carve (no visual change intended): `--map` as before — ships select (click, box, Shift), right-click move keeps formation, Space stops, motion smooth, selection rings and waypoint line show, FPS readout, strategic icons green when selected
 
 ## Checked earlier (morning list)
 

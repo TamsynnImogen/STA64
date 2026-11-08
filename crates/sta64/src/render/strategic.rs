@@ -15,8 +15,9 @@
 //! - Each icon fades in as its object's on-screen radius falls from
 //!   [`FADE_START_PX`] to [`FADE_FULL_PX`]. Tab cycles auto / always / off.
 //! - Selected units' icons get a green outline; clicks and drag boxes select by
-//!   icon when it shows (see `units::select`).
+//!   icon when it shows (see `input::select`).
 
+use crate::sim_link::{Selection, SimEntity};
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
@@ -296,12 +297,13 @@ fn attach(mut commands: Commands, masks: Res<Masks>, added: Query<(Entity, &Stra
     }
 }
 
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn update(
     mut commands: Commands,
     mode: Res<Mode>,
     camera: Query<(&Camera, &GlobalTransform, &Projection), crate::map::MainCamera>,
-    mut objects: Query<(&GlobalTransform, &mut Strategic, Has<crate::render::units::Selected>)>,
+    mut objects: Query<(&GlobalTransform, &mut Strategic, Option<&SimEntity>)>,
+    selection: Res<Selection>,
     mut icons: Query<(Entity, &Icon, &mut Node, &mut ImageNode, &mut UiTransform)>,
     mut outlines: Query<&mut Visibility, Without<Icon>>,
     images: Res<Assets<Image>>,
@@ -317,10 +319,11 @@ fn update(
     let eye = cam_tf.translation();
     let fwd = cam_tf.forward().as_vec3();
     for (icon_e, icon, mut node, mut img, mut ui_tf) in &mut icons {
-        let Ok((gt, mut s, selected)) = objects.get_mut(icon.target) else {
+        let Ok((gt, mut s, sim)) = objects.get_mut(icon.target) else {
             commands.entity(icon_e).despawn();
             continue;
         };
+        let selected = sim.is_some_and(|e| selection.0.contains(&e.0));
         let pos = gt.translation();
         let depth = (pos - eye).dot(fwd);
         let screen = if depth > 1.0 { cam.world_to_viewport(cam_tf, pos).ok() } else { None };

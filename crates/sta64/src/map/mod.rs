@@ -8,9 +8,12 @@
 //! Controls: left click/drag select, right click move, Space stop, Left/Right
 //! map, PgUp/PgDn x10, WASD pan, middle-drag orbit, wheel zoom, R reset view.
 
+use crate::clock::AnimClock;
 use crate::render::model_scene::{self, PartCache, SpawnCtx, to_bevy};
 use crate::render::sprites::SpriteTables;
 use crate::render::textures::{Loader, TextureCache};
+use crate::render::units::SelectRadius;
+use crate::sim_link::{CommandQueue, ContentRes, Selection, SimEntity, SimLink};
 use crate::viewer::{Mounted, Orbit, TeamColours};
 use bevy::app::{HierarchyPropagatePlugin, Propagate};
 use bevy::camera::visibility::RenderLayers;
@@ -22,6 +25,8 @@ use sta_assets::a2fmt::Matrix34;
 use sta_assets::model::Model;
 use std::collections::HashMap;
 use std::sync::Arc;
+use sta_sim::command::LocalRouter;
+use sta_sim::{EntityId, Fixed, MoveStats, PlayerId, Sim, Vec3 as SimVec3};
 
 #[derive(Resource)]
 pub struct MapBrowser {
@@ -55,51 +60,15 @@ pub fn browser(vfs: &sta_vfs::Vfs, initial: Option<&str>, mount_summary: String)
     }
 }
 
-/// The model an ODF draws: its `basename` (Fleet Operations names models this
-/// way, e.g. `dcorvette` -> `dom_destroyer`), else the ODF's own name.
-fn model_name(odf: &sta_odf::Odf, odf_name: &str) -> String {
-    odf.str("basename").filter(|b| !b.trim().is_empty()).map(|b| b.trim().to_owned()).unwrap_or_else(|| odf_name.to_owned())
-}
-
-/// ODF lookups and loaded models, kept across maps.
+/// Loaded models, kept across maps, and the temporary ODF shim.
 #[derive(Resource, Default)]
 struct Catalogue {
-    odf_paths: HashMap<String, String>,
-    odfs: HashMap<String, Option<Arc<sta_odf::Odf>>>,
+    /// CON-03 replaces this with the real content loader.
+    legacy: sta_content::legacy::Legacy,
     models: HashMap<String, Option<(String, Arc<Model>)>>,
 }
 
 impl Catalogue {
-    fn index(&mut self, vfs: &sta_vfs::Vfs) {
-        if !self.odf_paths.is_empty() {
-            return;
-        }
-        // ODFs are found by file name across all ODF folders (and A1's addon/).
-        for dir in ["odf", "addon"] {
-            for p in vfs.list(dir) {
-                if let Some(stem) = p.strip_suffix(".odf").map(|s| s.rsplit('/').next().unwrap_or(s).to_owned()) {
-                    self.odf_paths.entry(stem).or_insert(p);
-                }
-            }
-        }
-    }
-
-    fn odf(&mut self, vfs: &sta_vfs::Vfs, name: &str) -> Option<Arc<sta_odf::Odf>> {
-        let key = name.to_ascii_lowercase();
-        if let Some(o) = self.odfs.get(&key) {
-            return o.clone();
-        }
-        let paths = &self.odf_paths;
-        let mut load = |n: &str| {
-            let stem = n.to_ascii_lowercase();
-            let stem = stem.trim_end_matches(".odf");
-            paths.get(stem).and_then(|p| vfs.read(p)).and_then(Result::ok).map(|b| String::from_utf8_lossy(&b).into_owned())
-        };
-        let odf = sta_odf::resolve(&key, &mut load).ok().map(Arc::new);
-        self.odfs.insert(key, odf.clone());
-        odf
-    }
-
     fn model(&mut self, vfs: &sta_vfs::Vfs, name: &str) -> Option<(String, Arc<Model>)> {
         let key = name.to_ascii_lowercase();
         let key = key.trim_end_matches(".sod").to_owned();
@@ -116,6 +85,13 @@ impl Catalogue {
         self.models.insert(key, m.clone());
         m
     }
+}
+
+/// Add a ship at a map transform (right, up, front, position).
+fn spawn_unit(sim: &mut Sim, team: i32, transform: &[f32; 12], stats: MoveStats) -> EntityId {
+    let pos = SimVec3::from_f32([transform[9], transform[10], transform[11]]);
+    let heading = (Fixed::from_f64(transform[6] as f64), Fixed::from_f64(transform[8] as f64));
+    sim.spawn(team.clamp(0, 255) as u8, pos, heading, stats)
 }
 
 #[derive(Component)]
@@ -202,7 +178,9 @@ type MapEntities = Or<(With<MapRoot>, With<Sky>)>;
 /// The rest of the map's state, as one system parameter.
 type MapState<'w> = (
     ResMut<'w, crate::render::particles::Particles>,
-    ResMut<'w, crate::render::units::Game>,
+    ResMut<'w, Selection>,
+    ResMut<'w, CommandQueue>,
+    ResMut<'w, AnimClock>,
     ResMut<'w, CameraLimits>,
     ResMut<'w, Assets<crate::render::planet::PlanetMaterial>>,
     ResMut<'w, Assets<crate::render::nebula::NebulaMaterial>>,
@@ -234,7 +212,6 @@ impl Plugin for MapPlugin {
                 rotate: MouseButton::Middle,
                 pan: None,
             })
-            .add_plugins(crate::render::units::UnitsPlugin)
             .add_plugins(crate::render::planet::PlanetPlugin)
             .add_plugins(crate::render::rock::RockPlugin)
             .add_plugins(crate::render::nebula::NebulaPlugin)
@@ -435,13 +412,17 @@ fn rebuild(
     lighting: Lighting,
 ) {
     let (mut silhouettes, mut ambient, mut lights) = lighting;
-    let (mut particles, mut game, mut limits, mut planet_materials, mut nebula_materials, noise) = state;
+    let (mut particles, mut selection, mut queue, mut clock, mut limits, mut planet_materials, mut nebula_materials, noise) = state;
     if !browser.dirty {
         return;
     }
     browser.dirty = false;
     particles.clear();
-    game.reset();
+    // The old map's sim goes; the new one is linked once its ships are placed.
+    commands.remove_resource::<SimLink>();
+    selection.0.clear();
+    queue.0.clear();
+    *clock = AnimClock::new(clock.mode(), clock.seed());
     for e in &roots {
         commands.entity(e).despawn();
     }
@@ -461,7 +442,11 @@ fn rebuild(
             return;
         }
     };
-    catalogue.index(&vfs.0);
+    // Every ODF the map names, its ships' physics ODFs come with them, and the starfield.
+    let star_odf = map.starfield_odf.trim_end_matches(".odf").trim_end_matches(".ODF").to_owned();
+    let db = Arc::new(catalogue.legacy.db(&vfs.0, map.objects.iter().map(|o| o.odf.as_str()).chain([star_odf.as_str()])));
+    commands.insert_resource(ContentRes(db.clone()));
+    let mut sim = Sim::new(1);
     let formats = device
         .map(|d| CompressedImageFormats::from_features(d.features()))
         .unwrap_or(CompressedImageFormats::BC);
@@ -481,11 +466,12 @@ fn rebuild(
     let mut hidden = 0usize;
 
     for o in &map.objects {
-        let Some(odf) = catalogue.odf(&vfs.0, &o.odf) else {
+        let Some(def) = db.key(&o.odf).and_then(|k| db.unit(k)) else {
             no_odf += 1;
             missing.push(o.odf.clone());
             continue;
         };
+        let odf = &*def.raw;
         // Classes with `hidden = 1` are editor markers, drawn only in edit mode.
         // A directional-light marker aims the map's lights along its front axis.
         if odf.i64("hidden").unwrap_or(0) != 0 {
@@ -607,7 +593,7 @@ fn rebuild(
             // gives the radius.
             let scale = odf.f32("ScaleSOD").filter(|s| *s > 0.0).unwrap_or(1.0);
             let radius = catalogue
-                .model(&vfs.0, &model_name(&odf, &o.odf))
+                .model(&vfs.0, &def.model)
                 .and_then(|(_, m)| m.bounds())
                 .map(|(lo, hi)| (Vec3::from(hi) - Vec3::from(lo)).max_element() * 0.5)
                 .unwrap_or(500.0)
@@ -626,7 +612,7 @@ fn rebuild(
             drawn += 1;
             continue;
         }
-        let Some((path, model)) = catalogue.model(&vfs.0, &model_name(&odf, &o.odf)) else {
+        let Some((path, model)) = catalogue.model(&vfs.0, &def.model) else {
             no_model += 1;
             continue;
         };
@@ -642,24 +628,14 @@ fn rebuild(
         }
         let units_before = units;
         // Craft with a physics ODF move: they become simulation units.
-        if let Some(phys) = odf.str("physicsFile").filter(|p| !p.is_empty()).map(|p| p.trim_end_matches(".odf").to_owned())
-            && let Some(ph) = catalogue.odf(&vfs.0, &phys)
-            && ph.f32("impulseSpeed").is_some_and(|s| s > 0.0)
-        {
-            let stats = sta_sim::MoveStats::from_f32(
-                ph.f32("impulseSpeed").unwrap_or(100.0),
-                ph.f32("forwardAccel").unwrap_or(1.0),
-                ph.f32("turnOmega").unwrap_or(1.0),
-                ph.f32("turnAlpha").unwrap_or(1.0),
-                ph.f32("turnOmegaFractionAtRest").unwrap_or(0.2),
-            );
-            let id = game.spawn(o.team, &o.transform, stats);
+        if def.movement.max_speed > Fixed::ZERO {
+            let id = spawn_unit(&mut sim, o.team, &o.transform, def.movement);
             let radius = model
                 .bounds()
                 .map(|(lo, hi)| (Vec3::from(hi) - Vec3::from(lo)).length() * 0.5)
                 .unwrap_or(20.0)
                 * scale;
-            commands.entity(entity).insert(crate::render::units::Unit { id, radius: radius.max(5.0) });
+            commands.entity(entity).insert((SimEntity(id), SelectRadius(radius.max(5.0))));
             units += 1;
         }
         let team = if o.team > 0 { teams.0.get(o.team as usize).map(|t| t.1).unwrap_or(neutral) } else { neutral };
@@ -670,7 +646,7 @@ fn rebuild(
             let radius = model.bounds().map(|(lo, hi)| (Vec3::from(hi) - Vec3::from(lo)).length() * 0.5).unwrap_or(20.0) * scale;
             let mobile = units_before != units;
             let mut icon = crate::render::strategic::Strategic::new(crate::render::strategic::shape_for(&class, mobile), team, radius);
-            let sv = tables.0.sprite(&format!("{}_sv", model_name(&odf, &o.odf)));
+            let sv = tables.0.sprite(&format!("{}_sv", def.model));
             if let Some(sprite) = sv
                 && let Some(tex) = (Loader { vfs: &vfs.0, cache: &mut cache, images: &mut images, formats }).colour(&sprite.texture, false)
             {
@@ -757,8 +733,7 @@ fn rebuild(
 
     // Starfield: the map's starfield ODF, `<sprite> = count` and `<sprite>.scale`.
     let mut star_note = format!("{} (not found)", map.starfield_odf);
-    let star_odf = map.starfield_odf.trim_end_matches(".odf").trim_end_matches(".ODF").to_owned();
-    if let Some(sf) = catalogue.odf(&vfs.0, &star_odf) {
+    if let Some(sf) = db.key(&star_odf).and_then(|k| db.unit(k)).map(|d| &*d.raw) {
         let entries: Vec<(String, u32, f32)> = sf
             .keys()
             .filter(|k| !k.to_ascii_lowercase().ends_with(".scale"))
@@ -816,6 +791,10 @@ fn rebuild(
     limits.lo = a.min(b) - Vec3::splat(margin);
     limits.hi = a.max(b) + Vec3::splat(margin);
     limits.max_dist = size.x.max(size.z).max(2000.0) * 2.0;
+
+    // The ships' sim, stepped by the sim link. The view orders any team's ships, so
+    // the link speaks as the bench, which the sim does not restrict to its own units.
+    commands.insert_resource(SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), PlayerId::BENCH));
 
     missing.sort();
     missing.dedup();
