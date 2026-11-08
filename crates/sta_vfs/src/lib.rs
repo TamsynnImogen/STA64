@@ -9,13 +9,19 @@
 //! its root. An archive named `odf.fpq` is mounted under `odf/`. ZFS archives
 //! have no folders; their entries mount where Armada II keeps each type:
 //! `.odf` under `odf/`, `.tt` under `techtree/`, anything else at the root.
-//! Inside one layer, loose files win over FPQ entries, which win over ZFS
-//! entries, matching Fleet Operations for FPQ.
+//! STA64's own `*.sta` archives (`docs/STA_ARCHIVE.md`) mount at the layer's
+//! root with their paths as written.
+//!
+//! Inside one layer, loose files win over `.sta` entries, which win over FPQ
+//! entries, which win over ZFS entries (loose over FPQ matches Fleet
+//! Operations; loose over `.sta` lets a modder test a change without
+//! repacking). A `.sta` whiteout hides its path in every lower layer.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+pub mod sta;
 pub mod zfs;
 
 #[derive(Debug, thiserror::Error)]
@@ -36,6 +42,11 @@ pub enum VfsError {
         path: PathBuf,
         source: zfs::ZfsError,
     },
+    #[error("archive {path}: {source}")]
+    Sta {
+        path: PathBuf,
+        source: sta::StaError,
+    },
     #[error("io error at {path}: {source}")]
     Io {
         path: PathBuf,
@@ -49,6 +60,7 @@ pub struct Layer {
     pub root: PathBuf,
     pub archives: Vec<(PathBuf, sta_fpq::Fpq)>,
     pub zfs: Vec<(PathBuf, zfs::Zfs)>,
+    pub sta: Vec<(PathBuf, sta::StaArchive)>,
 }
 
 impl Layer {
@@ -64,6 +76,7 @@ impl std::fmt::Debug for Layer {
             .field("root", &self.root)
             .field("archives", &self.archives.iter().map(|(p, _)| p).collect::<Vec<_>>())
             .field("zfs", &self.zfs.iter().map(|(p, _)| p).collect::<Vec<_>>())
+            .field("sta", &self.sta.iter().map(|(p, _)| p).collect::<Vec<_>>())
             .finish()
     }
 }
@@ -76,6 +89,11 @@ pub enum Source {
     Packed { archive: usize, entry: usize },
     /// An entry of the layer's `zfs[archive]` (Armada I).
     Zfs { archive: usize, entry: usize },
+    /// An entry of the layer's `sta[archive]` (STA64).
+    Sta { archive: usize, entry: usize },
+    /// A `.sta` whiteout: the path is hidden in this layer and every lower one.
+    /// [`Vfs::resolve`], [`Vfs::resolve_all`] and [`Vfs::list`] never hand it out.
+    Whiteout,
 }
 
 /// Where a ZFS entry's flat name mounts (lower-cased): Armada II's folder for
@@ -126,6 +144,28 @@ impl Vfs {
         let mut map = HashMap::new();
         index_dir(&root, &root, &mut map)?;
 
+        // STA64 archives next: loose files keep priority over them.
+        let mut sta_paths: Vec<PathBuf> = fs::read_dir(&root)
+            .map_err(|source| VfsError::Io { path: root.clone(), source })?
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_file() && p.extension().is_some_and(|x| x.eq_ignore_ascii_case("sta")))
+            .collect();
+        sta_paths.sort();
+        let mut sta_archives = Vec::new();
+        for path in sta_paths {
+            let a = sta::StaArchive::open(&path).map_err(|source| VfsError::Sta { path: path.clone(), source })?;
+            let archive = sta_archives.len();
+            for (entry, e) in a.entries().iter().enumerate() {
+                let src = match e.kind {
+                    sta::Kind::File => Source::Sta { archive, entry },
+                    sta::Kind::Whiteout => Source::Whiteout,
+                };
+                map.entry(e.key.clone()).or_insert(src);
+            }
+            sta_archives.push((path, a));
+        }
+
         let mut fpqs: Vec<PathBuf> = fs::read_dir(&root)
             .map_err(|source| VfsError::Io { path: root.clone(), source })?
             .flatten()
@@ -171,7 +211,7 @@ impl Vfs {
             zfs_archives.push((path, z));
         }
 
-        self.layers.push(Layer { name, root, archives, zfs: zfs_archives });
+        self.layers.push(Layer { name, root, archives, zfs: zfs_archives, sta: sta_archives });
         self.index.push(map);
         Ok(())
     }
@@ -180,19 +220,23 @@ impl Vfs {
         &self.layers
     }
 
-    /// The highest-priority source for `path`, with its layer index.
+    /// The highest-priority source for `path`, with its layer index; `None`
+    /// when no layer has it or a whiteout hides it.
     pub fn resolve(&self, path: &str) -> Option<(usize, &Source)> {
         let key = normalize(path);
-        self.index.iter().enumerate().find_map(|(i, m)| m.get(&key).map(|s| (i, s)))
+        let (i, s) = self.index.iter().enumerate().find_map(|(i, m)| m.get(&key).map(|s| (i, s)))?;
+        (*s != Source::Whiteout).then_some((i, s))
     }
 
-    /// All layers providing `path`, highest priority first (for override diagnostics).
+    /// All layers providing `path`, highest priority first (for override
+    /// diagnostics and next-version-down reads), stopping at a whiteout.
     pub fn resolve_all(&self, path: &str) -> Vec<(&str, &Source)> {
         let key = normalize(path);
         self.layers
             .iter()
             .zip(&self.index)
             .filter_map(|(l, m)| m.get(&key).map(|s| (l.name(), s)))
+            .take_while(|(_, s)| **s != Source::Whiteout)
             .collect()
     }
 
@@ -216,6 +260,11 @@ impl Vfs {
                 let (_, z) = l.zfs.get(*archive).ok_or_else(|| invalid(format!("no zfs {archive}")))?;
                 z.read(*entry).map_err(|e| invalid(e.to_string()))
             }
+            Source::Sta { archive, entry } => {
+                let (_, a) = l.sta.get(*archive).ok_or_else(|| invalid(format!("no sta {archive}")))?;
+                a.read(*entry).map_err(|e| invalid(e.to_string()))
+            }
+            Source::Whiteout => Err(std::io::Error::new(std::io::ErrorKind::NotFound, "hidden by a whiteout")),
         }
     }
 
@@ -230,11 +279,13 @@ impl Vfs {
         if !prefix.is_empty() && !prefix.ends_with('/') {
             prefix.push('/');
         }
-        let mut seen: HashSet<&str> = HashSet::new();
+        // The top-most layer having a path decides; a whiteout there hides it.
+        let mut decided: HashSet<&str> = HashSet::new();
+        let mut seen: Vec<&str> = Vec::new();
         for m in &self.index {
-            for k in m.keys() {
-                if k.starts_with(&prefix) {
-                    seen.insert(k);
+            for (k, s) in m {
+                if k.starts_with(&prefix) && decided.insert(k) && *s != Source::Whiteout {
+                    seen.push(k);
                 }
             }
         }
@@ -363,6 +414,47 @@ mod tests {
         assert_eq!(vfs.list("odf"), ["odf/fed.odf", "odf/over.odf"]);
         let (_, src) = vfs.resolve("techtree/borg4.tt").unwrap();
         assert_eq!(vfs.read_from(vfs.layer_index("A1").unwrap(), src).unwrap(), b"bbase.odf 0");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sta_mounts_below_loose_and_whiteouts_hide_lower_layers() {
+        use crate::sta::tests::{build, T};
+        let root = tmp("sta");
+        write(root.join("Data/odf/ships/fdefiant.odf"), "data defiant");
+        write(root.join("Data/odf/ships/fsabre.odf"), "data sabre");
+        write(root.join("Data/Mods/M/info.ini"), "[Mod]\n");
+        // The mod's archive: a new ship, an override, a whiteout; a loose file beats its own copy.
+        let archive = build(
+            &[
+                T::Zstd("odf/ships/Fakira.odf", b"mod akira"),
+                T::Stored("odf/ships/fsabre.odf", b"mod sabre"),
+                T::Whiteout("odf/ships/fdefiant.odf"),
+                T::Stored("odf/ships/test.odf", b"packed test"),
+            ],
+            true,
+        );
+        fs::write(root.join("Data/Mods/M/mod.sta"), archive).unwrap();
+        write(root.join("Data/Mods/M/odf/ships/test.odf"), "loose test");
+        let vfs = Vfs::mount_install(&root, Some("M")).unwrap();
+        assert_eq!(vfs.read("odf/ships/FAKIRA.odf").unwrap().unwrap(), b"mod akira");
+        assert_eq!(vfs.read("odf/ships/fsabre.odf").unwrap().unwrap(), b"mod sabre");
+        assert_eq!(vfs.read("odf/ships/test.odf").unwrap().unwrap(), b"loose test");
+        assert!(vfs.read("odf/ships/fdefiant.odf").is_none(), "whiteout hides Data's file");
+        assert!(vfs.resolve_all("odf/ships/fdefiant.odf").is_empty());
+        assert_eq!(vfs.resolve_all("odf/ships/fsabre.odf").len(), 2);
+        let ships = vfs.list("odf/ships");
+        assert_eq!(ships, ["odf/ships/fakira.odf", "odf/ships/fsabre.odf", "odf/ships/test.odf"]);
+        assert!(matches!(vfs.resolve("odf/ships/fakira.odf"), Some((0, Source::Sta { archive: 0, .. }))));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn broken_sta_fails_the_mount() {
+        let root = tmp("sta_bad");
+        fs::write(root.join("bad.sta"), b"STA64ARC garbage").unwrap();
+        let mut vfs = Vfs::default();
+        assert!(matches!(vfs.push_dir("x".into(), root.clone()), Err(VfsError::Sta { .. })));
         let _ = fs::remove_dir_all(root);
     }
 

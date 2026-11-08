@@ -25,6 +25,7 @@ use sta_content::{ContentDb, MoveStats, Region, StartPos};
 use sta_core::{ContentKey, EntityId, Fixed, PlayerId, SEAM_REV, TeamId, Vec3};
 
 use crate::combat::weapons::{Weapons, WeaponsRec};
+use crate::economy::{Economy, EconomyRec};
 use crate::movement::{Course, Movement};
 use crate::view::UnitFlags;
 use crate::world::{Entities, Entity, EntityKind, Shields, Table};
@@ -32,7 +33,7 @@ use crate::{Rng, Sim, SimEvent};
 
 pub const MAGIC: [u8; 4] = *b"STAS";
 /// Bumped whenever [`Body`] (or anything in it) changes layout.
-pub const FORMAT_VERSION: u16 = 2;
+pub const FORMAT_VERSION: u16 = 3;
 
 const HEADER: usize = 4 + 2 + 4 + 8;
 
@@ -126,6 +127,8 @@ struct Body {
     courses: Vec<(EntityId, CourseRec)>,
     /// SIM-04 mounts, attack orders and projectiles in flight.
     weapons: WeaponsRec,
+    /// SIM-07 stock, resource nodes and freighters.
+    economy: EconomyRec,
 }
 
 fn kind_from(b: u8) -> Option<EntityKind> {
@@ -233,6 +236,7 @@ impl Sim {
                 })
                 .collect(),
             weapons: self.weapons.to_rec(),
+            economy: self.economy.to_rec(),
         };
         let mut out = Vec::new();
         out.extend_from_slice(&MAGIC);
@@ -307,6 +311,7 @@ impl Sim {
             events: b.events,
             movement,
             weapons,
+            economy: Economy::from_rec(&b.economy),
         })
     }
 }
@@ -437,7 +442,27 @@ mod tests {
                 target: t,
             }),
         };
-        live.step(&[attack]);
+        // Mining far from the fight: moon, station and a freighter, all colocated.
+        let (moon, station, miner) = (
+            db.key("fx_moon").unwrap(),
+            db.key("fx_station").unwrap(),
+            db.key("fx_miner").unwrap(),
+        );
+        let origin = v(0, 0, 0);
+        let node = live
+            .spawn_def(moon, crate::world::NEUTRAL, origin, ahead)
+            .unwrap();
+        live.spawn_def(station, PlayerId(1), origin, ahead).unwrap();
+        let m = live.spawn_def(miner, PlayerId(1), origin, ahead).unwrap();
+        let mine = Command {
+            player: PlayerId(1),
+            seq: 1,
+            kind: CommandKind::Order(Order::Mine {
+                units: vec![m],
+                node,
+            }),
+        };
+        live.step(&[attack, mine]);
         for _ in 0..5 {
             live.step(&[]);
         }
@@ -446,6 +471,10 @@ mod tests {
             "snapshot should catch a shot in flight"
         );
         assert_eq!(live.weapons.attack_of(s), Some(t));
+        assert!(
+            !live.economy.to_rec().miners.is_empty(),
+            "snapshot should catch a freighter mining"
+        );
         let mut loaded = Sim::from_snapshot(&live.snapshot(), Some(Arc::clone(&db))).unwrap();
         assert_eq!(loaded.digest(), live.digest());
         let mut events = 0;
@@ -457,6 +486,65 @@ mod tests {
             events += a.events.len();
         }
         assert!(events > 0, "combat should produce events");
+        assert_eq!(loaded.snapshot(), live.snapshot());
+    }
+
+    /// Snapshot a freighter mid-trip, carrying cargo, and step across its delivery.
+    #[test]
+    fn mid_mining_snapshot_continues_identically() {
+        use crate::setup::{Control, GameOptions, GameSetup, PlayerSetup};
+        let seat = |id| PlayerSetup {
+            id: PlayerId(id),
+            team: TeamId(id),
+            race: "fx".into(),
+            control: Control::Human,
+        };
+        let db = Arc::new(sta_content::fake::db());
+        let setup = GameSetup {
+            seed: 3,
+            map: Arc::new(sta_content::MapDef::empty()),
+            content: Arc::clone(&db),
+            players: vec![seat(0), seat(1)],
+            options: GameOptions::default(),
+        };
+        let mut live = Sim::from_setup(&setup);
+        let ahead = (Fixed::ZERO, Fixed::ONE);
+        let key = |n: &str| db.key(n).unwrap();
+        let node = live
+            .spawn_def(key("fx_moon"), crate::world::NEUTRAL, v(0, 0, 0), ahead)
+            .unwrap();
+        live.spawn_def(key("fx_station"), PlayerId(0), v(0, 0, 0), ahead)
+            .unwrap();
+        let m = live
+            .spawn_def(key("fx_miner"), PlayerId(0), v(0, 0, 0), ahead)
+            .unwrap();
+        let mine = cmd(
+            0,
+            Order::Mine {
+                units: vec![m],
+                node,
+            },
+        );
+        live.step(&[mine]);
+        for _ in 0..450 {
+            live.step(&[]);
+        }
+        let rec = live.economy.to_rec();
+        assert!(
+            rec.miners.iter().any(|m| m.3 != 0),
+            "freighter should be carrying cargo"
+        );
+        let mut loaded = Sim::from_snapshot(&live.snapshot(), Some(Arc::clone(&db))).unwrap();
+        assert_eq!(loaded.digest(), live.digest());
+        let mut delivered = 0;
+        for tick in 0..300 {
+            let a = live.step(&[]);
+            let b = loaded.step(&[]);
+            assert_eq!(a.view.digest, b.view.digest, "tick {tick}");
+            assert_eq!(a.events, b.events, "tick {tick}");
+            delivered += a.events.len();
+        }
+        assert!(delivered > 0, "a delivery should cross the snapshot");
         assert_eq!(loaded.snapshot(), live.snapshot());
     }
 
