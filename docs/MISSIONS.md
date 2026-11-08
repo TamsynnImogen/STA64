@@ -78,7 +78,15 @@ platforms. The runtime replaces them with deterministic implementations, and
 
 - [x] Inventory the `mmm` Lua API ([MMM_API.md](MMM_API.md)).
 - [x] Script resolution and the conversion report (`sta_mission`).
-- `sta_mission` crate: resolution rules above, plus the Lua runtime bound to
-  `sta_sim` commands so scripts stay deterministic in lockstep.
+- [x] Lua 5.3 (`mlua`, bundled) loads every installed mission script through
+  the VFS with `include()` and luabind's `class` (`class 'Name'(Base)`):
+  FO4 78, STA1 Classic 96, STA2 Classic 78 scripts, 0 errors
+  (`sta_mission::script::dry_run`, unknown API stubbed and recorded).
+- [ ] Real API in place of the stubs, most-used first. At load time scripts
+  touch `MMM.register`, `State`, `EntityFinder():find`, `Monitor():hook`
+  with `MonitorHook.Type.OnTrue`, and `Player():setRelation` /
+  `Player.Relation`.
+- [ ] Bind the runtime to `sta_sim` commands so scripts stay deterministic in
+  lockstep; deterministic `math.*`.
 - Run every installed `missions/*.lua` headless against stub maps as a
   regression test.

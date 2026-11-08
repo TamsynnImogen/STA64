@@ -58,6 +58,8 @@ impl Labels {
     }
 }
 
+pub mod script;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MatchedBy {
     Label,

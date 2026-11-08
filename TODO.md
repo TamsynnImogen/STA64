@@ -30,6 +30,7 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [x] RTS camera: edge scroll (`SCROLL_BORDER_WIDTH`), focus/zoom kept to the map — bba5143
 - [x] Mission resolution per docs/MISSIONS.md; `sta64 --mission-report` — 31ae0dd
 - [x] MMM Lua API inventory (docs/MMM_API.md: 478 names, 141 used by installed scripts)
+- [x] Lua 5.3 dry run: all 252 installed mission scripts (FO4, STA1/STA2 Classic) load with `include()` and luabind `class`, 0 errors
 
 ## Later
 
