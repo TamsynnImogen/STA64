@@ -23,26 +23,60 @@ pub struct Browser {
     pub team: usize,
     pub borg: bool,
     pub damaged: bool,
+    pub normal_maps: bool,
     /// Set when the shown model must be rebuilt.
     pub dirty: bool,
     pub mount_summary: String,
     pub info: String,
 }
 
-const TEAM_COLOURS: [(&str, Color); 6] = [
-    ("blue", Color::srgb(0.25, 0.45, 1.0)),
-    ("red", Color::srgb(1.0, 0.2, 0.15)),
-    ("green", Color::srgb(0.2, 0.9, 0.3)),
-    ("yellow", Color::srgb(1.0, 0.85, 0.2)),
-    ("purple", Color::srgb(0.7, 0.3, 1.0)),
-    ("white", Color::WHITE),
-];
+/// Team colours from `odf/system/teamcolor.odf` (Fleet Operations), in file
+/// order: neutral, teams 1-8, then race colours. Built-in values when absent.
+#[derive(Resource)]
+pub struct TeamColours(pub Vec<(String, Color)>);
+
+impl TeamColours {
+    pub fn load(vfs: &sta_vfs::Vfs) -> TeamColours {
+        let parsed: Vec<(String, Color)> = vfs
+            .read("odf/system/teamcolor.odf")
+            .and_then(Result::ok)
+            .map(|b| {
+                sta_odf::parse(&String::from_utf8_lossy(&b))
+                    .entries
+                    .into_iter()
+                    .filter_map(|e| {
+                        let v: Vec<f32> = e.value.split_whitespace().filter_map(|x| x.parse().ok()).collect();
+                        (v.len() >= 3).then(|| (e.key, Color::srgb(v[0], v[1], v[2])))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        if parsed.is_empty() {
+            return TeamColours(
+                [("blue", (0.0, 0.4, 1.0)), ("red", (1.0, 0.0, 0.0)), ("green", (0.0, 1.0, 0.0)), ("white", (0.9, 0.9, 0.9))]
+                    .into_iter()
+                    .map(|(n, (r, g, b))| (n.to_owned(), Color::srgb(r, g, b)))
+                    .collect(),
+            );
+        }
+        TeamColours(parsed)
+    }
+
+    /// The first real team (skips the neutral `empty` entry).
+    pub fn default_index(&self) -> usize {
+        self.0.iter().position(|(n, _)| n.eq_ignore_ascii_case("blue")).unwrap_or(0)
+    }
+}
 
 #[derive(Component)]
 struct ModelRoot;
 
 #[derive(Component)]
 struct Hud;
+
+/// The main light, which L swings around the model.
+#[derive(Component)]
+struct KeyLight;
 
 #[derive(Component)]
 struct Orbit {
@@ -70,6 +104,7 @@ impl Plugin for ViewerPlugin {
                 Update,
                 (
                     input,
+                    swing_light,
                     rebuild,
                     orbit_camera,
                     hud,
@@ -100,6 +135,7 @@ pub fn browser(vfs: &sta_vfs::Vfs, initial: Option<&str>, mount_summary: String)
         team: 0,
         borg: false,
         damaged: false,
+        normal_maps: true,
         dirty: true,
         mount_summary,
         info: String::new(),
@@ -119,6 +155,7 @@ fn setup(mut commands: Commands) {
         },
     ));
     commands.spawn((
+        KeyLight,
         DirectionalLight {
             illuminance: 6000.0,
             ..default()
@@ -148,12 +185,23 @@ fn setup(mut commands: Commands) {
     ));
 }
 
+/// Hold L to swing the main light around the model (grazing light shows bump detail).
+fn swing_light(keys: Res<ButtonInput<KeyCode>>, time: Res<Time>, mut q: Query<&mut Transform, With<KeyLight>>) {
+    if !keys.pressed(KeyCode::KeyL) {
+        return;
+    }
+    for mut tf in &mut q {
+        tf.rotate_around(Vec3::ZERO, Quat::from_rotation_y(time.delta_secs() * 1.2));
+    }
+}
+
 fn input(
     keys: Res<ButtonInput<KeyCode>>,
     mut browser: ResMut<Browser>,
     mut team_parts: Query<&MeshMaterial3d<StandardMaterial>, With<TeamPart>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut orbit: Query<&mut Orbit>,
+    teams: Res<TeamColours>,
 ) {
     let n = browser.models.len();
     if n == 0 {
@@ -179,8 +227,8 @@ fn input(
         browser.dirty = true;
     }
     if keys.just_pressed(KeyCode::KeyT) {
-        browser.team = (browser.team + 1) % TEAM_COLOURS.len();
-        let c = TEAM_COLOURS[browser.team].1;
+        browser.team = (browser.team + 1) % teams.0.len();
+        let c = teams.0[browser.team].1;
         for m in &mut team_parts {
             if let Some(mut mat) = materials.get_mut(&m.0) {
                 mat.base_color = c;
@@ -189,6 +237,10 @@ fn input(
     }
     if keys.just_pressed(KeyCode::KeyB) {
         browser.borg = !browser.borg;
+        browser.dirty = true;
+    }
+    if keys.just_pressed(KeyCode::KeyN) {
+        browser.normal_maps = !browser.normal_maps;
         browser.dirty = true;
     }
     if keys.just_pressed(KeyCode::KeyD) {
@@ -216,6 +268,7 @@ fn rebuild(
     tables: Res<SpriteTables>,
     mut orbit: Query<&mut Orbit>,
     mut particles: ResMut<crate::particles::Particles>,
+    teams: Res<TeamColours>,
 ) {
     if !browser.dirty {
         return;
@@ -260,10 +313,11 @@ fn rebuild(
             images: &mut images,
             formats,
         },
-        team: TEAM_COLOURS[browser.team].1,
+        team: teams.0[browser.team].1,
         borg: browser.borg,
         sprites: &tables.0,
         damaged: browser.damaged,
+        normal_maps: browser.normal_maps,
     };
     let stats = model_scene::spawn(&mut ctx, &model, root);
 
@@ -332,21 +386,23 @@ fn orbit_camera(
     }
 }
 
-fn hud(browser: Res<Browser>, mut q: Query<&mut Text, With<Hud>>) {
+fn hud(browser: Res<Browser>, teams: Res<TeamColours>, mut q: Query<&mut Text, With<Hud>>) {
     if !browser.is_changed() {
         return;
     }
     for mut t in &mut q {
         t.0 = format!(
-            "STA64 {} model viewer\n{}\n\n{}\nteam colour: {}   Borg: {}   damage: {}\n\n\
-             Left/Right model  PgUp/PgDn x10  Home first  T team colour  B Borg  D damage\n\
+            "STA64 {} model viewer\n{}\n\n{}\nteam colour: {}   Borg: {}   damage: {}   normal maps: {}\n\n\
+             Left/Right model  PgUp/PgDn x10  Home first  T team colour  B Borg  D damage  N normal maps\n\
+             hold L swing the light  \
              left-drag orbit  right-drag pan  wheel zoom  R reset view",
             env!("CARGO_PKG_VERSION"),
             browser.mount_summary,
             browser.info,
-            TEAM_COLOURS[browser.team].0,
+            teams.0[browser.team].0,
             if browser.borg { "on" } else { "off" },
             if browser.damaged { "shown" } else { "hidden" },
+            if browser.normal_maps { "on" } else { "off" },
         );
     }
 }

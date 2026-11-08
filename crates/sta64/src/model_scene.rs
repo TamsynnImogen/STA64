@@ -88,6 +88,8 @@ pub struct SpawnCtx<'a, 'w, 's> {
     pub sprites: &'a SpriteTable,
     /// Show damage-state nodes (breaches, fires, venting) as on a crippled craft.
     pub damaged: bool,
+    /// Use normal maps (N in the viewer, for comparing).
+    pub normal_maps: bool,
 }
 
 /// Spawn `model` under `root`. Only the finest LOD level of each LOD switch is shown.
@@ -272,6 +274,7 @@ fn spawn_mesh(
         let texture = want(&maps.diffuse, diffuse, stats);
         // SOD bump path: height map. M3D: bump map, normal or height by content.
         let normal = match (&maps.height, &maps.bump) {
+            _ if !ctx.normal_maps => None,
             (Some(h), _) => want(&maps.height, ctx.textures.normal_from_height(h), stats),
             (None, Some(b)) => want(&maps.bump, ctx.textures.normal_from_bump(b), stats),
             _ => None,

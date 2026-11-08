@@ -67,7 +67,10 @@ fn main() {
     let cfg = parse_args();
     let (vfs, summary) = mount(&cfg);
     println!("{summary}");
-    let browser = viewer::browser(&vfs, cfg.view.as_deref(), summary);
+    let mut browser = viewer::browser(&vfs, cfg.view.as_deref(), summary);
+    let teams = viewer::TeamColours::load(&vfs);
+    browser.team = teams.default_index();
+    println!("{} team colours", teams.0.len());
     println!("{} models visible", browser.models.len());
     let table = sta_assets::load_sprite_table(&vfs);
     println!(
@@ -94,6 +97,7 @@ fn main() {
         )
         .insert_resource(viewer::Mounted(vfs))
         .insert_resource(browser)
+        .insert_resource(teams)
         .insert_resource(sprites::SpriteTables(std::sync::Arc::new(table)))
         .add_plugins(viewer::ViewerPlugin)
         .run();
