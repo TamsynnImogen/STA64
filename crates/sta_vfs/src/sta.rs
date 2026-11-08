@@ -391,7 +391,7 @@ pub(crate) mod tests {
         let mut out = vec![0u8; 64];
         let mut offsets = Vec::new();
         for e in &es {
-            while out.len() % 16 != 0 {
+            while !out.len().is_multiple_of(16) {
                 out.push(0);
             }
             offsets.push(if e.kind == 1 { 0 } else { out.len() as u64 });
@@ -428,6 +428,32 @@ pub(crate) mod tests {
         out[24..32].copy_from_slice(&(stored.len() as u64).to_le_bytes());
         out[32..40].copy_from_slice(&index_size.to_le_bytes());
         out
+    }
+
+    /// `fixtures/sta/Data/Mods/StaMod/stamod.sta`, used by `sta_content`'s ODF
+    /// index test. Kept equal to this build; `STA64_WRITE_FIXTURES=1` rewrites it.
+    pub(crate) fn fixture_archive() -> Vec<u8> {
+        build(
+            &[
+                T::Stored("manifest.toml", b"[mod]\nid = \"stamod\"\nname = \"STA fixture\"\nversion = \"0.1.0\"\nkind = \"addon\"\n"),
+                T::Zstd("odf/ships/fakira.odf", b"#include \"fakira.odf\"\nmaxHealth = 1500\nunitName = \"Akira (sta)\"\n"),
+                T::Zstd("odf/my_pack/deep/fnew.odf", b"classLabel = \"craft\"\nunitName = \"New ship\"\n"),
+                T::Whiteout("odf/ships/fdefiant.odf"),
+            ],
+            true,
+        )
+    }
+
+    #[test]
+    fn fixture_is_current() {
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/sta/Data/Mods/StaMod/stamod.sta");
+        let want = fixture_archive();
+        if std::env::var_os("STA64_WRITE_FIXTURES").is_some() {
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, &want).unwrap();
+        }
+        assert_eq!(std::fs::read(&p).unwrap(), want, "rerun with STA64_WRITE_FIXTURES=1");
+        StaArchive::open(&p).unwrap();
     }
 
     fn sample(compress_index: bool) -> Vec<u8> {
