@@ -23,6 +23,7 @@
 
 pub mod combat;
 pub mod command;
+pub mod economy;
 pub mod event;
 pub mod fake;
 pub mod movement;
@@ -94,6 +95,8 @@ pub struct Sim {
     weapons: combat::weapons::Weapons,
     /// Queued waypoints and formations (SIM-02).
     movement: movement::Movement,
+    /// Stock, nodes and freighters (SIM-07); in the digest once any exists.
+    economy: economy::Economy,
 }
 
 fn dt() -> Fixed {
@@ -208,6 +211,7 @@ impl Sim {
             events: Vec::new(),
             weapons: Default::default(),
             movement: movement::Movement::default(),
+            economy: Default::default(),
         }
     }
 
@@ -240,13 +244,29 @@ impl Sim {
         use command::{CommandKind, Order};
         let order = match &c.kind {
             CommandKind::Order(o) => o,
-            CommandKind::Edit(e) => return self.apply_edit(c.player, e),
+            CommandKind::Edit(e) => {
+                return match self.economy.apply_edit(c.player, e) {
+                    Some(ok) => ok,
+                    None => self.apply_edit(c.player, e),
+                };
+            }
         };
         match order {
-            Order::Move { .. } | Order::Formation { .. } => self.apply_movement(c.player, order),
+            Order::Move { units, queue, .. } => {
+                if !queue {
+                    self.economy.cancel(&self.units, c.player, units);
+                }
+                self.apply_movement(c.player, order)
+            }
+            Order::Formation { .. } => self.apply_movement(c.player, order),
+            Order::Mine { units, node } => {
+                let Some(db) = self.content.clone() else { return false };
+                self.economy.order_mine(&db, &self.units, c.player, units, *node)
+            }
             Order::Stop { units } => {
                 // A stop also drops the attack order of the units it reaches.
                 self.weapons.stop_attack(&self.units, c.player, units);
+                self.economy.cancel(&self.units, c.player, units);
                 self.apply_movement(c.player, order)
             }
             Order::Attack { units, target } => {
@@ -265,6 +285,9 @@ impl Sim {
         if let Some(db) = &self.content {
             self.weapons.step(self.tick, &self.units, db, &self.players, &mut self.events);
         }
+        if let Some(db) = &self.content {
+            self.economy.step(&mut self.units, db, &mut self.events);
+        }
         self.advance_courses();
         self.tick += 1;
         TickOutput { view: Arc::new(self.build_view()), events: std::mem::take(&mut self.events) }
@@ -278,7 +301,7 @@ impl Sim {
             .map(|&(id, team)| PlayerView {
                 id,
                 team,
-                resources: Vec::new(),
+                resources: self.economy.stock_of(id),
                 officers: [Fixed::ZERO; 2],
                 eliminated: false,
                 relations: self
@@ -314,6 +337,9 @@ impl Sim {
         }
         if !self.weapons.is_empty() {
             self.weapons.hash_into(&mut h);
+        }
+        if !self.economy.is_empty() {
+            self.economy.hash_into(&mut h);
         }
         h.0
     }
