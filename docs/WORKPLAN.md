@@ -14,7 +14,8 @@ and on PR #1 (merged), which brought `a2fmt::Odf::load_layered`.
 **Assigning work.** Round 0 runs first and alone. After that, any package
 whose *needs* are merged, or whose *can start against* fakes exist, is ready.
 Open one GitHub issue per package (title `[SIM-06] Weapons`, label
-`lane:sim`), assign it, and let the agent work on its branch.
+`lane:sim`), assign it, and let the agent work on its branch. How sessions
+check, claim and release packages: [AGENTS.md](../AGENTS.md).
 
 **Picking up a package.** Read its row, the seams it names and the files it
 owns. Work only in those files. Start against the listed fakes, not against
