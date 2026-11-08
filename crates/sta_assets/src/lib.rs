@@ -16,6 +16,7 @@ use sta_vfs::Vfs;
 
 pub use a2fmt;
 
+pub mod cfg_h;
 pub mod dds;
 pub mod m3d;
 pub mod model;
@@ -355,6 +356,10 @@ mod tests {
                 }
                 Err(e) => dds_fail.push(e.to_string()),
             }
+        }
+        if let Some(Ok(b)) = vfs.read("RTS_CFG.h") {
+            let c = cfg_h::CfgH::parse(&String::from_utf8_lossy(&b));
+            eprintln!("RTS_CFG.h: {} values, SCROLL_BORDER_WIDTH = {:?}", c.len(), c.i64("SCROLL_BORDER_WIDTH"));
         }
         let t = load_sprite_table(&vfs);
         eprintln!(

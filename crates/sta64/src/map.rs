@@ -113,6 +113,27 @@ impl Catalogue {
 #[derive(Component)]
 struct MapRoot;
 
+/// Camera limits for the current map (Bevy space) and settings from RTS_CFG.h.
+#[derive(Resource)]
+pub struct CameraLimits {
+    lo: Vec3,
+    hi: Vec3,
+    max_dist: f32,
+    /// Pixels from the window edge that scroll the view (`SCROLL_BORDER_WIDTH`).
+    border: f32,
+}
+
+impl CameraLimits {
+    pub fn from_cfg(cfg: Option<&sta_assets::cfg_h::CfgH>) -> CameraLimits {
+        CameraLimits {
+            lo: Vec3::splat(-1e9),
+            hi: Vec3::splat(1e9),
+            max_dist: 1e9,
+            border: cfg.and_then(|c| c.f32("SCROLL_BORDER_WIDTH")).unwrap_or(8.0),
+        }
+    }
+}
+
 #[derive(Component)]
 struct Sky;
 
@@ -266,8 +287,23 @@ fn input(keys: Res<ButtonInput<KeyCode>>, mut browser: ResMut<MapBrowser>, mut o
     }
 }
 
-/// WASD moves the camera's focus over the map plane.
-fn pan_keys(keys: Res<ButtonInput<KeyCode>>, time: Res<Time>, mut q: Query<(&mut Orbit, &Transform)>) {
+/// WASD and the window edges move the camera's focus over the map plane; the
+/// focus stays over the map and the zoom within its size.
+fn pan_keys(
+    keys: Res<ButtonInput<KeyCode>>,
+    time: Res<Time>,
+    limits: Res<CameraLimits>,
+    window: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    mut q: Query<(&mut Orbit, &Transform)>,
+) {
+    let edge = window.single().ok().and_then(|w| {
+        let c = w.cursor_position()?;
+        let (wd, ht, b) = (w.width(), w.height(), limits.border);
+        Some(Vec2::new(
+            if c.x <= b { -1.0 } else if c.x >= wd - b { 1.0 } else { 0.0 },
+            if c.y <= b { 1.0 } else if c.y >= ht - b { -1.0 } else { 0.0 },
+        ))
+    });
     for (mut o, tf) in &mut q {
         let fwd = Vec3::new(tf.forward().x, 0.0, tf.forward().z).normalize_or_zero();
         let right = Vec3::new(tf.right().x, 0.0, tf.right().z).normalize_or_zero();
@@ -277,8 +313,13 @@ fn pan_keys(keys: Res<ButtonInput<KeyCode>>, time: Res<Time>, mut q: Query<(&mut
                 d += v;
             }
         }
+        if let Some(e) = edge {
+            d += right * e.x + fwd * e.y;
+        }
         let step = d * o.dist * 0.8 * time.delta_secs();
         o.focus += step;
+        o.focus = o.focus.clamp(limits.lo, limits.hi);
+        o.dist = o.dist.clamp(50.0, limits.max_dist);
     }
 }
 
@@ -311,11 +352,11 @@ fn rebuild(
     tables: Res<SpriteTables>,
     teams: Res<TeamColours>,
     mut orbit: Query<&mut Orbit>,
-    state: (ResMut<crate::particles::Particles>, ResMut<crate::units::Game>),
+    state: (ResMut<crate::particles::Particles>, ResMut<crate::units::Game>, ResMut<CameraLimits>),
     lighting: Lighting,
 ) {
     let (mut ambient, mut lights) = lighting;
-    let (mut particles, mut game) = state;
+    let (mut particles, mut game, mut limits) = state;
     if !browser.dirty {
         return;
     }
@@ -615,6 +656,12 @@ fn rebuild(
         o.dist = dist;
         o.home = (focus, dist);
     }
+    // Keep the focus over the map (with a margin) and the zoom within its size.
+    let margin = size.x.max(size.z) * 0.25;
+    let (a, b) = (Vec3::new(lo.x, lo.y, -(lo.z + size.z)), Vec3::new(lo.x + size.x, lo.y + size.y, -lo.z));
+    limits.lo = a.min(b) - Vec3::splat(margin);
+    limits.hi = a.max(b) + Vec3::splat(margin);
+    limits.max_dist = size.x.max(size.z).max(2000.0) * 2.0;
 
     missing.sort();
     missing.dedup();
