@@ -135,7 +135,7 @@ fn select(
     keys: Res<ButtonInput<KeyCode>>,
     window: Query<&Window, With<PrimaryWindow>>,
     camera: Query<(&Camera, &GlobalTransform), crate::map::MainCamera>,
-    units: Query<(Entity, &Unit, &GlobalTransform, Option<&crate::strategic::Strategic>)>,
+    units: Query<(Entity, &Unit, &GlobalTransform, Option<&crate::render::strategic::Strategic>)>,
     selected: Query<Entity, With<Selected>>,
     mut drag: ResMut<Drag>,
     mut boxes: Query<(&mut Node, &mut Visibility), With<SelectBox>>,

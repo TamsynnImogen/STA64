@@ -7,8 +7,8 @@
 //! with the mirror applied, SOD order is front-facing in Bevy (the M3D loader
 //! already stores its faces in SOD order).
 
-use crate::sprites::{self, Billboard, SpriteFx, UvFlipbook};
-use crate::textures::Loader;
+use crate::render::sprites::{self, Billboard, SpriteFx, UvFlipbook};
+use crate::render::textures::Loader;
 use sta_assets::a2fmt::spr::SpriteTable;
 use sta_assets::spr_anim;
 use bevy::asset::RenderAssetUsages;
@@ -51,7 +51,7 @@ struct CachedPart {
     bumped: bool,
     triangles: usize,
     /// Set when the part's texture names a surface recipe (rocks, moons).
-    rock: Option<crate::rock::RockPart>,
+    rock: Option<crate::render::rock::RockPart>,
 }
 
 /// Face groups that take the owner's team colour.
@@ -207,9 +207,9 @@ pub fn spawn(ctx: &mut SpawnCtx, model: &Model, root: Entity) -> SpawnStats {
         }
         match &node.kind {
             NodeKind::Sprite => spawn_sprite_node(ctx, node.sprite_node_id(), id, &quad, &mut stats),
-            NodeKind::Emitter(emitter) => match crate::particles::Template::new(ctx.sprites, emitter) {
+            NodeKind::Emitter(emitter) => match crate::render::particles::Template::new(ctx.sprites, emitter) {
                 Some(tpl) => {
-                    ctx.commands.entity(id).insert(crate::particles::Emitter {
+                    ctx.commands.entity(id).insert(crate::render::particles::Emitter {
                         tpl: std::sync::Arc::new(tpl),
                         owner: root,
                         timer: 0.0,
@@ -419,7 +419,7 @@ fn spawn_mesh(
         };
         // A texture with a surface recipe: the part becomes a rock once baked, its
         // surface looked up about the mesh's centre over its extents.
-        let rock = maps.diffuse.as_deref().filter(|n| crate::surfaces::recipe_text(ctx.textures.vfs, n).is_some()).map(|n| {
+        let rock = maps.diffuse.as_deref().filter(|n| crate::render::surfaces::recipe_text(ctx.textures.vfs, n).is_some()).map(|n| {
             let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
             for p in &mesh.positions {
                 for a in 0..3 {
@@ -429,7 +429,7 @@ fn spawn_mesh(
             }
             let c: [f32; 3] = std::array::from_fn(|a| (lo[a] + hi[a]) * 0.5);
             let ext: [f32; 3] = std::array::from_fn(|a| ((hi[a] - lo[a]) * 0.5 * ctx.scale).max(1e-4));
-            crate::rock::RockPart {
+            crate::render::rock::RockPart {
                 recipe: n.to_owned(),
                 centre: Vec3::from(mirror(c)) * ctx.scale,
                 inv_extent: Vec3::from(ext.map(|e| 1.0 / e)),

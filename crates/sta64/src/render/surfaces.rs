@@ -23,15 +23,15 @@ const CLOUD_FACE: u32 = 512;
 const CACHE_VERSION: u32 = 1;
 
 const BUNDLED: &[(&str, &str)] = &[
-    ("master1", include_str!("../../sta_surface/recipes/Master1.ini")),
-    ("master2", include_str!("../../sta_surface/recipes/Master2.ini")),
-    ("mdmoon", include_str!("../../sta_surface/recipes/Mdmoon.ini")),
-    ("pb_clssd", include_str!("../../sta_surface/recipes/PB_CLSSD.ini")),
-    ("pb_clssh", include_str!("../../sta_surface/recipes/PB_CLSSH.ini")),
-    ("pb_clssj", include_str!("../../sta_surface/recipes/PB_CLSSJ.ini")),
-    ("pb_clssk", include_str!("../../sta_surface/recipes/PB_CLSSK.ini")),
-    ("pb_clssl", include_str!("../../sta_surface/recipes/PB_CLSSL.ini")),
-    ("pb_clssm", include_str!("../../sta_surface/recipes/PB_CLSSM.ini")),
+    ("master1", include_str!("../../../sta_surface/recipes/Master1.ini")),
+    ("master2", include_str!("../../../sta_surface/recipes/Master2.ini")),
+    ("mdmoon", include_str!("../../../sta_surface/recipes/Mdmoon.ini")),
+    ("pb_clssd", include_str!("../../../sta_surface/recipes/PB_CLSSD.ini")),
+    ("pb_clssh", include_str!("../../../sta_surface/recipes/PB_CLSSH.ini")),
+    ("pb_clssj", include_str!("../../../sta_surface/recipes/PB_CLSSJ.ini")),
+    ("pb_clssk", include_str!("../../../sta_surface/recipes/PB_CLSSK.ini")),
+    ("pb_clssl", include_str!("../../../sta_surface/recipes/PB_CLSSL.ini")),
+    ("pb_clssm", include_str!("../../../sta_surface/recipes/PB_CLSSM.ini")),
 ];
 
 /// A baked surface on the GPU.

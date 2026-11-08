@@ -301,7 +301,7 @@ fn update(
     mut commands: Commands,
     mode: Res<Mode>,
     camera: Query<(&Camera, &GlobalTransform, &Projection), crate::map::MainCamera>,
-    mut objects: Query<(&GlobalTransform, &mut Strategic, Has<crate::units::Selected>)>,
+    mut objects: Query<(&GlobalTransform, &mut Strategic, Has<crate::render::units::Selected>)>,
     mut icons: Query<(Entity, &Icon, &mut Node, &mut ImageNode, &mut UiTransform)>,
     mut outlines: Query<&mut Visibility, Without<Icon>>,
     images: Res<Assets<Image>>,

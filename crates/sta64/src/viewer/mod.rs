@@ -4,9 +4,9 @@
 //! T cycle team colour, B toggle Borg (`_b` textures, `borg` node), D toggle
 //! damage-state nodes, left-drag orbit, right-drag pan, wheel zoom, R reset view.
 
-use crate::model_scene::{self, SpawnCtx, TeamPart};
-use crate::sprites::{self, SpriteTables};
-use crate::textures::{Loader, TextureCache};
+use crate::render::model_scene::{self, SpawnCtx, TeamPart};
+use crate::render::sprites::{self, SpriteTables};
+use crate::render::textures::{Loader, TextureCache};
 use bevy::image::CompressedImageFormats;
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::prelude::*;
@@ -92,7 +92,7 @@ pub struct ViewerPlugin;
 impl Plugin for ViewerPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TextureCache>()
-            .init_resource::<crate::particles::Particles>()
+            .init_resource::<crate::render::particles::Particles>()
             .insert_resource(ClearColor(Color::srgb(0.01, 0.01, 0.025)))
             .insert_resource(GlobalAmbientLight {
                 color: Color::WHITE,
@@ -111,8 +111,8 @@ impl Plugin for ViewerPlugin {
                     model_scene::animate,
                     sprites::animate,
                     sprites::face_camera,
-                    crate::particles::simulate,
-                    crate::particles::draw,
+                    crate::render::particles::simulate,
+                    crate::render::particles::draw,
                 )
                     .chain(),
             );
@@ -267,7 +267,7 @@ fn rebuild(
     device: Option<Res<RenderDevice>>,
     tables: Res<SpriteTables>,
     mut orbit: Query<&mut Orbit>,
-    mut particles: ResMut<crate::particles::Particles>,
+    mut particles: ResMut<crate::render::particles::Particles>,
     teams: Res<TeamColours>,
 ) {
     if !browser.dirty {

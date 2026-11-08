@@ -12,18 +12,8 @@ pub mod clock;
 pub mod plugins;
 pub mod sim_link;
 
-mod particles;
-mod planet;
-mod rock;
 mod map;
-mod model_scene;
-mod nebula;
-mod space;
-mod strategic;
-mod sprites;
-mod surfaces;
-mod textures;
-mod units;
+mod render;
 mod viewer;
 
 use app::LaunchConfig;
@@ -133,7 +123,7 @@ fn main() {
                 })
                 .set(ImagePlugin::default_linear()),
         )
-        .insert_resource(sprites::SpriteTables(std::sync::Arc::new(table)))
+        .insert_resource(render::sprites::SpriteTables(std::sync::Arc::new(table)))
         .insert_resource(teams);
     // Sets and the sim link; idle until a `SimLink` exists (R0-3).
     plugins::add_plugins(&mut app, &cfg);

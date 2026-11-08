@@ -56,7 +56,7 @@ pub struct RockMaterial {
 
 impl Material for RockMaterial {
     fn fragment_shader() -> ShaderRef {
-        ShaderRef::Path(AssetPath::parse("embedded://sta64/rock.wgsl").into_owned())
+        ShaderRef::Path(AssetPath::parse("embedded://sta64/render/rock.wgsl").into_owned())
     }
 }
 
@@ -79,7 +79,7 @@ impl Plugin for RockPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "rock.wgsl");
         app.add_plugins(MaterialPlugin::<RockMaterial>::default())
-            .add_systems(Update, apply.after(crate::surfaces::poll))
+            .add_systems(Update, apply.after(crate::render::surfaces::poll))
             .add_systems(PostUpdate, update.after(TransformSystems::Propagate));
     }
 }
@@ -88,12 +88,12 @@ impl Plugin for RockPlugin {
 fn apply(
     mut commands: Commands,
     vfs: Res<crate::viewer::Mounted>,
-    mut surfaces: ResMut<crate::surfaces::Surfaces>,
+    mut surfaces: ResMut<crate::render::surfaces::Surfaces>,
     parts: Query<(Entity, &RockPart), Without<RockMat>>,
     mut materials: ResMut<Assets<RockMaterial>>,
 ) {
     for (e, part) in &parts {
-        let Some(b) = surfaces.request(&vfs.0, &part.recipe, crate::surfaces::ROCK_FACE) else { continue };
+        let Some(b) = surfaces.request(&vfs.0, &part.recipe, crate::render::surfaces::ROCK_FACE) else { continue };
         let r = &b.recipe;
         let cut = r.cut > 0.0;
         let params = RockParams {
@@ -172,6 +172,6 @@ mod tests {
     #[test]
     fn shader_path_matches_embedded_registration() {
         let registered = bevy::asset::embedded_path!("src", "rock.wgsl");
-        assert_eq!(registered.to_string_lossy().replace('\\', "/"), "sta64/rock.wgsl");
+        assert_eq!(registered.to_string_lossy().replace('\\', "/"), "sta64/render/rock.wgsl");
     }
 }

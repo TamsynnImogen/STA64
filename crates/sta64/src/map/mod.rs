@@ -8,9 +8,9 @@
 //! Controls: left click/drag select, right click move, Space stop, Left/Right
 //! map, PgUp/PgDn x10, WASD pan, middle-drag orbit, wheel zoom, R reset view.
 
-use crate::model_scene::{self, PartCache, SpawnCtx, to_bevy};
-use crate::sprites::SpriteTables;
-use crate::textures::{Loader, TextureCache};
+use crate::render::model_scene::{self, PartCache, SpawnCtx, to_bevy};
+use crate::render::sprites::SpriteTables;
+use crate::render::textures::{Loader, TextureCache};
 use crate::viewer::{Mounted, Orbit, TeamColours};
 use bevy::app::{HierarchyPropagatePlugin, Propagate};
 use bevy::camera::visibility::RenderLayers;
@@ -201,17 +201,17 @@ type MapEntities = Or<(With<MapRoot>, With<Sky>)>;
 
 /// The rest of the map's state, as one system parameter.
 type MapState<'w> = (
-    ResMut<'w, crate::particles::Particles>,
-    ResMut<'w, crate::units::Game>,
+    ResMut<'w, crate::render::particles::Particles>,
+    ResMut<'w, crate::render::units::Game>,
     ResMut<'w, CameraLimits>,
-    ResMut<'w, Assets<crate::planet::PlanetMaterial>>,
-    ResMut<'w, Assets<crate::nebula::NebulaMaterial>>,
-    Res<'w, crate::nebula::NoiseVolume>,
+    ResMut<'w, Assets<crate::render::planet::PlanetMaterial>>,
+    ResMut<'w, Assets<crate::render::nebula::NebulaMaterial>>,
+    Res<'w, crate::render::nebula::NoiseVolume>,
 );
 
 /// The ambient light and the two map lights, as one system parameter.
 type Lighting<'w, 's> = (
-    ResMut<'w, crate::strategic::Silhouettes>,
+    ResMut<'w, crate::render::strategic::Silhouettes>,
     ResMut<'w, GlobalAmbientLight>,
     Query<'w, 's, (&'static MapLight, &'static mut Transform, &'static mut DirectionalLight), Without<Orbit>>,
 );
@@ -223,7 +223,7 @@ impl Plugin for MapPlugin {
         app.init_resource::<TextureCache>()
             .init_resource::<PartCache>()
             .init_resource::<Catalogue>()
-            .init_resource::<crate::particles::Particles>()
+            .init_resource::<crate::render::particles::Particles>()
             .insert_resource(ClearColor(Color::BLACK))
             .insert_resource(GlobalAmbientLight {
                 color: Color::WHITE,
@@ -234,12 +234,12 @@ impl Plugin for MapPlugin {
                 rotate: MouseButton::Middle,
                 pan: None,
             })
-            .add_plugins(crate::units::UnitsPlugin)
-            .add_plugins(crate::planet::PlanetPlugin)
-            .add_plugins(crate::rock::RockPlugin)
-            .add_plugins(crate::nebula::NebulaPlugin)
-            .add_plugins(crate::strategic::StrategicPlugin)
-            .init_resource::<crate::strategic::Silhouettes>()
+            .add_plugins(crate::render::units::UnitsPlugin)
+            .add_plugins(crate::render::planet::PlanetPlugin)
+            .add_plugins(crate::render::rock::RockPlugin)
+            .add_plugins(crate::render::nebula::NebulaPlugin)
+            .add_plugins(crate::render::strategic::StrategicPlugin)
+            .init_resource::<crate::render::strategic::Silhouettes>()
             .add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default())
             .add_plugins(HierarchyPropagatePlugin::<RenderLayers>::new(PostUpdate))
             .add_systems(Startup, setup)
@@ -255,10 +255,10 @@ impl Plugin for MapPlugin {
                     hud,
                     fps,
                     model_scene::animate,
-                    crate::sprites::animate,
-                    crate::sprites::face_camera,
-                    crate::particles::simulate,
-                    crate::particles::draw,
+                    crate::render::sprites::animate,
+                    crate::render::sprites::face_camera,
+                    crate::render::particles::simulate,
+                    crate::render::particles::draw,
                 )
                     .chain(),
             );
@@ -504,14 +504,14 @@ fn rebuild(
             let glow = Vec3::new(odf.f32("red_glow").unwrap_or(0.0), odf.f32("green_glow").unwrap_or(0.0), odf.f32("blue_glow").unwrap_or(0.0));
             let strength = glow.length();
             if strength > 0.0 {
-                let hue = crate::nebula::recipe(&vfs.0, &o.odf).map(|r| Vec3::from(r.gas_a)).filter(|h| h.length() > 0.0).unwrap_or(glow);
+                let hue = crate::render::nebula::recipe(&vfs.0, &o.odf).map(|r| Vec3::from(r.gas_a)).filter(|h| h.length() > 0.0).unwrap_or(glow);
                 let c = hue / hue.max_element().max(1e-3);
                 let start = odf.f32("glow_falloff_start").unwrap_or(60.0) * 8.0;
                 let reach = start + odf.f32("glow_falloff_range").unwrap_or(60.0) * 8.0;
                 commands.spawn((
                     PointLight {
                         color: Color::srgb(c.x, c.y, c.z),
-                        intensity: 1.4 * strength * crate::planet::KEY_LUX * 4.0 * std::f32::consts::PI * start * start,
+                        intensity: 1.4 * strength * crate::render::planet::KEY_LUX * 4.0 * std::f32::consts::PI * start * start,
                         range: reach,
                         shadow_maps_enabled: false,
                         ..default()
@@ -525,12 +525,12 @@ fn rebuild(
         if odf.class_label().is_some_and(|c| c.eq_ignore_ascii_case("nebula_obj") || c.eq_ignore_ascii_case("latinum")) {
             let key = o.odf.to_ascii_lowercase();
             let entry = gas.entry(key.clone()).or_insert_with(|| {
-                let r = crate::nebula::recipe(&vfs.0, &key);
+                let r = crate::render::nebula::recipe(&vfs.0, &key);
                 let latinum = odf.class_label().is_some_and(|c| c.eq_ignore_ascii_case("latinum"));
                 let radius = if latinum { 100.0 } else { odf.f32("effectRadius").filter(|r| *r > 10.0 && *r < 5000.0).unwrap_or(300.0) };
                 (r.unwrap_or_else(|| sta_surface::nebula::NebulaRecipe::parse("")), radius, Vec::new())
             });
-            if crate::nebula::recipe(&vfs.0, &key).is_some() {
+            if crate::render::nebula::recipe(&vfs.0, &key).is_some() {
                 entry.2.push([o.transform[9], o.transform[10], -o.transform[11]]);
                 nebulae += 1;
                 drawn += 1;
@@ -621,7 +621,7 @@ fn rebuild(
                 images: &mut images,
                 formats,
             };
-            missing.extend(crate::planet::spawn(&mut commands, &mut meshes, &mut planet_materials, &mut loader, &ground, &atmo, radius, entity));
+            missing.extend(crate::render::planet::spawn(&mut commands, &mut meshes, &mut planet_materials, &mut loader, &ground, &atmo, radius, entity));
             planets += 1;
             drawn += 1;
             continue;
@@ -659,7 +659,7 @@ fn rebuild(
                 .map(|(lo, hi)| (Vec3::from(hi) - Vec3::from(lo)).length() * 0.5)
                 .unwrap_or(20.0)
                 * scale;
-            commands.entity(entity).insert(crate::units::Unit { id, radius: radius.max(5.0) });
+            commands.entity(entity).insert(crate::render::units::Unit { id, radius: radius.max(5.0) });
             units += 1;
         }
         let team = if o.team > 0 { teams.0.get(o.team as usize).map(|t| t.1).unwrap_or(neutral) } else { neutral };
@@ -669,7 +669,7 @@ fn rebuild(
         if o.team > 0 && !matches!(class.as_str(), "background_obj" | "latinum" | "asteroidfield" | "nebula_obj" | "planet" | "wormhole_obj") {
             let radius = model.bounds().map(|(lo, hi)| (Vec3::from(hi) - Vec3::from(lo)).length() * 0.5).unwrap_or(20.0) * scale;
             let mobile = units_before != units;
-            let mut icon = crate::strategic::Strategic::new(crate::strategic::shape_for(&class, mobile), team, radius);
+            let mut icon = crate::render::strategic::Strategic::new(crate::render::strategic::shape_for(&class, mobile), team, radius);
             let sv = tables.0.sprite(&format!("{}_sv", model_name(&odf, &o.odf)));
             if let Some(sprite) = sv
                 && let Some(tex) = (Loader { vfs: &vfs.0, cache: &mut cache, images: &mut images, formats }).colour(&sprite.texture, false)
@@ -720,7 +720,7 @@ fn rebuild(
                 images: &mut images,
                 formats,
             };
-            let faces = crate::space::sky_faces(&mut commands, &mut meshes, &mut materials, &mut loader, &prefix, sky);
+            let faces = crate::render::space::sky_faces(&mut commands, &mut meshes, &mut materials, &mut loader, &prefix, sky);
             sky_note = format!("{prefix} ({faces}/6 faces)");
         }
         if let Some((path, model)) = cube {
@@ -775,14 +775,14 @@ fn rebuild(
             images: &mut images,
             formats,
         };
-        let n = crate::space::starfield(&mut commands, &mut meshes, &mut materials, &mut loader, &tables.0, &entries, 100_000.0, stars);
+        let n = crate::render::space::starfield(&mut commands, &mut meshes, &mut materials, &mut loader, &tables.0, &entries, 100_000.0, stars);
         star_note = format!("{} ({n} stars)", map.starfield_odf);
     }
 
     // Nebula fields, one per class with a recipe.
     let classes = gas.values().filter(|g| !g.2.is_empty()).count();
     for (_, (recipe, radius, pos)) in gas.into_iter().filter(|g| !g.1 .2.is_empty()) {
-        crate::nebula::spawn_field(&mut commands, &mut meshes, &mut nebula_materials, &mut images, &noise, recipe, radius, &pos, root);
+        crate::render::nebula::spawn_field(&mut commands, &mut meshes, &mut nebula_materials, &mut images, &noise, recipe, radius, &pos, root);
     }
 
     // Lights: the map's dlights if it has them, else the defaults.
