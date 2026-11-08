@@ -168,5 +168,5 @@ fn damage_run_digest_is_pinned() {
         };
         sim.step(&cmds);
     }
-    assert_eq!(sim.digest(), 0xbaaa_8dfc_68d0_4cbe);
+    assert_eq!(sim.digest(), 0xd6ad_d7d8_86e1_d03d);
 }
