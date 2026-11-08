@@ -3722,6 +3722,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lzokay-native"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c83fc518c5874790cff277720d646a859d5c88fb2a58c7d7c45782384658ddd"
+dependencies = [
+ "byteorder",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "mach2"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5201,6 +5211,7 @@ dependencies = [
 name = "sta_fpq"
 version = "0.1.0"
 dependencies = [
+ "lzokay-native",
  "thiserror 2.0.21",
 ]
 

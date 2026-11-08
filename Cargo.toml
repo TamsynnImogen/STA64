@@ -46,6 +46,8 @@ thiserror = "2"
 serde = { version = "1", features = ["derive", "rc"] }
 json5 = "1"
 postcard = { version = "1", default-features = false, features = ["alloc"] }
+# FPQ packing: LZO1X compression (MIT; liblzo itself is GPL).
+lzokay-native = "0.2.1"
 
 # Bevy is slow unoptimised; optimise dependencies even in dev builds.
 [profile.dev.package."*"]

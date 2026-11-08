@@ -20,6 +20,7 @@
 //! LZO1X.
 
 pub mod lzo;
+pub mod write;
 
 use std::path::Path;
 
@@ -430,5 +431,19 @@ mod tests {
             assert_eq!(data.len(), f.entry(i).size as usize);
         }
         eprintln!("validated {} entries in {p}", f.len());
+
+        // Repack in the same version and read it back.
+        let files: Vec<(String, Vec<u8>)> = (0..f.len()).map(|i| (f.path(i).unwrap(), f.read(i).unwrap())).collect();
+        let original = std::fs::metadata(&p).unwrap().len();
+        let packed = write::write(f.version(), &files, write::Compression::Auto).unwrap();
+        let g = Fpq::from_bytes(packed.clone()).unwrap();
+        assert_eq!((g.version(), g.len(), g.folder_count()), (f.version(), f.len(), f.folder_count()));
+        assert_eq!(g.hash_slots(), f.hash_slots(), "table size as FPQEdit chose it");
+        for (i, (path, data)) in files.iter().enumerate() {
+            assert_eq!(&g.path(i).unwrap(), path);
+            assert_eq!(&g.read(i).unwrap(), data, "{path}");
+            assert_eq!(g.find(path.rsplit('/').next().unwrap()), Some(i), "{path}");
+        }
+        eprintln!("repacked v{}: {} -> {} bytes ({:+.1}%)", f.version(), original, packed.len(), (packed.len() as f64 / original as f64 - 1.0) * 100.0);
     }
 }
