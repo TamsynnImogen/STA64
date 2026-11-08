@@ -26,6 +26,7 @@ pub mod event;
 pub mod fake;
 pub mod setup;
 pub mod source;
+pub mod spatial;
 pub mod spawn;
 pub mod view;
 pub mod world;
