@@ -1,0 +1,366 @@
+//! Entities into and out of the world (SIM-01): the map at tick 0, and the
+//! spawn and kill edits of the bench and missions.
+//!
+//! - [`Sim::from_setup`] spawns the map's `objects` in map order, resolving
+//!   ODF names through the setup's [`ContentDb`]. Names that are not a unit
+//!   definition are skipped with a [`Warning`], the same way on every peer.
+//! - Start positions spawn nothing yet: what a seat starts with (a starbase,
+//!   construction ships) depends on race and game options no package defines
+//!   yet. They and the regions are kept for the systems that use them.
+//! - `scenery` is never read.
+//! - Every spawn emits [`SimEvent::Spawned`] and every removal
+//!   [`SimEvent::Destroyed`], with the next step's output.
+
+use std::sync::Arc;
+
+use sta_content::{ContentDb, Region, StartPos, Warning};
+use sta_core::{ContentKey, EntityId, Fixed, PlayerId, Vec3};
+
+use crate::command::Edit;
+use crate::setup::GameSetup;
+use crate::world::{Entity, NEUTRAL};
+use crate::{Sim, SimEvent};
+
+impl Sim {
+    /// [`Sim::from_setup`], with the map objects it skipped.
+    pub fn from_setup_with_warnings(s: &GameSetup) -> (Sim, Vec<Warning>) {
+        let mut sim = Sim::new(s.seed);
+        let mut players: Vec<_> = s.players.iter().map(|p| (p.id, p.team)).collect();
+        players.sort();
+        players.dedup_by_key(|p| p.0);
+        sim.players = players;
+        sim.content = Some(Arc::clone(&s.content));
+        sim.starts = s.map.starts.clone();
+        sim.regions = s.map.regions.clone();
+
+        let mut warnings = Vec::new();
+        for o in &s.map.objects {
+            let Some(key) = s.content.key(&o.odf).filter(|&k| s.content.unit(k).is_some()) else {
+                warnings.push(Warning::new(&o.odf, format!("{}: not a unit definition; not spawned", s.map.name)));
+                continue;
+            };
+            let owner = o.owner.map_or(NEUTRAL, PlayerId);
+            let id = sim.spawn_def(key, owner, o.pos, o.heading).expect("key resolved to a unit");
+            if let Some(label) = &o.label {
+                sim.labels.insert(id, label.clone());
+            }
+        }
+        (sim, warnings)
+    }
+
+    /// Spawn an entity from a unit definition at full hull and shields.
+    /// `None` without content, or when `key` is not a unit.
+    pub fn spawn_def(&mut self, key: ContentKey, owner: PlayerId, pos: Vec3, heading: (Fixed, Fixed)) -> Option<EntityId> {
+        let content = self.content.as_ref()?;
+        let def = content.unit(key)?;
+        let id = self.units.spawn(Entity::from_def(def, content.features(), owner, pos, heading));
+        self.events.push(SimEvent::Spawned { id });
+        Some(id)
+    }
+
+    /// Take an entity out of the world, with everything kept about it.
+    /// `by`: who destroyed it, if anyone. False when there is no such entity.
+    ///
+    /// Packages that keep a `Table` of their own drop its row here.
+    pub fn despawn(&mut self, id: EntityId, by: Option<EntityId>) -> bool {
+        if self.units.remove(id).is_none() {
+            return false;
+        }
+        self.labels.remove(id);
+        self.events.push(SimEvent::Destroyed { id, by });
+        true
+    }
+
+    /// Apply an edit from `from`; false (rejected) when `from` may not edit
+    /// or the edit does not apply. Only scripts and the bench may edit.
+    pub(crate) fn apply_edit(&mut self, from: PlayerId, e: &Edit) -> bool {
+        if from != PlayerId::SCRIPT && from != PlayerId::BENCH {
+            return false;
+        }
+        match *e {
+            Edit::Spawn { odf, player, pos, heading } => self.spawn_def(odf, player, pos, heading).is_some(),
+            Edit::Kill(id) => self.despawn(id, None),
+            // Each lands with the package that owns what it changes.
+            _ => false,
+        }
+    }
+
+    /// The content this sim resolves spawns against.
+    pub fn content(&self) -> Option<&Arc<ContentDb>> {
+        self.content.as_ref()
+    }
+
+    /// The map's start positions, as the setup gave them.
+    pub fn starts(&self) -> &[StartPos] {
+        &self.starts
+    }
+
+    /// The map's regions, as the setup gave them.
+    pub fn regions(&self) -> &[Region] {
+        &self.regions
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::command::{Command, CommandKind, Order};
+    use crate::setup::{Control, GameOptions, PlayerSetup};
+    use crate::view::UnitFlags;
+    use crate::world::EntityKind;
+    use crate::WorldSource;
+    use sta_content::{MapDef, MapObject};
+    use sta_core::TeamId;
+
+    fn v(x: i32, y: i32, z: i32) -> Vec3 {
+        Vec3 { x: Fixed::from_int(x), y: Fixed::from_int(y), z: Fixed::from_int(z) }
+    }
+
+    fn setup(map: MapDef) -> GameSetup {
+        let seat = |id, control| PlayerSetup { id: PlayerId(id), team: TeamId(id), race: "fx".into(), control };
+        GameSetup {
+            seed: 11,
+            map: Arc::new(map),
+            content: Arc::new(sta_content::fake::db()),
+            players: vec![seat(0, Control::Human), seat(1, Control::Idle)],
+            options: GameOptions::default(),
+        }
+    }
+
+    fn object(odf: &str, owner: Option<u8>, pos: Vec3) -> MapObject {
+        MapObject { odf: odf.into(), owner, pos, heading: (Fixed::ONE, Fixed::ZERO), label: None }
+    }
+
+    fn cmd(player: PlayerId, seq: u32, kind: CommandKind) -> Command {
+        Command { player, seq, kind }
+    }
+
+    fn spawn(seq: u32, db: &ContentDb, odf: &str, player: u8, pos: Vec3) -> Command {
+        let e = Edit::Spawn { odf: db.key(odf).unwrap(), player: PlayerId(player), pos, heading: (Fixed::ZERO, Fixed::ONE) };
+        cmd(PlayerId::BENCH, seq, CommandKind::Edit(e))
+    }
+
+    fn mv(player: u8, seq: u32, units: &[u32], to: Vec3) -> Command {
+        let units = units.iter().map(|&i| EntityId(i)).collect();
+        cmd(PlayerId(player), seq, CommandKind::Order(Order::Move { units, to, queue: false }))
+    }
+
+    /// `two_bases` places one object, the moon; the starts spawn nothing.
+    #[test]
+    fn two_bases_spawns_its_objects() {
+        let s = setup(sta_content::fake::two_bases());
+        let (sim, warnings) = Sim::from_setup_with_warnings(&s);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(sim.units.len(), 1);
+        let moon = sim.unit(EntityId(1)).unwrap();
+        assert_eq!(moon.kind, EntityKind::Resource);
+        assert_eq!(moon.def, s.content.key("fx_moon").unwrap());
+        assert_eq!(moon.owner, NEUTRAL);
+        assert_eq!(moon.pos, Vec3::ZERO);
+        assert!(!moon.mobile() && !moon.orderable());
+        assert_eq!(sim.labels.get(moon.id).map(String::as_str), Some("moon"));
+        assert_eq!(sim.starts().len(), 2);
+        assert_eq!(sim.regions().len(), 2);
+        assert_eq!(sim.content().unwrap().hash(), s.content.hash());
+        assert_eq!(Sim::from_setup(&s).digest(), sim.digest());
+    }
+
+    /// Owned objects of every kind, in map order; unknown names and
+    /// non-units skipped with a warning each.
+    #[test]
+    fn map_objects_get_kinds_owners_and_defs() {
+        let mut map = sta_content::fake::two_bases();
+        map.objects.extend([
+            object("fx_station", Some(0), v(-4000, 0, 0)),
+            object("FX_Yard", Some(1), v(4000, 0, 0)),
+            object("fx_nothing", Some(0), v(0, 0, 0)),
+            object("fx_cruiser", Some(0), v(-3800, 0, 200)),
+            object("fx_beam", None, v(0, 0, 0)),
+            object("fx_miner", Some(1), v(3800, 0, -200)),
+        ]);
+        let s = setup(map);
+        let db = &s.content;
+        let (sim, warnings) = Sim::from_setup_with_warnings(&s);
+        let skipped: Vec<_> = warnings.iter().map(|w| w.file.as_str()).collect();
+        assert_eq!(skipped, ["fx_nothing", "fx_beam"]);
+        let got: Vec<_> = sim.units.iter().map(|e| (e.id.0, e.kind, e.def, e.owner)).collect();
+        let want = [
+            (1, EntityKind::Resource, "fx_moon", NEUTRAL),
+            (2, EntityKind::Station, "fx_station", PlayerId(0)),
+            (3, EntityKind::Station, "fx_yard", PlayerId(1)),
+            (4, EntityKind::Craft, "fx_cruiser", PlayerId(0)),
+            (5, EntityKind::Craft, "fx_miner", PlayerId(1)),
+        ]
+        .map(|(id, kind, odf, owner)| (id, kind, db.key(odf).unwrap(), owner));
+        assert_eq!(got, want);
+        let yard = sim.unit(EntityId(3)).unwrap();
+        assert_eq!(yard.hull, [Fixed::from_int(2000); 2]);
+        assert_eq!(yard.shields.view(), [[Fixed::from_int(800); 2]; 4]);
+    }
+
+    /// Scenery is render-only: changing it changes nothing in the sim.
+    #[test]
+    fn scenery_never_enters_the_sim() {
+        let plain = setup(sta_content::fake::two_bases());
+        let mut map = sta_content::fake::two_bases();
+        map.scenery = Default::default();
+        let bare = setup(map);
+        let (mut a, mut b) = (Sim::from_setup(&plain), Sim::from_setup(&bare));
+        assert_eq!(a.view(), b.view());
+        for _ in 0..10 {
+            assert_eq!(WorldSource::step(&mut a, &[]), WorldSource::step(&mut b, &[]));
+        }
+    }
+
+    /// Peers with different content differ from tick 0.
+    #[test]
+    fn content_hash_is_in_the_first_digest() {
+        let a = setup(MapDef::empty());
+        let mut b = a.clone();
+        b.content = Arc::new(ContentDb::builder().build().unwrap());
+        assert_ne!(a.content.hash(), b.content.hash());
+        assert_ne!(Sim::from_setup(&a).digest(), Sim::from_setup(&b).digest());
+    }
+
+    /// A scripted game on `two_bases`: the bench sets up both bases, the
+    /// players fly, a ship is added mid-game and one is killed. Returns the
+    /// digest at tick 300 and every event with its tick.
+    fn scripted_game() -> (u64, Vec<(u64, SimEvent)>) {
+        let s = setup(sta_content::fake::two_bases());
+        let db = Arc::clone(&s.content);
+        let mut sim = Sim::from_setup(&s);
+        let mut log = Vec::new();
+        for t in 0..300 {
+            // Ids: 1 the moon, then in spawn order.
+            let cmds = match t {
+                0 => vec![
+                    spawn(0, &db, "fx_station", 0, v(-4000, 0, 0)),   // 2
+                    spawn(1, &db, "fx_cruiser", 0, v(-3800, 0, 200)), // 3
+                    spawn(2, &db, "fx_frigate", 0, v(-3800, 0, -200)), // 4
+                    spawn(3, &db, "fx_yard", 1, v(4000, 0, 0)),       // 5
+                    spawn(4, &db, "fx_cruiser", 1, v(3800, 0, 0)),    // 6
+                ],
+                1 => vec![mv(0, 0, &[3, 4], v(-1000, 20, 500)), mv(1, 0, &[6], v(1000, -20, -500))],
+                90 => vec![spawn(5, &db, "fx_miner", 1, v(3900, 0, 300)), mv(0, 1, &[4], v(0, 0, 1500))], // 7
+                120 => vec![mv(1, 1, &[7], v(500, 0, 0))],
+                150 => vec![cmd(PlayerId::BENCH, 6, CommandKind::Edit(Edit::Kill(EntityId(3))))],
+                200 => vec![cmd(PlayerId(0), 2, CommandKind::Order(Order::Stop { units: vec![EntityId(4)] }))],
+                _ => vec![],
+            };
+            let out = WorldSource::step(&mut sim, &cmds);
+            assert_eq!(out.view.digest, sim.digest());
+            log.extend(out.events.into_iter().map(|e| (out.view.tick, e)));
+        }
+        assert_eq!(sim.tick, 300);
+        assert_eq!(sim.units.len(), 6);
+        (sim.digest(), log)
+    }
+
+    /// SIM-01's done-when: the same game twice gives the same digest at tick
+    /// 300, pinned so any change to the arithmetic or the model shows here.
+    #[test]
+    fn golden_digest_at_tick_300() {
+        let (digest, log) = scripted_game();
+        let (again, log2) = scripted_game();
+        assert_eq!(digest, again);
+        assert_eq!(log, log2);
+        let spawned: Vec<_> = log.iter().filter_map(|(t, e)| matches!(e, SimEvent::Spawned { .. }).then_some(*t)).collect();
+        // The moon comes out with the first step, with the five bench spawns;
+        // the miner at tick 91.
+        assert_eq!(spawned, [1, 1, 1, 1, 1, 1, 91]);
+        assert!(log.contains(&(151, SimEvent::Destroyed { id: EntityId(3), by: None })));
+        assert!(!log.iter().any(|(_, e)| matches!(e, SimEvent::Rejected { .. })), "{log:?}");
+        assert_eq!(digest, 0x4098_02e0_f981_8a21);
+    }
+
+    #[test]
+    fn ids_are_not_reused_after_a_kill() {
+        let s = setup(MapDef::empty());
+        let db = Arc::clone(&s.content);
+        let mut sim = Sim::from_setup(&s);
+        WorldSource::step(&mut sim, &[spawn(0, &db, "fx_cruiser", 0, v(0, 0, 0)), spawn(1, &db, "fx_frigate", 1, v(100, 0, 0))]);
+        let kill = |seq, id| cmd(PlayerId::SCRIPT, seq, CommandKind::Edit(Edit::Kill(EntityId(id))));
+        let out = WorldSource::step(&mut sim, &[kill(0, 2), spawn(1, &db, "fx_miner", 0, v(0, 0, 100))]);
+        assert_eq!(out.events, [SimEvent::Destroyed { id: EntityId(2), by: None }, SimEvent::Spawned { id: EntityId(3) }]);
+        let out = WorldSource::step(&mut sim, &[kill(0, 1), spawn(1, &db, "fx_miner", 0, v(0, 0, 200))]);
+        assert_eq!(out.events, [SimEvent::Destroyed { id: EntityId(1), by: None }, SimEvent::Spawned { id: EntityId(4) }]);
+        let ids: Vec<_> = out.view.units.iter().map(|u| u.id.0).collect();
+        assert_eq!(ids, [3, 4]);
+    }
+
+    #[test]
+    fn bad_commands_are_rejected() {
+        let s = setup(sta_content::fake::two_bases());
+        let db = Arc::clone(&s.content);
+        let mut sim = Sim::from_setup(&s);
+        // 2: player 0's cruiser, 3: player 1's frigate, killed at once.
+        WorldSource::step(&mut sim, &[spawn(0, &db, "fx_cruiser", 0, v(0, 0, 0)), spawn(1, &db, "fx_frigate", 1, v(100, 0, 0))]);
+        WorldSource::step(&mut sim, &[cmd(PlayerId::BENCH, 2, CommandKind::Edit(Edit::Kill(EntityId(3))))]);
+        let to = v(500, 0, 500);
+        let nothing = Edit::Spawn { odf: ContentKey::NONE, player: PlayerId(0), pos: to, heading: (Fixed::ZERO, Fixed::ONE) };
+        let cmds = [
+            mv(0, 0, &[3], to),                                                   // dead
+            mv(0, 1, &[1], to),                                                   // the moon: neutral, cannot move
+            mv(1, 0, &[2], to),                                                   // foreign
+            cmd(PlayerId(0), 2, CommandKind::Edit(Edit::Kill(EntityId(2)))),      // players may not edit
+            cmd(PlayerId::BENCH, 0, CommandKind::Edit(Edit::Kill(EntityId(3)))),  // already dead
+            cmd(PlayerId::BENCH, 1, CommandKind::Edit(Edit::Kill(EntityId(99)))), // never was
+            spawn(2, &db, "fx_beam", 0, to),                                      // a weapon, not a unit
+            cmd(PlayerId::BENCH, 3, CommandKind::Edit(nothing)),                  // no definition
+            mv(0, 3, &[3, 2], to),                                                // one dead, one fine: applies
+        ];
+        let out = WorldSource::step(&mut sim, &cmds);
+        let rejected: Vec<_> = out
+            .events
+            .iter()
+            .filter_map(|e| match e {
+                SimEvent::Rejected { player, seq } => Some((player.0, *seq)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(rejected, [(0, 0), (0, 1), (0, 2), (1, 0), (255, 0), (255, 1), (255, 2), (255, 3)]);
+        assert_eq!(out.events.len(), rejected.len());
+        assert_eq!(sim.unit(EntityId(2)).unwrap().target, Some(to));
+        // A sim without content cannot spawn from it.
+        let mut bare = Sim::new(1);
+        let out = WorldSource::step(&mut bare, &[spawn(0, &db, "fx_cruiser", 0, to)]);
+        assert_eq!(out.events, [SimEvent::Rejected { player: PlayerId::BENCH, seq: 0 }]);
+    }
+
+    /// Views show the entities as they are, and spawned craft fly on their
+    /// definition's movement.
+    #[test]
+    fn views_match_the_entities() {
+        let s = setup(sta_content::fake::two_bases());
+        let db = Arc::clone(&s.content);
+        let mut sim = Sim::from_setup(&s);
+        let first = WorldSource::step(&mut sim, &[spawn(0, &db, "fx_cruiser", 1, v(0, 0, -1000))]);
+        assert_eq!(first.events, [SimEvent::Spawned { id: EntityId(1) }, SimEvent::Spawned { id: EntityId(2) }]);
+        let to = v(0, 0, 600);
+        WorldSource::step(&mut sim, &[mv(1, 0, &[2], to)]);
+        let mut arrived = false;
+        for t in 0..30 * 30 {
+            let out = WorldSource::step(&mut sim, &[]);
+            assert_eq!(out.view.units, sim.units.iter().map(Entity::view).collect::<Vec<_>>());
+            let c = out.view.unit(EntityId(2)).unwrap();
+            if t == 30 {
+                // A second in: under way, no faster than its definition allows.
+                assert!(c.speed > Fixed::ZERO && c.speed <= Fixed::from_int(140), "{:?}", c.speed);
+            }
+            if sim.unit(EntityId(2)).unwrap().target.is_none() {
+                arrived = true;
+                break;
+            }
+        }
+        assert!(arrived, "never arrived");
+        let view = sim.view();
+        let c = view.unit(EntityId(2)).unwrap();
+        assert_eq!((c.def, c.owner, c.pos, c.speed), (db.key("fx_cruiser").unwrap(), PlayerId(1), to, Fixed::ZERO));
+        assert_eq!(c.hull, [Fixed::from_int(800); 2]);
+        assert_eq!(c.shields, [[Fixed::from_int(400); 2]; 4]);
+        assert_eq!(c.flags, UnitFlags::SELECTABLE);
+        assert_eq!(c.progress, None);
+        let moon = view.unit(EntityId(1)).unwrap();
+        assert_eq!((moon.owner, moon.hull, moon.speed), (NEUTRAL, [Fixed::ZERO; 2], Fixed::ZERO));
+    }
+}
