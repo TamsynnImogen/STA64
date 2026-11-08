@@ -126,10 +126,10 @@ struct Body {
     courses: Vec<(EntityId, CourseRec)>,
     /// SIM-04 mounts, attack orders and projectiles in flight.
     weapons: WeaponsRec,
-    /// SIM-07 stock, nodes and freighters.
+    /// SIM-07 stock, nodes and miners (build costs and refunds use the stock).
     economy: crate::economy::EconomyRec,
-    /// SIM-13 eliminated seats.
-    victory: crate::victory::VictoryRec,
+    /// SIM-08 yard queues, rig deploys and welds.
+    production: crate::production::ProductionRec,
 }
 
 fn kind_from(b: u8) -> Option<EntityKind> {
@@ -238,7 +238,7 @@ impl Sim {
                 .collect(),
             weapons: self.weapons.to_rec(),
             economy: self.economy.to_rec(),
-            victory: self.victory.to_rec(),
+            production: self.production.to_rec(),
         };
         let mut out = Vec::new();
         out.extend_from_slice(&MAGIC);
@@ -314,7 +314,7 @@ impl Sim {
             movement,
             weapons,
             economy: crate::economy::Economy::from_rec(&b.economy),
-            victory: crate::victory::Victory::from_rec(&b.victory),
+            production: crate::production::Production::from_rec(&b.production),
         })
     }
 }
@@ -468,51 +468,24 @@ mod tests {
         assert_eq!(loaded.snapshot(), live.snapshot());
     }
 
-    /// A snapshot after P2 is eliminated (P3 still alive) continues the same,
-    /// and the eliminated seat's orders are still rejected.
+    /// A yard half through two ships and a rig welding: loaded matches live
+    /// across a `Built`.
     #[test]
-    fn snapshot_keeps_eliminated_seats() {
-        use crate::setup::{Control, GameOptions, GameSetup, PlayerSetup};
-        let seat = |id| PlayerSetup { id: PlayerId(id), team: TeamId(id), race: "fx".into(), control: Control::Idle };
-        let db = sta_content::fake::db();
-        let (cruiser, frigate) = (db.key("fx_cruiser").unwrap(), db.key("fx_frigate").unwrap());
-        let db = Arc::new(db);
-        let setup = GameSetup {
-            seed: 7,
-            map: Arc::new(sta_content::MapDef::empty()),
-            content: Arc::clone(&db),
-            players: vec![seat(1), seat(2), seat(3)],
-            options: GameOptions::default(),
-        };
-        let mut live = Sim::from_setup(&setup);
-        let ahead = (Fixed::ZERO, Fixed::ONE);
-        let s = live.spawn_def(cruiser, PlayerId(1), v(2000, 0, 2000), ahead).unwrap();
-        let t = live.spawn_def(frigate, PlayerId(2), v(2000, 0, 2350), ahead).unwrap();
-        live.spawn_def(frigate, PlayerId(3), v(6000, 0, 6000), ahead).unwrap();
-        let attack = Command {
-            player: PlayerId(1),
-            seq: 0,
-            kind: CommandKind::Order(Order::Attack { units: vec![s], target: t }),
-        };
-        live.step(&[attack]);
-        for _ in 0..1500 {
-            live.step(&[]);
-        }
-        assert!(live.is_eliminated(PlayerId(2)) && !live.is_eliminated(PlayerId(3)));
+    fn mid_build_snapshot_continues_identically() {
+        use crate::production::tests::mid_build;
+        let (mut live, db) = mid_build();
+        assert!(!live.production.is_empty());
         let mut loaded = Sim::from_snapshot(&live.snapshot(), Some(Arc::clone(&db))).unwrap();
-        assert!(loaded.is_eliminated(PlayerId(2)));
         assert_eq!(loaded.digest(), live.digest());
-        let stop = Command { player: PlayerId(2), seq: 9, kind: CommandKind::Order(Order::Stop { units: vec![] }) };
-        for tick in 0..300 {
-            let cmds = if tick == 0 { vec![stop.clone()] } else { vec![] };
-            let a = live.step(&cmds);
-            let b = loaded.step(&cmds);
+        let mut built = 0;
+        for tick in 0..400 {
+            let a = live.step(&[]);
+            let b = loaded.step(&[]);
             assert_eq!(a.view.digest, b.view.digest, "tick {tick}");
             assert_eq!(a.events, b.events, "tick {tick}");
-            if tick == 0 {
-                assert!(b.events.contains(&SimEvent::Rejected { player: PlayerId(2), seq: 9 }));
-            }
+            built += a.events.iter().filter(|e| matches!(e, SimEvent::Built { .. })).count();
         }
+        assert!(built >= 1, "a build should finish after the snapshot");
         assert_eq!(loaded.snapshot(), live.snapshot());
     }
 
