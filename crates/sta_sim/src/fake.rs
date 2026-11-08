@@ -129,7 +129,7 @@ impl ScriptedSource {
 
     fn view_at(&self, t: Tick) -> WorldView {
         let units = self.rails.iter().filter_map(|r| r.at(t)).collect();
-        WorldView { tick: t, digest: 0, units, players: Vec::new() }
+        WorldView { tick: t, digest: 0, units, players: Vec::new(), visibility: Vec::new() }
     }
 
     fn events_at(&self, t: Tick) -> Vec<SimEvent> {

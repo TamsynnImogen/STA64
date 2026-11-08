@@ -26,6 +26,7 @@ pub mod event;
 pub mod fake;
 pub mod movement;
 pub mod setup;
+pub mod sensors;
 pub mod source;
 pub mod spatial;
 pub mod spawn;
@@ -273,7 +274,8 @@ impl Sim {
                     .collect(),
             })
             .collect();
-        WorldView { tick: self.tick, digest: self.digest(), units, players }
+        let visibility = sensors::compute(&self.units, self.content.as_deref(), &self.players);
+        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility }
     }
 
     /// FNV-1a over all simulation state, for desync detection. The content

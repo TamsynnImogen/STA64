@@ -5,7 +5,8 @@
 //!   and events.
 //! - Everything in it is `Fixed`; readers convert with `to_f32` and never
 //!   feed the result back.
-//! - Omniscient until per-player visibility (`visible_to`, SIM-12).
+//! - Per-player visibility is `visible_to` (SIM-12); a view without
+//!   visibility data is omniscient.
 //! - Evolution: fields are added, never removed, within a milestone.
 
 use std::sync::Arc;
@@ -25,9 +26,26 @@ pub struct WorldView {
     pub units: Vec<UnitView>,
     /// Ascending id.
     pub players: Vec<PlayerView>,
+    /// Per player, the ids it sees (ascending), ascending player. Empty when
+    /// the source computes no visibility, in which case the view is omniscient.
+    #[serde(default)]
+    pub visibility: Vec<(PlayerId, Vec<EntityId>)>,
 }
 
 impl WorldView {
+    /// The units `player` sees, ascending id: its team's and whatever its
+    /// team's sensors reach (`crate::sensors`). Everything when the view
+    /// carries no visibility data; nothing for a player it does not know.
+    pub fn visible_to(&self, player: PlayerId) -> Vec<&UnitView> {
+        if self.visibility.is_empty() {
+            return self.units.iter().collect();
+        }
+        match self.visibility.binary_search_by_key(&player, |v| v.0) {
+            Ok(i) => self.visibility[i].1.iter().filter_map(|&id| self.unit(id)).collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
     pub fn unit(&self, id: EntityId) -> Option<&UnitView> {
         self.units.binary_search_by_key(&id, |u| u.id).ok().map(|i| &self.units[i])
     }
