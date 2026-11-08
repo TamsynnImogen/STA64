@@ -89,6 +89,7 @@ impl Bench {
 
         let sim = match &s.start {
             Some(Start::Snapshot(file)) => {
+                label = format!("snapshot:{file}");
                 let bytes = std::fs::read(cfg.data_path(file))
                     .map_err(|e| format!("Start=snapshot:{file}: {e}"))?;
                 Sim::from_snapshot(&bytes, Some(content.clone()))

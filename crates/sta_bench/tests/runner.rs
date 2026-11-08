@@ -335,3 +335,39 @@ fn replay_start_runs_the_recorded_commands() {
     // The last step is `does not contain`, which the parser may read as a typed log step.
     assert!(r.passed, "{}", r.summary());
 }
+
+#[test]
+fn snapshot_start_continues_the_saved_run() {
+    let dir = std::env::temp_dir().join(format!("sta64-bench-snap-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("resumed.ini"),
+        "[Scene]\nStart=snapshot:mid.snap\n",
+    )
+    .unwrap();
+    // Run planet with a goto, save at tick 30, go on to tick 60.
+    let mut cfg = RunConfig::fake();
+    cfg.data_dir = dir.clone();
+    let cfg = Arc::new(cfg);
+    let r = case(
+        &cfg,
+        "planet",
+        &[
+            "Scene \"goto ship 1650 0 1400\"",
+            "Run 30 ticks",
+            "Save snapshot as \"mid.snap\"",
+            "Run 30 ticks",
+        ],
+    );
+    assert!(r.passed, "{}", r.summary());
+    let straight = r.digests[60].1;
+    // Resume from the snapshot: the same digest 30 ticks on, the order carried along.
+    let mut cfg = RunConfig::fake();
+    cfg.data_dir = dir.clone();
+    cfg.scene_dir = dir.clone();
+    let cfg = Arc::new(cfg);
+    let pinned = format!("Expect digest at tick 60 is \"{straight:016x}\"");
+    let r = case(&cfg, "resumed", &["Run until tick 60", &pinned]);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(r.passed, "{}", r.summary());
+}
