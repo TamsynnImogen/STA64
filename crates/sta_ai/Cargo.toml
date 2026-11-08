@@ -1,0 +1,9 @@
+[package]
+name = "sta_ai"
+description = "STA64 computer players: controllers that read world views and send commands"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Bevy-free; sits above sta_sim (docs/WORKPLAN.md, "Seams"). Empty until its lane starts.
+[dependencies]

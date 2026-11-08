@@ -1,0 +1,19 @@
+[package]
+name = "sta_content"
+description = "STA64 content database: typed unit, weapon and map definitions for the simulation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Bevy-free, like the simulation that consumes it. The format crates below
+# parse; this crate turns what they parse into the sim's fixed-point types.
+[dependencies]
+sta_core = { workspace = true, features = ["serde"] }
+sta_odf.workspace = true
+sta_vfs.workspace = true
+sta_bzn.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+json5.workspace = true

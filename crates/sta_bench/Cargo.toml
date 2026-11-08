@@ -1,0 +1,9 @@
+[package]
+name = "sta_bench"
+description = "STA64 test bench: scene, command and scenario parsers and the in-process runner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Bevy-free; sits above sta_sim (docs/WORKPLAN.md, "Seams"). Empty until its lane starts.
+[dependencies]

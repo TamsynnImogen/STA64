@@ -8,3 +8,9 @@ license.workspace = true
 # Deliberately no Bevy dependency: the simulation must run headless, in tests,
 # on dedicated servers, and stay bit-identical across platforms for lockstep.
 [dependencies]
+sta_core = { workspace = true, features = ["serde"] }
+sta_content.workspace = true
+serde.workspace = true
+# The fakes: ScriptedSource reads JSON5 timelines, ViewLog writes postcard.
+json5.workspace = true
+postcard.workspace = true
