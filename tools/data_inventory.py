@@ -54,7 +54,9 @@ def read_zfs(path: Path):
             n += 1
             data = b[fo : fo + size]
             if key:
-                data = bytes(c ^ k[i & 3] for i, c in enumerate(data))
+                # Whole words are XOR'd with the key; the last size % 4 bytes are plain.
+                whole = len(data) & ~3
+                data = bytes(c ^ k[i & 3] for i, c in enumerate(data[:whole])) + data[whole:]
             if flags:
                 print(f"warning: {path.name}:{name} compressed (flags {flags}), skipped", file=sys.stderr)
                 continue
@@ -653,7 +655,7 @@ def main():
               "  set items to `-1`."]
     lines += ["", "## Sources and regeneration", "",
               "- Armada I: retail install; most ODFs and all techtrees are in `assets.zfs`",
-              "  (ZFS v1, 100-entry blocks, 16-char names, data XOR'd with the 4-byte header key,",
+              "  (ZFS v1, 100-entry blocks, 16-char names, whole words XOR'd with the 4-byte header key,",
               "  read by the script). `addon/` ODFs are loose.",
               "- Armada II: retail 1.1 install, loose files.",
               "- Fleet Operations: loose `Data/` plus `ODF.fpq` (extracted with `sta_fpq`'s",

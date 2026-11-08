@@ -17,16 +17,18 @@
 //!
 //! The seams (docs/WORKPLAN.md) live in [`command`] (S2), [`view`] and
 //! [`source`] (S3), [`event`] (S4) and [`setup`] (S7); [`fake`] has the
-//! stand-ins other lanes build against. [`Sim`] is a [`WorldSource`] with
-//! today's movement; the entity model (SIM-01) and everything after it build
-//! on that.
+//! stand-ins other lanes build against. [`Sim`] is a [`WorldSource`] over
+//! the entity model in [`world`], filled from the map by [`spawn`], with
+//! today's movement.
 
 pub mod command;
 pub mod event;
 pub mod fake;
 pub mod setup;
 pub mod source;
+pub mod spawn;
 pub mod view;
+pub mod world;
 
 /// The fixed-point type and its module, now in `sta_core`; re-exported so
 /// `sta_sim::Fixed` and `sta_sim::fixed::Fixed` keep working.
@@ -41,22 +43,12 @@ pub use view::{TickOutput, UnitView, WorldView};
 
 use std::sync::Arc;
 
-use view::{PlayerView, Relation, UnitFlags};
+use sta_content::{ContentDb, Region, StartPos};
+use view::{PlayerView, Relation};
+use world::{Entities, Entity, EntityKind, Fnv, Table};
 
-/// A moving thing: today's only kind of entity.
-#[derive(Debug, Clone)]
-pub struct Unit {
-    pub id: EntityId,
-    pub player: u8,
-    pub pos: Vec3,
-    /// Unit heading in the XZ plane: (x, z), length one.
-    pub heading: (Fixed, Fixed),
-    pub speed: Fixed,
-    /// Current turn rate, radians per second; positive turns from +X toward +Z.
-    pub omega: Fixed,
-    pub target: Option<Vec3>,
-    pub stats: MoveStats,
-}
+/// The entity, under the name movement and `sta64::units` know it by.
+pub type Unit = Entity;
 
 /// xorshift64* — small, fast and identical everywhere.
 #[derive(Debug, Clone)]
@@ -81,12 +73,18 @@ impl Rng {
 pub struct Sim {
     pub tick: u64,
     pub rng: Rng,
-    /// Sorted by id; never reordered.
-    pub units: Vec<Unit>,
-    next_id: u32,
-    /// Seats from the game setup, ascending id. Shown in views; not yet in
-    /// the digest (SIM-01 decides what of a player is state).
+    /// Every entity, ascending id (the name is the legacy one).
+    pub units: Entities,
+    /// Map labels of the entities that have one (missions find them by it).
+    pub labels: Table<String>,
+    /// Seats from the game setup, ascending id; in the digest.
     players: Vec<(PlayerId, TeamId)>,
+    /// What spawns resolve against; `None` for a sim made with [`Sim::new`].
+    content: Option<Arc<ContentDb>>,
+    /// The map's start positions and regions, kept for the systems that use
+    /// them. Fixed by the setup, so not in the digest.
+    starts: Vec<StartPos>,
+    regions: Vec<Region>,
     /// Events since the last step (spawns between ticks), emitted with it.
     events: Vec<SimEvent>,
 }
@@ -194,39 +192,30 @@ impl Sim {
         Sim {
             tick: 0,
             rng: Rng::new(seed),
-            units: Vec::new(),
-            next_id: 1,
+            units: Entities::new(),
+            labels: Table::new(),
             players: Vec::new(),
+            content: None,
+            starts: Vec::new(),
+            regions: Vec::new(),
             events: Vec::new(),
         }
     }
 
-    /// Add a unit facing `heading` (x, z; normalised here).
+    /// Add a craft with no definition facing `heading` (x, z; normalised
+    /// here). Content-made entities come from [`Sim::spawn_def`].
     pub fn spawn(&mut self, player: u8, pos: Vec3, heading: (Fixed, Fixed), stats: MoveStats) -> EntityId {
-        let id = EntityId(self.next_id);
-        self.next_id += 1;
-        let len = (heading.0 * heading.0 + heading.1 * heading.1).sqrt();
-        let heading = if len == Fixed::ZERO { (Fixed::ZERO, Fixed::ONE) } else { (heading.0 / len, heading.1 / len) };
-        self.units.push(Unit {
-            id,
-            player,
-            pos,
-            heading,
-            speed: Fixed::ZERO,
-            omega: Fixed::ZERO,
-            target: None,
-            stats,
-        });
+        let id = self.units.spawn(Entity::new(EntityKind::Craft, ContentKey::NONE, PlayerId(player), pos, heading, stats));
         self.events.push(SimEvent::Spawned { id });
         id
     }
 
     pub fn unit(&self, id: EntityId) -> Option<&Unit> {
-        self.units.binary_search_by_key(&id, |u| u.id).ok().map(|i| &self.units[i])
+        self.units.get(id)
     }
 
     fn unit_mut(&mut self, id: EntityId) -> Option<&mut Unit> {
-        self.units.binary_search_by_key(&id, |u| u.id).ok().map(|i| &mut self.units[i])
+        self.units.get_mut(id)
     }
 
     fn set_target(&mut self, unit: EntityId, to: Option<Vec3>) {
@@ -235,11 +224,15 @@ impl Sim {
         }
     }
 
-    /// Apply one seam command, or say it was rejected. Today only moves and
-    /// stops exist; everything else is rejected until its package lands.
+    /// Apply one seam command, or say it was rejected. Today moves, stops
+    /// and the spawn and kill edits exist; everything else is rejected until
+    /// its package lands.
     fn apply(&mut self, c: &command::Command) -> bool {
         use command::{CommandKind, Order};
-        let CommandKind::Order(order) = &c.kind else { return false };
+        let order = match &c.kind {
+            CommandKind::Order(o) => o,
+            CommandKind::Edit(e) => return self.apply_edit(c.player, e),
+        };
         let (units, to) = match order {
             // Queued waypoints are SIM-02's; until then a queued move replaces.
             Order::Move { units, to, .. } => (units, Some(*to)),
@@ -247,11 +240,11 @@ impl Sim {
             _ => return false,
         };
         // Players order their own units; scripts and the bench any unit.
-        // Units that are gone or not the player's are skipped; the command
-        // is rejected only when none is left.
+        // Units that are gone, not the player's or unable to move are
+        // skipped; the command is rejected only when none is left.
         let mut any = false;
         for &id in units {
-            let owned = self.unit(id).is_some_and(|u| !c.player.is_player() || u.player == c.player.0);
+            let owned = self.unit(id).is_some_and(|u| u.orderable() && (!c.player.is_player() || u.owner == c.player));
             if owned {
                 self.set_target(id, to);
                 any = true;
@@ -262,7 +255,7 @@ impl Sim {
 
     /// Move every unit one tick and close the tick with its view.
     fn advance(&mut self) -> TickOutput {
-        for u in &mut self.units {
+        for u in self.units.iter_mut().filter(|u| u.mobile()) {
             u.step();
         }
         self.tick += 1;
@@ -270,22 +263,7 @@ impl Sim {
     }
 
     fn build_view(&self) -> WorldView {
-        let units = self
-            .units
-            .iter()
-            .map(|u| UnitView {
-                id: u.id,
-                def: ContentKey::NONE,
-                owner: PlayerId(u.player),
-                pos: u.pos,
-                heading: u.heading,
-                speed: u.speed,
-                hull: [Fixed::ZERO; 2],
-                shields: [[Fixed::ZERO; 2]; 4],
-                flags: UnitFlags::SELECTABLE,
-                progress: None,
-            })
-            .collect();
+        let units = self.units.iter().map(Entity::view).collect();
         let players = self
             .players
             .iter()
@@ -306,34 +284,26 @@ impl Sim {
         WorldView { tick: self.tick, digest: self.digest(), units, players }
     }
 
-    /// FNV-1a over all simulation state, for desync detection.
+    /// FNV-1a over all simulation state, for desync detection. The content
+    /// hash goes in first, so tick 0's digest already tells peers with
+    /// different content apart (S5), and every later one carries it.
     pub fn digest(&self) -> u64 {
-        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-        let mut eat = |v: u64| {
-            for b in v.to_le_bytes() {
-                h ^= b as u64;
-                h = h.wrapping_mul(0x100_0000_01b3);
-            }
-        };
-        eat(self.tick);
-        eat(self.rng.0);
-        for u in &self.units {
-            eat(u.id.0 as u64);
-            eat(u.player as u64);
-            for f in [u.pos.x, u.pos.y, u.pos.z, u.heading.0, u.heading.1, u.speed, u.omega] {
-                eat(f.to_bits() as u64);
-            }
-            match u.target {
-                Some(t) => {
-                    eat(1);
-                    for f in [t.x, t.y, t.z] {
-                        eat(f.to_bits() as u64);
-                    }
-                }
-                None => eat(0),
-            }
+        let mut h = Fnv::new();
+        h.u64(self.tick);
+        h.u64(self.rng.0);
+        h.u64(self.content.as_ref().map_or(0, |c| c.hash()));
+        h.u64(self.players.len() as u64);
+        for &(p, t) in &self.players {
+            h.u64(p.0 as u64);
+            h.u64(t.0 as u64);
         }
-        h
+        self.units.hash_into(&mut h);
+        h.u64(self.labels.len() as u64);
+        for (id, label) in self.labels.iter() {
+            h.u64(id.0 as u64);
+            h.str(label);
+        }
+        h.0
     }
 }
 
@@ -383,6 +353,10 @@ mod tests {
     }
 
     fn run() -> u64 {
+        run_sim().digest()
+    }
+
+    fn run_sim() -> Sim {
         let mut sim = Sim::new(1);
         let a = sim.spawn(0, v(0, 0, 0), (Fixed::ZERO, Fixed::ONE), stats());
         let b = sim.spawn(1, v(1000, 0, 0), (-Fixed::ONE, Fixed::ZERO), stats());
@@ -396,7 +370,32 @@ mod tests {
             sim.step(&cmds);
             sim.rng.next_u64();
         }
-        sim.digest()
+        sim
+    }
+
+    /// The digest before the entity model: the fields movement had, hashed
+    /// the old way.
+    fn movement_digest(sim: &Sim) -> u64 {
+        let mut h = Fnv::new();
+        h.u64(sim.tick);
+        h.u64(sim.rng.0);
+        for u in &sim.units {
+            h.u64(u.id.0 as u64);
+            h.u64(u.owner.0 as u64);
+            for f in [u.pos.x, u.pos.y, u.pos.z, u.heading.0, u.heading.1, u.speed, u.omega] {
+                h.fixed(f);
+            }
+            match u.target {
+                Some(t) => {
+                    h.u64(1);
+                    for f in [t.x, t.y, t.z] {
+                        h.fixed(f);
+                    }
+                }
+                None => h.u64(0),
+            }
+        }
+        h.0
     }
 
     #[test]
@@ -407,9 +406,15 @@ mod tests {
     /// The exact digest pins the arithmetic: any platform or compiler change
     /// that alters a single bit of the simulation fails here (CI runs it on
     /// x86-64, ARM64 Linux, Windows and Apple Silicon).
+    ///
+    /// The entity model (SIM-01) added kind, definition, stats, hull,
+    /// shields, flags, players and the next id to the digest, so its value
+    /// moved from `0xa4c0_7121_6986_d7dc`; the motion did not, which the old
+    /// formula over the same run still shows.
     #[test]
     fn digest_is_pinned() {
-        assert_eq!(run(), 0xa4c0_7121_6986_d7dc);
+        assert_eq!(run(), 0x2e54_3b95_7f83_da45);
+        assert_eq!(movement_digest(&run_sim()), 0xa4c0_7121_6986_d7dc);
     }
 
     #[test]

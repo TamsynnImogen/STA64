@@ -443,6 +443,7 @@ seam rather than writes.
 | CON-12 | GUI cfg (`docs/data/cfg.md`) → typed layouts for HUD/menus | `sta_content/src/gui_cfg.rs` | R0-2 | — | UI-04 | All 43 FO `.cfg` parse; layout snapshot tests | M | Sonnet |
 | CON-13 | Mod discovery: list mods (`info.ini`), chain, metadata | `sta_vfs/src/mods.rs` | — | temp dirs | UI-07 | Unit tests; lists installed mods | S | Haiku |
 | CON-14 | AIP files (`docs/data/aip.md`) → typed AI params | `sta_content/src/aip.rs` | R0-2 | — | AI-02 | All installed `.aip` parse | S | Haiku |
+| CON-15 | Armada I `.zfs` archives: reader, mounted per layer (`.odf` → `odf/`, `.tt` → `techtree/`, rest at root; loose > FPQ > ZFS), `Source::Zfs`, `Vfs::read_from` | `sta_vfs/src/zfs.rs`, ZFS mount in `sta_vfs/src/lib.rs` | — | synthetic archives | A1 content in CON-02/03/06 | Synthetic-archive tests; install-gated: A1 retail `assets.zfs` 516 entries, `objtxt.zfs` 81; `odf_index` resolves every A1 retail ODF | S | Sonnet |
 
 ### Simulation (SIM)
 
@@ -551,6 +552,30 @@ Each becomes a package of the same shape when M3 closes.
 | NET-02 | Lockstep `CommandRouter`; two sims in one process; desync injection | `sta_net/src/lockstep.rs` | NET-01, SIM-11 | `LoopbackNet` | NET-03, INT-M5 | Two in-process peers equal digests 10k ticks; injected desync detected within 1 turn and written as a replay | L | Sonnet |
 | NET-03 | Transport and relay (design notes in Refit `online/README.md`, new protocol): rooms, NAT-free relay, reconnect | `sta_net/src/transport/`, `crates/sta_net/src/bin/relay.rs` | NET-01 | `LoopbackNet` | UI-11, INT-M5 | Two processes play 5 min over a local relay | L | Sonnet |
 
+### Modder tools (EDT) — ported from A2FOExtensions
+
+The four authoring tools in A2FOExtensions (`tools/A2FOArcLab`,
+`A2FOIconLab`, `A2FOTooltipLab`, `ArmadaUIEditor`) are Bevy 0.13 +
+`bevy_egui` apps, each with its own ODF, SOD, SPR and CFG readers. Each
+package rebuilds one on STA64's crates instead (`sta_vfs` mod chain with FPQ
+and ZFS, `sta_content::OdfIndex`, `sta_odf::resolve_layered`, `a2fmt`
+SOD/SPR, `sta_assets` textures, and the CON loaders), on Bevy 0.20 with
+`bevy_egui` 0.43. So a tool sees files exactly as the engine does, and
+fixing a reader fixes both. The tools keep editing legacy files (A1/A2/FO
+mods). They are standalone binaries, not `sta64` modes, so the R0-3 freeze
+and the `sta64` hotspots don't apply. Behaviour and UI follow the original
+READMEs; the A2FOExtensions sources are Immy's own and may be adapted.
+
+| ID | Package | Owns | Needs | Against | Unlocks | Done when | Size | Model |
+|---|---|---|---|---|---|---|---|---|
+| EDT-01 | Tool shell: `sta_tools` crate (Bevy 0.20 + `bevy_egui` 0.43), install/mod picker over `Vfs::mount_install`, file browser over `OdfIndex`, atomic save with backup, window icon, shared viewport (orbit, Top/Bottom/Front/Back/Left/Right/Fit) | `crates/sta_tools/` (lib) | CON-02 (merged) | temp installs | EDT-02..05 | A demo bin opens an install and a mod, lists ODFs by root, previews a SOD; save round-trip test | M | Sonnet |
+| EDT-02 | Arc Lab: weapon ↔ hardpoint discovery, fire-arc volumes at hardpoints, damage/logo decal preview, generated ODF blocks (copy/save), `--inspect <ship.odf>` headless | `crates/sta_tools/src/bin/arc_lab/` | EDT-01, SIM-04 (arc test) | the original's arc maths until SIM-04 lands | — | `--inspect` agrees with the original on its fixtures; the arc test is SIM-04's code, not a copy | M | Sonnet |
+| EDT-03 | Icon Lab: `weaponXiconpos` editor previewed in the faction's info panel (`systembackgrounds.spr`, `systemimages.spr`, faction CFG `infoSingleSystemsIcon`), slots 1–128 | `crates/sta_tools/src/bin/icon_lab/` | EDT-01, CON-12 | — | — | Opens a FO4 ship, moves an icon, saves; the panel layout matches CON-12's typed CFG | M | Sonnet |
+| EDT-04 | Tooltip Lab: `Dynamic_Localized_Strings.h` editor with validation and a live preview from the mod's own `FontSmall.spr` glyph map (resolved through `ParentMod`) | `crates/sta_tools/src/bin/tooltip_lab/` | EDT-01, CON-11 | — | — | Round-trips every installed strings file byte-identically when unchanged; preview uses the mod's glyph table | M | Sonnet |
+| EDT-05 | UI Editor: A1/A2/FO `gui_*.cfg` + `gui_*.spr` layout editor, A1 640×480 vs A2 `screenWidth`/`screenHeight`, recursive `#include` effective values | `crates/sta_tools/src/bin/ui_editor/` | EDT-01, CON-12 | — | UI-04 (shared reading of layouts) | Opens stock A1, A2 and FO interfaces; edit → save → reload equal | L | Sonnet |
+| EDT-06 | ODF formatter (`format_odfs.py` → Rust): lossless ODF syntax tree in `sta_odf` (comments, order, continuation rows kept), grouped layout after the FO Guide templates; dry run by default, `--write` atomic, `--report` JSON | `crates/sta_odf/src/cst.rs`, `crates/sta_tools/src/bin/odf_fmt.rs` | CON-01 (merged) | — | — | Every installed ODF round-trips byte-identically unformatted; formatted output resolves to the same values (`resolve_layered`) as the input | M | Sonnet |
+| EDT-07 | Archive tool `sta-archive`: info/list/extract/cat/find/pack for FPQ v1 (FO 3.x, FPQEdit 3.2.7) and v2 (FO 4.0/Roots, FPQEdit 4.0) and A1 ZFS, format auto-detected, nested archives opened in place, safe extraction paths. FPQ v1 read (hash = MPQ string hash with a zero crypt table over the name minus its last character, stored as both hashes; no folders); FPQ v1/v2 and ZFS writers (LZO1X via MIT `lzokay-native`, raw when not smaller) | `crates/sta_fpq/`, ZFS writer in `sta_vfs/src/zfs.rs`, `crates/sta_vfs/src/bin/sta_archive.rs` | CON-15 | — | modders; repacking for tests | Every installed FPQ (v1 and v2) and ZFS lists, extracts and validates; pack → read round-trips every installed archive (same paths, same bytes, hash lookups agree); repacked archive opens in the matching FPQEdit/game (manual check line) | M | Sonnet |
+
 ### Integration (INT)
 
 One package per milestone owns `main.rs`, `app.rs`, `sta64/src/game/` (the
@@ -564,8 +589,8 @@ and fixes seams through seam PRs.
 | INT-M4 | Front end → Instant Action → game → back | UI-06..09, AUD-04, CON-13, TOOL-09 | Scenario reaches each screen by state and starts a match from setup | M | Sonnet |
 | INT-M5 | Multiplayer with AI and missions | NET-02, NET-03, UI-11, AI-02, LUA-04 | Two-process match with an AI and a Lua mission, no desync over 30 min | M | Sonnet |
 
-Counts: CON 14, SIM 14, RND 14, UI 11, AUD 5, TOOL 9, LUA 4, AI 3, NET 3,
-INT 4 (91), plus 3 in round 0.
+Counts: CON 15, SIM 14, RND 14, UI 11, AUD 5, TOOL 9, LUA 4, AI 3, NET 3,
+EDT 7, INT 4 (99), plus 3 in round 0.
 
 ## Dependency graph
 
@@ -585,6 +610,7 @@ graph LR
   CON07 --> TOOL05; SIM01 --> TOOL05
   SIM08 --> AI02; CON14 --> AI02
   NET01 --> NET02 & NET03; SIM11 --> NET02
+  CON02 --> EDT01 --> EDT02 & EDT03 & EDT04 & EDT05; SIM04 --> EDT02; CON12 --> EDT03 & EDT05; CON11 --> EDT04; CON01 --> EDT06; CON15 --> EDT07
   LUA02 --> LUA01 --> LUA03 --> LUA04
   CON07 & SIM02 & RND01 & TOOL05 --> INTM2[INT-M2]
   SIM05 & SIM08 & RND09 & UI04 & AI01 --> INTM3[INT-M3]

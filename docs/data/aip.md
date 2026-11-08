@@ -18,7 +18,7 @@ Preprocessor directives: `#include` ×197, `#define` ×10, `# comment line` ×4
 | `attack_region_priority` | 20 | 29 | 11 |  | int | `1000`, `100`, `3000` |
 | `attack_troops_priority` | 73 | 37 | 12 |  | int | `1000`, `1500`, `0` |
 | `avoid_danger_priority_modifier` | 16 | 10 | 3 |  | int | `10`, `0`, `100` |
-| `checkTechnologyAvailable` | · | 26 | 6 |  | int | `1`, `0` |
+| `checkTechnologyAvailable` | · | 26 | 6 | ✓ | int | `1`, `0` |
 | `danger_diminishment` | 22 | 29 | 1 |  | double | `1`, `0` |
 | `defend_buildings_priority` | 1 | · | · |  | int | `100` |
 | `defend_priority` | 73 | 37 | 12 |  | int | `1000`, `100`, `0` |
@@ -45,9 +45,9 @@ Preprocessor directives: `#include` ×197, `#define` ×10, `# comment line` ×4
 | `MAX_EVAL_ESCORT` | 14 | 28 | 11 |  | int | `10`, `1000`, `0` |
 | `MAX_EVAL_EXPLORE` | 14 | 28 | 11 |  | int | `10`, `1000`, `0` |
 | `MAX_EVAL_RESOURCE` | 14 | 28 | 11 |  | int | `10`, `1000`, `0` |
-| `MAX_EXEC_ATTACK` | 16 | 28 | 12 |  | int | `1`, `3`, `1000` |
+| `MAX_EXEC_ATTACK` | 16 | 28 | 12 | ✓ | int | `1`, `3`, `1000` |
 | `MAX_EXEC_ATTACK_BASE` | 16 | 28 | 12 |  | int | `1`, `3`, `0` |
-| `MAX_EXEC_DEFEND` | 14 | 28 | 12 |  | int | `2`, `1000`, `0` |
+| `MAX_EXEC_DEFEND` | 14 | 28 | 12 | ✓ | int | `2`, `1000`, `0` |
 | `MAX_EXEC_ESCORT` | 14 | 28 | 12 |  | int | `0`, `1`, `1000` |
 | `MAX_EXEC_EXPLORE` | 14 | 28 | 12 |  | int | `2`, `0`, `1` |
 | `MAX_EXEC_RESOURCE` | 14 | 28 | 12 |  | int | `1`, `0`, `4` |
