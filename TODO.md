@@ -13,7 +13,7 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 - [?] Asteroids and dilithium moons with generated rock (craters, relief, highlights, rim); moons' cracks glow blue — 7c8c421
 - [?] Movement smoothness after the sprite-material fix — 19b7300
 - [?] tutorialgameplay (FO4): no more grey wash (starfield clouds were sky-sized) and no giant blue disc; FO's background planets (`map_planet_class*`) sit where the map puts them but never cover ships; suns still behind everything — b6bc4f8
-- [?] FO background planets (`map_planet_class*`, e.g. banana split, tutorialgameplay): ground texture visible under a thin, lit cloud shell, not a pale solid ball — ATMOFIX
+- [?] FO background planets (`map_planet_class*`, e.g. banana split, tutorialgameplay): ground texture visible under a thin, lit cloud shell, not a pale solid ball — 3e24321
 - [?] Starfield star size (estimate: ODF `.scale` = world units seen from 5k): point stars a few px, FO star clouds ~6° — b6bc4f8
 - [?] Ships near a planet's day side / inside nebulae take their coloured light (planet glow, nebula lights); not overpowering? — 8a95cee
 - [?] Nebulae as volumetric gas (Mutara purple/pink etc.) instead of billboards; ships inside show correctly; FPS when zoomed into a big nebula — e4eb7c7
