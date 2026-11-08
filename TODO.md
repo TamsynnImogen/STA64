@@ -14,8 +14,8 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [?] Starfield visible; star size/brightness plausible (size is an estimate) — `270c675`
 - [?] Planets textured (`<ground>1`/`<ground>2` + cloud shell); texture not mirrored/rotated — `270c675`
 - [?] Ships' running lights / engine particles still sit on the hull after the ScaleSOD change (e.g. `fgalaxy`, ScaleSOD 2.78) — `270c675`
-- [?] Asteroid fields show rocks, slowly orbiting/tumbling; size and spread look like the game (spread is an estimate) — ASTEROIDS
-- [?] The editor's `dlight` arrow gizmo no longer shows; lighting direction matches the game on a map with dlights — ASTEROIDS
+- [?] Asteroid fields show rocks, slowly orbiting/tumbling; size and spread look like the game (spread is an estimate) — aa70e99
+- [?] The editor's `dlight` arrow gizmo no longer shows; lighting direction matches the game on a map with dlights — aa70e99
 
 ## Now (M2: a map you can fly in)
 
