@@ -1,0 +1,6 @@
+// base game copy
+#include "fedbase.odf"
+classLabel = "craft"
+unitName = "Cruiser"
+maxHealth = 1000
+maxSpeed = 3.0f

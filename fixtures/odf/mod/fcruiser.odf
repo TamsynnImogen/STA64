@@ -1,0 +1,4 @@
+// active mod: inherits the parent copy, tougher
+#include "fcruiser.odf"
+maxHealth = 1500;
+unitName = "Cruiser (mod)"

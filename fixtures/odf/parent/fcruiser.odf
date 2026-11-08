@@ -1,0 +1,3 @@
+// parent mod: inherits the base copy, faster
+#include "fcruiser.odf"
+maxSpeed = 4.0f
