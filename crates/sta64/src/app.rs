@@ -1,0 +1,272 @@
+//! App modes, states, system sets and the command line (docs/WORKPLAN.md
+//! S10). Owned by R0 and the INT packages; other packages never edit it.
+//!
+//! - Each package ships one plugin, registers its systems only in its
+//!   [`GameSet`], gates them on [`AppState`], and reads seams, not other
+//!   packages' internals.
+//! - The sets run in a fixed order each frame: bench, input, sim link,
+//!   interpolate, then render, UI and audio.
+
+#![allow(dead_code)] // Seam: modes and states are used from R0-3 and INT-M2 on.
+
+use std::path::PathBuf;
+
+use bevy::prelude::*;
+
+use crate::clock::ClockMode;
+
+/// What the executable was launched to do.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Mode {
+    /// The model viewer (`--view`, and the default).
+    Viewer,
+    /// A map to fly around in (`--map`).
+    Map,
+    /// A match from a game setup.
+    Game,
+    /// The front end (menus).
+    FrontEnd,
+    /// A bench scene (`--scene`); `headless`: no window; `sim_only`: no
+    /// renderer at all.
+    Bench { headless: bool, sim_only: bool },
+}
+
+impl Mode {
+    /// Whether render, UI and audio plugins belong in this mode.
+    pub fn has_window(self) -> bool {
+        !matches!(self, Mode::Bench { headless: true, .. } | Mode::Bench { sim_only: true, .. })
+    }
+}
+
+/// Where the app is. Packages gate their systems on it.
+#[derive(States, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum AppState {
+    #[default]
+    Boot,
+    FrontEnd,
+    Loading,
+    InGame,
+    Viewer,
+}
+
+/// Every package's systems go in one of these.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum GameSet {
+    /// Bench command channel: commands in, answers out.
+    Bench,
+    /// Input to [`CommandQueue`](crate::sim_link::CommandQueue) and selection.
+    Input,
+    /// Steps the sim (only the sim link).
+    SimLink,
+    /// Places things between the last two ticks.
+    Interpolate,
+    Render,
+    Ui,
+    Audio,
+}
+
+/// Order the sets in `Update`.
+pub fn configure_sets(app: &mut App) {
+    app.configure_sets(
+        Update,
+        (GameSet::Bench, GameSet::Input, GameSet::SimLink, GameSet::Interpolate, GameSet::Render, GameSet::Ui, GameSet::Audio).chain(),
+    );
+}
+
+/// The bench's command channel (`--control`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Control {
+    Stdio,
+    Socket,
+}
+
+/// The command line.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LaunchConfig {
+    pub install_root: Option<PathBuf>,
+    pub active_mod: Option<String>,
+    pub view: Option<String>,
+    /// `Some("")`: `--map` without a name (the map browser).
+    pub map: Option<String>,
+    pub mission_report: bool,
+    pub help: bool,
+    /// Bench scene file (`--scene <ini>`).
+    pub scene: Option<PathBuf>,
+    pub headless: bool,
+    pub sim_only: bool,
+    /// `--clock wall|bench`; `None`: the mode's default.
+    pub clock: Option<ClockMode>,
+    /// Run this many ticks, then exit.
+    pub ticks: Option<u64>,
+    pub control: Option<Control>,
+    /// Arguments not understood, kept for the warning.
+    pub unknown: Vec<String>,
+}
+
+pub const USAGE: &str = "\
+Usage: sta64 [options]
+
+  --install-root <path>    Armada II / Fleet Operations install (default: next to the executable)
+  --mod <name>             mod to mount on top of the install
+  --view [<model>]         model viewer (the default)
+  --map [<map>]            fly around a map; without a name, the map browser
+  --mission-report         print which mission script every map would run, then exit
+
+Test bench (docs/TESTBENCH.md):
+  --scene <ini>            load a bench scene
+  --headless               no window
+  --sim-only               no renderer at all
+  --clock wall|bench       animation clock (bench: fixed frame step)
+  --ticks <n>              run n ticks, then exit
+  --control stdio|socket   bench command channel
+
+  --help                   this text
+";
+
+/// Bench step per frame when `--clock bench` gives none: 60 frames a second.
+const BENCH_STEP: f64 = 1.0 / 60.0;
+
+impl LaunchConfig {
+    /// The process's own arguments, with the install root defaulting to the
+    /// executable's directory, like the original game.
+    pub fn from_env() -> LaunchConfig {
+        let mut cfg = LaunchConfig::parse(std::env::args().skip(1));
+        if cfg.install_root.is_none() {
+            cfg.install_root = std::env::current_exe().ok().and_then(|p| p.parent().map(PathBuf::from));
+        }
+        cfg
+    }
+
+    /// Parse arguments (without the program name).
+    pub fn parse(args: impl IntoIterator<Item = String>) -> LaunchConfig {
+        let mut cfg = LaunchConfig::default();
+        /// A flag's value: the next argument unless it is another flag.
+        fn value(args: &mut std::iter::Peekable<impl Iterator<Item = String>>) -> Option<String> {
+            args.next_if(|a| !a.starts_with("--"))
+        }
+        let mut args = args.into_iter().peekable();
+        while let Some(a) = args.next() {
+            match a.as_str() {
+                "--install-root" => cfg.install_root = value(&mut args).map(PathBuf::from),
+                "--mod" => cfg.active_mod = value(&mut args),
+                "--view" => cfg.view = value(&mut args),
+                "--map" => cfg.map = Some(value(&mut args).unwrap_or_default()),
+                "--mission-report" => cfg.mission_report = true,
+                "--help" | "-h" => cfg.help = true,
+                "--scene" => cfg.scene = value(&mut args).map(PathBuf::from),
+                "--headless" => cfg.headless = true,
+                "--sim-only" => cfg.sim_only = true,
+                "--clock" => match value(&mut args).as_deref() {
+                    Some("wall") => cfg.clock = Some(ClockMode::Wall),
+                    Some("bench") => cfg.clock = Some(ClockMode::Bench { step: BENCH_STEP }),
+                    other => cfg.unknown.push(format!("--clock {}", other.unwrap_or(""))),
+                },
+                "--ticks" => match value(&mut args).and_then(|v| v.parse().ok()) {
+                    Some(n) => cfg.ticks = Some(n),
+                    None => cfg.unknown.push("--ticks (needs a number)".into()),
+                },
+                "--control" => match value(&mut args).as_deref() {
+                    Some("stdio") => cfg.control = Some(Control::Stdio),
+                    Some("socket") => cfg.control = Some(Control::Socket),
+                    other => cfg.unknown.push(format!("--control {}", other.unwrap_or(""))),
+                },
+                _ => cfg.unknown.push(a),
+            }
+        }
+        cfg
+    }
+
+    pub fn mode(&self) -> Mode {
+        if self.scene.is_some() || self.sim_only || self.headless {
+            Mode::Bench { headless: self.headless || self.sim_only, sim_only: self.sim_only }
+        } else if self.map.is_some() {
+            Mode::Map
+        } else {
+            Mode::Viewer
+        }
+    }
+
+    /// The animation clock mode: as given, else bench for bench runs.
+    pub fn clock_mode(&self) -> ClockMode {
+        self.clock.unwrap_or(match self.mode() {
+            Mode::Bench { .. } => ClockMode::Bench { step: BENCH_STEP },
+            _ => ClockMode::Wall,
+        })
+    }
+
+    /// Flags that were given but do nothing yet, for `unsupported: <flag>`
+    /// lines. Each disappears when its package (TOOL-03) lands.
+    pub fn unsupported(&self) -> Vec<&'static str> {
+        let mut out = Vec::new();
+        let flags = [
+            (self.scene.is_some(), "--scene"),
+            (self.headless, "--headless"),
+            (self.sim_only, "--sim-only"),
+            (self.clock.is_some(), "--clock"),
+            (self.ticks.is_some(), "--ticks"),
+            (self.control.is_some(), "--control"),
+        ];
+        for (given, flag) in flags {
+            if given {
+                out.push(flag);
+            }
+        }
+        out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(s: &str) -> LaunchConfig {
+        LaunchConfig::parse(s.split_whitespace().map(String::from))
+    }
+
+    #[test]
+    fn existing_launches_parse_as_before() {
+        let c = parse("--install-root /games/a2 --mod Fleet-Ops --map a2_borg01");
+        assert_eq!(c.install_root, Some(PathBuf::from("/games/a2")));
+        assert_eq!(c.active_mod.as_deref(), Some("Fleet-Ops"));
+        assert_eq!(c.map.as_deref(), Some("a2_borg01"));
+        assert_eq!(c.mode(), Mode::Map);
+        assert!(c.unsupported().is_empty() && c.unknown.is_empty());
+
+        assert_eq!(parse("--map").map.as_deref(), Some(""));
+        assert_eq!(parse("--view fdefiant").view.as_deref(), Some("fdefiant"));
+        assert_eq!(parse("--view fdefiant").mode(), Mode::Viewer);
+        assert!(parse("--mission-report").mission_report);
+        assert_eq!(parse("").mode(), Mode::Viewer);
+        assert_eq!(parse("").clock_mode(), ClockMode::Wall);
+    }
+
+    #[test]
+    fn a_flag_after_map_is_not_its_name() {
+        let c = parse("--map --mod FO");
+        assert_eq!(c.map.as_deref(), Some(""));
+        assert_eq!(c.active_mod.as_deref(), Some("FO"));
+    }
+
+    #[test]
+    fn bench_flags_parse_and_report_unsupported() {
+        let c = parse("--sim-only --scene bench/scenes/synthetic.ini --clock bench --ticks 300 --control stdio");
+        assert_eq!(c.scene, Some(PathBuf::from("bench/scenes/synthetic.ini")));
+        assert_eq!(c.ticks, Some(300));
+        assert_eq!(c.control, Some(Control::Stdio));
+        assert_eq!(c.mode(), Mode::Bench { headless: true, sim_only: true });
+        assert!(!c.mode().has_window());
+        assert_eq!(c.clock_mode(), ClockMode::Bench { step: BENCH_STEP });
+        assert_eq!(c.unsupported(), ["--scene", "--sim-only", "--clock", "--ticks", "--control"]);
+
+        let c = parse("--scene s.ini --headless");
+        assert_eq!(c.mode(), Mode::Bench { headless: true, sim_only: false });
+        assert_eq!(c.clock_mode(), ClockMode::Bench { step: BENCH_STEP });
+    }
+
+    #[test]
+    fn bad_values_are_reported() {
+        let c = parse("--clock sometimes --ticks many --control pigeon --frobnicate");
+        assert_eq!(c.unknown, ["--clock sometimes", "--ticks (needs a number)", "--control pigeon", "--frobnicate"]);
+        assert!(parse("--help").help);
+    }
+}

@@ -2,6 +2,7 @@
 
 use std::ops::{Add, Div, Mul, Neg, Sub};
 
+/// A 32.32 fixed-point number: every quantity in simulation state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct Fixed(i64);
 
@@ -81,6 +82,31 @@ impl Div for Fixed {
             return Fixed::ZERO;
         }
         Fixed((((self.0 as i128) << FRAC) / o.0 as i128) as i64)
+    }
+}
+
+/// Binary formats (`postcard`: snapshots, replays, the wire) carry the exact
+/// bits. Human-readable ones (JSON5 content, maps and fixtures) carry a plain
+/// number, read with [`Fixed::from_f64`] like any loaded value.
+#[cfg(feature = "serde")]
+impl serde::Serialize for Fixed {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        if s.is_human_readable() {
+            s.serialize_f64(self.0 as f64 / (1u64 << FRAC) as f64)
+        } else {
+            s.serialize_i64(self.0)
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for Fixed {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        if d.is_human_readable() {
+            f64::deserialize(d).map(Fixed::from_f64)
+        } else {
+            i64::deserialize(d).map(Fixed)
+        }
     }
 }
 

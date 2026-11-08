@@ -2204,6 +2204,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cobs"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0fa961b519f0b462e3a3b4a34b64d119eeaca1d59af726fe450bbba07a9fc0a1"
+dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "codespan-reporting"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2565,6 +2574,18 @@ name = "either"
 version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e9c71c2167ca323c882b99918929403426e2373ea17242ff5653e0d5e1058be"
+
+[[package]]
+name = "embedded-io"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef1a6892d9eef45c8fa6b9e0086428a2cca8491aca8f787c534a3d6d0bcb3ced"
+
+[[package]]
+name = "embedded-io"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "edd0f118536f44f5ccd48bcb8b111bdc3de888b58c74639dfb034a357d0f206d"
 
 [[package]]
 name = "encase"
@@ -3430,6 +3451,16 @@ dependencies = [
  "cfg-if",
  "futures-util",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "json5"
+version = "1.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0348cde6df2b507ba3c3753beba226baba8567af588d6568cdb9877f02c75b60"
+dependencies = [
+ "serde",
+ "ucd-trie",
 ]
 
 [[package]]
@@ -4576,6 +4607,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "postcard"
+version = "1.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6764c3b5dd454e283a30e6dfe78e9b31096d9e32036b5d1eaac7a6119ccb9a24"
+dependencies = [
+ "cobs",
+ "embedded-io 0.4.0",
+ "embedded-io 0.6.1",
+ "serde",
+]
+
+[[package]]
 name = "potential_utf"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5096,6 +5139,7 @@ dependencies = [
  "naga",
  "sta_assets",
  "sta_bzn",
+ "sta_content",
  "sta_mission",
  "sta_odf",
  "sta_sim",
@@ -5103,6 +5147,10 @@ dependencies = [
  "sta_vfs",
  "winresource",
 ]
+
+[[package]]
+name = "sta_ai"
+version = "0.1.0"
 
 [[package]]
 name = "sta_assets"
@@ -5130,6 +5178,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "sta_content"
+version = "0.1.0"
+dependencies = [
+ "json5",
+ "serde",
+ "sta_bzn",
+ "sta_core",
+ "sta_odf",
+ "sta_vfs",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "sta_core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "sta_fpq"
 version = "0.1.0"
 dependencies = [
@@ -5146,6 +5214,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "sta_net"
+version = "0.1.0"
+
+[[package]]
 name = "sta_odf"
 version = "0.1.0"
 dependencies = [
@@ -5155,6 +5227,13 @@ dependencies = [
 [[package]]
 name = "sta_sim"
 version = "0.1.0"
+dependencies = [
+ "json5",
+ "postcard",
+ "serde",
+ "sta_content",
+ "sta_core",
+]
 
 [[package]]
 name = "sta_surface"
@@ -5549,6 +5628,12 @@ name = "typewit"
 version = "1.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "214ca0b2191785cbc06209b9ca1861e048e39b5ba33574b3cedd58363d5bb5f6"
+
+[[package]]
+name = "ucd-trie"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2896d95c02a80c6d6a5d6e953d479f5ddf2dfdb6a244441010e373ac0fb88971"
 
 [[package]]
 name = "unicode-ident"

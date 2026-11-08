@@ -1,0 +1,15 @@
+[package]
+name = "sta_core"
+description = "Core types shared by the STA64 content database, simulation and client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# No dependencies: every Bevy-free crate above the formats builds on this one.
+# `serde` is optional, so the types stay dependency-free unless a crate stores
+# or sends them (the sim's views, replays and the wire do).
+[dependencies]
+serde = { workspace = true, optional = true }
+
+[features]
+serde = ["dep:serde"]
