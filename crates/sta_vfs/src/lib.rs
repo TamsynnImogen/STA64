@@ -16,6 +16,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+pub mod sta;
 pub mod zfs;
 
 #[derive(Debug, thiserror::Error)]
