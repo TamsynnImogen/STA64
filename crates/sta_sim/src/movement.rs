@@ -54,6 +54,15 @@ pub struct Movement {
 }
 
 impl Movement {
+    /// Courses ascending by id, for snapshots.
+    pub(crate) fn rows(&self) -> Vec<(EntityId, Course)> {
+        self.courses.iter().map(|(id, c)| (id, c.clone())).collect()
+    }
+
+    pub(crate) fn from_rows(rows: Vec<(EntityId, Course)>) -> Option<Movement> {
+        Some(Movement { courses: Table::from_rows(rows)? })
+    }
+
     pub fn course(&self, id: EntityId) -> Option<&Course> {
         self.courses.get(id)
     }

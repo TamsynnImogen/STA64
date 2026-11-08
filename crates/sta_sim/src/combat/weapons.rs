@@ -18,6 +18,7 @@
 //! Not yet: bursts (no field in `WeaponDef`), mount positions (shots leave
 //! the entity's centre), entity radii.
 
+use serde::{Deserialize, Serialize};
 use sta_content::{ContentDb, FireArc, WeaponKind};
 use sta_core::{ContentKey, EntityId, Fixed, PlayerId, TICK_HZ, TeamId, Vec3};
 
@@ -67,13 +68,13 @@ pub fn facing(heading: (Fixed, Fixed), at: Vec3, from: Vec3) -> u8 {
 }
 
 /// One hardpoint's firing state: the first tick its weapon may fire again.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 struct Mount {
     ready: u64,
 }
 
 /// A projectile in flight.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct Shot {
     id: u32,
     shooter: EntityId,
@@ -95,7 +96,35 @@ pub struct Weapons {
     next_shot: u32,
 }
 
+/// [`Weapons`] as the snapshot stores it (SIM-10).
+#[derive(Serialize, Deserialize)]
+pub(crate) struct WeaponsRec {
+    attack: Vec<(EntityId, EntityId)>,
+    mounts: Vec<(EntityId, Vec<Mount>)>,
+    shots: Vec<Shot>,
+    next_shot: u32,
+}
+
 impl Weapons {
+    pub(crate) fn to_rec(&self) -> WeaponsRec {
+        WeaponsRec {
+            attack: self.attack.iter().map(|(id, t)| (id, *t)).collect(),
+            mounts: self.mounts.iter().map(|(id, m)| (id, m.clone())).collect(),
+            shots: self.shots.clone(),
+            next_shot: self.next_shot,
+        }
+    }
+
+    /// `None` if the rows are not ascending by id.
+    pub(crate) fn from_rec(r: WeaponsRec) -> Option<Weapons> {
+        Some(Weapons {
+            attack: Table::from_rows(r.attack)?,
+            mounts: Table::from_rows(r.mounts)?,
+            shots: r.shots,
+            next_shot: r.next_shot,
+        })
+    }
+
     /// Order `unit` to attack `target` until it is gone.
     pub fn set_attack(&mut self, unit: EntityId, target: EntityId) {
         self.attack.insert(unit, target);

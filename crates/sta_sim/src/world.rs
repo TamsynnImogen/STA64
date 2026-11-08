@@ -225,6 +225,13 @@ impl Entities {
         Entities::default()
     }
 
+    /// Rebuild from a snapshot: `list` ascending by id, every id below
+    /// `next`. `None` if either does not hold.
+    pub(crate) fn from_parts(list: Vec<Entity>, next: u32) -> Option<Entities> {
+        let ordered = list.windows(2).all(|w| w[0].id < w[1].id);
+        (ordered && list.last().is_none_or(|e| e.id.0 < next)).then_some(Entities { list, next })
+    }
+
     /// Give `e` the next id and add it; ids only grow, so the list stays sorted.
     pub fn spawn(&mut self, mut e: Entity) -> EntityId {
         let id = EntityId(self.next);
@@ -320,6 +327,11 @@ impl<T> Default for Table<T> {
 impl<T> Table<T> {
     pub fn new() -> Table<T> {
         Table::default()
+    }
+
+    /// Rebuild from a snapshot: rows must ascend by id, else `None`.
+    pub(crate) fn from_rows(rows: Vec<(EntityId, T)>) -> Option<Table<T>> {
+        rows.windows(2).all(|w| w[0].0 < w[1].0).then_some(Table { rows })
     }
 
     /// Set the row for `id`, returning the one it replaces.
