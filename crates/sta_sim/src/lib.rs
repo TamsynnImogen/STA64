@@ -58,15 +58,6 @@ pub struct Unit {
     pub stats: MoveStats,
 }
 
-/// Direct movement input for [`Sim::step`], as `sta64::units` sends it
-/// today. Superseded by [`command::Command`] through [`WorldSource::step`];
-/// goes when R0-3 moves the client onto the sim link.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Command {
-    Move { unit: EntityId, to: Vec3 },
-    Stop { unit: EntityId },
-}
-
 /// xorshift64* — small, fast and identical everywhere.
 #[derive(Debug, Clone)]
 pub struct Rng(u64);
@@ -238,18 +229,6 @@ impl Sim {
         self.units.binary_search_by_key(&id, |u| u.id).ok().map(|i| &mut self.units[i])
     }
 
-    /// Advance one tick, applying this tick's legacy commands in the given
-    /// order. New code steps the sim as a [`WorldSource`] instead.
-    pub fn step(&mut self, commands: &[Command]) -> TickOutput {
-        for c in commands {
-            match *c {
-                Command::Move { unit, to } => self.set_target(unit, Some(to)),
-                Command::Stop { unit } => self.set_target(unit, None),
-            }
-        }
-        self.advance()
-    }
-
     fn set_target(&mut self, unit: EntityId, to: Option<Vec3>) {
         if let Some(u) = self.unit_mut(unit) {
             u.target = to;
@@ -394,15 +373,24 @@ mod tests {
         MoveStats::from_f32(140.0, 1.0, 1.0, 1.0, 0.2)
     }
 
+    /// A single order from `player` to one of its units.
+    fn go(player: u8, id: EntityId, to: Vec3) -> command::Command {
+        order(player, 0, command::Order::Move { units: vec![id], to, queue: false })
+    }
+
+    fn halt(player: u8, id: EntityId) -> command::Command {
+        order(player, 0, command::Order::Stop { units: vec![id] })
+    }
+
     fn run() -> u64 {
         let mut sim = Sim::new(1);
         let a = sim.spawn(0, v(0, 0, 0), (Fixed::ZERO, Fixed::ONE), stats());
         let b = sim.spawn(1, v(1000, 0, 0), (-Fixed::ONE, Fixed::ZERO), stats());
         for t in 0..600 {
             let cmds = match t {
-                0 => vec![Command::Move { unit: a, to: v(500, 30, -300) }],
-                10 => vec![Command::Move { unit: b, to: v(0, 0, 900) }],
-                200 => vec![Command::Stop { unit: a }],
+                0 => vec![go(0, a, v(500, 30, -300))],
+                10 => vec![go(1, b, v(0, 0, 900))],
+                200 => vec![halt(0, a)],
                 _ => vec![],
             };
             sim.step(&cmds);
@@ -429,7 +417,7 @@ mod tests {
         let mut sim = Sim::new(1);
         // Facing +Z, target behind at -Z and off to the side.
         let a = sim.spawn(0, v(0, 0, 0), (Fixed::ZERO, Fixed::ONE), stats());
-        sim.step(&[Command::Move { unit: a, to: v(300, 50, -800) }]);
+        sim.step(&[go(0, a, v(300, 50, -800))]);
         let mut arrived = None;
         for t in 0..30 * 60 {
             sim.step(&[]);
@@ -453,7 +441,7 @@ mod tests {
     fn no_weaving_on_course() {
         let mut sim = Sim::new(1);
         let a = sim.spawn(0, v(0, 0, 0), (Fixed::ONE, Fixed::ZERO), stats());
-        sim.step(&[Command::Move { unit: a, to: v(0, 0, 4000) }]);
+        sim.step(&[go(0, a, v(0, 0, 4000))]);
         let mut crossings = 0;
         let mut worst = 0.0f32;
         let mut last: Option<bool> = None;
@@ -494,9 +482,9 @@ mod tests {
         command::Command { player: PlayerId(player), seq, kind: command::CommandKind::Order(o) }
     }
 
-    /// The pinned run again, through the seam: same digest as the legacy path.
+    /// The pinned run again, through the seam: same digest as setting targets directly.
     #[test]
-    fn world_source_matches_legacy_step() {
+    fn world_source_matches_direct_targets() {
         let mut sim = Sim::new(1);
         let a = sim.spawn(0, v(0, 0, 0), (Fixed::ZERO, Fixed::ONE), stats());
         let b = sim.spawn(1, v(1000, 0, 0), (-Fixed::ONE, Fixed::ZERO), stats());
@@ -514,19 +502,19 @@ mod tests {
             assert_eq!(out.view.digest, sim.digest());
             sim.rng.next_u64();
         }
-        // The legacy run with the same commands on the same ticks.
+        // The same run with targets set directly, no commands.
         let mut old = Sim::new(1);
         old.spawn(0, v(0, 0, 0), (Fixed::ZERO, Fixed::ONE), stats());
         old.spawn(1, v(1000, 0, 0), (-Fixed::ONE, Fixed::ZERO), stats());
-        old.step(&[]);
+        old.advance();
         for t in 1..600 {
-            let cmds = match t {
-                1 => vec![Command::Move { unit: a, to: v(500, 30, -300) }],
-                10 => vec![Command::Move { unit: b, to: v(0, 0, 900) }],
-                200 => vec![Command::Stop { unit: a }],
-                _ => vec![],
-            };
-            old.step(&cmds);
+            match t {
+                1 => old.set_target(a, Some(v(500, 30, -300))),
+                10 => old.set_target(b, Some(v(0, 0, 900))),
+                200 => old.set_target(a, None),
+                _ => {}
+            }
+            old.advance();
             old.rng.next_u64();
         }
         assert_eq!(sim.digest(), old.digest());
