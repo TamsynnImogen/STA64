@@ -1,5 +1,7 @@
 # Roadmap
 
+How M2–M5 split into parallel work packages: [WORKPLAN.md](WORKPLAN.md).
+
 ## M0: Foundation (current)
 - [x] Workspace, pinned toolchain, CI matrix (Linux/Windows/macOS arm64/Linux arm64)
 - [x] `sta_vfs`: Data + ParentMod mod chain, case-insensitive lookup
