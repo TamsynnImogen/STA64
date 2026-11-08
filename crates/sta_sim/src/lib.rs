@@ -21,6 +21,7 @@
 //! the entity model in [`world`], filled from the map by [`spawn`], with
 //! today's movement.
 
+pub mod combat;
 pub mod command;
 pub mod event;
 pub mod fake;
@@ -88,6 +89,8 @@ pub struct Sim {
     regions: Vec<Region>,
     /// Events since the last step (spawns between ticks), emitted with it.
     events: Vec<SimEvent>,
+    /// Weapon state (SIM-04); in the digest once any exists.
+    weapons: combat::weapons::Weapons,
 }
 
 fn dt() -> Fixed {
@@ -200,6 +203,7 @@ impl Sim {
             starts: Vec::new(),
             regions: Vec::new(),
             events: Vec::new(),
+            weapons: Default::default(),
         }
     }
 
@@ -238,6 +242,10 @@ impl Sim {
             // Queued waypoints are SIM-02's; until then a queued move replaces.
             Order::Move { units, to, .. } => (units, Some(*to)),
             Order::Stop { units } => (units, None),
+            Order::Attack { units, target } => {
+                let Some(db) = self.content.clone() else { return false };
+                return self.weapons.order_attack(&db, &self.units, c.player, units, *target);
+            }
             _ => return false,
         };
         // Players order their own units; scripts and the bench any unit.
@@ -258,6 +266,9 @@ impl Sim {
     fn advance(&mut self) -> TickOutput {
         for u in self.units.iter_mut().filter(|u| u.mobile()) {
             u.step();
+        }
+        if let Some(db) = &self.content {
+            self.weapons.step(self.tick, &self.units, db, &self.players, &mut self.events);
         }
         self.tick += 1;
         TickOutput { view: Arc::new(self.build_view()), events: std::mem::take(&mut self.events) }
@@ -303,6 +314,9 @@ impl Sim {
         for (id, label) in self.labels.iter() {
             h.u64(id.0 as u64);
             h.str(label);
+        }
+        if !self.weapons.is_empty() {
+            self.weapons.hash_into(&mut h);
         }
         h.0
     }
