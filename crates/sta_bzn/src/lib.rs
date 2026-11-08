@@ -37,6 +37,8 @@ pub struct MapObject {
     pub label: String,
     /// Right, up, front, position: the same layout as a SOD `Matrix34`.
     pub transform: [f32; 12],
+    /// Light objects (`dlight`): `lightColorRed/Green/Blue`, text maps only for now.
+    pub light_colour: Option<[f32; 3]>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -383,6 +385,10 @@ fn parse_text(text: &str) -> Map {
             team: get("team").and_then(|v| v.parse().ok()).unwrap_or(0),
             label: get("label").unwrap_or_default(),
             transform: t,
+            light_colour: match (get("lightColorRed"), get("lightColorGreen"), get("lightColorBlue")) {
+                (Some(r), Some(g), Some(b)) => Some([r, g, b].map(|v| v.parse().unwrap_or(1.0))),
+                _ => None,
+            },
         });
     }
     m

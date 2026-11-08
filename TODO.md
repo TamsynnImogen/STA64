@@ -14,12 +14,14 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [?] Starfield visible; star size/brightness plausible (size is an estimate) — `270c675`
 - [?] Planets textured (`<ground>1`/`<ground>2` + cloud shell); texture not mirrored/rotated — `270c675`
 - [?] Ships' running lights / engine particles still sit on the hull after the ScaleSOD change (e.g. `fgalaxy`, ScaleSOD 2.78) — `270c675`
+- [?] Asteroid fields show rocks, slowly orbiting/tumbling; size and spread look like the game (spread is an estimate) — ASTEROIDS
+- [?] The editor's `dlight` arrow gizmo no longer shows; lighting direction matches the game on a map with dlights — ASTEROIDS
 
 ## Now (M2: a map you can fly in)
 
 - [ ] Nebula look: class colour pulse on sim time, near fade, occlusion intensity
-- [ ] Asteroid fields (`dont_load_SOD` objects with `fieldRadius`)
-- [ ] Map key light from `dlight` background objects
+- [x] Asteroid fields: rocks from the engine's table (`master*`), count/radius/speeds from the ODF
+- [x] Map lights aimed by `dlight` markers; `hidden = 1` editor markers not drawn
 - [ ] Select units (click / drag box) in the map view
 - [ ] Move orders through `sta_sim`, renderer interpolating between ticks
 - [ ] RTS camera (edge scroll, tactical zoom limits from `RTS_CFG.h`)

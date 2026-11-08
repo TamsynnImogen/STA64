@@ -119,7 +119,37 @@ struct Sky;
 #[derive(Component)]
 struct MapHud;
 
+/// The map's lights: 0 the key, 1 the fill. Aimed by the map's `dlight` objects.
+#[derive(Component)]
+struct MapLight(usize);
+
+/// Constant rotation about a local axis (asteroid fields orbit, rocks tumble).
+#[derive(Component)]
+struct Spin {
+    axis: Vec3,
+    /// Radians per second.
+    speed: f32,
+}
+
+/// The rock models an asteroid field draws from (the engine's fixed table).
+const ROCKS: [&str; 8] = ["master", "master1", "master2", "master3", "master4", "master5", "master4", "master7"];
+
+/// Small deterministic generator, seeded per field.
+struct Lcg(u64);
+impl Lcg {
+    fn next(&mut self) -> f32 {
+        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        ((self.0 >> 40) as f32) / ((1u64 << 24) as f32)
+    }
+}
+
 type MapEntities = Or<(With<MapRoot>, With<Sky>)>;
+
+/// The ambient light and the two map lights, as one system parameter.
+type Lighting<'w, 's> = (
+    ResMut<'w, GlobalAmbientLight>,
+    Query<'w, 's, (&'static MapLight, &'static mut Transform, &'static mut DirectionalLight), Without<Orbit>>,
+);
 
 pub struct MapPlugin;
 
@@ -143,6 +173,7 @@ impl Plugin for MapPlugin {
                     rebuild,
                     pan_keys,
                     crate::viewer::orbit_camera,
+                    spin,
                     sky_follows_camera,
                     hud,
                     model_scene::animate,
@@ -174,11 +205,20 @@ fn setup(mut commands: Commands) {
         },
     ));
     commands.spawn((
+        MapLight(0),
         DirectionalLight {
             illuminance: 6000.0,
             ..default()
         },
         Transform::from_xyz(3.0, 5.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
+    ));
+    commands.spawn((
+        MapLight(1),
+        DirectionalLight {
+            illuminance: 1500.0,
+            ..default()
+        },
+        Transform::from_xyz(-4.0, -2.0, -3.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
     commands.spawn((
         MapHud,
@@ -237,6 +277,12 @@ fn pan_keys(keys: Res<ButtonInput<KeyCode>>, time: Res<Time>, mut q: Query<(&mut
     }
 }
 
+fn spin(time: Res<Time>, mut q: Query<(&Spin, &mut Transform)>) {
+    for (s, mut t) in &mut q {
+        t.rotate_local(Quat::from_axis_angle(s.axis, s.speed * time.delta_secs()));
+    }
+}
+
 fn sky_follows_camera(camera: Query<&Transform, (With<Camera3d>, Without<Sky>)>, mut sky: Query<&mut Transform, With<Sky>>) {
     let Ok(cam) = camera.single() else { return };
     for mut t in &mut sky {
@@ -260,9 +306,10 @@ fn rebuild(
     tables: Res<SpriteTables>,
     teams: Res<TeamColours>,
     mut orbit: Query<&mut Orbit>,
-    mut ambient: ResMut<GlobalAmbientLight>,
     mut particles: ResMut<crate::particles::Particles>,
+    lighting: Lighting,
 ) {
+    let (mut ambient, mut lights) = lighting;
     if !browser.dirty {
         return;
     }
@@ -297,8 +344,10 @@ fn rebuild(
 
     let neutral = teams.0.first().map(|t| t.1).unwrap_or(Color::WHITE);
     let root = commands.spawn((MapRoot, Transform::IDENTITY, Visibility::default())).id();
-    let (mut drawn, mut no_model, mut no_odf, mut tris, mut planets) = (0usize, 0usize, 0usize, 0usize, 0usize);
+    let (mut drawn, mut no_model, mut no_odf, mut tris, mut planets, mut rocks) = (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
     let mut missing: Vec<String> = Vec::new();
+    let mut map_lights: Vec<(Vec3, Option<[f32; 3]>)> = Vec::new();
+    let mut hidden = 0usize;
 
     for o in &map.objects {
         let Some(odf) = catalogue.odf(&vfs.0, &o.odf) else {
@@ -306,6 +355,77 @@ fn rebuild(
             missing.push(o.odf.clone());
             continue;
         };
+        // Classes with `hidden = 1` are editor markers, drawn only in edit mode.
+        // A directional-light marker aims the map's lights along its front axis.
+        if odf.i64("hidden").unwrap_or(0) != 0 {
+            if o.odf.to_ascii_lowercase().contains("light") {
+                let f = [o.transform[6], o.transform[7], -o.transform[8]];
+                map_lights.push((Vec3::from(f).normalize_or(Vec3::NEG_Y), o.light_colour));
+            }
+            hidden += 1;
+            continue;
+        }
+        if odf.class_label().is_some_and(|c| c.eq_ignore_ascii_case("asteroidfield")) {
+            // minAsteroids..maxAsteroids rocks from the engine's table within
+            // fieldRadius, scaled by ScaleSOD; the field turns at orbitingSpeed
+            // (degrees/s, our reading) and each rock tumbles at rotationSpeed (rad/s).
+            // Placement is our approximation of the engine's.
+            let mut rng = Lcg(o.entity_id as u32 as u64 ^ 0x9e37_79b9_7f4a_7c15);
+            let (lo, hi) = (odf.i64("minAsteroids").unwrap_or(3).max(0), odf.i64("maxAsteroids").unwrap_or(6).max(0));
+            let count = lo + ((hi - lo + 1) as f32 * rng.next()) as i64;
+            let radius = odf.f32("fieldRadius").unwrap_or(200.0);
+            let scale = odf.f32("ScaleSOD").or_else(|| odf.f32("scaleSOD")).filter(|s| *s > 0.0).unwrap_or(1.0);
+            let orbit = odf.f32("orbitingSpeed").unwrap_or(0.0).to_radians();
+            let tumble = odf.f32("rotationSpeed").unwrap_or(0.0);
+            let field = commands
+                .spawn((
+                    to_bevy(&Matrix34 { m: o.transform }),
+                    Visibility::default(),
+                    ChildOf(root),
+                    Spin { axis: Vec3::Y, speed: orbit },
+                ))
+                .id();
+            for _ in 0..count {
+                let name = ROCKS[(rng.next() * ROCKS.len() as f32) as usize % ROCKS.len()];
+                let Some((path, model)) = catalogue.model(&vfs.0, name) else { continue };
+                let (a, r) = (rng.next() * std::f32::consts::TAU, radius * rng.next().sqrt());
+                let at = Vec3::new(a.cos() * r, (rng.next() - 0.5) * radius * 0.3, a.sin() * r);
+                let axis = Vec3::new(rng.next() - 0.5, rng.next() - 0.5, rng.next() - 0.5).normalize_or(Vec3::Y);
+                let turn = Quat::from_axis_angle(axis, rng.next() * std::f32::consts::TAU);
+                let rock = commands
+                    .spawn((
+                        Transform::from_translation(at).with_rotation(turn),
+                        Visibility::default(),
+                        ChildOf(field),
+                        Spin { axis, speed: tumble },
+                    ))
+                    .id();
+                let mut ctx = SpawnCtx {
+                    commands: &mut commands,
+                    meshes: &mut meshes,
+                    materials: &mut materials,
+                    textures: Loader {
+                        vfs: &vfs.0,
+                        cache: &mut cache,
+                        images: &mut images,
+                        formats,
+                    },
+                    team: neutral,
+                    borg: false,
+                    sprites: &tables.0,
+                    damaged: false,
+                    normal_maps: true,
+                    parts: Some(&mut parts),
+                    model_key: path,
+                    unlit: false,
+                    scale,
+                };
+                tris += model_scene::spawn(&mut ctx, &model, rock).triangles;
+                rocks += 1;
+            }
+            drawn += 1;
+            continue;
+        }
         if odf.i64("dont_load_SOD").unwrap_or(0) != 0 {
             no_model += 1;
             continue;
@@ -441,6 +561,21 @@ fn rebuild(
         star_note = format!("{} ({n} stars)", map.starfield_odf);
     }
 
+    // Lights: the map's dlights if it has them, else the defaults.
+    for (ml, mut tf, mut light) in &mut lights {
+        match map_lights.get(ml.0) {
+            Some((dir, colour)) => {
+                *tf = Transform::IDENTITY.looking_to(*dir, if dir.y.abs() > 0.99 { Vec3::Z } else { Vec3::Y });
+                light.color = colour.map(|c| Color::srgb(c[0], c[1], c[2])).unwrap_or(Color::WHITE);
+            }
+            None => {
+                let from = if ml.0 == 0 { Vec3::new(3.0, 5.0, 4.0) } else { Vec3::new(-4.0, -2.0, -3.0) };
+                *tf = Transform::from_translation(from).looking_at(Vec3::ZERO, Vec3::Y);
+                light.color = Color::WHITE;
+            }
+        }
+    }
+
     // Frame the playable area (SOD space: mirror Z).
     let (lo, size) = (Vec3::from(map.min_extent), Vec3::from(map.size));
     let centre = lo + size * 0.5;
@@ -455,7 +590,7 @@ fn rebuild(
     missing.sort();
     missing.dedup();
     let mut info = format!(
-        "{header}\n{}  v{}  {}\nsize {:.0} x {:.0}   race {}   tech tree {}   scripts {:?}\nsky {}   starfield {}\n{} objects: {} drawn ({} planets), {} without a model, {} without an ODF   {} triangles",
+        "{header}\n{}  v{}  {}\nsize {:.0} x {:.0}   race {}   tech tree {}   scripts {:?}\nsky {}   starfield {}\n{} objects: {} drawn ({} planets, {} asteroid rocks), {} editor markers ({} lights), {} without a model, {} without an ODF   {} triangles",
         map.description,
         map.version,
         if map.binary { "binary" } else { "text" },
@@ -469,6 +604,9 @@ fn rebuild(
         map.objects.len(),
         drawn,
         planets,
+        rocks,
+        hidden,
+        map_lights.len(),
         no_model,
         no_odf,
         tris
