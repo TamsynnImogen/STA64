@@ -6,6 +6,7 @@
 //! original game content ships with STA64; it is read from that install at run
 //! time. Until gameplay exists, the executable opens the model viewer.
 
+mod particles;
 mod sod_scene;
 mod sprites;
 mod textures;

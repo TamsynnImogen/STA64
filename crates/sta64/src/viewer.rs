@@ -56,6 +56,7 @@ pub struct ViewerPlugin;
 impl Plugin for ViewerPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TextureCache>()
+            .init_resource::<crate::particles::Particles>()
             .insert_resource(ClearColor(Color::srgb(0.01, 0.01, 0.025)))
             .insert_resource(GlobalAmbientLight {
                 color: Color::WHITE,
@@ -65,7 +66,18 @@ impl Plugin for ViewerPlugin {
             .add_systems(Startup, setup)
             .add_systems(
                 Update,
-                (input, rebuild, orbit_camera, hud, sod_scene::animate, sprites::animate, sprites::face_camera).chain(),
+                (
+                    input,
+                    rebuild,
+                    orbit_camera,
+                    hud,
+                    sod_scene::animate,
+                    sprites::animate,
+                    sprites::face_camera,
+                    crate::particles::simulate,
+                    crate::particles::draw,
+                )
+                    .chain(),
             );
     }
 }
@@ -196,11 +208,13 @@ fn rebuild(
     device: Option<Res<RenderDevice>>,
     tables: Res<SpriteTables>,
     mut orbit: Query<&mut Orbit>,
+    mut particles: ResMut<crate::particles::Particles>,
 ) {
     if !browser.dirty {
         return;
     }
     browser.dirty = false;
+    particles.clear();
     for e in &roots {
         commands.entity(e).despawn();
     }
@@ -258,7 +272,7 @@ fn rebuild(
         stats.radius
     );
     info.push_str(&format!(
-        "\n{} sprite nodes, {} texture flipbooks, {} particle emitters (not drawn yet)",
+        "\n{} sprite nodes, {} texture flipbooks, {} particle emitters",
         stats.sprite_nodes, stats.flipbooks, stats.emitters
     ));
     if !stats.unknown_sprite_nodes.is_empty() {

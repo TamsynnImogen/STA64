@@ -158,7 +158,17 @@ pub fn spawn(ctx: &mut SpawnCtx, sod: &Sod, root: Entity) -> SpawnStats {
         }
         match &node.kind {
             NodeKind::Sprite => spawn_sprite_node(ctx, node.sprite_node_id(), id, &quad, &mut stats),
-            NodeKind::Emitter { .. } => stats.emitters += 1,
+            NodeKind::Emitter { emitter } => match crate::particles::Template::new(ctx.sprites, emitter) {
+                Some(tpl) => {
+                    ctx.commands.entity(id).insert(crate::particles::Emitter {
+                        tpl: std::sync::Arc::new(tpl),
+                        owner: root,
+                        timer: 0.0,
+                    });
+                    stats.emitters += 1;
+                }
+                None => stats.unknown_sprite_nodes.push(format!("emitter {emitter}")),
+            },
             _ => {}
         }
 

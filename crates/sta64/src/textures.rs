@@ -129,3 +129,28 @@ pub fn upload(levels: &[Rgba], srgb: bool) -> Image {
     img.sampler = repeat_sampler();
     img
 }
+
+/// System parameter bundle for loading textures from any system.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct LoaderParams<'w> {
+    vfs: Res<'w, crate::viewer::Mounted>,
+    cache: ResMut<'w, TextureCache>,
+    images: ResMut<'w, Assets<Image>>,
+    device: Option<Res<'w, bevy::render::renderer::RenderDevice>>,
+}
+
+impl LoaderParams<'_> {
+    pub fn loader(&mut self) -> Loader<'_> {
+        let formats = self
+            .device
+            .as_ref()
+            .map(|d| CompressedImageFormats::from_features(d.features()))
+            .unwrap_or(CompressedImageFormats::BC);
+        Loader {
+            vfs: &self.vfs.0,
+            cache: &mut self.cache,
+            images: &mut self.images,
+            formats,
+        }
+    }
+}
