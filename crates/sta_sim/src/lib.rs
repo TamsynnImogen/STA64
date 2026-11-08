@@ -24,6 +24,7 @@
 pub mod command;
 pub mod event;
 pub mod fake;
+pub mod replay;
 pub mod setup;
 pub mod source;
 pub mod spawn;
