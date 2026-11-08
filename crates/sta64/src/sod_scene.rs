@@ -2,8 +2,8 @@
 //!
 //! Coordinate conversion: SOD is Direct3D left-handed with row-vector matrices;
 //! Bevy is right-handed. Positions and transforms are mirrored on Z
-//! (`M' = S M S`, `S = diag(1, 1, -1)`) and triangle winding is reversed so that
-//! the faces the original engine treated as front faces stay front faces.
+//! (`M' = S M S`, `S = diag(1, 1, -1)`). Triangle winding is kept as stored:
+//! with the mirror applied, the file's order is front-facing in Bevy.
 
 use crate::textures::{self, TextureCache};
 use bevy::asset::RenderAssetUsages;
@@ -185,8 +185,10 @@ fn spawn_mesh(ctx: &mut SpawnCtx, sod: &Sod, mesh: &SodMesh, parent: Entity, sta
         let mut uvs: Vec<[f32; 2]> = Vec::new();
         let mut indices: Vec<u32> = Vec::with_capacity(group.faces.len() * 3);
         for face in &group.faces {
-            // Reverse winding for the handedness change.
-            for c in [face[0], face[2], face[1]] {
+            // File winding is kept: after the Z mirror it is already
+            // counter-clockwise (front-facing) for Bevy. Reversing it turned
+            // FO4 hulls inside out in the viewer.
+            for c in face {
                 let idx = *remap.entry((c.position, c.uv)).or_insert_with(|| {
                     positions.push(mirror(mesh.positions[c.position as usize]));
                     uvs.push(mesh.uvs[c.uv as usize]);
