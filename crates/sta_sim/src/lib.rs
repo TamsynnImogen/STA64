@@ -35,6 +35,7 @@ pub mod sensors;
 pub mod source;
 pub mod spatial;
 pub mod spawn;
+pub mod victory;
 pub mod view;
 pub mod world;
 
@@ -249,6 +250,9 @@ impl Sim {
     /// its package lands.
     fn apply(&mut self, c: &command::Command) -> bool {
         use command::{CommandKind, Order};
+        if self.victory.is_eliminated(c.player) {
+            return false;
+        }
         let order = match &c.kind {
             CommandKind::Order(o) => o,
             CommandKind::Edit(e) => {
@@ -303,9 +307,12 @@ impl Sim {
             combat::damage::recharge(&mut self.units, &db);
             let from = self.events.len();
             self.weapons.step(self.tick, &self.units, &db, &self.players, &mut self.events);
+            let mut lost = Vec::new();
             for (id, by) in combat::damage::apply(&mut self.units, &mut self.events, from) {
+                lost.extend(self.units.get(id).map(|u| u.owner));
                 self.despawn(id, by);
             }
+            self.victory.step(&self.units, &mut lost, &mut self.events);
         }
         if let Some(db) = &self.content {
             self.economy.step(&mut self.units, db, &mut self.events);
