@@ -176,6 +176,16 @@ impl Lcg {
 
 type MapEntities = Or<(With<MapRoot>, With<Sky>)>;
 
+/// The rest of the map's state, as one system parameter.
+type MapState<'w> = (
+    ResMut<'w, crate::particles::Particles>,
+    ResMut<'w, crate::units::Game>,
+    ResMut<'w, CameraLimits>,
+    ResMut<'w, Assets<crate::planet::PlanetMaterial>>,
+    ResMut<'w, Assets<crate::nebula::NebulaMaterial>>,
+    Res<'w, crate::nebula::NoiseVolume>,
+);
+
 /// The ambient light and the two map lights, as one system parameter.
 type Lighting<'w, 's> = (
     ResMut<'w, GlobalAmbientLight>,
@@ -203,6 +213,7 @@ impl Plugin for MapPlugin {
             .add_plugins(crate::units::UnitsPlugin)
             .add_plugins(crate::planet::PlanetPlugin)
             .add_plugins(crate::rock::RockPlugin)
+            .add_plugins(crate::nebula::NebulaPlugin)
             .add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default())
             .add_systems(Startup, setup)
             .add_systems(
@@ -230,6 +241,8 @@ impl Plugin for MapPlugin {
 fn setup(mut commands: Commands) {
     commands.spawn((
         Camera3d::default(),
+        // The nebulae's march stops at the scene's depth.
+        bevy::core_pipeline::prepass::DepthPrepass,
         Projection::Perspective(PerspectiveProjection {
             near: 1.0,
             far: 400_000.0,
@@ -380,16 +393,11 @@ fn rebuild(
     tables: Res<SpriteTables>,
     teams: Res<TeamColours>,
     mut orbit: Query<&mut Orbit>,
-    state: (
-        ResMut<crate::particles::Particles>,
-        ResMut<crate::units::Game>,
-        ResMut<CameraLimits>,
-        ResMut<Assets<crate::planet::PlanetMaterial>>,
-    ),
+    state: MapState,
     lighting: Lighting,
 ) {
     let (mut ambient, mut lights) = lighting;
-    let (mut particles, mut game, mut limits, mut planet_materials) = state;
+    let (mut particles, mut game, mut limits, mut planet_materials, mut nebula_materials, noise) = state;
     if !browser.dirty {
         return;
     }
@@ -428,7 +436,10 @@ fn rebuild(
     let (mut drawn, mut no_model, mut no_odf, mut tris, mut planets, mut rocks) = (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
     let mut missing: Vec<String> = Vec::new();
     let mut map_lights: Vec<(Vec3, Option<[f32; 3]>)> = Vec::new();
+    let mut nebulae = 0usize;
     let mut units = 0usize;
+    // Nebula classes drawn as gas: (recipe, radius, positions in Bevy space).
+    let mut gas: std::collections::BTreeMap<String, (sta_surface::nebula::NebulaRecipe, f32, Vec<[f32; 3]>)> = Default::default();
     let mut hidden = 0usize;
 
     for o in &map.objects {
@@ -446,6 +457,22 @@ fn rebuild(
             }
             hidden += 1;
             continue;
+        }
+        // A nebula class with a gas recipe: drawn as one field, not as billboards.
+        if odf.class_label().is_some_and(|c| c.eq_ignore_ascii_case("nebula_obj") || c.eq_ignore_ascii_case("latinum")) {
+            let key = o.odf.to_ascii_lowercase();
+            let entry = gas.entry(key.clone()).or_insert_with(|| {
+                let r = crate::nebula::recipe(&vfs.0, &key);
+                let latinum = odf.class_label().is_some_and(|c| c.eq_ignore_ascii_case("latinum"));
+                let radius = if latinum { 100.0 } else { odf.f32("effectRadius").filter(|r| *r > 10.0 && *r < 5000.0).unwrap_or(300.0) };
+                (r.unwrap_or_else(|| sta_surface::nebula::NebulaRecipe::parse("")), radius, Vec::new())
+            });
+            if crate::nebula::recipe(&vfs.0, &key).is_some() {
+                entry.2.push([o.transform[9], o.transform[10], -o.transform[11]]);
+                nebulae += 1;
+                drawn += 1;
+                continue;
+            }
         }
         if odf.class_label().is_some_and(|c| c.eq_ignore_ascii_case("asteroidfield")) {
             // minAsteroids..maxAsteroids rocks from the engine's table within
@@ -664,6 +691,12 @@ fn rebuild(
         star_note = format!("{} ({n} stars)", map.starfield_odf);
     }
 
+    // Nebula fields, one per class with a recipe.
+    let classes = gas.values().filter(|g| !g.2.is_empty()).count();
+    for (_, (recipe, radius, pos)) in gas.into_iter().filter(|g| !g.1 .2.is_empty()) {
+        crate::nebula::spawn_field(&mut commands, &mut meshes, &mut nebula_materials, &mut images, &noise, recipe, radius, &pos, root);
+    }
+
     // Lights: the map's dlights if it has them, else the defaults.
     for (ml, mut tf, mut light) in &mut lights {
         match map_lights.get(ml.0) {
@@ -699,7 +732,7 @@ fn rebuild(
     missing.sort();
     missing.dedup();
     let mut info = format!(
-        "{header}\n{}  v{}  {}\nsize {:.0} x {:.0}   race {}   tech tree {}   scripts {:?}\nsky {}   starfield {}\n{} objects: {} drawn ({} ships under the sim, {} planets, {} asteroid rocks), {} editor markers ({} lights), {} without a model, {} without an ODF   {} triangles",
+        "{header}\n{}  v{}  {}\nsize {:.0} x {:.0}   race {}   tech tree {}   scripts {:?}\nsky {}   starfield {}\n{} objects: {} drawn ({} ships under the sim, {} planets, {} asteroid rocks, {} nebulae as {} gas fields), {} editor markers ({} lights), {} without a model, {} without an ODF   {} triangles",
         map.description,
         map.version,
         if map.binary { "binary" } else { "text" },
@@ -715,6 +748,8 @@ fn rebuild(
         units,
         planets,
         rocks,
+        nebulae,
+        classes,
         hidden,
         map_lights.len(),
         no_model,

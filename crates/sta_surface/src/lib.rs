@@ -11,6 +11,7 @@
 //! order and orientation (+x, -x, +y, -y, +z, -z), which wgpu's cube maps share.
 
 mod noise;
+pub mod nebula;
 pub mod recipe;
 
 pub use recipe::Recipe;

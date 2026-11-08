@@ -11,6 +11,7 @@ mod planet;
 mod rock;
 mod map;
 mod model_scene;
+mod nebula;
 mod space;
 mod sprites;
 mod surfaces;
