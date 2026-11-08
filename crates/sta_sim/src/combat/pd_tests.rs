@@ -19,13 +19,16 @@ const AHEAD: (Fixed, Fixed) = (Fixed::ZERO, Fixed::ONE);
 /// player 2 (one beam, one PD, 3000 hull) 800 away: out of every beam's
 /// reach, inside the torpedoes' 900.
 fn scene(boats: usize) -> (Sim, Vec<EntityId>, EntityId) {
+    scene_with(sta_content::fake::db(), boats)
+}
+
+fn scene_with(db: sta_content::ContentDb, boats: usize) -> (Sim, Vec<EntityId>, EntityId) {
     let seat = |id| PlayerSetup {
         id: PlayerId(id),
         team: TeamId(id),
         race: "fx".into(),
         control: Control::Idle,
     };
-    let db = sta_content::fake::db();
     let (cruiser, station) = (db.key("fx_cruiser").unwrap(), db.key("fx_station").unwrap());
     let setup = GameSetup {
         seed: 7,
@@ -114,4 +117,25 @@ fn same_run_same_digest() {
         sim.digest()
     };
     assert_eq!(d(), d());
+}
+
+/// The fake content with `point_defense_cycles` off: PD does nothing and all
+/// three torpedoes land together.
+#[test]
+fn pd_is_idle_without_the_feature() {
+    let fake = sta_content::fake::db();
+    let mut b = sta_content::ContentDb::builder().features(Default::default());
+    for u in fake.units() {
+        b = b.unit(u.clone());
+    }
+    for w in fake.weapons() {
+        b = b.weapon(w.clone());
+    }
+    let db = b.build().unwrap();
+    assert!(!db.features().point_defense_cycles);
+    let (mut sim, boats, st) = scene_with(db, 3);
+    let [fired, pd, hits] = run(&mut sim, boats, st, 80);
+    assert_eq!(fired, [0, 0, 0]);
+    assert!(pd.is_empty());
+    assert_eq!(hits, [61, 61, 61]);
 }
