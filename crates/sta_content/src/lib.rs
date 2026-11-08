@@ -43,6 +43,7 @@ pub enum ContentError {
     Dangling { from: String, to: String },
 }
 
+/// Content loading's result.
 pub type Result<T, E = ContentError> = std::result::Result<T, E>;
 
 /// Something a loader skipped or guessed, reported instead of failing the

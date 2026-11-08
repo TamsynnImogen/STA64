@@ -12,6 +12,7 @@ use sta_core::{ContentKey, EntityId, Fixed, PlayerId, Vec3};
 
 pub use crate::command::Target;
 
+/// Something that happened in a tick.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum SimEvent {

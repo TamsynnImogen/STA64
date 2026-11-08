@@ -11,6 +11,7 @@ use std::sync::Arc;
 use crate::command::Command;
 use crate::view::{TickOutput, WorldView};
 
+/// Steps a world, one tick per call.
 pub trait WorldSource: Send {
     /// Advance one tick, applying `commands` (sorted by `(player, seq)`).
     fn step(&mut self, commands: &[Command]) -> TickOutput;

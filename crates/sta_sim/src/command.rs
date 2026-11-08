@@ -28,6 +28,7 @@ impl Command {
     }
 }
 
+/// Orders anyone may give their own units; edits only scripts and the bench.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum CommandKind {
