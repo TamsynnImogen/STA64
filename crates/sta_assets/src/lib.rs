@@ -10,11 +10,15 @@
 //! mod layer always wins. Within one layer the newest format wins:
 //! KTX2 > DDS > TGA > PNG, and GLB > glTF > SOD.
 
+extern crate alloc;
+
 use sta_vfs::Vfs;
 
 pub use a2fmt;
 
 pub mod dds;
+pub mod m3d;
+pub mod model;
 pub mod pixels;
 pub mod spr_anim;
 
@@ -44,16 +48,20 @@ pub enum ModelFormat {
     Glb,
     Gltf,
     Sod,
+    M3d,
 }
 
 impl ModelFormat {
-    pub const PREFERENCE: [ModelFormat; 3] = [Self::Glb, Self::Gltf, Self::Sod];
+    /// Within one mod layer. A SOD beside an M3D wins, as in A2FOM3D; an M3D in a
+    /// child mod still overrides a parent's SOD because layers are compared first.
+    pub const PREFERENCE: [ModelFormat; 4] = [Self::Glb, Self::Gltf, Self::Sod, Self::M3d];
 
     pub fn extension(self) -> &'static str {
         match self {
             Self::Glb => "glb",
             Self::Gltf => "gltf",
             Self::Sod => "sod",
+            Self::M3d => "m3d",
         }
     }
 }
@@ -122,6 +130,7 @@ pub enum AssetError {
     Sod(String, a2fmt::sod::Error),
     Tga(String, a2fmt::tga::Error),
     Dds(String, dds::DdsError),
+    M3d(String, String),
     Unsupported(String),
 }
 
@@ -133,6 +142,7 @@ impl std::fmt::Display for AssetError {
             Self::Sod(n, e) => write!(f, "{n}: SOD {e:?}"),
             Self::Tga(n, e) => write!(f, "{n}: TGA {e:?}"),
             Self::Dds(n, e) => write!(f, "{n}: DDS {e}"),
+            Self::M3d(n, e) => write!(f, "{n}: M3D {e}"),
             Self::Unsupported(n) => write!(f, "{n}: no CPU decoder for this format"),
         }
     }
@@ -149,6 +159,24 @@ pub fn read(vfs: &Vfs, path: &str) -> Result<Vec<u8>, AssetError> {
 pub fn load_sod(vfs: &Vfs, path: &str) -> Result<a2fmt::sod::Sod, AssetError> {
     let data = read(vfs, path)?;
     a2fmt::sod::Sod::parse(&data).map_err(|e| AssetError::Sod(path.to_owned(), e))
+}
+
+/// Load a SOD or M3D model into the shared [`model::Model`].
+pub fn load_model(vfs: &Vfs, path: &str, format: ModelFormat) -> Result<model::Model, AssetError> {
+    match format {
+        ModelFormat::Sod => load_sod(vfs, path).map(|s| model::Model::from_sod(&s)),
+        ModelFormat::M3d => {
+            let data = read(vfs, path)?;
+            // A file named .m3d may really be a SOD (A2FOM3D passes those through).
+            if data.starts_with(b"Storm3D_SW") || data.starts_with(b"StarTrekDB") {
+                return a2fmt::sod::Sod::parse(&data)
+                    .map(|s| model::Model::from_sod(&s))
+                    .map_err(|e| AssetError::Sod(path.to_owned(), e));
+            }
+            m3d::load(&data).map_err(|e| AssetError::M3d(path.to_owned(), e))
+        }
+        _ => Err(AssetError::Unsupported(path.to_owned())),
+    }
 }
 
 /// An image decoded to RGBA8, rows top-down.
@@ -278,18 +306,23 @@ mod tests {
         let vfs = Vfs::mount_install(Path::new(&root), m.as_deref()).unwrap();
         let (mut ok, mut failed, mut tex_ok) = (0, Vec::new(), 0);
         let mut missing = std::collections::BTreeSet::new();
+        let mut by_format: std::collections::BTreeMap<String, usize> = Default::default();
         for name in list_models(&vfs) {
-            let Some((path, ModelFormat::Sod)) = find_model(&vfs, &name) else { continue };
-            match load_sod(&vfs, &path) {
-                Ok(sod) => {
+            let Some((path, fmt)) = find_model(&vfs, &name) else { continue };
+            match load_model(&vfs, &path, fmt) {
+                Ok(model) => {
                     ok += 1;
-                    for n in &sod.nodes {
+                    *by_format.entry(format!("{fmt:?}")).or_default() += 1;
+                    for n in &model.nodes {
                         if let Some(mesh) = n.mesh() {
-                            for t in mesh.textures.iter().filter(|t| !t.name.is_empty()) {
-                                if find_texture(&vfs, &t.name).is_some() {
-                                    tex_ok += 1;
-                                } else {
-                                    missing.insert(t.name.to_ascii_lowercase());
+                            for g in &mesh.groups {
+                                let m = &g.maps;
+                                for t in [&m.diffuse, &m.height, &m.bump, &m.specular, &m.glow, &m.detail].into_iter().flatten() {
+                                    if find_texture(&vfs, t).is_some() {
+                                        tex_ok += 1;
+                                    } else {
+                                        missing.insert(t.to_ascii_lowercase());
+                                    }
                                 }
                             }
                         }
@@ -298,8 +331,9 @@ mod tests {
                 Err(e) => failed.push(e.to_string()),
             }
         }
+        eprintln!("models by format: {by_format:?}");
         eprintln!(
-            "SOD: {ok} parsed, {} failed; texture refs: {tex_ok} resolved, {} distinct missing",
+            "models: {ok} loaded, {} failed; texture refs: {tex_ok} resolved, {} distinct missing",
             failed.len(),
             missing.len()
         );

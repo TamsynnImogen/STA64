@@ -85,6 +85,53 @@ pub fn height_to_normal(height: &Rgba) -> Rgba {
     }
 }
 
+/// Whether a bump texture is an RGB tangent-space normal map (bluish, red and
+/// green centred on 0.5) rather than a greyscale height map.
+pub fn looks_like_normal_map(img: &Rgba) -> bool {
+    let n = (img.width * img.height) as usize;
+    if n == 0 {
+        return false;
+    }
+    let step = (n / 4096).max(1);
+    let (mut grey, mut count) = (0usize, 0usize);
+    let (mut r, mut g, mut b) = (0f64, 0f64, 0f64);
+    for px in img.pixels.chunks_exact(4).step_by(step) {
+        let (pr, pg, pb) = (px[0] as i32, px[1] as i32, px[2] as i32);
+        if (pr - pg).abs() < 8 && (pg - pb).abs() < 8 {
+            grey += 1;
+        }
+        r += pr as f64;
+        g += pg as f64;
+        b += pb as f64;
+        count += 1;
+    }
+    let c = count as f64 * 255.0;
+    let (r, g, b) = (r / c, g / c, b / c);
+    grey * 2 < count && b > 0.6 && (r - 0.5).abs() < 0.2 && (g - 0.5).abs() < 0.2
+}
+
+/// Flip a Direct3D-convention normal map's green channel to the glTF/Bevy one.
+pub fn flip_green(img: &mut Rgba) {
+    for px in img.pixels.chunks_exact_mut(4) {
+        px[1] = 255 - px[1];
+    }
+}
+
+/// A metallic-roughness map (glTF layout: G roughness, B metalness) from a
+/// specular map: bright specular means smooth, metalness stays 0.
+pub fn roughness_from_specular(spec: &Rgba) -> Rgba {
+    let mut out = spec.clone();
+    out.has_alpha = false;
+    for px in out.pixels.chunks_exact_mut(4) {
+        let l = (px[0] as u32 * 54 + px[1] as u32 * 183 + px[2] as u32 * 19) >> 8;
+        px[0] = 0;
+        px[1] = 255 - l.min(255) as u8;
+        px[2] = 0;
+        px[3] = 255;
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -104,6 +151,17 @@ mod tests {
         let dims: Vec<_> = m.iter().map(|l| (l.width, l.height)).collect();
         assert_eq!(dims, [(8, 2), (4, 1), (2, 1), (1, 1)]);
         assert!(m.iter().all(|l| l.pixels.iter().all(|&p| p == 100)));
+    }
+
+    #[test]
+    fn classifies_bump_textures() {
+        let grey = solid(16, 16, 90);
+        assert!(!looks_like_normal_map(&grey));
+        let mut normal = solid(16, 16, 0);
+        for px in normal.pixels.chunks_exact_mut(4) {
+            px.copy_from_slice(&[128, 120, 250, 255]);
+        }
+        assert!(looks_like_normal_map(&normal));
     }
 
     #[test]

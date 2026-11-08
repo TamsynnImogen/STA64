@@ -3,7 +3,7 @@
 //! Controls: Left/Right previous/next model, PageUp/PageDown jump 10, Home first,
 //! T cycle team colour, B toggle Borg `_b` textures, left-drag orbit, right-drag pan, wheel zoom, R reset view.
 
-use crate::sod_scene::{self, SpawnCtx, TeamPart};
+use crate::model_scene::{self, SpawnCtx, TeamPart};
 use crate::sprites::{self, SpriteTables};
 use crate::textures::{Loader, TextureCache};
 use bevy::image::CompressedImageFormats;
@@ -71,7 +71,7 @@ impl Plugin for ViewerPlugin {
                     rebuild,
                     orbit_camera,
                     hud,
-                    sod_scene::animate,
+                    model_scene::animate,
                     sprites::animate,
                     sprites::face_camera,
                     crate::particles::simulate,
@@ -228,12 +228,12 @@ fn rebuild(
         browser.info = format!("{header}\nnot found");
         return;
     };
-    if fmt != ModelFormat::Sod {
+    if matches!(fmt, ModelFormat::Glb | ModelFormat::Gltf) {
         browser.info = format!("{header}\n{path}\n{fmt:?} models are not wired into the viewer yet");
         return;
     }
-    let sod = match sta_assets::load_sod(&vfs.0, &path) {
-        Ok(s) => s,
+    let model = match sta_assets::load_model(&vfs.0, &path, fmt) {
+        Ok(m) => m,
         Err(e) => {
             browser.info = format!("{header}\n{e}");
             return;
@@ -257,14 +257,14 @@ fn rebuild(
         borg: browser.borg,
         sprites: &tables.0,
     };
-    let stats = sod_scene::spawn(&mut ctx, &sod, root);
+    let stats = model_scene::spawn(&mut ctx, &model, root);
 
     let layer = vfs.0.resolve(&path).map(|(l, _)| vfs.0.layers()[l].name().to_owned()).unwrap_or_default();
     let mut info = format!(
         "{header}\n{path}  [{layer}]  {:?} v{:.2}\n{} nodes, {} mesh parts, {} triangles, {} bump-mapped meshes, {} animated nodes, radius {:.1}",
-        sod.container,
-        sod.version,
-        sod.nodes.len(),
+        model.format,
+        model.version,
+        model.nodes.len(),
         stats.meshes,
         stats.triangles,
         stats.bump_meshes,
@@ -280,6 +280,9 @@ fn rebuild(
     }
     if !stats.missing_textures.is_empty() {
         info.push_str(&format!("\nmissing textures: {}", stats.missing_textures.join(", ")));
+    }
+    for w in model.warnings.iter().take(4) {
+        info.push_str(&format!("\nnote: {w}"));
     }
     browser.info = info;
 

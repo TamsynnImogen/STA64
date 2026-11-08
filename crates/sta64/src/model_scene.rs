@@ -1,9 +1,11 @@
-//! Turn a parsed SOD into a Bevy entity hierarchy.
+//! Turn a loaded model (SOD or M3D, see `sta_assets::model`) into a Bevy entity
+//! hierarchy.
 //!
-//! Coordinate conversion: SOD is Direct3D left-handed with row-vector matrices;
+//! Coordinate conversion: the files are Direct3D left-handed with row-vector matrices;
 //! Bevy is right-handed. Positions and transforms are mirrored on Z
 //! (`M' = S M S`, `S = diag(1, 1, -1)`). Triangle winding is kept as stored:
-//! with the mirror applied, the file's order is front-facing in Bevy.
+//! with the mirror applied, SOD order is front-facing in Bevy (the M3D loader
+//! already stores its faces in SOD order).
 
 use crate::sprites::{self, Billboard, SpriteFx, UvFlipbook};
 use crate::textures::Loader;
@@ -14,7 +16,7 @@ use bevy::mesh::Indices;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Face, PrimitiveTopology};
 use sta_assets::a2fmt::Matrix34;
-use sta_assets::a2fmt::sod::{ChannelKeys, Mesh as SodMesh, NodeKind, Role, Sod};
+use sta_assets::model::{Group, Keys, Mesh as ModelMesh, Model, NodeKind};
 use std::collections::{HashMap, HashSet};
 
 /// Step-keyed SOD animation on one node. Keys are evenly spaced over `period`.
@@ -65,9 +67,9 @@ fn mirror(p: [f32; 3]) -> [f32; 3] {
     [p[0], p[1], -p[2]]
 }
 
-/// Lower-case blend mode from the mesh's texture material.
-fn blend(mesh: &SodMesh) -> (AlphaMode, bool) {
-    match mesh.texture_material.to_ascii_lowercase().as_str() {
+/// Alpha mode and whether the group is unlit, from its blend mode.
+fn blend(group: &Group) -> (AlphaMode, bool) {
+    match group.blend.to_ascii_lowercase().as_str() {
         "additive" | "wormhole" => (AlphaMode::Add, true),
         "alphathreshold" => (AlphaMode::Mask(0.5), false),
         "translucent" | "alpha" | "transparent" => (AlphaMode::Blend, false),
@@ -86,41 +88,32 @@ pub struct SpawnCtx<'a, 'w, 's> {
     pub sprites: &'a SpriteTable,
 }
 
-/// Spawn `sod` under `root`. Only the finest LOD level of each LOD switch is shown.
-pub fn spawn(ctx: &mut SpawnCtx, sod: &Sod, root: Entity) -> SpawnStats {
+/// Spawn `model` under `root`. Only the finest LOD level of each LOD switch is shown.
+pub fn spawn(ctx: &mut SpawnCtx, model: &Model, root: Entity) -> SpawnStats {
     let mut stats = SpawnStats::default();
 
     // Hide every LOD level except the most detailed.
-    let mut hidden: HashSet<usize> = HashSet::new();
-    for (i, n) in sod.nodes.iter().enumerate() {
-        if n.role() == Role::Geometry {
-            let levels = sod.lod_levels(i);
-            if let Some((_, coarser)) = levels.split_last() {
-                hidden.extend(coarser.iter().copied());
-            }
-        }
-    }
+    let hidden: HashSet<usize> = model.coarse_lods().into_iter().collect();
 
-    let anims: HashMap<String, &sta_assets::a2fmt::sod::AnimChannel> =
-        sod.channels.iter().map(|c| (c.node.to_ascii_lowercase(), c)).collect();
-    // Type 4 references: a texture flipbook on a mesh's UV offset.
-    let flipbooks: HashMap<String, (String, f32)> = sod
-        .anim_refs
+    let anims: HashMap<String, &sta_assets::model::Channel> =
+        model.channels.iter().map(|c| (c.node.to_ascii_lowercase(), c)).collect();
+    // Texture flipbooks on a mesh's UV offset.
+    let flipbooks: HashMap<String, (String, f32)> = model
+        .flipbooks
         .iter()
-        .filter(|r| r.ref_type == 4)
-        .map(|r| (r.node.to_ascii_lowercase(), (r.animation.clone(), r.offset)))
+        .map(|(node, anim, offset)| (node.to_ascii_lowercase(), (anim.clone(), *offset)))
         .collect();
     let quad = ctx.meshes.add(sprites::unit_quad());
 
     let mut min = Vec3::splat(f32::MAX);
     let mut max = Vec3::splat(f32::MIN);
 
-    let mut entities: Vec<Option<Entity>> = vec![None; sod.nodes.len()];
+    let mut entities: Vec<Option<Entity>> = vec![None; model.nodes.len()];
     // Parents precede children only by chance in files; walk the tree from roots.
-    let mut stack: Vec<usize> = sod.roots().collect::<Vec<_>>();
+    let mut stack: Vec<usize> = model.roots().collect::<Vec<_>>();
     stack.reverse();
     while let Some(i) = stack.pop() {
-        let node = &sod.nodes[i];
+        let node = &model.nodes[i];
         if hidden.contains(&i) {
             continue;
         }
@@ -128,13 +121,17 @@ pub fn spawn(ctx: &mut SpawnCtx, sod: &Sod, root: Entity) -> SpawnStats {
         let base = to_bevy(&node.transform);
         let mut e = ctx.commands.spawn((Name::new(node.name.clone()), base, Visibility::default(), ChildOf(parent)));
 
+        let key_count = anims.get(&node.name.to_ascii_lowercase()).map_or(0, |c| match &c.keys {
+            Keys::Matrix(k) => k.len(),
+            Keys::Scale(k) => k.len(),
+        });
         if let Some(ch) = anims.get(&node.name.to_ascii_lowercase())
-            && ch.key_count() > 1
+            && key_count > 1
             && ch.period > 0.0
         {
             let keys = match &ch.keys {
-                ChannelKeys::Matrix(k) => AnimKeys::Matrix(k.iter().map(to_bevy).collect()),
-                ChannelKeys::Scale(k) => AnimKeys::Scale(k.clone()),
+                Keys::Matrix(k) => AnimKeys::Matrix(k.iter().map(to_bevy).collect()),
+                Keys::Scale(k) => AnimKeys::Scale(k.clone()),
             };
             e.insert(NodeAnim {
                 period: ch.period,
@@ -147,18 +144,18 @@ pub fn spawn(ctx: &mut SpawnCtx, sod: &Sod, root: Entity) -> SpawnStats {
         entities[i] = Some(id);
 
         if let NodeKind::Mesh(mesh) = &node.kind {
-            let world = sod.model_transform(i);
+            let world = model.model_transform(i);
             for p in &mesh.positions {
                 let w = Vec3::from(mirror(world.transform_point(*p)));
                 min = min.min(w);
                 max = max.max(w);
             }
             let flip = flipbooks.get(&node.name.to_ascii_lowercase());
-            spawn_mesh(ctx, sod, mesh, id, flip, &mut stats);
+            spawn_mesh(ctx, model, mesh, id, flip, &mut stats);
         }
         match &node.kind {
             NodeKind::Sprite => spawn_sprite_node(ctx, node.sprite_node_id(), id, &quad, &mut stats),
-            NodeKind::Emitter { emitter } => match crate::particles::Template::new(ctx.sprites, emitter) {
+            NodeKind::Emitter(emitter) => match crate::particles::Template::new(ctx.sprites, emitter) {
                 Some(tpl) => {
                     ctx.commands.entity(id).insert(crate::particles::Emitter {
                         tpl: std::sync::Arc::new(tpl),
@@ -241,63 +238,68 @@ fn spawn_sprite_node(ctx: &mut SpawnCtx, id: &str, parent: Entity, quad: &Handle
 
 fn spawn_mesh(
     ctx: &mut SpawnCtx,
-    sod: &Sod,
-    mesh: &SodMesh,
+    model: &Model,
+    mesh: &ModelMesh,
     parent: Entity,
     flipbook: Option<&(String, f32)>,
     stats: &mut SpawnStats,
 ) {
-    // Before 1.7 the texture comes from the file's texture-material table.
-    let tex_name = mesh.diffuse_texture().map(str::to_owned).or_else(|| {
-        sod.texture_materials
-            .iter()
-            .find(|t| t.ident.eq_ignore_ascii_case(&mesh.texture_material))
-            .map(|t| t.texture.clone())
-    });
-    let texture = tex_name.as_deref().and_then(|n| {
-        let h = ctx.textures.colour(n, ctx.borg);
-        if h.is_none() {
-            stats.missing_textures.push(n.to_owned());
-        }
-        h
-    });
-    // SOD 1.93 bump path: a height map turned into a normal map.
-    let normal_map = mesh.height_map().and_then(|n| {
-        let h = ctx.textures.normal_from_height(n);
-        if h.is_none() {
-            stats.missing_textures.push(n.to_owned());
-        }
-        h
-    });
-    if normal_map.is_some() {
-        stats.bump_meshes += 1;
-    }
-    let (alpha_mode, additive) = blend(mesh);
-    let two_sided = mesh.cull == 0;
+    let two_sided = mesh.two_sided;
+    let mut bumped = false;
 
     for group in &mesh.groups {
         if group.faces.is_empty() {
             continue;
         }
+        let maps = &group.maps;
+        let want = |name: &Option<String>, h: Option<Handle<Image>>, stats: &mut SpawnStats| {
+            if h.is_none()
+                && let Some(n) = name
+            {
+                stats.missing_textures.push(n.clone());
+            }
+            h
+        };
+        let diffuse = maps.diffuse.as_deref().and_then(|n| ctx.textures.colour(n, ctx.borg));
+        let texture = want(&maps.diffuse, diffuse, stats);
+        // SOD bump path: height map. M3D: bump map, normal or height by content.
+        let normal = match (&maps.height, &maps.bump) {
+            (Some(h), _) => want(&maps.height, ctx.textures.normal_from_height(h), stats),
+            (None, Some(b)) => want(&maps.bump, ctx.textures.normal_from_bump(b), stats),
+            _ => None,
+        };
+        let spec = maps.specular.as_deref().and_then(|n| ctx.textures.roughness_from_specular(n));
+        let spec = want(&maps.specular, spec, stats);
+        let glow = maps.glow.as_deref().and_then(|n| ctx.textures.colour(n, false));
+        let glow = want(&maps.glow, glow, stats);
+        let (alpha_mode, additive) = blend(group);
+
         // De-index this group: one vertex per distinct (position, uv) corner.
-        let mut remap: HashMap<(u16, u16), u32> = HashMap::new();
+        let mut remap: HashMap<(u32, u32), u32> = HashMap::new();
         let mut positions: Vec<[f32; 3]> = Vec::new();
         let mut uvs: Vec<[f32; 2]> = Vec::new();
         let mut indices: Vec<u32> = Vec::with_capacity(group.faces.len() * 3);
         for face in &group.faces {
-            // File winding is kept: after the Z mirror it is already
+            // Corners are in SOD winding: after the Z mirror that is already
             // counter-clockwise (front-facing) for Bevy. Reversing it turned
             // FO4 hulls inside out in the viewer.
-            for c in face {
-                let idx = *remap.entry((c.position, c.uv)).or_insert_with(|| {
-                    positions.push(mirror(mesh.positions[c.position as usize]));
-                    uvs.push(mesh.uvs[c.uv as usize]);
+            for &(p, u) in face {
+                let (Some(pos), Some(uv)) = (mesh.positions.get(p as usize), mesh.uvs.get(u as usize)) else {
+                    continue;
+                };
+                let idx = *remap.entry((p, u)).or_insert_with(|| {
+                    positions.push(mirror(*pos));
+                    uvs.push(*uv);
                     (positions.len() - 1) as u32
                 });
                 indices.push(idx);
             }
         }
-        // Area-weighted normals by shared position (the file stores none).
+        indices.truncate(indices.len() / 3 * 3);
+        if indices.is_empty() {
+            continue;
+        }
+        // Area-weighted normals by shared position (SOD stores none).
         let mut by_pos: HashMap<[u32; 3], Vec3> = HashMap::new();
         let key = |p: [f32; 3]| p.map(f32::to_bits);
         for t in indices.chunks_exact(3) {
@@ -320,24 +322,25 @@ fn spawn_mesh(
             .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
             .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
             .with_inserted_indices(Indices::U32(indices));
-        let mut group_normal_map = normal_map.clone();
-        if group_normal_map.is_some() && bevy_mesh.generate_tangents().is_err() {
-            group_normal_map = None;
-        }
+        let normal = normal.filter(|_| bevy_mesh.generate_tangents().is_ok());
+        bumped |= normal.is_some();
 
-        let lm = sod.lighting_material(&group.material);
+        let lm = model.lighting_material(&group.material);
         let team = group.material.to_ascii_lowercase().starts_with("team");
         let self_illum = lm.is_some_and(|m| m.self_illuminating);
         let base_color = if team { ctx.team } else { Color::WHITE };
         let material = StandardMaterial {
             base_color,
-            base_color_texture: texture.clone(),
-            normal_map_texture: group_normal_map,
+            base_color_texture: texture,
+            normal_map_texture: normal,
+            perceptual_roughness: if spec.is_some() { 1.0 } else { 0.6 },
+            metallic_roughness_texture: spec,
+            emissive: if glow.is_some() { LinearRgba::WHITE } else { LinearRgba::BLACK },
+            emissive_texture: glow,
             alpha_mode,
             unlit: additive || self_illum,
             double_sided: two_sided,
             cull_mode: if two_sided { None } else { Some(Face::Back) },
-            perceptual_roughness: 0.6,
             reflectance: 0.3,
             ..default()
         };
@@ -360,9 +363,12 @@ fn spawn_mesh(
             stats.flipbooks += 1;
         }
     }
+    if bumped {
+        stats.bump_meshes += 1;
+    }
 }
 
-/// Plays SOD node animation: a step flipbook, evenly spaced keys.
+/// Plays node animation (SOD and M3D): a step flipbook, evenly spaced keys.
 pub fn animate(time: Res<Time>, mut q: Query<(&NodeAnim, &mut Transform)>) {
     let t = time.elapsed_secs();
     for (anim, mut tf) in &mut q {

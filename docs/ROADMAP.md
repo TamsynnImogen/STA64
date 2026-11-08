@@ -17,8 +17,9 @@
 - [x] SOD 1.93 bump path: height map → normal map (`ST3D_CreateNormalMap` rule)
 - [x] CPU DDS decoder (DXT1/3/5 + uncompressed); all 604 FO4 DDS decode
 - [x] Sprite nodes (running lights, strobes, glows) and SOD texture flipbooks from `.spr`
-- Particle emitters (`@emitter`)
-- M3D models (port A2FOM3D's conversion)
+- [x] Particle emitters (`@emitter`: spray and cloud)
+- [x] M3D models loaded natively (A2FOM3D's parser; diffuse, bump, specular, glow kept)
+- Star Trek: Legacy LOD nodes (type 11) and effect nodes (type 2); M3D 1.93 layout
 - glTF/GLB models in the viewer
 
 ## M2: A map you can fly in

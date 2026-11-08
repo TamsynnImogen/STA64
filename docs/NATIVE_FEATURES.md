@@ -97,7 +97,7 @@ hard-coded.
 | Stock DLL missions (`*R.drl` / `*S.dsl`) | stock | not loadable natively; Lua conversion or silent fallback | design |
 | SOL maps | A2X `sol_maps` | map loader | todo |
 | BZN maps | stock | `sta_bzn` | todo |
-| M3D (Star Trek: Legacy) models; child-mod M3D overrides parent SOD | A2X `m3d` (`modules/A2FOM3D`) | `sta_assets` M3D reader | todo |
+| M3D (Star Trek: Legacy) models; child-mod M3D overrides parent SOD | A2X `m3d` (`modules/A2FOM3D`) | `sta_assets::m3d` → shared model, no SOD conversion | done |
 | Scene command vocabulary, event marks | Refit `Scene.asi` | headless scenario tests | todo |
 
 ## Multiplayer

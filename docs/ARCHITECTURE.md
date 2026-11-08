@@ -70,8 +70,12 @@ formats. Where each legacy format came from:
 |---|---|---|
 | Armada II (stock) | SOD | TGA (`Textures/RGB/`) |
 | Fleet Operations | — | DDS (mostly `Textures/`) |
-| A2FOExtensions | M3D (Star Trek: Legacy), converted at load | — |
+| A2FOExtensions | M3D (Star Trek: Legacy) | — |
 | STA64 native | glTF / GLB | KTX2 (PNG fallback) |
+
+Every model format loads straight into one engine-side model type
+(`sta_assets::model`). Nothing is converted to another format at load, so
+M3D keeps the specular, glow and normal maps that SOD cannot express.
 
 Lookup by bare name (as ODFs and SODs reference assets): a file in a
 higher-priority mod layer always wins. Within one layer the newest format

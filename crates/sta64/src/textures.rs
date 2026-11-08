@@ -76,6 +76,46 @@ impl Loader<'_> {
         handle
     }
 
+    /// An M3D bump texture as a normal map: used directly when it already is one
+    /// (green flipped from Direct3D's convention), else treated as a height map.
+    pub fn normal_from_bump(&mut self, name: &str) -> Option<Handle<Image>> {
+        let key = format!("b:{}", name.to_ascii_lowercase());
+        if let Some(h) = self.cache.map.get(&key) {
+            return h.clone();
+        }
+        let img = self.decode_rgba(name).map(|mut px| {
+            let normal = if sta_assets::pixels::looks_like_normal_map(&px) {
+                sta_assets::pixels::flip_green(&mut px);
+                px
+            } else {
+                sta_assets::pixels::height_to_normal(&px)
+            };
+            upload(&sta_assets::pixels::generate_mips(&normal), false)
+        });
+        let handle = img.map(|i| self.images.add(i));
+        self.cache.map.insert(key, handle.clone());
+        handle
+    }
+
+    /// A metallic-roughness texture derived from a specular map.
+    pub fn roughness_from_specular(&mut self, name: &str) -> Option<Handle<Image>> {
+        let key = format!("s:{}", name.to_ascii_lowercase());
+        if let Some(h) = self.cache.map.get(&key) {
+            return h.clone();
+        }
+        let img = self
+            .decode_rgba(name)
+            .map(|px| upload(&sta_assets::pixels::generate_mips(&sta_assets::pixels::roughness_from_specular(&px)), false));
+        let handle = img.map(|i| self.images.add(i));
+        self.cache.map.insert(key, handle.clone());
+        handle
+    }
+
+    fn decode_rgba(&self, name: &str) -> Option<Rgba> {
+        let (path, fmt) = sta_assets::find_texture(self.vfs, name)?;
+        sta_assets::decode_rgba(self.vfs, &path, fmt).map_err(|e| warn!("{e}")).ok()
+    }
+
     fn decode_colour(&self, path: &str, fmt: Fmt) -> Result<Image, String> {
         let data = sta_assets::read(self.vfs, path).map_err(|e| e.to_string())?;
         let gpu = |ext: &str| {
