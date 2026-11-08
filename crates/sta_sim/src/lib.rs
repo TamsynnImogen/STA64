@@ -21,6 +21,7 @@
 //! the entity model in [`world`], filled from the map by [`spawn`], with
 //! today's movement.
 
+pub mod combat;
 pub mod command;
 pub mod event;
 pub mod fake;
@@ -89,6 +90,8 @@ pub struct Sim {
     regions: Vec<Region>,
     /// Events since the last step (spawns between ticks), emitted with it.
     events: Vec<SimEvent>,
+    /// Weapon state (SIM-04); in the digest once any exists.
+    weapons: combat::weapons::Weapons,
     /// Queued waypoints and formations (SIM-02).
     movement: movement::Movement,
 }
@@ -203,6 +206,7 @@ impl Sim {
             starts: Vec::new(),
             regions: Vec::new(),
             events: Vec::new(),
+            weapons: Default::default(),
             movement: movement::Movement::default(),
         }
     }
@@ -239,7 +243,16 @@ impl Sim {
             CommandKind::Edit(e) => return self.apply_edit(c.player, e),
         };
         match order {
-            Order::Move { .. } | Order::Stop { .. } | Order::Formation { .. } => self.apply_movement(c.player, order),
+            Order::Move { .. } | Order::Formation { .. } => self.apply_movement(c.player, order),
+            Order::Stop { units } => {
+                // A stop also drops the attack order of the units it reaches.
+                self.weapons.stop_attack(&self.units, c.player, units);
+                self.apply_movement(c.player, order)
+            }
+            Order::Attack { units, target } => {
+                let Some(db) = self.content.clone() else { return false };
+                self.weapons.order_attack(&db, &self.units, c.player, units, *target)
+            }
             _ => false,
         }
     }
@@ -248,6 +261,9 @@ impl Sim {
     fn advance(&mut self) -> TickOutput {
         for u in self.units.iter_mut().filter(|u| u.mobile()) {
             u.step();
+        }
+        if let Some(db) = &self.content {
+            self.weapons.step(self.tick, &self.units, db, &self.players, &mut self.events);
         }
         self.advance_courses();
         self.tick += 1;
@@ -295,6 +311,9 @@ impl Sim {
         for (id, label) in self.labels.iter() {
             h.u64(id.0 as u64);
             h.str(label);
+        }
+        if !self.weapons.is_empty() {
+            self.weapons.hash_into(&mut h);
         }
         h.0
     }
