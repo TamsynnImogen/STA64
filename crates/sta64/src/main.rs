@@ -1,10 +1,16 @@
 //! STA64 game executable.
 //!
-//! Usage: `sta64 [--install-root <path>] [--mod <name>] [--view <model> | --map [<map>] | --mission-report]`
+//! Usage: `sta64 [--install-root <path>] [--mod <name>] [--view <model> | --map [<map>] | --mission-report]`;
+//! `sta64 --help` lists every flag, including the test bench's.
 //!
 //! The install root is a user-owned Armada II / Fleet Operations install. No
 //! original game content ships with STA64; it is read from that install at run
 //! time. Until gameplay exists, the executable opens the model viewer.
+
+pub mod app;
+pub mod clock;
+pub mod plugins;
+pub mod sim_link;
 
 mod particles;
 mod planet;
@@ -20,37 +26,8 @@ mod textures;
 mod units;
 mod viewer;
 
+use app::LaunchConfig;
 use bevy::prelude::*;
-use std::path::PathBuf;
-
-#[derive(Debug, Clone, Default)]
-struct LaunchConfig {
-    install_root: Option<PathBuf>,
-    active_mod: Option<String>,
-    view: Option<String>,
-    map: Option<String>,
-    mission_report: bool,
-}
-
-fn parse_args() -> LaunchConfig {
-    let mut cfg = LaunchConfig::default();
-    let mut args = std::env::args().skip(1);
-    while let Some(a) = args.next() {
-        match a.as_str() {
-            "--install-root" => cfg.install_root = args.next().map(PathBuf::from),
-            "--mod" => cfg.active_mod = args.next(),
-            "--view" => cfg.view = args.next(),
-            "--map" => cfg.map = Some(args.next().unwrap_or_default()),
-            "--mission-report" => cfg.mission_report = true,
-            _ => eprintln!("ignoring unknown argument {a:?}"),
-        }
-    }
-    // Default: the directory the executable lives in, like the original game.
-    if cfg.install_root.is_none() {
-        cfg.install_root = std::env::current_exe().ok().and_then(|p| p.parent().map(PathBuf::from));
-    }
-    cfg
-}
 
 fn mount(cfg: &LaunchConfig) -> (sta_vfs::Vfs, String) {
     let Some(root) = &cfg.install_root else {
@@ -111,7 +88,17 @@ fn mission_report(vfs: &sta_vfs::Vfs) {
 }
 
 fn main() {
-    let cfg = parse_args();
+    let cfg = LaunchConfig::from_env();
+    if cfg.help {
+        print!("{}", app::USAGE);
+        return;
+    }
+    for a in &cfg.unknown {
+        eprintln!("ignoring unknown argument {a:?}");
+    }
+    for flag in cfg.unsupported() {
+        eprintln!("unsupported: {flag}");
+    }
     let (vfs, summary) = mount(&cfg);
     println!("{summary}");
     if cfg.mission_report {
@@ -148,6 +135,8 @@ fn main() {
         )
         .insert_resource(sprites::SpriteTables(std::sync::Arc::new(table)))
         .insert_resource(teams);
+    // Sets and the sim link; idle until a `SimLink` exists (R0-3).
+    plugins::add_plugins(&mut app, &cfg);
     if let Some(m) = &cfg.map {
         let maps = map::browser(&vfs, Some(m.as_str()).filter(|m| !m.is_empty()), browser.mount_summary.clone());
         println!("{} maps visible", maps.maps.len());

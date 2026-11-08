@@ -5139,6 +5139,7 @@ dependencies = [
  "naga",
  "sta_assets",
  "sta_bzn",
+ "sta_content",
  "sta_mission",
  "sta_odf",
  "sta_sim",
