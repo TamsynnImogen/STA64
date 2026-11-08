@@ -33,6 +33,7 @@ How M2–M5 split into parallel work packages: [WORKPLAN.md](WORKPLAN.md).
   bodies from `groundTextureName`, nebula volumes, map lights (`dlight`)
 - RTS camera, selection, move orders through `sta_sim`
 - Renderer interpolation between sim ticks
+- Test bench first slice: `sta64 --scene` headless, animation clock on sim time ([TESTBENCH.md](TESTBENCH.md))
 
 ## M3: Combat and economy
 - Weapons/damage/shields from ODF, fire arcs, point defence
