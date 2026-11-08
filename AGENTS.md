@@ -57,9 +57,17 @@ Open one issue per package:
 The last line names who to ask; keep it verbatim in shape
 (`Claimed by Claude Code (Immy's session).`).
 
-**Races.** Right after opening the issue, run the issue search from step 2
-again. If an older open issue claims the same ID, the older one wins: close
-yours as a duplicate with a link and pick something else.
+**Races.** Right after opening the issue, check again without `--search`
+(GitHub's search index lags new issues by a minute or more, so step 2's
+search can miss a claim made seconds ago):
+
+```sh
+gh issue list --state open --json number,title \
+  --jq '.[] | select(.title | startswith("[SIM-04]")) | .number'
+```
+
+If an older open issue claims the same ID, the older one wins: close yours
+as a duplicate with a link and pick something else.
 
 **One claim at a time per agent.** A session may run several agents, each
 with its own claim; an agent does not hold claims it is not working on.
