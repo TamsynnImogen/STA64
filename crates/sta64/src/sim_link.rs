@@ -14,8 +14,6 @@
 //! Positions here are the sim's map space (left-handed); the renderer
 //! mirrors Z when it places things.
 
-#![allow(dead_code)] // Seam: the client moves onto it in R0-3.
-
 use std::collections::BTreeMap;
 use std::sync::Arc;
 

@@ -17,7 +17,7 @@
 //!
 //! Particles are a visual effect. They live outside the deterministic simulation.
 
-use crate::sprites::SpriteTables;
+use crate::render::sprites::SpriteTables;
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::Indices;
 use bevy::prelude::*;
@@ -253,7 +253,7 @@ pub fn draw(
     emitters: Query<(&Emitter, &InheritedVisibility)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut loader: crate::textures::LoaderParams,
+    mut loader: crate::render::textures::LoaderParams,
 ) {
     let Ok(cam) = camera.single() else { return };
     let (right, up) = (cam.right().as_vec3(), cam.up().as_vec3());

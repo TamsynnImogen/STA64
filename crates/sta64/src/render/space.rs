@@ -14,7 +14,7 @@
 //! All geometry is generated in the files' left-handed space and mirrored on Z
 //! like everything else.
 
-use crate::textures::Loader;
+use crate::render::textures::Loader;
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::mesh::Indices;

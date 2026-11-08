@@ -8,8 +8,8 @@
 //! in half the ground's own hue and half sky blue, glint 0.3^40, halo 1.0 reaching
 //! 4% of the radius above the ground, x2 brighter looking toward the sun.
 
-use crate::space;
-use crate::textures::Loader;
+use crate::render::space;
+use crate::render::textures::Loader;
 use bevy::asset::{embedded_asset, AssetPath};
 use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, ShaderType};
@@ -82,7 +82,7 @@ pub struct PlanetMaterial {
 
 impl Material for PlanetMaterial {
     fn fragment_shader() -> ShaderRef {
-        ShaderRef::Path(AssetPath::parse("embedded://sta64/planet.wgsl").into_owned())
+        ShaderRef::Path(AssetPath::parse("embedded://sta64/render/planet.wgsl").into_owned())
     }
     fn alpha_mode(&self) -> AlphaMode {
         self.alpha
@@ -108,8 +108,8 @@ impl Plugin for PlanetPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "planet.wgsl");
         app.add_plugins(MaterialPlugin::<PlanetMaterial>::default())
-            .init_resource::<crate::surfaces::Surfaces>()
-            .add_systems(Update, ((crate::surfaces::poll, apply_surfaces).chain(), place_glows))
+            .init_resource::<crate::render::surfaces::Surfaces>()
+            .add_systems(Update, ((crate::render::surfaces::poll, apply_surfaces).chain(), place_glows))
             .add_systems(PostUpdate, update.after(TransformSystems::Propagate));
     }
 }
@@ -283,7 +283,7 @@ pub fn spawn(
 /// glow; an atmosphere recipe (gas giants) draws the shell from the cubes, opaque.
 fn apply_surfaces(
     vfs: Res<crate::viewer::Mounted>,
-    mut surfaces: ResMut<crate::surfaces::Surfaces>,
+    mut surfaces: ResMut<crate::render::surfaces::Surfaces>,
     mut planets: Query<&mut PlanetBody>,
     mut materials: ResMut<Assets<PlanetMaterial>>,
 ) {
@@ -291,7 +291,7 @@ fn apply_surfaces(
         if body.applied.is_some() {
             continue;
         }
-        let face = crate::surfaces::PLANET_FACE;
+        let face = crate::render::surfaces::PLANET_FACE;
         let ground = (!body.ground_name.is_empty()).then(|| surfaces.request(&vfs.0, &body.ground_name, face)).flatten();
         let atmo = (!body.atmo_name.is_empty()).then(|| surfaces.request(&vfs.0, &body.atmo_name, face)).flatten();
         let ground_pending = !body.ground_name.is_empty() && ground.is_none() && surfaces.has_recipe(&body.ground_name);
@@ -299,7 +299,7 @@ fn apply_surfaces(
         if ground_pending || atmo_pending {
             continue;
         }
-        let set_surface = |m: &mut PlanetMaterial, b: &crate::surfaces::Baked| {
+        let set_surface = |m: &mut PlanetMaterial, b: &crate::render::surfaces::Baked| {
             let r = &b.recipe;
             m.params.mode = Vec4::new(3.0, 0.0, 0.0, 0.0);
             m.params.surf_glow = Vec4::from(r.glow);
@@ -402,7 +402,7 @@ mod tests {
     #[test]
     fn shader_path_matches_embedded_registration() {
         let registered = bevy::asset::embedded_path!("src", "planet.wgsl");
-        assert_eq!(registered.to_string_lossy().replace('\\', "/"), "sta64/planet.wgsl");
+        assert_eq!(registered.to_string_lossy().replace('\\', "/"), "sta64/render/planet.wgsl");
     }
 
     #[test]

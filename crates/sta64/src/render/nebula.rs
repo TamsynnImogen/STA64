@@ -26,15 +26,15 @@ const KEY_SHARE: f32 = 0.8;
 const SCATTER: f32 = 0.2;
 
 const BUNDLED: &[(&str, &str)] = &[
-    ("fluidicnebula", include_str!("../../sta_surface/nebulae/fluidicnebula.ini")),
-    ("generatednebula", include_str!("../../sta_surface/nebulae/generatednebula.ini")),
-    ("latinum", include_str!("../../sta_surface/nebulae/latinum.ini")),
-    ("mnebula10", include_str!("../../sta_surface/nebulae/mnebula10.ini")),
-    ("mnebula12", include_str!("../../sta_surface/nebulae/mnebula12.ini")),
-    ("mnebula6", include_str!("../../sta_surface/nebulae/mnebula6.ini")),
-    ("mnebula7", include_str!("../../sta_surface/nebulae/mnebula7.ini")),
-    ("mnebula8", include_str!("../../sta_surface/nebulae/mnebula8.ini")),
-    ("mnebula9", include_str!("../../sta_surface/nebulae/mnebula9.ini")),
+    ("fluidicnebula", include_str!("../../../sta_surface/nebulae/fluidicnebula.ini")),
+    ("generatednebula", include_str!("../../../sta_surface/nebulae/generatednebula.ini")),
+    ("latinum", include_str!("../../../sta_surface/nebulae/latinum.ini")),
+    ("mnebula10", include_str!("../../../sta_surface/nebulae/mnebula10.ini")),
+    ("mnebula12", include_str!("../../../sta_surface/nebulae/mnebula12.ini")),
+    ("mnebula6", include_str!("../../../sta_surface/nebulae/mnebula6.ini")),
+    ("mnebula7", include_str!("../../../sta_surface/nebulae/mnebula7.ini")),
+    ("mnebula8", include_str!("../../../sta_surface/nebulae/mnebula8.ini")),
+    ("mnebula9", include_str!("../../../sta_surface/nebulae/mnebula9.ini")),
 ];
 
 /// The recipe for a nebula class, if it has one.
@@ -86,7 +86,7 @@ pub struct NebulaMaterial {
 
 impl Material for NebulaMaterial {
     fn fragment_shader() -> ShaderRef {
-        ShaderRef::Path(AssetPath::parse("embedded://sta64/nebula.wgsl").into_owned())
+        ShaderRef::Path(AssetPath::parse("embedded://sta64/render/nebula.wgsl").into_owned())
     }
     fn alpha_mode(&self) -> AlphaMode {
         AlphaMode::Premultiplied
@@ -352,7 +352,7 @@ mod tests {
     #[test]
     fn shader_path_matches_embedded_registration() {
         let registered = bevy::asset::embedded_path!("src", "nebula.wgsl");
-        assert_eq!(registered.to_string_lossy().replace('\\', "/"), "sta64/nebula.wgsl");
+        assert_eq!(registered.to_string_lossy().replace('\\', "/"), "sta64/render/nebula.wgsl");
     }
 
     #[test]
