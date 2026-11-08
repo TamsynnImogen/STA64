@@ -15,6 +15,8 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [?] Planets textured (`<ground>1`/`<ground>2` + cloud shell); texture not mirrored/rotated — `270c675`
 - [?] Ships' running lights / engine particles still sit on the hull after the ScaleSOD change (e.g. `fgalaxy`, ScaleSOD 2.78) — `270c675`
 - [?] Asteroid fields show rocks, slowly orbiting/tumbling; size and spread look like the game (spread is an estimate) — aa70e99
+- [?] Ships: click / drag-box select, right-click move, Space stop; they turn and arrive smoothly; speeds feel like the game (accel/turn-at-rest interpretation is ours) — a3f2076
+- [?] Map camera now: middle-drag orbit, WASD pan, wheel zoom (left/right are select/order) — a3f2076
 - [?] The editor's `dlight` arrow gizmo no longer shows; lighting direction matches the game on a map with dlights — aa70e99
 
 ## Now (M2: a map you can fly in)
@@ -22,8 +24,8 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [ ] Nebula look: class colour pulse on sim time, near fade, occlusion intensity
 - [x] Asteroid fields: rocks from the engine's table (`master*`), count/radius/speeds from the ODF
 - [x] Map lights aimed by `dlight` markers; `hidden = 1` editor markers not drawn
-- [ ] Select units (click / drag box) in the map view
-- [ ] Move orders through `sta_sim`, renderer interpolating between ticks
+- [x] Select units (click / drag box) in the map view
+- [x] Move orders through `sta_sim` (deterministic, digest pinned), renderer interpolating between ticks
 - [ ] RTS camera (edge scroll, tactical zoom limits from `RTS_CFG.h`)
 
 ## Later
