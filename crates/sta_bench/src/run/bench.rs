@@ -89,13 +89,10 @@ impl Bench {
 
         let sim = match &s.start {
             Some(Start::Snapshot(file)) => {
-                // `sta_sim::snapshot` exists on main but `lib.rs` has no `mod snapshot;`
-                // (SIM-10 merge), so `Sim::{snapshot, from_snapshot}` are not compiled.
-                // Wire it in here once it is: read `cfg.data_path(file)` and call
-                // `Sim::from_snapshot(&bytes, Some(content))`.
-                return Err(format!(
-                    "Start=snapshot:{file}: sta_sim does not compile its snapshot module yet (missing `pub mod snapshot;` in lib.rs)"
-                ));
+                let bytes = std::fs::read(cfg.data_path(file))
+                    .map_err(|e| format!("Start=snapshot:{file}: {e}"))?;
+                Sim::from_snapshot(&bytes, Some(content.clone()))
+                    .map_err(|e| format!("Start=snapshot:{file}: {e:?}"))?
             }
             Some(Start::Replay(file)) => {
                 let bytes = std::fs::read(cfg.data_path(file))
@@ -784,9 +781,16 @@ impl Bench {
 
     /// Write the snapshot of the current state under the data directory.
     pub fn save_snapshot(&self, file: &str) -> Result<String, String> {
-        // See `Bench::build`: needs `Sim::snapshot`, not compiled on main yet.
-        Err(format!(
-            "Save snapshot as \"{file}\": sta_sim does not compile its snapshot module yet (missing `pub mod snapshot;` in lib.rs)"
+        let path = self.cfg.data_path(file);
+        if let Some(d) = path.parent() {
+            std::fs::create_dir_all(d).map_err(|e| format!("{}: {e}", d.display()))?;
+        }
+        std::fs::write(&path, self.sim.snapshot())
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        Ok(format!(
+            "snapshot at tick {} -> {}",
+            self.sim.tick,
+            path.display()
         ))
     }
 
