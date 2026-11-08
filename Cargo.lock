@@ -5099,6 +5099,7 @@ dependencies = [
  "sta_mission",
  "sta_odf",
  "sta_sim",
+ "sta_surface",
  "sta_vfs",
  "winresource",
 ]
@@ -5146,6 +5147,10 @@ dependencies = [
 
 [[package]]
 name = "sta_sim"
+version = "0.1.0"
+
+[[package]]
+name = "sta_surface"
 version = "0.1.0"
 
 [[package]]

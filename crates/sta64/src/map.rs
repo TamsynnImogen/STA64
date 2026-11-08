@@ -202,6 +202,7 @@ impl Plugin for MapPlugin {
             })
             .add_plugins(crate::units::UnitsPlugin)
             .add_plugins(crate::planet::PlanetPlugin)
+            .add_plugins(crate::rock::RockPlugin)
             .add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default())
             .add_systems(Startup, setup)
             .add_systems(

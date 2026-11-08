@@ -50,6 +50,8 @@ struct CachedPart {
     team: bool,
     bumped: bool,
     triangles: usize,
+    /// Set when the part's texture names a surface recipe (rocks, moons).
+    rock: Option<crate::rock::RockPart>,
 }
 
 /// Face groups that take the owner's team colour.
@@ -412,12 +414,31 @@ fn spawn_mesh(
             reflectance: 0.3,
             ..default()
         };
+        // A texture with a surface recipe: the part becomes a rock once baked, its
+        // surface looked up about the mesh's centre over its extents.
+        let rock = maps.diffuse.as_deref().filter(|n| crate::surfaces::recipe_text(ctx.textures.vfs, n).is_some()).map(|n| {
+            let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+            for p in &mesh.positions {
+                for a in 0..3 {
+                    lo[a] = lo[a].min(p[a]);
+                    hi[a] = hi[a].max(p[a]);
+                }
+            }
+            let c: [f32; 3] = std::array::from_fn(|a| (lo[a] + hi[a]) * 0.5);
+            let ext: [f32; 3] = std::array::from_fn(|a| ((hi[a] - lo[a]) * 0.5 * ctx.scale).max(1e-4));
+            crate::rock::RockPart {
+                recipe: n.to_owned(),
+                centre: Vec3::from(mirror(c)) * ctx.scale,
+                inv_extent: Vec3::from(ext.map(|e| 1.0 / e)),
+            }
+        });
         let part = CachedPart {
             mesh: ctx.meshes.add(bevy_mesh),
             material: ctx.materials.add(material),
             team,
             bumped: normal_present,
             triangles,
+            rock,
         };
         if let Some(cache) = ctx.parts.as_mut() {
             cache.map.insert(cache_key, part.clone());
@@ -440,6 +461,9 @@ fn spawn_part(ctx: &mut SpawnCtx, part: &CachedPart, parent: Entity, flipbook: O
     ));
     if part.team {
         e.insert(TeamPart);
+    }
+    if let Some(r) = &part.rock {
+        e.insert(r.clone());
     }
     if let Some((animation, offset)) = flipbook {
         e.insert(UvFlipbook {

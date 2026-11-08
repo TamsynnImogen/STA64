@@ -43,6 +43,10 @@ pub struct PlanetParams {
     pub shell: Vec4,
     pub halo: Vec4,
     pub mode: Vec4,
+    pub surf_glow: Vec4,
+    pub surf_cloud: Vec4,
+    pub surf_drift: Vec4,
+    pub surf_misc: Vec4,
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Clone, Debug)]
@@ -52,6 +56,15 @@ pub struct PlanetMaterial {
     #[texture(1)]
     #[sampler(2)]
     pub texture: Option<Handle<Image>>,
+    #[texture(3, dimension = "cube")]
+    #[sampler(4)]
+    pub albedo: Option<Handle<Image>>,
+    #[texture(5, dimension = "cube")]
+    #[sampler(6)]
+    pub relief: Option<Handle<Image>>,
+    #[texture(7, dimension = "cube")]
+    #[sampler(8)]
+    pub clouds: Option<Handle<Image>>,
     pub alpha: AlphaMode,
 }
 
@@ -68,6 +81,13 @@ impl Material for PlanetMaterial {
 #[derive(Component)]
 pub struct PlanetBody {
     materials: Vec<Handle<PlanetMaterial>>,
+    /// The ground hemispheres' and the shell's materials, for recipe surfaces.
+    ground: Vec<Handle<PlanetMaterial>>,
+    shell: Option<Handle<PlanetMaterial>>,
+    ground_name: String,
+    atmo_name: String,
+    /// A recipe surface was applied: (ground has one, atmosphere has one, drift rad/s).
+    applied: Option<(bool, bool, f32)>,
 }
 
 pub struct PlanetPlugin;
@@ -75,7 +95,10 @@ pub struct PlanetPlugin;
 impl Plugin for PlanetPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "planet.wgsl");
-        app.add_plugins(MaterialPlugin::<PlanetMaterial>::default()).add_systems(PostUpdate, update.after(TransformSystems::Propagate));
+        app.add_plugins(MaterialPlugin::<PlanetMaterial>::default())
+            .init_resource::<crate::surfaces::Surfaces>()
+            .add_systems(Update, (crate::surfaces::poll, apply_surfaces).chain())
+            .add_systems(PostUpdate, update.after(TransformSystems::Propagate));
     }
 }
 
@@ -126,6 +149,8 @@ pub fn spawn(
 ) -> Vec<String> {
     let mut missing = Vec::new();
     let mut handles = Vec::new();
+    let mut ground_mats = Vec::new();
+    let mut shell_mat = None;
     // Haze hue from both ground hemispheres, else the atmosphere, else grey.
     let means: Vec<[f32; 3]> = if ground.is_empty() {
         mean_colour(loader, atmosphere).into_iter().collect()
@@ -150,9 +175,13 @@ pub fn spawn(
             let m = materials.add(PlanetMaterial {
                 params: PlanetParams { mode: Vec4::ZERO, ..params },
                 texture: tex,
+                albedo: None,
+                relief: None,
+                clouds: None,
                 alpha: AlphaMode::Opaque,
             });
             handles.push(m.clone());
+            ground_mats.push(m.clone());
             commands.spawn((
                 Mesh3d(meshes.add(space::sphere(2 * h, 2, 2, radius))),
                 MeshMaterial3d(m),
@@ -170,9 +199,13 @@ pub fn spawn(
         let m = materials.add(PlanetMaterial {
             params: PlanetParams { mode: Vec4::new(1.0, 0.0, 0.0, 0.0), ..params },
             texture: tex,
+            albedo: None,
+            relief: None,
+            clouds: None,
             alpha: if ground.is_empty() { AlphaMode::Opaque } else { AlphaMode::Blend },
         });
         handles.push(m.clone());
+        shell_mat = Some(m.clone());
         commands.spawn((
             Mesh3d(meshes.add(space::sphere(0, 4, 4, shell_r))),
             MeshMaterial3d(m),
@@ -189,6 +222,9 @@ pub fn spawn(
                     ..params
                 },
                 texture: None,
+                albedo: None,
+                relief: None,
+                clouds: None,
                 alpha: AlphaMode::Add,
             });
             handles.push(m.clone());
@@ -200,8 +236,70 @@ pub fn spawn(
             ));
         }
     }
-    commands.entity(parent).insert(PlanetBody { materials: handles });
+    commands.entity(parent).insert(PlanetBody {
+        materials: handles,
+        ground: ground_mats,
+        shell: shell_mat,
+        ground_name: ground.to_owned(),
+        atmo_name: atmosphere.to_owned(),
+        applied: None,
+    });
     missing
+}
+
+/// Switch planets to their recipe surfaces once baked (Refit's draw_body): a ground
+/// recipe draws both hemispheres from the cubes and leaves the shell only its limb
+/// glow; an atmosphere recipe (gas giants) draws the shell from the cubes, opaque.
+fn apply_surfaces(
+    vfs: Res<crate::viewer::Mounted>,
+    mut surfaces: ResMut<crate::surfaces::Surfaces>,
+    mut planets: Query<&mut PlanetBody>,
+    mut materials: ResMut<Assets<PlanetMaterial>>,
+) {
+    for mut body in &mut planets {
+        if body.applied.is_some() {
+            continue;
+        }
+        let face = crate::surfaces::PLANET_FACE;
+        let ground = (!body.ground_name.is_empty()).then(|| surfaces.request(&vfs.0, &body.ground_name, face)).flatten();
+        let atmo = (!body.atmo_name.is_empty()).then(|| surfaces.request(&vfs.0, &body.atmo_name, face)).flatten();
+        let ground_pending = !body.ground_name.is_empty() && ground.is_none() && surfaces.has_recipe(&body.ground_name);
+        let atmo_pending = !body.atmo_name.is_empty() && atmo.is_none() && surfaces.has_recipe(&body.atmo_name);
+        if ground_pending || atmo_pending {
+            continue;
+        }
+        let set_surface = |m: &mut PlanetMaterial, b: &crate::surfaces::Baked| {
+            let r = &b.recipe;
+            m.params.mode = Vec4::new(3.0, 0.0, 0.0, 0.0);
+            m.params.surf_glow = Vec4::from(r.glow);
+            m.params.surf_cloud = Vec4::from(r.cloud_colour);
+            m.params.surf_drift = Vec4::new(1.0, 0.0, r.cloud_shadow[0], r.cloud_shadow[1]);
+            m.params.surf_misc = Vec4::new(r.depth, if b.clouds.is_some() { 1.0 } else { 0.0 }, 0.0, 0.0);
+            m.albedo = Some(b.albedo.clone());
+            m.relief = Some(b.relief.clone());
+            m.clouds = Some(b.clouds.clone().unwrap_or_else(|| b.relief.clone()));
+        };
+        let mut drift = 0.0;
+        if let Some(b) = &ground {
+            for h in &body.ground {
+                if let Some(mut m) = materials.get_mut(h) {
+                    set_surface(&mut m, b);
+                }
+            }
+            if let Some(mut m) = body.shell.as_ref().and_then(|h| materials.get_mut(h)) {
+                m.params.shell.x = 0.0;
+            }
+            drift = b.recipe.drift;
+        }
+        if let Some(b) = &atmo
+            && let Some(mut m) = body.shell.as_ref().and_then(|h| materials.get_mut(h))
+        {
+            set_surface(&mut m, b);
+            m.alpha = AlphaMode::Opaque;
+            drift = b.recipe.drift;
+        }
+        body.applied = Some((ground.is_some(), atmo.is_some(), drift));
+    }
 }
 
 /// Each frame: the camera, the planet's centre and the two map lights into every
@@ -211,6 +309,7 @@ fn update(
     lights: Query<(&GlobalTransform, &DirectionalLight)>,
     planets: Query<(&GlobalTransform, &PlanetBody)>,
     mut materials: ResMut<Assets<PlanetMaterial>>,
+    time: Res<Time>,
 ) {
     let Ok(cam) = camera.single() else { return };
     // Brightest light first: the key.
@@ -235,6 +334,12 @@ fn update(
             p.dvec0 = key.0.extend(0.0);
             p.dcol1 = (fill.1 * FILL).extend(0.0);
             p.dvec1 = fill.0.extend(0.0);
+            if let Some((_, _, drift)) = body.applied {
+                // The clouds drift about the pole on the clock.
+                let a = drift * time.elapsed_secs();
+                p.surf_drift.x = a.cos();
+                p.surf_drift.y = a.sin();
+            }
         }
     }
 }

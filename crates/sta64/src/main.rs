@@ -8,10 +8,12 @@
 
 mod particles;
 mod planet;
+mod rock;
 mod map;
 mod model_scene;
 mod space;
 mod sprites;
+mod surfaces;
 mod textures;
 mod units;
 mod viewer;
