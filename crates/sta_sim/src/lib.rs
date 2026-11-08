@@ -192,13 +192,17 @@ impl Unit {
         let frac = if st.max_speed > Fixed::ZERO { clamp(self.speed / st.max_speed, Fixed::ZERO, Fixed::ONE) } else { Fixed::ZERO };
         let omega_max = st.turn_omega * (st.turn_at_rest + (Fixed::ONE - st.turn_at_rest) * frac);
         let sign = if cross < Fixed::ZERO { -Fixed::ONE } else { Fixed::ONE };
-        // Ahead: turn in proportion to the remaining sine; behind: turn flat out.
-        let want_omega = if dot > Fixed::ZERO {
-            let gain = Fixed::from_int(4);
-            sign * (cross.abs() * gain).min(omega_max)
-        } else {
-            sign * omega_max
-        };
+        // Remaining turn angle from the sine and the side: asin(c) ~ c + c^3/6
+        // ahead, pi minus that behind.
+        let c = cross.abs();
+        let ahead = c + c * c * c / Fixed::from_int(6);
+        let angle = if dot >= Fixed::ZERO { ahead } else { Fixed::from_f64(std::f64::consts::PI) - ahead };
+        // The fastest turn that can still stop on the heading with the turn
+        // acceleration available: omega = sqrt(2 alpha angle). Asking for more
+        // overshoots and weaves; this settles without oscillating.
+        // Near the heading, also no more than closes the angle this tick, so the
+        // discrete steps do not overshoot and chatter across the course.
+        let want_omega = sign * (Fixed::from_int(2) * st.turn_alpha * angle).sqrt().min(omega_max).min(angle / dt);
         self.omega = approach(self.omega, want_omega, st.turn_alpha * dt);
 
         // Speed: slower when facing away, and able to stop at the target.
@@ -355,7 +359,7 @@ mod tests {
     /// x86-64, ARM64 Linux, Windows and Apple Silicon).
     #[test]
     fn digest_is_pinned() {
-        assert_eq!(run(), 0xb78f_2311_5fb6_844e);
+        assert_eq!(run(), 0xa4c0_7121_6986_d7dc);
     }
 
     #[test]
@@ -379,6 +383,41 @@ mod tests {
         // Heading stays unit length.
         let l = (u.heading.0 * u.heading.0 + u.heading.1 * u.heading.1).to_f32();
         assert!((l - 1.0).abs() < 1e-6, "{l}");
+    }
+
+    /// Once a unit has turned onto its course it must not weave across it
+    /// (the earlier proportional controller crossed it 806 times).
+    #[test]
+    fn no_weaving_on_course() {
+        let mut sim = Sim::new(1);
+        let a = sim.spawn(0, v(0, 0, 0), (Fixed::ONE, Fixed::ZERO), stats());
+        sim.step(&[Command::Move { unit: a, to: v(0, 0, 4000) }]);
+        let mut crossings = 0;
+        let mut worst = 0.0f32;
+        let mut last: Option<bool> = None;
+        for _ in 0..30 * 40 {
+            sim.step(&[]);
+            let u = sim.unit(a).unwrap();
+            let Some(t) = u.target else { break };
+            let (dx, dz) = (t.x - u.pos.x, t.z - u.pos.z);
+            let d = (dx * dx + dz * dz).sqrt();
+            // Course error as the sine of the angle; ignore below a milliradian.
+            let side = (u.heading.0 * dz - u.heading.1 * dx) / d;
+            if side.abs() < Fixed::from_f64(1e-3) {
+                continue;
+            }
+            let s = side > Fixed::ZERO;
+            if last.is_some_and(|l| l != s) {
+                crossings += 1;
+                worst = worst.max(side.abs().to_f32());
+            }
+            last = Some(s);
+        }
+        // Settling after the turn may cross the (moving) course line once or
+        // twice by a fraction of a degree; weaving means many or large swings.
+        assert!(crossings <= 2, "weaved across the course {crossings} times");
+        assert!(worst < 0.01, "overshoot of {worst} rad");
+        assert!(sim.unit(a).unwrap().target.is_none(), "did not arrive");
     }
 
     #[test]

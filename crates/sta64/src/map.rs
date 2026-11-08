@@ -146,6 +146,10 @@ struct Sky;
 #[derive(Component)]
 struct MapHud;
 
+/// Frames per second, top right.
+#[derive(Component)]
+struct FpsText;
+
 /// The map's lights: 0 the key, 1 the fill. Aimed by the map's `dlight` objects.
 #[derive(Component)]
 struct MapLight(usize);
@@ -197,6 +201,7 @@ impl Plugin for MapPlugin {
                 pan: None,
             })
             .add_plugins(crate::units::UnitsPlugin)
+            .add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default())
             .add_systems(Startup, setup)
             .add_systems(
                 Update,
@@ -208,6 +213,7 @@ impl Plugin for MapPlugin {
                     spin,
                     sky_follows_camera,
                     hud,
+                    fps,
                     model_scene::animate,
                     crate::sprites::animate,
                     crate::sprites::face_camera,
@@ -251,6 +257,20 @@ fn setup(mut commands: Commands) {
             ..default()
         },
         Transform::from_xyz(-4.0, -2.0, -3.0).looking_at(Vec3::ZERO, Vec3::Y),
+    ));
+    commands.spawn((
+        FpsText,
+        Text::new(""),
+        TextFont {
+            font_size: bevy::text::FontSize::Px(15.0),
+            ..default()
+        },
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(12.0),
+            right: Val::Px(12.0),
+            ..default()
+        },
     ));
     commands.spawn((
         MapHud,
@@ -698,6 +718,16 @@ fn rebuild(
         info.push_str(&format!("\nnot found: {}", missing.iter().take(12).cloned().collect::<Vec<_>>().join(", ")));
     }
     browser.info = info;
+}
+
+fn fps(diag: Res<bevy::diagnostic::DiagnosticsStore>, mut q: Query<&mut Text, With<FpsText>>) {
+    let fps = diag
+        .get(&bevy::diagnostic::FrameTimeDiagnosticsPlugin::FPS)
+        .and_then(|d| d.smoothed())
+        .unwrap_or(0.0);
+    for mut t in &mut q {
+        t.0 = format!("{fps:.0} fps");
+    }
 }
 
 fn hud(browser: Res<MapBrowser>, mut q: Query<&mut Text, With<MapHud>>) {
