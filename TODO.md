@@ -27,14 +27,15 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [x] Select units (click / drag box) in the map view
 - [x] Move orders through `sta_sim` (deterministic, digest pinned), renderer interpolating between ticks
 - [x] RTS camera: edge scroll (`SCROLL_BORDER_WIDTH`), focus/zoom kept to the map — bba5143
-- [ ] Mission resolution per docs/MISSIONS.md (`--mission-report`)
+- [x] Mission resolution per docs/MISSIONS.md; `sta64 --mission-report` — 31ae0dd
+- [x] MMM Lua API inventory (docs/MMM_API.md: 478 names, 141 used by installed scripts)
 
 ## Later
 
 - [ ] Borg lattice groups (`basic_borg_alpha`): lit or self-illuminated? (your call from the game)
 - [ ] Star Trek: Legacy LOD (type 11) and effect (type 2) nodes; M3D 1.93 layout
 - [ ] glTF/GLB models in the viewer and maps
-- [ ] Mission scripts: integrated MMM Lua runtime ([docs/MISSIONS.md](docs/MISSIONS.md))
+- [ ] Mission scripts: integrated MMM Lua 5.3 runtime, most-used API first ([docs/MISSIONS.md](docs/MISSIONS.md), [docs/MMM_API.md](docs/MMM_API.md))
 - [ ] Front end on Refit's 3D menu scene (M4)
 
 ## Done recently
