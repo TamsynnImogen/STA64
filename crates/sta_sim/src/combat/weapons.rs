@@ -261,6 +261,18 @@ impl Weapons {
         }
     }
 
+    /// Drop the attack orders of the listed units that `player` may order.
+    pub(crate) fn stop_attack(&mut self, units: &Entities, player: PlayerId, ids: &[EntityId]) {
+        for &id in ids {
+            if units
+                .get(id)
+                .is_some_and(|u| !player.is_player() || u.owner == player)
+            {
+                self.attack.remove(id);
+            }
+        }
+    }
+
     /// Apply an `Attack` order: every listed unit of `player` (any, for
     /// scripts and the bench) that can shoot is set on `target`. False when
     /// the target is not a valid one or no unit took the order.

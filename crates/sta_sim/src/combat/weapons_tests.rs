@@ -203,6 +203,23 @@ fn orders_are_checked() {
 }
 
 #[test]
+fn stop_clears_the_attack_order() {
+    let (mut sim, s, t) = firing(v(2000, 0, 2350));
+    sim.step(&[attack(1, s, t)]);
+    assert_eq!(sim.weapons.attack_of(s), Some(t));
+    // Another player's stop does nothing to it; the owner's clears it.
+    let stop = |p| Command {
+        player: PlayerId(p),
+        seq: 1,
+        kind: CommandKind::Order(Order::Stop { units: vec![s] }),
+    };
+    sim.step(&[stop(2)]);
+    assert_eq!(sim.weapons.attack_of(s), Some(t));
+    sim.step(&[stop(1)]);
+    assert_eq!(sim.weapons.attack_of(s), None);
+}
+
+#[test]
 fn same_run_same_digest() {
     let d = || {
         let (mut sim, s, t) = firing(v(2000, 0, 2350));
