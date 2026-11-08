@@ -83,7 +83,7 @@ beside an M3D in the same mod wins.
 |---|---|---|
 | Data/config | ODF, cfg, spr, techtree, `info.ini` | JSON5 |
 | Models | SOD (1.4–1.93), M3D | glTF/GLB (SODX deferred) |
-| Textures | TGA (incl. colour-mapped), DDS, Borg `_b`, animated `_1.._9`, named mip chains | KTX2 (PNG fallback) |
+| Textures | TGA (incl. colour-mapped), DDS (DXT1/3/5, uncompressed), Borg `_b` variants, hand-authored `_1.._n` mip chains, height maps | KTX2 (PNG fallback) |
 | Maps | BZN | JSON5 scene + glTF |
 | Archives | FPQ v2 (raw/LZO) | plain folders |
 | Audio | WAV, MP3 | OGG |

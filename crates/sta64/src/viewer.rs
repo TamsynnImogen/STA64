@@ -1,10 +1,11 @@
 //! Model viewer: browse every model visible through the mounted install.
 //!
 //! Controls: Left/Right previous/next model, PageUp/PageDown jump 10, Home first,
-//! T cycle team colour, left-drag orbit, right-drag pan, wheel zoom, R reset view.
+//! T cycle team colour, B toggle Borg `_b` textures, left-drag orbit, right-drag pan, wheel zoom, R reset view.
 
 use crate::sod_scene::{self, SpawnCtx, TeamPart};
-use crate::textures::TextureCache;
+use crate::sprites::{self, SpriteTables};
+use crate::textures::{Loader, TextureCache};
 use bevy::image::CompressedImageFormats;
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::prelude::*;
@@ -19,6 +20,7 @@ pub struct Browser {
     pub models: Vec<String>,
     pub index: usize,
     pub team: usize,
+    pub borg: bool,
     /// Set when the shown model must be rebuilt.
     pub dirty: bool,
     pub mount_summary: String,
@@ -61,7 +63,10 @@ impl Plugin for ViewerPlugin {
                 ..default()
             })
             .add_systems(Startup, setup)
-            .add_systems(Update, (input, rebuild, orbit_camera, hud, sod_scene::animate).chain());
+            .add_systems(
+                Update,
+                (input, rebuild, orbit_camera, hud, sod_scene::animate, sprites::animate, sprites::face_camera).chain(),
+            );
     }
 }
 
@@ -79,6 +84,7 @@ pub fn browser(vfs: &sta_vfs::Vfs, initial: Option<&str>, mount_summary: String)
         models,
         index,
         team: 0,
+        borg: false,
         dirty: true,
         mount_summary,
         info: String::new(),
@@ -166,6 +172,10 @@ fn input(
             }
         }
     }
+    if keys.just_pressed(KeyCode::KeyB) {
+        browser.borg = !browser.borg;
+        browser.dirty = true;
+    }
     if keys.just_pressed(KeyCode::KeyR) {
         for mut o in &mut orbit {
             (o.focus, o.dist) = o.home;
@@ -184,6 +194,7 @@ fn rebuild(
     mut images: ResMut<Assets<Image>>,
     mut cache: ResMut<TextureCache>,
     device: Option<Res<RenderDevice>>,
+    tables: Res<SpriteTables>,
     mut orbit: Query<&mut Orbit>,
 ) {
     if !browser.dirty {
@@ -222,25 +233,37 @@ fn rebuild(
         commands: &mut commands,
         meshes: &mut meshes,
         materials: &mut materials,
-        images: &mut images,
-        cache: &mut cache,
-        vfs: &vfs.0,
-        formats,
+        textures: Loader {
+            vfs: &vfs.0,
+            cache: &mut cache,
+            images: &mut images,
+            formats,
+        },
         team: TEAM_COLOURS[browser.team].1,
+        borg: browser.borg,
+        sprites: &tables.0,
     };
     let stats = sod_scene::spawn(&mut ctx, &sod, root);
 
     let layer = vfs.0.resolve(&path).map(|(l, _)| vfs.0.layers()[l].name().to_owned()).unwrap_or_default();
     let mut info = format!(
-        "{header}\n{path}  [{layer}]  {:?} v{:.2}\n{} nodes, {} mesh parts, {} triangles, {} animated nodes, radius {:.1}",
+        "{header}\n{path}  [{layer}]  {:?} v{:.2}\n{} nodes, {} mesh parts, {} triangles, {} bump-mapped meshes, {} animated nodes, radius {:.1}",
         sod.container,
         sod.version,
         sod.nodes.len(),
         stats.meshes,
         stats.triangles,
+        stats.bump_meshes,
         stats.animated_nodes,
         stats.radius
     );
+    info.push_str(&format!(
+        "\n{} sprite nodes, {} texture flipbooks, {} particle emitters (not drawn yet)",
+        stats.sprite_nodes, stats.flipbooks, stats.emitters
+    ));
+    if !stats.unknown_sprite_nodes.is_empty() {
+        info.push_str(&format!("\nunknown sprite nodes: {}", stats.unknown_sprite_nodes.join(", ")));
+    }
     if !stats.missing_textures.is_empty() {
         info.push_str(&format!("\nmissing textures: {}", stats.missing_textures.join(", ")));
     }
@@ -290,13 +313,14 @@ fn hud(browser: Res<Browser>, mut q: Query<&mut Text, With<Hud>>) {
     }
     for mut t in &mut q {
         t.0 = format!(
-            "STA64 {} model viewer\n{}\n\n{}\nteam colour: {}\n\n\
-             Left/Right model  PgUp/PgDn x10  Home first  T team colour\n\
+            "STA64 {} model viewer\n{}\n\n{}\nteam colour: {}   Borg textures: {}\n\n\
+             Left/Right model  PgUp/PgDn x10  Home first  T team colour  B Borg textures\n\
              left-drag orbit  right-drag pan  wheel zoom  R reset view",
             env!("CARGO_PKG_VERSION"),
             browser.mount_summary,
             browser.info,
             TEAM_COLOURS[browser.team].0,
+            if browser.borg { "on" } else { "off" },
         );
     }
 }

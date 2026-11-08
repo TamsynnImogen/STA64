@@ -7,6 +7,7 @@
 //! time. Until gameplay exists, the executable opens the model viewer.
 
 mod sod_scene;
+mod sprites;
 mod textures;
 mod viewer;
 
@@ -67,6 +68,13 @@ fn main() {
     println!("{summary}");
     let browser = viewer::browser(&vfs, cfg.view.as_deref(), summary);
     println!("{} models visible", browser.models.len());
+    let table = sta_assets::load_sprite_table(&vfs);
+    println!(
+        "sprite tables: {} sprites, {} sprite nodes, {} animations",
+        table.sprites.len(),
+        table.sprite_nodes.len(),
+        table.animations.len()
+    );
 
     App::new()
         .add_plugins(
@@ -85,6 +93,7 @@ fn main() {
         )
         .insert_resource(viewer::Mounted(vfs))
         .insert_resource(browser)
+        .insert_resource(sprites::SpriteTables(std::sync::Arc::new(table)))
         .add_plugins(viewer::ViewerPlugin)
         .run();
 }

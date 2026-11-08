@@ -5,9 +5,11 @@
 //! (`M' = S M S`, `S = diag(1, 1, -1)`). Triangle winding is kept as stored:
 //! with the mirror applied, the file's order is front-facing in Bevy.
 
-use crate::textures::{self, TextureCache};
+use crate::sprites::{self, Billboard, SpriteFx, UvFlipbook};
+use crate::textures::Loader;
+use sta_assets::a2fmt::spr::SpriteTable;
+use sta_assets::spr_anim;
 use bevy::asset::RenderAssetUsages;
-use bevy::image::CompressedImageFormats;
 use bevy::mesh::Indices;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Face, PrimitiveTopology};
@@ -38,6 +40,11 @@ pub struct SpawnStats {
     pub triangles: usize,
     pub missing_textures: Vec<String>,
     pub animated_nodes: usize,
+    pub bump_meshes: usize,
+    pub sprite_nodes: usize,
+    pub unknown_sprite_nodes: Vec<String>,
+    pub emitters: usize,
+    pub flipbooks: usize,
     /// Model-space bounds (Bevy space): centre and radius.
     pub centre: Vec3,
     pub radius: f32,
@@ -72,11 +79,11 @@ pub struct SpawnCtx<'a, 'w, 's> {
     pub commands: &'a mut Commands<'w, 's>,
     pub meshes: &'a mut Assets<Mesh>,
     pub materials: &'a mut Assets<StandardMaterial>,
-    pub images: &'a mut Assets<Image>,
-    pub cache: &'a mut TextureCache,
-    pub vfs: &'a sta_vfs::Vfs,
-    pub formats: CompressedImageFormats,
+    pub textures: Loader<'a>,
     pub team: Color,
+    /// Use Borg-assimilated `_b` texture variants where they exist.
+    pub borg: bool,
+    pub sprites: &'a SpriteTable,
 }
 
 /// Spawn `sod` under `root`. Only the finest LOD level of each LOD switch is shown.
@@ -96,6 +103,14 @@ pub fn spawn(ctx: &mut SpawnCtx, sod: &Sod, root: Entity) -> SpawnStats {
 
     let anims: HashMap<String, &sta_assets::a2fmt::sod::AnimChannel> =
         sod.channels.iter().map(|c| (c.node.to_ascii_lowercase(), c)).collect();
+    // Type 4 references: a texture flipbook on a mesh's UV offset.
+    let flipbooks: HashMap<String, (String, f32)> = sod
+        .anim_refs
+        .iter()
+        .filter(|r| r.ref_type == 4)
+        .map(|r| (r.node.to_ascii_lowercase(), (r.animation.clone(), r.offset)))
+        .collect();
+    let quad = ctx.meshes.add(sprites::unit_quad());
 
     let mut min = Vec3::splat(f32::MAX);
     let mut max = Vec3::splat(f32::MIN);
@@ -138,7 +153,13 @@ pub fn spawn(ctx: &mut SpawnCtx, sod: &Sod, root: Entity) -> SpawnStats {
                 min = min.min(w);
                 max = max.max(w);
             }
-            spawn_mesh(ctx, sod, mesh, id, &mut stats);
+            let flip = flipbooks.get(&node.name.to_ascii_lowercase());
+            spawn_mesh(ctx, sod, mesh, id, flip, &mut stats);
+        }
+        match &node.kind {
+            NodeKind::Sprite => spawn_sprite_node(ctx, node.sprite_node_id(), id, &quad, &mut stats),
+            NodeKind::Emitter { .. } => stats.emitters += 1,
+            _ => {}
         }
 
         for &c in node.children.iter().rev() {
@@ -154,10 +175,68 @@ pub fn spawn(ctx: &mut SpawnCtx, sod: &Sod, root: Entity) -> SpawnStats {
     }
     stats.missing_textures.sort();
     stats.missing_textures.dedup();
+    stats.unknown_sprite_nodes.sort();
+    stats.unknown_sprite_nodes.dedup();
     stats
 }
 
-fn spawn_mesh(ctx: &mut SpawnCtx, sod: &Sod, mesh: &SodMesh, parent: Entity, stats: &mut SpawnStats) {
+fn spawn_sprite_node(ctx: &mut SpawnCtx, id: &str, parent: Entity, quad: &Handle<Mesh>, stats: &mut SpawnStats) {
+    let table = ctx.sprites;
+    let Some(def) = table.sprite_node(id) else {
+        stats.unknown_sprite_nodes.push(id.to_owned());
+        return;
+    };
+    let Some(sprite) = table.sprite(&def.sprite) else {
+        stats.unknown_sprite_nodes.push(format!("{id} (sprite {})", def.sprite));
+        return;
+    };
+    let texture = ctx.textures.colour(&sprite.texture, false);
+    if texture.is_none() {
+        stats.missing_textures.push(sprite.texture.clone());
+    }
+    let material = ctx.materials.add(StandardMaterial {
+        base_color: Color::srgb(def.colour[0], def.colour[1], def.colour[2]),
+        base_color_texture: texture,
+        alpha_mode: sprites::alpha_mode(spr_anim::sprite_blend(&sprite.material)),
+        unlit: true,
+        double_sided: true,
+        cull_mode: None,
+        uv_transform: sprites::uv_affine(spr_anim::sprite_uv(table, sprite, 0.0)),
+        ..default()
+    });
+    // Billboards are sized by half extents, flat sprites by full size.
+    let (scale, billboard) = if def.billboard {
+        (Vec3::new(def.size[0] * 2.0, def.size[1] * 2.0, 1.0), true)
+    } else {
+        (Vec3::new(def.size[0], def.size[1], 1.0), false)
+    };
+    let mut e = ctx.commands.spawn((
+        Mesh3d(quad.clone()),
+        MeshMaterial3d(material.clone()),
+        Transform::from_scale(scale),
+        Visibility::default(),
+        SpriteFx {
+            node_anim: def.animation.clone(),
+            sprite: def.sprite.clone(),
+            colour: def.colour,
+            material,
+        },
+        ChildOf(parent),
+    ));
+    if billboard {
+        e.insert(Billboard);
+    }
+    stats.sprite_nodes += 1;
+}
+
+fn spawn_mesh(
+    ctx: &mut SpawnCtx,
+    sod: &Sod,
+    mesh: &SodMesh,
+    parent: Entity,
+    flipbook: Option<&(String, f32)>,
+    stats: &mut SpawnStats,
+) {
     // Before 1.7 the texture comes from the file's texture-material table.
     let tex_name = mesh.diffuse_texture().map(str::to_owned).or_else(|| {
         sod.texture_materials
@@ -166,12 +245,23 @@ fn spawn_mesh(ctx: &mut SpawnCtx, sod: &Sod, mesh: &SodMesh, parent: Entity, sta
             .map(|t| t.texture.clone())
     });
     let texture = tex_name.as_deref().and_then(|n| {
-        let h = textures::load(n, ctx.vfs, ctx.cache, ctx.images, ctx.formats);
+        let h = ctx.textures.colour(n, ctx.borg);
         if h.is_none() {
             stats.missing_textures.push(n.to_owned());
         }
         h
     });
+    // SOD 1.93 bump path: a height map turned into a normal map.
+    let normal_map = mesh.height_map().and_then(|n| {
+        let h = ctx.textures.normal_from_height(n);
+        if h.is_none() {
+            stats.missing_textures.push(n.to_owned());
+        }
+        h
+    });
+    if normal_map.is_some() {
+        stats.bump_meshes += 1;
+    }
     let (alpha_mode, additive) = blend(mesh);
     let two_sided = mesh.cull == 0;
 
@@ -215,11 +305,15 @@ fn spawn_mesh(ctx: &mut SpawnCtx, sod: &Sod, mesh: &SodMesh, parent: Entity, sta
         stats.triangles += indices.len() / 3;
         stats.meshes += 1;
 
-        let bevy_mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
+        let mut bevy_mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
             .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
             .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
             .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
             .with_inserted_indices(Indices::U32(indices));
+        let mut group_normal_map = normal_map.clone();
+        if group_normal_map.is_some() && bevy_mesh.generate_tangents().is_err() {
+            group_normal_map = None;
+        }
 
         let lm = sod.lighting_material(&group.material);
         let team = group.material.to_ascii_lowercase().starts_with("team");
@@ -228,6 +322,7 @@ fn spawn_mesh(ctx: &mut SpawnCtx, sod: &Sod, mesh: &SodMesh, parent: Entity, sta
         let material = StandardMaterial {
             base_color,
             base_color_texture: texture.clone(),
+            normal_map_texture: group_normal_map,
             alpha_mode,
             unlit: additive || self_illum,
             double_sided: two_sided,
@@ -236,14 +331,23 @@ fn spawn_mesh(ctx: &mut SpawnCtx, sod: &Sod, mesh: &SodMesh, parent: Entity, sta
             reflectance: 0.3,
             ..default()
         };
+        let material = ctx.materials.add(material);
         let mut e = ctx.commands.spawn((
             Mesh3d(ctx.meshes.add(bevy_mesh)),
-            MeshMaterial3d(ctx.materials.add(material)),
+            MeshMaterial3d(material.clone()),
             Transform::IDENTITY,
             ChildOf(parent),
         ));
         if team {
             e.insert(TeamPart);
+        }
+        if let Some((animation, offset)) = flipbook {
+            e.insert(UvFlipbook {
+                animation: animation.clone(),
+                offset: *offset,
+                material,
+            });
+            stats.flipbooks += 1;
         }
     }
 }

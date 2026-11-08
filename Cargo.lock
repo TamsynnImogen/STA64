@@ -5047,6 +5047,7 @@ name = "sta_assets"
 version = "0.1.0"
 dependencies = [
  "a2fmt",
+ "ddsfile",
  "sta_vfs",
 ]
 

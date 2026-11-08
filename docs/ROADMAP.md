@@ -13,8 +13,11 @@
 - [x] `sta_assets`: layer-aware lookup (KTX2 > DDS > TGA > PNG; GLB > glTF > SOD), TGA decode
 - [x] SOD → Bevy scene (vendored `a2fmt`), finest LOD, step animation; 926/927 FO4 SODs parse
 - [x] Model viewer: browse every model, orbit, team colours
-- Borg `_b` / animated `_1.._9` texture variants, named TGA mip chains, height → normal maps
-- Sprite nodes, emitters, texture flipbook animation refs (`.spr`)
+- [x] Borg `_b` texture variants, hand-authored TGA mip chains (`_1.._n`), full mips everywhere
+- [x] SOD 1.93 bump path: height map → normal map (`ST3D_CreateNormalMap` rule)
+- [x] CPU DDS decoder (DXT1/3/5 + uncompressed); all 604 FO4 DDS decode
+- [x] Sprite nodes (running lights, strobes, glows) and SOD texture flipbooks from `.spr`
+- Particle emitters (`@emitter`)
 - M3D models (port A2FOM3D's conversion)
 - glTF/GLB models in the viewer
 

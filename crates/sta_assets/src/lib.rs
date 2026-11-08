@@ -14,6 +14,10 @@ use sta_vfs::Vfs;
 
 pub use a2fmt;
 
+pub mod dds;
+pub mod pixels;
+pub mod spr_anim;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextureFormat {
     Ktx2,
@@ -117,6 +121,8 @@ pub enum AssetError {
     Io(String, std::io::Error),
     Sod(String, a2fmt::sod::Error),
     Tga(String, a2fmt::tga::Error),
+    Dds(String, dds::DdsError),
+    Unsupported(String),
 }
 
 impl std::fmt::Display for AssetError {
@@ -126,6 +132,8 @@ impl std::fmt::Display for AssetError {
             Self::Io(n, e) => write!(f, "{n}: {e}"),
             Self::Sod(n, e) => write!(f, "{n}: SOD {e:?}"),
             Self::Tga(n, e) => write!(f, "{n}: TGA {e:?}"),
+            Self::Dds(n, e) => write!(f, "{n}: DDS {e}"),
+            Self::Unsupported(n) => write!(f, "{n}: no CPU decoder for this format"),
         }
     }
 }
@@ -143,7 +151,8 @@ pub fn load_sod(vfs: &Vfs, path: &str) -> Result<a2fmt::sod::Sod, AssetError> {
     a2fmt::sod::Sod::parse(&data).map_err(|e| AssetError::Sod(path.to_owned(), e))
 }
 
-/// A TGA decoded to RGBA8, rows top-down.
+/// An image decoded to RGBA8, rows top-down.
+#[derive(Clone, Debug)]
 pub struct Rgba {
     pub width: u32,
     pub height: u32,
@@ -164,6 +173,61 @@ pub fn decode_tga(path: &str, data: &[u8]) -> Result<Rgba, AssetError> {
         has_alpha,
         pixels,
     })
+}
+
+/// The engine's sprite tables: `sprites/sprites.spr` and everything it
+/// `@include`s, each resolved through the VFS (highest mod layer first).
+pub fn load_sprite_table(vfs: &Vfs) -> a2fmt::spr::SpriteTable {
+    a2fmt::spr::SpriteTable::load("sprites.spr", |name| {
+        let name = name.replace('\\', "/");
+        vfs.read(&format!("sprites/{name}")).and_then(Result::ok)
+    })
+}
+
+/// Find a texture, preferring its Borg-assimilated `<name>_b` variant when
+/// `borg` is set (the engine swaps to these when a ship is assimilated).
+pub fn find_texture_variant(vfs: &Vfs, name: &str, borg: bool) -> Option<(String, TextureFormat)> {
+    if borg && let Some(found) = find_texture(vfs, &format!("{}_b", stem(name))) {
+        return Some(found);
+    }
+    find_texture(vfs, name)
+}
+
+/// Decode a texture file to RGBA8 on the CPU (TGA and DDS).
+pub fn decode_rgba(vfs: &Vfs, path: &str, fmt: TextureFormat) -> Result<Rgba, AssetError> {
+    let data = read(vfs, path)?;
+    match fmt {
+        TextureFormat::Tga => decode_tga(path, &data),
+        TextureFormat::Dds => dds::decode(&data).map_err(|e| AssetError::Dds(path.to_owned(), e)),
+        _ => Err(AssetError::Unsupported(path.to_owned())),
+    }
+}
+
+/// The full mip chain of a TGA: the base, then hand-authored levels named
+/// `<base>_<n>` or `<base><n>` beside it (accepted only at exactly half size per
+/// level, as the engine does), then box-filtered levels down to 1x1.
+pub fn tga_mip_chain(vfs: &Vfs, path: &str, base: Rgba) -> Vec<Rgba> {
+    let (dir, file) = path.rsplit_once('/').unwrap_or(("", path));
+    let stem = file.strip_suffix(".tga").unwrap_or(file);
+    let mut levels = vec![base];
+    for level in 1u32.. {
+        let last = levels.last().unwrap();
+        let (want_w, want_h) = ((last.width / 2).max(1), (last.height / 2).max(1));
+        if last.width == 1 && last.height == 1 {
+            break;
+        }
+        let found = [format!("{stem}_{level}"), format!("{stem}{level}")].into_iter().find_map(|n| {
+            let p = if dir.is_empty() { format!("{n}.tga") } else { format!("{dir}/{n}.tga") };
+            vfs.resolve(&p)?;
+            let img = decode_tga(&p, &read(vfs, &p).ok()?).ok()?;
+            (img.width == want_w && img.height == want_h).then_some(img)
+        });
+        match found {
+            Some(img) => levels.push(img),
+            None => break,
+        }
+    }
+    pixels::complete_mips(levels)
 }
 
 #[cfg(test)]
@@ -246,5 +310,31 @@ mod tests {
             eprintln!("  missing {t}");
         }
         assert!(ok > 0);
+
+        let mut dds_ok = 0;
+        let mut dds_fail = Vec::new();
+        for p in vfs.list("textures").into_iter().filter(|p| p.ends_with(".dds")) {
+            match decode_rgba(&vfs, &p, TextureFormat::Dds) {
+                Ok(img) => {
+                    assert_eq!(img.pixels.len(), (img.width * img.height * 4) as usize);
+                    dds_ok += 1;
+                }
+                Err(e) => dds_fail.push(e.to_string()),
+            }
+        }
+        let t = load_sprite_table(&vfs);
+        eprintln!(
+            "SPR: {} sprites, {} sprite nodes, {} animations, {} emitters, {} missing includes, {} warnings",
+            t.sprites.len(),
+            t.sprite_nodes.len(),
+            t.animations.len(),
+            t.emitters.len(),
+            t.missing_includes.len(),
+            t.warnings.len()
+        );
+        eprintln!("DDS: {dds_ok} decoded, {} failed", dds_fail.len());
+        for f in dds_fail.iter().take(10) {
+            eprintln!("  fail {f}");
+        }
     }
 }

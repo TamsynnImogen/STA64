@@ -7,4 +7,5 @@ license.workspace = true
 
 [dependencies]
 a2fmt.workspace = true
+ddsfile = "0.6"
 sta_vfs.workspace = true
