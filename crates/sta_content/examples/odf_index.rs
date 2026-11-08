@@ -61,6 +61,18 @@ fn main() {
         let chain: Vec<String> = all.iter().map(|e| format!("{}:{}", vfs.layers()[e.layer].name(), e.path)).collect();
         println!("  {stem}: {}", chain.join(" > "));
     }
+    let (mut ok, mut missing, mut cycles) = (0, Vec::new(), 0);
+    for (stem, _) in index.iter() {
+        match sta_odf::resolve_layered(stem, &mut |n, v| index.load(&vfs, n, v)) {
+            Ok(_) => ok += 1,
+            Err(sta_odf::OdfError::IncludeNotFound(inc)) => missing.push(format!("{stem} -> {inc}")),
+            Err(sta_odf::OdfError::IncludeCycle(_)) => cycles += 1,
+        }
+    }
+    println!("resolved {ok}, {} with a missing include, {cycles} include cycles", missing.len());
+    for m in missing.iter().take(5) {
+        println!("  missing: {m}");
+    }
     println!("{} same-root duplicates", warnings.len());
     for w in warnings.iter().take(15) {
         println!("  {w}");

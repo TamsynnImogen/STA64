@@ -25,12 +25,12 @@ so STA64 can track what it reads and what it still ignores.
 
 | | A1 | A2 | FO |
 |---|---:|---:|---:|
-| distinct ODF keys (STA64 ✓ / all) | 37 / 571 | 56 / 970 | 46 / 893 |
-| ODF class labels | 84 | 122 | 76 |
+| distinct ODF keys (STA64 ✓ / all) | 43 / 572 | 65 / 970 | 56 / 893 |
+| ODF class labels | 82 | 122 | 76 |
 | distinct CFG keys (✓ / all) | 0 / 364 | 2 / 443 | 2 / 474 |
-| distinct AIP variables (✓ / all) | 0 / 61 | 0 / 67 | 0 / 62 |
+| distinct AIP variables (✓ / all) | 2 / 61 | 3 / 67 | 3 / 62 |
 
-Keys found only in one game: A1 64, A2 134, FO 256.
+Keys found only in one game: A1 64, A2 133, FO 256.
 
 ## ODF syntax beyond `key = value`
 
@@ -48,14 +48,10 @@ Unparsed ODF line shapes (`w` word, `N` number), most common first:
 | `}` | 219 | `events.odf: }` |
 | `w{` | 218 | `events.odf: DefaultMarkerOnly{` |
 | `w` | 169 | `events.odf: Table` |
-| `` | 96 | `assets.zfs:audio.odf: ` |
 | `[w]` | 75 | `assets.zfs:aster.odf: [GameObjectClass]` |
-| `*w` | 74 | `assets.zfs:aster.odf: *l` |
 | `w "…"` | 59 | `events.odf: Text "VTune sampling turned on."` |
-| `-` | 55 | `assets.zfs:b_list6.odf: -` |
 | `w w` | 14 | `events.odf: SoundPriority 2` |
 | `w w w w w w w w w w w` | 7 | `events.odf: Marker radius 128 shrink 0.025 time 4 color 1 0 0` |
-| `w ¦w` | 5 | `assets.zfs:gchainp.odf: switchToAttack ¦V` |
 | `/w w w w` | 2 | `assets.zfs:shieldi.odf: /energy cost per second` |
 | `/ /*************************************` | 2 | `assets.zfs:fresear2.odf: / /*********************************************************` |
 | `w { #w w w w w w w w w` | 1 | `events.odf: InvalidEvent { #this event should be the first in this file` |
@@ -114,7 +110,7 @@ A key whose value is followed by indented `"name" value…` rows (FO's
 ## Sources and regeneration
 
 - Armada I: retail install; most ODFs and all techtrees are in `assets.zfs`
-  (ZFS v1, 100-entry blocks, 16-char names, data XOR'd with the 4-byte header key,
+  (ZFS v1, 100-entry blocks, 16-char names, whole words XOR'd with the 4-byte header key,
   read by the script). `addon/` ODFs are loose.
 - Armada II: retail 1.1 install, loose files.
 - Fleet Operations: loose `Data/` plus `ODF.fpq` (extracted with `sta_fpq`'s

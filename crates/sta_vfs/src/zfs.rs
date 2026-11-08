@@ -7,10 +7,11 @@
 //! - Blocks, chained: a `next_block` offset (0 ends the chain), then
 //!   `files_per_block` entries of `name[max_name]` (NUL-padded), `offset`,
 //!   `index`, `size`, `time`, `flags`. Unused slots have an empty name.
-//! - Data: `size` bytes at `offset`. When `key` is not 0 every byte is XOR'd
-//!   with the key's bytes in turn (`key.to_le_bytes()[i % 4]`, `i` counted
-//!   from the start of the file's data). `assets.zfs` has a key;
-//!   `objtxt.zfs` has 0.
+//! - Data: `size` bytes at `offset`. When `key` is not 0, each whole 4-byte
+//!   word is XOR'd with the key (byte `i` with `key.to_le_bytes()[i % 4]`);
+//!   the last `size % 4` bytes are stored plain. (Decrypting them too turns a
+//!   file's closing `"\r\n` into junk, which is how the rule was found.)
+//!   `assets.zfs` has a key; `objtxt.zfs` has 0.
 //!
 //! Every entry in the retail archives has `flags == 0` (stored). Other flags
 //! mean compression this reader does not know; such entries are listed and
@@ -132,7 +133,10 @@ impl Zfs {
         if self.key == [0; 4] {
             return Ok(raw.to_vec());
         }
-        Ok(raw.iter().enumerate().map(|(i, &c)| c ^ self.key[i & 3]).collect())
+        let whole = raw.len() & !3;
+        let mut out: Vec<u8> = raw[..whole].iter().enumerate().map(|(i, &c)| c ^ self.key[i & 3]).collect();
+        out.extend_from_slice(&raw[whole..]);
+        Ok(out)
     }
 }
 
@@ -165,7 +169,8 @@ pub(crate) mod tests {
                         rec[max_name + j * 4..max_name + j * 4 + 4].copy_from_slice(&v.to_le_bytes());
                     }
                     let k = key.to_le_bytes();
-                    data.extend(bytes.iter().enumerate().map(|(i, &c)| if key == 0 { c } else { c ^ k[i & 3] }));
+                    let whole = bytes.len() & !3;
+                    data.extend(bytes.iter().enumerate().map(|(i, &c)| if i < whole { c ^ k[i & 3] } else { c }));
                     data_at += bytes.len();
                 }
                 out.extend_from_slice(&rec);
@@ -178,7 +183,8 @@ pub(crate) mod tests {
     #[test]
     fn reads_encrypted_and_plain_over_several_blocks() {
         let files: Vec<(String, Vec<u8>)> =
-            (0..7).map(|i| (format!("f{i}.odf"), format!("classLabel = \"x{i}\"\r\n").into_bytes())).collect();
+            // Lengths 19..=25 cover every `len % 4`.
+            (0..7).map(|i| (format!("f{i}.odf"), format!("classLabel = \"{}\"\r\n", "x".repeat(i + 1)).into_bytes())).collect();
         let refs: Vec<(&str, &[u8])> = files.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
         for key in [0, 0x9466_279b] {
             let z = Zfs::from_bytes(build(&refs, key, 3)).unwrap();
@@ -188,6 +194,23 @@ pub(crate) mod tests {
                 assert_eq!(&z.read(i).unwrap(), bytes, "key {key:#x}");
             }
         }
+    }
+
+    #[test]
+    fn tail_bytes_are_plain() {
+        // Known plaintext from A1's mdmoon1.odf: 23 bytes, so the last 3 are not XOR'd.
+        let key: u32 = 0x9466_279b;
+        let plain = b"#include \"mdmoon.odf\"\r\n";
+        let k = key.to_le_bytes();
+        let mut raw: Vec<u8> = plain.iter().enumerate().map(|(i, &c)| c ^ k[i & 3]).collect();
+        raw[20..].copy_from_slice(&plain[20..]);
+        let mut b = build(&[("mdmoon1.odf", b"")], key, 4);
+        let at = b.len() as u32;
+        b.extend_from_slice(&raw);
+        let rec = 28 + 4;
+        b[rec + 16..rec + 20].copy_from_slice(&at.to_le_bytes());
+        b[rec + 24..rec + 28].copy_from_slice(&(raw.len() as u32).to_le_bytes());
+        assert_eq!(Zfs::from_bytes(b).unwrap().read(0).unwrap(), plain);
     }
 
     #[test]
