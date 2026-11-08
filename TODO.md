@@ -14,6 +14,7 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 - [?] Movement smoothness after the sprite-material fix — 19b7300
 - [?] tutorialgameplay (FO4): no more grey wash (starfield clouds were sky-sized) and no giant blue disc; FO's background planets (`map_planet_class*`) sit where the map puts them but never cover ships; suns still behind everything — b6bc4f8
 - [?] FO background planets (`map_planet_class*`, e.g. banana split, tutorialgameplay): ground texture visible under a thin, lit cloud shell, not a pale solid ball — 3e24321
+- [?] Strategic icons: zoom out and ships/stations turn into solid team-colour silhouettes (fade in as they get small, ships turn with heading); Tab cycles auto/always/off; click or box-select works on icons, selected icons get a green ring — ICONFIX
 - [?] Starfield star size (estimate: ODF `.scale` = world units seen from 5k): point stars a few px, FO star clouds ~6° — b6bc4f8
 - [?] Ships near a planet's day side / inside nebulae take their coloured light (planet glow, nebula lights); not overpowering? — 8a95cee
 - [?] Nebulae as volumetric gas (Mutara purple/pink etc.) instead of billboards; ships inside show correctly; FPS when zoomed into a big nebula — e4eb7c7
@@ -35,6 +36,7 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 
 ## Now (M2: a map you can fly in)
 
+- [ ] Strategic view, next: stack overlapping icons into one fleet icon with a count (Sins-style); grid/height bars at strategic zoom (`cfgSTRATEGIC_GRID_RENDER`)
 - [ ] Custom SOD materials (`wwarpcoreol`, `xore`, `wtractor`, `zferengi`, … ~30 names, mostly weapon/effect parts) draw as plain opaque; find what each engine material does (`blend_survey` example lists them)
 
 - [ ] Refit map objects, in order:

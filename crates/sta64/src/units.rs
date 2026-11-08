@@ -135,7 +135,7 @@ fn select(
     keys: Res<ButtonInput<KeyCode>>,
     window: Query<&Window, With<PrimaryWindow>>,
     camera: Query<(&Camera, &GlobalTransform), crate::map::MainCamera>,
-    units: Query<(Entity, &Unit, &GlobalTransform)>,
+    units: Query<(Entity, &Unit, &GlobalTransform, Option<&crate::strategic::Strategic>)>,
     selected: Query<Entity, With<Selected>>,
     mut drag: ResMut<Drag>,
     mut boxes: Query<(&mut Node, &mut Visibility), With<SelectBox>>,
@@ -171,7 +171,7 @@ fn select(
     }
     if dragging {
         let (lo, hi) = (start.min(cursor), start.max(cursor));
-        for (e, _, gt) in &units {
+        for (e, _, gt, _) in &units {
             if let Ok(p) = cam.0.world_to_viewport(cam.1, gt.translation())
                 && p.cmpge(lo).all()
                 && p.cmple(hi).all()
@@ -180,9 +180,22 @@ fn select(
             }
         }
     } else {
-        // Nearest unit whose sphere the ray passes through.
+        // A unit whose strategic icon is under the cursor (nearest icon centre)...
+        let icon = units
+            .iter()
+            .filter_map(|(e, _, _, s)| {
+                let s = s.filter(|s| s.shown > 0.5)?;
+                let d = s.screen.distance(cursor);
+                (d <= s.size_px * 0.6).then_some((d, e))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0));
+        if let Some((_, e)) = icon {
+            commands.entity(e).insert(Selected);
+            return;
+        }
+        // ...else the nearest unit whose sphere the ray passes through.
         let mut best: Option<(f32, Entity)> = None;
-        for (e, u, gt) in &units {
+        for (e, u, gt, _) in &units {
             let to = gt.translation() - ray.origin;
             let t = to.dot(*ray.direction);
             if t < 0.0 {

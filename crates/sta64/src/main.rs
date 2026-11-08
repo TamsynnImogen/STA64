@@ -13,6 +13,7 @@ mod map;
 mod model_scene;
 mod nebula;
 mod space;
+mod strategic;
 mod sprites;
 mod surfaces;
 mod textures;

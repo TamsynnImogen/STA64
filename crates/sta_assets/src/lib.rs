@@ -21,6 +21,7 @@ pub mod dds;
 pub mod m3d;
 pub mod model;
 pub mod pixels;
+pub mod silhouette;
 pub mod spr_anim;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

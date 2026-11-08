@@ -211,6 +211,7 @@ type MapState<'w> = (
 
 /// The ambient light and the two map lights, as one system parameter.
 type Lighting<'w, 's> = (
+    ResMut<'w, crate::strategic::Silhouettes>,
     ResMut<'w, GlobalAmbientLight>,
     Query<'w, 's, (&'static MapLight, &'static mut Transform, &'static mut DirectionalLight), Without<Orbit>>,
 );
@@ -237,6 +238,8 @@ impl Plugin for MapPlugin {
             .add_plugins(crate::planet::PlanetPlugin)
             .add_plugins(crate::rock::RockPlugin)
             .add_plugins(crate::nebula::NebulaPlugin)
+            .add_plugins(crate::strategic::StrategicPlugin)
+            .init_resource::<crate::strategic::Silhouettes>()
             .add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default())
             .add_plugins(HierarchyPropagatePlugin::<RenderLayers>::new(PostUpdate))
             .add_systems(Startup, setup)
@@ -431,7 +434,7 @@ fn rebuild(
     state: MapState,
     lighting: Lighting,
 ) {
-    let (mut ambient, mut lights) = lighting;
+    let (mut silhouettes, mut ambient, mut lights) = lighting;
     let (mut particles, mut game, mut limits, mut planet_materials, mut nebula_materials, noise) = state;
     if !browser.dirty {
         return;
@@ -637,6 +640,7 @@ fn rebuild(
         if background_obj {
             commands.entity(entity).insert(BackgroundObject);
         }
+        let units_before = units;
         // Craft with a physics ODF move: they become simulation units.
         if let Some(phys) = odf.str("physicsFile").filter(|p| !p.is_empty()).map(|p| p.trim_end_matches(".odf").to_owned())
             && let Some(ph) = catalogue.odf(&vfs.0, &phys)
@@ -659,6 +663,24 @@ fn rebuild(
             units += 1;
         }
         let team = if o.team > 0 { teams.0.get(o.team as usize).map(|t| t.1).unwrap_or(neutral) } else { neutral };
+        // Team-owned ships and stations: their strategic icon, the mod's `<model>_sv`
+        // sprite or a silhouette baked from the model.
+        let class = odf.class_label().unwrap_or("").to_ascii_lowercase();
+        if o.team > 0 && !matches!(class.as_str(), "background_obj" | "latinum" | "asteroidfield" | "nebula_obj" | "planet" | "wormhole_obj") {
+            let radius = model.bounds().map(|(lo, hi)| (Vec3::from(hi) - Vec3::from(lo)).length() * 0.5).unwrap_or(20.0) * scale;
+            let mobile = units_before != units;
+            let mut icon = crate::strategic::Strategic::new(crate::strategic::shape_for(&class, mobile), team, radius);
+            let sv = tables.0.sprite(&format!("{}_sv", model_name(&odf, &o.odf)));
+            if let Some(sprite) = sv
+                && let Some(tex) = (Loader { vfs: &vfs.0, cache: &mut cache, images: &mut images, formats }).colour(&sprite.texture, false)
+            {
+                let uv = sta_assets::spr_anim::sprite_uv(&tables.0, sprite, 0.0);
+                icon = icon.with_image(tex, Some(uv));
+            } else if let Some(img) = silhouettes.get(&path, &model, &mut images) {
+                icon = icon.with_image(img, None);
+            }
+            commands.entity(entity).insert(icon);
+        }
         let mut ctx = SpawnCtx {
             commands: &mut commands,
             meshes: &mut meshes,
@@ -845,7 +867,7 @@ fn hud(browser: Res<MapBrowser>, mut q: Query<&mut Text, With<MapHud>>) {
     for mut t in &mut q {
         t.0 = format!(
             "STA64 {} map view\n{}\n\n{}\n\nleft click/drag select (Shift adds)  right click move  Space stop\n\
-             Left/Right map  PgUp/PgDn x10  WASD pan  middle-drag orbit  wheel zoom  R reset",
+             Left/Right map  PgUp/PgDn x10  Tab icons  WASD pan  middle-drag orbit  wheel zoom  R reset",
             env!("CARGO_PKG_VERSION"),
             browser.mount_summary,
             browser.info
