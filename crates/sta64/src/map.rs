@@ -458,6 +458,31 @@ fn rebuild(
             hidden += 1;
             continue;
         }
+        // Every nebula carries a light in its glow colour (Refit's lights.rs: the ODF's
+        // red/green/blue_glow x 1.4, out to 8x its falloff; a gas class takes its
+        // recipe's hue at that strength). Calibrated against the key light at the
+        // falloff's start, cut off at its end.
+        if odf.class_label().is_some_and(|c| c.eq_ignore_ascii_case("nebula_obj")) {
+            let glow = Vec3::new(odf.f32("red_glow").unwrap_or(0.0), odf.f32("green_glow").unwrap_or(0.0), odf.f32("blue_glow").unwrap_or(0.0));
+            let strength = glow.length();
+            if strength > 0.0 {
+                let hue = crate::nebula::recipe(&vfs.0, &o.odf).map(|r| Vec3::from(r.gas_a)).filter(|h| h.length() > 0.0).unwrap_or(glow);
+                let c = hue / hue.max_element().max(1e-3);
+                let start = odf.f32("glow_falloff_start").unwrap_or(60.0) * 8.0;
+                let reach = start + odf.f32("glow_falloff_range").unwrap_or(60.0) * 8.0;
+                commands.spawn((
+                    PointLight {
+                        color: Color::srgb(c.x, c.y, c.z),
+                        intensity: 1.4 * strength * crate::planet::KEY_LUX * 4.0 * std::f32::consts::PI * start * start,
+                        range: reach,
+                        shadow_maps_enabled: false,
+                        ..default()
+                    },
+                    Transform::from_xyz(o.transform[9], o.transform[10], -o.transform[11]),
+                    ChildOf(root),
+                ));
+            }
+        }
         // A nebula class with a gas recipe: drawn as one field, not as billboards.
         if odf.class_label().is_some_and(|c| c.eq_ignore_ascii_case("nebula_obj") || c.eq_ignore_ascii_case("latinum")) {
             let key = o.odf.to_ascii_lowercase();

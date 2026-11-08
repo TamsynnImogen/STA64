@@ -26,6 +26,18 @@ const GLINT_POW: f32 = 40.0;
 const HALO: f32 = 1.0;
 const HALO_HEIGHT: f32 = 0.04;
 const HALO_FORWARD: f32 = 2.0;
+/// Planet glow (Refit's lights.rs): the sun's colour x the ground's mean x 1.5, full
+/// at the surface, gone at 6 radii.
+const GLOW: f32 = 1.5;
+const GLOW_RANGE: f32 = 6.0;
+/// The map's key light (lux), which the glows are calibrated against.
+pub const KEY_LUX: f32 = 6000.0;
+
+/// A planet's glow light: kept on the planet's day side.
+#[derive(Component)]
+struct PlanetGlow {
+    radius: f32,
+}
 
 #[derive(Clone, Copy, Default, ShaderType, Debug)]
 pub struct PlanetParams {
@@ -97,7 +109,7 @@ impl Plugin for PlanetPlugin {
         embedded_asset!(app, "planet.wgsl");
         app.add_plugins(MaterialPlugin::<PlanetMaterial>::default())
             .init_resource::<crate::surfaces::Surfaces>()
-            .add_systems(Update, (crate::surfaces::poll, apply_surfaces).chain())
+            .add_systems(Update, ((crate::surfaces::poll, apply_surfaces).chain(), place_glows))
             .add_systems(PostUpdate, update.after(TransformSystems::Propagate));
     }
 }
@@ -236,6 +248,25 @@ pub fn spawn(
             ));
         }
     }
+    // The glow: Bevy's point lights fall off with distance squared, so it matches the
+    // engine's strength at the surface and is cut off at the engine's range.
+    let lum = gc[0] * 0.3 + gc[1] * 0.5 + gc[2] * 0.2;
+    if lum > 0.0 && radius > 0.0 {
+        let colour = Color::srgb(gc[0] / lum.max(1e-3) * 0.5, gc[1] / lum.max(1e-3) * 0.5, gc[2] / lum.max(1e-3) * 0.5);
+        commands.spawn((
+            PointLight {
+                color: colour,
+                intensity: GLOW * lum * KEY_LUX * 4.0 * std::f32::consts::PI * radius * radius,
+                range: radius * GLOW_RANGE,
+                radius: radius * 0.5,
+                shadow_maps_enabled: false,
+                ..default()
+            },
+            Transform::IDENTITY,
+            ChildOf(parent),
+            PlanetGlow { radius },
+        ));
+    }
     commands.entity(parent).insert(PlanetBody {
         materials: handles,
         ground: ground_mats,
@@ -304,6 +335,25 @@ fn apply_surfaces(
 
 /// Each frame: the camera, the planet's centre and the two map lights into every
 /// planet material. Halo radii scale with the planet's world scale.
+/// Keep each glow a radius out toward the key light: its day side lights ships.
+fn place_glows(
+    lights: Query<(&GlobalTransform, &DirectionalLight)>,
+    planets: Query<&GlobalTransform, With<PlanetBody>>,
+    mut glows: Query<(&PlanetGlow, &ChildOf, &mut Transform)>,
+) {
+    let Some(key) = lights.iter().max_by(|a, b| a.1.illuminance.total_cmp(&b.1.illuminance)).map(|(t, _)| t.back().as_vec3()) else {
+        return;
+    };
+    for (g, child_of, mut tf) in &mut glows {
+        let Ok(p) = planets.get(child_of.parent()) else { continue };
+        let inv = p.compute_transform().rotation.inverse();
+        let want = inv * key * g.radius;
+        if tf.translation.distance(want) > 1e-3 {
+            tf.translation = want;
+        }
+    }
+}
+
 fn update(
     camera: Query<&GlobalTransform, With<Camera3d>>,
     lights: Query<(&GlobalTransform, &DirectionalLight)>,
