@@ -1,7 +1,6 @@
-//! The test bench without Bevy: scene, command and scenario parsers, the
-//! in-process runner and report writers (docs/TESTBENCH.md).
+//! Test bench (owner lane: TOOL; see `docs/TESTBENCH.md`).
 //!
-//! Owner: the TOOL lane (docs/WORKPLAN.md): TOOL-01 (parsers), TOOL-02
-//! (tier-1 runner), TOOL-04 (the `sta-bench` binary), TOOL-05 (map corpus
-//! test). Created empty by R0-2 so the workspace members are fixed; the lane
-//! fills it.
+//! Bevy-free: scenes, commands and scenarios are plain data here, so the same
+//! types serve the in-process runner, `sta64 --scene` and the `sta-bench` CLI.
+
+pub mod parse;
