@@ -7,6 +7,7 @@
 //! time. Until gameplay exists, the executable opens the model viewer.
 
 mod particles;
+mod planet;
 mod map;
 mod model_scene;
 mod space;

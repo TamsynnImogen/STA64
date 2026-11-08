@@ -5093,6 +5093,7 @@ name = "sta64"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "naga",
  "sta_assets",
  "sta_bzn",
  "sta_mission",

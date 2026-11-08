@@ -201,6 +201,7 @@ impl Plugin for MapPlugin {
                 pan: None,
             })
             .add_plugins(crate::units::UnitsPlugin)
+            .add_plugins(crate::planet::PlanetPlugin)
             .add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default())
             .add_systems(Startup, setup)
             .add_systems(
@@ -378,11 +379,16 @@ fn rebuild(
     tables: Res<SpriteTables>,
     teams: Res<TeamColours>,
     mut orbit: Query<&mut Orbit>,
-    state: (ResMut<crate::particles::Particles>, ResMut<crate::units::Game>, ResMut<CameraLimits>),
+    state: (
+        ResMut<crate::particles::Particles>,
+        ResMut<crate::units::Game>,
+        ResMut<CameraLimits>,
+        ResMut<Assets<crate::planet::PlanetMaterial>>,
+    ),
     lighting: Lighting,
 ) {
     let (mut ambient, mut lights) = lighting;
-    let (mut particles, mut game, mut limits) = state;
+    let (mut particles, mut game, mut limits, mut planet_materials) = state;
     if !browser.dirty {
         return;
     }
@@ -524,7 +530,7 @@ fn rebuild(
                 images: &mut images,
                 formats,
             };
-            missing.extend(crate::space::planet(&mut commands, &mut meshes, &mut materials, &mut loader, &ground, &atmo, radius, entity));
+            missing.extend(crate::planet::spawn(&mut commands, &mut meshes, &mut planet_materials, &mut loader, &ground, &atmo, radius, entity));
             planets += 1;
             drawn += 1;
             continue;

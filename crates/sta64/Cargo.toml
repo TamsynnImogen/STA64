@@ -20,3 +20,6 @@ dev = ["bevy/dynamic_linking"]
 
 [build-dependencies]
 winresource = "0.1.34"
+
+[dev-dependencies]
+naga = { version = "30.0.1", features = ["wgsl-in"] }

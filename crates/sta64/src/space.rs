@@ -177,7 +177,7 @@ pub fn starfield(
 /// longitude l into it and polar angle t from +y:
 /// u = lerp((2q+1)/8, (q pi/2 + l) / 2pi, w) * 4/n, v = t/pi, with w rising from 0
 /// at a pole to 1 at 45 degrees from it.
-fn sphere(start: usize, count: usize, n: usize, radius: f32) -> Mesh {
+pub fn sphere(start: usize, count: usize, n: usize, radius: f32) -> Mesh {
     const NL: usize = 24;
     const NT: usize = 48;
     let mut pos = Vec::new();
@@ -217,57 +217,4 @@ fn sphere(start: usize, count: usize, n: usize, radius: f32) -> Mesh {
         .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, nrm)
         .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uv)
         .with_inserted_indices(Indices::U32(idx))
-}
-
-#[allow(clippy::too_many_arguments)]
-/// A planet body under `parent`: ground hemispheres and the cloud shell.
-/// Returns the texture names that were not found.
-pub fn planet(
-    commands: &mut Commands,
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
-    loader: &mut Loader,
-    ground: &str,
-    atmosphere: &str,
-    radius: f32,
-    parent: Entity,
-) -> Vec<String> {
-    let mut missing = Vec::new();
-    let lit = |tex: Option<Handle<Image>>, alpha_mode: AlphaMode| StandardMaterial {
-        base_color_texture: tex,
-        perceptual_roughness: 0.9,
-        reflectance: 0.2,
-        alpha_mode,
-        ..default()
-    };
-    if !ground.is_empty() {
-        for h in 0..2 {
-            let name = format!("{ground}{}", h + 1);
-            let tex = loader.colour(&name, false);
-            if tex.is_none() {
-                missing.push(name);
-            }
-            commands.spawn((
-                Mesh3d(meshes.add(sphere(2 * h, 2, 2, radius))),
-                MeshMaterial3d(materials.add(lit(tex, AlphaMode::Opaque))),
-                Transform::IDENTITY,
-                ChildOf(parent),
-            ));
-        }
-    }
-    if !atmosphere.is_empty() {
-        let tex = loader.colour(atmosphere, false);
-        if tex.is_none() {
-            missing.push(atmosphere.to_owned());
-        }
-        let shell_r = if ground.is_empty() { radius } else { radius * 1.01 };
-        let alpha = if ground.is_empty() { AlphaMode::Opaque } else { AlphaMode::Blend };
-        commands.spawn((
-            Mesh3d(meshes.add(sphere(0, 4, 4, shell_r))),
-            MeshMaterial3d(materials.add(lit(tex, alpha))),
-            Transform::IDENTITY,
-            ChildOf(parent),
-        ));
-    }
-    missing
 }
