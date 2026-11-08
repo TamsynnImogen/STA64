@@ -26,16 +26,17 @@ pub mod event;
 pub mod fake;
 pub mod setup;
 pub mod source;
+pub mod spatial;
 pub mod spawn;
 pub mod view;
 pub mod world;
 
+/// Movement limits now live with the rest of a unit's definition.
+pub use sta_content::MoveStats;
 /// The fixed-point type and its module, now in `sta_core`; re-exported so
 /// `sta_sim::Fixed` and `sta_sim::fixed::Fixed` keep working.
 pub use sta_core::fixed;
 pub use sta_core::{ContentKey, EntityId, Fixed, PlayerId, SEAM_REV, TICK_HZ, TeamId, Tick, Vec3};
-/// Movement limits now live with the rest of a unit's definition.
-pub use sta_content::MoveStats;
 
 pub use event::SimEvent;
 pub use source::WorldSource;
@@ -105,7 +106,13 @@ fn clamp(v: Fixed, lo: Fixed, hi: Fixed) -> Fixed {
 
 /// Move `v` toward `goal` by at most `step`.
 fn approach(v: Fixed, goal: Fixed, step: Fixed) -> Fixed {
-    if v < goal { if goal - v < step { goal } else { v + step } } else if v - goal < step { goal } else { v - step }
+    if v < goal {
+        if goal - v < step { goal } else { v + step }
+    } else if v - goal < step {
+        goal
+    } else {
+        v - step
+    }
 }
 
 /// Rotate a unit vector by a small angle `a` (radians; |a| well under 1):
@@ -117,7 +124,11 @@ fn rotate(h: (Fixed, Fixed), a: Fixed) -> (Fixed, Fixed) {
     let x = h.0 * c - h.1 * s;
     let z = h.0 * s + h.1 * c;
     let len = (x * x + z * z).sqrt();
-    if len == Fixed::ZERO { h } else { (x / len, z / len) }
+    if len == Fixed::ZERO {
+        h
+    } else {
+        (x / len, z / len)
+    }
 }
 
 /// Distance at which a unit counts as arrived.
@@ -150,20 +161,36 @@ impl Unit {
         let cross = self.heading.0 * tz - self.heading.1 * tx;
         let dot = self.heading.0 * tx + self.heading.1 * tz;
 
-        let frac = if st.max_speed > Fixed::ZERO { clamp(self.speed / st.max_speed, Fixed::ZERO, Fixed::ONE) } else { Fixed::ZERO };
+        let frac = if st.max_speed > Fixed::ZERO {
+            clamp(self.speed / st.max_speed, Fixed::ZERO, Fixed::ONE)
+        } else {
+            Fixed::ZERO
+        };
         let omega_max = st.turn_omega * (st.turn_at_rest + (Fixed::ONE - st.turn_at_rest) * frac);
-        let sign = if cross < Fixed::ZERO { -Fixed::ONE } else { Fixed::ONE };
+        let sign = if cross < Fixed::ZERO {
+            -Fixed::ONE
+        } else {
+            Fixed::ONE
+        };
         // Remaining turn angle from the sine and the side: asin(c) ~ c + c^3/6
         // ahead, pi minus that behind.
         let c = cross.abs();
         let ahead = c + c * c * c / Fixed::from_int(6);
-        let angle = if dot >= Fixed::ZERO { ahead } else { Fixed::from_f64(std::f64::consts::PI) - ahead };
+        let angle = if dot >= Fixed::ZERO {
+            ahead
+        } else {
+            Fixed::from_f64(std::f64::consts::PI) - ahead
+        };
         // The fastest turn that can still stop on the heading with the turn
         // acceleration available: omega = sqrt(2 alpha angle). Asking for more
         // overshoots and weaves; this settles without oscillating.
         // Near the heading, also no more than closes the angle this tick, so the
         // discrete steps do not overshoot and chatter across the course.
-        let want_omega = sign * (Fixed::from_int(2) * st.turn_alpha * angle).sqrt().min(omega_max).min(angle / dt);
+        let want_omega = sign
+            * (Fixed::from_int(2) * st.turn_alpha * angle)
+                .sqrt()
+                .min(omega_max)
+                .min(angle / dt);
         self.omega = approach(self.omega, want_omega, st.turn_alpha * dt);
 
         // Speed: slower when facing away, and able to stop at the target.
@@ -204,8 +231,21 @@ impl Sim {
 
     /// Add a craft with no definition facing `heading` (x, z; normalised
     /// here). Content-made entities come from [`Sim::spawn_def`].
-    pub fn spawn(&mut self, player: u8, pos: Vec3, heading: (Fixed, Fixed), stats: MoveStats) -> EntityId {
-        let id = self.units.spawn(Entity::new(EntityKind::Craft, ContentKey::NONE, PlayerId(player), pos, heading, stats));
+    pub fn spawn(
+        &mut self,
+        player: u8,
+        pos: Vec3,
+        heading: (Fixed, Fixed),
+        stats: MoveStats,
+    ) -> EntityId {
+        let id = self.units.spawn(Entity::new(
+            EntityKind::Craft,
+            ContentKey::NONE,
+            PlayerId(player),
+            pos,
+            heading,
+            stats,
+        ));
         self.events.push(SimEvent::Spawned { id });
         id
     }
@@ -244,7 +284,9 @@ impl Sim {
         // skipped; the command is rejected only when none is left.
         let mut any = false;
         for &id in units {
-            let owned = self.unit(id).is_some_and(|u| u.orderable() && (!c.player.is_player() || u.owner == c.player));
+            let owned = self
+                .unit(id)
+                .is_some_and(|u| u.orderable() && (!c.player.is_player() || u.owner == c.player));
             if owned {
                 self.set_target(id, to);
                 any = true;
@@ -259,7 +301,10 @@ impl Sim {
             u.step();
         }
         self.tick += 1;
-        TickOutput { view: Arc::new(self.build_view()), events: std::mem::take(&mut self.events) }
+        TickOutput {
+            view: Arc::new(self.build_view()),
+            events: std::mem::take(&mut self.events),
+        }
     }
 
     fn build_view(&self) -> WorldView {
@@ -277,11 +322,25 @@ impl Sim {
                     .players
                     .iter()
                     .filter(|o| o.0 != id)
-                    .map(|&(o, t)| (o, if t == team { Relation::Ally } else { Relation::Enemy }))
+                    .map(|&(o, t)| {
+                        (
+                            o,
+                            if t == team {
+                                Relation::Ally
+                            } else {
+                                Relation::Enemy
+                            },
+                        )
+                    })
                     .collect(),
             })
             .collect();
-        WorldView { tick: self.tick, digest: self.digest(), units, players }
+        WorldView {
+            tick: self.tick,
+            digest: self.digest(),
+            units,
+            players,
+        }
     }
 
     /// FNV-1a over all simulation state, for desync detection. The content
@@ -316,7 +375,10 @@ impl WorldSource for Sim {
         batch.sort_by_key(|c| c.sort_key());
         for c in batch {
             if !self.apply(c) {
-                self.events.push(SimEvent::Rejected { player: c.player, seq: c.seq });
+                self.events.push(SimEvent::Rejected {
+                    player: c.player,
+                    seq: c.seq,
+                });
             }
         }
         self.advance()
@@ -345,7 +407,15 @@ mod tests {
 
     /// A single order from `player` to one of its units.
     fn go(player: u8, id: EntityId, to: Vec3) -> command::Command {
-        order(player, 0, command::Order::Move { units: vec![id], to, queue: false })
+        order(
+            player,
+            0,
+            command::Order::Move {
+                units: vec![id],
+                to,
+                queue: false,
+            },
+        )
     }
 
     fn halt(player: u8, id: EntityId) -> command::Command {
@@ -382,7 +452,15 @@ mod tests {
         for u in &sim.units {
             h.u64(u.id.0 as u64);
             h.u64(u.owner.0 as u64);
-            for f in [u.pos.x, u.pos.y, u.pos.z, u.heading.0, u.heading.1, u.speed, u.omega] {
+            for f in [
+                u.pos.x,
+                u.pos.y,
+                u.pos.z,
+                u.heading.0,
+                u.heading.1,
+                u.speed,
+                u.omega,
+            ] {
                 h.fixed(f);
             }
             match u.target {
@@ -484,7 +562,11 @@ mod tests {
     }
 
     fn order(player: u8, seq: u32, o: command::Order) -> command::Command {
-        command::Command { player: PlayerId(player), seq, kind: command::CommandKind::Order(o) }
+        command::Command {
+            player: PlayerId(player),
+            seq,
+            kind: command::CommandKind::Order(o),
+        }
     }
 
     /// The pinned run again, through the seam: same digest as setting targets directly.
@@ -494,11 +576,30 @@ mod tests {
         let a = sim.spawn(0, v(0, 0, 0), (Fixed::ZERO, Fixed::ONE), stats());
         let b = sim.spawn(1, v(1000, 0, 0), (-Fixed::ONE, Fixed::ZERO), stats());
         let first = WorldSource::step(&mut sim, &[]);
-        assert_eq!(first.events, [SimEvent::Spawned { id: a }, SimEvent::Spawned { id: b }]);
+        assert_eq!(
+            first.events,
+            [SimEvent::Spawned { id: a }, SimEvent::Spawned { id: b }]
+        );
         for t in 1..600 {
             let cmds = match t {
-                1 => vec![order(0, 0, command::Order::Move { units: vec![a], to: v(500, 30, -300), queue: false })],
-                10 => vec![order(1, 0, command::Order::Move { units: vec![b], to: v(0, 0, 900), queue: false })],
+                1 => vec![order(
+                    0,
+                    0,
+                    command::Order::Move {
+                        units: vec![a],
+                        to: v(500, 30, -300),
+                        queue: false,
+                    },
+                )],
+                10 => vec![order(
+                    1,
+                    0,
+                    command::Order::Move {
+                        units: vec![b],
+                        to: v(0, 0, 900),
+                        queue: false,
+                    },
+                )],
                 200 => vec![order(0, 1, command::Order::Stop { units: vec![a] })],
                 _ => vec![],
             };
@@ -533,14 +634,46 @@ mod tests {
         sim.step(&[]);
         let cmds = [
             // Player 1 may not order player 0's unit.
-            order(1, 0, command::Order::Move { units: vec![a], to: v(100, 0, 0), queue: false }),
+            order(
+                1,
+                0,
+                command::Order::Move {
+                    units: vec![a],
+                    to: v(100, 0, 0),
+                    queue: false,
+                },
+            ),
             // Not implemented yet.
-            order(0, 0, command::Order::Cloak { units: vec![a], on: true }),
+            order(
+                0,
+                0,
+                command::Order::Cloak {
+                    units: vec![a],
+                    on: true,
+                },
+            ),
             // The bench may order anything.
-            order(255, 0, command::Order::Move { units: vec![a], to: v(100, 0, 0), queue: false }),
+            order(
+                255,
+                0,
+                command::Order::Move {
+                    units: vec![a],
+                    to: v(100, 0, 0),
+                    queue: false,
+                },
+            ),
         ];
         let out = WorldSource::step(&mut sim, &cmds);
-        let rejected = [SimEvent::Rejected { player: PlayerId(0), seq: 0 }, SimEvent::Rejected { player: PlayerId(1), seq: 0 }];
+        let rejected = [
+            SimEvent::Rejected {
+                player: PlayerId(0),
+                seq: 0,
+            },
+            SimEvent::Rejected {
+                player: PlayerId(1),
+                seq: 0,
+            },
+        ];
         assert_eq!(out.events, rejected);
         assert_eq!(sim.unit(a).unwrap().target, Some(v(100, 0, 0)));
     }
