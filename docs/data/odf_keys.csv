@@ -1,0 +1,1294 @@
+key,A1,A2,FO,sta64,kind,classes,samples
+weapon#,209,406,12361,1,string,craft;shipyard;sensor;u_ball_obj;wingman,"""rom_cloak"";""kli_cloak"";""bor_refresh"""
+weaponhardpoints#,208,399,12354,1,string,craft;shipyard;sensor;u_ball_obj;wingman,"""root"";""hp01"";""hp01"" ""hp02"""
+classlabel,196,310,9114,1,string,cannonimp;craft;unitorpedo;phaser;replaceweapon,"""cannonimp"";""craft"";""UniTorpedo"""
+tooltip,208,490,5574,0,string,cannonimp;craft;pod;shipyard;utilityweapon,"""Disruptor Cannon"";""Phaser Array"";""Pulse Disruptor Cannon"""
+verbosetooltip,156,432,5580,0,string,cannonimp;craft;pod;shipyard;utilityweapon,"""AUTOTOOLTIP-bor_holdingbeam_H.odf"";""WRITE ME"";""AUTOTOOLTIP-bor_regeneration_RR.odf"""
+wpnname,122,240,3487,0,string,cannonimp;replaceweapon;utilityweapon;cannon;launcher,"""Disruptor Cannon"";""Phaser Array"";""Pulse Disruptor Cannon"""
+ordname,106,210,2979,0,string,cannonimp;launcher;cannon;toggleweapon;areacannon,"""bor_adaptionDo"";""photono"";""kphotono"""
+range,64,174,3006,0,int,cannonimp;toggleweapon;launcher;cannon;areacannon,600;800;400
+lifespan,50,99,2904,1,float,unitorpedo;phaser;utribeam;holding_bm;artillery,6.0;0.99;3.0
+shotspeed,47,97,2888,0,float,unitorpedo;phaser;utribeam;holding_bm;artillery,1e6;500.0;600.0
+firesound,124,241,2615,0,string,cannonimp;cannon;launcher;toggleweapon;areacannon,"""federation_phaser.wav"";""romulan_disruptor.wav"";""romulan_pulse_disruptor.wav"""
+damagebase,47,177,2739,0,float,unitorpedo;phaser;pphaser;photontorpedo;micro,0;10.108;7.845
+radius,48,108,2784,1,int,unitorpedo;phaser;utribeam;photontorpedo;artillery,0;15;25
+spriteduration,54,115,2763,0,int,unitorpedo;phaser;utribeam;pphaser;photontorpedo,1;0.5;1.0
+unitname,193,362,2373,0,string,craft;pod;shipyard;sensor;research,"""Tavara Class"";""Leahval Class"";""Sphere"""
+damagevariance,45,81,2735,0,int,unitorpedo;phaser;pphaser;micro;shockwavexplode,0;2;5
+damagethreshold,45,74,2735,0,int,unitorpedo;phaser;pphaser;micro;shockwavexplode,0;25;23
+hullcrewmodifier,45,74,2735,0,int,unitorpedo;phaser;pphaser;micro;shockwavexplode,0;0.1;0.0
+shieldcrewmodifier,45,74,2735,0,int,unitorpedo;phaser;pphaser;micro;shockwavexplode,0;0.2;0.0
+hitchance,42,64,2660,0,int,cannonimp;launcher;cannon;areacannon;regeneration,1;1.00;0.1
+officercost,145,314,2289,0,int,craft;pod;shipyard;sensor;research,0;1;2
+race,143,304,2292,1,string,craft;pod;shipyard;sensor;research,"""unitedfederation"";""romulanempire"";""klingonempire"""
+buildtime,145,315,2276,0,int,craft;pod;shipyard;sensor;research,150;185;100
+builditem#,274,306,2108,0,string,shipyard;constructionrig;research;(none);buildyard,"""all_halt"";""all_supply_routes1"";""all_supply_routes2"""
+stoptohitmodifier,11,20,2597,0,int,cannonimp;areacannon;launcher;minelayer;cannon,0;-0.0;0.15
+tohitstopmodifier,11,20,2597,0,int,cannonimp;areacannon;launcher;minelayer;cannon,0;0.50;0.25
+maxhealth,115,203,2302,1,int,craft;shipyard;pod;sensor;research,4000;92.25;3000
+shieldrate,107,187,2285,0,float,craft;shipyard;pod;sensor;research,0.000;4000.0;2.5
+dilithiumcost,145,259,2170,0,int,craft;pod;shipyard;sensor;replaceweapon,2000;1411;600
+avoidanceclass,13,33,2505,0,int,craft;shipyard;pod;u_ball_obj;sensor,5;9;8
+intrinsicvalue,97,162,2289,0,float,craft;shipyard;pod;sensor;research,1.000;0;0.000
+eventselect,103,111,2287,0,string,craft;shipyard;pod;sensor;research,"""Basic3CruiserSelect"";""StarbaseSelect"";""Basic2DestroyerSelect"""
+weaponshitpoints,39,164,2289,0,int,craft;shipyard;pod;sensor;research,300;0;60
+attackpower,69,114,2289,0,float,craft;shipyard;pod;sensor;wingman,1.000;0;0.000
+lifesupporthitpoints,26,149,2288,0,int,craft;shipyard;pod;sensor;research,0;60;50
+eventacknowledge,68,107,2287,0,string,craft;shipyard;pod;sensor;research,"""StarbaseAcknowledge"";""Basic3CruiserAcknowledge"";""Basic2DestroyerAcknowledge"""
+sensorshitpoints,25,148,2289,0,int,craft;shipyard;pod;sensor;research,0;60;47
+engineshitpoints,24,148,2289,0,int,craft;shipyard;pod;sensor;research,0;60;47
+shieldgeneratorhitpoints,24,148,2289,0,int,craft;shipyard;pod;sensor;research,0;300;60
+criticaltargethardpoints,99,183,2117,0,string list,craft;shipyard;sensor;research;wingman,"""hp01"" ""hp02"" ""hp03"" ""hp04"" ""hp05"" ""h…;""hp16"" ""hp17"" ""hp18"" ""hp19"" ""hp20"" ""h…;""hp01"" ""hp02"" ""hp03"" ""hp04"" ""hp05"""
+hulltargethardpoints,99,182,2117,0,string list,craft;shipyard;sensor;research;wingman,"""hp01"" ""hp02"" ""hp03"" ""hp04"" ""hp05"" ""h…;""hp09"" ""hp10"" ""hp11"" ""hp12"" ""hp13"" ""h…;""hp16"" ""hp17"" ""hp18"" ""hp19"" ""hp20"" ""h…"
+sensorstargethardpoints,99,182,2117,0,string list,craft;shipyard;sensor;research;wingman,"""hp01"" ""hp02"" ""hp03"" ""hp04"" ""hp05"" ""h…;""hp13"" ""hp14"" ""hp15"" ""hp16"" ""hp17"" ""h…;""hp16"" ""hp17"" ""hp18"" ""hp19"" ""hp20"" ""h…"
+shieldgeneratortargethardpoints,99,182,2117,0,string list,craft;shipyard;sensor;research;wingman,"""hp01"" ""hp02"" ""hp03"" ""hp04"" ""hp05"" ""h…;""hp10"" ""hp11"" ""hp12"" ""hp13"" ""hp14"" ""h…;""hp06"" ""hp07"" ""hp08"" ""hp09"""
+lifesupporttargethardpoints,99,177,2117,0,string list,craft;shipyard;sensor;research;wingman,"""hp01"" ""hp02"" ""hp03"" ""hp04"" ""hp05"" ""h…;""hp11"" ""hp12"" ""hp13"" ""hp14"" ""hp15"";""hp09"" ""hp10"" ""hp11"" ""hp12"" ""hp13"" ""h…"
+enginestargethardpoints,99,174,2117,0,string list,craft;shipyard;sensor;research;wingman,"""hp01"" ""hp02"" ""hp03"" ""hp04"" ""hp05"" ""h…;""hp23"" ""hp24"" ""hp25"" ""hp26"" ""hp27"" ""h…;""hp34"" ""hp35"" ""hp36"" ""hp37"" ""hp38"" ""h…"
+weaponstargethardpoints,99,170,2117,0,string list,craft;shipyard;sensor;research;wingman,"""hp01"" ""hp02"" ""hp03"" ""hp04"" ""hp05"" ""h…;""hp01"" ""hp02"" ""hp03"" ""hp04"" ""hp05"";""hp03"" ""hp04"" ""hp05"" ""hp06"" ""hp07"" ""h…"
+possiblecraftnames,93,176,2102,1,empty,craft;shipyard;sensor;research;wingman,";""USS Abernethy"" ""USS Agrippa"" ""USS Ai…;""USS Accel"" ""USS Africa"" ""USS Al Ramm…"
+eventattack,35,45,2287,0,string,craft;shipyard;pod;sensor;research,"""StarbaseAttack"";""Basic3CruiserAttack"";""Basic2DestroyerAttack"""
+hullhitpercent,35,21,2289,0,float,craft;shipyard;pod;sensor;research,71.0f;78.0f;94
+lifesupporthitpercent,35,21,2289,0,float,craft;shipyard;pod;sensor;research,7.0f;2;8.0f
+sensorshitpercent,35,21,2289,0,int,craft;shipyard;pod;sensor;research,0;7.5f;13.0f
+shieldgeneratorhitpercent,35,21,2289,0,float,craft;shipyard;pod;sensor;research,1.0f;0;7.5f
+weaponshitpercent,35,21,2289,0,float,craft;shipyard;pod;sensor;research,7.0f;0;8.0f
+engineshitpercent,23,19,2289,0,float,craft;shipyard;pod;sensor;research,7.0f;0.0f;2
+weldingradius,12,18,2289,0,float,craft;shipyard;pod;sensor;research,0.25;1.0;0.5
+ainame,8,13,2289,0,string,craft;shipyard;pod;sensor;research,"""CraftProcess"";""StarbaseProcess"";""RepairShipProcess"""
+fireball,9,11,2289,0,string,craft;shipyard;pod;sensor;research,"""x_large_explosion"";""x_large2_explosion"";""x_medium_explosion"""
+enginesrepairtime,7,4,2289,0,float,craft;shipyard;pod;sensor;research,1.0;0.25;2.0
+lifesupportrepairtime,7,4,2289,0,float,craft;shipyard;pod;sensor;research,0.25;0.0625;0.5
+sensorsrepairtime,7,4,2289,0,float,craft;shipyard;pod;sensor;research,1.0;0.25;2.0
+shieldgeneratorrepairtime,7,4,2289,0,float,craft;shipyard;pod;sensor;research,1.0;0.25;2.0
+weaponsrepairtime,7,4,2289,0,float,craft;shipyard;pod;sensor;research,1.0;0.25;2.0
+damagedscan,6,4,2289,0,float,craft;shipyard;pod;sensor;research,50.0;50.0f;100.0f
+enginescrewloss,6,4,2289,0,float,craft;shipyard;pod;sensor;research,10.0f;5.0f;15.0f
+lifesupportcrewloss,6,4,2289,0,float,craft;shipyard;pod;sensor;research,10.0f;5.0f;3.0f
+lifesupportloss,6,4,2289,0,int,craft;shipyard;pod;sensor;research,2;0.5;0.4
+sensorscrewloss,6,4,2289,0,float,craft;shipyard;pod;sensor;research,5.0f;2.0f
+shielddelay,6,4,2289,0,int,craft;shipyard;pod;sensor;research,2;3.0f
+shieldgeneratorcrewloss,6,4,2289,0,float,craft;shipyard;pod;sensor;research,10.0f;8.0f;15.0f
+weaponscrewloss,6,4,2289,0,float,craft;shipyard;pod;sensor;research,10.0f;8.0f;5.0f
+crewcost,100,154,2010,0,int,craft;shipyard;research;wingman;constructionrig,800;90;250
+basename,26,29,2118,1,string,craft;shipyard;u_ball_obj;sensor;pod,"""rom_tavara"";""effect_empty"";""rom_leahval"""
+rangescan,12,31,2128,0,int,craft;shipyard;sensor;research;evolver,850;900;800
+shotcolor,51,110,1937,0,int,unitorpedo;phaser;utribeam;pphaser;photontorpedo,227
+specialenergyrate,55,75,1937,0,float,craft;u_ball_obj;shipyard;sensor;wingman,0;10;0.000
+maxspecialenergy,55,75,1934,0,int,craft;u_ball_obj;shipyard;sensor;wingman,500;1000;100000
+physicsfile,21,49,1821,1,string,craft;shipyard;evolver;constructionrig;freighter,"""smooth_physics_100.odf"";""smooth_physics_120.odf"";""smooth_physics_130.odf"""
+special,53,99,1720,0,int,cannonimp;replaceweapon;toggleweapon;launcher;areacannon,0;1
+eventmove,22,29,1812,0,string,craft;shipyard;constructionrig;evolver;wingman,"""Basic3CruiserMove"";""Basic2DestroyerMove"";""Basic4CruiserMove"""
+eventstop,22,29,1812,0,string,craft;shipyard;constructionrig;evolver;wingman,"""Basic3CruiserStop"";""Basic2DestroyerStop"";""Basic4CruiserStop"""
+eventrepair,21,27,1812,0,string,craft;shipyard;constructionrig;evolver;wingman,"""Basic3CruiserRepair"";""Basic2DestroyerRepair"";""Basic4CruiserRepair"""
+ignoreshield,12,28,1751,0,int,unitorpedo;holding_bm;borgbore;minebm;deathchant,0;1;1-
+omegaturn,17,36,1687,0,int,unitorpedo;artillery;plasmacannon;photontorpedo;probetorpedo,0;0.5;3.0
+shotaccel,16,28,1694,0,float,unitorpedo;artillery;plasmacannon;probetorpedo;photontorpedo,70.0;9999;100.0
+shotgeometry,15,34,1623,0,string,unitorpedo;holding_bm;micro;borgbore;minebm,"""romW_pulsedisruptor.SOD"";""domW_tetryon.SOD"";""romW_plasma.SOD"""
+seektime,1,9,1520,0,int,unitorpedo;photontorpedo;plasmacannon,0;0.25
+hitsound,12,26,1452,0,string,unitorpedo;photontorpedo;plasmacannon;colonizerpod;antimine,"""xhit_torpedo3.wav"";""xhit_pulse2.wav"";""xhit_torpedo1.wav"""
+needtarget,29,59,1398,0,int,cannonimp;toggleweapon;launcher;areacannon;cannon,1;0;»
+sprite,68,154,1193,1,string,phaser;utribeam;pphaser;photontorpedo;unitorpedo,"""weapon_phaser"";""weapon_disruptor2"";""weapon_polaron"""
+shotdelay,120,234,656,0,int,utilityweapon;launcher;cannon;replaceweapon;toggleweapon,0;1;0.0
+shieldduration,3,5,1000,0,float,phaser;utribeam;unibeam;fedrepairteam;remodulation,1.0;3.0;4.0
+restrictfirearc,9,14,878,0,int,cannonimp;cannon;launcher,1;0
+specialenergycost,56,110,582,0,int,unitorpedo;holding_bm;utribeam;replaceweapon;phaser,500;0;100
+buttonslot,55,96,593,0,int,replaceweapon;toggleweapon;cannonimp;launcher;cannon,0;13;1
+animation,26,84,587,1,int,shipyard;u_ball_obj;craft;pod;sensor,2;1;3
+eventdecommission,50,80,475,0,string,shipyard;pod;sensor;research;mining,"""StarbaseDecommission"";""SuperblDecommission"";""AdvResearchStationDecommission"""
+repairred,18,13,485,0,float,shipyard;pod;sensor;research;(none),4.0f;2.0f;1.0f
+repairyellow,18,13,485,0,float,shipyard;pod;sensor;research;(none),2.0f;1.5f;1.1f
+footprintbuffer,4,7,491,0,float,shipyard;pod;sensor;research;scrap,120.0f;0f;10.0f
+is_starbase,4,4,485,0,int,shipyard;pod;sensor;research;mining,1;0
+avoidme,9,18,418,0,int,pod;u_ball_obj;latinum;background_obj;craft,0;1;«*l
+mapicon,5,11,360,0,string,pod;u_ball_obj;scrap;background_obj;wormhole_obj,"""mapicon_empty"";""map_worm"";""mapicon_dmoon"""
+distanceBelowGrid,5,10,354,0,int,craft;latinum;scrap;wormhole_obj;sensor,0;59.9;991
+buildhardpoint,21,26,244,0,string,shipyard;starbase;buildyard;sensor;constructionrig,"""hp99"";""root"";""build"""
+hidden,1,1,268,1,int,pod;u_ball_obj;craft;background_obj;sensor,1
+switchtoattack,16,43,197,0,int,toggleweapon;areacannon;launcher;minelayer;cannon,0;1;»
+length,27,41,176,0,int,rumbleexplode;utribeam;pphaser;fireballexplode;rfield,0;3;10.0
+repairFacility,3,4,217,0,int,shipyard;buildyard,0
+ScaleSOD,29,114,35,1,float,craft;pod;wingman;shipyard;background_obj,1.2;0.8;1.0
+lightColor,24,74,77,0,3 numbers,photontorpedo;pphaser;artillery;plasmacannon;scrap,0.0 1.0 0.0;0.5 1.0 0.5;0 0 0
+lightFalloffRange,24,74,77,0,float,photontorpedo;pphaser;artillery;plasmacannon;scrap,5.0;50.0;600.0
+lightFalloffStart,24,74,77,0,float,photontorpedo;pphaser;artillery;plasmacannon;scrap,50.0;300.0;75.0
+lifetimer,7,9,158,0,int,u_ball_obj;nebula_obj;ionstorm_obj,1;0;1.99
+weaponRed,61,101,10,0,float,craft;wingman;(none);starbase;cargo_ship,2.0f;0.75f;2.5f
+weaponYellow,61,101,10,0,float,craft;wingman;(none);starbase;cargo_ship,1.5f;1.0f;0.5f
+targetlocation,9,17,124,0,int,launcher;cannonimp;cannon;minelayer;transwarpconduit,1;0;»
+beneficial,6,6,122,0,int,cannonimp;areacannon;toggleweapon;cannon;rangedobjectaffector,1;ª*l
+keymapLabel,108,21,1,0,string,pod;wingman;sensor;shipyard;starbase,"""starbase"";""shipyard"";""detect_grid"""
+lengthscale,5,16,99,0,int,holding_bm;borgbore;minebm;tractor_bm;tech_assim_beam,5;5.0
+radiusscale,5,16,99,0,float,holding_bm;borgbore;minebm;tractor_bm;tech_assim_beam,7.5;2.5;5.0
+objectname,3,5,107,0,string,utribeam;artillery;ionstorm_tp;trans_rift,"""effect_mag"";""mionstm"";""muball"""
+buttonPriority,39,68,4,0,int,cannon;toggleweapon;areacannon;launcher;minelayer,5;10;1
+canattack,2,3,103,0,int,shipyard;constructionrig;freighter;craft;sensor,0
+dbname,7,9,85,0,string,rumbleexplode;fireballexplode,"""xplode"";""effect_quad"";""effect_quad_dom"""
+aitargetlocation,1,4,94,0,int,cannonimp;launcher;minelayer;ramweapon;replaceweapon,0;1
+superUnits#,32,29,36,0,string,(none),"""bconst.odf"";""fconst.odf"";""kconst.odf"""
+warpspeed,6,37,52,0,int,(none),-1;480;0
+impulsespeed,6,35,51,1,int,(none),80;50;100
+targetalliedcraft,8,19,63,0,int,toggleweapon;launcher;cannonimp;replaceweapon;cannon,0;1;ª
+cloakenable,4,7,78,0,int,replaceweapon;cloakingdeviceimp;rangedobjectaffector;cannonimp;cloakingdevice,1;0
+targetenemybuildings,7,18,62,0,int,toggleweapon;launcher;cannonimp;cannon;replaceweapon,1;0;»
+targetenemycraft,6,18,62,0,int,toggleweapon;launcher;cannonimp;replaceweapon;cannon,1;0
+pathleaddistance,6,24,51,0,int,(none),150;400;200
+targetalliedbuildings,6,13,62,0,int,toggleweapon;launcher;cannonimp;replaceweapon;cannon,0;1
+scalecount,1,1,78,0,int,utribeam,5
+scalevalue,1,1,78,0,int,utribeam,1;0.30
+specialvalue,15,20,45,0,int,borgbore;deathchant;borgenergyemitter;cloakdetector;esconverter,20;3;15
+tooclosetoturn,6,24,50,0,int,(none),100;50;75
+boardingdelay,1,3,75,0,int,holding_bm;shield_disruptor,1
+boardinginterval,1,3,75,0,int,holding_bm;shield_disruptor,1
+boardingsize,1,3,75,0,int,holding_bm;shield_disruptor,5;10;15
+standardUnits#,24,27,23,0,string,(none),"""bconst.odf"";""bbase.odf"";""fconst.odf"""
+buildanimation,1,3,67,0,int,shipyard,0;1
+rotationspeed,3,5,63,1,float,latinum;scrap;nebula_obj;asteroidfield,0.0;0.3;0.2
+hitcondition,10,21,36,0,int,areacannon;areamissile;fusingweapon;cannon;hologen_weapon,2;5;1
+mapsize,6,9,47,0,int,latinum;nebula_obj;background_obj;asteroidfield,6;8;5
+mapsprite,6,9,47,0,string,latinum;nebula_obj;background_obj;asteroidfield,"""mapicon_aster"";""mapicon_iaster"";""map_nebula5"""
+eventtransport,7,3,45,0,string,craft;repairship;wingman;shipyard;starbase,"""FederationNewtonCombatTransport"";""FederationTeutoburgTransport"";""RomulanWarbirdTransport"""
+explsound,8,11,34,0,string,rumbleexplode;fireballexplode;shockwavexplode,"""rqx.wav"";""xlarge2.wav"";""selfdxpl.wav"""
+podhardpoints,7,18,26,0,string list,research,"""hp100"" ""hp101"" ""hp102"" ""hp103"" ""hp10…;""pod01"" ""pod02"" ""pod03"" ""pod04"";""pod01"" ""pod02"" ""pod03"" ""pod04"" ""pod05"""
+rollrate,4,5,40,0,int,micro;borgbore;nanitesordnance;shieldh,12;1.0
+rays,8,20,19,0,int,shockwavexplode;omegaexplode;repulsionwave;shockwavecannon,16;1­*l;9
+coloractive,1,1,44,0,3 numbers,(none),0.5	0.5	1.0;1.0		0.9219	0.5585
+colordisabled,1,1,44,0,3 numbers,(none),0.5	0.0	0.0;0.1		0.12		0.11
+colormouseover,1,1,44,0,3 numbers,(none),1.0	1.0	1.0;0.8398	0.6836	0.5156
+colornormal,1,1,44,0,3 numbers,(none),1.0	1.0	1.0;0.6		0.6976	0.67
+colorpressed,1,1,44,0,3 numbers,(none),1.0	0.75	0.5;1.0		1.0		0.8666
+fadeFactor,7,20,19,0,float,shockwavexplode;omegaexplode;shockwavecannon;nebcreator,0.01;0.5;0.1
+color,7,19,19,1,3 numbers,shockwavexplode;omegaexplode;shockwavecannon,1.0	1.0	1.0;1.0	0.3	0.0;0.5	0.5	0.5
+radiusFactor,7,19,19,0,float,shockwavexplode;omegaexplode;shockwavecannon,1.0;0.85;1.5
+rate,7,19,19,0,int,shockwavexplode;omegaexplode;shockwavecannon,90;60;100
+texture,7,19,19,1,string,shockwavexplode;omegaexplode;shockwavecannon,"""empty"";""wselfdes"";""wengineol"""
+glow_falloff_range,10,17,14,1,float,nebula_obj;wormhole_obj;ionstorm_obj;u_ball_obj;latinum,60.0;150.0;100.0
+glow_falloff_start,10,17,14,1,float,nebula_obj;wormhole_obj;ionstorm_obj;u_ball_obj;latinum,60.0;100.0
+blue_glow,10,16,14,1,float,nebula_obj;wormhole_obj;ionstorm_obj;u_ball_obj,0.5;1.0;0.0
+red_glow,10,16,14,1,float,nebula_obj;wormhole_obj;ionstorm_obj;u_ball_obj,1.0;0.5;0.1
+weldingbeamwidth,5,10,20,0,float,constructionrig;evolver;drones_weapon,2.0;5.0;0
+repairside,1,5,28,0,int,shipyard,8;2;0
+targetRange,6,21,7,0,float,minebm;tractor_bm;holding_bm;psidisrupt;esconverter,400.0f;100.0f;800.0f
+workerbeename,5,9,20,0,string,constructionrig;evolver;drones_weapon,"""empty"";""dom_s_workbee"";""fed_s_workbee"""
+frontbackinertia,6,9,18,0,float,(none),7.5;30;50
+blastradius,1,2,29,0,int,artillery,350;400;480
+braccelcontrolstiffness,6,8,18,0,float,(none),1.5;4.0
+crewRedStatus,13,9,10,0,float,(none);shipyard;pod;wingman;craft,0.25f;0.3f;0.2f
+crewYellowStatus,13,9,10,0,float,(none);shipyard;pod;wingman;craft,0.5f;0.7f;0.4f
+forceToNeutral,2,15,13,0,int,(none),1
+regenmodifier,1,1,27,0,int,regeneration,40;3«;30
+blue_glow_range,7,10,11,0,float,nebula_obj;ionstorm_obj;u_ball_obj;latinum,0.0;0.5;0.25
+boardingStrength,10,8,10,0,float,(none),1.00f;0.75f;1.0f
+dont_load_SOD,6,9,13,1,int,nebula_obj;asteroidfield,0;1
+green_glow,8,9,11,1,float,nebula_obj;ionstorm_obj;u_ball_obj;wormhole_obj,0.5;0.0;0.1
+green_glow_range,7,10,11,0,float,nebula_obj;ionstorm_obj;u_ball_obj;latinum,0.0;0.5;0.25
+maxRoll,9,6,13,0,int,freighter;(none);constructionrig;wingman,1;40;50
+name,10,8,10,1,string,(none),"""borg"";""federation"";""ferengi"""
+one_in_n_chance_of_light_source,7,10,11,0,int,nebula_obj;ionstorm_obj;u_ball_obj;latinum,0;6;1
+particleart,2,4,22,0,string,micro;psidisrupt;override,"""effect_cluster"";""empty"";""wmicremit"""
+race#,10,8,10,1,string,(none),"""borg.odf"";""fed.odf"";""kling.odf"""
+red_glow_range,7,10,11,0,float,nebula_obj;ionstorm_obj;u_ball_obj;latinum,0.0;0.5;0.25
+repairStrength,10,8,10,0,float,(none),5.0f;1.25f;1.5f
+damageValue,7,9,11,0,int,nebula_obj;ionstorm_obj;u_ball_obj,0;5;25
+disableweapons,5,7,15,0,int,nebula_obj;cloakingdeviceimp;cloakingdevicecontrol,0;1
+effectRadius,7,9,11,1,int,nebula_obj;ionstorm_obj;u_ball_obj,300;100;600
+retreatStrength,9,8,10,0,float,(none),0.0f;0.25;0.15f
+drainrate,2,4,20,0,int,micro;shieldinv;wormholegen;resourceextractionbeam,50;80;75
+maximumCrew,6,11,8,0,int,starbase;mining;planet;wingman;sensor,1500;150;1000
+offsound,3,7,15,0,string,cloakingdeviceimp;cloakingdevice;fusingweapon,"""clrdisen.wav"";""clkdisen.wav"";""gcubeintoff.wav"""
+duration,1,3,20,0,int,borgbore;fluxwave;drones_weapon;sleeperagent,30;10.0;15
+min_speed_change,5,8,11,0,float,nebula_obj;latinum,0.0025;0.001;0.0020
+minimalUnits#,8,7,9,0,string,(none),"""fconst.odf"";""bconst.odf"";""kconst.odf"""
+speed_change_period_divisor,5,8,11,0,float,nebula_obj;latinum,0.3;0.4;0.2
+speed_change_range,5,8,11,0,float,nebula_obj;latinum,0.6;0.8
+weldingbeamsprite,1,3,20,0,string,constructionrig;drones_weapon,"""weldbeam"";""empty"";""8472beam"""
+disableCloak,5,7,11,0,int,nebula_obj,1;0
+disableCrew,5,7,11,0,int,nebula_obj,0;1
+disableSensors,5,7,11,0,int,nebula_obj,0;1
+disableShields,5,7,11,0,int,nebula_obj,0;1
+hideContents,5,7,11,0,int,nebula_obj,0;1
+maxrotationspeed,2,3,18,0,float,(none),0.75;0
+numberofworkerbees,1,2,20,0,int,constructionrig,12;6;1
+pathing_cost,5,7,11,0,int,nebula_obj,300;2000;90000
+rotationacceleration,2,3,18,0,float,(none),2.0
+rotationstiffness,2,3,18,0,float,(none),1.0
+tooslowtoturn,2,3,18,0,int,(none),5
+workerbeehardpoints,1,2,20,0,string list,constructionrig,"""hp98"" ""hp99"" ""hp98"" ""hp99"" ""hp98"" ""h…;""root"";""hp96"" ""hp97"" ""hp98"" ""hp99"" ""hp96"" ""h…"
+timeuntilclosure,1,1,20,0,float,constructionrig,3.0;2.0
+timeuntiltakeoff,1,1,20,0,float,constructionrig,3.0;2.0
+timewelding,1,1,20,0,float,constructionrig,0.5
+attackrange,1,1,19,0,int,borgbore,1000;400
+craft_speed_coefficient,5,5,11,0,float,nebula_obj,1.0;0.7;0.6
+craft_speed_limit,5,5,11,0,int,nebula_obj,-1;-1-;-ª*l
+crewAccumulationRate,4,7,10,0,float,(none),4.0;0;3.5
+crewRetreatRatio,4,7,10,0,float,(none),0.1;0.10f;0.2f
+effecttimer,3,3,15,0,int,cloakingdeviceimp;cloakingdevice;phasecloakdevice;manheimeffect,2;4;3.0f
+planetCrewAccumulationModifier,4,7,10,0,float,(none),1.0;1.25;1.5
+scout,1,2,17,0,int,craft;wingman;repairship,1
+dilithiumTransferRate,4,7,8,0,float,mining;shipyard,15.0
+interfaceConfiguration,4,6,9,0,string,(none),"""gui_federation.cfg"";""gui_bor.cfg"";""gui_fed.cfg"""
+interfaceSprites,4,6,9,0,string,(none),"""gui_federation.spr"";""gui_borg.spr"";""gui_klingon.spr"""
+freighterName,4,6,8,0,string,mining,"""bfreight"";""ffreight"";""kfreight"""
+infinite,1,1,16,0,int,scrap,1
+shockwave,7,9,2,0,string,fireballexplode;rumbleexplode,"""xshock"";""xomega"";""xselfd"""
+shockwaveDelay,7,9,2,0,float,fireballexplode;rumbleexplode,0.6;0.0;0
+shockwaveMinimum,7,9,2,0,float,fireballexplode;rumbleexplode,40.0;0.0;0.«*l
+waveName,2,7,9,0,string,areacannon;nebgeneration,"""fed_magnanw"";""Wholowav"";""Wposiwav"""
+Rotation,5,8,3,0,float,wormhole_obj;blackhole_obj;ionstorm_obj;u_ball_obj,-0.6f;0.005f;0.01f
+techfile#,7,6,2,0,string,(none),"""tech1.tt"";""nosuper.tt"";""nosci.tt"""
+ClosedScale,3,8,3,0,float,wormhole_obj,0.7f;2.5f;0.001f
+maxTargets,5,6,3,0,int,areamissile;areacannon;cannonimp,4;5;1
+officerres,2,3,9,0,string,(none),"""GUI_RD_CREDITS_TOOLTIP"";""GUI_CP_BORGOFF_RES"";""GUI_CP_ROMOFF_RES"""
+AnimationTime,3,7,3,0,float,wormhole_obj,2.0f;0.25f;0.01f
+DisableTimer,3,7,3,0,int,wormhole_obj,10;1
+MaxScaleFactor,3,7,3,0,float,wormhole_obj,2.0f;1.5f;1.0f
+MaxSpeedFactor,3,7,3,0,float,wormhole_obj,5.0f;4.0f
+OpenScale,3,7,3,0,float,wormhole_obj,2.5f;2.0f;3.0f
+ScaleEffectRange,3,7,3,0,float,wormhole_obj,75.0f;5.0f
+SpeedEffectRange,3,7,3,0,float,wormhole_obj,75.0f;5.0f
+toggle,3,6,4,0,int,wormholegen;ordnancedefenseweapon;pointdefenselaser;hologen_weapon;toggleweapon,1
+crewAffectsWeaponDelay,1,7,4,0,int,cannon;cannonimp;toggleweapon,0;»
+green_flow,2,7,3,0,float,wormhole_obj,1.0;8.0
+openSound,3,7,2,0,string,wormhole_obj,"""msworm.wav"";""swbmasto.wav"""
+speedmodifier,1,2,9,0,int,deathchant;speed_boost,1;3.0
+damagemodifier,1,1,9,0,int,deathchant,1;0.85
+detectradius,2,2,7,0,float,antimine;gravmine,200.0f;400.0f;250.0f
+firemodifier,1,1,9,0,float,deathchant,1.7;1.5;1.30
+hitmodifier,1,1,9,0,int,deathchant,1
+repairmodifier,1,1,9,0,int,deathchant,1;2;0.5
+turnmodifier,1,1,9,0,int,deathchant,1
+waveEffect,2,7,2,0,int,areacannon;nebgeneration,1;0
+initialDistance,1,4,4,0,int,transwarpdrive;fusingweapon,20;20.;300
+repulsionForce,3,3,2,0,float,rfield;repulsionwave;shockwavecannon,30.0f;50.0f;20.0f
+scalesize,2,2,3,0,float,transwarpdrive;blackhole_obj,1;10.0f;1.0
+percentage,2,2,2,0,float,psychonicblast,.50;µT;.02
+chainDamageModifier,1,2,2,0,float,chainpulsar,25.0f;1.0f;20.0f
+chainRadius,1,2,2,0,float,chainpulsar,300.0f;500.0f;800.0f
+energydrainrate,1,1,3,0,float,phasecloakdevice;cloakingdevicecontrol;cloakingdeviceimp,15.0;12;15.000
+fieldRadius,1,2,2,1,int,asteroidfield,100;200;400
+maxAsteroids,1,2,2,1,int,asteroidfield,1;15;8
+maxHits,1,2,2,0,int,chainpulsar,6;3;5
+minAsteroids,1,2,2,1,int,asteroidfield,1;10;4
+orbitingSpeed,1,2,2,1,float,asteroidfield,1.0;3.0
+regenvalue,1,1,3,0,int,nebula_obj,15;5
+repairvalue,1,1,3,0,int,nebula_obj,0;3
+repelIfWithin,1,2,2,0,float,asteroidfield,0.7
+ScalingCount,2,2,1,0,float,ionstorm_obj;u_ball_obj;(none),17.0f
+ScalingStepSize,2,2,1,0,float,ionstorm_obj;u_ball_obj;(none),0.20f
+disableTime,1,2,1,0,int,shockwavecannon;plasmacannon,20;100.0;30.0
+slowPercent,1,1,2,0,int,gravmine,15;50;70
+bitsPerSample,1,1,1,0,int,(none),16
+borg,1,1,1,1,3 numbers,(none),0.0	1.0	0.0;0.0	0.6	0.4;0.134	0.900	0.134
+distanceFactor,1,1,1,0,float,(none),0.01;0.5
+dominion,1,1,1,0,3 numbers,(none),0.8	0.2	1.0;0.600	0.431	0.600
+dopplerFactor,1,1,1,0,float,(none),1.0;0.01
+effectTexture,1,1,1,0,string,nanitesordnance,"""Nanites"";""empty"""
+empty,1,1,1,0,3 numbers,(none),0.5	0.5	0.5;0.3	0.3	0.3
+federation,1,1,1,0,3 numbers,(none),0.9	0.9	0.9;0.900	0.900	0.900
+ghostAmbient,1,1,1,0,3 numbers,(none),0.1 0.1 0.1
+ghostDiffuse,1,1,1,0,3 numbers,(none),0.1 0.1 0.1
+ghostSpecular,1,1,1,0,3 numbers,(none),0.0 0.0 0.0;0.0 0.0 0.«*l
+klingon,1,1,1,0,3 numbers,(none),0.2	0.6	0.2;1.0	0.2	0.2;0.900	0.134	0.134
+maximumDistance#D,1,1,1,0,float,(none),2000.0;3000.0;5000.0
+maxTime,1,1,1,0,float,nanitesordnance,5.0;0
+minimumDistance#D,1,1,1,0,float,(none),50.0;100.0
+minTime,1,1,1,0,float,nanitesordnance,2.0;0
+movementSpeed,1,1,1,0,float,nanitesordnance,2.0;12.0;200
+numberOfRaces,1,1,1,0,int,(none),10;8
+rolloffFactor,1,1,1,0,float,(none),0.15;0.1
+romulan,1,1,1,0,3 numbers,(none),0.2	0.6	0.2;0.4	1.0	0.4;0.259	0.600	0.259
+sampleRate,1,1,1,0,int,(none),44100;22050
+shotInfo,1,1,1,0,string,nanitesordnance,"""NaniteHitInfo"";""BorgSpeech"""
+startReturnTime,1,1,1,0,float,nanitesordnance,2.0
+streamBufferLength,1,1,1,0,float,(none),2.0;1.0
+tooltipDelay,1,1,1,0,float,(none),0.5-;0.5;1.0
+impulsetohitmodifier,0,20,2597,0,int,cannonimp;areacannon;launcher;minelayer;cannon,0;-0.0;-0.25
+tohitimpulsemodifier,0,20,2597,0,int,cannonimp;areacannon;launcher;minelayer;cannon,0;0.00;0.0
+transporter,0,64,2289,0,int,craft;shipyard;pod;sensor;research,1;0
+alert,0,48,2289,0,int,craft;shipyard;pod;sensor;research,1;0
+combat,0,32,2289,0,int,craft;shipyard;pod;sensor;research,1;0
+show_movement_autonomy,0,30,2289,0,int,craft;shipyard;pod;sensor;research,1;0
+show_sw_autonomy,0,27,2289,0,int,craft;shipyard;pod;sensor;research,1;0
+crewhitpercent,0,21,2289,0,float,craft;shipyard;pod;sensor;research,7.0f;2;8.0f
+can_sandd,0,20,2289,0,int,craft;shipyard;pod;sensor;research,1;0
+has_crew,0,8,2289,0,int,craft;shipyard;pod;sensor;research,1;0
+maxextraweapons,0,4,2289,0,int,craft;shipyard;pod;sensor;research,10;1;2
+has_hitpoints,0,3,2289,0,int,craft;shipyard;pod;sensor;research,1
+latinumcost,0,118,2170,0,int,craft;pod;shipyard;sensor;replaceweapon,483;1000;375
+biomattercost,0,36,1827,0,int,craft;replaceweapon;sensor;shipyard;pod,59;18;15
+shiptype,0,25,1812,0,string,craft;shipyard;evolver;constructionrig;freighter,"""C"";""B"";""D"""
+can_explore,0,10,1821,0,int,craft;shipyard;evolver;constructionrig;freighter,1;0
+shipclass,0,16,1812,1,string,craft;shipyard;evolver;constructionrig;freighter,"""cruiser"";""battleship"";""destroyer"""
+trekphysicsfile,0,7,1821,0,string,craft;shipyard;evolver;constructionrig;freighter,"""smooth_physics_100.odf"";""smooth_physics_120.odf"";""smooth_physics_130.odf"""
+ship,0,4,1822,1,int,craft;shipyard;evolver;constructionrig;freighter,1;0
+speakonattack,0,5,1720,0,int,cannonimp;replaceweapon;toggleweapon;launcher;areacannon,0
+attackspeech,0,4,1720,0,int,cannonimp;replaceweapon;toggleweapon;areacannon;launcher,0
+hotkeylabel,0,367,1168,0,string,craft;shipyard;pod;sensor;research,"""GAME-HOTKEY-S"";""GAME-HOTKEY-C"";""GAME-HOTKEY-A"""
+flareradiusmultiplier,0,27,999,0,int,phaser;utribeam;unibeam;pdlbeam,1;1.2;1.0
+firearc,0,1,878,0,float,cannonimp;launcher;cannon,1.61;1.3
+item#,0,221,390,0,string,(none),"""fdata"";""latinum"";""mnebula6"""
+facility,0,4,475,0,int,shipyard;pod;sensor;research;mining,1;0
+checkvalidresourceinterval,0,1,475,0,float,shipyard;pod;sensor;research;mining,10.0f
+metalCost,0,249,17,0,int,pod;craft;sensor;replaceweapon;research,0;50;150
+decommissionFacility,0,4,215,0,int,shipyard;buildyard,0;1
+builder_ship,0,22,192,0,int,shipyard;sensor;buildyard;starbase,1;0
+bstar.#,0,138,69,0,int,(none),0;1;75
+boardingpartystrength,0,6,190,0,float,craft;evolver;planet,1.3;1.1;1.2
+planet,0,2,186,1,int,craft;buildyard;constructionrig;freighter;evolver,1
+buttonBorder,45,81,0,0,int,cannon;toggleweapon;areacannon;launcher;areamissile,1;2;0
+eventcloakengage,1,0,124,0,string,craft;wingman,"""RomulanTavaraCloak"";""RomulanWarbirdCloak"";""SelaCloakEngage"""
+menuTitle,0,63,60,0,string,(none),"""Klingon"";""Borg"";""Federation"""
+maxcrewgain,0,11,107,0,int,shipyard;planet;starbase,5000;3000;0
+eventcloakdisengage,1,0,112,0,string,craft;wingman,"""RomulanTavaraDecloak"";""SelaCloakDisengage"""
+forceinvalidatetarget,0,10,103,0,int,holding_bm;borgbore;launcher;toggleweapon;tractor_bm,1;0
+ignorevalidastarget,0,5,102,0,int,toggleweapon;launcher;cannonimp,1
+northbuffer,0,4,98,0,float,shipyard;research;craft,170.0;220.0;10.0f
+verbose,0,49,42,0,string,(none),"""GUI_CP_ATTACK_VTOOLTIP"";""GUI_CP_BUY_DILITHIUM_VTOOLTIP"";""GUI_CP_BUY_METAL_VTOOLTIP"""
+buttonName,0,48,42,0,string,(none),"""attack"";""buydil"";""buymet"""
+preferredPosition,0,48,42,0,4 numbers,(none),0		1		0	0;0		0		0	0;1		2		0	0
+research,0,2,88,0,int,shipyard;research;planet;craft,0;1
+combatspeed,0,35,51,0,int,(none),60;40;50
+commandName,0,43,42,0,string,(none),"""GIVE_RESOURCE"";""BUY_RESOURCE"";""SET_FORMATION"""
+repair_ship,0,1,78,0,int,shipyard;repairship;craft,0;1
+source,0,37,42,0,string,(none),"""cargo_ship"";""ship"";""trade_station"""
+physics,0,24,50,0,string,(none),"""smooth"";""borg"";""hover"""
+combatphysicsfile,0,18,50,0,string,(none),"""basic_smooth_combat.odf"";""basic_rotate_combat.odf"";""bbatcombat.odf"""
+repairanimation,0,1,67,0,int,shipyard,0
+southbuffer,0,2,60,0,float,shipyard;craft,170.0;10.0f;50.0
+isshipupgrade,0,10,49,0,int,pod,1
+upgradelevel,0,10,49,0,int,pod,2;3
+upgrademultiplier,0,10,49,0,float,pod,1.0;1.16;1.08
+upgradesystem,0,10,49,0,string,pod,"""weapon_control"";""shield_generator"";""sensors"""
+backwardaccel,0,25,33,0,int,(none),4;1;0
+forwardaccel,0,25,33,1,float,(none),0.2;3;.5
+turnalpha,0,25,33,1,float,(none),0.24;1;.8
+turnomega,0,25,33,1,float,(none),0.145;1;.1
+pitchalpha,0,25,32,0,float,(none),0.1;1;.1
+pitchomega,0,25,32,0,float,(none),1.0;1;.1
+ctfunits#,0,20,36,0,string,(none),"""ctf_fconst.odf"";""ctf_fbase.odf"";""fscout.odf"""
+bstar.#.scale,0,31,24,0,float,(none),1.0;250.0;10
+rollcoupling,0,22,33,0,int,(none),5;0;3
+has_resource,0,2,50,0,int,latinum;scrap,0;1
+menu,0,19,33,0,string,(none),"""trade"";""orders"";""ai"""
+pitchalphafractionatrest,0,17,33,0,int,(none),1;.0;.8
+pitchomegafractionatrest,0,17,33,0,int,(none),1;.0;.8
+turnalphafractionatrest,0,17,33,0,int,(none),1;.0;.8
+turnomegafractionatrest,0,17,33,1,int,(none),1;.0;.8
+forwardcontroldistance,0,17,32,0,int,(none),70;100;200
+pitchdefault,0,17,32,0,int,(none),0;90
+pitchdefaultspeed,0,17,32,0,float,(none),0.5;1;-1
+turncontrolangle,0,17,32,0,int,(none),20;40;30
+turncontrolsquared,0,17,32,0,int,(none),0;1;1.0
+traveltimefraction,0,2,36,0,float,phaser,.01
+resourcescanhandle,0,14,23,0,string list,freighter;mining;p_mining,"""dilithium"" ""latinum"";""dilithium"";""biomatter"""
+secondaryBuildItem#,0,29,8,0,string,research,"""8472_PodShipResearch21"";""8472_PodShipResearch22"";""8472_PodShipResearch23"""
+canwebuildinhere,0,1,34,0,int,latinum;nebula_obj,1
+repairhardpoint,0,6,29,0,string,shipyard;research,"""hp98"";""repair"";""hp99"""
+assault,0,1,33,0,int,craft;evolver,1
+animateowner,0,5,25,0,int,cannonimp;launcher;cannon;toggleweapon,1
+ambientSound,8,21,0,0,string,nebula_obj;planet;background_obj;blackhole_obj;asteroidfield,"""msnebam.wav"";""msun_am.wav"";""msnebl.wav"""
+param,0,17,11,0,int,(none),2;4;3
+dest,0,11,15,0,string,(none),"""trade_station"";""has_crew"";""has_hitpoints"""
+repairrate,0,3,22,0,int,repairship;shipyard;craft,0;.15;.25
+resource,0,9,16,0,string,scrap;planet;latinum,"""map_dilithium_moon_res"";""map_tritanium_moon_res"";""ResourceLatinum"""
+evolve,0,2,22,0,int,evolver,0;1
+needsTarget,0,12,12,0,int,(none),1
+wpnReticle,10,14,0,0,string,areacannon;cannon;toggleweapon;areamissile;launcher,"""gblast"""
+affectedsystem,0,2,20,0,int,micro,0;1
+draintime,0,2,20,0,int,micro,8;4;5
+eventrepairtargetship,0,1,21,0,string,repairship;shipyard;craft,"""FederationNewtonCombatService"";""RepairTargetShip"""
+eventrepairtargetstation,0,1,21,0,string,repairship;shipyard;craft,"""FederationNewtonCombatServiceStation"";""RepairTargetStation"""
+wpnCategory,9,13,0,0,string,areacannon;cannon;toggleweapon;areamissile;launcher,"""ARCA"";""CANN"";""TOWE"""
+wpnPriority,9,13,0,0,int,areacannon;cannon;toggleweapon;areamissile;launcher,0
+builder_facility,0,1,20,0,int,constructionrig,1
+isHero,9,10,0,0,int,wingman;craft;starbase,1
+computerFacilityConstructionBegin#,8,10,0,0,string,(none),"""gvofc022.wav"";""gvofc023.wav"";""bc25.wav"""
+computerShipConstructionBegin#,8,10,0,0,string,(none),"""gvofc022.wav"";""gvofc023.wav"";""bc25.wav"""
+displaykey,0,8,10,1,string,(none),"""GUI_RD_NORACE"";""Federation"";""GUI_RD_BORG"""
+menuName#,0,11,7,0,string,(none),"""e_fed.odf"";""e_kling.odf"";""e_rom.odf"""
+nebulatype,0,7,11,0,int,nebula_obj,2;5;4
+shipIsBuiltByEvolution,0,11,7,0,int,sensor;craft;research;freighter;starbase,1
+officerGain,9,8,0,0,int,starbase;upgrade;upgrade¹;upgraÿbd,20;0;60
+scrapValue,9,8,0,0,int,asteroid;scrap;asteroidfield;wingman;shipyard,1;800;7
+background_#,0,8,8,0,string,(none),"""bitmaps\\AdmiralsLog\\Screens\\FRAME…"
+blametheshooter,0,1,15,0,int,shockwavexplode;fireballexplode,0;1
+crewModifier,15,1,0,0,float,planet_obj,1.0;1.2;1.0-
+detectClass,7,9,0,0,int,detectcloak,3;1;2
+detectTimer,7,9,0,0,float,detectcloak,10.0f
+tabBmp_#,0,8,8,0,string,(none),"""bitmaps\\AdmiralsLog\\TabButtons\\TA…"
+tabBmpH_#,0,8,8,0,string,(none),"""bitmaps\\AdmiralsLog\\TabButtons\\TA…"
+can_repair,0,14,1,0,int,craft;evolver;starbase;freighter;constructionrig,0
+citytexturename,0,6,9,0,string,(none),"""ECFR"";""ECNA"";""BORG"""
+computerEnginesOffline#,7,8,0,0,string,(none),"""gvofc03.wav"";""gvofc05.wav"";""bc15.wav"""
+creationlabel,0,6,9,0,string,(none),"""ADM_COMMISSIONED"";""ADM_ASSEMBLED"";""ADM_CREATED"""
+insufficientofficersevent,0,6,9,0,string,(none),"""InsufficientCredits"";""InsufficientBorgOfficers"";""InsufficientCardOfficers"""
+maxdilithium,0,2,13,0,int,freighter,150;600;0
+maxlatinum,0,2,13,0,int,freighter,100;400;0
+maxmetal,0,2,13,0,int,freighter,0;75;300
+miner,0,2,13,1,int,freighter,1;0
+miningratemodifier,0,6,9,0,float,(none),1.0;1.25;1.3
+multiplayermusic,0,6,9,0,string,(none),"""Federation.wav"";""Federation.mp3"";""mbormp300.wav"""
+recycledilithiumfraction,0,6,9,0,float,(none),.5;.6;.7
+recycledlabel,0,6,9,0,string,(none),"""ADM_DECOMMISSIONED"";""ADM_RECYCLED"""
+recyclemetalfraction,0,6,9,0,float,(none),.5;.6;.7
+selfdestruct,0,2,13,0,string,freighter;minearray,"""x_small2_explosion"";""xlatinumExplosion"";""xmineexplosion"""
+singleplayermusic,0,6,9,0,string,(none),""""";""Federation.wav"";""Federation.mp3"""
+track#,12,3,0,0,string,(none),"""mbor300.wav"";""mbor115.wav"";""mbor100.wav"""
+atmospheretint,0,5,9,0,3 numbers,(none),1.0 1.0 1.0
+explosionunitsperlatinum,0,1,13,0,int,freighter,0;10
+label,7,7,0,1,string,wingman;craft,"""Locutus"";""Enterprise NCC 1701-E"";""Martok's Negh'Var"""
+latinum_spray_emitter,0,1,13,0,string,freighter,"""latinum_spray"""
+lotscrew,0,5,9,0,int,(none),999999999;30000
+lotsdilithium,0,5,9,0,int,(none),8000;30000;45000
+lotslatinum,0,5,9,0,int,(none),4000;30000;0
+lotsmetal,0,5,9,0,int,(none),0;30000;45000
+maxbiomatter,0,1,13,0,int,freighter,0;25;150
+normalcrew,0,5,9,0,int,(none),999999999;1200
+normaldilithium,0,5,9,0,int,(none),4000;3500;3750
+normallatinum,0,5,9,0,int,(none),2000;500;0
+normalmetal,0,5,9,0,int,(none),0;2000;2250
+numcities,0,5,9,0,int,(none),35;35.0
+speedfractioncarryinglatinum,0,1,13,0,float,freighter,1.0;.4
+transportsprite,0,5,9,0,string,(none),"""federationtransport"";""btransport"";""ctransport"""
+defaultgreenalert,0,1,12,0,int,craft,1
+eventSelfDestruct,9,4,0,0,string,wingman;craft;starbase,"""BattleSelfDestruct"";""PicardSelfDestruct"";""LocutusSelfDestruct"""
+latinumtransferrate,0,5,8,0,float,mining;starbase,10.0;15.0
+maxAmmo,6,7,0,0,int,asteroid;scrap;asteroidfield;wingman;craft,0;1200
+scrapCost,6,7,0,0,int,asteroid;scrap;asteroidfield;wingman;craft,0;6
+transporttoenemyonhard,0,4,9,0,int,(none),0;1
+transporttofriendsonnoteasy,0,4,9,0,int,(none),0;1
+maximumUpgrades,5,7,0,0,int,starbase,6
+officertooltip,0,3,9,0,string,(none),"""GUI_RD_CREDITS_TOOLTIP"";""GUI_RD_BORG_OFF_TOOLTIP"";""GUI_RD_ROM_OFF_TOOLTIP"""
+officerverbosetooltip,0,3,9,0,string,(none),"""GUI_RD_CREDITS_VTOOLTIP"";""GUI_RD_BORG_OFF_VTOOLTIP"";""GUI_RD_ROM_OFF_VTOOLTIP"""
+canplaycollectlatinum,0,2,9,0,int,(none),1;0
+heatSignature,6,5,0,0,float,asteroid;scrap;wingman;shipyard;craft,0.02;1.2;0.5
+imageSignature,6,5,0,0,float,asteroid;scrap;wingman;shipyard;craft,0.02;3.0;2.0
+instantActionSlot,0,6,5,0,int,(none),1;4;0
+radarSignature,6,5,0,0,float,asteroid;scrap;wingman;shipyard;craft,0.01;0.2;0.01-
+smokeFrames,5,6,0,0,int,(none);chainpulsar;grenade;manheimeffect,16
+smokeRadius,5,6,0,0,float,(none);chainpulsar;grenade;manheimeffect,2.0;3.0;0.5
+affectedbypsionicinsanity,0,1,9,0,int,(none),1;0
+attack_path#,4,6,0,0,string,craft;wingman,"""p2.pth"";""p3.pth"""
+canbecommandeered,0,1,9,0,int,(none),1;0
+cancommandeer,0,1,9,0,int,(none),1;0
+canplaycapturetheflag,0,1,9,0,int,(none),1;0
+canplaycolonizeplanets,0,1,9,0,int,(none),0
+cantrade,0,1,9,0,int,(none),1;0
+eventGreenAlert,7,3,0,0,string,wingman;craft,"""PicardGreenAlert"";""LocutusGreenAlert"";""WorfGreenAlert"""
+eventRedAlert,7,3,0,0,string,wingman;craft,"""PicardRedAlert"";""LocutusRedAlert"";""WorfRedAlert"""
+eventYellowAlert,7,3,0,0,string,wingman;craft,"""PicardYellowAlert"";""LocutusYellowAlert"";""WorfYellowAlert"""
+lotsbiomatter,0,1,9,0,int,(none),500;120000
+miningRate,0,8,2,0,int,(none),10;12;15
+normalbiomatter,0,1,9,0,int,(none),500;7200
+officerUpgradeODF,4,6,0,0,string,(none),"""borgoff"";""fedoff"";""klingoff"""
+computerFacilityConstructionComplete#,4,5,0,0,string,(none),"""gvofc024.wav"";""bc27.wav"""
+computerLifeSupportOffline#,4,5,0,0,string,(none),"""gvofc011.wav"";""bc19.wav"""
+computerSensorsOffline#,4,5,0,0,string,(none),"""gvofc07.wav"";""bc16.wav"""
+computerShieldGeneratorOffline#,4,5,0,0,string,(none),"""gvofc09.wav"";""bc17.wav"""
+computerShipConstructionComplete#,4,5,0,0,string,(none),"""gvofc024.wav"";""bc27.wav"""
+computerUnderAttack#,4,5,0,0,string,(none),""""""
+computerWeaponsOffline#,4,5,0,0,string,(none),"""gvofc01.wav"";""bc14.wav"""
+eventfire,0,4,5,0,string,fusingweapon;cannonimp;repairweapon;separatingweapon,"""CubeFusion"";""BorgRefresh"";""FederationTeutoburgTricobalt"""
+multiReqClass#,0,6,3,0,string,fusingweapon;biopulse,"""bbattle1"";""bbattle2"";""8472_frigate"""
+multiReqMin#,0,6,3,0,int,fusingweapon;biopulse,1;8;4
+smokePause,4,5,0,0,float,chainpulsar;(none);grenade;manheimeffect,0.01;0.2;0.05
+smokeTexture,4,5,0,0,string,chainpulsar;(none);grenade;manheimeffect,"""Xsmoke"";""bsmoke"";""lsmoke"""
+amtBiomatter,0,6,2,0,int,(none),8000;25000;32000
+displayTrade,0,4,4,0,int,(none),1
+isBuy,0,4,4,0,int,(none),1;0
+leftRightInertia,4,4,0,0,float,(none),7.5;3.75;5.0
+maxPitch,4,4,0,0,int,(none),45;40;70
+maxReverseSpeed,4,4,0,0,float,(none),4.0;0.6667
+pitchRotationSpeed,4,4,0,0,float,(none),0.0667
+rollRotationSpeed,4,4,0,0,float,(none),0.5;0.52
+sp_pitchAngleCoeff,4,4,0,0,float,(none),-1.197;-2.639
+sp_velocAngleCoeff,4,4,0,0,float,(none),0.060;1.491
+sy_yawAngleCoeff,4,4,0,0,float,(none),1.497;0.927;1.0
+sy_yawVelocCoeff,4,4,0,0,float,(none),0.1;0.2;0.15
+turnRadius,4,4,0,0,int,(none),30;40;10
+upDownInertia,4,4,0,0,float,(none),7.5;3.75;5.0
+velocCoeffStill,4,4,0,0,float,(none),0.3;0.5;0.4
+velocWhenCoeffHalf,4,4,0,0,float,(none),0.7
+weaponHard#,4,4,0,0,string,wingman;craft,"""GC1"";""GC2"";""GM1"""
+weaponName#,4,4,0,0,string,wingman;craft,"""gatstab"";""gminigun"";""gmdmgun"""
+fallDuration,1,6,0,0,int,colonizerpod;klingoncommandoteam,5
+fallRate,1,6,0,0,int,colonizerpod;klingoncommandoteam,15
+partySize,1,6,0,0,int,colonizerpod;klingoncommandoteam,100;40
+rotationRate,1,6,0,0,float,colonizerpod;klingoncommandoteam,0.00015
+smokeInherit,3,4,0,0,float,chainpulsar;(none);manheimeffect,0.5;0.3-;0.3
+smokeLifespan,3,4,0,0,float,chainpulsar;(none);manheimeffect,0.6;.8;1.6
+smokeVariance,3,4,0,0,float,chainpulsar;(none);manheimeffect,1.0;2.0
+stayDuration,1,6,0,0,int,colonizerpod;klingoncommandoteam,5
+affectorType,0,3,3,0,int,rangedobjectaffector,1;2;0
+bordername,0,3,3,0,string,(none),"""bb_standard"""
+periodScan,4,2,0,0,float,wingman;craft;pod;shipyard,0.0f
+soundThrust,4,2,0,0,string,wingman;craft;pod;shipyard,"""impulse.wav"";""avsave0.wav"";""avslfe6.wav"""
+timeBetween,0,3,3,0,float,rangedobjectaffector,5.0;3.0;2.0
+velocJam,4,2,0,0,float,wingman;craft;pod;shipyard,5.0f
+wave_Effect,0,3,3,0,string,rangedobjectaffector,"""CloakEnhancerWave"";""SensorScramblerWave"";""WeaponEnhancerWave"""
+wormholeID,2,4,0,0,string,wormholegen;quantumeffect,"""wborgate"";""wborgate¹*l;""wborgate""-"
+can_guard,0,4,1,0,int,craft;mining;fighter,0
+canHaveOrbitalStation,0,3,2,0,int,(none),0;1
+lifetime,2,3,0,0,float,wormholegen,90.0f
+moveBelowCombatArea,2,3,0,0,int,wormhole_obj;sensor,0;1
+soundTurbo,3,2,0,0,string,wingman;craft;shipyard,"""warp.wav"";""warp.wúQD"
+sourcenot,0,1,4,0,string,(none),"""planet"";""planet"" ""species_mine"";""colony_ship"""
+weaponMask,3,2,0,0,int,wingman;craft;shipyard,00001
+closeSound,2,2,0,0,string,wormhole_obj,"""swbmastc.wav¹*l;""swbmastc.wav"""
+diedMsg,3,1,0,0,string,pod;wingman;shipyard;craft,"""die.wav"";""abetty3.wav"""
+expansionTime,1,3,0,0,float,blackholecreator;fluxwave,5.0;2.5
+finalDistance,0,3,1,0,int,fusingweapon,110;150;10
+fusedClass,0,3,1,0,string,fusingweapon,"""bbattle3"";""bbattle4"";""fgalaxy"""
+horzOverlayRect_#,0,2,2,0,4 numbers,(none),6	12	616	1;6	507	616	1;9	11	870	8
+initialScale,1,3,0,0,float,blackholecreator;fluxwave,0.05
+isInfinite,0,2,2,0,int,(none),1;0
+maxScale,1,3,0,0,float,blackholecreator;fluxwave,19.0;20.0
+retractionTime,1,3,0,0,float,blackholecreator;fluxwave,2.5;5.0
+sourceTypeOr,0,2,2,0,int,(none),1
+timeAtMaxSize,1,3,0,0,float,blackholecreator;fluxwave,5.0;5.0-o
+vertOverlayRect_#,0,2,2,0,4 numbers,(none),6	13	1	494;621	13	1	494;9	19	1	741
+visualFactor,1,3,0,0,float,blackholecreator;fluxwave,1.0
+waveArc,2,2,0,0,int,repulsionwave;shockwavecannon,90
+xplBuilding,2,2,0,0,string,grenade;myotron,"""xgasxpl"";""xmslbld"""
+xplGround,2,2,0,0,string,grenade;myotron,"""xgasxpl"";""xmslgnd"""
+xplVehicle,2,2,0,0,string,grenade;myotron,"""xgasxpl"";""xmslcar"""
+attackMsg,2,1,0,0,string,wingman;shipyard;craft,"""fireall.wav"""
+biomattertransferrate,0,1,2,0,float,mining,0.75;15.0
+canattackstations,0,1,2,0,int,gravmine,0
+cyclecolorblue,0,1,2,0,int,rangedobjectaffector,1.0;1;0
+cyclecolorgreen,0,1,2,0,int,rangedobjectaffector,0;1.0
+cyclecolorred,0,1,2,0,int,rangedobjectaffector,1;0
+damagefactor,0,1,2,0,float,rangedobjectaffector,2.0;1.0;1.75
+explosionSprite,1,2,0,0,string,artillery,"""sparkball1"";""sparkball3"""
+explosionSpriteRadius,1,2,0,0,float,artillery,50.0f
+followMeMsg,2,1,0,0,string,wingman;shipyard;craft,"""proceed.wav"""
+followMsg,2,1,0,0,string,wingman;shipyard;craft,"""outahere.wav"""
+fusingMetalCost,0,2,1,0,int,fusingweapon,750;1500;0
+goMsg,2,1,0,0,string,wingman;shipyard;craft,"""engage.wav"""
+isTranswarpGate,1,2,0,0,int,sensor,1
+killedMsg,2,1,0,0,string,wingman;shipyard;craft,"""standown.wav"""
+otherMsg,2,1,0,0,string,wingman;shipyard;craft,"""makeitso.wav"""
+rangefactor,0,1,2,0,float,rangedobjectaffector,1.5;1.25;1.0
+recycleMsg,2,1,0,0,string,wingman;shipyard;craft,"""makeitso.wav"""
+reloadMsg,2,1,0,0,string,wingman;shipyard;craft,"""load.wav"""
+repairMsg,2,1,0,0,string,wingman;shipyard;craft,"""repair.wav"""
+rescueMsg,2,1,0,0,string,wingman;shipyard;craft,"""fleetres.wav"""
+selectAttackMsg,2,1,0,0,string,wingman;shipyard;craft,"""lock.wav"""
+selectFollowMsg,2,1,0,0,string,wingman;shipyard;craft,"""carry.wav"""
+selectGoMsg,2,1,0,0,string,wingman;shipyard;craft,"""makeitso.wav"""
+selectOtherMsg,2,1,0,0,string,wingman;shipyard;craft,"""engage.wav"""
+selectWaitMsg,2,1,0,0,string,wingman;shipyard;craft,"""proceed.wav"""
+user#Msg,2,1,0,0,string,wingman;shipyard;craft,"""makeitso.wav"""
+accelBrake,1,1,0,0,float,wingman;craft,75.0
+accelDragFull,1,1,0,0,float,wingman;craft,1.0
+accelDragStop,1,1,0,0,float,wingman;craft,3.5
+accelJump,1,1,0,0,float,wingman;craft,20.0
+accelThrust,1,1,0,0,float,wingman;craft,20.0
+addToPathPlanner,0,1,1,0,int,nebula_obj,0
+adLogBG,0,1,1,0,string,(none),"""bitmaps\\AdmiralsLog\\BACKGROUND.BMP"";""bitmaps\\AdmiralsLog\\BACKGROUND.BMP"";"""
+aiName#,1,1,0,0,string,wingman;craft,"""TankEnemy"""
+alphaDamp,1,1,0,0,float,wingman;craft,5.0
+alphaSteer,1,1,0,0,float,wingman;craft,5.0
+alphaTrack,1,1,0,0,float,wingman;craft,20.0
+AmimDuration,1,1,0,0,float,background_obj,2.5
+ammoCost,1,1,0,0,int,grenade,5
+amplitude,1,1,0,0,int,repulsionwave,10
+amtDilithium,0,1,1,0,int,(none),20000;25000
+amtLatinum,0,1,1,0,int,(none),2000;25000
+AnimFrames,1,1,0,0,int,background_obj,16
+AnimTexture,1,1,0,0,string,background_obj,"""mgate"""
+barHeight,0,1,1,0,int,(none),2;3
+battle#Data,0,1,1,0,4 numbers,(none),11	75	110	20;16	112	215	30
+battleAlliedHeaderRect,0,1,1,0,4 numbers,(none),272	28	165	35;408	42	248	52
+battleEnemyHeaderRect,0,1,1,0,4 numbers,(none),448	28	150	35;672	42	225	52
+battleFleetsHeaderRect,0,1,1,0,4 numbers,(none),130	28	110	35;195	42	165	52
+battlesArrowDownRect,0,1,1,0,4 numbers,(none),590	474	24	24;885	711	36	36
+battlesArrowUpRect,0,1,1,0,4 numbers,(none),590	22	24	24;885	33	36	36
+battlesScrollAreaRect,0,1,1,0,4 numbers,(none),592	46	20	428;888	69	30	642
+battleTitleHeaderRect,0,1,1,0,4 numbers,(none),14	28	106	35;21	42	159	52
+battleTopY,0,1,1,0,int,(none),42;63
+betweenPlayerSpace,0,1,1,0,int,(none),7
+betweenTabSpace,0,1,1,0,int,(none),0
+black,1,1,0,0,3 numbers,(none),0.0	0.0	0.0
+blue,1,1,0,1,3 numbers,(none),0.0	0.4	1.0
+borgRaceIcon,0,1,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Overlays\\LOGO…"
+borgRaceIconH,0,1,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Overlays\\LOGO…"
+bottomY,0,1,1,0,int,(none),500;750
+breen,1,1,0,0,3 numbers,(none),0.0	0.7	0.0
+brickred,1,1,0,0,3 numbers,(none),0.5	0.1	0.1
+brown,1,1,0,0,3 numbers,(none),0.6	0.4	0.0
+buildArrowDownRect,0,1,1,0,4 numbers,(none),590	474	24	24;885	711	36	36
+buildArrowUpRect,0,1,1,0,4 numbers,(none),590	66	24	24;885	100	36	36
+buildScrollAreaRect,0,1,1,0,4 numbers,(none),592	90	20	384;888	135	30	576
+buildTopY,0,1,1,0,int,(none),36;54
+builtHeaderRect,0,1,1,0,4 numbers,(none),285	22	165	35;428	33	248	52
+builtHeaderX,0,1,1,0,int,(none),310;465
+buttonTextColor,0,1,1,0,3 numbers,(none),.613	.629	.648;1.0	1.0	1.0
+cardassian,1,1,0,0,3 numbers,(none),0.9	0.6	0.0
+cardassianRaceIcon,0,1,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Overlays\\LOGO…"
+cardassianRaceIconH,0,1,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Overlays\\LOGO…"
+cargo_ship,0,1,1,0,int,cargo_ship,1
+classHeaderRect,0,1,1,0,4 numbers,(none),14	22	118	35;21	33	177	52
+classHeaderX,0,1,1,0,int,(none),14;21
+collisionRadius,1,0,1,0,float,shipyard;fighter,5.0;2
+colorBorderDisabled,1,1,0,0,3 numbers,(none),0.1		0.12		0.11
+colorBorderMouseOver,1,1,0,0,3 numbers,(none),0.996		0.9219	0.5585
+colorBorderNormal,1,1,0,0,3 numbers,(none),0.5		0.5976	0.5859
+commandHotkeys,0,1,1,0,empty,(none),
+commandNames,0,1,1,0,empty,(none),
+continueButtonRect,0,1,1,0,4 numbers,(none),123	565	480	30
+crewAssignedData,0,1,1,0,4 numbers,(none),192	384	64	16
+crewAssignedLabel,0,1,1,0,4 numbers,(none),64	384	94	16
+crewHeaderRect,0,1,1,0,4 numbers,(none),308	21	85	35;612	33	127	52
+crewKilledData,0,1,1,0,4 numbers,(none),192	208	64	16
+crewKilledLabel,0,1,1,0,4 numbers,(none),64	208	94	16
+crewRecruitedData,0,1,1,0,4 numbers,(none),192	192	64	16
+crewRecruitedLabel,0,1,1,0,4 numbers,(none),64	192	94	16
+cyan,1,1,0,0,3 numbers,(none),0.0	1.0	0.784
+damageBallistic,1,1,0,0,int,grenade,0
+damageConcussion,1,1,0,0,int,grenade,250
+damageFlame,1,1,0,0,int,grenade,0
+damageImpact,1,1,0,0,int,grenade,0
+dialogWinRect,0,1,1,0,4 numbers,(none),170	60	630	512;236	118	926	744
+dilithiumCollectedData,0,1,1,0,4 numbers,(none),192	96	64	16
+dilithiumCollectedLabel,0,1,1,0,4 numbers,(none),64	96	94	16
+dilithiumHeaderRect,0,1,1,0,4 numbers,(none),11	21	85	35;33	33	127	52
+dilithiumPurchasedData,0,1,1,0,4 numbers,(none),192	288	64	16
+dilithiumPurchasedLabel,0,1,1,0,4 numbers,(none),64	288	94	16
+dilithiumSoldData,0,1,1,0,4 numbers,(none),192	304	64	16
+dilithiumSoldLabel,0,1,1,0,4 numbers,(none),64	304	94	16
+dilithiumSpentData,0,1,1,0,4 numbers,(none),192	112	64	16
+dilithiumSpentLabel,0,1,1,0,4 numbers,(none),64	112	94	16
+disableWeapon,0,1,1,0,int,plasmacannon,2
+doneBmp,0,1,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Buttons\\MENUB…"
+doneBmpH,0,1,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Buttons\\MENUB…"
+doneButtonRect,0,1,1,0,4 numbers,(none),640	574	122	16;65	815	121	22
+economyHeaderRect,0,1,1,0,4 numbers,(none),267	20	94	35;400	30	141	52
+EventRadius,1,1,0,0,int,blackhole_obj,70
+expireOnClose,0,1,1,0,int,wormhole_obj,1
+ferengi,1,1,0,0,3 numbers,(none),1.0	0.588	0.0
+filterButton,0,1,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Buttons\\BUTTO…"
+filterButtonH,0,1,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Buttons\\BUTTO…"
+filterButtonSpace,0,1,1,0,int,(none),10;15
+frameDelay,1,1,0,0,float,(none),0.1
+frequency,1,1,0,0,int,repulsionwave,10
+gamePtsHeaderRect,0,1,1,0,4 numbers,(none),15	20	120	35;23	30	180	52
+generalTextColor,0,1,1,0,3 numbers,(none),.41		.41		.41;1.0	1.0	1.0
+ghostTeamColorFactor,0,1,1,0,float,(none),0.5
+GravityRadius,1,1,0,0,int,blackhole_obj,450
+gray,1,1,0,0,3 numbers,(none),0.5	0.5	0.5
+green,1,1,0,1,3 numbers,(none),0.0 	1.0	0.0
+hisPilots,1,1,0,0,int,(none),20
+hisScrap,1,1,0,0,int,(none),60
+hitFriends,1,1,0,0,int,myotron,0
+horizontalOverlay,0,1,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Overlays\\LIGH…;""bitmaps\\AdmiralsLog\\Overlays\\Colo…"
+individualBarThin,0,1,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Buttons\\HORIZ…"
+initDelay,1,1,0,0,float,(none),0.5
+interPlayerHeight,0,1,1,0,int,(none),6;9
+isToggle,0,1,1,0,int,(none),1
+latinumCollectedData,0,1,1,0,4 numbers,(none),192	128	64	16
+latinumCollectedLabel,0,1,1,0,4 numbers,(none),64	128	94	16
+latinumEarnedData,0,1,1,0,4 numbers,(none),192	272	64	16
+latinumEarnedLabel,0,1,1,0,4 numbers,(none),64	272	94	16
+latinumHeaderRect,0,1,1,0,4 numbers,(none),111	21	85	35;226	33	127	52
+latinumSpentData,0,1,1,0,4 numbers,(none),192	144	64	16
+latinumSpentLabel,0,1,1,0,4 numbers,(none),64	144	94	16
+lostHeaderRect,0,1,1,0,4 numbers,(none),458	22	140	35;688	33	210	52
+lostHeaderX,0,1,1,0,int,(none),467;700
+m_maxResource,0,1,1,0,int,cargo_ship,500
+magenta,1,1,0,0,3 numbers,(none),1.0	0.0	1.0
+metalCollectedData,0,1,1,0,4 numbers,(none),192	160	64	16
+metalCollectedLabel,0,1,1,0,4 numbers,(none),64	160	94	16
+metalHeaderRect,0,1,1,0,4 numbers,(none),210	21	85	35;419	33	127	52
+metalPurchasedData,0,1,1,0,4 numbers,(none),192	320	64	16
+metalPurchasedLabel,0,1,1,0,4 numbers,(none),64	320	94	16
+metalSoldData,0,1,1,0,4 numbers,(none),192	336	64	16
+metalSoldLabel,0,1,1,0,4 numbers,(none),64	336	94	16
+metalSpentData,0,1,1,0,4 numbers,(none),192	176	64	16
+metalSpentLabel,0,1,1,0,4 numbers,(none),64	176	94	16
+militaryHeaderRect,0,1,1,0,4 numbers,(none),153	20	94	35;230	30	141	52
+myPilots,1,1,0,0,int,(none),20
+myScrap,1,1,0,0,int,(none),20
+nameLabel,0,1,1,0,4 numbers,(none),192	64	64	12
+nation,1,1,0,0,string,wingman;craft,"""american"""
+officerEndingData,0,1,1,0,4 numbers,(none),192	240	64	16
+officerEndingLabel,0,1,1,0,4 numbers,(none),64	240	94	16
+officerPeakData,0,1,1,0,4 numbers,(none),192	224	64	16
+officerPeakLabel,0,1,1,0,4 numbers,(none),64	224	94	16
+omegaSpin,1,1,0,0,float,wingman;craft,3.5
+orange,1,1,0,0,3 numbers,(none),1.0	0.588	0.0
+ownerSystemDuration,1,1,0,0,int,override,3
+particleFrames,1,1,0,0,int,(none),16
+particleTexture,1,1,0,0,string,(none),"""particle.0"""
+percentReduction,0,1,1,0,float,rangedobjectaffector,0.5;0.23
+pink,1,1,0,0,3 numbers,(none),1.0	0.5	0.5
+pitchPitch,1,1,0,0,float,wingman;craft,0.25
+pitchThrust,1,1,0,0,float,wingman;craft,0.1
+planetsColonizedData,0,1,1,0,4 numbers,(none),192	352	64	16
+planetsColonizedLabel,0,1,1,0,4 numbers,(none),64	352	94	16
+planetsLostData,0,1,1,0,4 numbers,(none),192	368	64	16
+planetsLostLabel,0,1,1,0,4 numbers,(none),64	368	94	16
+PlayAnimBackwards,1,1,0,0,name,background_obj,10.®;10.5
+PlayAnimForwards,1,1,0,0,float,background_obj,4.5
+player#DilData,0,1,1,0,4 numbers,(none),10	66	85	48;15	100	127	72
+player#ScoreData,0,1,1,0,4 numbers,(none),10	66	120	48;15	100	184	72
+player#ShipData,0,1,1,0,4 numbers,(none),10	66	180	48;15	100	270	72
+playerButton,0,1,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Buttons\\BUTTO…"
+playerButtonH,0,1,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Buttons\\BUTTO…"
+playerButtonRect#,0,1,1,0,4 numbers,(none),30	122	132	48;41	119	182	72
+purple,1,1,0,0,3 numbers,(none),0.686	0.0	1.0
+quitButtonRect,0,1,1,0,4 numbers,(none),618	565	112	30
+raceLabel,0,1,1,0,4 numbers,(none),192	76	64	12
+red,1,1,0,1,3 numbers,(none),1.0	0.0	0.0
+reflectBeam,1,1,0,0,int,reflectweapon,1
+reflectMissile,1,1,0,0,int,reflectweapon,1
+regularWeaponDelay,1,1,0,0,float,minelayer,1.0f
+rollSteer,1,1,0,0,float,wingman;craft,0.1
+rollStrafe,1,1,0,0,float,wingman;craft,0.1
+safe,1,1,0,0,int,selfdestruøsd;selfdestruct,0
+saveBmp,0,1,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Buttons\\MENUB…"
+saveBmpH,0,1,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Buttons\\MENUB…"
+saveButtonRect,0,1,1,0,4 numbers,(none),516	574	122	16;65	778	121	22
+scienceHeaderRect,0,1,1,0,4 numbers,(none),380	20	94	35;570	30	141	52
+SCROLL_DOWN_BUTTON_DOWN,0,1,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Buttons\\SCROL…"
+SCROLL_DOWN_BUTTON_NORMAL,0,1,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Buttons\\SCROL…"
+SCROLL_DOWN_BUTTON_OVER,0,1,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Buttons\\SCROL…"
+SCROLL_TAB_DOWN,0,1,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Buttons\\SCROL…"
+SCROLL_TAB_HEIGHT,0,1,1,0,int,(none),20;30
+SCROLL_TAB_NORMAL,0,1,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Buttons\\SCROL…"
+SCROLL_TAB_WIDTH,0,1,1,0,int,(none),20;30
+SCROLL_UP_BUTTON_DOWN,0,1,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Buttons\\SCROL…"
+SCROLL_UP_BUTTON_NORMAL,0,1,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Buttons\\SCROL…"
+SCROLL_UP_BUTTON_OVER,0,1,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Buttons\\SCROL…"
+segments,1,1,0,0,int,repulsionwave,30
+setAltitude,1,1,0,0,float,wingman;craft,1.0
+shieldsReturned,1,1,0,0,float,fedrepairteam,0.5
+ship#ClassData,0,1,1,1,4 numbers,(none),14	60	118	35;21	90	177	52
+ship#Data,0,1,1,1,4 numbers,(none),245	75	365	20;300	80	365	20
+ship#Image,0,1,1,1,4 numbers,(none),11	75	220	300;50	75	220	300
+shipFilterButtonRect,0,1,1,0,4 numbers,(none),18	26	80	22;27	39	120	33
+shipInfoData,0,1,1,0,4 numbers,(none),192	93	64	10
+shipInfoLabel,0,1,1,0,4 numbers,(none),64	96	94	10
+shipsArrowDownRect,0,1,1,0,4 numbers,(none),590	474	24	24;885	711	36	36
+shipsArrowUpRect,0,1,1,0,4 numbers,(none),590	66	24	24;885	100	36	36
+shipsHeaderRect,0,1,1,0,4 numbers,(none),12	22	180	35;38	33	270	52
+shipsScrollAreaRect,0,1,1,0,4 numbers,(none),592	90	20	384;888	135	30	576
+shotSound,1,1,0,0,string,grenade,"""Ordin_c.wav"""
+smokeBlack,1,1,0,0,string,(none),"""bsmoke"""
+smokeBrown,1,1,0,0,string,(none),"""dsmoke"""
+smokeDelay,1,1,0,0,float,grenade,0.05
+smokeLifetime,1,1,0,0,float,(none),1.6
+smokeScale,1,1,0,0,float,(none),1.0
+smokeTan,1,1,0,0,string,(none),"""msmoke"""
+smokeWhite,1,1,0,0,string,(none),"""lsmoke"""
+sona,1,1,0,0,3 numbers,(none),0.8	0.8	0.8
+sortButton,0,1,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Buttons\\BUTTO…"
+sortButtonH,0,1,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Buttons\\BUTTO…"
+sortButtonRect,0,1,1,0,4 numbers,(none),0	0	116	34;0	0	174	52
+species#RaceIcon,0,1,1,1,string,(none),"""bitmaps\\AdmiralsLog\\Overlays\\LOGO…"
+species#RaceIconH,0,1,1,1,string,(none),"""bitmaps\\AdmiralsLog\\Overlays\\LOGO…"
+sprayFrames,1,1,0,0,int,(none),16
+sprayLifetime,1,1,0,0,float,(none),1.6
+sprayRadius,1,1,0,0,float,(none),2.0
+sprayScale,1,1,0,0,float,(none),1.0
+sprayTexture,1,1,0,0,string,(none),"""lsmoke"""
+spreadSpeed,1,1,0,0,int,repulsionwave,15
+stardateHeaderRect,0,1,1,0,4 numbers,(none),143	22	128	35;215	33	177	52
+stardateHeaderX,0,1,1,0,int,(none),152;228
+stationsHeaderRect,0,1,1,0,4 numbers,(none),209	22	150	35;450	33	225	52
+steamFrames,1,1,0,0,int,(none),16
+steamLifetime,1,1,0,0,float,(none),1.6
+steamRadius,1,1,0,0,float,(none),2.0
+steamScale,1,1,0,0,float,(none),1.0
+steamTexture,1,1,0,0,string,(none),"""lsmoke"""
+stepSize,1,1,0,0,float,cloakingdevice,0.0004f
+streamBufferSections,0,1,1,0,int,(none),2
+tabRect#,0,1,1,0,4 numbers,(none),170	14	66	46;256	84	105	35
+tally#Data,0,1,1,0,4 numbers,(none),11	230	155	20;16	322	232	30
+tallyBuiltHeaderRect,0,1,1,0,4 numbers,(none),178	200	100	35;280	285	150	52
+tallyClassHeaderRect,0,1,1,0,4 numbers,(none),11	200	155	35;16	285	232	52
+tallyDestroyedHeaderRect,0,1,1,0,4 numbers,(none),518	200	100	35;777	285	150	52
+tallyEffectivenessRect,0,1,1,0,4 numbers,(none),25	25	575	145;37	37	862	217
+tallyKillsHeaderRet,0,1,1,0,4 numbers,(none),402	200	100	35;603	285	150	52
+tallyLostHeaderRect,0,1,1,0,4 numbers,(none),290	200	100	35;435	285	150	52
+targetSystemDuration,1,1,0,0,int,override,3
+timeBetweenSystems,1,1,0,0,int,override,2
+timeDelay,1,1,0,0,int,klingoncommandoteam,5
+timeLineArea,0,1,1,0,4 numbers,(none),10	64	610	440;30	96	885	630
+timeLineBattlesArea,0,1,1,0,4 numbers,(none),356	24	73	16;773	36	110	24
+timelineBattlesIcon,0,1,1,0,string,(none),"""bitmaps\\AdmiralsLog\\icons\\battles…"
+timeLineBattlesIconArea,0,1,1,0,4 numbers,(none),330	24	26	26;747	30	41	41
+timeLineTextArea,0,1,1,0,4 numbers,(none),4	24	218	49;6	36	327	74
+timer,1,1,0,0,int,selfdestruøsd;selfdestruct,5
+titleLabelRect,0,1,1,0,4 numbers,(none),64	8	178	20
+toggleButtonRect,0,1,1,0,4 numbers,(none),5	565	112	30
+topBarY,0,1,1,0,int,(none),64
+topEdgeModifier,1,1,0,0,name,omegaexplode,0.¢;0.95
+totalEconHeaderRect,0,1,1,0,4 numbers,(none),560	21	60	35;780	33	90	52
+totalMilHeaderRect,0,1,1,0,4 numbers,(none),490	22	127	35;735	33	190	52
+totalScoreHeaderRect,0,1,1,0,4 numbers,(none),492	20	123	35;738	30	184	52
+transparency,1,1,0,0,name,cloakingdevice,0µ;0.0
+unsafeCloakDistance,1,1,0,0,float,cloakingdevice,400.0f
+velocForward,1,1,0,0,float,wingman;craft,20.0
+velocReverse,1,1,0,0,float,wingman;craft,15.0
+velocStrafe,1,1,0,0,float,wingman;craft,20.0
+verticalOverlay,0,1,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Overlays\\LIGH…"
+waveHeight,1,1,0,0,float,omegaexplode,100.0
+waveLength,1,1,0,0,int,repulsionwave,110
+waveSpeed,1,1,0,0,int,repulsionwave,10
+weaponHardpoint#,1,1,0,0,string list,wingman;craft,"""hp01"" ""hp06"";""hp26"""
+white,1,1,0,1,3 numbers,(none),0.9	0.9	0.9
+yellow,1,1,0,0,3 numbers,(none),0.9 	0.9 	0.0
+weapon#iconpos,0,0,9448,0,2 numbers,craft;shipyard;sensor;evolver;constructionrig,75	50;70	50;74	50
+shotdelay#,0,0,6007,0,float,cannonimp,2;4;0.25
+extraweaponhardpoints,0,0,2289,0,string,craft;shipyard;pod;sensor;research,"""root"""
+buildablebyownerraceonly,0,0,2287,0,int,craft;shipyard;pod;sensor;research,1;0
+curhealth,0,0,2285,0,int,craft;shipyard;pod;sensor;research,4000;92.25;264
+curshields,0,0,2285,0,int,craft;shipyard;pod;sensor;research,0;4000;103.25
+healthrate,0,0,2285,0,float,craft;shipyard;pod;sensor;research,4000.0;0;0.217
+maxshields,0,0,2285,0,int,craft;shipyard;pod;sensor;research,0;4000;103.25
+specialenergydisplaymode,0,0,2273,0,int,craft;shipyard;pod;sensor;research,1;2
+explosionhit,0,0,2253,0,string,unitorpedo;phaser;unibeam,"""fedW_phaserH"";""romW_beamdisruptorH"";""romW_pulsedisruptorH"""
+explosionshieldhit,0,0,2253,0,string,unitorpedo;phaser;unibeam,"""fedW_phaserH"";""romW_beamdisruptorH"";""romW_pulsedisruptorHS"""
+replacement#class#,0,0,2232,0,string,replaceweapon,"""rom_tavaraYM_WDCr6"";""rom_tavaraZM_WDCr6"";""effect_rmC"""
+shielddown,0,0,2111,0,string,craft;shipyard;sensor;research;evolver,"""shield_fed_down"";""shield_rom_down"";""shield_kli_down"""
+shieldhit,0,0,2111,0,string,craft;shipyard;sensor;research;evolver,"""shield_fed_hitM"";""shield_fed_hitL"";""shield_fed_hitS"""
+shieldhitcritical,0,0,2111,0,string,craft;shipyard;sensor;research;evolver,"""shield_fed_hitcritM"";""shield_fed_hitcritL"";""shield_fed_hitcritS"""
+recyclebiomatter,0,0,2110,0,int,craft;shipyard;sensor;research;evolver,0;5;7
+recycledilithium,0,0,2110,0,int,craft;shipyard;sensor;research;evolver,0;423;600
+recyclelatinum,0,0,2110,0,int,craft;shipyard;sensor;research;evolver,0;143;92
+recycletime,0,0,2110,0,int,craft;shipyard;sensor;research;evolver,47;83;101
+worthxp,0,0,2107,0,int,craft;shipyard;sensor;research;evolver,72;61;275
+replacement#condition,0,0,2048,0,string,replaceweapon,"""bor_uplink"";""bor_uplinkZ"";""bor_uplinkY"""
+originalclass,0,0,1801,0,string,craft;shipyard;sensor;constructionrig;research,"""rom_tavaraY"";""rom_tavaraZ"";""bor_sphereY_BBBH"""
+xplevel,0,0,1550,0,int,craft;shipyard;evolver;sensor,1;6;2
+nextrankxp,0,0,1035,0,int,craft;shipyard;evolver;sensor,36;50;51
+nextrankclass,0,0,1031,0,string,craft;shipyard;evolver;sensor,"""rom_generix_sinr2"";""rom_generix_sinr3"";""rom_generix_sinr4"""
+flaresprite,0,0,995,0,string,phaser;utribeam,"""weapon_phaserflare"";""weapon_disruptor2flare"";""weapon_polaronflare"""
+shotcycleresettime,0,0,867,0,int,cannonimp,15;3.25;3.4
+fleetcapfile,0,0,845,0,string,craft;pod;shipyard;replaceweapon;sensor,"""all_cap_veteran.odf"";""all_cap_research.odf"";""all_cap_warpin.odf"""
+fleetcapclass#,0,0,838,0,string,(none),"""rom_tavaraYr6"";""rom_tavaraY_Dr6"";""rom_tavaraY_Wr6"""
+builditem#availability,0,0,796,0,int,shipyard;constructionrig,2;40;32
+giveisallowed,0,0,714,0,int,craft;shipyard;constructionrig;freighter;repairship,0
+savefirecyclepoint,0,0,649,0,int,cannonimp,4;8;7
+overlaysod,0,0,388,0,string,craft;shipyard;research;sensor;mining,"""rom_s_shuttlesL"";""effect_coverfireCanav"";""effect_coverfireSaber"""
+pushbuilditem#,0,0,347,0,name,shipyard,"NULL;""fed_nebula_engPC"";""rom_generix_sinPC"""
+useprimarytarget,0,0,344,0,int,cannonimp,0;1
+clearsfog,0,0,326,0,int,pod;u_ball_obj;fighter;sensor;rumbleexplode,0
+invalidastarget,0,0,321,0,int,pod;u_ball_obj;rumbleexplode;wormhole_obj;craft,1
+invincible,0,0,321,0,int,pod;u_ball_obj;rumbleexplode;wormhole_obj;craft,1
+perceivedneutral,0,0,321,0,int,pod;u_ball_obj;rumbleexplode;wormhole_obj;craft,1
+fleetcapclass#capvalue,0,0,316,0,int,(none),4;6;7
+overridesubsystem,0,0,289,0,int,replaceweapon;ramweapon,1
+replacementmaintainorders,0,0,283,0,int,replaceweapon,1;0
+showrange,0,0,279,0,int,toggleweapon;cannonimp;replaceweapon;launcher;ordnancedefenseweapon,1
+replacementcreationtype,0,0,257,0,int,replaceweapon,1;0
+replacementregisterasnew,0,0,251,0,int,replaceweapon,0
+destroyedbiomattercost,0,0,226,0,float,craft;shipyard,22.1;23.4;28.6
+rankupbiomatter,0,0,223,0,float,craft,10.8;9.6;3.2
+ignoreinterface,0,0,208,0,int,u_ball_obj;latinum;craft;shipyard;fighter,1
+basetargets,0,0,205,0,int,cannonimp;unitorpedo,2;1;3
+iamgametothedeathcondition,0,0,194,0,int,pod;freighter;u_ball_obj;sensor;fighter,0
+canshipyardrepair,0,0,187,0,int,craft;buildyard;constructionrig;freighter;evolver,0
+replacementkeepname,0,0,187,0,int,replaceweapon,1
+initialShotDelayModifier,0,0,179,0,int,replaceweapon;cannonimp;launcher;ramweapon;agentsaboteur,0;0.0
+canrepairshiprepair,0,0,174,0,int,pod;sensor;fighter,0
+replacementmode,0,0,172,0,int,replaceweapon,2;3
+destroymewithresearchstation,0,0,167,0,int,pod,0;1
+builditem#code,0,0,162,0,string,(none),"""RRHT"";""BTT"";""BTR"""
+replacementinstantai,0,0,153,0,int,replaceweapon,1
+module#buttonrect,0,0,149,0,4 numbers,(none),96 320 64 64;160 320 64 64;224 320 64 64
+module#buttonsprite,0,0,149,0,string,(none),"""b_bor_moduleR_Mid"";""b_bor_moduleB_Start"";""b_bor_moduleT_Mid"""
+module#buttontooltip,0,0,149,0,string,(none),"""AUTOTOOLTIP-bor_cube_moduleB.odf"";""AUTOTOOLTIP-bor_cube_moduleT.odf"";""AUTOTOOLTIP-bor_cube_moduleR.odf"""
+module#group,0,0,149,0,int,(none),0;1;2
+module#type,0,0,149,0,string,(none),"""R"";""T"";""B"""
+hitmode,0,0,136,0,int,cannonimp;areacannon,4;5;2
+validtargets,0,0,133,0,int,cannonimp;ordnancedefenseweapon;cannon;areacannon,0;1
+affectedsystems,0,0,122,0,int,unitorpedo;unibeam,1;2;3
+mstar.#.scale,0,116,0,0,float,(none),.40;.20;.80
+mstar.#,0,111,0,0,int,(none),1;0;2
+replacementignorefleetcap,0,0,111,0,int,replaceweapon,1
+damagemode,0,0,108,0,int,unitorpedo,1;2
+replacementinstantplayer,0,0,103,0,int,replaceweapon,1;0
+avatarboxicon,0,0,100,0,string,shipyard,"""b_avatar_bor_optimizeS"";""b_avatar_bor_assimilateS"";""b_avatar_dom_pureS"""
+avatarboxtooltip,0,0,100,0,string,shipyard,"""AUTOTOOLTIP-avatar_bor_optimize.odf_…;""AUTOTOOLTIP-avatar_bor_assimilate.od…;""AUTOTOOLTIP-avatar_dom_pure.odf_With…"
+overrideceasefire,0,0,99,0,int,replaceweapon;cannonimp;areacannon,1
+targetloop,0,0,91,0,int,cannonimp,1
+replacementkeepowner,0,0,89,0,int,replaceweapon,1;0
+destroyfootprint,0,0,88,0,int,shipyard;buildyard;sensor;mining;pod,0;1
+transferstats,0,0,87,0,int,replaceweapon,0;1
+turntofire,0,0,85,0,int,shipyard;constructionrig;craft,0
+autotargetclosest,0,0,81,0,int,cannonimp,1
+replacementevent,0,0,79,0,string,replaceweapon,"""ShipRefit"";""BorgCustomizeVessel"";""RankUpVeteran"""
+replacementinstantderelict,0,0,74,0,int,replaceweapon,1;0
+preferredselect,0,0,73,0,int,craft;constructionrig;freighter;repairship;shipyard,0
+replacementinstantdelay,0,0,71,0,int,replaceweapon,120;25;10
+hitcloaked,0,0,65,0,int,cannonimp,1;2
+constructionvoice,0,0,61,0,int,craft;pod;constructionrig;sensor;shipyard,5;2;3
+selectmode,0,0,56,0,int,replaceweapon,2
+popupSlot,0,53,0,0,int,cannon;launcher;toggleweapon;areacannon;minelayer,4;7;10
+replacement#class#position,0,0,53,0,name,replaceweapon,"0,0,0;0,0,200;0,-40,40"
+disableweaponspercent,0,0,49,0,int,unitorpedo;unibeam,0;1;0.25
+disableweaponstime,0,0,49,0,int,unitorpedo;unibeam,0;3;6
+istoggledon,0,0,46,0,int,replaceweapon,1
+eventmovefleecombat,0,0,45,0,string,craft;repairship;shipyard,"""FederationNewtonFlee"";""FederationTeutoburgFlee"";""RomulanWarbirdFlee"""
+eventselectaftercombat,0,0,45,0,string,craft;repairship;shipyard,"""FederationNewtonAfterfight"";""FederationTeutoburgSelectAfterfight"";""RomulanWarbirdSelectAfterfight"""
+eventselectcombat,0,0,45,0,string,craft;repairship;shipyard,"""FederationNewtonInfight"";""FederationTeutoburgSelectInfight"";""RomulanWarbirdSelectInfight"""
+eventselecteasycombat,0,0,45,0,string,craft;repairship;shipyard,"""FederationNewtonInfight"";""FederationTeutoburgSelectInfightEasy"";""RomulanWarbirdSelectInfightEasy"""
+eventselecthardcombat,0,0,45,0,string,craft;repairship;shipyard,"""FederationNewtonInfight"";""FederationTeutoburgSelectInfightHard"";""RomulanWarbirdSelectInfightHard"""
+hardpointshift,0,0,44,0,int,cannonimp,1
+visiblerange,0,0,44,0,int,replaceweapon,600;400;200
+replacementdontremovefootprint,0,0,43,0,int,replaceweapon,1
+extraweapon,0,0,39,0,string,unitorpedo,"""bor_adaptionD_borL"";""bor_adaptionD_borM"";""bor_adaptionD_borS"""
+extraweaponpercent,0,0,39,0,int,unitorpedo,1;0.2
+extraweapontime,0,0,39,0,int,unitorpedo,2;10;3
+showonlyifhastech,0,0,39,0,int,launcher;replaceweapon;cannonimp;transwarpconduit;cloakingdeviceimp,1
+replacementinstantcycle,0,0,37,0,int,replaceweapon,25;10;5
+assimilatable,0,35,0,0,string,toggleweapon;areacannon;cannon;launcher;areamissile,"""carpod6"";""fedpod4"";""fedpod2"""
+criticalHitPercent,35,0,0,0,float,wingman;sensor;starbase;pod;shipyard,2.5f;0.5f;5.0f
+disableenginespercent,0,0,34,0,float,unitorpedo,1;0.1;0.01
+disableenginestime,0,0,34,0,int,unitorpedo,4;3;6
+disableshieldsontransport,0,0,33,0,int,craft;evolver,0
+eventrepaircombat,0,0,33,0,string,craft;repairship;shipyard,"""FederationNewtonCombatRepair"";""FederationTeutoburgCombatRepair"""
+ignoreTechtree,0,0,31,0,int,replaceweapon;shipyard;mining,1
+replacement#class#randomweight,0,0,31,0,int,replaceweapon,3;2;4
+maxextratargets,0,0,30,0,int,cannonimp,1;2
+preloadunits#,0,0,29,0,string,(none),"""bor_assemblerY"";""bor_assemblerYS"";""bor_assemblerZ"""
+allowbuildqueuepop,0,0,28,0,int,craft;constructionrig,0
+alliedrepairupgrade,0,0,26,0,string,shipyard,"""all_alliedrepair"""
+replacementresetspecialenergy,0,0,26,0,int,replaceweapon,1
+saneCrewLossMethod,0,26,0,0,int,craft,1
+tip#,0,0,24,0,string,(none),"""TIPP-SCREENSHOT"";""TIPP-WEBPAGE"";""TIPP-DONATION"""
+tip#sprite,0,0,24,0,string,(none),"""LoadingBarTip_Screenshot"";""LoadingBarTip_Page"";""LoadingBarTip_Donate"""
+builditem#availabilityparent,0,0,21,0,int,shipyard;constructionrig,1;3;5
+requiredalliedrace,0,0,20,0,string,shipyard,"""dominion"";""unitedfederation"";""klingonempire"""
+captooltip,0,0,19,0,string,(none),"""         Hyperspace Artilleries ( %d…;""         Tavara Type Warbirds ( %d /…;""         Experimental Technology Cru…"
+preservestatus,0,0,18,0,int,replaceweapon;cannonimp,1
+createfootprint,0,0,17,0,int,shipyard;sensor;mining;pod,0;1
+beneficialbuild,0,0,16,0,int,sensor,0
+beneficialbuildradius,0,0,16,0,int,sensor,600
+maxcap,0,0,16,0,int,(none),3;10;8
+mpcolor#,0,0,16,0,3 numbers,(none),0.900	0.900	0.900;0.9	0.134	0.134;0.900	0.437	0.130
+showinmultiselect,0,0,16,0,int,replaceweapon;repairweapon,0
+cstar.#,0,15,0,0,int,(none),3;2;0
+disablesensorspercent,0,0,15,0,float,unitorpedo,0.25;0.01;0.05
+disablesensorstime,0,0,15,0,int,unitorpedo,3;6;1
+autoexpiretime,0,0,14,0,float,craft;pod,0.05;0.01;1
+cstar.#.scale,0,14,0,0,float,(none),.30;0.25
+recyclesInPlace,0,14,0,0,int,craft;evolver;starbase;freighter;constructionrig,1
+detectcloak,0,0,13,0,int,probetorpedo,0;1
+disablelifesupportpercent,0,0,13,0,float,unitorpedo,0.04;0.25;0.05
+disablelifesupporttime,0,0,13,0,int,unitorpedo,5;6;1
+boardingpercent,0,0,12,0,int,unitorpedo,1
+boardingrate,0,0,12,0,int,unitorpedo,15;75;4
+boardingtime,0,0,12,0,float,unitorpedo,0.1
+buildName,12,0,0,0,string,(none),"""Map Objects"";""Federation Ships"";""Miscellaneous"""
+cargoKey#,0,12,0,0,string,(none),"""GUI_SD_CARGO_SAURIAN_BRANDY"";""GUI_SD_CARGO_TRIBBLES"";""GUI_SD_CARGO_WARP_CORES"""
+cargoValue#,0,12,0,0,float,(none),1.0;1.5;1.1
+concurrentchilds,0,0,12,0,int,replaceweapon,1;4;5
+decloakshielddelay,0,0,12,0,int,cloakingdeviceimp,2;4;3
+ambientMinimumFactor,0,11,0,0,float,planet;background_obj;asteroidfield;blackhole_obj,1;.2;.4
+captooltipreached,0,0,11,0,string,(none),"""Already researched"";""         Already researched"";""         Already present"""
+registertargethit,0,0,11,0,int,probetorpedo;utribeam;cloakdetector,0
+slowToHitModifier,11,0,0,0,float,launcher;minelayer;cannon;areacannon,0;-0.10;-0.0
+toHitSlowModifier,11,0,0,0,float,launcher;minelayer;cannon;areacannon,0;0.10;0.30
+toHitWarpModifier,11,0,0,0,float,launcher;minelayer;cannon;areacannon,0;0.20;0.0
+warpToHitModifier,11,0,0,0,float,launcher;minelayer;cannon;areacannon,0;-0.0;-0.25
+ambientMaximumFactor,0,10,0,0,int,planet;background_obj;asteroidfield;blackhole_obj,1
+displayName,10,0,0,0,string,(none),"""Borg"";""Federation"";""Klingon"""
+moduleconf,0,0,10,0,string,buildyard,"""bor_adaptorCConf.odf"";""bor_assimilatorCConf.odf"";""bor_assimilatorZCConf.odf"""
+numberofmodules,0,0,10,0,int,(none),8;20;16
+rtypeallowed,0,0,10,0,int,(none),1;3;2
+shieldProtection,0,9,0,0,float,starbase;sensor;planet,1.0
+alwaysactiveai,0,0,8,0,int,resourceweapon,1
+builditem#provided,0,0,8,0,int,research,2;1
+decommissionValue,8,0,0,0,int,starbase;mining,1000;600
+selecthighlight,0,0,8,0,int,shipyard;research,1
+ttypeallowed,0,0,8,0,int,(none),1;2;3
+alwaysactiveplayer,0,0,7,0,int,resourceweapon,1
+rootnode,0,0,7,0,int,rumbleexplode,1
+addbiomatter,0,0,6,0,float,resourceweapon,-0.33;5;250
+allowgivebiomatter,0,0,6,0,int,(none),1;0
+allowgivecrew,0,0,6,0,int,(none),0
+allowgivedilithium,0,0,6,0,int,(none),1;0
+allowgivelatinum,0,0,6,0,int,(none),1;0
+allowgivemetal,0,0,6,0,int,(none),0
+amtMetal,0,6,0,0,int,(none),6000;24000;12000
+btypeallowed,0,0,6,0,int,(none),1;3
+headingCloseEnoughForWarp,6,0,0,0,int,(none),30;180
+isColonizable,0,6,0,0,int,planet,1;0
+maxPopulation,0,6,0,0,string,planet,"""unpopulated"";""sparse"";""light"""
+repairsshields,0,0,6,0,int,repairship;shipyard;craft,1
+requiresTerraform,0,6,0,0,int,planet,0;1
+successchance,0,0,6,0,float,ramweapon,0.90
+tooCloseForWarp,6,0,0,0,int,(none),10
+trickleAmount,0,6,0,0,int,(none),100
+trickleMiningRateFraction,0,6,0,0,float,(none),.2
+destructionprobability,0,0,5,0,float,agentsaboteur,0.75;0.8;0.85
+disableshield,0,0,5,0,int,cloakingdeviceimp;cloakingdevicecontrol,0
+dockingSpeedFactor,5,0,0,0,float,(none),2.5
+groundTextureName,0,5,0,1,string,planet,"""PB_CLSSD"";""PB_CLSSH"";""PB_CLSSK"""
+htypeallowed,0,0,5,0,int,(none),1;3;4
+orbitRange,0,5,0,0,float,colonizerpod,150.0f
+replacementresetcrew,0,0,5,0,int,replaceweapon,1;0
+rollRotationRate,5,0,0,0,float,(none),0.24
+showchoicedialog,0,0,5,0,int,shipyard,1
+showeffecticon,0,0,5,0,int,cannonimp,0
+yawRotationRate,5,0,0,0,float,(none),0.72
+assignClass#,0,4,0,0,string,techassim,"""bbattle1"";""bbattle2"";""bbattle3"""
+cargoTransferRate,0,4,0,0,float,trading_station,50.0
+civilianPopulationModifier,0,4,0,0,float,planet,1.0f;0.5f;1.5f
+createobject,0,0,4,0,string,rumbleexplode,"""effect_tric"""
+dockingBuffer,4,0,0,0,float,mining,70.0
+drainspecialenergypercent,0,0,4,0,float,unibeam;unitorpedo,0.65;0
+drainspecialenergyrate,0,0,4,0,int,unibeam;unitorpedo,40;100
+drainspecialenergytime,0,0,4,0,int,unibeam;unitorpedo,1
+freightersize,0,0,4,0,int,freighter,2
+latinum_spray_hardpoint,0,4,0,0,string,freighter,"""hp10"";""hp04"";""hp08"""
+lensflare,0,0,4,0,string,unibeam;pdlbeam,"""weapon_disruptor3flare"";""weapon_phaserflare"""
+liftControlStiffness,4,0,0,0,int,(none),10
+maxVerticalSpeed,4,0,0,0,float,(none),0.667;0.3333
+miningMultiplier,0,4,0,0,float,p_mining,0.4;0.5
+percentTradeProfit,0,4,0,0,float,trading_station,15.0
+pitchControlStiffness,4,0,0,0,int,(none),10
+replacementfindopenspot,0,0,4,0,int,replaceweapon,1
+shp_pitchAngleCoeff,4,0,0,0,float,(none),5.655;7.556
+shp_pitchVelocCoeff,4,0,0,0,float,(none),130.339;115.033
+shp_verticalPosCoeff,4,0,0,0,float,(none),-1.136;-1.400
+shp_verticalVelocCoeff,4,0,0,0,float,(none),-28.376;-30.497
+sp_pitchVelocCoeff,4,0,0,0,float,(none),0.000
+spl_lvelocAngleCoeff,4,0,0,0,float,(none),-0.925;-1.653
+spl_pitchAngleCoeff,4,0,0,0,float,(none),-3.986;-1.238
+spl_pitchVelocCoeff,4,0,0,0,float,(none),-71.844;-61.284
+spl_pvelocAngleCoeff,4,0,0,0,float,(none),-0.049;-0.676
+spl_verticalVelocCoeff,4,0,0,0,float,(none),1.492;3.001
+sy_rollAngleCoeff,4,0,0,0,int,(none),0
+sy_rollVelocCoeff,4,0,0,0,int,(none),0
+sy_velocAngleCoeff,4,0,0,0,float,(none),0.6;0.7;0.4
+trade_station,0,4,0,0,int,trading_station,1
+warpin,0,0,4,0,int,replaceweapon,1
+warpinspeed,0,0,4,0,int,replaceweapon,720
+addmetal,0,0,3,0,float,resourceweapon,20;0.1;0.05
+craft_max_speed_fraction,0,3,0,0,float,nebula_obj,0.5;0.7;0.4
+eventCancel,0,3,0,0,string,fusingweapon,"""CubeFusionCancel"";""SaucerIntegrateCancel"""
+hitinvalid,0,0,3,0,int,cannonimp;areacannon,1
+isresearchedbyyard,0,0,3,0,int,pod,1
+recrewRate,0,3,0,0,float,repairship,.15;.1;.2
+supplyclasses,0,0,3,0,int,fighter,0
+targetself,0,0,3,0,int,cannonimp,1
+targetterrainonly,0,0,3,0,int,cannonimp,1
+adddilithium,0,0,2,0,float,resourceweapon,0.7;5
+addlatinum,0,0,2,0,float,resourceweapon,0.7;5
+addToPlanner,0,2,0,0,int,minearray;p_mining,0
+alwaysRecomputeRallyPoint,0,2,0,0,int,starbase,1
+atmosphereTextureName,0,2,0,1,string,(none);planet,""""";""PB_CLSSJ"""
+borgPhysics,2,0,0,0,int,(none),1
+canAttackPlanets,0,2,0,0,int,craft,1
+directorRadiusScale,0,2,0,0,float,craft;planet,6.0;1.7
+dockinghardpoint,0,2,0,0,string,starbase,"""hp31"""
+eastBuffer,0,2,0,0,float,craft;shipyard,10.0f;200.0
+etypeallowed,0,0,2,0,int,(none),2;1
+groundDistance,0,2,0,0,int,planet,0;-100
+ignoredastarget,0,0,2,0,int,craft;shipyard,1
+initialcloak,0,0,2,0,int,cloakingdeviceimp,1;0
+itypeallowed,0,0,2,0,int,(none),2;1
+markcolor,0,0,2,0,3 numbers,detectorweapon,0.4	0.7	0.4
+markradius,0,0,2,0,int,detectorweapon,10
+markshrink,0,0,2,0,float,detectorweapon,0.0666
+marktime,0,0,2,0,int,detectorweapon,2
+MaxCiviliansKilled,0,2,0,0,int,accelcannon,30
+MaxCrewMembersKilled,0,2,0,0,int,accelcannon,30
+metalTransferRate,0,2,0,0,float,mining,15.0
+nebulaID,0,2,0,0,string,nebgeneration;nebcreator,"""GeneratedNebula"""
+ntypeallowed,0,0,2,0,int,(none),1
+officerName,2,0,0,0,string,(none),"""GUI_SD_BORG_OFF_LABEL"";""GUI_SD_ROM_OFF_LABEL"""
+officerOperate,2,0,0,0,string,(none),"""GUI_SD_TEXT_BORGOFF_OP"";""GUI_SD_TEXT_ROMOFF_OP"""
+oneTimeMode,0,0,2,0,int,resourceweapon,1
+replacementenemyofall,0,0,2,0,int,replaceweapon,1
+simplecapmode,0,0,2,0,int,(none),1
+soundDeploy,2,0,0,0,string,pod;shipyard,"""avsave5.wav"";""avslfe3.wav"""
+soundUndeploy,2,0,0,0,string,pod;shipyard,"""avsave6.wav"";""avslfe5.wav"""
+spatial_object,0,2,0,0,int,latinum;scrap,1
+standbytime,0,0,2,0,int,repairweapon,10
+targetEnemyPlanets,0,2,0,0,int,toggleweapon;cannon,1
+targetEnemyPlanetsOnly,0,2,0,0,int,toggleweapon;cannon,1
+accelConst,0,1,0,0,float,minearray,50.0
+acceleration,0,1,0,0,int,minearray,10000
+affectsai,0,0,1,0,int,(none),0
+alien,0,1,0,0,3 numbers,(none),0.8	0.8	0.8
+alwaysUseSpecialWeapons,1,0,0,0,int,wingman,1
+ambientMaximumDistance,0,1,0,0,float,planet,1.0
+ambientMinimumDistance,0,1,0,0,float,planet,.075
+animatebees,0,1,0,0,int,constructionrig,1
+assimilationTime,0,1,0,0,float,tech_assim_beam,6.0
+atypeallowed,0,0,1,0,int,(none),3
+avioidanceClass,1,0,0,0,name,ionstorm_obj,10-
+battleOrdnance,0,1,0,0,string,biopulse,"""biopulsebattle"""
+blameTheExploder,0,1,0,0,int,fireballexplode,1
+blockedGeyserMsg,1,0,0,0,string,shipyard,"""avslfvb.wav"""
+bombMsg,1,0,0,0,string,shipyard,"""avslfvk.wav"""
+buildMsg,1,0,0,0,string,shipyard,"""avslfvf.wav"""
+burntsienna,0,1,0,0,3 numbers,(none),0.412 0.192 0.055
+cameraMsg,1,0,0,0,string,shipyard,"""avslfv4.wav"""
+can_attack,0,0,1,0,int,fighter,0
+cangainxp,0,0,1,0,int,(none),0
+canOnlyAttackPlanets,0,1,0,0,int,colony,1
+centerEffectOnTarget,0,1,0,0,int,blackholecreator,1
+ceruleanblue,0,1,0,0,3 numbers,(none),0.145 0.623 0.847
+chargeDelay,0,1,0,0,int,biopulse,2
+ciadan,0,0,1,0,3 numbers,(none),0.123	0.819	0.819
+cleansingWeaponIndex,0,1,0,0,int,colony,1
+colonists,0,1,0,0,int,colony,1000
+colony_ship,0,1,0,0,int,colony,1
+ConstantlyCloaked,0,1,0,0,int,pod,1
+conversionRate,0,1,0,0,float,resourceextractionbeam,1.0
+countconstructions,0,0,1,0,int,(none),0
+damage,0,1,0,1,int,nebulaflux,500
+damage_range,0,1,0,0,int,nebulaflux,400
+damageRate,0,1,0,0,int,biopulse,300
+deltaRadius,0,1,0,0,int,quantumeffect,200
+deployedMsg,1,0,0,0,string,shipyard,"""avslfvp.wav"""
+destructRadius,0,1,0,0,int,minearray,250
+detectRange,0,1,0,0,int,minearray,800
+dilithiumConversionRate,0,1,0,0,float,mining,0.5
+dilithiumRecyclingFraction,0,1,0,0,int,shipyard,1
+dominionraceicon,0,0,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Overlays\\LOGO…"
+dominionraceiconh,0,0,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Overlays\\LOGO…"
+downbuffer,0,0,1,0,int,fighter,0
+drag,0,1,0,0,int,minearray,1
+dtypeallowed,0,0,1,0,int,(none),3
+entity,1,0,0,0,3 numbers,(none),0.8	0.8	0.8
+explosionRadius,1,0,0,0,int,repulsionwave,800
+extractionInterval,0,1,0,0,int,resourceextractionbeam,1
+federationRaceIcon,0,1,0,0,string,(none),"""bitmaps\\AdmiralsLog\\Overlays\\LOGO…"
+federationRaceIconH,0,1,0,0,string,(none),"""bitmaps\\AdmiralsLog\\Overlays\\LOGO…"
+forceaudiovisual,0,0,1,0,int,cannonimp,1
+formationBehind,0,1,0,0,int,biopulse,150
+formationRadius,0,1,0,0,int,biopulse,200
+frigateOrdnance,0,1,0,0,string,biopulse,"""biopulsefrigate"""
+goGeyserMsg,1,0,0,0,string,shipyard,"""avslfvh.wav"""
+growTime,0,1,0,0,int,nebcreator,30
+hasnegativeeffectonowner,0,0,1,0,int,replaceweapon,1
+healthRepair,1,0,0,0,int,shipyard,100
+hitPercent,0,1,0,0,float,planet_shield,10.0
+hitPoints,0,1,0,0,float,planet_shield,1000.0
+iconian,0,0,1,0,3 numbers,(none),0.900	0.437	0.130
+iconianraceicon,0,0,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Overlays\\LOGO…"
+iconianraceiconh,0,0,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Overlays\\LOGO…"
+is_station,0,1,0,0,int,p_mining,1
+isUpgrade,1,0,0,0,int,pod,1
+klingonempireraceicon,0,0,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Overlays\\LOGO…"
+klingonempireraceiconh,0,0,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Overlays\\LOGO…"
+klingonRaceIcon,0,1,0,0,string,(none),"""bitmaps\\AdmiralsLog\\Overlays\\LOGO…"
+klingonRaceIconH,0,1,0,0,string,(none),"""bitmaps\\AdmiralsLog\\Overlays\\LOGO…"
+latinumConversionRate,0,1,0,0,float,mining,0.5
+loadbarcolorend,0,0,1,0,3 numbers,(none),1.0	0.5	0.5
+loadbarcolorstart,0,0,1,0,3 numbers,(none),0.5	0.0	0.0
+loadbarheight,0,0,1,0,float,(none),0.03
+loadbarinvert,0,0,1,0,int,(none),0
+loadbarpositionx,0,0,1,0,float,(none),0.02
+loadbarpositiony,0,0,1,0,float,(none),0.94
+loadbartransparencyend,0,0,1,0,int,(none),0
+loadbarvertical,0,0,1,0,int,(none),0
+loadbarwidth,0,0,1,0,float,(none),0.96
+ltypeallowed,0,0,1,0,int,(none),1
+mainDelay,0,1,0,0,int,biopulse,1
+maxOfficerMultiplier,0,1,0,0,float,(none),0.24f
+maxRadius,0,1,0,0,int,quantumeffect,1000
+maxScrap,1,0,0,0,int,freighter,150
+maxSeparation,1,0,0,0,int,(none),67
+maxSize,0,1,0,0,int,nebcreator,3
+metalConversionRate,0,1,0,0,float,mining,0.5
+metalRecyclingFraction,0,1,0,0,int,shipyard,1
+minRadius,0,1,0,0,int,quantumeffect,200
+missileDetonator,0,1,0,0,string,craft,"""gcDreadnaught"""
+mtypeallowed,0,0,1,0,int,(none),2
+multiReqMax#,0,1,0,0,int,biopulse,8
+needLocation,0,1,0,0,int,toggleweapon,0
+newRepulsiveCoefficient,1,0,0,0,int,(none),5
+noGeyserMsg,1,0,0,0,string,shipyard,"""avslfvd.wav"""
+noxter,0,0,1,0,3 numbers,(none),0.600	0.431	0.600
+noxterraceicon,0,0,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Overlays\\LOGO…"
+noxterraceiconh,0,0,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Overlays\\LOGO…"
+npc_wreckageraceicon,0,0,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Overlays\\LOGO…"
+npc_wreckageraceiconh,0,0,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Overlays\\LOGO…"
+numberoftips,0,0,1,0,int,(none),24
+numDrones,0,1,0,0,int,drones_weapon,5
+numSections,0,1,0,0,int,quantumeffect,16
+obstacleAvoidenceRange,1,0,0,0,int,(none),150
+omegaType,0,1,0,0,int,tractor_bm,1
+orbitTime,0,1,0,0,int,p_mining,120
+otypeallowed,0,0,1,0,int,(none),2
+ownergainsxp,0,0,1,0,int,sleeperagent,1
+packedMsg,1,0,0,0,string,shipyard,"""avslfvc.wav"""
+percentNebulaWarn,0,0,1,0,float,fighter,0.0
+pilotHold,1,0,0,0,int,shipyard,0
+planetsHeaderRect,0,1,0,0,4 numbers,(none),378	22	98	35
+prioritybuild,0,0,1,0,int,pod,1
+propSpeed,0,1,0,0,float,fluxwave,200.0
+ptypeallowed,0,0,1,0,int,(none),1
+recycleExchangeRate,0,1,0,0,float,shipyard,.7
+recycler,0,1,0,0,int,shipyard,1
+reflectHitOwnerRatio,0,1,0,0,float,reflectweapon,0.3
+reflectionRatio,0,1,0,0,float,reflectweapon,0.9
+replacementafterwarpin,0,0,1,0,int,replaceweapon,1
+replacementanimate,0,0,1,0,int,replaceweapon,1
+replacementfractionsod,0,0,1,0,string,replaceweapon,"""kli_topmey_container"""
+reserveItem#,0,1,0,0,int,research,1
+returnSpeed,0,1,0,0,int,minearray,20
+romulanempireraceicon,0,0,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Overlays\\LOGO…"
+romulanempireraceiconh,0,0,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Overlays\\LOGO…"
+romulanRaceIcon,0,1,0,0,string,(none),"""bitmaps\\AdmiralsLog\\Overlays\\LOGO…"
+romulanRaceIconH,0,1,0,0,string,(none),"""bitmaps\\AdmiralsLog\\Overlays\\LOGO…"
+rstar.#,0,0,1,0,int,(none),36
+rstar.#.scale,0,0,1,0,float,(none),250.0
+rumblearea,0,0,1,0,float,rumbleexplode,1500.0
+rumbleduration,0,0,1,0,float,rumbleexplode,3.0
+rumblestrength,0,0,1,0,int,rumbleexplode,1
+saucerFormation,0,1,0,0,int,fusingweapon,1
+scrapHold,1,0,0,0,int,shipyard,5
+shieldamount,0,0,1,0,int,fedshieldemitter,20
+shipID,0,1,0,0,string,quantumeffect,"""8472_frigate"""
+shrinkTime,0,1,0,0,int,nebcreator,30
+slowdownDist,0,1,0,0,int,minearray,100
+soundBuild,1,0,0,0,string,shipyard,"""avslfe1.wav"""
+soundSteer,1,0,0,0,string,shipyard,"""avslfe9.wav"""
+specialEnergyDelay,1,0,0,0,int,micro,10
+specialEnergyDrainRate,1,0,0,0,int,micro,1000
+specialEnergyLossRate,0,1,0,0,int,biopulse,100
+species#,0,1,0,1,3 numbers,(none),0.80 0.65 0.49
+SPECIES_MINE,0,1,0,0,int,minearray,1
+spinRate,0,1,0,0,name,fluxwave,"1.0,2.0,1.0"
+stableTime,0,1,0,0,int,nebcreator,40
+streamChunkLength,1,0,0,0,float,(none),0.5
+stypeallowed,0,0,1,0,int,(none),3
+timeDeploy,1,0,0,0,float,shipyard,5.0
+timeLinePlanetArea,0,1,0,0,4 numbers,(none),465	24	147	16
+timelinePlanetIcon,0,1,0,0,string,(none),"""bitmaps\\AdmiralsLog\\icons\\planetc…"
+timeLinePlanetIconArea,0,1,0,0,4 numbers,(none),430	24	26	26
+timeRepair,1,0,0,0,float,shipyard,1.0
+timeUndeploy,1,0,0,0,float,shipyard,5.0
+tippositionx,0,0,1,0,float,(none),0.36
+tippositiony,0,0,1,0,float,(none),0.1
+tipspritesize,0,0,1,0,float,(none),0.05
+tipspritex,0,0,1,0,float,(none),0.30
+tipspritey,0,0,1,0,float,(none),0.1
+tipwidth,0,0,1,0,float,(none),0.4
+tradeHeaderRect,0,1,0,0,4 numbers,(none),406	21	140	35
+transferAmount,0,1,0,0,int,colonybm,100
+transferextraweapons,0,0,1,0,int,replaceweapon,0
+transferTime,0,1,0,0,int,colonybm,4
+turbulence,0,1,0,0,int,planet,0
+turnControlScaleType,0,1,0,0,int,(none),0
+unitedfederationraceicon,0,0,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Overlays\\LOGO…"
+unitedfederationraceiconh,0,0,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Overlays\\LOGO…"
+upbuffer,0,0,1,0,int,fighter,0
+verbosetooltipdelay,0,0,1,0,float,(none),1.0001
+vtypeallowed,0,0,1,0,int,(none),2
+warpEnable,0,1,0,0,int,cloakingdevice,1
+wave_name,0,1,0,0,string,nebulaflux,"""NebulaFluxWav"""
+waveRange,0,1,0,0,float,areacannon,1500.0f
+weaponIndexForShips,0,1,0,0,int,freighter,2
+weaponMsg,1,0,0,0,string,shipyard,"""avslfv3.wav"""
+westBuffer,0,1,0,0,float,craft,10.0f
+wormhole,0,1,0,1,string,shipyard,"""fluidicrift2.odf"""
+ztypeallowed,0,0,1,0,int,(none),2

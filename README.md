@@ -66,3 +66,4 @@ headers).
 - [docs/NATIVE_FEATURES.md](docs/NATIVE_FEATURES.md) — FleetOpsHook / A2FOExtensions / Refit → native systems
 - [docs/MISSIONS.md](docs/MISSIONS.md) — mission scripts without DLLs (integrated MMM Lua)
 - [docs/ROADMAP.md](docs/ROADMAP.md) — milestones
+- [docs/data/](docs/data/README.md) — every ODF/TT/XML/CFG/AIP feature in A1, A2 and FO, with what STA64 reads (`tools/data_inventory.py`)
