@@ -31,10 +31,12 @@ pub enum ZfsError {
     Truncated(usize),
     #[error("block chain loops at offset {0}")]
     Loop(usize),
-    #[error("{name}: flags {flags:#x} (compressed?) are not supported")]
+    #[error("{name}: flags {flags:#x} (compressed?) are not supported, or the name is not 1-16 ASCII bytes without folders")]
     Unsupported { name: String, flags: u32 },
     #[error("io: {0}")]
     Io(String),
+    #[error("two files named {0} (names compare case-insensitively)")]
+    Duplicate(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,6 +45,8 @@ pub struct ZfsEntry {
     pub name: String,
     pub offset: u32,
     pub size: u32,
+    /// Stored timestamp, kept as is.
+    pub time: u32,
     pub flags: u32,
 }
 
@@ -100,11 +104,12 @@ impl Zfs {
                 let name: String = raw[..end].iter().map(|&c| c as char).collect();
                 let offset = u32_at(&data, at + max_name)?;
                 let size = u32_at(&data, at + max_name + 8)?;
+                let time = u32_at(&data, at + max_name + 12)?;
                 let flags = u32_at(&data, at + max_name + 16)?;
                 if (offset as usize).checked_add(size as usize).is_none_or(|e| e > data.len()) {
                     return Err(ZfsError::Truncated(offset as usize));
                 }
-                entries.push(ZfsEntry { name, offset, size, flags });
+                entries.push(ZfsEntry { name, offset, size, time, flags });
             }
             block = next;
         }
@@ -123,6 +128,11 @@ impl Zfs {
         &self.entries[index]
     }
 
+    /// The header key (0 = not encrypted).
+    pub fn key(&self) -> u32 {
+        u32::from_le_bytes(self.key)
+    }
+
     /// The entry's bytes, decrypted.
     pub fn read(&self, index: usize) -> Result<Vec<u8>, ZfsError> {
         let e = &self.entries[index];
@@ -138,6 +148,68 @@ impl Zfs {
         out.extend_from_slice(&raw[whole..]);
         Ok(out)
     }
+}
+
+/// One file to write.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ZfsFile {
+    /// At most 16 Latin-1 bytes, no folders.
+    pub name: String,
+    pub data: Vec<u8>,
+    /// Timestamp field (the retail files carry one; 0 is fine).
+    pub time: u32,
+}
+
+/// Files per block and name length, as in every retail archive.
+pub const FILES_PER_BLOCK: usize = 100;
+pub const MAX_NAME: usize = 16;
+
+/// Write a ZFS v1 archive laid out as the retail ones are: each block's table
+/// (next-block offset and 100 slots) followed by its files' data, entries
+/// stored (flags 0), whole words XOR'd with `key` when it isn't 0.
+pub fn write(files: &[ZfsFile], key: u32) -> Result<Vec<u8>, ZfsError> {
+    let slot = MAX_NAME + 20;
+    let k = key.to_le_bytes();
+    let mut out = Vec::new();
+    out.extend_from_slice(b"ZFSF");
+    for v in [1u32, MAX_NAME as u32, FILES_PER_BLOCK as u32, files.len() as u32, key, 28] {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for f in files {
+        if f.name.is_empty() || f.name.len() > MAX_NAME || f.name.contains(['/', '\\']) || !f.name.is_ascii() {
+            return Err(ZfsError::Unsupported { name: f.name.clone(), flags: 0 });
+        }
+        if !seen.insert(f.name.to_ascii_lowercase()) {
+            return Err(ZfsError::Duplicate(f.name.clone()));
+        }
+    }
+    let blocks: Vec<&[ZfsFile]> = if files.is_empty() { vec![&[][..]] } else { files.chunks(FILES_PER_BLOCK).collect() };
+    for (b, chunk) in blocks.iter().enumerate() {
+        let table_at = out.len();
+        let mut data_at = table_at + 4 + FILES_PER_BLOCK * slot;
+        let next = if b + 1 < blocks.len() { data_at + chunk.iter().map(|f| f.data.len()).sum::<usize>() } else { 0 };
+        let mut table = Vec::with_capacity(4 + FILES_PER_BLOCK * slot);
+        table.extend_from_slice(&(next as u32).to_le_bytes());
+        for i in 0..FILES_PER_BLOCK {
+            let mut rec = vec![0u8; slot];
+            if let Some(f) = chunk.get(i) {
+                rec[..f.name.len()].copy_from_slice(f.name.as_bytes());
+                let index = (b * FILES_PER_BLOCK + i) as u32;
+                for (j, v) in [data_at as u32, index, f.data.len() as u32, f.time, 0].iter().enumerate() {
+                    rec[MAX_NAME + j * 4..MAX_NAME + j * 4 + 4].copy_from_slice(&v.to_le_bytes());
+                }
+                data_at += f.data.len();
+            }
+            table.extend_from_slice(&rec);
+        }
+        out.extend_from_slice(&table);
+        for f in *chunk {
+            let whole = if key == 0 { 0 } else { f.data.len() & !3 };
+            out.extend(f.data.iter().enumerate().map(|(i, &c)| if i < whole { c ^ k[i & 3] } else { c }));
+        }
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -236,6 +308,24 @@ pub(crate) mod tests {
         assert_eq!(z.read(0).unwrap_err(), ZfsError::Unsupported { name: "a.odf".into(), flags: 2 });
     }
 
+    #[test]
+    fn writer_round_trips_over_blocks() {
+        let files: Vec<ZfsFile> =
+            (0..250).map(|i| ZfsFile { name: format!("f{i}.odf"), data: format!("n = {i}\r\n").repeat(i % 7).into_bytes(), time: i as u32 }).collect();
+        for key in [0, 0x9466_279b] {
+            let z = Zfs::from_bytes(write(&files, key).unwrap()).unwrap();
+            assert_eq!((z.len(), z.key()), (250, key));
+            for (i, f) in files.iter().enumerate() {
+                assert_eq!((&z.entry(i).name, z.entry(i).time), (&f.name, f.time));
+                assert_eq!(z.read(i).unwrap(), f.data);
+            }
+        }
+        let long = ZfsFile { name: "seventeen_chars.x".into(), data: vec![], time: 0 };
+        assert!(write(&[long], 0).is_err());
+        let dup = |n: &str| ZfsFile { name: n.into(), data: vec![], time: 0 };
+        assert_eq!(write(&[dup("a.tt"), dup("A.TT")], 0).unwrap_err(), ZfsError::Duplicate("A.TT".into()));
+    }
+
     /// With STA64_TEST_ZFS pointing at an archive: every entry reads.
     #[test]
     fn real_archive_if_available() {
@@ -249,5 +339,12 @@ pub(crate) mod tests {
             *by_ext.entry(ext).or_default() += 1;
         }
         eprintln!("{p}: {} entries {by_ext:?}", z.len());
+        // Repacking with the same names, times and key gives the same file.
+        let files: Vec<ZfsFile> = (0..z.len())
+            .map(|i| ZfsFile { name: z.entry(i).name.clone(), data: z.read(i).unwrap(), time: z.entry(i).time })
+            .collect();
+        let again = write(&files, z.key()).unwrap();
+        assert_eq!(again, std::fs::read(&p).unwrap(), "repack is byte-identical");
+        eprintln!("repack byte-identical");
     }
 }
