@@ -10,6 +10,7 @@ bevy = { workspace = true, features = ["dds", "png"] }
 sta_vfs.workspace = true
 sta_assets.workspace = true
 sta_bzn.workspace = true
+sta_mission.workspace = true
 sta_odf.workspace = true
 sta_sim.workspace = true
 

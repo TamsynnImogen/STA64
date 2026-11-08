@@ -1,6 +1,6 @@
 //! STA64 game executable.
 //!
-//! Usage: `sta64 [--install-root <path>] [--mod <name>] [--view <model> | --map [<map>]]`
+//! Usage: `sta64 [--install-root <path>] [--mod <name>] [--view <model> | --map [<map>] | --mission-report]`
 //!
 //! The install root is a user-owned Armada II / Fleet Operations install. No
 //! original game content ships with STA64; it is read from that install at run
@@ -24,6 +24,7 @@ struct LaunchConfig {
     active_mod: Option<String>,
     view: Option<String>,
     map: Option<String>,
+    mission_report: bool,
 }
 
 fn parse_args() -> LaunchConfig {
@@ -35,6 +36,7 @@ fn parse_args() -> LaunchConfig {
             "--mod" => cfg.active_mod = args.next(),
             "--view" => cfg.view = args.next(),
             "--map" => cfg.map = Some(args.next().unwrap_or_default()),
+            "--mission-report" => cfg.mission_report = true,
             _ => eprintln!("ignoring unknown argument {a:?}"),
         }
     }
@@ -68,10 +70,49 @@ fn mount(cfg: &LaunchConfig) -> (sta_vfs::Vfs, String) {
     }
 }
 
+/// Print which mission script every map would run (docs/MISSIONS.md).
+fn mission_report(vfs: &sta_vfs::Vfs) {
+    use sta_mission::Resolution;
+    let labels = sta_mission::Labels::load(vfs);
+    let mut maps: Vec<String> = vfs.list("bzn").into_iter().filter(|p| p.ends_with(".bzn")).collect();
+    maps.sort();
+    let (mut lua, mut legacy, mut none) = (0, 0, 0);
+    for p in &maps {
+        let Some(Ok(d)) = vfs.read(p) else { continue };
+        let map = match sta_bzn::parse(&d) {
+            Ok(m) => m,
+            Err(e) => {
+                println!("{p:40} unreadable: {e}");
+                continue;
+            }
+        };
+        let name = p.trim_start_matches("bzn/");
+        match sta_mission::resolve(vfs, &labels, p, &map) {
+            Resolution::Lua { path, matched_by } => {
+                lua += 1;
+                println!("{name:40} lua      {path}  (by {matched_by:?})");
+            }
+            Resolution::LegacyDll { files } => {
+                legacy += 1;
+                println!("{name:40} NEEDS LUA CONVERSION: {}", files.join(", "));
+            }
+            Resolution::None => {
+                none += 1;
+                println!("{name:40} -");
+            }
+        }
+    }
+    println!("\n{} maps: {lua} with a Lua mission, {legacy} with only legacy DLL scripts (need Lua conversion), {none} without a script", maps.len());
+}
+
 fn main() {
     let cfg = parse_args();
     let (vfs, summary) = mount(&cfg);
     println!("{summary}");
+    if cfg.mission_report {
+        mission_report(&vfs);
+        return;
+    }
     let mut browser = viewer::browser(&vfs, cfg.view.as_deref(), summary);
     let teams = viewer::TeamColours::load(&vfs);
     browser.team = teams.default_index();

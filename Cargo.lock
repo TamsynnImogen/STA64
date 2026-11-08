@@ -5037,6 +5037,7 @@ dependencies = [
  "bevy",
  "sta_assets",
  "sta_bzn",
+ "sta_mission",
  "sta_odf",
  "sta_sim",
  "sta_vfs",
@@ -5066,6 +5067,14 @@ name = "sta_fpq"
 version = "0.1.0"
 dependencies = [
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "sta_mission"
+version = "0.1.0"
+dependencies = [
+ "sta_bzn",
+ "sta_vfs",
 ]
 
 [[package]]

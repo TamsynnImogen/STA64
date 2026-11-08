@@ -1,0 +1,10 @@
+[package]
+name = "sta_mission"
+description = "Mission script resolution for STA64 (integrated MMM Lua; no mission DLLs)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sta_vfs.workspace = true
+sta_bzn.workspace = true
