@@ -5,7 +5,12 @@ this file is what's being worked on now and what needs checking by eye.
 
 Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your check in game/viewer
 
-## Needs your check (morning)
+## Needs your check
+
+- [?] Ship movement smooth now (no weaving); FPS shown top right (try `cargo run --release` if it's low) — 3e748b3
+- [?] Planets with Refit's look: terminator, dusk band, limb haze, water glint, cloud shell, halo past the limb — 4fc4a88
+
+## Checked earlier (morning list)
 
 Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 
@@ -22,7 +27,12 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 
 ## Now (M2: a map you can fly in)
 
-- [ ] Nebula look: class colour pulse on sim time, near fade, occlusion intensity
+- [ ] Refit map objects, in order:
+  - [x] Planet look (Lighting.asi via Refit's world_planet shader) — 4fc4a88
+  - [ ] Recipe surfaces (Surfaces.asi): planets PB_CLSS*, moons Mdmoon, asteroid rock Master1/2 — procedural ground/relief/clouds baked to cubes, then the planet `surface_ps` and the rock shader
+  - [ ] Volumetric nebulae (Nebulae.asi): ray-marched gas lit by the key with ship shadows
+  - [ ] Planet glow lights on nearby ships (Refit `lights.rs`); planet city lights (need colony population)
+- [ ] Nebula billboards meanwhile: near fade, occlusion intensity
 - [x] Asteroid fields: rocks from the engine's table (`master*`), count/radius/speeds from the ODF
 - [x] Map lights aimed by `dlight` markers; `hidden = 1` editor markers not drawn
 - [x] Select units (click / drag box) in the map view
