@@ -1,7 +1,6 @@
 //! Every stock file of the installed game through every parser.
 //!
-//! The game directory comes from `A2_GAME`. Without a game (CI) each test prints
-//! a note and passes. Nothing read here is
+//! The game directory comes from `A2_GAME`. Without a game (CI) each test prints a note and passes. Nothing read here is
 //! written anywhere.
 //!
 //! "Stock" means: where a `<file>.<suffix>-backup` sits beside an installed file, the
@@ -31,7 +30,7 @@ macro_rules! game_or_skip {
         match game_dir() {
             Some(d) => d,
             None => {
-                eprintln!("NOTE: no Armada II install found (A2_GAME / a2env.sh); skipping stock test");
+                eprintln!("NOTE: no Armada II install found (A2_GAME); skipping stock test");
                 return;
             }
         }
