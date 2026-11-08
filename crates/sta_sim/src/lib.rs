@@ -24,6 +24,7 @@
 pub mod command;
 pub mod event;
 pub mod fake;
+pub mod movement;
 pub mod setup;
 pub mod source;
 pub mod spatial;
@@ -88,6 +89,8 @@ pub struct Sim {
     regions: Vec<Region>,
     /// Events since the last step (spawns between ticks), emitted with it.
     events: Vec<SimEvent>,
+    /// Queued waypoints and formations (SIM-02).
+    movement: movement::Movement,
 }
 
 fn dt() -> Fixed {
@@ -200,6 +203,7 @@ impl Sim {
             starts: Vec::new(),
             regions: Vec::new(),
             events: Vec::new(),
+            movement: movement::Movement::default(),
         }
     }
 
@@ -234,24 +238,10 @@ impl Sim {
             CommandKind::Order(o) => o,
             CommandKind::Edit(e) => return self.apply_edit(c.player, e),
         };
-        let (units, to) = match order {
-            // Queued waypoints are SIM-02's; until then a queued move replaces.
-            Order::Move { units, to, .. } => (units, Some(*to)),
-            Order::Stop { units } => (units, None),
-            _ => return false,
-        };
-        // Players order their own units; scripts and the bench any unit.
-        // Units that are gone, not the player's or unable to move are
-        // skipped; the command is rejected only when none is left.
-        let mut any = false;
-        for &id in units {
-            let owned = self.unit(id).is_some_and(|u| u.orderable() && (!c.player.is_player() || u.owner == c.player));
-            if owned {
-                self.set_target(id, to);
-                any = true;
-            }
+        match order {
+            Order::Move { .. } | Order::Stop { .. } | Order::Formation { .. } => self.apply_movement(c.player, order),
+            _ => false,
         }
-        any
     }
 
     /// Move every unit one tick and close the tick with its view.
@@ -259,6 +249,7 @@ impl Sim {
         for u in self.units.iter_mut().filter(|u| u.mobile()) {
             u.step();
         }
+        self.advance_courses();
         self.tick += 1;
         TickOutput { view: Arc::new(self.build_view()), events: std::mem::take(&mut self.events) }
     }
@@ -299,6 +290,7 @@ impl Sim {
             h.u64(t.0 as u64);
         }
         self.units.hash_into(&mut h);
+        self.movement.hash_into(&mut h);
         h.u64(self.labels.len() as u64);
         for (id, label) in self.labels.iter() {
             h.u64(id.0 as u64);
