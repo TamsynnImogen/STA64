@@ -11,7 +11,7 @@
 //! - Targets: an `Attack` order, else the nearest enemy in the weapon's range
 //!   (ties to the lowest id). Point-defence weapons do not shoot at units.
 //! - `Hit` carries the weapon's damage as `hull` and zero `shield`: applying
-//!   it (shields, hull, destruction) is SIM-05's.
+//!   it (shields, hull, destruction) is `damage.rs`, which rewrites the split.
 //!
 //! Order each tick: shots in flight move (ascending shot id), then shooters
 //! fire (ascending entity id, hardpoints in definition order).
