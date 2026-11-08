@@ -61,4 +61,5 @@ headers).
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — engine structure and rules
 - [docs/NATIVE_FEATURES.md](docs/NATIVE_FEATURES.md) — FleetOpsHook / A2FOExtensions / Refit → native systems
 - [docs/MISSIONS.md](docs/MISSIONS.md) — mission scripts without DLLs (integrated MMM Lua)
+- [docs/TESTBENCH.md](docs/TESTBENCH.md) — test bench plan: scenes, scenarios, determinism, parity with stock
 - [docs/ROADMAP.md](docs/ROADMAP.md) — milestones
