@@ -19,6 +19,7 @@ pub mod def;
 pub mod fake;
 pub mod features;
 pub mod index;
+pub mod legacy;
 pub mod map;
 
 pub use aip::{Aip, AipList, AipValue, AipVar, BuildItem};
