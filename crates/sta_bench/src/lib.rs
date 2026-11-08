@@ -4,3 +4,4 @@
 //! types serve the in-process runner, `sta64 --scene` and the `sta-bench` CLI.
 
 pub mod parse;
+pub mod run;

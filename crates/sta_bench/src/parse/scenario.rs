@@ -233,7 +233,8 @@ impl Scenario {
 
 const MAX_INCLUDE_DEPTH: usize = 8;
 
-const HEADER_KEYS: [&str; 15] = [
+const HEADER_KEYS: [&str; 16] = [
+    "Tier",
     "Scene",
     "Size",
     "Mod",
