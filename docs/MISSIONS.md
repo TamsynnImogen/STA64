@@ -61,7 +61,7 @@ reported, the failing callback is disabled, and the match continues.
 
 ## Conversion report
 
-`sta64 --mission-report` (planned) lists every map whose mission resolves to
+`sta64 --mission-report` lists every map whose mission resolves to
 case 2. That gives the Lua conversion work (STA2 Classic Mod campaign, A1
 missions) a checklist straight from the installed content.
 

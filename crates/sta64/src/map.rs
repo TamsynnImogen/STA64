@@ -53,6 +53,12 @@ pub fn browser(vfs: &sta_vfs::Vfs, initial: Option<&str>, mount_summary: String)
     }
 }
 
+/// The model an ODF draws: its `basename` (Fleet Operations names models this
+/// way, e.g. `dcorvette` -> `dom_destroyer`), else the ODF's own name.
+fn model_name(odf: &sta_odf::Odf, odf_name: &str) -> String {
+    odf.str("basename").filter(|b| !b.trim().is_empty()).map(|b| b.trim().to_owned()).unwrap_or_else(|| odf_name.to_owned())
+}
+
 /// ODF lookups and loaded models, kept across maps.
 #[derive(Resource, Default)]
 struct Catalogue {
@@ -484,7 +490,7 @@ fn rebuild(
             // gives the radius.
             let scale = odf.f32("ScaleSOD").filter(|s| *s > 0.0).unwrap_or(1.0);
             let radius = catalogue
-                .model(&vfs.0, &o.odf)
+                .model(&vfs.0, &model_name(&odf, &o.odf))
                 .and_then(|(_, m)| m.bounds())
                 .map(|(lo, hi)| (Vec3::from(hi) - Vec3::from(lo)).max_element() * 0.5)
                 .unwrap_or(500.0)
@@ -503,7 +509,7 @@ fn rebuild(
             drawn += 1;
             continue;
         }
-        let Some((path, model)) = catalogue.model(&vfs.0, &o.odf) else {
+        let Some((path, model)) = catalogue.model(&vfs.0, &model_name(&odf, &o.odf)) else {
             no_model += 1;
             continue;
         };
