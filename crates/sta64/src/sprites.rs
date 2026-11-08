@@ -99,15 +99,27 @@ pub fn animate(
         if !shown {
             continue;
         }
-        if let (Some(sprite), Some(mut m)) = (table.sprite(&f.sprite), materials.get_mut(&f.material)) {
-            m.base_color = colour(col);
-            m.uv_transform = uv_affine(spr_anim::sprite_uv(table, sprite, t));
+        // Write only on change: a write re-uploads the material, and a map has
+        // thousands of these, most of them static.
+        if let Some(sprite) = table.sprite(&f.sprite) {
+            let (c, uv) = (colour(col), uv_affine(spr_anim::sprite_uv(table, sprite, t)));
+            if materials.get(&f.material).is_some_and(|m| m.base_color != c || m.uv_transform != uv)
+                && let Some(mut m) = materials.get_mut(&f.material)
+            {
+                m.base_color = c;
+                m.uv_transform = uv;
+            }
         }
     }
     for f in &flip {
-        if let (Some(a), Some(mut m)) = (table.animation(&f.animation), materials.get_mut(&f.material)) {
+        if let Some(a) = table.animation(&f.animation) {
             let o = spr_anim::offset_of(spr_anim::value(a, t + f.offset, spr_anim::LOOP));
-            m.uv_transform = Affine2::from_translation(Vec2::new(o[0], o[1]));
+            let uv = Affine2::from_translation(Vec2::new(o[0], o[1]));
+            if materials.get(&f.material).is_some_and(|m| m.uv_transform != uv)
+                && let Some(mut m) = materials.get_mut(&f.material)
+            {
+                m.uv_transform = uv;
+            }
         }
     }
 }

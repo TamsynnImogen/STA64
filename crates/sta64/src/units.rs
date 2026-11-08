@@ -259,3 +259,76 @@ fn rings(mut gizmos: Gizmos, selected: Query<(&Unit, &GlobalTransform), With<Sel
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::time::TimeUpdateStrategy;
+    use std::time::Duration;
+
+    /// A ship cruising in a straight line must move the same distance every
+    /// rendered frame (sim at 30 Hz, frames at 60 Hz, interpolated between ticks).
+    #[test]
+    fn straight_line_motion_is_even_per_frame() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 60.0)))
+            .insert_resource(Time::<Fixed64>::from_hz(sta_sim::TICK_HZ as f64))
+            .init_resource::<Game>()
+            .add_systems(FixedUpdate, tick)
+            .add_systems(Update, place);
+        let id = {
+            let mut game = app.world_mut().resource_mut::<Game>();
+            let t = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0];
+            let id = game.spawn(1, &t, MoveStats::from_f32(140.0, 100.0, 1.0, 1.0, 1.0));
+            game.pending.push(Command::Move { unit: id, to: SimVec3::from_f32([0.0, 0.0, 100_000.0]) });
+            id
+        };
+        let e = app.world_mut().spawn((Unit { id, radius: 10.0 }, Transform::IDENTITY)).id();
+        let mut zs = Vec::new();
+        for _ in 0..180 {
+            app.update();
+            zs.push(app.world().get::<Transform>(e).unwrap().translation.z);
+        }
+        // Skip the first second (acceleration), then compare frame steps.
+        let steps: Vec<f32> = zs.windows(2).skip(60).map(|w| (w[1] - w[0]).abs()).collect();
+        let (lo, hi) = steps.iter().fold((f32::MAX, 0f32), |(l, h), &s| (l.min(s), h.max(s)));
+        let expect = 140.0 / 60.0;
+        assert!(lo > expect * 0.8 && hi < expect * 1.2, "uneven frame steps: min {lo}, max {hi}, expected ~{expect}");
+    }
+
+    /// With uneven frame times the on-screen speed (step / frame time) must stay
+    /// steady too.
+    #[test]
+    fn motion_follows_uneven_frames() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(Time::<Fixed64>::from_hz(sta_sim::TICK_HZ as f64))
+            .init_resource::<Game>()
+            .add_systems(FixedUpdate, tick)
+            .add_systems(Update, place);
+        let id = {
+            let mut game = app.world_mut().resource_mut::<Game>();
+            let t = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0];
+            let id = game.spawn(1, &t, MoveStats::from_f32(140.0, 100.0, 1.0, 1.0, 1.0));
+            game.pending.push(Command::Move { unit: id, to: SimVec3::from_f32([0.0, 0.0, 100_000.0]) });
+            id
+        };
+        let e = app.world_mut().spawn((Unit { id, radius: 10.0 }, Transform::IDENTITY)).id();
+        let frames = [0.007, 0.023, 0.016, 0.031, 0.011, 0.019, 0.042, 0.009];
+        let mut speeds = Vec::new();
+        let mut last = 0.0f32;
+        for i in 0..400 {
+            let dt = frames[i % frames.len()];
+            app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(dt)));
+            app.update();
+            let z = app.world().get::<Transform>(e).unwrap().translation.z;
+            if i > 120 {
+                speeds.push((z - last).abs() / dt as f32);
+            }
+            last = z;
+        }
+        let (lo, hi) = speeds.iter().fold((f32::MAX, 0f32), |(l, h), &s| (l.min(s), h.max(s)));
+        assert!(lo > 140.0 * 0.85 && hi < 140.0 * 1.15, "on-screen speed varies: {lo}..{hi}");
+    }
+}
