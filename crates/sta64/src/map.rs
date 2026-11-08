@@ -5,8 +5,8 @@
 //! model. The BZN team picks the object's entry in `teamcolor.odf`. The map's
 //! `BackgroundArt` SOD is the skybox, drawn unlit around the camera.
 //!
-//! Controls: Left/Right map, PgUp/PgDn x10, WASD pan, left-drag orbit,
-//! right-drag pan, wheel zoom, R reset view.
+//! Controls: left click/drag select, right click move, Space stop, Left/Right
+//! map, PgUp/PgDn x10, WASD pan, middle-drag orbit, wheel zoom, R reset view.
 
 use crate::model_scene::{self, PartCache, SpawnCtx, to_bevy};
 use crate::sprites::SpriteTables;
@@ -165,6 +165,11 @@ impl Plugin for MapPlugin {
                 brightness: 60.0,
                 ..default()
             })
+            .insert_resource(crate::viewer::OrbitButtons {
+                rotate: MouseButton::Middle,
+                pan: None,
+            })
+            .add_plugins(crate::units::UnitsPlugin)
             .add_systems(Startup, setup)
             .add_systems(
                 Update,
@@ -306,15 +311,17 @@ fn rebuild(
     tables: Res<SpriteTables>,
     teams: Res<TeamColours>,
     mut orbit: Query<&mut Orbit>,
-    mut particles: ResMut<crate::particles::Particles>,
+    state: (ResMut<crate::particles::Particles>, ResMut<crate::units::Game>),
     lighting: Lighting,
 ) {
     let (mut ambient, mut lights) = lighting;
+    let (mut particles, mut game) = state;
     if !browser.dirty {
         return;
     }
     browser.dirty = false;
     particles.clear();
+    game.reset();
     for e in &roots {
         commands.entity(e).despawn();
     }
@@ -347,6 +354,7 @@ fn rebuild(
     let (mut drawn, mut no_model, mut no_odf, mut tris, mut planets, mut rocks) = (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
     let mut missing: Vec<String> = Vec::new();
     let mut map_lights: Vec<(Vec3, Option<[f32; 3]>)> = Vec::new();
+    let mut units = 0usize;
     let mut hidden = 0usize;
 
     for o in &map.objects {
@@ -462,6 +470,27 @@ fn rebuild(
         // ScaleSOD goes to the model's positions, not to the object's transform.
         let tf = to_bevy(&Matrix34 { m: o.transform });
         let entity = commands.spawn((tf, Visibility::default(), ChildOf(root))).id();
+        // Craft with a physics ODF move: they become simulation units.
+        if let Some(phys) = odf.str("physicsFile").filter(|p| !p.is_empty()).map(|p| p.trim_end_matches(".odf").to_owned())
+            && let Some(ph) = catalogue.odf(&vfs.0, &phys)
+            && ph.f32("impulseSpeed").is_some_and(|s| s > 0.0)
+        {
+            let stats = sta_sim::MoveStats::from_f32(
+                ph.f32("impulseSpeed").unwrap_or(100.0),
+                ph.f32("forwardAccel").unwrap_or(1.0),
+                ph.f32("turnOmega").unwrap_or(1.0),
+                ph.f32("turnAlpha").unwrap_or(1.0),
+                ph.f32("turnOmegaFractionAtRest").unwrap_or(0.2),
+            );
+            let id = game.spawn(o.team, &o.transform, stats);
+            let radius = model
+                .bounds()
+                .map(|(lo, hi)| (Vec3::from(hi) - Vec3::from(lo)).length() * 0.5)
+                .unwrap_or(20.0)
+                * scale;
+            commands.entity(entity).insert(crate::units::Unit { id, radius: radius.max(5.0) });
+            units += 1;
+        }
         let team = if o.team > 0 { teams.0.get(o.team as usize).map(|t| t.1).unwrap_or(neutral) } else { neutral };
         let mut ctx = SpawnCtx {
             commands: &mut commands,
@@ -590,7 +619,7 @@ fn rebuild(
     missing.sort();
     missing.dedup();
     let mut info = format!(
-        "{header}\n{}  v{}  {}\nsize {:.0} x {:.0}   race {}   tech tree {}   scripts {:?}\nsky {}   starfield {}\n{} objects: {} drawn ({} planets, {} asteroid rocks), {} editor markers ({} lights), {} without a model, {} without an ODF   {} triangles",
+        "{header}\n{}  v{}  {}\nsize {:.0} x {:.0}   race {}   tech tree {}   scripts {:?}\nsky {}   starfield {}\n{} objects: {} drawn ({} ships under the sim, {} planets, {} asteroid rocks), {} editor markers ({} lights), {} without a model, {} without an ODF   {} triangles",
         map.description,
         map.version,
         if map.binary { "binary" } else { "text" },
@@ -603,6 +632,7 @@ fn rebuild(
         star_note,
         map.objects.len(),
         drawn,
+        units,
         planets,
         rocks,
         hidden,
@@ -623,7 +653,8 @@ fn hud(browser: Res<MapBrowser>, mut q: Query<&mut Text, With<MapHud>>) {
     }
     for mut t in &mut q {
         t.0 = format!(
-            "STA64 {} map view\n{}\n\n{}\n\nLeft/Right map  PgUp/PgDn x10  WASD pan  left-drag orbit  right-drag pan  wheel zoom  R reset",
+            "STA64 {} map view\n{}\n\n{}\n\nleft click/drag select (Shift adds)  right click move  Space stop\n\
+             Left/Right map  PgUp/PgDn x10  WASD pan  middle-drag orbit  wheel zoom  R reset",
             env!("CARGO_PKG_VERSION"),
             browser.mount_summary,
             browser.info

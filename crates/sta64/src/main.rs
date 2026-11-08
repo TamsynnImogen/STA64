@@ -12,6 +12,7 @@ mod model_scene;
 mod space;
 mod sprites;
 mod textures;
+mod units;
 mod viewer;
 
 use bevy::prelude::*;

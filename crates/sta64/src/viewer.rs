@@ -359,19 +359,32 @@ fn rebuild(
     }
 }
 
+/// Which mouse buttons orbit and pan the camera. The viewer uses left/right;
+/// the map uses middle to orbit and keeps left/right for selecting and orders.
+#[derive(Resource, Clone, Copy)]
+pub struct OrbitButtons {
+    pub rotate: MouseButton,
+    pub pan: Option<MouseButton>,
+}
+
 pub fn orbit_camera(
     buttons: Res<ButtonInput<MouseButton>>,
     motion: Res<AccumulatedMouseMotion>,
     scroll: Res<AccumulatedMouseScroll>,
+    config: Option<Res<OrbitButtons>>,
     mut q: Query<(&mut Orbit, &mut Transform)>,
 ) {
+    let cfg = config.map(|c| *c).unwrap_or(OrbitButtons {
+        rotate: MouseButton::Left,
+        pan: Some(MouseButton::Right),
+    });
     for (mut o, mut tf) in &mut q {
         let d = motion.delta;
-        if buttons.pressed(MouseButton::Left) {
+        if buttons.pressed(cfg.rotate) {
             o.yaw -= d.x * 0.008;
             o.pitch = (o.pitch + d.y * 0.008).clamp(-1.5, 1.5);
         }
-        if buttons.pressed(MouseButton::Right) {
+        if cfg.pan.is_some_and(|b| buttons.pressed(b)) {
             let right = tf.right();
             let up = tf.up();
             let k = o.dist * 0.0015;
