@@ -85,7 +85,7 @@ impl Loader<'_> {
         }
         let img = self.decode_rgba(name).map(|mut px| {
             let normal = if sta_assets::pixels::looks_like_normal_map(&px) {
-                sta_assets::pixels::flip_green(&mut px);
+                sta_assets::pixels::convert_direct3d_normal_map(&mut px);
                 px
             } else {
                 sta_assets::pixels::height_to_normal(&px)

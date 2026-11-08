@@ -72,7 +72,10 @@ pub fn height_to_normal(height: &Rgba) -> Rgba {
             let du = hgt(x + 1, y) - hgt(x - 1, y);
             let dv = hgt(x, y + 1) - hgt(x, y - 1);
             let l = (du * du + dv * dv + 1.0).sqrt();
-            let n = [-du / l, dv / l, 1.0 / l];
+            // Green holds the slope along +V when no flip is needed (Direct3D
+            // convention), along -V otherwise.
+            let gv = if D3D_GREEN_FLIP { dv } else { -dv };
+            let n = [-du / l, gv / l, 1.0 / l];
             let b = |c: f32| ((c * 0.5 + 0.5) * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
             px.extend_from_slice(&[b(n[0]), b(n[1]), b(n[2]), 255]);
         }
@@ -110,12 +113,23 @@ pub fn looks_like_normal_map(img: &Rgba) -> bool {
     grey * 2 < count && b > 0.6 && (r - 0.5).abs() < 0.2 && (g - 0.5).abs() < 0.2
 }
 
-/// Flip a Direct3D-convention normal map's green channel to the glTF/Bevy one.
-pub fn flip_green(img: &mut Rgba) {
-    for px in img.pixels.chunks_exact_mut(4) {
-        px[1] = 255 - px[1];
+/// Convert a Direct3D-authored normal map (green pointing down the image, +V)
+/// to the renderer's convention (see [`D3D_GREEN_FLIP`]).
+pub fn convert_direct3d_normal_map(img: &mut Rgba) {
+    if D3D_GREEN_FLIP {
+        for px in img.pixels.chunks_exact_mut(4) {
+            px[1] = 255 - px[1];
+        }
     }
 }
+
+/// Whether Direct3D normal maps need their green channel flipped for Bevy, and
+/// (the same fact) whether generated normal maps store -V rather than +V in
+/// green. True: Bevy's mikktspace bitangent points toward -V. Verified by
+/// `sta64`'s `height_maps_tilt_away_from_the_slope` and
+/// `direct3d_normal_maps_keep_their_meaning` tests against Bevy's own tangents
+/// (both fail if this is set the other way).
+pub const D3D_GREEN_FLIP: bool = true;
 
 /// A metallic-roughness map (glTF layout: G roughness, B metalness) from a
 /// specular map: bright specular means smooth, metalness stays 0.

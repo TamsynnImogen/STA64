@@ -400,6 +400,73 @@ pub fn animate(time: Res<Time>, mut q: Query<(&NodeAnim, &mut Transform)>) {
 mod tests {
     use super::*;
 
+    /// Bevy's shading of a normal-map texel on a quad, done on the CPU exactly as
+    /// `apply_normal_mapping` does: N' = x*T + y*B + z*N with B = w * cross(N, T).
+    /// The quad lies in the XY plane facing +Z; +u runs along +X, +v (down the
+    /// image) along -Y.
+    fn shade(texel: [u8; 3]) -> Vec3 {
+        let mut m = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
+            .with_inserted_attribute(
+                Mesh::ATTRIBUTE_POSITION,
+                vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
+            )
+            .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 0.0, 1.0]; 4])
+            .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]])
+            .with_inserted_indices(Indices::U32(vec![0, 1, 2, 0, 2, 3]));
+        m.generate_tangents().unwrap();
+        let Some(bevy::mesh::VertexAttributeValues::Float32x4(t)) = m.attribute(Mesh::ATTRIBUTE_TANGENT) else {
+            panic!("no tangents")
+        };
+        let tan = Vec3::new(t[0][0], t[0][1], t[0][2]);
+        let n = Vec3::Z;
+        let b = t[0][3] * n.cross(tan);
+        let nt = Vec3::new(texel[0] as f32, texel[1] as f32, texel[2] as f32) / 255.0 * 2.0 - 1.0;
+        (nt.x * tan + nt.y * b + nt.z * n).normalize()
+    }
+
+    fn texel_from_height(f: impl Fn(u32, u32) -> u8) -> [u8; 3] {
+        let mut img = sta_assets::Rgba {
+            width: 8,
+            height: 8,
+            has_alpha: false,
+            pixels: vec![0; 8 * 8 * 4],
+        };
+        for y in 0..8 {
+            for x in 0..8 {
+                let h = f(x, y);
+                img.pixels[((y * 8 + x) * 4) as usize..][..4].copy_from_slice(&[h, h, h, 255]);
+            }
+        }
+        let n = sta_assets::pixels::height_to_normal(&img);
+        let i = ((3 * 8 + 3) * 4) as usize;
+        [n.pixels[i], n.pixels[i + 1], n.pixels[i + 2]]
+    }
+
+    #[test]
+    fn height_maps_tilt_away_from_the_slope() {
+        // Height rising toward +u (world +X): the lit normal must lean toward -X.
+        let n = shade(texel_from_height(|x, _| (x * 30) as u8));
+        assert!(n.x < -0.1 && n.y.abs() < 0.05, "u slope gave {n}");
+        // Height rising down the image (+v, world -Y): the normal must lean toward +Y.
+        let n = shade(texel_from_height(|_, y| (y * 30) as u8));
+        assert!(n.y > 0.1 && n.x.abs() < 0.05, "v slope gave {n}");
+    }
+
+    #[test]
+    fn direct3d_normal_maps_keep_their_meaning() {
+        // A Direct3D (green-down) normal map texel leaning toward image-down (+v,
+        // world -Y): after our conversion the lit normal must lean toward -Y.
+        let mut img = sta_assets::Rgba {
+            width: 1,
+            height: 1,
+            has_alpha: false,
+            pixels: vec![128, 200, 220, 255],
+        };
+        sta_assets::pixels::convert_direct3d_normal_map(&mut img);
+        let n = shade([img.pixels[0], img.pixels[1], img.pixels[2]]);
+        assert!(n.y < -0.1, "D3D +v texel gave {n}");
+    }
+
     #[test]
     fn matrix_conversion_mirrors_z() {
         // Translation (1, 2, 3) with identity axes.
