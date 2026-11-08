@@ -23,11 +23,12 @@
 
 pub mod combat;
 pub mod command;
+pub mod economy;
 pub mod event;
 pub mod fake;
 pub mod movement;
 pub mod setup;
-pub mod snapshot;
+pub mod sensors;
 pub mod source;
 pub mod spatial;
 pub mod spawn;
@@ -95,6 +96,8 @@ pub struct Sim {
     weapons: combat::weapons::Weapons,
     /// Queued waypoints and formations (SIM-02).
     movement: movement::Movement,
+    /// Stock, nodes and freighters (SIM-07); in the digest once any exists.
+    economy: economy::Economy,
 }
 
 fn dt() -> Fixed {
@@ -209,6 +212,7 @@ impl Sim {
             events: Vec::new(),
             weapons: Default::default(),
             movement: movement::Movement::default(),
+            economy: Default::default(),
         }
     }
 
@@ -241,13 +245,29 @@ impl Sim {
         use command::{CommandKind, Order};
         let order = match &c.kind {
             CommandKind::Order(o) => o,
-            CommandKind::Edit(e) => return self.apply_edit(c.player, e),
+            CommandKind::Edit(e) => {
+                return match self.economy.apply_edit(c.player, e) {
+                    Some(ok) => ok,
+                    None => self.apply_edit(c.player, e),
+                };
+            }
         };
         match order {
-            Order::Move { .. } | Order::Formation { .. } => self.apply_movement(c.player, order),
+            Order::Move { units, queue, .. } => {
+                if !queue {
+                    self.economy.cancel(&self.units, c.player, units);
+                }
+                self.apply_movement(c.player, order)
+            }
+            Order::Formation { .. } => self.apply_movement(c.player, order),
+            Order::Mine { units, node } => {
+                let Some(db) = self.content.clone() else { return false };
+                self.economy.order_mine(&db, &self.units, c.player, units, *node)
+            }
             Order::Stop { units } => {
                 // A stop also drops the attack order of the units it reaches.
                 self.weapons.stop_attack(&self.units, c.player, units);
+                self.economy.cancel(&self.units, c.player, units);
                 self.apply_movement(c.player, order)
             }
             Order::Attack { units, target } => {
@@ -263,8 +283,16 @@ impl Sim {
         for u in self.units.iter_mut().filter(|u| u.mobile()) {
             u.step();
         }
+        if let Some(db) = self.content.clone() {
+            combat::damage::recharge(&mut self.units, &db);
+            let from = self.events.len();
+            self.weapons.step(self.tick, &self.units, &db, &self.players, &mut self.events);
+            for (id, by) in combat::damage::apply(&mut self.units, &mut self.events, from) {
+                self.despawn(id, by);
+            }
+        }
         if let Some(db) = &self.content {
-            self.weapons.step(self.tick, &self.units, db, &self.players, &mut self.events);
+            self.economy.step(&mut self.units, db, &mut self.events);
         }
         self.advance_courses();
         self.tick += 1;
@@ -279,7 +307,7 @@ impl Sim {
             .map(|&(id, team)| PlayerView {
                 id,
                 team,
-                resources: Vec::new(),
+                resources: self.economy.stock_of(id),
                 officers: [Fixed::ZERO; 2],
                 eliminated: false,
                 relations: self
@@ -290,7 +318,8 @@ impl Sim {
                     .collect(),
             })
             .collect();
-        WorldView { tick: self.tick, digest: self.digest(), units, players }
+        let visibility = sensors::compute(&self.units, self.content.as_deref(), &self.players);
+        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility }
     }
 
     /// FNV-1a over all simulation state, for desync detection. The content
@@ -315,6 +344,9 @@ impl Sim {
         }
         if !self.weapons.is_empty() {
             self.weapons.hash_into(&mut h);
+        }
+        if !self.economy.is_empty() {
+            self.economy.hash_into(&mut h);
         }
         h.0
     }
