@@ -16,7 +16,7 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [?] Ships' running lights / engine particles still sit on the hull after the ScaleSOD change (e.g. `fgalaxy`, ScaleSOD 2.78) — `270c675`
 - [?] Asteroid fields show rocks, slowly orbiting/tumbling; size and spread look like the game (spread is an estimate) — aa70e99
 - [?] Ships: click / drag-box select, right-click move, Space stop; they turn and arrive smoothly; speeds feel like the game (accel/turn-at-rest interpretation is ours) — a3f2076
-- [?] Map camera now: middle-drag orbit, WASD pan, wheel zoom (left/right are select/order) — a3f2076
+- [?] Map camera now: middle-drag orbit, WASD/edge pan, wheel zoom (left/right are select/order); edge scroll not annoying? — a3f2076
 - [?] The editor's `dlight` arrow gizmo no longer shows; lighting direction matches the game on a map with dlights — aa70e99
 
 ## Now (M2: a map you can fly in)
@@ -26,7 +26,8 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [x] Map lights aimed by `dlight` markers; `hidden = 1` editor markers not drawn
 - [x] Select units (click / drag box) in the map view
 - [x] Move orders through `sta_sim` (deterministic, digest pinned), renderer interpolating between ticks
-- [ ] RTS camera (edge scroll, tactical zoom limits from `RTS_CFG.h`)
+- [x] RTS camera: edge scroll (`SCROLL_BORDER_WIDTH`), focus/zoom kept to the map — bba5143
+- [ ] Mission resolution per docs/MISSIONS.md (`--mission-report`)
 
 ## Later
 
