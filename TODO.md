@@ -9,6 +9,9 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] Ship movement smooth now (no weaving); FPS shown top right (try `cargo run --release` if it's low) — 3e748b3
 - [?] Planets with Refit's look: terminator, dusk band, limb haze, water glint, cloud shell, halo past the limb — 4fc4a88
+- [?] Recipe planets (class D/H/J/K/L/M) switch to detailed generated ground with relief, drifting clouds and cloud shadows a few seconds after a map loads (first time only; then cached) — 7c8c421
+- [?] Asteroids and dilithium moons with generated rock (craters, relief, highlights, rim); moons' cracks glow blue — 7c8c421
+- [?] Movement smoothness after the sprite-material fix — 19b7300
 
 ## Checked earlier (morning list)
 
@@ -29,7 +32,8 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 
 - [ ] Refit map objects, in order:
   - [x] Planet look (Lighting.asi via Refit's world_planet shader) — 4fc4a88
-  - [ ] Recipe surfaces (Surfaces.asi): planets PB_CLSS*, moons Mdmoon, asteroid rock Master1/2 — procedural ground/relief/clouds baked to cubes, then the planet `surface_ps` and the rock shader
+  - [x] Recipe surfaces (Surfaces.asi): planets PB_CLSS*, moons Mdmoon, asteroid rock Master1/2 — 7c8c421
+  - [ ] Moon cracks' ravine parallax (Refit rock shader), moon glow shell and nimbus
   - [ ] Volumetric nebulae (Nebulae.asi): ray-marched gas lit by the key with ship shadows
   - [ ] Planet glow lights on nearby ships (Refit `lights.rs`); planet city lights (need colony population)
 - [ ] Nebula billboards meanwhile: near fade, occlusion intensity
