@@ -1,4 +1,8 @@
-//! Fleet Operations FPQ v2 archive reader.
+//! Fleet Operations FPQ archives, versions 1 and 2.
+//!
+//! - **v2**: Fleet Operations 4.0 / Roots, written by FPQEdit 4.0.
+//! - **v1**: Fleet Operations 3.x, written by FPQEdit 3.2.7. The same layout
+//!   with no folders (flat names) and a different name hash ([`hash_v1`]).
 //!
 //! Layout (little endian):
 //! - 28-byte header: `FPQ\0`, version, folder count, file count, hash count,
@@ -9,10 +13,14 @@
 //!   name offset, name length: u32; compression: u8; folder: i32).
 //! - name blob, then data blob.
 //!
-//! Lookup is MPQ-style over the case-insensitive basename. Compression 0 is raw,
-//! 1 is LZO1X.
+//! Lookup is MPQ-style over the case-insensitive basename: the start slot is
+//! the slot hash masked to the (power-of-two) table size, then linear probing;
+//! an all-zero slot is empty. v2 stores [`hash`] kinds `0x100` and `0x200` as
+//! hash A and B; v1 stores [`hash_v1`] as both. Compression 0 is raw, 1 is
+//! LZO1X.
 
 pub mod lzo;
+pub mod write;
 
 use std::path::Path;
 
@@ -54,6 +62,7 @@ struct Folder {
 }
 
 pub struct Fpq {
+    version: u32,
     bytes: Vec<u8>,
     hashes: Vec<(u32, u32, u32)>,
     folders: Vec<Folder>,
@@ -78,7 +87,7 @@ impl Fpq {
         }
         let h = |i: usize| u32_at(&bytes, 4 + i * 4) as usize;
         let (version, n_folders, n_files, n_hash, data_len, names_len) = (h(0), h(1), h(2), h(3), h(4), h(5));
-        if version < 2 {
+        if !(1..=2).contains(&version) {
             return Err(FpqError::Version(version as u32));
         }
         if n_hash == 0 || !n_hash.is_power_of_two() {
@@ -127,6 +136,7 @@ impl Fpq {
             })
             .collect();
         let fpq = Fpq {
+            version: version as u32,
             bytes,
             hashes,
             folders,
@@ -168,6 +178,20 @@ impl Fpq {
         Ok(s.iter().map(|&b| b as char).collect())
     }
 
+    /// Format version: 1 (FPQEdit 3.2.7) or 2 (FPQEdit 4.0).
+    pub fn version(&self) -> u32 {
+        self.version
+    }
+
+    /// Hash table size (a power of two).
+    pub fn hash_slots(&self) -> usize {
+        self.hashes.len()
+    }
+
+    pub fn folder_count(&self) -> usize {
+        self.folders.len()
+    }
+
     pub fn len(&self) -> usize {
         self.files.len()
     }
@@ -205,8 +229,8 @@ impl Fpq {
     /// Find a file by basename via the hash table.
     pub fn find(&self, basename: &str) -> Option<usize> {
         let mask = self.hashes.len() - 1;
-        let start = hash(basename, 0) as usize & mask;
-        let (a, b) = (hash(basename, 0x100), hash(basename, 0x200));
+        let (start, a, b) = slot_and_hashes(self.version, basename);
+        let start = start as usize & mask;
         let mut i = start;
         loop {
             let (ha, hb, idx) = self.hashes[i];
@@ -227,7 +251,19 @@ impl Fpq {
         let stored = &self.bytes[start..start + f.stored_size as usize];
         match f.compression {
             0 => Ok(stored.to_vec()),
-            _ => lzo::decompress(stored, f.size as usize).map_err(|source| FpqError::Lzo { index, source }),
+            _ => {
+                if self.version == 1 {
+                    let (size, used) = v1_size_prefix(stored)
+                        .ok_or_else(|| FpqError::Corrupt(format!("entry {index}: bad v1 size prefix")))?;
+                    if size != f.size {
+                        return Err(FpqError::Corrupt(format!("entry {index}: v1 prefix says {size}, entry {}", f.size)));
+                    }
+                    lzo::decompress_unterminated(&stored[used..], f.size as usize)
+                } else {
+                    lzo::decompress(stored, f.size as usize)
+                }
+                .map_err(|source| FpqError::Lzo { index, source })
+            }
         }
     }
 }
@@ -247,6 +283,68 @@ fn crypt_table() -> &'static [u32; 0x500] {
         }
         t
     })
+}
+
+/// FPQ v1 puts the unpacked size before each LZO stream: little-endian `u16`
+/// chunks of 15 bits each, bit 15 set when another chunk follows (`8c 01` =
+/// 396; `a4 f8 0f 00` = 0x78a4 + (0x0f << 15) = 522404). Returns (size, bytes used).
+pub fn v1_size_prefix(b: &[u8]) -> Option<(u32, usize)> {
+    let (mut value, mut shift, mut at) = (0u64, 0u32, 0usize);
+    loop {
+        let w = u16::from_le_bytes([*b.get(at)?, *b.get(at + 1)?]) as u64;
+        at += 2;
+        value |= (w & 0x7FFF) << shift;
+        shift += 15;
+        if w & 0x8000 == 0 {
+            return u32::try_from(value).ok().map(|v| (v, at));
+        }
+        if shift > 32 {
+            return None;
+        }
+    }
+}
+
+/// The v1 size prefix for `size`.
+pub fn v1_size_prefix_bytes(size: u32) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut v = size;
+    loop {
+        let more = v >> 15 != 0;
+        let w = (v & 0x7FFF) as u16 | if more { 0x8000 } else { 0 };
+        out.extend_from_slice(&w.to_le_bytes());
+        v >>= 15;
+        if !more {
+            return out;
+        }
+    }
+}
+
+/// (slot hash, hash A, hash B) of a basename for archive version `version`.
+pub fn slot_and_hashes(version: u32, basename: &str) -> (u32, u32, u32) {
+    if version == 1 {
+        let h = hash_v1(basename);
+        (h, h, h)
+    } else {
+        (hash(basename, 0), hash(basename, 0x100), hash(basename, 0x200))
+    }
+}
+
+/// FPQ v1's name hash, as FPQEdit 3.2.7 computes it: [`hash`]'s recurrence
+/// with an all-zero crypt table (that build never fills its table, which sits
+/// in zero-initialised memory), over the upper-cased name **without its last
+/// character** (its loop runs one step short).
+pub fn hash_v1(name: &str) -> u32 {
+    let (mut s1, mut s2): (u32, u32) = (0x7FED_7FED, 0xEEEE_EEEE);
+    let n = name.chars().count();
+    for ch in name.chars().take(n.saturating_sub(1)) {
+        let mut b = if (ch as u32) < 256 { ch as u32 } else { b'?' as u32 };
+        if (b'a' as u32..=b'z' as u32).contains(&b) {
+            b -= 0x20;
+        }
+        s1 = s1.wrapping_add(s2);
+        s2 = b.wrapping_add(s1).wrapping_add(s2.wrapping_mul(33)).wrapping_add(3);
+    }
+    s1
 }
 
 /// MPQ-style case-insensitive string hash over Latin-1 bytes.
@@ -333,5 +431,19 @@ mod tests {
             assert_eq!(data.len(), f.entry(i).size as usize);
         }
         eprintln!("validated {} entries in {p}", f.len());
+
+        // Repack in the same version and read it back.
+        let files: Vec<(String, Vec<u8>)> = (0..f.len()).map(|i| (f.path(i).unwrap(), f.read(i).unwrap())).collect();
+        let original = std::fs::metadata(&p).unwrap().len();
+        let packed = write::write(f.version(), &files, write::Compression::Auto).unwrap();
+        let g = Fpq::from_bytes(packed.clone()).unwrap();
+        assert_eq!((g.version(), g.len(), g.folder_count()), (f.version(), f.len(), f.folder_count()));
+        assert_eq!(g.hash_slots(), f.hash_slots(), "table size as FPQEdit chose it");
+        for (i, (path, data)) in files.iter().enumerate() {
+            assert_eq!(&g.path(i).unwrap(), path);
+            assert_eq!(&g.read(i).unwrap(), data, "{path}");
+            assert_eq!(g.find(path.rsplit('/').next().unwrap()), Some(i), "{path}");
+        }
+        eprintln!("repacked v{}: {} -> {} bytes ({:+.1}%)", f.version(), original, packed.len(), (packed.len() as f64 / original as f64 - 1.0) * 100.0);
     }
 }

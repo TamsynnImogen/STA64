@@ -49,8 +49,21 @@ impl Reader<'_> {
     }
 }
 
-/// Decompress `src`, requiring exactly `expected` output bytes.
+/// Decompress `src`, requiring exactly `expected` output bytes and the
+/// end-of-stream marker.
 pub fn decompress(src: &[u8], expected: usize) -> Result<Vec<u8>, LzoError> {
+    inner(src, expected, true)
+}
+
+/// Decompress a stream that may stop without the end-of-stream marker, as
+/// FPQ v1 (FPQEdit 3.2.7) writes them: input used up at an instruction
+/// boundary with exactly `expected` bytes out is the end. A marker, if
+/// present, is honoured too.
+pub fn decompress_unterminated(src: &[u8], expected: usize) -> Result<Vec<u8>, LzoError> {
+    inner(src, expected, false)
+}
+
+fn inner(src: &[u8], expected: usize, require_eof: bool) -> Result<Vec<u8>, LzoError> {
     let mut out: Vec<u8> = Vec::with_capacity(expected);
     let mut r = Reader { buf: src, pos: 0 };
 
@@ -91,6 +104,13 @@ pub fn decompress(src: &[u8], expected: usize) -> Result<Vec<u8>, LzoError> {
     }
 
     loop {
+        if !require_eof && r.pos == src.len() {
+            return if out.len() == expected {
+                Ok(out)
+            } else {
+                Err(LzoError::SizeMismatch { got: out.len(), expected })
+            };
+        }
         let t = r.byte()?;
         let (dist, len, next);
         if t < 16 {
@@ -137,7 +157,7 @@ pub fn decompress(src: &[u8], expected: usize) -> Result<Vec<u8>, LzoError> {
         copy_match(&mut out, dist, len)?;
         literals(&mut out, &mut r, next)?;
         state = next;
-        if r.pos >= src.len() {
+        if require_eof && r.pos >= src.len() {
             return Err(LzoError::NoEof);
         }
     }
@@ -161,6 +181,19 @@ mod tests {
         // want len 6, dist 2: t>>5 = 5 -> 0xA0, (t>>2)&7 = 1 -> +4, next 0.
         let s = [17 + 2, b'a', b'b', 0xA4, 0x00, 0x11, 0, 0];
         assert_eq!(decompress(&s, 8).unwrap(), b"abababab");
+    }
+
+    #[test]
+    fn unterminated_streams() {
+        // FPQ v1: no 0x11 0 0 at the end.
+        let s = [17 + 2, b'a', b'b', 0xA4, 0x00];
+        assert_eq!(decompress_unterminated(&s, 8).unwrap(), b"abababab");
+        assert_eq!(decompress(&s, 8), Err(LzoError::NoEof));
+        assert_eq!(decompress_unterminated(&s, 9), Err(LzoError::SizeMismatch { got: 8, expected: 9 }));
+        // A marker is still fine.
+        assert_eq!(decompress_unterminated(&[17 + 3, b'a', b'b', b'c', 0x11, 0, 0], 3).unwrap(), b"abc");
+        // Ends inside literals: an error, not a short success.
+        assert_eq!(decompress_unterminated(&[17 + 3, b'a'], 3), Err(LzoError::InputOverrun));
     }
 
     #[test]
