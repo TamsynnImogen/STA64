@@ -467,6 +467,7 @@ seam rather than writes.
 | SIM-12 | Sensors and per-player visibility (`visible_to`) | `sta_sim/src/sensors.rs` | SIM-03 | — | RND-13, AI | Bench visibility scenario | M | Sonnet |
 | SIM-13 | Victory/elimination | `sta_sim/src/victory.rs` | SIM-05 | — | INT-M3 | Last-unit-killed scenario emits `PlayerEliminated` | S | Haiku |
 | SIM-14 | Cloak and specials framework | `sta_sim/src/specials/` | SIM-05 | — | RND-11 | Bench `cloak` marks | M | Sonnet |
+| SIM-15 | Movement parity, one model per profile: `Unit::step` moves out of `lib.rs` into a movement model picked by `Profile` (STA2 Classic and FO4; STA1 Classic can follow), each model measuring which of acceleration, turning, braking and waypoint handling differ, physics keys each model reads (new `MoveStats` fields with defaults), waypoint chains without a stop at each leg where the game does so; constants fitted to the matching install, not guessed | `sta_sim/src/kinematics.rs`, `sta_sim/src/movement.rs`; `MoveStats` fields in `sta_content/src/def.rs` | SIM-02 (✓), CON-03, CON-05, TOOL-08 | `fake::db()` under each profile | INT-M5 | Bench `move-*` scenarios (start/stop, turn in place, 90° and 180° turns, waypoint chain) per unit class under STA2 Classic and FO4: TOOL-08 diff against stock A2 and against FO within a stated tolerance; goldens re-recorded once, in this PR | M | Opus |
 
 Later SIM backlog (rows in NATIVE_FEATURES "Simulation"): energy systems,
 turrets, squadrons, breeders/infestation, collective XP, wreckage, upgrades.
@@ -592,10 +593,10 @@ and fixes seams through seam PRs.
 | INT-M2 | Map you can fly in, on seams | R0-3, RND-01, CON-07, SIM-01, SIM-02, TOOL-03, TOOL-05 | `--map` plays as today from `MapDef` + `GameSetup`; corpus test green; ROADMAP M2 ticked | M | Sonnet |
 | INT-M3 | FO4 skirmish vs idle opponent | SIM-04..08, SIM-13, CON-03, CON-06, RND-09..11, UI-04, AUD-02, AUD-03, AI-01 | Bench skirmish scenario: player destroys idle opponent; first parity report (TOOL-08) | M | Sonnet |
 | INT-M4 | Front end → Instant Action → game → back | UI-06..09, AUD-04, CON-13, TOOL-09 | Scenario reaches each screen by state and starts a match from setup | M | Sonnet |
-| INT-M5 | Multiplayer with AI and missions | NET-02, NET-03, UI-11, AI-02, LUA-04 | Two-process match with an AI and a Lua mission, no desync over 30 min | M | Sonnet |
+| INT-M5 | Multiplayer with AI and missions | NET-02, NET-03, UI-11, AI-02, LUA-04, SIM-15 | Two-process match with an AI and a Lua mission, no desync over 30 min | M | Sonnet |
 
-Counts: CON 19, SIM 14, RND 14, UI 11, AUD 5, TOOL 9, LUA 4, AI 3, NET 3,
-EDT 8, INT 4 (104), plus 3 in round 0.
+Counts: CON 19, SIM 15, RND 14, UI 11, AUD 5, TOOL 9, LUA 4, AI 3, NET 3,
+EDT 8, INT 4 (105), plus 3 in round 0.
 
 ## Dependency graph
 
@@ -607,6 +608,7 @@ graph LR
   R0 --> SIM01 --> SIM02 & SIM03 & SIM10 & SIM11
   SIM03 --> SIM04 --> SIM05 --> SIM13 & SIM14
   SIM04 --> SIM06
+  CON03 & CON05 & TOOL08 --> SIM15
   SIM02 --> SIM07 --> SIM08 --> SIM09
   CON03 --> CON06 --> SIM08
   R03 --> RND01 & RND02 & RND09 & RND10 & UI01 & UI02 & UI03 & AUD01 & TOOL03
@@ -621,7 +623,7 @@ graph LR
   CON07 & SIM02 & RND01 & TOOL05 --> INTM2[INT-M2]
   SIM05 & SIM08 & RND09 & UI04 & AI01 --> INTM3[INT-M3]
   UI07 & UI06 --> INTM4[INT-M4]
-  NET02 & NET03 & AI02 & LUA04 --> INTM5[INT-M5]
+  NET02 & NET03 & AI02 & LUA04 & SIM15 --> INTM5[INT-M5]
 ```
 
 **Start right after round 0** (needs met or fakes enough): CON-02, CON-04,
@@ -706,5 +708,10 @@ Risks:
 - **Interpretation drift.** Movement and weapon timings are our reading of ODF
   keys (`units.rs` notes "our reading"); TOOL-08 parity runs are the check,
   and they need Refit's bench and an install, so they run locally.
+  Movement gets its own package, SIM-15, off the critical path and before INT-M5: A2 and
+  FO move differently, so it measures each against its own install, and
+  needs a parity source for stock A2 as well as FO (open: does Refit's bench
+  run unmodded A2?). It re-records every movement golden once, so it lands
+  before lockstep and replay goldens start to matter.
 - **Frame determinism** is unproven until RND-01 and TOOL-04 land; tier-2
   checks stay advisory until then.
