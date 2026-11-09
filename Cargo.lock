@@ -5354,6 +5354,7 @@ dependencies = [
  "bevy",
  "kira",
  "naga",
+ "png",
  "sta_assets",
  "sta_bench",
  "sta_bzn",
