@@ -51,6 +51,9 @@ lzokay-native = "0.2.1"
 # .sta archives: Zstandard (pure Rust, MIT) and SHA-256 (MIT OR Apache-2.0).
 ruzstd = "0.9.1"
 sha2 = "0.11.1"
+# .sta signatures: Ed25519 (BSD-3-Clause) and OS randomness for new keys.
+ed25519-dalek = "3.0.0"
+getrandom = "0.4.3"
 
 # Bevy is slow unoptimised; optimise dependencies even in dev builds.
 [profile.dev.package."*"]

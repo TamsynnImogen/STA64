@@ -1,0 +1,21 @@
+# Distinct SOD mesh-group blend names (lowercased) from `blend_survey` over the
+# Fleet Operations and Dominion War installs, plus names from TODO.md that those
+# installs lack (wwarpcoreol, xore, wtractor, zferengi). Unnamed ("") is also covered.
+default
+opaque
+additive
+alpha
+translucent
+alphathreshold
+atmosphere
+wormhole
+lambert
+phong
+phon
+whobber
+wtranscoil
+xcritical05
+wwarpcoreol
+xore
+wtractor
+zferengi
