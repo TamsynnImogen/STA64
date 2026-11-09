@@ -18,6 +18,7 @@ use sta_core::{ContentKey, EntityId, Fixed, PlayerId, Vec3};
 
 use crate::command::Edit;
 use crate::setup::GameSetup;
+use crate::view::UnitFlags;
 use crate::world::{Entity, NEUTRAL};
 use crate::{Sim, SimEvent};
 
@@ -80,9 +81,43 @@ impl Sim {
         match *e {
             Edit::Spawn { odf, player, pos, heading } => self.spawn_def(odf, player, pos, heading).is_some(),
             Edit::Kill(id) => self.despawn(id, None),
-            // Each lands with the package that owns what it changes.
+            Edit::Damage(id, amount) => {
+                // Straight to the hull, past the shields; lethal unless immortal.
+                let Some(u) = self.units.get_mut(id).filter(|u| u.hull[0] > Fixed::ZERO) else { return false };
+                let floor = if u.flags.contains(UnitFlags::IMMORTAL) { Fixed::ONE } else { Fixed::ZERO };
+                u.hull[0] = (u.hull[0] - amount).max(floor).min(u.hull[0]);
+                if u.hull[0] <= Fixed::ZERO {
+                    return self.despawn(id, None);
+                }
+                true
+            }
+            Edit::Heal(id) => {
+                let Some(u) = self.units.get_mut(id) else { return false };
+                u.hull[0] = u.hull[1];
+                u.shields = crate::world::Shields::full(u.shields.max, u.shields.directional);
+                true
+            }
+            Edit::Immortal(id, on) => self.set_flag(id, UnitFlags::IMMORTAL, on),
+            Edit::Engines(id, on) => {
+                let Some(u) = self.units.get_mut(id) else { return false };
+                if !on {
+                    u.speed = Fixed::ZERO;
+                    u.omega = Fixed::ZERO;
+                    u.target = None;
+                }
+                u.flags = u.flags.with(UnitFlags::ENGINES_OFF, !on);
+                true
+            }
+            Edit::Weapons(id, on) => self.set_flag(id, UnitFlags::WEAPONS_OFF, !on),
+            // The rest land with the package that owns what they change.
             _ => false,
         }
+    }
+
+    fn set_flag(&mut self, id: EntityId, flag: UnitFlags, on: bool) -> bool {
+        let Some(u) = self.units.get_mut(id) else { return false };
+        u.flags = u.flags.with(flag, on);
+        true
     }
 
     /// The content this sim resolves spawns against.
@@ -286,6 +321,31 @@ mod tests {
         assert_eq!(out.events, [SimEvent::Destroyed { id: EntityId(1), by: None }, SimEvent::Spawned { id: EntityId(4) }]);
         let ids: Vec<_> = out.view.units.iter().map(|u| u.id.0).collect();
         assert_eq!(ids, [3, 4]);
+    }
+
+    #[test]
+    fn bench_edits_damage_heal_immortal_switches() {
+        let s = setup(MapDef::empty());
+        let db = Arc::clone(&s.content);
+        let mut sim = Sim::from_setup(&s);
+        WorldSource::step(&mut sim, &[spawn(0, &db, "fx_frigate", 1, v(0, 0, 0))]);
+        let id = EntityId(1);
+        let e = |seq, e| cmd(PlayerId::BENCH, seq, CommandKind::Edit(e));
+        let hull = |sim: &Sim| sim.unit(id).map(|u| u.hull[0].to_f32());
+        let out = WorldSource::step(&mut sim, &[e(0, Edit::Damage(id, Fixed::from_int(100)))]);
+        assert!(!out.events.iter().any(|x| matches!(x, SimEvent::Rejected { .. })));
+        assert_eq!(hull(&sim), Some(200.0));
+        WorldSource::step(&mut sim, &[e(0, Edit::Heal(id))]);
+        assert_eq!(hull(&sim), Some(300.0));
+        // Immortal: lethal damage leaves one hull; off again, it kills.
+        WorldSource::step(&mut sim, &[e(0, Edit::Immortal(id, true)), e(1, Edit::Damage(id, Fixed::from_int(999)))]);
+        assert_eq!(hull(&sim), Some(1.0));
+        WorldSource::step(&mut sim, &[e(0, Edit::Weapons(id, false)), e(1, Edit::Weapons(id, true))]);
+        assert!(!sim.unit(id).unwrap().flags.contains(UnitFlags::WEAPONS_OFF));
+        WorldSource::step(&mut sim, &[e(0, Edit::Immortal(id, false)), e(1, Edit::Damage(id, Fixed::from_int(5)))]);
+        assert!(sim.unit(id).is_none());
+        let out = WorldSource::step(&mut sim, &[e(0, Edit::Heal(id))]);
+        assert!(out.events.iter().any(|x| matches!(x, SimEvent::Rejected { .. })), "no such unit");
     }
 
     #[test]

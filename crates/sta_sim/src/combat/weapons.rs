@@ -24,6 +24,7 @@ use sta_core::{ContentKey, EntityId, Fixed, PlayerId, TICK_HZ, TeamId, Vec3};
 
 use super::pd::{Pd, PdRec};
 use crate::event::{SimEvent, Target};
+use crate::view::UnitFlags;
 use crate::world::{Entities, Entity, Fnv, Table};
 
 /// The XZ-plane direction from `from` to `to`, normalised, and the distance.
@@ -240,6 +241,9 @@ impl Weapons {
         self.shots = flying;
 
         for u in units.iter() {
+            if u.flags.contains(UnitFlags::WEAPONS_OFF) {
+                continue;
+            }
             let Some(def) = db.unit(u.def) else { continue };
             if def.hardpoints.is_empty() {
                 continue;

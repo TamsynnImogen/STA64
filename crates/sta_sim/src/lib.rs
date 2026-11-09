@@ -336,7 +336,7 @@ impl Sim {
                 team,
                 resources: self.economy.stock_of(id),
                 officers: [Fixed::ZERO; 2],
-                eliminated: false,
+                eliminated: self.victory.is_eliminated(id),
                 relations: self
                     .players
                     .iter()

@@ -22,6 +22,7 @@ use sta_content::ContentDb;
 use sta_core::{EntityId, Fixed};
 
 use crate::event::SimEvent;
+use crate::view::UnitFlags;
 use crate::world::Entities;
 
 /// Recharge every unit's shields by its definition's rate.
@@ -78,7 +79,8 @@ pub(crate) fn apply(
             shield = damage.min(held);
             t.shields.now[pool] = held - shield;
             down = shield > Fixed::ZERO && t.shields.now[pool] == Fixed::ZERO;
-            hull = (damage - shield).min(t.hull[0]);
+            let floor = if t.flags.contains(UnitFlags::IMMORTAL) { Fixed::ONE } else { Fixed::ZERO };
+            hull = (damage - shield).min((t.hull[0] - floor).max(Fixed::ZERO));
             t.hull[0] = t.hull[0] - hull;
             if t.hull[0] <= Fixed::ZERO {
                 killed.push((target, Some(by)));
