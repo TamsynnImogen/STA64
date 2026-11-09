@@ -281,7 +281,8 @@ to match run "<scenario>"`, `Expect mark "fire.start obj=shooter" by tick 90`,
 - **Marks** come from `SimEvent`s: `fire.start`, `fire.end`, `hit`,
   `shields.down`, `spawn`, `death`, `build.start`, `built`, `delivered`,
   `cloak`, `rejected`, `eliminated`, with the fields listed in
-  `run/marks.rs`. `fire.start`/`fire.end` bracket a burst: shots of one
+  `marks.rs` (`sta_bench`, shared by the runner and `sta64 --sim-only/--headless`,
+  which writes `$STA64_BENCH_OUT/marks`; render marks have no source yet). `fire.start`/`fire.end` bracket a burst: shots of one
   hardpoint each no later than `FireGap` after the last ended (`fire.end` is
   the last `Fired` plus the weapon's `duration`).
 - **Checks** beyond the typed steps (grammar in `run/check.rs`; `Wait ... until`
