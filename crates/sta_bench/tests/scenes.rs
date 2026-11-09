@@ -8,7 +8,14 @@ use sta_bench::run::{self, RunConfig};
 
 #[test]
 fn tier1_scenarios_pass() {
-    let cfg = Arc::new(RunConfig::fake());
+    // Scenarios that start from a file (`snapshot-start`, `replay-start`) read
+    // what an earlier one (`snapshot-save`, `replay-save`; they sort first)
+    // wrote here, so the directory is cleared and private to this run.
+    let data = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("bench-data");
+    let _ = std::fs::remove_dir_all(&data);
+    let mut cfg = RunConfig::fake();
+    cfg.data_dir = data;
+    let cfg = Arc::new(cfg);
     let mut cases = Vec::new();
     for path in run::discover(&cfg.scenario_dir) {
         let text = std::fs::read_to_string(&path).expect("scenario readable");

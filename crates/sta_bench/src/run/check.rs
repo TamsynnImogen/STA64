@@ -16,6 +16,7 @@
 //! Wait [up to N seconds|ticks] until <state predicate>
 //! Run until tick N
 //! Save snapshot as "FILE"
+//! Save replay as "FILE"
 //!
 //! FIELD: hull hull.max shield[.fore|.aft|.port|.starboard] shield.max speed x y z
 //! CMP:   V [within E] | at least V | at most V | above V | below V | between A and B
@@ -149,6 +150,7 @@ pub enum Extra {
     },
     RunUntil(Tick),
     SaveSnapshot(String),
+    SaveReplay(String),
 }
 
 // ---- parsing --------------------------------------------------------------
@@ -484,6 +486,8 @@ pub fn parse(text: &str) -> Result<Option<Extra>, String> {
         Extra::RunUntil(c.time()?)
     } else if c.eat("save snapshot as") {
         Extra::SaveSnapshot(c.quoted()?)
+    } else if c.eat("save replay as") {
+        Extra::SaveReplay(c.quoted()?)
     } else {
         return Ok(None);
     };

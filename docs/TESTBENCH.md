@@ -229,14 +229,16 @@ to match run "<scenario>"`, `Expect mark "fire.start obj=shooter" by tick 90`,
   spawned with `Sim::spawn_def` (so ids are known: file order, `#1`...). Team
   `N>0` is `PlayerId(N)` with a seat made for it, team 0 is neutral. Scene
   keys become edits from `PlayerId::BENCH` on tick 0 (`Immortal`, `Engines=0`,
-  `Weapons=0`, `Attack=` as an order from the owner). `Heal=1` is one `Heal`
+  `Weapons=0`, `Attack=` as an order from the owner). `Allies=1,2` puts those players on one team
+  (each `Team=N` is otherwise a team of its own). `Heal=1` is one `Heal`
   edit a tick. `Scene: name Key=v` overrides `Seed`, `Pause`, `Map`,
   `MapObjects`, `Profile`, `Delay`, `Start`.
 - **Commands** are queued and land at the next tick boundary (`at <t>` waits
   for its tick). Orders are issued as the unit's owner, so the sim's own
   ownership check is under test. An edit the sim does not apply yet comes back
   as `Rejected`; the runner logs it once in `bench.log` and goes on. Runner
-  extension: `mine <ship>... <node>` (`Order::Mine`). Answers: `paused at tick
+  extensions: `mine <ship>... <node>` (`Order::Mine`), `goto ... queue`
+  (`Move` with `queue: true`: a waypoint chain). Answers: `paused at tick
   N`, `resumed at tick N`, `tick N`, `objects N -> objects.jsonl`, `marks N ->
   marks`, `selected N`, `ok`, `! <why>`. A command answering `!` fails its step.
 - **Ticks.** Tick `N` is the world after `N` steps; tick 0 is the setup. A
@@ -265,13 +267,25 @@ to match run "<scenario>"`, `Expect mark "fire.start obj=shooter" by tick 90`,
   Expect digest at tick N is "HEX" | to match run "SCENARIO"      (typed)
   Expect N ships|stations|planets|objects on team T                 (typed)
   Wait [up to N seconds|ticks] until <predicate>
-  Run N ticks | Run until tick N | Save snapshot as "FILE"
+  Run N ticks | Run until tick N | Save snapshot as "FILE" | Save replay as "FILE"
   CMP = V [within E] | at least V | at most V | above V | below V | between A and B
   ```
 
   Digests: pin `Expect digest at tick N is` only for golden values a CI job
   owns (TOOL-06); scenarios that need "the same run twice" compare two
   scenarios with `to match run`.
+- **Saved starts.** `Save snapshot as "F"` and `Save replay as "F"` write under
+  `RunConfig::data_dir`; a scenario with `Start=snapshot:F` / `Start=replay:F`
+  reads it back, and `Expect digest at tick N to match run "<saver>"` compares
+  the two runs. `tests/scenes.rs` clears a private data directory and runs
+  scenarios in name order, so the saver is named to sort first
+  (`snapshot-save` < `snapshot-start`, `replay-save` < `replay-start`). A
+  replay records every command that reached the sim, and scene and `spawn`
+  placements (made with `Sim::spawn_def`) as `Edit::Spawn` on their tick;
+  `Save replay as` plays the file back from tick 0 and fails on a digest
+  difference. Only runs from the empty map or a `Map=` can be recorded, and
+  orders given on tick 0 (before the bench's spawn edits in the sort order)
+  would not replay: give them on tick 1 or later.
 - **Not at tier 1:** screenshots and frame steps are skipped, and the display
   switches (`hud`, `grid`...) answer `! unsupported: <system>`. `Wait`
   without a bound is capped by the `Timeout:` header (sim seconds), default 120.
