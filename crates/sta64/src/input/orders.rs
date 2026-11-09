@@ -8,12 +8,10 @@ use bevy::prelude::*;
 use sta_sim::command::{CommandKind, Order};
 use sta_sim::{EntityId, Vec3 as SimVec3};
 
-use sta_sim::movement::{FORM_COLUMN, FORM_LINE, FORM_WEDGE};
-
 use super::Pointer;
-use crate::render::strategic::Strategic;
-use crate::render::units::SelectRadius;
-use crate::sim_link::{CommandQueue, OrderIssued, OrderKind, Selection, SimEntity, SimLink};
+use super::keys::{Action, KeyBindings};
+use super::select::{AimState, Targetable, own_selection, unit_under};
+use crate::sim_link::{CommandQueue, OrderIssued, OrderKind, Selection, SimLink};
 
 /// Where each ship was last ordered to go, until it arrives or is stopped,
 /// for the waypoint line. The views do not carry a ship's target yet; RND-08
@@ -26,65 +24,22 @@ fn formation_moves(picked: &[(EntityId, Vec3)], centre: Vec3, target: Vec3) -> V
     picked.iter().map(|&(id, p)| (id, target + (p - centre))).collect()
 }
 
-/// Keys for orders without a click. UI-01 owns rebinding; this is the table it edits.
-#[derive(Resource, Debug, Clone)]
-pub struct OrderKeys {
-    pub stop: Vec<KeyCode>,
-    /// Formation keys and the `movement::FORM_*` kind each asks for.
-    pub formations: Vec<(KeyCode, u8)>,
-}
-
-impl Default for OrderKeys {
-    fn default() -> Self {
-        OrderKeys {
-            stop: vec![KeyCode::KeyS, KeyCode::Space],
-            formations: vec![(KeyCode::F1, FORM_LINE), (KeyCode::F2, FORM_COLUMN), (KeyCode::F3, FORM_WEDGE)],
-        }
-    }
-}
-
-/// The cursor and the ray under it, this frame. Filled by [`aim`]; tests set it.
+/// The cursor, its ray and the camera projection this frame, shared by
+/// selection and orders. Filled by [`aim`]; tests set it.
 #[derive(Resource, Default, Clone, Copy)]
-pub struct Aim(pub Option<(Vec2, Ray3d)>);
+pub struct Aim(pub Option<AimState>);
 
 pub fn aim(pointer: Pointer, mut aim: ResMut<Aim>) {
-    aim.0 = pointer.get().map(|(_, c, r)| (c, r));
-}
-
-type Targetable<'w, 's> = Query<'w, 's, (&'static SimEntity, &'static SelectRadius, &'static GlobalTransform, Option<&'static Strategic>)>;
-
-/// The unit under the cursor: a strategic icon, else the nearest sphere on the ray.
-fn unit_under(cursor: Vec2, ray: Ray3d, units: &Targetable) -> Option<EntityId> {
-    let icon = units
-        .iter()
-        .filter_map(|(u, _, _, s)| {
-            let s = s.filter(|s| s.shown > 0.5)?;
-            let d = s.screen.distance(cursor);
-            (d <= s.size_px * 0.6).then_some((d, u.0))
-        })
-        .min_by(|a, b| a.0.total_cmp(&b.0));
-    if let Some((_, id)) = icon {
-        return Some(id);
-    }
-    let mut best: Option<(f32, EntityId)> = None;
-    for (u, radius, gt, _) in units {
-        let to = gt.translation() - ray.origin;
-        let t = to.dot(*ray.direction);
-        if t < 0.0 {
-            continue;
-        }
-        if (to - *ray.direction * t).length() <= radius.0 && best.is_none_or(|(bt, _)| t < bt) {
-            best = Some((t, u.0));
-        }
-    }
-    best.map(|b| b.1)
+    aim.0 = pointer.get().and_then(|((cam, gt), cursor, ray)| {
+        Some(AimState { cursor, ray, clip_from_world: cam.clip_from_view() * gt.to_matrix().inverse(), size: cam.logical_viewport_size()? })
+    });
 }
 
 #[allow(clippy::too_many_arguments)]
 pub fn order(
     buttons: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
-    order_keys: Res<OrderKeys>,
+    bindings: Res<KeyBindings>,
     aim: Res<Aim>,
     units: Targetable,
     selection: Res<Selection>,
@@ -93,37 +48,43 @@ pub fn order(
     mut targets: ResMut<OrderTargets>,
     mut issued: MessageWriter<OrderIssued>,
 ) {
-    if selection.0.is_empty() {
+    // Only own units take orders; an inspected enemy is left alone.
+    let own = own_selection(&selection, &link);
+    if own.is_empty() {
         return;
     }
-    if order_keys.stop.iter().any(|k| keys.just_pressed(*k)) {
-        for id in &selection.0 {
+    if bindings.just_pressed(Action::Stop, &keys) {
+        for id in &own {
             targets.0.remove(id);
         }
-        queue.0.push(CommandKind::Order(Order::Stop { units: selection.0.clone() }));
-        issued.write(OrderIssued { units: selection.0.clone(), kind: OrderKind::Stop });
+        queue.0.push(CommandKind::Order(Order::Stop { units: own.clone() }));
+        issued.write(OrderIssued { units: own.clone(), kind: OrderKind::Stop });
     }
-    if let Some(&(_, kind)) = order_keys.formations.iter().find(|(k, _)| keys.just_pressed(*k)) {
-        queue.0.push(CommandKind::Order(Order::Formation { units: selection.0.clone(), kind }));
-        issued.write(OrderIssued { units: selection.0.clone(), kind: OrderKind::Formation });
+    let form = Action::ALL.into_iter().find_map(|a| match a {
+        Action::Formation(kind) if bindings.just_pressed(a, &keys) => Some(kind),
+        _ => None,
+    });
+    if let Some(kind) = form {
+        queue.0.push(CommandKind::Order(Order::Formation { units: own.clone(), kind }));
+        issued.write(OrderIssued { units: own.clone(), kind: OrderKind::Formation });
     }
     if !buttons.just_pressed(MouseButton::Right) {
         return;
     }
-    let Some((cursor, ray)) = aim.0 else { return };
+    let Some(AimState { cursor, ray, .. }) = aim.0 else { return };
     let me = link.player();
     let view = link.curr();
     // Right-click on an enemy attacks it; on anything else it moves.
     if let Some(target) = unit_under(cursor, ray, &units).filter(|t| view.unit(*t).is_some_and(|u| u.owner != me)) {
-        queue.0.push(CommandKind::Order(Order::Attack { units: selection.0.clone(), target }));
-        issued.write(OrderIssued { units: selection.0.clone(), kind: OrderKind::Attack });
+        queue.0.push(CommandKind::Order(Order::Attack { units: own.clone(), target }));
+        issued.write(OrderIssued { units: own.clone(), kind: OrderKind::Attack });
         return;
     }
-    let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+    let shift = bindings.pressed(Action::AddModifier, &keys);
     // Positions in the sim's space; the order point is on the plane at the
     // selection's mean height.
     let picked: Vec<(EntityId, Vec3)> =
-        selection.0.iter().filter_map(|&id| view.unit(id).map(|u| (id, Vec3::from(u.pos.to_f32())))).collect();
+        own.iter().filter_map(|&id| view.unit(id).map(|u| (id, Vec3::from(u.pos.to_f32())))).collect();
     if picked.is_empty() {
         return;
     }
@@ -157,6 +118,9 @@ pub fn prune_targets(link: Res<SimLink>, mut targets: ResMut<OrderTargets>) {
 mod tests {
     use super::*;
     use sta_sim::command::LocalRouter;
+    use crate::render::units::SelectRadius;
+    use crate::sim_link::SimEntity;
+    use sta_sim::movement::FORM_WEDGE;
     use sta_sim::{Fixed, MoveStats, PlayerId, Sim};
 
     fn stats() -> MoveStats {
@@ -178,7 +142,7 @@ mod tests {
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<CommandQueue>()
             .init_resource::<OrderTargets>()
-            .init_resource::<OrderKeys>()
+            .init_resource::<KeyBindings>()
             .init_resource::<Aim>()
             .insert_resource(Selection(vec![a]))
             .insert_resource(SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), PlayerId(0)))
@@ -191,7 +155,7 @@ mod tests {
 
     fn aim_at(app: &mut App, x: f32, z: f32) {
         let ray = Ray3d::new(Vec3::new(x, 1000.0, z), Dir3::NEG_Y);
-        app.world_mut().resource_mut::<Aim>().0 = Some((Vec2::ZERO, ray));
+        app.world_mut().resource_mut::<Aim>().0 = Some(AimState { cursor: Vec2::ZERO, ray, clip_from_world: Mat4::IDENTITY, size: Vec2::new(800.0, 600.0) });
     }
 
     fn click(app: &mut App, shift: bool) -> (Vec<CommandKind>, Vec<OrderIssued>) {
@@ -264,6 +228,28 @@ mod tests {
         let (cmds, msgs) = run(&mut app);
         assert_eq!(cmds, [CommandKind::Order(Order::Formation { units: vec![a], kind: FORM_WEDGE })]);
         assert_eq!(msgs[0].kind, OrderKind::Formation);
+    }
+
+    #[test]
+    fn an_inspected_enemy_receives_no_order() {
+        let (mut app, [_, _, e]) = app();
+        app.world_mut().insert_resource(Selection(vec![e]));
+        aim_at(&mut app, 200.0, -300.0);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyS);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::F1);
+        let (cmds, msgs) = click(&mut app, false);
+        assert!(cmds.is_empty() && msgs.is_empty(), "{cmds:?}");
+    }
+
+    #[test]
+    fn rebinding_stop_moves_the_key() {
+        use super::super::keys::Action;
+        let (mut app, [a, ..]) = app();
+        app.world_mut().resource_mut::<KeyBindings>().rebind(Action::Stop, KeyCode::KeyX);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyS);
+        assert!(run(&mut app).0.is_empty());
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyX);
+        assert_eq!(run(&mut app).0, [CommandKind::Order(Order::Stop { units: vec![a] })]);
     }
 
     #[test]
