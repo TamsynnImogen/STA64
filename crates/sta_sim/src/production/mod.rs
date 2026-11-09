@@ -9,7 +9,7 @@
 //!     finishes ([`SimEvent::Built`] then `Spawned`), and the next item starts
 //!     in that same tick.
 //!   - A **craft** (construction rig) needs `at: Some(site)`. It steers there;
-//!     within [`DEPLOY_REACH`](deploy_reach) of the site it deploys: the
+//!     within [`deploy_reach`] of the site (the rig's slow-turn orbit plus a margin, from its ODF movement stats) it deploys: the
 //!     station entity appears at the site (`progress` 0,
 //!     [`SimEvent::BuildStarted`]) and welds for `build.ticks`, `progress`
 //!     rising each tick; on the last one `progress` becomes `None` (finished,
@@ -47,8 +47,24 @@ use crate::world::{Entities, Entity, EntityKind, Fnv, Table};
 /// Longest build queue of one yard.
 pub const QUEUE_MAX: usize = 5;
 
-fn deploy_reach() -> Fixed {
-    Fixed::from_int(30)
+/// How close a rig must come to deploy, from its own movement data. A craft
+/// that is not facing its target slows to [`MIN_ALIGN`](crate::MIN_ALIGN) of
+/// cruise and turns at the rate that speed allows, so one that keeps missing
+/// a point settles into an orbit of radius `speed / omega` at that speed.
+/// Reach is that orbit plus a quarter as a margin and the kinematics' own
+/// arrival distance: a nimble rig must nearly arrive, a sluggish one deploys
+/// from further out, and none can circle its site for ever. Pure movement data
+/// (`impulseSpeed`, `turnOmega`, `turnOmegaFractionAtRest`), so it holds for
+/// any game or mod.
+pub fn deploy_reach(stats: &crate::MoveStats) -> Fixed {
+    let a = Fixed::from_f64(crate::MIN_ALIGN);
+    let omega = stats.turn_omega * (stats.turn_at_rest + (Fixed::ONE - stats.turn_at_rest) * a);
+    let orbit = if omega > Fixed::ZERO {
+        stats.max_speed * a / omega
+    } else {
+        Fixed::ZERO
+    };
+    orbit + orbit / Fixed::from_int(4) + crate::arrive_distance()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -354,7 +370,7 @@ impl Production {
                 continue;
             };
             let (dx, dz) = (d.at.x - r.pos.x, d.at.z - r.pos.z);
-            if (dx * dx + dz * dz).sqrt() > deploy_reach() {
+            if (dx * dx + dz * dz).sqrt() > deploy_reach(&r.stats) {
                 continue;
             }
             self.deploys.remove(rig);
