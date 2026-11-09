@@ -79,6 +79,8 @@ pub trait AudioBackend {
     fn play(&mut self, sound: &Sound, bus: Bus, at: Option<[f32; 3]>);
     fn set_bus_volume(&mut self, bus: MixBus, volume: f32);
     fn stop_all(&mut self);
+    /// Stop what is playing on one bus (music switches tracks without cutting sfx).
+    fn stop_bus(&mut self, bus: Bus);
     /// Listener position and its right-hand direction.
     fn set_listener(&mut self, pos: [f32; 3], right: [f32; 3]);
 }
@@ -101,7 +103,7 @@ const FALLOFF: f32 = 2000.0;
 pub struct KiraAudio {
     manager: AudioManager<DefaultBackend>,
     tracks: HashMap<Bus, TrackHandle>,
-    playing: Vec<StaticSoundHandle>,
+    playing: Vec<(Bus, StaticSoundHandle)>,
     listener: ([f32; 3], [f32; 3]),
 }
 
@@ -139,10 +141,10 @@ impl AudioBackend for KiraAudio {
             settings = settings.panning(Panning((side * far).clamp(-1.0, 1.0))).volume(Decibels(-20.0 * far));
         }
         let data = StaticSoundData { sample_rate: sound.sample_rate, frames, settings, slice: None };
-        self.playing.retain(|h| h.state() != PlaybackState::Stopped);
+        self.playing.retain(|(_, h)| h.state() != PlaybackState::Stopped);
         if let Some(t) = self.tracks.get_mut(&bus) {
             match t.play(data) {
-                Ok(h) => self.playing.push(h),
+                Ok(h) => self.playing.push((bus, h)),
                 Err(e) => warn!("audio: playing {:?} failed: {e}", sound.name),
             }
         }
@@ -161,10 +163,19 @@ impl AudioBackend for KiraAudio {
     }
 
     fn stop_all(&mut self) {
-        for h in &mut self.playing {
+        for (_, h) in &mut self.playing {
             h.stop(Tween::default());
         }
         self.playing.clear();
+    }
+
+    fn stop_bus(&mut self, bus: Bus) {
+        self.playing.retain_mut(|(b, h)| {
+            if *b == bus {
+                h.stop(Tween::default());
+            }
+            *b != bus
+        });
     }
 
     fn set_listener(&mut self, pos: [f32; 3], right: [f32; 3]) {
