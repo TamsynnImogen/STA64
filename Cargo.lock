@@ -5286,6 +5286,7 @@ dependencies = [
  "libm",
  "mlua",
  "sta_bzn",
+ "sta_sim",
  "sta_vfs",
 ]
 
