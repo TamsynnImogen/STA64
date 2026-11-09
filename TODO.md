@@ -7,6 +7,7 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 ## Needs your check
 
+- [?] Weapon FX in the map view once a sim with weapons is linked: beams fade over their duration, torpedo spheres fly to the target, short muzzle flash at the shooter (centre of the ship for now, no hardpoint positions yet); all gone shortly after firing stops
 - [?] Ship movement smooth now (no weaving); FPS shown top right (try `cargo run --release` if it's low) — 3e748b3
 - [?] Planets with Refit's look: terminator, dusk band, limb haze, water glint, cloud shell, halo past the limb — 4fc4a88
 - [?] Recipe planets (class D/H/J/K/L/M) switch to detailed generated ground with relief, drifting clouds and cloud shadows a few seconds after a map loads (first time only; then cached) — 7c8c421
