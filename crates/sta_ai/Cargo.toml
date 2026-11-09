@@ -7,9 +7,7 @@ license.workspace = true
 
 # Bevy-free; sits above sta_sim (docs/WORKPLAN.md, "Seams").
 [dependencies]
-sta_sim.workspace = true
-thiserror.workspace = true
-
-[dev-dependencies]
 sta_content.workspace = true
 sta_core.workspace = true
+sta_sim.workspace = true
+thiserror.workspace = true
