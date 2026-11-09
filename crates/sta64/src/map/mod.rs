@@ -1137,8 +1137,19 @@ mod tests {
         assert!(maps > 0, "no map to test on");
 
         // Two armed ships of different seats, in range, shoot.
-        let armed: Vec<_> = db.units().filter(|u| !u.hardpoints.is_empty() && u.movement.max_speed > Fixed::ZERO && u.hull > Fixed::ZERO).collect();
+        // "Armed" means a weapon that can hurt at a distance and fires within the window: mods
+        // carry script-hook units (FO4's 8472active) whose only hardpoint is a dummy weapon
+        // with a one-unit range and a refire of about a day, which never shoots by design.
+        let armed: Vec<_> = db
+            .units()
+            .filter(|u| u.movement.max_speed > Fixed::ZERO && u.hull > Fixed::ZERO)
+            .filter(|u| {
+                u.hardpoints.iter().filter_map(|h| db.weapon(h.weapon.key)).any(|w| w.damage > Fixed::ZERO && w.range >= Fixed::from_int(50) && w.refire <= 450)
+            })
+            .collect();
         let a = armed.first().expect("an armed ship");
+        let reach = a.hardpoints.iter().filter_map(|h| db.weapon(h.weapon.key)).map(|w| w.range).max().unwrap_or(Fixed::ZERO);
+        let gap = (reach.to_f32() / 2.0).clamp(10.0, 300.0) as i32;
         let setup = GameSetup {
             seed: 3,
             map: Arc::new(MapDef::empty()),
@@ -1156,7 +1167,7 @@ mod tests {
             seq,
             kind: CommandKind::Edit(Edit::Spawn { odf: a.key, player: PlayerId(player), pos: at(x), heading: (Fixed::ONE, Fixed::ZERO) }),
         };
-        let mut v = sim.step(&[spawn(0, 0, 0), spawn(1, 1, 300)]).view;
+        let mut v = sim.step(&[spawn(0, 0, 0), spawn(1, 1, gap)]).view;
         let (first, second) = (v.units[0].id, v.units[1].id);
         let attack = |seq, by, target| Command { player: PlayerId::BENCH, seq, kind: CommandKind::Order(Order::Attack { units: vec![by], target }) };
         v = sim.step(&[attack(2, first, second), attack(3, second, first)]).view;
@@ -1168,5 +1179,56 @@ mod tests {
         }
         println!("{}: {hits} hits in 30 s, units left {}", a.odf, v.units.len());
         assert!(hits > 0, "{}: armed ships in range hit each other", a.odf);
+    }
+
+    /// With `STA64_TEST_INSTALL` (+ optional `STA64_TEST_MOD`): every mobile builder in the
+    /// install deploys a structure at a site abeam of it, however wide its turning circle.
+    #[test]
+    fn install_construction_ships_deploy_at_a_site_abeam() {
+        let Ok(root) = std::env::var("STA64_TEST_INSTALL") else { return };
+        let m = std::env::var("STA64_TEST_MOD").unwrap_or_default();
+        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(m.as_str()).filter(|m| !m.is_empty())).unwrap();
+        let (index, _) = OdfIndex::build(&vfs);
+        let (db, _) = ContentDb::load(&vfs, &index).unwrap();
+        let db = Arc::new(db);
+        let mut tried = 0;
+        for b in db.units().filter(|u| u.movement.max_speed > Fixed::ZERO && u.movement.turn_omega > Fixed::ZERO) {
+            let Some(what) = b.build.list.iter().find(|r| db.unit(r.key).is_some_and(|d| d.movement.max_speed == Fixed::ZERO && d.build.ticks > 0)) else { continue };
+            let setup = GameSetup {
+                seed: 5,
+                map: Arc::new(MapDef::empty()),
+                content: db.clone(),
+                players: vec![PlayerSetup { id: PlayerId(0), team: TeamId(0), race: String::new(), control: Control::Human }],
+                options: GameOptions::default(),
+            };
+            let mut sim = Sim::from_setup(&setup);
+            let f = Fixed::from_int;
+            let spawn = Command {
+                player: PlayerId::BENCH,
+                seq: 0,
+                kind: CommandKind::Edit(Edit::Spawn { odf: b.key, player: PlayerId(0), pos: SimVec3 { x: f(0), y: f(0), z: f(0) }, heading: (f(0), f(1)) }),
+            };
+            let id = sim.step(&[spawn]).view.units[0].id;
+            let rich = |r: u32| Command { player: PlayerId::BENCH, seq: 1 + r, kind: CommandKind::Edit(Edit::Cargo(PlayerId(0), r as u8, f(100_000))) };
+            sim.step(&[rich(0), rich(1), rich(2), rich(3)]);
+            let site = SimVec3 { x: f(400), y: f(0), z: f(0) };
+            let order = Command { player: PlayerId::BENCH, seq: 9, kind: CommandKind::Order(Order::Build { builder: id, what: what.key, at: Some(site) }) };
+            let first = sim.step(&[order]).events;
+            if let Some(r) = first.iter().find(|e| matches!(e, sta_sim::SimEvent::Rejected { .. })) {
+                println!("{}: {r:?}, skipped", b.odf);
+                continue;
+            }
+            let mut started = first.iter().any(|e| matches!(e, sta_sim::SimEvent::BuildStarted { .. }));
+            for _ in 0..3000 {
+                if started {
+                    break;
+                }
+                started = sim.step(&[]).events.iter().any(|e| matches!(e, sta_sim::SimEvent::BuildStarted { .. }));
+            }
+            println!("{}: reach {:?}, deploys {} -> {started}", b.odf, sta_sim::production::deploy_reach(&b.movement).to_f32(), what.odf);
+            assert!(started, "{}: never deployed {}", b.odf, what.odf);
+            tried += 1;
+        }
+        println!("{tried} builders tried");
     }
 }

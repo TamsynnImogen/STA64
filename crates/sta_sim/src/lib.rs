@@ -145,6 +145,10 @@ fn rotate(h: (Fixed, Fixed), a: Fixed) -> (Fixed, Fixed) {
     if len == Fixed::ZERO { h } else { (x / len, z / len) }
 }
 
+/// Smallest share of cruise speed a unit keeps while turning toward a target
+/// it is not facing.
+pub(crate) const MIN_ALIGN: f64 = 0.1;
+
 /// Distance at which a unit counts as arrived.
 fn arrive_distance() -> Fixed {
     Fixed::from_int(4)
@@ -192,7 +196,7 @@ impl Unit {
         self.omega = approach(self.omega, want_omega, st.turn_alpha * dt);
 
         // Speed: slower when facing away, and able to stop at the target.
-        let align = clamp(dot, Fixed::from_f64(0.1), Fixed::ONE);
+        let align = clamp(dot, Fixed::from_f64(MIN_ALIGN), Fixed::ONE);
         let brake = (Fixed::from_int(2) * accel * dist).sqrt();
         let want_speed = (st.max_speed * align).min(brake);
         self.speed = approach(self.speed, want_speed, accel * dt);

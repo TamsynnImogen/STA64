@@ -379,3 +379,33 @@ fn records_round_trip() {
     assert_eq!(Production::from_rec(&back), sim.production);
     assert!(!sim.production.is_empty());
 }
+
+#[test]
+fn deploy_reach_follows_the_rigs_turning_circle() {
+    let reach = |speed, omega| deploy_reach(&MoveStats::from_f32(speed, 1.0, omega, 1.0, 0.2));
+    // Orbit = 0.1 * 200 / (2 * (0.2 + 0.8 * 0.1)) = 35.7; plus a quarter and the arrival distance.
+    let r = reach(200.0, 2.0).to_f32();
+    assert!((r - (35.7 * 1.25 + 4.0)).abs() < 0.5, "{r}");
+    // A nimble rig has to nearly arrive; a sluggish one deploys from further out.
+    assert!(reach(100.0, 20.0) < reach(100.0, 2.0));
+    // No turn rate: only the arrival distance, never a panic.
+    assert_eq!(reach(100.0, 0.0), crate::arrive_distance());
+}
+
+/// A rig whose turning circle is wider than the old fixed reach of 30 cannot
+/// close on a site abeam of it, and used to circle it for ever.
+#[test]
+fn wide_turning_rig_still_deploys() {
+    let mut sim = game(true);
+    let rig = spawn(&mut sim, "fx_rig", v(0, 0));
+    sim.units.get_mut(rig).unwrap().stats = MoveStats::from_f32(200.0, 1.0, 0.5, 1.0, 0.2);
+    fund(&mut sim, 1500);
+    assert!(build(&mut sim, rig, "fx_station", Some(v(300, 0))));
+    let mut log = Vec::new();
+    run(&mut sim, 2400, &mut log);
+    assert!(
+        log.iter()
+            .any(|(_, e)| matches!(e, SimEvent::BuildStarted { .. }))
+    );
+    assert_eq!(built(&log).len(), 1);
+}
