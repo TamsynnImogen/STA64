@@ -3,4 +3,5 @@
 //! keep every `pub mod` line.
 
 pub mod loading;
+pub mod scene;
 pub mod screens;

@@ -134,6 +134,11 @@ impl UnitFade {
     }
 }
 
+/// The unit's [`UnitFade`] is somebody else's to set (the front end's scene decloaks its
+/// own ships): [`fade_units`] leaves it alone.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct ManualFade;
+
 /// Original handle of a material this module replaced with a per-unit clone.
 #[derive(Component)]
 struct FadeMat {
@@ -360,7 +365,7 @@ fn update_fx(
 
 #[allow(clippy::type_complexity)]
 /// Move each unit's cloak fade toward its target at a fixed rate.
-fn fade_units(mut cmds: Commands, clock: Res<AnimClock>, mut last: Local<Option<f64>>, mut q: Query<(Entity, Has<Cloaked>, Option<&mut UnitFade>), With<SimEntity>>) {
+fn fade_units(mut cmds: Commands, clock: Res<AnimClock>, mut last: Local<Option<f64>>, mut q: Query<(Entity, Has<Cloaked>, Option<&mut UnitFade>), (With<SimEntity>, Without<ManualFade>)>) {
     let now = clock.now();
     let dt = (now - last.unwrap_or(now)).max(0.0) as f32;
     *last = Some(now);
