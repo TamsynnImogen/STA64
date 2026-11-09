@@ -18,6 +18,9 @@ members = [
     "crates/sta_fontbake",
     "crates/sta64",
 ]
+# `cargo run` (and bare `cargo build`/`cargo test`) target the game; use
+# `-p <crate>` or `--workspace` for the others.
+default-members = ["crates/sta64"]
 
 [workspace.package]
 version = "0.1.0"
