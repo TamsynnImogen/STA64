@@ -2,7 +2,7 @@
 //!
 //! Aligned with Armada II Refit: the construction welding is its `effects` module's
 //! (`effects_construction.hlsl`, the worker bees' beam, arc flare, hot spot and
-//! sparks, ported in `quad.wgsl`; `[Bees]` and `[Construction]` constants), the cloak
+//! sparks, ported in `quad.wesl`; `[Bees]` and `[Construction]` constants), the cloak
 //! is its `hulls` look (`ART-DIRECTION.md`, "Cloaking": the ship wavers out in bands
 //! with a thin green front, and the player's own cloaked ships keep 10% of their hull).
 //! Refit's `specials` module draws the special weapons' target effects (override,

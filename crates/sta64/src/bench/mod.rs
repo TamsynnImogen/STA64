@@ -25,11 +25,12 @@ use bevy::prelude::*;
 use bevy::time::Real;
 use sta_bench::parse::{BenchCommand, SceneFile, parse_command};
 use sta_bench::run::{Bench, RunConfig};
-use sta_sim::Tick;
+use sta_sim::command::LocalRouter;
+use sta_sim::{PlayerId, Tick, TickOutput, WorldSource, WorldView};
 
 use crate::app::{Control, GameSet, LaunchConfig, configure_sets};
 use crate::clock::AnimClock;
-use crate::sim_link::SimLinkPlugin;
+use crate::sim_link::{BenchDriven, ContentRes, SimLink, SimLinkPlugin, SimMsg};
 
 /// Build the scene named by `--scene` on the bench's fake content.
 fn build(cfg: &LaunchConfig) -> Result<Bench, String> {
@@ -78,6 +79,18 @@ pub fn run_sim_only(cfg: &LaunchConfig) -> i32 {
     0
 }
 
+/// The link's source while the bench steps the sim: never asked to step.
+struct Idle(Arc<WorldView>);
+
+impl WorldSource for Idle {
+    fn step(&mut self, _: &[sta_sim::command::Command]) -> TickOutput {
+        TickOutput { view: self.0.clone(), events: Vec::new() }
+    }
+    fn view(&self) -> Arc<WorldView> {
+        self.0.clone()
+    }
+}
+
 #[derive(Resource)]
 struct BenchRes(SyncCell<Bench>);
 
@@ -122,6 +135,8 @@ fn run_headless_inner(cfg: &LaunchConfig) -> i32 {
         }
     };
     let scene_camera = scene_camera(cfg);
+    let content = bench.cfg.content.clone();
+    let first_view = bench.view().clone();
     let mut app = App::new();
     let runner = ScheduleRunnerPlugin::run_loop(Duration::from_millis(1));
     if cfg.frames.is_empty() {
@@ -155,6 +170,17 @@ fn run_headless_inner(cfg: &LaunchConfig) -> i32 {
     }
     if !cfg.frames.is_empty() {
         frames::add(&mut app, cfg, scene_camera);
+        // The effects read the sim through a link; this one is fed the bench's views
+        // and events as they happen (`bench_frame`).
+        app.insert_resource(ContentRes(content))
+            .insert_resource(SimLink::new(Box::new(Idle(first_view)), Box::new(LocalRouter::new()), PlayerId(0)))
+            .insert_resource(BenchDriven)
+            .add_plugins(crate::render::fx::FxMaterialsPlugin)
+            .add_plugins((
+                crate::render::fx::weapons::WeaponFxPlugin,
+                crate::render::fx::impacts::ImpactFxPlugin,
+                crate::render::fx::specials::SpecialsFxPlugin,
+            ));
     }
     match app.run() {
         AppExit::Success => 0,
@@ -193,6 +219,9 @@ fn bench_frame(
     mut view: Option<ResMut<frames::View>>,
     mut commands: Commands,
     mut exit: MessageWriter<AppExit>,
+    mut link: Option<ResMut<SimLink>>,
+    mut out: MessageWriter<SimMsg>,
+    mut sent: Local<usize>,
 ) {
     let bench = bench.0.get();
     let mut open = false;
@@ -234,6 +263,12 @@ fn bench_frame(
             break;
         }
         clock.ticked();
+        // The effects' view of the tick just run: its world and its events.
+        if let Some(link) = link.as_mut() {
+            link.feed(bench.view().clone());
+            out.write_batch(bench.events[*sent..].iter().map(|(_, e)| SimMsg(e.clone())));
+            *sent = bench.events.len();
+        }
     }
     clock.end_frame();
     let frames_done = capture.as_ref().is_none_or(|c| c.done());

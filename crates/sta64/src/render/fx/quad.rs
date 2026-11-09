@@ -1,4 +1,4 @@
-//! The quad effects' material (`quad.wgsl`, ported from Refit's ordnance and
+//! The quad effects' material (`quad.wesl`, ported from Refit's ordnance and
 //! welding shaders) and the helpers that lay a quad out: a billboard facing the
 //! camera, or a ribbon along a line facing it as far as it can, as Refit's `fx.rs`
 //! builds them. Every effect module owns its [`Look`] and writes its brightness and
@@ -11,7 +11,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, Face, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError};
 use bevy::shader::ShaderRef;
 
-/// The shader's kinds (`quad.wgsl`).
+/// The shader's kinds (`quad.wesl`).
 pub const K_FLARE: f32 = 0.0;
 pub const K_BEAM: f32 = 2.0;
 pub const K_BOLT: f32 = 3.0;
@@ -42,7 +42,7 @@ pub struct FxQuadMaterial {
 
 impl Material for FxQuadMaterial {
     fn fragment_shader() -> ShaderRef {
-        ShaderRef::Path(AssetPath::parse("embedded://sta64/render/fx/quad.wgsl").into_owned())
+        ShaderRef::Path(AssetPath::parse("embedded://sta64/render/fx/quad.wesl").into_owned())
     }
     /// Premultiplied with alpha 0 is Refit's ONE, ONE: the effect only adds light.
     fn alpha_mode(&self) -> AlphaMode {
@@ -64,12 +64,12 @@ pub struct FxQuadPlugin;
 
 impl Plugin for FxQuadPlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "quad.wgsl");
+        embedded_asset!(app, "quad.wesl");
         app.add_plugins(MaterialPlugin::<FxQuadMaterial>::default());
     }
 }
 
-/// What a quad draws: the shader's kind and parameters (`quad.wgsl` says what each
+/// What a quad draws: the shader's kind and parameters (`quad.wesl` says what each
 /// kind takes), at brightness 1.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Look {
@@ -166,7 +166,7 @@ mod tests {
 
     #[test]
     fn quad_shader_validates() {
-        super::super::validate_wgsl(include_str!("quad.wgsl"));
+        super::super::validate_wgsl(include_str!("quad.wesl"));
     }
 
     #[test]

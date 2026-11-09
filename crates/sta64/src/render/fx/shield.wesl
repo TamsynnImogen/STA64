@@ -31,7 +31,7 @@ struct Params {
     inv2: vec4<f32>,
 };
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> k: Params;
+@group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> k: Params;
 
 struct FragIn {
     @builtin(position) position: vec4<f32>,

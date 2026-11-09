@@ -1,4 +1,4 @@
-//! The explosion material (`fire.wgsl`, ported from Refit's
+//! The explosion material (`fire.wesl`, ported from Refit's
 //! `effects_explosions.hlsl`) and Refit's `[Explosions]` constants: a fireball's size
 //! and growth from the dead unit's radius, the shock ring.
 
@@ -141,7 +141,13 @@ pub struct FireMaterial {
 
 impl Material for FireMaterial {
     fn fragment_shader() -> ShaderRef {
-        ShaderRef::Path(AssetPath::parse("embedded://sta64/render/fx/fire.wgsl").into_owned())
+        ShaderRef::Path(AssetPath::parse("embedded://sta64/render/fx/fire.wesl").into_owned())
+    }
+    /// The fireball, ring and a shield hit about the same unit share a centre, so
+    /// their sort distance ties, and a tie is broken by an order that varies from
+    /// run to run; premultiplied blends do not commute. A bias per kind settles it.
+    fn depth_bias(&self) -> f32 {
+        if self.params.look.w > 0.5 { 2.0 } else { 1.0 }
     }
     /// ONE, ONE_MINUS_SRC_ALPHA, as Refit's `PREMUL`.
     fn alpha_mode(&self) -> AlphaMode {
@@ -168,7 +174,7 @@ pub struct FirePlugin;
 
 impl Plugin for FirePlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "fire.wgsl");
+        embedded_asset!(app, "fire.wesl");
         app.add_plugins(MaterialPlugin::<FireMaterial>::default());
     }
 }
@@ -179,7 +185,7 @@ mod tests {
 
     #[test]
     fn fire_shader_validates() {
-        crate::render::fx::validate_wgsl(include_str!("fire.wgsl"));
+        crate::render::fx::validate_wgsl(include_str!("fire.wesl"));
     }
 
     #[test]

@@ -1,14 +1,14 @@
 # Effect shaders and recipes
 
-`quad.wgsl`, `shield.wgsl`, `fire.wgsl` and `ordnance.ini` are ported or copied from
+`quad.wesl`, `shield.wesl`, `fire.wesl` and `ordnance.ini` are ported or copied from
 Armada II Refit (https://github.com/cedrichaase/armada2-refit) at commit
 4177bd948cd31f2fbcf00ebc822021ed1a192172:
 
 | Here | Refit |
 | --- | --- |
-| `quad.wgsl` | `render3d/mods/ordnance/shaders/ordnance.hlsl`, `render3d/mods/effects/shaders/effects_repair.hlsl`, `effects_construction.hlsl` |
-| `shield.wgsl` | `render3d/mods/effects/shaders/effects_shields.hlsl` |
-| `fire.wgsl` | `render3d/mods/effects/shaders/effects_explosions.hlsl` |
+| `quad.wesl` | `render3d/mods/ordnance/shaders/ordnance.hlsl`, `render3d/mods/effects/shaders/effects_repair.hlsl`, `effects_construction.hlsl` |
+| `shield.wesl` | `render3d/mods/effects/shaders/effects_shields.hlsl` |
+| `fire.wesl` | `render3d/mods/effects/shaders/effects_explosions.hlsl` |
 | `ordnance.ini` | `render3d/content/ordnance/ordnance.ini` (the `[Ordnance.*]` sections) |
 
 The parameters in the `.rs` files beside them (durations, sizes, counts, colours) are

@@ -112,3 +112,96 @@ fn session_start_drive_stop() {
     assert_eq!(cli::main(args(&["drive", "--session", &id, "query", "--out", o])), 1);
     let _ = std::fs::remove_dir_all(&sessions);
 }
+
+/// One `sta64 --headless` run of `scene`, capturing `frames`, with `commands` fed on
+/// stdin first. The frames' PNGs in tick order, and everything the run logged at
+/// warn level or above.
+fn run_frames(scene: &str, frames: &str, commands: &str, tag: &str) -> (Vec<Vec<u8>>, String) {
+    use std::io::Write;
+    use std::process::Stdio;
+    let dir = tmp(tag);
+    let mut cmd = Command::new(sta64());
+    cmd.args(["--headless", "--clock", "bench", "--frames", frames, "--frame-dir"])
+        .arg(&dir)
+        .arg("--scene")
+        .arg(bench().join("scenes").join(scene))
+        .env("RUST_LOG", "warn")
+        .stderr(Stdio::piped())
+        .stdout(Stdio::null());
+    if !commands.is_empty() {
+        cmd.args(["--control", "stdio", "--ticks", frames.rsplit(',').next().unwrap()]).stdin(Stdio::piped());
+    }
+    let mut child = cmd.spawn().unwrap();
+    if !commands.is_empty() {
+        child.stdin.take().unwrap().write_all(commands.as_bytes()).unwrap();
+    }
+    let out = child.wait_with_output().unwrap();
+    let log = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_eq!(out.status.code(), Some(0), "{scene}: sta64 must exit 0\n{log}");
+    let mut files: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "png")).collect();
+    files.sort();
+    (files.iter().map(|f| std::fs::read(f).unwrap()).collect(), log)
+}
+
+/// What overlapping effects' frames may differ by between runs, out of 255.
+const TOLERANCE: u8 = 3;
+
+/// The most any channel of two PNGs of one size differs by; `u8::MAX` if the sizes differ.
+fn max_diff(a: &[u8], b: &[u8]) -> u8 {
+    let decode = |p: &[u8]| {
+        let mut r = png::Decoder::new(std::io::Cursor::new(p)).read_info().unwrap();
+        let mut buf = vec![0; r.output_buffer_size().unwrap()];
+        let info = r.next_frame(&mut buf).unwrap();
+        (info.width, info.height, buf)
+    };
+    let (a, b) = (decode(a), decode(b));
+    if (a.0, a.1) != (b.0, b.1) {
+        return u8::MAX;
+    }
+    a.2.iter().zip(&b.2).map(|(x, y)| x.abs_diff(*y)).max().unwrap_or(0)
+}
+
+/// The effects draw on a real GPU: `sta64` exits 0 with no ERROR logged (a shader or
+/// pipeline error is only logged), the frames repeat byte for byte, and each frame in
+/// `live` differs from the first, which is before any effect. The first `exact` frames
+/// repeat byte for byte; the rest within [`TOLERANCE`]: a frame with several effects
+/// overlapping varies by a level or two on a few hundred bytes from run to run (8-bit
+/// additive blends are not associative, and the draw order of overlapping effects
+/// is not fixed; cause not pinned down).
+fn fx_frames(scene: &str, frames: &str, commands: &str, live: &[usize], exact: usize) {
+    if !adapter(&tmp(&format!("probe-{scene}"))) {
+        return;
+    }
+    let (a, log) = run_frames(scene, frames, commands, &format!("{scene}-a"));
+    let (b, _) = run_frames(scene, frames, commands, &format!("{scene}-b"));
+    assert!(!log.contains("ERROR"), "{scene}: errors logged\n{log}");
+    assert_eq!(a.len(), frames.split(',').count());
+    for (i, (x, y)) in a.iter().zip(&b).enumerate() {
+        let d = max_diff(x, y);
+        if i < exact {
+            assert_eq!(x, y, "{scene}: frame {i} twice must be the same PNG");
+        } else {
+            assert!(d <= TOLERANCE, "{scene}: frame {i} differs between runs by {d}/255");
+        }
+    }
+    for &i in live {
+        assert_ne!(a[0], a[i], "{scene}: frame {i} must differ from the one before any effect");
+    }
+}
+
+#[test]
+fn weapon_fx_render_beams_and_bolts() {
+    // Ticks 0 (nothing yet), 6 (beam and flares), 100 (a torpedo in flight).
+    fx_frames("combat-firing.ini", "0,6,100", "", &[1, 2], 1);
+}
+
+#[test]
+fn impact_fx_render_shield_hits_and_an_explosion() {
+    // 0, a shield hit just after the aft shield goes down (117), the fireball after the kill (477).
+    fx_frames("combat-duel.ini", "0,120,482,500", "", &[1, 2, 3], 2);
+}
+
+// The construction weld shares the weapon beams' quad material (`quad.wesl`, the kind
+// is a uniform), so its pipeline is the one `weapon_fx_render_beams_and_bolts` compiles.
+// Drawing it needs a station under construction, which the bench scenes only reach
+// through scenario commands that tier 2's replay does not repeat (digest mismatch).

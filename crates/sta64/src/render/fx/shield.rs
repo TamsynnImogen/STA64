@@ -1,4 +1,4 @@
-//! The shield-hit material (`shield.wgsl`, ported from Refit's
+//! The shield-hit material (`shield.wesl`, ported from Refit's
 //! `effects_shields.hlsl`) and Refit's `[Shields]` constants: what a hit looks like
 //! at a given age (`Shields::hit_now`), the faction colours of `effects.ini`.
 
@@ -184,7 +184,7 @@ pub struct ShieldMaterial {
 
 impl Material for ShieldMaterial {
     fn fragment_shader() -> ShaderRef {
-        ShaderRef::Path(AssetPath::parse("embedded://sta64/render/fx/shield.wgsl").into_owned())
+        ShaderRef::Path(AssetPath::parse("embedded://sta64/render/fx/shield.wesl").into_owned())
     }
     fn alpha_mode(&self) -> AlphaMode {
         AlphaMode::Premultiplied
@@ -205,7 +205,7 @@ pub struct ShieldPlugin;
 
 impl Plugin for ShieldPlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "shield.wgsl");
+        embedded_asset!(app, "shield.wesl");
         app.add_plugins(MaterialPlugin::<ShieldMaterial>::default());
     }
 }
@@ -216,7 +216,7 @@ mod tests {
 
     #[test]
     fn shield_shader_validates() {
-        crate::render::fx::validate_wgsl(include_str!("shield.wgsl"));
+        crate::render::fx::validate_wgsl(include_str!("shield.wesl"));
     }
 
     #[test]

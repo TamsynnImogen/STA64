@@ -2,12 +2,12 @@
 //! from `SimEvent::{Hit, ShieldsDown, Destroyed}` and `HullShare`.
 //!
 //! Aligned with Armada II Refit's `effects` module (`render3d/mods/effects`): the
-//! shield hit is `effects_shields.hlsl` ported to WGSL (`shield.wgsl`: the implied
+//! shield hit is `effects_shields.hlsl` ported to WGSL (`shield.wesl`: the implied
 //! shell lit only about the hit, spot, ring, mist, Klingon rays, soft edge) with
 //! `[Shields]`'s constants (`shield.rs`); the explosion is `effects_explosions.hlsl`
-//! (`fire.wgsl`: the ray-marched fireball and the shock ring) with `[Explosions]`'s
+//! (`fire.wesl`: the ray-marched fireball and the shock ring) with `[Explosions]`'s
 //! (`fire.rs`); the sparks are `sparks.rs`' streaks cooling along the black-body
-//! ramp (`quad.wgsl`, kind spark); the debris takes `[Debris]`'s timing and speed.
+//! ramp (`quad.wesl`, kind spark); the debris takes `[Debris]`'s timing and speed.
 //!
 //! - **Shield hit** (`Hit.shield > 0`): a shield ellipsoid around the target, lit about
 //!   where the shot struck (`Hit.at`, else the facing: 0 fore, 1 aft, 2 port,

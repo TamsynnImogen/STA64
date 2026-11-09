@@ -2,7 +2,7 @@
 //! `SimEvent::Fired`, removed on expiry or `Hit`.
 //!
 //! Aligned with Armada II Refit's ordnance module (`render3d/mods/ordnance`): the
-//! look is its `fx_ps` shader ported to WGSL (`quad.wgsl`: the beam's core and glow
+//! look is its `fx_ps` shader ported to WGSL (`quad.wesl`: the beam's core and glow
 //! profile, flowing pulses, helix strands and crackle; the bolt with its tail and
 //! rays; the flare; the tractor cone's fans and vapour) and its recipes
 //! (`ordnance.ini`, by the weapon's ODF name, [`super::recipe`]). Refit leaves the
