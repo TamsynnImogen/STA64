@@ -22,7 +22,7 @@
 //! - Selected units' icons get a green outline; clicks and drag boxes select by
 //!   icon when it shows (see `input::select`).
 
-use crate::render::units::{FromView, SelectRadius, TeamColour};
+use crate::render::units::{FromView, NeedsModel, SelectRadius, TeamColour};
 use crate::sim_link::{Selection, SimEntity};
 use sta_sim::EntityId;
 use bevy::asset::RenderAssetUsages;
@@ -342,7 +342,7 @@ fn toggle(keys: Res<ButtonInput<KeyCode>>, mut mode: ResMut<Mode>) {
 #[allow(clippy::type_complexity)]
 fn ensure_icons(
     mut commands: Commands,
-    units: Query<(Entity, Option<&TeamColour>, Option<&SelectRadius>), (With<FromView>, With<SimEntity>, Without<Strategic>)>,
+    units: Query<(Entity, Option<&TeamColour>, Option<&SelectRadius>), (With<FromView>, With<SimEntity>, Without<Strategic>, Without<NeedsModel>)>,
 ) {
     for (e, colour, radius) in &units {
         let colour = colour.map_or(Color::WHITE, |c| c.0);
