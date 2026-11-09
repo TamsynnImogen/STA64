@@ -65,6 +65,7 @@ headers).
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — engine structure and rules
 - [docs/NATIVE_FEATURES.md](docs/NATIVE_FEATURES.md) — FleetOpsHook / A2FOExtensions / Refit → native systems
 - [docs/MISSIONS.md](docs/MISSIONS.md) — mission scripts without DLLs (integrated MMM Lua)
+- [docs/MISSION_DLL_API.md](docs/MISSION_DLL_API.md) — every engine call the stock A1/A2 mission DLLs make, and what STA64's Lua lacks
 - [docs/TESTBENCH.md](docs/TESTBENCH.md) — test bench plan: scenes, scenarios, determinism, parity with stock
 - [docs/ROADMAP.md](docs/ROADMAP.md) — milestones
 - [docs/WORKPLAN.md](docs/WORKPLAN.md) — seams and parallel work packages for M2–M5
