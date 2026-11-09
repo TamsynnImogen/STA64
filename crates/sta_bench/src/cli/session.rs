@@ -109,7 +109,17 @@ fn start(o: &Opts) -> Outcome {
         Err(e) => {
             kill(child.id());
             kill(holder.id());
-            return Err(Fail::Error(format!("session did not start: {e} (see {}/err.log)", dir.display())));
+            let tail = |f: &str| {
+                let t = fs::read_to_string(dir.join(f)).unwrap_or_default();
+                let lines: Vec<&str> = t.lines().collect();
+                lines[lines.len().saturating_sub(15)..].join("\n")
+            };
+            return Err(Fail::Error(format!(
+                "session did not start: {e} (see {}/err.log)\n--- err.log ---\n{}\n--- out.log ---\n{}",
+                dir.display(),
+                tail("err.log"),
+                tail("out.log")
+            )));
         }
     }
     println!("  drive: sta-bench drive --session {id} \"<command>\"");
