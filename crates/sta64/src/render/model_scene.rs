@@ -52,6 +52,8 @@ struct CachedPart {
     triangles: usize,
     /// Set when the part's texture names a surface recipe (rocks, moons).
     rock: Option<crate::render::rock::RockPart>,
+    /// Set on a hull's parts (not skies), for the hull look (`render/hulls.rs`).
+    hull: Option<crate::render::hulls::HullPart>,
 }
 
 /// Face groups that take the owner's team colour.
@@ -431,6 +433,12 @@ fn spawn_mesh(
                 inv_extent: Vec3::from(ext.map(|e| 1.0 / e)),
             }
         });
+        // A `default` mesh's texture alpha is a cut-out where its group is not
+        // self-illuminating (open girders), as Refit's hulls draw it.
+        let hull = (!ctx.unlit && rock.is_none()).then_some(crate::render::hulls::HullPart {
+            self_illum,
+            cut_alpha: group.blend == "default" && !self_illum,
+        });
         let part = CachedPart {
             mesh: ctx.meshes.add(bevy_mesh),
             material: ctx.materials.add(material),
@@ -438,6 +446,7 @@ fn spawn_mesh(
             bumped: normal_present,
             triangles,
             rock,
+            hull,
         };
         if let Some(cache) = ctx.parts.as_mut() {
             cache.map.insert(cache_key, part.clone());
@@ -463,6 +472,9 @@ fn spawn_part(ctx: &mut SpawnCtx, part: &CachedPart, parent: Entity, flipbook: O
     }
     if let Some(r) = &part.rock {
         e.insert(r.clone());
+    }
+    if let Some(h) = part.hull {
+        e.insert(h);
     }
     if let Some((animation, offset)) = flipbook {
         e.insert(UvFlipbook {
