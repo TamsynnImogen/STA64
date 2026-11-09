@@ -34,19 +34,16 @@ struct NebulaParams {
     cam_fwd: vec4<f32>,   // the camera's forward axis
 };
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> k: NebulaParams;
-@group(#{MATERIAL_BIND_GROUP}) @binding(1) var s_noise: texture_3d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(2) var s_noise_sampler: sampler;
-@group(#{MATERIAL_BIND_GROUP}) @binding(3) var s_env: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(4) var s_env_sampler: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> k: NebulaParams;
+@group(constants::MATERIAL_BIND_GROUP) @binding(1) var s_noise: texture_3d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(2) var s_noise_sampler: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(3) var s_env: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(4) var s_env_sampler: sampler;
 
-#ifdef DEPTH_PREPASS
-#ifdef MULTISAMPLED
+@if(DEPTH_PREPASS && MULTISAMPLED)
 @group(0) @binding(20) var depth_prepass_texture: texture_depth_multisampled_2d;
-#else
+@if(DEPTH_PREPASS && !MULTISAMPLED)
 @group(0) @binding(20) var depth_prepass_texture: texture_depth_2d;
-#endif
-#endif
 
 struct FragIn {
     @builtin(position) position: vec4<f32>,
@@ -178,19 +175,17 @@ fn fragment(i: FragIn) -> @location(0) vec4<f32> {
     let t1 = max(ta, tb);
     let s0 = max(max(t0.x, t0.y), max(t0.z, k.box_lo.w));
     var s1 = min(min(t1.x, t1.y), t1.z);
-#ifdef DEPTH_PREPASS
-    // Stop at what the scene shows: reverse-Z depth is near / view depth.
-    let px = vec2<i32>(i.position.xy);
-#ifdef MULTISAMPLED
-    let z = textureLoad(depth_prepass_texture, px, 0);
-#else
-    let z = textureLoad(depth_prepass_texture, px, 0);
-#endif
-    if z > 0.0 {
-        let view_depth = k.box_lo.w / z;
-        s1 = min(s1, view_depth / max(dot(d, k.cam_fwd.xyz), 1e-4));
+    // Stop at what the scene shows: reverse-Z depth is near / view depth. (Sample 0
+    // serves the single- and the multisampled prepass texture alike.)
+    @if(DEPTH_PREPASS)
+    {
+        let px = vec2<i32>(i.position.xy);
+        let z = textureLoad(depth_prepass_texture, px, 0);
+        if z > 0.0 {
+            let view_depth = k.box_lo.w / z;
+            s1 = min(s1, view_depth / max(dot(d, k.cam_fwd.xyz), 1e-4));
+        }
     }
-#endif
     if s1 <= s0 {
         discard;
     }
