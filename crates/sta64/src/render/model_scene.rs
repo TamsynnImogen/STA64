@@ -91,15 +91,8 @@ fn mirror(p: [f32; 3]) -> [f32; 3] {
 
 /// Alpha mode and whether the group is unlit, from its blend mode.
 fn blend(group: &Group) -> (AlphaMode, bool) {
-    match group.blend.to_ascii_lowercase().as_str() {
-        "additive" | "wormhole" => (AlphaMode::Add, true),
-        "alphathreshold" => (AlphaMode::Mask(0.5), false),
-        "translucent" | "alpha" | "transparent" => (AlphaMode::Blend, false),
-        // FO's planet SODs: a cloud shell over the ground sphere, blended by the
-        // texture's alpha (mostly clear) and lit, as the engine's planet shells are.
-        "atmosphere" => (AlphaMode::Blend, false),
-        _ => (AlphaMode::Opaque, false),
-    }
+    let m = crate::render::materials::lookup(&group.blend);
+    (m.alpha_mode, m.unlit)
 }
 
 pub struct SpawnCtx<'a, 'w, 's> {
@@ -213,6 +206,7 @@ pub fn spawn(ctx: &mut SpawnCtx, model: &Model, root: Entity) -> SpawnStats {
                         tpl: std::sync::Arc::new(tpl),
                         owner: root,
                         timer: 0.0,
+                        rng: Default::default(),
                     });
                     stats.emitters += 1;
                 }
@@ -346,6 +340,8 @@ fn spawn_mesh(
         let glow = maps.glow.as_deref().and_then(|n| ctx.textures.colour(n, false));
         let glow = want(&maps.glow, glow, stats);
         let (alpha_mode, additive) = blend(group);
+        let mspec = crate::render::materials::lookup(&group.blend);
+        let two_sided = two_sided || mspec.double_sided;
 
         // De-index this group: one vertex per distinct (position, uv) corner.
         let mut remap: HashMap<(u32, u32), u32> = HashMap::new();
@@ -414,7 +410,7 @@ fn spawn_mesh(
             unlit: additive || self_illum || ctx.unlit,
             double_sided: two_sided,
             cull_mode: if two_sided { None } else { Some(Face::Back) },
-            reflectance: 0.3,
+            reflectance: mspec.reflectance,
             ..default()
         };
         // A texture with a surface recipe: the part becomes a rock once baked, its
@@ -479,8 +475,8 @@ fn spawn_part(ctx: &mut SpawnCtx, part: &CachedPart, parent: Entity, flipbook: O
 }
 
 /// Plays node animation (SOD and M3D): a step flipbook, evenly spaced keys.
-pub fn animate(time: Res<Time>, mut q: Query<(&NodeAnim, &mut Transform)>) {
-    let t = time.elapsed_secs();
+pub fn animate(clock: Res<crate::clock::AnimClock>, mut q: Query<(&NodeAnim, &mut Transform)>) {
+    let t = clock.wall() as f32;
     for (anim, mut tf) in &mut q {
         let n = match &anim.keys {
             AnimKeys::Matrix(k) => k.len(),

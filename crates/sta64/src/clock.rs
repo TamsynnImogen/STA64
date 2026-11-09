@@ -40,6 +40,8 @@ pub struct AnimClock {
     paused: bool,
     seed: u64,
     wall: f64,
+    /// Seconds the last frame added to `wall`.
+    frame_dt: f64,
 }
 
 impl Default for AnimClock {
@@ -56,7 +58,7 @@ impl AnimClock {
     pub const MAX_TICKS_PER_FRAME: u32 = 8;
 
     pub fn new(mode: ClockMode, seed: u64) -> AnimClock {
-        AnimClock { mode, tick: 0, debt: 0.0, alpha: 0.0, paused: false, seed, wall: 0.0 }
+        AnimClock { mode, tick: 0, debt: 0.0, alpha: 0.0, paused: false, seed, wall: 0.0, frame_dt: 0.0 }
     }
 
     pub fn mode(&self) -> ClockMode {
@@ -78,6 +80,12 @@ impl AnimClock {
     /// counts frame steps, so it repeats too.
     pub fn wall(&self) -> f64 {
         self.wall
+    }
+
+    /// Seconds the last frame added to [`wall`](Self::wall); the step for
+    /// per-frame cosmetic motion that follows wall time (spin, light swing).
+    pub fn frame_dt(&self) -> f32 {
+        self.frame_dt as f32
     }
 
     /// Seed for cosmetic random sequences; fixed in bench mode.
@@ -112,11 +120,23 @@ impl AnimClock {
             ClockMode::Bench { step } => step,
         };
         self.wall += dt;
+        self.frame_dt = dt;
         if self.paused {
             return 0;
         }
         self.debt += dt;
         ((self.debt * TICK_HZ as f64) as u32).min(Self::MAX_TICKS_PER_FRAME)
+    }
+
+    /// A frame with no sim to step (the model viewer, a map before its sim is
+    /// linked): only `wall` and `frame_dt` advance.
+    pub fn advance_idle(&mut self, real_dt: f64) {
+        let dt = match self.mode {
+            ClockMode::Wall => real_dt.max(0.0),
+            ClockMode::Bench { step } => step,
+        };
+        self.wall += dt;
+        self.frame_dt = dt;
     }
 
     /// One tick ran.
@@ -134,6 +154,12 @@ impl AnimClock {
         }
         self.alpha = (self.debt * TICK_HZ as f64).clamp(0.0, 1.0) as f32;
     }
+}
+
+/// Advances [`AnimClock::wall`] each frame when no sim link steps it. Add it
+/// `run_if(not(resource_exists::<SimLink>))`, before the animation systems.
+pub fn advance_idle_clock(time: Res<Time<Real>>, mut clock: ResMut<AnimClock>) {
+    clock.advance_idle(time.delta_secs_f64());
 }
 
 /// SplitMix64 finaliser: a cheap, well-mixed, portable hash of a `u64`.

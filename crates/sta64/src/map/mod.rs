@@ -223,6 +223,7 @@ impl Plugin for MapPlugin {
             .add_systems(
                 Update,
                 (
+                    crate::clock::advance_idle_clock.run_if(not(resource_exists::<crate::sim_link::SimLink>)),
                     input,
                     rebuild,
                     pan_keys,
@@ -237,7 +238,8 @@ impl Plugin for MapPlugin {
                     crate::render::particles::simulate,
                     crate::render::particles::draw,
                 )
-                    .chain(),
+                    .chain()
+                    .after(crate::app::GameSet::SimLink),
             );
     }
 }
@@ -379,9 +381,9 @@ fn pan_keys(
     }
 }
 
-fn spin(time: Res<Time>, mut q: Query<(&Spin, &mut Transform)>) {
+fn spin(clock: Res<AnimClock>, mut q: Query<(&Spin, &mut Transform)>) {
     for (s, mut t) in &mut q {
-        t.rotate_local(Quat::from_axis_angle(s.axis, s.speed * time.delta_secs()));
+        t.rotate_local(Quat::from_axis_angle(s.axis, s.speed * clock.frame_dt()));
     }
 }
 
