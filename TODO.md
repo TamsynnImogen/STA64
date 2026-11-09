@@ -38,7 +38,8 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 ## Now (M2: a map you can fly in)
 
 - [ ] Strategic view, next: stack overlapping icons into one fleet icon with a count (Sins-style); grid/height bars at strategic zoom (`cfgSTRATEGIC_GRID_RENDER`)
-- [ ] Custom SOD materials (`wwarpcoreol`, `xore`, `wtractor`, `zferengi`, … ~30 names, mostly weapon/effect parts) draw as plain opaque; find what each engine material does (`blend_survey` example lists them)
+- [x] Custom SOD blend names mapped in `render/materials.rs` (table-driven; our reading of the effect names, not engine source; unknown names log once) — #80
+- [?] Ships with weapon/effect parts (`wtractor`, `whobber`, `wtranscoil`, `xcritical05`) show them as additive glow, not plain opaque — #80
 
 - [ ] Refit map objects, in order:
   - [x] Planet look (Lighting.asi via Refit's world_planet shader) — 4fc4a88
