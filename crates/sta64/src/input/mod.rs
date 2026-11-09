@@ -4,6 +4,7 @@
 //! and pushes commands into [`CommandQueue`](crate::sim_link::CommandQueue);
 //! the sim link stamps and routes them. Systems run in `GameSet::Input`.
 
+pub mod keys;
 pub mod orders;
 pub mod select;
 
@@ -38,13 +39,15 @@ pub struct InputPlugin;
 impl Plugin for InputPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<select::Drag>()
+            .init_resource::<select::ControlGroups>()
+            .init_resource::<keys::KeyBindings>()
+            .add_message::<select::CameraFocus>()
             .init_resource::<orders::OrderTargets>()
-            .init_resource::<orders::OrderKeys>()
             .init_resource::<orders::Aim>()
             .add_systems(Startup, select::spawn_select_box)
             .add_systems(
                 Update,
-                (orders::aim, select::select, orders::order, orders::prune_targets)
+                (orders::aim, select::select_keys, select::select, orders::order, orders::prune_targets)
                     .chain()
                     .in_set(crate::app::GameSet::Input)
                     .run_if(resource_exists::<crate::sim_link::SimLink>),
