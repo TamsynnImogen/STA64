@@ -484,4 +484,4 @@ fn nearest_station(units: &Entities, owner: PlayerId, from: Vec3) -> Option<Vec3
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

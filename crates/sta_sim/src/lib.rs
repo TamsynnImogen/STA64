@@ -104,6 +104,8 @@ pub struct Sim {
     economy: economy::Economy,
     /// Yard queues and rig deploys (SIM-08); in the digest once any exists.
     production: production::Production,
+    /// Eliminated seats (SIM-13); in the digest once any exists.
+    victory: victory::Victory,
 }
 
 fn dt() -> Fixed {
@@ -220,6 +222,7 @@ impl Sim {
             movement: movement::Movement::default(),
             economy: Default::default(),
             production: Default::default(),
+            victory: Default::default(),
         }
     }
 
@@ -374,6 +377,9 @@ impl Sim {
         }
         if !self.production.is_empty() {
             self.production.hash_into(&mut h);
+        }
+        if !self.victory.is_empty() {
+            self.victory.hash_into(&mut h);
         }
         h.0
     }
