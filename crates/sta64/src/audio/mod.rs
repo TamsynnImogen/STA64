@@ -99,7 +99,7 @@ impl Plugin for AudioPlugin {
         if app.world().get_non_send::<Mixer>().is_none() {
             app.insert_non_send(Mixer::new(choose_backend(self.mode)));
         }
-        app.add_plugins(MusicPlugin)
+        app.add_plugins((MusicPlugin, UiSoundPlugin))
             .add_message::<PlaySound>()
             .init_resource::<Volumes>()
             .insert_resource(Resolver(Box::new(StubResolver::default())))
