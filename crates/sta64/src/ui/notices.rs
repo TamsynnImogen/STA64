@@ -278,7 +278,7 @@ fn age(time: Res<Time<Real>>, mut active: ResMut<Notices>, mut log: ResMut<ChatL
 }
 
 #[derive(Component)]
-struct NoticeRoot;
+pub(crate) struct NoticeRoot;
 #[derive(Component)]
 struct NoticeLine(usize);
 #[derive(Component)]

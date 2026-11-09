@@ -564,7 +564,7 @@ impl Plugin for RadarPlugin {
             .add_systems(Startup, spawn_radar)
             .add_systems(
                 Update,
-                (feed_from_link.run_if(resource_exists::<SimLink>), refresh, paint_filters).chain().in_set(GameSet::Ui),
+                (feed_from_link.run_if(resource_exists::<SimLink>).run_if(not(resource_exists::<super::hud::ExternalFeed>)), refresh, paint_filters).chain().in_set(GameSet::Ui),
             );
     }
 }
@@ -601,7 +601,7 @@ pub fn add_frame_overlay(app: &mut App, target: Handle<Image>, frame_height: u32
 }
 
 #[derive(Resource)]
-struct FrameUiCamera(Entity);
+pub(crate) struct FrameUiCamera(pub(crate) Entity);
 
 fn aim_at_camera(mut commands: Commands, cam: Option<Res<FrameUiCamera>>, roots: Query<Entity, (With<RadarRoot>, Without<UiTargetCamera>)>) {
     let Some(cam) = cam else { return };

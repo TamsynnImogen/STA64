@@ -223,6 +223,8 @@ pub fn add_radar(app: &mut App, cfg: &LaunchConfig) {
     use crate::ui::radar::{RadarFeed, add_frame_overlay};
     let target = app.world().resource::<Capture>().target.clone();
     add_frame_overlay(app, target, cfg.frame_size.unwrap_or((640, 360)).1);
+    // The bench's link speaks for player 0; the radar follows the feed below, as player 1.
+    app.insert_resource(crate::ui::hud::ExternalFeed);
     let content = Arc::new(sta_bench::run::fake_content());
     app.add_systems(
         Update,
@@ -231,6 +233,45 @@ pub fn add_radar(app: &mut App, cfg: &LaunchConfig) {
             feed.view = bench.0.get().view().clone();
             feed.player = sta_sim::PlayerId(1);
             feed.content = Some(content.clone());
+        })
+        .after(crate::app::GameSet::Bench)
+        .before(crate::app::GameSet::Ui),
+    );
+}
+
+/// `STA64_UI_HUD=1`: the UI-04 HUD over the frame (with the radar and notices it
+/// hosts), fed from the bench's view as player 1 on the bench's fake content;
+/// `crate::ui::hud::frame` has the other switches.
+pub fn add_hud(app: &mut App, cfg: &LaunchConfig) {
+    use crate::ui::hud::{HudFeed, HudState, Page, frame};
+    use crate::ui::radar::RadarFeed;
+    let target = app.world().resource::<Capture>().target.clone();
+    frame::add_overlay(app, target, cfg.frame_size.unwrap_or((640, 360)));
+    let content = Arc::new(sta_bench::run::fake_content());
+    let names = frame::select_names();
+    let open = frame::open_build();
+    app.add_systems(
+        Update,
+        (move |bench: ResMut<BenchRes>,
+               mut hud: ResMut<HudFeed>,
+               mut radar: ResMut<RadarFeed>,
+               mut state: ResMut<HudState>,
+               mut opened: Local<bool>| {
+            let mut bench = bench;
+            let bench = bench.0.get();
+            let selected: Vec<EntityId> = names.iter().filter_map(|n| bench.resolve(n).ok()).collect();
+            hud.view = bench.view().clone();
+            hud.player = sta_sim::PlayerId(1);
+            hud.content = Some(content.clone());
+            hud.selected.clone_from(&selected);
+            radar.view = hud.view.clone();
+            radar.player = hud.player;
+            radar.content = hud.content.clone();
+            radar.selected = selected;
+            if open && !*opened {
+                *opened = true;
+                state.page = Page::Build;
+            }
         })
         .after(crate::app::GameSet::Bench)
         .before(crate::app::GameSet::Ui),
