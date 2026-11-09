@@ -12,6 +12,7 @@
 mod mixer;
 mod music;
 mod null;
+mod ui;
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -21,6 +22,7 @@ use bevy::prelude::*;
 pub use mixer::{AudioBackend, KiraAudio, MixBus, Mixer, Sound, Volumes};
 pub use music::{Context as MusicContext, MusicConfig, MusicPlugin};
 pub use null::{Call, CallLog, NullAudio};
+pub use ui::{UiContext, UiSound, UiSoundPlugin, UiSounds};
 
 use crate::app::{GameSet, Mode};
 use crate::sim_link::{Bus, PlaySound};
