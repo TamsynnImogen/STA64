@@ -12,6 +12,8 @@
 //! - `--control stdio`: one `BenchCommand` per line on stdin
 //!   (`sta_bench::parse`), one answer line per command on stdout.
 
+pub mod marks;
+
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::time::Duration;
@@ -70,6 +72,7 @@ pub fn run_sim_only(cfg: &LaunchConfig) -> i32 {
     }
     let target = cfg.ticks.unwrap_or(0);
     while bench.tick() < target && bench.advance() {}
+    marks::write_if_requested(&bench);
     println!("{}", digest_line(&mut bench));
     0
 }
@@ -160,6 +163,7 @@ fn bench_frame(
     }
     clock.end_frame();
     if !open && (bench.tick() >= budget.0 || bench.paused()) {
+        marks::write_if_requested(bench);
         println!("{}", digest_line(bench));
         exit.write(AppExit::Success);
     }
