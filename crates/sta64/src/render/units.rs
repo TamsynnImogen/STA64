@@ -11,8 +11,7 @@
 //!   updates the components that change. [`attach_models`] builds the model
 //!   under a root once the game's files are mounted; [`show_damage`] shows
 //!   the model's damage-state nodes by hull share.
-//! - Selection rings and the line to a moving ship's target are gizmos
-//!   (`GameSet::Render`). RND-08 replaces them with the real overlays.
+//! - Selection rings, bars and target lines are `render/overlays.rs`.
 //!
 //! The sim works in the map's left-handed space; the renderer mirrors Z.
 
@@ -33,8 +32,7 @@ use crate::render::textures::{Loader, TextureCache};
 use crate::sim_link::{ContentRes, SimEntities};
 use crate::viewer::{Mounted, TeamColours};
 use crate::clock::AnimClock;
-use crate::input::orders::OrderTargets;
-use crate::sim_link::{Selection, SimEntity, SimLink};
+use crate::sim_link::{SimEntity, SimLink};
 
 /// Selection radius in world units, on the entity drawn for a sim unit.
 #[derive(Component)]
@@ -89,13 +87,12 @@ pub struct UnitsRenderPlugin;
 impl Plugin for UnitsRenderPlugin {
     fn build(&self, app: &mut App) {
         add_view_systems(app);
-        app.add_systems(Update, rings.in_set(GameSet::Render).run_if(resource_exists::<SimLink>));
     }
 }
 
 /// Spawn, despawn and place the units of the current view (everything but
 /// the selection gizmos, which need a renderer).
-fn add_view_systems(app: &mut App) {
+pub(crate) fn add_view_systems(app: &mut App) {
     app.init_resource::<SimEntities>()
         .init_resource::<LocalPlayer>()
         .init_resource::<UnitModels>()
@@ -303,20 +300,6 @@ fn place(link: Res<SimLink>, clock: Res<AnimClock>, mut q: Query<(&SimEntity, &m
         // The model's front (+Z in the files) is Bevy's -Z after the mirror, which
         // is what `looking_to` points along the heading.
         tf.rotation = Transform::IDENTITY.looking_to(Vec3::new(h[0], 0.0, -h[1]), Vec3::Y).rotation;
-    }
-}
-
-fn rings(mut gizmos: Gizmos, selection: Res<Selection>, targets: Res<OrderTargets>, units: Query<(&SimEntity, &SelectRadius, &GlobalTransform)>) {
-    let flat = Quat::from_rotation_x(std::f32::consts::FRAC_PI_2);
-    let colour = Color::srgb(0.3, 1.0, 0.4);
-    for (u, radius, gt) in &units {
-        if !selection.0.contains(&u.0) {
-            continue;
-        }
-        gizmos.circle(Isometry3d::new(gt.translation(), flat), radius.0, colour);
-        if let Some(t) = targets.0.get(&u.0) {
-            gizmos.line(gt.translation(), to_bevy(t.to_f32()), Color::srgba(0.3, 1.0, 0.4, 0.4));
-        }
     }
 }
 
