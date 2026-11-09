@@ -3,8 +3,10 @@
 //! `kira` is used directly. [`AudioPlugin`] drains [`PlaySound`](crate::sim_link::PlaySound)
 //! in `GameSet::Audio` and hands the sound to the [`Mixer`]'s backend: [`KiraAudio`]
 //! normally, [`NullAudio`] (records calls) when headless or when no sound device
-//! opens. Name to sound resolution is CON-10's job; until then [`SoundResolver`]
-//! is a stub, except for generated test tones named `audio-test:<hz>`.
+//! opens. Name to sound resolution is `sta_assets::audio` (CON-10): [`BankResolver`]
+//! wraps it and `plugins.rs` installs it when there is an install to read. Without
+//! one the [`StubResolver`] stays, and only generated test tones named
+//! `audio-test:<hz>` are audible.
 
 // The API is for AUD-02..05 and tests; the binary does not use all of it yet.
 #![allow(dead_code, unused_imports)]
@@ -49,6 +51,57 @@ impl SoundResolver for StubResolver {
 
 #[derive(Resource)]
 pub struct Resolver(pub Box<dyn SoundResolver>);
+
+/// The real resolver (CON-10): file names and event names through the install's
+/// sound tables, decoded once and cached. Owns its own mount of the install
+/// (the `Vfs` a viewer holds is a resource the resolver trait cannot reach).
+pub struct BankResolver {
+    vfs: sta_vfs::Vfs,
+    bank: sta_assets::audio::SoundBank,
+    /// Race tag for event names (`federation`, `klingon`, ...); `None` takes any.
+    pub race: Option<String>,
+    /// Rotates through an event's sounds, one step per resolve.
+    variant: usize,
+    warned: HashSet<String>,
+}
+
+impl BankResolver {
+    pub fn new(vfs: sta_vfs::Vfs) -> Self {
+        let bank = sta_assets::audio::SoundBank::load(&vfs);
+        Self { vfs, bank, race: None, variant: 0, warned: HashSet::new() }
+    }
+
+    /// Mount `root` (+ `active_mod`) as the game does; `None` and a warning when it fails.
+    pub fn mount(root: &std::path::Path, active_mod: Option<&str>) -> Option<Self> {
+        match sta_vfs::Vfs::mount_install(root, active_mod) {
+            Ok(vfs) => Some(Self::new(vfs)),
+            Err(e) => {
+                warn!("audio: cannot mount {} for sound ({e}); sound is off", root.display());
+                None
+            }
+        }
+    }
+}
+
+impl SoundResolver for BankResolver {
+    fn resolve(&mut self, name: &str) -> Option<Sound> {
+        self.variant = self.variant.wrapping_add(1);
+        match self.bank.audio(&self.vfs, name, self.race.as_deref(), self.variant) {
+            Some(a) => Some(Sound { name: name.to_owned(), sample_rate: a.sample_rate, frames: a.frames.clone() }),
+            None => {
+                if self.warned.insert(name.to_owned()) {
+                    match self.bank.failures.last() {
+                        Some((path, why)) if self.bank.resolve(&self.vfs, name, self.race.as_deref(), 0).is_some() => {
+                            warn!("audio: {name:?} ({path}) does not decode: {why}")
+                        }
+                        _ => info!("audio: no sound named {name:?}"),
+                    }
+                }
+                None
+            }
+        }
+    }
+}
 
 /// A short sine tone with a fade in and out.
 pub fn tone(hz: f32) -> Sound {
@@ -182,6 +235,36 @@ mod tests {
             let calls = log.drain();
             assert_eq!(calls, vec![Call::Play { name: "audio-test:440".into(), bus, at: at.map(|p| p.to_f32()) }]);
         }
+    }
+
+    #[test]
+    fn bank_resolver_finds_files_and_events_and_plays_them() {
+        let dir = std::env::temp_dir().join(format!("sta64-con10-hook-{}", std::process::id()));
+        let mut wav = b"RIFF\x28\0\0\0WAVEfmt \x10\0\0\0\x01\0\x01\0\x40\x1f\0\0\x40\x1f\0\0\x01\0\x08\0data\x04\0\0\0".to_vec();
+        wav.extend([128, 255, 0, 128]);
+        std::fs::create_dir_all(dir.join("sounds/effects")).unwrap();
+        std::fs::write(dir.join("sounds/effects/ping.wav"), &wav).unwrap();
+        std::fs::write(dir.join("events.dat"), "Chirp{\nTable\n\tSound <borg> \"ping.wav\"\n}\n").unwrap();
+        let mut vfs = sta_vfs::Vfs::default();
+        vfs.push_dir("root".into(), dir.clone()).unwrap();
+
+        let mut r = BankResolver::new(vfs);
+        let s = r.resolve("PING.WAV").expect("file by name");
+        assert_eq!((s.sample_rate, s.frames.len()), (8000, 4));
+        assert_eq!(r.resolve("chirp").map(|s| s.frames.len()), Some(4), "event by name");
+        assert!(r.resolve("nope.wav").is_none());
+
+        let (null, log) = NullAudio::new();
+        let mut app = App::new();
+        app.insert_non_send(Mixer::new(Box::new(null)));
+        app.add_plugins(AudioPlugin::default());
+        app.insert_resource(Resolver(Box::new(r)));
+        app.update();
+        log.drain();
+        app.world_mut().write_message(PlaySound { name: "ping.wav".into(), at: None, bus: Bus::Ui });
+        app.update();
+        assert_eq!(log.drain(), vec![Call::Play { name: "ping.wav".into(), bus: Bus::Ui, at: None }]);
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]

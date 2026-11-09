@@ -4045,6 +4045,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "nanomp3"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "acd9a8d0592a17ee5211aae2f976e6dc2f6846135d1f49665b3f19a7afd23435"
+dependencies = [
+ "nanomp3-core",
+]
+
+[[package]]
+name = "nanomp3-core"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "63fa2238e662d3d3c1a71168b3278f23422cf9bf76f6943ee6b1c2581d74eb5c"
+
+[[package]]
 name = "ndk"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5383,9 +5398,12 @@ version = "0.1.0"
 dependencies = [
  "a2fmt",
  "ddsfile",
+ "lewton",
+ "nanomp3",
  "sta_bzn",
  "sta_odf",
  "sta_vfs",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
