@@ -23,6 +23,7 @@ pub mod gui_cfg;
 pub mod index;
 pub mod legacy;
 pub mod profile;
+pub mod techtree;
 pub mod map;
 pub mod odf;
 pub mod unit;
@@ -35,6 +36,7 @@ pub use features::{Features, Profile};
 pub use gui_cfg::{Colour, GuiCfg, GuiLayout, GuiValue, Panel, Rect};
 pub use index::{OdfEntry, OdfIndex};
 pub use profile::{resolve_features, Overrides, FEATURE_NAMES, ODF_KEY_PREFIX};
+pub use techtree::{Availability, BuildOption, CapacityList, Condition, Owned, Requirement, TechEntry, TechState, TechTree, Unmet};
 pub use map::{MapDef, MapObject, Region, RegionKind, RegionShape, Scenery, SceneryLight, SceneryPlanet, StartPos};
 pub use sta_core::{ContentKey, Fixed, Vec3};
 
