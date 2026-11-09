@@ -199,7 +199,7 @@ pub fn can_build(db: &ContentDb, key: ContentKey, race: &str) -> bool {
     match db.tech_tree() {
         Some(tree) => {
             let own = crate::Owned::new(race).with(&u.odf, 1);
-            tree.build_options(db, &u.odf, &own).iter().any(|o| o.availability.is_available())
+            tree.build_options(db, &u.odf, &own, false).iter().any(|o| o.availability.is_available())
         }
         None => true,
     }

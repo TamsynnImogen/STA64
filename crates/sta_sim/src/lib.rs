@@ -92,6 +92,10 @@ pub struct Sim {
     pub labels: Table<String>,
     /// Seats from the game setup, ascending id; in the digest.
     players: Vec<(PlayerId, TeamId)>,
+    /// The seats whose setup said `Control::Ai`, ascending (SIM-09: the tech
+    /// gate lets AI seats build the engine's unlisted tail slots). From the
+    /// setup like `players`, so not in the digest.
+    ai_seats: Vec<PlayerId>,
     /// What spawns resolve against; `None` for a sim made with [`Sim::new`].
     content: Option<Arc<ContentDb>>,
     /// The map's start positions and regions, kept for the systems that use
@@ -220,6 +224,7 @@ impl Sim {
             units: Entities::new(),
             labels: Table::new(),
             players: Vec::new(),
+            ai_seats: Vec::new(),
             content: None,
             starts: Vec::new(),
             regions: Vec::new(),
@@ -298,7 +303,7 @@ impl Sim {
             }
             Order::Build { builder, what, at } => {
                 let Some(db) = self.content.clone() else { return false };
-                if !tech::build_allowed(&db, &self.units, &self.players, *builder, *what) {
+                if !tech::build_allowed(&db, &self.units, &self.players, &self.ai_seats, *builder, *what) {
                     return false;
                 }
                 self.production.order_build(&db, &mut self.units, &mut self.economy, c.player, *builder, *what, *at)
