@@ -23,9 +23,10 @@ its cost (600) leaves the stock.
 11. Wait up to 20 seconds until 2 stations are on team 1
 12. Scene "build yard fx_dread 0 0 0"
 13. Run 1 ticks
-14. Expect player 1 resource dilithium at tick 99 is 1800
-15. Run until tick 2200
-16. Expect 2 stations on team 1
-17. Scene "build yard fx_dread 0 0 0"
-18. Run 1 ticks
-19. Expect player 1 resource dilithium at tick 2201 is 1200
+14. Run until tick 99
+15. Expect player 1 resource dilithium at tick 99 is 1800
+16. Run until tick 2200
+17. Expect 2 stations on team 1
+18. Scene "build yard fx_dread 0 0 0"
+19. Run 1 ticks
+20. Expect player 1 resource dilithium at tick 2201 is 1200
