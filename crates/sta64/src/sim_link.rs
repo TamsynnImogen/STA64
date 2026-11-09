@@ -78,6 +78,12 @@ impl SimLink {
         Some((pos.to_array(), heading.to_array()))
     }
 
+    /// The bench's frame path steps its own sim: it hands each new view in here,
+    /// so effects and units read it as they read a link's.
+    pub fn feed(&mut self, view: Arc<WorldView>) {
+        self.prev = std::mem::replace(&mut self.curr, view);
+    }
+
     /// Run one tick if the router has its commands; `None` on a stall.
     fn tick(&mut self) -> Option<Vec<SimEvent>> {
         let batch = self.router.get().take_ready(self.curr.tick + 1)?;
@@ -86,6 +92,10 @@ impl SimLink {
         Some(out.events)
     }
 }
+
+/// Marks a link the bench feeds itself: `step_sim` leaves it alone.
+#[derive(Resource)]
+pub struct BenchDriven;
 
 /// Links a render-side entity to the sim entity it shows.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
@@ -187,7 +197,7 @@ impl Plugin for SimLinkPlugin {
             .init_resource::<CommandQueue>()
             .init_resource::<Selection>()
             .init_resource::<SimEntities>()
-            .add_systems(Update, step_sim.in_set(GameSet::SimLink).run_if(resource_exists::<SimLink>));
+            .add_systems(Update, step_sim.in_set(GameSet::SimLink).run_if(resource_exists::<SimLink>).run_if(not(resource_exists::<BenchDriven>)));
     }
 }
 
