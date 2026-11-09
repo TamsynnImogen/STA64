@@ -49,6 +49,7 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [ ] Strategic view, next: stack overlapping icons into one fleet icon with a count (Sins-style); grid/height bars at strategic zoom (`cfgSTRATEGIC_GRID_RENDER`)
 - [x] Custom SOD blend names mapped in `render/materials.rs` (table-driven; our reading of the effect names, not engine source; unknown names log once) — #80
 - [?] Ships with weapon/effect parts (`wtractor`, `whobber`, `wtranscoil`, `xcritical05`) show them as additive glow, not plain opaque — #80
+- [?] Fog of war and shroud (RND-13): the draw is ready but the map view does not insert `FogBounds` or a `LocalPlayer` yet, so nothing shows in `--map`; `sta64 --headless --clock bench --frames 0,60 --frame-dir out --scene bench/scenes/fog.ini` (needs a GPU) shows unseen ground dimmed, never-seen ground black, round edges, and the discs following the sensors (compare `fog-off.ini`)
 
 - [ ] Refit map objects, in order:
   - [x] Planet look (Lighting.asi via Refit's world_planet shader) — 4fc4a88
