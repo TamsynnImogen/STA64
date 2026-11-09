@@ -91,15 +91,8 @@ fn mirror(p: [f32; 3]) -> [f32; 3] {
 
 /// Alpha mode and whether the group is unlit, from its blend mode.
 fn blend(group: &Group) -> (AlphaMode, bool) {
-    match group.blend.to_ascii_lowercase().as_str() {
-        "additive" | "wormhole" => (AlphaMode::Add, true),
-        "alphathreshold" => (AlphaMode::Mask(0.5), false),
-        "translucent" | "alpha" | "transparent" => (AlphaMode::Blend, false),
-        // FO's planet SODs: a cloud shell over the ground sphere, blended by the
-        // texture's alpha (mostly clear) and lit, as the engine's planet shells are.
-        "atmosphere" => (AlphaMode::Blend, false),
-        _ => (AlphaMode::Opaque, false),
-    }
+    let m = crate::render::materials::lookup(&group.blend);
+    (m.alpha_mode, m.unlit)
 }
 
 pub struct SpawnCtx<'a, 'w, 's> {
@@ -347,6 +340,8 @@ fn spawn_mesh(
         let glow = maps.glow.as_deref().and_then(|n| ctx.textures.colour(n, false));
         let glow = want(&maps.glow, glow, stats);
         let (alpha_mode, additive) = blend(group);
+        let mspec = crate::render::materials::lookup(&group.blend);
+        let two_sided = two_sided || mspec.double_sided;
 
         // De-index this group: one vertex per distinct (position, uv) corner.
         let mut remap: HashMap<(u32, u32), u32> = HashMap::new();
@@ -415,7 +410,7 @@ fn spawn_mesh(
             unlit: additive || self_illum || ctx.unlit,
             double_sided: two_sided,
             cull_mode: if two_sided { None } else { Some(Face::Back) },
-            reflectance: 0.3,
+            reflectance: mspec.reflectance,
             ..default()
         };
         // A texture with a surface recipe: the part becomes a rock once baked, its

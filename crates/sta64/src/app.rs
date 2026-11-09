@@ -197,12 +197,8 @@ impl LaunchConfig {
     pub fn unsupported(&self) -> Vec<&'static str> {
         let mut out = Vec::new();
         let flags = [
-            (self.scene.is_some(), "--scene"),
-            (self.headless, "--headless"),
-            (self.sim_only, "--sim-only"),
-            (self.clock.is_some(), "--clock"),
-            (self.ticks.is_some(), "--ticks"),
-            (self.control.is_some(), "--control"),
+            (self.control == Some(Control::Socket), "--control socket"),
+            (self.headless && self.scene.is_none() && !self.sim_only, "--headless without --scene"),
         ];
         for (given, flag) in flags {
             if given {
@@ -254,7 +250,8 @@ mod tests {
         assert_eq!(c.mode(), Mode::Bench { headless: true, sim_only: true });
         assert!(!c.mode().has_window());
         assert_eq!(c.clock_mode(), ClockMode::Bench { step: BENCH_STEP });
-        assert_eq!(c.unsupported(), ["--scene", "--sim-only", "--clock", "--ticks", "--control"]);
+        assert!(c.unsupported().is_empty());
+        assert_eq!(parse("--control socket").unsupported(), ["--control socket"]);
 
         let c = parse("--scene s.ini --headless");
         assert_eq!(c.mode(), Mode::Bench { headless: true, sim_only: false });

@@ -14,7 +14,8 @@
 //! Paths follow the spec's rules ([`crate::sta::check_path`]); two paths that
 //! differ only in case are refused, since lookups would find one.
 
-use std::path::Path;
+use std::io::{Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
@@ -26,6 +27,26 @@ pub enum Content {
     Data(Vec<u8>),
     /// Hide this path in the mods below.
     Whiteout,
+}
+
+/// Loads one file's bytes when [`pack_to`] reaches it.
+pub type Loader<'a> = Box<dyn FnOnce() -> std::io::Result<Vec<u8>> + 'a>;
+
+/// What to put at a path, loaded only when it is written ([`pack_to`]), so
+/// a mod of any size packs with about one file in memory.
+pub enum Item<'a> {
+    Data(Vec<u8>),
+    Load(Loader<'a>),
+    Whiteout,
+}
+
+impl From<Content> for Item<'_> {
+    fn from(c: Content) -> Self {
+        match c {
+            Content::Data(d) => Item::Data(d),
+            Content::Whiteout => Item::Whiteout,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -41,75 +62,93 @@ fn zstd(data: &[u8]) -> Vec<u8> {
     ruzstd::encoding::compress_to_vec(data, ruzstd::encoding::CompressionLevel::Fastest)
 }
 
-struct Prepared {
+fn io(e: std::io::Error) -> StaError {
+    StaError::Io(e.to_string())
+}
+
+struct Written {
     path: String,
     key: String,
     kind: Kind,
     zstd: bool,
-    stored: Vec<u8>,
+    offset: u64,
+    stored: u64,
     size: u64,
     sha: [u8; 32],
 }
 
-/// Build an archive from `(path, content)` pairs, in any order.
+/// Build an archive in memory from `(path, content)` pairs, in any order.
 pub fn pack(files: Vec<(String, Content)>, compression: Compression) -> Result<Vec<u8>, StaError> {
-    let mut prepared = Vec::with_capacity(files.len());
-    for (path, content) in files {
+    let mut out = std::io::Cursor::new(Vec::new());
+    pack_to(&mut out, files.into_iter().map(|(p, c)| (p, c.into())).collect(), compression)?;
+    Ok(out.into_inner())
+}
+
+/// Write an archive to `out` (from its current position), loading each item
+/// only when it is written. Returns the archive's `content_hash`. The bytes
+/// are exactly those [`pack`] gives for the same files.
+pub fn pack_to<W: Write + Seek>(out: &mut W, files: Vec<(String, Item<'_>)>, compression: Compression) -> Result<[u8; 32], StaError> {
+    let mut items = Vec::with_capacity(files.len());
+    for (path, item) in files {
         let key = check_path(&path)?;
-        prepared.push(match content {
-            Content::Whiteout => Prepared { path, key, kind: Kind::Whiteout, zstd: false, stored: Vec::new(), size: 0, sha: [0; 32] },
-            Content::Data(data) => {
-                let sha: [u8; 32] = Sha256::digest(&data).into();
-                let size = data.len() as u64;
-                let packed = (compression == Compression::Auto && !data.is_empty()).then(|| zstd(&data)).filter(|z| z.len() < data.len());
-                let (zstd, stored) = match packed {
-                    Some(z) => (true, z),
-                    None => (false, data),
-                };
-                Prepared { path, key, kind: Kind::File, zstd, stored, size, sha }
-            }
-        });
+        items.push((key, path, item));
     }
-    prepared.sort_by(|a, b| a.key.as_bytes().cmp(b.key.as_bytes()));
-    for w in prepared.windows(2) {
-        if w[0].key == w[1].key {
-            return Err(StaError::BadPath { path: w[1].path.clone(), why: "same path as another file, ignoring case" });
+    items.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+    for w in items.windows(2) {
+        if w[0].0 == w[1].0 {
+            return Err(StaError::BadPath { path: w[1].1.clone(), why: "same path as another file, ignoring case" });
         }
     }
 
-    // Data, 16-byte aligned, in index order.
-    let mut out = vec![0u8; HEADER_SIZE as usize];
-    let mut offsets = Vec::with_capacity(prepared.len());
-    for p in &prepared {
-        if p.kind == Kind::Whiteout {
-            offsets.push(0u64);
-            continue;
-        }
-        out.resize(out.len().next_multiple_of(16), 0);
-        offsets.push(out.len() as u64);
-        out.extend_from_slice(&p.stored);
+    let base = out.stream_position().map_err(io)?;
+    out.write_all(&[0u8; HEADER_SIZE as usize]).map_err(io)?;
+    let mut pos = HEADER_SIZE;
+    // Data, 16-byte aligned, in index order, one file at a time.
+    let mut written = Vec::with_capacity(items.len());
+    for (key, path, item) in items {
+        let data = match item {
+            Item::Whiteout => {
+                written.push(Written { path, key, kind: Kind::Whiteout, zstd: false, offset: 0, stored: 0, size: 0, sha: [0; 32] });
+                continue;
+            }
+            Item::Data(d) => d,
+            Item::Load(f) => f().map_err(|e| StaError::Io(format!("{path}: {e}")))?,
+        };
+        let sha: [u8; 32] = Sha256::digest(&data).into();
+        let size = data.len() as u64;
+        let packed = (compression == Compression::Auto && !data.is_empty()).then(|| zstd(&data)).filter(|z| z.len() < data.len());
+        let pad = pos.next_multiple_of(16) - pos;
+        out.write_all(&[0u8; 16][..pad as usize]).map_err(io)?;
+        pos += pad;
+        let (is_zstd, stored) = match &packed {
+            Some(z) => (true, z.as_slice()),
+            None => (false, data.as_slice()),
+        };
+        out.write_all(stored).map_err(io)?;
+        written.push(Written { path, key, kind: Kind::File, zstd: is_zstd, offset: pos, stored: stored.len() as u64, size, sha });
+        pos += stored.len() as u64;
     }
 
     // Index: count, record size, content_hash, records, string pool.
-    let hash = content_hash(prepared.iter().map(|p| (p.key.as_str(), p.kind, p.size, &p.sha)));
-    let mut index = Vec::with_capacity(40 + prepared.len() * (ENTRY_SIZE_1_0 + 32));
-    index.extend_from_slice(&(prepared.len() as u32).to_le_bytes());
+    let hash = content_hash(written.iter().map(|w| (w.key.as_str(), w.kind, w.size, &w.sha)));
+    let mut index = Vec::with_capacity(40 + written.len() * (ENTRY_SIZE_1_0 + 32));
+    index.extend_from_slice(&(written.len() as u32).to_le_bytes());
     index.extend_from_slice(&(ENTRY_SIZE_1_0 as u32).to_le_bytes());
     index.extend_from_slice(&hash);
     let mut pool = Vec::new();
-    for (p, offset) in prepared.iter().zip(&offsets) {
+    for w in &written {
         let path_offset = u32::try_from(pool.len()).map_err(|_| StaError::Corrupt("string pool over 4 GiB".into()))?;
         let mut r = [0u8; ENTRY_SIZE_1_0];
         r[0..4].copy_from_slice(&path_offset.to_le_bytes());
-        r[4..6].copy_from_slice(&(p.path.len() as u16).to_le_bytes());
-        r[6] = p.zstd as u8;
-        r[7] = (p.kind == Kind::Whiteout) as u8;
-        r[8..16].copy_from_slice(&offset.to_le_bytes());
-        r[16..24].copy_from_slice(&(p.stored.len() as u64).to_le_bytes());
-        r[24..32].copy_from_slice(&p.size.to_le_bytes());
-        r[32..64].copy_from_slice(&p.sha);
+        r[4..6].copy_from_slice(&(w.path.len() as u16).to_le_bytes());
+        r[6] = w.zstd as u8;
+        r[7] = (w.kind == Kind::Whiteout) as u8;
+        r[8..16].copy_from_slice(&w.offset.to_le_bytes());
+        r[16..24].copy_from_slice(&w.stored.to_le_bytes());
+        r[24..32].copy_from_slice(&w.size.to_le_bytes());
+        r[32..64].copy_from_slice(&w.sha);
         index.extend_from_slice(&r);
-        pool.extend_from_slice(p.path.as_bytes());
+        pool.extend_from_slice(w.path.as_bytes());
     }
     index.extend_from_slice(&pool);
     let index_size = index.len() as u64;
@@ -118,40 +157,53 @@ pub fn pack(files: Vec<(String, Content)>, compression: Compression) -> Result<V
         Some(z) => (1u32, z),
         None => (0u32, index),
     };
+    let index_offset = pos;
+    out.write_all(&stored_index).map_err(io)?;
+    let end = out.stream_position().map_err(io)?;
 
-    let index_offset = out.len() as u64;
-    out.extend_from_slice(&stored_index);
-    out[..8].copy_from_slice(MAGIC);
-    out[8..10].copy_from_slice(&MAJOR.to_le_bytes());
-    out[10..12].copy_from_slice(&0u16.to_le_bytes());
-    out[12..16].copy_from_slice(&flags.to_le_bytes());
-    out[16..24].copy_from_slice(&index_offset.to_le_bytes());
-    out[24..32].copy_from_slice(&(stored_index.len() as u64).to_le_bytes());
-    out[32..40].copy_from_slice(&index_size.to_le_bytes());
+    let mut header = [0u8; HEADER_SIZE as usize];
+    header[..8].copy_from_slice(MAGIC);
+    header[8..10].copy_from_slice(&MAJOR.to_le_bytes());
+    header[10..12].copy_from_slice(&0u16.to_le_bytes());
+    header[12..16].copy_from_slice(&flags.to_le_bytes());
+    header[16..24].copy_from_slice(&index_offset.to_le_bytes());
+    header[24..32].copy_from_slice(&(stored_index.len() as u64).to_le_bytes());
+    header[32..40].copy_from_slice(&index_size.to_le_bytes());
     // signature_offset (40..48) and reserved (48..64) stay 0.
-    Ok(out)
+    out.seek(SeekFrom::Start(base)).map_err(io)?;
+    out.write_all(&header).map_err(io)?;
+    out.seek(SeekFrom::Start(end)).map_err(io)?;
+    Ok(hash)
+}
+
+fn walk_files(dir: &Path, root: &Path, out: &mut Vec<(String, PathBuf)>) -> std::io::Result<()> {
+    for e in std::fs::read_dir(dir)? {
+        let e = e?;
+        let ft = e.file_type()?;
+        let p = e.path();
+        if ft.is_dir() {
+            walk_files(&p, root, out)?;
+        } else if ft.is_file() {
+            let rel = p.strip_prefix(root).unwrap_or(&p).to_string_lossy().replace('\\', "/");
+            out.push((rel, p));
+        }
+    }
+    Ok(())
 }
 
 /// Every file under `root` (recursively, not following directory symlinks),
-/// as archive paths with `/`. Order does not matter to [`pack`].
+/// as archive paths with `/`, read now. Order does not matter to [`pack`].
 pub fn files_in_dir(root: &Path) -> std::io::Result<Vec<(String, Content)>> {
-    fn walk(dir: &Path, root: &Path, out: &mut Vec<(String, Content)>) -> std::io::Result<()> {
-        for e in std::fs::read_dir(dir)? {
-            let e = e?;
-            let ft = e.file_type()?;
-            let p = e.path();
-            if ft.is_dir() {
-                walk(&p, root, out)?;
-            } else if ft.is_file() {
-                let rel = p.strip_prefix(root).unwrap_or(&p).to_string_lossy().replace('\\', "/");
-                out.push((rel, Content::Data(std::fs::read(&p)?)));
-            }
-        }
-        Ok(())
-    }
-    let mut out = Vec::new();
-    walk(root, root, &mut out)?;
-    Ok(out)
+    let mut paths = Vec::new();
+    walk_files(root, root, &mut paths)?;
+    paths.into_iter().map(|(rel, p)| Ok((rel, Content::Data(std::fs::read(&p)?)))).collect()
+}
+
+/// As [`files_in_dir`], but each file is read only when [`pack_to`] writes it.
+pub fn items_in_dir(root: &Path) -> std::io::Result<Vec<(String, Item<'static>)>> {
+    let mut paths = Vec::new();
+    walk_files(root, root, &mut paths)?;
+    Ok(paths.into_iter().map(|(rel, p)| (rel, Item::Load(Box::new(move || std::fs::read(p))))).collect())
 }
 
 #[cfg(test)]
@@ -233,6 +285,26 @@ mod tests {
         for bad in ["../x", "/abs", "a\\b", "a//b"] {
             assert!(pack(vec![(bad.into(), Content::Data(vec![]))], Compression::Auto).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn streaming_gives_the_same_bytes() {
+        let want = pack(sample(), Compression::Auto).unwrap();
+        let items: Vec<(String, Item)> = sample()
+            .into_iter()
+            .map(|(p, c)| match c {
+                Content::Data(d) => (p, Item::Load(Box::new(move || Ok(d)))),
+                Content::Whiteout => (p, Item::Whiteout),
+            })
+            .collect();
+        let mut f = std::io::Cursor::new(Vec::new());
+        let hash = pack_to(&mut f, items, Compression::Auto).unwrap();
+        assert_eq!(f.into_inner(), want);
+        assert_eq!(StaArchive::from_bytes(want).unwrap().content_hash(), hash);
+        // A loader's error names the file.
+        let failing = vec![("a.odf".to_string(), Item::Load(Box::new(|| Err(std::io::Error::other("gone")))))];
+        let e = pack_to(&mut std::io::Cursor::new(Vec::new()), failing, Compression::Auto).unwrap_err();
+        assert!(e.to_string().contains("a.odf: gone"), "{e}");
     }
 
     #[test]
