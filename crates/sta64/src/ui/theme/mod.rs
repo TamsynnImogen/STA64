@@ -6,6 +6,7 @@
 // The kit is for UI-04..08; the binary uses only the gallery for now.
 #![allow(dead_code, unused_imports)]
 
+pub mod font;
 mod gallery;
 mod systems;
 mod tokens;
@@ -14,8 +15,8 @@ mod widgets;
 use bevy::prelude::*;
 
 pub use gallery::{GalleryPlugin, GalleryRoot, spawn_gallery};
-pub use systems::{ButtonClicked, ListSelected, SliderChanged, ToggleChanged, click, state_colour};
-pub use tokens::{Theme, scale};
+pub use systems::{ButtonClicked, ListSelected, SliderChanged, ToggleChanged, click, row_colour, state_colour};
+pub use tokens::{Theme, mix, scale};
 pub use widgets::*;
 
 use crate::app::GameSet;

@@ -21,7 +21,7 @@ impl Plugin for GalleryPlugin {
 pub fn spawn_gallery(mut commands: Commands, theme: Res<Theme>, camera: Query<(), With<Camera2d>>) {
     let t = &*theme;
     if camera.is_empty() {
-        commands.spawn((Camera2d, Camera { clear_color: ClearColorConfig::Custom(t.background), ..default() }));
+        commands.spawn((Camera2d, Camera { clear_color: ClearColorConfig::Custom(t.panel), ..default() }));
     }
     let content = (
         Node { flex_direction: FlexDirection::Column, row_gap: Val::Px(t.gap * 2.0), ..default() },
@@ -30,28 +30,28 @@ pub fn spawn_gallery(mut commands: Commands, theme: Res<Theme>, camera: Query<()
             (
                 Node { column_gap: Val::Px(t.gap), ..default() },
                 children![
-                    button(t, "ORANGE", t.orange, 140.0),
-                    button(t, "LILAC", t.lilac, 140.0),
-                    button(t, "SKY", t.sky, 140.0),
-                    disabled_button(t, "DISABLED", 140.0),
+                    button(t, "Engage", 160.0),
+                    button(t, "Hold", 160.0),
+                    button(t, "Release", 160.0),
+                    disabled_button(t, "Disabled", 160.0),
                 ],
             ),
             label(t, "Toggles"),
             (
                 Node { column_gap: Val::Px(t.gap), ..default() },
-                children![toggle(t, "ON", t.peach, true, 140.0), toggle(t, "OFF", t.peach, false, 140.0)],
+                children![toggle(t, "On", true, 160.0), toggle(t, "Off", false, 160.0)],
             ),
             label(t, "Slider"),
-            slider(t, t.orange, 300.0, 0.0, 100.0, 40.0),
+            slider(t, 300.0, 0.0, 100.0, 40.0),
             label(t, "Progress"),
-            progress_bar(t, t.sky, 300.0, 0.65),
+            progress_bar(t, 300.0, 0.65),
             label(t, "List"),
-            list(t, t.orange, &["Federation", "Klingon", "Romulan", "Borg"], Some(0)),
+            list(t, &["Federation", "Klingon", "Romulan", "Borg"], Some(0)),
         ],
     );
     commands.spawn((
         GalleryRoot,
         Node { width: Val::Percent(100.0), height: Val::Percent(100.0), padding: UiRect::all(Val::Px(24.0)), ..default() },
-        children![panel(t, "WIDGET GALLERY", t.orange, content)],
+        children![panel(t, "Widget gallery", content)],
     ));
 }
