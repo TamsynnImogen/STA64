@@ -12,6 +12,7 @@ pub enum Call {
     Play { name: String, bus: Bus, at: Option<[f32; 3]> },
     BusVolume { bus: MixBus, volume: f32 },
     StopAll,
+    StopBus { bus: Bus },
     Listener { pos: [f32; 3], right: [f32; 3] },
 }
 
@@ -56,6 +57,9 @@ impl AudioBackend for NullAudio {
     }
     fn stop_all(&mut self) {
         self.push(Call::StopAll);
+    }
+    fn stop_bus(&mut self, bus: Bus) {
+        self.push(Call::StopBus { bus });
     }
     fn set_listener(&mut self, pos: [f32; 3], right: [f32; 3]) {
         self.push(Call::Listener { pos, right });
