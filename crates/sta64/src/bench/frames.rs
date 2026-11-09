@@ -217,6 +217,26 @@ pub fn add(app: &mut App, cfg: &LaunchConfig, scene_camera: Option<BenchCommand>
         .add_systems(Update, sync_world.after(crate::app::GameSet::Bench));
 }
 
+/// `STA64_UI_RADAR=1`: the UI-05 radar over the frame, fed from the bench's
+/// view (player 1, the scenes' own team, with the bench's fake content).
+pub fn add_radar(app: &mut App, cfg: &LaunchConfig) {
+    use crate::ui::radar::{RadarFeed, add_frame_overlay};
+    let target = app.world().resource::<Capture>().target.clone();
+    add_frame_overlay(app, target, cfg.frame_size.unwrap_or((640, 360)).1);
+    let content = Arc::new(sta_bench::run::fake_content());
+    app.add_systems(
+        Update,
+        (move |bench: ResMut<BenchRes>, mut feed: ResMut<RadarFeed>| {
+            let mut bench = bench;
+            feed.view = bench.0.get().view().clone();
+            feed.player = sta_sim::PlayerId(1);
+            feed.content = Some(content.clone());
+        })
+        .after(crate::app::GameSet::Bench)
+        .before(crate::app::GameSet::Ui),
+    );
+}
+
 #[allow(clippy::too_many_arguments)]
 fn sync_world(
     mut commands: Commands,

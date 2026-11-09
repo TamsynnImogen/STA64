@@ -36,6 +36,7 @@ pub mod source;
 pub mod specials;
 pub mod spatial;
 pub mod spawn;
+pub mod tech;
 pub mod victory;
 pub mod view;
 pub mod world;
@@ -295,6 +296,9 @@ impl Sim {
             }
             Order::Build { builder, what, at } => {
                 let Some(db) = self.content.clone() else { return false };
+                if !tech::build_allowed(&db, &self.units, &self.players, *builder, *what) {
+                    return false;
+                }
                 self.production.order_build(&db, &mut self.units, &mut self.economy, c.player, *builder, *what, *at)
             }
             Order::Attack { units, target } => {

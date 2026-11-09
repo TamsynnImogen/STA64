@@ -5,6 +5,8 @@ use std::sync::Arc;
 
 use sta_core::{ContentKey, Fixed, Tick};
 
+use crate::features::Features;
+
 /// A reference from one definition to another, by ODF name as the data
 /// writes it. [`ContentDb`](crate::ContentDb) resolves `key` when it is built.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -171,6 +173,10 @@ pub struct UnitDef {
     /// Resource id a node gives (`resource`, text: latinum 1, metal or
     /// tritanium 2, biomatter 3, anything else 0); `None` when not set.
     pub resource: Option<u8>,
+    /// Feature switches resolved for this unit (profile defaults, mod
+    /// overrides, then the ODF's `Feature_<name>` keys); `None`: the
+    /// database-wide set. Read through `ContentDb::unit_features`.
+    pub features: Option<Features>,
     /// The resolved ODF, so keys no field reads yet stay reachable. Empty for
     /// definitions not made from an ODF.
     pub raw: Arc<sta_odf::Odf>,
@@ -204,6 +210,7 @@ impl UnitDef {
             mining_rate: Fixed::ZERO,
             transfer_rate: Fixed::ZERO,
             resource: None,
+            features: None,
             raw: Arc::new(raw),
         }
     }
@@ -252,6 +259,10 @@ pub struct WeaponDef {
     pub disable_weapons: bool,
     /// Cloak: a hit decloaks (`decloakOnHit`, default off).
     pub decloak_on_hit: bool,
+    /// Feature switches resolved for this weapon, as [`UnitDef::features`];
+    /// `None`: the database-wide set. Read through
+    /// `ContentDb::weapon_features`.
+    pub features: Option<Features>,
     pub raw: Arc<sta_odf::Odf>,
 }
 
@@ -277,6 +288,7 @@ impl WeaponDef {
             energy_cost: Fixed::ZERO,
             disable_weapons: true,
             decloak_on_hit: false,
+            features: None,
             raw: Arc::new(raw),
         }
     }

@@ -28,7 +28,8 @@ use sta_core::Fixed;
 use sta_odf::Odf;
 
 use crate::def::DefRef;
-use crate::features::Profile;
+use crate::features::{Features, Profile};
+use crate::profile::{resolve_features, Overrides};
 use crate::index::OdfIndex;
 use crate::{ContentDb, Result, Warning};
 
@@ -201,8 +202,19 @@ pub type Loader<'a> = dyn FnMut(&str, usize) -> Option<String> + 'a;
 
 /// Build the database from ODFs found by `stems`. [`load`] is this over an
 /// install; tests give an in-memory loader.
-pub fn load_with(profile: Profile, stems: &[String], loader: &mut Loader<'_>) -> Result<(ContentDb, Vec<Warning>)> {
+pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], loader: &mut Loader<'_>) -> Result<(ContentDb, Vec<Warning>)> {
     let mut warnings = Vec::new();
+    for name in &mod_overrides.unknown {
+        warnings.push(Warning::new("info.ini", format!("[Features] {name} is not a feature switch")));
+    }
+    // Defaults < mod overrides < the ODF's own `Feature_<name>` keys.
+    let features_of = |file: &str, odf: &Odf, warnings: &mut Vec<Warning>| -> Features {
+        let own = Overrides::from_odf_keys(odf.keys().filter_map(|k| Some((k, odf.raw(k)?))));
+        for name in &own.unknown {
+            warnings.push(Warning::new(file, format!("Feature_{name} is not a feature switch")));
+        }
+        resolve_features(profile, &[mod_overrides, &own])
+    };
     let mut resolved: BTreeMap<String, Option<Arc<Odf>>> = BTreeMap::new();
     let mut get = |name: &str, warn: &mut Vec<Warning>, loader: &mut Loader<'_>| -> Option<Arc<Odf>> {
         let key = stem(name);
@@ -232,7 +244,7 @@ pub fn load_with(profile: Profile, stems: &[String], loader: &mut Loader<'_>) ->
         }
     }
 
-    let mut builder = ContentDb::builder().profile(profile);
+    let mut builder = ContentDb::builder().profile(profile).features(resolve_features(profile, &[mod_overrides]));
     let mut weapon_arcs = BTreeMap::new();
     let mut weapon_names = BTreeSet::new();
     for (s, odf) in &weapons {
@@ -243,7 +255,8 @@ pub fn load_with(profile: Profile, stems: &[String], loader: &mut Loader<'_>) ->
             }
             found
         });
-        let (def, arc) = crate::weapon::weapon_def(s, odf, ord.as_deref(), &mut warnings);
+        let (mut def, arc) = crate::weapon::weapon_def(s, odf, ord.as_deref(), &mut warnings);
+        def.features = Some(features_of(&format!("{s}.odf"), odf, &mut warnings));
         weapon_arcs.insert(stem(s), arc);
         weapon_names.insert(stem(s));
         builder = builder.weapon(def);
@@ -263,6 +276,7 @@ pub fn load_with(profile: Profile, stems: &[String], loader: &mut Loader<'_>) ->
         };
         let mut def = crate::unit::unit_def(s, odf, phys.as_deref(), &mut warnings);
         let file = format!("{s}.odf");
+        def.features = Some(features_of(&file, odf, &mut warnings));
         // References to ODFs that are not definitions are dropped and listed,
         // so the database always builds.
         def.hardpoints.retain_mut(|h| {
@@ -295,7 +309,7 @@ pub fn load_with(profile: Profile, stems: &[String], loader: &mut Loader<'_>) ->
 /// Build the database from every ODF of a mounted install.
 pub fn load(vfs: &sta_vfs::Vfs, profile: Profile, index: &OdfIndex) -> Result<(ContentDb, Vec<Warning>)> {
     let stems: Vec<String> = index.iter().map(|(s, _)| s.to_owned()).collect();
-    load_with(profile, &stems, &mut |n, v| index.load(vfs, n, v))
+    load_with(profile, &Overrides::from_vfs(vfs), &stems, &mut |n, v| index.load(vfs, n, v))
 }
 
 #[cfg(test)]
@@ -348,7 +362,7 @@ mod tests {
 
     fn fixture_db() -> (ContentDb, Vec<Warning>) {
         let map: HashMap<String, &str> = FIXTURES.iter().map(|(n, t)| (format!("{n}.odf"), *t)).collect();
-        load_with(Profile::Fo4, &stems(), &mut |n, v| {
+        load_with(Profile::Fo4, &Overrides::default(), &stems(), &mut |n, v| {
             let n = if n.ends_with(".odf") { n.to_owned() } else { format!("{n}.odf") };
             if v == 0 { map.get(&n.to_ascii_lowercase()).map(|t| (*t).to_owned()) } else { None }
         })
@@ -463,11 +477,54 @@ mod tests {
         let mut rev = stems();
         rev.reverse();
         let map: HashMap<String, &str> = FIXTURES.iter().map(|(n, t)| (format!("{n}.odf"), *t)).collect();
-        let (b, _) = load_with(Profile::Fo4, &rev, &mut |n, v| {
+        let (b, _) = load_with(Profile::Fo4, &Overrides::default(), &rev, &mut |n, v| {
             let n = if n.ends_with(".odf") { n.to_owned() } else { format!("{n}.odf") };
             if v == 0 { map.get(&n.to_ascii_lowercase()).map(|t| (*t).to_owned()) } else { None }
         })
         .unwrap();
         assert_eq!(a.hash(), b.hash());
+    }
+
+    /// Defaults < `info.ini` `[Features]` < the ODF's `Feature_<name>` keys,
+    /// per unit and per weapon; the database-wide set ignores the ODF keys.
+    #[test]
+    fn odf_keys_override_one_defs_feature() {
+        let fixtures: &[(&str, &str)] = &[
+            ("plain", "[GameObjectClass]\nclassLabel = \"craft\"\nunitName = \"A\"\n"),
+            ("noarcs", "[GameObjectClass]\nclassLabel = \"craft\"\nunitName = \"B\"\nFeature_fire_arcs = 0\nFeature_bogus = 1\n"),
+            ("pd", "[WeaponClass]\nclassLabel = \"cannon\"\nwpnName = \"PD\"\nFeature_a1_compat = 1\nFeature_turrets = 0\n"),
+            ("gun", "[WeaponClass]\nclassLabel = \"cannon\"\nwpnName = \"Gun\"\n"),
+        ];
+        let map: HashMap<String, &str> = fixtures.iter().map(|(n, t)| (format!("{n}.odf"), *t)).collect();
+        let stems: Vec<String> = fixtures.iter().map(|(n, _)| (*n).to_owned()).collect();
+        let run = |profile: Profile, mod_ov: &Overrides| {
+            load_with(profile, mod_ov, &stems, &mut |n, v| {
+                let n = if n.ends_with(".odf") { n.to_owned() } else { format!("{n}.odf") };
+                if v == 0 { map.get(&n.to_ascii_lowercase()).map(|t| (*t).to_owned()) } else { None }
+            })
+            .unwrap()
+        };
+        let (db, warnings) = run(Profile::Native, &Overrides::default());
+        assert!(Profile::Native.features().fire_arcs && Profile::Native.features().turrets);
+        let plain = db.unit(db.key("plain").unwrap()).unwrap();
+        let noarcs = db.unit(db.key("noarcs").unwrap()).unwrap();
+        assert!(db.unit_features(plain).fire_arcs);
+        assert!(!db.unit_features(noarcs).fire_arcs, "the ODF switches it off for this unit");
+        assert!(db.features().fire_arcs, "the database-wide set is untouched");
+        let pd = db.weapon(db.key("pd").unwrap()).unwrap();
+        let gun = db.weapon(db.key("gun").unwrap()).unwrap();
+        assert!(db.weapon_features(pd).a1_compat && !db.features().a1_compat);
+        assert!(!db.weapon_features(pd).turrets);
+        assert_eq!(db.weapon_features(gun), db.features());
+        assert!(warnings.iter().any(|w| w.file == "noarcs.odf" && w.message.contains("bogus")), "{warnings:?}");
+        // A mod-level switch sits under the ODF key.
+        let mod_ov = Overrides::from_info_ini("[Features]\nfire_arcs = 0\nturrets = 0\n");
+        let (db2, _) = run(Profile::Native, &mod_ov);
+        assert!(!db2.features().fire_arcs);
+        assert!(!db2.unit_features(db2.unit(db2.key("plain").unwrap()).unwrap()).fire_arcs);
+        // Overrides change the hash; unset ones do not.
+        let (same, _) = run(Profile::Native, &Overrides::default());
+        assert_eq!(same.hash(), db.hash());
+        assert_ne!(db2.hash(), db.hash());
     }
 }
