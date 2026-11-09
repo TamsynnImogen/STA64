@@ -13,6 +13,7 @@
 //!   (`sta_bench::parse`), one answer line per command on stdout.
 
 pub mod frames;
+pub mod marks;
 
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
@@ -72,6 +73,7 @@ pub fn run_sim_only(cfg: &LaunchConfig) -> i32 {
     }
     let target = cfg.ticks.unwrap_or(0);
     while bench.tick() < target && bench.advance() {}
+    marks::write_if_requested(&bench);
     println!("{}", digest_line(&mut bench));
     0
 }
@@ -135,6 +137,12 @@ fn run_headless_inner(cfg: &LaunchConfig) -> i32 {
                 .disable::<bevy::winit::WinitPlugin>(),
         )
         .add_plugins(runner);
+        if let Some(info) = app.world().get_resource::<bevy::render::renderer::RenderAdapterInfo>()
+            && frames::is_software_adapter(info.device_type, &info.name)
+        {
+            eprintln!("no GPU adapter: only a software adapter is available ({})", info.name);
+            return frames::NO_ADAPTER;
+        }
     }
     configure_sets(&mut app);
     app.insert_resource(AnimClock::new(cfg.clock_mode(), 0))
@@ -230,6 +238,7 @@ fn bench_frame(
     clock.end_frame();
     let frames_done = capture.as_ref().is_none_or(|c| c.done());
     if !open && frames_done && (bench.tick() >= budget.0 || bench.paused()) {
+        marks::write_if_requested(bench);
         println!("{}", digest_line(bench));
         exit.write(AppExit::Success);
     }

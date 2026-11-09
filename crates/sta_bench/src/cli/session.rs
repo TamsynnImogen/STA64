@@ -41,7 +41,13 @@ fn new_id() -> String {
 }
 
 fn pid_alive(pid: u32) -> bool {
-    Path::new(&format!("/proc/{pid}")).exists()
+    // No /proc on macOS: signal 0 only checks that the process exists.
+    Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
 }
 
 fn read_pid(dir: &Path, file: &str) -> Option<u32> {
@@ -109,7 +115,17 @@ fn start(o: &Opts) -> Outcome {
         Err(e) => {
             kill(child.id());
             kill(holder.id());
-            return Err(Fail::Error(format!("session did not start: {e} (see {}/err.log)", dir.display())));
+            let tail = |f: &str| {
+                let t = fs::read_to_string(dir.join(f)).unwrap_or_default();
+                let lines: Vec<&str> = t.lines().collect();
+                lines[lines.len().saturating_sub(15)..].join("\n")
+            };
+            return Err(Fail::Error(format!(
+                "session did not start: {e} (see {}/err.log)\n--- err.log ---\n{}\n--- out.log ---\n{}",
+                dir.display(),
+                tail("err.log"),
+                tail("out.log")
+            )));
         }
     }
     println!("  drive: sta-bench drive --session {id} \"<command>\"");
