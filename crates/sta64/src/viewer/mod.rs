@@ -1,7 +1,7 @@
 //! Model viewer: browse every model visible through the mounted install.
 //!
 //! Controls: Left/Right previous/next model, PageUp/PageDown jump 10, Home first,
-//! T cycle team colour, B toggle Borg (`_b` textures, `borg` node), D toggle
+//! T cycle team colour, H hull lighting (Refit look / Bevy PBR), B toggle Borg (`_b` textures, `borg` node), D toggle
 //! damage-state nodes, left-drag orbit, right-drag pan, wheel zoom, R reset view.
 
 use crate::render::model_scene::{self, SpawnCtx, TeamPart};
@@ -196,10 +196,11 @@ fn swing_light(keys: Res<ButtonInput<KeyCode>>, clock: Res<crate::clock::AnimClo
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn input(
     keys: Res<ButtonInput<KeyCode>>,
     mut browser: ResMut<Browser>,
-    mut team_parts: Query<&MeshMaterial3d<StandardMaterial>, With<TeamPart>>,
+    team_parts: Query<(Option<&MeshMaterial3d<StandardMaterial>>, Option<&crate::render::hulls::HullSource>), With<TeamPart>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut orbit: Query<&mut Orbit>,
     teams: Res<TeamColours>,
@@ -230,8 +231,10 @@ fn input(
     if keys.just_pressed(KeyCode::KeyT) {
         browser.team = (browser.team + 1) % teams.0.len();
         let c = teams.0[browser.team].1;
-        for m in &mut team_parts {
-            if let Some(mut mat) = materials.get_mut(&m.0) {
+        for (m, hull) in &team_parts {
+            // A part drawn with the hull look keeps its standard material as the source.
+            let Some(handle) = m.map(|m| &m.0).or(hull.map(|h| &h.source)) else { continue };
+            if let Some(mut mat) = materials.get_mut(handle) {
                 mat.base_color = c;
             }
         }
@@ -411,7 +414,7 @@ fn hud(browser: Res<Browser>, teams: Res<TeamColours>, mut q: Query<&mut Text, W
     for mut t in &mut q {
         t.0 = format!(
             "STA64 {} model viewer\n{}\n\n{}\nteam colour: {}   Borg: {}   damage: {}   normal maps: {}\n\n\
-             Left/Right model  PgUp/PgDn x10  Home first  T team colour  B Borg  D damage  N normal maps\n\
+             Left/Right model  PgUp/PgDn x10  Home first  T team colour  B Borg  D damage  N normal maps  H hull lighting A/B\n\
              hold L swing the light  \
              left-drag orbit  right-drag pan  wheel zoom  R reset view",
             env!("CARGO_PKG_VERSION"),
