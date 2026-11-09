@@ -8,9 +8,7 @@ away. An enemy cruiser (team 3, sensor range 1000) flies along the x axis
 through the station's range. Players 1 and 2 see it exactly while it is
 inside 1500 of the station (the ally shares vision); the enemy always sees
 its own cruiser, sees the station only inside 1000, and never sees the far
-ally. Cloak is not covered: `Order::Cloak` is not implemented in the sim yet,
-so a cloaked ship cannot be made from a scenario (the in-crate sensors test
-sets the flag directly).
+ally. Cloak is in `cloak.md`.
 
 1. Expect player 1 does not see "cruiser" at tick 0
 2. Expect player 3 sees "cruiser" at tick 0

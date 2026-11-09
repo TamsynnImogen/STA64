@@ -5216,6 +5216,12 @@ dependencies = [
 [[package]]
 name = "sta_ai"
 version = "0.1.0"
+dependencies = [
+ "sta_content",
+ "sta_core",
+ "sta_sim",
+ "thiserror 2.0.21",
+]
 
 [[package]]
 name = "sta_assets"
@@ -5303,6 +5309,7 @@ dependencies = [
  "serde",
  "sta_content",
  "sta_core",
+ "sta_odf",
 ]
 
 [[package]]

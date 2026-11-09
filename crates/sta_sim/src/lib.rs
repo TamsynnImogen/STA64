@@ -33,6 +33,7 @@ pub mod setup;
 pub mod snapshot;
 pub mod sensors;
 pub mod source;
+pub mod specials;
 pub mod spatial;
 pub mod spawn;
 pub mod victory;
@@ -106,6 +107,8 @@ pub struct Sim {
     production: production::Production,
     /// Eliminated seats (SIM-13); in the digest once any exists.
     victory: victory::Victory,
+    /// Special energy and cloaks (SIM-14); in the digest once any exists.
+    specials: specials::Specials,
 }
 
 fn dt() -> Fixed {
@@ -223,6 +226,7 @@ impl Sim {
             economy: Default::default(),
             production: Default::default(),
             victory: Default::default(),
+            specials: Default::default(),
         }
     }
 
@@ -297,7 +301,14 @@ impl Sim {
                 let Some(db) = self.content.clone() else { return false };
                 self.weapons.order_attack(&db, &self.units, c.player, units, *target)
             }
-            _ => false,
+            Order::Cloak { units, on } => {
+                let Some(db) = self.content.clone() else { return false };
+                self.specials.order_cloak(&db, &self.units, c.player, units, *on)
+            }
+            Order::Special { units, slot, .. } => {
+                let Some(db) = self.content.clone() else { return false };
+                self.specials.order_special(&db, &self.units, c.player, units, *slot)
+            }
         }
     }
 
@@ -308,6 +319,7 @@ impl Sim {
         }
         if let Some(db) = self.content.clone() {
             combat::damage::recharge(&mut self.units, &db);
+            self.specials.step(&mut self.units, &db, &mut self.events);
             let from = self.events.len();
             self.weapons.step(self.tick, &self.units, &db, &self.players, &mut self.events);
             let mut lost = Vec::new();
@@ -315,6 +327,7 @@ impl Sim {
                 lost.extend(self.units.get(id).map(|u| u.owner));
                 self.despawn(id, by);
             }
+            self.specials.react(&mut self.units, &db, &mut self.events, from);
             self.victory.step(&self.units, &mut lost, &mut self.events);
         }
         if let Some(db) = &self.content {
@@ -380,6 +393,9 @@ impl Sim {
         }
         if !self.victory.is_empty() {
             self.victory.hash_into(&mut h);
+        }
+        if !self.specials.is_empty() {
+            self.specials.hash_into(&mut h);
         }
         h.0
     }
