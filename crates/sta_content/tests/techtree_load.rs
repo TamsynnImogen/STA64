@@ -53,7 +53,7 @@ fn load(layers: &[(&str, &PathBuf)]) -> (ContentDb, Vec<Warning>) {
 fn start_options(db: &ContentDb) -> Vec<(String, bool)> {
     let tree = db.tech_tree().unwrap();
     let owned = Owned::new("unitedfederation").with("fbase", 1);
-    tree.build_options(db, "fbase", &owned).into_iter().map(|o| (o.def.odf.clone(), matches!(o.availability, Availability::Available))).collect()
+    tree.build_options(db, "fbase", &owned, false).into_iter().map(|o| (o.def.odf.clone(), matches!(o.availability, Availability::Available))).collect()
 }
 
 #[test]

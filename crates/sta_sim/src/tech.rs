@@ -14,12 +14,15 @@
 //!   like every other refused build.
 //! - A db without a tech tree (`ContentDb::tech_tree()` is `None`, as for
 //!   `fake::db()`) allows everything. When there is a tree, a def it does not
-//!   list ([`Availability::NotListed`]) is blocked, except the hidden and
-//!   variant items [`sta_content::TechTree::availability_for_builder`] lets through: a
-//!   def in the db whose build-list slot has no `builditem#availability`
-//!   line while the builder flags other slots, or whose `originalclass` the tree lists (never an `edit_` page).
-//!   The HUD's build page asks the same function. The engine's own handling
-//!   of unlisted ODFs is undocumented; the rule is inferred from install data.
+//!   list ([`Availability::NotListed`]) is blocked unless
+//!   [`sta_content::TechTree::availability_for_builder`] lets it through: a
+//!   def in the db (never an `edit_` page) whose build slot carries an
+//!   availability or provided line, or whose builder flags no slot at all,
+//!   is open to everyone; a bare slot of a builder that flags others is an
+//!   AI/engine tail slot, open to AI seats (`Control::Ai` in the setup, kept
+//!   as `Sim::ai_seats`) and blocked for humans. The HUD's build page asks
+//!   the same function. The engine's own handling of unlisted ODFs is
+//!   undocumented; the rule is inferred from install data.
 //! - Checked when the order is accepted, not again when a queued item
 //!   starts or a rig deploys.
 
@@ -88,6 +91,7 @@ pub(crate) fn build_allowed(
     db: &ContentDb,
     units: &Entities,
     seats: &[(PlayerId, TeamId)],
+    ai_seats: &[PlayerId],
     builder: EntityId,
     what: ContentKey,
 ) -> bool {
@@ -96,7 +100,7 @@ pub(crate) fn build_allowed(
     let race = db.unit(b.def).map_or("", |d| d.race.as_str());
     let Some(name) = db.name(what) else { return false };
     let state = Owned::new(db, units, seats, b.owner, race);
-    matches!(tree.availability_for_builder(db, name, db.name(b.def).unwrap_or(""), &state), Availability::Available)
+    matches!(tree.availability_for_builder(db, name, db.name(b.def).unwrap_or(""), &state, ai_seats.contains(&b.owner)), Availability::Available)
 }
 
 #[cfg(test)]
@@ -147,7 +151,7 @@ mod tests {
             id: PlayerId(id),
             team: TeamId(team),
             race: "fx".into(),
-            control: Control::Human,
+            control: if id == 0 { Control::Human } else { Control::Ai("test".into()) },
         };
         Sim::from_setup(&GameSetup {
             seed: 3,
@@ -195,68 +199,68 @@ mod tests {
 
     #[test]
     fn a_def_the_tree_does_not_list_is_blocked() {
-        // Blocked unless a hidden slot or an `originalclass` lets it through
-        // (see the tests below): `fake::db()`'s units have neither.
-        let mut sim = game(Some("fx_frigate 0\n"), [0, 1]);
+        // The tree lists the frigate only. The cruiser is a bare slot of a
+        // yard that flags another one, so a human cannot build it; the
+        // flagged slot (`edit_page` is the yard's slot 2, see `yard_game`)
+        // does not change that.
+        let mut sim = yard_game("fx_frigate 0\nfx_yard 0\n", false, false);
         let yard = spawn(&mut sim, "fx_yard", P0);
         assert!(build(&mut sim, P0, yard, "fx_frigate"));
         assert!(!build(&mut sim, P0, yard, "fx_cruiser"));
     }
 
-    /// The yard's slot 1 holds the cruiser (with an availability line unless
-    /// `hidden`); the cruiser's ODF says `original`.
-    fn yard_game(tree: &str, hidden: bool, original: Option<&str>) -> Sim {
+    /// The yard's slot 1 holds the cruiser, flagged (an availability line)
+    /// when `flagged`; slot 3 is flagged too unless `menu`, which leaves the
+    /// yard with no flag at all.
+    fn yard_game(tree: &str, flagged: bool, menu: bool) -> Sim {
         game_with(Some(tree), [0, 1], |u| {
-            // Slot 2 always has a line, so the yard marks its slots.
-            let slot = if hidden { "" } else { "builditem1availability = 0\n" };
-            match u.odf.as_str() {
-                "fx_yard" => {
-                    u.raw = raw("fx_yard", &format!("builditem1 = \"fx_cruiser\"\n{slot}builditem2 = \"edit_page\"\nbuilditem3availability = 0\n"));
-                    u.build.list.push(sta_content::DefRef::new("edit_page"));
-                }
-                "fx_cruiser" => {
-                    u.raw = raw("fx_cruiser", &original.map(|o| format!("originalclass = \"{o}\"\n")).unwrap_or_default());
-                }
-                _ => {}
+            if u.odf == "fx_yard" {
+                let slot1 = if flagged { "builditem1availability = 0\n" } else { "" };
+                let other = if menu { "" } else { "builditem3provided = 1\n" };
+                u.raw = raw("fx_yard", &format!("builditem1 = \"fx_cruiser\"\n{slot1}builditem2 = \"edit_page\"\n{other}"));
+                u.build.list.push(sta_content::DefRef::new("edit_page"));
             }
         })
     }
 
     #[test]
-    fn a_hidden_slot_the_tree_omits_is_allowed() {
-        let mut sim = yard_game("fx_yard 0\n", true, None);
+    fn a_flagged_slot_is_allowed_to_humans() {
+        let mut sim = yard_game("fx_yard 0\n", true, false);
         let yard = spawn(&mut sim, "fx_yard", P0);
         assert!(build(&mut sim, P0, yard, "fx_cruiser"));
-        // The same slot with an availability line is just unlisted.
-        let mut sim = yard_game("fx_yard 0\n", false, None);
-        let yard = spawn(&mut sim, "fx_yard", P0);
-        assert!(!build(&mut sim, P0, yard, "fx_cruiser"));
     }
 
     #[test]
-    fn a_variant_of_a_listed_def_is_allowed() {
-        let mut sim = yard_game("fx_yard 0\n", false, Some("FX_Yard.odf"));
+    fn a_builder_with_no_flags_offers_unlisted_slots_to_humans() {
+        let mut sim = yard_game("fx_yard 0\n", false, true);
         let yard = spawn(&mut sim, "fx_yard", P0);
         assert!(build(&mut sim, P0, yard, "fx_cruiser"));
-        // An original the tree does not list does not count.
-        let mut sim = yard_game("fx_yard 0\n", false, Some("fx_frigate"));
-        let yard = spawn(&mut sim, "fx_yard", P0);
-        assert!(!build(&mut sim, P0, yard, "fx_cruiser"));
     }
 
     #[test]
-    fn an_editor_page_is_blocked_even_from_a_hidden_slot() {
-        // Slot 2 of the yard holds `edit_page` with no availability line.
-        let mut sim = yard_game("fx_yard 0\n", true, None);
-        let yard = spawn(&mut sim, "fx_yard", P0);
-        assert!(!build(&mut sim, P0, yard, "edit_page"));
+    fn a_tail_slot_is_blocked_for_humans_and_allowed_for_ai() {
+        // Slot 1 is bare while slot 3 is flagged. P0 is Human, P1 is Ai.
+        let mut sim = yard_game("fx_yard 0\n", false, false);
+        let mine = spawn(&mut sim, "fx_yard", P0);
+        let theirs = spawn(&mut sim, "fx_yard", P1);
+        assert!(!build(&mut sim, P0, mine, "fx_cruiser"));
+        assert!(build(&mut sim, P1, theirs, "fx_cruiser"));
     }
 
     #[test]
-    fn a_withheld_def_stays_blocked_from_a_hidden_slot() {
-        let mut sim = yard_game("fx_yard 0\nfx_cruiser -1\n", true, None);
-        let yard = spawn(&mut sim, "fx_yard", P0);
-        assert!(!build(&mut sim, P0, yard, "fx_cruiser"));
+    fn editor_pages_are_blocked_even_for_ai() {
+        let mut sim = yard_game("fx_yard 0\n", false, true);
+        let theirs = spawn(&mut sim, "fx_yard", P1);
+        assert!(!build(&mut sim, P1, theirs, "edit_page"));
+    }
+
+    #[test]
+    fn a_withheld_def_stays_blocked_even_for_ai() {
+        let mut sim = yard_game("fx_yard 0\nfx_cruiser -1\n", true, true);
+        let mine = spawn(&mut sim, "fx_yard", P0);
+        let theirs = spawn(&mut sim, "fx_yard", P1);
+        assert!(!build(&mut sim, P0, mine, "fx_cruiser"));
+        assert!(!build(&mut sim, P1, theirs, "fx_cruiser"));
     }
 
     #[test]

@@ -40,9 +40,9 @@
 //! Names are ODF stems, lower-cased without `.odf`, as everywhere in the
 //! content seam. An ODF the tree does not list is [`Availability::NotListed`].
 //! For a build-list item that is not the end of it: see
-//! [`TechTree::availability_for_builder`], which lets through hidden and
-//! variant items the engine builds without a tree entry (inferred from
-//! install data; the engine's own rule is undocumented).
+//! [`TechTree::availability_for_builder`], which says who may build the
+//! unlisted slots of an ODF (inferred from install data; the engine's own
+//! rule is undocumented).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -398,67 +398,70 @@ impl TechTree {
     }
 
     /// Whether `odf` may be built by `builder` (a unit ODF of `db`) for a
-    /// player in `state`. This is [`availability`](TechTree::availability)
-    /// except for items the tree does not list: Fleet Operations 4.0 omits
-    /// the avatar-form main bases (`fed_outpostZ`, ...) and some hidden helper
-    /// forms, yet its construction ships build them. A [`NotListed`](Availability::NotListed)
-    /// item of a build list is [`Available`](Availability::Available) when the
-    /// def exists in `db` and
+    /// player in `state`; `ai` says the player is computer-controlled. This
+    /// is [`availability`](TechTree::availability) except for items the tree
+    /// does not list. Fleet Operations 4.0's tree omits the avatar-form main
+    /// bases (`fed_outpostZ`, ...) and some helper forms, and ODFs of every
+    /// game carry build slots the tree never mentions. A
+    /// [`NotListed`](Availability::NotListed) build-list item is
     ///
-    /// - (a) the builder's slot for it has no `builditem#availability` line
-    ///   (a hidden or provided slot) while the builder flags other slots (`availability` or `provided`), or
-    /// - (b) its ODF has an `originalclass` naming a def the tree lists (an
-    ///   evolve or variant form of a listed unit),
+    /// 1. blocked when it is not a def of `db` or the builder or item is a
+    ///    map-editor page (`edit_` prefix);
+    /// 2. [`Available`](Availability::Available) to every player when its
+    ///    slot carries a `builditem#availability` or `builditem#provided`
+    ///    line, or when the builder carries no such line on any slot (a menu
+    ///    builder: all its slots are plain);
+    /// 3. otherwise an AI/engine tail slot (the builder flags some slots and
+    ///    this one is bare): available to AI-controlled seats only.
     ///
-    /// and neither the builder nor the item is a map-editor page (`edit_`
-    /// prefix). Withheld and Locked results are never overridden. Both the
-    /// sim's gate and the HUD's build page ask this, so they agree.
-    pub fn availability_for_builder(&self, db: &ContentDb, odf: &str, builder: &str, state: &dyn TechState) -> Availability {
+    /// `Withheld` and `Locked` are never overridden. Both the sim's gate and
+    /// the HUD's build page ask this, so they agree. The engine's own rule is
+    /// undocumented; this is inferred from install data.
+    pub fn availability_for_builder(&self, db: &ContentDb, odf: &str, builder: &str, state: &dyn TechState, ai: bool) -> Availability {
         let a = self.availability(odf, state);
-        if a == Availability::NotListed && self.unlisted_item_allowed(db, odf, builder) {
+        if a == Availability::NotListed && self.unlisted_item_allowed(db, odf, builder, ai) {
             Availability::Available
         } else {
             a
         }
     }
 
-    fn unlisted_item_allowed(&self, db: &ContentDb, odf: &str, builder: &str) -> bool {
+    fn unlisted_item_allowed(&self, db: &ContentDb, odf: &str, builder: &str, ai: bool) -> bool {
         let (item, builder) = (stem(odf), stem(builder));
         if item.starts_with("edit_") || builder.starts_with("edit_") {
             return false;
         }
-        let Some(def) = db.key(&item).and_then(|k| db.unit(k)) else { return false };
+        if db.key(&item).and_then(|k| db.unit(k)).is_none() {
+            return false;
+        }
         let Some(b) = db.key(&builder).and_then(|k| db.unit(k)) else { return false };
         let raw = &b.raw;
-        // Only a builder that flags its slots (an availability or a provided
-        // line on some slot) says anything by leaving one unflagged; most
-        // ODFs flag none.
-        let marks_slots = raw.keys().any(|k| {
+        let mut builder_flags = false;
+        let mut slot_flagged = false;
+        for k in raw.keys() {
             let l = k.to_ascii_lowercase();
-            l.starts_with("builditem") && (l.ends_with("availability") || l.ends_with("provided"))
-        });
-        let hidden_slot = marks_slots && raw.keys().any(|k| {
-            let l = k.to_ascii_lowercase();
-            let Some(n) = l.strip_prefix("builditem").filter(|n| !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit())) else {
-                return false;
-            };
-            raw.raw(k).is_some_and(|v| stem(v.trim().trim_matches('"')) == item)
-                && raw.raw(&format!("builditem{n}availability")).is_none()
-        });
-        let variant = def.raw.str("originalclass").is_some_and(|o| self.entries.contains_key(&stem(o)));
-        hidden_slot || variant
+            let Some(rest) = l.strip_prefix("builditem") else { continue };
+            let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+            if digits == 0 || !matches!(&rest[digits..], "availability" | "provided") {
+                continue;
+            }
+            builder_flags = true;
+            let n = &rest[..digits];
+            slot_flagged |= raw.raw(&format!("builditem{n}")).is_some_and(|v| stem(v.trim().trim_matches('"')) == item);
+        }
+        slot_flagged || !builder_flags || ai
     }
 
     /// A builder's build list, in button order, each with its availability
     /// (see [`availability_for_builder`](TechTree::availability_for_builder)).
     /// `builder` is a unit ODF (any case, `.odf` optional) of `db`; an
     /// unknown builder has an empty list.
-    pub fn build_options(&self, db: &ContentDb, builder: &str, state: &dyn TechState) -> Vec<BuildOption> {
+    pub fn build_options(&self, db: &ContentDb, builder: &str, state: &dyn TechState, ai: bool) -> Vec<BuildOption> {
         let Some(unit) = db.key(&stem(builder)).and_then(|k| db.unit(k)) else { return Vec::new() };
         unit.build
             .list
             .iter()
-            .map(|d| BuildOption { def: d.clone(), availability: self.availability_for_builder(db, &d.odf, builder, state) })
+            .map(|d| BuildOption { def: d.clone(), availability: self.availability_for_builder(db, &d.odf, builder, state, ai) })
             .collect()
     }
 
@@ -1099,7 +1102,7 @@ mod tests {
         assert!(t.check_against(&db).is_empty());
         let me = Owned::new("fx");
 
-        let opts = t.build_options(&db, "fx_yard", &me);
+        let opts = t.build_options(&db, "fx_yard", &me, false);
         assert_eq!(opts.iter().map(|o| o.def.odf.as_str()).collect::<Vec<_>>(), ["fx_cruiser", "fx_frigate"]);
         // No yard yet: the cruiser is locked, the frigate withheld.
         assert_eq!(
@@ -1108,17 +1111,17 @@ mod tests {
         );
         assert_eq!(opts[1].availability, Availability::Withheld);
         let with_yard = me.with("fx_yard", 1);
-        assert!(t.build_options(&db, "FX_YARD.odf", &with_yard)[0].availability.is_available());
+        assert!(t.build_options(&db, "FX_YARD.odf", &with_yard, false)[0].availability.is_available());
         // The station builds a miner with no prerequisite.
-        assert!(t.build_options(&db, "fx_station", &Owned::new("fx"))[0].availability.is_available());
-        assert!(t.build_options(&db, "nobody", &Owned::new("fx")).is_empty());
+        assert!(t.build_options(&db, "fx_station", &Owned::new("fx"), false)[0].availability.is_available());
+        assert!(t.build_options(&db, "nobody", &Owned::new("fx"), false).is_empty());
 
         let bad = tt("ghost 1 fx_yard\n");
         assert_eq!(bad.check_against(&db).len(), 1);
     }
 
-    /// A db whose `yard` lists `item` in slot 1 (an availability line unless
-    /// `hidden`), plus the extra `(name, ODF text)` units.
+    /// A db whose builder `yard` has ODF text `slot` and lists each of the
+    /// extra `(name, ODF text)` units.
     fn rule_db(yard: &str, slot: &str, extra: &[(&str, &str)]) -> ContentDb {
         use crate::UnitDef;
         let raw = |n: &str, t: &str| std::sync::Arc::new(sta_odf::resolve(n, &mut |_| Some(t.to_owned())).unwrap());
@@ -1135,41 +1138,46 @@ mod tests {
     }
 
     #[test]
-    fn unlisted_items_follow_the_hidden_and_variant_rule() {
+    fn unlisted_items_follow_the_flagged_slot_rule() {
         let me = Owned::new("fx");
         let t = tt("yard 0\nlisted 0\nwithheld -1\n");
-        let slots = "builditem1 = \"hid\"\nbuilditem2 = \"shown\"\nbuilditem2availability = 0\n\
-            builditem3 = \"var\"\nbuilditem3availability = 0\nbuilditem4 = \"withheld\"\n\
-            builditem5 = \"edit_x\"\nbuilditem6 = \"ghost\"\nBuildItem7 = \"Hid2.odf\"\n";
-        let db = rule_db(
-            "yard",
-            slots,
-            &[
-                ("hid", ""),
-                ("shown", ""),
-                ("var", "originalclass = \"Listed\"\n"),
-                ("withheld", ""),
-                ("edit_x", ""),
-                ("hid2", ""),
-            ],
-        );
-        let a = |item: &str| t.availability_for_builder(&db, item, "yard", &me);
-        // (a) hidden slot, any case or extension.
-        assert!(a("hid").is_available());
-        assert!(a("HID2.odf").is_available());
-        assert_eq!(a("shown"), Availability::NotListed);
-        // (b) originalclass names a listed def.
-        assert!(a("var").is_available());
-        // Explicitly withheld stays so, hidden slot or not.
-        assert_eq!(a("withheld"), Availability::Withheld);
-        // Editor pages, as item or as builder, and defs not in the db.
-        assert_eq!(a("edit_x"), Availability::NotListed);
-        assert_eq!(a("ghost"), Availability::NotListed);
-        assert_eq!(t.availability_for_builder(&db, "hid", "edit_yard", &me), Availability::NotListed);
-        assert_eq!(t.availability_for_builder(&db, "hid", "nobody", &me), Availability::NotListed);
+        // A builder that flags some slots: `tail*` slots are bare.
+        let slots = "builditem1 = \"flagged\"\nbuilditem1availability = 0\n\
+            builditem2 = \"prov\"\nbuilditem2provided = 1\n\
+            builditem3 = \"tail\"\nBuildItem4 = \"Tail2.odf\"\n\
+            builditem5 = \"withheld\"\nbuilditem6 = \"edit_x\"\nbuilditem7 = \"ghost\"\n";
+        let db = rule_db("yard", slots, &[("flagged", ""), ("prov", ""), ("tail", ""), ("tail2", ""), ("withheld", ""), ("edit_x", "")]);
+        let a = |item: &str, ai: bool| t.availability_for_builder(&db, item, "yard", &me, ai);
+        // Flagged slots: everyone.
+        assert!(a("flagged", false).is_available());
+        assert!(a("prov", false).is_available());
+        // Bare slots of a flagging builder: AI only (any case or extension).
+        assert_eq!(a("tail", false), Availability::NotListed);
+        assert_eq!(a("TAIL2.odf", false), Availability::NotListed);
+        assert!(a("tail", true).is_available());
+        assert!(a("TAIL2.odf", true).is_available());
+        // Withheld stays so for everyone.
+        assert_eq!(a("withheld", false), Availability::Withheld);
+        assert_eq!(a("withheld", true), Availability::Withheld);
+        // Editor pages and defs not in the db stay blocked, AI or not.
+        assert_eq!(a("edit_x", true), Availability::NotListed);
+        assert_eq!(a("ghost", true), Availability::NotListed);
+        assert_eq!(t.availability_for_builder(&db, "tail", "edit_yard", &me, true), Availability::NotListed);
+        assert_eq!(t.availability_for_builder(&db, "tail", "nobody", &me, true), Availability::NotListed);
         // build_options agrees.
-        let opts = t.build_options(&db, "yard", &me);
-        let ok: Vec<&str> = opts.iter().filter(|o| o.availability.is_available()).map(|o| o.def.odf.as_str()).collect();
-        assert_eq!(ok, ["hid", "var", "hid2"]);
+        let ok = |ai| {
+            t.build_options(&db, "yard", &me, ai).iter().filter(|o| o.availability.is_available()).map(|o| o.def.odf.clone()).collect::<Vec<_>>()
+        };
+        assert_eq!(ok(false), ["flagged", "prov"]);
+        assert_eq!(ok(true), ["flagged", "prov", "tail", "tail2"]);
+    }
+
+    #[test]
+    fn a_builder_without_flags_offers_its_unlisted_slots_to_everyone() {
+        let me = Owned::new("fx");
+        let t = tt("menu 0\n");
+        let db = rule_db("menu", "builditem1 = \"mod_a\"\nbuilditem2 = \"mod_b\"\n", &[("mod_a", ""), ("mod_b", "")]);
+        assert!(t.availability_for_builder(&db, "mod_a", "menu", &me, false).is_available());
+        assert!(t.availability_for_builder(&db, "mod_b", "menu", &me, true).is_available());
     }
 }

@@ -47,7 +47,7 @@ fn check(label: &str, vfs: &Vfs) {
             .iter()
             .map(|st| {
                 let owned = Owned::new(race).with(&st.odf, 1);
-                (st.odf.as_str(), tree.build_options(&db, &st.odf, &owned))
+                (st.odf.as_str(), tree.build_options(&db, &st.odf, &owned, false))
             })
             .collect();
         let avail = |o: &[sta_content::BuildOption]| o.iter().filter(|o| o.availability.is_available()).count();
@@ -78,78 +78,82 @@ fn check(label: &str, vfs: &Vfs) {
     assert!(dead_races.is_empty(), "{label}: races whose start bases have no available build option: {dead_races:?}");
 }
 
-/// The NotListed rule (`TechTree::availability_for_builder`): counts what it
-/// frees, checks no editor page is offered and, on Fleet Ops 4.0, that the
-/// avatar-form main bases and `kli_field_yardP4` build.
+/// The NotListed rule (`TechTree::availability_for_builder`): counts, per
+/// install, the (builder, item) slots the tree does not list that stay
+/// blocked, for humans and for AI seats; checks no editor page is offered;
+/// and, on Fleet Ops 4.0, that the `*Z` main bases are an AI-only tail slot
+/// of the `*ZS` construction ships while `kli_field_yardP4` (a flagged slot)
+/// is open to humans.
 fn not_listed_rule(label: &str, vfs: &Vfs, fo4: bool) {
     let (index, _) = OdfIndex::build(vfs);
     let (db, _) = ContentDb::load(vfs, &index).unwrap();
     let tree = db.tech_tree().expect("tech tree");
-    // A player owning one of everything: the strictest test that an editor
-    // page is never offered (nothing is Locked then).
+    // A player owning one of everything: nothing is Locked then, so only
+    // the NotListed rule decides.
     let everything = |race: &str| db.units().fold(Owned::new(race), |o, u| o.with(&u.odf, 1));
-    let (mut before, mut after) = (BTreeSet::new(), BTreeSet::new());
-    let mut freed = BTreeSet::new();
+    let flag = |k: &str| {
+        let l = k.to_ascii_lowercase();
+        l.strip_prefix("builditem").is_some_and(|r| {
+            let r = r.trim_start_matches(|c: char| c.is_ascii_digit());
+            r == "availability" || r == "provided"
+        })
+    };
+    let flagging = db.units().filter(|u| !u.build.list.is_empty() && u.raw.keys().any(flag)).count();
+    let builders = db.units().filter(|u| !u.build.list.is_empty()).count();
+    let (mut before, mut human, mut ai) = (BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
     for b in db.units() {
         let st = everything(&b.race);
         for item in &b.build.list {
             let pair = (b.odf.as_str(), item.odf.as_str());
-            if tree.availability(&item.odf, &st) == Availability::NotListed {
-                before.insert(pair);
-                if tree.availability_for_builder(&db, &item.odf, &b.odf, &st) == Availability::NotListed {
-                    after.insert(pair);
-                } else {
-                    freed.insert(item.odf.as_str());
-                    if std::env::var_os("STA64_TEST_VERBOSE").is_some() {
-                        let o = db.key(&item.odf).and_then(|k| db.unit(k)).and_then(|u| u.raw.str("originalclass").map(str::to_owned));
-                        let slots: Vec<String> = b.raw.keys().filter(|k| k.to_ascii_lowercase().starts_with("builditem") && b.raw.raw(k).is_some_and(|v| v.trim_matches('"').eq_ignore_ascii_case(&item.odf))).flat_map(|k| { let n = &k[9..]; ["availability", "provided", "code"].iter().filter_map(|f| b.raw.raw(&format!("builditem{n}{f}")).map(|v| format!("{f}={v}"))).collect::<Vec<_>>() }).collect();
-                        eprintln!("DBG freed {} <- {} originalclass={o:?} slot={slots:?}", item.odf, b.odf);
-                    }
-                }
+            if tree.availability(&item.odf, &st) != Availability::NotListed {
+                continue;
             }
-            let offered = tree.availability_for_builder(&db, &item.odf, &b.odf, &st).is_available();
-            assert!(
-                !offered || !(item.odf.to_ascii_lowercase().starts_with("edit_") || b.odf.to_ascii_lowercase().starts_with("edit_")),
-                "{label}: editor page offered: {} from {}",
-                item.odf,
-                b.odf
-            );
+            before.insert(pair);
+            let h = tree.availability_for_builder(&db, &item.odf, &b.odf, &st, false);
+            let a = tree.availability_for_builder(&db, &item.odf, &b.odf, &st, true);
+            if !h.is_available() {
+                human.insert(pair);
+            }
+            if !a.is_available() {
+                ai.insert(pair);
+            }
+            let editor = item.odf.to_ascii_lowercase().starts_with("edit_") || b.odf.to_ascii_lowercase().starts_with("edit_");
+            assert!(!(editor && (h.is_available() || a.is_available())), "{label}: editor page offered: {} from {}", item.odf, b.odf);
         }
     }
-    // No install defines editor pages as units (the loader never sees them),
-    // so the `edit_` guard is belt and braces; say so if one ever appears.
-    let editors = db.units().filter(|u| u.odf.to_ascii_lowercase().starts_with("edit_")).count();
-    eprintln!("{label}: {editors} edit_ defs in the db");
     let items = |s: &BTreeSet<(&str, &str)>| s.iter().map(|p| p.1).collect::<BTreeSet<_>>().len();
     eprintln!(
-        "{label}: NotListed (builder, item) slots blocked: before {} ({} distinct items), after {} ({} distinct); freed items: {freed:?}",
+        "{label}: {flagging} of {builders} builders flag slots; NotListed slots (distinct items) blocked: before {} ({}), after for humans {} ({}), after for AI {} ({})",
         before.len(),
         items(&before),
-        after.len(),
-        items(&after)
+        human.len(),
+        items(&human),
+        ai.len(),
+        items(&ai)
     );
     if !fo4 {
         return;
     }
-    // Each Z base builds from its construction ship with only the ship and
-    // the start base (its Y twin) owned.
+    // Each Z main base: not offered to a human from the `*ZS` ships that
+    // carry it as a bare tail slot, offered to an AI seat, with only the
+    // ship and the start base (its Y twin) owned.
     for z in ["fed_outpostZ", "rom_starbaseZ", "bor_assi_matrixZ", "dom_cloning_facZ", "kli_kahless_stationZ"] {
         let ships: Vec<_> = db.units().filter(|u| u.odf.to_ascii_lowercase().ends_with("zs") && u.build.list.iter().any(|d| d.odf.eq_ignore_ascii_case(z))).collect();
         assert!(!ships.is_empty(), "{label}: no *ZS ship builds {z}");
-        let y = format!("{}Y", &z[..z.len() - 1]);
-        let ok = ships.iter().any(|ship| {
-            let owned = Owned::new(&ship.race).with(&ship.odf, 1).with(&y, 1);
-            tree.availability_for_builder(&db, z, &ship.odf, &owned).is_available()
-        });
-        assert!(ok, "{label}: {z} is not available from {:?}", ships.iter().map(|s| &s.odf).collect::<Vec<_>>());
-        // Without the rule the tree alone omits it.
         assert_eq!(tree.availability(z, &Owned::new(&ships[0].race)), Availability::NotListed, "{label}: {z} is listed after all");
+        let y = format!("{}Y", &z[..z.len() - 1]);
+        for ship in &ships {
+            let owned = Owned::new(&ship.race).with(&ship.odf, 1).with(&y, 1);
+            assert!(!tree.availability_for_builder(&db, z, &ship.odf, &owned, false).is_available(), "{label}: {z} offered to a human from {}", ship.odf);
+            assert!(tree.availability_for_builder(&db, z, &ship.odf, &owned, true).is_available(), "{label}: {z} not offered to an AI from {}", ship.odf);
+        }
     }
     let yard = db.units().find(|u| u.build.list.iter().any(|d| d.odf.eq_ignore_ascii_case("kli_field_yardP4")));
     let yard = yard.expect("some builder lists kli_field_yardP4");
-    eprintln!("{label}: kli_field_yardP4 is built by {}", yard.odf);
     let owned = Owned::new(&yard.race).with(&yard.odf, 1);
-    assert!(tree.availability_for_builder(&db, "kli_field_yardP4", &yard.odf, &owned).is_available(), "{label}: kli_field_yardP4");
+    for ai in [false, true] {
+        assert!(tree.availability_for_builder(&db, "kli_field_yardP4", &yard.odf, &owned, ai).is_available(), "{label}: kli_field_yardP4 from {} (ai {ai})", yard.odf);
+    }
 }
 
 #[test]

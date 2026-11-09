@@ -32,7 +32,7 @@ use crate::{Rng, Sim, SimEvent};
 
 pub const MAGIC: [u8; 4] = *b"STAS";
 /// Bumped whenever [`Body`] (or anything in it) changes layout.
-pub const FORMAT_VERSION: u16 = 5;
+pub const FORMAT_VERSION: u16 = 6;
 
 const HEADER: usize = 4 + 2 + 4 + 8;
 
@@ -116,6 +116,8 @@ struct Body {
     tick: u64,
     rng: u64,
     players: Vec<(PlayerId, TeamId)>,
+    /// SIM-09 AI-controlled seats.
+    ai_seats: Vec<PlayerId>,
     starts: Vec<StartPos>,
     regions: Vec<Region>,
     next_entity: u32,
@@ -220,6 +222,7 @@ impl Sim {
             tick: self.tick,
             rng: self.rng.0,
             players: self.players.clone(),
+            ai_seats: self.ai_seats.clone(),
             starts: self.starts.clone(),
             regions: self.regions.clone(),
             next_entity: self.units.next_id().0,
@@ -314,6 +317,7 @@ impl Sim {
             units,
             labels,
             players: b.players,
+            ai_seats: b.ai_seats,
             content,
             starts: b.starts,
             regions: b.regions,
