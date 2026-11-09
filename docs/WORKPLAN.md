@@ -497,6 +497,7 @@ Each becomes a package of the same shape when M3 closes.
 | RND-12 | Planet city lights (needs colony population in view) | `render/planet.rs` | SIM-07 | `ScriptedSource` | — | Check line | S | Sonnet |
 | RND-13 | Fog-of-war rendering | `render/fog.rs` | SIM-12 | `ScriptedSource` | — | Frame test | M | Sonnet |
 | RND-14 | Opt-in post FX (Refit `postfx`) | `render/post.rs` | — | — | — | Setting toggles; frame test | S | Sonnet |
+| RND-15 | Nebula ship shadows: key-light shadow map sampled in the nebula march, plus a hull shadow pass consistent with RND-06 | `render/shadows.rs` | RND-05, RND-06 | `two_bases()` | — | GPU test: ship inside a nebula darkens the gas behind it; frame diff within tolerance | M | Sonnet |
 
 ### UI and input (UI)
 
