@@ -7,6 +7,7 @@ on:
   push:
     branches: [main]
     paths-ignore: ['docs/**']
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -22,7 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON((github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'full-ci')) && '["ubuntu-latest","ubuntu-24.04-arm","windows-latest","macos-latest"]' || '["ubuntu-latest"]') }}
+        os: ${{ fromJSON((github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-ci')) && '["ubuntu-latest","ubuntu-24.04-arm","windows-latest","macos-latest"]' || '["ubuntu-latest"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -36,7 +37,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON((github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'full-ci')) && '["ubuntu-latest","ubuntu-24.04-arm","windows-latest","macos-latest"]' || '["ubuntu-latest"]') }}
+        os: ${{ fromJSON((github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-ci')) && '["ubuntu-latest","ubuntu-24.04-arm","windows-latest","macos-latest"]' || '["ubuntu-latest"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -45,7 +46,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
       - uses: Swatinem/rust-cache@v2
       - name: Build (main)
-        if: github.event_name == 'push'
+        if: github.event_name != 'pull_request'
         run: cargo build -p sta64 --release
       - name: Check (PR)
         if: github.event_name == 'pull_request'
