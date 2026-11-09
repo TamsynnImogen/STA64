@@ -51,3 +51,6 @@ jobs:
         if: github.event_name == 'pull_request'
         run: cargo check -p sta64 --all-targets
       - run: cargo clippy -p sta64 -- -D warnings
+      - name: Bench smoke (sim-only)
+        run: cargo run -p sta64 --release -- --sim-only --scene bench/scenes/synthetic.ini --ticks 300
+      - run: cargo test -p sta64 --release
