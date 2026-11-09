@@ -237,6 +237,10 @@ pub fn spawn(ctx: &mut SpawnCtx, model: &Model, root: Entity) -> SpawnStats {
 
 fn spawn_sprite_node(ctx: &mut SpawnCtx, id: &str, parent: Entity, quad: &Handle<Mesh>, stats: &mut SpawnStats) {
     let table = ctx.sprites;
+    // The moons' round nimbus: their cracks carry the light instead (RND-05).
+    if id.eq_ignore_ascii_case("oreglow") && !crate::render::rock::MOON_NIMBUS {
+        return;
+    }
     let Some(def) = table.sprite_node(id) else {
         stats.unknown_sprite_nodes.push(id.to_owned());
         return;
@@ -415,6 +419,8 @@ fn spawn_mesh(
             reflectance: mspec.reflectance,
             ..default()
         };
+        // A dilithium moon's glow shell is drawn dark (RND-05).
+        let material = if crate::render::rock::is_moon_shell(&group.material) { crate::render::rock::shell_material(two_sided) } else { material };
         // A texture with a surface recipe: the part becomes a rock once baked, its
         // surface looked up about the mesh's centre over its extents.
         let rock = maps.diffuse.as_deref().filter(|n| crate::render::surfaces::recipe_text(ctx.textures.vfs, n).is_some()).map(|n| {

@@ -108,6 +108,18 @@ fn rock_planet_and_nebula_pipelines_build() {
             }
             let mesh = meshes.add(Cuboid::default());
             commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(rocks.add(RockMaterial { params: RockParams::default(), albedo: None, relief: None }))));
+            // A moon: cut-out cracks lit from inside, with the ravine's parallax march (RND-05).
+            let moon = RockParams {
+                misc: Vec4::new(0.02, 0.0, 1.0, 0.0),
+                ext: Vec4::new(1.0, 1.0, 1.0, 1.0),
+                core: Vec4::new(0.0, 2.0, 4.0, 0.22),
+                spill: Vec4::new(1.0, 1.0, 0.02, 3.0),
+                row0: Vec4::X,
+                row1: Vec4::Y,
+                row2: Vec4::Z,
+                ..RockParams::default()
+            };
+            commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(rocks.add(RockMaterial { params: moon, albedo: None, relief: None }))));
             commands.spawn((
                 Mesh3d(mesh.clone()),
                 MeshMaterial3d(planets.add(PlanetMaterial {
