@@ -181,6 +181,7 @@ fn run_headless_inner(cfg: &LaunchConfig) -> i32 {
                 crate::render::fx::impacts::ImpactFxPlugin,
                 crate::render::fx::specials::SpecialsFxPlugin,
             ));
+        app.add_plugins(crate::render::post::PostFxPlugin::from_cfg(cfg));
     }
     match app.run() {
         AppExit::Success => 0,

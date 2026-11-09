@@ -156,6 +156,21 @@ pub struct UnitDef {
     pub build: BuildDef,
     pub sounds: SoundRefs,
     pub fx: FxRefs,
+    /// Special energy pool (`maxSpecialEnergy`); zero: none.
+    pub special_energy_max: Fixed,
+    /// Special energy regained per second (`specialEnergyRate`).
+    pub special_energy_rate: Fixed,
+    /// A freighter that mines (`miner = 1`, or class `freighter`).
+    pub miner: bool,
+    /// Hold size (`maxdilithium`); zero: not set, the consumer's default.
+    pub max_dilithium: Fixed,
+    /// Units mined per second (`miningRate`); zero: not set.
+    pub mining_rate: Fixed,
+    /// Units unloaded per second (`dilithiumTransferRate`); zero: not set.
+    pub transfer_rate: Fixed,
+    /// Resource id a node gives (`resource`, text: latinum 1, metal or
+    /// tritanium 2, biomatter 3, anything else 0); `None` when not set.
+    pub resource: Option<u8>,
     /// The resolved ODF, so keys no field reads yet stay reachable. Empty for
     /// definitions not made from an ODF.
     pub raw: Arc<sta_odf::Odf>,
@@ -182,6 +197,13 @@ impl UnitDef {
             build: BuildDef::default(),
             sounds: SoundRefs::default(),
             fx: FxRefs::default(),
+            special_energy_max: Fixed::ZERO,
+            special_energy_rate: Fixed::ZERO,
+            miner: false,
+            max_dilithium: Fixed::ZERO,
+            mining_rate: Fixed::ZERO,
+            transfer_rate: Fixed::ZERO,
+            resource: None,
             raw: Arc::new(raw),
         }
     }
@@ -220,6 +242,16 @@ pub struct WeaponDef {
     pub fire_sound: Option<String>,
     /// Ordnance or beam effect name (resolved client-side).
     pub fx: Option<String>,
+    /// Specials: ticks to engage or disengage (`effectTimer`).
+    pub effect_ticks: Tick,
+    /// Specials: energy drained per second while active (`energyDrainRate`).
+    pub energy_drain: Fixed,
+    /// Special energy to trigger the weapon (`specialEnergyCost`).
+    pub energy_cost: Fixed,
+    /// Cloak: weapons are off while cloaked (`disableWeapons`, default on).
+    pub disable_weapons: bool,
+    /// Cloak: a hit decloaks (`decloakOnHit`, default off).
+    pub decloak_on_hit: bool,
     pub raw: Arc<sta_odf::Odf>,
 }
 
@@ -240,6 +272,11 @@ impl WeaponDef {
             duration: 0,
             fire_sound: None,
             fx: None,
+            effect_ticks: 0,
+            energy_drain: Fixed::ZERO,
+            energy_cost: Fixed::ZERO,
+            disable_weapons: true,
+            decloak_on_hit: false,
             raw: Arc::new(raw),
         }
     }

@@ -1,5 +1,8 @@
 //! Rebindable keys: named actions mapped to [`KeyCode`]s.
 //!
+//! Defaults follow Refit's `qol/README.md` (QOL-1, 4, 5): plain digit recalls,
+//! Ctrl+digit replaces, Shift+digit adds, Alt+digit recalls and centres.
+//!
 //! Systems ask [`KeyBindings`] "is this action pressed" instead of naming a
 //! key, so rebinding changes which key triggers the action. Control groups
 //! (digits 1..9) and the Shift/Ctrl modifiers are bound the same way.
@@ -24,6 +27,9 @@ pub enum Action {
     AddModifier,
     /// Held with a digit: assign the selection to that control group.
     GroupModifier,
+    /// Held with a digit: select the group and centre the camera at once
+    /// (stock's Shift+N, moved to Alt by QOL-4).
+    CentreModifier,
     /// Select every own unit of the selected units' class.
     SelectType,
     /// Control group 1..=9 (index 0..=8).
@@ -36,9 +42,10 @@ pub enum Action {
 
 #[allow(dead_code)] // settings file API, until the settings package wires it
 impl Action {
-    pub const ALL: [Action; 16] = [
+    pub const ALL: [Action; 17] = [
         Action::AddModifier,
         Action::GroupModifier,
+        Action::CentreModifier,
         Action::SelectType,
         Action::Group(0),
         Action::Group(1),
@@ -59,6 +66,7 @@ impl Action {
         match self {
             Action::AddModifier => "add_modifier".into(),
             Action::GroupModifier => "group_modifier".into(),
+            Action::CentreModifier => "centre_modifier".into(),
             Action::SelectType => "select_type".into(),
             Action::Group(n) => format!("group{}", n + 1),
             Action::Stop => "stop".into(),
@@ -94,6 +102,7 @@ impl Default for KeyBindings {
         let mut m = BTreeMap::new();
         m.insert(Action::AddModifier, vec![KeyCode::ShiftLeft, KeyCode::ShiftRight]);
         m.insert(Action::GroupModifier, vec![KeyCode::ControlLeft, KeyCode::ControlRight]);
+        m.insert(Action::CentreModifier, vec![KeyCode::AltLeft, KeyCode::AltRight]);
         m.insert(Action::SelectType, vec![KeyCode::KeyT]);
         m.insert(Action::Stop, vec![KeyCode::KeyS, KeyCode::Space]);
         m.insert(Action::Formation(FORM_LINE), vec![KeyCode::F1]);

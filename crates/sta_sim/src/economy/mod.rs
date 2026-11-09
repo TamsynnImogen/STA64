@@ -94,18 +94,16 @@ fn per_tick(per_second: Fixed) -> Fixed {
 
 fn cfg_of(db: &ContentDb, def: ContentKey) -> Option<Cfg> {
     let d = db.unit(def)?;
-    let miner = d.class.0 == "freighter" || d.raw.i64("miner") == Some(1);
+    let miner = d.class.0 == "freighter" || d.miner;
     if !miner {
         return None;
     }
-    let num = |key: &str, default: i32| match d.raw.f32(key) {
-        Some(v) if v > 0.0 => Fixed::from_f64(v as f64),
-        _ => Fixed::from_int(default),
-    };
+    // Zero means the definition does not say: the defaults apply.
+    let or = |v: Fixed, default: i32| if v > Fixed::ZERO { v } else { Fixed::from_int(default) };
     Some(Cfg {
-        capacity: num("maxdilithium", DEFAULT_CAPACITY),
-        rate: per_tick(num("miningRate", DEFAULT_RATE)),
-        unload: per_tick(num("dilithiumTransferRate", DEFAULT_RATE)),
+        capacity: or(d.max_dilithium, DEFAULT_CAPACITY),
+        rate: per_tick(or(d.mining_rate, DEFAULT_RATE)),
+        unload: per_tick(or(d.transfer_rate, DEFAULT_RATE)),
     })
 }
 
@@ -115,16 +113,7 @@ fn node_resource(db: &ContentDb, def: ContentKey) -> u8 {
     if d.class.0 == "latinum" {
         return 1;
     }
-    let r = d.raw.str("resource").unwrap_or("").to_ascii_lowercase();
-    if r.contains("latinum") {
-        1
-    } else if r.contains("metal") || r.contains("tritanium") {
-        2
-    } else if r.contains("biomatter") {
-        3
-    } else {
-        0
-    }
+    d.resource.unwrap_or(0)
 }
 
 fn dist(a: Vec3, b: Vec3) -> Fixed {

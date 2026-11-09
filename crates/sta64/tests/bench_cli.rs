@@ -205,3 +205,39 @@ fn impact_fx_render_shield_hits_and_an_explosion() {
 // is a uniform), so its pipeline is the one `weapon_fx_render_beams_and_bolts` compiles.
 // Drawing it needs a station under construction, which the bench scenes only reach
 // through scenario commands that tier 2's replay does not repeat (digest mismatch).
+/// A `sta64` stand-in that adds `--postfx <fx>` to every launch (the bench
+/// passes no extra flags itself).
+#[cfg(unix)]
+fn sta64_with_postfx(dir: &Path, fx: &str) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let script = dir.join(format!("sta64-{fx}.sh"));
+    std::fs::write(&script, format!("#!/bin/sh\nexec \"{}\" \"$@\" --postfx {fx}\n", sta64())).unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    script.to_str().unwrap().to_owned()
+}
+
+/// The frame PNGs of one `planet` run, run with the given `sta64` binary.
+#[cfg(unix)]
+fn planet_frames(bin: &str, tag: &str) -> Vec<Vec<u8>> {
+    let out = tmp(tag);
+    let code = cli::main(args(&["run", "planet", "--tier", "2", "--frames", "0,100", "--sta64", bin, "--out", out.to_str().unwrap()]));
+    assert_eq!(code, 0, "sta-bench run planet ({tag})");
+    let mut files: Vec<_> = std::fs::read_dir(run_dir(&out).join("planet/frames")).unwrap().flatten().map(|e| e.path()).collect();
+    files.sort();
+    files.iter().map(|f| std::fs::read(f).unwrap()).collect()
+}
+
+#[cfg(unix)]
+#[test]
+fn bloom_changes_frames_and_repeats() {
+    if !adapter(&tmp("probe-postfx")) {
+        return;
+    }
+    let wrap = tmp("postfx-wrap");
+    let bloom = sta64_with_postfx(&wrap, "bloom");
+    let off = planet_frames(sta64(), "postfx-off");
+    let on_a = planet_frames(&bloom, "postfx-on-a");
+    let on_b = planet_frames(&bloom, "postfx-on-b");
+    assert_eq!(on_a, on_b, "bloom on twice must give the same frames");
+    assert_ne!(off, on_a, "bloom must change the frames");
+}
