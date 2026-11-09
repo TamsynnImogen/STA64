@@ -41,6 +41,19 @@ pub struct MapObject {
     pub light_colour: Option<[f32; 3]>,
 }
 
+/// A player start location (`SLPos`, `SLType`, `SLLkTeam`, `SLLkRace` in text
+/// maps; a fixed run of records in binary ones).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct StartLoc {
+    pub pos: [f32; 3],
+    /// `player`, `ai-easy`, `ai-medium`, `ai-hard`, `empty` or empty.
+    pub kind: String,
+    /// Locked team (`SLLkTeam`), -1 when free.
+    pub team: i32,
+    /// Locked race (`SLLkRace`): `race-unspecified`, a race name, or empty.
+    pub race: String,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Map {
     pub version: u32,
@@ -59,6 +72,12 @@ pub struct Map {
     pub starfield_odf: String,
     pub tech_tree_file: String,
     pub race: String,
+    /// `MPDStLoc`: how many start locations a multiplayer map offers.
+    pub start_count: i32,
+    /// Every start location record, in file order. Entry 0 is the neutral
+    /// slot (team 0) and entry `n` belongs to team `n`; unused entries sit at
+    /// the entry-0 position (the map's centre).
+    pub start_locs: Vec<StartLoc>,
     pub objects: Vec<MapObject>,
 }
 
@@ -185,6 +204,18 @@ fn parse_binary(recs: &[Rec]) -> Map {
         objects_from = i + 4;
     }
 
+    // Start locations follow the extent vectors by a few records.
+    if let Some(&vs) = recs.iter().take(60).enumerate().filter(|(_, r)| r.kind == 9 && r.data.len() == 12).map(|(i, _)| i).collect::<Vec<_>>().get(1) {
+        let first = (vs + 1..recs.len().min(vs + 60)).find(|&k| start_loc(recs, k).is_some());
+        if let Some(mut k) = first {
+            m.start_count = recs[k - 1].i32().unwrap_or(0);
+            while let Some((loc, next)) = start_loc(recs, k) {
+                m.start_locs.push(loc);
+                k = next;
+            }
+        }
+    }
+
     // Objects: PrjIdLen (i16), PrjID (text of that length), EntityID (i32),
     // pos (vector3), team (i32), label (text), id, transform (48-byte struct).
     let mut i = objects_from;
@@ -224,6 +255,33 @@ fn parse_binary(recs: &[Rec]) -> Map {
         i += 4;
     }
     m
+}
+
+/// A length-prefixed string at `k`: `(text, next record)`. A zero length has
+/// no string record.
+fn lp_string(recs: &[Rec], k: usize) -> Option<(String, usize)> {
+    let n = recs.get(k)?.i32().filter(|&n| n >= 0)? as usize;
+    if n == 0 {
+        return Some((String::new(), k + 1));
+    }
+    let s = recs.get(k + 1).filter(|r| r.is_string() && r.data.len() == n)?;
+    Some((s.text(), k + 2))
+}
+
+/// One start location record: SLPos (vector3), SLType (string), SLLkTeam
+/// (i32), SLLkRace (string), SLLat, SLMetal, SLCrew, SLDil (f32), SLTName and
+/// SLColor (strings). Returns the entry and the next record.
+fn start_loc(recs: &[Rec], k: usize) -> Option<(StartLoc, usize)> {
+    let pos = recs.get(k).filter(|r| r.kind == 9 && r.data.len() == 12)?;
+    let (kind, k) = lp_string(recs, k + 1)?;
+    let team = recs.get(k).filter(|r| r.kind == 4)?.i32()?;
+    let (race, k) = lp_string(recs, k + 1)?;
+    if !(0..4).all(|i| recs.get(k + i).is_some_and(|r| r.kind == 5 && r.data.len() == 4)) {
+        return None;
+    }
+    let (_, k) = lp_string(recs, k + 4)?;
+    let (_, k) = lp_string(recs, k)?;
+    Some((StartLoc { pos: vec3(pos), kind, team, race }, k))
 }
 
 fn strip_odf(s: &str) -> String {
@@ -302,6 +360,13 @@ fn fields(text: &str) -> Vec<Field> {
     out
 }
 
+/// The vector whose field is on line `i`: its next three value lines, with
+/// the nested `x [1] =` headers between them skipped.
+fn vec3_at(lines: &[&str], i: usize) -> Option<[f32; 3]> {
+    let mut v = lines.get(i + 1..)?.iter().take(8).filter(|l| !l.contains('=')).filter_map(|l| l.parse::<f32>().ok());
+    Some([v.next()?, v.next()?, v.next()?])
+}
+
 fn parse_text(text: &str) -> Map {
     let fs = fields(text);
     let mut m = Map::default();
@@ -334,6 +399,22 @@ fn parse_text(text: &str) -> Map {
     m.scripts = [string("MPDScriptFile"), string("MPDRuleFile")].into_iter().filter(|s| !s.is_empty()).collect();
     m.min_extent = after("MPDMinExtent");
     m.size = after("MPDSize");
+    let lines: Vec<&str> = text.lines().map(|l| l.trim()).collect();
+    m.start_count = lines
+        .iter()
+        .position(|l| *l == "MPDStLoc [1] =")
+        .and_then(|i| lines.get(i + 1))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let sl: Vec<usize> = lines.iter().enumerate().filter(|(_, l)| **l == "SLPos [1] =").map(|(i, _)| i).collect();
+    for (n, &i) in sl.iter().enumerate() {
+        let Some(pos) = vec3_at(&lines, i) else { continue };
+        let end = sl.get(n + 1).copied().unwrap_or(lines.len()).min(i + 60);
+        let seg = &lines[i..end];
+        let hex = |key: &str| seg.iter().find_map(|l| l.strip_prefix(key)).map(|v| if is_hex(v) { decode_hex(v) } else { v.to_owned() }).unwrap_or_default();
+        let team = seg.iter().position(|l| *l == "SLLkTeam [1] =").and_then(|j| seg.get(j + 1)).and_then(|v| v.parse().ok()).unwrap_or(-1);
+        m.start_locs.push(StartLoc { pos, kind: hex("SLType = "), team, race: hex("SLLkRace = ") });
+    }
     m.ambient = [float(first("AmbientRed")), float(first("AmbientGreen")), float(first("AmbientBlue"))];
     m.background = first("BackgroundArt").unwrap_or_default();
     m.starfield_odf = first("StarfieldOdf").unwrap_or_default();
@@ -467,6 +548,67 @@ PrjID = 4d62616b7500\r\nEntityID [1] =\r\n7\r\nteam [1] =\r\n2\r\nlabel = Baku\r
         assert_eq!((o.odf.as_str(), o.entity_id, o.team, o.label.as_str()), ("bcube", -9, 3, "Cube"));
         assert_eq!(o.transform[2], 1.0);
         assert_eq!(&o.transform[9..], &[1.0, 2.0, 3.0]);
+    }
+
+    fn start_text(pos: [f32; 3], kind: &str, team: i32) -> String {
+        let hex: String = kind.bytes().map(|b| format!("{b:02x}")).collect();
+        format!(
+            "SLPos [1] =\r\n  x [1] =\r\n{}\r\n  y [1] =\r\n{}\r\n  z [1] =\r\n{}\r\nSLType [1] =\r\n{}\r\nSLType = {hex}\r\n\
+SLLkTeam [1] =\r\n{team}\r\nSLLkRace [1] =\r\n0\r\nSLLat [1] =\r\n-1\r\n",
+            pos[0],
+            pos[1],
+            pos[2],
+            kind.len()
+        )
+    }
+
+    #[test]
+    fn text_start_locations() {
+        let text = format!(
+            "version [1] =\r\n3013\r\nBinaryMode [1] =\r\nfalse\r\nMPDSize [1] =\r\n  x [1] =\r\n12000\r\n  y [1] =\r\n500\r\n  z [1] =\r\n12000\r\n\
+MPDStLoc [1] =\r\n2\r\n{}{}{}",
+            start_text([6000.0, 0.0, 6000.0], "empty", -1),
+            start_text([3734.12, 0.0, 10682.7], "player", 3),
+            start_text([6000.0, 0.0, 6000.0], "empty", -1)
+        );
+        let m = parse(text.as_bytes()).unwrap();
+        assert_eq!(m.size, [12000.0, 500.0, 12000.0]);
+        assert_eq!(m.start_count, 2);
+        assert_eq!(m.start_locs.len(), 3);
+        assert_eq!(m.start_locs[1], StartLoc { pos: [3734.12, 0.0, 10682.7], kind: "player".into(), team: 3, race: String::new() });
+        assert_eq!(m.start_locs[0].kind, "empty");
+    }
+
+    #[test]
+    fn binary_start_locations() {
+        let mut b = b"version [1] =\r\n3013\r\nBinaryMode [1] =\r\ntrue\r\n".to_vec();
+        let vec = |v: [f32; 3]| rec(9, &v.iter().flat_map(|f| f.to_le_bytes()).collect::<Vec<u8>>());
+        let string = |s: &str| {
+            let mut v = rec(4, &(s.len() as i32).to_le_bytes());
+            if !s.is_empty() {
+                v.extend(rec(0, s.as_bytes()));
+            }
+            v
+        };
+        b.extend(vec([0.0, -500.0, 0.0]));
+        b.extend(vec([9500.0, 1000.0, 9500.0]));
+        b.extend(rec(4, &0i32.to_le_bytes()));
+        b.extend(rec(4, &2i32.to_le_bytes()));
+        for (pos, kind, team, race) in [([4750.0, 0.0, 4750.0], "empty", -1i32, ""), ([1602.0, 0.0, 7902.0], "player", -1, "race-unspecified")] {
+            b.extend(vec(pos));
+            b.extend(string(kind));
+            b.extend(rec(4, &team.to_le_bytes()));
+            b.extend(string(race));
+            for _ in 0..4 {
+                b.extend(rec(5, &(-1.0f32).to_le_bytes()));
+            }
+            b.extend(string(""));
+            b.extend(string("empty"));
+        }
+        let m = parse(&b).unwrap();
+        assert_eq!(m.start_count, 2);
+        assert_eq!(m.start_locs.len(), 2);
+        assert_eq!(m.start_locs[1], StartLoc { pos: [1602.0, 0.0, 7902.0], kind: "player".into(), team: -1, race: "race-unspecified".into() });
     }
 
     /// With STA64_TEST_BZN_DIRS (colon-separated dirs): parse every map.
