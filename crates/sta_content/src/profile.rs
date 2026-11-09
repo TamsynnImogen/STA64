@@ -11,14 +11,16 @@
 //!    layer's `info.ini`, top-most layer first. Names: `native`/`sta64`,
 //!    `fo4`/`fo`, `sta2`/`sta2classic`, `sta1`/`sta1classic` (see
 //!    [`Profile::from_name`]).
-//! 2. **Armada I layout.** Any layer holds a `.zfs` archive or an `addon/`
-//!    directory.
+//! 2. **Armada I layout.** Any layer holds a `.zfs` archive. (An `addon/`
+//!    directory is not a signature: Armada II and FO ship one too, and a
+//!    real FO Roots install detected as Armada I on it.)
 //! 3. **Fleet Operations.** Any layer other than `Data` whose folder name or
 //!    `info.ini` `Name` contains `fleet op`/`fleetop`/`fo4`/`fo 4`, or an
 //!    `mmm_loader.dll` (FO's mission loader) at a layer root or the install
 //!    root above `Data`.
-//! 4. **Stock Armada II.** Any other install (a `Data` layer, possibly with
-//!    mods that match nothing above).
+//! 4. **Stock Armada II.** Any other install: a `Data` layer, or a plain game
+//!    folder with an `odf/` directory, `ODF.fpq` or `Armada2.exe`, possibly
+//!    with mods that match nothing above.
 //! 5. **Native.** No `Data` layer and nothing matched (also the fallback for
 //!    unknown or custom content).
 //!
@@ -31,10 +33,11 @@
 //! over parent) < per-ODF overrides (`Feature_<name>` keys). Each source is an
 //! [`Overrides`]; later sources win per feature.
 //!
-//! Hookup for CON-03: `ContentDb::load` calls `Profile::detect(vfs)` and
+//! Hookup: `ContentDb::load` calls `Profile::detect(vfs)` and
 //! `Overrides::from_vfs(vfs)`; db-wide features are
 //! `resolve_features(profile, &[&mod_ov])`, and a def's own are
-//! `resolve_features(profile, &[&mod_ov, &Overrides::from_odf_keys(..)])`.
+//! `resolve_features(profile, &[&mod_ov, &Overrides::from_odf_keys(..)])`,
+//! stored in `UnitDef::features` / `WeaponDef::features`.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -140,7 +143,7 @@ impl Profile {
         }
         // 2. Armada I layout.
         for l in layers {
-            if !l.zfs.is_empty() || has_child(&l.root, "addon", true) || has_zfs_file(&l.root) {
+            if !l.zfs.is_empty() || has_zfs_file(&l.root) {
                 return Profile::Sta1Classic;
             }
         }
@@ -153,6 +156,9 @@ impl Profile {
                     return Profile::Fo4;
                 }
                 continue;
+            }
+            if has_child(&l.root, "odf", true) || has_child(&l.root, "odf.fpq", false) || has_child(&l.root, "armada2.exe", false) {
+                has_data = true;
             }
             let name = ini.as_ref().and_then(|i| i.get("mod", "name")).unwrap_or("");
             if looks_like_fo(&l.name) || looks_like_fo(name) || has_child(&l.root, "mmm_loader.dll", false) {
@@ -413,6 +419,15 @@ mod tests {
             fs::write(p, body).unwrap();
             self
         }
+        /// A real (one-file) Armada I archive at `rel`.
+        fn zfs(&self, rel: &str) -> &Tmp {
+            let f = sta_vfs::zfs::ZfsFile { name: "a.odf".into(), data: b"x".to_vec(), time: 0 };
+            let bytes = sta_vfs::zfs::write(&[f], 0x9466_279b).unwrap();
+            let p = self.0.join(rel);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(p, bytes).unwrap();
+            self
+        }
         fn detect(&self, active: Option<&str>) -> Profile {
             Profile::detect(&Vfs::mount_install(&self.0, active).unwrap())
         }
@@ -535,8 +550,26 @@ mod tests {
     #[test]
     fn detects_a1_layout() {
         let t = Tmp::new();
-        t.file("Data/addon/ship.odf", "");
+        t.zfs("Data/assets.zfs");
         assert_eq!(t.detect(None), Profile::Sta1Classic);
+    }
+
+    /// FO and A2 `Data` folders carry an `addon/` directory too.
+    #[test]
+    fn an_addon_folder_alone_is_not_armada_one() {
+        let t = Tmp::new();
+        t.file("Data/addon/ship.odf", "");
+        assert_eq!(t.detect(None), Profile::Sta2Classic);
+    }
+
+    /// A plain game folder (stock A2 as GOG installs it) has no `Data`.
+    #[test]
+    fn detects_a_plain_a2_folder() {
+        let t = Tmp::new();
+        t.file("odf/a.odf", "");
+        let mut vfs = Vfs::default();
+        vfs.push_dir("root".into(), t.0.clone()).unwrap();
+        assert_eq!(Profile::detect(&vfs), Profile::Sta2Classic);
     }
 
     #[test]
@@ -561,7 +594,7 @@ mod tests {
     #[test]
     fn explicit_profile_wins() {
         let t = Tmp::new();
-        t.file("Data/addon/a.odf", "").file("Data/Mods/M/info.ini", "[Mod]\nName=Fleet Ops\nProfile=STA2 Classic\n");
+        t.zfs("Data/assets.zfs").file("Data/Mods/M/info.ini", "[Mod]\nName=Fleet Ops\nProfile=STA2 Classic\n");
         assert_eq!(t.detect(Some("M")), Profile::Sta2Classic);
     }
 
