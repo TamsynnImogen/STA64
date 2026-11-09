@@ -10,6 +10,7 @@
 #![allow(dead_code, unused_imports)]
 
 mod mixer;
+mod music;
 mod null;
 mod ui;
 
@@ -19,6 +20,7 @@ use std::sync::Arc;
 use bevy::prelude::*;
 
 pub use mixer::{AudioBackend, KiraAudio, MixBus, Mixer, Sound, Volumes};
+pub use music::{Context as MusicContext, MusicConfig, MusicPlugin};
 pub use null::{Call, CallLog, NullAudio};
 pub use ui::{UiContext, UiSound, UiSoundPlugin, UiSounds};
 
@@ -97,7 +99,7 @@ impl Plugin for AudioPlugin {
         if app.world().get_non_send::<Mixer>().is_none() {
             app.insert_non_send(Mixer::new(choose_backend(self.mode)));
         }
-        app.add_plugins(UiSoundPlugin)
+        app.add_plugins(MusicPlugin)
             .add_message::<PlaySound>()
             .init_resource::<Volumes>()
             .insert_resource(Resolver(Box::new(StubResolver::default())))

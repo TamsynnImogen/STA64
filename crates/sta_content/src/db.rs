@@ -40,7 +40,19 @@ impl ContentDb {
     /// Load every unit and weapon definition from the ODFs of a mounted
     /// install (see [`crate::odf`]). ODFs that cannot make a definition are
     /// listed in the warnings, not errors.
-    pub fn load(vfs: &sta_vfs::Vfs, profile: Profile, index: &OdfIndex) -> Result<(ContentDb, Vec<Warning>)> {
+    ///
+    /// The profile is detected from the mod chain ([`Profile::detect`]); the
+    /// database-wide features are the profile's defaults with the chain's
+    /// `info.ini` `[Features]` applied, and each unit and weapon carries its
+    /// own set with its ODF's `Feature_<name>` keys on top
+    /// ([`unit_features`](ContentDb::unit_features)).
+    pub fn load(vfs: &sta_vfs::Vfs, index: &OdfIndex) -> Result<(ContentDb, Vec<Warning>)> {
+        ContentDb::load_as(vfs, Profile::detect(vfs), index)
+    }
+
+    /// [`load`](ContentDb::load) with the profile given instead of detected
+    /// (a lobby choice, a test).
+    pub fn load_as(vfs: &sta_vfs::Vfs, profile: Profile, index: &OdfIndex) -> Result<(ContentDb, Vec<Warning>)> {
         crate::odf::load(vfs, profile, index)
     }
 
@@ -109,8 +121,21 @@ impl ContentDb {
         self.profile
     }
 
+    /// The database-wide switches: the profile's defaults and the mod
+    /// chain's overrides.
     pub fn features(&self) -> &Features {
         &self.features
+    }
+
+    /// The switches that apply to one unit: its own resolved set, or the
+    /// database-wide one for defs built in code.
+    pub fn unit_features<'a>(&'a self, u: &'a UnitDef) -> &'a Features {
+        u.features.as_ref().unwrap_or(&self.features)
+    }
+
+    /// The switches that apply to one weapon, as [`unit_features`](ContentDb::unit_features).
+    pub fn weapon_features<'a>(&'a self, w: &'a WeaponDef) -> &'a Features {
+        w.features.as_ref().unwrap_or(&self.features)
     }
 }
 
@@ -208,6 +233,17 @@ impl Fnv {
     }
 }
 
+/// A def's own switches, hashed only when they differ from the database-wide
+/// set, so fakes and defs without overrides hash as they did before.
+fn feature_bits(h: &mut Fnv, own: Option<&Features>, db: &Features) {
+    if let Some(f) = own.filter(|f| *f != db) {
+        h.byte(0xe3);
+        for b in f.bits() {
+            h.byte(b as u8);
+        }
+    }
+}
+
 fn hash(db: &ContentDb) -> u64 {
     let mut h = Fnv(0xcbf2_9ce4_8422_2325);
     h.u64(db.profile as u64);
@@ -262,6 +298,7 @@ fn hash(db: &ContentDb) -> u64 {
                         h.fixed(f);
                     }
                 }
+                feature_bits(&mut h, u.features.as_ref(), &db.features);
             }
             Def::Weapon(w) => {
                 h.byte(1);
@@ -280,6 +317,7 @@ fn hash(db: &ContentDb) -> u64 {
                     h.byte(w.disable_weapons as u8);
                     h.byte(w.decloak_on_hit as u8);
                 }
+                feature_bits(&mut h, w.features.as_ref(), &db.features);
             }
         }
     }
@@ -326,7 +364,7 @@ mod tests {
 
     #[test]
     fn load_of_an_empty_install_is_empty() {
-        let (db, warnings) = ContentDb::load(&sta_vfs::Vfs::default(), Profile::Fo4, &OdfIndex::default()).unwrap();
+        let (db, warnings) = ContentDb::load_as(&sta_vfs::Vfs::default(), Profile::Fo4, &OdfIndex::default()).unwrap();
         assert!(db.is_empty() && warnings.is_empty());
         assert_eq!(db.profile(), Profile::Fo4);
     }
