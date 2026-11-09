@@ -139,3 +139,12 @@ fn pd_is_idle_without_the_feature() {
     assert!(pd.is_empty());
     assert_eq!(hits, [61, 61, 61]);
 }
+
+/// Three cruisers against a PD station, 45 ticks in: the PD is mid-cooldown
+/// with torpedoes in flight; for the snapshot test.
+pub(crate) fn mid_saturation() -> (Sim, Arc<sta_content::ContentDb>) {
+    let (mut sim, boats, st) = scene(3);
+    run(&mut sim, boats, st, 45);
+    let db = Arc::clone(sim.content().unwrap());
+    (sim, db)
+}

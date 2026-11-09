@@ -76,7 +76,7 @@ struct Mount {
 
 /// A projectile in flight.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(super) struct Shot {
+pub(crate) struct Shot {
     pub(super) id: u32,
     pub(super) shooter: EntityId,
     pub(super) weapon: ContentKey,

@@ -7,6 +7,6 @@ pub mod weapons;
 #[cfg(test)]
 mod damage_tests;
 #[cfg(test)]
-mod pd_tests;
+pub(crate) mod pd_tests;
 #[cfg(test)]
 mod weapons_tests;
