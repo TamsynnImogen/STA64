@@ -570,7 +570,8 @@ fn run_extra(b: &mut Bench, text: &str, cap: Tick) -> Option<(Status, String)> {
     })
 }
 
-/// `fake::db()` plus a construction rig (`fx_rig`) and with `pay_on_queue` on:
+/// `fake::db()` plus a construction rig (`fx_rig`), the cloakers of
+/// `sta_sim::specials::fixture` and with `pay_on_queue` on:
 /// what the construction scenarios build with. The rig deploys any of the
 /// fake content's stations.
 pub fn fake_content() -> ContentDb {
@@ -586,11 +587,12 @@ pub fn fake_content() -> ContentDb {
         .profile(fake.profile())
         .features(features)
         .unit(rig);
-    for w in fake.weapons() {
-        b = b.weapon(w.clone());
+    let (cloakers, cloaks) = sta_sim::specials::fixture::defs();
+    for w in fake.weapons().cloned().chain(cloaks) {
+        b = b.weapon(w);
     }
-    for u in fake.units() {
-        b = b.unit(u.clone());
+    for u in fake.units().cloned().chain(cloakers) {
+        b = b.unit(u);
     }
     b.build().expect("fake content plus a rig is consistent")
 }

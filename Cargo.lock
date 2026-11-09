@@ -5303,6 +5303,7 @@ dependencies = [
  "serde",
  "sta_content",
  "sta_core",
+ "sta_odf",
 ]
 
 [[package]]

@@ -10,6 +10,7 @@ license.workspace = true
 [dependencies]
 sta_core = { workspace = true, features = ["serde"] }
 sta_content.workspace = true
+sta_odf.workspace = true
 serde.workspace = true
 # The fakes: ScriptedSource reads JSON5 timelines, ViewLog writes postcard.
 json5.workspace = true
