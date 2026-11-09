@@ -239,6 +239,13 @@ pub fn add_radar(app: &mut App, cfg: &LaunchConfig) {
     );
 }
 
+/// `STA64_UI_LOADING=1`: the UI-08 loading screen over the frame
+/// (`crate::frontend::loading` has the other switches).
+pub fn add_loading(app: &mut App, cfg: &LaunchConfig) {
+    let target = app.world().resource::<Capture>().target.clone();
+    crate::frontend::loading::add_frame_overlay(app, target, cfg.frame_size.unwrap_or((640, 360)));
+}
+
 /// `STA64_UI_HUD=1`: the UI-04 HUD over the frame (with the radar and notices it
 /// hosts), fed from the bench's view as player 1 on the bench's fake content;
 /// `crate::ui::hud::frame` has the other switches.
