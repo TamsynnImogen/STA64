@@ -148,6 +148,9 @@ pub struct Command { pub player: PlayerId, pub seq: u32, pub kind: CommandKind }
     Spawn { odf: ContentKey, player: PlayerId, pos: Vec3, heading: (Fixed, Fixed) },
     Kill(EntityId), Damage(EntityId, Fixed), Heal(EntityId), Immortal(EntityId, bool),
     SetEnergy(EntityId, Fixed), Tech(PlayerId, ContentKey), Cargo(PlayerId, u8, Fixed), …
+    Present(Presentation),                   // missions: shown, not simulated (sta_sim::present)
+    Subsystem(EntityId, Subsystem, bool), Alert(EntityId, AlertState),
+    MaxSpeed(EntityId, Option<Fixed>), Targetable(EntityId, bool), Decommissionable(EntityId, bool),
 }
 pub trait CommandRouter {                    // local today, lockstep in sta_net
     fn submit(&mut self, cmd: Command);
@@ -212,6 +215,7 @@ pub trait WorldSource: Send {
     CloakChanged { id: EntityId, on: bool },
     Rejected { player: PlayerId, seq: u32 },
     PlayerEliminated { player: PlayerId },
+    Present(Presentation),                   // from Edit::Present, the tick it applies
 }
 ```
 

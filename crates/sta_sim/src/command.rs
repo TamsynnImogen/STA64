@@ -84,6 +84,46 @@ pub enum Edit {
     Team(EntityId, PlayerId),
     /// Reseed the sim's random sequence.
     Seed(u64),
+    /// Something to show or play that changes nothing in the world: the sim
+    /// raises [`SimEvent::Present`](crate::event::SimEvent::Present) with it
+    /// that tick (see [`crate::present`]).
+    Present(crate::present::Presentation),
+    /// A subsystem on or off (mission `Disable*` calls). `Engines` and
+    /// `Weapons` act like [`Edit::Engines`] / [`Edit::Weapons`]; the others
+    /// are rejected until the package owning that subsystem applies them.
+    Subsystem(EntityId, Subsystem, bool),
+    /// Alert state (mission `SetRedAlert` and friends). Rejected until a
+    /// package models alert states.
+    Alert(EntityId, AlertState),
+    /// Cap a unit's speed (`SetImpulseSpeed`), `None` to lift the cap.
+    /// Rejected until movement applies it.
+    MaxSpeed(EntityId, Option<Fixed>),
+    /// Whether other units may target it (`AllowAsTarget`). Rejected until
+    /// targeting applies it.
+    Targetable(EntityId, bool),
+    /// Whether its owner may decommission it (`SetCanBeDecommissioned`).
+    /// Rejected until decommissioning exists.
+    Decommissionable(EntityId, bool),
+}
+
+/// A unit system a mission can switch on or off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum Subsystem {
+    Engines,
+    Weapons,
+    Shields,
+    LifeSupport,
+    Sensors,
+}
+
+/// Armada's alert states.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum AlertState {
+    Green,
+    Yellow,
+    Red,
 }
 
 /// Where commands wait between being issued and being applied. Local play
