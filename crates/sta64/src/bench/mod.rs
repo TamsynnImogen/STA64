@@ -155,6 +155,7 @@ fn run_headless_inner(cfg: &LaunchConfig) -> i32 {
     }
     if !cfg.frames.is_empty() {
         frames::add(&mut app, cfg, scene_camera);
+        app.add_plugins(crate::render::post::PostFxPlugin::from_cfg(cfg));
     }
     match app.run() {
         AppExit::Success => 0,
