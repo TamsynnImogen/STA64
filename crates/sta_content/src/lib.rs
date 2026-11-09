@@ -30,7 +30,7 @@ pub mod unit;
 pub mod weapon;
 
 pub use aip::{Aip, AipList, AipValue, AipVar, BuildItem};
-pub use db::{ContentBuilder, ContentDb};
+pub use db::{ContentBuilder, ContentDb, DEFAULT_TECH_TREE};
 pub use def::{BuildDef, ClassLabel, DefRef, FireArc, FxRefs, Hardpoint, MoveStats, ShieldDef, SoundRefs, UnitDef, WeaponDef, WeaponKind};
 pub use features::{Features, Profile};
 pub use gui_cfg::{Colour, GuiCfg, GuiLayout, GuiValue, Panel, Rect};

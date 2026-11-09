@@ -252,6 +252,37 @@ impl TechTree {
         (tree, warnings)
     }
 
+    /// Where the tech tree called `stem` (no extension) lives in a mounted
+    /// install: the highest-priority layer that has `techtree/<stem>.xml`,
+    /// `techtree/<stem>.tt` or `<stem>.tt`, the `.xml` first within one layer
+    /// (Fleet Operations' base ships both; a mod's own `.tt` beats the base's
+    /// `.xml`). Armada I's `.zfs` puts `.tt` files under `techtree/`.
+    pub fn find(vfs: &sta_vfs::Vfs, stem: &str) -> Option<String> {
+        let s = stem.to_ascii_lowercase();
+        [format!("techtree/{s}.xml"), format!("techtree/{s}.tt"), format!("{s}.tt")]
+            .into_iter()
+            .filter_map(|p| vfs.resolve(&p).map(|(layer, _)| (layer, p)))
+            .min_by_key(|(layer, _)| *layer)
+            .map(|(_, p)| p)
+    }
+
+    /// Load the tree [`find`](TechTree::find) names. Includes resolve beside
+    /// the including file, then under `techtree/`, then by bare name. `None`
+    /// when no such tree is mounted.
+    pub fn from_vfs(vfs: &sta_vfs::Vfs, stem: &str) -> Option<(TechTree, Vec<Warning>)> {
+        let path = Self::find(vfs, stem)?;
+        let (dir, name) = match path.rsplit_once('/') {
+            Some((d, n)) => (format!("{d}/"), n.to_owned()),
+            None => (String::new(), path.clone()),
+        };
+        let mut load = |n: &str| {
+            let base = n.rsplit(['/', '\\']).next()?;
+            let bytes = [format!("{dir}{base}"), format!("techtree/{base}"), base.to_owned()].iter().find_map(|p| vfs.read(p))?.ok()?;
+            Some(String::from_utf8_lossy(&bytes).into_owned())
+        };
+        Some(TechTree::load(&name, &mut load))
+    }
+
     /// Parse one `.tt` or `.xml` text with no includes available.
     pub fn parse(name: &str, text: &str) -> (TechTree, Vec<Warning>) {
         let mut first = Some(text.to_owned());

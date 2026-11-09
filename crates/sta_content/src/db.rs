@@ -10,6 +10,9 @@ use crate::index::OdfIndex;
 use crate::techtree::TechTree;
 use crate::{ContentError, Result, Warning};
 
+/// The tech tree `load` mounts: what a skirmish game uses.
+pub const DEFAULT_TECH_TREE: &str = "tech1";
+
 // Units are much larger than weapons; a table built once can afford that.
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
@@ -52,6 +55,10 @@ impl ContentDb {
     /// `info.ini` `[Features]` applied, and each unit and weapon carries its
     /// own set with its ODF's `Feature_<name>` keys on top
     /// ([`unit_features`](ContentDb::unit_features)).
+    ///
+    /// The tech tree [`DEFAULT_TECH_TREE`] is loaded too when one is mounted
+    /// (`.xml` or `.tt`, see [`TechTree::find`]) and gates building (SIM-09);
+    /// without one `tech_tree()` is `None` and a warning says so.
     pub fn load(vfs: &sta_vfs::Vfs, index: &OdfIndex) -> Result<(ContentDb, Vec<Warning>)> {
         ContentDb::load_as(vfs, Profile::detect(vfs), index)
     }
@@ -59,7 +66,38 @@ impl ContentDb {
     /// [`load`](ContentDb::load) with the profile given instead of detected
     /// (a lobby choice, a test).
     pub fn load_as(vfs: &sta_vfs::Vfs, profile: Profile, index: &OdfIndex) -> Result<(ContentDb, Vec<Warning>)> {
-        crate::odf::load(vfs, profile, index)
+        let (db, mut warnings) = crate::odf::load(vfs, profile, index)?;
+        if db.is_empty() {
+            return Ok((db, warnings));
+        }
+        // The skirmish tree: `tech1`, from the top-most layer that has one.
+        // A map may name another (CON-07/UI); `with_tech_tree` swaps it.
+        match TechTree::from_vfs(vfs, DEFAULT_TECH_TREE) {
+            // Load what parses; the warnings (mostly duplicate entries in
+            // Fleet Operations' files) are the caller's to show.
+            Some((tree, w)) if !tree.is_empty() => {
+                warnings.extend(w);
+                Ok((db.with_tech_tree(tree), warnings))
+            }
+            // Unreadable or empty: no gating rather than gating everything.
+            Some((_, w)) => {
+                warnings.extend(w);
+                warnings.push(Warning::new(DEFAULT_TECH_TREE, "tech tree has no entries; building is not gated"));
+                Ok((db, warnings))
+            }
+            None => {
+                warnings.push(Warning::new(DEFAULT_TECH_TREE, "no tech tree found; building is not gated"));
+                Ok((db, warnings))
+            }
+        }
+    }
+
+    /// This database gated by `tree` (replacing any), with the hash
+    /// recomputed.
+    pub fn with_tech_tree(mut self, tree: TechTree) -> ContentDb {
+        self.tech = Some(Arc::new(tree));
+        self.hash = hash(&self);
+        self
     }
 
     /// Build a database from definitions made in code (fakes) or JSON5.
