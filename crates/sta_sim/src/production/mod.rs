@@ -27,7 +27,8 @@
 //!   its item or deploy completes refunds the same way. A weld in progress is
 //!   not refundable.
 //! - Accepted: any def the content db has, if the builder's `build.list` is
-//!   empty or names it. Tech prerequisites (CON-06) are not checked; SIM-09.
+//!   empty or names it. Tech prerequisites
+//!   are checked before this, in `Sim::apply` ([`crate::tech`], SIM-09).
 //! - Not yet: officers (no officer stock exists on the player), cooperative
 //!   multi-yard builds on one item, rally points,
 //!   `Features::construction_rigs` gating.

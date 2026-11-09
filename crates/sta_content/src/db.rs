@@ -1,10 +1,13 @@
 //! The content database (S5): every definition under one name-sorted table.
 
+use std::sync::Arc;
+
 use sta_core::{ContentKey, Fixed};
 
 use crate::def::{DefRef, UnitDef, WeaponDef};
 use crate::features::{Features, Profile};
 use crate::index::OdfIndex;
+use crate::techtree::TechTree;
 use crate::{ContentError, Result, Warning};
 
 // Units are much larger than weapons; a table built once can afford that.
@@ -33,6 +36,9 @@ pub struct ContentDb {
     defs: Vec<(String, Def)>,
     profile: Profile,
     features: Features,
+    /// What may be built given what is owned (CON-06); `None` allows
+    /// everything, as the fakes do.
+    tech: Option<Arc<TechTree>>,
     hash: u64,
 }
 
@@ -112,6 +118,12 @@ impl ContentDb {
     pub fn features(&self) -> &Features {
         &self.features
     }
+
+    /// The tech tree the sim gates building with (SIM-09). `None` means no
+    /// gating: every def a builder lists may be built.
+    pub fn tech_tree(&self) -> Option<&TechTree> {
+        self.tech.as_deref()
+    }
 }
 
 /// Collects definitions, then sorts them, hands out keys and resolves
@@ -121,6 +133,7 @@ pub struct ContentBuilder {
     defs: Vec<Def>,
     profile: Profile,
     features: Features,
+    tech: Option<TechTree>,
 }
 
 impl ContentBuilder {
@@ -141,6 +154,12 @@ impl ContentBuilder {
 
     pub fn features(mut self, features: Features) -> Self {
         self.features = features;
+        self
+    }
+
+    /// Gate building with this tech tree (it is part of the content hash).
+    pub fn tech_tree(mut self, tree: TechTree) -> Self {
+        self.tech = Some(tree);
         self
     }
 
@@ -178,7 +197,7 @@ impl ContentBuilder {
                 Def::Weapon(w) => w.key = key,
             }
         }
-        let mut db = ContentDb { defs, profile: self.profile, features: self.features, hash: 0 };
+        let mut db = ContentDb { defs, profile: self.profile, features: self.features, tech: self.tech.map(Arc::new), hash: 0 };
         db.hash = hash(&db);
         Ok(db)
     }
@@ -282,6 +301,14 @@ fn hash(db: &ContentDb) -> u64 {
                 }
             }
         }
+    }
+    // Hashed only when set, so databases without a tree keep their hash. The
+    // entries come out in sorted order, so the Debug text is stable.
+    if let Some(t) = &db.tech {
+        h.byte(0xe3);
+        let entries: Vec<_> = t.entries().collect();
+        let caps: Vec<_> = t.capacity_lists().collect();
+        h.str(&format!("{entries:?}{caps:?}"));
     }
     h.0
 }
