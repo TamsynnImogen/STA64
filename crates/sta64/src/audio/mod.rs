@@ -14,6 +14,7 @@
 mod mixer;
 mod music;
 mod null;
+mod sfx;
 mod ui;
 mod voices;
 
@@ -25,6 +26,7 @@ use bevy::prelude::*;
 pub use mixer::{AudioBackend, KiraAudio, MixBus, Mixer, Sound, Volumes};
 pub use music::{Context as MusicContext, MusicConfig, MusicPlugin};
 pub use null::{Call, CallLog, NullAudio};
+pub use sfx::{SfxConfig, SfxNames, SfxPlugin, VoiceLimiter};
 pub use ui::{UiContext, UiSound, UiSoundPlugin, UiSounds};
 pub use voices::{VoiceConfig, VoiceNames, VoicePlugin};
 
@@ -163,7 +165,7 @@ impl Plugin for AudioPlugin {
         if app.world().get_non_send::<Mixer>().is_none() {
             app.insert_non_send(Mixer::new(choose_backend(self.mode)));
         }
-        app.add_plugins((MusicPlugin, UiSoundPlugin, VoicePlugin))
+        app.add_plugins((MusicPlugin, UiSoundPlugin, SfxPlugin, VoicePlugin))
             .add_message::<PlaySound>()
             .init_resource::<Volumes>()
             .insert_resource(Resolver(Box::new(StubResolver::default())))
@@ -189,7 +191,9 @@ fn sync_volumes(volumes: Res<Volumes>, mut mixer: NonSendMut<Mixer>, mut sent: L
 
 fn sync_listener(cam: Query<&GlobalTransform, With<Camera3d>>, mut mixer: NonSendMut<Mixer>) {
     if let Some(t) = cam.iter().next() {
-        mixer.backend.set_listener(t.translation().to_array(), t.right().to_array());
+        // Sounds are placed in map space; the renderer mirrors Z, so mirror the camera back.
+        let (p, r) = (t.translation(), t.right());
+        mixer.backend.set_listener([p.x, p.y, -p.z], [r.x, r.y, -r.z]);
     }
 }
 

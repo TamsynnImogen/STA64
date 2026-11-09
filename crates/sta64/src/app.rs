@@ -87,6 +87,8 @@ pub struct LaunchConfig {
     /// `Some("")`: `--map` without a name (the map browser).
     pub map: Option<String>,
     pub mission_report: bool,
+    /// `--seat <n>`: play seat `n` in the map view (the link speaks for it, its fog is drawn).
+    pub seat: Option<u8>,
     pub help: bool,
     /// Bench scene file (`--scene <ini>`).
     pub scene: Option<PathBuf>,
@@ -118,6 +120,7 @@ Usage: sta64 [options]
   --mod <name>             mod to mount on top of the install
   --view [<model>]         model viewer (the default)
   --map [<map>]            fly around a map; without a name, the map browser
+  --seat <n>               with --map: play seat n (orders for its units only, its fog and shroud drawn)
   --mission-report         print which mission script every map would run, then exit
 
 Test bench (docs/TESTBENCH.md):
@@ -165,6 +168,10 @@ impl LaunchConfig {
                 "--mod" => cfg.active_mod = value(&mut args),
                 "--view" => cfg.view = value(&mut args),
                 "--map" => cfg.map = Some(value(&mut args).unwrap_or_default()),
+                "--seat" => match value(&mut args).and_then(|v| v.parse().ok()) {
+                    Some(n) => cfg.seat = Some(n),
+                    None => cfg.unknown.push("--seat (needs a seat number)".into()),
+                },
                 "--ui-gallery" => cfg.ui_gallery = true,
                 "--mission-report" => cfg.mission_report = true,
                 "--help" | "-h" => cfg.help = true,
@@ -254,6 +261,8 @@ mod tests {
         assert!(c.unsupported().is_empty() && c.unknown.is_empty());
 
         assert_eq!(parse("--map").map.as_deref(), Some(""));
+        assert_eq!(parse("--map x --seat 2").seat, Some(2));
+        assert_eq!(parse("--map x").seat, None);
         assert_eq!(parse("--view fdefiant").view.as_deref(), Some("fdefiant"));
         assert_eq!(parse("--view fdefiant").mode(), Mode::Viewer);
         assert!(parse("--mission-report").mission_report);

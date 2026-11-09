@@ -15,3 +15,7 @@ sta_sim.workspace = true
 [[bin]]
 name = "sta-bench"
 path = "src/bin/sta-bench.rs"
+
+[dev-dependencies]
+sta_vfs.workspace = true
+sta_bzn.workspace = true

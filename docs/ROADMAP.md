@@ -29,11 +29,12 @@ How M2–M5 split into parallel work packages: [WORKPLAN.md](WORKPLAN.md).
   parse, binary object counts match the declared counts exactly
 - [x] Map view: every object's model placed by its BZN transform, `ScaleSOD`,
   team colours, skybox (`BackgroundArt`), shared parts across copies
-- Starfield (`StarfieldOdf`), asteroid fields (`dont_load_SOD` fields), planet
+- [x] Starfield (`StarfieldOdf`), asteroid fields (`dont_load_SOD` fields), planet
   bodies from `groundTextureName`, nebula volumes, map lights (`dlight`)
-- RTS camera, selection, move orders through `sta_sim`
-- Renderer interpolation between sim ticks
-- Test bench first slice: `sta64 --scene` headless, animation clock on sim time ([TESTBENCH.md](TESTBENCH.md))
+- [x] RTS camera, selection, move orders through `sta_sim`
+- [x] Renderer interpolation between sim ticks
+- [x] Test bench first slice: `sta64 --scene` headless, animation clock on sim time ([TESTBENCH.md](TESTBENCH.md))
+- [x] On the seams: `--map` builds its sim from `MapDef` + `GameSetup` (`Sim::from_setup`) over `ContentDb::load` (INT-M2)
 
 ## M3: Combat and economy
 - Weapons/damage/shields from ODF, fire arcs, point defence

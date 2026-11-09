@@ -25,8 +25,10 @@ use sta_assets::a2fmt::Matrix34;
 use sta_assets::model::Model;
 use std::collections::HashMap;
 use std::sync::Arc;
+use sta_content::{ContentDb, MapDef, OdfIndex};
 use sta_sim::command::LocalRouter;
-use sta_sim::{EntityId, Fixed, MoveStats, PlayerId, Sim, Vec3 as SimVec3};
+use sta_sim::setup::{Control, GameOptions, GameSetup, PlayerSetup};
+use sta_sim::{ContentKey, EntityId, Fixed, PlayerId, Sim, TeamId, Vec3 as SimVec3};
 
 #[derive(Resource)]
 pub struct MapBrowser {
@@ -60,15 +62,50 @@ pub fn browser(vfs: &sta_vfs::Vfs, initial: Option<&str>, mount_summary: String)
     }
 }
 
-/// Loaded models, kept across maps, and the temporary ODF shim.
+/// The seat this client plays in the map view (`--seat <n>`): the link speaks for
+/// it, `LocalPlayer` is it (so the fog and shroud are its) and only its units take
+/// orders. `None` (the default) is the view as before: every unit visible, every
+/// team's ships ordered, as the bench.
+#[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct MapSeat(pub Option<u8>);
+
+/// The sim's content, loaded once per mount: the database and the ODF index its
+/// map conversions resolve scenery through.
+struct SimContent {
+    db: Arc<ContentDb>,
+    index: Arc<OdfIndex>,
+}
+
+/// Loaded models, kept across maps, and the render-side ODF cache.
 #[derive(Resource, Default)]
 struct Catalogue {
-    /// CON-03 replaces this with the real content loader.
+    /// What the sim reads: `ContentDb::load` (CON-03) of the mount.
+    content: Option<SimContent>,
+    /// What only the renderer reads (nebula and planet keys, the starfield's
+    /// sprites): the ODFs the map names, as raw keys. The sim's database does not
+    /// carry them.
     legacy: sta_content::legacy::Legacy,
     models: HashMap<String, Option<(String, Arc<Model>)>>,
 }
 
 impl Catalogue {
+    /// The mount's content database, built on first use.
+    fn content(&mut self, vfs: &sta_vfs::Vfs) -> Result<&SimContent, String> {
+        if self.content.is_none() {
+            let (index, dupes) = OdfIndex::build(vfs);
+            let (db, warnings) = ContentDb::load(vfs, &index).map_err(|e| e.to_string())?;
+            info!(
+                "content: {} definitions, profile {:?}, {} warnings ({} duplicate ODFs)",
+                db.len(),
+                db.profile(),
+                warnings.len(),
+                dupes.len()
+            );
+            self.content = Some(SimContent { db: Arc::new(db), index: Arc::new(index) });
+        }
+        Ok(self.content.as_ref().expect("just set"))
+    }
+
     fn model(&mut self, vfs: &sta_vfs::Vfs, name: &str) -> Option<(String, Arc<Model>)> {
         let key = name.to_ascii_lowercase();
         let key = key.trim_end_matches(".sod").to_owned();
@@ -87,11 +124,74 @@ impl Catalogue {
     }
 }
 
-/// Add a ship at a map transform (right, up, front, position).
-fn spawn_unit(sim: &mut Sim, team: i32, transform: &[f32; 12], stats: MoveStats) -> EntityId {
-    let pos = SimVec3::from_f32([transform[9], transform[10], transform[11]]);
-    let heading = (Fixed::from_f64(transform[6] as f64), Fixed::from_f64(transform[8] as f64));
-    sim.spawn(team.clamp(0, 255) as u8, pos, heading, stats)
+/// The sim entities a map's objects became, found again by what they were placed
+/// as: `from_setup` spawns the `MapDef`'s objects, the view lists them back, and
+/// each BZN object takes the next entity of its definition, place and owner.
+struct Placed(HashMap<(ContentKey, [Fixed; 3], PlayerId), std::collections::VecDeque<EntityId>>);
+
+impl Placed {
+    fn of(sim: &Sim) -> Placed {
+        use sta_sim::WorldSource;
+        let mut by: HashMap<_, std::collections::VecDeque<EntityId>> = HashMap::new();
+        for u in &sim.view().units {
+            by.entry((u.def, [u.pos.x, u.pos.y, u.pos.z], u.owner)).or_default().push_back(u.id);
+        }
+        Placed(by)
+    }
+
+    fn take(&mut self, key: ContentKey, o: &sta_bzn::MapObject) -> Option<EntityId> {
+        let p = SimVec3::from_f32([o.transform[9], o.transform[10], o.transform[11]]);
+        let owner = if o.team > 0 { PlayerId((o.team - 1).min(255) as u8) } else { sta_sim::world::NEUTRAL };
+        self.0.get_mut(&(key, [p.x, p.y, p.z], owner))?.pop_front()
+    }
+
+    /// Entities no BZN object took (`from_setup` made them from something the
+    /// renderer does not draw as a ship).
+    fn rest(self) -> Vec<EntityId> {
+        let mut ids: Vec<EntityId> = self.0.into_values().flatten().collect();
+        ids.sort();
+        ids
+    }
+}
+
+/// What the sim is made from: the BZN converted to a `MapDef` (CON-07), a `GameSetup`
+/// over it and the mount's content, and the sim from that (`Sim::from_setup`).
+struct SimSide {
+    setup: GameSetup,
+    sim: Sim,
+    /// Conversion and spawn warnings together.
+    warnings: usize,
+}
+
+fn build_sim(map: &sta_bzn::Map, name: &str, content: &Arc<ContentDb>, index: &OdfIndex, vfs: &sta_vfs::Vfs, seat: Option<u8>) -> SimSide {
+    let converted = MapDef::convert_bzn_in(map, content, vfs, index);
+    let mut map_def = converted.map;
+    map_def.name = name.to_owned();
+    let setup = GameSetup {
+        seed: 1,
+        players: seats(&map_def, seat, &map.race),
+        map: Arc::new(map_def),
+        content: content.clone(),
+        options: GameOptions::default(),
+    };
+    let (sim, spawn_warnings) = Sim::from_setup_with_warnings(&setup);
+    for w in converted.warnings.iter().chain(&spawn_warnings).take(20) {
+        debug!("{}: {}", w.file, w.message);
+    }
+    SimSide { warnings: converted.warnings.len() + spawn_warnings.len(), setup, sim }
+}
+
+/// The seats of a map: every owner and start slot, and the one the client plays.
+fn seats(map: &MapDef, me: Option<u8>, race: &str) -> Vec<PlayerSetup> {
+    let n = map.objects.iter().filter_map(|o| o.owner).chain(map.starts.iter().map(|s| s.slot)).chain(me).max().map_or(1, |m| m as usize + 1);
+    (0..n.min(250) as u8)
+        .map(|i| PlayerSetup {
+            id: PlayerId(i),
+            team: TeamId(i),
+            race: race.to_owned(),
+            control: if me == Some(i) { Control::Human } else { Control::Idle },
+        })
+        .collect()
 }
 
 #[derive(Component)]
@@ -185,6 +285,7 @@ type MapState<'w> = (
     ResMut<'w, Assets<crate::render::planet::PlanetMaterial>>,
     ResMut<'w, Assets<crate::render::nebula::NebulaMaterial>>,
     Res<'w, crate::render::nebula::NoiseVolume>,
+    Res<'w, MapSeat>,
 );
 
 /// The ambient light and the two map lights, as one system parameter.
@@ -201,6 +302,7 @@ impl Plugin for MapPlugin {
         app.init_resource::<TextureCache>()
             .init_resource::<PartCache>()
             .init_resource::<Catalogue>()
+            .init_resource::<MapSeat>()
             .init_resource::<crate::render::particles::Particles>()
             .insert_resource(ClearColor(Color::BLACK))
             .insert_resource(GlobalAmbientLight {
@@ -414,7 +516,7 @@ fn rebuild(
     lighting: Lighting,
 ) {
     let (mut silhouettes, mut ambient, mut lights) = lighting;
-    let (mut particles, mut selection, mut queue, mut clock, mut limits, mut planet_materials, mut nebula_materials, noise) = state;
+    let (mut particles, mut selection, mut queue, mut clock, mut limits, mut planet_materials, mut nebula_materials, noise, seat) = state;
     if !browser.dirty {
         return;
     }
@@ -444,11 +546,32 @@ fn rebuild(
             return;
         }
     };
-    // Every ODF the map names, its ships' physics ODFs come with them, and the starfield.
+    // The sim's side: the mount's content, the map converted to a `MapDef`, a
+    // `GameSetup` and the sim from it.
+    let (content, index) = match catalogue.content(&vfs.0) {
+        Ok(c) => (c.db.clone(), c.index.clone()),
+        Err(e) => {
+            browser.info = format!("{header}\ncontent: {e}");
+            return;
+        }
+    };
+    let SimSide { setup, sim, warnings: sim_warnings } = build_sim(&map, &name, &content, &index, &vfs.0, seat.0);
+    let map_def = setup.map.clone();
+    let mut placed = Placed::of(&sim);
+    commands.insert_resource(ContentRes(content.clone()));
+    let seat_player = seat.0.map(PlayerId);
+    commands.insert_resource(crate::render::units::LocalPlayer(seat_player));
+    {
+        let (lo, hi) = map_def.bounds;
+        commands.insert_resource(crate::render::fog::FogBounds {
+            min: Vec2::new(lo.x.to_f32(), lo.z.to_f32()),
+            max: Vec2::new(hi.x.to_f32(), hi.z.to_f32()),
+        });
+    }
+    // Every ODF the map names, its ships' physics ODFs come with them, and the starfield:
+    // what the renderer reads that the sim's database does not carry.
     let star_odf = map.starfield_odf.trim_end_matches(".odf").trim_end_matches(".ODF").to_owned();
     let db = Arc::new(catalogue.legacy.db(&vfs.0, map.objects.iter().map(|o| o.odf.as_str()).chain([star_odf.as_str()])));
-    commands.insert_resource(ContentRes(db.clone()));
-    let mut sim = Sim::new(1);
     let formats = device
         .map(|d| CompressedImageFormats::from_features(d.features()))
         .unwrap_or(CompressedImageFormats::BC);
@@ -468,6 +591,7 @@ fn rebuild(
     let mut hidden = 0usize;
 
     for o in &map.objects {
+        let sim_key = content.key(&o.odf).filter(|&k| content.unit(k).is_some());
         let Some(def) = db.key(&o.odf).and_then(|k| db.unit(k)) else {
             no_odf += 1;
             missing.push(o.odf.clone());
@@ -629,16 +753,21 @@ fn rebuild(
             commands.entity(entity).insert(BackgroundObject);
         }
         let units_before = units;
-        // Craft with a physics ODF move: they become simulation units.
-        if def.movement.max_speed > Fixed::ZERO {
-            let id = spawn_unit(&mut sim, o.team, &o.transform, def.movement);
-            let radius = model
-                .bounds()
-                .map(|(lo, hi)| (Vec3::from(hi) - Vec3::from(lo)).length() * 0.5)
-                .unwrap_or(20.0)
-                * scale;
-            commands.entity(entity).insert((SimEntity(id), SelectRadius(radius.max(5.0))));
-            units += 1;
+        // What the sim made of the object (a unit of the content database) is drawn
+        // by this entity: the ship moves with it and takes orders as one.
+        if let Some(id) = sim_key.and_then(|k| placed.take(k, o)) {
+            commands.entity(entity).insert(SimEntity(id));
+            if def.movement.max_speed > Fixed::ZERO || o.team > 0 {
+                let radius = model
+                    .bounds()
+                    .map(|(lo, hi)| (Vec3::from(hi) - Vec3::from(lo)).length() * 0.5)
+                    .unwrap_or(20.0)
+                    * scale;
+                commands.entity(entity).insert(SelectRadius(radius.max(5.0)));
+            }
+            if def.movement.max_speed > Fixed::ZERO {
+                units += 1;
+            }
         }
         let team = if o.team > 0 { teams.0.get(o.team as usize).map(|t| t.1).unwrap_or(neutral) } else { neutral };
         // Team-owned ships and stations: their strategic icon, the mod's `<model>_sv`
@@ -794,9 +923,19 @@ fn rebuild(
     limits.hi = a.max(b) + Vec3::splat(margin);
     limits.max_dist = size.x.max(size.z).max(2000.0) * 2.0;
 
-    // The ships' sim, stepped by the sim link. The view orders any team's ships, so
-    // the link speaks as the bench, which the sim does not restrict to its own units.
-    commands.insert_resource(SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), PlayerId::BENCH));
+    // Sim entities the renderer draws some other way (planets, nebulae, rocks, things
+    // without a model): linked to a bare entity, so the units view does not draw them a
+    // second time.
+    let unlinked = placed.rest();
+    let ghosts = unlinked.len();
+    for id in unlinked {
+        commands.spawn((SimEntity(id), Transform::IDENTITY, Visibility::default(), ChildOf(root)));
+    }
+
+    // The sim, stepped by the sim link. Without a seat the view orders any team's ships,
+    // so the link speaks as the bench, which the sim does not restrict to its own units;
+    // with one it speaks as the seat and the sim holds it to its own.
+    commands.insert_resource(SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), seat_player.unwrap_or(PlayerId::BENCH)));
 
     missing.sort();
     missing.dedup();
@@ -825,9 +964,22 @@ fn rebuild(
         no_odf,
         tris
     );
+    info.push_str(&format!(
+        "\nsim: {} objects, {} regions, {} starts, {} seats ({}), {} without a model of their own   content {} defs, {:?}, {} conversion warnings",
+        map_def.objects.len(),
+        map_def.regions.len(),
+        map_def.starts.len(),
+        setup.players.len(),
+        seat.0.map_or("viewing as the bench".to_owned(), |s| format!("playing seat {s}")),
+        ghosts,
+        content.len(),
+        content.profile(),
+        sim_warnings
+    ));
     if !missing.is_empty() {
         info.push_str(&format!("\nnot found: {}", missing.iter().take(12).cloned().collect::<Vec<_>>().join(", ")));
     }
+    info!("map {}", info.replace('\n', " | "));
     browser.info = info;
 }
 
@@ -853,5 +1005,109 @@ fn hud(browser: Res<MapBrowser>, mut q: Query<&mut Text, With<MapHud>>) {
             browser.mount_summary,
             browser.info
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sta_sim::command::{Command, CommandKind, Edit, Order};
+    use sta_sim::WorldSource;
+
+    #[test]
+    fn seats_cover_owners_starts_and_the_player() {
+        let mut map = MapDef::empty();
+        assert_eq!(seats(&map, None, "x").len(), 1);
+        map.starts.push(sta_content::StartPos { slot: 3, pos: Default::default(), heading: (Fixed::ZERO, Fixed::ONE) });
+        let s = seats(&map, Some(5), "x");
+        assert_eq!(s.len(), 6);
+        assert_eq!(s.iter().filter(|p| p.control == Control::Human).count(), 1);
+        assert_eq!(s[5].control, Control::Human);
+        assert_eq!(s[2].team, TeamId(2));
+    }
+
+    /// With `STA64_TEST_INSTALL` (+ optional `STA64_TEST_MOD`, empty for none): the map
+    /// view's sim side on real maps. Every BZN object the sim made a unit of finds its
+    /// entity again, a ship obeys a move order, and two hostile ships fight.
+    #[test]
+    fn install_maps_build_a_sim_that_moves_and_fights() {
+        let Ok(root) = std::env::var("STA64_TEST_INSTALL") else { return };
+        let m = std::env::var("STA64_TEST_MOD").unwrap_or_default();
+        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(m.as_str()).filter(|m| !m.is_empty())).unwrap();
+        let (index, _) = OdfIndex::build(&vfs);
+        let (db, _) = ContentDb::load(&vfs, &index).unwrap();
+        let (db, index) = (Arc::new(db), Arc::new(index));
+        let mut names: Vec<String> = vfs.list("bzn").into_iter().filter(|p| p.ends_with(".bzn")).collect();
+        names.sort();
+        let mut maps = 0;
+        for path in names.iter().step_by((names.len() / 8).max(1)) {
+            let Some(Ok(data)) = vfs.read(path) else { continue };
+            let Ok(bzn) = sta_bzn::parse(&data) else { continue };
+            if bzn.objects.is_empty() {
+                continue;
+            }
+            let SimSide { setup, mut sim, warnings } = build_sim(&bzn, path, &db, &index, &vfs, Some(0));
+            let mut placed = Placed::of(&sim);
+            let (mut wanted, mut found) = (0, 0);
+            for o in &bzn.objects {
+                if let Some(k) = db.key(&o.odf).filter(|&k| db.unit(k).is_some()) {
+                    wanted += 1;
+                    found += usize::from(placed.take(k, o).is_some());
+                }
+            }
+            let units = sim.view().units.len();
+            println!("{path}: {units} sim units, {found}/{wanted} objects linked, {} unlinked, {} seats, {warnings} warnings", placed.rest().len(), setup.players.len());
+            assert_eq!(found, setup.map.objects.len(), "{path}: every placed object finds its entity ({wanted} had a unit definition, the rest became regions or scenery)");
+            maps += 1;
+
+            // A ship moves when told to (the bench speaks for any seat).
+            let view = sim.view();
+            let ship = view.units.iter().find(|u| db.unit(u.def).is_some_and(|d| d.movement.max_speed > Fixed::ZERO));
+            if let Some(ship) = ship {
+                let to = SimVec3 { x: ship.pos.x + Fixed::from_int(2000), y: ship.pos.y, z: ship.pos.z };
+                let cmd = Command { player: PlayerId::BENCH, seq: 0, kind: CommandKind::Order(Order::Move { units: vec![ship.id], to, queue: false }) };
+                let start = ship.pos;
+                let mut v = sim.step(&[cmd]).view;
+                for _ in 0..300 {
+                    v = sim.step(&[]).view;
+                }
+                let now = v.unit(ship.id).expect("ship still there").pos;
+                assert!(now != start, "{path}: the ship moved");
+            }
+        }
+        assert!(maps > 0, "no map to test on");
+
+        // Two armed ships of different seats, in range, shoot.
+        let armed: Vec<_> = db.units().filter(|u| !u.hardpoints.is_empty() && u.movement.max_speed > Fixed::ZERO && u.hull > Fixed::ZERO).collect();
+        let a = armed.first().expect("an armed ship");
+        let setup = GameSetup {
+            seed: 3,
+            map: Arc::new(MapDef::empty()),
+            content: db.clone(),
+            players: vec![
+                PlayerSetup { id: PlayerId(0), team: TeamId(0), race: String::new(), control: Control::Human },
+                PlayerSetup { id: PlayerId(1), team: TeamId(1), race: String::new(), control: Control::Idle },
+            ],
+            options: GameOptions::default(),
+        };
+        let mut sim = Sim::from_setup(&setup);
+        let at = |x: i32| SimVec3 { x: Fixed::from_int(x), y: Fixed::ZERO, z: Fixed::ZERO };
+        let spawn = |seq, player, x| Command {
+            player: PlayerId::BENCH,
+            seq,
+            kind: CommandKind::Edit(Edit::Spawn { odf: a.key, player: PlayerId(player), pos: at(x), heading: (Fixed::ONE, Fixed::ZERO) }),
+        };
+        let mut v = sim.step(&[spawn(0, 0, 0), spawn(1, 1, 300)]).view;
+        let (first, second) = (v.units[0].id, v.units[1].id);
+        let attack = |seq, by, target| Command { player: PlayerId::BENCH, seq, kind: CommandKind::Order(Order::Attack { units: vec![by], target }) };
+        v = sim.step(&[attack(2, first, second), attack(3, second, first)]).view;
+        let mut hits = 0;
+        for _ in 0..900 {
+            let out = sim.step(&[]);
+            hits += out.events.iter().filter(|e| matches!(e, sta_sim::SimEvent::Hit { .. })).count();
+            v = out.view;
+        }
+        println!("{}: {hits} hits in 30 s, units left {}", a.odf, v.units.len());
+        assert!(hits > 0, "{}: armed ships in range hit each other", a.odf);
     }
 }

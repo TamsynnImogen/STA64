@@ -319,8 +319,9 @@ mod tests {
                 .drain()
                 .into_iter()
                 .filter_map(|c| match c {
-                    Call::Play { name, bus, at } => {
-                        assert_eq!((bus, at), (Bus::Voice, None), "voices are non-positional on the voice bus");
+                    // SfxPlugin is part of AudioPlugin: leave its positional sounds out.
+                    Call::Play { name, bus: Bus::Voice, at } => {
+                        assert_eq!(at, None, "voices are non-positional");
                         Some(name)
                     }
                     _ => None,
