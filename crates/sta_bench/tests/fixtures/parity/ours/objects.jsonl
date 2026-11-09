@@ -1,0 +1,4 @@
+{"schema":1,"build":"sta64-sim 0.1.0 Native","label":"empty","tick":320,"digest":"fc5ed0c1c5951bea"}
+{"id":1,"name":"warbird","odf":"fx_cloaker","class":"craft","team":1,"mine":false,"kind":"craft","pos":[0,0,0],"hull":[300,300],"shields":[150,150],"selected":false,"group":null,"dying":false}
+{"id":2,"name":"friend","odf":"fx_frigate","class":"craft","team":2,"mine":false,"kind":"craft","pos":[-100,0,0],"hull":[300,300],"shields":[150,150],"selected":false,"group":null,"dying":false}
+{"id":3,"name":"foe","odf":"fx_frigate","class":"craft","team":3,"mine":false,"kind":"craft","pos":[400,0,0],"hull":[300,300],"shields":[130,150],"selected":false,"group":null,"dying":false}
