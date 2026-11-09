@@ -3,3 +3,4 @@
 
 pub mod notices;
 pub mod theme;
+pub mod radar;

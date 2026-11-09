@@ -26,6 +26,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 - [?] Ships near a planet's day side / inside nebulae take their coloured light (planet glow, nebula lights); not overpowering? — 8a95cee
 - [?] Nebulae as volumetric gas (Mutara purple/pink etc.) instead of billboards; ships inside show correctly; FPS when zoomed into a big nebula — e4eb7c7
 - [?] R0-3 carve (no visual change intended): `--map` as before — ships select (click, box, Shift), right-click move keeps formation, Space stops, motion smooth, selection rings and waypoint line show, FPS readout, strategic icons green when selected
+- [?] Radar (UI-05), until the HUD wires it in: `STA64_UI_RADAR=1 cargo run -- --headless --clock bench --scene crates/sta64/tests/fixtures/radar.ini --frames 0 --frame-size 1280x720 --frame-dir /tmp/radar`; the LCARS panel sits bottom left with Ships / Stations filter dots above a dark square; own ships green, enemies red, moon dim grey, bases square, only what the player's sensors see
+- [?] Radar clicks and filters: dots pick all / allies / enemies / neutral, the name cycles; a click on the square sends `RadarClick` (camera move / `GO_WARP` wiring is the HUD's, INT-M3)
 
 ## Checked earlier (morning list)
 
