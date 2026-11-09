@@ -81,3 +81,4 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [x] Normal-map convention verified against Bevy's tangents — `6b12c12`
 - [x] Team colours from `teamcolor.odf` — `4cea39a`
 - [x] Damage-state nodes hidden on healthy craft — `5287d6f`
+- [ ] Construction, cloak FX: a station under construction welds and firms up, `Built` flashes; a cloaked own unit goes translucent and back (RND-11)
