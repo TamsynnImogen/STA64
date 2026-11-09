@@ -41,7 +41,13 @@ fn new_id() -> String {
 }
 
 fn pid_alive(pid: u32) -> bool {
-    Path::new(&format!("/proc/{pid}")).exists()
+    // No /proc on macOS: signal 0 only checks that the process exists.
+    Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
 }
 
 fn read_pid(dir: &Path, file: &str) -> Option<u32> {
