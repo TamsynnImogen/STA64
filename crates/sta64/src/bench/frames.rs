@@ -246,6 +246,13 @@ pub fn add_loading(app: &mut App, cfg: &LaunchConfig) {
     crate::frontend::loading::add_frame_overlay(app, target, cfg.frame_size.unwrap_or((640, 360)));
 }
 
+/// `STA64_UI_SCREEN=<name>`: a front-end screen (UI-07) over the frame, on fake content;
+/// `crate::frontend::screens::frame` has the names.
+pub fn add_screen(app: &mut App, cfg: &LaunchConfig, screen: crate::frontend::screens::Screen) {
+    let target = app.world().resource::<Capture>().target.clone();
+    crate::frontend::screens::frame::add_overlay(app, screen, target, cfg.frame_size.unwrap_or((640, 360)).1);
+}
+
 /// `STA64_UI_HUD=1`: the UI-04 HUD over the frame (with the radar and notices it
 /// hosts), fed from the bench's view as player 1 on the bench's fake content;
 /// `crate::ui::hud::frame` has the other switches.
