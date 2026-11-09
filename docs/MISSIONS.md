@@ -90,3 +90,9 @@ platforms. The runtime replaces them with deterministic implementations, and
   lockstep; deterministic `math.*`.
 - Run every installed `missions/*.lua` headless against stub maps as a
   regression test.
+- [x] Inventory what the stock A1 and A2 mission DLLs call in the engine
+  ([MISSION_DLL_API.md](MISSION_DLL_API.md), `tools/mission_dll_inventory.py`):
+  A2's `.dsl` scripts call through `g_pSI` (a `ScriptInterface` vtable; 138 of
+  its methods used), A1's DLLs import 213 functions by name from `Armada.exe`,
+  bridge scenes included. Binding the missing ones: WORKPLAN LUA-05, LUA-06;
+  `.drl` rules to Lua scaffolds: LUA-07.

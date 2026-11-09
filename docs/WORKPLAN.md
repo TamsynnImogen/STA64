@@ -438,7 +438,7 @@ seam rather than writes.
 | CON-07 | `MapDef::from_bzn`: objects, start positions, regions, scenery, mission; `map.rs` reads `scenery` | `sta_content/src/map.rs` (not the seam types) | R0-3, CON-02 | `two_bases()` | SIM-01, TOOL-05 | All 517 maps convert with counts equal to `sta_bzn`'s; start positions found on every multiplayer map | M | Sonnet |
 | CON-08 | M3D 1.93 layout; Legacy LOD (type 11) and effect (type 2) nodes | `sta_assets/src/m3d.rs` | — | — | RND-07 | Every installed M3D parses; LOD nodes listed by `model_info` | M | Sonnet |
 | CON-09 | glTF/GLB → `sta_assets::model::Model` | `sta_assets/src/gltf.rs` | — | `fixtures/models/` | native content | Fixture GLBs load; viewer shows them (`--view fx_cruiser`) | M | Sonnet |
-| CON-10 | Audio data: sound lookup by bare name (OGG > WAV > MP3 per layer), WAV/MP3 decode, `audio.odf`/`events.odf` sound tables | `sta_assets/src/audio.rs` | — | — | AUD-01..04 | Every sound named by FO4 ODFs resolves or is listed; decode tests | M | Sonnet |
+| CON-10 | Audio data: sound lookup by bare name (OGG > WAV > MP3 per layer), **WAV, MP3 and OGG (Vorbis) decode** in pure Rust (permissive licences only), `audio.odf`/`events.odf` sound tables; the formats STA64 supports (Immy, 2026-11-09) | `sta_assets/src/audio.rs` | — | — | AUD-01..04, MED-03, LUA-06 | Every sound named by FO4 ODFs and the A1/A2 mission DLLs resolves or is listed; every installed WAV, MP3 and OGG decodes | M | Sonnet |
 | CON-11 | Language packs: `Dynamic_Localized_Strings.h`, `label.map` → `StringTable` (shares `sta_mission::Labels`) | `sta_content/src/strings.rs` | R0-2 | — | UI-09 | All installed packs parse; lookup test | S | Haiku |
 | CON-12 | GUI cfg (`docs/data/cfg.md`) → typed layouts for HUD/menus | `sta_content/src/gui_cfg.rs` | R0-2 | — | UI-04 | All 43 FO `.cfg` parse; layout snapshot tests | M | Sonnet |
 | CON-13 | Mod discovery: list mods (`info.ini`), chain, metadata | `sta_vfs/src/mods.rs` | — | temp dirs | UI-07 | Unit tests; lists installed mods | S | Haiku |
@@ -448,6 +448,8 @@ seam rather than writes.
 | CON-17 | `.sta` writer: reproducible packing (key order, fixed Zstandard level, no timestamps), store-when-not-smaller, `content_hash` | `crates/sta_vfs/src/sta_write.rs` | CON-16 | — | EDT-08 | Same folder packs to the same bytes twice; same files packed stored vs compressed give the same `content_hash`; write → read round trip | S | Sonnet |
 | CON-18 | Mod manifests and load order: `manifest.toml` parse, `info.ini` `ParentMod` as a dependency, semver checks, cycle refusal, topological order with `[load]` hints; mod identity (`content_hash`) into `ContentDb::hash` | `crates/sta_vfs/src/manifest.rs`, `sta_vfs/src/order.rs` | CON-13, CON-16 | temp dirs | UI-07 (mod select), NET handshake | Table tests for ordering, missing/wrong-version dependencies and cycles; installed Roots mods order as `mod_chain` does today | M | Sonnet |
 | CON-19 | `.sta` signatures: Ed25519 sign/verify of header + `content_hash`, trust store, status (trusted / unknown key / unsigned / tampered) | `crates/sta_vfs/src/sta_sign.rs` | CON-16, CON-17 | — | UI-07 | Sign → verify; a flipped byte in any file, the index or the header reports tampered | S | Sonnet |
+| CON-20 | Star Trek: Legacy `.sol` maps (BinaryMode SOL v3021): map metadata, bounds, start locations, placed objects (ODF, id, team, instance name, Matrix34) → `MapDef`; the mission script name kept (`.drl`/`.dsl`). Port of A2FOExtensions' `A2FOSOLMaps/sol_format.cpp` (Immy's own) | `crates/sta_bzn/src/sol.rs` | CON-07 for `MapDef` (parser first, against `MapDef::empty`) | hand-built SOL fixtures | maps | Fixture tests; `mpbajor_all.sol` gives 8 start locations and 19 objects, as A2FOSOLMaps validated; a SOL in `bzn/` appears in the map list and loads its objects | M | Sonnet |
+| CON-21 | Menu and shell images: **BMP** decode (1/4/8-bit palette, 16/24/32-bit, RLE) beside the existing PNG path, found through the VFS like textures | `sta_assets/src/bmp.rs` | — | — | UI-06, UI-07, UI-08 | Every installed `.bmp` (A1, A2, FO) decodes; palette and RLE fixture tests | S | Sonnet |
 
 ### Simulation (SIM)
 
@@ -507,6 +509,7 @@ Each becomes a package of the same shape when M3 closes.
 | UI-09 | All UI text through `StringTable`; language switch | `sta64/src/ui/i18n.rs` | CON-11 | — | INT-M4 | No literal UI strings (lint test) | S | Haiku |
 | UI-10 | Tooltips, notices, chat log | `sta64/src/ui/notices.rs` | UI-03 | `ScriptedSource` | — | Notice on `Destroyed` test | S | Sonnet |
 | UI-11 | Lobby | `sta64/src/frontend/lobby.rs` | UI-07, NET-03 | `LoopbackNet` | INT-M5 | Two clients join a room in-process | M | Sonnet |
+| UI-12 | **Sprite fonts**: UI text drawn with the games' own SPR fonts (`FontSmall.spr` and the rest, resolved through the mod chain; each mod's byte → glyph table, including custom single-byte glyphs such as resource symbols, as Tooltip Lab reads them). The games' fonts are sprite based; UI-03's baked TTF fonts stay for STA64's own screens | `sta64/src/ui/sprite_font.rs` | UI-03 | — | UI-04, UI-07, UI-10, EDT-04 | HUD and menu text renders in the mod's font; glyph tables differ per mod and are read, not assumed | M | Sonnet |
 
 ### Audio (AUD) — new; not yet on the roadmap
 
@@ -540,6 +543,24 @@ Each becomes a package of the same shape when M3 closes.
 | LUA-02 | Deterministic `math.*` and `math.random` (MISSIONS.md "Determinism") | `sta_mission/src/math.rs` | — | — | LUA-01 | Bit-exact golden values on four targets | S | Sonnet |
 | LUA-03 | MMM API, most used first (MMM_API.md: `Entity`, `EntityFinder`, `Monitor`, `Player` relations, objectives, `giveOrder`) | `sta_mission/src/api/` | LUA-01, SIM-01 | `fake::db()` | LUA-04 | Per-function tests; share of installed scripts that run 300 ticks without stub hits | L | Sonnet |
 | LUA-04 | Every installed mission runs headless on its own map | `sta_mission/tests/missions.rs` | LUA-03, TOOL-05 | — | INT-M5 | Report: scripts run / stubbed / failed (install-gated) | S | Sonnet |
+| LUA-05 | **Armada II mission calls** in Lua: the 123 `ScriptInterface` calls stock missions use that STA64 lacks ([MISSION_DLL_API.md](MISSION_DLL_API.md): 98 with no Lua equivalent, 25 that MMM has) as an `A2` table with the DLLs' names and arguments, handles mapped to entities, labels and paths. Orders, objects, teams and resources go through sim commands; cineractives, titles, audio, movies and fades raise presentation events that RND, AUD and MED consume (logged until they exist) | `sta_mission/src/api/a2/` | LUA-03 | `fake::db()`, `ScriptedSource` | converted A2 campaigns | `mission_dll_inventory.py` reports 0 missing A2 calls; per-area tests; a converted A2 mission runs headless to its first objective | L | Sonnet |
+| LUA-06 | **Armada I mission calls** in Lua, bridge scenes included: the 168 engine functions A1 missions import that STA64 lacks (142 new, 26 that MMM has) as an `A1` table: `PreLoadBridgeScene`, `SetBridgeSceneRace`, `ShowBridgeScene`, `ShowBridgeOnScreen`, `PlayBridgeMovie`, `StopMovie`, `IsMoviePlaying`, the `CineractiveShot` family and the rest | `sta_mission/src/api/a1/` | LUA-03, LUA-05 (shared plumbing) | as LUA-05 | A1 campaign conversions | Inventory reports 0 missing A1 calls; bridge-scene events drive MED-03 and the bridge display | L | Sonnet |
+| LUA-07 | `.drl` rule decoding → Lua scaffolds: read each A2 `R.drl`'s rules (conditions over `.dsl` variables → `.dsl` actions) and emit a Lua mission skeleton calling LUA-05's `A2` API, as the earlier STA2 Classic conversion scaffolds did | `tools/drl_to_lua.py`, `sta_mission/tests/drl.rs` | LUA-05 | — | A2 conversions | Every installed `R.drl` decodes; the generated scaffold for `a2_fed01` loads and registers its rules | M | Opus |
+
+### Media (MED) — video
+
+Movies are **Bink 1 (`.bik`)** and **MP4**; other formats only when asked for
+(Immy, 2026-11-09). The installs hold Bink revisions `BIKi` (92 files) and
+`BIKf` (69). Decoders are pure Rust with permissive licences: `mercs2_bink`
+(MIT) decodes `BIKi`; GPL decoders are out. MP4 is a port of A2FOExtensions'
+`rust/a2fo_media` (Immy's own; `oxideav` H.264/AAC, MIT, no FFmpeg). A new
+`sta_media` crate needs a seam PR first (workspace members).
+
+| ID | Package | Owns | Needs | Against | Unlocks | Done when | Size | Model |
+|---|---|---|---|---|---|---|---|---|
+| MED-01 | Bink 1 decoder, revisions `f` and `i`: video frames (YUV → RGBA) and audio | `crates/sta_media/src/bink/` | seam PR for `sta_media` | — | MED-03 | Every installed `.bik` (A1, A2, FO) decodes to its stated frame count and audio length; frame-hash golden tests on short fixtures | L | Opus |
+| MED-02 | MP4 (H.264 video, AAC audio) from `a2fo_media`'s demux/decode core: keyframe seek, AAC priming, frame/PCM queues | `crates/sta_media/src/mp4.rs` | seam PR for `sta_media` | — | MED-03 | The STA2 HD movie set (BIK → MP4 pipeline output) decodes; seek and end-of-stream tests | M | Sonnet |
+| MED-03 | Movie playback in `sta64`: full-screen and in-panel (bridge viewscreen) movies, skip, audio through the mixer, same-stem `.mp4` preferred over `.bik` (as A2FOVideo) | `sta64/src/media/` | MED-01 or MED-02, AUD-01, CON-10 | — | LUA-05, LUA-06 | Intro and campaign movies play from the front end; a mission's `PlayCinematicMovie` / `PlayBridgeMovie` event plays and reports when done | M | Sonnet |
 
 ### AI (AI)
 
@@ -595,8 +616,8 @@ and fixes seams through seam PRs.
 | INT-M4 | Front end → Instant Action → game → back | UI-06..09, AUD-04, CON-13, TOOL-09 | Scenario reaches each screen by state and starts a match from setup | M | Sonnet |
 | INT-M5 | Multiplayer with AI and missions | NET-02, NET-03, UI-11, AI-02, LUA-04, SIM-15 | Two-process match with an AI and a Lua mission, no desync over 30 min | M | Sonnet |
 
-Counts: CON 19, SIM 15, RND 14, UI 11, AUD 5, TOOL 9, LUA 4, AI 3, NET 3,
-EDT 8, INT 4 (105), plus 3 in round 0.
+Counts: CON 21, SIM 15, RND 14, UI 12, AUD 5, MED 3, TOOL 9, LUA 7, AI 3, NET 3,
+EDT 8, INT 4 (114), plus 3 in round 0.
 
 ## Dependency graph
 
@@ -619,6 +640,7 @@ graph LR
   NET01 --> NET02 & NET03; SIM11 --> NET02
   CON02 --> EDT01 --> EDT02 & EDT03 & EDT04 & EDT05; SIM04 --> EDT02; CON12 --> EDT03 & EDT05; CON11 --> EDT04; CON01 --> EDT06; CON15 --> EDT07
   CON16 --> CON17 & CON18; CON13 --> CON18; CON16 & CON17 --> CON19; EDT07 & CON17 --> EDT08
+  CON07 --> CON20; UI03 --> UI12; MED01 & MED02 --> MED03; CON10 --> MED03; LUA03 --> LUA05 --> LUA06 & LUA07
   LUA02 --> LUA01 --> LUA03 --> LUA04
   CON07 & SIM02 & RND01 & TOOL05 --> INTM2[INT-M2]
   SIM05 & SIM08 & RND09 & UI04 & AI01 --> INTM3[INT-M3]
