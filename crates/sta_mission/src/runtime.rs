@@ -17,6 +17,7 @@
 //!   a float). `MMM.unregister(id)` removes it. `docs/MMM_API.md` lists
 //!   names only, so this signature is an assumption to revisit when a
 //!   script shows otherwise;
+//! - the MMM API of [`crate::api`];
 //! - every other global or `MMM.*` name is a permissive stub (any index or
 //!   call returns another stub), so real scripts load before their API
 //!   exists. LUA-03 replaces stubs name by name.
@@ -32,14 +33,15 @@
 //!
 //! # Commands (LUA-03)
 //!
-//! Scripts cannot emit commands yet. [`MissionRuntime::take_commands`] is
-//! where LUA-03's API bindings will queue them; `think` drains it into `out`.
+//! The API bindings (`crate::api`) queue commands; `think` drains them into
+//! `out`, and [`MissionRuntime::take_commands`] drains them directly.
 //!
 //! # Seam gaps
 //!
 //! `Controller::think` receives no `PlayerId`, so a mission cannot know
 //! which seat it owns, and it sees only a [`WorldView`]: the ODF and content
-//! tables scripts query are unreachable from it.
+//! tables scripts query are unreachable from it. [`MissionConfig`] passes
+//! the seat, `Arc<ContentDb>` and map labels in at construction instead.
 
 use mlua::{Function, Lua, MultiValue};
 use std::cell::RefCell;
@@ -50,6 +52,8 @@ use sta_sim::setup::Controller;
 use sta_sim::view::WorldView;
 use sta_sim::{SimEvent, TICK_HZ};
 use sta_vfs::Vfs;
+
+use crate::api::{self, Ctx, MissionConfig, Objective, Shared as ApiShared};
 
 /// A callback that has failed this many times is disabled.
 pub const MAX_CALLBACK_ERRORS: u32 = 5;
@@ -73,6 +77,7 @@ local function mk()
   })
   return t
 end
+rawset(_G, "__stub", mk)
 setmetatable(_G, { __index = function() return mk() end })
 setmetatable(MMM, { __index = function() return mk() end })
 "#;
@@ -96,6 +101,7 @@ struct Inner {
     // Callbacks hold `Function`s of `lua`: declared first, dropped first.
     callbacks: Vec<Callback>,
     shared: Rc<RefCell<Shared>>,
+    ctx: ApiShared,
     #[allow(dead_code)] // owns the state the callbacks belong to
     lua: Lua,
 }
@@ -104,7 +110,6 @@ struct Inner {
 pub struct MissionRuntime {
     inner: Inner,
     errors: Vec<String>,
-    commands: Vec<Command>,
 }
 
 // SAFETY: `Lua` is not `Send` because its handles share non-atomic
@@ -119,28 +124,49 @@ type Reader = Arc<Mutex<dyn Fn(&str) -> Option<Vec<u8>> + Send>>;
 impl MissionRuntime {
     /// Load `path` (a VFS path such as `missions/Eviction.lua`) from `vfs`.
     pub fn from_vfs(vfs: Arc<Vfs>, path: &str, seed: u64) -> MissionRuntime {
-        MissionRuntime::load(path, seed, move |name| vfs.read(name).and_then(Result::ok))
+        MissionRuntime::from_vfs_with(vfs, path, seed, MissionConfig::default())
+    }
+
+    /// [`MissionRuntime::from_vfs`] with the game's seat, content and labels.
+    pub fn from_vfs_with(vfs: Arc<Vfs>, path: &str, seed: u64, cfg: MissionConfig) -> MissionRuntime {
+        MissionRuntime::load_with(path, seed, cfg, move |name| vfs.read(name).and_then(Result::ok))
     }
 
     /// Load the script `path`, reading it and its `include()`s with `read`
     /// (called with VFS-style paths, `missions/<name>` first).
     pub fn load(path: &str, seed: u64, read: impl Fn(&str) -> Option<Vec<u8>> + Send + 'static) -> MissionRuntime {
+        MissionRuntime::load_with(path, seed, MissionConfig::default(), read)
+    }
+
+    /// [`MissionRuntime::load`] with the game's seat, content and labels.
+    pub fn load_with(
+        path: &str,
+        seed: u64,
+        cfg: MissionConfig,
+        read: impl Fn(&str) -> Option<Vec<u8>> + Send + 'static,
+    ) -> MissionRuntime {
         let shared = Rc::new(RefCell::new(Shared::default()));
+        let ctx: ApiShared = Rc::new(RefCell::new(Ctx::new(cfg, seed)));
         let lua = Lua::new();
         let mut errors = Vec::new();
-        if let Err(e) = Self::setup(&lua, &shared, seed, Arc::new(Mutex::new(read)), path) {
+        if let Err(e) = Self::setup(&lua, &shared, &ctx, seed, Arc::new(Mutex::new(read)), path) {
             errors.push(format!("{path}: {e}"));
         }
-        MissionRuntime { inner: Inner { callbacks: Vec::new(), shared, lua }, errors, commands: Vec::new() }
+        MissionRuntime { inner: Inner { callbacks: Vec::new(), shared, ctx, lua }, errors }
     }
 
     /// Load a script given as text (tests, tools).
     pub fn from_source(name: &str, source: &str, seed: u64) -> MissionRuntime {
-        let (n, s) = (name.to_owned(), source.as_bytes().to_vec());
-        MissionRuntime::load(name, seed, move |p| (p == n).then(|| s.clone()))
+        MissionRuntime::from_source_with(name, source, seed, MissionConfig::default())
     }
 
-    fn setup(lua: &Lua, shared: &Rc<RefCell<Shared>>, seed: u64, read: Reader, path: &str) -> mlua::Result<()> {
+    /// [`MissionRuntime::from_source`] with the game's seat, content and labels.
+    pub fn from_source_with(name: &str, source: &str, seed: u64, cfg: MissionConfig) -> MissionRuntime {
+        let (n, s) = (name.to_owned(), source.as_bytes().to_vec());
+        MissionRuntime::load_with(name, seed, cfg, move |p| (p == n).then(|| s.clone()))
+    }
+
+    fn setup(lua: &Lua, shared: &Rc<RefCell<Shared>>, ctx: &ApiShared, seed: u64, read: Reader, path: &str) -> mlua::Result<()> {
         crate::math::install(lua, seed)?;
         lua.load(crate::script::LUABIND_CLASS).set_name("=luabind class").exec()?;
         let globals = lua.globals();
@@ -183,12 +209,18 @@ impl MissionRuntime {
             })?,
         )?;
 
+        api::install(lua, ctx)?;
         lua.load(STUBS).set_name("=stubs").exec()?;
         let src = {
             let r = read.lock().unwrap_or_else(|p| p.into_inner());
             r(path).ok_or_else(|| mlua::Error::runtime("not found"))?
         };
         lua.load(&src[..]).set_name(format!("@{path}")).exec()
+    }
+
+    /// Evaluate a Lua chunk in the script's state (tests, tools).
+    pub fn eval<T: mlua::FromLuaMulti>(&self, chunk: &str) -> mlua::Result<T> {
+        self.inner.lua.load(chunk).eval()
     }
 
     /// Errors so far: load errors and callback errors, oldest first.
@@ -201,10 +233,37 @@ impl MissionRuntime {
         self.inner.callbacks.iter().filter(|c| !c.disabled).count()
     }
 
-    /// Commands the script has queued since the last call. Always empty
-    /// until LUA-03 binds the command API.
+    /// Commands the script has queued since the last call.
     pub fn take_commands(&mut self) -> Vec<Command> {
-        std::mem::take(&mut self.commands)
+        std::mem::take(&mut self.inner.ctx.borrow_mut().commands)
+    }
+
+    /// The objectives the script added, in order.
+    pub fn objectives(&self) -> Vec<Objective> {
+        self.inner.ctx.borrow().objectives.clone()
+    }
+
+    /// Whether the script called `Mission.finish`.
+    pub fn finished(&self) -> bool {
+        self.inner.ctx.borrow().finished
+    }
+
+    /// What the script `print`ed.
+    pub fn log(&self) -> Vec<String> {
+        self.inner.ctx.borrow().log.clone()
+    }
+
+    /// API calls that were accepted but had no effect (an order the sim
+    /// has no command for, an unreadable argument), with counts, ascending
+    /// by name.
+    pub fn unsupported(&self) -> Vec<(String, u32)> {
+        self.inner.ctx.borrow().unsupported.iter().map(|(k, v)| (k.clone(), *v)).collect()
+    }
+
+    /// How `from` stands toward `to`, with the script's overrides applied
+    /// (`player:setRelation`).
+    pub fn relation(&self, from: sta_core::PlayerId, to: sta_core::PlayerId) -> sta_sim::view::Relation {
+        self.inner.ctx.borrow().relation(from, to)
     }
 
     /// Run every live callback once for `tick`.
@@ -221,6 +280,7 @@ impl MissionRuntime {
         }
         let time = tick as f64 / TICK_HZ as f64;
         let mut failures = Vec::new();
+        api::fire_monitors(&self.inner.lua, &self.inner.ctx, &mut failures);
         for cb in self.inner.callbacks.iter_mut().filter(|c| !c.disabled) {
             // A Lua error is a Result; catch_unwind also guards a panic in
             // a Rust function installed into the state.
@@ -245,9 +305,14 @@ impl MissionRuntime {
 }
 
 impl Controller for MissionRuntime {
-    fn think(&mut self, view: &WorldView, _events: &[SimEvent], out: &mut Vec<Command>) {
+    fn think(&mut self, view: &WorldView, events: &[SimEvent], out: &mut Vec<Command>) {
+        {
+            let mut c = self.inner.ctx.borrow_mut();
+            c.view = view.clone();
+            c.events = events.to_vec();
+        }
         self.step(view.tick);
-        out.append(&mut self.commands);
+        out.append(&mut self.inner.ctx.borrow_mut().commands);
     }
 }
 
