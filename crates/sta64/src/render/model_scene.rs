@@ -213,6 +213,7 @@ pub fn spawn(ctx: &mut SpawnCtx, model: &Model, root: Entity) -> SpawnStats {
                         tpl: std::sync::Arc::new(tpl),
                         owner: root,
                         timer: 0.0,
+                        rng: Default::default(),
                     });
                     stats.emitters += 1;
                 }
@@ -479,8 +480,8 @@ fn spawn_part(ctx: &mut SpawnCtx, part: &CachedPart, parent: Entity, flipbook: O
 }
 
 /// Plays node animation (SOD and M3D): a step flipbook, evenly spaced keys.
-pub fn animate(time: Res<Time>, mut q: Query<(&NodeAnim, &mut Transform)>) {
-    let t = time.elapsed_secs();
+pub fn animate(clock: Res<crate::clock::AnimClock>, mut q: Query<(&NodeAnim, &mut Transform)>) {
+    let t = clock.wall() as f32;
     for (anim, mut tf) in &mut q {
         let n = match &anim.keys {
             AnimKeys::Matrix(k) => k.len(),
