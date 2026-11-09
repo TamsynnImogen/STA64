@@ -61,14 +61,17 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [ ] Refit map objects, in order:
   - [x] Planet look (Lighting.asi via Refit's world_planet shader) — 4fc4a88
   - [x] Recipe surfaces (Surfaces.asi): planets PB_CLSS*, moons Mdmoon, asteroid rock Master1/2 — 7c8c421
-  - [ ] Moon cracks' ravine parallax (Refit rock shader), moon glow shell and nimbus
+  - [?] Moon cracks' ravine parallax (Refit rock shader), moon glow shell (dark, Refit's default) and nimbus (off, Refit's default) — RND-05, #141
+    - [?] Check in `--map` on a dilithium moon: tilting the view, the cracks' walls should hide the blue light at an angle; no black or banded cracks; the moon shows no round halo
+    - [?] Check the moon's glow shell: it should not show as a black or blue ball around the moon
   - [x] Volumetric nebulae (Nebulae.asi): ray-marched gas fields per class — e4eb7c7
   - [?] Nebulae extras: lightning (mnebula7), ring/pulse (latinum), swirl (mnebula10) — RND-05, #141
-  - [ ] Nebulae extras still to do: ship shadows, baked volume + temporal smoothing for speed
+  - [ ] Nebulae extras still to do: ship shadows (needs the key light's shadow map in the march; proposed as its own package on #141), baked volume + temporal smoothing for speed
   - [x] Background objects (suns, wrecks, gates) drawn about the eye — dee4e4b
   - [x] Planet glow lights and nebula lights (Refit `lights.rs`) — 8a95cee
   - [ ] Planet city lights (need colony population)
-- [ ] Nebula billboards meanwhile: near fade, occlusion intensity
+- [?] Nebula billboards meanwhile: near fade, occlusion intensity — RND-05, #141
+  - [?] Check on a map with a stock nebula (no gas recipe): puffs fade out as the camera flies into them (no hard near-plane cut) and a nebula seen through another is dimmer, not doubly bright. The fade and occlusion rules are our reading, not stock's formula
 - [x] Asteroid fields: rocks from the engine's table (`master*`), count/radius/speeds from the ODF
 - [x] Map lights aimed by `dlight` markers; `hidden = 1` editor markers not drawn
 - [x] Select units (click / drag box) in the map view

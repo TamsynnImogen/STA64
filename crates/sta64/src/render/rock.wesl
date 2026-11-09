@@ -4,8 +4,8 @@
 // 2026 Cedric Haase), itself Lighting.asi's moon_ps: colour, relief and cut-out from
 // cube maps in the direction from the mesh's centre, or triplanar across its extents
 // (asteroids); lit with diffuse, a highlight by the texture's brightness and a rim.
-// The moons' cracks show the light inside them. Not ported yet: the cracks' ravine
-// parallax.
+// The moons' cracks show the light inside them, at the bottom of a ravine: the view's
+// ray is marched down into it (parallax), so its walls hide the light at an angle.
 
 struct RockParams {
     amb: vec4<f32>,       // ambient rgb
@@ -24,7 +24,7 @@ struct RockParams {
     misc: vec4<f32>,      // x relief strength, z 1 when the albedo's alpha cuts, w 1 for triplanar
     ext: vec4<f32>,       // xyz 1 / the mesh's extent per object axis; w the highlight's strength
     core: vec4<f32>,      // rgb the light inside the cracks (0: holes); w the cut's level
-    spill: vec4<f32>,     // x the glow's scale; y the white at a crack's core
+    spill: vec4<f32>,     // x the glow's scale; y the white at a crack's core, z the ravine's depth (0: flat), w the light's falloff up the walls
 };
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> k: RockParams;
@@ -85,6 +85,15 @@ fn fragment(i: FragIn) -> @location(0) vec4<f32> {
     let cy = vec3<f32>(cq.x, sd.y, cq.z);
     let cz = vec3<f32>(cq.x, cq.y, sd.z);
     let dq = normalize(q);
+    // The ravine's view direction and the gradients its taps need, in uniform control
+    // flow. A tap at q - vq * t has the gradient ddx(q) - ddx(vq) * t.
+    let far_k = saturate((k.spill.z / max(length(fwidth(q)), 1e-6) - 2.0) / 3.0);
+    var vq = mirror(to_obj(k.eye.xyz - wp)) * k.ext.xyz;
+    vq /= max(length(vq), 1e-12);
+    let qx = dpdx(q);
+    let qy = dpdy(q);
+    let vx = dpdx(vq);
+    let vy = dpdy(vq);
     // All lookups up front (uniform control flow for the derivatives).
     let ax = textureSample(m_albedo, m_albedo_sampler, cx);
     let bx = textureSample(m_relief, m_relief_sampler, cx);
@@ -124,8 +133,42 @@ fn fragment(i: FragIn) -> @location(0) vec4<f32> {
     let n = normalize(normalize(i.world_normal) + pw);
     var c = shade(n, wp, a, k.ext.w);
     c += k.glow.rgb * b.a * k.spill.x;
-    let hot = saturate((b.a - k.core.w) / max(k.core.w, 1e-3));
-    let core = k.core.rgb * (1.0 + hot) + dot(k.core.rgb, vec3<f32>(0.333)) * hot * hot * k.spill.y;
+    var hot = saturate((b.a - k.core.w) / max(k.core.w, 1e-3));
+    var lit = 1.0;
+    var wall = c;
+    if k.spill.z > 0.0 && k.misc.w < 0.5 {
+        // A ravine with the light at its bottom: it opens where the cut does and is
+        // deepest at the fissure's core, the walls steep. The view's ray goes down into
+        // it until it meets a wall; how deep that is says how much light reaches it, so
+        // the walls are dark rock, the light lies at the bottom, and at an angle the near
+        // wall hides part of it. Fixed steps, branch-free.
+        let dd0 = k.spill.z;
+        let lip = k.core.w - 0.06;
+        let top = max(2.0 * k.core.w - lip, 1e-3);
+        let h0 = dd0 * sqrt(saturate((b.a - lip) / top));
+        var hit = h0;
+        var found = 0.0;
+        var tp = 0.0;
+        var dp = h0;
+        for (var s = 1; s <= 8; s++) {
+            let t = dd0 * f32(s) / 8.0;
+            let g = textureSampleGrad(m_relief, m_relief_sampler, q - vq * t, qx - vx * t, qy - vy * t).a;
+            let dd = dd0 * sqrt(saturate((g - lip) / top)) - t;
+            let f = (1.0 - found) * step(dd, 0.0);
+            let x = mix(tp, t, saturate(dp / max(dp - dd, 1e-6)));
+            hit = mix(hit, x, f);
+            found = max(found, f);
+            tp = t;
+            dp = dd;
+        }
+        hit = mix(dd0, hit, found);
+        let e = saturate(hit / dd0);
+        lit = mix(1.0, pow(e, k.spill.w), far_k);
+        hot = mix(hot, e, far_k);
+        wall = c * mix(0.5, 0.05, saturate(e * 2.0));
+    }
+    var core = k.core.rgb * (1.0 + hot) + dot(k.core.rgb, vec3<f32>(0.333)) * hot * hot * k.spill.y;
+    core = mix(wall, core, lit);
     c = mix(c, core, (1.0 - a.a) * inside);
     return vec4<f32>(c, 1.0);
 }

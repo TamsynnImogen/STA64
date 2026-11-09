@@ -32,6 +32,10 @@ pub struct SpriteFx {
     pub material: Handle<StandardMaterial>,
 }
 
+/// Dims a sprite node's colour (a nebula puff's near fade and occlusion, RND-05).
+#[derive(Component)]
+pub struct SpriteFade(pub f32);
+
 /// Faces the camera every frame.
 #[derive(Component)]
 pub struct Billboard;
@@ -76,13 +80,13 @@ fn colour(c: [f32; 3]) -> Color {
 pub fn animate(
     clock: Res<crate::clock::AnimClock>,
     tables: Res<SpriteTables>,
-    mut fx: Query<(&SpriteFx, &mut Visibility)>,
+    mut fx: Query<(&SpriteFx, Option<&SpriteFade>, &mut Visibility)>,
     flip: Query<&UvFlipbook>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let t = clock.wall() as f32;
     let table = &tables.0;
-    for (f, mut vis) in &mut fx {
+    for (f, fade, mut vis) in &mut fx {
         let mut col = f.colour;
         let mut shown = true;
         if let Some(a) = f.node_anim.as_deref().and_then(|a| table.animation(a)) {
@@ -91,6 +95,9 @@ pub fn animate(
                 Some(Value::Colour(c)) => col = c,
                 _ => {}
             }
+        }
+        if let Some(k) = fade {
+            col = col.map(|c| c * k.0);
         }
         let want = if shown { Visibility::Inherited } else { Visibility::Hidden };
         if *vis != want {

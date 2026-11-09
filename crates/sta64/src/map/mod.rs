@@ -752,6 +752,11 @@ fn rebuild(
         if background_obj {
             commands.entity(entity).insert(BackgroundObject);
         }
+        // A stock nebula drawn as billboards: its puffs fade near and behind others.
+        if odf.class_label().is_some_and(|c| c.eq_ignore_ascii_case("nebula_obj")) {
+            let radius = odf.f32("effectRadius").filter(|r| *r > 10.0 && *r < 5000.0).unwrap_or(300.0);
+            commands.entity(entity).insert(crate::render::nebula::NebulaBoards { radius });
+        }
         let units_before = units;
         // What the sim made of the object (a unit of the content database) is drawn
         // by this entity: the ship moves with it and takes orders as one.

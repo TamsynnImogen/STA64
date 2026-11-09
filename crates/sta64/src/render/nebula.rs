@@ -155,8 +155,91 @@ impl Plugin for NebulaPlugin {
         embedded_asset!(app, "nebula.wesl");
         app.add_plugins(MaterialPlugin::<NebulaMaterial>::default())
             .init_resource::<NoiseVolume>()
-            .add_systems(Update, poll_noise)
+            .add_systems(Update, (poll_noise, fade_boards))
             .add_systems(PostUpdate, update.after(TransformSystems::Propagate));
+    }
+}
+
+/// A stock nebula drawn as billboards (a class without a gas recipe): its puffs dim
+/// with the eye's nearness and with the nebulae in front of it (RND-05).
+#[derive(Component)]
+pub struct NebulaBoards {
+    /// The nebula's reach, in world units.
+    pub radius: f32,
+}
+
+/// The near fade's distance, in world units: a puff is gone within a quarter of it
+/// (or of its own half size, if larger) and whole past a quarter more than the whole.
+const BOARD_NEAR: f32 = 60.0;
+/// How much of a puff's light a nebula covering all of it takes away.
+const OCCLUDE: f32 = 0.5;
+
+/// A puff's near fade: 0 at the eye, 1 once the eye is clear of it. The same ramp as
+/// the gas's `NearFade` (`nebula.wesl`), over the puff's half size where that is wider.
+pub fn near_fade(dist: f32, half_size: f32) -> f32 {
+    let nf = BOARD_NEAR.max(half_size);
+    ((dist - nf * 0.25) / nf).clamp(0.0, 1.0)
+}
+
+/// Each nebula's occlusion intensity, 1 when nothing stands before it: the nebulae
+/// nearer the eye whose discs (by angle) cover its centre's direction thin it, each by
+/// `OCCLUDE` times how much of its disc they cover. Stock's `sCullOccludedNebula` thins
+/// "where one hides another"; its exact rule is not known to us. `(centre, radius)` per
+/// nebula; an eye inside a nebula is not occluded by it.
+pub fn occlusion(eye: Vec3, nebulae: &[(Vec3, f32)]) -> Vec<f32> {
+    let disc = |c: Vec3, r: f32| {
+        let d = c - eye;
+        let dist = d.length().max(1e-3);
+        (d / dist, dist, (r / dist).min(1.0).asin())
+    };
+    nebulae
+        .iter()
+        .enumerate()
+        .map(|(i, &(ci, ri))| {
+            let (di, dist_i, ai) = disc(ci, ri);
+            let mut k = 1.0f32;
+            for (j, &(cj, rj)) in nebulae.iter().enumerate() {
+                let (dj, dist_j, aj) = disc(cj, rj);
+                if j == i || dist_j >= dist_i || dist_j < rj {
+                    continue;
+                }
+                let theta = di.dot(dj).clamp(-1.0, 1.0).acos();
+                let cover = ((aj + ai - theta) / (2.0 * ai).max(1e-4)).clamp(0.0, 1.0);
+                k *= 1.0 - OCCLUDE * cover;
+            }
+            k
+        })
+        .collect()
+}
+
+/// Dim each billboard nebula's puffs.
+fn fade_boards(
+    mut commands: Commands,
+    camera: Query<&GlobalTransform, crate::map::MainCamera>,
+    nebulae: Query<(Entity, &GlobalTransform, &NebulaBoards)>,
+    children: Query<&Children>,
+    mut puffs: Query<(&GlobalTransform, &Transform, Option<&mut crate::render::sprites::SpriteFade>), With<crate::render::sprites::SpriteFx>>,
+) {
+    let Ok(cam) = camera.single() else { return };
+    let eye = cam.translation();
+    let list: Vec<_> = nebulae.iter().map(|(e, g, b)| (e, g.translation(), b.radius)).collect();
+    let occ = occlusion(eye, &list.iter().map(|&(_, c, r)| (c, r)).collect::<Vec<_>>());
+    for (&(root, _, _), occ) in list.iter().zip(occ) {
+        for e in children.iter_descendants(root) {
+            let Ok((g, t, fade)) = puffs.get_mut(e) else { continue };
+            // A billboard quad's scale is twice its half size.
+            let v = near_fade(g.translation().distance(eye), t.scale.x * 0.5) * occ;
+            match fade {
+                Some(mut f) => {
+                    if (f.0 - v).abs() > 1e-3 {
+                        f.0 = v;
+                    }
+                }
+                None => {
+                    commands.entity(e).insert(crate::render::sprites::SpriteFade(v));
+                }
+            }
+        }
     }
 }
 
@@ -372,6 +455,31 @@ fn update(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn near_fade_ramps_from_a_quarter_to_a_quarter_past_the_whole() {
+        assert_eq!(near_fade(10.0, 5.0), 0.0);
+        assert_eq!(near_fade(15.0, 5.0), 0.0);
+        assert!((near_fade(45.0, 5.0) - 0.5).abs() < 1e-5);
+        assert_eq!(near_fade(80.0, 5.0), 1.0);
+        // A large puff fades over its own size.
+        assert!((near_fade(250.0, 400.0) - 0.375).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_nebula_behind_another_is_thinned_and_the_front_one_is_not() {
+        let eye = Vec3::ZERO;
+        let o = occlusion(eye, &[(Vec3::new(0.0, 0.0, -400.0), 100.0), (Vec3::new(0.0, 0.0, -1000.0), 100.0)]);
+        assert_eq!(o[0], 1.0);
+        assert!((o[1] - 0.5).abs() < 0.05, "{o:?}");
+        // Off to one side: untouched.
+        let o = occlusion(eye, &[(Vec3::new(0.0, 0.0, -400.0), 100.0), (Vec3::new(900.0, 0.0, -400.0), 100.0)]);
+        assert_eq!(o, vec![1.0, 1.0]);
+        // The eye inside one does not dim what lies beyond.
+        let o = occlusion(eye, &[(Vec3::new(0.0, 0.0, -50.0), 100.0), (Vec3::new(0.0, 0.0, -1000.0), 100.0)]);
+        assert_eq!(o[1], 1.0);
+    }
     /// Evaluates a conditional-translation attribute's condition (`A && !B`).
     fn holds(cond: &str, defs: &[&str]) -> bool {
         cond.split("&&").all(|t| {

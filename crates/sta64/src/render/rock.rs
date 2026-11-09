@@ -20,6 +20,31 @@ const RIM_POW: f32 = 3.0;
 const SUN: f32 = 1.1;
 const CRACKS: f32 = 4.0;
 const CRACK_CORE: f32 = 1.0;
+/// How deep the moons' cracks are, in the mesh's radii (Refit's `MoonCrackDepth`), and
+/// the exponent of the light's fade up their walls (`MoonCrackFalloff`).
+const CRACK_DEPTH: f32 = 0.02;
+const CRACK_FALLOFF: f32 = 3.0;
+/// Whether the round nimbus (`oreglow`) is drawn behind a moon (Refit's `MoonNimbus`,
+/// off: the light shows in the cracks instead).
+pub const MOON_NIMBUS: bool = false;
+
+/// The material name of a dilithium moon's glow shell.
+pub fn is_moon_shell(material: &str) -> bool {
+    material.eq_ignore_ascii_case("glowdmoon")
+}
+
+/// The glow shell as Refit draws it by default (`MoonShell=dark`): dark and opaque, so
+/// the rock's cut-outs show black where the cracks' light is not. Stock draws it added
+/// in the moon's colour; the cracks' own light stands in for that now.
+pub fn shell_material(two_sided: bool) -> StandardMaterial {
+    StandardMaterial {
+        base_color: Color::BLACK,
+        unlit: true,
+        double_sided: two_sided,
+        cull_mode: if two_sided { None } else { Some(bevy::render::render_resource::Face::Back) },
+        ..default()
+    }
+}
 
 #[derive(Clone, Copy, Default, ShaderType, Debug)]
 pub struct RockParams {
@@ -105,7 +130,7 @@ fn apply(
             ext: part.inv_extent.extend(r.gloss),
             // The moons' cracks lit from inside; the recipe's glow takes the light's hue.
             core: if cut { (Vec3::new(0.0, 0.5, 1.0) * CRACKS).extend(r.cut.max(1e-3)) } else { Vec4::ZERO },
-            spill: Vec4::new(1.0, CRACK_CORE, 0.0, 0.0),
+            spill: Vec4::new(1.0, CRACK_CORE, if cut { CRACK_DEPTH } else { 0.0 }, CRACK_FALLOFF),
             ..default()
         };
         let m = materials.add(RockMaterial {
