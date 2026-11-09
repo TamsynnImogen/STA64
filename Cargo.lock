@@ -5277,6 +5277,7 @@ dependencies = [
 name = "sta_mission"
 version = "0.1.0"
 dependencies = [
+ "libm",
  "mlua",
  "sta_bzn",
  "sta_vfs",
