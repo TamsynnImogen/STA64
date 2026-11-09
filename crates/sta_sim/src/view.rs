@@ -87,9 +87,20 @@ impl UnitFlags {
     pub const BUILDING: UnitFlags = UnitFlags(1 << 2);
     pub const DOCKED: UnitFlags = UnitFlags(1 << 3);
     pub const SELECTABLE: UnitFlags = UnitFlags(1 << 4);
+    /// Hull never falls below one (bench `Immortal`).
+    pub const IMMORTAL: UnitFlags = UnitFlags(1 << 5);
+    /// Fires nothing (bench `Weapons` off).
+    pub const WEAPONS_OFF: UnitFlags = UnitFlags(1 << 6);
+    /// Does not move (bench `Engines` off).
+    pub const ENGINES_OFF: UnitFlags = UnitFlags(1 << 7);
 
     pub fn contains(self, other: UnitFlags) -> bool {
         self.0 & other.0 == other.0
+    }
+
+    /// These bits set or cleared.
+    pub fn with(self, other: UnitFlags, on: bool) -> UnitFlags {
+        UnitFlags(if on { self.0 | other.0 } else { self.0 & !other.0 })
     }
 }
 

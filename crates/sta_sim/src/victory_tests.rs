@@ -150,3 +150,12 @@ fn rec_round_trips() {
         sim.victory.eliminated()
     );
 }
+
+#[test]
+fn the_view_shows_who_is_eliminated() {
+    let (mut sim, a, t) = fixture(&[(1, 1), (2, 2)]);
+    run(&mut sim, a, t, 1500);
+    let view = sim.step(&[]).view;
+    let flags: Vec<_> = view.players.iter().map(|p| (p.id, p.eliminated)).collect();
+    assert_eq!(flags, vec![(PlayerId(1), false), (PlayerId(2), true)]);
+}

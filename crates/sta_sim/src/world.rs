@@ -152,7 +152,7 @@ impl Entity {
 
     /// Steps under movement each tick.
     pub fn mobile(&self) -> bool {
-        self.stats.max_speed > Fixed::ZERO
+        self.stats.max_speed > Fixed::ZERO && !self.flags.contains(UnitFlags::ENGINES_OFF)
     }
 
     pub fn view(&self) -> UnitView {
