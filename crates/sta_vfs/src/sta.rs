@@ -84,6 +84,7 @@ pub struct StaArchive {
     major: u16,
     minor: u16,
     signature_offset: u64,
+    file_len: u64,
     content_hash: [u8; 32],
     entries: Vec<StaEntry>,
 }
@@ -160,7 +161,7 @@ impl StaArchive {
         let (index_offset, index_stored) = Self::check_header(&header, len)?;
         let mut index = vec![0u8; index_stored as usize];
         f.seek(SeekFrom::Start(index_offset)).and_then(|_| f.read_exact(&mut index)).map_err(|e| StaError::Io(e.to_string()))?;
-        Self::build(&header, &index, Backing::File(Mutex::new(f)))
+        Self::build(&header, &index, Backing::File(Mutex::new(f)), len)
     }
 
     /// An archive held in memory (tests, or one nested in another archive).
@@ -171,7 +172,8 @@ impl StaArchive {
         let header: [u8; 64] = bytes[..64].try_into().unwrap();
         let (index_offset, index_stored) = Self::check_header(&header, bytes.len() as u64)?;
         let index = bytes[index_offset as usize..(index_offset + index_stored) as usize].to_vec();
-        Self::build(&header, &index, Backing::Memory(bytes))
+        let len = bytes.len() as u64;
+        Self::build(&header, &index, Backing::Memory(bytes), len)
     }
 
     /// Magic, version and the index/signature ranges. Returns (index offset, stored size).
@@ -197,7 +199,7 @@ impl StaArchive {
         Ok((io, is))
     }
 
-    fn build(h: &[u8; 64], stored_index: &[u8], backing: Backing) -> Result<StaArchive, StaError> {
+    fn build(h: &[u8; 64], stored_index: &[u8], backing: Backing, file_len: u64) -> Result<StaArchive, StaError> {
         let (major, minor, flags) = (u16_at(h, 8), u16_at(h, 10), u32_at(h, 12));
         let (index_offset, index_size, signature_offset) = (u64_at(h, 16), u64_at(h, 32), u64_at(h, 40));
         let index = if flags & 1 != 0 {
@@ -285,7 +287,7 @@ impl StaArchive {
         if computed != stated {
             return Err(corrupt("content_hash does not match the index (damaged or modified)"));
         }
-        Ok(StaArchive { backing, major, minor, signature_offset, content_hash: stated, entries })
+        Ok(StaArchive { backing, major, minor, signature_offset, file_len, content_hash: stated, entries })
     }
 
     pub fn version(&self) -> (u16, u16) {
@@ -299,6 +301,21 @@ impl StaArchive {
 
     pub fn is_signed(&self) -> bool {
         self.signature_offset != 0
+    }
+
+    /// Where the signature block starts (0 = unsigned).
+    pub fn signature_offset(&self) -> u64 {
+        self.signature_offset
+    }
+
+    /// The archive's size in bytes.
+    pub fn file_len(&self) -> u64 {
+        self.file_len
+    }
+
+    /// The 64-byte header as stored (what a signature covers, with `content_hash`).
+    pub fn header_bytes(&self) -> Result<[u8; 64], StaError> {
+        Ok(self.raw(0, HEADER_SIZE)?.try_into().unwrap())
     }
 
     pub fn len(&self) -> usize {
@@ -323,7 +340,11 @@ impl StaArchive {
         self.entries.binary_search_by(|e| e.key.as_bytes().cmp(key.as_bytes())).ok()
     }
 
-    fn raw(&self, offset: u64, len: u64) -> Result<Vec<u8>, StaError> {
+    /// Bytes `offset..offset + len` of the archive file, as stored.
+    pub(crate) fn raw(&self, offset: u64, len: u64) -> Result<Vec<u8>, StaError> {
+        if offset.checked_add(len).is_none_or(|end| end > self.file_len) {
+            return Err(corrupt(format!("read of {len} bytes at {offset} past the end")));
+        }
         match &self.backing {
             Backing::Memory(b) => Ok(b[offset as usize..(offset + len) as usize].to_vec()),
             Backing::File(f) => {

@@ -22,6 +22,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub mod sta;
+pub mod sta_sign;
 pub mod sta_write;
 pub mod zfs;
 
