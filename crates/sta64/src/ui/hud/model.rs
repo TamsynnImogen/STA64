@@ -253,7 +253,7 @@ pub fn build_items(feed: &HudFeed, builder: &UnitView) -> Vec<BuildItem> {
     match db.tech_tree() {
         Some(tree) => {
             let state = tech_state(feed, db, &def.race);
-            tree.build_options(db, &def.odf, &state).iter().filter_map(|o| item(&o.def.odf, o.def.key, Some(&o.availability))).collect()
+            tree.build_options(db, &def.odf, &state, false).iter().filter_map(|o| item(&o.def.odf, o.def.key, Some(&o.availability))).collect()
         }
         None => def.build.list.iter().filter_map(|d| item(&d.odf, d.key, None)).collect(),
     }

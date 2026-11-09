@@ -509,7 +509,7 @@ impl SkirmishController {
             let Some(u) = db.unit(builder) else { return Vec::new() };
             match db.tech_tree() {
                 Some(tree) => tree
-                    .build_options(&db, &u.odf, &state)
+                    .build_options(&db, &u.odf, &state, true)
                     .into_iter()
                     .filter(|o| o.availability.is_available())
                     .map(|o| o.def.key)

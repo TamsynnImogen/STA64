@@ -30,6 +30,9 @@ impl Sim {
         players.sort();
         players.dedup_by_key(|p| p.0);
         sim.players = players;
+        sim.ai_seats = s.players.iter().filter(|p| matches!(p.control, crate::setup::Control::Ai(_))).map(|p| p.id).collect();
+        sim.ai_seats.sort();
+        sim.ai_seats.dedup();
         sim.content = Some(Arc::clone(&s.content));
         sim.starts = s.map.starts.clone();
         sim.regions = s.map.regions.clone();
