@@ -10,3 +10,5 @@ sta_fpq.workspace = true
 thiserror.workspace = true
 ruzstd.workspace = true
 sha2.workspace = true
+ed25519-dalek.workspace = true
+getrandom.workspace = true
