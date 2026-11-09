@@ -48,6 +48,20 @@ cargo run -p sta64 -- --install-root "/path/to/Fleet Ops" --mod "Fleet Ops 4.0" 
 `--map [<name>]` opens the map view instead (Left/Right steps through maps,
 WASD pans).
 
+`--skirmish [<map>]` plays a match on a multiplayer map: you (seat 0, or
+`--seat <n>`) against one opponent, each starting with its race's starting
+forces and resources, with the HUD, fog, music, sound effects and voices, and a
+notice and banner when a side is eliminated:
+
+```sh
+cargo run -p sta64 --release -- --install-root "/path/to/Fleet Ops" --mod "Fleet Ops 4.0" \
+    --skirmish blueamber [--seat 0] [--opponent skirmish|idle] [--race federation] [--opponent-race klingon]
+```
+
+`--opponent skirmish` (the default) seats the skirmish AI, `--opponent idle` an
+opponent that never sends a command. Without a map name the map browser opens
+(Left/Right change the map). `sta64 --help` lists every flag.
+
 For now `sta64` opens a model viewer over every model the mounted install
 exposes. Left/Right steps through models, T cycles team colour, left-drag
 orbits, right-drag pans, the wheel zooms and R resets the view.

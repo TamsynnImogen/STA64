@@ -74,6 +74,8 @@ pub struct MapSeat(pub Option<u8>);
 struct SimContent {
     db: Arc<ContentDb>,
     index: Arc<OdfIndex>,
+    /// The race ODFs: start units, stock, GUI cfg and music per race.
+    races: Arc<sta_content::Races>,
 }
 
 /// Loaded models, kept across maps, and the render-side ODF cache.
@@ -101,7 +103,9 @@ impl Catalogue {
                 warnings.len(),
                 dupes.len()
             );
-            self.content = Some(SimContent { db: Arc::new(db), index: Arc::new(index) });
+            let (races, race_warnings) = sta_content::Races::load(vfs, &index);
+            info!("races: {} ({} warnings)", races.iter().map(|r| r.stem.as_str()).collect::<Vec<_>>().join(", "), race_warnings.len());
+            self.content = Some(SimContent { db: Arc::new(db), index: Arc::new(index), races: Arc::new(races) });
         }
         Ok(self.content.as_ref().expect("just set"))
     }
@@ -156,29 +160,59 @@ impl Placed {
 
 /// What the sim is made from: the BZN converted to a `MapDef` (CON-07), a `GameSetup`
 /// over it and the mount's content, and the sim from that (`Sim::from_setup`).
-struct SimSide {
-    setup: GameSetup,
-    sim: Sim,
+pub(crate) struct SimSide {
+    pub(crate) setup: GameSetup,
+    pub(crate) sim: Sim,
     /// Conversion and spawn warnings together.
-    warnings: usize,
+    pub(crate) warnings: usize,
+    /// A skirmish's computer players, for the link to think after each tick.
+    pub(crate) controllers: Vec<Box<dyn sta_sim::setup::Controller>>,
+    /// A skirmish's local race, or why the skirmish could not be set up.
+    pub(crate) skirmish: Option<Result<crate::game::Seats, String>>,
 }
 
-fn build_sim(map: &sta_bzn::Map, name: &str, content: &Arc<ContentDb>, index: &OdfIndex, vfs: &sta_vfs::Vfs, seat: Option<u8>) -> SimSide {
+/// The sim of a map: the map view's (`skirmish: None`: one idle seat per owner or
+/// start, nobody starts with anything) or a skirmish's (two seats, each with its
+/// race's starting forces, the opponent under the AI or idle).
+pub(crate) fn build_sim(
+    map: &sta_bzn::Map,
+    name: &str,
+    content: &Arc<ContentDb>,
+    index: &OdfIndex,
+    vfs: &sta_vfs::Vfs,
+    seat: Option<u8>,
+    skirmish: Option<(&crate::game::SkirmishCfg, &sta_content::Races)>,
+) -> SimSide {
     let converted = MapDef::convert_bzn_in(map, content, vfs, index);
     let mut map_def = converted.map;
     map_def.name = name.to_owned();
-    let setup = GameSetup {
-        seed: 1,
-        players: seats(&map_def, seat, &map.race),
-        map: Arc::new(map_def),
-        content: content.clone(),
-        options: GameOptions::default(),
+    let mut plan = None;
+    let players = match skirmish {
+        Some((cfg, races)) => match crate::game::seats(&map_def, cfg, races, content) {
+            Ok(s) => {
+                let players = s.players.clone();
+                plan = Some(Ok(s));
+                players
+            }
+            Err(e) => {
+                plan = Some(Err(e));
+                seats(&map_def, seat, &map.race)
+            }
+        },
+        None => seats(&map_def, seat, &map.race),
     };
-    let (sim, spawn_warnings) = Sim::from_setup_with_warnings(&setup);
+    let setup = GameSetup { seed: 1, players, map: Arc::new(map_def), content: content.clone(), options: GameOptions::default() };
+    let (sim, spawn_warnings, controllers) = match (&plan, skirmish) {
+        (Some(Ok(_)), Some((_, races))) => crate::game::start(&setup, races),
+        _ => {
+            let (sim, w) = Sim::from_setup_with_warnings(&setup);
+            (sim, w, Vec::new())
+        }
+    };
     for w in converted.warnings.iter().chain(&spawn_warnings).take(20) {
         debug!("{}: {}", w.file, w.message);
     }
-    SimSide { warnings: converted.warnings.len() + spawn_warnings.len(), setup, sim }
+    SimSide { warnings: converted.warnings.len() + spawn_warnings.len(), setup, sim, controllers, skirmish: plan }
 }
 
 /// The seats of a map: every owner and start slot, and the one the client plays.
@@ -286,6 +320,7 @@ type MapState<'w> = (
     ResMut<'w, Assets<crate::render::nebula::NebulaMaterial>>,
     Res<'w, crate::render::nebula::NoiseVolume>,
     Res<'w, MapSeat>,
+    Option<Res<'w, crate::game::SkirmishCfg>>,
 );
 
 /// The ambient light and the two map lights, as one system parameter.
@@ -516,7 +551,7 @@ fn rebuild(
     lighting: Lighting,
 ) {
     let (mut silhouettes, mut ambient, mut lights) = lighting;
-    let (mut particles, mut selection, mut queue, mut clock, mut limits, mut planet_materials, mut nebula_materials, noise, seat) = state;
+    let (mut particles, mut selection, mut queue, mut clock, mut limits, mut planet_materials, mut nebula_materials, noise, seat, skirmish_cfg) = state;
     if !browser.dirty {
         return;
     }
@@ -548,14 +583,28 @@ fn rebuild(
     };
     // The sim's side: the mount's content, the map converted to a `MapDef`, a
     // `GameSetup` and the sim from it.
-    let (content, index) = match catalogue.content(&vfs.0) {
-        Ok(c) => (c.db.clone(), c.index.clone()),
+    let (content, index, races) = match catalogue.content(&vfs.0) {
+        Ok(c) => (c.db.clone(), c.index.clone(), c.races.clone()),
         Err(e) => {
             browser.info = format!("{header}\ncontent: {e}");
             return;
         }
     };
-    let SimSide { setup, sim, warnings: sim_warnings } = build_sim(&map, &name, &content, &index, &vfs.0, seat.0);
+    let SimSide { setup, sim, warnings: sim_warnings, controllers, skirmish } =
+        build_sim(&map, &name, &content, &index, &vfs.0, seat.0, skirmish_cfg.as_deref().map(|c| (c, &*races)));
+    let mut skirmish_note = None;
+    match skirmish {
+        Some(Ok(s)) => {
+            info!("{}", s.summary);
+            skirmish_note = Some(s.summary);
+            commands.insert_resource(s.local);
+        }
+        Some(Err(e)) => {
+            warn!("skirmish: {e}");
+            skirmish_note = Some(format!("not a skirmish: {e}"));
+        }
+        None => {}
+    }
     let map_def = setup.map.clone();
     let mut placed = Placed::of(&sim);
     commands.insert_resource(ContentRes(content.clone()));
@@ -940,7 +989,9 @@ fn rebuild(
     // The sim, stepped by the sim link. Without a seat the view orders any team's ships,
     // so the link speaks as the bench, which the sim does not restrict to its own units;
     // with one it speaks as the seat and the sim holds it to its own.
-    commands.insert_resource(SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), seat_player.unwrap_or(PlayerId::BENCH)));
+    commands.insert_resource(
+        SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), seat_player.unwrap_or(PlayerId::BENCH)).with_controllers(controllers),
+    );
 
     missing.sort();
     missing.dedup();
@@ -981,6 +1032,9 @@ fn rebuild(
         content.profile(),
         sim_warnings
     ));
+    if let Some(n) = skirmish_note {
+        info.push_str(&format!("\n{n}"));
+    }
     if !missing.is_empty() {
         info.push_str(&format!("\nnot found: {}", missing.iter().take(12).cloned().collect::<Vec<_>>().join(", ")));
     }
@@ -1051,7 +1105,7 @@ mod tests {
             if bzn.objects.is_empty() {
                 continue;
             }
-            let SimSide { setup, mut sim, warnings } = build_sim(&bzn, path, &db, &index, &vfs, Some(0));
+            let SimSide { setup, mut sim, warnings, .. } = build_sim(&bzn, path, &db, &index, &vfs, Some(0), None);
             let mut placed = Placed::of(&sim);
             let (mut wanted, mut found) = (0, 0);
             for o in &bzn.objects {

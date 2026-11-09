@@ -22,6 +22,7 @@ use bevy::prelude::*;
 use bevy::time::Real;
 use sta_content::ContentDb;
 use sta_sim::command::{Command, CommandKind, CommandRouter, Order};
+use sta_sim::setup::Controller;
 use sta_sim::{EntityId, PlayerId, SimEvent, Vec3 as SimVec3, WorldSource, WorldView};
 
 use crate::app::GameSet;
@@ -38,12 +39,29 @@ pub struct SimLink {
     player: PlayerId,
     /// Next sequence number for this client's commands.
     seq: u32,
+    /// Computer players of this game (`sta_ai`), thinking after every tick.
+    controllers: SyncCell<Vec<Box<dyn Controller>>>,
+    /// Commands the controllers have sent, for the log.
+    controller_commands: u64,
 }
 
 impl SimLink {
     pub fn new(source: Box<dyn WorldSource>, router: Box<dyn CommandRouter>, player: PlayerId) -> SimLink {
         let view = source.view();
-        SimLink { source: SyncCell::new(source), router: SyncCell::new(router), prev: view.clone(), curr: view, player, seq: 0 }
+        SimLink { source: SyncCell::new(source), router: SyncCell::new(router), prev: view.clone(), curr: view, player, seq: 0, controllers: SyncCell::new(Vec::new()), controller_commands: 0 }
+    }
+
+    /// Seat computer players: each reads the new view and the tick's events
+    /// after every tick and its commands go to the router like a player's
+    /// (D3: controllers run on the host and are never rerun by replays).
+    pub fn with_controllers(mut self, controllers: Vec<Box<dyn Controller>>) -> SimLink {
+        self.controllers = SyncCell::new(controllers);
+        self
+    }
+
+    /// How many controllers run.
+    pub fn controllers(&mut self) -> usize {
+        self.controllers.get().len()
     }
 
     /// The view before the last tick.
@@ -85,10 +103,21 @@ impl SimLink {
     }
 
     /// Run one tick if the router has its commands; `None` on a stall.
-    fn tick(&mut self) -> Option<Vec<SimEvent>> {
+    pub(crate) fn tick(&mut self) -> Option<Vec<SimEvent>> {
         let batch = self.router.get().take_ready(self.curr.tick + 1)?;
         let out = self.source.get().step(&batch);
         self.prev = std::mem::replace(&mut self.curr, out.view);
+        let mut cmds = Vec::new();
+        for c in self.controllers.get().iter_mut() {
+            c.think(&self.curr, &out.events, &mut cmds);
+        }
+        for cmd in cmds {
+            self.controller_commands += 1;
+            if self.controller_commands == 1 || self.controller_commands.is_multiple_of(50) {
+                info!("ai: command {} at tick {}: seat {} {:?}", self.controller_commands, self.curr.tick, cmd.player.0, cmd.kind);
+            }
+            self.router.get().submit(cmd);
+        }
         Some(out.events)
     }
 }

@@ -51,6 +51,11 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
 
     // bench —
 
+    // game — the match flow (INT-M3)
+    if cfg.skirmish {
+        app.add_plugins(crate::game::GamePlugin);
+    }
+
     if cfg.mode().has_window() {
         // render —
         app.add_plugins(crate::render::hulls::HullPlugin);
@@ -59,12 +64,22 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
         // ui —
         app.add_plugins(crate::ui::theme::ThemePlugin);
         app.add_plugins(crate::ui::notices::NoticePlugin);
+        if cfg.skirmish {
+            // INT-M3: the HUD (with the radar) for the local seat's race (`game::apply_race`
+            // sets its layout), and the match's result.
+            app.add_plugins(crate::ui::hud::HudPlugin);
+        }
 
         // audio —
         app.add_plugins(crate::audio::AudioPlugin { mode: cfg.mode() });
         // CON-10: real sounds in place of the stub resolver.
         if let Some(r) = cfg.install_root.as_deref().and_then(|root| crate::audio::BankResolver::mount(root, cfg.active_mod.as_deref())) {
             app.insert_resource(crate::audio::Resolver(Box::new(r)));
+        }
+        if cfg.skirmish {
+            // A match: calm and battle music of the local race (set by `game::apply_race`),
+            // not the viewer's silence.
+            app.insert_resource(crate::audio::MusicContext::Game);
         }
     }
 }

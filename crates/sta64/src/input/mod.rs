@@ -48,7 +48,14 @@ impl Plugin for InputPlugin {
             .add_systems(Startup, select::spawn_select_box)
             .add_systems(
                 Update,
-                (orders::aim, select::select_keys, select::select, orders::order, orders::prune_targets)
+                (
+                    orders::aim,
+                    select::select_keys,
+                    // A click on the HUD, or the one that places a build, is not the map's.
+                    select::select.run_if(crate::ui::hud::map_input_free),
+                    orders::order.run_if(crate::ui::hud::map_input_free),
+                    orders::prune_targets,
+                )
                     .chain()
                     .in_set(crate::app::GameSet::Input)
                     .run_if(resource_exists::<crate::sim_link::SimLink>),
