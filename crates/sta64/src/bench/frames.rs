@@ -92,6 +92,11 @@ impl Capture {
         }
     }
 
+    /// The image the frames are read from.
+    pub fn target(&self) -> &Handle<Image> {
+        &self.target
+    }
+
     /// The last tick a frame is asked at.
     pub fn last_tick(&self) -> Tick {
         self.ticks.last().copied().unwrap_or(0)

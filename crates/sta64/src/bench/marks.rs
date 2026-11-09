@@ -19,6 +19,32 @@ pub fn text(bench: &Bench) -> String {
     sta_bench::run::marks::render(bench, &bench.marks())
 }
 
+/// Marks the renderer and the front end make, as `render.*` kinds (UI-06: `render.menu.*`).
+/// A scene without a sim bench writes these alone; with one they follow the sim marks.
+#[derive(bevy::prelude::Resource, Default, Debug)]
+pub struct RenderMarks(pub Vec<sta_bench::marks::Mark>);
+
+impl RenderMarks {
+    /// The marks file's lines, in the sim marks' format (`TICK KIND k=v ...`).
+    pub fn text(&self) -> String {
+        sta_bench::marks::render_with(&self.0, |id| format!("#{}", id.0))
+    }
+
+    /// The kinds made so far with their fields, `kind k=v k=v` per mark, for checks.
+    pub fn lines(&self) -> Vec<String> {
+        self.text().lines().map(|l| l.split_whitespace().skip(1).collect::<Vec<_>>().join(" ")).collect()
+    }
+}
+
+/// Write the render marks if the environment asks for a marks file.
+pub fn write_render_if_requested(marks: &RenderMarks) {
+    if let Some(dir) = out_dir()
+        && let Err(e) = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(dir.join("marks"), marks.text()))
+    {
+        eprintln!("marks: {}: {e}", dir.display());
+    }
+}
+
 /// Where the report wants the marks file, if anywhere.
 fn out_dir() -> Option<PathBuf> {
     std::env::var_os("STA64_BENCH_OUT").map(PathBuf::from).filter(|p| !p.as_os_str().is_empty())

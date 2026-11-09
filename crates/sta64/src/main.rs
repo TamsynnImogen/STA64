@@ -98,6 +98,10 @@ fn main() {
     if cfg.sim_only {
         std::process::exit(bench::run_sim_only(&cfg));
     }
+    // The front end's scene on its own (UI-06): `--headless` with `STA64_MENU_SCENE=1`.
+    if frontend::scene::requested(&cfg) {
+        std::process::exit(frontend::scene::run_headless(&cfg));
+    }
     if cfg.headless && cfg.scene.is_some() {
         std::process::exit(bench::run_headless(&cfg));
     }
