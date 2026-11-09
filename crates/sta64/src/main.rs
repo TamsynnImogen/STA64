@@ -17,6 +17,7 @@ mod audio;
 mod input;
 mod map;
 mod render;
+mod ui;
 mod viewer;
 
 use app::LaunchConfig;

@@ -97,6 +97,8 @@ pub struct LaunchConfig {
     /// Run this many ticks, then exit.
     pub ticks: Option<u64>,
     pub control: Option<Control>,
+    /// `--ui-gallery`: show the widget gallery instead of the viewer.
+    pub ui_gallery: bool,
     /// `--frames 0,100`: save a frame at each of these ticks (needs `--headless`).
     pub frames: Vec<u64>,
     /// `--frame-dir <dir>`: where frames go (default `frames`).
@@ -126,6 +128,8 @@ Test bench (docs/TESTBENCH.md):
   --frames <t,t,..>        save a PNG frame at each of these ticks (headless, needs a GPU adapter)
   --frame-dir <dir>        where frames go (default: frames)
   --frame-size <WxH>       frame size (default: 640x360)
+
+  --ui-gallery             show every UI widget (LCARS kit)
 
   --help                   this text
 ";
@@ -158,6 +162,7 @@ impl LaunchConfig {
                 "--mod" => cfg.active_mod = value(&mut args),
                 "--view" => cfg.view = value(&mut args),
                 "--map" => cfg.map = Some(value(&mut args).unwrap_or_default()),
+                "--ui-gallery" => cfg.ui_gallery = true,
                 "--mission-report" => cfg.mission_report = true,
                 "--help" | "-h" => cfg.help = true,
                 "--scene" => cfg.scene = value(&mut args).map(PathBuf::from),

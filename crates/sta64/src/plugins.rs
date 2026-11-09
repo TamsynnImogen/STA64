@@ -35,6 +35,8 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
         app.add_plugins(crate::render::fx::weapons::WeaponFxPlugin);
         app.add_plugins(crate::render::fx::specials::SpecialsFxPlugin);
         app.add_plugins(crate::render::fx::impacts::ImpactFxPlugin);
+    } else if cfg.ui_gallery {
+        app.add_plugins(crate::ui::theme::GalleryPlugin);
     } else {
         app.add_plugins(ViewerPlugin);
     }
@@ -50,6 +52,7 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
         // render —
 
         // ui —
+        app.add_plugins(crate::ui::theme::ThemePlugin);
 
         // audio —
         app.add_plugins(crate::audio::AudioPlugin { mode: cfg.mode() });
