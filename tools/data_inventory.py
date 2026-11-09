@@ -390,6 +390,7 @@ def sta64_literals(repo: Path):
 
 
 def used(key: str, lits) -> bool:
+    key = key.lower()  # literals are lower-cased; keys keep their spelling
     if key in lits:
         return True
     if "#" in key:

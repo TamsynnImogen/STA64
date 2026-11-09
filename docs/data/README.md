@@ -25,7 +25,7 @@ so STA64 can track what it reads and what it still ignores.
 
 | | A1 | A2 | FO |
 |---|---:|---:|---:|
-| distinct ODF keys (STA64 ✓ / all) | 43 / 572 | 65 / 970 | 56 / 893 |
+| distinct ODF keys (STA64 ✓ / all) | 75 / 572 | 107 / 970 | 104 / 893 |
 | ODF class labels | 82 | 122 | 76 |
 | distinct CFG keys (✓ / all) | 0 / 364 | 2 / 443 | 2 / 474 |
 | distinct AIP variables (✓ / all) | 2 / 61 | 3 / 67 | 3 / 62 |
