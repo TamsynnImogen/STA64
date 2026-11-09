@@ -591,8 +591,23 @@ pub fn fake_content() -> ContentDb {
     for w in fake.weapons().cloned().chain(cloaks) {
         b = b.weapon(w);
     }
+    // `fx_dread`: the yard's third ship, a cruiser that needs a station.
+    let mut dread = fake.units().find(|u| u.odf == "fx_cruiser").expect("fake cruiser").clone();
+    dread.odf = "fx_dread".into();
+    dread.model = "fx_dread".into();
+    let mut tree = String::new();
     for u in fake.units().cloned().chain(cloakers) {
+        let mut u = u;
+        if u.odf == "fx_yard" {
+            u.build.list.push(sta_content::DefRef::new("fx_dread"));
+        }
+        // Everything is buildable from the start but the dread; the tree
+        // lists every unit because a def it omits is blocked.
+        tree.push_str(&format!("{} 0\n", u.odf));
         b = b.unit(u);
     }
-    b.build().expect("fake content plus a rig is consistent")
+    tree.push_str("fx_rig 0\nfx_dread 1 fx_station\n");
+    let (tree, warnings) = sta_content::TechTree::parse("fake.tt", &tree);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    b.unit(dread).tech_tree(tree).build().expect("fake content plus a rig is consistent")
 }
