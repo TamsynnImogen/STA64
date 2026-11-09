@@ -21,6 +21,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+pub mod convert;
 pub mod sta;
 pub mod sta_write;
 pub mod zfs;
