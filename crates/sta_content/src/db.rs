@@ -133,6 +133,12 @@ impl ContentDb {
         &self.features
     }
 
+    /// The tech tree the sim gates building with (SIM-09). `None` means no
+    /// gating: every def a builder lists may be built.
+    pub fn tech_tree(&self) -> Option<&TechTree> {
+        self.tech.as_deref()
+    }
+
     /// The switches that apply to one unit: its own resolved set, or the
     /// database-wide one for defs built in code.
     pub fn unit_features<'a>(&'a self, u: &'a UnitDef) -> &'a Features {
