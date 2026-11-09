@@ -183,7 +183,10 @@ fn run_headless_inner(cfg: &LaunchConfig) -> i32 {
                 crate::render::fx::specials::SpecialsFxPlugin,
             ));
         app.add_plugins(crate::render::post::PostFxPlugin::from_cfg(cfg));
-        if crate::ui::hud::frame::requested() {
+        if crate::frontend::loading::frame_requested() {
+            // UI-08: the loading screen over the frame (`STA64_UI_LOADING=1`).
+            frames::add_loading(&mut app, cfg);
+        } else if crate::ui::hud::frame::requested() {
             frames::add_hud(&mut app, cfg);
         } else if let Some(screen) = crate::frontend::screens::frame::requested() {
             frames::add_screen(&mut app, cfg, screen);
