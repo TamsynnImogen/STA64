@@ -32,6 +32,7 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
         // The map's ships; the map view is always windowed, so not gated below.
         app.add_plugins(UnitsRenderPlugin);
         app.add_plugins(crate::render::overlays::OverlaysPlugin);
+        app.add_plugins(crate::render::fx::weapons::WeaponFxPlugin);
     } else {
         app.add_plugins(ViewerPlugin);
     }
