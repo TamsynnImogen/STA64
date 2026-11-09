@@ -63,6 +63,7 @@ pub struct Drag {
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MaxSelection(usize);
 
+#[allow(dead_code)] // the settings package sets it
 impl MaxSelection {
     pub fn new(n: usize) -> Self {
         MaxSelection(n.clamp(17, 120))

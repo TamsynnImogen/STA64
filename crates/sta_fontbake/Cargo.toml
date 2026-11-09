@@ -1,0 +1,10 @@
+[package]
+name = "sta_fontbake"
+description = "Host tool: bakes a TTF into the signed-distance font atlas the UI theme loads (port of Refit's fontbake)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+skrifa = "0.44"

@@ -5425,6 +5425,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sta_fontbake"
+version = "0.1.0"
+dependencies = [
+ "skrifa",
+]
+
+[[package]]
 name = "sta_fpq"
 version = "0.1.0"
 dependencies = [
