@@ -68,6 +68,7 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [ ] glTF/GLB models in the viewer and maps
 - [ ] Mission scripts: integrated MMM Lua 5.3 runtime, most-used API first ([docs/MISSIONS.md](docs/MISSIONS.md), [docs/MMM_API.md](docs/MMM_API.md))
 - [ ] Front end on Refit's 3D menu scene (M4)
+- [ ] LCARS widget gallery looks right: `cargo run -p sta64 -- --ui-gallery` (pills, elbows, hover/press, slider drag); screenshot it as the local baseline ([STYLE.md](crates/sta64/src/ui/theme/STYLE.md))
 
 ## Done recently
 

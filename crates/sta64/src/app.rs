@@ -97,6 +97,8 @@ pub struct LaunchConfig {
     /// Run this many ticks, then exit.
     pub ticks: Option<u64>,
     pub control: Option<Control>,
+    /// `--ui-gallery`: show the widget gallery instead of the viewer.
+    pub ui_gallery: bool,
     /// Arguments not understood, kept for the warning.
     pub unknown: Vec<String>,
 }
@@ -117,6 +119,8 @@ Test bench (docs/TESTBENCH.md):
   --clock wall|bench       animation clock (bench: fixed frame step)
   --ticks <n>              run n ticks, then exit
   --control stdio|socket   bench command channel
+
+  --ui-gallery             show every UI widget (LCARS kit)
 
   --help                   this text
 ";
@@ -149,6 +153,7 @@ impl LaunchConfig {
                 "--mod" => cfg.active_mod = value(&mut args),
                 "--view" => cfg.view = value(&mut args),
                 "--map" => cfg.map = Some(value(&mut args).unwrap_or_default()),
+                "--ui-gallery" => cfg.ui_gallery = true,
                 "--mission-report" => cfg.mission_report = true,
                 "--help" | "-h" => cfg.help = true,
                 "--scene" => cfg.scene = value(&mut args).map(PathBuf::from),
