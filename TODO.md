@@ -8,6 +8,7 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 ## Needs your check
 
 - [?] Selection overlays (RND-08): `cargo run -- --map <name>`, select ships: team-coloured ring, green hull bar (and blue shield bar if any) above, faint line to the move target after a move order; all gone on deselect
+- [?] Impact FX (RND-10): in a map fight, shield hits flash a blue shell on the struck side, hull hits throw sparks, destroyed ships explode (flash, shell, debris), ships under half hull trail grey smoke (two streams under a quarter), none when cloaked; all fades and nothing lingers
 - [?] Weapon FX in the map view once a sim with weapons is linked: beams fade over their duration, torpedo spheres fly to the target, short muzzle flash at the shooter (centre of the ship for now, no hardpoint positions yet); all gone shortly after firing stops
 - [?] Audio (AUD-01): `cargo run -- --audio-test` plays four rising tones (music, sfx, voice, ui buses) at startup; F9 repeats them; no sound device logs a warning and runs silent
 - [?] Ship movement smooth now (no weaving); FPS shown top right (try `cargo run --release` if it's low) — 3e748b3
