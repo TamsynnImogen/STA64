@@ -216,7 +216,8 @@ pub struct UnitModels {
 #[allow(clippy::too_many_arguments)]
 fn attach_models(
     mut commands: Commands,
-    pending: Query<(Entity, &NeedsModel, &TeamColour)>,
+    pending: Query<(Entity, &NeedsModel, &TeamColour, Option<&UnitOwner>)>,
+    mut silhouettes: Option<ResMut<crate::render::strategic::Silhouettes>>,
     vfs: Res<Mounted>,
     content: Res<ContentRes>,
     tables: Res<SpriteTables>,
@@ -229,7 +230,7 @@ fn attach_models(
     device: Option<Res<RenderDevice>>,
 ) {
     let formats = device.map(|d| CompressedImageFormats::from_features(d.features())).unwrap_or(CompressedImageFormats::BC);
-    for (e, need, team) in &pending {
+    for (e, need, team, owner) in &pending {
         commands.entity(e).remove::<NeedsModel>();
         let Some(def) = content.0.unit(need.0) else { continue };
         let key = def.model.to_ascii_lowercase().trim_end_matches(".sod").to_owned();
@@ -248,6 +249,31 @@ fn attach_models(
             .clone();
         let Some((path, model)) = found else { continue };
         let scale = def.scale.to_f32();
+        // What the map view gives the ships it draws itself: a click radius from the
+        // model's bounds, and for team-owned things a strategic icon of the right
+        // shape (the mod's `<model>_sv` sprite, else a silhouette of the model). Units
+        // that come into sight, or are placed at the start, are drawn here.
+        let radius = model.bounds().map(|(lo, hi)| (Vec3::from(hi) - Vec3::from(lo)).length() * 0.5).unwrap_or(20.0) * if scale > 0.0 { scale } else { 1.0 };
+        let mobile = def.movement.max_speed > sta_sim::Fixed::ZERO;
+        let owned = owner.is_some_and(|o| o.0 != sta_sim::world::NEUTRAL);
+        if mobile || owned {
+            commands.entity(e).insert(SelectRadius(radius.max(5.0)));
+        }
+        let class = def.class.0.as_str();
+        if owned && !matches!(class, "background_obj" | "latinum" | "asteroidfield" | "nebula_obj" | "planet" | "wormhole_obj") {
+            let mut icon = crate::render::strategic::Strategic::new(crate::render::strategic::shape_for(class, mobile), team.0, radius);
+            let sv = tables.0.sprite(&format!("{}_sv", def.model));
+            let tex = sv.and_then(|sprite| {
+                let tex = (Loader { vfs: &vfs.0, cache: &mut cache, images: &mut images, formats }).colour(&sprite.texture, false)?;
+                Some((tex, sta_assets::spr_anim::sprite_uv(&tables.0, sprite, 0.0)))
+            });
+            if let Some((tex, uv)) = tex {
+                icon = icon.with_image(tex, Some(uv));
+            } else if let Some(img) = silhouettes.as_mut().and_then(|s| s.get(&path, &model, &mut images)) {
+                icon = icon.with_image(img, None);
+            }
+            commands.entity(e).insert(icon);
+        }
         let mut ctx = SpawnCtx {
             commands: &mut commands,
             meshes: &mut meshes,

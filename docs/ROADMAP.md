@@ -40,6 +40,7 @@ How M2–M5 split into parallel work packages: [WORKPLAN.md](WORKPLAN.md).
 - Weapons/damage/shields from ODF, fire arcs, point defence
 - Resources, mining, construction rigs, build queues
 - FO4 profile running a skirmish against an idle opponent
+- [x] `--skirmish <map>`: the local player against the skirmish AI or an idle opponent, each seat with its race's start units and stock (`sta_content::race`), HUD, fog, audio, victory and defeat notice; bench `skirmish` scenario (INT-M3)
 
 ## M4: Front-end and UI
 - Front end built on Refit's 3D menu scene: a live map behind the menus,

@@ -37,6 +37,7 @@ pub mod source;
 pub mod specials;
 pub mod spatial;
 pub mod spawn;
+pub mod start;
 pub mod tech;
 pub mod victory;
 pub mod view;
