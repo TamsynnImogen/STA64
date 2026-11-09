@@ -14,7 +14,12 @@
 //!   like every other refused build.
 //! - A db without a tech tree (`ContentDb::tech_tree()` is `None`, as for
 //!   `fake::db()`) allows everything. When there is a tree, a def it does not
-//!   list ([`Availability::NotListed`]) is blocked, as CON-06 asks.
+//!   list ([`Availability::NotListed`]) is blocked, except the hidden and
+//!   variant items [`sta_content::TechTree::availability_for_builder`] lets through: a
+//!   def in the db whose build-list slot has no `builditem#availability`
+//!   line while the builder flags other slots, or whose `originalclass` the tree lists (never an `edit_` page).
+//!   The HUD's build page asks the same function. The engine's own handling
+//!   of unlisted ODFs is undocumented; the rule is inferred from install data.
 //! - Checked when the order is accepted, not again when a queued item
 //!   starts or a rig deploys.
 
@@ -91,7 +96,7 @@ pub(crate) fn build_allowed(
     let race = db.unit(b.def).map_or("", |d| d.race.as_str());
     let Some(name) = db.name(what) else { return false };
     let state = Owned::new(db, units, seats, b.owner, race);
-    matches!(tree.availability(name, &state), Availability::Available)
+    matches!(tree.availability_for_builder(db, name, db.name(b.def).unwrap_or(""), &state), Availability::Available)
 }
 
 #[cfg(test)]
@@ -100,7 +105,7 @@ mod tests {
     use crate::command::{Command, CommandKind, Order};
     use crate::setup::{Control, GameOptions, GameSetup, PlayerSetup};
     use crate::{Sim, SimEvent, WorldSource};
-    use sta_content::TechTree;
+    use sta_content::{TechTree, UnitDef};
     use sta_core::Vec3;
     use std::sync::Arc;
 
@@ -109,13 +114,29 @@ mod tests {
 
     /// `fake::db()` rebuilt, with a tech tree when given.
     fn game(tree: Option<&str>, teams: [u8; 2]) -> Sim {
+        game_with(tree, teams, |_| {})
+    }
+
+    /// An ODF of `text`, as a loaded unit's `raw` is.
+    fn raw(name: &str, text: &str) -> Arc<sta_odf::Odf> {
+        Arc::new(sta_odf::resolve(name, &mut |_| Some(text.to_owned())).unwrap())
+    }
+
+    /// [`game`] with every unit passed through `patch` first, and an
+    /// `edit_page` unit (a map-editor page) added.
+    fn game_with(tree: Option<&str>, teams: [u8; 2], patch: impl Fn(&mut UnitDef)) -> Sim {
         let fake = sta_content::fake::db();
         let mut b = ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
         for w in fake.weapons() {
             b = b.weapon(w.clone());
         }
         for u in fake.units() {
-            b = b.unit(u.clone());
+            let mut u = u.clone();
+            patch(&mut u);
+            b = b.unit(u);
+        }
+        if tree.is_some() {
+            b = b.unit(UnitDef::new("edit_page", "craft"));
         }
         if let Some(t) = tree {
             let (t, w) = TechTree::parse("t.tt", t);
@@ -174,9 +195,67 @@ mod tests {
 
     #[test]
     fn a_def_the_tree_does_not_list_is_blocked() {
+        // Blocked unless a hidden slot or an `originalclass` lets it through
+        // (see the tests below): `fake::db()`'s units have neither.
         let mut sim = game(Some("fx_frigate 0\n"), [0, 1]);
         let yard = spawn(&mut sim, "fx_yard", P0);
         assert!(build(&mut sim, P0, yard, "fx_frigate"));
+        assert!(!build(&mut sim, P0, yard, "fx_cruiser"));
+    }
+
+    /// The yard's slot 1 holds the cruiser (with an availability line unless
+    /// `hidden`); the cruiser's ODF says `original`.
+    fn yard_game(tree: &str, hidden: bool, original: Option<&str>) -> Sim {
+        game_with(Some(tree), [0, 1], |u| {
+            // Slot 2 always has a line, so the yard marks its slots.
+            let slot = if hidden { "" } else { "builditem1availability = 0\n" };
+            match u.odf.as_str() {
+                "fx_yard" => {
+                    u.raw = raw("fx_yard", &format!("builditem1 = \"fx_cruiser\"\n{slot}builditem2 = \"edit_page\"\nbuilditem3availability = 0\n"));
+                    u.build.list.push(sta_content::DefRef::new("edit_page"));
+                }
+                "fx_cruiser" => {
+                    u.raw = raw("fx_cruiser", &original.map(|o| format!("originalclass = \"{o}\"\n")).unwrap_or_default());
+                }
+                _ => {}
+            }
+        })
+    }
+
+    #[test]
+    fn a_hidden_slot_the_tree_omits_is_allowed() {
+        let mut sim = yard_game("fx_yard 0\n", true, None);
+        let yard = spawn(&mut sim, "fx_yard", P0);
+        assert!(build(&mut sim, P0, yard, "fx_cruiser"));
+        // The same slot with an availability line is just unlisted.
+        let mut sim = yard_game("fx_yard 0\n", false, None);
+        let yard = spawn(&mut sim, "fx_yard", P0);
+        assert!(!build(&mut sim, P0, yard, "fx_cruiser"));
+    }
+
+    #[test]
+    fn a_variant_of_a_listed_def_is_allowed() {
+        let mut sim = yard_game("fx_yard 0\n", false, Some("FX_Yard.odf"));
+        let yard = spawn(&mut sim, "fx_yard", P0);
+        assert!(build(&mut sim, P0, yard, "fx_cruiser"));
+        // An original the tree does not list does not count.
+        let mut sim = yard_game("fx_yard 0\n", false, Some("fx_frigate"));
+        let yard = spawn(&mut sim, "fx_yard", P0);
+        assert!(!build(&mut sim, P0, yard, "fx_cruiser"));
+    }
+
+    #[test]
+    fn an_editor_page_is_blocked_even_from_a_hidden_slot() {
+        // Slot 2 of the yard holds `edit_page` with no availability line.
+        let mut sim = yard_game("fx_yard 0\n", true, None);
+        let yard = spawn(&mut sim, "fx_yard", P0);
+        assert!(!build(&mut sim, P0, yard, "edit_page"));
+    }
+
+    #[test]
+    fn a_withheld_def_stays_blocked_from_a_hidden_slot() {
+        let mut sim = yard_game("fx_yard 0\nfx_cruiser -1\n", true, None);
+        let yard = spawn(&mut sim, "fx_yard", P0);
         assert!(!build(&mut sim, P0, yard, "fx_cruiser"));
     }
 

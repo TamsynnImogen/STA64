@@ -38,9 +38,11 @@
 //!   of greying it ([`Availability::Locked::hidden`]).
 //!
 //! Names are ODF stems, lower-cased without `.odf`, as everywhere in the
-//! content seam. An ODF the tree does not list is [`Availability::NotListed`];
-//! whether that blocks building is the caller's call (the sim treats it as
-//! blocked).
+//! content seam. An ODF the tree does not list is [`Availability::NotListed`].
+//! For a build-list item that is not the end of it: see
+//! [`TechTree::availability_for_builder`], which lets through hidden and
+//! variant items the engine builds without a tree entry (inferred from
+//! install data; the engine's own rule is undocumented).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -395,7 +397,60 @@ impl TechTree {
         }
     }
 
-    /// A builder's build list, in button order, each with its availability.
+    /// Whether `odf` may be built by `builder` (a unit ODF of `db`) for a
+    /// player in `state`. This is [`availability`](TechTree::availability)
+    /// except for items the tree does not list: Fleet Operations 4.0 omits
+    /// the avatar-form main bases (`fed_outpostZ`, ...) and some hidden helper
+    /// forms, yet its construction ships build them. A [`NotListed`](Availability::NotListed)
+    /// item of a build list is [`Available`](Availability::Available) when the
+    /// def exists in `db` and
+    ///
+    /// - (a) the builder's slot for it has no `builditem#availability` line
+    ///   (a hidden or provided slot) while the builder flags other slots (`availability` or `provided`), or
+    /// - (b) its ODF has an `originalclass` naming a def the tree lists (an
+    ///   evolve or variant form of a listed unit),
+    ///
+    /// and neither the builder nor the item is a map-editor page (`edit_`
+    /// prefix). Withheld and Locked results are never overridden. Both the
+    /// sim's gate and the HUD's build page ask this, so they agree.
+    pub fn availability_for_builder(&self, db: &ContentDb, odf: &str, builder: &str, state: &dyn TechState) -> Availability {
+        let a = self.availability(odf, state);
+        if a == Availability::NotListed && self.unlisted_item_allowed(db, odf, builder) {
+            Availability::Available
+        } else {
+            a
+        }
+    }
+
+    fn unlisted_item_allowed(&self, db: &ContentDb, odf: &str, builder: &str) -> bool {
+        let (item, builder) = (stem(odf), stem(builder));
+        if item.starts_with("edit_") || builder.starts_with("edit_") {
+            return false;
+        }
+        let Some(def) = db.key(&item).and_then(|k| db.unit(k)) else { return false };
+        let Some(b) = db.key(&builder).and_then(|k| db.unit(k)) else { return false };
+        let raw = &b.raw;
+        // Only a builder that flags its slots (an availability or a provided
+        // line on some slot) says anything by leaving one unflagged; most
+        // ODFs flag none.
+        let marks_slots = raw.keys().any(|k| {
+            let l = k.to_ascii_lowercase();
+            l.starts_with("builditem") && (l.ends_with("availability") || l.ends_with("provided"))
+        });
+        let hidden_slot = marks_slots && raw.keys().any(|k| {
+            let l = k.to_ascii_lowercase();
+            let Some(n) = l.strip_prefix("builditem").filter(|n| !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit())) else {
+                return false;
+            };
+            raw.raw(k).is_some_and(|v| stem(v.trim().trim_matches('"')) == item)
+                && raw.raw(&format!("builditem{n}availability")).is_none()
+        });
+        let variant = def.raw.str("originalclass").is_some_and(|o| self.entries.contains_key(&stem(o)));
+        hidden_slot || variant
+    }
+
+    /// A builder's build list, in button order, each with its availability
+    /// (see [`availability_for_builder`](TechTree::availability_for_builder)).
     /// `builder` is a unit ODF (any case, `.odf` optional) of `db`; an
     /// unknown builder has an empty list.
     pub fn build_options(&self, db: &ContentDb, builder: &str, state: &dyn TechState) -> Vec<BuildOption> {
@@ -403,7 +458,7 @@ impl TechTree {
         unit.build
             .list
             .iter()
-            .map(|d| BuildOption { def: d.clone(), availability: self.availability(&d.odf, state) })
+            .map(|d| BuildOption { def: d.clone(), availability: self.availability_for_builder(db, &d.odf, builder, state) })
             .collect()
     }
 
@@ -1060,5 +1115,61 @@ mod tests {
 
         let bad = tt("ghost 1 fx_yard\n");
         assert_eq!(bad.check_against(&db).len(), 1);
+    }
+
+    /// A db whose `yard` lists `item` in slot 1 (an availability line unless
+    /// `hidden`), plus the extra `(name, ODF text)` units.
+    fn rule_db(yard: &str, slot: &str, extra: &[(&str, &str)]) -> ContentDb {
+        use crate::UnitDef;
+        let raw = |n: &str, t: &str| std::sync::Arc::new(sta_odf::resolve(n, &mut |_| Some(t.to_owned())).unwrap());
+        let mut y = UnitDef::new(yard, "shipyard");
+        y.raw = raw(yard, slot);
+        let mut b = ContentDb::builder();
+        for (n, t) in extra {
+            let mut u = UnitDef::new(n, "craft");
+            u.raw = raw(n, t);
+            y.build.list.push(crate::DefRef::new(*n));
+            b = b.unit(u);
+        }
+        b.unit(y).build().unwrap()
+    }
+
+    #[test]
+    fn unlisted_items_follow_the_hidden_and_variant_rule() {
+        let me = Owned::new("fx");
+        let t = tt("yard 0\nlisted 0\nwithheld -1\n");
+        let slots = "builditem1 = \"hid\"\nbuilditem2 = \"shown\"\nbuilditem2availability = 0\n\
+            builditem3 = \"var\"\nbuilditem3availability = 0\nbuilditem4 = \"withheld\"\n\
+            builditem5 = \"edit_x\"\nbuilditem6 = \"ghost\"\nBuildItem7 = \"Hid2.odf\"\n";
+        let db = rule_db(
+            "yard",
+            slots,
+            &[
+                ("hid", ""),
+                ("shown", ""),
+                ("var", "originalclass = \"Listed\"\n"),
+                ("withheld", ""),
+                ("edit_x", ""),
+                ("hid2", ""),
+            ],
+        );
+        let a = |item: &str| t.availability_for_builder(&db, item, "yard", &me);
+        // (a) hidden slot, any case or extension.
+        assert!(a("hid").is_available());
+        assert!(a("HID2.odf").is_available());
+        assert_eq!(a("shown"), Availability::NotListed);
+        // (b) originalclass names a listed def.
+        assert!(a("var").is_available());
+        // Explicitly withheld stays so, hidden slot or not.
+        assert_eq!(a("withheld"), Availability::Withheld);
+        // Editor pages, as item or as builder, and defs not in the db.
+        assert_eq!(a("edit_x"), Availability::NotListed);
+        assert_eq!(a("ghost"), Availability::NotListed);
+        assert_eq!(t.availability_for_builder(&db, "hid", "edit_yard", &me), Availability::NotListed);
+        assert_eq!(t.availability_for_builder(&db, "hid", "nobody", &me), Availability::NotListed);
+        // build_options agrees.
+        let opts = t.build_options(&db, "yard", &me);
+        let ok: Vec<&str> = opts.iter().filter(|o| o.availability.is_available()).map(|o| o.def.odf.as_str()).collect();
+        assert_eq!(ok, ["hid", "var", "hid2"]);
     }
 }
