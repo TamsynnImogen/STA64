@@ -187,6 +187,11 @@ impl Economy {
         Some(true)
     }
 
+    /// Set a player's whole stock (a game's starting resources).
+    pub(crate) fn set_stock(&mut self, p: PlayerId, stock: [Fixed; RESOURCES]) {
+        *self.slot(p) = stock;
+    }
+
     /// Take `amount` of `res` from `p` if there is that much (SIM-08 builds).
     pub fn spend(&mut self, p: PlayerId, res: u8, amount: Fixed) -> bool {
         if res as usize >= RESOURCES

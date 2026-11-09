@@ -78,6 +78,16 @@ pub enum Control {
     Socket,
 }
 
+/// Who runs the opponent's seat in a skirmish (`--opponent`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Opponent {
+    /// `sta_ai`'s skirmish controller (AI-02).
+    #[default]
+    Skirmish,
+    /// Nobody: the seat has its units and never sends a command (AI-01).
+    Idle,
+}
+
 /// The command line.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct LaunchConfig {
@@ -87,6 +97,15 @@ pub struct LaunchConfig {
     /// `Some("")`: `--map` without a name (the map browser).
     pub map: Option<String>,
     pub mission_report: bool,
+    /// `--skirmish [<map>]`: play a match on the map (the map view with a seat,
+    /// starting forces, an opponent, the HUD and audio); `map` holds its name.
+    pub skirmish: bool,
+    /// `--opponent skirmish|idle`.
+    pub opponent: Opponent,
+    /// `--race <name>`: the local player's race (default: the first playable).
+    pub race: Option<String>,
+    /// `--opponent-race <name>`.
+    pub opponent_race: Option<String>,
     /// `--seat <n>`: play seat `n` in the map view (the link speaks for it, its fog is drawn).
     pub seat: Option<u8>,
     pub help: bool,
@@ -121,6 +140,13 @@ Usage: sta64 [options]
   --view [<model>]         model viewer (the default)
   --map [<map>]            fly around a map; without a name, the map browser
   --seat <n>               with --map: play seat n (orders for its units only, its fog and shroud drawn)
+  --skirmish [<map>]       play a match: you (seat 0, or --seat n) against an opponent on a multiplayer
+                           map, each with its race's starting forces; HUD, fog, music, sfx and voices;
+                           a notice and a log line when one side is eliminated. Without a name, the map
+                           browser (Left/Right change the map)
+  --opponent skirmish|idle with --skirmish: the AI (default) or an opponent that never sends a command
+  --race <name>            with --skirmish: your race, e.g. federation (default: the first playable)
+  --opponent-race <name>   with --skirmish: the opponent's race (default: the next playable one)
   --mission-report         print which mission script every map would run, then exit
 
 Test bench (docs/TESTBENCH.md):
@@ -168,6 +194,17 @@ impl LaunchConfig {
                 "--mod" => cfg.active_mod = value(&mut args),
                 "--view" => cfg.view = value(&mut args),
                 "--map" => cfg.map = Some(value(&mut args).unwrap_or_default()),
+                "--skirmish" => {
+                    cfg.skirmish = true;
+                    cfg.map = Some(value(&mut args).unwrap_or_default());
+                }
+                "--opponent" => match value(&mut args).as_deref() {
+                    Some("skirmish") => cfg.opponent = Opponent::Skirmish,
+                    Some("idle") => cfg.opponent = Opponent::Idle,
+                    other => cfg.unknown.push(format!("--opponent {} (skirmish or idle)", other.unwrap_or(""))),
+                },
+                "--race" => cfg.race = value(&mut args),
+                "--opponent-race" => cfg.opponent_race = value(&mut args),
                 "--seat" => match value(&mut args).and_then(|v| v.parse().ok()) {
                     Some(n) => cfg.seat = Some(n),
                     None => cfg.unknown.push("--seat (needs a seat number)".into()),
@@ -211,6 +248,8 @@ impl LaunchConfig {
     pub fn mode(&self) -> Mode {
         if self.scene.is_some() || self.sim_only || self.headless {
             Mode::Bench { headless: self.headless || self.sim_only, sim_only: self.sim_only }
+        } else if self.skirmish {
+            Mode::Game
         } else if self.map.is_some() {
             Mode::Map
         } else {
@@ -268,6 +307,22 @@ mod tests {
         assert!(parse("--mission-report").mission_report);
         assert_eq!(parse("").mode(), Mode::Viewer);
         assert_eq!(parse("").clock_mode(), ClockMode::Wall);
+    }
+
+    #[test]
+    fn skirmish_flags_parse() {
+        let c = parse("--install-root /g --mod FO --skirmish blueamber --seat 1 --opponent idle --race klingon --opponent-race borg");
+        assert!(c.skirmish);
+        assert_eq!(c.map.as_deref(), Some("blueamber"));
+        assert_eq!((c.seat, c.opponent), (Some(1), Opponent::Idle));
+        assert_eq!((c.race.as_deref(), c.opponent_race.as_deref()), (Some("klingon"), Some("borg")));
+        assert_eq!(c.mode(), Mode::Game);
+        assert!(c.unknown.is_empty());
+        let d = parse("--skirmish");
+        assert_eq!((d.map.as_deref(), d.opponent, d.seat), (Some(""), Opponent::Skirmish, None));
+        assert!(!parse("--map x").skirmish);
+        assert_eq!(parse("--map x").mode(), Mode::Map);
+        assert_eq!(parse("--skirmish x --opponent robots").unknown.len(), 1);
     }
 
     #[test]

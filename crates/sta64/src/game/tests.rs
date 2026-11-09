@@ -1,0 +1,171 @@
+use super::*;
+use sta_content::fake;
+use sta_sim::command::LocalRouter;
+use sta_sim::{SimEvent, WorldSource};
+
+fn cfg(opponent: Opponent) -> SkirmishCfg {
+    SkirmishCfg { seat: 0, opponent, race: None, opponent_race: None }
+}
+
+fn setup(opponent: Opponent) -> (GameSetup, Races) {
+    let (map, db) = (Arc::new(fake::two_bases()), Arc::new(fake::db()));
+    let races = Races::default();
+    let s = seats(&map, &cfg(opponent), &races, &db).expect("two starts");
+    (GameSetup { seed: 5, map, content: db, players: s.players, options: Default::default() }, races)
+}
+
+#[test]
+fn seats_are_the_local_player_and_one_opponent() {
+    let (map, db) = (fake::two_bases(), fake::db());
+    let s = seats(&map, &cfg(Opponent::Skirmish), &Races::default(), &db).unwrap();
+    let controls: Vec<_> = s.players.iter().map(|p| (p.id.0, p.team.0, p.control.clone())).collect();
+    assert_eq!(controls, [(0, 0, Control::Human), (1, 1, Control::Ai("skirmish".into()))]);
+    assert_eq!(s.players[0].race, "fx");
+    assert_eq!(s.local.name, "fx");
+    assert!(s.summary.contains("skirmish AI"), "{}", s.summary);
+
+    let idle = seats(&map, &SkirmishCfg { seat: 1, ..cfg(Opponent::Idle) }, &Races::default(), &db).unwrap();
+    let controls: Vec<_> = idle.players.iter().map(|p| (p.id.0, p.control.clone())).collect();
+    assert_eq!(controls, [(0, Control::Idle), (1, Control::Human)]);
+
+    let missing = seats(&map, &SkirmishCfg { seat: 7, ..cfg(Opponent::Idle) }, &Races::default(), &db);
+    assert!(missing.err().unwrap().contains("seat 7"));
+    let mut one = map.clone();
+    one.starts.truncate(1);
+    assert!(seats(&one, &cfg(Opponent::Idle), &Races::default(), &db).is_err());
+}
+
+#[test]
+fn only_the_ai_seat_gets_a_controller() {
+    let (s, _) = setup(Opponent::Skirmish);
+    assert_eq!(controllers(&s).len(), 1);
+    let (s, _) = setup(Opponent::Idle);
+    assert_eq!(controllers(&s).len(), 0);
+}
+
+#[test]
+fn the_verdict_follows_eliminations() {
+    let (s, races) = setup(Opponent::Idle);
+    let mut sim = sta_sim::Sim::from_setup_with_starts(&s, &races).0;
+    let view = sim.view();
+    assert_eq!(verdict(&view, PlayerId(0)), None);
+    let mut v = (*view).clone();
+    v.players[1].eliminated = true;
+    assert_eq!(verdict(&v, PlayerId(0)), Some(Verdict::Victory));
+    assert_eq!(verdict(&v, PlayerId(1)), Some(Verdict::Defeat));
+    v.players[0].eliminated = true;
+    assert_eq!(verdict(&v, PlayerId(0)), Some(Verdict::Defeat));
+    let _ = sim.step(&[]);
+}
+
+/// The real setup path on fake content: `seats` -> `GameSetup` -> `start` (starting
+/// forces and stock, controllers) -> a `SimLink` with the controllers, stepped as the
+/// game steps it. The AI seat (1) has a yard and a miner and nothing else; it mines,
+/// builds warships, attacks the idle seat (0) and eliminates it.
+#[test]
+fn the_skirmish_ai_builds_and_attacks_in_the_game_setup_path() {
+    let (s, races) = setup(Opponent::Skirmish);
+    let (sim, _, ctrl) = start(&s, &races);
+    let mut link = SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), PlayerId(0)).with_controllers(ctrl);
+    assert_eq!(link.controllers(), 1);
+
+    let ai = PlayerId(1);
+    let (mut built, mut hits, mut rejected, mut won_at) = (0, 0, 0, None);
+    let mut shooters = std::collections::BTreeSet::new();
+    for _ in 0..45_000 {
+        let events = link.tick().expect("local router never stalls");
+        let view = link.curr().clone();
+        for e in &events {
+            match e {
+                SimEvent::Built { id, .. } if view.unit(*id).is_some_and(|u| u.owner == ai) => built += 1,
+                SimEvent::Hit { by, .. } => {
+                    if let Some(u) = view.unit(*by).filter(|u| u.owner == ai) {
+                        hits += 1;
+                        shooters.insert(u.def);
+                    }
+                }
+                SimEvent::Rejected { player, .. } if *player == ai => rejected += 1,
+                _ => {}
+            }
+        }
+        if verdict(&view, PlayerId(0)).is_some() {
+            won_at = Some(view.tick);
+            break;
+        }
+    }
+    println!("skirmish AI: {built} units built, {hits} hits from {} kinds of ship, {rejected} rejected, eliminated the idle seat at {won_at:?}", shooters.len());
+    assert!(built >= 3, "the AI built warships ({built})");
+    assert!(hits > 0, "the AI's ships hit the idle seat");
+    assert_eq!(rejected, 0, "no order of the AI was rejected");
+    let tick = won_at.expect("the AI wins");
+    assert_eq!(verdict(link.curr(), PlayerId(0)), Some(Verdict::Defeat));
+    assert_eq!(verdict(link.curr(), ai), Some(Verdict::Victory));
+    assert!(tick < 45_000);
+}
+
+#[test]
+fn an_idle_opponent_never_acts_and_survives() {
+    let (s, races) = setup(Opponent::Idle);
+    let (sim, _, ctrl) = start(&s, &races);
+    assert!(ctrl.is_empty());
+    let mut link = SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), PlayerId(0)).with_controllers(ctrl);
+    let before = link.curr().units.len();
+    for _ in 0..600 {
+        link.tick().unwrap();
+    }
+    assert_eq!(link.curr().units.len(), before);
+    assert_eq!(verdict(link.curr(), PlayerId(0)), None);
+}
+
+/// With `STA64_TEST_INSTALL` (+ `STA64_TEST_MOD`, empty for none): a skirmish on a real
+/// multiplayer map (`STA64_TEST_MAP`, default `blueamber`) built as the game builds it.
+/// Each seat gets its race's start units and stock, and the AI seat issues orders that
+/// the sim accepts. Prints what the AI did in the first minutes.
+#[test]
+fn install_skirmish_starts_and_the_ai_acts() {
+    let Ok(root) = std::env::var("STA64_TEST_INSTALL") else { return };
+    let m = std::env::var("STA64_TEST_MOD").unwrap_or_default();
+    let map_name = std::env::var("STA64_TEST_MAP").unwrap_or_else(|_| "blueamber".into());
+    let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(m.as_str()).filter(|m| !m.is_empty())).unwrap();
+    let (index, _) = sta_content::OdfIndex::build(&vfs);
+    let (db, _) = ContentDb::load(&vfs, &index).unwrap();
+    let (races, _) = Races::load(&vfs, &index);
+    let db = Arc::new(db);
+    let bzn = sta_bzn::parse(&vfs.read(&format!("bzn/{map_name}.bzn")).expect("map exists").unwrap()).unwrap();
+    let cfg = SkirmishCfg { seat: 0, opponent: Opponent::Skirmish, race: std::env::var("STA64_TEST_RACE").ok(), opponent_race: std::env::var("STA64_TEST_OPPONENT_RACE").ok() };
+    let side = crate::map::build_sim(&bzn, &map_name, &db, &index, &vfs, Some(0), Some((&cfg, &races)));
+    let plan = side.skirmish.expect("a skirmish").unwrap_or_else(|e| panic!("{e}"));
+    println!("{}", plan.summary);
+    let ai = PlayerId(plan.players.iter().find(|p| matches!(p.control, Control::Ai(_))).unwrap().id.0);
+    let mut link = SimLink::new(Box::new(side.sim), Box::new(LocalRouter::new()), PlayerId(0)).with_controllers(side.controllers);
+    assert_eq!(link.controllers(), 1);
+    let name = |k| db.name(k).unwrap_or("?").to_owned();
+    let (mut built, mut rejected, mut mined) = (Vec::new(), 0, 0);
+    let view = link.curr().clone();
+    for p in &view.players {
+        let mine: Vec<_> = view.units.iter().filter(|u| u.owner == p.id).map(|u| name(u.def)).collect();
+        println!("seat {}: {mine:?} stock {:?}", p.id.0, p.resources.iter().map(|r| r.to_f32() as i64).collect::<Vec<_>>());
+        if p.id == ai {
+            assert!(!mine.is_empty(), "the AI seat has start units");
+        }
+    }
+    for _ in 0..(30 * 60 * 5) {
+        for e in link.tick().unwrap() {
+            match e {
+                SimEvent::Built { id, .. } => {
+                    let v = link.curr();
+                    if let Some(u) = v.unit(id).filter(|u| u.owner == ai) {
+                        built.push((v.tick, name(u.def)));
+                    }
+                }
+                SimEvent::Rejected { player, .. } if player == ai => rejected += 1,
+                SimEvent::Delivered { .. } => mined += 1,
+                _ => {}
+            }
+        }
+    }
+    let v = link.curr();
+    println!("after 5 minutes: AI built {built:?}, {rejected} rejected, {mined} deliveries; AI units now {:?}", v.units.iter().filter(|u| u.owner == ai).map(|u| name(u.def)).collect::<Vec<_>>());
+    assert!(!built.is_empty(), "the AI built something in five minutes");
+    assert_eq!(rejected, 0, "the sim accepted every order of the AI");
+}

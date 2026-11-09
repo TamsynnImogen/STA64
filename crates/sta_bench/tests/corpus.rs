@@ -9,8 +9,9 @@
 //!
 //! Each map goes through the seams only: `sta_bzn::parse`,
 //! `MapDef::convert_bzn_in`, `ContentDb::load`, a [`GameSetup`] and
-//! `Sim::from_setup`; then the starting units of every start position
-//! (`start_for`, `spawn_points`) are placed with `Sim::spawn_def`. A map is
+//! `Sim::from_setup_with_starts`, the rule the game itself uses to place each
+//! seat's starting forces on its start position (the race's start objects and
+//! stock from its ODF, or the documented default). A map is
 //! a failure when its BZN is unreadable, when it panics, does not reach tick
 //! 300, or when two fresh builds end on different digests. Armada I's
 //! save-game layout (no objects, no mission type) is counted as unreadable,
@@ -26,15 +27,13 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use sta_content::{ContentDb, MapDef, OdfIndex};
-use sta_core::{Fixed, PlayerId, TeamId};
+use sta_content::{ContentDb, MapDef, OdfIndex, Races};
+use sta_core::{PlayerId, TeamId};
 use sta_sim::setup::{Control, GameOptions, GameSetup, PlayerSetup};
 use sta_sim::{Sim, WorldSource};
 use sta_vfs::Vfs;
 
 const TICKS: u64 = 300;
-/// Units placed on each start position.
-const START_UNITS: usize = 3;
 const SEED: u64 = 0x5EED_C0DE;
 
 #[test]
@@ -67,6 +66,8 @@ fn check(label: &str, vfs: &Vfs) {
     let (index, _) = OdfIndex::build(vfs);
     let (db, _) = ContentDb::load(vfs, &index).unwrap();
     let db = Arc::new(db);
+    let (races, _) = Races::load(vfs, &index);
+    let races = Arc::new(races);
 
     let mut problems = Vec::new();
     let (mut files, mut unreadable) = (0, 0);
@@ -104,7 +105,7 @@ fn check(label: &str, vfs: &Vfs) {
                     loop {
                         let i = next.fetch_add(1, Ordering::Relaxed);
                         let Some((_, map)) = maps.get(i) else { break };
-                        done.push((i, run_map(map, &db)));
+                        done.push((i, run_map(map, &db, &races)));
                     }
                     done
                 })
@@ -146,12 +147,12 @@ fn check(label: &str, vfs: &Vfs) {
 }
 
 /// Build the map twice, tick each 300 times, compare the digests.
-fn run_map(map: &Arc<MapDef>, db: &Arc<ContentDb>) -> Outcome {
+fn run_map(map: &Arc<MapDef>, db: &Arc<ContentDb>, races: &Races) -> Outcome {
     let mut out = Outcome::default();
-    let setup = setup_for(map, db);
+    let setup = setup_for(map, db, races);
     let run = || {
         catch_unwind(AssertUnwindSafe(|| {
-            let (mut sim, skipped) = build(&setup);
+            let (mut sim, skipped) = build(&setup, races);
             let at_start = sim.view().units.len();
             let mut tick = 0;
             for _ in 0..TICKS {
@@ -188,7 +189,7 @@ fn panic_text(p: &Box<dyn std::any::Any + Send>) -> String {
 
 /// One seat per start position, or per owner a mission's objects name, and at
 /// least two; each seat its own team and, in turn, one of the content's races.
-fn setup_for(map: &Arc<MapDef>, db: &Arc<ContentDb>) -> GameSetup {
+fn setup_for(map: &Arc<MapDef>, db: &Arc<ContentDb>, races: &Races) -> GameSetup {
     let seats = map
         .starts
         .iter()
@@ -197,7 +198,7 @@ fn setup_for(map: &Arc<MapDef>, db: &Arc<ContentDb>) -> GameSetup {
         .max()
         .unwrap_or(0)
         .clamp(2, 16);
-    let races = races(db);
+    let races = sta_content::race::skirmish_races(races, db);
     let players = (0..seats)
         .map(|i| PlayerSetup {
             id: PlayerId(i as u8),
@@ -209,29 +210,9 @@ fn setup_for(map: &Arc<MapDef>, db: &Arc<ContentDb>) -> GameSetup {
     GameSetup { seed: SEED, map: Arc::clone(map), content: Arc::clone(db), players, options: GameOptions::default() }
 }
 
-fn races(db: &ContentDb) -> Vec<String> {
-    let mut r: Vec<String> = db.units().map(|u| u.race.clone()).filter(|r| !r.is_empty()).collect();
-    r.sort();
-    r.dedup();
-    r
-}
-
-/// `Sim::from_setup`, then each seat's start units on its start position:
-/// the first armed, mobile units of the seat's race by ODF name (any mobile
-/// unit when the race has none). Returns the sim and the objects it skipped.
-fn build(setup: &GameSetup) -> (Sim, usize) {
-    let (mut sim, warnings) = Sim::from_setup_with_warnings(setup);
-    let db = &setup.content;
-    for p in &setup.players {
-        let Some(start) = setup.map.start_for(p.id.0) else { continue };
-        let mobile = |u: &&sta_content::UnitDef| u.movement.max_speed > Fixed::ZERO;
-        let mut of_race: Vec<_> = db.units().filter(|u| u.race == p.race).filter(mobile).collect();
-        of_race.sort_by(|a, b| a.odf.cmp(&b.odf));
-        let armed: Vec<_> = of_race.iter().filter(|u| !u.hardpoints.is_empty()).collect();
-        let picks: Vec<_> = if armed.is_empty() { of_race.iter().collect() } else { armed };
-        for (u, (pos, heading)) in picks.into_iter().take(START_UNITS).zip(start.spawn_points(START_UNITS, Fixed::from_int(60))) {
-            sim.spawn_def(u.key, p.id, pos, heading);
-        }
-    }
+/// The skirmish start rule (`Sim::from_setup_with_starts`): each seat's race
+/// loadout on its start position. Returns the sim and the objects it skipped.
+fn build(setup: &GameSetup, races: &Races) -> (Sim, usize) {
+    let (sim, warnings) = Sim::from_setup_with_starts(setup, races);
     (sim, warnings.len())
 }
