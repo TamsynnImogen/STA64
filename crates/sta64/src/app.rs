@@ -97,6 +97,12 @@ pub struct LaunchConfig {
     /// Run this many ticks, then exit.
     pub ticks: Option<u64>,
     pub control: Option<Control>,
+    /// `--frames 0,100`: save a frame at each of these ticks (needs `--headless`).
+    pub frames: Vec<u64>,
+    /// `--frame-dir <dir>`: where frames go (default `frames`).
+    pub frame_dir: Option<PathBuf>,
+    /// `--frame-size WxH`.
+    pub frame_size: Option<(u32, u32)>,
     /// Arguments not understood, kept for the warning.
     pub unknown: Vec<String>,
 }
@@ -117,6 +123,9 @@ Test bench (docs/TESTBENCH.md):
   --clock wall|bench       animation clock (bench: fixed frame step)
   --ticks <n>              run n ticks, then exit
   --control stdio|socket   bench command channel
+  --frames <t,t,..>        save a PNG frame at each of these ticks (headless, needs a GPU adapter)
+  --frame-dir <dir>        where frames go (default: frames)
+  --frame-size <WxH>       frame size (default: 640x360)
 
   --help                   this text
 ";
@@ -167,6 +176,15 @@ impl LaunchConfig {
                     Some("stdio") => cfg.control = Some(Control::Stdio),
                     Some("socket") => cfg.control = Some(Control::Socket),
                     other => cfg.unknown.push(format!("--control {}", other.unwrap_or(""))),
+                },
+                "--frames" => match value(&mut args).map(|v| v.split(',').map(|t| t.trim().parse().ok()).collect::<Option<Vec<u64>>>()) {
+                    Some(Some(t)) => cfg.frames = t,
+                    _ => cfg.unknown.push("--frames (needs ticks like 0,100)".into()),
+                },
+                "--frame-dir" => cfg.frame_dir = value(&mut args).map(PathBuf::from),
+                "--frame-size" => match value(&mut args).and_then(|v| v.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))) {
+                    Some(wh) => cfg.frame_size = Some(wh),
+                    None => cfg.unknown.push("--frame-size (needs WxH)".into()),
                 },
                 _ => cfg.unknown.push(a),
             }

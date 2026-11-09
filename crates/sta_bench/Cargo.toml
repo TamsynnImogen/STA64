@@ -11,3 +11,7 @@ thiserror.workspace = true
 sta_core.workspace = true
 sta_content.workspace = true
 sta_sim.workspace = true
+
+[[bin]]
+name = "sta-bench"
+path = "src/bin/sta-bench.rs"
