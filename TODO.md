@@ -7,6 +7,7 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 ## Needs your check
 
+- [?] Map on seams (INT-M2): `cargo run -- --install-root <FO install> --map <name>` plays as before (ships move on right-click, fight when ordered to attack); the info panel's `sim:` line shows the `MapDef` counts. `--seat 0` plays seat 0 (orders for its units only, its fog and shroud drawn). `STA64_TEST_INSTALL=<root> STA64_TEST_MOD=<mod or empty> cargo test -p sta64 map::tests -- --nocapture`
 - [?] Map conversion (CON-07): `STA64_TEST_INSTALL=<root> STA64_TEST_MOD=<mod or empty> cargo test -p sta_content --test map_install -- --nocapture` (and `STA64_TEST_DIR=<dir>` for a bare game folder) prints, per install, maps converted, objects placed or counted as regions/planets/lights/props, and multiplayer maps with starts; no `PROBLEM` lines
 - [?] Map corpus (TOOL-05): `STA64_TEST_INSTALL=<root> STA64_TEST_MOD=<mod or empty> cargo test -p sta_bench --test corpus -- --nocapture` (and `STA64_TEST_DIR=<dir>` for a bare game folder) prints maps loaded, ticked 300 and repeated with the same digest; no `PROBLEM` lines
 - [?] Skirmish AI (AI-02): `cargo test -p sta_ai skirmish -- --nocapture` passes and prints `skirmish beats idle on two_bases at 21.84 sim minutes`; no in-game view yet (INT-M3 seats it with `Control::Ai("skirmish")`)

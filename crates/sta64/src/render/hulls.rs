@@ -285,9 +285,9 @@ fn apply(
             .or_insert_with(|| hulls.add(hull_material(std, part, &view)))
             .clone();
         let mut ec = commands.entity(e);
-        ec.insert(HullSource { source: mat.0.clone(), hull: hull.clone(), shown: lighting.on });
+        ec.try_insert(HullSource { source: mat.0.clone(), hull: hull.clone(), shown: lighting.on });
         if lighting.on {
-            ec.insert(MeshMaterial3d(hull)).remove::<MeshMaterial3d<StandardMaterial>>();
+            ec.try_insert(MeshMaterial3d(hull)).try_remove::<MeshMaterial3d<StandardMaterial>>();
         }
     }
     if !lighting.is_changed() {
