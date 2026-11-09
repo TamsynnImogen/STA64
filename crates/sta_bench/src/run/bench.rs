@@ -652,7 +652,31 @@ impl Bench {
                 );
                 "ok".into()
             }
-            C::Special { .. } => return Err("unsupported: special".into()),
+            C::Special { name, weapon, target } => {
+                // The weapon's name picks the slot among the unit's specials.
+                if target.is_some() {
+                    return Err("unsupported: special with a target (cloak is the only special)".into());
+                }
+                let id = self.living(name)?;
+                let content = &self.cfg.content;
+                let def = self.sim.unit(id).and_then(|u| content.unit(u.def));
+                let slot = def
+                    .and_then(|d| {
+                        sta_sim::specials::specials_of(content, d)
+                            .position(|(_, w)| w.odf.eq_ignore_ascii_case(weapon))
+                    })
+                    .ok_or_else(|| format!("`{name}` has no special `{weapon}`"))?;
+                self.order(
+                    &[id],
+                    Order::Special {
+                        units: vec![id],
+                        slot: slot as u8,
+                        target: sta_sim::command::Target::None,
+                    },
+                    format!("special {name} {weapon}"),
+                );
+                "ok".into()
+            }
             C::Spawn {
                 name,
                 odf,

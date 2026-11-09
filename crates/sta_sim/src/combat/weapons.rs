@@ -255,7 +255,7 @@ impl Weapons {
                 let Some(w) = db.weapon(hp.weapon.key) else {
                     continue;
                 };
-                if w.kind == WeaponKind::PointDefence {
+                if w.kind == WeaponKind::PointDefence || crate::specials::is_special(w) {
                     continue;
                 }
                 let arc = if db.features().fire_arcs {
@@ -358,8 +358,12 @@ impl Weapons {
         units: &'a Entities,
         teams: &[(PlayerId, TeamId)],
     ) -> Option<&'a Entity> {
+        let team = |p: PlayerId| teams.iter().find(|x| x.0 == p).map(|x| x.1);
+        // A cloaked unit is only a target for its own team.
+        let unseen = |t: &Entity| t.flags.contains(UnitFlags::CLOAKED) && team(t.owner) != team(u.owner);
         let hittable = |t: &Entity| {
             t.id != u.id
+                && !unseen(t)
                 && t.hull[1] > Fixed::ZERO
                 && flat(u.pos, t.pos).1 <= range
                 && in_arc(u.heading, arc, u.pos, t.pos)
@@ -367,7 +371,6 @@ impl Weapons {
         if let Some(t) = self.attack.get(u.id).and_then(|&t| units.get(t)) {
             return hittable(t).then_some(t);
         }
-        let team = |p: PlayerId| teams.iter().find(|x| x.0 == p).map(|x| x.1);
         let mine = team(u.owner)?;
         let mut best: Option<(Fixed, &Entity)> = None;
         for t in units.iter() {

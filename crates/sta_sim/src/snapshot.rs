@@ -32,7 +32,7 @@ use crate::{Rng, Sim, SimEvent};
 
 pub const MAGIC: [u8; 4] = *b"STAS";
 /// Bumped whenever [`Body`] (or anything in it) changes layout.
-pub const FORMAT_VERSION: u16 = 4;
+pub const FORMAT_VERSION: u16 = 5;
 
 const HEADER: usize = 4 + 2 + 4 + 8;
 
@@ -132,6 +132,8 @@ struct Body {
     production: crate::production::ProductionRec,
     /// SIM-13 eliminated seats.
     victory: crate::victory::VictoryRec,
+    /// SIM-14 special energy and cloaks.
+    specials: crate::specials::SpecialsRec,
 }
 
 fn kind_from(b: u8) -> Option<EntityKind> {
@@ -242,6 +244,7 @@ impl Sim {
             economy: self.economy.to_rec(),
             production: self.production.to_rec(),
             victory: self.victory.to_rec(),
+            specials: self.specials.to_rec(),
         };
         let mut out = Vec::new();
         out.extend_from_slice(&MAGIC);
@@ -304,6 +307,7 @@ impl Sim {
             .collect();
         let movement = Movement::from_rows(courses).ok_or_else(|| corrupt("courses"))?;
         let weapons = Weapons::from_rec(b.weapons).ok_or_else(|| corrupt("weapons"))?;
+        let specials = crate::specials::Specials::from_rec(b.specials).ok_or_else(|| corrupt("specials"))?;
         Ok(Sim {
             tick: b.tick,
             rng: Rng(b.rng),
@@ -319,6 +323,7 @@ impl Sim {
             economy: crate::economy::Economy::from_rec(&b.economy),
             production: crate::production::Production::from_rec(&b.production),
             victory: crate::victory::Victory::from_rec(&b.victory),
+            specials,
         })
     }
 }

@@ -223,7 +223,15 @@ to match run "<scenario>"`, `Expect mark "fire.start obj=shooter" by tick 90`,
 - **Content.** `RunConfig::fake()` runs on `fake::db()`. Scenes keep stock ODF
   names (`fgalaxy`); `RunConfig::aliases` maps them onto the content in use
   (fake: Galaxy -> `fx_cruiser`, Borg cube -> `fx_frigate`, class M planet ->
-  `fx_moon`). Real content needs no aliases.
+  `fx_moon`). Real content needs no aliases. The runner's content also has
+  the cloakers of `sta_sim::specials::fixture` (`fx_cloaker`,
+  `fx_cloaker_frail`, `fx_cloaker_loud`; table in that file).
+- **Specials.** `cloak <name> on|off|now` is `Order::Cloak` (`now` is `on`:
+  the engage time is the cloaking device's `effectTimer`); `special <name>
+  <weapon>` is `Order::Special` for the named special weapon of the unit
+  (toggles a cloak; no target yet). Check them with `Expect mark "cloak
+  obj=NAME on=1|0"` and `Expect player P sees | does not see "NAME"`; see
+  `bench/scenarios/cloak.md`.
 - **Build.** The start (`Map=` from `RunConfig::maps`, `Start=snapshot:`,
   `Start=replay:`, else the empty map) loads, then the scene's objects are
   spawned with `Sim::spawn_def` (so ids are known: file order, `#1`...). Team
