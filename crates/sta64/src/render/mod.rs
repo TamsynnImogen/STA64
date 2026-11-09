@@ -12,3 +12,6 @@ pub mod strategic;
 pub mod surfaces;
 pub mod textures;
 pub mod units;
+
+#[cfg(test)]
+mod clock_guard;

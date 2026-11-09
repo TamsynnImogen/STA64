@@ -359,7 +359,7 @@ fn update(
     lights: Query<(&GlobalTransform, &DirectionalLight)>,
     planets: Query<(&GlobalTransform, &PlanetBody)>,
     mut materials: ResMut<Assets<PlanetMaterial>>,
-    time: Res<Time>,
+    clock: Res<crate::clock::AnimClock>,
 ) {
     let Ok(cam) = camera.single() else { return };
     // Brightest light first: the key.
@@ -386,7 +386,7 @@ fn update(
             p.dvec1 = fill.0.extend(0.0);
             if let Some((_, _, drift)) = body.applied {
                 // The clouds drift about the pole on the clock.
-                let a = drift * time.elapsed_secs();
+                let a = drift * clock.wall() as f32;
                 p.surf_drift.x = a.cos();
                 p.surf_drift.y = a.sin();
             }

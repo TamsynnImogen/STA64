@@ -74,13 +74,13 @@ fn colour(c: [f32; 3]) -> Color {
 
 /// Advance sprite-node animations and sprite flipbooks.
 pub fn animate(
-    time: Res<Time>,
+    clock: Res<crate::clock::AnimClock>,
     tables: Res<SpriteTables>,
     mut fx: Query<(&SpriteFx, &mut Visibility)>,
     flip: Query<&UvFlipbook>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let t = time.elapsed_secs();
+    let t = clock.wall() as f32;
     let table = &tables.0;
     for (f, mut vis) in &mut fx {
         let mut col = f.colour;
