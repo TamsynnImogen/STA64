@@ -1,0 +1,14 @@
+# Mark kinds of Refit's bench vocabulary that STA64 emits (docs/TESTBENCH.md,
+# "Marks"). Refit-only kinds (cloak.done, selection) are not emitted yet.
+fire.start
+fire.end
+hit
+shields.down
+spawn
+death
+build.start
+built
+delivered
+cloak
+rejected
+eliminated

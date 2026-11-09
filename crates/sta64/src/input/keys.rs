@@ -9,13 +9,13 @@
 //! [`KeyBindings::save`]). The game has no settings path yet, so the resource
 //! lives in memory with the defaults; follow-up: the settings package picks the
 //! file location and calls `load` at startup and `save` after a rebind.
-//! `orders::OrderKeys` (UI-02) can later be filled from here: add its actions
-//! to [`Action`] and read them with [`KeyBindings::just_pressed`].
+//! Orders read Stop and Formation from here too.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use bevy::prelude::*;
+use sta_sim::movement::{FORM_COLUMN, FORM_LINE, FORM_WEDGE};
 
 /// A bindable action. The file names are the [`Action::name`]s.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -28,11 +28,15 @@ pub enum Action {
     SelectType,
     /// Control group 1..=9 (index 0..=8).
     Group(u8),
+    /// Stop the selected units.
+    Stop,
+    /// Set the selection's formation: one of the `movement::FORM_*` kinds.
+    Formation(u8),
 }
 
 #[allow(dead_code)] // settings file API, until the settings package wires it
 impl Action {
-    pub const ALL: [Action; 12] = [
+    pub const ALL: [Action; 16] = [
         Action::AddModifier,
         Action::GroupModifier,
         Action::SelectType,
@@ -45,6 +49,10 @@ impl Action {
         Action::Group(6),
         Action::Group(7),
         Action::Group(8),
+        Action::Stop,
+        Action::Formation(FORM_LINE),
+        Action::Formation(FORM_COLUMN),
+        Action::Formation(FORM_WEDGE),
     ];
 
     pub fn name(self) -> String {
@@ -53,6 +61,10 @@ impl Action {
             Action::GroupModifier => "group_modifier".into(),
             Action::SelectType => "select_type".into(),
             Action::Group(n) => format!("group{}", n + 1),
+            Action::Stop => "stop".into(),
+            Action::Formation(FORM_LINE) => "formation_line".into(),
+            Action::Formation(FORM_COLUMN) => "formation_column".into(),
+            Action::Formation(_) => "formation_wedge".into(),
         }
     }
 
@@ -83,6 +95,10 @@ impl Default for KeyBindings {
         m.insert(Action::AddModifier, vec![KeyCode::ShiftLeft, KeyCode::ShiftRight]);
         m.insert(Action::GroupModifier, vec![KeyCode::ControlLeft, KeyCode::ControlRight]);
         m.insert(Action::SelectType, vec![KeyCode::KeyT]);
+        m.insert(Action::Stop, vec![KeyCode::KeyS, KeyCode::Space]);
+        m.insert(Action::Formation(FORM_LINE), vec![KeyCode::F1]);
+        m.insert(Action::Formation(FORM_COLUMN), vec![KeyCode::F2]);
+        m.insert(Action::Formation(FORM_WEDGE), vec![KeyCode::F3]);
         for (n, k) in DIGITS.into_iter().enumerate() {
             m.insert(Action::Group(n as u8), vec![k]);
         }

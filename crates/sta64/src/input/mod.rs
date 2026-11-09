@@ -39,15 +39,15 @@ pub struct InputPlugin;
 impl Plugin for InputPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<select::Drag>()
-            .init_resource::<select::SelectAim>()
             .init_resource::<select::ControlGroups>()
             .init_resource::<keys::KeyBindings>()
             .add_message::<select::CameraFocus>()
             .init_resource::<orders::OrderTargets>()
+            .init_resource::<orders::Aim>()
             .add_systems(Startup, select::spawn_select_box)
             .add_systems(
                 Update,
-                (select::select_aim, select::select_keys, select::select, orders::order, orders::prune_targets)
+                (orders::aim, select::select_keys, select::select, orders::order, orders::prune_targets)
                     .chain()
                     .in_set(crate::app::GameSet::Input)
                     .run_if(resource_exists::<crate::sim_link::SimLink>),

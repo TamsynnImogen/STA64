@@ -1,8 +1,9 @@
 //! `sta-bench` against the real `sta64` binary: frame determinism and sessions.
 //!
-//! The frame test needs a GPU adapter (or a software one such as lavapipe).
-//! Without one `sta64` exits 77 and the test prints `SKIP` and passes; the
-//! PR that adds it says where it was actually run.
+//! The frame tests need a real GPU, so they are opt-in: they print `SKIP` and
+//! pass unless `STA64_GPU_TESTS=1`. Even then, `sta64` exits 77 when there is
+//! no hardware adapter (software ones count as none) and the test skips; with
+//! the variable set a timeout is a failure.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -30,6 +31,10 @@ fn args(v: &[&str]) -> Vec<String> {
 
 /// Does a frame render here at all?
 fn adapter(dir: &Path) -> bool {
+    if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1") {
+        eprintln!("SKIP: set STA64_GPU_TESTS=1 to run the GPU frame tests");
+        return false;
+    }
     let out = Command::new(sta64())
         .args(["--headless", "--clock", "bench", "--frames", "0", "--frame-dir"])
         .arg(dir)

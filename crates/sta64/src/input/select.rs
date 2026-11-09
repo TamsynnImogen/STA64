@@ -19,12 +19,12 @@
 //!
 //! The result goes to [`Selection`]; nothing is marked on the entities. All
 //! keys come from [`KeyBindings`]. Tests (and later UI-02's `Aim`) inject the
-//! cursor, ray and projection through [`SelectAim`].
+//! cursor, ray and projection through [`Aim`].
 
 use bevy::prelude::*;
 use sta_sim::{ContentKey, EntityId};
 
-use super::Pointer;
+use super::orders::Aim;
 use super::keys::{Action, KeyBindings};
 use crate::render::strategic::Strategic;
 use crate::render::units::SelectRadius;
@@ -88,21 +88,6 @@ impl AimState {
     }
 }
 
-/// Filled by [`select_aim`] from the window and camera; tests set it.
-#[derive(Resource, Default, Clone, Copy)]
-pub struct SelectAim(pub Option<AimState>);
-
-pub fn select_aim(pointer: Pointer, mut aim: ResMut<SelectAim>) {
-    aim.0 = pointer.get().and_then(|((cam, gt), cursor, ray)| {
-        Some(AimState {
-            cursor,
-            ray,
-            clip_from_world: cam.clip_from_view() * gt.to_matrix().inverse(),
-            size: cam.logical_viewport_size()?,
-        })
-    });
-}
-
 pub fn spawn_select_box(mut commands: Commands) {
     commands.spawn((
         SelectBox,
@@ -126,10 +111,10 @@ fn def_of(link: &SimLink, id: EntityId) -> Option<ContentKey> {
     link.curr().unit(id).map(|u| u.def)
 }
 
-type Targetable<'w, 's> = Query<'w, 's, (&'static SimEntity, &'static SelectRadius, &'static GlobalTransform, Option<&'static Strategic>)>;
+pub(super) type Targetable<'w, 's> = Query<'w, 's, (&'static SimEntity, &'static SelectRadius, &'static GlobalTransform, Option<&'static Strategic>)>;
 
 /// The unit under the cursor: a strategic icon, else the nearest sphere on the ray.
-fn unit_under(cursor: Vec2, ray: Ray3d, units: &Targetable) -> Option<EntityId> {
+pub(super) fn unit_under(cursor: Vec2, ray: Ray3d, units: &Targetable) -> Option<EntityId> {
     let icon = units
         .iter()
         .filter_map(|(u, _, _, s)| {
@@ -226,7 +211,7 @@ pub fn select(
     keys: Res<ButtonInput<KeyCode>>,
     bindings: Res<KeyBindings>,
     time: Res<Time<Real>>,
-    aim: Res<SelectAim>,
+    aim: Res<Aim>,
     link: Res<SimLink>,
     units: Targetable,
     mut selection: ResMut<Selection>,
@@ -372,7 +357,7 @@ mod tests {
             .init_resource::<Drag>()
             .init_resource::<ControlGroups>()
             .init_resource::<KeyBindings>()
-            .insert_resource(SelectAim(None))
+            .init_resource::<Aim>()
             .insert_resource(SimLink::new(Box::new(Frozen(view.clone())), Box::new(LocalRouter::new()), PlayerId(0)))
             .add_systems(Update, (select_keys, select).chain());
         for u in &view.units {
@@ -386,7 +371,7 @@ mod tests {
         // Screen (x, y) is world (x, z); depth is world y.
         let swap = Mat4::from_cols(Vec4::X, Vec4::Z, Vec4::Y, Vec4::W);
         let clip = Mat4::from_translation(Vec3::new(-1.0, 1.0, 0.5)) * Mat4::from_scale(Vec3::new(2.0 / 800.0, -2.0 / 600.0, 0.0)) * swap;
-        app.world_mut().resource_mut::<SelectAim>().0 = Some(AimState {
+        app.world_mut().resource_mut::<Aim>().0 = Some(AimState {
             cursor: Vec2::new(x, z),
             ray: Ray3d::new(Vec3::new(x, 1000.0, z), Dir3::NEG_Y),
             clip_from_world: clip,
