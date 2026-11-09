@@ -2,3 +2,4 @@
 //! rest build on it.
 
 pub mod theme;
+pub mod radar;

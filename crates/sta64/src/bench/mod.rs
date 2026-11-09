@@ -156,6 +156,9 @@ fn run_headless_inner(cfg: &LaunchConfig) -> i32 {
     if !cfg.frames.is_empty() {
         frames::add(&mut app, cfg, scene_camera);
         app.add_plugins(crate::render::post::PostFxPlugin::from_cfg(cfg));
+        if crate::ui::radar::frame_overlay_requested() {
+            frames::add_radar(&mut app, cfg);
+        }
     }
     match app.run() {
         AppExit::Success => 0,
