@@ -1,23 +1,33 @@
 name: CI
 
 on:
-  push:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+    paths-ignore: ['docs/**']
+  push:
+    branches: [main]
+    paths-ignore: ['docs/**']
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Full 4-OS matrix on main and on PRs labelled `full-ci`; Linux only otherwise.
   core:
     name: core crates (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, macos-latest]
+        os: ${{ fromJSON((github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'full-ci')) && '["ubuntu-latest","ubuntu-24.04-arm","windows-latest","macos-latest"]' || '["ubuntu-latest"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace --exclude sta64
       - run: cargo clippy --workspace --exclude sta64 --all-targets -- -D warnings
 
@@ -26,7 +36,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, macos-latest]
+        os: ${{ fromJSON((github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'full-ci')) && '["ubuntu-latest","ubuntu-24.04-arm","windows-latest","macos-latest"]' || '["ubuntu-latest"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -34,5 +44,10 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build -p sta64 --release
+      - name: Build (main)
+        if: github.event_name == 'push'
+        run: cargo build -p sta64 --release
+      - name: Check (PR)
+        if: github.event_name == 'pull_request'
+        run: cargo check -p sta64 --all-targets
       - run: cargo clippy -p sta64 -- -D warnings
