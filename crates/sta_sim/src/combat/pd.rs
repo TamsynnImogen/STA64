@@ -84,7 +84,7 @@ impl Pd {
         }
         let team = |p: PlayerId| teams.iter().find(|x| x.0 == p).map(|x| x.1);
         for u in units.iter() {
-            if u.hull[1] <= Fixed::ZERO || shots.is_empty() {
+            if u.hull[1] <= Fixed::ZERO || shots.is_empty() || u.flags.contains(crate::view::UnitFlags::WEAPONS_OFF) {
                 continue;
             }
             let Some(def) = db.unit(u.def) else { continue };

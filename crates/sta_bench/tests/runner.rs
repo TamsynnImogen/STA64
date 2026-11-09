@@ -34,7 +34,7 @@ fn fails(scene: &str, steps: &[&str]) -> CaseResult {
 #[test]
 fn field_checks_at_a_tick() {
     passes(
-        "firing",
+        "combat-duel",
         &[
             "Run 200 ticks",
             "Expect \"shooter\" hull is 800",
@@ -239,6 +239,7 @@ fn unsupported_edits_are_logged_not_fatal() {
         &cfg(),
         "firing",
         &[
+            "Scene \"team shooter 2\"",
             "Run 3 ticks",
             "Expect \"bench.log\" contains \"rejected by the sim\"",
         ],
