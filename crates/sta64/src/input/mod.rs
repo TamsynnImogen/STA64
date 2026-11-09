@@ -41,6 +41,7 @@ impl Plugin for InputPlugin {
         app.init_resource::<select::Drag>()
             .init_resource::<select::ControlGroups>()
             .init_resource::<keys::KeyBindings>()
+            .init_resource::<select::MaxSelection>()
             .add_message::<select::CameraFocus>()
             .init_resource::<orders::OrderTargets>()
             .init_resource::<orders::Aim>()
