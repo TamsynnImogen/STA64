@@ -4,7 +4,7 @@ use bevy::picking::events::{PointerClick, PointerOut, PointerOver, PointerPress,
 use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 
-use super::tokens::{Theme, scale};
+use super::tokens::{Theme, mix};
 use super::widgets::*;
 
 /// A button was clicked.
@@ -97,37 +97,72 @@ pub fn drive_sliders(
     }
 }
 
-/// The colour a state gives a widget's base colour.
-pub fn state_colour(theme: &Theme, base: Color, state: WidgetState, on: Option<bool>) -> Color {
-    let c = match state {
-        WidgetState::Disabled => return theme.disabled,
-        WidgetState::Normal => base,
-        WidgetState::Hovered => scale(base, theme.hover_boost),
-        WidgetState::Pressed => scale(base, theme.press_boost),
-    };
-    if on == Some(false) { scale(c, theme.off_dim) } else { c }
+/// The fill a button (`on: None`) or toggle has in a state, from the theme's
+/// button roles: `button` -> `button_hot` on hover -> `button_down` pressed;
+/// a toggle that is on is `button_on` (gold), eased half way to `button_hot`
+/// on hover; disabled is `button_off`.
+pub fn state_colour(theme: &Theme, state: WidgetState, on: Option<bool>) -> Color {
+    match (state, on) {
+        (WidgetState::Disabled, _) => theme.button_off,
+        (WidgetState::Pressed, _) => theme.button_down,
+        (WidgetState::Hovered, Some(true)) => mix(theme.button_on, theme.button_hot, theme.on_hover_mix),
+        (WidgetState::Hovered, _) => theme.button_hot,
+        (WidgetState::Normal, Some(true)) => theme.button_on,
+        (WidgetState::Normal, _) => theme.button,
+    }
+}
+
+/// A list row's fill: selected `row_sel`, hovered `row_hot`, odd rows faintly
+/// lit (`row_alt`), else clear.
+pub fn row_colour(theme: &Theme, state: WidgetState, selected: bool, index: usize) -> Color {
+    if selected {
+        theme.row_sel
+    } else if state == WidgetState::Hovered {
+        theme.row_hot
+    } else if index % 2 == 1 {
+        theme.row_alt
+    } else {
+        Color::NONE
+    }
 }
 
 #[allow(clippy::type_complexity)]
 pub fn paint_widgets(
     theme: Res<Theme>,
     mut q: Query<
-        (&WidgetState, &Look, Option<&Toggle>, Option<&ListItem>, Option<&ChildOf>, &mut BackgroundColor),
+        (&WidgetState, Option<&Toggle>, Option<&ListItem>, Option<&ChildOf>, &mut BackgroundColor),
         Without<Slider>,
     >,
     lists: Query<&List>,
+    mut texts: Query<(&ChildOf, &mut TextColor), With<ButtonText>>,
+    mut marks: Query<(&ChildOf, &mut BackgroundColor), (With<RowMark>, Without<WidgetState>)>,
 ) {
-    for (state, look, toggle, item, parent, mut bg) in &mut q {
+    for (state, toggle, item, parent, mut bg) in &mut q {
         let c = if let Some(&ListItem(i)) = item {
             let selected = parent.and_then(|p| lists.get(p.parent()).ok()).is_some_and(|l| l.selected == Some(i));
-            match (state, selected) {
-                (WidgetState::Hovered, false) => scale(theme.disabled, 0.6),
-                (_, true) => state_colour(&theme, theme.orange, *state, None),
-                _ => state_colour(&theme, theme.background, *state, None),
-            }
+            row_colour(&theme, *state, selected, i)
         } else {
-            state_colour(&theme, look.0, *state, toggle.map(|t| t.on))
+            state_colour(&theme, *state, toggle.map(|t| t.on))
         };
+        if bg.0 != c {
+            bg.0 = c;
+        }
+    }
+    for (parent, mut tc) in &mut texts {
+        let disabled = q.get(parent.parent()).is_ok_and(|(s, ..)| *s == WidgetState::Disabled);
+        let c = if disabled { theme.text_off } else { theme.text_on };
+        if tc.0 != c {
+            tc.0 = c;
+        }
+    }
+    for (parent, mut bg) in &mut marks {
+        let selected = q
+            .get(parent.parent())
+            .ok()
+            .and_then(|(_, _, item, list, _)| Some((item?.0, list?.parent())))
+            .and_then(|(i, l)| lists.get(l).ok().map(|l| l.selected == Some(i)))
+            .unwrap_or(false);
+        let c = if selected { theme.accent } else { Color::NONE };
         if bg.0 != c {
             bg.0 = c;
         }
