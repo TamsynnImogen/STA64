@@ -13,6 +13,7 @@ use std::process::ExitCode;
 use sta_fpq::write::Compression;
 use sta_fpq::Fpq;
 use sta_vfs::sta::{Kind, StaArchive, Storage};
+use sta_vfs::sta_sign::{self, KeyPair, Status, TrustStore};
 use sta_vfs::zfs::{self, Zfs, ZfsFile};
 
 /// `println!` that stops quietly when stdout is closed (`sta-archive info x | head`).
@@ -34,12 +35,18 @@ usage:
   sta-archive verify  <archive>
   sta-archive pack    <dir> <out> --format sta|fpq1|fpq2|zfs [--raw] [--key 0xHEX] [--force]
   sta-archive convert <mod-dir> <out.sta> [--raw] [--force]
+  sta-archive keygen  <key-file> [--force]
+  sta-archive sign    <archive.sta> --key <key-file> [--name <signer>]
+  sta-archive trust   add <public-key | key-file | signed.sta> <name...>
+  sta-archive trust   list | remove <public-key>
 
 <archive> may name an archive inside an archive: outer.fpq::path/inner.fpq
 patterns match archive paths case-insensitively; '*' is any run of characters
 fpq1 = FO 3.x (FPQEdit 3.2.7), fpq2 = FO 4.0 / Roots (FPQEdit 4.0)
 convert packs a mod folder (loose files, its .fpq/.zfs unpacked) into one .sta,
-writing manifest.toml from info.ini when the mod has none (docs/STA_ARCHIVE.md)";
+writing manifest.toml from info.ini when the mod has none (docs/STA_ARCHIVE.md)
+info, verify and trust use the trust store at --trust <file>, else $STA64_TRUST,
+else <config dir>/sta64/trusted-keys.txt (~/.config on Linux, %APPDATA% on Windows)";
 
 enum Archive {
     Fpq(Fpq),
@@ -208,7 +215,7 @@ fn human(n: u64) -> String {
     }
 }
 
-fn info(spec: &str) -> Result<(), String> {
+fn info(spec: &str, trust: Option<&str>) -> Result<(), String> {
     let a = Archive::open(spec)?;
     let (mut size, mut stored, mut lzo, mut nested) = (0u64, 0u64, 0usize, 0usize);
     for i in 0..a.len() {
@@ -238,7 +245,7 @@ fn info(spec: &str) -> Result<(), String> {
             outln!("format:  STA {v}.{m} (STA64)");
             outln!("files:   {} ({zstd} Zstandard, {} stored, {hidden} whiteouts)", a.len() - hidden, a.len() - hidden - zstd);
             outln!("id:      {}", hex(&a.content_hash()));
-            outln!("signed:  {}", if a.is_signed() { "yes (not checked: CON-19)" } else { "no" });
+            outln!("signed:  {}", describe(&sta_sign::check_signature(a, &load_trust(trust)?)));
             if let Some(i) = a.find("manifest.toml") {
                 let m = a.read(i).map_err(|e| e.to_string())?;
                 for line in String::from_utf8_lossy(&m).lines().filter(|l| l.starts_with("name") || l.starts_with("version") || l.starts_with("id")) {
@@ -462,7 +469,7 @@ fn convert(dir: &Path, out: &Path, raw: bool, force: bool) -> Result<(), String>
     Ok(())
 }
 
-fn verify(spec: &str) -> Result<(), String> {
+fn verify(spec: &str, trust: Option<&str>) -> Result<(), String> {
     let a = Archive::open(spec)?;
     let mut bad = Vec::new();
     let mut n = 0;
@@ -479,15 +486,166 @@ fn verify(spec: &str) -> Result<(), String> {
     for b in &bad {
         eprintln!("{b}");
     }
+    let mut tampered = false;
     if let Archive::Sta(s) = &a {
-        outln!("id {}{}", hex(&s.content_hash()), if s.is_signed() { " (signed; signature not checked yet: CON-19)" } else { "" });
+        // Files were just read; the signature check needs only the header and block.
+        let mut status = sta_sign::check_signature(s, &load_trust(trust)?);
+        // A file that no longer matches its hash was changed after packing
+        // (and after signing, if signed): the archive as a whole is tampered.
+        if !bad.is_empty() && s.is_signed() && !matches!(status, Status::Tampered(_)) {
+            status = Status::Tampered(format!("{} file(s) changed after signing", bad.len()));
+        }
+        tampered = matches!(status, Status::Tampered(_));
+        outln!("id {}", hex(&s.content_hash()));
+        outln!("signature: {}", describe(&status));
     }
-    if bad.is_empty() {
+    if !bad.is_empty() {
+        Err(format!("{} of {n} file(s) failed", bad.len()))
+    } else if tampered {
+        Err("signature check failed: the archive was modified after signing".into())
+    } else {
         outln!("ok: {n} file(s) read and checked");
         Ok(())
-    } else {
-        Err(format!("{} of {n} file(s) failed", bad.len()))
     }
+}
+
+fn describe(s: &Status) -> String {
+    match s {
+        Status::Trusted { name, key } => format!("trusted, {name} ({})", hex(key)),
+        Status::UnknownKey { signer, key } => format!("valid, but by a key you don't trust: claims to be {signer:?} ({})", hex(key)),
+        Status::Unsigned => "unsigned".into(),
+        Status::Tampered(why) => format!("TAMPERED: {why}"),
+    }
+}
+
+/// `--trust`, else `$STA64_TRUST`, else `<config dir>/sta64/trusted-keys.txt`.
+fn trust_path(flag: Option<&str>) -> PathBuf {
+    if let Some(f) = flag {
+        return PathBuf::from(f);
+    }
+    if let Some(f) = std::env::var_os("STA64_TRUST") {
+        return PathBuf::from(f);
+    }
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("APPDATA").map(PathBuf::from))
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+        .unwrap_or_else(|| PathBuf::from("."));
+    base.join("sta64").join("trusted-keys.txt")
+}
+
+/// The trust store; a missing file is an empty store.
+fn load_trust(flag: Option<&str>) -> Result<TrustStore, String> {
+    let p = trust_path(flag);
+    match std::fs::read_to_string(&p) {
+        Ok(t) => TrustStore::parse(&t).map_err(|e| format!("{}: {e}", p.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(TrustStore::default()),
+        Err(e) => Err(format!("{}: {e}", p.display())),
+    }
+}
+
+fn write_private(path: &Path, text: &str, force: bool) -> Result<(), String> {
+    if path.exists() && !force {
+        return Err(format!("{}: exists (use --force)", path.display()));
+    }
+    if let Some(d) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(d).map_err(|e| format!("{}: {e}", d.display()))?;
+    }
+    let mut o = std::fs::OpenOptions::new();
+    o.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
+    let mut f = o.open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    f.write_all(text.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+fn keygen(path: &Path, force: bool) -> Result<(), String> {
+    let k = KeyPair::generate().map_err(|e| e.to_string())?;
+    write_private(path, &k.to_text(), force)?;
+    outln!("public key {}", hex(&k.public_key()));
+    eprintln!("wrote {}: keep it secret; share the public key so players can trust it", path.display());
+    Ok(())
+}
+
+fn sign(archive: &Path, key: &Path, name: Option<&str>) -> Result<(), String> {
+    let text = std::fs::read_to_string(key).map_err(|e| format!("{}: {e}", key.display()))?;
+    let k = KeyPair::from_text(&text).map_err(|e| format!("{}: {e}", key.display()))?;
+    let name = name.unwrap_or("unnamed");
+    sta_sign::sign_file(archive, &k, name).map_err(|e| format!("{}: {e}", archive.display()))?;
+    let a = StaArchive::open(archive).map_err(|e| e.to_string())?;
+    match sta_sign::check_signature(&a, &TrustStore::default()) {
+        Status::UnknownKey { .. } => {
+            outln!("signed {} as {name:?} with {}", archive.display(), hex(&k.public_key()));
+            Ok(())
+        }
+        other => Err(format!("signed, but the check says {}", describe(&other))),
+    }
+}
+
+fn parse_public(text: &str) -> Option<[u8; 32]> {
+    let t = text.trim();
+    if t.len() != 64 {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for (i, o) in out.iter_mut().enumerate() {
+        *o = u8::from_str_radix(t.get(i * 2..i * 2 + 2)?, 16).ok()?;
+    }
+    Some(out)
+}
+
+fn trust(args: &[&String], store: Option<&str>) -> Result<(), String> {
+    let path = trust_path(store);
+    let mut t = load_trust(store)?;
+    match args.first().map(|s| s.as_str()) {
+        Some("list") => {
+            let text = t.to_text();
+            let keys: Vec<&str> = text.lines().filter(|l| !l.starts_with('#')).collect();
+            if keys.is_empty() {
+                outln!("no trusted keys in {}", path.display());
+            }
+            for l in keys {
+                outln!("{l}");
+            }
+            return Ok(());
+        }
+        Some("add") if args.len() >= 3 => {
+            let what = args[1].as_str();
+            let name = args[2..].iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" ");
+            let key = if let Some(k) = parse_public(what) {
+                k
+            } else if what.to_ascii_lowercase().ends_with(".sta") {
+                let a = StaArchive::open(Path::new(what)).map_err(|e| format!("{what}: {e}"))?;
+                match sta_sign::check_signature(&a, &TrustStore::default()) {
+                    Status::UnknownKey { key, .. } => key,
+                    other => return Err(format!("{what}: {}", describe(&other))),
+                }
+            } else {
+                let text = std::fs::read_to_string(what).map_err(|e| format!("{what}: {e}"))?;
+                let pub_line = text.lines().find_map(|l| l.trim().strip_prefix("public-ed25519 ").and_then(parse_public));
+                match pub_line {
+                    Some(k) => k,
+                    None => KeyPair::from_text(&text).map_err(|e| format!("{what}: {e}"))?.public_key(),
+                }
+            };
+            t.add(key, &name);
+            outln!("trusted {} as {name:?}", hex(&key));
+        }
+        Some("remove") if args.len() >= 2 => {
+            let key = parse_public(args[1]).ok_or_else(|| format!("{}: not a public key (64 hex digits)", args[1]))?;
+            if !t.remove(&key) {
+                return Err(format!("{} was not trusted", args[1]));
+            }
+            outln!("no longer trusting {}", args[1]);
+        }
+        _ => return Err(USAGE.to_string()),
+    }
+    if let Some(d) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(d).map_err(|e| format!("{}: {e}", d.display()))?;
+    }
+    std::fs::write(&path, t.to_text()).map_err(|e| format!("{}: {e}", path.display()))?;
+    eprintln!("updated {}", path.display());
+    Ok(())
 }
 
 fn run(args: &[String]) -> Result<(), String> {
@@ -499,7 +657,7 @@ fn run(args: &[String]) -> Result<(), String> {
         for a in args.iter().skip(1) {
             if skip {
                 skip = false;
-            } else if a == "--format" || a == "--key" {
+            } else if matches!(a.as_str(), "--format" | "--key" | "--name" | "--trust") {
                 skip = true;
             } else if !a.starts_with("--") && a != "-l" {
                 v.push(a);
@@ -509,7 +667,7 @@ fn run(args: &[String]) -> Result<(), String> {
     };
     let need = |n: usize| if pos.len() < n { Err(USAGE.to_string()) } else { Ok(()) };
     match args.first().map(String::as_str) {
-        Some("info") => need(1).and_then(|_| info(pos[0])),
+        Some("info") => need(1).and_then(|_| info(pos[0], value("--trust").as_deref())),
         Some("list") => need(1).and_then(|_| list(pos[0], flag("-l"))),
         Some("find") => need(2).and_then(|_| find(pos[0], pos[1])),
         Some("cat") => need(2).and_then(|_| cat(pos[0], pos[1])),
@@ -517,7 +675,13 @@ fn run(args: &[String]) -> Result<(), String> {
             let patterns: Vec<String> = pos[2..].iter().map(|s| s.to_string()).collect();
             extract(pos[0], Path::new(pos[1]), flag("--force"), &patterns)
         }),
-        Some("verify") => need(1).and_then(|_| verify(pos[0])),
+        Some("verify") => need(1).and_then(|_| verify(pos[0], value("--trust").as_deref())),
+        Some("keygen") => need(1).and_then(|_| keygen(Path::new(pos[0]), flag("--force"))),
+        Some("sign") => need(1).and_then(|_| {
+            let key = value("--key").ok_or("sign needs --key <key-file>")?;
+            sign(Path::new(pos[0]), Path::new(&key), value("--name").as_deref())
+        }),
+        Some("trust") => trust(&pos, value("--trust").as_deref()),
         Some("convert") => need(2).and_then(|_| convert(Path::new(pos[0]), Path::new(pos[1]), flag("--raw"), flag("--force"))),
         Some("pack") => need(2).and_then(|_| {
             let format = value("--format").ok_or("pack needs --format sta|fpq1|fpq2|zfs")?;
@@ -545,6 +709,16 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn public_keys_and_trust_path() {
+        let hexkey = "e6e839a85936d4a946b1d80860a7f3a04c6b08f1c93db1f9441b898ffe91132e";
+        assert_eq!(parse_public(hexkey).unwrap()[0], 0xe6);
+        assert!(parse_public("e6e8").is_none() && parse_public(&"zz".repeat(32)).is_none());
+        assert_eq!(trust_path(Some("/x/t.txt")), PathBuf::from("/x/t.txt"));
+        assert!(describe(&Status::Unsigned) == "unsigned");
+        assert!(describe(&Status::Tampered("x".into())).starts_with("TAMPERED"));
+    }
 
     #[test]
     fn globs() {
