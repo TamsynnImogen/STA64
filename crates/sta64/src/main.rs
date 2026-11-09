@@ -14,6 +14,7 @@ pub mod plugins;
 pub mod sim_link;
 
 mod audio;
+mod frontend;
 mod input;
 mod map;
 mod render;
