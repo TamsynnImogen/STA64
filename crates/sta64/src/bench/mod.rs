@@ -183,7 +183,9 @@ fn run_headless_inner(cfg: &LaunchConfig) -> i32 {
                 crate::render::fx::specials::SpecialsFxPlugin,
             ));
         app.add_plugins(crate::render::post::PostFxPlugin::from_cfg(cfg));
-        if crate::ui::radar::frame_overlay_requested() {
+        if crate::ui::hud::frame::requested() {
+            frames::add_hud(&mut app, cfg);
+        } else if crate::ui::radar::frame_overlay_requested() {
             frames::add_radar(&mut app, cfg);
         }
         // `Fog=1` in the scene draws the fog and shroud as the first seat sees the map.
