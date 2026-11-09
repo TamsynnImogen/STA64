@@ -8,7 +8,12 @@ license.workspace = true
 [dependencies]
 a2fmt.workspace = true
 ddsfile = "0.6"
+# Sound decoding, pure Rust (CON-10): Ogg Vorbis (MIT OR Apache-2.0) and MPEG audio
+# (MIT OR Apache-2.0, a safe port of minimp3). WAV is parsed in audio.rs.
+lewton = "0.10"
+nanomp3 = { version = "0.2", default-features = false, features = ["std"] }
 sta_vfs.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 sta_bzn.workspace = true

@@ -16,6 +16,7 @@ use sta_vfs::Vfs;
 
 pub use a2fmt;
 
+pub mod audio;
 pub mod cfg_h;
 pub mod dds;
 pub mod m3d;
