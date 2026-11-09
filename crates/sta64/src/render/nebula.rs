@@ -1,4 +1,4 @@
-//! Nebulae as volumes of gas (Armada II Refit's Nebulae port, see `nebula.wgsl`).
+//! Nebulae as volumes of gas (Armada II Refit's Nebulae port, see `nebula.wesl`).
 //!
 //! A nebula class with a recipe (`nebulae/<odf>.ini` through the VFS, else the ones
 //! bundled from Refit) is drawn as one field per map: an envelope over the map plane
@@ -86,7 +86,7 @@ pub struct NebulaMaterial {
 
 impl Material for NebulaMaterial {
     fn fragment_shader() -> ShaderRef {
-        ShaderRef::Path(AssetPath::parse("embedded://sta64/render/nebula.wgsl").into_owned())
+        ShaderRef::Path(AssetPath::parse("embedded://sta64/render/nebula.wesl").into_owned())
     }
     fn alpha_mode(&self) -> AlphaMode {
         AlphaMode::Premultiplied
@@ -132,7 +132,7 @@ pub struct NebulaPlugin;
 
 impl Plugin for NebulaPlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "nebula.wgsl");
+        embedded_asset!(app, "nebula.wesl");
         app.add_plugins(MaterialPlugin::<NebulaMaterial>::default())
             .init_resource::<NoiseVolume>()
             .add_systems(Update, poll_noise)
@@ -316,24 +316,49 @@ fn update(
 
 #[cfg(test)]
 mod tests {
-    fn variant(defs: &[&str]) -> String {
-        // A small #ifdef/#else/#endif preprocessor, as Bevy's shader loader runs it.
-        let src = include_str!("nebula.wgsl").replace("#{MATERIAL_BIND_GROUP}", "3");
-        let mut out = String::new();
-        let mut stack: Vec<bool> = Vec::new();
-        for line in src.lines() {
-            let t = line.trim();
-            if let Some(d) = t.strip_prefix("#ifdef ") {
-                stack.push(defs.contains(&d.trim()));
-            } else if t == "#else" {
-                let v = stack.pop().unwrap();
-                stack.push(!v);
-            } else if t == "#endif" {
-                stack.pop();
-            } else if stack.iter().all(|&b| b) {
-                out.push_str(line);
-                out.push('\n');
+    /// Evaluates a conditional-translation attribute's condition (`A && !B`).
+    fn holds(cond: &str, defs: &[&str]) -> bool {
+        cond.split("&&").all(|t| {
+            let t = t.trim();
+            match t.strip_prefix('!') {
+                Some(n) => !defs.contains(&n.trim()),
+                None => defs.contains(&t),
             }
+        })
+    }
+
+    /// The shader as Bevy's WESL loader would hand it to naga for these shader defs:
+    /// `@if(cond)` keeps or drops the declaration, statement or `{ }` block after it,
+    /// and `constants::MATERIAL_BIND_GROUP` is filled in.
+    fn variant(defs: &[&str]) -> String {
+        let src = include_str!("nebula.wesl").replace("constants::MATERIAL_BIND_GROUP", "3");
+        let lines: Vec<&str> = src.lines().collect();
+        let indent_of = |l: &str| l.len() - l.trim_start().len();
+        let mut out = String::new();
+        let mut i = 0;
+        while i < lines.len() {
+            let t = lines[i].trim();
+            if let Some(cond) = t.strip_prefix("@if(").and_then(|r| r.strip_suffix(')')) {
+                let keep = holds(cond, defs);
+                i += 1;
+                let start = i;
+                if lines[i].trim() == "{" {
+                    while !(lines[i].trim() == "}" && indent_of(lines[i]) == indent_of(lines[start])) {
+                        i += 1;
+                    }
+                }
+                if keep {
+                    for l in &lines[start..=i] {
+                        out.push_str(l);
+                        out.push('\n');
+                    }
+                }
+                i += 1;
+                continue;
+            }
+            out.push_str(lines[i]);
+            out.push('\n');
+            i += 1;
         }
         out
     }
@@ -351,8 +376,8 @@ mod tests {
 
     #[test]
     fn shader_path_matches_embedded_registration() {
-        let registered = bevy::asset::embedded_path!("src", "nebula.wgsl");
-        assert_eq!(registered.to_string_lossy().replace('\\', "/"), "sta64/render/nebula.wgsl");
+        let registered = bevy::asset::embedded_path!("src", "nebula.wesl");
+        assert_eq!(registered.to_string_lossy().replace('\\', "/"), "sta64/render/nebula.wesl");
     }
 
     #[test]

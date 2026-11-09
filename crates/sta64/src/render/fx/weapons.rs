@@ -1,24 +1,35 @@
-//! Weapon FX (RND-09): beams, projectiles and muzzle flashes from
+//! Weapon FX (RND-09): beams, bolts, cones and muzzle flashes from
 //! `SimEvent::Fired`, removed on expiry or `Hit`.
 //!
-//! The reference mod (Refit's `render3d/mods/ordnance`) is not in this repo;
-//! kinds, durations and speeds come from the weapon's `WeaponDef` in the
-//! content database (`kind`, `duration`, `shot_speed`, `class`, `fx`), the
-//! colours from those names. Sprites and ODF beam widths wait for CON data.
+//! Aligned with Armada II Refit's ordnance module (`render3d/mods/ordnance`): the
+//! look is its `fx_ps` shader ported to WGSL (`quad.wesl`: the beam's core and glow
+//! profile, flowing pulses, helix strands and crackle; the bolt with its tail and
+//! rays; the flare; the tractor cone's fans and vapour) and its recipes
+//! (`ordnance.ini`, by the weapon's ODF name, [`super::recipe`]). Refit leaves the
+//! ordinary phasers and torpedoes to stock's sprites and lights them only
+//! (`lights.rs`); with no sprites here they take the recipe defaults of their kind, in
+//! a colour from the weapon's class and effect name, else its ODF `lightColor`.
 //!
-//! - **Beam**: a stretched box from the shooter to the target, both followed
-//!   live each frame; alpha fades 1 to 0 over `duration` ticks.
-//! - **Projectile**: a small sphere flying from the firing point to the
-//!   target's (live, interpolated) position. The sim's shots are not in the
-//!   view, so flight time is derived at fire time as distance / `shot_speed`
-//!   (the sim hits on arrival) and progress is linear in anim time; the
-//!   sphere is removed on the matching `Hit` or at arrival, whichever first.
-//! - **Muzzle flash**: a short-lived sphere at the shooter, for every shot.
+//! - **Beam** (`WeaponKind::Beam`, or a recipe of kind beam/cone): a ribbon from the
+//!   shooter to the target, both followed live each frame, `duration` ticks long.
+//!   Brightness rises over the recipe's `FadeIn` and falls over the last 0.25 s (the
+//!   phaser lights' envelope). A flare sits at the emitter (`Emitter` half widths) and
+//!   at the impact (`Impact`), as in Refit's `Fx::beam`.
+//! - **Cone** (recipe `Kind=cone`: tractor, holding, assimilation beams): Refit's
+//!   fans-and-vapour cone, `Spread` of the target's radius wide at the target. The
+//!   view has no target radius here, so the cone is Refit's fallback shape without a
+//!   target: an eighth as wide as it is long.
+//! - **Projectile**: a bolt flying from the firing point to the target's (live,
+//!   interpolated) position. The sim's shots are not in the view, so flight time is
+//!   derived at fire time as distance / `shot_speed` (the sim hits on arrival) and
+//!   progress is linear in anim time; removed on the matching `Hit` or at arrival.
+//! - **Muzzle flash**: a flare at the shooter for every shot, for Refit's
+//!   `MuzzleTime` (0.5 s), standing in for its muzzle light.
 //! - Point-defence shots only flash.
 //!
-//! Shots leave the shooter's centre: the view has no hardpoint positions yet
-//! (the sim has none either). The fire tick is `AnimClock::tick()` when the
-//! message is read, exact at one tick per frame or fewer.
+//! Shots leave the shooter's centre: the view has no hardpoint positions yet (the sim
+//! has none either). The fire tick is `AnimClock::tick()` when the message is read,
+//! exact at one tick per frame or fewer.
 //!
 //! All time is [`AnimClock`].
 
@@ -27,22 +38,29 @@ use sta_content::WeaponKind;
 use sta_sim::command::Target;
 use sta_sim::{ContentKey, EntityId, SimEvent, TICK_HZ, Tick};
 
+use super::quad::{self, FxQuadMaterial, Look};
+use super::recipe::{self, Recipe, Shape};
 use crate::app::GameSet;
 use crate::clock::AnimClock;
 use crate::render::units::to_bevy;
 use crate::sim_link::{ContentRes, SimLink, SimMsg};
 
-/// Ticks a muzzle flash lasts.
-pub const FLASH_TICKS: Tick = 6;
-const BEAM_WIDTH: f32 = 3.0;
-const FLASH_RADIUS: f32 = 8.0;
-const SHOT_RADIUS: f32 = 5.0;
+/// Ticks a muzzle flash lasts: Refit's `MuzzleTime`, 0.5 s.
+pub const FLASH_TICKS: Tick = TICK_HZ as Tick / 2;
+/// Seconds a beam fades over at its end (Refit's phaser lights, `Lighting.ini`).
+const BEAM_FALL: f32 = 0.25;
+/// Refit's `Fx::beam` flare: core sharpness and the star's.
+const FLARE_CORE: f32 = 30.0;
+const FLARE_STAR_SHARP: f32 = 18.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum FxKind {
     Beam,
     Projectile,
+    /// The emitter's flare, the muzzle.
     Flash,
+    /// The flare where a beam lands.
+    Impact,
 }
 
 /// One weapon effect. Tests key on `(shooter, weapon, kind, fired)`, never
@@ -61,7 +79,9 @@ pub struct WeaponFx {
     /// Last known ends, kept when a unit disappears.
     from: Vec3,
     to: Vec3,
-    colour: Color,
+    recipe: Recipe,
+    look: Look,
+    seed: f32,
 }
 
 /// Opacity 0..1, applied to the material when there is one.
@@ -83,19 +103,41 @@ impl Plugin for WeaponFxPlugin {
     }
 }
 
-fn colour_for(class: &str, fx: Option<&str>) -> Color {
+/// A colour from the weapon's class and effect name, as the stock effects read.
+fn name_colour(class: &str, fx: Option<&str>) -> Option<Vec3> {
     let s = format!("{class} {}", fx.unwrap_or("")).to_ascii_lowercase();
-    if s.contains("disruptor") {
-        Color::srgb(0.2, 1.0, 0.3)
+    Some(if s.contains("disruptor") {
+        Vec3::new(0.2, 1.0, 0.3)
     } else if s.contains("polaron") {
-        Color::srgb(0.7, 0.4, 1.0)
+        Vec3::new(0.7, 0.4, 1.0)
     } else if s.contains("torpedo") {
-        Color::srgb(0.3, 0.6, 1.0)
+        Vec3::new(0.3, 0.6, 1.0)
     } else if s.contains("phaser") || s.contains("beam") {
-        Color::srgb(1.0, 0.45, 0.2)
+        Vec3::new(1.0, 0.45, 0.2)
     } else {
-        Color::WHITE
+        return None;
+    })
+}
+
+/// The recipe a weapon draws with: Refit's, by ODF name, else its kind's defaults in
+/// the weapon's colour (class and effect name, else the ODF's `lightColor`: three
+/// numbers, 0..1 or 0..255).
+fn recipe_for(def: &sta_content::WeaponDef) -> Recipe {
+    if let Some(r) = recipe::bundled().get(&def.odf.to_ascii_lowercase()) {
+        return r.clone();
     }
+    let shape = if def.kind == WeaponKind::Beam { Shape::Beam } else { Shape::Bolt };
+    let mut r = Recipe::new(shape);
+    let light: Vec<f32> = def.raw.list("lightColor").iter().filter_map(|t| t.trim_end_matches(['f', 'F', ';']).parse().ok()).collect();
+    let odf = match light[..] {
+        [r, g, b, ..] if r.max(g).max(b) > 0.0 => Some(Vec3::new(r, g, b) / if r.max(g).max(b) > 1.0 { 255.0 } else { 1.0 }),
+        _ => None,
+    };
+    if let Some(c) = name_colour(&def.class.0, def.fx.as_deref()).or(odf) {
+        r.col = c;
+        r.core = c.lerp(Vec3::ONE, 0.85);
+    }
+    r
 }
 
 fn point(link: &SimLink, id: EntityId, alpha: f32) -> Option<Vec3> {
@@ -108,6 +150,16 @@ fn target_point(link: &SimLink, t: &Target, alpha: f32) -> Option<Vec3> {
         Target::Point(p) => Some(to_bevy(p.to_f32())),
         _ => None,
     }
+}
+
+/// A per-shot seed in 0..10.23, as Refit's `(hash & 1023) * 0.01`.
+fn shot_seed(shooter: EntityId, weapon: ContentKey, tick: Tick) -> f32 {
+    let mut h = 0x811c_9dc5u32;
+    for x in [shooter.0, weapon.0, tick as u32] {
+        h = (h ^ x).wrapping_mul(0x0100_0193);
+        h ^= h >> 15;
+    }
+    (h & 1023) as f32 * 0.01
 }
 
 fn spawn_fx(
@@ -125,19 +177,40 @@ fn spawn_fx(
                 let Some(def) = content.0.weapon(*weapon) else { continue };
                 let Some(from) = point(&link, *shooter, alpha) else { continue };
                 let to = target_point(&link, target, alpha).unwrap_or(from);
-                let colour = colour_for(&def.class.0, def.fx.as_deref());
-                let mk = |kind, life: f32| WeaponFx { kind, shooter: *shooter, weapon: *weapon, target: *target, fired: clock.tick(), life, start: from, from, to, colour };
-                cmds.spawn((mk(FxKind::Flash, FLASH_TICKS as f32), FxAlpha(1.0), Transform::from_translation(from)));
+                let recipe = recipe_for(def);
+                let seed = shot_seed(*shooter, *weapon, clock.tick());
+                let mk = |kind, life: f32, look: Look| WeaponFx {
+                    kind,
+                    shooter: *shooter,
+                    weapon: *weapon,
+                    target: *target,
+                    fired: clock.tick(),
+                    life,
+                    start: from,
+                    from,
+                    to,
+                    recipe: recipe.clone(),
+                    look,
+                    seed,
+                };
+                // Refit's emitter flare: `Fx::flare` at the start, `Emitter` half widths.
+                let flare = Look::flare(recipe.col, FLARE_CORE, 3.5, recipe.star, FLARE_STAR_SHARP, 0.0, 20.0, seed);
+                cmds.spawn((mk(FxKind::Flash, FLASH_TICKS as f32, flare), FxAlpha(1.0), Transform::from_translation(from)));
+                let per_tick = def.shot_speed.to_f32() / TICK_HZ as f32;
+                let flight = if per_tick > 0.0 { (from.distance(to) / per_tick).ceil().max(1.0) } else { 1.0 };
                 match def.kind {
-                    WeaponKind::Beam => {
-                        cmds.spawn((mk(FxKind::Beam, def.duration.max(1) as f32), FxAlpha(1.0), Transform::from_translation(from.midpoint(to))));
+                    WeaponKind::PointDefence => {}
+                    WeaponKind::Projectile if recipe.shape == Shape::Bolt => {
+                        cmds.spawn((mk(FxKind::Projectile, flight, Look::new(quad::K_BOLT, recipe.col)), FxAlpha(0.0), Transform::from_translation(from)));
                     }
-                    WeaponKind::Projectile => {
-                        let per_tick = def.shot_speed.to_f32() / TICK_HZ as f32;
-                        let flight = if per_tick > 0.0 { (from.distance(to) / per_tick).ceil().max(1.0) } else { 1.0 };
-                        cmds.spawn((mk(FxKind::Projectile, flight), FxAlpha(1.0), Transform::from_translation(from)));
+                    // A beam weapon runs its ribbon for `duration`; a recipe of beam or
+                    // cone kind on a shot the sim resolves on arrival, for its flight.
+                    _ => {
+                        let life = if def.kind == WeaponKind::Beam { def.duration.max(1) as f32 } else { flight };
+                        let kind = if recipe.shape == Shape::Cone { quad::K_CONE } else { quad::K_BEAM };
+                        cmds.spawn((mk(FxKind::Beam, life, Look::new(kind, recipe.col)), FxAlpha(0.0), Transform::from_translation(from.midpoint(to))));
+                        cmds.spawn((mk(FxKind::Impact, life, flare), FxAlpha(0.0), Transform::from_translation(to)));
                     }
-                    _ => {}
                 }
             }
             SimEvent::Hit { target, by, weapon, .. } => {
@@ -155,9 +228,24 @@ fn spawn_fx(
     }
 }
 
-fn update_fx(mut cmds: Commands, clock: Res<AnimClock>, link: Res<SimLink>, mut q: Query<(Entity, &mut WeaponFx, &mut Transform, &mut FxAlpha)>) {
+/// The beam's brightness envelope: up over `fade_in` seconds, down over the last
+/// [`BEAM_FALL`].
+fn envelope(age: f32, life: f32, fade_in: f32) -> f32 {
+    let t = TICK_HZ as f32;
+    ((age / t) / fade_in).clamp(0.0, 1.0) * (((life - age) / t) / BEAM_FALL).clamp(0.0, 1.0)
+}
+
+#[allow(clippy::type_complexity)]
+fn update_fx(
+    mut cmds: Commands,
+    clock: Res<AnimClock>,
+    link: Res<SimLink>,
+    camera: Query<&GlobalTransform, crate::map::MainCamera>,
+    mut q: Query<(Entity, &mut WeaponFx, &mut Transform, &mut FxAlpha)>,
+) {
     let now_ticks = clock.now() * TICK_HZ as f64;
     let alpha = clock.alpha();
+    let eye = camera.single().ok().map(|c| c.translation());
     for (e, mut fx, mut tf, mut a) in &mut q {
         let age = (now_ticks - fx.fired as f64) as f32;
         if age >= fx.life {
@@ -171,21 +259,55 @@ fn update_fx(mut cmds: Commands, clock: Res<AnimClock>, link: Res<SimLink>, mut 
         if let Some(p) = target_point(&link, &fx.target, alpha) {
             fx.to = p;
         }
+        let r = fx.recipe.clone();
         match fx.kind {
             FxKind::Beam => {
                 let d = fx.to - fx.from;
-                let len = d.length();
-                let dir = if len > 1e-4 { d / len } else { Vec3::Z };
-                *tf = Transform::from_translation(fx.from.midpoint(fx.to)).looking_to(dir, Vec3::Y).with_scale(Vec3::new(BEAM_WIDTH, BEAM_WIDTH, len.max(1e-3)));
-                a.0 = 1.0 - k;
+                let len = d.length().max(1e-3);
+                let hw = r.width * 0.5;
+                if r.shape == Shape::Cone {
+                    // Refit's no-target cone: an eighth as wide as long, `Spread` of it.
+                    let tr = (len * 0.125).max(r.width);
+                    let hw1 = (r.spread * tr).max(hw);
+                    let s_end = 1.0 + r.beyond * tr / len;
+                    let end = fx.from + d / len * (len * s_end);
+                    *tf = quad::ribbon(eye, fx.from, end, hw1, 0.0);
+                    fx.look.len = len / hw1;
+                    fx.look.col2 = Vec3::new(s_end, 0.0, 0.0);
+                    fx.look.extra = hw / hw1;
+                    fx.look.p3 = Vec4::new(r.fans[0].clamp(0.0, 4.0), r.fans[1].clamp(0.0, 1.0), r.fans[2], r.edge_px);
+                    fx.look.p4 = Vec4::new(r.vapour[0].clamp(0.0, 1.0), r.vapour[1], r.vapour[2], r.fall);
+                } else {
+                    // Capped at both ends by a half width, as `Fx::beam`.
+                    *tf = quad::ribbon(eye, fx.from, fx.to, hw, hw);
+                    fx.look.len = len / hw;
+                    fx.look.col2 = r.core;
+                    fx.look.p3 = Vec4::new(r.core_w, r.flow[0], r.flow[1], r.flow[2]);
+                    fx.look.p4 = Vec4::new(r.helix[0], r.helix[1], r.helix[2], r.crackle);
+                }
+                fx.look.seed = fx.seed;
+                a.0 = envelope(age, fx.life, r.fade_in);
             }
             FxKind::Projectile => {
-                *tf = Transform::from_translation(fx.start.lerp(fx.to, k)).with_scale(Vec3::splat(SHOT_RADIUS));
-                a.0 = 1.0;
+                let at = fx.start.lerp(fx.to, k);
+                let dir = (fx.to - fx.start).normalize_or(Vec3::Z);
+                let rad = r.size;
+                *tf = quad::ribbon(eye, at - dir * rad * r.tail, at + dir * rad, rad, 0.0);
+                fx.look.len = r.tail;
+                fx.look.col2 = r.core;
+                fx.look.seed = fx.seed;
+                fx.look.p3 = Vec4::new(18.0, 3.0, r.rays, clock.now() as f32 * r.spin + fx.seed);
+                a.0 = ((age / TICK_HZ as f32) / r.fade_in).clamp(0.0, 1.0);
             }
             FxKind::Flash => {
-                *tf = Transform::from_translation(fx.from).with_scale(Vec3::splat(FLASH_RADIUS * (1.0 - k)));
-                a.0 = 1.0 - k;
+                let h = if r.shape == Shape::Bolt { r.size * 1.5 } else { r.emitter * r.width * 0.5 };
+                *tf = quad::billboard(eye, fx.from, Vec2::splat(h));
+                a.0 = (1.0 - k) * (1.0 - k);
+            }
+            FxKind::Impact => {
+                let h = if r.shape == Shape::Bolt { r.size } else { r.impact * r.width * 0.5 };
+                *tf = quad::billboard(eye, fx.to, Vec2::splat(h));
+                a.0 = envelope(age, fx.life, r.fade_in);
             }
         }
     }
@@ -196,29 +318,28 @@ fn update_fx(mut cmds: Commands, clock: Res<AnimClock>, link: Res<SimLink>, mut 
 fn attach_visuals(
     mut cmds: Commands,
     meshes: Option<ResMut<Assets<Mesh>>>,
-    mats: Option<ResMut<Assets<StandardMaterial>>>,
+    mats: Option<ResMut<Assets<FxQuadMaterial>>>,
+    mut quad_mesh: Local<Option<Handle<Mesh>>>,
     new: Query<(Entity, &WeaponFx), Added<WeaponFx>>,
 ) {
     let (Some(mut meshes), Some(mut mats)) = (meshes, mats) else { return };
     if new.is_empty() {
         return;
     }
-    let cube = meshes.add(Cuboid::new(1.0, 1.0, 1.0));
-    let ball = meshes.add(Sphere::new(1.0));
+    let mesh = quad_mesh.get_or_insert_with(|| meshes.add(quad::rectangle())).clone();
     for (e, fx) in &new {
-        let mesh = if fx.kind == FxKind::Beam { cube.clone() } else { ball.clone() };
-        let material = mats.add(StandardMaterial { base_color: fx.colour, emissive: fx.colour.to_linear() * 4.0, unlit: true, alpha_mode: AlphaMode::Add, ..default() });
-        cmds.entity(e).insert((Mesh3d(mesh), MeshMaterial3d(material)));
+        cmds.entity(e).insert((Mesh3d(mesh.clone()), MeshMaterial3d(mats.add(quad::material(&fx.look)))));
     }
 }
 
-fn apply_alpha(mats: Option<ResMut<Assets<StandardMaterial>>>, q: Query<(&WeaponFx, &FxAlpha, &MeshMaterial3d<StandardMaterial>), Changed<FxAlpha>>) {
+fn apply_alpha(clock: Res<AnimClock>, mats: Option<ResMut<Assets<FxQuadMaterial>>>, q: Query<(&WeaponFx, &FxAlpha, &MeshMaterial3d<FxQuadMaterial>)>) {
     let Some(mut mats) = mats else { return };
+    let t = quad::shader_clock(clock.now());
     for (fx, a, m) in &q {
-        if let Some(mut mat) = mats.get_mut(&m.0) {
-            mat.base_color = fx.colour.with_alpha(a.0);
-            mat.emissive = fx.colour.to_linear() * (4.0 * a.0);
-        }
+        // Refit's flares are drawn at 0.6 of the beam's brightness.
+        let share = if matches!(fx.kind, FxKind::Flash | FxKind::Impact) { 0.6 } else { 1.0 };
+        let flicker = fx.recipe.flicker_at(t, fx.seed);
+        quad::drive(&mut mats, &m.0, &fx.look, fx.recipe.bright * share * a.0 * flicker, t);
     }
 }
 
@@ -295,10 +416,17 @@ mod tests {
         assert_eq!(fired(FxKind::Beam).len(), 4);
         assert_eq!(fired(FxKind::Projectile).len(), 2);
         assert_eq!(fired(FxKind::Flash).len(), 6);
-        // A beam fades: its alpha only falls while it lives.
+        // A flare lands with each beam.
+        assert_eq!(fired(FxKind::Impact).len(), 4);
+        // A beam rises over its fade-in and falls over its last quarter second: the
+        // alpha climbs to a single peak of 1 and drops back.
         let first = fired(FxKind::Beam).into_iter().next().unwrap();
         let alphas: Vec<f32> = a.iter().flatten().filter(|r| r.0.2 == FxKind::Beam && (r.0.1, r.0.3) == first).map(|r| f32::from_bits(r.3)).collect();
-        assert!(alphas.len() > 5 && alphas.windows(2).all(|w| w[1] <= w[0]) && alphas[0] > alphas[alphas.len() - 1]);
+        let peak = alphas.iter().cloned().fold(0.0, f32::max);
+        let at = alphas.iter().position(|&x| x == peak).unwrap();
+        assert!(alphas.len() > 5 && peak > 0.99 && at > 0 && at < alphas.len() - 1);
+        assert!(alphas[..=at].windows(2).all(|w| w[1] >= w[0]) && alphas[at..].windows(2).all(|w| w[1] <= w[0]));
+        assert!(alphas[0] < peak && alphas[alphas.len() - 1] < peak);
         assert!(a.last().unwrap().is_empty(), "FX left after the timeline: {:?}", a.last());
     }
 }

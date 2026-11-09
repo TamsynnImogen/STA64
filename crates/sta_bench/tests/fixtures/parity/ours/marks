@@ -1,0 +1,13 @@
+     0 spawn obj=warbird
+     0 spawn obj=friend
+     0 spawn obj=foe
+     0 fire.start obj=warbird weapon=fx_beam hp=0
+     0 hit obj=foe by=warbird weapon=fx_beam facing=0
+    45 hit obj=foe by=warbird weapon=fx_beam facing=0
+    60 fire.end obj=warbird weapon=fx_beam hp=0
+    89 cloak obj=warbird on=1
+   200 cloak obj=warbird on=0
+   229 fire.start obj=warbird weapon=fx_beam hp=0
+   229 hit obj=foe by=warbird weapon=fx_beam facing=0
+   274 hit obj=foe by=warbird weapon=fx_beam facing=0
+   319 hit obj=foe by=warbird weapon=fx_beam facing=0

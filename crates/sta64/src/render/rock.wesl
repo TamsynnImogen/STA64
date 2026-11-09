@@ -27,11 +27,11 @@ struct RockParams {
     spill: vec4<f32>,     // x the glow's scale; y the white at a crack's core
 };
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> k: RockParams;
-@group(#{MATERIAL_BIND_GROUP}) @binding(1) var m_albedo: texture_cube<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(2) var m_albedo_sampler: sampler;
-@group(#{MATERIAL_BIND_GROUP}) @binding(3) var m_relief: texture_cube<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(4) var m_relief_sampler: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> k: RockParams;
+@group(constants::MATERIAL_BIND_GROUP) @binding(1) var m_albedo: texture_cube<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(2) var m_albedo_sampler: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(3) var m_relief: texture_cube<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(4) var m_relief_sampler: sampler;
 
 struct FragIn {
     @builtin(position) position: vec4<f32>,

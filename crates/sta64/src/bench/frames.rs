@@ -49,7 +49,7 @@ pub fn is_software_adapter(kind: impl std::fmt::Debug, name: &str) -> bool {
 /// not racing asset and pipeline setup.
 const WARMUP: u32 = 5;
 /// Frames the picture is held still before a capture is requested.
-const SETTLE: u32 = 3;
+const SETTLE: u32 = 8;
 
 /// Where the bench's frames go and when.
 #[derive(Resource)]
@@ -261,9 +261,10 @@ fn sync_world(
     });
     let mut at: BTreeMap<EntityId, Vec3> = BTreeMap::new();
     for u in &world.units {
-        let pos = Vec3::new(fixed(u.pos.x), fixed(u.pos.y), fixed(u.pos.z));
+        // Render space, as the game's (`to_bevy`): the sim's Z runs the other way.
+        let pos = Vec3::new(fixed(u.pos.x), fixed(u.pos.y), -fixed(u.pos.z));
         at.insert(u.id, pos);
-        let yaw = fixed(u.heading.0).atan2(fixed(u.heading.1));
+        let yaw = fixed(u.heading.0).atan2(-fixed(u.heading.1));
         let t = Transform::from_translation(pos).with_rotation(Quat::from_rotation_y(yaw));
         if let Some(&e) = proxies.0.get(&u.id) {
             if let Ok(mut tr) = transforms.get_mut(e) {
@@ -284,19 +285,19 @@ fn sync_world(
         proxies.0.insert(u.id, e);
     }
     let resolve = |t: &Target| match t {
-        Target::Point(p) => Some(Vec3::new(p[0] as f32, p[1] as f32, p[2] as f32)),
+        Target::Point(p) => Some(Vec3::new(p[0] as f32, p[1] as f32, -p[2] as f32)),
         Target::Object(n) => bench.resolve(n).ok().and_then(|id| at.get(&id).copied()),
     };
     let Ok(mut cam) = camera.single_mut() else { return };
     let placed = if let Some((target, yaw, pitch, dist)) = &view.orbit {
         resolve(target).map(|c| {
             let (y, p) = (yaw.to_radians(), pitch.to_radians());
-            (c + *dist * Vec3::new(y.sin() * p.cos(), p.sin(), y.cos() * p.cos()), c)
+            (c + *dist * Vec3::new(y.sin() * p.cos(), p.sin(), -y.cos() * p.cos()), c)
         })
     } else if let Some((eye, look)) = &view.eye {
-        resolve(look).map(|c| (*eye, c))
+        resolve(look).map(|c| (Vec3::new(eye.x, eye.y, -eye.z), c))
     } else {
-        Some((Vec3::new(0.0, 600.0, 900.0), Vec3::ZERO))
+        Some((Vec3::new(0.0, 600.0, -900.0), Vec3::ZERO))
     };
     if let Some((eye, look)) = placed {
         *cam = Transform::from_translation(eye).looking_at(look, Vec3::Y);
