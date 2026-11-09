@@ -192,7 +192,7 @@ pub fn run_scenario_file(cfg: &Arc<RunConfig>, path: &Path) -> Result<CaseResult
     run_file(cfg, path, 0)
 }
 
-fn load_scenario(cfg: &RunConfig, path: &Path) -> Result<Scenario, String> {
+pub fn load_scenario(cfg: &RunConfig, path: &Path) -> Result<Scenario, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut load = |n: &str| std::fs::read_to_string(cfg.scenario_dir.join(format!("{n}.md"))).ok();
     Scenario::parse_with(&text, &mut load).map_err(|e| format!("{}: {e}", path.display()))

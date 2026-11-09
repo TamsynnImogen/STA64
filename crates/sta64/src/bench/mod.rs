@@ -12,6 +12,7 @@
 //! - `--control stdio`: one `BenchCommand` per line on stdin
 //!   (`sta_bench::parse`), one answer line per command on stdout.
 
+pub mod frames;
 pub mod marks;
 
 use std::sync::Arc;
@@ -88,6 +89,31 @@ struct TickBudget(Tick);
 
 /// `--headless`: a Bevy app without a window; returns the process exit code.
 pub fn run_headless(cfg: &LaunchConfig) -> i32 {
+    if cfg.frames.is_empty() {
+        return run_headless_inner(cfg);
+    }
+    // No adapter panics inside plugin setup: report it as a skippable
+    // condition, not a crash.
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_headless_inner(cfg))) {
+        Ok(code) => code,
+        Err(e) => {
+            let msg = e
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| e.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+                .unwrap_or_default();
+            if msg.contains("Unable to find a GPU") {
+                eprintln!("no GPU adapter: {msg}");
+                frames::NO_ADAPTER
+            } else {
+                eprintln!("headless render failed: {msg}");
+                101
+            }
+        }
+    }
+}
+
+fn run_headless_inner(cfg: &LaunchConfig) -> i32 {
     let bench = match build(cfg) {
         Ok(b) => b,
         Err(e) => {
@@ -95,21 +121,45 @@ pub fn run_headless(cfg: &LaunchConfig) -> i32 {
             return 2;
         }
     };
+    let scene_camera = scene_camera(cfg);
     let mut app = App::new();
-    app.add_plugins(MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(Duration::from_millis(1))));
+    let runner = ScheduleRunnerPlugin::run_loop(Duration::from_millis(1));
+    if cfg.frames.is_empty() {
+        app.add_plugins(MinimalPlugins.set(runner));
+    } else {
+        // Frames: the renderer without a window (an offscreen image target).
+        use bevy::render::RenderPlugin;
+        use bevy::window::ExitCondition;
+        app.add_plugins(
+            DefaultPlugins
+                .set(WindowPlugin { primary_window: None, exit_condition: ExitCondition::DontExit, ..default() })
+                .set(RenderPlugin { synchronous_pipeline_compilation: true, ..default() })
+                .disable::<bevy::winit::WinitPlugin>(),
+        )
+        .add_plugins(runner);
+    }
     configure_sets(&mut app);
     app.insert_resource(AnimClock::new(cfg.clock_mode(), 0))
         .add_plugins(SimLinkPlugin)
         .insert_resource(BenchRes(SyncCell::new(bench)))
-        .insert_resource(TickBudget(cfg.ticks.unwrap_or(0)))
+        .insert_resource(TickBudget(cfg.ticks.unwrap_or(0).max(cfg.frames.iter().copied().max().unwrap_or(0))))
         .add_systems(Update, bench_frame.in_set(GameSet::Bench));
     if matches!(cfg.control, Some(Control::Stdio)) {
         app.insert_resource(Channel(SyncCell::new(spawn_stdin())));
+    }
+    if !cfg.frames.is_empty() {
+        frames::add(&mut app, cfg, scene_camera);
     }
     match app.run() {
         AppExit::Success => 0,
         AppExit::Error(c) => i32::from(c.get()),
     }
+}
+
+/// The scene's `Camera=` command, for the frame view.
+fn scene_camera(cfg: &LaunchConfig) -> Option<BenchCommand> {
+    let text = std::fs::read_to_string(cfg.scene.as_deref()?).ok()?;
+    SceneFile::parse(&text).ok()?.scene.camera.map(|t| t.command)
 }
 
 fn spawn_stdin() -> Receiver<String> {
@@ -126,12 +176,16 @@ fn spawn_stdin() -> Receiver<String> {
 
 /// Per frame: the channel's commands, then the ticks the clock allows, then
 /// exit once the budget is reached and the channel (if any) has closed.
+#[allow(clippy::too_many_arguments)]
 fn bench_frame(
     time: Res<Time<Real>>,
     mut clock: ResMut<AnimClock>,
     mut bench: ResMut<BenchRes>,
     budget: Res<TickBudget>,
     mut channel: Option<ResMut<Channel>>,
+    mut capture: Option<ResMut<frames::Capture>>,
+    mut view: Option<ResMut<frames::View>>,
+    mut commands: Commands,
     mut exit: MessageWriter<AppExit>,
 ) {
     let bench = bench.0.get();
@@ -141,6 +195,9 @@ fn bench_frame(
         loop {
             match ch.0.get().try_recv() {
                 Ok(line) => {
+                    if let Some(v) = view.as_mut() {
+                        v.observe(&line);
+                    }
                     if let Some(a) = run_line(bench, &line) {
                         println!("{a}");
                     }
@@ -153,16 +210,28 @@ fn bench_frame(
             }
         }
     }
+    // A frame being captured holds the sim; otherwise it caps the ticks run.
+    let (mut limit, mut held) = (Tick::MAX, false);
+    if let Some(c) = capture.as_mut() {
+        match c.gate(bench.tick(), &mut commands) {
+            frames::Gate::Run(t) => limit = t,
+            frames::Gate::Hold => held = true,
+        }
+    }
+    if held {
+        return;
+    }
     clock.set_paused(bench.paused());
     let due = clock.begin_frame(time.delta_secs_f64());
     for _ in 0..due {
-        if (bench.tick() >= budget.0 && !open) || !bench.advance() {
+        if bench.tick() >= limit || (bench.tick() >= budget.0 && !open) || !bench.advance() {
             break;
         }
         clock.ticked();
     }
     clock.end_frame();
-    if !open && (bench.tick() >= budget.0 || bench.paused()) {
+    let frames_done = capture.as_ref().is_none_or(|c| c.done());
+    if !open && frames_done && (bench.tick() >= budget.0 || bench.paused()) {
         marks::write_if_requested(bench);
         println!("{}", digest_line(bench));
         exit.write(AppExit::Success);

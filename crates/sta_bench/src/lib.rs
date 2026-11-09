@@ -5,4 +5,5 @@
 
 pub mod marks;
 pub mod parse;
+pub mod cli;
 pub mod run;

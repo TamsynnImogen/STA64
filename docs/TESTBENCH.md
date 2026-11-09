@@ -184,9 +184,32 @@ Refit's names (`fire.end obj=shooter`, `cloak.done obj=warbird`).
   filled by the scene file at load, by stdin or a local socket in a live
   session, and by the runner. Answers go back one line per command and into
   `bench.log`.
-- **`sta-bench`** (binary in `sta_bench`): `run <scenario...>`, `check`
-  (parse and show steps, no launch), `list`, `session start|stop|list`,
-  `drive --session ID "<cmd>"`, `diff` (frames, object lists).
+- **`sta-bench`** (binary in `sta_bench`, logic in `sta_bench::cli`; built):
+  - `list [scenarios|scenes]`.
+  - `run <scenario...>`: tier 1 in-process; `--tier 2` (or a `Tier: 2`
+    header) then runs the scene in `sta64 --headless --clock bench --control
+    stdio --frames ...`, requires the same final digest as the in-process run,
+    and writes frames to `<case>/frames/tick-NNNNNN.png` (default ticks: 0 and
+    the last). `--repeat N` runs the process N times and requires byte-identical
+    frames. `--sta64`/`$STA64_BIN` names the binary.
+  - `check`: every tier-1 scenario in-process, exit 1 on a failure (what CI
+    calls); tier-2 scenarios are listed as skipped.
+  - `session start --scene NAME [Key=Value...]` / `list` / `stop` and
+    `drive --session ID "<cmd>"...`: a headless `sta64 --control stdio`
+    behind a named pipe (Unix), state in `<results parent>/sessions/<id>/`.
+  - `diff A B`: two report directories, per case: digests (first differing
+    tick), marks, objects by name, frames byte for byte; exit 1 on a difference.
+  - Not yet: isolated install clones per session, `--jobs`, `index.html`,
+    frames from a session, `Take a screenshot`/`Expect shots` steps.
+- **Frames** (`sta64 --headless --frames 0,100 --frame-dir D --frame-size WxH`,
+  `crates/sta64/src/bench/frames.rs`): a windowless render app draws into an
+  offscreen image and a `Screenshot` of it is written as PNG at each tick; the
+  bench holds the sim still while a frame settles, so it is exactly that tick.
+  Today the picture is stand-in shapes from the sim state (sphere for planets
+  and moons, box for the rest, owner colour), camera from `Camera=`/`orbit`/
+  `camera`: the bench has no install to load models from, so the game's own
+  renderers join when they can run without one. Without a GPU adapter `sta64`
+  exits 77 ("no GPU adapter") and `sta-bench`/the tests skip with a message.
 
 **Two tiers.** Most checks (orders, combat, economy, AI, missions) are
 **tier 1**: `sta_bench` + `sta_sim` in-process, milliseconds per case, run by
