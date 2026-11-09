@@ -15,9 +15,14 @@
 //!   sprite node's colour animation plays on the particle's age; its draw flag is
 //!   ignored. The colour is multiplied by 1 + the owner's emitters shown.
 //!
+//! Time comes from [`AnimClock`]: frames are cut into fixed
+//! [`AnimClock::SUBSTEP`]s, and each emitter draws from its own sequence seeded
+//! from the clock's seed and its owner's sim id, so a bench run repeats exactly.
 //! Particles are a visual effect. They live outside the deterministic simulation.
 
+use crate::clock::AnimClock;
 use crate::render::sprites::SpriteTables;
+use crate::sim_link::SimEntity;
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::Indices;
 use bevy::prelude::*;
@@ -113,7 +118,13 @@ pub struct Emitter {
     pub tpl: Arc<Template>,
     pub owner: Entity,
     pub timer: f32,
+    /// This emitter's random sequence; seeded by [`simulate`] on first sight.
+    pub rng: EmitterRng,
 }
+
+/// An emitter's own [`Rng`], empty until seeded.
+#[derive(Default)]
+pub struct EmitterRng(Option<Rng>);
 
 struct Particle {
     owner: Entity,
@@ -127,7 +138,10 @@ struct Particle {
 
 #[derive(Resource)]
 pub struct Particles {
-    rng: Rng,
+    /// Frame time not yet run in fixed sub-steps.
+    acc: f64,
+    /// Emitters seeded so far per owner, for telling an owner's emitters apart.
+    ordinals: HashMap<Entity, u32>,
     parts: Vec<Particle>,
     /// One dynamic mesh per (texture, blend).
     batches: HashMap<(String, Blend), (Handle<Mesh>, Entity)>,
@@ -138,7 +152,8 @@ pub struct Particles {
 impl Default for Particles {
     fn default() -> Self {
         Particles {
-            rng: Rng(12345),
+            acc: 0.0,
+            ordinals: HashMap::new(),
             parts: Vec::new(),
             batches: HashMap::new(),
             cloud_fps: 30.0,
@@ -149,12 +164,36 @@ impl Default for Particles {
 impl Particles {
     pub fn clear(&mut self) {
         self.parts.clear();
+        self.acc = 0.0;
+        self.ordinals.clear();
     }
 }
 
 /// Fire emitters and age particles.
-pub fn simulate(time: Res<Time>, mut sys: ResMut<Particles>, mut emitters: Query<(&mut Emitter, &GlobalTransform, &InheritedVisibility)>) {
-    let dt = time.delta_secs().min(0.25);
+pub fn simulate(
+    clock: Res<AnimClock>,
+    mut sys: ResMut<Particles>,
+    mut emitters: Query<(&mut Emitter, &GlobalTransform, &InheritedVisibility)>,
+    sims: Query<&SimEntity>,
+) {
+    for (mut em, _, _) in &mut emitters {
+        if em.rng.0.is_none() {
+            let n = sys.ordinals.entry(em.owner).or_default();
+            let ordinal = *n;
+            *n += 1;
+            let id = sims.get(em.owner).map(|s| s.0).unwrap_or(sta_sim::EntityId(0));
+            let key = clock.entity_key(id) ^ (ordinal as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+            em.rng.0 = Some(Rng((key % 429_397_397) as u32));
+        }
+    }
+    sys.acc += (clock.frame_dt() as f64).min(0.25);
+    while sys.acc >= AnimClock::SUBSTEP {
+        sys.acc -= AnimClock::SUBSTEP;
+        substep(&mut sys, AnimClock::SUBSTEP as f32, &mut emitters);
+    }
+}
+
+fn substep(sys: &mut Particles, dt: f32, emitters: &mut Query<(&mut Emitter, &GlobalTransform, &InheritedVisibility)>) {
     let fps = sys.cloud_fps;
     // Age and move; the dead go.
     sys.parts.retain_mut(|p| {
@@ -175,11 +214,12 @@ pub fn simulate(time: Res<Time>, mut sys: ResMut<Particles>, mut emitters: Query
     for p in &sys.parts {
         *counts.entry(p.owner).or_default() += 1;
     }
-    for (mut em, gt, vis) in &mut emitters {
+    for (mut em, gt, vis) in emitters.iter_mut() {
         if !vis.get() {
             continue;
         }
         let tpl = em.tpl.clone();
+        let Some(mut rng) = em.rng.0.take() else { continue };
         let at = gt.translation();
         // Node axes in world space. Our transforms are Z-mirrored SOD transforms,
         // so the SOD node's +Z is the Bevy node's -Z.
@@ -194,9 +234,9 @@ pub fn simulate(time: Res<Time>, mut sys: ResMut<Particles>, mut emitters: Query
                 if em.timer < 0.0 {
                     em.timer = if dt < tpl.period { em.timer + tpl.period } else { tpl.period };
                     let d = if tpl.spread > 0.0 {
-                        let a = tpl.spread * sys.rng.signed();
-                        let b = tpl.spread * sys.rng.signed();
-                        let _ = sys.rng.signed(); // the engine draws a third angle it never uses
+                        let a = tpl.spread * rng.signed();
+                        let b = tpl.spread * rng.signed();
+                        let _ = rng.signed(); // the engine draws a third angle it never uses
                         rx * (a.cos() * b.sin()) - ry * a.sin() + rz * (a.cos() * b.cos())
                     } else {
                         rz
@@ -218,7 +258,7 @@ pub fn simulate(time: Res<Time>, mut sys: ResMut<Particles>, mut emitters: Query
                 while *n < tpl.count && guard < 4096 {
                     guard += 1;
                     *n += 1;
-                    let r = &mut sys.rng;
+                    let r = &mut rng;
                     let v = Vec3::new(r.signed(), r.signed(), r.signed()) * tpl.speed;
                     let o = Vec3::new(r.signed(), r.signed(), r.signed()) * (tpl.speed * tpl.radius);
                     let age = r.up_to(tpl.life);
@@ -235,6 +275,7 @@ pub fn simulate(time: Res<Time>, mut sys: ResMut<Particles>, mut emitters: Query
             }
             EmitterType::Beam => {}
         }
+        em.rng.0 = Some(rng);
     }
 }
 
@@ -357,5 +398,74 @@ pub fn draw(
             m.insert_attribute(Mesh::ATTRIBUTE_COLOR, g.col);
             m.insert_indices(Indices::U32(g.idx));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::clock::ClockMode;
+    use crate::render::model_scene::{self, AnimKeys, NodeAnim};
+
+    fn template(kind: EmitterType) -> Arc<Template> {
+        Arc::new(Template {
+            kind,
+            speed: 3.0,
+            growth: 0.0,
+            life: 2.0,
+            period: 0.05,
+            spread: 0.4,
+            count: 12,
+            radius: 5.0,
+            texture: String::new(),
+            uv: [0.0, 0.0, 1.0, 1.0],
+            blend: Blend::Additive,
+            size: [1.0, 1.0],
+            colour: [1.0; 3],
+            anim: None,
+            sprite_anims: Vec::new(),
+        })
+    }
+
+    /// Run `frames` bench frames of an app with one spray and one cloud emitter
+    /// plus a node animation; return every value that would reach the screen.
+    fn run(frames: usize, step: f64) -> Vec<f32> {
+        let mut app = App::new();
+        app.insert_resource(AnimClock::new(ClockMode::Bench { step }, 99))
+            .init_resource::<Particles>()
+            .add_systems(Update, (simulate, model_scene::animate).chain());
+        let owner = app.world_mut().spawn_empty().id();
+        for (i, kind) in [EmitterType::Spray, EmitterType::Cloud].into_iter().enumerate() {
+            app.world_mut().spawn((
+                Emitter { tpl: template(kind), owner, timer: 0.0, rng: Default::default() },
+                GlobalTransform::from(Transform::from_xyz(i as f32, 0.0, 0.0)),
+                InheritedVisibility::VISIBLE,
+            ));
+        }
+        let node = app
+            .world_mut()
+            .spawn((
+                NodeAnim { period: 1.0, base: Transform::IDENTITY, keys: AnimKeys::Scale(vec![1.0, 2.0, 3.0, 4.0]) },
+                Transform::IDENTITY,
+            ))
+            .id();
+        let mut out = Vec::new();
+        for _ in 0..frames {
+            app.world_mut().resource_mut::<AnimClock>().advance_idle(0.123); // ignored in bench mode
+            app.update();
+            out.push(app.world().get::<Transform>(node).unwrap().scale.x);
+        }
+        let sys = app.world().resource::<Particles>();
+        assert!(!sys.parts.is_empty());
+        out.extend(sys.parts.iter().flat_map(|p| [p.pos.x, p.pos.y, p.pos.z, p.age]));
+        out
+    }
+
+    #[test]
+    fn same_bench_frames_give_identical_animation() {
+        let a = run(240, 1.0 / 60.0);
+        assert_eq!(a, run(240, 1.0 / 60.0));
+        // The run is live: a different frame step gives a different result.
+        assert_ne!(a, run(240, 1.0 / 50.0));
     }
 }

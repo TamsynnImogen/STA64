@@ -103,6 +103,7 @@ impl Plugin for ViewerPlugin {
             .add_systems(
                 Update,
                 (
+                    crate::clock::advance_idle_clock.run_if(not(resource_exists::<crate::sim_link::SimLink>)),
                     input,
                     swing_light,
                     rebuild,
@@ -186,12 +187,12 @@ fn setup(mut commands: Commands) {
 }
 
 /// Hold L to swing the main light around the model (grazing light shows bump detail).
-fn swing_light(keys: Res<ButtonInput<KeyCode>>, time: Res<Time>, mut q: Query<&mut Transform, With<KeyLight>>) {
+fn swing_light(keys: Res<ButtonInput<KeyCode>>, clock: Res<crate::clock::AnimClock>, mut q: Query<&mut Transform, With<KeyLight>>) {
     if !keys.pressed(KeyCode::KeyL) {
         return;
     }
     for mut tf in &mut q {
-        tf.rotate_around(Vec3::ZERO, Quat::from_rotation_y(time.delta_secs() * 1.2));
+        tf.rotate_around(Vec3::ZERO, Quat::from_rotation_y(clock.frame_dt() * 1.2));
     }
 }
 

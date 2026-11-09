@@ -279,7 +279,7 @@ fn update(
     lights: Query<(&GlobalTransform, &DirectionalLight)>,
     fields: Query<&NebulaField>,
     mut materials: ResMut<Assets<NebulaMaterial>>,
-    time: Res<Time>,
+    clock: Res<crate::clock::AnimClock>,
 ) {
     let Ok((cam, proj)) = camera.single() else { return };
     let near = match proj {
@@ -292,7 +292,7 @@ fn update(
         .map(|(t, _)| t.back().as_vec3())
         .unwrap_or(Vec3::Y);
     let fwd = cam.forward().as_vec3();
-    let t = time.elapsed_secs();
+    let t = clock.wall() as f32;
     for f in &fields {
         let Some(mut m) = materials.get_mut(&f.material) else { continue };
         let r = &f.recipe;
