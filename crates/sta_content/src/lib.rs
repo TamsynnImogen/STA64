@@ -9,9 +9,10 @@
 //!   that loaded the same content; [`ContentDb::hash`] says whether it did.
 //! - Profile defaults come first, then per-ODF keys switch features per unit.
 //!
-//! The real loaders (ODF: CON-03, index: CON-02, BZN maps: CON-07) are not
-//! written yet and answer [`ContentError::Unsupported`]; [`ContentDb::builder`]
-//! and [`fake`] work today.
+//! [`ContentDb::load`] builds the database from ODFs ([`odf`], CON-03);
+//! the BZN map loader (CON-07) is not written yet and answers
+//! [`ContentError::Unsupported`]. [`ContentDb::builder`] and [`fake`] work
+//! without any install. [`legacy`] still serves the map view's scenery ODFs.
 
 pub mod aip;
 pub mod db;
@@ -23,6 +24,9 @@ pub mod index;
 pub mod legacy;
 pub mod profile;
 pub mod map;
+pub mod odf;
+pub mod unit;
+pub mod weapon;
 
 pub use aip::{Aip, AipList, AipValue, AipVar, BuildItem};
 pub use db::{ContentBuilder, ContentDb};

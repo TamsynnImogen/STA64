@@ -37,10 +37,11 @@ pub struct ContentDb {
 }
 
 impl ContentDb {
-    /// Load every definition from a mounted install (CON-03; not yet written).
+    /// Load every unit and weapon definition from the ODFs of a mounted
+    /// install (see [`crate::odf`]). ODFs that cannot make a definition are
+    /// listed in the warnings, not errors.
     pub fn load(vfs: &sta_vfs::Vfs, profile: Profile, index: &OdfIndex) -> Result<(ContentDb, Vec<Warning>)> {
-        let _ = (vfs, profile, index);
-        Err(ContentError::Unsupported("ContentDb::load from ODFs (CON-03)"))
+        crate::odf::load(vfs, profile, index)
     }
 
     /// Build a database from definitions made in code (fakes) or JSON5.
@@ -250,6 +251,17 @@ fn hash(db: &ContentDb) -> u64 {
                 for b in &u.build.list {
                     h.u64(b.key.0 as u64);
                 }
+                // Later additions: hashed only when set, so databases made
+                // before them (the fakes) keep their hash.
+                let extra = [u.special_energy_max, u.special_energy_rate, u.max_dilithium, u.mining_rate, u.transfer_rate];
+                if u.miner || u.resource.is_some() || extra.iter().any(|f| *f != Fixed::ZERO) {
+                    h.byte(0xe1);
+                    h.byte(u.miner as u8);
+                    h.u64(u.resource.map_or(0, |r| r as u64 + 1));
+                    for f in extra {
+                        h.fixed(f);
+                    }
+                }
             }
             Def::Weapon(w) => {
                 h.byte(1);
@@ -260,6 +272,14 @@ fn hash(db: &ContentDb) -> u64 {
                 }
                 h.u64(w.refire);
                 h.u64(w.duration);
+                if w.effect_ticks != 0 || w.energy_drain != Fixed::ZERO || w.energy_cost != Fixed::ZERO || !w.disable_weapons || w.decloak_on_hit {
+                    h.byte(0xe2);
+                    h.u64(w.effect_ticks);
+                    h.fixed(w.energy_drain);
+                    h.fixed(w.energy_cost);
+                    h.byte(w.disable_weapons as u8);
+                    h.byte(w.decloak_on_hit as u8);
+                }
             }
         }
     }
@@ -305,8 +325,9 @@ mod tests {
     }
 
     #[test]
-    fn load_is_unsupported() {
-        let r = ContentDb::load(&sta_vfs::Vfs::default(), Profile::Fo4, &OdfIndex::default());
-        assert!(matches!(r, Err(ContentError::Unsupported(_))));
+    fn load_of_an_empty_install_is_empty() {
+        let (db, warnings) = ContentDb::load(&sta_vfs::Vfs::default(), Profile::Fo4, &OdfIndex::default()).unwrap();
+        assert!(db.is_empty() && warnings.is_empty());
+        assert_eq!(db.profile(), Profile::Fo4);
     }
 }
