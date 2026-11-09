@@ -48,5 +48,6 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
         // ui —
 
         // audio —
+        app.add_plugins(crate::audio::AudioPlugin { mode: cfg.mode() });
     }
 }
