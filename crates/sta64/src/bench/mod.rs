@@ -185,6 +185,8 @@ fn run_headless_inner(cfg: &LaunchConfig) -> i32 {
         app.add_plugins(crate::render::post::PostFxPlugin::from_cfg(cfg));
         if crate::ui::hud::frame::requested() {
             frames::add_hud(&mut app, cfg);
+        } else if let Some(screen) = crate::frontend::screens::frame::requested() {
+            frames::add_screen(&mut app, cfg, screen);
         } else if crate::ui::radar::frame_overlay_requested() {
             frames::add_radar(&mut app, cfg);
         }
