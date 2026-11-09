@@ -103,6 +103,8 @@ pub struct LaunchConfig {
     pub frame_dir: Option<PathBuf>,
     /// `--frame-size WxH`.
     pub frame_size: Option<(u32, u32)>,
+    /// `--postfx bloom,smaa`: opt-in post effects (render/post.rs).
+    pub postfx: Vec<String>,
     /// Arguments not understood, kept for the warning.
     pub unknown: Vec<String>,
 }
@@ -126,6 +128,7 @@ Test bench (docs/TESTBENCH.md):
   --frames <t,t,..>        save a PNG frame at each of these ticks (headless, needs a GPU adapter)
   --frame-dir <dir>        where frames go (default: frames)
   --frame-size <WxH>       frame size (default: 640x360)
+  --postfx <a,b,..>        opt-in post effects: bloom smaa fxaa vignette chromatic exposure aces reinhard cinematic (F8 cycles)
 
   --help                   this text
 ";
@@ -181,6 +184,7 @@ impl LaunchConfig {
                     Some(Some(t)) => cfg.frames = t,
                     _ => cfg.unknown.push("--frames (needs ticks like 0,100)".into()),
                 },
+                "--postfx" => cfg.postfx.extend(value(&mut args)),
                 "--frame-dir" => cfg.frame_dir = value(&mut args).map(PathBuf::from),
                 "--frame-size" => match value(&mut args).and_then(|v| v.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))) {
                     Some(wh) => cfg.frame_size = Some(wh),

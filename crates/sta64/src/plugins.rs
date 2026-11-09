@@ -47,6 +47,7 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
 
     if cfg.mode().has_window() {
         // render —
+        app.add_plugins(crate::render::post::PostFxPlugin::from_cfg(cfg));
 
         // ui —
 
