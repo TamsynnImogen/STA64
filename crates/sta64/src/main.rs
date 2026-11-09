@@ -140,7 +140,8 @@ fn main() {
         let maps = map::browser(&vfs, Some(m.as_str()).filter(|m| !m.is_empty()), browser.mount_summary.clone());
         println!("{} maps visible", maps.maps.len());
         let rts = vfs.read("RTS_CFG.h").and_then(Result::ok).map(|b| sta_assets::cfg_h::CfgH::parse(&String::from_utf8_lossy(&b)));
-        app.insert_resource(map::CameraLimits::from_cfg(rts.as_ref()))
+        app.insert_resource(map::MapSeat(cfg.seat))
+            .insert_resource(map::CameraLimits::from_cfg(rts.as_ref()))
             .insert_resource(viewer::Mounted(vfs))
             .insert_resource(maps);
     } else {
