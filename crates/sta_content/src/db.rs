@@ -149,6 +149,12 @@ impl ContentDb {
     pub fn weapon_features<'a>(&'a self, w: &'a WeaponDef) -> &'a Features {
         w.features.as_ref().unwrap_or(&self.features)
     }
+
+    /// The tech tree the sim gates building with (SIM-09). `None` means no
+    /// gating: every def a builder lists may be built.
+    pub fn tech_tree(&self) -> Option<&TechTree> {
+        self.tech.as_deref()
+    }
 }
 
 /// Collects definitions, then sorts them, hands out keys and resolves
