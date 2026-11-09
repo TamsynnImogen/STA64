@@ -5232,6 +5232,9 @@ dependencies = [
 name = "sta_bench"
 version = "0.1.0"
 dependencies = [
+ "sta_content",
+ "sta_core",
+ "sta_sim",
  "thiserror 2.0.21",
 ]
 

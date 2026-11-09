@@ -213,6 +213,72 @@ New steps: `Expect digest at tick 200 is "<hex>"`, `Expect digest at tick 200
 to match run "<scenario>"`, `Expect mark "fire.start obj=shooter" by tick 90`,
 `Expect "bench.log" contains "TEXT"`.
 
+## Tier-1 runner
+
+`sta_bench::run` (`crates/sta_bench/src/run/`) runs a scenario in-process.
+`cargo test -p sta_bench` runs every `bench/scenarios/*.md` whose header says
+`Tier: 1` (`tests/scenes.rs`), so a new scenario needs no Rust. Fragments
+(`_name.md`) are not scenarios. A scenario with no `Tier:` line is skipped.
+
+- **Content.** `RunConfig::fake()` runs on `fake::db()`. Scenes keep stock ODF
+  names (`fgalaxy`); `RunConfig::aliases` maps them onto the content in use
+  (fake: Galaxy -> `fx_cruiser`, Borg cube -> `fx_frigate`, class M planet ->
+  `fx_moon`). Real content needs no aliases.
+- **Build.** The start (`Map=` from `RunConfig::maps`, `Start=snapshot:`,
+  `Start=replay:`, else the empty map) loads, then the scene's objects are
+  spawned with `Sim::spawn_def` (so ids are known: file order, `#1`...). Team
+  `N>0` is `PlayerId(N)` with a seat made for it, team 0 is neutral. Scene
+  keys become edits from `PlayerId::BENCH` on tick 0 (`Immortal`, `Engines=0`,
+  `Weapons=0`, `Attack=` as an order from the owner). `Heal=1` is one `Heal`
+  edit a tick. `Scene: name Key=v` overrides `Seed`, `Pause`, `Map`,
+  `MapObjects`, `Profile`, `Delay`, `Start`.
+- **Commands** are queued and land at the next tick boundary (`at <t>` waits
+  for its tick). Orders are issued as the unit's owner, so the sim's own
+  ownership check is under test. An edit the sim does not apply yet comes back
+  as `Rejected`; the runner logs it once in `bench.log` and goes on. Runner
+  extension: `mine <ship>... <node>` (`Order::Mine`). Answers: `paused at tick
+  N`, `resumed at tick N`, `tick N`, `objects N -> objects.jsonl`, `marks N ->
+  marks`, `selected N`, `ok`, `! <why>`. A command answering `!` fails its step.
+- **Ticks.** Tick `N` is the world after `N` steps; tick 0 is the setup. A
+  mark is stamped with the tick of the step that produced it: a command
+  queued at tick 0 fires `fire.start` at tick 0, and its effect is visible at
+  tick 1. Every view and digest is kept, so a check may look at any tick that
+  has been run (`at tick N`); a tick not reached yet is a failure, never an
+  implicit run.
+- **Marks** come from `SimEvent`s: `fire.start`, `fire.end`, `hit`,
+  `shields.down`, `spawn`, `death`, `build.start`, `built`, `delivered`,
+  `cloak`, `rejected`, `eliminated`, with the fields listed in
+  `run/marks.rs`. `fire.start`/`fire.end` bracket a burst: shots of one
+  hardpoint each no later than `FireGap` after the last ended (`fire.end` is
+  the last `Fired` plus the weapon's `duration`).
+- **Checks** beyond the typed steps (grammar in `run/check.rs`; `Wait ... until`
+  takes any predicate about the present):
+
+  ```text
+  Expect [no] mark "KIND k=v ..." (by tick N | at tick N | between ticks A and B)
+  Expect "OBJ" FIELD [at tick N] is CMP          hull hull.max shield[.fore|.aft|.port|.starboard] shield.max speed x y z
+  Expect "OBJ" is within R of (X Y Z | "OBJ2") [at tick N]
+  Expect "OBJ" exists | does not exist [at tick N]
+  Expect player P resource NAME [at tick N] is CMP   dilithium latinum metal biomatter
+  Expect player P is [not] eliminated [at tick N]
+  Expect player P sees | does not see "OBJ" [at tick N]
+  Expect digest at tick N is "HEX" | to match run "SCENARIO"      (typed)
+  Expect N ships|stations|planets|objects on team T                 (typed)
+  Wait [up to N seconds|ticks] until <predicate>
+  Run N ticks | Run until tick N | Save snapshot as "FILE"
+  CMP = V [within E] | at least V | at most V | above V | below V | between A and B
+  ```
+
+  Digests: pin `Expect digest at tick N is` only for golden values a CI job
+  owns (TOOL-06); scenarios that need "the same run twice" compare two
+  scenarios with `to match run`.
+- **Not at tier 1:** screenshots and frame steps are skipped, and the display
+  switches (`hud`, `grid`...) answer `! unsupported: <system>`. `Wait`
+  without a bound is capped by the `Timeout:` header (sim seconds), default 120.
+- **Report.** `run::write_report(root, &cases)` writes `<root>/<run>/{report.md,
+  results.json, <case>/{log.txt, bench.log, objects.jsonl, marks, digests}}` and
+  repoints `<root>/latest`. `cargo test` writes it under `target/tmp/bench-results/`.
+
 ## Determinism and the animation clock
 
 `sta_sim` is already deterministic: fixed point, ordered ids, one seeded RNG,
