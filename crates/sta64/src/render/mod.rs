@@ -8,6 +8,7 @@ pub mod nebula;
 pub mod overlays;
 pub mod particles;
 pub mod planet;
+pub mod post;
 pub mod rock;
 pub mod space;
 pub mod sprites;
