@@ -102,6 +102,7 @@ paths fall under an open freeze wait; ones elsewhere carry on.
   decisions the plan did not dictate, and new `TODO.md` check lines.
 - Open it as a draft until the *done when* check passes on your branch; mark
   it ready after that. The user merges; agents never merge their own PRs.
+- CI runs only `ubuntu-latest` on PRs; the full 4-OS matrix runs on `main`. Add the `full-ci` label to a PR that touches determinism or platform code to run all four OSes pre-merge.
 - Rebase on `origin/main` before asking for review. Regenerate `Cargo.lock`
   (`cargo update -w`), never hand-merge it.
 - Never push to `main`, never force-push a branch someone else has pulled.
