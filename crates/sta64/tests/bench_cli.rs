@@ -241,3 +241,28 @@ fn bloom_changes_frames_and_repeats() {
     assert_eq!(on_a, on_b, "bloom on twice must give the same frames");
     assert_ne!(off, on_a, "bloom must change the frames");
 }
+
+/// The fog of war and the shroud (RND-13): `fog.ini` draws them as team 1 sees the map,
+/// `fog-off.ini` is the same scene without. Both run twice: no ERROR logged (a shader or
+/// pipeline error is only logged), the frames repeat byte for byte, the fog changes the
+/// frame, and after the scout warps away the frame changes again (the fog moves with it
+/// and what it passed stays explored, so the shroud is not what it was).
+#[test]
+fn fog_of_war_draws_changes_the_frame_and_follows_the_sensors() {
+    if !adapter(&tmp("probe-fog")) {
+        return;
+    }
+    let go = "goto scout 3500 0 -1500 warp\n";
+    let (a, log) = run_frames("fog.ini", "0,60", go, "fog-a");
+    let (b, _) = run_frames("fog.ini", "0,60", go, "fog-b");
+    let (off, off_log) = run_frames("fog-off.ini", "0,60", go, "fog-off");
+    for l in [&log, &off_log] {
+        assert!(!l.contains("ERROR"), "errors logged\n{l}");
+    }
+    assert_eq!(a.len(), 2);
+    assert_eq!(a, b, "fog frames twice must be the same PNGs");
+    assert_ne!(a[0], off[0], "the fog must change the first frame");
+    assert_ne!(a[1], off[1], "the fog must change the later frame");
+    assert_ne!(a[0], a[1], "the fog must move with the scout");
+    assert!(max_diff(&a[0], &off[0]) > 40, "fog is a visible dimming, not a speck");
+}

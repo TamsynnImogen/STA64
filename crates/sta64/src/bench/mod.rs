@@ -137,6 +137,7 @@ fn run_headless_inner(cfg: &LaunchConfig) -> i32 {
     let scene_camera = scene_camera(cfg);
     let content = bench.cfg.content.clone();
     let first_view = bench.view().clone();
+    let fog = scene_fog(cfg, &bench);
     let mut app = App::new();
     let runner = ScheduleRunnerPlugin::run_loop(Duration::from_millis(1));
     if cfg.frames.is_empty() {
@@ -185,11 +186,35 @@ fn run_headless_inner(cfg: &LaunchConfig) -> i32 {
         if crate::ui::radar::frame_overlay_requested() {
             frames::add_radar(&mut app, cfg);
         }
+        // `Fog=1` in the scene draws the fog and shroud as the first seat sees the map.
+        if let Some((player, bounds)) = fog {
+            app.insert_resource(crate::render::units::LocalPlayer(Some(player)))
+                .insert_resource(bounds)
+                .add_plugins(crate::render::fog::FogPlugin);
+        }
     }
     match app.run() {
         AppExit::Success => 0,
         AppExit::Error(c) => i32::from(c.get()),
     }
+}
+
+/// The scene's `Fog=1`: whose eyes the frames are drawn through (the first seat) and the
+/// map's corners (the scene's `Map=`, or the empty map).
+fn scene_fog(cfg: &LaunchConfig, bench: &Bench) -> Option<(PlayerId, crate::render::fog::FogBounds)> {
+    let text = std::fs::read_to_string(cfg.scene.as_deref()?).ok()?;
+    let scene = SceneFile::parse(&text).ok()?;
+    if scene.scene.switch(sta_bench::parse::System::Fog) != Some(true) {
+        return None;
+    }
+    let map = match &scene.scene.map {
+        Some(name) => bench.cfg.maps.get(name).cloned().unwrap_or_else(sta_content::MapDef::empty),
+        None => sta_content::MapDef::empty(),
+    };
+    let (lo, hi) = map.bounds;
+    let player = bench.view().players.first()?.id;
+    let bounds = crate::render::fog::FogBounds { min: Vec2::new(lo.x.to_f32(), lo.z.to_f32()), max: Vec2::new(hi.x.to_f32(), hi.z.to_f32()) };
+    Some((player, bounds))
 }
 
 /// The scene's `Camera=` command, for the frame view.
