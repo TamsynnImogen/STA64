@@ -4,13 +4,13 @@ weaponhardpoints#,208,399,12354,1,string,craft;shipyard;sensor;u_ball_obj;wingma
 classlabel,196,310,9114,1,string,cannonimp;craft;unitorpedo;phaser;replaceweapon,"""cannonimp"";""craft"";""UniTorpedo"""
 tooltip,208,490,5574,0,string,cannonimp;craft;pod;shipyard;utilityweapon,"""Disruptor Cannon"";""Phaser Array"";""Pulse Disruptor Cannon"""
 verbosetooltip,156,432,5580,0,string,cannonimp;craft;pod;shipyard;utilityweapon,"""AUTOTOOLTIP-bor_holdingbeam_H.odf"";""WRITE ME"";""AUTOTOOLTIP-bor_regeneration_RR.odf"""
-wpnname,122,240,3487,0,string,cannonimp;replaceweapon;utilityweapon;cannon;launcher,"""Disruptor Cannon"";""Phaser Array"";""Pulse Disruptor Cannon"""
-ordname,106,210,2979,0,string,cannonimp;launcher;cannon;toggleweapon;areacannon,"""bor_adaptionDo"";""photono"";""kphotono"""
-range,64,174,3006,0,int,cannonimp;toggleweapon;launcher;cannon;areacannon,600;800;400
+wpnname,122,240,3487,1,string,cannonimp;replaceweapon;utilityweapon;cannon;launcher,"""Disruptor Cannon"";""Phaser Array"";""Pulse Disruptor Cannon"""
+ordname,106,210,2979,1,string,cannonimp;launcher;cannon;toggleweapon;areacannon,"""bor_adaptionDo"";""photono"";""kphotono"""
+range,64,174,3006,1,int,cannonimp;toggleweapon;launcher;cannon;areacannon,600;800;400
 lifespan,50,99,2904,1,float,unitorpedo;phaser;utribeam;holding_bm;artillery,6.0;0.99;3.0
-shotspeed,47,97,2888,0,float,unitorpedo;phaser;utribeam;holding_bm;artillery,1e6;500.0;600.0
-firesound,124,241,2615,0,string,cannonimp;cannon;launcher;toggleweapon;areacannon,"""federation_phaser.wav"";""romulan_disruptor.wav"";""romulan_pulse_disruptor.wav"""
-damagebase,47,177,2739,0,float,unitorpedo;phaser;pphaser;photontorpedo;micro,0;10.108;7.845
+shotspeed,47,97,2888,1,float,unitorpedo;phaser;utribeam;holding_bm;artillery,1e6;500.0;600.0
+firesound,124,241,2615,1,string,cannonimp;cannon;launcher;toggleweapon;areacannon,"""federation_phaser.wav"";""romulan_disruptor.wav"";""romulan_pulse_disruptor.wav"""
+damagebase,47,177,2739,1,float,unitorpedo;phaser;pphaser;photontorpedo;micro,0;10.108;7.845
 radius,48,108,2784,1,int,unitorpedo;phaser;utribeam;photontorpedo;artillery,0;15;25
 spriteduration,54,115,2763,0,int,unitorpedo;phaser;utribeam;pphaser;photontorpedo,1;0.5;1.0
 unitname,193,362,2373,1,string,craft;pod;shipyard;sensor;research,"""Tavara Class"";""Leahval Class"";""Sphere"""
@@ -19,22 +19,22 @@ damagethreshold,45,74,2735,0,int,unitorpedo;phaser;pphaser;micro;shockwavexplode
 hullcrewmodifier,45,74,2735,0,int,unitorpedo;phaser;pphaser;micro;shockwavexplode,0;0.1;0.0
 shieldcrewmodifier,45,74,2735,0,int,unitorpedo;phaser;pphaser;micro;shockwavexplode,0;0.2;0.0
 hitchance,42,64,2660,0,int,cannonimp;launcher;cannon;areacannon;regeneration,1;1.00;0.1
-officercost,145,314,2289,0,int,craft;pod;shipyard;sensor;research,0;1;2
+officercost,145,314,2289,1,int,craft;pod;shipyard;sensor;research,0;1;2
 race,143,304,2292,1,string,craft;pod;shipyard;sensor;research,"""unitedfederation"";""romulanempire"";""klingonempire"""
-buildtime,145,315,2276,0,int,craft;pod;shipyard;sensor;research,150;185;100
-builditem#,274,306,2108,0,string,shipyard;constructionrig;research;(none);buildyard,"""all_halt"";""all_supply_routes1"";""all_supply_routes2"""
+buildtime,145,315,2276,1,int,craft;pod;shipyard;sensor;research,150;185;100
+builditem#,274,306,2108,1,string,shipyard;constructionrig;research;(none);buildyard,"""all_halt"";""all_supply_routes1"";""all_supply_routes2"""
 stoptohitmodifier,11,20,2597,0,int,cannonimp;areacannon;launcher;minelayer;cannon,0;-0.0;0.15
 tohitstopmodifier,11,20,2597,0,int,cannonimp;areacannon;launcher;minelayer;cannon,0;0.50;0.25
 maxhealth,115,203,2302,1,int,craft;shipyard;pod;sensor;research,4000;92.25;3000
-shieldrate,107,187,2285,0,float,craft;shipyard;pod;sensor;research,0.000;4000.0;2.5
-dilithiumcost,145,259,2170,0,int,craft;pod;shipyard;sensor;replaceweapon,2000;1411;600
+shieldrate,107,187,2285,1,float,craft;shipyard;pod;sensor;research,0.000;4000.0;2.5
+dilithiumcost,145,259,2170,1,int,craft;pod;shipyard;sensor;replaceweapon,2000;1411;600
 avoidanceclass,13,33,2505,0,int,craft;shipyard;pod;u_ball_obj;sensor,5;9;8
 intrinsicvalue,97,162,2289,0,float,craft;shipyard;pod;sensor;research,1.000;0;0.000
-eventselect,103,111,2287,0,string,craft;shipyard;pod;sensor;research,"""Basic3CruiserSelect"";""StarbaseSelect"";""Basic2DestroyerSelect"""
+eventselect,103,111,2287,1,string,craft;shipyard;pod;sensor;research,"""Basic3CruiserSelect"";""StarbaseSelect"";""Basic2DestroyerSelect"""
 weaponshitpoints,39,164,2289,0,int,craft;shipyard;pod;sensor;research,300;0;60
 attackpower,69,114,2289,0,float,craft;shipyard;pod;sensor;wingman,1.000;0;0.000
 lifesupporthitpoints,26,149,2288,0,int,craft;shipyard;pod;sensor;research,0;60;50
-eventacknowledge,68,107,2287,0,string,craft;shipyard;pod;sensor;research,"""StarbaseAcknowledge"";""Basic3CruiserAcknowledge"";""Basic2DestroyerAcknowledge"""
+eventacknowledge,68,107,2287,1,string,craft;shipyard;pod;sensor;research,"""StarbaseAcknowledge"";""Basic3CruiserAcknowledge"";""Basic2DestroyerAcknowledge"""
 sensorshitpoints,25,148,2289,0,int,craft;shipyard;pod;sensor;research,0;60;47
 engineshitpoints,24,148,2289,0,int,craft;shipyard;pod;sensor;research,0;60;47
 shieldgeneratorhitpoints,24,148,2289,0,int,craft;shipyard;pod;sensor;research,0;300;60
@@ -55,7 +55,7 @@ weaponshitpercent,35,21,2289,0,float,craft;shipyard;pod;sensor;research,7.0f;0;8
 engineshitpercent,23,19,2289,0,float,craft;shipyard;pod;sensor;research,7.0f;0.0f;2
 weldingradius,12,18,2289,0,float,craft;shipyard;pod;sensor;research,0.25;1.0;0.5
 ainame,8,13,2289,0,string,craft;shipyard;pod;sensor;research,"""CraftProcess"";""StarbaseProcess"";""RepairShipProcess"""
-fireball,9,11,2289,0,string,craft;shipyard;pod;sensor;research,"""x_large_explosion"";""x_large2_explosion"";""x_medium_explosion"""
+fireball,9,11,2289,1,string,craft;shipyard;pod;sensor;research,"""x_large_explosion"";""x_large2_explosion"";""x_medium_explosion"""
 enginesrepairtime,7,4,2289,0,float,craft;shipyard;pod;sensor;research,1.0;0.25;2.0
 lifesupportrepairtime,7,4,2289,0,float,craft;shipyard;pod;sensor;research,0.25;0.0625;0.5
 sensorsrepairtime,7,4,2289,0,float,craft;shipyard;pod;sensor;research,1.0;0.25;2.0
@@ -69,12 +69,12 @@ sensorscrewloss,6,4,2289,0,float,craft;shipyard;pod;sensor;research,5.0f;2.0f
 shielddelay,6,4,2289,0,int,craft;shipyard;pod;sensor;research,2;3.0f
 shieldgeneratorcrewloss,6,4,2289,0,float,craft;shipyard;pod;sensor;research,10.0f;8.0f;15.0f
 weaponscrewloss,6,4,2289,0,float,craft;shipyard;pod;sensor;research,10.0f;8.0f;5.0f
-crewcost,100,154,2010,0,int,craft;shipyard;research;wingman;constructionrig,800;90;250
+crewcost,100,154,2010,1,int,craft;shipyard;research;wingman;constructionrig,800;90;250
 basename,26,29,2118,1,string,craft;shipyard;u_ball_obj;sensor;pod,"""rom_tavara"";""effect_empty"";""rom_leahval"""
-rangescan,12,31,2128,0,int,craft;shipyard;sensor;research;evolver,850;900;800
+rangescan,12,31,2128,1,int,craft;shipyard;sensor;research;evolver,850;900;800
 shotcolor,51,110,1937,0,int,unitorpedo;phaser;utribeam;pphaser;photontorpedo,227
-specialenergyrate,55,75,1937,0,float,craft;u_ball_obj;shipyard;sensor;wingman,0;10;0.000
-maxspecialenergy,55,75,1934,0,int,craft;u_ball_obj;shipyard;sensor;wingman,500;1000;100000
+specialenergyrate,55,75,1937,1,float,craft;u_ball_obj;shipyard;sensor;wingman,0;10;0.000
+maxspecialenergy,55,75,1934,1,int,craft;u_ball_obj;shipyard;sensor;wingman,500;1000;100000
 physicsfile,21,49,1821,1,string,craft;shipyard;evolver;constructionrig;freighter,"""smooth_physics_100.odf"";""smooth_physics_120.odf"";""smooth_physics_130.odf"""
 special,53,99,1720,1,int,cannonimp;replaceweapon;toggleweapon;launcher;areacannon,0;1
 eventmove,22,29,1812,0,string,craft;shipyard;constructionrig;evolver;wingman,"""Basic3CruiserMove"";""Basic2DestroyerMove"";""Basic4CruiserMove"""
@@ -83,15 +83,15 @@ eventrepair,21,27,1812,0,string,craft;shipyard;constructionrig;evolver;wingman,"
 ignoreshield,12,28,1751,0,int,unitorpedo;holding_bm;borgbore;minebm;deathchant,0;1
 omegaturn,17,36,1687,0,int,unitorpedo;artillery;plasmacannon;photontorpedo;probetorpedo,0;0.5;3.0
 shotaccel,16,28,1694,0,float,unitorpedo;artillery;plasmacannon;probetorpedo;photontorpedo,70.0;9999;100.0
-shotgeometry,15,34,1623,0,string,unitorpedo;holding_bm;micro;borgbore;minebm,"""romW_pulsedisruptor.SOD"";""domW_tetryon.SOD"";""romW_plasma.SOD"""
+shotgeometry,15,34,1623,1,string,unitorpedo;holding_bm;micro;borgbore;minebm,"""romW_pulsedisruptor.SOD"";""domW_tetryon.SOD"";""romW_plasma.SOD"""
 seektime,1,9,1520,0,int,unitorpedo;photontorpedo;plasmacannon,0;0.25
 hitsound,12,26,1452,0,string,unitorpedo;photontorpedo;plasmacannon;colonizerpod;antimine,"""xhit_torpedo3.wav"";""xhit_pulse2.wav"";""xhit_torpedo1.wav"""
 needtarget,32,59,1398,0,int,cannonimp;toggleweapon;launcher;areacannon;cannon,1;0
 sprite,68,154,1193,1,string,phaser;utribeam;pphaser;photontorpedo;unitorpedo,"""weapon_phaser"";""weapon_disruptor2"";""weapon_polaron"""
 shotdelay,120,234,656,1,int,utilityweapon;launcher;cannon;replaceweapon;toggleweapon,0;1;0.0
 shieldduration,3,5,1000,0,float,phaser;utribeam;unibeam;fedrepairteam;remodulation,1.0;3.0;4.0
-restrictfirearc,9,14,878,0,int,cannonimp;cannon;launcher,1;0
-specialenergycost,56,110,582,0,int,unitorpedo;holding_bm;utribeam;replaceweapon;phaser,500;0;100
+restrictfirearc,9,14,878,1,int,cannonimp;cannon;launcher,1;0
+specialenergycost,56,110,582,1,int,unitorpedo;holding_bm;utribeam;replaceweapon;phaser,500;0;100
 buttonslot,55,96,593,0,int,replaceweapon;toggleweapon;cannonimp;launcher;cannon,0;13;1
 animation,26,84,587,1,int,shipyard;u_ball_obj;craft;pod;sensor,2;1;3
 eventdecommission,50,80,475,0,string,shipyard;pod;sensor;research;mining,"""StarbaseDecommission"";""SuperblDecommission"";""AdvResearchStationDecommission"""
@@ -189,7 +189,7 @@ race#,10,8,10,1,string,(none),"""borg.odf"";""fed.odf"";""kling.odf"""
 red_glow_range,7,10,11,0,float,nebula_obj;ionstorm_obj;u_ball_obj;latinum,0.0;0.5;0.25
 repairStrength,10,8,10,0,float,(none),5.0f;1.25f;1.5f
 damageValue,7,9,11,0,int,nebula_obj;ionstorm_obj;u_ball_obj,0;5;25
-disableweapons,5,7,15,0,int,nebula_obj;cloakingdeviceimp;cloakingdevicecontrol,0;1
+disableweapons,5,7,15,1,int,nebula_obj;cloakingdeviceimp;cloakingdevicecontrol,0;1
 effectRadius,7,9,11,1,int,nebula_obj;ionstorm_obj;u_ball_obj,300;100;600
 retreatStrength,9,8,10,0,float,(none),0.0f;0.25;0.15f
 drainrate,2,4,20,0,int,micro;shieldinv;wormholegen;resourceextractionbeam,50;80;75
@@ -221,10 +221,10 @@ craft_speed_coefficient,5,5,11,0,float,nebula_obj,1.0;0.7;0.6
 craft_speed_limit,5,5,11,0,int,nebula_obj,-1;0
 crewAccumulationRate,4,7,10,0,float,(none),4.0;0;3.5
 crewRetreatRatio,4,7,10,0,float,(none),0.1;0.10f;0.2f
-effecttimer,3,3,15,0,int,cloakingdeviceimp;cloakingdevice;phasecloakdevice;manheimeffect,2;4;3.0f
+effecttimer,3,3,15,1,int,cloakingdeviceimp;cloakingdevice;phasecloakdevice;manheimeffect,2;4;3.0f
 planetCrewAccumulationModifier,4,7,10,0,float,(none),1.0;1.25;1.5
-scout,1,2,17,0,int,craft;wingman;repairship,1
-dilithiumTransferRate,4,7,8,0,float,mining;shipyard,15.0
+scout,1,2,17,1,int,craft;wingman;repairship,1
+dilithiumTransferRate,4,7,8,1,float,mining;shipyard,15.0
 interfaceConfiguration,4,6,9,0,string,(none),"""gui_federation.cfg"";""gui_bor.cfg"";""gui_fed.cfg"""
 interfaceSprites,4,6,9,0,string,(none),"""gui_federation.spr"";""gui_borg.spr"";""gui_klingon.spr"""
 freighterName,4,6,8,0,string,mining,"""bfreight"";""ffreight"";""kfreight"""
@@ -263,7 +263,7 @@ scalesize,2,2,3,0,float,transwarpdrive;blackhole_obj,1;10.0f;1.0
 percentage,2,2,2,0,float,psychonicblast,.02;.50;0.09
 chainDamageModifier,1,2,2,0,float,chainpulsar,25.0f;1.0f;20.0f
 chainRadius,1,2,2,0,float,chainpulsar,300.0f;500.0f;800.0f
-energydrainrate,1,1,3,0,float,phasecloakdevice;cloakingdevicecontrol;cloakingdeviceimp,15.0;12;15.000
+energydrainrate,1,1,3,1,float,phasecloakdevice;cloakingdevicecontrol;cloakingdeviceimp,15.0;12;15.000
 fieldRadius,1,2,2,1,int,asteroidfield,100;200;400
 maxAsteroids,1,2,2,1,int,asteroidfield,1;15;8
 maxHits,1,2,2,0,int,chainpulsar,6;3;5
@@ -287,7 +287,7 @@ federation,1,1,1,1,3 numbers,(none),0.9	0.9	0.9;0.900	0.900	0.900
 ghostAmbient,1,1,1,0,3 numbers,(none),0.1 0.1 0.1
 ghostDiffuse,1,1,1,0,3 numbers,(none),0.1 0.1 0.1
 ghostSpecular,1,1,1,0,3 numbers,(none),0.0 0.0 0.0
-klingon,1,1,1,0,3 numbers,(none),0.2	0.6	0.2;1.0	0.2	0.2;0.900	0.134	0.134
+klingon,1,1,1,1,3 numbers,(none),0.2	0.6	0.2;1.0	0.2	0.2;0.900	0.134	0.134
 maximumDistance#D,1,1,1,0,float,(none),2000.0;3000.0;5000.0
 maxTime,1,1,1,0,float,nanitesordnance,5.0;0
 minimumDistance#D,1,1,1,0,float,(none),50.0;100.0
@@ -295,7 +295,7 @@ minTime,1,1,1,0,float,nanitesordnance,2.0;0
 movementSpeed,1,1,1,0,float,nanitesordnance,2.0;12.0;200
 numberOfRaces,1,1,1,0,int,(none),10;8
 rolloffFactor,1,1,1,0,float,(none),0.15;0.1
-romulan,1,1,1,0,3 numbers,(none),0.2	0.6	0.2;0.4	1.0	0.4;0.259	0.600	0.259
+romulan,1,1,1,1,3 numbers,(none),0.2	0.6	0.2;0.4	1.0	0.4;0.259	0.600	0.259
 sampleRate,1,1,1,0,int,(none),44100;22050
 shotInfo,1,1,1,0,string,nanitesordnance,"""NaniteHitInfo"";""BorgSpeech"""
 startReturnTime,1,1,1,0,float,nanitesordnance,2.0
@@ -313,8 +313,8 @@ can_sandd,0,20,2289,0,int,craft;shipyard;pod;sensor;research,1;0
 has_crew,0,8,2289,0,int,craft;shipyard;pod;sensor;research,1;0
 maxextraweapons,0,4,2289,0,int,craft;shipyard;pod;sensor;research,10;1;2
 has_hitpoints,0,3,2289,0,int,craft;shipyard;pod;sensor;research,1
-latinumcost,0,118,2170,0,int,craft;pod;shipyard;sensor;replaceweapon,483;1000;375
-biomattercost,0,36,1827,0,int,craft;replaceweapon;sensor;shipyard;pod,59;18;15
+latinumcost,0,118,2170,1,int,craft;pod;shipyard;sensor;replaceweapon,483;1000;375
+biomattercost,0,36,1827,1,int,craft;replaceweapon;sensor;shipyard;pod,59;18;15
 shiptype,0,25,1812,0,string,craft;shipyard;evolver;constructionrig;freighter,"""C"";""B"";""D"""
 can_explore,0,10,1821,0,int,craft;shipyard;evolver;constructionrig;freighter,1;0
 shipclass,0,16,1812,1,string,craft;shipyard;evolver;constructionrig;freighter,"""cruiser"";""battleship"";""destroyer"""
@@ -324,11 +324,11 @@ speakonattack,0,5,1720,0,int,cannonimp;replaceweapon;toggleweapon;launcher;areac
 attackspeech,0,4,1720,0,int,cannonimp;replaceweapon;toggleweapon;areacannon;launcher,0
 hotkeylabel,0,367,1168,0,string,craft;shipyard;pod;sensor;research,"""GAME-HOTKEY-S"";""GAME-HOTKEY-C"";""GAME-HOTKEY-A"""
 flareradiusmultiplier,0,27,999,0,int,phaser;utribeam;unibeam;pdlbeam,1;1.2;1.0
-firearc,0,1,878,0,float,cannonimp;launcher;cannon,1.61;1.3
+firearc,0,1,878,1,float,cannonimp;launcher;cannon,1.61;1.3
 item#,0,221,390,0,string,(none),"""fdata"";""latinum"";""mnebula6"""
 facility,0,4,475,0,int,shipyard;pod;sensor;research;mining,1;0
 checkvalidresourceinterval,0,1,475,0,float,shipyard;pod;sensor;research;mining,10.0f
-metalCost,0,249,17,0,int,pod;craft;sensor;replaceweapon;research,0;50;150
+metalCost,0,249,17,1,int,pod;craft;sensor;replaceweapon;research,0;50;150
 decommissionFacility,0,4,215,0,int,shipyard;buildyard,0;1
 builder_ship,0,22,192,0,int,shipyard;sensor;buildyard;starbase,1;0
 bstar.#,0,138,69,0,int,(none),0;1;75
@@ -345,7 +345,7 @@ northbuffer,0,4,98,0,float,shipyard;research;craft,170.0;220.0;10.0f
 verbose,0,49,42,0,string,(none),"""GUI_CP_ATTACK_VTOOLTIP"";""GUI_CP_BUY_DILITHIUM_VTOOLTIP"";""GUI_CP_BUY_METAL_VTOOLTIP"""
 buttonName,0,48,42,0,string,(none),"""attack"";""buydil"";""buymet"""
 preferredPosition,0,48,42,0,4 numbers,(none),0		1		0	0;0		0		0	0;1		2		0	0
-research,0,2,88,0,int,shipyard;research;planet;craft,0;1
+research,0,2,88,1,int,shipyard;research;planet;craft,0;1
 combatspeed,0,35,51,0,int,(none),60;40;50
 commandName,0,43,42,0,string,(none),"""GIVE_RESOURCE"";""BUY_RESOURCE"";""SET_FORMATION"""
 repair_ship,0,1,78,0,int,shipyard;repairship;craft,0;1
@@ -385,7 +385,7 @@ canwebuildinhere,0,1,34,0,int,latinum;nebula_obj,1
 repairhardpoint,0,6,29,0,string,shipyard;research,"""hp98"";""repair"";""hp99"""
 assault,0,1,33,0,int,craft;evolver,1
 animateowner,0,5,25,0,int,cannonimp;launcher;cannon;toggleweapon,1
-ambientSound,8,21,0,0,string,nebula_obj;planet;background_obj;blackhole_obj;asteroidfield,"""msnebam.wav"";""msun_am.wav"";""msnebl.wav"""
+ambientSound,8,21,0,1,string,nebula_obj;planet;background_obj;blackhole_obj;asteroidfield,"""msnebam.wav"";""msun_am.wav"";""msnebl.wav"""
 param,0,17,11,1,int,(none),2;4;3
 dest,0,11,15,0,string,(none),"""trade_station"";""has_crew"";""has_hitpoints"""
 repairrate,0,3,22,0,int,repairship;shipyard;craft,0;.15;.25
@@ -421,7 +421,7 @@ citytexturename,0,6,9,0,string,(none),"""ECFR"";""ECNA"";""BORG"""
 computerEnginesOffline#,7,8,0,0,string,(none),"""gvofc03.wav"";""gvofc05.wav"";""bc15.wav"""
 creationlabel,0,6,9,0,string,(none),"""ADM_COMMISSIONED"";""ADM_ASSEMBLED"";""ADM_CREATED"""
 insufficientofficersevent,0,6,9,0,string,(none),"""InsufficientCredits"";""InsufficientBorgOfficers"";""InsufficientCardOfficers"""
-maxdilithium,0,2,13,0,int,freighter,150;600;0
+maxdilithium,0,2,13,1,int,freighter,150;600;0
 maxlatinum,0,2,13,0,int,freighter,100;400;0
 maxmetal,0,2,13,0,int,freighter,0;75;300
 miner,0,2,13,1,int,freighter,1;0
@@ -477,7 +477,7 @@ eventGreenAlert,7,3,0,0,string,wingman;craft,"""PicardGreenAlert"";""LocutusGree
 eventRedAlert,7,3,0,0,string,wingman;craft,"""PicardRedAlert"";""LocutusRedAlert"";""WorfRedAlert"""
 eventYellowAlert,7,3,0,0,string,wingman;craft,"""PicardYellowAlert"";""LocutusYellowAlert"";""WorfYellowAlert"""
 lotsbiomatter,0,1,9,0,int,(none),500;120000
-miningRate,0,8,2,0,int,(none),10;12;15
+miningRate,0,8,2,1,int,(none),10;12;15
 normalbiomatter,0,1,9,0,int,(none),500;7200
 officerUpgradeODF,4,6,0,0,string,(none),"""borgoff"";""fedoff"";""klingoff"""
 computerFacilityConstructionComplete#,4,5,0,0,string,(none),"""gvofc024.wav"";""bc27.wav"""
@@ -626,7 +626,7 @@ buttonTextColor,0,1,1,0,3 numbers,(none),.613	.629	.648;1.0	1.0	1.0
 cardassian,1,1,0,0,3 numbers,(none),0.9	0.6	0.0
 cardassianRaceIcon,0,1,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Overlays\\LOGO…"
 cardassianRaceIconH,0,1,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Overlays\\LOGO…"
-cargo_ship,0,1,1,0,int,cargo_ship,1
+cargo_ship,0,1,1,1,int,cargo_ship,1
 classHeaderRect,0,1,1,0,4 numbers,(none),14	22	118	35;21	33	177	52
 classHeaderX,0,1,1,0,int,(none),14;21
 collisionRadius,1,0,1,0,float,shipyard;fighter,5.0;2
@@ -716,7 +716,7 @@ officerPeakData,0,1,1,0,4 numbers,(none),192	224	64	16
 officerPeakLabel,0,1,1,0,4 numbers,(none),64	224	94	16
 omegaSpin,1,1,0,0,float,wingman;craft,3.5
 omegaType,1,1,0,0,int,tractor_bm,1
-orange,1,1,0,0,3 numbers,(none),1.0	0.588	0.0
+orange,1,1,0,1,3 numbers,(none),1.0	0.588	0.0
 ownerSystemDuration,1,1,0,0,int,override,3
 particleFrames,1,1,0,0,int,(none),16
 particleTexture,1,1,0,0,string,(none),"""particle.0"""
@@ -730,9 +730,9 @@ planetsLostData,0,1,1,0,4 numbers,(none),192	368	64	16
 planetsLostLabel,0,1,1,0,4 numbers,(none),64	368	94	16
 PlayAnimBackwards,1,1,0,0,float,background_obj,10.5
 PlayAnimForwards,1,1,0,0,float,background_obj,4.5
-player#DilData,0,1,1,0,4 numbers,(none),10	66	85	48;15	100	127	72
-player#ScoreData,0,1,1,0,4 numbers,(none),10	66	120	48;15	100	184	72
-player#ShipData,0,1,1,0,4 numbers,(none),10	66	180	48;15	100	270	72
+player#DilData,0,1,1,1,4 numbers,(none),10	66	85	48;15	100	127	72
+player#ScoreData,0,1,1,1,4 numbers,(none),10	66	120	48;15	100	184	72
+player#ShipData,0,1,1,1,4 numbers,(none),10	66	180	48;15	100	270	72
 playerButton,0,1,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Buttons\\BUTTO…"
 playerButtonH,0,1,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Buttons\\BUTTO…"
 playerButtonRect#,0,1,1,0,4 numbers,(none),30	122	132	48;41	119	182	72
@@ -819,7 +819,7 @@ timeLineBattlesArea,0,1,1,0,4 numbers,(none),356	24	73	16;773	36	110	24
 timelineBattlesIcon,0,1,1,0,string,(none),"""bitmaps\\AdmiralsLog\\icons\\battles…"
 timeLineBattlesIconArea,0,1,1,0,4 numbers,(none),330	24	26	26;747	30	41	41
 timeLineTextArea,0,1,1,0,4 numbers,(none),4	24	218	49;6	36	327	74
-timer,1,1,0,0,int,selfdestruct,5
+timer,1,1,0,1,int,selfdestruct,5
 titleLabelRect,0,1,1,0,4 numbers,(none),64	8	178	20
 toggleButtonRect,0,1,1,0,4 numbers,(none),5	565	112	30
 topBarY,0,1,1,0,int,(none),64
@@ -839,14 +839,14 @@ waveSpeed,1,1,0,0,int,repulsionwave,10
 weaponHardpoint#,1,1,0,0,string list,wingman;craft,"""hp01"" ""hp06"";""hp26"""
 white,1,1,0,1,3 numbers,(none),0.9	0.9	0.9
 yellow,1,1,0,0,3 numbers,(none),0.9 	0.9 	0.0
-weapon#iconpos,0,0,9448,0,2 numbers,craft;shipyard;sensor;evolver;constructionrig,75	50;70	50;74	50
+weapon#iconpos,0,0,9448,1,2 numbers,craft;shipyard;sensor;evolver;constructionrig,75	50;70	50;74	50
 shotdelay#,0,0,6007,1,float,cannonimp,2;4;0.25
 extraweaponhardpoints,0,0,2289,0,string,craft;shipyard;pod;sensor;research,"""root"""
 buildablebyownerraceonly,0,0,2287,0,int,craft;shipyard;pod;sensor;research,1;0
 curhealth,0,0,2285,0,int,craft;shipyard;pod;sensor;research,4000;92.25;264
-curshields,0,0,2285,0,int,craft;shipyard;pod;sensor;research,0;4000;103.25
+curshields,0,0,2285,1,int,craft;shipyard;pod;sensor;research,0;4000;103.25
 healthrate,0,0,2285,0,float,craft;shipyard;pod;sensor;research,4000.0;0;0.217
-maxshields,0,0,2285,0,int,craft;shipyard;pod;sensor;research,0;4000;103.25
+maxshields,0,0,2285,1,int,craft;shipyard;pod;sensor;research,0;4000;103.25
 specialenergydisplaymode,0,0,2273,0,int,craft;shipyard;pod;sensor;research,1;2
 explosionhit,0,0,2253,0,string,unitorpedo;phaser;unibeam,"""fedW_phaserH"";""romW_beamdisruptorH"";""romW_pulsedisruptorH"""
 explosionshieldhit,0,0,2253,0,string,unitorpedo;phaser;unibeam,"""fedW_phaserH"";""romW_beamdisruptorH"";""romW_pulsedisruptorHS"""
@@ -855,7 +855,7 @@ shielddown,0,0,2111,0,string,craft;shipyard;sensor;research;evolver,"""shield_fe
 shieldhit,0,0,2111,0,string,craft;shipyard;sensor;research;evolver,"""shield_fed_hitM"";""shield_fed_hitL"";""shield_fed_hitS"""
 shieldhitcritical,0,0,2111,0,string,craft;shipyard;sensor;research;evolver,"""shield_fed_hitcritM"";""shield_fed_hitcritL"";""shield_fed_hitcritS"""
 recyclebiomatter,0,0,2110,0,int,craft;shipyard;sensor;research;evolver,0;5;7
-recycledilithium,0,0,2110,0,int,craft;shipyard;sensor;research;evolver,0;423;600
+recycledilithium,0,0,2110,1,int,craft;shipyard;sensor;research;evolver,0;423;600
 recyclelatinum,0,0,2110,0,int,craft;shipyard;sensor;research;evolver,0;143;92
 recycletime,0,0,2110,0,int,craft;shipyard;sensor;research;evolver,47;83;101
 worthxp,0,0,2107,0,int,craft;shipyard;sensor;research;evolver,72;61;275
@@ -868,7 +868,7 @@ flaresprite,0,0,995,0,string,phaser;utribeam,"""weapon_phaserflare"";""weapon_di
 shotcycleresettime,0,0,867,0,int,cannonimp,15;3.25;3.4
 fleetcapfile,0,0,845,0,string,craft;pod;shipyard;replaceweapon;sensor,"""all_cap_veteran.odf"";""all_cap_research.odf"";""all_cap_warpin.odf"""
 fleetcapclass#,0,0,838,0,string,(none),"""rom_tavaraYr6"";""rom_tavaraY_Dr6"";""rom_tavaraY_Wr6"""
-builditem#availability,0,0,796,0,int,shipyard;constructionrig,2;40;32
+builditem#availability,0,0,796,1,int,shipyard;constructionrig,2;40;32
 giveisallowed,0,0,714,0,int,craft;shipyard;constructionrig;freighter;repairship,0
 savefirecyclepoint,0,0,649,0,int,cannonimp,4;8;7
 overlaysod,0,0,388,0,string,craft;shipyard;research;sensor;mining,"""rom_s_shuttlesL"";""effect_coverfireCanav"";""effect_coverfireSaber"""
@@ -876,7 +876,7 @@ pushbuilditem#,0,0,347,0,name,shipyard,"NULL;""fed_nebula_engPC"";""rom_generix_
 useprimarytarget,0,0,344,0,int,cannonimp,0;1
 clearsfog,0,0,326,0,int,pod;u_ball_obj;fighter;sensor;rumbleexplode,0
 invalidastarget,0,0,321,0,int,pod;u_ball_obj;rumbleexplode;wormhole_obj;craft,1
-invincible,0,0,321,0,int,pod;u_ball_obj;rumbleexplode;wormhole_obj;craft,1
+invincible,0,0,321,1,int,pod;u_ball_obj;rumbleexplode;wormhole_obj;craft,1
 perceivedneutral,0,0,321,0,int,pod;u_ball_obj;rumbleexplode;wormhole_obj;craft,1
 fleetcapclass#capvalue,0,0,316,0,int,(none),4;6;7
 overridesubsystem,0,0,289,0,int,replaceweapon;ramweapon,1
@@ -895,7 +895,7 @@ initialShotDelayModifier,0,0,179,0,int,replaceweapon;cannonimp;launcher;ramweapo
 canrepairshiprepair,0,0,174,0,int,pod;sensor;fighter,0
 replacementmode,0,0,172,0,int,replaceweapon,2;3
 destroymewithresearchstation,0,0,167,0,int,pod,0;1
-builditem#code,0,0,162,0,string,(none),"""RRHT"";""BTT"";""BTR"""
+builditem#code,0,0,162,1,string,(none),"""RRHT"";""BTT"";""BTR"""
 replacementinstantai,0,0,153,0,int,replaceweapon,1
 module#buttonrect,0,0,149,0,4 numbers,(none),96 320 64 64;160 320 64 64;224 320 64 64
 module#buttonsprite,0,0,149,0,string,(none),"""b_bor_moduleR_Mid"";""b_bor_moduleB_Start"";""b_bor_moduleT_Mid"""
@@ -960,7 +960,7 @@ replacementresetspecialenergy,0,0,26,0,int,replaceweapon,1
 saneCrewLossMethod,0,26,0,0,int,craft,1
 tip#,0,0,24,0,string,(none),"""TIPP-SCREENSHOT"";""TIPP-WEBPAGE"";""TIPP-DONATION"""
 tip#sprite,0,0,24,0,string,(none),"""LoadingBarTip_Screenshot"";""LoadingBarTip_Page"";""LoadingBarTip_Donate"""
-builditem#availabilityparent,0,0,21,0,int,shipyard;constructionrig,1;3;5
+builditem#availabilityparent,0,0,21,1,int,shipyard;constructionrig,1;3;5
 requiredalliedrace,0,0,20,0,string,shipyard,"""dominion"";""unitedfederation"";""klingonempire"""
 captooltip,0,0,19,0,string,(none),"""         Hyperspace Artilleries ( %d…;""         Tavara Type Warbirds ( %d /…;""         Experimental Technology Cru…"
 preservestatus,0,0,18,0,int,replaceweapon;cannonimp,1
@@ -1001,7 +1001,7 @@ numberofmodules,0,0,10,0,int,(none),8;20;16
 rtypeallowed,0,0,10,0,int,(none),1;3;2
 shieldProtection,0,9,0,0,float,starbase;sensor;planet,1.0
 alwaysactiveai,0,0,8,0,int,resourceweapon,1
-builditem#provided,0,0,8,0,int,research,2;1
+builditem#provided,0,0,8,1,int,research,2;1
 decommissionValue,8,0,0,0,int,starbase;mining,1000;600
 selecthighlight,0,0,8,0,int,shipyard;research,1
 ttypeallowed,0,0,8,0,int,(none),1;2;3
@@ -1157,7 +1157,7 @@ dominionraceiconh,0,0,1,0,string,(none),"""bitmaps\\AdmiralsLog\\Overlays\\LOGO�
 downbuffer,0,0,1,0,int,fighter,0
 drag,0,1,0,1,int,minearray,1
 dtypeallowed,0,0,1,0,int,(none),3
-entity,1,0,0,0,3 numbers,(none),0.8	0.8	0.8
+entity,1,0,0,1,3 numbers,(none),0.8	0.8	0.8
 explosionRadius,1,0,0,0,int,repulsionwave,800
 extractionInterval,0,1,0,0,int,resourceextractionbeam,1
 federationRaceIcon,0,1,0,0,string,(none),"""bitmaps\\AdmiralsLog\\Overlays\\LOGO…"
