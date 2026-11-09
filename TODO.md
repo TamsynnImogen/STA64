@@ -7,6 +7,7 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 ## Needs your check
 
+- [?] Hull lighting with Refit's look (RND-06): in the model viewer or a map, ships are lit by the key and fill with a highlight, rim light, team colour, glowing windows and (Borg) normal maps; **H** switches to the previous Bevy lighting and back, to compare; T still changes the team colour in the viewer
 - [?] Post FX (RND-14), opt-in: `cargo run -- --map <name> --postfx bloom,smaa` (names: bloom smaa fxaa vignette chromatic exposure aces reinhard cinematic); F8 cycles off / bloom / cinematic; with no flag the look is exactly as before
 - [?] Selection overlays (RND-08): `cargo run -- --map <name>`, select ships: team-coloured ring, green hull bar (and blue shield bar if any) above, faint line to the move target after a move order; all gone on deselect
 - [?] Impact FX (RND-10): in a map fight, shield hits flash a blue shell on the struck side, hull hits throw sparks, destroyed ships explode (flash, shell, debris), ships under half hull trail grey smoke (two streams under a quarter), none when cloaked; all fades and nothing lingers
