@@ -137,6 +137,12 @@ fn run_headless_inner(cfg: &LaunchConfig) -> i32 {
                 .disable::<bevy::winit::WinitPlugin>(),
         )
         .add_plugins(runner);
+        if let Some(info) = app.world().get_resource::<bevy::render::renderer::RenderAdapterInfo>()
+            && frames::is_software_adapter(info.device_type, &info.name)
+        {
+            eprintln!("no GPU adapter: only a software adapter is available ({})", info.name);
+            return frames::NO_ADAPTER;
+        }
     }
     configure_sets(&mut app);
     app.insert_resource(AnimClock::new(cfg.clock_mode(), 0))
