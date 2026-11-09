@@ -1,0 +1,12 @@
+# Refit Scene.marks, format as testbench/scene/README.md "Marks"
+epoch 0x01dd3f6a 0x8e0c1b40 74712093
+74712093 ready objects=3
+74712143 fire.start obj=warbird weapon=fx_beam target=foe shots=3 secs=2.0
+74713511 cmd text=select warbird
+74713528 select n=1 names=warbird
+74714143 fire.end obj=warbird weapon=fx_beam target=foe shots=3 secs=2.0
+74715063 cloak.start obj=warbird
+74718063 cloak.done obj=warbird
+74718793 decloak.start obj=warbird
+74719726 fire.start obj=warbird weapon=fx_beam target=foe shots=1 secs=0.0
+74721793 decloak.done obj=warbird

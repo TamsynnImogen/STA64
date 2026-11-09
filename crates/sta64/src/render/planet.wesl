@@ -28,15 +28,15 @@ struct PlanetParams {
     surf_misc: vec4<f32>,     // x: the relief's strength; y: 1 with clouds
 };
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> p: PlanetParams;
-@group(#{MATERIAL_BIND_GROUP}) @binding(1) var tex: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(2) var tex_sampler: sampler;
-@group(#{MATERIAL_BIND_GROUP}) @binding(3) var s_albedo: texture_cube<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(4) var s_albedo_sampler: sampler;
-@group(#{MATERIAL_BIND_GROUP}) @binding(5) var s_relief: texture_cube<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(6) var s_relief_sampler: sampler;
-@group(#{MATERIAL_BIND_GROUP}) @binding(7) var s_clouds: texture_cube<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(8) var s_clouds_sampler: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> p: PlanetParams;
+@group(constants::MATERIAL_BIND_GROUP) @binding(1) var tex: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(2) var tex_sampler: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(3) var s_albedo: texture_cube<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(4) var s_albedo_sampler: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(5) var s_relief: texture_cube<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(6) var s_relief_sampler: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(7) var s_clouds: texture_cube<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(8) var s_clouds_sampler: sampler;
 
 struct FragIn {
     @builtin(position) position: vec4<f32>,

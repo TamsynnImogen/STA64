@@ -7,12 +7,14 @@
 //! sta-bench session start --scene <name> [Key=Value...] | stop | list
 //! sta-bench drive --session ID "<command>"...
 //! sta-bench diff <report-a> <report-b>
+//! sta-bench parity <refit-out> <ours-out> [--tol time=0.1,pos=1,hull=1] | --names
 //! ```
 //!
 //! The logic is a library so `sta64`'s own tests can drive it with the binary
 //! they were built with; `src/bin/sta-bench.rs` is a shell around [`main`].
 
 mod diff;
+mod parity;
 mod session;
 mod tier2;
 
@@ -38,6 +40,10 @@ Usage: sta-bench <command> [options]
   session list | session stop --session ID
   drive --session ID \"<command>\"...  send bench commands to a session, print the answers
   diff <report-a> <report-b>       compare report directories; exit 1 when they differ
+  parity <refit-out> <ours-out>    Refit's Scene.marks/Scene.objects.jsonl against our marks/objects.jsonl
+                                   (run directories, or their logs/): objects by name, marks in sim seconds
+      --tol time=0.1,pos=1,hull=1  tolerances (seconds, world units, points)
+      --names                      print the Refit-to-ours mark-name table
 
 Common options:
   --bench-dir <dir>                directory holding scenes/ and scenarios/ (default: the repository's bench/)
@@ -60,6 +66,8 @@ pub(crate) struct Opts {
     pub frames: Option<Vec<u64>>,
     pub frame_size: Option<String>,
     pub repeat: u32,
+    pub tol: Option<String>,
+    pub names: bool,
     pub timeout: u64,
     pub rest: Vec<String>,
 }
@@ -86,6 +94,8 @@ fn parse(args: Vec<String>) -> Result<Opts, String> {
                         .map_err(|_| "--frames: ticks like 0,100".to_string())?,
                 );
             }
+            "--tol" => o.tol = Some(val(&a)?),
+            "--names" => o.names = true,
             "--frame-size" => o.frame_size = Some(val(&a)?),
             "--repeat" => o.repeat = val(&a)?.parse().map_err(|_| "--repeat: a number")?,
             "--timeout" => o.timeout = val(&a)?.parse().map_err(|_| "--timeout: seconds")?,
@@ -135,6 +145,7 @@ pub fn main(args: Vec<String>) -> i32 {
         "session" => session::session(&o),
         "drive" => session::drive(&o),
         "diff" => diff::diff(&o),
+        "parity" => parity::parity(&o),
         other => Err(Fail::Usage(format!("unknown command `{other}`"))),
     };
     match result {

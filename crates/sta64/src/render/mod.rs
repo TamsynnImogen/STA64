@@ -2,6 +2,7 @@
 //! the ships on the map (docs/WORKPLAN.md, RND lane).
 
 pub mod fx;
+pub mod hulls;
 pub mod materials;
 pub mod model_scene;
 pub mod nebula;
@@ -19,3 +20,5 @@ pub mod units;
 
 #[cfg(test)]
 mod clock_guard;
+#[cfg(test)]
+mod gpu_shaders;

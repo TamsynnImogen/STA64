@@ -404,7 +404,11 @@ both engines:
 2. STA64: `sta-bench run` on the same file with `Map=a2_borg01`, the same
    install and mod. With `MapObjects=keep` and no spawned objects, the same map
    and seed can be compared after N seconds without any coordinates agreeing.
-3. `sta-bench diff`: object lists by name (positions after T seconds, hull
+3. `sta-bench parity <refit-out> <ours-out>` (TOOL-08; `--names` prints the
+   Refit-to-ours mark-name table, `--tol time=0.1,pos=1,hull=1` the tolerances)
+   reads Refit's `Scene.marks` and `Scene.objects.jsonl` and our `marks` and
+   `objects.jsonl`: objects by name, marks in sim seconds, kinds in Refit's
+   vocabulary. `sta-bench diff`: object lists by name (positions after T seconds, hull
    over time, who is dying), marks by kind on a common sim-seconds axis, and
    frames side by side with a heat map.
 
