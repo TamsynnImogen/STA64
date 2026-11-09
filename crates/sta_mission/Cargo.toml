@@ -9,3 +9,4 @@ license.workspace = true
 sta_vfs.workspace = true
 sta_bzn.workspace = true
 mlua = { version = "0.12.2", features = ["lua53", "vendored"] }
+libm = "=0.2.16"
