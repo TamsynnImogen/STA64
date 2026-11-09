@@ -19,3 +19,5 @@ pub mod units;
 
 #[cfg(test)]
 mod clock_guard;
+#[cfg(test)]
+mod gpu_shaders;

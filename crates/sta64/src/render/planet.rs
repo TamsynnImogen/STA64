@@ -1,4 +1,4 @@
-//! Planet bodies with Armada II Refit's planet look (see `planet.wgsl`): the engine's
+//! Planet bodies with Armada II Refit's planet look (see `planet.wesl`): the engine's
 //! two ground hemispheres and cloud shell (`space::sphere`), shaded by a material of
 //! our own that lights them with the map's key and fill lights, plus the air past
 //! the limb as an added halo shell.
@@ -82,7 +82,7 @@ pub struct PlanetMaterial {
 
 impl Material for PlanetMaterial {
     fn fragment_shader() -> ShaderRef {
-        ShaderRef::Path(AssetPath::parse("embedded://sta64/render/planet.wgsl").into_owned())
+        ShaderRef::Path(AssetPath::parse("embedded://sta64/render/planet.wesl").into_owned())
     }
     fn alpha_mode(&self) -> AlphaMode {
         self.alpha
@@ -106,7 +106,7 @@ pub struct PlanetPlugin;
 
 impl Plugin for PlanetPlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "planet.wgsl");
+        embedded_asset!(app, "planet.wesl");
         app.add_plugins(MaterialPlugin::<PlanetMaterial>::default())
             .init_resource::<crate::render::surfaces::Surfaces>()
             .add_systems(Update, ((crate::render::surfaces::poll, apply_surfaces).chain(), place_glows))
@@ -401,13 +401,13 @@ mod tests {
     /// The path `embedded_asset!` registers must be the one the material asks for.
     #[test]
     fn shader_path_matches_embedded_registration() {
-        let registered = bevy::asset::embedded_path!("src", "planet.wgsl");
-        assert_eq!(registered.to_string_lossy().replace('\\', "/"), "sta64/render/planet.wgsl");
+        let registered = bevy::asset::embedded_path!("src", "planet.wesl");
+        assert_eq!(registered.to_string_lossy().replace('\\', "/"), "sta64/render/planet.wesl");
     }
 
     #[test]
     fn planet_shader_validates() {
-        let src = include_str!("planet.wgsl").replace("#{MATERIAL_BIND_GROUP}", "3");
+        let src = include_str!("planet.wesl").replace("constants::MATERIAL_BIND_GROUP", "3");
         let module = naga::front::wgsl::parse_str(&src).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&src)));
         naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
             .validate(&module)
