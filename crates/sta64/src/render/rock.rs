@@ -1,6 +1,6 @@
 //! Rocks with recipe surfaces: mesh parts whose texture names a recipe (the
 //! asteroids' `Master*`, the dilithium moons' `Mdmoon`) switch to Armada II Refit's
-//! rock look (`rock.wgsl`) once their surface is baked.
+//! rock look (`rock.wesl`) once their surface is baked.
 //!
 //! Settings are Refit's defaults: ambient (0.05, 0.05, 0.07), specular 0.7 with
 //! exponent 24 (times the texture's brightness and the recipe's Gloss), rim
@@ -56,7 +56,7 @@ pub struct RockMaterial {
 
 impl Material for RockMaterial {
     fn fragment_shader() -> ShaderRef {
-        ShaderRef::Path(AssetPath::parse("embedded://sta64/render/rock.wgsl").into_owned())
+        ShaderRef::Path(AssetPath::parse("embedded://sta64/render/rock.wesl").into_owned())
     }
 }
 
@@ -77,7 +77,7 @@ pub struct RockPlugin;
 
 impl Plugin for RockPlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "rock.wgsl");
+        embedded_asset!(app, "rock.wesl");
         app.add_plugins(MaterialPlugin::<RockMaterial>::default())
             .add_systems(Update, apply.after(crate::render::surfaces::poll))
             .add_systems(PostUpdate, update.after(TransformSystems::Propagate));
@@ -162,7 +162,7 @@ fn update(
 mod tests {
     #[test]
     fn rock_shader_validates() {
-        let src = include_str!("rock.wgsl").replace("#{MATERIAL_BIND_GROUP}", "3");
+        let src = include_str!("rock.wesl").replace("constants::MATERIAL_BIND_GROUP", "3");
         let module = naga::front::wgsl::parse_str(&src).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&src)));
         naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
             .validate(&module)
@@ -171,7 +171,7 @@ mod tests {
 
     #[test]
     fn shader_path_matches_embedded_registration() {
-        let registered = bevy::asset::embedded_path!("src", "rock.wgsl");
-        assert_eq!(registered.to_string_lossy().replace('\\', "/"), "sta64/render/rock.wgsl");
+        let registered = bevy::asset::embedded_path!("src", "rock.wesl");
+        assert_eq!(registered.to_string_lossy().replace('\\', "/"), "sta64/render/rock.wesl");
     }
 }
