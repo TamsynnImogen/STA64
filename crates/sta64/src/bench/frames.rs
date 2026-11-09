@@ -35,6 +35,16 @@ use crate::app::LaunchConfig;
 /// Exit code for "no GPU adapter here"; the test bench treats it as a skip.
 pub const NO_ADAPTER: i32 = 77;
 
+/// Is this a CPU/software rasteriser (WARP, llvmpipe, SwiftShader, ...)?
+/// Those render frames far too slowly to be a useful bench, so they count as
+/// "no GPU".
+pub fn is_software_adapter(kind: impl std::fmt::Debug, name: &str) -> bool {
+    // bevy does not re-export wgpu's `DeviceType`; its Debug name is `Cpu`.
+    let n = name.to_ascii_lowercase();
+    format!("{kind:?}") == "Cpu"
+        || ["warp", "llvmpipe", "swiftshader", "lavapipe", "microsoft basic render"].iter().any(|s| n.contains(s))
+}
+
 /// Frames held at tick 0 before anything is captured, so the first draw is
 /// not racing asset and pipeline setup.
 const WARMUP: u32 = 5;

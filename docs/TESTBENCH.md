@@ -281,7 +281,8 @@ to match run "<scenario>"`, `Expect mark "fire.start obj=shooter" by tick 90`,
 - **Marks** come from `SimEvent`s: `fire.start`, `fire.end`, `hit`,
   `shields.down`, `spawn`, `death`, `build.start`, `built`, `delivered`,
   `cloak`, `rejected`, `eliminated`, with the fields listed in
-  `run/marks.rs`. `fire.start`/`fire.end` bracket a burst: shots of one
+  `marks.rs` (`sta_bench`, shared by the runner and `sta64 --sim-only/--headless`,
+  which writes `$STA64_BENCH_OUT/marks`; render marks have no source yet). `fire.start`/`fire.end` bracket a burst: shots of one
   hardpoint each no later than `FireGap` after the last ended (`fire.end` is
   the last `Fired` plus the weapon's `duration`).
 - **Checks** beyond the typed steps (grammar in `run/check.rs`; `Wait ... until`
@@ -446,6 +447,11 @@ The matrix in `.github/workflows/ci.yml` has no game install, so:
   The **map corpus test** is one of them: it needs the install and a mod
   (stock, or FO 4.0), and runs once per mod.
 - Tier-2 frames in CI wait on a software GPU (open questions).
+- **GPU frame tests are opt-in.** `crates/sta64/tests/bench_cli.rs` frame tests
+  print `SKIP: set STA64_GPU_TESTS=1 ...` and pass unless `STA64_GPU_TESTS=1`
+  is set, which CI never does. With it set they need a real GPU: `sta64`
+  treats a software adapter (wgpu `Cpu` type, WARP, llvmpipe, SwiftShader,
+  Microsoft Basic Render) as none and exits 77 (skip), and a timeout fails.
 
 ## Plan
 
