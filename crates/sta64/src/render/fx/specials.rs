@@ -1,14 +1,26 @@
 //! Special FX (RND-11): construction, cloak, and the gaps for repair and warp.
 //!
-//! - **Construction**: while a unit's `UnitView::progress` is `Some`, a weld
-//!   beam runs from the builder (bound from `BuildStarted`, matched to the
-//!   station by content key) to the station, with a spark orbiting it. The
-//!   station hull is drawn translucent and firms up with progress
-//!   ([`UnitFade::build`]). `Built` flashes at the finished station.
+//! Aligned with Armada II Refit: the construction welding is its `effects` module's
+//! (`effects_construction.hlsl`, the worker bees' beam, arc flare, hot spot and
+//! sparks, ported in `quad.wgsl`; `[Bees]` and `[Construction]` constants), the cloak
+//! is its `hulls` look (`ART-DIRECTION.md`, "Cloaking": the ship wavers out in bands
+//! with a thin green front, and the player's own cloaked ships keep 10% of their hull).
+//! Refit's `specials` module draws the special weapons' target effects (override,
+//! drain, psionic), which have no sim event yet.
+//!
+//! - **Construction**: while a unit's `UnitView::progress` is `Some`, a bee's welding
+//!   beam runs from the builder (bound from `BuildStarted`, matched to the station
+//!   by content key) to a weld point on the station's hull, with the arc's flare and
+//!   hot spot there and `Sparks` (3) streaks flying off it and cooling. The station
+//!   hull is drawn translucent and firms up with progress ([`UnitFade::build`]);
+//!   Refit welds along the new edges of the station's SOD instead. `Built` flashes at
+//!   the finished station (STA64's own).
 //! - **Cloak**: [`UnitFade::cloak`] moves linearly between 1 and
-//!   [`CLOAKED_ALPHA`] over [`CLOAK_TICKS`] whenever the `Cloaked` marker
-//!   (from the view's flag) changes, and `CloakChanged` adds a shimmer flash.
-//!   Enemy cloaked units never reach here: RND-02 drops them from the view.
+//!   [`CLOAKED_ALPHA`] (Refit's `CloakHull`, 0.1, for the player's own ships) over
+//!   [`CLOAK_TICKS`] (Refit's `CloakTime`, 2.5 s) whenever the `Cloaked` marker (from
+//!   the view's flag) changes, and `CloakChanged` adds the bands and green front,
+//!   strongest mid-transition (`vis (1 - vis)`). Enemy cloaked units never reach here:
+//!   RND-02 drops them from the view.
 //! - **Repair, warp**: the sim has no repair or warp event or view state
 //!   (SIM-14 only has cloak), so there is nothing to draw. Gap, see the PR.
 //!
@@ -20,34 +32,74 @@ use std::collections::BTreeMap;
 use bevy::prelude::*;
 use sta_sim::{ContentKey, EntityId, SimEvent, TICK_HZ, Tick};
 
+use super::impacts::{heat_colour, rand, spark_at};
+use super::quad::{self, FxQuadMaterial, Look};
 use super::weapons::FxAlpha;
 use crate::app::GameSet;
 use crate::clock::AnimClock;
-use crate::render::units::{Cloaked, to_bevy};
-use crate::sim_link::{SimEntity, SimLink, SimMsg};
+use crate::render::units::{Cloaked, SelectRadius, to_bevy};
+use crate::sim_link::{SimEntities, SimEntity, SimLink, SimMsg};
 
-/// Ticks a cloak or decloak takes.
-pub const CLOAK_TICKS: f32 = 30.0;
-/// Opacity of a cloaked unit its owner still sees.
-pub const CLOAKED_ALPHA: f32 = 0.3;
+/// Ticks a cloak or decloak takes: Refit's `CloakTime`, 2.5 s.
+pub const CLOAK_TICKS: f32 = 2.5 * TICK_HZ as f32;
+/// Opacity of a cloaked unit its owner still sees: Refit's `CloakHull`, 10%.
+pub const CLOAKED_ALPHA: f32 = 0.1;
 /// Opacity of a station at zero progress.
 pub const BUILD_MIN_ALPHA: f32 = 0.15;
 /// Ticks the `Built` flash lasts.
 pub const FLASH_TICKS: Tick = 12;
-const WELD_WIDTH: f32 = 2.0;
-const SPARK_RADIUS: f32 = 4.0;
-const SPARK_ORBIT: f32 = 30.0;
-const FLASH_RADIUS: f32 = 40.0;
+const DEFAULT_RADIUS: f32 = 30.0;
+
+// `[Bees]` (render3d/mods/effects/src/bees.rs, `read`) for the beam; `[Construction]`
+// for the sparks and the arc.
+const BEAM_BRIGHT: f32 = 1.3;
+/// The beam's width (world units) and its minimum in pixels.
+const BEAM_WIDTH: f32 = 0.9;
+const BEAM_MIN_PX: f32 = 2.5;
+const BEAM_COLOUR: Vec3 = Vec3::new(110.0 / 255.0, 160.0 / 255.0, 1.0);
+/// The flare at the weld, in beam widths, and its minimum in pixels.
+const FLARE: f32 = 3.0;
+const FLARE_MIN_PX: f32 = 12.0;
+const ARC_COLOUR: Vec3 = Vec3::new(120.0 / 255.0, 165.0 / 255.0, 1.0);
+/// The arc flare's core and glow sharpness, rays' share and sharpness (`[Repair]`'s
+/// `FlareCore`, `FlareGlow`, `FlareRays`, `FlareRaySharpness`).
+const ARC_FLARE: Vec4 = Vec4::new(60.0, 3.5, 1.4, 30.0);
+const HOT_COLOUR: Vec3 = Vec3::new(1.0, 120.0 / 255.0, 30.0 / 255.0);
+const FLICKER_RATE: f32 = 24.0;
+const STUTTER: f32 = 0.2;
+const SPARKS: u8 = 3;
+/// `SparkSpeed` (times the station's radius), `SparkSpread`, `SparkBrightness`,
+/// `SparkWidth` (times the radius) and `SparkMinPixels`.
+const SPARK_SPEED: f32 = 0.12;
+const SPARK_SPREAD: f32 = 0.9;
+const SPARK_BRIGHT: f32 = 2.0;
+const SPARK_WIDTH: f32 = 0.002;
+const SPARK_MIN_PX: f32 = 1.4;
+/// Seconds a spark lives (the middle of `SparkLife` 0.3..0.9).
+const SPARK_LIFE: f32 = 0.6;
+/// World units one screen pixel spans per unit of distance, at the map camera's
+/// field of view and a 1080 line view: what Refit's `*MinPixels` become here.
+const PIXEL: f32 = 0.0008;
+/// `CloakFront`'s colour, `CloakWaveBands`, `CloakWaveSpeed`, `CloakWaveTilt`.
+const FRONT_COLOUR: Vec3 = Vec3::new(0.3, 1.0, 0.55);
+const FRONT_BANDS: f32 = 3.0;
+const FRONT_SPEED: f32 = 0.6;
+const FRONT_TILT: f32 = 0.5;
+const FRONT_BRIGHT: f32 = 1.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SpecialKind {
-    /// Beam from builder to station.
+    /// The bee's welding beam from builder to station.
     Weld,
-    /// Spark orbiting the station.
+    /// The arc's flare at the weld.
+    Arc,
+    /// The hot spot the arc leaves on the hull.
+    Hot,
+    /// A spark streaking off the weld.
     Spark,
     /// Completion flash.
     BuiltFlash,
-    /// Cloak or decloak shimmer.
+    /// Cloak or decloak bands and front.
     Shimmer,
 }
 
@@ -61,9 +113,12 @@ pub struct SpecialFx {
     pub born: Tick,
     /// Ticks it lives; `None` while the sim keeps it alive (construction).
     pub life: Option<f32>,
+    /// Which of a station's sparks.
+    pub idx: u8,
     from: Vec3,
     to: Vec3,
-    colour: Color,
+    radius: f32,
+    look: Look,
 }
 
 /// Opacity of a unit's hull: cloak and construction multiply.
@@ -89,8 +144,8 @@ struct FadeMat {
 struct Construction {
     /// `BuildStarted`s not yet bound to a station.
     pending: Vec<(EntityId, ContentKey)>,
-    /// Station to its (weld, spark) entities.
-    active: BTreeMap<EntityId, [Entity; 2]>,
+    /// Station to its effect entities.
+    active: BTreeMap<EntityId, Vec<Entity>>,
 }
 
 pub struct SpecialsFxPlugin;
@@ -99,7 +154,7 @@ impl Plugin for SpecialsFxPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Construction>().add_systems(
             Update,
-            (read_events, fade_units, sync_construction, update_fx, attach_visuals, apply_alpha, apply_fade)
+            (read_events, fade_units, sync_construction, update_fx, attach_visuals, apply_quads, apply_fade)
                 .chain()
                 .in_set(GameSet::Interpolate)
                 .run_if(resource_exists::<SimLink>),
@@ -111,8 +166,20 @@ fn point(link: &SimLink, id: EntityId, alpha: f32) -> Option<Vec3> {
     link.interpolate(id, alpha).map(|(p, _)| to_bevy(p))
 }
 
-fn fx(kind: SpecialKind, subject: EntityId, builder: Option<EntityId>, born: Tick, life: Option<f32>, at: Vec3, colour: Color) -> impl Bundle {
-    (SpecialFx { kind, subject, builder, born, life, from: at, to: at, colour }, FxAlpha(0.0), Transform::from_translation(at))
+#[allow(clippy::too_many_arguments)]
+fn fx(kind: SpecialKind, subject: EntityId, builder: Option<EntityId>, born: Tick, life: Option<f32>, idx: u8, at: Vec3, look: Look) -> impl Bundle {
+    (SpecialFx { kind, subject, builder, born, life, idx, from: at, to: at, radius: DEFAULT_RADIUS, look }, FxAlpha(0.0), Transform::from_translation(at))
+}
+
+fn look_for(kind: SpecialKind) -> Look {
+    match kind {
+        SpecialKind::Weld => Look::new(quad::K_WELD_BEAM, BEAM_COLOUR),
+        SpecialKind::Arc => Look { p3: ARC_FLARE, ..Look::new(quad::K_ARC_FLARE, ARC_COLOUR) },
+        SpecialKind::Hot => Look::new(quad::K_HOT, HOT_COLOUR),
+        SpecialKind::Spark => Look::new(quad::K_SPARK, Vec3::ONE),
+        SpecialKind::BuiltFlash => Look::flare(Vec3::new(0.6, 0.9, 1.0), 30.0, 3.5, 0.4, 18.0, 0.0, 20.0, 0.0),
+        SpecialKind::Shimmer => Look { p3: Vec4::new(FRONT_BANDS, FRONT_SPEED, FRONT_TILT, 0.0), ..Look::new(quad::K_CLOAK, FRONT_COLOUR) },
+    }
 }
 
 fn read_events(mut cmds: Commands, mut msgs: MessageReader<SimMsg>, clock: Res<AnimClock>, link: Res<SimLink>, mut cons: ResMut<Construction>) {
@@ -121,13 +188,12 @@ fn read_events(mut cmds: Commands, mut msgs: MessageReader<SimMsg>, clock: Res<A
             SimEvent::BuildStarted { builder, what } => cons.pending.push((*builder, *what)),
             SimEvent::Built { id, .. } => {
                 if let Some(at) = point(&link, *id, clock.alpha()) {
-                    cmds.spawn(fx(SpecialKind::BuiltFlash, *id, None, clock.tick(), Some(FLASH_TICKS as f32), at, Color::srgb(0.6, 0.9, 1.0)));
+                    cmds.spawn(fx(SpecialKind::BuiltFlash, *id, None, clock.tick(), Some(FLASH_TICKS as f32), 0, at, look_for(SpecialKind::BuiltFlash)));
                 }
             }
-            SimEvent::CloakChanged { id, on } => {
+            SimEvent::CloakChanged { id, .. } => {
                 if let Some(at) = point(&link, *id, clock.alpha()) {
-                    let c = if *on { Color::srgb(0.5, 0.7, 1.0) } else { Color::srgb(0.8, 0.9, 1.0) };
-                    cmds.spawn(fx(SpecialKind::Shimmer, *id, None, clock.tick(), Some(CLOAK_TICKS), at, c));
+                    cmds.spawn(fx(SpecialKind::Shimmer, *id, None, clock.tick(), Some(CLOAK_TICKS), 0, at, look_for(SpecialKind::Shimmer)));
                 }
             }
             _ => {}
@@ -135,7 +201,8 @@ fn read_events(mut cmds: Commands, mut msgs: MessageReader<SimMsg>, clock: Res<A
     }
 }
 
-/// Weld and spark for every station with progress; the station's build fade.
+/// The beam, arc, hot spot and sparks for every station with progress; the station's
+/// build fade.
 fn sync_construction(
     mut cmds: Commands,
     clock: Res<AnimClock>,
@@ -159,9 +226,14 @@ fn sync_construction(
         let slot = cons.pending.iter().position(|(_, what)| *what == def);
         let builder = slot.map(|i| cons.pending.remove(i).0);
         let at = point(&link, id, clock.alpha()).unwrap_or(Vec3::ZERO);
-        let weld = cmds.spawn(fx(SpecialKind::Weld, id, builder, clock.tick(), None, at, Color::srgb(1.0, 0.8, 0.3))).id();
-        let spark = cmds.spawn(fx(SpecialKind::Spark, id, builder, clock.tick(), None, at, Color::srgb(1.0, 0.95, 0.7))).id();
-        cons.active.insert(id, [weld, spark]);
+        let mut spawned = Vec::new();
+        for kind in [SpecialKind::Weld, SpecialKind::Arc, SpecialKind::Hot] {
+            spawned.push(cmds.spawn(fx(kind, id, builder, clock.tick(), None, 0, at, look_for(kind))).id());
+        }
+        for i in 0..SPARKS {
+            spawned.push(cmds.spawn(fx(SpecialKind::Spark, id, builder, clock.tick(), None, i, at, look_for(SpecialKind::Spark))).id());
+        }
+        cons.active.insert(id, spawned);
     }
     for (e, mut f) in &mut fades {
         let build = building.get(&e.0).map_or(1.0, |(p, _)| BUILD_MIN_ALPHA + (1.0 - BUILD_MIN_ALPHA) * p);
@@ -171,10 +243,32 @@ fn sync_construction(
     }
 }
 
-fn update_fx(mut cmds: Commands, clock: Res<AnimClock>, link: Res<SimLink>, mut q: Query<(Entity, &mut SpecialFx, &mut Transform, &mut FxAlpha)>) {
+/// Half size of something `px` pixels across at `dist`, at least `world`.
+fn at_least_px(world: f32, px: f32, dist: f32) -> f32 {
+    world.max(px * PIXEL * dist * 0.5)
+}
+
+/// Refit's stutter: the brightness drops now and then, a new value each flicker.
+fn flicker(now: f64, seed: u8) -> f32 {
+    let step = (now * FLICKER_RATE as f64).floor() as u32;
+    let h = step.wrapping_mul(2654435761).wrapping_add(seed as u32 * 40503) >> 8 & 0xffff;
+    1.0 - STUTTER * (h as f32 / 65535.0)
+}
+
+#[allow(clippy::type_complexity)]
+fn update_fx(
+    mut cmds: Commands,
+    clock: Res<AnimClock>,
+    link: Res<SimLink>,
+    ents: Option<Res<SimEntities>>,
+    radii: Query<&SelectRadius>,
+    camera: Query<&GlobalTransform, crate::map::MainCamera>,
+    mut q: Query<(Entity, &mut SpecialFx, &mut Transform, &mut FxAlpha)>,
+) {
     let now = clock.now();
     let now_ticks = now * TICK_HZ as f64;
     let alpha = clock.alpha();
+    let eye = camera.single().ok().map(|c| c.translation());
     for (e, mut f, mut tf, mut a) in &mut q {
         let age = (now_ticks - f.born as f64) as f32;
         let k = match f.life {
@@ -194,29 +288,71 @@ fn update_fx(mut cmds: Commands, clock: Res<AnimClock>, link: Res<SimLink>, mut 
             continue;
         };
         f.to = subject;
+        f.radius = ents.as_ref().and_then(|m| m.0.get(&f.subject)).and_then(|e| radii.get(*e).ok()).map_or(DEFAULT_RADIUS, |r| r.0);
+        // The weld point: on the station's hull, on the side the builder is on.
+        let weld = match f.builder {
+            Some(_) => f.to + (f.from - f.to).normalize_or(Vec3::Y) * f.radius * 0.6,
+            None => f.to,
+        };
+        let live = if f.builder.is_some() { 1.0 } else { 0.0 };
+        let dist = eye.map_or(100.0, |c| c.distance(weld));
+        let hw = at_least_px(BEAM_WIDTH * 0.5, BEAM_MIN_PX, dist);
+        let seed = f.idx;
         match f.kind {
             SpecialKind::Weld => {
-                let (from, to) = if f.builder.is_some() { (f.from, f.to) } else { (f.to, f.to) };
-                let d = to - from;
-                let len = d.length();
-                let dir = if len > 1e-4 { d / len } else { Vec3::Z };
-                *tf = Transform::from_translation(from.midpoint(to)).looking_to(dir, Vec3::Y).with_scale(Vec3::new(WELD_WIDTH, WELD_WIDTH, len.max(1e-3)));
-                // Flicker, deterministic in anim time.
-                a.0 = if f.builder.is_some() { 0.6 + 0.4 * (now as f32 * 40.0).sin().abs() } else { 0.0 };
+                let from = if f.builder.is_some() { f.from } else { weld };
+                *tf = quad::ribbon(eye, from, weld, hw, 0.0);
+                // The crackle's phase moves on with each flicker.
+                f.look.seed = (now * FLICKER_RATE as f64).floor() as f32 * 0.137 % 1.0;
+                a.0 = live * flicker(now, seed);
+            }
+            SpecialKind::Arc => {
+                let h = at_least_px(FLARE * hw, FLARE_MIN_PX, dist);
+                *tf = quad::billboard(eye, weld, Vec2::splat(h));
+                // The rays turn to a new angle with each flicker.
+                f.look.p4.x = (now * FLICKER_RATE as f64).floor() as f32 * 2.399;
+                a.0 = live * flicker(now, seed);
+            }
+            SpecialKind::Hot => {
+                let h = at_least_px(FLARE * hw, FLARE_MIN_PX, dist) * 0.5;
+                *tf = quad::billboard(eye, weld, Vec2::splat(h));
+                a.0 = live;
             }
             SpecialKind::Spark => {
-                let ang = now as f32 * 9.0;
-                let off = Vec3::new(ang.cos(), 0.3 * (ang * 1.7).sin(), ang.sin()) * SPARK_ORBIT;
-                *tf = Transform::from_translation(f.to + off).with_scale(Vec3::splat(SPARK_RADIUS));
-                a.0 = 0.7 + 0.3 * (now as f32 * 55.0).sin().abs();
+                // Each spark runs its own cycle, staggered, from the weld: a new
+                // direction every time round.
+                let t = now as f32 / SPARK_LIFE + seed as f32 / SPARKS as f32;
+                let n = t.floor();
+                let cycle = n as Tick;
+                let at = (t - n) * SPARK_LIFE;
+                let out = (weld - f.to).normalize_or(Vec3::Y);
+                let r = |s: u8| rand(f.subject, cycle, seed, s);
+                let (ya, aa) = (r(0) * 2.0 - 1.0, r(1) * std::f32::consts::TAU);
+                let ring = (1.0 - ya * ya).sqrt();
+                let dir = (out + Vec3::new(ring * aa.cos(), ya, ring * aa.sin()) * SPARK_SPREAD).normalize_or(out);
+                let speed = SPARK_SPEED * f.radius * (0.3 + 0.7 * r(2));
+                let w = at_least_px(SPARK_WIDTH * f.radius, SPARK_MIN_PX, dist);
+                match spark_at(weld, dir, speed, at, SPARK_LIFE) {
+                    Some((tail, head, kh)) if f.builder.is_some() => {
+                        *tf = quad::ribbon(eye, tail, head, w, w);
+                        f.look.col = heat_colour(kh);
+                        f.look.len = (head - tail).length() / w;
+                        a.0 = kh;
+                    }
+                    _ => {
+                        *tf = Transform::from_translation(weld).with_scale(Vec3::ZERO);
+                        a.0 = 0.0;
+                    }
+                }
             }
             SpecialKind::BuiltFlash => {
-                *tf = Transform::from_translation(f.to).with_scale(Vec3::splat(FLASH_RADIUS * (0.3 + 0.7 * k)));
+                *tf = quad::billboard(eye, f.to, Vec2::splat(f.radius * (0.3 + 0.7 * k)));
                 a.0 = 1.0 - k;
             }
             SpecialKind::Shimmer => {
-                *tf = Transform::from_translation(f.to).with_scale(Vec3::splat(FLASH_RADIUS * (0.5 + 0.5 * k)));
-                a.0 = 0.6 * (1.0 - k);
+                *tf = quad::billboard(eye, f.to, Vec2::splat(f.radius));
+                // Strongest mid-transition: vis (1 - vis), scaled to 1.
+                a.0 = 4.0 * k * (1.0 - k);
             }
         }
     }
@@ -249,29 +385,33 @@ fn fade_units(mut cmds: Commands, clock: Res<AnimClock>, mut last: Local<Option<
 fn attach_visuals(
     mut cmds: Commands,
     meshes: Option<ResMut<Assets<Mesh>>>,
-    mats: Option<ResMut<Assets<StandardMaterial>>>,
+    mats: Option<ResMut<Assets<FxQuadMaterial>>>,
+    mut quad_mesh: Local<Option<Handle<Mesh>>>,
     new: Query<(Entity, &SpecialFx), Added<SpecialFx>>,
 ) {
     let (Some(mut meshes), Some(mut mats)) = (meshes, mats) else { return };
     if new.is_empty() {
         return;
     }
-    let cube = meshes.add(Cuboid::new(1.0, 1.0, 1.0));
-    let ball = meshes.add(Sphere::new(1.0));
+    let mesh = quad_mesh.get_or_insert_with(|| meshes.add(quad::rectangle())).clone();
     for (e, f) in &new {
-        let mesh = if f.kind == SpecialKind::Weld { cube.clone() } else { ball.clone() };
-        let material = mats.add(StandardMaterial { base_color: f.colour, emissive: f.colour.to_linear() * 4.0, unlit: true, alpha_mode: AlphaMode::Add, ..default() });
-        cmds.entity(e).insert((Mesh3d(mesh), MeshMaterial3d(material)));
+        cmds.entity(e).insert((Mesh3d(mesh.clone()), MeshMaterial3d(mats.add(quad::material(&f.look)))));
     }
 }
 
-fn apply_alpha(mats: Option<ResMut<Assets<StandardMaterial>>>, q: Query<(&SpecialFx, &FxAlpha, &MeshMaterial3d<StandardMaterial>), Changed<FxAlpha>>) {
+fn apply_quads(clock: Res<AnimClock>, mats: Option<ResMut<Assets<FxQuadMaterial>>>, q: Query<(&SpecialFx, &FxAlpha, &MeshMaterial3d<FxQuadMaterial>)>) {
     let Some(mut mats) = mats else { return };
+    let t = quad::shader_clock(clock.now());
     for (f, a, m) in &q {
-        if let Some(mut mat) = mats.get_mut(&m.0) {
-            mat.base_color = f.colour.with_alpha(a.0);
-            mat.emissive = f.colour.to_linear() * (4.0 * a.0);
-        }
+        // `[Construction] Brightness` 1.2 for the arc and hot spot, `[Bees]`' 1.3 for the beam.
+        let bright = match f.kind {
+            SpecialKind::Weld => BEAM_BRIGHT * a.0,
+            SpecialKind::Arc | SpecialKind::Hot => 1.2 * a.0,
+            SpecialKind::Spark => SPARK_BRIGHT * a.0 * (0.5 + 0.5 * a.0),
+            SpecialKind::BuiltFlash => a.0,
+            SpecialKind::Shimmer => FRONT_BRIGHT * 0.5 * a.0,
+        };
+        quad::drive(&mut mats, &m.0, &f.look, bright, t);
     }
 }
 
@@ -410,7 +550,12 @@ mod tests {
         assert_eq!(a, b);
         let kinds = |k: SpecialKind| a.iter().flat_map(|f| &f.0).filter(|r| r.0.1 == k).map(|r| r.0.2).collect::<std::collections::BTreeSet<_>>();
         assert_eq!(kinds(SpecialKind::Weld).len(), 1);
+        assert_eq!(kinds(SpecialKind::Arc).len(), 1);
+        assert_eq!(kinds(SpecialKind::Hot).len(), 1);
         assert_eq!(kinds(SpecialKind::Spark).len(), 1);
+        // Refit's `Sparks`: three streaks to a station.
+        let sparks = a.iter().map(|f| f.0.iter().filter(|r| r.0.1 == SpecialKind::Spark).count()).max().unwrap();
+        assert_eq!(sparks, SPARKS as usize);
         assert_eq!(kinds(SpecialKind::BuiltFlash).len(), 1);
         assert_eq!(kinds(SpecialKind::Shimmer).len(), 2);
         assert!(a.last().unwrap().0.is_empty(), "FX left after the timeline");
