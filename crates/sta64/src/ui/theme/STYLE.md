@@ -43,4 +43,4 @@ licence font (e.g. an OFL LCARS-style face, with its licence file) into
 
 `sta64 --ui-gallery` opens a window with one of every widget. Frame baseline
 (local only, needs a GPU): take it manually, or with `sta-bench run --tier 2
---frames` once TOOL-04 (#94) is on main.
+--frames`. TOOL-04 frame capture (#94) is scene-driven (`--scene ... --headless --frames`) and has no gallery path yet; adding one is a follow-up.
