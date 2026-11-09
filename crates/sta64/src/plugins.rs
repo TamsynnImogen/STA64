@@ -56,6 +56,7 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
 
         // ui —
         app.add_plugins(crate::ui::theme::ThemePlugin);
+        app.add_plugins(crate::ui::notices::NoticePlugin);
 
         // audio —
         app.add_plugins(crate::audio::AudioPlugin { mode: cfg.mode() });

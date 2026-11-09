@@ -13,6 +13,7 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 - [?] Impact FX (RND-10): in a map fight, shield hits flash a blue shell on the struck side, hull hits throw sparks, destroyed ships explode (flash, shell, debris), ships under half hull trail grey smoke (two streams under a quarter), none when cloaked; all fades and nothing lingers
 - [?] Weapon FX in the map view once a sim with weapons is linked: beams fade over their duration, torpedo spheres fly to the target, short muzzle flash at the shooter (centre of the ship for now, no hardpoint positions yet); all gone shortly after firing stops
 - [?] Audio (AUD-01): `cargo run -- --audio-test` plays four rising tones (music, sfx, voice, ui buses) at startup; F9 repeats them; no sound device logs a warning and runs silent
+- [?] UI sounds (AUD-05): `STA64_TEST_INSTALL=<root> STA64_TEST_MOD=<mod> cargo test -p sta64 audio::ui` passes (every click/hover/error/chat name resolves in the install); audible clicks wait for the CON-10 sound resolver
 - [?] Ship movement smooth now (no weaving); FPS shown top right (try `cargo run --release` if it's low) — 3e748b3
 - [?] Planets with Refit's look: terminator, dusk band, limb haze, water glint, cloud shell, halo past the limb — 4fc4a88
 - [?] Recipe planets (class D/H/J/K/L/M) switch to detailed generated ground with relief, drifting clouds and cloud shadows a few seconds after a map loads (first time only; then cached) — 7c8c421
@@ -76,6 +77,7 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [ ] Mission scripts: integrated MMM Lua 5.3 runtime, most-used API first ([docs/MISSIONS.md](docs/MISSIONS.md), [docs/MMM_API.md](docs/MMM_API.md))
 - [ ] Front end on Refit's 3D menu scene (M4)
 - [ ] LCARS widget gallery looks right: `cargo run -p sta64 -- --ui-gallery` (pills, elbows, hover/press, slider drag); screenshot it as the local baseline ([STYLE.md](crates/sta64/src/ui/theme/STYLE.md))
+- [ ] Notices and tooltips look right: in a bench match a destroyed own unit shows a red "<Unit> destroyed" line at the top centre that fades after 5 s, an enemy loss a plain one, and a `Tooltip` node shows its text 0.35 s after the pointer rests ([notices.rs](crates/sta64/src/ui/notices.rs), UI-10)
 
 ## Done recently
 
