@@ -8,6 +8,7 @@
 //! time. Until gameplay exists, the executable opens the model viewer.
 
 pub mod app;
+pub mod bench;
 pub mod clock;
 pub mod plugins;
 pub mod sim_link;
@@ -89,6 +90,13 @@ fn main() {
     }
     for flag in cfg.unsupported() {
         eprintln!("unsupported: {flag}");
+    }
+    // Bench runs that need no install, window or renderer (docs/TESTBENCH.md).
+    if cfg.sim_only {
+        std::process::exit(bench::run_sim_only(&cfg));
+    }
+    if cfg.headless && cfg.scene.is_some() {
+        std::process::exit(bench::run_headless(&cfg));
     }
     let (vfs, summary) = mount(&cfg);
     println!("{summary}");

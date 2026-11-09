@@ -5203,6 +5203,7 @@ dependencies = [
  "bevy",
  "naga",
  "sta_assets",
+ "sta_bench",
  "sta_bzn",
  "sta_content",
  "sta_mission",

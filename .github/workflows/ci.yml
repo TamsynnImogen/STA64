@@ -36,3 +36,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build -p sta64 --release
       - run: cargo clippy -p sta64 -- -D warnings
+      - name: Bench smoke (sim-only)
+        run: cargo run -p sta64 --release -- --sim-only --scene bench/scenes/synthetic.ini --ticks 300
+      - run: cargo test -p sta64 --release
