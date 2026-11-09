@@ -15,6 +15,7 @@ mod mixer;
 mod music;
 mod null;
 mod ui;
+mod voices;
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -25,6 +26,7 @@ pub use mixer::{AudioBackend, KiraAudio, MixBus, Mixer, Sound, Volumes};
 pub use music::{Context as MusicContext, MusicConfig, MusicPlugin};
 pub use null::{Call, CallLog, NullAudio};
 pub use ui::{UiContext, UiSound, UiSoundPlugin, UiSounds};
+pub use voices::{VoiceConfig, VoiceNames, VoicePlugin};
 
 use crate::app::{GameSet, Mode};
 use crate::sim_link::{Bus, PlaySound};
@@ -32,6 +34,11 @@ use crate::sim_link::{Bus, PlaySound};
 /// Turns a bare sound name into decoded audio.
 pub trait SoundResolver: Send + Sync {
     fn resolve(&mut self, name: &str) -> Option<Sound>;
+
+    /// The race whose lines event names pick (`federation`, `klingon`, ...); `None` takes
+    /// any. [`VoicePlugin`] sets it from the local player's units. Resolvers that do not
+    /// know races ignore it.
+    fn set_race(&mut self, _race: Option<&str>) {}
 }
 
 /// Resolves nothing; logs each unknown name once.
@@ -84,6 +91,10 @@ impl BankResolver {
 }
 
 impl SoundResolver for BankResolver {
+    fn set_race(&mut self, race: Option<&str>) {
+        self.race = race.map(str::to_owned);
+    }
+
     fn resolve(&mut self, name: &str) -> Option<Sound> {
         self.variant = self.variant.wrapping_add(1);
         match self.bank.audio(&self.vfs, name, self.race.as_deref(), self.variant) {
@@ -152,7 +163,7 @@ impl Plugin for AudioPlugin {
         if app.world().get_non_send::<Mixer>().is_none() {
             app.insert_non_send(Mixer::new(choose_backend(self.mode)));
         }
-        app.add_plugins((MusicPlugin, UiSoundPlugin))
+        app.add_plugins((MusicPlugin, UiSoundPlugin, VoicePlugin))
             .add_message::<PlaySound>()
             .init_resource::<Volumes>()
             .insert_resource(Resolver(Box::new(StubResolver::default())))
