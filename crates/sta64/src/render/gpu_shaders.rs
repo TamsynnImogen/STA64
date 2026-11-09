@@ -9,7 +9,8 @@
 //! any `ERROR` event.
 //!
 //! Needs a hardware adapter: prints `SKIP` and passes unless `STA64_GPU_TESTS=1`,
-//! and skips when the only adapter is a software one.
+//! and skips when the only adapter is a software one. The adapter is read after the
+//! warm-up frames, from the render world, which is where it lives.
 
 use std::sync::Mutex;
 
@@ -82,12 +83,6 @@ fn rock_planet_and_nebula_pipelines_build() {
             .set(LogPlugin { level: bevy::log::Level::WARN, custom_layer: error_layer, ..default() })
             .disable::<bevy::winit::WinitPlugin>(),
     );
-    if let Some(info) = app.world().get_resource::<bevy::render::renderer::RenderAdapterInfo>()
-        && crate::bench::frames::is_software_adapter(info.device_type, &info.name)
-    {
-        eprintln!("SKIP: only a software adapter is available ({})", info.name);
-        return;
-    }
     // The shaders as the game registers them (`embedded://sta64/render/*.wesl`).
     embedded_asset!(app, "rock.wesl");
     embedded_asset!(app, "planet.wesl");
@@ -125,8 +120,28 @@ fn rock_planet_and_nebula_pipelines_build() {
                 })),
             ));
             commands.spawn((
-                Mesh3d(mesh),
+                Mesh3d(mesh.clone()),
                 MeshMaterial3d(nebulae.add(NebulaMaterial { params: NebulaParams::default(), noise: None, envelope: None })),
+            ));
+            // The nebula with its extras on: the core's pulse and ring, the swirl and
+            // lightning (RND-05). Their branches are uniform-driven, so this is the same
+            // pipeline, but it runs them.
+            let extras = NebulaParams {
+                pulse: Vec4::new(0.5, 1.0, 1.0, 0.0),
+                ring: Vec4::new(0.85, 0.55, 0.3, 0.25),
+                rpatch: Vec4::new(0.4, 0.35, 0.15, 0.6),
+                ring_a: Vec4::new(0.3, 0.9, 0.8, 0.0),
+                ring_b: Vec4::new(0.5, 0.4, 1.0, 0.0),
+                ring_c: Vec4::new(0.9, 0.4, 1.0, 0.0),
+                ring_d: Vec4::new(0.6, 1.0, 0.4, 0.0),
+                swirl: Vec4::new(24.0, 1.0, 1.0, 2.0),
+                flash0: Vec4::new(0.0, 0.0, 0.0, 1.0),
+                flash_c: Vec4::new(1.0, 0.9, 0.8, 0.01),
+                ..NebulaParams::default()
+            };
+            commands.spawn((
+                Mesh3d(mesh),
+                MeshMaterial3d(nebulae.add(NebulaMaterial { params: extras, noise: None, envelope: None })),
             ));
         },
     );
@@ -135,6 +150,20 @@ fn rock_planet_and_nebula_pipelines_build() {
     app.cleanup();
     for _ in 0..30 {
         app.update();
+    }
+    // The adapter lives in the render world, which has it once the first frames have run.
+    let info = app.world().get_resource::<bevy::render::renderer::RenderAdapterInfo>().cloned().or_else(|| {
+        app.get_sub_app(bevy::render::RenderApp)
+            .and_then(|r| r.world().get_resource::<bevy::render::renderer::RenderAdapterInfo>().cloned())
+    });
+    let Some(info) = info else {
+        eprintln!("SKIP: no render adapter");
+        return;
+    };
+    eprintln!("GPU adapter: {} ({:?}, {:?})", info.name, info.device_type, info.backend);
+    if crate::bench::frames::is_software_adapter(info.device_type, &info.name) {
+        eprintln!("SKIP: only a software adapter is available ({})", info.name);
+        return;
     }
     let errors = ERRORS.lock().unwrap().clone();
     assert!(errors.is_empty(), "shader/pipeline ERROR events:\n{}", errors.join("\n"));

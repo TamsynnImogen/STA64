@@ -7,6 +7,7 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 ## Needs your check
 
+- [?] Nebula extras (RND-05), `cargo run -- --map <name>` on a map with the class: latinum's core pulses and its ring about the core tints in patches that go round teal, violet, pink and green; mnebula7 (crimson) flickers with lightning, a flash lighting the cloud about it for under a second; mnebula10's gas wanders slow loops (swirl); other nebulae look as before
 - [?] Hull lighting with Refit's look (RND-06): in the model viewer or a map, ships are lit by the key and fill with a highlight, rim light, team colour, glowing windows and (Borg) normal maps; **H** switches to the previous Bevy lighting and back, to compare; T still changes the team colour in the viewer
 - [?] Post FX (RND-14), opt-in: `cargo run -- --map <name> --postfx bloom,smaa` (names: bloom smaa fxaa vignette chromatic exposure aces reinhard cinematic); F8 cycles off / bloom / cinematic; with no flag the look is exactly as before
 - [?] Selection overlays (RND-08): `cargo run -- --map <name>`, select ships: team-coloured ring, green hull bar (and blue shield bar if any) above, faint line to the move target after a move order; all gone on deselect
@@ -52,7 +53,8 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
   - [x] Recipe surfaces (Surfaces.asi): planets PB_CLSS*, moons Mdmoon, asteroid rock Master1/2 — 7c8c421
   - [ ] Moon cracks' ravine parallax (Refit rock shader), moon glow shell and nimbus
   - [x] Volumetric nebulae (Nebulae.asi): ray-marched gas fields per class — e4eb7c7
-  - [ ] Nebulae extras: lightning (mnebula7), ring/pulse (latinum), swirl (mnebula10), ship shadows, baked volume + temporal smoothing for speed
+  - [?] Nebulae extras: lightning (mnebula7), ring/pulse (latinum), swirl (mnebula10) — RND-05, #141
+  - [ ] Nebulae extras still to do: ship shadows, baked volume + temporal smoothing for speed
   - [x] Background objects (suns, wrecks, gates) drawn about the eye — dee4e4b
   - [x] Planet glow lights and nebula lights (Refit `lights.rs`) — 8a95cee
   - [ ] Planet city lights (need colony population)

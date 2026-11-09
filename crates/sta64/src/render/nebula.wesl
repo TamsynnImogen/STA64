@@ -6,8 +6,11 @@
 // fringe, knots and lanes, a brighter core, two hues and a glow, the key light
 // scattered forward, the near fade and edge-on dimming, flow that churns the gas,
 // and optical depth that dims what lies behind. The march stops at the scene's depth.
-// Not ported yet: lightning, rings, pulse, swirl, ship shadows, temporal smoothing,
-// the baked volume (the gas is evaluated directly at each step).
+// RND-05 adds the core's pulse, the ring's colours about the core, the swirl (the gas
+// wanders round two circles about its place) and the lightning (up to four flashes
+// that light the gas about them), as Refit's gas_colour and march do.
+// Not ported yet: ship shadows, temporal smoothing, the baked volume (the gas is
+// evaluated directly at each step).
 
 struct NebulaParams {
     eye: vec4<f32>,       // xyz the camera; w the near fade (world units)
@@ -32,6 +35,19 @@ struct NebulaParams {
     box_lo: vec4<f32>,    // the field's box, low corner; w the camera's near plane
     box_hi: vec4<f32>,
     cam_fwd: vec4<f32>,   // the camera's forward axis
+    pulse: vec4<f32>,     // x Pulse (0: off); y its phase now (radians); z 1 with lightning
+    ring: vec4<f32>,      // x how much the ring tints (0: off); y where (core profile); z its width; w the colours' phase now
+    rpatch: vec4<f32>,    // x the patches' scale (of the tile); y how much of the ring they cover; z their softness; w the colours' spread
+    ring_a: vec4<f32>,    // rgb the ring's four colours, in turn
+    ring_b: vec4<f32>,
+    ring_c: vec4<f32>,
+    ring_d: vec4<f32>,
+    swirl: vec4<f32>,     // x Swirl (world units; 0: off); y its phases' scale (of the tile); z, w the two circles' phases now
+    flash0: vec4<f32>,    // lightning: xyz where; w how bright now (0: dark)
+    flash1: vec4<f32>,
+    flash2: vec4<f32>,
+    flash3: vec4<f32>,
+    flash_c: vec4<f32>,   // rgb the lightning's colour; w 1 / its radius squared
 };
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> k: NebulaParams;
@@ -133,11 +149,72 @@ fn flow_at(p: vec3<f32>) -> vec3<f32> {
     return clamp((a + b - 1.0) * 1.4142, vec3<f32>(-1.0), vec3<f32>(1.0));
 }
 
+// The swirl's offset at p: the read goes round two circles, the second the other way
+// and 1.618 times as fast, at phases and a size that vary smoothly from place to place,
+// so each speck wanders in loops out of step with its neighbours.
+fn swirl_at(p: vec3<f32>) -> vec3<f32> {
+    let sn = nz(rot(p) * (k.noise.x * k.swirl.y) + k.seed.yzx + vec3<f32>(0.29, 0.61, 0.17)).gba;
+    let a1 = k.swirl.z + sn.x * 6.2832;
+    let a2 = -k.swirl.w + sn.y * 6.2832;
+    let r = saturate(0.35 + sn.z * 0.9) * k.swirl.x;
+    return r * (0.62 * vec3<f32>(cos(a1), 0.4 * sin(a2), sin(a1)) + 0.38 * vec3<f32>(sin(a2), 0.6 * cos(a1), cos(a2)));
+}
+
+// About the core: the pulse brightens and dims it, out of step from one nebula to the
+// next; the ring tints the gas in patches whose colours go round in turn.
+fn core_effects(c_in: vec3<f32>, p: vec3<f32>) -> vec3<f32> {
+    var c = c_in;
+    let e = textureSampleLevel(s_env, s_env_sampler, (p.xz - k.env.xy) * k.env.zw, 0.0);
+    let t = abs(p.y - k.vert.x - (e.b * 2.0 - 1.0) * k.opac.y) / max(e.r * k.vert.y, 1.0);
+    let cp = saturate(e.r) * saturate(1.0 - t);
+    if k.pulse.x > 0.0 {
+        let off = nz(p * (k.noise.x * 0.05)).g * 12.566;
+        c *= 1.0 + k.pulse.x * sin(k.pulse.y + off) * pow(cp, k.core.y * 0.5);
+    }
+    if k.ring.x > 0.0 {
+        var ring = saturate(1.0 - abs(cp - k.ring.y) / k.ring.z);
+        let n = nz(p * (k.noise.x * k.rpatch.x) + vec3<f32>(0.37, 0.11, 0.73)).g;
+        ring *= smoothstep(1.0 - k.rpatch.y - k.rpatch.z, 1.0 - k.rpatch.y + k.rpatch.z, n);
+        let s = fract(k.ring.w + n * k.rpatch.w) * 4.0;
+        let f = fract(s);
+        var a = k.ring_a.rgb;
+        var b = k.ring_b.rgb;
+        if s >= 3.0 {
+            a = k.ring_d.rgb;
+            b = k.ring_a.rgb;
+        } else if s >= 2.0 {
+            a = k.ring_c.rgb;
+            b = k.ring_d.rgb;
+        } else if s >= 1.0 {
+            a = k.ring_b.rgb;
+            b = k.ring_c.rgb;
+        }
+        // A tint, not more light: the gas there takes the colour at its own brightness.
+        let lum = dot(c, vec3<f32>(0.3, 0.5, 0.2));
+        c = mix(c, mix(a, b, smoothstep(0.0, 1.0, f)) * (lum * 1.4), saturate(ring * k.ring.x));
+    }
+    return c;
+}
+
+// The light of the lightning's flashes at p: the gas about each lights up in the
+// lightning's colour. Not shadowed by the gas between, and the key's phase leaves it.
+fn flashes_at(p: vec3<f32>) -> f32 {
+    let d0 = p - k.flash0.xyz;
+    let d1 = p - k.flash1.xyz;
+    let d2 = p - k.flash2.xyz;
+    let d3 = p - k.flash3.xyz;
+    return k.flash0.w * exp(-dot(d0, d0) * k.flash_c.w) + k.flash1.w * exp(-dot(d1, d1) * k.flash_c.w)
+         + k.flash2.w * exp(-dot(d2, d2) * k.flash_c.w) + k.flash3.w * exp(-dot(d3, d3) * k.flash_c.w);
+}
+
 // One step: rgb the light the gas adds over `thick`; a its optical depth.
 fn march_step(p: vec3<f32>, dist: f32, thick: f32, ph: f32) -> vec4<f32> {
     var pa = p;
     if k.fine.z > 0.0 {
         pa = p + flow_at(p) * k.fine.z;
+    }
+    if k.swirl.x > 0.0 {
+        pa += swirl_at(p);
     }
     let v = gas_at(pa);
     if v.x <= 0.002 {
@@ -154,8 +231,15 @@ fn march_step(p: vec3<f32>, dist: f32, thick: f32, ph: f32) -> vec4<f32> {
     let hue = saturate(mix(v.z, dn, k.shape.y));
     let gas = mix(k.gas_a.rgb, k.gas_b.rgb, hue);
     var c = (gas * dn + k.glow.rgb * (dn * dn) * v.w) * v.w * v.y;
+    if k.pulse.x > 0.0 || k.ring.x > 0.0 {
+        c = core_effects(c, p);
+    }
     if k.key.w > 0.0 {
         c *= 1.0 - k.key.w + k.key.w * ph;
+    }
+    if k.pulse.z > 0.5 {
+        let f = flashes_at(p);
+        c += k.flash_c.rgb * f * (dn + 0.15 * f * f);
     }
     let near = saturate((dist - k.eye.w * 0.25) / k.eye.w);
     return vec4<f32>(c * (k.gas_a.w * near * thick * k.vert.w), dn * near * thick * k.opac.x);

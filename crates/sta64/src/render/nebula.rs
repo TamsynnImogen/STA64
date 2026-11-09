@@ -16,7 +16,7 @@ use bevy::render::render_resource::{
     TextureDimension, TextureFormat,
 };
 use bevy::shader::ShaderRef;
-use sta_surface::nebula::{envelope, noise_volume, volume_mips, NebulaRecipe};
+use sta_surface::nebula::{envelope, noise_volume, volume_mips, Lightning, NebulaRecipe};
 use std::sync::{Arc, Mutex};
 
 /// The noise volume's size (Refit's default).
@@ -70,6 +70,19 @@ pub struct NebulaParams {
     pub box_lo: Vec4,
     pub box_hi: Vec4,
     pub cam_fwd: Vec4,
+    pub pulse: Vec4,
+    pub ring: Vec4,
+    pub rpatch: Vec4,
+    pub ring_a: Vec4,
+    pub ring_b: Vec4,
+    pub ring_c: Vec4,
+    pub ring_d: Vec4,
+    pub swirl: Vec4,
+    pub flash0: Vec4,
+    pub flash1: Vec4,
+    pub flash2: Vec4,
+    pub flash3: Vec4,
+    pub flash_c: Vec4,
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Clone, Debug)]
@@ -126,6 +139,13 @@ pub struct NebulaField {
     reach: f32,
     /// The envelope's extent, for the edge-on dimming's path limit.
     span: f32,
+    /// The domes' height, the lightning's vertical spread.
+    dome: f32,
+    /// Where the class's nebulae sit (Bevy space), for the lightning to strike among.
+    centres: Vec<[f32; 3]>,
+    lightning: Lightning,
+    /// The wall clock at the last update, for the lightning's step.
+    last: f32,
 }
 
 pub struct NebulaPlugin;
@@ -227,6 +247,8 @@ pub fn spawn_field(
     let lo = Vec3::new(x0, env.ey - half, z0);
     let hi = Vec3::new(x1, env.ey + half, z1);
     let r = &recipe;
+    // A class's lightning is its own sequence, the same on every run of a seeded clock.
+    let seed = pos.iter().flatten().fold(0x811c_9dc5u32, |h, x| (h ^ x.to_bits()).wrapping_mul(0x0100_0193));
     let params = NebulaParams {
         eye: Vec4::new(0.0, 0.0, 0.0, r.near_fade),
         gas_a: Vec3::from(r.gas_a).extend(r.brightness),
@@ -250,6 +272,19 @@ pub fn spawn_field(
         box_lo: lo.extend(1.0),
         box_hi: hi.extend(0.0),
         cam_fwd: Vec4::NEG_Z,
+        pulse: Vec4::new(r.pulse, 0.0, if r.lightning > 0.0 { 1.0 } else { 0.0 }, 0.0),
+        ring: Vec4::new(r.ring[0], r.ring[1], r.ring[2], 0.0),
+        rpatch: Vec4::from(r.ring_patch),
+        ring_a: Vec3::from(r.ring_cols[0]).extend(0.0),
+        ring_b: Vec3::from(r.ring_cols[1]).extend(0.0),
+        ring_c: Vec3::from(r.ring_cols[2]).extend(0.0),
+        ring_d: Vec3::from(r.ring_cols[3]).extend(0.0),
+        swirl: Vec4::new(r.swirl, r.swirl_scale, 0.0, 0.0),
+        flash0: Vec4::ZERO,
+        flash1: Vec4::ZERO,
+        flash2: Vec4::ZERO,
+        flash3: Vec4::ZERO,
+        flash_c: Vec3::from(r.lightning_colour).extend(1.0 / (r.lightning_size * reach).powi(2).max(1e-6)),
     };
     let material = materials.add(NebulaMaterial {
         params,
@@ -269,6 +304,10 @@ pub fn spawn_field(
             recipe,
             reach,
             span: (x1 - x0) + (z1 - z0),
+            dome,
+            centres: pos.to_vec(),
+            lightning: Lightning::new(seed),
+            last: -1.0,
         },
     ));
 }
@@ -277,7 +316,7 @@ pub fn spawn_field(
 fn update(
     camera: Query<(&GlobalTransform, &Projection), crate::map::MainCamera>,
     lights: Query<(&GlobalTransform, &DirectionalLight)>,
-    fields: Query<&NebulaField>,
+    mut fields: Query<&mut NebulaField>,
     mut materials: ResMut<Assets<NebulaMaterial>>,
     clock: Res<crate::clock::AnimClock>,
 ) {
@@ -293,7 +332,8 @@ fn update(
         .unwrap_or(Vec3::Y);
     let fwd = cam.forward().as_vec3();
     let t = clock.wall() as f32;
-    for f in &fields {
+    for mut f in &mut fields {
+        let f = &mut *f;
         let Some(mut m) = materials.get_mut(&f.material) else { continue };
         let r = &f.recipe;
         let p = &mut m.params;
@@ -311,6 +351,22 @@ fn update(
         let path = if fwd.y.abs() > 1e-3 { (2.0 * p.vert.y / fwd.y.abs()).min(f.span) } else { f.span };
         let s = if path > rf && r.opacity <= 0.0 { (rf / path).powf(r.edge_dim) } else { 1.0 };
         p.vert.w = s / f.reach;
+        // Motion on the clock: the core's pulse, the ring's colours, the swirl's circles.
+        p.pulse.y = r.pulse_phase(t);
+        p.ring.w = r.ring_phase(t);
+        let [s1, s2] = r.swirl_phases(t);
+        p.swirl.z = s1;
+        p.swirl.w = s2;
+        // Lightning: the flashes now (none on the first frame or after a long gap).
+        if r.lightning > 0.0 {
+            let dt = if f.last >= 0.0 && t > f.last { t - f.last } else { 0.0 };
+            f.last = t;
+            let fl = f.lightning.step(r, &f.centres, f.reach, f.dome, t, dt);
+            p.flash0 = Vec4::from(fl[0]);
+            p.flash1 = Vec4::from(fl[1]);
+            p.flash2 = Vec4::from(fl[2]);
+            p.flash3 = Vec4::from(fl[3]);
+        }
     }
 }
 

@@ -56,6 +56,31 @@ pub struct NebulaRecipe {
     pub edge_dim: f32,
     pub extent: f32,
     pub height: f32,
+    /// Pulse: how far the core brightens and dims (0: off), its speed (cycles a
+    /// second) and how far the speed wanders.
+    pub pulse: f32,
+    pub pulse_speed: f32,
+    pub pulse_wander: f32,
+    /// Ring about the core: how far it tints (0: off), where (core profile), its width.
+    pub ring: [f32; 3],
+    /// Its patches: scale (of the tile), how much of the ring they cover, their
+    /// softness, the colours' spread.
+    pub ring_patch: [f32; 4],
+    /// Seconds for its colours to go round once.
+    pub ring_cycle: f32,
+    /// Its four colours, in turn.
+    pub ring_cols: [[f32; 3]; 4],
+    /// Swirl: how far the gas wanders about its place (world units), its phases'
+    /// scale (of the tile), the seconds one loop takes.
+    pub swirl: f32,
+    pub swirl_scale: f32,
+    pub swirl_period: f32,
+    /// Lightning: flashes a minute per nebula (0: none), a flash's size (of the
+    /// reach), its brightness and colour.
+    pub lightning: f32,
+    pub lightning_size: f32,
+    pub lightning_bright: f32,
+    pub lightning_colour: [f32; 3],
 }
 
 impl NebulaRecipe {
@@ -127,7 +152,116 @@ impl NebulaRecipe {
             edge_dim: one("EdgeOnDim", 0.5),
             extent: one("Extent", 1.3),
             height: one("Height", 3.0),
+            pulse: one("Pulse", 0.0),
+            pulse_speed: one("PulseSpeed", 0.5),
+            pulse_wander: one("PulseWander", 0.5),
+            ring: [one("Ring", 0.0), one("RingAt", 0.4), one("RingWidth", 0.3).max(0.01)],
+            ring_patch: [one("RingScale", 0.35), one("RingPatch", 0.5), one("RingSoftness", 0.15), one("RingSpread", 0.5)],
+            ring_cycle: one("RingCycle", 6.0).max(0.1),
+            ring_cols: [rgb("RingA"), rgb("RingB"), rgb("RingC"), rgb("RingD")],
+            swirl: one("Swirl", 0.0).max(0.0),
+            swirl_scale: one("SwirlScale", 1.0),
+            swirl_period: one("SwirlPeriod", 40.0).max(1.0),
+            lightning: one("Lightning", 0.0),
+            lightning_size: one("LightningSize", 0.3),
+            lightning_bright: one("LightningBrightness", 1.0),
+            lightning_colour: {
+                let c = rgb("LightningColour");
+                if c.iter().sum::<f32>() <= 0.0 { [1.0, 0.92, 0.8] } else { c }
+            },
         }
+    }
+
+    /// The pulse's phase (radians) at `sec`: the speed wanders as
+    /// `1 + wander sin(0.37 s) cos(0.13 s)`, and this is its integral in closed form,
+    /// so it is a function of the time alone, not of how the frames fell.
+    pub fn pulse_phase(&self, sec: f32) -> f32 {
+        let (s, w) = (sec as f64, self.pulse_wander as f64);
+        let wander = 0.5 * w * ((1.0 - (s * 0.5).cos()) / 0.5 + (1.0 - (s * 0.24).cos()) / 0.24);
+        (std::f64::consts::TAU * (self.pulse_speed as f64 * (s + wander)).rem_euclid(1.0)) as f32
+    }
+
+    /// The ring colours' phase (0..1) at `sec`.
+    pub fn ring_phase(&self, sec: f32) -> f32 {
+        (sec / self.ring_cycle).rem_euclid(1.0)
+    }
+
+    /// The swirl's two circles' phases (radians) at `sec`, the second the other way
+    /// round in the shader and 1.618 times as fast.
+    pub fn swirl_phases(&self, sec: f32) -> [f32; 2] {
+        let t = std::f32::consts::TAU;
+        [t * (sec / self.swirl_period).rem_euclid(1.0), t * (sec * 1.618_034 / self.swirl_period).rem_euclid(1.0)]
+    }
+}
+
+/// A flash's brightness `t` seconds after it starts: three flickers, 65 ms half-lives.
+pub fn flicker(t: f32) -> f32 {
+    const AT: [f32; 3] = [0.0, 0.12, 0.3];
+    const AMP: [f32; 3] = [1.0, 0.6, 0.85];
+    let mut s = 0.0;
+    for i in 0..3 {
+        let u = t - AT[i];
+        if (0.0..0.5).contains(&u) {
+            s += AMP[i] * (-u * 15.0).exp2();
+        }
+    }
+    s
+}
+
+/// How long a flash lasts.
+pub const FLASH_SECS: f32 = 0.8;
+
+/// One class's lightning: up to four flashes at once, scheduled as Nebulae.asi's.
+#[derive(Debug, Clone)]
+pub struct Lightning {
+    seed: u32,
+    pos: [[f32; 3]; 4],
+    t0: [f32; 4],
+    amp: [f32; 4],
+}
+
+impl Lightning {
+    pub fn new(seed: u32) -> Lightning {
+        Lightning { seed, pos: [[0.0; 3]; 4], t0: [0.0; 4], amp: [0.0; 4] }
+    }
+
+    fn rnd(&mut self) -> f32 {
+        self.seed = hash32(self.seed.wrapping_add(0x6d2b_79f5));
+        (self.seed >> 8) as f32 * (1.0 / 16_777_216.0)
+    }
+
+    /// Advance to `now` (`dt` since the last call, 0 if there was none or it was long
+    /// ago): maybe strike a new flash among the nebulae at `centres` (each within
+    /// `reach`, `half_height` high), and return the four flashes as xyz and how bright
+    /// each is now (0: dark).
+    pub fn step(&mut self, r: &NebulaRecipe, centres: &[[f32; 3]], reach: f32, half_height: f32, now: f32, dt: f32) -> [[f32; 4]; 4] {
+        let rs = [self.rnd(), self.rnd(), self.rnd(), self.rnd(), self.rnd(), self.rnd()];
+        let mut out = [[0.0; 4]; 4];
+        for (i, o) in out.iter_mut().enumerate() {
+            if self.amp[i] > 0.0 {
+                let a = now - self.t0[i];
+                if !(0.0..=FLASH_SECS).contains(&a) {
+                    self.amp[i] = 0.0;
+                } else {
+                    let p = self.pos[i];
+                    *o = [p[0], p[1], p[2], self.amp[i] * flicker(a)];
+                }
+            }
+        }
+        if r.lightning > 0.0
+            && !centres.is_empty()
+            && dt > 0.0
+            && dt <= 0.5
+            && rs[0] < r.lightning / 60.0 * centres.len() as f32 * dt
+            && let Some(i) = (0..4).find(|&i| self.amp[i] <= 0.0)
+        {
+            let c = centres[((rs[1] * centres.len() as f32) as usize) % centres.len()];
+            let (a, d) = (rs[2] * std::f32::consts::TAU, rs[3].sqrt() * reach * 0.6);
+            self.pos[i] = [c[0] + d * a.cos(), c[1] + (rs[4] * 2.0 - 1.0) * half_height * 0.45, c[2] + d * a.sin()];
+            self.t0[i] = now;
+            self.amp[i] = r.lightning_bright * (0.6 + 0.4 * rs[5]);
+        }
+        out
     }
 }
 
@@ -396,6 +530,97 @@ pub fn envelope(r: &NebulaRecipe, radius: f32, pos: &[[f32; 3]]) -> Envelope {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bundled_recipes_carry_their_extras() {
+        let l = NebulaRecipe::parse(include_str!("../nebulae/latinum.ini"));
+        assert!(l.pulse > 0.0 && l.ring[0] > 0.0 && l.ring_cols[0] == [70.0 / 255.0, 230.0 / 255.0, 200.0 / 255.0]);
+        assert_eq!(l.ring_cycle, 5.0);
+        let m7 = NebulaRecipe::parse(include_str!("../nebulae/mnebula7.ini"));
+        assert_eq!((m7.lightning, m7.lightning_size, m7.lightning_bright), (7.5, 0.6, 3.0));
+        assert!(m7.lightning_colour[0] > 0.99 && m7.pulse == 0.0 && m7.swirl == 0.0);
+        let m10 = NebulaRecipe::parse(include_str!("../nebulae/mnebula10.ini"));
+        assert_eq!((m10.swirl, m10.swirl_scale, m10.swirl_period), (24.0, 1.0, 30.0));
+        // Unset: the defaults, and lightning's colour a warm white.
+        let d = NebulaRecipe::parse("");
+        assert_eq!((d.pulse, d.ring[0], d.swirl, d.lightning), (0.0, 0.0, 0.0, 0.0));
+        assert_eq!(d.lightning_colour, [1.0, 0.92, 0.8]);
+    }
+
+    #[test]
+    fn pulse_is_the_integral_of_its_wandering_speed() {
+        let r = NebulaRecipe::parse("[Nebula]\nPulse=1\nPulseSpeed=0.6\nPulseWander=0.5\n");
+        // Numerically integrate speed(t) = s (1 + w sin(0.37 t) cos(0.13 t)).
+        let (mut ph, dt) = (0.0f64, 0.001f64);
+        let mut t = 0.0f64;
+        while t < 20.0 {
+            ph += 0.6 * (1.0 + 0.5 * (t * 0.37).sin() * (t * 0.13).cos()) * dt;
+            t += dt;
+        }
+        let want = (ph.rem_euclid(1.0) * std::f64::consts::TAU) as f32;
+        assert!((r.pulse_phase(20.0) - want).abs() < 0.01, "{} vs {want}", r.pulse_phase(20.0));
+        assert_eq!(r.pulse_phase(0.0), 0.0);
+        assert!((0.0..std::f32::consts::TAU).contains(&r.pulse_phase(1234.5)));
+    }
+
+    #[test]
+    fn ring_and_swirl_phases_go_round_once_a_period() {
+        let r = NebulaRecipe::parse("[Nebula]\nRingCycle=5\nSwirlPeriod=30\n");
+        assert!((r.ring_phase(2.5) - 0.5).abs() < 1e-6 && r.ring_phase(5.0) < 1e-6);
+        let [a, b] = r.swirl_phases(15.0);
+        assert!((a - std::f32::consts::PI).abs() < 1e-4);
+        assert!((b - (std::f32::consts::TAU * 0.809_017).rem_euclid(std::f32::consts::TAU)).abs() < 1e-3);
+    }
+
+    #[test]
+    fn flicker_flashes_three_times_and_dies() {
+        assert!((flicker(0.0) - 1.0).abs() < 1e-6);
+        assert!(flicker(0.07) < 0.5 && flicker(0.12) > 0.55, "second flash");
+        assert!(flicker(0.3) > 0.8, "third");
+        assert_eq!(flicker(-0.1), 0.0);
+        assert!(flicker(0.79) < 0.01 && flicker(0.81) == 0.0);
+    }
+
+    #[test]
+    fn lightning_strikes_inside_the_field_and_fades() {
+        let r = NebulaRecipe::parse("[Nebula]\nLightning=60\nLightningBrightness=2\n");
+        let centres = [[100.0, 0.0, 0.0], [-500.0, 10.0, 300.0]];
+        let mut l = Lightning::new(7);
+        let (mut now, mut seen, mut max_lit) = (0.0f32, 0, 0);
+        while now < 30.0 {
+            let fl = l.step(&r, &centres, 200.0, 50.0, now, 1.0 / 30.0);
+            max_lit = max_lit.max(fl.iter().filter(|f| f[3] > 0.0).count());
+            for f in fl.iter().filter(|f| f[3] > 0.0) {
+                seen += 1;
+                let near = centres.iter().any(|c| {
+                    ((f[0] - c[0]).powi(2) + (f[2] - c[2]).powi(2)).sqrt() <= 200.0 * 0.6 + 1e-2 && (f[1] - c[1]).abs() <= 50.0 * 0.45 + 1e-3
+                });
+                assert!(near, "{f:?}");
+                assert!(f[3] <= 2.0 + 1e-4);
+            }
+            now += 1.0 / 30.0;
+        }
+        assert!(seen > 10 && (1..=4).contains(&max_lit), "{seen} {max_lit}");
+        // Without lightning nothing strikes.
+        let off = NebulaRecipe::parse("");
+        let mut l2 = Lightning::new(1);
+        for i in 0..300 {
+            assert!(l2.step(&off, &centres, 200.0, 50.0, i as f32 / 30.0, 1.0 / 30.0).iter().all(|f| f[3] == 0.0));
+        }
+        // Every flash dies out once the clock passes its life.
+        assert!(l.step(&off, &centres, 200.0, 50.0, now + 5.0, 0.0).iter().all(|f| f[3] == 0.0));
+    }
+
+    #[test]
+    fn lightning_is_deterministic_per_seed() {
+        let r = NebulaRecipe::parse("[Nebula]\nLightning=30\n");
+        let run = |seed| {
+            let mut l = Lightning::new(seed);
+            (0..600).map(|i| l.step(&r, &[[0.0; 3]], 100.0, 10.0, i as f32 / 30.0, 1.0 / 30.0)).collect::<Vec<_>>()
+        };
+        assert_eq!(run(3), run(3));
+        assert_ne!(run(3), run(4));
+    }
 
     #[test]
     fn noise_tiles_and_is_centred() {
