@@ -56,6 +56,9 @@ sha2 = "0.11.1"
 # .sta signatures: Ed25519 (BSD-3-Clause) and OS randomness for new keys.
 ed25519-dalek = "3.0.0"
 getrandom = "0.4.3"
+# Mod manifests (manifest.toml) and their version requirements.
+toml = "1.2.1"
+semver = "1.0.28"
 
 # Bevy is slow unoptimised; optimise dependencies even in dev builds.
 [profile.dev.package."*"]

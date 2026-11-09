@@ -5488,9 +5488,11 @@ dependencies = [
  "ed25519-dalek",
  "getrandom 0.4.3",
  "ruzstd",
+ "semver",
  "sha2",
  "sta_fpq",
  "thiserror 2.0.21",
+ "toml",
 ]
 
 [[package]]
