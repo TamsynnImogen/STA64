@@ -39,9 +39,9 @@ finished 1800 ticks later.
 25. Expect 1 stations on team 1
 26. Wait up to 20 seconds until 2 stations are on team 1
 27. Run 1 ticks
-28. Expect mark "build.start obj=rig what=fx_station" at tick 1696
+28. Expect mark "build.start obj=rig what=fx_station" at tick 1686
 29. Run until tick 3900
-30. Expect mark "built obj=rig" at tick 3496
+30. Expect mark "built obj=rig" at tick 3486
 31. Expect 2 stations on team 1
 32. Expect player 1 resource dilithium at tick 3900 is 300
 33. Expect "#5" is within 1 of -1600 0 0
