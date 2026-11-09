@@ -27,6 +27,7 @@ pub mod economy;
 pub mod event;
 pub mod fake;
 pub mod movement;
+pub mod present;
 pub mod production;
 pub mod replay;
 pub mod setup;

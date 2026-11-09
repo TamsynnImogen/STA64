@@ -16,7 +16,7 @@ use std::sync::Arc;
 use sta_content::{ContentDb, Region, StartPos, Warning};
 use sta_core::{ContentKey, EntityId, Fixed, PlayerId, Vec3};
 
-use crate::command::Edit;
+use crate::command::{Edit, Subsystem};
 use crate::setup::GameSetup;
 use crate::view::UnitFlags;
 use crate::world::{Entity, NEUTRAL};
@@ -109,6 +109,13 @@ impl Sim {
                 true
             }
             Edit::Weapons(id, on) => self.set_flag(id, UnitFlags::WEAPONS_OFF, !on),
+            Edit::Present(ref p) => {
+                // Changes nothing; every client and replay sees the event.
+                self.events.push(SimEvent::Present(p.clone()));
+                true
+            }
+            Edit::Subsystem(id, Subsystem::Engines, on) => self.apply_edit(from, &Edit::Engines(id, on)),
+            Edit::Subsystem(id, Subsystem::Weapons, on) => self.apply_edit(from, &Edit::Weapons(id, on)),
             // The rest land with the package that owns what they change.
             _ => false,
         }
@@ -346,6 +353,32 @@ mod tests {
         assert!(sim.unit(id).is_none());
         let out = WorldSource::step(&mut sim, &[e(0, Edit::Heal(id))]);
         assert!(out.events.iter().any(|x| matches!(x, SimEvent::Rejected { .. })), "no such unit");
+    }
+
+    #[test]
+    fn present_passes_through_and_mission_edits() {
+        use crate::command::AlertState;
+        use crate::present::{Presentation, Spot};
+        let s = setup(MapDef::empty());
+        let db = Arc::clone(&s.content);
+        let mut sim = Sim::from_setup(&s);
+        WorldSource::step(&mut sim, &[spawn(0, &db, "fx_frigate", 1, v(0, 0, 0))]);
+        let id = EntityId(1);
+        let script = |seq, e| cmd(PlayerId::SCRIPT, seq, CommandKind::Edit(e));
+        let shot = Presentation::Shot { from: Spot::Entity(id), at: Spot::Path("intro".into()), seconds: Fixed::from_int(3) };
+        let out = WorldSource::step(
+            &mut sim,
+            &[script(0, Edit::Present(shot.clone())), script(1, Edit::Subsystem(id, Subsystem::Engines, false)), script(2, Edit::Alert(id, AlertState::Red))],
+        );
+        assert!(out.events.contains(&SimEvent::Present(shot)), "{:?}", out.events);
+        assert!(sim.unit(id).unwrap().flags.contains(UnitFlags::ENGINES_OFF), "Subsystem(Engines) acts as Engines");
+        assert!(out.events.contains(&SimEvent::Rejected { player: PlayerId::SCRIPT, seq: 2 }), "Alert waits for its package");
+        WorldSource::step(&mut sim, &[script(0, Edit::Subsystem(id, Subsystem::Weapons, false))]);
+        assert!(sim.unit(id).unwrap().flags.contains(UnitFlags::WEAPONS_OFF));
+        // Edits are for scripts and the bench: a player cannot present.
+        let out = WorldSource::step(&mut sim, &[cmd(PlayerId(0), 0, CommandKind::Edit(Edit::Present(Presentation::StopMusic)))]);
+        assert!(!out.events.iter().any(|x| matches!(x, SimEvent::Present(_))));
+        assert!(out.events.contains(&SimEvent::Rejected { player: PlayerId(0), seq: 0 }));
     }
 
     #[test]

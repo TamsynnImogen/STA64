@@ -30,4 +30,7 @@ pub enum SimEvent {
     /// A command that was ignored, by its `(player, seq)`.
     Rejected { player: PlayerId, seq: u32 },
     PlayerEliminated { player: PlayerId },
+    /// A mission's presentation, passed through from
+    /// [`Edit::Present`](crate::command::Edit::Present) the tick it applied.
+    Present(crate::present::Presentation),
 }
