@@ -39,10 +39,12 @@ impl Plugin for InputPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<select::Drag>()
             .init_resource::<orders::OrderTargets>()
+            .init_resource::<orders::OrderKeys>()
+            .init_resource::<orders::Aim>()
             .add_systems(Startup, select::spawn_select_box)
             .add_systems(
                 Update,
-                (select::select, orders::order, orders::prune_targets)
+                (orders::aim, select::select, orders::order, orders::prune_targets)
                     .chain()
                     .in_set(crate::app::GameSet::Input)
                     .run_if(resource_exists::<crate::sim_link::SimLink>),
