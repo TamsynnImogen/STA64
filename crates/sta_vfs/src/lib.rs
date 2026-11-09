@@ -22,7 +22,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub mod convert;
+pub mod manifest;
 pub mod mods;
+pub mod order;
 pub mod sta;
 pub mod sta_sign;
 pub mod sta_write;

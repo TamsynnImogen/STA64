@@ -12,3 +12,5 @@ ruzstd.workspace = true
 sha2.workspace = true
 ed25519-dalek.workspace = true
 getrandom.workspace = true
+toml.workspace = true
+semver.workspace = true
