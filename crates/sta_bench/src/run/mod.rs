@@ -71,7 +71,7 @@ impl RunConfig {
             .into_iter()
             .collect();
         RunConfig {
-            content: Arc::new(sta_content::fake::db()),
+            content: Arc::new(fake_content()),
             aliases,
             maps,
             scene_dir: bench.join("scenes"),
@@ -566,5 +566,31 @@ fn run_extra(b: &mut Bench, text: &str, cap: Tick) -> Option<(Status, String)> {
             run_ticks(b, n)
         }
         check::Extra::SaveSnapshot(f) => verdict(b.save_snapshot(&f)),
+        check::Extra::SaveReplay(f) => verdict(b.save_replay(&f)),
     })
+}
+
+/// `fake::db()` plus a construction rig (`fx_rig`) and with `pay_on_queue` on:
+/// what the construction scenarios build with. The rig deploys any of the
+/// fake content's stations.
+pub fn fake_content() -> ContentDb {
+    use sta_content::{MoveStats, UnitDef};
+    let fake = sta_content::fake::db();
+    let mut features = fake.features().clone();
+    features.pay_on_queue = true;
+    let mut rig = UnitDef::new("fx_rig", "constructionrig");
+    rig.race = "fx".into();
+    rig.movement = MoveStats::from_f32(140.0, 1.0, 1.0, 1.0, 0.2);
+    rig.hull = Fixed::from_int(100);
+    let mut b = ContentDb::builder()
+        .profile(fake.profile())
+        .features(features)
+        .unit(rig);
+    for w in fake.weapons() {
+        b = b.weapon(w.clone());
+    }
+    for u in fake.units() {
+        b = b.unit(u.clone());
+    }
+    b.build().expect("fake content plus a rig is consistent")
 }

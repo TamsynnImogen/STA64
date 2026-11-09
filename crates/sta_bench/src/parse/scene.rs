@@ -77,6 +77,9 @@ pub struct SceneSection {
     pub profile: Option<String>,
     /// STA64: `Start=snapshot:<file>` / `Start=replay:<file>`.
     pub start: Option<Start>,
+    /// STA64: `Allies=1,2`: these players share the first one's team (each
+    /// `Team=N` is otherwise a team of its own).
+    pub allies: Vec<u8>,
 }
 
 impl Default for SceneSection {
@@ -97,6 +100,7 @@ impl Default for SceneSection {
             map_objects: None,
             profile: None,
             start: None,
+            allies: Vec::new(),
         }
     }
 }
@@ -530,6 +534,13 @@ fn scene_section(e: &mut Entries, w: &mut Vec<ParseWarning>) -> Result<SceneSect
         _ => Err("expected keep or strip".into()),
     })?;
     s.profile = e.string("Profile", w);
+    s.allies = e
+        .get("Allies", w, |v| {
+            v.split(',')
+                .map(|t| t.trim().parse::<u8>().map_err(|e| e.to_string()))
+                .collect::<Result<Vec<u8>, String>>()
+        })?
+        .unwrap_or_default();
     s.start = e.get("Start", w, |v| match v.split_once(':') {
         Some((kind, file)) if !file.is_empty() && kind.eq_ignore_ascii_case("snapshot") => {
             Ok(Start::Snapshot(file.to_owned()))

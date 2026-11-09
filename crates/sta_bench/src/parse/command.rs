@@ -154,6 +154,8 @@ pub enum BenchCommand {
         who: Vec<String>,
         to: Target,
         warp: bool,
+        /// Runner extension: append to the unit's waypoints instead of replacing them.
+        queue: bool,
     },
     Attack {
         who: String,
@@ -453,19 +455,27 @@ fn parse_words(w: &[&str], text: &str) -> Result<BenchCommand, String> {
         }
 
         "goto" | "move" => {
-            let u = "goto <name>[,<name>...] <object | x y z> [warp]";
+            let u = "goto <name>[,<name>...] <object | x y z> [warp] [queue]";
             if a.len() < 2 {
                 return Err(usage(u));
             }
             let who = names(a[0])?;
             let (to, used) = target(&a[1..], u)?;
             let rest = &a[1 + used..];
-            let warp = match rest {
-                [] => false,
-                [w] if w.eq_ignore_ascii_case("warp") => true,
-                [other, ..] => return Err(format!("{}; unexpected `{other}`", usage(u))),
-            };
-            BenchCommand::Goto { who, to, warp }
+            let (mut warp, mut queue) = (false, false);
+            for w in rest {
+                match w.to_ascii_lowercase().as_str() {
+                    "warp" => warp = true,
+                    "queue" => queue = true,
+                    _ => return Err(format!("{}; unexpected `{w}`", usage(u))),
+                }
+            }
+            BenchCommand::Goto {
+                who,
+                to,
+                warp,
+                queue,
+            }
         }
         "attack" => {
             arity(a, 2, 2, "attack <name> <target>")?;
@@ -815,7 +825,8 @@ mod tests {
             BenchCommand::Goto {
                 who: vec!["a".into(), "b".into(), "c".into()],
                 to: Target::Point([1.0, 2.0, 3.0]),
-                warp: true
+                warp: true,
+                queue: false
             }
         );
         assert_eq!(
@@ -823,10 +834,20 @@ mod tests {
             BenchCommand::Goto {
                 who: vec!["a".into()],
                 to: obj("planet"),
-                warp: false
+                warp: false,
+                queue: false
             }
         );
         assert_eq!(cmd("move a planet"), cmd("goto a planet"));
+        assert_eq!(
+            cmd("goto a 1 2 3 queue"),
+            BenchCommand::Goto {
+                who: vec!["a".into()],
+                to: Target::Point([1.0, 2.0, 3.0]),
+                warp: false,
+                queue: true
+            }
+        );
         assert_eq!(
             cmd("attack shooter target"),
             BenchCommand::Attack {

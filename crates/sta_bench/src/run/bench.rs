@@ -7,7 +7,7 @@ use std::sync::Arc;
 use sta_content::MapDef;
 use sta_core::{ContentKey, EntityId, Fixed, PlayerId, TICK_HZ, TeamId, Tick, Vec3};
 use sta_sim::command::{Command, CommandKind, Edit, Order};
-use sta_sim::replay::Replay;
+use sta_sim::replay::{ControlRec, Logged, Replay, SeatRec};
 use sta_sim::setup::{Control, GameOptions, GameSetup, PlayerSetup};
 use sta_sim::view::WorldView;
 use sta_sim::world::NEUTRAL;
@@ -26,6 +26,18 @@ struct ReplayFeed {
     digests: Vec<(Tick, u64)>,
     next_digest: usize,
 }
+
+/// What a run has done so far, for `Save replay as`: the setup it started
+/// from (empty or named map only), every command that reached the sim and
+/// every scene or `spawn` placement as an `Edit::Spawn` on the tick it was made.
+struct Rec {
+    setup: GameSetup,
+    commands: Vec<Logged>,
+    digests: Vec<(Tick, u64)>,
+}
+
+/// Digest recorded every this many ticks, and at the end.
+const REC_EVERY: Tick = 30;
 
 pub struct Bench {
     pub cfg: Arc<RunConfig>,
@@ -47,6 +59,7 @@ pub struct Bench {
     pause_at: Option<Tick>,
     pub fire_gap: Tick,
     replay: Option<ReplayFeed>,
+    rec: Option<Rec>,
     pub log: Vec<String>,
     logged_once: BTreeSet<String>,
     /// Files the case writes into its report directory.
@@ -84,6 +97,7 @@ impl Bench {
         let s = &scene.scene;
         let content = cfg.content.clone();
         let mut replay_feed = None;
+        let mut rec_setup = None;
         let label;
         let mut log = Vec::new();
 
@@ -139,7 +153,11 @@ impl Bench {
                     .into_iter()
                     .map(|t| PlayerSetup {
                         id: PlayerId(t),
-                        team: TeamId(t),
+                        team: TeamId(if s.allies.contains(&t) {
+                            s.allies[0]
+                        } else {
+                            t
+                        }),
                         race: "bench".into(),
                         control: Control::Idle,
                     })
@@ -152,6 +170,7 @@ impl Bench {
                     options: GameOptions::default(),
                 };
                 let (sim, warnings) = Sim::from_setup_with_warnings(&setup);
+                rec_setup = Some(setup);
                 log.extend(
                     warnings
                         .iter()
@@ -179,6 +198,7 @@ impl Bench {
             pause_at: s.pause.map(|p| p.ticks(TICK_HZ)),
             fire_gap: (scene.marks.fire_gap * f64::from(TICK_HZ)).round() as Tick,
             replay: replay_feed,
+            rec: None,
             log,
             logged_once: BTreeSet::new(),
             artifacts: BTreeMap::new(),
@@ -194,6 +214,11 @@ impl Bench {
         if s.camera.is_some() {
             b.log.push("camera: no renderer at tier 1, ignored".into());
         }
+        b.rec = rec_setup.map(|setup| Rec {
+            digests: vec![(0, b.sim.digest())],
+            setup,
+            commands: Vec::new(),
+        });
         b.place_objects(scene)?;
         Ok(b)
     }
@@ -216,6 +241,7 @@ impl Bench {
                 .sim
                 .spawn_def(key, owner, point(o.pos), heading_of(o.heading))
                 .ok_or_else(|| format!("[Object.{}] {}: sim refused the spawn", o.name, o.odf))?;
+            self.record_spawn(key, owner, point(o.pos), heading_of(o.heading));
             self.names.insert(o.name.clone(), id);
             if o.immortal {
                 self.edit(Edit::Immortal(id, true), format!("immortal {}", o.name));
@@ -319,6 +345,14 @@ impl Bench {
             }
         }
         let batch = std::mem::take(&mut self.pending);
+        if let Some(r) = &mut self.rec {
+            let mut sorted: Vec<&Command> = batch.iter().collect();
+            sorted.sort_by_key(|c| c.sort_key());
+            r.commands.extend(sorted.into_iter().map(|c| Logged {
+                tick,
+                command: c.clone(),
+            }));
+        }
         let out = self.sim.step(&batch);
         for e in out.events {
             if let SimEvent::Rejected { player, seq } = e {
@@ -341,6 +375,11 @@ impl Bench {
                 }
             }
             self.events.push((tick, e));
+        }
+        if let Some(r) = &mut self.rec
+            && out.view.tick.is_multiple_of(REC_EVERY)
+        {
+            r.digests.push((out.view.tick, out.view.digest));
         }
         self.views.push(out.view);
         if let Some(r) = &mut self.replay {
@@ -529,7 +568,12 @@ impl Bench {
                 }
                 format!("selected {}", self.selection.len())
             }
-            C::Goto { who, to, warp } => {
+            C::Goto {
+                who,
+                to,
+                warp,
+                queue,
+            } => {
                 let ids = self.ids(who)?;
                 let to = self.pos_of(to)?;
                 self.order(
@@ -537,7 +581,7 @@ impl Bench {
                     Order::Move {
                         units: ids.clone(),
                         to,
-                        queue: false,
+                        queue: *queue,
                     },
                     format!("goto {}", who.join(",")),
                 );
@@ -624,6 +668,7 @@ impl Bench {
                     .sim
                     .spawn_def(key, owner_of(*team), point(*pos), heading_of(*heading))
                     .ok_or_else(|| "the sim refused the spawn".to_string())?;
+                self.record_spawn(key, owner_of(*team), point(*pos), heading_of(*heading));
                 self.names.insert(name.clone(), id);
                 format!("spawned #{}", id.0)
             }
@@ -791,6 +836,84 @@ impl Bench {
         Ok(format!(
             "snapshot at tick {} -> {}",
             self.sim.tick,
+            path.display()
+        ))
+    }
+
+    /// Log a placement made with `Sim::spawn_def` as the `Edit::Spawn` that
+    /// makes it on a replay, on the tick it happened.
+    fn record_spawn(
+        &mut self,
+        odf: ContentKey,
+        player: PlayerId,
+        pos: Vec3,
+        heading: (Fixed, Fixed),
+    ) {
+        if self.rec.is_none() {
+            return;
+        }
+        let n = self.seq.entry(PlayerId::BENCH).or_insert(0);
+        let seq = *n;
+        *n += 1;
+        let tick = self.sim.tick;
+        let command = Command {
+            player: PlayerId::BENCH,
+            seq,
+            kind: CommandKind::Edit(Edit::Spawn {
+                odf,
+                player,
+                pos,
+                heading,
+            }),
+        };
+        if let Some(r) = &mut self.rec {
+            r.commands.push(Logged { tick, command });
+        }
+    }
+
+    /// Write what has run so far as a replay file under the data directory,
+    /// and play it back from tick 0 to check that it reproduces every digest.
+    pub fn save_replay(&self, file: &str) -> Result<String, String> {
+        let r = self
+            .rec
+            .as_ref()
+            .ok_or("no replay can be recorded from a snapshot or replay start".to_string())?;
+        let end = self.sim.tick;
+        let mut digests = r.digests.clone();
+        if digests.last().map(|d| d.0) != Some(end) {
+            digests.push((end, self.sim.digest()));
+        }
+        let replay = Replay {
+            seam_rev: sta_sim::SEAM_REV,
+            content_hash: r.setup.content.hash(),
+            seed: r.setup.seed,
+            map: (*r.setup.map).clone(),
+            players: r
+                .setup
+                .players
+                .iter()
+                .map(|p| SeatRec {
+                    id: p.id,
+                    team: p.team,
+                    race: p.race.clone(),
+                    control: ControlRec::Idle,
+                })
+                .collect(),
+            commands: r.commands.clone(),
+            digests,
+            end_tick: end,
+        };
+        replay
+            .play(r.setup.content.clone())
+            .map_err(|e| format!("the recording does not replay: {e}"))?;
+        let path = self.cfg.data_path(file);
+        if let Some(d) = path.parent() {
+            std::fs::create_dir_all(d).map_err(|e| format!("{}: {e}", d.display()))?;
+        }
+        std::fs::write(&path, replay.encode()).map_err(|e| format!("{}: {e}", path.display()))?;
+        Ok(format!(
+            "replay of {end} ticks, {} commands -> {}",
+            replay.commands.len(),
             path.display()
         ))
     }
