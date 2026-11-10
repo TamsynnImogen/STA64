@@ -1,0 +1,56 @@
+//! SIM-19: guarded ownership edits through the shared simulation.
+//!
+//! Production-involved and unfinished units remain rejected until their
+//! capture accounting is established. See docs/OWNERSHIP_TRANSFER.md.
+
+use sta_core::{EntityId, Fixed, PlayerId};
+
+use crate::Sim;
+use crate::view::UnitFlags;
+use crate::world::{EntityKind, NEUTRAL};
+
+impl Sim {
+    pub(crate) fn transfer_owner(&mut self, from: PlayerId, id: EntityId, to: PlayerId) -> bool {
+        if from != PlayerId::SCRIPT && from != PlayerId::BENCH {
+            return false;
+        }
+        let destination = to == NEUTRAL
+            || (to.is_player()
+                && (self.players.is_empty() || self.players.iter().any(|&(p, _)| p == to)));
+        if !destination || self.victory.is_eliminated(to) {
+            return false;
+        }
+        let Some(unit) = self.units.get(id) else {
+            return false;
+        };
+        if !matches!(unit.kind, EntityKind::Craft | EntityKind::Station)
+            || unit.hull[0] <= Fixed::ZERO
+            || unit.flags.contains(UnitFlags::DYING)
+            || unit.progress.is_some()
+            || self
+                .content
+                .as_deref()
+                .and_then(|db| db.unit(unit.def))
+                .is_some_and(|def| def.resource.is_some())
+            || self.production.transfer_blocked(id)
+        {
+            return false;
+        }
+
+        // All rejection checks precede cleanup, including same-owner requests.
+        // Do not call ordinary production cancellation: its refund contract
+        // has not been established for capture.
+        self.weapons.stop_attack(&self.units, from, &[id]);
+        self.economy.cancel(&self.units, from, &[id]);
+        self.movement.clear(id);
+        self.production.clear_builder_rally(id);
+        let unit = self.units.get_mut(id).expect("validated live unit");
+        unit.target = None;
+        unit.owner = to;
+        true
+    }
+}
+
+#[cfg(test)]
+#[path = "ownership_tests.rs"]
+mod tests;

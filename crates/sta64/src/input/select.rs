@@ -5,8 +5,14 @@
 //!   the nearest sphere on the ray). Click on empty space clears.
 //! - Shift (the `AddModifier` key) click adds an unselected unit, removes a
 //!   selected one.
-//! - Left drag (over 6 px) box-selects own units whose centre is in the box;
-//!   Shift keeps the old selection.
+//! - Left drag (over 6 px) box-selects own *ships* (craft, as the content
+//!   classes them) whose centre is in the box; stations are never taken by a
+//!   box. Shift keeps the old selection.
+//! - Ships and stations are never selected together (stock: `Select` refuses
+//!   anything but own ships once something is selected). A click picks one
+//!   station when nothing, or another station, is selected; Shift-click of a
+//!   station while ships are selected is refused; Shift-click of a ship over a
+//!   selected station replaces it.
 //! - Double click an own unit (same unit, within 0.4 s): all own units of the
 //!   same def (class) that are on screen ("everything of that type on screen").
 //! - `SelectType` (T): all own units of the selected units' classes, anywhere.
@@ -33,13 +39,14 @@
 //! cursor, ray and projection through [`Aim`].
 
 use bevy::prelude::*;
+use sta_sim::world::EntityKind;
 use sta_sim::{ContentKey, EntityId};
 
 use super::orders::Aim;
 use super::keys::{Action, KeyBindings};
 use crate::render::strategic::Strategic;
 use crate::render::units::SelectRadius;
-use crate::sim_link::{Selection, SelectionChanged, SimEntity, SimLink};
+use crate::sim_link::{ContentRes, Selection, SelectionChanged, SimEntity, SimLink};
 
 /// Seconds within which a second click counts as a double click.
 const DOUBLE: f64 = 0.4;
@@ -145,6 +152,38 @@ pub fn own_selection(selection: &Selection, link: &SimLink) -> Vec<EntityId> {
 
 fn is_own(link: &SimLink, id: EntityId) -> bool {
     link.curr().unit(id).is_some_and(|u| u.owner == link.player())
+}
+
+/// Whether `id` is a ship: a craft by its definition's class. Without content
+/// (tests that need none) everything counts as a ship.
+fn is_ship(link: &SimLink, content: Option<&ContentRes>, id: EntityId) -> bool {
+    let (Some(content), Some(u)) = (content, link.curr().unit(id)) else { return true };
+    content.0.unit(u.def).is_none_or(|d| EntityKind::of(&d.class, &d.movement) == EntityKind::Craft)
+}
+
+/// Shift-click `id` into `sel` (the own selection) without ever mixing ships and
+/// stations: a ship replaces a selected station, a station is refused while
+/// ships are selected and replaces another station; a selected unit toggles off.
+fn shift_add(sel: &mut Vec<EntityId>, id: EntityId, ship: impl Fn(EntityId) -> bool) {
+    if let Some(i) = sel.iter().position(|&s| s == id) {
+        sel.remove(i);
+    } else if ship(id) {
+        sel.retain(|&s| ship(s));
+        sel.push(id);
+    } else if sel.iter().any(|&s| ship(s)) {
+        // Refused: a station never joins ships.
+    } else {
+        *sel = vec![id];
+    }
+}
+
+/// The drag rectangle as UI node values: `(left, top, width, height)`. The
+/// cursor is in logical window pixels, and a `Val::Px` is multiplied by
+/// [`UiScale`] when the UI is laid out, so divide it out to land on the cursor.
+fn box_node(start: Vec2, cursor: Vec2, ui_scale: f32) -> (f32, f32, f32, f32) {
+    let k = if ui_scale > 0.0 { ui_scale } else { 1.0 };
+    let (lo, hi) = (start.min(cursor) / k, start.max(cursor) / k);
+    (lo.x, lo.y, hi.x - lo.x, hi.y - lo.y)
 }
 
 fn def_of(link: &SimLink, id: EntityId) -> Option<ContentKey> {
@@ -287,6 +326,8 @@ pub fn select(
     link: Res<SimLink>,
     max: Res<MaxSelection>,
     units: Targetable,
+    content: Option<Res<ContentRes>>,
+    ui_scale: Option<Res<UiScale>>,
     mut selection: ResMut<Selection>,
     mut changed: MessageWriter<SelectionChanged>,
     mut drag: ResMut<Drag>,
@@ -301,11 +342,11 @@ pub fn select(
     let dragging = start.distance(cursor) > DRAG_PX;
     if let Ok((mut node, mut vis)) = boxes.single_mut() {
         if dragging && buttons.pressed(MouseButton::Left) {
-            let (lo, hi) = (start.min(cursor), start.max(cursor));
-            node.left = Val::Px(lo.x);
-            node.top = Val::Px(lo.y);
-            node.width = Val::Px(hi.x - lo.x);
-            node.height = Val::Px(hi.y - lo.y);
+            let (l, t, w, h) = box_node(start, cursor, ui_scale.map_or(1.0, |s| s.0));
+            node.left = Val::Px(l);
+            node.top = Val::Px(t);
+            node.width = Val::Px(w);
+            node.height = Val::Px(h);
             *vis = Visibility::Visible;
         } else {
             *vis = Visibility::Hidden;
@@ -320,10 +361,15 @@ pub fn select(
     let before = selection.0.clone();
     // An inspected enemy is never joined by anything.
     let mut sel: Vec<EntityId> = if add { own_selection(&selection, &link) } else { vec![] };
+    let content = content.as_deref();
+    let ship = |id: EntityId| is_ship(&link, content, id);
     if dragging {
+        // A box takes ships only; Shift adds them to ships (a selected station is dropped).
+        sel.retain(|&s| ship(s));
         let (lo, hi) = (start.min(cursor), start.max(cursor));
         for (u, _, gt, _) in &units {
             if is_own(&link, u.0)
+                && ship(u.0)
                 && let Some(p) = aim.project(gt.translation())
                 && p.cmpge(lo).all()
                 && p.cmple(hi).all()
@@ -340,6 +386,8 @@ pub fn select(
                 sel = vec![id];
             }
         } else if double {
+            // Same def, so all ships or all stations; never mixed with the old selection.
+            sel.retain(|&s| ship(s) == ship(id));
             let def = def_of(&link, id);
             for (u, _, gt, _) in &units {
                 if is_own(&link, u.0) && def_of(&link, u.0) == def && aim.on_screen(gt.translation()) {
@@ -348,12 +396,7 @@ pub fn select(
             }
             push_unique(&mut sel, id);
         } else if add {
-            // Toggle against the old selection.
-            if let Some(i) = sel.iter().position(|&s| s == id) {
-                sel.remove(i);
-            } else {
-                sel.push(id);
-            }
+            shift_add(&mut sel, id, ship);
         } else {
             sel = vec![id];
         }
@@ -370,6 +413,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use sta_content::ContentDb;
     use sta_sim::command::LocalRouter;
     use sta_sim::command::Command;
     use sta_sim::view::UnitFlags;
@@ -407,18 +451,29 @@ mod tests {
     const E: EntityId = EntityId(4);
     const F: EntityId = EntityId(5);
     const D: EntityId = EntityId(6);
+    /// Two own stations (class `shipyard`) and an own station of another def.
+    const Y1: EntityId = EntityId(7);
+    const Y2: EntityId = EntityId(8);
 
     /// Player 0 owns A, B (class 1), C (class 2), F (class 1, off screen) and
     /// D (class 1, on screen, far below); player 1 owns E (class 1). Render
     /// x/z are screen pixels in an 800x600 top-down view.
     fn app() -> App {
+        let mut db = ContentDb::builder();
+        for (name, class) in [("cls1", "craft"), ("cls2", "craft"), ("yard", "shipyard")] {
+            db = db.unit(sta_content::UnitDef::new(name, class));
+        }
+        let db = db.build().unwrap();
+        let k = |n: &str| db.key(n).unwrap().0;
         let units = vec![
-            unit(1, 1, 0, 100.0, 100.0),
-            unit(2, 1, 0, 300.0, 100.0),
-            unit(3, 2, 0, 500.0, 100.0),
-            unit(4, 1, 1, 100.0, 300.0),
-            unit(5, 1, 0, 5000.0, 100.0),
-            unit(6, 1, 0, 700.0, 500.0),
+            unit(1, k("cls1"), 0, 100.0, 100.0),
+            unit(2, k("cls1"), 0, 300.0, 100.0),
+            unit(3, k("cls2"), 0, 500.0, 100.0),
+            unit(4, k("cls1"), 1, 100.0, 300.0),
+            unit(5, k("cls1"), 0, 5000.0, 100.0),
+            unit(6, k("cls1"), 0, 700.0, 500.0),
+            unit(7, k("yard"), 0, 200.0, 200.0),
+            unit(8, k("yard"), 0, 600.0, 300.0),
         ];
         let view = Arc::new(WorldView { units, ..default() });
         let mut app = App::new();
@@ -433,6 +488,7 @@ mod tests {
             .init_resource::<KeyBindings>()
             .init_resource::<MaxSelection>()
             .init_resource::<Aim>()
+            .insert_resource(ContentRes(Arc::new(db)))
             .insert_resource(SimLink::new(Box::new(Frozen(view.clone())), Box::new(LocalRouter::new()), PlayerId(0)))
             .add_systems(Update, (select_keys, select).chain());
         for u in &view.units {
@@ -529,6 +585,83 @@ mod tests {
         // A box with only an enemy in it selects nothing.
         drag(&mut app, (60.0, 260.0), (150.0, 350.0));
         assert!(sel(&app).is_empty());
+    }
+
+    #[test]
+    fn box_takes_ships_never_stations() {
+        let mut app = app();
+        // Covers ships A, B, the enemy E and the own yard Y1: ships only.
+        drag(&mut app, (50.0, 50.0), (350.0, 350.0));
+        assert_eq!(sel(&app), [A, B]);
+        // A box with only a station in it selects nothing.
+        drag(&mut app, (150.0, 150.0), (250.0, 250.0));
+        assert!(sel(&app).is_empty());
+        // A box over two stations (and nothing else) selects nothing either.
+        drag(&mut app, (150.0, 150.0), (650.0, 350.0));
+        assert!(sel(&app).is_empty());
+    }
+
+    #[test]
+    fn shift_box_over_a_selected_station_drops_it() {
+        let mut app = app();
+        click(&mut app, 200.0, 200.0);
+        assert_eq!(sel(&app), [Y1]);
+        press(&mut app, KeyCode::ShiftLeft);
+        drag(&mut app, (50.0, 50.0), (350.0, 150.0));
+        assert_eq!(sel(&app), [A, B]);
+    }
+
+    #[test]
+    fn a_click_selects_a_station_but_shift_never_mixes() {
+        let mut app = app();
+        click(&mut app, 200.0, 200.0);
+        assert_eq!(sel(&app), [Y1]);
+        // A click on another station replaces; Shift-click does too (never two stations).
+        press(&mut app, KeyCode::ShiftLeft);
+        click(&mut app, 600.0, 300.0);
+        assert_eq!(sel(&app), [Y2]);
+        // Shift-click a ship over a station: the ship replaces it.
+        click(&mut app, 100.0, 100.0);
+        assert_eq!(sel(&app), [A]);
+        // Shift-click a station over ships: refused.
+        click(&mut app, 200.0, 200.0);
+        assert_eq!(sel(&app), [A]);
+        click(&mut app, 300.0, 100.0);
+        assert_eq!(sel(&app), [A, B]);
+    }
+
+    #[test]
+    fn double_click_on_a_station_stays_stations_only() {
+        let mut app = app();
+        click(&mut app, 200.0, 200.0);
+        click(&mut app, 200.0, 200.0);
+        assert!(sel(&app).iter().all(|id| [Y1, Y2].contains(id)), "{:?}", sel(&app));
+        assert!(sel(&app).contains(&Y1));
+    }
+
+    #[test]
+    fn the_drawn_box_lands_on_the_cursor_at_any_ui_scale() {
+        // Cursor positions are logical pixels; a Px value is multiplied by UiScale.
+        let (l, t, w, h) = box_node(Vec2::new(300.0, 200.0), Vec2::new(100.0, 400.0), 2.0);
+        assert_eq!((l * 2.0, t * 2.0, w * 2.0, h * 2.0), (100.0, 200.0, 200.0, 200.0));
+        assert_eq!(box_node(Vec2::new(10.0, 20.0), Vec2::new(30.0, 60.0), 1.0), (10.0, 20.0, 20.0, 40.0));
+        // A zero scale cannot divide.
+        assert_eq!(box_node(Vec2::ZERO, Vec2::splat(4.0), 0.0), (0.0, 0.0, 4.0, 4.0));
+    }
+
+    #[test]
+    fn the_box_node_follows_the_cursor_in_the_same_frame() {
+        let mut app = app();
+        app.insert_resource(UiScale(2.0));
+        app.world_mut().spawn((SelectBox, Node::default(), Visibility::Hidden));
+        aim_at(&mut app, 100.0, 100.0);
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        step(&mut app);
+        aim_at(&mut app, 300.0, 200.0);
+        app.update();
+        let (node, vis) = app.world_mut().query::<(&Node, &Visibility)>().single(app.world()).unwrap();
+        assert_eq!(*vis, Visibility::Visible);
+        assert_eq!((node.left, node.top, node.width, node.height), (Val::Px(50.0), Val::Px(50.0), Val::Px(100.0), Val::Px(50.0)));
     }
 
     #[test]

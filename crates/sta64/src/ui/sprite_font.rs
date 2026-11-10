@@ -236,6 +236,61 @@ pub struct Layout {
     pub height: f32,
 }
 
+/// A glyph's source rectangle in the texture's own pixels: reference texels scaled by
+/// texture size over reference size (the file's `@reference*`, else the texture's own
+/// size). `src` is `[x, y, w, h]` as in [`GlyphQuad::src`].
+pub fn texel_rect(reference: Option<[f32; 2]>, tex: UVec2, src: [f32; 4]) -> Rect {
+    let r = reference.unwrap_or([tex.x as f32, tex.y as f32]);
+    let (kx, ky) = (tex.x as f32 / r[0], tex.y as f32 / r[1]);
+    Rect::new(
+        src[0] * kx,
+        src[1] * ky,
+        (src[0] + src[2]) * kx,
+        (src[1] + src[3]) * ky,
+    )
+}
+
+/// Share of the letters and digits whose rectangle, mapped onto the texture, holds ink
+/// and is bounded by empty columns left and right of it. A font whose reference size
+/// does not match its strips (Fleet Ops 4.0's FontMedium/FontLarge/FontVeryLarge, whose
+/// strips were cut for another texture size) lands rectangles across neighbouring
+/// glyphs and scores near zero; a well-formed font scores near one. `None` when the
+/// page has none of those glyphs.
+pub fn page_fit(font: &SpriteFont, page: usize, tex: UVec2, rgba: &[u8]) -> Option<f32> {
+    let p = font.pages.get(page)?;
+    let ink = |x: i64, y: i64| {
+        if x < 0 || y < 0 || x >= i64::from(tex.x) || y >= i64::from(tex.y) {
+            return false;
+        }
+        let i = (y as usize * tex.x as usize + x as usize) * 4;
+        let px = rgba.get(i..i + 4).unwrap_or(&[0; 4]);
+        let lum = u32::from(px[0].max(px[1]).max(px[2]));
+        u32::from(px[3]) * lum / 255 > 24
+    };
+    let (mut tested, mut good) = (0u32, 0u32);
+    for code in (b'0'..=b'9').chain(b'A'..=b'Z').chain(b'a'..=b'z') {
+        let Some((gp, g)) = font.glyph(code) else {
+            continue;
+        };
+        if gp != page || g.w <= 0.0 {
+            continue;
+        }
+        let r = texel_rect(font.reference, tex, [g.x, g.y, g.w, p.height]);
+        let (x0, x1) = (r.min.x.round() as i64, r.max.x.round() as i64);
+        let (y0, y1) = (r.min.y.round() as i64, r.max.y.round() as i64);
+        let inside = (y0..y1).any(|y| (x0..x1).any(|x| ink(x, y)));
+        // Bounded: no ink in the column just outside, left and right.
+        let edge = |x: i64| (y0..y1).filter(|y| ink(x, *y)).count();
+        let clean = edge(x0 - 1) <= 1 && edge(x1) <= 1;
+        tested += 1;
+        good += u32::from(inside && clean);
+    }
+    (tested > 0).then(|| good as f32 / tested as f32)
+}
+
+/// Fonts scoring below this are not drawn (see [`page_fit`]).
+pub const MIN_FIT: f32 = 0.9;
+
 /// A character as the game's single byte (Windows-1252); anything else is `?`.
 pub fn windows_1252(c: char) -> u8 {
     const HIGH: [char; 32] = [
@@ -298,27 +353,27 @@ pub fn read_fonts(vfs: &Vfs) -> Vec<SpriteFont> {
     out
 }
 
-fn load_page(
-    vfs: &Vfs,
-    texture: &str,
-    images: &mut Assets<Image>,
-) -> Option<(Handle<Image>, UVec2)> {
+/// Decode a page texture: its pixels and size.
+fn decode_page(vfs: &Vfs, texture: &str) -> Option<(Vec<u8>, UVec2)> {
     let (path, fmt) = sta_assets::find_texture(vfs, texture)?;
     let rgba = sta_assets::decode_rgba(vfs, &path, fmt).ok()?;
-    let size = UVec2::new(rgba.width, rgba.height);
+    Some((rgba.pixels, UVec2::new(rgba.width, rgba.height)))
+}
+
+fn upload_page(pixels: Vec<u8>, size: UVec2, images: &mut Assets<Image>) -> (Handle<Image>, UVec2) {
     let mut img = Image::new(
         Extent3d {
-            width: rgba.width,
-            height: rgba.height,
+            width: size.x,
+            height: size.y,
             depth_or_array_layers: 1,
         },
         TextureDimension::D2,
-        rgba.pixels,
+        pixels,
         TextureFormat::Rgba8UnormSrgb,
         RenderAssetUsages::RENDER_WORLD,
     );
     img.sampler = ImageSampler::nearest(); // "No filtering, ever" (the fonts' own note).
-    Some((images.add(img), size))
+    (images.add(img), size)
 }
 
 /// (Re)load the fonts when the mounted install changes.
@@ -335,16 +390,32 @@ fn load_fonts(
     }
     fonts.fonts.clear();
     for font in read_fonts(&vfs.0) {
-        let pages: Vec<_> = font
+        let decoded: Vec<_> = font
             .pages
             .iter()
-            .filter_map(|p| load_page(&vfs.0, &p.texture, &mut images))
+            .filter_map(|p| decode_page(&vfs.0, &p.texture))
             .collect();
-        if pages.len() == font.pages.len() {
-            fonts
-                .fonts
-                .insert(font.name.clone(), LoadedFont { font, pages });
+        if decoded.len() != font.pages.len() {
+            continue;
         }
+        let fits = decoded
+            .iter()
+            .enumerate()
+            .all(|(i, (px, size))| page_fit(&font, i, *size, px).is_none_or(|f| f >= MIN_FIT));
+        if !fits {
+            info!(
+                "sprite font {} skipped: its strips do not fit its texture",
+                font.name
+            );
+            continue;
+        }
+        let pages = decoded
+            .into_iter()
+            .map(|(px, size)| upload_page(px, size, &mut images))
+            .collect();
+        fonts
+            .fonts
+            .insert(font.name.clone(), LoadedFont { font, pages });
     }
     info!("sprite fonts: {} loaded", fonts.fonts.len());
 }
@@ -402,15 +473,7 @@ fn resolve_text(
             let Some((image, tex)) = f.pages.get(q.page) else {
                 continue;
             };
-            let r = f.font.reference.unwrap_or([tex.x as f32, tex.y as f32]);
-            // Reference texels -> the texture's own texels.
-            let (kx, ky) = (tex.x as f32 / r[0], tex.y as f32 / r[1]);
-            let rect = Rect::new(
-                q.src[0] * kx,
-                q.src[1] * ky,
-                (q.src[0] + q.src[2]) * kx,
-                (q.src[1] + q.src[3]) * ky,
-            );
+            let rect = texel_rect(f.font.reference, *tex, q.src);
             ec.with_child((
                 ImageNode {
                     image: image.clone(),
@@ -693,5 +756,117 @@ mod tests {
             "every install's FontSmall table is identical: {:?}",
             tables.iter().map(|t| &t.0).collect::<Vec<_>>()
         );
+    }
+
+    /// Glyph rectangles of "DILITHIUM 4000" in Fleet Ops 4.0's FontSmall, read off the
+    /// strips and checked by eye against the 1024x256 `all_interface_font20` sheet
+    /// (texture and reference sizes are equal, so source texels are texture pixels).
+    #[test]
+    fn fo4_fontsmall_lays_out_known_strings() {
+        let roots = Path::new(HEROIC).join("Star Trek Armada II Fleet Operations Roots");
+        let Ok(vfs) = Vfs::mount_install(&roots, Some("Fleet Ops 4.0")) else {
+            eprintln!("FO4 not installed: skipped");
+            return;
+        };
+        let font = read_fonts(&vfs)
+            .into_iter()
+            .find(|f| f.name.eq_ignore_ascii_case("FontSmall"))
+            .expect("FontSmall");
+        assert_eq!(
+            (font.reference, font.height()),
+            (Some([1024.0, 256.0]), 23.0)
+        );
+        let l = font.layout("DILITHIUM 4000", 1.0);
+        let want: [(u8, [f32; 4]); 14] = [
+            (b'D', [561.0, 2.0, 11.0, 23.0]),
+            (b'I', [632.0, 2.0, 5.0, 23.0]),
+            (b'L', [669.0, 2.0, 7.0, 23.0]),
+            (b'I', [632.0, 2.0, 5.0, 23.0]),
+            (b'T', [789.0, 2.0, 9.0, 23.0]),
+            (b'H', [616.0, 2.0, 10.0, 23.0]),
+            (b'I', [632.0, 2.0, 5.0, 23.0]),
+            (b'U', [804.0, 2.0, 10.0, 23.0]),
+            (b'M', [680.0, 2.0, 16.0, 23.0]),
+            (b' ', [0.0, 102.0, 6.0, 23.0]),
+            (b'4', [291.0, 2.0, 12.0, 23.0]),
+            (b'0', [234.0, 2.0, 12.0, 23.0]),
+            (b'0', [234.0, 2.0, 12.0, 23.0]),
+            (b'0', [234.0, 2.0, 12.0, 23.0]),
+        ];
+        assert_eq!(l.quads.len(), want.len());
+        for (q, (c, src)) in l.quads.iter().zip(want) {
+            assert_eq!((q.code, q.src), (c, src), "glyph {}", c as char);
+        }
+        // The pen advances by the widths: D 11, I 5, L 7, I 5, T 9, H 10, I 5, U 10, M 16.
+        assert_eq!(
+            l.quads[9].rect[0],
+            11.0 + 5.0 + 7.0 + 5.0 + 9.0 + 10.0 + 5.0 + 10.0 + 16.0
+        );
+        let digits = font.layout("0123456789", 1.0);
+        assert_eq!(digits.quads.len(), 10);
+        let zero = digits.quads[0].src;
+        assert_eq!((zero[0], zero[1]), (234.0, 2.0));
+        // Equal texture and reference size: the texel rect is the source rect.
+        let r = texel_rect(font.reference, UVec2::new(1024, 256), l.quads[0].src);
+        assert_eq!(
+            (r.min.x, r.min.y, r.max.x, r.max.y),
+            (561.0, 2.0, 572.0, 25.0)
+        );
+    }
+
+    /// Install-gated: the mod's FontSmall and the FontFinal4 pages fit their sheets;
+    /// FontMedium/FontLarge/FontVeryLarge (strips cut for other sizes) do not.
+    #[test]
+    fn fo4_fonts_fit_or_are_rejected() {
+        let roots = Path::new(HEROIC).join("Star Trek Armada II Fleet Operations Roots");
+        let Ok(vfs) = Vfs::mount_install(&roots, Some("Fleet Ops 4.0")) else {
+            eprintln!("FO4 not installed: skipped");
+            return;
+        };
+        for f in read_fonts(&vfs) {
+            let Some((px, size)) = decode_page(&vfs, &f.pages[0].texture) else {
+                continue;
+            };
+            let fit = page_fit(&f, 0, size, &px).unwrap();
+            eprintln!("{}: fit {fit:.2}", f.name);
+            let n = f.name.to_ascii_lowercase();
+            let good = matches!(
+                n.as_str(),
+                "fontsmall" | "fontfinal4_10" | "fontfinal4_13" | "fontfinal4_16"
+            );
+            let bad = matches!(n.as_str(), "fontmedium" | "fontlarge" | "fontverylarge");
+            assert!(!good || fit >= MIN_FIT, "{} should fit: {fit}", f.name);
+            assert!(!bad || fit < MIN_FIT, "{} should not fit: {fit}", f.name);
+        }
+    }
+
+    /// A synthetic sheet: glyphs where the strips say pass, a wrong reference fails.
+    #[test]
+    fn page_fit_tells_aligned_from_shifted() {
+        let mut f = SpriteFont::parse("F", SAMPLE).unwrap();
+        f.pages.truncate(1);
+        f.pages[0].glyphs = (0..0x60u32 - 0x20)
+            .map(|n| GlyphEntry {
+                x: 20.0 * (n % 12) as f32 + 2.0,
+                y: 20.0 * (n / 12) as f32,
+                w: 8.0,
+            })
+            .collect();
+        f.pages[0].height = 10.0;
+        f.reference = Some([256.0, 128.0]);
+        let tex = UVec2::new(256, 128);
+        let mut px = vec![0u8; 256 * 128 * 4];
+        for g in &f.pages[0].glyphs {
+            for y in 0..10 {
+                for x in 0..8 {
+                    let i = ((g.y as usize + y) * 256 + g.x as usize + x) * 4;
+                    px[i..i + 4].copy_from_slice(&[255, 255, 255, 255]);
+                }
+            }
+        }
+        assert_eq!(page_fit(&f, 0, tex, &px), Some(1.0));
+        // A reference twice the sheet: every rectangle lands at the wrong place.
+        f.reference = Some([512.0, 256.0]);
+        assert!(page_fit(&f, 0, tex, &px).unwrap() < MIN_FIT);
     }
 }

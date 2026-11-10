@@ -18,6 +18,7 @@
 #![allow(dead_code, unused_imports)]
 
 use bevy::prelude::*;
+use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::window::PrimaryWindow;
 use sta_sim::setup::GameSetup;
 
@@ -32,7 +33,7 @@ pub use view::{Act, ScreenRoot};
 
 use crate::app::{AppState, GameSet};
 use crate::ui::theme::{ButtonClicked, ListSelected, SliderChanged, ThemePlugin, ToggleChanged};
-use view::{MapList, ModList, SettingSlider, SettingToggle};
+use view::{MapList, ModList, ScrollBox, SettingSlider, SettingToggle};
 
 /// The screen shown in `AppState::FrontEnd`.
 #[derive(States, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -45,6 +46,30 @@ pub enum Screen {
     MapSelect,
     Settings,
     ModSelect,
+}
+
+/// Where the open list (map or mod select) is scrolled, in logical pixels.
+/// Kept here because the screen is drawn again whenever the pick changes.
+#[derive(Resource, Debug, Clone, Copy, Default)]
+pub struct ListScroll {
+    pub offset: f32,
+    /// The box's height as last laid out; 0 before the first layout.
+    pub view_h: f32,
+    /// Bring the picked row into view once the box has a size.
+    pub pending: bool,
+}
+
+/// The scroll offset that shows row `index` (of `count`, `row_h` tall each) in
+/// a box `view_h` tall, moving `offset` as little as possible.
+pub fn reveal(offset: f32, index: usize, count: usize, row_h: f32, view_h: f32) -> f32 {
+    let top = index as f32 * row_h;
+    let mut o = offset;
+    if top < o {
+        o = top;
+    } else if top + row_h > o + view_h {
+        o = top + row_h - view_h;
+    }
+    o.clamp(0.0, (count as f32 * row_h - view_h).max(0.0))
 }
 
 /// A game setup column that a click steps through.
@@ -105,13 +130,18 @@ impl Plugin for ScreensPlugin {
             .init_resource::<Settings>()
             .init_resource::<SelectedMod>()
             .init_resource::<Browse>()
+            .init_resource::<ListScroll>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .add_message::<MouseWheel>()
             .add_message::<StartGame>()
             .add_message::<ModChosen>()
             .add_systems(Startup, make_draft)
             .add_systems(OnEnter(AppState::FrontEnd), enter_front_end)
+            .add_systems(OnEnter(Screen::MapSelect), open_list)
+            .add_systems(OnEnter(Screen::ModSelect), open_list)
             .add_systems(
                 Update,
-                (fit_scale, follow_data, on_buttons, on_lists, on_settings, rebuild)
+                (fit_scale, follow_data, on_keys, on_wheel, track_scroll, on_buttons, on_lists, on_settings, rebuild)
                     .chain()
                     .in_set(GameSet::Ui)
                     .run_if(in_state(AppState::FrontEnd)),
@@ -151,6 +181,116 @@ fn follow_data(data: Res<ScreenData>, draft: Option<ResMut<SetupDraft>>, mut bro
     }
     browse.map = browse.map.min(data.maps.len().saturating_sub(1));
     browse.mod_row = browse.mod_row.min(data.mods.len());
+}
+
+/// A list opens at the top, then moves to show the pick.
+fn open_list(mut scroll: ResMut<ListScroll>) {
+    scroll.offset = 0.0;
+    scroll.pending = true;
+}
+
+/// Keys in the lists: Up, Down, PageUp, PageDown, Home and End move the pick
+/// and keep it in view; Enter takes it; Esc leaves without taking it. They
+/// press the screen's own buttons, so a key does what the click does.
+#[allow(clippy::too_many_arguments)]
+fn on_keys(
+    keys: Res<ButtonInput<KeyCode>>,
+    screen: Res<State<Screen>>,
+    theme: Res<crate::ui::theme::Theme>,
+    boxes: Query<&ScrollBox>,
+    acts: Query<(Entity, &Act)>,
+    mut browse: ResMut<Browse>,
+    mut scroll: ResMut<ListScroll>,
+    mut clicks: MessageWriter<ButtonClicked>,
+) {
+    let (take, back) = match screen.get() {
+        Screen::MapSelect => (Act::TakeMap, Act::Goto(Screen::Setup)),
+        Screen::ModSelect => (Act::UseMod, Act::Goto(Screen::Main)),
+        _ => return,
+    };
+    let press = |want: Act| acts.iter().find(|(_, a)| **a == want).map(|(e, _)| e);
+    if keys.just_pressed(KeyCode::Escape) {
+        if let Some(e) = press(back) {
+            clicks.write(ButtonClicked(e));
+        }
+        return;
+    }
+    if keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::NumpadEnter) {
+        if let Some(e) = press(take) {
+            clicks.write(ButtonClicked(e));
+        }
+        return;
+    }
+    let Ok(b) = boxes.single() else { return };
+    if b.count == 0 {
+        return;
+    }
+    let page = if scroll.view_h > 0.0 { (scroll.view_h / theme.list_row_h).floor().max(1.0) as usize } else { 10 };
+    let last = b.count - 1;
+    let cur = b.selected.unwrap_or(0).min(last);
+    let want = if keys.just_pressed(KeyCode::ArrowDown) {
+        (cur + 1).min(last)
+    } else if keys.just_pressed(KeyCode::ArrowUp) {
+        cur.saturating_sub(1)
+    } else if keys.just_pressed(KeyCode::PageDown) {
+        (cur + page).min(last)
+    } else if keys.just_pressed(KeyCode::PageUp) {
+        cur.saturating_sub(page)
+    } else if keys.just_pressed(KeyCode::Home) {
+        0
+    } else if keys.just_pressed(KeyCode::End) {
+        last
+    } else {
+        return;
+    };
+    let row = match screen.get() {
+        Screen::MapSelect => &mut browse.map,
+        _ => &mut browse.mod_row,
+    };
+    if *row != want || b.selected.is_none() {
+        *row = want;
+    }
+    if scroll.view_h > 0.0 {
+        scroll.offset = reveal(scroll.offset, want, b.count, theme.list_row_h, scroll.view_h);
+    } else {
+        scroll.pending = true;
+    }
+}
+
+/// The mouse wheel scrolls the open list.
+fn on_wheel(mut wheel: MessageReader<MouseWheel>, theme: Res<crate::ui::theme::Theme>, boxes: Query<&ScrollBox>, mut scroll: ResMut<ListScroll>) {
+    let Ok(b) = boxes.single() else {
+        wheel.clear();
+        return;
+    };
+    for w in wheel.read() {
+        let dy = match w.unit {
+            MouseScrollUnit::Line => w.y * theme.list_row_h * 3.0,
+            MouseScrollUnit::Pixel => w.y,
+        };
+        let max = (b.count as f32 * theme.list_row_h - scroll.view_h).max(0.0);
+        scroll.offset = (scroll.offset - dy).clamp(0.0, max);
+    }
+}
+
+/// Keep the box's scroll and [`ListScroll`] in step: the offset goes to the
+/// box, and the box's laid-out height comes back.
+fn track_scroll(theme: Res<crate::ui::theme::Theme>, mut boxes: Query<(&ScrollBox, &ComputedNode, &mut ScrollPosition)>, mut scroll: ResMut<ListScroll>) {
+    let Ok((b, node, mut pos)) = boxes.single_mut() else { return };
+    let view_h = node.size.y * node.inverse_scale_factor;
+    if view_h > 0.0 && (scroll.view_h - view_h).abs() > 0.01 {
+        scroll.view_h = view_h;
+    }
+    if scroll.pending && view_h > 0.0 {
+        scroll.pending = false;
+        if let Some(i) = b.selected {
+            scroll.offset = reveal(scroll.offset, i, b.count, theme.list_row_h, view_h);
+        }
+    }
+    if (pos.0.y - scroll.offset).abs() > 0.01 {
+        // The wheel and keys write `offset`.
+        pos.0.y = scroll.offset;
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -249,6 +389,7 @@ fn rebuild(
     settings: Res<Settings>,
     selected: Res<SelectedMod>,
     camera: Option<Res<ScreensCamera>>,
+    scroll: Res<ListScroll>,
 ) {
     let Some(draft) = draft else { return };
     if !(screen.is_changed() || draft.is_changed() || browse.is_changed() || selected.is_changed() || data.is_changed() || theme.is_changed()) {
@@ -257,6 +398,6 @@ fn rebuild(
     for e in &roots {
         commands.entity(e).despawn();
     }
-    let ctx = view::Ctx { theme: &theme, data: &data, draft: &draft, browse: &browse, settings: &settings, selected: &selected };
+    let ctx = view::Ctx { theme: &theme, data: &data, draft: &draft, browse: &browse, settings: &settings, selected: &selected, scroll: &scroll };
     view::spawn(&mut commands, *screen.get(), &ctx, camera.map(|c| c.0));
 }

@@ -3,9 +3,10 @@
 ## Status and trigger
 
 The source-audit and implementation proposal was recorded before core edits
-in merged #257. The cargo prerequisite below is implemented with regression
-checks; the ownership edit and later stages remain incomplete.
-`Edit::Team` exists but `Sim::apply_edit` rejects it. The longer installed A2
+in merged #257. The cargo prerequisite is merged in #258. The guarded
+ownership stage below is implemented for finished units without production
+involvement; full construction/capture support remains incomplete.
+At audit time, `Edit::Team` existed but `Sim::apply_edit` rejected it. The longer installed A2
 mission probe records rejected transfers in Invasion at tick 1440 and The
 Cavalry at tick 720. `Entity.player = ...` already queues that edit; adding an
 A2.SetRealTeam wrapper alone would conceal the missing simulation operation.
@@ -138,7 +139,7 @@ continued digests/stock are recorded with the fixture for a real compatibility
 check. This is a narrow compatible-v8 read path, not general save migration
 or cross-build replay compatibility.
 
-This prerequisite does not yet implement Team, choose capture refunds or
+The cargo prerequisite itself does not implement Team, choose capture refunds or
 resolve construction/victory behavior. Those stages retain the gates above.
 
 ## Verification and staged delivery
@@ -169,3 +170,105 @@ Run focused tests, shared regressions, strict Clippy and the required workspace
 check with the repository's low-priority/two-job policy. Request the full OS
 matrix for deterministic core changes. Native runtime, client visuals and
 campaign completion remain separate acceptance evidence.
+
+## Guarded ownership stage decision
+
+After the cargo prerequisite, introduce the existing Team edit for live,
+finished craft and stations. This is an incremental shared capability, not
+completion of the producer/capture gates above. Before mutating anything,
+reject a missing/dying/zero-hull/non-unit target, resources identified by
+kind or definition metadata, any unfinished target, and
+any unit with a production queue, pending deploy or weld involvement (as
+builder or child). Even a same-owner request uses these guards. Rejection
+must leave orders, cargo, rally, resources and ownership unchanged.
+
+Accept NEUTRAL or a real player destination. In a configured game, a real
+player must be an existing seat and must not be eliminated. A seat-less
+synthetic Sim may use real IDs 0..7 without creating seats or changing the
+seat list. SCRIPT, BENCH and other reserved IDs are never owners accepted by
+this edit. Existing SCRIPT/BENCH edit authority remains the only entry.
+
+For an accepted request, stop the actor's movement and queued course/formation, clear
+its explicit attack order, suspend mining while retaining physical cargo,
+and remove only its own rally. A different builder's rally pointing at this
+still-live entity remains valid. Clear activity even for a same-owner request
+and for repeated swaps within one ordered batch. Then assign the destination
+without replacing identity, definition, race, label, position, hull/shields,
+energy, cloak, mounts or cooldowns. A later Mine order uses the resulting
+owner's station. New/old-owner command authorization, visibility and tech
+holdings use the shared existing systems.
+
+Keep the existing damage-only elimination rule in this stage. Losing the last
+asset through a Team edit does not eliminate or revive a seat; capture-loss
+victory policy remains a separate gate. No ownership event/hook, assimilation
+or mutable-race feature is implied. Existing shots already in flight and
+other actors' explicit attack orders retain their current shared-simulation
+behavior; this is not measured native projectile/effect parity. The edit
+must not clear projectiles or refill weapons as an ownership shortcut.
+
+This stage adds no saved fields, command/event tags, dependencies or defaults.
+Exercise actual steps, old/new-owner control, same-owner/repeated swaps,
+neutral/configured/seat-less destinations, atomic construction rejection,
+physical-state retention, idle cargo delivery, derived tech/visibility and
+snapshot/replay continuation. Rerun the installed mission probes without
+hiding any remaining rejected commands. Keep SIM-19 and LUA-05 incomplete
+until their remaining gates are met.
+
+## Guarded-stage installed probe evidence
+
+The optional 1800-tick startup sweep on guarded-stage source e9f55fe reaches
+all 36 external ports and resolves all 36 installed maps without packaging
+failures. It still fails overall with two diagnostics: Blockade's existing
+forceOntoMap Lua error and Invasion's Team request at tick 1440. The Cavalry's
+previous tick-720 Team rejection is absent. This is startup/command evidence,
+not campaign completion, native runtime acceptance or working AIP behavior.
+
+The rejected Invasion target is the Regula III planet. The after-step
+diagnostic identifies pb_clssh with class planet, Resource kind, neutral
+owner, full positive hull, no construction progress and resource metadata 0.
+The current model represents it as a neutral deposit. Do not bypass the
+resource guards for this map or ODF. Distinguishing colonizable worlds and
+colony ownership from neutral deposits needs its own native-backed model;
+this stage does not implement colony capture. The probe keeps both remaining
+failures and its unsupported/handled-call diagnostics visible.
+
+## Per-producer payment configuration prerequisite decision
+
+The owned Fleet Ops source identifies queueInstantDeduct as the ProducerClass
+ODF Boolean. Its default constructor writes zero; the ODF copy constructor
+reads the key with the source class byte as fallback. The relevant constructor
+windows and embedded key are byte-identical in the owned legacy and clean
+FleetOpsHook references, and the clean window was also inspected directly.
+The owned Boolean getter distinguishes absence from explicit false/zero and
+normalizes an authored integer nonzero to true. These are static/source
+findings, not live hook or gameplay acceptance. Do not copy native addresses
+or treat this FO extension as a stock A1/A2 default.
+
+Reuse the existing per-unit Features cache and its conditional content hash.
+No new BuildDef, command or snapshot field is needed. On unit ODFs in Fo4 and
+Native profiles only, map a valid queueInstantDeduct to pay_on_queue before
+the existing Feature_<name> overrides. Precedence is profile defaults, mod
+[Features] defaults, resolved native ODF key, then resolved explicit STA64
+Feature_pay_on_queue. Existing ODF inheritance supplies parent values; a
+child's zero overrides the same inherited native key. An inherited explicit
+STA64 Feature override still has the higher documented precedence; its child
+can override it through that same Feature key. The initial key reader accepts true/false and signed 32-bit decimal integers,
+including noncanonical nonzero values such as 2. Other lexical forms warn
+and retain the existing fallback; native invalid/overflow parsing is not
+claimed as reproduced. Weapons and stock A1/A2 profiles do not
+interpret the FO key. Raw ODF data remains available unchanged.
+
+Production must consult the builder's resolved unit_features, rather than
+only the database-wide switch. This also fixes the existing Feature_pay_on_queue
+unit override being parsed but ignored. Do not use the product's flag, add
+refund behavior, or relax ownership/construction guards. Existing paid and
+started records already carry payment state. Absent keys keep the existing
+profile/mod behavior and fake-content hash; explicit differences use the
+existing feature hash marker and therefore the content guard on saves.
+
+Test native-key inheritance and explicit zero, both namespace precedence
+levels, invalid-value diagnostics, Fo4/Native versus stock profile gating,
+weapon exclusion, absent-key hash stability, two builders with opposite
+payment modes, pending rig deploys, failed-affordability behavior and the
+real v8 fixture's continued digest. Run shared/consumer/workspace/Clippy
+checks. Capture refund policy, colonizable worlds and victory remain gated.

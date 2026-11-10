@@ -6,4 +6,5 @@ pub mod i18n;
 pub mod notices;
 pub mod theme;
 pub mod radar;
+pub mod radar_fog;
 pub mod sprite_font;

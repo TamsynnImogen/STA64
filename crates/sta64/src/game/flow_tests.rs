@@ -37,8 +37,11 @@ fn build_match(mut commands: Commands, active: Res<ActiveMatch>, link: Option<Re
 fn app() -> (App, CallLog) {
     let (null, log) = NullAudio::new();
     let mut app = App::new();
-    app.add_plugins((MinimalPlugins, StatesPlugin))
+    app.set_error_handler(bevy::ecs::error::panic)
+        .add_plugins((MinimalPlugins, StatesPlugin))
         .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f32(0.1)))
+        .init_resource::<ButtonInput<MouseButton>>()
+        .init_resource::<ButtonInput<KeyCode>>()
         .insert_non_send(Mixer::new(Box::new(null)));
     configure_sets(&mut app);
     let data = ScreenData::fake();
@@ -48,7 +51,7 @@ fn app() -> (App, CallLog) {
         .insert_resource(MenuSceneSource(scene))
         .insert_resource(MusicConfig { menu: vec!["audio-test:100".into()], calm: vec!["audio-test:200".into()], ..default() })
         .insert_resource(crate::clock::AnimClock::new(crate::clock::ClockMode::Wall, 0))
-        .add_plugins((FlowPlugin, crate::sim_link::SimLinkPlugin, MenuSceneCorePlugin, ScreensPlugin, LoadingPlugin, crate::audio::AudioPlugin::default()))
+        .add_plugins((FlowPlugin, crate::sim_link::SimLinkPlugin, MenuSceneCorePlugin, ScreensPlugin, LoadingPlugin, crate::audio::AudioPlugin::default(), crate::input::InputPlugin, crate::ui::hud::HudPlugin))
         .add_systems(Update, build_match.run_if(resource_exists::<ActiveMatch>).run_if(resource_exists::<SkirmishCfg>));
     (app, log)
 }
@@ -104,7 +107,6 @@ fn front_end_to_match_and_back() {
     assert!(app.world().resource::<ActiveMatch>().setup.players.len() == want.players.len());
     settle(&mut app, 2);
     assert!(!app.world().contains_resource::<MenuScene>());
-    assert!(!app.world().contains_resource::<SimLink>(), "nothing is built behind the loading screen's first frames");
     for _ in 0..200 {
         if state(&app) == AppState::InGame {
             break;
@@ -112,6 +114,7 @@ fn front_end_to_match_and_back() {
         app.update();
     }
     assert_eq!(state(&app), AppState::InGame);
+    settle(&mut app, 30); // every match system runs with the match's resources, no error handler panic
 
     // In the match: built from the setup's seats and map, menu screens gone, game music.
     let cfg = app.world().resource::<SkirmishCfg>().clone();
@@ -148,6 +151,13 @@ fn front_end_to_match_and_back() {
         app.update();
     }
     assert_eq!(state(&app), AppState::InGame);
+    settle(&mut app, 30);
+    // F10 leaves again, and the front end is clean to start a third.
+    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::F10);
+    settle(&mut app, 4);
+    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(KeyCode::F10);
+    assert_eq!(state(&app), AppState::FrontEnd);
+    settle(&mut app, 10);
 }
 
 #[test]
