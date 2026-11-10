@@ -606,7 +606,8 @@ impl Plugin for RadarPlugin {
         if !app.is_plugin_added::<ThemePlugin>() {
             app.add_plugins(ThemePlugin);
         }
-        app.init_resource::<RadarFeed>()
+        app.add_plugins(super::radar_fog::RadarFogPlugin)
+            .init_resource::<RadarFeed>()
             .init_resource::<RadarState>()
             .init_resource::<BlipEntities>()
             .add_message::<RadarClick>()

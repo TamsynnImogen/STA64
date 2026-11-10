@@ -156,6 +156,13 @@ impl FogGrid {
         (self.visible.iter().filter(|v| **v).count(), self.explored.iter().filter(|v| **v).count())
     }
 
+    /// Set one cell's state (tests of the minimap).
+    #[cfg(test)]
+    pub fn set_cell_for_test(&mut self, cx: usize, cz: usize, visible: bool, explored: bool) {
+        self.visible[cz * self.w + cx] = visible;
+        self.explored[cz * self.w + cx] = explored;
+    }
+
     /// Everything in sight (an omniscient view).
     fn reveal_all(&mut self) {
         self.visible.fill(true);

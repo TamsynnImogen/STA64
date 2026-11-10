@@ -94,8 +94,56 @@ pub fn sky_faces(
     found
 }
 
-/// How far off a star's `scale` is measured (see [`starfield`]).
-const STAR_DISTANCE: f32 = 5000.0;
+/// How big and how far the engine's stars are, from `ART_CFG.h`
+/// (`DETAIL_n_STARFIELD_BACKGROUND_STAR_*`, equal on every detail level of every
+/// shipped file): a star is `MAX_SIZE - rand * SIZE_VARIATION` world units across
+/// times its ODF `scale`, `MAX_DISTANCE - rand * DISTANCE_VARIATION` away.
+///
+/// That is how Fleet Operations' ODFs read: stock's point stars (`bstar.0.scale = .4`,
+/// 750 of them) come out about a pixel wide (75 * .4 = 30 units at 40000), and the
+/// tile sprites of Fleet Ops (`bstar.0 = 36`, `scale = 250`: a 1024 sheet of many
+/// small stars) about 25 degrees across, which is what lets 59 of them fill the sky.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StarSizing {
+    pub size: f32,
+    pub size_variation: f32,
+    pub distance: f32,
+    pub distance_variation: f32,
+}
+
+impl Default for StarSizing {
+    fn default() -> Self {
+        StarSizing { size: 75.0, size_variation: 35.0, distance: 40000.0, distance_variation: 10000.0 }
+    }
+}
+
+impl StarSizing {
+    /// Read `ART_CFG.h` (detail level 2, the middle one; the levels agree).
+    pub fn from_cfg(cfg: Option<&sta_assets::cfg_h::CfgH>) -> StarSizing {
+        let d = StarSizing::default();
+        let Some(c) = cfg else { return d };
+        let f = |k: &str, v: f32| c.f32(&format!("DETAIL_2_STARFIELD_BACKGROUND_STAR_{k}")).unwrap_or(v);
+        StarSizing {
+            size: f("MAX_SIZE", d.size),
+            size_variation: f("SIZE_VARIATION", d.size_variation),
+            distance: f("MAX_DISTANCE", d.distance),
+            distance_variation: f("DISTANCE_VARIATION", d.distance_variation),
+        }
+    }
+}
+
+/// One star quad of the sky sphere.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StarQuad {
+    /// Index into the entries it came from.
+    pub entry: usize,
+    /// Unit direction from the camera.
+    pub dir: Vec3,
+    /// Half the quad's angular size, as a tangent: its half edge over its distance.
+    pub half_tan: f32,
+    /// Turn of the quad about its direction, radians.
+    pub roll: f32,
+}
 
 /// Small deterministic generator for star placement.
 struct Lcg(u64);
@@ -106,14 +154,41 @@ impl Lcg {
     }
 }
 
+/// Where the stars of `entries` (`(sprite, count, scale)`) stand. Each entry's stars
+/// are spread over the whole sphere evenly (a golden-angle lattice, every star
+/// jittered within its cell, the lattice turned at random), so a handful of large
+/// tiles still leaves no part of the sky bare; stock's purely random scatter is
+/// that, clumps and gaps included, which a few big tiles cannot afford.
+pub fn star_quads(entries: &[(String, u32, f32)], sizing: &StarSizing, seed: u64) -> Vec<StarQuad> {
+    let mut rng = Lcg(seed);
+    let golden = PI * (3.0 - 5.0f32.sqrt());
+    let mut out = Vec::new();
+    for (entry, (_, count, scale)) in entries.iter().enumerate() {
+        let n = *count as usize;
+        let turn = rng.next() * 2.0 * PI;
+        let tilt = rng.next() * 2.0 - 1.0;
+        for i in 0..n {
+            let cell = 2.0 / n as f32;
+            let z = (1.0 - (i as f32 + 0.5) * cell + (rng.next() - 0.5) * cell * 0.7).clamp(-1.0, 1.0);
+            let a = turn + golden * i as f32 + (rng.next() - 0.5) * 0.7 * (2.0 * PI / (n as f32).sqrt());
+            let r = (1.0 - z * z).sqrt();
+            let lattice = Vec3::new(r * a.cos(), z, r * a.sin());
+            // The lattice, turned about x by a random angle so its poles are anywhere.
+            let dir = Quat::from_rotation_x(tilt * PI) * lattice;
+            let size = (sizing.size - rng.next() * sizing.size_variation).max(0.0) * scale;
+            let dist = (sizing.distance - rng.next() * sizing.distance_variation).max(1.0);
+            out.push(StarQuad { entry, dir, half_tan: size * 0.5 / dist, roll: rng.next() * 2.0 * PI });
+        }
+    }
+    out
+}
+
 /// Spawn the starfield under `parent` at `radius`. `entries` are the starfield
 /// ODF's `(sprite, count, scale)`. Returns the number of stars.
 ///
-/// Stock builds its stars as world-space quads at random distances about the map
-/// (`Starfield::mCreateStarSprite`), and how big they are is not recorded. Here a
-/// star's `scale` is read as its half size in world units seen from
-/// [`STAR_DISTANCE`] away: FO's point stars (scale 4-8) come out a few pixels wide,
-/// its star clouds (250) about six degrees across.
+/// Stock builds its stars as world-space quads about the map
+/// (`Starfield::mCreateStarSprite`); here each is a quad on a sphere of `radius`
+/// about the camera, sized by [`StarSizing`] so it subtends what the engine's would.
 #[allow(clippy::too_many_arguments)]
 pub fn starfield(
     commands: &mut Commands,
@@ -122,6 +197,7 @@ pub fn starfield(
     loader: &mut Loader,
     table: &SpriteTable,
     entries: &[(String, u32, f32)],
+    sizing: &StarSizing,
     radius: f32,
     parent: Entity,
 ) -> usize {
@@ -132,35 +208,29 @@ pub fn starfield(
         idx: Vec<u32>,
     }
     let mut batches: HashMap<String, Batch> = HashMap::new();
-    let mut rng = Lcg(0x5741_3634);
+    // Entries whose sprite the mod's table lacks are not drawn (FO4 has `bstar.0`, `.9`, `.10`).
+    let drawn: Vec<(String, u32, f32)> = entries.iter().filter(|(n, ..)| table.sprite(n).is_some()).cloned().collect();
     let mut total = 0;
-    for (sprite_name, count, scale) in entries {
-        let Some(sprite) = table.sprite(sprite_name) else { continue };
+    for q in star_quads(&drawn, sizing, 0x5741_3634) {
+        let Some(sprite) = table.sprite(&drawn[q.entry].0) else { continue };
         let uv = sta_assets::spr_anim::sprite_uv(table, sprite, 0.0);
-        let half = radius * scale / STAR_DISTANCE;
         let b = batches.entry(sprite.texture.to_ascii_lowercase()).or_default();
-        for _ in 0..*count {
-            // Uniform direction on the sphere.
-            let z = rng.next() * 2.0 - 1.0;
-            let a = rng.next() * 2.0 * PI;
-            let r = (1.0 - z * z).sqrt();
-            let dir = Vec3::new(r * a.cos(), z, r * a.sin());
-            let right = dir.any_orthonormal_vector();
-            let up = dir.cross(right);
-            let c = dir * radius;
-            let base = b.pos.len() as u32;
-            for (corner, t) in [
-                (c - right * half + up * half, [uv[0], uv[1]]),
-                (c + right * half + up * half, [uv[0] + uv[2], uv[1]]),
-                (c + right * half - up * half, [uv[0] + uv[2], uv[1] + uv[3]]),
-                (c - right * half - up * half, [uv[0], uv[1] + uv[3]]),
-            ] {
-                b.pos.push(corner.to_array());
-                b.uv.push(t);
-            }
-            b.idx.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
-            total += 1;
+        let half = radius * q.half_tan;
+        let right = Quat::from_axis_angle(q.dir, q.roll) * q.dir.any_orthonormal_vector();
+        let up = q.dir.cross(right);
+        let c = q.dir * radius;
+        let base = b.pos.len() as u32;
+        for (corner, t) in [
+            (c - right * half + up * half, [uv[0], uv[1]]),
+            (c + right * half + up * half, [uv[0] + uv[2], uv[1]]),
+            (c + right * half - up * half, [uv[0] + uv[2], uv[1] + uv[3]]),
+            (c - right * half - up * half, [uv[0], uv[1] + uv[3]]),
+        ] {
+            b.pos.push(corner.to_array());
+            b.uv.push(t);
         }
+        b.idx.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+        total += 1;
     }
     for (texture, b) in batches {
         let tex = loader.colour(&texture, false);
@@ -226,4 +296,82 @@ pub fn sphere(start: usize, count: usize, n: usize, radius: f32) -> Mesh {
         .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, nrm)
         .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uv)
         .with_inserted_indices(Indices::U32(idx))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Fleet Ops' `stars_default.odf`: 36 + 23 tile sprites at scale 250, 27 + 41 point
+    /// stars at 8 and 4 (127 stars; the mod's sprite table draws the first two groups).
+    fn default_odf() -> Vec<(String, u32, f32)> {
+        [("bstar.0", 36, 250.0), ("bstar.9", 23, 250.0), ("bstar.6", 27, 8.0), ("bstar.7", 41, 4.0)]
+            .map(|(n, c, s)| (n.to_owned(), c, s))
+            .to_vec()
+    }
+
+    #[test]
+    fn stars_cover_every_octant_and_the_odf_counts() {
+        let q = star_quads(&default_odf(), &StarSizing::default(), 1);
+        assert_eq!(q.len(), 127);
+        for entry in 0..4 {
+            let mut octants = [0u32; 8];
+            for s in q.iter().filter(|s| s.entry == entry) {
+                octants[usize::from(s.dir.x > 0.0) + 2 * usize::from(s.dir.y > 0.0) + 4 * usize::from(s.dir.z > 0.0)] += 1;
+            }
+            let n = [36u32, 23, 27, 41][entry];
+            assert!(octants.iter().all(|c| *c >= n / 16), "entry {entry}: {octants:?}");
+        }
+    }
+
+    /// The tile sprites are about 25 degrees across and, laid evenly, leave little bare.
+    #[test]
+    fn tiles_follow_the_odf_scale_and_fill_the_sky() {
+        let sizing = StarSizing::default();
+        let q = star_quads(&default_odf(), &sizing, 7);
+        let tiles: Vec<_> = q.iter().filter(|s| s.entry < 2).collect();
+        for s in &tiles {
+            // size = (75 - rand*35) * 250 over a distance of 30000..40000.
+            let (lo, hi) = (40.0 * 250.0 * 0.5 / 40000.0, 75.0 * 250.0 * 0.5 / 30000.0);
+            assert!((lo..=hi).contains(&s.half_tan), "{}", s.half_tan);
+        }
+        // Point stars follow their scale too: 4 and 8 times 40 to 75 units.
+        let point = q.iter().find(|s| s.entry == 3).unwrap();
+        assert!(point.half_tan < 0.01, "a star is a blob of a few pixels, not a patch");
+        // Directions inside the inscribed circle of some tile (the squares cover about a third more).
+        let mut rng = Lcg(99);
+        let (mut hit, total) = (0, 4000);
+        for _ in 0..total {
+            let z = rng.next() * 2.0 - 1.0;
+            let a = rng.next() * 2.0 * PI;
+            let r = (1.0 - z * z).sqrt();
+            let d = Vec3::new(r * a.cos(), z, r * a.sin());
+            hit += usize::from(tiles.iter().any(|t| t.dir.dot(d) >= t.half_tan.atan().cos()));
+        }
+        assert!(hit as f32 / total as f32 > 0.4, "tiles cover {hit}/{total} of the sphere");
+    }
+
+    #[test]
+    fn sizing_reads_art_cfg() {
+        let c = sta_assets::cfg_h::CfgH::parse(
+            "float DETAIL_2_STARFIELD_BACKGROUND_STAR_MAX_SIZE = 90.0;\nfloat DETAIL_2_STARFIELD_BACKGROUND_STAR_MAX_DISTANCE = 50000.0;\n",
+        );
+        let s = StarSizing::from_cfg(Some(&c));
+        assert_eq!((s.size, s.distance, s.size_variation), (90.0, 50000.0, 35.0));
+        assert_eq!(StarSizing::from_cfg(None), StarSizing::default());
+    }
+
+    /// Install-gated: Fleet Ops 4.0's own `ART_CFG.h` and `stars_default.odf`.
+    #[test]
+    fn fo4_files_give_the_expected_star_sizes() {
+        let roots = std::path::Path::new("/home/cedric/Games/Heroic/Star Trek Armada II Fleet Operations Roots");
+        let Ok(vfs) = sta_vfs::Vfs::mount_install(roots, Some("Fleet Ops 4.0")) else { return };
+        let cfg = vfs.read("ART_CFG.h").and_then(Result::ok).map(|b| sta_assets::cfg_h::CfgH::parse(&String::from_utf8_lossy(&b)));
+        assert_eq!(StarSizing::from_cfg(cfg.as_ref()), StarSizing::default());
+        let odf = vfs.list("odf").into_iter().find(|p| p.to_ascii_lowercase().ends_with("stars_default.odf")).unwrap();
+        let text = String::from_utf8_lossy(&vfs.read(&odf).unwrap().unwrap()).into_owned();
+        let sum: u32 = text.lines().filter(|l| !l.contains(".scale")).filter_map(|l| l.split('=').nth(1)?.trim().parse::<u32>().ok()).sum();
+        assert_eq!(sum, 127);
+        assert!(text.contains("bstar.0.scale = 250"));
+    }
 }
