@@ -240,7 +240,7 @@ reads the key with the source class byte as fallback. The relevant constructor
 windows and embedded key are byte-identical in the owned legacy and clean
 FleetOpsHook references, and the clean window was also inspected directly.
 The owned Boolean getter distinguishes absence from explicit false/zero and
-normalizes an authored numeric nonzero to true. These are static/source
+normalizes an authored integer nonzero to true. These are static/source
 findings, not live hook or gameplay acceptance. Do not copy native addresses
 or treat this FO extension as a stock A1/A2 default.
 
@@ -252,8 +252,10 @@ the existing Feature_<name> overrides. Precedence is profile defaults, mod
 Feature_pay_on_queue. Existing ODF inheritance supplies parent values; a
 child's zero overrides the same inherited native key. An inherited explicit
 STA64 Feature override still has the higher documented precedence; its child
-can override it through that same Feature key. Invalid native values warn
-and retain the existing fallback. Weapons and stock A1/A2 profiles do not
+can override it through that same Feature key. The initial key reader accepts true/false and signed 32-bit decimal integers,
+including noncanonical nonzero values such as 2. Other lexical forms warn
+and retain the existing fallback; native invalid/overflow parsing is not
+claimed as reproduced. Weapons and stock A1/A2 profiles do not
 interpret the FO key. Raw ODF data remains available unchanged.
 
 Production must consult the builder's resolved unit_features, rather than
