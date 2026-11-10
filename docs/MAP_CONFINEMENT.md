@@ -2,10 +2,11 @@
 
 ## Status and trigger
 
-This is a pre-implementation proposal and native-audit record for issue #287.
-No boundary state, new edit, default or Lua property is implemented by this
-proposal. Resolve the gates below and record the final decisions before core
-edits. Deliver the simulation seam before its LUA-05 adapter.
+This is a staged proposal and native-audit record for issue #287. The first
+implementation stage is the pure geometry operation specified below. Entity
+state, new edits, defaults, movement integration and the Lua property remain
+gated on their separate policy decisions. Deliver the integrated simulation
+seam before its LUA-05 adapter; pure geometry alone does not fix Blockade.
 
 The longer installed campaign probe fails on Blockade's unsupported
 Entity.forceOntoMap property. The external port has five true assignments and
@@ -82,9 +83,66 @@ on a reader-mode branch, then its zero-mode tail recomputes the force flag
 from strict raw X/Z interior; the other branch skips that recomputation.
 The ordinary FileReader constructor initializes that mode to zero, while a
 named ReplayReader constructor explicitly sets it to one on its FileReader.
-The exact fresh-map/saved-game caller provenance and corresponding A1/FO
-branches still need confirmation. Do not infer that every serialized flag
-must become a fresh-map authoring field merely from its presence in Save.
+The named A2 header loader derives the reader mode from its SaveDetails type,
+and its caller forwards that same reader to the main load operation. This is
+a typed object test, not evidence of a raw eight-byte BZN header tag. FO's
+inspected object Load has the same zero-mode recompute/nonzero-mode preserve
+branches. A1 instead uses a separate global gate around the serialized force
+read, and its inspected Load tail lacks the A2 raw-X/Z recomputation. A1's
+global-mode caller identity, FO's header-mode caller and the exact applicable
+class initialization flows remain open. Do not infer that every serialized
+flag must become a fresh-map authoring field merely from its presence in Save.
+
+## Stage 1: pure geometry contract
+
+The complete finite-coordinate comparisons are sufficient for an independent
+geometry prerequisite. Implement only `sta_sim::boundary` and its dedicated
+tests, plus the module declaration in `lib.rs`. It must not inspect or modify
+Sim, entities, content, commands, movement, snapshots, hashes or profile
+defaults. Initialization, background/class exemption and persistence remain
+caller responsibilities for later stages. No currently running game changes
+behaviour merely because this module is available.
+
+`BoundaryVolume::new(min, max, inset, upper_epsilon)` accepts Fixed values and
+returns a validated volume or an explicit error. It has no hardcoded tuning
+defaults: later content integration must supply resolved author-controlled
+rules. For X and Z, retain both the upper comparison limit and the distinct
+upper projection value:
+
+- Lower comparison/projection limit: `min + inset`.
+- Upper comparison limit: `max - inset`.
+- Upper projection value: `max - inset - upper_epsilon`.
+- For Y, comparison/projection limits are the unmodified min/max.
+
+Each lower violation is strictly below the lower limit; each upper violation
+is strictly above the upper comparison limit. Equality is inside, including
+equality at the upper comparison limit. A point above that upper limit projects
+to the upper projection value, not to the comparison limit. Check X, Y and Z;
+return both any-axis outside and X/Z-only outside indications. An inspect-only
+operation returns the original point even when outside; enforcement returns
+the projected point. Inputs are passed by value and never partially mutated.
+
+The native 100-unit inset and binary32 0.1 upper inset are reference test
+values, not module-owned configuration. That binary32 upper inset translates
+exactly to Fixed raw bits `429496736`; converting a decimal 0.1 directly gives
+a different value. All runtime geometry uses integer comparisons and checked
+integer construction, without floats or platform math. This preserves the
+documented inequalities, not x87 rounding at every intermediate operation.
+
+STA64 rejects negative inset/epsilon, reversed raw bounds, overflow in derived
+limits, or X/Z extents too small to contain their upper projection value.
+Flat Y bounds and zero inset/epsilon are valid. Rejection of unsupported tiny
+or overflowing volumes is an explicit STA64 contract, not a claim about the
+legacy executables on invalid maps. Validate with widened/checked arithmetic;
+Fixed's wrapping Add/Sub operators must not admit a wrapped volume. Valid
+enforced results are inside on reinspection and enforcement is idempotent.
+
+Test all axes, strict equality and neighbouring Fixed bits, asymmetric upper
+projection, Y-only reports, inspect-only preservation, corners, zero values,
+flat Y, rejected negative/reversed/tiny/overflowing volumes, valid extreme
+coordinates, idempotence and containment over a deterministic point grid.
+These tests establish the prerequisite only; later stages still require real
+commands, movement, save/replay and the campaign probe.
 
 ## Proposed shared seam
 
@@ -143,7 +201,7 @@ new boundary state.
 
 ## Required gates and tests
 
-Before core code, settle native fresh-map versus saved-state initialization,
+Before integrating entity confinement, settle native fresh-map versus saved-state initialization,
 background/class scope, target versus physical-update ordering, all numeric
 finite-domain comparisons, authoring keys and persistence migration. Declare
 only the exact paths needed by the resulting stage on #287. Keep race/loadout,
