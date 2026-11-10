@@ -84,10 +84,11 @@ pub fn variants_of(
             let Some(name) = weapon.str(&format!("replacement0class{n}")) else {
                 break;
             };
-            if let Some(k) = db.key(name.trim()) {
-                if db.unit(k).is_some_and(|u| u.resource.is_some()) && !out.contains(&k) {
-                    out.push(k);
-                }
+            if let Some(k) = db.key(name.trim())
+                && db.unit(k).is_some_and(|u| u.resource.is_some())
+                && !out.contains(&k)
+            {
+                out.push(k);
             }
         }
     }
