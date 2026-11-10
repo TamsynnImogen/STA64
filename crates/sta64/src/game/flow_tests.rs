@@ -177,3 +177,31 @@ fn a_setup_without_a_human_does_not_start() {
     assert_eq!(state(&app), AppState::FrontEnd);
     let _ = app.world().resource::<Messages<Notice>>();
 }
+
+/// Every request that reached the mixer's queue, for a test to read.
+#[derive(Resource, Default)]
+struct Requested(Vec<(String, crate::sim_link::Bus)>);
+
+fn record(mut msgs: MessageReader<crate::sim_link::PlaySound>, mut out: ResMut<Requested>) {
+    out.0.extend(msgs.read().map(|m| (m.name.clone(), m.bus)));
+}
+
+/// The front end's scene links a sim of ships for show. Selecting one (a click that
+/// landed on a menu button over the backdrop) or ordering it must not make a unit
+/// speak: no voice is requested outside a match.
+#[test]
+fn the_front_end_never_plays_unit_voices() {
+    use crate::sim_link::{Bus, OrderIssued, OrderKind, Selection, SelectionChanged};
+    let (mut app, _) = app();
+    app.init_resource::<Requested>().add_systems(Update, record);
+    settle(&mut app, 4);
+    assert!(app.world().contains_resource::<MenuScene>());
+    let ships: Vec<sta_sim::EntityId> = app.world().resource::<SimLink>().curr().units.iter().map(|u| u.id).collect();
+    assert!(!ships.is_empty());
+    app.world_mut().resource_mut::<Selection>().0 = ships.clone();
+    app.world_mut().write_message(SelectionChanged);
+    app.world_mut().write_message(OrderIssued { units: ships, kind: OrderKind::Move });
+    settle(&mut app, 3);
+    let voices: Vec<_> = app.world().resource::<Requested>().0.iter().filter(|(_, b)| *b == Bus::Voice).collect();
+    assert!(voices.is_empty(), "voices in the front end: {voices:?}");
+}

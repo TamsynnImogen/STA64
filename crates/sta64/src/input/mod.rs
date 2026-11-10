@@ -60,7 +60,10 @@ impl Plugin for InputPlugin {
                 )
                     .chain()
                     .in_set(crate::app::GameSet::Input)
-                    .distributive_run_if(resource_exists::<crate::sim_link::SimLink>),
+                    .distributive_run_if(resource_exists::<crate::sim_link::SimLink>)
+                    // The front end's scene links a sim of ships for show: a click on a menu
+                    // button (or the backdrop) must not select or order them.
+                    .distributive_run_if(not(resource_exists::<crate::frontend::scene::MenuScene>)),
             );
     }
 }
