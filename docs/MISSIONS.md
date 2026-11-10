@@ -82,6 +82,28 @@ establishes Producer → Craft and Starbase → Shipyard → Producer. These che
 allow the converted mission to find its static portal/base. They do not add a
 complete mapping from every ODF class label to every MMM type name.
 
+## Cinematic object callbacks
+
+Registered mission objects may also define `cineractiveUpdate(self)` and
+`cineractiveFinish(self, forced)`. The runtime keeps its existing setup/update
+rules and selects these optional method handles before each normal update.
+It then runs the cinematic update while the actual `Cineractive.active`
+singleton is true. When an observed active level ends, it calls finish once
+with `forced=false`, consuming that notification before calling Lua. A finish
+error is recorded without repeating the same finish on the next tick. These
+phases share the existing five-error budget for their object. A failed phase
+aborts its remaining phases for that poll; pending finish detection requires
+a later successful poll and stops if that object exhausts its budget. Other
+registered objects and function callbacks continue independently.
+
+A finish can start another cinematic; its cinematic update begins on the
+next poll. The active flag is copied directly from the existing singleton,
+without duplicating its state or retaining a userdata borrow during callbacks.
+This is a polling bridge convention, not native immediate timing. Forced skips,
+incoming input and cinematic transitions entirely between observed polls are
+outside this subset. Objects still require setup or update; function-only
+registrations retain their existing behavior.
+
 ## Permissive fallback diagnostics
 
 Unknown globals still return permissive stubs so incomplete missions can load.

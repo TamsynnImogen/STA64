@@ -34,7 +34,7 @@ Call-shape evidence: Immy's clean-room `armada_missions` A2 ports (including
 The asset-free intro test drives a real `Sim`, reaches a synthetic first
 objective, and replays its recorded presentation commands. It does not run
 a full converted stock mission. Remaining LUA-05 gates include the
-remaining DLL-named `A2` calls, mission-object lifecycle beyond the setup/update bridge,
+remaining DLL-named `A2` calls, unverified lifecycle defaults and forced input integration,
 unverified Timer overloads and other missing MMM APIs, full converted-mission
 tests, and client-side presentation/completion feedback. The package remains in progress.
 
@@ -184,9 +184,11 @@ for the numbering mode, bounded static Craft ancestry, and the three read-only
 DLL-shaped health/ODF queries.
 
 Named condition monitors now support the converted UI tutorial's observed
-five-argument constructor and OnTrue hook form. The separate ignored probe
-checks its early timed rules on empty synthetic views, without incoming input
-or manually invoking rule methods. Debug/TextInput still use permissive global
+five-argument constructor and OnTrue hook form. The early ignored probe
+checks timed rules on empty synthetic views, without incoming input or manually
+invoking rule methods. A second probe supplies installed objective text and
+naturally reaches tutorial step 1 at tick 511 after cinematic update/finish
+callbacks, loading three goals and awaiting input. Debug/TextInput still use permissive global
 fallbacks; their missing global/field lookups now appear in `unsupported()`.
 These diagnostics do not implement input. Native monitor timing, input
-advancement, cineractive object callbacks and full tutorial play remain open.
+advancement, forced skips and full tutorial play remain open.

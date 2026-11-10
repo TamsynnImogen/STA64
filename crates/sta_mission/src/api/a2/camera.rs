@@ -87,6 +87,13 @@ struct Cineractive {
     from_typed: bool,
 }
 
+/// Copy the existing singleton's state without calling Lua or exporting a VM handle.
+pub(super) fn active(lua: &Lua) -> mlua::Result<bool> {
+    let singleton = lua.globals().raw_get::<mlua::AnyUserData>("Cineractive")?;
+    let active = singleton.borrow::<Cineractive>()?.active;
+    Ok(active)
+}
+
 impl Cineractive {
     fn emit(&self, p: Presentation) {
         self.ctx.borrow_mut().edit(Edit::Present(p));

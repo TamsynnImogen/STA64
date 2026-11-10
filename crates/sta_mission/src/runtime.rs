@@ -26,7 +26,10 @@
 //! clean-room A2 ports. Its successful `setup(self)` runs once at the first
 //! controller tick, followed by `update(self, time)` each tick. Function
 //! registrations keep their original ordering and signature. These are
-//! bridge lifecycle rules: cineractive-specific object hooks remain pending.
+//! bridge lifecycle rules: optional `cineractiveUpdate(self)` runs while active,
+//! followed by `cineractiveFinish(self, false)` once an observed active level ends.
+//! Their method handles are selected before each normal update; forced skips
+//! and native immediate timing are not implemented.
 //!
 //! # Error isolation
 //!
@@ -158,7 +161,10 @@ pub use inspection::{EvalArgs, EvalResult};
 /// another callback kind outside the Lua state. Successful setup runs once,
 /// against the first controller view; update then runs once per tick. Setup
 /// failures use the existing callback retry/error budget, as function callbacks
-/// do. Cineractive-specific object hooks are not implemented by this bridge.
+/// do. Cinematic hooks use an explicit polling policy: normal update first,
+/// cinematic update while active, then a single normal-finish notification.
+/// Phase errors abort the remaining phases of that poll and use the existing
+/// per-object budget; later phases require successful preceding phases.
 fn object_callback(lua: &Lua, object: Table) -> mlua::Result<Function> {
     let mut any = false;
     for name in ["setup", "update"] {
@@ -168,19 +174,52 @@ fn object_callback(lua: &Lua, object: Table) -> mlua::Result<Function> {
             _ => return Err(mlua::Error::runtime(format!("mission object {name} must be a function or nil"))),
         }
     }
+    for name in ["cineractiveUpdate", "cineractiveFinish"] {
+        match object.get::<Value>(name)? {
+            Value::Nil | Value::Function(_) => {},
+            _ => return Err(mlua::Error::runtime(format!("mission object {name} must be a function or nil"))),
+        }
+    }
     if !any {
         return Err(mlua::Error::runtime("mission object must define setup or update"));
     }
     let mut initialized = false;
-    lua.create_function_mut(move |_, time: f64| {
+    let mut was_active = false;
+    lua.create_function_mut(move |lua, time: f64| {
         if !initialized {
             if let Some(setup) = object.get::<Option<Function>>("setup")? {
                 setup.call::<MultiValue>(object.clone())?;
             }
             initialized = true;
         }
+        // Select this poll's methods before update, as with monitor hook snapshots.
+        let cinematic_update = object.get::<Option<Function>>("cineractiveUpdate")?;
+        let cinematic_finish = object.get::<Option<Function>>("cineractiveFinish")?;
+        let cinematic_hooks = cinematic_update.is_some() || cinematic_finish.is_some();
+        if cinematic_hooks {
+            was_active |= api::cineractive_active(lua)?;
+        }
         if let Some(update) = object.get::<Option<Function>>("update")? {
             update.call::<MultiValue>((object.clone(), time))?;
+        }
+        if cinematic_hooks {
+            if api::cineractive_active(lua)? {
+                was_active = true;
+                if let Some(update) = cinematic_update {
+                    update.call::<MultiValue>(object.clone())?;
+                }
+            }
+            if was_active && !api::cineractive_active(lua)? {
+                // Consume the edge before calling Lua: a failed finish is not replayed.
+                was_active = false;
+                if let Some(finish) = cinematic_finish {
+                    finish.call::<MultiValue>((object.clone(), false))?;
+                }
+            }
+            // A finish may start a new cinematic; it is updated on the next poll.
+            was_active = api::cineractive_active(lua)?;
+        } else {
+            was_active = false;
         }
         Ok(())
     })

@@ -84,6 +84,10 @@ pub(crate) fn drain_commands(ctx: &Shared) -> Vec<Command> {
     spawn::drain(&mut ctx.borrow_mut())
 }
 
+pub(crate) fn cineractive_active(lua: &Lua) -> mlua::Result<bool> {
+    a2::cineractive_active(lua)
+}
+
 /// Explicit conversion between Lua player numbers and core player slots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PlayerNumbering {

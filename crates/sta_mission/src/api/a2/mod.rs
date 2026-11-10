@@ -23,6 +23,10 @@ mod subsystems;
 mod tests;
 mod titles;
 
+pub(super) fn cineractive_active(lua: &Lua) -> mlua::Result<bool> {
+    camera::active(lua)
+}
+
 pub(super) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
     camera::install(lua, ctx)?;
     media::install(lua, ctx)?;
