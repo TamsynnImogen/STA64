@@ -10,6 +10,7 @@ use bevy::ui::UiTargetCamera;
 use super::data::{Browse, ScreenData, SelectedMod, SettingKey, SetupDraft, Settings};
 use super::{Col, Screen};
 use crate::app::AppState;
+use crate::ui::i18n::{tr, trf};
 use crate::ui::theme::{Theme, button, disabled_button, label, list, panel, slider, toggle};
 
 /// A screen's root node: everything of the screen hangs under it.
@@ -62,12 +63,12 @@ pub struct Ctx<'a> {
 /// Spawn `screen`; `camera` is the UI camera when the host has one of its own.
 pub fn spawn(commands: &mut Commands, screen: Screen, ctx: &Ctx, camera: Option<Entity>) {
     match screen {
-        Screen::Main => frame(commands, ctx, screen, camera, "Star Trek Armada", 520.0, main_menu(ctx)),
-        Screen::SinglePlayer => frame(commands, ctx, screen, camera, "Single player", 620.0, single_player(ctx)),
-        Screen::Setup => frame(commands, ctx, screen, camera, "Instant action", 960.0, setup(ctx)),
-        Screen::MapSelect => frame(commands, ctx, screen, camera, "Select map", 760.0, map_select(ctx)),
-        Screen::Settings => frame(commands, ctx, screen, camera, "Options", 760.0, settings(ctx)),
-        Screen::ModSelect => frame(commands, ctx, screen, camera, "Mods", 900.0, mod_select(ctx)),
+        Screen::Main => frame(commands, ctx, screen, camera, &tr("Star Trek Armada"), 520.0, main_menu(ctx)),
+        Screen::SinglePlayer => frame(commands, ctx, screen, camera, &tr("Single player"), 620.0, single_player(ctx)),
+        Screen::Setup => frame(commands, ctx, screen, camera, &tr("Instant action"), 960.0, setup(ctx)),
+        Screen::MapSelect => frame(commands, ctx, screen, camera, &tr("Select map"), 760.0, map_select(ctx)),
+        Screen::Settings => frame(commands, ctx, screen, camera, &tr("Options"), 760.0, settings(ctx)),
+        Screen::ModSelect => frame(commands, ctx, screen, camera, &tr("Mods"), 900.0, mod_select(ctx)),
     }
 }
 
@@ -106,13 +107,13 @@ fn main_menu(ctx: &Ctx) -> impl Bundle {
     let t = ctx.theme.clone();
     let w = 440.0;
     content(ctx.theme, move |p| {
-        p.spawn((button(&t, "Single player", w), Act::Goto(Screen::SinglePlayer)));
-        p.spawn((button(&t, "Instant action", w), Act::Goto(Screen::Setup)));
+        p.spawn((button(&t, &tr("Single player"), w), Act::Goto(Screen::SinglePlayer)));
+        p.spawn((button(&t, &tr("Instant action"), w), Act::Goto(Screen::Setup)));
         // The lobby (UI-11) opens this.
-        p.spawn(disabled_button(&t, "Multiplayer", w));
-        p.spawn((button(&t, "Mods", w), Act::PickMod));
-        p.spawn((button(&t, "Options", w), Act::Goto(Screen::Settings)));
-        p.spawn((button(&t, "Exit", w), Act::Exit));
+        p.spawn(disabled_button(&t, &tr("Multiplayer"), w));
+        p.spawn((button(&t, &tr("Mods"), w), Act::PickMod));
+        p.spawn((button(&t, &tr("Options"), w), Act::Goto(Screen::Settings)));
+        p.spawn((button(&t, &tr("Exit"), w), Act::Exit));
     })
 }
 
@@ -123,10 +124,10 @@ fn single_player(ctx: &Ctx) -> impl Bundle {
         // The campaigns need the mission scripts (LUA lane); the cards stand
         // where Refit's `single_player.rs` has them.
         for name in ["Tutorials", "Federation campaign", "Klingon campaign", "Borg campaign"] {
-            p.spawn(disabled_button(&t, name, w));
+            p.spawn(disabled_button(&t, &tr(name), w));
         }
-        p.spawn(disabled_button(&t, "Load game", w));
-        p.spawn((button(&t, "Previous menu", w), Act::Goto(Screen::Main)));
+        p.spawn(disabled_button(&t, &tr("Load game"), w));
+        p.spawn((button(&t, &tr("Previous menu"), w), Act::Goto(Screen::Main)));
     })
 }
 
@@ -137,34 +138,34 @@ fn setup(ctx: &Ctx) -> impl Bundle {
     content(ctx.theme, move |p| {
         p.spawn((
             row(t.gap),
-            children![cell(&t, 130.0, "Seat"), cell(&t, 200.0, "Control"), cell(&t, 260.0, "Side"), cell(&t, 160.0, "Team")],
+            children![cell(&t, 130.0, &tr("Seat")), cell(&t, 200.0, &tr("Control")), cell(&t, 260.0, &tr("Side")), cell(&t, 160.0, &tr("Team"))],
         ));
         for (i, seat) in draft.seats.iter().enumerate() {
             p.spawn((
                 row(t.gap),
                 children![
-                    cell(&t, 130.0, &format!("Player {}", i + 1)),
+                    cell(&t, 130.0, &trf("Player {0}", &[&(i + 1)])),
                     (button(&t, seat.control.label(), 200.0 - t.gap), Act::Cycle(i, Col::Control)),
                     (button(&t, if seat.race.is_empty() { "none" } else { &seat.race }, 260.0 - t.gap), Act::Cycle(i, Col::Race)),
-                    (button(&t, &format!("Team {}", seat.team + 1), 160.0 - t.gap), Act::Cycle(i, Col::Team)),
+                    (button(&t, &trf("Team {0}", &[&(seat.team + 1)]), 160.0 - t.gap), Act::Cycle(i, Col::Team)),
                 ],
             ));
         }
         match &map {
             Some((title, slots)) => {
-                p.spawn((row(t.gap), children![label(&t, &format!("Map: {title}  ({slots} players)")), (button(&t, "Select map", 220.0), Act::PickMap)]));
+                p.spawn((row(t.gap), children![label(&t, &trf("Map: {0}  ({1} players)", &[&title, &slots])), (button(&t, &tr("Select map"), 220.0), Act::PickMap)]));
             }
             None => {
-                p.spawn(label(&t, "No maps found."));
+                p.spawn(label(&t, &tr("No maps found.")));
             }
         }
         p.spawn(row(t.gap)).with_children(|r| {
             if map.is_some() {
-                r.spawn((button(&t, "Launch", 220.0), Act::Launch));
+                r.spawn((button(&t, &tr("Launch"), 220.0), Act::Launch));
             } else {
-                r.spawn(disabled_button(&t, "Launch", 220.0));
+                r.spawn(disabled_button(&t, &tr("Launch"), 220.0));
             }
-            r.spawn((button(&t, "Previous menu", 220.0), Act::Goto(Screen::Main)));
+            r.spawn((button(&t, &tr("Previous menu"), 220.0), Act::Goto(Screen::Main)));
         });
     })
 }
@@ -178,11 +179,11 @@ fn map_select(ctx: &Ctx) -> impl Bundle {
         p.spawn((list(&t, &rows, picked), MapList));
         p.spawn(row(t.gap)).with_children(|r| {
             if picked.is_some() {
-                r.spawn((button(&t, "Select map", 220.0), Act::TakeMap));
+                r.spawn((button(&t, &tr("Select map"), 220.0), Act::TakeMap));
             } else {
-                r.spawn(disabled_button(&t, "Select map", 220.0));
+                r.spawn(disabled_button(&t, &tr("Select map"), 220.0));
             }
-            r.spawn((button(&t, "Cancel", 220.0), Act::Goto(Screen::Setup)));
+            r.spawn((button(&t, &tr("Cancel"), 220.0), Act::Goto(Screen::Setup)));
         });
     })
 }
@@ -191,45 +192,45 @@ fn settings(ctx: &Ctx) -> impl Bundle {
     let t = ctx.theme.clone();
     let s = ctx.settings.clone();
     content(ctx.theme, move |p| {
-        p.spawn(label(&t, "Sound"));
+        p.spawn(label(&t, &tr("Sound")));
         for (name, key) in [
             ("Master volume", SettingKey::MasterVolume),
             ("Music", SettingKey::MusicVolume),
             ("Effects", SettingKey::EffectsVolume),
             ("Voices", SettingKey::VoiceVolume),
         ] {
-            p.spawn((row(t.gap), children![cell(&t, 240.0, name), (slider(&t, 360.0, 0.0, 100.0, s.number(key).unwrap_or(0.0)), SettingSlider(key))]));
+            p.spawn((row(t.gap), children![cell(&t, 240.0, &tr(name)), (slider(&t, 360.0, 0.0, 100.0, s.number(key).unwrap_or(0.0)), SettingSlider(key))]));
         }
-        p.spawn(label(&t, "Game"));
-        p.spawn((row(t.gap), children![cell(&t, 240.0, "Scroll speed"), (slider(&t, 360.0, 0.0, 100.0, s.scroll_speed), SettingSlider(SettingKey::ScrollSpeed))]));
-        p.spawn(label(&t, "Graphics"));
+        p.spawn(label(&t, &tr("Game")));
+        p.spawn((row(t.gap), children![cell(&t, 240.0, &tr("Scroll speed")), (slider(&t, 360.0, 0.0, 100.0, s.scroll_speed), SettingSlider(SettingKey::ScrollSpeed))]));
+        p.spawn(label(&t, &tr("Graphics")));
         p.spawn((
             row(t.gap),
             children![
-                (toggle(&t, "Fullscreen", s.fullscreen, 220.0), SettingToggle(SettingKey::Fullscreen)),
-                (toggle(&t, "Vertical sync", s.vsync, 220.0), SettingToggle(SettingKey::Vsync)),
-                (toggle(&t, "Show FPS", s.show_fps, 220.0), SettingToggle(SettingKey::ShowFps)),
+                (toggle(&t, &tr("Fullscreen"), s.fullscreen, 220.0), SettingToggle(SettingKey::Fullscreen)),
+                (toggle(&t, &tr("Vertical sync"), s.vsync, 220.0), SettingToggle(SettingKey::Vsync)),
+                (toggle(&t, &tr("Show FPS"), s.show_fps, 220.0), SettingToggle(SettingKey::ShowFps)),
             ],
         ));
-        p.spawn((button(&t, "Previous menu", 220.0), Act::Goto(Screen::Main)));
+        p.spawn((button(&t, &tr("Previous menu"), 220.0), Act::Goto(Screen::Main)));
     })
 }
 
 fn mod_select(ctx: &Ctx) -> impl Bundle {
     let t = ctx.theme.clone();
-    let mut names = vec!["Base game".to_owned()];
+    let mut names = vec![tr("Base game")];
     names.extend(ctx.data.mods.iter().map(|m| m.name.clone()));
     let picked = ctx.browse.mod_row.min(names.len() - 1);
     let mut details = Vec::new();
     match picked.checked_sub(1).and_then(|i| ctx.data.mods.get(i)) {
-        None => details.push("The game as installed, without a mod.".to_owned()),
+        None => details.push(tr("The game as installed, without a mod.")),
         Some(m) => {
             details.push(format!("{}{}", m.name, m.version.as_deref().map(|v| format!("  v{v}")).unwrap_or_default()));
             if !m.authors.is_empty() {
-                details.push(format!("By {}", m.authors.join(", ")));
+                details.push(trf("By {0}", &[&m.authors.join(", ")]));
             }
             if let Some(parent) = &m.parent {
-                details.push(format!("Needs {parent}"));
+                details.push(trf("Needs {0}", &[parent]));
             }
             if !m.description.is_empty() {
                 details.push(m.description.clone());
@@ -237,8 +238,8 @@ fn mod_select(ctx: &Ctx) -> impl Bundle {
         }
     }
     let current = match &ctx.selected.0 {
-        Some(f) => format!("In use: {f}"),
-        None => "In use: base game".to_owned(),
+        Some(f) => trf("In use: {0}", &[f]),
+        None => tr("In use: base game"),
     };
     content(ctx.theme, move |p| {
         let rows: Vec<&str> = names.iter().map(String::as_str).collect();
@@ -247,6 +248,6 @@ fn mod_select(ctx: &Ctx) -> impl Bundle {
             p.spawn(label(&t, d));
         }
         p.spawn(label(&t, &current));
-        p.spawn((row(t.gap), children![(button(&t, "Use mod", 220.0), Act::UseMod), (button(&t, "Previous menu", 220.0), Act::Goto(Screen::Main))]));
+        p.spawn((row(t.gap), children![(button(&t, &tr("Use mod"), 220.0), Act::UseMod), (button(&t, &tr("Previous menu"), 220.0), Act::Goto(Screen::Main))]));
     })
 }

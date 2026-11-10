@@ -39,6 +39,7 @@ use sta_sim::{EntityId, PlayerId, WorldView};
 use super::theme::{Theme, ThemePlugin, mix, panel};
 use crate::app::GameSet;
 use crate::sim_link::{ContentRes, Selection, SimLink};
+use crate::ui::i18n::tr;
 
 /// The square's side in theme units (Refit `MinimapSize`, at most 45% of the
 /// 1080-unit screen).
@@ -338,9 +339,9 @@ pub struct FilterName {
 #[derive(Resource, Default)]
 pub struct BlipEntities(BTreeMap<EntityId, Entity>);
 
-fn text(s: &str, size: f32, color: Color) -> impl Bundle {
+fn text(s: impl Into<String>, size: f32, color: Color) -> impl Bundle {
     (
-        Text::new(s),
+        Text::new(s.into()),
         TextFont { font_size: bevy::text::FontSize::Px(size), ..default() },
         TextColor(color),
         Pickable::IGNORE,
@@ -372,7 +373,7 @@ fn strip(theme: &Theme, station: bool) -> impl Bundle {
             Spawn((
                 FilterName { station },
                 Node { margin: UiRect::right(Val::Px(2.0)), ..default() },
-                children![text(if station { "Stations" } else { "Ships" }, theme.micro_size, theme.text_dim)],
+                children![text(tr(if station { "Stations" } else { "Ships" }), theme.micro_size, theme.text_dim)],
             )),
             SpawnIter(dots.into_iter()),
         )),
@@ -410,7 +411,7 @@ pub fn spawn_radar(mut commands: Commands, theme: Res<Theme>, existing: Query<()
     commands.spawn((
         RadarRoot,
         Node { position_type: PositionType::Absolute, left: Val::Px(10.0), bottom: Val::Px(10.0), ..default() },
-        children![panel(t, "Radar", content)],
+        children![panel(t, &tr("Radar"), content)],
     ));
 }
 

@@ -401,7 +401,7 @@ fn smoke_attach(
     let want: BTreeMap<EntityId, u8> = units.iter().map(|(u, h, cloaked)| (u.0, if cloaked { 0 } else { smoke_level(h.0) })).collect();
     for (e, mut s) in &mut emitters {
         match want.get(&s.unit).copied().unwrap_or(0) {
-            0 => cmds.entity(e).despawn(),
+            0 => cmds.entity(e).try_despawn(),
             l if l != s.level => s.level = l,
             _ => {}
         }
@@ -483,7 +483,7 @@ fn update_impacts(
         let age = age_secs(&clock, &fx);
         let ticks_age = age * TICK_HZ as f32 + fx.delay;
         if ticks_age >= fx.life {
-            cmds.entity(e).despawn();
+            cmds.entity(e).try_despawn();
             continue;
         }
         let k = (ticks_age / fx.life).clamp(0.0, 1.0);
@@ -559,18 +559,18 @@ fn attach_visuals(
     for (e, fx) in &new {
         match fx.kind {
             ImpactKind::Shield => {
-                cmds.entity(e).insert((Mesh3d(ball.clone()), MeshMaterial3d(shield_mats.add(ShieldMaterial { params: default() }))));
+                cmds.entity(e).try_insert((Mesh3d(ball.clone()), MeshMaterial3d(shield_mats.add(ShieldMaterial { params: default() }))));
             }
             ImpactKind::Fire | ImpactKind::Ring => {
-                cmds.entity(e).insert((Mesh3d(ball.clone()), MeshMaterial3d(fire_mats.add(FireMaterial { params: default() }))));
+                cmds.entity(e).try_insert((Mesh3d(ball.clone()), MeshMaterial3d(fire_mats.add(FireMaterial { params: default() }))));
             }
             ImpactKind::Spark => {
-                cmds.entity(e).insert((Mesh3d(rect.clone()), MeshMaterial3d(quad_mats.add(quad::material(&fx.look)))));
+                cmds.entity(e).try_insert((Mesh3d(rect.clone()), MeshMaterial3d(quad_mats.add(quad::material(&fx.look)))));
             }
             ImpactKind::Debris | ImpactKind::Puff => {
                 let blend = if fx.kind == ImpactKind::Puff { AlphaMode::Blend } else { AlphaMode::Add };
                 let material = std_mats.add(StandardMaterial { base_color: fx.colour, emissive: fx.colour.to_linear() * 3.0, unlit: true, alpha_mode: blend, ..default() });
-                cmds.entity(e).insert((Mesh3d(ball.clone()), MeshMaterial3d(material)));
+                cmds.entity(e).try_insert((Mesh3d(ball.clone()), MeshMaterial3d(material)));
             }
         }
     }
