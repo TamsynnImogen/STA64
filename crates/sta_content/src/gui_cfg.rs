@@ -338,6 +338,14 @@ impl GuiCfg {
         Some((w as i32, h as i32))
     }
 
+    /// The typed layout on the canvas the game's files imply when they set
+    /// none: Armada II and Fleet Operations (`gui_interface.cfg` is read) draw
+    /// on 1600 x 1200, Armada I's cfgs on 640 x 480.
+    pub fn layout_auto(&self) -> GuiLayout {
+        let a2 = self.files.iter().any(|f| f.to_ascii_lowercase().starts_with("gui_interface"));
+        self.layout(if a2 { (1600, 1200) } else { (640, 480) })
+    }
+
     /// The typed layout. `default_canvas` applies when the files set no
     /// `screenWidth`/`screenHeight` (Armada I: 640 × 480).
     pub fn layout(&self, default_canvas: (i32, i32)) -> GuiLayout {

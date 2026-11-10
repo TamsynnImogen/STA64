@@ -202,15 +202,24 @@ fn info_sizes(p: Option<&Panel>, s: f32) -> [Vec2; 3] {
         .collect();
     rects.sort_by_key(|r| r.h);
     rects.dedup_by_key(|r| r.h);
-    let pick: Vec<(i32, i32)> = if rects.len() >= 3 {
-        let n = rects.len();
-        [rects[0], rects[n / 2], rects[n - 1]].iter().map(|r| (r.w, r.h)).collect()
-    } else {
-        STOCK_INFO.to_vec()
-    };
+    // Stock's sizes are on stock's canvas whatever the cfg's; a cfg with fewer
+    // than three heights (Fleet Operations: one strip, 163 tall) gives its
+    // height to all three, with stock's width and the content's minimum.
+    let stock = SCREEN_H / STOCK_CANVAS.1 as f32;
     let mut out = [Vec2::ZERO; 3];
-    for i in 0..3 {
-        out[i] = Vec2::new(pick[i].0 as f32 * s, pick[i].1 as f32 * s).max(INFO_MIN[i]);
+    for (i, o) in out.iter_mut().enumerate() {
+        let (w, h) = match rects.len() {
+            0 => (STOCK_INFO[i].0 as f32 * stock, STOCK_INFO[i].1 as f32 * stock),
+            1 | 2 => {
+                let r = rects[rects.len() - 1];
+                (STOCK_INFO[i].0 as f32 * stock, r.h as f32 * s)
+            }
+            n => {
+                let r = [rects[0], rects[n / 2], rects[n - 1]][i];
+                (r.w as f32 * s, r.h as f32 * s)
+            }
+        };
+        *o = Vec2::new(w, h).max(INFO_MIN[i]);
     }
     out
 }
@@ -226,7 +235,7 @@ mod tests {
     fn fo() -> HudLayout {
         let (cfg, w) = GuiCfg::parse("gui_fo.cfg", FO);
         assert!(w.is_empty(), "{w:?}");
-        HudLayout::new(Some(&cfg.layout((640, 480))), 16.0 / 9.0)
+        HudLayout::new(Some(&cfg.layout_auto()), 16.0 / 9.0)
     }
 
     #[test]
@@ -251,7 +260,7 @@ mod tests {
         assert_eq!(l.no_resource, [false; 4]);
         // One area alone is not three heights: stock's three.
         let (cfg, _) = GuiCfg::parse("a.cfg", "infoPanelArea = 146 364 247 116\n");
-        assert_eq!(HudLayout::new(Some(&cfg.layout((640, 480))), 4.0 / 3.0).info[0].x, 880.0 * 1080.0 / 480.0);
+        assert_eq!(HudLayout::new(Some(&cfg.layout_auto()), 4.0 / 3.0).info[0].x, 880.0 * 0.9);
     }
 
     #[test]
@@ -296,5 +305,43 @@ mod tests {
         assert_eq!(lo.bottom(), hi.bottom());
         assert!(hi.h > lo.h);
         assert!(l.solid(Some(InfoHeight::High)).len() == 4 && l.solid(None).len() == 3);
+    }
+
+    /// A Fleet Operations race cfg as Roots ships it: `gui_interface.cfg` on
+    /// the 1600 x 1200 canvas it never declares, one 163-tall info strip.
+    fn roots() -> GuiLayout {
+        let (cfg, w) = GuiCfg::load("gui_federation.cfg", &mut |n| match n {
+            "gui_federation.cfg" => Some("#include \"gui_interface.cfg\"\n".into()),
+            "gui_interface.cfg" => Some(
+                "resourcePanelArea = 100 8 870 48\ninfoPanelArea_0 = 0 0 0 0\n\
+                 infoPanelArea_1 = 352 1038 1249 163\ninfoPanelArea_2 = 352 1038 1249 163\n"
+                    .into(),
+            ),
+            _ => None,
+        });
+        assert!(w.is_empty(), "{w:?}");
+        cfg.layout_auto()
+    }
+
+    /// The info panel is a short strip at every window size, for one unit and
+    /// for a group: no taller than stock's group panel (310 of 1200 canvas
+    /// lines, 26% of the screen), no shorter than its one-unit strip (85 of
+    /// 1200, 7%). Its height over the window's is the same in theme units.
+    #[test]
+    fn the_info_panel_is_a_short_strip_at_any_window_size() {
+        let roots = roots();
+        assert_eq!(roots.canvas, (1600, 1200));
+        let a1 = GuiCfg::parse("a1.cfg", "infoPanelArea = 146 364 247 116\n").0.layout_auto();
+        for (w, h) in [(2000.0f32, 837.0f32), (1920.0, 1080.0), (1280.0, 720.0)] {
+            for cfg in [Some(&roots), Some(&a1), None] {
+                let l = HudLayout::new(cfg, w / h);
+                for height in [InfoHeight::Low, InfoHeight::High] {
+                    let r = l.bottom_row(Some(height)).info;
+                    let share = r.h / SCREEN_H;
+                    assert!((0.07..=0.26).contains(&share), "{w}x{h} {height:?}: {share}");
+                    assert!(r.bottom() <= l.screen.y && r.right() <= l.screen.x);
+                }
+            }
+        }
     }
 }
