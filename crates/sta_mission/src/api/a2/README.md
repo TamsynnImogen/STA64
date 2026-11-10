@@ -130,6 +130,20 @@ bounded by maximum hull. Finite values beyond the fixed-point range saturate
 before clamping; non-finite values are rejected. Reads see the old snapshot
 until the host advances. Native invalid-input and float ABI parity are unverified.
 
+`A2.SetSpecialEnergy(id, energy)` requires exactly two arguments: an unsigned
+live positive-hull ID with a content-defined energy pool and a finite Lua
+number. Invalid arguments or ineligible targets raise errors before queuing.
+It queues an absolute SCRIPT `Edit::SetEnergy`; finite values saturate at the
+fixed-point boundary and the sim clamps to zero through the configured maximum.
+Normal regeneration and cloak cost/drain still run in their usual tick phases.
+Maximum and refill rate come from the unit's resolved `maxSpecialEnergy` and
+`specialEnergyRate` ODF keys. Child/include overrides remain authoritative:
+maximum zero disables the pool and rate zero prevents regeneration. This
+adapter adds no replacement maximum or forced refill default. Absolute input
+units are supported by the pinned A2 reference; these validation/clamping
+policies and native float ABI/default parity remain separate claims. No new
+energy getter, view field or mission save/resume support is implied.
+
 
 The shared order enum is available as both `Order` and `GameObject.Order`,
 which refer to the same table. This supplies the namespace used in 104
