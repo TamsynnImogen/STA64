@@ -39,6 +39,7 @@ use sta_sim::command::{CommandKind, Order, Target};
 use sta_sim::{ContentKey, EntityId, Vec3 as SimVec3};
 
 pub use layout::{HudLayout, InfoHeight};
+pub use panels::HudRoot;
 pub use model::{Act, HudFeed, Page};
 use model::{Models, TargetMode, command, models};
 use panels::{GridCell, GridPanel, GroupTile, InfoPanel, ResourceStrip};
@@ -49,6 +50,7 @@ use super::theme::{ButtonClicked, Theme, ThemePlugin};
 use crate::app::GameSet;
 use crate::input::orders::{Aim, OrderTargets, formation_moves};
 use crate::input::select::{Targetable, unit_under};
+use crate::ui::i18n::{tr, trf};
 use sta_sim::view::UnitFlags;
 use sta_sim::world::EntityKind;
 use crate::sim_link::{CommandQueue, ContentRes, OrderIssued, OrderKind, Selection, SelectionChanged, SimLink};
@@ -357,7 +359,7 @@ fn press(
                 state.targeting = Some(*mode);
                 notices.write(Notice::new(
                     Severity::Info,
-                    format!("{mode:?}: click the map (Esc cancels)"),
+                    trf("{0}: click the map (Esc cancels)", &[&tr(&format!("{mode:?}"))]),
                 ));
             }
             Act::Build {
@@ -379,7 +381,7 @@ fn press(
                 });
                 notices.write(Notice::new(
                     Severity::Info,
-                    format!("Place {odf}: click the map (Esc cancels)"),
+                    trf("Place {0}: click the map (Esc cancels)", &[odf]),
                 ));
             }
             other => {
