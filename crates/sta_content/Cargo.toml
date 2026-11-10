@@ -11,9 +11,13 @@ license.workspace = true
 sta_core = { workspace = true, features = ["serde"] }
 sta_odf.workspace = true
 sta_vfs.workspace = true
+sta_assets.workspace = true
+a2fmt.workspace = true
 sta_bzn.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
 json5.workspace = true
+# The install tests resolve models the way the renderer does (`sta_assets::find_model`).
+sta_assets.workspace = true
