@@ -147,6 +147,27 @@ APK ELF payload: 790fa20cb05f0aac326f39c92279b22c47801bf676381f291c0ae240680bcf6
 Prepackage ELF:  6e133b219a0380658d795b2f242ba5a3bc037be9f61422b41e1d772e9abdf454
 ```
 
+The [clean hosted workflow run](https://github.com/TamsynnImogen/STA64/actions/runs/42856234141)
+also succeeded on 2026-11-10 at source
+`4e4625f3201b367e2c4791bfc619811a98fef793`, using the same pinned Android
+build stack and Temurin 21.0.13. It built the full ARM64 client and signed APK,
+passed all staged/actual-payload ELF, dependency, alignment and signature checks,
+and uploaded `sta64-android-arm64-debug`. The downloaded APK's hash was
+independently checked against the build log:
+
+```text
+Hosted APK:      40a88ca9f83ac77552a5082de1cc36baaff956d71c2816aebba868a55110cd5f
+Hosted payload:  ff60156e4ed8b799ba788ec702143e62321ad91cf9908b6c6bfa37f4cc8b9431
+```
+
+Two hosted-runner setup failures preceded that successful run: setup-android's
+obsolete default `tools` package request, fixed by explicitly requesting
+`platform-tools`, and conflicting preinstalled NDK aliases, fixed by setting
+both aliases to the pinned NDK. Neither required game/dependency changes. These
+results establish clean-runner APK build support, not Android/Waydroid runtime
+acceptance. Different debug build/signing environments yield different artifact
+hashes; retain the matching source and receipt for each APK.
+
 The actual APK payload differs from the prepackage library because Gradle strips
 symbols. The debug APK is about 176 MiB; this is an unoptimized development
 artifact, not a release-size or performance result. No original game data is
