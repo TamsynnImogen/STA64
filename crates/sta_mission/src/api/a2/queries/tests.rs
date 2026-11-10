@@ -100,6 +100,118 @@ fn health_tracks_fresh_snapshot_and_is_odf_matches_only_the_definition_name() {
 }
 
 #[test]
+fn original_race_comes_from_definition_and_is_independent_of_owner() {
+    let fake_db = fake::db();
+    let mut other_def = fake_db
+        .unit(fake_db.key("fx_cruiser").unwrap())
+        .unwrap()
+        .clone();
+    other_def.odf = "other_cruiser".into();
+    other_def.race = "other".into();
+    let mut builder = ContentDb::builder()
+        .profile(fake_db.profile())
+        .features(fake_db.features().clone());
+    for unit in fake_db.units() {
+        builder = builder.unit(unit.clone());
+    }
+    for weapon in fake_db.weapons() {
+        builder = builder.weapon(weapon.clone());
+    }
+    let db = Arc::new(builder.unit(other_def).build().unwrap());
+    let setup = GameSetup {
+        seed: 19,
+        map: Arc::new(MapDef::empty()),
+        content: db.clone(),
+        players: vec![
+            PlayerSetup {
+                id: PlayerId(0),
+                team: TeamId(0),
+                race: "fx".into(),
+                control: Control::Idle,
+            },
+            PlayerSetup {
+                id: PlayerId(1),
+                team: TeamId(1),
+                race: "other".into(),
+                control: Control::Idle,
+            },
+        ],
+        options: GameOptions::default(),
+    };
+    let mut sim = Sim::from_setup(&setup);
+    let other_id = sim
+        .spawn_def(
+            db.key("other_cruiser").unwrap(),
+            PlayerId(1),
+            Vec3::from_f32([100.0, 0.0, 0.0]),
+            (Fixed::ZERO, Fixed::ONE),
+        )
+        .unwrap();
+    let id = sim
+        .spawn_def(
+            db.key("fx_cruiser").unwrap(),
+            PlayerId(0),
+            Vec3::ZERO,
+            (Fixed::ZERO, Fixed::ONE),
+        )
+        .unwrap();
+    let mut rt = runtime(&sim, Some(db));
+    assert_eq!(
+        rt.eval::<String>(&format!("return A2.GetOriginalRace({})", id.0))
+            .unwrap(),
+        "fx"
+    );
+    assert_eq!(
+        rt.eval::<String>(&format!("return A2.GetOriginalRace({})", other_id.0))
+            .unwrap(),
+        "other"
+    );
+    assert_eq!(
+        rt.eval::<i64>(&format!("return A2.GetRealTeam({})", id.0))
+            .unwrap(),
+        0
+    );
+
+    let mut fresh = (*sim.view()).clone();
+    fresh
+        .units
+        .iter_mut()
+        .find(|unit| unit.id == id)
+        .unwrap()
+        .owner = PlayerId(1);
+    fresh.tick += 1;
+    assert_eq!(
+        rt.eval::<String>(&format!("return A2.GetOriginalRace({})", id.0))
+            .unwrap(),
+        "fx"
+    );
+    assert_eq!(
+        rt.eval::<i64>(&format!("return A2.GetRealTeam({})", id.0))
+            .unwrap(),
+        0
+    );
+
+    let mut commands = Vec::new();
+    rt.think(&fresh, &[], &mut commands);
+    assert_eq!(
+        rt.eval::<String>(&format!("return A2.GetOriginalRace({})", id.0))
+            .unwrap(),
+        "fx"
+    );
+    assert_eq!(
+        rt.eval::<String>(&format!("return A2.GetOriginalRace({})", other_id.0))
+            .unwrap(),
+        "other"
+    );
+    assert_eq!(
+        rt.eval::<i64>(&format!("return A2.GetRealTeam({})", id.0))
+            .unwrap(),
+        1
+    );
+    assert!(commands.is_empty() && rt.take_commands().is_empty() && rt.unsupported().is_empty());
+}
+
+#[test]
 fn is_race_compares_only_the_live_definition_race_literal_case_insensitively() {
     let (sim, db, id) = scene();
     let mut rt = runtime(&sim, Some(db));
@@ -125,6 +237,13 @@ fn malformed_inputs_are_rejected_without_commands() {
         "A2.GetMaxHealth(1.5)",
         "A2.GetMaxHealth('1')",
         "A2.GetCurrentHealth(4294967296)",
+        "A2.GetOriginalRace()",
+        "A2.GetOriginalRace(1,2)",
+        "A2.GetOriginalRace(-1)",
+        "A2.GetOriginalRace(1.5)",
+        "A2.GetOriginalRace('1')",
+        "A2.GetOriginalRace(4294967296)",
+        "A2.GetOriginalRace(99999)",
         "A2.GetMaxHealth(0/0)",
         "A2.GetCurrentHealth(99999)",
         "A2.IsOdf(1)",
@@ -164,6 +283,7 @@ fn malformed_inputs_are_rejected_without_commands() {
             .is_err()
     );
     assert!(rt.eval::<f64>(&format!("return A2.GetMaxHealth({})", id.0)).is_err());
+    assert!(rt.eval::<String>(&format!("return A2.GetOriginalRace({})", id.0)).is_err());
     assert!(
         !rt.eval::<bool>(&format!("return A2.IsOdf({},'fx_cruiser')", id.0))
             .unwrap()
@@ -193,6 +313,7 @@ fn live_unit_without_content_has_health_but_is_odf_errors() {
         rt.eval::<bool>(&format!("return A2.IsOdf({},'fx_cruiser')", id.0))
             .is_err()
     );
+    assert!(rt.eval::<String>(&format!("return A2.GetOriginalRace({})", id.0)).is_err());
     assert!(rt.eval::<bool>(&format!("return A2.IsRace({},'fx')", id.0)).is_err());
     assert!(rt.take_commands().is_empty() && rt.unsupported().is_empty());
 }

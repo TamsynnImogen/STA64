@@ -1,4 +1,4 @@
-# LUA-05 presentation milestone
+# LUA-05 mission bridge
 
 `Cineractive`, `Media` and `UI` now queue `Edit::Present` commands from
 `PlayerId::SCRIPT`. The sim raises the matching events; these bindings do
@@ -181,18 +181,23 @@ external port resolves the Enterprise, portal and base, then naturally spawns
 four Borg cruisers at tick 6120 and issues their accepted attacks after the
 actual receipts at tick 6121. This validates commands/receipts, not combat or
 complete mission play. See [mission conventions](../../../../../docs/MISSIONS.md)
-for the numbering mode, bounded static Craft ancestry, and the three read-only
-DLL-shaped health/ODF queries.
+for the numbering mode, bounded static Craft ancestry, and the read-only
+DLL-shaped health, definition-race, distance and visibility queries. Definition
+race is the available data source; mutable SetRace/assimilation overrides are
+not modeled. GetOriginalRace returns owned definition data, not a native pointer.
 
 Named condition monitors now support the converted UI tutorial's observed
 five-argument constructor and OnTrue hook form. The early ignored probe
 checks timed rules on empty synthetic views, without incoming input or manually
 invoking rule methods. A second probe supplies installed objective text and
 naturally reaches tutorial step 1 at tick 511 after cinematic update/finish
-callbacks, loading three goals and awaiting input. Debug/TextInput still use permissive global
-fallbacks; their missing global/field lookups now appear in `unsupported()`.
-These diagnostics do not implement input. Native monitor timing, input
-advancement, forced skips and full tutorial play remain open.
+callbacks, loading three goals and awaiting input. Debug still uses a permissive
+fallback tracked by `unsupported()`. The bounded TextInput binding now consumes
+accepted player MissionText commands through the normal sim/replay path. Further
+empty-world probes use the authored NEXT fallback to reach UI Tutorial's step 15
+and Economics Tutorial's delayed finish through 14 and 9 text commands. Those
+checks establish objective flow, not physical tutorial actions or client input.
+Native timing, forced skips and full tutorial play remain unverified.
 
 The campaign startup sweep now covers all 36 header-selected installed maps for
 30 ticks each. A source-only mount resolves 34 scripts; the staging helper adds

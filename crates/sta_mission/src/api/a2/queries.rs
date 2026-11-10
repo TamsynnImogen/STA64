@@ -28,6 +28,21 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
     table.set("GetMaxHealth", health(lua, ctx, "GetMaxHealth", true)?)?;
     let c = ctx.clone();
     table.set(
+        "GetOriginalRace",
+        lua.create_function(move |_, args: MultiValue| {
+            let id = handle("GetOriginalRace", &args, 1)?;
+            let c = c.borrow();
+            let unit = c.alive(id).ok_or_else(|| {
+                mlua::Error::runtime(format!("A2.GetOriginalRace: object {} is not alive", id.0))
+            })?;
+            let def = c.def(unit).ok_or_else(|| {
+                mlua::Error::runtime(format!("A2.GetOriginalRace: object {} has no unit definition", id.0))
+            })?;
+            Ok(def.race.clone())
+        })?,
+    )?;
+    let c = ctx.clone();
+    table.set(
         "GetDistance",
         lua.create_function(move |_, args: MultiValue| {
             let first = handle("GetDistance", &args, 2)?;

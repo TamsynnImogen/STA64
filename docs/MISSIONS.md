@@ -225,6 +225,17 @@ raise an error. The query reads only the current snapshot and content, queues
 no commands, and does not infer race from the current owner's faction. Native
 string-comparison and invalid-object defaults remain unverified.
 
+The current model does not carry per-instance SetRace or assimilation race
+overrides. IsRace therefore describes the definition race, rather than
+attesting mutable-race parity after those unsupported operations.
+
+`A2.GetOriginalRace(id)` returns the live unit's spawn-definition race as an
+owned Lua string, verbatim from UnitDef.race. It requires exactly one unsigned
+integral entity ID. Missing/dying units and live units without a definition
+raise an error. An owner change does not change the value, and no command or
+native pointer escapes. The current sim retains the spawn definition; mutable
+race and replacement-history semantics remain unmodeled or unverified.
+
 `A2.IsVisibleToTeam(id, playerNumber)` reads membership in the latest
 `WorldView::visible_to` snapshot. Both arguments must be unsigned integral
 values; the player number uses the configured Slots or ArmadaTeams adapter,
