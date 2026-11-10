@@ -3,9 +3,10 @@
 ## Status and trigger
 
 The source-audit and implementation proposal was recorded before core edits
-in merged #257. The cargo prerequisite below is implemented with regression
-checks; the ownership edit and later stages remain incomplete.
-`Edit::Team` exists but `Sim::apply_edit` rejects it. The longer installed A2
+in merged #257. The cargo prerequisite is merged in #258. The guarded
+ownership stage below is implemented for finished units without production
+involvement; full construction/capture support remains incomplete.
+At audit time, `Edit::Team` existed but `Sim::apply_edit` rejected it. The longer installed A2
 mission probe records rejected transfers in Invasion at tick 1440 and The
 Cavalry at tick 720. `Entity.player = ...` already queues that edit; adding an
 A2.SetRealTeam wrapper alone would conceal the missing simulation operation.
@@ -138,7 +139,7 @@ continued digests/stock are recorded with the fixture for a real compatibility
 check. This is a narrow compatible-v8 read path, not general save migration
 or cross-build replay compatibility.
 
-This prerequisite does not yet implement Team, choose capture refunds or
+The cargo prerequisite itself does not implement Team, choose capture refunds or
 resolve construction/victory behavior. Those stages retain the gates above.
 
 ## Verification and staged delivery
@@ -186,7 +187,7 @@ synthetic Sim may use real IDs 0..7 without creating seats or changing the
 seat list. SCRIPT, BENCH and other reserved IDs are never owners accepted by
 this edit. Existing SCRIPT/BENCH edit authority remains the only entry.
 
-For an accepted request, stop the actor's movement and queued course, clear
+For an accepted request, stop the actor's movement and queued course/formation, clear
 its explicit attack order, suspend mining while retaining physical cargo,
 and remove only its own rally. A different builder's rally pointing at this
 still-live entity remains valid. Clear activity even for a same-owner request
