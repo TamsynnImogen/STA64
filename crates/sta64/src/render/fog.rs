@@ -60,6 +60,13 @@ const FOG_SOFT: f32 = 0.2;
 const SHROUD_SOFT: f32 = 0.1;
 const RIM: f32 = 1.0;
 const RIM_WIDTH: f32 = 0.25;
+/// Sort bias of the layers among the blended things of the scene (nebula puffs, particles,
+/// icons): both go after all of them, the shroud last, so what lies under fog or shroud is
+/// dimmed or hidden whichever side of the map's middle it is on (Refit's `Step::Terrain`
+/// draws them over the world, and the engine draws nothing it cannot see). A sort distance is
+/// world units from the camera; a map is some thousands.
+const FOG_SORT: f32 = 1.0e6;
+const SHROUD_SORT: f32 = 2.0e6;
 /// Height of the layers over the map's plane, so they do not z-fight a grid drawn at 0.
 const LAYER_Y: f32 = 0.0;
 
@@ -235,7 +242,7 @@ pub struct FogMaterial {
     #[texture(1)]
     #[sampler(2)]
     pub mask: Handle<Image>,
-    /// Sort bias: 0 for the fog, 1 for the shroud.
+    /// Sort bias: [`FOG_SORT`] for the fog, [`SHROUD_SORT`] for the shroud.
     pub bias: f32,
 }
 
@@ -373,7 +380,7 @@ fn update_fog(
             }
             for layer in [Layer::Fog, Layer::Shroud] {
                 let mask = images.add(mask_image(&new.grid, layer));
-                let mat = materials.add(FogMaterial { params: params(layer), mask: mask.clone(), bias: if layer == Layer::Shroud { 1.0 } else { 0.0 } });
+                let mat = materials.add(FogMaterial { params: params(layer), mask: mask.clone(), bias: if layer == Layer::Shroud { SHROUD_SORT } else { FOG_SORT } });
                 commands.spawn((
                     Name::new(format!("fog layer {layer:?}")),
                     FogLayer { layer, mask },
