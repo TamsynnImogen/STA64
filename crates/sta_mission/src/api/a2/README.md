@@ -142,7 +142,8 @@ The sim still validates capabilities
 and sorts commands by player/sequence; global Lua call order is not promised.
 Name, position and shield writes remain unsupported. Owner transfer remains
 unsupported by the sim; assigning a pending handle's player is diagnosed.
-Camera spots and destruction monitors currently require a resolved ID.
+Camera spots can wait for real spawn receipts, with ordered requests and explicit
+scene cancellation; destruction monitors still require a resolved ID.
 
 A host must use one MissionRuntime for its SCRIPT command stream and deliver
 the complete submitted-batch events with the next view. Tokens and command

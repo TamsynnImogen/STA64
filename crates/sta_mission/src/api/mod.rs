@@ -57,6 +57,7 @@ mod a2;
 mod entity;
 mod entity_action;
 mod entity_ref;
+mod camera_intent;
 mod monitor;
 mod condition_monitor;
 mod player;
@@ -78,6 +79,7 @@ pub(crate) fn fire_monitors(lua: &Lua, ctx: &Shared, errors: &mut Vec<String>) {
 
 pub(crate) fn process_spawns(ctx: &mut Ctx) {
     spawn::process(ctx);
+    camera_intent::process(ctx);
 }
 
 pub(crate) fn drain_commands(ctx: &Shared) -> Vec<Command> {
@@ -177,6 +179,7 @@ pub(crate) struct Ctx {
     pub commands: Vec<Command>,
     seq: BTreeMap<PlayerId, u32>,
     pub spawns: spawn::SpawnStore,
+    pub camera: camera_intent::Store,
     pub objectives: Vec<Objective>,
     pub next_objective_id: u32,
     pub objective_briefing: Option<ObjectiveBriefing>,
@@ -209,6 +212,7 @@ impl Ctx {
             commands: Vec::new(),
             seq: BTreeMap::new(),
             spawns: spawn::SpawnStore::default(),
+            camera: camera_intent::Store::default(),
             objectives: Vec::new(),
             next_objective_id: 0,
             objective_briefing: None,

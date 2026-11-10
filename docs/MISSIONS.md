@@ -82,6 +82,23 @@ establishes Producer → Craft and Starbase → Shipyard → Producer. These che
 allow the converted mission to find its static portal/base. They do not add a
 complete mapping from every ODF class label to every MMM type name.
 
+## Pending camera spots
+
+Cineractive spot requests can reference queued Entity.add handles. They retain
+only typed Rust references and arguments, then emit real entity IDs after spawn
+receipts resolve, before the next Lua callbacks. No predicted ID or spawn-position
+hint is substituted for a world entity. Within a source scene, later lookAt
+requests wait behind earlier unresolved spot requests, including generic calls
+with entity arguments. Offsets, fades and other presentation channels keep their
+existing paths.
+
+A validated new lookFrom cancels older deferred spot requests. Setting active
+false cancels deferred requests and clears an unresolved retained source, so a
+later lookAt cannot resurrect it. Failed or dead references discard the remaining
+deferred scene tail; already emitted requests are not recalled. Existing resolved,
+vector and path requests retain their previous behavior. Save/resume and native
+immediate timing remain unimplemented or unverified.
+
 ## Cinematic object callbacks
 
 Registered mission objects may also define `cineractiveUpdate(self)` and
