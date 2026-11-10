@@ -38,6 +38,7 @@ use sta_sim::command::{CommandKind, Order};
 use sta_sim::{ContentKey, EntityId, Vec3 as SimVec3};
 
 pub use layout::{HudLayout, InfoHeight};
+pub use panels::HudRoot;
 pub use model::{Act, HudFeed, Page};
 use model::{Models, command, models};
 use panels::{GridCell, GridPanel, GroupTile, InfoPanel, ResourceStrip};
