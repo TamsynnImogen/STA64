@@ -198,6 +198,12 @@ fn run_headless_inner(cfg: &LaunchConfig) -> i32 {
             app.insert_resource(crate::render::units::LocalPlayer(Some(player)))
                 .insert_resource(bounds)
                 .add_plugins(crate::render::fog::FogPlugin);
+            // `--install-root` (and `--mod`) give the layers the mod's own Gshroud / Gfog art.
+            if let Some(root) = &cfg.install_root
+                && let Ok(vfs) = sta_vfs::Vfs::mount_install(root, cfg.active_mod.as_deref())
+            {
+                app.insert_resource(crate::viewer::Mounted(vfs));
+            }
         }
     }
     match app.run() {

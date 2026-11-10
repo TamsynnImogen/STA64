@@ -9,8 +9,8 @@
 // smoothstep about a threshold of it, never narrower than a pixel or so (fwidth).
 //
 // Differences from Refit: its texture also carries the layer's art (alpha 1, rgb the
-// art, hidden cells only), which is divided out of the filtered colour; here the layer
-// is one colour and the mask is all the texture holds. The rim is kept: Refit's seen
+// art, hidden cells only), which is divided out of the filtered colour; here the mask is all
+// that texture holds and the art is a second texture, the mod's own, sampled by position. The rim is kept: Refit's seen
 // texels are black, so the art darkens towards an edge, to half at the cut. Here it is
 // a shade from the mask: half at the threshold, full where the mask has risen by the
 // rim's width above it.
@@ -20,12 +20,15 @@
 
 struct FogParams {
     tint: vec4<f32>,  // rgb the layer's colour; w its opacity
+    pat: vec4<f32>,   // xy the pattern's uv per unit of the layer's uv; zw its offset
     edge: vec4<f32>,  // x the mask level of the edge; y its softness; z the rim's strength; w 1 / the rim's width
 };
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> k: FogParams;
 @group(constants::MATERIAL_BIND_GROUP) @binding(1) var mask: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(2) var mask_s: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(3) var pattern: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(4) var pattern_s: sampler;
 
 struct FragIn {
     @builtin(position) position: vec4<f32>,
@@ -61,6 +64,9 @@ fn fragment(in: FragIn) -> @location(0) vec4<f32> {
     let w = max(k.edge.y, fwidth(a));
     let cover = smoothstep(k.edge.x - w, k.edge.x + w, a);
     let shade = clamp(0.5 + 0.5 * (a - k.edge.x) * k.edge.w, 0.0, 1.0);
-    let rgb = k.tint.rgb * mix(1.0, shade, k.edge.z);
+    // The layer's art: the mod's Gfog / Gshroud, one texel per cell of the grid, the grid
+    // centred in it and the pattern repeating beyond (stock copies a texel per hidden cell).
+    let art = textureSampleLevel(pattern, pattern_s, in.uv * k.pat.xy + k.pat.zw, 0.0).rgb;
+    let rgb = art * k.tint.rgb * mix(1.0, shade, k.edge.z);
     return vec4<f32>(rgb, cover * k.tint.a);
 }

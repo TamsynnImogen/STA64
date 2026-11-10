@@ -81,12 +81,17 @@ impl FogColours {
     /// texture keeps the Fleet Ops default.
     pub fn read(vfs: &Vfs) -> FogColours {
         let mean = |name: &str, default: [u8; 3]| -> [u8; 3] {
-            let Some((path, fmt)) = sta_assets::find_texture(vfs, name) else { return default };
-            let Ok(img) = sta_assets::decode_rgba(vfs, &path, fmt) else { return default };
-            mean_colour(&img.pixels).unwrap_or(default)
+            read_pattern(vfs, name).and_then(|img| mean_colour(&img.pixels)).unwrap_or(default)
         };
         FogColours { fog: mean("Gfog", DEFAULT_FOG), shroud: mean("Gshroud", DEFAULT_SHROUD) }
     }
+}
+
+/// A layer's pattern texture (`Gfog`, `Gshroud`) from the mounted data, decoded; shared by
+/// the radar's colours and the 3D view's textured layers.
+pub fn read_pattern(vfs: &Vfs, name: &str) -> Option<sta_assets::Rgba> {
+    let (path, fmt) = sta_assets::find_texture(vfs, name)?;
+    sta_assets::decode_rgba(vfs, &path, fmt).ok()
 }
 
 /// The mean RGB of an RGBA8 buffer, ignoring fully transparent texels.
