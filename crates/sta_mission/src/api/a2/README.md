@@ -118,6 +118,20 @@ optional queue flag; it does not follow a moving target. Raw string `"Move"`,
 path overloads, Colonize and other unimplemented orders remain separate gaps.
 This is a STA64 port-compatibility policy, not native Go/Move equivalence.
 
+`Entity:giveOrder(Order.Mine)` (also with an explicit nil target) selects
+the nearest content-backed resource by exact fixed-point XZ distance at the
+time of the Lua call. Height is ignored. Equal distances prefer existing
+nodes by ID, then validated pending resources by request order. Definitions
+must classify as Resource through the sim's class/movement rule; resource
+metadata alone and missing definitions do not qualify. Current DYING nodes
+are excluded. This is an explicit STA64 rule, not a verified native default.
+The selected typed reference waits for real spawn receipts and retains per-actor
+order sequence. A failed or dead selected pending node drops the order without
+retargeting. Explicit entity targets keep their existing behavior; other target types
+or no candidate records an unsupported diagnostic.
+The selection does not inspect visibility, remaining ore, cargo or depot state;
+normal core ownership, miner eligibility and mining behavior still apply.
+
 
 `A2.DisableEngines(handle, disabled)` and
 `A2.DisableWeapons(handle, disabled)` require explicit booleans and use
