@@ -74,6 +74,8 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [?] Android / Waydroid first APK (TOOL-10, #253): manually install the ARM64 debug APK and open STA64; record its hash, Android version/active ABI, first-screen result and any native-loader/renderer errors. The current APK contains no original game data and has no SAF importer yet; an empty catalogue is expected. A translated x86_64 Waydroid run is separate from physical ARM64 evidence ([steps and limits](docs/ANDROID_SUPPORT.md#waydroid-smoke-testing)).
 - [?] Android lifecycle (TOOL-10, #253): background and resume the app; the frontend should recover without stale clicks or a crash. With staged user-owned content, also check that a running match does not catch up background time or lose the player's existing pause state. Record audio/surface-recreation failures separately; audio focus remains a follow-up.
 
+- [?] Loaded freighters (SIM-19, #256; updated builds only): interrupt mining with Stop or a new Move, then order mining again; the carried resource should be delivered before the next load. When changing resource types, watch that the old resource credits its own counter rather than disappearing or becoming the new resource. The older pinned rally build predates this change.
+
 ## Now (M2: a map you can fly in)
 
 - [ ] Strategic view, next: stack overlapping icons into one fleet icon with a count (Sins-style); grid/height bars at strategic zoom (`cfgSTRATEGIC_GRID_RENDER`)

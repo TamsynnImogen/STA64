@@ -2,7 +2,9 @@
 
 ## Status and trigger
 
-This is a source-audit and implementation proposal, written before core edits.
+The source-audit and implementation proposal was recorded before core edits
+in merged #257. The cargo prerequisite below is implemented with regression
+checks; the ownership edit and later stages remain incomplete.
 `Edit::Team` exists but `Sim::apply_edit` rejects it. The longer installed A2
 mission probe records rejected transfers in Invasion at tick 1440 and The
 Cavalry at tick 720. `Entity.player = ...` already queues that edit; adding an
@@ -48,13 +50,13 @@ future hooks, not an implemented STA64 weapon feature or full live-game proof.
 |---|---|
 | Identity | world::Entity.owner is persisted and digested. Definition, original race, ID, label, position, hull and shields must not be replaced just to change owner. |
 | Orders | Movement courses, attack orders and mining jobs are per entity. Stop clears several activities, but its cleanup is not a complete capture operation. |
-| Cargo | Economy::Miner combines job, carried resource and cargo. cancel currently destroys the record and cargo. Cargo retention cannot be implemented by calling that helper unchanged. |
+| Cargo | The audit baseline combined job and physical cargo, so cancel destroyed both. The cargo prerequisite now retains loaded records in Idle; this is necessary before using cancellation during transfer. |
 | Production | Queue/deploy items retain owner and paid state. cancel refunds paid costs to the recorded owner; whether capture should do so must be verified independently. Weld records connect unfinished units to builders. |
 | Rally | Production rallies retain their issuing owner. Existing pruning drops a rally after owner mismatch, but a transfer needs deterministic cleanup even across multiple swaps in one tick. |
 | Weapons/specials | Ordered targets are distinct from mount cooldowns, energy and active cloak state. Resetting all subsystem state would refill/reset physical state or alter authored effects. |
 | Visibility/technology | Sensors and tech holdings derive from current ownership each tick. Player alliance assignments are separate and must not be changed by a unit transfer. |
 | Victory | Elimination is permanent under the current contract and currently receives damage losses only. Capture-loss timing and scripted mission victory rules need an explicit decision. |
-| Persistence | Snapshot version 8 stores entity owner and subsystem records. Commands already have a Team tag; existing tags must stay stable. |
+| Persistence | The audit baseline used snapshot version 8; the cargo stage writes version 9 with a narrow compatible-v8 read path. It stores entity owner and subsystem records. Commands already have a Team tag; existing tags must stay stable. |
 
 ## Proposed integration
 
@@ -109,6 +111,35 @@ future hooks, not an implemented STA64 weapon feature or full live-game proof.
 - Any newly verified default belongs in its owning ODF/CFG/AIP/profile path,
   with explicit/inherited zero distinguished from absence. Do not add guessed
   global defaults or change source game data.
+
+## Cargo prerequisite decision
+
+The first implementation stage preserves carried cargo when a mining job is
+interrupted by Stop or a replacement Move. Original A1 and A2 getter paths
+read cargo from the freighter object rather than the order/process; the GOG A1
+swap and Stop wrappers use a distinct command encoding and must not borrow
+A2 numeric codes. These static observations support separating physical cargo
+from job lifetime; they are not full native runtime or effect-parity proof.
+No source game data or numeric defaults change in this stage.
+
+Use Idle phase code 4 in the existing miner tuple. Idle retains the cargo and
+its resource, produces no income and does not override a manual movement
+order. A stopped loaded miner can survive destruction of its old node. A new
+Mine order first delivers the old resource to a station of its current owner,
+then mines the newly requested resource. Reset partial-delivery event
+accounting when a job is interrupted, without undoing stock already credited.
+
+Write snapshot format 9 for the new phase semantics. Explicitly accept the
+unchanged v8 body only with old phase codes 0..3; reject an Idle/new phase
+masquerading as v8. Reject unknown phase codes at the file-loading boundary.
+No tuple field or command tag is added. A synthetic loaded-miner snapshot was
+created by the unchanged v8 implementation before these edits; its saved and
+continued digests/stock are recorded with the fixture for a real compatibility
+check. This is a narrow compatible-v8 read path, not general save migration
+or cross-build replay compatibility.
+
+This prerequisite does not yet implement Team, choose capture refunds or
+resolve construction/victory behavior. Those stages retain the gates above.
 
 ## Verification and staged delivery
 
