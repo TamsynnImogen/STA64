@@ -695,7 +695,13 @@ fn pending_edits_use_allocated_ids_and_keep_no_actions_after_their_first_dispatc
     assert_eq!(edits.len(), 3);
     assert!(edits.iter().all(|c| c.player == PlayerId::SCRIPT));
     assert_eq!(edits[0].kind, CommandKind::Edit(Edit::Immortal(survivor, true)));
-    assert!(matches!(edits[1].kind, CommandKind::Edit(Edit::Damage(id, _)) if id == survivor));
+    assert_eq!(
+        edits[1].kind,
+        CommandKind::Edit(Edit::Hull(
+            survivor,
+            output.view.unit(survivor).unwrap().hull[1] / sta_core::Fixed::from_int(2),
+        )),
+    );
     assert_eq!(edits[2].kind, CommandKind::Edit(Edit::Kill(removed)));
     let output = sim.step(&edits);
     let unit = output.view.unit(survivor).unwrap();

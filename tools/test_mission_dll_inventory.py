@@ -267,6 +267,28 @@ class MissionDllInventoryTests(unittest.TestCase):
         ]:
             self.assertEqual(inventory.a2_exact_for(signature, self.repo), "", signature)
 
+    def test_current_health_writer_requires_exact_void_integer_float_call_shape(self):
+        self.register_a2(
+            'table.set("SetCurrentHealth", fn);\n',
+            registration='objects::install(lua, ctx, &a2)?; lua.globals().raw_set("A2", a2)?;',
+        )
+        self.assertEqual(
+            inventory.a2_exact_for(
+                "public: virtual void __thiscall ScriptInterfaceImp::SetCurrentHealth(int, float)",
+                self.repo,
+            ),
+            "A2.SetCurrentHealth",
+        )
+        for signature in [
+            "float SetCurrentHealth(int, float)",
+            "void SetCurrentHealth(int)",
+            "void SetCurrentHealth(int, int)",
+            "void SetCurrentHealth(int&, float)",
+            "void SetCurrentHealth(int, float&)",
+            "void SetCurrentHealth(int, float, bool)",
+        ]:
+            self.assertEqual(inventory.a2_exact_for(signature, self.repo), "", signature)
+
     def test_test_files_do_not_count_as_a2_bindings(self):
         self.register_a2("", registration='objects::install(lua, ctx, &a2)?; lua.globals().raw_set("A2", a2)?;')
         (self.a2 / "tests.rs").write_text('table.set("IsAlive", fn);', encoding="utf-8")

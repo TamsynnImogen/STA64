@@ -108,6 +108,16 @@ other owner-dependent state before this binding can be offered. Unknown
 The inventory distinguishes these exact callable signatures from older
 MMM job-equivalence mappings; neither classification proves native parity.
 
+`A2.SetCurrentHealth(id, hull)` takes exactly one unsigned integral live ID
+and one finite Lua number; malformed arguments and missing/dying objects raise
+errors without commands. It queues the same absolute SCRIPT hull edit as
+`Entity.hull = value`. Each assignment applies in command order, without using
+a damage delta from a stale snapshot or restoring shields. The sim clamps the
+fixed-point value to zero through maximum hull, with an immortal floor of one
+bounded by maximum hull. Finite values beyond the fixed-point range saturate
+before clamping; non-finite values are rejected. Reads see the old snapshot
+until the host advances. Native invalid-input and float ABI parity are unverified.
+
 
 The shared order enum is available as both `Order` and `GameObject.Order`,
 which refer to the same table. This supplies the namespace used in 104
@@ -212,8 +222,8 @@ external port resolves the Enterprise, portal and base, then naturally spawns
 four Borg cruisers at tick 6120 and issues their accepted attacks after the
 actual receipts at tick 6121. This validates commands/receipts, not combat or
 complete mission play. See [mission conventions](../../../../../docs/MISSIONS.md)
-for the numbering mode, bounded static Craft ancestry, and the read-only
-DLL-shaped health, definition-race, distance and visibility queries. Definition
+for the numbering mode, bounded static Craft ancestry, absolute hull writes,
+and DLL-shaped health, definition-race, distance and visibility queries. Definition
 race is the available data source; mutable SetRace/assimilation overrides are
 not modeled. GetOriginalRace returns owned definition data, not a native pointer.
 
