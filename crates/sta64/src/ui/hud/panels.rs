@@ -8,6 +8,7 @@ use sta_sim::EntityId;
 
 use super::layout::{CELL, CELL_GAP, GRID_COLS, GRID_PAD, GRID_ROWS, HudLayout, InfoHeight};
 use super::model::{Act, Button, Info, Look, ResEntry, Single, Tile};
+use crate::ui::i18n::{tr, trf};
 use crate::ui::notices::Tooltip;
 use crate::ui::theme::{Theme, UiButton, WidgetState, progress_bar};
 
@@ -178,22 +179,22 @@ fn fill_single(p: &mut EntityCommands, theme: &Theme, s: &Single, size: Vec2) {
         Pickable::IGNORE,
         children![text(s.name.to_uppercase(), theme.heading_size, name_colour), text(s.class.to_uppercase(), theme.small_size, theme.text_dim)],
     ));
-    p.with_child(bar_row(theme, "Hull", s.hull, format!("{}/{}", s.hull_now, s.hull_max), bar));
+    p.with_child(bar_row(theme, &tr("Hull"), s.hull, format!("{}/{}", s.hull_now, s.hull_max), bar));
     if let Some(sh) = s.shield {
-        p.with_child(bar_row(theme, "Shield", sh, format!("{}%", (sh * 100.0).round() as i32), bar));
+        p.with_child(bar_row(theme, &tr("Shield"), sh, format!("{}%", (sh * 100.0).round() as i32), bar));
     }
     if let Some(pr) = s.progress {
-        p.with_child(bar_row(theme, "Built", pr, format!("{}%", (pr * 100.0).round() as i32), bar));
+        p.with_child(bar_row(theme, &tr("Built"), pr, format!("{}%", (pr * 100.0).round() as i32), bar));
     }
     if s.builder {
-        p.with_child(text("Select Build in the grid to queue ships", theme.small_size, theme.text_dim));
+        p.with_child(text(tr("Select Build in the grid to queue ships"), theme.small_size, theme.text_dim));
     }
 }
 
 fn fill_group(p: &mut EntityCommands, theme: &Theme, tiles: &[Tile], size: Vec2) {
     let inner = size.x - 2.0 * theme.pad - theme.side_bar;
     let per_row = ((inner + TILE_GAP) / (TILE_W + TILE_GAP)).floor().max(1.0) as usize;
-    p.with_child(text(format!("{} SELECTED", tiles.len()), theme.small_size, theme.text_dim));
+    p.with_child(text(trf("{0} SELECTED", &[&tiles.len()]), theme.small_size, theme.text_dim));
     for row in tiles.chunks(per_row) {
         p.with_child((
             Node { column_gap: Val::Px(TILE_GAP), ..default() },

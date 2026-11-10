@@ -387,7 +387,7 @@ pub fn draw(
         };
         let empty = g.idx.is_empty();
         if let Some((_, e)) = sys.batches.get(&key) {
-            commands.entity(*e).insert(if empty { Visibility::Hidden } else { Visibility::Inherited });
+            commands.entity(*e).try_insert(if empty { Visibility::Hidden } else { Visibility::Inherited });
         }
         if empty {
             continue;

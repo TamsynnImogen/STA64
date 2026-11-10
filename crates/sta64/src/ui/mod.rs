@@ -2,6 +2,7 @@
 //! and the rest build on it.
 
 pub mod hud;
+pub mod i18n;
 pub mod notices;
 pub mod theme;
 pub mod radar;

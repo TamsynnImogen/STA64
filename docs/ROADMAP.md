@@ -49,6 +49,7 @@ How M2–M5 split into parallel work packages: [WORKPLAN.md](WORKPLAN.md).
 - Refit-style screens and LCARS glass theme; loading screen over the map's skybox
 - cfg/spr-driven HUD, language packs
 - Mod loader, Instant Action settings
+- [x] Front end → Instant Action → loading → match → back: launching with no mode flag opens the front end; setup's Launch builds the match as `--skirmish` does; F10 (or Enter/Esc after the result) returns with the match cleaned up and menu music back (INT-M4). Release packaging (TOOL-09) is not done.
 
 ## M5: AI, Lua, multiplayer
 - FO Lua mission API
