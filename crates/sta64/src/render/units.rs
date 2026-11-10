@@ -261,7 +261,9 @@ fn attach_models(
         let radius = model.bounds().map(|(lo, hi)| (Vec3::from(hi) - Vec3::from(lo)).length() * 0.5).unwrap_or(20.0) * if scale > 0.0 { scale } else { 1.0 };
         let mobile = def.movement.max_speed > sta_sim::Fixed::ZERO;
         let owned = owner.is_some_and(|o| o.0 != sta_sim::world::NEUTRAL);
-        if mobile || owned {
+        // A resource (a moon) is neutral and never moves, but is clicked for its info and
+        // as a mining target, so it gets a click radius too: of the moon the marker was swapped for.
+        if mobile || owned || def.resource.is_some() {
             commands.entity(e).insert(SelectRadius(radius.max(5.0)));
         }
         let class = def.class.0.as_str();
