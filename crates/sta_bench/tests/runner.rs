@@ -239,9 +239,24 @@ fn unsupported_edits_are_logged_not_fatal() {
         &cfg(),
         "firing",
         &[
-            "Scene \"team shooter 2\"",
+            "Scene \"tech shooter fgalaxy\"",
             "Run 3 ticks",
             "Expect \"bench.log\" contains \"rejected by the sim\"",
+        ],
+    );
+    assert!(r.passed, "{}", r.summary());
+}
+
+#[test]
+fn team_edit_transfers_a_finished_actor_through_the_bench() {
+    let r = case(
+        &cfg(),
+        "firing",
+        &[
+            "Scene \"team shooter 2\"",
+            "Run 3 ticks",
+            "Expect 0 objects on team 1",
+            "Expect 2 objects on team 2",
         ],
     );
     assert!(r.passed, "{}", r.summary());

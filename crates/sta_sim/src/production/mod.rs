@@ -186,6 +186,18 @@ impl Production {
         self.rallies.remove_entity(id);
     }
 
+    /// Capture accounting is not implemented for these production records.
+    pub(crate) fn transfer_blocked(&self, id: EntityId) -> bool {
+        self.queues.get(id).is_some()
+            || self.deploys.get(id).is_some()
+            || self.welds.get(id).is_some()
+            || self.welds.iter().any(|(_, w)| w.builder == id)
+    }
+
+    pub(crate) fn clear_builder_rally(&mut self, id: EntityId) {
+        self.rallies.remove_builder(id);
+    }
+
     /// Items queued at `yard`, in order, as `(def, ticks done)`.
     pub fn queue(&self, yard: EntityId) -> Vec<(ContentKey, u64)> {
         self.queues

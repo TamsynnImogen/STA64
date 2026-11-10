@@ -56,6 +56,11 @@ pub struct Movement {
 }
 
 impl Movement {
+    /// Detach owner-bound courses and formation on an ownership request.
+    pub(crate) fn clear(&mut self, id: EntityId) {
+        self.courses.remove(id);
+    }
+
     /// Courses ascending by id, for snapshots.
     pub(crate) fn rows(&self) -> Vec<(EntityId, Course)> {
         self.courses.iter().map(|(id, c)| (id, c.clone())).collect()
