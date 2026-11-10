@@ -136,6 +136,8 @@ fn install_skirmish_starts_and_the_ai_acts() {
     let side = crate::map::build_sim(&bzn, &map_name, &db, &index, &vfs, Some(0), Some((&cfg, &races)));
     let plan = side.skirmish.expect("a skirmish").unwrap_or_else(|e| panic!("{e}"));
     println!("{}", plan.summary);
+    let side_starts: Vec<_> = bzn.start_locs.iter().map(|s| (s.team, s.pos[0] as i64, s.pos[2] as i64)).collect();
+    println!("team objects {:?}", bzn.objects.iter().filter(|o| o.team > 0).map(|o| (o.odf.clone(), o.team, o.transform[9] as i64, o.transform[11] as i64)).collect::<Vec<_>>());
     let ai = PlayerId(plan.players.iter().find(|p| matches!(p.control, Control::Ai(_))).unwrap().id.0);
     let mut link = SimLink::new(Box::new(side.sim), Box::new(LocalRouter::new()), PlayerId(0)).with_controllers(side.controllers);
     assert_eq!(link.controllers(), 1);
@@ -144,6 +146,8 @@ fn install_skirmish_starts_and_the_ai_acts() {
     let view = link.curr().clone();
     for p in &view.players {
         let mine: Vec<_> = view.units.iter().filter(|u| u.owner == p.id).map(|u| name(u.def)).collect();
+        let at: Vec<_> = view.units.iter().filter(|u| u.owner == p.id).map(|u| (name(u.def), u.pos.x.to_f32() as i64, u.pos.z.to_f32() as i64)).collect();
+        println!("seat {} at {at:?}; starts {:?}", p.id.0, side_starts);
         println!("seat {}: {mine:?} stock {:?}", p.id.0, p.resources.iter().map(|r| r.to_f32() as i64).collect::<Vec<_>>());
         if p.id == ai {
             assert!(!mine.is_empty(), "the AI seat has start units");

@@ -152,7 +152,12 @@ impl Placed {
     /// Entities no BZN object took (`from_setup` made them from something the
     /// renderer does not draw as a ship).
     fn rest(self) -> Vec<EntityId> {
-        let mut ids: Vec<EntityId> = self.0.into_values().flatten().collect();
+        self.rest_where(|_| true)
+    }
+
+    /// As [`Placed::rest`], keeping only the entities `keep` says yes to, by owner.
+    fn rest_where(self, keep: impl Fn(PlayerId) -> bool) -> Vec<EntityId> {
+        let mut ids: Vec<EntityId> = self.0.into_iter().filter(|((_, _, owner), _)| keep(*owner)).flat_map(|(_, v)| v).collect();
         ids.sort();
         ids
     }
@@ -637,6 +642,7 @@ fn rebuild(
     let SimSide { setup, sim, warnings: sim_warnings, controllers, skirmish } =
         build_sim(&map, &name, &content, &index, &vfs.0, seat.0, skirmish_cfg.as_deref().map(|c| (c, &*races)));
     let mut skirmish_note = None;
+    let is_match = matches!(skirmish, Some(Ok(_)));
     match skirmish {
         Some(Ok(s)) => {
             info!("{}", s.summary);
@@ -1017,13 +1023,21 @@ fn rebuild(
     let centre = lo + size * 0.5;
     let focus = Vec3::new(centre.x, 0.0, -centre.z);
     let mut dist = size.x.max(size.z).max(2000.0) * 0.75;
-    // A match opens on the player's start, near enough to see the base; R returns there.
-    let focus = match skirmish_cfg.as_deref().and_then(|c| map_def.starts.iter().find(|s| s.slot == c.seat)) {
-        Some(s) => {
+    // A match opens over the local seat's own starting units (their centroid; the start marker
+    // is only where the grid begins), near enough to see the base; R returns there.
+    let focus = {
+        use sta_sim::WorldSource;
+        let mine: Vec<Vec2> = match seat_player.filter(|_| is_match) {
+            Some(p) => sim.view().units.iter().filter(|u| u.owner == p).map(|u| Vec2::new(u.pos.x.to_f32(), u.pos.z.to_f32())).collect(),
+            None => Vec::new(),
+        };
+        if mine.is_empty() {
+            focus
+        } else {
             dist = dist.min(START_DIST);
-            Vec3::new(s.pos.x.to_f32(), 0.0, -s.pos.z.to_f32())
+            let c = mine.iter().sum::<Vec2>() / mine.len() as f32;
+            Vec3::new(c.x, 0.0, -c.y)
         }
-        None => focus,
     };
     for mut o in &mut orbit {
         o.focus = focus;
@@ -1040,7 +1054,9 @@ fn rebuild(
     // Sim entities the renderer draws some other way (planets, nebulae, rocks, things
     // without a model): linked to a bare entity, so the units view does not draw them a
     // second time.
-    let unlinked = placed.rest();
+    // A match's start units (a seat's outpost, builders) are made by the sim, not by a BZN
+    // object, so nothing took them: they are left to the units view, which draws them.
+    let unlinked = placed.rest_where(|owner| !is_match || owner == sta_sim::world::NEUTRAL);
     let ghosts = unlinked.len();
     for id in unlinked {
         commands.spawn((SimEntity(id), Transform::IDENTITY, Visibility::default(), ChildOf(root)));
@@ -1131,6 +1147,20 @@ fn hud(browser: Res<MapBrowser>, skirmish: Option<Res<crate::game::SkirmishCfg>>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A match's start units (owned by a seat, made by the sim) are not ghosts: the units
+    /// view must draw and pick them; neutral leftovers (planets, nebulae) stay ghosts.
+    #[test]
+    fn a_matchs_start_units_are_not_ghosted() {
+        let z = Fixed::from_int(0);
+        let at = [z, z, z];
+        let mut m = HashMap::new();
+        m.insert((ContentKey::NONE, at, PlayerId(0)), std::collections::VecDeque::from([EntityId(1)]));
+        m.insert((ContentKey::NONE, at, sta_sim::world::NEUTRAL), std::collections::VecDeque::from([EntityId(2)]));
+        let keep_neutral = |o: PlayerId| o == sta_sim::world::NEUTRAL;
+        assert_eq!(Placed(m.clone()).rest_where(keep_neutral), vec![EntityId(2)]);
+        assert_eq!(Placed(m).rest(), vec![EntityId(1), EntityId(2)]);
+    }
     use sta_sim::command::{Command, CommandKind, Edit, Order};
     use sta_sim::WorldSource;
 
