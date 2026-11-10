@@ -30,41 +30,72 @@ pub struct Browser {
     pub info: String,
 }
 
-/// Team colours from `odf/system/teamcolor.odf` (Fleet Operations), in file
-/// order: neutral, teams 1-8, then race colours. Built-in values when absent.
+/// Where the engine finds `teamcolor.odf` (the exe names the bare file; the stock
+/// A2 install and its mods carry it in `odf/other/`). Searched in this order, the
+/// topmost mod layer first within each path.
+pub const TEAMCOLOR_PATHS: [&str; 3] = ["odf/other/teamcolor.odf", "odf/system/teamcolor.odf", "odf/teamcolor.odf"];
+
+/// The stock Armada II `odf/other/teamcolor.odf` palette, used when the install and
+/// its mods carry none (Fleet Operations Roots, A1's archive format aside). Values are
+/// the engine's team table as shipped: neutral, players 1-8 by file order, then the
+/// race base colours. Federation's is a pale grey (0.9), the neutral `empty` 0.5.
+pub const STOCK_TEAMCOLOR: &str = "empty = 0.5 0.5 0.5
+white = 0.9 0.9 0.9
+red = 1.0 0.0 0.0
+blue = 0.0 0.4 1.0
+green = 0.0 1.0 0.0
+yellow = 0.9 0.9 0.0
+purple = 0.686 0.0 1.0
+cyan = 0.0 1.0 0.784
+brown = 0.6 0.4 0.0
+orange = 1.0 0.588 0.0
+pink = 1.0 0.5 0.5
+magenta = 1.0 0.0 1.0
+gray = 0.5 0.5 0.5
+black = 0.0 0.0 0.0
+ferengi = 1.0 0.588 0.0
+dominion = 0.8 0.2 1.0
+klingon = 1.0 0.2 0.2
+romulan = 0.4 1.0 0.4
+borg = 0.0 0.6 0.4
+federation = 0.9 0.9 0.9
+cardassian = 0.9 0.6 0.0
+breen = 0.0 0.7 0.0
+sona = 0.8 0.8 0.8
+alien = 0.8 0.8 0.8
+";
+
+/// Team colours from `teamcolor.odf` ([`TEAMCOLOR_PATHS`]), in file order: neutral,
+/// teams 1-8, then race colours. The stock palette ([`STOCK_TEAMCOLOR`]) when absent.
+/// The hull shader multiplies lit texels by the colour, as the engine does.
 #[derive(Resource)]
 pub struct TeamColours(pub Vec<(String, Color)>);
 
 impl TeamColours {
-    pub fn load(vfs: &sta_vfs::Vfs) -> TeamColours {
-        let parsed: Vec<(String, Color)> = vfs
-            .read("odf/system/teamcolor.odf")
-            .and_then(Result::ok)
-            .map(|b| {
-                sta_odf::parse(&String::from_utf8_lossy(&b))
-                    .entries
-                    .into_iter()
-                    .filter_map(|e| {
-                        let v: Vec<f32> = e.value.split_whitespace().filter_map(|x| x.parse().ok()).collect();
-                        (v.len() >= 3).then(|| (e.key, Color::srgb(v[0], v[1], v[2])))
-                    })
-                    .collect()
+    pub fn parse(text: &str) -> Vec<(String, Color)> {
+        sta_odf::parse(text)
+            .entries
+            .into_iter()
+            .filter_map(|e| {
+                let v: Vec<f32> = e.value.split_whitespace().filter_map(|x| x.parse().ok()).collect();
+                (v.len() >= 3).then(|| (e.key, Color::srgb(v[0], v[1], v[2])))
             })
-            .unwrap_or_default();
-        if parsed.is_empty() {
-            return TeamColours(
-                [("blue", (0.0, 0.4, 1.0)), ("red", (1.0, 0.0, 0.0)), ("green", (0.0, 1.0, 0.0)), ("white", (0.9, 0.9, 0.9))]
-                    .into_iter()
-                    .map(|(n, (r, g, b))| (n.to_owned(), Color::srgb(r, g, b)))
-                    .collect(),
-            );
-        }
-        TeamColours(parsed)
+            .collect()
     }
 
-    /// The first real team (skips the neutral `empty` entry).
+    pub fn load(vfs: &sta_vfs::Vfs) -> TeamColours {
+        let parsed = TEAMCOLOR_PATHS
+            .iter()
+            .filter_map(|p| vfs.read(p).and_then(Result::ok))
+            .map(|b| Self::parse(&String::from_utf8_lossy(&b)))
+            .find(|t| !t.is_empty());
+        TeamColours(parsed.unwrap_or_else(|| Self::parse(STOCK_TEAMCOLOR)))
+    }
+
+    /// The viewer's starting colour: `white`, the first real team after the neutral
+    /// `empty` entry (a pale grey, so hulls keep their own look), else the first entry.
     pub fn default_index(&self) -> usize {
-        self.0.iter().position(|(n, _)| n.eq_ignore_ascii_case("blue")).unwrap_or(0)
+        self.0.iter().position(|(n, _)| n.eq_ignore_ascii_case("white")).unwrap_or(0)
     }
 }
 
@@ -425,5 +456,20 @@ fn hud(browser: Res<Browser>, teams: Res<TeamColours>, mut q: Query<&mut Text, W
             if browser.damaged { "shown" } else { "hidden" },
             if browser.normal_maps { "on" } else { "off" },
         );
+    }
+}
+
+#[cfg(test)]
+mod team_colour_tests {
+    use super::*;
+
+    #[test]
+    fn stock_palette_is_the_fallback_and_federation_is_pale() {
+        let t = TeamColours(TeamColours::parse(STOCK_TEAMCOLOR));
+        assert_eq!(t.0[0].0, "empty");
+        assert_eq!(t.0[3].0, "blue");
+        assert_eq!(t.0[t.default_index()].0, "white");
+        let fed = t.0.iter().find(|(n, _)| n == "federation").unwrap().1.to_srgba();
+        assert!((fed.red - 0.9).abs() < 1e-6 && fed.red == fed.green && fed.green == fed.blue);
     }
 }
