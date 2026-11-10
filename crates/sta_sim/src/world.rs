@@ -184,7 +184,7 @@ impl Entity {
         e
     }
 
-    /// Can take move and stop orders.
+    /// Can take movement orders. Stop also applies to immobile craft/stations.
     pub fn orderable(&self) -> bool {
         self.kind == EntityKind::Craft && self.stats.max_speed > Fixed::ZERO
     }
