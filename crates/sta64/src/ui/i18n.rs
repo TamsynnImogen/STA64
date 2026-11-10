@@ -5,9 +5,10 @@
 //! mod that lacks a key, and in tests. A [`Strings`] table maps that key to
 //! the active language's text. It is filled from two layers, later wins:
 //!
-//! 1. the game's own `Dynamic_Localized_Strings.h` (`"GAME_KEY", "text"`),
-//!    reached through [`GAME_KEYS`], which maps STA64 call-site keys to the
-//!    game's key where the original has one;
+//! 1. the game's own `Dynamic_Localized_Strings.h` (`"GAME_KEY", "text"`,
+//!    parsed by [`StringTable`] with mod layers merged), reached through
+//!    [`GAME_KEYS`], which maps STA64 call-site keys to the game's key where
+//!    the original has one;
 //! 2. `sta64_<language>.strings` in the mounted install or mod, tab-separated
 //!    `key<TAB>text` lines, for everything the game never had and for
 //!    translations.
@@ -23,6 +24,7 @@ use std::collections::HashMap;
 use std::sync::{OnceLock, RwLock};
 
 use bevy::prelude::*;
+use sta_content::strings::StringTable;
 use sta_vfs::Vfs;
 
 /// STA64 call-site key -> the game's own string key, for the strings the
@@ -63,13 +65,11 @@ impl Strings {
                 .and_then(Result::ok)
                 .map(|b| String::from_utf8_lossy(&b).into_owned())
         };
-        let game = read("Dynamic_Localized_Strings.h")
-            .map(|t| parse_game(&t))
-            .unwrap_or_default();
+        let game = StringTable::load(vfs);
         let mut map = HashMap::new();
         for (key, game_key) in GAME_KEYS {
-            if let Some(text) = game.get(*game_key) {
-                map.insert((*key).to_owned(), text.clone());
+            if let Some(text) = game.get(game_key) {
+                map.insert((*key).to_owned(), text.to_owned());
             }
         }
         if let Some(t) = read(&format!("sta64_{language}.strings")) {
@@ -99,18 +99,6 @@ impl Strings {
             *g = self.map.clone();
         }
     }
-}
-
-/// `"KEY",<ws>"text"` lines of `Dynamic_Localized_Strings.h`.
-fn parse_game(text: &str) -> HashMap<String, String> {
-    let mut out = HashMap::new();
-    for line in text.lines() {
-        let mut q = line.trim().split('"');
-        if let (Some(""), Some(k), Some(_), Some(v)) = (q.next(), q.next(), q.next(), q.next()) {
-            out.insert(k.to_owned(), v.to_owned());
-        }
-    }
-    out
 }
 
 fn parse_pairs(text: &str) -> impl Iterator<Item = (String, String)> + '_ {
@@ -181,9 +169,9 @@ mod tests {
 
     #[test]
     fn parses_game_and_pair_files() {
-        let g = parse_game("\t\"GUI_A\",\t\"Hello there\",\n// x\n\t\"GUI_B\", \"b\"");
-        assert_eq!(g["GUI_A"], "Hello there");
-        assert_eq!(g["GUI_B"], "b");
+        let g = StringTable::parse("\t\"GUI_A\",\t\"Hello there\",\n// x\n\t\"GUI_B\", \"b\"");
+        assert_eq!(g.get("GUI_A"), Some("Hello there"));
+        assert_eq!(g.get("GUI_B"), Some("b"));
         let p: Vec<_> = parse_pairs("# c\nHold\tHalten\n").collect();
         assert_eq!(p, vec![("Hold".to_owned(), "Halten".to_owned())]);
     }

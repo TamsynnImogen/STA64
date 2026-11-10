@@ -118,3 +118,4 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [x] Team colours from `teamcolor.odf` — `4cea39a`
 - [x] Damage-state nodes hidden on healthy craft — `5287d6f`
 - [ ] Construction, cloak FX: a station under construction welds and firms up, `Built` flashes; a cloaked own unit goes translucent and back (RND-11)
+- [?] Language packs (CON-11): `cargo test -p sta_content --lib strings -- --nocapture` lists a string and label count for every installed game and mod (A1, A2, A2 stock, Dominion War, FO, FO Roots, Fleet Ops 4.0, STA2 Classic) and passes; the UI tooltip "Double click to return to strategic mode." still shows in-game
