@@ -213,3 +213,21 @@ physical-state retention, idle cargo delivery, derived tech/visibility and
 snapshot/replay continuation. Rerun the installed mission probes without
 hiding any remaining rejected commands. Keep SIM-19 and LUA-05 incomplete
 until their remaining gates are met.
+
+## Guarded-stage installed probe evidence
+
+The optional 1800-tick startup sweep on guarded-stage source e9f55fe reaches
+all 36 external ports and resolves all 36 installed maps without packaging
+failures. It still fails overall with two diagnostics: Blockade's existing
+forceOntoMap Lua error and Invasion's Team request at tick 1440. The Cavalry's
+previous tick-720 Team rejection is absent. This is startup/command evidence,
+not campaign completion, native runtime acceptance or working AIP behavior.
+
+The rejected Invasion target is the Regula III planet. The after-step
+diagnostic identifies pb_clssh with class planet, Resource kind, neutral
+owner, full positive hull, no construction progress and resource metadata 0.
+The current model represents it as a neutral deposit. Do not bypass the
+resource guards for this map or ODF. Distinguishing colonizable worlds and
+colony ownership from neutral deposits needs its own native-backed model;
+this stage does not implement colony capture. The probe keeps both remaining
+failures and its unsupported/handled-call diagnostics visible.
