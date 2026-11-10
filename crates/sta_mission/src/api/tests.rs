@@ -86,6 +86,40 @@ impl Game {
 }
 
 #[test]
+fn converted_order_namespace_dispatches_attack_and_stop_through_the_sim() {
+    let mut g = game(
+        r#"
+        assert(rawequal(GameObject.Order, Order))
+        assert(type(GameObject.Order.Attack) == 'string')
+        HERO_HANDLE = EntityFinder():findOne('hero')
+        HERO_HANDLE:giveOrder(GameObject.Order.Attack, EntityFinder():findOne('foe'))
+        "#,
+    );
+    let mut replay = g.sim.clone();
+    let attack = g.rt.take_commands();
+    assert_eq!(attack.len(), 1);
+    assert_eq!(attack[0].player, PlayerId(0));
+    assert_eq!(attack[0].kind, CommandKind::Order(Order::Attack { units: vec![HERO], target: FOE }));
+    let out = g.sim.step(&attack);
+    assert_eq!(replay.step(&attack).events, out.events);
+    assert!(!out.events.iter().any(|e| matches!(e, SimEvent::Rejected { .. })));
+
+    let mut commands = Vec::new();
+    g.rt.think(&out.view, &out.events, &mut commands);
+    assert!(commands.is_empty());
+    g.rt.eval::<()>("HERO_HANDLE:giveOrder(GameObject.Order.Stop)").unwrap();
+    let stop = g.rt.take_commands();
+    assert_eq!(stop.len(), 1);
+    assert_eq!(stop[0].player, PlayerId(0));
+    assert_eq!(stop[0].kind, CommandKind::Order(Order::Stop { units: vec![HERO] }));
+    let out = g.sim.step(&stop);
+    assert_eq!(replay.step(&stop).events, out.events);
+    assert!(!out.events.iter().any(|e| matches!(e, SimEvent::Rejected { .. })));
+    assert_eq!(g.sim.digest(), replay.digest());
+    assert!(g.rt.unsupported().is_empty());
+}
+
+#[test]
 fn entity_properties_read_the_view_and_content() {
     let g = game(
         r#"

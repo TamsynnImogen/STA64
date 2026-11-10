@@ -15,7 +15,8 @@
 //! # Bound names
 //!
 //! - `Vector(x, y, z)` (`+ - *`, `length`, `distance`);
-//! - `Entity.Type.*`, `Order.*`, `Relation.*`, `SlotType.*` enum values;
+//! - `Entity.Type.*`, `Order.*` (also `GameObject.Order.*`), `Relation.*`,
+//!   `SlotType.*` enum values;
 //! - entity handles (from `EntityFinder`, `Player` and monitor callbacks):
 //!   `id valid destroyed position forward velocity hull maxHull shields
 //!   maxShields crew maxCrew player owner race odf class label cloaked
@@ -319,7 +320,12 @@ pub(crate) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
     let entity_t = lua.create_table()?;
     entity_t.set("Type", enum_table(lua, ENTITY_TYPES)?)?;
     g.raw_set("Entity", entity_t)?;
-    g.raw_set("Order", enum_table(lua, ORDERS)?)?;
+    let orders = enum_table(lua, ORDERS)?;
+    g.raw_set("Order", orders.clone())?;
+    // Converted A2 missions use this namespace for the same order values.
+    let game_object = lua.create_table()?;
+    game_object.raw_set("Order", orders)?;
+    g.raw_set("GameObject", game_object)?;
     g.raw_set("SlotType", enum_table(lua, SLOT_TYPES)?)?;
     g.raw_set("Relation", enum_table(lua, &["Ally", "Enemy", "Neutral"])?)?;
 

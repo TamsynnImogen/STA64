@@ -98,3 +98,10 @@ other owner-dependent state before this binding can be offered. Unknown
 `A2` names return nil rather than implying a completed binding via a stub.
 The inventory distinguishes these exact callable signatures from older
 MMM job-equivalence mappings; neither classification proves native parity.
+
+
+The shared order enum is available as both `Order` and `GameObject.Order`,
+which refer to the same table. This supplies the namespace used in 104
+calls in the converted A2 ports; it does not add behavior for order values
+that the dispatcher does not implement, including Colonize. The ports'
+Move spelling remains a separate unsupported gap.
