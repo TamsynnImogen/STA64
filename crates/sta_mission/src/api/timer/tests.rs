@@ -10,7 +10,7 @@ fn step(rt: &mut MissionRuntime, tick: u64) {
     rt.think(&view, &[], &mut Vec::new());
 }
 
-fn eval<T: mlua::FromLuaMulti>(rt: &MissionRuntime, code: &str) -> T {
+fn eval<T: crate::runtime::EvalResult>(rt: &MissionRuntime, code: &str) -> T {
     rt.eval(code).unwrap()
 }
 

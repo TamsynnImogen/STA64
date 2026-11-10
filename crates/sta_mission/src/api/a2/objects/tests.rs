@@ -42,15 +42,8 @@ fn object_calls_queue_commands_and_read_the_latest_snapshot() {
     let mut rt = runtime(&sim);
     let alive: bool = rt.eval(&format!("return A2.IsAlive({})", a.0)).unwrap();
     assert!(alive);
-    let location: mlua::Table = rt.eval(&format!("return A2.GetLocation({})", a.0)).unwrap();
-    assert_eq!(
-        (
-            location.get::<f64>("x").unwrap(),
-            location.get::<f64>("y").unwrap(),
-            location.get::<f64>("z").unwrap()
-        ),
-        (100.0, 20.0, -30.0)
-    );
+    let location: (f64, f64, f64) = rt.eval(&format!("local p = A2.GetLocation({}); return p.x, p.y, p.z", a.0)).unwrap();
+    assert_eq!(location, (100.0, 20.0, -30.0));
     let owner: i64 = rt.eval(&format!("return A2.GetRealTeam({})", a.0)).unwrap();
     assert_eq!(owner, 0);
 

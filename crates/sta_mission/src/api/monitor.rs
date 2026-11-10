@@ -56,9 +56,8 @@ struct Monitor(u64, Shared);
 
 fn add_hook(lua: &Lua, m: &Monitor, args: &MultiValue) -> mlua::Result<()> {
     let _ = lua;
-    let mut c = m.1.borrow_mut();
     let Some(Value::String(kind)) = args.front() else {
-        c.unsupported("Monitor:hook: non-string kind");
+        m.1.borrow_mut().unsupported("Monitor:hook: non-string kind");
         return Ok(());
     };
     let kind = kind.to_string_lossy();
@@ -67,15 +66,17 @@ fn add_hook(lua: &Lua, m: &Monitor, args: &MultiValue) -> mlua::Result<()> {
         Some(Value::Function(f)) => Some(f.clone()),
         _ => None,
     };
+    let centre = if kind == "Enters" { rest.first().and_then(|v| point_of(&m.1, v)) } else { None };
+    let mut c = m.1.borrow_mut();
     let parsed = match kind.as_str() {
         "Destroyed" => match (rest.first(), func(1)) {
             (Some(Value::UserData(u)), Some(f)) => u
                 .borrow::<super::entity::Entity>()
                 .ok()
-                .map(|e| (MonitorKind::Destroyed { target: e.id, seen_alive: c.alive(e.id).is_some() }, f)),
+                .and_then(|e| e.key.id().map(|id| (MonitorKind::Destroyed { target: id, seen_alive: c.alive(id).is_some() }, f))),
             _ => None,
         },
-        "Enters" => match (rest.first().and_then(|v| point_of(&c, v)), rest.get(1), func(2)) {
+        "Enters" => match (centre, rest.get(1), func(2)) {
             (Some(centre), Some(r), Some(f)) => {
                 let radius = match r {
                     Value::Number(n) => *n,

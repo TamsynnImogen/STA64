@@ -52,7 +52,8 @@ fn position(t: &mlua::Table) -> mlua::Result<Vec3> {
 
 fn spot(v: &Value) -> mlua::Result<Spot> {
     match v {
-        Value::UserData(u) if u.is::<Entity>() => Ok(Spot::Entity(u.borrow::<Entity>()?.id)),
+        Value::UserData(u) if u.is::<Entity>() => u.borrow::<Entity>()?.key.id().map(Spot::Entity)
+            .ok_or_else(|| mlua::Error::runtime("camera spot needs a resolved entity; spawn is pending or failed")),
         Value::UserData(u) if u.is::<PathRef>() => Ok(Spot::Path(u.borrow::<PathRef>()?.name.clone())),
         Value::Table(t) => Ok(Spot::Position(position(t)?)),
         _ => Err(mlua::Error::runtime("camera spot must be an entity, Vector or Path")),

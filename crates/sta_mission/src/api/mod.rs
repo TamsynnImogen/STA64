@@ -17,8 +17,9 @@
 //! - `Vector(x, y, z)` (`+ - *`, `length`, `distance`);
 //! - `Entity.Type.*`, `Order.*` (also `GameObject.Order.*`), `Relation.*`,
 //!   `SlotType.*` enum values;
+//! - queued `Entity.add(odf, player, Vector)` handles, see `spawn`;
 //! - entity handles (from `EntityFinder`, `Player` and monitor callbacks):
-//!   `id valid destroyed position forward velocity hull maxHull shields
+//!   `id valid pending destroyed position forward velocity hull maxHull shields
 //!   maxShields crew maxCrew player owner race odf class label cloaked
 //!   invincible`, `isType giveOrder cloak decloak remove canPlayerSee`;
 //! - `EntityFinder():find(filter)` / `:findOne(filter)`, a filter being a
@@ -54,11 +55,14 @@ use sta_sim::SimEvent;
 
 mod a2;
 mod entity;
+mod entity_action;
+mod entity_ref;
 mod monitor;
 mod player;
 mod timer;
 mod objectives;
 mod objectives_file;
+mod spawn;
 #[cfg(test)]
 mod tests;
 
@@ -68,6 +72,14 @@ pub(crate) use monitor::MonitorState;
 pub(crate) fn fire_monitors(lua: &Lua, ctx: &Shared, errors: &mut Vec<String>) {
     monitor::fire_monitors(lua, ctx, errors);
     timer::fire_timers(lua, ctx, errors);
+}
+
+pub(crate) fn process_spawns(ctx: &mut Ctx) {
+    spawn::process(ctx);
+}
+
+pub(crate) fn drain_commands(ctx: &Shared) -> Vec<Command> {
+    spawn::drain(&mut ctx.borrow_mut())
 }
 
 /// What a mission needs to know about its game that `Controller::think`
@@ -122,6 +134,7 @@ pub(crate) struct Ctx {
     pub events: Vec<SimEvent>,
     pub commands: Vec<Command>,
     seq: BTreeMap<PlayerId, u32>,
+    pub spawns: spawn::SpawnStore,
     pub objectives: Vec<Objective>,
     pub next_objective_id: u32,
     pub objective_briefing: Option<ObjectiveBriefing>,
@@ -151,6 +164,7 @@ impl Ctx {
             events: Vec::new(),
             commands: Vec::new(),
             seq: BTreeMap::new(),
+            spawns: spawn::SpawnStore::default(),
             objectives: Vec::new(),
             next_objective_id: 0,
             objective_briefing: None,
@@ -184,10 +198,18 @@ impl Ctx {
         self.content.as_ref().and_then(|c| c.name(u.def)).unwrap_or_default().to_owned()
     }
 
+    pub fn try_push(&mut self, player: PlayerId, kind: CommandKind) -> Result<u32, &'static str> {
+        let seq = self.seq.get(&player).copied().unwrap_or(0)
+            .checked_add(1).ok_or("command sequence exhausted")?;
+        self.seq.insert(player, seq);
+        self.commands.push(Command { player, seq, kind });
+        Ok(seq)
+    }
+
     pub fn push(&mut self, player: PlayerId, kind: CommandKind) {
-        let s = self.seq.entry(player).or_insert(0);
-        *s += 1;
-        self.commands.push(Command { player, seq: *s, kind });
+        if let Err(reason) = self.try_push(player, kind) {
+            self.unsupported(reason);
+        }
     }
 
     pub fn edit(&mut self, e: Edit) {
@@ -200,8 +222,10 @@ impl Ctx {
             self.unsupported("order: no owner");
             return false;
         };
-        self.push(owner, CommandKind::Order(make(vec![id])));
-        true
+        match self.try_push(owner, CommandKind::Order(make(vec![id]))) {
+            Ok(_) => true,
+            Err(reason) => { self.unsupported(reason); false }
+        }
     }
 
     pub fn unsupported(&mut self, what: &str) {
@@ -236,12 +260,15 @@ pub(crate) fn dist(a: (f64, f64, f64), b: (f64, f64, f64)) -> f64 {
 }
 
 /// A point from a `Vector`-like table or an entity handle.
-pub(crate) fn point_of(ctx: &Ctx, v: &Value) -> Option<(f64, f64, f64)> {
+pub(crate) fn point_of(ctx: &Shared, v: &Value) -> Option<(f64, f64, f64)> {
     match v {
+        // Callers must not hold a context borrow while table lookups can
+        // invoke Lua __index. Entity lookup below borrows only for Rust reads.
         Value::Table(t) => Some((t.get("x").ok()?, t.get("y").unwrap_or(0.0), t.get("z").ok()?)),
         Value::UserData(u) => {
             let e = u.borrow::<entity::Entity>().ok()?;
-            ctx.unit(e.id).map(|u| pos_f64(u.pos))
+            let ctx = ctx.borrow();
+            e.key.id().and_then(|id| ctx.unit(id)).or_else(|| e.key.hint()).map(|u| pos_f64(u.pos))
         }
         _ => None,
     }

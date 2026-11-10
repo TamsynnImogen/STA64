@@ -1,24 +1,29 @@
 //! `Entity` handles, `EntityFinder` and `giveOrder`.
 
+use std::rc::Rc;
+
 use mlua::{AnyUserData, Lua, MetaMethod, MultiValue, UserData, UserDataFields, UserDataMethods, UserDataRef, Value};
-use sta_core::{EntityId, Fixed};
-use sta_sim::command::{Edit, Order, Target};
+use sta_core::EntityId;
+use sta_sim::command::Edit;
 use sta_sim::view::{UnitFlags, UnitView};
 
 use super::player::{player_of, Player};
+use super::entity_action::{parse_order, EntityAction};
+use super::entity_ref::EntityRef;
+use super::spawn;
 use super::{dist, point_of, pos_f64, stub, to_vec3, vector, Ctx, Shared};
 
 /// A handle to a unit. Reads see the latest view; a dead unit's handle
 /// stays valid as a value but reads `valid == false`.
 pub(crate) struct Entity {
-    pub id: EntityId,
+    pub key: EntityRef,
     pub ctx: Shared,
 }
 
 impl Entity {
     fn with<R>(&self, f: impl FnOnce(&Ctx, Option<&UnitView>) -> R) -> R {
         let c = self.ctx.borrow();
-        let u = c.alive(self.id);
+        let u = self.key.id().and_then(|id| c.alive(id)).or_else(|| self.key.hint());
         f(&c, u)
     }
 }
@@ -40,12 +45,13 @@ pub(crate) fn is_type(class: &str, t: &str) -> bool {
 }
 
 fn entity_value(lua: &Lua, ctx: &Shared, id: EntityId) -> mlua::Result<Value> {
-    Ok(Value::UserData(lua.create_userdata(Entity { id, ctx: ctx.clone() })?))
+    Ok(Value::UserData(lua.create_userdata(Entity { key: EntityRef::Existing(id), ctx: ctx.clone() })?))
 }
 
 impl UserData for Entity {
     fn add_fields<F: UserDataFields<Self>>(f: &mut F) {
-        f.add_field_method_get("id", |_, e| Ok(e.id.0));
+        f.add_field_method_get("id", |_, e| Ok(e.key.id().map(|id| id.0)));
+        f.add_field_method_get("pending", |_, e| Ok(e.key.pending()));
         f.add_field_method_get("valid", |_, e| Ok(e.with(|_, u| u.is_some())));
         f.add_field_method_get("destroyed", |_, e| Ok(e.with(|_, u| u.is_none())));
         f.add_field_method_get("position", |lua, e| {
@@ -101,7 +107,7 @@ impl UserData for Entity {
         f.add_field_method_get("class", |_, e| {
             Ok(e.with(|c, u| u.and_then(|u| c.def(u)).map(|d| d.class.0.clone()).unwrap_or_default()))
         });
-        f.add_field_method_get("label", |_, e| Ok(e.ctx.borrow().labels.get(&e.id).cloned()));
+        f.add_field_method_get("label", |_, e| Ok(e.key.id().and_then(|id| e.ctx.borrow().labels.get(&id).cloned())));
         f.add_field_method_get("cloaked", |_, e| {
             Ok(e.with(|_, u| u.is_some_and(|u| u.flags.contains(UnitFlags::CLOAKED))))
         });
@@ -109,25 +115,20 @@ impl UserData for Entity {
             Ok(e.with(|_, u| u.is_some_and(|u| u.flags.contains(UnitFlags::IMMORTAL))))
         });
         f.add_field_method_set("invincible", |_, e, on: bool| {
-            e.ctx.borrow_mut().edit(Edit::Immortal(e.id, on));
+            spawn::queue_action(&mut e.ctx.borrow_mut(), e.key.clone(), EntityAction::Immortal(on));
             Ok(())
         });
         f.add_field_method_set("hull", |_, e, to: f64| {
-            let mut c = e.ctx.borrow_mut();
-            if let Some(now) = c.alive(e.id).map(|u| u.hull[0].to_f32() as f64) {
-                if to < now {
-                    c.edit(Edit::Damage(e.id, Fixed::from_f64(now - to)));
-                } else if to > now {
-                    c.edit(Edit::Heal(e.id));
-                }
-            }
+            if !to.is_finite() { return Err(mlua::Error::runtime("entity.hull requires a finite value")); }
+            spawn::queue_action(&mut e.ctx.borrow_mut(), e.key.clone(), EntityAction::Hull(to));
             Ok(())
         });
         f.add_field_method_set("player", |_, e, p: Value| {
             let mut c = e.ctx.borrow_mut();
-            match player_of(&p) {
-                Some(p) => c.edit(Edit::Team(e.id, p)),
-                None => c.unsupported("entity.player = non-player"),
+            match (e.key.id(), player_of(&p)) {
+                (Some(id), Some(p)) => c.edit(Edit::Team(id, p)),
+                (None, _) => c.unsupported("entity.player: pending or failed spawn"),
+                (_, None) => c.unsupported("entity.player = non-player"),
             }
             Ok(())
         });
@@ -145,79 +146,41 @@ impl UserData for Entity {
         m.add_method("canPlayerSee", |_, e, p: Value| {
             let c = e.ctx.borrow();
             let Some(p) = player_of(&p) else { return Ok(false) };
-            Ok(c.view.visible_to(p).iter().any(|u| u.id == e.id))
+            let Some(id) = e.key.id() else { return Ok(false) };
+            Ok(c.view.visible_to(p).iter().any(|u| u.id == id))
         });
         m.add_method("remove", |_, e, _: MultiValue| {
-            e.ctx.borrow_mut().edit(Edit::Kill(e.id));
+            spawn::queue_action(&mut e.ctx.borrow_mut(), e.key.clone(), EntityAction::Remove);
             Ok(())
         });
         m.add_method("cloak", |_, e, _: MultiValue| {
-            e.ctx.borrow_mut().order(e.id, |units| Order::Cloak { units, on: true });
+            spawn::queue_action(&mut e.ctx.borrow_mut(), e.key.clone(), EntityAction::Cloak(true));
             Ok(())
         });
         m.add_method("decloak", |_, e, _: MultiValue| {
-            e.ctx.borrow_mut().order(e.id, |units| Order::Cloak { units, on: false });
+            spawn::queue_action(&mut e.ctx.borrow_mut(), e.key.clone(), EntityAction::Cloak(false));
             Ok(())
         });
         m.add_method("giveOrder", |_, e, args: MultiValue| {
-            give_order(&e.ctx, e.id, &args);
+            give_order(&e.ctx, e.key.clone(), &args);
             Ok(())
         });
-        m.add_meta_method(MetaMethod::Eq, |_, e, o: UserDataRef<Entity>| Ok(e.id == o.id));
-        m.add_meta_method(MetaMethod::ToString, |_, e, ()| Ok(format!("Entity#{}", e.id.0)));
+        m.add_meta_method(MetaMethod::Eq, |_, e, o: UserDataRef<Entity>| Ok(Rc::ptr_eq(&e.ctx, &o.ctx) && e.key.same_entity(&o.key)));
+        m.add_meta_method(MetaMethod::ToString, |_, e, ()| Ok(match e.key.id() {
+            Some(id) => format!("Entity#{}", id.0),
+            None => format!("Entity<{}>", if e.key.pending() { "pending" } else { "invalid" }),
+        }));
         m.add_meta_method(MetaMethod::Index, |lua, _, _: Value| stub(lua));
     }
 }
 
 /// `unit:giveOrder(Order.X, target?, queue?)`. Orders the sim has no
 /// command for are counted in `Ctx::unsupported`.
-fn give_order(ctx: &Shared, id: EntityId, args: &MultiValue) {
-    let mut c = ctx.borrow_mut();
-    let Some(Value::String(name)) = args.front() else {
-        c.unsupported("giveOrder: no order");
-        return;
-    };
-    let name = name.to_string_lossy();
-    let target = args.get(1).cloned().unwrap_or(Value::Nil);
-    let queue = matches!(args.get(2), Some(Value::Boolean(true)));
-    let target_entity = |v: &Value| match v {
-        Value::UserData(u) => u.borrow::<Entity>().ok().map(|e| e.id),
-        _ => None,
-    };
-    match name.as_str() {
-        "Go" | "GoSingle" | "MoveHigh" | "MoveMedium" | "MoveLow" | "GoWarp" | "GoWarpSingle" | "Scout" => {
-            match point_of(&c, &target) {
-                Some((x, y, z)) => {
-                    c.order(id, |units| Order::Move { units, to: to_vec3(x, y, z), queue });
-                }
-                None => c.unsupported("giveOrder Go: no point"),
-            }
-        }
-        "Stop" | "None" | "Default" => {
-            c.order(id, |units| Order::Stop { units });
-        }
-        "Attack" | "SearchAndDestroy" | "AnchoredAttack" => match target_entity(&target) {
-            Some(t) => {
-                c.order(id, |units| Order::Attack { units, target: t });
-            }
-            None => c.unsupported("giveOrder Attack: no target entity"),
-        },
-        "Mine" => match target_entity(&target) {
-            Some(t) => {
-                c.order(id, |units| Order::Mine { units, node: t });
-            }
-            None => c.unsupported("giveOrder Mine: no target entity"),
-        },
-        "SpecialWeaponHigh" | "SpecialWeaponMedium" | "SpecialAttack" => {
-            let slot = if name == "SpecialWeaponMedium" { 1 } else { 0 };
-            let tgt = match (target_entity(&target), point_of(&c, &target)) {
-                (Some(t), _) => Target::Entity(t),
-                (None, Some((x, y, z))) => Target::Point(to_vec3(x, y, z)),
-                _ => Target::None,
-            };
-            c.order(id, |units| Order::Special { units, slot, target: tgt });
-        }
-        other => c.unsupported(&format!("giveOrder {other}")),
+fn give_order(ctx: &Shared, key: EntityRef, args: &MultiValue) {
+    let parsed = parse_order(ctx, args);
+    match parsed {
+        Ok(intent) => { spawn::queue_action(&mut ctx.borrow_mut(), key, EntityAction::Order(intent)); }
+        Err(reason) => ctx.borrow_mut().unsupported(&reason),
     }
 }
 
@@ -238,7 +201,6 @@ fn odf_stem(name: &str) -> &str {
 }
 
 fn find(lua: &Lua, ctx: &Shared, filter: &Value, predicate: Option<&mlua::Function>) -> mlua::Result<Vec<EntityId>> {
-    let c = ctx.borrow();
     let ci = |a: &str, b: &str| a.eq_ignore_ascii_case(b);
     let (mut label, mut odf, mut class, mut ty, mut owner) = (None, None, None, None, None);
     let mut any_name: Option<String> = None;
@@ -251,7 +213,7 @@ fn find(lua: &Lua, ctx: &Shared, filter: &Value, predicate: Option<&mlua::Functi
             class = t.get::<Value>("class")?.as_string().map(|s| s.to_string_lossy());
             ty = str_of(&t.get::<Value>("type")?);
             owner = player_of(&t.get::<Value>("player")?);
-            let centre = point_of(&c, &t.get::<Value>("center")?);
+            let centre = point_of(ctx, &t.get::<Value>("center")?);
             let radius: Option<f64> = t.get("radius")?;
             if let (Some(p), Some(r)) = (centre, radius) {
                 circle = Some((p, r));
@@ -260,6 +222,9 @@ fn find(lua: &Lua, ctx: &Shared, filter: &Value, predicate: Option<&mlua::Functi
         Value::Integer(_) | Value::Number(_) | Value::UserData(_) => owner = player_of(filter),
         _ => {}
     }
+    // Filter fields may execute Lua and queue edits. Borrow the view only
+    // after all such lookups finish, as with the predicates below.
+    let c = ctx.borrow();
     let mut out = Vec::new();
     for u in &c.view.units {
         if u.flags.contains(UnitFlags::DYING) {
@@ -348,6 +313,40 @@ fn finder_methods(lua: &Lua, ctx: &Shared, predicate: Option<mlua::Function>) ->
 }
 
 pub(crate) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
+    let entities: mlua::Table = lua.globals().raw_get("Entity")?;
+    let c = ctx.clone();
+    entities.raw_set("add", lua.create_function(move |lua, args: MultiValue| {
+        if args.len() != 3 {
+            return Err(mlua::Error::runtime("Entity.add expects ODF, player and Vector"));
+        }
+        let Value::String(name) = &args[0] else {
+            return Err(mlua::Error::runtime("Entity.add requires an ODF name"));
+        };
+        let name = name.to_str()?.to_owned();
+        if let Value::Number(n) = &args[1]
+            && (!n.is_finite() || n.fract() != 0.0) {
+            return Err(mlua::Error::runtime("Entity.add requires an integer player slot"));
+        }
+        let owner = player_of(&args[1]).filter(|p| p.is_player())
+            .ok_or_else(|| mlua::Error::runtime("Entity.add requires a player slot 0..7"))?;
+        let Value::Table(point) = &args[2] else {
+            return Err(mlua::Error::runtime("Entity.add requires a Vector"));
+        };
+        // Read Lua fields before borrowing the context: user-defined table
+        // lookups may reenter the API. Coordinates must fit the sim's fixed point.
+        let (x, y, z) = (point.get::<f64>("x")?, point.get::<Option<f64>>("y")?.unwrap_or(0.0), point.get::<f64>("z")?);
+        if [x, y, z].iter().any(|v| !v.is_finite() || !(-2147483648.0..2147483648.0).contains(v)) {
+            return Err(mlua::Error::runtime("Entity.add position must be finite and fit 32.32 fixed point"));
+        }
+        let key = {
+            let c = c.borrow();
+            c.content.as_ref().and_then(|db| db.key(odf_stem(&name)).filter(|key| db.unit(*key).is_some()))
+                .ok_or_else(|| mlua::Error::runtime("Entity.add requires a known unit ODF"))?
+        };
+        let key = spawn::queue_spawn(&mut c.borrow_mut(), key, owner, to_vec3(x, y, z))
+            .map_err(mlua::Error::runtime)?;
+        lua.create_userdata(Entity { key, ctx: c.clone() })
+    })?)?;
     // `EntityFinder()` makes an object with the same methods; the methods
     // ignore `self`, so `EntityFinder.find(f)` works too.
     let class = lua.create_table()?;
@@ -380,5 +379,5 @@ pub(crate) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
 
 /// An entity handle for `id`, for monitors.
 pub(crate) fn handle(lua: &Lua, ctx: &Shared, id: EntityId) -> mlua::Result<AnyUserData> {
-    lua.create_userdata(Entity { id, ctx: ctx.clone() })
+    lua.create_userdata(Entity { key: EntityRef::Existing(id), ctx: ctx.clone() })
 }

@@ -115,3 +115,58 @@ when disabled, following the existing sim behavior. These calls share the
 object bridge's argument, live-handle and snapshot rules. Sensors, shields
 and life support are not exposed by this slice because the simulation
 rejects those edits.
+
+
+## Queued Entity.add bridge
+
+`Entity.add(odf, player, Vector)` accepts a known unit ODF (with optional
+`.odf` suffix), player slot 0..7 or its Player handle, and finite fixed-point
+coordinates. The request uses heading +Z as a bridge default. It queues a
+SCRIPT SpawnRequest rather than mutating the simulation or predicting an ID.
+
+The returned handle has `.pending == true`, `.id == nil`, and `.valid == true`
+for a locally validated request. Its getters expose uncommitted definition,
+owner and position hints; it is not yet in EntityFinder or the world view.
+A real ScriptSpawned receipt resolves its ID on the next controller view.
+Rejected, missing or conflicting receipts invalidate it. A receipt may name
+an entity already destroyed that tick: the real ID remains inspectable but
+the handle is invalid and its pending actions are discarded.
+
+Move/stop/attack/mine/special/cloak orders and the existing remove,
+invincibility and hull edits wait for all pending references, including a
+pending target. They dispatch once before that tick's Lua callbacks, through
+the normal owner orders or SCRIPT edits. Later actions for the same unit wait
+behind an earlier blocked action, preserving attack-then-stop intent order.
+The sim still validates capabilities
+and sorts commands by player/sequence; global Lua call order is not promised.
+Name, position and shield writes remain unsupported. Owner transfer remains
+unsupported by the sim; assigning a pending handle's player is diagnosed.
+Camera spots and destruction monitors currently require a resolved ID.
+
+A host must use one MissionRuntime for its SCRIPT command stream and deliver
+the complete submitted-batch events with the next view. Tokens and command
+sequences are checked; data held for pending actions contains no Lua values,
+and resolved requests leave the outstanding registry. Save/resume of Lua
+and pending handles, multi-runtime SCRIPT ownership and native immediate
+spawn timing are not completion claims of this bridge.
+
+The ignored external spawn-helper probe invokes Into the Breach's unmodified
+spawnAttack method explicitly with a repository-only synthetic ship and toy
+beam. It verifies a real receipt and accepted deferred Attack targeting the
+Enterprise. This is not a naturally timed Borg wave, native ship data,
+complete original-map play or client rendering proof.
+
+## Runtime inspection ownership
+
+The runtime's inspection methods return only sealed owned scalars, strings,
+options, vectors and tuples; they cannot export Lua Table/Function/userdata
+handles or admit custom Rust conversions that retain the VM. `eval_with`
+passes sealed arguments through Lua varargs without string interpolation.
+The explicit mlua `error-send` feature and a compile-time guard keep errors
+within that ownership boundary as well; mlua `send` is not enabled. Compile-
+fail examples reject Lua handles and custom result/argument conversions,
+and a positive test moves the runtime while retaining copied inspection data.
+
+Filter fields and vector coordinates can invoke Lua metatables. They are
+read before borrowing the context, so callbacks may queue orders or edits;
+view iteration still snapshots candidates before predicate callbacks.

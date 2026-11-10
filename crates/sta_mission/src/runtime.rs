@@ -113,6 +113,10 @@ struct Inner {
 }
 
 /// A mission script running as a [`Controller`].
+///
+/// The host owns one runtime for its SCRIPT command stream and supplies the
+/// complete events from a submitted batch with the next view. Independent
+/// runtimes must not share SCRIPT sequences or spawn request tokens.
 pub struct MissionRuntime {
     inner: Inner,
     errors: Vec<String>,
@@ -122,10 +126,16 @@ pub struct MissionRuntime {
 // reference counts. Everything that touches them (the state, the callback
 // `Function`s, the closures installed into it) lives inside `Inner`, which
 // is moved as a whole and never cloned out, so one thread at a time uses
-// them. The reader closure is required to be `Send`.
+// them. Public inspection accepts only sealed standard owned conversions;
+// neither Lua handles nor custom converters can escape via eval/eval_with.
+// The reader closure is required to be Send, and error-send plus a static
+// assertion keep errors from exporting thread-affine values either.
 unsafe impl Send for MissionRuntime {}
 
 type Reader = api::MissionReader;
+
+mod inspection;
+pub use inspection::{EvalArgs, EvalResult};
 
 /// Adapt the class instances used by the converted missions without exposing
 /// another callback kind outside the Lua state. Successful setup runs once,
@@ -262,9 +272,47 @@ impl MissionRuntime {
         lua.load(&src[..]).set_name(format!("@{path}")).exec()
     }
 
-    /// Evaluate a Lua chunk in the script's state (tests, tools).
-    pub fn eval<T: mlua::FromLuaMulti>(&self, chunk: &str) -> mlua::Result<T> {
+    /// Evaluate a chunk, returning only sealed owned data. Lua handles and
+    /// custom conversions cannot escape this runtime's manual Send boundary.
+    ///
+    /// ```compile_fail
+    /// use sta_mission::runtime::MissionRuntime;
+    /// let rt = MissionRuntime::from_source("test.lua", "", 1);
+    /// let _: mlua::Table = rt.eval("return {}").unwrap();
+    /// ```
+    ///
+    /// A Send result alone would not prevent a custom converter retaining
+    /// a Lua clone as a side effect; custom conversions are also sealed out.
+    ///
+    /// ```compile_fail
+    /// use sta_mission::runtime::MissionRuntime;
+    /// struct Custom;
+    /// impl mlua::FromLuaMulti for Custom {
+    ///     fn from_lua_multi(_: mlua::MultiValue, _: &mlua::Lua) -> mlua::Result<Self> { Ok(Custom) }
+    /// }
+    /// let rt = MissionRuntime::from_source("test.lua", "", 1);
+    /// let _: Custom = rt.eval("return 1").unwrap();
+    /// ```
+    pub fn eval<T: EvalResult>(&self, chunk: &str) -> mlua::Result<T> {
         self.inner.lua.load(chunk).eval()
+    }
+
+    /// Call a chunk with sealed arguments, avoiding both string interpolation
+    /// and exported Lua Function handles. Lua receives arguments through `...`.
+    ///
+    /// ```compile_fail
+    /// use sta_mission::runtime::MissionRuntime;
+    /// struct Custom;
+    /// impl mlua::IntoLuaMulti for Custom {
+    ///     fn into_lua_multi(self, _: &mlua::Lua) -> mlua::Result<mlua::MultiValue> {
+    ///         Ok(mlua::MultiValue::new())
+    ///     }
+    /// }
+    /// let rt = MissionRuntime::from_source("test.lua", "", 1);
+    /// rt.eval_with::<(), _>("", Custom).unwrap();
+    /// ```
+    pub fn eval_with<T: EvalResult, A: EvalArgs>(&self, chunk: &str, args: A) -> mlua::Result<T> {
+        self.inner.lua.load(chunk).call(args)
     }
 
     /// Errors so far: load errors and callback errors, oldest first.
@@ -279,7 +327,7 @@ impl MissionRuntime {
 
     /// Commands the script has queued since the last call.
     pub fn take_commands(&mut self) -> Vec<Command> {
-        std::mem::take(&mut self.inner.ctx.borrow_mut().commands)
+        api::drain_commands(&self.inner.ctx)
     }
 
     /// The objectives the script added, in order.
@@ -366,9 +414,10 @@ impl Controller for MissionRuntime {
             let mut c = self.inner.ctx.borrow_mut();
             c.view = view.clone();
             c.events = events.to_vec();
+            api::process_spawns(&mut c);
         }
         self.step(view.tick);
-        out.append(&mut self.inner.ctx.borrow_mut().commands);
+        out.extend(api::drain_commands(&self.inner.ctx));
     }
 }
 

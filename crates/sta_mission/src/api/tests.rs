@@ -76,7 +76,7 @@ impl Game {
         assert!(!self.seen.iter().any(|e| matches!(e, SimEvent::Rejected { .. })), "{:?}", self.seen);
     }
 
-    fn global<T: mlua::FromLua>(&self, name: &str) -> T {
+    fn global<T: mlua::FromLua + crate::runtime::EvalResult>(&self, name: &str) -> T {
         self.rt.eval(&format!("return {name}")).unwrap()
     }
 
@@ -116,6 +116,30 @@ fn converted_order_namespace_dispatches_attack_and_stop_through_the_sim() {
     assert_eq!(replay.step(&stop).events, out.events);
     assert!(!out.events.iter().any(|e| matches!(e, SimEvent::Rejected { .. })));
     assert_eq!(g.sim.digest(), replay.digest());
+    assert!(g.rt.unsupported().is_empty());
+}
+
+#[test]
+fn filter_and_point_metatables_can_queue_orders_without_context_borrow_panics() {
+    let mut g = game(r#"
+        local h = EntityFinder():findOne('hero')
+        local filter = setmetatable({}, { __index = function(_, name)
+            if name == 'player' then h:giveOrder(Order.Stop); return Player(0) end
+        end })
+        FILTERED = {}
+        for _, u in ipairs(EntityFinder():find(filter)) do FILTERED[#FILTERED+1] = u.id end
+        local p = setmetatable({y=0,z=0}, { __index = function(_, name)
+            if name == 'x' then h:giveOrder(Order.Stop); return -600 end
+        end })
+        h:giveOrder(Order.Go, p)
+        Monitor():hook(Monitor.Enters, p, 120, function() end)
+    "#);
+    assert_eq!(g.global::<Vec<u32>>("FILTERED"), [HERO.0, 3]);
+    let commands = g.rt.take_commands();
+    assert_eq!(commands.len(), 4);
+    assert_eq!(commands.iter().filter(|c| matches!(c.kind, CommandKind::Order(Order::Stop { .. }))).count(), 3);
+    assert_eq!(commands.iter().filter(|c| matches!(c.kind, CommandKind::Order(Order::Move { .. }))).count(), 1);
+    assert!(!g.sim.step(&commands).events.iter().any(|e| matches!(e, SimEvent::Rejected { .. })));
     assert!(g.rt.unsupported().is_empty());
 }
 
@@ -294,8 +318,7 @@ fn monitor_enters_fires_for_newcomers_only() {
         "#,
     );
     g.run(600);
-    let entered: mlua::Table = g.global("ENTERED");
-    let ids: Vec<u32> = entered.sequence_values().map(Result::unwrap).collect();
+    let ids: Vec<u32> = g.global("ENTERED");
     assert_eq!(ids, [HERO.0], "{:?}", g.pos(HERO));
 }
 

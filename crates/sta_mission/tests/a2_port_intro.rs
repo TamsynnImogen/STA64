@@ -7,6 +7,7 @@ use sta_content::{ContentDb, MapDef, MapObject, UnitDef};
 use sta_core::{Fixed, PlayerId, TeamId, Vec3};
 use sta_mission::api::{MissionConfig, ObjectiveState};
 use sta_mission::runtime::MissionRuntime;
+use sta_sim::command::{CommandKind, Order};
 use sta_sim::present::Presentation;
 use sta_sim::setup::{Control, Controller, GameOptions, GameSetup, PlayerSetup};
 use sta_sim::{EntityId, Sim, SimEvent, WorldSource};
@@ -14,13 +15,19 @@ use sta_sim::{EntityId, Sim, SimEvent, WorldSource};
 #[test]
 #[ignore = "requires STA64_A2_PORTS pointing to the external armada_missions a2/missions folder"]
 fn into_the_breach_intro_reaches_gameplay_on_a_minimal_fake_world() {
-    run_port(false);
+    run_port(false, false);
 }
 
 #[test]
 #[ignore = "requires STA64_A2_PORTS and STA64_A2_OBJECTIVES external folders"]
 fn into_the_breach_loads_goals_and_fires_the_first_goal_trigger() {
-    run_port(true);
+    run_port(true, false);
+}
+
+#[test]
+#[ignore = "requires STA64_A2_PORTS and STA64_A2_OBJECTIVES external folders"]
+fn into_the_breach_spawn_helper_creates_a_synthetic_ship_and_attacks_with_its_allocated_id() {
+    run_port(true, true);
 }
 
 fn portal_region(source: &str) -> Vec3 {
@@ -39,7 +46,7 @@ fn portal_region(source: &str) -> Vec3 {
     }
 }
 
-fn run_port(with_goals: bool) {
+fn run_port(with_goals: bool, with_spawns: bool) {
     let root = std::path::PathBuf::from(std::env::var("STA64_A2_PORTS").expect("set STA64_A2_PORTS"));
     let source = std::fs::read_to_string(root.join("Into the Breach.lua")).unwrap();
     let region = portal_region(&source);
@@ -54,7 +61,24 @@ fn run_port(with_goals: bool) {
         u.crew = Fixed::from_int(10);
         b = b.unit(u);
     }
+    if with_spawns {
+        // The port's helper receives our own synthetic ODF. Its toy beam
+        // proves command acceptance, not a Borg ship or native combat balance.
+        let fake = sta_content::fake::db();
+        b = b.weapon(fake.weapon(fake.key("fx_beam").unwrap()).unwrap().clone());
+        let mut u = UnitDef::new("fx_spawn_probe", "craft");
+        u.hull = Fixed::from_int(1000);
+        u.crew = Fixed::from_int(10);
+        u.movement = sta_content::MoveStats::from_f32(100.0, 1.0, 1.0, 1.0, 0.2);
+        u.hardpoints.push(sta_content::Hardpoint {
+            weapon: sta_content::DefRef::new("fx_beam"),
+            node: "hp01".into(),
+            arc: None,
+        });
+        b = b.unit(u);
+    }
     let db = Arc::new(b.build().unwrap());
+    let spawn_key = db.key("fx_spawn_probe");
     let mut map = MapDef::empty();
     map.objects = ["fente", "bportal", "fbase"]
         .into_iter()
@@ -158,6 +182,48 @@ fn run_port(with_goals: bool) {
         eprintln!(
             "external A2 first goal: 4 file goals loaded; discovery trigger completes goal 1 on synthetic actors"
         );
+        events = found.events;
+    }
+    if with_spawns {
+        // Invoke the unmodified port method explicitly with a fixture ODF.
+        // This is helper-path proof, not a naturally timed native attack wave.
+        rt.eval::<()>("__port_instance:spawnAttack(__port_instance.enterprise.position + Vector(3000,0,0), {'fx_spawn_probe.odf'}, __port_instance.enterprise)").unwrap();
+        let (mut born, mut attacked) = (None, false);
+        for _ in 0..3 {
+            let mut commands = Vec::new();
+            rt.think(&sim.view(), &events, &mut commands);
+            for command in &commands {
+                if let CommandKind::Order(Order::Attack { units, target }) = &command.kind {
+                    assert_eq!(command.player, PlayerId(4));
+                    assert_eq!(*target, EntityId(1));
+                    assert_eq!(
+                        units.as_slice(),
+                        [born.expect("spawn receipt precedes deferred attack")]
+                    );
+                    attacked = true;
+                }
+            }
+            let output = sim.step(&commands);
+            assert!(
+                !output.events.iter().any(|e| matches!(e, SimEvent::Rejected { .. })),
+                "{:?}",
+                output.events
+            );
+            for event in &output.events {
+                if let SimEvent::ScriptSpawned { id, .. } = event {
+                    let unit = output.view.unit(*id).unwrap();
+                    assert_eq!(Some(unit.def), spawn_key);
+                    assert_eq!(unit.owner, PlayerId(4));
+                    assert!(born.replace(*id).is_none());
+                }
+            }
+            events = output.events;
+        }
+        assert!(born.is_some() && attacked);
+        assert!(rt.errors().is_empty(), "{:?}", rt.errors());
+        eprintln!(
+            "external A2 spawn helper: actual receipt and accepted deferred Attack on synthetic craft; not a native wave"
+        );
     }
     eprintln!(
         "external A2 intro: gameplay at 30 seconds; unsupported={:?}",
@@ -193,8 +259,8 @@ fn installed_objective_text_corpus_loads_without_errors() {
             path.strip_prefix("objectives/")
                 .and_then(|p| std::fs::read(r.join(p)).ok())
         });
-        let load: mlua::Function = rt.eval("return function(name) Objectives:load(name) end").unwrap();
-        load.call::<()>(name.clone()).unwrap_or_else(|e| panic!("{name}: {e}"));
+        rt.eval_with::<(), _>("Objectives:load(...)", name.as_str())
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
         assert!(rt.errors().is_empty(), "{name}: {:?}", rt.errors());
         assert!(rt.unsupported().is_empty(), "{name}: {:?}", rt.unsupported());
         assert!(rt.objective_briefing().is_some());
