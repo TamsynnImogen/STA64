@@ -293,6 +293,20 @@ ODF names must be Lua strings, and arity must match exactly. Queries never
 queue commands and see writes only after the host advances the simulation.
 These are STA64 bridge policies; native defaults/overloads remain unverified.
 
+`A2.SetCurrentHealth(id, hull)` implements `void SetCurrentHealth(int, float)`
+with exactly two arguments: an unsigned integral live entity ID and a finite
+Lua number. Strings, booleans, missing/dying IDs and non-finite values raise
+errors before queuing a command. Both this call and `Entity.hull = value`
+queue absolute SCRIPT hull edits, rather than damage deltas or a full heal.
+Repeated assignments apply in command sequence, even when the final value
+equals the stale snapshot. Reads still see that snapshot until the host advances.
+Values are converted to fixed point (finite values beyond its range saturate),
+then clamped by the sim to zero through maximum hull. Immortal units retain
+at least one hull point, bounded by their maximum. Shields and shield mode
+are preserved; zero hull follows normal destruction for mortal units.
+These input and clamping rules are explicit STA64 policies, not verified native
+invalid-input or floating-point ABI behavior.
+
 `A2.GetDistance(id, id)` implements the inventoried two-handle
 `float GetDistance(int&, int&)` call shape. It returns three-dimensional
 Euclidean distance between the latest non-dying snapshot positions, using the

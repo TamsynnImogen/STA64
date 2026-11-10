@@ -255,6 +255,7 @@ A2_SIGNATURES = {
     "void DisableWeapons(int, bool)": "A2.DisableWeapons",
     "float GetCurrentHealth(int)": "A2.GetCurrentHealth",
     "float GetMaxHealth(int)": "A2.GetMaxHealth",
+    "void SetCurrentHealth(int, float)": "A2.SetCurrentHealth",
     "bool IsOdf(int, char*)": "A2.IsOdf",
     "float GetDistance(int&, int&)": "A2.GetDistance",
     "bool IsRace(int, char*const)": "A2.IsRace",

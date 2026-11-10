@@ -2,7 +2,7 @@
 //! become commands and are visible only after the simulation advances.
 
 use mlua::{Lua, MultiValue, Table, Value};
-use sta_core::EntityId;
+use sta_core::{EntityId, Fixed};
 use sta_sim::command::{Edit, Order};
 
 use crate::api::{Shared, pos_f64, vector};
@@ -85,6 +85,26 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
             let id = handle("RemoveObject", &args, 1)?;
             live(&c, "RemoveObject", id)?;
             c.borrow_mut().edit(Edit::Kill(id));
+            Ok(())
+        })?,
+    )?;
+
+    let c = ctx.clone();
+    table.set(
+        "SetCurrentHealth",
+        lua.create_function(move |_, args: MultiValue| {
+            let id = handle("SetCurrentHealth", &args, 2)?;
+            let hull = match &args[1] {
+                Value::Integer(n) => *n as f64,
+                Value::Number(n) if n.is_finite() => *n,
+                _ => {
+                    return Err(mlua::Error::runtime(
+                        "A2.SetCurrentHealth requires a finite numeric hull value",
+                    ));
+                }
+            };
+            live(&c, "SetCurrentHealth", id)?;
+            c.borrow_mut().edit(Edit::Hull(id, Fixed::from_f64(hull)));
             Ok(())
         })?,
     )?;

@@ -240,16 +240,12 @@ fn dispatch(c: &mut Ctx, actor: EntityRef, action: EntityAction) -> bool {
                 c.unsupported("entity.hull: non-finite value");
                 return false;
             }
-            let Some(now) = c.alive(id).map(|u| u.hull[0].to_f32() as f64) else {
+            if c.alive(id).is_none() {
                 return false;
-            };
-            if to < now {
-                edit(c, Edit::Damage(id, Fixed::from_f64(now - to)))
-            } else if to > now {
-                edit(c, Edit::Heal(id))
-            } else {
-                true
             }
+            // Absolute input is applied in command order. A cached snapshot
+            // cannot supply a correct damage delta for multiple assignments.
+            edit(c, Edit::Hull(id, Fixed::from_f64(to)))
         }
         EntityAction::Order(intent) => match intent {
             OrderIntent::Move { to, queue } => c.order(id, |units| Order::Move { units, to, queue }),
