@@ -395,7 +395,8 @@ impl Plugin for MapPlugin {
                 )
                     .chain()
                     .after(crate::app::GameSet::SimLink)
-                    .run_if(crate::game::flow::match_running),
+                    .run_if(crate::game::flow::match_running)
+                    .run_if(crate::platform::foreground),
             );
     }
 }

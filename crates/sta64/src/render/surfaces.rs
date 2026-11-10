@@ -62,15 +62,6 @@ pub fn recipe_text(vfs: &sta_vfs::Vfs, name: &str) -> Option<String> {
     BUNDLED.iter().find(|(n, _)| *n == key).map(|(_, t)| (*t).to_owned())
 }
 
-fn cache_dir() -> PathBuf {
-    let base = std::env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("LOCALAPPDATA").map(PathBuf::from))
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
-        .unwrap_or_else(std::env::temp_dir);
-    base.join("sta64").join("surfaces")
-}
-
 fn fnv(data: &[u8]) -> u64 {
     data.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ *b as u64).wrapping_mul(0x100_0000_01b3))
 }
@@ -191,13 +182,15 @@ impl Surfaces {
         let recipe = Recipe::parse(&text);
         let face = if recipe.face > 0 { recipe.face.min(face) } else { face };
         let id = fnv(format!("{CACHE_VERSION}|{face}|{CLOUD_FACE}|{text}").as_bytes());
-        let path = cache_dir().join(format!("{key}-{id:016x}.bin"));
+        let path = crate::platform::surface_cache_dir().map(|dir| dir.join(format!("{key}-{id:016x}.bin")));
         let slot = Arc::new(Mutex::new(None));
         let out = slot.clone();
         std::thread::spawn(move || {
-            let s = load_cached(&path).unwrap_or_else(|| {
+            let s = path.as_ref().and_then(load_cached).unwrap_or_else(|| {
                 let s = sta_surface::bake(&recipe, face, CLOUD_FACE);
-                save_cached(&path, &s);
+                if let Some(path) = &path {
+                    save_cached(path, &s);
+                }
                 s
             });
             if let Ok(mut o) = out.lock() {

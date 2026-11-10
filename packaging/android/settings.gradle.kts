@@ -16,4 +16,3 @@ dependencyResolutionManagement {
 
 rootProject.name = "STA64Android"
 include(":app")
-

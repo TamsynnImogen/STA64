@@ -177,7 +177,7 @@ impl LaunchConfig {
     pub fn from_env() -> LaunchConfig {
         let mut cfg = LaunchConfig::parse(std::env::args().skip(1));
         if cfg.install_root.is_none() {
-            cfg.install_root = std::env::current_exe().ok().and_then(|p| p.parent().map(PathBuf::from));
+            cfg.install_root = crate::platform::default_install_root();
         }
         cfg
     }
