@@ -342,7 +342,7 @@ pub(crate) fn front_end_data(vfs: &sta_vfs::Vfs, catalogue: &mut Catalogue, inst
     info!("front end: {} multiplayer maps of {}, {} mods, in {:.1?}", maps.len(), names.len(), mods.len(), t0.elapsed());
     let menu_music = races.playable().into_iter().find_map(|r| r.single_player_music.clone()).into_iter().collect();
     let scene = MenuSceneConfig::new(db.clone(), MenuMap::from_vfs(vfs), MapDef::empty());
-    Ok(FrontEndData { screens: ScreenData { content: db, maps, mods }, scene, menu_music })
+    Ok(FrontEndData { screens: ScreenData { content: db, maps, mods, base_name: install_root.and_then(|r| r.file_name()).map(|n| n.to_string_lossy().into_owned()) }, scene, menu_music })
 }
 
 /// Use mod: remount the install with it and refill the lists. The scene shows
