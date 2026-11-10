@@ -35,31 +35,92 @@ impl ClassLabel {
 }
 
 /// Movement limits, from a craft's physics ODF (`physicsFile`).
+///
+/// The first five fields are what every movement model reads. The rest are
+/// Armada II "smooth physics" keys that only that model reads
+/// (`sta_sim::kinematics`); STA64's own model ignores them. Values are the
+/// ODF's own, unscaled: each model turns them into rates.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MoveStats {
     /// Cruise speed, units per second (`impulseSpeed`).
     pub max_speed: Fixed,
-    /// Seconds-to-full-speed reciprocal (`forwardAccel`): speed changes by
-    /// `forward_accel * max_speed` per second. Our reading of the key.
+    /// `forwardAccel`. Native model: a seconds-to-full-speed reciprocal
+    /// (speed changes by `forward_accel * max_speed` per second; our
+    /// reading). Smooth model: scaled by `combat_speed`.
     pub forward_accel: Fixed,
-    /// Turn rate, radians per second (`turnOmega`).
+    /// `turnOmega`. Native model: radians per second. Smooth model: scaled
+    /// by `combat_speed`.
     pub turn_omega: Fixed,
-    /// Turn acceleration, radians per second squared (`turnAlpha`).
+    /// `turnAlpha`. Native model: radians per second squared. Smooth model:
+    /// a share of the turn rate per second.
     pub turn_alpha: Fixed,
     /// Share of the turn rate available at rest (`turnOmegaFractionAtRest`).
     pub turn_at_rest: Fixed,
+    /// `combatSpeed`, units per second: the scale of the smooth model's
+    /// acceleration and turn rates. Defaults to `max_speed`.
+    pub combat_speed: Fixed,
+    /// Share of the turn acceleration available at rest
+    /// (`turnAlphaFractionAtRest`). Defaults to `turn_at_rest`.
+    pub turn_alpha_at_rest: Fixed,
+    /// `tooCloseToTurn`, units: inside it a craft stops rather than circling
+    /// round to its point, and arrives once slow enough. Default 50 (the
+    /// stock files' "usually 50").
+    pub too_close_to_turn: Fixed,
+    /// `pathLeadDistance`, units: how far ahead on its path a craft aims,
+    /// and how near a waypoint it moves on to the next leg. Default 150 (the
+    /// stock files' "usually 150").
+    pub path_lead: Fixed,
+    /// `turnControlAngle`, degrees: inside it the turn onto a heading is
+    /// damped. Default 20.
+    pub turn_control_angle: Fixed,
+    /// `turnControlSquared`: damp by the square of the remaining share.
+    pub turn_control_squared: bool,
+    /// `forwardControlDistance`, units: inside it the approach to a stop is
+    /// damped. Default 70.
+    pub forward_control_distance: Fixed,
 }
 
 impl MoveStats {
+    /// The common five; the smooth-physics fields take their defaults.
     pub fn from_f32(max_speed: f32, forward_accel: f32, turn_omega: f32, turn_alpha: f32, turn_at_rest: f32) -> MoveStats {
         let f = |v: f32| Fixed::from_f64(v as f64);
+        let turn_at_rest = f(turn_at_rest.clamp(0.0, 1.0));
         MoveStats {
             max_speed: f(max_speed),
             forward_accel: f(forward_accel.max(0.01)),
             turn_omega: f(turn_omega),
             turn_alpha: f(turn_alpha.max(0.01)),
-            turn_at_rest: f(turn_at_rest.clamp(0.0, 1.0)),
+            turn_at_rest,
+            combat_speed: f(max_speed),
+            turn_alpha_at_rest: turn_at_rest,
+            ..SMOOTH_DEFAULTS
         }
+    }
+
+    /// Whether any smooth-physics field differs from what
+    /// [`from_f32`](MoveStats::from_f32) gives. Hashes add those fields only
+    /// then, so content without the keys hashes as before.
+    pub fn has_smooth_keys(&self) -> bool {
+        self.combat_speed != self.max_speed
+            || self.turn_alpha_at_rest != self.turn_at_rest
+            || self.too_close_to_turn != SMOOTH_DEFAULTS.too_close_to_turn
+            || self.path_lead != SMOOTH_DEFAULTS.path_lead
+            || self.turn_control_angle != SMOOTH_DEFAULTS.turn_control_angle
+            || self.turn_control_squared != SMOOTH_DEFAULTS.turn_control_squared
+            || self.forward_control_distance != SMOOTH_DEFAULTS.forward_control_distance
+    }
+
+    /// The smooth-physics fields in declaration order, the flag as 0 or 1.
+    pub fn smooth_fields(&self) -> [Fixed; 7] {
+        [
+            self.combat_speed,
+            self.turn_alpha_at_rest,
+            self.too_close_to_turn,
+            self.path_lead,
+            self.turn_control_angle,
+            if self.turn_control_squared { Fixed::ONE } else { Fixed::ZERO },
+            self.forward_control_distance,
+        ]
     }
 
     /// Things that never move (stations, moons).
@@ -69,8 +130,28 @@ impl MoveStats {
         turn_omega: Fixed::ZERO,
         turn_alpha: Fixed::ONE,
         turn_at_rest: Fixed::ZERO,
+        ..SMOOTH_DEFAULTS
     };
 }
+
+/// Smooth-physics values for keys a physics ODF leaves out (the defaults
+/// of `tooCloseToTurn` and `pathLeadDistance` are the stock comments'
+/// "usually"; the control ones are the stock destroyer's). The first seven
+/// fields are placeholders every constructor sets.
+const SMOOTH_DEFAULTS: MoveStats = MoveStats {
+    max_speed: Fixed::ZERO,
+    forward_accel: Fixed::ONE,
+    turn_omega: Fixed::ZERO,
+    turn_alpha: Fixed::ONE,
+    turn_at_rest: Fixed::ZERO,
+    combat_speed: Fixed::ZERO,
+    turn_alpha_at_rest: Fixed::ZERO,
+    too_close_to_turn: Fixed::from_int(50),
+    path_lead: Fixed::from_int(150),
+    turn_control_angle: Fixed::from_int(20),
+    turn_control_squared: false,
+    forward_control_distance: Fixed::from_int(70),
+};
 
 impl Default for MoveStats {
     fn default() -> Self {

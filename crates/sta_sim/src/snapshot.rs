@@ -32,7 +32,7 @@ use crate::{Rng, Sim, SimEvent};
 
 pub const MAGIC: [u8; 4] = *b"STAS";
 /// Bumped whenever [`Body`] (or anything in it) changes layout.
-pub const FORMAT_VERSION: u16 = 7;
+pub const FORMAT_VERSION: u16 = 8;
 
 const HEADER: usize = 4 + 2 + 4 + 8;
 
@@ -82,6 +82,8 @@ struct StatsRec {
     turn_omega: Fixed,
     turn_alpha: Fixed,
     turn_at_rest: Fixed,
+    /// The smooth-physics fields (SIM-15), as `MoveStats::smooth_fields`.
+    smooth: [Fixed; 7],
 }
 
 #[derive(Serialize, Deserialize)]
@@ -167,6 +169,7 @@ impl EntityRec {
                 turn_omega: e.stats.turn_omega,
                 turn_alpha: e.stats.turn_alpha,
                 turn_at_rest: e.stats.turn_at_rest,
+                smooth: e.stats.smooth_fields(),
             },
             hull: e.hull,
             shields_now: e.shields.now,
@@ -197,6 +200,13 @@ impl EntityRec {
                 turn_omega: s.turn_omega,
                 turn_alpha: s.turn_alpha,
                 turn_at_rest: s.turn_at_rest,
+                combat_speed: s.smooth[0],
+                turn_alpha_at_rest: s.smooth[1],
+                too_close_to_turn: s.smooth[2],
+                path_lead: s.smooth[3],
+                turn_control_angle: s.smooth[4],
+                turn_control_squared: s.smooth[5] != Fixed::ZERO,
+                forward_control_distance: s.smooth[6],
             },
             hull: self.hull,
             shields: Shields {

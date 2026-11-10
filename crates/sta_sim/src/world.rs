@@ -245,6 +245,13 @@ impl Entity {
         ] {
             h.fixed(f);
         }
+        // Smooth-physics keys (SIM-15) only when set, so sims without them
+        // hash as before.
+        if s.has_smooth_keys() {
+            for f in s.smooth_fields() {
+                h.fixed(f);
+            }
+        }
         for f in self
             .hull
             .into_iter()

@@ -88,13 +88,14 @@ impl Legacy {
         if !ph.f32("impulseSpeed").is_some_and(|s| s > 0.0) {
             return MoveStats::STATIC;
         }
-        MoveStats::from_f32(
+        let m = MoveStats::from_f32(
             ph.f32("impulseSpeed").unwrap_or(100.0),
             ph.f32("forwardAccel").unwrap_or(1.0),
             ph.f32("turnOmega").unwrap_or(1.0),
             ph.f32("turnAlpha").unwrap_or(1.0),
             ph.f32("turnOmegaFractionAtRest").unwrap_or(0.2),
-        )
+        );
+        crate::unit::with_smooth_keys(m, |k| ph.f32(k).filter(|v| v.is_finite()).map(f64::from))
     }
 }
 
