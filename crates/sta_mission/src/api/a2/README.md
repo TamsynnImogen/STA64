@@ -132,9 +132,14 @@ rejects those edits.
 ## Queued Entity.add bridge
 
 `Entity.add(odf, player, Vector)` accepts a known unit ODF (with optional
-`.odf` suffix), an owned player number in the configured mode or its Player
-handle, and finite fixed-point coordinates. The default Slots mode uses 0..7;
-opt-in ArmadaTeams uses 1..8 (neutral spawning is unsupported). The request uses heading +Z as a bridge default. It queues a
+`.odf` suffix), a player number in the configured mode or its Player handle,
+and finite fixed-point coordinates. Owned Slots numbers are 0..7; opt-in
+ArmadaTeams uses 1..8. The neutral owner is 253 in Slots or 0 in ArmadaTeams.
+Neutral spawning requires a resource definition: the canonical core kind is
+Resource or the definition has explicit resource metadata. Neutral nonresources
+and reserved SCRIPT/BENCH owners are rejected before request allocation.
+Resources remain neutral even when given an owned player, matching the core's
+existing normalization. The request uses heading +Z as a bridge default. It queues a
 SCRIPT SpawnRequest rather than mutating the simulation or predicting an ID.
 
 The returned handle has `.pending == true`, `.id == nil`, and `.valid == true`

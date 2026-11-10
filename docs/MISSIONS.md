@@ -69,7 +69,13 @@ store core IDs; `.number`, numeric finder/monitor owners, visibility/relation
 arguments, `Entity.add` owners and `A2.GetRealTeam` use the selected conversion.
 `Game.localSlot` and `MissionConfig::seat` always remain core slot numbers.
 Invalid explicit team filters fail with a Lua error instead of matching all
-owners; absent/nil filters remain unrestricted. Neutral spawning is not supported.
+owners; absent/nil filters remain unrestricted. Neutral resource spawning uses
+Lua 0 in ArmadaTeams or the reserved owner 253 in Slots (or a neutral Player
+handle). It requires a definition classified as Resource by the core's
+`EntityKind::of` or carrying explicit resource metadata. Neutral nonresources
+and reserved SCRIPT/BENCH owners are rejected before request/sequence allocation.
+The pending hint and actual spawn share the core's resource-neutrality rule,
+including when a resource was requested with an ordinary player owner.
 
 This opt-in adapter follows the observed converted mission/map pairing. It does
 not settle the original MMM numbering convention or automatically choose a mode
