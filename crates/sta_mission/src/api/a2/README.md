@@ -293,3 +293,67 @@ byte-identical BZN-stem aliases so all 36 resolve from an independently verified
 package layer. Uncaught Lua errors and rejected commands are checked separately
 from handled log messages (199 across six missions in the current inputs).
 This leaves property/ownership, AI, later gameplay and client acceptance work open.
+
+## IsStation contract and native-family boundary
+
+This is the pre-implementation design for `bool IsStation(int)`. The binding
+is credited in the generated inventory only after implementation and tests.
+Use the latest mission view and the already-resolved, hashed
+`UnitDef.is_starbase` from CON-24. No Raw ODF reads, new core fields, actor-kind
+changes, gameplay commands or platform branches belong in this query.
+
+The pinned stock A2 wrapper checks for an object, the native Craft type and
+its dead marker before reading the class flag. Static prototype-label/vtable
+associations and RTTI in the owned A1/A2/FO inputs establish the following
+bounded canonical families. Shared labels agree across inspected versions;
+this union is a compatibility bridge, not a claim that every version admits
+every listed class or every hook/alias was observed at runtime.
+
+| Native family | Canonical labels |
+|---|---|
+| Craft | cargo_ship, colony, constructionrig, craft, evolver, freighter, hover, minearray, mining, p_mining, planet, pod, producer, repairship, research, scavenger, sensor, shipyard, starbase, trading_station, wingman |
+| Outside Craft | areaeffect_obj, asteroidfield, background_obj, blackhole_obj, constplaceholder, i76building, ionstorm_obj, latinum, nebula_obj, planet_obj, planet_shield, scrap, u_ball_obj, upgrade, wormhole_obj |
+
+Named A2 leaf constructors corroborate ResearchPod, MineArray and Colony's
+Craft base; Producer and MiningStation preserve it for Planet/TradingStation.
+The native construction placeholder instead derives from GameObject without
+the Craft type. In normal STA64 simulation, `Some` build progress represents
+a production weld using the final definition; treating that proxy as a
+finished native Craft would give a wrong answer. Stable identity across
+construction completion remains a broader unresolved model difference.
+Private hashes and bounded excerpts stay outside the repository. The owned
+A2FO A1 compatibility policies do not replace the A2 wrapper's type guard.
+
+The explicit STA64 bridge contract is:
+
+- Exactly one unsigned 32-bit integer handle, using existing A2 validation;
+  malformed type/arity errors occur before inspecting state.
+- Missing or DYING objects return false using the existing view-liveness
+  convention. This query adds no independent hull threshold.
+- Any `Some` construction progress returns false, including a represented
+  progress of one until finalization clears it.
+- A finished represented object without a unit definition errors.
+- A resolved false flag returns false, including an unclassified class:
+  the conjunction is already false and no ancestry guess is needed.
+- For a true flag, known Craft-family labels return true and known non-Craft
+  labels false, independently of `EntityKind`. Match ASCII case-insensitively.
+- An unclassified true-flag class errors and increments a stable per-class
+  `unsupported()` diagnostic before returning the error. Catching it with
+  `pcall` does not hide the gap. In particular buildyard, fighter, asteroid
+  and moon aliases have no demonstrated native-family association in these
+  references. Do not silently guess from STA64's class lists or movement.
+
+All successful queries leave commands and simulation state untouched.
+Argument errors, missing definitions and unclassified-class diagnostics are
+STA64 policy, not claimed native invalid-input/sentinel/ABI behavior. The
+query does not implement A1 ScriptInterface support, capture, colony
+simulation or complete mod-class coverage. Android shares this code; device
+runtime and the December desktop alpha remain separate acceptance gates.
+
+Tests must exercise conflicting actor kind/class/flag combinations, known
+native pods/planets/non-Craft types, metadata inherited/explicit zero,
+construction proxies and finalization, missing/dying/definition-less views,
+strict arguments, unknown false versus caught unknown true diagnostics,
+read-only commands/digests and refreshed snapshots. Check exact signature
+normalization against wrong return/argument/arity shapes, regenerate the
+inventory, and run mission/sim regressions, strict Clippy and workspace checks.
