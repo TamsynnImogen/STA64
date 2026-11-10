@@ -42,7 +42,7 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use mlua::{Lua, Value};
 use sta_content::{ContentDb, UnitDef};
@@ -56,6 +56,8 @@ mod entity;
 mod monitor;
 mod player;
 mod timer;
+mod objectives;
+mod objectives_file;
 #[cfg(test)]
 mod tests;
 
@@ -98,6 +100,17 @@ pub struct Objective {
     pub state: ObjectiveState,
 }
 
+/// File-backed briefing metadata, kept separate from the individual goals.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObjectiveBriefing {
+    pub file: String,
+    pub title: String,
+    pub text: String,
+    pub notes: String,
+}
+
+pub(crate) type MissionReader = Arc<Mutex<dyn Fn(&str) -> Option<Vec<u8>> + Send>>;
+
 /// Script-visible state; see the module docs.
 pub(crate) struct Ctx {
     pub seat: PlayerId,
@@ -109,6 +122,9 @@ pub(crate) struct Ctx {
     pub commands: Vec<Command>,
     seq: BTreeMap<PlayerId, u32>,
     pub objectives: Vec<Objective>,
+    pub next_objective_id: u32,
+    pub objective_briefing: Option<ObjectiveBriefing>,
+    pub reader: Option<MissionReader>,
     pub objectives_visible: bool,
     pub relations: BTreeMap<(PlayerId, PlayerId), Relation>,
     pub monitors: Vec<MonitorState>,
@@ -135,6 +151,9 @@ impl Ctx {
             commands: Vec::new(),
             seq: BTreeMap::new(),
             objectives: Vec::new(),
+            next_objective_id: 0,
+            objective_briefing: None,
+            reader: None,
             objectives_visible: true,
             relations: BTreeMap::new(),
             monitors: Vec::new(),

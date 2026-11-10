@@ -114,7 +114,9 @@ impl UserData for Player {
             Ok(())
         });
         m.add_method("loadAIP", |_, p, name: Option<String>| {
-            p.ctx.borrow_mut().loaded_aips.push((p.id, name.unwrap_or_default()));
+            let mut c = p.ctx.borrow_mut();
+            c.loaded_aips.push((p.id, name.unwrap_or_default()));
+            c.unsupported("Player.loadAIP");
             Ok(())
         });
         m.add_meta_method(MetaMethod::Eq, |_, p, o: UserDataRef<Player>| Ok(p.id == o.id));
@@ -149,6 +151,21 @@ impl UserData for ObjectiveHandle {
                 ObjectiveState::Failed => "failed",
             }))
         });
+        f.add_field_method_set("state", |_, o, value: Value| {
+            let state = match value {
+                Value::Boolean(true) => ObjectiveState::Complete,
+                Value::Boolean(false) => ObjectiveState::Active,
+                Value::String(s) => match s.to_str()?.as_ref() {
+                    "active" => ObjectiveState::Active,
+                    "complete" => ObjectiveState::Complete,
+                    "failed" => ObjectiveState::Failed,
+                    _ => return Err(mlua::Error::runtime("unknown objective state")),
+                },
+                _ => return Err(mlua::Error::runtime("objective state must be boolean or state name")),
+            };
+            let _ = o.with(|o| o.state = state);
+            Ok(())
+        });
     }
 
     fn add_methods<M: UserDataMethods<Self>>(m: &mut M) {
@@ -160,6 +177,15 @@ impl UserData for ObjectiveHandle {
 
 /// `Objectives.objectives`: the list.
 struct ObjectiveList(Shared);
+
+fn objective_at(lua: &Lua, ctx: &Shared, index: i64) -> mlua::Result<Value> {
+    let id = index.checked_sub(1).and_then(|i| usize::try_from(i).ok())
+        .and_then(|i| ctx.borrow().objectives.get(i).map(|o| o.id));
+    match id {
+        Some(id) => Ok(Value::UserData(lua.create_userdata(ObjectiveHandle { id, ctx: ctx.clone() })?)),
+        None => Ok(Value::Nil),
+    }
+}
 
 impl UserData for ObjectiveList {
     fn add_fields<F: UserDataFields<Self>>(f: &mut F) {
@@ -180,20 +206,20 @@ impl UserData for ObjectiveList {
                 _ => (String::new(), String::new()),
             };
             let mut c = l.0.borrow_mut();
-            let id = c.objectives.last().map_or(1, |o| o.id + 1);
+            let id = c.next_objective_id.checked_add(1).ok_or_else(|| mlua::Error::runtime("objective ids exhausted"))?;
+            c.next_objective_id = id;
             c.objectives.push(Objective { id, title, description, state: ObjectiveState::Active });
             drop(c);
             lua.create_userdata(ObjectiveHandle { id, ctx: l.0.clone() })
         });
-        m.add_method("get", |lua, l, i: i64| {
-            let id = l.0.borrow().objectives.get((i - 1).max(0) as usize).map(|o| o.id);
-            match id {
-                Some(id) if i >= 1 => Ok(Value::UserData(lua.create_userdata(ObjectiveHandle { id, ctx: l.0.clone() })?)),
-                _ => Ok(Value::Nil),
-            }
-        });
+        m.add_method("get", |lua, l, i: i64| objective_at(lua, &l.0, i));
         m.add_meta_method(MetaMethod::Len, |_, l, ()| Ok(l.0.borrow().objectives.len()));
-        m.add_meta_method(MetaMethod::Index, |lua, _, _: Value| stub(lua));
+        m.add_meta_method(MetaMethod::Index, |lua, l, key: Value| match key {
+            Value::Integer(i) => objective_at(lua, &l.0, i),
+            Value::Number(n) if n.is_finite() && n.fract() == 0.0 => objective_at(lua, &l.0, n as i64),
+            Value::Number(_) => Ok(Value::Nil),
+            _ => stub(lua),
+        });
     }
 }
 
@@ -209,14 +235,18 @@ impl UserData for Objectives {
     }
 
     fn add_methods<M: UserDataMethods<Self>>(m: &mut M) {
-        // Loading an objectives file needs its format; recorded, no effect.
-        m.add_function("load", |_, args: MultiValue| {
-            for v in args.iter() {
-                if let Some(o) = v.as_userdata().and_then(|u| u.borrow::<Objectives>().ok()) {
-                    o.0.borrow_mut().unsupported("Objectives.load");
-                }
+        m.add_function("load", |lua, mut args: MultiValue| {
+            let ctx = args.front().and_then(|v| v.as_userdata())
+                .and_then(|u| u.borrow::<Objectives>().ok()).map(|o| o.0.clone());
+            let ctx = match ctx {
+                Some(c) => { args.pop_front(); c },
+                None => lua.globals().raw_get::<mlua::AnyUserData>("Objectives")?.borrow::<Objectives>()?.0.clone(),
+            };
+            if args.len() != 1 { return Err(mlua::Error::runtime("Objectives.load expects one file name")); }
+            match args.front() {
+                Some(Value::String(name)) => super::objectives::load(&ctx, name.to_str()?.as_ref()),
+                _ => Err(mlua::Error::runtime("Objectives.load expects a file name")),
             }
-            Ok(())
         });
         m.add_meta_method(MetaMethod::Index, |lua, _, _: Value| stub(lua));
     }

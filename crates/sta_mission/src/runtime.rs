@@ -125,7 +125,7 @@ pub struct MissionRuntime {
 // them. The reader closure is required to be `Send`.
 unsafe impl Send for MissionRuntime {}
 
-type Reader = Arc<Mutex<dyn Fn(&str) -> Option<Vec<u8>> + Send>>;
+type Reader = api::MissionReader;
 
 /// Adapt the class instances used by the converted missions without exposing
 /// another callback kind outside the Lua state. Successful setup runs once,
@@ -205,6 +205,7 @@ impl MissionRuntime {
     }
 
     fn setup(lua: &Lua, shared: &Rc<RefCell<Shared>>, ctx: &ApiShared, seed: u64, read: Reader, path: &str) -> mlua::Result<()> {
+        ctx.borrow_mut().reader = Some(read.clone());
         crate::math::install(lua, seed)?;
         lua.load(crate::script::LUABIND_CLASS).set_name("=luabind class").exec()?;
         let globals = lua.globals();
@@ -284,6 +285,12 @@ impl MissionRuntime {
     /// The objectives the script added, in order.
     pub fn objectives(&self) -> Vec<Objective> {
         self.inner.ctx.borrow().objectives.clone()
+    }
+
+    /// File-backed heading, briefing and notes for inspection. Like the goal
+    /// list, this is host mission state, not yet a replicated UI presentation.
+    pub fn objective_briefing(&self) -> Option<api::ObjectiveBriefing> {
+        self.inner.ctx.borrow().objective_briefing.clone()
     }
 
     /// Whether the script called `Mission.finish`.
