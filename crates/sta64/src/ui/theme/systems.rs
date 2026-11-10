@@ -62,6 +62,9 @@ pub fn on_click(ev: On<PointerClick>, mut commands: Commands) {
 
 /// What a click on `e` does. Public so tests can click without a pointer.
 pub fn click(w: &mut World, e: Entity) {
+    if w.get_resource::<crate::platform::LifecycleGate>().is_some_and(|gate| !gate.is_foreground()) {
+        return;
+    }
     if w.get::<WidgetState>(e) == Some(&WidgetState::Disabled) {
         return;
     }

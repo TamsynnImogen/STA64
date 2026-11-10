@@ -30,3 +30,7 @@ winresource = "0.1.34"
 [dev-dependencies]
 naga = { version = "30.0.1", features = ["wgsl-in"] }
 png = "0.18"
+
+# The Android activity glue is enabled only for the native Android target.
+[target.'cfg(target_os = "android")'.dependencies]
+bevy = { workspace = true, features = ["android-native-activity"] }

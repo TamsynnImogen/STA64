@@ -146,7 +146,8 @@ impl Plugin for ViewerPlugin {
                     crate::render::particles::simulate,
                     crate::render::particles::draw,
                 )
-                    .chain(),
+                    .chain()
+                    .run_if(crate::platform::foreground),
             );
     }
 }
