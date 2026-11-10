@@ -1019,6 +1019,9 @@ fn rebuild(
                 (n > 0).then(|| (k.to_owned(), n as u32, scale))
             })
             .collect();
+        let sizing = crate::render::space::StarSizing::from_cfg(
+            vfs.0.read("ART_CFG.h").and_then(Result::ok).map(|b| sta_assets::cfg_h::CfgH::parse(&String::from_utf8_lossy(&b))).as_ref(),
+        );
         let stars = commands.spawn((Sky, Transform::IDENTITY, Visibility::default())).id();
         let mut loader = Loader {
             vfs: &vfs.0,
@@ -1026,7 +1029,7 @@ fn rebuild(
             images: &mut images,
             formats,
         };
-        let n = crate::render::space::starfield(&mut commands, &mut meshes, &mut materials, &mut loader, &tables.0, &entries, 100_000.0, stars);
+        let n = crate::render::space::starfield(&mut commands, &mut meshes, &mut materials, &mut loader, &tables.0, &entries, &sizing, 100_000.0, stars);
         star_note = format!("{} ({n} stars)", map.starfield_odf);
     }
 
