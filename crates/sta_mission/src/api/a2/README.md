@@ -105,3 +105,13 @@ which refer to the same table. This supplies the namespace used in 104
 calls in the converted A2 ports; it does not add behavior for order values
 that the dispatcher does not implement, including Colonize. The ports'
 Move spelling remains a separate unsupported gap.
+
+
+`A2.DisableEngines(handle, disabled)` and
+`A2.DisableWeapons(handle, disabled)` require explicit booleans and use
+SCRIPT engine/weapon edits. Passing true disables the system; false
+reenables it. The engine edit clears its current movement target and speed
+when disabled, following the existing sim behavior. These calls share the
+object bridge's argument, live-handle and snapshot rules. Sensors, shields
+and life support are not exposed by this slice because the simulation
+rejects those edits.

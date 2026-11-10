@@ -80,6 +80,33 @@ class MissionDllInventoryTests(unittest.TestCase):
         self.register_a2('table.set("IsAlive", fn);', registration='objects::install(lua, ctx, &a2)?;')
         self.assertEqual(inventory.a2_exact_for("bool IsAlive(int)", self.repo), "")
 
+    def test_exact_bindings_can_come_from_multiple_registered_modules(self):
+        self.register_a2(
+            'table.set("IsAlive", fn);',
+            registration=(
+                'objects::install(lua, ctx, &a2)?; '
+                'subsystems::install(lua, ctx, &a2)?; '
+                'lua.globals().raw_set("A2", a2)?;'
+            ),
+        )
+        (self.a2 / "subsystems.rs").write_text(
+            'table.set("DisableEngines", fn);\n'
+            'table.set("DisableWeapons", fn);\n',
+            encoding="utf-8",
+        )
+        self.assertEqual(
+            inventory.a2_exact_for("void DisableEngines(int, bool)", self.repo),
+            "A2.DisableEngines",
+        )
+        self.assertEqual(
+            inventory.a2_exact_for("void DisableWeapons(int, bool)", self.repo),
+            "A2.DisableWeapons",
+        )
+        self.assertEqual(inventory.a2_exact_for("void DisableEngines(int)", self.repo), "")
+        self.assertEqual(inventory.a2_exact_for("bool IsAlive(int)", self.repo), "A2.IsAlive")
+        self.register_a2('table.set("IsAlive", fn);')
+        self.assertEqual(inventory.a2_exact_for("void DisableEngines(int, bool)", self.repo), "")
+
     def test_test_files_do_not_count_as_a2_bindings(self):
         self.register_a2("", registration='objects::install(lua, ctx, &a2)?; lua.globals().raw_set("A2", a2)?;')
         (self.a2 / "tests.rs").write_text('table.set("IsAlive", fn);', encoding="utf-8")

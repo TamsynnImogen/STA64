@@ -251,6 +251,8 @@ A2_SIGNATURES = {
     "void CraftCannotDie(int, bool)": "A2.CraftCannotDie",
     "void Cloak(int)": "A2.Cloak",
     "void Decloak(int)": "A2.Decloak",
+    "void DisableEngines(int, bool)": "A2.DisableEngines",
+    "void DisableWeapons(int, bool)": "A2.DisableWeapons",
 }
 
 

@@ -20,7 +20,7 @@ fn integer(name: &str, value: &Value) -> mlua::Result<u32> {
     n.ok_or_else(|| mlua::Error::runtime(format!("A2.{name} requires an unsigned integer")))
 }
 
-fn handle(name: &str, args: &MultiValue, arity: usize) -> mlua::Result<EntityId> {
+pub(super) fn handle(name: &str, args: &MultiValue, arity: usize) -> mlua::Result<EntityId> {
     if args.len() != arity {
         return Err(mlua::Error::runtime(format!(
             "A2.{name} requires exactly {arity} argument(s)"
@@ -29,7 +29,7 @@ fn handle(name: &str, args: &MultiValue, arity: usize) -> mlua::Result<EntityId>
     Ok(EntityId(integer(name, &args[0])?))
 }
 
-fn live(ctx: &Shared, name: &str, id: EntityId) -> mlua::Result<()> {
+pub(super) fn live(ctx: &Shared, name: &str, id: EntityId) -> mlua::Result<()> {
     if ctx.borrow().alive(id).is_some() {
         Ok(())
     } else {

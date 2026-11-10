@@ -15,11 +15,11 @@ user's own executables each time, and none are recorded here.
 | engine API size | 371 `ScriptInterface` methods | (imports only) |
 | distinct calls used | 138 | 213 |
 | call sites | 11708 | — |
-| A2 DLL-shaped callable | 7 | — |
-| missing A2 callable signatures | 125 | — |
+| A2 DLL-shaped callable | 9 | — |
+| missing A2 callable signatures | 123 | — |
 | MMM job-equivalent, not A2-shaped | 0 | — |
 | bound in STA64's Lua today | — | 6 |
-| in MMM's API, not yet bound | 26 | 27 |
+| in MMM's API, not yet bound | 24 | 27 |
 | no Lua equivalent (STA64 extension needed) | 99 | 144 |
 | script-state plumbing (n/a in Lua) | 6 | 36 |
 
@@ -158,7 +158,7 @@ user's own executables each time, and none are recorded here.
 | `int GetNearestObjectNearPosition(Vector3 const &, float, int, char *, int, bool, int)` | 12 | 115 | new |  |
 | `void AllowAsTarget(int, int, bool)` | 10 | 74 | new |  |
 | `void SetPosition(int, char *)` | 10 | 85 | new |  |
-| `void DisableWeapons(int, bool)` | 9 | 77 | MMM | `DamageFlags.DisableWeapons` |
+| `void DisableWeapons(int, bool)` | 9 | 77 | A2 DLL-shaped | `A2.DisableWeapons` |
 | `void SearchAndDestroy(int)` | 9 | 62 | MMM | `Order.SearchAndDestroy` |
 | `int GetNearestObjectNearMe(int, float, int, char *, int, bool)` | 7 | 10 | new |  |
 | `void DestroyCritical(int)` | 7 | 12 | new |  |
@@ -194,7 +194,7 @@ user's own executables each time, and none are recorded here.
 | call | scripts | call sites | status | Lua name |
 |---|---:|---:|:-:|---|
 | `void SetCanBeDecommissioned(int, bool)` | 28 | 48 | new |  |
-| `void DisableEngines(int, bool)` | 9 | 34 | MMM | `DamageFlags.DisableEngines` |
+| `void DisableEngines(int, bool)` | 9 | 34 | A2 DLL-shaped | `A2.DisableEngines` |
 | `void SetGreenAlert(int)` | 9 | 52 | MMM | `Order.GreenAlert` |
 | `void PointAt(int, char *)` | 8 | 64 | MMM | `pointAt` |
 | `void Scout(int)` | 7 | 17 | MMM | `Order.Scout` |
