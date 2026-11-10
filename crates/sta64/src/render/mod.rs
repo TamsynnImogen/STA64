@@ -6,6 +6,7 @@ pub mod fx;
 pub mod hulls;
 pub mod materials;
 pub mod model_scene;
+pub mod moons;
 pub mod nebula;
 pub mod overlays;
 pub mod particles;

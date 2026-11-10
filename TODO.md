@@ -118,4 +118,5 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [x] Team colours from `teamcolor.odf` — `4cea39a`
 - [x] Damage-state nodes hidden on healthy craft — `5287d6f`
 - [ ] Construction, cloak FX: a station under construction welds and firms up, `Built` flashes; a cloaked own unit goes translucent and back (RND-11)
+- [?] Resource moons (RND-16), `cargo run -- --map <name>` on an FO4, FO or DW map with `trigger_dilithium` / `trigger_tritanium` markers: each draws a dilithium or tritanium moon model (one of four variants, as the game's replace weapon lists them), never the editor letter; it is neutral, shows no selection ring and plays no ship voice; A2 maps (`mdmoon`) look as before
 - [?] Language packs (CON-11): `cargo test -p sta_content --lib strings -- --nocapture` lists a string and label count for every installed game and mod (A1, A2, A2 stock, Dominion War, FO, FO Roots, Fleet Ops 4.0, STA2 Classic) and passes; the UI tooltip "Double click to return to strategic mode." still shows in-game
