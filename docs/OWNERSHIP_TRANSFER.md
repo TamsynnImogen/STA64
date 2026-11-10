@@ -169,3 +169,45 @@ Run focused tests, shared regressions, strict Clippy and the required workspace
 check with the repository's low-priority/two-job policy. Request the full OS
 matrix for deterministic core changes. Native runtime, client visuals and
 campaign completion remain separate acceptance evidence.
+
+## Guarded ownership stage decision
+
+After the cargo prerequisite, introduce the existing Team edit for live,
+finished craft and stations. This is an incremental shared capability, not
+completion of the producer/capture gates above. Before mutating anything,
+reject a missing/dying/zero-hull/non-unit target, any unfinished target, and
+any unit with a production queue, pending deploy or weld involvement (as
+builder or child). Even a same-owner request uses these guards. Rejection
+must leave orders, cargo, rally, resources and ownership unchanged.
+
+Accept NEUTRAL or a real player destination. In a configured game, a real
+player must be an existing seat and must not be eliminated. A seat-less
+synthetic Sim may use real IDs 0..7 without creating seats or changing the
+seat list. SCRIPT, BENCH and other reserved IDs are never owners accepted by
+this edit. Existing SCRIPT/BENCH edit authority remains the only entry.
+
+For an accepted request, stop the actor's movement and queued course, clear
+its explicit attack order, suspend mining while retaining physical cargo,
+and remove only its own rally. A different builder's rally pointing at this
+still-live entity remains valid. Clear activity even for a same-owner request
+and for repeated swaps within one ordered batch. Then assign the destination
+without replacing identity, definition, race, label, position, hull/shields,
+energy, cloak, mounts or cooldowns. A later Mine order uses the resulting
+owner's station. New/old-owner command authorization, visibility and tech
+holdings use the shared existing systems.
+
+Keep the existing damage-only elimination rule in this stage. Losing the last
+asset through a Team edit does not eliminate or revive a seat; capture-loss
+victory policy remains a separate gate. No ownership event/hook, assimilation
+or mutable-race feature is implied. Existing shots already in flight and
+other actors' explicit attack orders retain their current shared-simulation
+behavior; this is not measured native projectile/effect parity. The edit
+must not clear projectiles or refill weapons as an ownership shortcut.
+
+This stage adds no saved fields, command/event tags, dependencies or defaults.
+Exercise actual steps, old/new-owner control, same-owner/repeated swaps,
+neutral/configured/seat-less destinations, atomic construction rejection,
+physical-state retention, idle cargo delivery, derived tech/visibility and
+snapshot/replay continuation. Rerun the installed mission probes without
+hiding any remaining rejected commands. Keep SIM-19 and LUA-05 incomplete
+until their remaining gates are met.
