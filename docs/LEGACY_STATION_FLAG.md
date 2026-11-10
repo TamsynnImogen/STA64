@@ -2,9 +2,10 @@
 
 ## Status and source decision
 
-Issue #270 tracks this additive content seam. This decision is committed before
-core edits; it does not claim a working A2.IsStation binding. The follow-on Lua
-query still needs its native object/class-family guard and caller validation.
+Issue #270 tracks this additive content seam. The metadata resolver and hash
+field are implemented here; the design was committed before core edits. The
+follow-on A2.IsStation binding still needs its native object/class-family guard
+and caller validation.
 Keep the December 2026 desktop alpha and shared Android implementation intact.
 
 The pinned original GOG A1, stock A2 and Fleet Operations host references each
@@ -27,7 +28,7 @@ marker. Its additional menu/pod policy is not a substitute for the A2 query.
 
 ## Shared metadata contract
 
-Add UnitDef.is_starbase: bool, defaultfalse in UnitDef::new. Resolve it from
+UnitDef.is_starbase is a bool, default false in UnitDef::new. Resolve it from
 the unit's owning ODF key is_starbase after the existing include resolution.
 Do not infer true from a class label, movement speed, build list or actor kind.
 A child zero/false overrides a nonzero parent. Retain Raw ODF data unchanged.
@@ -51,7 +52,7 @@ is not claimed as reproduced. In particular A1 Boolean
 words are outside the verified integer contract. Do not silently clamp values,
 borrow A2 lexical behavior for A1 or treat explicit zero as absence.
 
-Use a dedicated station-flag reader so this improved prefix handling does not
+The dedicated station-flag reader ensures this prefix handling does not
 change the existing queueInstantDeduct reader's separately documented bounded
 contract, diagnostics, profile gating or precedence. Do not change the generic
 ODF reader or unrelated legacy keys.
@@ -84,3 +85,22 @@ strict scoped all-targets Clippy and workspace all-targets checks. Coordinate
 pending #268 and #271 additions without replacing their queue/resource rules.
 No native game, GUI, Waydroid activity or input automation is part of this
 headless validation; runtime acceptance remains separate.
+
+## Recorded headless validation
+
+After merging main07b4cee (including queue limits, resource mapping, menu voice
+and deferred-rig fixes), the six affected/shared/consumer crates report 951
+passing Rust tests and zero failures. Ten private installed-content probes and
+one client documentation example remain intentionally ignored; optional
+external assets/GPU paths were not enabled. Seven new content tests exercise
+the native prefix and profile contracts, explicit/inherited zero, class-label
+independence, diagnostics, raw preservation and hash behavior. Existing payment
+parsing tests, queue-capacity regressions and the genuine pre-edit v8 mining
+fixture continuation pass.
+
+Strict all-targets Clippy for those six crates and the workspace all-targets
+check pass. The offline workspace lock refresh changes no packages. An
+independent read-only source/test/merge review found no residual defect. The
+only merge conflict kept both queue-limit and station-flag resolution after
+the resource-node resolver. The generated A2 callable report is unchanged:
+this seam adds no Lua binding and does not complete LUA-05.
