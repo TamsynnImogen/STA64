@@ -42,7 +42,7 @@ fn text_follows_command_order_once_and_leaves_physical_state_unchanged() {
     let setup = setup();
     let mut sim = Sim::from_setup(&setup);
     let mut control = Sim::from_setup(&setup);
-    let commands = [
+    let commands = vec![
         text(1, 0, "third"),
         text(0, 9, "second"),
         text(0, 2, "NEXT"),
