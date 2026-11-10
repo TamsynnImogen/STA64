@@ -193,3 +193,10 @@ callbacks, loading three goals and awaiting input. Debug/TextInput still use per
 fallbacks; their missing global/field lookups now appear in `unsupported()`.
 These diagnostics do not implement input. Native monitor timing, input
 advancement, forced skips and full tutorial play remain open.
+
+The campaign startup sweep now covers all 36 header-selected installed maps for
+30 ticks each. A source-only mount resolves 34 scripts; the staging helper adds
+byte-identical BZN-stem aliases so all 36 resolve from an independently verified
+package layer. Uncaught Lua errors and rejected commands are checked separately
+from handled log messages (199 across six missions in the current inputs).
+This leaves property/ownership, AI, later gameplay and client acceptance work open.

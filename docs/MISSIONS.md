@@ -82,6 +82,40 @@ establishes Producer → Craft and Starbase → Shipyard → Producer. These che
 allow the converted mission to find its static portal/base. They do not add a
 complete mapping from every ODF class label to every MMM type name.
 
+## External campaign startup and staging
+
+The ignored `a2_campaign_startup` probe reads each external port's header-selected
+BZN, loads installed content once, then creates a fresh simulation with eight idle
+seats for 30 ticks per mission. It preserves map actors/owners and supplies complete
+simulation events to the runtime. It checks uncaught Lua errors and rejected
+commands, and reports loader warnings, unsupported lookups and handled keyword
+log messages separately. This is startup evidence, not complete campaign or AI play.
+
+With only the external source directory mounted, 34 of the current 36 ports resolve
+through the production resolver. Economics Tutorial and Crucis Major need filename
+aliases. `tools/stage_a2_ports.py` creates a new private stage containing original
+Lua filenames and header-declared BZN-stem aliases. It preserves bytes, rejects
+source symlinks/collisions/existing destinations, and writes a SHA-256 completion
+manifest last. Inputs must remain stable while read; an I/O failure can leave an
+incomplete new directory. The helper does not install files.
+
+```sh
+python3 tools/stage_a2_ports.py --ports "$STA64_A2_PORTS" --out "$STA64_A2_PACKAGE"
+renice -n 19 -p $$ >/dev/null
+cargo test -p sta_mission --test a2_campaign_startup --jobs 2 -- --ignored --nocapture
+```
+
+Export `STA64_A2_INSTALL`, `STA64_A2_PORTS` and a new `STA64_A2_PACKAGE` path in an
+existing parent directory before staging. The optional `STA64_A2_MOD` defaults to
+STA2 Classic. In package mode the probe mounts the package without mounting the
+source directory, verifies resolved script bytes against the source, and checks
+that all runtime scripts actually come from the package's VFS layer.
+
+The current staged input passes all 36 production resolutions and startups. It
+still reports 199 handled keyword messages across six missions, including unsupported
+forceOntoMap writes, plus tutorial input fallbacks. These messages remain open
+compatibility work; a startup pass does not mean every mission intent succeeded.
+
 ## Pending camera spots
 
 Cineractive spot requests can reference queued Entity.add handles. They retain
