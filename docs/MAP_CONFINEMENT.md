@@ -8,6 +8,10 @@ state, new edits, defaults, movement integration and the Lua property remain
 gated on their separate policy decisions. Deliver the integrated simulation
 seam before its LUA-05 adapter; pure geometry alone does not fix Blockade.
 
+The next proposed state/authoring/movement/persistence contract is in
+[MAP_CONFINEMENT_INTEGRATION.md](MAP_CONFINEMENT_INTEGRATION.md). Its remaining
+gates precede any entity integration or source freeze.
+
 The longer installed campaign probe fails on Blockade's unsupported
 Entity.forceOntoMap property. The external port has five true assignments and
 one false assignment, alongside real orders. A fake property that only stores
