@@ -88,10 +88,15 @@ and its caller forwards that same reader to the main load operation. This is
 a typed object test, not evidence of a raw eight-byte BZN header tag. FO's
 inspected object Load has the same zero-mode recompute/nonzero-mode preserve
 branches. A1 instead uses a separate global gate around the serialized force
-read, and its inspected Load tail lacks the A2 raw-X/Z recomputation. A1's
-global-mode caller identity, FO's header-mode caller and the exact applicable
-class initialization flows remain open. Do not infer that every serialized
-flag must become a fresh-map authoring field merely from its presence in Save.
+read, and its inspected Load tail lacks the A2 raw-X/Z recomputation. Paired
+header read/write paths identify that A1 gate as `missionSave`; all 49 original
+installed A1 maps have the corresponding metadata boolean true. The existing
+A2FO A1-map parser corroborates the front-matter order. `saveGameDesc` alone
+does not identify a file as a saved game: it also occurs in those maps. FO's
+header path likewise derives its reader mode from the loaded SaveDetails type.
+Exact constructor/position/Load/Update ordering across applicable classes and
+FO's complete main-load forwarding still need closure. Do not infer that every
+serialized flag must become a fresh-map authoring field from Save alone.
 
 ## Stage 1: pure geometry contract
 
@@ -214,6 +219,16 @@ attacks/mining/build approaches and new obstacle avoidance. Check invalid edits
 atomically against an identical baseline tick. Test override/inheritance/zero,
 invalid numeric diagnostics and content/digest differences. Verify snapshot and
 same-build replay continuation, old fixtures and malformed input rejection.
+
+Stage 1 local verification on 2026-11-10, with main `dd6db8a` merged forward:
+all five geometry tests pass; the scoped `sta_core`, `sta_odf`, `sta_bzn`,
+`sta_content`, `sta_sim` and `sta_mission` suites report 559 passes, zero
+failures and ten ignored external-install probes. The genuine version-8 Native
+mining fixture continuation passes. Strict simulation/mission all-targets
+Clippy, workspace all-targets checking and formatting/diff checks pass. Offline
+workspace lock regeneration changes zero packages. An independent design and
+source/test review found no blocking defect. This is shared host validation;
+branch-specific full desktop CI and Android APK validation remain separate.
 
 After the shared seam merges, add the Lua adapter with actual movement tests
 and rerun the longer Blockade probe. Preserve other diagnostics, including
