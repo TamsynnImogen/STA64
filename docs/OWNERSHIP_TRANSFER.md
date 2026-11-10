@@ -231,3 +231,44 @@ resource guards for this map or ODF. Distinguishing colonizable worlds and
 colony ownership from neutral deposits needs its own native-backed model;
 this stage does not implement colony capture. The probe keeps both remaining
 failures and its unsupported/handled-call diagnostics visible.
+
+## Per-producer payment configuration prerequisite decision
+
+The owned Fleet Ops source identifies queueInstantDeduct as the ProducerClass
+ODF Boolean. Its default constructor writes zero; the ODF copy constructor
+reads the key with the source class byte as fallback. The relevant constructor
+windows and embedded key are byte-identical in the owned legacy and clean
+FleetOpsHook references, and the clean window was also inspected directly.
+The owned Boolean getter distinguishes absence from explicit false/zero and
+normalizes an authored integer nonzero to true. These are static/source
+findings, not live hook or gameplay acceptance. Do not copy native addresses
+or treat this FO extension as a stock A1/A2 default.
+
+Reuse the existing per-unit Features cache and its conditional content hash.
+No new BuildDef, command or snapshot field is needed. On unit ODFs in Fo4 and
+Native profiles only, map a valid queueInstantDeduct to pay_on_queue before
+the existing Feature_<name> overrides. Precedence is profile defaults, mod
+[Features] defaults, resolved native ODF key, then resolved explicit STA64
+Feature_pay_on_queue. Existing ODF inheritance supplies parent values; a
+child's zero overrides the same inherited native key. An inherited explicit
+STA64 Feature override still has the higher documented precedence; its child
+can override it through that same Feature key. The initial key reader accepts true/false and signed 32-bit decimal integers,
+including noncanonical nonzero values such as 2. Other lexical forms warn
+and retain the existing fallback; native invalid/overflow parsing is not
+claimed as reproduced. Weapons and stock A1/A2 profiles do not
+interpret the FO key. Raw ODF data remains available unchanged.
+
+Production must consult the builder's resolved unit_features, rather than
+only the database-wide switch. This also fixes the existing Feature_pay_on_queue
+unit override being parsed but ignored. Do not use the product's flag, add
+refund behavior, or relax ownership/construction guards. Existing paid and
+started records already carry payment state. Absent keys keep the existing
+profile/mod behavior and fake-content hash; explicit differences use the
+existing feature hash marker and therefore the content guard on saves.
+
+Test native-key inheritance and explicit zero, both namespace precedence
+levels, invalid-value diagnostics, Fo4/Native versus stock profile gating,
+weapon exclusion, absent-key hash stability, two builders with opposite
+payment modes, pending rig deploys, failed-affordability behavior and the
+real v8 fixture's continued digest. Run shared/consumer/workspace/Clippy
+checks. Capture refund policy, colonizable worlds and victory remain gated.

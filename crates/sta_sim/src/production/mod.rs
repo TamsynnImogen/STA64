@@ -19,7 +19,7 @@
 //!     deployed; the weld goes on without it.
 //!   - Timing: an item queued (or a rig deployed) in the step of tick `t`
 //!     starts in that step and completes in the step of tick `t + ticks`.
-//! - Payment: with `Features::pay_on_queue` the cost leaves the player's stock
+//! - Payment: with the builder's resolved `Features::pay_on_queue` the cost leaves the player's stock
 //!   when the order is accepted (rejected if it cannot be paid); otherwise a
 //!   queue item waits at the head until the stock covers it and pays as it
 //!   starts, and a rig pays on deploy (dropping the deploy if it cannot).
@@ -236,7 +236,7 @@ impl Production {
         if !bd.build.list.is_empty() && !bd.build.list.iter().any(|r| r.key == what) {
             return false;
         }
-        let pay_now = db.features().pay_on_queue;
+        let pay_now = db.unit_features(bd).pay_on_queue;
         match kind {
             EntityKind::Station => {
                 if self
@@ -577,3 +577,6 @@ impl Production {
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+#[cfg(test)]
+mod charge_tests;
