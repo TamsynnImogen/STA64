@@ -264,7 +264,9 @@ pub struct GamePlugin;
 
 impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (apply_race, outcome).in_set(crate::app::GameSet::Ui));
+        // Headless frame runs have no notice plugin; the match still posts its notices.
+        app.add_message::<Notice>()
+            .add_systems(Update, (apply_race, outcome).in_set(crate::app::GameSet::Ui));
     }
 }
 

@@ -151,8 +151,14 @@ impl Placed {
 
     /// Entities no BZN object took (`from_setup` made them from something the
     /// renderer does not draw as a ship).
+    #[cfg(test)]
     fn rest(self) -> Vec<EntityId> {
-        let mut ids: Vec<EntityId> = self.0.into_values().flatten().collect();
+        self.rest_where(|_| true)
+    }
+
+    /// As [`Placed::rest`], keeping only the entities `keep` says yes to, by owner.
+    fn rest_where(self, keep: impl Fn(PlayerId) -> bool) -> Vec<EntityId> {
+        let mut ids: Vec<EntityId> = self.0.into_iter().filter(|((_, _, owner), _)| keep(*owner)).flat_map(|(_, v)| v).collect();
         ids.sort();
         ids
     }
@@ -338,6 +344,7 @@ impl Plugin for MapPlugin {
             .init_resource::<PartCache>()
             .init_resource::<Catalogue>()
             .init_resource::<MapSeat>()
+            .add_message::<crate::ui::radar::RadarClick>()
             .init_resource::<crate::render::particles::Particles>()
             .insert_resource(ClearColor(Color::BLACK))
             .insert_resource(GlobalAmbientLight {
@@ -363,8 +370,10 @@ impl Plugin for MapPlugin {
                     crate::clock::advance_idle_clock.run_if(not(resource_exists::<crate::sim_link::SimLink>)),
                     input,
                     rebuild,
+                    radar_click,
                     pan_keys,
                     crate::viewer::orbit_camera,
+                    radar_camera,
                     spin,
                     sky_follows_camera,
                     hud,
@@ -457,11 +466,16 @@ fn setup(mut commands: Commands) {
     ));
 }
 
-fn input(keys: Res<ButtonInput<KeyCode>>, mut browser: ResMut<MapBrowser>, mut orbit: Query<&mut Orbit>) {
+/// Camera distance a skirmish opens at, over the player's start.
+const START_DIST: f32 = 2500.0;
+
+fn input(keys: Res<ButtonInput<KeyCode>>, mut browser: ResMut<MapBrowser>, mut orbit: Query<&mut Orbit>, skirmish: Option<Res<crate::game::SkirmishCfg>>) {
     let n = browser.maps.len() as isize;
     if n == 0 {
         return;
     }
+    // A match stays on its map: the browser's keys are the map viewer's.
+    let browsing = skirmish.is_none();
     let step = [
         (KeyCode::ArrowRight, 1),
         (KeyCode::ArrowLeft, -1),
@@ -470,7 +484,8 @@ fn input(keys: Res<ButtonInput<KeyCode>>, mut browser: ResMut<MapBrowser>, mut o
     ]
     .iter()
     .find(|(k, _)| keys.just_pressed(*k))
-    .map(|(_, s)| *s);
+    .map(|(_, s)| *s)
+    .filter(|_| browsing);
     if let Some(s) = step {
         browser.index = (browser.index as isize + s).rem_euclid(n) as usize;
         browser.dirty = true;
@@ -480,6 +495,41 @@ fn input(keys: Res<ButtonInput<KeyCode>>, mut browser: ResMut<MapBrowser>, mut o
             (o.focus, o.dist) = o.home;
         }
     }
+}
+
+/// A click or drag on the radar puts the camera over that map point.
+fn radar_click(
+    mut clicks: MessageReader<crate::ui::radar::RadarClick>,
+    limits: Res<CameraLimits>,
+    mut q: Query<&mut Orbit>,
+) {
+    let Some(c) = clicks.read().filter(|c| c.button == bevy::picking::pointer::PointerButton::Primary).last() else { return };
+    for mut o in &mut q {
+        let at = Vec3::new(c.at.x, 0.0, -c.at.y);
+        o.focus = at.clamp(limits.lo, limits.hi);
+    }
+}
+
+/// The camera's view on the map plane for the radar: where its four screen corners
+/// look at ground level (sim x, z). A corner above the horizon goes far along its ray.
+fn radar_camera(
+    camera: Query<(&Camera, &GlobalTransform), MainCamera>,
+    limits: Res<CameraLimits>,
+    feed: Option<ResMut<crate::ui::radar::RadarFeed>>,
+) {
+    let (Some(mut feed), Ok((cam, gt))) = (feed, camera.single()) else { return };
+    let Some(size) = cam.logical_viewport_size() else { return };
+    let far = limits.max_dist.min(1e6) * 3.0;
+    let corners = [Vec2::ZERO, Vec2::new(size.x, 0.0), size, Vec2::new(0.0, size.y)];
+    let mut out = [Vec2::ZERO; 4];
+    for (o, c) in out.iter_mut().zip(corners) {
+        let Ok(ray) = cam.viewport_to_world(gt, c) else { return };
+        let (p, d) = (ray.origin, *ray.direction);
+        let t = if d.y < -1e-3 { (-p.y / d.y).min(far) } else { far };
+        let hit = p + d * t;
+        *o = Vec2::new(hit.x, -hit.z);
+    }
+    feed.camera = Some(out);
 }
 
 /// WASD and the window edges move the camera's focus over the map plane; the
@@ -593,6 +643,7 @@ fn rebuild(
     let SimSide { setup, sim, warnings: sim_warnings, controllers, skirmish } =
         build_sim(&map, &name, &content, &index, &vfs.0, seat.0, skirmish_cfg.as_deref().map(|c| (c, &*races)));
     let mut skirmish_note = None;
+    let is_match = matches!(skirmish, Some(Ok(_)));
     match skirmish {
         Some(Ok(s)) => {
             info!("{}", s.summary);
@@ -612,6 +663,14 @@ fn rebuild(
     commands.insert_resource(crate::render::units::LocalPlayer(seat_player));
     {
         let (lo, hi) = map_def.bounds;
+        // The radar draws the map's own rectangle, not the units' spread.
+        let (rlo, rhi) = (Vec2::new(lo.x.to_f32(), lo.z.to_f32()), Vec2::new(hi.x.to_f32(), hi.z.to_f32()));
+        commands.queue(move |w: &mut World| {
+            if let Some(mut st) = w.get_resource_mut::<crate::ui::radar::RadarState>() {
+                st.map = Some(crate::ui::radar::RadarMap::of_bounds(rlo, rhi));
+                st.map_fixed = true;
+            }
+        });
         commands.insert_resource(crate::render::fog::FogBounds {
             min: Vec2::new(lo.x.to_f32(), lo.z.to_f32()),
             max: Vec2::new(hi.x.to_f32(), hi.z.to_f32()),
@@ -964,7 +1023,23 @@ fn rebuild(
     let (lo, size) = (Vec3::from(map.min_extent), Vec3::from(map.size));
     let centre = lo + size * 0.5;
     let focus = Vec3::new(centre.x, 0.0, -centre.z);
-    let dist = size.x.max(size.z).max(2000.0) * 0.75;
+    let mut dist = size.x.max(size.z).max(2000.0) * 0.75;
+    // A match opens over the local seat's own starting units (their centroid; the start marker
+    // is only where the grid begins), near enough to see the base; R returns there.
+    let focus = {
+        use sta_sim::WorldSource;
+        let mine: Vec<Vec2> = match seat_player.filter(|_| is_match) {
+            Some(p) => sim.view().units.iter().filter(|u| u.owner == p).map(|u| Vec2::new(u.pos.x.to_f32(), u.pos.z.to_f32())).collect(),
+            None => Vec::new(),
+        };
+        if mine.is_empty() {
+            focus
+        } else {
+            dist = dist.min(START_DIST);
+            let c = mine.iter().sum::<Vec2>() / mine.len() as f32;
+            Vec3::new(c.x, 0.0, -c.y)
+        }
+    };
     for mut o in &mut orbit {
         o.focus = focus;
         o.dist = dist;
@@ -980,7 +1055,9 @@ fn rebuild(
     // Sim entities the renderer draws some other way (planets, nebulae, rocks, things
     // without a model): linked to a bare entity, so the units view does not draw them a
     // second time.
-    let unlinked = placed.rest();
+    // A match's start units (a seat's outpost, builders) are made by the sim, not by a BZN
+    // object, so nothing took them: they are left to the units view, which draws them.
+    let unlinked = placed.rest_where(|owner| !is_match || owner == sta_sim::world::NEUTRAL);
     let ghosts = unlinked.len();
     for id in unlinked {
         commands.spawn((SimEntity(id), Transform::IDENTITY, Visibility::default(), ChildOf(root)));
@@ -1052,14 +1129,15 @@ fn fps(diag: Res<bevy::diagnostic::DiagnosticsStore>, mut q: Query<&mut Text, Wi
     }
 }
 
-fn hud(browser: Res<MapBrowser>, mut q: Query<&mut Text, With<MapHud>>) {
+fn hud(browser: Res<MapBrowser>, skirmish: Option<Res<crate::game::SkirmishCfg>>, mut q: Query<&mut Text, With<MapHud>>) {
     if !browser.is_changed() {
         return;
     }
+    let keys = if skirmish.is_some() { "" } else { "Left/Right map  PgUp/PgDn x10  " };
     for mut t in &mut q {
         t.0 = format!(
             "STA64 {} map view\n{}\n\n{}\n\nleft click/drag select (Shift adds)  right click move  Space stop\n\
-             Left/Right map  PgUp/PgDn x10  Tab icons  WASD pan  middle-drag orbit  wheel zoom  R reset",
+             {keys}Tab icons  WASD pan  middle-drag orbit  wheel zoom  R reset",
             env!("CARGO_PKG_VERSION"),
             browser.mount_summary,
             browser.info
@@ -1070,6 +1148,20 @@ fn hud(browser: Res<MapBrowser>, mut q: Query<&mut Text, With<MapHud>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A match's start units (owned by a seat, made by the sim) are not ghosts: the units
+    /// view must draw and pick them; neutral leftovers (planets, nebulae) stay ghosts.
+    #[test]
+    fn a_matchs_start_units_are_not_ghosted() {
+        let z = Fixed::from_int(0);
+        let at = [z, z, z];
+        let mut m = HashMap::new();
+        m.insert((ContentKey::NONE, at, PlayerId(0)), std::collections::VecDeque::from([EntityId(1)]));
+        m.insert((ContentKey::NONE, at, sta_sim::world::NEUTRAL), std::collections::VecDeque::from([EntityId(2)]));
+        let keep_neutral = |o: PlayerId| o == sta_sim::world::NEUTRAL;
+        assert_eq!(Placed(m.clone()).rest_where(keep_neutral), vec![EntityId(2)]);
+        assert_eq!(Placed(m).rest(), vec![EntityId(1), EntityId(2)]);
+    }
     use sta_sim::command::{Command, CommandKind, Edit, Order};
     use sta_sim::WorldSource;
 

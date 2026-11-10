@@ -130,6 +130,13 @@ impl RadarMap {
         Some(RadarMap { min: (lo + hi) / 2.0 - Vec2::splat(size / 2.0), size })
     }
 
+    /// The square round a map's rectangle `lo..hi` (x, z): the longer side fills it and the
+    /// shorter is centred, so a map that is not square keeps its aspect.
+    pub fn of_bounds(lo: Vec2, hi: Vec2) -> RadarMap {
+        let size = (hi - lo).max_element().max(1.0);
+        RadarMap { min: (lo + hi) / 2.0 - Vec2::splat(size / 2.0), size }
+    }
+
     /// Grow to hold `other` too, never shrink: the picture does not jump as
     /// units come and go.
     pub fn grow(self, other: RadarMap) -> RadarMap {
@@ -163,8 +170,9 @@ pub struct RadarFeed {
     pub selected: Vec<EntityId>,
     /// Tells stations and moons from ships; without it every unit is a ship.
     pub content: Option<Arc<ContentDb>>,
-    /// The camera's view on the ground, as a map-space rectangle (x, z).
-    pub camera: Option<Rect>,
+    /// The camera's view on the ground: the corners of its footprint in map space (x, z), in
+    /// order round it (a trapezoid under a tilted camera).
+    pub camera: Option<[Vec2; 4]>,
 }
 
 impl Default for RadarFeed {
@@ -309,9 +317,9 @@ pub struct RadarSquare;
 #[derive(Component)]
 pub struct RadarBlip(pub EntityId);
 
-/// The camera's outline in the square.
+/// One side of the camera's outline in the square (0 to 3).
 #[derive(Component)]
-pub struct RadarCamera;
+pub struct RadarCamera(pub usize);
 
 /// A dot of a filter strip: pick `state` for ships or stations.
 #[derive(Component, Debug, Clone, Copy)]
@@ -430,8 +438,9 @@ pub fn refresh(
     mut state: ResMut<RadarState>,
     mut ents: ResMut<BlipEntities>,
     square: Query<Entity, With<RadarSquare>>,
-    mut nodes: Query<(&mut Node, &mut BackgroundColor, &mut BorderColor)>,
-    outline: Query<Entity, With<RadarCamera>>,
+    mut nodes: Query<(&mut Node, &mut BackgroundColor, &mut BorderColor), Without<RadarCamera>>,
+    outline: Query<(Entity, &RadarCamera)>,
+    mut lines_q: Query<(&mut Node, &mut UiTransform), With<RadarCamera>>,
 ) {
     let Ok(square) = square.single() else { return };
     if !state.map_fixed
@@ -483,28 +492,44 @@ pub fn refresh(
             }
         }
     }
-    // The camera's outline: white, hollow.
-    if let Some(r) = feed.camera {
-        let (a, b) = (map.to_square(r.min), map.to_square(r.max));
-        let (lo, hi) = (a.min(b), a.max(b));
+    // The camera's footprint: four thin white lines, turned to the sides of the trapezoid.
+    let side = RADAR_SIDE - 2.0;
+    let lines: Vec<(Vec2, f32, f32)> = match feed.camera {
+        Some(c) => (0..4)
+            .map(|i| {
+                let (a, b) = (map.to_square(c[i]) * side, map.to_square(c[(i + 1) % 4]) * side);
+                let d = b - a;
+                ((a + b) / 2.0, d.length(), d.y.atan2(d.x))
+            })
+            .collect(),
+        None => Vec::new(),
+    };
+    let have: Vec<(Entity, usize)> = outline.iter().map(|(e, c)| (e, c.0)).collect();
+    for (e, i) in &have {
+        if *i >= lines.len() {
+            commands.entity(*e).despawn();
+        }
+    }
+    for (i, (mid, len, angle)) in lines.iter().enumerate() {
         let node = Node {
             position_type: PositionType::Absolute,
-            left: Val::Percent(lo.x * 100.0),
-            top: Val::Percent(lo.y * 100.0),
-            width: Val::Percent((hi.x - lo.x) * 100.0),
-            height: Val::Percent((hi.y - lo.y) * 100.0),
-            border: UiRect::all(Val::Px(1.0)),
+            left: Val::Px(mid.x - len / 2.0),
+            top: Val::Px(mid.y - 0.75),
+            width: Val::Px(*len),
+            height: Val::Px(1.5),
             ..default()
         };
-        match outline.single().ok().and_then(|e| nodes.get_mut(e).ok()) {
-            Some((mut n, ..)) => *n = node,
-            None => {
-                commands.spawn((RadarCamera, node, BorderColor::all(Color::WHITE), Pickable::IGNORE, ChildOf(square)));
+        let tf = UiTransform::from_rotation(Rot2::radians(*angle));
+        match have.iter().find(|(_, j)| *j == i) {
+            Some((e, _)) => {
+                if let Ok((mut n, mut t)) = lines_q.get_mut(*e) {
+                    *n = node;
+                    *t = tf;
+                }
             }
-        }
-    } else {
-        for e in &outline {
-            commands.entity(e).despawn();
+            None => {
+                commands.spawn((RadarCamera(i), node, tf, BackgroundColor(Color::WHITE), Pickable::IGNORE, ChildOf(square)));
+            }
         }
     }
 }
@@ -549,6 +574,30 @@ fn on_click(
     }
 }
 
+/// Holding the left button on the square keeps sending clicks: dragging moves the camera along
+/// (`on_click` alone only sees the release).
+fn drag(
+    buttons: Option<Res<ButtonInput<MouseButton>>>,
+    squares: Query<&RelativeCursorPosition, With<RadarSquare>>,
+    state: Res<RadarState>,
+    mut held: Local<bool>,
+    mut out: MessageWriter<RadarClick>,
+) {
+    let (Some(buttons), Ok(rel), Some(map)) = (buttons, squares.single(), state.map) else { return };
+    if buttons.just_pressed(MouseButton::Left) {
+        *held = rel.cursor_over;
+    }
+    if !buttons.pressed(MouseButton::Left) {
+        *held = false;
+    }
+    if *held
+        && let Some(p) = rel.normalized
+    {
+        let uv = (p + Vec2::splat(0.5)).clamp(Vec2::ZERO, Vec2::ONE);
+        out.write(RadarClick { at: map.to_world(uv), button: PointerButton::Primary });
+    }
+}
+
 pub struct RadarPlugin;
 
 impl Plugin for RadarPlugin {
@@ -564,7 +613,7 @@ impl Plugin for RadarPlugin {
             .add_systems(Startup, spawn_radar)
             .add_systems(
                 Update,
-                (feed_from_link.run_if(resource_exists::<SimLink>).run_if(not(resource_exists::<super::hud::ExternalFeed>)), refresh, paint_filters).chain().in_set(GameSet::Ui),
+                (feed_from_link.run_if(resource_exists::<SimLink>).run_if(not(resource_exists::<super::hud::ExternalFeed>)), drag, refresh, paint_filters).chain().in_set(GameSet::Ui),
             );
     }
 }
@@ -764,11 +813,11 @@ mod tests {
 
         let mut feed = omniscient(feed_at(&mut log, &db, 0));
         feed.selected = vec![flagship];
-        feed.camera = Some(Rect::new(500.0, 500.0, 1500.0, 1200.0));
+        feed.camera = Some([Vec2::new(500.0, 500.0), Vec2::new(1500.0, 500.0), Vec2::new(1500.0, 1200.0), Vec2::new(500.0, 1200.0)]);
         *app.world_mut().resource_mut::<RadarFeed>() = feed;
         app.update();
         assert_eq!(count::<RadarBlip>(&mut app), 8);
-        assert_eq!(count::<RadarCamera>(&mut app), 1);
+        assert_eq!(count::<RadarCamera>(&mut app), 4);
 
         let theme = app.world().resource::<Theme>().clone();
         let ent = *app.world().resource::<BlipEntities>().0.get(&flagship).unwrap();
