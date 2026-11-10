@@ -213,6 +213,9 @@ pub struct BuildDef {
     pub officers: Fixed,
     /// What this unit can build, in button order.
     pub list: Vec<DefRef>,
+    /// STA64_queueLimit: total station jobs, including the active head.
+    /// None selects the profile default; Some(0) disables new admissions.
+    pub queue_limit: Option<u32>,
 }
 
 /// Sound names a unit uses; the client resolves them (CON-10, AUD-02/03).

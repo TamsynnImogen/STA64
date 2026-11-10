@@ -163,7 +163,10 @@ impl Races {
             // The standard units, then the first minimal unit when it is the race's own
             // (Fleet Operations 4.0 names `fconst` for every race: not a builder of theirs).
             let own = |k: ContentKey| db.unit(k).is_some_and(|u| u.race.eq_ignore_ascii_case(&r.name));
-            let minimal = r.minimal_units.iter().take(1).filter(|s| db.key(s).is_some_and(|k| own(k) && can_build(db, k, &r.name)));
+            // It must also be payable from the start stock: Fleet Operations 4.0's `fconst` is
+            // Roots' ODF (it costs metal), and a race whose stock has no metal cannot build it.
+            let stock = r.stock;
+            let minimal = r.minimal_units.iter().take(1).filter(|s| db.key(s).is_some_and(|k| own(k) && affordable(db, k, &stock) && can_build(db, k, &r.name)));
             for s in r.standard_units.iter().chain(minimal) {
                 let Some(mut k) = db.key(s).filter(|&k| is_craft(k)) else { continue };
                 // Fleet Operations 4.0's start outpost is a stub (`fed_outpostS`) that names
@@ -190,6 +193,11 @@ impl Races {
         }
         default_loadout(db, race)
     }
+}
+
+/// Whether the start `stock` pays for a unit: each slot of its cost is covered.
+pub fn affordable(db: &ContentDb, key: ContentKey, stock: &[i64; RESOURCES]) -> bool {
+    db.unit(key).is_some_and(|u| u.build.cost.iter().enumerate().all(|(i, c)| *c <= Fixed::from_int(stock.get(i).copied().unwrap_or(0).clamp(0, 1_000_000_000) as i32)))
 }
 
 /// Whether a seat of `race` owning `key` can build something at once: it has a

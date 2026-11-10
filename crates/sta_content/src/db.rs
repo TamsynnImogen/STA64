@@ -6,6 +6,7 @@ use sta_core::{ContentKey, Fixed};
 
 use crate::def::{DefRef, UnitDef, WeaponDef};
 use crate::features::{Features, Profile};
+use crate::resources::ResourceModel;
 use crate::index::OdfIndex;
 use crate::techtree::TechTree;
 use crate::{ContentError, Result, Warning};
@@ -39,6 +40,8 @@ pub struct ContentDb {
     defs: Vec<(String, Def)>,
     profile: Profile,
     features: Features,
+    /// What the game calls its stock slots (display only: not in the hash).
+    resources: ResourceModel,
     /// What may be built given what is owned (CON-06); `None` allows
     /// everything, as the fakes do.
     tech: Option<Arc<TechTree>>,
@@ -67,7 +70,7 @@ impl ContentDb {
     /// (a lobby choice, a test).
     pub fn load_as(vfs: &sta_vfs::Vfs, profile: Profile, index: &OdfIndex) -> Result<(ContentDb, Vec<Warning>)> {
         let (db, mut warnings) = crate::odf::load(vfs, profile, index)?;
-        let db = db.with_launch_points(vfs);
+        let db = db.with_launch_points(vfs).with_resources(ResourceModel::from_strings(profile, &crate::StringTable::load(vfs)));
         if db.is_empty() {
             return Ok((db, warnings));
         }
@@ -174,6 +177,18 @@ impl ContentDb {
         self.profile
     }
 
+    /// What the game calls its stock slots (the install's string table over
+    /// the profile's words).
+    pub fn resources(&self) -> &ResourceModel {
+        &self.resources
+    }
+
+    /// This database with these slot names.
+    pub fn with_resources(mut self, resources: ResourceModel) -> ContentDb {
+        self.resources = resources;
+        self
+    }
+
     /// The database-wide switches: the profile's defaults and the mod
     /// chain's overrides.
     pub fn features(&self) -> &Features {
@@ -192,6 +207,13 @@ impl ContentDb {
         u.features.as_ref().unwrap_or(&self.features)
     }
 
+    /// Total station jobs for this producer, including its active head.
+    /// An explicit zero disables new queue admissions without cancelling
+    /// existing jobs. See docs/QUEUE_LIMITS.md for profile defaults.
+    pub fn build_queue_limit(&self, u: &UnitDef) -> u32 {
+        u.build.queue_limit.unwrap_or_else(|| self.profile.build_queue_limit())
+    }
+
     /// The switches that apply to one weapon, as [`unit_features`](ContentDb::unit_features).
     pub fn weapon_features<'a>(&'a self, w: &'a WeaponDef) -> &'a Features {
         w.features.as_ref().unwrap_or(&self.features)
@@ -205,6 +227,7 @@ pub struct ContentBuilder {
     defs: Vec<Def>,
     profile: Profile,
     features: Features,
+    resources: Option<ResourceModel>,
     tech: Option<TechTree>,
 }
 
@@ -226,6 +249,12 @@ impl ContentBuilder {
 
     pub fn features(mut self, features: Features) -> Self {
         self.features = features;
+        self
+    }
+
+    /// The slot names; the profile's when not given.
+    pub fn resources(mut self, resources: ResourceModel) -> Self {
+        self.resources = Some(resources);
         self
     }
 
@@ -269,7 +298,8 @@ impl ContentBuilder {
                 Def::Weapon(w) => w.key = key,
             }
         }
-        let mut db = ContentDb { defs, profile: self.profile, features: self.features, tech: self.tech.map(Arc::new), hash: 0 };
+        let resources = self.resources.unwrap_or_else(|| ResourceModel::for_profile(self.profile));
+        let mut db = ContentDb { defs, profile: self.profile, features: self.features, resources, tech: self.tech.map(Arc::new), hash: 0 };
         db.hash = hash(&db);
         Ok(db)
     }
@@ -369,6 +399,13 @@ fn hash(db: &ContentDb) -> u64 {
                 }
                 h.u64(u.build.ticks);
                 h.fixed(u.build.officers);
+                // The old shared rule was five for every profile. Preserve
+                // its hashes only when the effective rule is still five.
+                let queue_limit = db.build_queue_limit(u);
+                if queue_limit != 5 {
+                    h.byte(0xe5);
+                    h.u64(u64::from(queue_limit));
+                }
                 h.u64(u.build.list.len() as u64);
                 for b in &u.build.list {
                     h.u64(b.key.0 as u64);

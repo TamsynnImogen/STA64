@@ -200,6 +200,20 @@ pub(crate) fn words(raw: &str) -> Vec<String> {
 /// `sta_odf::resolve_layered` asks.
 pub type Loader<'a> = dyn FnMut(&str, usize) -> Option<String> + 'a;
 
+/// A STA64-owned extension, not a native Armada key. Keep absence and
+/// authored zero distinct; ODF resolution already applies inheritance.
+fn build_queue_limit(file: &str, odf: &Odf, warnings: &mut Vec<Warning>) -> Option<u32> {
+    let raw = odf.str("STA64_queueLimit")?;
+    let value = raw.trim();
+    if !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit())
+        && let Ok(n) = value.parse::<u32>()
+    {
+        return Some(n);
+    }
+    warnings.push(Warning::new(file, format!("STA64_queueLimit = {raw} is not an unsigned 32-bit decimal integer; using the profile default")));
+    None
+}
+
 /// The FO producer flag uses integer truth, unlike the generic ODF flags.
 /// Broader native malformed/overflow parsing is outside this bounded reader.
 fn queue_instant_deduct(file: &str, odf: &Odf, warnings: &mut Vec<Warning>) -> Option<bool> {
@@ -305,6 +319,7 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
         builder = builder.weapon(def);
     }
 
+    let model = crate::ResourceModel::for_profile(profile);
     let unit_names: BTreeSet<String> = units.iter().map(|(s, _)| stem(s)).collect();
     for (s, odf) in &units {
         let phys = match odf.str("physicsFile").map(str::trim).filter(|p| !p.is_empty()) {
@@ -318,7 +333,15 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
             None => None,
         };
         let mut def = crate::unit::unit_def(s, odf, phys.as_deref(), &mut warnings);
+        // A node's resource: the slot its resource ODF fills (`amtlatinum` on Fleet Ops 4.0's
+        // tritanium moon, `amtmetal` on Roots'), else the game's word for it in the text.
+        if let Some(text) = odf.str("resource").map(str::trim).filter(|t| !t.is_empty()) {
+            let node = sta_odf::resolve_layered(&stem(text), loader).ok();
+            let slot = node.as_ref().and_then(crate::resources::node_slot).or_else(|| model.slot_of_text(text));
+            def.resource = Some(slot.unwrap_or(0) as u8);
+        }
         let file = format!("{s}.odf");
+        def.build.queue_limit = build_queue_limit(&file, odf, &mut warnings);
         def.is_starbase = station_flag(&file, odf, profile, &mut warnings);
         let mut native = Overrides::default();
         if matches!(profile, Profile::Fo4 | Profile::Native)

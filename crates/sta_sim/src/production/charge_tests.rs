@@ -183,15 +183,18 @@ fn pending_rig_deploys_use_the_rigs_payment_flags() {
         let mut sim = game(global);
         let immediate = spawn(&mut sim, "charge_rig_immediate", pos(0));
         let deferred = spawn(&mut sim, "charge_rig_deferred", pos(1000));
-        fund(&mut sim, 1200);
+        fund(&mut sim, 2400);
         assert!(build(&mut sim, immediate, "fx_station", Some(pos(4000))));
-        assert_eq!(stock(&sim), Fixed::ZERO);
+        assert_eq!(stock(&sim), Fixed::from_int(1200));
         assert!(build(&mut sim, deferred, "fx_station", Some(pos(5000))));
-        assert_eq!(stock(&sim), Fixed::ZERO);
+        assert_eq!(stock(&sim), Fixed::from_int(1200));
         let rec = sim.production.to_rec();
         assert_eq!(rec.deploys.len(), 2);
         assert!(rec.deploys.iter().find(|r| r.0 == immediate.0).unwrap().4);
         assert!(!rec.deploys.iter().find(|r| r.0 == deferred.0).unwrap().4);
+        // Both orders were affordable at issue time. Later spending can
+        // still leave the deferred rig unfunded when it reaches its site.
+        assert!(sim.economy.spend(OWNER, 0, Fixed::from_int(1200)));
         assert!(!build(&mut sim, immediate, "fx_station", None));
         assert_eq!(stock(&sim), Fixed::ZERO);
         assert!(sim.production.is_deploying(immediate));
