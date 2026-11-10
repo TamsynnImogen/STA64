@@ -16,9 +16,10 @@ See [the compatibility matrix](ANDROID_COMPATIBILITY.md) for implemented,
 partial and planned functionality, and [the roadmap](ANDROID_ROADMAP.md) for
 follow-up acceptance gates. Source portability is not an Android build result.
 
-## Proposed narrow platform seam
+## Narrow platform seam
 
-This proposal precedes the implementation in TOOL-10 / issue #250.
+The proposal was recorded before source changes in merged #251. TOOL-10 /
+issue #250 implements this boundary, with build evidence tracked below.
 
 1. Move the current client entry implementation into the same package's Rust
    library without changing the gameplay modules. Keep a small desktop binary
@@ -65,12 +66,19 @@ AGP's [compatibility table](https://developer.android.com/build/releases/agp-8-1
 supports that SDK/Gradle combination. The Android build will request 16 KiB ELF
 segment alignment and verify the resulting native artifact.
 
-Intended commands (scripts will be added and verified before being advertised
-as working):
+The checked-in scripts validate prerequisites before building. Install the
+Android SDK components and the Rust target/helper once:
 
 ```sh
+sdkmanager --install 'platforms;android-36' 'build-tools;36.0.0' 'ndk;29.0.14206865'
 rustup target add --toolchain 1.97.1 aarch64-linux-android
+renice -n 19 -p $$ >/dev/null
 cargo install cargo-ndk --version 4.1.2 --locked --jobs 2
+```
+
+Then, from the checkout root:
+
+```sh
 tools/android/doctor.sh
 tools/android/build.sh debug
 tools/android/build.sh release
@@ -80,6 +88,25 @@ Set `ANDROID_HOME` or `ANDROID_SDK_ROOT` to the SDK and `ANDROID_NDK_HOME` or
 `ANDROID_NDK_ROOT` to its installed NDK. Set `JAVA_HOME` to JDK 21. Scripts must
 validate these inputs and use low-priority, two-job Cargo builds. Release output
 requires the developer's own signing key; never commit keys or passwords.
+
+Debug output is `packaging/android/app/build/outputs/apk/debug/app-debug.apk`.
+Release output is `packaging/android/app/build/outputs/apk/release/app-release-unsigned.apk`.
+The build script requests a `cdylib` only for Android and checks ELF64/AArch64,
+activity exports, every packaged library's 16 KiB LOAD alignment and shared
+dependencies against NDK public API-26 libraries. It extracts the actual APK
+native payload and repeats these checks after Gradle stripping/packaging, then
+checks APK ABI/ZIP alignment and the debug signature. These are artifact checks, not device tests.
+Do not enable the desktop `dev` / dynamic-linking feature for Android.
+
+For a release, build the unsigned APK, use SDK `apksigner sign` with your own
+keystore and output path, then `apksigner verify --verbose` on the signed APK.
+Let the signer prompt for passwords. Keep the key and passwords outside the
+repository; the build and CI intentionally contain no signing credentials.
+Release optimization, signing, store submission and device acceptance are
+separate from the initial debug build.
+
+The manual `Android APK (manual)` workflow packages and uploads a debug APK.
+It is dispatched explicitly and adds no required Android job to desktop CI.
 
 The initial storage convention is app-private `content/Data` for an A2/FO-style
 install. Original GOG A1 roots instead use `Vfs::push_dir` because they do not
@@ -91,14 +118,35 @@ normalization, archives, signatures and explicit ODF/CFG/AIP overrides.
 
 - Repository audit: completed; compatibility conclusions remain source based.
 - SDK 36, build tools 36.0.0, NDK 29 and JDK 21: found on the preparation host.
-- Android Rust target and cargo-ndk: not installed at the audit baseline.
-- Android shared library, APK and device execution: not yet attempted.
-- Desktop changes: none at this documentation checkpoint.
+- Android Rust target and cargo-ndk 4.1.2: installed; doctor passes with the
+  installed SDK/NDK and a usable Temurin 21.0.11 JDK.
+- First full Android ARM64 shared library and debug APK: built successfully.
+  ELF64/AArch64/activity exports, 16 KiB LOAD alignment, dependency closure,
+  APK ABI/ZIP alignment and debug signature checks pass. A final rebuild after
+  lifecycle review fixes is pending; do not distribute this first checkpoint.
+- Device execution: not attempted.
+- Desktop regressions: all 291 client tests pass, including lifecycle tests;
+  strict `cargo clippy -p sta64 --all-targets -- -D warnings` and
+  `cargo check --workspace --all-targets` pass. The native desktop CLI help and
+  300-tick synthetic smoke pass (digest `31d49d4f2ab3de17`). The final
+  post-review APK rebuild remains in progress.
 
 After an attempt, record exact commands, target, tool versions, artifact hashes,
 desktop regression results and remaining blockers here. Shared-crate compilation,
 an ARM64 ELF, an APK and an actual device run are separate evidence levels.
 No device, input automation or GUI launch is part of this preparation workflow.
+
+## Renderer requirements
+
+The pinned Bevy render settings use wgpu 30, automatic available-backend
+selection, functionality priority and normal wgpu device limits. An Android
+API level or the presence of a Vulkan driver alone does not establish that
+these requirements or STA64's custom shaders/3D textures can run. No GLES or
+low-end-device fallback is claimed by this preparation. On each test device,
+record the selected backend, adapter/driver, features and limits, shader
+pipeline success, BC upload versus CPU texture fallback, and surface recreation.
+Choose graphics presets from that evidence. Do not change simulation rules to
+work around rendering limits.
 
 ## Runtime and release gates
 
