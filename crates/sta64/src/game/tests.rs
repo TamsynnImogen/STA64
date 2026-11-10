@@ -173,3 +173,63 @@ fn install_skirmish_starts_and_the_ai_acts() {
     assert!(!built.is_empty(), "the AI built something in five minutes");
     assert_eq!(rejected, 0, "the sim accepted every order of the AI");
 }
+
+/// With `STA64_TEST_INSTALL` (+ `STA64_TEST_MOD`, `STA64_TEST_MAP`): on a real skirmish
+/// map (default `boobytrap`) the player's construction ship, ordered to build a structure
+/// at sites 100 to 600 off, starts building when the player can pay (the order is refused
+/// up front when not, instead of the ship flying out and silently never building).
+#[test]
+fn install_skirmish_rig_starts_building() {
+    use sta_sim::command::{Command, CommandKind, Edit, Order};
+    let Ok(root) = std::env::var("STA64_TEST_INSTALL") else { return };
+    let m = std::env::var("STA64_TEST_MOD").unwrap_or_default();
+    let map_name = std::env::var("STA64_TEST_MAP").unwrap_or_else(|_| "boobytrap".into());
+    let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(m.as_str()).filter(|m| !m.is_empty())).unwrap();
+    let (index, _) = sta_content::OdfIndex::build(&vfs);
+    let (db, _) = ContentDb::load(&vfs, &index).unwrap();
+    let (races, _) = Races::load(&vfs, &index);
+    let db = Arc::new(db);
+    let bzn = sta_bzn::parse(&vfs.read(&format!("bzn/{map_name}.bzn")).expect("map exists").unwrap()).unwrap();
+    let cfg = SkirmishCfg { seat: 0, opponent: Opponent::Skirmish, race: Some("federation".into()), opponent_race: None };
+    let mut tried = 0;
+    for funded in [false, true] {
+        for (d, a) in [(150.0f32, 0.0f32), (300.0, 90.0), (300.0, 200.0), (600.0, 300.0), (100.0, 45.0)] {
+            let side = crate::map::build_sim(&bzn, &map_name, &db, &index, &vfs, Some(0), Some((&cfg, &races)));
+            side.skirmish.expect("a skirmish").unwrap_or_else(|e| panic!("{e}"));
+            let bounds = side.setup.map.bounds;
+            let mut sim = side.sim;
+            if funded {
+                let rich = |r: u8| Command { player: PlayerId::BENCH, seq: 1 + r as u32, kind: CommandKind::Edit(Edit::Cargo(PlayerId(0), r, sta_sim::Fixed::from_int(100_000))) };
+                sim.step(&[rich(0), rich(1), rich(2), rich(3)]);
+            }
+            let mut link = SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), PlayerId(0));
+            let view = link.curr().clone();
+            let rig = view.units.iter().find(|u| u.owner == PlayerId(0) && db.unit(u.def).is_some_and(|d| d.class.0 == "constructionrig")).expect("a rig");
+            let bd = db.unit(rig.def).unwrap();
+            let what = bd.build.list.iter().find(|r| db.unit(r.key).is_some_and(|d| d.movement.max_speed == sta_sim::Fixed::ZERO && d.build.ticks > 0)).expect("buildable").clone();
+            let r = a.to_radians();
+            let at = sta_sim::Vec3::from_f32([rig.pos.x.to_f32() + d * r.sin(), rig.pos.y.to_f32(), rig.pos.z.to_f32() + d * r.cos()]);
+            // Only sites the placement ghost would show clear: the same rule as the sim's.
+            let clear = sta_sim::production::site::check_site(&db, Some(&bounds), what.key, at, sta_sim::production::site::view_obstacles(&db, &view, Some(rig.id)));
+            if clear.is_err() {
+                println!("{} d{d} a{a}: site {clear:?}, skipped", what.odf);
+                continue;
+            }
+            tried += 1;
+            link.submit(CommandKind::Order(Order::Build { builder: rig.id, what: what.key, at: Some(at) }));
+            let (mut started, mut rejected) = (false, false);
+            for _ in 0..3000 {
+                for e in link.tick().unwrap() {
+                    started |= matches!(e, SimEvent::BuildStarted { builder, .. } if builder == rig.id);
+                    rejected |= matches!(e, SimEvent::Rejected { .. });
+                }
+                if started {
+                    break;
+                }
+            }
+            println!("{} d{d} a{a} funded {funded}: started {started} rejected {rejected}", what.odf);
+            assert_eq!((started, rejected), (funded, !funded), "{} {d} {a}", what.odf);
+        }
+    }
+    assert!(tried >= 4, "only {tried} clear sites tried");
+}

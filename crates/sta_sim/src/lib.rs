@@ -105,6 +105,9 @@ pub struct Sim {
     /// them. Fixed by the setup, so not in the digest.
     starts: Vec<StartPos>,
     regions: Vec<Region>,
+    /// The map's playable volume, for build sites; fixed by the setup, so
+    /// not in the digest. `None` for a sim made without a map.
+    bounds: Option<(Vec3, Vec3)>,
     /// Events since the last step (spawns between ticks), emitted with it.
     events: Vec<SimEvent>,
     /// Weapon state (SIM-04); in the digest once any exists.
@@ -133,6 +136,7 @@ impl Sim {
             content: None,
             starts: Vec::new(),
             regions: Vec::new(),
+            bounds: None,
             events: Vec::new(),
             weapons: Default::default(),
             movement: movement::Movement::default(),
@@ -238,7 +242,7 @@ impl Sim {
                 if !tech::build_allowed(&db, &self.units, &self.players, &self.ai_seats, *builder, *what) {
                     return false;
                 }
-                self.production.order_build(&db, &mut self.units, &mut self.economy, c.player, *builder, *what, *at)
+                self.production.order_build(&db, &mut self.units, &mut self.economy, c.player, *builder, *what, *at, self.bounds.as_ref())
             }
             Order::Attack { units, target } => {
                 let Some(db) = self.content.clone() else { return false };

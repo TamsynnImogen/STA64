@@ -638,7 +638,7 @@ pub fn fake_content() -> ContentDb {
         tree.push_str(&format!("{} 0\n", u.odf));
         b = b.unit(u);
     }
-    tree.push_str("fx_rig 0\nfx_dread 1 fx_station\n");
+    tree.push_str("fx_rig 0\nfx_fo_rig 0\nfx_dread 1 fx_station\n");
     let (tree, warnings) = sta_content::TechTree::parse("fake.tt", &tree);
     assert!(warnings.is_empty(), "{warnings:?}");
     for u in movers() {
@@ -666,6 +666,23 @@ fn movers() -> Vec<sta_content::UnitDef> {
         ("fx_fo_cruiser", 120.0, 120.0, 0.2, 0.145, 0.24, 1.0, 100.0, 400.0, 20.0, false, 70.0),
         ("fx_fo_battle", 72.0, 72.0, 0.2, 0.145, 0.24, 1.0, 100.0, 400.0, 20.0, false, 70.0),
     ];
+    // `fx_fo_rig`: the FO 4.0 construction ship `fconst` (impulse and combat
+    // speed 100, forwardAccel 0.45, turnOmega 0.13, turnAlpha 0.33, both at
+    // rest 1, tooCloseToTurn 50, pathLead 300, controlAngle 20, fcd 70).
+    let mut rig = UnitDef::new("fx_fo_rig", "constructionrig");
+    rig.race = "fx".into();
+    rig.model = "fx_cruiser".into();
+    rig.hull = Fixed::from_int(100);
+    rig.movement = MoveStats {
+        combat_speed: f(100.0),
+        turn_alpha_at_rest: f(1.0),
+        too_close_to_turn: f(50.0),
+        path_lead: f(300.0),
+        turn_control_angle: f(20.0),
+        turn_control_squared: false,
+        forward_control_distance: f(70.0),
+        ..MoveStats::from_f32(100.0, 0.45, 0.13, 0.33, 1.0)
+    };
     rows.iter()
         .map(|&(name, impulse, combat, accel, omega, alpha, rest, close, lead, angle, sq, fcd)| {
             let mut u = UnitDef::new(name, "craft");
@@ -684,5 +701,6 @@ fn movers() -> Vec<sta_content::UnitDef> {
             };
             u
         })
+        .chain(std::iter::once(rig))
         .collect()
 }

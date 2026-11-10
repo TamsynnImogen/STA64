@@ -703,6 +703,7 @@ fn rebuild(
                 st.map_fixed = true;
             }
         });
+        commands.insert_resource(crate::ui::hud::ghost::PlacementBounds(Some((lo, hi))));
         commands.insert_resource(crate::render::fog::FogBounds {
             min: Vec2::new(lo.x.to_f32(), lo.z.to_f32()),
             max: Vec2::new(hi.x.to_f32(), hi.z.to_f32()),

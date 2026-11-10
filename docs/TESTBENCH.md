@@ -252,7 +252,8 @@ to match run "<scenario>"`, `Expect mark "fire.start obj=shooter" by tick 90`,
   carrying real physics ODF values for the movement scenarios (SIM-15):
   `fx_a2_scout` and `fx_a2_battle` (stock `sscoutphys`, `sbattphys`),
   `fx_fo_escort`, `fx_fo_cruiser` and `fx_fo_battle` (FO 4.0
-  `smooth_physics_150`, `_100`, `_60`).
+  `smooth_physics_150`, `_100`, `_60`), and `fx_fo_rig`, a construction
+  ship with the FO 4.0 `fconst` values (`construction-fo`).
 - **Profile.** A scene's `Profile=` (`STA2Classic`, `FO4`, ...; or the
   `Scene:` override) runs the content under that profile, which picks the
   sim's rules, the movement model among them. The `move-*` scenarios use it.
