@@ -1,10 +1,12 @@
 //! Orders that move units (SIM-02): queued waypoints, formations and stop,
-//! on top of SIM-01's kinematics (`Unit::step` flies to one `target`).
+//! on top of [`kinematics`](crate::kinematics) (SIM-15), which flies a unit
+//! to one `target` under the profile's movement model.
 //!
 //! - A unit's `target` is its current leg. Further legs wait in its
 //!   [`Course`]; when a leg is reached the next one becomes the target.
-//!   A unit stops at each waypoint (the kinematics bring it to rest on
-//!   arrival), then sets off again.
+//!   Under the native model a unit stops at each waypoint, then sets off
+//!   again; under the smooth model (Armada II, FO) it moves on to the next
+//!   leg before reaching a waypoint and flies through.
 //! - `Move { queue: false }` replaces the course; `queue: true` appends (a
 //!   unit with nothing to do starts at once). `Stop` clears both.
 //! - `Formation` sets a unit's formation kind; the next `Move` of a group

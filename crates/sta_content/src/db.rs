@@ -327,6 +327,13 @@ fn hash(db: &ContentDb) -> u64 {
                 for f in [u.scale, m.max_speed, m.forward_accel, m.turn_omega, m.turn_alpha, m.turn_at_rest] {
                     h.fixed(f);
                 }
+                // Smooth-physics keys (SIM-15) only when set, so content
+                // without them hashes as before.
+                if m.has_smooth_keys() {
+                    for f in m.smooth_fields() {
+                        h.fixed(f);
+                    }
+                }
                 for f in [u.hull, u.shields.max, u.shields.recharge, u.crew, u.sensor] {
                     h.fixed(f);
                 }

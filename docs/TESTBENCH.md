@@ -248,7 +248,16 @@ to match run "<scenario>"`, `Expect mark "fire.start obj=shooter" by tick 90`,
   (fake: Galaxy -> `fx_cruiser`, Borg cube -> `fx_frigate`, class M planet ->
   `fx_moon`). Real content needs no aliases. The runner's content also has
   the cloakers of `sta_sim::specials::fixture` (`fx_cloaker`,
-  `fx_cloaker_frail`, `fx_cloaker_loud`; table in that file).
+  `fx_cloaker_frail`, `fx_cloaker_loud`; table in that file), and craft
+  carrying real physics ODF values for the movement scenarios (SIM-15):
+  `fx_a2_scout` and `fx_a2_battle` (stock `sscoutphys`, `sbattphys`),
+  `fx_fo_escort`, `fx_fo_cruiser` and `fx_fo_battle` (FO 4.0
+  `smooth_physics_150`, `_100`, `_60`).
+- **Profile.** A scene's `Profile=` (`STA2Classic`, `FO4`, ...; or the
+  `Scene:` override) runs the content under that profile, which picks the
+  sim's rules, the movement model among them. The `move-*` scenarios use it.
+- **Heading.** `Expect "OBJ" heading ...` reads degrees clockwise from +z
+  toward +x, as a scene's `Heading=` writes them.
 - **Specials.** `cloak <name> on|off|now` is `Order::Cloak` (`now` is `on`:
   the engage time is the cloaking device's `effectTimer`); `special <name>
   <weapon>` is `Order::Special` for the named special weapon of the unit

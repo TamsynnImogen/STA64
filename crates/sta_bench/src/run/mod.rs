@@ -570,6 +570,38 @@ fn run_extra(b: &mut Bench, text: &str, cap: Tick) -> Option<(Status, String)> {
     })
 }
 
+/// `cfg` with its content under `profile` (a scene's `Profile=`): the same
+/// definitions in the same order, so content keys agree, with the sim rules
+/// the profile picks (SIM-15: the movement model). `cfg` itself when the
+/// profile is already the content's.
+pub(crate) fn with_profile(cfg: &Arc<RunConfig>, profile: sta_content::Profile) -> Arc<RunConfig> {
+    let db = &cfg.content;
+    if db.profile() == profile {
+        return cfg.clone();
+    }
+    let mut b = ContentDb::builder()
+        .profile(profile)
+        .features(db.features().clone());
+    for u in db.units() {
+        b = b.unit(u.clone());
+    }
+    for w in db.weapons() {
+        b = b.weapon(w.clone());
+    }
+    if let Some(t) = db.tech_tree() {
+        b = b.tech_tree(t.clone());
+    }
+    let content = b.build().expect("a built content set rebuilds under another profile");
+    Arc::new(RunConfig {
+        content: Arc::new(content),
+        aliases: cfg.aliases.clone(),
+        maps: cfg.maps.clone(),
+        scene_dir: cfg.scene_dir.clone(),
+        scenario_dir: cfg.scenario_dir.clone(),
+        data_dir: cfg.data_dir.clone(),
+    })
+}
+
 /// `fake::db()` plus a construction rig (`fx_rig`), the cloakers of
 /// `sta_sim::specials::fixture` and with `pay_on_queue` on:
 /// what the construction scenarios build with. The rig deploys any of the
@@ -609,5 +641,48 @@ pub fn fake_content() -> ContentDb {
     tree.push_str("fx_rig 0\nfx_dread 1 fx_station\n");
     let (tree, warnings) = sta_content::TechTree::parse("fake.tt", &tree);
     assert!(warnings.is_empty(), "{warnings:?}");
+    for u in movers() {
+        b = b.unit(u);
+    }
     b.unit(dread).tech_tree(tree).build().expect("fake content plus a rig is consistent")
+}
+
+/// Craft with real physics ODF values for the `move-*` scenarios (SIM-15):
+/// stock Armada II `sscoutphys.odf` (through `sdestphys.odf`) and
+/// `sbattphys.odf`, and Fleet Operations 4.0 `smooth_physics_150`, `_100`
+/// and `_60` (fast escort, Galaxy class, battleship). Numbers only; what
+/// they mean is the movement model's business.
+fn movers() -> Vec<sta_content::UnitDef> {
+    use sta_content::{MoveStats, UnitDef};
+    let f = Fixed::from_f64;
+    // (name, impulse, combat, forwardAccel, turnOmega, turnAlpha,
+    //  omega/alpha at rest, tooCloseToTurn, pathLead, controlAngle,
+    //  squared, forwardControlDistance)
+    type Row = (&'static str, f64, f64, f64, f64, f64, f64, f64, f64, f64, bool, f64);
+    let rows: [Row; 5] = [
+        ("fx_a2_scout", 160.0, 80.0, 1.0, 1.0, 1.0, 0.2, 40.0, 150.0, 20.0, false, 70.0),
+        ("fx_a2_battle", 80.0, 40.0, 3.0, 1.0, 1.0, 0.0, 50.0, 150.0, 30.0, false, 100.0),
+        ("fx_fo_escort", 180.0, 180.0, 0.2, 0.145, 0.24, 1.0, 100.0, 400.0, 20.0, false, 70.0),
+        ("fx_fo_cruiser", 120.0, 120.0, 0.2, 0.145, 0.24, 1.0, 100.0, 400.0, 20.0, false, 70.0),
+        ("fx_fo_battle", 72.0, 72.0, 0.2, 0.145, 0.24, 1.0, 100.0, 400.0, 20.0, false, 70.0),
+    ];
+    rows.iter()
+        .map(|&(name, impulse, combat, accel, omega, alpha, rest, close, lead, angle, sq, fcd)| {
+            let mut u = UnitDef::new(name, "craft");
+            u.race = "fx".into();
+            u.model = "fx_cruiser".into();
+            u.hull = Fixed::from_int(1000);
+            u.movement = MoveStats {
+                combat_speed: f(combat),
+                turn_alpha_at_rest: f(rest),
+                too_close_to_turn: f(close),
+                path_lead: f(lead),
+                turn_control_angle: f(angle),
+                turn_control_squared: sq,
+                forward_control_distance: f(fcd),
+                ..MoveStats::from_f32(impulse as f32, accel as f32, omega as f32, alpha as f32, rest as f32)
+            };
+            u
+        })
+        .collect()
 }

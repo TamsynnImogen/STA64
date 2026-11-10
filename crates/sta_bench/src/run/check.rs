@@ -26,7 +26,7 @@
 //! Times are ticks (`200`) or seconds (`3.2s`). Numbers compare as the sim's
 //! fixed point turned into `f64`; `is V` without `within` allows 1e-6.
 
-use sta_core::{PlayerId, TICK_HZ, Tick};
+use sta_core::{Fixed, PlayerId, TICK_HZ, Tick};
 use sta_sim::view::UnitFlags;
 
 use super::bench::{Bench, owner_of};
@@ -72,6 +72,8 @@ pub enum Field {
     Shield(usize),
     ShieldMax,
     Speed,
+    /// Degrees clockwise from +z toward +x, `[0, 360)` (a scene's `Heading=`).
+    Heading,
     X,
     Y,
     Z,
@@ -315,6 +317,7 @@ fn field(w: &str) -> Option<Field> {
         "shield.starboard" => Field::Shield(3),
         "shield.max" => Field::ShieldMax,
         "speed" => Field::Speed,
+        "heading" => Field::Heading,
         "x" => Field::X,
         "y" => Field::Y,
         "z" => Field::Z,
@@ -512,6 +515,13 @@ fn unit_view<'a>(
         .ok_or_else(|| format!("`{obj}` does not exist at tick {}", view.tick))
 }
 
+/// A heading as a scene writes it: degrees clockwise from +z toward +x,
+/// in `[0, 360)`. Read-out only, so platform trig is fine here.
+fn heading_degrees(h: (Fixed, Fixed)) -> f64 {
+    let d = to_f64(h.0).atan2(to_f64(h.1)).to_degrees();
+    if d < 0.0 { d + 360.0 } else { d }
+}
+
 fn dist(a: [f64; 3], p: [f64; 3]) -> f64 {
     ((a[0] - p[0]).powi(2) + (a[1] - p[1]).powi(2) + (a[2] - p[2]).powi(2)).sqrt()
 }
@@ -526,16 +536,17 @@ pub fn eval(b: &Bench, p: &Pred) -> Result<String, String> {
             at,
         } => {
             let (u, tick) = unit_view(b, obj, *at)?;
-            let v = to_f64(match field {
-                Field::Hull => u.hull[0],
-                Field::HullMax => u.hull[1],
-                Field::Shield(i) => u.shields[*i][0],
-                Field::ShieldMax => u.shields[0][1],
-                Field::Speed => u.speed,
-                Field::X => u.pos.x,
-                Field::Y => u.pos.y,
-                Field::Z => u.pos.z,
-            });
+            let v = match field {
+                Field::Hull => to_f64(u.hull[0]),
+                Field::HullMax => to_f64(u.hull[1]),
+                Field::Shield(i) => to_f64(u.shields[*i][0]),
+                Field::ShieldMax => to_f64(u.shields[0][1]),
+                Field::Speed => to_f64(u.speed),
+                Field::Heading => heading_degrees(u.heading),
+                Field::X => to_f64(u.pos.x),
+                Field::Y => to_f64(u.pos.y),
+                Field::Z => to_f64(u.pos.z),
+            };
             let msg = format!("`{obj}` {field:?} = {v} at tick {tick} (want {cmp:?})");
             if cmp.holds(v) { Ok(msg) } else { Err(msg) }
         }

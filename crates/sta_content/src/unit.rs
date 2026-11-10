@@ -35,13 +35,42 @@ pub fn movement(phys: Option<&Odf>, file: &str, warnings: &mut Vec<Warning>) -> 
     if speed <= 0.0 {
         return MoveStats::STATIC;
     }
-    MoveStats::from_f32(
+    let m = MoveStats::from_f32(
         speed as f32,
         r.num("forwardAccel").unwrap_or(1.0) as f32,
         r.num("turnOmega").unwrap_or(1.0) as f32,
         r.num("turnAlpha").unwrap_or(1.0) as f32,
         r.num("turnOmegaFractionAtRest").unwrap_or(0.2) as f32,
-    )
+    );
+    with_smooth_keys(m, |k| r.num(k))
+}
+
+/// `m` with the smooth-physics keys (SIM-15) a physics ODF sets; keys it
+/// leaves out keep `m`'s values. `num` reads one key as a number.
+pub(crate) fn with_smooth_keys(mut m: MoveStats, mut num: impl FnMut(&str) -> Option<f64>) -> MoveStats {
+    let mut get = |key: &str, at_least: f64| num(key).map(|v| Fixed::from_f64(v.max(at_least)));
+    if let Some(v) = get("combatSpeed", 0.0).filter(|v| *v > Fixed::ZERO) {
+        m.combat_speed = v;
+    }
+    if let Some(v) = get("turnAlphaFractionAtRest", 0.0) {
+        m.turn_alpha_at_rest = v.min(Fixed::ONE);
+    }
+    if let Some(v) = get("tooCloseToTurn", 0.0) {
+        m.too_close_to_turn = v;
+    }
+    if let Some(v) = get("pathLeadDistance", 0.0) {
+        m.path_lead = v;
+    }
+    if let Some(v) = get("turnControlAngle", 0.0) {
+        m.turn_control_angle = v;
+    }
+    if let Some(v) = get("turnControlSquared", 0.0) {
+        m.turn_control_squared = v != Fixed::ZERO;
+    }
+    if let Some(v) = get("forwardControlDistance", 0.0) {
+        m.forward_control_distance = v;
+    }
+    m
 }
 
 /// Resource id for a node's `resource` text.
@@ -129,4 +158,48 @@ pub fn unit_def(name: &str, odf: &Odf, phys: Option<&Odf>, warnings: &mut Vec<Wa
 
     d.movement = movement(phys, &file, warnings);
     d
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn odf(text: &str) -> Odf {
+        let text = text.to_owned();
+        sta_odf::resolve("p.odf", &mut |_| Some(text.clone())).unwrap()
+    }
+
+    /// The smooth-physics keys of a stock-shaped physics ODF (values and the
+    /// trailing `;` as stock `sbattphys.odf` writes them).
+    #[test]
+    fn smooth_keys_are_read() {
+        let ph = odf(
+            "physics = \"smooth\"\ncombatSpeed = 40\nimpulseSpeed = 80\ntooCloseToTurn = 50;\npathLeadDistance = 150;\n\
+             forwardAccel = 3;\nturnOmega = 1;\nturnAlpha = 1;\nturnOmegaFractionAtRest = .0;\nturnAlphaFractionAtRest = .0;\n\
+             turnControlSquared = 1;\nturnControlAngle = 30;\nforwardControlDistance = 100;\n",
+        );
+        let mut w = Vec::new();
+        let m = movement(Some(&ph), "p.odf", &mut w);
+        assert!(w.is_empty(), "{w:?}");
+        assert_eq!(m.combat_speed, Fixed::from_int(40));
+        assert_eq!(m.max_speed, Fixed::from_int(80));
+        assert_eq!(m.turn_alpha_at_rest, Fixed::ZERO);
+        assert_eq!(m.too_close_to_turn, Fixed::from_int(50));
+        assert_eq!(m.path_lead, Fixed::from_int(150));
+        assert_eq!(m.turn_control_angle, Fixed::from_int(30));
+        assert!(m.turn_control_squared);
+        assert_eq!(m.forward_control_distance, Fixed::from_int(100));
+        assert!(m.has_smooth_keys());
+    }
+
+    /// Without the keys, the defaults (and no change to hashes).
+    #[test]
+    fn smooth_keys_default() {
+        let mut w = Vec::new();
+        let m = movement(Some(&odf("impulseSpeed = 120\nturnOmegaFractionAtRest = 1\n")), "p.odf", &mut w);
+        assert_eq!(m.combat_speed, m.max_speed);
+        assert_eq!(m.turn_alpha_at_rest, Fixed::ONE);
+        assert!(!m.has_smooth_keys());
+        assert!(!MoveStats::default().has_smooth_keys());
+    }
 }

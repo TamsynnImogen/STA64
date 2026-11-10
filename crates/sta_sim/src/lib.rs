@@ -26,6 +26,7 @@ pub mod command;
 pub mod economy;
 pub mod event;
 pub mod fake;
+pub mod kinematics;
 pub mod movement;
 pub mod present;
 pub mod production;
@@ -59,6 +60,8 @@ use std::sync::Arc;
 use sta_content::{ContentDb, Region, StartPos};
 use view::{PlayerView, Relation};
 use world::{Entities, Entity, EntityKind, Fnv, Table};
+
+pub(crate) use kinematics::{MIN_ALIGN, arrive_distance};
 
 /// The entity, under the name movement and `sta64::units` know it by.
 pub type Unit = Entity;
@@ -116,108 +119,6 @@ pub struct Sim {
     victory: victory::Victory,
     /// Special energy and cloaks (SIM-14); in the digest once any exists.
     specials: specials::Specials,
-}
-
-fn dt() -> Fixed {
-    Fixed::ONE / Fixed::from_int(TICK_HZ as i32)
-}
-
-fn clamp(v: Fixed, lo: Fixed, hi: Fixed) -> Fixed {
-    if v < lo {
-        lo
-    } else if v > hi {
-        hi
-    } else {
-        v
-    }
-}
-
-/// Move `v` toward `goal` by at most `step`.
-fn approach(v: Fixed, goal: Fixed, step: Fixed) -> Fixed {
-    if v < goal { if goal - v < step { goal } else { v + step } } else if v - goal < step { goal } else { v - step }
-}
-
-/// Rotate a unit vector by a small angle `a` (radians; |a| well under 1):
-/// sin and cos from their Taylor series, then renormalised.
-fn rotate(h: (Fixed, Fixed), a: Fixed) -> (Fixed, Fixed) {
-    let a2 = a * a;
-    let s = a - a * a2 / Fixed::from_int(6);
-    let c = Fixed::ONE - a2 / Fixed::from_int(2) + a2 * a2 / Fixed::from_int(24);
-    let x = h.0 * c - h.1 * s;
-    let z = h.0 * s + h.1 * c;
-    let len = (x * x + z * z).sqrt();
-    if len == Fixed::ZERO { h } else { (x / len, z / len) }
-}
-
-/// Smallest share of cruise speed a unit keeps while turning toward a target
-/// it is not facing.
-pub(crate) const MIN_ALIGN: f64 = 0.1;
-
-/// Distance at which a unit counts as arrived.
-fn arrive_distance() -> Fixed {
-    Fixed::from_int(4)
-}
-
-impl Unit {
-    fn step(&mut self) {
-        let dt = dt();
-        let st = self.stats;
-        let accel = st.forward_accel * st.max_speed;
-        let Some(target) = self.target else {
-            self.speed = approach(self.speed, Fixed::ZERO, accel * dt);
-            self.omega = approach(self.omega, Fixed::ZERO, st.turn_alpha * dt);
-            self.advance(dt);
-            return;
-        };
-        let (dx, dz) = (target.x - self.pos.x, target.z - self.pos.z);
-        let dist = (dx * dx + dz * dz).sqrt();
-        if dist <= arrive_distance().max(self.speed * dt) {
-            self.pos = target;
-            self.target = None;
-            self.speed = Fixed::ZERO;
-            self.omega = Fixed::ZERO;
-            return;
-        }
-        let (tx, tz) = (dx / dist, dz / dist);
-        // cross > 0: the target lies toward +omega; dot: how aligned we are.
-        let cross = self.heading.0 * tz - self.heading.1 * tx;
-        let dot = self.heading.0 * tx + self.heading.1 * tz;
-
-        let frac = if st.max_speed > Fixed::ZERO { clamp(self.speed / st.max_speed, Fixed::ZERO, Fixed::ONE) } else { Fixed::ZERO };
-        let omega_max = st.turn_omega * (st.turn_at_rest + (Fixed::ONE - st.turn_at_rest) * frac);
-        let sign = if cross < Fixed::ZERO { -Fixed::ONE } else { Fixed::ONE };
-        // Remaining turn angle from the sine and the side: asin(c) ~ c + c^3/6
-        // ahead, pi minus that behind.
-        let c = cross.abs();
-        let ahead = c + c * c * c / Fixed::from_int(6);
-        let angle = if dot >= Fixed::ZERO { ahead } else { Fixed::from_f64(std::f64::consts::PI) - ahead };
-        // The fastest turn that can still stop on the heading with the turn
-        // acceleration available: omega = sqrt(2 alpha angle). Asking for more
-        // overshoots and weaves; this settles without oscillating.
-        // Near the heading, also no more than closes the angle this tick, so the
-        // discrete steps do not overshoot and chatter across the course.
-        let want_omega = sign * (Fixed::from_int(2) * st.turn_alpha * angle).sqrt().min(omega_max).min(angle / dt);
-        self.omega = approach(self.omega, want_omega, st.turn_alpha * dt);
-
-        // Speed: slower when facing away, and able to stop at the target.
-        let align = clamp(dot, Fixed::from_f64(MIN_ALIGN), Fixed::ONE);
-        let brake = (Fixed::from_int(2) * accel * dist).sqrt();
-        let want_speed = (st.max_speed * align).min(brake);
-        self.speed = approach(self.speed, want_speed, accel * dt);
-
-        // Height: straight toward the target's, no faster than the cruise speed.
-        let dy = target.y - self.pos.y;
-        self.pos.y = self.pos.y + clamp(dy, -st.max_speed * dt, st.max_speed * dt);
-        self.advance(dt);
-    }
-
-    fn advance(&mut self, dt: Fixed) {
-        if self.omega != Fixed::ZERO {
-            self.heading = rotate(self.heading, self.omega * dt);
-        }
-        self.pos.x = self.pos.x + self.heading.0 * self.speed * dt;
-        self.pos.z = self.pos.z + self.heading.1 * self.speed * dt;
-    }
 }
 
 impl Sim {
@@ -360,9 +261,7 @@ impl Sim {
 
     /// Move every unit one tick and close the tick with its view.
     fn advance(&mut self) -> TickOutput {
-        for u in self.units.iter_mut().filter(|u| u.mobile()) {
-            u.step();
-        }
+        self.step_kinematics();
         if let Some(db) = self.content.clone() {
             combat::damage::recharge(&mut self.units, &db);
             self.specials.step(&mut self.units, &db, &mut self.events);
@@ -618,7 +517,7 @@ mod tests {
     #[test]
     #[allow(clippy::disallowed_methods)] // platform trig as the reference only
     fn small_rotation_matches_trig() {
-        let h = rotate((Fixed::ONE, Fixed::ZERO), Fixed::from_f64(0.05));
+        let h = kinematics::rotate((Fixed::ONE, Fixed::ZERO), Fixed::from_f64(0.05));
         assert!((h.0.to_f32() - 0.05f32.cos()).abs() < 1e-6);
         assert!((h.1.to_f32() - 0.05f32.sin()).abs() < 1e-6);
     }

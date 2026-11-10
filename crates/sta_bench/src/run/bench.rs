@@ -95,6 +95,14 @@ impl Bench {
     /// then the scene file's objects on top.
     pub fn build(cfg: Arc<RunConfig>, scene: &SceneFile) -> Result<Bench, String> {
         let s = &scene.scene;
+        let cfg = match &s.profile {
+            Some(name) => {
+                let p = sta_content::Profile::from_name(name)
+                    .ok_or_else(|| format!("Profile={name}: not a profile name"))?;
+                super::with_profile(&cfg, p)
+            }
+            None => cfg,
+        };
         let content = cfg.content.clone();
         let mut replay_feed = None;
         let mut rec_setup = None;
