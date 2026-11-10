@@ -151,6 +151,7 @@ impl Placed {
 
     /// Entities no BZN object took (`from_setup` made them from something the
     /// renderer does not draw as a ship).
+    #[cfg(test)]
     fn rest(self) -> Vec<EntityId> {
         self.rest_where(|_| true)
     }
