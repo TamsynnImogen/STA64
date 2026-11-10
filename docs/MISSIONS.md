@@ -143,6 +143,18 @@ polling selects the batch's callbacks before invoking them: cancellation from
 one callback does not recall another callback already selected in that batch.
 These are STA64 bridge rules; native MMM timing and save/resume remain unverified.
 
+## Static entity cleanup
+
+`Entity.remove(entity)` is the dot-call counterpart of `entity:remove()`, using
+the same typed removal queue and SCRIPT Kill command. The static form requires
+exactly one Entity userdata; invalid arity or types error before queuing. Reads
+retain their current snapshot until the host steps the simulation and supplies
+the next view. A queued Entity.add handle waits for its actual spawn receipt
+before removal can dispatch. Failed spawn references follow the existing
+discard/diagnostic path, and repeated kills of stale resolved IDs retain the
+simulation's rejection behavior. Numeric IDs and batch/table removal are not
+overloads of this function. Native timing and idempotence remain unverified.
+
 ## Converted Move spelling
 
 `Order.Move` and `GameObject.Order.Move` expose the existing `Order.Go` value

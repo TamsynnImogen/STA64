@@ -173,6 +173,17 @@ beam. It verifies a real receipt and accepted deferred Attack targeting the
 Enterprise. This is not a naturally timed Borg wave, native ship data,
 complete original-map play or client rendering proof.
 
+## Static entity cleanup
+
+`Entity.remove(entity)` requires exactly one Entity userdata and shares the
+existing `entity:remove()` implementation. It queues a real SCRIPT Kill rather
+than changing the current world view immediately. Pending handles wait for the
+actual spawn receipt; failed requests discard the queued action. Stale resolved
+handles retain the existing kill/rejection behavior, without an idempotence
+guarantee. Numbers, batches and other userdata are not accepted by this static
+entry point. This supplies the converted ports' cleanup call shape, without
+claiming native timing or adding an A2 DLL-signature binding.
+
 ## Runtime inspection ownership
 
 The runtime's inspection methods return only sealed owned scalars, strings,

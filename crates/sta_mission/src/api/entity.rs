@@ -21,6 +21,10 @@ pub(crate) struct Entity {
 }
 
 impl Entity {
+    fn remove(&self) {
+        spawn::queue_action(&mut self.ctx.borrow_mut(), self.key.clone(), EntityAction::Remove);
+    }
+
     fn with<R>(&self, f: impl FnOnce(&Ctx, Option<&UnitView>) -> R) -> R {
         let c = self.ctx.borrow();
         let u = self.key.id().and_then(|id| c.alive(id)).or_else(|| self.key.hint());
@@ -154,7 +158,7 @@ impl UserData for Entity {
             Ok(c.view.visible_to(p).iter().any(|u| u.id == id))
         });
         m.add_method("remove", |_, e, _: MultiValue| {
-            spawn::queue_action(&mut e.ctx.borrow_mut(), e.key.clone(), EntityAction::Remove);
+            e.remove();
             Ok(())
         });
         m.add_method("cloak", |_, e, _: MultiValue| {
@@ -330,6 +334,18 @@ fn finder_methods(lua: &Lua, ctx: &Shared, predicate: Option<mlua::Function>) ->
 
 pub(crate) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
     let entities: mlua::Table = lua.globals().raw_get("Entity")?;
+    entities.raw_set("remove", lua.create_function(|_, args: MultiValue| {
+        if args.len() != 1 {
+            return Err(mlua::Error::runtime("Entity.remove expects one Entity handle"));
+        }
+        let Value::UserData(value) = &args[0] else {
+            return Err(mlua::Error::runtime("Entity.remove requires an Entity handle"));
+        };
+        let entity = value.borrow::<Entity>()
+            .map_err(|_| mlua::Error::runtime("Entity.remove requires an Entity handle"))?;
+        entity.remove();
+        Ok(())
+    })?)?;
     let c = ctx.clone();
     entities.raw_set("add", lua.create_function(move |lua, args: MultiValue| {
         if args.len() != 3 {
