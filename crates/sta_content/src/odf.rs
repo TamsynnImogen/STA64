@@ -234,6 +234,29 @@ fn queue_instant_deduct(file: &str, odf: &Odf, warnings: &mut Vec<Warning>) -> O
     }
 }
 
+/// The station flag uses a signed decimal prefix: A1 scans an integer,
+/// A2/FO try Boolean words before their integer conversion. Out-of-range
+/// and no-prefix native edge behavior is outside this bounded reader.
+fn station_flag(file: &str, odf: &Odf, profile: Profile, warnings: &mut Vec<Warning>) -> bool {
+    let Some(raw) = odf.str("is_starbase") else { return false };
+    let value = raw.trim();
+    let words = profile != Profile::Sta1Classic;
+    if words && value.eq_ignore_ascii_case("true") {
+        return true;
+    }
+    if words && value.eq_ignore_ascii_case("false") {
+        return false;
+    }
+    let sign = usize::from(value.starts_with('+') || value.starts_with('-'));
+    let digits = value.as_bytes()[sign..].iter().take_while(|b| b.is_ascii_digit()).count();
+    if digits > 0 && let Ok(n) = value[..sign + digits].parse::<i32>() {
+        return n != 0;
+    }
+    let expected = if words { "a Boolean or representable signed 32-bit decimal prefix" } else { "a representable signed 32-bit decimal prefix" };
+    warnings.push(Warning::new(file, format!("is_starbase = {raw} is not {expected}; using false")));
+    false
+}
+
 /// Build the database from ODFs found by `stems`. [`load`] is this over an
 /// install; tests give an in-memory loader.
 pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], loader: &mut Loader<'_>) -> Result<(ContentDb, Vec<Warning>)> {
@@ -319,6 +342,7 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
         }
         let file = format!("{s}.odf");
         def.build.queue_limit = build_queue_limit(&file, odf, &mut warnings);
+        def.is_starbase = station_flag(&file, odf, profile, &mut warnings);
         let mut native = Overrides::default();
         if matches!(profile, Profile::Fo4 | Profile::Native)
             && let Some(on) = queue_instant_deduct(&file, odf, &mut warnings)
