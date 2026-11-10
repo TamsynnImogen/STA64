@@ -5,6 +5,8 @@ use mlua::{Lua, MultiValue, Table, Value};
 use super::objects::{handle, integer};
 use crate::api::{Shared, dist, pos_f64};
 
+mod station;
+
 fn odf_stem(name: &str) -> &str {
     match name.get(name.len().saturating_sub(4)..) {
         Some(suffix) if suffix.eq_ignore_ascii_case(".odf") => &name[..name.len() - 4],
@@ -24,6 +26,7 @@ fn health(lua: &Lua, ctx: &Shared, name: &'static str, max: bool) -> mlua::Resul
 }
 
 pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()> {
+    table.set("IsStation", station::function(lua, ctx)?)?;
     table.set("GetCurrentHealth", health(lua, ctx, "GetCurrentHealth", false)?)?;
     table.set("GetMaxHealth", health(lua, ctx, "GetMaxHealth", true)?)?;
     let c = ctx.clone();
