@@ -176,8 +176,8 @@ fn install_skirmish_starts_and_the_ai_acts() {
 
 /// With `STA64_TEST_INSTALL` (+ `STA64_TEST_MOD`, `STA64_TEST_MAP`): on a real skirmish
 /// map (default `boobytrap`) the player's construction ship, ordered to build a structure
-/// at sites 100 to 600 off, starts building when the player can pay (the order is refused
-/// up front when not, instead of the ship flying out and silently never building).
+/// at sites 100 to 600 off, starts building when the player can pay (the HUD refuses the click when not; the
+/// sim, pay on deploy, accepts it and the deploy waits on funds).
 #[test]
 fn install_skirmish_rig_starts_building() {
     use sta_sim::command::{Command, CommandKind, Edit, Order};
@@ -228,7 +228,7 @@ fn install_skirmish_rig_starts_building() {
                 }
             }
             println!("{} d{d} a{a} funded {funded}: started {started} rejected {rejected}", what.odf);
-            assert_eq!((started, rejected), (funded, !funded), "{} {d} {a}", what.odf);
+            assert_eq!((started, rejected), (funded, false), "{} {d} {a}", what.odf);
         }
     }
     assert!(tried >= 4, "only {tried} clear sites tried");
