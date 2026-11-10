@@ -163,6 +163,32 @@ class MissionDllInventoryTests(unittest.TestCase):
         ]:
             self.assertEqual(inventory.a2_exact_for(signature, self.repo), "", signature)
 
+    def test_race_coverage_keeps_pointer_qualifiers_distinct(self):
+        self.register_a2(
+            "",
+            registration=(
+                'queries::install(lua, ctx, &a2)?; '
+                'lua.globals().raw_set("A2", a2)?;'
+            ),
+        )
+        (self.a2 / "queries.rs").write_text(
+            'table.set("IsRace", fn);\n', encoding="utf-8"
+        )
+        self.assertEqual(
+            inventory.a2_exact_for(
+                "public: bool __thiscall ScriptInterfaceImp::IsRace(int, char * const)",
+                self.repo,
+            ),
+            "A2.IsRace",
+        )
+        for signature in [
+            "bool IsRace(int, char*)",
+            "bool IsRace(int, char const*)",
+            "int IsRace(int, char*const)",
+            "bool IsRace(int, char*const, int)",
+        ]:
+            self.assertEqual(inventory.a2_exact_for(signature, self.repo), "", signature)
+
     def test_test_files_do_not_count_as_a2_bindings(self):
         self.register_a2("", registration='objects::install(lua, ctx, &a2)?; lua.globals().raw_set("A2", a2)?;')
         (self.a2 / "tests.rs").write_text('table.set("IsAlive", fn);', encoding="utf-8")

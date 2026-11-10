@@ -257,6 +257,7 @@ A2_SIGNATURES = {
     "float GetMaxHealth(int)": "A2.GetMaxHealth",
     "bool IsOdf(int, char*)": "A2.IsOdf",
     "float GetDistance(int&, int&)": "A2.GetDistance",
+    "bool IsRace(int, char*const)": "A2.IsRace",
 }
 
 

@@ -216,6 +216,15 @@ queues no commands and sees a changed position only after the host supplies
 the next view. Path overloads, entity bounds/surface corrections, and native
 dimensional or invalid-handle defaults are unimplemented or unverified.
 
+`A2.IsRace(id, race)` reads the live unit definition's race, as `Entity.race`
+does, and compares it literally without ASCII case sensitivity. It does not
+strip `.odf`, accept paths or resolve race aliases. The exact call shape is
+`bool IsRace(int, char*const)`: a strict unsigned integral ID and a UTF-8
+string. Missing/dying objects return false; live objects without a definition
+raise an error. The query reads only the current snapshot and content, queues
+no commands, and does not infer race from the current owner's faction. Native
+string-comparison and invalid-object defaults remain unverified.
+
 ## Conversion report
 
 `sta64 --mission-report` lists every map whose mission resolves to

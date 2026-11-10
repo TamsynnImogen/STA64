@@ -100,6 +100,21 @@ fn health_tracks_fresh_snapshot_and_is_odf_matches_only_the_definition_name() {
 }
 
 #[test]
+fn is_race_compares_only_the_live_definition_race_literal_case_insensitively() {
+    let (sim, db, id) = scene();
+    let mut rt = runtime(&sim, Some(db));
+    let result: (bool, bool, bool, bool) = rt
+        .eval(&format!(
+            "return A2.IsRace({},'fx'), A2.IsRace({},'FX'), A2.IsRace({},'fx.odf'), A2.IsRace({},'other/fx')",
+            id.0, id.0, id.0, id.0
+        ))
+        .unwrap();
+    assert_eq!(result, (true, true, false, false));
+    assert!(rt.take_commands().is_empty());
+    assert!(rt.unsupported().is_empty());
+}
+
+#[test]
 fn malformed_inputs_are_rejected_without_commands() {
     let (sim, db, id) = scene();
     let mut rt = runtime(&sim, Some(db));
@@ -118,11 +133,22 @@ fn malformed_inputs_are_rejected_without_commands() {
         "A2.IsOdf(1.5,'fx_cruiser')",
         "A2.IsOdf(1,123)",
         "A2.IsOdf(1,nil)",
+        "A2.IsRace()",
+        "A2.IsRace(1)",
+        "A2.IsRace(1,'fx',true)",
+        "A2.IsRace(-1,'fx')",
+        "A2.IsRace(1.5,'fx')",
+        "A2.IsRace('1','fx')",
+        "A2.IsRace(4294967296,'fx')",
+        "A2.IsRace(1,123)",
+        "A2.IsRace(1,nil)",
+        "A2.IsRace(1,string.char(255))",
     ] {
         assert!(rt.eval::<()>(script).is_err(), "{script}");
         assert!(rt.take_commands().is_empty(), "{script} queued a command");
     }
     assert!(!rt.eval::<bool>("return A2.IsOdf(99999,'fx_cruiser')").unwrap());
+    assert!(!rt.eval::<bool>("return A2.IsRace(99999,'fx')").unwrap());
     assert!(rt.unsupported().is_empty());
 
     let mut dying = (*sim.view()).clone();
@@ -142,6 +168,7 @@ fn malformed_inputs_are_rejected_without_commands() {
         !rt.eval::<bool>(&format!("return A2.IsOdf({},'fx_cruiser')", id.0))
             .unwrap()
     );
+    assert!(!rt.eval::<bool>(&format!("return A2.IsRace({},'fx')", id.0)).unwrap());
     assert!(rt.take_commands().is_empty() && rt.unsupported().is_empty());
 }
 
@@ -166,6 +193,7 @@ fn live_unit_without_content_has_health_but_is_odf_errors() {
         rt.eval::<bool>(&format!("return A2.IsOdf({},'fx_cruiser')", id.0))
             .is_err()
     );
+    assert!(rt.eval::<bool>(&format!("return A2.IsRace({},'fx')", id.0)).is_err());
     assert!(rt.take_commands().is_empty() && rt.unsupported().is_empty());
 }
 

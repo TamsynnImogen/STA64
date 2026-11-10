@@ -65,6 +65,26 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
             Ok(odf_stem(&c.odf_name(unit)).eq_ignore_ascii_case(odf_stem(&odf)))
         })?,
     )?;
+    let c = ctx.clone();
+    table.set(
+        "IsRace",
+        lua.create_function(move |_, args: MultiValue| {
+            let id = handle("IsRace", &args, 2)?;
+            let Value::String(race) = &args[1] else {
+                return Err(mlua::Error::runtime("A2.IsRace requires a race string"));
+            };
+            let race = race.to_str()?;
+            let c = c.borrow();
+            let Some(unit) = c.alive(id) else { return Ok(false) };
+            let Some(def) = c.def(unit) else {
+                return Err(mlua::Error::runtime(format!(
+                    "A2.IsRace: object {} has no unit definition",
+                    id.0
+                )));
+            };
+            Ok(def.race.eq_ignore_ascii_case(race.as_ref()))
+        })?,
+    )?;
     Ok(())
 }
 

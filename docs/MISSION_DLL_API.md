@@ -15,12 +15,12 @@ user's own executables each time, and none are recorded here.
 | engine API size | 371 `ScriptInterface` methods | (imports only) |
 | distinct calls used | 138 | 213 |
 | call sites | 11708 | — |
-| A2 DLL-shaped callable | 13 | — |
-| missing A2 callable signatures | 119 | — |
+| A2 DLL-shaped callable | 14 | — |
+| missing A2 callable signatures | 118 | — |
 | MMM job-equivalent, not A2-shaped | 0 | — |
 | bound in STA64's Lua today | — | 6 |
 | in MMM's API, not yet bound | 24 | 27 |
-| no Lua equivalent (STA64 extension needed) | 95 | 144 |
+| no Lua equivalent (STA64 extension needed) | 94 | 144 |
 | script-state plumbing (n/a in Lua) | 6 | 36 |
 
 - **bound**: an existing `sta_mission` binding does the same job.
@@ -142,7 +142,7 @@ user's own executables each time, and none are recorded here.
 | `int GetRealTeam(int)` | 5 | 9 | A2 DLL-shaped | `A2.GetRealTeam` |
 | `void SetRace(int, char const *)` | 2 | 2 | new |  |
 | `Vector3 GetMainEnemyBaseLocation(int)` | 1 | 2 | new |  |
-| `bool IsRace(int, char *const)` | 1 | 1 | new |  |
+| `bool IsRace(int, char *const)` | 1 | 1 | A2 DLL-shaped | `A2.IsRace` |
 | `bool IsVisibleToTeam(int, int)` | 1 | 9 | new |  |
 | `char const * GetOriginalRace(int)` | 1 | 1 | new |  |
 | `int GetNearestEnemy(int, float)` | 1 | 4 | new |  |
