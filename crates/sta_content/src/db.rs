@@ -323,6 +323,12 @@ fn hash(db: &ContentDb) -> u64 {
             Def::Unit(u) => {
                 h.byte(0);
                 h.str(&u.class.0);
+                // Native default false keeps the old hash path. A true
+                // legacy flag must participate before mission queries use it.
+                if u.is_starbase {
+                    h.byte(0xe6);
+                    h.byte(1);
+                }
                 let m = &u.movement;
                 for f in [u.scale, m.max_speed, m.forward_accel, m.turn_omega, m.turn_alpha, m.turn_at_rest] {
                     h.fixed(f);
