@@ -96,6 +96,7 @@ pub(crate) fn add_view_systems(app: &mut App) {
     app.init_resource::<SimEntities>()
         .init_resource::<LocalPlayer>()
         .init_resource::<UnitModels>()
+        .init_resource::<crate::render::moons::MoonVariants>()
         .add_systems(
             Update,
             (sync_units, attach_models.run_if(resource_exists::<Mounted>).run_if(resource_exists::<ContentRes>), show_damage)
@@ -216,7 +217,8 @@ pub struct UnitModels {
 #[allow(clippy::too_many_arguments)]
 fn attach_models(
     mut commands: Commands,
-    pending: Query<(Entity, &NeedsModel, &TeamColour, Option<&UnitOwner>)>,
+    pending: Query<(Entity, &NeedsModel, &TeamColour, Option<&UnitOwner>, Option<&SimEntity>)>,
+    mut moons: ResMut<crate::render::moons::MoonVariants>,
     mut silhouettes: Option<ResMut<crate::render::strategic::Silhouettes>>,
     vfs: Res<Mounted>,
     content: Res<ContentRes>,
@@ -230,9 +232,11 @@ fn attach_models(
     device: Option<Res<RenderDevice>>,
 ) {
     let formats = device.map(|d| CompressedImageFormats::from_features(d.features())).unwrap_or(CompressedImageFormats::BC);
-    for (e, need, team, owner) in &pending {
+    for (e, need, team, owner, sim) in &pending {
         commands.entity(e).remove::<NeedsModel>();
         let Some(def) = content.0.unit(need.0) else { continue };
+        // A resource moon's marker is drawn as the moon the game swaps it for (RND-16).
+        let def = moons.moon_for(&vfs.0, &content.0, def, sim.map_or(0, |s| s.0 .0 as u64)).unwrap_or(def);
         let key = def.model.to_ascii_lowercase().trim_end_matches(".sod").to_owned();
         let found = models
             .models
