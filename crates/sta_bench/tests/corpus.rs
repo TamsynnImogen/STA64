@@ -38,9 +38,13 @@ const SEED: u64 = 0x5EED_C0DE;
 
 #[test]
 fn every_map_loads_ticks_and_repeats() {
-    if let (Ok(root), Ok(m)) = (std::env::var("STA64_TEST_INSTALL"), std::env::var("STA64_TEST_MOD")) {
+    if let (Ok(root), Ok(m)) = (
+        std::env::var("STA64_TEST_INSTALL"),
+        std::env::var("STA64_TEST_MOD"),
+    ) {
         // An empty mod mounts the base `Data` alone.
-        let vfs = Vfs::mount_install(Path::new(&root), Some(m.as_str()).filter(|m| !m.is_empty())).unwrap();
+        let vfs = Vfs::mount_install(Path::new(&root), Some(m.as_str()).filter(|m| !m.is_empty()))
+            .unwrap();
         check(&format!("{root} + {m}"), &vfs);
     }
     if let Ok(dir) = std::env::var("STA64_TEST_DIR") {
@@ -72,7 +76,11 @@ fn check(label: &str, vfs: &Vfs) {
     let mut problems = Vec::new();
     let (mut files, mut unreadable) = (0, 0);
     let mut maps: Vec<(String, Arc<MapDef>)> = Vec::new();
-    for path in vfs.list("bzn").into_iter().filter(|p| p.to_ascii_lowercase().ends_with(".bzn")) {
+    for path in vfs
+        .list("bzn")
+        .into_iter()
+        .filter(|p| p.to_ascii_lowercase().ends_with(".bzn"))
+    {
         files += 1;
         let Some(Ok(data)) = vfs.read(&path) else {
             problems.push(format!("{path}: unreadable"));
@@ -91,12 +99,21 @@ fn check(label: &str, vfs: &Vfs) {
             continue;
         }
         let mut map = MapDef::convert_bzn_in(&bzn, &db, vfs, &index).map;
-        map.name = path.rsplit('/').next().unwrap_or(&path).trim_end_matches(".bzn").to_owned();
+        map.name = path
+            .rsplit('/')
+            .next()
+            .unwrap_or(&path)
+            .trim_end_matches(".bzn")
+            .to_owned();
         maps.push((path, Arc::new(map)));
     }
 
     let next = AtomicUsize::new(0);
-    let jobs = std::env::var("STA64_TEST_JOBS").ok().and_then(|j| j.parse().ok()).unwrap_or(4usize).max(1);
+    let jobs = std::env::var("STA64_TEST_JOBS")
+        .ok()
+        .and_then(|j| j.parse().ok())
+        .unwrap_or(4usize)
+        .max(1);
     let mut results: Vec<(usize, Outcome)> = std::thread::scope(|s| {
         let workers: Vec<_> = (0..jobs)
             .map(|_| {
@@ -111,7 +128,10 @@ fn check(label: &str, vfs: &Vfs) {
                 })
             })
             .collect();
-        workers.into_iter().flat_map(|w| w.join().unwrap()).collect()
+        workers
+            .into_iter()
+            .flat_map(|w| w.join().unwrap())
+            .collect()
     });
     results.sort_by_key(|r| r.0);
 
@@ -129,12 +149,22 @@ fn check(label: &str, vfs: &Vfs) {
         }
     }
     eprintln!("== {label}");
-    eprintln!("{files} bzn files: {} loaded, {unreadable} in a layout the reader does not know", maps.len());
-    eprintln!("{} maps loaded, {ticked} ticked {TICKS}, {repeated} repeated with the same digest", maps.len());
-    eprintln!("{start_units} units at tick 0 in all, {skipped} map objects skipped by the sim, {empty} maps empty at tick 0");
+    eprintln!(
+        "{files} bzn files: {} loaded, {unreadable} in a layout the reader does not know",
+        maps.len()
+    );
+    eprintln!(
+        "{} maps loaded, {ticked} ticked {TICKS}, {repeated} repeated with the same digest",
+        maps.len()
+    );
+    eprintln!(
+        "{start_units} units at tick 0 in all, {skipped} map objects skipped by the sim, {empty} maps empty at tick 0"
+    );
     let mut reasons: BTreeMap<&str, usize> = BTreeMap::new();
     for p in &problems {
-        *reasons.entry(p.split_once(": ").map_or(p.as_str(), |(_, r)| r)).or_default() += 1;
+        *reasons
+            .entry(p.split_once(": ").map_or(p.as_str(), |(_, r)| r))
+            .or_default() += 1;
     }
     for p in &problems {
         eprintln!("PROBLEM {p}");
@@ -142,7 +172,11 @@ fn check(label: &str, vfs: &Vfs) {
     for (r, n) in &reasons {
         eprintln!("  {n:4}  {r}");
     }
-    assert!(problems.is_empty(), "{label}: {} problem(s), see PROBLEM lines", problems.len());
+    assert!(
+        problems.is_empty(),
+        "{label}: {} problem(s), see PROBLEM lines",
+        problems.len()
+    );
     assert!(!maps.is_empty(), "{label}: no map loaded");
 }
 
@@ -154,11 +188,32 @@ fn run_map(map: &Arc<MapDef>, db: &Arc<ContentDb>, races: &Races) -> Outcome {
         catch_unwind(AssertUnwindSafe(|| {
             let (mut sim, skipped) = build(&setup, races);
             let at_start = sim.view().units.len();
+            // SIM-18: no resource has an owner at tick 0.
+            let content = sim.content().cloned().expect("sim has content");
+            for u in &sim.view().units {
+                let Some(def) = content.unit(u.def) else {
+                    continue;
+                };
+                let res = sta_sim::world::EntityKind::of(&def.class, &def.movement)
+                    == sta_sim::world::EntityKind::Resource;
+                assert!(
+                    !(res || def.resource.is_some()) || u.owner == sta_sim::world::NEUTRAL,
+                    "resource {} owned by {:?}",
+                    def.raw.name,
+                    u.owner
+                );
+            }
             let mut tick = 0;
             for _ in 0..TICKS {
                 tick = sim.step(&[]).view.tick;
             }
-            (tick, at_start, sim.view().units.len(), skipped, sim.digest())
+            (
+                tick,
+                at_start,
+                sim.view().units.len(),
+                skipped,
+                sim.digest(),
+            )
         }))
     };
     let first = match run() {
@@ -184,7 +239,10 @@ fn run_map(map: &Arc<MapDef>, db: &Arc<ContentDb>, races: &Races) -> Outcome {
 }
 
 fn panic_text(p: &Box<dyn std::any::Any + Send>) -> String {
-    p.downcast_ref::<String>().cloned().or_else(|| p.downcast_ref::<&str>().map(|s| (*s).to_owned())).unwrap_or_default()
+    p.downcast_ref::<String>()
+        .cloned()
+        .or_else(|| p.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+        .unwrap_or_default()
 }
 
 /// One seat per start position, or per owner a mission's objects name, and at
@@ -194,7 +252,12 @@ fn setup_for(map: &Arc<MapDef>, db: &Arc<ContentDb>, races: &Races) -> GameSetup
         .starts
         .iter()
         .map(|s| s.slot as usize + 1)
-        .chain(map.objects.iter().filter_map(|o| o.owner).map(|o| o as usize + 1))
+        .chain(
+            map.objects
+                .iter()
+                .filter_map(|o| o.owner)
+                .map(|o| o as usize + 1),
+        )
         .max()
         .unwrap_or(0)
         .clamp(2, 16);
@@ -203,11 +266,20 @@ fn setup_for(map: &Arc<MapDef>, db: &Arc<ContentDb>, races: &Races) -> GameSetup
         .map(|i| PlayerSetup {
             id: PlayerId(i as u8),
             team: TeamId(i as u8),
-            race: races.get(i % races.len().max(1)).cloned().unwrap_or_default(),
+            race: races
+                .get(i % races.len().max(1))
+                .cloned()
+                .unwrap_or_default(),
             control: Control::Idle,
         })
         .collect();
-    GameSetup { seed: SEED, map: Arc::clone(map), content: Arc::clone(db), players, options: GameOptions::default() }
+    GameSetup {
+        seed: SEED,
+        map: Arc::clone(map),
+        content: Arc::clone(db),
+        players,
+        options: GameOptions::default(),
+    }
 }
 
 /// The skirmish start rule (`Sim::from_setup_with_starts`): each seat's race

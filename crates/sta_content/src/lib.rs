@@ -20,6 +20,7 @@ pub mod def;
 pub mod fake;
 pub mod features;
 pub mod gui_cfg;
+pub mod launch;
 pub mod index;
 pub mod legacy;
 pub mod profile;
@@ -32,7 +33,7 @@ pub mod weapon;
 
 pub use aip::{Aip, AipList, AipValue, AipVar, BuildItem};
 pub use db::{ContentBuilder, ContentDb, DEFAULT_TECH_TREE};
-pub use def::{BuildDef, ClassLabel, DefRef, FireArc, FxRefs, Hardpoint, MoveStats, ShieldDef, SoundRefs, UnitDef, WeaponDef, WeaponKind};
+pub use def::{BuildDef, ClassLabel, DefRef, FireArc, FxRefs, Hardpoint, LaunchPoint, MoveStats, ShieldDef, SoundRefs, UnitDef, WeaponDef, WeaponKind};
 pub use features::{Features, Profile};
 pub use gui_cfg::{Colour, GuiCfg, GuiLayout, GuiValue, Panel, Rect};
 pub use index::{OdfEntry, OdfIndex};
