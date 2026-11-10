@@ -41,6 +41,17 @@ pub enum EntityKind {
 }
 
 impl EntityKind {
+    /// The kind of a definition: by [`EntityKind::of`], except that a fixture of an unlisted
+    /// class that carries a `resource` is a resource node (Fleet Ops' moons are class
+    /// `scrap`, which also covers plain wrecks). A craft or station with a `resource` stays
+    /// what its class says (SIM-18).
+    pub fn of_def(def: &sta_content::UnitDef) -> EntityKind {
+        match EntityKind::of(&def.class, &def.movement) {
+            EntityKind::Prop if def.resource.is_some() => EntityKind::Resource,
+            kind => kind,
+        }
+    }
+
     /// The kind for a definition, from its ODF class (docs/data/odf_classes.md).
     /// Unlisted classes that can move count as craft, the rest as props.
     pub fn of(class: &ClassLabel, movement: &MoveStats) -> EntityKind {
@@ -171,7 +182,7 @@ impl Entity {
         pos: Vec3,
         heading: (Fixed, Fixed),
     ) -> Entity {
-        let kind = EntityKind::of(&def.class, &def.movement);
+        let kind = EntityKind::of_def(def);
         // Resources stay neutral whatever the map or loadout says (SIM-18).
         let owner = if kind == EntityKind::Resource || def.resource.is_some() {
             NEUTRAL
@@ -522,7 +533,7 @@ mod tests {
         let db = sta_content::fake::db();
         let kind = |n: &str| {
             let d = db.unit(db.key(n).unwrap()).unwrap();
-            EntityKind::of(&d.class, &d.movement)
+            EntityKind::of_def(d)
         };
         assert_eq!(kind("fx_cruiser"), EntityKind::Craft);
         assert_eq!(kind("fx_miner"), EntityKind::Craft);
@@ -538,6 +549,18 @@ mod tests {
             EntityKind::of(&unknown, &MoveStats::default()),
             EntityKind::Craft
         );
+    }
+
+    /// Fleet Ops' moons are class `scrap`, which is also plain wreckage: the `resource` decides.
+    #[test]
+    fn a_scrap_class_node_with_a_resource_is_a_resource() {
+        let mut moon = sta_content::UnitDef::new("map_moon", "scrap");
+        moon.resource = Some(0);
+        let wreck = sta_content::UnitDef::new("wreck", "scrap");
+        assert_eq!(EntityKind::of_def(&moon), EntityKind::Resource);
+        assert_eq!(EntityKind::of_def(&wreck), EntityKind::Prop);
+        let e = Entity::from_def(&moon, &Features::default(), PlayerId(0), Vec3::ZERO, (Fixed::ZERO, Fixed::ONE));
+        assert_eq!((e.kind, e.owner), (EntityKind::Resource, NEUTRAL));
     }
 
     #[test]

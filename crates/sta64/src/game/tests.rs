@@ -233,3 +233,67 @@ fn install_skirmish_rig_starts_building() {
     }
     assert!(tried >= 4, "only {tried} clear sites tried");
 }
+
+/// With `STA64_TEST_INSTALL` (+ `STA64_TEST_MOD`, `STA64_TEST_MAP`): on a real skirmish map the
+/// player's freighter, right-clicked on a resource moon, is ordered to mine it, the sim accepts
+/// and the freighter starts filling its hold.
+#[test]
+fn install_skirmish_freighter_mines_a_moon() {
+    use sta_sim::command::CommandKind;
+    let Ok(root) = std::env::var("STA64_TEST_INSTALL") else { return };
+    let m = std::env::var("STA64_TEST_MOD").unwrap_or_default();
+    let map_name = std::env::var("STA64_TEST_MAP").unwrap_or_else(|_| "boobytrap".into());
+    let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(m.as_str()).filter(|m| !m.is_empty())).unwrap();
+    let (index, _) = sta_content::OdfIndex::build(&vfs);
+    let (db, _) = ContentDb::load(&vfs, &index).unwrap();
+    let (races, _) = Races::load(&vfs, &index);
+    let db = Arc::new(db);
+    let bzn = sta_bzn::parse(&vfs.read(&format!("bzn/{map_name}.bzn")).expect("map exists").unwrap()).unwrap();
+    let cfg = SkirmishCfg { seat: 0, opponent: Opponent::Skirmish, race: Some("federation".into()), opponent_race: None };
+    let side = crate::map::build_sim(&bzn, &map_name, &db, &index, &vfs, Some(0), Some((&cfg, &races)));
+    side.skirmish.expect("a skirmish").unwrap_or_else(|e| panic!("{e}"));
+    let mut sim = side.sim;
+    // The start gives an outpost; its freighter (the Federation's `fminer`) is built there.
+    // Put one beside it, as if built.
+    let outpost = sta_sim::WorldSource::view(&sim).units.iter().find(|u| u.owner == PlayerId(0)).expect("a start unit").pos;
+    let key = db.key("fminer").expect("the Federation miner");
+    assert!(db.unit(key).is_some_and(|d| d.class.0 == "freighter" || d.miner));
+    let at = sta_sim::Vec3::from_f32([outpost.x.to_f32() + 150.0, outpost.y.to_f32(), outpost.z.to_f32()]);
+    sim.spawn_def(key, PlayerId(0), at, (sta_sim::Fixed::ZERO, sta_sim::Fixed::ONE)).expect("spawned");
+    let mut link = SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), PlayerId(0));
+    link.tick().unwrap();
+    let view = link.curr().clone();
+    let freighter = view
+        .units
+        .iter()
+        .find(|u| u.owner == PlayerId(0) && u.def == key)
+        .expect("the freighter");
+    let dist = |a: sta_sim::Vec3| {
+        let (dx, dz) = ((a.x - freighter.pos.x).to_f32(), (a.z - freighter.pos.z).to_f32());
+        dx * dx + dz * dz
+    };
+    let moon = view
+        .units
+        .iter()
+        .filter(|u| db.unit(u.def).is_some_and(|d| d.resource.is_some()))
+        .min_by(|a, b| dist(a.pos).total_cmp(&dist(b.pos)))
+        .expect("the map places resource moons as resources, not as craft markers");
+    assert_eq!(moon.owner, sta_sim::world::NEUTRAL);
+    // The right-click on the moon: a Mine order, which the sim accepts.
+    let order = crate::input::context::context_order(Some(&*db), &view, PlayerId(0), &[freighter.id], moon.id)
+        .expect("a freighter right-clicked on a moon mines it");
+    assert!(matches!(&order, sta_sim::command::Order::Mine { node, .. } if *node == moon.id));
+    link.submit(CommandKind::Order(order));
+    let (mut rejected, mut delivered) = (false, false);
+    for _ in 0..20_000 {
+        for e in link.tick().unwrap() {
+            rejected |= matches!(e, SimEvent::Rejected { .. });
+            delivered |= matches!(e, SimEvent::Delivered { player, .. } if player == PlayerId(0));
+        }
+        if delivered {
+            break;
+        }
+    }
+    assert!(!rejected, "the sim accepted the Mine order");
+    assert!(delivered, "the freighter mined the moon and unloaded at a dock");
+}

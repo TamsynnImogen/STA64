@@ -23,9 +23,6 @@ use bevy::prelude::*;
 use sta_content::{ContentDb, ContentKey, OdfIndex, UnitDef};
 use sta_vfs::Vfs;
 
-/// Class label of the weapon that swaps a marker for another object.
-const REPLACE_CLASS: &str = "replaceweapon";
-
 /// The moon variants each marker definition can turn into, read once per
 /// definition from the weapon ODFs.
 #[derive(Resource, Default)]
@@ -64,35 +61,10 @@ pub fn variants_of(
     def: &UnitDef,
     load: &mut dyn FnMut(&str, usize) -> Option<String>,
 ) -> Vec<ContentKey> {
-    let mut out = Vec::new();
-    // The weapon is read from the unit's own ODF keys: the database does not define
-    // `replaceweapon`s, so they are not among its hardpoints.
-    for n in 1..=8 {
-        let Some(wname) = def.raw.str(&format!("weapon{n}")) else {
-            continue;
-        };
-        let Ok(weapon) = sta_odf::resolve_layered(wname.trim(), load) else {
-            continue;
-        };
-        if !weapon
-            .class_label()
-            .is_some_and(|c| c.trim().eq_ignore_ascii_case(REPLACE_CLASS))
-        {
-            continue;
-        }
-        for n in 0.. {
-            let Some(name) = weapon.str(&format!("replacement0class{n}")) else {
-                break;
-            };
-            if let Some(k) = db.key(name.trim())
-                && db.unit(k).is_some_and(|u| u.resource.is_some())
-                && !out.contains(&k)
-            {
-                out.push(k);
-            }
-        }
-    }
-    out
+    // The sim places the same moon (`sta_content::map::moon_variants`), picked by the object's id.
+    sta_content::map::moon_variants(db, def, &mut |n| {
+        sta_odf::resolve_layered(n, &mut *load).ok().map(std::sync::Arc::new)
+    })
 }
 
 #[cfg(test)]
