@@ -67,7 +67,7 @@ impl RunConfig {
         .into_iter()
         .map(|(a, b)| (a.to_owned(), b.to_owned()))
         .collect();
-        let maps = [("fx_two_bases".to_owned(), sta_content::fake::two_bases())]
+        let maps = [("fx_two_bases".to_owned(), sta_content::fake::two_bases()), ("fx_field".to_owned(), field_map())]
             .into_iter()
             .collect();
         RunConfig {
@@ -638,12 +638,23 @@ pub fn fake_content() -> ContentDb {
         tree.push_str(&format!("{} 0\n", u.odf));
         b = b.unit(u);
     }
-    tree.push_str("fx_rig 0\nfx_fo_rig 0\nfx_dread 1 fx_station\n");
+    tree.push_str("fx_rig 0\nfx_fo_rig 0\nfx_dread 1 fx_station\nfx_bulk 0\nfx_world 0\n");
     let (tree, warnings) = sta_content::TechTree::parse("fake.tt", &tree);
     assert!(warnings.is_empty(), "{warnings:?}");
     for u in movers() {
         b = b.unit(u);
     }
+    // SIM-21: bodies for the contact scenes. `fx_bulk` is a cruiser with a
+    // 100-unit model circle (body 75), `fx_world` a planet of 400 (body 300).
+    // The stock fakes keep radius zero, so scenes using them never touch.
+    let mut bulk = fake.units().find(|u| u.odf == "fx_cruiser").expect("fake cruiser").clone();
+    bulk.odf = "fx_bulk".into();
+    bulk.model = "fx_bulk".into();
+    bulk.radius = Fixed::from_int(100);
+    let mut world = UnitDef::new("fx_world", "planet");
+    world.model = "fx_world".into();
+    world.radius = Fixed::from_int(400);
+    b = b.unit(bulk).unit(world);
     b.unit(dread).tech_tree(tree).build().expect("fake content plus a rig is consistent")
 }
 
@@ -703,4 +714,18 @@ fn movers() -> Vec<sta_content::UnitDef> {
         })
         .chain(std::iter::once(rig))
         .collect()
+}
+
+/// `fx_field` (SIM-21): an empty map with one asteroid field, a sphere of 300
+/// units centred on (0, 0, 1500).
+fn field_map() -> MapDef {
+    use sta_content::{Region, RegionKind, RegionShape};
+    let mut map = MapDef::empty();
+    map.name = "fx_field".into();
+    map.regions = vec![Region {
+        kind: RegionKind::AsteroidField,
+        odf: "fx_asteroids".into(),
+        shape: RegionShape::Sphere { centre: sta_core::Vec3 { x: Fixed::ZERO, y: Fixed::ZERO, z: Fixed::from_int(1500) }, radius: Fixed::from_int(300) },
+    }];
+    map
 }

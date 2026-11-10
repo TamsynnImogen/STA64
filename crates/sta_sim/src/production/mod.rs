@@ -78,6 +78,17 @@ pub fn deploy_reach(stats: &crate::MoveStats) -> Fixed {
     orbit + orbit / Fixed::from_int(4) + crate::arrive_distance()
 }
 
+/// Gap kept between a rig and the footprint of the structure it builds, units.
+pub const STAND_GAP: i32 = 10;
+
+/// How far from a site's centre its rig parks: the structure's footprint, the
+/// rig's own body and a small gap (SIM-21).
+pub fn stand_ring(db: &ContentDb, units: &Entities, what: ContentKey, rig: EntityId) -> Fixed {
+    let body = |def: ContentKey| db.unit(def).map_or(Fixed::ZERO, |d| d.radius * Fixed::from_int(3) / Fixed::from_int(4));
+    let rig_body = units.get(rig).map_or(Fixed::ZERO, |r| body(r.def));
+    site::footprint(db, what).max(body(what)) + rig_body + Fixed::from_int(STAND_GAP)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Item {
     def: ContentKey,
@@ -294,8 +305,16 @@ impl Production {
                         paid: pay_now,
                     },
                 );
+                // The rig parks beside the site, not on it: the structure
+                // goes up at `at` and the rig stops at its edge.
+                let ring = stand_ring(db, units, what, builder);
                 if let Some(r) = units.get_mut(builder) {
-                    r.target = Some(at);
+                    let (mut dx, mut dz) = (r.pos.x - at.x, r.pos.z - at.z);
+                    let mut d = (dx * dx + dz * dz).sqrt();
+                    if d == Fixed::ZERO {
+                        (dx, dz, d) = (-r.heading.0, -r.heading.1, Fixed::ONE);
+                    }
+                    r.target = Some(Vec3 { x: at.x + dx / d * ring, y: at.y, z: at.z + dz / d * ring });
                 }
                 true
             }
@@ -440,6 +459,8 @@ impl Production {
                 crate::kinematics::Model::Smooth => deploy_reach(&r.stats).max(r.stats.too_close_to_turn + crate::arrive_distance()),
                 crate::kinematics::Model::Native => deploy_reach(&r.stats),
             };
+            // The rig stops beside the structure's footprint (SIM-21).
+            let reach = reach + stand_ring(db, units, d.def, rig);
             if (dx * dx + dz * dz).sqrt() > reach {
                 continue;
             }

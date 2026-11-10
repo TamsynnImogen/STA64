@@ -13,9 +13,8 @@
 //! such object into a [`RegionKind::AsteroidField`] sphere of `fieldRadius`;
 //! here the sphere (or box) becomes a [`Solid`] units are pushed out of.
 //!
-//! This is push-out only, there is no path search yet: a unit ordered
-//! through a field slides along its edge and stops at it. Units are points
-//! (no radius in the entity model yet).
+//! This is push-out only; steering round a field is [`avoid`](crate::avoid)'s
+//! (SIM-21), which also gives units their radius (zero: a point).
 //!
 //! Nebulae are a different effect (speed coefficient, disabled systems) and
 //! not handled here. A map without asteroid fields takes the early return and
@@ -47,9 +46,10 @@ impl Sim {
         if solids.is_empty() {
             return;
         }
-        for u in self.units.iter_mut().filter(|u| u.mobile()) {
+        let radii: Vec<Fixed> = self.units.iter().map(|u| self.body_radius(u.def)).collect();
+        for (u, &radius) in self.units.iter_mut().zip(&radii).filter(|(u, _)| u.mobile()) {
             for s in &solids {
-                let (dx, dz) = push_from_solid(u.pos, Fixed::ZERO, s);
+                let (dx, dz) = push_from_solid(u.pos, radius, s);
                 u.pos.x = u.pos.x + dx;
                 u.pos.z = u.pos.z + dz;
             }

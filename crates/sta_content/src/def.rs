@@ -261,6 +261,9 @@ pub struct UnitDef {
     /// Where finished units leave this builder; `None`: not read (the unit
     /// appears at the builder's centre, as before SIM-16).
     pub launch: Option<LaunchPoint>,
+    /// Bounding radius of the model times `ScaleSOD`, units (SIM-21); zero:
+    /// not read, the unit takes no room.
+    pub radius: Fixed,
     pub sounds: SoundRefs,
     pub fx: FxRefs,
     /// Special energy pool (`maxSpecialEnergy`); zero: none.
@@ -288,6 +291,12 @@ pub struct UnitDef {
 }
 
 impl UnitDef {
+    /// `avoidMe = 1`: other units steer around and keep out of this one
+    /// (moons and balls in Fleet Operations, SIM-21).
+    pub fn avoid_me(&self) -> bool {
+        self.raw.bool("avoidMe").unwrap_or(false)
+    }
+
     /// A definition with everything zero or empty, to fill field by field.
     pub fn new(odf: &str, class: &str) -> UnitDef {
         let mut raw = sta_odf::Odf::default();
@@ -308,6 +317,7 @@ impl UnitDef {
             hardpoints: Vec::new(),
             build: BuildDef::default(),
             launch: None,
+            radius: Fixed::ZERO,
             sounds: SoundRefs::default(),
             fx: FxRefs::default(),
             special_energy_max: Fixed::ZERO,
