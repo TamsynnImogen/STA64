@@ -258,6 +258,7 @@ A2_SIGNATURES = {
     "bool IsOdf(int, char*)": "A2.IsOdf",
     "float GetDistance(int&, int&)": "A2.GetDistance",
     "bool IsRace(int, char*const)": "A2.IsRace",
+    "bool IsVisibleToTeam(int, int)": "A2.IsVisibleToTeam",
 }
 
 

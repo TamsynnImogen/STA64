@@ -225,6 +225,23 @@ raise an error. The query reads only the current snapshot and content, queues
 no commands, and does not infer race from the current owner's faction. Native
 string-comparison and invalid-object defaults remain unverified.
 
+`A2.IsVisibleToTeam(id, playerNumber)` reads membership in the latest
+`WorldView::visible_to` snapshot. Both arguments must be unsigned integral
+values; the player number uses the configured Slots or ArmadaTeams adapter,
+like GetRealTeam. It must resolve to a normal core player slot; neutral,
+reserved and invalid numbers raise errors even if the entity is absent.
+Missing/dying entities return false. The supplied visibility is authoritative
+for cloak and shared sight. The view's existing unrestricted legacy fallback
+when all visibility data is absent is preserved, as in Entity.canPlayerSee.
+No content definition, additional fog calculation, Core TeamId lookup or
+commands are involved.
+
+Private static observations of the nine calls in `a2_kling08S.dsl` show
+object-named globals passed first and the literal team value 1 second. This
+supports the chosen argument order; native fog, coalition and invalid-object
+defaults remain unverified. The number-to-seat interpretation is the explicit
+STA64 bridge policy, not a new simulation team rule.
+
 ## Conversion report
 
 `sta64 --mission-report` lists every map whose mission resolves to

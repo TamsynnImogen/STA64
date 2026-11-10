@@ -189,6 +189,32 @@ class MissionDllInventoryTests(unittest.TestCase):
         ]:
             self.assertEqual(inventory.a2_exact_for(signature, self.repo), "", signature)
 
+    def test_visibility_coverage_requires_both_integer_arguments(self):
+        self.register_a2(
+            "",
+            registration=(
+                'queries::install(lua, ctx, &a2)?; '
+                'lua.globals().raw_set("A2", a2)?;'
+            ),
+        )
+        (self.a2 / "queries.rs").write_text(
+            'table.set("IsVisibleToTeam", fn);\n', encoding="utf-8"
+        )
+        self.assertEqual(
+            inventory.a2_exact_for(
+                "public: bool __thiscall ScriptInterfaceImp::IsVisibleToTeam(int, int)",
+                self.repo,
+            ),
+            "A2.IsVisibleToTeam",
+        )
+        for signature in [
+            "int IsVisibleToTeam(int, int)",
+            "bool IsVisibleToTeam(int)",
+            "bool IsVisibleToTeam(int, float)",
+            "bool IsVisibleToTeam(unsigned int, int)",
+        ]:
+            self.assertEqual(inventory.a2_exact_for(signature, self.repo), "", signature)
+
     def test_test_files_do_not_count_as_a2_bindings(self):
         self.register_a2("", registration='objects::install(lua, ctx, &a2)?; lua.globals().raw_set("A2", a2)?;')
         (self.a2 / "tests.rs").write_text('table.set("IsAlive", fn);', encoding="utf-8")

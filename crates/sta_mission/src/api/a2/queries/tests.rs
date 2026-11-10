@@ -5,9 +5,9 @@ use sta_core::{EntityId, Fixed, PlayerId, TeamId, Vec3};
 use sta_sim::command::{Command, CommandKind, Edit};
 use sta_sim::setup::{Control, Controller, GameOptions, GameSetup, PlayerSetup};
 use sta_sim::view::UnitFlags;
-use sta_sim::{MoveStats, Sim, WorldSource};
+use sta_sim::{MoveStats, Sim, WorldSource, WorldView};
 
-use crate::api::MissionConfig;
+use crate::api::{MissionConfig, PlayerNumbering};
 use crate::runtime::MissionRuntime;
 
 fn scene_at(pos: Vec3) -> (Sim, Arc<ContentDb>, EntityId) {
@@ -291,4 +291,121 @@ fn get_distance_rejects_invalid_handles_and_dying_objects_on_either_side() {
         );
         assert!(rt.take_commands().is_empty() && rt.unsupported().is_empty());
     }
+}
+
+fn visible_runtime(view: WorldView, numbering: PlayerNumbering) -> MissionRuntime {
+    let cfg = MissionConfig {
+        player_numbering: numbering,
+        view: Some(view),
+        ..MissionConfig::default()
+    };
+    let rt = MissionRuntime::from_source_with("visibility.lua", "", 19, cfg);
+    assert!(rt.errors().is_empty(), "{:?}", rt.errors());
+    rt
+}
+
+#[test]
+fn is_visible_to_team_uses_configured_player_numbers_and_snapshot_membership() {
+    let (sim, _, id) = scene();
+    let mut view = (*sim.view()).clone();
+    view.visibility = vec![(PlayerId(0), vec![id]), (PlayerId(1), vec![]), (PlayerId(7), vec![id])];
+    // The supplied visibility list is authoritative, including for cloaked units.
+    view.units.iter_mut().find(|unit| unit.id == id).unwrap().flags = UnitFlags::CLOAKED;
+    for (numbering, visible, hidden, eighth) in [
+        (PlayerNumbering::Slots, 0, 1, 7),
+        (PlayerNumbering::ArmadaTeams, 1, 2, 8),
+    ] {
+        let mut rt = visible_runtime(view.clone(), numbering);
+        let query = format!(
+            "return A2.IsVisibleToTeam({},{visible}), A2.IsVisibleToTeam({},{hidden}), A2.IsVisibleToTeam({},{eighth})",
+            id.0, id.0, id.0
+        );
+        assert_eq!(rt.eval::<(bool, bool, bool)>(&query).unwrap(), (true, false, true));
+        assert!(
+            !rt.eval::<bool>(&format!("return A2.IsVisibleToTeam(99999,{visible})"))
+                .unwrap()
+        );
+        let mut fresh = view.clone();
+        fresh.tick += 1;
+        fresh.visibility = vec![(PlayerId(0), vec![]), (PlayerId(1), vec![id]), (PlayerId(7), vec![])];
+        assert!(
+            rt.eval::<bool>(&format!("return A2.IsVisibleToTeam({},{visible})", id.0))
+                .unwrap()
+        );
+        let mut commands = Vec::new();
+        rt.think(&fresh, &[], &mut commands);
+        assert_eq!(
+            rt.eval::<(bool, bool)>(&format!(
+                "return A2.IsVisibleToTeam({},{visible}), A2.IsVisibleToTeam({},{hidden})",
+                id.0, id.0
+            ))
+            .unwrap(),
+            (false, true)
+        );
+        assert!(commands.is_empty() && rt.take_commands().is_empty() && rt.unsupported().is_empty());
+    }
+}
+
+#[test]
+fn is_visible_to_team_rejects_invalid_player_numbers_before_missing_entity_check() {
+    let (sim, _, id) = scene();
+    let view = (*sim.view()).clone();
+    for (numbering, valid, invalid) in [
+        (PlayerNumbering::Slots, 0, vec!["8", "253", "254", "255"]),
+        (PlayerNumbering::ArmadaTeams, 1, vec!["0", "9", "253", "254", "255"]),
+    ] {
+        let mut rt = visible_runtime(view.clone(), numbering);
+        for bad in invalid.into_iter().chain([
+            "256",
+            "-1",
+            "1.5",
+            "'1'",
+            "0/0",
+            "math.huge",
+            "4294967296",
+            "true",
+            "nil",
+        ]) {
+            for object in [id.0, 99999] {
+                let script = format!("A2.IsVisibleToTeam({object},{bad})");
+                assert!(rt.eval::<()>(&script).is_err(), "{script}");
+            }
+        }
+        for script in [
+            "A2.IsVisibleToTeam()".to_owned(),
+            format!("A2.IsVisibleToTeam({})", id.0),
+            format!("A2.IsVisibleToTeam({id},{valid},0)", id = id.0),
+        ] {
+            assert!(rt.eval::<()>(&script).is_err(), "{script}");
+        }
+        for bad in ["-1", "1.5", "'1'", "0/0", "math.huge", "4294967296", "true", "nil"] {
+            let script = format!("A2.IsVisibleToTeam({bad},{valid})");
+            assert!(rt.eval::<()>(&script).is_err(), "{script}");
+        }
+        assert!(rt.take_commands().is_empty() && rt.unsupported().is_empty());
+    }
+}
+
+#[test]
+fn is_visible_to_team_missing_or_dying_is_false_and_empty_visibility_is_omniscient() {
+    let (sim, _, id) = scene();
+    let mut view = (*sim.view()).clone();
+    view.visibility.clear();
+    let mut rt = visible_runtime(view.clone(), PlayerNumbering::Slots);
+    assert!(
+        rt.eval::<bool>(&format!("return A2.IsVisibleToTeam({},7)", id.0))
+            .unwrap()
+    );
+    assert!(!rt.eval::<bool>("return A2.IsVisibleToTeam(99999,7)").unwrap());
+    view.visibility = vec![(PlayerId(0), vec![id, EntityId(99999)])];
+    view.units.iter_mut().find(|unit| unit.id == id).unwrap().flags = UnitFlags::DYING;
+    view.tick += 1;
+    let mut commands = Vec::new();
+    rt.think(&view, &[], &mut commands);
+    assert!(
+        !rt.eval::<bool>(&format!("return A2.IsVisibleToTeam({},0)", id.0))
+            .unwrap()
+    );
+    assert!(!rt.eval::<bool>("return A2.IsVisibleToTeam(99999,0)").unwrap());
+    assert!(commands.is_empty() && rt.take_commands().is_empty() && rt.unsupported().is_empty());
 }

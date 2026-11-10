@@ -85,6 +85,23 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
             Ok(def.race.eq_ignore_ascii_case(race.as_ref()))
         })?,
     )?;
+    let c = ctx.clone();
+    table.set(
+        "IsVisibleToTeam",
+        lua.create_function(move |_, args: MultiValue| {
+            let id = handle("IsVisibleToTeam", &args, 2)?;
+            let team = integer("IsVisibleToTeam", &args[1])?;
+            let team = u8::try_from(team)
+                .map_err(|_| mlua::Error::runtime("A2.IsVisibleToTeam requires a valid player number"))?;
+            let c = c.borrow();
+            let player = c
+                .player_numbering
+                .decode(team)
+                .filter(|player| player.is_player())
+                .ok_or_else(|| mlua::Error::runtime("A2.IsVisibleToTeam requires a valid player number"))?;
+            Ok(c.alive(id).is_some() && c.view.visible_to(player).iter().any(|unit| unit.id == id))
+        })?,
+    )?;
     Ok(())
 }
 
