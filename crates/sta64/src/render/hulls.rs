@@ -323,9 +323,74 @@ fn follow_source(
     }
 }
 
+/// Whether a face group takes the owner's team colour (RND-17). The one rule the
+/// engine and Refit use: the group's lighting material name starts with `team`
+/// (`team_basic_shaderbump`); every other group is drawn white. The texture's alpha is
+/// not a team mask: it is the self-illumination (`hulls.wesl` leaves those texels
+/// untinted).
+pub fn is_team_material(material: &str) -> bool {
+    material.get(..4).is_some_and(|p| p.eq_ignore_ascii_case("team"))
+}
+
+/// (team-coloured faces, all faces) of a model, by [`is_team_material`].
+#[cfg(test)]
+fn team_share(model: &sta_assets::model::Model) -> (usize, usize) {
+    let groups = model.nodes.iter().filter_map(|n| n.mesh()).flat_map(|m| m.groups.iter());
+    groups.fold((0, 0), |(t, all), g| (t + if is_team_material(&g.material) { g.faces.len() } else { 0 }, all + g.faces.len()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_team_materials_take_the_team_colour() {
+        assert!(is_team_material("team_basic_shaderbump"));
+        assert!(is_team_material("Team"));
+        assert!(!is_team_material("basic_shaderbump"));
+        assert!(!is_team_material("tea"));
+        assert!(!is_team_material("glow_white"));
+        assert!(!is_team_material("é"));
+    }
+
+    /// Install-gated (`STA64_TEST_INSTALL`, optional `STA64_TEST_MOD`; skips when
+    /// absent): per race, the team-coloured share of each start unit's faces. The
+    /// share is exactly the faces of `team*` groups, and a start unit is fully tinted
+    /// only when every group of its model is a team group. The Federation construction
+    /// ship keeps untinted faces beside its team ones.
+    #[test]
+    fn install_start_units_team_share() {
+        let Ok(root) = std::env::var("STA64_TEST_INSTALL") else {
+            eprintln!("SKIP: STA64_TEST_INSTALL not set");
+            return;
+        };
+        let m = std::env::var("STA64_TEST_MOD").unwrap_or_default();
+        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(m.as_str()).filter(|m| !m.is_empty())).unwrap();
+        let (index, _) = sta_content::OdfIndex::build(&vfs);
+        let (db, _) = sta_content::ContentDb::load(&vfs, &index).unwrap();
+        let (races, _) = sta_content::race::Races::load(&vfs, &index);
+        let mut seen = 0;
+        for r in races.playable() {
+            for k in races.loadout(&db, &r.name).units {
+                let def = db.unit(k).unwrap();
+                let key = def.model.to_ascii_lowercase().trim_end_matches(".sod").to_owned();
+                let Some((path, fmt)) = sta_assets::find_model(&vfs, &key) else { continue };
+                let model = sta_assets::load_model(&vfs, &path, fmt).unwrap();
+                let (team, all) = team_share(&model);
+                let materials: Vec<&str> = model.nodes.iter().filter_map(|n| n.mesh()).flat_map(|m| m.groups.iter()).map(|g| g.material.as_str()).collect();
+                println!("{:<18} {:<22} {:>5}/{:<5} faces team = {:>3}%", r.name, def.odf, team, all, team * 100 / all.max(1));
+                assert!(all > 0, "{} has no faces", def.odf);
+                // Fully tinted only when the data marks every group team.
+                assert_eq!(team == all, materials.iter().all(|m| is_team_material(m)), "{}", def.odf);
+                // A construction ship has grey parts beside the team ones.
+                if def.class.0.contains("construct") || def.odf.ends_with("const") {
+                    assert!(team > 0 && team < all, "{} is {team}/{all} team", def.odf);
+                }
+                seen += 1;
+            }
+        }
+        assert!(seen > 0, "no start unit had a model");
+    }
 
     /// The shader must parse and validate (naga, as wgpu runs it), with Bevy's
     /// material bind group filled in.
