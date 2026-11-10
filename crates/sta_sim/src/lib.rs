@@ -297,13 +297,26 @@ impl Sim {
                 self.economy.order_mine(&db, &self.units, c.player, units, *node)
             }
             Order::Stop { units } => {
-                // A stop also drops the attack order of the units it reaches.
-                self.weapons.stop_attack(&self.units, c.player, units);
-                self.economy.cancel(&self.units, c.player, units);
+                // Stop controls activities as well as movement. Select eligible
+                // actors before cleanup, including stations that cannot move.
+                let mut eligible: Vec<_> = units.iter().copied().filter(|&id| {
+                    self.unit(id).is_some_and(|u| {
+                        matches!(u.kind, world::EntityKind::Craft | world::EntityKind::Station)
+                            && (!c.player.is_player() || u.owner == c.player)
+                    })
+                }).collect();
+                eligible.sort();
+                eligible.dedup();
+                if eligible.is_empty() { return false; }
+                self.weapons.stop_attack(&self.units, c.player, &eligible);
+                self.economy.cancel(&self.units, c.player, &eligible);
                 if let Some(db) = self.content.clone() {
-                    self.production.cancel(&db, &self.units, &mut self.economy, c.player, units);
+                    self.production.cancel(&db, &self.units, &mut self.economy, c.player, &eligible);
                 }
-                self.apply_movement(c.player, order)
+                // Immobile actors have no course to stop; their accepted
+                // cleanup must not be reported as a rejected movement order.
+                self.apply_movement(c.player, &Order::Stop { units: eligible });
+                true
             }
             Order::Build { builder, what, at } => {
                 let Some(db) = self.content.clone() else { return false };
