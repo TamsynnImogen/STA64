@@ -489,6 +489,7 @@ fn setup(mut commands: Commands) {
             position_type: PositionType::Absolute,
             top: Val::Px(12.0),
             left: Val::Px(12.0),
+            max_width: Val::Percent(HUD_TEXT_WIDTH_PCT),
             ..default()
         },
     ));
@@ -671,11 +672,13 @@ fn rebuild(
     let SimSide { setup, sim, warnings: sim_warnings, controllers, skirmish } =
         build_sim(&map, &name, &content, &index, &vfs.0, seat.0, skirmish_cfg.as_deref().map(|c| (c, &*races)));
     let mut skirmish_note = None;
+    let mut played_race = None;
     let is_match = matches!(skirmish, Some(Ok(_)));
     match skirmish {
         Some(Ok(s)) => {
             info!("{}", s.summary);
             skirmish_note = Some(s.summary);
+            played_race = Some(s.local.name.clone());
             commands.insert_resource(s.local);
         }
         Some(Err(e)) => {
@@ -1101,13 +1104,13 @@ fn rebuild(
     missing.sort();
     missing.dedup();
     let mut info = format!(
-        "{header}\n{}  v{}  {}\nsize {:.0} x {:.0}   race {}   tech tree {}   scripts {:?}\nsky {}   starfield {}\n{} objects: {} drawn ({} ships under the sim, {} planets, {} asteroid rocks, {} nebulae as {} gas fields), {} editor markers ({} lights), {} without a model, {} without an ODF   {} triangles",
+        "{header}\n{}  v{}  {}\nsize {:.0} x {:.0}   {}   tech tree {}   scripts {:?}\nsky {}   starfield {}\n{} objects: {} drawn ({} ships under the sim, {} planets, {} asteroid rocks, {} nebulae as {} gas fields), {} editor markers ({} lights), {} without a model, {} without an ODF   {} triangles",
         map.description,
         map.version,
         if map.binary { "binary" } else { "text" },
         map.size[0],
         map.size[2],
-        map.race,
+        race_field(&map.race, played_race.as_deref()),
         map.tech_tree_file,
         map.scripts,
         sky_note,
@@ -1147,6 +1150,20 @@ fn rebuild(
     browser.info = info;
 }
 
+/// The info panel's race field: the race the local seat plays when there is a match,
+/// else the map's default race (a bare map view plays nobody).
+fn race_field(map_race: &str, played: Option<&str>) -> String {
+    match played {
+        Some(r) => format!("race {r}"),
+        None => format!("race {map_race} (map default)"),
+    }
+}
+
+/// Width of the top-left text, as a share of the screen. The notices (top centre) take
+/// [`crate::ui::notices::NOTICE_WIDTH_PCT`] around the middle, so this stops short of
+/// them; the text wraps inside it.
+pub(crate) const HUD_TEXT_WIDTH_PCT: f32 = 33.0;
+
 fn fps(diag: Res<bevy::diagnostic::DiagnosticsStore>, mut q: Query<&mut Text, With<FpsText>>) {
     let fps = diag
         .get(&bevy::diagnostic::FrameTimeDiagnosticsPlugin::FPS)
@@ -1176,6 +1193,25 @@ fn hud(browser: Res<MapBrowser>, skirmish: Option<Res<crate::game::SkirmishCfg>>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_info_panel_names_the_played_race() {
+        let played = race_field("federation", Some("borg"));
+        assert_eq!(played, "race borg");
+        assert!(!played.contains("federation"));
+        assert_eq!(race_field("federation", None), "race federation (map default)");
+    }
+
+    /// The info text (left) and the notices (centre) never share a column, at any
+    /// screen width a match runs at.
+    #[test]
+    fn the_notices_clear_the_info_text() {
+        for w in [800.0_f32, 1280.0, 1920.0, 3440.0] {
+            let info_right = 12.0 + w * HUD_TEXT_WIDTH_PCT / 100.0;
+            let notice_left = crate::ui::notices::notice_span(w).0;
+            assert!(info_right <= notice_left, "{w}: info ends at {info_right}, notices start at {notice_left}");
+        }
+    }
 
     /// A match's start units (owned by a seat, made by the sim) are not ghosts: the units
     /// view must draw and pick them; neutral leftovers (planets, nebulae) stay ghosts.

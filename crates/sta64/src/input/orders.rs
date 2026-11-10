@@ -20,7 +20,7 @@ use crate::sim_link::{CommandQueue, ContentRes, OrderIssued, OrderKind, Selectio
 pub struct OrderTargets(pub BTreeMap<EntityId, SimVec3>);
 
 /// Each unit's move target: the group keeps its offsets from `centre`.
-fn formation_moves(picked: &[(EntityId, Vec3)], centre: Vec3, target: Vec3) -> Vec<(EntityId, Vec3)> {
+pub(crate) fn formation_moves(picked: &[(EntityId, Vec3)], centre: Vec3, target: Vec3) -> Vec<(EntityId, Vec3)> {
     picked.iter().map(|&(id, p)| (id, target + (p - centre))).collect()
 }
 

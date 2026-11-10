@@ -93,11 +93,6 @@ impl Strings {
         }
     }
 
-    #[cfg(test)]
-    pub fn get(&self, key: &str) -> Option<&str> {
-        self.map.get(key).map(String::as_str)
-    }
-
     /// Makes this the table [`tr`] reads.
     pub fn activate(&self) {
         if let Ok(mut g) = active().write() {

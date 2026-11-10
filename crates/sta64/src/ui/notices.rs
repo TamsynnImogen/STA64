@@ -38,6 +38,11 @@ pub const NOTICE_SECS: f32 = 5.0;
 pub const NOTICE_FADE: f32 = 1.0;
 /// Notices on screen at once.
 pub const NOTICE_MAX: usize = 4;
+/// Widest a notice line gets, as a share of the screen width. Centred, so notices
+/// stay between (100 - this) / 2 % and (100 + this) / 2 %, clear of the info text
+/// (`map::HUD_TEXT_WIDTH_PCT`) at the top left. HUD.md puts event text in the middle
+/// of the screen and chat down the left, so nothing of ours takes the left column.
+pub const NOTICE_WIDTH_PCT: f32 = 30.0;
 /// Seconds a chat line shows on the left.
 pub const CHAT_SECS: f32 = 12.0;
 /// Chat lines on screen at once.
@@ -48,6 +53,12 @@ pub const LOG_MAX: usize = 100;
 pub const TIP_SHORT_SECS: f32 = 0.35;
 /// Rest before the verbose tooltip.
 pub const TIP_VERBOSE_SECS: f32 = 1.5;
+
+/// The horizontal span `(left, right)` of the notice column on a screen `screen_w` wide.
+pub fn notice_span(screen_w: f32) -> (f32, f32) {
+    let w = screen_w * NOTICE_WIDTH_PCT / 100.0;
+    ((screen_w - w) / 2.0, (screen_w + w) / 2.0)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Severity {
@@ -361,7 +372,7 @@ fn draw_notices(
         }
         for (i, a) in notices.active.iter().enumerate() {
             commands.entity(root).with_child((
-                Node { padding: UiRect::axes(Val::Px(theme.pad), Val::Px(2.0)), ..default() },
+                Node { padding: UiRect::axes(Val::Px(theme.pad), Val::Px(2.0)), max_width: Val::Percent(NOTICE_WIDTH_PCT), ..default() },
                 BackgroundColor(theme.panel.with_alpha(0.6)),
                 children![(NoticeLine(i), text(a.shown(), theme.text_size, colour(&theme, a.severity)))],
             ));
