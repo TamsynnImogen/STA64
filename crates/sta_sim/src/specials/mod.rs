@@ -3,8 +3,9 @@
 //! What content gives us (`UnitDef`/`WeaponDef` have no special fields yet, so
 //! everything is read from the resolved ODFs in `raw`; gaps listed below):
 //! - Unit: `maxSpecialEnergy` and `specialEnergyRate` (per second). A unit
-//!   with `maxSpecialEnergy > 0` has an energy pool, full at its first tick,
-//!   refilled at the rate up to the maximum.
+//!   with `maxSpecialEnergy > 0` has an energy pool, full at its first tick
+//!   unless set by `Edit::SetEnergy`, refilled at the rate within 0..max.
+//!   Mission/bench energy edits apply before that tick's refill/cloak drain.
 //! - A special is a hardpoint whose weapon's class label the [`SpecialKind`]
 //!   dispatch knows (`cloakingdevice`, `cloakingdeviceimp`). Special weapons
 //!   never fire as weapons (`weapons.rs` skips them). An `Order::Special`
@@ -156,6 +157,19 @@ impl Specials {
 
     pub fn energy_of(&self, id: EntityId) -> Option<Fixed> {
         self.energy.get(id).copied()
+    }
+
+    pub(crate) fn set_energy(&mut self, units: &Entities, db: &ContentDb, id: EntityId, to: Fixed) -> bool {
+        let Some(def) = units
+            .get(id)
+            .filter(|unit| unit.hull[0] > Fixed::ZERO)
+            .and_then(|unit| db.unit(unit.def))
+            .and_then(energy_def)
+        else {
+            return false;
+        };
+        self.energy.insert(id, to.max(Fixed::ZERO).min(def.max));
+        true
     }
 
     pub fn cloak_state(&self, id: EntityId) -> Option<CloakState> {
@@ -335,7 +349,12 @@ impl Specials {
                 continue;
             };
             match self.energy.get_mut(id) {
-                Some(v) => *v = (*v + e.rate).min(e.max),
+                Some(v) => {
+                    // Widen before adding: Fixed addition wraps before a cap
+                    // can apply, including when a mission sets a full pool.
+                    let next = i128::from(v.to_bits()) + i128::from(e.rate.to_bits());
+                    *v = Fixed::from_bits(next.clamp(0, i128::from(e.max.to_bits())) as i64);
+                }
                 None => {
                     self.energy.insert(id, e.max);
                 }

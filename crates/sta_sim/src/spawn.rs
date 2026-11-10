@@ -164,6 +164,12 @@ impl Sim {
                 true
             }
             Edit::Immortal(id, on) => self.set_flag(id, UnitFlags::IMMORTAL, on),
+            Edit::SetEnergy(id, to) => {
+                let Some(db) = self.content.as_deref() else {
+                    return false;
+                };
+                self.specials.set_energy(&self.units, db, id, to)
+            }
             Edit::Engines(id, on) => {
                 let Some(u) = self.units.get_mut(id) else {
                     return false;

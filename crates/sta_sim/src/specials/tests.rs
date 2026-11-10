@@ -6,6 +6,9 @@ use crate::{Sim, WorldSource};
 use sta_core::{TeamId, Vec3};
 use std::sync::Arc;
 
+#[path = "energy_edits.rs"]
+mod energy_edits;
+
 fn v(x: i32, z: i32) -> Vec3 {
     Vec3 {
         x: Fixed::from_int(x),

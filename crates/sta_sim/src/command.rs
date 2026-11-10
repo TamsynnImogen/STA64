@@ -83,6 +83,9 @@ pub enum Edit {
     Damage(EntityId, Fixed),
     Heal(EntityId),
     Immortal(EntityId, bool),
+    /// Set absolute special energy on a live unit with a defined pool,
+    /// clamped to 0..max. Normal regeneration/cloak drain follows that tick.
+    /// Requires SCRIPT/BENCH privileges; missing/dead/no-pool targets reject.
     SetEnergy(EntityId, Fixed),
     /// Grant a technology to a player.
     Tech(PlayerId, ContentKey),
