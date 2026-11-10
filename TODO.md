@@ -43,6 +43,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 - [?] Screens frame test (UI-07): `STA64_GPU_TESTS=1 cargo test -p sta64 --test screens_frame`; lavender buttons and a gold title in the middle half of the frame, the scene untouched either side, each screen its own picture
 - [?] Radar clicks and filters: dots pick all / allies / enemies / neutral, the name cycles; a click on the square sends `RadarClick` (camera move / `GO_WARP` wiring is the HUD's, INT-M3)
 
+- [?] Rally controls (UI-14 follow-up): select a finished stationary yard/outpost and right-click empty ground or a unit to set its rally target; new ships use that target. A mobile constructor still moves on right-click, as do mixed yard/ship groups. Clicking allied or neutral ships with a warship moves rather than attacking. Rally currently has no voice acknowledgement.
+
 ## Checked earlier (morning list)
 
 Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
