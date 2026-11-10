@@ -640,3 +640,38 @@ fn existing_team_command_replays_same_build_with_identical_events() {
     }
     assert_eq!(rerun.digest(), digest);
 }
+
+#[test]
+fn metadata_resources_stay_neutral_even_with_craft_or_station_class() {
+    for class in ["craft", "starbase"] {
+        let mut def = UnitDef::new("metadata_resource", class);
+        def.hull = Fixed::from_int(100);
+        def.resource = Some(0);
+        let content = Arc::new(ContentDb::builder().unit(def).build().unwrap());
+        let setup = GameSetup {
+            seed: 19,
+            map: Arc::new(MapDef::empty()),
+            content,
+            players: vec![PlayerSetup {
+                id: PlayerId(0),
+                team: TeamId(0),
+                race: String::new(),
+                control: Control::Human,
+            }],
+            options: GameOptions::default(),
+        };
+        let mut sim = Sim::from_setup(&setup);
+        let id = spawn(&mut sim, "metadata_resource", PlayerId(0), pos(0));
+        assert_ne!(
+            sim.unit(id).unwrap().kind,
+            crate::world::EntityKind::Resource
+        );
+        assert_eq!(sim.unit(id).unwrap().owner, NEUTRAL);
+        sim.units.get_mut(id).unwrap().target = Some(pos(100));
+        let before = sim.snapshot();
+        for to in [PlayerId(0), NEUTRAL] {
+            assert!(!sim.apply_edit(PlayerId::SCRIPT, &Edit::Team(id, to)));
+            assert_eq!(sim.snapshot(), before);
+        }
+    }
+}

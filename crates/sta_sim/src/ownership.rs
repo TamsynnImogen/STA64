@@ -27,6 +27,11 @@ impl Sim {
             || unit.hull[0] <= Fixed::ZERO
             || unit.flags.contains(UnitFlags::DYING)
             || unit.progress.is_some()
+            || self
+                .content
+                .as_deref()
+                .and_then(|db| db.unit(unit.def))
+                .is_some_and(|def| def.resource.is_some())
             || self.production.transfer_blocked(id)
         {
             return false;

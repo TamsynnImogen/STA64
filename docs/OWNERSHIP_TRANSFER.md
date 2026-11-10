@@ -176,7 +176,8 @@ campaign completion remain separate acceptance evidence.
 After the cargo prerequisite, introduce the existing Team edit for live,
 finished craft and stations. This is an incremental shared capability, not
 completion of the producer/capture gates above. Before mutating anything,
-reject a missing/dying/zero-hull/non-unit target, any unfinished target, and
+reject a missing/dying/zero-hull/non-unit target, resources identified by
+kind or definition metadata, any unfinished target, and
 any unit with a production queue, pending deploy or weld involvement (as
 builder or child). Even a same-owner request uses these guards. Rejection
 must leave orders, cargo, rally, resources and ownership unchanged.
