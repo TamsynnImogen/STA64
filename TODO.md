@@ -56,6 +56,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] Stop capability: select a stationary yard/station or an engine-disabled ship and check that Stop remains in the top grid while Move and formations stay unavailable; Stop clears the selected actors' orders. Mixed owned craft/station groups retain Stop; resources and dying units do not gain it.
 
+- [?] Guarded scripted ownership (SIM-19, #256; updated builds only): at an existing mission handoff of a finished unit, check that its new owner can command it and the former owner cannot; old movement, attack and actor rally should stop. A loaded freighter retains cargo and delivers to its new owner after a new Mine order. Transfers involving queued construction, pending deploys or unfinished welds are deliberately rejected in this stage; capture-loss victory is not yet implemented. The pinned older rally build predates these changes.
+
 ## Checked earlier (morning list)
 
 Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
@@ -128,3 +130,4 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [ ] Construction, cloak FX: a station under construction welds and firms up, `Built` flashes; a cloaked own unit goes translucent and back (RND-11)
 - [?] Resource moons (RND-16), `cargo run -- --map <name>` on an FO4, FO or DW map with `trigger_dilithium` / `trigger_tritanium` markers: each draws a dilithium or tritanium moon model (one of four variants, as the game's replace weapon lists them), never the editor letter; it is neutral, shows no selection ring and plays no ship voice; A2 maps (`mdmoon`) look as before
 - [?] Language packs (CON-11): `cargo test -p sta_content --lib strings -- --nocapture` lists a string and label count for every installed game and mod (A1, A2, A2 stock, Dominion War, FO, FO Roots, Fleet Ops 4.0, STA2 Classic) and passes; the UI tooltip "Double click to return to strategic mode." still shows in-game
+- [?] Asteroid fields block ships: `STA64_TEST_INSTALL=<FO Roots dir> STA64_TEST_MOD="Fleet Ops 4.0" cargo test -p sta_content --test asteroid_install` passes. In a skirmish on FO 4 `AsteroidZone`, order a ship straight across one of the hidden `trigger_blocking` walls: it stops at the edge or slides round it, never inside (no path search yet, so it may stall behind a wall it is aimed squarely at; proposed follow-up in the PR). Maps without fields fly as before.

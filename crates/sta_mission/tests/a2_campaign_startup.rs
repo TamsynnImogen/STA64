@@ -11,6 +11,7 @@ use sta_core::{PlayerId, TeamId};
 use sta_mission::api::{MissionConfig, PlayerNumbering};
 use sta_mission::runtime::MissionRuntime;
 use sta_mission::{Labels, Resolution};
+use sta_sim::command::{CommandKind, Edit};
 use sta_sim::setup::{Control, Controller, GameOptions, GameSetup, PlayerSetup};
 use sta_sim::{Sim, SimEvent, WorldSource};
 use sta_vfs::Vfs;
@@ -240,15 +241,21 @@ fn external_a2_campaign_ports_start_on_installed_maps() {
                 let output = sim.step(&commands);
                 rejected.extend(output.events.iter().filter_map(|event| {
                     match event {
-                        SimEvent::Rejected { player, seq } => Some((
-                            tick,
-                            player.0,
-                            *seq,
-                            commands
+                        SimEvent::Rejected { player, seq } => {
+                            let command = commands
                                 .iter()
-                                .find(|c| c.player == *player && c.seq == *seq)
-                                .map(|c| format!("{:?}", c.kind)),
-                        )),
+                                .find(|c| c.player == *player && c.seq == *seq);
+                            if let Some(CommandKind::Edit(Edit::Team(id, _))) = command.map(|c| &c.kind) {
+                                // Diagnostic only: this is the state AFTER the step,
+                                // not a claim about the precise rejection branch.
+                                let target = sim.unit(*id).map(|u| (
+                                    u.kind, u.owner, u.hull, u.flags, u.progress,
+                                    db.unit(u.def).map(|d| (&d.odf, &d.class, d.resource)),
+                                ));
+                                eprintln!("A2 startup {name}: rejected Team tick={tick} target_after_step={target:?}");
+                            }
+                            Some((tick, player.0, *seq, command.map(|c| format!("{:?}", c.kind))))
+                        }
                         _ => None,
                     }
                 }));
