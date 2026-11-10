@@ -214,7 +214,7 @@ pub struct UnitModels {
 
 /// Build the model of every root that [`NeedsModel`], in the owner's team
 /// colour, with the damage-state nodes present (hidden by [`show_damage`]).
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn attach_models(
     mut commands: Commands,
     pending: Query<(Entity, &NeedsModel, &TeamColour, Option<&UnitOwner>, Option<&SimEntity>)>,
