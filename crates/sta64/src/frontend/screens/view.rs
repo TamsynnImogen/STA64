@@ -243,13 +243,14 @@ fn settings(ctx: &Ctx) -> impl Bundle {
 
 fn mod_select(ctx: &Ctx) -> impl Bundle {
     let t = ctx.theme.clone();
-    let mut names = vec![tr("Base game")];
+    let base = ctx.data.base_name.clone().unwrap_or_else(|| tr("Base game"));
+    let mut names = vec![base.clone()];
     names.extend(ctx.data.mods.iter().map(|m| m.name.clone()));
     let scroll = ctx.scroll.offset;
     let picked = ctx.browse.mod_row.min(names.len() - 1);
     let mut details = Vec::new();
     match picked.checked_sub(1).and_then(|i| ctx.data.mods.get(i)) {
-        None => details.push(tr("The game as installed, without a mod.")),
+        None => details.push(trf("{0}, as installed, without a mod.", &[&base])),
         Some(m) => {
             details.push(format!("{}{}", m.name, m.version.as_deref().map(|v| format!("  v{v}")).unwrap_or_default()));
             if !m.authors.is_empty() {
@@ -265,7 +266,7 @@ fn mod_select(ctx: &Ctx) -> impl Bundle {
     }
     let current = match &ctx.selected.0 {
         Some(f) => trf("In use: {0}", &[f]),
-        None => tr("In use: base game"),
+        None => trf("In use: {0}", &[&base]),
     };
     content(ctx.theme, move |p| {
         let rows: Vec<&str> = names.iter().map(String::as_str).collect();
