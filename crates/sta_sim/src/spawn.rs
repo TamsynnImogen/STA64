@@ -41,6 +41,7 @@ impl Sim {
         sim.content = Some(Arc::clone(&s.content));
         sim.starts = s.map.starts.clone();
         sim.regions = s.map.regions.clone();
+        sim.bounds = Some(s.map.bounds);
 
         let mut warnings = Vec::new();
         for o in &s.map.objects {

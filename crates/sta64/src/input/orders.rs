@@ -81,6 +81,8 @@ pub fn order(
         .and_then(|t| super::context::context_order(content.as_deref().map(|c| &*c.0), view, me, &own, t))
     {
         let kind = OrderKind::of(&order);
+        // A new order replaces the old destination line.
+        clear_targets(&mut targets, &own);
         queue.0.push(CommandKind::Order(order));
         if let Some(kind) = kind {
             issued.write(OrderIssued { units: own.clone(), kind });
@@ -107,6 +109,7 @@ pub fn order(
     let hit = ray.origin + dir * t;
     let target = Vec3::new(hit.x, centre.y, -hit.z);
     if super::context::rally_builders(content.as_deref().map(|c| &*c.0), view, me, &own) {
+        clear_targets(&mut targets, &own);
         queue.0.push(CommandKind::Order(Order::Rally { builders: own, at: Target::Point(SimVec3::from_f32(target.to_array())) }));
         return;
     }
@@ -120,9 +123,38 @@ pub fn order(
     issued.write(OrderIssued { units: picked.iter().map(|p| p.0).collect(), kind: OrderKind::Move });
 }
 
-/// Forget targets of ships that arrived (the sim snaps them onto it) or are gone.
-pub fn prune_targets(link: Res<SimLink>, mut targets: ResMut<OrderTargets>) {
-    targets.0.retain(|id, to| link.curr().unit(*id).is_some_and(|u| u.pos != *to));
+/// Forget the destination line of `units` (a new, non-move order replaced it).
+pub(crate) fn clear_targets(targets: &mut OrderTargets, units: &[EntityId]) {
+    for id in units {
+        targets.0.remove(id);
+    }
+}
+
+/// Which ships were seen under way since their target was set.
+#[derive(Default)]
+pub struct Underway(std::collections::BTreeSet<EntityId>);
+
+/// Drop the targets of ships that arrived, are gone, or came to rest after
+/// moving. The smooth movement model stops a ship short of its point (within
+/// `tooCloseToTurn`), so "arrived" is "was moving and is now at rest", not
+/// only "is exactly on the point"; a rig that deploys stops the same way.
+pub fn prune_targets(link: Res<SimLink>, mut targets: ResMut<OrderTargets>, mut underway: Local<Underway>) {
+    prune(link.curr(), &mut targets, &mut underway);
+}
+
+fn prune(view: &sta_sim::WorldView, targets: &mut OrderTargets, underway: &mut Underway) {
+    targets.0.retain(|id, to| {
+        let Some(u) = view.unit(*id) else { return false };
+        if u.pos == *to {
+            return false;
+        }
+        if u.speed > sta_sim::Fixed::ZERO {
+            underway.0.insert(*id);
+            return true;
+        }
+        !underway.0.contains(id)
+    });
+    underway.0.retain(|id| targets.0.contains_key(id));
 }
 
 #[cfg(test)]
@@ -202,6 +234,35 @@ mod tests {
         let to = SimVec3::from_f32([200.0, 0.0, 300.0]);
         assert_eq!(cmds, [CommandKind::Order(Order::Move { units: vec![a], to, queue: true })]);
         assert_eq!(msgs[0].kind, OrderKind::Move);
+    }
+
+    #[test]
+    fn a_new_order_replaces_the_old_destination_line() {
+        let (mut app, [a, _, e]) = app();
+        app.world_mut().resource_mut::<OrderTargets>().0.insert(a, SimVec3::from_f32([200.0, 0.0, 300.0]));
+        aim_at(&mut app, -500.0, 0.0);
+        let (cmds, _) = click(&mut app, false);
+        assert_eq!(cmds, [CommandKind::Order(Order::Attack { units: vec![a], target: e })]);
+        assert!(app.world().resource::<OrderTargets>().0.is_empty());
+    }
+
+    #[test]
+    fn a_ship_that_came_to_rest_short_of_its_point_loses_its_line() {
+        let (app, [a, ..]) = app();
+        let view = app.world().resource::<SimLink>().curr().clone();
+        let mut targets = OrderTargets::default();
+        let mut underway = Underway::default();
+        targets.0.insert(a, SimVec3::from_f32([300.0, 0.0, 0.0]));
+        // Not yet moving (just ordered): kept.
+        prune(&view, &mut targets, &mut underway);
+        assert_eq!(targets.0.len(), 1);
+        // Seen under way, then at rest short of the point: dropped.
+        let mut moving = (*view).clone();
+        moving.units.iter_mut().find(|u| u.id == a).unwrap().speed = Fixed::from_int(50);
+        prune(&moving, &mut targets, &mut underway);
+        assert_eq!(targets.0.len(), 1);
+        prune(&view, &mut targets, &mut underway);
+        assert!(targets.0.is_empty());
     }
 
     #[test]

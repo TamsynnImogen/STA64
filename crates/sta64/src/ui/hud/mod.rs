@@ -27,6 +27,7 @@
 #![allow(dead_code)]
 
 pub mod frame;
+pub mod ghost;
 pub mod layout;
 pub mod model;
 pub mod commands;
@@ -138,6 +139,7 @@ impl Plugin for HudPlugin {
             .init_resource::<HudFeed>()
             .init_resource::<HudState>()
             .init_resource::<HudPointer>()
+            .init_resource::<ghost::PlacementBounds>()
             .init_resource::<OrderTargets>()
             .init_resource::<CommandQueue>()
             .add_message::<OrderIssued>()
@@ -154,6 +156,8 @@ impl Plugin for HudPlugin {
                     pointer,
                     press,
                     place_on_click.run_if(resource_exists::<Aim>),
+                    ghost::update_ghost,
+                    ghost::tint_ghost,
                 )
                     .chain()
                     .in_set(GameSet::Ui),
@@ -416,6 +420,8 @@ fn place_on_click(
     mut issued: MessageWriter<OrderIssued>,
     units: Targetable,
     mut targets: ResMut<OrderTargets>,
+    bounds: Res<ghost::PlacementBounds>,
+    mut notices: MessageWriter<Notice>,
 ) {
     if keys
         .as_ref()
@@ -447,8 +453,10 @@ fn place_on_click(
         let point = ground_point(a.ray, y);
         if let Some((orders, ids)) = target_order(&feed, mode, target, point) {
             if let Some(kind) = orders.first().and_then(OrderKind::of) {
-                issued.write(OrderIssued { units: ids, kind });
+                issued.write(OrderIssued { units: ids.clone(), kind });
             }
+            // A new order replaces the old destination line (a move sets its own).
+            clear_order_targets(&mut targets, &ids);
             for order in orders {
                 record_move_target(&mut targets, &order);
                 queue.0.push(CommandKind::Order(order));
@@ -484,6 +492,18 @@ fn place_on_click(
     // Render space to the sim's: z runs the other way.
     let hit = a.ray.origin + dir * t;
     let at = SimVec3::from_f32([hit.x, y, -hit.z]);
+    if !ghost::affordable(&feed, &armed) {
+        notices.write(Notice::new(Severity::Warn, tr("Cannot build: not enough resources")));
+        return;
+    }
+    // The sim's own rule, as the ghost shows it: a refused site keeps the
+    // placement armed so the click can be tried again elsewhere.
+    if let Err(e) = ghost::site_status(&feed, bounds.0.as_ref(), &armed, at) {
+        notices.write(Notice::new(Severity::Warn, tr(ghost::refusal(e))));
+        return;
+    }
+    // The new order's target replaces the destination line of the last one.
+    targets.0.insert(armed.builder, at);
     queue.0.push(CommandKind::Order(Order::Build {
         builder: armed.builder,
         what: armed.what,
