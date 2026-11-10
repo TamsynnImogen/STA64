@@ -71,16 +71,16 @@ pub struct MapSeat(pub Option<u8>);
 
 /// The sim's content, loaded once per mount: the database and the ODF index its
 /// map conversions resolve scenery through.
-struct SimContent {
-    db: Arc<ContentDb>,
-    index: Arc<OdfIndex>,
+pub(crate) struct SimContent {
+    pub(crate) db: Arc<ContentDb>,
+    pub(crate) index: Arc<OdfIndex>,
     /// The race ODFs: start units, stock, GUI cfg and music per race.
-    races: Arc<sta_content::Races>,
+    pub(crate) races: Arc<sta_content::Races>,
 }
 
 /// Loaded models, kept across maps, and the render-side ODF cache.
 #[derive(Resource, Default)]
-struct Catalogue {
+pub(crate) struct Catalogue {
     /// What the sim reads: `ContentDb::load` (CON-03) of the mount.
     content: Option<SimContent>,
     /// What only the renderer reads (nebula and planet keys, the starfield's
@@ -92,7 +92,7 @@ struct Catalogue {
 
 impl Catalogue {
     /// The mount's content database, built on first use.
-    fn content(&mut self, vfs: &sta_vfs::Vfs) -> Result<&SimContent, String> {
+    pub(crate) fn content(&mut self, vfs: &sta_vfs::Vfs) -> Result<&SimContent, String> {
         if self.content.is_none() {
             let (index, dupes) = OdfIndex::build(vfs);
             let (db, warnings) = ContentDb::load(vfs, &index).map_err(|e| e.to_string())?;
@@ -146,7 +146,9 @@ impl Placed {
     fn take(&mut self, key: ContentKey, o: &sta_bzn::MapObject) -> Option<EntityId> {
         let p = SimVec3::from_f32([o.transform[9], o.transform[10], o.transform[11]]);
         let owner = if o.team > 0 { PlayerId((o.team - 1).min(255) as u8) } else { sta_sim::world::NEUTRAL };
-        self.0.get_mut(&(key, [p.x, p.y, p.z], owner))?.pop_front()
+        // Resources are neutral in the sim whoever the BZN gave them to (SIM-18).
+        let mut pop = |o| self.0.get_mut(&(key, [p.x, p.y, p.z], o)).and_then(|q| q.pop_front());
+        pop(owner).or_else(|| pop(sta_sim::world::NEUTRAL))
     }
 
     /// Entities no BZN object took (`from_setup` made them from something the
@@ -363,8 +365,15 @@ impl Plugin for MapPlugin {
             .init_resource::<crate::render::strategic::Silhouettes>()
             .add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default())
             .add_plugins(HierarchyPropagatePlugin::<RenderLayers>::new(PostUpdate))
-            .add_systems(Startup, setup)
-            .add_systems(
+            .add_systems(OnEnter(crate::app::AppState::FrontEnd), clear_match);
+        // Behind the front end the match's cameras, lights and texts exist only from the
+        // loading screen to the front end's return (INT-M4); otherwise from the start.
+        if app.world().contains_resource::<crate::game::flow::Flow>() {
+            app.add_systems(OnEnter(crate::app::AppState::Loading), setup);
+        } else {
+            app.add_systems(Startup, setup);
+        }
+        app.add_systems(
                 Update,
                 (
                     crate::clock::advance_idle_clock.run_if(not(resource_exists::<crate::sim_link::SimLink>)),
@@ -385,8 +394,22 @@ impl Plugin for MapPlugin {
                     crate::render::particles::draw,
                 )
                     .chain()
-                    .after(crate::app::GameSet::SimLink),
+                    .after(crate::app::GameSet::SimLink)
+                    .run_if(crate::game::flow::match_running),
             );
+    }
+}
+
+/// What the match's own cameras, lights and texts are tagged with, to take them
+/// down when the front end returns.
+#[derive(Component)]
+pub(crate) struct MatchEntity;
+
+/// Back at the front end: the map, its sky and the match's cameras go.
+fn clear_match(mut commands: Commands, q: Query<Entity, Or<(MapEntities, With<MatchEntity>)>>, mut particles: ResMut<crate::render::particles::Particles>) {
+    particles.clear();
+    for e in &q {
+        commands.entity(e).despawn();
     }
 }
 
@@ -399,6 +422,7 @@ fn setup(mut commands: Commands) {
     // The scene, drawn over the background camera's picture with its own depth.
     commands
         .spawn((
+            MatchEntity,
             Camera3d::default(),
             Camera {
                 order: 1,
@@ -419,6 +443,7 @@ fn setup(mut commands: Commands) {
         ))
         .with_child((BackgroundCamera, Camera3d::default(), Camera { order: 0, ..default() }, projection, RenderLayers::layer(BACKGROUND_LAYER)));
     commands.spawn((
+        MatchEntity,
         MapLight(0),
         RenderLayers::from_layers(&[0, BACKGROUND_LAYER]),
         DirectionalLight {
@@ -428,6 +453,7 @@ fn setup(mut commands: Commands) {
         Transform::from_xyz(3.0, 5.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
     commands.spawn((
+        MatchEntity,
         MapLight(1),
         RenderLayers::from_layers(&[0, BACKGROUND_LAYER]),
         DirectionalLight {
@@ -437,6 +463,7 @@ fn setup(mut commands: Commands) {
         Transform::from_xyz(-4.0, -2.0, -3.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
     commands.spawn((
+        MatchEntity,
         FpsText,
         Text::new(""),
         TextFont {
@@ -451,6 +478,7 @@ fn setup(mut commands: Commands) {
         },
     ));
     commands.spawn((
+        MatchEntity,
         MapHud,
         Text::new(""),
         TextFont {

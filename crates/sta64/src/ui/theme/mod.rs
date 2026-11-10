@@ -25,6 +25,9 @@ pub struct ThemePlugin;
 
 impl Plugin for ThemePlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<crate::ui::i18n::I18nPlugin>() {
+            app.add_plugins(crate::ui::i18n::I18nPlugin);
+        }
         app.init_resource::<Theme>()
             .add_message::<ButtonClicked>()
             .add_message::<ToggleChanged>()

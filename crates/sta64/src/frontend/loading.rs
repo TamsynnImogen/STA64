@@ -59,6 +59,7 @@ use sta_content::MapDef;
 
 use crate::app::GameSet;
 use crate::clock::AnimClock;
+use crate::ui::i18n::tr;
 use crate::render::textures::{Loader, TextureCache};
 use crate::ui::theme::{Fill, ProgressBar, Theme, ThemePlugin, mix};
 use crate::viewer::Mounted;
@@ -220,10 +221,10 @@ impl LoadProgress {
     /// What the screen says it is doing: the step's text after the stage's
     /// words, when the stage reported one.
     pub fn doing(&self) -> String {
-        let Some(stage) = self.current() else { return "Ready".into() };
+        let Some(stage) = self.current() else { return tr("Ready") };
         match &self.step {
-            Some(step) if !step.is_empty() => format!("{} - {step}", stage.doing()),
-            _ => stage.doing().to_owned(),
+            Some(step) if !step.is_empty() => format!("{} - {step}", tr(stage.doing())),
+            _ => tr(stage.doing()),
         }
     }
 
@@ -574,7 +575,7 @@ fn spawn_info(p: &mut ChildSpawnerCommands, t: &Theme, info: &LoadInfo) {
             c.spawn(text(para.clone(), t.text_size, t.text_dim));
         }
         if !info.objectives.is_empty() {
-            c.spawn(text("OBJECTIVES", t.small_size, t.accent));
+            c.spawn(text(tr("OBJECTIVES"), t.small_size, t.accent));
             for o in &info.objectives {
                 c.spawn((Node { column_gap: Val::Px(t.gap), align_items: AlignItems::Center, ..default() }, Pickable::IGNORE)).with_children(|row| {
                     row.spawn((Node { width: Val::Px(8.0), height: Val::Px(8.0), border_radius: BorderRadius::MAX, ..default() }, BackgroundColor(t.accent)));
@@ -858,9 +859,9 @@ fn parse_script(at: &str) -> Option<Vec<LoadReport>> {
 pub fn add_frame_overlay(app: &mut App, target: Handle<Image>, size: (u32, u32)) {
     let map = sta_content::fake::two_bases();
     let mut info = LoadInfo::from_map(&map);
-    info.kicker = "Instant Action".into();
-    info.briefing = vec!["Two starbases face each other across a mineable moon.".into(), "A nebula lies on one flank and an asteroid field on the other.".into()];
-    info.objectives = vec!["Destroy the enemy base".into(), "Protect your own".into()];
+    info.kicker = tr("Instant Action");
+    info.briefing = vec![tr("Two starbases face each other across a mineable moon."), tr("A nebula lies on one flank and an asteroid field on the other.")];
+    info.objectives = vec![tr("Destroy the enemy base"), tr("Protect your own")];
     if let Some(dir) = std::env::var_os("STA64_UI_LOADING_SKY") {
         let mut vfs = sta_vfs::Vfs::default();
         match vfs.push_dir("loading-sky".into(), dir.into()) {

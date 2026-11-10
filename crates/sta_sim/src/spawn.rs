@@ -30,7 +30,12 @@ impl Sim {
         players.sort();
         players.dedup_by_key(|p| p.0);
         sim.players = players;
-        sim.ai_seats = s.players.iter().filter(|p| matches!(p.control, crate::setup::Control::Ai(_))).map(|p| p.id).collect();
+        sim.ai_seats = s
+            .players
+            .iter()
+            .filter(|p| matches!(p.control, crate::setup::Control::Ai(_)))
+            .map(|p| p.id)
+            .collect();
         sim.ai_seats.sort();
         sim.ai_seats.dedup();
         sim.content = Some(Arc::clone(&s.content));
@@ -39,12 +44,21 @@ impl Sim {
 
         let mut warnings = Vec::new();
         for o in &s.map.objects {
-            let Some(key) = s.content.key(&o.odf).filter(|&k| s.content.unit(k).is_some()) else {
-                warnings.push(Warning::new(&o.odf, format!("{}: not a unit definition; not spawned", s.map.name)));
+            let Some(key) = s
+                .content
+                .key(&o.odf)
+                .filter(|&k| s.content.unit(k).is_some())
+            else {
+                warnings.push(Warning::new(
+                    &o.odf,
+                    format!("{}: not a unit definition; not spawned", s.map.name),
+                ));
                 continue;
             };
             let owner = o.owner.map_or(NEUTRAL, PlayerId);
-            let id = sim.spawn_def(key, owner, o.pos, o.heading).expect("key resolved to a unit");
+            let id = sim
+                .spawn_def(key, owner, o.pos, o.heading)
+                .expect("key resolved to a unit");
             if let Some(label) = &o.label {
                 sim.labels.insert(id, label.clone());
             }
@@ -54,10 +68,22 @@ impl Sim {
 
     /// Spawn an entity from a unit definition at full hull and shields.
     /// `None` without content, or when `key` is not a unit.
-    pub fn spawn_def(&mut self, key: ContentKey, owner: PlayerId, pos: Vec3, heading: (Fixed, Fixed)) -> Option<EntityId> {
+    pub fn spawn_def(
+        &mut self,
+        key: ContentKey,
+        owner: PlayerId,
+        pos: Vec3,
+        heading: (Fixed, Fixed),
+    ) -> Option<EntityId> {
         let content = self.content.as_ref()?;
         let def = content.unit(key)?;
-        let id = self.units.spawn(Entity::from_def(def, content.features(), owner, pos, heading));
+        let id = self.units.spawn(Entity::from_def(
+            def,
+            content.features(),
+            owner,
+            pos,
+            heading,
+        ));
         self.events.push(SimEvent::Spawned { id });
         Some(id)
     }
@@ -83,12 +109,23 @@ impl Sim {
             return false;
         }
         match *e {
-            Edit::Spawn { odf, player, pos, heading } => self.spawn_def(odf, player, pos, heading).is_some(),
+            Edit::Spawn {
+                odf,
+                player,
+                pos,
+                heading,
+            } => self.spawn_def(odf, player, pos, heading).is_some(),
             Edit::Kill(id) => self.despawn(id, None),
             Edit::Damage(id, amount) => {
                 // Straight to the hull, past the shields; lethal unless immortal.
-                let Some(u) = self.units.get_mut(id).filter(|u| u.hull[0] > Fixed::ZERO) else { return false };
-                let floor = if u.flags.contains(UnitFlags::IMMORTAL) { Fixed::ONE } else { Fixed::ZERO };
+                let Some(u) = self.units.get_mut(id).filter(|u| u.hull[0] > Fixed::ZERO) else {
+                    return false;
+                };
+                let floor = if u.flags.contains(UnitFlags::IMMORTAL) {
+                    Fixed::ONE
+                } else {
+                    Fixed::ZERO
+                };
                 u.hull[0] = (u.hull[0] - amount).max(floor).min(u.hull[0]);
                 if u.hull[0] <= Fixed::ZERO {
                     return self.despawn(id, None);
@@ -96,14 +133,18 @@ impl Sim {
                 true
             }
             Edit::Heal(id) => {
-                let Some(u) = self.units.get_mut(id) else { return false };
+                let Some(u) = self.units.get_mut(id) else {
+                    return false;
+                };
                 u.hull[0] = u.hull[1];
                 u.shields = crate::world::Shields::full(u.shields.max, u.shields.directional);
                 true
             }
             Edit::Immortal(id, on) => self.set_flag(id, UnitFlags::IMMORTAL, on),
             Edit::Engines(id, on) => {
-                let Some(u) = self.units.get_mut(id) else { return false };
+                let Some(u) = self.units.get_mut(id) else {
+                    return false;
+                };
                 if !on {
                     u.speed = Fixed::ZERO;
                     u.omega = Fixed::ZERO;
@@ -118,15 +159,21 @@ impl Sim {
                 self.events.push(SimEvent::Present(p.clone()));
                 true
             }
-            Edit::Subsystem(id, Subsystem::Engines, on) => self.apply_edit(from, &Edit::Engines(id, on)),
-            Edit::Subsystem(id, Subsystem::Weapons, on) => self.apply_edit(from, &Edit::Weapons(id, on)),
+            Edit::Subsystem(id, Subsystem::Engines, on) => {
+                self.apply_edit(from, &Edit::Engines(id, on))
+            }
+            Edit::Subsystem(id, Subsystem::Weapons, on) => {
+                self.apply_edit(from, &Edit::Weapons(id, on))
+            }
             // The rest land with the package that owns what they change.
             _ => false,
         }
     }
 
     fn set_flag(&mut self, id: EntityId, flag: UnitFlags, on: bool) -> bool {
-        let Some(u) = self.units.get_mut(id) else { return false };
+        let Some(u) = self.units.get_mut(id) else {
+            return false;
+        };
         u.flags = u.flags.with(flag, on);
         true
     }
@@ -150,20 +197,29 @@ impl Sim {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::WorldSource;
     use crate::command::{Command, CommandKind, Order};
     use crate::setup::{Control, GameOptions, PlayerSetup};
     use crate::view::UnitFlags;
     use crate::world::EntityKind;
-    use crate::WorldSource;
     use sta_content::{MapDef, MapObject};
     use sta_core::TeamId;
 
     fn v(x: i32, y: i32, z: i32) -> Vec3 {
-        Vec3 { x: Fixed::from_int(x), y: Fixed::from_int(y), z: Fixed::from_int(z) }
+        Vec3 {
+            x: Fixed::from_int(x),
+            y: Fixed::from_int(y),
+            z: Fixed::from_int(z),
+        }
     }
 
     fn setup(map: MapDef) -> GameSetup {
-        let seat = |id, control| PlayerSetup { id: PlayerId(id), team: TeamId(id), race: "fx".into(), control };
+        let seat = |id, control| PlayerSetup {
+            id: PlayerId(id),
+            team: TeamId(id),
+            race: "fx".into(),
+            control,
+        };
         GameSetup {
             seed: 11,
             map: Arc::new(map),
@@ -174,7 +230,13 @@ mod tests {
     }
 
     fn object(odf: &str, owner: Option<u8>, pos: Vec3) -> MapObject {
-        MapObject { odf: odf.into(), owner, pos, heading: (Fixed::ONE, Fixed::ZERO), label: None }
+        MapObject {
+            odf: odf.into(),
+            owner,
+            pos,
+            heading: (Fixed::ONE, Fixed::ZERO),
+            label: None,
+        }
     }
 
     fn cmd(player: PlayerId, seq: u32, kind: CommandKind) -> Command {
@@ -182,13 +244,44 @@ mod tests {
     }
 
     fn spawn(seq: u32, db: &ContentDb, odf: &str, player: u8, pos: Vec3) -> Command {
-        let e = Edit::Spawn { odf: db.key(odf).unwrap(), player: PlayerId(player), pos, heading: (Fixed::ZERO, Fixed::ONE) };
+        let e = Edit::Spawn {
+            odf: db.key(odf).unwrap(),
+            player: PlayerId(player),
+            pos,
+            heading: (Fixed::ZERO, Fixed::ONE),
+        };
         cmd(PlayerId::BENCH, seq, CommandKind::Edit(e))
     }
 
     fn mv(player: u8, seq: u32, units: &[u32], to: Vec3) -> Command {
         let units = units.iter().map(|&i| EntityId(i)).collect();
-        cmd(PlayerId(player), seq, CommandKind::Order(Order::Move { units, to, queue: false }))
+        cmd(
+            PlayerId(player),
+            seq,
+            CommandKind::Order(Order::Move {
+                units,
+                to,
+                queue: false,
+            }),
+        )
+    }
+
+    /// SIM-18: a resource placed with a team (or spawned for a seat) is neutral.
+    #[test]
+    fn resources_spawn_neutral() {
+        let mut map = sta_content::fake::two_bases();
+        for o in &mut map.objects {
+            o.owner = Some(0);
+        }
+        let s = setup(map);
+        let mut sim = Sim::from_setup(&s);
+        let moon = s.content.key("fx_moon").unwrap();
+        sim.spawn_def(moon, PlayerId(1), v(5, 0, 5), (Fixed::ONE, Fixed::ZERO))
+            .unwrap();
+        let view = sim.view();
+        let moons: Vec<_> = view.units.iter().filter(|u| u.def == moon).collect();
+        assert_eq!(moons.len(), 2);
+        assert!(moons.iter().all(|u| u.owner == NEUTRAL));
     }
 
     /// `two_bases` places one object, the moon; the starts spawn nothing.
@@ -229,7 +322,11 @@ mod tests {
         let (sim, warnings) = Sim::from_setup_with_warnings(&s);
         let skipped: Vec<_> = warnings.iter().map(|w| w.file.as_str()).collect();
         assert_eq!(skipped, ["fx_nothing", "fx_beam"]);
-        let got: Vec<_> = sim.units.iter().map(|e| (e.id.0, e.kind, e.def, e.owner)).collect();
+        let got: Vec<_> = sim
+            .units
+            .iter()
+            .map(|e| (e.id.0, e.kind, e.def, e.owner))
+            .collect();
         let want = [
             (1, EntityKind::Resource, "fx_moon", NEUTRAL),
             (2, EntityKind::Station, "fx_station", PlayerId(0)),
@@ -254,7 +351,10 @@ mod tests {
         let (mut a, mut b) = (Sim::from_setup(&plain), Sim::from_setup(&bare));
         assert_eq!(a.view(), b.view());
         for _ in 0..10 {
-            assert_eq!(WorldSource::step(&mut a, &[]), WorldSource::step(&mut b, &[]));
+            assert_eq!(
+                WorldSource::step(&mut a, &[]),
+                WorldSource::step(&mut b, &[])
+            );
         }
     }
 
@@ -280,17 +380,33 @@ mod tests {
             // Ids: 1 the moon, then in spawn order.
             let cmds = match t {
                 0 => vec![
-                    spawn(0, &db, "fx_station", 0, v(-4000, 0, 0)),   // 2
-                    spawn(1, &db, "fx_cruiser", 0, v(-3800, 0, 200)), // 3
+                    spawn(0, &db, "fx_station", 0, v(-4000, 0, 0)),    // 2
+                    spawn(1, &db, "fx_cruiser", 0, v(-3800, 0, 200)),  // 3
                     spawn(2, &db, "fx_frigate", 0, v(-3800, 0, -200)), // 4
-                    spawn(3, &db, "fx_yard", 1, v(4000, 0, 0)),       // 5
-                    spawn(4, &db, "fx_cruiser", 1, v(3800, 0, 0)),    // 6
+                    spawn(3, &db, "fx_yard", 1, v(4000, 0, 0)),        // 5
+                    spawn(4, &db, "fx_cruiser", 1, v(3800, 0, 0)),     // 6
                 ],
-                1 => vec![mv(0, 0, &[3, 4], v(-1000, 20, 500)), mv(1, 0, &[6], v(1000, -20, -500))],
-                90 => vec![spawn(5, &db, "fx_miner", 1, v(3900, 0, 300)), mv(0, 1, &[4], v(0, 0, 1500))], // 7
+                1 => vec![
+                    mv(0, 0, &[3, 4], v(-1000, 20, 500)),
+                    mv(1, 0, &[6], v(1000, -20, -500)),
+                ],
+                90 => vec![
+                    spawn(5, &db, "fx_miner", 1, v(3900, 0, 300)),
+                    mv(0, 1, &[4], v(0, 0, 1500)),
+                ], // 7
                 120 => vec![mv(1, 1, &[7], v(500, 0, 0))],
-                150 => vec![cmd(PlayerId::BENCH, 6, CommandKind::Edit(Edit::Kill(EntityId(3))))],
-                200 => vec![cmd(PlayerId(0), 2, CommandKind::Order(Order::Stop { units: vec![EntityId(4)] }))],
+                150 => vec![cmd(
+                    PlayerId::BENCH,
+                    6,
+                    CommandKind::Edit(Edit::Kill(EntityId(3))),
+                )],
+                200 => vec![cmd(
+                    PlayerId(0),
+                    2,
+                    CommandKind::Order(Order::Stop {
+                        units: vec![EntityId(4)],
+                    }),
+                )],
                 _ => vec![],
             };
             let out = WorldSource::step(&mut sim, &cmds);
@@ -310,12 +426,25 @@ mod tests {
         let (again, log2) = scripted_game();
         assert_eq!(digest, again);
         assert_eq!(log, log2);
-        let spawned: Vec<_> = log.iter().filter_map(|(t, e)| matches!(e, SimEvent::Spawned { .. }).then_some(*t)).collect();
+        let spawned: Vec<_> = log
+            .iter()
+            .filter_map(|(t, e)| matches!(e, SimEvent::Spawned { .. }).then_some(*t))
+            .collect();
         // The moon comes out with the first step, with the five bench spawns;
         // the miner at tick 91.
         assert_eq!(spawned, [1, 1, 1, 1, 1, 1, 91]);
-        assert!(log.contains(&(151, SimEvent::Destroyed { id: EntityId(3), by: None })));
-        assert!(!log.iter().any(|(_, e)| matches!(e, SimEvent::Rejected { .. })), "{log:?}");
+        assert!(log.contains(&(
+            151,
+            SimEvent::Destroyed {
+                id: EntityId(3),
+                by: None
+            }
+        )));
+        assert!(
+            !log.iter()
+                .any(|(_, e)| matches!(e, SimEvent::Rejected { .. })),
+            "{log:?}"
+        );
         assert_eq!(digest, 0x4098_02e0_f981_8a21);
     }
 
@@ -324,12 +453,48 @@ mod tests {
         let s = setup(MapDef::empty());
         let db = Arc::clone(&s.content);
         let mut sim = Sim::from_setup(&s);
-        WorldSource::step(&mut sim, &[spawn(0, &db, "fx_cruiser", 0, v(0, 0, 0)), spawn(1, &db, "fx_frigate", 1, v(100, 0, 0))]);
-        let kill = |seq, id| cmd(PlayerId::SCRIPT, seq, CommandKind::Edit(Edit::Kill(EntityId(id))));
-        let out = WorldSource::step(&mut sim, &[kill(0, 2), spawn(1, &db, "fx_miner", 0, v(0, 0, 100))]);
-        assert_eq!(out.events, [SimEvent::Destroyed { id: EntityId(2), by: None }, SimEvent::Spawned { id: EntityId(3) }]);
-        let out = WorldSource::step(&mut sim, &[kill(0, 1), spawn(1, &db, "fx_miner", 0, v(0, 0, 200))]);
-        assert_eq!(out.events, [SimEvent::Destroyed { id: EntityId(1), by: None }, SimEvent::Spawned { id: EntityId(4) }]);
+        WorldSource::step(
+            &mut sim,
+            &[
+                spawn(0, &db, "fx_cruiser", 0, v(0, 0, 0)),
+                spawn(1, &db, "fx_frigate", 1, v(100, 0, 0)),
+            ],
+        );
+        let kill = |seq, id| {
+            cmd(
+                PlayerId::SCRIPT,
+                seq,
+                CommandKind::Edit(Edit::Kill(EntityId(id))),
+            )
+        };
+        let out = WorldSource::step(
+            &mut sim,
+            &[kill(0, 2), spawn(1, &db, "fx_miner", 0, v(0, 0, 100))],
+        );
+        assert_eq!(
+            out.events,
+            [
+                SimEvent::Destroyed {
+                    id: EntityId(2),
+                    by: None
+                },
+                SimEvent::Spawned { id: EntityId(3) }
+            ]
+        );
+        let out = WorldSource::step(
+            &mut sim,
+            &[kill(0, 1), spawn(1, &db, "fx_miner", 0, v(0, 0, 200))],
+        );
+        assert_eq!(
+            out.events,
+            [
+                SimEvent::Destroyed {
+                    id: EntityId(1),
+                    by: None
+                },
+                SimEvent::Spawned { id: EntityId(4) }
+            ]
+        );
         let ids: Vec<_> = out.view.units.iter().map(|u| u.id.0).collect();
         assert_eq!(ids, [3, 4]);
     }
@@ -344,19 +509,46 @@ mod tests {
         let e = |seq, e| cmd(PlayerId::BENCH, seq, CommandKind::Edit(e));
         let hull = |sim: &Sim| sim.unit(id).map(|u| u.hull[0].to_f32());
         let out = WorldSource::step(&mut sim, &[e(0, Edit::Damage(id, Fixed::from_int(100)))]);
-        assert!(!out.events.iter().any(|x| matches!(x, SimEvent::Rejected { .. })));
+        assert!(
+            !out.events
+                .iter()
+                .any(|x| matches!(x, SimEvent::Rejected { .. }))
+        );
         assert_eq!(hull(&sim), Some(200.0));
         WorldSource::step(&mut sim, &[e(0, Edit::Heal(id))]);
         assert_eq!(hull(&sim), Some(300.0));
         // Immortal: lethal damage leaves one hull; off again, it kills.
-        WorldSource::step(&mut sim, &[e(0, Edit::Immortal(id, true)), e(1, Edit::Damage(id, Fixed::from_int(999)))]);
+        WorldSource::step(
+            &mut sim,
+            &[
+                e(0, Edit::Immortal(id, true)),
+                e(1, Edit::Damage(id, Fixed::from_int(999))),
+            ],
+        );
         assert_eq!(hull(&sim), Some(1.0));
-        WorldSource::step(&mut sim, &[e(0, Edit::Weapons(id, false)), e(1, Edit::Weapons(id, true))]);
+        WorldSource::step(
+            &mut sim,
+            &[
+                e(0, Edit::Weapons(id, false)),
+                e(1, Edit::Weapons(id, true)),
+            ],
+        );
         assert!(!sim.unit(id).unwrap().flags.contains(UnitFlags::WEAPONS_OFF));
-        WorldSource::step(&mut sim, &[e(0, Edit::Immortal(id, false)), e(1, Edit::Damage(id, Fixed::from_int(5)))]);
+        WorldSource::step(
+            &mut sim,
+            &[
+                e(0, Edit::Immortal(id, false)),
+                e(1, Edit::Damage(id, Fixed::from_int(5))),
+            ],
+        );
         assert!(sim.unit(id).is_none());
         let out = WorldSource::step(&mut sim, &[e(0, Edit::Heal(id))]);
-        assert!(out.events.iter().any(|x| matches!(x, SimEvent::Rejected { .. })), "no such unit");
+        assert!(
+            out.events
+                .iter()
+                .any(|x| matches!(x, SimEvent::Rejected { .. })),
+            "no such unit"
+        );
     }
 
     #[test]
@@ -369,20 +561,54 @@ mod tests {
         WorldSource::step(&mut sim, &[spawn(0, &db, "fx_frigate", 1, v(0, 0, 0))]);
         let id = EntityId(1);
         let script = |seq, e| cmd(PlayerId::SCRIPT, seq, CommandKind::Edit(e));
-        let shot = Presentation::Shot { from: Spot::Entity(id), at: Spot::Path("intro".into()), seconds: Fixed::from_int(3) };
+        let shot = Presentation::Shot {
+            from: Spot::Entity(id),
+            at: Spot::Path("intro".into()),
+            seconds: Fixed::from_int(3),
+        };
         let out = WorldSource::step(
             &mut sim,
-            &[script(0, Edit::Present(shot.clone())), script(1, Edit::Subsystem(id, Subsystem::Engines, false)), script(2, Edit::Alert(id, AlertState::Red))],
+            &[
+                script(0, Edit::Present(shot.clone())),
+                script(1, Edit::Subsystem(id, Subsystem::Engines, false)),
+                script(2, Edit::Alert(id, AlertState::Red)),
+            ],
         );
-        assert!(out.events.contains(&SimEvent::Present(shot)), "{:?}", out.events);
-        assert!(sim.unit(id).unwrap().flags.contains(UnitFlags::ENGINES_OFF), "Subsystem(Engines) acts as Engines");
-        assert!(out.events.contains(&SimEvent::Rejected { player: PlayerId::SCRIPT, seq: 2 }), "Alert waits for its package");
-        WorldSource::step(&mut sim, &[script(0, Edit::Subsystem(id, Subsystem::Weapons, false))]);
+        assert!(
+            out.events.contains(&SimEvent::Present(shot)),
+            "{:?}",
+            out.events
+        );
+        assert!(
+            sim.unit(id).unwrap().flags.contains(UnitFlags::ENGINES_OFF),
+            "Subsystem(Engines) acts as Engines"
+        );
+        assert!(
+            out.events.contains(&SimEvent::Rejected {
+                player: PlayerId::SCRIPT,
+                seq: 2
+            }),
+            "Alert waits for its package"
+        );
+        WorldSource::step(
+            &mut sim,
+            &[script(0, Edit::Subsystem(id, Subsystem::Weapons, false))],
+        );
         assert!(sim.unit(id).unwrap().flags.contains(UnitFlags::WEAPONS_OFF));
         // Edits are for scripts and the bench: a player cannot present.
-        let out = WorldSource::step(&mut sim, &[cmd(PlayerId(0), 0, CommandKind::Edit(Edit::Present(Presentation::StopMusic)))]);
+        let out = WorldSource::step(
+            &mut sim,
+            &[cmd(
+                PlayerId(0),
+                0,
+                CommandKind::Edit(Edit::Present(Presentation::StopMusic)),
+            )],
+        );
         assert!(!out.events.iter().any(|x| matches!(x, SimEvent::Present(_))));
-        assert!(out.events.contains(&SimEvent::Rejected { player: PlayerId(0), seq: 0 }));
+        assert!(out.events.contains(&SimEvent::Rejected {
+            player: PlayerId(0),
+            seq: 0
+        }));
     }
 
     #[test]
@@ -391,20 +617,46 @@ mod tests {
         let db = Arc::clone(&s.content);
         let mut sim = Sim::from_setup(&s);
         // 2: player 0's cruiser, 3: player 1's frigate, killed at once.
-        WorldSource::step(&mut sim, &[spawn(0, &db, "fx_cruiser", 0, v(0, 0, 0)), spawn(1, &db, "fx_frigate", 1, v(100, 0, 0))]);
-        WorldSource::step(&mut sim, &[cmd(PlayerId::BENCH, 2, CommandKind::Edit(Edit::Kill(EntityId(3))))]);
+        WorldSource::step(
+            &mut sim,
+            &[
+                spawn(0, &db, "fx_cruiser", 0, v(0, 0, 0)),
+                spawn(1, &db, "fx_frigate", 1, v(100, 0, 0)),
+            ],
+        );
+        WorldSource::step(
+            &mut sim,
+            &[cmd(
+                PlayerId::BENCH,
+                2,
+                CommandKind::Edit(Edit::Kill(EntityId(3))),
+            )],
+        );
         let to = v(500, 0, 500);
-        let nothing = Edit::Spawn { odf: ContentKey::NONE, player: PlayerId(0), pos: to, heading: (Fixed::ZERO, Fixed::ONE) };
+        let nothing = Edit::Spawn {
+            odf: ContentKey::NONE,
+            player: PlayerId(0),
+            pos: to,
+            heading: (Fixed::ZERO, Fixed::ONE),
+        };
         let cmds = [
-            mv(0, 0, &[3], to),                                                   // dead
-            mv(0, 1, &[1], to),                                                   // the moon: neutral, cannot move
-            mv(1, 0, &[2], to),                                                   // foreign
-            cmd(PlayerId(0), 2, CommandKind::Edit(Edit::Kill(EntityId(2)))),      // players may not edit
-            cmd(PlayerId::BENCH, 0, CommandKind::Edit(Edit::Kill(EntityId(3)))),  // already dead
-            cmd(PlayerId::BENCH, 1, CommandKind::Edit(Edit::Kill(EntityId(99)))), // never was
-            spawn(2, &db, "fx_beam", 0, to),                                      // a weapon, not a unit
-            cmd(PlayerId::BENCH, 3, CommandKind::Edit(nothing)),                  // no definition
-            mv(0, 3, &[3, 2], to),                                                // one dead, one fine: applies
+            mv(0, 0, &[3], to),                                              // dead
+            mv(0, 1, &[1], to), // the moon: neutral, cannot move
+            mv(1, 0, &[2], to), // foreign
+            cmd(PlayerId(0), 2, CommandKind::Edit(Edit::Kill(EntityId(2)))), // players may not edit
+            cmd(
+                PlayerId::BENCH,
+                0,
+                CommandKind::Edit(Edit::Kill(EntityId(3))),
+            ), // already dead
+            cmd(
+                PlayerId::BENCH,
+                1,
+                CommandKind::Edit(Edit::Kill(EntityId(99))),
+            ), // never was
+            spawn(2, &db, "fx_beam", 0, to), // a weapon, not a unit
+            cmd(PlayerId::BENCH, 3, CommandKind::Edit(nothing)), // no definition
+            mv(0, 3, &[3, 2], to), // one dead, one fine: applies
         ];
         let out = WorldSource::step(&mut sim, &cmds);
         let rejected: Vec<_> = out
@@ -415,13 +667,31 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(rejected, [(0, 0), (0, 1), (0, 2), (1, 0), (255, 0), (255, 1), (255, 2), (255, 3)]);
+        assert_eq!(
+            rejected,
+            [
+                (0, 0),
+                (0, 1),
+                (0, 2),
+                (1, 0),
+                (255, 0),
+                (255, 1),
+                (255, 2),
+                (255, 3)
+            ]
+        );
         assert_eq!(out.events.len(), rejected.len());
         assert_eq!(sim.unit(EntityId(2)).unwrap().target, Some(to));
         // A sim without content cannot spawn from it.
         let mut bare = Sim::new(1);
         let out = WorldSource::step(&mut bare, &[spawn(0, &db, "fx_cruiser", 0, to)]);
-        assert_eq!(out.events, [SimEvent::Rejected { player: PlayerId::BENCH, seq: 0 }]);
+        assert_eq!(
+            out.events,
+            [SimEvent::Rejected {
+                player: PlayerId::BENCH,
+                seq: 0
+            }]
+        );
     }
 
     /// Views show the entities as they are, and spawned craft fly on their
@@ -432,17 +702,30 @@ mod tests {
         let db = Arc::clone(&s.content);
         let mut sim = Sim::from_setup(&s);
         let first = WorldSource::step(&mut sim, &[spawn(0, &db, "fx_cruiser", 1, v(0, 0, -1000))]);
-        assert_eq!(first.events, [SimEvent::Spawned { id: EntityId(1) }, SimEvent::Spawned { id: EntityId(2) }]);
+        assert_eq!(
+            first.events,
+            [
+                SimEvent::Spawned { id: EntityId(1) },
+                SimEvent::Spawned { id: EntityId(2) }
+            ]
+        );
         let to = v(0, 0, 600);
         WorldSource::step(&mut sim, &[mv(1, 0, &[2], to)]);
         let mut arrived = false;
         for t in 0..30 * 30 {
             let out = WorldSource::step(&mut sim, &[]);
-            assert_eq!(out.view.units, sim.units.iter().map(Entity::view).collect::<Vec<_>>());
+            assert_eq!(
+                out.view.units,
+                sim.units.iter().map(Entity::view).collect::<Vec<_>>()
+            );
             let c = out.view.unit(EntityId(2)).unwrap();
             if t == 30 {
                 // A second in: under way, no faster than its definition allows.
-                assert!(c.speed > Fixed::ZERO && c.speed <= Fixed::from_int(140), "{:?}", c.speed);
+                assert!(
+                    c.speed > Fixed::ZERO && c.speed <= Fixed::from_int(140),
+                    "{:?}",
+                    c.speed
+                );
             }
             if sim.unit(EntityId(2)).unwrap().target.is_none() {
                 arrived = true;
@@ -452,12 +735,18 @@ mod tests {
         assert!(arrived, "never arrived");
         let view = sim.view();
         let c = view.unit(EntityId(2)).unwrap();
-        assert_eq!((c.def, c.owner, c.pos, c.speed), (db.key("fx_cruiser").unwrap(), PlayerId(1), to, Fixed::ZERO));
+        assert_eq!(
+            (c.def, c.owner, c.pos, c.speed),
+            (db.key("fx_cruiser").unwrap(), PlayerId(1), to, Fixed::ZERO)
+        );
         assert_eq!(c.hull, [Fixed::from_int(800); 2]);
         assert_eq!(c.shields, [[Fixed::from_int(400); 2]; 4]);
         assert_eq!(c.flags, UnitFlags::SELECTABLE);
         assert_eq!(c.progress, None);
         let moon = view.unit(EntityId(1)).unwrap();
-        assert_eq!((moon.owner, moon.hull, moon.speed), (NEUTRAL, [Fixed::ZERO; 2], Fixed::ZERO));
+        assert_eq!(
+            (moon.owner, moon.hull, moon.speed),
+            (NEUTRAL, [Fixed::ZERO; 2], Fixed::ZERO)
+        );
     }
 }
