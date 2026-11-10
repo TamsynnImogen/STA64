@@ -11,6 +11,8 @@ license.workspace = true
 sta_core = { workspace = true, features = ["serde"] }
 sta_odf.workspace = true
 sta_vfs.workspace = true
+sta_assets.workspace = true
+a2fmt.workspace = true
 sta_bzn.workspace = true
 serde.workspace = true
 thiserror.workspace = true

@@ -67,6 +67,7 @@ impl ContentDb {
     /// (a lobby choice, a test).
     pub fn load_as(vfs: &sta_vfs::Vfs, profile: Profile, index: &OdfIndex) -> Result<(ContentDb, Vec<Warning>)> {
         let (db, mut warnings) = crate::odf::load(vfs, profile, index)?;
+        let db = db.with_launch_points(vfs);
         if db.is_empty() {
             return Ok((db, warnings));
         }
@@ -90,6 +91,14 @@ impl ContentDb {
                 Ok((db, warnings))
             }
         }
+    }
+
+    /// This database with every builder's [`LaunchPoint`](crate::LaunchPoint)
+    /// read from its model (SIM-16), and the hash recomputed.
+    pub fn with_launch_points(mut self, vfs: &sta_vfs::Vfs) -> ContentDb {
+        crate::launch::attach(vfs, self.defs.iter_mut().filter_map(|(_, d)| if let Def::Unit(u) = d { Some(u) } else { None }));
+        self.hash = hash(&self);
+        self
     }
 
     /// This database gated by `tree` (replacing any), with the hash
@@ -337,6 +346,13 @@ fn hash(db: &ContentDb) -> u64 {
                 h.u64(u.build.cost.len() as u64);
                 for &c in &u.build.cost {
                     h.fixed(c);
+                }
+                // Only when set, so content without launch points keeps its hash.
+                if let Some(l) = &u.launch {
+                    h.byte(2);
+                    for f in [l.offset.0, l.offset.1, l.dir.0, l.dir.1, l.clear] {
+                        h.fixed(f);
+                    }
                 }
                 h.u64(u.build.ticks);
                 h.fixed(u.build.officers);

@@ -7,7 +7,7 @@
 
 use sta_core::{Fixed, Vec3};
 
-use crate::def::{DefRef, FireArc, Hardpoint, MoveStats, ShieldDef, UnitDef, WeaponDef, WeaponKind};
+use crate::def::{DefRef, FireArc, Hardpoint, LaunchPoint, MoveStats, ShieldDef, UnitDef, WeaponDef, WeaponKind};
 use crate::features::{Features, Profile};
 use crate::map::{MapDef, MapObject, Region, RegionKind, RegionShape, Scenery, SceneryLight, SceneryPlanet, StartPos};
 use crate::ContentDb;
@@ -153,6 +153,24 @@ pub fn db() -> ContentDb {
         .unit(moon)
         .build()
         .expect("fake content is consistent")
+}
+
+/// `fx_yard_launch` (SIM-16): a yard like `fx_yard`, building `fx_frigate`,
+/// with a launch hardpoint (`hp99`) 40 units ahead of its centre and a clear
+/// circle of 60. Not in [`db`], so its pinned hash stays; scenes that need it
+/// add it (`sta_bench`'s `fake_content`).
+pub fn launch_yard() -> UnitDef {
+    let mut y = UnitDef::new("fx_yard_launch", "shipyard");
+    y.race = "fx".into();
+    y.model = "fx_yard_launch".into();
+    y.hull = n(2000);
+    y.crew = n(500);
+    y.sensor = n(800);
+    y.build.cost = vec![n(900)];
+    y.build.ticks = 1500;
+    y.build.list = vec![DefRef::new("fx_frigate")];
+    y.launch = Some(LaunchPoint { offset: (Fixed::ZERO, n(40)), dir: (Fixed::ZERO, Fixed::ONE), clear: n(60), node: Some("hp99".into()) });
+    y
 }
 
 /// A two-player map for [`db`]: two starts facing each other across a
