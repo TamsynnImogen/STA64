@@ -34,21 +34,27 @@ A child zero/false overrides a nonzero parent. Retain Raw ODF data unchanged.
 Weapons do not interpret the key. No profile switch, new dependency or platform
 branch is required for this immutable metadata.
 
-The initial accepted lexical forms are deliberately bounded:
+The initial accepted forms follow the verified native integer-prefix reads:
 
-- Sta1Classic: signed 32-bit decimal integers; zero is false, nonzero is true.
-- Sta2Classic, Fo4 and Native: those integers plus case-insensitive true/false.
+- Sta1Classic: a signed decimal integer prefix representable in 32 bits;
+  zero is false and nonzero is true. Trailing text is ignored, as in the
+  verified native integer scan.
+- Sta2Classic, Fo4 and Native: those prefixes plus case-insensitive true/false.
+  The A2/FO Boolean paths were traced to the imported integer conversion.
+  Thus 1.5 means integer one, while 0x1 means integer zero; do not silently
+  replace these native rules with Rust whole-string integer parsing.
 
 Whitespace and ODF quoting follow the existing reader. Absent values use false.
-Malformed, unsupported or overflowing forms warn and use false; native invalid
-scanf/atoi behavior is not claimed as reproduced. In particular A1 Boolean
+Values with no supported numeric prefix or Boolean word, and overflowing
+prefixes, warn and use false; native invalid scanf/atoi and overflow behavior
+is not claimed as reproduced. In particular A1 Boolean
 words are outside the verified integer contract. Do not silently clamp values,
 borrow A2 lexical behavior for A1 or treat explicit zero as absence.
 
-A small private native-flag reader may be shared with the existing
-queueInstantDeduct mapping, preserving that mapping's valid forms, diagnostics,
-profile gating and precedence. Numeric/Boolean parsing must not change the
-generic ODF reader or unrelated legacy keys.
+Use a dedicated station-flag reader so this improved prefix handling does not
+change the existing queueInstantDeduct reader's separately documented bounded
+contract, diagnostics, profile gating or precedence. Do not change the generic
+ODF reader or unrelated legacy keys.
 
 ## Identity and scope boundaries
 
@@ -68,7 +74,8 @@ shortcut. The generated API report must not count a binding before it exists.
 
 ## Validation before delivery
 
-Use synthetic ODFs to test zero/nonzero and profile lexical forms, parent one
+Use synthetic ODFs to test zero/nonzero, numeric prefixes and profile lexical
+forms, parent one
 with child zero, invalid/overflow diagnostics and raw preservation. Include
 opposing class labels and authored flags to catch accidental kind inference,
 weapon exclusion, programmatic field hashing, default/no-op hash stability
