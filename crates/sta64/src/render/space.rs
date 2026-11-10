@@ -132,6 +132,23 @@ impl StarSizing {
     }
 }
 
+/// A sprite at least this many texels wide is a sheet of many stars, not one star.
+const TILE_TEXELS: f32 = 512.0;
+
+/// How much larger than the ODF's size a star sheet is drawn. The ODF sizes (Fleet Ops:
+/// `scale = 250`) make a 1024 sheet about 20 degrees across, which puts two or three
+/// of its texels on every pixel of a 1080p view at the 45 degree field: the 1 to 2
+/// texel stars shrink through the mip chain to nearly nothing, and what is left shows
+/// only where several sheets overlap, as patches. Doubled it is about 40 degrees,
+/// a texel to a pixel (Refit's menu sky, a 1024 tile over 38 degrees at 1080p, reads
+/// the same), and the stars stand in even density across the whole sky.
+const TILE_GAIN: f32 = 2.0;
+
+/// The size factor for a star sprite `texels` wide: [`TILE_GAIN`] for a sheet, 1 for a star.
+pub fn tile_gain(texels: f32) -> f32 {
+    if texels >= TILE_TEXELS { TILE_GAIN } else { 1.0 }
+}
+
 /// One star quad of the sky sphere.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StarQuad {
@@ -208,8 +225,16 @@ pub fn starfield(
         idx: Vec<u32>,
     }
     let mut batches: HashMap<String, Batch> = HashMap::new();
-    // Entries whose sprite the mod's table lacks are not drawn (FO4 has `bstar.0`, `.9`, `.10`).
-    let drawn: Vec<(String, u32, f32)> = entries.iter().filter(|(n, ..)| table.sprite(n).is_some()).cloned().collect();
+    // Entries whose sprite the table lacks are not drawn. A sheet-sized sprite is a tile
+    // of many 1 to 2 texel stars, which the sky shows at about a texel a pixel (see
+    // [`TILE_GAIN`]); a sprite of one star keeps the ODF's size.
+    let drawn: Vec<(String, u32, f32)> = entries
+        .iter()
+        .filter_map(|(n, count, scale)| {
+            let sprite = table.sprite(n)?;
+            Some((n.clone(), *count, scale * tile_gain(sprite.rect[2])))
+        })
+        .collect();
     let mut total = 0;
     for q in star_quads(&drawn, sizing, 0x5741_3634) {
         let Some(sprite) = table.sprite(&drawn[q.entry].0) else { continue };
@@ -308,6 +333,12 @@ mod tests {
         [("bstar.0", 36, 250.0), ("bstar.9", 23, 250.0), ("bstar.6", 27, 8.0), ("bstar.7", 41, 4.0)]
             .map(|(n, c, s)| (n.to_owned(), c, s))
             .to_vec()
+    }
+
+    #[test]
+    fn sheets_are_drawn_larger_and_single_stars_as_listed() {
+        assert_eq!(tile_gain(1024.0), TILE_GAIN);
+        assert_eq!(tile_gain(128.0), 1.0);
     }
 
     #[test]
