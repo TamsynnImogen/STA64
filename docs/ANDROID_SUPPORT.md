@@ -36,7 +36,13 @@ This proposal precedes the implementation in TOOL-10 / issue #250.
    Skip the first resumed frame's wall-time delta so background time does not
    become simulation catch-up. The actual client clock reads `Time<Real>`;
    pausing Bevy virtual time alone would be insufficient. Preserve any existing
-   game pause state. Surface recreation remains Bevy/winit's responsibility.
+   game pause state. Cover HUD command producers in `GameSet::Ui` and the plain
+   viewer/map update chains, including their idle clock, as well as Input and
+   SimLink. Clear held input and uncommitted drag/placement/target state while
+   blocked; retain commands already committed before suspension. Surface
+   recreation remains Bevy/winit's responsibility. The existing theme click
+   dispatcher also observes this gate, since pointer observers run outside
+   `GameSet::Ui`; stale pointer press tracking and theme messages are discarded.
 5. Package the shared native library in a small NativeActivity APK. No legacy
    game data, alternate gameplay code or unrestricted storage permission is
    included. Keep Android automation separate from mandatory desktop CI.
