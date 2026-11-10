@@ -1,0 +1,14 @@
+{
+  "format_version": 8,
+  "baseline_commit": "ef1b15d7963a86e9804d277785390e44cb972946",
+  "simulation_tree": "ebc07a6e2fb3ccf4e8c2603f5fc615ab7f96590d",
+  "sha256": "549e4cff7ceb4b815ab2cf1430591fcd1fa1ae8cccc49aa48179119786664901",
+  "fixture_kind": "Synthetic fake content only; generated with unchanged v8 implementation before SIM-19 core edits.",
+  "setup": "seed3; fake::db; empty map; slots0/1 Idle; colocated fx_moon/fx_station/fx_miner; slot0 Mine command then99empty steps",
+  "saved_tick": 100,
+  "saved_digest": "14c70e044af1fb70",
+  "continue_empty_ticks": 800,
+  "expected_tick": 900,
+  "expected_digest": "1fadadc88e060e5a",
+  "expected_slot0_dilithium_bits": 644245094400
+}

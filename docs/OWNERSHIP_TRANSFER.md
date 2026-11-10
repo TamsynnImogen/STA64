@@ -110,6 +110,35 @@ future hooks, not an implemented STA64 weapon feature or full live-game proof.
   with explicit/inherited zero distinguished from absence. Do not add guessed
   global defaults or change source game data.
 
+## Cargo prerequisite decision
+
+The first implementation stage preserves carried cargo when a mining job is
+interrupted by Stop or a replacement Move. Original A1 and A2 getter paths
+read cargo from the freighter object rather than the order/process; the GOG A1
+swap and Stop wrappers use a distinct command encoding and must not borrow
+A2 numeric codes. These static observations support separating physical cargo
+from job lifetime; they are not full native runtime or effect-parity proof.
+No source game data or numeric defaults change in this stage.
+
+Use Idle phase code 4 in the existing miner tuple. Idle retains the cargo and
+its resource, produces no income and does not override a manual movement
+order. A stopped loaded miner can survive destruction of its old node. A new
+Mine order first delivers the old resource to a station of its current owner,
+then mines the newly requested resource. Reset partial-delivery event
+accounting when a job is interrupted, without undoing stock already credited.
+
+Write snapshot format 9 for the new phase semantics. Explicitly accept the
+unchanged v8 body only with old phase codes 0..3; reject an Idle/new phase
+masquerading as v8. Reject unknown phase codes at the file-loading boundary.
+No tuple field or command tag is added. A synthetic loaded-miner snapshot was
+created by the unchanged v8 implementation before these edits; its saved and
+continued digests/stock are recorded with the fixture for a real compatibility
+check. This is a narrow compatible-v8 read path, not general save migration
+or cross-build replay compatibility.
+
+This prerequisite does not yet implement Team, choose capture refunds or
+resolve construction/victory behavior. Those stages retain the gates above.
+
 ## Verification and staged delivery
 
 Use narrow commits for the cargo/persistence prerequisite, production cleanup,
