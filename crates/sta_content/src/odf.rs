@@ -282,6 +282,7 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
         builder = builder.weapon(def);
     }
 
+    let model = crate::ResourceModel::for_profile(profile);
     let unit_names: BTreeSet<String> = units.iter().map(|(s, _)| stem(s)).collect();
     for (s, odf) in &units {
         let phys = match odf.str("physicsFile").map(str::trim).filter(|p| !p.is_empty()) {
@@ -295,6 +296,13 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
             None => None,
         };
         let mut def = crate::unit::unit_def(s, odf, phys.as_deref(), &mut warnings);
+        // A node's resource: the slot its resource ODF fills (`amtlatinum` on Fleet Ops 4.0's
+        // tritanium moon, `amtmetal` on Roots'), else the game's word for it in the text.
+        if let Some(text) = odf.str("resource").map(str::trim).filter(|t| !t.is_empty()) {
+            let node = sta_odf::resolve_layered(&stem(text), loader).ok();
+            let slot = node.as_ref().and_then(crate::resources::node_slot).or_else(|| model.slot_of_text(text));
+            def.resource = Some(slot.unwrap_or(0) as u8);
+        }
         let file = format!("{s}.odf");
         let mut native = Overrides::default();
         if matches!(profile, Profile::Fo4 | Profile::Native)
