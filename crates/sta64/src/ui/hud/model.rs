@@ -12,6 +12,7 @@ use sta_sim::command::{CommandKind, Order};
 use sta_sim::movement::{FORM_COLUMN, FORM_LINE, FORM_WEDGE};
 use sta_sim::{ContentKey, EntityId, Fixed, PlayerId, UnitView, WorldView};
 
+use crate::ui::i18n::tr;
 use super::layout::{GRID_COLS, GRID_ROWS, InfoHeight};
 
 /// Everything the HUD reads: the view, whose HUD it is, the selection and the
@@ -310,19 +311,19 @@ pub fn grid(feed: &HudFeed, page: Page) -> Vec<Button> {
                 verbose: Some(verbose),
             });
         }
-        out.push(button(CANCEL_CELL, "Cancel", Act::Cancel(b.id), "Cancel the queue"));
-        out.push(button(BACK_CELL, "Back", Act::Back, "Back"));
+        out.push(button(CANCEL_CELL, &tr("Cancel"), Act::Cancel(b.id), &tr("Cancel the queue")));
+        out.push(button(BACK_CELL, &tr("Back"), Act::Back, &tr("Back")));
         out.sort_by_key(|b| b.cell);
         return out;
     }
     let mut out = Vec::new();
     if builder.is_some() {
-        out.push(button(0, "Build", Act::OpenBuild, "Build"));
+        out.push(button(0, &tr("Build"), Act::OpenBuild, &tr("Build")));
     }
-    out.push(button(6, "Stop", Act::Stop, "Stop"));
-    out.push(button(7, "Line", Act::Formation(FORM_LINE), "Formation: line"));
-    out.push(button(8, "Column", Act::Formation(FORM_COLUMN), "Formation: column"));
-    out.push(button(9, "Wedge", Act::Formation(FORM_WEDGE), "Formation: wedge"));
+    out.push(button(6, &tr("Stop"), Act::Stop, &tr("Stop")));
+    out.push(button(7, &tr("Line"), Act::Formation(FORM_LINE), &tr("Formation: line")));
+    out.push(button(8, &tr("Column"), Act::Formation(FORM_COLUMN), &tr("Formation: column")));
+    out.push(button(9, &tr("Wedge"), Act::Formation(FORM_WEDGE), &tr("Formation: wedge")));
     out
 }
 
