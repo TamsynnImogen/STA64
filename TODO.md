@@ -56,6 +56,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] Stop capability: select a stationary yard/station or an engine-disabled ship and check that Stop remains in the top grid while Move and formations stay unavailable; Stop clears the selected actors' orders. Mixed owned craft/station groups retain Stop; resources and dying units do not gain it.
 
+- [?] Guarded scripted ownership (SIM-19, #256; updated builds only): at an existing mission handoff of a finished unit, check that its new owner can command it and the former owner cannot; old movement, attack and actor rally should stop. A loaded freighter retains cargo and delivers to its new owner after a new Mine order. Transfers involving queued construction, pending deploys or unfinished welds are deliberately rejected in this stage; capture-loss victory is not yet implemented. The pinned older rally build predates these changes.
+
 ## Checked earlier (morning list)
 
 Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
