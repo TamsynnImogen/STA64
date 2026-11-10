@@ -5,7 +5,8 @@
 The source-audit and implementation proposal was recorded before core edits
 in merged #257. The cargo prerequisite is merged in #258. The guarded
 ownership stage below is implemented for finished units without production
-involvement; full construction/capture support remains incomplete.
+involvement, extended by checked cleanup for entirely unstarted station queues
+in the final section; full construction/capture support remains incomplete.
 At audit time, `Edit::Team` existed but `Sim::apply_edit` rejected it. The longer installed A2
 mission probe records rejected transfers in Invasion at tick 1440 and The
 Cavalry at tick 720. `Entity.player = ...` already queues that edit; adding an

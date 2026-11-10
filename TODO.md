@@ -60,6 +60,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] Station queue limits (SIM-20): in A1 content admit five total jobs per yard, and in stock A2/FO admit ten, counting the active head; the next order is refused without spending resources. In a local test mod set the producer ODF `STA64_queueLimit = 12` to admit twelve, or inherit a nonzero value and override it with `0` to disable new jobs. Existing jobs continue; this does not add the A2FOExtensions grouped queue UI. Native content keeps five unless authored otherwise.
 
+- [?] Unstarted station queue handoff (SIM-19 follow-up; updated builds only): scripted capture before a station starts its first job clears the queue and returns paid costs to the former owner. A deferred, unfunded queue clears without credit. A started head, rig deploy or weld still rejects transfer; older pinned builds and the guarded-stage note above predate this extension. Headless transaction/replay tests cover the same-tick prepaid case, which may be difficult to observe manually.
+
 ## Checked earlier (morning list)
 
 Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.

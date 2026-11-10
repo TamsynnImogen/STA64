@@ -1,7 +1,7 @@
 //! SIM-19: guarded ownership edits through the shared simulation.
 //!
-//! Production-involved and unfinished units remain rejected until their
-//! capture accounting is established. See docs/OWNERSHIP_TRANSFER.md.
+//! Active production and unfinished units remain rejected. Entirely
+//! unstarted station queues have checked cleanup; see OWNERSHIP_TRANSFER.md.
 
 use sta_core::{EntityId, Fixed, PlayerId};
 
@@ -32,14 +32,21 @@ impl Sim {
                 .as_deref()
                 .and_then(|db| db.unit(unit.def))
                 .is_some_and(|def| def.resource.is_some())
-            || self.production.transfer_blocked(id)
         {
             return false;
         }
+        let Some(production) =
+            self.production
+                .prepare_transfer(self.content.as_deref(), &self.economy, id, unit)
+        else {
+            return false;
+        };
 
         // All rejection checks precede cleanup, including same-owner requests.
-        // Do not call ordinary production cancellation: its refund contract
-        // has not been established for capture.
+        // This consumes the checked unstarted-queue plan; ordinary Stop/cancel
+        // has a separate contract, particularly for active production.
+        self.production
+            .finish_transfer(&mut self.economy, production);
         self.weapons.stop_attack(&self.units, from, &[id]);
         self.economy.cancel(&self.units, from, &[id]);
         self.movement.clear(id);
@@ -54,3 +61,7 @@ impl Sim {
 #[cfg(test)]
 #[path = "ownership_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "ownership_queue_tests.rs"]
+mod queue_tests;

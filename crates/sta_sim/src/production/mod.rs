@@ -52,6 +52,7 @@ use crate::world::{Entities, Entity, EntityKind, Fnv, Table};
 mod launch;
 pub mod rally;
 pub mod site;
+mod transfer;
 
 /// Legacy five-job fallback, retained for downstream source compatibility.
 /// Station admission uses the builder's resolved content rule instead.
@@ -193,14 +194,6 @@ impl Production {
 
     pub(crate) fn remove_rally_entity(&mut self, id: EntityId) {
         self.rallies.remove_entity(id);
-    }
-
-    /// Capture accounting is not implemented for these production records.
-    pub(crate) fn transfer_blocked(&self, id: EntityId) -> bool {
-        self.queues.get(id).is_some()
-            || self.deploys.get(id).is_some()
-            || self.welds.get(id).is_some()
-            || self.welds.iter().any(|(_, w)| w.builder == id)
     }
 
     pub(crate) fn clear_builder_rally(&mut self, id: EntityId) {
