@@ -97,8 +97,8 @@ impl Plugin for WeaponFxPlugin {
             (spawn_fx, update_fx, attach_visuals, apply_alpha)
                 .chain()
                 .in_set(GameSet::Interpolate)
-                .run_if(resource_exists::<SimLink>)
-                .run_if(resource_exists::<ContentRes>),
+                .distributive_run_if(resource_exists::<SimLink>)
+                .distributive_run_if(resource_exists::<ContentRes>),
         );
     }
 }

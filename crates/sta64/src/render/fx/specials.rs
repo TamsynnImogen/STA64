@@ -162,7 +162,7 @@ impl Plugin for SpecialsFxPlugin {
             (read_events, fade_units, sync_construction, update_fx, attach_visuals, apply_quads, apply_fade)
                 .chain()
                 .in_set(GameSet::Interpolate)
-                .run_if(resource_exists::<SimLink>),
+                .distributive_run_if(resource_exists::<SimLink>),
         );
     }
 }

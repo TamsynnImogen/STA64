@@ -60,7 +60,39 @@ impl Plugin for InputPlugin {
                 )
                     .chain()
                     .in_set(crate::app::GameSet::Input)
-                    .run_if(resource_exists::<crate::sim_link::SimLink>),
+                    .distributive_run_if(resource_exists::<crate::sim_link::SimLink>),
             );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sim_link::{SimLink, SimLinkPlugin};
+    use sta_sim::command::LocalRouter;
+    use sta_sim::{PlayerId, Sim};
+
+    /// The match's link goes while the input systems are between two of them (the
+    /// menu scene's `close` and the map's `rebuild` remove it with commands, in the
+    /// same frame): a run condition checked once for the whole chain would let the
+    /// rest run without it and panic on the missing resource.
+    #[test]
+    fn the_link_going_mid_chain_skips_the_rest() {
+        let mut app = App::new();
+        app.set_error_handler(bevy::ecs::error::panic)
+            .add_plugins(MinimalPlugins)
+            .init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<ButtonInput<KeyCode>>();
+        crate::app::configure_sets(&mut app);
+        app.add_plugins((SimLinkPlugin, InputPlugin))
+            .insert_resource(crate::clock::AnimClock::new(crate::clock::ClockMode::Wall, 0))
+            .insert_resource(SimLink::new(Box::new(Sim::new(1)), Box::new(LocalRouter::new()), PlayerId(0)))
+            .add_systems(
+                Update,
+                (|mut commands: Commands| commands.remove_resource::<SimLink>()).after(orders::aim).before(orders::prune_targets),
+            );
+        app.update();
+        app.update();
+        assert!(!app.world().contains_resource::<SimLink>());
     }
 }
