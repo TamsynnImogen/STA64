@@ -100,6 +100,7 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [ ] Front end on Refit's 3D menu scene (M4)
 - [ ] LCARS widget gallery looks right: `cargo run -p sta64 -- --ui-gallery` (pills, elbows, hover/press, slider drag); screenshot it as the local baseline ([STYLE.md](crates/sta64/src/ui/theme/STYLE.md))
 - [ ] Notices and tooltips look right: in a bench match a destroyed own unit shows a red "<Unit> destroyed" line at the top centre that fades after 5 s, an enemy loss a plain one, and a `Tooltip` node shows its text 0.35 s after the pointer rests ([notices.rs](crates/sta64/src/ui/notices.rs), UI-10)
+- [ ] In-match text (UI-15): start a skirmish as a non-default race and kill a ship; the notice appears top centre, clear of the info text at the top left, and the info panel's race field names the race you play, not the map's default ([notices.rs](crates/sta64/src/ui/notices.rs), [map/mod.rs](crates/sta64/src/map/mod.rs))
 
 ## Done recently
 
