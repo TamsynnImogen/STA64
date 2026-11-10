@@ -123,6 +123,12 @@ pub enum Edit {
     /// the sim does not reserve IDs or deduplicate request tokens.
     /// Appended to preserve every existing postcard Edit tag.
     SpawnRequest { request: u64, odf: ContentKey, player: PlayerId, pos: Vec3, heading: (Fixed, Fixed) },
+    /// Set absolute hull at application time without changing shields.
+    /// Clamped to 0..max hull, with the existing immortal floor (one hull,
+    /// bounded by max). Zero destroys a mortal target normally. Requires a
+    /// live target and SCRIPT/BENCH privileges; ordinary players are rejected.
+    /// Appended to preserve every existing postcard Edit tag.
+    Hull(EntityId, Fixed),
 }
 
 /// A unit system a mission can switch on or off.
@@ -213,6 +219,46 @@ mod tests {
         };
         let bytes = postcard::to_allocvec(&c).unwrap();
         assert_eq!(postcard::from_bytes::<Command>(&bytes).unwrap(), c);
+    }
+
+    #[test]
+    fn hull_appends_a_tag_without_renumbering_existing_edits() {
+        let id = EntityId(1);
+        let odf = ContentKey(7);
+        let player = PlayerId(0);
+        let heading = (Fixed::ZERO, Fixed::ONE);
+        let edits = [
+            Edit::Spawn { odf, player, pos: Vec3::ZERO, heading },
+            Edit::Kill(id),
+            Edit::Damage(id, Fixed::ONE),
+            Edit::Heal(id),
+            Edit::Immortal(id, true),
+            Edit::SetEnergy(id, Fixed::ONE),
+            Edit::Tech(player, odf),
+            Edit::Cargo(player, 0, Fixed::ONE),
+            Edit::Engines(id, true),
+            Edit::Weapons(id, true),
+            Edit::Team(id, player),
+            Edit::Seed(1),
+            Edit::Present(crate::present::Presentation::Cineractive { on: false, skippable: false }),
+            Edit::Subsystem(id, Subsystem::Engines, true),
+            Edit::Alert(id, AlertState::Green),
+            Edit::MaxSpeed(id, None),
+            Edit::Targetable(id, true),
+            Edit::Decommissionable(id, true),
+            Edit::SpawnRequest { request: 1, odf, player, pos: Vec3::ZERO, heading },
+        ];
+        for (tag, edit) in edits.iter().enumerate() {
+            let bytes = postcard::to_allocvec(edit).unwrap();
+            assert_eq!(bytes[0], tag as u8, "legacy edit {edit:?}");
+            assert_eq!(postcard::from_bytes::<Edit>(&bytes).unwrap(), *edit);
+        }
+        assert_eq!(postcard::to_allocvec(&Edit::Hull(id, Fixed::ZERO)).unwrap(), [19, 1, 0]);
+        for hull in [Fixed::from_bits(i64::MIN), Fixed::ZERO, Fixed::ONE, Fixed::from_bits(i64::MAX)] {
+            let c = Command { player: PlayerId::SCRIPT, seq: 9, kind: CommandKind::Edit(Edit::Hull(id, hull)) };
+            let bytes = postcard::to_allocvec(&c).unwrap();
+            assert_eq!(postcard::from_bytes::<Command>(&bytes).unwrap(), c);
+        }
     }
 
     #[test]
