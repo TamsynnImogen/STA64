@@ -260,6 +260,7 @@ A2_SIGNATURES = {
     "bool IsRace(int, char*const)": "A2.IsRace",
     "bool IsVisibleToTeam(int, int)": "A2.IsVisibleToTeam",
     "char const* GetOriginalRace(int)": "A2.GetOriginalRace",
+    "void ObjectivesDisplay_Set_Visibility(bool)": "A2.ObjectivesDisplay_Set_Visibility",
 }
 
 

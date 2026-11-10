@@ -70,6 +70,15 @@ ignored probe loads every text file in the supplied objectives directory
 without embedding any game text in the repository.
 
 
+## DLL-named objective visibility
+
+`A2.ObjectivesDisplay_Set_Visibility(visible)` requires exactly one Lua
+boolean and sets the same runtime-local flag as `Objectives.visible`.
+Objective contents, completion and briefing metadata stay intact. This updates
+host mission state immediately and emits no sim or presentation command;
+client rendering and native defaults are not acceptance claims. File-loading
+and completion-selector DLL calls remain separate, unimplemented adapters.
+
 ## Initial DLL-named object bridge
 
 The `A2` table exposes the single-handle forms `IsAlive`, `GetLocation`,

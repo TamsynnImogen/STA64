@@ -15,12 +15,12 @@ user's own executables each time, and none are recorded here.
 | engine API size | 371 `ScriptInterface` methods | (imports only) |
 | distinct calls used | 138 | 213 |
 | call sites | 11708 | — |
-| A2 DLL-shaped callable | 16 | — |
-| missing A2 callable signatures | 116 | — |
+| A2 DLL-shaped callable | 17 | — |
+| missing A2 callable signatures | 115 | — |
 | MMM job-equivalent, not A2-shaped | 0 | — |
 | bound in STA64's Lua today | — | 6 |
 | in MMM's API, not yet bound | 24 | 27 |
-| no Lua equivalent (STA64 extension needed) | 92 | 144 |
+| no Lua equivalent (STA64 extension needed) | 91 | 144 |
 | script-state plumbing (n/a in Lua) | 6 | 36 |
 
 - **bound**: an existing `sta_mission` binding does the same job.
@@ -86,7 +86,7 @@ user's own executables each time, and none are recorded here.
 | `int ShowSubtitle(int, int, char const *, bool)` | 1 | 2 | new |  |
 | `int ShowTitle(int, int, char const *, bool)` | 1 | 1 | new |  |
 | `void ObjectivesDisplaySetObjectiveComplete(int, bool)` | 1 | 4 | new |  |
-| `void ObjectivesDisplay_Set_Visibility(bool)` | 1 | 1 | new |  |
+| `void ObjectivesDisplay_Set_Visibility(bool)` | 1 | 1 | A2 DLL-shaped | `A2.ObjectivesDisplay_Set_Visibility` |
 
 ### Audio and music (4)
 

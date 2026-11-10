@@ -241,6 +241,32 @@ class MissionDllInventoryTests(unittest.TestCase):
         ]:
             self.assertEqual(inventory.a2_exact_for(signature, self.repo), "", signature)
 
+    def test_objective_visibility_requires_exact_void_boolean_call_shape(self):
+        self.register_a2(
+            "",
+            registration=(
+                'objectives::install(lua, ctx, &a2)?; '
+                'lua.globals().raw_set("A2", a2)?;'
+            ),
+        )
+        (self.a2 / "objectives.rs").write_text(
+            'table.set("ObjectivesDisplay_Set_Visibility", fn);\n', encoding="utf-8"
+        )
+        self.assertEqual(
+            inventory.a2_exact_for(
+                "public: virtual void __thiscall ScriptInterfaceImp::ObjectivesDisplay_Set_Visibility(bool)",
+                self.repo,
+            ),
+            "A2.ObjectivesDisplay_Set_Visibility",
+        )
+        for signature in [
+            "bool ObjectivesDisplay_Set_Visibility(bool)",
+            "void ObjectivesDisplay_Set_Visibility(int)",
+            "void ObjectivesDisplay_Set_Visibility(bool&)",
+            "void ObjectivesDisplay_Set_Visibility(bool, bool)",
+        ]:
+            self.assertEqual(inventory.a2_exact_for(signature, self.repo), "", signature)
+
     def test_test_files_do_not_count_as_a2_bindings(self):
         self.register_a2("", registration='objects::install(lua, ctx, &a2)?; lua.globals().raw_set("A2", a2)?;')
         (self.a2 / "tests.rs").write_text('table.set("IsAlive", fn);', encoding="utf-8")

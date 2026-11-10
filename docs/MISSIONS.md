@@ -211,6 +211,18 @@ IDs, malformed registrations, non-nil table arguments and other hook kinds
 raise errors. `OnFalse`, `WhileTrue`, `WhileFalse`, `OnStop`, restart, and native
 edge/repetition defaults remain unimplemented or unverified.
 
+## DLL-shaped objective visibility
+
+`A2.ObjectivesDisplay_Set_Visibility(visible)` implements the inventoried
+`void ObjectivesDisplay_Set_Visibility(bool)` call shape. It accepts exactly
+one Lua boolean and changes the same mission-local flag as `Objectives.visible`.
+The change is immediately visible through `Objectives.visible` in Lua
+inspection; it does not replace goals, change completion or briefing data, or
+queue simulation or presentation commands. Invalid calls error before mutation.
+Each runtime owns its flag. Client rendering and native defaults remain
+unverified. The distinct file-loading boolean and objective-completion selector
+are not implemented by this adapter.
+
 ## DLL-shaped object queries
 
 The `A2` table provides strict, read-only adapters for the inventoried call
