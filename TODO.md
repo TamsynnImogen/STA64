@@ -58,6 +58,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] Guarded scripted ownership (SIM-19, #256; updated builds only): at an existing mission handoff of a finished unit, check that its new owner can command it and the former owner cannot; old movement, attack and actor rally should stop. A loaded freighter retains cargo and delivers to its new owner after a new Mine order. Transfers involving queued construction, pending deploys or unfinished welds are deliberately rejected in this stage; capture-loss victory is not yet implemented. The pinned older rally build predates these changes.
 
+- [?] Station queue limits (SIM-20): in A1 content admit five total jobs per yard, and in stock A2/FO admit ten, counting the active head; the next order is refused without spending resources. In a local test mod set the producer ODF `STA64_queueLimit = 12` to admit twelve, or inherit a nonzero value and override it with `0` to disable new jobs. Existing jobs continue; this does not add the A2FOExtensions grouped queue UI. Native content keeps five unless authored otherwise.
+
 ## Checked earlier (morning list)
 
 Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.

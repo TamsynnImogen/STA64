@@ -200,6 +200,20 @@ pub(crate) fn words(raw: &str) -> Vec<String> {
 /// `sta_odf::resolve_layered` asks.
 pub type Loader<'a> = dyn FnMut(&str, usize) -> Option<String> + 'a;
 
+/// A STA64-owned extension, not a native Armada key. Keep absence and
+/// authored zero distinct; ODF resolution already applies inheritance.
+fn build_queue_limit(file: &str, odf: &Odf, warnings: &mut Vec<Warning>) -> Option<u32> {
+    let raw = odf.str("STA64_queueLimit")?;
+    let value = raw.trim();
+    if !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit())
+        && let Ok(n) = value.parse::<u32>()
+    {
+        return Some(n);
+    }
+    warnings.push(Warning::new(file, format!("STA64_queueLimit = {raw} is not an unsigned 32-bit decimal integer; using the profile default")));
+    None
+}
+
 /// The FO producer flag uses integer truth, unlike the generic ODF flags.
 /// Broader native malformed/overflow parsing is outside this bounded reader.
 fn queue_instant_deduct(file: &str, odf: &Odf, warnings: &mut Vec<Warning>) -> Option<bool> {
@@ -304,6 +318,7 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
             def.resource = Some(slot.unwrap_or(0) as u8);
         }
         let file = format!("{s}.odf");
+        def.build.queue_limit = build_queue_limit(&file, odf, &mut warnings);
         let mut native = Overrides::default();
         if matches!(profile, Profile::Fo4 | Profile::Native)
             && let Some(on) = queue_instant_deduct(&file, odf, &mut warnings)
