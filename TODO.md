@@ -49,6 +49,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] Rally controls (UI-14 follow-up): select a finished stationary yard/outpost and right-click empty ground or a unit to set its rally target; new ships use that target. A mobile constructor still moves on right-click, as do mixed yard/ship groups. Clicking allied or neutral ships with a warship moves rather than attacking. Rally currently has no voice acknowledgement.
 
+- [?] Capability grid (UI-13): select a stationary yard (Build/Rally, no movement/formation buttons), a warship (Move/Attack/Stop/formations), or a freighter (Move/Mine); mixed groups show shared actions. Click a target button then the map/unit; Esc or right-click cancels. Grid Move keeps ship spacing and waypoint lines. Known allies/neutral relations cannot be targeted by Attack. Cell placement is a fallback; native visual layout still needs checking.
+
 ## Checked earlier (morning list)
 
 Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
