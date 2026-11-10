@@ -429,7 +429,12 @@ priority. TOOL-10 is isolated preparation, not an additional desktop release
 gate or permission to simplify gameplay. Its documented entry seam may extract
 the existing client launch into `lib.rs`, retain the desktop CLI wrapper, and
 route platform storage/lifecycle inputs; it does not authorize a core rewrite.
-Touch, safe-area UI, device performance and cross-play remain subsequent gates.
+The Android-only lifecycle condition may also gate the existing viewer/map
+update chains and HUD command set, and discard transient input state; it must
+not change desktop scheduling or committed commands. The existing theme click
+dispatcher may check the same gate because its observers run outside these
+sets. Touch, safe-area UI,
+device performance and cross-play remain subsequent gates.
 See [Android support](ANDROID_SUPPORT.md), [compatibility](ANDROID_COMPATIBILITY.md)
 and [roadmap](ANDROID_ROADMAP.md). No Android completion date is assigned.
 
@@ -564,7 +569,7 @@ Each becomes a package of the same shape when M3 closes.
 | TOOL-07 | Marks from `SimMsg` and render marks | `sta_bench/src/marks.rs`, `sta64/src/bench/marks.rs` | TOOL-03 | `ScriptedSource` | parity | Marks file matches Refit names | S | Sonnet |
 | TOOL-08 | Parity diff vs Refit's bench (objects by name, marks in sim seconds) | `sta_bench/src/parity.rs` | TOOL-07 | Refit sample output | M3 parity report | Diff of two identical runs is empty | M | Sonnet |
 | TOOL-09 | Packaging and release: tagged builds for four targets, `packaging/linux` desktop entry, Windows zip, macOS bundle | `packaging/`, `.github/workflows/release.yml` | TOOL-06 | — | release | Tag on a fork produces four artefacts | M | Sonnet |
-| TOOL-10 | Android ARM64 preparation as a first-class platform: source audit and compatibility matrix, a shared client library with desktop/Android entrypoints, app-private storage/lifecycle boundary, opt-in NDK/Gradle build and debug APK attempt, Android docs and subsequent touch/UI plan | `docs/ANDROID_*.md`, `tools/android/`, `packaging/android/`, `.github/workflows/android.yml`; narrow launch seam in `sta64/{Cargo.toml,src/main.rs,src/lib.rs,src/platform.rs}` and surface-cache path integration | Existing shared client/core and TOOL-06 CI | shared fake content and desktop regression tests; Android SDK/NDK | future Android runtime validation | Accurate audit/docs; ARM64 build infrastructure and actual build attempt/APK where tooling permits; desktop checks pass; no gameplay fork, dependency upgrade or new mandatory Android CI gate | M | Lead |
+| TOOL-10 | Android ARM64 preparation as a first-class platform: source audit and compatibility matrix, a shared client library with desktop/Android entrypoints, app-private storage/lifecycle boundary, opt-in NDK/Gradle build and debug APK attempt, Android docs and subsequent touch/UI plan | `docs/ANDROID_*.md`, `tools/android/`, `packaging/android/`, `.github/workflows/android.yml`; narrow launch seam in `sta64/{Cargo.toml,src/main.rs,src/lib.rs,src/platform.rs,src/platform/tests.rs,src/app.rs}`, surface-cache path integration and lifecycle conditions on the existing viewer/map chains and theme click dispatcher | Existing shared client/core and TOOL-06 CI | shared fake content and desktop regression tests; Android SDK/NDK | future Android runtime validation | Accurate audit/docs; ARM64 build infrastructure and actual build attempt/APK where tooling permits; desktop checks pass; no gameplay fork, dependency upgrade or new mandatory Android CI gate | M | Lead |
 
 ### Lua missions (LUA)
 
