@@ -2,6 +2,7 @@
 //! No installed or port bytes are bundled in this repository.
 
 use std::collections::BTreeSet;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -13,6 +14,58 @@ use sta_mission::{Labels, Resolution};
 use sta_sim::setup::{Control, Controller, GameOptions, GameSetup, PlayerSetup};
 use sta_sim::{Sim, SimEvent, WorldSource};
 use sta_vfs::Vfs;
+
+const DEFAULT_STARTUP_TICKS: u32 = 30;
+const MAX_STARTUP_TICKS: u32 = 36_000;
+
+fn parse_startup_horizon(value: Option<OsString>) -> Result<u32, String> {
+    let Some(value) = value else {
+        return Ok(DEFAULT_STARTUP_TICKS);
+    };
+    let value = value
+        .into_string()
+        .map_err(|_| "must be Unicode decimal digits".to_owned())?;
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err("must be a non-empty unsigned decimal integer".into());
+    }
+    let ticks = value
+        .parse::<u32>()
+        .map_err(|_| "must fit in an unsigned 32-bit integer".to_owned())?;
+    if !(1..=MAX_STARTUP_TICKS).contains(&ticks) {
+        return Err(format!("must be in 1..={MAX_STARTUP_TICKS}"));
+    }
+    Ok(ticks)
+}
+
+#[test]
+fn startup_horizon_parser_accepts_bounds_and_uses_explicit_default() {
+    for ticks in [1, 30, 600, 1800, 36_000] {
+        assert_eq!(
+            parse_startup_horizon(Some(OsString::from(ticks.to_string()))).unwrap(),
+            ticks
+        );
+    }
+    assert_eq!(parse_startup_horizon(None).unwrap(), 30);
+}
+
+#[test]
+fn startup_horizon_parser_rejects_invalid_values_clearly() {
+    for value in ["0", "36001", "-1", "1.5", "", " ", " 30", "4294967296"] {
+        assert!(
+            parse_startup_horizon(Some(OsString::from(value))).is_err(),
+            "accepted {value:?}"
+        );
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        let non_unicode = OsString::from_vec(vec![0xff]);
+        assert_eq!(
+            parse_startup_horizon(Some(non_unicode)).unwrap_err(),
+            "must be Unicode decimal digits"
+        );
+    }
+}
 
 fn header_map(bytes: &[u8]) -> Result<String, String> {
     let header = String::from_utf8_lossy(bytes);
@@ -52,6 +105,9 @@ fn header_map_accepts_sentence_punctuation_and_rejects_ambiguous_metadata() {
 #[test]
 #[ignore = "requires STA64_A2_INSTALL and STA64_A2_PORTS external directories"]
 fn external_a2_campaign_ports_start_on_installed_maps() {
+    let startup_ticks = parse_startup_horizon(std::env::var_os("STA64_A2_STARTUP_TICKS"))
+        .unwrap_or_else(|error| panic!("invalid STA64_A2_STARTUP_TICKS: {error}"));
+    eprintln!("A2 startup configuration: horizon_ticks={startup_ticks}");
     let install = PathBuf::from(std::env::var("STA64_A2_INSTALL").expect("set STA64_A2_INSTALL"));
     let ports = PathBuf::from(std::env::var("STA64_A2_PORTS").expect("set STA64_A2_PORTS"));
     let mod_name = std::env::var("STA64_A2_MOD").unwrap_or_else(|_| "STA2 Classic".into());
@@ -60,7 +116,7 @@ fn external_a2_campaign_ports_start_on_installed_maps() {
     let (index, index_warnings) = OdfIndex::build(&vfs);
     let (db, content_warnings) = ContentDb::load(&vfs, &index).expect("load installed content");
     eprintln!(
-        "A2 startup: profile={:?} content_hash={:#018x} index_warnings={} content_warnings={}",
+        "A2 startup: horizon_ticks={startup_ticks} profile={:?} content_hash={:#018x} index_warnings={} content_warnings={}",
         db.profile(),
         db.hash(),
         index_warnings.len(),
@@ -178,7 +234,7 @@ fn external_a2_campaign_ports_start_on_installed_maps() {
             let mut runtime = MissionRuntime::from_vfs_with(vfs.clone(), startup_path, 1, cfg);
             let mut events = Vec::new();
             let mut rejected = Vec::new();
-            for tick in 0..30 {
+            for tick in 0..startup_ticks {
                 let mut commands = Vec::new();
                 runtime.think(&sim.view(), &events, &mut commands);
                 let output = sim.step(&commands);
@@ -211,12 +267,14 @@ fn external_a2_campaign_ports_start_on_installed_maps() {
                 })
                 .collect();
             eprintln!(
-                "A2 startup {name}: map={bzn_name} loaded_layer={loaded_layer:?} objects={} regions={} warnings(map/spawn)={}/{} resolve={resolution:?} errors={} unsupported={unsupported:?} rejected={rejected:?} handled_log_count={} handled_log_samples={:?}",
+                "A2 startup {name}: horizon_ticks={startup_ticks} map={bzn_name} loaded_layer={loaded_layer:?} objects={} regions={} warnings(map/spawn)={}/{} resolve={resolution:?} errors={} objectives={} finished={} unsupported={unsupported:?} rejected={rejected:?} handled_log_count={} handled_log_samples={:?}",
                 setup.map.objects.len(),
                 setup.map.regions.len(),
                 map_warnings.len(),
                 spawn_warnings.len(),
                 runtime.errors().len(),
+                runtime.objectives().len(),
+                runtime.finished(),
                 handled_logs.len(),
                 handled_logs.iter().take(3).collect::<Vec<_>>()
             );
@@ -233,11 +291,14 @@ fn external_a2_campaign_ports_start_on_installed_maps() {
         }
     }
     eprintln!(
-        "A2 startup summary: ports={} ran={ran} resolved={resolved} packaging={packaging:?} failures={failures:?}",
+        "A2 startup summary: horizon_ticks={startup_ticks} ports={} ran={ran} resolved={resolved} packaging={packaging:?} failures={failures:?}",
         files.len()
     );
     assert_eq!(files.len(), 36, "expected all 36 external clean-room ports");
-    assert_eq!(ran, 36, "every external port must complete a 30-tick startup");
+    assert_eq!(
+        ran, 36,
+        "every external port must complete a {startup_ticks}-tick startup"
+    );
     if package.is_some() {
         assert_eq!(resolved, 36, "staged aliases must resolve every intended port");
     }

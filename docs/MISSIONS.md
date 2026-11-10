@@ -111,7 +111,15 @@ STA2 Classic. In package mode the probe mounts the package without mounting the
 source directory, verifies resolved script bytes against the source, and checks
 that all runtime scripts actually come from the package's VFS layer.
 
-The current staged input passes all 36 production resolutions and startups. It
+For longer natural runs, set `STA64_A2_STARTUP_TICKS=600` before the same
+command. The default remains 30 ticks; accepted overrides are integers from
+1 to 36000. At the current 30 Hz, 600 ticks cover 20 simulation seconds.
+The probe reports the horizon, objective count and finished flag, while retaining
+its existing failures for uncaught Lua errors and rejected commands. It injects
+no input or helper calls. These counters are observations, not objective or
+complete-mission acceptance checks.
+
+The staged 30-tick sweep passes all 36 production resolutions and startups. It
 still reports 199 handled keyword messages across six missions, including unsupported
 forceOntoMap writes, plus tutorial input fallbacks. These messages remain open
 compatibility work; a startup pass does not mean every mission intent succeeded.
