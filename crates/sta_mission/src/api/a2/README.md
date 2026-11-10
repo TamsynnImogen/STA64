@@ -79,6 +79,18 @@ host mission state immediately and emits no sim or presentation command;
 client rendering and native defaults are not acceptance claims. File-loading
 and completion-selector DLL calls remain separate, unimplemented adapters.
 
+## DLL-shaped random numbers
+
+`A2.RandomGetUnsigned(upper)` takes exactly one positive unsigned 32-bit
+integer (including an integral Lua number) and returns a Lua integer in
+`[0, upper)`. Invalid arguments, zero and wrong arity raise errors without
+advancing the generator. A bound of one still consumes a draw. It shares the
+runtime's deterministic `math.random` stream and `math.randomseed` state,
+captured before mission code runs; later replacing the global random function
+does not redirect the binding. It emits no sim commands. The positive
+upper-exclusive range is supported by the pinned A2 reference; native RNG
+algorithm/sequence and mission save/resume parity remain unverified.
+
 ## Initial DLL-named object bridge
 
 The `A2` table exposes the single-handle forms `IsAlive`, `GetLocation`,

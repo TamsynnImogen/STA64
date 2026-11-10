@@ -15,12 +15,12 @@ user's own executables each time, and none are recorded here.
 | engine API size | 371 `ScriptInterface` methods | (imports only) |
 | distinct calls used | 138 | 213 |
 | call sites | 11708 | — |
-| A2 DLL-shaped callable | 18 | — |
-| missing A2 callable signatures | 114 | — |
+| A2 DLL-shaped callable | 19 | — |
+| missing A2 callable signatures | 113 | — |
 | MMM job-equivalent, not A2-shaped | 0 | — |
 | bound in STA64's Lua today | — | 6 |
 | in MMM's API, not yet bound | 24 | 27 |
-| no Lua equivalent (STA64 extension needed) | 90 | 144 |
+| no Lua equivalent (STA64 extension needed) | 89 | 144 |
 | script-state plumbing (n/a in Lua) | 6 | 36 |
 
 - **bound**: an existing `sta_mission` binding does the same job.
@@ -209,7 +209,7 @@ user's own executables each time, and none are recorded here.
 | `void StuffIntoWormhole(int, int)` | 4 | 6 | new |  |
 | `bool IsExploding(int)` | 3 | 4 | new |  |
 | `bool IsOdf(int, char *)` | 3 | 7 | A2 DLL-shaped | `A2.IsOdf` |
-| `unsigned int RandomGetUnsigned(unsigned int)` | 3 | 28 | new |  |
+| `unsigned int RandomGetUnsigned(unsigned int)` | 3 | 28 | A2 DLL-shaped | `A2.RandomGetUnsigned` |
 | `void AddTransporterEffect(int)` | 3 | 5 | new |  |
 | `void CraftCanRecrew(int, bool)` | 3 | 4 | new |  |
 | `void PointAt(int, int)` | 3 | 13 | MMM | `pointAt` |
