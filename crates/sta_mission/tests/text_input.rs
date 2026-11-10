@@ -160,7 +160,7 @@ fn deferred_pattern_error_counts_once_per_event_and_disables_only_that_hook() {
     );
     for tick_no in 0..6 {
         let input = event(0, tick_no + 1, "x");
-        tick(&mut rt, tick_no as u64, &[input.clone()]);
+        tick(&mut rt, tick_no as u64, std::slice::from_ref(&input));
         if tick_no == 0 {
             assert_eq!(rt.errors().len(), 1);
             tick(&mut rt, tick_no as u64, &[input]);

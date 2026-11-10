@@ -84,7 +84,11 @@ fn economics_tutorial_text_commands_advance_authored_steps_and_finish_on_timer()
     assert_no_lua_errors(&runtime);
 
     // The authored 12-second opening timer naturally shows step one.
-    for _ in 0..361 {
+    for _ in 0..359 {
+        tick(&mut runtime, &mut sim, &mut commands);
+        assert_eq!(step_number(&runtime), 0, "opening must not finish before twelve seconds");
+    }
+    for _ in 0..2 {
         tick(&mut runtime, &mut sim, &mut commands);
         if step_number(&runtime) == 1 {
             break;
