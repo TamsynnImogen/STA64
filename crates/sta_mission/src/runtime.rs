@@ -22,6 +22,15 @@
 //!   call returns another stub), so real scripts load before their API
 //!   exists. LUA-03 replaces stubs name by name.
 //!
+//! `MMM.register(object)` also accepts the class instances used by the
+//! clean-room A2 ports. Its successful `setup(self)` runs once at the first
+//! controller tick, followed by `update(self, time)` each tick. Function
+//! registrations keep their original ordering and signature. These are
+//! bridge lifecycle rules: optional `cineractiveUpdate(self)` runs while active,
+//! followed by `cineractiveFinish(self, false)` once an observed active level ends.
+//! Their method handles are selected before each normal update; forced skips
+//! and native immediate timing are not implemented.
+//!
 //! # Error isolation
 //!
 //! Nothing a script does panics the sim. A load error is kept in
@@ -43,7 +52,7 @@
 //! tables scripts query are unreachable from it. [`MissionConfig`] passes
 //! the seat, `Arc<ContentDb>` and map labels in at construction instead.
 
-use mlua::{Function, Lua, MultiValue};
+use mlua::{Function, Lua, MultiValue, Table, Value};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -62,11 +71,24 @@ const MAX_LOGGED: usize = 100;
 
 /// A permissive stand-in for API that does not exist yet.
 const STUBS: &str = r#"
-local function mk()
+local record = ...
+local kindOf, stringify = type, tostring
+local function label(key)
+  local kind = kindOf(key)
+  if kind == "string" then return key end
+  if kind == "number" then return stringify(key) end
+  return "<" .. kind .. ">"
+end
+local function field(path, key)
+  local name = path .. "." .. label(key)
+  record("stub field " .. name)
+  return name
+end
+local function mk(path)
   local t = {}
   setmetatable(t, {
-    __index = function() return mk() end,
-    __call = function() return mk() end,
+    __index = function(_, key) return mk(path and field(path, key)) end,
+    __call = function() return mk(path and (path .. "()")) end,
     __add = function() return 0 end, __sub = function() return 0 end,
     __mul = function() return 0 end, __div = function() return 0 end,
     __mod = function() return 0 end, __unm = function() return 0 end,
@@ -78,8 +100,12 @@ local function mk()
   return t
 end
 rawset(_G, "__stub", mk)
-setmetatable(_G, { __index = function() return mk() end })
-setmetatable(MMM, { __index = function() return mk() end })
+setmetatable(_G, { __index = function(_, key)
+  local name = label(key)
+  record("stub global " .. name)
+  return mk(name)
+end })
+setmetatable(MMM, { __index = function(_, key) return mk(field("MMM", key)) end })
 "#;
 
 struct Callback {
@@ -107,6 +133,10 @@ struct Inner {
 }
 
 /// A mission script running as a [`Controller`].
+///
+/// The host owns one runtime for its SCRIPT command stream and supplies the
+/// complete events from a submitted batch with the next view. Independent
+/// runtimes must not share SCRIPT sequences or spawn request tokens.
 pub struct MissionRuntime {
     inner: Inner,
     errors: Vec<String>,
@@ -116,10 +146,84 @@ pub struct MissionRuntime {
 // reference counts. Everything that touches them (the state, the callback
 // `Function`s, the closures installed into it) lives inside `Inner`, which
 // is moved as a whole and never cloned out, so one thread at a time uses
-// them. The reader closure is required to be `Send`.
+// them. Public inspection accepts only sealed standard owned conversions;
+// neither Lua handles nor custom converters can escape via eval/eval_with.
+// The reader closure is required to be Send, and error-send plus a static
+// assertion keep errors from exporting thread-affine values either.
 unsafe impl Send for MissionRuntime {}
 
-type Reader = Arc<Mutex<dyn Fn(&str) -> Option<Vec<u8>> + Send>>;
+type Reader = api::MissionReader;
+
+mod inspection;
+pub use inspection::{EvalArgs, EvalResult};
+
+/// Adapt the class instances used by the converted missions without exposing
+/// another callback kind outside the Lua state. Successful setup runs once,
+/// against the first controller view; update then runs once per tick. Setup
+/// failures use the existing callback retry/error budget, as function callbacks
+/// do. Cinematic hooks use an explicit polling policy: normal update first,
+/// cinematic update while active, then a single normal-finish notification.
+/// Phase errors abort the remaining phases of that poll and use the existing
+/// per-object budget; later phases require successful preceding phases.
+fn object_callback(lua: &Lua, object: Table) -> mlua::Result<Function> {
+    let mut any = false;
+    for name in ["setup", "update"] {
+        match object.get::<Value>(name)? {
+            Value::Nil => {},
+            Value::Function(_) => any = true,
+            _ => return Err(mlua::Error::runtime(format!("mission object {name} must be a function or nil"))),
+        }
+    }
+    for name in ["cineractiveUpdate", "cineractiveFinish"] {
+        match object.get::<Value>(name)? {
+            Value::Nil | Value::Function(_) => {},
+            _ => return Err(mlua::Error::runtime(format!("mission object {name} must be a function or nil"))),
+        }
+    }
+    if !any {
+        return Err(mlua::Error::runtime("mission object must define setup or update"));
+    }
+    let mut initialized = false;
+    let mut was_active = false;
+    lua.create_function_mut(move |lua, time: f64| {
+        if !initialized {
+            if let Some(setup) = object.get::<Option<Function>>("setup")? {
+                setup.call::<MultiValue>(object.clone())?;
+            }
+            initialized = true;
+        }
+        // Select this poll's methods before update, as with monitor hook snapshots.
+        let cinematic_update = object.get::<Option<Function>>("cineractiveUpdate")?;
+        let cinematic_finish = object.get::<Option<Function>>("cineractiveFinish")?;
+        let cinematic_hooks = cinematic_update.is_some() || cinematic_finish.is_some();
+        if cinematic_hooks {
+            was_active |= api::cineractive_active(lua)?;
+        }
+        if let Some(update) = object.get::<Option<Function>>("update")? {
+            update.call::<MultiValue>((object.clone(), time))?;
+        }
+        if cinematic_hooks {
+            if api::cineractive_active(lua)? {
+                was_active = true;
+                if let Some(update) = cinematic_update {
+                    update.call::<MultiValue>(object.clone())?;
+                }
+            }
+            if was_active && !api::cineractive_active(lua)? {
+                // Consume the edge before calling Lua: a failed finish is not replayed.
+                was_active = false;
+                if let Some(finish) = cinematic_finish {
+                    finish.call::<MultiValue>((object.clone(), false))?;
+                }
+            }
+            // A finish may start a new cinematic; it is updated on the next poll.
+            was_active = api::cineractive_active(lua)?;
+        } else {
+            was_active = false;
+        }
+        Ok(())
+    })
+}
 
 impl MissionRuntime {
     /// Load `path` (a VFS path such as `missions/Eviction.lua`) from `vfs`.
@@ -167,6 +271,7 @@ impl MissionRuntime {
     }
 
     fn setup(lua: &Lua, shared: &Rc<RefCell<Shared>>, ctx: &ApiShared, seed: u64, read: Reader, path: &str) -> mlua::Result<()> {
+        ctx.borrow_mut().reader = Some(read.clone());
         crate::math::install(lua, seed)?;
         lua.load(crate::script::LUABIND_CLASS).set_name("=luabind class").exec()?;
         let globals = lua.globals();
@@ -175,9 +280,14 @@ impl MissionRuntime {
         let sh = shared.clone();
         mmm.set(
             "register",
-            lua.create_function(move |_, f: Function| {
+            lua.create_function(move |lua, value: Value| {
+                let f = match value {
+                    Value::Function(f) => f,
+                    Value::Table(t) => object_callback(lua, t)?,
+                    _ => return Err(mlua::Error::runtime("MMM.register expects a function or mission object")),
+                };
                 let mut s = sh.borrow_mut();
-                s.next_id += 1;
+                s.next_id = s.next_id.checked_add(1).ok_or_else(|| mlua::Error::runtime("mission callback ids exhausted"))?;
                 let id = s.next_id;
                 s.added.push((id, f));
                 Ok(id)
@@ -210,7 +320,12 @@ impl MissionRuntime {
         )?;
 
         api::install(lua, ctx)?;
-        lua.load(STUBS).set_name("=stubs").exec()?;
+        let diagnostics = ctx.clone();
+        let record = lua.create_function(move |_, name: String| {
+            diagnostics.borrow_mut().unsupported(&name);
+            Ok(())
+        })?;
+        lua.load(STUBS).set_name("=stubs").call::<()>(record)?;
         let src = {
             let r = read.lock().unwrap_or_else(|p| p.into_inner());
             r(path).ok_or_else(|| mlua::Error::runtime("not found"))?
@@ -218,9 +333,47 @@ impl MissionRuntime {
         lua.load(&src[..]).set_name(format!("@{path}")).exec()
     }
 
-    /// Evaluate a Lua chunk in the script's state (tests, tools).
-    pub fn eval<T: mlua::FromLuaMulti>(&self, chunk: &str) -> mlua::Result<T> {
+    /// Evaluate a chunk, returning only sealed owned data. Lua handles and
+    /// custom conversions cannot escape this runtime's manual Send boundary.
+    ///
+    /// ```compile_fail
+    /// use sta_mission::runtime::MissionRuntime;
+    /// let rt = MissionRuntime::from_source("test.lua", "", 1);
+    /// let _: mlua::Table = rt.eval("return {}").unwrap();
+    /// ```
+    ///
+    /// A Send result alone would not prevent a custom converter retaining
+    /// a Lua clone as a side effect; custom conversions are also sealed out.
+    ///
+    /// ```compile_fail
+    /// use sta_mission::runtime::MissionRuntime;
+    /// struct Custom;
+    /// impl mlua::FromLuaMulti for Custom {
+    ///     fn from_lua_multi(_: mlua::MultiValue, _: &mlua::Lua) -> mlua::Result<Self> { Ok(Custom) }
+    /// }
+    /// let rt = MissionRuntime::from_source("test.lua", "", 1);
+    /// let _: Custom = rt.eval("return 1").unwrap();
+    /// ```
+    pub fn eval<T: EvalResult>(&self, chunk: &str) -> mlua::Result<T> {
         self.inner.lua.load(chunk).eval()
+    }
+
+    /// Call a chunk with sealed arguments, avoiding both string interpolation
+    /// and exported Lua Function handles. Lua receives arguments through `...`.
+    ///
+    /// ```compile_fail
+    /// use sta_mission::runtime::MissionRuntime;
+    /// struct Custom;
+    /// impl mlua::IntoLuaMulti for Custom {
+    ///     fn into_lua_multi(self, _: &mlua::Lua) -> mlua::Result<mlua::MultiValue> {
+    ///         Ok(mlua::MultiValue::new())
+    ///     }
+    /// }
+    /// let rt = MissionRuntime::from_source("test.lua", "", 1);
+    /// rt.eval_with::<(), _>("", Custom).unwrap();
+    /// ```
+    pub fn eval_with<T: EvalResult, A: EvalArgs>(&self, chunk: &str, args: A) -> mlua::Result<T> {
+        self.inner.lua.load(chunk).call(args)
     }
 
     /// Errors so far: load errors and callback errors, oldest first.
@@ -235,12 +388,18 @@ impl MissionRuntime {
 
     /// Commands the script has queued since the last call.
     pub fn take_commands(&mut self) -> Vec<Command> {
-        std::mem::take(&mut self.inner.ctx.borrow_mut().commands)
+        api::drain_commands(&self.inner.ctx)
     }
 
     /// The objectives the script added, in order.
     pub fn objectives(&self) -> Vec<Objective> {
         self.inner.ctx.borrow().objectives.clone()
+    }
+
+    /// File-backed heading, briefing and notes for inspection. Like the goal
+    /// list, this is host mission state, not yet a replicated UI presentation.
+    pub fn objective_briefing(&self) -> Option<api::ObjectiveBriefing> {
+        self.inner.ctx.borrow().objective_briefing.clone()
     }
 
     /// Whether the script called `Mission.finish`.
@@ -253,9 +412,11 @@ impl MissionRuntime {
         self.inner.ctx.borrow().log.clone()
     }
 
-    /// API calls that were accepted but had no effect (an order the sim
-    /// has no command for, an unreadable argument), with counts, ascending
-    /// by name.
+    /// Unsupported API encounters, with counts ascending by name. Includes
+    /// accepted operations with no effect and permissive fallback lookups
+    /// (`stub global <name>` / `stub field <path>`). Lookup counts are not
+    /// function-call counts. Lookup keys may be dynamically computed strings;
+    /// function arguments are not inspected.
     pub fn unsupported(&self) -> Vec<(String, u32)> {
         self.inner.ctx.borrow().unsupported.iter().map(|(k, v)| (k.clone(), *v)).collect()
     }
@@ -268,6 +429,9 @@ impl MissionRuntime {
 
     /// Run every live callback once for `tick`.
     pub fn step(&mut self, tick: u64) {
+        // `step` is public as well as called by `think`: clock-based API must
+        // see the tick supplied here even without a new world snapshot.
+        self.inner.ctx.borrow_mut().view.tick = tick;
         {
             let mut s = self.inner.shared.borrow_mut();
             let added = std::mem::take(&mut s.added);
@@ -304,15 +468,23 @@ impl MissionRuntime {
     }
 }
 
+#[cfg(test)]
+mod object_tests;
+
 impl Controller for MissionRuntime {
     fn think(&mut self, view: &WorldView, events: &[SimEvent], out: &mut Vec<Command>) {
         {
             let mut c = self.inner.ctx.borrow_mut();
             c.view = view.clone();
             c.events = events.to_vec();
+            api::process_spawns(&mut c);
         }
+        let mut failures = Vec::new();
+        api::fire_text_input(&self.inner.lua, &self.inner.ctx, &mut failures);
+        let room = MAX_LOGGED.saturating_sub(self.errors.len());
+        self.errors.extend(failures.into_iter().take(room));
         self.step(view.tick);
-        out.append(&mut self.inner.ctx.borrow_mut().commands);
+        out.extend(api::drain_commands(&self.inner.ctx));
     }
 }
 

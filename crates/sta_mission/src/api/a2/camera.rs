@@ -10,10 +10,13 @@
 use mlua::{Lua, MetaMethod, UserData, UserDataFields, UserDataMethods, Value, Variadic};
 use sta_core::{Fixed, Vec3};
 use sta_sim::command::Edit;
-use sta_sim::present::{Arg, Presentation, Spot};
+use sta_sim::present::{Arg, Presentation};
+#[cfg(test)]
+use sta_sim::present::Spot;
 
 use crate::api::Shared;
 use crate::api::entity::Entity;
+use crate::api::camera_intent::{self, ArgRef, Intent, SpotRef};
 
 struct PathRef {
     name: String,
@@ -50,31 +53,28 @@ fn position(t: &mlua::Table) -> mlua::Result<Vec3> {
     })
 }
 
-fn spot(v: &Value) -> mlua::Result<Spot> {
+fn spot(v: &Value) -> mlua::Result<SpotRef> {
     match v {
-        Value::UserData(u) if u.is::<Entity>() => Ok(Spot::Entity(u.borrow::<Entity>()?.id)),
-        Value::UserData(u) if u.is::<PathRef>() => Ok(Spot::Path(u.borrow::<PathRef>()?.name.clone())),
-        Value::Table(t) => Ok(Spot::Position(position(t)?)),
+        Value::UserData(u) if u.is::<Entity>() => {
+            let key = u.borrow::<Entity>()?.key.clone();
+            if key.id().is_none() && !key.pending() {
+                return Err(mlua::Error::runtime("camera entity spawn failed"));
+            }
+            Ok(SpotRef::Entity(key))
+        }
+        Value::UserData(u) if u.is::<PathRef>() => Ok(SpotRef::Path(u.borrow::<PathRef>()?.name.clone())),
+        Value::Table(t) => Ok(SpotRef::Position(position(t)?)),
         _ => Err(mlua::Error::runtime("camera spot must be an entity, Vector or Path")),
     }
 }
 
-fn spot_arg(s: &Spot) -> Arg {
-    match s {
-        Spot::Entity(e) => Arg::Entity(*e),
-        Spot::Position(p) => Arg::Position(*p),
-        Spot::Path(p) => Arg::Text(p.clone()),
-        _ => unreachable!("only spots built by this module"),
-    }
-}
-
-fn arg(v: &Value) -> mlua::Result<Arg> {
+fn arg(v: &Value) -> mlua::Result<ArgRef> {
     match v {
-        Value::Boolean(b) => Ok(Arg::Bool(*b)),
-        Value::Integer(n) => Ok(Arg::Int(*n)),
-        Value::Number(n) => Ok(Arg::Num(fixed(*n)?)),
-        Value::String(s) => Ok(Arg::Text(s.to_str()?.to_owned())),
-        _ => spot(v).map(|s| spot_arg(&s)),
+        Value::Boolean(b) => Ok(ArgRef::Ready(Arg::Bool(*b))),
+        Value::Integer(n) => Ok(ArgRef::Ready(Arg::Int(*n))),
+        Value::Number(n) => Ok(ArgRef::Ready(Arg::Num(fixed(*n)?))),
+        Value::String(s) => Ok(ArgRef::Ready(Arg::Text(s.to_str()?.to_owned()))),
+        _ => spot(v).map(ArgRef::Spot),
     }
 }
 
@@ -82,8 +82,15 @@ struct Cineractive {
     ctx: Shared,
     active: bool,
     skippable: bool,
-    from: Option<Spot>,
+    from: Option<SpotRef>,
     from_typed: bool,
+}
+
+/// Copy the existing singleton's state without calling Lua or exporting a VM handle.
+pub(super) fn active(lua: &Lua) -> mlua::Result<bool> {
+    let singleton = lua.globals().raw_get::<mlua::AnyUserData>("Cineractive")?;
+    let active = singleton.borrow::<Cineractive>()?.active;
+    Ok(active)
 }
 
 impl Cineractive {
@@ -104,14 +111,15 @@ impl Cineractive {
         };
         let s = spot(first)?;
         // Validate every extra before mutating state or emitting anything.
-        let mut args = vec![spot_arg(&s)];
+        let mut args = vec![ArgRef::Spot(s.clone())];
         for v in values.iter().skip(1) {
             args.push(arg(v)?);
         }
-        let simple = args.len() == 1 && !matches!(s, Spot::Path(_));
+        let simple = args.len() == 1 && !matches!(&s, SpotRef::Path(_));
         if from {
             self.from = Some(s.clone());
             self.from_typed = simple;
+            camera_intent::clear(&mut self.ctx.borrow_mut());
         } else if simple
             && self.from_typed
             && let Some(source) = &self.from
@@ -119,23 +127,19 @@ impl Cineractive {
             // Complete the pair only here: a new source must not produce a
             // transient shot toward an earlier scene's target. Parameterized
             // paths remain generic instead of adding an approximate Shot.
-            self.emit(Presentation::Shot {
+            return camera_intent::submit(&mut self.ctx.borrow_mut(), Intent::Shot {
                 from: source.clone(),
                 at: s,
-                seconds: Fixed::ZERO,
-            });
-            return Ok(());
+            }).map_err(mlua::Error::runtime);
         }
-        self.emit(Presentation::Call {
+        camera_intent::submit(&mut self.ctx.borrow_mut(), Intent::Call {
             name: if from {
                 "Cineractive.lookFrom"
             } else {
                 "Cineractive.lookAt"
-            }
-            .into(),
+            },
             args,
-        });
-        Ok(())
+        }).map_err(mlua::Error::runtime)
     }
 }
 
@@ -145,6 +149,15 @@ impl UserData for Cineractive {
         f.add_field_method_get("skippable", |_, c| Ok(c.skippable));
         f.add_field_method_set("active", |_, c, on: bool| {
             c.active = on;
+            if !on {
+                camera_intent::clear(&mut c.ctx.borrow_mut());
+                // A subsequent lookAt must not resurrect a canceled pending source.
+                // Preserve the previous behavior of already resolved sources.
+                if c.from.as_ref().is_some_and(SpotRef::unresolved) {
+                    c.from = None;
+                    c.from_typed = false;
+                }
+            }
             c.mode();
             Ok(())
         });

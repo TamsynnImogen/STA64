@@ -19,7 +19,9 @@
 //! The name inventory lists `hook`, `stop`, `stopAll`, `unhook`, `state`,
 //! `id`, `hooks` but no arguments; the kinds and argument order are this
 //! runtime's choice. Other kinds (`State.Started` hooks) are recorded as
-//! unsupported and never fire.
+//! unsupported and never fire. The separate named condition constructor and
+//! OnTrue hooks are implemented in `condition_monitor`, without changing the
+//! legacy event-hook signatures above.
 
 use std::collections::BTreeSet;
 
@@ -56,9 +58,8 @@ struct Monitor(u64, Shared);
 
 fn add_hook(lua: &Lua, m: &Monitor, args: &MultiValue) -> mlua::Result<()> {
     let _ = lua;
-    let mut c = m.1.borrow_mut();
     let Some(Value::String(kind)) = args.front() else {
-        c.unsupported("Monitor:hook: non-string kind");
+        m.1.borrow_mut().unsupported("Monitor:hook: non-string kind");
         return Ok(());
     };
     let kind = kind.to_string_lossy();
@@ -67,22 +68,28 @@ fn add_hook(lua: &Lua, m: &Monitor, args: &MultiValue) -> mlua::Result<()> {
         Some(Value::Function(f)) => Some(f.clone()),
         _ => None,
     };
+    let centre = if kind == "Enters" { rest.first().and_then(|v| point_of(&m.1, v)) } else { None };
+    let mut c = m.1.borrow_mut();
     let parsed = match kind.as_str() {
         "Destroyed" => match (rest.first(), func(1)) {
             (Some(Value::UserData(u)), Some(f)) => u
                 .borrow::<super::entity::Entity>()
                 .ok()
-                .map(|e| (MonitorKind::Destroyed { target: e.id, seen_alive: c.alive(e.id).is_some() }, f)),
+                .and_then(|e| e.key.id().map(|id| (MonitorKind::Destroyed { target: id, seen_alive: c.alive(id).is_some() }, f))),
             _ => None,
         },
-        "Enters" => match (rest.first().and_then(|v| point_of(&c, v)), rest.get(1), func(2)) {
+        "Enters" => match (centre, rest.get(1), func(2)) {
             (Some(centre), Some(r), Some(f)) => {
                 let radius = match r {
                     Value::Number(n) => *n,
                     Value::Integer(n) => *n as f64,
                     _ => 0.0,
                 };
-                let owner = rest.get(3).and_then(player_of);
+                let owner = rest.get(3).and_then(|v| player_of(&c, v));
+                if c.player_numbering == super::PlayerNumbering::ArmadaTeams
+                    && rest.get(3).is_some_and(|v| !v.is_nil()) && owner.is_none() {
+                    return Err(mlua::Error::runtime("Monitor.Enters requires a valid Armada team number or Player"));
+                }
                 let inside = c
                     .view
                     .units
@@ -149,7 +156,10 @@ pub(crate) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
         class.set(k, k)?;
     }
     let c = ctx.clone();
-    let make = lua.create_function(move |lua, _: MultiValue| {
+    let make = lua.create_function(move |lua, args: MultiValue| {
+        // __call supplies the class table. Internal shorthand calls supply no arguments.
+        let args: Vec<_> = args.into_iter().skip(1).collect();
+        if !args.is_empty() { return super::condition_monitor::make(lua, &c, &args); }
         let mut b = c.borrow_mut();
         b.next_monitor += 1;
         let id = b.next_monitor;
@@ -160,7 +170,9 @@ pub(crate) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
     class.set(
         "stopAll",
         lua.create_function(move |_, _: MultiValue| {
-            c.borrow_mut().monitors.iter_mut().for_each(|h| h.active = false);
+            let mut c = c.borrow_mut();
+            c.monitors.iter_mut().for_each(|h| h.active = false);
+            super::condition_monitor::stop_all(&mut c.conditions);
             Ok(())
         })?,
     )?;
@@ -186,6 +198,7 @@ pub(crate) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
     mt.set("__index", lua.create_function(|lua, (_t, _k): (Value, Value)| stub(lua))?)?;
     class.set_metatable(Some(mt))?;
     lua.globals().raw_set("Monitor", class)?;
+    super::condition_monitor::install(lua)?;
     Ok(())
 }
 
