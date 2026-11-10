@@ -30,6 +30,7 @@ pub mod kinematics;
 pub mod movement;
 pub mod present;
 pub mod production;
+mod regions;
 pub mod replay;
 pub mod setup;
 pub mod snapshot;
@@ -262,6 +263,7 @@ impl Sim {
     /// Move every unit one tick and close the tick with its view.
     fn advance(&mut self) -> TickOutput {
         self.step_kinematics();
+        self.push_out_of_fields();
         if let Some(db) = self.content.clone() {
             combat::damage::recharge(&mut self.units, &db);
             self.specials.step(&mut self.units, &db, &mut self.events);
