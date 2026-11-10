@@ -71,6 +71,7 @@ impl Sim {
             return false;
         }
         self.labels.remove(id);
+        self.production.remove_rally_entity(id);
         self.events.push(SimEvent::Destroyed { id, by });
         true
     }

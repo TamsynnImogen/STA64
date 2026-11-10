@@ -30,7 +30,7 @@
 //!   empty or names it. Tech prerequisites
 //!   are checked before this, in `Sim::apply` ([`crate::tech`], SIM-09).
 //! - Not yet: officers (no officer stock exists on the player), cooperative
-//!   multi-yard builds on one item, rally points,
+//!   multi-yard builds on one item,
 //!   `Features::construction_rigs` gating.
 //! - Persistent state is [`Production`]; the snapshot (`to_rec`/`from_rec`)
 //!   must include it. It is in the digest once any exists.
@@ -43,6 +43,8 @@ use crate::command::Edit;
 use crate::economy::Economy;
 use crate::event::SimEvent;
 use crate::world::{Entities, Entity, EntityKind, Fnv, Table};
+
+pub mod rally;
 
 /// Longest build queue of one yard.
 pub const QUEUE_MAX: usize = 5;
@@ -95,6 +97,8 @@ struct Weld {
 /// Build queues, pending rig deploys and stations being welded.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Production {
+    /// Per-builder destinations (SIM-17), independent of a build queue.
+    rallies: rally::Rallies,
     /// By yard.
     queues: Table<Vec<Item>>,
     /// By rig.
@@ -109,6 +113,8 @@ pub type ItemRec = (u32, u8, u64, bool, bool);
 /// Plain form of [`Production`] for snapshots.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProductionRec {
+    /// `(builder, original owner, point or entity destination)` in id order.
+    pub rallies: rally::RallyRec,
     /// `(yard, [(def, owner, done, started, paid)])`.
     pub queues: Vec<(u32, Vec<ItemRec>)>,
     /// `(rig, def, owner, [x, y, z] bits, paid)`.
@@ -159,7 +165,22 @@ fn refund(eco: &mut Economy, db: &ContentDb, p: PlayerId, def: ContentKey) {
 
 impl Production {
     pub fn is_empty(&self) -> bool {
-        self.queues.is_empty() && self.deploys.is_empty() && self.welds.is_empty()
+        self.queues.is_empty() && self.deploys.is_empty() && self.welds.is_empty() && self.rallies.is_empty()
+    }
+
+    pub(crate) fn order_rally(
+        &mut self,
+        db: &ContentDb,
+        units: &Entities,
+        player: PlayerId,
+        builders: &[EntityId],
+        at: crate::command::Target,
+    ) -> bool {
+        self.rallies.order(db, units, player, builders, at)
+    }
+
+    pub(crate) fn remove_rally_entity(&mut self, id: EntityId) {
+        self.rallies.remove_entity(id);
     }
 
     /// Items queued at `yard`, in order, as `(def, ticks done)`.
@@ -303,6 +324,7 @@ impl Production {
         if self.is_empty() {
             return;
         }
+        self.rallies.prune(units);
         let welds: Vec<EntityId> = self.welds.iter().map(|(id, _)| id).collect();
         for id in welds {
             if !units.contains(id) {
@@ -315,7 +337,12 @@ impl Production {
             let Some(s) = units.get_mut(id) else { continue };
             if done >= ticks {
                 s.progress = None;
+                let (owner, mobile) = (s.owner, s.orderable());
                 self.welds.remove(id);
+                if mobile {
+                    let target = self.rallies.destination(builder, owner, units);
+                    units.get_mut(id).expect("completed weld").target = target;
+                }
                 events.push(SimEvent::Built { builder, id });
             } else {
                 s.progress = Some(Fixed::from_int(done as i32) / Fixed::from_int(ticks as i32));
@@ -337,8 +364,11 @@ impl Production {
                 if head.done >= ticks_of(db, head.def) {
                     let Item { def, owner, .. } = q.remove(0);
                     if let Some(d) = db.unit(def) {
-                        let id =
-                            units.spawn(Entity::from_def(d, db.features(), owner, pos, heading));
+                        let mut unit = Entity::from_def(d, db.features(), owner, pos, heading);
+                        if unit.orderable() {
+                            unit.target = self.rallies.destination(yard, owner, units);
+                        }
+                        let id = units.spawn(unit);
                         events.push(SimEvent::Built { builder: yard, id });
                         events.push(SimEvent::Spawned { id });
                     }
@@ -430,11 +460,13 @@ impl Production {
             h.u64(w.done);
             h.u64(w.ticks);
         }
+        self.rallies.hash_into(h);
     }
 
     #[allow(dead_code)] // the snapshot calls it
     pub(crate) fn to_rec(&self) -> ProductionRec {
         ProductionRec {
+            rallies: self.rallies.to_rec(),
             queues: self
                 .queues
                 .iter()
@@ -469,8 +501,11 @@ impl Production {
     }
 
     #[allow(dead_code)] // the snapshot calls it
-    pub(crate) fn from_rec(r: &ProductionRec) -> Production {
-        let mut p = Production::default();
+    pub(crate) fn from_rec(r: &ProductionRec) -> Option<Production> {
+        let mut p = Production {
+            rallies: rally::Rallies::from_rec(&r.rallies)?,
+            ..Production::default()
+        };
         for (id, q) in &r.queues {
             let items = q
                 .iter()
@@ -510,7 +545,7 @@ impl Production {
                 },
             );
         }
-        p
+        Some(p)
     }
 }
 

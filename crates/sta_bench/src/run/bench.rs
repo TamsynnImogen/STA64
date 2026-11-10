@@ -627,6 +627,25 @@ impl Bench {
                 );
                 "ok".into()
             }
+            C::Rally { builders, at } => {
+                let ids = self.ids(builders)?;
+                let at = match at {
+                    None => sta_sim::command::Target::None,
+                    Some(Target::Point(p)) => sta_sim::command::Target::Point(point(*p)),
+                    Some(Target::Object(name)) => {
+                        sta_sim::command::Target::Entity(self.living(name)?)
+                    }
+                };
+                self.order(
+                    &ids,
+                    Order::Rally {
+                        builders: ids.clone(),
+                        at,
+                    },
+                    format!("rally {}", builders.join(",")),
+                );
+                "ok".into()
+            }
             C::Formation { who, kind } => {
                 let ids = self.ids(who)?;
                 self.order(

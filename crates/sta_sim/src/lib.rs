@@ -324,6 +324,10 @@ impl Sim {
                 let Some(db) = self.content.clone() else { return false };
                 self.specials.order_special(&db, &self.units, c.player, units, *slot)
             }
+            Order::Rally { builders, at } => {
+                let Some(db) = self.content.as_deref() else { return false };
+                self.production.order_rally(db, &self.units, c.player, builders, *at)
+            }
         }
     }
 
