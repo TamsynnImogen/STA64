@@ -59,6 +59,29 @@ covers every case where a BZN or SOL map names a script that isn't there.
 Errors inside a Lua script that does exist are a separate case. They are
 reported, the failing callback is disabled, and the match continues.
 
+## Player numbers for converted missions
+
+`MissionConfig::player_numbering` is explicit host configuration. Its default,
+`PlayerNumbering::Slots`, keeps the existing Lua/core slot convention (0–7).
+`ArmadaTeams` adapts converted missions that use BZN team numbers: Lua 1–8
+map to core slots 0–7, and Lua 0 maps to the neutral owner. `Player` handles
+store core IDs; `.number`, numeric finder/monitor owners, visibility/relation
+arguments, `Entity.add` owners and `A2.GetRealTeam` use the selected conversion.
+`Game.localSlot` and `MissionConfig::seat` always remain core slot numbers.
+Invalid explicit team filters fail with a Lua error instead of matching all
+owners; absent/nil filters remain unrestricted. Neutral spawning is not supported.
+
+This opt-in adapter follows the observed converted mission/map pairing. It does
+not settle the original MMM numbering convention or automatically choose a mode
+for a content profile. The application host still needs to select the mode when
+it integrates this runtime.
+
+Craft queries include parsed `sensor`, `shipyard` and `starbase` definitions.
+The content loader already categorizes `sensor` as a craft; registration metadata
+establishes Producer → Craft and Starbase → Shipyard → Producer. These checks
+allow the converted mission to find its static portal/base. They do not add a
+complete mapping from every ODF class label to every MMM type name.
+
 ## Conversion report
 
 `sta64 --mission-report` lists every map whose mission resolves to

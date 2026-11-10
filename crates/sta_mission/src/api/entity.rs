@@ -38,8 +38,12 @@ pub(crate) fn is_type(class: &str, t: &str) -> bool {
         "craft" => matches!(
             class.as_str(),
             "freighter" | "cargoship" | "constructionrig" | "repairship" | "scavenger" | "evolver" | "miningship"
+                // Parsed ODF craft labels include static sensors and yards.
+                // Producer/Shipyard/Starbase also inherit Craft in the binding metadata.
+                | "sensor" | "shipyard" | "starbase" | "miningstation"
         ),
         "producer" => matches!(class.as_str(), "shipyard" | "starbase" | "miningstation"),
+        "shipyard" => class == "starbase",
         _ => false,
     }
 }
@@ -125,7 +129,7 @@ impl UserData for Entity {
         });
         f.add_field_method_set("player", |_, e, p: Value| {
             let mut c = e.ctx.borrow_mut();
-            match (e.key.id(), player_of(&p)) {
+            match (e.key.id(), player_of(&c, &p)) {
                 (Some(id), Some(p)) => c.edit(Edit::Team(id, p)),
                 (None, _) => c.unsupported("entity.player: pending or failed spawn"),
                 (_, None) => c.unsupported("entity.player = non-player"),
@@ -145,7 +149,7 @@ impl UserData for Entity {
         });
         m.add_method("canPlayerSee", |_, e, p: Value| {
             let c = e.ctx.borrow();
-            let Some(p) = player_of(&p) else { return Ok(false) };
+            let Some(p) = player_of(&c, &p) else { return Ok(false) };
             let Some(id) = e.key.id() else { return Ok(false) };
             Ok(c.view.visible_to(p).iter().any(|u| u.id == id))
         });
@@ -200,6 +204,13 @@ fn odf_stem(name: &str) -> &str {
     }
 }
 
+fn validate_owner_filter(ctx: &Shared, value: &Value, owner: Option<sta_core::PlayerId>) -> mlua::Result<()> {
+    if !value.is_nil() && owner.is_none() && ctx.borrow().player_numbering == super::PlayerNumbering::ArmadaTeams {
+        return Err(mlua::Error::runtime("EntityFinder requires a valid Armada team number or Player"));
+    }
+    Ok(())
+}
+
 fn find(lua: &Lua, ctx: &Shared, filter: &Value, predicate: Option<&mlua::Function>) -> mlua::Result<Vec<EntityId>> {
     let ci = |a: &str, b: &str| a.eq_ignore_ascii_case(b);
     let (mut label, mut odf, mut class, mut ty, mut owner) = (None, None, None, None, None);
@@ -212,14 +223,19 @@ fn find(lua: &Lua, ctx: &Shared, filter: &Value, predicate: Option<&mlua::Functi
             odf = t.get::<Value>("odf")?.as_string().map(|s| s.to_string_lossy());
             class = t.get::<Value>("class")?.as_string().map(|s| s.to_string_lossy());
             ty = str_of(&t.get::<Value>("type")?);
-            owner = player_of(&t.get::<Value>("player")?);
+            let player = t.get::<Value>("player")?;
+            owner = player_of(&ctx.borrow(), &player);
+            validate_owner_filter(ctx, &player, owner)?;
             let centre = point_of(ctx, &t.get::<Value>("center")?);
             let radius: Option<f64> = t.get("radius")?;
             if let (Some(p), Some(r)) = (centre, radius) {
                 circle = Some((p, r));
             }
         }
-        Value::Integer(_) | Value::Number(_) | Value::UserData(_) => owner = player_of(filter),
+        Value::Integer(_) | Value::Number(_) | Value::UserData(_) => {
+            owner = player_of(&ctx.borrow(), filter);
+            validate_owner_filter(ctx, filter, owner)?;
+        }
         _ => {}
     }
     // Filter fields may execute Lua and queue edits. Borrow the view only
@@ -327,8 +343,8 @@ pub(crate) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
             && (!n.is_finite() || n.fract() != 0.0) {
             return Err(mlua::Error::runtime("Entity.add requires an integer player slot"));
         }
-        let owner = player_of(&args[1]).filter(|p| p.is_player())
-            .ok_or_else(|| mlua::Error::runtime("Entity.add requires a player slot 0..7"))?;
+        let owner = player_of(&c.borrow(), &args[1]).filter(|p| p.is_player())
+            .ok_or_else(|| mlua::Error::runtime("Entity.add requires a valid owned player in the configured numbering mode"))?;
         let Value::Table(point) = &args[2] else {
             return Err(mlua::Error::runtime("Entity.add requires a Vector"));
         };

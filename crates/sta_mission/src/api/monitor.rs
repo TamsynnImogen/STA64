@@ -83,7 +83,11 @@ fn add_hook(lua: &Lua, m: &Monitor, args: &MultiValue) -> mlua::Result<()> {
                     Value::Integer(n) => *n as f64,
                     _ => 0.0,
                 };
-                let owner = rest.get(3).and_then(player_of);
+                let owner = rest.get(3).and_then(|v| player_of(&c, v));
+                if c.player_numbering == super::PlayerNumbering::ArmadaTeams
+                    && rest.get(3).is_some_and(|v| !v.is_nil()) && owner.is_none() {
+                    return Err(mlua::Error::runtime("Monitor.Enters requires a valid Armada team number or Player"));
+                }
                 let inside = c
                     .view
                     .units

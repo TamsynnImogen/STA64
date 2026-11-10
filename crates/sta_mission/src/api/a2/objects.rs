@@ -71,7 +71,8 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
         "GetRealTeam",
         lua.create_function(move |_, args: MultiValue| {
             let id = handle("GetRealTeam", &args, 1)?;
-            c.borrow().alive(id).map(|u| u.owner.0).ok_or_else(|| {
+            let c = c.borrow();
+            c.alive(id).map(|u| c.player_numbering.encode(u.owner)).ok_or_else(|| {
                 mlua::Error::runtime(format!("A2.GetRealTeam: object {} is not alive", id.0))
             })
         })?,

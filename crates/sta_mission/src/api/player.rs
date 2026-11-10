@@ -6,7 +6,7 @@ use sta_sim::command::Edit;
 use sta_sim::view::Relation;
 use sta_sim::TICK_HZ;
 
-use super::{stub, Objective, ObjectiveState, Shared};
+use super::{stub, Ctx, Objective, ObjectiveState, PlayerNumbering, Shared};
 
 /// A seat. Reads see the latest view.
 pub(crate) struct Player {
@@ -15,10 +15,11 @@ pub(crate) struct Player {
 }
 
 /// A player from a number or a `Player` handle.
-pub(crate) fn player_of(v: &Value) -> Option<PlayerId> {
+pub(crate) fn player_of(ctx: &Ctx, v: &Value) -> Option<PlayerId> {
     match v {
-        Value::Integer(n) => u8::try_from(*n).ok().map(PlayerId),
-        Value::Number(n) if *n >= 0.0 && *n < 256.0 => Some(PlayerId(*n as u8)),
+        Value::Integer(n) => u8::try_from(*n).ok().and_then(|n| ctx.player_numbering.decode(n)),
+        Value::Number(n) if *n >= 0.0 && *n < 256.0
+            && (ctx.player_numbering == PlayerNumbering::Slots || n.fract() == 0.0) => ctx.player_numbering.decode(*n as u8),
         Value::UserData(u) => u.borrow::<Player>().ok().map(|p| p.id),
         _ => None,
     }
@@ -72,8 +73,8 @@ fn resources(lua: &Lua, p: &Player) -> mlua::Result<mlua::Table> {
 
 impl UserData for Player {
     fn add_fields<F: UserDataFields<Self>>(f: &mut F) {
-        f.add_field_method_get("number", |_, p| Ok(p.id.0));
-        f.add_field_method_get("name", |_, p| Ok(format!("Player {}", p.id.0)));
+        f.add_field_method_get("number", |_, p| Ok(p.ctx.borrow().player_numbering.encode(p.id)));
+        f.add_field_method_get("name", |_, p| Ok(format!("Player {}", p.ctx.borrow().player_numbering.encode(p.id).unwrap_or(p.id.0))));
         f.add_field_method_get("race", |_, p| {
             // The race of the player's first unit that has one.
             let c = p.ctx.borrow();
@@ -96,7 +97,7 @@ impl UserData for Player {
     fn add_methods<M: UserDataMethods<Self>>(m: &mut M) {
         m.add_method("getRelation", |_, p, other: Value| {
             let c = p.ctx.borrow();
-            Ok(match player_of(&other) {
+            Ok(match player_of(&c, &other) {
                 Some(o) => relation_name(c.relation(p.id, o)),
                 None => "Neutral",
             })
@@ -108,7 +109,7 @@ impl UserData for Player {
                 "Enemy" => Relation::Enemy,
                 _ => Relation::Neutral,
             };
-            if let Some(o) = player_of(&other) {
+            if let Some(o) = player_of(&c, &other) {
                 c.relations.insert((p.id, o), rel);
             }
             Ok(())
@@ -260,7 +261,7 @@ pub(crate) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
     class.set("Relation", g.raw_get::<Value>("Relation")?)?;
     let c = ctx.clone();
     let get = lua.create_function(move |lua, args: MultiValue| {
-        let n = args.iter().rev().find_map(player_of);
+        let n = { let c = c.borrow(); args.iter().rev().find_map(|v| player_of(&c, v)) };
         match n {
             Some(id) => Ok(Value::UserData(lua.create_userdata(Player { id, ctx: c.clone() })?)),
             None => Ok(Value::Nil),

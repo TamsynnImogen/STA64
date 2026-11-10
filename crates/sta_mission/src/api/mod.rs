@@ -82,12 +82,47 @@ pub(crate) fn drain_commands(ctx: &Shared) -> Vec<Command> {
     spawn::drain(&mut ctx.borrow_mut())
 }
 
+/// Explicit conversion between Lua player numbers and core player slots.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PlayerNumbering {
+    /// Existing STA64 scripts use core slot numbers directly.
+    #[default]
+    Slots,
+    /// Converted Armada missions use BZN team numbers: 1..8 are slots 0..7,
+    /// and 0 is neutral. This is an explicit adapter, not a change to map data.
+    ArmadaTeams,
+}
+
+impl PlayerNumbering {
+    pub(crate) fn decode(self, number: u8) -> Option<PlayerId> {
+        match self {
+            Self::Slots => Some(PlayerId(number)),
+            Self::ArmadaTeams => match number {
+                0 => Some(sta_sim::world::NEUTRAL),
+                1..=8 => Some(PlayerId(number - 1)),
+                _ => None,
+            },
+        }
+    }
+
+    pub(crate) fn encode(self, id: PlayerId) -> Option<u8> {
+        match self {
+            Self::Slots => Some(id.0),
+            Self::ArmadaTeams if id.is_player() => Some(id.0 + 1),
+            Self::ArmadaTeams if id == sta_sim::world::NEUTRAL => Some(0),
+            Self::ArmadaTeams => None,
+        }
+    }
+}
+
 /// What a mission needs to know about its game that `Controller::think`
 /// does not pass it (see the seam gaps in `crate::runtime`).
 #[derive(Clone, Default)]
 pub struct MissionConfig {
     /// The seat the mission runs as (`Game.localSlot`); `PlayerId(0)` if unset.
     pub seat: Option<PlayerId>,
+    /// Lua player-number conversion; core seats and Game.localSlot stay zero-based.
+    pub player_numbering: PlayerNumbering,
     /// ODF names, classes and races for `odf`, `class`, `isType`.
     pub content: Option<Arc<ContentDb>>,
     /// Map labels by entity (`sim.labels`), for `EntityFinder` and `label`.
@@ -127,6 +162,7 @@ pub(crate) type MissionReader = Arc<Mutex<dyn Fn(&str) -> Option<Vec<u8>> + Send
 /// Script-visible state; see the module docs.
 pub(crate) struct Ctx {
     pub seat: PlayerId,
+    pub player_numbering: PlayerNumbering,
     pub seed: u64,
     pub content: Option<Arc<ContentDb>>,
     pub labels: BTreeMap<EntityId, String>,
@@ -157,6 +193,7 @@ impl Ctx {
     pub fn new(cfg: MissionConfig, seed: u64) -> Ctx {
         Ctx {
             seat: cfg.seat.unwrap_or(PlayerId(0)),
+            player_numbering: cfg.player_numbering,
             seed,
             content: cfg.content,
             labels: cfg.labels,

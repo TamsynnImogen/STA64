@@ -55,6 +55,7 @@ fn game(script: &str) -> Game {
         content: Some(content),
         labels: sim.labels.iter().map(|(id, l)| (id, l.clone())).collect(),
         view: Some((*sim.view()).clone()),
+        player_numbering: super::PlayerNumbering::Slots,
     };
     let rt = MissionRuntime::from_source_with("missions/T.lua", script, 1, cfg);
     assert!(rt.errors().is_empty(), "{:?}", rt.errors());
@@ -141,6 +142,26 @@ fn filter_and_point_metatables_can_queue_orders_without_context_borrow_panics() 
     assert_eq!(commands.iter().filter(|c| matches!(c.kind, CommandKind::Order(Order::Move { .. }))).count(), 1);
     assert!(!g.sim.step(&commands).events.iter().any(|e| matches!(e, SimEvent::Rejected { .. })));
     assert!(g.rt.unsupported().is_empty());
+}
+
+#[test]
+fn static_craft_and_producer_ancestry_remains_available_to_mission_finders() {
+    use super::entity::is_type;
+    // The parsed sensor label is already a craft category in sta_content.
+    assert!(sta_content::odf::CRAFT_CLASSES.contains(&"sensor"));
+    for class in ["sensor", "shipyard", "starbase", "miningstation"] {
+        assert!(is_type(class, "Craft"), "{class} must be a Craft");
+        assert!(is_type(class, "GameObject"));
+        assert!(is_type(class, class));
+    }
+    for class in ["shipyard", "starbase", "miningstation"] {
+        assert!(is_type(class, "Producer"));
+    }
+    assert!(is_type("Starbase", "Shipyard"));
+    assert!(!is_type("sensor", "Producer"));
+    assert!(!is_type("shipyard", "Starbase"));
+    assert!(!is_type("planet", "Craft"));
+    assert!(!is_type("unknown", "Craft"));
 }
 
 #[test]
