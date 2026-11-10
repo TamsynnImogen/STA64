@@ -51,6 +51,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] Capability grid (UI-13): select a stationary yard (Build/Rally, no movement/formation buttons), a warship (Move/Attack/Stop/formations), or a freighter (Move/Mine); mixed groups show shared actions. Click a target button then the map/unit; Esc or right-click cancels. Grid Move keeps ship spacing and waypoint lines. Known allies/neutral relations cannot be targeted by Attack. Cell placement is a fallback; native visual layout still needs checking.
 
+- [?] Stop capability: select a stationary yard/station or an engine-disabled ship and check that Stop remains in the top grid while Move and formations stay unavailable; Stop clears the selected actors' orders. Mixed owned craft/station groups retain Stop; resources and dying units do not gain it.
+
 ## Checked earlier (morning list)
 
 Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.

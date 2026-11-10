@@ -15,9 +15,11 @@
 //! # Bound names
 //!
 //! - `Vector(x, y, z)` (`+ - *`, `length`, `distance`);
-//! - `Entity.Type.*`, `Order.*`, `Relation.*`, `SlotType.*` enum values;
+//! - `Entity.Type.*`, `Order.*` (also `GameObject.Order.*`), `Relation.*`,
+//!   `SlotType.*` enum values;
+//! - queued `Entity.add(odf, player, Vector)` handles, see `spawn`;
 //! - entity handles (from `EntityFinder`, `Player` and monitor callbacks):
-//!   `id valid destroyed position forward velocity hull maxHull shields
+//!   `id valid pending destroyed position forward velocity hull maxHull shields
 //!   maxShields crew maxCrew player owner race odf class label cloaked
 //!   invincible`, `isType giveOrder cloak decloak remove canPlayerSee`;
 //! - `EntityFinder():find(filter)` / `:findOne(filter)`, a filter being a
@@ -30,6 +32,8 @@
 //!   objective (`state title description id`, `:complete()`, `:fail()`),
 //!   `Objectives.visible`, `Objectives.count`;
 //! - `Monitor()` with `:hook(kind, ...)`, see [`monitor`];
+//! - named tick-based `Timer`, see [`timer`];
+//! - mission-seat `TextInput:hook(id, receiver, callback, argument, pattern)`;
 //! - `Game.time localSlot localPlayer seed isHost gameSpeed allowSave`,
 //!   `Mission.finish`, `print`.
 //!
@@ -41,7 +45,7 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use mlua::{Lua, Value};
 use sta_content::{ContentDb, UnitDef};
@@ -52,13 +56,78 @@ use sta_sim::SimEvent;
 
 mod a2;
 mod entity;
+mod entity_action;
+mod entity_ref;
+mod camera_intent;
 mod monitor;
+mod condition_monitor;
 mod player;
+mod timer;
+mod objectives;
+mod objectives_file;
+mod spawn;
+mod text_input;
 #[cfg(test)]
 mod tests;
 
 pub use monitor::MonitorKind;
-pub(crate) use monitor::{fire_monitors, MonitorState};
+pub(crate) use monitor::MonitorState;
+
+pub(crate) fn fire_monitors(lua: &Lua, ctx: &Shared, errors: &mut Vec<String>) {
+    monitor::fire_monitors(lua, ctx, errors);
+    condition_monitor::fire(lua, ctx, errors);
+    timer::fire_timers(lua, ctx, errors);
+}
+
+pub(crate) fn fire_text_input(lua: &Lua, ctx: &Shared, errors: &mut Vec<String>) {
+    text_input::fire(lua, ctx, errors);
+}
+
+pub(crate) fn process_spawns(ctx: &mut Ctx) {
+    spawn::process(ctx);
+    camera_intent::process(ctx);
+}
+
+pub(crate) fn drain_commands(ctx: &Shared) -> Vec<Command> {
+    spawn::drain(&mut ctx.borrow_mut())
+}
+
+pub(crate) fn cineractive_active(lua: &Lua) -> mlua::Result<bool> {
+    a2::cineractive_active(lua)
+}
+
+/// Explicit conversion between Lua player numbers and core player slots.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PlayerNumbering {
+    /// Existing STA64 scripts use core slot numbers directly.
+    #[default]
+    Slots,
+    /// Converted Armada missions use BZN team numbers: 1..8 are slots 0..7,
+    /// and 0 is neutral. This is an explicit adapter, not a change to map data.
+    ArmadaTeams,
+}
+
+impl PlayerNumbering {
+    pub(crate) fn decode(self, number: u8) -> Option<PlayerId> {
+        match self {
+            Self::Slots => Some(PlayerId(number)),
+            Self::ArmadaTeams => match number {
+                0 => Some(sta_sim::world::NEUTRAL),
+                1..=8 => Some(PlayerId(number - 1)),
+                _ => None,
+            },
+        }
+    }
+
+    pub(crate) fn encode(self, id: PlayerId) -> Option<u8> {
+        match self {
+            Self::Slots => Some(id.0),
+            Self::ArmadaTeams if id.is_player() => Some(id.0 + 1),
+            Self::ArmadaTeams if id == sta_sim::world::NEUTRAL => Some(0),
+            Self::ArmadaTeams => None,
+        }
+    }
+}
 
 /// What a mission needs to know about its game that `Controller::think`
 /// does not pass it (see the seam gaps in `crate::runtime`).
@@ -66,6 +135,8 @@ pub(crate) use monitor::{fire_monitors, MonitorState};
 pub struct MissionConfig {
     /// The seat the mission runs as (`Game.localSlot`); `PlayerId(0)` if unset.
     pub seat: Option<PlayerId>,
+    /// Lua player-number conversion; core seats and Game.localSlot stay zero-based.
+    pub player_numbering: PlayerNumbering,
     /// ODF names, classes and races for `odf`, `class`, `isType`.
     pub content: Option<Arc<ContentDb>>,
     /// Map labels by entity (`sim.labels`), for `EntityFinder` and `label`.
@@ -91,9 +162,21 @@ pub struct Objective {
     pub state: ObjectiveState,
 }
 
+/// File-backed briefing metadata, kept separate from the individual goals.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObjectiveBriefing {
+    pub file: String,
+    pub title: String,
+    pub text: String,
+    pub notes: String,
+}
+
+pub(crate) type MissionReader = Arc<Mutex<dyn Fn(&str) -> Option<Vec<u8>> + Send>>;
+
 /// Script-visible state; see the module docs.
 pub(crate) struct Ctx {
     pub seat: PlayerId,
+    pub player_numbering: PlayerNumbering,
     pub seed: u64,
     pub content: Option<Arc<ContentDb>>,
     pub labels: BTreeMap<EntityId, String>,
@@ -101,11 +184,19 @@ pub(crate) struct Ctx {
     pub events: Vec<SimEvent>,
     pub commands: Vec<Command>,
     seq: BTreeMap<PlayerId, u32>,
+    pub spawns: spawn::SpawnStore,
+    pub camera: camera_intent::Store,
+    pub text_input: text_input::Store,
     pub objectives: Vec<Objective>,
+    pub next_objective_id: u32,
+    pub objective_briefing: Option<ObjectiveBriefing>,
+    pub reader: Option<MissionReader>,
     pub objectives_visible: bool,
     pub relations: BTreeMap<(PlayerId, PlayerId), Relation>,
     pub monitors: Vec<MonitorState>,
+    pub conditions: condition_monitor::Store,
     pub next_monitor: u64,
+    pub timers: timer::TimerStore,
     pub finished: bool,
     pub log: Vec<String>,
     /// Orders and names the API accepted but could not carry out, by name.
@@ -119,6 +210,7 @@ impl Ctx {
     pub fn new(cfg: MissionConfig, seed: u64) -> Ctx {
         Ctx {
             seat: cfg.seat.unwrap_or(PlayerId(0)),
+            player_numbering: cfg.player_numbering,
             seed,
             content: cfg.content,
             labels: cfg.labels,
@@ -126,11 +218,19 @@ impl Ctx {
             events: Vec::new(),
             commands: Vec::new(),
             seq: BTreeMap::new(),
+            spawns: spawn::SpawnStore::default(),
+            camera: camera_intent::Store::default(),
+            text_input: text_input::Store::default(),
             objectives: Vec::new(),
+            next_objective_id: 0,
+            objective_briefing: None,
+            reader: None,
             objectives_visible: true,
             relations: BTreeMap::new(),
             monitors: Vec::new(),
+            conditions: condition_monitor::Store::default(),
             next_monitor: 0,
+            timers: timer::TimerStore::default(),
             finished: false,
             log: Vec::new(),
             unsupported: BTreeMap::new(),
@@ -155,10 +255,18 @@ impl Ctx {
         self.content.as_ref().and_then(|c| c.name(u.def)).unwrap_or_default().to_owned()
     }
 
+    pub fn try_push(&mut self, player: PlayerId, kind: CommandKind) -> Result<u32, &'static str> {
+        let seq = self.seq.get(&player).copied().unwrap_or(0)
+            .checked_add(1).ok_or("command sequence exhausted")?;
+        self.seq.insert(player, seq);
+        self.commands.push(Command { player, seq, kind });
+        Ok(seq)
+    }
+
     pub fn push(&mut self, player: PlayerId, kind: CommandKind) {
-        let s = self.seq.entry(player).or_insert(0);
-        *s += 1;
-        self.commands.push(Command { player, seq: *s, kind });
+        if let Err(reason) = self.try_push(player, kind) {
+            self.unsupported(reason);
+        }
     }
 
     pub fn edit(&mut self, e: Edit) {
@@ -171,8 +279,10 @@ impl Ctx {
             self.unsupported("order: no owner");
             return false;
         };
-        self.push(owner, CommandKind::Order(make(vec![id])));
-        true
+        match self.try_push(owner, CommandKind::Order(make(vec![id]))) {
+            Ok(_) => true,
+            Err(reason) => { self.unsupported(reason); false }
+        }
     }
 
     pub fn unsupported(&mut self, what: &str) {
@@ -207,12 +317,15 @@ pub(crate) fn dist(a: (f64, f64, f64), b: (f64, f64, f64)) -> f64 {
 }
 
 /// A point from a `Vector`-like table or an entity handle.
-pub(crate) fn point_of(ctx: &Ctx, v: &Value) -> Option<(f64, f64, f64)> {
+pub(crate) fn point_of(ctx: &Shared, v: &Value) -> Option<(f64, f64, f64)> {
     match v {
+        // Callers must not hold a context borrow while table lookups can
+        // invoke Lua __index. Entity lookup below borrows only for Rust reads.
         Value::Table(t) => Some((t.get("x").ok()?, t.get("y").unwrap_or(0.0), t.get("z").ok()?)),
         Value::UserData(u) => {
             let e = u.borrow::<entity::Entity>().ok()?;
-            ctx.unit(e.id).map(|u| pos_f64(u.pos))
+            let ctx = ctx.borrow();
+            e.key.id().and_then(|id| ctx.unit(id)).or_else(|| e.key.hint()).map(|u| pos_f64(u.pos))
         }
         _ => None,
     }
@@ -291,13 +404,22 @@ pub(crate) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
     let entity_t = lua.create_table()?;
     entity_t.set("Type", enum_table(lua, ENTITY_TYPES)?)?;
     g.raw_set("Entity", entity_t)?;
-    g.raw_set("Order", enum_table(lua, ORDERS)?)?;
+    let orders = enum_table(lua, ORDERS)?;
+    // Converted A2 ports use Move for the existing Go-to-point behavior.
+    orders.set("Move", "Go")?;
+    g.raw_set("Order", orders.clone())?;
+    // Converted A2 missions use this namespace for the same order values.
+    let game_object = lua.create_table()?;
+    game_object.raw_set("Order", orders)?;
+    g.raw_set("GameObject", game_object)?;
     g.raw_set("SlotType", enum_table(lua, SLOT_TYPES)?)?;
     g.raw_set("Relation", enum_table(lua, &["Ally", "Enemy", "Neutral"])?)?;
 
     entity::install(lua, ctx)?;
     player::install(lua, ctx)?;
     monitor::install(lua, ctx)?;
+    text_input::install(lua, ctx)?;
+    timer::install(lua, ctx)?;
     a2::install(lua, ctx)?;
 
     let mission = lua.create_table()?;

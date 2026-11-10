@@ -2,8 +2,9 @@
 //!
 //! Observed call shapes come from Immy's clean-room `armada_missions`
 //! conversions and `A2FOMissions/missions/Recovery.lua`, not MMM bodies.
-//! All output uses `Edit::Present`; this module does not play media or move
-//! the client's camera. The DLL-named `A2` table is still pending.
+//! Presentation output uses `Edit::Present`; this module does not play media
+//! or move the client's camera. A bounded DLL-named `A2` object API maps
+//! integer handles to the current mission view and sim commands.
 //!
 //! The typed seam cannot yet describe positioned titles or camera path
 //! parameters. Those requests use `Presentation::Call`, retaining arguments
@@ -15,13 +16,27 @@ use super::Shared;
 
 mod camera;
 mod media;
+mod objectives;
+mod objects;
+mod queries;
+mod subsystems;
 #[cfg(test)]
 mod tests;
 mod titles;
+
+pub(super) fn cineractive_active(lua: &Lua) -> mlua::Result<bool> {
+    camera::active(lua)
+}
 
 pub(super) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
     camera::install(lua, ctx)?;
     media::install(lua, ctx)?;
     titles::install(lua, ctx)?;
+    let a2 = lua.create_table()?;
+    objectives::install(lua, ctx, &a2)?;
+    objects::install(lua, ctx, &a2)?;
+    queries::install(lua, ctx, &a2)?;
+    subsystems::install(lua, ctx, &a2)?;
+    lua.globals().raw_set("A2", a2)?;
     Ok(())
 }

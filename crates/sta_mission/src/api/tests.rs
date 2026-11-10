@@ -55,6 +55,7 @@ fn game(script: &str) -> Game {
         content: Some(content),
         labels: sim.labels.iter().map(|(id, l)| (id, l.clone())).collect(),
         view: Some((*sim.view()).clone()),
+        player_numbering: super::PlayerNumbering::Slots,
     };
     let rt = MissionRuntime::from_source_with("missions/T.lua", script, 1, cfg);
     assert!(rt.errors().is_empty(), "{:?}", rt.errors());
@@ -76,13 +77,91 @@ impl Game {
         assert!(!self.seen.iter().any(|e| matches!(e, SimEvent::Rejected { .. })), "{:?}", self.seen);
     }
 
-    fn global<T: mlua::FromLua>(&self, name: &str) -> T {
+    fn global<T: mlua::FromLua + crate::runtime::EvalResult>(&self, name: &str) -> T {
         self.rt.eval(&format!("return {name}")).unwrap()
     }
 
     fn pos(&self, id: EntityId) -> Option<[f32; 3]> {
         self.view.unit(id).map(|u| u.pos.to_f32())
     }
+}
+
+#[test]
+fn converted_order_namespace_dispatches_attack_and_stop_through_the_sim() {
+    let mut g = game(
+        r#"
+        assert(rawequal(GameObject.Order, Order))
+        assert(type(GameObject.Order.Attack) == 'string')
+        HERO_HANDLE = EntityFinder():findOne('hero')
+        HERO_HANDLE:giveOrder(GameObject.Order.Attack, EntityFinder():findOne('foe'))
+        "#,
+    );
+    let mut replay = g.sim.clone();
+    let attack = g.rt.take_commands();
+    assert_eq!(attack.len(), 1);
+    assert_eq!(attack[0].player, PlayerId(0));
+    assert_eq!(attack[0].kind, CommandKind::Order(Order::Attack { units: vec![HERO], target: FOE }));
+    let out = g.sim.step(&attack);
+    assert_eq!(replay.step(&attack).events, out.events);
+    assert!(!out.events.iter().any(|e| matches!(e, SimEvent::Rejected { .. })));
+
+    let mut commands = Vec::new();
+    g.rt.think(&out.view, &out.events, &mut commands);
+    assert!(commands.is_empty());
+    g.rt.eval::<()>("HERO_HANDLE:giveOrder(GameObject.Order.Stop)").unwrap();
+    let stop = g.rt.take_commands();
+    assert_eq!(stop.len(), 1);
+    assert_eq!(stop[0].player, PlayerId(0));
+    assert_eq!(stop[0].kind, CommandKind::Order(Order::Stop { units: vec![HERO] }));
+    let out = g.sim.step(&stop);
+    assert_eq!(replay.step(&stop).events, out.events);
+    assert!(!out.events.iter().any(|e| matches!(e, SimEvent::Rejected { .. })));
+    assert_eq!(g.sim.digest(), replay.digest());
+    assert!(g.rt.unsupported().is_empty());
+}
+
+#[test]
+fn filter_and_point_metatables_can_queue_orders_without_context_borrow_panics() {
+    let mut g = game(r#"
+        local h = EntityFinder():findOne('hero')
+        local filter = setmetatable({}, { __index = function(_, name)
+            if name == 'player' then h:giveOrder(Order.Stop); return Player(0) end
+        end })
+        FILTERED = {}
+        for _, u in ipairs(EntityFinder():find(filter)) do FILTERED[#FILTERED+1] = u.id end
+        local p = setmetatable({y=0,z=0}, { __index = function(_, name)
+            if name == 'x' then h:giveOrder(Order.Stop); return -600 end
+        end })
+        h:giveOrder(Order.Go, p)
+        Monitor():hook(Monitor.Enters, p, 120, function() end)
+    "#);
+    assert_eq!(g.global::<Vec<u32>>("FILTERED"), [HERO.0, 3]);
+    let commands = g.rt.take_commands();
+    assert_eq!(commands.len(), 4);
+    assert_eq!(commands.iter().filter(|c| matches!(c.kind, CommandKind::Order(Order::Stop { .. }))).count(), 3);
+    assert_eq!(commands.iter().filter(|c| matches!(c.kind, CommandKind::Order(Order::Move { .. }))).count(), 1);
+    assert!(!g.sim.step(&commands).events.iter().any(|e| matches!(e, SimEvent::Rejected { .. })));
+    assert!(g.rt.unsupported().is_empty());
+}
+
+#[test]
+fn static_craft_and_producer_ancestry_remains_available_to_mission_finders() {
+    use super::entity::is_type;
+    // The parsed sensor label is already a craft category in sta_content.
+    assert!(sta_content::odf::CRAFT_CLASSES.contains(&"sensor"));
+    for class in ["sensor", "shipyard", "starbase", "miningstation"] {
+        assert!(is_type(class, "Craft"), "{class} must be a Craft");
+        assert!(is_type(class, "GameObject"));
+        assert!(is_type(class, class));
+    }
+    for class in ["shipyard", "starbase", "miningstation"] {
+        assert!(is_type(class, "Producer"));
+    }
+    assert!(is_type("Starbase", "Shipyard"));
+    assert!(!is_type("sensor", "Producer"));
+    assert!(!is_type("shipyard", "Starbase"));
+    assert!(!is_type("planet", "Craft"));
+    assert!(!is_type("unknown", "Craft"));
 }
 
 #[test]
@@ -100,7 +179,7 @@ fn entity_properties_read_the_view_and_content() {
         "#,
     );
     assert_eq!(g.global::<u32>("ID"), HERO.0);
-    assert_eq!(g.global::<String>("ODF"), "fx_cruiser");
+    assert_eq!(g.global::<String>("ODF"), "fx_cruiser.odf");
     assert_eq!(g.global::<String>("CLASS"), "craft");
     assert_eq!(g.global::<u8>("OWNER"), 0);
     assert_eq!(g.global::<String>("LABEL"), "hero");
@@ -260,8 +339,7 @@ fn monitor_enters_fires_for_newcomers_only() {
         "#,
     );
     g.run(600);
-    let entered: mlua::Table = g.global("ENTERED");
-    let ids: Vec<u32> = entered.sequence_values().map(Result::unwrap).collect();
+    let ids: Vec<u32> = g.global("ENTERED");
     assert_eq!(ids, [HERO.0], "{:?}", g.pos(HERO));
 }
 
@@ -470,4 +548,55 @@ fn empty_world_is_safe() {
     }
     assert!(rt.errors().is_empty(), "{:?}", rt.errors());
     assert!(out.is_empty());
+}
+
+#[test]
+fn finder_constructor_predicates_filter_and_combine_with_query_filters() {
+    let g = game(r#"
+        local f = EntityFinder(function(e) return e.player.number == 0 end)
+        local function ids(t) local r={} for i,e in ipairs(t) do r[i]=e.id end return table.concat(r, ',') end
+        ALL = ids(f:find())
+        FRIG = ids(f:find({odf='FX_FRIGATE.ODF'}))
+        FIRST = f:findOne().id
+        STATIC = ids(EntityFinder.find(function(e) return e.label == 'foe' end))
+        BYFILE = EntityFinder():findOne('FX_CRUISER.ODF').id
+        RELATION = Player.Relation.Enemy == Relation.Enemy
+    "#);
+    assert_eq!(g.global::<String>("ALL"), "2,3");
+    assert_eq!(g.global::<String>("FRIG"), "3");
+    assert_eq!(g.global::<u32>("FIRST"), HERO.0);
+    assert_eq!(g.global::<String>("STATIC"), "4");
+    assert_eq!(g.global::<u32>("BYFILE"), HERO.0);
+    assert!(g.global::<bool>("RELATION"));
+}
+
+#[test]
+fn finder_predicates_can_reenter_the_api_and_queue_edits() {
+    let mut g = game(r#"
+        local f = EntityFinder(function(e)
+            if e.player.number == 0 then e.hull = 10; return true end
+            return false
+        end)
+        COUNT = #f:find()
+    "#);
+    assert_eq!(g.global::<u32>("COUNT"), 2);
+    assert_eq!(g.rt.take_commands().len(), 2);
+    assert!(g.rt.unsupported().is_empty());
+}
+
+#[test]
+fn finder_predicates_are_isolated_and_errors_remain_visible() {
+    let g = game(r#"
+        local a = EntityFinder(function(e) return e.label == 'hero' end)
+        local b = EntityFinder(function(e) return e.label == 'foe' end)
+        A, B = a:findOne().id, b:findOne().id
+        OK = pcall(function() EntityFinder(function() error('predicate failed') end):find() end)
+        INVALID = pcall(function() EntityFinder(3) end)
+        AGAIN = a:findOne().id
+    "#);
+    assert_eq!(g.global::<u32>("A"), HERO.0);
+    assert_eq!(g.global::<u32>("B"), FOE.0);
+    assert!(!g.global::<bool>("OK"));
+    assert!(!g.global::<bool>("INVALID"));
+    assert_eq!(g.global::<u32>("AGAIN"), HERO.0);
 }

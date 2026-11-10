@@ -11,5 +11,5 @@ sta_bzn.workspace = true
 sta_sim.workspace = true
 sta_core.workspace = true
 sta_content.workspace = true
-mlua = { version = "0.12.2", features = ["lua53", "vendored"] }
+mlua = { version = "0.12.2", features = ["lua53", "vendored", "error-send"] }
 libm = "=0.2.16"
