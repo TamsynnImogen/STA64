@@ -32,7 +32,7 @@ use crate::{Rng, Sim, SimEvent};
 
 pub const MAGIC: [u8; 4] = *b"STAS";
 /// Bumped whenever [`Body`] (or anything in it) changes layout.
-pub const FORMAT_VERSION: u16 = 6;
+pub const FORMAT_VERSION: u16 = 7;
 
 const HEADER: usize = 4 + 2 + 4 + 8;
 
@@ -325,7 +325,7 @@ impl Sim {
             movement,
             weapons,
             economy: crate::economy::Economy::from_rec(&b.economy),
-            production: crate::production::Production::from_rec(&b.production),
+            production: crate::production::Production::from_rec(&b.production).ok_or_else(|| corrupt("rallies"))?,
             victory: crate::victory::Victory::from_rec(&b.victory),
             specials,
         })
