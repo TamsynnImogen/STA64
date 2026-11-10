@@ -184,7 +184,7 @@ pub fn list(theme: &Theme, items: &[&str], selected: Option<usize>) -> impl Bund
             )
         })
         .collect();
-    (List { selected }, Node { flex_direction: FlexDirection::Column, ..default() }, Children::spawn(SpawnIter(rows.into_iter())))
+    (List { selected }, Node { flex_direction: FlexDirection::Column, flex_shrink: 0.0, ..default() }, Children::spawn(SpawnIter(rows.into_iter())))
 }
 
 /// A black rectangle with one rounded corner, laid over an elbow to cut its inside.
