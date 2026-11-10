@@ -296,8 +296,8 @@ This leaves property/ownership, AI, later gameplay and client acceptance work op
 
 ## IsStation contract and native-family boundary
 
-This is the pre-implementation design for `bool IsStation(int)`. The binding
-is credited in the generated inventory only after implementation and tests.
+The pre-implementation design for `bool IsStation(int)` was committed before
+the binding. It is implemented with focused runtime and inventory tests.
 Use the latest mission view and the already-resolved, hashed
 `UnitDef.is_starbase` from CON-24. No Raw ODF reads, new core fields, actor-kind
 changes, gameplay commands or platform branches belong in this query.
@@ -316,6 +316,15 @@ every listed class or every hook/alias was observed at runtime.
 
 Named A2 leaf constructors corroborate ResearchPod, MineArray and Colony's
 Craft base; Producer and MiningStation preserve it for Planet/TradingStation.
+Of the 36 union labels, hover and wingman occur only in the inspected A1
+prototype table. The extended audit covers the remaining 34 A2 labels:
+32 named instance constructors have matching base chains and local type-flag
+writes. The upgrade and
+planet_shield instance factories return null rather than creating an object.
+Entity initializes its type flags to zero; the observed non-Craft constructor
+chains do not add the Craft bit, and Craft descendants preserve it locally.
+This is bounded static constructor evidence; arbitrary helper/hook behavior
+and mutable runtime type flags are not proven by the table.
 The native construction placeholder instead derives from GameObject without
 the Craft type. In normal STA64 simulation, `Some` build progress represents
 a production weld using the final definition; treating that proxy as a

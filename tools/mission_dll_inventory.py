@@ -245,6 +245,7 @@ COVERED = {
 # A2 table. MMM equivalents above remain a separate, older classification.
 A2_SIGNATURES = {
     "bool IsAlive(int)": "A2.IsAlive",
+    "bool IsStation(int)": "A2.IsStation",
     "bool Exists(int)": "A2.Exists",
     "bool DoesNotExist(int)": "A2.DoesNotExist",
     "Vector3 const & GetLocation(int)": "A2.GetLocation",

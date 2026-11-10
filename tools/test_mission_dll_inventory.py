@@ -107,6 +107,33 @@ class MissionDllInventoryTests(unittest.TestCase):
         self.register_a2('table.set("IsAlive", fn);')
         self.assertEqual(inventory.a2_exact_for("void DisableEngines(int, bool)", self.repo), "")
 
+    def test_station_requires_exact_signature_and_registered_query_binding(self):
+        self.register_a2(
+            "",
+            registration=(
+                'queries::install(lua, ctx, &a2)?; '
+                'lua.globals().raw_set("A2", a2)?;'
+            ),
+        )
+        query = self.a2 / "queries.rs"
+        query.write_text('table.set("IsStation", fn);\n', encoding="utf-8")
+        self.assertEqual(
+            inventory.a2_exact_for(
+                "public: virtual bool __thiscall ScriptInterfaceImp::IsStation(int)", self.repo
+            ),
+            "A2.IsStation",
+        )
+        for signature in (
+            "int IsStation(int)",
+            "bool IsStation()",
+            "bool IsStation(int, bool)",
+            "bool IsStation(unsigned int)",
+            "bool IsStation(int&)",
+        ):
+            self.assertEqual(inventory.a2_exact_for(signature, self.repo), "", signature)
+        query.write_text("", encoding="utf-8")
+        self.assertEqual(inventory.a2_exact_for("bool IsStation(int)", self.repo), "")
+
     def test_registered_query_signatures_require_exact_return_and_argument_types(self):
         self.register_a2(
             "",
