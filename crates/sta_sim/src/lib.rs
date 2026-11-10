@@ -274,6 +274,20 @@ impl Sim {
         }
         let order = match &c.kind {
             CommandKind::Order(o) => o,
+            CommandKind::MissionText { text } => {
+                if !c.player.is_player()
+                    || !self.players.iter().any(|(id, _)| *id == c.player)
+                    || text.len() > command::MAX_MISSION_TEXT_BYTES
+                {
+                    return false;
+                }
+                self.events.push(SimEvent::MissionText {
+                    player: c.player,
+                    seq: c.seq,
+                    text: text.clone(),
+                });
+                return true;
+            }
             CommandKind::Edit(e) => {
                 return match self.economy.apply_edit(c.player, e) {
                     Some(ok) => ok,

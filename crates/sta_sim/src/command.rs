@@ -28,13 +28,21 @@ impl Command {
     }
 }
 
-/// Orders anyone may give their own units; edits only scripts and the bench.
+/// Player orders and mission text; edits only scripts and the bench.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum CommandKind {
     Order(Order),
     Edit(Edit),
+    /// Text submitted by a configured, noneliminated player seat for mission
+    /// hooks. Raises `SimEvent::MissionText` without changing physical state.
+    /// UTF-8, at most [`MAX_MISSION_TEXT_BYTES`] bytes; empty text is allowed.
+    /// Appended to preserve existing postcard command tags.
+    MissionText { text: String },
 }
+
+/// Maximum UTF-8 byte length of a single mission-text command.
+pub const MAX_MISSION_TEXT_BYTES: usize = 4096;
 
 /// What a weapon, special or event aims at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
