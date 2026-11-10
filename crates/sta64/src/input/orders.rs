@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 
 use bevy::prelude::*;
-use sta_sim::command::{CommandKind, Order};
+use sta_sim::command::{CommandKind, Order, Target};
 use sta_sim::{EntityId, Vec3 as SimVec3};
 
 use super::Pointer;
@@ -77,15 +77,14 @@ pub fn order(
     let view = link.curr();
     // Right-click on a resource or an enemy gives a context order; on
     // anything else it moves.
-    if let Some((order, kind)) = unit_under(cursor, ray, &units)
+    if let Some(order) = unit_under(cursor, ray, &units)
         .and_then(|t| super::context::context_order(content.as_deref().map(|c| &*c.0), view, me, &own, t))
     {
-        let units = match &order {
-            Order::Mine { units, .. } => units.clone(),
-            _ => own.clone(),
-        };
+        let kind = OrderKind::of(&order);
         queue.0.push(CommandKind::Order(order));
-        issued.write(OrderIssued { units, kind });
+        if let Some(kind) = kind {
+            issued.write(OrderIssued { units: own.clone(), kind });
+        }
         return;
     }
     let shift = bindings.pressed(Action::AddModifier, &keys);
@@ -107,6 +106,10 @@ pub fn order(
     }
     let hit = ray.origin + dir * t;
     let target = Vec3::new(hit.x, centre.y, -hit.z);
+    if super::context::rally_builders(content.as_deref().map(|c| &*c.0), view, me, &own) {
+        queue.0.push(CommandKind::Order(Order::Rally { builders: own, at: Target::Point(SimVec3::from_f32(target.to_array())) }));
+        return;
+    }
     for (id, to) in formation_moves(&picked, centre, target) {
         let to = SimVec3::from_f32(to.to_array());
         if !shift {
