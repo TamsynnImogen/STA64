@@ -22,6 +22,12 @@
 //!   call returns another stub), so real scripts load before their API
 //!   exists. LUA-03 replaces stubs name by name.
 //!
+//! `MMM.register(object)` also accepts the class instances used by the
+//! clean-room A2 ports. Its successful `setup(self)` runs once at the first
+//! controller tick, followed by `update(self, time)` each tick. Function
+//! registrations keep their original ordering and signature. These are
+//! bridge lifecycle rules: cineractive-specific object hooks remain pending.
+//!
 //! # Error isolation
 //!
 //! Nothing a script does panics the sim. A load error is kept in
@@ -43,7 +49,7 @@
 //! tables scripts query are unreachable from it. [`MissionConfig`] passes
 //! the seat, `Arc<ContentDb>` and map labels in at construction instead.
 
-use mlua::{Function, Lua, MultiValue};
+use mlua::{Function, Lua, MultiValue, Table, Value};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -121,6 +127,38 @@ unsafe impl Send for MissionRuntime {}
 
 type Reader = Arc<Mutex<dyn Fn(&str) -> Option<Vec<u8>> + Send>>;
 
+/// Adapt the class instances used by the converted missions without exposing
+/// another callback kind outside the Lua state. Successful setup runs once,
+/// against the first controller view; update then runs once per tick. Setup
+/// failures use the existing callback retry/error budget, as function callbacks
+/// do. Cineractive-specific object hooks are not implemented by this bridge.
+fn object_callback(lua: &Lua, object: Table) -> mlua::Result<Function> {
+    let mut any = false;
+    for name in ["setup", "update"] {
+        match object.get::<Value>(name)? {
+            Value::Nil => {},
+            Value::Function(_) => any = true,
+            _ => return Err(mlua::Error::runtime(format!("mission object {name} must be a function or nil"))),
+        }
+    }
+    if !any {
+        return Err(mlua::Error::runtime("mission object must define setup or update"));
+    }
+    let mut initialized = false;
+    lua.create_function_mut(move |_, time: f64| {
+        if !initialized {
+            if let Some(setup) = object.get::<Option<Function>>("setup")? {
+                setup.call::<MultiValue>(object.clone())?;
+            }
+            initialized = true;
+        }
+        if let Some(update) = object.get::<Option<Function>>("update")? {
+            update.call::<MultiValue>((object.clone(), time))?;
+        }
+        Ok(())
+    })
+}
+
 impl MissionRuntime {
     /// Load `path` (a VFS path such as `missions/Eviction.lua`) from `vfs`.
     pub fn from_vfs(vfs: Arc<Vfs>, path: &str, seed: u64) -> MissionRuntime {
@@ -175,9 +213,14 @@ impl MissionRuntime {
         let sh = shared.clone();
         mmm.set(
             "register",
-            lua.create_function(move |_, f: Function| {
+            lua.create_function(move |lua, value: Value| {
+                let f = match value {
+                    Value::Function(f) => f,
+                    Value::Table(t) => object_callback(lua, t)?,
+                    _ => return Err(mlua::Error::runtime("MMM.register expects a function or mission object")),
+                };
                 let mut s = sh.borrow_mut();
-                s.next_id += 1;
+                s.next_id = s.next_id.checked_add(1).ok_or_else(|| mlua::Error::runtime("mission callback ids exhausted"))?;
                 let id = s.next_id;
                 s.added.push((id, f));
                 Ok(id)
@@ -268,6 +311,9 @@ impl MissionRuntime {
 
     /// Run every live callback once for `tick`.
     pub fn step(&mut self, tick: u64) {
+        // `step` is public as well as called by `think`: clock-based API must
+        // see the tick supplied here even without a new world snapshot.
+        self.inner.ctx.borrow_mut().view.tick = tick;
         {
             let mut s = self.inner.shared.borrow_mut();
             let added = std::mem::take(&mut s.added);
@@ -303,6 +349,9 @@ impl MissionRuntime {
         self.errors.extend(failures.into_iter().take(room));
     }
 }
+
+#[cfg(test)]
+mod object_tests;
 
 impl Controller for MissionRuntime {
     fn think(&mut self, view: &WorldView, events: &[SimEvent], out: &mut Vec<Command>) {

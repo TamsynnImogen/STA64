@@ -34,6 +34,6 @@ Call-shape evidence: Immy's clean-room `armada_missions` A2 ports (including
 The asset-free intro test drives a real `Sim`, reaches a synthetic first
 objective, and replays its recorded presentation commands. It does not run
 a full converted stock mission. Remaining LUA-05 gates include the
-DLL-named `A2` table, mission-object `MMM.register` lifecycle, `Timer` and
-other missing MMM APIs, full converted-mission tests, and client-side
+DLL-named `A2` table, mission-object lifecycle beyond the setup/update bridge,
+unverified Timer overloads and other missing MMM APIs, full converted-mission tests, and client-side
 presentation/completion feedback. The package remains in progress.

@@ -92,7 +92,12 @@ impl UserData for Entity {
         });
         // `odf` is the ODF name as a string (the real binding may return a
         // class object with `odf`/`name`/`label`; see the module docs).
-        f.add_field_method_get("odf", |_, e| Ok(e.with(|c, u| u.map(|u| c.odf_name(u)).unwrap_or_default())));
+        // Converted MMM scripts compare this property with file names such
+        // as "fente.odf", while content keys remain canonical stems.
+        f.add_field_method_get("odf", |_, e| Ok(e.with(|c, u| {
+            let name = u.map(|u| c.odf_name(u)).unwrap_or_default();
+            if name.is_empty() || odf_stem(&name) != name { name } else { format!("{name}.odf") }
+        })));
         f.add_field_method_get("class", |_, e| {
             Ok(e.with(|c, u| u.and_then(|u| c.def(u)).map(|d| d.class.0.clone()).unwrap_or_default()))
         });
@@ -224,7 +229,15 @@ fn str_of(v: &Value) -> Option<String> {
 }
 
 /// Entities matching a filter, ascending id.
-fn find(lua: &Lua, ctx: &Shared, filter: &Value) -> mlua::Result<Vec<EntityId>> {
+fn odf_stem(name: &str) -> &str {
+    if name.get(name.len().saturating_sub(4)..).is_some_and(|s| s.eq_ignore_ascii_case(".odf")) {
+        &name[..name.len() - 4]
+    } else {
+        name
+    }
+}
+
+fn find(lua: &Lua, ctx: &Shared, filter: &Value, predicate: Option<&mlua::Function>) -> mlua::Result<Vec<EntityId>> {
     let c = ctx.borrow();
     let ci = |a: &str, b: &str| a.eq_ignore_ascii_case(b);
     let (mut label, mut odf, mut class, mut ty, mut owner) = (None, None, None, None, None);
@@ -247,7 +260,6 @@ fn find(lua: &Lua, ctx: &Shared, filter: &Value) -> mlua::Result<Vec<EntityId>> 
         Value::Integer(_) | Value::Number(_) | Value::UserData(_) => owner = player_of(filter),
         _ => {}
     }
-    let _ = lua;
     let mut out = Vec::new();
     for u in &c.view.units {
         if u.flags.contains(UnitFlags::DYING) {
@@ -257,13 +269,13 @@ fn find(lua: &Lua, ctx: &Shared, filter: &Value) -> mlua::Result<Vec<EntityId>> 
         let def = c.def(u);
         let name = c.odf_name(u);
         let cls = def.map(|d| d.class.0.as_str()).unwrap_or("");
-        if any_name.as_ref().is_some_and(|a| !(lab.is_some_and(|l| ci(l, a)) || ci(&name, a) || ci(cls, a))) {
+        if any_name.as_ref().is_some_and(|a| !(lab.is_some_and(|l| ci(l, a)) || ci(odf_stem(&name), odf_stem(a)) || ci(cls, a))) {
             continue;
         }
         if label.as_deref().is_some_and(|l| !lab.is_some_and(|x| ci(x, l))) {
             continue;
         }
-        if odf.as_deref().is_some_and(|o| !ci(&name, o)) {
+        if odf.as_deref().is_some_and(|o| !ci(odf_stem(&name), odf_stem(o))) {
             continue;
         }
         if class.as_deref().is_some_and(|k| !ci(cls, k)) {
@@ -280,7 +292,24 @@ fn find(lua: &Lua, ctx: &Shared, filter: &Value) -> mlua::Result<Vec<EntityId>> 
         }
         out.push(u.id);
     }
-    Ok(out)
+    drop(c);
+    out.sort();
+    if predicate.is_none() && filter.as_function().is_none() { return Ok(out); }
+    // Lua predicates may query entities or queue commands. Never retain a
+    // context borrow while calling them, and snapshot candidate IDs first.
+    let mut matched = Vec::new();
+    for id in out {
+        let entity = entity_value(lua, ctx, id)?;
+        let mut keep = true;
+        for predicate in [predicate, filter.as_function()].into_iter().flatten() {
+            if !predicate.call::<bool>(entity.clone())? {
+                keep = false;
+                break;
+            }
+        }
+        if keep { matched.push(id); }
+    }
+    Ok(matched)
 }
 
 /// The filter argument of `finder:find(f)`, with or without `self`.
@@ -292,13 +321,14 @@ fn filter_arg(args: &MultiValue) -> Value {
     }
 }
 
-pub(crate) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
+fn finder_methods(lua: &Lua, ctx: &Shared, predicate: Option<mlua::Function>) -> mlua::Result<mlua::Table> {
     let finder = lua.create_table()?;
     let c = ctx.clone();
+    let pred = predicate.clone();
     finder.set(
         "find",
         lua.create_function(move |lua, args: MultiValue| {
-            let ids = find(lua, &c, &filter_arg(&args))?;
+            let ids = find(lua, &c, &filter_arg(&args), pred.as_ref())?;
             let t = lua.create_table()?;
             for (i, id) in ids.into_iter().enumerate() {
                 t.set(i + 1, entity_value(lua, &c, id)?)?;
@@ -309,23 +339,35 @@ pub(crate) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
     let c = ctx.clone();
     finder.set(
         "findOne",
-        lua.create_function(move |lua, args: MultiValue| match find(lua, &c, &filter_arg(&args))?.first() {
+        lua.create_function(move |lua, args: MultiValue| match find(lua, &c, &filter_arg(&args), predicate.as_ref())?.first() {
             Some(&id) => entity_value(lua, &c, id),
             None => Ok(Value::Nil),
         })?,
     )?;
+    Ok(finder)
+}
+
+pub(crate) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
     // `EntityFinder()` makes an object with the same methods; the methods
     // ignore `self`, so `EntityFinder.find(f)` works too.
     let class = lua.create_table()?;
-    let methods = finder;
+    let methods = finder_methods(lua, ctx, None)?;
     let class_mt = lua.create_table()?;
-    let m2 = methods.clone();
+    let c = ctx.clone();
     class_mt.set(
         "__call",
-        lua.create_function(move |lua, _: MultiValue| {
+        lua.create_function(move |lua, args: MultiValue| {
+            if args.len() > 2 {
+                return Err(mlua::Error::runtime("EntityFinder expects at most one predicate"));
+            }
+            let predicate = match args.get(1) {
+                None | Some(Value::Nil) => None,
+                Some(Value::Function(f)) => Some(f.clone()),
+                _ => return Err(mlua::Error::runtime("EntityFinder predicate must be a function")),
+            };
             let o = lua.create_table()?;
             let omt = lua.create_table()?;
-            omt.set("__index", m2.clone())?;
+            omt.set("__index", finder_methods(lua, &c, predicate)?)?;
             o.set_metatable(Some(omt))?;
             Ok(o)
         })?,

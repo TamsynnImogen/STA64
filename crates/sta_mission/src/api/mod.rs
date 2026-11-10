@@ -30,6 +30,7 @@
 //!   objective (`state title description id`, `:complete()`, `:fail()`),
 //!   `Objectives.visible`, `Objectives.count`;
 //! - `Monitor()` with `:hook(kind, ...)`, see [`monitor`];
+//! - named tick-based `Timer`, see [`timer`];
 //! - `Game.time localSlot localPlayer seed isHost gameSpeed allowSave`,
 //!   `Mission.finish`, `print`.
 //!
@@ -54,11 +55,17 @@ mod a2;
 mod entity;
 mod monitor;
 mod player;
+mod timer;
 #[cfg(test)]
 mod tests;
 
 pub use monitor::MonitorKind;
-pub(crate) use monitor::{fire_monitors, MonitorState};
+pub(crate) use monitor::MonitorState;
+
+pub(crate) fn fire_monitors(lua: &Lua, ctx: &Shared, errors: &mut Vec<String>) {
+    monitor::fire_monitors(lua, ctx, errors);
+    timer::fire_timers(lua, ctx, errors);
+}
 
 /// What a mission needs to know about its game that `Controller::think`
 /// does not pass it (see the seam gaps in `crate::runtime`).
@@ -106,6 +113,7 @@ pub(crate) struct Ctx {
     pub relations: BTreeMap<(PlayerId, PlayerId), Relation>,
     pub monitors: Vec<MonitorState>,
     pub next_monitor: u64,
+    pub timers: timer::TimerStore,
     pub finished: bool,
     pub log: Vec<String>,
     /// Orders and names the API accepted but could not carry out, by name.
@@ -131,6 +139,7 @@ impl Ctx {
             relations: BTreeMap::new(),
             monitors: Vec::new(),
             next_monitor: 0,
+            timers: timer::TimerStore::default(),
             finished: false,
             log: Vec::new(),
             unsupported: BTreeMap::new(),
@@ -298,6 +307,7 @@ pub(crate) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
     entity::install(lua, ctx)?;
     player::install(lua, ctx)?;
     monitor::install(lua, ctx)?;
+    timer::install(lua, ctx)?;
     a2::install(lua, ctx)?;
 
     let mission = lua.create_table()?;

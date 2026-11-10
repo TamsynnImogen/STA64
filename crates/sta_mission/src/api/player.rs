@@ -227,6 +227,7 @@ pub(crate) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
 
     // `Player(n)` and `Player.get(n)`.
     let class = lua.create_table()?;
+    class.set("Relation", g.raw_get::<Value>("Relation")?)?;
     let c = ctx.clone();
     let get = lua.create_function(move |lua, args: MultiValue| {
         let n = args.iter().rev().find_map(player_of);

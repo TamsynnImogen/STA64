@@ -100,7 +100,7 @@ fn entity_properties_read_the_view_and_content() {
         "#,
     );
     assert_eq!(g.global::<u32>("ID"), HERO.0);
-    assert_eq!(g.global::<String>("ODF"), "fx_cruiser");
+    assert_eq!(g.global::<String>("ODF"), "fx_cruiser.odf");
     assert_eq!(g.global::<String>("CLASS"), "craft");
     assert_eq!(g.global::<u8>("OWNER"), 0);
     assert_eq!(g.global::<String>("LABEL"), "hero");
@@ -470,4 +470,55 @@ fn empty_world_is_safe() {
     }
     assert!(rt.errors().is_empty(), "{:?}", rt.errors());
     assert!(out.is_empty());
+}
+
+#[test]
+fn finder_constructor_predicates_filter_and_combine_with_query_filters() {
+    let g = game(r#"
+        local f = EntityFinder(function(e) return e.player.number == 0 end)
+        local function ids(t) local r={} for i,e in ipairs(t) do r[i]=e.id end return table.concat(r, ',') end
+        ALL = ids(f:find())
+        FRIG = ids(f:find({odf='FX_FRIGATE.ODF'}))
+        FIRST = f:findOne().id
+        STATIC = ids(EntityFinder.find(function(e) return e.label == 'foe' end))
+        BYFILE = EntityFinder():findOne('FX_CRUISER.ODF').id
+        RELATION = Player.Relation.Enemy == Relation.Enemy
+    "#);
+    assert_eq!(g.global::<String>("ALL"), "2,3");
+    assert_eq!(g.global::<String>("FRIG"), "3");
+    assert_eq!(g.global::<u32>("FIRST"), HERO.0);
+    assert_eq!(g.global::<String>("STATIC"), "4");
+    assert_eq!(g.global::<u32>("BYFILE"), HERO.0);
+    assert!(g.global::<bool>("RELATION"));
+}
+
+#[test]
+fn finder_predicates_can_reenter_the_api_and_queue_edits() {
+    let mut g = game(r#"
+        local f = EntityFinder(function(e)
+            if e.player.number == 0 then e.hull = 10; return true end
+            return false
+        end)
+        COUNT = #f:find()
+    "#);
+    assert_eq!(g.global::<u32>("COUNT"), 2);
+    assert_eq!(g.rt.take_commands().len(), 2);
+    assert!(g.rt.unsupported().is_empty());
+}
+
+#[test]
+fn finder_predicates_are_isolated_and_errors_remain_visible() {
+    let g = game(r#"
+        local a = EntityFinder(function(e) return e.label == 'hero' end)
+        local b = EntityFinder(function(e) return e.label == 'foe' end)
+        A, B = a:findOne().id, b:findOne().id
+        OK = pcall(function() EntityFinder(function() error('predicate failed') end):find() end)
+        INVALID = pcall(function() EntityFinder(3) end)
+        AGAIN = a:findOne().id
+    "#);
+    assert_eq!(g.global::<u32>("A"), HERO.0);
+    assert_eq!(g.global::<u32>("B"), FOE.0);
+    assert!(!g.global::<bool>("OK"));
+    assert!(!g.global::<bool>("INVALID"));
+    assert_eq!(g.global::<u32>("AGAIN"), HERO.0);
 }
