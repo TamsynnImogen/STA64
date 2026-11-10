@@ -84,8 +84,8 @@ impl Plugin for OverlaysPlugin {
                 (sync_overlays, update_bars, update_lines, billboard, count)
                     .chain()
                     .in_set(GameSet::Render)
-                    .run_if(resource_exists::<SimLink>)
-                    .run_if(resource_exists::<OverlayAssets>),
+                    .distributive_run_if(resource_exists::<SimLink>)
+                    .distributive_run_if(resource_exists::<OverlayAssets>),
             );
     }
 }
