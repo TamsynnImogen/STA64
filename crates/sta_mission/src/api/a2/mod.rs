@@ -19,6 +19,7 @@ mod media;
 mod objectives;
 mod objects;
 mod queries;
+mod random;
 mod subsystems;
 #[cfg(test)]
 mod tests;
@@ -36,6 +37,7 @@ pub(super) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
     objectives::install(lua, ctx, &a2)?;
     objects::install(lua, ctx, &a2)?;
     queries::install(lua, ctx, &a2)?;
+    random::install(lua, ctx, &a2)?;
     subsystems::install(lua, ctx, &a2)?;
     lua.globals().raw_set("A2", a2)?;
     Ok(())

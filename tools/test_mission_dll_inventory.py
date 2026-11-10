@@ -289,6 +289,30 @@ class MissionDllInventoryTests(unittest.TestCase):
         ]:
             self.assertEqual(inventory.a2_exact_for(signature, self.repo), "", signature)
 
+    def test_random_unsigned_requires_exact_unsigned_return_and_bound(self):
+        self.register_a2(
+            "",
+            registration='random::install(lua, ctx, &a2)?; lua.globals().raw_set("A2", a2)?;',
+        )
+        (self.a2 / "random.rs").write_text(
+            'table.set("RandomGetUnsigned", fn);\n', encoding="utf-8"
+        )
+        self.assertEqual(
+            inventory.a2_exact_for(
+                "public: virtual unsigned int __thiscall ScriptInterfaceImp::RandomGetUnsigned(unsigned int)",
+                self.repo,
+            ),
+            "A2.RandomGetUnsigned",
+        )
+        for signature in [
+            "int RandomGetUnsigned(unsigned int)",
+            "unsigned int RandomGetUnsigned(int)",
+            "unsigned int RandomGetUnsigned(unsigned int&)",
+            "unsigned int RandomGetUnsigned()",
+            "unsigned int RandomGetUnsigned(unsigned int, unsigned int)",
+        ]:
+            self.assertEqual(inventory.a2_exact_for(signature, self.repo), "", signature)
+
     def test_test_files_do_not_count_as_a2_bindings(self):
         self.register_a2("", registration='objects::install(lua, ctx, &a2)?; lua.globals().raw_set("A2", a2)?;')
         (self.a2 / "tests.rs").write_text('table.set("IsAlive", fn);', encoding="utf-8")

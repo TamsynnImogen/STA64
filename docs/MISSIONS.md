@@ -367,7 +367,19 @@ every peer. Lua's arithmetic is IEEE double precision and identical on every
 platform. Its `math.sin`, `math.cos`, `math.exp`, `math.log`, `math.pow` and
 similar call the platform maths library, whose last bits differ between
 platforms. The runtime replaces them with deterministic implementations, and
-`math.random` with the sim's seeded generator.
+`math.random` with the mission runtime's seeded generator.
+
+`A2.RandomGetUnsigned(upper)` shares that deterministic stream and its
+`math.randomseed` state. It requires exactly one positive unsigned 32-bit
+integer (an integral Lua number is also accepted) and returns a Lua integer
+in `[0, upper)`. A bound of one returns zero and still consumes a draw.
+Zero, invalid types, fractions, out-of-range or non-finite values and wrong
+arity raise errors before drawing. No simulation command is queued.
+The binding captures the installed generator before mission code runs;
+replacing the global `math.random` afterward does not redirect it.
+The positive upper-exclusive range matches the pinned A2 reference, while
+the random algorithm/sequence and zero-input error are explicit STA64
+policies. Native RNG and mission save/resume parity are not claimed.
 
 ## To do
 
