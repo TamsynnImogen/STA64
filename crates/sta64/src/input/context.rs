@@ -44,6 +44,7 @@ pub fn context_order(db: Option<&ContentDb>, view: &WorldView, me: sta_sim::Play
 
 /// The cursor shows the order a right-click would give: a crosshair for an
 /// attack, a pointing hand for mining, the arrow otherwise.
+#[allow(clippy::too_many_arguments)] // Bevy injects these system parameters.
 pub fn cursor(
     aim: Res<Aim>,
     units: Targetable,
