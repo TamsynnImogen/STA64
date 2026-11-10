@@ -4,7 +4,7 @@
 //! the tritanium/latinum/dilithium moons give; then asserts the rules the
 //! data states:
 //!
-//! - a start unit is payable from the race's start stock;
+//! - start units are placed, not bought (a start ship may cost a slot the stock lacks);
 //! - Fleet Operations 4.0 (and 3.x, Dominion War) call the latinum slot
 //!   "Tritanium" and the biomatter slot "Supply", Roots' own ODFs the metal
 //!   slot "Tritanium" (`GUI_RD_*_VTOOLTIP`);
@@ -33,14 +33,46 @@ struct Install {
 
 fn installs() -> Vec<Install> {
     let h = Path::new(HEROIC);
-    let plain = |label, dir: &str, names| Install { label, root: h.join(dir), modname: None, names };
+    let plain = |label, dir: &str, names| Install {
+        label,
+        root: h.join(dir),
+        modname: None,
+        names,
+    };
     vec![
-        Install { label: "FO4", root: h.join(ROOTS), modname: Some("Fleet Ops 4.0"), names: ["Dilithium", "Tritanium", "Collective Connections", "Supply"] },
-        Install { label: "STA2 Classic", root: h.join(ROOTS), modname: Some("STA2 Classic Mod"), names: ["Dilithium", "Latinum", "Metal", "Bio-matter"] },
-        Install { label: "Roots", root: h.join(ROOTS), modname: None, names: ["Dilithium", "Connections Nodes", "Tritanium", "Supply"] },
-        plain("FO", "Star Trek Armada II Fleet Operations", ["Dilithium", "Tritanium", "Collective Connections", "Supply"]),
-        plain("DW", "Star Trek Armada II Dominion War", ["Dilithium", "Tritanium", "Collective Connections", "Supply"]),
-        plain("A2", "Star Trek Armada II (Stock)", ["Dilithium", "Latinum", "Metal", "Bio-matter"]),
+        Install {
+            label: "FO4",
+            root: h.join(ROOTS),
+            modname: Some("Fleet Ops 4.0"),
+            names: ["Dilithium", "Tritanium", "Collective Connections", "Supply"],
+        },
+        Install {
+            label: "STA2 Classic",
+            root: h.join(ROOTS),
+            modname: Some("STA2 Classic Mod"),
+            names: ["Dilithium", "Latinum", "Metal", "Bio-matter"],
+        },
+        Install {
+            label: "Roots",
+            root: h.join(ROOTS),
+            modname: None,
+            names: ["Dilithium", "Connections Nodes", "Tritanium", "Supply"],
+        },
+        plain(
+            "FO",
+            "Star Trek Armada II Fleet Operations",
+            ["Dilithium", "Tritanium", "Collective Connections", "Supply"],
+        ),
+        plain(
+            "DW",
+            "Star Trek Armada II Dominion War",
+            ["Dilithium", "Tritanium", "Collective Connections", "Supply"],
+        ),
+        plain(
+            "A2",
+            "Star Trek Armada II (Stock)",
+            ["Dilithium", "Latinum", "Metal", "Bio-matter"],
+        ),
     ]
 }
 
@@ -76,11 +108,20 @@ fn every_game_names_and_feeds_its_resources() {
         let names: Vec<&str> = (0..SLOTS).map(|s| model.name(s)).collect();
         eprintln!("== {} ({:?}): slots {names:?}", i.label, db.profile());
         for (s, want) in i.names.iter().enumerate() {
-            assert_eq!(model.name(s), *want, "{}: name of slot {s} ({})", i.label, resources::KEYS[s]);
+            assert_eq!(
+                model.name(s),
+                *want,
+                "{}: name of slot {s} ({})",
+                i.label,
+                resources::KEYS[s]
+            );
         }
         for race in skirmish_races(&races, &db) {
             let l = races.loadout(&db, &race);
-            eprintln!("  {race}: start stock {:?}", l.stock.iter().map(|v| f(*v)).collect::<Vec<_>>());
+            eprintln!(
+                "  {race}: start stock {:?}",
+                l.stock.iter().map(|v| f(*v)).collect::<Vec<_>>()
+            );
             for k in &l.units {
                 let u = db.unit(*k).unwrap();
                 // Not an outpost's own cost (it is placed free): what it can build is checked below.
@@ -89,20 +130,33 @@ fn every_game_names_and_feeds_its_resources() {
         }
         // Moons: a dilithium moon fills dilithium, a tritanium moon never does; where the
         // game has the word (Fleet Operations, Roots) the tritanium moon fills that slot.
-        for u in db.units().filter(|u| u.odf.starts_with("map_") && u.odf.contains("moon") && u.resource.is_some()) {
+        for u in db
+            .units()
+            .filter(|u| u.odf.starts_with("map_") && u.odf.contains("moon") && u.resource.is_some())
+        {
             let slot = u.resource.unwrap() as usize;
             if u.odf.contains("dilithium") {
                 assert_eq!(slot, resources::DILITHIUM, "{}: {}", i.label, u.odf);
             } else if u.odf.contains("tritanium") {
                 assert_ne!(slot, resources::DILITHIUM, "{}: {}", i.label, u.odf);
                 if model.name(slot) != "Metal" {
-                    assert_eq!(model.name(slot), "Tritanium", "{}: {} gives slot {slot}", i.label, u.odf);
+                    assert_eq!(
+                        model.name(slot),
+                        "Tritanium",
+                        "{}: {} gives slot {slot}",
+                        i.label,
+                        u.odf
+                    );
                 }
             }
         }
         let tri = db.units().find(|u| u.odf == "map_tritanium_moon1");
         if let Some(u) = tri {
-            eprintln!("  map_tritanium_moon1 gives slot {} ({})", u.resource.unwrap_or(9), model.name(u.resource.unwrap_or(9) as usize));
+            eprintln!(
+                "  map_tritanium_moon1 gives slot {} ({})",
+                u.resource.unwrap_or(9),
+                model.name(u.resource.unwrap_or(9) as usize)
+            );
         }
         checked += 1;
     }
@@ -125,20 +179,37 @@ fn fo4_federation_can_afford_a_structure_at_tick_zero() {
     assert_eq!(db.profile(), Profile::Fo4);
     let l = races.loadout(&db, "unitedfederation");
     assert_eq!(l.stock.map(f), [4000, 2000, 0, 500]);
-    // Every start unit that is not placed free is payable (fconst, Roots' metal ship, is not one).
-    for k in &l.units {
-        let u = db.unit(*k).unwrap();
-        assert!(u.odf != "fconst", "Roots' fconst costs metal and is no start unit of Fleet Ops 4.0");
-    }
+    // The data's minimal start ship (`minimalunits1 = "fconst.odf"`) is placed even though its
+    // cost names a slot the stock lacks.
+    assert!(
+        l.units.iter().any(|k| db.unit(*k).unwrap().odf == "fconst"),
+        "the Federation starts with its construction ship fconst"
+    );
     // The construction ships the start yard builds, and what they build.
     let mut affordable = Vec::new();
     for k in &l.units {
         let yard = db.unit(*k).unwrap();
-        let ships: Vec<_> = yard.build.list.iter().filter_map(|r| db.unit(r.key)).filter(|u| u.class.0 == "constructionrig").collect();
+        let ships: Vec<_> = yard
+            .build
+            .list
+            .iter()
+            .filter_map(|r| db.unit(r.key))
+            .filter(|u| u.class.0 == "constructionrig")
+            .collect();
         for ship in &ships {
             for s in ship.build.list.iter().filter_map(|r| db.unit(r.key)) {
-                let pays = s.build.cost.iter().enumerate().all(|(slot, c)| *c <= l.stock[slot]);
-                eprintln!("  {} -> {}: cost {:?} pays {pays}", ship.odf, s.odf, s.build.cost.iter().map(|v| f(*v)).collect::<Vec<_>>());
+                let pays = s
+                    .build
+                    .cost
+                    .iter()
+                    .enumerate()
+                    .all(|(slot, c)| *c <= l.stock[slot]);
+                eprintln!(
+                    "  {} -> {}: cost {:?} pays {pays}",
+                    ship.odf,
+                    s.odf,
+                    s.build.cost.iter().map(|v| f(*v)).collect::<Vec<_>>()
+                );
                 if pays && s.build.cost.iter().any(|c| *c > Fixed::ZERO) {
                     affordable.push(format!("{} -> {}", ship.odf, s.odf));
                 }
@@ -147,5 +218,9 @@ fn fo4_federation_can_afford_a_structure_at_tick_zero() {
         // The yard's own list, for a race that places the construction ship.
         assert!(!yard.build.list.is_empty() || ships.is_empty());
     }
-    assert!(!affordable.is_empty(), "no structure of a construction ship's list is payable from {:?}", l.stock);
+    assert!(
+        !affordable.is_empty(),
+        "no structure of a construction ship's list is payable from {:?}",
+        l.stock
+    );
 }
