@@ -50,6 +50,7 @@ use sta_sim::command::{Command, CommandKind, Edit, Order};
 use sta_sim::view::{Relation, UnitFlags, UnitView, WorldView};
 use sta_sim::SimEvent;
 
+mod a2;
 mod entity;
 mod monitor;
 mod player;
@@ -297,6 +298,7 @@ pub(crate) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
     entity::install(lua, ctx)?;
     player::install(lua, ctx)?;
     monitor::install(lua, ctx)?;
+    a2::install(lua, ctx)?;
 
     let mission = lua.create_table()?;
     let c = ctx.clone();
