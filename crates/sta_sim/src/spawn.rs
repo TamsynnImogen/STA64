@@ -84,6 +84,14 @@ impl Sim {
         }
         match *e {
             Edit::Spawn { odf, player, pos, heading } => self.spawn_def(odf, player, pos, heading).is_some(),
+            Edit::SpawnRequest { request, odf, player, pos, heading } => {
+                if from != PlayerId::SCRIPT {
+                    return false;
+                }
+                let Some(id) = self.spawn_def(odf, player, pos, heading) else { return false };
+                self.events.push(SimEvent::ScriptSpawned { request, id });
+                true
+            }
             Edit::Kill(id) => self.despawn(id, None),
             Edit::Damage(id, amount) => {
                 // Straight to the hull, past the shields; lethal unless immortal.
@@ -146,6 +154,10 @@ impl Sim {
         &self.regions
     }
 }
+
+#[cfg(test)]
+#[path = "spawn/request_tests.rs"]
+mod request_tests;
 
 #[cfg(test)]
 mod tests {

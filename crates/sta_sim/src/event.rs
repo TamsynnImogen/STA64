@@ -33,4 +33,10 @@ pub enum SimEvent {
     /// A mission's presentation, passed through from
     /// [`Edit::Present`](crate::command::Edit::Present) the tick it applied.
     Present(crate::present::Presentation),
+    /// The actual ID allocated by a successful SCRIPT `Edit::SpawnRequest`.
+    /// This accompanies ordinary `Spawned`, not a liveness guarantee: a
+    /// later command or combat can destroy the entity during the same tick.
+    /// Consumers must match an outstanding unique request and check the view.
+    /// Appended to preserve every existing postcard event tag.
+    ScriptSpawned { request: u64, id: EntityId },
 }

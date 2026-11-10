@@ -108,6 +108,13 @@ pub enum Edit {
     /// Whether its owner may decommission it (`SetCanBeDecommissioned`).
     /// Rejected until decommissioning exists.
     Decommissionable(EntityId, bool),
+    /// A mission spawn with an opaque caller-owned correlation token. Only
+    /// SCRIPT may issue this edit. Success emits ordinary `Spawned` and
+    /// `ScriptSpawned { request, id }`; failure uses `Rejected { player, seq }`.
+    /// Consumers allocate unique tokens and correlate their command sequence;
+    /// the sim does not reserve IDs or deduplicate request tokens.
+    /// Appended to preserve every existing postcard Edit tag.
+    SpawnRequest { request: u64, odf: ContentKey, player: PlayerId, pos: Vec3, heading: (Fixed, Fixed) },
 }
 
 /// A unit system a mission can switch on or off.
