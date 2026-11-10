@@ -4,6 +4,7 @@
 //! and pushes commands into [`CommandQueue`](crate::sim_link::CommandQueue);
 //! the sim link stamps and routes them. Systems run in `GameSet::Input`.
 
+pub mod context;
 pub mod keys;
 pub mod orders;
 pub mod select;
@@ -55,6 +56,7 @@ impl Plugin for InputPlugin {
                     select::select.run_if(crate::ui::hud::map_input_free),
                     orders::order.run_if(crate::ui::hud::map_input_free),
                     orders::prune_targets,
+                    context::cursor,
                 )
                     .chain()
                     .in_set(crate::app::GameSet::Input)
