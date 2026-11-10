@@ -244,6 +244,9 @@ pub struct UnitDef {
     /// ODF name without extension; the definition's name in the database.
     pub odf: String,
     pub class: ClassLabel,
+    /// Resolved legacy `is_starbase` ODF flag, default false. This is
+    /// independent of the simulation's actor kind or producer behavior.
+    pub is_starbase: bool,
     pub race: String,
     pub model: String,
     pub scale: Fixed,
@@ -293,6 +296,7 @@ impl UnitDef {
             key: ContentKey::NONE,
             odf: odf.to_owned(),
             class: ClassLabel::new(class),
+            is_starbase: false,
             race: String::new(),
             model: String::new(),
             scale: Fixed::ONE,

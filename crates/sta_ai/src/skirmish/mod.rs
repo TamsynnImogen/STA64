@@ -131,7 +131,7 @@ impl SkirmishConfig {
             .filter(|o| {
                 db.key(&o.odf)
                     .and_then(|k| db.unit(k))
-                    .is_some_and(|d| EntityKind::of(&d.class, &d.movement) == EntityKind::Resource)
+                    .is_some_and(|d| EntityKind::of_def(d) == EntityKind::Resource)
             })
             .map(|o| o.pos)
             .collect();
@@ -170,7 +170,7 @@ enum Role {
 
 fn role_of(db: &ContentDb, key: ContentKey) -> Role {
     let Some(d) = db.unit(key) else { return Role::Other };
-    match EntityKind::of(&d.class, &d.movement) {
+    match EntityKind::of_def(d) {
         EntityKind::Station if d.build.list.is_empty() => Role::Fort,
         EntityKind::Station => Role::Yard,
         EntityKind::Craft if d.class.0 == "constructionrig" => Role::Rig,
@@ -181,7 +181,7 @@ fn role_of(db: &ContentDb, key: ContentKey) -> Role {
 }
 
 fn is_station(db: &ContentDb, key: ContentKey) -> bool {
-    db.unit(key).is_some_and(|d| EntityKind::of(&d.class, &d.movement) == EntityKind::Station)
+    db.unit(key).is_some_and(|d| EntityKind::of_def(d) == EntityKind::Station)
 }
 
 fn cost_sum(db: &ContentDb, key: ContentKey) -> Fixed {
@@ -411,7 +411,7 @@ impl SkirmishController {
                 }
             } else if view.player(u.owner).is_none() {
                 // Neutral: a mining node, once somebody's sensors reach it.
-                if let Some(d) = db.unit(u.def).filter(|d| EntityKind::of(&d.class, &d.movement) == EntityKind::Resource) {
+                if let Some(d) = db.unit(u.def).filter(|d| EntityKind::of_def(d) == EntityKind::Resource) {
                     let res = if d.class.0 == "latinum" { 1 } else { d.resource.unwrap_or(0) };
                     self.nodes.insert(u.id, (u.pos, res));
                 }

@@ -22,7 +22,7 @@ use crate::sim_link::{ContentRes, Selection, SimLink};
 
 /// A resource node: a moon, asteroid or latinum field, by its definition.
 fn is_resource(db: &ContentDb, view: &WorldView, id: EntityId) -> bool {
-    view.unit(id).and_then(|u| db.unit(u.def)).is_some_and(|d| EntityKind::of(&d.class, &d.movement) == EntityKind::Resource)
+    view.unit(id).and_then(|u| db.unit(u.def)).is_some_and(|d| EntityKind::of_def(d) == EntityKind::Resource)
 }
 
 fn is_miner(db: &ContentDb, view: &WorldView, id: EntityId) -> bool {
@@ -59,7 +59,7 @@ pub(super) fn rally_builders(
                 && db.unit(u.def).is_some_and(|d| {
                     !d.build.list.is_empty()
                         && d.movement.max_speed == Fixed::ZERO
-                        && matches!(EntityKind::of(&d.class, &d.movement), EntityKind::Station | EntityKind::Craft)
+                        && matches!(EntityKind::of_def(d), EntityKind::Station | EntityKind::Craft)
                 })
         })
     })
