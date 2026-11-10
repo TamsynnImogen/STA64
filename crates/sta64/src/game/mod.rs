@@ -14,7 +14,10 @@
 //! - [`apply_race`] points the HUD at the local race's GUI cfg and the music at
 //!   its playlist once the map has loaded;
 //! - [`outcome`] says when a side has been eliminated: a notice, a log line and
-//!   a banner.
+//!   a banner;
+//! - [`flow`] is the front end around it (INT-M4): launch, loading, the match, back.
+
+pub mod flow;
 
 use std::sync::Arc;
 
@@ -273,5 +276,7 @@ impl Plugin for GamePlugin {
 /// Keeps `Arc<Races>` handy for the map view.
 pub type SharedRaces = Arc<Races>;
 
+#[cfg(test)]
+mod flow_tests;
 #[cfg(test)]
 mod tests;
