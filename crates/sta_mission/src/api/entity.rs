@@ -359,8 +359,9 @@ pub(crate) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
             && (!n.is_finite() || n.fract() != 0.0) {
             return Err(mlua::Error::runtime("Entity.add requires an integer player slot"));
         }
-        let owner = player_of(&c.borrow(), &args[1]).filter(|p| p.is_player())
-            .ok_or_else(|| mlua::Error::runtime("Entity.add requires a valid owned player in the configured numbering mode"))?;
+        let owner = player_of(&c.borrow(), &args[1])
+            .filter(|p| p.is_player() || *p == sta_sim::world::NEUTRAL)
+            .ok_or_else(|| mlua::Error::runtime("Entity.add requires a valid player or neutral owner in the configured numbering mode"))?;
         let Value::Table(point) = &args[2] else {
             return Err(mlua::Error::runtime("Entity.add requires a Vector"));
         };

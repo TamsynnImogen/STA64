@@ -8,6 +8,7 @@ use std::rc::Rc;
 
 use sta_core::{ContentKey, EntityId, Fixed, PlayerId, Vec3};
 use sta_sim::SimEvent;
+use sta_sim::world::{EntityKind, NEUTRAL};
 use sta_sim::command::{Command, CommandKind, Edit, Order, Target};
 
 use super::Ctx;
@@ -27,11 +28,19 @@ struct QueuedAction {
 }
 
 pub(super) fn queue_spawn(c: &mut Ctx, odf: ContentKey, owner: PlayerId, pos: Vec3) -> Result<EntityRef, &'static str> {
-    if !owner.is_player() {
-        return Err("Entity.add requires a player slot 0..7");
+    if !owner.is_player() && owner != NEUTRAL {
+        return Err("Entity.add requires a player slot 0..7 or a neutral resource owner");
     }
     let content = c.content.as_ref().ok_or("Entity.add requires content")?;
     let def = content.unit(odf).ok_or("Entity.add requires a unit definition")?;
+    // Match the core's resource-neutrality classification, including explicit
+    // resource metadata on definitions whose class has a different kind.
+    if owner == NEUTRAL
+        && EntityKind::of(&def.class, &def.movement) != EntityKind::Resource
+        && def.resource.is_none()
+    {
+        return Err("Entity.add neutral ownership requires a resource definition");
+    }
     let heading = (Fixed::ZERO, Fixed::ONE);
     // This is request data for getters, not a unit inserted in the world.
     // Its NONE id must never be emitted in a command or exposed as a real ID.
