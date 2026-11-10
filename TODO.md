@@ -71,6 +71,9 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [?] FO4 maps now show Dominion/other ships, defence platforms, corvettes and yards that were missing (models found via ODF `basename`) — bed098d
 - [?] The editor's `dlight` arrow gizmo no longer shows; lighting direction matches the game on a map with dlights — aa70e99
 
+- [?] Android / Waydroid first APK (TOOL-10, #253): manually install the ARM64 debug APK and open STA64; record its hash, Android version/active ABI, first-screen result and any native-loader/renderer errors. The current APK contains no original game data and has no SAF importer yet; an empty catalogue is expected. A translated x86_64 Waydroid run is separate from physical ARM64 evidence ([steps and limits](docs/ANDROID_SUPPORT.md#waydroid-smoke-testing)).
+- [?] Android lifecycle (TOOL-10, #253): background and resume the app; the frontend should recover without stale clicks or a crash. With staged user-owned content, also check that a running match does not catch up background time or lose the player's existing pause state. Record audio/surface-recreation failures separately; audio focus remains a follow-up.
+
 ## Now (M2: a map you can fly in)
 
 - [ ] Strategic view, next: stack overlapping icons into one fleet icon with a count (Sins-style); grid/height bars at strategic zoom (`cfgSTRATEGIC_GRID_RENDER`)
