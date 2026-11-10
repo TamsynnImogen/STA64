@@ -9,9 +9,9 @@
 //!   ([`HudConfig::gui`], CON-12), places from HUD.md's bottom-row rules.
 //! - **Info panel**: one object (low), a builder (middle), a group (high).
 //!   A group tile click selects the unit (Shift removes it).
-//! - **Grid**: 5 x 3 cells. The top page issues UI-02's orders on the own
-//!   selection (Stop, the three formations) and opens the build page for a
-//!   builder. The build page lists the builder's build list, through the tech
+//! - **Grid**: 5 x 3 cells. The top page derives shared actions from owned
+//!   units' content capabilities and current flags. The build page lists the
+//!   first eligible builder's build list, through the tech
 //!   tree ([`TechTree::build_options`](sta_content::TechTree::build_options))
 //!   when the content has one, else the def's list; locked entries are shown
 //!   disabled, hidden ones left out. A press queues `Order::Build`. A builder
@@ -29,24 +29,28 @@
 pub mod frame;
 pub mod layout;
 pub mod model;
+pub mod commands;
 mod panels;
 
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use sta_content::GuiLayout;
-use sta_sim::command::{CommandKind, Order};
+use sta_sim::command::{CommandKind, Order, Target};
 use sta_sim::{ContentKey, EntityId, Vec3 as SimVec3};
 
 pub use layout::{HudLayout, InfoHeight};
 pub use model::{Act, HudFeed, Page};
-use model::{Models, command, models};
+use model::{Models, TargetMode, command, models};
 use panels::{GridCell, GridPanel, GroupTile, InfoPanel, ResourceStrip};
 
 use super::notices::{Notice, NoticePlugin, NoticeRoot, Severity};
 use super::radar::{RadarPlugin, RadarRoot};
 use super::theme::{ButtonClicked, Theme, ThemePlugin};
 use crate::app::GameSet;
-use crate::input::orders::Aim;
+use crate::input::orders::{Aim, OrderTargets, formation_moves};
+use crate::input::select::{Targetable, unit_under};
+use sta_sim::view::UnitFlags;
+use sta_sim::world::EntityKind;
 use crate::sim_link::{CommandQueue, ContentRes, OrderIssued, OrderKind, Selection, SelectionChanged, SimLink};
 
 /// What the HUD is drawn from and how it fits the screen.
@@ -88,6 +92,7 @@ pub struct HudState {
     pub page: Page,
     /// A build waiting for a site.
     pub placing: Option<Armed>,
+    pub targeting: Option<TargetMode>,
     drawn: Option<Models>,
     height: Option<InfoHeight>,
     logged: String,
@@ -105,7 +110,7 @@ pub struct HudPointer(pub bool);
 /// Run condition for the map's selection and order systems: the pointer is not
 /// over the HUD and no placement is waiting for the click.
 pub fn map_input_free(pointer: Option<Res<HudPointer>>, state: Option<Res<HudState>>) -> bool {
-    !pointer.is_some_and(|p| p.0) && !state.is_some_and(|s| s.placing.is_some())
+    !pointer.is_some_and(|p| p.0) && !state.is_some_and(|s| s.placing.is_some() || s.targeting.is_some())
 }
 
 pub struct HudPlugin;
@@ -128,6 +133,7 @@ impl Plugin for HudPlugin {
             .init_resource::<HudFeed>()
             .init_resource::<HudState>()
             .init_resource::<HudPointer>()
+            .init_resource::<OrderTargets>()
             .init_resource::<CommandQueue>()
             .add_message::<OrderIssued>()
             .add_message::<SelectionChanged>()
@@ -194,7 +200,7 @@ fn refresh(
     mut grid_panel: Query<(Entity, &mut Node, Option<&Children>), (With<GridPanel>, Without<ResourceStrip>, Without<InfoPanel>)>,
 ) {
     // The build page needs a builder; without one it is the top page.
-    if state.page == Page::Build && model::builder(&feed).is_none() {
+    if state.page == Page::Build && (!commands::shared(&feed).build || model::builder(&feed).is_none()) {
         state.page = Page::Top;
     }
     let now = models(&feed, state.page, layout.0.no_resource);
@@ -321,27 +327,64 @@ fn press(
     mut selection: ResMut<Selection>,
     mut changed: MessageWriter<SelectionChanged>,
     mut notices: MessageWriter<Notice>,
+    mut targets: ResMut<OrderTargets>,
 ) {
     for ButtonClicked(e) in clicks.read() {
         if let Ok(GroupTile(id)) = tiles.get(*e) {
-            let shift = keys.as_ref().is_some_and(|k| k.pressed(KeyCode::ShiftLeft) || k.pressed(KeyCode::ShiftRight));
-            selection.0 = if shift { selection.0.iter().copied().filter(|s| s != id).collect() } else { vec![*id] };
+            let shift = keys
+                .as_ref()
+                .is_some_and(|k| k.pressed(KeyCode::ShiftLeft) || k.pressed(KeyCode::ShiftRight));
+            selection.0 = if shift {
+                selection.0.iter().copied().filter(|s| s != id).collect()
+            } else {
+                vec![*id]
+            };
             changed.write(SelectionChanged);
             continue;
         }
-        let Ok(GridCell(act)) = cells.get(*e) else { continue };
+        let Ok(GridCell(act)) = cells.get(*e) else {
+            continue;
+        };
         match act {
             Act::OpenBuild => state.page = Page::Build,
             Act::Back => {
                 state.page = Page::Top;
                 state.placing = None;
+                state.targeting = None;
             }
-            Act::Build { builder, what, odf, site: true } => {
-                state.placing = Some(Armed { builder: *builder, what: *what, odf: odf.clone() });
-                notices.write(Notice::new(Severity::Info, format!("Place {odf}: click the map (Esc cancels)")));
+            Act::Target(mode) if target_mode_available(&feed, *mode) => {
+                state.placing = None;
+                state.targeting = Some(*mode);
+                notices.write(Notice::new(
+                    Severity::Info,
+                    format!("{mode:?}: click the map (Esc cancels)"),
+                ));
+            }
+            Act::Build {
+                builder,
+                what,
+                odf,
+                site: true,
+            } => {
+                if !commands::shared(&feed).build
+                    || model::builder(&feed).is_none_or(|u| u.id != *builder)
+                {
+                    continue;
+                }
+                state.targeting = None;
+                state.placing = Some(Armed {
+                    builder: *builder,
+                    what: *what,
+                    odf: odf.clone(),
+                });
+                notices.write(Notice::new(
+                    Severity::Info,
+                    format!("Place {odf}: click the map (Esc cancels)"),
+                ));
             }
             other => {
                 if let Some((kind, units)) = command(&feed, other) {
+                    if matches!(&kind, CommandKind::Order(Order::Stop { .. })) { clear_order_targets(&mut targets, &units); }
                     if let CommandKind::Order(o) = &kind
                         && let Some(k) = OrderKind::of(o)
                     {
@@ -366,9 +409,54 @@ fn place_on_click(
     feed: Res<HudFeed>,
     mut queue: ResMut<CommandQueue>,
     mut issued: MessageWriter<OrderIssued>,
+    units: Targetable,
+    mut targets: ResMut<OrderTargets>,
 ) {
-    let Some(armed) = state.placing.clone() else { return };
-    if keys.is_some_and(|k| k.just_pressed(KeyCode::Escape)) || feed.view.unit(armed.builder).is_none() {
+    if keys
+        .as_ref()
+        .is_some_and(|k| k.just_pressed(KeyCode::Escape))
+        || buttons
+            .as_ref()
+            .is_some_and(|b| b.just_pressed(MouseButton::Right))
+    {
+        state.placing = None;
+        state.targeting = None;
+        return;
+    }
+    if let Some(mode) = state.targeting {
+        if !target_mode_available(&feed, mode) {
+            state.targeting = None;
+            return;
+        }
+        let Some(buttons) = buttons.as_ref() else {
+            return;
+        };
+        if !buttons.just_pressed(MouseButton::Left) || pointer.0 {
+            return;
+        }
+        let Some(a) = aim.0 else { return };
+        let target = unit_under(a.cursor, a.ray, &units);
+        let own = feed.own_selection();
+        let heights: Vec<f32> = own.iter().filter_map(|id| feed.view.unit(*id).map(|u| u.pos.y.to_f32())).collect();
+        let y = if heights.is_empty() { 0.0 } else { heights.iter().sum::<f32>() / heights.len() as f32 };
+        let point = ground_point(a.ray, y);
+        if let Some((orders, ids)) = target_order(&feed, mode, target, point) {
+            if let Some(kind) = orders.first().and_then(OrderKind::of) {
+                issued.write(OrderIssued { units: ids, kind });
+            }
+            for order in orders {
+                record_move_target(&mut targets, &order);
+                queue.0.push(CommandKind::Order(order));
+            }
+            state.targeting = None;
+        }
+        return;
+    }
+    let Some(armed) = state.placing.clone() else {
+        return;
+    };
+    if !commands::shared(&feed).build || model::builder(&feed).is_none_or(|u| u.id != armed.builder)
+    {
         state.placing = None;
         return;
     }
@@ -376,7 +464,9 @@ fn place_on_click(
     if !buttons.just_pressed(MouseButton::Left) || pointer.0 {
         return;
     }
-    let (Some(a), Some(b)) = (aim.0, feed.view.unit(armed.builder)) else { return };
+    let (Some(a), Some(b)) = (aim.0, feed.view.unit(armed.builder)) else {
+        return;
+    };
     let y = b.pos.y.to_f32();
     let dir = *a.ray.direction;
     if dir.y.abs() < 1e-4 {
@@ -389,9 +479,195 @@ fn place_on_click(
     // Render space to the sim's: z runs the other way.
     let hit = a.ray.origin + dir * t;
     let at = SimVec3::from_f32([hit.x, y, -hit.z]);
-    queue.0.push(CommandKind::Order(Order::Build { builder: armed.builder, what: armed.what, at: Some(at) }));
-    issued.write(OrderIssued { units: vec![armed.builder], kind: OrderKind::Build });
+    queue.0.push(CommandKind::Order(Order::Build {
+        builder: armed.builder,
+        what: armed.what,
+        at: Some(at),
+    }));
+    issued.write(OrderIssued {
+        units: vec![armed.builder],
+        kind: OrderKind::Build,
+    });
     state.placing = None;
+}
+
+fn target_mode_available(feed: &HudFeed, mode: TargetMode) -> bool {
+    let c = commands::shared(feed);
+    match mode {
+        TargetMode::Move => c.move_order,
+        TargetMode::Attack => c.attack,
+        TargetMode::Mine => c.mine,
+        TargetMode::Rally => c.build,
+    }
+}
+
+/// Resolve a grid target against the current view, after capability and ownership checks.
+fn target_order(
+    feed: &HudFeed,
+    mode: TargetMode,
+    target: Option<EntityId>,
+    point: Option<SimVec3>,
+) -> Option<(Vec<Order>, Vec<EntityId>)> {
+    if !target_mode_available(feed, mode) { return None; }
+    let ids = feed.own_selection();
+    let orders = match mode {
+        TargetMode::Move => {
+            let picked: Vec<(EntityId, Vec3)> = ids.iter().filter_map(|id| feed.view.unit(*id).map(|u| (*id, Vec3::from(u.pos.to_f32())))).collect();
+            if picked.is_empty() { return None; }
+            let centre = picked.iter().fold(Vec3::ZERO, |a, (_, pos)| a + *pos) / picked.len() as f32;
+            let dest = Vec3::from(point?.to_f32());
+            formation_moves(&picked, centre, dest).into_iter().map(|(id, to)| Order::Move { units: vec![id], to: SimVec3::from_f32(to.to_array()), queue: false }).collect()
+        }
+        TargetMode::Attack => {
+            let id = target?;
+            let u = feed.view.unit(id)?;
+            if u.flags.contains(UnitFlags::DYING) || u.hull[1] <= sta_sim::Fixed::ZERO || !enemy_target(feed, u.owner) { return None; }
+            vec![Order::Attack { units: ids.clone(), target: id }]
+        }
+        TargetMode::Mine => {
+            let id = target?;
+            let u = feed.view.unit(id)?;
+            let db = feed.content.as_deref()?;
+            let def = db.unit(u.def)?;
+            if u.flags.contains(UnitFlags::DYING) || EntityKind::of(&def.class, &def.movement) != EntityKind::Resource { return None; }
+            vec![Order::Mine { units: ids.clone(), node: id }]
+        }
+        TargetMode::Rally => {
+            let at = match target.and_then(|id| feed.view.unit(id).filter(|u| !u.flags.contains(UnitFlags::DYING)).map(|_| id)) {
+                Some(id) => Target::Entity(id),
+                None => Target::Point(point?),
+            };
+            vec![Order::Rally { builders: ids.clone(), at }]
+        }
+    };
+    Some((orders, ids))
+}
+
+fn enemy_target(feed: &HudFeed, owner: sta_sim::PlayerId) -> bool {
+    if owner == feed.player || !owner.is_player() { return false; }
+    let mine = feed.view.player(feed.player);
+    let theirs = feed.view.player(owner);
+    if let (Some(m), Some(t)) = (mine, theirs)
+        && m.team == t.team { return false; }
+    let relation = mine.and_then(|m| m.relations.iter().find(|(id, _)| *id == owner).map(|(_, relation)| *relation))
+        .or_else(|| theirs.and_then(|t| t.relations.iter().find(|(id, _)| *id == feed.player).map(|(_, relation)| *relation)));
+    match relation {
+        Some(sta_sim::view::Relation::Enemy) | None => true,
+        Some(_) => false,
+    }
+}
+
+fn record_move_target(targets: &mut OrderTargets, order: &Order) {
+    if let Order::Move { units, to, .. } = order {
+        for id in units { targets.0.insert(*id, *to); }
+    }
+}
+
+fn clear_order_targets(targets: &mut OrderTargets, units: &[EntityId]) {
+    for id in units { targets.0.remove(id); }
+}
+
+fn ground_point(ray: Ray3d, y: f32) -> Option<SimVec3> {
+    let dir = *ray.direction;
+    if dir.y.abs() < 1e-4 {
+        return None;
+    }
+    let t = (y - ray.origin.y) / dir.y;
+    if t <= 0.0 {
+        return None;
+    }
+    let hit = ray.origin + dir * t;
+    Some(SimVec3::from_f32([hit.x, y, -hit.z]))
+}
+
+#[cfg(test)]
+mod target_tests {
+    use super::*;
+    use sta_sim::view::{PlayerView, Relation, UnitView};
+    use sta_sim::{Fixed, PlayerId, TeamId, WorldView};
+    use std::sync::Arc;
+
+    fn feed(selected: &[u32]) -> HudFeed {
+        let db = sta_content::fake::db();
+        let make = |id, odf, owner| UnitView {
+            id: EntityId(id), def: db.key(odf).unwrap(), owner: PlayerId(owner),
+            pos: SimVec3::ZERO, heading: (Fixed::ZERO, Fixed::ONE), speed: Fixed::ZERO,
+            hull: [Fixed::ONE; 2], shields: [[Fixed::ZERO; 2]; 4],
+            flags: UnitFlags::SELECTABLE, progress: None,
+        };
+        HudFeed {
+            view: Arc::new(WorldView { units: vec![make(1, "fx_cruiser", 1), make(2, "fx_miner", 1), make(3, "fx_yard", 1), make(4, "fx_cruiser", 2), make(5, "fx_moon", 255)], ..Default::default() }),
+            player: PlayerId(1), selected: selected.iter().copied().map(EntityId).collect(), content: Some(Arc::new(db)),
+        }
+    }
+
+    fn player(id: u8, team: u8, relation: Option<Relation>) -> PlayerView {
+        PlayerView { id: PlayerId(id), team: TeamId(team), resources: Vec::new(), officers: [Fixed::ZERO; 2], eliminated: false,
+            relations: relation.map(|r| vec![(PlayerId(if id == 1 { 2 } else { 1 }), r)]).unwrap_or_default() }
+    }
+
+    #[test]
+    fn target_actions_make_supported_orders() {
+        let p = Some(SimVec3::from_f32([10.0, 0.0, 20.0]));
+        let f = feed(&[1]);
+        assert!(matches!(target_order(&f, TargetMode::Move, None, p), Some((orders, _)) if matches!(orders.as_slice(), [Order::Move { units, to, .. }] if units == &[EntityId(1)] && Some(*to) == p)));
+        assert!(matches!(target_order(&f, TargetMode::Attack, Some(EntityId(4)), p), Some((orders, _)) if matches!(orders.as_slice(), [Order::Attack { target: EntityId(4), .. }])));
+        assert!(target_order(&f, TargetMode::Attack, Some(EntityId(1)), p).is_none());
+        assert!(target_order(&f, TargetMode::Attack, Some(EntityId(99)), p).is_none());
+        let f = feed(&[2]);
+        assert!(matches!(target_order(&f, TargetMode::Mine, Some(EntityId(5)), p), Some((orders, _)) if matches!(orders.as_slice(), [Order::Mine { node: EntityId(5), .. }])));
+        assert!(target_order(&f, TargetMode::Mine, Some(EntityId(4)), p).is_none());
+        let f = feed(&[3]);
+        assert!(matches!(target_order(&f, TargetMode::Rally, None, p), Some((orders, _)) if matches!(orders.as_slice(), [Order::Rally { builders, at: Target::Point(_) }] if builders == &[EntityId(3)])));
+        assert!(matches!(target_order(&f, TargetMode::Rally, Some(EntityId(4)), p), Some((orders, _)) if matches!(orders.as_slice(), [Order::Rally { at: Target::Entity(EntityId(4)), .. }])));
+    }
+
+    #[test]
+    fn move_keeps_offsets_and_updates_and_clears_waypoint_cache() {
+        let mut f = feed(&[1, 2]);
+        Arc::make_mut(&mut f.view).units[1].pos = SimVec3::from_f32([100.0, 0.0, 0.0]);
+        let (orders, ids) = target_order(&f, TargetMode::Move, None, Some(SimVec3::from_f32([1000.0, 0.0, 0.0]))).unwrap();
+        assert_eq!(ids, [EntityId(1), EntityId(2)]);
+        assert_eq!(orders, [
+            Order::Move { units: vec![EntityId(1)], to: SimVec3::from_f32([950.0, 0.0, 0.0]), queue: false },
+            Order::Move { units: vec![EntityId(2)], to: SimVec3::from_f32([1050.0, 0.0, 0.0]), queue: false },
+        ]);
+        let mut cache = OrderTargets::default();
+        for order in &orders { record_move_target(&mut cache, order); }
+        assert_eq!(cache.0.get(&EntityId(1)), Some(&SimVec3::from_f32([950.0, 0.0, 0.0])));
+        assert_eq!(cache.0.get(&EntityId(2)), Some(&SimVec3::from_f32([1050.0, 0.0, 0.0])));
+        clear_order_targets(&mut cache, &ids);
+        assert!(cache.0.is_empty());
+    }
+
+    #[test]
+    fn attack_rejects_known_allies_and_neutral_relations() {
+        let mut f = feed(&[1]);
+        let p = Some(SimVec3::ZERO);
+        Arc::make_mut(&mut f.view).players = vec![player(1, 1, None), player(2, 1, None)];
+        assert!(target_order(&f, TargetMode::Attack, Some(EntityId(4)), p).is_none(), "same team");
+        Arc::make_mut(&mut f.view).players = vec![player(1, 1, Some(Relation::Ally)), player(2, 2, None)];
+        assert!(target_order(&f, TargetMode::Attack, Some(EntityId(4)), p).is_none(), "ally relation");
+        Arc::make_mut(&mut f.view).players = vec![player(1, 1, Some(Relation::Neutral)), player(2, 2, None)];
+        assert!(target_order(&f, TargetMode::Attack, Some(EntityId(4)), p).is_none(), "neutral relation");
+        Arc::make_mut(&mut f.view).players = vec![player(1, 1, Some(Relation::Enemy)), player(2, 2, None)];
+        assert!(target_order(&f, TargetMode::Attack, Some(EntityId(4)), p).is_some());
+        Arc::make_mut(&mut f.view).units.iter_mut().find(|u| u.id == EntityId(4)).unwrap().owner = sta_sim::PlayerId(253);
+        assert!(target_order(&f, TargetMode::Attack, Some(EntityId(4)), p).is_none(), "nonplayer neutral");
+    }
+
+    #[test]
+    fn stale_and_disabled_selection_cannot_emit_target_orders() {
+        let p = Some(SimVec3::ZERO);
+        let mut f = feed(&[1]);
+        Arc::make_mut(&mut f.view).units[0].flags = UnitFlags::SELECTABLE.with(UnitFlags::ENGINES_OFF, true);
+        assert!(target_order(&f, TargetMode::Move, None, p).is_none());
+        f.selected = vec![EntityId(99)];
+        assert!(target_order(&f, TargetMode::Attack, Some(EntityId(4)), p).is_none());
+        f.selected = vec![EntityId(3)];
+        Arc::make_mut(&mut f.view).units[2].owner = PlayerId(2);
+        assert!(target_order(&f, TargetMode::Rally, None, p).is_none());
+    }
 }
 
 #[cfg(test)]
