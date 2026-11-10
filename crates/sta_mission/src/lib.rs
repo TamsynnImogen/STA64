@@ -14,47 +14,26 @@
 //! plain scenario and is listed for conversion. Nothing here is ever an error
 //! that stops a map loading.
 
-use std::collections::HashMap;
+use sta_content::strings::LabelMap;
 use sta_vfs::Vfs;
 
-/// `label.map`: `section { + key {Text} }`. Only the `+ key {text}` lines matter.
+/// `label.map`: `section { + key {Text} }`. Parsing lives in
+/// [`sta_content::strings::LabelMap`] (CON-11); this wraps it for the resolver.
 #[derive(Debug, Default)]
-pub struct Labels {
-    by_key: HashMap<String, Vec<String>>,
-}
+pub struct Labels(LabelMap);
 
 impl Labels {
     pub fn parse(text: &str) -> Labels {
-        let mut by_key: HashMap<String, Vec<String>> = HashMap::new();
-        for line in text.lines() {
-            let t = line.trim();
-            let Some(rest) = t.strip_prefix('+') else { continue };
-            let Some(open) = rest.find('{') else { continue };
-            let Some(close) = rest.rfind('}') else { continue };
-            if close <= open {
-                continue;
-            }
-            let key = rest[..open].trim().to_ascii_lowercase();
-            let value = rest[open + 1..close].trim().to_owned();
-            if !key.is_empty() && !value.is_empty() {
-                let v = by_key.entry(key).or_default();
-                if !v.contains(&value) {
-                    v.push(value);
-                }
-            }
-        }
-        Labels { by_key }
+        Labels(LabelMap::parse(text))
     }
 
+    /// Reads `label.map` from every VFS layer (mods extend the base game's).
     pub fn load(vfs: &Vfs) -> Labels {
-        vfs.read("label.map")
-            .and_then(Result::ok)
-            .map(|b| Labels::parse(&String::from_utf8_lossy(&b)))
-            .unwrap_or_default()
+        Labels(LabelMap::load(vfs))
     }
 
     pub fn get(&self, key: &str) -> &[String] {
-        self.by_key.get(&key.to_ascii_lowercase()).map(Vec::as_slice).unwrap_or(&[])
+        self.0.get(key)
     }
 }
 

@@ -182,6 +182,7 @@ fn invalid_stop_rejects_without_mutating_active_attack_or_queue() {
         (PlayerId(1), station),
         (PlayerId(0), EntityId(999)),
         (PlayerId(0), moon),
+        (PlayerId::SCRIPT, moon), // Kind rejection also bypasses owner filtering.
     ] {
         let mut sim = Sim::from_setup(&setup);
         let mut control = Sim::from_setup(&setup);

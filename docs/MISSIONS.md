@@ -59,6 +59,262 @@ covers every case where a BZN or SOL map names a script that isn't there.
 Errors inside a Lua script that does exist are a separate case. They are
 reported, the failing callback is disabled, and the match continues.
 
+## Player numbers for converted missions
+
+`MissionConfig::player_numbering` is explicit host configuration. Its default,
+`PlayerNumbering::Slots`, keeps the existing Lua/core slot convention (0–7).
+`ArmadaTeams` adapts converted missions that use BZN team numbers: Lua 1–8
+map to core slots 0–7, and Lua 0 maps to the neutral owner. `Player` handles
+store core IDs; `.number`, numeric finder/monitor owners, visibility/relation
+arguments, `Entity.add` owners and `A2.GetRealTeam` use the selected conversion.
+`Game.localSlot` and `MissionConfig::seat` always remain core slot numbers.
+Invalid explicit team filters fail with a Lua error instead of matching all
+owners; absent/nil filters remain unrestricted. Neutral spawning is not supported.
+
+This opt-in adapter follows the observed converted mission/map pairing. It does
+not settle the original MMM numbering convention or automatically choose a mode
+for a content profile. The application host still needs to select the mode when
+it integrates this runtime.
+
+Craft queries include parsed `sensor`, `shipyard` and `starbase` definitions.
+The content loader already categorizes `sensor` as a craft; registration metadata
+establishes Producer → Craft and Starbase → Shipyard → Producer. These checks
+allow the converted mission to find its static portal/base. They do not add a
+complete mapping from every ODF class label to every MMM type name.
+
+## External campaign startup and staging
+
+The ignored `a2_campaign_startup` probe reads each external port's header-selected
+BZN, loads installed content once, then creates a fresh simulation with eight idle
+seats for 30 ticks per mission. It preserves map actors/owners and supplies complete
+simulation events to the runtime. It checks uncaught Lua errors and rejected
+commands, and reports loader warnings, unsupported lookups and handled keyword
+log messages separately. This is startup evidence, not complete campaign or AI play.
+
+With only the external source directory mounted, 34 of the current 36 ports resolve
+through the production resolver. Economics Tutorial and Crucis Major need filename
+aliases. `tools/stage_a2_ports.py` creates a new private stage containing original
+Lua filenames and header-declared BZN-stem aliases. It preserves bytes, rejects
+source symlinks/collisions/existing destinations, and writes a SHA-256 completion
+manifest last. Inputs must remain stable while read; an I/O failure can leave an
+incomplete new directory. The helper does not install files.
+
+```sh
+python3 tools/stage_a2_ports.py --ports "$STA64_A2_PORTS" --out "$STA64_A2_PACKAGE"
+renice -n 19 -p $$ >/dev/null
+cargo test -p sta_mission --test a2_campaign_startup --jobs 2 -- --ignored --nocapture
+```
+
+Export `STA64_A2_INSTALL`, `STA64_A2_PORTS` and a new `STA64_A2_PACKAGE` path in an
+existing parent directory before staging. The optional `STA64_A2_MOD` defaults to
+STA2 Classic. In package mode the probe mounts the package without mounting the
+source directory, verifies resolved script bytes against the source, and checks
+that all runtime scripts actually come from the package's VFS layer.
+
+For longer natural runs, set `STA64_A2_STARTUP_TICKS=600` before the same
+command. The default remains 30 ticks; accepted overrides are integers from
+1 to 36000. At the current 30 Hz, 600 ticks cover 20 simulation seconds.
+The probe reports the horizon, objective count and finished flag, while retaining
+its existing failures for uncaught Lua errors and rejected commands. It injects
+no input or helper calls. These counters are observations, not objective or
+complete-mission acceptance checks.
+
+The staged 30-tick sweep passes all 36 production resolutions and startups. It
+still reports 199 handled keyword messages across six missions, including unsupported
+forceOntoMap writes, plus tutorial input fallbacks. These messages remain open
+compatibility work; a startup pass does not mean every mission intent succeeded.
+
+## Pending destruction hooks
+
+`Monitor():hook(Monitor.Destroyed, entity, callback)` and
+`Monitor.destroyed(entity, callback)` accept queued or submitted `Entity.add`
+handles. Hooks retain the request reference and wait for its actual receipt;
+they never predict an entity ID or treat a missing ID as a wildcard. Once the
+receipt resolves, the hook checks that same batch's destruction events. A unit
+spawned and destroyed in one batch therefore supplies its real dead handle to
+the callback. Otherwise the existing rule applies: an explicit destruction
+event, or an observed live unit subsequently leaving the view, fires once.
+
+Rejected, missing or conflicting receipts stop waiting hooks without a death
+callback. Registering a hook on an already failed handle remains unsupported.
+`stop`, `unhook` and `Monitor.stopAll` cancel waiting hooks before polling; a
+later receipt cannot reactivate them. As with existing resolved event hooks,
+polling selects the batch's callbacks before invoking them: cancellation from
+one callback does not recall another callback already selected in that batch.
+These are STA64 bridge rules; native MMM timing and save/resume remain unverified.
+
+## Static entity cleanup
+
+`Entity.remove(entity)` is the dot-call counterpart of `entity:remove()`, using
+the same typed removal queue and SCRIPT Kill command. The static form requires
+exactly one Entity userdata; invalid arity or types error before queuing. Reads
+retain their current snapshot until the host steps the simulation and supplies
+the next view. A queued Entity.add handle waits for its actual spawn receipt
+before removal can dispatch. Failed spawn references follow the existing
+discard/diagnostic path, and repeated kills of stale resolved IDs retain the
+simulation's rejection behavior. Numeric IDs and batch/table removal are not
+overloads of this function. Native timing and idempotence remain unverified.
+
+## Converted Move spelling
+
+`Order.Move` and `GameObject.Order.Move` expose the existing `Order.Go` value
+through their shared enum table. Converted ports use this spelling at 17 sites
+across eight scripts, with vector destinations or entity handles. The alias
+uses Go's current point conversion, optional queue flag and normal owner-command
+ordering. Resolved entity positions are captured from the current mission view at the
+Lua call; this does not add target following. Pending actors retain the existing
+receipt-dependent command path. Raw string `"Move"`, path overloads and native
+Go/Move equivalence remain outside this spelling adapter.
+
+## Pending camera spots
+
+Cineractive spot requests can reference queued Entity.add handles. They retain
+only typed Rust references and arguments, then emit real entity IDs after spawn
+receipts resolve, before the next Lua callbacks. No predicted ID or spawn-position
+hint is substituted for a world entity. Within a source scene, later lookAt
+requests wait behind earlier unresolved spot requests, including generic calls
+with entity arguments. Offsets, fades and other presentation channels keep their
+existing paths.
+
+A validated new lookFrom cancels older deferred spot requests. Setting active
+false cancels deferred requests and clears an unresolved retained source, so a
+later lookAt cannot resurrect it. Failed or dead references discard the remaining
+deferred scene tail; already emitted requests are not recalled. Existing resolved,
+vector and path requests retain their previous behavior. Save/resume and native
+immediate timing remain unimplemented or unverified.
+
+## Cinematic object callbacks
+
+Registered mission objects may also define `cineractiveUpdate(self)` and
+`cineractiveFinish(self, forced)`. The runtime keeps its existing setup/update
+rules and selects these optional method handles before each normal update.
+It then runs the cinematic update while the actual `Cineractive.active`
+singleton is true. When an observed active level ends, it calls finish once
+with `forced=false`, consuming that notification before calling Lua. A finish
+error is recorded without repeating the same finish on the next tick. These
+phases share the existing five-error budget for their object. A failed phase
+aborts its remaining phases for that poll; pending finish detection requires
+a later successful poll and stops if that object exhausts its budget. Other
+registered objects and function callbacks continue independently.
+
+A finish can start another cinematic; its cinematic update begins on the
+next poll. The active flag is copied directly from the existing singleton,
+without duplicating its state or retaining a userdata borrow during callbacks.
+This is a polling bridge convention, not native immediate timing. Forced skips,
+incoming input and cinematic transitions entirely between observed polls are
+outside this subset. Objects still require setup or update; function-only
+registrations retain their existing behavior.
+
+## Permissive fallback diagnostics
+
+Unknown globals still return permissive stubs so incomplete missions can load.
+`MissionRuntime::unsupported()` records missing global reads as
+`stub global <name>` and fields reached through those stubs as
+`stub field <path>`, including missing MMM fields. Returned stub paths retain
+`()` for constructor/call results. The counts describe lookups, not function
+invocations. Lookup keys, including dynamically computed strings, form these
+paths; function arguments are not inspected. Non-string keys use
+stable type labels without invoking script formatting metamethods.
+
+Bound APIs retain their existing diagnostics. Known functions do not acquire
+stub diagnostics, and stub operations retain their permissive behavior.
+Seeing a name in the counter identifies a missing API; it does not implement
+that API or establish native behavior for the rest of a mission.
+
+## Named condition monitors
+
+Converted rule scripts can use
+`Monitor(id, initialState, nil, predicate, argument)` and
+`monitor:hook(id, MonitorHook.Type.OnTrue, nil, callback, argument)`.
+The metadata identifies these parameter positions; the following timing is an
+explicit STA64 bridge policy. Each active predicate runs once per tick before
+mission updates, in registration order, as `predicate(monitor, argument)`.
+It must return a boolean. `OnTrue` fires on a false-to-true edge relative to the
+initial state, committed before `callback(monitor, argument)`. Nil arguments
+are preserved. Named `.id` is the string ID and `.state` is the last boolean;
+legacy event monitor fields keep their previous behavior.
+
+Tick-start snapshots defer new monitors/hooks until a later poll; stop/unhook
+cancel pending work immediately. `stopAll` includes both monitor forms. Five
+accumulated condition errors stop a monitor; five hook errors disable that
+hook. Errors remain isolated from other monitors and mission updates. Duplicate
+IDs, malformed registrations, non-nil table arguments and other hook kinds
+raise errors. `OnFalse`, `WhileTrue`, `WhileFalse`, `OnStop`, restart, and native
+edge/repetition defaults remain unimplemented or unverified.
+
+## DLL-shaped objective visibility
+
+`A2.ObjectivesDisplay_Set_Visibility(visible)` implements the inventoried
+`void ObjectivesDisplay_Set_Visibility(bool)` call shape. It accepts exactly
+one Lua boolean and changes the same mission-local flag as `Objectives.visible`.
+The change is immediately visible through `Objectives.visible` in Lua
+inspection; it does not replace goals, change completion or briefing data, or
+queue simulation or presentation commands. Invalid calls error before mutation.
+Each runtime owns its flag. Client rendering and native defaults remain
+unverified. The distinct file-loading boolean and objective-completion selector
+are not implemented by this adapter.
+
+## DLL-shaped object queries
+
+The `A2` table provides strict, read-only adapters for the inventoried call
+shapes `GetCurrentHealth(int)`, `GetMaxHealth(int)` and `IsOdf(int, char*)`.
+Health means the latest non-dying unit snapshot's current/max hull, matching
+`Entity.hull`/`maxHull`; missing or dying objects raise a Lua error. `IsOdf`
+compares the unit definition's name, case-insensitively and with an optional
+`.odf` suffix, as existing finder filters do. It does not match the class name
+or normalize paths. Missing/dying objects return false; a live object without
+its unit definition raises an error. IDs must be unsigned integral values,
+ODF names must be Lua strings, and arity must match exactly. Queries never
+queue commands and see writes only after the host advances the simulation.
+These are STA64 bridge policies; native defaults/overloads remain unverified.
+
+`A2.GetDistance(id, id)` implements the inventoried two-handle
+`float GetDistance(int&, int&)` call shape. It returns three-dimensional
+Euclidean distance between the latest non-dying snapshot positions, using the
+same position precision and distance helpers as the existing Entity/Vector
+API. The same live ID returns zero. Both arguments require strict unsigned
+integral IDs; missing or dying objects raise an error on either side. It
+queues no commands and sees a changed position only after the host supplies
+the next view. Path overloads, entity bounds/surface corrections, and native
+dimensional or invalid-handle defaults are unimplemented or unverified.
+
+`A2.IsRace(id, race)` reads the live unit definition's race, as `Entity.race`
+does, and compares it literally without ASCII case sensitivity. It does not
+strip `.odf`, accept paths or resolve race aliases. The exact call shape is
+`bool IsRace(int, char*const)`: a strict unsigned integral ID and a UTF-8
+string. Missing/dying objects return false; live objects without a definition
+raise an error. The query reads only the current snapshot and content, queues
+no commands, and does not infer race from the current owner's faction. Native
+string-comparison and invalid-object defaults remain unverified.
+
+The current model does not carry per-instance SetRace or assimilation race
+overrides. IsRace therefore describes the definition race, rather than
+attesting mutable-race parity after those unsupported operations.
+
+`A2.GetOriginalRace(id)` returns the live unit's spawn-definition race as an
+owned Lua string, verbatim from UnitDef.race. It requires exactly one unsigned
+integral entity ID. Missing/dying units and live units without a definition
+raise an error. An owner change does not change the value, and no command or
+native pointer escapes. The current sim retains the spawn definition; mutable
+race and replacement-history semantics remain unmodeled or unverified.
+
+`A2.IsVisibleToTeam(id, playerNumber)` reads membership in the latest
+`WorldView::visible_to` snapshot. Both arguments must be unsigned integral
+values; the player number uses the configured Slots or ArmadaTeams adapter,
+like GetRealTeam. It must resolve to a normal core player slot; neutral,
+reserved and invalid numbers raise errors even if the entity is absent.
+Missing/dying entities return false. The supplied visibility is authoritative
+for cloak and shared sight. The view's existing unrestricted legacy fallback
+when all visibility data is absent is preserved, as in Entity.canPlayerSee.
+No content definition, additional fog calculation, Core TeamId lookup or
+commands are involved.
+
+Private static observations of the nine calls in `a2_kling08S.dsl` show
+object-named globals passed first and the literal team value 1 second. This
+supports the chosen argument order; native fog, coalition and invalid-object
+defaults remain unverified. The number-to-seat interpretation is the explicit
+STA64 bridge policy, not a new simulation team rule.
+
 ## Conversion report
 
 `sta64 --mission-report` lists every map whose mission resolves to
@@ -96,3 +352,41 @@ platforms. The runtime replaces them with deterministic implementations, and
   its methods used), A1's DLLs import 213 functions by name from `Armada.exe`,
   bridge scenes included. Binding the missing ones: WORKPLAN LUA-05, LUA-06;
   `.drl` rules to Lua scaffolds: LUA-07.
+
+## Mission text callbacks
+
+`CommandKind::MissionText { text }` carries UTF-8 text through the normal
+simulation command and replay path. Configured, noneliminated player seats
+may submit up to 4096 bytes; reserved or unknown senders and larger payloads
+produce `Rejected`. Empty text and embedded NULs are preserved. Accepted
+commands emit `SimEvent::MissionText { player, seq, text }` in command order
+without changing physical world state. Sequence uniqueness remains the
+sender's responsibility. This seam provides neither chat display nor a
+frontend input producer.
+
+The observed converted tutorial call is
+`TextInput:hook(id, receiverTable, callback, argument, luaPattern)`.
+The callback receives `(receiverTable, text, argument)`, preserving nil.
+IDs and patterns must be UTF-8 strings, patterns are bounded to 4096 bytes,
+and duplicate active IDs raise an error. Matching uses the builtin Lua
+`string.find` captured when the runtime installs the binding. An empty-subject
+preflight catches some malformed patterns; other pattern errors can arise
+when an actual text reaches the malformed portion. Matching and callback
+errors share a cumulative five-error budget per stable hook registration.
+After five errors that registration is disabled. `TextInput:unhook(id)` is an
+explicit bridge extension; it removes registrations with that ID.
+
+After updating the view and resolving spawn receipts, `Controller::think`
+delivers only text from `MissionConfig.seat` before polling monitors and
+mission updates. It consumes `(player, seq)` once per view tick before Lua
+runs, including when callbacks fail. The host must deliver complete events
+with monotonically advancing views. Each event batch snapshots existing hook
+serials in registration order; removal cancels pending work immediately and
+new or replacement registrations wait for another batch. Callback errors are
+charged to their original serial, so replacement hooks retain their own
+budget. No context borrow is held across Lua matching or callbacks.
+
+These are STA64 bridge rules inferred from the authored call shape, rather
+than native MMM delivery defaults. The tutorial's text fallback can now be
+exercised headlessly. `Debug:getKeyState` and client keyboard/chat entry remain
+unimplemented or unverified; this binding never synthesizes device input.

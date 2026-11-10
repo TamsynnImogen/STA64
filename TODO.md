@@ -51,6 +51,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] Capability grid (UI-13): select a stationary yard (Build/Rally, no movement/formation buttons), a warship (Move/Attack/Stop/formations), or a freighter (Move/Mine); mixed groups show shared actions. Click a target button then the map/unit; Esc or right-click cancels. Grid Move keeps ship spacing and waypoint lines. Known allies/neutral relations cannot be targeted by Attack. Cell placement is a fallback; native visual layout still needs checking.
 
+- [?] Stop capability: select a stationary yard/station or an engine-disabled ship and check that Stop remains in the top grid while Move and formations stay unavailable; Stop clears the selected actors' orders. Mixed owned craft/station groups retain Stop; resources and dying units do not gain it.
+
 ## Checked earlier (morning list)
 
 Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
@@ -117,3 +119,4 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [x] Damage-state nodes hidden on healthy craft — `5287d6f`
 - [ ] Construction, cloak FX: a station under construction welds and firms up, `Built` flashes; a cloaked own unit goes translucent and back (RND-11)
 - [ ] Sprite fonts (UI-12): start a skirmish on Fleet Ops 4.0 (Roots), the HUD's resource strip and info panel text is drawn in the game's own bitmap font (FontSmall/FontMedium sheets, white glyphs tinted by the HUD colours); with a mod that has no fonts (or none mounted) it stays in the TTF. Check glyph colours and spacing; resource symbols (codes 0x80 and up) are not mapped to the i18n words yet ([sprite_font.rs](crates/sta64/src/ui/sprite_font.rs))
+- [?] Language packs (CON-11): `cargo test -p sta_content --lib strings -- --nocapture` lists a string and label count for every installed game and mod (A1, A2, A2 stock, Dominion War, FO, FO Roots, Fleet Ops 4.0, STA2 Classic) and passes; the UI tooltip "Double click to return to strategic mode." still shows in-game
