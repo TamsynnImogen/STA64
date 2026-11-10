@@ -40,6 +40,19 @@ pub(super) fn live(ctx: &Shared, name: &str, id: EntityId) -> mlua::Result<()> {
     }
 }
 
+fn finite_amount(name: &str, label: &str, value: &Value) -> mlua::Result<Fixed> {
+    let amount = match value {
+        Value::Integer(n) => *n as f64,
+        Value::Number(n) if n.is_finite() => *n,
+        _ => {
+            return Err(mlua::Error::runtime(format!(
+                "A2.{name} requires a finite numeric {label} value"
+            )));
+        }
+    };
+    Ok(Fixed::from_f64(amount))
+}
+
 pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()> {
     let c = ctx.clone();
     table.set(
@@ -94,17 +107,33 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
         "SetCurrentHealth",
         lua.create_function(move |_, args: MultiValue| {
             let id = handle("SetCurrentHealth", &args, 2)?;
-            let hull = match &args[1] {
-                Value::Integer(n) => *n as f64,
-                Value::Number(n) if n.is_finite() => *n,
-                _ => {
-                    return Err(mlua::Error::runtime(
-                        "A2.SetCurrentHealth requires a finite numeric hull value",
-                    ));
-                }
-            };
+            let hull = finite_amount("SetCurrentHealth", "hull", &args[1])?;
             live(&c, "SetCurrentHealth", id)?;
-            c.borrow_mut().edit(Edit::Hull(id, Fixed::from_f64(hull)));
+            c.borrow_mut().edit(Edit::Hull(id, hull));
+            Ok(())
+        })?,
+    )?;
+
+    let c = ctx.clone();
+    table.set(
+        "SetSpecialEnergy",
+        lua.create_function(move |_, args: MultiValue| {
+            let id = handle("SetSpecialEnergy", &args, 2)?;
+            let energy = finite_amount("SetSpecialEnergy", "energy", &args[1])?;
+            {
+                let c = c.borrow();
+                let unit = c.alive(id)
+                    .filter(|unit| unit.hull[0] > Fixed::ZERO)
+                    .ok_or_else(|| mlua::Error::runtime(format!(
+                        "A2.SetSpecialEnergy: object {} is not a live positive-hull unit", id.0
+                    )))?;
+                if c.def(unit).and_then(sta_sim::specials::energy_def).is_none() {
+                    return Err(mlua::Error::runtime(format!(
+                        "A2.SetSpecialEnergy: object {} has no defined energy pool", id.0
+                    )));
+                }
+            }
+            c.borrow_mut().edit(Edit::SetEnergy(id, energy));
             Ok(())
         })?,
     )?;

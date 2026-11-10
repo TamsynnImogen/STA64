@@ -307,6 +307,24 @@ are preserved; zero hull follows normal destruction for mortal units.
 These input and clamping rules are explicit STA64 policies, not verified native
 invalid-input or floating-point ABI behavior.
 
+`A2.SetSpecialEnergy(id, energy)` implements `void SetSpecialEnergy(int, float)`
+with exactly two arguments: an unsigned live positive-hull entity ID with a
+defined energy pool, and a finite Lua number in absolute energy units. Invalid
+types, arity, missing/dying/zero-hull targets and undefined pools raise errors
+without commands. Valid writes queue SCRIPT `Edit::SetEnergy`; finite values
+saturate at the fixed-point conversion boundary, then clamp to zero through
+maximum energy. Normal regeneration and cloak cost/drain still apply in their
+usual command/tick phases; the resulting tick energy can differ from the input.
+
+Configure each unit through its resolved ODF `maxSpecialEnergy` and
+`specialEnergyRate` (per second) keys. Explicit child/include values override
+inherited values, including maximum zero to disable the pool and rate zero to
+stop regeneration. This binding supplies no fixed replacement for those keys.
+The pinned A2 reference supports absolute setter units; input validation,
+clamping and zero-pool errors are explicit STA64 policies. Native float ABI,
+default/error parity, new energy getters and mission save/resume are unverified
+or outside this adapter.
+
 `A2.GetDistance(id, id)` implements the inventoried two-handle
 `float GetDistance(int&, int&)` call shape. It returns three-dimensional
 Euclidean distance between the latest non-dying snapshot positions, using the

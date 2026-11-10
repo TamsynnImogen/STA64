@@ -256,6 +256,7 @@ A2_SIGNATURES = {
     "float GetCurrentHealth(int)": "A2.GetCurrentHealth",
     "float GetMaxHealth(int)": "A2.GetMaxHealth",
     "void SetCurrentHealth(int, float)": "A2.SetCurrentHealth",
+    "void SetSpecialEnergy(int, float)": "A2.SetSpecialEnergy",
     "unsigned int RandomGetUnsigned(unsigned int)": "A2.RandomGetUnsigned",
     "bool IsOdf(int, char*)": "A2.IsOdf",
     "float GetDistance(int&, int&)": "A2.GetDistance",

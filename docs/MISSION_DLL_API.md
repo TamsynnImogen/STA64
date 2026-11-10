@@ -15,12 +15,12 @@ user's own executables each time, and none are recorded here.
 | engine API size | 371 `ScriptInterface` methods | (imports only) |
 | distinct calls used | 138 | 213 |
 | call sites | 11708 | — |
-| A2 DLL-shaped callable | 19 | — |
-| missing A2 callable signatures | 113 | — |
+| A2 DLL-shaped callable | 20 | — |
+| missing A2 callable signatures | 112 | — |
 | MMM job-equivalent, not A2-shaped | 0 | — |
 | bound in STA64's Lua today | — | 6 |
 | in MMM's API, not yet bound | 24 | 27 |
-| no Lua equivalent (STA64 extension needed) | 89 | 144 |
+| no Lua equivalent (STA64 extension needed) | 88 | 144 |
 | script-state plumbing (n/a in Lua) | 6 | 36 |
 
 - **bound**: an existing `sta_mission` binding does the same job.
@@ -171,7 +171,7 @@ user's own executables each time, and none are recorded here.
 | `void SetPosition(int, char *, int)` | 4 | 63 | new |  |
 | `void DamageSensors(int, float)` | 3 | 3 | new |  |
 | `void DamageShieldGenerator(int, float)` | 3 | 3 | new |  |
-| `void SetSpecialEnergy(int, float)` | 3 | 22 | new |  |
+| `void SetSpecialEnergy(int, float)` | 3 | 22 | A2 DLL-shaped | `A2.SetSpecialEnergy` |
 | `SiegeFleet * CreateNewSiegeFleet(void)` | 2 | 4 | new |  |
 | `bool Exists(int)` | 2 | 26 | MMM | `Path.exists` |
 | `bool IsAlive(int)` | 2 | 15 | A2 DLL-shaped | `A2.IsAlive` |
