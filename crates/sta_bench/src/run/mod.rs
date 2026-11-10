@@ -596,7 +596,7 @@ pub fn fake_content() -> ContentDb {
     dread.odf = "fx_dread".into();
     dread.model = "fx_dread".into();
     let mut tree = String::new();
-    for u in fake.units().cloned().chain(cloakers) {
+    for u in fake.units().cloned().chain(cloakers).chain([sta_content::fake::launch_yard()]) {
         let mut u = u;
         if u.odf == "fx_yard" {
             u.build.list.push(sta_content::DefRef::new("fx_dread"));

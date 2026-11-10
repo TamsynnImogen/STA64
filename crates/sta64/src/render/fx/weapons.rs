@@ -220,7 +220,7 @@ fn spawn_fx(
                     .filter(|(_, f)| f.kind == FxKind::Projectile && f.shooter == *by && f.weapon == *weapon && f.target == Target::Entity(*target))
                     .min_by_key(|(_, f)| f.fired);
                 if let Some((e, _)) = hit {
-                    cmds.entity(e).despawn();
+                    cmds.entity(e).try_despawn();
                 }
             }
             _ => {}
@@ -249,7 +249,7 @@ fn update_fx(
     for (e, mut fx, mut tf, mut a) in &mut q {
         let age = (now_ticks - fx.fired as f64) as f32;
         if age >= fx.life {
-            cmds.entity(e).despawn();
+            cmds.entity(e).try_despawn();
             continue;
         }
         let k = (age / fx.life).clamp(0.0, 1.0);
@@ -328,7 +328,7 @@ fn attach_visuals(
     }
     let mesh = quad_mesh.get_or_insert_with(|| meshes.add(quad::rectangle())).clone();
     for (e, fx) in &new {
-        cmds.entity(e).insert((Mesh3d(mesh.clone()), MeshMaterial3d(mats.add(quad::material(&fx.look)))));
+        cmds.entity(e).try_insert((Mesh3d(mesh.clone()), MeshMaterial3d(mats.add(quad::material(&fx.look)))));
     }
 }
 
