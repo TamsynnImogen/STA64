@@ -5431,6 +5431,7 @@ dependencies = [
 name = "sta_content"
 version = "0.1.0"
 dependencies = [
+ "a2fmt",
  "json5",
  "serde",
  "sta_assets",
