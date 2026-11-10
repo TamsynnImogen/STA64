@@ -187,6 +187,6 @@ Named condition monitors now support the converted UI tutorial's observed
 five-argument constructor and OnTrue hook form. The separate ignored probe
 checks its early timed rules on empty synthetic views, without incoming input
 or manually invoking rule methods. Debug/TextInput still use permissive global
-fallbacks, which this diagnostic counter does not yet record; empty diagnostics
-therefore do not establish complete API support. Native monitor timing, input
+fallbacks; their missing global/field lookups now appear in `unsupported()`.
+These diagnostics do not implement input. Native monitor timing, input
 advancement, cineractive object callbacks and full tutorial play remain open.

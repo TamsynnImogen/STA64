@@ -68,11 +68,24 @@ const MAX_LOGGED: usize = 100;
 
 /// A permissive stand-in for API that does not exist yet.
 const STUBS: &str = r#"
-local function mk()
+local record = ...
+local kindOf, stringify = type, tostring
+local function label(key)
+  local kind = kindOf(key)
+  if kind == "string" then return key end
+  if kind == "number" then return stringify(key) end
+  return "<" .. kind .. ">"
+end
+local function field(path, key)
+  local name = path .. "." .. label(key)
+  record("stub field " .. name)
+  return name
+end
+local function mk(path)
   local t = {}
   setmetatable(t, {
-    __index = function() return mk() end,
-    __call = function() return mk() end,
+    __index = function(_, key) return mk(path and field(path, key)) end,
+    __call = function() return mk(path and (path .. "()")) end,
     __add = function() return 0 end, __sub = function() return 0 end,
     __mul = function() return 0 end, __div = function() return 0 end,
     __mod = function() return 0 end, __unm = function() return 0 end,
@@ -84,8 +97,12 @@ local function mk()
   return t
 end
 rawset(_G, "__stub", mk)
-setmetatable(_G, { __index = function() return mk() end })
-setmetatable(MMM, { __index = function() return mk() end })
+setmetatable(_G, { __index = function(_, key)
+  local name = label(key)
+  record("stub global " .. name)
+  return mk(name)
+end })
+setmetatable(MMM, { __index = function(_, key) return mk(field("MMM", key)) end })
 "#;
 
 struct Callback {
@@ -264,7 +281,12 @@ impl MissionRuntime {
         )?;
 
         api::install(lua, ctx)?;
-        lua.load(STUBS).set_name("=stubs").exec()?;
+        let diagnostics = ctx.clone();
+        let record = lua.create_function(move |_, name: String| {
+            diagnostics.borrow_mut().unsupported(&name);
+            Ok(())
+        })?;
+        lua.load(STUBS).set_name("=stubs").call::<()>(record)?;
         let src = {
             let r = read.lock().unwrap_or_else(|p| p.into_inner());
             r(path).ok_or_else(|| mlua::Error::runtime("not found"))?
@@ -351,9 +373,11 @@ impl MissionRuntime {
         self.inner.ctx.borrow().log.clone()
     }
 
-    /// API calls that were accepted but had no effect (an order the sim
-    /// has no command for, an unreadable argument), with counts, ascending
-    /// by name.
+    /// Unsupported API encounters, with counts ascending by name. Includes
+    /// accepted operations with no effect and permissive fallback lookups
+    /// (`stub global <name>` / `stub field <path>`). Lookup counts are not
+    /// function-call counts. Lookup keys may be dynamically computed strings;
+    /// function arguments are not inspected.
     pub fn unsupported(&self) -> Vec<(String, u32)> {
         self.inner.ctx.borrow().unsupported.iter().map(|(k, v)| (k.clone(), *v)).collect()
     }

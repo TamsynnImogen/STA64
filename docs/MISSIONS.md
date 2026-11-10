@@ -82,6 +82,22 @@ establishes Producer → Craft and Starbase → Shipyard → Producer. These che
 allow the converted mission to find its static portal/base. They do not add a
 complete mapping from every ODF class label to every MMM type name.
 
+## Permissive fallback diagnostics
+
+Unknown globals still return permissive stubs so incomplete missions can load.
+`MissionRuntime::unsupported()` records missing global reads as
+`stub global <name>` and fields reached through those stubs as
+`stub field <path>`, including missing MMM fields. Returned stub paths retain
+`()` for constructor/call results. The counts describe lookups, not function
+invocations. Lookup keys, including dynamically computed strings, form these
+paths; function arguments are not inspected. Non-string keys use
+stable type labels without invoking script formatting metamethods.
+
+Bound APIs retain their existing diagnostics. Known functions do not acquire
+stub diagnostics, and stub operations retain their permissive behavior.
+Seeing a name in the counter identifies a missing API; it does not implement
+that API or establish native behavior for the rest of a mission.
+
 ## Named condition monitors
 
 Converted rule scripts can use

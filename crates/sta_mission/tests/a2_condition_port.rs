@@ -83,9 +83,13 @@ fn ui_tutorial_setup_and_early_timed_rules_emit_expected_presentations() {
     assert_eq!(count_call_through(&presentations, 400, "UI.addTitle"), 2);
     assert_eq!(count_call_through(&presentations, 400, "UI.addSubtitle"), 5);
     let unsupported = runtime.unsupported();
+    assert!(unsupported.contains(&("stub global Debug".into(), 401)));
+    assert!(unsupported.contains(&("stub field Debug.getKeyState".into(), 401)));
+    assert!(unsupported.contains(&("stub global TextInput".into(), 1)));
+    assert!(unsupported.contains(&("stub field TextInput.hook".into(), 1)));
     let unsupported_total: u32 = unsupported.iter().map(|(_, count)| count).sum();
     eprintln!(
-        "external UI Tutorial early rules: unsupported diagnostic count {unsupported_total} across {} names: {unsupported:?}; silent permissive globals may not appear",
+        "external UI Tutorial early rules: unsupported lookup/operation count {unsupported_total} across {} names: {unsupported:?}; fallback diagnostics do not implement input",
         unsupported.len()
     );
 }
