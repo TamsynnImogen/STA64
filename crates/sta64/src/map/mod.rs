@@ -388,6 +388,7 @@ impl Plugin for MapPlugin {
                     spin,
                     sky_follows_camera,
                     hud,
+                    hud_toggle,
                     fps,
                     model_scene::animate,
                     crate::render::sprites::animate,
@@ -1196,11 +1197,31 @@ fn hud(browser: Res<MapBrowser>, skirmish: Option<Res<crate::game::SkirmishCfg>>
     for mut t in &mut q {
         t.0 = format!(
             "STA64 {} map view\n{}\n\n{}\n\nleft click/drag select (Shift adds)  right click move  Space stop\n\
-             {keys}Tab icons  WASD pan  middle-drag orbit  wheel zoom  R reset",
+             {keys}Tab icons  WASD pan  middle-drag orbit  wheel zoom  R reset  F11 hide this",
             env!("CARGO_PKG_VERSION"),
             browser.mount_summary,
             browser.info
         );
+    }
+}
+
+/// The map view's debug text sits where a match puts its command grid, so a match
+/// starts with it hidden; F11 shows or hides it. The bare map view shows it.
+fn hud_toggle(
+    keys: Res<ButtonInput<KeyCode>>,
+    skirmish: Option<Res<crate::game::SkirmishCfg>>,
+    mut shown: Local<Option<bool>>,
+    mut q: Query<&mut Visibility, With<MapHud>>,
+) {
+    let shown = shown.get_or_insert(skirmish.is_none());
+    if keys.just_pressed(KeyCode::F11) {
+        *shown = !*shown;
+    }
+    let want = if *shown { Visibility::Inherited } else { Visibility::Hidden };
+    for mut v in &mut q {
+        if *v != want {
+            *v = want;
+        }
     }
 }
 
