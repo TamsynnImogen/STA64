@@ -11,7 +11,7 @@ use sta_sim::{EntityId, Vec3 as SimVec3};
 use super::Pointer;
 use super::keys::{Action, KeyBindings};
 use super::select::{AimState, Targetable, own_selection, unit_under};
-use crate::sim_link::{CommandQueue, OrderIssued, OrderKind, Selection, SimLink};
+use crate::sim_link::{CommandQueue, ContentRes, OrderIssued, OrderKind, Selection, SimLink};
 
 /// Where each ship was last ordered to go, until it arrives or is stopped,
 /// for the waypoint line. The views do not carry a ship's target yet; RND-08
@@ -44,6 +44,7 @@ pub fn order(
     units: Targetable,
     selection: Res<Selection>,
     link: Res<SimLink>,
+    content: Option<Res<ContentRes>>,
     mut queue: ResMut<CommandQueue>,
     mut targets: ResMut<OrderTargets>,
     mut issued: MessageWriter<OrderIssued>,
@@ -74,10 +75,17 @@ pub fn order(
     let Some(AimState { cursor, ray, .. }) = aim.0 else { return };
     let me = link.player();
     let view = link.curr();
-    // Right-click on an enemy attacks it; on anything else it moves.
-    if let Some(target) = unit_under(cursor, ray, &units).filter(|t| view.unit(*t).is_some_and(|u| u.owner != me)) {
-        queue.0.push(CommandKind::Order(Order::Attack { units: own.clone(), target }));
-        issued.write(OrderIssued { units: own.clone(), kind: OrderKind::Attack });
+    // Right-click on a resource or an enemy gives a context order; on
+    // anything else it moves.
+    if let Some((order, kind)) = unit_under(cursor, ray, &units)
+        .and_then(|t| super::context::context_order(content.as_deref().map(|c| &*c.0), view, me, &own, t))
+    {
+        let units = match &order {
+            Order::Mine { units, .. } => units.clone(),
+            _ => own.clone(),
+        };
+        queue.0.push(CommandKind::Order(order));
+        issued.write(OrderIssued { units, kind });
         return;
     }
     let shift = bindings.pressed(Action::AddModifier, &keys);
