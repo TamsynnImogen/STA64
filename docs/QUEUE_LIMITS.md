@@ -73,3 +73,21 @@ continuation, the original v8 fixture and affected consumers. Run scoped
 strict Clippy and workspace all-targets checks. No GUI or game execution is
 part of these headless checks; native runtime and grouped queue UI remain
 separate acceptance work.
+
+## Recorded headless validation
+
+After merging main's construction-site and upfront-affordability changes,
+the six affected/shared/consumer crates report 934 passing Rust tests, zero
+failures, ten intentionally ignored private installed-content probes and one
+ignored client documentation example. This includes the genuine v8 mining
+fixture continuation, long-queue snapshot continuation/content mismatch,
+existing replay checks and the new capacity boundaries. Strict all-targets
+Clippy for those crates and the workspace all-targets check pass. Cargo's
+workspace lock refresh changes no packages.
+
+The older rig payment test was adapted to issue an affordable deferred order
+and spend its funds before arrival, retaining deferred/prepaid arrival
+coverage. A constant-only frontend test assertion was moved into a const
+block for strict Clippy; runtime UI behavior is unchanged. These integration
+adjustments were declared on #267 before editing. Original-game and
+Android/Waydroid runtime acceptance remain unverified.

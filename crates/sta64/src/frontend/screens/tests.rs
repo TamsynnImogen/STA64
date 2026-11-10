@@ -416,7 +416,7 @@ fn a_long_map_list_is_bounded_by_the_window_and_scrolls() {
     assert_eq!(count::<ListItem>(&mut app), 250);
     let node = app.world_mut().query::<(&view::ScrollBox, &Node)>().single(app.world()).unwrap().1.clone();
     assert_eq!(node.max_height, Val::Vh(view::LIST_MAX_VH), "the box is capped to a share of the window");
-    assert!(view::LIST_MAX_VH < 100.0);
+    const { assert!(view::LIST_MAX_VH < 100.0) };
     assert_eq!(node.overflow, Overflow::scroll_y());
     let row_h = app.world().resource::<crate::ui::theme::Theme>().list_row_h;
     assert!(250.0 * row_h > 400.0, "the list is taller than the box, so it must scroll");
