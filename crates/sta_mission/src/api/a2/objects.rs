@@ -56,6 +56,24 @@ fn finite_amount(name: &str, label: &str, value: &Value) -> mlua::Result<Fixed> 
 pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()> {
     let c = ctx.clone();
     table.set(
+        "Exists",
+        lua.create_function(move |_, args: MultiValue| {
+            let id = handle("Exists", &args, 1)?;
+            Ok(c.borrow().unit(id).is_some())
+        })?,
+    )?;
+
+    let c = ctx.clone();
+    table.set(
+        "DoesNotExist",
+        lua.create_function(move |_, args: MultiValue| {
+            let id = handle("DoesNotExist", &args, 1)?;
+            Ok(c.borrow().unit(id).is_none())
+        })?,
+    )?;
+
+    let c = ctx.clone();
+    table.set(
         "IsAlive",
         lua.create_function(move |_, args: MultiValue| {
             let id = handle("IsAlive", &args, 1)?;
