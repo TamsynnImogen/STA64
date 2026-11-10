@@ -212,31 +212,114 @@ def short(sig, cls=None):
     return s
 
 
-def lua_names(repo):
-    """Every name the Lua mission API binds (sta_mission/src/api)."""
+def lua_names(repo, module):
+    """Names bound in one expected production API module."""
     names = set()
-    for f in glob.glob(os.path.join(repo, "crates/sta_mission/src/api/*.rs")):
-        src = open(f, encoding="utf-8").read()
-        names |= set(re.findall(r'(?:set|create_function|add_method|add_function|add_meta_method|add_field_method_get|add_field_method_set)\(\s*"([A-Za-z_][A-Za-z_0-9]*)"', src))
+    path = os.path.join(repo, "crates/sta_mission/src/api", module)
+    try:
+        with open(path, encoding="utf-8") as source:
+            src = source.read()
+    except OSError:
+        return names
+    names |= set(re.findall(r'(?:set|create_function|add_method|add_function|add_meta_method|add_field_method_get|add_field_method_set)\(\s*"([A-Za-z_][A-Za-z_0-9]*)"', src))
     return names
 
 
 # Engine call -> the existing MMM-style Lua binding that already does its job.
 # Only listed when the binding exists in sta_mission today.
 COVERED = {
-    "RemoveObject": "Entity:remove",
-    "GetLocation": "Entity.position",
-    "CraftCannotDie": "Entity.invincible",
-    "AI_Team_Load_AIP": "Player:loadAIP",
-    "SetRelation": "Player:setRelation",
-    "GetRelation": "Player:getRelation",
-    "IsAlive": "Entity.destroyed / Entity.valid",
-    "Cloak": "Entity:cloak",
-    "Decloak": "Entity:decloak",
-    "GetHull": "Entity.hull",
-    "GetShields": "Entity.shields",
-    "Stop": "Entity:stop",
+    "RemoveObject": ("Entity:remove", "entity.rs", ("remove",)),
+    "GetLocation": ("Entity.position", "entity.rs", ("position",)),
+    "CraftCannotDie": ("Entity.invincible", "entity.rs", ("invincible",)),
+    "SetRelation": ("Player:setRelation", "player.rs", ("setRelation",)),
+    "GetRelation": ("Player:getRelation", "player.rs", ("getRelation",)),
+    "IsAlive": ("Entity.destroyed / Entity.valid", "entity.rs", ("destroyed", "valid")),
+    "Cloak": ("Entity:cloak", "entity.rs", ("cloak",)),
+    "Decloak": ("Entity:decloak", "entity.rs", ("decloak",)),
+    "GetHull": ("Entity.hull", "entity.rs", ("hull",)),
+    "GetShields": ("Entity.shields", "entity.rs", ("shields",)),
 }
+
+
+# Exact Armada II ScriptInterface signatures implemented by the DLL-shaped
+# A2 table. MMM equivalents above remain a separate, older classification.
+A2_SIGNATURES = {
+    "bool IsAlive(int)": "A2.IsAlive",
+    "Vector3 const & GetLocation(int)": "A2.GetLocation",
+    "int GetRealTeam(int)": "A2.GetRealTeam",
+    "void RemoveObject(int)": "A2.RemoveObject",
+    "void CraftCannotDie(int, bool)": "A2.CraftCannotDie",
+    "void Cloak(int)": "A2.Cloak",
+    "void Decloak(int)": "A2.Decloak",
+}
+
+
+def normalized_signature(sig):
+    """Normalize demangled decoration while retaining the full call shape."""
+    sig = re.sub(r"^(?:public|private|protected):\s*", "", sig.strip())
+    sig = re.sub(r"\b(?:virtual|__thiscall|__cdecl|__stdcall|class|struct|enum)\s+", "", sig)
+    sig = re.sub(r"\bScriptInterfaceImp::", "", sig)
+    sig = re.sub(r"\s+", " ", sig)
+    sig = re.sub(r"\s*([(),*&])\s*", r"\1", sig)
+    return sig
+
+
+def a2_source_names(repo):
+    """Literal A2 table.set names in registered production api/a2 modules."""
+    base = os.path.join(repo, "crates/sta_mission/src/api/a2")
+    try:
+        with open(os.path.join(base, "mod.rs"), encoding="utf-8") as source:
+            registration = source.read()
+    except OSError:
+        return set()
+    modules = re.findall(
+        r"\b([A-Za-z_][A-Za-z_0-9]*)::install\s*\(\s*lua\s*,\s*ctx\s*,\s*&a2\s*\)",
+        registration,
+    )
+    if not modules or not re.search(r'raw_set\s*\(\s*"A2"\s*,\s*a2\s*\)', registration):
+        return set()
+    names = set()
+    for module in modules:
+        path = os.path.join(base, f"{module}.rs")
+        if not os.path.isfile(path):
+            continue
+        with open(path, encoding="utf-8") as source:
+            src = source.read()
+        names |= set(
+            re.findall(
+                r'(?m)^\s*table\s*\.\s*set\s*\(\s*"([A-Za-z_][A-Za-z_0-9]*)"\s*,',
+                src,
+            )
+        )
+    return names
+
+
+def a2_exact_for(sig, repo):
+    """Return the A2 Lua name only for an exact signature and source binding."""
+    key = normalized_signature(sig)
+    lua_name = next(
+        (name for signature, name in A2_SIGNATURES.items() if normalized_signature(signature) == key),
+        "",
+    )
+    if not lua_name or lua_name.split(".", 1)[1] not in a2_source_names(repo):
+        return ""
+    return lua_name
+
+
+def covered_for(name, repo, sig=""):
+    """Return a verified existing MMM-style binding for the right module."""
+    covered = COVERED.get(name)
+    if not covered:
+        return ""
+    if name == "GetLocation" and normalized_signature(sig) != normalized_signature(
+        "Vector3 const & GetLocation(int)"
+    ):
+        return ""
+    display, module, expected_names = covered
+    bound = lua_names(repo, module)
+    if all(expected in bound for expected in expected_names):
+        return display
+    return ""
 
 
 def mmm_names(repo):
@@ -300,7 +383,6 @@ def main():
     use, per, a2_scripts = a2_usage(slots, a2_dlls)
     a1_dlls = find(a.a1, "missions/*.dsl") + find(a.a1, "missions/*.drl") + find(a.a1, "AI/*.dsl") + find(a.a1, "AI/*.drl")
     a1 = a1_usage(a1_dlls)
-    bound = lua_names(a.repo)
     mmm = mmm_names(a.repo)
 
     def mmm_for(name):
@@ -309,20 +391,23 @@ def main():
             return mmm.get(alias.split(".")[-1].lower(), alias)
         return mmm.get(name.lower(), "")
 
-    def status(name, sig=""):
+    def lua_for(name, sig="", repo=a.repo):
+        return covered_for(name, repo, sig)
+
+    def status(name, sig="", api="a1"):
         if sig and area(sig) == "Script state and save/load":
             return "n/a"
-        if lua_for(name):
+        if api == "a2":
+            exact = a2_exact_for(sig, a.repo)
+            if exact:
+                return "A2 DLL-shaped"
+            if lua_for(name, sig):
+                return "MMM-equivalent"
+        elif lua_for(name, sig):
             return "bound"
         if mmm_for(name):
             return "MMM"
         return "new"
-
-    def lua_for(name):
-        c = COVERED.get(name)
-        if c and all(part.split(".")[-1].split(":")[-1].split(" ")[0] in bound for part in c.split(" / ")):
-            return c
-        return ""
 
     L = ["# Mission DLL engine calls (Armada I and II)", "",
          "What the stock campaign missions ask of the engine, so the Lua mission",
@@ -331,8 +416,16 @@ def main():
          "Names and counts only: the tool reads slot order and addresses from the",
          "user's own executables each time, and none are recorded here.", ""]
     a2_used = [(i, s) for i, s in slots if use.get(i)]
-    a2_cov = sum(1 for _, s in a2_used if lua_for(method_name(s)))
-    a1_cov = sum(1 for s, _ in a1 if lua_for(method_name(s)))
+    a2_cov = sum(1 for _, s in a2_used if a2_exact_for(s, a.repo))
+    a2_missing = sum(
+        1 for _, s in a2_used
+        if area(s) != "Script state and save/load" and not a2_exact_for(s, a.repo)
+    )
+    a2_mmm_equiv = sum(
+        1 for _, s in a2_used
+        if not a2_exact_for(s, a.repo) and lua_for(method_name(s), s)
+    )
+    a1_cov = sum(1 for s, _ in a1 if lua_for(method_name(s), s))
     L += ["## Summary", "",
           "| | Armada II | Armada I |", "|---|---:|---:|",
           f"| mission DLLs read | {len(a2_dlls)} | {len(a1_dlls)} |",
@@ -340,11 +433,19 @@ def main():
           f"| engine API size | {len(slots)} `ScriptInterface` methods | (imports only) |",
           f"| distinct calls used | {len(a2_used)} | {len(a1)} |",
           f"| call sites | {sum(use.values())} | — |",
-          f"| bound in STA64's Lua today | {a2_cov} | {a1_cov} |",
-          f"| in MMM's API, not yet bound | {sum(1 for _, s_ in a2_used if status(method_name(s_), s_) == 'MMM')} | {sum(1 for s_, _ in a1 if status(method_name(s_), s_) == 'MMM')} |",
-          f"| no Lua equivalent (STA64 extension needed) | {sum(1 for _, s_ in a2_used if status(method_name(s_), s_) == 'new')} | {sum(1 for s_, _ in a1 if status(method_name(s_), s_) == 'new')} |",
-          f"| script-state plumbing (n/a in Lua) | {sum(1 for _, s_ in a2_used if status(method_name(s_), s_) == 'n/a')} | {sum(1 for s_, _ in a1 if status(method_name(s_), s_) == 'n/a')} |", "",
+          f"| A2 DLL-shaped callable | {a2_cov} | — |",
+          f"| missing A2 callable signatures | {a2_missing} | — |",
+          f"| MMM job-equivalent, not A2-shaped | {a2_mmm_equiv} | — |",
+          f"| bound in STA64's Lua today | — | {a1_cov} |",
+          f"| in MMM's API, not yet bound | {sum(1 for _, s_ in a2_used if status(method_name(s_), s_, 'a2') == 'MMM')} | {sum(1 for s_, _ in a1 if status(method_name(s_), s_, 'a1') == 'MMM')} |",
+          f"| no Lua equivalent (STA64 extension needed) | {sum(1 for _, s_ in a2_used if status(method_name(s_), s_, 'a2') == 'new')} | {sum(1 for s_, _ in a1 if status(method_name(s_), s_, 'a1') == 'new')} |",
+          f"| script-state plumbing (n/a in Lua) | {sum(1 for _, s_ in a2_used if status(method_name(s_), s_, 'a2') == 'n/a')} | {sum(1 for s_, _ in a1 if status(method_name(s_), s_, 'a1') == 'n/a')} |", "",
           "- **bound**: an existing `sta_mission` binding does the same job.",
+          "- **A2 DLL-shaped**: the exact normalized ScriptInterface signature has a literal",
+          "  production binding registered on the `A2` namespace; this is source-level coverage,",
+          "  not proof of native simulation parity.",
+          "- **MMM-equivalent**: an existing MMM-style Lua operation does the same job, but",
+          "  it is not counted as an A2 DLL-shaped callable.",
           "- **MMM**: Fleet Operations' MMM Lua API ([MMM_API.md](MMM_API.md)) has it (same name, or the",
           "  alias noted), so converted scripts can call it once STA64 binds it.",
           "- **new**: no Lua API has it; STA64's runtime needs an extension (e.g. A1's bridge scenes).",
@@ -370,8 +471,11 @@ def main():
                 if has_calls:
                     cells.append(str(r[2]))
                 n = method_name(sig)
-                cells.append(status(n, sig))
-                cells.append(f"`{lua_for(n) or mmm_for(n)}`" if (lua_for(n) or mmm_for(n)) else "")
+                api = "a2" if has_calls else "a1"
+                cells.append(status(n, sig, api))
+                display = a2_exact_for(sig, a.repo) if api == "a2" else ""
+                display = display or lua_for(n, sig) or mmm_for(n)
+                cells.append(f"`{display}`" if display else "")
                 out.append("| " + " | ".join(cells) + " |")
             out.append("")
         return out
@@ -389,7 +493,7 @@ def main():
           "```"]
     open(a.out, "w").write("\n".join(L) + "\n")
     print(f"A2: {len(a2_dlls)} DLLs, {a2_scripts} scripts, {len(a2_used)}/{len(slots)} methods used, {sum(use.values())} calls; "
-          f"A1: {len(a1_dlls)} DLLs, {len(a1)} imports; bound {a2_cov} + {a1_cov}")
+          f"A2 callable {a2_cov}, missing {a2_missing}; A1: {len(a1_dlls)} DLLs, {len(a1)} imports, MMM-equivalent {a1_cov}")
 
 
 if __name__ == "__main__":

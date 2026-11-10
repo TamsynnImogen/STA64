@@ -1,0 +1,133 @@
+//! DLL-named object calls. Handles refer to the latest mission view; writes
+//! become commands and are visible only after the simulation advances.
+
+use mlua::{Lua, MultiValue, Table, Value};
+use sta_core::EntityId;
+use sta_sim::command::{Edit, Order};
+
+use crate::api::{Shared, pos_f64, vector};
+
+fn integer(name: &str, value: &Value) -> mlua::Result<u32> {
+    let n = match value {
+        Value::Integer(n) => u32::try_from(*n).ok(),
+        Value::Number(n)
+            if n.is_finite() && *n >= 0.0 && *n <= u32::MAX as f64 && n.fract() == 0.0 =>
+        {
+            Some(*n as u32)
+        }
+        _ => None,
+    };
+    n.ok_or_else(|| mlua::Error::runtime(format!("A2.{name} requires an unsigned integer")))
+}
+
+fn handle(name: &str, args: &MultiValue, arity: usize) -> mlua::Result<EntityId> {
+    if args.len() != arity {
+        return Err(mlua::Error::runtime(format!(
+            "A2.{name} requires exactly {arity} argument(s)"
+        )));
+    }
+    Ok(EntityId(integer(name, &args[0])?))
+}
+
+fn live(ctx: &Shared, name: &str, id: EntityId) -> mlua::Result<()> {
+    if ctx.borrow().alive(id).is_some() {
+        Ok(())
+    } else {
+        Err(mlua::Error::runtime(format!(
+            "A2.{name}: object {} is not alive",
+            id.0
+        )))
+    }
+}
+
+pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()> {
+    let c = ctx.clone();
+    table.set(
+        "IsAlive",
+        lua.create_function(move |_, args: MultiValue| {
+            let id = handle("IsAlive", &args, 1)?;
+            Ok(c.borrow().alive(id).is_some())
+        })?,
+    )?;
+
+    let c = ctx.clone();
+    table.set(
+        "GetLocation",
+        lua.create_function(move |lua, args: MultiValue| {
+            let id = handle("GetLocation", &args, 1)?;
+            let pos = c
+                .borrow()
+                .alive(id)
+                .map(|u| pos_f64(u.pos))
+                .ok_or_else(|| {
+                    mlua::Error::runtime(format!("A2.GetLocation: object {} is not alive", id.0))
+                })?;
+            vector(lua, pos)
+        })?,
+    )?;
+
+    let c = ctx.clone();
+    table.set(
+        "GetRealTeam",
+        lua.create_function(move |_, args: MultiValue| {
+            let id = handle("GetRealTeam", &args, 1)?;
+            c.borrow().alive(id).map(|u| u.owner.0).ok_or_else(|| {
+                mlua::Error::runtime(format!("A2.GetRealTeam: object {} is not alive", id.0))
+            })
+        })?,
+    )?;
+
+    let c = ctx.clone();
+    table.set(
+        "RemoveObject",
+        lua.create_function(move |_, args: MultiValue| {
+            let id = handle("RemoveObject", &args, 1)?;
+            live(&c, "RemoveObject", id)?;
+            c.borrow_mut().edit(Edit::Kill(id));
+            Ok(())
+        })?,
+    )?;
+
+    let c = ctx.clone();
+    table.set(
+        "CraftCannotDie",
+        lua.create_function(move |_, args: MultiValue| {
+            let id = handle("CraftCannotDie", &args, 2)?;
+            let Value::Boolean(on) = &args[1] else {
+                return Err(mlua::Error::runtime("A2.CraftCannotDie requires a boolean"));
+            };
+            live(&c, "CraftCannotDie", id)?;
+            c.borrow_mut().edit(Edit::Immortal(id, *on));
+            Ok(())
+        })?,
+    )?;
+
+    table.set("Cloak", cloak_function(lua, ctx, "Cloak", true)?)?;
+    table.set("Decloak", cloak_function(lua, ctx, "Decloak", false)?)?;
+    Ok(())
+}
+
+fn cloak_function(
+    lua: &Lua,
+    ctx: &Shared,
+    name: &'static str,
+    on: bool,
+) -> mlua::Result<mlua::Function> {
+    let c = ctx.clone();
+    lua.create_function(move |_, args: MultiValue| {
+        let id = handle(name, &args, 1)?;
+        live(&c, name, id)?;
+        if !c.borrow().unit(id).is_some_and(|u| u.owner.is_player()) {
+            return Err(mlua::Error::runtime(format!(
+                "A2.{name}: object {} has no player owner",
+                id.0
+            )));
+        }
+        c.borrow_mut().order(id, |units| Order::Cloak { units, on });
+        Ok(())
+    })
+}
+
+#[cfg(test)]
+#[path = "objects/tests.rs"]
+mod tests;

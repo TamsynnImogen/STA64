@@ -34,7 +34,7 @@ Call-shape evidence: Immy's clean-room `armada_missions` A2 ports (including
 The asset-free intro test drives a real `Sim`, reaches a synthetic first
 objective, and replays its recorded presentation commands. It does not run
 a full converted stock mission. Remaining LUA-05 gates include the
-DLL-named `A2` table, mission-object lifecycle beyond the setup/update bridge,
+remaining DLL-named `A2` calls, mission-object lifecycle beyond the setup/update bridge,
 unverified Timer overloads and other missing MMM APIs, full converted-mission
 tests, and client-side presentation/completion feedback. The package remains in progress.
 
@@ -68,3 +68,33 @@ It proves Lua scheduling, file goals and state changes, not native map
 movement, complete mission play, or presentation playback. A separate
 ignored probe loads every text file in the supplied objectives directory
 without embedding any game text in the repository.
+
+
+## Initial DLL-named object bridge
+
+The `A2` table exposes the single-handle forms `IsAlive`, `GetLocation`,
+`GetRealTeam`, `RemoveObject`, `CraftCannotDie`, `Cloak` and `Decloak`.
+The bridge maps handles to this runtime's `EntityId` values, available as
+`Entity.id`; it does not accept native DLL pointers or saved engine handles.
+Calls use dot syntax and the exact arity listed in `MISSION_DLL_API.md`.
+No label/index overload of `GetLocation` is implemented in this slice.
+
+Handles must be nonnegative integral values within `u32`; zero means no
+entity. `IsAlive` returns false for absent or dying units. The other calls
+return Lua errors for those units. These are explicit bridge policies,
+not verified native error or sentinel conventions. `CraftCannotDie` requires
+a boolean. `GetLocation` returns a fresh Vector and `GetRealTeam` returns the
+snapshot owner number. Writes are queued: `RemoveObject` and
+`CraftCannotDie` use SCRIPT edits, while cloak orders use the unit's current
+player owner and retain normal capability/energy checks in the sim.
+Reads see the last world snapshot until the next controller tick. The sim
+sorts commands by player and sequence, so edits and owner orders need not
+apply in the order of interleaved Lua calls.
+
+`SetRealTeam` is deliberately absent: although `Edit::Team` is in the
+command enum, the simulation currently rejects it. Ownership transfer
+needs an implementation that handles existing orders, build queues and
+other owner-dependent state before this binding can be offered. Unknown
+`A2` names return nil rather than implying a completed binding via a stub.
+The inventory distinguishes these exact callable signatures from older
+MMM job-equivalence mappings; neither classification proves native parity.
