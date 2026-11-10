@@ -392,6 +392,80 @@ mod tests {
         assert!(seen > 0, "no start unit had a model");
     }
 
+    /// RND-20 data check, install-gated (`STA64_TEST_INSTALL`, optional
+    /// `STA64_TEST_MOD`): the engine multiplies the lit texel by the team colour (the
+    /// shader does the same; self-illuminated texels, alpha, stay untinted). For the
+    /// Federation construction ship, the mean lit team-group texel times each palette
+    /// colour: with the engine's own white/federation/gray colours the hull stays near
+    /// grey (saturation low); saturated player colours tint it as in game.
+    #[test]
+    fn install_fconst_team_tint_stays_grey_for_pale_colours() {
+        let Ok(root) = std::env::var("STA64_TEST_INSTALL") else {
+            eprintln!("SKIP: STA64_TEST_INSTALL not set");
+            return;
+        };
+        let m = std::env::var("STA64_TEST_MOD").unwrap_or_default();
+        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(m.as_str()).filter(|m| !m.is_empty())).unwrap();
+        let (index, _) = sta_content::OdfIndex::build(&vfs);
+        let (db, _) = sta_content::ContentDb::load(&vfs, &index).unwrap();
+        let (races, _) = sta_content::race::Races::load(&vfs, &index);
+        let Some(model) = races
+            .playable().into_iter()
+            .filter(|r| r.name == "unitedfederation")
+            .flat_map(|r| races.loadout(&db, &r.name).units)
+            .filter_map(|k| db.unit(k))
+            .filter(|d| d.odf.ends_with("const"))
+            .find_map(|d| {
+                let key = d.model.to_ascii_lowercase().trim_end_matches(".sod").to_owned();
+                let (path, fmt) = sta_assets::find_model(&vfs, &key)?;
+                sta_assets::load_model(&vfs, &path, fmt).ok()
+            })
+        else {
+            eprintln!("SKIP: no Federation construction ship");
+            return;
+        };
+        let (mut sum, mut n) = ([0.0f64; 3], 0.0f64);
+        for g in model.nodes.iter().filter_map(|n| n.mesh()).flat_map(|m| m.groups.iter()).filter(|g| is_team_material(&g.material)) {
+            let Some(tex) = g.maps.diffuse.as_deref() else { continue };
+            let Some((p, f)) = sta_assets::find_texture(&vfs, tex) else { continue };
+            let Ok(img) = sta_assets::decode_rgba(&vfs, &p, f) else { continue };
+            // Weight by the group's faces; lit texels only (alpha low).
+            let w = g.faces.len() as f64;
+            let (mut s, mut c) = ([0.0f64; 3], 0.0f64);
+            for px in img.pixels.chunks_exact(4).filter(|px| !img.has_alpha || px[3] < 128) {
+                for k in 0..3 {
+                    s[k] += px[k] as f64 / 255.0;
+                }
+                c += 1.0;
+            }
+            if c > 0.0 {
+                for k in 0..3 {
+                    sum[k] += s[k] / c * w;
+                }
+                n += w;
+            }
+        }
+        if n == 0.0 {
+            eprintln!("SKIP: fconst has no readable team textures");
+            return;
+        }
+        let mean = sum.map(|v| v / n);
+        let sat = |c: [f64; 3]| {
+            let mx = c.iter().cloned().fold(0.0, f64::max);
+            let mn = c.iter().cloned().fold(1.0, f64::min);
+            if mx > 0.0 { (mx - mn) / mx } else { 0.0 }
+        };
+        println!("fconst mean lit team texel {mean:.3?} saturation {:.2}", sat(mean));
+        for (name, col) in crate::viewer::TeamColours::parse(crate::viewer::STOCK_TEAMCOLOR) {
+            let c = col.to_srgba();
+            let tinted = [mean[0] * c.red as f64, mean[1] * c.green as f64, mean[2] * c.blue as f64];
+            println!("  {name:<12} -> {tinted:.3?} saturation {:.2}", sat(tinted));
+            if matches!(name.as_str(), "white" | "federation" | "gray" | "empty") {
+                assert!(sat(tinted) < 0.35, "{name}: {tinted:?} is not near-grey");
+            }
+        }
+    }
+
     /// The shader must parse and validate (naga, as wgpu runs it), with Bevy's
     /// material bind group filled in.
     #[test]
