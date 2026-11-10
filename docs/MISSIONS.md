@@ -260,6 +260,25 @@ Each runtime owns its flag. Client rendering and native defaults remain
 unverified. The distinct file-loading boolean and objective-completion selector
 are not implemented by this adapter.
 
+## Targetless mining orders
+
+`entity:giveOrder(Order.Mine)` or `(Order.Mine, nil)` selects the nearest
+content-backed Resource-kind node by exact fixed-point XZ distance when Lua
+issues the call. Height is ignored. Candidates come from the current non-dying
+view and validated pending spawn hints. Definitions are classified through
+`EntityKind::of(class, movement)`; missing definitions and resource metadata on
+other kinds are skipped. Ties prefer existing nodes by ID, then pending nodes
+by request order. This is an explicit STA64 policy; native selection defaults
+are unverified.
+
+The selected reference uses the existing actor/target receipt dependencies and
+per-actor order sequence. Pending IDs are never predicted. Failed or dead
+selected nodes drop deferred orders without selecting a replacement. Explicit
+entity targets are unchanged; other target types or no candidate record an
+unsupported diagnostic without an order. Selection uses call-time positions
+and does not inspect visibility, remaining ore, cargo or depot state. The core
+still enforces ownership and miner eligibility and handles actual extraction.
+
 ## DLL-shaped object queries
 
 The `A2` table provides strict, read-only adapters for the inventoried call

@@ -11,6 +11,26 @@ use super::*;
 use crate::api::MissionConfig;
 use crate::runtime::MissionRuntime;
 
+#[test]
+fn default_mine_distance_orders_extreme_fixed_coordinates_without_overflow() {
+    let point = |x, y, z| Vec3 {
+        x: Fixed::from_bits(x),
+        y: Fixed::from_bits(y),
+        z: Fixed::from_bits(z),
+    };
+    let origin = point(0, 0, 0);
+    assert_eq!(flat_distance(origin, point(3, i64::MAX, 4)), (false, 25));
+    assert_eq!(flat_distance(origin, point(0, i64::MIN, 0)), (false, 0));
+    let lo = point(i64::MIN, 0, i64::MIN);
+    let hi = point(i64::MAX, 0, i64::MAX);
+    let axis = flat_distance(lo, point(i64::MAX, 0, i64::MIN));
+    assert_eq!(axis, (false, u128::MAX - ((1u128 << 65) - 2)));
+    let diagonal = flat_distance(lo, hi);
+    assert_eq!(diagonal, (true, u128::MAX - ((1u128 << 66) - 3)));
+    assert!(axis < diagonal);
+    assert_eq!(diagonal, flat_distance(hi, lo));
+}
+
 fn setup() -> (Sim, Arc<ContentDb>) {
     let db = Arc::new(fake::db());
     let seat = |n| PlayerSetup {

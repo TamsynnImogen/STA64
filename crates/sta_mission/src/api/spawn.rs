@@ -27,6 +27,41 @@ struct QueuedAction {
     action: EntityAction,
 }
 
+/// Exact squared XZ distance can require 129 bits across the Fixed range.
+/// The carry is the high bit, so tuple ordering remains distance ordering.
+fn flat_distance(a: Vec3, b: Vec3) -> (bool, u128) {
+    let dx = (i128::from(a.x.to_bits()) - i128::from(b.x.to_bits())).unsigned_abs();
+    let dz = (i128::from(a.z.to_bits()) - i128::from(b.z.to_bits())).unsigned_abs();
+    let (low, carry) = (dx * dx).overflowing_add(dz * dz);
+    (carry, low)
+}
+
+/// STA64's omitted-target Mine policy: choose once, using content-backed
+/// resource kinds and current/request positions. Existing nodes win ties,
+/// then actual IDs or request tokens. Receipts still determine actual IDs.
+pub(super) fn default_mine_node(c: &Ctx, actor: &EntityRef) -> Option<EntityRef> {
+    let actor = actor.id().and_then(|id| c.alive(id)).or_else(|| actor.hint())?;
+    let resource = |unit: &sta_sim::view::UnitView| {
+        c.def(unit).is_some_and(|def| EntityKind::of(&def.class, &def.movement) == EntityKind::Resource)
+    };
+    let current = c.view.units.iter()
+        .filter(|unit| unit.id != EntityId::NONE
+            && !unit.flags.contains(sta_sim::view::UnitFlags::DYING)
+            && resource(unit))
+        .map(|unit| (
+            (flat_distance(actor.pos, unit.pos), 0u8, u64::from(unit.id.0)),
+            EntityRef::Existing(unit.id),
+        ));
+    let pending = c.spawns.outstanding.values()
+        .filter(|handle| matches!(handle.state.get(), SpawnStatus::Queued | SpawnStatus::Submitted(_))
+            && resource(&handle.hint))
+        .map(|handle| (
+            (flat_distance(actor.pos, handle.hint.pos), 1u8, handle.request),
+            EntityRef::Spawn(handle.clone()),
+        ));
+    current.chain(pending).min_by_key(|(key, _)| *key).map(|(_, node)| node)
+}
+
 pub(super) fn queue_spawn(c: &mut Ctx, odf: ContentKey, owner: PlayerId, pos: Vec3) -> Result<EntityRef, &'static str> {
     if !owner.is_player() && owner != NEUTRAL {
         return Err("Entity.add requires a player slot 0..7 or a neutral resource owner");

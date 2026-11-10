@@ -55,7 +55,7 @@ impl EntityAction {
 
 /// Parse the same supported names, targets and queue flag as the existing
 /// `Entity:giveOrder` bridge. No Lua value is retained after this call.
-pub(crate) fn parse_order(ctx: &Shared, args: &MultiValue) -> Result<OrderIntent, String> {
+pub(crate) fn parse_order(ctx: &Shared, actor: &EntityRef, args: &MultiValue) -> Result<OrderIntent, String> {
     let Some(Value::String(name)) = args.front() else {
         return Err("giveOrder: no order".into());
     };
@@ -81,9 +81,15 @@ pub(crate) fn parse_order(ctx: &Shared, args: &MultiValue) -> Result<OrderIntent
         "Attack" | "SearchAndDestroy" | "AnchoredAttack" => target_entity(&target)
             .map(|target| OrderIntent::Attack { target })
             .ok_or_else(|| "giveOrder Attack: no target entity".into()),
-        "Mine" => target_entity(&target)
-            .map(|node| OrderIntent::Mine { node })
-            .ok_or_else(|| "giveOrder Mine: no target entity".into()),
+        "Mine" => {
+            let node = if matches!(target, Value::Nil) {
+                super::spawn::default_mine_node(&ctx.borrow(), actor)
+                    .ok_or_else(|| "giveOrder Mine: no resource node".to_owned())?
+            } else {
+                target_entity(&target).ok_or_else(|| "giveOrder Mine: no target entity".to_owned())?
+            };
+            Ok(OrderIntent::Mine { node })
+        }
         "SpecialWeaponHigh" | "SpecialWeaponMedium" | "SpecialAttack" => {
             let slot = if name == "SpecialWeaponMedium" { 1 } else { 0 };
             let target = match (target_entity(&target), point_of(ctx, &target)) {

@@ -185,7 +185,7 @@ impl UserData for Entity {
 /// `unit:giveOrder(Order.X, target?, queue?)`. Orders the sim has no
 /// command for are counted in `Ctx::unsupported`.
 fn give_order(ctx: &Shared, key: EntityRef, args: &MultiValue) {
-    let parsed = parse_order(ctx, args);
+    let parsed = parse_order(ctx, &key, args);
     match parsed {
         Ok(intent) => { spawn::queue_action(&mut ctx.borrow_mut(), key, EntityAction::Order(intent)); }
         Err(reason) => ctx.borrow_mut().unsupported(&reason),
