@@ -58,6 +58,7 @@ mod entity;
 mod entity_action;
 mod entity_ref;
 mod monitor;
+mod condition_monitor;
 mod player;
 mod timer;
 mod objectives;
@@ -71,6 +72,7 @@ pub(crate) use monitor::MonitorState;
 
 pub(crate) fn fire_monitors(lua: &Lua, ctx: &Shared, errors: &mut Vec<String>) {
     monitor::fire_monitors(lua, ctx, errors);
+    condition_monitor::fire(lua, ctx, errors);
     timer::fire_timers(lua, ctx, errors);
 }
 
@@ -178,6 +180,7 @@ pub(crate) struct Ctx {
     pub objectives_visible: bool,
     pub relations: BTreeMap<(PlayerId, PlayerId), Relation>,
     pub monitors: Vec<MonitorState>,
+    pub conditions: condition_monitor::Store,
     pub next_monitor: u64,
     pub timers: timer::TimerStore,
     pub finished: bool,
@@ -209,6 +212,7 @@ impl Ctx {
             objectives_visible: true,
             relations: BTreeMap::new(),
             monitors: Vec::new(),
+            conditions: condition_monitor::Store::default(),
             next_monitor: 0,
             timers: timer::TimerStore::default(),
             finished: false,

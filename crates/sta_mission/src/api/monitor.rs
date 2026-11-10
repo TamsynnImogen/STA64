@@ -19,7 +19,9 @@
 //! The name inventory lists `hook`, `stop`, `stopAll`, `unhook`, `state`,
 //! `id`, `hooks` but no arguments; the kinds and argument order are this
 //! runtime's choice. Other kinds (`State.Started` hooks) are recorded as
-//! unsupported and never fire.
+//! unsupported and never fire. The separate named condition constructor and
+//! OnTrue hooks are implemented in `condition_monitor`, without changing the
+//! legacy event-hook signatures above.
 
 use std::collections::BTreeSet;
 
@@ -154,7 +156,10 @@ pub(crate) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
         class.set(k, k)?;
     }
     let c = ctx.clone();
-    let make = lua.create_function(move |lua, _: MultiValue| {
+    let make = lua.create_function(move |lua, args: MultiValue| {
+        // __call supplies the class table. Internal shorthand calls supply no arguments.
+        let args: Vec<_> = args.into_iter().skip(1).collect();
+        if !args.is_empty() { return super::condition_monitor::make(lua, &c, &args); }
         let mut b = c.borrow_mut();
         b.next_monitor += 1;
         let id = b.next_monitor;
@@ -165,7 +170,9 @@ pub(crate) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
     class.set(
         "stopAll",
         lua.create_function(move |_, _: MultiValue| {
-            c.borrow_mut().monitors.iter_mut().for_each(|h| h.active = false);
+            let mut c = c.borrow_mut();
+            c.monitors.iter_mut().for_each(|h| h.active = false);
+            super::condition_monitor::stop_all(&mut c.conditions);
             Ok(())
         })?,
     )?;
@@ -191,6 +198,7 @@ pub(crate) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
     mt.set("__index", lua.create_function(|lua, (_t, _k): (Value, Value)| stub(lua))?)?;
     class.set_metatable(Some(mt))?;
     lua.globals().raw_set("Monitor", class)?;
+    super::condition_monitor::install(lua)?;
     Ok(())
 }
 

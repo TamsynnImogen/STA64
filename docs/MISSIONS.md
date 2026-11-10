@@ -82,6 +82,27 @@ establishes Producer → Craft and Starbase → Shipyard → Producer. These che
 allow the converted mission to find its static portal/base. They do not add a
 complete mapping from every ODF class label to every MMM type name.
 
+## Named condition monitors
+
+Converted rule scripts can use
+`Monitor(id, initialState, nil, predicate, argument)` and
+`monitor:hook(id, MonitorHook.Type.OnTrue, nil, callback, argument)`.
+The metadata identifies these parameter positions; the following timing is an
+explicit STA64 bridge policy. Each active predicate runs once per tick before
+mission updates, in registration order, as `predicate(monitor, argument)`.
+It must return a boolean. `OnTrue` fires on a false-to-true edge relative to the
+initial state, committed before `callback(monitor, argument)`. Nil arguments
+are preserved. Named `.id` is the string ID and `.state` is the last boolean;
+legacy event monitor fields keep their previous behavior.
+
+Tick-start snapshots defer new monitors/hooks until a later poll; stop/unhook
+cancel pending work immediately. `stopAll` includes both monitor forms. Five
+accumulated condition errors stop a monitor; five hook errors disable that
+hook. Errors remain isolated from other monitors and mission updates. Duplicate
+IDs, malformed registrations, non-nil table arguments and other hook kinds
+raise errors. `OnFalse`, `WhileTrue`, `WhileFalse`, `OnStop`, restart, and native
+edge/repetition defaults remain unimplemented or unverified.
+
 ## DLL-shaped object queries
 
 The `A2` table provides strict, read-only adapters for the inventoried call

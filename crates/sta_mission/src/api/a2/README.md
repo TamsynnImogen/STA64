@@ -84,7 +84,7 @@ entity. `IsAlive` returns false for absent or dying units. The other calls
 return Lua errors for those units. These are explicit bridge policies,
 not verified native error or sentinel conventions. `CraftCannotDie` requires
 a boolean. `GetLocation` returns a fresh Vector and `GetRealTeam` returns the
-snapshot owner number. Writes are queued: `RemoveObject` and
+snapshot owner number in the configured player-numbering mode. Writes are queued: `RemoveObject` and
 `CraftCannotDie` use SCRIPT edits, while cloak orders use the unit's current
 player owner and retain normal capability/energy checks in the sim.
 Reads see the last world snapshot until the next controller tick. The sim
@@ -120,8 +120,9 @@ rejects those edits.
 ## Queued Entity.add bridge
 
 `Entity.add(odf, player, Vector)` accepts a known unit ODF (with optional
-`.odf` suffix), player slot 0..7 or its Player handle, and finite fixed-point
-coordinates. The request uses heading +Z as a bridge default. It queues a
+`.odf` suffix), an owned player number in the configured mode or its Player
+handle, and finite fixed-point coordinates. The default Slots mode uses 0..7;
+opt-in ArmadaTeams uses 1..8 (neutral spawning is unsupported). The request uses heading +Z as a bridge default. It queues a
 SCRIPT SpawnRequest rather than mutating the simulation or predicting an ID.
 
 The returned handle has `.pending == true`, `.id == nil`, and `.valid == true`
@@ -170,3 +171,22 @@ and a positive test moves the runtime while retaining copied inspection data.
 Filter fields and vector coordinates can invoke Lua metatables. They are
 read before borrowing the context, so callbacks may queue orders or edits;
 view iteration still snapshots candidates before predicate callbacks.
+
+## Later headless validation
+
+The opt-in installed-map test mounts actual STA2 Classic content and
+`a2_fed05.bzn`, using the explicit ArmadaTeams numbering adapter. The unchanged
+external port resolves the Enterprise, portal and base, then naturally spawns
+four Borg cruisers at tick 6120 and issues their accepted attacks after the
+actual receipts at tick 6121. This validates commands/receipts, not combat or
+complete mission play. See [mission conventions](../../../../../docs/MISSIONS.md)
+for the numbering mode, bounded static Craft ancestry, and the three read-only
+DLL-shaped health/ODF queries.
+
+Named condition monitors now support the converted UI tutorial's observed
+five-argument constructor and OnTrue hook form. The separate ignored probe
+checks its early timed rules on empty synthetic views, without incoming input
+or manually invoking rule methods. Debug/TextInput still use permissive global
+fallbacks, which this diagnostic counter does not yet record; empty diagnostics
+therefore do not establish complete API support. Native monitor timing, input
+advancement, cineractive object callbacks and full tutorial play remain open.
