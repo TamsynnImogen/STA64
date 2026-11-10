@@ -14,6 +14,7 @@ use sta_sim::{ContentKey, EntityId, Fixed, PlayerId, UnitView, WorldView};
 
 use crate::ui::i18n::tr;
 use super::layout::{GRID_COLS, GRID_ROWS, InfoHeight};
+use super::commands;
 
 /// Everything the HUD reads: the view, whose HUD it is, the selection and the
 /// content. Filled from the sim link, the selection and the content resource
@@ -53,7 +54,7 @@ impl HudFeed {
     }
 }
 
-fn finished(u: &UnitView) -> bool {
+pub(super) fn finished(u: &UnitView) -> bool {
     u.progress.is_none_or(|p| p >= Fixed::ONE)
 }
 
@@ -153,6 +154,10 @@ pub enum Page {
 pub enum Act {
     OpenBuild,
     Back,
+    /// Arm a map target; completed by the HUD's target click system.
+    Target(TargetMode),
+    /// The sim currently supports cloak as a special slot toggle.
+    Special(u8),
     /// UI-02's stop on the own selection.
     Stop,
     /// UI-02's formation on the own selection.
@@ -161,7 +166,20 @@ pub enum Act {
     Cancel(EntityId),
     /// `Order::Build`; `site`: the builder is a craft and needs a place, so
     /// the press arms a placement instead.
-    Build { builder: EntityId, what: ContentKey, odf: String, site: bool },
+    Build {
+        builder: EntityId,
+        what: ContentKey,
+        odf: String,
+        site: bool,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetMode {
+    Move,
+    Attack,
+    Mine,
+    Rally,
 }
 
 /// How a button looks.
@@ -289,12 +307,15 @@ pub fn grid(feed: &HudFeed, page: Page) -> Vec<Button> {
     if own.is_empty() {
         return Vec::new();
     }
-    let builder = builder(feed);
+    let caps = commands::shared(feed);
+    let builder = caps.build.then(|| builder(feed)).flatten();
     if page == Page::Build
         && let Some(b) = builder
     {
         let items = build_items(feed, b);
-        let site = feed.def(b).is_some_and(|d| d.movement.max_speed > Fixed::ZERO);
+        let site = feed
+            .def(b)
+            .is_some_and(|d| d.movement.max_speed > Fixed::ZERO);
         let mut out = Vec::new();
         let cells = (0..GRID_COLS * GRID_ROWS).filter(|c| *c != CANCEL_CELL && *c != BACK_CELL);
         for (cell, it) in cells.zip(&items) {
@@ -305,7 +326,12 @@ pub fn grid(feed: &HudFeed, page: Page) -> Vec<Button> {
             out.push(Button {
                 cell,
                 label: short(&it.odf),
-                act: Act::Build { builder: b.id, what: it.key, odf: it.odf.clone(), site },
+                act: Act::Build {
+                    builder: b.id,
+                    what: it.key,
+                    odf: it.odf.clone(),
+                    site,
+                },
                 look: it.look,
                 tip: format!("Build {}", it.odf),
                 verbose: Some(verbose),
@@ -319,11 +345,52 @@ pub fn grid(feed: &HudFeed, page: Page) -> Vec<Button> {
     let mut out = Vec::new();
     if builder.is_some() {
         out.push(button(0, &tr("Build"), Act::OpenBuild, &tr("Build")));
+        out.push(button(
+            1,
+            &tr("Rally"),
+            Act::Target(TargetMode::Rally),
+            &tr("Set rally point"),
+        ));
     }
-    out.push(button(6, &tr("Stop"), Act::Stop, &tr("Stop")));
-    out.push(button(7, &tr("Line"), Act::Formation(FORM_LINE), &tr("Formation: line")));
-    out.push(button(8, &tr("Column"), Act::Formation(FORM_COLUMN), &tr("Formation: column")));
-    out.push(button(9, &tr("Wedge"), Act::Formation(FORM_WEDGE), &tr("Formation: wedge")));
+    if caps.move_order {
+        out.push(button(2, &tr("Move"), Act::Target(TargetMode::Move), &tr("Move")));
+        out.push(button(6, &tr("Stop"), Act::Stop, &tr("Stop")));
+        out.push(button(
+            7,
+            &tr("Line"),
+            Act::Formation(FORM_LINE),
+            &tr("Formation: line"),
+        ));
+        out.push(button(
+            8,
+            &tr("Column"),
+            Act::Formation(FORM_COLUMN),
+            &tr("Formation: column"),
+        ));
+        out.push(button(
+            9,
+            &tr("Wedge"),
+            Act::Formation(FORM_WEDGE),
+            &tr("Formation: wedge"),
+        ));
+    }
+    if caps.attack {
+        out.push(button(
+            3,
+            &tr("Attack"),
+            Act::Target(TargetMode::Attack),
+            &tr("Attack"),
+        ));
+    }
+    if caps.mine {
+        out.push(button(4, &tr("Mine"), Act::Target(TargetMode::Mine), &tr("Mine")));
+    }
+    for (i, (slot, _)) in caps.specials.iter().enumerate() {
+        if let Some(cell) = [5, 10, 11, 12, 13, 14].get(i) {
+            out.push(button(*cell, &tr("Cloak"), Act::Special(*slot), &tr("Toggle cloak")));
+        }
+    }
+    out.sort_by_key(|b| b.cell);
     out
 }
 
@@ -332,15 +399,54 @@ pub fn grid(feed: &HudFeed, page: Page) -> Vec<Button> {
 /// needs a site.
 pub fn command(feed: &HudFeed, act: &Act) -> Option<(CommandKind, Vec<EntityId>)> {
     let own = feed.own_selection();
+    let caps = commands::shared(feed);
     match act {
-        Act::OpenBuild | Act::Back => None,
-        Act::Stop => Some((CommandKind::Order(Order::Stop { units: own.clone() }), own)),
-        Act::Formation(kind) => Some((CommandKind::Order(Order::Formation { units: own.clone(), kind: *kind }), own)),
-        Act::Cancel(b) => Some((CommandKind::Order(Order::Stop { units: vec![*b] }), vec![*b])),
-        Act::Build { builder, what, site: false, .. } => {
-            Some((CommandKind::Order(Order::Build { builder: *builder, what: *what, at: None }), vec![*builder]))
+        Act::OpenBuild | Act::Back | Act::Target(_) => None,
+        Act::Stop if caps.move_order => {
+            Some((CommandKind::Order(Order::Stop { units: own.clone() }), own))
         }
-        Act::Build { site: true, .. } => None,
+        Act::Formation(kind) if caps.move_order => Some((
+            CommandKind::Order(Order::Formation {
+                units: own.clone(),
+                kind: *kind,
+            }),
+            own,
+        )),
+        Act::Special(slot) if caps.specials.iter().any(|s| s.0 == *slot) => Some((
+            CommandKind::Order(Order::Special {
+                units: own.clone(),
+                slot: *slot,
+                target: sta_sim::command::Target::None,
+            }),
+            own,
+        )),
+        Act::Cancel(b) if caps.build && builder(feed).is_some_and(|u| u.id == *b) => Some((
+            CommandKind::Order(Order::Stop { units: vec![*b] }),
+            vec![*b],
+        )),
+        Act::Build {
+            builder: b,
+            what,
+            site: false,
+            ..
+        } if caps.build
+            && builder(feed).is_some_and(|u| {
+                u.id == *b
+                    && feed
+                        .def(u)
+                        .is_some_and(|d| d.build.list.iter().any(|i| i.key == *what))
+            }) =>
+        {
+            Some((
+                CommandKind::Order(Order::Build {
+                    builder: *b,
+                    what: *what,
+                    at: None,
+                }),
+                vec![*b],
+            ))
+        }
+        _ => None,
     }
 }
 
@@ -494,24 +600,130 @@ mod tests {
     #[test]
     fn the_top_page_offers_the_ui02_orders() {
         let db = sta_content::fake::db();
-        let units = vec![unit(&db, 1, "fx_cruiser", 1, 100.0, None), unit(&db, 2, "fx_yard", 1, 100.0, None), unit(&db, 4, "fx_cruiser", 2, 100.0, None)];
+        let units = vec![
+            unit(&db, 1, "fx_cruiser", 1, 100.0, None),
+            unit(&db, 2, "fx_yard", 1, 100.0, None),
+            unit(&db, 4, "fx_cruiser", 2, 100.0, None),
+        ];
         let f = feed(db, units, &[1]);
         let g = grid(&f, Page::Top);
-        assert_eq!(g.iter().map(|b| b.cell).collect::<Vec<_>>(), [6, 7, 8, 9], "no builder, no Build");
+        assert_eq!(
+            g.iter().map(|b| b.cell).collect::<Vec<_>>(),
+            [2, 3, 6, 7, 8, 9],
+            "mobile armed craft"
+        );
         let stop = g.iter().find(|b| b.act == Act::Stop).unwrap();
         assert_eq!(
             command(&f, &stop.act),
-            Some((CommandKind::Order(Order::Stop { units: vec![EntityId(1)] }), vec![EntityId(1)]))
+            Some((
+                CommandKind::Order(Order::Stop {
+                    units: vec![EntityId(1)]
+                }),
+                vec![EntityId(1)]
+            ))
         );
-        let wedge = g.iter().find(|b| b.act == Act::Formation(FORM_WEDGE)).unwrap();
-        assert!(matches!(command(&f, &wedge.act), Some((CommandKind::Order(Order::Formation { kind: FORM_WEDGE, .. }), _))));
+        let wedge = g
+            .iter()
+            .find(|b| b.act == Act::Formation(FORM_WEDGE))
+            .unwrap();
+        assert!(matches!(
+            command(&f, &wedge.act),
+            Some((
+                CommandKind::Order(Order::Formation {
+                    kind: FORM_WEDGE,
+                    ..
+                }),
+                _
+            ))
+        ));
         // A builder adds the opener in the top left.
-        let g = grid(&feed(sta_content::fake::db(), vec![unit(&sta_content::fake::db(), 2, "fx_yard", 1, 100.0, None)], &[2]), Page::Top);
+        let g = grid(
+            &feed(
+                sta_content::fake::db(),
+                vec![unit(&sta_content::fake::db(), 2, "fx_yard", 1, 100.0, None)],
+                &[2],
+            ),
+            Page::Top,
+        );
         assert_eq!((g[0].cell, &g[0].act), (0, &Act::OpenBuild));
+        assert!(g.iter().any(|b| b.act == Act::Target(TargetMode::Rally)));
+        assert!(!g.iter().any(|b| b.act == Act::Stop
+            || matches!(&b.act, Act::Formation(_) | Act::Target(TargetMode::Move))));
         // An enemy or nothing: no orders.
         let db = sta_content::fake::db();
-        assert!(grid(&feed(sta_content::fake::db(), vec![unit(&db, 4, "fx_cruiser", 2, 100.0, None)], &[4]), Page::Top).is_empty());
+        assert!(
+            grid(
+                &feed(
+                    sta_content::fake::db(),
+                    vec![unit(&db, 4, "fx_cruiser", 2, 100.0, None)],
+                    &[4]
+                ),
+                Page::Top
+            )
+            .is_empty()
+        );
         assert!(grid(&feed(sta_content::fake::db(), Vec::new(), &[]), Page::Top).is_empty());
+    }
+
+    #[test]
+    fn capability_grid_filters_static_mixed_disabled_and_stale_selection() {
+        let db = sta_content::fake::db();
+        let units = vec![
+            unit(&db, 1, "fx_station", 1, 100.0, None),
+            unit(&db, 2, "fx_yard", 1, 100.0, None),
+            unit(&db, 3, "fx_miner", 1, 100.0, None),
+            unit(&db, 4, "fx_cruiser", 1, 100.0, None),
+        ];
+        let f = feed(db, units, &[1]);
+        let station = grid(&f, Page::Top);
+        assert!(station.iter().any(|b| b.act == Act::OpenBuild));
+        assert!(
+            station
+                .iter()
+                .any(|b| b.act == Act::Target(TargetMode::Rally))
+        );
+        assert!(
+            station
+                .iter()
+                .any(|b| b.act == Act::Target(TargetMode::Attack))
+        );
+        assert!(!station.iter().any(|b| matches!(
+            &b.act,
+            Act::Stop | Act::Formation(_) | Act::Target(TargetMode::Move)
+        )));
+        let mut f = f;
+        f.selected = vec![EntityId(3)];
+        assert!(
+            grid(&f, Page::Top)
+                .iter()
+                .any(|b| b.act == Act::Target(TargetMode::Mine))
+        );
+        f.selected = vec![EntityId(3), EntityId(4)];
+        assert!(
+            !grid(&f, Page::Top)
+                .iter()
+                .any(|b| b.act == Act::Target(TargetMode::Mine))
+        );
+        assert!(
+            grid(&f, Page::Top)
+                .iter()
+                .any(|b| b.act == Act::Target(TargetMode::Move))
+        );
+        f.selected = vec![EntityId(1), EntityId(2)];
+        assert!(grid(&f, Page::Top).iter().any(|b| b.act == Act::OpenBuild));
+        f.selected = vec![EntityId(2), EntityId(4)];
+        assert!(!grid(&f, Page::Top).iter().any(|b| b.act == Act::OpenBuild));
+        assert_eq!(command(&f, &Act::OpenBuild), None);
+        f.selected = vec![EntityId(4)];
+        Arc::make_mut(&mut f.view).units[3].flags =
+            UnitFlags::SELECTABLE.with(UnitFlags::ENGINES_OFF, true);
+        assert!(!grid(&f, Page::Top).iter().any(|b| matches!(
+            &b.act,
+            Act::Stop | Act::Formation(_) | Act::Target(TargetMode::Move)
+        )));
+        f.selected = vec![EntityId(999)];
+        assert!(grid(&f, Page::Top).is_empty());
+        assert_eq!(command(&f, &Act::Stop), None);
     }
 
     #[test]
