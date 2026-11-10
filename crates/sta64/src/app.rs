@@ -94,6 +94,8 @@ pub struct LaunchConfig {
     pub install_root: Option<PathBuf>,
     pub active_mod: Option<String>,
     pub view: Option<String>,
+    /// `--view` was given (with or without a model): the model viewer instead of the front end.
+    pub viewer: bool,
     /// `Some("")`: `--map` without a name (the map browser).
     pub map: Option<String>,
     pub mission_report: bool,
@@ -137,7 +139,7 @@ Usage: sta64 [options]
 
   --install-root <path>    Armada II / Fleet Operations install (default: next to the executable)
   --mod <name>             mod to mount on top of the install
-  --view [<model>]         model viewer (the default)
+  --view [<model>]         model viewer (without any mode flag, the front end opens)
   --map [<map>]            fly around a map; without a name, the map browser
   --seat <n>               with --map: play seat n (orders for its units only, its fog and shroud drawn)
   --skirmish [<map>]       play a match: you (seat 0, or --seat n) against an opponent on a multiplayer
@@ -192,7 +194,10 @@ impl LaunchConfig {
             match a.as_str() {
                 "--install-root" => cfg.install_root = value(&mut args).map(PathBuf::from),
                 "--mod" => cfg.active_mod = value(&mut args),
-                "--view" => cfg.view = value(&mut args),
+                "--view" => {
+                    cfg.viewer = true;
+                    cfg.view = value(&mut args);
+                }
                 "--map" => cfg.map = Some(value(&mut args).unwrap_or_default()),
                 "--skirmish" => {
                     cfg.skirmish = true;
@@ -252,8 +257,11 @@ impl LaunchConfig {
             Mode::Game
         } else if self.map.is_some() {
             Mode::Map
-        } else {
+        } else if self.viewer || self.ui_gallery {
             Mode::Viewer
+        } else {
+            // No flags that pick a mode: the front end (INT-M4).
+            Mode::FrontEnd
         }
     }
 
@@ -305,7 +313,10 @@ mod tests {
         assert_eq!(parse("--view fdefiant").view.as_deref(), Some("fdefiant"));
         assert_eq!(parse("--view fdefiant").mode(), Mode::Viewer);
         assert!(parse("--mission-report").mission_report);
-        assert_eq!(parse("").mode(), Mode::Viewer);
+        assert_eq!(parse("--view").mode(), Mode::Viewer);
+        assert_eq!(parse("--ui-gallery").mode(), Mode::Viewer);
+        assert_eq!(parse("").mode(), Mode::FrontEnd);
+        assert_eq!(parse("--install-root /g --mod FO").mode(), Mode::FrontEnd);
         assert_eq!(parse("").clock_mode(), ClockMode::Wall);
     }
 

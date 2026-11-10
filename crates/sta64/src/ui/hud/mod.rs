@@ -38,6 +38,7 @@ use sta_sim::command::{CommandKind, Order};
 use sta_sim::{ContentKey, EntityId, Vec3 as SimVec3};
 
 pub use layout::{HudLayout, InfoHeight};
+pub use panels::HudRoot;
 pub use model::{Act, HudFeed, Page};
 use model::{Models, command, models};
 use panels::{GridCell, GridPanel, GroupTile, InfoPanel, ResourceStrip};
@@ -47,6 +48,7 @@ use super::radar::{RadarPlugin, RadarRoot};
 use super::theme::{ButtonClicked, Theme, ThemePlugin};
 use crate::app::GameSet;
 use crate::input::orders::Aim;
+use crate::ui::i18n::trf;
 use crate::sim_link::{CommandQueue, ContentRes, OrderIssued, OrderKind, Selection, SelectionChanged, SimLink};
 
 /// What the HUD is drawn from and how it fits the screen.
@@ -338,7 +340,7 @@ fn press(
             }
             Act::Build { builder, what, odf, site: true } => {
                 state.placing = Some(Armed { builder: *builder, what: *what, odf: odf.clone() });
-                notices.write(Notice::new(Severity::Info, format!("Place {odf}: click the map (Esc cancels)")));
+                notices.write(Notice::new(Severity::Info, trf("Place {0}: click the map (Esc cancels)", &[&odf])));
             }
             other => {
                 if let Some((kind, units)) = command(&feed, other) {

@@ -30,6 +30,7 @@ use sta_sim::{PlayerId, SimEvent, UnitView};
 use super::theme::Theme;
 use crate::app::GameSet;
 use crate::sim_link::{ContentRes, SimLink, SimMsg};
+use crate::ui::i18n::{tr, trf};
 
 /// Seconds a notice shows, fade included.
 pub const NOTICE_SECS: f32 = 5.0;
@@ -200,26 +201,26 @@ pub struct TipHover {
 pub fn notice_for(ev: &SimEvent, me: PlayerId, unit: impl Fn(sta_sim::EntityId) -> Option<(PlayerId, String)>) -> Option<Notice> {
     Some(match ev {
         SimEvent::Destroyed { id, .. } => {
-            let (owner, name) = unit(*id).unwrap_or((me, "Unit".into()));
+            let (owner, name) = unit(*id).unwrap_or((me, tr("Unit")));
             if owner == me {
-                Notice::new(Severity::Bad, format!("{name} destroyed"))
+                Notice::new(Severity::Bad, trf("{0} destroyed", &[&name]))
             } else {
-                Notice::new(Severity::Info, format!("Enemy {name} destroyed"))
+                Notice::new(Severity::Info, trf("Enemy {0} destroyed", &[&name]))
             }
         }
         SimEvent::ShieldsDown { id, .. } => {
             let (owner, name) = unit(*id)?;
-            (owner == me).then(|| Notice::new(Severity::Warn, format!("{name}: shields down")))?
+            (owner == me).then(|| Notice::new(Severity::Warn, trf("{0}: shields down", &[&name])))?
         }
         SimEvent::Built { id, .. } => {
             let (owner, name) = unit(*id)?;
-            (owner == me).then(|| Notice::new(Severity::Good, format!("{name} complete")))?
+            (owner == me).then(|| Notice::new(Severity::Good, trf("{0} complete", &[&name])))?
         }
         SimEvent::PlayerEliminated { player } => {
             if *player == me {
-                Notice::new(Severity::Bad, "You have been eliminated")
+                Notice::new(Severity::Bad, tr("You have been eliminated"))
             } else {
-                Notice::new(Severity::Info, format!("Player {} eliminated", player.0))
+                Notice::new(Severity::Info, trf("Player {0} eliminated", &[&player.0]))
             }
         }
         _ => return None,
@@ -227,7 +228,7 @@ pub fn notice_for(ev: &SimEvent, me: PlayerId, unit: impl Fn(sta_sim::EntityId) 
 }
 
 fn name_of(db: Option<&ContentRes>, u: &UnitView) -> String {
-    db.and_then(|d| d.0.name(u.def)).map(str::to_owned).unwrap_or_else(|| "Unit".into())
+    db.and_then(|d| d.0.name(u.def)).map(str::to_owned).unwrap_or_else(|| tr("Unit"))
 }
 
 fn events_to_notices(
