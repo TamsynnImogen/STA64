@@ -41,18 +41,27 @@ verify_elf() {
 }
 
 verify_needed() {
-    local file=$1 dynamic needed api
+    local file=$1 bundled=$2 dynamic needed api
     dynamic=$("$readelf" --dynamic --wide "$file")
     while IFS= read -r needed; do
         [[ -n $needed ]] || continue
         [[ $needed =~ ^lib[A-Za-z0-9_+.-]+\.so$ ]] || fail "$file has invalid NEEDED name: $needed"
-        if [[ -s $generated/$needed ]]; then
+        if [[ -s $bundled/$needed ]]; then
             continue
         fi
         api=$(awk -F '"' -v name="$needed" '$2 == name { print $4; exit }' "$system_libs")
         [[ $api =~ ^[0-9]+$ && $api -le 26 ]] \
             || fail "$file needs unbundled or API>26 library: $needed"
     done < <(awk '/\(NEEDED\)/ { if (match($0, /\[[^]]+\]/)) print substr($0, RSTART + 1, RLENGTH - 2) }' <<<"$dynamic")
+}
+
+verify_activity_exports() {
+    local file=$1 symbols
+    symbols=$("$readelf" --dyn-syms --wide "$file")
+    awk '$NF == "android_main" && $5 == "GLOBAL" && $7 != "UND" { found = 1 } END { exit !found }' \
+        <<<"$symbols" || fail "$file does not export android_main"
+    awk '$NF == "ANativeActivity_onCreate" && $5 == "GLOBAL" && $7 != "UND" { found = 1 } END { exit !found }' \
+        <<<"$symbols" || fail "$file does not export ANativeActivity_onCreate"
 }
 
 target_dir=${CARGO_TARGET_DIR:-$repo/target}
@@ -80,11 +89,7 @@ fi
 [[ -s $lib ]] || fail "native library not produced: $lib"
 
 verify_elf "$lib"
-symbols=$("$readelf" --dyn-syms --wide "$lib")
-awk '$NF == "android_main" && $5 == "GLOBAL" && $7 != "UND" { found = 1 } END { exit !found }' \
-    <<<"$symbols" || fail 'android_main is not exported'
-awk '$NF == "ANativeActivity_onCreate" && $5 == "GLOBAL" && $7 != "UND" { found = 1 } END { exit !found }' \
-    <<<"$symbols" || fail 'ANativeActivity_onCreate is not exported'
+verify_activity_exports "$lib"
 
 mkdir -p "$generated"
 cp "$lib" "$generated/libsta64.so"
@@ -106,20 +111,21 @@ for packaged in "$generated"/*.so; do
     esac
 done
 verify_elf "$generated/libsta64.so"
+verify_activity_exports "$generated/libsta64.so"
 if [[ $needs_libcxx == true ]]; then
     verify_elf "$generated/libc++_shared.so"
 fi
-verify_needed "$generated/libsta64.so"
+verify_needed "$generated/libsta64.so" "$generated"
 if [[ $needs_libcxx == true ]]; then
-    verify_needed "$generated/libc++_shared.so"
+    verify_needed "$generated/libc++_shared.so" "$generated"
 fi
 
 cd "$project"
 if [[ $variant == debug ]]; then
-    ./gradlew --no-daemon :app:assembleDebug
+    ./gradlew --no-daemon --max-workers 2 :app:assembleDebug
     apk=$project/app/build/outputs/apk/debug/app-debug.apk
 else
-    ./gradlew --no-daemon :app:assembleRelease
+    ./gradlew --no-daemon --max-workers 2 :app:assembleRelease
     apk=$project/app/build/outputs/apk/release/app-release-unsigned.apk
 fi
 [[ -s $apk ]] || fail "APK not produced: $apk"
@@ -130,12 +136,34 @@ grep -Fxq 'lib/arm64-v8a/libsta64.so' <<<"$entries" \
 if [[ $needs_libcxx == true ]]; then
     grep -Fxq 'lib/arm64-v8a/libc++_shared.so' <<<"$entries" \
         || fail 'APK is missing required ARM64 libc++_shared.so'
+elif grep -Fxq 'lib/arm64-v8a/libc++_shared.so' <<<"$entries"; then
+    fail 'APK contains an unneeded ARM64 libc++_shared.so'
 fi
 if awk '/^lib\/arm64-v8a\/.*\.so$/ && $0 != "lib/arm64-v8a/libsta64.so" && $0 != "lib/arm64-v8a/libc++_shared.so" { found = 1 } END { exit !found }' <<<"$entries"; then
     fail 'APK contains an unexpected native library'
 fi
 if awk '/^lib\// && $0 !~ /^lib\/arm64-v8a\// { found = 1 } END { exit !found }' <<<"$entries"; then
     fail 'APK contains an unexpected ABI'
+fi
+
+# Gradle may strip debug symbols while packaging. Verify the actual APK bytes,
+# not only the native library staged before Gradle runs.
+verified=$project/app/build/verified-apk/$variant/arm64-v8a
+mkdir -p "$verified"
+unzip -p "$apk" lib/arm64-v8a/libsta64.so > "$verified/libsta64.so" \
+    || fail 'could not extract APK libsta64.so'
+if [[ $needs_libcxx == true ]]; then
+    unzip -p "$apk" lib/arm64-v8a/libc++_shared.so > "$verified/libc++_shared.so" \
+        || fail 'could not extract APK libc++_shared.so'
+else
+    rm -f "$verified/libc++_shared.so"
+fi
+verify_elf "$verified/libsta64.so"
+verify_activity_exports "$verified/libsta64.so"
+verify_needed "$verified/libsta64.so" "$verified"
+if [[ $needs_libcxx == true ]]; then
+    verify_elf "$verified/libc++_shared.so"
+    verify_needed "$verified/libc++_shared.so" "$verified"
 fi
 "$sdk/build-tools/36.0.0/zipalign" -c -P 16 -v 4 "$apk" >/dev/null \
     || fail 'APK native libraries are not 16 KiB ZIP aligned'
@@ -149,5 +177,9 @@ else
     printf 'Release APK is unsigned; sign it separately with your own key.\n'
 fi
 
-printf 'Native library: %s\nAPK: %s\n' "$lib" "$apk"
-sha256sum "$lib" "$apk"
+printf 'Prepackage native library: %s\nAPK native payload: %s\nAPK: %s\n' \
+    "$lib" "$verified/libsta64.so" "$apk"
+sha256sum "$lib" "$verified/libsta64.so" "$apk"
+if [[ $needs_libcxx == true ]]; then
+    sha256sum "$verified/libc++_shared.so"
+fi
