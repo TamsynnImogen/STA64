@@ -19,6 +19,10 @@ fn v(x: i32, z: i32) -> Vec3 {
 }
 
 fn game() -> Sim {
+    game_with_content(sta_content::fake::db())
+}
+
+fn game_with_content(content: sta_content::ContentDb) -> Sim {
     let seat = |id, control| PlayerSetup {
         id: PlayerId(id),
         team: TeamId(id),
@@ -28,10 +32,26 @@ fn game() -> Sim {
     Sim::from_setup(&GameSetup {
         seed: 3,
         map: Arc::new(MapDef::empty()),
-        content: Arc::new(sta_content::fake::db()),
+        content: Arc::new(content),
         players: vec![seat(0, Control::Human), seat(1, Control::Idle)],
         options: GameOptions::default(),
     })
+}
+
+fn game_with_second_resource() -> Sim {
+    let base = sta_content::fake::db();
+    let mut builder = sta_content::ContentDb::builder()
+        .profile(base.profile())
+        .features(base.features().clone());
+    for unit in base.units() {
+        builder = builder.unit(unit.clone());
+    }
+    for weapon in base.weapons() {
+        builder = builder.weapon(weapon.clone());
+    }
+    let mut latinum = sta_content::UnitDef::new("fx_latinum_moon", "planet");
+    latinum.resource = Some(1);
+    game_with_content(builder.unit(latinum).build().unwrap())
 }
 
 fn cmd(player: PlayerId, seq: u32, kind: CommandKind) -> Command {
@@ -229,9 +249,128 @@ fn move_and_stop_end_mining() {
                 queue: false,
             }
         };
+        let carried = sim.economy.cargo(m).unwrap();
+        assert!(carried > Fixed::ZERO);
         sim.step(&[cmd(PlayerId(0), 2, CommandKind::Order(o))]);
         assert!(!sim.economy.is_mining(m), "stop={stop}");
+        assert_eq!(sim.economy.cargo(m), Some(carried));
+        assert_eq!(sim.economy.miners.get(m).unwrap().phase, Phase::Idle);
+        if !stop {
+            assert_eq!(sim.unit(m).unwrap().target, Some(v(500, 0)));
+        }
+        sim.step(&[cmd(PlayerId::BENCH, 3, CommandKind::Edit(Edit::Kill(moon)))]);
+        run(&mut sim, 20);
+        assert_eq!(stock(&sim, 0, 0), Fixed::ZERO);
+        assert_eq!(sim.economy.cargo(m), Some(carried));
+        if !stop {
+            assert_eq!(sim.unit(m).unwrap().target, Some(v(500, 0)));
+        }
     }
+}
+
+#[test]
+fn empty_miner_stops_approaching_a_removed_node() {
+    let mut sim = game();
+    let moon = spawn(&mut sim, "fx_moon", NEUTRAL, v(2000, 0));
+    let miner = spawn(&mut sim, "fx_miner", PlayerId(0), v(0, 0));
+    assert!(mine(&mut sim, 0, miner, moon));
+    assert_eq!(sim.economy.cargo(miner), Some(Fixed::ZERO));
+    assert_eq!(sim.unit(miner).unwrap().target, Some(v(2000, 0)));
+    sim.step(&[cmd(PlayerId::BENCH, 5, CommandKind::Edit(Edit::Kill(moon)))]);
+    assert!(!sim.economy.is_mining(miner));
+    assert_eq!(sim.economy.cargo(miner), None);
+    assert_eq!(sim.unit(miner).unwrap().target, None);
+}
+
+#[test]
+fn loaded_freighter_delivers_after_its_old_node_is_removed() {
+    let mut sim = game();
+    let moon = spawn(&mut sim, "fx_moon", NEUTRAL, v(0, 0));
+    spawn(&mut sim, "fx_station", PlayerId(0), v(0, 0));
+    let m = spawn(&mut sim, "fx_miner", PlayerId(0), v(0, 0));
+    assert!(mine(&mut sim, 0, m, moon));
+    run(&mut sim, 10);
+    let carried = sim.economy.cargo(m).unwrap();
+    let mut events = sim.step(&[cmd(PlayerId::BENCH, 5, CommandKind::Edit(Edit::Kill(moon)))]).events;
+    for _ in 0..30 {
+        events.extend(sim.step(&[]).events);
+    }
+    assert_eq!(stock(&sim, 0, 0), carried);
+    assert!(events.contains(&SimEvent::Delivered {
+        player: PlayerId(0), resource: 0, amount: carried
+    }));
+    assert_eq!(sim.economy.cargo(m), None);
+    assert!(!sim.economy.is_mining(m));
+}
+
+#[test]
+fn changing_nodes_delivers_old_resource_before_mining_new_resource() {
+    let mut sim = game_with_second_resource();
+    let old = spawn(&mut sim, "fx_moon", NEUTRAL, v(0, 0));
+    let new = spawn(&mut sim, "fx_latinum_moon", NEUTRAL, v(0, 0));
+    spawn(&mut sim, "fx_station", PlayerId(0), v(0, 0));
+    let m = spawn(&mut sim, "fx_miner", PlayerId(0), v(0, 0));
+    assert!(mine(&mut sim, 0, m, old));
+    run(&mut sim, 10);
+    let carried = sim.economy.cargo(m).unwrap();
+    assert!(mine(&mut sim, 0, m, new));
+    let mut missing_new = sim.clone();
+    let mut missing_events = missing_new.step(&[cmd(
+        PlayerId::BENCH, 5, CommandKind::Edit(Edit::Kill(new))
+    )]).events;
+    for _ in 0..30 {
+        missing_events.extend(missing_new.step(&[]).events);
+    }
+    assert_eq!(stock(&missing_new, 0, 0), carried);
+    assert!(missing_events.contains(&SimEvent::Delivered {
+        player: PlayerId(0), resource: 0, amount: carried
+    }));
+    assert!(!missing_new.economy.is_mining(m));
+    assert_eq!(missing_new.economy.cargo(m), None);
+    let mut events = Vec::new();
+    for _ in 0..30 {
+        events.extend(sim.step(&[]).events);
+    }
+    assert_eq!(stock(&sim, 0, 0), carried);
+    assert_eq!(stock(&sim, 0, 1), Fixed::ZERO);
+    assert!(events.contains(&SimEvent::Delivered {
+        player: PlayerId(0), resource: 0, amount: carried
+    }));
+    assert_eq!(sim.economy.miners.get(m).unwrap().res, 1);
+    assert_eq!(sim.economy.miners.get(m).unwrap().node, new);
+    assert!(sim.economy.cargo(m).unwrap() > Fixed::ZERO);
+    run(&mut sim, 600);
+    assert_eq!(stock(&sim, 0, 0), carried);
+    assert!(stock(&sim, 0, 1) >= Fixed::from_int(150));
+}
+
+#[test]
+fn interrupted_partial_unload_keeps_credited_stock_and_reports_only_remainder() {
+    let mut sim = game_with_second_resource();
+    let old = spawn(&mut sim, "fx_moon", NEUTRAL, v(0, 0));
+    let new = spawn(&mut sim, "fx_latinum_moon", NEUTRAL, v(0, 0));
+    spawn(&mut sim, "fx_station", PlayerId(0), v(0, 0));
+    let m = spawn(&mut sim, "fx_miner", PlayerId(0), v(0, 0));
+    assert!(mine(&mut sim, 0, m, old));
+    run(&mut sim, 310);
+    let credited = stock(&sim, 0, 0);
+    let carried = sim.economy.cargo(m).unwrap();
+    assert!(credited > Fixed::ZERO && carried > Fixed::ZERO);
+    assert_eq!(credited + carried, Fixed::from_int(150));
+    sim.step(&[cmd(PlayerId(0), 2, CommandKind::Order(Order::Stop { units: vec![m] }))]);
+    assert_eq!(sim.economy.miners.get(m).unwrap().unloaded, Fixed::ZERO);
+    assert_eq!(stock(&sim, 0, 0), credited);
+    assert!(mine(&mut sim, 0, m, new));
+    let mut events = Vec::new();
+    for _ in 0..310 {
+        events.extend(sim.step(&[]).events);
+    }
+    assert_eq!(stock(&sim, 0, 0), Fixed::from_int(150));
+    assert!(events.contains(&SimEvent::Delivered {
+        player: PlayerId(0), resource: 0, amount: carried
+    }));
+    assert!(!events.iter().any(|e| matches!(e, SimEvent::Delivered { resource: 0, amount, .. } if *amount == Fixed::from_int(150))));
+    assert_eq!(sim.economy.miners.get(m).unwrap().res, 1);
 }
 
 #[test]
@@ -296,7 +435,27 @@ fn rec_round_trips_mid_trip() {
 }
 
 #[test]
-fn dead_node_or_miner_drops_the_order() {
+fn idle_cargo_record_round_trips_with_phase_four_and_same_digest() {
+    let mut sim = game();
+    let moon = spawn(&mut sim, "fx_moon", NEUTRAL, v(0, 0));
+    let m = spawn(&mut sim, "fx_miner", PlayerId(0), v(0, 0));
+    assert!(mine(&mut sim, 0, m, moon));
+    run(&mut sim, 10);
+    sim.step(&[cmd(PlayerId(0), 2, CommandKind::Order(Order::Stop { units: vec![m] }))]);
+    let rec = sim.economy.to_rec();
+    assert_eq!(rec.miners.len(), 1);
+    assert_eq!(rec.miners[0].5, 4);
+    let back = Economy::from_rec(&rec);
+    assert_eq!(back, sim.economy);
+    let mut a = Fnv::new();
+    let mut b = Fnv::new();
+    sim.economy.hash_into(&mut a);
+    back.hash_into(&mut b);
+    assert_eq!(a.0, b.0);
+}
+
+#[test]
+fn dead_miner_drops_the_record() {
     let mut sim = game();
     let moon = spawn(&mut sim, "fx_moon", NEUTRAL, v(0, 0));
     let m = spawn(&mut sim, "fx_miner", PlayerId(0), v(0, 0));
@@ -304,7 +463,7 @@ fn dead_node_or_miner_drops_the_order() {
     sim.step(&[cmd(
         PlayerId::BENCH,
         5,
-        CommandKind::Edit(crate::command::Edit::Kill(moon)),
+        CommandKind::Edit(crate::command::Edit::Kill(m)),
     )]);
     run(&mut sim, 2);
     assert!(!sim.economy.is_mining(m));

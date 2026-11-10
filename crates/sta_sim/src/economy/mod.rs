@@ -12,7 +12,8 @@
 //!   rate (ODF `dilithiumTransferRate`, default 15 per second), crediting the
 //!   stock as it goes. [`SimEvent::Delivered`] is emitted once per trip.
 //!   Hold size: ODF `maxdilithium`, default 150.
-//! - A `Move` (not queued) or `Stop` of a freighter ends its mining.
+//! - A `Move` (not queued) or `Stop` ends mining, but a loaded freighter keeps
+//!   its cargo while idle. A later Mine order delivers that cargo first.
 //! - Which resource a node gives comes from its class (`latinum`) or its
 //!   ODF `resource` key (names containing latinum, metal/tritanium,
 //!   biomatter), else dilithium. Nodes hold [`RICHNESS`] and run dry.
@@ -53,6 +54,7 @@ enum Phase {
     Mining,
     ToDock,
     Unloading,
+    Idle,
 }
 
 impl Phase {
@@ -65,6 +67,7 @@ impl Phase {
             1 => Phase::Mining,
             2 => Phase::ToDock,
             3 => Phase::Unloading,
+            4 => Phase::Idle,
             _ => Phase::ToNode,
         }
     }
@@ -154,12 +157,12 @@ impl Economy {
             .unwrap_or_default()
     }
 
-    /// Whether `id` is on a mining order.
+    /// Whether `id` has an active mining order.
     pub fn is_mining(&self, id: EntityId) -> bool {
-        self.miners.get(id).is_some()
+        self.miners.get(id).is_some_and(|m| m.phase != Phase::Idle)
     }
 
-    /// What `id` carries, if it is a freighter on a mining order.
+    /// What `id` carries, including while idle.
     pub fn cargo(&self, id: EntityId) -> Option<Fixed> {
         self.miners.get(id).map(|m| m.cargo)
     }
@@ -236,9 +239,7 @@ impl Economy {
         ids.dedup();
         for &id in &ids {
             let old = self.miners.get(id).copied();
-            let cargo = old
-                .filter(|m| m.res == res)
-                .map_or(Fixed::ZERO, |m| m.cargo);
+            let cargo = old.map_or(Fixed::ZERO, |m| m.cargo);
             let phase = if cargo > Fixed::ZERO {
                 Phase::ToDock
             } else {
@@ -248,7 +249,7 @@ impl Economy {
                 id,
                 Miner {
                     node,
-                    res,
+                    res: if cargo > Fixed::ZERO { old.unwrap().res } else { res },
                     cargo,
                     unloaded: Fixed::ZERO,
                     phase,
@@ -258,14 +259,21 @@ impl Economy {
         !ids.is_empty()
     }
 
-    /// A move or stop of these units ends their mining (their cargo is lost).
+    /// A move or stop suspends mining; carried cargo remains physical state.
     pub(crate) fn cancel(&mut self, units: &Entities, player: PlayerId, ids: &[EntityId]) {
         for &id in ids {
             if units
                 .get(id)
                 .is_some_and(|u| !player.is_player() || u.owner == player)
+                && let Some(mut m) = self.miners.get(id).copied()
             {
-                self.miners.remove(id);
+                if m.cargo > Fixed::ZERO {
+                    m.phase = Phase::Idle;
+                    m.unloaded = Fixed::ZERO;
+                    self.miners.insert(id, m);
+                } else {
+                    self.miners.remove(id);
+                }
             }
         }
     }
@@ -282,11 +290,7 @@ impl Economy {
             let Some(mut m) = self.miners.get(id).copied() else {
                 continue;
             };
-            let alive = units
-                .get(id)
-                .zip(units.get(m.node))
-                .map(|(u, n)| (u.def, u.owner, n.pos));
-            let Some((def, owner, node_pos)) = alive else {
+            let Some((def, owner)) = units.get(id).map(|u| (u.def, u.owner)) else {
                 self.miners.remove(id);
                 continue;
             };
@@ -294,18 +298,28 @@ impl Economy {
                 self.miners.remove(id);
                 continue;
             };
+            let node_pos = units.get(m.node).filter(|n| n.kind == EntityKind::Resource).map(|n| n.pos);
+            if matches!(m.phase, Phase::ToNode | Phase::Mining) && node_pos.is_none() {
+                if m.cargo == Fixed::ZERO {
+                    set_target(units, id, None);
+                    self.miners.remove(id);
+                    continue;
+                }
+                m.phase = Phase::ToDock;
+            }
             // A transition that lands in reach acts the same tick.
             for _ in 0..4 {
                 let Some(pos) = units.get(id).map(|u| u.pos) else {
                     break;
                 };
                 match m.phase {
+                    Phase::Idle => break,
                     Phase::ToNode => {
-                        if dist(pos, node_pos) <= reach() {
+                        if dist(pos, node_pos.unwrap()) <= reach() {
                             set_target(units, id, None);
                             m.phase = Phase::Mining;
                         } else {
-                            steer(units, id, node_pos);
+                            steer(units, id, node_pos.unwrap());
                             break;
                         }
                     }
@@ -353,13 +367,22 @@ impl Economy {
                                 amount: m.unloaded,
                             });
                             m.unloaded = Fixed::ZERO;
-                            m.phase = Phase::ToNode;
+                            if let Some(n) = units.get(m.node).filter(|n| n.kind == EntityKind::Resource) {
+                                m.res = node_resource(db, n.def);
+                                m.phase = Phase::ToNode;
+                            } else {
+                                m.phase = Phase::Idle;
+                            }
                         }
                         break;
                     }
                 }
             }
-            self.miners.insert(id, m);
+            if m.phase == Phase::Idle && m.cargo == Fixed::ZERO {
+                self.miners.remove(id);
+            } else {
+                self.miners.insert(id, m);
+            }
         }
         // Rows of nodes that are gone go with them.
         let gone: Vec<EntityId> = self

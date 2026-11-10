@@ -12,8 +12,9 @@
 //!
 //! Adding a subsystem's state (weapons from SIM-04, say) is one field on
 //! [`Body`], filled in [`Sim::snapshot`] and read back in
-//! [`Sim::from_snapshot`], plus a [`FORMAT_VERSION`] bump. Old snapshots are
-//! refused, not migrated: a save is only good for the build that wrote it.
+//! [`Sim::from_snapshot`], plus a [`FORMAT_VERSION`] bump. Old layouts are
+//! refused, not generally migrated. Format 8 has the same body as format 9;
+//! its narrow compatible read path accepts only its original mining phases.
 //!
 //! The state types of other crates (`MoveStats`) have no serde, so the body
 //! uses small mirror records here instead of touching those crates.
@@ -31,8 +32,11 @@ use crate::world::{Entities, Entity, EntityKind, Shields, Table};
 use crate::{Rng, Sim, SimEvent};
 
 pub const MAGIC: [u8; 4] = *b"STAS";
-/// Bumped whenever [`Body`] (or anything in it) changes layout.
-pub const FORMAT_VERSION: u16 = 8;
+/// Bumped whenever [`Body`] or its state tags change. Format 9 adds the
+/// suspended-cargo mining phase without adding a tuple field.
+pub const FORMAT_VERSION: u16 = 9;
+// Only compatible while Body is byte-for-byte the format-8 record schema.
+const COMPATIBLE_MINING_FORMAT: u16 = 8;
 
 const HEADER: usize = 4 + 2 + 4 + 8;
 
@@ -57,7 +61,7 @@ impl std::fmt::Display for SnapshotError {
         match self {
             SnapshotError::BadMagic => write!(f, "not a snapshot"),
             SnapshotError::FormatVersion { found } => {
-                write!(f, "snapshot format {found}, expected {FORMAT_VERSION}")
+                write!(f, "snapshot format {found}, expected {FORMAT_VERSION} or compatible {COMPATIBLE_MINING_FORMAT}")
             }
             SnapshotError::SeamRev { found } => {
                 write!(f, "snapshot seam revision {found}, expected {SEAM_REV}")
@@ -279,7 +283,7 @@ impl Sim {
             return Err(SnapshotError::BadMagic);
         }
         let found = u16::from_le_bytes([bytes[4], bytes[5]]);
-        if found != FORMAT_VERSION {
+        if found != FORMAT_VERSION && found != COMPATIBLE_MINING_FORMAT {
             return Err(SnapshotError::FormatVersion { found });
         }
         let seam = u32::from_le_bytes(bytes[6..10].try_into().unwrap());
@@ -295,6 +299,12 @@ impl Sim {
             .map_err(|e| SnapshotError::Corrupt(e.to_string()))?;
         if !rest.is_empty() {
             return Err(SnapshotError::Corrupt("trailing bytes".into()));
+        }
+        let max_phase = if found == COMPATIBLE_MINING_FORMAT { 3 } else { 4 };
+        if let Some(row) = b.economy.miners.iter().find(|row| row.5 > max_phase) {
+            return Err(SnapshotError::Corrupt(format!(
+                "mining phase {} is not supported by snapshot format {found}", row.5
+            )));
         }
 
         let list = b
@@ -535,6 +545,75 @@ mod tests {
         assert!(!live.economy.is_empty());
         let delivered = assert_continues(&mut live, db, 300);
         assert!(delivered > 0, "a delivery falls inside the window");
+    }
+
+    const MINING_V8: &[u8] = include_bytes!("../tests/fixtures/mining-v8.stas");
+
+    #[test]
+    fn original_v8_mining_fixture_keeps_its_baseline_continuation() {
+        let db = Arc::new(sta_content::fake::db());
+        assert_eq!(u16::from_le_bytes(MINING_V8[4..6].try_into().unwrap()), 8);
+        let mut live = Sim::from_snapshot(MINING_V8, Some(db)).unwrap();
+        assert_eq!(live.tick, 100);
+        assert_eq!(live.digest(), 0x14c7_0e04_4af1_fb70);
+        assert_eq!(live.economy.to_rec().miners[0].3, Fixed::from_int(50).to_bits());
+        for _ in 0..800 { live.step(&[]); }
+        assert_eq!(live.tick, 900);
+        assert_eq!(live.digest(), 0x1fad_adc8_8e06_0e5a);
+        assert_eq!(live.view().player(PlayerId(0)).unwrap().resources[0], Fixed::from_int(150));
+        assert_eq!(u16::from_le_bytes(live.snapshot()[4..6].try_into().unwrap()), FORMAT_VERSION);
+    }
+
+    fn stopped_loaded_miner() -> (Sim, Arc<sta_content::ContentDb>) {
+        let db = Arc::new(sta_content::fake::db());
+        let mut sim = Sim::from_snapshot(MINING_V8, Some(db.clone())).unwrap();
+        let stopped = sim.step(&[Command {
+            player: PlayerId(0), seq: 0,
+            kind: CommandKind::Order(Order::Stop { units: vec![EntityId(3)] }),
+        }]);
+        assert!(!stopped.events.iter().any(|e| matches!(e, SimEvent::Rejected { .. })));
+        let rec = sim.economy.to_rec();
+        assert_eq!(rec.miners.len(), 1);
+        assert_eq!((rec.miners[0].3, rec.miners[0].5), (Fixed::from_int(50).to_bits(), 4));
+        (sim, db)
+    }
+
+    #[test]
+    fn suspended_cargo_snapshot_stays_idle_and_resumes_identically() {
+        let (mut live, db) = stopped_loaded_miner();
+        assert_eq!(assert_continues(&mut live, db.clone(), 120), 0);
+        assert_eq!(live.economy.to_rec().miners[0].3, Fixed::from_int(50).to_bits());
+        assert_eq!(live.view().player(PlayerId(0)).unwrap().resources.first().copied().unwrap_or(Fixed::ZERO), Fixed::ZERO);
+        let mut loaded = Sim::from_snapshot(&live.snapshot(), Some(db)).unwrap();
+        let order = Command {
+            player: PlayerId(0), seq: 1,
+            kind: CommandKind::Order(Order::Mine { units: vec![EntityId(3)], node: EntityId(1) }),
+        };
+        let a = live.step(std::slice::from_ref(&order));
+        let b = loaded.step(&[order]);
+        assert_eq!(a, b);
+        for tick in 0..700 {
+            let a = live.step(&[]);
+            let b = loaded.step(&[]);
+            assert_eq!(a, b, "tick {tick}");
+        }
+        assert_eq!(loaded.snapshot(), live.snapshot());
+        assert!(live.view().player(PlayerId(0)).unwrap().resources[0] >= Fixed::from_int(50));
+    }
+
+    #[test]
+    fn new_or_unknown_mining_phases_cannot_masquerade_as_v8() {
+        let (sim, db) = stopped_loaded_miner();
+        let mut bytes = sim.snapshot();
+        bytes[4..6].copy_from_slice(&COMPATIBLE_MINING_FORMAT.to_le_bytes());
+        assert!(matches!(Sim::from_snapshot(&bytes, Some(db.clone())), Err(SnapshotError::Corrupt(_))));
+
+        let bytes = sim.snapshot();
+        let mut body: Body = postcard::from_bytes(&bytes[HEADER..]).unwrap();
+        body.economy.miners[0].5 = 5;
+        let mut unknown = bytes[..HEADER].to_vec();
+        unknown.extend(postcard::to_allocvec(&body).unwrap());
+        assert!(matches!(Sim::from_snapshot(&unknown, Some(db)), Err(SnapshotError::Corrupt(_))));
     }
 
     #[test]
