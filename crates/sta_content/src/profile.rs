@@ -79,6 +79,16 @@ impl Profile {
         PROFILE_NAMES.iter().find(|(n, _)| *n == k).map(|(_, p)| *p)
     }
 
+    /// Total station build jobs, including the active head (SIM-20).
+    /// Original A1 uses five; stock A2 and FO use ten. Native retains
+    /// STA64's five-job policy. A producer ODF can override every default.
+    pub fn build_queue_limit(self) -> u32 {
+        match self {
+            Profile::Native | Profile::Sta1Classic => 5,
+            Profile::Fo4 | Profile::Sta2Classic => 10,
+        }
+    }
+
     /// The defaults table: which rule switches this profile turns on.
     ///
     /// First-pass values from docs/NATIVE_FEATURES.md (Source and Profile

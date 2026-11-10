@@ -3,7 +3,8 @@
 //!
 //! - `Order::Build { builder, what, at }`:
 //!   - A finished **station** (yard, starbase; [`EntityKind::Station`]) queues
-//!     `what` (up to [`QUEUE_MAX`] items; `at` is ignored). Each yard has its
+//!     `what` (up to its resolved [`ContentDb::build_queue_limit`], including
+//!     the active head; `at` is ignored). Each yard has its
 //!     own queue and they run in parallel. The head item takes the def's
 //!     `build.ticks`; a ship appears on the tick it finishes, at the yard's
 //!     launch hardpoint facing out (`launch`, SIM-16; at the yard's centre
@@ -49,7 +50,9 @@ use crate::world::{Entities, Entity, EntityKind, Fnv, Table};
 mod launch;
 pub mod rally;
 
-/// Longest build queue of one yard.
+/// Legacy five-job fallback, retained for downstream source compatibility.
+/// Station admission uses the builder's resolved content rule instead.
+#[deprecated(note = "Use ContentDb::build_queue_limit for the producer's resolved capacity")]
 pub const QUEUE_MAX: usize = 5;
 
 /// How close a rig must come to deploy, from its own movement data. A craft
@@ -239,11 +242,9 @@ impl Production {
         let pay_now = db.unit_features(bd).pay_on_queue;
         match kind {
             EntityKind::Station => {
-                if self
-                    .queues
-                    .get(builder)
-                    .is_some_and(|q| q.len() >= QUEUE_MAX)
-                {
+                let limit = u64::from(db.build_queue_limit(bd));
+                let queued = self.queues.get(builder).map_or(0, |q| q.len() as u64);
+                if queued >= limit {
                     return false;
                 }
                 if pay_now && !pay(eco, db, owner, what) {
@@ -580,3 +581,6 @@ pub(crate) mod tests;
 
 #[cfg(test)]
 mod charge_tests;
+
+#[cfg(test)]
+mod queue_limit_tests;

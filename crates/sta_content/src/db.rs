@@ -192,6 +192,13 @@ impl ContentDb {
         u.features.as_ref().unwrap_or(&self.features)
     }
 
+    /// Total station jobs for this producer, including its active head.
+    /// An explicit zero disables new queue admissions without cancelling
+    /// existing jobs. See docs/QUEUE_LIMITS.md for profile defaults.
+    pub fn build_queue_limit(&self, u: &UnitDef) -> u32 {
+        u.build.queue_limit.unwrap_or_else(|| self.profile.build_queue_limit())
+    }
+
     /// The switches that apply to one weapon, as [`unit_features`](ContentDb::unit_features).
     pub fn weapon_features<'a>(&'a self, w: &'a WeaponDef) -> &'a Features {
         w.features.as_ref().unwrap_or(&self.features)
@@ -363,6 +370,13 @@ fn hash(db: &ContentDb) -> u64 {
                 }
                 h.u64(u.build.ticks);
                 h.fixed(u.build.officers);
+                // The old shared rule was five for every profile. Preserve
+                // its hashes only when the effective rule is still five.
+                let queue_limit = db.build_queue_limit(u);
+                if queue_limit != 5 {
+                    h.byte(0xe5);
+                    h.u64(u64::from(queue_limit));
+                }
                 h.u64(u.build.list.len() as u64);
                 for b in &u.build.list {
                     h.u64(b.key.0 as u64);

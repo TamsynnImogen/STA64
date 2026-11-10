@@ -2,10 +2,10 @@
 
 ## Status and evidence
 
-This is the implementation decision recorded before core changes. Issue #267
-tracks delivery; this document alone does not claim the feature is implemented.
-The shared station queue currently admits five total jobs for every profile.
-The active head remains in that count until completion.
+The implementation decision was committed before core changes. Issue #267
+tracks delivery of the shared profile/ODF capacity resolver and station
+admission check. Before this change the shared queue admitted five total jobs
+for every profile. The active head remains in the count until completion.
 
 Read-only inspection of the pinned owned GOG Armada 1 executable establishes
 an ordinary producer insertion limit of five. Its start path retains the head;
@@ -28,6 +28,8 @@ five for Native (retaining STA64's existing native-content policy). An additive
 BuildDef.queue_limit: Option<u32> stores an authored override; absence selects
 the profile default. Keep numeric policy out of the Boolean Features switches.
 A ContentDb accessor resolves the effective limit for a producer.
+The old public QUEUE_MAX constant remains as a deprecated five-job fallback
+for downstream source compatibility; admission no longer consults it.
 
 All profiles may author the STA64-owned unit ODF key STA64_queueLimit:
 
