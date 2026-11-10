@@ -272,4 +272,39 @@ mod tests {
             bad.join("\n  ")
         );
     }
+
+    /// Install-gated: the FO4 `boobytrap` map's moon markers, resolved through
+    /// [`MoonVariants::moon_for`] (the renderer's own path), each get a moon.
+    #[test]
+    fn boobytrap_markers_resolve_through_the_renderer_path() {
+        let root = std::path::Path::new("/home/cedric/Games/Heroic/Star Trek Armada II Fleet Operations Roots");
+        let Ok(vfs) = Vfs::mount_install(root, Some("Fleet Ops 4.0")) else {
+            eprintln!("skipped: FO4 not installed");
+            return;
+        };
+        let (index, _) = OdfIndex::build(&vfs);
+        let Ok((db, _)) = ContentDb::load(&vfs, &index) else { return };
+        let data = vfs.read("bzn/boobytrap.bzn").expect("boobytrap").unwrap();
+        let bzn = sta_bzn::parse(&data).unwrap();
+        let mut moons = MoonVariants::default();
+        let mut markers = std::collections::BTreeSet::new();
+        for o in &bzn.objects {
+            if !o.odf.to_ascii_lowercase().starts_with("trigger_") {
+                continue;
+            }
+            let def = db.key(&o.odf).and_then(|k| db.unit(k)).unwrap_or_else(|| panic!("{} undefined", o.odf));
+            for seed in 0..4 {
+                let moon = moons.moon_for(&vfs, &db, def, seed);
+                eprintln!("{} seed {seed} -> {:?}", o.odf, moon.map(|m| (&m.odf, &m.model, m.resource)));
+                // Other triggers (`trigger_blocking`) swap for nothing: not moons.
+                let Some(moon) = moon else { continue };
+                markers.insert(o.odf.to_ascii_lowercase());
+                // A resource: the renderers give such a root a click radius (not shown as craft).
+                assert!(moon.resource.is_some(), "{} is not a resource node", moon.odf);
+                assert!(sta_assets::find_model(&vfs, &moon.model).is_some(), "{}: model {}", moon.odf, moon.model);
+            }
+        }
+        // Both of FO4's moon markers on this map (dilithium and tritanium) get their moons.
+        assert!(markers.contains("trigger_dilithium") && markers.contains("trigger_tritanium"), "{markers:?}");
+    }
 }
