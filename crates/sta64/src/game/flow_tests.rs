@@ -205,3 +205,30 @@ fn the_front_end_never_plays_unit_voices() {
     let voices: Vec<_> = app.world().resource::<Requested>().0.iter().filter(|(_, b)| *b == Bus::Voice).collect();
     assert!(voices.is_empty(), "voices in the front end: {voices:?}");
 }
+
+/// Menu buttons click with the shell sound (`cfgSOUND_SHELL_BUTTON_CLICK`), the match's HUD with the HUD one.
+#[test]
+fn the_context_follows_the_app_state() {
+    use crate::audio::{UiContext, UiSound, UiSounds};
+    let (mut app, _) = app();
+    settle(&mut app, 4);
+    assert_eq!(state(&app), AppState::FrontEnd);
+    let sounds = app.world().resource::<UiSounds>().clone();
+    let ctx = *app.world().resource::<UiContext>();
+    assert_eq!(ctx, UiContext::Shell);
+    assert_eq!(sounds.name(UiSound::Click, ctx), sounds.shell_click);
+    press(&mut app, Act::Goto(Screen::SinglePlayer));
+    press(&mut app, Act::Goto(Screen::Main));
+    press(&mut app, Act::Goto(Screen::Setup));
+    press(&mut app, Act::Launch);
+    for _ in 0..200 {
+        if state(&app) == AppState::InGame {
+            break;
+        }
+        app.update();
+    }
+    settle(&mut app, 3);
+    let ctx = *app.world().resource::<UiContext>();
+    assert_eq!(ctx, UiContext::Hud);
+    assert_eq!(sounds.name(UiSound::Click, ctx), sounds.hud_click);
+}

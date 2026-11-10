@@ -150,11 +150,26 @@ impl Plugin for UiSoundPlugin {
             .init_resource::<UiSounds>()
             .init_resource::<UiContext>()
             .add_observer(hover_sound)
+            .add_systems(Update, sync_context.before(theme_clicks).in_set(crate::app::GameSet::Audio))
             .add_systems(Update, (theme_clicks, play_ui_sounds).chain().before(super::play_sounds).in_set(crate::app::GameSet::Audio));
     }
 }
 
 type Clickable = Or<(With<UiButton>, With<Toggle>, With<ListItem>)>;
+
+/// The front end's buttons use the shell sounds, the match's HUD the HUD ones.
+/// Without an app state (bare test apps) the context stays as set.
+fn sync_context(state: Option<Res<State<crate::app::AppState>>>, mut ctx: ResMut<UiContext>) {
+    use crate::app::AppState;
+    let Some(state) = state else { return };
+    let want = match state.get() {
+        AppState::InGame | AppState::Viewer => UiContext::Hud,
+        AppState::Boot | AppState::FrontEnd | AppState::Loading => UiContext::Shell,
+    };
+    if *ctx != want {
+        *ctx = want;
+    }
+}
 
 /// The pointer comes onto an enabled button, toggle or list row.
 fn hover_sound(
