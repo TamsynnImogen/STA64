@@ -6,7 +6,7 @@ use sta_sim::command::Edit;
 use sta_sim::view::Relation;
 use sta_sim::TICK_HZ;
 
-use super::{stub, Objective, ObjectiveState, Shared};
+use super::{stub, Ctx, Objective, ObjectiveState, PlayerNumbering, Shared};
 
 /// A seat. Reads see the latest view.
 pub(crate) struct Player {
@@ -15,10 +15,11 @@ pub(crate) struct Player {
 }
 
 /// A player from a number or a `Player` handle.
-pub(crate) fn player_of(v: &Value) -> Option<PlayerId> {
+pub(crate) fn player_of(ctx: &Ctx, v: &Value) -> Option<PlayerId> {
     match v {
-        Value::Integer(n) => u8::try_from(*n).ok().map(PlayerId),
-        Value::Number(n) if *n >= 0.0 && *n < 256.0 => Some(PlayerId(*n as u8)),
+        Value::Integer(n) => u8::try_from(*n).ok().and_then(|n| ctx.player_numbering.decode(n)),
+        Value::Number(n) if *n >= 0.0 && *n < 256.0
+            && (ctx.player_numbering == PlayerNumbering::Slots || n.fract() == 0.0) => ctx.player_numbering.decode(*n as u8),
         Value::UserData(u) => u.borrow::<Player>().ok().map(|p| p.id),
         _ => None,
     }
@@ -72,8 +73,8 @@ fn resources(lua: &Lua, p: &Player) -> mlua::Result<mlua::Table> {
 
 impl UserData for Player {
     fn add_fields<F: UserDataFields<Self>>(f: &mut F) {
-        f.add_field_method_get("number", |_, p| Ok(p.id.0));
-        f.add_field_method_get("name", |_, p| Ok(format!("Player {}", p.id.0)));
+        f.add_field_method_get("number", |_, p| Ok(p.ctx.borrow().player_numbering.encode(p.id)));
+        f.add_field_method_get("name", |_, p| Ok(format!("Player {}", p.ctx.borrow().player_numbering.encode(p.id).unwrap_or(p.id.0))));
         f.add_field_method_get("race", |_, p| {
             // The race of the player's first unit that has one.
             let c = p.ctx.borrow();
@@ -96,7 +97,7 @@ impl UserData for Player {
     fn add_methods<M: UserDataMethods<Self>>(m: &mut M) {
         m.add_method("getRelation", |_, p, other: Value| {
             let c = p.ctx.borrow();
-            Ok(match player_of(&other) {
+            Ok(match player_of(&c, &other) {
                 Some(o) => relation_name(c.relation(p.id, o)),
                 None => "Neutral",
             })
@@ -108,13 +109,15 @@ impl UserData for Player {
                 "Enemy" => Relation::Enemy,
                 _ => Relation::Neutral,
             };
-            if let Some(o) = player_of(&other) {
+            if let Some(o) = player_of(&c, &other) {
                 c.relations.insert((p.id, o), rel);
             }
             Ok(())
         });
         m.add_method("loadAIP", |_, p, name: Option<String>| {
-            p.ctx.borrow_mut().loaded_aips.push((p.id, name.unwrap_or_default()));
+            let mut c = p.ctx.borrow_mut();
+            c.loaded_aips.push((p.id, name.unwrap_or_default()));
+            c.unsupported("Player.loadAIP");
             Ok(())
         });
         m.add_meta_method(MetaMethod::Eq, |_, p, o: UserDataRef<Player>| Ok(p.id == o.id));
@@ -149,6 +152,21 @@ impl UserData for ObjectiveHandle {
                 ObjectiveState::Failed => "failed",
             }))
         });
+        f.add_field_method_set("state", |_, o, value: Value| {
+            let state = match value {
+                Value::Boolean(true) => ObjectiveState::Complete,
+                Value::Boolean(false) => ObjectiveState::Active,
+                Value::String(s) => match s.to_str()?.as_ref() {
+                    "active" => ObjectiveState::Active,
+                    "complete" => ObjectiveState::Complete,
+                    "failed" => ObjectiveState::Failed,
+                    _ => return Err(mlua::Error::runtime("unknown objective state")),
+                },
+                _ => return Err(mlua::Error::runtime("objective state must be boolean or state name")),
+            };
+            let _ = o.with(|o| o.state = state);
+            Ok(())
+        });
     }
 
     fn add_methods<M: UserDataMethods<Self>>(m: &mut M) {
@@ -160,6 +178,15 @@ impl UserData for ObjectiveHandle {
 
 /// `Objectives.objectives`: the list.
 struct ObjectiveList(Shared);
+
+fn objective_at(lua: &Lua, ctx: &Shared, index: i64) -> mlua::Result<Value> {
+    let id = index.checked_sub(1).and_then(|i| usize::try_from(i).ok())
+        .and_then(|i| ctx.borrow().objectives.get(i).map(|o| o.id));
+    match id {
+        Some(id) => Ok(Value::UserData(lua.create_userdata(ObjectiveHandle { id, ctx: ctx.clone() })?)),
+        None => Ok(Value::Nil),
+    }
+}
 
 impl UserData for ObjectiveList {
     fn add_fields<F: UserDataFields<Self>>(f: &mut F) {
@@ -180,20 +207,20 @@ impl UserData for ObjectiveList {
                 _ => (String::new(), String::new()),
             };
             let mut c = l.0.borrow_mut();
-            let id = c.objectives.last().map_or(1, |o| o.id + 1);
+            let id = c.next_objective_id.checked_add(1).ok_or_else(|| mlua::Error::runtime("objective ids exhausted"))?;
+            c.next_objective_id = id;
             c.objectives.push(Objective { id, title, description, state: ObjectiveState::Active });
             drop(c);
             lua.create_userdata(ObjectiveHandle { id, ctx: l.0.clone() })
         });
-        m.add_method("get", |lua, l, i: i64| {
-            let id = l.0.borrow().objectives.get((i - 1).max(0) as usize).map(|o| o.id);
-            match id {
-                Some(id) if i >= 1 => Ok(Value::UserData(lua.create_userdata(ObjectiveHandle { id, ctx: l.0.clone() })?)),
-                _ => Ok(Value::Nil),
-            }
-        });
+        m.add_method("get", |lua, l, i: i64| objective_at(lua, &l.0, i));
         m.add_meta_method(MetaMethod::Len, |_, l, ()| Ok(l.0.borrow().objectives.len()));
-        m.add_meta_method(MetaMethod::Index, |lua, _, _: Value| stub(lua));
+        m.add_meta_method(MetaMethod::Index, |lua, l, key: Value| match key {
+            Value::Integer(i) => objective_at(lua, &l.0, i),
+            Value::Number(n) if n.is_finite() && n.fract() == 0.0 => objective_at(lua, &l.0, n as i64),
+            Value::Number(_) => Ok(Value::Nil),
+            _ => stub(lua),
+        });
     }
 }
 
@@ -209,14 +236,18 @@ impl UserData for Objectives {
     }
 
     fn add_methods<M: UserDataMethods<Self>>(m: &mut M) {
-        // Loading an objectives file needs its format; recorded, no effect.
-        m.add_function("load", |_, args: MultiValue| {
-            for v in args.iter() {
-                if let Some(o) = v.as_userdata().and_then(|u| u.borrow::<Objectives>().ok()) {
-                    o.0.borrow_mut().unsupported("Objectives.load");
-                }
+        m.add_function("load", |lua, mut args: MultiValue| {
+            let ctx = args.front().and_then(|v| v.as_userdata())
+                .and_then(|u| u.borrow::<Objectives>().ok()).map(|o| o.0.clone());
+            let ctx = match ctx {
+                Some(c) => { args.pop_front(); c },
+                None => lua.globals().raw_get::<mlua::AnyUserData>("Objectives")?.borrow::<Objectives>()?.0.clone(),
+            };
+            if args.len() != 1 { return Err(mlua::Error::runtime("Objectives.load expects one file name")); }
+            match args.front() {
+                Some(Value::String(name)) => super::objectives::load(&ctx, name.to_str()?.as_ref()),
+                _ => Err(mlua::Error::runtime("Objectives.load expects a file name")),
             }
-            Ok(())
         });
         m.add_meta_method(MetaMethod::Index, |lua, _, _: Value| stub(lua));
     }
@@ -227,9 +258,10 @@ pub(crate) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
 
     // `Player(n)` and `Player.get(n)`.
     let class = lua.create_table()?;
+    class.set("Relation", g.raw_get::<Value>("Relation")?)?;
     let c = ctx.clone();
     let get = lua.create_function(move |lua, args: MultiValue| {
-        let n = args.iter().rev().find_map(player_of);
+        let n = { let c = c.borrow(); args.iter().rev().find_map(|v| player_of(&c, v)) };
         match n {
             Some(id) => Ok(Value::UserData(lua.create_userdata(Player { id, ctx: c.clone() })?)),
             None => Ok(Value::Nil),

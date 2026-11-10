@@ -354,7 +354,6 @@ pub fn grid(feed: &HudFeed, page: Page) -> Vec<Button> {
     }
     if caps.move_order {
         out.push(button(2, &tr("Move"), Act::Target(TargetMode::Move), &tr("Move")));
-        out.push(button(6, &tr("Stop"), Act::Stop, &tr("Stop")));
         out.push(button(
             7,
             &tr("Line"),
@@ -373,6 +372,9 @@ pub fn grid(feed: &HudFeed, page: Page) -> Vec<Button> {
             Act::Formation(FORM_WEDGE),
             &tr("Formation: wedge"),
         ));
+    }
+    if caps.stop {
+        out.push(button(6, &tr("Stop"), Act::Stop, &tr("Stop")));
     }
     if caps.attack {
         out.push(button(
@@ -402,7 +404,7 @@ pub fn command(feed: &HudFeed, act: &Act) -> Option<(CommandKind, Vec<EntityId>)
     let caps = commands::shared(feed);
     match act {
         Act::OpenBuild | Act::Back | Act::Target(_) => None,
-        Act::Stop if caps.move_order => {
+        Act::Stop if caps.stop => {
             Some((CommandKind::Order(Order::Stop { units: own.clone() }), own))
         }
         Act::Formation(kind) if caps.move_order => Some((
@@ -647,8 +649,10 @@ mod tests {
         );
         assert_eq!((g[0].cell, &g[0].act), (0, &Act::OpenBuild));
         assert!(g.iter().any(|b| b.act == Act::Target(TargetMode::Rally)));
-        assert!(!g.iter().any(|b| b.act == Act::Stop
-            || matches!(&b.act, Act::Formation(_) | Act::Target(TargetMode::Move))));
+        assert!(g.iter().any(|b| b.cell == 6 && b.act == Act::Stop));
+        assert!(!g
+            .iter()
+            .any(|b| matches!(&b.act, Act::Formation(_) | Act::Target(TargetMode::Move))));
         // An enemy or nothing: no orders.
         let db = sta_content::fake::db();
         assert!(
@@ -687,9 +691,14 @@ mod tests {
                 .iter()
                 .any(|b| b.act == Act::Target(TargetMode::Attack))
         );
+        assert!(station.iter().any(|b| b.cell == 6 && b.act == Act::Stop));
+        assert!(matches!(
+            command(&f, &Act::Stop),
+            Some((CommandKind::Order(Order::Stop { .. }), _))
+        ));
         assert!(!station.iter().any(|b| matches!(
             &b.act,
-            Act::Stop | Act::Formation(_) | Act::Target(TargetMode::Move)
+            Act::Formation(_) | Act::Target(TargetMode::Move)
         )));
         let mut f = f;
         f.selected = vec![EntityId(3)];
@@ -711,18 +720,71 @@ mod tests {
         );
         f.selected = vec![EntityId(1), EntityId(2)];
         assert!(grid(&f, Page::Top).iter().any(|b| b.act == Act::OpenBuild));
+        assert!(grid(&f, Page::Top).iter().any(|b| b.act == Act::Stop));
         f.selected = vec![EntityId(2), EntityId(4)];
         assert!(!grid(&f, Page::Top).iter().any(|b| b.act == Act::OpenBuild));
         assert_eq!(command(&f, &Act::OpenBuild), None);
         f.selected = vec![EntityId(4)];
         Arc::make_mut(&mut f.view).units[3].flags =
             UnitFlags::SELECTABLE.with(UnitFlags::ENGINES_OFF, true);
+        assert!(grid(&f, Page::Top).iter().any(|b| b.cell == 6 && b.act == Act::Stop));
+        assert!(matches!(
+            command(&f, &Act::Stop),
+            Some((CommandKind::Order(Order::Stop { .. }), _))
+        ));
         assert!(!grid(&f, Page::Top).iter().any(|b| matches!(
             &b.act,
-            Act::Stop | Act::Formation(_) | Act::Target(TargetMode::Move)
+            Act::Formation(_) | Act::Target(TargetMode::Move)
         )));
         f.selected = vec![EntityId(999)];
         assert!(grid(&f, Page::Top).is_empty());
+        assert_eq!(command(&f, &Act::Stop), None);
+    }
+
+    #[test]
+    fn stop_uses_live_craft_and_station_kind_independent_of_movement() {
+        let db = sta_content::fake::db();
+        let mut craft = unit(&db, 1, "fx_cruiser", 1, 100.0, None);
+        craft.flags = craft.flags.with(UnitFlags::ENGINES_OFF, true);
+        let station = unit(&db, 2, "fx_station", 1, 100.0, Some(0.5));
+        let resource = unit(&db, 3, "fx_moon", 1, 100.0, None);
+        let mut missing_def = unit(&db, 4, "fx_cruiser", 1, 100.0, None);
+        missing_def.def = ContentKey::NONE;
+        let mut dying = unit(&db, 5, "fx_cruiser", 1, 100.0, None);
+        dying.flags = dying.flags.with(UnitFlags::DYING, true);
+        let foreign = unit(&db, 6, "fx_cruiser", 2, 100.0, None);
+        let mut f = feed(
+            db,
+            vec![craft, station, resource, missing_def, dying, foreign],
+            &[1, 2],
+        );
+        let caps = commands::shared(&f);
+        assert!(caps.stop);
+        assert!(!caps.move_order);
+        assert!(grid(&f, Page::Top)
+            .iter()
+            .any(|b| b.cell == 6 && b.act == Act::Stop));
+        assert_eq!(
+            command(&f, &Act::Stop),
+            Some((
+                CommandKind::Order(Order::Stop {
+                    units: vec![EntityId(1), EntityId(2)]
+                }),
+                vec![EntityId(1), EntityId(2)]
+            ))
+        );
+
+        for id in [3, 4, 5, 6, 999] {
+            f.selected = vec![EntityId(id)];
+            assert!(!commands::shared(&f).stop, "{id} must not gain Stop");
+            assert!(!grid(&f, Page::Top).iter().any(|b| b.act == Act::Stop));
+            assert_eq!(command(&f, &Act::Stop), None);
+        }
+        f.selected = vec![EntityId(1), EntityId(3)];
+        assert!(
+            !commands::shared(&f).stop,
+            "the shared command needs every owned unit"
+        );
         assert_eq!(command(&f, &Act::Stop), None);
     }
 

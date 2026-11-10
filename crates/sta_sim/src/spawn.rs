@@ -140,6 +140,21 @@ impl Sim {
                 }
                 true
             }
+            Edit::Hull(id, to) => {
+                let Some(u) = self.units.get_mut(id).filter(|u| u.hull[0] > Fixed::ZERO) else {
+                    return false;
+                };
+                let floor = if u.flags.contains(UnitFlags::IMMORTAL) {
+                    Fixed::ONE
+                } else {
+                    Fixed::ZERO
+                };
+                u.hull[0] = to.max(floor).min(u.hull[1]);
+                if u.hull[0] <= Fixed::ZERO {
+                    return self.despawn(id, None);
+                }
+                true
+            }
             Edit::Heal(id) => {
                 let Some(u) = self.units.get_mut(id) else {
                     return false;
@@ -561,6 +576,55 @@ mod tests {
                 .any(|x| matches!(x, SimEvent::Rejected { .. })),
             "no such unit"
         );
+    }
+
+    #[test]
+    fn absolute_hull_preserves_shield_pools_and_legacy_heal() {
+        for directional in [false, true] {
+            let s = setup(MapDef::empty());
+            let mut sim = Sim::from_setup(&s);
+            let id = sim.spawn_def(
+                s.content.key("fx_frigate").unwrap(), PlayerId(0), Vec3::ZERO, (Fixed::ZERO, Fixed::ONE),
+            ).unwrap();
+            let u = sim.units.get_mut(id).unwrap();
+            u.hull[0] = Fixed::from_int(100);
+            u.shields = crate::world::Shields {
+                now: [37, 23, 11, 7].map(Fixed::from_int),
+                max: Fixed::from_int(80),
+                directional,
+            };
+            let shields = u.shields;
+            // Direct application isolates the edit from normal regeneration.
+            for (to, expected) in [(150, 150), (75, 75), (999, 300)] {
+                assert!(sim.apply_edit(PlayerId::SCRIPT, &Edit::Hull(id, Fixed::from_int(to))));
+                let u = sim.units.get(id).unwrap();
+                assert_eq!(u.hull[0], Fixed::from_int(expected));
+                assert_eq!(u.shields, shields);
+            }
+            assert!(sim.apply_edit(PlayerId::BENCH, &Edit::Heal(id)));
+            let u = sim.units.get(id).unwrap();
+            assert_eq!(u.hull[0], u.hull[1]);
+            assert_eq!(u.shields, crate::world::Shields::full(shields.max, directional));
+        }
+    }
+
+    #[test]
+    fn absolute_hull_caps_immortal_floor_and_rejects_nonlive_targets() {
+        let s = setup(MapDef::empty());
+        let mut sim = Sim::from_setup(&s);
+        let id = sim.spawn_def(
+            s.content.key("fx_frigate").unwrap(), PlayerId(0), Vec3::ZERO, (Fixed::ZERO, Fixed::ONE),
+        ).unwrap();
+        let half = Fixed::ONE / Fixed::from_int(2);
+        let u = sim.units.get_mut(id).unwrap();
+        u.hull = [half, half];
+        u.flags = u.flags.with(UnitFlags::IMMORTAL, true);
+        assert!(sim.apply_edit(PlayerId::SCRIPT, &Edit::Hull(id, Fixed::from_bits(i64::MIN))));
+        assert_eq!(sim.units.get(id).unwrap().hull, [half, half]);
+        // Even a retained zero-hull row cannot be resurrected by the edit.
+        sim.units.get_mut(id).unwrap().hull[0] = Fixed::ZERO;
+        assert!(!sim.apply_edit(PlayerId::SCRIPT, &Edit::Hull(id, Fixed::ONE)));
+        assert_eq!(sim.units.get(id).unwrap().hull[0], Fixed::ZERO);
     }
 
     #[test]

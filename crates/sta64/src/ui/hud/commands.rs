@@ -12,6 +12,7 @@ use super::model::{HudFeed, finished};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Capabilities {
+    pub stop: bool,
     pub move_order: bool,
     pub attack: bool,
     pub build: bool,
@@ -24,10 +25,15 @@ fn one(db: &ContentDb, u: &UnitView) -> Capabilities {
     let Some(def) = db.unit(u.def) else {
         return Capabilities::default();
     };
+    let kind = EntityKind::of(&def.class, &def.movement);
+    let stop = matches!(kind, EntityKind::Craft | EntityKind::Station);
     if !finished(u) {
-        return Capabilities::default();
+        return Capabilities {
+            stop,
+            ..Default::default()
+        };
     }
-    let mobile = EntityKind::of(&def.class, &def.movement) == EntityKind::Craft
+    let mobile = kind == EntityKind::Craft
         && def.movement.max_speed > Fixed::ZERO
         && !u.flags.contains(UnitFlags::ENGINES_OFF);
     let attack = !u.flags.contains(UnitFlags::WEAPONS_OFF)
@@ -42,6 +48,7 @@ fn one(db: &ContentDb, u: &UnitView) -> Capabilities {
         })
         .collect();
     Capabilities {
+        stop,
         move_order: mobile,
         attack,
         build: !def.build.list.is_empty(),
@@ -64,6 +71,7 @@ pub fn shared(feed: &HudFeed) -> Capabilities {
     let mut common = one(db, first);
     for u in own {
         let next = one(db, u);
+        common.stop &= next.stop;
         common.move_order &= next.move_order;
         common.attack &= next.attack;
         common.build &= next.build;
