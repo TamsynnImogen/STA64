@@ -180,11 +180,17 @@ pub fn spawn(ctx: &mut SpawnCtx, model: &Model, root: Entity) -> SpawnStats {
                 ),
                 Keys::Scale(k) => AnimKeys::Scale(k.clone()),
             };
-            e.insert(NodeAnim {
+            let track = NodeAnim {
                 period: ch.period,
                 base,
                 keys,
-            });
+            };
+            // Open-ended tracks (bay doors, build arms) wait for their event.
+            if crate::render::anim::classify(&ch.keys) == crate::render::anim::TrackKind::Event {
+                e.insert(crate::render::anim::EventAnim::new(track, root));
+            } else {
+                e.insert(track);
+            }
             stats.animated_nodes += 1;
         }
         let id = e.id();

@@ -1,6 +1,7 @@
 //! Everything drawn: models, sprites, particles, planets, nebulae, the sky and
 //! the ships on the map (docs/WORKPLAN.md, RND lane).
 
+pub mod anim;
 pub mod fog;
 pub mod fx;
 pub mod hulls;

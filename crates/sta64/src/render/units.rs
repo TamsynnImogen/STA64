@@ -105,6 +105,7 @@ pub(crate) fn add_view_systems(app: &mut App) {
                 .run_if(resource_exists::<SimLink>),
         )
         .add_systems(Update, place.in_set(GameSet::Interpolate).run_if(resource_exists::<SimLink>));
+    crate::render::anim::add_systems(app);
 }
 
 /// Diff the current view against [`SimEntities`].
