@@ -272,3 +272,66 @@ weapon exclusion, absent-key hash stability, two builders with opposite
 payment modes, pending rig deploys, failed-affordability behavior and the
 real v8 fixture's continued digest. Run shared/consumer/workspace/Clippy
 checks. Capture refund policy, colonizable worlds and victory remain gated.
+
+## Unstarted station-queue transfer stage
+
+This next stage extends the guarded operation only for a finished station
+whose entire queue has not started. Active heads (including zero elapsed
+ticks), pending rig deploys, weld builders and unfinished children still
+reject. Construction identity, attached research, capture victory and active
+refund policy remain unresolved; SIM-19 is not complete.
+
+Pinned original A1 and A2 producer ownership cleanup calls queue clearing
+outside the optional busy/construction-effect branch. Their inspected queue
+clear bodies unlink nodes without direct stock credits. The owned FO host
+has the same outer ordering. The matched clean/legacy FO callback's precharged
+branch queries current class/team costs and credits every queued class before
+structural clearing; its non-precharged branch has no local stock credit.
+This supports clearing unstarted unpaid jobs without credit and returning
+modeled prepaid costs. These are static local observations, not verified hook
+installation, resource-provider contracts or native runtime parity. The owned
+A2FO extension's added-resource events are separate from original stock.
+
+Use the existing per-item paid flag and owner, not the producer's current
+payment feature, to determine liability. Content is immutable during the run;
+credit each positive represented cost to the original owner, never the new
+owner. This is STA64's current flat-cost accounting: native dynamic discounts,
+crew/officer ledgers, external resource hooks and maximum-stock clamps are not
+represented and are not implemented by this stage. No new numeric default or
+legacy data rewrite is needed. Existing profile/ODF/feature payment precedence
+and inherited zero remain unchanged.
+
+Before changing any activity or balance, prepare an ephemeral transaction:
+
+- Retain all existing authority, destination, life, kind and resource guards.
+- Reject any deploy/weld involvement. A queue may belong only to a Station;
+  every entry must have the actor's current owner, zero done ticks, started
+  false and an existing definition. Reject malformed records atomically.
+- For paid entries, accumulate positive costs by the four currently modeled
+  resource slots. Reject any positive cost beyond those slots. Ignore zero
+  and negative costs, as existing charging does. Check each signed 32.32
+  addition before committing; rejection must preserve balances and queue.
+  Existing negative balances are allowed if credits remain representable.
+- Positive paid credits require a real old owner (0..7). Native neutral-team
+  precharged clearing is a distinct hazardous branch; reject such credits
+  rather than invent a neutral refund or confuse neutral with Core player0.
+  Unpaid or zero-cost neutral queues can clear without monetary edits.
+- No queue retains the old production-free transfer behavior, including a
+  content-less synthetic Sim. No new persisted plan, command or event exists.
+
+After all validation, consume the plan once: remove the station's queue,
+apply the prepared final balances, then perform the existing actor cleanup
+and ownership assignment. No production tick intervenes. Same-owner requests
+also clear and credit once; later requests find no queue. Ordinary Stop/cancel
+keeps its existing separate policy. Clearing a queue emits no fabricated
+build, destruction or income event. The captured station can subsequently
+accept new work under the new owner and existing command authorization.
+
+Check prepaid multiple jobs cleared in the admission/transfer command batch,
+unfunded deferred queues over later ticks, no completion or new-owner credit,
+same-owner/repeated edits, old/new control, all modeled currencies, malformed
+owner/definition/progress/resource and overflow rejection, active/deploy/weld
+guards, and snapshot/replay continuation. Rejection comparisons allow the
+ordinary rest of the tick by using an identical baseline simulation. Shared
+regressions and full OS CI remain required. Android uses this same operation;
+an APK build is distinct from Waydroid/device gameplay acceptance.
