@@ -100,6 +100,7 @@ impl ContentDb {
     /// read from its model (SIM-16), and the hash recomputed.
     pub fn with_launch_points(mut self, vfs: &sta_vfs::Vfs) -> ContentDb {
         crate::launch::attach(vfs, self.defs.iter_mut().filter_map(|(_, d)| if let Def::Unit(u) = d { Some(u) } else { None }));
+        crate::launch::attach_radii(vfs, self.defs.iter_mut().filter_map(|(_, d)| if let Def::Unit(u) = d { Some(u) } else { None }));
         self.hash = hash(&self);
         self
     }
@@ -396,6 +397,11 @@ fn hash(db: &ContentDb) -> u64 {
                     for f in [l.offset.0, l.offset.1, l.dir.0, l.dir.1, l.clear] {
                         h.fixed(f);
                     }
+                }
+                // Only when read, so content without models keeps its hash.
+                if u.radius > Fixed::ZERO {
+                    h.byte(3);
+                    h.fixed(u.radius);
                 }
                 h.u64(u.build.ticks);
                 h.fixed(u.build.officers);

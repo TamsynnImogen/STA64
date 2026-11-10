@@ -344,7 +344,10 @@ fn two_yards_build_in_parallel_and_the_digest_is_pinned() {
     assert_eq!(sim.digest(), PINNED_DIGEST, "digest {:#x}", sim.digest());
 }
 
-const PINNED_DIGEST: u64 = 0x1f6ba950228b3166;
+/// Re-pinned by SIM-21: the rig now parks beside its site (the footprint's
+/// edge plus a gap) instead of deploying where it happens to be, so its
+/// final position, and the digest, moved. It was `0x1f6ba950228b3166`.
+const PINNED_DIGEST: u64 = 0x4caca0a50bd8a4e8;
 
 /// A yard 600 ticks into a cruiser (frigate queued behind) and a rig 600
 /// ticks into welding a station; for the snapshot test.
@@ -451,5 +454,72 @@ fn the_ghost_rule_is_the_sims_rule() {
     // The sim agrees on each.
     for (at, ok) in [(v(3000, 3000), true), (v(1000, 20), false), (v(8200, 0), false)] {
         assert_eq!(build(&mut sim, rig, "fx_station", Some(at)), ok, "{at:?}");
+    }
+}
+
+/// SIM-21: the structure goes up at the chosen point, the rig parks beside it
+/// (outside the footprint, neither pushed), and leaves when done.
+#[test]
+fn rig_parks_beside_its_site_and_neither_is_pushed() {
+    let fake = sta_content::fake::db();
+    let mut features = fake.features().clone();
+    features.pay_on_queue = true;
+    let mut rig = UnitDef::new("fx_rig", "constructionrig");
+    rig.race = "fx".into();
+    rig.movement = MoveStats::from_f32(140.0, 1.0, 1.0, 1.0, 0.2);
+    rig.hull = Fixed::from_int(100);
+    rig.radius = Fixed::from_int(60); // body 45
+    let mut b = ContentDb::builder().profile(fake.profile()).features(features).unit(rig);
+    for w in fake.weapons() {
+        b = b.weapon(w.clone());
+    }
+    for u in fake.units() {
+        let mut u = u.clone();
+        if u.odf == "fx_station" {
+            u.radius = Fixed::from_int(200); // body 150
+        }
+        b = b.unit(u);
+    }
+    let seat = |id| PlayerSetup { id: PlayerId(id), team: TeamId(id), race: "fx".into(), control: Control::Human };
+    let mut sim = Sim::from_setup(&GameSetup {
+        seed: 3,
+        map: Arc::new(sta_content::MapDef::empty()),
+        content: Arc::new(b.build().unwrap()),
+        players: vec![seat(0), seat(1)],
+        options: GameOptions::default(),
+    });
+    let rig = spawn(&mut sim, "fx_rig", v(0, 0));
+    fund(&mut sim, 1500);
+    let site = v(600, 0);
+    assert!(build(&mut sim, rig, "fx_station", Some(site)));
+    let gap = |sim: &Sim, id| {
+        let p = sim.unit(id).unwrap().pos;
+        let (dx, dz) = (p.x - site.x, p.z - site.z);
+        (dx * dx + dz * dz).sqrt().to_f32() as f64
+    };
+    let mut log = Vec::new();
+    run(&mut sim, 300, &mut log);
+    let station = EntityId(rig.0 + 1);
+    assert_eq!(sim.unit(station).unwrap().pos, site, "the structure stands on the chosen point");
+    // Beside the footprint: outside station body plus rig body, a gap and the
+    // deploy reach from it.
+    let ring = 150.0 + 45.0 + 10.0;
+    let d = gap(&sim, rig);
+    assert!(d >= 150.0 + 45.0 && d <= ring + 40.0, "rig {d} from the site");
+    let rig_at = sim.unit(rig).unwrap().pos;
+    run(&mut sim, 2400, &mut log);
+    assert_eq!(sim.unit(rig).unwrap().pos, rig_at, "the rig is not pushed while it welds");
+    assert_eq!(sim.unit(station).unwrap().pos, site);
+    assert_eq!(sim.unit(station).unwrap().progress, None, "built");
+    // Afterwards the rig leaves without touching the structure.
+    let to = Order::Move { units: vec![rig], to: v(0, 600), queue: false };
+    sim.step(&[cmd(P0, 9, CommandKind::Order(to))]);
+    for i in 0..600 {
+        sim.step(&[]);
+        let g = gap(&sim, rig);
+        // The rig faces the structure and drifts ahead a little as it turns
+        // away; it never gets more than 20 units into the structure's body (own
+        // structures are not solid to their owner's craft).
+        assert!(g >= 130.0, "rig inside the structure: {g} at {i}, rig {:?} was {rig_at:?}", sim.unit(rig).unwrap().pos);
     }
 }

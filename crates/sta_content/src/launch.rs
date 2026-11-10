@@ -29,6 +29,41 @@ fn unit2(x: f32, z: f32) -> Option<(f32, f32)> {
     (l.is_finite() && l > 1e-3).then(|| (x / l, z / l))
 }
 
+/// Loosest bounding circle round the model origin (XZ), model units: every
+/// mesh's sphere.
+fn bounding_circle(sod: &Sod) -> f32 {
+    let mut clear = 0.0f32;
+    for (i, n) in sod.nodes.iter().enumerate() {
+        if let Some(m) = n.mesh() {
+            let (c, r) = m.bounds();
+            let p = sod.model_transform(i).transform_point(c);
+            clear = clear.max((p[0] * p[0] + p[2] * p[2]).sqrt() + r);
+        }
+    }
+    clear
+}
+
+/// Fill `radius` (SIM-21) of every unit from its model's bounding circle
+/// times `ScaleSOD`; units whose model cannot be read keep zero.
+pub fn attach_radii<'a>(vfs: &sta_vfs::Vfs, units: impl Iterator<Item = &'a mut UnitDef>) {
+    let mut circles: BTreeMap<String, Option<f32>> = BTreeMap::new();
+    for u in units {
+        let key = u.model.to_ascii_lowercase().trim_end_matches(".sod").to_owned();
+        if key.is_empty() {
+            continue;
+        }
+        let c = *circles.entry(key.clone()).or_insert_with(|| {
+            let (path, _) = sta_assets::find_model(vfs, &key)?;
+            sta_assets::load_sod(vfs, &path).ok().map(|s| bounding_circle(&s))
+        });
+        let scale = u.scale.to_f32();
+        let scale = if scale > 0.0 { scale } else { 1.0 };
+        if let Some(c) = c.filter(|c| *c > 0.0) {
+            u.radius = fx(c * scale);
+        }
+    }
+}
+
 /// The launch point of `def` from its model (`None`: model not readable).
 pub fn launch_point(def: &UnitDef, sod: Option<&Sod>) -> LaunchPoint {
     let scale = def.scale.to_f32();
@@ -41,15 +76,7 @@ pub fn launch_point(def: &UnitDef, sod: Option<&Sod>) -> LaunchPoint {
             node: None,
         };
     };
-    // Loosest bounding circle round the origin: every mesh's sphere.
-    let mut clear = 0.0f32;
-    for (i, n) in sod.nodes.iter().enumerate() {
-        if let Some(m) = n.mesh() {
-            let (c, r) = m.bounds();
-            let p = sod.model_transform(i).transform_point(c);
-            clear = clear.max((p[0] * p[0] + p[2] * p[2]).sqrt() + r);
-        }
-    }
+    let clear = bounding_circle(sod);
     let clear = if clear > 0.0 {
         clear * scale
     } else {
