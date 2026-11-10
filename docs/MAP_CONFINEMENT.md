@@ -77,6 +77,15 @@ MapObject do not expose it. Native serialization alone does not tell us whether
 fresh map loading preserves or reinitializes an authored flag. Resolve this
 before silently replacing serialized state with a computed default.
 
+Further A2 tracing narrows that gate: GameObject.Load reads serialized state
+on a reader-mode branch, then its zero-mode tail recomputes the force flag
+from strict raw X/Z interior; the other branch skips that recomputation.
+The ordinary FileReader constructor initializes that mode to zero, while a
+named ReplayReader constructor explicitly sets it to one on its FileReader.
+The exact fresh-map/saved-game caller provenance and corresponding A1/FO
+branches still need confirmation. Do not infer that every serialized flag
+must become a fresh-map authoring field merely from its presence in Save.
+
 ## Proposed shared seam
 
 Use a small deterministic per-entity boundary state table, following the
