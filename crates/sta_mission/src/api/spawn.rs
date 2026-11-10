@@ -42,7 +42,7 @@ fn flat_distance(a: Vec3, b: Vec3) -> (bool, u128) {
 pub(super) fn default_mine_node(c: &Ctx, actor: &EntityRef) -> Option<EntityRef> {
     let actor = actor.id().and_then(|id| c.alive(id)).or_else(|| actor.hint())?;
     let resource = |unit: &sta_sim::view::UnitView| {
-        c.def(unit).is_some_and(|def| EntityKind::of(&def.class, &def.movement) == EntityKind::Resource)
+        c.def(unit).is_some_and(|def| EntityKind::of_def(def) == EntityKind::Resource)
     };
     let current = c.view.units.iter()
         .filter(|unit| unit.id != EntityId::NONE
@@ -71,7 +71,7 @@ pub(super) fn queue_spawn(c: &mut Ctx, odf: ContentKey, owner: PlayerId, pos: Ve
     // Match the core's resource-neutrality classification, including explicit
     // resource metadata on definitions whose class has a different kind.
     if owner == NEUTRAL
-        && EntityKind::of(&def.class, &def.movement) != EntityKind::Resource
+        && EntityKind::of_def(def) != EntityKind::Resource
         && def.resource.is_none()
     {
         return Err("Entity.add neutral ownership requires a resource definition");

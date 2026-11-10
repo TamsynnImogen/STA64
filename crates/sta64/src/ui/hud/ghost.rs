@@ -23,9 +23,9 @@ use crate::render::units::{NeedsModel, TeamColour, to_bevy};
 pub struct PlacementBounds(pub Option<(SimVec3, SimVec3)>);
 
 /// Tint of a ghost over a clear site.
-pub const CLEAR: Color = Color::srgba(0.35, 1.0, 0.4, 0.45);
+pub const CLEAR: Color = Color::srgba(0.35, 1.0, 0.4, 0.6);
 /// Tint of a ghost over a blocked site.
-pub const BLOCKED: Color = Color::srgba(1.0, 0.25, 0.2, 0.45);
+pub const BLOCKED: Color = Color::srgba(1.0, 0.25, 0.2, 0.6);
 
 /// The ghost entity; `status` is whether the site under the cursor is clear.
 #[derive(Component, Debug)]
@@ -54,7 +54,8 @@ fn paint(color: Color) -> impl Fn(&mut StandardMaterial) {
     move |m| {
         m.base_color = color;
         m.alpha_mode = AlphaMode::Blend;
-        m.emissive = color.to_linear() * 0.6;
+        // Glows in its tint whatever the lighting, so it reads against dark space.
+        m.emissive = color.to_linear() * 1.5;
         m.perceptual_roughness = 1.0;
     }
 }

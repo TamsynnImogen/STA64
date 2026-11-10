@@ -26,7 +26,7 @@
 use std::sync::Arc;
 
 use bevy::asset::{AssetPath, RenderAssetUsages, embedded_asset};
-use bevy::image::ImageSampler;
+use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::mesh::{Indices, MeshVertexBufferLayoutRef, PrimitiveTopology};
 use bevy::pbr::{MaterialPipeline, MaterialPipelineKey};
 use bevy::prelude::*;
@@ -43,6 +43,8 @@ use sta_sim::{PlayerId, WorldView};
 use crate::app::GameSet;
 use crate::render::units::LocalPlayer;
 use crate::sim_link::{ContentRes, SimLink};
+use crate::ui::radar_fog::{DEFAULT_FOG, DEFAULT_SHROUD, read_pattern};
+use crate::viewer::Mounted;
 
 /// World units per grid cell, unless the map is big enough to need [`MAX_CELLS`].
 pub const CELL: f32 = 128.0;
@@ -51,8 +53,6 @@ pub const MAX_CELLS: usize = 512;
 
 /// Fog opacity over unseen ground (Refit: its `fog` texture material is 0.3 translucent).
 const FOG_OPACITY: f32 = 0.7;
-/// The fog layer's colour: a cold dark grey, as the grey of Refit's `fog` art on the bench.
-const FOG_TINT: [f32; 3] = [0.004, 0.005, 0.01];
 /// The edge of each layer, Refit's defaults (`FogThreshold`, `FogSoftness`, `ShroudSoftness`,
 /// `FogRim`, `ShroudRim`, `RimWidth`).
 const THRESHOLD: f32 = 0.5;
@@ -235,8 +235,10 @@ pub fn sensor_discs(view: &WorldView, player: PlayerId, content: Option<&Content
 
 #[derive(Clone, Copy, Default, ShaderType, Debug, PartialEq)]
 pub struct FogParams {
-    /// rgb the layer's colour; w its opacity.
+    /// rgb multiplies the layer's art (white); w its opacity.
     pub tint: Vec4,
+    /// xy the art's uv per unit of the layer's uv, zw its offset: one art texel per cell, the grid centred in it.
+    pub pat: Vec4,
     /// x the mask level of the edge, y its softness, z the rim's strength, w 1 / the rim's width.
     pub edge: Vec4,
 }
@@ -249,6 +251,10 @@ pub struct FogMaterial {
     #[texture(1)]
     #[sampler(2)]
     pub mask: Handle<Image>,
+    /// The layer's art: the mounted mod's `Gfog` / `Gshroud`, or one texel of the stock colour.
+    #[texture(3)]
+    #[sampler(4)]
+    pub pattern: Handle<Image>,
     /// Sort bias: [`FOG_SORT`] for the fog, [`SHROUD_SORT`] for the shroud.
     pub bias: f32,
 }
@@ -290,6 +296,70 @@ pub struct FogLayer {
     mask: Handle<Image>,
 }
 
+/// The layers' art: `Gfog` and `Gshroud` of the mounted mod (decoded by
+/// `ui::radar_fog::read_pattern`, the radar's loader), each a 1 x 1 texel of Fleet Ops'
+/// colour where the data has none. `size` is the textures' sides in texels.
+#[derive(Resource, Debug, Clone)]
+pub struct FogPatterns {
+    pub fog: (Handle<Image>, Vec2),
+    pub shroud: (Handle<Image>, Vec2),
+    /// Bumped when the textures are replaced, so the layers are rebuilt.
+    generation: u32,
+}
+
+impl FogPatterns {
+    fn of(&self, layer: Layer) -> &(Handle<Image>, Vec2) {
+        match layer {
+            Layer::Fog => &self.fog,
+            Layer::Shroud => &self.shroud,
+        }
+    }
+}
+
+/// An art texture: repeating, sRGB, opaque (the layer's opacity is the layer's own).
+fn pattern_image(vfs: Option<&sta_vfs::Vfs>, name: &str, default: [u8; 3]) -> (Image, Vec2) {
+    let (w, h, mut px) = match vfs.and_then(|v| read_pattern(v, name)) {
+        Some(p) if p.width > 0 && p.height > 0 => (p.width, p.height, p.pixels),
+        _ => (1, 1, vec![default[0], default[1], default[2], 255]),
+    };
+    for a in px.chunks_exact_mut(4) {
+        a[3] = 255;
+    }
+    let mut img = Image::new(
+        Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        TextureDimension::D2,
+        px,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::default(),
+    );
+    img.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+        address_mode_u: ImageAddressMode::Repeat,
+        address_mode_v: ImageAddressMode::Repeat,
+        ..ImageSamplerDescriptor::linear()
+    });
+    (img, Vec2::new(w as f32, h as f32))
+}
+
+/// (Re)load the art when the mounted install changes (or once, with the fallback colours).
+fn load_patterns(
+    mut commands: Commands,
+    vfs: Option<Res<Mounted>>,
+    old: Option<Res<FogPatterns>>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    if old.is_some() && !vfs.as_ref().is_some_and(|v| v.is_changed()) {
+        return;
+    }
+    let vfs = vfs.as_ref().map(|v| &v.0);
+    let (fog, fog_size) = pattern_image(vfs, "Gfog", DEFAULT_FOG);
+    let (shroud, shroud_size) = pattern_image(vfs, "Gshroud", DEFAULT_SHROUD);
+    commands.insert_resource(FogPatterns {
+        fog: (images.add(fog), fog_size),
+        shroud: (images.add(shroud), shroud_size),
+        generation: old.map_or(0, |o| o.generation + 1),
+    });
+}
+
 pub struct FogPlugin;
 
 impl Plugin for FogPlugin {
@@ -297,7 +367,8 @@ impl Plugin for FogPlugin {
         embedded_asset!(app, "fog.wesl");
         app.init_resource::<FogSettings>().add_plugins(MaterialPlugin::<FogMaterial>::default()).add_systems(
             Update,
-            update_fog
+            (load_patterns.run_if(resource_exists::<Assets<Image>>), update_fog)
+                .chain()
                 .in_set(GameSet::Render)
                 .run_if(resource_exists::<SimLink>)
                 .run_if(resource_exists::<FogBounds>)
@@ -331,14 +402,21 @@ fn layer_mesh(grid: &FogGrid) -> Mesh {
         .with_inserted_indices(Indices::U32(vec![0, 2, 1, 0, 3, 2]))
 }
 
-fn params(layer: Layer) -> FogParams {
+fn params(layer: Layer, grid: &FogGrid, art: Vec2) -> FogParams {
+    // One art texel per cell, the grid centred in the art (stock's sprite is as large as its grid).
+    let grid_texels = Vec2::new(grid.w as f32, grid.h as f32);
+    let pat = grid_texels / art;
+    let off = (Vec2::ONE - pat) * 0.5;
+    let pat = Vec4::new(pat.x, pat.y, off.x, off.y);
     match layer {
         Layer::Fog => FogParams {
-            tint: Vec4::new(FOG_TINT[0], FOG_TINT[1], FOG_TINT[2], FOG_OPACITY),
+            tint: Vec4::new(1.0, 1.0, 1.0, FOG_OPACITY),
+            pat,
             edge: Vec4::new(THRESHOLD, FOG_SOFT, RIM, 1.0 / RIM_WIDTH),
         },
         Layer::Shroud => FogParams {
-            tint: Vec4::new(0.0, 0.0, 0.0, 1.0),
+            tint: Vec4::new(1.0, 1.0, 1.0, 1.0),
+            pat,
             edge: Vec4::new(THRESHOLD, SHROUD_SOFT, RIM, 1.0 / RIM_WIDTH),
         },
     }
@@ -354,13 +432,16 @@ fn update_fog(
     bounds: Res<FogBounds>,
     content: Option<Res<ContentRes>>,
     settings: Res<FogSettings>,
+    patterns: Option<Res<FogPatterns>>,
     state: Option<ResMut<FogState>>,
     mut images: ResMut<Assets<Image>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<FogMaterial>>,
     mut layers: Query<(Entity, &FogLayer, &mut Visibility)>,
     mut seen: Local<Option<(Arc<WorldView>, Option<PlayerId>)>>,
+    mut art_generation: Local<Option<u32>>,
 ) {
+    let Some(patterns) = patterns else { return };
     let Some(player) = local.0 else {
         // No local player: the whole map is shown.
         for (_, _, mut v) in &mut layers {
@@ -369,7 +450,7 @@ fn update_fog(
         return;
     };
     let curr = link.curr();
-    let fresh = state.is_none() || !seen.as_ref().is_some_and(|(v, p)| Arc::ptr_eq(v, curr) && *p == local.0);
+    let fresh = state.is_none() || *art_generation != Some(patterns.generation) || !seen.as_ref().is_some_and(|(v, p)| Arc::ptr_eq(v, curr) && *p == local.0);
     let map_changed = state.as_ref().is_some_and(|s| s.grid.min != [bounds.min.x, bounds.min.y]);
     if fresh || map_changed {
         *seen = Some((curr.clone(), local.0));
@@ -378,7 +459,9 @@ fn update_fog(
             _ => (FogGrid::new([bounds.min.x, bounds.min.y], [bounds.max.x, bounds.max.y]), 0),
         };
         grid.observe(curr, player, content.as_deref().map(|c| &*c.0));
-        let respawn = state.is_none() || map_changed;
+        let art_changed = *art_generation != Some(patterns.generation);
+        *art_generation = Some(patterns.generation);
+        let respawn = state.is_none() || map_changed || art_changed;
         let new = FogState { grid, updates: updates + 1 };
         if respawn {
             for (e, l, _) in &layers {
@@ -387,7 +470,7 @@ fn update_fog(
             }
             for layer in [Layer::Fog, Layer::Shroud] {
                 let mask = images.add(mask_image(&new.grid, layer));
-                let mat = materials.add(FogMaterial { params: params(layer), mask: mask.clone(), bias: if layer == Layer::Shroud { SHROUD_SORT } else { FOG_SORT } });
+                let mat = materials.add(FogMaterial { params: params(layer, &new.grid, patterns.of(layer).1), mask: mask.clone(), pattern: patterns.of(layer).0.clone(), bias: if layer == Layer::Shroud { SHROUD_SORT } else { FOG_SORT } });
                 commands.spawn((
                     Name::new(format!("fog layer {layer:?}")),
                     FogLayer { layer, mask },
@@ -538,6 +621,38 @@ mod tests {
         assert_eq!(g.cell, 200.0);
         let small = FogGrid::new([0.0, 0.0], [1000.0, 300.0]);
         assert_eq!((small.cell, small.w, small.h), (CELL, 8, 3));
+    }
+
+    fn texel(img: &Image) -> [u8; 3] {
+        let d = img.data.as_ref().unwrap();
+        [d[0], d[1], d[2]]
+    }
+
+    #[test]
+    fn without_data_the_layers_use_the_stock_colours() {
+        let (shroud, size) = pattern_image(None, "Gshroud", DEFAULT_SHROUD);
+        assert_eq!((texel(&shroud), size), (DEFAULT_SHROUD, Vec2::ONE));
+        let (fog, _) = pattern_image(None, "Gfog", DEFAULT_FOG);
+        assert_eq!(texel(&fog), DEFAULT_FOG);
+    }
+
+    /// Install-gated: the shroud's art is the mounted mod's own `Gshroud.tga`.
+    #[test]
+    fn the_shroud_art_comes_from_the_mods_gshroud() {
+        let roots = std::path::Path::new("/home/cedric/Games/Heroic/Star Trek Armada II Fleet Operations Roots");
+        let Ok(vfs) = sta_vfs::Vfs::mount_install(roots, Some("Fleet Ops 4.0")) else { return };
+        let (img, size) = pattern_image(Some(&vfs), "Gshroud", [255, 0, 255]);
+        assert_ne!(texel(&img), [255, 0, 255], "the fallback colour is not used when the mod has the texture");
+        let mean = crate::ui::radar_fog::mean_colour(img.data.as_ref().unwrap()).unwrap();
+        assert_eq!(mean, [30, 36, 50]);
+        assert!(size.x >= 1.0 && size.y >= 1.0);
+    }
+
+    #[test]
+    fn the_art_is_one_texel_per_cell_with_the_grid_centred() {
+        let g = FogGrid::new([0.0, 0.0], [4.0 * CELL, 2.0 * CELL]);
+        let p = params(Layer::Shroud, &g, Vec2::splat(8.0)).pat;
+        assert_eq!(p, Vec4::new(0.5, 0.25, 0.25, 0.375));
     }
 
     #[test]

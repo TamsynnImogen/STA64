@@ -158,7 +158,7 @@ fn is_own(link: &SimLink, id: EntityId) -> bool {
 /// (tests that need none) everything counts as a ship.
 fn is_ship(link: &SimLink, content: Option<&ContentRes>, id: EntityId) -> bool {
     let (Some(content), Some(u)) = (content, link.curr().unit(id)) else { return true };
-    content.0.unit(u.def).is_none_or(|d| EntityKind::of(&d.class, &d.movement) == EntityKind::Craft)
+    content.0.unit(u.def).is_none_or(|d| EntityKind::of_def(d) == EntityKind::Craft)
 }
 
 /// Shift-click `id` into `sel` (the own selection) without ever mixing ships and

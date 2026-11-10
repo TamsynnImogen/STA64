@@ -300,7 +300,7 @@ fn a_cfg_resizes_the_panels() {
         "g.cfg",
         "screenWidth = 2134\nscreenHeight = 1200\ninfoPanelArea = 0 900 600 300\ninfoPanelArea_1 = 0 1000 600 200\ninfoPanelArea_2 = 0 1100 600 100\n",
     );
-    let gui = cfg.layout((640, 480));
+    let gui = cfg.layout_auto();
     let mut app = app(content(None), &[3]);
     app.world_mut().resource_mut::<HudConfig>().gui = Some(gui.clone());
     app.update();

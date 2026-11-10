@@ -909,7 +909,8 @@ fn rebuild(
         let units_before = units;
         // What the sim made of the object (a unit of the content database) is drawn
         // by this entity: the ship moves with it and takes orders as one.
-        if let Some(id) = sim_key.and_then(|k| placed.take(k, o)) {
+        // (The sim placed the moon in the marker's place: the same pick, see `MapDef::convert_bzn`.)
+        if let Some(id) = moon.map(|m| m.key).or(sim_key).and_then(|k| placed.take(k, o)) {
             commands.entity(entity).insert(SimEntity(id));
             // A resource (a moon) is neutral and never moves but is clicked for its info and
             // as a mining target.
@@ -1302,6 +1303,11 @@ mod tests {
             for o in &bzn.objects {
                 if let Some(k) = db.key(&o.odf).filter(|&k| db.unit(k).is_some()) {
                     wanted += 1;
+                    // A resource marker is placed as its moon (`MapDef::convert_bzn`).
+                    let moons = sta_content::map::moon_variants(&db, db.unit(k).unwrap(), &mut |n| {
+                        sta_odf::resolve_layered(n, &mut |n, v| index.load(&vfs, n, v)).ok().map(Arc::new)
+                    });
+                    let k = moons.get(o.entity_id as u64 as usize % moons.len().max(1)).copied().unwrap_or(k);
                     found += usize::from(placed.take(k, o).is_some());
                 }
             }

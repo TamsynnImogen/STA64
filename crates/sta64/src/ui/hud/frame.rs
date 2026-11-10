@@ -48,7 +48,7 @@ pub fn cfg_from_env() -> Option<GuiLayout> {
     for w in warnings {
         eprintln!("hud cfg: {w}");
     }
-    Some(cfg.layout((640, 480)))
+    Some(cfg.layout_auto())
 }
 
 /// Add the HUD to a frame run: the radar's camera and scale (UI-05), the HUD's
