@@ -30,6 +30,7 @@ use sta_core::{EntityId, PlayerId, TICK_HZ};
 use sta_sim::SimEvent;
 
 use super::entity::handle;
+use super::entity_ref::EntityRef;
 use super::player::player_of;
 use super::{dist, point_of, pos_f64, stub, Shared};
 
@@ -44,11 +45,18 @@ pub enum MonitorKind {
     Timer { due: u64, every: Option<u64> },
 }
 
+/// Pending targets retain request identity without exposing a predicted ID or
+/// changing the public, resolved event descriptions.
+enum HookKind {
+    Event(MonitorKind),
+    PendingDestroyed(EntityRef),
+}
+
 /// One hook of a monitor.
 pub(crate) struct MonitorState {
     pub monitor: u64,
     pub hook: u64,
-    pub kind: MonitorKind,
+    kind: HookKind,
     pub func: Function,
     pub active: bool,
     pub errors: u32,
@@ -72,10 +80,14 @@ fn add_hook(lua: &Lua, m: &Monitor, args: &MultiValue) -> mlua::Result<()> {
     let mut c = m.1.borrow_mut();
     let parsed = match kind.as_str() {
         "Destroyed" => match (rest.first(), func(1)) {
-            (Some(Value::UserData(u)), Some(f)) => u
-                .borrow::<super::entity::Entity>()
-                .ok()
-                .and_then(|e| e.key.id().map(|id| (MonitorKind::Destroyed { target: id, seen_alive: c.alive(id).is_some() }, f))),
+            (Some(Value::UserData(u)), Some(f)) => u.borrow::<super::entity::Entity>().ok().and_then(|e| {
+                let kind = match e.key.id() {
+                    Some(id) => HookKind::Event(MonitorKind::Destroyed { target: id, seen_alive: c.alive(id).is_some() }),
+                    None if e.key.pending() => HookKind::PendingDestroyed(e.key.clone()),
+                    None => return None,
+                };
+                Some((kind, f))
+            }),
             _ => None,
         },
         "Enters" => match (centre, rest.get(1), func(2)) {
@@ -97,7 +109,7 @@ fn add_hook(lua: &Lua, m: &Monitor, args: &MultiValue) -> mlua::Result<()> {
                     .filter(|u| owner.is_none_or(|o| u.owner == o) && dist(pos_f64(u.pos), centre) <= radius)
                     .map(|u| u.id)
                     .collect();
-                Some((MonitorKind::Enters { centre, radius, owner, inside }, f))
+                Some((HookKind::Event(MonitorKind::Enters { centre, radius, owner, inside }), f))
             }
             _ => None,
         },
@@ -110,7 +122,7 @@ fn add_hook(lua: &Lua, m: &Monitor, args: &MultiValue) -> mlua::Result<()> {
                 };
                 let ticks = (secs * TICK_HZ as f64).round().max(1.0) as u64;
                 let every = matches!(rest.get(2), Some(Value::Boolean(true))).then_some(ticks);
-                Some((MonitorKind::Timer { due: c.view.tick + ticks, every }, f))
+                Some((HookKind::Event(MonitorKind::Timer { due: c.view.tick + ticks, every }), f))
             }
             _ => None,
         },
@@ -212,7 +224,20 @@ pub(crate) fn fire_monitors(lua: &Lua, ctx: &Shared, errors: &mut Vec<String>) {
         let c = &mut *c;
         let tick = c.view.tick;
         for h in c.monitors.iter_mut().filter(|h| h.active) {
-            match &mut h.kind {
+            if let HookKind::PendingDestroyed(target) = &h.kind {
+                if let Some(id) = target.id() {
+                    // Receipts resolve before polling. Evaluate this batch's
+                    // death events too, including a spawn killed immediately.
+                    h.kind = HookKind::Event(MonitorKind::Destroyed { target: id, seen_alive: false });
+                } else {
+                    // Rejection or an invalid receipt is not a destruction.
+                    // Stopped hooks never enter this loop or reactivate here.
+                    if !target.pending() { h.active = false; }
+                    continue;
+                }
+            }
+            let HookKind::Event(kind) = &mut h.kind else { unreachable!("pending hook resolved above") };
+            match kind {
                 MonitorKind::Destroyed { target, seen_alive } => {
                     let alive = c.view.unit(*target).is_some_and(|u| !u.flags.contains(sta_sim::view::UnitFlags::DYING));
                     let event = c.events.iter().any(|e| matches!(e, SimEvent::Destroyed { id, .. } if id == target));

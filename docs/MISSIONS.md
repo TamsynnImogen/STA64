@@ -116,6 +116,25 @@ still reports 199 handled keyword messages across six missions, including unsupp
 forceOntoMap writes, plus tutorial input fallbacks. These messages remain open
 compatibility work; a startup pass does not mean every mission intent succeeded.
 
+## Pending destruction hooks
+
+`Monitor():hook(Monitor.Destroyed, entity, callback)` and
+`Monitor.destroyed(entity, callback)` accept queued or submitted `Entity.add`
+handles. Hooks retain the request reference and wait for its actual receipt;
+they never predict an entity ID or treat a missing ID as a wildcard. Once the
+receipt resolves, the hook checks that same batch's destruction events. A unit
+spawned and destroyed in one batch therefore supplies its real dead handle to
+the callback. Otherwise the existing rule applies: an explicit destruction
+event, or an observed live unit subsequently leaving the view, fires once.
+
+Rejected, missing or conflicting receipts stop waiting hooks without a death
+callback. Registering a hook on an already failed handle remains unsupported.
+`stop`, `unhook` and `Monitor.stopAll` cancel waiting hooks before polling; a
+later receipt cannot reactivate them. As with existing resolved event hooks,
+polling selects the batch's callbacks before invoking them: cancellation from
+one callback does not recall another callback already selected in that batch.
+These are STA64 bridge rules; native MMM timing and save/resume remain unverified.
+
 ## Pending camera spots
 
 Cineractive spot requests can reference queued Entity.add handles. They retain

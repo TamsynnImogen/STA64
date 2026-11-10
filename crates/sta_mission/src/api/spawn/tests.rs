@@ -182,6 +182,326 @@ fn rejected_spawn_and_same_tick_death_drop_buffered_actions() {
 }
 
 #[test]
+fn pending_destroyed_monitors_keep_handle_identity_across_receipts() {
+    let (mut sim, db) = setup();
+    let unrelated = sim
+        .spawn_def(
+            db.key("fx_cruiser").unwrap(),
+            PlayerId(0),
+            Vec3::from_f32([3000.0, 0.0, 0.0]),
+            (sta_core::Fixed::ZERO, sta_core::Fixed::ONE),
+        )
+        .unwrap();
+    let mut rt = runtime(
+        &sim,
+        db,
+        r#"
+        FIRED_A, FIRED_B = 0, 0
+        a = Entity.add('fx_cruiser', 0, Vector(1000, 0, 0))
+        b = Entity.add('fx_cruiser', 1, Vector(2000, 0, 0))
+        "#,
+    );
+    let mut first = rt.take_commands();
+    assert_eq!(first.len(), 2);
+    assert!(matches!(
+        first[0].kind,
+        CommandKind::Edit(Edit::SpawnRequest { request: 1, .. })
+    ));
+    assert!(matches!(
+        first[1].kind,
+        CommandKind::Edit(Edit::SpawnRequest { request: 2, .. })
+    ));
+    // Register after drain so both handles are submitted, but unresolved.
+    rt.eval::<()>(
+        r#"
+        Monitor():hook(Monitor.Destroyed, a, function(dead)
+          FIRED_A = FIRED_A + 1; DEAD_A = dead.id; VALID_A = dead.valid
+        end)
+        Monitor.destroyed(b, function(dead)
+          FIRED_B = FIRED_B + 1; DEAD_B = dead.id; VALID_B = dead.valid
+        end)
+        EntityFinder():findOne({ player=0 }):remove()
+        "#,
+    )
+    .unwrap();
+    let mut unrelated_death = rt.take_commands();
+    assert_eq!(unrelated_death.len(), 1);
+    assert_eq!(
+        unrelated_death[0].kind,
+        CommandKind::Edit(Edit::Kill(unrelated))
+    );
+    first.append(&mut unrelated_death);
+
+    let out = sim.step(&first);
+    let ids: Vec<_> = [1, 2]
+        .into_iter()
+        .map(|request| {
+            out.events
+                .iter()
+                .find_map(|event| match event {
+                    SimEvent::ScriptSpawned { request: got, id } if *got == request => Some(*id),
+                    _ => None,
+                })
+                .expect("spawn receipt")
+        })
+        .collect();
+    assert!(
+        out.events
+            .iter()
+            .any(|event| matches!(event, SimEvent::Destroyed { id, .. } if *id == unrelated))
+    );
+    let mut commands = Vec::new();
+    rt.think(&out.view, &out.events, &mut commands);
+    assert_eq!(
+        rt.eval::<(i64, i64)>("return FIRED_A, FIRED_B").unwrap(),
+        (0, 0)
+    );
+    assert_eq!(
+        rt.eval::<(u32, u32)>("return a.id, b.id").unwrap(),
+        (ids[0].0, ids[1].0)
+    );
+
+    rt.eval::<()>("a:remove()").unwrap();
+    let commands = rt.take_commands();
+    let out = sim.step(&commands);
+    rt.think(&out.view, &out.events, &mut Vec::new());
+    assert_eq!(
+        rt.eval::<(i64, i64, u32, bool)>("return FIRED_A, FIRED_B, DEAD_A, VALID_A")
+            .unwrap(),
+        (1, 0, ids[0].0, false)
+    );
+
+    rt.eval::<()>("b:remove()").unwrap();
+    let commands = rt.take_commands();
+    let out = sim.step(&commands);
+    rt.think(&out.view, &out.events, &mut Vec::new());
+    assert_eq!(
+        rt.eval::<(i64, u32, bool, bool)>("return FIRED_B, DEAD_B, VALID_B, b.pending")
+            .unwrap(),
+        (1, ids[1].0, false, false)
+    );
+    assert_eq!(rt.eval::<i64>("return FIRED_A").unwrap(), 1);
+    assert!(rt.errors().is_empty(), "{:?}", rt.errors());
+    assert!(rt.unsupported().is_empty(), "{:?}", rt.unsupported());
+}
+
+#[test]
+fn pending_destroyed_monitor_fires_for_same_batch_spawn_and_death() {
+    let (mut sim, db) = setup();
+    let mut rt = runtime(
+        &sim,
+        db,
+        r#"
+        FIRED = 0
+        h = Entity.add('fx_cruiser', 0, Vector(0, 0, 0))
+        Monitor.destroyed(h, function(dead)
+          FIRED = FIRED + 1; DEAD_ID = dead.id; DEAD_VALID = dead.valid
+        end)
+        "#,
+    );
+    let mut commands = rt.take_commands();
+    assert_eq!(commands.len(), 1);
+    // The empty-map fixture allocates the first entity ID as 1.
+    commands.push(Command {
+        player: PlayerId::SCRIPT,
+        seq: commands[0].seq + 1,
+        kind: CommandKind::Edit(Edit::Kill(EntityId(1))),
+    });
+    let out = sim.step(&commands);
+    let actual_id = out
+        .events
+        .iter()
+        .find_map(|event| match event {
+            SimEvent::ScriptSpawned { request: 1, id } => Some(*id),
+            _ => None,
+        })
+        .expect("spawn receipt");
+    assert_eq!(actual_id, EntityId(1));
+    assert!(
+        out.events
+            .iter()
+            .any(|event| matches!(event, SimEvent::Destroyed { id, .. } if *id == actual_id))
+    );
+    assert!(out.view.unit(actual_id).is_none());
+
+    rt.think(&out.view, &out.events, &mut Vec::new());
+    assert_eq!(rt.eval::<i64>("return FIRED").unwrap(), 1);
+    assert_eq!(rt.eval::<u32>("return h.id").unwrap(), actual_id.0);
+    assert!(!rt.eval::<bool>("return h.pending or h.valid").unwrap());
+    assert_eq!(
+        rt.eval::<(u32, bool)>("return DEAD_ID, DEAD_VALID")
+            .unwrap(),
+        (actual_id.0, false)
+    );
+    assert!(rt.unsupported().is_empty(), "{:?}", rt.unsupported());
+    assert!(rt.errors().is_empty(), "{:?}", rt.errors());
+}
+
+#[test]
+fn resolved_pending_destroyed_monitor_uses_missing_view_fallback() {
+    let (mut sim, db) = setup();
+    let mut rt = runtime(
+        &sim,
+        db,
+        r#"
+        FIRED = 0
+        h = Entity.add('fx_cruiser', 0, Vector(0, 0, 0))
+        Monitor.destroyed(h, function(dead)
+          FIRED = FIRED + 1; DEAD_ID = dead.id; DEAD_VALID = dead.valid
+        end)
+        "#,
+    );
+    let commands = rt.take_commands();
+    let out = sim.step(&commands);
+    let actual_id = out
+        .events
+        .iter()
+        .find_map(|event| match event {
+            SimEvent::ScriptSpawned { request: 1, id } => Some(*id),
+            _ => None,
+        })
+        .expect("spawn receipt");
+    rt.think(&out.view, &out.events, &mut Vec::new());
+    assert_eq!(rt.eval::<i64>("return FIRED").unwrap(), 0);
+
+    // Simulate a later authoritative view that omits the unit but carries no
+    // Destroyed event; the existing seen-alive fallback should fire once.
+    let mut missing = (*out.view).clone();
+    missing.units.retain(|unit| unit.id != actual_id);
+    missing.tick += 1;
+    rt.think(&missing, &[], &mut Vec::new());
+    assert_eq!(rt.eval::<i64>("return FIRED").unwrap(), 1);
+    assert_eq!(
+        rt.eval::<(u32, bool)>("return DEAD_ID, DEAD_VALID")
+            .unwrap(),
+        (actual_id.0, false)
+    );
+    assert!(rt.errors().is_empty(), "{:?}", rt.errors());
+    assert!(rt.unsupported().is_empty(), "{:?}", rt.unsupported());
+}
+
+#[test]
+fn stopped_pending_destroyed_monitor_stays_disabled_after_receipt() {
+    for cancellation in ["M:stop()", "M:unhook()", "Monitor.stopAll()"] {
+        let (mut sim, db) = setup();
+        let script = format!(
+            r#"
+            FIRED = 0
+            h = Entity.add('fx_cruiser', 0, Vector(0, 0, 0))
+            M = Monitor()
+            M:hook(Monitor.Destroyed, h, function() FIRED = FIRED + 1 end)
+            {cancellation}
+            "#
+        );
+        let mut rt = runtime(&sim, db, &script);
+        let spawn = rt.take_commands();
+        let out = sim.step(&spawn);
+        let actual_id = out
+            .events
+            .iter()
+            .find_map(|event| match event {
+                SimEvent::ScriptSpawned { request: 1, id } => Some(*id),
+                _ => None,
+            })
+            .expect("spawn receipt");
+        rt.think(&out.view, &out.events, &mut Vec::new());
+        assert_eq!(
+            rt.eval::<(i64, u32, String)>("return FIRED, h.id, M.state")
+                .unwrap(),
+            (0, actual_id.0, "Stopped".into()),
+            "cancellation: {cancellation}"
+        );
+
+        rt.eval::<()>("h:remove()").unwrap();
+        let commands = rt.take_commands();
+        let out = sim.step(&commands);
+        rt.think(&out.view, &out.events, &mut Vec::new());
+        assert_eq!(rt.eval::<i64>("return FIRED").unwrap(), 0, "cancellation: {cancellation}");
+        assert!(rt.errors().is_empty(), "{:?}", rt.errors());
+        assert!(rt.unsupported().is_empty(), "{:?}", rt.unsupported());
+    }
+}
+
+#[test]
+fn failed_pending_destroyed_monitors_disable_without_firing() {
+    let verify_unresolved = |events: Vec<SimEvent>| {
+        let (sim, db) = setup();
+        let mut rt = runtime(
+            &sim,
+            db,
+            r#"
+            FIRED = 0
+            h = Entity.add('fx_cruiser', 0, Vector(0, 0, 0))
+            M = Monitor.destroyed(h, function() FIRED = FIRED + 1 end)
+            "#,
+        );
+        let commands = rt.take_commands();
+        assert_eq!(commands.len(), 1);
+        let mut later = (*sim.view()).clone();
+        later.tick += 1;
+        rt.think(&later, &events, &mut Vec::new());
+        assert_eq!(
+            rt.eval::<(i64, bool, bool, String)>("return FIRED, h.pending, h.id == nil, M.state")
+                .unwrap(),
+            (0, false, true, "Stopped".into())
+        );
+        assert!(rt.errors().is_empty(), "{:?}", rt.errors());
+    };
+
+    // No receipt by the following view is a failed spawn request.
+    verify_unresolved(Vec::new());
+    // Duplicate receipts for one request are conflicting and fail closed.
+    verify_unresolved(vec![
+        SimEvent::ScriptSpawned {
+            request: 1,
+            id: EntityId(9),
+        },
+        SimEvent::ScriptSpawned {
+            request: 1,
+            id: EntityId(10),
+        },
+    ]);
+
+    // A real host rejection also disables a waiting hook without calling it.
+    let (_, db) = setup();
+    let mut no_content = Sim::new(17);
+    let mut rt = runtime(
+        &no_content,
+        db,
+        r#"
+        FIRED = 0
+        h = Entity.add('fx_cruiser', 0, Vector(0, 0, 0))
+        M = Monitor.destroyed(h, function() FIRED = FIRED + 1 end)
+        "#,
+    );
+    let commands = rt.take_commands();
+    let out = no_content.step(&commands);
+    assert!(out.events.iter().any(|event| matches!(
+        event,
+        SimEvent::Rejected {
+            player: PlayerId::SCRIPT,
+            ..
+        }
+    )));
+    rt.think(&out.view, &out.events, &mut Vec::new());
+    assert_eq!(
+        rt.eval::<(i64, bool, bool, String)>("return FIRED, h.pending, h.id == nil, M.state")
+            .unwrap(),
+        (0, false, true, "Stopped".into())
+    );
+    rt.eval::<()>("late = Monitor.destroyed(h, function() FIRED = FIRED + 1 end)")
+        .unwrap();
+    assert_eq!(
+        rt.unsupported()
+            .iter()
+            .filter(|(name, _)| name == "Monitor:hook Destroyed")
+            .count(),
+        1
+    );
+    assert!(rt.errors().is_empty(), "{:?}", rt.errors());
+}
+
+#[test]
 fn unsolicited_and_conflicting_receipts_fail_closed() {
     let (sim, db) = setup();
     let mut c = Ctx::new(

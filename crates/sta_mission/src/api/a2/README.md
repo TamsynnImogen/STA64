@@ -143,7 +143,10 @@ and sorts commands by player/sequence; global Lua call order is not promised.
 Name, position and shield writes remain unsupported. Owner transfer remains
 unsupported by the sim; assigning a pending handle's player is diagnosed.
 Camera spots can wait for real spawn receipts, with ordered requests and explicit
-scene cancellation; destruction monitors still require a resolved ID.
+scene cancellation. Destroyed monitors also retain pending request identity,
+then match the resolved ID against the same batch's death events. Failed receipts
+stop those hooks without a death callback; stop/unhook cancellation before polling
+prevents activation. See `docs/MISSIONS.md` for the existing batch callback rules.
 
 A host must use one MissionRuntime for its SCRIPT command stream and deliver
 the complete submitted-batch events with the next view. Tokens and command
