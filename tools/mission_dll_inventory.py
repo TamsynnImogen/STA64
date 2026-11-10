@@ -253,6 +253,9 @@ A2_SIGNATURES = {
     "void Decloak(int)": "A2.Decloak",
     "void DisableEngines(int, bool)": "A2.DisableEngines",
     "void DisableWeapons(int, bool)": "A2.DisableWeapons",
+    "float GetCurrentHealth(int)": "A2.GetCurrentHealth",
+    "float GetMaxHealth(int)": "A2.GetMaxHealth",
+    "bool IsOdf(int, char*)": "A2.IsOdf",
 }
 
 

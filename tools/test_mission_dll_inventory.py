@@ -107,6 +107,36 @@ class MissionDllInventoryTests(unittest.TestCase):
         self.register_a2('table.set("IsAlive", fn);')
         self.assertEqual(inventory.a2_exact_for("void DisableEngines(int, bool)", self.repo), "")
 
+    def test_registered_query_signatures_require_exact_return_and_argument_types(self):
+        self.register_a2(
+            "",
+            registration=(
+                'queries::install(lua, ctx, &a2)?; '
+                'lua.globals().raw_set("A2", a2)?;'
+            ),
+        )
+        (self.a2 / "queries.rs").write_text(
+            'table.set("GetCurrentHealth", fn);\n'
+            'table.set("GetMaxHealth", fn);\n'
+            'table.set("IsOdf", fn);\n',
+            encoding="utf-8",
+        )
+
+        self.assertEqual(
+            inventory.a2_exact_for("float GetCurrentHealth(int)", self.repo),
+            "A2.GetCurrentHealth",
+        )
+        self.assertEqual(
+            inventory.a2_exact_for("float GetMaxHealth(int)", self.repo),
+            "A2.GetMaxHealth",
+        )
+        self.assertEqual(
+            inventory.a2_exact_for("bool IsOdf(int, char*)", self.repo), "A2.IsOdf"
+        )
+        self.assertEqual(inventory.a2_exact_for("int GetCurrentHealth(int)", self.repo), "")
+        self.assertEqual(inventory.a2_exact_for("float GetMaxHealth(int, float)", self.repo), "")
+        self.assertEqual(inventory.a2_exact_for("bool IsOdf(int, int)", self.repo), "")
+
     def test_test_files_do_not_count_as_a2_bindings(self):
         self.register_a2("", registration='objects::install(lua, ctx, &a2)?; lua.globals().raw_set("A2", a2)?;')
         (self.a2 / "tests.rs").write_text('table.set("IsAlive", fn);', encoding="utf-8")

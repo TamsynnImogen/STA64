@@ -82,6 +82,20 @@ establishes Producer → Craft and Starbase → Shipyard → Producer. These che
 allow the converted mission to find its static portal/base. They do not add a
 complete mapping from every ODF class label to every MMM type name.
 
+## DLL-shaped object queries
+
+The `A2` table provides strict, read-only adapters for the inventoried call
+shapes `GetCurrentHealth(int)`, `GetMaxHealth(int)` and `IsOdf(int, char*)`.
+Health means the latest non-dying unit snapshot's current/max hull, matching
+`Entity.hull`/`maxHull`; missing or dying objects raise a Lua error. `IsOdf`
+compares the unit definition's name, case-insensitively and with an optional
+`.odf` suffix, as existing finder filters do. It does not match the class name
+or normalize paths. Missing/dying objects return false; a live object without
+its unit definition raises an error. IDs must be unsigned integral values,
+ODF names must be Lua strings, and arity must match exactly. Queries never
+queue commands and see writes only after the host advances the simulation.
+These are STA64 bridge policies; native defaults/overloads remain unverified.
+
 ## Conversion report
 
 `sta64 --mission-report` lists every map whose mission resolves to

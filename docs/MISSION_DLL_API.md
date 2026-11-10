@@ -15,12 +15,12 @@ user's own executables each time, and none are recorded here.
 | engine API size | 371 `ScriptInterface` methods | (imports only) |
 | distinct calls used | 138 | 213 |
 | call sites | 11708 | — |
-| A2 DLL-shaped callable | 9 | — |
-| missing A2 callable signatures | 123 | — |
+| A2 DLL-shaped callable | 12 | — |
+| missing A2 callable signatures | 120 | — |
 | MMM job-equivalent, not A2-shaped | 0 | — |
 | bound in STA64's Lua today | — | 6 |
 | in MMM's API, not yet bound | 24 | 27 |
-| no Lua equivalent (STA64 extension needed) | 99 | 144 |
+| no Lua equivalent (STA64 extension needed) | 96 | 144 |
 | script-state plumbing (n/a in Lua) | 6 | 36 |
 
 - **bound**: an existing `sta_mission` binding does the same job.
@@ -166,7 +166,7 @@ user's own executables each time, and none are recorded here.
 | `void Cloak(int)` | 6 | 41 | A2 DLL-shaped | `A2.Cloak` |
 | `void SetShieldPercent(int, float)` | 6 | 21 | new |  |
 | `bool RecruitSpecialForces(char *, int, int &)` | 4 | 17 | new |  |
-| `float GetMaxHealth(int)` | 4 | 4 | new |  |
+| `float GetMaxHealth(int)` | 4 | 4 | A2 DLL-shaped | `A2.GetMaxHealth` |
 | `void DisableShieldGenerator(int, bool)` | 4 | 18 | new |  |
 | `void SetPosition(int, char *, int)` | 4 | 63 | new |  |
 | `void DamageSensors(int, float)` | 3 | 3 | new |  |
@@ -182,7 +182,7 @@ user's own executables each time, and none are recorded here.
 | `void DamageLifeSupport(int, float)` | 2 | 2 | new |  |
 | `void DamageWeapons(int, float)` | 2 | 2 | new |  |
 | `Vector3 const & GetLocation(char *, int)` | 1 | 18 | new |  |
-| `float GetCurrentHealth(int)` | 1 | 1 | new |  |
+| `float GetCurrentHealth(int)` | 1 | 1 | A2 DLL-shaped | `A2.GetCurrentHealth` |
 | `void DamageEngines(int, float)` | 1 | 2 | new |  |
 | `void GridVisible(bool)` | 1 | 1 | new |  |
 | `void HideObject(int, bool)` | 1 | 2 | new |  |
@@ -208,7 +208,7 @@ user's own executables each time, and none are recorded here.
 | `void DisableSensors(int, bool)` | 4 | 18 | MMM | `DamageFlags.DisableSensors` |
 | `void StuffIntoWormhole(int, int)` | 4 | 6 | new |  |
 | `bool IsExploding(int)` | 3 | 4 | new |  |
-| `bool IsOdf(int, char *)` | 3 | 7 | new |  |
+| `bool IsOdf(int, char *)` | 3 | 7 | A2 DLL-shaped | `A2.IsOdf` |
 | `unsigned int RandomGetUnsigned(unsigned int)` | 3 | 28 | new |  |
 | `void AddTransporterEffect(int)` | 3 | 5 | new |  |
 | `void CraftCanRecrew(int, bool)` | 3 | 4 | new |  |

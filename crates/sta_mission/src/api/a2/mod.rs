@@ -17,6 +17,7 @@ use super::Shared;
 mod camera;
 mod media;
 mod objects;
+mod queries;
 mod subsystems;
 #[cfg(test)]
 mod tests;
@@ -28,6 +29,7 @@ pub(super) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
     titles::install(lua, ctx)?;
     let a2 = lua.create_table()?;
     objects::install(lua, ctx, &a2)?;
+    queries::install(lua, ctx, &a2)?;
     subsystems::install(lua, ctx, &a2)?;
     lua.globals().raw_set("A2", a2)?;
     Ok(())
