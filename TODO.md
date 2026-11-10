@@ -125,6 +125,7 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 
 ## Done recently
 
+- [x] Map-confinement geometry prerequisite (SIM-22 stage 1): checked Fixed boundary volumes, strict edge comparisons, asymmetric upper projection and inspect-only reporting pass five focused tests, including a 405-point containment/idempotence grid. This is a pure shared helper; entity state, movement enforcement, profile/ODF defaults, save/replay integration and Lua ForceOntoMap remain unfinished. No new in-game test applies until that integration is delivered.
 - [x] BZN reader, text + binary; all 517 installed maps; object counts verified — `f10cc94`
 - [x] Map view: objects placed, team colours, shared parts — `f10cc94`
 - [x] Native M3D loading (no SOD conversion), glow maps from STL slot — `ad27a39`, `5287d6f`
