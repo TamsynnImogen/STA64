@@ -33,6 +33,7 @@
 //!   `Objectives.visible`, `Objectives.count`;
 //! - `Monitor()` with `:hook(kind, ...)`, see [`monitor`];
 //! - named tick-based `Timer`, see [`timer`];
+//! - mission-seat `TextInput:hook(id, receiver, callback, argument, pattern)`;
 //! - `Game.time localSlot localPlayer seed isHost gameSpeed allowSave`,
 //!   `Mission.finish`, `print`.
 //!
