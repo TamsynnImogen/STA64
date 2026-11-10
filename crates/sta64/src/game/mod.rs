@@ -161,7 +161,7 @@ pub fn gui_layout(vfs: &sta_vfs::Vfs, name: &str) -> Option<sta_content::GuiLayo
     for w in warnings.iter().take(5) {
         debug!("hud cfg: {w}");
     }
-    Some(cfg.layout((640, 480)))
+    Some(cfg.layout_auto())
 }
 
 /// Point the HUD and the music at the local race, when the match is (re)built.

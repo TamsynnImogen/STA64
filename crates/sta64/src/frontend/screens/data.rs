@@ -70,6 +70,9 @@ pub struct ScreenData {
     pub content: Arc<ContentDb>,
     pub maps: Vec<MapEntry>,
     pub mods: Vec<ModEntry>,
+    /// What the mod select screen calls the plain install (its folder's name);
+    /// `None` shows "Base game".
+    pub base_name: Option<String>,
 }
 
 impl ScreenData {
@@ -114,6 +117,7 @@ impl ScreenData {
             parent: parent.map(str::to_owned),
         };
         ScreenData {
+            base_name: Some("Fake Install".into()),
             content: Arc::new(sta_content::fake::db()),
             maps: vec![MapEntry::new(two), MapEntry::new(four)],
             mods: vec![m("fx_balance", "Balance Pack", "Rebalances every ship.", None), m("fx_ships", "Extra Ships", "Adds a cruiser.", Some("fx_balance"))],

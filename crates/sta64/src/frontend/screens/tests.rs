@@ -316,7 +316,10 @@ fn mod_select_lists_the_mods_and_reports_the_choice() {
     press(&mut app, Act::PickMod);
     assert_eq!(count::<ListItem>(&mut app), 3, "the base game and two mods");
     assert!(has_text(&mut app, "Balance Pack"));
-    assert!(has_text(&mut app, "In use: base game"));
+    assert!(has_text(&mut app, "Fake Install"), "the base entry is named after the install");
+    assert!(has_text(&mut app, "In use: Fake Install"));
+    let first = app.world_mut().query::<&ListItem>().iter(app.world()).map(|i| i.0).min();
+    assert_eq!(first, Some(0), "the list starts with the base entry");
     let row = app.world_mut().query::<(Entity, &ListItem)>().iter(app.world()).find(|(_, i)| i.0 == 2).unwrap().0;
     click(app.world_mut(), row);
     settle(&mut app);
@@ -336,6 +339,10 @@ fn mod_select_lists_the_mods_and_reports_the_choice() {
     settle(&mut app);
     press(&mut app, Act::UseMod);
     assert_eq!(app.world().resource::<SelectedMod>().0, None);
+    assert_eq!(app.world().resource::<Seen>().chosen.last(), Some(&ModChosen(None)), "choosing the base entry remounts with no mod");
+    press(&mut app, Act::PickMod);
+    assert!(has_text(&mut app, "In use: Fake Install"));
+    assert_eq!(app.world().resource::<Browse>().mod_row, 0, "the base entry is current when no mod is mounted");
 }
 
 #[test]

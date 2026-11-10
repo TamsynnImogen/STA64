@@ -120,7 +120,7 @@ impl Plugin for ScreensPlugin {
         }
         if !app.world().contains_resource::<ScreenData>() {
             let empty = sta_content::ContentDb::builder().build().expect("empty content");
-            app.insert_resource(ScreenData { content: std::sync::Arc::new(empty), maps: Vec::new(), mods: Vec::new() });
+            app.insert_resource(ScreenData { content: std::sync::Arc::new(empty), maps: Vec::new(), mods: Vec::new(), base_name: None });
         }
         if !app.world().contains_resource::<State<AppState>>() {
             app.init_state::<AppState>();
