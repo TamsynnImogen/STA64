@@ -34,7 +34,6 @@
 //! - Not yet: officers (no officer stock exists on the player), cooperative
 //!   multi-yard builds on one item,
 //!   `Features::construction_rigs` gating.
-//! - A rig's order is also refused when the player cannot pay now.
 //! - A rig's site must pass [`site::check_site`] (inside the map, clear of other
 //!   objects) or the order is rejected.
 //! - Persistent state is [`Production`]; the snapshot (`to_rec`/`from_rec`)
@@ -280,12 +279,6 @@ impl Production {
                 let mut others = site::entity_obstacles(db, units, builder);
                 others.extend(self.deploys.iter().map(|(_, d)| (d.at, site::footprint(db, d.def))));
                 if site::check_site(db, bounds, what, at, others).is_err() {
-                    return false;
-                }
-                // Pay-on-deploy still refuses what the player cannot pay now: a rig
-                // that flew out and then silently dropped the deploy looked like a
-                // build that never started.
-                if !pay_now && !can_pay(eco, db, owner, what) {
                     return false;
                 }
                 if pay_now && !pay(eco, db, owner, what) {
