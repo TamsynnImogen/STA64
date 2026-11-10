@@ -151,10 +151,10 @@ fn def_of(link: &SimLink, id: EntityId) -> Option<ContentKey> {
     link.curr().unit(id).map(|u| u.def)
 }
 
-pub(super) type Targetable<'w, 's> = Query<'w, 's, (&'static SimEntity, &'static SelectRadius, &'static GlobalTransform, Option<&'static Strategic>)>;
+pub(crate) type Targetable<'w, 's> = Query<'w, 's, (&'static SimEntity, &'static SelectRadius, &'static GlobalTransform, Option<&'static Strategic>)>;
 
 /// The unit under the cursor: a strategic icon, else the nearest sphere on the ray.
-pub(super) fn unit_under(cursor: Vec2, ray: Ray3d, units: &Targetable) -> Option<EntityId> {
+pub(crate) fn unit_under(cursor: Vec2, ray: Ray3d, units: &Targetable) -> Option<EntityId> {
     let icon = units
         .iter()
         .filter_map(|(u, _, _, s)| {
