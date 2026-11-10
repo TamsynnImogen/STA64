@@ -282,6 +282,15 @@ impl MapDef {
             let t = &o.transform;
             let pos = vec3([t[9], t[10], t[11]]);
             let key = db.key(&o.odf).filter(|&k| db.unit(k).is_some());
+            // A resource marker is placed as the moon the game swaps it for.
+            let moon = key.and_then(|k| db.unit(k)).and_then(|d| {
+                let variants = moon_variants(db, d, odfs);
+                (!variants.is_empty()).then(|| variants[(o.entity_id as u64 % variants.len() as u64) as usize])
+            });
+            let (key, placed_odf) = match moon.and_then(|k| db.unit(k)) {
+                Some(m) => (moon, m.odf.clone()),
+                None => (key, o.odf.clone()),
+            };
             let (class, odf) = match key.and_then(|k| db.unit(k)) {
                 Some(def) => (def.class.0.clone(), Some(Arc::clone(&def.raw))),
                 None => {
@@ -325,7 +334,7 @@ impl MapDef {
                 "wormhole_obj" => skip("wormhole; not carried (no map type for it yet)", &mut counts.skipped),
                 _ if key.is_some() => {
                     map.objects.push(MapObject {
-                        odf: o.odf.clone(),
+                        odf: placed_odf,
                         owner: if o.team > 0 { u8::try_from(o.team - 1).ok() } else { None },
                         pos,
                         heading: unit_xz(t[6], t[8]),
@@ -383,6 +392,37 @@ impl MapDef {
             scenery: Scenery::default(),
         }
     }
+}
+
+/// Class label of the weapon that swaps a marker for another object.
+const REPLACE_CLASS: &str = "replaceweapon";
+
+/// The moon definitions a resource marker (`trigger_dilithium`, ...) is swapped for when
+/// the map starts: for each of its weapons that is a `replaceweapon`, the
+/// `replacement0class<N>` ODFs (N from 0 up, until one is missing) that the database defines
+/// as resource nodes. Empty for anything that is not a marker. The sim places the moon, so
+/// the node is a resource whatever the marker's own class says.
+pub fn moon_variants(db: &ContentDb, def: &crate::UnitDef, odfs: &mut OdfLookup) -> Vec<crate::ContentKey> {
+    let mut out = Vec::new();
+    // The weapon is read from the unit's own ODF keys: the database does not define
+    // `replaceweapon`s, so they are not among its hardpoints.
+    for n in 1..=8 {
+        let Some(wname) = def.raw.str(&format!("weapon{n}")) else { continue };
+        let Some(weapon) = odfs(wname.trim()) else { continue };
+        if !weapon.class_label().is_some_and(|c| c.trim().eq_ignore_ascii_case(REPLACE_CLASS)) {
+            continue;
+        }
+        for n in 0.. {
+            let Some(name) = weapon.str(&format!("replacement0class{n}")) else { break };
+            if let Some(k) = db.key(name.trim())
+                && db.unit(k).is_some_and(|u| u.resource.is_some())
+                && !out.contains(&k)
+            {
+                out.push(k);
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -479,6 +519,30 @@ mod tests {
         assert_eq!(notes.len(), 3, "{notes:?}");
         assert!(notes.iter().any(|n| n.starts_with("map_dust:") && n.contains("prop")));
         assert!(notes.iter().any(|n| n.starts_with("nonesuch:") && n.contains("no such ODF")));
+    }
+
+    /// A map places `trigger_dilithium` (a craft-class marker); the game swaps it for one of
+    /// its moons (class `scrap`, with a `resource`), so the map places the moon, by the object's id.
+    #[test]
+    fn a_resource_marker_is_placed_as_its_moon() {
+        use crate::UnitDef;
+        let mut marker = UnitDef::new("trigger_dilithium", "craft");
+        marker.raw = Arc::new(sta_odf::resolve("trigger_dilithium", &mut |_| Some("weapon1 = \"triggerW_dilithium\"\nclassLabel = \"craft\"\n".to_owned())).unwrap());
+        let mut moons = [UnitDef::new("map_dilithium_moon1", "scrap"), UnitDef::new("map_dilithium_moon2", "scrap")];
+        moons.iter_mut().for_each(|m| m.resource = Some(0));
+        let [m1, m2] = moons;
+        let db = ContentDb::builder().unit(marker).unit(m1).unit(m2).build().unwrap();
+        const W: &[(&str, &str)] = &[(
+            "triggerW_dilithium",
+            "classLabel = \"replaceweapon\"\nreplacement0class0 = \"map_dilithium_moon1\"\nreplacement0class1 = \"map_dilithium_moon2\"\n",
+        )];
+        let mut o0 = obj("trigger_dilithium", 0, "", [10.0, 0.0, 20.0], [0.0, 0.0, 1.0]);
+        let mut o1 = o0.clone();
+        (o0.entity_id, o1.entity_id) = (4, 7);
+        let map = sta_bzn::Map { file_name: "m.bzn".into(), objects: vec![o0, o1], ..Default::default() };
+        let c = MapDef::convert_bzn(&map, &db, &mut lookup(W));
+        let placed: Vec<_> = c.map.objects.iter().map(|o| o.odf.as_str()).collect();
+        assert_eq!(placed, ["map_dilithium_moon1", "map_dilithium_moon2"]);
     }
 
     #[test]

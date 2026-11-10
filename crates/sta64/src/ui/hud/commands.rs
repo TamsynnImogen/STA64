@@ -25,7 +25,7 @@ fn one(db: &ContentDb, u: &UnitView) -> Capabilities {
     let Some(def) = db.unit(u.def) else {
         return Capabilities::default();
     };
-    let kind = EntityKind::of(&def.class, &def.movement);
+    let kind = EntityKind::of_def(def);
     let stop = matches!(kind, EntityKind::Craft | EntityKind::Station);
     if !finished(u) {
         return Capabilities {
