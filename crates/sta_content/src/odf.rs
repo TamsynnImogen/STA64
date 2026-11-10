@@ -200,6 +200,26 @@ pub(crate) fn words(raw: &str) -> Vec<String> {
 /// `sta_odf::resolve_layered` asks.
 pub type Loader<'a> = dyn FnMut(&str, usize) -> Option<String> + 'a;
 
+/// The FO producer flag uses integer truth, unlike the generic ODF flags.
+/// Broader native malformed/overflow parsing is outside this bounded reader.
+fn queue_instant_deduct(file: &str, odf: &Odf, warnings: &mut Vec<Warning>) -> Option<bool> {
+    let raw = odf.str("queueInstantDeduct")?;
+    let value = raw.trim();
+    if value.eq_ignore_ascii_case("true") {
+        return Some(true);
+    }
+    if value.eq_ignore_ascii_case("false") {
+        return Some(false);
+    }
+    match value.parse::<i32>() {
+        Ok(n) => Some(n != 0),
+        Err(_) => {
+            warnings.push(Warning::new(file, format!("queueInstantDeduct = {raw} is not a Boolean or signed 32-bit decimal integer")));
+            None
+        }
+    }
+}
+
 /// Build the database from ODFs found by `stems`. [`load`] is this over an
 /// install; tests give an in-memory loader.
 pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], loader: &mut Loader<'_>) -> Result<(ContentDb, Vec<Warning>)> {
@@ -207,13 +227,13 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
     for name in &mod_overrides.unknown {
         warnings.push(Warning::new("info.ini", format!("[Features] {name} is not a feature switch")));
     }
-    // Defaults < mod overrides < the ODF's own `Feature_<name>` keys.
-    let features_of = |file: &str, odf: &Odf, warnings: &mut Vec<Warning>| -> Features {
+    // Defaults < mod overrides < native unit keys < `Feature_<name>` keys.
+    let features_of = |file: &str, odf: &Odf, native: &Overrides, warnings: &mut Vec<Warning>| -> Features {
         let own = Overrides::from_odf_keys(odf.keys().filter_map(|k| Some((k, odf.raw(k)?))));
         for name in &own.unknown {
             warnings.push(Warning::new(file, format!("Feature_{name} is not a feature switch")));
         }
-        resolve_features(profile, &[mod_overrides, &own])
+        resolve_features(profile, &[mod_overrides, native, &own])
     };
     let mut resolved: BTreeMap<String, Option<Arc<Odf>>> = BTreeMap::new();
     let mut get = |name: &str, warn: &mut Vec<Warning>, loader: &mut Loader<'_>| -> Option<Arc<Odf>> {
@@ -256,7 +276,7 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
             found
         });
         let (mut def, arc) = crate::weapon::weapon_def(s, odf, ord.as_deref(), &mut warnings);
-        def.features = Some(features_of(&format!("{s}.odf"), odf, &mut warnings));
+        def.features = Some(features_of(&format!("{s}.odf"), odf, &Overrides::default(), &mut warnings));
         weapon_arcs.insert(stem(s), arc);
         weapon_names.insert(stem(s));
         builder = builder.weapon(def);
@@ -276,7 +296,13 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
         };
         let mut def = crate::unit::unit_def(s, odf, phys.as_deref(), &mut warnings);
         let file = format!("{s}.odf");
-        def.features = Some(features_of(&file, odf, &mut warnings));
+        let mut native = Overrides::default();
+        if matches!(profile, Profile::Fo4 | Profile::Native)
+            && let Some(on) = queue_instant_deduct(&file, odf, &mut warnings)
+        {
+            native.insert("pay_on_queue", on);
+        }
+        def.features = Some(features_of(&file, odf, &native, &mut warnings));
         // References to ODFs that are not definitions are dropped and listed,
         // so the database always builds.
         def.hardpoints.retain_mut(|h| {
