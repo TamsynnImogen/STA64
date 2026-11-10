@@ -118,8 +118,12 @@ impl Rallies {
         }
     }
 
-    pub(super) fn remove_entity(&mut self, id: EntityId) {
+    pub(super) fn remove_builder(&mut self, id: EntityId) {
         self.targets.remove(id);
+    }
+
+    pub(super) fn remove_entity(&mut self, id: EntityId) {
+        self.remove_builder(id);
         let refs: Vec<_> = self
             .targets
             .iter()

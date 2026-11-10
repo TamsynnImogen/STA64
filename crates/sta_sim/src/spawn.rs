@@ -124,6 +124,7 @@ impl Sim {
                 true
             }
             Edit::Kill(id) => self.despawn(id, None),
+            Edit::Team(id, to) => self.transfer_owner(from, id, to),
             Edit::Damage(id, amount) => {
                 // Straight to the hull, past the shields; lethal unless immortal.
                 let Some(u) = self.units.get_mut(id).filter(|u| u.hull[0] > Fixed::ZERO) else {
