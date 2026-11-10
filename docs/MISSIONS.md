@@ -135,6 +135,17 @@ polling selects the batch's callbacks before invoking them: cancellation from
 one callback does not recall another callback already selected in that batch.
 These are STA64 bridge rules; native MMM timing and save/resume remain unverified.
 
+## Converted Move spelling
+
+`Order.Move` and `GameObject.Order.Move` expose the existing `Order.Go` value
+through their shared enum table. Converted ports use this spelling at 17 sites
+across eight scripts, with vector destinations or entity handles. The alias
+uses Go's current point conversion, optional queue flag and normal owner-command
+ordering. Resolved entity positions are captured from the current mission view at the
+Lua call; this does not add target following. Pending actors retain the existing
+receipt-dependent command path. Raw string `"Move"`, path overloads and native
+Go/Move equivalence remain outside this spelling adapter.
+
 ## Pending camera spots
 
 Cineractive spot requests can reference queued Entity.add handles. They retain

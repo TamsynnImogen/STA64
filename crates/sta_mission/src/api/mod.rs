@@ -405,6 +405,8 @@ pub(crate) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
     entity_t.set("Type", enum_table(lua, ENTITY_TYPES)?)?;
     g.raw_set("Entity", entity_t)?;
     let orders = enum_table(lua, ORDERS)?;
+    // Converted A2 ports use Move for the existing Go-to-point behavior.
+    orders.set("Move", "Go")?;
     g.raw_set("Order", orders.clone())?;
     // Converted A2 missions use this namespace for the same order values.
     let game_object = lua.create_table()?;

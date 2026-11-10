@@ -111,9 +111,12 @@ MMM job-equivalence mappings; neither classification proves native parity.
 
 The shared order enum is available as both `Order` and `GameObject.Order`,
 which refer to the same table. This supplies the namespace used in 104
-calls in the converted A2 ports; it does not add behavior for order values
-that the dispatcher does not implement, including Colonize. The ports'
-Move spelling remains a separate unsupported gap.
+calls in the converted A2 ports. `Move` explicitly aliases the existing `Go`
+value. This spelling occurs at 17 observed calls across eight ports with vector
+or entity targets. It inherits Go's point conversion at the time of the Lua call and
+optional queue flag; it does not follow a moving target. Raw string `"Move"`,
+path overloads, Colonize and other unimplemented orders remain separate gaps.
+This is a STA64 port-compatibility policy, not native Go/Move equivalence.
 
 
 `A2.DisableEngines(handle, disabled)` and
