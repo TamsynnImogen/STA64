@@ -5,8 +5,10 @@
 //!   - A finished **station** (yard, starbase; [`EntityKind::Station`]) queues
 //!     `what` (up to [`QUEUE_MAX`] items; `at` is ignored). Each yard has its
 //!     own queue and they run in parallel. The head item takes the def's
-//!     `build.ticks`; a ship appears at the yard's position on the tick it
-//!     finishes ([`SimEvent::Built`] then `Spawned`), and the next item starts
+//!     `build.ticks`; a ship appears on the tick it finishes, at the yard's
+//!     launch hardpoint facing out (`launch`, SIM-16; at the yard's centre
+//!     when its def has none), then [`SimEvent::Built`] and `Spawned`; the
+//!     next item starts
 //!     in that same tick.
 //!   - A **craft** (construction rig) needs `at: Some(site)`. It steers there;
 //!     within [`deploy_reach`] of the site (the rig's slow-turn orbit plus a margin, from its ODF movement stats) it deploys: the
@@ -44,6 +46,7 @@ use crate::economy::Economy;
 use crate::event::SimEvent;
 use crate::world::{Entities, Entity, EntityKind, Fnv, Table};
 
+mod launch;
 pub mod rally;
 
 /// Longest build queue of one yard.
@@ -355,7 +358,7 @@ impl Production {
                 self.drop_queue(db, eco, yard);
                 continue;
             };
-            let (pos, heading) = (y.pos, y.heading);
+            let (pos, heading, yard_def) = (y.pos, y.heading, y.def);
             let q = self.queues.get_mut(yard).expect("listed");
             if let Some(head) = q.first_mut()
                 && head.started
@@ -364,9 +367,14 @@ impl Production {
                 if head.done >= ticks_of(db, head.def) {
                     let Item { def, owner, .. } = q.remove(0);
                     if let Some(d) = db.unit(def) {
-                        let mut unit = Entity::from_def(d, db.features(), owner, pos, heading);
+                        // SIM-16: out of the builder's launch hardpoint.
+                        let out = match db.unit(yard_def) {
+                            Some(b) => launch::place(b, pos, heading),
+                            None => launch::Launch { pos, heading, exit: None },
+                        };
+                        let mut unit = Entity::from_def(d, db.features(), owner, out.pos, out.heading);
                         if unit.orderable() {
-                            unit.target = self.rallies.destination(yard, owner, units);
+                            unit.target = self.rallies.destination(yard, owner, units).or(out.exit);
                         }
                         let id = units.spawn(unit);
                         events.push(SimEvent::Built { builder: yard, id });

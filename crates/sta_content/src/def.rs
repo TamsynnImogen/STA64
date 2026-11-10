@@ -107,6 +107,21 @@ pub struct Hardpoint {
     pub arc: Option<FireArc>,
 }
 
+/// Where a finished unit leaves its builder (SIM-16), in the builder's own
+/// frame (+z ahead, model units times `ScaleSOD`, XZ only). See [`crate::launch`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LaunchPoint {
+    /// Where the new unit appears, `(x, z)`.
+    pub offset: (Fixed, Fixed),
+    /// Unit vector the new unit faces and leaves along, `(x, z)`.
+    pub dir: (Fixed, Fixed),
+    /// Radius of a circle round the builder's centre that the unit must leave.
+    pub clear: Fixed,
+    /// The model node (`buildHardpoint`) that gave `offset` and `dir`;
+    /// `None`: the stated fallback (builder centre, facing ahead).
+    pub node: Option<String>,
+}
+
 /// What building a thing costs and what it can build.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BuildDef {
@@ -156,6 +171,9 @@ pub struct UnitDef {
     pub sensor: Fixed,
     pub hardpoints: Vec<Hardpoint>,
     pub build: BuildDef,
+    /// Where finished units leave this builder; `None`: not read (the unit
+    /// appears at the builder's centre, as before SIM-16).
+    pub launch: Option<LaunchPoint>,
     pub sounds: SoundRefs,
     pub fx: FxRefs,
     /// Special energy pool (`maxSpecialEnergy`); zero: none.
@@ -201,6 +219,7 @@ impl UnitDef {
             sensor: Fixed::ZERO,
             hardpoints: Vec::new(),
             build: BuildDef::default(),
+            launch: None,
             sounds: SoundRefs::default(),
             fx: FxRefs::default(),
             special_energy_max: Fixed::ZERO,

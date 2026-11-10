@@ -45,10 +45,10 @@ impl EntityKind {
     /// Unlisted classes that can move count as craft, the rest as props.
     pub fn of(class: &ClassLabel, movement: &MoveStats) -> EntityKind {
         match class.0.as_str() {
-            "craft" | "freighter" | "constructionrig" | "wingman" | "repairship" | "cargo_ship" | "evolver" | "scavenger"
-            | "fighter" => EntityKind::Craft,
-            "starbase" | "shipyard" | "buildyard" | "research" | "mining" | "p_mining" | "sensor" | "colony"
-            | "trading_station" => EntityKind::Station,
+            "craft" | "freighter" | "constructionrig" | "wingman" | "repairship" | "cargo_ship"
+            | "evolver" | "scavenger" | "fighter" => EntityKind::Craft,
+            "starbase" | "shipyard" | "buildyard" | "research" | "mining" | "p_mining"
+            | "sensor" | "colony" | "trading_station" => EntityKind::Station,
             "planet" | "planet_obj" | "moon" | "latinum" | "asteroid" => EntityKind::Resource,
             _ if movement.max_speed > Fixed::ZERO => EntityKind::Craft,
             _ => EntityKind::Prop,
@@ -69,13 +69,25 @@ pub struct Shields {
 impl Shields {
     /// Charged to `max`.
     pub fn full(max: Fixed, directional: bool) -> Shields {
-        let now = if directional { [max; 4] } else { [max, Fixed::ZERO, Fixed::ZERO, Fixed::ZERO] };
-        Shields { now, max, directional }
+        let now = if directional {
+            [max; 4]
+        } else {
+            [max, Fixed::ZERO, Fixed::ZERO, Fixed::ZERO]
+        };
+        Shields {
+            now,
+            max,
+            directional,
+        }
     }
 
     /// `[now, max]` per facing, as [`UnitView::shields`] has it.
     pub fn view(&self) -> [[Fixed; 2]; 4] {
-        if self.directional { self.now.map(|n| [n, self.max]) } else { [[self.now[0], self.max]; 4] }
+        if self.directional {
+            self.now.map(|n| [n, self.max])
+        } else {
+            [[self.now[0], self.max]; 4]
+        }
     }
 }
 
@@ -111,12 +123,23 @@ pub struct Entity {
 /// Normalise an XZ heading; a zero vector faces +Z.
 pub fn unit_heading(h: (Fixed, Fixed)) -> (Fixed, Fixed) {
     let len = (h.0 * h.0 + h.1 * h.1).sqrt();
-    if len == Fixed::ZERO { (Fixed::ZERO, Fixed::ONE) } else { (h.0 / len, h.1 / len) }
+    if len == Fixed::ZERO {
+        (Fixed::ZERO, Fixed::ONE)
+    } else {
+        (h.0 / len, h.1 / len)
+    }
 }
 
 impl Entity {
     /// At rest, no hull or shields, not yet given an id.
-    pub fn new(kind: EntityKind, def: ContentKey, owner: PlayerId, pos: Vec3, heading: (Fixed, Fixed), stats: MoveStats) -> Entity {
+    pub fn new(
+        kind: EntityKind,
+        def: ContentKey,
+        owner: PlayerId,
+        pos: Vec3,
+        heading: (Fixed, Fixed),
+        stats: MoveStats,
+    ) -> Entity {
         Entity {
             id: EntityId::NONE,
             kind,
@@ -131,14 +154,30 @@ impl Entity {
             hull: [Fixed::ZERO; 2],
             shields: Shields::default(),
             // Shots in flight are the only thing a player cannot pick.
-            flags: if kind == EntityKind::Projectile { UnitFlags::default() } else { UnitFlags::SELECTABLE },
+            flags: if kind == EntityKind::Projectile {
+                UnitFlags::default()
+            } else {
+                UnitFlags::SELECTABLE
+            },
             progress: None,
         }
     }
 
     /// Made from `def`, at full hull and shields.
-    pub fn from_def(def: &UnitDef, features: &Features, owner: PlayerId, pos: Vec3, heading: (Fixed, Fixed)) -> Entity {
+    pub fn from_def(
+        def: &UnitDef,
+        features: &Features,
+        owner: PlayerId,
+        pos: Vec3,
+        heading: (Fixed, Fixed),
+    ) -> Entity {
         let kind = EntityKind::of(&def.class, &def.movement);
+        // Resources stay neutral whatever the map or loadout says (SIM-18).
+        let owner = if kind == EntityKind::Resource || def.resource.is_some() {
+            NEUTRAL
+        } else {
+            owner
+        };
         let mut e = Entity::new(kind, def.key, owner, pos, heading, def.movement);
         e.hull = [def.hull; 2];
         e.shields = Shields::full(def.shields.max, features.directional_shields);
@@ -176,7 +215,15 @@ impl Entity {
         h.u64(self.kind as u64);
         h.u64(self.def.0 as u64);
         h.u64(self.owner.0 as u64);
-        for f in [self.pos.x, self.pos.y, self.pos.z, self.heading.0, self.heading.1, self.speed, self.omega] {
+        for f in [
+            self.pos.x,
+            self.pos.y,
+            self.pos.z,
+            self.heading.0,
+            self.heading.1,
+            self.speed,
+            self.omega,
+        ] {
             h.fixed(f);
         }
         match self.target {
@@ -189,10 +236,21 @@ impl Entity {
             None => h.u64(0),
         }
         let s = &self.stats;
-        for f in [s.max_speed, s.forward_accel, s.turn_omega, s.turn_alpha, s.turn_at_rest] {
+        for f in [
+            s.max_speed,
+            s.forward_accel,
+            s.turn_omega,
+            s.turn_alpha,
+            s.turn_at_rest,
+        ] {
             h.fixed(f);
         }
-        for f in self.hull.into_iter().chain(self.shields.now).chain([self.shields.max]) {
+        for f in self
+            .hull
+            .into_iter()
+            .chain(self.shields.now)
+            .chain([self.shields.max])
+        {
             h.fixed(f);
         }
         h.u64(self.shields.directional as u64);
@@ -216,7 +274,10 @@ pub struct Entities {
 
 impl Default for Entities {
     fn default() -> Self {
-        Entities { list: Vec::new(), next: 1 }
+        Entities {
+            list: Vec::new(),
+            next: 1,
+        }
     }
 }
 
@@ -331,7 +392,9 @@ impl<T> Table<T> {
 
     /// Rebuild from a snapshot: rows must ascend by id, else `None`.
     pub(crate) fn from_rows(rows: Vec<(EntityId, T)>) -> Option<Table<T>> {
-        rows.windows(2).all(|w| w[0].0 < w[1].0).then_some(Table { rows })
+        rows.windows(2)
+            .all(|w| w[0].0 < w[1].0)
+            .then_some(Table { rows })
     }
 
     /// Set the row for `id`, returning the one it replaces.
@@ -346,15 +409,24 @@ impl<T> Table<T> {
     }
 
     pub fn remove(&mut self, id: EntityId) -> Option<T> {
-        self.rows.binary_search_by_key(&id, |r| r.0).ok().map(|i| self.rows.remove(i).1)
+        self.rows
+            .binary_search_by_key(&id, |r| r.0)
+            .ok()
+            .map(|i| self.rows.remove(i).1)
     }
 
     pub fn get(&self, id: EntityId) -> Option<&T> {
-        self.rows.binary_search_by_key(&id, |r| r.0).ok().map(|i| &self.rows[i].1)
+        self.rows
+            .binary_search_by_key(&id, |r| r.0)
+            .ok()
+            .map(|i| &self.rows[i].1)
     }
 
     pub fn get_mut(&mut self, id: EntityId) -> Option<&mut T> {
-        self.rows.binary_search_by_key(&id, |r| r.0).ok().map(|i| &mut self.rows[i].1)
+        self.rows
+            .binary_search_by_key(&id, |r| r.0)
+            .ok()
+            .map(|i| &mut self.rows[i].1)
     }
 
     /// Ascending id.
@@ -411,7 +483,14 @@ mod tests {
     use super::*;
 
     fn craft(owner: u8) -> Entity {
-        Entity::new(EntityKind::Craft, ContentKey::NONE, PlayerId(owner), Vec3::ZERO, (Fixed::ZERO, Fixed::ONE), MoveStats::default())
+        Entity::new(
+            EntityKind::Craft,
+            ContentKey::NONE,
+            PlayerId(owner),
+            Vec3::ZERO,
+            (Fixed::ZERO, Fixed::ONE),
+            MoveStats::default(),
+        )
     }
 
     #[test]
@@ -444,15 +523,27 @@ mod tests {
         assert_eq!(kind("fx_yard"), EntityKind::Station);
         assert_eq!(kind("fx_moon"), EntityKind::Resource);
         let unknown = ClassLabel::new("background_obj");
-        assert_eq!(EntityKind::of(&unknown, &MoveStats::STATIC), EntityKind::Prop);
-        assert_eq!(EntityKind::of(&unknown, &MoveStats::default()), EntityKind::Craft);
+        assert_eq!(
+            EntityKind::of(&unknown, &MoveStats::STATIC),
+            EntityKind::Prop
+        );
+        assert_eq!(
+            EntityKind::of(&unknown, &MoveStats::default()),
+            EntityKind::Craft
+        );
     }
 
     #[test]
     fn entities_from_defs_start_full() {
         let db = sta_content::fake::db();
         let cruiser = db.unit(db.key("fx_cruiser").unwrap()).unwrap();
-        let e = Entity::from_def(cruiser, db.features(), PlayerId(0), Vec3::ZERO, (Fixed::ZERO, Fixed::from_int(2)));
+        let e = Entity::from_def(
+            cruiser,
+            db.features(),
+            PlayerId(0),
+            Vec3::ZERO,
+            (Fixed::ZERO, Fixed::from_int(2)),
+        );
         assert_eq!(e.hull, [Fixed::from_int(800); 2]);
         assert_eq!(e.shields.view(), [[Fixed::from_int(400); 2]; 4]);
         assert_eq!(e.heading, (Fixed::ZERO, Fixed::ONE), "normalised");
@@ -470,7 +561,10 @@ mod tests {
         assert_eq!(t.insert(EntityId(2), 'b'), None);
         assert_eq!(t.insert(EntityId(9), 'c'), None);
         assert_eq!(t.insert(EntityId(5), 'd'), Some('a'));
-        assert_eq!(t.iter().map(|(id, v)| (id.0, *v)).collect::<Vec<_>>(), [(2, 'b'), (5, 'd'), (9, 'c')]);
+        assert_eq!(
+            t.iter().map(|(id, v)| (id.0, *v)).collect::<Vec<_>>(),
+            [(2, 'b'), (5, 'd'), (9, 'c')]
+        );
         *t.get_mut(EntityId(9)).unwrap() = 'e';
         assert_eq!(t.remove(EntityId(2)), Some('b'));
         assert_eq!(t.get(EntityId(9)), Some(&'e'));
