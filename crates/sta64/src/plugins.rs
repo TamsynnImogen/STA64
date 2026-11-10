@@ -26,7 +26,13 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
 
     // The map view or the model viewer, chosen by the flags as before the bench
     // flags existed (they do nothing yet): `--map --headless` still opens the map.
-    let map_view = cfg.map.is_some();
+    // The front end (INT-M4) runs the map view behind its loading screen: a match
+    // is a skirmish the setup screen asked for.
+    let front_end = cfg.mode() == crate::app::Mode::FrontEnd;
+    if front_end {
+        app.add_plugins(crate::game::flow::FlowPlugin);
+    }
+    let map_view = cfg.map.is_some() || front_end;
     if map_view {
         app.add_plugins(MapPlugin);
         // The map's ships; the map view is always windowed, so not gated below.
@@ -52,7 +58,7 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
     // bench —
 
     // game — the match flow (INT-M3)
-    if cfg.skirmish {
+    if cfg.skirmish || front_end {
         app.add_plugins(crate::game::GamePlugin);
     }
 
@@ -64,7 +70,13 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
         // ui —
         app.add_plugins(crate::ui::theme::ThemePlugin);
         app.add_plugins(crate::ui::notices::NoticePlugin);
-        if cfg.skirmish {
+        if front_end {
+            // INT-M4: the front end's screens over the menu scene, the loading screen.
+            app.add_plugins(crate::frontend::scene::MenuScenePlugin);
+            app.add_plugins(crate::frontend::screens::ScreensPlugin);
+            app.add_plugins(crate::frontend::loading::LoadingPlugin);
+        }
+        if cfg.skirmish || front_end {
             // INT-M3: the HUD (with the radar) for the local seat's race (`game::apply_race`
             // sets its layout), and the match's result.
             app.add_plugins(crate::ui::hud::HudPlugin);

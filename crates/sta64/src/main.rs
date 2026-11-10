@@ -5,7 +5,7 @@
 //!
 //! The install root is a user-owned Armada II / Fleet Operations install. No
 //! original game content ships with STA64; it is read from that install at run
-//! time. Until gameplay exists, the executable opens the model viewer.
+//! time. With no mode flag the front end opens (menus, then Instant Action and the match); `--view`, `--map`, `--skirmish` and the bench flags go straight to their mode.
 
 pub mod app;
 pub mod bench;
@@ -142,7 +142,37 @@ fn main() {
         )
         .insert_resource(render::sprites::SpriteTables(std::sync::Arc::new(table)))
         .insert_resource(teams);
-    if let Some(m) = &cfg.map {
+    if cfg.mode() == app::Mode::FrontEnd {
+        // INT-M4: no mode flag, so the front end; a match is built from its setup screen.
+        let rts = vfs.read("RTS_CFG.h").and_then(Result::ok).map(|b| sta_assets::cfg_h::CfgH::parse(&String::from_utf8_lossy(&b)));
+        let mut catalogue = map::Catalogue::default();
+        let mut screens = frontend::screens::ScreensConfig::default();
+        let maps = match game::flow::front_end_data(&vfs, &mut catalogue, cfg.install_root.as_deref()) {
+            Ok(d) => {
+                // The menu scene has the camera.
+                screens.own_camera = false;
+                let maps = game::flow::browser_for(&d.screens, browser.mount_summary.clone());
+                app.insert_resource(d.screens)
+                    .insert_resource(game::flow::MenuSceneSource(d.scene.clone()))
+                    .insert_resource(d.scene)
+                    .insert_resource(game::flow::MenuMusic(d.menu_music));
+                maps
+            }
+            Err(e) => {
+                eprintln!("front end: no content ({e}); the screens show nothing to play");
+                let mut b = map::browser(&vfs, None, browser.mount_summary.clone());
+                b.dirty = false;
+                b
+            }
+        };
+        app.insert_resource(screens)
+            .insert_resource(catalogue)
+            .insert_resource(game::flow::FlowConfig { install_root: cfg.install_root.clone() })
+            .insert_resource(map::MapSeat(None))
+            .insert_resource(map::CameraLimits::from_cfg(rts.as_ref()))
+            .insert_resource(viewer::Mounted(vfs))
+            .insert_resource(maps);
+    } else if let Some(m) = &cfg.map {
         let maps = map::browser(&vfs, Some(m.as_str()).filter(|m| !m.is_empty()), browser.mount_summary.clone());
         println!("{} maps visible", maps.maps.len());
         let rts = vfs.read("RTS_CFG.h").and_then(Result::ok).map(|b| sta_assets::cfg_h::CfgH::parse(&String::from_utf8_lossy(&b)));
