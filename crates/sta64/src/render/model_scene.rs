@@ -401,7 +401,7 @@ fn spawn_mesh(
         bumped |= normal_present;
 
         let lm = model.lighting_material(&group.material);
-        let team = group.material.to_ascii_lowercase().starts_with("team");
+        let team = crate::render::hulls::is_team_material(&group.material);
         let self_illum = lm.is_some_and(|m| m.self_illuminating);
         let base_color = if team { ctx.team } else { Color::WHITE };
         let material = StandardMaterial {
