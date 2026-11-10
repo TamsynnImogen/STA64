@@ -184,6 +184,7 @@ fn is_facility(def: &UnitDef) -> bool {
 fn run_voices(
     time: Option<Res<Time<Real>>>,
     link: Option<Res<SimLink>>,
+    scene: Option<Res<crate::frontend::scene::MenuScene>>,
     content: Option<Res<ContentRes>>,
     local: Option<Res<LocalPlayer>>,
     cfg: Res<VoiceConfig>,
@@ -194,7 +195,8 @@ fn run_voices(
     mut st: ResMut<VoiceState>,
     mut out: MessageWriter<PlaySound>,
 ) {
-    let (Some(link), Some(content)) = (link, content) else {
+    // The menu scene's ships are scenery: no unit speaks in the front end.
+    let (Some(link), Some(content), None) = (link, content, scene) else {
         selected.clear();
         orders.clear();
         sim.clear();
