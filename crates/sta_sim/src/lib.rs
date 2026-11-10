@@ -21,6 +21,7 @@
 //! the entity model in [`world`], filled from the map by [`spawn`], with
 //! today's movement.
 
+pub mod boundary;
 pub mod combat;
 pub mod command;
 pub mod economy;
