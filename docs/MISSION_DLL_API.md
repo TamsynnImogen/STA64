@@ -15,12 +15,12 @@ user's own executables each time, and none are recorded here.
 | engine API size | 371 `ScriptInterface` methods | (imports only) |
 | distinct calls used | 138 | 213 |
 | call sites | 11708 | — |
-| A2 DLL-shaped callable | 20 | — |
-| missing A2 callable signatures | 112 | — |
+| A2 DLL-shaped callable | 22 | — |
+| missing A2 callable signatures | 110 | — |
 | MMM job-equivalent, not A2-shaped | 0 | — |
 | bound in STA64's Lua today | — | 6 |
-| in MMM's API, not yet bound | 24 | 27 |
-| no Lua equivalent (STA64 extension needed) | 88 | 144 |
+| in MMM's API, not yet bound | 23 | 27 |
+| no Lua equivalent (STA64 extension needed) | 87 | 144 |
 | script-state plumbing (n/a in Lua) | 6 | 36 |
 
 - **bound**: an existing `sta_mission` binding does the same job.
@@ -173,7 +173,7 @@ user's own executables each time, and none are recorded here.
 | `void DamageShieldGenerator(int, float)` | 3 | 3 | new |  |
 | `void SetSpecialEnergy(int, float)` | 3 | 22 | A2 DLL-shaped | `A2.SetSpecialEnergy` |
 | `SiegeFleet * CreateNewSiegeFleet(void)` | 2 | 4 | new |  |
-| `bool Exists(int)` | 2 | 26 | MMM | `Path.exists` |
+| `bool Exists(int)` | 2 | 26 | A2 DLL-shaped | `A2.Exists` |
 | `bool IsAlive(int)` | 2 | 15 | A2 DLL-shaped | `A2.IsAlive` |
 | `float GetDistance(int &, int &)` | 2 | 8 | A2 DLL-shaped | `A2.GetDistance` |
 | `int CountUnitsNearObject(int, float, int, char *)` | 2 | 14 | new |  |
@@ -216,7 +216,7 @@ user's own executables each time, and none are recorded here.
 | `void SetForceOntoMap(int, bool)` | 3 | 91 | new |  |
 | `void SetPlanetCivPop(int, int)` | 3 | 3 | new |  |
 | `bool IsCompromised(int, int)` | 2 | 14 | new |  |
-| `bool DoesNotExist(int)` | 1 | 1 | new |  |
+| `bool DoesNotExist(int)` | 1 | 1 | A2 DLL-shaped | `A2.DoesNotExist` |
 | `bool IsStation(int)` | 1 | 1 | new |  |
 | `int GetFirstCraft(void)` | 1 | 1 | new |  |
 | `void LinkWormholes(int, int)` | 1 | 2 | new |  |
