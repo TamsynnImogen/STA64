@@ -2,6 +2,7 @@
 //! weapon set, RND-10 impacts, RND-11 specials. The shaders and recipes are ported
 //! from Refit (`NOTICE.md`).
 
+pub mod bees;
 pub mod fire;
 pub mod impacts;
 pub mod quad;

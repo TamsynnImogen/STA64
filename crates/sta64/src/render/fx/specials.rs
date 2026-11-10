@@ -29,16 +29,26 @@
 
 use std::collections::BTreeMap;
 
+use std::sync::Arc;
+
+use bevy::image::CompressedImageFormats;
 use bevy::prelude::*;
+use bevy::render::renderer::RenderDevice;
+use sta_assets::model::Model;
 use sta_sim::{ContentKey, EntityId, SimEvent, TICK_HZ, Tick};
 
+use super::bees::{BeeSpec, bee_pose, bee_spec};
 use super::impacts::{heat_colour, rand, spark_at};
 use super::quad::{self, FxQuadMaterial, Look};
 use super::weapons::FxAlpha;
 use crate::app::GameSet;
 use crate::clock::AnimClock;
-use crate::render::units::{Cloaked, SelectRadius, to_bevy};
-use crate::sim_link::{SimEntities, SimEntity, SimLink, SimMsg};
+use crate::render::model_scene::{self, PartCache, SpawnCtx};
+use crate::render::sprites::SpriteTables;
+use crate::render::textures::{Loader, TextureCache};
+use crate::render::units::{Cloaked, SelectRadius, TeamColour, to_bevy};
+use crate::viewer::Mounted;
+use crate::sim_link::{ContentRes, SimEntities, SimEntity, SimLink, SimMsg};
 
 /// Ticks a cloak or decloak takes: Refit's `CloakTime`, 2.5 s.
 pub const CLOAK_TICKS: f32 = 2.5 * TICK_HZ as f32;
@@ -48,6 +58,10 @@ pub const CLOAKED_ALPHA: f32 = 0.1;
 pub const BUILD_MIN_ALPHA: f32 = 0.15;
 /// Ticks the `Built` flash lasts.
 pub const FLASH_TICKS: Tick = 12;
+/// Ticks the bees and beams take to fade out when the station is done.
+pub const BEE_FADE_TICKS: f32 = 18.0;
+/// Size of a worker bee's model, times its SOD's own.
+const BEE_SCALE: f32 = 1.0;
 const DEFAULT_RADIUS: f32 = 30.0;
 
 // `[Bees]` (render3d/mods/effects/src/bees.rs, `read`) for the beam; `[Construction]`
@@ -101,6 +115,8 @@ pub enum SpecialKind {
     BuiltFlash,
     /// Cloak or decloak bands and front.
     Shimmer,
+    /// A worker bee, circling the station (its model hangs off this entity).
+    Drone,
 }
 
 /// One special effect. Tests key on `(subject, kind, born)`.
@@ -115,6 +131,15 @@ pub struct SpecialFx {
     pub life: Option<f32>,
     /// Which of a station's sparks.
     pub idx: u8,
+    /// Which worker bee this is (or whose spot a spark flies from); `None`: the
+    /// builder's own single beam, for content that names no bees.
+    pub bee: Option<u8>,
+    /// Bees at the site.
+    pub bees: u8,
+    /// The tick its station was finished: it fades out over [`BEE_FADE_TICKS`] and goes.
+    ended: Option<Tick>,
+    /// The beam's width against the one the look is tuned for.
+    pub beam_scale: f32,
     from: Vec3,
     to: Vec3,
     radius: f32,
@@ -159,7 +184,7 @@ impl Plugin for SpecialsFxPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Construction>().add_systems(
             Update,
-            (read_events, fade_units, sync_construction, update_fx, attach_visuals, apply_quads, apply_fade)
+            (read_events, fade_units, sync_construction, update_fx, attach_visuals, attach_bee_models.run_if(resource_exists::<Mounted>).run_if(resource_exists::<ContentRes>), apply_quads, apply_fade)
                 .chain()
                 .in_set(GameSet::Interpolate)
                 .distributive_run_if(resource_exists::<SimLink>),
@@ -172,9 +197,23 @@ fn point(link: &SimLink, id: EntityId, alpha: f32) -> Option<Vec3> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn fx(kind: SpecialKind, subject: EntityId, builder: Option<EntityId>, born: Tick, life: Option<f32>, idx: u8, at: Vec3, look: Look) -> impl Bundle {
-    (SpecialFx { kind, subject, builder, born, life, idx, from: at, to: at, radius: DEFAULT_RADIUS, look }, FxAlpha(0.0), Transform::from_translation(at))
+fn fx(kind: SpecialKind, subject: EntityId, builder: Option<EntityId>, born: Tick, life: Option<f32>, idx: u8, at: Vec3, look: Look) -> (SpecialFx, FxAlpha, Transform) {
+    (SpecialFx { kind, subject, builder, born, life, idx, bee: None, bees: 0, ended: None, beam_scale: 1.0, from: at, to: at, radius: DEFAULT_RADIUS, look }, FxAlpha(0.0), Transform::from_translation(at))
 }
+
+/// A construction effect that belongs to one of the site's worker bees.
+#[allow(clippy::too_many_arguments)]
+fn bee_fx(kind: SpecialKind, subject: EntityId, builder: Option<EntityId>, born: Tick, idx: u8, bee: u8, spec: &BeeSpec, at: Vec3) -> impl Bundle {
+    let (mut f, a, t) = fx(kind, subject, builder, born, None, idx, at, look_for(kind));
+    f.bee = Some(bee);
+    f.bees = spec.count;
+    f.beam_scale = spec.width_scale();
+    (f, a, t, Visibility::default())
+}
+
+/// The model of a worker bee, built once the entity has its place.
+#[derive(Component)]
+struct BeeModel(String);
 
 fn look_for(kind: SpecialKind) -> Look {
     match kind {
@@ -184,6 +223,7 @@ fn look_for(kind: SpecialKind) -> Look {
         SpecialKind::Spark => Look::new(quad::K_SPARK, Vec3::ONE),
         SpecialKind::BuiltFlash => Look::flare(Vec3::new(0.6, 0.9, 1.0), 30.0, 3.5, 0.4, 18.0, 0.0, 20.0, 0.0),
         SpecialKind::Shimmer => Look { p3: Vec4::new(FRONT_BANDS, FRONT_SPEED, FRONT_TILT, 0.0), ..Look::new(quad::K_CLOAK, FRONT_COLOUR) },
+        SpecialKind::Drone => Look::new(quad::K_FLARE, Vec3::ONE),
     }
 }
 
@@ -213,15 +253,21 @@ fn sync_construction(
     clock: Res<AnimClock>,
     link: Res<SimLink>,
     mut cons: ResMut<Construction>,
+    content: Option<Res<ContentRes>>,
     mut fades: Query<(&SimEntity, &mut UnitFade)>,
+    mut fxs: Query<&mut SpecialFx>,
 ) {
     let curr = link.curr().clone();
     let building: BTreeMap<EntityId, (f32, ContentKey)> =
         curr.units.iter().filter_map(|u| u.progress.map(|p| (u.id, (p.to_f32().clamp(0.0, 1.0), u.def)))).collect();
     let gone: Vec<EntityId> = cons.active.keys().filter(|id| !building.contains_key(id)).copied().collect();
     for id in gone {
+        // Finished: the bees and their beams fade out rather than vanish.
         for e in cons.active.remove(&id).unwrap() {
-            cmds.entity(e).try_despawn();
+            match fxs.get_mut(e) {
+                Ok(mut f) => f.ended = Some(clock.tick()),
+                Err(_) => cmds.entity(e).try_despawn(),
+            }
         }
     }
     for (&id, &(_, def)) in &building {
@@ -232,11 +278,30 @@ fn sync_construction(
         let builder = slot.map(|i| cons.pending.remove(i).0);
         let at = point(&link, id, clock.alpha()).unwrap_or(Vec3::ZERO);
         let mut spawned = Vec::new();
-        for kind in [SpecialKind::Weld, SpecialKind::Arc, SpecialKind::Hot] {
-            spawned.push(cmds.spawn(fx(kind, id, builder, clock.tick(), None, 0, at, look_for(kind))).id());
-        }
-        for i in 0..SPARKS {
-            spawned.push(cmds.spawn(fx(SpecialKind::Spark, id, builder, clock.tick(), None, i, at, look_for(SpecialKind::Spark))).id());
+        // The builder's ODF says how many bees there are and what they look like.
+        let spec = builder
+            .and_then(|b| curr.units.iter().find(|u| u.id == b))
+            .and_then(|b| content.as_ref()?.0.unit(b.def))
+            .and_then(|d| bee_spec(&d.raw));
+        if let Some(spec) = spec.as_ref().filter(|s| s.count > 0) {
+            for bee in 0..spec.count {
+                for kind in [SpecialKind::Weld, SpecialKind::Arc, SpecialKind::Hot] {
+                    spawned.push(cmds.spawn(bee_fx(kind, id, builder, clock.tick(), 0, bee, spec, at)).id());
+                }
+                if let Some(model) = &spec.model {
+                    spawned.push(cmds.spawn((bee_fx(SpecialKind::Drone, id, builder, clock.tick(), 0, bee, spec, at), BeeModel(model.clone()))).id());
+                }
+            }
+            for i in 0..SPARKS {
+                spawned.push(cmds.spawn(bee_fx(SpecialKind::Spark, id, builder, clock.tick(), i, i % spec.count, spec, at)).id());
+            }
+        } else if spec.is_none() {
+            for kind in [SpecialKind::Weld, SpecialKind::Arc, SpecialKind::Hot] {
+                spawned.push(cmds.spawn(fx(kind, id, builder, clock.tick(), None, 0, at, look_for(kind))).id());
+            }
+            for i in 0..SPARKS {
+                spawned.push(cmds.spawn(fx(SpecialKind::Spark, id, builder, clock.tick(), None, i, at, look_for(SpecialKind::Spark))).id());
+            }
         }
         cons.active.insert(id, spawned);
     }
@@ -276,6 +341,14 @@ fn update_fx(
     let eye = camera.single().ok().map(|c| c.translation());
     for (e, mut f, mut tf, mut a) in &mut q {
         let age = (now_ticks - f.born as f64) as f32;
+        let gone = match f.ended {
+            Some(t) => ((now_ticks - t as f64) as f32 / BEE_FADE_TICKS).clamp(0.0, 1.0),
+            None => 0.0,
+        };
+        if gone >= 1.0 {
+            cmds.entity(e).try_despawn();
+            continue;
+        }
         let k = match f.life {
             Some(life) if age >= life => {
                 cmds.entity(e).try_despawn();
@@ -294,18 +367,30 @@ fn update_fx(
         };
         f.to = subject;
         f.radius = ents.as_ref().and_then(|m| m.0.get(&f.subject)).and_then(|e| radii.get(*e).ok()).map_or(DEFAULT_RADIUS, |r| r.0);
-        // The weld point: on the station's hull, on the side the builder is on.
-        let weld = match f.builder {
-            Some(_) => f.to + (f.from - f.to).normalize_or(Vec3::Y) * f.radius * 0.6,
-            None => f.to,
+        // A bee's own place and weld spot; without bees, the point of the hull on
+        // the side the builder is on.
+        let pose = f.bee.map(|b| bee_pose(f.subject, b, f.bees, f.to, f.radius, (now % 100_000.0) as f32));
+        let weld = match (pose, f.builder) {
+            (Some(p), _) => p.spot,
+            (None, Some(_)) => f.to + (f.from - f.to).normalize_or(Vec3::Y) * f.radius * 0.6,
+            (None, None) => f.to,
         };
-        let live = if f.builder.is_some() { 1.0 } else { 0.0 };
+        // Construction effects that outlive the build fade out over their last ticks.
+        let fade = match f.kind {
+            SpecialKind::BuiltFlash | SpecialKind::Shimmer => 1.0,
+            _ => 1.0 - gone,
+        };
+        let live = if f.builder.is_some() { fade } else { 0.0 };
         let dist = eye.map_or(100.0, |c| c.distance(weld));
-        let hw = at_least_px(BEAM_WIDTH * 0.5, BEAM_MIN_PX, dist);
+        let hw = at_least_px(BEAM_WIDTH * 0.5 * f.beam_scale, BEAM_MIN_PX, dist);
         let seed = f.idx;
         match f.kind {
             SpecialKind::Weld => {
-                let from = if f.builder.is_some() { f.from } else { weld };
+                let from = match (pose, f.builder) {
+                    (Some(p), _) => p.at,
+                    (None, Some(_)) => f.from,
+                    (None, None) => weld,
+                };
                 *tf = quad::ribbon(eye, from, weld, hw, 0.0);
                 // The crackle's phase moves on with each flicker.
                 f.look.seed = (now * FLICKER_RATE as f64).floor() as f32 * 0.137 % 1.0;
@@ -342,13 +427,20 @@ fn update_fx(
                         *tf = quad::ribbon(eye, tail, head, w, w);
                         f.look.col = heat_colour(kh);
                         f.look.len = (head - tail).length() / w;
-                        a.0 = kh;
+                        a.0 = kh * fade;
                     }
                     _ => {
                         *tf = Transform::from_translation(weld).with_scale(Vec3::ZERO);
                         a.0 = 0.0;
                     }
                 }
+            }
+            SpecialKind::Drone => {
+                // Its model is a child; this entity is the bee's place and heading.
+                if let Some(p) = pose {
+                    *tf = Transform::from_translation(p.at).looking_to(p.fwd, Vec3::Y).with_scale(Vec3::splat(BEE_SCALE * fade.max(0.001)));
+                }
+                a.0 = 1.0;
             }
             SpecialKind::BuiltFlash => {
                 *tf = quad::billboard(eye, f.to, Vec2::splat(f.radius * (0.3 + 0.7 * k)));
@@ -394,12 +486,14 @@ fn attach_visuals(
     mut quad_mesh: Local<Option<Handle<Mesh>>>,
     new: Query<(Entity, &SpecialFx), Added<SpecialFx>>,
 ) {
+    let new = new.iter().filter(|(_, f)| f.kind != SpecialKind::Drone);
     let (Some(mut meshes), Some(mut mats)) = (meshes, mats) else { return };
-    if new.is_empty() {
+    let mut new = new.peekable();
+    if new.peek().is_none() {
         return;
     }
     let mesh = quad_mesh.get_or_insert_with(|| meshes.add(quad::rectangle())).clone();
-    for (e, f) in &new {
+    for (e, f) in new {
         cmds.entity(e).try_insert((Mesh3d(mesh.clone()), MeshMaterial3d(mats.add(quad::material(&f.look)))));
     }
 }
@@ -414,9 +508,58 @@ fn apply_quads(clock: Res<AnimClock>, mats: Option<ResMut<Assets<FxQuadMaterial>
             SpecialKind::Arc | SpecialKind::Hot => 1.2 * a.0,
             SpecialKind::Spark => SPARK_BRIGHT * a.0 * (0.5 + 0.5 * a.0),
             SpecialKind::BuiltFlash => a.0,
+            SpecialKind::Drone => 0.0,
             SpecialKind::Shimmer => FRONT_BRIGHT * 0.5 * a.0,
         };
         quad::drive(&mut mats, &m.0, &f.look, bright, t);
+    }
+}
+
+/// Build the model of each worker bee in the owner's team colour (shared parts, so a
+/// dozen bees cost one set of meshes).
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn attach_bee_models(
+    mut commands: Commands,
+    pending: Query<(Entity, &BeeModel, &SpecialFx), Added<BeeModel>>,
+    teams: Query<&TeamColour>,
+    ents: Option<Res<SimEntities>>,
+    mut known: Local<std::collections::HashMap<String, Option<(String, Arc<Model>)>>>,
+    vfs: Res<Mounted>,
+    tables: Res<SpriteTables>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+    mut cache: ResMut<TextureCache>,
+    mut parts: ResMut<PartCache>,
+    device: Option<Res<RenderDevice>>,
+) {
+    let formats = device.map(|d| CompressedImageFormats::from_features(d.features())).unwrap_or(CompressedImageFormats::BC);
+    for (e, bee, f) in &pending {
+        let key = bee.0.to_ascii_lowercase().trim_end_matches(".sod").to_owned();
+        let found = known
+            .entry(key.clone())
+            .or_insert_with(|| {
+                sta_assets::find_model(&vfs.0, &key).and_then(|(path, fmt)| sta_assets::load_model(&vfs.0, &path, fmt).ok().map(|m| (path, Arc::new(m))))
+            })
+            .clone();
+        let Some((path, model)) = found else { continue };
+        let team = ents.as_ref().and_then(|m| m.0.get(&f.subject)).and_then(|s| teams.get(*s).ok()).map_or(Color::WHITE, |t| t.0);
+        let mut ctx = SpawnCtx {
+            commands: &mut commands,
+            meshes: &mut meshes,
+            materials: &mut materials,
+            textures: Loader { vfs: &vfs.0, cache: &mut cache, images: &mut images, formats },
+            team,
+            borg: false,
+            sprites: &tables.0,
+            damaged: false,
+            normal_maps: true,
+            parts: Some(&mut parts),
+            model_key: path,
+            unlit: false,
+            scale: 1.0,
+        };
+        model_scene::spawn(&mut ctx, &model, e);
     }
 }
 
@@ -564,9 +707,11 @@ mod tests {
         assert_eq!(kinds(SpecialKind::BuiltFlash).len(), 1);
         assert_eq!(kinds(SpecialKind::Shimmer).len(), 2);
         assert!(a.last().unwrap().0.is_empty(), "FX left after the timeline");
-        // Weld is alive only while building (90 ticks at 1.5 frames each).
+        // Weld is alive only while building (90 ticks at 1.5 frames each) and its fade-out
+        // after (BEE_FADE_TICKS).
         let weld_frames = a.iter().filter(|f| f.0.iter().any(|r| r.0.1 == SpecialKind::Weld)).count();
-        assert!((129..=141).contains(&weld_frames), "{weld_frames}");
+        let fade = (BEE_FADE_TICKS * 1.5) as usize;
+        assert!((129 + fade - 3..=141 + fade + 3).contains(&weld_frames), "{weld_frames}");
 
         // Cloak: down to CLOAKED_ALPHA, then back up, each leg monotonic.
         let cloak: Vec<f32> = a.iter().map(|f| f32::from_bits(f.1)).collect();
