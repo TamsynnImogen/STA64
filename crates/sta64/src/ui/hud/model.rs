@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use bevy::prelude::Resource;
-use sta_content::{Availability, ContentDb, Owned, Unmet, UnitDef};
+use sta_content::{Availability, ContentDb, Owned, ResourceModel, Unmet, UnitDef};
 use sta_sim::command::{CommandKind, Order};
 use sta_sim::movement::{FORM_COLUMN, FORM_LINE, FORM_WEDGE};
 use sta_sim::{ContentKey, EntityId, Fixed, PlayerId, UnitView, WorldView};
@@ -207,8 +207,12 @@ pub struct Button {
 pub const CANCEL_CELL: usize = 4;
 pub const BACK_CELL: usize = 9;
 
-/// Resource names by id (0 dilithium, 1 latinum, 2 metal, 3 biomatter).
-pub const RESOURCES: [&str; 4] = ["dilithium", "latinum", "metal", "biomatter"];
+/// What the game calls its four stock slots (0 dilithium, 1 latinum, 2 metal,
+/// 3 biomatter by id): the content's own words (Fleet Operations: Tritanium
+/// for the latinum slot, Supply for the biomatter one), stock's without content.
+pub fn resource_model(feed: &HudFeed) -> ResourceModel {
+    feed.content.as_deref().map(|db| db.resources().clone()).unwrap_or_default()
+}
 
 /// A shipyard's or builder's tech state, from the view: what the player owns
 /// finished, its race, and the races of its allies.
@@ -278,8 +282,8 @@ pub fn build_items(feed: &HudFeed, builder: &UnitView) -> Vec<BuildItem> {
     }
 }
 
-fn cost_text(cost: &[f32]) -> String {
-    let parts: Vec<String> = cost.iter().enumerate().filter(|(_, c)| **c > 0.0).map(|(i, c)| format!("{} {}", *c as i64, RESOURCES.get(i).copied().unwrap_or("?"))).collect();
+fn cost_text(cost: &[f32], names: &ResourceModel) -> String {
+    let parts: Vec<String> = cost.iter().enumerate().filter(|(_, c)| **c > 0.0).map(|(i, c)| format!("{} {}", *c as i64, names.name(i))).collect();
     if parts.is_empty() { "free".into() } else { parts.join(", ") }
 }
 
@@ -313,6 +317,7 @@ pub fn grid(feed: &HudFeed, page: Page) -> Vec<Button> {
         && let Some(b) = builder
     {
         let items = build_items(feed, b);
+        let names = resource_model(feed);
         let site = feed
             .def(b)
             .is_some_and(|d| d.movement.max_speed > Fixed::ZERO);
@@ -320,8 +325,8 @@ pub fn grid(feed: &HudFeed, page: Page) -> Vec<Button> {
         let cells = (0..GRID_COLS * GRID_ROWS).filter(|c| *c != CANCEL_CELL && *c != BACK_CELL);
         for (cell, it) in cells.zip(&items) {
             let verbose = match &it.why {
-                Some(w) => format!("{}. Cost: {}", w, cost_text(&it.cost)),
-                None => format!("Cost: {}", cost_text(&it.cost)),
+                Some(w) => format!("{}. Cost: {}", w, cost_text(&it.cost, &names)),
+                None => format!("Cost: {}", cost_text(&it.cost, &names)),
             };
             out.push(Button {
                 cell,
@@ -457,7 +462,8 @@ pub fn command(feed: &HudFeed, act: &Act) -> Option<(CommandKind, Vec<EntityId>)
 /// One entry of the strip.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResEntry {
-    pub name: &'static str,
+    /// The game's word for it (`Tritanium`), lower case for a built-in entry.
+    pub name: String,
     /// The resource id, for its colour.
     pub id: usize,
     pub text: String,
@@ -468,14 +474,15 @@ pub struct ResEntry {
 /// officers as "in use/capacity" when it has any.
 pub fn resources(feed: &HudFeed, no: [bool; 4]) -> Vec<ResEntry> {
     let Some(p) = feed.view.player(feed.player) else { return Vec::new() };
+    let names = resource_model(feed);
     let mut out: Vec<ResEntry> = [0usize, 2, 1, 3]
         .into_iter()
         .filter(|&i| !no[i])
-        .map(|i| ResEntry { name: RESOURCES[i], id: i, text: (p.resources.get(i).map_or(0.0, |f| f.to_f32()) as i64).to_string() })
+        .map(|i| ResEntry { name: names.name(i).to_owned(), id: i, text: (p.resources.get(i).map_or(0.0, |f| f.to_f32()) as i64).to_string() })
         .collect();
     let [used, cap] = p.officers;
     if cap > Fixed::ZERO {
-        out.push(ResEntry { name: "officers", id: 4, text: format!("{}/{}", used.to_f32() as i64, cap.to_f32() as i64) });
+        out.push(ResEntry { name: "officers".into(), id: 4, text: format!("{}/{}", used.to_f32() as i64, cap.to_f32() as i64) });
     }
     out
 }
@@ -861,21 +868,33 @@ mod tests {
         // Stock is 20 latinum: the cruiser's 50 is out of reach, the frigate's 250 dilithium is not.
         assert_eq!(by("fx_cruiser").look, Look::Poor);
         assert_eq!(by("fx_frigate").look, Look::Ready);
-        assert_eq!(cost_text(&by("fx_cruiser").cost), "600 dilithium, 50 latinum");
-        assert_eq!(cost_text(&by("fx_frigate").cost), "250 dilithium");
-        assert_eq!(cost_text(&[0.0, 0.0]), "free");
+        assert_eq!(cost_text(&by("fx_cruiser").cost, &ResourceModel::default()), "600 Dilithium, 50 Latinum");
+        assert_eq!(cost_text(&by("fx_frigate").cost, &ResourceModel::default()), "250 Dilithium");
+        assert_eq!(cost_text(&[0.0, 0.0], &ResourceModel::default()), "free");
     }
 
     #[test]
     fn the_strip_orders_the_stock_and_skips_what_the_race_lacks() {
         let f = feed(sta_content::fake::db(), Vec::new(), &[]);
         let r = resources(&f, [false; 4]);
-        assert_eq!(r.iter().map(|e| (e.name, e.text.as_str())).collect::<Vec<_>>(), [("dilithium", "3000"), ("metal", "700"), ("latinum", "20"), ("biomatter", "0"), ("officers", "3/10")]);
+        assert_eq!(r.iter().map(|e| (e.name.as_str(), e.text.as_str())).collect::<Vec<_>>(), [("Dilithium", "3000"), ("Metal", "700"), ("Latinum", "20"), ("Biomatter", "0"), ("officers", "3/10")]);
         let r = resources(&f, [false, true, false, true]);
-        assert_eq!(r.iter().map(|e| e.name).collect::<Vec<_>>(), ["dilithium", "metal", "officers"]);
+        assert_eq!(r.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["Dilithium", "Metal", "officers"]);
         // Unknown player: nothing.
         let mut f = f;
         f.player = PlayerId(9);
         assert!(resources(&f, [false; 4]).is_empty());
+    }
+
+    #[test]
+    fn the_strip_and_costs_use_the_games_words() {
+        // Fleet Operations: the latinum slot is the Tritanium, the biomatter slot the Supply,
+        // and the metal slot (Collective Connections) is the Borg's, hidden for the rest.
+        let db = sta_content::fake::db().with_resources(ResourceModel::for_profile(sta_content::Profile::Fo4));
+        let f = feed(db, Vec::new(), &[]);
+        let r = resources(&f, [false, false, true, false]);
+        assert_eq!(r.iter().map(|e| (e.name.as_str(), e.id, e.text.as_str())).collect::<Vec<_>>(), [("Dilithium", 0, "3000"), ("Tritanium", 1, "20"), ("Supply", 3, "0"), ("officers", 4, "3/10")]);
+        let names = resource_model(&f);
+        assert_eq!(cost_text(&[261.0, 181.0, 0.0, 10.0], &names), "261 Dilithium, 181 Tritanium, 10 Supply");
     }
 }

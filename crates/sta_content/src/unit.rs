@@ -73,18 +73,11 @@ pub(crate) fn with_smooth_keys(mut m: MoveStats, mut num: impl FnMut(&str) -> Op
     m
 }
 
-/// Resource id for a node's `resource` text.
+/// Resource id for a node's `resource` text when nothing better is known
+/// (stock names; [`crate::odf::load_with`] replaces it with the node ODF's
+/// `amt<slot>` keys and the profile's own words).
 fn resource_id(text: &str) -> u8 {
-    let r = text.to_ascii_lowercase();
-    if r.contains("latinum") {
-        1
-    } else if r.contains("metal") || r.contains("tritanium") {
-        2
-    } else if r.contains("biomatter") {
-        3
-    } else {
-        0
-    }
+    crate::ResourceModel::default().slot_of_text(text).unwrap_or(0) as u8
 }
 
 /// The definition of the unit `name`; `phys` is its resolved physics ODF.
@@ -122,13 +115,7 @@ pub fn unit_def(name: &str, odf: &Odf, phys: Option<&Odf>, warnings: &mut Vec<Wa
         d.hardpoints.push(Hardpoint { weapon: DefRef::new(weapon), node, arc: None });
     }
 
-    let mut cost = [
-        r.fixed("dilithiumCost"),
-        r.fixed("latinumCost"),
-        r.fixed("metalCost"),
-        r.fixed("biomatterCost"),
-    ]
-    .to_vec();
+    let mut cost: Vec<Fixed> = (0..crate::resources::SLOTS).map(|s| r.fixed(&crate::resources::cost_key(s))).collect();
     while cost.last() == Some(&Fixed::ZERO) {
         cost.pop();
     }

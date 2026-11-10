@@ -279,7 +279,7 @@ fn log_line(l: &HudLayout, height: Option<InfoHeight>, page: Page, m: &Models, r
         r(row.info),
         row.grid_beside,
         cells.join(" "),
-        m.resources.iter().map(|e| format!("{}={}", e.name, e.text)).collect::<Vec<_>>().join(" "),
+        m.resources.iter().map(|e| format!("{}={}", e.name.to_lowercase(), e.text)).collect::<Vec<_>>().join(" "),
     )
 }
 

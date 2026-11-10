@@ -15,8 +15,10 @@
 //! - A `Move` (not queued) or `Stop` ends mining, but a loaded freighter keeps
 //!   its cargo while idle. A later Mine order delivers that cargo first.
 //! - Which resource a node gives comes from its class (`latinum`) or its
-//!   ODF `resource` key (names containing latinum, metal/tritanium,
-//!   biomatter), else dilithium. Nodes hold [`RICHNESS`] and run dry.
+//!   ODF `resource` key, which content resolves to a slot when it loads: the
+//!   `amt<slot>` of the resource ODF (Fleet Operations 4.0's tritanium moon
+//!   holds `amtlatinum`, so it fills the slot the game calls Tritanium), else
+//!   the game's word for the slot in the text, else dilithium. Nodes hold [`RICHNESS`] and run dry.
 //! - Within 150 units of node or station counts as there; the freighter
 //!   stops and works that same tick, so a trip with no travel takes exactly
 //!   `capacity / rate + capacity / unload` ticks.
