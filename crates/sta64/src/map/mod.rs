@@ -146,7 +146,9 @@ impl Placed {
     fn take(&mut self, key: ContentKey, o: &sta_bzn::MapObject) -> Option<EntityId> {
         let p = SimVec3::from_f32([o.transform[9], o.transform[10], o.transform[11]]);
         let owner = if o.team > 0 { PlayerId((o.team - 1).min(255) as u8) } else { sta_sim::world::NEUTRAL };
-        self.0.get_mut(&(key, [p.x, p.y, p.z], owner))?.pop_front()
+        // Resources are neutral in the sim whoever the BZN gave them to (SIM-18).
+        let mut pop = |o| self.0.get_mut(&(key, [p.x, p.y, p.z], o)).and_then(|q| q.pop_front());
+        pop(owner).or_else(|| pop(sta_sim::world::NEUTRAL))
     }
 
     /// Entities no BZN object took (`from_setup` made them from something the

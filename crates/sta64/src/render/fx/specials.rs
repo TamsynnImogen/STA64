@@ -221,7 +221,7 @@ fn sync_construction(
     let gone: Vec<EntityId> = cons.active.keys().filter(|id| !building.contains_key(id)).copied().collect();
     for id in gone {
         for e in cons.active.remove(&id).unwrap() {
-            cmds.entity(e).despawn();
+            cmds.entity(e).try_despawn();
         }
     }
     for (&id, &(_, def)) in &building {
@@ -278,7 +278,7 @@ fn update_fx(
         let age = (now_ticks - f.born as f64) as f32;
         let k = match f.life {
             Some(life) if age >= life => {
-                cmds.entity(e).despawn();
+                cmds.entity(e).try_despawn();
                 continue;
             }
             Some(life) => (age / life).clamp(0.0, 1.0),
@@ -375,7 +375,7 @@ fn fade_units(mut cmds: Commands, clock: Res<AnimClock>, mut last: Local<Option<
         match fade {
             // A unit seen already cloaked starts cloaked.
             None => {
-                cmds.entity(e).insert(UnitFade { cloak: target, build: 1.0 });
+                cmds.entity(e).try_insert(UnitFade { cloak: target, build: 1.0 });
             }
             Some(mut f) => {
                 let next = if f.cloak < target { (f.cloak + step).min(target) } else { (f.cloak - step).max(target) };
@@ -400,7 +400,7 @@ fn attach_visuals(
     }
     let mesh = quad_mesh.get_or_insert_with(|| meshes.add(quad::rectangle())).clone();
     for (e, f) in &new {
-        cmds.entity(e).insert((Mesh3d(mesh.clone()), MeshMaterial3d(mats.add(quad::material(&f.look)))));
+        cmds.entity(e).try_insert((Mesh3d(mesh.clone()), MeshMaterial3d(mats.add(quad::material(&f.look)))));
     }
 }
 
@@ -436,14 +436,14 @@ fn apply_fade(
             if a >= 1.0 {
                 if let Some(s) = saved {
                     m.0 = s.orig.clone();
-                    cmds.entity(d).remove::<FadeMat>();
+                    cmds.entity(d).try_remove::<FadeMat>();
                 }
                 continue;
             }
             if saved.is_none() {
                 let Some(copy) = mats.get(&m.0).cloned() else { continue };
                 let orig = std::mem::replace(&mut m.0, mats.add(copy));
-                cmds.entity(d).insert(FadeMat { orig });
+                cmds.entity(d).try_insert(FadeMat { orig });
             }
             if let Some(mut mat) = mats.get_mut(&m.0) {
                 mat.base_color = mat.base_color.with_alpha(a);
