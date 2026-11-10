@@ -88,6 +88,8 @@ pub(crate) struct Catalogue {
     /// carry them.
     legacy: sta_content::legacy::Legacy,
     models: HashMap<String, Option<(String, Arc<Model>)>>,
+    /// The moon each resource marker is swapped for (RND-16), read from its ODFs.
+    moons: crate::render::moons::MoonVariants,
 }
 
 impl Catalogue {
@@ -879,6 +881,11 @@ fn rebuild(
             drawn += 1;
             continue;
         }
+        // A resource marker (`trigger_dilithium`, `trigger_tritanium`, ...) is drawn as the
+        // moon the game swaps it for (RND-16), the same for whichever resource it is.
+        let sim_def = sim_key.and_then(|k| content.unit(k));
+        let moon = sim_def.and_then(|d| catalogue.moons.moon_for(&vfs.0, &content, d, o.entity_id as u64));
+        let (def, odf) = moon.map_or((def, odf), |m| (m, &*m.raw));
         let Some((path, model)) = catalogue.model(&vfs.0, &def.model) else {
             no_model += 1;
             continue;
@@ -903,7 +910,9 @@ fn rebuild(
         // by this entity: the ship moves with it and takes orders as one.
         if let Some(id) = sim_key.and_then(|k| placed.take(k, o)) {
             commands.entity(entity).insert(SimEntity(id));
-            if def.movement.max_speed > Fixed::ZERO || o.team > 0 {
+            // A resource (a moon) is neutral and never moves but is clicked for its info and
+            // as a mining target.
+            if def.movement.max_speed > Fixed::ZERO || o.team > 0 || def.resource.is_some() {
                 let radius = model
                     .bounds()
                     .map(|(lo, hi)| (Vec3::from(hi) - Vec3::from(lo)).length() * 0.5)
@@ -1020,6 +1029,9 @@ fn rebuild(
                 (n > 0).then(|| (k.to_owned(), n as u32, scale))
             })
             .collect();
+        let sizing = crate::render::space::StarSizing::from_cfg(
+            vfs.0.read("ART_CFG.h").and_then(Result::ok).map(|b| sta_assets::cfg_h::CfgH::parse(&String::from_utf8_lossy(&b))).as_ref(),
+        );
         let stars = commands.spawn((Sky, Transform::IDENTITY, Visibility::default())).id();
         let mut loader = Loader {
             vfs: &vfs.0,
@@ -1027,7 +1039,7 @@ fn rebuild(
             images: &mut images,
             formats,
         };
-        let n = crate::render::space::starfield(&mut commands, &mut meshes, &mut materials, &mut loader, &tables.0, &entries, 100_000.0, stars);
+        let n = crate::render::space::starfield(&mut commands, &mut meshes, &mut materials, &mut loader, &tables.0, &entries, &sizing, 100_000.0, stars);
         star_note = format!("{} ({n} stars)", map.starfield_odf);
     }
 

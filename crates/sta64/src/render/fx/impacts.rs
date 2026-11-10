@@ -160,7 +160,7 @@ impl Plugin for ImpactFxPlugin {
             (track, spawn_impacts, smoke_attach, emit_smoke, update_impacts, attach_visuals, apply_alpha, apply_shields, apply_fire, apply_quads)
                 .chain()
                 .in_set(GameSet::Interpolate)
-                .run_if(resource_exists::<SimLink>),
+                .distributive_run_if(resource_exists::<SimLink>),
         );
     }
 }

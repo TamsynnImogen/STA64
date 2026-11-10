@@ -8,7 +8,7 @@ use bevy::prelude::*;
 use bevy::ui::UiTargetCamera;
 
 use super::data::{Browse, ScreenData, SelectedMod, SettingKey, SetupDraft, Settings};
-use super::{Col, Screen};
+use super::{Col, ListScroll, Screen};
 use crate::app::AppState;
 use crate::ui::i18n::{tr, trf};
 use crate::ui::theme::{Theme, button, disabled_button, label, list, panel, slider, toggle};
@@ -50,6 +50,29 @@ pub struct MapList;
 #[derive(Component, Debug, Clone, Copy)]
 pub struct ModList;
 
+/// The scrolling box a long list sits in: it is as tall as the list up to a
+/// share of the window, and the rest scrolls. Carries what the list shows so
+/// the scroll systems can keep the picked row in view.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct ScrollBox {
+    pub selected: Option<usize>,
+    pub count: usize,
+}
+
+/// The share of the window height (percent) a list's box may take; the title
+/// bar, the buttons and the details beside it fit in the rest.
+pub const LIST_MAX_VH: f32 = 55.0;
+
+/// A [`list`] in a [`ScrollBox`] that scrolls to `scroll`.
+fn scroll_list(theme: &Theme, rows: &[&str], picked: Option<usize>, scroll: f32, marker: impl Component) -> impl Bundle {
+    (
+        ScrollBox { selected: picked, count: rows.len() },
+        Node { flex_direction: FlexDirection::Column, max_height: Val::Vh(LIST_MAX_VH), overflow: Overflow::scroll_y(), ..default() },
+        ScrollPosition(Vec2::new(0.0, scroll)),
+        children![(list(theme, rows, picked), marker)],
+    )
+}
+
 /// What a screen is drawn from.
 pub struct Ctx<'a> {
     pub theme: &'a Theme,
@@ -58,6 +81,7 @@ pub struct Ctx<'a> {
     pub browse: &'a Browse,
     pub settings: &'a Settings,
     pub selected: &'a SelectedMod,
+    pub scroll: &'a ListScroll,
 }
 
 /// Spawn `screen`; `camera` is the UI camera when the host has one of its own.
@@ -173,10 +197,11 @@ fn setup(ctx: &Ctx) -> impl Bundle {
 fn map_select(ctx: &Ctx) -> impl Bundle {
     let t = ctx.theme.clone();
     let titles: Vec<String> = ctx.data.maps.iter().map(|m| format!("{}  ({} players)", m.title(), m.slots())).collect();
+    let scroll = ctx.scroll.offset;
     let picked = (!titles.is_empty()).then_some(ctx.browse.map.min(titles.len() - 1));
     content(ctx.theme, move |p| {
         let rows: Vec<&str> = titles.iter().map(String::as_str).collect();
-        p.spawn((list(&t, &rows, picked), MapList));
+        p.spawn(scroll_list(&t, &rows, picked, scroll, MapList));
         p.spawn(row(t.gap)).with_children(|r| {
             if picked.is_some() {
                 r.spawn((button(&t, &tr("Select map"), 220.0), Act::TakeMap));
@@ -220,6 +245,7 @@ fn mod_select(ctx: &Ctx) -> impl Bundle {
     let t = ctx.theme.clone();
     let mut names = vec![tr("Base game")];
     names.extend(ctx.data.mods.iter().map(|m| m.name.clone()));
+    let scroll = ctx.scroll.offset;
     let picked = ctx.browse.mod_row.min(names.len() - 1);
     let mut details = Vec::new();
     match picked.checked_sub(1).and_then(|i| ctx.data.mods.get(i)) {
@@ -243,7 +269,7 @@ fn mod_select(ctx: &Ctx) -> impl Bundle {
     };
     content(ctx.theme, move |p| {
         let rows: Vec<&str> = names.iter().map(String::as_str).collect();
-        p.spawn((list(&t, &rows, Some(picked)), ModList));
+        p.spawn(scroll_list(&t, &rows, Some(picked), scroll, ModList));
         for d in &details {
             p.spawn(label(&t, d));
         }
