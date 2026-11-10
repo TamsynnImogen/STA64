@@ -59,6 +59,10 @@ pub enum Order {
     Special { units: Vec<EntityId>, slot: u8, target: Target },
     Cloak { units: Vec<EntityId>, on: bool },
     Mine { units: Vec<EntityId>, node: EntityId },
+    /// Set a builder's destination for newly produced mobile units. `None`
+    /// clears it; entity positions are resolved when a unit is produced.
+    /// Appended: existing postcard Order tags must keep their values.
+    Rally { builders: Vec<EntityId>, at: Target },
 }
 
 /// Direct changes to the world: the bench's edits (docs/TESTBENCH.md,
@@ -194,5 +198,18 @@ mod tests {
         };
         let bytes = postcard::to_allocvec(&c).unwrap();
         assert_eq!(postcard::from_bytes::<Command>(&bytes).unwrap(), c);
+    }
+
+    #[test]
+    fn rally_appends_a_wire_tag_and_round_trips_all_target_kinds() {
+        let mine = Order::Mine { units: vec![], node: EntityId(1) };
+        assert_eq!(postcard::to_allocvec(&mine).unwrap(), [7, 0, 1]);
+        let clear = Order::Rally { builders: vec![], at: Target::None };
+        assert_eq!(postcard::to_allocvec(&clear).unwrap(), [8, 0, 0]);
+        for at in [Target::None, Target::Entity(EntityId(42)), Target::Point(Vec3::from_f32([1.5, -2.0, 3.0]))] {
+            let c = Command { player: PlayerId(0), seq: 9, kind: CommandKind::Order(Order::Rally { builders: vec![EntityId(3)], at }) };
+            let bytes = postcard::to_allocvec(&c).unwrap();
+            assert_eq!(postcard::from_bytes::<Command>(&bytes).unwrap(), c);
+        }
     }
 }
