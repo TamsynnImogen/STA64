@@ -7,7 +7,7 @@ use sta_sim::command::{Edit, Order};
 
 use crate::api::{Shared, pos_f64, vector};
 
-fn integer(name: &str, value: &Value) -> mlua::Result<u32> {
+pub(super) fn integer(name: &str, value: &Value) -> mlua::Result<u32> {
     let n = match value {
         Value::Integer(n) => u32::try_from(*n).ok(),
         Value::Number(n)

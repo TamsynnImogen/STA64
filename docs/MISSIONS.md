@@ -206,6 +206,16 @@ ODF names must be Lua strings, and arity must match exactly. Queries never
 queue commands and see writes only after the host advances the simulation.
 These are STA64 bridge policies; native defaults/overloads remain unverified.
 
+`A2.GetDistance(id, id)` implements the inventoried two-handle
+`float GetDistance(int&, int&)` call shape. It returns three-dimensional
+Euclidean distance between the latest non-dying snapshot positions, using the
+same position precision and distance helpers as the existing Entity/Vector
+API. The same live ID returns zero. Both arguments require strict unsigned
+integral IDs; missing or dying objects raise an error on either side. It
+queues no commands and sees a changed position only after the host supplies
+the next view. Path overloads, entity bounds/surface corrections, and native
+dimensional or invalid-handle defaults are unimplemented or unverified.
+
 ## Conversion report
 
 `sta64 --mission-report` lists every map whose mission resolves to

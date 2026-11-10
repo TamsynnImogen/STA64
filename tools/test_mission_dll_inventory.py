@@ -137,6 +137,32 @@ class MissionDllInventoryTests(unittest.TestCase):
         self.assertEqual(inventory.a2_exact_for("float GetMaxHealth(int, float)", self.repo), "")
         self.assertEqual(inventory.a2_exact_for("bool IsOdf(int, int)", self.repo), "")
 
+    def test_distance_coverage_keeps_reference_arguments_and_overloads_distinct(self):
+        self.register_a2(
+            "",
+            registration=(
+                'queries::install(lua, ctx, &a2)?; '
+                'lua.globals().raw_set("A2", a2)?;'
+            ),
+        )
+        (self.a2 / "queries.rs").write_text(
+            'table.set("GetDistance", fn);\n', encoding="utf-8"
+        )
+        self.assertEqual(
+            inventory.a2_exact_for(
+                "public: float __thiscall ScriptInterfaceImp::GetDistance(int &, int &)",
+                self.repo,
+            ),
+            "A2.GetDistance",
+        )
+        for signature in [
+            "int GetDistance(int&, int&)",
+            "float GetDistance(int, int)",
+            "float GetDistance(int&, char*, int)",
+            "float GetDistance(int&, int&, int)",
+        ]:
+            self.assertEqual(inventory.a2_exact_for(signature, self.repo), "", signature)
+
     def test_test_files_do_not_count_as_a2_bindings(self):
         self.register_a2("", registration='objects::install(lua, ctx, &a2)?; lua.globals().raw_set("A2", a2)?;')
         (self.a2 / "tests.rs").write_text('table.set("IsAlive", fn);', encoding="utf-8")

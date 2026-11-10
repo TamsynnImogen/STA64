@@ -15,12 +15,12 @@ user's own executables each time, and none are recorded here.
 | engine API size | 371 `ScriptInterface` methods | (imports only) |
 | distinct calls used | 138 | 213 |
 | call sites | 11708 | — |
-| A2 DLL-shaped callable | 12 | — |
-| missing A2 callable signatures | 120 | — |
+| A2 DLL-shaped callable | 13 | — |
+| missing A2 callable signatures | 119 | — |
 | MMM job-equivalent, not A2-shaped | 0 | — |
 | bound in STA64's Lua today | — | 6 |
 | in MMM's API, not yet bound | 24 | 27 |
-| no Lua equivalent (STA64 extension needed) | 96 | 144 |
+| no Lua equivalent (STA64 extension needed) | 95 | 144 |
 | script-state plumbing (n/a in Lua) | 6 | 36 |
 
 - **bound**: an existing `sta_mission` binding does the same job.
@@ -175,7 +175,7 @@ user's own executables each time, and none are recorded here.
 | `SiegeFleet * CreateNewSiegeFleet(void)` | 2 | 4 | new |  |
 | `bool Exists(int)` | 2 | 26 | MMM | `Path.exists` |
 | `bool IsAlive(int)` | 2 | 15 | A2 DLL-shaped | `A2.IsAlive` |
-| `float GetDistance(int &, int &)` | 2 | 8 | new |  |
+| `float GetDistance(int &, int &)` | 2 | 8 | A2 DLL-shaped | `A2.GetDistance` |
 | `int CountUnitsNearObject(int, float, int, char *)` | 2 | 14 | new |  |
 | `int CountVisibleUnitsNearObject(int, float, int, bool, char *)` | 2 | 10 | new |  |
 | `int GetNearestShipyard(int, int, bool)` | 2 | 9 | new |  |

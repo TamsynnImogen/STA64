@@ -10,7 +10,7 @@ use sta_sim::{MoveStats, Sim, WorldSource};
 use crate::api::MissionConfig;
 use crate::runtime::MissionRuntime;
 
-fn scene() -> (Sim, Arc<ContentDb>, EntityId) {
+fn scene_at(pos: Vec3) -> (Sim, Arc<ContentDb>, EntityId) {
     let db = Arc::new(fake::db());
     let setup = GameSetup {
         seed: 19,
@@ -29,11 +29,15 @@ fn scene() -> (Sim, Arc<ContentDb>, EntityId) {
         .spawn_def(
             db.key("fx_cruiser").unwrap(),
             PlayerId(0),
-            Vec3::ZERO,
+            pos,
             (Fixed::ZERO, Fixed::ONE),
         )
         .unwrap();
     (sim, db, id)
+}
+
+fn scene() -> (Sim, Arc<ContentDb>, EntityId) {
+    scene_at(Vec3::ZERO)
 }
 
 fn runtime(sim: &Sim, db: Option<Arc<ContentDb>>) -> MissionRuntime {
@@ -163,4 +167,100 @@ fn live_unit_without_content_has_health_but_is_odf_errors() {
             .is_err()
     );
     assert!(rt.take_commands().is_empty() && rt.unsupported().is_empty());
+}
+
+fn distance_scene() -> (Sim, Arc<ContentDb>, EntityId, EntityId) {
+    let (mut sim, db, first) = scene_at(Vec3::from_f32([-0.5, -1.25, -2.0]));
+    let second = sim
+        .spawn_def(
+            db.key("fx_cruiser").unwrap(),
+            PlayerId(0),
+            Vec3::from_f32([2.5, 2.75, 10.0]),
+            (Fixed::ZERO, Fixed::ONE),
+        )
+        .unwrap();
+    (sim, db, first, second)
+}
+
+#[test]
+fn get_distance_uses_three_axes_and_waits_for_the_latest_snapshot() {
+    let (sim, db, first, second) = distance_scene();
+    let mut rt = runtime(&sim, Some(db));
+    let query = format!(
+        "return A2.GetDistance({},{}), A2.GetDistance({},{}), A2.GetDistance({},{})",
+        first.0, second.0, second.0, first.0, first.0, first.0
+    );
+    let values: (f64, f64, f64) = rt.eval(&query).unwrap();
+    assert_eq!(
+        values,
+        (13.0, 13.0, 0.0),
+        "negative and fractional coordinates still use 3D distance"
+    );
+    let mut fresh = (*sim.view()).clone();
+    let new_pos = fresh.unit(second).unwrap().pos;
+    fresh.units.iter_mut().find(|u| u.id == first).unwrap().pos = new_pos;
+    fresh.tick += 1;
+    assert_eq!(
+        rt.eval::<f64>(&format!("return A2.GetDistance({},{})", first.0, second.0))
+            .unwrap(),
+        13.0
+    );
+    let mut commands = Vec::new();
+    rt.think(&fresh, &[], &mut commands);
+    assert_eq!(
+        rt.eval::<f64>(&format!("return A2.GetDistance({},{})", first.0, second.0))
+            .unwrap(),
+        0.0
+    );
+    assert!(commands.is_empty() && rt.take_commands().is_empty() && rt.unsupported().is_empty());
+}
+
+#[test]
+fn get_distance_rejects_invalid_handles_and_dying_objects_on_either_side() {
+    let (sim, db, first, second) = distance_scene();
+    let mut rt = runtime(&sim, Some(db.clone()));
+    for script in [
+        "A2.GetDistance()".to_owned(),
+        format!("A2.GetDistance({})", first.0),
+        format!("A2.GetDistance({},{},0)", first.0, second.0),
+        format!("A2.GetDistance(99999,{})", first.0),
+        format!("A2.GetDistance({},99999)", first.0),
+    ] {
+        assert!(rt.eval::<()>(&script).is_err(), "{script}");
+    }
+    for bad in [
+        "-1",
+        "1.5",
+        "'1'",
+        "0/0",
+        "math.huge",
+        "-math.huge",
+        "4294967296",
+        "true",
+        "nil",
+    ] {
+        for script in [
+            format!("A2.GetDistance({bad},{})", second.0),
+            format!("A2.GetDistance({},{bad})", first.0),
+        ] {
+            assert!(rt.eval::<()>(&script).is_err(), "{script}");
+        }
+    }
+    assert!(rt.take_commands().is_empty() && rt.unsupported().is_empty());
+
+    for dying in [first, second] {
+        let mut view = (*sim.view()).clone();
+        view.units.iter_mut().find(|u| u.id == dying).unwrap().flags = UnitFlags::DYING;
+        let cfg = MissionConfig {
+            content: Some(db.clone()),
+            view: Some(view),
+            ..MissionConfig::default()
+        };
+        let mut rt = MissionRuntime::from_source_with("dying-distance.lua", "", 19, cfg);
+        assert!(
+            rt.eval::<f64>(&format!("return A2.GetDistance({},{})", first.0, second.0))
+                .is_err()
+        );
+        assert!(rt.take_commands().is_empty() && rt.unsupported().is_empty());
+    }
 }

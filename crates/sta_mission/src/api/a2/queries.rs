@@ -2,8 +2,8 @@
 
 use mlua::{Lua, MultiValue, Table, Value};
 
-use super::objects::handle;
-use crate::api::Shared;
+use super::objects::{handle, integer};
+use crate::api::{Shared, dist, pos_f64};
 
 fn odf_stem(name: &str) -> &str {
     match name.get(name.len().saturating_sub(4)..) {
@@ -26,6 +26,25 @@ fn health(lua: &Lua, ctx: &Shared, name: &'static str, max: bool) -> mlua::Resul
 pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()> {
     table.set("GetCurrentHealth", health(lua, ctx, "GetCurrentHealth", false)?)?;
     table.set("GetMaxHealth", health(lua, ctx, "GetMaxHealth", true)?)?;
+    let c = ctx.clone();
+    table.set(
+        "GetDistance",
+        lua.create_function(move |_, args: MultiValue| {
+            let first = handle("GetDistance", &args, 2)?;
+            let second = sta_core::EntityId(integer("GetDistance", &args[1])?);
+            let (a, b) = {
+                let c = c.borrow();
+                let a = c
+                    .alive(first)
+                    .ok_or_else(|| mlua::Error::runtime(format!("A2.GetDistance: object {} is not alive", first.0)))?;
+                let b = c
+                    .alive(second)
+                    .ok_or_else(|| mlua::Error::runtime(format!("A2.GetDistance: object {} is not alive", second.0)))?;
+                (pos_f64(a.pos), pos_f64(b.pos))
+            };
+            Ok(dist(a, b))
+        })?,
+    )?;
     let c = ctx.clone();
     table.set(
         "IsOdf",
