@@ -1,6 +1,6 @@
 //! Public contract for replayable mission text, without a UI input producer.
 use sta_core::{Fixed, PlayerId, TeamId, Vec3};
-use sta_sim::command::{Command, CommandKind, Edit, MAX_MISSION_TEXT_BYTES};
+use sta_sim::command::{Command, CommandKind, Edit, MAX_MISSION_TEXT_BYTES, Order};
 use sta_sim::replay::{Recorder, Replay};
 use sta_sim::setup::{Control, GameOptions, GameSetup, PlayerSetup};
 use sta_sim::{Sim, SimEvent, WorldSource};
@@ -42,11 +42,20 @@ fn text_follows_command_order_once_and_leaves_physical_state_unchanged() {
     let setup = setup();
     let mut sim = Sim::from_setup(&setup);
     let mut control = Sim::from_setup(&setup);
-    let out = sim.step(&[
+    let commands = [
         text(1, 0, "third"),
         text(0, 9, "second"),
         text(0, 2, "NEXT"),
-    ]);
+    ];
+    let bytes = postcard::to_allocvec(&commands).unwrap();
+    let decoded: Vec<Command> = postcard::from_bytes(&bytes).unwrap();
+    let mut replay = Sim::from_setup(&setup);
+    let out = sim.step(&commands);
+    assert_eq!(
+        replay.step(&decoded),
+        out,
+        "serialized commands must reproduce full events/view"
+    );
     assert_eq!(
         out.events,
         [
@@ -102,20 +111,38 @@ fn utf8_byte_boundary_empty_and_embedded_nul_are_preserved() {
 fn eliminated_player_text_is_rejected() {
     let setup = setup();
     let mut sim = Sim::from_setup(&setup);
-    let id = sim
+    let target = sim
         .spawn_def(
-            setup.content.key("fx_cruiser").unwrap(),
+            setup.content.key("fx_frigate").unwrap(),
             PlayerId(0),
-            Vec3::ZERO,
+            Vec3::from_f32([2000.0, 0.0, 2350.0]),
             (Fixed::ZERO, Fixed::ONE),
         )
         .unwrap();
-    sim.step(&[]); // observe the seat's assets before destroying the last one
+    let attacker = sim
+        .spawn_def(
+            setup.content.key("fx_cruiser").unwrap(),
+            PlayerId(1),
+            Vec3::from_f32([2000.0, 0.0, 2000.0]),
+            (Fixed::ZERO, Fixed::ONE),
+        )
+        .unwrap();
+    // Use combat destruction: direct script removal does not currently feed
+    // the victory subsystem's lost-seat list.
     sim.step(&[Command {
-        player: PlayerId::SCRIPT,
+        player: PlayerId(1),
         seq: 0,
-        kind: CommandKind::Edit(Edit::Kill(id)),
+        kind: CommandKind::Order(Order::Attack {
+            units: vec![attacker],
+            target,
+        }),
     }]);
+    for _ in 0..1500 {
+        if sim.is_eliminated(PlayerId(0)) {
+            break;
+        }
+        sim.step(&[]);
+    }
     assert!(sim.is_eliminated(PlayerId(0)));
     assert_eq!(
         sim.step(&[text(0, 1, "NEXT")]).events,
