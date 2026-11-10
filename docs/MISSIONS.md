@@ -243,3 +243,41 @@ platforms. The runtime replaces them with deterministic implementations, and
   its methods used), A1's DLLs import 213 functions by name from `Armada.exe`,
   bridge scenes included. Binding the missing ones: WORKPLAN LUA-05, LUA-06;
   `.drl` rules to Lua scaffolds: LUA-07.
+
+## Mission text callbacks
+
+`CommandKind::MissionText { text }` carries UTF-8 text through the normal
+simulation command and replay path. Configured, noneliminated player seats
+may submit up to 4096 bytes; reserved or unknown senders and larger payloads
+produce `Rejected`. Empty text and embedded NULs are preserved. Accepted
+commands emit `SimEvent::MissionText { player, seq, text }` in command order
+without changing physical world state. Sequence uniqueness remains the
+sender's responsibility. This seam provides neither chat display nor a
+frontend input producer.
+
+The observed converted tutorial call is
+`TextInput:hook(id, receiverTable, callback, argument, luaPattern)`.
+The callback receives `(receiverTable, text, argument)`, preserving nil.
+IDs and patterns must be UTF-8 strings, patterns are bounded to 4096 bytes,
+and duplicate active IDs raise an error. Matching uses the builtin Lua
+`string.find` captured when the runtime installs the binding. An empty-subject
+preflight catches some malformed patterns; other pattern errors can arise
+when an actual text reaches the malformed portion. Matching and callback
+errors share a cumulative five-error budget per stable hook registration.
+After five errors that registration is disabled. `TextInput:unhook(id)` is an
+explicit bridge extension; it removes registrations with that ID.
+
+After updating the view and resolving spawn receipts, `Controller::think`
+delivers only text from `MissionConfig.seat` before polling monitors and
+mission updates. It consumes `(player, seq)` once per view tick before Lua
+runs, including when callbacks fail. The host must deliver complete events
+with monotonically advancing views. Each event batch snapshots existing hook
+serials in registration order; removal cancels pending work immediately and
+new or replacement registrations wait for another batch. Callback errors are
+charged to their original serial, so replacement hooks retain their own
+budget. No context borrow is held across Lua matching or callbacks.
+
+These are STA64 bridge rules inferred from the authored call shape, rather
+than native MMM delivery defaults. The tutorial's text fallback can now be
+exercised headlessly. `Debug:getKeyState` and client keyboard/chat entry remain
+unimplemented or unverified; this binding never synthesizes device input.

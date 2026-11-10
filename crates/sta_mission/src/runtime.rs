@@ -479,6 +479,10 @@ impl Controller for MissionRuntime {
             c.events = events.to_vec();
             api::process_spawns(&mut c);
         }
+        let mut failures = Vec::new();
+        api::fire_text_input(&self.inner.lua, &self.inner.ctx, &mut failures);
+        let room = MAX_LOGGED.saturating_sub(self.errors.len());
+        self.errors.extend(failures.into_iter().take(room));
         self.step(view.tick);
         out.extend(api::drain_commands(&self.inner.ctx));
     }

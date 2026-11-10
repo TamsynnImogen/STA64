@@ -82,8 +82,7 @@ fn ui_tutorial_cineractive_finish_loads_its_first_objective_step() {
     let unsupported = runtime.unsupported();
     assert!(unsupported.contains(&("stub global Debug".into(), 531)));
     assert!(unsupported.contains(&("stub field Debug.getKeyState".into(), 531)));
-    assert!(unsupported.contains(&("stub global TextInput".into(), 1)));
-    assert!(unsupported.contains(&("stub field TextInput.hook".into(), 1)));
+    assert!(!unsupported.iter().any(|(name, _)| name.contains("TextInput")));
     eprintln!("external UI Tutorial cineractive transition: unsupported diagnostics={unsupported:?}");
 }
 

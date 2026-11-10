@@ -85,8 +85,7 @@ fn ui_tutorial_setup_and_early_timed_rules_emit_expected_presentations() {
     let unsupported = runtime.unsupported();
     assert!(unsupported.contains(&("stub global Debug".into(), 401)));
     assert!(unsupported.contains(&("stub field Debug.getKeyState".into(), 401)));
-    assert!(unsupported.contains(&("stub global TextInput".into(), 1)));
-    assert!(unsupported.contains(&("stub field TextInput.hook".into(), 1)));
+    assert!(!unsupported.iter().any(|(name, _)| name.contains("TextInput")));
     let unsupported_total: u32 = unsupported.iter().map(|(_, count)| count).sum();
     eprintln!(
         "external UI Tutorial early rules: unsupported lookup/operation count {unsupported_total} across {} names: {unsupported:?}; fallback diagnostics do not implement input",

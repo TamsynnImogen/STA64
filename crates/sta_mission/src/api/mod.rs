@@ -65,6 +65,7 @@ mod timer;
 mod objectives;
 mod objectives_file;
 mod spawn;
+mod text_input;
 #[cfg(test)]
 mod tests;
 
@@ -75,6 +76,10 @@ pub(crate) fn fire_monitors(lua: &Lua, ctx: &Shared, errors: &mut Vec<String>) {
     monitor::fire_monitors(lua, ctx, errors);
     condition_monitor::fire(lua, ctx, errors);
     timer::fire_timers(lua, ctx, errors);
+}
+
+pub(crate) fn fire_text_input(lua: &Lua, ctx: &Shared, errors: &mut Vec<String>) {
+    text_input::fire(lua, ctx, errors);
 }
 
 pub(crate) fn process_spawns(ctx: &mut Ctx) {
@@ -180,6 +185,7 @@ pub(crate) struct Ctx {
     seq: BTreeMap<PlayerId, u32>,
     pub spawns: spawn::SpawnStore,
     pub camera: camera_intent::Store,
+    pub text_input: text_input::Store,
     pub objectives: Vec<Objective>,
     pub next_objective_id: u32,
     pub objective_briefing: Option<ObjectiveBriefing>,
@@ -213,6 +219,7 @@ impl Ctx {
             seq: BTreeMap::new(),
             spawns: spawn::SpawnStore::default(),
             camera: camera_intent::Store::default(),
+            text_input: text_input::Store::default(),
             objectives: Vec::new(),
             next_objective_id: 0,
             objective_briefing: None,
@@ -408,6 +415,7 @@ pub(crate) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
     entity::install(lua, ctx)?;
     player::install(lua, ctx)?;
     monitor::install(lua, ctx)?;
+    text_input::install(lua, ctx)?;
     timer::install(lua, ctx)?;
     a2::install(lua, ctx)?;
 
