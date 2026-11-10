@@ -39,4 +39,9 @@ pub enum SimEvent {
     /// Consumers must match an outstanding unique request and check the view.
     /// Appended to preserve every existing postcard event tag.
     ScriptSpawned { request: u64, id: EntityId },
+    /// Accepted player mission text, in command application order. The
+    /// originating `(player, seq)` identifies it within this tick; it is not
+    /// a chat-display instruction or a keyboard event. See `MissionText` in
+    /// [`crate::command::CommandKind`]. Appended after spawn receipts.
+    MissionText { player: PlayerId, seq: u32, text: String },
 }
