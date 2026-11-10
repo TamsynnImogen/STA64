@@ -116,3 +116,4 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [x] Team colours from `teamcolor.odf` — `4cea39a`
 - [x] Damage-state nodes hidden on healthy craft — `5287d6f`
 - [ ] Construction, cloak FX: a station under construction welds and firms up, `Built` flashes; a cloaked own unit goes translucent and back (RND-11)
+- [ ] Sprite fonts (UI-12): start a skirmish on Fleet Ops 4.0 (Roots), the HUD's resource strip and info panel text is drawn in the game's own bitmap font (FontSmall/FontMedium sheets, white glyphs tinted by the HUD colours); with a mod that has no fonts (or none mounted) it stays in the TTF. Check glyph colours and spacing; resource symbols (codes 0x80 and up) are not mapped to the i18n words yet ([sprite_font.rs](crates/sta64/src/ui/sprite_font.rs))

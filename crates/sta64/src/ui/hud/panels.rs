@@ -36,7 +36,8 @@ pub const TILE_H: f32 = 40.0;
 const TILE_GAP: f32 = 4.0;
 
 fn text(s: impl Into<String>, size: f32, color: Color) -> impl Bundle {
-    (Text::new(s.into()), TextFont { font_size: bevy::text::FontSize::Px(size), ..default() }, TextColor(color), Pickable::IGNORE)
+    // The mod's own sprite font where it has one, the TTF otherwise (UI-12).
+    crate::ui::sprite_font::sprite_text(s, size, color)
 }
 
 /// A cell's label: small, centred, broken anywhere to fit two lines in the cell.

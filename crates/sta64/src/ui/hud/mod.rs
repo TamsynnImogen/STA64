@@ -122,6 +122,9 @@ impl Plugin for HudPlugin {
         if !app.is_plugin_added::<ThemePlugin>() {
             app.add_plugins(ThemePlugin);
         }
+        if !app.is_plugin_added::<super::sprite_font::SpriteFontPlugin>() {
+            app.add_plugins(super::sprite_font::SpriteFontPlugin);
+        }
         if !app.is_plugin_added::<NoticePlugin>() {
             app.add_plugins(NoticePlugin);
         }
