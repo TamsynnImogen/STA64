@@ -36,6 +36,89 @@ fn runtime(sim: &Sim) -> MissionRuntime {
 }
 
 #[test]
+fn existence_queries_use_view_membership_even_for_dying_or_zero_hull_units() {
+    let (mut sim, live, dying) = scene();
+    let zero_hull = sim.spawn(
+        0,
+        Vec3::from_f32([300.0, 0.0, 0.0]),
+        (Fixed::ZERO, Fixed::ONE),
+        MoveStats::STATIC,
+    );
+    let mut view = (*sim.view()).clone();
+    let dying_unit = view.units.iter_mut().find(|u| u.id == dying).unwrap();
+    dying_unit.flags = UnitFlags::DYING;
+    view.units
+        .iter_mut()
+        .find(|u| u.id == zero_hull)
+        .unwrap()
+        .hull[0] = Fixed::ZERO;
+    let cfg = MissionConfig {
+        view: Some(view),
+        ..MissionConfig::default()
+    };
+    let mut rt = MissionRuntime::from_source_with("exists.lua", "", 7, cfg);
+    assert!(rt.errors().is_empty(), "{:?}", rt.errors());
+
+    for (id, exists, alive) in [
+        (live.0, true, true),
+        (dying.0, true, false),
+        (zero_hull.0, true, true),
+        (0, false, false),
+    ] {
+        let result: (bool, bool, bool) = rt
+            .eval(&format!(
+                "return A2.Exists({id}), A2.DoesNotExist({id}), A2.IsAlive({id})"
+            ))
+            .unwrap();
+        assert_eq!(result, (exists, !exists, alive), "id {id}");
+    }
+    assert!(rt.take_commands().is_empty());
+}
+
+#[test]
+fn existence_queries_keep_the_old_view_until_think_receives_removal() {
+    let (mut sim, id, _) = scene();
+    let mut rt = runtime(&sim);
+    rt.eval::<()>(&format!("A2.RemoveObject({})", id.0))
+        .unwrap();
+    let commands = rt.take_commands();
+    assert_eq!(commands.len(), 1);
+    assert_eq!(commands[0].kind, CommandKind::Edit(Edit::Kill(id)));
+    let out = sim.step(&commands);
+    assert!(out.view.unit(id).is_none());
+
+    let before: (bool, bool) = rt
+        .eval(&format!(
+            "return A2.Exists({0}), A2.DoesNotExist({0})",
+            id.0
+        ))
+        .unwrap();
+    assert_eq!(before, (true, false));
+    rt.think(&out.view, &out.events, &mut Vec::new());
+    let after: (bool, bool) = rt
+        .eval(&format!(
+            "return A2.Exists({0}), A2.DoesNotExist({0})",
+            id.0
+        ))
+        .unwrap();
+    assert_eq!(after, (false, true));
+    assert!(rt.take_commands().is_empty());
+}
+
+#[test]
+fn existence_queries_reject_bad_handles_without_queuing_commands() {
+    let (sim, _, _) = scene();
+    let mut rt = runtime(&sim);
+    for name in ["Exists", "DoesNotExist"] {
+        for args in ["", "1, 2", "-1", "1.5", "4294967296", "'1'", "0/0", "1/0"] {
+            let script = format!("A2.{name}({args})");
+            assert!(rt.eval::<()>(&script).is_err(), "{script}");
+            assert!(rt.take_commands().is_empty(), "{script}");
+        }
+    }
+}
+
+#[test]
 fn object_calls_queue_commands_and_read_the_latest_snapshot() {
     let (mut sim, a, b) = scene();
     let mut replay = sim.clone();

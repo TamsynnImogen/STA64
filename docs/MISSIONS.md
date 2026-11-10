@@ -293,6 +293,22 @@ ODF names must be Lua strings, and arity must match exactly. Queries never
 queue commands and see writes only after the host advances the simulation.
 These are STA64 bridge policies; native defaults/overloads remain unverified.
 
+`A2.Exists(id)` and `A2.DoesNotExist(id)` each require exactly one unsigned
+integral entity ID. They query whether that entity is present in the latest
+mission `WorldView`; `DoesNotExist` negates that presence. A represented dying
+or zero-hull entity still exists until removed from the snapshot. This differs
+from `A2.IsAlive`, which excludes dying entities. Missing IDs return false from
+Exists and true from DoesNotExist. Queries issue no commands; a queued removal
+becomes visible only after the host updates the mission view. The separate
+MMM `Path.exists` API is unchanged.
+
+The pinned A2 reference establishes that DoesNotExist negates Exists rather
+than IsAlive, and that native existence does not consult the state separating
+alive/exploding objects. The bridge maps this distinction to represented view
+entities; the complete native object-class universe, invalid-input behavior,
+ABI and explosion timing are not claimed. No new defaults or simulation state
+are introduced by these queries.
+
 `A2.SetCurrentHealth(id, hull)` implements `void SetCurrentHealth(int, float)`
 with exactly two arguments: an unsigned integral live entity ID and a finite
 Lua number. Strings, booleans, missing/dying IDs and non-finite values raise

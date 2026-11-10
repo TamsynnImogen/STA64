@@ -93,7 +93,8 @@ algorithm/sequence and mission save/resume parity remain unverified.
 
 ## Initial DLL-named object bridge
 
-The `A2` table exposes the single-handle forms `IsAlive`, `GetLocation`,
+The `A2` table exposes the single-handle forms `Exists`, `DoesNotExist`,
+`IsAlive`, `GetLocation`,
 `GetRealTeam`, `RemoveObject`, `CraftCannotDie`, `Cloak` and `Decloak`.
 The bridge maps handles to this runtime's `EntityId` values, available as
 `Entity.id`; it does not accept native DLL pointers or saved engine handles.
@@ -101,14 +102,20 @@ Calls use dot syntax and the exact arity listed in `MISSION_DLL_API.md`.
 No label/index overload of `GetLocation` is implemented in this slice.
 
 Handles must be nonnegative integral values within `u32`; zero means no
-entity. `IsAlive` returns false for absent or dying units. The other calls
-return Lua errors for those units. These are explicit bridge policies,
+entity. `Exists` reports whether a unit is present in the current world view;
+`DoesNotExist` is its complement. A represented dying or zero-hull unit still
+exists. `IsAlive` returns false for absent or dying units, while a represented
+zero-hull unit without the dying flag is alive under this bridge's policy.
+These three queries return booleans and emit no commands. The other calls
+return Lua errors for absent or dying units. These are explicit bridge policies,
 not verified native error or sentinel conventions. `CraftCannotDie` requires
 a boolean. `GetLocation` returns a fresh Vector and `GetRealTeam` returns the
 snapshot owner number in the configured player-numbering mode. Writes are queued: `RemoveObject` and
 `CraftCannotDie` use SCRIPT edits, while cloak orders use the unit's current
 player owner and retain normal capability/energy checks in the sim.
-Reads see the last world snapshot until the next controller tick. The sim
+Reads, including both existence queries, see the last world snapshot until
+the next controller tick supplies a refreshed view. Queuing or applying
+`RemoveObject` does not change an existing mission view by itself. The sim
 sorts commands by player and sequence, so edits and owner orders need not
 apply in the order of interleaved Lua calls.
 

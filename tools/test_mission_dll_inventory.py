@@ -332,6 +332,27 @@ class MissionDllInventoryTests(unittest.TestCase):
         ]:
             self.assertEqual(inventory.a2_exact_for(signature, self.repo), "", signature)
 
+    def test_existence_queries_require_each_exact_registered_call_shape(self):
+        self.register_a2('table.set("Exists", fn);\ntable.set("DoesNotExist", fn);\n')
+        for name in ("Exists", "DoesNotExist"):
+            self.assertEqual(
+                inventory.a2_exact_for(
+                    f"public: virtual bool __thiscall ScriptInterfaceImp::{name}(int)",
+                    self.repo,
+                ),
+                f"A2.{name}",
+            )
+            for signature in (
+                f"void {name}(int)", f"int {name}(int)", f"bool {name}(float)",
+                f"bool {name}(int&)", f"bool {name}(char*)", f"bool {name}()",
+                f"bool {name}(int, int)",
+            ):
+                self.assertEqual(inventory.a2_exact_for(signature, self.repo), "", signature)
+        self.register_a2('table.set("Exists", fn);')
+        self.assertEqual(inventory.a2_exact_for("bool DoesNotExist(int)", self.repo), "")
+        self.register_a2('table.set("DoesNotExist", fn);')
+        self.assertEqual(inventory.a2_exact_for("bool Exists(int)", self.repo), "")
+
     def test_test_files_do_not_count_as_a2_bindings(self):
         self.register_a2("", registration='objects::install(lua, ctx, &a2)?; lua.globals().raw_set("A2", a2)?;')
         (self.a2 / "tests.rs").write_text('table.set("IsAlive", fn);', encoding="utf-8")
