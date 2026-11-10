@@ -376,7 +376,7 @@ fn records_round_trip() {
     let rec = sim.production.to_rec();
     let bytes = postcard::to_allocvec(&rec).unwrap();
     let back: ProductionRec = postcard::from_bytes(&bytes).unwrap();
-    assert_eq!(Production::from_rec(&back), sim.production);
+    assert_eq!(Production::from_rec(&back).unwrap(), sim.production);
     assert!(!sim.production.is_empty());
 }
 

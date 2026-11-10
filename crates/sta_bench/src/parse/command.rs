@@ -167,6 +167,11 @@ pub enum BenchCommand {
         odf: String,
         at: Target,
     },
+    /// `rally <builder[,builder]> <x y z | object | off>`.
+    Rally {
+        builders: Vec<String>,
+        at: Option<Target>,
+    },
     Formation {
         who: Vec<String>,
         kind: i64,
@@ -500,6 +505,25 @@ fn parse_words(w: &[&str], text: &str) -> Result<BenchCommand, String> {
                 odf: a[1].to_owned(),
                 at,
             }
+        }
+        "rally" => {
+            let u = "rally <builder[,builder]> <x y z | object | off>";
+            if a.len() < 2 {
+                return Err(usage(u));
+            }
+            if a[0].split(',').any(str::is_empty) {
+                return Err("expected a nonempty builder name".into());
+            }
+            let builders = names(a[0])?;
+            let at = if a[1].eq_ignore_ascii_case("off") {
+                arity(a, 2, 2, u)?;
+                None
+            } else {
+                let (at, used) = target(&a[1..], u)?;
+                arity(a, 1 + used, 1 + used, u)?;
+                Some(at)
+            };
+            BenchCommand::Rally { builders, at }
         }
         "formation" => {
             arity(a, 2, 2, "formation <name>[,<name>...] <param>")?;
@@ -901,6 +925,43 @@ mod tests {
                 target: Some("borg".into())
             }
         );
+    }
+
+    #[test]
+    fn rally_targets_and_errors() {
+        let builders = vec!["yard".to_owned(), "other".to_owned()];
+        assert_eq!(
+            cmd("RALLY yard,other 1 -2 3"),
+            BenchCommand::Rally {
+                builders: builders.clone(),
+                at: Some(Target::Point([1.0, -2.0, 3.0])),
+            }
+        );
+        assert_eq!(
+            cmd("rally yard,other marker"),
+            BenchCommand::Rally {
+                builders: builders.clone(),
+                at: Some(obj("marker"))
+            }
+        );
+        assert_eq!(
+            cmd("rally yard,other OFF"),
+            BenchCommand::Rally { builders, at: None }
+        );
+        for bad in [
+            "rally",
+            "rally yard",
+            "rally ,yard off",
+            "rally yard, off",
+            "rally yard,,other off",
+            "rally yard 1",
+            "rally yard 1 2",
+            "rally yard off extra",
+            "rally yard marker extra",
+            "rally yard 1 2 3 extra",
+        ] {
+            assert!(parse_command(bad).is_err(), "accepted {bad}");
+        }
     }
 
     #[test]
