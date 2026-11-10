@@ -322,3 +322,62 @@ fn clicks_over_the_hud_are_kept_off_the_map() {
 }
 
 use bevy::ecs::system::RunSystemOnce;
+
+/// Arm the cruiser's station build and put the pointer over the sim point `(x, z)`.
+fn armed_at(app: &mut App, x: f32, z: f32) {
+    app.init_resource::<Aim>();
+    let open = cell(app, |a| *a == Act::OpenBuild);
+    press(app, open);
+    let station = cell(app, |a| matches!(a, Act::Build { site: true, .. }));
+    press(app, station);
+    let ray = Ray3d::new(Vec3::new(x, 1000.0, -z), Dir3::NEG_Y);
+    app.world_mut().resource_mut::<Aim>().0 = Some(AimState { cursor: Vec2::ZERO, ray, clip_from_world: Mat4::IDENTITY, size: Vec2::new(800.0, 600.0) });
+    app.update();
+}
+
+fn ghost_status(app: &mut App) -> Option<Result<(), sta_sim::production::site::SiteError>> {
+    let mut q = app.world_mut().query::<&ghost::Ghost>();
+    q.iter(app.world()).next().expect("a ghost").status
+}
+
+#[test]
+fn the_ghost_is_clear_on_open_space_and_blocked_over_a_structure_or_off_the_map() {
+    use sta_sim::production::site::SiteError;
+    let mut app = app(content(None), &[1]);
+    armed_at(&mut app, -1600.0, 300.0);
+    assert_eq!(app.world_mut().query::<&ghost::Ghost>().iter(app.world()).count(), 1);
+    assert_eq!(ghost_status(&mut app), Some(Ok(())));
+    // The yard (id 2) stands at (400, 0).
+    let ray = Ray3d::new(Vec3::new(410.0, 1000.0, 0.0), Dir3::NEG_Y);
+    app.world_mut().resource_mut::<Aim>().0 = Some(AimState { cursor: Vec2::ZERO, ray, clip_from_world: Mat4::IDENTITY, size: Vec2::new(800.0, 600.0) });
+    app.update();
+    assert_eq!(ghost_status(&mut app), Some(Err(SiteError::Blocked)));
+    // Off the map: the same function the sim uses, with the map's bounds.
+    let b = |v: f32| SimVec3::from_f32([v, 0.0, v]);
+    app.insert_resource(ghost::PlacementBounds(Some((b(-2000.0), b(2000.0)))));
+    let ray = Ray3d::new(Vec3::new(1990.0, 1000.0, 0.0), Dir3::NEG_Y);
+    app.world_mut().resource_mut::<Aim>().0 = Some(AimState { cursor: Vec2::ZERO, ray, clip_from_world: Mat4::IDENTITY, size: Vec2::new(800.0, 600.0) });
+    app.update();
+    assert_eq!(ghost_status(&mut app), Some(Err(SiteError::OffMap)));
+}
+
+#[test]
+fn a_click_on_a_blocked_site_is_refused_and_the_placement_stays_armed() {
+    let mut app = app(content(None), &[1]);
+    armed_at(&mut app, 400.0, 0.0);
+    app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+    app.update();
+    assert!(queued(&mut app).is_empty());
+    assert!(app.world().resource::<HudState>().placing.is_some());
+    // Moving on to open space and clicking places it.
+    let ray = Ray3d::new(Vec3::new(-1600.0, 1000.0, 300.0), Dir3::NEG_Y);
+    app.world_mut().resource_mut::<Aim>().0 = Some(AimState { cursor: Vec2::ZERO, ray, clip_from_world: Mat4::IDENTITY, size: Vec2::new(800.0, 600.0) });
+    app.world_mut().resource_mut::<ButtonInput<MouseButton>>().release(MouseButton::Left);
+    app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();
+    app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+    app.update();
+    assert_eq!(queued(&mut app).len(), 1);
+    assert!(app.world().resource::<HudState>().placing.is_none());
+    app.update();
+    assert_eq!(app.world_mut().query::<&ghost::Ghost>().iter(app.world()).count(), 0, "the ghost goes with the placement");
+}

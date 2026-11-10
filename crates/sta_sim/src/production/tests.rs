@@ -409,3 +409,47 @@ fn wide_turning_rig_still_deploys() {
     );
     assert_eq!(built(&log).len(), 1);
 }
+
+#[test]
+fn a_site_off_the_map_or_under_another_structure_is_refused() {
+    let mut sim = game(true);
+    let rig = spawn(&mut sim, "fx_rig", v(0, 0));
+    spawn(&mut sim, "fx_yard", v(1000, 0));
+    fund(&mut sim, 5000);
+    // Under the yard, and a little beside it (inside both footprints).
+    assert!(!build(&mut sim, rig, "fx_station", Some(v(1000, 0))));
+    assert!(!build(&mut sim, rig, "fx_station", Some(v(1020, 10))));
+    // Past the empty map's edge (8192).
+    assert!(!build(&mut sim, rig, "fx_station", Some(v(8190, 0))));
+    assert!(!build(&mut sim, rig, "fx_station", Some(v(-9000, 0))));
+    // Refusals cost nothing and leave no deploy.
+    assert_eq!(dilithium(&sim), Fixed::from_int(5000));
+    assert!(!sim.production.is_deploying(rig));
+    // Open space, and the builder itself never blocks.
+    assert!(build(&mut sim, rig, "fx_station", Some(v(3000, 3000))));
+    assert!(sim.production.is_deploying(rig));
+}
+
+#[test]
+fn the_ghost_rule_is_the_sims_rule() {
+    use super::site::{SiteError, check_site, footprint, view_obstacles};
+    let mut sim = game(true);
+    let rig = spawn(&mut sim, "fx_rig", v(0, 0));
+    spawn(&mut sim, "fx_yard", v(1000, 0));
+    fund(&mut sim, 5000);
+    let db = sim.content().unwrap().clone();
+    let what = key(&sim, "fx_station");
+    let view = sim.view();
+    let bounds = (v(-8192, -8192), v(8192, 8192));
+    let status = |at| check_site(&db, Some(&bounds), what, at, view_obstacles(&db, &view, Some(rig)));
+    assert_eq!(status(v(3000, 3000)), Ok(()));
+    assert_eq!(status(v(1000, 20)), Err(SiteError::Blocked));
+    assert_eq!(status(v(8200, 0)), Err(SiteError::OffMap));
+    // Just clear of the yard's footprint plus the station's.
+    let gap = footprint(&db, what) + footprint(&db, key(&sim, "fx_yard"));
+    assert_eq!(status(Vec3 { x: v(1000, 0).x + gap + Fixed::ONE, ..v(0, 0) }), Ok(()));
+    // The sim agrees on each.
+    for (at, ok) in [(v(3000, 3000), true), (v(1000, 20), false), (v(8200, 0), false)] {
+        assert_eq!(build(&mut sim, rig, "fx_station", Some(at)), ok, "{at:?}");
+    }
+}

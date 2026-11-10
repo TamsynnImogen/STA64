@@ -269,6 +269,9 @@ impl Sim {
         out.extend_from_slice(&SEAM_REV.to_le_bytes());
         out.extend_from_slice(&self.content.as_ref().map_or(0, |c| c.hash()).to_le_bytes());
         out.extend(postcard::to_allocvec(&body).expect("snapshot serialises"));
+        // The map's bounds (build sites) follow the body, so snapshots from
+        // before them still load, with no bounds.
+        out.extend(postcard::to_allocvec(&self.bounds).expect("snapshot serialises"));
         out
     }
 
@@ -297,9 +300,15 @@ impl Sim {
         }
         let (b, rest): (Body, &[u8]) = postcard::take_from_bytes(&bytes[HEADER..])
             .map_err(|e| SnapshotError::Corrupt(e.to_string()))?;
-        if !rest.is_empty() {
-            return Err(SnapshotError::Corrupt("trailing bytes".into()));
-        }
+        let bounds: Option<(Vec3, Vec3)> = if rest.is_empty() {
+            None
+        } else {
+            let (bounds, rest) = postcard::take_from_bytes(rest).map_err(|e| SnapshotError::Corrupt(e.to_string()))?;
+            if !rest.is_empty() {
+                return Err(SnapshotError::Corrupt("trailing bytes".into()));
+            }
+            bounds
+        };
         let max_phase = if found == COMPATIBLE_MINING_FORMAT { 3 } else { 4 };
         if let Some(row) = b.economy.miners.iter().find(|row| row.5 > max_phase) {
             return Err(SnapshotError::Corrupt(format!(
@@ -341,6 +350,7 @@ impl Sim {
             content,
             starts: b.starts,
             regions: b.regions,
+            bounds,
             events: b.events,
             movement,
             weapons,
