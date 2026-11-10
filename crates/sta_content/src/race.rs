@@ -15,8 +15,9 @@
 //!
 //! [`Races::loadout`] is the one rule for a seat's start: the race's standard
 //! units that are craft or stations, plus the first minimal unit when it is
-//! the race's own (a builder the player can use at once), and the "normal"
-//! stock. Fleet Operations 4.0 starts a race with a stub outpost that builds
+//! the race's own and has a build list (a builder the player can use at once;
+//! start units are placed, not bought, so their cost is no condition), and the
+//! "normal" stock. Only Roots' `standardunits` hold freighters (`fminer`). Fleet Operations 4.0 starts a race with a stub outpost that builds
 //! nothing and names the working one (`originalclass`): that one is placed
 //! instead. When no unit can build, the race's [`basic_builder`] comes along. A race the data does
 //! not describe, or one whose units are not in the database, falls back to
@@ -73,7 +74,10 @@ fn stem(name: &str) -> String {
 }
 
 fn numbered(odf: &sta_odf::Odf, prefix: &str) -> Vec<String> {
-    (1..=32).map_while(|i| odf.str(&format!("{prefix}{i}")).map(stem)).filter(|s| !s.is_empty()).collect()
+    (1..=32)
+        .map_while(|i| odf.str(&format!("{prefix}{i}")).map(stem))
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 impl Races {
@@ -103,8 +107,19 @@ impl Races {
             let s = stem(file);
             match sta_odf::resolve_layered(&s, loader) {
                 Ok(o) => {
-                    let Some(name) = o.str("name").map(|n| n.trim().to_ascii_lowercase()).filter(|n| !n.is_empty()) else { continue };
-                    let text = |k: &str| o.str(k).map(str::trim).filter(|v| !v.is_empty()).map(str::to_owned);
+                    let Some(name) = o
+                        .str("name")
+                        .map(|n| n.trim().to_ascii_lowercase())
+                        .filter(|n| !n.is_empty())
+                    else {
+                        continue;
+                    };
+                    let text = |k: &str| {
+                        o.str(k)
+                            .map(str::trim)
+                            .filter(|v| !v.is_empty())
+                            .map(str::to_owned)
+                    };
                     let stock = |k: &str| o.i64(&format!("normal{k}")).unwrap_or(0).max(0);
                     races.push(RaceDef {
                         stem: s,
@@ -115,7 +130,12 @@ impl Races {
                         multiplayer_music: text("multiplayermusic"),
                         standard_units: numbered(&o, "standardunits"),
                         minimal_units: numbered(&o, "minimalunits"),
-                        stock: [stock("dilithium"), stock("latinum"), stock("metal"), stock("biomatter")],
+                        stock: [
+                            stock("dilithium"),
+                            stock("latinum"),
+                            stock("metal"),
+                            stock("biomatter"),
+                        ],
                     });
                 }
                 Err(e) => warnings.push(Warning::new(format!("{s}.odf"), e.to_string())),
@@ -158,22 +178,39 @@ impl Races {
     /// What a seat of `race` (a unit race key) starts with.
     pub fn loadout(&self, db: &ContentDb, race: &str) -> Loadout {
         if let Some(r) = self.get(race) {
-            let is_craft = |k: ContentKey| db.unit(k).is_some_and(|u| CRAFT_CLASSES.contains(&u.class.0.as_str()));
+            let is_craft = |k: ContentKey| {
+                db.unit(k)
+                    .is_some_and(|u| CRAFT_CLASSES.contains(&u.class.0.as_str()))
+            };
             let mut units: Vec<ContentKey> = Vec::new();
             // The standard units, then the first minimal unit when it is the race's own
             // (Fleet Operations 4.0 names `fconst` for every race: not a builder of theirs).
-            let own = |k: ContentKey| db.unit(k).is_some_and(|u| u.race.eq_ignore_ascii_case(&r.name));
-            // It must also be payable from the start stock: Fleet Operations 4.0's `fconst` is
-            // Roots' ODF (it costs metal), and a race whose stock has no metal cannot build it.
-            let stock = r.stock;
-            let minimal = r.minimal_units.iter().take(1).filter(|s| db.key(s).is_some_and(|k| own(k) && affordable(db, k, &stock) && can_build(db, k, &r.name)));
+            let own = |k: ContentKey| {
+                db.unit(k)
+                    .is_some_and(|u| u.race.eq_ignore_ascii_case(&r.name))
+            };
+            // Start units are placed, not bought: what they cost is no condition (Fleet Operations
+            // 4.0's `fconst` costs a slot its start stock lacks and is still the start ship).
+            let minimal = r
+                .minimal_units
+                .iter()
+                .take(1)
+                .filter(|s| db.key(s).is_some_and(|k| own(k) && has_build_list(db, k)));
             for s in r.standard_units.iter().chain(minimal) {
-                let Some(mut k) = db.key(s).filter(|&k| is_craft(k)) else { continue };
+                let Some(mut k) = db.key(s).filter(|&k| is_craft(k)) else {
+                    continue;
+                };
                 // Fleet Operations 4.0's start outpost is a stub (`fed_outpostS`) that names
                 // the working one it stands for (`originalclass = "fed_outpostY"`).
                 if !can_build(db, k, &r.name) {
-                    let original = db.unit(k).and_then(|u| u.raw.str("originalclass")).map(crate::odf::stem);
-                    if let Some(o) = original.and_then(|o| db.key(&o)).filter(|&o| can_build(db, o, &r.name)) {
+                    let original = db
+                        .unit(k)
+                        .and_then(|u| u.raw.str("originalclass"))
+                        .map(crate::odf::stem);
+                    if let Some(o) = original
+                        .and_then(|o| db.key(&o))
+                        .filter(|&o| can_build(db, o, &r.name))
+                    {
                         k = o;
                     }
                 }
@@ -188,26 +225,36 @@ impl Races {
                 units.extend(basic_builder(db, &r.name));
             }
             if !units.is_empty() {
-                return Loadout { units, stock: r.stock.map(|n| Fixed::from_int(n.clamp(0, 1_000_000_000) as i32)), source: format!("race {}", r.stem) };
+                return Loadout {
+                    units,
+                    stock: r
+                        .stock
+                        .map(|n| Fixed::from_int(n.clamp(0, 1_000_000_000) as i32)),
+                    source: format!("race {}", r.stem),
+                };
             }
         }
         default_loadout(db, race)
     }
 }
 
-/// Whether the start `stock` pays for a unit: each slot of its cost is covered.
-pub fn affordable(db: &ContentDb, key: ContentKey, stock: &[i64; RESOURCES]) -> bool {
-    db.unit(key).is_some_and(|u| u.build.cost.iter().enumerate().all(|(i, c)| *c <= Fixed::from_int(stock.get(i).copied().unwrap_or(0).clamp(0, 1_000_000_000) as i32)))
+/// Whether a unit has a build list at all (a construction ship or station).
+fn has_build_list(db: &ContentDb, key: ContentKey) -> bool {
+    db.unit(key).is_some_and(|u| !u.build.list.is_empty())
 }
 
 /// Whether a seat of `race` owning `key` can build something at once: it has a
 /// build list and, with a tech tree, at least one entry of it is available.
 pub fn can_build(db: &ContentDb, key: ContentKey, race: &str) -> bool {
-    let Some(u) = db.unit(key).filter(|u| !u.build.list.is_empty()) else { return false };
+    let Some(u) = db.unit(key).filter(|u| !u.build.list.is_empty()) else {
+        return false;
+    };
     match db.tech_tree() {
         Some(tree) => {
             let own = crate::Owned::new(race).with(&u.odf, 1);
-            tree.build_options(db, &u.odf, &own, false).iter().any(|o| o.availability.is_available())
+            tree.build_options(db, &u.odf, &own, false)
+                .iter()
+                .any(|o| o.availability.is_available())
         }
         None => true,
     }
@@ -221,7 +268,11 @@ pub fn can_build(db: &ContentDb, key: ContentKey, race: &str) -> bool {
 pub fn basic_builder(db: &ContentDb, race: &str) -> Option<ContentKey> {
     let race = race.trim().to_ascii_lowercase();
     db.units()
-        .filter(|u| u.race.eq_ignore_ascii_case(&race) && u.class.0 == "constructionrig" && can_build(db, u.key, &race))
+        .filter(|u| {
+            u.race.eq_ignore_ascii_case(&race)
+                && u.class.0 == "constructionrig"
+                && can_build(db, u.key, &race)
+        })
         .min_by(|a, b| (a.build.list.len(), &a.odf).cmp(&(b.build.list.len(), &b.odf)))
         .map(|u| u.key)
 }
@@ -231,22 +282,36 @@ pub fn basic_builder(db: &ContentDb, race: &str) -> Option<ContentKey> {
 /// [`DEFAULT_STOCK`]. Empty when the race has neither.
 pub fn default_loadout(db: &ContentDb, race: &str) -> Loadout {
     let race = race.trim().to_ascii_lowercase();
-    let mut of_race: Vec<&crate::UnitDef> = db.units().filter(|u| u.race.to_ascii_lowercase() == race).collect();
+    let mut of_race: Vec<&crate::UnitDef> = db
+        .units()
+        .filter(|u| u.race.to_ascii_lowercase() == race)
+        .collect();
     of_race.sort_by(|a, b| a.odf.cmp(&b.odf));
     let mut units = Vec::new();
     let builds = |u: &&&crate::UnitDef| !u.build.list.is_empty();
     let mobile = |u: &&&crate::UnitDef| u.movement.max_speed > Fixed::ZERO;
     for class in ["shipyard", "starbase"] {
-        if let Some(u) = of_race.iter().filter(builds).find(|u| u.class.0 == class && !mobile(u)) {
+        if let Some(u) = of_race
+            .iter()
+            .filter(builds)
+            .find(|u| u.class.0 == class && !mobile(u))
+        {
             units.push(u.key);
             break;
         }
     }
-    let miner = of_race.iter().find(|u| (u.miner || u.class.0 == "freighter") && mobile(u)).or_else(|| of_race.iter().filter(builds).find(|u| mobile(u)));
+    let miner = of_race
+        .iter()
+        .find(|u| (u.miner || u.class.0 == "freighter") && mobile(u))
+        .or_else(|| of_race.iter().filter(builds).find(|u| mobile(u)));
     if let Some(u) = miner {
         units.push(u.key);
     }
-    Loadout { units, stock: DEFAULT_STOCK.map(Fixed::from_int), source: "default".into() }
+    Loadout {
+        units,
+        stock: DEFAULT_STOCK.map(Fixed::from_int),
+        source: "default".into(),
+    }
 }
 
 /// The races a skirmish can be played with, in setup order: the playable races
@@ -260,10 +325,17 @@ pub fn skirmish_races(races: &Races, db: &ContentDb) -> Vec<String> {
         }
     }
     if out.is_empty() {
-        let mut all: Vec<String> = db.units().map(|u| u.race.to_ascii_lowercase()).filter(|r| !r.is_empty()).collect();
+        let mut all: Vec<String> = db
+            .units()
+            .map(|u| u.race.to_ascii_lowercase())
+            .filter(|r| !r.is_empty())
+            .collect();
         all.sort();
         all.dedup();
-        out = all.into_iter().filter(|r| !races.loadout(db, r).units.is_empty()).collect();
+        out = all
+            .into_iter()
+            .filter(|r| !races.loadout(db, r).units.is_empty())
+            .collect();
     }
     out
 }
@@ -273,13 +345,28 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
-    fn loader(files: &'static [(&'static str, &'static str)]) -> impl FnMut(&str, usize) -> Option<String> {
-        let map: HashMap<String, String> = files.iter().map(|(n, t)| (n.to_string(), t.to_string())).collect();
-        move |n, v| if v == 0 { map.get(n.to_ascii_lowercase().trim_end_matches(".odf")).cloned() } else { None }
+    fn loader(
+        files: &'static [(&'static str, &'static str)],
+    ) -> impl FnMut(&str, usize) -> Option<String> {
+        let map: HashMap<String, String> = files
+            .iter()
+            .map(|(n, t)| (n.to_string(), t.to_string()))
+            .collect();
+        move |n, v| {
+            if v == 0 {
+                map.get(n.to_ascii_lowercase().trim_end_matches(".odf"))
+                    .cloned()
+            } else {
+                None
+            }
+        }
     }
 
     const FILES: &[(&str, &str)] = &[
-        ("races", "numberofraces = 3\nrace0 = \"norace.odf\"\nrace1 = \"federation.odf\"\nrace2 = \"klingon.odf\"\n"),
+        (
+            "races",
+            "numberofraces = 3\nrace0 = \"norace.odf\"\nrace1 = \"federation.odf\"\nrace2 = \"klingon.odf\"\n",
+        ),
         ("norace", "name = \"norace\"\n"),
         (
             "federation",
@@ -335,8 +422,15 @@ mod tests {
         let base = crate::fake::db();
         let mut stub = crate::UnitDef::new("fx_outposts", "shipyard");
         stub.race = "fx".into();
-        stub.raw = std::sync::Arc::new(sta_odf::resolve("fx_outposts", &mut |_| Some("originalclass = \"fx_yard\"\n".into())).unwrap());
-        let mut b = crate::ContentDb::builder().profile(base.profile()).features(base.features().clone());
+        stub.raw = std::sync::Arc::new(
+            sta_odf::resolve("fx_outposts", &mut |_| {
+                Some("originalclass = \"fx_yard\"\n".into())
+            })
+            .unwrap(),
+        );
+        let mut b = crate::ContentDb::builder()
+            .profile(base.profile())
+            .features(base.features().clone());
         for w in base.weapons() {
             b = b.weapon(w.clone());
         }

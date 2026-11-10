@@ -74,6 +74,16 @@ fn installs() -> Vec<(String, PathBuf, Option<String>)> {
             Some("Fleet Ops 4.0".into()),
         ),
         (
+            "Roots".into(),
+            Path::new(HEROIC).join("Star Trek Armada II Fleet Operations Roots"),
+            None,
+        ),
+        (
+            "STA2 Classic".into(),
+            Path::new(HEROIC).join("Star Trek Armada II Fleet Operations Roots"),
+            Some("STA2 Classic Mod".into()),
+        ),
+        (
             "FO".into(),
             Path::new(HEROIC).join("Star Trek Armada II Fleet Operations"),
             None,
@@ -182,4 +192,127 @@ fn a_start_unit_without_a_model_is_reported() {
         rows.iter().all(|s| s.path.is_some()),
         "a model in the layer is not reported"
     );
+}
+
+/// The rule per game, read from the data (race ODFs through the mod chain, so
+/// the mod's own `federation.odf` wins over Roots'):
+///
+/// - playable races are the race ODFs with `instantactionslot > 0`; each has a
+///   start (DW's `fed`, `dom` and `borg` are real races of their own, with a
+///   slot, a race key and start units, not aliases of `federation`/`dominion`);
+/// - a start is the race's `standardunits*` that are craft or stations, plus the
+///   first `minimalunits` ship when it is the race's own and has a build list.
+///   Start units are placed, not paid for, so their cost is no condition;
+/// - Fleet Operations 4.0, Federation: `minimalunits1 = "fconst.odf"` (the mod's
+///   own `fconst`, race `unitedfederation`) is placed beside the outpost, and
+///   a structure on its build list is payable from the `normal*` stock;
+/// - a start holds a freighter only where `standardunits*` names one: Roots'
+///   `fminer`/`kminer`/... (class `freighter`); A2, FO, FO4 and DW name none.
+#[test]
+fn start_rule_matches_the_data_per_install() {
+    let mut checked = 0;
+    for (label, root, active_mod) in installs() {
+        let Ok(vfs) = Vfs::mount_install(&root, active_mod.as_deref()) else {
+            eprintln!("{label}: skipped");
+            continue;
+        };
+        let (index, _) = OdfIndex::build(&vfs);
+        let (db, _) = ContentDb::load(&vfs, &index).unwrap();
+        let (races, _) = Races::load(&vfs, &index);
+        let offered = skirmish_races(&races, &db);
+        let playable: Vec<&str> = races.playable().iter().map(|r| r.name.as_str()).collect();
+        for r in &offered {
+            assert!(
+                playable.contains(&r.as_str()),
+                "{label}: {r} offered but not playable"
+            );
+        }
+        for def in races.playable() {
+            let l = races.loadout(&db, &def.name);
+            let odfs: Vec<String> = l
+                .units
+                .iter()
+                .map(|k| db.unit(*k).unwrap().odf.clone())
+                .collect();
+            eprintln!("{label} {} ({}) -> {odfs:?}", def.stem, def.name);
+            assert!(
+                !l.units.is_empty(),
+                "{label}: {} starts with nothing",
+                def.stem
+            );
+            // Every start unit is of the race or is a standard unit the data names.
+            let has_freighter = l
+                .units
+                .iter()
+                .any(|k| db.unit(*k).unwrap().class.0 == "freighter");
+            let names_freighter = def.standard_units.iter().any(|s| {
+                db.key(s)
+                    .and_then(|k| db.unit(k))
+                    .is_some_and(|u| u.class.0 == "freighter")
+            });
+            assert_eq!(
+                has_freighter, names_freighter,
+                "{label} {}: freighters come only from standardunits",
+                def.stem
+            );
+            // Something that can build starts.
+            assert!(
+                l.units
+                    .iter()
+                    .any(|k| !db.unit(*k).unwrap().build.list.is_empty()),
+                "{label} {}: nothing builds",
+                def.stem
+            );
+        }
+        if label == "FO4" {
+            let l = races.loadout(&db, "unitedfederation");
+            let odfs: Vec<String> = l
+                .units
+                .iter()
+                .map(|k| db.unit(*k).unwrap().odf.clone())
+                .collect();
+            assert!(
+                odfs.iter().any(|o| o == "fconst"),
+                "FO4 Federation starts with a construction ship: {odfs:?}"
+            );
+            // fconst is Roots' ODF (its list costs the metal slot, which FO4's stock lacks); the
+            // start outpost builds the mod's own construction ships, whose structures cost
+            // dilithium and latinum (the Tritanium): one of them is payable from the stock.
+            let pays = l
+                .units
+                .iter()
+                .filter_map(|k| db.unit(*k))
+                .flat_map(|y| y.build.list.iter())
+                .filter_map(|r| db.unit(r.key))
+                .filter(|u| u.class.0 == "constructionrig")
+                .flat_map(|ship| ship.build.list.iter())
+                .filter_map(|r| db.unit(r.key))
+                .any(|s| {
+                    s.build.cost.iter().any(|c| *c > sta_content::Fixed::ZERO)
+                        && s.build
+                            .cost
+                            .iter()
+                            .enumerate()
+                            .all(|(i, c)| *c <= l.stock[i])
+                });
+            assert!(
+                pays,
+                "no structure of a construction ship the start builds is payable at tick 0"
+            );
+        }
+        if label == "DW" {
+            for key in ["fed", "dom", "borg"] {
+                let d = races
+                    .playable()
+                    .into_iter()
+                    .find(|r| r.name == key)
+                    .unwrap_or_else(|| panic!("DW: {key} not playable"));
+                assert!(d.slot.is_some() && !d.standard_units.is_empty());
+            }
+        }
+        checked += 1;
+    }
+    if checked == 0 {
+        eprintln!("no install mounted: nothing checked");
+    }
 }
