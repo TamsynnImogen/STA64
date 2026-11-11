@@ -54,6 +54,11 @@ required for deferred spawns.
 Owned source additions are the narrow mission api/a2 modules and tests;
 Entity/EntityAction/spawn integration; private edit_feedback state, api/mod and
 runtime processing; exact inventory signatures/tests and regenerated report.
+The existing omitted-target Mine helper must also use Core's shared
+`mineable_def` admission for current and pending targets. SIM-19 separated
+background bodies from mining nodes; the mission selector must not keep
+choosing a background or resource-less producer which Core will reject.
+This adopts the merged capability rule rather than introducing a new policy.
 No Core/content/client/network/dependency changes are authorized by this slice.
 
 ## Closure blockers to retain
