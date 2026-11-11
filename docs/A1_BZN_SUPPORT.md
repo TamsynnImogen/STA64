@@ -60,6 +60,34 @@ Run scoped/consumer tests, strict Clippy, workspace checking and Android ARM64
 library checking. The library check is not an executable, APK or runtime test.
 Never commit original map bytes or modify the installed files.
 
+## Implemented inspection and validation
+
+`sta_bzn::a1::inspect_header(&bytes)` now returns the lossless front matter.
+`sta_bzn::parse(&bytes)` returns `UnsupportedArmada1Import { version }` for
+identified, valid A1 headers, including text-body headers. Header errors use
+the separate `a1::HeaderError` type. The existing map browser displays parser
+errors through its current error path; skirmish map discovery skips unsupported
+maps. No GUI/runtime acceptance is claimed.
+
+Thirteen BZN tests passed with the opt-in corpus test enabled. They include
+all 49 original A1 headers receiving explicit unsupported-import errors, all
+72 original A2 maps parsing 34,695 objects, and zero A2 declared-object-count
+mismatches. All 121 original input hashes remained unchanged. The corpus test
+can be repeated with `STA64_TEST_A1_BZN_DIR` set to the A1 `bzn` directory and
+`STA64_TEST_BZN_DIRS` set to the A2 control directory:
+
+```sh
+cargo test -p sta_bzn -- --include-ignored --nocapture
+```
+
+The content consumer suite reported 90 passes. Strict sta_bzn Clippy,
+workspace all-targets checking and Android ARM64 library checking passed.
+The Android result does not prove an executable, APK or device run. An
+independent source review found a similar-field-name detection collision;
+the detector now matches the full field token and a regression checks A2
+text/binary behaviour with `saveGameDescription` and `binarySaveMode` fields.
+Follow-up source review found no confirmed defect.
+
 ## Next import milestone
 
 Before creating `Map` values from A1, validate typed metadata and per-record

@@ -17,8 +17,13 @@
 //! name. Both give the same [`Map`].
 //!
 //! Positions and transforms are Direct3D left-handed, like SOD.
+//!
+//! A1 front matter can be inspected through [`a1::inspect_header`]. A1 map-body
+//! import is not implemented; [`parse`] returns an explicit unsupported error.
 
 use std::collections::HashMap;
+
+pub mod a1;
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum BznError {
@@ -26,6 +31,10 @@ pub enum BznError {
     NotBzn,
     #[error("truncated record at byte {0}")]
     Truncated(usize),
+    #[error(transparent)]
+    Armada1Header(#[from] a1::HeaderError),
+    #[error("Armada 1 BZN import is not implemented (version {version})")]
+    UnsupportedArmada1Import { version: u32 },
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -84,6 +93,10 @@ pub struct Map {
 pub fn parse(data: &[u8]) -> Result<Map, BznError> {
     if !data.starts_with(b"version") {
         return Err(BznError::NotBzn);
+    }
+    if a1::has_header_marker(data) {
+        let header = a1::inspect_header(data)?;
+        return Err(BznError::UnsupportedArmada1Import { version: header.version });
     }
     let header_end = |key: &[u8]| data.windows(key.len()).position(|w| w == key);
     let version = text_value(data, b"version [1] =").and_then(|v| v.parse().ok()).unwrap_or(0);
