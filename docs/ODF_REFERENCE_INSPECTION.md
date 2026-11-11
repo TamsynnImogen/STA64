@@ -7,8 +7,10 @@ schema distributions, game assets or recovered prototypes are copied.
 
 ## Pre-implementation contract
 
-Add only a headless `sta_content` example, `odf_references`, and its dedicated
-tests. No library, parser, simulation, asset loader, default, dependency or
+Add a headless `sta_content` example, `odf_references`, and its dedicated
+tests. A `[[example]]` entry with `test = true` in sta_content/Cargo.toml makes
+the existing workspace CI execute its tests; no workflow changes are needed.
+No library, parser, simulation, asset loader, default, dependency or
 Bevy changes. The tool does not write inputs or output files.
 
 Usage: `odf_references <root> <odf> [--mod <name> | --loose-root]`.
