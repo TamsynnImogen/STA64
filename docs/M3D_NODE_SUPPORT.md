@@ -81,3 +81,39 @@ different records. They are not complete scene models. Format/role discovery,
 decoding and the original corpus gate remain open: this stage does not close
 CON-08 or M1. Private input identities and native evidence stay in the preserved
 artifact tree outside the source checkout.
+
+## Chunk-format extension contract (before implementation)
+
+Native evidence now distinguishes two contexts after the common magic/version:
+
+- A chunk material library stores a 32-bit record count, texture-material
+  records (lighting-material name, versioned texture slots/flags and shader
+  strings), then a 32-bit geometry-variant count.
+- A geometry variant stores eight bound floats, a 32-bit chunk count, then each
+  chunk's 32-bit special flag, common mesh data without inline texture-material
+  records, and one signed material-library index per face group. Negative
+  indices select the native fallback. Keep the flag and indices as authored.
+
+Add explicit Bevy-free material-library and geometry decoders under
+`sta_assets::m3d::chunks`, sharing the existing bounded mesh/group reader.
+Initially admit the observed/tested 2.04–2.06 layouts. Require complete byte
+consumption and contextual errors; do not guess a role or silently fall back
+from the full-model reader. `model_info` gains explicit `--chunk-materials` and
+`--chunk-geometry` diagnostic modes. Libraries are asset data, not fake scene
+models; geometry retains its external material bindings. Native destruction,
+variant selection, shader effects and scene insertion are separate systems.
+
+The common reader needs two native-backed corrections: read stored normals
+only when mesh flag `0x10` is set, and retain 32-bit corner-record indices for
+2.06 instead of imposing the old Armada conversion's 16-bit limit. Keep stored
+normals and their corner bindings available in the new geometry data; existing
+legacy display normal generation is unchanged. Extract the existing material
+record reader only as needed to reuse its layout in both contexts. Preserve
+texture flags and extra shader strings in the new library data.
+
+Use original synthetic material/geometry streams for each admitted version,
+with/wihout stored normals, material indices, 32-bit corner records, malformed
+counts/indices and every truncated prefix. Refresh the full installed scan with
+explicit roles, including wrong-role controls and input hashes. None of this
+resolves the separate historical StarTrekDB 1.0/1.2 gate or establishes native
+debris playback, rendered-light parity, or completion of M1.
