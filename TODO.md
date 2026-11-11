@@ -82,6 +82,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] M1 M3D formats (CON-08, updated builds): the normal viewer list should contain resolvable scene models, without nested chunk-library entries. Inspect known M3D models with their original geometry/materials; `model_info --file`, `--chunk-materials` and `--chunk-geometry` provide read-only diagnostics. Typed light fields and raw chunk decoding do not yet provide native light/destruction playback. The installed corpus and unchanged-byte checks are automated; remaining renderer limits and known content gaps are in [M3D support](docs/M3D_NODE_SUPPORT.md).
 
+- [?] Playable race selection: on an updated build, the Instant Action picker should offer only the effective `races.odf` slot entries, including slot 0; NPC unit race names must not add choices. Original A1 uses the A2FOExtensions interface-based fallback. Confirm the selected race’s interface and start units match. [Rule and overrides](docs/PLAYABLE_RACES.md).
+
 ## Checked earlier (morning list)
 
 Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.

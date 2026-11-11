@@ -36,6 +36,45 @@ fn seats_are_the_local_player_and_one_opponent() {
 }
 
 #[test]
+fn seats_respect_catalogue_eligibility_including_explicit_requests() {
+    let (map, db) = (fake::two_bases(), fake::db());
+    assert!(seats(&map, &cfg(Opponent::Idle), &Races::from_defs(Vec::new()), &db)
+        .err().unwrap().contains("no playable races"));
+    let mut loader = |name: &str, version| {
+        if version != 0 { return None; }
+        match name.trim_end_matches(".odf") {
+            "races" => Some("numberofraces=2\nrace0=allowed\nrace1=observer".into()),
+            "allowed" => Some("name=fx\ninstantActionSlot=0".into()),
+            "observer" => Some("name=observer".into()),
+            _ => None,
+        }
+    };
+    let (races, _) = Races::load_with(&mut loader);
+    let wanted = SkirmishCfg { race: Some("observer".into()), ..cfg(Opponent::Idle) };
+    let s = seats(&map, &wanted, &races, &db).unwrap();
+    assert_eq!(s.local.name, "fx");
+    assert!(s.players.iter().all(|p| p.race == "fx"));
+}
+
+#[test]
+fn offered_player_keys_cannot_be_shadowed_by_an_npc_odf_stem() {
+    let (map, db) = (fake::two_bases(), fake::db());
+    let (races, _) = Races::load_with(&mut |name, version| {
+        if version != 0 { return None; }
+        match name.trim_end_matches(".odf") {
+            "races" => Some("numberofraces=2\nrace0=allowed\nrace1=fx".into()),
+            "allowed" => Some("name=fx\ninstantActionSlot=0\ninterfaceConfiguration=correct.cfg".into()),
+            "fx" => Some("name=npc\ninterfaceConfiguration=wrong.cfg".into()),
+            _ => None,
+        }
+    });
+    let wanted = SkirmishCfg { race: Some("FX".into()), ..cfg(Opponent::Idle) };
+    let s = seats(&map, &wanted, &races, &db).unwrap();
+    assert_eq!(s.local.name, "fx");
+    assert_eq!(s.local.interface.as_deref(), Some("correct.cfg"));
+}
+
+#[test]
 fn only_the_ai_seat_gets_a_controller() {
     let (s, _) = setup(Opponent::Skirmish);
     assert_eq!(controllers(&s).len(), 1);

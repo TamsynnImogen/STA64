@@ -4,8 +4,8 @@
 //! ODF (read from the installs, Armada II and Fleet Operations alike) holds:
 //!
 //! - `name`: the race key unit definitions carry (`unitedfederation`);
-//! - `instantactionslot`: its place in the skirmish setup, zero or absent when
-//!   it is not a playable race;
+//! - `instantactionslot`: its nonnegative place in the skirmish setup, including
+//!   zero; absent or invalid slots do not make a modern race playable;
 //! - `interfaceconfiguration`: its GUI cfg (`gui_federation.cfg`), and
 //!   `singleplayermusic` / `multiplayermusic`;
 //! - `standardunits1..`: what a normal start places (an outpost, the race's
@@ -25,7 +25,7 @@
 //! something, and its first miner (else builder), with [`DEFAULT_STOCK`].
 
 use crate::odf::{CRAFT_CLASSES, Loader};
-use crate::{ContentDb, ContentKey, Fixed, Warning};
+use crate::{ContentDb, ContentKey, Fixed, Profile, Warning};
 
 /// Resources per player: dilithium, latinum, metal, biomatter.
 pub const RESOURCES: usize = 4;
@@ -67,6 +67,9 @@ pub struct Loadout {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Races {
     races: Vec<RaceDef>,
+    /// A loaded (even empty/broken) catalogue is authoritative. Only a bare
+    /// database with no catalogue may infer its choices from unit definitions.
+    catalogue: bool,
 }
 
 fn stem(name: &str) -> String {
@@ -80,23 +83,50 @@ fn numbered(odf: &sta_odf::Odf, prefix: &str) -> Vec<String> {
         .collect()
 }
 
+fn instant_action_slot(odf: &sta_odf::Odf) -> Option<i64> {
+    let token = odf.str("instantactionslot")?.split_whitespace().next()?
+        .trim_end_matches(';').trim_end_matches(['f', 'F']).trim_end_matches(';');
+    token.parse::<i64>().ok().or_else(|| {
+        let value = token.parse::<f64>().ok()?;
+        (value.is_finite() && value >= 0.0 && value < i64::MAX as f64 && value.fract() == 0.0)
+            .then_some(value as i64)
+    }).filter(|&slot| slot >= 0)
+}
+
 impl Races {
     /// The races of a mounted install.
     pub fn load(vfs: &sta_vfs::Vfs, index: &crate::OdfIndex) -> (Races, Vec<Warning>) {
-        Races::load_with(&mut |n, v| index.load(vfs, n, v))
+        let (mut races, warnings) = Races::load_with_profile(Profile::detect(vfs), &mut |n, v| index.load(vfs, n, v));
+        // An indexed but unreadable catalogue is not an intentionally bare DB.
+        races.catalogue |= index.get("races").is_some();
+        (races, warnings)
     }
 
     /// The races `races.odf` lists, through a loader (tests give an in-memory one).
     pub fn load_with(loader: &mut Loader<'_>) -> (Races, Vec<Warning>) {
+        Self::load_with_profile(Profile::Native, loader)
+    }
+
+    /// Apply profile-specific race-menu defaults after ordinary layered ODF resolution.
+    pub fn load_with_profile(profile: Profile, loader: &mut Loader<'_>) -> (Races, Vec<Warning>) {
         let mut warnings = Vec::new();
-        let list = match sta_odf::resolve_layered("races", loader) {
+        let root = loader("races.odf", 0);
+        let catalogue = root.is_some();
+        let list = match sta_odf::resolve_layered("races", &mut |name, version| {
+            if version == 0 && stem(name) == "races" {
+                root.clone()
+            } else {
+                loader(name, version)
+            }
+        }) {
             Ok(o) => o,
             Err(e) => {
                 warnings.push(Warning::new("races.odf", e.to_string()));
-                return (Races::default(), warnings);
+                return (Races { races: Vec::new(), catalogue }, warnings);
             }
         };
         let mut races = Vec::new();
+        let mut interfaces = Vec::new();
         for i in 0..64 {
             let Some(file) = list.str(&format!("race{i}")) else {
                 if i >= list.i64("numberofraces").unwrap_or(0) {
@@ -112,6 +142,7 @@ impl Races {
                         .map(|n| n.trim().to_ascii_lowercase())
                         .filter(|n| !n.is_empty())
                     else {
+                        warnings.push(Warning::new(format!("{s}.odf"), "race has no name"));
                         continue;
                     };
                     let text = |k: &str| {
@@ -121,10 +152,15 @@ impl Races {
                             .map(str::to_owned)
                     };
                     let stock = |k: &str| o.i64(&format!("normal{k}")).unwrap_or(0).max(0);
+                    let slot = instant_action_slot(&o);
+                    if o.raw("instantactionslot").is_some() && slot.is_none() {
+                        warnings.push(Warning::new(format!("{s}.odf"), "instantActionSlot must be a nonnegative integer"));
+                    }
+                    interfaces.push(o.raw("interfaceconfiguration").is_some());
                     races.push(RaceDef {
                         stem: s,
                         name,
-                        slot: o.i64("instantactionslot").filter(|&n| n > 0),
+                        slot,
                         interface: text("interfaceconfiguration"),
                         single_player_music: text("singleplayermusic"),
                         multiplayer_music: text("multiplayermusic"),
@@ -141,11 +177,29 @@ impl Races {
                 Err(e) => warnings.push(Warning::new(format!("{s}.odf"), e.to_string())),
             }
         }
-        (Races { races }, warnings)
+        if profile == Profile::Sta1Classic {
+            // A2FOExtensions config.rs::a2fo_rs_config_race: preserve a fully
+            // valid explicit table; otherwise derive A1's legacy menu from
+            // interfaceConfiguration presence, in race declaration order.
+            let count = list.i64("numberofraces").unwrap_or(races.len() as i64).max(0);
+            let mut occupied = std::collections::BTreeSet::new();
+            let valid = races.iter().all(|r| r.slot.is_some_and(|s| s < count && occupied.insert(s)));
+            if !valid {
+                let mut next = 0;
+                for (race, has_interface) in races.iter_mut().zip(interfaces) {
+                    race.slot = has_interface.then(|| {
+                        let slot = next;
+                        next += 1;
+                        slot
+                    });
+                }
+            }
+        }
+        (Races { races, catalogue }, warnings)
     }
 
     pub fn from_defs(races: Vec<RaceDef>) -> Races {
-        Races { races }
+        Races { races, catalogue: true }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -164,20 +218,27 @@ impl Races {
         self.races
             .iter()
             .find(|r| r.stem == n)
-            .or_else(|| self.races.iter().find(|r| r.name == n && r.slot.is_some()))
+            .or_else(|| self.races.iter().find(|r| r.name == n && r.slot.is_some_and(|slot| slot >= 0)))
             .or_else(|| self.races.iter().find(|r| r.name == n))
     }
 
     /// The playable races in setup order (`instantactionslot`).
     pub fn playable(&self) -> Vec<&RaceDef> {
-        let mut v: Vec<&RaceDef> = self.races.iter().filter(|r| r.slot.is_some()).collect();
+        let mut v: Vec<&RaceDef> = self.races.iter().filter(|r| r.slot.is_some_and(|slot| slot >= 0)).collect();
         v.sort_by_key(|r| (r.slot, r.stem.clone()));
         v
     }
 
+    /// A playable unit race key, in setup order. Unlike `get`, an unrelated
+    /// ODF stem cannot shadow a key emitted by the player race picker.
+    pub fn get_playable(&self, key: &str) -> Option<&RaceDef> {
+        let key = key.trim();
+        self.playable().into_iter().find(|race| race.name.eq_ignore_ascii_case(key))
+    }
+
     /// What a seat of `race` (a unit race key) starts with.
     pub fn loadout(&self, db: &ContentDb, race: &str) -> Loadout {
-        if let Some(r) = self.get(race) {
+        if let Some(r) = self.get_playable(race).or_else(|| self.get(race)) {
             let is_craft = |k: ContentKey| {
                 db.unit(k)
                     .is_some_and(|u| CRAFT_CLASSES.contains(&u.class.0.as_str()))
@@ -315,16 +376,16 @@ pub fn default_loadout(db: &ContentDb, race: &str) -> Loadout {
 }
 
 /// The races a skirmish can be played with, in setup order: the playable races
-/// (`instantactionslot`) of the install that start with something; when the data
-/// names none (a bare database), every race of the units that does.
+/// (`instantactionslot`) of the install, independent of start-unit availability.
+/// Only a bare database without a race catalogue may infer races from its units.
 pub fn skirmish_races(races: &Races, db: &ContentDb) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for r in races.playable() {
-        if !out.contains(&r.name) && !races.loadout(db, &r.name).units.is_empty() {
+        if !out.contains(&r.name) {
             out.push(r.name.clone());
         }
     }
-    if out.is_empty() {
+    if !races.catalogue {
         let mut all: Vec<String> = db
             .units()
             .map(|u| u.race.to_ascii_lowercase())
@@ -339,6 +400,10 @@ pub fn skirmish_races(races: &Races, db: &ContentDb) -> Vec<String> {
     }
     out
 }
+
+#[cfg(test)]
+#[path = "race/eligibility_tests.rs"]
+mod eligibility_tests;
 
 #[cfg(test)]
 mod tests {

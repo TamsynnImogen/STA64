@@ -68,6 +68,7 @@ impl From<&sta_vfs::mods::ModInfo> for ModEntry {
 #[derive(Resource, Debug, Clone)]
 pub struct ScreenData {
     pub content: Arc<ContentDb>,
+    pub races: Arc<sta_content::Races>,
     pub maps: Vec<MapEntry>,
     pub mods: Vec<ModEntry>,
     /// What the mod select screen calls the plain install (its folder's name);
@@ -76,12 +77,9 @@ pub struct ScreenData {
 }
 
 impl ScreenData {
-    /// The races the content defines units for, sorted.
+    /// Races in the mounted install's skirmish setup order.
     pub fn races(&self) -> Vec<String> {
-        let mut races: Vec<String> = self.content.units().map(|u| u.race.clone()).filter(|r| !r.is_empty()).collect();
-        races.sort();
-        races.dedup();
-        races
+        sta_content::race::skirmish_races(&self.races, &self.content)
     }
 
     /// Every mod in a `Data` folder (CON-13), and a note for each folder skipped.
@@ -119,6 +117,7 @@ impl ScreenData {
         ScreenData {
             base_name: Some("Fake Install".into()),
             content: Arc::new(sta_content::fake::db()),
+            races: Arc::new(sta_content::Races::default()),
             maps: vec![MapEntry::new(two), MapEntry::new(four)],
             mods: vec![m("fx_balance", "Balance Pack", "Rebalances every ship.", None), m("fx_ships", "Extra Ships", "Adds a cruiser.", Some("fx_balance"))],
         }
@@ -264,6 +263,10 @@ impl SetupDraft {
     /// start slot `i`. `None` when the draft names no map.
     pub fn to_setup(&self, data: &ScreenData) -> Option<GameSetup> {
         let map = data.maps.get(self.map)?;
+        let races = data.races();
+        if races.is_empty() || self.seats.iter().any(|s| !races.iter().any(|r| r.eq_ignore_ascii_case(&s.race))) {
+            return None;
+        }
         Some(GameSetup {
             seed: self.seed,
             map: map.def.clone(),

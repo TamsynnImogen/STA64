@@ -77,11 +77,18 @@ pub fn seats(map: &MapDef, cfg: &SkirmishCfg, races: &Races, db: &ContentDb) -> 
     let opponent_slot = *slots.iter().find(|&&s| s != cfg.seat).expect("two slots");
 
     let available = sta_content::race::skirmish_races(races, db);
+    if available.is_empty() {
+        return Err("this install has no playable races declared for Instant Action".into());
+    }
+    let playable = races.playable();
     let pick = |wanted: &Option<String>, taken: Option<&str>, skip: usize| -> String {
         if let Some(w) = wanted {
+            if let Some(name) = available.iter().find(|name| name.eq_ignore_ascii_case(w.trim())) {
+                return name.clone();
+            }
             match races.get(w) {
-                Some(r) => return r.name.clone(),
-                None => warn!("race {w:?} is not one of this install's ({})", available.join(", ")),
+                Some(r) if playable.iter().any(|p| p.stem == r.stem) => return r.name.clone(),
+                _ => warn!("race {w:?} is not playable in this install ({})", available.join(", ")),
             }
         }
         let others: Vec<&String> = available.iter().filter(|r| Some(r.as_str()) != taken).collect();
@@ -98,7 +105,7 @@ pub fn seats(map: &MapDef, cfg: &SkirmishCfg, races: &Races, db: &ContentDb) -> 
     let mut players = vec![player(cfg.seat, &mine, Control::Human), player(opponent_slot, &theirs, ai)];
     players.sort_by_key(|p| p.id);
 
-    let def = races.get(&mine);
+    let def = races.get_playable(&mine).or_else(|| races.get(&mine));
     let local = LocalRace {
         name: mine.clone(),
         interface: def.and_then(|r| r.interface.clone()),
