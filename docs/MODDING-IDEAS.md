@@ -203,6 +203,26 @@ tiers above apply to third-party mods only). Implications:
 - Open: how far to change Refit formats for STA64 vs keeping them stable for
   existing Refit users (owner's decision).
 
+## Format dialects per profile (from Tammy, verified against installs)
+
+Formats differ by lineage, not only interpretation, so a profile also owns a
+*format resolution table* (the codec axis is per-profile, not global):
+- Tech trees: `.tt` pre-FO4; `.xml` for FO4/Roots engine, which also accepts
+  `.tt`. Roots install has 55 `.tt` and 29 `.xml`, often same-named pairs
+  (`devtech.tt` + `devtech.xml`); FO plain has 3 `.tt`, 0 xml. Changelog
+  mentions "caplists in xml techtrees". Need a precedence rule when both exist
+  (open: which wins in the Roots engine?).
+- Textures: `.tga` pre-FO4; `.dds` for most of FO4 (Roots: 1064 dds vs 4205
+  tga; bump maps accept both per changelog; FO plain: 0 dds).
+- Menus: `.bmp` or `.png`; no alpha, a *colour mask/key* is used for
+  transparency (png count 342 in FO plain -> 1642 in Roots).
+Design: per-profile ordered extension search (`texture: [dds, tga]`,
+`techtree: [xml, tt]`, `menu_image: [png, bmp]` + colour-key rule), with
+packs able to override the order. Codecs stay game-independent; the profile
+only says which to try and how to interpret alpha/colour-key. Tech-tree xml
+and tt should both parse to the same canonical tree (xml adds features such
+as caplist tooltips, so the canonical form needs those fields optional).
+
 ## Open unknowns
 
 - **A1 survey** (exe fingerprint, community patches/hooks, A1-specific
