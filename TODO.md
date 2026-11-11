@@ -76,9 +76,7 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] LUA-05 perception adapter: run Blockade beyond its fleet-isolation callback on a current campaign build. Confirm no unknown `perceivedTeam` field warnings, check the isolated ships retain their intended real owners, and keep any AIP/other unsupported diagnostics visible. A clean 1800-tick headless startup is a bounded check, not full campaign acceptance.
 
-- [?] Classic Defiant investigation (#330): a diagnostic build with `STA64_TRACE_MODEL=fdestroy` logs model/material/visibility snapshots automatically. Build one Defiant in an ordinary Classic skirmish and retain its log. Isolated CPU attachment and windowless GPU rendering pass; the reported live invisibility is not fixed or accepted yet. [Evidence and probe instructions](docs/DEFIANT_VISIBILITY.md).
-
-- [?] Correction to #330: the affected ship is Sabre (`fdestroy2`), confirmed by the screenshot and user; Defiant is fine. Use the Sabre diagnostic launcher (`STA64_TRACE_MODEL=fdestroy2`). Both ships now pass the isolated probes; live Sabre visibility is still unresolved.
+- [?] Static glTF/GLB (CON-09): with an updated build, place the original `fixtures/models/fx_cruiser.glb` in a mounted layer's `sod/` directory and run `--view fx_cruiser`; orbit the red/blue checker model and check its surface remains visible. Parser, material, VFS lookup and windowless GPU checks are separate automated evidence. Animation, skins, morph targets and unsupported required extensions currently report explicit errors. [Scope and limits](docs/M1_ASSET_MODEL_COMPLETION.md).
 
 ## Checked earlier (morning list)
 

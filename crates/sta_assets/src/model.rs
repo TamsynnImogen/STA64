@@ -8,10 +8,13 @@
 use a2fmt::Matrix34;
 use a2fmt::sod::{ChannelKeys, NodeKind as SodKind, Sod};
 
+pub mod pbr;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceFormat {
     Sod,
     M3d,
+    Gltf,
 }
 
 #[derive(Debug, Clone)]
@@ -25,6 +28,8 @@ pub struct Model {
     pub flipbooks: Vec<(String, String, f32)>,
     /// Notes from loading (things kept as plain transforms, skipped channels...).
     pub warnings: Vec<String>,
+    /// Native PBR materials/images/attributes. Absent for unchanged legacy data.
+    pub pbr: Option<pbr::PbrModel>,
 }
 
 #[derive(Debug, Clone)]
@@ -156,6 +161,7 @@ impl Model {
     /// matched as `CraftClass::InitializeDamageNodes` finds them), plus the
     /// `damage` and `crew` groups (hull breaches, fires, venting).
     pub fn damage_nodes(&self) -> Vec<usize> {
+        if self.format == SourceFormat::Gltf { return Vec::new(); }
         ["shields", "engines", "target", "sensors", "life", "damage", "crew"]
             .iter()
             .filter_map(|want| self.nodes.iter().position(|n| n.name.eq_ignore_ascii_case(want)))
@@ -164,12 +170,14 @@ impl Model {
 
     /// The `borg` node: shown only while the craft is assimilated.
     pub fn borg_node(&self) -> Option<usize> {
+        if self.format == SourceFormat::Gltf { return None; }
         self.nodes.iter().position(|n| n.name.eq_ignore_ascii_case("borg"))
     }
 
     /// Nodes to hide so only the most detailed level of each LOD switch shows:
     /// every `lod*` child of a `geometry*` node except the one with most faces.
     pub fn coarse_lods(&self) -> Vec<usize> {
+        if self.format == SourceFormat::Gltf { return Vec::new(); }
         let mut out = Vec::new();
         for n in self.nodes.iter().filter(|n| n.is_geometry()) {
             let mut levels: Vec<usize> = n.children.iter().copied().filter(|&c| self.nodes[c].is_lod()).collect();
@@ -264,6 +272,7 @@ impl Model {
                 .map(|r| (r.node.clone(), r.animation.clone(), r.offset))
                 .collect(),
             warnings: Vec::new(),
+            pbr: None,
         }
     }
 

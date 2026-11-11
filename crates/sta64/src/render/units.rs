@@ -318,7 +318,7 @@ fn attach_models(
 pub fn show_damage(
     units: Query<(Entity, &HullShare), Or<(Changed<HullShare>, Changed<Children>)>>,
     children: Query<&Children>,
-    mut nodes: Query<(&Name, &mut Visibility)>,
+    mut nodes: Query<(&Name, &mut Visibility), Without<model_scene::NativeNode>>,
 ) {
     for (unit, share) in &units {
         for d in children.iter_descendants(unit) {

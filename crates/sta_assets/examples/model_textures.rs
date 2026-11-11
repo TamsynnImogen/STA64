@@ -99,6 +99,30 @@ fn report(vfs: &Vfs, path: &str, model: &Model) -> Report {
                 node.name, group.material
             )
             .unwrap();
+            if let Some(pbr) = &model.pbr
+                && let Some(material) = pbr.materials.get(&group.material)
+            {
+                writeln!(output, "  pbr base_color={:?} metallic={} roughness={} alpha={:?} double_sided={} unlit={}",
+                    material.base_color, material.metallic, material.roughness, material.alpha,
+                    material.double_sided, material.unlit).unwrap();
+                for (role, reference) in [
+                    ("base_color", material.base_color_texture),
+                    ("normal", material.normal_texture),
+                    ("metallic_roughness", material.metallic_roughness_texture),
+                    ("emissive", material.emissive_texture),
+                    ("occlusion", material.occlusion_texture),
+                ] {
+                    let Some(reference) = reference else { continue };
+                    match pbr.images.get(reference.image) {
+                        Some(image) => writeln!(output,
+                            "  {role} image={} origin={:?} format={:?} encoded_bytes={} uv={} sampler={:?} (decode not checked)",
+                            reference.image, image.origin, image.format, image.data.len(), reference.tex_coord,
+                            reference.sampler).unwrap(),
+                        None => { missing += 1; writeln!(output, "  {role} image={} missing", reference.image).unwrap(); }
+                    }
+                }
+                continue;
+            }
             let maps = &group.maps;
             for (role, reference) in [
                 ("diffuse", &maps.diffuse),

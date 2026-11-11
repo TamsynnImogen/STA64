@@ -11,7 +11,6 @@ use bevy::image::CompressedImageFormats;
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::prelude::*;
 use bevy::render::renderer::RenderDevice;
-use sta_assets::ModelFormat;
 
 #[derive(Resource)]
 pub struct Mounted(pub sta_vfs::Vfs);
@@ -324,10 +323,6 @@ fn rebuild(
         browser.info = format!("{header}\nnot found");
         return;
     };
-    if matches!(fmt, ModelFormat::Glb | ModelFormat::Gltf) {
-        browser.info = format!("{header}\n{path}\n{fmt:?} models are not wired into the viewer yet");
-        return;
-    }
     let model = match sta_assets::load_model(&vfs.0, &path, fmt) {
         Ok(m) => m,
         Err(e) => {

@@ -136,7 +136,7 @@ mod tests {
     }
 
     fn model(nodes: Vec<Node>) -> Model {
-        Model { format: crate::model::SourceFormat::Sod, version: 1.93, materials: vec![], nodes, channels: vec![], flipbooks: vec![], warnings: vec![] }
+        Model { format: crate::model::SourceFormat::Sod, version: 1.93, materials: vec![], nodes, channels: vec![], flipbooks: vec![], warnings: vec![], pbr: None }
     }
 
     fn at(s: &Silhouette, x: u32, y: u32) -> u8 {

@@ -16,6 +16,9 @@ use sta_assets::dds::DdsKind;
 use sta_assets::{Rgba, TextureFormat as Fmt};
 use std::collections::HashMap;
 
+mod pbr;
+pub(crate) use pbr::TextureUse;
+
 /// Decoded textures by key; `None` caches a miss.
 #[derive(Resource, Default)]
 pub struct TextureCache {
