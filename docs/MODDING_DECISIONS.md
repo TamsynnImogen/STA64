@@ -1,6 +1,7 @@
 # Modding v1: decisions for sign-off
 
-Status: proposed, awaiting sign-off. Covers how STA64 treats existing Armada
+Status: **accepted** (Tammy and Cedric, 2026-11-11; merged in #352). Binding on
+all agent and human work in the areas below. Covers how STA64 treats existing Armada
 mods and what the first modding release contains. Background and evidence are
 in [MODDING-IDEAS.md](MODDING-IDEAS.md) and `docs/research/modding/`; this
 document records decisions only.
@@ -112,8 +113,10 @@ key while peers differing only by a texture or recipe folder are accepted; a
 replay names its packs; a recipe ini dropped in a mod folder changes a headless
 frame.
 
-## Sign-off
+## Changing these decisions
 
-Name: ____________  Date: ____________  Decisions: all / all except: ________
-
-Name: ____________  Date: ____________  Decisions: all / all except: ________
+A decision changes only through a PR that edits this file, states which
+decision and why, and is approved by both Tammy and Cedric. An agent that finds
+a decision wrong or blocking comments on its package issue and stops; it does
+not work around the decision. Number decisions are never reused: a replaced
+decision is marked "Superseded by Dn" and kept.
