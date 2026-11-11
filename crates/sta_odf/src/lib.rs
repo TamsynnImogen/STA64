@@ -21,6 +21,9 @@
 
 use std::collections::HashMap;
 
+pub mod diagnostics;
+pub use diagnostics::DuplicateEntry;
+
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum OdfError {
     #[error("include not found: {0}")]
