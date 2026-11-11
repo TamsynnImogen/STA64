@@ -119,8 +119,10 @@ exe; the survey found only IPX/ddraw shims there and did not look for A1
 community patches or hooks, so A1 is the least-surveyed lineage), and the
 A2 family: stock A2, FO 3.2.7 (in-memory `FleetOpsHook.dll`, stock exe renamed
 `Armada2.ldl` behind a loader), Roots 5.0Z11 (patched `ArmadaL.exe` plus its
-own hook). "FO 4.0" and "STA2 Classic" are data submods under Roots
-`Data/Mods/`. FO plain and Dominion War are code-identical. Profiles
+own hook). "FO 4.0" (v4.0Z, ported to the Roots engine; same `ArmadaL.exe` md5 as
+Roots) and "STA2 Classic" are standalone data/rules mods under Roots
+`Data/Mods/`. The original pre-Roots FO 4.0 release, if it had its own hook
+build, is not installed here and is unsurveyed. FO plain and Dominion War are code-identical. Profiles
 therefore key on code lineage plus a data-mod layer, matching the pack model.
 Fingerprints: `.test` exe section,
 `AssetVersion=50000`, `Armada2.ldl`. Every `.asi` except
