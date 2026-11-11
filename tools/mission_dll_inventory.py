@@ -267,6 +267,7 @@ A2_SIGNATURES = {
     "bool IsVisibleToTeam(int, int)": "A2.IsVisibleToTeam",
     "char const* GetOriginalRace(int)": "A2.GetOriginalRace",
     "void ObjectivesDisplay_Set_Visibility(bool)": "A2.ObjectivesDisplay_Set_Visibility",
+    "void ObjectivesDisplaySetObjectiveComplete(int, bool)": "A2.ObjectivesDisplaySetObjectiveComplete",
 }
 
 

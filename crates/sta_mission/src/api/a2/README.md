@@ -406,3 +406,19 @@ IDs; check true/false/Failed reactivation, empty/out-of-list no-ops, strict
 invalid-input atomicity, runtime isolation and preserved host metadata with
 no commands or unsupported credit. Extend only the exact inventory signature
 and its source-coverage tests; regenerate the report rather than editing it.
+
+The completion adapter is implemented under this contract. All five new
+completion tests and three existing visibility tests pass. The full mission
+suite reports 185 passes, zero failures and 10 ignored; ignored installed-port
+probes are not campaign-playback evidence. All 17 Python inventory tests pass.
+Regenerating against the original 72 A2 and 59 A1 DLLs reports 24 exact A2
+callables and 108 missing signatures; all 133 binary/map/DLL input hashes remain
+unchanged. This count is source-level callable coverage, not native GUI or
+simulation parity. Independent read-only review found no confirmed defect.
+
+Strict mission all-target Clippy, workspace all-target checking, Android ARM64
+client-library checking through cargo-ndk/NDK 29 API 26 and changed-file
+formatting/diff checks pass. The library check is not an APK or device result;
+the separate SIM-22 APK does not contain this independent branch's adapter.
+No new in-game eye-check applies to this host-state-only addition. The parent
+LUA-05 package and complete mission playback remain unfinished.
