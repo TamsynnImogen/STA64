@@ -136,3 +136,13 @@ Legacy header reader independently refuses versions below 1.4, agreeing with
 the existing a2fmt documented engine gate. They remain explicitly refused
 historical files, not newly supported 1.0/1.2 assets or corrupt chunks. No
 version gate is lowered to improve a corpus count.
+
+Normal model enumeration also needs a narrow resolver check: recursive VFS
+listing currently exposes nested chunk-library stems that bare-name model
+lookup cannot resolve. Filter the list through the existing `find_model`
+resolver, with a nested-chunk regression; do not change lookup precedence or
+guess roles from filenames. This is a small `sta_assets/src/lib.rs` ownership
+exception to keep the normal viewer list consistent with its actual resolver.
+An opt-in installed-corpus test uses `STA64_TEST_M3D_ROOTS`, public readers and
+before/after byte comparisons. It counts expected historical refusals and
+warnings separately; unset CI environments are explicitly reported as skipped.
