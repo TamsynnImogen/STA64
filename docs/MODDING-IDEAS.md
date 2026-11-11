@@ -1,5 +1,9 @@
 # Modding abstraction: ideas (pre-RFC, 2026-11-11)
 
+> **Background only.** The binding decisions are in
+> [MODDING_DECISIONS.md](MODDING_DECISIONS.md). Where this file disagrees with
+> it (including the "ADOPTED PLAN" section below), the decisions file wins.
+
 Status: brainstorm, not a decision. Written to be resumed later. The
 investigation findings go in `docs/research/modding/` (see bottom); the RFC
 (`docs/MODDING.md`) is drafted from both.

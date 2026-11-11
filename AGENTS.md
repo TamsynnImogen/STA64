@@ -126,6 +126,16 @@ table, with *owns*, *needs* and *done when*. That PR may be the package's own
 first commit, but the issue body says `Not in WORKPLAN yet: added by #NN.`
 until it merges.
 
+## Modding decisions
+
+[docs/MODDING_DECISIONS.md](docs/MODDING_DECISIONS.md) is accepted and binding.
+Read it before touching mod loading, the VFS mount (`sta_vfs`), profile
+detection, `RTS_CFG.h`/ODF rule handling, the content digest, render recipes
+or mission Lua, and cite the decision numbers your change relies on in the
+issue and PR (`Implements D7`). Do not add a feature the "Not in v1" list
+excludes. If a decision is wrong or blocks you, comment on your issue and
+stop; changing a decision is a PR to that file approved by Tammy and Cedric.
+
 ## Builds
 
 The repository is built on people's own machines, often by several sessions
