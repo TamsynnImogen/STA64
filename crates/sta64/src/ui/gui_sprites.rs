@@ -190,6 +190,7 @@ fn art(
 
 /// Paint after widget state/background systems. Deferred image insertion is
 /// flushed by Bevy at the end of the chained HUD systems.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn paint(
     mut commands: Commands,
     mounted: Option<Res<Mounted>>,
