@@ -552,7 +552,7 @@ mod tests {
             }
             // An empty ODF is legal (e.g. FO4's basic_rotate_combat.odf).
             // Require readable presence, not nonempty authored contents.
-            let bytes = vfs.read(p).unwrap().unwrap_or_else(|| panic!("missing listed ODF {p}"));
+            let bytes = vfs.read(p).unwrap_or_else(|| panic!("missing listed ODF {p}")).unwrap();
             empty += usize::from(bytes.is_empty());
         }
         eprintln!("{} layers, {packed} FPQ entries, {} odfs, {from_archive} served from FPQ, {from_zfs} from ZFS, {empty} empty", vfs.layers().len(), odfs.len());
