@@ -1,6 +1,7 @@
-//! Install-gated: with STA64_TEST_INSTALL / STA64_TEST_MOD set, resolve every
-//! ODF of the mounted mod chain through `resolve_layered` (each layer's copy of a
+//! Install-gated: with STA64_TEST_INSTALL set, resolve every
+//! ODF of the mounted install through `resolve_layered` (each layer's copy of a
 //! file is one version) and require that none ends in `IncludeCycle`.
+//! STA64_TEST_MOD optionally selects a mod; absent/empty mounts the base or flat A1 root.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -14,10 +15,11 @@ fn read(vfs: &Vfs, layer: &str, src: &Source) -> Option<Vec<u8>> {
 
 #[test]
 fn no_include_cycles_in_install() {
-    let (Ok(root), Ok(m)) = (std::env::var("STA64_TEST_INSTALL"), std::env::var("STA64_TEST_MOD")) else {
+    let Ok(root) = std::env::var("STA64_TEST_INSTALL") else {
         return;
     };
-    let vfs = Vfs::mount_install(Path::new(&root), Some(&m)).unwrap();
+    let m = std::env::var("STA64_TEST_MOD").ok();
+    let vfs = Vfs::mount_install(Path::new(&root), m.as_deref().filter(|m| !m.is_empty())).unwrap();
     // File name -> virtual path; includes name files anywhere under odf/ (and A1 addon/).
     let mut by_name: BTreeMap<String, String> = BTreeMap::new();
     for p in vfs.list("odf").into_iter().chain(vfs.list("addon")) {
@@ -63,6 +65,10 @@ fn no_include_cycles_in_install() {
         followed.get(),
         cycles.len()
     );
-    eprintln!("missing includes (first 5): {:?}", &missing_names[..missing_names.len().min(5)]);
+    eprintln!(
+        "missing includes (first 5): {:?}",
+        &missing_names[..missing_names.len().min(5)]
+    );
+    assert!(!names.is_empty(), "install contains no ODFs");
     assert!(cycles.is_empty(), "{cycles:#?}");
 }
