@@ -195,7 +195,7 @@ fn setup_round_trips_through_a_game_setup() {
 
 fn race(name: &str, slot: Option<i64>) -> RaceDef {
     RaceDef {
-        stem: name.into(), name: name.into(), slot, interface: None,
+        stem: name.into(), name: name.into(), slot, interface: None, interface_sprites: None,
         single_player_music: None, multiplayer_music: None,
         standard_units: Vec::new(), minimal_units: Vec::new(), stock: [0; 4],
     }

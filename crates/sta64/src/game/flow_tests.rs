@@ -31,7 +31,7 @@ fn build_match(mut commands: Commands, active: Res<ActiveMatch>, link: Option<Re
     }
     let (sim, _) = Sim::from_setup_with_warnings(&active.setup);
     commands.insert_resource(SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), sta_sim::PlayerId(cfg.seat)));
-    commands.insert_resource(LocalRace { name: "built".into(), interface: None, music: None });
+    commands.insert_resource(LocalRace { name: "built".into(), interface: None, interface_sprites: None, music: None });
 }
 
 fn app() -> (App, CallLog) {

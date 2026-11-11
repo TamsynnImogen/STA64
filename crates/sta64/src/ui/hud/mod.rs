@@ -139,6 +139,8 @@ impl Plugin for HudPlugin {
             .init_resource::<HudFeed>()
             .init_resource::<HudState>()
             .init_resource::<HudPointer>()
+            .init_resource::<super::gui_sprites::GuiSkin>()
+            .init_resource::<super::gui_sprites::GuiSprites>()
             .init_resource::<ghost::PlacementBounds>()
             .init_resource::<OrderTargets>()
             .init_resource::<CommandQueue>()
@@ -158,6 +160,7 @@ impl Plugin for HudPlugin {
                     place_on_click.run_if(resource_exists::<Aim>),
                     ghost::update_ghost,
                     ghost::tint_ghost,
+                    super::gui_sprites::paint.after(super::theme::WidgetPaint),
                 )
                     .chain()
                     .in_set(GameSet::Ui),

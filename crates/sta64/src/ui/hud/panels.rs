@@ -8,6 +8,7 @@ use sta_sim::EntityId;
 
 use super::layout::{CELL, CELL_GAP, GRID_COLS, GRID_PAD, GRID_ROWS, HudLayout, InfoHeight};
 use super::model::{Act, Button, Info, Look, ResEntry, Single, Tile};
+use crate::ui::gui_sprites::{GuiButton, GuiButtonLabel};
 use crate::ui::i18n::{tr, trf};
 use crate::ui::notices::Tooltip;
 use crate::ui::theme::{Theme, UiButton, WidgetState, progress_bar};
@@ -257,6 +258,7 @@ pub fn fill_grid(commands: &mut Commands, theme: &Theme, panel: Entity, buttons:
                 }
                 p.with_child((
                     GridCell(b.act.clone()),
+                    GuiButton { names: b.sprite_names.clone(), keep_label: b.keep_label },
                     UiButton,
                     state,
                     tip,
@@ -269,7 +271,7 @@ pub fn fill_grid(commands: &mut Commands, theme: &Theme, panel: Entity, buttons:
                     },
                     BackgroundColor(if state == WidgetState::Disabled { theme.button_off } else { theme.button }),
                     children![
-                        (crate::ui::theme::ButtonText, cell_label(b.label.clone(), theme)),
+                        (GuiButtonLabel, crate::ui::theme::ButtonText, cell_label(b.label.clone(), theme)),
                         (
                             // The stock does not cover it: a warning pip in the corner.
                             Node {
