@@ -1,7 +1,7 @@
 # Transactional objective reload completion policy
 
 Pre-code private-helper seam for the remaining A2 objective-file adapter, tracked
-in #311 under the unfinished LUA-05 work. Based on main14ce742, independently of
+in #311 under the unfinished LUA-05 work. Based on main `14ce742`, independently of
 the open objective-completion #310 and map-confinement #309. This seam introduces
 no Lua callable and grants no inventory credit.
 
@@ -76,5 +76,22 @@ diff and unchanged-lock checks. A library compile is not APK/device acceptance.
 No in-game visual test applies until an actual caller is integrated.
 
 The parent LUA-05 goal and exact file adapter remain unfinished. This adds no
-desktop release gate or completion date; December2026 desktop alpha remains the
+desktop release gate or completion date; December 2026 desktop alpha remains the
 priority. User merges; no automatic merge or original-content rewrite.
+
+## Implemented helper and checks
+
+The helper is implemented inside the existing replacement transaction. Four
+new tests and the existing objective/parser tests report 11 focused passes.
+The full mission suite reports 184 passes, zero failures and 10 ignored;
+ignored installed-port probes are not complete-campaign evidence. Independent
+read-only review found no confirmed defect. Strict mission all-target Clippy,
+workspace all-target checking and an Android ARM64 client-library check through
+cargo-ndk/NDK 29 API 26 pass. Root loader formatting uses its existing
+120-column style through stdin without traversing unrelated test modules; the
+new tests use default Rust formatting. Diff checks pass.
+
+This does not implement the A2 file callable or change its inventory status.
+The existing Lua load's exact arity, zero return values, reset default, stale
+handle behavior and missing-asset diagnostic are covered by regressions. No
+new APK or runtime acceptance is implied by the library check.
