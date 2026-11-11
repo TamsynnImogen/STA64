@@ -41,6 +41,13 @@ fn only_an_absent_catalogue_allows_unit_inference() {
     let db = crate::fake::db();
     let (absent, _) = load(Profile::Native, &[]);
     assert_eq!(skirmish_races(&absent, &db), ["fx"]);
+    for profile in [Profile::Sta1Classic, Profile::Sta2Classic, Profile::Fo4] {
+        let (missing, _) = load(profile, &[]);
+        assert!(
+            skirmish_races(&missing, &db).is_empty(),
+            "{profile:?}: missing legacy catalogue must not promote NPCs"
+        );
+    }
     for files in [
         vec![("races", "numberofraces=0")],
         vec![("races", "#include \"missing\"")],

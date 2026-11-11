@@ -14,6 +14,7 @@ playable entries. Only a bare database without `races.odf` retains the existing
 unit-derived fallback for native/fake content. Launch is disabled without
 eligible races; start-loadout validation remains a separate check. Campaign/NPC
 race definitions remain loaded and available to their existing consumers.
+Legacy profiles with a missing catalogue report it and offer no inferred races.
 
 ## Original Armada I
 
