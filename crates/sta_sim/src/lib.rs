@@ -31,6 +31,7 @@ pub mod kinematics;
 pub mod movement;
 mod ownership;
 mod perception;
+mod shield_edits;
 #[cfg(test)]
 mod perception_tests;
 pub mod present;

@@ -132,6 +132,8 @@ impl Sim {
             Edit::Kill(id) => self.despawn(id, None),
             Edit::Team(id, to) => self.transfer_owner(from, id, to),
             Edit::PerceivedTeam(id, to) => self.set_perceived_owner(id, to),
+            Edit::ShieldFraction(id, fraction) => self.set_shield_fraction(id, fraction),
+            Edit::MaxShields(id, maximum) => self.set_max_shields(id, maximum),
             Edit::ForceOntoMap { id, enabled } => self.units.get(id).is_some_and(|u| self.confinement.set(u, enabled)),
             Edit::Damage(id, amount) => {
                 // Straight to the hull, past the shields; lethal unless immortal.

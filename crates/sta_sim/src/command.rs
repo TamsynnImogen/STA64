@@ -139,6 +139,12 @@ pub enum Edit {
     /// Global target identity, independent of ownership. SCRIPT/BENCH only.
     /// Appended tag 21 preserves all older edit tags.
     PerceivedTeam(EntityId, PlayerId),
+    /// Current shields become maximum times this raw fraction in every active
+    /// pool. No clamp; checked Fixed overflow rejects the entire edit. Tag 22.
+    ShieldFraction(EntityId, Fixed),
+    /// Set the per-pool instance maximum and fill active pools to it. Tag 23.
+    /// Does not change the definition or directional mode. SCRIPT/BENCH only.
+    MaxShields(EntityId, Fixed),
 }
 
 /// A unit system a mission can switch on or off.

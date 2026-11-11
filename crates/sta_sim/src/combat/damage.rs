@@ -39,7 +39,12 @@ pub(crate) fn recharge(units: &mut Entities, db: &ContentDb) {
         let pools = if u.shields.directional { 4 } else { 1 };
         for now in &mut u.shields.now[..pools] {
             if *now < max {
-                *now = (*now + rate).min(max);
+                // Clamp before narrowing: Fixed addition wraps at i64::MAX.
+                // With positive rate and now < max, this result is between
+                // the previous current value and maximum, so it fits i64.
+                let next = (i128::from(now.to_bits()) + i128::from(rate.to_bits()))
+                    .min(i128::from(max.to_bits()));
+                *now = Fixed::from_bits(i64::try_from(next).expect("recharge bounded by current and maximum"));
             }
         }
     }
