@@ -530,23 +530,33 @@ mod tests {
         ));
     }
 
-    /// Mounts a real install when STA64_TEST_INSTALL / STA64_TEST_MOD are set.
+    /// Mounts STA64_TEST_INSTALL, with an optional nonempty STA64_TEST_MOD.
     #[test]
     fn real_install_if_available() {
-        let (Ok(root), Ok(m)) = (std::env::var("STA64_TEST_INSTALL"), std::env::var("STA64_TEST_MOD")) else {
+        let Ok(root) = std::env::var("STA64_TEST_INSTALL") else {
             return;
         };
-        let vfs = Vfs::mount_install(Path::new(&root), Some(&m)).unwrap();
+        let m = std::env::var("STA64_TEST_MOD").ok();
+        let vfs = Vfs::mount_install(Path::new(&root), m.as_deref().filter(|m| !m.is_empty())).unwrap();
         let packed: usize = vfs.layers().iter().flat_map(|l| &l.archives).map(|(_, f)| f.len()).sum();
         let odfs: Vec<_> = vfs.list("odf").into_iter().filter(|p| p.ends_with(".odf")).collect();
         let mut from_archive = 0;
+        let mut from_zfs = 0;
+        let mut empty = 0;
         for p in &odfs {
             if matches!(vfs.resolve(p), Some((_, Source::Packed { .. }))) {
                 from_archive += 1;
-                assert!(!vfs.read(p).unwrap().unwrap().is_empty(), "{p}");
             }
+            if matches!(vfs.resolve(p), Some((_, Source::Zfs { .. }))) {
+                from_zfs += 1;
+            }
+            // An empty ODF is legal (e.g. FO4's basic_rotate_combat.odf).
+            // Require readable presence, not nonempty authored contents.
+            let bytes = vfs.read(p).unwrap_or_else(|| panic!("missing listed ODF {p}")).unwrap();
+            empty += usize::from(bytes.is_empty());
         }
-        eprintln!("{} layers, {packed} packed entries, {} odfs, {from_archive} served from FPQ", vfs.layers().len(), odfs.len());
+        eprintln!("{} layers, {packed} FPQ entries, {} odfs, {from_archive} served from FPQ, {from_zfs} from ZFS, {empty} empty", vfs.layers().len(), odfs.len());
+        assert!(!odfs.is_empty(), "install contains no ODFs");
         assert!(packed == 0 || from_archive > 0);
     }
 }

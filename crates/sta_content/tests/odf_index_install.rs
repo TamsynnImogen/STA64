@@ -1,7 +1,8 @@
-//! Install-gated (STA64_TEST_INSTALL + STA64_TEST_MOD): build the ODF index
+//! Install-gated (STA64_TEST_INSTALL, optional STA64_TEST_MOD): build the ODF index
 //! and resolve every ODF through it with `sta_odf::resolve_layered`, each
 //! file of a name being one version. Requires 0 include cycles and that
 //! every name's winner is in the highest root that has it.
+//! An absent/empty mod selects the base install, including original flat A1 roots.
 
 use std::path::Path;
 
@@ -11,10 +12,11 @@ use sta_vfs::Vfs;
 
 #[test]
 fn index_and_resolve_every_odf() {
-    let (Ok(root), Ok(m)) = (std::env::var("STA64_TEST_INSTALL"), std::env::var("STA64_TEST_MOD")) else {
+    let Ok(root) = std::env::var("STA64_TEST_INSTALL") else {
         return;
     };
-    let vfs = Vfs::mount_install(Path::new(&root), Some(&m)).unwrap();
+    let m = std::env::var("STA64_TEST_MOD").ok();
+    let vfs = Vfs::mount_install(Path::new(&root), m.as_deref().filter(|m| !m.is_empty())).unwrap();
     let (index, warnings) = OdfIndex::build(&vfs);
     let (mut ok, mut missing, mut cycles) = (0, 0, Vec::new());
     for (stem, winner) in index.iter() {

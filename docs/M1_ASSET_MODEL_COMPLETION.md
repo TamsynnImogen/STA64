@@ -138,3 +138,11 @@ device acceptance or completion of the remaining M3D and Sabre gates.
 
 These are source/build/headless checks. Viewer interaction, original-game
 appearance and Android device rendering remain separate acceptance steps.
+
+## Installed-corpus refresh and current acceptance
+
+The [2026-11-11 validation report](M1_VALIDATION.md) records the FPQ, recursive
+ODF/A1 ZFS, SOD/TGA/DDS/mip and sprite/animation checks, including every model
+refusal and remaining content-reference gaps. The Sabre construction/movement
+check is accepted by the user; the new GLB viewer orbit check is still pending.
+Ready packages still require user integration before this tracker closes.
