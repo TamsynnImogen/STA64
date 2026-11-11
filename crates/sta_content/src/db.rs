@@ -360,6 +360,17 @@ fn hash(db: &ContentDb) -> u64 {
                     h.byte(0xe6);
                     h.byte(1);
                 }
+                // CON-30: None preserves old Native identities. The explicit
+                // domain/tags are independent of Rust enum layout and of
+                // pending SIM-22's 0xe7/0xe8 confinement records.
+                if let Some(role) = u.planet_role {
+                    h.byte(0xe9);
+                    h.str("sta64.planet-role.v1");
+                    h.byte(match role {
+                        crate::PlanetRole::Background => 0,
+                        crate::PlanetRole::Producer => 1,
+                    });
+                }
                 let m = &u.movement;
                 for f in [u.scale, m.max_speed, m.forward_accel, m.turn_omega, m.turn_alpha, m.turn_at_rest] {
                     h.fixed(f);
