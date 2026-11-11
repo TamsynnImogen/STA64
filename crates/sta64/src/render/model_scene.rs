@@ -25,6 +25,14 @@ mod pbr;
 #[path = "model_scene/gltf_tests.rs"]
 mod gltf_tests;
 
+#[cfg(test)]
+#[path = "model_scene/defiant_tests.rs"]
+mod defiant_tests;
+
+#[cfg(test)]
+#[path = "model_scene/defiant_gpu.rs"]
+mod defiant_gpu;
+
 /// Step-keyed SOD animation on one node. Keys are evenly spaced over `period`.
 #[derive(Component)]
 pub struct NodeAnim {

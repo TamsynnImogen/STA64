@@ -23,8 +23,46 @@ Direct model spawning, unit attachment followed by `show_damage`, and windowless
 Vulkan rendering pass separately for both ships. Sabre draws 12,657 lit pixels
 in fresh-hull, PBR and restored-hull captures; Defiant draws 13,315 in hull captures
 and 13,328 with PBR. These checks establish isolated asset/material behavior, not
-successful visibility in a running skirmish. The Sabre's live failure remains
-unconfirmed. Original game files are unchanged.
+successful visibility in a running skirmish. The expanded prepass regression
+below now reproduces the Sabre failure. Original game files are unchanged.
+
+## Reproduced cause and renderer correction
+
+The Sabre's retained LOD has a reflected transform. In Bevy 0.20.1 the forward
+mesh pipeline defaults to back-face culling, while the depth prepass defaults
+to no culling. `HullMaterial::specialize` previously only changed culling for
+double-sided materials, leaving those defaults different for single-sided hulls.
+The depth pass could therefore write nearer faces that the color pass culled,
+hiding the reflected hull. The map camera requests this prepass; the original
+isolated model probe did not.
+
+The renderer now sets the material's culling explicitly for both passes:
+back-face culling when single-sided, no culling when double-sided. Texture alpha
+remains self-illumination data. No model, texture, ODF, gameplay default or
+simulation rule is changed.
+
+Windowless Vulkan checks use the original Classic models and real scene builder:
+
+| Stage | Sabre before | Sabre after | Defiant control before |
+| --- | ---: | ---: | ---: |
+| Hull without prepass | 12,657 | 12,657 | 13,315 |
+| Hull with prepass | 0 | 12,657 | 13,315 |
+| PBR with prepass | 12,657 | 12,657 | 13,328 |
+| Restored hull with prepass | 0 | 12,657 | 13,315 |
+| Hull with prepass / MSAA 4 | 0 | 12,915 | 13,511 |
+| Hull after removing prepass | 12,657 | 12,657 | 13,315 |
+
+Counts are pixels brighter than the probe's threshold, not a visual-parity
+score. Both diagnostic test modules are registered again; their declarations
+were missing from the merged tree. The original synthetic hull fixture also
+checks a reflected single-sided object with the depth pass, without needing
+private game assets. Manual skirmish acceptance remains a separate gate before
+closing #330.
+
+The synthetic reflected sphere draws 2,772 lit pixels both before and after
+enabling the prepass, with zero silhouette mismatch on the local Vulkan GPU.
+This supplements the installed-model regression and keeps the culling check
+available without distributing any original game model or texture.
 
 ## Opt-in local probes
 

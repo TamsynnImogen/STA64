@@ -1,4 +1,4 @@
-//! Optional, windowless render of the installed Defiant through the real model path.
+//! Optional, windowless Classic ship render, including the map's depth prepass.
 use super::*;
 use bevy::camera::RenderTarget;
 use bevy::render::RenderPlugin;
@@ -53,12 +53,16 @@ fn installed_defiant_draws_offscreen() {
     );
     target_image.asset_usage = RenderAssetUsages::RENDER_WORLD;
     let target = app.world_mut().resource_mut::<Assets<Image>>().add(target_image);
-    app.world_mut().spawn((
-        Camera3d::default(),
-        RenderTarget::from(target.clone()),
-        Msaa::Off,
-        Transform::from_translation(centre + Vec3::new(0.0, radius * 2.5, radius * 1.2)).looking_at(centre, Vec3::Y),
-    ));
+    let camera = app
+        .world_mut()
+        .spawn((
+            Camera3d::default(),
+            RenderTarget::from(target.clone()),
+            Msaa::Off,
+            Transform::from_translation(centre + Vec3::new(0.0, radius * 2.5, radius * 1.2))
+                .looking_at(centre, Vec3::Y),
+        ))
+        .id();
     app.world_mut().spawn((
         DirectionalLight {
             illuminance: 6000.0,
@@ -103,7 +107,24 @@ fn installed_defiant_draws_offscreen() {
     app.finish();
     app.cleanup();
     let frames = Arc::new(Mutex::new(Vec::<(String, Image)>::new()));
-    for (name, on) in [("hull-fresh", true), ("pbr", false), ("hull", true)] {
+    for (name, on, depth, msaa) in [
+        ("hull-fresh", true, false, Msaa::Off),
+        ("hull-prepass", true, true, Msaa::Off),
+        ("pbr", false, true, Msaa::Off),
+        ("hull", true, true, Msaa::Off),
+        ("hull-msaa4", true, true, Msaa::Sample4),
+        ("hull-no-prepass", true, false, Msaa::Off),
+    ] {
+        app.world_mut().entity_mut(camera).insert(msaa);
+        if depth {
+            app.world_mut()
+                .entity_mut(camera)
+                .insert(bevy::core_pipeline::prepass::DepthPrepass);
+        } else {
+            app.world_mut()
+                .entity_mut(camera)
+                .remove::<bevy::core_pipeline::prepass::DepthPrepass>();
+        }
         app.world_mut().resource_mut::<crate::render::hulls::HullLighting>().on = on;
         for _ in 0..12 {
             app.update();
@@ -124,17 +145,29 @@ fn installed_defiant_draws_offscreen() {
         }
         assert!(frames.lock().unwrap().len() > before, "no {name} frame");
     }
+    let mut visible_pixels = std::collections::BTreeMap::new();
     for (name, image) in frames.lock().unwrap().iter() {
         let dynamic = image.clone().try_into_dynamic().unwrap();
         let rgba = dynamic.to_rgba8();
         let lit = rgba.pixels().filter(|p| p[0].max(p[1]).max(p[2]) > 20).count();
-        eprintln!("Defiant {name}: {lit} lit pixels");
+        eprintln!("Classic {model_key} {name}: {lit} lit pixels");
+        visible_pixels.insert(name.clone(), lit);
         if let Ok(dir) = std::env::var("STA64_GPU_OUT") {
             std::fs::create_dir_all(&dir).unwrap();
             dynamic
                 .save(std::path::Path::new(&dir).join(format!("defiant-{name}.png")))
                 .unwrap();
         }
-        assert!(lit > 500, "Defiant {name} invisible: {lit} lit pixels");
+    }
+    assert!(
+        visible_pixels.values().all(|&lit| lit > 500),
+        "ship invisible in a material/prepass stage: {visible_pixels:?}"
+    );
+    let baseline = visible_pixels["hull-fresh"];
+    for stage in ["hull-prepass", "hull", "hull-msaa4", "hull-no-prepass"] {
+        assert!(
+            visible_pixels[stage] * 100 >= baseline * 95,
+            "prepass/camera change loses the hull: {visible_pixels:?}"
+        );
     }
 }
