@@ -18,6 +18,7 @@ use alloc::{
     vec::Vec,
 };
 
+pub mod chunks;
 
 type Bytes = Vec<u8>;
 fn b(s: &str) -> Bytes {
@@ -67,8 +68,9 @@ struct Material {
 }
 #[derive(Default, Clone)]
 struct Face {
-    positions: [u16; 3],
-    uvs: [u16; 3],
+    positions: [u32; 3],
+    normals: [u32; 3],
+    uvs: [u32; 3],
 }
 #[derive(Default, Clone)]
 struct Group {
@@ -79,6 +81,8 @@ struct Group {
     glow: Bytes,
     detail: Bytes,
     shader: Bytes,
+    extra_shader: Bytes,
+    texture_flags: [u32; 5],
     faces: Vec<Face>,
 }
 #[derive(Clone)]
@@ -86,6 +90,7 @@ struct Mesh {
     flags: u32,
     trailer: u16,
     vertices: Vec<[f32; 3]>,
+    normals: Vec<[f32; 3]>,
     uvs: Vec<[f32; 2]>,
     groups: Vec<Group>,
     cull: i8,
@@ -96,6 +101,7 @@ impl Default for Mesh {
             flags: 0,
             trailer: 0,
             vertices: Vec::new(),
+            normals: Vec::new(),
             uvs: Vec::new(),
             groups: Vec::new(),
             cull: 1,
@@ -162,6 +168,8 @@ struct Reader<'a> {
     data: &'a [u8],
     at: usize,
     error: Bytes,
+    strict_numbers: bool,
+    preserve_numbers: bool,
 }
 impl<'a> Reader<'a> {
     fn new(data: &'a [u8]) -> Self {
@@ -169,6 +177,8 @@ impl<'a> Reader<'a> {
             data,
             at: 0,
             error: Vec::new(),
+            strict_numbers: false,
+            preserve_numbers: false,
         }
     }
     fn remaining(&self) -> usize {
@@ -202,7 +212,11 @@ impl<'a> Reader<'a> {
         Some(u32::from_le_bytes(self.raw(4, what)?.try_into().ok()?))
     }
     fn f32(&mut self, what: &str) -> Option<f32> {
-        Some(f32::from_bits(self.u32(what)?))
+        let value = f32::from_bits(self.u32(what)?);
+        if self.strict_numbers && !value.is_finite() {
+            return self.fail(&format!("Non-finite M3D {what} at byte {}.", self.at - 4));
+        }
+        Some(value)
     }
     fn id(&mut self, what: &str) -> Option<Bytes> {
         let n = self.u16(what)? as usize;
@@ -226,7 +240,8 @@ impl<'a> Reader<'a> {
     fn vec3(&mut self, what: &str) -> Option<[f32; 3]> {
         let mut a = [0.; 3];
         for v in &mut a {
-            *v = finite(self.f32(what)?);
+            let value = self.f32(what)?;
+            *v = if self.preserve_numbers { value } else { finite(value) };
         }
         Some(a)
     }
@@ -235,27 +250,19 @@ impl<'a> Reader<'a> {
         let flags = self.u32("texture flags")?;
         Some((name, flags))
     }
-    fn index(&mut self, wide: bool, what: &str) -> Option<u16> {
-        if !wide {
-            return self.u16(what);
-        }
-        let v = self.u32(what)?;
-        if v > u16::MAX as u32 {
-            return self.fail("M3D index exceeds Armada's 16-bit SOD limit.");
-        }
-        Some(v as u16)
+    fn index(&mut self, wide: bool, what: &str) -> Option<u32> {
+        if wide { self.u32(what) } else { self.u16(what).map(u32::from) }
     }
-    fn group(&mut self, version: f32, mesh_flags: u32) -> Option<Group> {
+    fn material_record(&mut self, version: f32) -> Option<Group> {
         let mut g = Group::default();
-        let faces = self.u16("group face count")? as usize;
         g.material = self.id("group material")?;
         if at_least(version, 1.99) {
-            g.diffuse = self.texture("diffuse texture")?.0;
-            g.bump = self.texture("bump texture")?.0;
-            g.specular = self.texture("specular texture")?.0;
-            g.glow = self.texture("glow texture")?.0;
+            (g.diffuse, g.texture_flags[0]) = self.texture("diffuse texture")?;
+            (g.bump, g.texture_flags[1]) = self.texture("bump texture")?;
+            (g.specular, g.texture_flags[2]) = self.texture("specular texture")?;
+            (g.glow, g.texture_flags[3]) = self.texture("glow texture")?;
             if at_least(version, 2.0) {
-                g.detail = self.texture("detail texture")?.0;
+                (g.detail, g.texture_flags[4]) = self.texture("detail texture")?;
             }
         } else {
             let Some(n) = self.u32("group texture count") else {
@@ -266,6 +273,7 @@ impl<'a> Reader<'a> {
             }
             for i in 0..n {
                 let (name, kind) = self.texture("group texture")?;
+                if let Some(flags) = g.texture_flags.get_mut(i as usize) { *flags = kind; }
                 match i {
                     0 => g.diffuse = name,
                     1 => g.bump = name,
@@ -281,20 +289,26 @@ impl<'a> Reader<'a> {
         }
         g.shader = self.id("group shader")?;
         if at_least(version, 2.05) {
-            self.id("group extra shader data")?;
+            g.extra_shader = self.id("group extra shader data")?;
         }
+        Some(g)
+    }
+    fn group(&mut self, version: f32, mesh_flags: u32, inline_material: bool) -> Option<Group> {
+        let faces = self.u16("group face count")? as usize;
+        let mut g = if inline_material { self.material_record(version)? } else { Group::default() };
         g.faces = vec![Face::default(); faces];
         if !at_least(version, 1.97) {
             for f in &mut g.faces {
                 for c in 0..3 {
-                    f.positions[c] = self.u16("position index")?;
-                    f.uvs[c] = self.u16("UV index")?;
+                    f.positions[c] = u32::from(self.u16("position index")?);
+                    f.normals[c] = f.positions[c];
+                    f.uvs[c] = u32::from(self.u16("UV index")?);
                 }
             }
             return Some(g);
         }
         let wide = at_least(version, 2.06);
-        let mut corners = vec![[0u16; 3]; faces];
+        let mut corners = vec![[0u32; 3]; faces];
         for f in &mut corners {
             for v in f {
                 *v = self.index(wide, "corner record index")?;
@@ -306,19 +320,25 @@ impl<'a> Reader<'a> {
         if n > 10_000_000 {
             return self.fail("Invalid M3D corner record count.");
         }
+        let stride = (if at_least(version, 2.02) { 3 } else { 2 }) * (if wide { 4 } else { 2 });
+        if n as usize > self.remaining() / stride {
+            return self.fail("Truncated M3D corner records.");
+        }
         let mut records = Vec::with_capacity(n as usize);
         for _ in 0..n {
             let pos;
+            let normal;
             let uv;
             if at_least(version, 2.02) {
                 pos = self.index(wide, "corner attribute index")?;
-                self.index(wide, "corner attribute index")?;
+                normal = self.index(wide, "corner attribute index")?;
                 uv = self.index(wide, "corner attribute index")?;
             } else {
-                pos = self.u16("position index")?;
-                uv = self.u16("UV index")?;
+                pos = u32::from(self.u16("position index")?);
+                normal = pos;
+                uv = u32::from(self.u16("UV index")?);
             }
-            records.push((pos, uv));
+            records.push((pos, normal, uv));
         }
         for (f, indices) in g.faces.iter_mut().zip(&corners) {
             for c in 0..3 {
@@ -327,7 +347,8 @@ impl<'a> Reader<'a> {
                     return self.fail("M3D face refers to an out-of-range corner record.");
                 }
                 f.positions[c] = records[i].0;
-                f.uvs[c] = records[i].1;
+                f.normals[c] = records[i].1;
+                f.uvs[c] = records[i].2;
             }
         }
         if mesh_flags & 2 != 0 {
@@ -337,12 +358,12 @@ impl<'a> Reader<'a> {
             self.skip(24, "group bounds")?;
             let nr = self.u32("bounds record count")?;
             if nr > 10_000_000 {
-                return None;
+                return self.fail("Invalid M3D bounds record count.");
             }
             self.skip(nr as usize * 8, "bounds records")?;
             let ni = self.u32("bounds index count")?;
             if ni > 10_000_000 {
-                return None;
+                return self.fail("Invalid M3D bounds index count.");
             }
             self.skip(ni as usize * 2, "bounds indices")?;
             self.u16("bounds depth")?;
@@ -350,6 +371,9 @@ impl<'a> Reader<'a> {
         Some(g)
     }
     fn mesh(&mut self, version: f32) -> Option<Mesh> {
+        self.mesh_with_materials(version, true)
+    }
+    fn mesh_with_materials(&mut self, version: f32, inline_material: bool) -> Option<Mesh> {
         let mut m = Mesh::default();
         m.flags = self.u32("mesh flags")?;
         m.trailer = self.u16("mesh trailer")?;
@@ -363,17 +387,21 @@ impl<'a> Reader<'a> {
         for _ in 0..nv {
             m.vertices.push(self.vec3("vertex")?);
         }
-        for _ in 0..nn {
-            self.vec3("normal")?;
+        if m.flags & 0x10 != 0 {
+            for _ in 0..nn {
+                m.normals.push(self.vec3("normal")?);
+            }
         }
         for _ in 0..nu {
             let mut uv = [self.f32("UV")?, self.f32("UV")?];
-            uv[0] = finite(uv[0]);
-            uv[1] = finite(uv[1]);
+            if !self.preserve_numbers {
+                uv[0] = finite(uv[0]);
+                uv[1] = finite(uv[1]);
+            }
             m.uvs.push(uv);
         }
         for _ in 0..ng {
-            m.groups.push(self.group(version, m.flags)?);
+            m.groups.push(self.group(version, m.flags, inline_material)?);
         }
         m.cull = self.i8("cull flag")?;
         if !at_least(version, 2.01) {
@@ -1065,7 +1093,7 @@ pub fn load(input: &[u8]) -> Result<crate::model::Model, String> {
                                     fc.positions.iter().all(|&p| (p as usize) < n.mesh.vertices.len())
                                         && fc.uvs.iter().all(|&u| (u as usize) < n.mesh.uvs.len())
                                 })
-                                .map(|fc| [0, 2, 1].map(|c| (fc.positions[c] as u32, fc.uvs[c] as u32)))
+                                .map(|fc| [0, 2, 1].map(|c| (fc.positions[c], fc.uvs[c])))
                                 .collect(),
                         })
                         .collect(),
@@ -1150,3 +1178,7 @@ pub fn load(input: &[u8]) -> Result<crate::model::Model, String> {
 #[cfg(test)]
 #[path = "m3d/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "m3d/install_tests.rs"]
+mod install_tests;

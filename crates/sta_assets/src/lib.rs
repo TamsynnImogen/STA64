@@ -122,6 +122,7 @@ pub fn list_models(vfs: &Vfs) -> Vec<String> {
         .flat_map(|d| vfs.list(d))
         .filter(|p| ModelFormat::PREFERENCE.iter().any(|f| p.ends_with(&format!(".{}", f.extension()))))
         .map(|p| stem(&p).to_owned())
+        .filter(|name| find_model(vfs, name).is_some())
         .collect();
     out.sort();
     out.dedup();
@@ -293,6 +294,11 @@ mod tests {
         w("Data/Mods/M/Textures/RGB/b.tga");
         w("Data/sod/ship.sod");
         w("Data/Mods/M/sod/ship.glb");
+        // Nested library/data files are not selectable by the bare-name model
+        // resolver. A nested duplicate must still leave the root model listed.
+        w("Data/Mods/M/sod/chunks/library.m3d");
+        w("Data/Mods/M/sod/nested/unreachable.sod");
+        w("Data/Mods/M/sod/chunks/ship.m3d");
         let vfs = Vfs::mount_install(&root, Some("M")).unwrap();
         assert_eq!(find_texture(&vfs, "A").unwrap(), ("textures/a.dds".into(), TextureFormat::Dds));
         let (p, f) = find_texture(&vfs, "b.tga").unwrap();

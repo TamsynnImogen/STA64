@@ -6,7 +6,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 fn usage() -> &'static str {
-    "Usage:\n  model_info <install> <mod> <model>\n  model_info --file <path>\n"
+    "Usage:\n  model_info <install> <mod> <model>\n  model_info --file <path>\n  model_info --chunk-materials <path>\n  model_info --chunk-geometry <path>\n"
 }
 
 fn run(args: &[String]) -> Result<String, String> {
@@ -19,6 +19,18 @@ fn run(args: &[String]) -> Result<String, String> {
         }
         return report_file(Path::new(&args[1]));
     }
+    if args.first().is_some_and(|arg| arg == "--chunk-materials") {
+        if args.len() != 2 || args[1].starts_with('-') {
+            return Err(format!("--chunk-materials requires exactly one path\n{}", usage()));
+        }
+        return report_chunk_material_file(Path::new(&args[1]));
+    }
+    if args.first().is_some_and(|arg| arg == "--chunk-geometry") {
+        if args.len() != 2 || args[1].starts_with('-') {
+            return Err(format!("--chunk-geometry requires exactly one path\n{}", usage()));
+        }
+        return report_chunk_geometry_file(Path::new(&args[1]));
+    }
     if args.len() != 3 {
         return Err(format!("expected <install> <mod> <model>\n{}", usage()));
     }
@@ -29,6 +41,90 @@ fn run(args: &[String]) -> Result<String, String> {
         .ok_or_else(|| format!("model {:?}: not found in mounted VFS", args[2]))?;
     let model = sta_assets::load_model(&vfs, &path, format).map_err(|e| format!("loading VFS model {path:?}: {e}"))?;
     Ok(report_model(&model, &format!("{path} {format:?}"), Some(&vfs)))
+}
+
+fn report_chunk_material_file(path: &Path) -> Result<String, String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("reading chunk material library {path:?}: {e}"))?;
+    let library = sta_assets::m3d::chunks::load_materials(&bytes)
+        .map_err(|e| format!("parsing chunk material library {path:?}: {e}"))?;
+    Ok(report_chunk_materials(&library, &format!("file {path:?}")))
+}
+
+fn report_chunk_geometry_file(path: &Path) -> Result<String, String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("reading chunk geometry {path:?}: {e}"))?;
+    let geometry =
+        sta_assets::m3d::chunks::load_geometry(&bytes).map_err(|e| format!("parsing chunk geometry {path:?}: {e}"))?;
+    Ok(report_chunk_geometry(&geometry, &format!("file {path:?}")))
+}
+
+fn report_chunk_materials(library: &sta_assets::m3d::chunks::MaterialLibrary, source: &str) -> String {
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "{source:?} chunk materials v{} records={} variants={}",
+        library.version,
+        library.materials.len(),
+        library.variant_count
+    );
+    for (index, material) in library.materials.iter().enumerate() {
+        let _ = writeln!(
+            out,
+            "  material #{index} lighting_material={:?} shader={:?} extra_shader={:?}",
+            String::from_utf8_lossy(&material.lighting_material),
+            String::from_utf8_lossy(&material.shader),
+            String::from_utf8_lossy(&material.extra_shader)
+        );
+        for (slot, binding) in material.textures.iter().enumerate() {
+            let _ = writeln!(
+                out,
+                "    texture[{slot}] reference={:?} flags=0x{:08x}",
+                String::from_utf8_lossy(&binding.reference),
+                binding.flags
+            );
+        }
+    }
+    out
+}
+
+fn report_chunk_geometry(geometry: &sta_assets::m3d::chunks::GeometryVariant, source: &str) -> String {
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "{source:?} chunk geometry v{} bounds={:?} chunks={}",
+        geometry.version,
+        geometry.bounds,
+        geometry.chunks.len()
+    );
+    for warning in geometry.attribute_warnings() {
+        let _ = writeln!(out, "  warning={warning:?}");
+    }
+    for (index, chunk) in geometry.chunks.iter().enumerate() {
+        let _ = writeln!(
+            out,
+            "  chunk #{index} special_flag=0x{:08x} flags=0x{:08x} trailer=0x{:04x} cull={} positions={} normals={} uvs={} groups={}",
+            chunk.special_flag,
+            chunk.flags,
+            chunk.trailer,
+            chunk.cull,
+            chunk.positions.len(),
+            chunk.normals.len(),
+            chunk.uvs.len(),
+            chunk.groups.len()
+        );
+        for (group_index, group) in chunk.groups.iter().enumerate() {
+            let _ = writeln!(
+                out,
+                "    group #{group_index} material_index={} faces={}",
+                group.material_index,
+                group.faces.len()
+            );
+        }
+    }
+    let _ = writeln!(
+        out,
+        "external material library required; native destruction/variant playback not implemented"
+    );
+    out
 }
 
 fn report_file(path: &Path) -> Result<String, String> {
@@ -51,14 +147,15 @@ fn report_model(model: &sta_assets::model::Model, source: &str, vfs: Option<&sta
 
     let mut out = String::new();
     let _ = writeln!(out, "{source:?} v{}", model.version);
+    let _ = writeln!(out, "  model bounds={:?}", model.bounds());
     for warning in &model.warnings {
         let _ = writeln!(out, "  warning={warning:?}");
     }
     for (i, node) in model.nodes.iter().enumerate() {
         let _ = writeln!(
             out,
-            "  node #{i} name={:?} parent={:?} children={:?}",
-            node.name, node.parent, node.children
+            "  node #{i} name={:?} parent={:?} children={:?} transform={:?}",
+            node.name, node.parent, node.children, node.transform
         );
         match &node.kind {
             NodeKind::Lod => {

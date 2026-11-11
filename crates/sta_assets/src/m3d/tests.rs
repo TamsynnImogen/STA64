@@ -137,7 +137,7 @@ fn texture(out: &mut Vec<u8>, name: &str) {
 
 // For 1.94/1.96 the M3D reader stores mesh normals and direct face corners.
 fn newer_mesh(out: &mut Vec<u8>, version: f32, faces: u16) {
-    u32_(out, 0); // mesh flags
+    u32_(out, 0x10); // Native stored-normal flag; normals follow positions below.
     u16_(out, 0); // trailer
     u16_(out, 3); // vertices
     if version >= 2.02 {
