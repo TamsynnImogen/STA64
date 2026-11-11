@@ -376,7 +376,8 @@ not the one-based `Objectives.objectives` index or a persistent objective ID.
 The pinned stock A2 wrapper passes the integer unchanged; its complete leaf
 indexes the completion-byte vector directly and returns for a nonnegative
 slot at or beyond the current list length. The independently checked own-image
-FO wrapper/leaf corroborates this bounded behavior. Private static captures,+image hashes and receipts stay in `STA64-artifacts/native/LUA-05-objective-completion`;
+FO wrapper/leaf corroborates this bounded behavior. Private static captures,
+image hashes and receipts stay in `STA64-artifacts/native/LUA-05-objective-completion`;
 no original bytes or MMM implementation are copied here.
 
 Require a nonnegative signed-i32-range Lua integer, or a finite integral Lua
