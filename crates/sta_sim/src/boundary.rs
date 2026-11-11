@@ -49,6 +49,11 @@ pub struct BoundaryVolume {
 }
 
 impl BoundaryVolume {
+    /// Inclusive comparison limits, distinct from the upper projection inset.
+    pub(crate) fn comparison_limits(&self) -> (Vec3, Vec3) {
+        (self.lower, self.upper)
+    }
+
     /// Inset X/Z by `inset`, then subtract `upper_epsilon` from their upper
     /// projection values only. Y retains the original bounds, including flat Y.
     ///
@@ -155,3 +160,9 @@ impl BoundaryVolume {
 
 #[cfg(test)]
 mod tests;
+
+pub(crate) mod contact;
+pub(crate) mod state;
+
+#[cfg(test)]
+mod integration_tests;

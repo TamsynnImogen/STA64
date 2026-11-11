@@ -13,8 +13,10 @@
 //! Adding a subsystem's state (weapons from SIM-04, say) is one field on
 //! [`Body`], filled in [`Sim::snapshot`] and read back in
 //! [`Sim::from_snapshot`], plus a [`FORMAT_VERSION`] bump. Old layouts are
-//! refused, not generally migrated. Format 8 has the same body as format 9;
-//! its narrow compatible read path accepts only its original mining phases.
+//! refused, not generally migrated. Formats 8/9 retain the old Body and optional
+//! bounds; their narrow read path requires disabled confinement capability,
+//! and format 8 accepts only its original mining phases. Format 10 adds explicit
+//! bounds and a mandatory versioned confinement record after that old Body.
 //!
 //! The state types of other crates (`MoveStats`) have no serde, so the body
 //! uses small mirror records here instead of touching those crates.
@@ -32,9 +34,10 @@ use crate::world::{Entities, Entity, EntityKind, Shields, Table};
 use crate::{Rng, Sim, SimEvent};
 
 pub const MAGIC: [u8; 4] = *b"STAS";
-/// Bumped whenever [`Body`] or its state tags change. Format 9 adds the
-/// suspended-cargo mining phase without adding a tuple field.
-pub const FORMAT_VERSION: u16 = 9;
+/// Format 10 adds the mandatory confinement suffix. The format-9 body (including
+/// suspended-cargo mining phase 4) is unchanged.
+pub const FORMAT_VERSION: u16 = 10;
+const PREVIOUS_FORMAT: u16 = 9;
 // Only compatible while Body is byte-for-byte the format-8 record schema.
 const COMPATIBLE_MINING_FORMAT: u16 = 8;
 
@@ -61,7 +64,7 @@ impl std::fmt::Display for SnapshotError {
         match self {
             SnapshotError::BadMagic => write!(f, "not a snapshot"),
             SnapshotError::FormatVersion { found } => {
-                write!(f, "snapshot format {found}, expected {FORMAT_VERSION} or compatible {COMPATIBLE_MINING_FORMAT}")
+                write!(f, "snapshot format {found}, expected {FORMAT_VERSION} or compatible {PREVIOUS_FORMAT}/{COMPATIBLE_MINING_FORMAT}")
             }
             SnapshotError::SeamRev { found } => {
                 write!(f, "snapshot seam revision {found}, expected {SEAM_REV}")
@@ -142,6 +145,13 @@ struct Body {
     victory: crate::victory::VictoryRec,
     /// SIM-14 special energy and cloaks.
     specials: crate::specials::SpecialsRec,
+}
+
+/// Mandatory v10 suffix; the old body stays byte-for-byte unchanged.
+#[derive(Serialize, Deserialize)]
+struct BoundaryRec {
+    version: u8,
+    rows: Vec<(EntityId, bool)>,
 }
 
 fn kind_from(b: u8) -> Option<EntityKind> {
@@ -269,9 +279,9 @@ impl Sim {
         out.extend_from_slice(&SEAM_REV.to_le_bytes());
         out.extend_from_slice(&self.content.as_ref().map_or(0, |c| c.hash()).to_le_bytes());
         out.extend(postcard::to_allocvec(&body).expect("snapshot serialises"));
-        // The map's bounds (build sites) follow the body, so snapshots from
-        // before them still load, with no bounds.
+        // The new suffix is mandatory, even without content, bounds or actors.
         out.extend(postcard::to_allocvec(&self.bounds).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&BoundaryRec { version: 1, rows: self.confinement.rows() }).expect("snapshot serialises"));
         out
     }
 
@@ -286,7 +296,7 @@ impl Sim {
             return Err(SnapshotError::BadMagic);
         }
         let found = u16::from_le_bytes([bytes[4], bytes[5]]);
-        if found != FORMAT_VERSION && found != COMPATIBLE_MINING_FORMAT {
+        if found != FORMAT_VERSION && found != PREVIOUS_FORMAT && found != COMPATIBLE_MINING_FORMAT {
             return Err(SnapshotError::FormatVersion { found });
         }
         let seam = u32::from_le_bytes(bytes[6..10].try_into().unwrap());
@@ -300,14 +310,23 @@ impl Sim {
         }
         let (b, rest): (Body, &[u8]) = postcard::take_from_bytes(&bytes[HEADER..])
             .map_err(|e| SnapshotError::Corrupt(e.to_string()))?;
-        let bounds: Option<(Vec3, Vec3)> = if rest.is_empty() {
-            None
+        if found != FORMAT_VERSION && content.as_ref().is_some_and(|db| db.has_map_confinement()) {
+            return Err(SnapshotError::Corrupt("old snapshot has no explicit confinement state".into()));
+        }
+        let (bounds, boundary_rows) = if found == FORMAT_VERSION {
+            let (bounds, rest) = postcard::take_from_bytes(rest).map_err(|e| SnapshotError::Corrupt(e.to_string()))?;
+            let (record, rest): (BoundaryRec, _) = postcard::take_from_bytes(rest).map_err(|e| SnapshotError::Corrupt(e.to_string()))?;
+            if record.version != 1 { return Err(SnapshotError::Corrupt("unknown confinement record version".into())); }
+            if !rest.is_empty() { return Err(SnapshotError::Corrupt("trailing bytes".into())); }
+            (bounds, record.rows)
+        } else if rest.is_empty() {
+            (None, Vec::new())
         } else {
             let (bounds, rest) = postcard::take_from_bytes(rest).map_err(|e| SnapshotError::Corrupt(e.to_string()))?;
             if !rest.is_empty() {
                 return Err(SnapshotError::Corrupt("trailing bytes".into()));
             }
-            bounds
+            (bounds, Vec::new())
         };
         let max_phase = if found == COMPATIBLE_MINING_FORMAT { 3 } else { 4 };
         if let Some(row) = b.economy.miners.iter().find(|row| row.5 > max_phase) {
@@ -323,6 +342,8 @@ impl Sim {
             .collect::<Result<Vec<_>, _>>()?;
         let units =
             Entities::from_parts(list, b.next_entity).ok_or_else(|| corrupt("entity ids"))?;
+        let (mut confinement, _) = crate::boundary::state::Confinement::prepare(content.as_deref(), bounds);
+        confinement.restore(&units, boundary_rows).map_err(|why| SnapshotError::Corrupt(why.into()))?;
         let labels = Table::from_rows(b.labels).ok_or_else(|| corrupt("labels"))?;
         let courses = b
             .courses
@@ -351,6 +372,7 @@ impl Sim {
             starts: b.starts,
             regions: b.regions,
             bounds,
+            confinement,
             events: b.events,
             movement,
             weapons,
@@ -361,6 +383,10 @@ impl Sim {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "snapshot/confinement_tests.rs"]
+mod confinement_tests;
 
 #[cfg(test)]
 mod tests {
@@ -614,16 +640,17 @@ mod tests {
     #[test]
     fn new_or_unknown_mining_phases_cannot_masquerade_as_v8() {
         let (sim, db) = stopped_loaded_miner();
-        let mut bytes = sim.snapshot();
+        let mut bytes = include_bytes!("../tests/fixtures/mining-idle-v9.stas").to_vec();
         bytes[4..6].copy_from_slice(&COMPATIBLE_MINING_FORMAT.to_le_bytes());
-        assert!(matches!(Sim::from_snapshot(&bytes, Some(db.clone())), Err(SnapshotError::Corrupt(_))));
+        assert!(matches!(Sim::from_snapshot(&bytes, Some(db.clone())), Err(SnapshotError::Corrupt(why)) if why.contains("mining phase 4")));
 
         let bytes = sim.snapshot();
-        let mut body: Body = postcard::from_bytes(&bytes[HEADER..]).unwrap();
+        let (mut body, suffix): (Body, _) = postcard::take_from_bytes(&bytes[HEADER..]).unwrap();
         body.economy.miners[0].5 = 5;
         let mut unknown = bytes[..HEADER].to_vec();
         unknown.extend(postcard::to_allocvec(&body).unwrap());
-        assert!(matches!(Sim::from_snapshot(&unknown, Some(db)), Err(SnapshotError::Corrupt(_))));
+        unknown.extend_from_slice(suffix);
+        assert!(matches!(Sim::from_snapshot(&unknown, Some(db)), Err(SnapshotError::Corrupt(why)) if why.contains("mining phase 5")));
     }
 
     #[test]

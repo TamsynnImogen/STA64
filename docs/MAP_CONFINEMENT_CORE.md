@@ -206,3 +206,40 @@ unchanged. No compatibility/runtime claim follows merely from compilation.
 Publish the complete core seam for user merge before its Lua adapter. Preserve
 the separate ownership and campaign limitations. Do not mark #287 complete for
 this contract or the pure helper alone.
+
+## Implemented core and verification
+
+The shared core now caches finished/construction rules and checked volumes,
+stores exact actor flags, appends privileged command tag 20, initializes all
+current birth paths and resets weld completion. Movement constrains resolved
+active/queued targets after the complete command batch and after late writers.
+Checked alternate detours/contacts and temporary holds preserve logical orders.
+Position projection excludes the actor's own solid by source ID; a regression
+reproduced an erroneous x=300 contact instead of x=399.9 before this correction.
+Other actors and the existing own-station exemption retain their normal roles.
+
+Forty new focused tests cover policy/overrides, geometry, shared state and
+movement, production/rally/weld lifecycle, strict snapshots and replay commands.
+The six shared crate suites report 673 passes, zero failures and 10 ignored.
+Install-gated tests without their environment are not installed-corpus proof.
+Workspace all-target checking and an Android ARM64 client-library check through
+cargo-ndk/NDK 29 API 26 pass. The library check is not an APK or runtime result.
+Full platform CI and an exact-source debug APK remain separate publication gates.
+
+The genuine synthetic v9 fixtures in `sta_sim/tests/fixtures/` retain their
+original SHA-256 values and old continuation digests (provenance in
+`confinement-native-v9.json`). Existing genuine v8 controls still pass. A private
+current-writer probe also reproduces the entire genuine Native STAR1 file
+byte-for-byte, including its old content hash and tick600/900 digests. A real
+tag-20 recording replays under STAR1/seam1 and is rejected by the hash-pinned old
+reader. The frozen old snapshot reader rejects actual STAS10 outputs and their
+negative header-only 8/9 downgrades, including an empty boundary row list.
+Source, linked-library, input and output fingerprints are preserved privately in
+`STA64-artifacts/probes/SIM-22-core-validation`.
+
+Native capability remains off unless authored. Enabled legacy rules intentionally
+change content hashes; arbitrary old legacy saves are not migrated by substituting
+a header hash. The mandatory v10 flags must be present. No Lua binding, networking
+implementation, gameplay fork, dependency upgrade, original-content rewrite,
+native-game execution or device acceptance is included. The December 2026 desktop
+alpha remains the priority.

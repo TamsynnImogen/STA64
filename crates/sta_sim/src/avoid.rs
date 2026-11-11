@@ -54,9 +54,11 @@ fn three_quarters(r: Fixed) -> Fixed {
 }
 
 /// An obstacle: the solid, and the player whose craft may overlap it.
-struct Obstacle {
-    solid: Solid,
-    friend: Option<PlayerId>,
+pub(crate) struct Obstacle {
+    pub(crate) solid: Solid,
+    pub(crate) friend: Option<PlayerId>,
+    /// Static regions have no actor; a moving solid never blocks itself.
+    source: Option<EntityId>,
 }
 
 impl Obstacle {
@@ -96,12 +98,13 @@ impl Sim {
             .map_or(Fixed::ZERO, |d| three_quarters(d.radius))
     }
 
-    fn obstacles(&self) -> Vec<Obstacle> {
+    pub(crate) fn obstacles(&self) -> Vec<Obstacle> {
         let mut out: Vec<Obstacle> = crate::regions::solids(&self.regions)
             .into_iter()
             .map(|solid| Obstacle {
                 solid,
                 friend: None,
+                source: None,
             })
             .collect();
         let Some(db) = self.content.as_ref() else {
@@ -127,6 +130,7 @@ impl Sim {
                         radius,
                     },
                     friend,
+                    source: Some(e.id),
                 });
             }
         }
@@ -151,6 +155,8 @@ impl Sim {
             let mut t = real;
             let owner = u.owner;
             let mine = || obstacles.iter().filter(move |o| o.friend != Some(owner));
+            let volume = self.confinement.active_volume(u);
+            let solids: Vec<_> = if volume.is_some() { mine().map(|o| o.solid).collect() } else { Vec::new() };
             // A destination inside a solid ends at its edge: a margin beyond
             // it, so arriving there is neither touching (pushed back) nor a
             // leg that grazes the solid (steered round for ever).
@@ -160,6 +166,20 @@ impl Sim {
                 t.z = t.z + dz;
             }
             let p = u.pos;
+            if let Some(volume) = volume.filter(|v| v.check(t, false).outside) {
+                // A pushed destination must never be clipped back into its
+                // blocker. Choose a checked contact on the current side.
+                use crate::boundary::contact::{contact, distance};
+                let candidate = solids.iter().enumerate().filter_map(|(index, solid)| {
+                    let point = contact(&volume, p, real, solid, ur, margin, &solids)?;
+                    Some(((distance(point, real), distance(point, p), index), point))
+                }).min_by_key(|(key, _)| *key).map(|(_, point)| point);
+                let Some(candidate) = candidate else {
+                    hold(u, real, &mut held);
+                    continue;
+                };
+                t = candidate;
+            }
             if t != real {
                 // A craft cannot always land on a point it must approach
                 // along an arc: the order is done within the craft's own
@@ -180,7 +200,7 @@ impl Sim {
                 continue;
             }
             let (ux, uz) = (lx / len, lz / len);
-            let mut hit: Option<(Fixed, Vec3, Fixed)> = None;
+            let mut hit: Option<(Fixed, Vec3, Fixed, Solid)> = None;
             for o in mine() {
                 let (c, r) = o.circle();
                 let reach = r + ur + margin / Fixed::from_int(2);
@@ -194,11 +214,23 @@ impl Sim {
                 let s = (cx * ux + cz * uz).max(Fixed::ZERO).min(len);
                 let (qx, qz) = (cx - ux * s, cz - uz * s);
                 if (qx * qx + qz * qz).sqrt() < reach && hit.is_none_or(|h| s < h.0) {
-                    hit = Some((s, c, r + ur + margin));
+                    hit = Some((s, c, r + ur + margin, o.solid));
                 }
             }
-            let Some((_, c, ring)) = hit else { continue };
-            u.target = Some(detour(p, (ux, uz), c, ring, t.y));
+            let Some((_, c, ring, solid)) = hit else { continue };
+            let preferred = detour(p, (ux, uz), c, ring, t.y);
+            let target = if let Some(volume) = volume {
+                use crate::boundary::contact::{contact, legal_target};
+                let alternate = detours(p, (ux, uz), c, ring, t.y)[1];
+                [preferred, alternate].into_iter().find(|&point| legal_target(&volume, p, point, ur, &solids))
+                    .or_else(|| contact(&volume, p, t, &solid, ur, margin, &solids))
+            } else { Some(preferred) };
+            let Some(target) = target else {
+                // `t != real` has already saved this order for restoration.
+                hold(u, real, &mut held);
+                continue;
+            };
+            u.target = Some(target);
             if t == real {
                 held.push((u.id, real));
             }
@@ -267,10 +299,48 @@ impl Sim {
         }
         for (id, (dx, dz)) in shifts {
             if let Some(u) = self.units.get_mut(id) {
+                let previous = u.pos;
                 u.pos.x = u.pos.x + dx;
                 u.pos.z = u.pos.z + dz;
+                if u.pos != previous {
+                    let radius = bodies.binary_search_by_key(&id, |b| b.id).map_or(Fixed::ZERO, |i| bodies[i].radius);
+                    constrain_position(&mut self.confinement, u, previous, radius, &obstacles);
+                }
             }
         }
+    }
+}
+
+fn hold(unit: &mut crate::Unit, real: Vec3, held: &mut Vec<(EntityId, Vec3)>) {
+    unit.target = None;
+    unit.speed = Fixed::ZERO;
+    unit.omega = Fixed::ZERO;
+    if held.last().is_none_or(|(id, _)| *id != unit.id) { held.push((unit.id, real)); }
+}
+
+/// Ordinary position update followed by checked solid-aware projection recovery.
+/// Only actual projection pays for contact candidates. Bounds remain authoritative
+/// if fully occluded; retaining a previous valid physical point is preferable.
+pub(crate) fn constrain_position(
+    confinement: &mut crate::boundary::state::Confinement,
+    unit: &mut crate::Unit,
+    previous: Vec3,
+    radius: Fixed,
+    obstacles: &[Obstacle],
+) {
+    let Some(volume) = confinement.position_updated(unit) else { return };
+    use crate::boundary::contact::{contact, distance, legal_target};
+    let solids: Vec<_> = obstacles.iter().filter(|o| o.source != Some(unit.id) && o.friend != Some(unit.owner)).map(|o| o.solid).collect();
+    let desired = unit.pos;
+    if legal_target(&volume, previous, desired, radius, &solids) { return; }
+    let replacement = solids.iter().enumerate().filter_map(|(index, solid)| {
+        let point = contact(&volume, previous, desired, solid, radius, Fixed::ZERO, &solids)?;
+        Some(((distance(point, desired), distance(point, previous), index), point))
+    }).min_by_key(|(key, _)| *key).map(|(_, point)| point);
+    if let Some(point) = replacement {
+        unit.pos = point;
+    } else if legal_target(&volume, previous, previous, radius, &solids) {
+        unit.pos = previous;
     }
 }
 
@@ -278,6 +348,11 @@ impl Sim {
 /// (`c`, `ring`): its tangent point on the side the centre is not, advanced
 /// round the circle by a fixed angle so it is never reached.
 fn detour(p: Vec3, dir: (Fixed, Fixed), c: Vec3, ring: Fixed, y: Fixed) -> Vec3 {
+    detours(p, dir, c, ring, y)[0]
+}
+
+/// Keep the old preferred side first; confinement alone may select the other.
+fn detours(p: Vec3, dir: (Fixed, Fixed), c: Vec3, ring: Fixed, y: Fixed) -> [Vec3; 2] {
     let (vx, vz) = (p.x - c.x, p.z - c.z);
     let d = (vx * vx + vz * vz).sqrt();
     let (nx, nz) = if d == Fixed::ZERO {
@@ -300,18 +375,14 @@ fn detour(p: Vec3, dir: (Fixed, Fixed), c: Vec3, ring: Fixed, y: Fixed) -> Vec3 
     let pick = |(rx, rz): (Fixed, Fixed)| dir.0 * rz - dir.1 * rx;
     let (a, b) = (cand(Fixed::ONE), cand(-Fixed::ONE));
     // Aim at the candidate on the far side of the leg from the centre.
-    let (rx, rz) = if side > Fixed::ZERO {
-        if pick(a) < pick(b) { a } else { b }
+    let (first, second) = if side > Fixed::ZERO {
+        if pick(a) < pick(b) { (a, b) } else { (b, a) }
     } else if pick(a) > pick(b) {
-        a
+        (a, b)
     } else {
-        b
+        (b, a)
     };
-    Vec3 {
-        x: c.x + rx * ring,
-        y,
-        z: c.z + rz * ring,
-    }
+    [first, second].map(|(rx, rz)| Vec3 { x: c.x + rx * ring, y, z: c.z + rz * ring })
 }
 
 #[cfg(test)]
