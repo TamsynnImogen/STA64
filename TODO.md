@@ -76,9 +76,9 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] LUA-05 perception adapter: run Blockade beyond its fleet-isolation callback on a current campaign build. Confirm no unknown `perceivedTeam` field warnings, check the isolated ships retain their intended real owners, and keep any AIP/other unsupported diagnostics visible. A clean 1800-tick headless startup is a bounded check, not full campaign acceptance.
 
-- [?] Static glTF/GLB (CON-09): with an updated build, place the original `fixtures/models/fx_cruiser.glb` in a mounted layer's `sod/` directory and run `--view fx_cruiser`; orbit the red/blue checker model and check its surface remains visible. Parser, material, VFS lookup and windowless GPU checks are separate automated evidence. Animation, skins, morph targets and unsupported required extensions currently report explicit errors. [Scope and limits](docs/M1_ASSET_MODEL_COMPLETION.md).
-
 - [?] M1 corpus refresh: installed ODF/VFS checks now cover an original flat A1 ZFS install as well as base/modded Roots and Classic. See [the acceptance report](docs/M1_VALIDATION.md) for the exact counts, old-version/required-extension refusals and remaining GLB viewer check. Sabre construction/movement is accepted on the staged fix; M1 integration and the low-FPS optimized-build comparison remain pending.
+
+- [?] Static glTF/GLB (CON-09): with an updated build, place the original `fixtures/models/fx_cruiser.glb` in a mounted layer's `sod/` directory and run `--view fx_cruiser`; orbit the red/blue checker model and check its surface remains visible. Parser, material, VFS lookup and windowless GPU checks are separate automated evidence. Animation, skins, morph targets and unsupported required extensions currently report explicit errors. [Scope and limits](docs/M1_ASSET_MODEL_COMPLETION.md).
 
 ## Checked earlier (morning list)
 
