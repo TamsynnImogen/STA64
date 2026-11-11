@@ -62,6 +62,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] Unstarted station queue handoff (SIM-19 follow-up; updated builds only): scripted capture before a station starts its first job clears the queue and returns paid costs to the former owner. A deferred, unfunded queue clears without credit. A started head, rig deploy or weld still rejects transfer; older pinned builds and the guarded-stage note above predate this extension. Headless transaction/replay tests cover the same-tick prepaid case, which may be difficult to observe manually.
 
+- [?] ODF duplicate report (EDT-09): `cargo run -p sta_odf --bin sta-odf-duplicates -- path/to/unit.odf` prints repeated command locations without rewriting the file. Later assignments remain legal; add `--deny-duplicates` only when a duplicate should fail a mod-author check. Includes and parent-mod overrides are not compared. [Usage and validation](docs/REFERENCE_SPACE_RTS.md#implemented-report-and-validation).
+
 ## Checked earlier (morning list)
 
 Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
