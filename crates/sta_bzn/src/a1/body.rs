@@ -262,7 +262,8 @@ pub(crate) fn parse_map(data: &[u8], header: Header) -> Result<Map, BznError> {
         let entity_id = o.integer("EntityID")?;
         let pos_at = o.at;
         let position = floats::<3>(o.bytes(9, 12, "position vector3")?, pos_at)?;
-        initial_positions.push(coords.point(position, pos_at)?);
+        let position = coords.point(position, pos_at)?;
+        initial_positions.push(position);
         let team = o.integer("team")?;
         let label = o.string(2, Some(40), "label text40")?;
         object_refs.push(o.word(8, "obj_addr reference")?);
@@ -275,6 +276,7 @@ pub(crate) fn parse_map(data: &[u8], header: Header) -> Result<Map, BznError> {
             entity_id,
             team,
             label,
+            initial_position: Some(position),
             transform,
             light_colour: None,
         });

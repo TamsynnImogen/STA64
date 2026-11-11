@@ -6,10 +6,10 @@ SIM-22/#287. This does not implement map confinement or choose its lifecycle.
 ## Source information
 
 An object prefix contains a `pos` point before the later transform matrix.
-They can differ. The current A2 binary reader uses the point to construct an
-initial matrix and then replaces that matrix when a transform record exists.
-The text reader uses `pos` only as a fallback when `position.x` is missing.
-Consequently neither A2 path retains a distinct prefix after parsing.
+They can differ. The pre-change A2 binary reader used the point to construct
+an initial matrix and then replaced that matrix when a transform record
+existed. The text reader used `pos` only as a fallback when `position.x` was
+missing. Neither path retained a distinct prefix after parsing.
 
 The A1 reader already preserves resized prefix points in
 `MapData.initial_positions`, separately from final matrices. Source/native
@@ -18,9 +18,10 @@ future initialization policy; equality in stock maps is not a safe substitute.
 
 ## Representation and parsing
 
-Add `sta_bzn::MapObject.initial_position: Option<[f32; 3]>`, containing the
-prefix point in the same coordinate system as the returned transform. `None`
-means unavailable; it must not mean the final matrix or an invented origin.
+The reader now exposes `sta_bzn::MapObject.initial_position: Option<[f32; 3]>`,
+containing the prefix point in the same coordinate system as the returned
+transform. `None` means unavailable; it does not mean the final matrix or an
+invented origin.
 
 | Input | New metadata | Existing final placement |
 |---|---|---|
@@ -70,3 +71,19 @@ write belongs here. The same format reader serves desktop and Android.
 
 Format retention is not native gameplay or device-runtime proof. The December
 2026 desktop alpha remains the priority.
+
+## Corpus result
+
+A private read-only before/after probe covers 49 installed A1 maps with
+17,595 objects, 72 A2 maps with 34,695 objects, and 190 FO4 maps with 88,424
+objects. Every object retains a prefix. A1's common field agrees bit-for-bit
+with its existing checked parallel array. All prefixes equal final positions
+in this particular corpus; the synthetic tests exercise different values.
+
+Canonical dumps of every previously returned field and serialized full
+converted `MapDef` streams compare byte-for-byte with the pre-change reader
+for all 311 maps. Content hashes and all 311 VFS map input SHA-256 values are
+unchanged. This establishes preservation for that corpus, not universal
+equality of prefix and final placement. Private receipts retain probe source,
+linked-library hashes, outputs and comparison hashes; no game bytes are
+published as fixtures.
