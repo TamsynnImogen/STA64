@@ -366,3 +366,42 @@ strict arguments, unknown false versus caught unknown true diagnostics,
 read-only commands/digests and refreshed snapshots. Check exact signature
 normalization against wrong return/argument/arity shapes, regenerate the
 inventory, and run mission/sim regressions, strict Clippy and workspace checks.
+
+## DLL-shaped objective completion contract
+
+Pre-code contract for the independent LUA-05 objective-state slice. Expose
+`A2.ObjectivesDisplaySetObjectiveComplete(slot, complete)` with exactly two
+arguments. The slot is a zero-based ordinal in the current objective list,
+not the one-based `Objectives.objectives` index or a persistent objective ID.
+The pinned stock A2 wrapper passes the integer unchanged; its complete leaf
+indexes the completion-byte vector directly and returns for a nonnegative
+slot at or beyond the current list length. The independently checked own-image
+FO wrapper/leaf corroborates this bounded behavior. Private static captures,+image hashes and receipts stay in `STA64-artifacts/native/LUA-05-objective-completion`;
+no original bytes or MMM implementation are copied here.
+
+Require a nonnegative signed-i32-range Lua integer, or a finite integral Lua
+number in that range, and a strict boolean. Negative/native unsafe indexing,
+fractional/nonfinite/out-of-range numbers, coercions and wrong arity raise Lua
+errors before mutation. A valid nonnegative slot outside the current list is
+a successful no-op, including an empty list; it is not an unsupported call.
+The native leaf lacks a negative-index lower-bound guard. Rejecting that input
+is an explicit STA64 safety policy, not native invalid-input/ABI parity.
+
+For an existing slot, true sets `ObjectiveState::Complete` and false sets
+`ObjectiveState::Active`, including a previously Failed objective. This clears
+the completion flag; it does not select a failure state. Update the existing
+host state immediately, preserving the objective ID/title/description, other
+objectives, briefing, visibility and ID allocator. Queue no simulation or
+presentation command. Keep runtime instances independent. Do not route through
+one-based indexing or interpret a selector as a stored handle after file reload.
+
+This does not implement the separate objective-file loading boolean adapter,
+native display colors/check-mark rendering, objective persistence, A1 calls or
+complete mission playback. It has no dependency on unmerged SIM-22 and changes
+no core/content/client/defaults/dependencies. Android uses the same adapter.
+
+Tests must distinguish slots from one-based indices and nonsequential/reloaded
+IDs; check true/false/Failed reactivation, empty/out-of-list no-ops, strict
+invalid-input atomicity, runtime isolation and preserved host metadata with
+no commands or unsupported credit. Extend only the exact inventory signature
+and its source-coverage tests; regenerate the report rather than editing it.
