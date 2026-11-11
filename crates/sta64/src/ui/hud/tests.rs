@@ -176,13 +176,17 @@ fn the_grid_issues_the_ui02_orders() {
     let stop = cell(&mut app, |a| *a == Act::Stop);
     press(&mut app, stop);
     assert_eq!(queued(&mut app), [CommandKind::Order(Order::Stop { units: vec![EntityId(1), EntityId(3)] })]);
+    // Observe each acknowledgement while its message is live, as the voice
+    // consumer does. Four later app updates may expire the first action.
+    let stop_acks: Vec<_> = app.world_mut().resource_mut::<Messages<OrderIssued>>().drain().map(|m| m.kind).collect();
+    assert_eq!(stop_acks, [OrderKind::Stop]);
     let wedge = cell(&mut app, |a| matches!(a, Act::Formation(_)));
     press(&mut app, wedge);
     let q = queued(&mut app);
     assert!(matches!(q[..], [CommandKind::Order(Order::Formation { ref units, .. })] if units.len() == 2), "{q:?}");
     // The voice ack hears about it, as for a key press.
-    let msgs: Vec<_> = app.world_mut().resource_mut::<Messages<OrderIssued>>().drain().collect();
-    assert_eq!(msgs.iter().map(|m| m.kind).collect::<Vec<_>>(), [OrderKind::Stop, OrderKind::Formation]);
+    let formation_acks: Vec<_> = app.world_mut().resource_mut::<Messages<OrderIssued>>().drain().map(|m| m.kind).collect();
+    assert_eq!(formation_acks, [OrderKind::Formation]);
     // An enemy gets no orders.
     app.world_mut().resource_mut::<Selection>().0 = vec![EntityId(4)];
     app.update();

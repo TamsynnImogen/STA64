@@ -27,7 +27,7 @@ use bevy::asset::{embedded_asset, AssetPath};
 use bevy::mesh::MeshVertexBufferLayoutRef;
 use bevy::pbr::{MaterialPipeline, MaterialPipelineKey};
 use bevy::prelude::*;
-use bevy::render::render_resource::{AsBindGroup, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError};
+use bevy::render::render_resource::{AsBindGroup, Face, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError};
 use bevy::shader::ShaderRef;
 
 const AMBIENT: [f32; 3] = [0.05, 0.05, 0.07];
@@ -122,9 +122,10 @@ impl Material for HullMaterial {
         _: &MeshVertexBufferLayoutRef,
         key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
-        if key.bind_group_data.double_sided {
-            descriptor.primitive.cull_mode = None;
-        }
+        // Forward defaults to Back, but Bevy's depth prepass defaults to None.
+        // Match both passes: reflected hulls otherwise write occluding depth
+        // for faces that their color pass culls.
+        descriptor.primitive.cull_mode = if key.bind_group_data.double_sided { None } else { Some(Face::Back) };
         Ok(())
     }
 }
@@ -688,12 +689,12 @@ mod gpu {
         // The viewer's lights: a Key and a fill.
         app.world_mut().spawn((DirectionalLight { illuminance: 6000.0, ..default() }, Transform::from_xyz(3.0, 5.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y)));
         app.world_mut().spawn((DirectionalLight { illuminance: 1500.0, ..default() }, Transform::from_xyz(-4.0, -2.0, -3.0).looking_at(Vec3::ZERO, Vec3::Y)));
-        app.world_mut().spawn((
+        let camera = app.world_mut().spawn((
             Camera3d::default(),
             RenderTarget::from(target.clone()),
             Msaa::Off,
             Transform::from_xyz(0.0, 0.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
-        ));
+        )).id();
         // Two-sided, so the shader's back-face branch and the specialised pipeline run too.
         let std = app.world_mut().resource_mut::<Assets<StandardMaterial>>().add(StandardMaterial {
             base_color: Color::WHITE,
@@ -704,7 +705,7 @@ mod gpu {
             double_sided: true,
             ..default()
         });
-        app.world_mut().spawn((Mesh3d(sphere), MeshMaterial3d(std), HullPart::default()));
+        let subject = app.world_mut().spawn((Mesh3d(sphere), MeshMaterial3d(std.clone()), HullPart::default())).id();
 
         app.finish();
         app.cleanup();
@@ -737,9 +738,6 @@ mod gpu {
         }
         capture(&mut app, &target, "hull");
 
-        let errors = ERRORS.lock().unwrap().clone();
-        assert!(errors.is_empty(), "shader/pipeline ERROR events:\n{}", errors.join("\n"));
-
         let frames = FRAMES.lock().unwrap().clone();
         let (pbr, hull) = (&frames[0].1, &frames[1].1);
         save("pbr", pbr);
@@ -754,5 +752,38 @@ mod gpu {
         assert!(mism <= na / 50, "silhouette differs by {mism} of {na} pixels");
         assert!(diff < 45.0, "mean frame difference {diff}/255 against PBR");
         assert!((la - lb).abs() < 60.0, "mean luminance {la:.1} against {lb:.1}");
+
+        // A reflected, single-sided hull must keep the same silhouette when
+        // the map's depth prepass is enabled. This needs no installed assets.
+        app.world_mut().resource_mut::<HullLighting>().on = false;
+        for _ in 0..4 { app.update(); }
+        let single_sided = {
+            let mut materials = app.world_mut().resource_mut::<Assets<StandardMaterial>>();
+            let mut source = materials.get(&std).unwrap().clone();
+            source.cull_mode = Some(bevy::render::render_resource::Face::Back);
+            source.double_sided = false;
+            materials.add(source)
+        };
+        app.world_mut().entity_mut(subject).insert((
+            MeshMaterial3d(single_sided),
+            Transform::from_scale(Vec3::new(-1.0, 1.0, 1.0)),
+        ));
+        app.world_mut().resource_mut::<HullLighting>().on = true;
+        for _ in 0..6 { app.update(); }
+        capture(&mut app, &target, "mirrored-bare");
+        app.world_mut().entity_mut(camera).insert(bevy::core_pipeline::prepass::DepthPrepass);
+        for _ in 0..6 { app.update(); }
+        capture(&mut app, &target, "mirrored-prepass");
+        let frames = FRAMES.lock().unwrap().clone();
+        let bare = &frames.iter().find(|f| f.0 == "mirrored-bare").unwrap().1;
+        let depth = &frames.iter().find(|f| f.0 == "mirrored-prepass").unwrap().1;
+        save("mirrored-bare", bare);
+        save("mirrored-prepass", depth);
+        let (_, _, _, before, after, mismatch) = compare(bare, depth);
+        eprintln!("reflected hull: bare {before} lit pixels; prepass {after}; silhouette mismatch {mismatch}");
+        assert!(before > 500 && after * 100 >= before * 95, "depth prepass hides reflected hull: {before} -> {after}");
+        assert!(mismatch <= before / 50, "depth prepass changes reflected silhouette by {mismatch} pixels");
+        let errors = ERRORS.lock().unwrap().clone();
+        assert!(errors.is_empty(), "shader/pipeline ERROR events:\n{}", errors.join("\n"));
     }
 }
