@@ -241,7 +241,7 @@ fn installed_station_reveals_opaque_chunks_offscreen() {
         .filter(|(partial, full)| **partial && !**full)
         .count();
     assert!(
-        outside * 100 <= counts[1],
+        outside * 100 <= counts[2],
         "partial geometry escaped full station silhouette: {outside}"
     );
     let mismatch = masks[4]
