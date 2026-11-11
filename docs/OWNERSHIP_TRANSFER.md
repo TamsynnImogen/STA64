@@ -336,3 +336,111 @@ guards, and snapshot/replay continuation. Rejection comparisons allow the
 ordinary rest of the tick by using an identical baseline simulation. Shared
 regressions and full OS CI remain required. Android uses this same operation;
 an APK build is distinct from Waydroid/device gameplay acceptance.
+
+## Active station-queue transfer: pre-implementation contract
+
+This stage extends the existing checked plan to a paid, started station head,
+including zero elapsed ticks. It does not complete SIM-19. The exact owned
+paths are `production/transfer.rs`, narrow explanatory comments in
+`ownership.rs`, the obsolete active-head rejection case and a child-test
+registration in `ownership_queue_tests.rs`, a new
+`ownership_active_tests.rs`, and this document. No production tick, command,
+snapshot, replay, content/default, client or Lua format/API changes are needed.
+Open #309 owns separate boundary/production integration; its files are not
+modified by this stage. This contract must be pushed before source changes.
+
+### Native accounting decision
+
+Fresh static checks use the pinned original GOG A1 executable, original A2
+executable and its own matching map, and separately corroborated Fleet Ops
+host/DLL paths. Private captures retain hashes and exact ranges. A1's export,
+virtual ownership slots and class layout were traced independently; A2
+offsets and the historical FO-like map are not used as A1/A2 substitutes.
+
+The examined ordinary station start paths charge the whole cost before
+marking the build active. They do not charge gradually as its timer advances.
+The outer ownership operation clears old-team state before setting the new
+team and issuing Stop. Its producer cleanup removes the construction effect,
+clears the queue and resets active state. This differs from ordinary Cancel,
+whose explicit monetary credits are not called by that producer clear path.
+The ordinary deferred active cost is therefore forfeited on this ownership
+clear; the later Stop cannot refund an already removed job. A started head
+with zero elapsed time has already crossed the payment boundary.
+
+The reviewed Fleet Ops precharged-clear callback instead credits every linked
+queue item to the old team before structural removal. The active head remains
+in that queue and is included. Its deferred branch decrements an active
+technology count and performs structural clearing, without that monetary
+credit loop. Construction-effect removal and officer release are separate
+from these currencies. No runtime hook admission or full original-game parity
+is inferred from static paths.
+
+A2FOExtensions supplies another distinct layer: its producer-event subscriber
+credits four additional currencies on cancellation/deletion/clear events.
+Those are Tritanium, Supply, Credits and Collective Connections, not the four
+stock resource slots modeled by the current Economy. Do not reinterpret its
+event-description comments as stock monetary credits. This stage neither
+implements that additional ledger nor silently drops a positive unsupported
+cost. Future resource integration must preserve these distinct contracts.
+
+The original station start path uses a construction effect; product creation
+happens at finish. The Core likewise has no child actor for an active station
+queue item. Shipyard launch/rally and attached-research handling remain
+separate native responsibilities; this stage handles only state represented
+by the shared queue and does not claim attached-pod identity or full research
+parity. Evolver/craft construction, rig deployments, weld builders/children,
+unfinished targets, planet/resource ownership and capture-victory policy keep
+their existing guards and unresolved gates.
+
+### Checked Core mapping
+
+Keep the existing all-unstarted behavior intact, including its paid-receipt
+test under a deferred builder mode. For an active queue, only index zero may
+be started; it must also be paid and have `done < build.ticks.max(1)`. Zero
+elapsed is valid. Every unstarted item must still have done zero. Every item
+must resolve its definition and retain the station's old owner. For an active
+head, also require a valid station builder definition; never obtain charging
+mode from a missing definition's fallback.
+
+Use the builder's existing immutable `unit_features(...).pay_on_queue`,
+already resolved from its profile/ODF overrides and included in the content
+hash. A paid active head refunds its positive represented costs only in
+precharged mode. In deferred mode those costs remain spent. All unstarted
+paid entries retain the existing recorded-payer refund contract; unpaid
+entries never earn credit. No new default or option is introduced, and the
+existing authored payment-mode overrides and explicit/inherited zero remain
+authoritative. Dynamic discounts, mutable native prices and paid-price
+receipts remain outside the modeled flat-cost policy.
+
+Check positive paid costs for unsupported slots and neutral/reserved owners
+even when the active cost will be forfeited; accepting a dubious neutral
+payment must not expose Core player-zero aliasing. Sum only actual refunds,
+with checked Fixed-bit arithmetic. A deferred head does not cause refund
+overflow when no addition is performed. Any malformed phase, payer,
+definition, unsupported positive paid cost or refund overflow rejects before
+any cleanup, ownership or resource mutation. Keep the plan single-use and
+consume it in the existing same command application, before any tick can
+advance. Ordinary Stop's full paid-item refund policy is unchanged.
+
+Successful cleanup removes the entire queue and preserves the existing actor
+cleanup/control rules. No child appears, no completion is fabricated and no
+credit goes to the destination. Same-owner and repeated requests use these
+same rules. Already completed products remain separate actors with their own
+owners. The existing Item record already serializes definition, payer,
+elapsed ticks, started and paid; add no fields, format tags or version bump.
+Snapshot and replay checks prove same-build continuation, not cross-engine
+replay equivalence for commands that an earlier implementation rejected.
+
+### Required checks
+
+Exercise both charging modes at zero and partial elapsed time, active head
+with tails, all four currencies, same-owner/repeated requests, old/new-owner
+control, transfer immediately before completion, an already completed child,
+and an ordinary Stop control showing its different refund. Test unpaid active
+heads, started tails, out-of-range progress, missing definitions/builders,
+payer mismatch, neutral positive/zero cost, unsupported slots, refund overflow
+and deferred non-refund overflow distinctions. Rejections must be atomic
+relative to the normal rest of the tick. Preserve existing rig/weld/resource
+guards and unstarted tests. Run active snapshot/replay continuation, shared
+consumer tests, strict Clippy/workspace checks, full desktop OS CI and Android
+ARM64 checks. An APK artifact remains separate from Waydroid/device acceptance.
