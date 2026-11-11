@@ -344,7 +344,7 @@ mod tests {
             failed.len(),
             missing.len()
         );
-        for f in failed.iter().take(10) {
+        for f in &failed {
             eprintln!("  fail {f}");
         }
         for t in missing.iter().take(10) {

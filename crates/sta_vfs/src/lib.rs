@@ -542,6 +542,7 @@ mod tests {
         let odfs: Vec<_> = vfs.list("odf").into_iter().filter(|p| p.ends_with(".odf")).collect();
         let mut from_archive = 0;
         let mut from_zfs = 0;
+        let mut empty = 0;
         for p in &odfs {
             if matches!(vfs.resolve(p), Some((_, Source::Packed { .. }))) {
                 from_archive += 1;
@@ -549,9 +550,12 @@ mod tests {
             if matches!(vfs.resolve(p), Some((_, Source::Zfs { .. }))) {
                 from_zfs += 1;
             }
-            assert!(!vfs.read(p).unwrap().unwrap().is_empty(), "{p}");
+            // An empty ODF is legal (e.g. FO4's basic_rotate_combat.odf).
+            // Require readable presence, not nonempty authored contents.
+            let bytes = vfs.read(p).unwrap().unwrap_or_else(|| panic!("missing listed ODF {p}"));
+            empty += usize::from(bytes.is_empty());
         }
-        eprintln!("{} layers, {packed} FPQ entries, {} odfs, {from_archive} served from FPQ, {from_zfs} from ZFS", vfs.layers().len(), odfs.len());
+        eprintln!("{} layers, {packed} FPQ entries, {} odfs, {from_archive} served from FPQ, {from_zfs} from ZFS, {empty} empty", vfs.layers().len(), odfs.len());
         assert!(!odfs.is_empty(), "install contains no ODFs");
         assert!(packed == 0 || from_archive > 0);
     }
