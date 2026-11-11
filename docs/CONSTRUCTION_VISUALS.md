@@ -211,3 +211,26 @@ Stock A1/FO visual equivalence has not been established. Chunk order is the
 STA64 spatial policy, not recovered native section ordering. The previous
 24-bee presentation cap remains; this does not alter simulation unit limits.
 No desktop milestone or December 2026 alpha date was changed.
+
+### Live-feedback follow-up verification
+
+- All-target client/simulation tests pass: 363 client library tests (one existing
+  ignored), 286 simulation library tests and their integration suites. Fourteen
+  AI tests pass, including the busy-constructor positive/negative controls.
+- Lock tests cover all four content profiles, direct/queued moves, replacement
+  builds, mixed groups, residual velocity, craft/field displacement, explicit
+  Stop on either constructor or site, destruction and snapshot continuation.
+  Existing construction completion ticks are unchanged.
+- Strict all-target Clippy for client, simulation and AI, workspace/all-target
+  compilation and Android ARM64 client-library compilation pass.
+- `construction` (3,900 ticks), `construction-fo` (4,000) and `rally` (1,700)
+  scenarios pass all 67 steps, with zero failures or skips.
+- The real Classic shipyard GPU capture is zero pixels while waiting and at
+  the first-weld latch, 3,135 pixels at the rebased midpoint (identical to the
+  unblocked midpoint), and 5,467 at completion/reference. The final silhouettes
+  match exactly. The Sabre prepass/MSAA regression remains unchanged.
+
+These automated checks do not override the rejected first live candidate.
+The wider-beam, later-reveal and stationary-constructor changes require a new
+manual Classic build/cancel/second-build check and FPS observation. Original
+assets and reference executables were inspected read-only.
