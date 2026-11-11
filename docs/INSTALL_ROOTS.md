@@ -25,7 +25,12 @@ No new loading path, filesystem writes, platform conditionals or dependencies.
    unchanged: loose > STA > FPQ > ZFS within each layer.
 
 Existing original-A1 profile detection already recognizes a ZFS-backed layer.
-Keep it unchanged. There is no Android-specific gameplay/storage shortcut;
+Profile detection stays unchanged.
+CON-29 additionally recognizes the observed loose-file A2 root with a
+case-insensitive Armada2.exe file and odf/bzn directories, under the same
+absent-Data/no-requested-mod gate. Its separate
+[contract and checks](A2_INSTALL_ROOTS.md) preserve the Data/A1 rules above.
+There is no Android-specific gameplay/storage shortcut;
 the same VFS API is shared by Windows, Linux and Android. The Android packaged
 Data layout remains supported. This does not add unrestricted-storage access,
 SAF import, mod installation or a new permission.

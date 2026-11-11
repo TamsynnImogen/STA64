@@ -130,10 +130,11 @@ pub struct Vfs {
 }
 
 impl Vfs {
-    /// Mount a Data-based install or an original flat Armada I install.
+    /// Mount a Data-based install or a recognized original flat Armada I/II root.
     ///
     /// `active_mod` is a folder name under `Data/Mods`; `None` mounts only `Data`.
     /// Without a Data child, `None` also permits a flat root containing ZFS files.
+    /// A loose-file A2 root requires an Armada2.exe file and odf/bzn directories.
     /// A requested mod is never silently ignored by falling back to a flat root.
     pub fn mount_install(install_root: &Path, active_mod: Option<&str>) -> Result<Self, VfsError> {
         let Some(data) = find_child_ci(install_root, "Data") else {
@@ -144,7 +145,11 @@ impl Vfs {
                         path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("zfs")) && path.is_file()
                     })
                 });
-            if !flat_a1 {
+            let flat_a2 = active_mod.is_none()
+                && find_child_ci(install_root, "Armada2.exe").is_some_and(|p| p.is_file())
+                && find_child_ci(install_root, "odf").is_some_and(|p| p.is_dir())
+                && find_child_ci(install_root, "bzn").is_some_and(|p| p.is_dir());
+            if !flat_a1 && !flat_a2 {
                 return Err(VfsError::NoDataDir(install_root.to_path_buf()));
             }
             let mut vfs = Vfs::default();
@@ -401,6 +406,9 @@ fn index_dir(root: &Path, dir: &Path, out: &mut HashMap<String, Source>) -> Resu
 
 #[cfg(test)]
 mod flat_install_tests;
+
+#[cfg(test)]
+mod flat_a2_tests;
 
 #[cfg(test)]
 mod tests {
