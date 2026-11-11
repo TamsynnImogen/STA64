@@ -482,6 +482,8 @@ seam rather than writes.
 
 | CON-28 | Pure A1 MDF count and precise Camera_i start resolver; pre-code contract [A1_START_LOCATIONS.md](A1_START_LOCATIONS.md) | sta_bzn/src/a1/starts.rs, narrow a1.rs exports, dedicated tests and contract/support docs | CON-26 | Synthetic canonical/malformed MDF/path fixtures; pinned GOG new-game placement and read-only 49 A1 maps/28 MDFs | Subsequent selected-file-aware content conversion seam | Explicit checked count subset, exact first-path/first-point XYZ without grid inversion or partial results, original corpus and scoped/consumer/Clippy/workspace/Android library checks; no client/gameplay claim | S | Lead |
 
+| CON-31 | Fleet Operations identity on base Data: apply existing authored info.ini Name hint before the Data-layer skip; contract [FO_PROFILE_DETECTION.md](FO_PROFILE_DETECTION.md) | sta_content/src/profile.rs narrow loop/docs; new tests/base_profile.rs; owning doc | CON-02, CON-03, CON-05 (merged) | Synthetic Data/mod/ZFS/explicit-profile/feature fixtures and hash-preserved Roots content | Correct shared defaults for standalone FO bases on every platform | Base FO name auto-selects Fo4; explicit Profile/A1 precedence and existing hints/fallbacks retained; ContentDb defaults and zero overrides tested; shared/Clippy/workspace/Android library/unchanged-lock/full OS checks; no data or profile-default rewrite | S | Lead |
+
 ### Simulation (SIM)
 
 | ID | Package | Owns | Needs | Against | Unlocks | Done when | Size | Model |
