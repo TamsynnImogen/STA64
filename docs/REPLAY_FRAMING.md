@@ -6,7 +6,7 @@ remains separate. This change affects reading one replay file, not gameplay.
 
 ## Observed behavior
 
-The current STAR version-1 reader passes the body to `postcard::from_bytes`.
+The pre-change STAR version-1 reader passed the body to `postcard::from_bytes`.
 In pinned postcard 1.1.3, that API returns the deserialized value while
 discarding unused input. The version-specific APIs are documented at
 [`from_bytes`](https://docs.rs/postcard/1.1.3/postcard/fn.from_bytes.html) and
@@ -26,11 +26,11 @@ copies; the genuine fixture and its original generation receipts are retained.
 
 ## Contract
 
-`Replay::decode` must consume exactly one complete replay body. Use
-`postcard::take_from_bytes::<Replay>` and return `ReplayError::Corrupt` if
-the returned remainder is nonempty. Keep the existing magic, format, seam,
-content and command-order checks. There is no permitted extension suffix in
-STAR version 1.
+`Replay::decode` now consumes exactly one complete replay body. It uses
+`postcard::take_from_bytes::<Replay>` and returns `ReplayError::Corrupt` if
+the returned remainder is nonempty. The existing magic, format, seam,
+content and command-order checks remain. There is no permitted extension
+suffix in STAR version 1.
 
 The writer, STAR version 1, seam revision 1, command tags, valid encoded bytes,
 content hashes and simulation digests remain unchanged. No dependency update,

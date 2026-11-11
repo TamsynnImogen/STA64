@@ -10,7 +10,8 @@
 //!   change that breaks old replays) names the first tick that differs.
 //! - Wire format: magic `STAR`, a `u16` format version, then `postcard`.
 //!   The body also carries [`SEAM_REV`] and the content hash; [`Replay::decode`]
-//!   rejects a file whose magic, format or seam revision it does not know.
+//!   rejects a file whose magic, format or seam revision it does not know,
+//!   or whose body leaves trailing bytes.
 //!   Content is checked when a game is built from the replay.
 //! - Not in the file yet: [`GameOptions`] is empty today. When it gains
 //!   fields, add them here with a format bump.
@@ -143,7 +144,7 @@ impl Replay {
         out
     }
 
-    /// Reads a file, checking magic, format and seam revision.
+    /// Reads exactly one file, checking magic, format and seam revision.
     pub fn decode(bytes: &[u8]) -> Result<Replay, ReplayError> {
         if bytes.len() < 6 || bytes[..4] != MAGIC {
             return Err(ReplayError::BadMagic);
@@ -152,8 +153,11 @@ impl Replay {
         if found != FORMAT_VERSION {
             return Err(ReplayError::FormatVersion { found });
         }
-        let r: Replay =
-            postcard::from_bytes(&bytes[6..]).map_err(|e| ReplayError::Corrupt(e.to_string()))?;
+        let (r, remaining) = postcard::take_from_bytes::<Replay>(&bytes[6..])
+            .map_err(|e| ReplayError::Corrupt(e.to_string()))?;
+        if !remaining.is_empty() {
+            return Err(ReplayError::Corrupt("trailing bytes".into()));
+        }
         if r.seam_rev != SEAM_REV {
             return Err(ReplayError::SeamRev { found: r.seam_rev });
         }
@@ -396,6 +400,58 @@ mod tests {
         let sim = decoded.play(Arc::new(sta_content::fake::db())).unwrap();
         assert_eq!(sim.digest(), digest);
         assert_eq!(sim.view().tick, 200);
+    }
+
+    // Genuine pre-integration Recorder output; provenance and old digests
+    // are in tests/fixtures/native-control-v1.json. Never regenerate it
+    // with a changed writer to make a compatibility test pass.
+    const NATIVE_V1: &[u8] = include_bytes!("../tests/fixtures/native-control-v1.star");
+
+    #[test]
+    fn rejects_trailing_replay_data() {
+        for suffix in [&[0][..], &[0xff][..], b"unrecognized extension"] {
+            let mut bytes = NATIVE_V1.to_vec();
+            bytes.extend_from_slice(suffix);
+            assert!(
+                matches!(Replay::decode(&bytes), Err(ReplayError::Corrupt(_))),
+                "accepted replay suffix {suffix:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_concatenated_replays() {
+        let mut bytes = NATIVE_V1.to_vec();
+        bytes.extend_from_slice(NATIVE_V1);
+        assert!(matches!(
+            Replay::decode(&bytes),
+            Err(ReplayError::Corrupt(_))
+        ));
+    }
+
+    #[test]
+    fn genuine_native_v1_preserves_bytes_and_continuation() {
+        assert_eq!(NATIVE_V1.len(), 486);
+        assert_eq!(&NATIVE_V1[..6], b"STAR\x01\x00");
+        let replay = Replay::decode(NATIVE_V1).unwrap();
+        assert_eq!(replay.encode(), NATIVE_V1);
+        assert_eq!(replay.seam_rev, 1);
+        assert_eq!(replay.content_hash, 0xc0d4_3c3a_94f1_650e);
+        assert_eq!(replay.end_tick, 600);
+        assert_eq!(replay.commands.len(), 5);
+        assert_eq!(replay.digests.first(), Some(&(0, 0x0a12_857a_226d_b8ca)));
+        assert!(replay.digests.contains(&(300, 0xace6_bda2_8dd6_531f)));
+        assert_eq!(replay.digests.last(), Some(&(600, 0xe551_eb38_7ec7_a1ee)));
+
+        let mut sim = replay.play(Arc::new(sta_content::fake::db())).unwrap();
+        assert_eq!(sim.view().tick, 600);
+        assert_eq!(sim.digest(), 0xe551_eb38_7ec7_a1ee);
+        assert!(sim.unit(EntityId(1)).unwrap().pos.z > Fixed::from_int(8192));
+        for _ in 0..300 {
+            sim.step(&[]);
+        }
+        assert_eq!(sim.view().tick, 900);
+        assert_eq!(sim.digest(), 0x2b96_65c4_c00e_0f3b);
     }
 
     #[test]
