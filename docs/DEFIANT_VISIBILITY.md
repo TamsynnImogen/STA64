@@ -56,8 +56,8 @@ Counts are pixels brighter than the probe's threshold, not a visual-parity
 score. Both diagnostic test modules are registered again; their declarations
 were missing from the merged tree. The original synthetic hull fixture also
 checks a reflected single-sided object with the depth pass, without needing
-private game assets. Manual skirmish acceptance remains a separate gate before
-closing #330.
+private game assets. The user subsequently confirmed the manual skirmish check
+below; #330 can close through the renderer PR.
 
 The synthetic reflected sphere draws 2,772 lit pixels both before and after
 enabling the prepass, with zero silhouette mismatch on the local Vulkan GPU.
@@ -103,7 +103,11 @@ Missing unit models now produce a warning identifying the actor, ODF and model.
 `RUST_LOG=info,sta64::render::units=debug` also records attachment mesh/triangle
 counts and missing textures. The diagnostic launcher enables both automatically.
 
-The next manual check is ordinary construction of one Sabre in Classic,
-then moving it away from the yard and keeping its log. The depth-prepass cause
-and correction are reproduced offscreen; #330 remains open until this live
-construction/movement check confirms the hull remains visible.
+On 2026-11-11, the user confirmed **Hull stays visible** after the requested
+Classic/Federation Sabre construction-and-movement check using the staged
+`sabre-prepass-31d20cd` executable (code 7ed1cd3, documentation 31d20cd).
+Its executable SHA-256 is
+`c3f0a37cadf78a1b663e8de1189d8041a95db7724c68540d5fd7a88feab09868`.
+This accepts the reported live symptom alongside the offscreen regression;
+it does not establish every ship's original-renderer parity or Android rendering.
+All five preserved Sabre model/texture/ODF hashes remain unchanged.
