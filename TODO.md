@@ -66,6 +66,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] Original flat A1 install (CON-27, build including CON-26): manually run an updated `sta64 --install-root "<A1 install>" --map 2blue`. The map view should load placed actors/scenery directly from the existing game folder; record missing models, lighting or selection issues. The headless `--mission-report` path already enumerates all 49 maps. Do not move game files; A1 multiplayer starts still need MDF/precise-path integration. [Mount rules and checks](docs/INSTALL_ROOTS.md).
 
+- [?] Standalone FO base detection (CON-31): after merging, choose Roots through the normal STA64 install/mod entry without a forced profile. The startup `content:` line should report `profile Fo4`; confirm a skirmish loads and resource labels match the Roots content.
+
 ## Checked earlier (morning list)
 
 Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.

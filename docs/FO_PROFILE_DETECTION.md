@@ -85,3 +85,40 @@ the existing full four-OS CI because profile selection affects effective
 content rules. An Android library check alone does not build or run an APK.
 The December 2026 desktop alpha remains the priority; desktop and Android
 use this same shared loader.
+
+A single append-only TODO check is also permitted under WORKPLAN's shared-file
+rule: after merge, use the normal Roots launch and confirm the existing startup
+content line reports Fo4, then check skirmish loading and resource labels. No
+existing user check is ticked and no client source changes.
+
+## Implemented correction and validation
+
+The existing authored-name check now runs before the Data-layer skip. Seven
+focused tests passed, covering base/mod names, inheritance, explicit profiles,
+A1 archive precedence, old hints/fallbacks and actual `ContentDb::load` feature
+resolution with mod/ODF zero overrides. No matcher or default table changed.
+
+The six shared consumer suites reported 564 passes, no failures and ten
+ignored tests, including genuine original v8 continuation and the existing
+Native fake identity. Some install-gated tests return early without configured
+inputs; the total is not complete installed-content acceptance. Strict
+six-crate all-target Clippy, workspace all-target compilation, the Android
+ARM64 client-library check using NDK 29/API 26, scoped formatting/diff and
+an unchanged zero-package offline lock refresh passed. Independent read-only
+source/test review found no concrete defect.
+
+A preserved pre-fix executable of our own Rust content probe reproduced
+Sta2Classic detection for Roots. Its profile source blob is identical to the
+main audit baseline. The corrected loader selects Fo4 automatically, loads
+660 units/1151 definitions and produces content hash `32b49bb1c39f7f56`.
+This matches both the corrected forced-Fo4 load and the preserved pre-fix
+forced-Fo4 result. Automatic/forced feature bits and all 117 warning records
+are equal. These warnings remain visible; no complete-mod-validity claim is
+made. A1 and stock A2 controls still select Sta1Classic and Sta2Classic.
+
+The selected Roots `info.ini` and ODF archive hashes are unchanged across
+the check. This preservation claim does not cover every model or texture.
+Private probe sources, logs, baseline executable identity and comparison
+receipts stay outside the repository. No original executable was run, no
+installation was modified, and no APK or device/visual acceptance is claimed
+for this source. The appended TODO item remains the user's manual check.
