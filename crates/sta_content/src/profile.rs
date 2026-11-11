@@ -14,18 +14,19 @@
 //! 2. **Armada I layout.** Any layer holds a `.zfs` archive. (An `addon/`
 //!    directory is not a signature: Armada II and FO ship one too, and a
 //!    real FO Roots install detected as Armada I on it.)
-//! 3. **Fleet Operations.** Any layer other than `Data` whose folder name or
-//!    `info.ini` `Name` contains `fleet op`/`fleetop`/`fo4`/`fo 4`, or an
-//!    `mmm_loader.dll` (FO's mission loader) at a layer root or the install
-//!    root above `Data`.
+//! 3. **Fleet Operations.** Any layer whose `info.ini` `Name` contains
+//!    `fleet op`/`fleetop`/`fo4`/`fo 4`, including `Data`; a non-Data layer's
+//!    folder name with that signature; or the existing `mmm_loader.dll`
+//!    (FO's mission loader) hints at a mod layer or above `Data`.
 //! 4. **Stock Armada II.** Any other install: a `Data` layer, or a plain game
 //!    folder with an `odf/` directory, `ODF.fpq` or `Armada2.exe`, possibly
 //!    with mods that match nothing above.
 //! 5. **Native.** No `Data` layer and nothing matched (also the fallback for
 //!    unknown or custom content).
 //!
-//! The FO and A1 signatures are heuristics from the documented layouts; they
-//! are unverified against a real install here (see the install-gated test).
+//! The FO and A1 signatures are heuristics from the documented layouts.
+//! Content-selection checks, including the install-gated test, do not prove
+//! original-game runtime compatibility.
 //!
 //! # Precedence ([`resolve_features`])
 //!
@@ -160,6 +161,10 @@ impl Profile {
         // 3. Fleet Operations.
         let mut has_data = false;
         for (l, ini) in layers.iter().zip(&infos) {
+            let name = ini.as_ref().and_then(|i| i.get("mod", "name")).unwrap_or("");
+            if looks_like_fo(name) {
+                return Profile::Fo4;
+            }
             if l.name.eq_ignore_ascii_case("data") {
                 has_data = true;
                 if l.root.parent().is_some_and(|r| has_child(r, "mmm_loader.dll", false)) {
@@ -170,8 +175,7 @@ impl Profile {
             if has_child(&l.root, "odf", true) || has_child(&l.root, "odf.fpq", false) || has_child(&l.root, "armada2.exe", false) {
                 has_data = true;
             }
-            let name = ini.as_ref().and_then(|i| i.get("mod", "name")).unwrap_or("");
-            if looks_like_fo(&l.name) || looks_like_fo(name) || has_child(&l.root, "mmm_loader.dll", false) {
+            if looks_like_fo(&l.name) || has_child(&l.root, "mmm_loader.dll", false) {
                 return Profile::Fo4;
             }
         }

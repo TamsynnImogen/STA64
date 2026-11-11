@@ -68,6 +68,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] Map confinement (SIM-22 core, updated builds): in an A2/FO skirmish, order a ship toward a map edge and past an asteroid or planet near that edge. An enabled ordinary actor should stay in its configured playable volume and take an available inward route; an impossible route should retain its order for retry. Build ships with an outward rally point: each product follows its own confinement policy. Terrain keeps its spatial bypass. Owning-unit ODF overrides and their explicit-zero behavior are documented in [the core contract](docs/MAP_CONFINEMENT_CORE.md); Native content defaults off. Manual visual/runtime acceptance is pending, and the mission Lua adapter is still a separate step.
 
+- [?] Standalone FO base detection (CON-31): after merging and building the updated engine, choose Roots through the normal STA64 install/mod entry without a forced profile. The startup `content:` line should report `profile Fo4`; confirm a skirmish loads and resource labels match the Roots content.
+
 ## Checked earlier (morning list)
 
 Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
