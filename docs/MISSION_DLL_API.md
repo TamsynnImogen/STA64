@@ -15,12 +15,12 @@ user's own executables each time, and none are recorded here.
 | engine API size | 371 `ScriptInterface` methods | (imports only) |
 | distinct calls used | 138 | 213 |
 | call sites | 11708 | — |
-| A2 DLL-shaped callable | 28 | — |
-| missing A2 callable signatures | 104 | — |
+| A2 DLL-shaped callable | 36 | — |
+| missing A2 callable signatures | 96 | — |
 | MMM job-equivalent, not A2-shaped | 0 | — |
 | bound in STA64's Lua today | — | 6 |
-| in MMM's API, not yet bound | 23 | 27 |
-| no Lua equivalent (STA64 extension needed) | 81 | 144 |
+| in MMM's API, not yet bound | 21 | 27 |
+| no Lua equivalent (STA64 extension needed) | 75 | 144 |
 | script-state plumbing (n/a in Lua) | 6 | 36 |
 
 - **bound**: an existing `sta_mission` binding does the same job.
@@ -58,17 +58,17 @@ user's own executables each time, and none are recorded here.
 
 | call | scripts | call sites | status | Lua name |
 |---|---:|---:|:-:|---|
-| `void CineractiveShot(char *, float, int)` | 36 | 163 | new |  |
+| `void CineractiveShot(char *, float, int)` | 36 | 163 | A2 DLL-shaped | `A2.CineractiveShot` |
 | `void CineractiveStart(script *, bool)` | 36 | 201 | new |  |
 | `void FadeIn(script *, float, float, float, bool)` | 36 | 125 | MMM | `_Cineractive.fadeIn` |
 | `void FadeOut(script *, float, float, float, bool)` | 32 | 155 | MMM | `_Cineractive.fadeOut` |
-| `void CineractiveCameraOffset(char *, float, bool)` | 29 | 78 | MMM | `_Cineractive.setCameraOffset` |
-| `void CineractiveShot(int, int)` | 29 | 81 | new |  |
-| `void CenterCamera(int)` | 10 | 66 | new |  |
-| `void CineractiveCameraOffset(float, float, float, bool)` | 3 | 3 | MMM | `_Cineractive.setCameraOffset` |
-| `void CineractiveConstantSpeed(bool)` | 2 | 2 | new |  |
-| `void SetCameraZoom(float)` | 2 | 2 | new |  |
-| `void CineractiveShot(char *, int, int)` | 1 | 1 | new |  |
+| `void CineractiveCameraOffset(char *, float, bool)` | 29 | 78 | A2 DLL-shaped | `A2.CineractiveCameraOffset` |
+| `void CineractiveShot(int, int)` | 29 | 81 | A2 DLL-shaped | `A2.CineractiveShot` |
+| `void CenterCamera(int)` | 10 | 66 | A2 DLL-shaped | `A2.CenterCamera` |
+| `void CineractiveCameraOffset(float, float, float, bool)` | 3 | 3 | A2 DLL-shaped | `A2.CineractiveCameraOffset` |
+| `void CineractiveConstantSpeed(bool)` | 2 | 2 | A2 DLL-shaped | `A2.CineractiveConstantSpeed` |
+| `void SetCameraZoom(float)` | 2 | 2 | A2 DLL-shaped | `A2.SetCameraZoom` |
+| `void CineractiveShot(char *, int, int)` | 1 | 1 | A2 DLL-shaped | `A2.CineractiveShot` |
 
 ### Titles, text and objectives (13)
 

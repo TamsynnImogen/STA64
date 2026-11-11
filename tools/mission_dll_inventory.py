@@ -272,6 +272,14 @@ A2_SIGNATURES = {
     "void SetRealTeam(int, int)": "A2.SetRealTeam",
     "void SetPerceivedTeam(int, int)": "A2.SetPerceivedTeam",
     "int GetPerceivedTeam(int)": "A2.GetPerceivedTeam",
+    "void CenterCamera(int)": "A2.CenterCamera",
+    "void SetCameraZoom(float)": "A2.SetCameraZoom",
+    "void CineractiveConstantSpeed(bool)": "A2.CineractiveConstantSpeed",
+    "void CineractiveCameraOffset(float, float, float, bool)": "A2.CineractiveCameraOffset",
+    "void CineractiveCameraOffset(char*, float, bool)": "A2.CineractiveCameraOffset",
+    "void CineractiveShot(int, int)": "A2.CineractiveShot",
+    "void CineractiveShot(char*, int, int)": "A2.CineractiveShot",
+    "void CineractiveShot(char*, float, int)": "A2.CineractiveShot",
     "void ObjectivesDisplay_Set_Text_From_File(char*, bool)": "A2.ObjectivesDisplay_Set_Text_From_File",
 }
 

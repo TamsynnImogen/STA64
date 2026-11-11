@@ -410,6 +410,80 @@ class MissionDllInventoryTests(unittest.TestCase):
         (self.a2 / "controls.rs").write_text('table.set("SetPerceivedTeam", fn);\n', encoding="utf-8")
         self.assertEqual(inventory.a2_exact_for("int GetPerceivedTeam(int)", self.repo), "")
 
+    def test_native_camera_signatures_require_exact_registered_module_shapes(self):
+        cases = {
+            "CenterCamera": (
+                "void CenterCamera(int)",
+                ("bool CenterCamera(int)", "void CenterCamera()", "void CenterCamera(int&)", "void CenterCamera(int, int)"),
+            ),
+            "SetCameraZoom": (
+                "void SetCameraZoom(float)",
+                ("bool SetCameraZoom(float)", "void SetCameraZoom()", "void SetCameraZoom(int)", "void SetCameraZoom(float&)"),
+            ),
+            "CineractiveConstantSpeed": (
+                "void CineractiveConstantSpeed(bool)",
+                ("bool CineractiveConstantSpeed(bool)", "void CineractiveConstantSpeed()", "void CineractiveConstantSpeed(int)", "void CineractiveConstantSpeed(bool&)"),
+            ),
+            "CineractiveCameraOffset": (
+                (
+                    "void CineractiveCameraOffset(float, float, float, bool)",
+                    "void CineractiveCameraOffset(char*, float, bool)",
+                ),
+                (
+                    "bool CineractiveCameraOffset(float, float, float, bool)",
+                    "void CineractiveCameraOffset(float, float, bool)",
+                    "void CineractiveCameraOffset(float, float, float, int)",
+                    "void CineractiveCameraOffset(float&, float, float, bool)",
+                    "void CineractiveCameraOffset(char const*, float, bool)",
+                    "void CineractiveCameraOffset(char*, int, bool)",
+                    "void CineractiveCameraOffset(char*, float, int)",
+                ),
+            ),
+            "CineractiveShot": (
+                (
+                    "void CineractiveShot(int, int)",
+                    "void CineractiveShot(char*, int, int)",
+                    "void CineractiveShot(char*, float, int)",
+                ),
+                (
+                    "bool CineractiveShot(int, int)",
+                    "void CineractiveShot(int)",
+                    "void CineractiveShot(int&, int)",
+                    "void CineractiveShot(int, int, int)",
+                    "void CineractiveShot(char const*, int, int)",
+                    "void CineractiveShot(char*, int&, int)",
+                    "void CineractiveShot(char*, int, int&)",
+                    "void CineractiveShot(char*, float, bool)",
+                    "void CineractiveShot(char*, float&, int)",
+                    "void CineractiveShot(char*, double, int)",
+                ),
+            ),
+        }
+        self.register_a2(
+            "",
+            registration=(
+                'native_camera::install(lua, ctx, &a2)?; '
+                'lua.globals().raw_set("A2", a2)?;'
+            ),
+        )
+        source = self.a2 / "native_camera.rs"
+        source.write_text(
+            "".join(f'table.set("{name}", fn);\n' for name in cases),
+            encoding="utf-8",
+        )
+
+        for name, (exact, wrong) in cases.items():
+            signatures = (exact,) if isinstance(exact, str) else exact
+            for signature in signatures:
+                with self.subTest(signature=signature):
+                    self.assertEqual(inventory.a2_exact_for(signature, self.repo), f"A2.{name}")
+            for signature in wrong:
+                with self.subTest(signature=signature):
+                    self.assertEqual(inventory.a2_exact_for(signature, self.repo), "")
+
+        (self.a2 / "mod.rs").write_text('lua.globals().raw_set("A2", a2)?;', encoding="utf-8")
+        self.assertEqual(inventory.a2_exact_for("void CenterCamera(int)", self.repo), "")
+
     def test_current_health_writer_requires_exact_void_integer_float_call_shape(self):
         self.register_a2(
             'table.set("SetCurrentHealth", fn);\n',

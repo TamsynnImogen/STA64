@@ -29,6 +29,28 @@ See [the pre-code contract](../../../../../docs/LUA05_PERCEPTION_BINDINGS.md).
 The getter is not used by the currently inventoried DLL corpus and earns no
 extra used-call coverage. No full campaign or playback acceptance is implied.
 
+## Exact camera requests
+
+Five A2 names accept eight native call shapes: `CenterCamera`, `SetCameraZoom`,
+`CineractiveConstantSpeed`, two `CineractiveCameraOffset` forms and three
+`CineractiveShot` forms. They queue typed SCRIPT presentation requests through
+the existing command/replay stream. There is no client consumer for these
+requests yet; no camera motion or cinematic playback is claimed.
+
+The ambiguous path shot uses Lua 5.3 numeric categories: an Integer selects a
+point index, while a Number retains the floating path parameter. Thus
+`A2.CineractiveShot("cam", 0, id)` and the `0.0` form are distinct. Other float
+arguments accept integers or numbers. Raw values/flags are retained without
+guessing units, clamps or coordinate-space meaning. Exact arity, current live
+handles, UTF-8/no-NUL strings, strict booleans and finite 32.32 numeric range
+are validated before a request is queued. Existing MMM camera state and the
+unimplemented `Camera.center` alias are unchanged.
+
+The [pre-code contract](../../../../../docs/LUA05_CAMERA_REQUESTS.md) lists the
+eight signatures, argument roles, native evidence limits and request-only
+acceptance. Inventory credit follows the workplan's presentation-event gate;
+it is separate from a renderer implementing the operation.
+
 ## Existing presentation bridge
 
 `Cineractive`, `Media` and `UI` now queue `Edit::Present` commands from

@@ -76,6 +76,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] LUA-05 perception adapter: run Blockade beyond its fleet-isolation callback on a current campaign build. Confirm no unknown `perceivedTeam` field warnings, check the isolated ships retain their intended real owners, and keep any AIP/other unsupported diagnostics visible. A clean 1800-tick headless startup is a bounded check, not full campaign acceptance.
 
+- [?] LUA-05 camera request bridge: client rendering is still pending. Once its consumer lands, compare integer path-point and floating path shots, camera centring/zoom and both offset forms against the retained request payloads. Current headless request/replay tests do not prove visible camera movement.
+
 ## Checked earlier (morning list)
 
 Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.

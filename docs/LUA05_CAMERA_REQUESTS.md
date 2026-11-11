@@ -71,3 +71,11 @@ permits; it does not mean that a renderer has implemented that request.
 
 The original LUA-05 zero-missing gate remains unchanged. The parent stays open
 after this partial bridge even when all eight request signatures are tested.
+
+## Integrated inventory follow-up
+
+Camera source #329 merged as `8df38e1`, followed by perception #328 as
+`0d979bf`. The deferred exact mappings/report and owning documentation are
+therefore completed from that actual integrated main in a separate follow-up.
+No unmerged shield or other prerequisite code is consumed. Request capture,
+replay and exact-shape inventory proof remain separate from client playback.
