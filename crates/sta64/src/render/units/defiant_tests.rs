@@ -22,13 +22,14 @@ fn installed_defiant_unit_attaches_visible_hull() {
     .unwrap();
     let (index, _) = sta_content::OdfIndex::build(&vfs);
     let (db, _) = sta_content::ContentDb::load(&vfs, &index).unwrap();
+    let model_key = std::env::var("STA64_TEST_MODEL").unwrap_or_else(|_| "fdestroy".into());
     let defs = db
         .units()
-        .filter(|def| def.model.to_ascii_lowercase().trim_end_matches(".sod") == "fdestroy")
+        .filter(|def| def.model.to_ascii_lowercase().trim_end_matches(".sod") == model_key)
         .collect::<Vec<_>>();
     for def in &defs {
         println!(
-            "Defiant definition: odf={} model={} ScaleSOD={} key={:?}",
+            "Fixture definition: odf={} model={} ScaleSOD={} key={:?}",
             def.odf,
             def.model,
             def.scale.to_f32(),
@@ -76,7 +77,7 @@ fn installed_defiant_unit_attaches_visible_hull() {
     let models = world.resource::<UnitModels>();
     let (path, model) = models
         .models
-        .get("fdestroy")
+        .get(&model_key)
         .and_then(Option::as_ref)
         .expect("fdestroy was loaded by unit attachment");
     println!(

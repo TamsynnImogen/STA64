@@ -17,7 +17,9 @@ fn installed_defiant_draws_offscreen() {
     let root = std::env::var("STA64_TEST_INSTALL").expect("STA64_TEST_INSTALL");
     let active_mod = std::env::var("STA64_TEST_MOD").expect("STA64_TEST_MOD");
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(&active_mod)).unwrap();
-    let (path, fmt) = sta_assets::find_model(&vfs, "fdestroy").expect("Defiant model");
+    let model_key = std::env::var("STA64_TEST_MODEL").unwrap_or_else(|_| "fdestroy".into());
+    eprintln!("GPU fixture: {model_key}");
+    let (path, fmt) = sta_assets::find_model(&vfs, &model_key).expect("requested model");
     let model = sta_assets::load_model(&vfs, &path, fmt).unwrap();
     let (lo, hi) = model.bounds().expect("model bounds");
     let centre = Vec3::from(mirror(std::array::from_fn(|i| (lo[i] + hi[i]) * 0.5))) * 0.8;

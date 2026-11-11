@@ -78,6 +78,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] Classic Defiant investigation (#330): a diagnostic build with `STA64_TRACE_MODEL=fdestroy` logs model/material/visibility snapshots automatically. Build one Defiant in an ordinary Classic skirmish and retain its log. Isolated CPU attachment and windowless GPU rendering pass; the reported live invisibility is not fixed or accepted yet. [Evidence and probe instructions](docs/DEFIANT_VISIBILITY.md).
 
+- [?] Correction to #330: the affected ship is Sabre (`fdestroy2`), confirmed by the screenshot and user; Defiant is fine. Use the Sabre diagnostic launcher (`STA64_TRACE_MODEL=fdestroy2`). Both ships now pass the isolated probes; live Sabre visibility is still unresolved.
+
 ## Checked earlier (morning list)
 
 Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.

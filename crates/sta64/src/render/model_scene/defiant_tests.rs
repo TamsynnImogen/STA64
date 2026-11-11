@@ -20,10 +20,11 @@ fn classic_defiant_has_visible_opaque_hull_parts() {
         Some(mod_name.as_str()).filter(|name| !name.is_empty()),
     )
     .unwrap();
-    let (path, format) = sta_assets::find_model(&vfs, "fdestroy").expect("fdestroy model in selected install/mod");
+    let model_key = std::env::var("STA64_TEST_MODEL").unwrap_or_else(|_| "fdestroy".into());
+    let (path, format) = sta_assets::find_model(&vfs, &model_key).expect("requested model in selected install/mod");
     let model = sta_assets::load_model(&vfs, &path, format).unwrap();
     println!(
-        "Defiant model: {path} {format:?} v{}; {} nodes",
+        "Fixture model: {path} {format:?} v{}; {} nodes",
         model.version,
         model.nodes.len()
     );
@@ -116,7 +117,7 @@ fn classic_defiant_has_visible_opaque_hull_parts() {
                     damaged: false,
                     normal_maps: false,
                     parts: None,
-                    model_key: "fdestroy".to_owned(),
+                    model_key: path.clone(),
                     unlit: false,
                     scale: 1.0,
                 };
