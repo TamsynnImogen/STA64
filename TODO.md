@@ -92,6 +92,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 ## Checked earlier (morning list)
 
+- [x] Construction live-feedback fixes accepted (2026-11-11, `construction-a1666d0`): the user confirmed visible beams, later chunk reveal and the constructor staying fixed under normal/queued movement. Automated Stop/cancellation and snapshot checks pass. FPS was not reported; this does not complete broader native/Android checks above.
+
 Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 
 - [?] Nebulae no longer blown out (ScaleSOD no longer scales puff size) — `270c675`

@@ -16,6 +16,9 @@ use sta_assets::a2fmt::spr::{Skip, Sprite, SpriteTable};
 use crate::ui::theme::{UiButton, WidgetState};
 use crate::viewer::Mounted;
 
+type PageKey = (String, Option<[u8; 3]>);
+type PageImage = (Handle<Image>, UVec2);
+
 #[derive(Resource, Default)]
 pub struct GuiSkin {
     pub table: Option<String>,
@@ -26,7 +29,7 @@ pub struct GuiSprites {
     selected_path: Option<String>,
     selected: Option<SpriteTable>,
     global: Option<SpriteTable>,
-    pages: HashMap<(String, Option<[u8; 3]>), Option<(Handle<Image>, UVec2)>>,
+    pages: HashMap<PageKey, Option<PageImage>>,
     resolved: HashMap<Vec<String>, Option<(Handle<Image>, Rect)>>,
     loaded: bool,
 }
@@ -190,6 +193,7 @@ fn art(
 
 /// Paint after widget state/background systems. Deferred image insertion is
 /// flushed by Bevy at the end of the chained HUD systems.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn paint(
     mut commands: Commands,
     mounted: Option<Res<Mounted>>,

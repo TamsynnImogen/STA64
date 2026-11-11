@@ -230,7 +230,9 @@ No desktop milestone or December 2026 alpha date was changed.
   unblocked midpoint), and 5,467 at completion/reference. The final silhouettes
   match exactly. The Sabre prepass/MSAA regression remains unchanged.
 
-These automated checks do not override the rejected first live candidate.
-The wider-beam, later-reveal and stationary-constructor changes require a new
-manual Classic build/cancel/second-build check and FPS observation. Original
+The first live candidate remains rejected. On the replacement optimized
+`construction-a1666d0` build, the user confirmed "All three look correct":
+visible beams, later chunk reveal and a fixed constructor under normal/queued
+movement. This accepts those three requested fixes. FPS was not reported;
+broader native visual parity and Android runtime remain unverified. Original
 assets and reference executables were inspected read-only.
