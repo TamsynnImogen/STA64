@@ -3,7 +3,9 @@
 This is a separate seam change before Lua consumption. Real ownership remains
 the authority for commands, economy, sensors, production, victory and team colour.
 The stock A2 script setter writes a distinct, global perceived-team value on a
-finished, non-dying Craft-family object. Native relation helpers consult the
+non-dying GameObject-family object, including construction proxies. Constructor
+traces distinguish this from the narrower Craft guard used by crew APIs.
+Native relation helpers consult the
 target's perceived team from the observer's real team. This is not a per-viewer
 disguise system. Native special-weapon exceptions are outside this small seam.
 The private pinned-image audit is retained outside the repository.
@@ -16,10 +18,10 @@ The private pinned-image audit is retained outside the repository.
   the previous perceived value, including the previously implicit value; rejected
   transfers change neither identity. Despawn removes the override.
 - Append `Edit::PerceivedTeam(EntityId, PlayerId)` after all existing edit tags.
-  Only SCRIPT/BENCH may write. Require an existing, non-DYING, finished entity;
+  Only SCRIPT/BENCH may write. Require an existing, non-DYING entity;
   accept configured player seats or neutral (seatless synthetic sims accept
   slots 0..7). An eliminated seat may remain a perceived identity. This generic
-  Core edit does not decide the native Craft-family adapter guard.
+  Core edit does not infer native object ancestry from simulation actor kind.
 - Add a separate `WorldView.perceived_owners` override list and
   `WorldView::perceived_owner(id)` / `Sim::perceived_owner(id)` queries. Missing
   entities return None. Keep `UnitView.owner` authoritative and unchanged.
