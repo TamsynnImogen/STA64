@@ -43,7 +43,8 @@ impl Sim {
         sim.regions = s.map.regions.clone();
         sim.bounds = Some(s.map.bounds);
 
-        let mut warnings = Vec::new();
+        let (confinement, mut warnings) = crate::boundary::state::Confinement::prepare(Some(&s.content), sim.bounds);
+        sim.confinement = confinement;
         for o in &s.map.objects {
             let Some(key) = s
                 .content
@@ -60,6 +61,7 @@ impl Sim {
             let id = sim
                 .spawn_def(key, owner, o.pos, o.heading)
                 .expect("key resolved to a unit");
+            sim.confinement.map_loaded(sim.units.get_mut(id).expect("spawned"));
             if let Some(label) = &o.label {
                 sim.labels.insert(id, label.clone());
             }
@@ -85,6 +87,7 @@ impl Sim {
             pos,
             heading,
         ));
+        self.confinement.initialize(self.units.get_mut(id).expect("spawned"));
         self.events.push(SimEvent::Spawned { id });
         Some(id)
     }
@@ -98,6 +101,7 @@ impl Sim {
             return false;
         }
         self.labels.remove(id);
+        self.confinement.remove(id);
         self.production.remove_rally_entity(id);
         self.events.push(SimEvent::Destroyed { id, by });
         true
@@ -126,6 +130,7 @@ impl Sim {
             }
             Edit::Kill(id) => self.despawn(id, None),
             Edit::Team(id, to) => self.transfer_owner(from, id, to),
+            Edit::ForceOntoMap { id, enabled } => self.units.get(id).is_some_and(|u| self.confinement.set(u, enabled)),
             Edit::Damage(id, amount) => {
                 // Straight to the hull, past the shields; lethal unless immortal.
                 let Some(u) = self.units.get_mut(id).filter(|u| u.hull[0] > Fixed::ZERO) else {

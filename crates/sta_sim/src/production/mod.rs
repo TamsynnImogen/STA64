@@ -361,6 +361,7 @@ impl Production {
         db: &ContentDb,
         eco: &mut Economy,
         events: &mut Vec<SimEvent>,
+        confinement: &mut crate::boundary::state::Confinement,
     ) {
         if self.is_empty() {
             return;
@@ -378,6 +379,7 @@ impl Production {
             let Some(s) = units.get_mut(id) else { continue };
             if done >= ticks {
                 s.progress = None;
+                confinement.initialize(s);
                 let (owner, mobile) = (s.owner, s.orderable());
                 self.welds.remove(id);
                 if mobile {
@@ -415,6 +417,7 @@ impl Production {
                             unit.target = self.rallies.destination(yard, owner, units).or(out.exit);
                         }
                         let id = units.spawn(unit);
+                        confinement.initialize(units.get_mut(id).expect("spawned"));
                         events.push(SimEvent::Built { builder: yard, id });
                         events.push(SimEvent::Spawned { id });
                     }
@@ -469,6 +472,7 @@ impl Production {
                 Entity::from_def(def, db.features(), d.owner, d.at, (Fixed::ZERO, Fixed::ONE));
             s.progress = Some(Fixed::ZERO);
             let id = units.spawn(s);
+            confinement.initialize(units.get_mut(id).expect("spawned"));
             self.welds.insert(
                 id,
                 Weld {

@@ -50,6 +50,9 @@ pub struct MapObject {
     pub entity_id: i32,
     pub team: i32,
     pub label: String,
+    /// Prefix `pos`, separate from the final transform; absent when unavailable.
+    /// Uses the returned map's coordinates, including A1 resize conversion.
+    pub initial_position: Option<[f32; 3]>,
     /// Right, up, front, position: the same layout as a SOD `Matrix34`.
     pub transform: [f32; 12],
     /// Light objects (`dlight`): `lightColorRed/Green/Blue`, text maps only for now.
@@ -258,6 +261,7 @@ fn parse_binary(recs: &[Rec]) -> Map {
             ..Default::default()
         };
         let p = vec3(pos);
+        o.initial_position = Some(p);
         o.transform = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, p[0], p[1], p[2]];
         // The fields up to the transform, within a short window.
         let mut j = i + 4;
@@ -448,6 +452,15 @@ fn parse_text(text: &str) -> Map {
         let end = starts.get(k + 1).copied().unwrap_or(fs.len());
         let block = &fs[s + 1..end];
         let get = |name: &str| block.iter().find(|f| f.name == name).and_then(|f| f.values.first()).cloned();
+        // Preserve a complete prefix independently of transform precedence.
+        // Leave the older partial-coordinate fallback below unchanged.
+        let initial_position = block.iter().position(|f| f.name == "pos").and_then(|p| {
+            let component = |axis: &str| {
+                block[p + 1..].iter().take(4).find(|f| f.name == axis)
+                    .and_then(|f| f.values.first()).and_then(|v| v.parse().ok())
+            };
+            Some([component("x")?, component("y")?, component("z")?])
+        });
         let num: HashMap<&str, f32> = [
             "right_x", "right_y", "right_z", "up_x", "up_y", "up_z", "front_x", "front_y", "front_z", "position.x", "position.y",
             "position.z",
@@ -486,6 +499,7 @@ fn parse_text(text: &str) -> Map {
             entity_id: get("EntityID").and_then(|v| v.parse().ok()).unwrap_or(0),
             team: get("team").and_then(|v| v.parse().ok()).unwrap_or(0),
             label: get("label").unwrap_or_default(),
+            initial_position,
             transform: t,
             light_colour: match (get("lightColorRed"), get("lightColorGreen"), get("lightColorBlue")) {
                 (Some(r), Some(g), Some(b)) => Some([r, g, b].map(|v| v.parse().unwrap_or(1.0))),

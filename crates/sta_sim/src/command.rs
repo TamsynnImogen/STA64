@@ -132,6 +132,10 @@ pub enum Edit {
     /// live target and SCRIPT/BENCH privileges; ordinary players are rejected.
     /// Appended to preserve every existing postcard Edit tag.
     Hull(EntityId, Fixed),
+    /// Only changes the saved flag; projection occurs on position updates.
+    /// Requires a live represented actor with usable bounds and SCRIPT/BENCH.
+    /// Appended tag 20 preserves every previous payload and tag.
+    ForceOntoMap { id: EntityId, enabled: bool },
 }
 
 /// A unit system a mission can switch on or off.

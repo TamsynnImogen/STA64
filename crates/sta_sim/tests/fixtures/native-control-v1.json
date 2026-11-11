@@ -1,0 +1,60 @@
+{
+  "format_version": 1,
+  "seam_revision": 1,
+  "bytes": 486,
+  "sha256": "635cfe97e39facc92309c17decc5d25ff8c790828e68b8ee122b484e02335ff4",
+  "fixture_kind": "Own-authored synthetic Native fake content; genuine pre-integration Recorder output, no original game data or rewritten version byte.",
+  "generation_working_commit": "815ef39c1ca5f6e8ba21188e93ea1ac06c9279e1",
+  "simulation_source_base": "3896abdffd11fd7737e5287f71ea4e0982c0addd",
+  "replay_source_sha256": "6876aaea5c451d1b3aaeac1cdfc32205a721978809a70861b9b878591d087da4",
+  "fake_content_source_sha256": "b21a2481ababcf4fdbb2843e80ca5f6bb333188e46e5c32eccb9e7b28c5bee14",
+  "generator_api": "Recorder::with_interval(&setup, 30); step the following commands at their ticks, empty batches otherwise, through tick600; finish().encode().",
+  "setup": {
+    "seed": 22,
+    "content": "Arc::new(sta_content::fake::db())",
+    "content_hash": "c0d43c3a94f1650e",
+    "map": "MapDef::empty(), name sim22_native_pre_integration; one fx_cruiser, owner0, pos(0,0,7900), heading(0,1), label cruiser",
+    "players": "PlayerId0, TeamId0, race fx, Human",
+    "options": "GameOptions::default()"
+  },
+  "commands": [
+    {
+      "tick": 0,
+      "player": 0,
+      "seq": 0,
+      "kind": "Order::Move entity1 to(0,0,9000), queue false"
+    },
+    {
+      "tick": 1,
+      "player": 0,
+      "seq": 1,
+      "kind": "Order::Move entity1 to(300,0,9300), queue true"
+    },
+    {
+      "tick": 100,
+      "player": "SCRIPT",
+      "seq": 0,
+      "kind": "Edit::Hull entity1, Fixed::from_int(650); old tag19"
+    },
+    {
+      "tick": 150,
+      "player": "SCRIPT",
+      "seq": 1,
+      "kind": "Edit::SpawnRequest request77, fake fx_miner ContentKey, owner0, pos(6000,0,1000), heading(0,1); old tag18"
+    },
+    {
+      "tick": 500,
+      "player": 0,
+      "seq": 2,
+      "kind": "Order::Stop entity1"
+    }
+  ],
+  "expected_digests": {
+    "0": "0a12857a226db8ca",
+    "300": "ace6bda28dd6531f",
+    "600": "e551eb387ec7a1ee",
+    "900": "2b9665c4c00e0f3b"
+  },
+  "continuation": "Replay::decode(...).play(fake::db()) reaches600 with every recorded digest checked; 300 empty steps reach900. Cruiser z exceeds raw map maximum8192.",
+  "preservation": "Keep this original fixture unchanged. Suffix/concatenation rejection tests create synthetic copies in memory. Do not regenerate old compatibility evidence with a changed writer."
+}

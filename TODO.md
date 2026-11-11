@@ -66,7 +66,7 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] Original flat A1 install (CON-27, build including CON-26): manually run an updated `sta64 --install-root "<A1 install>" --map 2blue`. The map view should load placed actors/scenery directly from the existing game folder; record missing models, lighting or selection issues. The headless `--mission-report` path already enumerates all 49 maps. Do not move game files; A1 multiplayer starts still need MDF/precise-path integration. [Mount rules and checks](docs/INSTALL_ROOTS.md).
 
-- [?] Original loose-file A2 root (CON-29, updated build): run `sta64 --install-root "<A2 root>" --mission-report`; it should mount the existing folder and enumerate its maps without moving files into Data. Then open a familiar multiplayer map with `--map <name>` and check models, lighting, selection and orders. An explicit mod still requires the existing Data/Mods layout. [Recognition rules](docs/A2_INSTALL_ROOTS.md).
+- [?] Map confinement (SIM-22 core, updated builds): in an A2/FO skirmish, order a ship toward a map edge and past an asteroid or planet near that edge. An enabled ordinary actor should stay in its configured playable volume and take an available inward route; an impossible route should retain its order for retry. Build ships with an outward rally point: each product follows its own confinement policy. Terrain keeps its spatial bypass. Owning-unit ODF overrides and their explicit-zero behavior are documented in [the core contract](docs/MAP_CONFINEMENT_CORE.md); Native content defaults off. Manual visual/runtime acceptance is pending, and the mission Lua adapter is still a separate step.
 
 ## Checked earlier (morning list)
 

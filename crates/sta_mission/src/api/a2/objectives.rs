@@ -1,8 +1,23 @@
-//! DLL-named objective display visibility control.
+//! DLL-named objective display controls over host mission state.
 
 use mlua::{Lua, MultiValue, Table, Value};
 
-use crate::api::Shared;
+use crate::api::{ObjectiveState, Shared};
+
+fn objective_slot(value: &Value) -> mlua::Result<usize> {
+    let slot = match value {
+        Value::Integer(n) => i32::try_from(*n).ok().filter(|n| *n >= 0),
+        Value::Number(n)
+            if n.is_finite() && *n >= 0.0 && *n <= f64::from(i32::MAX) && n.fract() == 0.0 =>
+        {
+            Some(*n as i32)
+        }
+        _ => None,
+    };
+    slot.map(|n| n as usize).ok_or_else(|| {
+        mlua::Error::runtime("A2.ObjectivesDisplaySetObjectiveComplete requires a nonnegative signed-32-bit integer slot")
+    })
+}
 
 pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()> {
     let c = ctx.clone();
@@ -23,8 +38,37 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
             Ok(())
         })?,
     )?;
+
+    let c = ctx.clone();
+    table.set(
+        "ObjectivesDisplaySetObjectiveComplete",
+        lua.create_function(move |_, args: MultiValue| {
+            if args.len() != 2 {
+                return Err(mlua::Error::runtime(
+                    "A2.ObjectivesDisplaySetObjectiveComplete requires exactly two arguments",
+                ));
+            }
+            let slot = objective_slot(&args[0])?;
+            let Value::Boolean(complete) = &args[1] else {
+                return Err(mlua::Error::runtime(
+                    "A2.ObjectivesDisplaySetObjectiveComplete requires a boolean completion value",
+                ));
+            };
+            if let Some(objective) = c.borrow_mut().objectives.get_mut(slot) {
+                objective.state = if *complete {
+                    ObjectiveState::Complete
+                } else {
+                    ObjectiveState::Active
+                };
+            }
+            Ok(())
+        })?,
+    )?;
     Ok(())
 }
+
+#[cfg(test)]
+mod completion_tests;
 
 #[cfg(test)]
 mod tests {

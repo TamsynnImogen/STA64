@@ -235,6 +235,14 @@ version bump alone does not settle replay or future network compatibility.
 Exercise actual recorded commands and final digests; no networking rewrite is
 part of this seam.
 
+The independent [strict replay framing prerequisite](REPLAY_FRAMING.md)
+preserves STAR1/seam1 and valid bytes while rejecting unused input. The frozen
+old decoder accepted both a byte suffix and a concatenated second replay;
+do not assume old readers will reject an appended record. Replay serializes
+the full `MapDef`/`MapObject`, so retaining a distinct source placement for
+initialization also affects its positional body. That future layout needs an
+explicit format/legacy-body decision; the framing fix does not authorize it.
+
 ## Source scope and acceptance gates
 
 No source freeze or implementation is declared by this document. Proposed
