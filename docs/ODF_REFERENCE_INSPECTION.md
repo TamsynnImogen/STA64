@@ -61,3 +61,39 @@ or device test. The reference checkout stays clean at its pinned revision.
 
 This optional author diagnostic adds no gameplay or Android release gate;
 the December 2026 desktop alpha remains the immediate priority.
+
+## Implemented usage and checks
+
+From the workspace root:
+
+```sh
+cargo run -p sta_content --example odf_references -- /path/to/install ship --mod MyMod
+cargo run -p sta_content --example odf_references -- /path/to/unpacked/root ship --loose-root
+cargo test -p sta_content --example odf_references
+```
+
+Reports contain tab-separated `source`, `warning` and `link` rows, with escaped
+field values. A successful link row may look like:
+
+```text
+link    key=weapon1    ref=MyGun    status=indexed    layer=MyMod    path=odf/weapons/mygun.odf
+```
+
+The example and manifest test opt-in are implemented. Five focused tests pass;
+the content suite reports 132 passes and no failures, including these five.
+Some existing installed-content tests return early without their environment
+variables, so that count is not proof of installed-mod validation. Strict
+content Clippy, workspace all-target checking, scoped formatting/diff checks
+and an offline zero-package lock refresh pass; Cargo.lock is unchanged. The
+Android ARM64 client-library check passes with NDK29/API26. No new APK or
+device test was requested for this author diagnostic.
+
+A separate real CLI sample inspected four original installed A2 ODFs:
+fconst, fcruise1, fbase and fyard. It reported 37 indexed links, no missing
+targets and exit 0. All 1,089 installed ODF hashes remain unchanged. Synthetic
+subprocess checks verify help0, usage2, operational1 and advisory-missing0.
+An actual before/after CLI probe exposed and then verified a source-name fix:
+the inspector now resolves the index winner's exact filename, so a leading
+space cannot redirect its values to a different file. The reference checkout
+remains clean at the pinned source. These checks do not run an original game
+or establish target-file validity or full campaign/mod compatibility.

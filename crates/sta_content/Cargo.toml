@@ -21,3 +21,7 @@ thiserror.workspace = true
 json5.workspace = true
 # The install tests resolve models the way the renderer does (`sta_assets::find_model`).
 sta_assets.workspace = true
+
+[[example]]
+name = "odf_references"
+test = true

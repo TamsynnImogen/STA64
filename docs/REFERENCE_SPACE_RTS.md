@@ -148,8 +148,8 @@ new work in this follow-up.
 The remaining bounded diagnostic gap is selected effective ODF links. The
 reference's `src/bin/odf_check.rs` displays these links, whereas STA64's
 existing `odf_index` example primarily inventories winners and includes.
-[EDT-10](ODF_REFERENCE_INSPECTION.md) will independently adapt that diagnostic
-idea over STA64's existing VFS, ODF index and layered resolver. It will not
+[EDT-10](ODF_REFERENCE_INSPECTION.md) independently implements that diagnostic
+idea over STA64's existing VFS, ODF index and layered resolver. It does not
 copy the reference's filesystem resolver or use its generated schemas as
 runtime defaults. Only the new example/tests/contract and additive audit/plan
 lines are owned; the open selected-map PR's earlier audit updates remain
