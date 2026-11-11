@@ -1,7 +1,8 @@
 //! Immutable planet rule families resolved by the profile-aware ODF loader.
 //!
-//! This metadata does not grant mining, ownership, production or colonization
-//! capabilities. Those need their own shared simulation contracts.
+//! Role metadata does not itself grant mining, ownership, production or
+//! colonization capabilities. Producer crew gain is a separate resolved input
+//! for a derived capacity, not a crew stock or population count.
 
 use sta_odf::Odf;
 
@@ -48,6 +49,32 @@ pub(crate) fn resolve(file: &str, odf: &Odf, profile: Profile, warnings: &mut Ve
             warnings.push(Warning::new(
                 file,
                 format!("{ROLE_KEY} = {raw} is not none, background or producer; using profile/class default"),
+            ));
+            fallback
+        }
+    }
+}
+
+/// Resolve the effective producer contribution after the role is known.
+/// Other roles do not read or diagnose an unused `maxCrewGain` key.
+pub(crate) fn resolve_crew_gain(
+    file: &str,
+    odf: &Odf,
+    profile: Profile,
+    role: Option<PlanetRole>,
+    warnings: &mut Vec<Warning>,
+) -> i32 {
+    if role != Some(PlanetRole::Producer) {
+        return 0;
+    }
+    let fallback = if matches!(profile, Profile::Sta2Classic | Profile::Fo4) { 10_000 } else { 0 };
+    let Some(raw) = odf.str("maxCrewGain") else { return fallback };
+    match raw.trim().parse::<i32>() {
+        Ok(value) => value,
+        Err(_) => {
+            warnings.push(Warning::new(
+                file,
+                format!("maxCrewGain = {raw} is not a signed 32-bit decimal integer; using profile default {fallback}"),
             ));
             fallback
         }
