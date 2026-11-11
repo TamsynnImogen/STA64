@@ -34,6 +34,12 @@ use crate::viewer::{Mounted, TeamColours};
 use crate::clock::AnimClock;
 use crate::sim_link::{SimEntity, SimLink};
 
+mod diagnostics;
+
+#[cfg(test)]
+#[path = "units/defiant_tests.rs"]
+mod defiant_tests;
+
 /// Selection radius in world units, on the entity drawn for a sim unit.
 #[derive(Component)]
 pub struct SelectRadius(pub f32);
@@ -87,6 +93,7 @@ pub struct UnitsRenderPlugin;
 impl Plugin for UnitsRenderPlugin {
     fn build(&self, app: &mut App) {
         add_view_systems(app);
+        app.add_systems(Last, diagnostics::trace);
     }
 }
 
@@ -252,7 +259,10 @@ fn attach_models(
                 })
             })
             .clone();
-        let Some((path, model)) = found else { continue };
+        let Some((path, model)) = found else {
+            warn!("unit model unavailable: id={:?} odf={} model={key}", sim.map(|s| s.0), def.odf);
+            continue;
+        };
         let scale = def.scale.to_f32();
         // What the map view gives the ships it draws itself: a click radius from the
         // model's bounds, and for team-owned things a strategic icon of the right
@@ -296,7 +306,9 @@ fn attach_models(
             unlit: false,
             scale: if scale > 0.0 { scale } else { 1.0 },
         };
-        model_scene::spawn(&mut ctx, &model, e);
+        let stats = model_scene::spawn(&mut ctx, &model, e);
+        debug!("unit model attached: id={:?} odf={} model={key} meshes={} triangles={} missing_textures={:?}",
+            sim.map(|s| s.0), def.odf, stats.meshes, stats.triangles, stats.missing_textures);
     }
 }
 

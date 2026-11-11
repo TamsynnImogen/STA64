@@ -19,6 +19,13 @@ use sta_assets::a2fmt::Matrix34;
 use sta_assets::model::{Group, Keys, Mesh as ModelMesh, Model, NodeKind};
 use std::collections::{HashMap, HashSet};
 
+#[cfg(test)]
+#[path = "model_scene/defiant_tests.rs"]
+mod defiant_tests;
+#[cfg(test)]
+#[path = "model_scene/defiant_gpu.rs"]
+mod defiant_gpu;
+
 /// Step-keyed SOD animation on one node. Keys are evenly spaced over `period`.
 #[derive(Component)]
 pub struct NodeAnim {
