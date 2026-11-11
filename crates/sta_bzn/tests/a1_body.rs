@@ -169,6 +169,8 @@ fn complete_a1_map_retains_metadata_placements_mission_aois_and_paths() {
         assert_eq!(&a1.mission_title[11..15], b"TAIL");
         assert_eq!(a1.object_refs, [0xDEAD_BEEF, 0]);
         assert_eq!(a1.initial_positions, [[25.0, 3.0, 0.0], [75.0, -4.0, 100.0]]);
+        assert_eq!(map.objects[0].initial_position, Some(a1.initial_positions[0]));
+        assert_eq!(map.objects[1].initial_position, Some(a1.initial_positions[1]));
         assert_eq!(map.version, 2051);
         assert!(map.binary);
         assert_eq!(map.mission_type, mission);
@@ -232,6 +234,8 @@ fn resize_maps_xz_only_for_objects_transforms_and_path_points() {
     assert_eq!(map.min_extent, [-100.0, -999.0, 100.0]);
     assert_eq!(map.size, [400.0, 1998.0, 400.0]);
     assert_eq!(a1.initial_positions, [[0.0, 3.0, 200.0], [200.0, -4.0, 400.0]]);
+    assert_eq!(map.objects[0].initial_position, Some(a1.initial_positions[0]));
+    assert_eq!(map.objects[1].initial_position, Some(a1.initial_positions[1]));
     assert_eq!(
         &map.objects[0].transform[..9],
         &[0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, -1.0]
@@ -250,6 +254,8 @@ fn separate_factory_position_does_not_replace_authored_final_transform() {
     let a1 = map.a1.as_ref().unwrap();
     assert_eq!(a1.initial_positions[0], [150.0, -123.0, 200.0]);
     assert_eq!(a1.initial_positions[1], [75.0, -4.0, 100.0]);
+    assert_eq!(map.objects[0].initial_position, Some([150.0, -123.0, 200.0]));
+    assert_eq!(map.objects[1].initial_position, Some([75.0, -4.0, 100.0]));
     assert_eq!(&map.objects[0].transform[9..], &[25.0, 3.0, 0.0]);
     assert_eq!(
         &map.objects[0].transform[..9],
