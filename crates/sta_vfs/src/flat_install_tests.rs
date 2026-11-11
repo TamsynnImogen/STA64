@@ -88,7 +88,11 @@ fn data_child_wins_over_valid_flat_root_archive_and_keeps_mod_chain() {
 
     let base = Vfs::mount_install(root.path(), None).unwrap();
     assert_eq!(base.layers().len(), 1);
-    assert_eq!(base.layers()[0].root, root.path().join("dAtA"));
+    // Case-insensitive filesystems can retain "Data" for the same physical directory.
+    assert_eq!(
+        fs::canonicalize(&base.layers()[0].root).unwrap(),
+        fs::canonicalize(root.path().join("dAtA")).unwrap()
+    );
     assert_eq!(read(&base, "odf/ship.odf"), b"data ship");
     assert!(
         base.read("odf/only.odf").is_none(),

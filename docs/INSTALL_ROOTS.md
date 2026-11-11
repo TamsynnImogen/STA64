@@ -98,3 +98,10 @@ refresh changed zero packages. Independent source review found no confirmed
 defect. All 49 original map and two ZFS archive hashes remained unchanged.
 No APK, device, graphical map-view or gameplay acceptance is implied by these
 checks; the manual check above remains outstanding.
+
+The first full-CI macOS run exposed a test-only path-spelling assumption:
+`Data` and `dAtA` can identify the same directory on a case-insensitive volume.
+The fixture now compares canonical directory identity while retaining its
+content and mod-chain assertions. Production mounting is unchanged. The 55
+VFS library and three CLI tests, and strict scoped Clippy, passed again on
+Linux after this correction; the updated full matrix remains pending.
