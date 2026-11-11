@@ -37,6 +37,12 @@ edits rather than a new shield system or duplicate mission-side state.
 - Emit no Hit/ShieldsDown event just for a setter. Normal subsequent damage,
   recharge and Heal consume the mutated instance state through their existing
   rules. Sorted SCRIPT sequences determine multiple edits' application order.
+- A reproduced accepted-range boundary requires a narrow recharge correction:
+  near Fixed's positive endpoint, adding recharge currently wraps negative
+  before the existing maximum clamp. Add in widened integer storage and clamp
+  before converting back. Keep the rate, cap and normal-value rule identical;
+  no arithmetic-format or gameplay-default change. Retain the failing-before
+  and passing-after endpoint regression.
 
 No new gameplay default, resource limit, profile/ODF/CFG/AIP change, mutable table
 or view field is needed. Existing entity shield hashing and snapshot-11 records
@@ -53,6 +59,8 @@ Own a new private shield-edit helper/test module and narrow lib/command/spawn
 integration, this contract, a WORKPLAN seam note and append-only TODO. No Lua
 adapter consumes this separate prerequisite until merged. No mission/client/
 content/network/dependency source or original input changes are part of it.
+The sole additional owned path is `combat/damage.rs::recharge` for the reproduced
+overflow correction above; no general damage/Fixed arithmetic rewrite.
 
 Required proof: SCRIPT/BENCH versus player rejection; absent/DYING atomicity;
 absolute maximum/fill and fraction-of-maximum order; single/directional and
