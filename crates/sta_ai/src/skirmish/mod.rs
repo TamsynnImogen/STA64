@@ -251,6 +251,7 @@ struct Own {
     pos: Vec3,
     role: Role,
     finished: bool,
+    welding: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -346,7 +347,8 @@ impl SkirmishController {
                     }
                     self.rig_jobs.remove(builder);
                 }
-                // A rig that deployed is free again, though its weld goes on.
+                // Drop the pending-job count once deployment starts; the view's
+                // BUILDING flag keeps the rig unavailable while it welds.
                 SimEvent::BuildStarted { builder, .. } => {
                     self.rig_jobs.remove(builder);
                 }
@@ -403,7 +405,14 @@ impl SkirmishController {
                 continue;
             }
             if u.owner == seat {
-                own.push(Own { id: u.id, def: u.def, pos: u.pos, role: role_of(&db, u.def), finished: finished(u) });
+                own.push(Own {
+                    id: u.id,
+                    def: u.def,
+                    pos: u.pos,
+                    role: role_of(&db, u.def),
+                    finished: finished(u),
+                    welding: u.flags.contains(UnitFlags::BUILDING),
+                });
             } else if me.relations.iter().any(|&(p, r)| p == u.owner && r == Relation::Enemy) {
                 let role = role_of(&db, u.def);
                 if role != Role::Other || is_station(&db, u.def) {
@@ -576,7 +585,10 @@ impl SkirmishController {
         }
 
         // Rigs deploy the stations the AIP lists that are not there yet.
-        let idle_rigs: Vec<&Own> = own.iter().filter(|o| o.role == Role::Rig && o.finished && !self.rig_jobs.contains_key(&o.id)).collect();
+        let idle_rigs: Vec<&Own> = own
+            .iter()
+            .filter(|o| o.role == Role::Rig && o.finished && !o.welding && !self.rig_jobs.contains_key(&o.id))
+            .collect();
         for r in idle_rigs {
             let opts = buildable(r.def);
             let want = rows

@@ -155,7 +155,8 @@ impl Sim {
             .iter()
             .copied()
             .filter(|&id| {
-                self.unit(id)
+                (matches!(order, Order::Stop { .. }) || !self.production.is_welding(id))
+                    && self.unit(id)
                     .is_some_and(|u| u.orderable() && (!player.is_player() || u.owner == player))
             })
             .collect();
@@ -183,6 +184,19 @@ impl Sim {
             _ => return false,
         }
         true
+    }
+
+    /// Stop both residual velocity and old waypoints at the weld boundary.
+    /// Also runs before physics so later target writers cannot restart a rig.
+    pub(crate) fn hold_welding_builders(&mut self) {
+        for id in self.production.welding_builders() {
+            if let Some(unit) = self.units.get_mut(id) {
+                unit.target = None;
+                unit.speed = Fixed::ZERO;
+                unit.omega = Fixed::ZERO;
+            }
+            self.movement.clear(id);
+        }
     }
 
     fn move_group(&mut self, ids: &[EntityId], to: Vec3, queue: bool) {

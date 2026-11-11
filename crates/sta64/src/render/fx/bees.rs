@@ -30,6 +30,8 @@ pub struct BeeSpec {
     pub sprite: Option<String>,
     /// `weldingBeamWidth`; absent defaults to one, explicit zero disables the beam.
     pub width: f32,
+    /// STA64 presentation stand-off from the station edge, in world units.
+    pub stand_off: f32,
     pub takeoff: f32,
     pub welding: f32,
     pub closure: f32,
@@ -80,6 +82,7 @@ pub fn bee_spec(odf: &Odf) -> Option<BeeSpec> {
             .map(str::to_owned).collect(),
         sprite,
         width: timing("weldingbeamwidth", 1.0),
+        stand_off: timing("sta64_workerbeestandoff", 15.0),
         takeoff: timing("timeuntiltakeoff", 2.0),
         welding: timing("timewelding", 0.5),
         closure: timing("timeuntilclosure", 2.0),
@@ -130,17 +133,20 @@ impl BeeMotion {
     }
 
     /// Advance toward a pending chunk edge, or return from the actual last position.
+    #[allow(clippy::too_many_arguments)]
     pub fn update(
         &mut self,
         now: f64,
         home: Vec3,
+        site_center: Vec3,
         edges: &[Vec3],
         bee: u8,
         spec: &BeeSpec,
         returning: bool,
     ) {
         const SPEED: f32 = 80.0;
-        const STANDOFF: f32 = 3.0;
+        const RETARGET_TOLERANCE: f32 = 3.0;
+        let hover = |edge: Vec3| edge + (edge - site_center).normalize_or((edge - home).normalize_or(Vec3::Y)) * spec.stand_off;
         if !now.is_finite() {
             return;
         }
@@ -168,16 +174,16 @@ impl BeeMotion {
                 return;
             }
             if let Some(next) =
-                nearby.filter(|next| next.distance_squared(self.edge) <= STANDOFF * STANDOFF)
+                nearby.filter(|next| next.distance_squared(self.edge) <= RETARGET_TOLERANCE * RETARGET_TOLERANCE)
             {
                 self.edge = next;
                 if self.phase == BeePhase::Traveling {
-                    self.destination = next + (home - next).normalize_or(Vec3::Y) * STANDOFF;
+                    self.destination = hover(next);
                 }
             } else {
                 self.edge = edges[(bee as usize + self.cycle) % edges.len()];
                 self.from = self.at;
-                self.destination = self.edge + (home - self.edge).normalize_or(Vec3::Y) * STANDOFF;
+                self.destination = hover(self.edge);
                 self.since = now;
                 self.phase = BeePhase::Traveling;
                 return;
@@ -196,8 +202,7 @@ impl BeeMotion {
                     if edges.is_empty() { self.blocked_on_edge = true; break; }
                     self.edge = edges[(bee as usize + self.cycle) % edges.len()];
                     self.from = self.at;
-                    self.destination =
-                        self.edge + (home - self.edge).normalize_or(Vec3::Y) * STANDOFF;
+                    self.destination = hover(self.edge);
                     self.since = if self.blocked_on_edge { now } else { self.since + f64::from(spec.takeoff) };
                     self.blocked_on_edge = false;
                     self.phase = BeePhase::Traveling;
@@ -225,8 +230,7 @@ impl BeeMotion {
                     self.cycle += 1;
                     self.from = self.at;
                     self.edge = edges[(bee as usize + self.cycle) % edges.len()];
-                    self.destination =
-                        self.edge + (home - self.edge).normalize_or(Vec3::Y) * STANDOFF;
+                    self.destination = hover(self.edge);
                     self.phase = BeePhase::Traveling;
                 }
                 BeePhase::Returning => {
@@ -301,6 +305,7 @@ mod tests {
         );
         let defaults = bee_spec(&odf("numberOfWorkerBees = 2\nworkerBeeName = \"bee\"\n")).unwrap();
         assert_eq!(defaults.sprite.as_deref(), Some("phaser"));
+        assert_eq!(defaults.stand_off, 15.0);
         assert_eq!(
             (
                 defaults.width,
@@ -315,43 +320,53 @@ mod tests {
             (clamped.takeoff, clamped.welding, clamped.closure),
             (0.0, 0.0, 0.0)
         );
+        let hover = bee_spec(&odf("numberOfWorkerBees = 1\nworkerBeeName = \"bee\"\nSTA64_workerBeeStandOff = 0\n")).unwrap();
+        assert_eq!(hover.stand_off, 0.0);
+        let mut motion = BeeMotion::new(0.0, Vec3::ZERO);
+        let edge = Vec3::new(10.0, 0.0, 0.0);
+        let mut immediate = hover.clone();
+        immediate.takeoff = 0.0;
+        motion.update(0.2, Vec3::ZERO, Vec3::ZERO, &[edge], 0, &immediate, false);
+        assert_eq!(motion.phase, BeePhase::Welding);
+        assert_eq!(motion.at, edge, "zero stand-off is an exact edge override");
     }
 
     #[test]
     fn phase_is_sim_timed_and_edge_changes_stop_welding() {
         let spec = bee_spec(&odf("numberOfWorkerBees = 1\nworkerBeeName = \"bee\"\n")).unwrap();
         let home = Vec3::ZERO;
-        let edge = Vec3::new(80.0, 0.0, 0.0);
+        let edge = Vec3::new(40.0, 0.0, 0.0);
         let mut regular = BeeMotion::new(0.0, home);
         let mut irregular = regular;
         for now in [0.0, 1.0, 2.0, 2.5, 3.1] {
-            regular.update(now, home, &[edge], 0, &spec, false);
+            regular.update(now, home, Vec3::ZERO, &[edge], 0, &spec, false);
         }
         for now in [0.0, 0.17, 1.23, 2.25, 2.75, 3.1] {
-            irregular.update(now, home, &[edge], 0, &spec, false);
+            irregular.update(now, home, Vec3::ZERO, &[edge], 0, &spec, false);
         }
         assert_eq!(regular.phase, BeePhase::Welding);
         assert_eq!(irregular.phase, regular.phase);
         assert_eq!(irregular.at, regular.at);
         assert_eq!(regular.edge, edge);
+        assert!(regular.at.distance(edge) >= 15.0, "default beam length");
         let paused = regular.at;
-        regular.update(3.1, home, &[edge], 0, &spec, false);
+        regular.update(3.1, home, Vec3::ZERO, &[edge], 0, &spec, false);
         assert_eq!(regular.at, paused);
-        let next = Vec3::new(0.0, 80.0, 0.0);
-        regular.update(3.2, home, &[next], 0, &spec, false);
+        let next = Vec3::new(0.0, 40.0, 0.0);
+        regular.update(3.2, home, Vec3::ZERO, &[next], 0, &spec, false);
         assert_eq!(regular.phase, BeePhase::Traveling);
         assert_eq!(regular.edge, next);
         assert_eq!(regular.at, paused);
-        regular.update(3.3, home, &[], 0, &spec, false);
+        regular.update(3.3, home, Vec3::ZERO, &[], 0, &spec, false);
         assert_eq!(regular.phase, BeePhase::Waiting);
         assert_eq!(
             regular.at, paused,
             "missing edge must not snap the bee home"
         );
-        regular.update(3.4, home, &[], 0, &spec, true);
+        regular.update(3.4, home, Vec3::ZERO, &[], 0, &spec, true);
         assert_eq!(regular.phase, BeePhase::Returning);
         assert_eq!(regular.at, paused);
-        regular.update(4.5, home, &[], 0, &spec, true);
+        regular.update(4.5, home, Vec3::ZERO, &[], 0, &spec, true);
         assert_eq!(regular.phase, BeePhase::Closing);
         assert_eq!(regular.at, home);
     }
@@ -362,17 +377,17 @@ mod tests {
         let home = Vec3::ZERO;
         let edge = Vec3::new(80.0, 0.0, 0.0);
         let mut bee = BeeMotion::new(0.0, home);
-        bee.update(8.0, home, &[], 0, &spec, false);
+        bee.update(8.0, home, Vec3::ZERO, &[], 0, &spec, false);
         assert_eq!(bee.phase, BeePhase::Waiting);
-        bee.update(8.0, home, &[edge], 0, &spec, false);
+        bee.update(8.0, home, Vec3::ZERO, &[edge], 0, &spec, false);
         assert_eq!(bee.phase, BeePhase::Traveling);
         assert_eq!(bee.at, home, "late geometry must not fast-forward flight");
-        bee.update(8.25, home, &[edge], 0, &spec, false);
+        bee.update(8.25, home, Vec3::ZERO, &[edge], 0, &spec, false);
         let partway = bee.at;
         assert!(partway.x > 0.0 && partway.x < edge.x);
-        bee.update(8.3, home, &[], 0, &spec, false);
+        bee.update(8.3, home, Vec3::ZERO, &[], 0, &spec, false);
         assert_eq!(bee.at, partway);
-        bee.update(20.0, home, &[edge], 0, &spec, false);
+        bee.update(20.0, home, Vec3::ZERO, &[edge], 0, &spec, false);
         assert_eq!(bee.phase, BeePhase::Traveling);
         assert_eq!(bee.at, partway, "reappearing edge must not teleport bee");
     }

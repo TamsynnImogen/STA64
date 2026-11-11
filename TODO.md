@@ -86,6 +86,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] Station construction (#349, updated builds): build a Federation station in Armada 2 Classic. Its solid hull should appear in chunks; bees should leave the constructor's named bays after the takeoff delay, weld with sparks on the next chunk's edges, return home and then let the bays close. Cancel a second station and start another build to check returning bees and cleanup. Constructor timing/beam overrides and the station's optional `constructionChunks` are documented in [construction visuals](docs/CONSTRUCTION_VISUALS.md). Automated geometry/phase and windowless render checks are separate from this live acceptance check.
 
+- [?] Station construction live follow-up (#349): on the updated candidate, confirm the wider outward bee stand-off makes `weldbeam` visible and no station chunks appear until the first welding interval has completed. During welding, Move and queued Move must leave the constructor fixed; Stop cancels the unfinished station (the active weld remains non-refundable) and permits a new order. Check the same with a second build and note FPS. `STA64_workerBeeStandOff` is overrideable on the constructor ODF. This follows the rejected first candidate; it does not mark that earlier visual check accepted.
+
 ## Checked earlier (morning list)
 
 Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.

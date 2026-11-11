@@ -35,7 +35,8 @@ fn one(db: &ContentDb, u: &UnitView) -> Capabilities {
     }
     let mobile = kind == EntityKind::Craft
         && def.movement.max_speed > Fixed::ZERO
-        && !u.flags.contains(UnitFlags::ENGINES_OFF);
+        && !u.flags.contains(UnitFlags::ENGINES_OFF)
+        && !u.flags.contains(UnitFlags::BUILDING);
     let attack = !u.flags.contains(UnitFlags::WEAPONS_OFF)
         && def.hardpoints.iter().any(|h| {
             db.weapon(h.weapon.key)
@@ -51,7 +52,7 @@ fn one(db: &ContentDb, u: &UnitView) -> Capabilities {
         stop,
         move_order: mobile,
         attack,
-        build: !def.build.list.is_empty(),
+        build: !def.build.list.is_empty() && !u.flags.contains(UnitFlags::BUILDING),
         mine: mobile && (def.miner || def.class.0 == "freighter"),
         specials,
     }
@@ -89,6 +90,27 @@ mod tests {
     use sta_sim::command::{CommandKind, Order, Target};
     use sta_sim::{EntityId, PlayerId, Vec3, WorldView};
     use std::sync::Arc;
+
+    #[test]
+    fn welding_constructor_keeps_stop_but_loses_move_mine_and_build() {
+        let mut constructor = UnitDef::new("test_constructor", "constructionrig");
+        constructor.movement = sta_content::MoveStats::from_f32(100.0, 1.0, 1.0, 1.0, 0.2);
+        constructor.miner = true;
+        constructor.build.list = vec![DefRef::new("test_station")];
+        let db = ContentDb::builder().unit(constructor).unit(UnitDef::new("test_station", "starbase")).build().unwrap();
+        let mut unit = UnitView {
+            id: EntityId(1), def: db.key("test_constructor").unwrap(), owner: PlayerId(0),
+            pos: Vec3::ZERO, heading: (Fixed::ZERO, Fixed::ONE), speed: Fixed::ZERO,
+            hull: [Fixed::ONE; 2], shields: [[Fixed::ZERO; 2]; 4],
+            flags: UnitFlags::SELECTABLE, progress: None,
+        };
+        let idle = one(&db, &unit);
+        assert!(idle.stop && idle.move_order && idle.mine && idle.build);
+        unit.flags = unit.flags.with(UnitFlags::BUILDING, true);
+        let welding = one(&db, &unit);
+        assert!(welding.stop);
+        assert!(!welding.move_order && !welding.mine && !welding.build);
+    }
 
     #[test]
     fn specials_require_same_supported_slot_and_weapon_capability() {

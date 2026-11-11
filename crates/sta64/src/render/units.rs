@@ -94,6 +94,7 @@ impl Plugin for UnitsRenderPlugin {
     fn build(&self, app: &mut App) {
         add_view_systems(app);
         app.init_resource::<crate::render::construction::ConstructionEdges>()
+            .init_resource::<crate::render::construction::ConstructionWork>()
             .add_systems(
                 PostUpdate,
                 crate::render::construction::sync_reveal
@@ -325,9 +326,9 @@ fn attach_models(
             .and_then(|unit| link.curr().unit(unit.0))
             .and_then(|unit| unit.progress)
             .map(|progress| progress.to_f32().clamp(0.0, 1.0));
-        let stats = if let Some(progress) = progress {
+        let stats = if progress.is_some_and(|progress| progress < 1.0) {
             let chunks = construction_chunk_count(def);
-            model_scene::spawn_construction(&mut ctx, &model, e, chunks, progress)
+            model_scene::spawn_construction(&mut ctx, &model, e, chunks, 0.0)
         } else {
             model_scene::spawn(&mut ctx, &model, e)
         };

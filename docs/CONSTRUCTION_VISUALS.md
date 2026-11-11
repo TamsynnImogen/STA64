@@ -2,9 +2,13 @@
 
 ## Contract (before implementation)
 
-This RND-11 follow-up changes presentation only. `UnitView.progress`, simulation
-ticks, payment, completion, save formats and multiplayer rules stay shared and
-unchanged. An unfinished station reveals opaque geometry in discrete spatial
+The initial RND-11 candidate changed presentation only. Following live feedback,
+the shared simulation also holds constructors stationary while welding and
+refuses new movement/build orders until completion or explicit Stop. Stop
+cancels the unfinished station using the existing non-refundable active-weld
+payment rule. Approach movement and pending-deploy refunds remain available.
+`UnitView.progress`, construction duration and save/wire layouts are unchanged;
+the lock derives from existing weld records. An unfinished station reveals opaque geometry in discrete spatial
 chunks. It does not fade its entire hull in. Cloaking still uses its existing
 independent opacity path.
 
@@ -43,6 +47,10 @@ chunk edges, dwell for `timeWelding`, and return home at completion/cancellation
 Welding is disabled during travel and return. Closure delay begins after return;
 production-end model animation should wait for the returning bees. Visual
 timings use `AnimClock`, including pause/replay behavior, not wall time.
+`STA64_workerBeeStandOff` in the constructor ODF sets minimum outward hover
+clearance (default 15 world units; explicit zero is allowed). Geometry stays
+hidden until the first completed weld interval, then visual progress is rebased
+over the remaining simulation progress so logical completion is not delayed.
 
 ## Native evidence and limits
 
@@ -50,15 +58,38 @@ Stock A2 `odf/ships/const.odf` authors six bees, `bot1` through `bot6`, `weldbea
 width 1 and takeoff/welding/closure delays 2/0.5/2 seconds. These are authored
 defaults inherited by constructors, not proof of executable root-class defaults.
 STA64 uses these three timing values as documented fallbacks where absent;
-they remain overrideable in the constructor ODF. Stock class loading defaults
-the beam sprite to `phaser` and reads the other fields from its class template.
+they remain overrideable in the constructor ODF. The recovered **A1** class
+loader defaults the beam sprite to `phaser` and reads other fields from its
+class template; this does not prove an A2 executable default. A2's mounted ODFs
+explicitly author `weldbeam`.
 
-The local A2FOExtensions stock-A2 pseudocode (`_inferred/WorkerBee.cpp`, update
+The local A2FOExtensions **Armada 1** pseudocode (`_inferred/WorkerBee.cpp`, update
 at 0x00518250) shows home/exit, travel, timed welding, return and closure states,
 and movement at 80 world units per second. `modules/A2FOAnimations/module.cpp`
 defers the production-end animation until every bee has returned; this does not
 extend logical station construction time. These are static source findings,
-not native runtime acceptance or proof of identical A1/FO behavior.
+not native runtime acceptance or proof of identical A2/FO behavior.
+
+The generated corpus is pinned to SHA256
+`1c37ee8e4a24380c950a91ce5a7f9f96c4fcf3d8ffc0cc7e58faec3835350be6`,
+which matches the local GOG A1 `Armada.exe`. It does **not** match either local
+A2 `Armada2.exe` (`8d3ba6ec826198daf3e0c7b3435e9ce8195293e56da7c87e0af2634eaa4693b3`
+and `e1a51cc6d8482744c195d4602f5a45b3e926f59249c5547983fd6a7bb58415bb`).
+The initial document called this stock A2; that attribution was incorrect.
+Offsets from it must not be applied to A2. A PE-section-mapped static read of
+the matching A1 image confirms `DAT_005d2b00` is float 15.0 (file offset
+0x001d2b00, bytes `00 00 70 41`). No original game executable was run. The user
+requested the movement lock; the inspected binaries have not established A2
+movement admission or cancellation refund behavior.
+
+The requested `A2FOHookExtensions/reverse_engineering/Armada2` clean recovery
+pins the first A2 hash above. Its current named CraftProcess recovery covers
+persistence, not constructor locomotion. The sibling FleetOpsHook recovery's
+`producer_process_callbacks32::CancelBuild` adjusts a pending-item counter and
+forwards cancellation to native code; this does not establish the forwarded
+refund rule. Those two trees remain the references for further A2/FO checks;
+the bounded construction search did not establish bee hover or weld movement
+rules there. Historical patched-host notes are not clean A2 evidence.
 
 `_unattributed/110000.cpp` at 0x00519010 copies class fields +0x570,
 +0x578 and +0x574 into the bee's takeoff, welding and closure timers. Recovered
@@ -121,6 +152,41 @@ Sabre rendering checks remain separate.
 
 ## Validation (2026-11-11)
 
+### Live feedback follow-up (contract before changes)
+
+The first live candidate was rejected: bees hovered too close to the hull for
+the beam to be visible, and chunks appeared before welding had taken effect.
+Increase the default stand-off to 15 world units, outward from the station
+centre; `STA64_workerBeeStandOff` on the constructor ODF can override it.
+This minimum beam clearance is STA64 presentation policy, not a recovered native
+beam-length default. Native worker positioning uses a radius-derived offset;
+the previous fixed 3-unit gap did not provide adequate clearance.
+
+For constructors with active bees, hold geometry at zero until a bee completes
+its first authored `timeWelding` interval, then rebase visual progress over the
+remaining simulation progress. This prevents an initial jump while keeping
+logical completion at the existing simulation tick. Constructors without bees
+retain progress-based chunk reveal. Completion always restores the full model,
+including exceptionally short jobs that finish before bee arrival.
+
+The user also requires the constructor to stop and refuse movement once station
+welding starts. The approach to a chosen construction site is still mobile;
+Stop/cancellation and completion release the lock. Use the existing active weld
+record rather than adding save/wire state. Enforce this in shared simulation,
+including queued orders and already-running movement, with desktop/Android
+using the same rule. This is an intentional gameplay change requested after
+the first candidate only. The lock is visible through the existing `BUILDING`
+view flag, so Move/Mine/Build controls are unavailable while Stop remains.
+Skirmish AI uses that same view flag to choose idle constructors and avoids
+issuing replacement builds to a welding rig.
+Collision separation treats a welding constructor as fixed; old waypoints and
+residual velocity are cleared. Explicit Stop removes its unfinished child
+without refunding the active weld. Stop on an unfinished station cancels that
+site and releases its constructor too. Engines running different gameplay
+versions should not be mixed merely because the wire layout is unchanged.
+
+### Initial candidate evidence (live acceptance rejected)
+
 - Client library: 361 passed, zero failed, one existing ignored test. Includes
   geometry partition/edge/restore checks, exact quoted ODF hardpoints, explicit
   zero overrides, waiting/travel/welding/return phases, late geometry, parallel
@@ -145,3 +211,26 @@ Stock A1/FO visual equivalence has not been established. Chunk order is the
 STA64 spatial policy, not recovered native section ordering. The previous
 24-bee presentation cap remains; this does not alter simulation unit limits.
 No desktop milestone or December 2026 alpha date was changed.
+
+### Live-feedback follow-up verification
+
+- All-target client/simulation tests pass: 363 client library tests (one existing
+  ignored), 286 simulation library tests and their integration suites. Fourteen
+  AI tests pass, including the busy-constructor positive/negative controls.
+- Lock tests cover all four content profiles, direct/queued moves, replacement
+  builds, mixed groups, residual velocity, craft/field displacement, explicit
+  Stop on either constructor or site, destruction and snapshot continuation.
+  Existing construction completion ticks are unchanged.
+- Strict all-target Clippy for client, simulation and AI, workspace/all-target
+  compilation and Android ARM64 client-library compilation pass.
+- `construction` (3,900 ticks), `construction-fo` (4,000) and `rally` (1,700)
+  scenarios pass all 67 steps, with zero failures or skips.
+- The real Classic shipyard GPU capture is zero pixels while waiting and at
+  the first-weld latch, 3,135 pixels at the rebased midpoint (identical to the
+  unblocked midpoint), and 5,467 at completion/reference. The final silhouettes
+  match exactly. The Sabre prepass/MSAA regression remains unchanged.
+
+These automated checks do not override the rejected first live candidate.
+The wider-beam, later-reveal and stationary-constructor changes require a new
+manual Classic build/cancel/second-build check and FPS observation. Original
+assets and reference executables were inspected read-only.

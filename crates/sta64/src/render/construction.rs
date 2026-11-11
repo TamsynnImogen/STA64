@@ -20,6 +20,34 @@ pub struct ConstructionEdges {
     pub sites: BTreeMap<EntityId, Vec<Vec3>>,
 }
 
+/// Weld-gated visual start point for each station construction sequence.
+/// Missing site entries leave progress ungated; an explicit `None` holds at 0.
+#[derive(Resource, Default)]
+pub struct ConstructionWork {
+    pub starts: BTreeMap<EntityId, Option<f32>>,
+}
+
+/// Convert simulation progress to visual progress after the first authored weld.
+/// A full simulation completion always restores the full original mesh.
+pub(crate) fn effective_progress(progress: f32, start: Option<Option<f32>>) -> f32 {
+    if progress.is_finite() && progress >= 1.0 {
+        return 1.0;
+    }
+    if !progress.is_finite() {
+        return 0.0;
+    }
+    let progress = progress.clamp(0.0, 1.0);
+    match start {
+        None => progress,
+        Some(None) => 0.0,
+        Some(Some(start)) if !start.is_finite() || start >= 1.0 => 0.0,
+        Some(Some(start)) => {
+            let start = start.clamp(0.0, 1.0);
+            ((progress - start) / (1.0 - start)).clamp(0.0, 1.0)
+        }
+    }
+}
+
 /// CPU-side indices and real triangle-edge midpoints for one rendered part.
 /// This Arc exists only on an unfinished instance's mesh entity.
 pub(crate) struct ConstructionSource {
@@ -288,11 +316,17 @@ fn stage_indices(source: &ConstructionSource, completed: usize) -> Vec<u32> {
         .collect()
 }
 
+fn completed_stages(progress: f32, count: usize) -> usize {
+    (progress.clamp(0.0, 1.0) * count as f32).floor() as usize
+}
+
 /// Advance active partial meshes and publish the next chunk's transformed edge
 /// midpoints. Runs after transform propagation so targets use current hierarchy.
+#[allow(clippy::too_many_arguments)]
 pub fn sync_reveal(
     mut commands: Commands,
     link: Res<SimLink>,
+    work: Option<Res<ConstructionWork>>,
     roots: Query<(Entity, &SimEntity)>,
     mut parts: Query<(Entity, &GlobalTransform, &mut Mesh3d, &mut ConstructionPart)>,
     mut decorations: Query<(Entity, &ConstructionDecor, &mut Visibility)>,
@@ -318,12 +352,14 @@ pub fn sync_reveal(
     }
     let mut seen_targets = HashMap::<EntityId, HashSet<[u32; 3]>>::new();
     for (entity, transform, mut mesh_handle, mut construction) in &mut parts {
-        let Some((site, progress)) = by_root.get(&construction.owner).copied() else {
+        let Some((site, sim_progress)) = by_root.get(&construction.owner).copied() else {
             restore(&mut commands, &mut meshes, entity, &mut mesh_handle, &construction);
             continue;
         };
+        let gate = work.as_ref().and_then(|work| work.starts.get(&site).copied());
+        let progress = effective_progress(sim_progress, gate);
         let count = construction.source.stage_indices.len();
-        let completed = (progress * count as f32).floor() as usize;
+        let completed = completed_stages(progress, count);
         if completed >= count {
             restore(&mut commands, &mut meshes, entity, &mut mesh_handle, &construction);
             continue;
@@ -428,6 +464,48 @@ mod tests {
         let count = |completed| stage_indices(&source, completed).len() / 3;
         assert_eq!((count(0), count(1), count(2)), (0, 1, 2));
         assert_eq!(source.stage_indices.iter().map(|s| s.len() / 3).sum::<usize>(), 2);
+    }
+
+    #[test]
+    fn first_weld_gate_holds_then_maps_remaining_progress_without_a_jump() {
+        let progress = 0.5;
+        assert_eq!(effective_progress(progress, Some(None)), 0.0);
+        let model = model(square_groups(), [0.0; 3]);
+        let plan = ConstructionPlan::build(&model, 2, 1.0, &HashSet::from([0])).unwrap();
+        let source = plan.part_source(&model, 0, 0, model.nodes[0].mesh().unwrap(), 1.0);
+        assert_eq!(
+            completed_stages(effective_progress(progress, Some(None)), plan.chunk_count),
+            0
+        );
+        assert!(stage_indices(&source, 0).is_empty());
+        assert!(
+            !source.stage_edges[0].is_empty(),
+            "waiting bees must still target the first chunk"
+        );
+
+        // Latching the first weld at the current sim progress starts at visual 0.
+        assert_eq!(effective_progress(progress, Some(Some(progress))), 0.0);
+        assert_eq!(
+            completed_stages(effective_progress(progress, Some(Some(progress))), plan.chunk_count),
+            0
+        );
+        assert_eq!(effective_progress(0.75, Some(Some(progress))), 0.5);
+        assert_eq!(
+            completed_stages(effective_progress(0.75, Some(Some(progress))), plan.chunk_count),
+            1
+        );
+        assert_eq!(
+            effective_progress(0.75, None),
+            0.75,
+            "missing work entry remains ungated"
+        );
+        assert_eq!(
+            effective_progress(1.0, Some(None)),
+            1.0,
+            "sim completion always restores full geometry"
+        );
+        assert_eq!(effective_progress(0.5, Some(Some(f32::NAN))), 0.0);
+        assert_eq!(effective_progress(0.5, Some(Some(1.0))), 0.0);
     }
 
     #[test]

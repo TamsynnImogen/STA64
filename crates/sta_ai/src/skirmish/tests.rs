@@ -8,7 +8,7 @@
 
 use std::collections::BTreeSet;
 
-use sta_content::{Aip, ContentDb, TechTree};
+use sta_content::{Aip, BuildItem, ContentDb, DefRef, TechTree};
 use sta_core::{EntityId, Fixed, PlayerId, TICK_HZ, TeamId, Tick, Vec3};
 use sta_sim::command::{Command, CommandKind, Edit, Order};
 use sta_sim::setup::{Control, GameOptions, GameSetup, PlayerSetup};
@@ -200,4 +200,77 @@ fn config_reads_the_map() {
     assert_eq!(c.enemy_starts, [Vec3 { x: Fixed::from_int(4000), y: Fixed::ZERO, z: Fixed::ZERO }]);
     assert_eq!(c.nodes.len(), 1, "the moon");
     assert_eq!(c.race, "fx");
+}
+
+#[test]
+fn welding_rigs_are_skipped_until_the_building_flag_clears() {
+    let fake = sta_content::fake::db();
+    let mut rig = sta_content::UnitDef::new("fx_rig", "craft");
+    rig.race = "fx".into();
+    rig.class.0 = "constructionrig".into();
+    rig.build.list = vec![DefRef::new("fx_station")];
+    let mut b = ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
+    for w in fake.weapons() {
+        b = b.weapon(w.clone());
+    }
+    for u in fake.units() {
+        b = b.unit(u.clone());
+    }
+    let db = Arc::new(b.unit(rig).build().unwrap());
+    let rig_key = db.key("fx_rig").unwrap();
+    let station_key = db.key("fx_station").unwrap();
+    let mut cfg = SkirmishConfig {
+        player: P0,
+        race: "fx".into(),
+        content: db,
+        home: Vec3::ZERO,
+        enemy_starts: Vec::new(),
+        nodes: Vec::new(),
+        seed: 1,
+        params: Params::default(),
+    };
+    cfg.params.build_list = vec![BuildItem {
+        unit: "fx_station".into(),
+        count: Fixed::from_int(2),
+        base: None,
+        max: None,
+        tech_level: None,
+    }];
+    let me = PlayerView {
+        id: P0,
+        team: TeamId(0),
+        resources: vec![Fixed::from_int(10_000); 4],
+        officers: [Fixed::ZERO; 2],
+        eliminated: false,
+        relations: Vec::new(),
+    };
+    let rig_view = |id, building| sta_sim::view::UnitView {
+        id: EntityId(id),
+        def: rig_key,
+        owner: P0,
+        pos: Vec3::ZERO,
+        heading: (Fixed::ONE, Fixed::ZERO),
+        speed: Fixed::ZERO,
+        hull: [Fixed::ONE; 2],
+        shields: [[Fixed::ZERO; 2]; 4],
+        flags: sta_sim::view::UnitFlags::SELECTABLE.with(sta_sim::view::UnitFlags::BUILDING, building),
+        progress: None,
+    };
+    let run = |units| {
+        let view = WorldView { units, ..WorldView::default() };
+        let mut ai = SkirmishController::new(cfg.clone());
+        let mut out = Vec::new();
+        ai.plan(&view, &me, &mut out);
+        out
+    };
+    let builds = |out: &[Command]| {
+        out.iter().filter_map(|c| match &c.kind {
+            CommandKind::Order(Order::Build { builder, what, .. }) => Some((*builder, *what)),
+            _ => None,
+        }).collect::<Vec<_>>()
+    };
+
+    assert!(builds(&run(vec![rig_view(1, true)])).is_empty(), "a welding rig must not receive another build order");
+    assert_eq!(builds(&run(vec![rig_view(1, true), rig_view(2, false)])), [(EntityId(2), station_key)]);
+    assert_eq!(builds(&run(vec![rig_view(1, false)])), [(EntityId(1), station_key)], "the rig is available again once BUILDING clears");
 }
