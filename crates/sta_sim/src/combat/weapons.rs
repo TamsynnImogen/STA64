@@ -4,6 +4,8 @@
 //! - Each armed entity has one mount per hardpoint of its definition. A mount
 //!   fires when its weapon is ready, the target is alive, inside the weapon's
 //!   range and inside the hardpoint's arc ([`in_arc`]).
+//!   In a seated game the target must also be in the shooter's team's current
+//!   sensor visibility; an allied spotter can supply that vision.
 //! - A beam hits on the tick it fires and is drawn for `duration` ticks (the
 //!   client derives `fire.end` as the `Fired` tick plus `duration`). A
 //!   projectile flies at `shot_speed` toward its target's current position and
@@ -252,6 +254,9 @@ impl Weapons {
         }
         self.shots = flying;
 
+        // Compute after this tick's movement, using the exact same shared-vision
+        // rule as WorldView. Do not use last tick's view or explored fog.
+        let visibility = crate::sensors::compute(units, Some(db), teams);
         for u in units.iter() {
             if u.flags.contains(UnitFlags::WEAPONS_OFF) {
                 continue;
@@ -275,7 +280,12 @@ impl Weapons {
                 } else {
                     None
                 };
-                let Some(t) = self.pick(u, w.range, arc, units, teams, perception) else {
+                // Seatless legacy/bench sources are omniscient, as their views
+                // are. An unknown owner in a configured game sees nothing.
+                let seen = (!teams.is_empty()).then(|| visibility.iter()
+                    .find(|(player, _)| *player == u.owner)
+                    .map_or(&[][..], |(_, ids)| ids.as_slice()));
+                let Some(t) = self.pick(u, w.range, arc, units, teams, perception, seen) else {
                     continue;
                 };
                 if self.mounts.get(u.id).is_none() {
@@ -362,6 +372,7 @@ impl Weapons {
 
     /// The target a mount of `u` shoots at, if any: the ordered one when it
     /// can be hit, else the nearest enemy that can.
+    #[allow(clippy::too_many_arguments)]
     fn pick<'a>(
         &self,
         u: &Entity,
@@ -370,12 +381,14 @@ impl Weapons {
         units: &'a Entities,
         teams: &[(PlayerId, TeamId)],
         perception: &Table<PlayerId>,
+        seen: Option<&[EntityId]>,
     ) -> Option<&'a Entity> {
         let team = |p: PlayerId| teams.iter().find(|x| x.0 == p).map(|x| x.1);
         // A cloaked unit is only a target for its own team.
         let unseen = |t: &Entity| t.flags.contains(UnitFlags::CLOAKED) && team(t.owner) != team(u.owner);
         let hittable = |t: &Entity| {
             t.id != u.id
+                && seen.is_none_or(|ids| ids.binary_search(&t.id).is_ok())
                 && !unseen(t)
                 && t.hull[1] > Fixed::ZERO
                 && flat(u.pos, t.pos).1 <= range

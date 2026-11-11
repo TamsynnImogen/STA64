@@ -229,3 +229,95 @@ fn same_run_same_digest() {
     };
     assert_eq!(d(), d());
 }
+
+/// Artillery range exceeds its own sensors. Player 3 shares player 1's vision.
+fn artillery() -> (Sim, EntityId, EntityId) {
+    artillery_kind(sta_content::WeaponKind::Beam)
+}
+
+fn artillery_kind(kind: sta_content::WeaponKind) -> (Sim, EntityId, EntityId) {
+    use sta_content::{ContentDb, DefRef, Hardpoint, UnitDef, WeaponDef};
+    let mut weapon = WeaponDef::new("sight_gun", "phaser", kind);
+    weapon.range = Fixed::from_int(600);
+    weapon.damage = Fixed::ONE;
+    weapon.refire = 1;
+    weapon.shot_speed = Fixed::from_int(3000);
+    let mut gun = UnitDef::new("sight_artillery", "craft");
+    gun.hull = Fixed::from_int(100);
+    gun.sensor = Fixed::from_int(100);
+    gun.hardpoints.push(Hardpoint { weapon: DefRef::new("sight_gun"), node: "hp01".into(), arc: None });
+    let mut scout = UnitDef::new("sight_scout", "craft");
+    scout.hull = Fixed::from_int(100);
+    scout.sensor = Fixed::from_int(100);
+    let db = ContentDb::builder().weapon(weapon).unit(gun).unit(scout).build().unwrap();
+    let setup = GameSetup {
+        seed: 340, map: Arc::new(sta_content::MapDef::empty()), content: Arc::new(db),
+        players: [(1,1), (2,2), (3,1)].into_iter().map(|(id,team)| PlayerSetup {
+            id: PlayerId(id), team: TeamId(team), race: "test".into(), control: Control::Idle,
+        }).collect(), options: GameOptions::default(),
+    };
+    let mut sim = Sim::from_setup(&setup);
+    let gun = sim.content.as_ref().unwrap().key("sight_artillery").unwrap();
+    let scout = sim.content.as_ref().unwrap().key("sight_scout").unwrap();
+    let shooter = sim.spawn_def(gun, PlayerId(1), v(2000,0,2000), AHEAD).unwrap();
+    let target = sim.spawn_def(scout, PlayerId(2), v(2000,0,2500), AHEAD).unwrap();
+    (sim, shooter, target)
+}
+
+fn fired_by(events: &[SimEvent], shooter: EntityId) -> bool {
+    events.iter().any(|e| matches!(e, SimEvent::Fired { shooter: s, .. } if *s == shooter))
+}
+
+#[test]
+fn artillery_needs_current_shared_vision_for_ordered_and_automatic_fire() {
+    for ordered in [false, true] {
+        let (mut sim, shooter, target) = artillery();
+        let cmds: Vec<_> = ordered.then(|| attack(1,shooter,target)).into_iter().collect();
+        assert!(!fired_by(&sim.step(&cmds).events, shooter));
+        let scout = sim.content.as_ref().unwrap().key("sight_scout").unwrap();
+        let spotter = sim.spawn_def(scout, PlayerId(3), v(2000,0,2550), AHEAD).unwrap();
+        assert!(fired_by(&sim.step(&[]).events, shooter), "allied spotter, ordered={ordered}");
+        sim.despawn(spotter, None);
+        assert!(!fired_by(&sim.step(&[]).events, shooter), "explored fog is not current vision");
+        if ordered { assert_eq!(sim.weapons.attack_of(shooter), Some(target)); }
+        // Even with current allied sight the weapon's range still applies.
+        sim.units.get_mut(target).unwrap().pos = v(2000,0,2700);
+        sim.spawn_def(scout, PlayerId(3), v(2000,0,2750), AHEAD).unwrap();
+        assert!(!fired_by(&sim.step(&[]).events, shooter));
+        // Return inside range, then cloak: allied sensors cannot reveal it.
+        sim.units.get_mut(target).unwrap().pos = v(2000,0,2500);
+        let entity = sim.units.get_mut(target).unwrap();
+        entity.flags = entity.flags.with(crate::view::UnitFlags::CLOAKED, true);
+        sim.spawn_def(scout, PlayerId(3), v(2000,0,2550), AHEAD).unwrap();
+        assert!(!fired_by(&sim.step(&[]).events, shooter));
+    }
+}
+
+#[test]
+fn unknown_owners_get_no_seated_vision_but_seatless_legacy_api_is_omniscient() {
+    let (mut sim, shooter, target) = artillery();
+    sim.units.get_mut(shooter).unwrap().owner = PlayerId(9);
+    assert!(!fired_by(&sim.step(&[attack(9,shooter,target)]).events, shooter));
+    sim.players.clear();
+    assert!(fired_by(&sim.step(&[]).events, shooter));
+}
+
+
+#[test]
+fn launched_projectiles_survive_lost_sight_and_snapshot_resume() {
+    let (mut sim, shooter,target)=artillery_kind(sta_content::WeaponKind::Projectile);
+    sim.units.get_mut(target).unwrap().pos=v(2000,0,2080);
+    assert!(fired_by(&sim.step(&[attack(1,shooter,target)]).events,shooter));
+    sim.units.get_mut(target).unwrap().pos=v(2000,0,2500);
+    let bytes=sim.snapshot();
+    let mut restored=Sim::from_snapshot(&bytes,sim.content.clone()).unwrap();
+    let mut hit=false;
+    for _ in 0..10 {
+        let a=sim.step(&[]); let b=restored.step(&[]);
+        assert_eq!(a.view.digest,b.view.digest);
+        assert_eq!(a.events,b.events);
+        assert!(!fired_by(&a.events,shooter),"no new shot without sight");
+        hit |= a.events.iter().any(|e|matches!(e,SimEvent::Hit {target:t,by,..} if *t==target && *by==shooter));
+    }
+    assert!(hit,"already launched projectile should still arrive");
+}
