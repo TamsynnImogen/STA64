@@ -26,13 +26,13 @@ use sta_sim::view::UnitFlags;
 use sta_sim::{ContentKey, EntityId, PlayerId, WorldView};
 
 use crate::app::GameSet;
+use crate::clock::AnimClock;
 use crate::render::model_scene::{self, PartCache, SpawnCtx};
 use crate::render::sprites::SpriteTables;
 use crate::render::textures::{Loader, TextureCache};
 use crate::sim_link::{ContentRes, SimEntities};
-use crate::viewer::{Mounted, TeamColours};
-use crate::clock::AnimClock;
 use crate::sim_link::{SimEntity, SimLink};
+use crate::viewer::{Mounted, TeamColours};
 
 mod diagnostics;
 
@@ -93,6 +93,13 @@ pub struct UnitsRenderPlugin;
 impl Plugin for UnitsRenderPlugin {
     fn build(&self, app: &mut App) {
         add_view_systems(app);
+        app.init_resource::<crate::render::construction::ConstructionEdges>()
+            .add_systems(
+                PostUpdate,
+                crate::render::construction::sync_reveal
+                    .after(TransformSystems::Propagate)
+                    .run_if(resource_exists::<SimLink>),
+            );
         app.add_systems(Last, diagnostics::trace);
     }
 }
@@ -225,7 +232,8 @@ pub struct UnitModels {
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn attach_models(
     mut commands: Commands,
-    pending: Query<(Entity, &NeedsModel, &TeamColour, Option<&UnitOwner>, Option<&SimEntity>)>,
+    pending: Query<(Entity, &NeedsModel, &TeamColour, Option<&UnitOwner>, Option<&SimEntity>,
+    )>,
     mut moons: ResMut<crate::render::moons::MoonVariants>,
     mut silhouettes: Option<ResMut<crate::render::strategic::Silhouettes>>,
     vfs: Res<Mounted>,
@@ -237,24 +245,28 @@ fn attach_models(
     mut cache: ResMut<TextureCache>,
     mut parts: ResMut<PartCache>,
     mut models: ResMut<UnitModels>,
+    link: Res<SimLink>,
     device: Option<Res<RenderDevice>>,
 ) {
     let formats = device.map(|d| CompressedImageFormats::from_features(d.features())).unwrap_or(CompressedImageFormats::BC);
     for (e, need, team, owner, sim) in &pending {
         commands.entity(e).remove::<NeedsModel>();
-        let Some(def) = content.0.unit(need.0) else { continue };
+        let Some(def) = content.0.unit(need.0) else { continue;
+        };
         // A resource moon's marker is drawn as the moon the game swaps it for (RND-16).
-        let def = moons.moon_for(&vfs.0, &content.0, def, sim.map_or(0, |s| s.0 .0 as u64)).unwrap_or(def);
+        let def = moons.moon_for(&vfs.0, &content.0, def, sim.map_or(0, |s| s.0.0 as u64)).unwrap_or(def);
         let key = def.model.to_ascii_lowercase().trim_end_matches(".sod").to_owned();
         let found = models
             .models
             .entry(key.clone())
             .or_insert_with(|| {
-                sta_assets::find_model(&vfs.0, &key).and_then(|(path, fmt)| match sta_assets::load_model(&vfs.0, &path, fmt) {
+                sta_assets::find_model(&vfs.0, &key).and_then(|(path, fmt)| {
+                    match sta_assets::load_model(&vfs.0, &path, fmt) {
                     Ok(m) => Some((path, Arc::new(m))),
                     Err(err) => {
                         warn!("{err}");
                         None
+                        }
                     }
                 })
             })
@@ -278,10 +290,12 @@ fn attach_models(
         }
         let class = def.class.0.as_str();
         if owned && !matches!(class, "background_obj" | "latinum" | "asteroidfield" | "nebula_obj" | "planet" | "wormhole_obj") {
-            let mut icon = crate::render::strategic::Strategic::new(crate::render::strategic::shape_for(class, mobile), team.0, radius);
+            let mut icon = crate::render::strategic::Strategic::new(crate::render::strategic::shape_for(class, mobile), team.0, radius,
+            );
             let sv = tables.0.sprite(&format!("{}_sv", def.model));
             let tex = sv.and_then(|sprite| {
-                let tex = (Loader { vfs: &vfs.0, cache: &mut cache, images: &mut images, formats }).colour(&sprite.texture, false)?;
+                let tex = (Loader { vfs: &vfs.0, cache: &mut cache, images: &mut images, formats,
+                }).colour(&sprite.texture, false)?;
                 Some((tex, sta_assets::spr_anim::sprite_uv(&tables.0, sprite, 0.0)))
             });
             if let Some((tex, uv)) = tex {
@@ -295,7 +309,8 @@ fn attach_models(
             commands: &mut commands,
             meshes: &mut meshes,
             materials: &mut materials,
-            textures: Loader { vfs: &vfs.0, cache: &mut cache, images: &mut images, formats },
+            textures: Loader { vfs: &vfs.0, cache: &mut cache, images: &mut images, formats,
+            },
             team: team.0,
             borg: false,
             sprites: &tables.0,
@@ -306,9 +321,42 @@ fn attach_models(
             unlit: false,
             scale: if scale > 0.0 { scale } else { 1.0 },
         };
-        let stats = model_scene::spawn(&mut ctx, &model, e);
+        let progress = sim
+            .and_then(|unit| link.curr().unit(unit.0))
+            .and_then(|unit| unit.progress)
+            .map(|progress| progress.to_f32().clamp(0.0, 1.0));
+        let stats = if let Some(progress) = progress {
+            let chunks = construction_chunk_count(def);
+            model_scene::spawn_construction(&mut ctx, &model, e, chunks, progress)
+        } else {
+            model_scene::spawn(&mut ctx, &model, e)
+        };
         debug!("unit model attached: id={:?} odf={} model={key} meshes={} triangles={} missing_textures={:?}",
             sim.map(|s| s.0), def.odf, stats.meshes, stats.triangles, stats.missing_textures);
+    }
+}
+
+fn construction_chunk_count(def: &sta_content::UnitDef) -> u16 {
+    const DEFAULT: u16 = 24;
+    let Some(raw) = def.raw.raw("constructionChunks") else {
+        return DEFAULT;
+    };
+    match def.raw.i64("constructionChunks") {
+        Some(value) if (1..=256).contains(&value) => value as u16,
+        Some(value) => {
+            warn!(
+                "{}: constructionChunks={raw} is outside 1..=256; clamping",
+                def.odf
+            );
+            value.clamp(1, 256) as u16
+        }
+        None => {
+            warn!(
+                "{}: constructionChunks={raw} is invalid; using default {DEFAULT}",
+                def.odf
+            );
+            DEFAULT
+        }
     }
 }
 
@@ -354,9 +402,9 @@ mod tests {
     use crate::app::configure_sets;
     use crate::sim_link::{CommandQueue, SimLinkPlugin};
     use bevy::time::TimeUpdateStrategy;
-    use std::time::Duration;
     use sta_sim::command::{CommandKind, LocalRouter, Order};
     use sta_sim::{EntityId, Fixed, MoveStats, PlayerId, Sim, Vec3 as SimVec3};
+    use std::time::Duration;
 
     /// A ship at the origin facing +Z, ordered to `to` through the command
     /// queue, drawn by `place` from the sim link on the animation clock.
@@ -366,12 +414,15 @@ mod tests {
         let id = sim.spawn(1, SimVec3::ZERO, (Fixed::ZERO, Fixed::ONE), stats);
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 60.0)))
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 60.0,
+            )))
             .add_plugins(SimLinkPlugin)
-            .insert_resource(SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), PlayerId::BENCH))
+            .insert_resource(SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), PlayerId::BENCH,
+            ))
             .add_systems(Update, place.in_set(GameSet::Interpolate));
         configure_sets(&mut app);
-        app.world_mut().resource_mut::<CommandQueue>().0.push(CommandKind::Order(Order::Move {
+        app.world_mut().resource_mut::<CommandQueue>().0
+            .push(CommandKind::Order(Order::Move {
             units: vec![id],
             to: SimVec3::from_f32(to),
             queue: false,
@@ -459,11 +510,11 @@ mod view_tests {
     use crate::app::configure_sets;
     use crate::sim_link::SimLinkPlugin;
     use bevy::time::TimeUpdateStrategy;
-    use std::time::Duration;
     use sta_sim::command::{Command, LocalRouter};
     use sta_sim::fake::ScriptedSource;
     use sta_sim::view::{TickOutput, UnitView};
     use sta_sim::{Fixed, Vec3 as SimVec3, WorldSource};
+    use std::time::Duration;
 
     fn app_with(source: Box<dyn WorldSource>, local: Option<PlayerId>) -> App {
         let mut app = App::new();
