@@ -1,4 +1,4 @@
-//! Checked station-queue ownership cleanup (SIM-19).
+//! Checked queue/deploy/weld ownership cleanup (SIM-19).
 
 use super::Production;
 use crate::economy::{Economy, RESOURCES};

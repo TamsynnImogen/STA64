@@ -19,6 +19,8 @@
 //!   `amt<slot>` of the resource ODF (Fleet Operations 4.0's tritanium moon
 //!   holds `amtlatinum`, so it fills the slot the game calls Tritanium), else
 //!   the game's word for the slot in the text, else dilithium. Nodes hold [`RICHNESS`] and run dry.
+//!   Typed Background planets reject mining; typed Producer planets need an
+//!   explicit resource slot. This does not implement orbital/multi-resource mining.
 //! - Within 150 units of node or station counts as there; the freighter
 //!   stops and works that same tick, so a trip with no travel takes exactly
 //!   `capacity / rate + capacity / unload` ticks.

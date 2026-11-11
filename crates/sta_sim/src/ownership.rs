@@ -42,7 +42,7 @@ impl Sim {
         };
 
         // All rejection checks precede cleanup, including same-owner requests.
-        // Consume the checked queue plan; ordinary Stop/cancel has a separate
+        // Consume the checked production plan; ordinary Stop/cancel has a separate
         // refund contract, particularly for deferred active production.
         let children = self.production.finish_transfer(&mut self.economy, production);
         for child in children {

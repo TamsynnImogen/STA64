@@ -151,7 +151,14 @@ fn capture_active_weld_removes_child_and_accounts_for_payment_mode() {
         let before = sim.snapshot();
         assert!(!sim.apply_edit(PlayerId::SCRIPT, &Edit::Team(child, PlayerId(1))));
         assert_eq!(sim.snapshot(), before);
-        step_accepted(&mut sim, &[team(0, rig, PlayerId(1))]);
+        let events = step_accepted(&mut sim, &[team(0, rig, PlayerId(1))]);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e, SimEvent::PlayerEliminated { player } if *player == PlayerId(0)))
+                .count(),
+            1
+        );
         assert!(sim.unit(child).is_none());
         assert!(sim.production.to_rec().welds.is_empty());
         assert_eq!(sim.unit(rig).unwrap().owner, PlayerId(1));
@@ -325,11 +332,12 @@ fn background_refuses_mining_and_producer_runs_a_capture_cancelled_queue() {
                 node: background,
             }),
         };
-        assert!(sim
-            .step(&[mine])
-            .events
-            .iter()
-            .any(|e| matches!(e, SimEvent::Rejected { .. })));
+        assert!(
+            sim.step(&[mine])
+                .events
+                .iter()
+                .any(|e| matches!(e, SimEvent::Rejected { .. }))
+        );
         assert!(!sim.economy.is_mining(miner));
         step_accepted(
             &mut sim,

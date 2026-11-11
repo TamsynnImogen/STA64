@@ -202,7 +202,8 @@ impl Entity {
         heading: (Fixed, Fixed),
     ) -> Entity {
         let kind = EntityKind::of_def(def);
-        // Resources stay neutral whatever the map or loadout says (SIM-18).
+        // Generic resources stay neutral (SIM-18). Typed planets have their
+        // own ownership policy, independent of their body/resource kind.
         let owner = if def.planet_role.is_none()
             && (kind == EntityKind::Resource || def.resource.is_some()) {
             NEUTRAL
