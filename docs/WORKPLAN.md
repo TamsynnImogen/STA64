@@ -478,6 +478,8 @@ seam rather than writes.
 
 | CON-26 | A1 binary map body: native-backed metadata, count-checked placements, mission descriptors and retained AOI/AiPath data; pre-code contract [A1_BZN_IMPORT.md](A1_BZN_IMPORT.md) | sta_bzn/src/a1/body.rs; narrow a1/lib Map/error/dispatch; dedicated header/body tests; contract docs | CON-25 | Synthetic grammar/malformed/rescale fixtures, pinned GOG readers/writers, 49 A1 and 72 A2 maps | A1 scenes and subsequent MDF/start/mission integration | 49 nonempty A1 maps with declared counts matched; fields/paths retained, invalid/unsupported inputs explicit, A2 unchanged; scoped/consumer/Clippy/workspace/Android library checks | M | Lead |
 
+| CON-27 | Original flat A1 install roots through the existing shared VFS/client entry point; pre-code contract [INSTALL_ROOTS.md](INSTALL_ROOTS.md) | sta_vfs/src/lib.rs narrow mount/doc/test-module; new flat_install_tests.rs; install/support docs and WORKPLAN row | CON-15 | Synthetic ZFS/Data/mod fixtures and read-only original A1 root | Actual desktop A1 map viewing; shared cross-platform mounting | Data priority/errors and archive order unchanged; root ZFS recognized only with no selected mod; corrupt/unsupported roots explicit; scoped/consumer/Clippy/workspace and real client headless report checks pass | S | Lead |
+
 ### Simulation (SIM)
 
 | ID | Package | Owns | Needs | Against | Unlocks | Done when | Size | Model |
