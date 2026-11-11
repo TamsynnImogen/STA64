@@ -67,9 +67,9 @@ pub struct Loadout {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Races {
     races: Vec<RaceDef>,
-    /// A loaded (even empty/broken) catalogue is authoritative. Only a bare
-    /// database with no catalogue may infer its choices from unit definitions.
-    catalogue: bool,
+    /// Legacy profiles and loaded catalogues are authoritative. Only a bare
+    /// native/fake database may infer its choices from unit definitions.
+    authoritative: bool,
 }
 
 fn stem(name: &str) -> String {
@@ -98,7 +98,7 @@ impl Races {
     pub fn load(vfs: &sta_vfs::Vfs, index: &crate::OdfIndex) -> (Races, Vec<Warning>) {
         let (mut races, warnings) = Races::load_with_profile(Profile::detect(vfs), &mut |n, v| index.load(vfs, n, v));
         // An indexed but unreadable catalogue is not an intentionally bare DB.
-        races.catalogue |= index.get("races").is_some();
+        races.authoritative |= index.get("races").is_some();
         (races, warnings)
     }
 
@@ -111,7 +111,7 @@ impl Races {
     pub fn load_with_profile(profile: Profile, loader: &mut Loader<'_>) -> (Races, Vec<Warning>) {
         let mut warnings = Vec::new();
         let root = loader("races.odf", 0);
-        let catalogue = root.is_some();
+        let authoritative = root.is_some() || profile != Profile::Native;
         let list = match sta_odf::resolve_layered("races", &mut |name, version| {
             if version == 0 && stem(name) == "races" {
                 root.clone()
@@ -122,7 +122,7 @@ impl Races {
             Ok(o) => o,
             Err(e) => {
                 warnings.push(Warning::new("races.odf", e.to_string()));
-                return (Races { races: Vec::new(), catalogue }, warnings);
+                return (Races { races: Vec::new(), authoritative }, warnings);
             }
         };
         let mut races = Vec::new();
@@ -195,11 +195,11 @@ impl Races {
                 }
             }
         }
-        (Races { races, catalogue }, warnings)
+        (Races { races, authoritative }, warnings)
     }
 
     pub fn from_defs(races: Vec<RaceDef>) -> Races {
-        Races { races, catalogue: true }
+        Races { races, authoritative: true }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -385,7 +385,7 @@ pub fn skirmish_races(races: &Races, db: &ContentDb) -> Vec<String> {
             out.push(r.name.clone());
         }
     }
-    if !races.catalogue {
+    if !races.authoritative {
         let mut all: Vec<String> = db
             .units()
             .map(|u| u.race.to_ascii_lowercase())
