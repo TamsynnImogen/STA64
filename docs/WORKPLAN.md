@@ -480,6 +480,8 @@ seam rather than writes.
 
 | CON-27 | Original flat A1 install roots through the existing shared VFS/client entry point; pre-code contract [INSTALL_ROOTS.md](INSTALL_ROOTS.md) | sta_vfs/src/lib.rs narrow mount/doc/test-module; new flat_install_tests.rs; install/support docs and WORKPLAN row | CON-15 | Synthetic ZFS/Data/mod fixtures and read-only original A1 root | Actual desktop A1 map viewing; shared cross-platform mounting | Data priority/errors and archive order unchanged; root ZFS recognized only with no selected mod; corrupt/unsupported roots explicit; scoped/consumer/Clippy/workspace and real client headless report checks pass | S | Lead |
 
+| CON-28 | Pure A1 MDF count and precise Camera_i start resolver; pre-code contract [A1_START_LOCATIONS.md](A1_START_LOCATIONS.md) | sta_bzn/src/a1/starts.rs, narrow a1.rs exports, dedicated tests and contract/support docs | CON-26 | Synthetic canonical/malformed MDF/path fixtures; pinned GOG new-game placement and read-only 49 A1 maps/28 MDFs | Subsequent selected-file-aware content conversion seam | Explicit checked count subset, exact first-path/first-point XYZ without grid inversion or partial results, original corpus and scoped/consumer/Clippy/workspace/Android library checks; no client/gameplay claim | S | Lead |
+
 ### Simulation (SIM)
 
 | ID | Package | Owns | Needs | Against | Unlocks | Done when | Size | Model |

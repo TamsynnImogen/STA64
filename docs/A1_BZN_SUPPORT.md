@@ -16,6 +16,13 @@ early-exit check does not start the window/audio/input pipeline. Follow the
 [install-root rules and manual checks](INSTALL_ROOTS.md). Original files need
 not move. MDF/precise-path starts and graphical/gameplay acceptance remain pending.
 
+CON-28 adds pure helpers for a checked canonical MDF start count and precise
+first `Camera_i` points ([contract and limits](A1_START_LOCATIONS.md)). The
+original 28 companion pairs resolve 113 starts without preview-grid inversion.
+These helpers are not yet called by content conversion or the client; A1
+skirmish start integration remains pending. Native malformed-MDF/default-eight
+handling and configuration-backed missing-path fallback are not implemented.
+
 ## Confirmed behaviour before CON-25
 
 STA64's BZN parser recognizes A2 `BinaryMode`, but not A1 `binarySave`.
