@@ -59,3 +59,25 @@ matches; model_info/tests; this document, WORKPLAN and an appended TODO check.
 CON-09 and Sabre diagnostic PRs remain independent. No original assets, defaults,
 major dependencies, input devices or native original executables are modified
 or executed. The December 2026 desktop alpha target remains unchanged.
+
+## Stage-one evidence and remaining gate
+
+The initial changes pass 32 asset library tests, three model-info tests and six
+existing texture-inspection tests. Two-crate strict all-target Clippy passes.
+The new synthetic streams cover 1.93, 1.94, 1.96 and 2.06, including every
+truncated prefix, typed fields, hierarchy and winding. These checks are not
+native runtime or visual acceptance.
+
+The read-only installed scan contains 2,412 paths, including duplicate installs:
+606 complete models parse; 1,790 files under `M3D/chunks/` have separate native
+chunk-material/geometry layouts; 16 `StarTrekDB` 1.0/1.2 files are unsupported.
+All input hashes match before and after. None of the latter files is labelled
+corrupt merely because it is outside the complete-model reader's layout.
+The native Legacy header routine rejects versions below 1.4, so the old
+database files also need separate historical-format evidence.
+
+The native chunk readers use the same magic/version prefix, followed by
+different records. They are not complete scene models. Format/role discovery,
+decoding and the original corpus gate remain open: this stage does not close
+CON-08 or M1. Private input identities and native evidence stay in the preserved
+artifact tree outside the source checkout.

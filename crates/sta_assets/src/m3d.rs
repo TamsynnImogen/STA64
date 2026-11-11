@@ -114,6 +114,7 @@ struct Node {
     matrix: [f32; 12],
     mesh: Mesh,
     payload: Bytes,
+    light: Option<a2fmt::sod::Light>,
 }
 impl Default for Node {
     fn default() -> Self {
@@ -128,6 +129,7 @@ impl Default for Node {
             matrix: [1., 0., 0., 0., 1., 0., 0., 0., 1., 0., 0., 0.],
             mesh: Mesh::default(),
             payload: Vec::new(),
+            light: None,
         }
     }
 }
@@ -442,8 +444,20 @@ fn parse(data: &[u8], fmt: &impl Fn(u32) -> Bytes) -> Result<File, Bytes> {
         match node.kind {
             1 => node.mesh = r.mesh(f.version).ok_or_else(|| r.error.clone())?,
             2 => {
-                r.u8("effect subtype").ok_or_else(|| r.error.clone())?;
-                r.skip(20, "effect data").ok_or_else(|| r.error.clone())?;
+                let kind = r.u8("light subtype").ok_or_else(|| r.error.clone())?;
+                let mut values = [0.0; 5];
+                for value in &mut values {
+                    *value = r.f32("light data").ok_or_else(|| r.error.clone())?;
+                }
+                if values.iter().any(|value| !value.is_finite()) {
+                    return Err(b("Non-finite M3D light data."));
+                }
+                node.light = Some(a2fmt::sod::Light {
+                    kind,
+                    colour: [values[0], values[1], values[2]],
+                    falloff_start: values[3],
+                    falloff_range: values[4],
+                });
             }
             3 | 12 => node.payload = r.id("node command").ok_or_else(|| r.error.clone())?,
             _ => (),
@@ -962,13 +976,40 @@ fn map(b: &[u8]) -> Option<String> {
     (!n.is_empty()).then(|| text(&n))
 }
 
-/// Load an M3D directly into a [`crate::model::Model`]: no SOD round trip, and
-/// every texture map a face group names (diffuse, bump, specular, glow, detail)
-/// is kept. The hierarchy gets the same clean-up as the A2FOM3D conversion
-/// (root synthesis, unique names, damage emitters, parent-before-child order).
+/// Load an M3D into a [`crate::model::Model`]. Version 1.93 reuses the existing
+/// old-layout reader in memory. Newer layouts retain the A2FOM3D hierarchy
+/// clean-up (root synthesis, unique names, damage emitters, parent-first order)
+/// and diffuse, bump, specular, glow and detail references. No files are written.
 pub fn load(input: &[u8]) -> Result<crate::model::Model, String> {
     use crate::model::{Channel, Group as MGroup, Keys, LightingMaterial, Maps, Mesh as MMesh, Model, Node as MNode, NodeKind, SourceFormat};
     use a2fmt::Matrix34;
+
+    // Native Legacy accepts both magics before the same version dispatch. Its
+    // 1.93 layout is the old SOD layout, not the newer M3D mesh/group layout.
+    // Reuse that strict reader in memory only; never rewrite the user's file.
+    if input.get(..8) == Some(b"Mad3D_SW")
+        && input.get(10..14).is_some_and(|v| v == 1.93_f32.to_le_bytes())
+    {
+        let mut normalized = input.to_vec();
+        normalized[..10].copy_from_slice(b"Storm3D_SW");
+        let sod = a2fmt::sod::Sod::parse(&normalized).map_err(|e| format!("M3D 1.93: {e:?}"))?;
+        let mut model = Model::from_sod(&sod);
+        model.format = SourceFormat::M3d;
+        for (node, source) in model.nodes.iter_mut().zip(&sod.nodes) {
+            if let NodeKind::Light(light) = &node.kind
+                && light.colour.into_iter().chain([light.falloff_start, light.falloff_range]).any(|v| !v.is_finite())
+            {
+                return Err("Non-finite M3D 1.93 light data.".into());
+            }
+            if source.node_type == 11 {
+                node.kind = NodeKind::Lod;
+            }
+        }
+        if model.nodes.iter().any(|node| matches!(node.kind, NodeKind::Light(_))) {
+            model.warnings.push("Legacy light fields parsed; renderer light playback unavailable".into());
+        }
+        return Ok(model);
+    }
 
     let format_version = |bits: u32| format!("{}", f32::from_bits(bits)).into_bytes();
     let source = parse(input, &format_version).map_err(|e| text(&e))?;
@@ -1033,13 +1074,10 @@ pub fn load(input: &[u8]) -> Result<crate::model::Model, String> {
                 12 => NodeKind::Emitter(text(if n.payload.is_empty() { &n.name } else { &n.payload })),
                 0 => NodeKind::Null,
                 2 => {
-                    warnings.push(format!("Legacy effect node '{}' kept as a plain transform", text(&n.name)));
-                    NodeKind::Null
+                    warnings.push(format!("Legacy light '{}' parsed; renderer light playback unavailable", text(&n.name)));
+                    NodeKind::Light(n.light.clone().expect("type-2 payload is checked while parsing"))
                 }
-                11 => {
-                    warnings.push(format!("Legacy LOD node '{}' kept as a plain transform", text(&n.name)));
-                    NodeKind::Null
-                }
+                11 => NodeKind::Lod,
                 k => {
                     warnings.push(format!("node '{}' of type {k} kept as a plain transform", text(&n.name)));
                     NodeKind::Null
@@ -1107,3 +1145,7 @@ pub fn load(input: &[u8]) -> Result<crate::model::Model, String> {
         warnings,
     })
 }
+
+#[cfg(test)]
+#[path = "m3d/tests.rs"]
+mod tests;

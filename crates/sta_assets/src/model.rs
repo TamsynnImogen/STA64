@@ -49,6 +49,12 @@ pub struct Node {
 #[derive(Debug, Clone)]
 pub enum NodeKind {
     Null,
+    /// An authored Legacy LOD control. M1 displays its finest geometry branch;
+    /// camera-distance switching is a separate renderer policy.
+    Lod,
+    /// Parsed legacy light data. The subtype remains source-specific; keeping
+    /// these values does not imply the renderer reproduces its light shader.
+    Light(a2fmt::sod::Light),
     Mesh(Mesh),
     /// The node name up to its first underscore is a `@sprite_node` id.
     Sprite,
@@ -103,7 +109,7 @@ pub enum Keys {
 
 impl Node {
     pub fn is_geometry(&self) -> bool {
-        self.name.to_ascii_lowercase().starts_with("geometry")
+        matches!(self.kind, NodeKind::Lod) || self.name.to_ascii_lowercase().starts_with("geometry")
     }
     pub fn is_lod(&self) -> bool {
         self.name.to_ascii_lowercase().starts_with("lod")
@@ -226,6 +232,7 @@ impl Model {
                     }
                     SodKind::Sprite => NodeKind::Sprite,
                     SodKind::Emitter { emitter } => NodeKind::Emitter(emitter.clone()),
+                    SodKind::Light(light) => NodeKind::Light(light.clone()),
                     _ => NodeKind::Null,
                 },
             })
