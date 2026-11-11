@@ -72,6 +72,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] Lua shared controls (LUA-05, updated builds): run Blockade and check that its off-map staging/arrival callbacks no longer fail on forceOntoMap. Also check Invasion and Cavalry ownership handoffs. Lua writes use shared simulation guards; any rejected operation should identify its SCRIPT sequence in mission errors rather than silently appearing successful. Full campaigns, native playback and unimplemented A2 calls remain separate checks.
 
+- [?] LUA-05 perceived-team prerequisite: after its separate seam and Lua adapter merge, check Blockade's disguise/reveal sequence. Confirm real ownership still controls selection/resources, automatic enemy acquisition follows perceived identity, and save/load preserves the disguise. Source/headless proof does not replace this campaign check; use the current build's revision-2 replay/view logs.
+
 ## Checked earlier (morning list)
 
 Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.

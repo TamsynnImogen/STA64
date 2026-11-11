@@ -129,7 +129,7 @@ impl ScriptedSource {
 
     fn view_at(&self, t: Tick) -> WorldView {
         let units = self.rails.iter().filter_map(|r| r.at(t)).collect();
-        WorldView { tick: t, digest: 0, units, players: Vec::new(), visibility: Vec::new() }
+        WorldView { tick: t, digest: 0, units, players: Vec::new(), visibility: Vec::new(), perceived_owners: Vec::new() }
     }
 
     fn events_at(&self, t: Tick) -> Vec<SimEvent> {
@@ -241,6 +241,11 @@ impl ViewLog {
 
     /// Fails on a log from another seam revision or a damaged file.
     pub fn from_bytes(bytes: &[u8]) -> Result<ViewLog, String> {
+        // Read the revision before interpreting the version-dependent view.
+        let (rev, _): (u32, _) = postcard::take_from_bytes(bytes).map_err(|e| e.to_string())?;
+        if rev != SEAM_REV {
+            return Err(format!("view log is seam revision {rev}, this build reads {SEAM_REV}"));
+        }
         let file: LogFile = postcard::from_bytes(bytes).map_err(|e| e.to_string())?;
         if file.rev != SEAM_REV {
             return Err(format!("view log is seam revision {}, this build reads {SEAM_REV}", file.rev));
@@ -382,9 +387,36 @@ mod tests {
     }
 
     #[test]
+    fn view_log_round_trips_perceived_owner_separately_from_real_owner() {
+        let (mut sim, _) = real_run();
+        let mut log = ViewLog::record(&mut sim, std::iter::empty());
+        let initial = Arc::make_mut(&mut log.initial);
+        let unit = initial.units.first().unwrap();
+        let id = unit.id;
+        let real_owner = unit.owner;
+        let perceived_owner = PlayerId(2);
+        assert_ne!(real_owner, perceived_owner);
+        initial.perceived_owners.push((id, perceived_owner));
+
+        let decoded = ViewLog::from_bytes(&log.to_bytes()).unwrap();
+        let view = decoded.view();
+        assert_eq!(view.unit(id).unwrap().owner, real_owner);
+        assert_eq!(view.perceived_owner(id), Some(perceived_owner));
+    }
+
+    #[test]
     fn view_log_refuses_other_revisions() {
         let file = LogFile { rev: SEAM_REV + 1, initial: Arc::default(), ticks: Vec::new() };
         let bytes = postcard::to_allocvec(&file).unwrap();
         assert!(ViewLog::from_bytes(&bytes).is_err());
+    }
+
+    #[test]
+    fn view_log_refuses_revision_one() {
+        let file = LogFile { rev: 1, initial: Arc::default(), ticks: Vec::new() };
+        let bytes = postcard::to_allocvec(&file).unwrap();
+        assert!(ViewLog::from_bytes(&bytes).unwrap_err().contains("seam revision 1"));
+        // The old payload need not decode as today's WorldView to identify it.
+        assert!(ViewLog::from_bytes(&[1]).unwrap_err().contains("seam revision 1"));
     }
 }

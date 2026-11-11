@@ -183,7 +183,7 @@ fn late_mining_target_uses_miner_flag_without_altering_terrain_node() {
 }
 
 #[test]
-fn actual_force_commands_replay_with_star1_and_seam1() {
+fn actual_force_commands_replay_with_star1_and_current_seam() {
     let mut craft = def("craft", "craft");
     craft.movement = MoveStats::from_f32(120.0, 2.0, 2.0, 2.0, 1.0);
     let mut setup = setup(Profile::Fo4, vec![craft]);
@@ -227,7 +227,7 @@ fn actual_force_commands_replay_with_star1_and_seam1() {
     }
     let expected = recording.sim().snapshot();
     let replay = recording.finish();
-    assert_eq!(replay.seam_rev, 1);
+    assert_eq!(replay.seam_rev, crate::SEAM_REV);
     let bytes = replay.encode();
     assert_eq!(&bytes[..6], b"STAR\x01\0");
     let played = Replay::decode(&bytes).unwrap().play(setup.content).unwrap();

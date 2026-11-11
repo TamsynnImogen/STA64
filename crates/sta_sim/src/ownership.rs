@@ -23,6 +23,10 @@ impl Sim {
         let Some(unit) = self.units.get(id) else {
             return false;
         };
+        let perceived = self.perceived_owner(id).expect("validated live unit");
+        if !crate::perception::representable(perceived) {
+            return false;
+        }
         let def = self.content.as_deref().and_then(|db| db.unit(unit.def));
         let planet = def.is_some_and(|d| d.planet_role.is_some());
         let background = def.is_some_and(|d| d.planet_role == Some(sta_content::PlanetRole::Background));
@@ -52,6 +56,11 @@ impl Sim {
         self.economy.cancel(&self.units, from, &[id]);
         self.movement.clear(id);
         self.production.clear_builder_rally(id);
+        if perceived == to {
+            self.perception.remove(id);
+        } else {
+            self.perception.insert(id, perceived);
+        }
         let unit = self.units.get_mut(id).expect("validated live unit");
         unit.target = None;
         unit.owner = to;
