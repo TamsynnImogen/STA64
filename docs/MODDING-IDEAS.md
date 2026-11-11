@@ -25,13 +25,15 @@ A *pack* = manifest + optional layers:
 |-----------|---------|
 | `content` | VFS overlay: textures, models, ODFs, maps, sounds |
 | `rules`   | quirk/tunable overrides: limits, formulas, ODF key semantics |
-| `render`  | effect-slot overrides (nebula, cloak, shield, trail) via WGSL |
+| `render`  | effect-slot overrides (nebula, cloak, shield, trail); shaders are WESL (`.wesl`) |
 | `script`  | triggers, timelines, scripts |
 
 - Base game = read-only pack from the user's install, fingerprinted by exe
   hash; the fingerprint selects the profile.
 - Mods, FleetOps, Refit, Roots are all packs with `extends` / `requires`.
-  Roots = `extends fleetops` = `extends a2-1.x`.
+  Roots is an *engine* (separate lineage, see below), not a pack that
+  extends FleetOps; FO 4.0 / STA2 Classic are standalone packs requiring the
+  Roots engine (review-opus C2: needs a separate `engine =` axis).
 
 **Profile** = base + set of named, documented, toggleable *quirks*
 (e.g. `a2.shield_regen_ignores_damage_delay`), not a per-exe monolith. A
@@ -214,7 +216,7 @@ Formats differ by lineage, not only interpretation, so a profile also owns a
   (open: which wins in the Roots engine?).
 - Textures: `.tga` pre-FO4; `.dds` for most of FO4 (Roots: 1064 dds vs 4205
   tga; bump maps accept both per changelog; FO plain: 0 dds).
-- Menus: `.bmp` or `.png`; no alpha, a *colour mask/key* is used for
+- Menus: `.bmp` or `.png`; mostly no alpha, a *colour mask/key* is used for
   transparency (png count 342 in FO plain -> 1642 in Roots).
 Design: per-profile ordered extension search (`texture: [dds, tga]`,
 `techtree: [xml, tt]`, `menu_image: [png, bmp]` + colour-key rule), with
@@ -246,7 +248,7 @@ key-level `[patch]` fragments and `sta64 why`.
 size (64x64 px); `@tmaterial=` = blend/material mode for the atlas. Values
 observed by grep across installs (meaning of each not yet checked):
 `interface`, `additive`, `default`, `alphathreshold`, `add_nomipf`,
-`wormhole` (A1 and A2 stock); `font` (A2+); `alpha` (FO/Roots, absent in A1).
+`wormhole` (A1 only; review-opus found it absent in A2 stock sprites); `font` (A2+); `alpha` (FO/Roots, absent in A1).
 Other directives seen: `@referencewidth`/`@referenceheight` (non-square
 atlases, up to 2048 in FO/Roots), `@auto=square|column|row|scalar`,
 `@skip=off|(r,g,b)`. `@tmaterial` is a prime *profile-keyed enum*: the
@@ -294,6 +296,16 @@ colour/wavelength/speed/dir, cycle colours, model has bump, cloaked} and
 params from the profile (ART_CFG keys mapped to pack tunables). The sim
 exposes only the affector state; colour mixing and wave maths stay render-side
 (no determinism risk).
+
+## Opus review (docs/research/modding/review-opus.md)
+
+Corrections above applied. Open decisions from the review, not yet adopted:
+session manifest/lock for peers+replays+saves (C1); `engine =` axis (C2);
+quirk registry with conflict rule; replace tiers with a coverage report and
+cut the `.asi` importer; split scripts into presentation vs host-only gameplay
+(Lua, no WASM); trim MOD-01..13. Conflict with owner decision: review says
+defer shaders; owner decided shader authoring is first-class (see ladder),
+so reconcile as "contracts marked `unstable`, ship recipes-via-VFS first".
 
 ## Open unknowns
 
