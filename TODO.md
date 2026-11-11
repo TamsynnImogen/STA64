@@ -64,6 +64,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] ODF duplicate report (EDT-09): `cargo run -p sta_odf --bin sta-odf-duplicates -- path/to/unit.odf` prints repeated command locations without rewriting the file. Later assignments remain legal; add `--deny-duplicates` only when a duplicate should fail a mod-author check. Includes and parent-mod overrides are not compared. [Usage and validation](docs/REFERENCE_SPACE_RTS.md#implemented-report-and-validation).
 
+- [?] Original flat A1 install (CON-27, build including CON-26): manually run an updated `sta64 --install-root "<A1 install>" --map 2blue`. The map view should load placed actors/scenery directly from the existing game folder; record missing models, lighting or selection issues. The headless `--mission-report` path already enumerates all 49 maps. Do not move game files; A1 multiplayer starts still need MDF/precise-path integration. [Mount rules and checks](docs/INSTALL_ROOTS.md).
+
 ## Checked earlier (morning list)
 
 Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
