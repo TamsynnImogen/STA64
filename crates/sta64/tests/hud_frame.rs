@@ -199,7 +199,7 @@ fn hud_layout_draws_every_panel_where_the_layout_says() {
 
     let l = Layout::of(&a.out);
     assert_eq!((l.get("screen"), l.get("info"), l.get("page"), l.get("beside")), ("1920x1080", "middle", "Top", "true"), "a yard is a builder: the middle panel");
-    assert_eq!(l.get("cells"), "0:BUILD 6:STOP 7:LINE 8:COLUMN 9:WEDGE");
+    assert_eq!(l.get("cells"), "0:BUILD 1:RALLY 6:STOP");
     assert!(l.get("strip").starts_with("dilithium="), "{}", l.get("strip"));
     // No panel on another, the grid beside the minimap, everything on the screen.
     let (res, mini, grid, info) = (l.rect("resources"), l.rect("minimap"), l.rect("grid"), l.rect("info_rect"));
@@ -271,7 +271,7 @@ fn a_group_takes_the_high_panel_and_a_cfg_sizes_it() {
     assert_eq!(rs[1] + rs[3], rg[1] + rg[3], "both stand on the same floor");
     // The grid is where it was, and no longer offers Build (no builder).
     assert_eq!(lg.rect("grid"), ls.rect("grid"));
-    assert_eq!(lg.get("cells"), "6:STOP 7:LINE 8:COLUMN 9:WEDGE");
+    assert_eq!(lg.get("cells"), "2:MOVE 3:ATTACK 6:STOP 7:FORMATIONS");
     // Three tiles, each with its hull strip.
     let i = lg.area("info_rect", WIDE.h);
     assert!(near(&g, GOOD, 10, i) > 150, "hull strips");

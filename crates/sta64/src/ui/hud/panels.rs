@@ -1,6 +1,6 @@
 //! The HUD's panels as Bevy UI nodes on the LCARS kit: the resources strip,
-//! the info panel and the command grid. Each is rebuilt when its model
-//! ([`super::model`]) changes and repositioned when the layout does.
+//! the info panel and the command grid. Value changes patch existing children;
+//! structural changes rebuild a panel, and layout changes reposition it.
 
 use bevy::picking::Pickable;
 use bevy::prelude::*;
@@ -22,6 +22,70 @@ pub struct ResourceStrip;
 pub struct InfoPanel;
 #[derive(Component)]
 pub struct GridPanel;
+
+#[derive(Component, Clone, Copy)]
+pub(super) enum ValueText { Resource(usize), Hull, Shield, Built }
+
+#[derive(Component, Clone, Copy)]
+pub(super) enum ValueBar { Hull, Shield, Built, Group(EntityId) }
+
+/// Numbers do not change the row's structure.
+pub(super) fn same_resources(a: &[ResEntry], b: &[ResEntry]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(a,b)| a.id == b.id && a.name == b.name)
+}
+
+pub(super) fn same_info(a: &Info, b: &Info) -> bool {
+    match (a,b) {
+        (Info::None, Info::None) => true,
+        (Info::Single(a), Info::Single(b)) => a.id == b.id && a.name == b.name
+            && a.class == b.class && a.own == b.own && a.builder == b.builder
+            && a.shield.is_some() == b.shield.is_some() && a.progress.is_some() == b.progress.is_some(),
+        (Info::Group(a), Info::Group(b)) => a.len() == b.len()
+            && a.iter().zip(b).all(|(a,b)| a.id == b.id && a.name == b.name),
+        _ => false,
+    }
+}
+
+/// Patch text and progress without destroying headers, rows, glyph owners or
+/// click targets. New structural children already contain their initial values.
+#[allow(clippy::type_complexity)]
+pub(super) fn update_values(
+    feed: Res<super::model::HudFeed>,
+    layout: Res<super::HudLayoutRes>,
+    theme: Res<Theme>,
+    mut texts: Query<(&ValueText, &mut crate::ui::sprite_font::SpriteText)>,
+    mut bars: Query<(&ValueBar, Option<&mut crate::ui::theme::ProgressBar>, Option<&mut Node>, Option<&mut BackgroundColor>)>,
+) {
+    let resources = super::model::resources(&feed, layout.0.no_resource);
+    let info = super::model::info(&feed);
+    for (kind, mut text) in &mut texts {
+        let value = match (kind, &info) {
+            (ValueText::Resource(id), _) => resources.iter().find(|e| e.id == *id).map(|e| e.text.clone()),
+            (ValueText::Hull, Info::Single(s)) => Some(format!("{}/{}", s.hull_now, s.hull_max)),
+            (ValueText::Shield, Info::Single(s)) => s.shield.map(|v| format!("{}%", (v*100.0).round() as i32)),
+            (ValueText::Built, Info::Single(s)) => s.progress.map(|v| format!("{}%", (v*100.0).round() as i32)),
+            _ => None,
+        };
+        if let Some(value) = value && text.text != value { text.text = value; }
+    }
+    for (kind, progress, node, color) in &mut bars {
+        let value = match (kind, &info) {
+            (ValueBar::Hull, Info::Single(s)) => Some(s.hull),
+            (ValueBar::Shield, Info::Single(s)) => s.shield,
+            (ValueBar::Built, Info::Single(s)) => s.progress,
+            (ValueBar::Group(id), Info::Group(tiles)) => tiles.iter().find(|t| t.id == *id).map(|t| t.hull),
+            _ => None,
+        };
+        let Some(value) = value else { continue };
+        if let Some(mut progress) = progress && progress.0 != value { progress.0 = value; }
+        if matches!(kind, ValueBar::Group(_)) {
+            let width = Val::Percent(value.clamp(0.0,1.0)*100.0);
+            if let Some(mut node) = node && node.width != width { node.width = width; }
+            let next = hull_colour(&theme, value);
+            if let Some(mut color) = color && color.0 != next { color.0 = next; }
+        }
+    }
+}
 
 /// A grid cell with something to press.
 #[derive(Component, Debug, Clone)]
@@ -131,7 +195,7 @@ pub fn fill_resources(commands: &mut Commands, theme: &Theme, strip: Entity, ent
             children![
                 (Node { width: Val::Px(12.0), height: Val::Px(12.0), border_radius: BorderRadius::MAX, ..default() }, BackgroundColor(colour), Pickable::IGNORE),
                 text(e.name.to_uppercase(), theme.micro_size, theme.text_dim),
-                text(e.text.clone(), theme.text_size, theme.text),
+                (ValueText::Resource(e.id), text(e.text.clone(), theme.text_size, theme.text)),
             ],
         ));
     }
@@ -148,14 +212,14 @@ pub fn resource_colour(theme: &Theme, id: usize) -> Color {
     }
 }
 
-fn bar_row(theme: &Theme, label: &str, value: f32, shown: String, w: f32) -> impl Bundle {
+fn bar_row(theme: &Theme, label: &str, value: f32, shown: String, w: f32, kind: ValueBar, number: ValueText) -> impl Bundle {
     (
         Node { align_items: AlignItems::Center, column_gap: Val::Px(theme.gap), ..default() },
         Pickable::IGNORE,
         children![
             (Node { width: Val::Px(54.0), ..default() }, children![text(label.to_uppercase(), theme.micro_size, theme.text_dim)]),
-            progress_bar(theme, w, value),
-            text(shown, theme.small_size, theme.text),
+            (kind, progress_bar(theme, w, value)),
+            (number, text(shown, theme.small_size, theme.text)),
         ],
     )
 }
@@ -181,12 +245,12 @@ fn fill_single(p: &mut EntityCommands, theme: &Theme, s: &Single, size: Vec2) {
         Pickable::IGNORE,
         children![text(s.name.to_uppercase(), theme.heading_size, name_colour), text(s.class.to_uppercase(), theme.small_size, theme.text_dim)],
     ));
-    p.with_child(bar_row(theme, &tr("Hull"), s.hull, format!("{}/{}", s.hull_now, s.hull_max), bar));
+    p.with_child(bar_row(theme, &tr("Hull"), s.hull, format!("{}/{}", s.hull_now, s.hull_max), bar, ValueBar::Hull, ValueText::Hull));
     if let Some(sh) = s.shield {
-        p.with_child(bar_row(theme, &tr("Shield"), sh, format!("{}%", (sh * 100.0).round() as i32), bar));
+        p.with_child(bar_row(theme, &tr("Shield"), sh, format!("{}%", (sh * 100.0).round() as i32), bar, ValueBar::Shield, ValueText::Shield));
     }
     if let Some(pr) = s.progress {
-        p.with_child(bar_row(theme, &tr("Built"), pr, format!("{}%", (pr * 100.0).round() as i32), bar));
+        p.with_child(bar_row(theme, &tr("Built"), pr, format!("{}%", (pr * 100.0).round() as i32), bar, ValueBar::Built, ValueText::Built));
     }
     if s.builder {
         p.with_child(text(tr("Select Build in the grid to queue ships"), theme.small_size, theme.text_dim));
@@ -206,8 +270,12 @@ fn fill_group(p: &mut EntityCommands, theme: &Theme, tiles: &[Tile], size: Vec2)
     }
 }
 
+fn hull_colour(theme: &Theme, hull: f32) -> Color {
+    if hull > 0.5 { theme.good } else if hull > 0.25 { theme.warn } else { theme.bad }
+}
+
 fn tile(theme: &Theme, t: &Tile) -> impl Bundle {
-    let hull_colour = if t.hull > 0.5 { theme.good } else if t.hull > 0.25 { theme.warn } else { theme.bad };
+    let hull_colour = hull_colour(theme, t.hull);
     (
         GroupTile(t.id),
         UiButton,
@@ -230,6 +298,7 @@ fn tile(theme: &Theme, t: &Tile) -> impl Bundle {
                 BackgroundColor(theme.track),
                 Pickable::IGNORE,
                 children![(
+                    ValueBar::Group(t.id),
                     Node { width: Val::Percent(t.hull.clamp(0.0, 1.0) * 100.0), height: Val::Percent(100.0), ..default() },
                     BackgroundColor(hull_colour),
                     Pickable::IGNORE,

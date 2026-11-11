@@ -16,6 +16,8 @@ pub struct Capabilities {
     pub move_order: bool,
     pub attack: bool,
     pub build: bool,
+    /// Stationary producers may set a launch rally; mobile builders may not.
+    pub rally: bool,
     pub mine: bool,
     /// Same supported special kind at the same sim slot on every unit.
     pub specials: Vec<(u8, SpecialKind)>,
@@ -37,10 +39,14 @@ fn one(db: &ContentDb, u: &UnitView) -> Capabilities {
         && def.movement.max_speed > Fixed::ZERO
         && !u.flags.contains(UnitFlags::ENGINES_OFF)
         && !u.flags.contains(UnitFlags::BUILDING);
-    let attack = !u.flags.contains(UnitFlags::WEAPONS_OFF)
+    // This is the resolved ODF's command-panel flag, not a raw sim rule.
+    let attack = def.raw.bool("canAttack").unwrap_or(true)
+        && !u.flags.contains(UnitFlags::WEAPONS_OFF)
         && def.hardpoints.iter().any(|h| {
             db.weapon(h.weapon.key)
-                .is_some_and(|w| !sta_sim::specials::is_special(w))
+                .is_some_and(|w| w.kind != sta_content::WeaponKind::PointDefence
+                    && !w.raw.bool("special").unwrap_or(false)
+                    && !sta_sim::specials::is_special(w))
         });
     let specials = specials_of(db, def)
         .enumerate()
@@ -53,6 +59,8 @@ fn one(db: &ContentDb, u: &UnitView) -> Capabilities {
         move_order: mobile,
         attack,
         build: !def.build.list.is_empty() && !u.flags.contains(UnitFlags::BUILDING),
+        rally: EntityKind::producer_def(def) && def.movement.max_speed == Fixed::ZERO
+            && !def.build.list.is_empty() && !u.flags.contains(UnitFlags::BUILDING),
         mine: mobile && (def.miner || def.class.0 == "freighter"),
         specials,
     }
@@ -76,6 +84,7 @@ pub fn shared(feed: &HudFeed) -> Capabilities {
         common.move_order &= next.move_order;
         common.attack &= next.attack;
         common.build &= next.build;
+        common.rally &= next.rally;
         common.mine &= next.mine;
         common.specials.retain(|s| next.specials.contains(s));
     }
@@ -235,4 +244,46 @@ mod tests {
         feed.selected = vec![EntityId(2)];
         assert!(!shared(&feed).stop && !shared(&feed).build);
     }
+
+    #[test]
+    fn authored_attack_flags_and_producer_rally_match_available_commands() {
+        let mut gun = WeaponDef::new("cmd_gun", "phaser", WeaponKind::Beam);
+        gun.damage=Fixed::ONE;
+        let pd=WeaponDef::new("cmd_pd", "pointdefenselaser", WeaponKind::PointDefence);
+        let mut special=WeaponDef::new("cmd_special", "utility", WeaponKind::Beam);
+        special.raw=Arc::new(sta_odf::resolve("w", &mut |_| Some("special=1".into())).unwrap());
+        let make_def=|name:&str, weapon:Option<&str>, flag:Option<bool>| {
+            let mut def=UnitDef::new(name,"craft");
+            def.movement.max_speed=Fixed::ONE;
+            if let Some(weapon)=weapon { def.hardpoints.push(Hardpoint {weapon:DefRef::new(weapon),node:"hp01".into(),arc:None}); }
+            if let Some(flag)=flag {
+                // The derived file's explicit zero must override inherited one.
+                def.raw=Arc::new(sta_odf::resolve("child", &mut |n| Some(if n.trim_end_matches(".odf")=="base" {
+                    "canAttack=1".into()
+                } else { format!("#include \"base.odf\"\ncanAttack={}",u8::from(flag)) })).unwrap());
+            }
+            def
+        };
+        let normal=make_def("normal",Some("cmd_gun"),None);
+        let disabled=make_def("disabled",Some("cmd_gun"),Some(false));
+        let enabled=make_def("enabled",Some("cmd_gun"),Some(true));
+        let pd_only=make_def("pd_only",Some("cmd_pd"),None);
+        let special_only=make_def("special_only",Some("cmd_special"),None);
+        let mut builder=make_def("builder",None,None);
+        builder.build.list=vec![DefRef::new("normal")];
+        let mut yard=UnitDef::new("yard","shipyard");
+        yard.build.list=vec![DefRef::new("normal")];
+        let db=ContentDb::builder().weapon(gun).weapon(pd).weapon(special)
+            .unit(normal).unit(disabled).unit(enabled).unit(pd_only).unit(special_only).unit(builder).unit(yard).build().unwrap();
+        let cap=|name| one(&db,&UnitView {
+            id:EntityId(1),def:db.key(name).unwrap(),owner:PlayerId(0),pos:Vec3::ZERO,
+            heading:(Fixed::ZERO,Fixed::ONE),speed:Fixed::ZERO,hull:[Fixed::ONE;2],
+            shields:[[Fixed::ZERO;2];4],flags:UnitFlags::SELECTABLE,progress:None,
+        });
+        assert!(cap("normal").attack && cap("enabled").attack);
+        assert!(!cap("disabled").attack && !cap("pd_only").attack && !cap("special_only").attack);
+        assert!(cap("builder").build && !cap("builder").rally);
+        assert!(cap("yard").build && cap("yard").rally);
+    }
+
 }

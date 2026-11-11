@@ -48,5 +48,46 @@ regressions and full OS CI. The other fixes do not change save/network formats.
 
 ## Evidence
 
-Implementation and verification are in progress. Each issue records its own
-source and acceptance evidence; none is closed merely because it was claimed.
+Verified locally on 2026-11-11:
+
+- #339 is closed against the existing merged #348/#347 fix. Menu/launch and
+  content eligibility regressions were refreshed, not reimplemented.
+- 379 client library tests passed (one existing ignored); 320 simulation tests
+  including integrations passed; 174 content tests passed (two install-gated
+  ignored); 299 AI/bench/mission consumer tests passed (ten existing ignored).
+- The new artillery tests cover ordered/automatic fire, allied spotters, sight
+  loss without order loss, range/cloak, unknown seats and seatless fallback.
+  An in-flight projectile continues after sight loss, with identical events
+  and digests after snapshot resume. Existing replay/save regressions pass.
+- HUD tests preserve resource/info descendants while numbers change, preserve
+  glyphs through resizing, and verify first-frame inherited visibility. Command
+  tests cover authored/inherited Attack flags, utility-only mounts, producer
+  rally and formation-page clicks/selection changes.
+- Voice tests cover long-clip conflicts, same-frame alerts, no delayed replay,
+  missing audio, independent other buses and stop release. Real Kira admission
+  follows handle completion, including asynchronous stop fades.
+- Ghost tests verify separate material copies, source preservation, both tints
+  and conversion from custom hull materials. A real windowless Vulkan test of
+  Classic `fyard` on the GTX 1660 Ti captured **8,532 dominant green pixels and
+  8,532 dominant red pixels with ambient lighting zero**. It first exercises
+  real HullMaterial conversion, then removes that path on ghost descendants;
+  original materials remain unchanged. This is actual GPU proof, not a manual
+  in-game acceptance result.
+- Strict client/simulation all-target Clippy, workspace all-target check and
+  NDK29/API26 Android ARM64 client-library compilation pass. No new APK/device
+  or original-game execution is claimed. Dependencies and save/wire layouts
+  are unchanged. Independent source review found no remaining blocker.
+
+The optional GPU check is `installed_ghost_is_readable_without_lights`, gated
+by `STA64_GPU_TESTS=1 STA64_GHOST_TESTS=1 STA64_TEST_INSTALL=...`, optional
+`STA64_TEST_MOD`, `STA64_TEST_MODEL` (default `fyard`) and `STA64_GPU_OUT`.
+It creates no window or input-device events. Proprietary inputs and captured
+images stay outside the repository. Logs are under
+`STA64-artifacts/probes/claimed-bugs/`.
+
+The independently merged documentation PR #363 contained only the contract.
+The implementation is published separately from current main; earlier branches
+are preserved. An optimized desktop candidate and its receipt accompany the
+implementation PR. Manual HUD, voice and construction checks are added to
+TODO without altering earlier entries. No bug is closed merely by assignment,
+and full stock UI/campaign/native runtime parity is not claimed by this batch.

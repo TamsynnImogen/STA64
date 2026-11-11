@@ -448,7 +448,7 @@ mod tests {
         for _ in 0..40 {
             all.extend(r.frame());
         }
-        assert_eq!(all, ["BaseUnderAttack", "EnemyEngaged"], "ship and base alerts once each; our own hits on the enemy are silent");
+        assert_eq!(all, ["BaseUnderAttack"], "the first simultaneous alert plays; the other is discarded and never queued; repeated hits stay rate limited");
     }
 
     #[test]

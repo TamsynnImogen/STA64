@@ -22,6 +22,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use bevy::prelude::*;
+use bevy::time::Real;
 
 pub use mixer::{AudioBackend, KiraAudio, MixBus, Mixer, Sound, Volumes};
 pub use music::{Context as MusicContext, MusicConfig, MusicPlugin};
@@ -197,8 +198,14 @@ fn sync_listener(cam: Query<&GlobalTransform, With<Camera3d>>, mut mixer: NonSen
     }
 }
 
-fn play_sounds(mut msgs: MessageReader<PlaySound>, mut mixer: NonSendMut<Mixer>, mut resolver: ResMut<Resolver>) {
+fn play_sounds(mut msgs: MessageReader<PlaySound>, mut mixer: NonSendMut<Mixer>, mut resolver: ResMut<Resolver>, time: Option<Res<Time<Real>>>) {
+    mixer.backend.advance(time.map_or(0.0, |t| t.delta_secs_f64()));
     for m in msgs.read() {
+        // Admission belongs here so advisor, mission and unit lines share the
+        // same voice bus. A rejected line is consumed, never queued or decoded.
+        if m.bus == Bus::Voice && mixer.backend.bus_busy(Bus::Voice) {
+            continue;
+        }
         if let Some(sound) = builtin(&m.name).or_else(|| resolver.0.resolve(&m.name)) {
             mixer.backend.play(&sound, m.bus, m.at.map(|p| p.to_f32()));
         }
@@ -224,7 +231,81 @@ fn audio_test_key(keys: Option<Res<ButtonInput<KeyCode>>>, mut out: MessageWrite
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::time::TimeUpdateStrategy;
     use sta_sim::Vec3 as SimVec3;
+    use std::time::Duration;
+
+    struct LongVoice;
+
+    impl SoundResolver for LongVoice {
+        fn resolve(&mut self, name: &str) -> Option<Sound> {
+            (name != "missing").then(|| Sound {
+                name: name.to_owned(),
+                sample_rate: 10,
+                frames: Arc::from(vec![[0.0, 0.0]; 20]),
+            })
+        }
+    }
+
+    fn voice_app() -> (App, CallLog) {
+        let (null, log) = NullAudio::new();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(500)))
+            .insert_non_send(Mixer::new(Box::new(null)))
+            .add_plugins(AudioPlugin::default())
+            .insert_resource(Resolver(Box::new(LongVoice)));
+        app.update();
+        log.drain();
+        (app, log)
+    }
+
+    fn request(app: &mut App, name: &str, bus: Bus) {
+        app.world_mut().write_message(PlaySound { name: name.into(), at: None, bus });
+    }
+
+    #[test]
+    fn voice_bus_discards_overlaps_until_exact_completion() {
+        let (mut app, log) = voice_app();
+        request(&mut app, "first", Bus::Voice);
+        request(&mut app, "overlap", Bus::Voice);
+        request(&mut app, "ui", Bus::Ui);
+        app.update();
+        assert_eq!(log.drain(), vec![
+            Call::Play { name: "first".into(), bus: Bus::Voice, at: None },
+            Call::Play { name: "ui".into(), bus: Bus::Ui, at: None },
+        ]);
+        request(&mut app, "late_overlap", Bus::Voice);
+        app.update(); // 0.5 of the 2.0-second clip has elapsed.
+        assert!(log.drain().is_empty());
+        app.update();
+        app.update(); // 1.5 seconds elapsed; no queued line starts.
+        assert!(log.drain().is_empty());
+        request(&mut app, "after", Bus::Voice);
+        app.update(); // Exactly 2.0 seconds elapsed.
+        assert_eq!(log.drain(), vec![Call::Play { name: "after".into(), bus: Bus::Voice, at: None }]);
+        app.update();
+        assert!(log.drain().is_empty(), "discarded lines never replay");
+    }
+
+    #[test]
+    fn missing_audio_and_explicit_stops_release_voice_admission() {
+        let (mut app, log) = voice_app();
+        request(&mut app, "missing", Bus::Voice);
+        request(&mut app, "valid", Bus::Voice);
+        app.update();
+        assert_eq!(log.drain(), vec![Call::Play { name: "valid".into(), bus: Bus::Voice, at: None }]);
+        app.world_mut().non_send_mut::<Mixer>().backend.stop_bus(Bus::Voice);
+        log.drain();
+        request(&mut app, "after_stop_bus", Bus::Voice);
+        app.update();
+        assert_eq!(log.drain(), vec![Call::Play { name: "after_stop_bus".into(), bus: Bus::Voice, at: None }]);
+        app.world_mut().non_send_mut::<Mixer>().backend.stop_all();
+        log.drain();
+        request(&mut app, "after_stop_all", Bus::Voice);
+        app.update();
+        assert_eq!(log.drain(), vec![Call::Play { name: "after_stop_all".into(), bus: Bus::Voice, at: None }]);
+    }
 
     fn app() -> (App, CallLog) {
         let (null, log) = NullAudio::new();
