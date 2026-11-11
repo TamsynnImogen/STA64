@@ -223,6 +223,39 @@ only says which to try and how to interpret alpha/colour-key. Tech-tree xml
 and tt should both parse to the same canonical tree (xml adds features such
 as caplist tooltips, so the canonical form needs those fields optional).
 
+## File-type glossary (from Tammy; semantics unverified unless noted)
+
+| Ext / file | Meaning |
+|---|---|
+| `.odf` | text object definition: weapons, build lists, ship stats, most gameplay data |
+| `.sod` | model |
+| `.spr` | sprite definition: tables of sprites over an atlas |
+| `.cfg` / `.h` | mostly UI; `dynamic_localized_strings.h` holds most strings; `RTS_CFG.h`/`ART_CFG.h` are tunables (see fo-hooks-asi.md) |
+| `.aip` | AI files |
+| `.tt` / `.xml` | tech trees (see dialects above) |
+
+**ODF folder layout.** `odf/` has subfolders `commands`, `other`, `ships`,
+`special_weapons`, `stations`, `system`, `weapons` (with nested `Phasers`,
+`Photons`, `Pulse` in the Classic Enhanced mod). Consequence for packs: a
+pack's ODF may sit in a different subfolder than the base file it overrides,
+so ODF identity should be the *name*, resolved recursively across subfolders,
+not the path. Check how the engine resolves (unverified); matters for
+key-level `[patch]` fragments and `sta64 why`.
+
+**SPR tables.** Each table starts with `@` headings. `@reference=64` = atlas
+size (64x64 px); `@tmaterial=` = blend/material mode for the atlas. Values
+observed by grep across installs (meaning of each not yet checked):
+`interface`, `additive`, `default`, `alphathreshold`, `add_nomipf`,
+`wormhole` (A1 and A2 stock); `font` (A2+); `alpha` (FO/Roots, absent in A1).
+Other directives seen: `@referencewidth`/`@referenceheight` (non-square
+atlases, up to 2048 in FO/Roots), `@auto=square|column|row|scalar`,
+`@skip=off|(r,g,b)`. `@tmaterial` is a prime *profile-keyed enum*: the
+canonical form is a named blend mode, each profile maps its accepted
+spellings, and FO/Roots-only values must be rejected or mapped on A1.
+Next: have an agent pin down each `@tmaterial`'s semantics and the
+`@auto`/`@skip` rules from the installs and the existing `sta_content` spr
+parser.
+
 ## Open unknowns
 
 - **A1 survey** (exe fingerprint, community patches/hooks, A1-specific
