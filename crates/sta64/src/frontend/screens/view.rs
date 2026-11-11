@@ -159,6 +159,7 @@ fn setup(ctx: &Ctx) -> impl Bundle {
     let t = ctx.theme.clone();
     let draft = ctx.draft.clone();
     let map = ctx.data.maps.get(draft.map).map(|m| (m.title().to_owned(), m.slots()));
+    let can_launch = draft.to_setup(ctx.data).is_some();
     content(ctx.theme, move |p| {
         p.spawn((
             row(t.gap),
@@ -184,7 +185,7 @@ fn setup(ctx: &Ctx) -> impl Bundle {
             }
         }
         p.spawn(row(t.gap)).with_children(|r| {
-            if map.is_some() {
+            if can_launch {
                 r.spawn((button(&t, &tr("Launch"), 220.0), Act::Launch));
             } else {
                 r.spawn(disabled_button(&t, &tr("Launch"), 220.0));
