@@ -93,7 +93,9 @@ pub fn order(
     // Positions in the sim's space; the order point is on the plane at the
     // selection's mean height.
     let picked: Vec<(EntityId, Vec3)> =
-        own.iter().filter_map(|&id| view.unit(id).map(|u| (id, Vec3::from(u.pos.to_f32())))).collect();
+        own.iter().filter_map(|&id| view.unit(id)
+            .filter(|u| !u.flags.contains(sta_sim::view::UnitFlags::BUILDING))
+            .map(|u| (id, Vec3::from(u.pos.to_f32())))).collect();
     if picked.is_empty() {
         return;
     }

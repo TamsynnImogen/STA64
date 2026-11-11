@@ -16,8 +16,8 @@
 //!     station entity appears at the site (`progress` 0,
 //!     [`SimEvent::BuildStarted`]) and welds for `build.ticks`, `progress`
 //!     rising each tick; on the last one `progress` becomes `None` (finished,
-//!     revealed) and [`SimEvent::Built`] is emitted. The rig is free once
-//!     deployed; the weld goes on without it.
+//!     revealed) and [`SimEvent::Built`] is emitted. The rig is held in place
+//!     until the weld completes or is explicitly cancelled.
 //!   - Timing: an item queued (or a rig deployed) in the step of tick `t`
 //!     starts in that step and completes in the step of tick `t + ticks`.
 //! - Payment: with the builder's resolved `Features::pay_on_queue` the cost leaves the player's stock
@@ -28,7 +28,8 @@
 //!   `Stop` on a rig drops its pending deploy; whatever was paid is refunded in
 //!   full (items that have started included). A yard or rig destroyed before
 //!   its item or deploy completes refunds the same way. A weld in progress is
-//!   not refundable.
+//!   not refundable. Stop cancels an active weld and removes its unfinished
+//!   station; Move is refused while welding, including queued movement.
 //! - Accepted: any def the content db has, if the builder's `build.list` is
 //!   empty or names it. Tech prerequisites
 //!   are checked before this, in `Sim::apply` ([`crate::tech`], SIM-09).
@@ -224,6 +225,32 @@ impl Production {
         self.deploys.get(rig).is_some()
     }
 
+    /// Derived from the existing persisted weld records: no separate lock state.
+    pub fn is_welding(&self, rig: EntityId) -> bool {
+        self.welds.iter().any(|(_, weld)| weld.builder == rig)
+    }
+
+    pub(crate) fn welding_builders(&self) -> Vec<EntityId> {
+        let mut ids: Vec<_> = self.welds.iter().map(|(_, weld)| weld.builder).collect();
+        ids.sort();
+        ids.dedup();
+        ids
+    }
+
+    /// Explicit Stop preserves the existing non-refundable active-weld rule.
+    /// The caller removes these unfinished actors through ordinary despawn.
+    pub(crate) fn cancel_welds(&mut self, ids: &[EntityId]) -> Vec<EntityId> {
+        let sites: Vec<_> = self.welds.iter()
+            .filter(|(site, weld)| ids.contains(site) || ids.contains(&weld.builder))
+            .map(|(site, _)| site).collect();
+        for &site in &sites { self.welds.remove(site); }
+        sites
+    }
+
+    pub(crate) fn remove_weld_site(&mut self, site: EntityId) {
+        self.welds.remove(site);
+    }
+
     /// `Order::Build`; false when rejected.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn order_build(
@@ -240,7 +267,7 @@ impl Production {
         let Some(b) = units.get(builder) else {
             return false;
         };
-        if (player.is_player() && b.owner != player) || !finished(b) {
+        if (player.is_player() && b.owner != player) || !finished(b) || self.is_welding(builder) {
             return false;
         }
         let (kind, owner, bdef) = (b.kind, b.owner, b.def);

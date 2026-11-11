@@ -48,7 +48,8 @@ impl Sim {
         }
         let radii: Vec<Fixed> = self.units.iter().map(|u| self.body_radius(u.def)).collect();
         let obstacles = if self.confinement.is_active() { self.obstacles() } else { Vec::new() };
-        for (u, &radius) in self.units.iter_mut().zip(&radii).filter(|(u, _)| u.mobile()) {
+        for (u, &radius) in self.units.iter_mut().zip(&radii)
+            .filter(|(u, _)| u.mobile() && !self.production.is_welding(u.id)) {
             for s in &solids {
                 let previous = u.pos;
                 let (dx, dz) = push_from_solid(u.pos, radius, s);

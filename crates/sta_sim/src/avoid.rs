@@ -260,7 +260,7 @@ impl Sim {
                 id: u.id,
                 pos: u.pos,
                 radius: self.body_radius(u.def),
-                movable: true,
+                movable: !self.production.is_welding(u.id),
             })
             .filter(|b| b.radius > Fixed::ZERO)
             .collect();
@@ -269,7 +269,7 @@ impl Sim {
         }
         let mut shifts = separate(&Grid::build(&bodies, CELL_LOG2));
         let obstacles = self.obstacles();
-        for b in &bodies {
+        for b in bodies.iter().filter(|body| body.movable) {
             let owner = self.units.get(b.id).map(|u| u.owner);
             let at = shifts.binary_search_by_key(&b.id, |x| x.0);
             let (mut sx, mut sz) = at.map_or((Fixed::ZERO, Fixed::ZERO), |i| shifts[i].1);

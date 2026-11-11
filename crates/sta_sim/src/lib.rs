@@ -219,19 +219,24 @@ impl Sim {
             }
         };
         match order {
-            Order::Move { units, queue, .. } => {
+            Order::Move { units, to, queue } => {
+                let unlocked: Vec<_> = units.iter().copied()
+                    .filter(|id| !self.production.is_welding(*id)).collect();
+                if unlocked.is_empty() { return false; }
                 if !queue {
-                    self.economy.cancel(&self.units, c.player, units);
+                    self.economy.cancel(&self.units, c.player, &unlocked);
                     if let Some(db) = self.content.clone() {
-                        self.production.cancel(&db, &self.units, &mut self.economy, c.player, units);
+                        self.production.cancel(&db, &self.units, &mut self.economy, c.player, &unlocked);
                     }
                 }
-                self.apply_movement(c.player, order)
+                self.apply_movement(c.player, &Order::Move { units: unlocked, to: *to, queue: *queue })
             }
             Order::Formation { .. } => self.apply_movement(c.player, order),
             Order::Mine { units, node } => {
                 let Some(db) = self.content.clone() else { return false };
-                self.economy.order_mine(&db, &self.units, c.player, units, *node)
+                let unlocked: Vec<_> = units.iter().copied()
+                    .filter(|id| !self.production.is_welding(*id)).collect();
+                self.economy.order_mine(&db, &self.units, c.player, &unlocked, *node)
             }
             Order::Stop { units } => {
                 // Stop controls activities as well as movement. Select eligible
@@ -251,6 +256,9 @@ impl Sim {
                 self.economy.cancel(&self.units, c.player, &eligible);
                 if let Some(db) = self.content.clone() {
                     self.production.cancel(&db, &self.units, &mut self.economy, c.player, &eligible);
+                }
+                for site in self.production.cancel_welds(&eligible) {
+                    self.despawn(site, None);
                 }
                 // Immobile actors have no course to stop; their accepted
                 // cleanup must not be reported as a rejected movement order.
@@ -285,6 +293,7 @@ impl Sim {
 
     /// Move every unit one tick and close the tick with its view.
     fn advance(&mut self) -> TickOutput {
+        self.hold_welding_builders();
         self.constrain_targets();
         let held = self.steer_around();
         self.step_kinematics();
@@ -308,6 +317,7 @@ impl Sim {
             self.economy.step(&mut self.units, db, &mut self.events);
             self.production.step(&mut self.units, db, &mut self.economy, &mut self.events, &mut self.confinement);
         }
+        self.hold_welding_builders();
         self.advance_courses();
         self.constrain_targets();
         self.tick += 1;
@@ -315,7 +325,11 @@ impl Sim {
     }
 
     fn build_view(&self) -> WorldView {
-        let units = self.units.iter().map(Entity::view).collect();
+        let units = self.units.iter().map(|entity| {
+            let mut view = entity.view();
+            view.flags = view.flags.with(view::UnitFlags::BUILDING, self.production.is_welding(entity.id));
+            view
+        }).collect();
         let players = self
             .players
             .iter()
