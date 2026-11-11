@@ -104,6 +104,7 @@ impl Sim {
         self.confinement.remove(id);
         self.perception.remove(id);
         self.production.remove_rally_entity(id);
+        self.production.remove_weld_site(id);
         self.events.push(SimEvent::Destroyed { id, by });
         true
     }

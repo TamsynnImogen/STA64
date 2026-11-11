@@ -265,6 +265,153 @@ fn station_is_visible_and_unfinished_while_welding() {
     assert_eq!(sim.unit(id).unwrap().progress, None);
 }
 
+fn welding_fixture() -> (Sim, EntityId, EntityId) {
+    welding_fixture_profile(sta_content::Profile::Native)
+}
+
+fn welding_fixture_profile(profile: sta_content::Profile) -> (Sim, EntityId, EntityId) {
+    let mut sim = game(true);
+    let source = sim.content().unwrap().clone();
+    let mut content = ContentDb::builder().profile(profile).features(source.features().clone());
+    for unit in source.units() { content = content.unit(unit.clone()); }
+    for weapon in source.weapons() { content = content.weapon(weapon.clone()); }
+    sim.content = Some(Arc::new(content.build().unwrap()));
+    let rig = spawn(&mut sim, "fx_rig", v(0, 0));
+    fund(&mut sim, 1500);
+    assert!(build(&mut sim, rig, "fx_station", Some(v(10, 0))));
+    assert!(sim.production.is_welding(rig));
+    (sim, rig, EntityId(rig.0 + 1))
+}
+
+#[test]
+fn welding_rig_refuses_direct_queued_and_replacement_orders() {
+    for profile in [sta_content::Profile::Native, sta_content::Profile::Sta1Classic,
+        sta_content::Profile::Sta2Classic, sta_content::Profile::Fo4] {
+    let (mut sim, rig, station) = welding_fixture_profile(profile);
+    let at = sim.unit(rig).unwrap().pos;
+    let stock = dilithium(&sim);
+    for (seq, queue) in [false, true].into_iter().enumerate() {
+        let out = sim.step(&[cmd(P0, seq as u32, CommandKind::Order(Order::Move {
+            units: vec![rig], to: v(1000, 900), queue,
+        }))]);
+        assert!(out.events.iter().any(|e| matches!(e, SimEvent::Rejected { .. })));
+        assert_eq!(sim.unit(rig).unwrap().pos, at);
+        assert!(sim.movement.course(rig).is_none());
+        assert!(sim.unit(station).unwrap().progress.is_some());
+        assert_eq!(dilithium(&sim), stock);
+    }
+    assert!(!build(&mut sim, rig, "fx_station", Some(v(500, 400))));
+    assert_eq!(dilithium(&sim), stock);
+    assert!(sim.view().unit(rig).unwrap().flags.contains(crate::view::UnitFlags::BUILDING));
+    }
+}
+
+#[test]
+fn welding_holds_velocity_courses_and_collision_position_but_not_other_units() {
+    let (mut sim, rig, _station) = welding_fixture();
+    let at = sim.unit(rig).unwrap().pos;
+    // A restored stale velocity/target or another actor cannot move the rig.
+    let unit = sim.units.get_mut(rig).unwrap();
+    unit.speed = Fixed::from_int(100);
+    unit.omega = Fixed::ONE;
+    unit.target = Some(v(1000, 1000));
+    let other = spawn(&mut sim, "fx_cruiser", at);
+    let out = sim.step(&[cmd(P0, 20, CommandKind::Order(Order::Move {
+        units: vec![rig, other], to: v(800, 800), queue: true,
+    }))]);
+    assert!(!out.events.iter().any(|e| matches!(e, SimEvent::Rejected { .. })));
+    for _ in 0..90 {
+        sim.step(&[]);
+        let unit = sim.unit(rig).unwrap();
+        assert_eq!(unit.pos, at);
+        assert_eq!(unit.speed, Fixed::ZERO);
+        assert_eq!(unit.omega, Fixed::ZERO);
+        assert_eq!(unit.target, None);
+    }
+    assert_ne!(sim.unit(other).unwrap().pos, at);
+}
+
+#[test]
+fn stop_cancels_weld_without_refunding_and_releases_move_in_same_batch() {
+    let (mut sim, rig, station) = welding_fixture();
+    let stock = dilithium(&sim);
+    let out = sim.step(&[cmd(PlayerId(1), 0, CommandKind::Order(Order::Stop { units: vec![rig] }))]);
+    assert!(out.events.iter().any(|e| matches!(e, SimEvent::Rejected { .. })));
+    assert!(sim.production.is_welding(rig));
+    let out = sim.step(&[
+        cmd(P0, 30, CommandKind::Order(Order::Stop { units: vec![rig] })),
+        cmd(P0, 31, CommandKind::Order(Order::Move { units: vec![rig], to: v(700, 0), queue: false })),
+    ]);
+    assert!(!out.events.iter().any(|e| matches!(e, SimEvent::Rejected { .. })));
+    assert!(out.events.iter().any(|e| matches!(e, SimEvent::Destroyed { id, .. } if *id == station)));
+    assert!(sim.unit(station).is_none());
+    assert!(!sim.production.is_welding(rig));
+    assert_eq!(dilithium(&sim), stock);
+    assert!(!sim.view().unit(rig).unwrap().flags.contains(crate::view::UnitFlags::BUILDING));
+    assert_eq!(sim.unit(rig).unwrap().target, Some(v(700, 0)));
+}
+
+#[test]
+fn weld_lock_survives_snapshot_and_completion_releases_it_at_existing_tick() {
+    let (mut sim, rig, station) = welding_fixture();
+    let db = sim.content().unwrap().clone();
+    let mut restored = Sim::from_snapshot(&sim.snapshot(), Some(db)).unwrap();
+    assert_eq!(sim.digest(), restored.digest());
+    let at = sim.unit(rig).unwrap().pos;
+    for _ in 0..1800 {
+        let a = sim.step(&[]);
+        let b = restored.step(&[]);
+        assert_eq!(a, b);
+        assert_eq!(sim.unit(rig).unwrap().pos, at);
+    }
+    assert_eq!(sim.unit(station).unwrap().progress, None);
+    assert!(!sim.production.is_welding(rig));
+    assert!(!sim.view().unit(rig).unwrap().flags.contains(crate::view::UnitFlags::BUILDING));
+    let out = sim.step(&[cmd(P0, 50, CommandKind::Order(Order::Move {
+        units: vec![rig], to: v(700, 0), queue: false,
+    }))]);
+    assert!(!out.events.iter().any(|e| matches!(e, SimEvent::Rejected { .. })));
+    assert_ne!(sim.unit(rig).unwrap().pos, at);
+}
+
+#[test]
+fn destroying_unfinished_station_releases_constructor_lock() {
+    let (mut sim, rig, station) = welding_fixture();
+    assert!(sim.despawn(station, None));
+    assert!(!sim.production.is_welding(rig));
+    let out = sim.step(&[cmd(P0, 60, CommandKind::Order(Order::Move {
+        units: vec![rig], to: v(700, 0), queue: false,
+    }))]);
+    assert!(!out.events.iter().any(|e| matches!(e, SimEvent::Rejected { .. })));
+}
+
+#[test]
+fn welding_rig_stays_fixed_when_a_field_overlaps_its_parked_position() {
+    let (mut sim, rig, _station) = welding_fixture();
+    let at = sim.unit(rig).unwrap().pos;
+    sim.regions.push(sta_content::Region {
+        kind: sta_content::RegionKind::AsteroidField,
+        odf: "test_field".into(),
+        shape: sta_content::RegionShape::Sphere { centre: at, radius: Fixed::from_int(100) },
+    });
+    for _ in 0..10 {
+        sim.step(&[]);
+        assert_eq!(sim.unit(rig).unwrap().pos, at);
+    }
+}
+
+#[test]
+fn stop_on_the_unfinished_station_cancels_only_its_weld() {
+    let (mut sim, rig, station) = welding_fixture();
+    let stock = dilithium(&sim);
+    let out = sim.step(&[cmd(P0, 70, CommandKind::Order(Order::Stop { units: vec![station] }))]);
+    assert!(!out.events.iter().any(|e| matches!(e, SimEvent::Rejected { .. })));
+    assert!(sim.unit(station).is_none());
+    assert!(!sim.production.is_welding(rig));
+    assert!(sim.unit(rig).is_some());
+    assert_eq!(dilithium(&sim), stock);
+}
+
 #[test]
 fn moving_a_rig_cancels_its_deploy_with_a_refund() {
     let mut sim = game(true);
@@ -505,7 +652,10 @@ fn rig_parks_beside_its_site_and_neither_is_pushed() {
     // deploy reach from it.
     let ring = 150.0 + 45.0 + 10.0;
     let d = gap(&sim, rig);
-    assert!(d >= 150.0 + 45.0 && d <= ring + 40.0, "rig {d} from the site");
+    // Welding now holds at the deployment boundary instead of coasting closer
+    // after BuildStarted. Its outer limit is the rig's authored deploy reach.
+    let reach = deploy_reach(&sim.unit(rig).unwrap().stats).to_f32() as f64;
+    assert!(d >= 150.0 + 45.0 && d <= ring + reach + 1.0, "rig {d} from the site");
     let rig_at = sim.unit(rig).unwrap().pos;
     run(&mut sim, 2400, &mut log);
     assert_eq!(sim.unit(rig).unwrap().pos, rig_at, "the rig is not pushed while it welds");

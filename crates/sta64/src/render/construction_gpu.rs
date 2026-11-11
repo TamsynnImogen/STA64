@@ -81,6 +81,7 @@ fn installed_station_reveals_opaque_chunks_offscreen() {
         })
         .init_resource::<Stages>()
         .init_resource::<super::ConstructionEdges>()
+        .init_resource::<super::ConstructionWork>()
         .add_systems(
             PostUpdate,
             super::sync_reveal.after(bevy::transform::TransformSystems::Propagate),
@@ -158,9 +159,26 @@ fn installed_station_reveals_opaque_chunks_offscreen() {
     app.update();
     let roots = app.world().resource::<Stages>().0.clone();
     let frames = Arc::new(Mutex::new(Vec::<Image>::new()));
-    for (stage, progress) in [Some(0.0), Some(0.5), None, None].into_iter().enumerate() {
-        install_progress(&mut app, progress);
-        let visible = roots[usize::from(stage == 3)];
+    let captures = [
+        (Some(0.5), Some(None)),
+        (Some(0.5), Some(Some(0.5))),
+        (Some(0.75), Some(Some(0.5))),
+        (Some(0.5), None), // Missing work entry keeps ordinary progress unblocked.
+        (Some(1.0), Some(None)),
+        (None, None), // Unblocked full reference instance.
+    ];
+    for (stage, (progress, start)) in captures.into_iter().enumerate() {
+        if stage < 5 {
+            install_progress(&mut app, progress);
+        }
+        {
+            let mut work = app.world_mut().resource_mut::<super::ConstructionWork>();
+            work.starts.clear();
+            if let Some(start) = start {
+                work.starts.insert(sta_sim::EntityId(1), start);
+            }
+        }
+        let visible = roots[usize::from(stage == 5)];
         for &root in &roots {
             *app.world_mut().get_mut::<Visibility>(root).unwrap() = if root == visible {
                 Visibility::Inherited
@@ -207,23 +225,28 @@ fn installed_station_reveals_opaque_chunks_offscreen() {
         }
     }
     let counts: Vec<usize> = masks.iter().map(|m| m.iter().filter(|&&p| p).count()).collect();
-    assert_eq!(counts[0], 0, "zero progress must not display the full hull");
+    assert_eq!(counts[0], 0, "pre-weld progress must not display the hull");
+    assert_eq!(counts[0], counts[1], "latched first weld must not jump visual progress");
     assert!(
-        counts[1] > 100 && counts[1] < counts[2],
+        counts[2] > 100 && counts[2] < counts[4],
         "station fails partial/full reveal: {counts:?}"
     );
-    let outside = masks[1]
+    assert_eq!(
+        counts[2], counts[3],
+        "missing work entry must use ordinary sim progress"
+    );
+    let outside = masks[2]
         .iter()
-        .zip(&masks[2])
+        .zip(&masks[4])
         .filter(|(partial, full)| **partial && !**full)
         .count();
     assert!(
         outside * 100 <= counts[1],
         "partial geometry escaped full station silhouette: {outside}"
     );
-    let mismatch = masks[2]
+    let mismatch = masks[4]
         .iter()
-        .zip(&masks[3])
+        .zip(&masks[5])
         .filter(|(finished, original)| finished != original)
         .count();
     assert_eq!(mismatch, 0, "completed station differs from the original shared mesh");

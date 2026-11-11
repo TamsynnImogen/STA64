@@ -189,6 +189,7 @@ struct Site {
     returning: bool,
     closure_started: Option<f64>,
     missing_hardpoints: BTreeSet<u8>,
+    first_weld_progress: Option<f32>,
 }
 
 /// Constructors whose production bay stays open for working or returning bees.
@@ -206,6 +207,7 @@ impl Plugin for SpecialsFxPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Construction>()
             .init_resource::<ConstructionBays>()
+            .init_resource::<crate::render::construction::ConstructionWork>()
             .add_systems(
                 Update,
                 (
@@ -420,6 +422,7 @@ fn sync_construction(
     link: Res<SimLink>,
     mut cons: ResMut<Construction>,
     mut bays: ResMut<ConstructionBays>,
+    mut work: ResMut<crate::render::construction::ConstructionWork>,
     content: Option<Res<ContentRes>>,
     edges: Option<Res<crate::render::construction::ConstructionEdges>>,
     ents: Option<Res<SimEntities>>,
@@ -618,16 +621,19 @@ fn sync_construction(
                 returning: false,
                 closure_started: None,
                 missing_hardpoints: BTreeSet::new(),
+                first_weld_progress: None,
             },
         );
     }
     bays.open.clear();
+    work.starts.clear();
     let mut finished = Vec::new();
     for (&id, site) in &mut cons.active {
         if !building.contains_key(&id) {
             site.returning = true;
         }
-        if point(&link, id, clock.alpha()).is_none() {
+        let site_center = point(&link, id, clock.alpha());
+        if site_center.is_none() {
             site.returning = true;
         }
         let targets = edges
@@ -659,7 +665,14 @@ fn sync_construction(
                         spec.hardpoints.get(i)
                     );
                 }
-                bee.update(clock.now(), home, targets, i as u8, spec, site.returning);
+                bee.update(clock.now(), home, site_center.unwrap_or(Vec3::ZERO), targets, i as u8, spec, site.returning);
+            }
+            if !site.returning && !site.bees.is_empty() {
+                if site.first_weld_progress.is_none() && site.bees.iter().any(|bee| bee.cycle > 0) {
+                    site.first_weld_progress = curr.units.iter().find(|unit| unit.id == id)
+                        .and_then(|unit| unit.progress).map(|p| p.to_f32().clamp(0.0, 1.0));
+                }
+                work.starts.insert(id, site.first_weld_progress);
             }
             if site.returning && site.bees.iter().all(|b| b.phase == BeePhase::Closing) {
                 let since = *site.closure_started.get_or_insert(clock.now());
@@ -1320,12 +1333,17 @@ mod tests {
         assert!((sites[&EntityId(3)].bees[0].at.x - 10.0).abs() < 0.1, "bot1 transformed home");
         assert!((sites[&EntityId(4)].bees[0].at.x - 110.0).abs() < 0.1);
         assert_eq!(sites[&EntityId(3)].bees[0].phase, BeePhase::Waiting);
+        assert_eq!(app.world().resource::<crate::render::construction::ConstructionWork>().starts.get(&EntityId(3)), Some(&None));
         assert!(app.world().resource::<ConstructionBays>().open.contains(&EntityId(1)));
         let mut welded = false;
         while app.world().resource::<SimLink>().curr().tick < 90 {
             app.update();
             let sites = &app.world().resource::<Construction>().active;
             if sites[&EntityId(3)].bees[0].phase == BeePhase::Welding {
+                assert!(sites[&EntityId(3)].bees[0].at.distance(sites[&EntityId(3)].bees[0].edge) >= 14.9,
+                    "default stand-off leaves a visible beam");
+                assert_eq!(app.world().resource::<crate::render::construction::ConstructionWork>().starts.get(&EntityId(3)), Some(&None),
+                    "arrival alone must not reveal the station");
                 let world = app.world_mut();
                 let mut query = world.query::<(&SpecialFx, &Transform, &FxAlpha)>();
                 // The arc shares the current geometry edge, with the beam lit only while welding.
@@ -1336,6 +1354,11 @@ mod tests {
             }
         }
         assert!(welded, "bee never welded at the published edge");
+        while app.world().resource::<SimLink>().curr().tick < 90
+            && app.world().resource::<Construction>().active[&EntityId(3)].bees[0].cycle == 0 { app.update(); }
+        assert!(app.world().resource::<Construction>().active[&EntityId(3)].bees[0].cycle > 0);
+        assert!(app.world().resource::<crate::render::construction::ConstructionWork>().starts[&EntityId(3)].is_some(),
+            "first completed welding dwell opens visual progress");
         to_tick(&mut app, 91);
         let sites = &app.world().resource::<Construction>().active;
         assert!(sites[&EntityId(3)].returning);
@@ -1353,7 +1376,9 @@ mod tests {
         assert!(!sites.contains_key(&EntityId(3)), "new job supersedes old closure");
         assert_eq!(sites[&EntityId(5)].builder, Some(EntityId(1)));
         assert_eq!(sites[&EntityId(5)].bees.len(), 1);
-        to_tick(&mut app, 160);
+        // The wider outward stand-off extends bee 2's return flight. Its two
+        // second closure begins after reaching home, not at completion tick 90.
+        to_tick(&mut app, 170);
         assert!(!app.world().resource::<Construction>().active.contains_key(&EntityId(4)), "closure expires");
     }
 
