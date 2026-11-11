@@ -256,6 +256,45 @@ Next: have an agent pin down each `@tmaterial`'s semantics and the
 `@auto`/`@skip` rules from the installs and the existing `sta_content` spr
 parser.
 
+## Worked example: rangedobjectaffector wave lights (from JanB, Roots author)
+
+`rangedobjectaffector` weapons (type 1 weaponenhancer, type 2 sensor
+scrambler = "ECM" in Roots, type 3 cloak enhancer, per JanB) tint a craft's
+hull with a moving **wave light**. One feature, four dependencies, which is a
+good stress test for the pack/profile/slot model:
+- **Rendering path depends on profile x model.** Stock A2 and stock FO use
+  vertex lighting (the "wavy pattern"; only some Borg parts have bump maps in
+  A2). FO/Roots ships bump maps on all ships and the Roots engine lights
+  bump-mapped hulls as a reflection tint instead (screenshots from JanB show
+  both, incl. cloaked Romulans falling back to the wavy look because cloaked
+  craft are not drawn through the bump path). So the slot variant is chosen
+  by (profile feature, "model has bump map", cloak state), not by profile
+  alone.
+- **Roots-engine-only tunables** (ART_CFG.h; not in stock A2/FO):
+  `cfgTy2Lit_R/G/B` (type 2 colour, default 0.0/0.5/1.0),
+  `USE_ROACOMBI_LIGHT` (0 = engine mixes, 1 = force custom),
+  `cfgCombiLit_R/G/B` (type 1+2 combined, default 1.0/0.25/0.0). Originally
+  types 2/3 ignored colour and any combination went white. These are
+  `cfg.*` tunables owned by a Roots-lineage profile; stock profiles must not
+  honour them.
+- **ODF semantics:** type 1 obeys the cycle-colour ODF keys (guide:
+  guide.fleetops.net/guide/modding/fo-odf-commands/weapon/rangedobjectaffector);
+  types 2/3 do not. Also (changelog) negative `rangefactor` on type 1 affects
+  hit chance (`odf.*` quirk, sim-side).
+- **Refit already models it** (`render3d/mods/hulls/src/hooks.rs:116`,
+  `wave_lights`): reads five engine WaveLight objects per draw (weapon
+  enhancer, sensor scrambler, speed enhancer, psionic getters, plus a white
+  wave on crafts while a craft field is > 0), each with colour, wavelength,
+  speed, direction; legacy lighting is
+  `colour x 0.5 sin(2 pi (p.dir/wavelength + t x speed))` per vertex.
+  Naming mismatch to resolve: Refit calls the third getter "speed enhancer",
+  JanB calls type 3 "cloak enhancer".
+Slot sketch: `hull.affector_light` with inputs {active affector set, per-type
+colour/wavelength/speed/dir, cycle colours, model has bump, cloaked} and
+params from the profile (ART_CFG keys mapped to pack tunables). The sim
+exposes only the affector state; colour mixing and wave maths stay render-side
+(no determinism risk).
+
 ## Open unknowns
 
 - **A1 survey** (exe fingerprint, community patches/hooks, A1-specific
