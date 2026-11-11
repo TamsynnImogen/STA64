@@ -146,3 +146,48 @@ exception to keep the normal viewer list consistent with its actual resolver.
 An opt-in installed-corpus test uses `STA64_TEST_M3D_ROOTS`, public readers and
 before/after byte comparisons. It counts expected historical refusals and
 warnings separately; unset CI environments are explicitly reported as skipped.
+
+## Implemented format support and verification
+
+| Context | Implemented data | Current limit |
+| --- | --- | --- |
+| Complete Mad3D scenes | 1.93 old layout; existing 1.94–2.06 geometry/material/hierarchy/animation subset | Existing unsupported animation kinds remain warnings |
+| Legacy SOD containers | Existing 1.4–1.93 reader; original magic and values stay on disk | 1.0/1.2 retain the native version refusal |
+| Type-11 controls | Typed LOD identity and shared finest-branch selection | Dynamic camera-distance switching is RND-07 |
+| Type-2 lights | Authored subtype, RGB and both falloff values; visible in inspector | Exact native light-shader playback is not implemented |
+| Chunk libraries | 2.04–2.06 material names, five texture slots/flags, shader strings, variant count | Libraries are not complete scene models |
+| Chunk geometry | 2.04–2.06 bounds, mesh flags, positions, stored normals, UVs, 32-bit corner bindings and external material indices | Raw inspection; native destruction/variant playback is not implemented |
+
+On merged main `10c82cc` plus this package, the asset suite passes 51 library
+tests, six model-info tests and seven texture-inspection tests. The configured
+installed check reads 2,412 files: 606 scenes, 594 libraries and 1,196 geometry
+variants decode; 16 native historical refusals remain explicit. This includes
+the two preserved Legacy roots and six additional test-mod models. Input bytes
+match before and after every decode. Twelve geometry files report retained
+non-finite UV values; they must not be called safe GPU input.
+
+The independent file/identity receipt also checks existing numbered geometry
+variants against their real material libraries. Two declared names,
+`warp_dampener_root1.m3d` and `warp_dampener_root2.m3d`, are absent in the original
+and copied install (four paths). These are content gaps; no fallback files or
+native variant-selection behavior are invented.
+
+Integrated client tests pass 344 checks with one existing ignored test. Strict
+two-crate all-target Clippy, workspace all-target compilation and API-26 Android
+ARM64 client-library compilation pass. The offline workspace lock refresh is
+unchanged; no dependency is added or upgraded by CON-08. No original executable
+or GUI was run. Library compilation is not APK/device or native visual proof.
+
+Inspector modes are read-only:
+
+```sh
+target/debug/examples/model_info --file <model.sod-or-m3d>
+target/debug/examples/model_info --chunk-materials <library.m3d>
+target/debug/examples/model_info --chunk-geometry <variant.m3d>
+```
+
+Normal install/mod/model invocation retains VFS precedence. `--file` is for
+legacy SOD/M3D streams; other native models use the normal VFS mode. Set
+`STA64_TEST_M3D_ROOTS` to the platform path-separated list of corpus directories
+to enable the installed test. Use the repository's low-priority, two-job Cargo
+settings; without that variable CI explicitly skips the private corpus.

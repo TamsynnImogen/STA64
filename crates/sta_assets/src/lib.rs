@@ -3,7 +3,7 @@
 //! Format history this crate follows:
 //! - Armada II: SOD models, TGA textures (`Textures/RGB/`).
 //! - Fleet Operations: adds DDS textures, mostly in `Textures/`.
-//! - A2FOExtensions: adds M3D models (1.94–2.06).
+//! - A2FOExtensions: adds M3D models (1.93–2.06); Legacy chunk contexts are explicit.
 //! - STA64 native: static glTF/GLB models with PNG/JPEG material images.
 //!
 //! Lookup by bare name searches the known folders. A file in a higher-priority

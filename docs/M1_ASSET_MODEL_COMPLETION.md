@@ -17,14 +17,23 @@ host library checks alone do not establish Android rendering or APK acceptance.
 | Borg variants, authored and generated mips | Implemented | Refresh asset and material checks |
 | SOD bump height maps and DDS | Implemented | CPU and optional GPU checks; device support remains distinct |
 | Sprites, texture flipbooks, spray/cloud emitters | Implemented | Refresh animation/emitter checks and manual appearance |
-| Native M3D parsing/material references | Implemented for 1.94–2.06 | Corpus census and errors must identify unsupported inputs |
-| M3D 1.93 and Legacy LOD/effect nodes | Incomplete: 1.93 rejected, type 2/11 semantics incomplete | CON-08, verified layout/behavior and tests; do not guess unknown fields |
-| glTF/GLB through shared model and viewer | CON-09 implements static scenes, typed PBR materials and VFS resources | CPU/material and offscreen GPU fixtures pass; full regressions/publication and manual viewer acceptance remain |
+| Native M3D parsing/material references | CON-08 supports complete 1.93–2.06 streams and explicit 2.04–2.06 chunk contexts | Corpus/check evidence and limitations in [M3D support](M3D_NODE_SUPPORT.md) |
+| M3D 1.93 and Legacy LOD/effect nodes | CON-08 preserves typed LOD/light fields and finest-LOD policy | Native light-shader playback and distance LOD remain renderer work; parsing is not rendered-effect parity |
+| glTF/GLB through shared model and viewer | Static CON-09 implementation merged in #334 | CPU/material/offscreen Vulkan checks and PR CI pass; manual viewer and Android device acceptance remain distinct |
 
 The read-only audit found private M3D 1.93 examples, so that row cannot be
 resolved by removing the version from the requirements. Unsupported effects
 must not be silently described as implemented. Private game files and recovered
 binary excerpts do not become public fixtures.
+
+CON-08's installed check accounts for 2,412 paths: 606 complete scenes,
+594 chunk material libraries and 1,196 geometry variants decode; 16 historical
+StarTrekDB 1.0/1.2 files retain the native version refusal. Twelve geometry
+files retain non-finite UV values with explicit warnings. Two declared variant
+names are absent in both preserved installs (four paths); no files are invented
+to fill those content gaps. Chunk inspection does not implement native
+destruction or variant playback. M1 remains open for the Sabre regression and
+the remaining acceptance/audit gates below.
 
 ## Work sequence and ownership
 
