@@ -45,6 +45,11 @@ pub struct ContentDb {
     /// What may be built given what is owned (CON-06); `None` allows
     /// everything, as the fakes do.
     tech: Option<Arc<TechTree>>,
+    /// Definition-key-aligned immutable map rules; weapons have no policy.
+    map_confinement: Vec<Option<crate::ConfinementRules>>,
+    construction_confinement: Vec<Option<crate::ConfinementRules>>,
+    has_map_confinement: bool,
+    map_confinement_warnings: Vec<Warning>,
     hash: u64,
 }
 
@@ -215,6 +220,27 @@ impl ContentDb {
         u.build.queue_limit.unwrap_or_else(|| self.profile.build_queue_limit())
     }
 
+    /// Effective per-definition rules, resolved once at build time.
+    pub fn map_confinement(&self, key: ContentKey) -> Option<&crate::ConfinementRules> {
+        self.map_confinement.get(key.0 as usize).and_then(Option::as_ref)
+    }
+
+    /// Plain-GameObject policy while the final definition is under construction.
+    pub fn construction_confinement(&self, key: ContentKey) -> Option<&crate::ConfinementRules> {
+        self.construction_confinement.get(key.0 as usize).and_then(Option::as_ref)
+    }
+
+    /// Includes supported definitions that may be spawned later, not just actors.
+    pub fn has_map_confinement(&self) -> bool {
+        self.has_map_confinement
+    }
+
+    /// Diagnostics for unsupported policies or typed overrides built in code.
+    /// Sim setup adds volume diagnostics and reports these once per setup.
+    pub fn map_confinement_warnings(&self) -> &[Warning] {
+        &self.map_confinement_warnings
+    }
+
     /// The switches that apply to one weapon, as [`unit_features`](ContentDb::unit_features).
     pub fn weapon_features<'a>(&'a self, w: &'a WeaponDef) -> &'a Features {
         w.features.as_ref().unwrap_or(&self.features)
@@ -300,7 +326,26 @@ impl ContentBuilder {
             }
         }
         let resources = self.resources.unwrap_or_else(|| ResourceModel::for_profile(self.profile));
-        let mut db = ContentDb { defs, profile: self.profile, features: self.features, resources, tech: self.tech.map(Arc::new), hash: 0 };
+        let mut map_confinement_warnings = Vec::new();
+        let map_confinement: Vec<_> = defs.iter().map(|(_, def)| match def {
+            Def::Unit(u) => Some(crate::confinement::resolve(
+                self.profile, &u.class.0, u.confinement, &format!("{}.odf", u.odf),
+                &mut map_confinement_warnings,
+            )),
+            Def::Weapon(_) => None,
+        }).collect();
+        let has_map_confinement = map_confinement.iter().flatten().any(|r| r.is_enabled());
+        let construction_confinement = defs.iter().zip(&map_confinement).map(|((_, def), rules)| {
+            match (def, rules) {
+                (Def::Unit(u), Some(r)) => Some(crate::confinement::construction(self.profile, *r, u.confinement)),
+                _ => None,
+            }
+        }).collect();
+        let mut db = ContentDb {
+            defs, profile: self.profile, features: self.features, resources,
+            tech: self.tech.map(Arc::new), map_confinement, construction_confinement, has_map_confinement,
+            map_confinement_warnings, hash: 0,
+        };
         db.hash = hash(&db);
         Ok(db)
     }
@@ -439,6 +484,26 @@ fn hash(db: &ContentDb) -> u64 {
                     }
                 }
                 feature_bits(&mut h, u.features.as_ref(), &db.features);
+                // No new bytes for disabled/unsupported rules: old Native
+                // databases and genuine replay/save controls retain their hash.
+                if let Some(r) = db.map_confinement(u.key).filter(|r| r.is_enabled()) {
+                    h.byte(0xe7);
+                    h.byte(1); // resolved map-rule hash schema
+                    h.byte(r.spatial.hash_tag());
+                    h.byte(r.initial.hash_tag());
+                    h.byte(u8::from(r.rearm));
+                    h.fixed(r.inset);
+                    h.fixed(r.upper_epsilon);
+                    if let Some(c) = db.construction_confinement(u.key).filter(|c| *c != r) {
+                        h.byte(0xe8);
+                        h.byte(1);
+                        h.byte(c.spatial.hash_tag());
+                        h.byte(c.initial.hash_tag());
+                        h.byte(u8::from(c.rearm));
+                        h.fixed(c.inset);
+                        h.fixed(c.upper_epsilon);
+                    }
+                }
             }
             Def::Weapon(w) => {
                 h.byte(1);

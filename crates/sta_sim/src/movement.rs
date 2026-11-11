@@ -126,6 +126,19 @@ fn slots(kind: u8, n: usize) -> Vec<(Fixed, Fixed)> {
 }
 
 impl Sim {
+    /// Run after the whole command batch and after late target writers. A later
+    /// ForceOntoMap edit in the same batch therefore governs every resolved leg.
+    pub(crate) fn constrain_targets(&mut self) {
+        if !self.confinement.is_active() { return; }
+        for unit in self.units.iter_mut() {
+            let Some(volume) = self.confinement.active_volume(unit) else { continue };
+            if let Some(target) = unit.target.as_mut() { *target = volume.check(*target, true).position; }
+            if let Some(course) = self.movement.courses.get_mut(unit.id) {
+                for target in &mut course.waypoints { *target = volume.check(*target, true).position; }
+            }
+        }
+    }
+
     /// Apply a move, stop or formation order. `false`: reject (no unit could
     /// take it, or an unknown formation kind).
     pub(crate) fn apply_movement(&mut self, player: PlayerId, order: &Order) -> bool {

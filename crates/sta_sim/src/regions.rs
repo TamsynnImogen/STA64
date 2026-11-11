@@ -47,11 +47,16 @@ impl Sim {
             return;
         }
         let radii: Vec<Fixed> = self.units.iter().map(|u| self.body_radius(u.def)).collect();
+        let obstacles = if self.confinement.is_active() { self.obstacles() } else { Vec::new() };
         for (u, &radius) in self.units.iter_mut().zip(&radii).filter(|(u, _)| u.mobile()) {
             for s in &solids {
+                let previous = u.pos;
                 let (dx, dz) = push_from_solid(u.pos, radius, s);
                 u.pos.x = u.pos.x + dx;
                 u.pos.z = u.pos.z + dz;
+                if u.pos != previous {
+                    crate::avoid::constrain_position(&mut self.confinement, u, previous, radius, &obstacles);
+                }
             }
         }
     }

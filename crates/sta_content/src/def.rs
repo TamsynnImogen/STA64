@@ -289,6 +289,8 @@ pub struct UnitDef {
     /// overrides, then the ODF's `Feature_<name>` keys); `None`: the
     /// database-wide set. Read through `ContentDb::unit_features`.
     pub features: Option<Features>,
+    /// Owning-unit map-confinement overrides; resolved once through ContentDb.
+    pub confinement: crate::ConfinementOverrides,
     /// The resolved ODF, so keys no field reads yet stay reachable. Empty for
     /// definitions not made from an ODF.
     pub raw: Arc<sta_odf::Odf>,
@@ -333,6 +335,7 @@ impl UnitDef {
             transfer_rate: Fixed::ZERO,
             resource: None,
             features: None,
+            confinement: crate::ConfinementOverrides::default(),
             raw: Arc::new(raw),
         }
     }

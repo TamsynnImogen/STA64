@@ -15,6 +15,7 @@
 //! without any install. [`legacy`] still serves the map view's scenery ODFs.
 
 pub mod aip;
+pub mod confinement;
 pub mod db;
 pub mod def;
 pub mod fake;
@@ -35,6 +36,7 @@ pub mod unit;
 pub mod weapon;
 
 pub use aip::{Aip, AipList, AipValue, AipVar, BuildItem};
+pub use confinement::{ConfinementInitial, ConfinementOverrides, ConfinementRules, ConfinementSpatial};
 pub use db::{ContentBuilder, ContentDb, DEFAULT_TECH_TREE};
 pub use def::{BuildDef, ClassLabel, DefRef, FireArc, FxRefs, Hardpoint, LaunchPoint, MoveStats, ShieldDef, SoundRefs, UnitDef, WeaponDef, WeaponKind};
 pub use features::{Features, Profile};
