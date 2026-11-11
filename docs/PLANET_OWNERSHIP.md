@@ -1,6 +1,38 @@
-# Planet roles and ownership: shared-model proposal
+# Planet roles and ownership
 
-Status: native/data audit and proposed integration sequence under SIM-19,
+## Implemented shared ownership subset (SIM-19 completion)
+
+Typed `Background` and `Producer` planets retain their requested map/spawn
+owner and use the shared Team transaction. A background object with exactly
+zero current/maximum hull remains a live transfer target unless marked dying.
+Generic resources retain the SIM-18 neutral-owner guard. Kind and collision
+behaviour are unchanged; planets do not become stations or survival assets.
+
+Mining admission is independent: Background rejects Mine in Core and the client;
+Producer requires an explicit resource slot and retains the existing single-slot
+mining model. This fixes the absent-resource dilithium fallback on A1 Earth; it
+does not claim complete native freighter/orbital or multi-resource semantics.
+Producer planets can use stationary build queues, rally and Stop through the
+shared implementation. Team cancels their queues with station payment rules.
+
+Producer `maxCrewGain` is now a typed signed 32-bit integer. A2/FO default 10000,
+other profiles default zero; the planet ODF may override it, including inherited
+or child zero and signed values. Malformed/out-of-range values warn and use the
+profile fallback. Parsing is strict decimal, not emulation of permissive native
+CRT conversion. The effective producer value participates in content identity;
+unused values on other roles do not. `Sim::planet_crew_capacity` derives the
+current owner's planet contribution, including after save/load, without a
+mutable credit accumulator. It is not crew stock or total crew capacity.
+
+Colonization, population, recruitment, planetary shields/atmosphere simulation,
+orbital links and multiple resource quantities remain planned. Ownership does
+not fabricate these states, and `isColonizable` remains raw metadata rather than
+a hidden Team gate. See [OWNERSHIP_TRANSFER.md](OWNERSHIP_TRANSFER.md) for the
+transaction, persistence and explicitly unsupported capabilities.
+
+## Original audit and broader proposal
+
+Historical status: native/data audit and proposed integration sequence under SIM-19,
 issue #256. This document precedes any planet implementation. It neither lifts
 the current guards nor completes ownership, colonies or resource parity.
 Baseline: `14ce74217b90d3a588d48668ec6c337fb36ef93a`. Pending active-station

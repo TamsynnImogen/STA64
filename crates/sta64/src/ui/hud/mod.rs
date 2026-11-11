@@ -554,7 +554,7 @@ fn target_order(
             let u = feed.view.unit(id)?;
             let db = feed.content.as_deref()?;
             let def = db.unit(u.def)?;
-            if u.flags.contains(UnitFlags::DYING) || EntityKind::of_def(def) != EntityKind::Resource { return None; }
+            if u.flags.contains(UnitFlags::DYING) || !EntityKind::mineable_def(def) { return None; }
             vec![Order::Mine { units: ids.clone(), node: id }]
         }
         TargetMode::Rally => {

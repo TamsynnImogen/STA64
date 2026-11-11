@@ -250,6 +250,7 @@ impl Production {
         if !bd.build.list.is_empty() && !bd.build.list.iter().any(|r| r.key == what) {
             return false;
         }
+        let kind = if EntityKind::producer_def(bd) { EntityKind::Station } else { kind };
         let pay_now = db.unit_features(bd).pay_on_queue;
         match kind {
             EntityKind::Station => {

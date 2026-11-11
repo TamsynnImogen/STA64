@@ -251,6 +251,9 @@ pub struct UnitDef {
     /// `None` retains the existing non-planet-metadata path; Native content
     /// opts in explicitly. Filled by the profile-aware ODF loader, or by an author.
     pub planet_role: Option<crate::planet::PlanetRole>,
+    /// Effective signed `maxCrewGain` contribution for a Producer planet.
+    /// Zero for other roles; this is not a crew stock or population count.
+    pub planet_crew_gain: i32,
     pub race: String,
     pub model: String,
     pub scale: Fixed,
@@ -313,6 +316,7 @@ impl UnitDef {
             class: ClassLabel::new(class),
             is_starbase: false,
             planet_role: None,
+            planet_crew_gain: 0,
             race: String::new(),
             model: String::new(),
             scale: Fixed::ONE,

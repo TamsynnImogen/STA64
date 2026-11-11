@@ -282,7 +282,7 @@ fn rejected_without_state_change(sim: &mut Sim, id: EntityId) {
 }
 
 #[test]
-fn active_queue_clears_but_deploy_and_weld_block_transfer_atomically_in_both_pay_modes() {
+fn active_queue_deploy_and_weld_cleanup_obey_both_pay_modes() {
     for pay_on_queue in [false, true] {
         let mut queued = game(&[0, 1], pay_on_queue);
         let yard = spawn(&mut queued, "fx_yard", PlayerId(0), pos(0));
@@ -307,7 +307,10 @@ fn active_queue_clears_but_deploy_and_weld_block_transfer_atomically_in_both_pay
         fund(&mut deploying, 2000);
         build(&mut deploying, rig, "fx_station", Some(pos(400)));
         assert!(deploying.production.is_deploying(rig));
-        rejected_without_state_change(&mut deploying, rig);
+        accepted(&mut deploying, &[team(PlayerId::SCRIPT, 0, rig, PlayerId(1))]);
+        assert!(!deploying.production.is_deploying(rig));
+        assert_eq!(deploying.unit(rig).unwrap().owner, PlayerId(1));
+        assert_eq!(deploying.economy.stock_of(PlayerId(0))[0], Fixed::from_int(2000));
 
         let mut welding = game(&[0, 1], pay_on_queue);
         let rig = spawn(&mut welding, "fx_rig", PlayerId(0), pos(0));
@@ -317,8 +320,13 @@ fn active_queue_clears_but_deploy_and_weld_block_transfer_atomically_in_both_pay
         assert_eq!(welds.len(), 1);
         let child = EntityId(welds[0].0);
         assert!(welding.unit(child).unwrap().progress.is_some());
-        rejected_without_state_change(&mut welding, rig);
         rejected_without_state_change(&mut welding, child);
+        accepted(&mut welding, &[team(PlayerId::SCRIPT, 0, rig, PlayerId(1))]);
+        assert!(welding.unit(child).is_none());
+        assert!(welding.production.to_rec().welds.is_empty());
+        assert_eq!(welding.unit(rig).unwrap().owner, PlayerId(1));
+        let expected = if pay_on_queue { 2000 } else { 800 };
+        assert_eq!(welding.economy.stock_of(PlayerId(0))[0], Fixed::from_int(expected));
     }
 }
 
@@ -374,7 +382,7 @@ fn loaded_cargo_survives_transfer_and_delivers_to_the_new_owners_station() {
 }
 
 #[test]
-fn owner_change_preserves_physical_state_and_last_asset_loss_does_not_eliminate() {
+fn owner_change_preserves_physical_state() {
     let content = Arc::new(crate::specials::fixture::db());
     let sim_setup = GameSetup {
         seed: 19,

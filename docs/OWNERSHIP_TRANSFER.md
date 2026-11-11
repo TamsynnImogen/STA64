@@ -1,12 +1,74 @@
 # Deterministic ownership transfer (SIM-19)
 
+## Completion contract (current represented state)
+
+This section supersedes the incremental guards below. It is the implementation
+contract recorded before the completion pass changes Core.
+
+- Retain Resource kind and collision policy for typed planets. Preserve their
+  supplied owner. Background planets exist independently of positive hull and
+  cannot be mined; producer planets retain their explicitly configured resource
+  node and may use stationary production queues with the same checked station
+  transfer cleanup/accounting. Generic resources stay neutral.
+  Neither a non-colonizable flag nor zero background hull prohibits Team.
+- Resolve producer `maxCrewGain` as a signed 32-bit integer in content, preserving
+  explicit/inherited zero. A2/FO fallback is 10000; other profiles require an
+  authored value and default to zero. Malformed/out-of-range values warn and use
+  that fallback. Hash the effective value only for producer roles under a new
+  domain. Expose the deterministic, derived sum of owned producer contributions;
+  it is not a civilian population, crew stock, or a complete crew-capacity system.
+- A pending rig deployment is removed; refund a paid reservation to its validated
+  original owner. A welding rig loses its unfinished child and weld record. The
+  child owner must equal the rig owner, and the child/progress/timer must validate.
+  Core pays at weld creation and no supported edit changes an unfinished child's
+  owner/definition. These invariants support accounting from the current immutable
+  definition; existing weld records are not independent historical payer receipts
+  for externally forged saves. Reject child-owned production records that would
+  otherwise outlive removal; other subsystem rows use the existing despawn/step
+  pruning contract.
+  Precharged active work refunds its full cost; deferred active work forfeits it,
+  as in the station contract. Reject arithmetic overflow or unsupported paid slots
+  before changing anything. Cleanup uses the normal shared entity-removal path.
+- Direct Team on an unfinished child remains explicitly unsupported. Core's weld
+  child is a future gameplay unit; the native construction object is a separate
+  temporary object deleted before the final product is made. Transferring that
+  effect is not evidence that Core may capture a completed station early. Full
+  construction-effect identity and research attachments need their own model.
+- An accepted configured-seat loss of a Craft/Station is an elimination candidate at
+  the end of the sorted command batch. A seat that regains an asset in that batch
+  survives. Same-owner/failed transfers, unconfigured synthetic owners and planet
+  changes create no candidate.
+  Retain Core's existing Craft/Station survival rule, permanent elimination and
+  damage processing. This is an explicit Core timing decision consistent with
+  native victory checking current non-planet assets, not complete native victory
+  mode parity. Script kill and mission-specific victory are separate operations.
+- Preserve existing save fields, kind/tag values and format-10 layout. Derived
+  capacity needs no saved accumulator; malformed production state remains guarded
+  on transfer. Same-build snapshot/replay continuation and the genuine v8 fixture
+  remain required. Changed content rules participate in content identity.
+
+Owning paths additionally include `sta_content/src/{planet,def,db,odf}.rs` and
+dedicated content tests for the crew contribution; `sta_sim/src/{world,ownership,
+lib,victory}.rs`, production/economy helpers and dedicated ownership tests; and
+the narrow client context/HUD mining and producer eligibility checks. No native
+data, dependency, Lua wrapper, new resource slot or platform branch is added.
+Colonization, population/crew recruitment, orbital mining, multi-resource nodes,
+research attachments and ownership weapon hooks are not currently represented;
+they must remain visible limitations rather than fabricated transfer effects.
+
 ## Status and trigger
 
+The completion implementation follows the contract above: shared ownership,
+station and producer-planet queues, pending rigs and rig-child cancellation,
+planet ownership/mining admission, derived planet crew contribution and
+end-of-batch capture elimination. Direct unfinished-child capture, research
+attachments, colony economy and ownership effects are explicit unsupported
+capabilities; this is not complete native capture parity. The later sections
+preserve the incremental design and evidence history; their temporary guards
+are superseded by the completion contract.
+
 The source-audit and implementation proposal was recorded before core edits
-in merged #257. The cargo prerequisite is merged in #258. The guarded
-ownership stage below is implemented for finished units without production
-involvement, extended by checked station-queue cleanup including a paid active
-head in the stages below; full construction/capture support remains incomplete.
+in merged #257. The cargo prerequisite is merged in #258.
 At audit time, `Edit::Team` existed but `Sim::apply_edit` rejected it. The longer installed A2
 mission probe records rejected transfers in Invasion at tick 1440 and The
 Cavalry at tick 720. `Entity.player = ...` already queues that edit; adding an

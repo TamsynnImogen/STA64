@@ -3,7 +3,9 @@
 //! Rules:
 //! - A seat is *alive* while it owns at least one craft or station. Resources,
 //!   projectiles and props never count.
-//! - Elimination is checked for a seat on the tick it loses a unit to damage
+//! - Elimination is checked for a seat on the tick it loses a unit to damage,
+//!   or after a command batch transfers away one of its craft/stations.
+//!   Capture candidates require a configured seat; same-batch recovery survives
 //!   (so a seat that starts with nothing is never eliminated). When the seat
 //!   has no craft or station left, it gets one [`SimEvent::PlayerEliminated`]
 //!   and joins the eliminated set for good.

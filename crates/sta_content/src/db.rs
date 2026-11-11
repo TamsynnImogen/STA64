@@ -416,6 +416,11 @@ fn hash(db: &ContentDb) -> u64 {
                         crate::PlanetRole::Producer => 1,
                     });
                 }
+                if u.planet_role == Some(crate::PlanetRole::Producer) {
+                    h.byte(0xea);
+                    h.str("sta64.planet-crew-gain.v1");
+                    h.u64(u.planet_crew_gain as i64 as u64);
+                }
                 let m = &u.movement;
                 for f in [u.scale, m.max_speed, m.forward_accel, m.turn_omega, m.turn_alpha, m.turn_at_rest] {
                     h.fixed(f);

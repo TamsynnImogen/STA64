@@ -22,7 +22,7 @@ use crate::sim_link::{ContentRes, Selection, SimLink};
 
 /// A resource node: a moon, asteroid or latinum field, by its definition.
 fn is_resource(db: &ContentDb, view: &WorldView, id: EntityId) -> bool {
-    view.unit(id).and_then(|u| db.unit(u.def)).is_some_and(|d| EntityKind::of_def(d) == EntityKind::Resource)
+    view.unit(id).and_then(|u| db.unit(u.def)).is_some_and(EntityKind::mineable_def)
 }
 
 fn is_miner(db: &ContentDb, view: &WorldView, id: EntityId) -> bool {
@@ -59,7 +59,8 @@ pub(super) fn rally_builders(
                 && db.unit(u.def).is_some_and(|d| {
                     !d.build.list.is_empty()
                         && d.movement.max_speed == Fixed::ZERO
-                        && matches!(EntityKind::of_def(d), EntityKind::Station | EntityKind::Craft)
+                        && (matches!(EntityKind::of_def(d), EntityKind::Station | EntityKind::Craft)
+                            || EntityKind::producer_def(d))
                 })
         })
     })
@@ -319,5 +320,55 @@ mod tests {
         assert!(!rally_builders(Some(db), &view, PlayerId(0), &[ids[5], ids[7]]));
         assert!(!rally_builders(Some(db), &view, PlayerId(0), &[ids[2]]));
         assert!(!rally_builders(Some(db), &view, PlayerId(0), &[EntityId(u32::MAX)]));
+    }
+
+    #[test]
+    fn typed_planet_context_mining_and_stationary_rally_use_resolved_roles() {
+        use sta_content::PlanetRole;
+        use sta_sim::view::UnitView;
+        use sta_sim::world::NEUTRAL;
+
+        let fake = fake::db();
+        let mut builder = ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
+        for unit in fake.units() { builder = builder.unit(unit.clone()); }
+        for weapon in fake.weapons() { builder = builder.weapon(weapon.clone()); }
+        let mut background = UnitDef::new("test_background", "planet_obj");
+        background.planet_role = Some(PlanetRole::Background);
+        background.resource = Some(0); // metadata does not make a background mineable.
+        let mut producer = UnitDef::new("test_producer", "planet");
+        producer.planet_role = Some(PlanetRole::Producer);
+        producer.resource = Some(0);
+        producer.build.list = vec![DefRef::new("fx_miner")];
+        let mut empty_producer = UnitDef::new("test_empty_producer", "planet");
+        empty_producer.planet_role = Some(PlanetRole::Producer);
+        let db = builder.unit(background).unit(producer).unit(empty_producer).build().unwrap();
+        let make = |id, name, owner| UnitView {
+            id: EntityId(id), def: db.key(name).unwrap(), owner,
+            pos: SimVec3::ZERO, heading: (Fixed::ZERO, Fixed::ONE), speed: Fixed::ZERO,
+            hull: [Fixed::ONE; 2], shields: [[Fixed::ZERO; 2]; 4],
+            flags: UnitFlags::SELECTABLE, progress: None,
+        };
+        let view = WorldView {
+            units: vec![
+                make(1, "fx_miner", PlayerId(0)),
+                make(2, "test_background", PlayerId(0)),
+                make(3, "test_producer", NEUTRAL),
+                make(4, "test_empty_producer", NEUTRAL),
+                make(5, "test_producer", PlayerId(0)),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(context_order(Some(&db), &view, PlayerId(0), &[EntityId(1)], EntityId(2)), None);
+        assert_eq!(
+            context_order(Some(&db), &view, PlayerId(0), &[EntityId(1)], EntityId(3)),
+            Some(Order::Mine { units: vec![EntityId(1)], node: EntityId(3) })
+        );
+        assert_eq!(context_order(Some(&db), &view, PlayerId(0), &[EntityId(1)], EntityId(4)), None);
+        assert!(rally_builders(Some(&db), &view, PlayerId(0), &[EntityId(5)]));
+        assert!(!rally_builders(Some(&db), &view, PlayerId(0), &[EntityId(2)]));
+        assert_eq!(
+            context_order(Some(&db), &view, PlayerId(0), &[EntityId(5)], EntityId(3)),
+            Some(Order::Rally { builders: vec![EntityId(5)], at: Target::Entity(EntityId(3)) })
+        );
     }
 }

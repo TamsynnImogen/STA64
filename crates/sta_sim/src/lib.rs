@@ -232,7 +232,9 @@ impl Sim {
                 // actors before cleanup, including stations that cannot move.
                 let mut eligible: Vec<_> = units.iter().copied().filter(|&id| {
                     self.unit(id).is_some_and(|u| {
-                        matches!(u.kind, world::EntityKind::Craft | world::EntityKind::Station)
+                        (matches!(u.kind, world::EntityKind::Craft | world::EntityKind::Station)
+                            || self.content.as_deref().and_then(|db| db.unit(u.def))
+                                .is_some_and(world::EntityKind::producer_def))
                             && (!c.player.is_player() || u.owner == c.player)
                     })
                 }).collect();
@@ -376,11 +378,24 @@ impl WorldSource for Sim {
     fn step(&mut self, commands: &[command::Command]) -> TickOutput {
         let mut batch: Vec<&command::Command> = commands.iter().collect();
         batch.sort_by_key(|c| c.sort_key());
+        let mut captured = Vec::new();
         for c in batch {
+            let previous = match &c.kind {
+                command::CommandKind::Edit(command::Edit::Team(id, to)) => self.units.get(*id)
+                    .filter(|u| u.owner != *to && self.players.iter().any(|(p, _)| *p == u.owner)
+                        && matches!(u.kind, world::EntityKind::Craft | world::EntityKind::Station))
+                    .map(|u| u.owner),
+                _ => None,
+            };
             if !self.apply(c) {
                 self.events.push(SimEvent::Rejected { player: c.player, seq: c.seq });
+            } else if let Some(owner) = previous {
+                captured.push(owner);
             }
         }
+        // Resolve only after the complete ordered batch: another transfer in
+        // this batch can restore an asset. No transient candidate is persisted.
+        self.victory.step(&self.units, &mut captured, &mut self.events);
         self.advance()
     }
 
