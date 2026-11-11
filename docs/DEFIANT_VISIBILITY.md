@@ -64,6 +64,12 @@ enabling the prepass, with zero silhouette mismatch on the local Vulkan GPU.
 This supplements the installed-model regression and keeps the culling check
 available without distributing any original game model or texture.
 
+The complete client suite passes 346 tests (one ignored). Strict client
+all-target Clippy, workspace all-target compilation and NDK 29/API-26 ARM64
+client-library compilation pass. A timing-sensitive HUD test now observes each
+acknowledgement within its message lifetime; production event handling is unchanged.
+These checks do not constitute an Android APK build or device run.
+
 ## Opt-in local probes
 
 These tests require privately installed Classic assets; they do not bundle them.
@@ -98,5 +104,6 @@ Missing unit models now produce a warning identifying the actor, ODF and model.
 counts and missing textures. The diagnostic launcher enables both automatically.
 
 The next manual check is ordinary construction of one Sabre in Classic,
-followed by keeping its log. No visual fix or native renderer parity is claimed,
-and #330 remains open pending diagnosis and manual acceptance.
+then moving it away from the yard and keeping its log. The depth-prepass cause
+and correction are reproduced offscreen; #330 remains open until this live
+construction/movement check confirms the hull remains visible.
