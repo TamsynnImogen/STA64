@@ -1,8 +1,8 @@
 //! SIM-19: guarded ownership edits through the shared simulation.
 //!
 //! Station queues have checked cleanup, including a paid active head.
-//! Rig/weld involvement and unfinished targets remain rejected; see
-//! OWNERSHIP_TRANSFER.md for the separate cancellation/refund contracts.
+//! Rig cleanup and typed planet roles share the same transaction. Direct
+//! unfinished-child transfer remains unsupported; see OWNERSHIP_TRANSFER.md.
 
 use sta_core::{EntityId, Fixed, PlayerId};
 
@@ -16,29 +16,27 @@ impl Sim {
             return false;
         }
         let destination = to == NEUTRAL
-            || (to.is_player()
-                && (self.players.is_empty() || self.players.iter().any(|&(p, _)| p == to)));
+            || (to.is_player() && (self.players.is_empty() || self.players.iter().any(|&(p, _)| p == to)));
         if !destination || self.victory.is_eliminated(to) {
             return false;
         }
         let Some(unit) = self.units.get(id) else {
             return false;
         };
-        if !matches!(unit.kind, EntityKind::Craft | EntityKind::Station)
-            || unit.hull[0] <= Fixed::ZERO
+        let def = self.content.as_deref().and_then(|db| db.unit(unit.def));
+        let planet = def.is_some_and(|d| d.planet_role.is_some());
+        let background = def.is_some_and(|d| d.planet_role == Some(sta_content::PlanetRole::Background));
+        if (!planet && !matches!(unit.kind, EntityKind::Craft | EntityKind::Station))
+            || (unit.hull[0] <= Fixed::ZERO && !(background && unit.hull == [Fixed::ZERO; 2]))
             || unit.flags.contains(UnitFlags::DYING)
             || unit.progress.is_some()
-            || self
-                .content
-                .as_deref()
-                .and_then(|db| db.unit(unit.def))
-                .is_some_and(|def| def.resource.is_some())
+            || (!planet && def.is_some_and(|def| def.resource.is_some()))
         {
             return false;
         }
         let Some(production) =
             self.production
-                .prepare_transfer(self.content.as_deref(), &self.economy, id, unit)
+                .prepare_transfer(self.content.as_deref(), &self.economy, &self.units, id, unit)
         else {
             return false;
         };
@@ -46,8 +44,10 @@ impl Sim {
         // All rejection checks precede cleanup, including same-owner requests.
         // Consume the checked queue plan; ordinary Stop/cancel has a separate
         // refund contract, particularly for deferred active production.
-        self.production
-            .finish_transfer(&mut self.economy, production);
+        let children = self.production.finish_transfer(&mut self.economy, production);
+        for child in children {
+            self.despawn(child, None);
+        }
         self.weapons.stop_attack(&self.units, from, &[id]);
         self.economy.cancel(&self.units, from, &[id]);
         self.movement.clear(id);
@@ -56,6 +56,23 @@ impl Sim {
         unit.target = None;
         unit.owner = to;
         true
+    }
+
+    /// Planet contribution only, not total team crew capacity or crew stock.
+    /// Derived from immutable definitions and current owners, so repeated swaps
+    /// cannot double-credit it and snapshots need no mutable accumulator.
+    pub fn planet_crew_capacity(&self, player: PlayerId) -> i64 {
+        if !player.is_player() {
+            return 0;
+        }
+        let Some(db) = self.content.as_deref() else { return 0 };
+        self.units
+            .iter()
+            .filter(|u| u.owner == player)
+            .filter_map(|u| db.unit(u.def))
+            .filter(|d| d.planet_role == Some(sta_content::PlanetRole::Producer))
+            .map(|d| i64::from(d.planet_crew_gain))
+            .sum()
     }
 }
 
@@ -66,3 +83,7 @@ mod tests;
 #[cfg(test)]
 #[path = "ownership_queue_tests.rs"]
 mod queue_tests;
+
+#[cfg(test)]
+#[path = "ownership_completion_tests.rs"]
+mod completion_tests;

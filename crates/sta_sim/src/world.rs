@@ -41,6 +41,25 @@ pub enum EntityKind {
 }
 
 impl EntityKind {
+    /// Shared mining admission. Background planets have no resource interface;
+    /// producer planets require an explicitly resolved resource. Other nodes
+    /// retain their existing SIM-18 policy.
+    pub fn mineable_def(def: &UnitDef) -> bool {
+        Self::of_def(def) == Self::Resource
+            && match def.planet_role {
+                Some(sta_content::PlanetRole::Background) => false,
+                Some(sta_content::PlanetRole::Producer) => def.resource.is_some(),
+                None => true,
+                _ => false,
+            }
+    }
+
+    /// Stationary production is independent of a planet's body/resource kind.
+    pub fn producer_def(def: &UnitDef) -> bool {
+        Self::of_def(def) == Self::Station
+            || def.planet_role == Some(sta_content::PlanetRole::Producer)
+    }
+
     /// The kind of a definition: by [`EntityKind::of`], except that a fixture of an unlisted
     /// class that carries a `resource` is a resource node (Fleet Ops' moons are class
     /// `scrap`, which also covers plain wrecks). A craft or station with a `resource` stays
@@ -184,7 +203,8 @@ impl Entity {
     ) -> Entity {
         let kind = EntityKind::of_def(def);
         // Resources stay neutral whatever the map or loadout says (SIM-18).
-        let owner = if kind == EntityKind::Resource || def.resource.is_some() {
+        let owner = if def.planet_role.is_none()
+            && (kind == EntityKind::Resource || def.resource.is_some()) {
             NEUTRAL
         } else {
             owner

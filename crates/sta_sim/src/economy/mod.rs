@@ -222,7 +222,8 @@ impl Economy {
         ids: &[EntityId],
         node: EntityId,
     ) -> bool {
-        let Some(n) = units.get(node).filter(|n| n.kind == EntityKind::Resource) else {
+        let Some(n) = units.get(node).filter(|n| n.kind == EntityKind::Resource
+            && db.unit(n.def).is_none_or(EntityKind::mineable_def)) else {
             return false;
         };
         let res = node_resource(db, n.def);
@@ -300,7 +301,8 @@ impl Economy {
                 self.miners.remove(id);
                 continue;
             };
-            let node_pos = units.get(m.node).filter(|n| n.kind == EntityKind::Resource).map(|n| n.pos);
+            let node_pos = units.get(m.node).filter(|n| n.kind == EntityKind::Resource
+                && db.unit(n.def).is_none_or(EntityKind::mineable_def)).map(|n| n.pos);
             if matches!(m.phase, Phase::ToNode | Phase::Mining) && node_pos.is_none() {
                 if m.cargo == Fixed::ZERO {
                     set_target(units, id, None);
@@ -369,7 +371,8 @@ impl Economy {
                                 amount: m.unloaded,
                             });
                             m.unloaded = Fixed::ZERO;
-                            if let Some(n) = units.get(m.node).filter(|n| n.kind == EntityKind::Resource) {
+                            if let Some(n) = units.get(m.node).filter(|n| n.kind == EntityKind::Resource
+                                && db.unit(n.def).is_none_or(EntityKind::mineable_def)) {
                                 m.res = node_resource(db, n.def);
                                 m.phase = Phase::ToNode;
                             } else {

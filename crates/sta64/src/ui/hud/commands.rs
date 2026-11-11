@@ -26,7 +26,7 @@ fn one(db: &ContentDb, u: &UnitView) -> Capabilities {
         return Capabilities::default();
     };
     let kind = EntityKind::of_def(def);
-    let stop = matches!(kind, EntityKind::Craft | EntityKind::Station);
+    let stop = matches!(kind, EntityKind::Craft | EntityKind::Station) || EntityKind::producer_def(def);
     if !finished(u) {
         return Capabilities {
             stop,
@@ -85,7 +85,7 @@ pub fn shared(feed: &HudFeed) -> Capabilities {
 mod tests {
     use super::*;
     use crate::ui::hud::model::{Act, Page, command, grid};
-    use sta_content::{DefRef, Hardpoint, WeaponDef, WeaponKind};
+    use sta_content::{DefRef, Hardpoint, PlanetRole, UnitDef, WeaponDef, WeaponKind};
     use sta_sim::command::{CommandKind, Order, Target};
     use sta_sim::{EntityId, PlayerId, Vec3, WorldView};
     use std::sync::Arc;
@@ -180,5 +180,37 @@ mod tests {
         Arc::make_mut(&mut feed.view).units[1].flags =
             UnitFlags::SELECTABLE.with(UnitFlags::WEAPONS_OFF, true);
         assert!(!shared(&feed).attack);
+    }
+
+    #[test]
+    fn typed_producer_builder_has_stop_and_build_while_background_has_neither() {
+        let item = UnitDef::new("test_item", "craft");
+        let mut producer = UnitDef::new("test_producer", "planet");
+        producer.planet_role = Some(PlanetRole::Producer);
+        producer.build.list = vec![DefRef::new("test_item")];
+        let mut background = UnitDef::new("test_background", "planet_obj");
+        background.planet_role = Some(PlanetRole::Background);
+        let db = Arc::new(ContentDb::builder().unit(item).unit(producer).unit(background).build().unwrap());
+        let make = |id, name| UnitView {
+            id: EntityId(id), def: db.key(name).unwrap(), owner: PlayerId(0),
+            pos: Vec3::ZERO, heading: (Fixed::ZERO, Fixed::ONE), speed: Fixed::ZERO,
+            hull: [Fixed::ONE; 2], shields: [[Fixed::ZERO; 2]; 4],
+            flags: UnitFlags::SELECTABLE, progress: None,
+        };
+        let producer_view = make(1, "test_producer");
+        let background_view = make(2, "test_background");
+        let producer_caps = one(&db, &producer_view);
+        assert!(producer_caps.stop && producer_caps.build);
+        assert!(!producer_caps.move_order && !producer_caps.mine);
+        let background_caps = one(&db, &background_view);
+        assert!(!background_caps.stop && !background_caps.build);
+
+        let mut feed = HudFeed {
+            view: Arc::new(WorldView { units: vec![producer_view, background_view], ..Default::default() }),
+            player: PlayerId(0), selected: vec![EntityId(1)], content: Some(db),
+        };
+        assert!(shared(&feed).stop && shared(&feed).build);
+        feed.selected = vec![EntityId(2)];
+        assert!(!shared(&feed).stop && !shared(&feed).build);
     }
 }

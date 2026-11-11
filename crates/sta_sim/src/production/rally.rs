@@ -34,7 +34,8 @@ fn live(u: &Entity) -> bool {
 fn builder(u: &Entity, db: &ContentDb) -> bool {
     live(u)
         && u.owner.is_player()
-        && matches!(u.kind, EntityKind::Station | EntityKind::Craft)
+        && (matches!(u.kind, EntityKind::Station | EntityKind::Craft)
+            || db.unit(u.def).is_some_and(EntityKind::producer_def))
         && u.progress.is_none_or(|p| p >= sta_core::Fixed::ONE)
         && db.unit(u.def).is_some_and(|d| !d.build.list.is_empty())
 }
