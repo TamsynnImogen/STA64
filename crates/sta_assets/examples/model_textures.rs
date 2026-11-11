@@ -85,10 +85,7 @@ struct Report {
 fn report(vfs: &Vfs, path: &str, model: &Model) -> Report {
     use std::fmt::Write;
 
-    let mut output = format!(
-        "model {path:?} format={:?} version={}\n",
-        model.format, model.version
-    );
+    let mut output = format!("model {path:?} format={:?} version={}\n", model.format, model.version);
     for warning in &model.warnings {
         writeln!(output, "warning {warning:?}").unwrap();
     }
@@ -113,12 +110,8 @@ fn report(vfs: &Vfs, path: &str, model: &Model) -> Report {
             ] {
                 let Some(reference) = reference else { continue };
                 // An empty map in Model is still an occurrence, but never a lookup.
-                let found = (!reference.is_empty())
-                    .then(|| find_texture(vfs, reference))
-                    .flatten();
-                match found.and_then(|(path, format)| {
-                    vfs.resolve(&path).map(|(layer, _)| (path, format, layer))
-                }) {
+                let found = (!reference.is_empty()).then(|| find_texture(vfs, reference)).flatten();
+                match found.and_then(|(path, format)| vfs.resolve(&path).map(|(layer, _)| (path, format, layer))) {
                     Some((texture_path, format, layer_index)) => {
                         let layer_name = vfs.layers()[layer_index].name();
                         writeln!(
@@ -148,8 +141,8 @@ fn run(options: &Options) -> Result<Report, String> {
         Vfs::mount_install(&options.root, options.active_mod.as_deref())
             .map_err(|e| format!("mount {:?}: {e}", options.root))?
     };
-    let (path, format) = find_model(&vfs, &options.model)
-        .ok_or_else(|| format!("model {:?} not found", options.model))?;
+    let (path, format) =
+        find_model(&vfs, &options.model).ok_or_else(|| format!("model {:?} not found", options.model))?;
     let model = load_model(&vfs, &path, format).map_err(|e| format!("load model {path:?}: {e}"))?;
     Ok(report(&vfs, &path, &model))
 }
@@ -157,10 +150,7 @@ fn run(options: &Options) -> Result<Report, String> {
 fn main() {
     let args = std::env::args_os()
         .skip(1)
-        .map(|arg| {
-            arg.into_string()
-                .map_err(|_| "arguments must be UTF-8".to_owned())
-        })
+        .map(|arg| arg.into_string().map_err(|_| "arguments must be UTF-8".to_owned()))
         .collect::<Result<Vec<_>, _>>();
     let options = match args.and_then(parse_args) {
         Ok(Some(options)) => options,

@@ -92,11 +92,7 @@ fn six_roles_in_model_order_and_preserved_references() {
         glow: Some("g".into()),
         detail: Some("t".into()),
     };
-    let report = report(
-        &tree.vfs(),
-        "sod/test.sod",
-        &model(vec![group("first", maps)]),
-    );
+    let report = report(&tree.vfs(), "sod/test.sod", &model(vec![group("first", maps)]));
     assert_eq!(report.missing, 0);
     let roles: Vec<&str> = report
         .output
@@ -104,20 +100,13 @@ fn six_roles_in_model_order_and_preserved_references() {
         .filter(|l| l.starts_with("  "))
         .map(|l| l.split_whitespace().next().unwrap())
         .collect();
-    assert_eq!(
-        roles,
-        ["diffuse", "height", "bump", "specular", "glow", "detail"]
-    );
+    assert_eq!(roles, ["diffuse", "height", "bump", "specular", "glow", "detail"]);
     assert!(
         report
             .output
             .contains("node=1 name=\"mesh\" group=0 material=\"first\"")
     );
-    assert!(
-        report
-            .output
-            .contains("diffuse ref=\"D.TGA\" path=\"textures/d.png\"")
-    );
+    assert!(report.output.contains("diffuse ref=\"D.TGA\" path=\"textures/d.png\""));
 }
 
 #[test]
@@ -210,24 +199,17 @@ fn empty_model_maps_are_valid_and_output_escapes_row_breaks() {
         .missing,
         0
     );
-    assert_eq!(
-        report(&tree.vfs(), "sod/none.sod", &model(vec![])).missing,
-        0
-    );
+    assert_eq!(report(&tree.vfs(), "sod/none.sod", &model(vec![])).missing, 0);
 }
 
 #[test]
 fn argument_forms_and_invalid_arguments() {
     let parse = |args: &[&str]| parse_args(args.iter().map(|s| (*s).to_owned()));
     assert_eq!(parse(&["--help"]).unwrap(), None);
-    let install = parse(&["--deny-missing", "install", "model", "mod"])
-        .unwrap()
-        .unwrap();
+    let install = parse(&["--deny-missing", "install", "model", "mod"]).unwrap().unwrap();
     assert!(install.deny_missing);
     assert_eq!(install.active_mod.as_deref(), Some("mod"));
-    let root = parse(&["--root", "assets", "--", "-ship"])
-        .unwrap()
-        .unwrap();
+    let root = parse(&["--root", "assets", "--", "-ship"]).unwrap().unwrap();
     assert!(root.loose_root);
     assert_eq!(root.model, "-ship");
     for args in [
@@ -256,11 +238,7 @@ fn mount_missing_model_unsupported_and_corrupt_model_errors() {
             .unwrap_err()
             .contains("mount")
     );
-    assert!(
-        run(&options(tree.0.clone(), "ship"))
-            .unwrap_err()
-            .contains("not found")
-    );
+    assert!(run(&options(tree.0.clone(), "ship")).unwrap_err().contains("not found"));
     tree.put("sod/ship.glb", b"not glb");
     assert!(
         run(&options(tree.0.clone(), "ship"))
@@ -269,9 +247,5 @@ fn mount_missing_model_unsupported_and_corrupt_model_errors() {
     );
     std::fs::remove_file(tree.0.join("sod/ship.glb")).unwrap();
     tree.put("sod/ship.sod", b"corrupt");
-    assert!(
-        run(&options(tree.0.clone(), "ship"))
-            .unwrap_err()
-            .contains("SOD")
-    );
+    assert!(run(&options(tree.0.clone(), "ship")).unwrap_err().contains("SOD"));
 }
