@@ -136,6 +136,9 @@ pub enum Edit {
     /// Requires a live represented actor with usable bounds and SCRIPT/BENCH.
     /// Appended tag 20 preserves every previous payload and tag.
     ForceOntoMap { id: EntityId, enabled: bool },
+    /// Global target identity, independent of ownership. SCRIPT/BENCH only.
+    /// Appended tag 21 preserves all older edit tags.
+    PerceivedTeam(EntityId, PlayerId),
 }
 
 /// A unit system a mission can switch on or off.

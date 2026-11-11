@@ -51,19 +51,21 @@ fn simulation() -> (Sim, Arc<ContentDb>) {
     (sim, db)
 }
 
-fn split(bytes: &[u8]) -> (Body, Option<(Vec3, Vec3)>, BoundaryRec) {
+fn split(bytes: &[u8]) -> (Body, Option<(Vec3, Vec3)>, BoundaryRec, PerceptionRec) {
     let (body, rest) = postcard::take_from_bytes(&bytes[HEADER..]).unwrap();
     let (bounds, rest) = postcard::take_from_bytes(rest).unwrap();
     let (record, rest) = postcard::take_from_bytes(rest).unwrap();
+    let (perception, rest) = postcard::take_from_bytes(rest).unwrap();
     assert!(rest.is_empty());
-    (body, bounds, record)
+    (body, bounds, record, perception)
 }
 
-fn join(header: &[u8], body: &Body, bounds: Option<(Vec3, Vec3)>, record: &BoundaryRec) -> Vec<u8> {
+fn join(header: &[u8], body: &Body, bounds: Option<(Vec3, Vec3)>, record: &BoundaryRec, perception: &PerceptionRec) -> Vec<u8> {
     let mut bytes = header[..HEADER].to_vec();
     bytes.extend(postcard::to_allocvec(body).unwrap());
     bytes.extend(postcard::to_allocvec(&bounds).unwrap());
     bytes.extend(postcard::to_allocvec(record).unwrap());
+    bytes.extend(postcard::to_allocvec(perception).unwrap());
     bytes
 }
 
@@ -71,7 +73,7 @@ fn join(header: &[u8], body: &Body, bounds: Option<(Vec3, Vec3)>, record: &Bound
 fn mandatory_suffix_rejects_bad_rows_versions_trailing_and_unusable_bounds() {
     let (sim, db) = simulation();
     let bytes = sim.snapshot();
-    let (body, bounds, mut rec) = split(&bytes);
+    let (body, bounds, mut rec, perception) = split(&bytes);
     assert_eq!(rec.version, 1);
     assert_eq!(rec.rows, [(EntityId(1), true), (EntityId(2), true)]);
     for bad in [
@@ -100,14 +102,14 @@ fn mandatory_suffix_rejects_bad_rows_versions_trailing_and_unusable_bounds() {
         ],
     ] {
         rec.rows = bad;
-        assert!(Sim::from_snapshot(&join(&bytes, &body, bounds, &rec), Some(db.clone())).is_err());
+        assert!(Sim::from_snapshot(&join(&bytes, &body, bounds, &rec, &perception), Some(db.clone())).is_err());
     }
     rec.rows = vec![(EntityId(1), false), (EntityId(2), true)];
     rec.version = 2;
-    assert!(Sim::from_snapshot(&join(&bytes, &body, bounds, &rec), Some(db.clone())).is_err());
+    assert!(Sim::from_snapshot(&join(&bytes, &body, bounds, &rec, &perception), Some(db.clone())).is_err());
     rec.version = 1;
     for invalid in [None, Some((Vec3::ZERO, v(100, 0, 100)))] {
-        assert!(Sim::from_snapshot(&join(&bytes, &body, invalid, &rec), Some(db.clone())).is_err());
+        assert!(Sim::from_snapshot(&join(&bytes, &body, invalid, &rec, &perception), Some(db.clone())).is_err());
     }
     let mut body_only = bytes[..HEADER].to_vec();
     body_only.extend(postcard::to_allocvec(&body).unwrap());
@@ -164,7 +166,7 @@ fn true_outside_flag_is_preserved_without_reinitializing_or_projecting() {
 fn header_downgrades_and_forged_old_content_hashes_cannot_hide_state() {
     for sim in [Sim::new(22), simulation().0] {
         let bytes = sim.snapshot();
-        for version in [8_u16, 9] {
+        for version in [8_u16, 9, 10] {
             let mut bad = bytes.clone();
             bad[4..6].copy_from_slice(&version.to_le_bytes());
             assert!(Sim::from_snapshot(&bad, sim.content.clone()).is_err());

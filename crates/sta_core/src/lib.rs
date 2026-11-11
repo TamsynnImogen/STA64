@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 /// Bumped on any breaking change to a seam type; versions the `postcard`
 /// encoding of commands, views, snapshots and replays.
-pub const SEAM_REV: u32 = 1;
+pub const SEAM_REV: u32 = 2;
 
 /// Simulation ticks per second. Armada ran its sim at a fixed rate independent
 /// of frame rate; we do the same and let the renderer interpolate.

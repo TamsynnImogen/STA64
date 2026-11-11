@@ -30,6 +30,9 @@ pub mod fake;
 pub mod kinematics;
 pub mod movement;
 mod ownership;
+mod perception;
+#[cfg(test)]
+mod perception_tests;
 pub mod present;
 pub mod production;
 mod avoid;
@@ -114,6 +117,8 @@ pub struct Sim {
     bounds: Option<(Vec3, Vec3)>,
     /// Profile-backed immutable volumes and the saved mutable actor flags.
     confinement: boundary::state::Confinement,
+    /// Canonical perceived-owner overrides; absent means real owner.
+    perception: Table<PlayerId>,
     /// Events since the last step (spawns between ticks), emitted with it.
     events: Vec<SimEvent>,
     /// Weapon state (SIM-04); in the digest once any exists.
@@ -144,6 +149,7 @@ impl Sim {
             regions: Vec::new(),
             bounds: None,
             confinement: Default::default(),
+            perception: Table::new(),
             events: Vec::new(),
             weapons: Default::default(),
             movement: movement::Movement::default(),
@@ -289,7 +295,7 @@ impl Sim {
             combat::damage::recharge(&mut self.units, &db);
             self.specials.step(&mut self.units, &db, &mut self.events);
             let from = self.events.len();
-            self.weapons.step(self.tick, &self.units, &db, &self.players, &mut self.events);
+            self.weapons.step_with_perception(self.tick, &self.units, &db, &self.players, &self.perception, &mut self.events);
             let mut lost = Vec::new();
             for (id, by) in combat::damage::apply(&mut self.units, &mut self.events, from) {
                 lost.extend(self.units.get(id).map(|u| u.owner));
@@ -328,7 +334,8 @@ impl Sim {
             })
             .collect();
         let visibility = sensors::compute(&self.units, self.content.as_deref(), &self.players);
-        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility }
+        let perceived_owners = self.perception.iter().map(|(id, &owner)| (id, owner)).collect();
+        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners }
     }
 
     /// FNV-1a over all simulation state, for desync detection. The content
@@ -367,6 +374,14 @@ impl Sim {
             self.specials.hash_into(&mut h);
         }
         self.confinement.hash_into(&mut h);
+        if !self.perception.is_empty() {
+            h.str("perceived-team-v1");
+            h.u64(self.perception.len() as u64);
+            for (id, owner) in self.perception.iter() {
+                h.u64(id.0 as u64);
+                h.u64(owner.0 as u64);
+            }
+        }
         h.0
     }
 }

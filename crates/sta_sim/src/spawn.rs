@@ -102,6 +102,7 @@ impl Sim {
         }
         self.labels.remove(id);
         self.confinement.remove(id);
+        self.perception.remove(id);
         self.production.remove_rally_entity(id);
         self.events.push(SimEvent::Destroyed { id, by });
         true
@@ -130,6 +131,7 @@ impl Sim {
             }
             Edit::Kill(id) => self.despawn(id, None),
             Edit::Team(id, to) => self.transfer_owner(from, id, to),
+            Edit::PerceivedTeam(id, to) => self.set_perceived_owner(id, to),
             Edit::ForceOntoMap { id, enabled } => self.units.get(id).is_some_and(|u| self.confinement.set(u, enabled)),
             Edit::Damage(id, amount) => {
                 // Straight to the hull, past the shields; lethal unless immortal.

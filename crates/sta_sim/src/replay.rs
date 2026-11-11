@@ -153,6 +153,13 @@ impl Replay {
         if found != FORMAT_VERSION {
             return Err(ReplayError::FormatVersion { found });
         }
+        // Revision is the first postcard field. Reject it before decoding a
+        // command payload using a different schema.
+        let (seam, _): (u32, _) = postcard::take_from_bytes(&bytes[6..])
+            .map_err(|e| ReplayError::Corrupt(e.to_string()))?;
+        if seam != SEAM_REV {
+            return Err(ReplayError::SeamRev { found: seam });
+        }
         let (r, remaining) = postcard::take_from_bytes::<Replay>(&bytes[6..])
             .map_err(|e| ReplayError::Corrupt(e.to_string()))?;
         if !remaining.is_empty() {
@@ -409,8 +416,9 @@ mod tests {
 
     #[test]
     fn rejects_trailing_replay_data() {
+        let valid = record(10).0.encode();
         for suffix in [&[0][..], &[0xff][..], b"unrecognized extension"] {
-            let mut bytes = NATIVE_V1.to_vec();
+            let mut bytes = valid.clone();
             bytes.extend_from_slice(suffix);
             assert!(
                 matches!(Replay::decode(&bytes), Err(ReplayError::Corrupt(_))),
@@ -421,8 +429,9 @@ mod tests {
 
     #[test]
     fn rejects_concatenated_replays() {
-        let mut bytes = NATIVE_V1.to_vec();
-        bytes.extend_from_slice(NATIVE_V1);
+        let valid = record(10).0.encode();
+        let mut bytes = valid.clone();
+        bytes.extend_from_slice(&valid);
         assert!(matches!(
             Replay::decode(&bytes),
             Err(ReplayError::Corrupt(_))
@@ -430,27 +439,62 @@ mod tests {
     }
 
     #[test]
-    fn genuine_native_v1_preserves_bytes_and_continuation() {
+    fn rejects_revision_one_replay() {
         assert_eq!(NATIVE_V1.len(), 486);
         assert_eq!(&NATIVE_V1[..6], b"STAR\x01\x00");
-        let replay = Replay::decode(NATIVE_V1).unwrap();
-        assert_eq!(replay.encode(), NATIVE_V1);
-        assert_eq!(replay.seam_rev, 1);
-        assert_eq!(replay.content_hash, 0xc0d4_3c3a_94f1_650e);
-        assert_eq!(replay.end_tick, 600);
-        assert_eq!(replay.commands.len(), 5);
-        assert_eq!(replay.digests.first(), Some(&(0, 0x0a12_857a_226d_b8ca)));
-        assert!(replay.digests.contains(&(300, 0xace6_bda2_8dd6_531f)));
-        assert_eq!(replay.digests.last(), Some(&(600, 0xe551_eb38_7ec7_a1ee)));
+        assert_eq!(
+            Replay::decode(NATIVE_V1).unwrap_err(),
+            ReplayError::SeamRev { found: 1 }
+        );
+    }
 
+    #[test]
+    fn perceived_team_command_records_and_replays_shared_state() {
+        let setup = setup();
+        let mut rec = Recorder::with_interval(&setup, 1);
+        rec.step(&[Command {
+            player: PlayerId::SCRIPT,
+            seq: 0,
+            kind: CommandKind::Edit(Edit::Spawn {
+                odf: setup.content.key("fx_cruiser").unwrap(),
+                player: PlayerId(0),
+                pos: Vec3::from_f32([2000.0, 0.0, 2000.0]),
+                heading: (Fixed::ZERO, Fixed::ONE),
+            }),
+        }]);
+        let unit = rec.sim().view().units.iter().find(|u| u.owner == PlayerId(0)).unwrap().id;
+        let out = rec.step(&[Command {
+            player: PlayerId::SCRIPT,
+            seq: 7,
+            kind: CommandKind::Edit(Edit::PerceivedTeam(unit, PlayerId(1))),
+        }]);
+        assert!(!out.events.iter().any(|event| matches!(event, crate::SimEvent::Rejected { .. })));
+        assert_eq!(out.view.perceived_owner(unit), Some(PlayerId(1)));
+        for _ in 0..10 {
+            rec.step(&[]);
+        }
+        let expected = rec.sim().view();
+        let replay = Replay::decode(&rec.finish().encode()).unwrap();
+        let restored = replay.play(setup.content).unwrap();
+        assert_eq!(restored.view(), expected);
+        assert_eq!(restored.unit(unit).unwrap().owner, PlayerId(0));
+        assert_eq!(restored.perceived_owner(unit), Some(PlayerId(1)));
+    }
+
+    #[test]
+    fn historical_native_commands_retain_their_default_simulation_golden() {
+        // Test-only extraction of known old commands, not a public replay
+        // migration path. The real decoder above correctly rejects revision 1.
+        let (mut replay, rest): (Replay, _) = postcard::take_from_bytes(&NATIVE_V1[6..]).unwrap();
+        assert!(rest.is_empty());
+        assert_eq!(replay.seam_rev, 1);
+        replay.seam_rev = SEAM_REV;
         let mut sim = replay.play(Arc::new(sta_content::fake::db())).unwrap();
         assert_eq!(sim.view().tick, 600);
         assert_eq!(sim.digest(), 0xe551_eb38_7ec7_a1ee);
-        assert!(sim.unit(EntityId(1)).unwrap().pos.z > Fixed::from_int(8192));
         for _ in 0..300 {
             sim.step(&[]);
         }
-        assert_eq!(sim.view().tick, 900);
         assert_eq!(sim.digest(), 0x2b96_65c4_c00e_0f3b);
     }
 

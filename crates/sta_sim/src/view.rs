@@ -30,9 +30,21 @@ pub struct WorldView {
     /// the source computes no visibility, in which case the view is omniscient.
     #[serde(default)]
     pub visibility: Vec<(PlayerId, Vec<EntityId>)>,
+    /// Global perceived-owner overrides, ascending entity id. Absence means
+    /// real owner; this never grants command authority or sensor sharing.
+    #[serde(default)]
+    pub perceived_owners: Vec<(EntityId, PlayerId)>,
 }
 
 impl WorldView {
+    pub fn perceived_owner(&self, id: EntityId) -> Option<PlayerId> {
+        let unit = self.unit(id)?;
+        Some(match self.perceived_owners.binary_search_by_key(&id, |row| row.0) {
+            Ok(i) => self.perceived_owners[i].1,
+            Err(_) => unit.owner,
+        })
+    }
+
     /// The units `player` sees, ascending id: its team's and whatever its
     /// team's sensors reach (`crate::sensors`). Everything when the view
     /// carries no visibility data; nothing for a player it does not know.

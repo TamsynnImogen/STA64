@@ -193,6 +193,18 @@ impl Weapons {
         teams: &[(PlayerId, TeamId)],
         events: &mut Vec<SimEvent>,
     ) {
+        self.step_with_perception(tick, units, db, teams, &Table::new(), events);
+    }
+
+    pub(crate) fn step_with_perception(
+        &mut self,
+        tick: u64,
+        units: &Entities,
+        db: &ContentDb,
+        teams: &[(PlayerId, TeamId)],
+        perception: &Table<PlayerId>,
+        events: &mut Vec<SimEvent>,
+    ) {
         let alive = |id: EntityId| units.get(id).filter(|u| u.hull[1] > Fixed::ZERO);
         let gone: Vec<EntityId> = self
             .attack
@@ -263,7 +275,7 @@ impl Weapons {
                 } else {
                     None
                 };
-                let Some(t) = self.pick(u, w.range, arc, units, teams) else {
+                let Some(t) = self.pick(u, w.range, arc, units, teams, perception) else {
                     continue;
                 };
                 if self.mounts.get(u.id).is_none() {
@@ -357,6 +369,7 @@ impl Weapons {
         arc: Option<FireArc>,
         units: &'a Entities,
         teams: &[(PlayerId, TeamId)],
+        perception: &Table<PlayerId>,
     ) -> Option<&'a Entity> {
         let team = |p: PlayerId| teams.iter().find(|x| x.0 == p).map(|x| x.1);
         // A cloaked unit is only a target for its own team.
@@ -374,7 +387,8 @@ impl Weapons {
         let mine = team(u.owner)?;
         let mut best: Option<(Fixed, &Entity)> = None;
         for t in units.iter() {
-            if team(t.owner).is_none_or(|x| x == mine) || !hittable(t) {
+            let perceived = perception.get(t.id).copied().unwrap_or(t.owner);
+            if team(perceived).is_none_or(|x| x == mine) || !hittable(t) {
                 continue;
             }
             let d = flat(u.pos, t.pos).1;
