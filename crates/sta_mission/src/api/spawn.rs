@@ -244,6 +244,16 @@ fn dispatch(c: &mut Ctx, actor: EntityRef, action: EntityAction) -> bool {
                 }
             }
         }
+        EntityAction::PerceivedTeam(to) => {
+            if c.alive(id).is_none() { return false; }
+            match super::edit_feedback::queue(c, "Entity.perceivedTeam", Edit::PerceivedTeam(id, to)) {
+                Ok(()) => true,
+                Err(_) => {
+                    c.unsupported("Entity.perceivedTeam: command could not be queued");
+                    false
+                }
+            }
+        }
         EntityAction::Cloak(on) => c.order(id, |units| Order::Cloak { units, on }),
         EntityAction::Hull(to) => {
             if !to.is_finite() {

@@ -66,7 +66,7 @@ No Core/content/client/network/dependency changes are authorized by this slice.
 
 ## Remaining closure work
 
-The regenerated branch report has 27 exact signatures and 105 missing
+The regenerated branch report has 28 exact signatures and 104 missing
 signatures, across the same 72 A2 and 59 A1 mission DLLs. The full per-signature
 list remains generated in [MISSION_DLL_API.md](MISSION_DLL_API.md).
 
@@ -78,11 +78,11 @@ list remains generated in [MISSION_DLL_API.md](MISSION_DLL_API.md).
 | Audio/music | 4 | Local typed requests exist, but native sound IDs/script handles/voice-command flags and completion feedback are not mapped. |
 | Orders/AI | 24 | Stop/attack/mining subsets exist; native priority flags, path movement, colonization and dynamic AI/AIP control require shared-system work. |
 | Crew | 2 | Current mutable crew does not exist. Definition crew and planet capacity are not a replacement; a SIM state/serialization contract is required. |
-| Teams/relations | 4 | Perceived team and mutable race are distinct absent state; native enemy-search semantics also need verification. |
+| Teams/relations | 3 | Shared perceived identity is merged in #327 and its Lua setter is implemented by the separate [perception adapter](LUA05_PERCEPTION_BINDINGS.md). Mutable race and native enemy-search semantics still need work. |
 | Objects | 25 | Finder/view primitives exist, but native search masks/ties/sentinels need adapters; positioning, shield setters and target policy need supported shared edits. |
 | Other | 24 | Alert/non-engine subsystem/decommission/derelict/rotation/transport/population/wormhole state is absent or rejected; several presentation/query adapters also remain. |
 
-These are shared-engine or adapter prerequisites, not 105 claims that Core is
+These are shared-engine or adapter prerequisites, not 104 claims that Core is
 entirely absent. Small host-backed adapters can proceed after their native
 argument/timing gates. Larger gameplay changes require owning simulation/content
 seam proposals, tests and persistence contracts before further Lua bindings.

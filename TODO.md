@@ -74,6 +74,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] LUA-05 perceived-team prerequisite: after its separate seam and Lua adapter merge, check Blockade's disguise/reveal sequence. Confirm real ownership still controls selection/resources, automatic enemy acquisition follows perceived identity, and save/load preserves the disguise. Source/headless proof does not replace this campaign check; use the current build's revision-2 replay/view logs.
 
+- [?] LUA-05 perception adapter: run Blockade beyond its fleet-isolation callback on a current campaign build. Confirm no unknown `perceivedTeam` field warnings, check the isolated ships retain their intended real owners, and keep any AIP/other unsupported diagnostics visible. A clean 1800-tick headless startup is a bounded check, not full campaign acceptance.
+
 ## Checked earlier (morning list)
 
 Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.

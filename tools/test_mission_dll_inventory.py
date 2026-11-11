@@ -365,6 +365,51 @@ class MissionDllInventoryTests(unittest.TestCase):
                 (self.a2 / "mod.rs").write_text('lua.globals().raw_set("A2", a2)?;', encoding="utf-8")
                 self.assertEqual(inventory.a2_exact_for(exact, self.repo), "")
 
+    def test_perceived_team_signatures_require_exact_registered_control_shapes(self):
+        self.register_a2(
+            "",
+            registration=(
+                'controls::install(lua, ctx, &a2)?; '
+                'lua.globals().raw_set("A2", a2)?;'
+            ),
+        )
+        (self.a2 / "controls.rs").write_text(
+            'table.set("SetPerceivedTeam", fn);\n'
+            'table.set("GetPerceivedTeam", fn);\n',
+            encoding="utf-8",
+        )
+
+        self.assertEqual(
+            inventory.a2_exact_for(
+                "public: virtual void __thiscall ScriptInterfaceImp::SetPerceivedTeam(int, int)",
+                self.repo,
+            ),
+            "A2.SetPerceivedTeam",
+        )
+        self.assertEqual(
+            inventory.a2_exact_for(
+                "public: virtual int __thiscall ScriptInterfaceImp::GetPerceivedTeam(int)",
+                self.repo,
+            ),
+            "A2.GetPerceivedTeam",
+        )
+        for signature in (
+            "int SetPerceivedTeam(int, int)",
+            "void SetPerceivedTeam(int)",
+            "void SetPerceivedTeam(int, int&)",
+            "void SetPerceivedTeam(int&, int)",
+            "void SetPerceivedTeam(int, bool)",
+            "void GetPerceivedTeam(int)",
+            "bool GetPerceivedTeam(int)",
+            "int GetPerceivedTeam()",
+            "int GetPerceivedTeam(int&)",
+            "int GetPerceivedTeam(int, int)",
+        ):
+            self.assertEqual(inventory.a2_exact_for(signature, self.repo), "", signature)
+
+        (self.a2 / "controls.rs").write_text('table.set("SetPerceivedTeam", fn);\n', encoding="utf-8")
+        self.assertEqual(inventory.a2_exact_for("int GetPerceivedTeam(int)", self.repo), "")
+
     def test_current_health_writer_requires_exact_void_integer_float_call_shape(self):
         self.register_a2(
             'table.set("SetCurrentHealth", fn);\n',

@@ -273,8 +273,12 @@ fn external_a2_campaign_ports_start_on_installed_maps() {
                         .any(|word| lower.contains(word))
                 })
                 .collect();
+            let handled_perception_errors = handled_logs
+                .iter()
+                .filter(|line| line.to_ascii_lowercase().contains("perceivedteam"))
+                .count();
             eprintln!(
-                "A2 startup {name}: horizon_ticks={startup_ticks} map={bzn_name} loaded_layer={loaded_layer:?} objects={} regions={} warnings(map/spawn)={}/{} resolve={resolution:?} errors={} objectives={} finished={} unsupported={unsupported:?} rejected={rejected:?} handled_log_count={} handled_log_samples={:?}",
+                "A2 startup {name}: horizon_ticks={startup_ticks} map={bzn_name} loaded_layer={loaded_layer:?} objects={} regions={} warnings(map/spawn)={}/{} resolve={resolution:?} errors={} objectives={} finished={} unsupported={unsupported:?} rejected={rejected:?} handled_log_count={} handled_perception_errors={handled_perception_errors} handled_log_samples={:?}",
                 setup.map.objects.len(),
                 setup.map.regions.len(),
                 map_warnings.len(),
@@ -290,6 +294,9 @@ fn external_a2_campaign_ports_start_on_installed_maps() {
             }
             if !rejected.is_empty() {
                 failures.push(format!("{name}: rejected commands: {rejected:?}"));
+            }
+            if handled_perception_errors != 0 {
+                failures.push(format!("{name}: {handled_perception_errors} handled perceivedTeam errors"));
             }
             Ok(())
         })();

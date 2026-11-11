@@ -3,7 +3,7 @@
 //! strings; dispatch and dependency scheduling belong to the runtime.
 
 use mlua::{MultiValue, Value};
-use sta_core::Vec3;
+use sta_core::{PlayerId, Vec3};
 
 use super::entity::Entity;
 use super::entity_ref::EntityRef;
@@ -33,6 +33,7 @@ pub(crate) enum EntityAction {
     Cloak(bool),
     Hull(f64),
     ForceOntoMap(bool),
+    PerceivedTeam(PlayerId),
 }
 
 impl EntityAction {
@@ -50,7 +51,8 @@ impl EntityAction {
             | Self::Immortal(_)
             | Self::Cloak(_)
             | Self::Hull(_)
-            | Self::ForceOntoMap(_) => Vec::new(),
+            | Self::ForceOntoMap(_)
+            | Self::PerceivedTeam(_) => Vec::new(),
         }
     }
 }

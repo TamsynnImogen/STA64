@@ -12,7 +12,10 @@ client, save, network or dependency changes are part of this adapter.
   Configured-seat and target validation at application time remain Core's job.
 - `A2.GetPerceivedTeam(id)` takes exactly one unsigned integral handle. Require
   a current non-DYING handle and encode the shared view's perceived owner in
-  the configured numbering. Emit no command. This native method is not used by
+  the configured numbering. Emit no command. As with the existing GetRealTeam,
+  a synthetic reserved identity which ArmadaTeams cannot encode returns nil;
+  ordinary real slots and neutral encode numerically. This is a bridge edge
+  convention, not native sentinel parity. This native method is not used by
   the current inventoried DLL corpus; do not inflate the used-call count.
 - `Entity.perceivedTeam` reads as a Player from the latest shared view, or nil
   for a pending/failed/missing/DYING actor. It does not predict queued writes.
@@ -48,6 +51,9 @@ Narrow owned paths: mission api/a2 controls and new perception tests; Entity,
 EntityAction and spawn dispatch; exact inventory mappings/tests/report and owning
 documentation. Existing edit feedback needs no alternate store or sequence
 scheme. No shared-state implementation is duplicated.
+The installed `a2_campaign_startup` probe additionally counts all handled
+perceivedTeam failures and rejects any, independently of its three printed
+samples; other diagnostics remain visible and retain their existing gates.
 
 Test strict arity/types/ranges and both numbering modes; current-view reads and
 refresh; real owner retained; pending FIFO dispatch through real receipts;
