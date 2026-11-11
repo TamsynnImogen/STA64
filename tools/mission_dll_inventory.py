@@ -270,6 +270,8 @@ A2_SIGNATURES = {
     "void ObjectivesDisplaySetObjectiveComplete(int, bool)": "A2.ObjectivesDisplaySetObjectiveComplete",
     "void SetForceOntoMap(int, bool)": "A2.SetForceOntoMap",
     "void SetRealTeam(int, int)": "A2.SetRealTeam",
+    "void SetPerceivedTeam(int, int)": "A2.SetPerceivedTeam",
+    "int GetPerceivedTeam(int)": "A2.GetPerceivedTeam",
     "void ObjectivesDisplay_Set_Text_From_File(char*, bool)": "A2.ObjectivesDisplay_Set_Text_From_File",
 }
 

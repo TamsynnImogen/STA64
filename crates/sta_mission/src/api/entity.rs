@@ -101,6 +101,16 @@ impl UserData for Entity {
                 }
             });
         }
+        f.add_field_method_get("perceivedTeam", |lua, e| {
+            let owner = {
+                let c = e.ctx.borrow();
+                e.key.id().filter(|&id| c.alive(id).is_some()).and_then(|id| c.view.perceived_owner(id))
+            };
+            match owner {
+                Some(id) => Ok(Value::UserData(lua.create_userdata(Player { id, ctx: e.ctx.clone() })?)),
+                None => Ok(Value::Nil),
+            }
+        });
         f.add_field_method_get("race", |_, e| {
             Ok(e.with(|c, u| u.and_then(|u| c.def(u)).map(|d| d.race.clone()).unwrap_or_default()))
         });
@@ -148,6 +158,19 @@ impl UserData for Entity {
                 return Err(mlua::Error::runtime("Entity.forceOntoMap requires a live object"));
             }
             spawn::queue_action(&mut e.ctx.borrow_mut(), e.key.clone(), EntityAction::ForceOntoMap(enabled));
+            Ok(())
+        });
+        f.add_field_method_set("perceivedTeam", |_, e, value: Value| {
+            if matches!(&value, Value::Number(n) if !n.is_finite() || n.fract() != 0.0) {
+                return Err(mlua::Error::runtime("Entity.perceivedTeam requires a Player or integral player number"));
+            }
+            let destination = player_of(&e.ctx.borrow(), &value)
+                .filter(|p| p.is_player() || *p == sta_sim::world::NEUTRAL)
+                .ok_or_else(|| mlua::Error::runtime("Entity.perceivedTeam requires a real Player or neutral"))?;
+            if e.key.id().is_some_and(|id| e.ctx.borrow().alive(id).is_none()) {
+                return Err(mlua::Error::runtime("Entity.perceivedTeam requires a live object"));
+            }
+            spawn::queue_action(&mut e.ctx.borrow_mut(), e.key.clone(), EntityAction::PerceivedTeam(destination));
             Ok(())
         });
     }

@@ -1,5 +1,36 @@
 # LUA-05 mission bridge
 
+## Perceived identity
+
+The merged shared perception seam backs `A2.SetPerceivedTeam(id, team)` and
+`A2.GetPerceivedTeam(id)`. They use strict unsigned integral handles/numbers,
+exact arity and the configured Slots/ArmadaTeams numbering. Both require a
+current non-DYING object. The setter queues a correlated SCRIPT edit; the getter
+reads the latest shared view. Neither changes real ownership or the Lua cache
+optimistically. Missing/reserved/malformed arguments error before queuing.
+As with `GetRealTeam`, ArmadaTeams returns nil for a synthetic reserved identity
+it cannot encode; real slots and neutral return numbers. Native sentinel parity
+is not claimed.
+
+`Entity.perceivedTeam` reads a Player from the latest view, or nil while pending,
+failed, absent or DYING. Assign a Player or strict integral player number (real
+slots or neutral). Pending actors retain a typed action until their actual spawn
+receipt arrives; failed receipts and rejected edits remain diagnosed. Actor-local
+FIFO dispatch does not change Core's sorted cross-player application order.
+
+The stock A2 native field is global and independent of real team. Its object
+guard includes GameObject construction proxies; it is not the narrower crew
+guard. Strict Lua validation, receipt handling, numbering and error policies are
+bridge conventions, not native ABI/invalid-input parity claims. Automatic
+weapon acquisition consumes shared perception; explicit Attack, control,
+sensors, economy, victory and team colours retain real ownership. Additional
+AI/client and native special-weapon perception policy is not claimed complete.
+See [the pre-code contract](../../../../../docs/LUA05_PERCEPTION_BINDINGS.md).
+The getter is not used by the currently inventoried DLL corpus and earns no
+extra used-call coverage. No full campaign or playback acceptance is implied.
+
+## Existing presentation bridge
+
 `Cineractive`, `Media` and `UI` now queue `Edit::Present` commands from
 `PlayerId::SCRIPT`. The sim raises the matching events; these bindings do
 not render a shot/title or play a sound/movie themselves.
