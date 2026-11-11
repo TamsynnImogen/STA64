@@ -344,7 +344,10 @@ including zero elapsed ticks. It does not complete SIM-19. The exact owned
 paths are `production/transfer.rs`, narrow explanatory comments in
 `ownership.rs`, the obsolete active-head rejection case and a child-test
 registration in `ownership_queue_tests.rs`, a new
-`ownership_active_tests.rs`, and this document. No production tick, command,
+`ownership_active_tests.rs`, the legacy combined queue/deploy/weld test in
+`ownership_tests.rs`, and this document. That legacy test now needs to check
+active queue acceptance while retaining all deploy/weld rejection assertions;
+the wider ownership run exposed its obsolete blanket queue guard. No production tick, command,
 snapshot, replay, content/default, client or Lua format/API changes are needed.
 Open #309 owns separate boundary/production integration; its files are not
 modified by this stage. This contract must be pushed before source changes.
