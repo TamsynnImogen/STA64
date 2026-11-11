@@ -32,8 +32,9 @@ at completion, preserving winding, materials, attributes and model transforms.
 The **constructor's resolved ODF** provides `numberOfWorkerBees`, `workerBeeName`,
 `workerBeeHardpoints`, `weldingBeamSprite`, `weldingBeamWidth`,
 `timeUntilTakeoff`, `timeWelding` and `timeUntilClosure`. Explicit zero timings
-and widths are respected. Missing hardpoints fall back to the builder origin
-with a diagnostic; named nodes use their animated model transforms. No original
+and widths are respected. An absent hardpoint list falls back to the builder
+origin; an authored name that cannot be found also emits a diagnostic. Named
+nodes use their animated model transforms. No original
 ODF or sprite file is modified. The existing procedural Refit effects remain a
 fallback when the named sprite is unavailable.
 
@@ -115,5 +116,32 @@ It advances one instance from zero to half progress after GPU extraction,
 then completes it with the hull depth prepass enabled. It checks that zero
 shows no hull, compares the partial hull with the full silhouette, and compares
 the completed instance with an untouched original mesh. It does not by itself
-verify worker movement or complete in-game
-construction acceptance. Existing Sabre rendering checks remain separate.
+verify worker movement or complete in-game construction acceptance. Existing
+Sabre rendering checks remain separate.
+
+## Validation (2026-11-11)
+
+- Client library: 361 passed, zero failed, one existing ignored test. Includes
+  geometry partition/edge/restore checks, exact quoted ODF hardpoints, explicit
+  zero overrides, waiting/travel/welding/return phases, late geometry, parallel
+  constructor binding and home transforms, bay closure and consecutive jobs.
+  Existing cloak and five-minute FX cleanup checks pass.
+- Production regression subset: 33 passed. No simulation, save or wire code
+  changed.
+- Strict client all-target Clippy and workspace/all-target compilation pass.
+- Real Classic `fbase`, Vulkan/headless depth prepass: 0 / 6,228 / 10,188 lit
+  pixels at zero / half / complete progress. Completed and untouched reference
+  silhouettes match exactly. This exercises partial index updates **after**
+  renderer extraction, then restoration of the original mesh.
+- Sabre `fdestroy2`: 12,657 lit pixels with and without the depth prepass,
+  12,915 with MSAA4; no regression of the accepted invisible-hull fix.
+- Android NDK 29, API 26, `aarch64-linux-android` client library compilation
+  passes. This is not a full APK build or Android/Waydroid runtime test.
+- Seven inspected stock ODF/sprite and native-source hashes remain unchanged.
+
+Remaining acceptance: the optimized desktop build needs a live Classic station
+build, cancellation and second-build check, including FPS during construction.
+Stock A1/FO visual equivalence has not been established. Chunk order is the
+STA64 spatial policy, not recovered native section ordering. The previous
+24-bee presentation cap remains; this does not alter simulation unit limits.
+No desktop milestone or December 2026 alpha date was changed.
