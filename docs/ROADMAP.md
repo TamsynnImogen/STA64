@@ -11,7 +11,7 @@ How M2–M5 split into parallel work packages: [WORKPLAN.md](WORKPLAN.md).
 
 ## M1: See the content
 - [x] `sta_fpq` (FPQ v2 archives) mounted in the VFS — byte-identical to liblzo2 on Sigma's 2,872-entry `ODF.fpq`
-- ODF index across all ODF folders and A1 `addon/`, with duplicate warnings
+- [x] ODF index across all ODF folders and A1 `addon/`, with duplicate warnings; [installed and synthetic validation](M1_VALIDATION.md)
 - [x] `sta_assets`: layer-aware lookup (KTX2 > DDS > TGA > PNG; GLB > glTF > SOD), TGA decode
 - [x] SOD → Bevy scene (vendored `a2fmt`), finest LOD, step animation; 926/927 FO4 SODs parse
 - [x] Model viewer: browse every model, orbit, team colours

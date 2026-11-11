@@ -78,6 +78,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] Static glTF/GLB (CON-09): with an updated build, place the original `fixtures/models/fx_cruiser.glb` in a mounted layer's `sod/` directory and run `--view fx_cruiser`; orbit the red/blue checker model and check its surface remains visible. Parser, material, VFS lookup and windowless GPU checks are separate automated evidence. Animation, skins, morph targets and unsupported required extensions currently report explicit errors. [Scope and limits](docs/M1_ASSET_MODEL_COMPLETION.md).
 
+- [?] M1 corpus refresh: installed ODF/VFS checks now cover an original flat A1 ZFS install as well as base/modded Roots and Classic. See [the acceptance report](docs/M1_VALIDATION.md) for the exact counts, old-version/required-extension refusals and remaining GLB viewer check. Sabre construction/movement is accepted on the staged fix; M1 integration and the low-FPS optimized-build comparison remain pending.
+
 ## Checked earlier (morning list)
 
 Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
