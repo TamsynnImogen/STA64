@@ -114,12 +114,15 @@ unknown: first thing to find out.
 Full reports: `docs/research/modding/{fo-hooks-asi,render-mods,repo-seams}.md`.
 Summaries are the agents' own; formulas and ODF.fpq contents are unverified.
 
-**Code lineages (fo-hooks-asi).** Only three exist: stock A2, FO 3.2.7
-(in-memory `FleetOpsHook.dll`, stock exe renamed `Armada2.ldl` behind a
-loader), Roots 5.0Z11 (patched `ArmadaL.exe` plus its own hook). "FO 4.0" and
-"STA2 Classic" are data submods under Roots `Data/Mods/`. FO plain and
-Dominion War are code-identical. Profiles therefore key on code lineage plus
-a data-mod layer, matching the pack model. Fingerprints: `.test` exe section,
+**Code lineages (fo-hooks-asi).** Four engine lineages: **stock A1** (own
+exe; the survey found only IPX/ddraw shims there and did not look for A1
+community patches or hooks, so A1 is the least-surveyed lineage), and the
+A2 family: stock A2, FO 3.2.7 (in-memory `FleetOpsHook.dll`, stock exe renamed
+`Armada2.ldl` behind a loader), Roots 5.0Z11 (patched `ArmadaL.exe` plus its
+own hook). "FO 4.0" and "STA2 Classic" are data submods under Roots
+`Data/Mods/`. FO plain and Dominion War are code-identical. Profiles
+therefore key on code lineage plus a data-mod layer, matching the pack model.
+Fingerprints: `.test` exe section,
 `AssetVersion=50000`, `Armada2.ldl`. Every `.asi` except
 `STA2WidescreenPatch.asi` is Refit's own. Roots' `devstuff/Engine_Changelog.txt`
 (616 lines) is the best quirk source: sentinel ODF keys (`hitChanceMod`,
@@ -167,9 +170,9 @@ Amendments to the slot idea:
 
 ## Open unknowns
 
-- Roots `ODF.fpq` key survey; FO 4.0 effect SODs vs FO plain; Dominion War
-  data diff; widescreen patch internals; A1 community patches.
-- No disassembly yet: quirk formulas unverified; stock RTS_CFG defaults not
+- **A1 survey** (exe fingerprint, community patches/hooks, A1-specific
+  quirks vs A2: not covered by the first pass); Roots `ODF.fpq` key survey; FO 4.0 effect SODs vs FO plain; Dominion War
+  data diff; widescreen patch internals; - No disassembly yet: quirk formulas unverified; stock RTS_CFG defaults not
   found on disk.
 
 ## Next
