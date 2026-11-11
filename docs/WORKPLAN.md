@@ -474,6 +474,8 @@ seam rather than writes.
 
 | CON-24 | Resolved legacy is_starbase metadata for exact mission classification: native-backed zero default and inherited ODF overrides, kept separate from actor kind; design in [LEGACY_STATION_FLAG.md](LEGACY_STATION_FLAG.md) | sta_content/src/def.rs UnitDef field/constructor, odf.rs native flag reader, db.rs conditional hash; new station_flag tests | CON-03, CON-05 | Synthetic ODFs, pinned GOG A1/A2/FO class readers and genuine v8 fixture | LUA-05 IsStation query after native class guard is verified | Explicit/inherited zero, verified profile-specific numeric prefixes/Boolean forms, invalid diagnostics, weapon exclusion and effective/no-op hash tests; default Native fixtures remain compatible; shared/consumer/Clippy/workspace checks pass | S | Lead |
 
+| CON-25 | Explicit A1 BZN front-matter inspection and unsupported-import errors instead of successful empty text maps; pre-code contract in [A1_BZN_SUPPORT.md](A1_BZN_SUPPORT.md) | sta_bzn/src/a1.rs, narrow lib.rs module/error/dispatch, dedicated tests; contract docs | CON-07 | Synthetic LF/CRLF/malformed headers and read-only GOG A1 corpus | Validated future typed metadata/object/MDF importer | Lossless description and exact metadata offset, identified A1 inputs never silently become empty maps, A2 outputs unchanged, scoped/consumer/Clippy/workspace/Android library checks | S | Lead |
+
 ### Simulation (SIM)
 
 | ID | Package | Owns | Needs | Against | Unlocks | Done when | Size | Model |
