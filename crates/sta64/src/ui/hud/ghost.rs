@@ -243,3 +243,7 @@ mod tests {
         assert_ne!(source.base_color, blocked.base_color);
     }
 }
+
+#[cfg(test)]
+#[path = "ghost_gpu.rs"]
+mod gpu_tests;
