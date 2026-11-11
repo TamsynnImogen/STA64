@@ -98,8 +98,12 @@ override does not suppress later A1 rearm; authors can separately disable rearm.
 Core welds retain an ID while native construction destroys its placeholder and
 constructs the finished actor. Reset boundary initialization at completion,
 before assigning the finished actor's movement target. Incomplete structures
-use plain-GameObject update timing; their final definition must not grant an
-unconditional Craft tick prematurely. Keep current IDs, labels and production
+use plain-GameObject spatial dispatch, profile initialization/rearm defaults
+and update timing, with the same owning-unit authored overrides and immutable
+capability. Cache/hash this construction policy as well as the finished policy
+when it differs. In particular, a terrain product must not lend its constructor
+flag/bypass to the ordinary placeholder, or a Craft product its unconditional
+tick prematurely. Keep current IDs, labels and production
 accounting. Despawn removes the row; ownership changes preserve it.
 
 For unusable/missing/tiny/overflowing volumes, retain valid spawns, diagnose
