@@ -6,6 +6,8 @@ use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 use sta_sim::setup::{Control, GameSetup};
 use sta_sim::{PlayerId, TeamId};
+use sta_content::{RaceDef, Races};
+use std::sync::Arc;
 
 use super::view::{MapList, ModList, SettingSlider, SettingToggle};
 use super::*;
@@ -189,6 +191,68 @@ fn setup_round_trips_through_a_game_setup() {
     // The sim takes it as it is.
     let sim = sta_sim::Sim::from_setup(&setup);
     assert_eq!(sta_sim::WorldSource::view(&sim).players.len(), 4);
+}
+
+fn race(name: &str, slot: Option<i64>) -> RaceDef {
+    RaceDef {
+        stem: name.into(), name: name.into(), slot, interface: None,
+        single_player_music: None, multiplayer_music: None,
+        standard_units: Vec::new(), minimal_units: Vec::new(), stock: [0; 4],
+    }
+}
+
+#[test]
+fn race_picker_uses_catalogue_slots_even_without_start_units() {
+    let mut data = ScreenData::fake();
+    // The fake database contains `fx` units, but the mounted race list does not.
+    data.races = Arc::new(Races::from_defs(vec![
+        race("later", Some(3)), race("excluded", None), race("zero", Some(0)),
+        race("middle", Some(2)),
+    ]));
+    assert_eq!(data.races(), ["zero", "middle", "later"]);
+    let mut draft = SetupDraft::new(&data);
+    assert_eq!((draft.seats[0].race.as_str(), draft.seats[1].race.as_str()), ("zero", "middle"));
+    draft.cycle_race(&data, 0);
+    assert_eq!(draft.seats[0].race, "middle");
+    draft.cycle_race(&data, 0);
+    assert_eq!(draft.seats[0].race, "later");
+    draft.cycle_race(&data, 0);
+    assert_eq!(draft.seats[0].race, "zero");
+    assert_eq!(draft.to_setup(&data).unwrap().players[0].race, "zero");
+}
+
+#[test]
+fn explicit_empty_or_nonplayable_catalogue_cannot_launch_inferred_unit_race() {
+    for catalogue in [Races::from_defs(vec![]), Races::from_defs(vec![race("observer", None)])] {
+        let mut data = ScreenData::fake();
+        data.races = Arc::new(catalogue);
+        assert!(data.races().is_empty(), "fx units must not enter a mounted catalogue");
+        let mut draft = SetupDraft::new(&data);
+        assert!(draft.seats.iter().all(|s| s.race.is_empty()));
+        draft.cycle_race(&data, 0);
+        assert!(draft.seats[0].race.is_empty());
+        assert!(draft.to_setup(&data).is_none());
+    }
+    let mut app = app();
+    app.world_mut().resource_mut::<ScreenData>().races = Arc::new(Races::from_defs(vec![]));
+    go(&mut app, Screen::Setup);
+    assert_eq!(app.world_mut().query_filtered::<&WidgetState, With<UiButton>>().iter(app.world()).filter(|s| **s == WidgetState::Disabled).count(), 1);
+    assert!(started(&mut app).is_empty());
+}
+
+#[test]
+fn stale_seat_races_cannot_launch_after_catalogue_change() {
+    let mut data = ScreenData::fake();
+    let mut draft = SetupDraft::new(&data);
+    assert_eq!(draft.seats[0].race, "fx");
+    data.races = Arc::new(Races::from_defs(vec![race("new", Some(0))]));
+    assert_eq!(data.races(), ["new"]);
+    assert!(draft.to_setup(&data).is_none());
+    for row in 0..draft.seats.len() {
+        draft.cycle_race(&data, row);
+    }
+    assert_eq!(draft.seats.iter().map(|s| s.race.as_str()).collect::<Vec<_>>(), ["new", "new"]);
+    assert!(draft.to_setup(&data).is_some());
 }
 
 #[test]

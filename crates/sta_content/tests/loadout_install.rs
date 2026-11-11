@@ -197,7 +197,9 @@ fn a_start_unit_without_a_model_is_reported() {
 /// The rule per game, read from the data (race ODFs through the mod chain, so
 /// the mod's own `federation.odf` wins over Roots'):
 ///
-/// - playable races are the race ODFs with `instantactionslot > 0`; each has a
+/// - playable modern races are the referenced race ODFs with a nonnegative
+///   `instantactionslot` (including zero); A1 uses its legacy interface fallback.
+///   Start validity is checked separately below; it never selects eligibility. Each has a
 ///   start (DW's `fed`, `dom` and `borg` are real races of their own, with a
 ///   slot, a race key and start units, not aliases of `federation`/`dominion`);
 /// - a start is the race's `standardunits*` that are craft or stations, plus the
@@ -221,6 +223,13 @@ fn start_rule_matches_the_data_per_install() {
         let (races, _) = Races::load(&vfs, &index);
         let offered = skirmish_races(&races, &db);
         let playable: Vec<&str> = races.playable().iter().map(|r| r.name.as_str()).collect();
+        let mut expected = Vec::new();
+        for name in &playable {
+            if !expected.contains(&name.to_string()) {
+                expected.push(name.to_string());
+            }
+        }
+        assert_eq!(offered, expected, "{label}: choices must follow the race catalogue");
         for r in &offered {
             assert!(
                 playable.contains(&r.as_str()),
