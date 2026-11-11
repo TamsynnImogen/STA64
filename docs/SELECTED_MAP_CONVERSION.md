@@ -72,3 +72,49 @@ an actual built client, APK builds and manual rendering/gameplay acceptance.
 Do not launch GUI/input automation, Android or original executables. Preserve
 existing staged clients, APK receipts and playtest launchers. The December
 2026 desktop alpha remains the priority; no new completion date is assigned.
+
+## Executed checks
+
+The six content seam tests passed with their original A1 and A2 corpus checks
+explicitly enabled. They cover selected/internal name conflicts, case/slash and
+nested paths, precise slots/XYZ/heading, scene preservation, missing/unreadable/
+invalid MDFs, no partial paths, packed/loose/mod precedence, whiteouts and an
+invalid child over a valid parent. Existing unnamed APIs and full A2 map
+results remain compatible.
+
+All 49 original A1 maps account for 17,595 source objects. Their 28 MDF pairs
+produce 113 starts; the other maps do not infer starts from camera paths.
+Control conversion preserves every `MapDef`, object count and warning count
+for all 72 installed A2 maps (213 converted starts) and all 190 FO4 maps
+(855 converted starts), after the same selected-name assignment the client
+previously performed afterward. The loose A2 control uses `push_dir`; it is
+not proof that the client recognizes that install layout through `mount_install`.
+
+Both actual client tests passed without constructing an `App`: synthetic renamed
+MDF selection reaches shared skirmish seats/loadout spawning; the original A1
+front-end path lists 28 maps/113 starts, and `2blue` creates a two-seat setup
+with 18 initial units. This is headless setup evidence, not rendering or a
+completed game. The 90 existing content library tests also passed.
+
+Independent source/test review found no confirmed defect. Strict content/client
+all-targets Clippy, workspace all-targets checking and the Android ARM64 client
+library check through cargo-ndk/NDK API 26 passed. The Android check is not an APK
+or device-runtime result. All 79 original A1 BZN/MDF/ZFS hashes remained unchanged.
+The actual Linux client also built and its early-exit mission reports read 49
+A1 maps and 190 FO4 maps without unreadable entries. That report exits before
+the window/audio/input pipeline and does not itself exercise starts; the client
+tests above cover those paths. A separate hashed client is staged privately for
+manual checks. An offline lock refresh changed zero packages; the lock stayed
+unchanged. Existing playtest builds and original game data are preserved.
+
+For the opt-in A1 checks (in addition to ordinary scoped tests):
+
+```sh
+renice -n 19 -p $$ >/dev/null
+STA64_TEST_A1_INSTALL="/path/to/Star Trek Armada" cargo test -p sta_content --test selected_map original_a1_install --jobs 2 -- --ignored --nocapture
+STA64_TEST_A1_INSTALL="/path/to/Star Trek Armada" cargo test -p sta64 --lib map::a1_start_tests --jobs 2 -- --include-ignored --nocapture
+```
+
+The installed tests require their environment explicitly and remain ignored in
+ordinary CI. Synthetic coverage uses only generated data and owned temporary
+directories. Manual front-end/skirmish checks are appended to `TODO.md`.

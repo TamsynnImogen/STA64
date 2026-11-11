@@ -325,12 +325,15 @@ pub(crate) fn front_end_data(vfs: &sta_vfs::Vfs, catalogue: &mut Catalogue, inst
     for name in &names {
         let Some(Ok(bytes)) = vfs.read(&format!("bzn/{name}.bzn")) else { continue };
         let Ok(map) = sta_bzn::parse(&bytes) else { continue };
-        let mut def = MapDef::convert_bzn_in(&map, &db, vfs, &index).map;
+        let converted = MapDef::convert_bzn_named_in(&map, name, &db, vfs, &index);
+        for warning in converted.warnings.iter().filter(|w| w.file.ends_with(".mdf")) {
+            debug!("{warning}");
+        }
+        let def = converted.map;
         let mut slots: Vec<u8> = def.starts.iter().map(|s| s.slot).collect();
         slots.sort_unstable();
         slots.dedup();
         if slots.len() >= 2 {
-            def.name.clone_from(name);
             maps.push(MapEntry::new(def));
         }
     }

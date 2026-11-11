@@ -5,7 +5,7 @@
 CON-26 adds the known binary map body to the shared `Map` reader: metadata,
 count-checked placements, mission descriptors and retained AOI/AiPath data.
 See [the import contract and checks](A1_BZN_IMPORT.md). A1 text bodies,
-saved-game state, multiplayer start integration and runtime acceptance remain
+saved-game state and runtime acceptance remain
 pending. Named paths and AOIs are retained data, not enabled gameplay.
 
 CON-27 lets the client mount the original flat A1 install directly with
@@ -14,13 +14,17 @@ priority, and an explicit mod is never discarded to select a flat root.
 The built client mission report enumerated all 49 original A1 maps; this
 early-exit check does not start the window/audio/input pipeline. Follow the
 [install-root rules and manual checks](INSTALL_ROOTS.md). Original files need
-not move. MDF/precise-path starts and graphical/gameplay acceptance remain pending.
+not move. Graphical/gameplay acceptance remains pending.
 
 CON-28 adds pure helpers for a checked canonical MDF start count and precise
 first `Camera_i` points ([contract and limits](A1_START_LOCATIONS.md)). The
 original 28 companion pairs resolve 113 starts without preview-grid inversion.
-These helpers are not yet called by content conversion or the client; A1
-skirmish start integration remains pending. Native malformed-MDF/default-eight
+The additive [selected-map conversion seam](SELECTED_MAP_CONVERSION.md) uses
+them for both client map discovery and map/skirmish setup, loading the MDF by
+the selected VFS stem rather than the internal BZN filename. Existing unnamed
+conversion APIs retain their behaviour. Missing companions do not infer starts
+from campaign camera paths; invalid companions leave a loadable scene and a
+warning without partial starts. Native malformed-MDF/default-eight
 handling and configuration-backed missing-path fallback are not implemented.
 
 ## Confirmed behaviour before CON-25
@@ -118,8 +122,10 @@ CON-26 validates known typed metadata, the type byte, placement prefixes,
 transforms, labels/teams, mission data and bounds against original GOG/native
 and A2FO evidence. Native class payload between placements is not a saved-state
 importer; binary per-object light colours also need further work.
-Companion MDF grid starts require an explicit conversion into STA64's neutral
-slot and player-slot conventions, preserving precise Camera_i path positions.
+The selected-map adapter maps precise Camera_i first points to existing
+zero-based player slots and shared Fixed/heading conversion. MDF preview grid
+positions are not used as world positions. Native missing-path fallbacks and
+malformed-MDF equivalence still need configuration-backed integration.
 A nearby transform or copied A2 template does not establish those meanings.
 Do not silently substitute defaults for
 unknown legacy fields or report a structurally scanned map as fully playable.

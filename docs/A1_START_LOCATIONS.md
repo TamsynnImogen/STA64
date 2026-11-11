@@ -98,7 +98,8 @@ or invented completion date.
 subset above. A caller with independently selected BZN and MDF bytes can parse
 the BZN, require its `a1` data, read the count, then resolve the precise points.
 The helpers perform no companion lookup and change neither the parsed source
-nor `Map.start_locs`. They are not wired into `MapDef` or the client yet.
+nor `Map.start_locs`. The subsequent [selected-map seam](SELECTED_MAP_CONVERSION.md)
+connects them to content conversion and the client using explicit source identity.
 
 The BZN suite passed 26 tests with the installed corpus tests explicitly
 enabled. All 49 original A1 maps retain 17,595 objects; all 28 MDF companions
