@@ -18,8 +18,8 @@
 //!
 //! Positions and transforms are Direct3D left-handed, like SOD.
 //!
-//! A1 front matter can be inspected through [`a1::inspect_header`]. A1 map-body
-//! import is not implemented; [`parse`] returns an explicit unsupported error.
+//! A1 front matter can be inspected through [`a1::inspect_header`]. Known binary
+//! map bodies share [`Map`]; text A1 and saved-game state remain unsupported.
 
 use std::collections::HashMap;
 
@@ -33,8 +33,14 @@ pub enum BznError {
     Truncated(usize),
     #[error(transparent)]
     Armada1Header(#[from] a1::HeaderError),
-    #[error("Armada 1 BZN import is not implemented (version {version})")]
+    #[error("Armada 1 text BZN import is not implemented (version {version})")]
     UnsupportedArmada1Import { version: u32 },
+    #[error("unsupported Armada 1 BZN feature: {0}")]
+    UnsupportedArmada1Feature(&'static str),
+    #[error("invalid Armada 1 BZN record {record}: expected {expected}")]
+    InvalidArmada1Body { record: usize, expected: &'static str },
+    #[error("Armada 1 BZN declares {declared} objects, found {found} placement records")]
+    Armada1ObjectCount { declared: usize, found: usize },
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -88,6 +94,8 @@ pub struct Map {
     /// the entry-0 position (the map's centre).
     pub start_locs: Vec<StartLoc>,
     pub objects: Vec<MapObject>,
+    /// Retained A1-specific source data; absent for existing A2 binary/text maps.
+    pub a1: Option<a1::MapData>,
 }
 
 pub fn parse(data: &[u8]) -> Result<Map, BznError> {
@@ -96,7 +104,7 @@ pub fn parse(data: &[u8]) -> Result<Map, BznError> {
     }
     if a1::has_header_marker(data) {
         let header = a1::inspect_header(data)?;
-        return Err(BznError::UnsupportedArmada1Import { version: header.version });
+        return a1::parse_map(data, header);
     }
     let header_end = |key: &[u8]| data.windows(key.len()).position(|w| w == key);
     let version = text_value(data, b"version [1] =").and_then(|v| v.parse().ok()).unwrap_or(0);

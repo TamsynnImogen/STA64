@@ -476,6 +476,8 @@ seam rather than writes.
 
 | CON-25 | Explicit A1 BZN front-matter inspection and unsupported-import errors instead of successful empty text maps; pre-code contract in [A1_BZN_SUPPORT.md](A1_BZN_SUPPORT.md) | sta_bzn/src/a1.rs, narrow lib.rs module/error/dispatch, dedicated tests; contract docs | CON-07 | Synthetic LF/CRLF/malformed headers and read-only GOG A1 corpus | Validated future typed metadata/object/MDF importer | Lossless description and exact metadata offset, identified A1 inputs never silently become empty maps, A2 outputs unchanged, scoped/consumer/Clippy/workspace/Android library checks | S | Lead |
 
+| CON-26 | A1 binary map body: native-backed metadata, count-checked placements, mission descriptors and retained AOI/AiPath data; pre-code contract [A1_BZN_IMPORT.md](A1_BZN_IMPORT.md) | sta_bzn/src/a1/body.rs; narrow a1/lib Map/error/dispatch; dedicated header/body tests; contract docs | CON-25 | Synthetic grammar/malformed/rescale fixtures, pinned GOG readers/writers, 49 A1 and 72 A2 maps | A1 scenes and subsequent MDF/start/mission integration | 49 nonempty A1 maps with declared counts matched; fields/paths retained, invalid/unsupported inputs explicit, A2 unchanged; scoped/consumer/Clippy/workspace/Android library checks | M | Lead |
+
 ### Simulation (SIM)
 
 | ID | Package | Owns | Needs | Against | Unlocks | Done when | Size | Model |

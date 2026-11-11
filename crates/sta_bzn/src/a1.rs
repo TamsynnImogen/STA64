@@ -1,7 +1,11 @@
-//! Armada 1 front matter only; metadata and map-body import are not implemented.
+//! Armada 1 front matter and known binary map-body data.
 //!
 //! Informed by the project's A2FOExtensions `a1_maps` reader and the earlier
 //! OpenSourced-Space-RTS header inspector. No opaque post-header skip is used.
+
+mod body;
+pub(crate) use body::parse_map;
+pub use body::{AiPath, AreaOfInterest, MapData};
 
 /// Lossless A1 front matter. The offset identifies metadata, not an object list.
 #[derive(Debug, Clone, PartialEq, Eq)]

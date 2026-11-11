@@ -16,9 +16,9 @@ be adapted without migrating its plugins or replacing working shared loaders.
 | ODF diagnostics | Preserved entries and duplicate/schema reports in `src/odf/` | Implemented the optional same-file duplicate report below, using RawOdf's original spelling, value and line. |
 | Includes and mods | Filesystem resolver and `mod_info.rs` | STA64 has richer layered self-includes, OdfIndex, VFS mounts and mod inheritance. Keep those shared implementations. |
 | Generated schema/defaults | Command tables and A1/A2 comparison tools | Discovery leads, not authoritative runtime defaults. Independently verify profile behaviour against the games. |
-| A1 BZN header | `BznHeader` recognizes A1 binarySave separately from A2 BinaryMode | STA64 has no A1 binarySave branch: a genuine gap for a separately validated format path. |
+| A1 BZN header | `BznHeader` recognizes A1 binarySave separately from A2 BinaryMode | The audit exposed a missing branch. CON-25 added strict recognition; CON-26 adds known binary map bodies ([scope](A1_BZN_SUPPORT.md)). |
 | A1 objects/conversion | Candidate-record scans and a conversion plan | Heuristic scaffolding. The template converter copies its supplied A2 template; it does not emit converted A1 objects. |
-| A1 body boundary | Skips 145 opaque metadata bytes | Validate against original GOG A1/native/A2FO evidence before relying on this sample-driven boundary. Companion MDF starts and object records need separate validation. |
+| A1 body boundary | Skips 145 opaque metadata bytes | Original GOG reader/writer checks established typed metadata and placements for CON-26. The fixed skip points into a record in an original map; it is not used. MDF/start integration remains pending. |
 | FPQ | Reader/writer, flag-1 decoding and heuristic table discovery | STA64 already has exact v1/v2 parsing/writing and A1 ZFS support. Retain their validation and archive roundtrips. |
 | SOD/M3D/materials/sprites | Viewer loaders and linked-asset diagnostics | STA64 already has shared models/materials, animated sprites/emitters and a viewer. Adapt targeted diagnostics for verified gaps. |
 | OBJ/MTL export | Transformed geometry, UVs, normals and material groups | Useful future headless tool over `sta_assets::model::Model`; settle axes/winding and test a synthetic roundtrip first. |
@@ -96,7 +96,7 @@ tool's scope.
 ## A1 map investigation: confirmed gap, importer still pending
 
 A separate read-only probe compared the reference header reader and STA64's
-current parser on the original installed maps. The reference recognized all
+audit-baseline parser on the original installed maps. The reference recognized all
 49 A1 headers; STA64 accepted all 49 through its text fallback and returned
 zero objects and starts. The A2 control set parsed 72 binary maps, 34,695
 objects and 648 starts. Successful `parse()` alone therefore does not prove
@@ -110,10 +110,11 @@ structural evidence only: it does not establish complete object semantics,
 map bounds or companion MDF starts. A six-scalar bounds scan at that offset
 found none; metadata cannot simply be treated as the A2 body header.
 
-The existing A2FOExtensions `a1_maps` reader provides an additional independent
-lead for metadata, bounds and MDF framing. A follow-up should validate those
-against the original GOG format, add explicit A1 header handling, and exercise
-genuine installed maps alongside synthetic malformed-input tests. Do not
+The existing A2FOExtensions `a1_maps` reader provided an additional independent
+lead for metadata, bounds and MDF framing. CON-25/#294 and the subsequent
+[CON-26 import](A1_BZN_IMPORT.md) validate header/body fields against original
+GOG readers/writers and installed maps, alongside malformed-input controls.
+They do not establish full A1 gameplay or MDF/start support. Do not
 import the opaque 145-byte skip as an unexplained format constant or use the
 reference's template-copy converter as evidence of object conversion.
 
