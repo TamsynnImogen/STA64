@@ -56,6 +56,7 @@ use sta_sim::SimEvent;
 
 mod a2;
 mod entity;
+mod edit_feedback;
 mod entity_action;
 mod entity_ref;
 mod camera_intent;
@@ -89,7 +90,15 @@ pub(crate) fn process_spawns(ctx: &mut Ctx) {
 }
 
 pub(crate) fn drain_commands(ctx: &Shared) -> Vec<Command> {
-    spawn::drain(&mut ctx.borrow_mut())
+    let mut c = ctx.borrow_mut();
+    let commands = spawn::drain(&mut c);
+    let tick = c.view.tick;
+    c.edit_feedback.submit(&commands, tick);
+    commands
+}
+
+pub(crate) fn process_edit_feedback(ctx: &mut Ctx) -> Vec<String> {
+    edit_feedback::process(ctx)
 }
 
 pub(crate) fn cineractive_active(lua: &Lua) -> mlua::Result<bool> {
@@ -185,6 +194,7 @@ pub(crate) struct Ctx {
     pub commands: Vec<Command>,
     seq: BTreeMap<PlayerId, u32>,
     pub spawns: spawn::SpawnStore,
+    edit_feedback: edit_feedback::Store,
     pub camera: camera_intent::Store,
     pub text_input: text_input::Store,
     pub objectives: Vec<Objective>,
@@ -219,6 +229,7 @@ impl Ctx {
             commands: Vec::new(),
             seq: BTreeMap::new(),
             spawns: spawn::SpawnStore::default(),
+            edit_feedback: edit_feedback::Store::default(),
             camera: camera_intent::Store::default(),
             text_input: text_input::Store::default(),
             objectives: Vec::new(),

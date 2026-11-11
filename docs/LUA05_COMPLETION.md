@@ -15,9 +15,12 @@ adapters without changing Core, content, wire formats or gameplay defaults:
   zero/false requests and rearming remain Core decisions. Add no getter or
   guessed flag to WorldView.
 - `Entity.forceOntoMap = boolean`: strict Boolean; use a typed deferred action
-  for pending entity receipts, retaining actor-local action ordering and failed
+  for pending entity receipts, retaining actor-local deferred dispatch order and failed
   spawn handling. A resolved non-dying entity uses the same SCRIPT edit. This
   fixes the missing setter used by Blockade and other external ports.
+  This is dispatch order, not cross-player application order: Core still sorts
+  commands by player and sequence. Await a refreshed host view when an owner
+  order must observe a prior script edit.
 - `A2.SetRealTeam(id, team)`: exactly two arguments and unsigned integral values;
   decode the existing configured numbering mode, accepting real slots and
   neutral only. Queue the existing SCRIPT Team edit. Core retains destination,
@@ -61,7 +64,31 @@ choosing a background or resource-less producer which Core will reject.
 This adopts the merged capability rule rather than introducing a new policy.
 No Core/content/client/network/dependency changes are authorized by this slice.
 
-## Closure blockers to retain
+## Remaining closure work
+
+The regenerated branch report has 27 exact signatures and 105 missing
+signatures, across the same 72 A2 and 59 A1 mission DLLs. The full per-signature
+list remains generated in [MISSION_DLL_API.md](MISSION_DLL_API.md).
+
+| Missing area | Signatures | Actual prerequisite |
+|---|---:|---|
+| Movies | 1 | Movie request backend exists; script handle, flags and completion contract still need a native-backed adapter. Playback belongs to MED. |
+| Camera/cineractives | 11 | Existing host intents cover subsets; native overload/flag/path semantics and camera consumers remain. |
+| Titles/text/objectives | 10 | Title/audio handles, removal flags, minimap/admiral-log state and completion reporting need contracts; recording a request is not playback. |
+| Audio/music | 4 | Local typed requests exist, but native sound IDs/script handles/voice-command flags and completion feedback are not mapped. |
+| Orders/AI | 24 | Stop/attack/mining subsets exist; native priority flags, path movement, colonization and dynamic AI/AIP control require shared-system work. |
+| Crew | 2 | Current mutable crew does not exist. Definition crew and planet capacity are not a replacement; a SIM state/serialization contract is required. |
+| Teams/relations | 4 | Perceived team and mutable race are distinct absent state; native enemy-search semantics also need verification. |
+| Objects | 25 | Finder/view primitives exist, but native search masks/ties/sentinels need adapters; positioning, shield setters and target policy need supported shared edits. |
+| Other | 24 | Alert/non-engine subsystem/decommission/derelict/rotation/transport/population/wormhole state is absent or rejected; several presentation/query adapters also remain. |
+
+These are shared-engine or adapter prerequisites, not 105 claims that Core is
+entirely absent. Small host-backed adapters can proceed after their native
+argument/timing gates. Larger gameplay changes require owning simulation/content
+seam proposals, tests and persistence contracts before further Lua bindings.
+This tranche cannot honestly close LUA-05's unchanged zero-missing gate.
+
+## Limits
 
 The remaining missing signatures include orders and AI, mutable crew/shields,
 unsupported actor edits, path movement and object/fleet APIs. Several require

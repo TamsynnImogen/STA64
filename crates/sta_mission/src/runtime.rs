@@ -473,13 +473,14 @@ mod object_tests;
 
 impl Controller for MissionRuntime {
     fn think(&mut self, view: &WorldView, events: &[SimEvent], out: &mut Vec<Command>) {
+        let mut failures;
         {
             let mut c = self.inner.ctx.borrow_mut();
             c.view = view.clone();
             c.events = events.to_vec();
+            failures = api::process_edit_feedback(&mut c);
             api::process_spawns(&mut c);
         }
-        let mut failures = Vec::new();
         api::fire_text_input(&self.inner.lua, &self.inner.ctx, &mut failures);
         let room = MAX_LOGGED.saturating_sub(self.errors.len());
         self.errors.extend(failures.into_iter().take(room));

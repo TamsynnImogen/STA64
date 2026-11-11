@@ -15,6 +15,7 @@ use mlua::Lua;
 use super::Shared;
 
 mod camera;
+mod controls;
 mod media;
 mod objectives;
 mod objects;
@@ -34,6 +35,7 @@ pub(super) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
     media::install(lua, ctx)?;
     titles::install(lua, ctx)?;
     let a2 = lua.create_table()?;
+    controls::install(lua, ctx, &a2)?;
     objectives::install(lua, ctx, &a2)?;
     objects::install(lua, ctx, &a2)?;
     queries::install(lua, ctx, &a2)?;

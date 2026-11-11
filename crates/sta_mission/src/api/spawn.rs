@@ -42,7 +42,7 @@ fn flat_distance(a: Vec3, b: Vec3) -> (bool, u128) {
 pub(super) fn default_mine_node(c: &Ctx, actor: &EntityRef) -> Option<EntityRef> {
     let actor = actor.id().and_then(|id| c.alive(id)).or_else(|| actor.hint())?;
     let resource = |unit: &sta_sim::view::UnitView| {
-        c.def(unit).is_some_and(|def| EntityKind::of_def(def) == EntityKind::Resource)
+        c.def(unit).is_some_and(EntityKind::mineable_def)
     };
     let current = c.view.units.iter()
         .filter(|unit| unit.id != EntityId::NONE
@@ -234,6 +234,16 @@ fn dispatch(c: &mut Ctx, actor: EntityRef, action: EntityAction) -> bool {
     match action {
         EntityAction::Remove => edit(c, Edit::Kill(id)),
         EntityAction::Immortal(on) => edit(c, Edit::Immortal(id, on)),
+        EntityAction::ForceOntoMap(enabled) => {
+            if c.alive(id).is_none() { return false; }
+            match super::edit_feedback::queue(c, "Entity.forceOntoMap", Edit::ForceOntoMap { id, enabled }) {
+                Ok(()) => true,
+                Err(_) => {
+                    c.unsupported("Entity.forceOntoMap: command could not be queued");
+                    false
+                }
+            }
+        }
         EntityAction::Cloak(on) => c.order(id, |units| Order::Cloak { units, on }),
         EntityAction::Hull(to) => {
             if !to.is_finite() {

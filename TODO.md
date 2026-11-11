@@ -70,6 +70,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] Standalone FO base detection (CON-31): after merging and building the updated engine, choose Roots through the normal STA64 install/mod entry without a forced profile. The startup `content:` line should report `profile Fo4`; confirm a skirmish loads and resource labels match the Roots content.
 
+- [?] Lua shared controls (LUA-05, updated builds): run Blockade and check that its off-map staging/arrival callbacks no longer fail on forceOntoMap. Also check Invasion and Cavalry ownership handoffs. Lua writes use shared simulation guards; any rejected operation should identify its SCRIPT sequence in mission errors rather than silently appearing successful. Full campaigns, native playback and unimplemented A2 calls remain separate checks.
+
 ## Checked earlier (morning list)
 
 Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.

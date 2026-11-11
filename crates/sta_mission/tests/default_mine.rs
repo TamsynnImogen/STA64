@@ -19,6 +19,44 @@ fn point(x: i32, y: i32, z: i32) -> Vec3 {
     }
 }
 
+#[test]
+fn default_mining_uses_shared_planet_capability_for_world_and_pending_nodes() {
+    let (mut config, _, base) = setup(&[]);
+    let mut builder = ContentDb::builder().profile(base.profile()).features(base.features().clone());
+    for unit in base.units() { builder = builder.unit(unit.clone()); }
+    for weapon in base.weapons() { builder = builder.weapon(weapon.clone()); }
+    let mut background = sta_content::UnitDef::new("mine_background", "planet_obj");
+    background.planet_role = Some(sta_content::PlanetRole::Background);
+    background.resource = Some(0);
+    let mut empty = sta_content::UnitDef::new("mine_empty_planet", "planet");
+    empty.planet_role = Some(sta_content::PlanetRole::Producer);
+    let mut producer = empty.clone();
+    producer.odf = "mine_producer".into();
+    producer.resource = Some(0);
+    config.content = Arc::new(builder.unit(background).unit(empty).unit(producer).build().unwrap());
+    let mut map = MapDef::empty();
+    map.objects = ["fx_miner", "mine_background", "mine_empty_planet", "mine_producer", "fx_moon"]
+        .into_iter().enumerate().map(|(index, odf)| MapObject {
+            odf: odf.into(), owner: Some(0), pos: point(index as i32 * 20, 0, 0),
+            heading: (Fixed::ZERO, Fixed::ONE), label: Some(format!("obj_{index}")),
+        }).collect();
+    config.map = Arc::new(map);
+    let mut sim = Sim::from_setup(&config);
+    let miner = labeled(&sim, "obj_0");
+    let expected = labeled(&sim, "obj_3");
+    let mut rt = runtime(&sim, config.content.clone(), r#"
+        local actor = EntityFinder():findOne('obj_0')
+        local pending = Entity.add('mine_background', Player(0), Vector(0, 0, 0))
+        actor:giveOrder(Order.Mine)
+    "#);
+    assert!(rt.errors().is_empty(), "{:?}", rt.errors());
+    let mut commands = Vec::new();
+    rt.think(&sim.view(), &[], &mut commands);
+    assert!(commands.iter().any(|c| matches!(&c.kind,
+        CommandKind::Order(Order::Mine { units, node }) if units == &[miner] && *node == expected)));
+    assert!(!sim.step(&commands).events.iter().any(|e| matches!(e, SimEvent::Rejected { .. })));
+}
+
 fn setup(objects: &[(&str, u8, Vec3)]) -> (GameSetup, Sim, Arc<ContentDb>) {
     let content = Arc::new(fake::db());
     let mut map = MapDef::empty();

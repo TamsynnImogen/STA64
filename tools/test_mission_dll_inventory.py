@@ -333,6 +333,38 @@ class MissionDllInventoryTests(unittest.TestCase):
         )
         self.assertEqual(inventory.a2_exact_for(exact, self.repo), "")
 
+    def test_shared_control_and_objective_file_signatures_require_installed_exact_shapes(self):
+        cases = [
+            ("controls", "SetForceOntoMap", "void SetForceOntoMap(int, bool)", [
+                "bool SetForceOntoMap(int, bool)", "void SetForceOntoMap(int, int)",
+                "void SetForceOntoMap(int&, bool)", "void SetForceOntoMap(int)",
+            ]),
+            ("controls", "SetRealTeam", "void SetRealTeam(int, int)", [
+                "int SetRealTeam(int, int)", "void SetRealTeam(int, unsigned int)",
+                "void SetRealTeam(int&, int)", "void SetRealTeam(int, int, bool)",
+            ]),
+            ("objectives", "ObjectivesDisplay_Set_Text_From_File", "void ObjectivesDisplay_Set_Text_From_File(char*, bool)", [
+                "bool ObjectivesDisplay_Set_Text_From_File(char*, bool)",
+                "void ObjectivesDisplay_Set_Text_From_File(char const*, bool)",
+                "void ObjectivesDisplay_Set_Text_From_File(char*, int)",
+                "void ObjectivesDisplay_Set_Text_From_File(char*)",
+            ]),
+        ]
+        for module, name, exact, wrong in cases:
+            with self.subTest(name=name):
+                registration = f'{module}::install(lua, ctx, &a2)?; lua.globals().raw_set("A2", a2)?;'
+                self.register_a2("", registration=registration)
+                path = self.a2 / f"{module}.rs"
+                path.write_text(f'table.set("{name}", fn);\n', encoding="utf-8")
+                self.assertEqual(inventory.a2_exact_for(exact, self.repo), f"A2.{name}")
+                for signature in wrong:
+                    self.assertEqual(inventory.a2_exact_for(signature, self.repo), "", signature)
+                path.write_text("", encoding="utf-8")
+                self.assertEqual(inventory.a2_exact_for(exact, self.repo), "")
+                path.write_text(f'table.set("{name}", fn);\n', encoding="utf-8")
+                (self.a2 / "mod.rs").write_text('lua.globals().raw_set("A2", a2)?;', encoding="utf-8")
+                self.assertEqual(inventory.a2_exact_for(exact, self.repo), "")
+
     def test_current_health_writer_requires_exact_void_integer_float_call_shape(self):
         self.register_a2(
             'table.set("SetCurrentHealth", fn);\n',

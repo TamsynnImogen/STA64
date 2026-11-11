@@ -134,10 +134,20 @@ impl UserData for Entity {
         f.add_field_method_set("player", |_, e, p: Value| {
             let mut c = e.ctx.borrow_mut();
             match (e.key.id(), player_of(&c, &p)) {
-                (Some(id), Some(p)) => c.edit(Edit::Team(id, p)),
+                (Some(id), Some(p)) => super::edit_feedback::queue(&mut c, "Entity.player", Edit::Team(id, p))?,
                 (None, _) => c.unsupported("entity.player: pending or failed spawn"),
                 (_, None) => c.unsupported("entity.player = non-player"),
             }
+            Ok(())
+        });
+        f.add_field_method_set("forceOntoMap", |_, e, value: Value| {
+            let Value::Boolean(enabled) = value else {
+                return Err(mlua::Error::runtime("Entity.forceOntoMap requires a boolean"));
+            };
+            if e.key.id().is_some_and(|id| e.ctx.borrow().alive(id).is_none()) {
+                return Err(mlua::Error::runtime("Entity.forceOntoMap requires a live object"));
+            }
+            spawn::queue_action(&mut e.ctx.borrow_mut(), e.key.clone(), EntityAction::ForceOntoMap(enabled));
             Ok(())
         });
     }

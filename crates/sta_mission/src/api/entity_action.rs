@@ -32,6 +32,7 @@ pub(crate) enum EntityAction {
     Immortal(bool),
     Cloak(bool),
     Hull(f64),
+    ForceOntoMap(bool),
 }
 
 impl EntityAction {
@@ -48,7 +49,8 @@ impl EntityAction {
             | Self::Remove
             | Self::Immortal(_)
             | Self::Cloak(_)
-            | Self::Hull(_) => Vec::new(),
+            | Self::Hull(_)
+            | Self::ForceOntoMap(_) => Vec::new(),
         }
     }
 }
