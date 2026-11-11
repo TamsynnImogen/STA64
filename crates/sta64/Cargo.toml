@@ -6,7 +6,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-bevy = { workspace = true, features = ["dds", "png"] }
+bevy = { workspace = true, features = ["dds", "png", "jpeg"] }
 sta_vfs.workspace = true
 sta_assets.workspace = true
 sta_bzn.workspace = true
@@ -18,6 +18,7 @@ sta_content.workspace = true
 sta_core.workspace = true
 sta_ai.workspace = true
 sta_bench.workspace = true
+image.workspace = true
 kira = { version = "=0.12.6", default-features = false, features = ["cpal"] }
 
 [features]

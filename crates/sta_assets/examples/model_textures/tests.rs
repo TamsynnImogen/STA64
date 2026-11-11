@@ -66,6 +66,7 @@ fn model(groups: Vec<Group>) -> Model {
         channels: vec![],
         flipbooks: vec![],
         warnings: vec!["warning\nnext".into()],
+        pbr: None,
     }
 }
 
@@ -76,6 +77,29 @@ fn group(material: &str, maps: Maps) -> Group {
         maps,
         faces: vec![],
     }
+}
+
+#[test]
+fn native_pbr_bindings_report_encoded_sources_and_missing_indices() {
+    use sta_assets::model::pbr::*;
+    let mut model = model(vec![group("native", Maps::default())]);
+    model.format = SourceFormat::Gltf;
+    let mut pbr = PbrModel::default();
+    pbr.images.push(PbrImage { name: None, origin: "buffer view 2\nnot another row".into(),
+        format: PbrImageFormat::Png, data: vec![1,2,3], content_hash: [0;32] });
+    pbr.materials.insert("native".into(), PbrMaterial {
+        base_color_texture: Some(PbrTexture {image:0, tex_coord:1, sampler:PbrSampler::default()}),
+        normal_texture: Some(PbrTexture {image:8, tex_coord:0, sampler:PbrSampler::default()}),
+        ..Default::default()
+    });
+    model.pbr = Some(pbr);
+    let report = report(&Vfs::default(), "sod/box.glb", &model);
+    assert_eq!(report.missing,1);
+    assert!(report.output.contains("base_color image=0"));
+    assert!(report.output.contains("encoded_bytes=3 uv=1"));
+    assert!(report.output.contains("(decode not checked)"));
+    assert!(report.output.contains("buffer view 2\\nnot another row"));
+    assert!(report.output.contains("normal image=8 missing"));
 }
 
 #[test]
@@ -224,7 +248,7 @@ fn argument_forms_and_invalid_arguments() {
 }
 
 #[test]
-fn mount_missing_model_unsupported_and_corrupt_model_errors() {
+fn mount_missing_and_corrupt_model_errors() {
     let tree = Tree::new();
     let options = |root: PathBuf, model: &str| Options {
         root,
@@ -243,7 +267,7 @@ fn mount_missing_model_unsupported_and_corrupt_model_errors() {
     assert!(
         run(&options(tree.0.clone(), "ship"))
             .unwrap_err()
-            .contains("no CPU decoder")
+            .contains("glTF parsing")
     );
     std::fs::remove_file(tree.0.join("sod/ship.glb")).unwrap();
     tree.put("sod/ship.sod", b"corrupt");

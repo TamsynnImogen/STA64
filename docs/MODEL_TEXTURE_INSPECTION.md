@@ -64,6 +64,13 @@ Its report therefore reflects those existing transformations; raw spelling,
 empty M3D slots and original M3D node indices cannot be recovered from `Model`.
 This diagnostic does not alter those shared-loader policies.
 
+CON-09 adds static glTF/GLB reporting through the same loader. Native PBR groups
+report material factors and five typed texture bindings: base color, normal,
+metallic/roughness, emissive and occlusion. Images report their virtual or inline
+origin, encoding, byte count, UV set and sampler. Encoded image bytes are not
+dumped; this is still not a decoder or rendered-parity check. Original legacy
+six-role output and exit meanings remain unchanged.
+
 Use existing lookup semantics without changing them: a higher-priority layer
 wins before format preference, names are case-insensitive, and the shared
 basename/extension lookup remains authoritative. Do not add direct filesystem
@@ -75,8 +82,9 @@ explicit map, while errors retain exit 2 precedence.
 
 The report does not decode textures, modify inputs, recurse through ODFs, export
 models, flatten includes, infer runtime bump/Borg/texture-animation fallbacks,
-or validate glTF/GLB (the shared model loader currently rejects them). It is a
-diagnostic of explicit SOD/M3D model references, separate from a complete asset
+or validate complete glTF specification coverage. The shared static glTF/GLB
+loader performs its own geometry/resource checks before the report is built.
+This is a diagnostic of explicit shared model references, separate from a complete asset
 dependency graph or graphical editor integration. Simulation, defaults, hashes,
 archives, save/replay/network formats and Bevy remain unchanged.
 

@@ -19,6 +19,12 @@ use sta_assets::a2fmt::Matrix34;
 use sta_assets::model::{Group, Keys, Mesh as ModelMesh, Model, NodeKind};
 use std::collections::{HashMap, HashSet};
 
+mod pbr;
+
+#[cfg(test)]
+#[path = "model_scene/gltf_tests.rs"]
+mod gltf_tests;
+
 /// Step-keyed SOD animation on one node. Keys are evenly spaced over `period`.
 #[derive(Component)]
 pub struct NodeAnim {
@@ -41,7 +47,7 @@ pub struct PartCache {
 }
 
 /// Model, node, group, team colour, Borg, normal maps, ScaleSOD bits.
-type PartKey = (String, usize, usize, [u8; 3], bool, bool, u32);
+type PartKey = (String, usize, usize, [u8; 3], bool, bool, bool, u32);
 
 #[derive(Clone)]
 struct CachedPart {
@@ -59,6 +65,10 @@ struct CachedPart {
 /// Face groups that take the owner's team colour.
 #[derive(Component)]
 pub struct TeamPart;
+
+/// Native static scene names do not opt into legacy damage-node conventions.
+#[derive(Component)]
+pub struct NativeNode;
 
 #[derive(Default)]
 pub struct SpawnStats {
@@ -125,11 +135,12 @@ pub fn spawn(ctx: &mut SpawnCtx, model: &Model, root: Entity) -> SpawnStats {
     let mut stats = SpawnStats::default();
 
     // Hide every LOD level except the most detailed.
-    let mut hidden: HashSet<usize> = model.coarse_lods().into_iter().collect();
-    if !ctx.damaged {
+    let legacy = model.format != sta_assets::model::SourceFormat::Gltf;
+    let mut hidden: HashSet<usize> = if legacy { model.coarse_lods().into_iter().collect() } else { HashSet::new() };
+    if legacy && !ctx.damaged {
         hidden.extend(model.damage_nodes());
     }
-    if !ctx.borg {
+    if legacy && !ctx.borg {
         hidden.extend(model.borg_node());
     }
 
@@ -159,6 +170,7 @@ pub fn spawn(ctx: &mut SpawnCtx, model: &Model, root: Entity) -> SpawnStats {
         let mut base = to_bevy(&node.transform);
         base.translation *= ctx.scale;
         let mut e = ctx.commands.spawn((Name::new(node.name.clone()), base, Visibility::default(), ChildOf(parent)));
+        if !legacy { e.insert(NativeNode); }
 
         let key_count = anims.get(&node.name.to_ascii_lowercase()).map_or(0, |c| match &c.keys {
             Keys::Matrix(k) => k.len(),
@@ -315,13 +327,16 @@ fn spawn_mesh(
         if group.faces.is_empty() {
             continue;
         }
+        let native = model.pbr.as_ref().and_then(|p| p.materials.get(&group.material).map(|m| (p, m)));
+        let attributes = model.pbr.as_ref().and_then(|p| p.attributes.get(&node_index));
         let cache_key = (
             ctx.model_key.clone(),
             node_index,
             group_index,
             team_rgb,
             ctx.borg,
-            ctx.normal_maps || ctx.unlit,
+            ctx.normal_maps,
+            ctx.unlit,
             ctx.scale.to_bits(),
         );
         if let Some(part) = ctx.parts.as_ref().and_then(|c| c.map.get(&cache_key)).cloned() {
@@ -360,6 +375,7 @@ fn spawn_mesh(
         let mut positions: Vec<[f32; 3]> = Vec::new();
         let mut uvs: Vec<[f32; 2]> = Vec::new();
         let mut indices: Vec<u32> = Vec::with_capacity(group.faces.len() * 3);
+        let mut source_positions: Vec<usize> = Vec::new();
         for face in &group.faces {
             // Corners are in SOD winding: after the Z mirror that is already
             // counter-clockwise (front-facing) for Bevy. Reversing it turned
@@ -371,6 +387,7 @@ fn spawn_mesh(
                 let idx = *remap.entry((p, u)).or_insert_with(|| {
                     positions.push(mirror(pos.map(|v| v * ctx.scale)));
                     uvs.push(*uv);
+                    source_positions.push(p as usize);
                     (positions.len() - 1) as u32
                 });
                 indices.push(idx);
@@ -392,7 +409,10 @@ fn spawn_mesh(
         }
         let normals: Vec<[f32; 3]> = positions
             .iter()
-            .map(|p| by_pos[&key(*p)].normalize_or(Vec3::Y).to_array())
+            .enumerate()
+            .map(|(i, p)| attributes.and_then(|a| a.normals.as_ref())
+                .and_then(|n| n.get(source_positions[i])).copied().map(mirror)
+                .unwrap_or_else(|| by_pos[&key(*p)].normalize_or(Vec3::Y).to_array()))
             .collect();
 
         let triangles = indices.len() / 3;
@@ -402,15 +422,31 @@ fn spawn_mesh(
             .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
             .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
             .with_inserted_indices(Indices::U32(indices));
+        if let Some(attributes) = attributes {
+            if let Some(values) = &attributes.tangents {
+                let values: Option<Vec<[f32; 4]>> = source_positions.iter().map(|&i| values.get(i).map(|v| [v[0],v[1],-v[2],-v[3]])).collect();
+                if let Some(values) = values { bevy_mesh.insert_attribute(Mesh::ATTRIBUTE_TANGENT, values); }
+            }
+            if let Some(values) = &attributes.colors {
+                let values: Option<Vec<[f32; 4]>> = source_positions.iter().map(|&i| values.get(i).copied()).collect();
+                if let Some(values) = values { bevy_mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, values); }
+            }
+            if let Some(values) = &attributes.uv1 {
+                let values: Option<Vec<[f32; 2]>> = source_positions.iter().map(|&i| values.get(i).copied()).collect();
+                if let Some(values) = values { bevy_mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, values); }
+            }
+        }
         let normal = normal.filter(|_| bevy_mesh.generate_tangents().is_ok());
-        let normal_present = normal.is_some();
+        let mut normal_present = normal.is_some();
         bumped |= normal_present;
 
         let lm = model.lighting_material(&group.material);
-        let team = crate::render::hulls::is_team_material(&group.material);
+        let team = native.is_none() && crate::render::hulls::is_team_material(&group.material);
         let self_illum = lm.is_some_and(|m| m.self_illuminating);
         let base_color = if team { ctx.team } else { Color::WHITE };
-        let material = StandardMaterial {
+        let mut material = if let Some((pbr_model, source)) = native {
+            pbr::material(&mut ctx.textures, pbr_model, source, ctx.normal_maps, ctx.unlit, stats)
+        } else { StandardMaterial {
             base_color,
             base_color_texture: texture,
             normal_map_texture: normal,
@@ -424,7 +460,25 @@ fn spawn_mesh(
             cull_mode: if two_sided { None } else { Some(Face::Back) },
             reflectance: mspec.reflectance,
             ..default()
-        };
+        }};
+        if native.is_some() && material.normal_map_texture.is_some() && bevy_mesh.attribute(Mesh::ATTRIBUTE_TANGENT).is_none() {
+            // A glTF normal texture can select UV1. Tangent generation uses UV0;
+            // temporarily use the selected coordinates without changing the asset.
+            let uv0 = if material.normal_map_channel == bevy::mesh::UvChannel::Uv1 {
+                match (bevy_mesh.attribute(Mesh::ATTRIBUTE_UV_0).cloned(), bevy_mesh.attribute(Mesh::ATTRIBUTE_UV_1).cloned()) {
+                    (Some(uv0), Some(uv1)) => { bevy_mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv1); Some(uv0) },
+                    _ => None,
+                }
+            } else { None };
+            let generated = bevy_mesh.generate_tangents();
+            if let Some(uv0) = uv0 { bevy_mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv0); }
+            if generated.is_err() {
+                warn!("{}: unable to generate native normal-map tangents for node {node_index}", ctx.model_key);
+                material.normal_map_texture = None;
+            }
+        }
+        normal_present |= material.normal_map_texture.is_some();
+        bumped |= normal_present;
         // A dilithium moon's glow shell is drawn dark (RND-05).
         let material = if crate::render::rock::is_moon_shell(&group.material) { crate::render::rock::shell_material(two_sided) } else { material };
         // A texture with a surface recipe: the part becomes a rock once baked, its
@@ -447,7 +501,7 @@ fn spawn_mesh(
         });
         // A `default` mesh's texture alpha is a cut-out where its group is not
         // self-illuminating (open girders), as Refit's hulls draw it.
-        let hull = (!ctx.unlit && rock.is_none()).then_some(crate::render::hulls::HullPart {
+        let hull = (native.is_none() && !ctx.unlit && rock.is_none()).then_some(crate::render::hulls::HullPart {
             self_illum,
             cut_alpha: group.blend == "default" && !self_illum,
         });

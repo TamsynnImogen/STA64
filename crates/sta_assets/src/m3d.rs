@@ -1105,5 +1105,6 @@ pub fn load(input: &[u8]) -> Result<crate::model::Model, String> {
             .map(|r| (text(&r.node), text(&r.animation), finite(f32::from_bits(r.extra))))
             .collect(),
         warnings,
+        pbr: None,
     })
 }

@@ -14,6 +14,9 @@ lewton = "0.10"
 nanomp3 = { version = "0.2", default-features = false, features = ["std"] }
 sta_vfs.workspace = true
 thiserror.workspace = true
+gltf.workspace = true
+base64.workspace = true
+sha2.workspace = true
 
 [dev-dependencies]
 sta_bzn.workspace = true

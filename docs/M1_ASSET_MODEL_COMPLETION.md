@@ -19,7 +19,7 @@ host library checks alone do not establish Android rendering or APK acceptance.
 | Sprites, texture flipbooks, spray/cloud emitters | Implemented | Refresh animation/emitter checks and manual appearance |
 | Native M3D parsing/material references | Implemented for 1.94–2.06 | Corpus census and errors must identify unsupported inputs |
 | M3D 1.93 and Legacy LOD/effect nodes | Incomplete: 1.93 rejected, type 2/11 semantics incomplete | CON-08, verified layout/behavior and tests; do not guess unknown fields |
-| glTF/GLB through shared model and viewer | Lookup only; shared load returns Unsupported | CON-09, synthetic models, VFS resources and real offscreen rendering |
+| glTF/GLB through shared model and viewer | CON-09 implements static scenes, typed PBR materials and VFS resources | CPU/material and offscreen GPU fixtures pass; full regressions/publication and manual viewer acceptance remain |
 
 The read-only audit found private M3D 1.93 examples, so that row cannot be
 resolved by removing the version from the requirements. Unsupported effects
@@ -67,6 +67,9 @@ glTF is right-handed. Convert it once into Model's left-handed positions and
 Matrix34 convention; the existing client conversion returns it to Bevy's
 right-handed space. Test handedness, parent transforms, normals and winding.
 Static native glTF materials use StandardMaterial PBR, not the legacy hull look.
+glTF node names are descriptive: legacy name-based LOD, Borg and damage hiding
+does not apply to them. A renderer-only native-node marker and a narrow filter
+in units::show_damage enforce this without changing legacy nodes or simulation.
 Loading models must not rewrite files or generate proprietary texture caches.
 
 Reject malformed lengths/offsets, indices, cycles, multiple parents, invalid
@@ -92,3 +95,46 @@ The package owns the new gltf loader/tests and PBR model definitions, narrow
 sta_assets dispatch/Model constructor changes, necessary dependency lines,
 renderer texture/material integration and viewer dispatch, plus owning docs.
 It must not alter legacy default values or take over simulation/content seams.
+
+## Static glTF/GLB usage and limits
+
+Place a model under a mounted content layer's `sod/` directory, for example
+`sod/fx_cruiser.glb`, and select it by basename with `--view fx_cruiser`.
+GLB/glTF retain the existing higher-layer-before-format lookup rules. Relative
+image/buffer URIs resolve within that VFS, including its normal case handling;
+they do not grant direct filesystem or network access.
+
+The original reproducible model in `fixtures/models/` exercises this path.
+Its generator and provenance are documented alongside it. Native PNG/JPEG
+images are decoded to RGBA8 for GPU upload; color maps use sRGB and material
+data/normal/occlusion maps use linear formats. Normal scale and occlusion
+strength are applied in memory, and mipmaps are generated without rewriting
+source assets. Sampler wrap/filter and UV0/UV1 selections are preserved.
+This does not add KTX2/Basis or compressed glTF texture decoding.
+
+Supported static scenes are distinct from the explicitly rejected animation,
+skin, morph, point/line and unsupported-required-extension cases above.
+Optional unsupported extensions report the core fallback in model warnings.
+`model_textures` reports native material bindings without claiming full image
+decoding or rendered parity. Automated host drawing does not establish Android
+device acceptance or completion of the remaining M3D and Sabre gates.
+
+### CON-09 local verification (2026-11-11)
+
+- Asset crate: 35 library tests and seven inspection-example tests pass.
+- Client: 343 library tests pass, one existing ignored test. GPU tests run
+  separately from this default suite.
+- Original GLB fixture: VFS basename lookup, CPU PBR/vertex/sampler checks and
+  native-name visibility regression pass. A real Vulkan offscreen draw on the
+  local NVIDIA adapter shows both red and blue checker pixels.
+- Existing rock/planet/nebula GPU pipelines pass in an isolated process.
+  An initial combined GPU run encountered global logger contention and a
+  timing-sensitive HUD message assertion; the complete CPU suite and isolated
+  pipeline test pass. Their initial logs are retained, not erased.
+- Strict all-target Clippy for `sta_assets`/`sta64`, workspace all-target
+  compilation and API-26 Android ARM64 client-library compilation pass.
+- Offline workspace lock refresh retains all existing dependency versions;
+  JPEG enables two decoder packages. Rust 1.97.1 and Bevy 0.20.1 stay pinned.
+
+These are source/build/headless checks. Viewer interaction, original-game
+appearance and Android device rendering remain separate acceptance steps.

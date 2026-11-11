@@ -62,6 +62,10 @@ getrandom = "0.4.3"
 # Mod manifests (manifest.toml) and their version requirements.
 toml = "1.2.1"
 semver = "1.0.28"
+# Native glTF parsing and image decoding; versions already occur in Bevy's lock graph.
+gltf = { version = "=1.4.1", default-features = false, features = ["utils", "names", "KHR_materials_unlit"] }
+base64 = "=0.23.1"
+image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg"] }
 
 # Bevy is slow unoptimised; optimise dependencies even in dev builds.
 [profile.dev.package."*"]
