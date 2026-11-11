@@ -154,6 +154,14 @@ pub struct HullSource {
     shown: bool,
 }
 
+#[cfg(test)]
+impl HullSource {
+    /// A converted hull part for ghost material integration tests without a GPU.
+    pub(crate) fn test_source(source: Handle<StandardMaterial>) -> Self {
+        Self { source, hull: Handle::default(), shown: true }
+    }
+}
+
 /// The hull material made for each `StandardMaterial` (parts share materials).
 #[derive(Resource, Default)]
 struct HullMaterials(HashMap<AssetId<StandardMaterial>, Handle<HullMaterial>>);

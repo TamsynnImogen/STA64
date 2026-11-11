@@ -15,6 +15,7 @@ use sta_sim::{ContentKey, Vec3 as SimVec3};
 use super::model::HudFeed;
 use super::{Armed, HudState, ground_point};
 use crate::input::orders::Aim;
+use crate::render::hulls::{HullMaterial, HullSource};
 use crate::render::units::{NeedsModel, TeamColour, to_bevy};
 
 /// The map's playable volume, for build sites (`None`: unbounded). Set when a
@@ -23,9 +24,9 @@ use crate::render::units::{NeedsModel, TeamColour, to_bevy};
 pub struct PlacementBounds(pub Option<(SimVec3, SimVec3)>);
 
 /// Tint of a ghost over a clear site.
-pub const CLEAR: Color = Color::srgba(0.35, 1.0, 0.4, 0.6);
+pub const CLEAR: Color = Color::srgba(0.35, 1.0, 0.4, 0.75);
 /// Tint of a ghost over a blocked site.
-pub const BLOCKED: Color = Color::srgba(1.0, 0.25, 0.2, 0.6);
+pub const BLOCKED: Color = Color::srgba(1.0, 0.25, 0.2, 0.75);
 
 /// The ghost entity; `status` is whether the site under the cursor is clear.
 #[derive(Component, Debug)]
@@ -33,7 +34,7 @@ pub struct Ghost {
     pub def: ContentKey,
     pub status: Option<Result<(), SiteError>>,
     painted: Option<Result<(), SiteError>>,
-    own: Vec<Handle<StandardMaterial>>,
+    own: Vec<(Entity, Handle<StandardMaterial>)>,
 }
 
 /// Whether `armed` may be placed at `at` now: `check_site` over the feed's
@@ -52,10 +53,19 @@ pub fn affordable(feed: &HudFeed, armed: &Armed) -> bool {
 
 fn paint(color: Color) -> impl Fn(&mut StandardMaterial) {
     move |m| {
+        // A dark diffuse map or its cut-out alpha must not attenuate the
+        // blueprint. These changes are made only to the ghost's material copy.
+        m.base_color_texture = None;
+        m.normal_map_texture = None;
+        m.metallic_roughness_texture = None;
+        m.occlusion_texture = None;
+        m.emissive_texture = None;
         m.base_color = color;
         m.alpha_mode = AlphaMode::Blend;
-        // Glows in its tint whatever the lighting, so it reads against dark space.
-        m.emissive = color.to_linear() * 1.5;
+        m.unlit = true;
+        m.emissive = LinearRgba::BLACK;
+        m.metallic = 0.0;
+        m.reflectance = 0.0;
         m.perceptual_roughness = 1.0;
     }
 }
@@ -112,29 +122,48 @@ pub fn update_ghost(
 /// Give the ghost's model translucent materials of its own (the model's parts
 /// share theirs with real units) and keep them tinted by the site's status.
 pub fn tint_ghost(
+    mut commands: Commands,
     mut ghosts: Query<(Entity, &mut Ghost)>,
     children: Query<&Children>,
     mut handles: Query<&mut MeshMaterial3d<StandardMaterial>>,
+    hull_sources: Query<&HullSource>,
     assets: Option<ResMut<Assets<StandardMaterial>>>,
 ) {
     let Some(mut assets) = assets else { return };
     for (root, mut g) in &mut ghosts {
         let Some(status) = g.status else { continue };
-        if g.own.is_empty() {
-            for d in children.iter_descendants(root) {
-                let Ok(mut h) = handles.get_mut(d) else { continue };
-                let Some(copy) = assets.get(&h.0).cloned() else { continue };
-                let own = assets.add(copy);
-                h.0 = own.clone();
-                g.own.push(own);
+        let mut new_parts = false;
+        for d in children.iter_descendants(root) {
+            if let Some((_, own)) = g.own.iter().find(|(entity, _)| *entity == d) {
+                if hull_sources.get(d).is_ok() {
+                    commands.entity(d)
+                        .remove::<HullSource>()
+                        .remove::<MeshMaterial3d<HullMaterial>>()
+                        .insert(MeshMaterial3d(own.clone()));
+                }
+                continue;
             }
+            let source = hull_sources.get(d).ok().map(|h| h.source.clone());
+            let original = source.clone().or_else(|| handles.get(d).ok().map(|h| h.0.clone()));
+            let Some(copy) = original.and_then(|h| assets.get(&h).cloned()) else { continue };
+            let own = assets.add(copy);
+            if source.is_some() {
+                commands.entity(d)
+                    .remove::<HullSource>()
+                    .remove::<MeshMaterial3d<HullMaterial>>()
+                    .insert(MeshMaterial3d(own.clone()));
+            } else if let Ok(mut h) = handles.get_mut(d) {
+                h.0 = own.clone();
+            }
+            g.own.push((d, own));
+            new_parts = true;
         }
-        if g.painted == Some(status) && !g.own.is_empty() {
+        if g.painted == Some(status) && !new_parts && !g.own.is_empty() {
             continue;
         }
         let color = if status.is_ok() { CLEAR } else { BLOCKED };
         let apply = paint(color);
-        for h in &g.own {
+        for (_, h) in &g.own {
             if let Some(mut m) = assets.get_mut(h) {
                 apply(&mut m);
             }
@@ -150,5 +179,67 @@ pub fn refusal(e: SiteError) -> &'static str {
     match e {
         SiteError::OffMap => "Cannot build here: off the map",
         SiteError::Blocked => "Cannot build here: the site is blocked",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    #[test]
+    fn blueprint_copy_ignores_dark_transparent_source_and_preserves_original() {
+        let source = StandardMaterial {
+            base_color: Color::srgba(0.0, 0.0, 0.0, 0.0),
+            base_color_texture: Some(Handle::default()),
+            normal_map_texture: Some(Handle::default()),
+            metallic_roughness_texture: Some(Handle::default()),
+            occlusion_texture: Some(Handle::default()),
+            emissive_texture: Some(Handle::default()),
+            ..default()
+        };
+        let mut world = World::new();
+        let mut materials = Assets::<StandardMaterial>::default();
+        let original = materials.add(source);
+        world.insert_resource(materials);
+        let child = world.spawn(MeshMaterial3d(original.clone())).id();
+        let converted = world.spawn((
+            HullSource::test_source(original.clone()),
+            MeshMaterial3d::<HullMaterial>(Handle::default()),
+        )).id();
+        let root = world.spawn(Ghost {
+            def: ContentKey::NONE,
+            status: Some(Ok(())),
+            painted: None,
+            own: Vec::new(),
+        }).add_children(&[child, converted]).id();
+        world.run_system_once(tint_ghost).unwrap();
+        assert!(world.get::<HullSource>(converted).is_none());
+        assert!(world.get::<MeshMaterial3d<HullMaterial>>(converted).is_none());
+        let converted_material = world.get::<MeshMaterial3d<StandardMaterial>>(converted).unwrap().0.clone();
+        assert_ne!(converted_material, original);
+        assert_eq!(world.resource::<Assets<StandardMaterial>>().get(&converted_material).unwrap().base_color, CLEAR);
+        let own = world.get::<MeshMaterial3d<StandardMaterial>>(child).unwrap().0.clone();
+        assert_ne!(own, original);
+        assert_eq!(world.resource::<Assets<StandardMaterial>>().get(&own).unwrap().base_color, CLEAR);
+        world.get_mut::<Ghost>(root).unwrap().status = Some(Err(SiteError::Blocked));
+        world.run_system_once(tint_ghost).unwrap();
+        assert_eq!(world.get::<MeshMaterial3d<StandardMaterial>>(child).unwrap().0, own);
+
+        let materials = world.resource::<Assets<StandardMaterial>>();
+        let source = materials.get(&original).unwrap();
+        let blocked = materials.get(&own).unwrap();
+        assert_eq!(source.base_color, Color::srgba(0.0, 0.0, 0.0, 0.0));
+        assert!(source.base_color_texture.is_some());
+        assert_eq!(blocked.base_color, BLOCKED);
+        assert!(blocked.unlit);
+        assert!(matches!(blocked.alpha_mode, AlphaMode::Blend));
+        assert!(blocked.base_color_texture.is_none());
+        assert!(blocked.normal_map_texture.is_none());
+        assert!(blocked.metallic_roughness_texture.is_none());
+        assert!(blocked.occlusion_texture.is_none());
+        assert!(blocked.emissive_texture.is_none());
+        assert_eq!(blocked.emissive, LinearRgba::BLACK);
+        assert_ne!(source.base_color, blocked.base_color);
     }
 }
