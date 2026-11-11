@@ -4,6 +4,8 @@
 //! `active mod -> its ParentMod chain -> Data`. Lookups are case-insensitive on
 //! every platform, because Armada-era content mixes case freely and was only
 //! ever tested on Windows.
+//! An original flat A1 install with root ZFS files mounts as one `root` layer
+//! when no Data child or selected mod is present.
 //!
 //! Each layer is a directory plus any `*.fpq` and Armada I `*.zfs` archives at
 //! its root. An archive named `odf.fpq` is mounted under `odf/`. ZFS archives
@@ -128,12 +130,27 @@ pub struct Vfs {
 }
 
 impl Vfs {
-    /// Mount a Fleet Operations / Armada II style install.
+    /// Mount a Data-based install or an original flat Armada I install.
     ///
     /// `active_mod` is a folder name under `Data/Mods`; `None` mounts only `Data`.
+    /// Without a Data child, `None` also permits a flat root containing ZFS files.
+    /// A requested mod is never silently ignored by falling back to a flat root.
     pub fn mount_install(install_root: &Path, active_mod: Option<&str>) -> Result<Self, VfsError> {
-        let data = find_child_ci(install_root, "Data")
-            .ok_or_else(|| VfsError::NoDataDir(install_root.to_path_buf()))?;
+        let Some(data) = find_child_ci(install_root, "Data") else {
+            let flat_a1 = active_mod.is_none()
+                && fs::read_dir(install_root).is_ok_and(|entries| {
+                    entries.flatten().any(|entry| {
+                        let path = entry.path();
+                        path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("zfs")) && path.is_file()
+                    })
+                });
+            if !flat_a1 {
+                return Err(VfsError::NoDataDir(install_root.to_path_buf()));
+            }
+            let mut vfs = Vfs::default();
+            vfs.push_dir("root".into(), install_root.to_path_buf())?;
+            return Ok(vfs);
+        };
 
         let mut vfs = Vfs::default();
         if let Some(name) = active_mod {
@@ -381,6 +398,9 @@ fn index_dir(root: &Path, dir: &Path, out: &mut HashMap<String, Source>) -> Resu
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod flat_install_tests;
 
 #[cfg(test)]
 mod tests {

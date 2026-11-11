@@ -8,10 +8,13 @@ See [the import contract and checks](A1_BZN_IMPORT.md). A1 text bodies,
 saved-game state, multiplayer start integration and runtime acceptance remain
 pending. Named paths and AOIs are retained data, not enabled gameplay.
 
-The original flat A1 install is not yet a supported desktop launch root:
-`--install-root` currently requires `Data/`. Headless format/content tests can
-mount it directly. Do not move original game files to work around this;
-shared mounting and MDF/precise-path starts need separate integration work.
+CON-27 lets the client mount the original flat A1 install directly with
+`--install-root`, using the existing shared VFS. Data-based installs keep
+priority, and an explicit mod is never discarded to select a flat root.
+The built client mission report enumerated all 49 original A1 maps; this
+early-exit check does not start the window/audio/input pipeline. Follow the
+[install-root rules and manual checks](INSTALL_ROOTS.md). Original files need
+not move. MDF/precise-path starts and graphical/gameplay acceptance remain pending.
 
 ## Confirmed behaviour before CON-25
 

@@ -64,8 +64,8 @@ sta64 --install-root "/path/to/Star Trek Armada" --map 2blue
 ```
 
 The first command should report the root as mounted and enumerate the A1 maps.
-The second is a **manual** map-view check for placed actors, terrain and
-lighting; it is not automated runtime proof. Multiplayer starts still require
+The second is a **manual** map-view check for placed actors and scenery,
+including any lighting problems; it is not automated runtime proof. Multiplayer starts still require
 MDF/precise Camera_i path integration. Background props/wormholes and other
 known importer/converter limits are recorded in [A1 support](A1_BZN_SUPPORT.md).
 Do not move, rename, normalize or rewrite the original game data.
@@ -75,3 +75,26 @@ and integration. A bounded worker may own only `src/flat_install_tests.rs`;
 independent source review follows the frozen implementation. December 2026's
 desktop alpha stays the immediate priority; no completion date or new release
 dependency is assigned.
+
+## Executed checks
+
+The actual client was built before and after the mount-selection change. With
+the same flat A1 root and `--mission-report`, the baseline reported `no Data
+directory` and zero maps; the changed, staged client mounted `root` and reported
+49 maps (20 legacy-DLL missions needing Lua conversion, 29 without a script).
+The same client mounted FO4's unchanged Data/mod chain and reported 190 maps,
+including 35 Lua missions. These early-exit reports do not execute the missions
+or start the Bevy window/audio/input pipeline.
+
+The VFS suite passed 55 library tests and three CLI tests, including the five
+new root-selection regressions. Content consumer tests reported 90 passes.
+The installed A1 conversion test now goes through `mount_install` itself,
+converting all 49 maps and accounting for 17,595 source objects. Its existing
+background-prop/wormhole warnings and missing multiplayer starts remain.
+
+Strict VFS Clippy, workspace all-targets checking and an Android ARM64 VFS
+library check through cargo-ndk/NDK API 26 passed. The offline workspace lock
+refresh changed zero packages. Independent source review found no confirmed
+defect. All 49 original map and two ZFS archive hashes remained unchanged.
+No APK, device, graphical map-view or gameplay acceptance is implied by these
+checks; the manual check above remains outstanding.

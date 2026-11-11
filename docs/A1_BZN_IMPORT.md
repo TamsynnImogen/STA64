@@ -167,7 +167,8 @@ source review, including the final native-width correction, found no confirmed
 defect. Original-map hashes and static/native captures are kept privately;
 original map bytes are not test fixtures in this repository.
 
-The current desktop `--install-root` path still requires a child `Data/`.
-The headless conversion test mounts the bare original A1 folder directly via
-the existing VFS. Client mounting and MDF/Camera_i start selection remain
-separate follow-ups, with no suggestion to move or rewrite the original data.
+At CON-26, the desktop `--install-root` path still required a child `Data/`;
+its headless conversion test mounted the bare A1 folder directly.
+[CON-27](INSTALL_ROOTS.md) extends the same VFS entry point to flat A1 roots
+and checks an actual built client mission report. MDF/Camera_i start selection
+remains a separate follow-up. Original data is not moved or rewritten.
