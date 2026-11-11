@@ -141,9 +141,10 @@ Amendments to the slot idea:
 - Slots need a binding key (ODF, texture, race, skybox) and a fallback to the
   default draw; post is an ordered chain.
 - Pack contributions are three kinds: parameter set, asset selection, shader
-  implementation. **v1 = parameters + asset selection + post chain; user
-  shader replacement later.** (Supersedes "WGSL override" above.) Recipe
-  numbers are fitted per art set, so the profile supplies default params.
+  implementation. **Shader authoring is a first-class tier (owner decision,
+  2026-11-11), not deferred**: not all modders will or can write shaders, so
+  rungs 1-2 never require it, but rung 3 gets maximum help (see below).
+  Recipe numbers are fitted per art set, so the profile supplies default params.
 - Tiers: Roots data T0, Refit recipes/ini T1, ReShade preset T2, Refit
   shaders and Roots engine-code behaviour T3.
 
@@ -167,6 +168,24 @@ Amendments to the slot idea:
   exe fingerprint, quirk registry, ODF fragments + provenance, tier loaders,
   hook importer, render slots, triggers, script layer, pack UI, hot reload).
   Check `origin/main` for free IDs before claiming.
+
+## Shader authoring ladder
+
+Render output never feeds the deterministic sim, so shader mods carry no
+desync risk; that is why this can be opened early.
+1. Parameters (ini recipe numbers). 2. Asset selection (textures, models).
+3. Shader: replace the slot's effect code.
+Making rung 3 easy:
+- Modder writes only the effect body; the slot defines signature + versioned
+  input struct (depth, scene copy, lights, hit data, sim clock); engine owns
+  bindings, passes, fallback. Shared WESL helpers (`import sta::lighting`).
+- `sta64 new-effect <slot>` ejects the built-in default shader into the pack;
+  Refit's ported effects ship as annotated example packs.
+- Shader uniform declarations (range, default) auto-become recipe keys and
+  in-game sliders, linking rung 3 back to rung 1.
+- Validate at load; compile error -> fall back to default draw + error with
+  file:line. Hot reload. Slot-isolation preview scene via the testbench harness.
+- Pack names the contract version it targets; old versions get a shim.
 
 ## Refit is first-party (author = project owner)
 
