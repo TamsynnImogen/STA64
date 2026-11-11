@@ -201,6 +201,10 @@ pub struct Button {
     pub look: Look,
     pub tip: String,
     pub verbose: Option<String>,
+    /// Sprite IDs in priority order; an empty list leaves the text label visible.
+    pub sprite_names: Vec<String>,
+    /// Keep the text alongside a resolved icon (formations need distinct labels).
+    pub keep_label: bool,
 }
 
 /// The cell of "cancel" (key T) and "back" (key G) on every page.
@@ -293,7 +297,39 @@ pub fn short(name: &str) -> String {
 }
 
 fn button(cell: usize, label: &str, act: Act, tip: &str) -> Button {
-    Button { cell, label: label.to_uppercase(), act, look: Look::Ready, tip: tip.to_owned(), verbose: None }
+    let (sprite_names, keep_label) = match &act {
+        Act::OpenBuild => (vec!["b_build".into()], false),
+        Act::Target(TargetMode::Move) => (vec!["b_move".into()], false),
+        Act::Target(TargetMode::Attack) => (vec!["b_attack".into()], false),
+        Act::Target(TargetMode::Rally) => (vec!["b_rally".into()], false),
+        Act::Stop => (vec!["b_stop".into()], false),
+        Act::Back => (vec!["b_back".into()], false),
+        Act::Target(TargetMode::Mine) => (vec!["b_harvest".into()], false),
+        Act::Cancel(_) => (vec!["b_cancel".into()], false),
+        Act::Formation(_) => (vec!["b_form".into()], true),
+        // No verified native ID for these actions; use the existing label.
+        Act::Special(_) | Act::Build { .. } => (Vec::new(), false),
+    };
+    Button { cell, label: label.to_uppercase(), act, look: Look::Ready, tip: tip.to_owned(), verbose: None, sprite_names, keep_label }
+}
+
+/// A build icon follows the resolved model basename before the ODF stem.
+fn build_sprite_names(model: &str, odf: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    for source in [model, odf] {
+        let basename = source.rsplit(['/', '\\']).next().unwrap_or(source).trim();
+        let stem = match basename.rsplit_once('.') {
+            Some((stem, ext)) if ["sod", "odf", "glb", "gltf", "m3d"].iter().any(|known| ext.eq_ignore_ascii_case(known)) => stem,
+            _ => basename,
+        };
+        if !stem.is_empty() {
+            let name = format!("b_{stem}");
+            if !names.iter().any(|old: &String| old.eq_ignore_ascii_case(&name)) {
+                names.push(name);
+            }
+        }
+    }
+    names
 }
 
 /// The first selected own unit that can build: the grid's builder.
@@ -340,6 +376,9 @@ pub fn grid(feed: &HudFeed, page: Page) -> Vec<Button> {
                 look: it.look,
                 tip: format!("Build {}", it.odf),
                 verbose: Some(verbose),
+                sprite_names: feed.content.as_deref().and_then(|db| db.unit(it.key))
+                    .map_or_else(Vec::new, |def| build_sprite_names(&def.model, &it.odf)),
+                keep_label: false,
             });
         }
         out.push(button(CANCEL_CELL, &tr("Cancel"), Act::Cancel(b.id), &tr("Cancel the queue")));
@@ -635,6 +674,8 @@ mod tests {
             .iter()
             .find(|b| b.act == Act::Formation(FORM_WEDGE))
             .unwrap();
+        assert_eq!(wedge.sprite_names, ["b_form"]);
+        assert!(wedge.keep_label);
         assert!(matches!(
             command(&f, &wedge.act),
             Some((
@@ -714,6 +755,7 @@ mod tests {
                 .iter()
                 .any(|b| b.act == Act::Target(TargetMode::Mine))
         );
+        assert_eq!(grid(&f, Page::Top).iter().find(|b| b.act == Act::Target(TargetMode::Mine)).unwrap().sprite_names, ["b_harvest"]);
         f.selected = vec![EntityId(3), EntityId(4)];
         assert!(
             !grid(&f, Page::Top)
@@ -814,6 +856,36 @@ mod tests {
         assert_eq!(command(&f, &Act::Back), None);
         // A yard builds in place: no site.
         assert!(matches!(cruiser.act, Act::Build { site: false, .. }));
+    }
+
+    #[test]
+    fn grid_sprite_metadata_preserves_actions_and_build_order() {
+        let fake = sta_content::fake::db();
+        let mut db = ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
+        for weapon in fake.weapons() { db = db.weapon(weapon.clone()); }
+        for unit in fake.units() {
+            let mut unit = unit.clone();
+            if unit.odf == "fx_cruiser" { unit.model = "fed_excelsior".into(); }
+            db = db.unit(unit);
+        }
+        let db = db.build().unwrap();
+        let f = feed(db, vec![unit(&fake, 2, "fx_yard", 1, 100.0, None)], &[2]);
+        let top = grid(&f, Page::Top);
+        assert_eq!(top.iter().map(|b| b.cell).collect::<Vec<_>>(), [0, 1, 6]);
+        assert_eq!(top[0].sprite_names, ["b_build"]);
+        assert_eq!(top[1].sprite_names, ["b_rally"]);
+        assert_eq!(top[2].sprite_names, ["b_stop"]);
+        let build = grid(&f, Page::Build);
+        assert_eq!(build.iter().map(|b| b.cell).collect::<Vec<_>>(), [0, 1, 4, 9]);
+        assert_eq!(build[0].sprite_names, ["b_fed_excelsior", "b_fx_cruiser"]);
+        assert_eq!(build[0].label, "FX_CRUISER");
+        assert!(matches!(build[0].act, Act::Build { .. }));
+        assert_eq!(build[2].sprite_names, ["b_cancel"]);
+        assert_eq!(build[3].sprite_names, ["b_back"]);
+        assert_eq!(command(&f, &build[2].act).unwrap().0, CommandKind::Order(Order::Stop { units: vec![EntityId(2)] }));
+        assert_eq!(build_sprite_names("fed_excelsior", "fed_excelsiorA"), ["b_fed_excelsior", "b_fed_excelsiorA"]);
+        assert_eq!(build_sprite_names("FX_Cruiser.SOD", "fx_cruiser.odf"), ["b_FX_Cruiser"]);
+        assert_eq!(build_sprite_names("models/fed_excelsior.GlB", "fed_excelsiorA"), ["b_fed_excelsior", "b_fed_excelsiorA"]);
     }
 
     const TREE: &str = "fx_cruiser 0\nfx_frigate 1 fx_station\nfx_yard 0\nfx_station 0\n";

@@ -52,6 +52,7 @@ impl SkirmishCfg {
 pub struct LocalRace {
     pub name: String,
     pub interface: Option<String>,
+    pub interface_sprites: Option<String>,
     pub music: Option<String>,
 }
 
@@ -109,6 +110,7 @@ pub fn seats(map: &MapDef, cfg: &SkirmishCfg, races: &Races, db: &ContentDb) -> 
     let local = LocalRace {
         name: mine.clone(),
         interface: def.and_then(|r| r.interface.clone()),
+        interface_sprites: def.and_then(|r| r.interface_sprites.clone()),
         music: def.and_then(|r| r.multiplayer_music.clone().or_else(|| r.single_player_music.clone())),
     };
     let summary = format!(
@@ -177,8 +179,20 @@ pub fn apply_race(
     vfs: Option<Res<crate::viewer::Mounted>>,
     hud: Option<ResMut<crate::ui::hud::HudConfig>>,
     music: Option<ResMut<crate::audio::MusicConfig>>,
+    skin: Option<ResMut<crate::ui::gui_sprites::GuiSkin>>,
 ) {
-    let Some(race) = race.filter(|r| r.is_changed()) else { return };
+    let Some(race) = race else {
+        if let Some(mut skin) = skin
+            && skin.table.is_some()
+        {
+            skin.table = None;
+        }
+        return;
+    };
+    if !race.is_changed() { return; }
+    if let Some(mut skin) = skin {
+        skin.table.clone_from(&race.interface_sprites);
+    }
     if let (Some(mut hud), Some(vfs), Some(cfg)) = (hud, vfs, &race.interface) {
         hud.gui = gui_layout(&vfs.0, cfg);
         info!("hud: {} for {}", cfg, race.name);
@@ -276,7 +290,7 @@ impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
         // Headless frame runs have no notice plugin; the match still posts its notices.
         app.add_message::<Notice>()
-            .add_systems(Update, (apply_race, outcome).in_set(crate::app::GameSet::Ui));
+            .add_systems(Update, (apply_race.before(crate::ui::gui_sprites::paint), outcome).in_set(crate::app::GameSet::Ui));
     }
 }
 
