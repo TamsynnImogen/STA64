@@ -61,3 +61,42 @@ independent; do not branch from or depend on its unmerged implementation.
 
 The December 2026 desktop alpha remains the priority. No new completion date
 or release dependency is assigned.
+
+## Executed checks
+
+The actual baseline client reported NoData and zero maps for this root. Its
+VFS source file is byte-identical to the pre-change main version; its exact
+source/binary hashes are retained with the private probe receipt.
+
+All 59 VFS library tests and three CLI tests passed, including four new tests
+for complete/incomplete/wrong-type markers, case handling, loose-file access,
+explicit mods and Data priority/errors. Independent source/test review found
+no confirmed defect.
+
+The 90 content library tests passed with the real A2 root and expected
+`sta2classic` detection. For this profile test, leave `STA64_TEST_MOD` **unset**;
+it passes a set empty value as the explicit `Some("")`, which correctly fails
+flat mounting. An initial combined invocation exposed this test-harness
+distinction; production behaviour was not weakened to satisfy it.
+
+The separate `map_install` harness filters its empty mod variable into None.
+Through `mount_install` it converted all 72 original A2 maps and accounted for
+34,695 objects: 5,123 actors, 28,944 regions, 148 lights, 397 uncarried props and
+83 skipped objects. All 35 multiplayer maps have their announced starts, 213
+in total. Its 75 existing background-prop/wormhole warnings remain; no ODF was
+unrecognized. This does not establish rendering or complete gameplay.
+
+Strict VFS Clippy, workspace all-targets checking and the full Android ARM64
+client-library check through cargo-ndk/NDK API 26 passed. This library check is
+not an APK or device-runtime result. Original source hashes and built-client
+checks are bound to the published implementation in the PR/private receipts.
+
+The changed Linux client built and mounted the same A2 root directly: 72 maps,
+36 with legacy DLL scripts needing Lua conversion and 36 without a script,
+with no unreadable entries. The identical command previously reported NoData
+and zero maps. A1 and FO4 control reports still enumerate 49 and 190 maps.
+These early-exit reports do not start App/window/audio/input or execute the
+missions. A separate private binary and receipts preserve exact source/hash
+identity; prior playtest builds are untouched. All 1,239 original A2 input
+hashes stayed unchanged. An offline workspace lock refresh changed zero
+packages and left the lock unchanged.

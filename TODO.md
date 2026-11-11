@@ -66,6 +66,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] Original flat A1 install (CON-27, build including CON-26): manually run an updated `sta64 --install-root "<A1 install>" --map 2blue`. The map view should load placed actors/scenery directly from the existing game folder; record missing models, lighting or selection issues. The headless `--mission-report` path already enumerates all 49 maps. Do not move game files; A1 multiplayer starts still need MDF/precise-path integration. [Mount rules and checks](docs/INSTALL_ROOTS.md).
 
+- [?] Original loose-file A2 root (CON-29, updated build): run `sta64 --install-root "<A2 root>" --mission-report`; it should mount the existing folder and enumerate its maps without moving files into Data. Then open a familiar multiplayer map with `--map <name>` and check models, lighting, selection and orders. An explicit mod still requires the existing Data/Mods layout. [Recognition rules](docs/A2_INSTALL_ROOTS.md).
+
 ## Checked earlier (morning list)
 
 Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
