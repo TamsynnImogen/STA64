@@ -1,0 +1,193 @@
+# CON-08 — Legacy M3D layouts and model nodes
+
+## Pre-implementation contract
+
+This package completes the format/inspection gate in WORKPLAN, under M1 issue
+#332. Every valid installed M3D must parse; an unsupported valid stream remains
+a closure blocker. Invalid, misnamed or unrelated `.m3d` files must be reported
+separately with contextual errors. Counts alone are insufficient evidence.
+
+The existing 1.94–2.06 reader is retained. Version 1.93 must use its actual old
+layout, not merely pass the newer version gate. Two private 1.93 streams parse
+completely with the existing strict SOD reader when only their ten-byte magic
+is normalized in a temporary byte buffer. Their original bytes stay untouched.
+The installed Legacy reader independently accepts `Mad3D_SW`, `Storm3D_SW`
+and `StarTrekDB` before the same version/layout dispatch. This supports reuse
+of the existing 1.93 reader in memory; it does not prove all later layouts equal.
+Identify the result as M3D and retain old-layout face winding/material meaning.
+
+Native type 2 is a light payload: a subtype byte, RGB floats and two falloff
+floats. Static reader/writer and RTTI evidence identifies subtype 2 as point,
+and the other constructor as directional. Keep the authored subtype and values;
+do not infer its meaning from Direct3D enum constants. Preserve this payload in
+the shared Bevy-free model instead of skipping 21 bytes. Existing a2fmt already
+has the matching light data structure, which can be reused without claiming
+the Armada and Legacy light-class policies are identical.
+
+Preserve type-11 controls as explicit shared LOD nodes. Retain hierarchy and
+child geometry. M1 keeps the existing finest-LOD presentation policy; use typed
+control identity as well as existing geometry/LOD name conventions, and test
+that exactly the chosen branch remains visible. RND-07 owns distance switching,
+cull/fade thresholds and render marks. Native dynamic LOD is not inferred from
+successful parsing or from a plain-transform fallback.
+
+The shared Model node enum may gain typed LOD and light variants, with narrow
+constructor and exhaustive client-match changes. SOD light data may be retained
+through the same representation. No Bevy dependency enters the asset crate,
+and no simulation, command, content hash, save or network representation changes.
+This package must not invent physical light intensities or substitute Bevy's
+inverse-square falloff for Legacy's authored shader behavior. Model inspection
+must state whether fields are parsed or actually consumed by the renderer.
+Light playback remains an explicit rendering limitation until a faithful
+adapter exists; preserving data must not be called rendered-light parity.
+
+Extend `model_info` narrowly to report node kind, parent/children, LOD choice
+and parsed light fields, retaining its existing model/material/bump report.
+Add a read-only `--file <path>` mode for corpus inspection; use shared parsers,
+contextual errors and stable nonzero exits. Do not copy proprietary examples
+into fixtures or bypass game/mod VFS resolution for normal engine loading.
+
+Use original synthetic binary tests for 1.93 and newer versions, hierarchy,
+LOD/light preservation, truncation and invalid fields. Run the installed corpus
+read-only, bind results to input hashes and refresh legacy asset/client checks,
+strict Clippy and workspace/ARM64 compilation. Source/headless/build proof,
+manual model appearance and original-native runtime acceptance remain distinct.
+Private decompiler output and game bytes stay outside the repository.
+
+Ownership: M3D loader/tests; narrow shared Model annotations and client enum
+matches; model_info/tests; this document, WORKPLAN and an appended TODO check.
+CON-09 and Sabre diagnostic PRs remain independent. No original assets, defaults,
+major dependencies, input devices or native original executables are modified
+or executed. The December 2026 desktop alpha target remains unchanged.
+
+## Stage-one evidence and remaining gate
+
+The initial changes pass 32 asset library tests, three model-info tests and six
+existing texture-inspection tests. Two-crate strict all-target Clippy passes.
+The new synthetic streams cover 1.93, 1.94, 1.96 and 2.06, including every
+truncated prefix, typed fields, hierarchy and winding. These checks are not
+native runtime or visual acceptance.
+
+The read-only installed scan contains 2,412 paths, including duplicate installs:
+606 complete models parse; 1,790 files under `M3D/chunks/` have separate native
+chunk-material/geometry layouts; 16 `StarTrekDB` 1.0/1.2 files are unsupported.
+All input hashes match before and after. None of the latter files is labelled
+corrupt merely because it is outside the complete-model reader's layout.
+The native Legacy header routine rejects versions below 1.4, so the old
+database files also need separate historical-format evidence.
+
+The native chunk readers use the same magic/version prefix, followed by
+different records. They are not complete scene models. Format/role discovery,
+decoding and the original corpus gate remain open: this stage does not close
+CON-08 or M1. Private input identities and native evidence stay in the preserved
+artifact tree outside the source checkout.
+
+## Chunk-format extension contract (before implementation)
+
+Native evidence now distinguishes two contexts after the common magic/version:
+
+- A chunk material library stores a 32-bit record count, texture-material
+  records (lighting-material name, versioned texture slots/flags and shader
+  strings), then a 32-bit geometry-variant count.
+- A geometry variant stores eight bound floats, a 32-bit chunk count, then each
+  chunk's 32-bit special flag, common mesh data without inline texture-material
+  records, and one signed material-library index per face group. Negative
+  indices select the native fallback. Keep the flag and indices as authored.
+
+Add explicit Bevy-free material-library and geometry decoders under
+`sta_assets::m3d::chunks`, sharing the existing bounded mesh/group reader.
+Initially admit the observed/tested 2.04–2.06 layouts. Require complete byte
+consumption and contextual errors; do not guess a role or silently fall back
+from the full-model reader. `model_info` gains explicit `--chunk-materials` and
+`--chunk-geometry` diagnostic modes. Libraries are asset data, not fake scene
+models; geometry retains its external material bindings. Native destruction,
+variant selection, shader effects and scene insertion are separate systems.
+
+The common reader needs two native-backed corrections: read stored normals
+only when mesh flag `0x10` is set, and retain 32-bit corner-record indices for
+2.06 instead of imposing the old Armada conversion's 16-bit limit. Keep stored
+normals and their corner bindings available in the new geometry data; existing
+legacy display normal generation is unchanged. Extract the existing material
+record reader only as needed to reuse its layout in both contexts. Preserve
+texture flags and extra shader strings in the new library data.
+
+Use original synthetic material/geometry streams for each admitted version,
+with/without stored normals, material indices, 32-bit corner records, malformed
+counts/indices and every truncated prefix. Refresh the full installed scan with
+explicit roles, including wrong-role controls and input hashes. None of this
+resolves the separate historical StarTrekDB 1.0/1.2 gate or establishes native
+debris playback, rendered-light parity, or completion of M1.
+
+### Stored non-finite attribute evidence (before adjustment)
+
+The first explicit-role scan decodes 1,778 chunk files. Twelve remaining paths
+(six distinct exports duplicated in the preserved installs) contain actual
+stored NaN/Infinity UV floats, not merely a version/header mismatch. Native
+mesh reading stores those floats without a finite-value replacement. The new
+raw chunk API must therefore preserve attribute bit patterns and report them
+as warnings instead of silently substituting zero or claiming render safety.
+Header/version, bounds, counts, index ranges and complete consumption remain
+validated. This exception applies to the explicit raw chunk data path; the
+existing full-model sanitation policy is unchanged. A future renderer adapter
+must handle these warnings explicitly before uploading unsafe coordinates.
+
+The 16 historical database rejections are now also classified: the installed
+Legacy header reader independently refuses versions below 1.4, agreeing with
+the existing a2fmt documented engine gate. They remain explicitly refused
+historical files, not newly supported 1.0/1.2 assets or corrupt chunks. No
+version gate is lowered to improve a corpus count.
+
+Normal model enumeration also needs a narrow resolver check: recursive VFS
+listing currently exposes nested chunk-library stems that bare-name model
+lookup cannot resolve. Filter the list through the existing `find_model`
+resolver, with a nested-chunk regression; do not change lookup precedence or
+guess roles from filenames. This is a small `sta_assets/src/lib.rs` ownership
+exception to keep the normal viewer list consistent with its actual resolver.
+An opt-in installed-corpus test uses `STA64_TEST_M3D_ROOTS`, public readers and
+before/after byte comparisons. It counts expected historical refusals and
+warnings separately; unset CI environments are explicitly reported as skipped.
+
+## Implemented format support and verification
+
+| Context | Implemented data | Current limit |
+| --- | --- | --- |
+| Complete Mad3D scenes | 1.93 old layout; existing 1.94–2.06 geometry/material/hierarchy/animation subset | Existing unsupported animation kinds remain warnings |
+| Legacy SOD containers | Existing 1.4–1.93 reader; original magic and values stay on disk | 1.0/1.2 retain the native version refusal |
+| Type-11 controls | Typed LOD identity and shared finest-branch selection | Dynamic camera-distance switching is RND-07 |
+| Type-2 lights | Authored subtype, RGB and both falloff values; visible in inspector | Exact native light-shader playback is not implemented |
+| Chunk libraries | 2.04–2.06 material names, five texture slots/flags, shader strings, variant count | Libraries are not complete scene models |
+| Chunk geometry | 2.04–2.06 bounds, mesh flags, positions, stored normals, UVs, 32-bit corner bindings and external material indices | Raw inspection; native destruction/variant playback is not implemented |
+
+On merged main `10c82cc` plus this package, the asset suite passes 51 library
+tests, six model-info tests and seven texture-inspection tests. The configured
+installed check reads 2,412 files: 606 scenes, 594 libraries and 1,196 geometry
+variants decode; 16 native historical refusals remain explicit. This includes
+the two preserved Legacy roots and six additional test-mod models. Input bytes
+match before and after every decode. Twelve geometry files report retained
+non-finite UV values; they must not be called safe GPU input.
+
+The independent file/identity receipt also checks existing numbered geometry
+variants against their real material libraries. Two declared names,
+`warp_dampener_root1.m3d` and `warp_dampener_root2.m3d`, are absent in the original
+and copied install (four paths). These are content gaps; no fallback files or
+native variant-selection behavior are invented.
+
+Integrated client tests pass 344 checks with one existing ignored test. Strict
+two-crate all-target Clippy, workspace all-target compilation and API-26 Android
+ARM64 client-library compilation pass. The offline workspace lock refresh is
+unchanged; no dependency is added or upgraded by CON-08. No original executable
+or GUI was run. Library compilation is not APK/device or native visual proof.
+
+Inspector modes are read-only:
+
+```sh
+target/debug/examples/model_info --file <model.sod-or-m3d>
+target/debug/examples/model_info --chunk-materials <library.m3d>
+target/debug/examples/model_info --chunk-geometry <variant.m3d>
+```
+
+Normal install/mod/model invocation retains VFS precedence. `--file` is for
+legacy SOD/M3D streams; other native models use the normal VFS mode. Set
+`STA64_TEST_M3D_ROOTS` to the platform path-separated list of corpus directories
+to enable the installed test. Use the repository's low-priority, two-job Cargo
+settings; without that variable CI explicitly skips the private corpus.

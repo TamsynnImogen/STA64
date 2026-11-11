@@ -3,7 +3,7 @@
 //! Format history this crate follows:
 //! - Armada II: SOD models, TGA textures (`Textures/RGB/`).
 //! - Fleet Operations: adds DDS textures, mostly in `Textures/`.
-//! - A2FOExtensions: adds M3D models (1.94–2.06).
+//! - A2FOExtensions: adds M3D models (1.93–2.06); Legacy chunk contexts are explicit.
 //! - STA64 native: static glTF/GLB models with PNG/JPEG material images.
 //!
 //! Lookup by bare name searches the known folders. A file in a higher-priority
@@ -122,6 +122,7 @@ pub fn list_models(vfs: &Vfs) -> Vec<String> {
         .flat_map(|d| vfs.list(d))
         .filter(|p| ModelFormat::PREFERENCE.iter().any(|f| p.ends_with(&format!(".{}", f.extension()))))
         .map(|p| stem(&p).to_owned())
+        .filter(|name| find_model(vfs, name).is_some())
         .collect();
     out.sort();
     out.dedup();
@@ -293,6 +294,11 @@ mod tests {
         w("Data/Mods/M/Textures/RGB/b.tga");
         w("Data/sod/ship.sod");
         w("Data/Mods/M/sod/ship.glb");
+        // Nested library/data files are not selectable by the bare-name model
+        // resolver. A nested duplicate must still leave the root model listed.
+        w("Data/Mods/M/sod/chunks/library.m3d");
+        w("Data/Mods/M/sod/nested/unreachable.sod");
+        w("Data/Mods/M/sod/chunks/ship.m3d");
         let vfs = Vfs::mount_install(&root, Some("M")).unwrap();
         assert_eq!(find_texture(&vfs, "A").unwrap(), ("textures/a.dds".into(), TextureFormat::Dds));
         let (p, f) = find_texture(&vfs, "b.tga").unwrap();

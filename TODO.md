@@ -80,6 +80,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] Static glTF/GLB (CON-09): with an updated build, place the original `fixtures/models/fx_cruiser.glb` in a mounted layer's `sod/` directory and run `--view fx_cruiser`; orbit the red/blue checker model and check its surface remains visible. Parser, material, VFS lookup and windowless GPU checks are separate automated evidence. Animation, skins, morph targets and unsupported required extensions currently report explicit errors. [Scope and limits](docs/M1_ASSET_MODEL_COMPLETION.md).
 
+- [?] M1 M3D formats (CON-08, updated builds): the normal viewer list should contain resolvable scene models, without nested chunk-library entries. Inspect known M3D models with their original geometry/materials; `model_info --file`, `--chunk-materials` and `--chunk-geometry` provide read-only diagnostics. Typed light fields and raw chunk decoding do not yet provide native light/destruction playback. The installed corpus and unchanged-byte checks are automated; remaining renderer limits and known content gaps are in [M3D support](docs/M3D_NODE_SUPPORT.md).
+
 ## Checked earlier (morning list)
 
 Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.

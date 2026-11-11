@@ -25,3 +25,7 @@ sta_odf.workspace = true
 [[example]]
 name = "model_textures"
 test = true
+
+[[example]]
+name = "model_info"
+test = true
