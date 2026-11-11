@@ -1,7 +1,8 @@
 //! SIM-19: guarded ownership edits through the shared simulation.
 //!
-//! Active production and unfinished units remain rejected. Entirely
-//! unstarted station queues have checked cleanup; see OWNERSHIP_TRANSFER.md.
+//! Station queues have checked cleanup, including a paid active head.
+//! Rig/weld involvement and unfinished targets remain rejected; see
+//! OWNERSHIP_TRANSFER.md for the separate cancellation/refund contracts.
 
 use sta_core::{EntityId, Fixed, PlayerId};
 
@@ -43,8 +44,8 @@ impl Sim {
         };
 
         // All rejection checks precede cleanup, including same-owner requests.
-        // This consumes the checked unstarted-queue plan; ordinary Stop/cancel
-        // has a separate contract, particularly for active production.
+        // Consume the checked queue plan; ordinary Stop/cancel has a separate
+        // refund contract, particularly for deferred active production.
         self.production
             .finish_transfer(&mut self.economy, production);
         self.weapons.stop_attack(&self.units, from, &[id]);

@@ -293,7 +293,7 @@ fn atomically_rejected(mut sim: Sim, yard: EntityId, to: PlayerId) {
 }
 
 #[test]
-fn malformed_queues_active_heads_and_overflow_reject_atomically() {
+fn malformed_queues_unpaid_active_heads_and_overflow_reject_atomically() {
     let base = || {
         let mut sim = game(true);
         let yard = spawn_yard(&mut sim, OLD);
@@ -313,7 +313,7 @@ fn malformed_queues_active_heads_and_overflow_reject_atomically() {
     atomically_rejected(sim, yard, NEW);
 
     let (mut sim, yard) = base();
-    inject(&mut sim, yard, vec![(four, OLD.0, 0, true, true)]);
+    inject(&mut sim, yard, vec![(four, OLD.0, 0, true, false)]);
     atomically_rejected(sim, yard, NEW);
 
     let (mut sim, yard) = base();
@@ -464,3 +464,6 @@ fn unstarted_queue_snapshot_and_same_build_replay_continue_deterministically() {
     assert!(played.production.queue(yard).is_empty());
     assert_eq!(played.unit(yard).unwrap().owner, NEW);
 }
+
+#[path = "ownership_active_tests.rs"]
+mod active_tests;
