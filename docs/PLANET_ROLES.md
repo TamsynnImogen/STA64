@@ -69,6 +69,11 @@ genuine old Native fixtures. Equivalent absent/explicit defaults and include
 spellings must have equal hashes; role changes must change hashes. Explicit
 None and unresolved/default None are equivalent metadata.
 
+Reserve marker `0xe9`, followed by the length-prefixed domain string
+`sta64.planet-role.v1` and one byte: Background 0, Producer 1. Pending #309
+already reserves `0xe7`/`0xe8` for its independent confinement additions;
+neither is reused. This is an internal content-hash record, not a wire tag.
+
 Newly recognized legacy roles change those databases' content hashes, even
 before simulation consumes the metadata. This is intentional content-seam
 identity, not an old legacy-save migration claim. The Native fake moon is
