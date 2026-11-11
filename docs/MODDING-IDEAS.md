@@ -168,6 +168,20 @@ Amendments to the slot idea:
   hook importer, render slots, triggers, script layer, pack UI, hot reload).
   Check `origin/main` for free IDs before claiming.
 
+## Refit is first-party (author = project owner)
+
+The user develops Armada 2 Refit and can extract, change and repackage parts
+of it for STA64. So Refit is not a foreign mod to be converted (the T1/T3
+tiers above apply to third-party mods only). Implications:
+- Refit is the **reference pack**: repackage its recipes (sky, surfaces,
+  nebulae, ordnance, menu scene), content sets and QOL rules to the STA64 pack
+  manifest; derive and freeze slot input contracts from its recipe formats.
+- One source of truth for recipe/param formats and ported shaders shared by
+  the Refit `.asi` and STA64; consider splitting Refit into data/recipes vs
+  the Windows renderer.
+- Open: how far to change Refit formats for STA64 vs keeping them stable for
+  existing Refit users (owner's decision).
+
 ## Open unknowns
 
 - **A1 survey** (exe fingerprint, community patches/hooks, A1-specific
