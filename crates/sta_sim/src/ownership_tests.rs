@@ -282,7 +282,7 @@ fn rejected_without_state_change(sim: &mut Sim, id: EntityId) {
 }
 
 #[test]
-fn production_queue_deploy_and_weld_block_transfer_atomically_in_both_pay_modes() {
+fn active_queue_clears_but_deploy_and_weld_block_transfer_atomically_in_both_pay_modes() {
     for pay_on_queue in [false, true] {
         let mut queued = game(&[0, 1], pay_on_queue);
         let yard = spawn(&mut queued, "fx_yard", PlayerId(0), pos(0));
@@ -290,7 +290,17 @@ fn production_queue_deploy_and_weld_block_transfer_atomically_in_both_pay_modes(
         build(&mut queued, yard, "fx_frigate", None);
         build(&mut queued, yard, "fx_frigate", None);
         assert_eq!(queued.production.queue(yard).len(), 2);
-        rejected_without_state_change(&mut queued, yard);
+        let before = queued.economy.stock_of(PlayerId(0));
+        accepted(&mut queued, &[team(PlayerId::SCRIPT, 0, yard, PlayerId(1))]);
+        assert!(queued.production.queue(yard).is_empty());
+        assert_eq!(queued.unit(yard).unwrap().owner, PlayerId(1));
+        let expected = if pay_on_queue {
+            [2000, 0, 0, 0].map(Fixed::from_int).to_vec()
+        } else {
+            before
+        };
+        assert_eq!(queued.economy.stock_of(PlayerId(0)), expected);
+        assert!(queued.economy.stock_of(PlayerId(1)).is_empty());
 
         let mut deploying = game(&[0, 1], pay_on_queue);
         let rig = spawn(&mut deploying, "fx_rig", PlayerId(0), pos(0));

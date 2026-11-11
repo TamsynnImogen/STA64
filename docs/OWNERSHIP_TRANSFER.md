@@ -5,8 +5,8 @@
 The source-audit and implementation proposal was recorded before core edits
 in merged #257. The cargo prerequisite is merged in #258. The guarded
 ownership stage below is implemented for finished units without production
-involvement, extended by checked cleanup for entirely unstarted station queues
-in the final section; full construction/capture support remains incomplete.
+involvement, extended by checked station-queue cleanup including a paid active
+head in the stages below; full construction/capture support remains incomplete.
 At audit time, `Edit::Team` existed but `Sim::apply_edit` rejected it. The longer installed A2
 mission probe records rejected transfers in Invasion at tick 1440 and The
 Cavalry at tick 720. `Entity.player = ...` already queues that edit; adding an
@@ -276,11 +276,12 @@ checks. Capture refund policy, colonizable worlds and victory remain gated.
 
 ## Unstarted station-queue transfer stage
 
-This next stage extends the guarded operation only for a finished station
-whose entire queue has not started. Active heads (including zero elapsed
-ticks), pending rig deploys, weld builders and unfinished children still
-reject. Construction identity, attached research, capture victory and active
-refund policy remain unresolved; SIM-19 is not complete.
+The first queue stage extended the guarded operation to a finished station
+whose entire queue had not started. Active heads, including zero elapsed
+ticks, were rejected then; the following active stage now extends that case.
+Pending rig deploys, weld builders and unfinished children still reject.
+Construction identity, attached research and capture victory remain unresolved;
+SIM-19 is not complete.
 
 Pinned original A1 and A2 producer ownership cleanup calls queue clearing
 outside the optional busy/construction-effect branch. Their inspected queue
@@ -337,9 +338,10 @@ ordinary rest of the tick by using an identical baseline simulation. Shared
 regressions and full OS CI remain required. Android uses this same operation;
 an APK build is distinct from Waydroid/device gameplay acceptance.
 
-## Active station-queue transfer: pre-implementation contract
+## Active station-queue transfer stage
 
-This stage extends the existing checked plan to a paid, started station head,
+The contract was pushed in `5aaa0da` and its legacy-test refinement `3fb3954`
+before the corresponding edits. This stage implements the checked plan for a paid, started station head,
 including zero elapsed ticks. It does not complete SIM-19. The exact owned
 paths are `production/transfer.rs`, narrow explanatory comments in
 `ownership.rs`, the obsolete active-head rejection case and a child-test
@@ -347,10 +349,11 @@ registration in `ownership_queue_tests.rs`, a new
 `ownership_active_tests.rs`, the legacy combined queue/deploy/weld test in
 `ownership_tests.rs`, and this document. That legacy test now needs to check
 active queue acceptance while retaining all deploy/weld rejection assertions;
-the wider ownership run exposed its obsolete blanket queue guard. No production tick, command,
+the wider ownership run exposed its obsolete blanket queue guard. No production
+tick, command,
 snapshot, replay, content/default, client or Lua format/API changes are needed.
 Open #309 owns separate boundary/production integration; its files are not
-modified by this stage. This contract must be pushed before source changes.
+modified by this stage.
 
 ### Native accounting decision
 
@@ -447,3 +450,27 @@ relative to the normal rest of the tick. Preserve existing rig/weld/resource
 guards and unstarted tests. Run active snapshot/replay continuation, shared
 consumer tests, strict Clippy/workspace checks, full desktop OS CI and Android
 ARM64 checks. An APK artifact remains separate from Waydroid/device acceptance.
+
+### Implementation checks
+
+Eight new active-queue tests pass. The complete ownership focus reports 26
+passes, and six shared crate suites report 565 passes, zero failures and ten
+ignored tests. Existing install-gated early returns are not installed-game
+validation. The genuine original v8 mining fixture retains its baseline
+continuation. Tests cover real multi-job queues and both charging modes at
+zero, partial and pre-completion times, exact four-currency accounting,
+same-owner/repeated requests, control, existing children, Stop, malformed
+states, neutral/unrepresented positive costs, actual-refund overflow and
+active snapshot/replay continuation. The legacy combined test now accepts
+valid active work and retains every rig/deploy/weld rejection assertion.
+
+Strict six-crate all-target Clippy, workspace all-target compilation, scoped
+new-test formatting/diff checks and the Android ARM64 client-library check
+pass. An offline workspace lock refresh changes zero packages and leaves
+Cargo.lock unchanged. Independent source/test reviews found no confirmed
+defect; the lead ran all Cargo checks serially at low priority with two jobs.
+Original binaries remain hash-identical, and private static captures stay
+outside the repository. Full desktop CI and a fresh APK are requested on the
+publication branch; their results are separate from these local checks.
+Native runtime, Waydroid/device acceptance and the remaining SIM-19 gates are
+not claimed complete. December 2026 desktop alpha remains the priority.
