@@ -1,41 +1,21 @@
 //! The construction ship's worker bees (RND-11 follow-up): how many, which model,
-//! and where each one is at a given time.
+//! and the presentation-only flight phases from its home hardpoint to the next
+//! unrevealed station edge and back.
 //!
 //! The games keep this in the construction ship's ODF: `numberOfWorkerBees` (6 for
 //! the Dominion's ship, 12 for the Federation, Klingon and Romulan ones, 1 and
 //! `workerBeeName = "empty"` for a base that builds without any), `workerBeeName` (the
 //! SOD of one bee), `weldingBeamSprite` and `weldingBeamWidth` (2.0). Stock flies the
 //! bees from the ship to spots on the new structure and welds there; Refit draws the
-//! same (`bees.rs`, `[Bees]`). Here each bee circles the structure on its own
-//! tilted orbit, bobbing and jittering a little, and welds a spot of the hull that
-//! changes every second or two. Positions come from the animation clock and a seed
-//! of the structure and the bee, so they replay.
+//! same (`bees.rs`, `[Bees]`). `BeeMotion` uses simulation time and a current
+//! edge target.
 
 use bevy::prelude::*;
 use sta_odf::Odf;
-use sta_sim::EntityId;
-
-use super::impacts::rand;
-
 /// Most bees a site draws, whatever the ODF says.
 pub const MAX_BEES: u8 = 24;
 /// `weldingBeamWidth` the beam's own width is tuned for.
 pub const REF_BEAM_WIDTH: f32 = 2.0;
-
-/// Orbit radius around the structure (times its radius) and how far it varies per bee.
-const ORBIT: f32 = 1.05;
-const ORBIT_SPREAD: f32 = 0.35;
-/// Orbit speed, radians a second, and its spread across bees.
-const SPEED: f32 = 0.45;
-const SPEED_SPREAD: f32 = 0.5;
-/// Height of the bobbing, and the size of the jitter, in structure radii.
-const BOB: f32 = 0.22;
-const JITTER: f32 = 0.035;
-/// Where on the hull a bee welds, in structure radii from the centre.
-pub const SURFACE: f32 = 0.55;
-/// Seconds a bee welds one spot, and the share of it spent moving the beam on.
-const SPOT_SECONDS: f32 = 1.8;
-const SPOT_SWING: f32 = 0.18;
 
 /// What a construction ship's ODF says about its bees.
 #[derive(Debug, Clone, PartialEq)]
@@ -44,8 +24,15 @@ pub struct BeeSpec {
     pub count: u8,
     /// SOD of one bee; `None`: the ODF has none (`empty`).
     pub model: Option<String>,
-    /// `weldingBeamWidth`; zero when not set.
+    /// Constructor model nodes where bees wait and return, in ODF order.
+    pub hardpoints: Vec<String>,
+    /// `weldingBeamSprite`; stock class default is `phaser`.
+    pub sprite: Option<String>,
+    /// `weldingBeamWidth`; absent defaults to one, explicit zero disables the beam.
     pub width: f32,
+    pub takeoff: f32,
+    pub welding: f32,
+    pub closure: f32,
 }
 
 impl BeeSpec {
@@ -69,77 +56,203 @@ pub fn bee_spec(odf: &Odf) -> Option<BeeSpec> {
         })
     };
     let model = named("workerbeename").map(str::to_owned);
-    let beam = named("weldingbeamsprite");
+    let sprite = if odf.raw("weldingbeamsprite").is_some() {
+        named("weldingbeamsprite").map(str::to_owned)
+    } else {
+        Some("phaser".into())
+    };
     // A bee with no model and no beam is not drawn at all.
-    let count = if model.is_none() && beam.is_none() {
+    let count = if model.is_none() && sprite.is_none() {
         0
     } else {
         count
     };
+    let timing = |key, fallback| {
+        odf.f32(key)
+            .filter(|v| v.is_finite())
+            .map_or(fallback, |v| v.max(0.0))
+    };
     Some(BeeSpec {
         count,
         model,
-        width: odf.f32("weldingbeamwidth").unwrap_or(0.0),
+        hardpoints: odf.raw("workerbeehardpoints").into_iter().flat_map(str::split_whitespace)
+            .map(|name| name.trim_matches('"')).filter(|name| !name.is_empty())
+            .map(str::to_owned).collect(),
+        sprite,
+        width: timing("weldingbeamwidth", 1.0),
+        takeoff: timing("timeuntiltakeoff", 2.0),
+        welding: timing("timewelding", 0.5),
+        closure: timing("timeuntilclosure", 2.0),
     })
 }
 
-/// One bee at one moment.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct BeePose {
+/// Presentation-only flight state. All deadlines are in `AnimClock::now` seconds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BeePhase {
+    Waiting,
+    Traveling,
+    Welding,
+    Returning,
+    Closing,
+    Done,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct BeeMotion {
+    pub phase: BeePhase,
     pub at: Vec3,
-    /// Unit vector of its motion.
-    pub fwd: Vec3,
-    /// The point of the hull it welds.
-    pub spot: Vec3,
+    pub edge: Vec3,
+    pub cycle: usize,
+    ever_left: bool,
+    blocked_on_edge: bool,
+    since: f64,
+    from: Vec3,
+    destination: Vec3,
 }
 
-/// Where a bee of `n` is at `now` seconds, round a structure at `center` of `radius`.
-pub fn bee_pose(site: EntityId, bee: u8, n: u8, center: Vec3, radius: f32, now: f32) -> BeePose {
-    let at = orbit(site, bee, n, center, radius, now);
-    let ahead = orbit(site, bee, n, center, radius, now + 0.1);
-    let fwd = (ahead - at).normalize_or(Vec3::X);
+impl BeeMotion {
+    pub fn new(now: f64, home: Vec3) -> Self {
+        Self {
+            phase: BeePhase::Waiting,
+            at: home,
+            edge: home,
+            cycle: 0,
+            ever_left: false,
+            blocked_on_edge: false,
+            since: now,
+            from: home,
+            destination: home,
+        }
+    }
 
-    // The spot: each cycle a new point on the hull, on the bee's side, blended in
-    // from the last one while the beam swings over.
-    let offset = rand(site, 0, bee, 9) * SPOT_SECONDS;
-    let t = (now + offset) / SPOT_SECONDS;
-    let cycle = t.floor();
-    let into = t - cycle;
-    let spot_of = |c: f32| {
-        let tc = c * SPOT_SECONDS - offset;
-        let side = (orbit(site, bee, n, center, radius, tc) - center).normalize_or(Vec3::Y);
-        let r = |s: u8| rand(site, 1 + c.max(0.0) as u64, bee, 10 + s);
-        let (y, a) = (r(0) * 2.0 - 1.0, r(1) * std::f32::consts::TAU);
-        let ring = (1.0 - y * y).sqrt();
-        let scatter = Vec3::new(ring * a.cos(), y, ring * a.sin());
-        (side + scatter * 0.8).normalize_or(side)
-    };
-    let swing = (into / SPOT_SWING).clamp(0.0, 1.0);
-    let swing = swing * swing * (3.0 - 2.0 * swing);
-    let dir = spot_of(cycle - 1.0)
-        .lerp(spot_of(cycle), swing)
-        .normalize_or(Vec3::Y);
-    let spot = center + dir * radius * SURFACE;
-    BeePose { at, fwd, spot }
-}
+    pub fn forward(&self) -> Vec3 {
+        (self.destination - self.at).normalize_or(Vec3::Z)
+    }
 
-fn orbit(site: EntityId, bee: u8, n: u8, center: Vec3, radius: f32, now: f32) -> Vec3 {
-    let r = |s: u8| rand(site, 0, bee, s);
-    let tau = std::f32::consts::TAU;
-    let dir = if r(2) < 0.5 { -1.0 } else { 1.0 };
-    let speed = dir * SPEED * (1.0 - SPEED_SPREAD + SPEED_SPREAD * 2.0 * r(1));
-    let phase = tau * bee as f32 / n.max(1) as f32 + r(3) * 0.6;
-    let theta = phase + speed * now;
-    let rad =
-        radius * (ORBIT + ORBIT_SPREAD * r(0)) * (1.0 + 0.12 * (now * 0.55 + r(4) * tau).sin());
-    let mut p = Vec3::new(theta.cos(), 0.0, theta.sin()) * rad;
-    // Tilt the orbit about the x axis so the bees do not all ride one plane.
-    p = Quat::from_rotation_x((r(5) - 0.5) * 1.3) * p;
-    p.y += radius * BOB * (now * (0.8 + r(6)) + r(7) * tau).sin();
-    // Flitting: a small quick wobble on top.
-    let w = now * 2.7 + r(8) * tau;
-    p += Vec3::new(w.sin(), (w * 1.3).cos(), (w * 0.7).sin()) * radius * JITTER;
-    center + p
+    /// Advance toward a pending chunk edge, or return from the actual last position.
+    pub fn update(
+        &mut self,
+        now: f64,
+        home: Vec3,
+        edges: &[Vec3],
+        bee: u8,
+        spec: &BeeSpec,
+        returning: bool,
+    ) {
+        const SPEED: f32 = 80.0;
+        const STANDOFF: f32 = 3.0;
+        if !now.is_finite() {
+            return;
+        }
+        if returning
+            && !matches!(
+                self.phase,
+                BeePhase::Returning | BeePhase::Closing | BeePhase::Done
+            )
+        {
+            self.phase = BeePhase::Returning;
+            self.from = self.at;
+            self.since = now;
+        }
+        if !returning && matches!(self.phase, BeePhase::Traveling | BeePhase::Welding) {
+            // The edge seam carries positions but no stable IDs. Treat small
+            // movement of an animated edge as the same target; a larger jump
+            // starts travel again with welding off.
+            let nearby = edges.iter().copied().min_by(|a, b| {
+                a.distance_squared(self.edge)
+                    .total_cmp(&b.distance_squared(self.edge))
+            });
+            if nearby.is_none() {
+                self.phase = BeePhase::Waiting;
+                self.blocked_on_edge = true;
+                return;
+            }
+            if let Some(next) =
+                nearby.filter(|next| next.distance_squared(self.edge) <= STANDOFF * STANDOFF)
+            {
+                self.edge = next;
+                if self.phase == BeePhase::Traveling {
+                    self.destination = next + (home - next).normalize_or(Vec3::Y) * STANDOFF;
+                }
+            } else {
+                self.edge = edges[(bee as usize + self.cycle) % edges.len()];
+                self.from = self.at;
+                self.destination = self.edge + (home - self.edge).normalize_or(Vec3::Y) * STANDOFF;
+                self.since = now;
+                self.phase = BeePhase::Traveling;
+                return;
+            }
+        }
+        // At most a few transitions in one frame; zero authored durations do not spin.
+        for _ in 0..6 {
+            match self.phase {
+                BeePhase::Waiting => {
+                    if !self.ever_left {
+                        self.at = home;
+                    }
+                    if now < self.since + f64::from(spec.takeoff) {
+                        break;
+                    }
+                    if edges.is_empty() { self.blocked_on_edge = true; break; }
+                    self.edge = edges[(bee as usize + self.cycle) % edges.len()];
+                    self.from = self.at;
+                    self.destination =
+                        self.edge + (home - self.edge).normalize_or(Vec3::Y) * STANDOFF;
+                    self.since = if self.blocked_on_edge { now } else { self.since + f64::from(spec.takeoff) };
+                    self.blocked_on_edge = false;
+                    self.phase = BeePhase::Traveling;
+                    self.ever_left = true;
+                }
+                BeePhase::Traveling => {
+                    let travel = f64::from(self.from.distance(self.destination) / SPEED);
+                    let fraction = if travel > 0.0 {
+                        ((now - self.since) / travel).clamp(0.0, 1.0) as f32
+                    } else {
+                        1.0
+                    };
+                    self.at = self.from.lerp(self.destination, fraction);
+                    if fraction < 1.0 {
+                        break;
+                    }
+                    self.since += travel;
+                    self.phase = BeePhase::Welding;
+                }
+                BeePhase::Welding => {
+                    if now < self.since + f64::from(spec.welding) {
+                        break;
+                    }
+                    self.since += f64::from(spec.welding);
+                    self.cycle += 1;
+                    self.from = self.at;
+                    self.edge = edges[(bee as usize + self.cycle) % edges.len()];
+                    self.destination =
+                        self.edge + (home - self.edge).normalize_or(Vec3::Y) * STANDOFF;
+                    self.phase = BeePhase::Traveling;
+                }
+                BeePhase::Returning => {
+                    self.destination = home;
+                    let travel = f64::from(self.from.distance(home) / SPEED);
+                    let fraction = if travel > 0.0 {
+                        ((now - self.since) / travel).clamp(0.0, 1.0) as f32
+                    } else {
+                        1.0
+                    };
+                    self.at = self.from.lerp(home, fraction);
+                    if fraction < 1.0 {
+                        break;
+                    }
+                    self.at = home;
+                    self.since += travel;
+                    self.phase = BeePhase::Closing;
+                }
+                BeePhase::Closing => {
+                    self.at = home;
+                    break;
+                }
+                BeePhase::Done => break,
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -175,33 +288,93 @@ mod tests {
     }
 
     #[test]
-    fn bees_move_around_the_site_and_stay_near_it() {
-        let (site, c, r) = (EntityId(7), Vec3::new(100.0, 0.0, -50.0), 40.0);
-        for bee in 0..6 {
-            let mut seen = Vec::new();
-            for i in 0..40 {
-                let p = bee_pose(site, bee, 6, c, r, i as f32 * 0.5);
-                let d = p.at.distance(c);
-                assert!(d > r * 0.6 && d < r * 2.0, "bee {bee} at {d}");
-                assert!(
-                    (p.spot.distance(c) - r * SURFACE).abs() < r * 0.01,
-                    "spot off the hull"
-                );
-                assert!((p.fwd.length() - 1.0).abs() < 1e-4);
-                seen.push(p);
-            }
-            let travelled: f32 = seen.windows(2).map(|w| w[0].at.distance(w[1].at)).sum();
-            assert!(travelled > r * 4.0, "bee {bee} went {travelled}");
-            assert!(
-                seen.windows(2)
-                    .any(|w| w[0].spot.distance(w[1].spot) > r * 0.1),
-                "beam never moved"
-            );
-        }
-        // Not all on one spot, and the same again on a replay.
-        let a = bee_pose(site, 0, 6, c, r, 3.0);
-        assert_ne!(a.at, bee_pose(site, 1, 6, c, r, 3.0).at);
-        assert_eq!(a, bee_pose(site, 0, 6, c, r, 3.0));
-        assert_ne!(a.at, bee_pose(EntityId(8), 0, 6, c, r, 3.0).at);
+    fn authored_hardpoints_sprite_and_timings_keep_zero_overrides() {
+        let spec = bee_spec(&odf("numberOfWorkerBees = 6\nworkerBeeName = \"bee\"\nworkerBeeHardpoints = \"bot1\" \"bot2\" \"bot3\" \"bot4\" \"bot5\" \"bot6\"\nweldingBeamSprite = \"weldbeam\"\nweldingBeamWidth = 0\ntimeUntilTakeoff = 0\ntimeWelding = 0\ntimeUntilClosure = 0\n")).unwrap();
+        assert_eq!(
+            spec.hardpoints,
+            ["bot1", "bot2", "bot3", "bot4", "bot5", "bot6"]
+        );
+        assert_eq!(spec.sprite.as_deref(), Some("weldbeam"));
+        assert_eq!(
+            (spec.width, spec.takeoff, spec.welding, spec.closure),
+            (0.0, 0.0, 0.0, 0.0)
+        );
+        let defaults = bee_spec(&odf("numberOfWorkerBees = 2\nworkerBeeName = \"bee\"\n")).unwrap();
+        assert_eq!(defaults.sprite.as_deref(), Some("phaser"));
+        assert_eq!(
+            (
+                defaults.width,
+                defaults.takeoff,
+                defaults.welding,
+                defaults.closure
+            ),
+            (1.0, 2.0, 0.5, 2.0)
+        );
+        let clamped = bee_spec(&odf("numberOfWorkerBees = 1\nworkerBeeName = \"bee\"\ntimeUntilTakeoff = -3\ntimeWelding = -1\ntimeUntilClosure = -2\n")).unwrap();
+        assert_eq!(
+            (clamped.takeoff, clamped.welding, clamped.closure),
+            (0.0, 0.0, 0.0)
+        );
     }
+
+    #[test]
+    fn phase_is_sim_timed_and_edge_changes_stop_welding() {
+        let spec = bee_spec(&odf("numberOfWorkerBees = 1\nworkerBeeName = \"bee\"\n")).unwrap();
+        let home = Vec3::ZERO;
+        let edge = Vec3::new(80.0, 0.0, 0.0);
+        let mut regular = BeeMotion::new(0.0, home);
+        let mut irregular = regular;
+        for now in [0.0, 1.0, 2.0, 2.5, 3.1] {
+            regular.update(now, home, &[edge], 0, &spec, false);
+        }
+        for now in [0.0, 0.17, 1.23, 2.25, 2.75, 3.1] {
+            irregular.update(now, home, &[edge], 0, &spec, false);
+        }
+        assert_eq!(regular.phase, BeePhase::Welding);
+        assert_eq!(irregular.phase, regular.phase);
+        assert_eq!(irregular.at, regular.at);
+        assert_eq!(regular.edge, edge);
+        let paused = regular.at;
+        regular.update(3.1, home, &[edge], 0, &spec, false);
+        assert_eq!(regular.at, paused);
+        let next = Vec3::new(0.0, 80.0, 0.0);
+        regular.update(3.2, home, &[next], 0, &spec, false);
+        assert_eq!(regular.phase, BeePhase::Traveling);
+        assert_eq!(regular.edge, next);
+        assert_eq!(regular.at, paused);
+        regular.update(3.3, home, &[], 0, &spec, false);
+        assert_eq!(regular.phase, BeePhase::Waiting);
+        assert_eq!(
+            regular.at, paused,
+            "missing edge must not snap the bee home"
+        );
+        regular.update(3.4, home, &[], 0, &spec, true);
+        assert_eq!(regular.phase, BeePhase::Returning);
+        assert_eq!(regular.at, paused);
+        regular.update(4.5, home, &[], 0, &spec, true);
+        assert_eq!(regular.phase, BeePhase::Closing);
+        assert_eq!(regular.at, home);
+    }
+
+    #[test]
+    fn late_or_reappearing_edges_start_travel_at_current_time() {
+        let spec = bee_spec(&odf("numberOfWorkerBees = 1\nworkerBeeName = \"bee\"\n")).unwrap();
+        let home = Vec3::ZERO;
+        let edge = Vec3::new(80.0, 0.0, 0.0);
+        let mut bee = BeeMotion::new(0.0, home);
+        bee.update(8.0, home, &[], 0, &spec, false);
+        assert_eq!(bee.phase, BeePhase::Waiting);
+        bee.update(8.0, home, &[edge], 0, &spec, false);
+        assert_eq!(bee.phase, BeePhase::Traveling);
+        assert_eq!(bee.at, home, "late geometry must not fast-forward flight");
+        bee.update(8.25, home, &[edge], 0, &spec, false);
+        let partway = bee.at;
+        assert!(partway.x > 0.0 && partway.x < edge.x);
+        bee.update(8.3, home, &[], 0, &spec, false);
+        assert_eq!(bee.at, partway);
+        bee.update(20.0, home, &[edge], 0, &spec, false);
+        assert_eq!(bee.phase, BeePhase::Traveling);
+        assert_eq!(bee.at, partway, "reappearing edge must not teleport bee");
+    }
+
 }
