@@ -44,6 +44,8 @@ pub struct RaceDef {
     pub slot: Option<i64>,
     /// `interfaceconfiguration` (`gui_federation.cfg`).
     pub interface: Option<String>,
+    /// Authored `interfaceSprites` GUI table, independent of the layout cfg.
+    pub interface_sprites: Option<String>,
     pub single_player_music: Option<String>,
     pub multiplayer_music: Option<String>,
     /// `standardunits1..`, ODF stems.
@@ -174,6 +176,7 @@ impl Races {
                         name,
                         slot,
                         interface: text("interfaceconfiguration"),
+                        interface_sprites: text("interfacesprites"),
                         single_player_music: text("singleplayermusic"),
                         multiplayer_music: text("multiplayermusic"),
                         standard_units: numbered(&o, "standardunits"),
@@ -459,6 +462,22 @@ mod tests {
         assert!(w.is_empty(), "{w:?}");
         r
     }
+    #[test]
+    fn interface_sprite_table_is_authored_and_inherited_independently() {
+        let (races, warnings) = Races::load_with(&mut loader(&[
+            ("races", "race0=child\nrace1=blank\nrace2=absent"),
+            ("base", "name=fx\ninterfaceConfiguration=layout.cfg\ninterfaceSprites=authored.spr"),
+            ("child", "#include \"base.odf\"\ninstantActionSlot=0"),
+            ("blank", "name=blank\ninterfaceSprites=\" \""),
+            ("absent", "name=absent\ninterfaceConfiguration=gui_wrong.cfg"),
+        ]));
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let child = races.get("child").unwrap();
+        assert_eq!(child.interface.as_deref(), Some("layout.cfg"));
+        assert_eq!(child.interface_sprites.as_deref(), Some("authored.spr"));
+        assert_eq!(races.get("blank").unwrap().interface_sprites, None);
+        assert_eq!(races.get("absent").unwrap().interface_sprites, None);
+    }
 
     #[test]
     fn reads_races_and_start_keys() {
@@ -468,6 +487,7 @@ mod tests {
         assert_eq!((f.stem.as_str(), f.slot), ("federation", Some(2)));
         assert_eq!(r.get("federation"), Some(f));
         assert_eq!(f.interface.as_deref(), Some("gui_federation.cfg"));
+        assert_eq!(f.interface_sprites, None);
         assert_eq!(f.multiplayer_music.as_deref(), Some("Federation.mp3"));
         assert_eq!(f.standard_units, ["fx_yard", "fx_effects", "fx_station"]);
         assert_eq!(f.minimal_units, ["fx_miner"]);

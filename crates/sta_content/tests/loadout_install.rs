@@ -163,6 +163,7 @@ fn a_start_unit_without_a_model_is_reported() {
         name: "fx".into(),
         slot: Some(1),
         interface: None,
+        interface_sprites: None,
         single_player_music: None,
         multiplayer_music: None,
         standard_units: vec!["fx_yard".into(), "fx_station".into()],

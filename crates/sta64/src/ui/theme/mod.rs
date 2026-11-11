@@ -23,6 +23,10 @@ use crate::app::GameSet;
 
 pub struct ThemePlugin;
 
+/// Artwork layers run after the shared widget background/state painter.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct WidgetPaint;
+
 impl Plugin for ThemePlugin {
     fn build(&self, app: &mut App) {
         if !app.is_plugin_added::<crate::ui::i18n::I18nPlugin>() {
@@ -38,7 +42,7 @@ impl Plugin for ThemePlugin {
             .add_observer(systems::on_press)
             .add_observer(systems::on_release)
             .add_observer(systems::on_click)
-            .add_systems(Update, (systems::drive_sliders, systems::paint_widgets, systems::fill_bars).chain().in_set(GameSet::Ui));
+            .add_systems(Update, (systems::drive_sliders, systems::paint_widgets.in_set(WidgetPaint), systems::fill_bars).chain().in_set(GameSet::Ui));
     }
 }
 

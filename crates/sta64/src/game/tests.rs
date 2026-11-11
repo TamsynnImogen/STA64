@@ -63,8 +63,8 @@ fn offered_player_keys_cannot_be_shadowed_by_an_npc_odf_stem() {
         if version != 0 { return None; }
         match name.trim_end_matches(".odf") {
             "races" => Some("numberofraces=2\nrace0=allowed\nrace1=fx".into()),
-            "allowed" => Some("name=fx\ninstantActionSlot=0\ninterfaceConfiguration=correct.cfg".into()),
-            "fx" => Some("name=npc\ninterfaceConfiguration=wrong.cfg".into()),
+            "allowed" => Some("name=fx\ninstantActionSlot=0\ninterfaceConfiguration=correct.cfg\ninterfaceSprites=authored.spr".into()),
+            "fx" => Some("name=npc\ninterfaceConfiguration=wrong.cfg\ninterfaceSprites=wrong.spr".into()),
             _ => None,
         }
     });
@@ -72,6 +72,37 @@ fn offered_player_keys_cannot_be_shadowed_by_an_npc_odf_stem() {
     let s = seats(&map, &wanted, &races, &db).unwrap();
     assert_eq!(s.local.name, "fx");
     assert_eq!(s.local.interface.as_deref(), Some("correct.cfg"));
+    assert_eq!(s.local.interface_sprites.as_deref(), Some("authored.spr"));
+}
+
+#[test]
+fn local_race_skin_resets_between_matches_and_does_not_follow_selection() {
+    use crate::ui::gui_sprites::GuiSkin;
+    let mut app = App::new();
+    app.init_resource::<GuiSkin>()
+        .insert_resource(crate::ui::hud::HudConfig::default())
+        .insert_resource(crate::sim_link::Selection::default())
+        .add_systems(Update, apply_race);
+    app.insert_resource(LocalRace {
+        name: "local".into(), interface: None,
+        interface_sprites: Some("authored.spr".into()), music: None,
+    });
+    app.update();
+    assert_eq!(app.world().resource::<GuiSkin>().table.as_deref(), Some("authored.spr"));
+    app.world_mut().resource_mut::<crate::sim_link::Selection>().0.push(sta_sim::EntityId(123));
+    app.update();
+    assert_eq!(app.world().resource::<GuiSkin>().table.as_deref(), Some("authored.spr"));
+    app.insert_resource(LocalRace {
+        name: "no_skin".into(), interface: None, interface_sprites: None, music: None,
+    });
+    app.update();
+    assert_eq!(app.world().resource::<GuiSkin>().table, None);
+    app.world_mut().resource_mut::<LocalRace>().interface_sprites = Some("second.spr".into());
+    app.update();
+    assert_eq!(app.world().resource::<GuiSkin>().table.as_deref(), Some("second.spr"));
+    app.world_mut().remove_resource::<LocalRace>();
+    app.update();
+    assert_eq!(app.world().resource::<GuiSkin>().table, None);
 }
 
 #[test]
