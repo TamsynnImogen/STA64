@@ -7,6 +7,10 @@ does not make a faction playable, and start-unit availability does not decide
 eligibility. Missing/invalid slot fields omit a modern race; malformed explicit
 values produce a diagnostic. Standard layered includes and child-mod overrides
 apply before these rules.
+Canonical numeric `raceN` references are read in numeric order, within the
+resolved `numberOfRaces` when present. Lowering that count in a child mod
+excludes inherited trailing references. Without a count, the defined references
+are used; the list is not truncated at 64. Malformed explicit counts are diagnosed.
 
 The setup picker and direct skirmish launch use the same `skirmish_races` result.
 A loaded catalogue remains authoritative even if empty, broken, or without any

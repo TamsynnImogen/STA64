@@ -166,3 +166,40 @@ fn playable_keys_keep_their_own_loadout_when_an_npc_stem_collides() {
     assert_eq!(start.source, "race chosen");
     assert_eq!(start.stock[0], Fixed::from_int(7));
 }
+
+#[test]
+fn reduced_declared_count_ignores_inherited_trailing_race_entries() {
+    let (races, warnings) = load(
+        Profile::Sta1Classic,
+        &[
+            ("races", "#include \"parent_list\"\nnumberOfRaces=2"),
+            ("parent_list", "numberOfRaces=3\nrace0=first\nrace1=second\nrace2=tail"),
+            (
+                "first",
+                "name=first\ninstantActionSlot=1\ninterfaceConfiguration=first.cfg",
+            ),
+            (
+                "second",
+                "name=second\ninstantActionSlot=0\ninterfaceConfiguration=second.cfg",
+            ),
+            ("tail", "name=tail"),
+        ],
+    );
+    assert!(warnings.is_empty());
+    assert_eq!(skirmish_races(&races, &crate::fake::db()), ["second", "first"]);
+    assert!(races.get("tail").is_none());
+}
+
+#[test]
+fn sparse_declared_references_are_not_truncated_at_sixty_four() {
+    let (races, warnings) = load(
+        Profile::Native,
+        &[
+            ("races", "numberOfRaces=66\nrace0=first\nrace65=last"),
+            ("first", "name=first\ninstantActionSlot=2"),
+            ("last", "name=last\ninstantActionSlot=0"),
+        ],
+    );
+    assert!(warnings.is_empty());
+    assert_eq!(skirmish_races(&races, &crate::fake::db()), ["last", "first"]);
+}

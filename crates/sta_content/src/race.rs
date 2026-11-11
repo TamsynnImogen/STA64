@@ -83,8 +83,8 @@ fn numbered(odf: &sta_odf::Odf, prefix: &str) -> Vec<String> {
         .collect()
 }
 
-fn instant_action_slot(odf: &sta_odf::Odf) -> Option<i64> {
-    let token = odf.str("instantactionslot")?.split_whitespace().next()?
+fn nonnegative_integer(odf: &sta_odf::Odf, key: &str) -> Option<i64> {
+    let token = odf.str(key)?.split_whitespace().next()?
         .trim_end_matches(';').trim_end_matches(['f', 'F']).trim_end_matches(';');
     token.parse::<i64>().ok().or_else(|| {
         let value = token.parse::<f64>().ok()?;
@@ -125,13 +125,25 @@ impl Races {
                 return (Races { races: Vec::new(), authoritative }, warnings);
             }
         };
+        let declared = nonnegative_integer(&list, "numberofraces");
+        if list.raw("numberofraces").is_some() && declared.is_none() {
+            warnings.push(Warning::new("races.odf", "numberOfRaces must be a nonnegative integer"));
+            return (Races { races: Vec::new(), authoritative }, warnings);
+        }
+        // Walk authored keys rather than an arbitrary fixed cap or a potentially
+        // enormous declared count. Inherited trailing keys are inactive when a
+        // child lowers numberOfRaces.
+        let mut entries: Vec<u64> = list.keys().filter_map(|key| {
+            let key = key.to_ascii_lowercase();
+            let index = key.strip_prefix("race")?.parse::<u64>().ok()?;
+            (key == format!("race{index}") && declared.is_none_or(|count| index < count as u64))
+                .then_some(index)
+        }).collect();
+        entries.sort_unstable();
         let mut races = Vec::new();
         let mut interfaces = Vec::new();
-        for i in 0..64 {
+        for i in entries {
             let Some(file) = list.str(&format!("race{i}")) else {
-                if i >= list.i64("numberofraces").unwrap_or(0) {
-                    break;
-                }
                 continue;
             };
             let s = stem(file);
@@ -152,7 +164,7 @@ impl Races {
                             .map(str::to_owned)
                     };
                     let stock = |k: &str| o.i64(&format!("normal{k}")).unwrap_or(0).max(0);
-                    let slot = instant_action_slot(&o);
+                    let slot = nonnegative_integer(&o, "instantactionslot");
                     if o.raw("instantactionslot").is_some() && slot.is_none() {
                         warnings.push(Warning::new(format!("{s}.odf"), "instantActionSlot must be a nonnegative integer"));
                     }
@@ -181,7 +193,7 @@ impl Races {
             // A2FOExtensions config.rs::a2fo_rs_config_race: preserve a fully
             // valid explicit table; otherwise derive A1's legacy menu from
             // interfaceConfiguration presence, in race declaration order.
-            let count = list.i64("numberofraces").unwrap_or(races.len() as i64).max(0);
+            let count = declared.unwrap_or(races.len() as i64);
             let mut occupied = std::collections::BTreeSet::new();
             let valid = races.iter().all(|r| r.slot.is_some_and(|s| s < count && occupied.insert(s)));
             if !valid {
