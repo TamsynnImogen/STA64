@@ -482,6 +482,8 @@ seam rather than writes.
 
 | CON-28 | Pure A1 MDF count and precise Camera_i start resolver; pre-code contract [A1_START_LOCATIONS.md](A1_START_LOCATIONS.md) | sta_bzn/src/a1/starts.rs, narrow a1.rs exports, dedicated tests and contract/support docs | CON-26 | Synthetic canonical/malformed MDF/path fixtures; pinned GOG new-game placement and read-only 49 A1 maps/28 MDFs | Subsequent selected-file-aware content conversion seam | Explicit checked count subset, exact first-path/first-point XYZ without grid inversion or partial results, original corpus and scoped/consumer/Clippy/workspace/Android library checks; no client/gameplay claim | S | Lead |
 
+| CON-30 | Resolved planet role metadata: Background/Producer profile-class defaults, explicit STA64_planetRole ODF override, known planet_obj admission and effective hashed identity; pre-code [PLANET_ROLES.md](PLANET_ROLES.md) | new sta_content/src/planet.rs; UnitDef field/constructor and lib export; odf.rs class entry/role assignment; db.rs conditional role hash; dedicated tests/planet_roles.rs; owning doc | CON-03, CON-05 (merged) | Synthetic resolved/layered ODFs, Native fake identity, genuine v8 continuation and read-only installed content | Subsequent shared background lifecycle/mining/ownership and producer-planet state | All profile/class/override/include/invalid/exclusion/admission/hash cases pass; Native fixtures unchanged; shared/consumer/Clippy/workspace/unchanged-lock checks; no Core/default-number/save-version change or premature planet support claim | S | Lead |
+
 ### Simulation (SIM)
 
 | ID | Package | Owns | Needs | Against | Unlocks | Done when | Size | Model |
