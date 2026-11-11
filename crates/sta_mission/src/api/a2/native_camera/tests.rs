@@ -245,7 +245,7 @@ fn invalid_arity_types_range_strings_and_handles_queue_nothing() {
         format!("A2.CineractiveShot({}, {})", first.0, "'missing'"),
         format!("A2.CineractiveShot('p',-1,{})", first.0),
         format!("A2.CineractiveShot('p',2147483648,{})", first.0),
-        format!("A2.CineractiveShot('p',0,999999)"),
+        "A2.CineractiveShot('p',0,999999)".to_owned(),
         format!("A2.CineractiveShot('p',string.char(0),{})", first.0),
         format!("A2.CineractiveShot(string.char(0),0,{})", first.0),
         format!("A2.CineractiveShot(string.char(255),0,{})", first.0),
