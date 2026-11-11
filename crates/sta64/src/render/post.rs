@@ -146,6 +146,10 @@ fn cycle_preset(keys: Option<Res<ButtonInput<KeyCode>>>, mut fx: ResMut<PostFx>)
 type NotBackground = (With<Camera3d>, Without<BackgroundCamera>);
 
 /// Put the settings on the cameras: when they change, and on new cameras.
+///
+/// The commands are the `try_` kind: a camera can be despawned by another
+/// system's commands in the same frame (the menu camera when a match
+/// launches), and a plain `insert` on it would panic.
 pub fn apply(
     mut commands: Commands,
     fx: Res<PostFx>,
@@ -159,48 +163,48 @@ pub fn apply(
     for e in &cams {
         let mut cam = commands.entity(e);
         if fx.bloom {
-            cam.insert(Bloom { intensity: fx.bloom_intensity, ..Bloom::NATURAL });
+            cam.try_insert(Bloom { intensity: fx.bloom_intensity, ..Bloom::NATURAL });
         } else {
-            cam.remove::<Bloom>();
+            cam.try_remove::<Bloom>();
         }
         if fx.auto_exposure {
-            cam.insert(AutoExposure::default());
+            cam.try_insert(AutoExposure::default());
         } else {
-            cam.remove::<AutoExposure>();
+            cam.try_remove::<AutoExposure>();
         }
         // Bloom and auto-exposure bring `Hdr` along; take it back with them.
         if !fx.bloom && !fx.auto_exposure {
-            cam.remove::<Hdr>();
+            cam.try_remove::<Hdr>();
         }
-        cam.insert(fx.tonemapping.unwrap_or_default());
+        cam.try_insert(fx.tonemapping.unwrap_or_default());
         if fx.vignette {
-            cam.insert(Vignette { intensity: fx.vignette_intensity, ..default() });
+            cam.try_insert(Vignette { intensity: fx.vignette_intensity, ..default() });
         } else {
-            cam.remove::<Vignette>();
+            cam.try_remove::<Vignette>();
         }
         if fx.chromatic {
-            cam.insert(ChromaticAberration { intensity: fx.chromatic_intensity, ..default() });
+            cam.try_insert(ChromaticAberration { intensity: fx.chromatic_intensity, ..default() });
         } else {
-            cam.remove::<ChromaticAberration>();
+            cam.try_remove::<ChromaticAberration>();
         }
         match fx.aa {
             Aa::Off => {
-                cam.remove::<(Fxaa, Smaa)>();
+                cam.try_remove::<(Fxaa, Smaa)>();
             }
             Aa::Fxaa => {
-                cam.remove::<Smaa>().insert(Fxaa::default());
+                cam.try_remove::<Smaa>().try_insert(Fxaa::default());
             }
             Aa::Smaa => {
-                cam.remove::<Fxaa>().insert(Smaa::default());
+                cam.try_remove::<Fxaa>().try_insert(Smaa::default());
             }
         }
         // FXAA/SMAA replace MSAA; give it back afterwards.
         if fx.aa != Aa::Off {
             if !marked.contains(e) {
-                cam.insert((PostFxMsaa, Msaa::Off));
+                cam.try_insert((PostFxMsaa, Msaa::Off));
             }
         } else if marked.contains(e) {
-            cam.remove::<PostFxMsaa>().insert(Msaa::default());
+            cam.try_remove::<PostFxMsaa>().try_insert(Msaa::default());
         }
     }
 }
@@ -211,7 +215,8 @@ mod tests {
 
     fn app(fx: PostFx) -> (App, Entity, Entity) {
         let mut app = App::new();
-        app.add_plugins(PostFxPlugin { initial: fx });
+        // Like the game: a failed command panics instead of logging.
+        app.set_error_handler(bevy::ecs::error::panic).add_plugins(PostFxPlugin { initial: fx });
         let main = app.world_mut().spawn(Camera3d::default()).id();
         let bg = app.world_mut().spawn((Camera3d::default(), BackgroundCamera)).id();
         app.update();
@@ -263,6 +268,23 @@ mod tests {
         let late = app.world_mut().spawn(Camera3d::default()).id();
         app.update();
         assert!(has::<Bloom>(&app, late));
+    }
+
+    #[test]
+    fn camera_despawned_in_the_same_frame_does_not_panic() {
+        fn despawn_cams(mut commands: Commands, cams: Query<Entity, NotBackground>) {
+            for e in &cams {
+                commands.entity(e).despawn();
+            }
+        }
+        let (mut app, main, _) = app(PostFx::cinematic());
+        // No sync point between them: both command queues apply at the end
+        // of the frame, the despawn first, as when a match launches.
+        app.add_systems(Update, despawn_cams.before_ignore_deferred(apply));
+        // A changed resource makes `apply` queue commands for every camera.
+        app.world_mut().resource_mut::<PostFx>().aa = Aa::Fxaa;
+        app.update();
+        assert!(app.world().get_entity(main).is_err());
     }
 
     #[test]
