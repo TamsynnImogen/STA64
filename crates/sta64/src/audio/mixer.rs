@@ -77,6 +77,10 @@ pub trait AudioBackend {
     fn name(&self) -> &'static str;
     /// Play `sound` on `bus`; `at` is a map-space position, `None` for non-positional.
     fn play(&mut self, sound: &Sound, bus: Bus, at: Option<[f32; 3]>);
+    /// Whether a bus still has audible playback (including an in-progress stop).
+    fn bus_busy(&self, bus: Bus) -> bool;
+    /// Advance a headless backend's playback clock; real devices use their own clock.
+    fn advance(&mut self, _seconds: f64) {}
     fn set_bus_volume(&mut self, bus: MixBus, volume: f32);
     fn stop_all(&mut self);
     /// Stop what is playing on one bus (music switches tracks without cutting sfx).
@@ -150,6 +154,10 @@ impl AudioBackend for KiraAudio {
         }
     }
 
+    fn bus_busy(&self, bus: Bus) -> bool {
+        self.playing.iter().any(|(b, handle)| *b == bus && handle.state() != PlaybackState::Stopped)
+    }
+
     fn set_bus_volume(&mut self, bus: MixBus, volume: f32) {
         let v = db(volume);
         let t = Tween::default();
@@ -166,7 +174,9 @@ impl AudioBackend for KiraAudio {
         for (_, h) in &mut self.playing {
             h.stop(Tween::default());
         }
-        self.playing.clear();
+        // A stop can fade asynchronously. Retain voice handles until Kira
+        // reports Stopped so a replacement cannot overlap the fading line.
+        self.playing.retain(|(bus, h)| *bus == Bus::Voice && h.state() != PlaybackState::Stopped);
     }
 
     fn stop_bus(&mut self, bus: Bus) {
@@ -174,7 +184,7 @@ impl AudioBackend for KiraAudio {
             if *b == bus {
                 h.stop(Tween::default());
             }
-            *b != bus
+            *b != bus || (bus == Bus::Voice && h.state() != PlaybackState::Stopped)
         });
     }
 
