@@ -36,6 +36,13 @@ retains A1 information not yet consumed by the engine:
   `resized: bool`, `declared_object_count: usize`, `mission_title: [u8; 64]`.
 - `object_refs: Vec<u32>` in placement order. These are serialized reference
   tokens, never host addresses to dereference.
+- `initial_positions: Vec<[f32; 3]>` in placement order, after any resize. The
+  native factory consumes the separate prefix position before loading and
+  applying the final matrix. SIM-22 research establishes that this ordering
+  can affect confinement initialization. All 17,595 original placements have
+  identical prefix/matrix positions, but authored maps must retain both rather
+  than lose this distinction. This addition is recorded before implementing
+  the retained-position field; it does not enable confinement here.
 - `paths: Vec<AiPath>`: `reference: u32`, original `label: String`, ordered
   `points: Vec<[f32; 3]>`, raw `path_type: i32`, `asteroid_belt_speed: f32`.
 - `areas: Vec<AreaOfInterest>`: `object_ref: u32`, `team: i32`,
