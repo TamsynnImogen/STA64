@@ -278,6 +278,9 @@ pub struct MapDef {
 }                                                    //  planets, lights, ambient
 impl MapDef {
     pub fn from_bzn(m: &sta_bzn::Map, db: &ContentDb) -> (MapDef, Vec<Warning>);
+    // Selected VFS stem relative to bzn/, without .bzn; additive named context.
+    pub fn convert_bzn_named_in(m: &sta_bzn::Map, selected_stem: &str,
+        db: &ContentDb, vfs: &sta_vfs::Vfs, index: &OdfIndex) -> Conversion;
     pub fn empty() -> MapDef;                        // the bench's built-in empty map
 }
 ```
@@ -287,6 +290,9 @@ impl MapDef {
 - The sim spawns from `objects`, `starts` and `regions` only; `scenery`
   never enters the sim or the digest.
 - JSON5 maps (native format) deserialize into the same type.
+- Named conversion carries the selected source identity before conversion;
+  the A1 MDF adapter and unchanged old APIs follow the
+  [selected-map seam contract](SELECTED_MAP_CONVERSION.md).
 
 ### S7. Game setup and controllers — `sta_sim::setup`
 
