@@ -1,4 +1,17 @@
-# Armada 1 BZN support: recognition before import
+# Armada 1 BZN support
+
+## Current scope
+
+CON-26 adds the known binary map body to the shared `Map` reader: metadata,
+count-checked placements, mission descriptors and retained AOI/AiPath data.
+See [the import contract and checks](A1_BZN_IMPORT.md). A1 text bodies,
+saved-game state, multiplayer start integration and runtime acceptance remain
+pending. Named paths and AOIs are retained data, not enabled gameplay.
+
+The original flat A1 install is not yet a supported desktop launch root:
+`--install-root` currently requires `Data/`. Headless format/content tests can
+mount it directly. Do not move original game files to work around this;
+shared mounting and MDF/precise-path starts need separate integration work.
 
 ## Confirmed behaviour before CON-25
 
@@ -60,11 +73,12 @@ Run scoped/consumer tests, strict Clippy, workspace checking and Android ARM64
 library checking. The library check is not an executable, APK or runtime test.
 Never commit original map bytes or modify the installed files.
 
-## Implemented inspection and validation
+## CON-25 inspection and validation (historical stage)
 
-`sta_bzn::a1::inspect_header(&bytes)` now returns the lossless front matter.
-`sta_bzn::parse(&bytes)` returns `UnsupportedArmada1Import { version }` for
-identified, valid A1 headers, including text-body headers. Header errors use
+`sta_bzn::a1::inspect_header(&bytes)` returns the lossless front matter.
+At CON-25, `sta_bzn::parse(&bytes)` returned `UnsupportedArmada1Import { version }`
+for identified valid A1 headers, including text-body headers. CON-26 supersedes
+that result for supported binary map bodies. Header errors still use
 the separate `a1::HeaderError` type. The existing map browser displays parser
 errors through its current error path; skirmish map discovery skips unsupported
 maps. No GUI/runtime acceptance is claimed.
@@ -88,16 +102,18 @@ the detector now matches the full field token and a regression checks A2
 text/binary behaviour with `saveGameDescription` and `binarySaveMode` fields.
 Follow-up source review found no confirmed defect.
 
-## Next import milestone
+## Remaining integration
 
-Before creating `Map` values from A1, validate typed metadata and per-record
-type flags, object boundaries and transforms, labels/teams, mission data,
-lighting/backgrounds and bounds against original GOG/native and A2FO evidence.
+CON-26 validates known typed metadata, the type byte, placement prefixes,
+transforms, labels/teams, mission data and bounds against original GOG/native
+and A2FO evidence. Native class payload between placements is not a saved-state
+importer; binary per-object light colours also need further work.
 Companion MDF grid starts require an explicit conversion into STA64's neutral
-slot and player-slot conventions. A nearby transform or copied A2 template
-does not establish those meanings. Do not silently substitute defaults for
+slot and player-slot conventions, preserving precise Camera_i path positions.
+A nearby transform or copied A2 template does not establish those meanings.
+Do not silently substitute defaults for
 unknown legacy fields or report a structurally scanned map as fully playable.
 
 This bounded correction adds no release dependency or completion date. The
-December 2026 desktop alpha remains the immediate priority. Full A1 map import
+December 2026 desktop alpha remains the immediate priority. Full A1 gameplay integration
 and runtime acceptance are still pending.

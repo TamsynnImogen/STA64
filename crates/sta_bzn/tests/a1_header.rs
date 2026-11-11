@@ -23,10 +23,7 @@ fn lossless_header_and_exact_metadata_offset_for_each_known_version() {
             assert!(h.binary_save);
             assert_eq!(h.metadata_offset, offset);
             assert_eq!(&data[h.metadata_offset..], b"\r\n\0\xff");
-            assert_eq!(
-                sta_bzn::parse(&data),
-                Err(BznError::UnsupportedArmada1Import { version })
-            );
+            assert!(matches!(sta_bzn::parse(&data), Err(BznError::Truncated(_))));
         }
     }
 }
@@ -130,7 +127,7 @@ fn a2_fields_with_similar_names_keep_the_existing_dispatch() {
 
 #[test]
 #[ignore = "requires STA64_TEST_A1_BZN_DIR pointing at user-owned original A1 maps"]
-fn installed_a1_maps_have_explicit_unsupported_results() {
+fn installed_a1_headers_have_exact_metadata_offsets() {
     let root = std::env::var_os("STA64_TEST_A1_BZN_DIR").expect("set STA64_TEST_A1_BZN_DIR");
     let mut count = 0;
     for entry in std::fs::read_dir(root).unwrap() {
@@ -142,14 +139,8 @@ fn installed_a1_maps_have_explicit_unsupported_results() {
         let h = inspect_header(&bytes).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         assert!(h.binary_save, "{}", path.display());
         assert!(h.metadata_offset < bytes.len());
-        assert_eq!(
-            sta_bzn::parse(&bytes),
-            Err(BznError::UnsupportedArmada1Import { version: h.version }),
-            "{}",
-            path.display()
-        );
         count += 1;
     }
     assert!(count > 0, "no A1 maps found");
-    eprintln!("A1 headers inspected: {count}; explicitly unsupported imports: {count}; no map-body support claimed");
+    eprintln!("A1 headers inspected: {count}; body/corpus assertions are in a1_body");
 }

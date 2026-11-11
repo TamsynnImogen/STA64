@@ -2,7 +2,7 @@
 
 This contract precedes implementation. CON-25 (#294) recognizes front matter;
 this package adds the known binary **map** body, using the same shared `Map`
-as A2 and SOL. Text A1 bodies and saved-game state remain explicitly unsupported.
+as the implemented A2 parser. Text A1 bodies and saved-game state remain explicitly unsupported.
 No engine gameplay, content hashes, native data files or dependencies change.
 
 ## Evidence and limits
@@ -20,14 +20,15 @@ the seventh prefix record, and the metadata prefix had one common shape. All
 34,695 objects. Nonzero AOIs and resizing therefore need synthetic controls in
 addition to the native static evidence; they are not corpus/runtime proof.
 
-The native binary writer initializes only the type byte of its four-byte tag
-slot; its binary readers compare that byte and the separate payload length.
+An inspected native binary field writer initializes only the type byte of its
+four-byte tag slot; inspected readers compare that byte and the separate payload length.
 Ignore the upper 24 bits for A1 only. They are not a stable field-name hash.
 Use CON-25's exact metadata offset, not the reference's opaque 145-byte skip.
 
 ## Shared output and retained source data
 
-Keep existing A2/text/SOL parsing unchanged. Add one default-None field,
+Keep existing A2 binary/text parsing unchanged; SOL is planned, not implemented
+in this checkout, and remains outside this package. Add one default-None field,
 `Map.a1: Option<a1::MapData>`, rather than another simulation/content model.
 The generic fields retain metadata, placements and scenery. The optional data
 retains A1 information not yet consumed by the engine:
@@ -70,12 +71,15 @@ After the textual header:
 4. Ambient RGB: three floats; BackgroundArt text100; techTreeFilename text128;
    race text128; declared object count int(4,4).
 
-Object placements have a strict seven-record prefix: PrjID(7,variable),
+Object placements have a strict seven-record prefix: PrjID(7,8),
 EntityID(4,4), pos(9,12), team(4,4), label(2,40), obj_addr(8,4),
 transform(11,48). The native writer names these fields. Scan **framed records**
 only, starting at the declared object list; retain original order and require
 exact agreement with the count. Preserve the serialized reference token.
 Native class payload between prefixes is not imported as simulation state.
+The exact PrjID width comes from the original GameObject reader's eight-byte
+argument and its exact-size check. The reference/A2FO signature allowance of
+variable-width names is too permissive here; all 17,595 originals use eight bytes.
 
 Require exactly one supported mission block after the object list:
 class-name text40 (EmptyMission or Inst4XMission), reference(8,4), scriptName
@@ -136,3 +140,34 @@ changes. A bounded worker may own only `tests/a1_body.rs`; independent review
 follows the frozen implementation. No source game bytes enter test fixtures.
 This package adds no release dependency or completion date; the December 2026
 desktop alpha remains the immediate priority.
+
+## Implementation and executed checks
+
+The shared parser now produces nonempty A1 `Map` values and optional source
+data under the contract above. Twenty BZN tests passed with the original
+corpus enabled: 49 A1 maps with 17,595 placements and exact declared-count
+agreement; 72 A2 maps with 34,695 objects and zero count mismatches. Synthetic
+controls cover nonzero AOIs and resize; the original corpus has neither.
+An additional aligned seven-byte PrjID case checks the original native
+eight-byte width rather than relying on an accidental framing failure.
+
+The existing content and mission library suites reported 90 and 122 passes.
+The real A1 content-conversion test converted all 49 maps and accounted for
+every object: 2,176 placed actors, 15,028 regions, 106 lights, 126 uncarried
+props and 159 skipped objects. It reported 59 existing background-prop/wormhole
+warnings, no unrecognized ODF warnings, and zero starts (not implemented here).
+The A2 conversion control converted all 72 maps, including 35 multiplayer maps
+with starts and no conversion problems. These tests do not prove rendering,
+native game rules, AOI/path gameplay or campaign completion.
+
+Strict sta_bzn Clippy, workspace all-targets checking and the Android ARM64
+sta_bzn library check passed. The offline workspace lock refresh changed zero
+packages. No APK or device test was performed for this change. Independent
+source review, including the final native-width correction, found no confirmed
+defect. Original-map hashes and static/native captures are kept privately;
+original map bytes are not test fixtures in this repository.
+
+The current desktop `--install-root` path still requires a child `Data/`.
+The headless conversion test mounts the bare original A1 folder directly via
+the existing VFS. Client mounting and MDF/Camera_i start selection remain
+separate follow-ups, with no suggestion to move or rewrite the original data.
