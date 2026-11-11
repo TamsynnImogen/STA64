@@ -268,6 +268,9 @@ A2_SIGNATURES = {
     "char const* GetOriginalRace(int)": "A2.GetOriginalRace",
     "void ObjectivesDisplay_Set_Visibility(bool)": "A2.ObjectivesDisplay_Set_Visibility",
     "void ObjectivesDisplaySetObjectiveComplete(int, bool)": "A2.ObjectivesDisplaySetObjectiveComplete",
+    "void SetForceOntoMap(int, bool)": "A2.SetForceOntoMap",
+    "void SetRealTeam(int, int)": "A2.SetRealTeam",
+    "void ObjectivesDisplay_Set_Text_From_File(char*, bool)": "A2.ObjectivesDisplay_Set_Text_From_File",
 }
 
 

@@ -64,11 +64,38 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
             Ok(())
         })?,
     )?;
+    let c = ctx.clone();
+    table.set(
+        "ObjectivesDisplay_Set_Text_From_File",
+        lua.create_function(move |_, args: MultiValue| {
+            if args.len() != 2 {
+                return Err(mlua::Error::runtime(
+                    "A2.ObjectivesDisplay_Set_Text_From_File requires exactly two arguments",
+                ));
+            }
+            let Value::String(path) = &args[0] else {
+                return Err(mlua::Error::runtime(
+                    "A2.ObjectivesDisplay_Set_Text_From_File requires a UTF-8 path string",
+                ));
+            };
+            let Value::Boolean(reset_completed) = &args[1] else {
+                return Err(mlua::Error::runtime(
+                    "A2.ObjectivesDisplay_Set_Text_From_File requires a boolean resetCompleted value",
+                ));
+            };
+            let path = path.to_str()?;
+            crate::api::objectives::load_with_completion(&c, path.as_ref(), *reset_completed)
+        })?,
+    )?;
     Ok(())
 }
 
 #[cfg(test)]
 mod completion_tests;
+
+#[cfg(test)]
+#[path = "objectives/file_tests.rs"]
+mod file_tests;
 
 #[cfg(test)]
 mod tests {

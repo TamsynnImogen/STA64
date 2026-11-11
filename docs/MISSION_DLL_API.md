@@ -15,12 +15,12 @@ user's own executables each time, and none are recorded here.
 | engine API size | 371 `ScriptInterface` methods | (imports only) |
 | distinct calls used | 138 | 213 |
 | call sites | 11708 | — |
-| A2 DLL-shaped callable | 24 | — |
-| missing A2 callable signatures | 108 | — |
+| A2 DLL-shaped callable | 27 | — |
+| missing A2 callable signatures | 105 | — |
 | MMM job-equivalent, not A2-shaped | 0 | — |
 | bound in STA64's Lua today | — | 6 |
 | in MMM's API, not yet bound | 23 | 27 |
-| no Lua equivalent (STA64 extension needed) | 85 | 144 |
+| no Lua equivalent (STA64 extension needed) | 82 | 144 |
 | script-state plumbing (n/a in Lua) | 6 | 36 |
 
 - **bound**: an existing `sta_mission` binding does the same job.
@@ -82,7 +82,7 @@ user's own executables each time, and none are recorded here.
 | `void RemoveFromAdLog(int)` | 8 | 115 | new |  |
 | `bool IsAudioMessageDone(int)` | 2 | 9 | new |  |
 | `void MinimapMessage(char *, int, float, int)` | 2 | 4 | new |  |
-| `void ObjectivesDisplay_Set_Text_From_File(char *, bool)` | 2 | 6 | new |  |
+| `void ObjectivesDisplay_Set_Text_From_File(char *, bool)` | 2 | 6 | A2 DLL-shaped | `A2.ObjectivesDisplay_Set_Text_From_File` |
 | `int ShowSubtitle(int, int, char const *, bool)` | 1 | 2 | new |  |
 | `int ShowTitle(int, int, char const *, bool)` | 1 | 1 | new |  |
 | `void ObjectivesDisplaySetObjectiveComplete(int, bool)` | 1 | 4 | A2 DLL-shaped | `A2.ObjectivesDisplaySetObjectiveComplete` |
@@ -137,7 +137,7 @@ user's own executables each time, and none are recorded here.
 
 | call | scripts | call sites | status | Lua name |
 |---|---:|---:|:-:|---|
-| `void SetRealTeam(int, int)` | 13 | 75 | new |  |
+| `void SetRealTeam(int, int)` | 13 | 75 | A2 DLL-shaped | `A2.SetRealTeam` |
 | `void SetPerceivedTeam(int, int)` | 12 | 73 | new |  |
 | `int GetRealTeam(int)` | 5 | 9 | A2 DLL-shaped | `A2.GetRealTeam` |
 | `void SetRace(int, char const *)` | 2 | 2 | new |  |
@@ -213,7 +213,7 @@ user's own executables each time, and none are recorded here.
 | `void AddTransporterEffect(int)` | 3 | 5 | new |  |
 | `void CraftCanRecrew(int, bool)` | 3 | 4 | new |  |
 | `void PointAt(int, int)` | 3 | 13 | MMM | `pointAt` |
-| `void SetForceOntoMap(int, bool)` | 3 | 91 | new |  |
+| `void SetForceOntoMap(int, bool)` | 3 | 91 | A2 DLL-shaped | `A2.SetForceOntoMap` |
 | `void SetPlanetCivPop(int, int)` | 3 | 3 | new |  |
 | `bool IsCompromised(int, int)` | 2 | 14 | new |  |
 | `bool DoesNotExist(int)` | 1 | 1 | A2 DLL-shaped | `A2.DoesNotExist` |

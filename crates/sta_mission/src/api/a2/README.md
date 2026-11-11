@@ -119,13 +119,49 @@ the next controller tick supplies a refreshed view. Queuing or applying
 sorts commands by player and sequence, so edits and owner orders need not
 apply in the order of interleaved Lua calls.
 
-`SetRealTeam` is deliberately absent: although `Edit::Team` is in the
-command enum, the simulation currently rejects it. Ownership transfer
-needs an implementation that handles existing orders, build queues and
-other owner-dependent state before this binding can be offered. Unknown
+`A2.SetRealTeam(id, team)` takes exactly two unsigned integral numbers and
+queues the merged shared SCRIPT Team operation. The configured Slots mode
+accepts slots 0..7 or neutral 253; ArmadaTeams accepts 1..8 or neutral 0.
+Reserved/malformed destinations and absent/dying handles raise Lua errors
+without queuing. Core remains authoritative for configured/defeated seats,
+supported targets, construction/cargo cleanup and capture-loss timing. Reads
+remain on the old snapshot until the host advances; no mission-side ownership
+algorithm or immediate cached-owner write is added. Direct unfinished-child
+transfer remains unsupported in Core. Unknown
 `A2` names return nil rather than implying a completed binding via a stub.
 The inventory distinguishes these exact callable signatures from older
 MMM job-equivalence mappings; neither classification proves native parity.
+
+`A2.SetForceOntoMap(id, enabled)` takes exactly an unsigned integral live
+handle and strict Boolean, then queues the shared SCRIPT ForceOntoMap edit.
+`Entity.forceOntoMap = enabled` uses the same operation, including deferred
+pending-spawn actions. Pending IDs are resolved from actual spawn receipts;
+failed spawns retain existing diagnostics and actor-local deferred actions retain
+dispatch order. Core still sorts SCRIPT and owner commands by player/sequence;
+their application need not follow interleaved Lua call order. Await the next
+host view when an owner order must observe a script edit.
+Core decides capability, map geometry and entry/rearm behaviour even
+for false/same-value writes. There is no Boolean getter: the current WorldView
+does not carry the flag, and the bridge must not guess its value.
+
+These operations and the existing Entity.player write track the SCRIPT
+sequence only when commands are drained to the host. On the next strictly
+newer view, a matching SCRIPT rejection becomes a detailed runtime error and
+a fixed operation-specific unsupported count. Successful/failed settled rows
+are retired; unrelated players/sequences and unsubmitted/same-tick events do
+not create false failures. Detailed errors share the runtime's existing
+100-error cap, while all matching failures are counted. The host must deliver
+the full events of the submitted batch with that next view, as for spawn
+receipts. No speculative immediate success or state update is reported.
+
+`A2.ObjectivesDisplay_Set_Text_From_File(path, resetCompleted)` requires
+exactly a UTF-8 Lua string and strict Boolean and returns no values. It reuses
+the existing atomic content-reader loader. True resets new goals to Active;
+false preserves only completed ordinal slots. A successful replacement uses
+fresh monotonic IDs and new metadata while retaining display visibility.
+Missing files retain the old state with the existing diagnostic; invalid
+paths, malformed files and allocation failures retain old state and error.
+This is the documented bridge parser/path policy, not native ABI or save parity.
 
 `A2.SetCurrentHealth(id, hull)` takes exactly one unsigned integral live ID
 and one finite Lua number; malformed arguments and missing/dying objects raise
@@ -165,8 +201,9 @@ This is a STA64 port-compatibility policy, not native Go/Move equivalence.
 the nearest content-backed resource by exact fixed-point XZ distance at the
 time of the Lua call. Height is ignored. Equal distances prefer existing
 nodes by ID, then validated pending resources by request order. Definitions
-must classify as Resource through the sim's class/movement rule; resource
-metadata alone and missing definitions do not qualify. Current DYING nodes
+must satisfy Core's shared mineable-definition rule; typed backgrounds and
+resource-less producer planets are excluded for both current and pending
+objects. Resource metadata alone and missing definitions do not qualify. Current DYING nodes
 are excluded. This is an explicit STA64 rule, not a verified native default.
 The selected typed reference waits for real spawn receipts and retains per-actor
 order sequence. A failed or dead selected pending node drops the order without
@@ -208,14 +245,15 @@ an entity already destroyed that tick: the real ID remains inspectable but
 the handle is invalid and its pending actions are discarded.
 
 Move/stop/attack/mine/special/cloak orders and the existing remove,
-invincibility and hull edits wait for all pending references, including a
+invincibility, hull and confinement edits wait for all pending references, including a
 pending target. They dispatch once before that tick's Lua callbacks, through
 the normal owner orders or SCRIPT edits. Later actions for the same unit wait
 behind an earlier blocked action, preserving attack-then-stop intent order.
 The sim still validates capabilities
 and sorts commands by player/sequence; global Lua call order is not promised.
-Name, position and shield writes remain unsupported. Owner transfer remains
-unsupported by the sim; assigning a pending handle's player is diagnosed.
+Name, position and shield writes remain unsupported. Assigning a pending
+handle's player remains unsupported and diagnosed; resolved owner changes use
+the shared guarded Team operation described above.
 Camera spots can wait for real spawn receipts, with ordered requests and explicit
 scene cancellation. Destroyed monitors also retain pending request identity,
 then match the resolved ID against the same batch's death events. Failed receipts
