@@ -4,6 +4,71 @@ Status: brainstorm, not a decision. Written to be resumed later. The
 investigation findings go in `docs/research/modding/` (see bottom); the RFC
 (`docs/MODDING.md`) is drafted from both.
 
+## ADOPTED PLAN (owner, 2026-11-11): follow review-fable.md
+
+The owner adopted the Fable review's recommendations. Everything below this
+section is brainstorm and evidence; where it conflicts with this section,
+**this section wins**. Source: `docs/research/modding/review-fable.md`
+(findings, evidence, file refs). Superseded by it: compat tiers T0-T3 (use a
+measured coverage report), TOML `[patch]` for ODFs, keyed quirk map, `engine =`
+as lineage key, MOD-01..13 list, shader contracts/shims/`new-effect`.
+
+**Decisions taken**
+1. **Dual-run: yes.** A mod adapted for STA64 must still load on its original
+   engine. `info.ini` stays the "tiny ini"; STA64 additions must be ignorable
+   by the original engines.
+2. **Axes:** `profile` = closed engine lineage; `engine` keeps its existing
+   meaning (STA64 version requirement); data chain from `kind`/`ParentMod`.
+   v1 lineages: **stock A2 and Roots only**.
+3. **What must match between peers:** one digest of resolved sim-visible rules
+   (values, not names); pack list informational only.
+4. **Rules shape:** typed `Rules` struct fed by the legacy files (`RTS_CFG.h`,
+   ODF keys); no keyed quirk map or new rules file in v1.
+5. **Acceptance target:** STA2 Classic Enhanced as the compatibility
+   reference (its author should try the result), Refit as the *render*
+   reference only. Shaders: dev-only `.wesl` shadowing by VFS path, labelled
+   unstable, no contract; promote to a real slot when a second author asks.
+   Draw from the perception-filtered view because the renderer should anyway.
+
+**v1 pieces (each <= M, one format bump)**
+1. Mount fix (S): honour `standalone`/`ignoreParentMaps`; lineage from
+   manifest `profile`, then `info.ini`, then heuristics; one mount entry point
+   (count real non-test `mount_install` call sites first: reviewers disagree,
+   5 vs ~50); several install roots.
+2. Coverage report + `why` (M): `sta64 check-pack`; key coverage weighted by
+   use, changed-but-ignored cfg keys, unresolved map refs, which layer/line
+   won a file or key.
+3. Rules + digest (M, with NET-01): typed `Rules` from `RTS_CFG.h` starting
+   with keys Classic Enhanced changes; remove the 6 raw ODF reads in
+   `sta_sim/src/specials/mod.rs`; derived digest incl. tech tree and resource
+   model; replay/snapshot headers gain lineage + pack names.
+4. Self-include inheritance for `.h` and `.tt` (M), with provenance.
+5. Render (S): ordnance recipes VFS-first; dev-only `.wesl` shadowing.
+6. Lua restriction (S): explicit std-lib set, memory and instruction limits
+   for `sta_mission` (`Lua::new()` today); do regardless of this RFC.
+
+**Done when:** Classic Enhanced loads over its parent and FO 4.0 loads with no
+base Roots leaking in; the report prints coverage for every installed mod; two
+in-process peers on Classic vs Classic Enhanced refuse to start and name the
+differing key, while peers differing only by texture/recipe folder are
+accepted; a replay names its packs; a recipe ini dropped in a mod folder
+changes a headless frame.
+
+**Non-goals for v1:** exe fingerprinting, FO 3.2.7 / Dominion War / A1
+lineages, bug-emulation quirks, TOML `[patch]` for ODF, trigger/timeline DSL,
+third-party pack Lua, WASM, shader contracts and shims, pack UI/load-order
+editor, dependency fetching, signing policy, string-table overlay, hot reload
+beyond dev shadowing, `.asi`/hook importer, per-match rule toggles.
+
+**Can wait:** script tiers; slot contract/versioning; pack UI; distribution,
+signing, trust; FO3 and A1 lineages; localisation overlay; whether Refit's
+recipe format ever diverges from STA64's.
+
+**Next:** claim packages per AGENTS.md (new IDs via a WORKPLAN PR, next free
+number in the lane; check `origin/main` first), starting with piece 1 and 6.
+
+---
+
 ## Goal
 
 Find the right abstraction for "game" and "mod". The landscape is
