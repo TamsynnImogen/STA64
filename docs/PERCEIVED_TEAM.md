@@ -34,7 +34,13 @@ The private pinned-image audit is retained outside the repository.
   backward replay compatibility. Existing edit tags remain byte-for-byte pinned.
 - Snapshot format 11 keeps the old Body and confinement suffix, then appends a
   mandatory version-1 perceived-team record. Validate sorted unique live IDs,
-  valid perceived destinations and nonredundant rows. Reject unknown versions,
+  representable perceived identities and nonredundant rows. Explicit writes
+  require configured seats, but saved identities admit any real slot 0..7 or
+  neutral: a valid transfer can preserve an old map owner's unconfigured slot.
+  Transfers from synthetic non-slot identities are rejected before cleanup if
+  their perception cannot be represented. This is an explicit STA64 validation
+  policy for the public spawn API, not inferred native invalid-input behavior.
+  Reject unknown versions,
   truncation and trailing bytes. Read historical formats 8/9/10 only with their
   historical seam 1; synthesize no overrides. Preserve their existing mining and
   confinement compatibility restrictions, including the genuine v8 fixture.
