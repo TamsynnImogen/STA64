@@ -98,23 +98,29 @@ focused tests passed, covering base/mod names, inheritance, explicit profiles,
 A1 archive precedence, old hints/fallbacks and actual `ContentDb::load` feature
 resolution with mod/ODF zero overrides. No matcher or default table changed.
 
-The six shared consumer suites reported 564 passes, no failures and ten
-ignored tests, including genuine original v8 continuation and the existing
-Native fake identity. Some install-gated tests return early without configured
-inputs; the total is not complete installed-content acceptance. Strict
-six-crate all-target Clippy, workspace all-target compilation, the Android
-ARM64 client-library check using NDK 29/API 26, scoped formatting/diff and
-an unchanged zero-package offline lock refresh passed. Independent read-only
-source/test review found no concrete defect.
+After integration onto main `8fb9b0b`, the six shared consumer suites
+reported 642 passes, no failures and twelve ignored tests, including genuine
+original v8 continuation and the existing Native fake identity. Some
+install-gated tests return early without configured inputs; the total is not
+complete installed-content acceptance. Strict six-crate all-target Clippy,
+workspace all-target compilation, the Android ARM64 client-library check
+using NDK 29/API 26, scoped formatting/diff and an unchanged zero-package
+offline lock refresh passed. Independent read-only source/test review found
+no concrete defect.
 
 A preserved pre-fix executable of our own Rust content probe reproduced
 Sta2Classic detection for Roots. Its profile source blob is identical to the
-main audit baseline. The corrected loader selects Fo4 automatically, loads
-660 units/1151 definitions and produces content hash `32b49bb1c39f7f56`.
-This matches both the corrected forced-Fo4 load and the preserved pre-fix
-forced-Fo4 result. Automatic/forced feature bits and all 117 warning records
-are equal. These warnings remain visible; no complete-mod-validity claim is
-made. A1 and stock A2 controls still select Sta1Classic and Sta2Classic.
+original main audit baseline. On that original baseline, the corrected
+automatic load matched both forced-Fo4 loads, including the preserved
+pre-fix reference (`32b49bb1c39f7f56`).
+
+Newly merged content/confinement metadata intentionally changes content
+identity. The final updated-main check therefore uses its own forced-Fo4
+reference: automatic and forced loading both select Fo4, load 660 units/1151
+definitions and produce hash `c6e79d90d1253700`. Feature bits and all 117
+warning records are equal. The old and new baseline hashes are not asserted
+equal. Warnings remain visible; no complete-mod-validity claim is made.
+A1 and stock A2 controls still select Sta1Classic and Sta2Classic.
 
 The selected Roots `info.ini` and ODF archive hashes are unchanged across
 the check. This preservation claim does not cover every model or texture.
