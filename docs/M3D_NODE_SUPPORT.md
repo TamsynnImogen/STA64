@@ -112,8 +112,27 @@ record reader only as needed to reuse its layout in both contexts. Preserve
 texture flags and extra shader strings in the new library data.
 
 Use original synthetic material/geometry streams for each admitted version,
-with/wihout stored normals, material indices, 32-bit corner records, malformed
+with/without stored normals, material indices, 32-bit corner records, malformed
 counts/indices and every truncated prefix. Refresh the full installed scan with
 explicit roles, including wrong-role controls and input hashes. None of this
 resolves the separate historical StarTrekDB 1.0/1.2 gate or establishes native
 debris playback, rendered-light parity, or completion of M1.
+
+### Stored non-finite attribute evidence (before adjustment)
+
+The first explicit-role scan decodes 1,778 chunk files. Twelve remaining paths
+(six distinct exports duplicated in the preserved installs) contain actual
+stored NaN/Infinity UV floats, not merely a version/header mismatch. Native
+mesh reading stores those floats without a finite-value replacement. The new
+raw chunk API must therefore preserve attribute bit patterns and report them
+as warnings instead of silently substituting zero or claiming render safety.
+Header/version, bounds, counts, index ranges and complete consumption remain
+validated. This exception applies to the explicit raw chunk data path; the
+existing full-model sanitation policy is unchanged. A future renderer adapter
+must handle these warnings explicitly before uploading unsafe coordinates.
+
+The 16 historical database rejections are now also classified: the installed
+Legacy header reader independently refuses versions below 1.4, agreeing with
+the existing a2fmt documented engine gate. They remain explicitly refused
+historical files, not newly supported 1.0/1.2 assets or corrupt chunks. No
+version gate is lowered to improve a corpus count.
