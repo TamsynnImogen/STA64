@@ -4,6 +4,13 @@
 use super::{Objective, ObjectiveBriefing, ObjectiveState, Shared};
 
 pub(super) fn load(ctx: &Shared, name: &str) -> mlua::Result<()> {
+    load_with_completion(ctx, name, true)
+}
+
+/// Prepare the completion policy before committing a successful replacement.
+/// Preserve mode carries only completed slots, never IDs or failure states.
+/// All read/parse/ID failures retain the entire old list and metadata.
+pub(super) fn load_with_completion(ctx: &Shared, name: &str, reset_completed: bool) -> mlua::Result<()> {
     let path = name.replace('\\', "/");
     if path.is_empty()
         || path.starts_with('/')
@@ -47,7 +54,15 @@ pub(super) fn load(ctx: &Shared, name: &str) -> mlua::Result<()> {
             id: c.next_objective_id + i as u32 + 1,
             title,
             description: String::new(),
-            state: ObjectiveState::Active,
+            state: if !reset_completed
+                && c.objectives
+                    .get(i)
+                    .is_some_and(|old| old.state == ObjectiveState::Complete)
+            {
+                ObjectiveState::Complete
+            } else {
+                ObjectiveState::Active
+            },
         })
         .collect();
     c.objectives = goals;
@@ -63,3 +78,6 @@ pub(super) fn load(ctx: &Shared, name: &str) -> mlua::Result<()> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod reload_policy_tests;

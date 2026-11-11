@@ -89,6 +89,7 @@ pub fn unit_def(name: &str, odf: &Odf, phys: Option<&Odf>, warnings: &mut Vec<Wa
     let mut d = UnitDef::new(name.trim().trim_end_matches(".odf"), class);
     d.class = ClassLabel::new(class.trim());
     d.raw = std::sync::Arc::new(odf.clone());
+    d.confinement = crate::confinement::from_odf(odf, &file, warnings);
     let mut r = Reader { odf, file: &file, warnings };
 
     d.race = r.text("race").unwrap_or_default();

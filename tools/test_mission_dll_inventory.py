@@ -294,6 +294,45 @@ class MissionDllInventoryTests(unittest.TestCase):
         ]:
             self.assertEqual(inventory.a2_exact_for(signature, self.repo), "", signature)
 
+    def test_objective_completion_requires_exact_registered_void_int_bool_shape(self):
+        self.register_a2(
+            "",
+            registration=(
+                'objectives::install(lua, ctx, &a2)?; '
+                'lua.globals().raw_set("A2", a2)?;'
+            ),
+        )
+        (self.a2 / "objectives.rs").write_text(
+            'table.set("ObjectivesDisplaySetObjectiveComplete", fn);\n', encoding="utf-8"
+        )
+        exact = "void ObjectivesDisplaySetObjectiveComplete(int, bool)"
+        self.assertEqual(
+            inventory.a2_exact_for(
+                "public: virtual void __thiscall ScriptInterfaceImp::ObjectivesDisplaySetObjectiveComplete(int, bool)",
+                self.repo,
+            ),
+            "A2.ObjectivesDisplaySetObjectiveComplete",
+        )
+        for signature in [
+            "bool ObjectivesDisplaySetObjectiveComplete(int, bool)",
+            "void ObjectivesDisplaySetObjectiveComplete(bool, int)",
+            "void ObjectivesDisplaySetObjectiveComplete(unsigned int, bool)",
+            "void ObjectivesDisplaySetObjectiveComplete(int&, bool)",
+            "void ObjectivesDisplaySetObjectiveComplete(int, int)",
+            "void ObjectivesDisplaySetObjectiveComplete(int, bool, bool)",
+        ]:
+            self.assertEqual(inventory.a2_exact_for(signature, self.repo), "", signature)
+        (self.a2 / "objectives.rs").write_text("", encoding="utf-8")
+        self.assertEqual(inventory.a2_exact_for(exact, self.repo), "")
+        (self.a2 / "objectives.rs").write_text(
+            'table.set("ObjectivesDisplaySetObjectiveComplete", fn);\n', encoding="utf-8"
+        )
+        (self.a2 / "mod.rs").write_text(
+            'objects::install(lua, ctx, &a2)?; lua.globals().raw_set("A2", a2)?;',
+            encoding="utf-8",
+        )
+        self.assertEqual(inventory.a2_exact_for(exact, self.repo), "")
+
     def test_current_health_writer_requires_exact_void_integer_float_call_shape(self):
         self.register_a2(
             'table.set("SetCurrentHealth", fn);\n',

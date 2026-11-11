@@ -247,6 +247,10 @@ pub struct UnitDef {
     /// Resolved legacy `is_starbase` ODF flag, default false. This is
     /// independent of the simulation's actor kind or producer behavior.
     pub is_starbase: bool,
+    /// Resolved planet rule family, independent of actor kind and colony state.
+    /// `None` retains the existing non-planet-metadata path; Native content
+    /// opts in explicitly. Filled by the profile-aware ODF loader, or by an author.
+    pub planet_role: Option<crate::planet::PlanetRole>,
     pub race: String,
     pub model: String,
     pub scale: Fixed,
@@ -285,6 +289,8 @@ pub struct UnitDef {
     /// overrides, then the ODF's `Feature_<name>` keys); `None`: the
     /// database-wide set. Read through `ContentDb::unit_features`.
     pub features: Option<Features>,
+    /// Owning-unit map-confinement overrides; resolved once through ContentDb.
+    pub confinement: crate::ConfinementOverrides,
     /// The resolved ODF, so keys no field reads yet stay reachable. Empty for
     /// definitions not made from an ODF.
     pub raw: Arc<sta_odf::Odf>,
@@ -306,6 +312,7 @@ impl UnitDef {
             odf: odf.to_owned(),
             class: ClassLabel::new(class),
             is_starbase: false,
+            planet_role: None,
             race: String::new(),
             model: String::new(),
             scale: Fixed::ONE,
@@ -328,6 +335,7 @@ impl UnitDef {
             transfer_rate: Fixed::ZERO,
             resource: None,
             features: None,
+            confinement: crate::ConfinementOverrides::default(),
             raw: Arc::new(raw),
         }
     }

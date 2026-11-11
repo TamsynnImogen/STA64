@@ -218,12 +218,28 @@ impl Sim {
                 .unwrap_or_default(),
         );
         let flows = model.flows_through_waypoints();
+        let obstacles = if self.confinement.is_active() { self.obstacles() } else { Vec::new() };
+        let db = self.content.as_deref();
         for u in self.units.iter_mut().filter(|u| u.mobile()) {
             let queued = match self.movement.course(u.id) {
                 Some(c) if flows => c.waypoints.as_slice(),
                 _ => &[],
             };
+            let previous = u.pos;
             step(model, u, Leg { queued });
+            if self.confinement.is_active() && u.pos != previous {
+                let radius = db.and_then(|db| db.unit(u.def)).map_or(Fixed::ZERO, |d| d.radius * Fixed::from_int(3) / Fixed::from_int(4));
+                crate::avoid::constrain_position(&mut self.confinement, u, previous, radius, &obstacles);
+            }
+        }
+        if self.confinement.is_active() {
+            for u in self.units.iter_mut() {
+                if self.confinement.ticks(u) {
+                    let previous = u.pos;
+                    let radius = db.and_then(|db| db.unit(u.def)).map_or(Fixed::ZERO, |d| d.radius * Fixed::from_int(3) / Fixed::from_int(4));
+                    crate::avoid::constrain_position(&mut self.confinement, u, previous, radius, &obstacles);
+                }
+            }
         }
     }
 }

@@ -112,6 +112,8 @@ pub struct Sim {
     /// The map's playable volume, for build sites; fixed by the setup, so
     /// not in the digest. `None` for a sim made without a map.
     bounds: Option<(Vec3, Vec3)>,
+    /// Profile-backed immutable volumes and the saved mutable actor flags.
+    confinement: boundary::state::Confinement,
     /// Events since the last step (spawns between ticks), emitted with it.
     events: Vec<SimEvent>,
     /// Weapon state (SIM-04); in the digest once any exists.
@@ -141,6 +143,7 @@ impl Sim {
             starts: Vec::new(),
             regions: Vec::new(),
             bounds: None,
+            confinement: Default::default(),
             events: Vec::new(),
             weapons: Default::default(),
             movement: movement::Movement::default(),
@@ -161,6 +164,11 @@ impl Sim {
 
     pub fn unit(&self, id: EntityId) -> Option<&Unit> {
         self.units.get(id)
+    }
+
+    /// Actual actor state; unavailable is distinct from a disabled flag.
+    pub fn force_onto_map(&self, id: EntityId) -> Option<bool> {
+        self.confinement.flag(self.units.get(id)?)
     }
 
     fn unit_mut(&mut self, id: EntityId) -> Option<&mut Unit> {
@@ -269,6 +277,7 @@ impl Sim {
 
     /// Move every unit one tick and close the tick with its view.
     fn advance(&mut self) -> TickOutput {
+        self.constrain_targets();
         let held = self.steer_around();
         self.step_kinematics();
         self.restore_targets(held);
@@ -289,9 +298,10 @@ impl Sim {
         }
         if let Some(db) = &self.content {
             self.economy.step(&mut self.units, db, &mut self.events);
-            self.production.step(&mut self.units, db, &mut self.economy, &mut self.events);
+            self.production.step(&mut self.units, db, &mut self.economy, &mut self.events, &mut self.confinement);
         }
         self.advance_courses();
+        self.constrain_targets();
         self.tick += 1;
         TickOutput { view: Arc::new(self.build_view()), events: std::mem::take(&mut self.events) }
     }
@@ -354,6 +364,7 @@ impl Sim {
         if !self.specials.is_empty() {
             self.specials.hash_into(&mut h);
         }
+        self.confinement.hash_into(&mut h);
         h.0
     }
 }
