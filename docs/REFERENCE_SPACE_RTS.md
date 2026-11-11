@@ -137,3 +137,29 @@ SIM-22 geometry/design in #289/#290 and its pre-integration fixtures remain
 preserved. State/movement/Lua integration is unfinished. This reference work
 adds no release gate or completion date; the December 2026 desktop alpha
 remains the immediate priority.
+
+## Follow-up inspection
+
+GitHub's default branch was rechecked for this follow-up and still resolves
+to the pinned `d01118d86b15f0f252b56278d9606312f38cb428`. The earlier ODF
+duplicate and A1 map adaptations above already exist in STA64; they are not
+new work in this follow-up.
+
+The remaining bounded diagnostic gap is selected effective ODF links. The
+reference's `src/bin/odf_check.rs` displays these links, whereas STA64's
+existing `odf_index` example primarily inventories winners and includes.
+[EDT-10](ODF_REFERENCE_INSPECTION.md) will independently adapt that diagnostic
+idea over STA64's existing VFS, ODF index and layered resolver. It will not
+copy the reference's filesystem resolver or use its generated schemas as
+runtime defaults. Only the new example/tests/contract and additive audit/plan
+lines are owned; the open selected-map PR's earlier audit updates remain
+separate and must be preserved when merging.
+
+The OBJ/MTL exporter remains a useful later authoring-tool lead. Its Bevy
+scene export cannot be dropped into STA64's shared Model representation,
+which has independent position/UV indices and no stored normals. Establish
+coordinate/winding behavior and synthetic hierarchical export checks before
+implementing it. Existing STA64 model_info and sod_survey examples already
+cover much of the reference's model/material inspection. The reference's
+mutating include flattener and reduced SOD writer are not adopted as
+preservation tools.
