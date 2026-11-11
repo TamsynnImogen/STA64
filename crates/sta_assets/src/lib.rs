@@ -3,12 +3,13 @@
 //! Format history this crate follows:
 //! - Armada II: SOD models, TGA textures (`Textures/RGB/`).
 //! - Fleet Operations: adds DDS textures, mostly in `Textures/`.
-//! - A2FOExtensions: adds M3D models (planned here).
-//! - STA64 native: glTF/GLB models, KTX2 textures (PNG fallback).
+//! - A2FOExtensions: adds M3D models (1.94–2.06).
+//! - STA64 native: static glTF/GLB models with PNG/JPEG material images.
 //!
 //! Lookup by bare name searches the known folders. A file in a higher-priority
 //! mod layer always wins. Within one layer the newest format wins:
-//! KTX2 > DDS > TGA > PNG, and GLB > glTF > SOD.
+//! KTX2 > DDS > TGA > PNG, and GLB > glTF > SOD > M3D. Lookup ranking does
+//! not imply every texture format has a CPU decoder.
 
 extern crate alloc;
 
@@ -19,6 +20,7 @@ pub use a2fmt;
 pub mod audio;
 pub mod cfg_h;
 pub mod dds;
+pub mod gltf;
 pub mod m3d;
 pub mod model;
 pub mod pixels;
@@ -134,6 +136,7 @@ pub enum AssetError {
     Tga(String, a2fmt::tga::Error),
     Dds(String, dds::DdsError),
     M3d(String, String),
+    Gltf(String, String),
     Unsupported(String),
 }
 
@@ -146,6 +149,7 @@ impl std::fmt::Display for AssetError {
             Self::Tga(n, e) => write!(f, "{n}: TGA {e:?}"),
             Self::Dds(n, e) => write!(f, "{n}: DDS {e}"),
             Self::M3d(n, e) => write!(f, "{n}: M3D {e}"),
+            Self::Gltf(n, e) => write!(f, "{n}: glTF {e}"),
             Self::Unsupported(n) => write!(f, "{n}: no CPU decoder for this format"),
         }
     }
@@ -164,7 +168,7 @@ pub fn load_sod(vfs: &Vfs, path: &str) -> Result<a2fmt::sod::Sod, AssetError> {
     a2fmt::sod::Sod::parse(&data).map_err(|e| AssetError::Sod(path.to_owned(), e))
 }
 
-/// Load a SOD or M3D model into the shared [`model::Model`].
+/// Load a SOD, M3D or static glTF/GLB model into the shared [`model::Model`].
 pub fn load_model(vfs: &Vfs, path: &str, format: ModelFormat) -> Result<model::Model, AssetError> {
     match format {
         ModelFormat::Sod => load_sod(vfs, path).map(|s| model::Model::from_sod(&s)),
@@ -178,7 +182,7 @@ pub fn load_model(vfs: &Vfs, path: &str, format: ModelFormat) -> Result<model::M
             }
             m3d::load(&data).map_err(|e| AssetError::M3d(path.to_owned(), e))
         }
-        _ => Err(AssetError::Unsupported(path.to_owned())),
+        ModelFormat::Glb | ModelFormat::Gltf => gltf::load(vfs, path).map_err(|e| AssetError::Gltf(path.to_owned(), e)),
     }
 }
 
