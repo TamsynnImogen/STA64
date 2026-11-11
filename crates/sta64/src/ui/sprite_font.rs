@@ -445,12 +445,17 @@ fn resolve_text(
     mut commands: Commands,
     fonts: Res<SpriteFonts>,
     q: Query<(Entity, &SpriteText), Changed<SpriteText>>,
+    children: Query<&Children>,
+    images: Query<(), With<ImageNode>>,
+    texts: Query<(), With<Text>>,
 ) {
     for (e, t) in &q {
-        let mut ec = commands.entity(e);
-        ec.despawn_related::<Children>();
+        let existing: Vec<Entity> = children
+            .get(e)
+            .map(|children| children.iter().collect())
+            .unwrap_or_default();
         let Some(f) = fonts.pick(t.size) else {
-            ec.with_child((
+            let label = (
                 Text::new(t.text.clone()),
                 TextFont {
                     font_size: bevy::text::FontSize::Px(t.size),
@@ -458,23 +463,35 @@ fn resolve_text(
                 },
                 TextColor(t.color),
                 Pickable::IGNORE,
-            ));
+            );
+            if let Some(&child) = existing.first().filter(|child| texts.contains(**child)) {
+                commands.entity(child).insert(label);
+                for &stale in &existing[1..] {
+                    commands.entity(stale).despawn();
+                }
+            } else {
+                for stale in existing {
+                    commands.entity(stale).despawn();
+                }
+                commands.entity(e).with_child(label);
+            }
             continue;
         };
         let scale = t.size / f.font.height();
         let lay = f.font.layout(&t.text, scale);
-        ec.insert(Node {
+        commands.entity(e).insert(Node {
             width: Val::Px(lay.width.ceil()),
             height: Val::Px(lay.height.ceil()),
             flex_shrink: 0.0,
             ..default()
         });
+        let mut used = 0;
         for q in &lay.quads {
             let Some((image, tex)) = f.pages.get(q.page) else {
                 continue;
             };
             let rect = texel_rect(f.font.reference, *tex, q.src);
-            ec.with_child((
+            let glyph = (
                 ImageNode {
                     image: image.clone(),
                     rect: Some(rect),
@@ -490,7 +507,19 @@ fn resolve_text(
                     ..default()
                 },
                 Pickable::IGNORE,
-            ));
+            );
+            if let Some(&child) = existing.get(used).filter(|child| images.contains(**child)) {
+                commands.entity(child).insert(glyph);
+            } else {
+                if let Some(&stale) = existing.get(used) {
+                    commands.entity(stale).despawn();
+                }
+                commands.entity(e).with_child(glyph);
+            }
+            used += 1;
+        }
+        for &stale in existing.iter().skip(used) {
+            commands.entity(stale).despawn();
         }
     }
 }
@@ -503,7 +532,8 @@ impl Plugin for SpriteFontPlugin {
             PostUpdate,
             (load_fonts, resolve_text)
                 .chain()
-                .before(bevy::ui::UiSystems::Prepare),
+                .before(bevy::ui::UiSystems::Prepare)
+                .before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate),
         );
     }
 }
@@ -643,6 +673,129 @@ mod tests {
             app.world()
                 .get::<ImageNode>(kids[0])
                 .is_some_and(|i| i.rect.is_some())
+        );
+    }
+
+    fn test_font() -> LoadedFont {
+        LoadedFont {
+            font: SpriteFont::parse("F", SAMPLE).unwrap(),
+            pages: vec![
+                (Handle::default(), UVec2::new(256, 128)),
+                (Handle::default(), UVec2::new(256, 128)),
+            ],
+        }
+    }
+
+    #[test]
+    fn changing_sprite_text_reuses_glyphs_and_removes_only_surplus() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<SpriteFonts>()
+            .add_systems(Update, resolve_text);
+        app.world_mut()
+            .resource_mut::<SpriteFonts>()
+            .fonts
+            .insert("F".into(), test_font());
+        let label = app
+            .world_mut()
+            .spawn(sprite_text(" !", 12.0, Color::WHITE))
+            .id();
+        app.update();
+        let original: Vec<Entity> = app
+            .world()
+            .get::<Children>(label)
+            .unwrap()
+            .iter()
+            .collect();
+
+        app.world_mut().get_mut::<SpriteText>(label).unwrap().text = "!!".into();
+        app.update();
+        let same: Vec<Entity> = app
+            .world()
+            .get::<Children>(label)
+            .unwrap()
+            .iter()
+            .collect();
+        assert_eq!(same, original);
+        assert_eq!(app.world().get::<Node>(same[1]).unwrap().left, Val::Px(8.5));
+        assert_eq!(
+            app.world().get::<ImageNode>(same[0]).unwrap().rect,
+            Some(Rect::new(10.0, 0.0, 18.5, 12.0))
+        );
+
+        app.world_mut().get_mut::<SpriteText>(label).unwrap().text = "!!#".into();
+        app.update();
+        let longer: Vec<Entity> = app
+            .world()
+            .get::<Children>(label)
+            .unwrap()
+            .iter()
+            .collect();
+        assert_eq!(&longer[..2], &original);
+        assert_eq!(longer.len(), 3);
+        assert!(app.world().get::<Pickable>(longer[2]).is_some());
+
+        app.world_mut().get_mut::<SpriteText>(label).unwrap().text = "!".into();
+        app.update();
+        let shorter: Vec<Entity> = app
+            .world()
+            .get::<Children>(label)
+            .unwrap()
+            .iter()
+            .collect();
+        assert_eq!(shorter, vec![original[0]]);
+        assert!(app.world().get_entity(original[1]).is_err());
+        assert!(app.world().get_entity(longer[2]).is_err());
+    }
+
+    #[test]
+    fn fallback_text_keeps_its_child_for_number_updates() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<SpriteFonts>()
+            .add_systems(Update, resolve_text);
+        let label = app
+            .world_mut()
+            .spawn(sprite_text("123", 12.0, Color::WHITE))
+            .id();
+        app.update();
+        let child = app.world().get::<Children>(label).unwrap()[0];
+        app.world_mut().get_mut::<SpriteText>(label).unwrap().text = "99".into();
+        app.update();
+        assert_eq!(app.world().get::<Children>(label).unwrap().len(), 1);
+        assert_eq!(app.world().get::<Children>(label).unwrap()[0], child);
+        assert_eq!(app.world().get::<Text>(child).unwrap().0, "99");
+    }
+
+    #[test]
+    fn new_glyphs_inherit_visibility_in_their_first_frame() {
+        let mut app = App::new();
+        app.init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>()
+            .add_plugins((MinimalPlugins, bevy::camera::visibility::VisibilityPlugin, SpriteFontPlugin));
+        app.world_mut()
+            .resource_mut::<SpriteFonts>()
+            .fonts
+            .insert("F".into(), test_font());
+        let root = app.world_mut().spawn(Visibility::Visible).id();
+        let label = app
+            .world_mut()
+            .spawn(sprite_text("!", 12.0, Color::WHITE))
+            .id();
+        app.world_mut().entity_mut(root).add_child(label);
+        app.update();
+        let first = app.world().get::<Children>(label).unwrap()[0];
+        assert!(app.world().get::<InheritedVisibility>(first).unwrap().get());
+
+        *app.world_mut().get_mut::<Visibility>(root).unwrap() = Visibility::Hidden;
+        app.world_mut().get_mut::<SpriteText>(label).unwrap().text = "!!".into();
+        app.update();
+        let appended = app.world().get::<Children>(label).unwrap()[1];
+        assert!(
+            !app.world()
+                .get::<InheritedVisibility>(appended)
+                .unwrap()
+                .get()
         );
     }
 

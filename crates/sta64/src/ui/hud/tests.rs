@@ -180,6 +180,10 @@ fn the_grid_issues_the_ui02_orders() {
     // consumer does. Four later app updates may expire the first action.
     let stop_acks: Vec<_> = app.world_mut().resource_mut::<Messages<OrderIssued>>().drain().map(|m| m.kind).collect();
     assert_eq!(stop_acks, [OrderKind::Stop]);
+    let formations = cell(&mut app, |a| *a == Act::OpenFormations);
+    press(&mut app, formations);
+    assert_eq!(app.world().resource::<HudState>().page, Page::Formations);
+    assert!(queued(&mut app).is_empty());
     let wedge = cell(&mut app, |a| matches!(a, Act::Formation(_)));
     press(&mut app, wedge);
     let q = queued(&mut app);
@@ -384,4 +388,47 @@ fn a_click_on_a_blocked_site_is_refused_and_the_placement_stays_armed() {
     assert!(app.world().resource::<HudState>().placing.is_none());
     app.update();
     assert_eq!(app.world_mut().query::<&ghost::Ghost>().iter(app.world()).count(), 0, "the ghost goes with the placement");
+}
+
+
+#[test]
+fn changing_numbers_preserves_resource_and_selected_info_descendants() {
+    fn descendants(app: &App, root: Entity) -> Vec<Entity> {
+        fn visit(app: &App, entity: Entity, out: &mut Vec<Entity>) {
+            if let Some(children) = app.world().get::<Children>(entity) {
+                for child in children.iter() { out.push(child); visit(app,child,out); }
+            }
+        }
+        let mut out=Vec::new(); visit(app,root,&mut out); out
+    }
+    let mut app = app(content(None), &[1]);
+    app.insert_resource(ExternalFeed);
+    let strip = one::<ResourceStrip>(&mut app);
+    let panel = one::<InfoPanel>(&mut app);
+    let before_strip = descendants(&app,strip);
+    let before_info = descendants(&app,panel);
+    let mut feed = app.world().resource::<HudFeed>().clone();
+    let mut view=(*feed.view).clone();
+    view.players[0].resources[0]=Fixed::from_int(1234);
+    view.units[0].hull[0]=Fixed::from_int(87);
+    feed.view=Arc::new(view);
+    *app.world_mut().resource_mut::<HudFeed>()=feed;
+    app.update();
+    assert_eq!(descendants(&app,strip),before_strip);
+    assert_eq!(descendants(&app,panel),before_info);
+    let words:Vec<_>=app.world_mut().query::<&Text>().iter(app.world()).map(|t|t.0.clone()).collect();
+    assert!(words.iter().any(|w|w=="1234"),"{words:?}");
+    assert!(words.iter().any(|w|w.starts_with("87/")),"{words:?}");
+}
+
+#[test]
+fn mobile_constructor_cannot_arm_a_rally_target() {
+    let mut app=app(content(None), &[1]);
+    assert!(app.world_mut().query::<&GridCell>().iter(app.world()).all(|c|c.0!=Act::Target(TargetMode::Rally)));
+    assert!(!target_mode_available(app.world().resource::<HudFeed>(),TargetMode::Rally));
+    let formations=cell(&mut app,|a|*a==Act::OpenFormations);
+    press(&mut app,formations);
+    app.world_mut().resource_mut::<Selection>().0=vec![EntityId(2)];
+    app.update();
+    assert_eq!(app.world().resource::<HudState>().page,Page::Top);
 }

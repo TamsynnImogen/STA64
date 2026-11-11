@@ -147,12 +147,14 @@ pub enum Page {
     #[default]
     Top,
     Build,
+    Formations,
 }
 
 /// What pressing a cell does.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Act {
     OpenBuild,
+    OpenFormations,
     Back,
     /// Arm a map target; completed by the HUD's target click system.
     Target(TargetMode),
@@ -299,6 +301,7 @@ pub fn short(name: &str) -> String {
 fn button(cell: usize, label: &str, act: Act, tip: &str) -> Button {
     let (sprite_names, keep_label) = match &act {
         Act::OpenBuild => (vec!["b_build".into()], false),
+        Act::OpenFormations => (vec!["b_form".into()], false),
         Act::Target(TargetMode::Move) => (vec!["b_move".into()], false),
         Act::Target(TargetMode::Attack) => (vec!["b_attack".into()], false),
         Act::Target(TargetMode::Rally) => (vec!["b_rally".into()], false),
@@ -349,6 +352,14 @@ pub fn grid(feed: &HudFeed, page: Page) -> Vec<Button> {
     }
     let caps = commands::shared(feed);
     let builder = caps.build.then(|| builder(feed)).flatten();
+    if page == Page::Formations && caps.move_order {
+        return vec![
+            button(0, &tr("Line"), Act::Formation(FORM_LINE), &tr("Formation: line")),
+            button(1, &tr("Column"), Act::Formation(FORM_COLUMN), &tr("Formation: column")),
+            button(2, &tr("Wedge"), Act::Formation(FORM_WEDGE), &tr("Formation: wedge")),
+            button(BACK_CELL, &tr("Back"), Act::Back, &tr("Back")),
+        ];
+    }
     if page == Page::Build
         && let Some(b) = builder
     {
@@ -389,6 +400,8 @@ pub fn grid(feed: &HudFeed, page: Page) -> Vec<Button> {
     let mut out = Vec::new();
     if builder.is_some() {
         out.push(button(0, &tr("Build"), Act::OpenBuild, &tr("Build")));
+    }
+    if caps.rally {
         out.push(button(
             1,
             &tr("Rally"),
@@ -398,24 +411,7 @@ pub fn grid(feed: &HudFeed, page: Page) -> Vec<Button> {
     }
     if caps.move_order {
         out.push(button(2, &tr("Move"), Act::Target(TargetMode::Move), &tr("Move")));
-        out.push(button(
-            7,
-            &tr("Line"),
-            Act::Formation(FORM_LINE),
-            &tr("Formation: line"),
-        ));
-        out.push(button(
-            8,
-            &tr("Column"),
-            Act::Formation(FORM_COLUMN),
-            &tr("Formation: column"),
-        ));
-        out.push(button(
-            9,
-            &tr("Wedge"),
-            Act::Formation(FORM_WEDGE),
-            &tr("Formation: wedge"),
-        ));
+        out.push(button(7, &tr("Formations"), Act::OpenFormations, &tr("Choose formation")));
     }
     if caps.stop {
         out.push(button(6, &tr("Stop"), Act::Stop, &tr("Stop")));
@@ -447,7 +443,7 @@ pub fn command(feed: &HudFeed, act: &Act) -> Option<(CommandKind, Vec<EntityId>)
     let own = feed.own_selection();
     let caps = commands::shared(feed);
     match act {
-        Act::OpenBuild | Act::Back | Act::Target(_) => None,
+        Act::OpenBuild | Act::OpenFormations | Act::Back | Act::Target(_) => None,
         Act::Stop if caps.stop => {
             Some((CommandKind::Order(Order::Stop { units: own.clone() }), own))
         }
@@ -657,7 +653,7 @@ mod tests {
         let g = grid(&f, Page::Top);
         assert_eq!(
             g.iter().map(|b| b.cell).collect::<Vec<_>>(),
-            [2, 3, 6, 7, 8, 9],
+            [2, 3, 6, 7],
             "mobile armed craft"
         );
         let stop = g.iter().find(|b| b.act == Act::Stop).unwrap();
@@ -670,7 +666,10 @@ mod tests {
                 vec![EntityId(1)]
             ))
         );
-        let wedge = g
+        assert!(g.iter().any(|b| b.act == Act::OpenFormations));
+        assert!(!g.iter().any(|b| matches!(b.act, Act::Formation(_))));
+        let formations = grid(&f, Page::Formations);
+        let wedge = formations
             .iter()
             .find(|b| b.act == Act::Formation(FORM_WEDGE))
             .unwrap();

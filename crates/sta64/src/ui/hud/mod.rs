@@ -154,6 +154,7 @@ impl Plugin for HudPlugin {
                     feed_from_link.run_if(resource_exists::<SimLink>).run_if(not(resource_exists::<ExternalFeed>)),
                     fit_screen,
                     refresh,
+                    panels::update_values.before(super::theme::WidgetPaint),
                     host,
                     pointer,
                     press,
@@ -215,6 +216,9 @@ fn refresh(
     if state.page == Page::Build && (!commands::shared(&feed).build || model::builder(&feed).is_none()) {
         state.page = Page::Top;
     }
+    if state.page == Page::Formations && !commands::shared(&feed).move_order {
+        state.page = Page::Top;
+    }
     let now = models(&feed, state.page, layout.0.no_resource);
     let height = now.info.height();
     let layout_changed = layout.is_changed() || state.height != height || state.drawn.is_none();
@@ -226,7 +230,7 @@ fn refresh(
         if layout_changed {
             panels::place(&mut node, l.resources);
         }
-        if layout_changed || drawn.as_ref().is_none_or(|d| d.resources != now.resources) {
+        if layout_changed || drawn.as_ref().is_none_or(|d| !panels::same_resources(&d.resources, &now.resources)) {
             clear(&mut commands, kids);
             panels::fill_resources(&mut commands, &theme, e, &now.resources);
         }
@@ -235,7 +239,7 @@ fn refresh(
         if layout_changed {
             panels::place(&mut node, row.info);
         }
-        if layout_changed || drawn.as_ref().is_none_or(|d| d.info != now.info) {
+        if layout_changed || drawn.as_ref().is_none_or(|d| !panels::same_info(&d.info, &now.info)) {
             clear(&mut commands, kids);
             panels::fill_info(&mut commands, &theme, e, &now.info, Vec2::new(row.info.w, row.info.h));
         }
@@ -359,6 +363,7 @@ fn press(
         };
         match act {
             Act::OpenBuild => state.page = Page::Build,
+            Act::OpenFormations if commands::shared(&feed).move_order => state.page = Page::Formations,
             Act::Back => {
                 state.page = Page::Top;
                 state.placing = None;
@@ -525,7 +530,7 @@ fn target_mode_available(feed: &HudFeed, mode: TargetMode) -> bool {
         TargetMode::Move => c.move_order,
         TargetMode::Attack => c.attack,
         TargetMode::Mine => c.mine,
-        TargetMode::Rally => c.build,
+        TargetMode::Rally => c.rally,
     }
 }
 
