@@ -70,8 +70,9 @@ sta64 --install-root "/path/to/Star Trek Armada" --map 2blue
 
 The first command should report the root as mounted and enumerate the A1 maps.
 The second is a **manual** map-view check for placed actors and scenery,
-including any lighting problems; it is not automated runtime proof. Multiplayer starts still require
-MDF/precise Camera_i path integration. Background props/wormholes and other
+including any lighting problems; it is not automated runtime proof. The later
+[selected-map seam](SELECTED_MAP_CONVERSION.md) adds multiplayer starts from
+valid MDF counts and precise Camera_i points. Background props/wormholes and other
 known importer/converter limits are recorded in [A1 support](A1_BZN_SUPPORT.md).
 Do not move, rename, normalize or rewrite the original game data.
 

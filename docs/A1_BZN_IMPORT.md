@@ -170,5 +170,7 @@ original map bytes are not test fixtures in this repository.
 At CON-26, the desktop `--install-root` path still required a child `Data/`;
 its headless conversion test mounted the bare A1 folder directly.
 [CON-27](INSTALL_ROOTS.md) extends the same VFS entry point to flat A1 roots
-and checks an actual built client mission report. MDF/Camera_i start selection
-remains a separate follow-up. Original data is not moved or rewritten.
+and checks an actual built client mission report. Subsequent
+[MDF/Camera_i helpers](A1_START_LOCATIONS.md) and the
+[selected-map seam](SELECTED_MAP_CONVERSION.md) add checked start conversion.
+Original data is not moved or rewritten.

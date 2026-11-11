@@ -193,9 +193,8 @@ pub(crate) fn build_sim(
     seat: Option<u8>,
     skirmish: Option<(&crate::game::SkirmishCfg, &sta_content::Races)>,
 ) -> SimSide {
-    let converted = MapDef::convert_bzn_in(map, content, vfs, index);
-    let mut map_def = converted.map;
-    map_def.name = name.to_owned();
+    let converted = MapDef::convert_bzn_named_in(map, name, content, vfs, index);
+    let map_def = converted.map;
     let mut plan = None;
     let players = match skirmish {
         Some((cfg, races)) => match crate::game::seats(&map_def, cfg, races, content) {
@@ -1227,6 +1226,9 @@ fn hud_toggle(
 }
 
 #[cfg(test)]
+mod a1_start_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1297,7 +1299,8 @@ mod tests {
             if bzn.objects.is_empty() {
                 continue;
             }
-            let SimSide { setup, mut sim, warnings, .. } = build_sim(&bzn, path, &db, &index, &vfs, Some(0), None);
+            let name = path.trim_start_matches("bzn/").trim_end_matches(".bzn");
+            let SimSide { setup, mut sim, warnings, .. } = build_sim(&bzn, name, &db, &index, &vfs, Some(0), None);
             let mut placed = Placed::of(&sim);
             let (mut wanted, mut found) = (0, 0);
             for o in &bzn.objects {

@@ -240,24 +240,66 @@ impl MapDef {
 
     /// [`MapDef::from_bzn_in`] with its [`Counts`].
     pub fn convert_bzn_in(m: &sta_bzn::Map, db: &ContentDb, vfs: &sta_vfs::Vfs, index: &crate::OdfIndex) -> Conversion {
+        Self::convert_bzn_in_context(m, None, db, vfs, index)
+    }
+
+    /// Convert the selected VFS map, using its stem relative to `bzn/` (without
+    /// `.bzn`) for identity, diagnostics and A1's MDF companion. The internal
+    /// BZN filename is never used for companion discovery. Existing unnamed
+    /// conversion methods do not load companions.
+    pub fn convert_bzn_named_in(m: &sta_bzn::Map, selected_stem: &str, db: &ContentDb, vfs: &sta_vfs::Vfs, index: &crate::OdfIndex) -> Conversion {
+        Self::convert_bzn_in_context(m, Some(selected_stem), db, vfs, index)
+    }
+
+    fn convert_bzn_in_context(m: &sta_bzn::Map, selected_stem: Option<&str>, db: &ContentDb, vfs: &sta_vfs::Vfs, index: &crate::OdfIndex) -> Conversion {
         let mut cache: std::collections::HashMap<String, Option<Arc<sta_odf::Odf>>> = Default::default();
         let mut lookup = |name: &str| {
             let k = name.to_ascii_lowercase();
             cache.entry(k.clone()).or_insert_with(|| sta_odf::resolve_layered(&k, &mut |n, v| index.load(vfs, n, v)).ok().map(Arc::new)).clone()
         };
-        MapDef::convert_bzn(m, db, &mut lookup)
+        let mut converted = Self::convert_bzn_context(m, selected_stem, db, &mut lookup);
+        if let (Some(a1), Some(name)) = (&m.a1, selected_stem) {
+            // Camera paths alone do not make a campaign map a multiplayer map.
+            converted.map.starts.clear();
+            let companion = format!("bzn/{name}.mdf");
+            let Some(bytes) = vfs.read(&companion) else { return converted };
+            let bytes = match bytes {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    converted.warnings.push(Warning::new(&companion, format!("A1 starts unavailable: {error}")));
+                    return converted;
+                }
+            };
+            match sta_bzn::a1::mdf_start_count(&bytes).and_then(|count| sta_bzn::a1::player_start_positions(a1, count)) {
+                Ok(points) => {
+                    let (lo, size) = (m.min_extent, m.size);
+                    let centre = [(lo[0] + (lo[0] + size[0])) * 0.5, (lo[2] + (lo[2] + size[2])) * 0.5];
+                    converted.map.starts = points.into_iter().enumerate().map(|(i, pos)| StartPos {
+                        slot: i as u8,
+                        pos: vec3(pos),
+                        heading: unit_xz(centre[0] - pos[0], centre[1] - pos[2]),
+                    }).collect();
+                }
+                Err(error) => converted.warnings.push(Warning::new(&companion, format!("A1 starts unavailable: {error}"))),
+            }
+        }
+        converted
     }
 
     /// The conversion with its [`Counts`].
     pub fn convert_bzn(m: &sta_bzn::Map, db: &ContentDb, odfs: &mut OdfLookup) -> Conversion {
+        Self::convert_bzn_context(m, None, db, odfs)
+    }
+
+    fn convert_bzn_context(m: &sta_bzn::Map, selected_stem: Option<&str>, db: &ContentDb, odfs: &mut OdfLookup) -> Conversion {
         let mut warnings = Vec::new();
         let mut counts = Counts::default();
         let mut map = MapDef::empty();
         let file = m.file_name.trim();
-        map.name = match file.len().checked_sub(4).filter(|&i| file.is_char_boundary(i) && file[i..].eq_ignore_ascii_case(".bzn")) {
+        map.name = selected_stem.map(str::to_owned).unwrap_or_else(|| match file.len().checked_sub(4).filter(|&i| file.is_char_boundary(i) && file[i..].eq_ignore_ascii_case(".bzn")) {
             Some(i) => file[..i].to_owned(),
             None => file.to_owned(),
-        };
+        });
         let text = |s: &str| Some(s.trim().to_owned()).filter(|s| !s.is_empty());
         map.label = text(&m.description);
         map.mission = m.scripts.iter().find_map(|s| text(s));

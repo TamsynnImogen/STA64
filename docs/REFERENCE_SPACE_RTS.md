@@ -18,7 +18,7 @@ be adapted without migrating its plugins or replacing working shared loaders.
 | Generated schema/defaults | Command tables and A1/A2 comparison tools | Discovery leads, not authoritative runtime defaults. Independently verify profile behaviour against the games. |
 | A1 BZN header | `BznHeader` recognizes A1 binarySave separately from A2 BinaryMode | The audit exposed a missing branch. CON-25 added strict recognition; CON-26 adds known binary map bodies ([scope](A1_BZN_SUPPORT.md)). |
 | A1 objects/conversion | Candidate-record scans and a conversion plan | Heuristic scaffolding. The template converter copies its supplied A2 template; it does not emit converted A1 objects. |
-| A1 body boundary | Skips 145 opaque metadata bytes | Original GOG reader/writer checks established typed metadata and placements for CON-26. The fixed skip points into a record in an original map; it is not used. CON-28 adds a checked MDF count/precise-path resolver; client start integration remains pending. |
+| A1 body boundary | Skips 145 opaque metadata bytes | Original GOG reader/writer checks established typed metadata and placements for CON-26. The fixed skip points into a record in an original map; it is not used. CON-28's checked MDF/precise-path resolver feeds the selected-map conversion seam; graphical/gameplay acceptance remains pending. |
 | FPQ | Reader/writer, flag-1 decoding and heuristic table discovery | STA64 already has exact v1/v2 parsing/writing and A1 ZFS support. Retain their validation and archive roundtrips. |
 | SOD/M3D/materials/sprites | Viewer loaders and linked-asset diagnostics | STA64 already has shared models/materials, animated sprites/emitters and a viewer. Adapt targeted diagnostics for verified gaps. |
 | OBJ/MTL export | Transformed geometry, UVs, normals and material groups | Useful future headless tool over `sta_assets::model::Model`; settle axes/winding and test a synthetic roundtrip first. |
@@ -120,9 +120,9 @@ reference's template-copy converter as evidence of object conversion.
 
 The subsequent [CON-28 start resolver](A1_START_LOCATIONS.md) checks canonical
 MDF counts and exact first `Camera_i` points against original A1 new-game
-placement. All 28 installed companion pairs yield 113 precise starts. This is
-format-side resolution only: a selected-file-aware shared content seam and
-client integration remain pending. Preview pixels are not inverted into world
+placement. All 28 installed companion pairs yield 113 precise starts. The
+[selected-map seam](SELECTED_MAP_CONVERSION.md) connects that resolver to shared
+content conversion and both production client paths. Preview pixels are not inverted into world
 positions, and the original files are not rewritten.
 
 ## Source pointers
