@@ -247,6 +247,10 @@ pub struct UnitDef {
     /// Resolved legacy `is_starbase` ODF flag, default false. This is
     /// independent of the simulation's actor kind or producer behavior.
     pub is_starbase: bool,
+    /// Resolved planet rule family, independent of actor kind and colony state.
+    /// `None` retains the existing non-planet-metadata path; Native content
+    /// opts in explicitly. Filled by the profile-aware ODF loader, or by an author.
+    pub planet_role: Option<crate::planet::PlanetRole>,
     pub race: String,
     pub model: String,
     pub scale: Fixed,
@@ -306,6 +310,7 @@ impl UnitDef {
             odf: odf.to_owned(),
             class: ClassLabel::new(class),
             is_starbase: false,
+            planet_role: None,
             race: String::new(),
             model: String::new(),
             scale: Fixed::ONE,

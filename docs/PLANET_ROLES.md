@@ -110,3 +110,36 @@ role-only seam. The known background mining/Team bugs remain until the
 simulation integration is implemented and verified. The December 2026
 desktop alpha remains the priority; all future consumers share one engine
 across desktop and Android.
+
+## Implemented metadata and verification
+
+The typed field, resolver, known-class admission and optional hash record are
+implemented. Nine focused tests cover the contract, including zero-valued
+colonization/crew keys leaving the Producer family intact. No simulation,
+input, mission or rendering consumer uses the new field yet.
+
+Local six-crate shared suites reported 566 passes, zero failures and ten
+ignored tests, including genuine original v8 mining continuation and the
+unchanged fixed Native fake-content hash. Some installed-content tests return
+early without configured inputs, so this is not complete legacy validation.
+Strict six-crate all-target Clippy, workspace all-target compilation, the
+Android ARM64 client-library check (NDK 29/API 26), scoped formatting/diff and
+an unchanged zero-package offline lock refresh passed. A library check is not
+an APK build or Android runtime acceptance. Independent source/test review
+found no remaining defect after correcting quoted-raw-value test assertions.
+
+A separate read-only installed-content probe confirmed 15 Background roles
+in GOG A1 and one Background/seven Producer roles in stock A2. The actual
+`mearth` and `pb_clssh` definitions resolve as Background and Producer; the
+same A2 tree forced to Native has all 395 unit roles unset. No new role
+warnings occurred in those loads. All 1098 checked metadata-source hashes
+stayed equal (A1/A2 loose ODFs and A1 archives, plus the selected Roots ODF
+archive); models and textures are outside that preservation claim.
+
+The Roots sample was explicitly forced to Fo4 after the existing detector
+selected Sta2Classic. Its 660 units contained neither planet role and its
+117 content warnings remain visible; this sample does not validate FO role
+defaults or correct profile detection. Synthetic tests cover the Fo4 table.
+The detector's treatment of the base layer's authored mod name needs separate
+investigation. No original game execution, assets or private input paths are
+distributed with this metadata prerequisite.
