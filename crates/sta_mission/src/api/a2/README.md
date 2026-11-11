@@ -245,14 +245,15 @@ an entity already destroyed that tick: the real ID remains inspectable but
 the handle is invalid and its pending actions are discarded.
 
 Move/stop/attack/mine/special/cloak orders and the existing remove,
-invincibility and hull edits wait for all pending references, including a
+invincibility, hull and confinement edits wait for all pending references, including a
 pending target. They dispatch once before that tick's Lua callbacks, through
 the normal owner orders or SCRIPT edits. Later actions for the same unit wait
 behind an earlier blocked action, preserving attack-then-stop intent order.
 The sim still validates capabilities
 and sorts commands by player/sequence; global Lua call order is not promised.
-Name, position and shield writes remain unsupported. Owner transfer remains
-unsupported by the sim; assigning a pending handle's player is diagnosed.
+Name, position and shield writes remain unsupported. Assigning a pending
+handle's player remains unsupported and diagnosed; resolved owner changes use
+the shared guarded Team operation described above.
 Camera spots can wait for real spawn receipts, with ordered requests and explicit
 scene cancellation. Destroyed monitors also retain pending request identity,
 then match the resolved ID against the same batch's death events. Failed receipts
