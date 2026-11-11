@@ -4,8 +4,10 @@
 //! OpenSourced-Space-RTS header inspector. No opaque post-header skip is used.
 
 mod body;
+mod starts;
 pub(crate) use body::parse_map;
 pub use body::{AiPath, AreaOfInterest, MapData};
+pub use starts::{StartError, mdf_start_count, player_start_positions};
 
 /// Lossless A1 front matter. The offset identifies metadata, not an object list.
 #[derive(Debug, Clone, PartialEq, Eq)]

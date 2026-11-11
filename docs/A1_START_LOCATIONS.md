@@ -91,3 +91,29 @@ all-targets checking and an Android ARM64 library check where available. These
 checks do not build an APK or establish device/gameplay acceptance. The
 December 2026 desktop alpha stays the priority, with no new release dependency
 or invented completion date.
+
+## Implemented helpers and checks
+
+`sta_bzn::a1::{mdf_start_count, player_start_positions}` implement the checked
+subset above. A caller with independently selected BZN and MDF bytes can parse
+the BZN, require its `a1` data, read the count, then resolve the precise points.
+The helpers perform no companion lookup and change neither the parsed source
+nor `Map.start_locs`. They are not wired into `MapDef` or the client yet.
+
+The BZN suite passed 26 tests with the installed corpus tests explicitly
+enabled. All 49 original A1 maps retain 17,595 objects; all 28 MDF companions
+have matching BZNs and resolve 113 starts. The `2blue` first point matches its
+independently inspected binary32 XYZ payload exactly. The A2 control set still
+parses 72 maps with 34,695 objects and no declared-count mismatches.
+
+Independent review found a corpus-test gap that could leave an orphan MDF
+unchecked; the explicit matching-stem assertion is now included. The six
+dedicated tests passed again after that correction. Strict BZN Clippy and an
+Android ARM64 BZN library check through cargo-ndk/NDK API 26 passed. The content
+and mission library suites reported 90 and 122 passes; their optional
+install-gated cases are not proof of installed mission execution. All 77
+original BZN/MDF SHA-256 values remained unchanged.
+
+Workspace all-targets checking, formatting and diff checks passed. An offline
+workspace lock refresh changed zero packages and left `Cargo.lock` unchanged.
+No new APK or device/runtime claim is made for these helpers.
