@@ -482,6 +482,8 @@ seam rather than writes.
 
 | CON-28 | Pure A1 MDF count and precise Camera_i start resolver; pre-code contract [A1_START_LOCATIONS.md](A1_START_LOCATIONS.md) | sta_bzn/src/a1/starts.rs, narrow a1.rs exports, dedicated tests and contract/support docs | CON-26 | Synthetic canonical/malformed MDF/path fixtures; pinned GOG new-game placement and read-only 49 A1 maps/28 MDFs | Subsequent selected-file-aware content conversion seam | Explicit checked count subset, exact first-path/first-point XYZ without grid inversion or partial results, original corpus and scoped/consumer/Clippy/workspace/Android library checks; no client/gameplay claim | S | Lead |
 
+| CON-29 | Original loose-file A2 roots through shared VFS/client selection; pre-code contract [A2_INSTALL_ROOTS.md](A2_INSTALL_ROOTS.md) | sta_vfs/src/lib.rs narrow selector/doc/module, new flat_a2_tests.rs; install/support docs and WORKPLAN row | CON-27 | Synthetic case/type/Data/mod fixtures and read-only original A2, A1 and FO4 roots | Direct client selection of observed A2 install | Data/A1/error/precedence rules unchanged; require executable file plus odf/bzn directories with no selected mod; actual built-client A2 report reads 72 maps; scoped/consumer/strict/workspace/Android checks and unchanged input hashes | S | Lead |
+
 ### Simulation (SIM)
 
 | ID | Package | Owns | Needs | Against | Unlocks | Done when | Size | Model |
