@@ -111,7 +111,7 @@ fn report_escapes_names_and_describes_typed_lod_and_light() {
 fn file_mode_reports_a_contextual_parser_error_for_malformed_sod() {
     let file = TempFile::new(b"Storm3D_SW");
     let message = run(&args(&["--file", file.0.to_str().unwrap()])).unwrap_err();
-    assert!(message.contains(&file.0.display().to_string()));
+    assert!(message.contains(&format!("{:?}", file.0.to_str().unwrap())));
     assert!(message.contains("parsing SOD"));
 }
 
@@ -204,8 +204,8 @@ fn chunk_modes_report_contextual_parser_errors() {
     let file = TempFile::new(b"Mad3D_SW\0\0");
     let materials = run(&args(&["--chunk-materials", file.0.to_str().unwrap()])).unwrap_err();
     assert!(materials.contains("parsing chunk material library"));
-    assert!(materials.contains(&file.0.display().to_string()));
+    assert!(materials.contains(&format!("{:?}", file.0.to_str().unwrap())));
     let geometry = run(&args(&["--chunk-geometry", file.0.to_str().unwrap()])).unwrap_err();
     assert!(geometry.contains("parsing chunk geometry"));
-    assert!(geometry.contains(&file.0.display().to_string()));
+    assert!(geometry.contains(&format!("{:?}", file.0.to_str().unwrap())));
 }
