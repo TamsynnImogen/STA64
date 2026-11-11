@@ -109,15 +109,70 @@ unknown: first thing to find out.
 - Is "pack" too uniform for render vs content? Check against Refit/Roots.
 - Where does canonical DB schema live and who owns it (WORKPLAN seam)?
 
-## Investigation plan (in progress)
+## Investigation findings (2026-11-11)
 
-Sonnet subagents, read-only, findings written to `docs/research/modding/`:
+Full reports: `docs/research/modding/{fo-hooks-asi,render-mods,repo-seams}.md`.
+Summaries are the agents' own; formulas and ODF.fpq contents are unverified.
 
-1. `fo-hooks-asi.md`: what FleetOps hooks, other `.asi` files and exe patches
-   actually change (A2 install, FO install).
-2. `render-mods.md`: Refit (`/home/cedric/Projects/armada2-refit`) and FO Roots
-   effect/shader approaches, mapped to candidate effect slots.
-3. `repo-seams.md`: current STA64 VFS, ODF/format loading, db seam, WORKPLAN
-   ownership; where a pack/profile layer would attach.
+**Code lineages (fo-hooks-asi).** Only three exist: stock A2, FO 3.2.7
+(in-memory `FleetOpsHook.dll`, stock exe renamed `Armada2.ldl` behind a
+loader), Roots 5.0Z11 (patched `ArmadaL.exe` plus its own hook). "FO 4.0" and
+"STA2 Classic" are data submods under Roots `Data/Mods/`. FO plain and
+Dominion War are code-identical. Profiles therefore key on code lineage plus
+a data-mod layer, matching the pack model. Fingerprints: `.test` exe section,
+`AssetVersion=50000`, `Armada2.ldl`. Every `.asi` except
+`STA2WidescreenPatch.asi` is Refit's own. Roots' `devstuff/Engine_Changelog.txt`
+(616 lines) is the best quirk source: sentinel ODF keys (`hitChanceMod`,
+`lodShift`, `avoidanceclass`, `percentNebulaWarn`), MP factions 8 -> 16,
+autonomy rework, new RTS_CFG/ART_CFG keys. All engine-rule detours, so
+reimplementable as named quirks/tunables (`limit.*`, `cfg.*`, `odf.*`, `sim.*`,
+`a2.*` ID families).
 
-Next: read the three reports, revise this doc, draft `docs/MODDING.md`.
+**Render (render-mods).** Refit is not a shader override: it is an `.asi`
+replacing render steps with its own renderer, driven by ini "recipes".
+Roots' visual changes are data (SODs, DDS, ODF keys, cfg numbers) plus a
+ReShade post chain; only a bump-mesh path and cloak alpha are engine code.
+Amendments to the slot idea:
+- A slot's real contract is its *inputs* (depth, scene copy, lights, shadow
+  map, hit data, sim clock): needs a versioned input contract.
+- Slots need a binding key (ODF, texture, race, skybox) and a fallback to the
+  default draw; post is an ordered chain.
+- Pack contributions are three kinds: parameter set, asset selection, shader
+  implementation. **v1 = parameters + asset selection + post chain; user
+  shader replacement later.** (Supersedes "WGSL override" above.) Recipe
+  numbers are fitted per art set, so the profile supplies default params.
+- Tiers: Roots data T0, Refit recipes/ini T1, ReShade preset T2, Refit
+  shaders and Roots engine-code behaviour T3.
+
+**Repo (repo-seams).**
+- `sta_vfs` already has `manifest.toml` (deps, `[load]`), `order.rs` load
+  order/`identity()`, `.sta` archives, `Vfs::resolve_all`. Extend it; no
+  second manifest. But ~50 call sites use `Vfs::mount_install`, and mod
+  identity is not wired into `ContentDb::hash`.
+- Profiles are close to the design (defaults < mod `[Features]` < per-ODF
+  `Feature_*`), but `Profile` is a closed 4-variant enum, `Features` a struct
+  of 22 bools, and sim/content `match profile` in several places. Making
+  profiles data (keyed typed quirk table) is a seam PR (proposed MOD-03).
+  Quirk values must obey determinism rules (`Fixed`, no `HashMap`, hashed).
+- No exe fingerprint detection yet; `Manifest::profile` is parsed but unused.
+- Ready pieces: `NotListed` tech rule as first named quirk; ODF FO
+  self-includes as key-level inheritance; data-driven menu scene
+  (`assets/menu/map.ini`); Lua/MMM runtime (`sta_mission`) as tier-3 script;
+  `SimEvent` as hook source (no `ui.hover` yet). Shaders are embedded `.wesl`,
+  no slot registry.
+- Proposed packages MOD-01..MOD-13 (RFC, pack mount, profile-as-data,
+  exe fingerprint, quirk registry, ODF fragments + provenance, tier loaders,
+  hook importer, render slots, triggers, script layer, pack UI, hot reload).
+  Check `origin/main` for free IDs before claiming.
+
+## Open unknowns
+
+- Roots `ODF.fpq` key survey; FO 4.0 effect SODs vs FO plain; Dominion War
+  data diff; widescreen patch internals; A1 community patches.
+- No disassembly yet: quirk formulas unverified; stock RTS_CFG defaults not
+  found on disk.
+
+## Next
+
+Draft `docs/MODDING.md` from this doc and the three reports; then claim MOD-01
+(RFC) per AGENTS.md if wanted.
