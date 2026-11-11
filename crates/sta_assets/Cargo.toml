@@ -18,3 +18,7 @@ thiserror.workspace = true
 [dev-dependencies]
 sta_bzn.workspace = true
 sta_odf.workspace = true
+
+[[example]]
+name = "model_textures"
+test = true
