@@ -1335,24 +1335,49 @@ mod tests {
         assert_eq!(sites[&EntityId(3)].bees[0].phase, BeePhase::Waiting);
         assert_eq!(app.world().resource::<crate::render::construction::ConstructionWork>().starts.get(&EntityId(3)), Some(&None));
         assert!(app.world().resource::<ConstructionBays>().open.contains(&EntityId(1)));
+        {
+            let world = app.world_mut();
+            let mut query = world.query::<(&SpecialFx, &FxAlpha)>();
+            assert!(query.iter(world).any(|(fx, _)| fx.subject == EntityId(3)
+                && fx.kind == SpecialKind::Weld && fx.bee == Some(0)), "worker beam exists");
+            assert!(query.iter(world).filter(|(fx, _)| fx.subject == EntityId(3)
+                && fx.kind == SpecialKind::Weld && fx.bee == Some(0))
+                .all(|(_, alpha)| alpha.0 == 0.0), "waiting bee beam is hidden");
+        }
         let mut welded = false;
+        let mut traveled = false;
         while app.world().resource::<SimLink>().curr().tick < 90 {
             app.update();
-            let sites = &app.world().resource::<Construction>().active;
-            if sites[&EntityId(3)].bees[0].phase == BeePhase::Welding {
-                assert!(sites[&EntityId(3)].bees[0].at.distance(sites[&EntityId(3)].bees[0].edge) >= 14.9,
+            let (phase, at, edge) = {
+                let bee = &app.world().resource::<Construction>().active[&EntityId(3)].bees[0];
+                (bee.phase, bee.at, bee.edge)
+            };
+            if phase == BeePhase::Traveling {
+                let world = app.world_mut();
+                let mut query = world.query::<(&SpecialFx, &FxAlpha)>();
+                assert!(query.iter(world).filter(|(fx, _)| fx.subject == EntityId(3)
+                    && fx.kind == SpecialKind::Weld && fx.bee == Some(0))
+                    .all(|(_, alpha)| alpha.0 == 0.0), "traveling bee beam is hidden");
+                traveled = true;
+            }
+            if phase == BeePhase::Welding {
+                assert!(at.distance(edge) >= 14.9,
                     "default stand-off leaves a visible beam");
                 assert_eq!(app.world().resource::<crate::render::construction::ConstructionWork>().starts.get(&EntityId(3)), Some(&None),
                     "arrival alone must not reveal the station");
                 let world = app.world_mut();
                 let mut query = world.query::<(&SpecialFx, &Transform, &FxAlpha)>();
                 // The arc shares the current geometry edge, with the beam lit only while welding.
+                assert!(query.iter(world).any(|(fx, _, alpha)| fx.subject == EntityId(3)
+                    && fx.kind == SpecialKind::Weld && fx.bee == Some(0) && alpha.0 > 0.0),
+                    "stationary welding bee beam is visible");
                 assert!(query.iter(world).any(|(fx, transform, alpha)| fx.subject == EntityId(3)
                     && fx.kind == SpecialKind::Arc && transform.translation.distance(Vec3::new(30.0,0.0,0.0)) < 0.01 && alpha.0 > 0.0));
                 welded = true;
                 break;
             }
         }
+        assert!(traveled, "bee never traveled to its welding edge");
         assert!(welded, "bee never welded at the published edge");
         while app.world().resource::<SimLink>().curr().tick < 90
             && app.world().resource::<Construction>().active[&EntityId(3)].bees[0].cycle == 0 { app.update(); }
@@ -1367,6 +1392,9 @@ mod tests {
         let mut query = world.query::<(&SpecialFx, &FxAlpha)>();
         assert!(query.iter(world).filter(|(fx, _)| fx.subject == EntityId(3) && fx.kind == SpecialKind::Weld)
             .all(|(_, alpha)| alpha.0 == 0.0), "return must extinguish beams");
+        assert!(query.iter(world).filter(|(fx, _)| fx.subject == EntityId(3)
+            && fx.kind == SpecialKind::Weld && fx.bee == Some(0))
+            .all(|(_, alpha)| alpha.0 == 0.0), "returning bee beam is hidden");
         to_tick(&mut app, 105);
         let sites = &app.world().resource::<Construction>().active;
         assert_eq!(sites[&EntityId(3)].bees[0].phase, BeePhase::Closing);
