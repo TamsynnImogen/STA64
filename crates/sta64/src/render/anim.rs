@@ -85,6 +85,10 @@ pub struct EventAnim {
     pub root: Entity,
     /// Anim-clock time the current play began; `None` at rest.
     pub started: Option<f64>,
+    /// Construction keeps the bay open until every worker has returned.
+    held: bool,
+    /// Fraction open when a held bay begins closing, including early cancellation.
+    closing_from: Option<f32>,
 }
 
 impl EventAnim {
@@ -93,6 +97,8 @@ impl EventAnim {
             track,
             root,
             started: None,
+            held: false,
+            closing_from: None,
         }
     }
 }
@@ -168,10 +174,18 @@ pub fn start_events(
 }
 
 /// Poses event tracks: at rest on the first key, or mid-play.
-pub fn play_events(clock: Res<AnimClock>, mut q: Query<(&mut EventAnim, &mut Transform)>) {
+pub fn play_events(clock: Res<AnimClock>,
+    bays: Option<Res<crate::render::fx::specials::ConstructionBays>>,
+    roots: Query<&crate::sim_link::SimEntity>,
+    mut q: Query<(&mut EventAnim, &mut Transform)>,
+) {
     let now = clock.now();
     for (mut a, mut tf) in &mut q {
-        let (p, going) = pose(&a.track, a.started.map(|s| (now - s) as f32));
+        let held = roots
+            .get(a.root)
+            .ok()
+            .is_some_and(|id| bays.as_ref().is_some_and(|b| b.open.contains(&id.0)));
+        let (p, going) = construction_pose(&mut a, now, held);
         if !going && a.started.is_some() {
             a.started = None;
         }
@@ -181,12 +195,50 @@ pub fn play_events(clock: Res<AnimClock>, mut q: Query<(&mut EventAnim, &mut Tra
     }
 }
 
+/// Construction uses the existing event track in two halves: open and hold,
+/// then close after the last worker is home. Other launches retain their
+/// forward/back event behavior. Reopening a closing bay preserves its pose.
+fn construction_pose(a: &mut EventAnim, now: f64, held: bool) -> (Transform, bool) {
+    let fraction = |a: &EventAnim| {
+        let elapsed = a.started.map_or(0.0, |s| (now - s).max(0.0) as f32);
+        match a.closing_from {
+            Some(from) => (from - elapsed / a.track.period).clamp(0.0, 1.0),
+            None => (elapsed / a.track.period).clamp(0.0, 1.0),
+        }
+    };
+    if held && !a.held {
+        let from = if a.closing_from.is_some() {
+            fraction(a)
+        } else {
+            0.0
+        };
+        a.started = Some(now - f64::from(from * a.track.period));
+        a.closing_from = None;
+    } else if !held && a.held {
+        a.closing_from = Some(fraction(a));
+        a.started = Some(now);
+    }
+    a.held = held;
+    if held || a.closing_from.is_some() {
+        let open = fraction(a);
+        let k = ((open * key_count(&a.track) as f32) as usize).min(key_count(&a.track) - 1);
+        let going = held || open > 0.0;
+        if !going {
+            a.closing_from = None;
+        }
+        (key_pose(&a.track, k), going)
+    } else {
+        pose(&a.track, a.started.map(|s| (now - s) as f32))
+    }
+}
+
 pub fn add_systems(app: &mut App) {
     use crate::app::GameSet;
     app.add_message::<SimMsg>().add_systems(
         Update,
         (start_events, play_events)
             .chain()
+            .after(crate::render::fx::specials::ConstructionSet)
             .in_set(GameSet::Interpolate)
             .run_if(resource_exists::<crate::sim_link::SimLink>),
     );
@@ -245,6 +297,33 @@ mod tests {
         let (back, going) = pose(&d, Some(3.9));
         assert!(going && back.translation.x < 2.0);
         assert_eq!(pose(&d, Some(4.1)), (Transform::IDENTITY, false));
+    }
+
+    #[test]
+    fn construction_holds_the_bay_until_workers_return_then_closes() {
+        let mut a = EventAnim::new(door(), Entity::PLACEHOLDER);
+        assert_eq!(construction_pose(&mut a, 10.0, true).0.translation.x, 0.0);
+        assert_eq!(construction_pose(&mut a, 11.0, true).0.translation.x, 10.0);
+        assert_eq!(construction_pose(&mut a, 50.0, true).0.translation.x, 19.0);
+        // A paused clock produces exactly the same pose.
+        assert_eq!(construction_pose(&mut a, 50.0, true).0.translation.x, 19.0);
+        assert_eq!(construction_pose(&mut a, 51.0, false).0.translation.x, 19.0);
+        assert_eq!(construction_pose(&mut a, 52.0, false).0.translation.x, 10.0);
+        let (shut, going) = construction_pose(&mut a, 53.0, false);
+        assert_eq!(shut.translation.x, 0.0);
+        assert!(!going);
+    }
+
+    #[test]
+    fn cancelled_build_closes_from_current_pose_and_new_build_reopens() {
+        let mut a = EventAnim::new(door(), Entity::PLACEHOLDER);
+        construction_pose(&mut a, 0.0, true);
+        let before_cancel = construction_pose(&mut a, 0.8, true).0;
+        assert_eq!(construction_pose(&mut a, 0.8, false).0, before_cancel);
+        let closing = construction_pose(&mut a, 1.0, false).0;
+        assert!(closing.translation.x < before_cancel.translation.x);
+        assert_eq!(construction_pose(&mut a, 1.0, true).0, closing);
+        assert!(construction_pose(&mut a, 1.5, true).0.translation.x > closing.translation.x);
     }
 
     /// An idle ship's bay stays shut; a launch event plays it once.

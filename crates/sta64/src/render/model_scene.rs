@@ -9,14 +9,14 @@
 
 use crate::render::sprites::{self, Billboard, SpriteFx, UvFlipbook};
 use crate::render::textures::Loader;
-use sta_assets::a2fmt::spr::SpriteTable;
-use sta_assets::spr_anim;
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::Indices;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Face, PrimitiveTopology};
 use sta_assets::a2fmt::Matrix34;
+use sta_assets::a2fmt::spr::SpriteTable;
 use sta_assets::model::{Group, Keys, Mesh as ModelMesh, Model, NodeKind};
+use sta_assets::spr_anim;
 use std::collections::{HashMap, HashSet};
 
 mod pbr;
@@ -54,8 +54,9 @@ pub struct PartCache {
     map: HashMap<PartKey, CachedPart>,
 }
 
-/// Model, node, group, team colour, Borg, normal maps, ScaleSOD bits.
-type PartKey = (String, usize, usize, [u8; 3], bool, bool, bool, u32);
+/// Model, node, group, team colour, Borg, normal maps, unlit, ScaleSOD bits,
+/// and whether the shared source must remain CPU-readable for construction.
+type PartKey = (String, usize, usize, [u8; 3], bool, bool, bool, u32, bool);
 
 #[derive(Clone)]
 struct CachedPart {
@@ -140,6 +141,33 @@ pub struct SpawnCtx<'a, 'w, 's> {
 
 /// Spawn `model` under `root`. Only the finest LOD level of each LOD switch is shown.
 pub fn spawn(ctx: &mut SpawnCtx, model: &Model, root: Entity) -> SpawnStats {
+    spawn_impl(ctx, model, root, None)
+}
+
+/// Spawn an unfinished instance with deterministic spatial geometry reveal.
+/// Construction data is attached only to partial instances; progress is applied
+/// before the first frame so no fully-built hull is briefly visible.
+pub fn spawn_construction(
+    ctx: &mut SpawnCtx,
+    model: &Model,
+    root: Entity,
+    chunks: u16,
+    progress: f32,
+) -> SpawnStats {
+    let progress = progress.clamp(0.0, 1.0);
+    if progress >= 1.0 {
+        spawn(ctx, model, root)
+    } else {
+        spawn_impl(ctx, model, root, Some((chunks.clamp(1, 256), progress)))
+    }
+}
+
+fn spawn_impl(
+    ctx: &mut SpawnCtx,
+    model: &Model,
+    root: Entity,
+    construction: Option<(u16, f32)>,
+) -> SpawnStats {
     let mut stats = SpawnStats::default();
 
     // Hide every LOD level except the most detailed.
@@ -151,6 +179,38 @@ pub fn spawn(ctx: &mut SpawnCtx, model: &Model, root: Entity) -> SpawnStats {
     if legacy && !ctx.borg {
         hidden.extend(model.borg_node());
     }
+    let mut visible_nodes = HashSet::new();
+    let mut visible_stack: Vec<usize> = model.roots().collect();
+    while let Some(index) = visible_stack.pop() {
+        if hidden.contains(&index) {
+            continue;
+        }
+        visible_nodes.insert(index);
+        visible_stack.extend(model.nodes[index].children.iter().copied());
+    }
+    // Unit attachment keeps damage geometry in the tree for show_damage. It
+    // remains opaque/hidden through construction and is not part of the reveal.
+    let mut damage_stack = if legacy {
+        model.damage_nodes()
+    } else {
+        Vec::new()
+    };
+    while let Some(index) = damage_stack.pop() {
+        visible_nodes.remove(&index);
+        damage_stack.extend(model.nodes[index].children.iter().copied());
+    }
+    let plan = construction.and_then(|(chunks, _)| {
+        crate::render::construction::ConstructionPlan::build(
+            model,
+            chunks,
+            ctx.scale,
+            &visible_nodes,
+        )
+    });
+    let completed = match (construction, plan.as_ref()) {
+        (Some((_, progress)), Some(plan)) => (progress * plan.chunk_count as f32).floor() as usize,
+        _ => 0,
+    };
 
     let anims: HashMap<String, &sta_assets::model::Channel> =
         model.channels.iter().map(|c| (c.node.to_ascii_lowercase(), c)).collect();
@@ -177,7 +237,8 @@ pub fn spawn(ctx: &mut SpawnCtx, model: &Model, root: Entity) -> SpawnStats {
         let parent = node.parent.and_then(|p| entities[p]).unwrap_or(root);
         let mut base = to_bevy(&node.transform);
         base.translation *= ctx.scale;
-        let mut e = ctx.commands.spawn((Name::new(node.name.clone()), base, Visibility::default(), ChildOf(parent)));
+        let mut e = ctx.commands.spawn((Name::new(node.name.clone()), base, Visibility::default(), ChildOf(parent),
+        ));
         if !legacy { e.insert(NativeNode); }
 
         let key_count = anims.get(&node.name.to_ascii_lowercase()).map_or(0, |c| match &c.keys {
@@ -224,11 +285,18 @@ pub fn spawn(ctx: &mut SpawnCtx, model: &Model, root: Entity) -> SpawnStats {
                 max = max.max(w);
             }
             let flip = flipbooks.get(&node.name.to_ascii_lowercase());
-            spawn_mesh(ctx, model, i, mesh, id, flip, &mut stats);
+            spawn_mesh(ctx, model, i, mesh, id, flip,
+                plan.as_ref().map(|plan| (plan, root, completed)),
+                &mut stats,
+            );
         }
         match &node.kind {
-            NodeKind::Sprite => spawn_sprite_node(ctx, node.sprite_node_id(), id, &quad, &mut stats),
-            NodeKind::Emitter(emitter) => match crate::render::particles::Template::new(ctx.sprites, emitter) {
+            NodeKind::Sprite => spawn_sprite_node(ctx, node.sprite_node_id(), id, &quad,
+                construction.map(|_| root),
+                &mut stats,
+            ),
+            NodeKind::Emitter(emitter) => {
+                match crate::render::particles::Template::new(ctx.sprites, emitter) {
                 Some(tpl) => {
                     ctx.commands.entity(id).insert(crate::render::particles::Emitter {
                         tpl: std::sync::Arc::new(tpl),
@@ -236,10 +304,17 @@ pub fn spawn(ctx: &mut SpawnCtx, model: &Model, root: Entity) -> SpawnStats {
                         timer: 0.0,
                         rng: Default::default(),
                     });
+                        if construction.is_some() {
+                            ctx.commands.entity(id).insert((
+                                crate::render::construction::ConstructionDecor { owner: root },
+                                Visibility::Hidden,
+                            ));
+                        }
                     stats.emitters += 1;
                 }
                 None => stats.unknown_sprite_nodes.push(format!("emitter {emitter}")),
-            },
+            }
+            }
             _ => {}
         }
 
@@ -261,7 +336,10 @@ pub fn spawn(ctx: &mut SpawnCtx, model: &Model, root: Entity) -> SpawnStats {
     stats
 }
 
-fn spawn_sprite_node(ctx: &mut SpawnCtx, id: &str, parent: Entity, quad: &Handle<Mesh>, stats: &mut SpawnStats) {
+fn spawn_sprite_node(ctx: &mut SpawnCtx, id: &str, parent: Entity, quad: &Handle<Mesh>,
+    construction_owner: Option<Entity>,
+    stats: &mut SpawnStats,
+) {
     let table = ctx.sprites;
     // The moons' round nimbus: their cracks carry the light instead (RND-05).
     if id.eq_ignore_ascii_case("oreglow") && !crate::render::rock::MOON_NIMBUS {
@@ -311,6 +389,12 @@ fn spawn_sprite_node(ctx: &mut SpawnCtx, id: &str, parent: Entity, quad: &Handle
     if billboard {
         e.insert(Billboard);
     }
+    if let Some(owner) = construction_owner {
+        e.insert((
+            crate::render::construction::ConstructionDecor { owner },
+            Visibility::Hidden,
+        ));
+    }
     stats.sprite_nodes += 1;
 }
 
@@ -322,6 +406,11 @@ fn spawn_mesh(
     mesh: &ModelMesh,
     parent: Entity,
     flipbook: Option<&(String, f32)>,
+    construction: Option<(
+        &crate::render::construction::ConstructionPlan,
+        Entity,
+        usize,
+    )>,
     stats: &mut SpawnStats,
 ) {
     let two_sided = mesh.two_sided;
@@ -346,9 +435,15 @@ fn spawn_mesh(
             ctx.normal_maps,
             ctx.unlit,
             ctx.scale.to_bits(),
+            construction.is_some(),
         );
+        let reveal = construction
+            .map(|(plan, _, _)| plan.part_source(model, node_index, group_index, mesh, ctx.scale));
         if let Some(part) = ctx.parts.as_ref().and_then(|c| c.map.get(&cache_key)).cloned() {
-            spawn_part(ctx, &part, parent, flipbook, stats);
+            spawn_part(ctx, &part, parent, flipbook,
+                construction.map(|(_, root, stage)| (root, reveal.clone().unwrap(), stage)),
+                stats,
+            );
             bumped |= part.bumped;
             continue;
         }
@@ -418,14 +513,21 @@ fn spawn_mesh(
         let normals: Vec<[f32; 3]> = positions
             .iter()
             .enumerate()
-            .map(|(i, p)| attributes.and_then(|a| a.normals.as_ref())
+            .map(|(i, p)| {
+                attributes.and_then(|a| a.normals.as_ref())
                 .and_then(|n| n.get(source_positions[i])).copied().map(mirror)
-                .unwrap_or_else(|| by_pos[&key(*p)].normalize_or(Vec3::Y).to_array()))
+                .unwrap_or_else(|| by_pos[&key(*p)].normalize_or(Vec3::Y).to_array())
+            })
             .collect();
 
         let triangles = indices.len() / 3;
 
-        let mut bevy_mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
+        let usage = if construction.is_some() {
+            RenderAssetUsages::default()
+        } else {
+            RenderAssetUsages::RENDER_WORLD
+        };
+        let mut bevy_mesh = Mesh::new(PrimitiveTopology::TriangleList, usage)
             .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
             .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
             .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
@@ -453,7 +555,8 @@ fn spawn_mesh(
         let self_illum = lm.is_some_and(|m| m.self_illuminating);
         let base_color = if team { ctx.team } else { Color::WHITE };
         let mut material = if let Some((pbr_model, source)) = native {
-            pbr::material(&mut ctx.textures, pbr_model, source, ctx.normal_maps, ctx.unlit, stats)
+            pbr::material(&mut ctx.textures, pbr_model, source, ctx.normal_maps, ctx.unlit, stats,
+            )
         } else { StandardMaterial {
             base_color,
             base_color_texture: texture,
@@ -473,8 +576,9 @@ fn spawn_mesh(
             // A glTF normal texture can select UV1. Tangent generation uses UV0;
             // temporarily use the selected coordinates without changing the asset.
             let uv0 = if material.normal_map_channel == bevy::mesh::UvChannel::Uv1 {
-                match (bevy_mesh.attribute(Mesh::ATTRIBUTE_UV_0).cloned(), bevy_mesh.attribute(Mesh::ATTRIBUTE_UV_1).cloned()) {
-                    (Some(uv0), Some(uv1)) => { bevy_mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv1); Some(uv0) },
+                match (bevy_mesh.attribute(Mesh::ATTRIBUTE_UV_0).cloned(), bevy_mesh.attribute(Mesh::ATTRIBUTE_UV_1).cloned(),
+                ) {
+                    (Some(uv0), Some(uv1)) => { bevy_mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv1); Some(uv0) }
                     _ => None,
                 }
             } else { None };
@@ -512,7 +616,8 @@ fn spawn_mesh(
         let hull = (native.is_none() && !ctx.unlit && rock.is_none()).then_some(crate::render::hulls::HullPart {
             self_illum,
             cut_alpha: group.blend == "default" && !self_illum,
-        });
+        },
+        );
         let part = CachedPart {
             mesh: ctx.meshes.add(bevy_mesh),
             material: ctx.materials.add(material),
@@ -525,22 +630,62 @@ fn spawn_mesh(
         if let Some(cache) = ctx.parts.as_mut() {
             cache.map.insert(cache_key, part.clone());
         }
-        spawn_part(ctx, &part, parent, flipbook, stats);
+        spawn_part(ctx, &part, parent, flipbook,
+            construction.map(|(_, root, stage)| (root, reveal.unwrap(), stage)),
+            stats,
+        );
     }
     if bumped {
         stats.bump_meshes += 1;
     }
 }
 
-fn spawn_part(ctx: &mut SpawnCtx, part: &CachedPart, parent: Entity, flipbook: Option<&(String, f32)>, stats: &mut SpawnStats) {
+fn spawn_part(ctx: &mut SpawnCtx, part: &CachedPart, parent: Entity, flipbook: Option<&(String, f32)>,
+    construction: Option<(
+        Entity,
+        std::sync::Arc<crate::render::construction::ConstructionSource>,
+        usize,
+    )>,
+    stats: &mut SpawnStats,
+) {
+    let mut private = None;
+    let mesh = if let Some((root, source, completed)) = construction {
+        if let Some(mut partial) = ctx.meshes.get(&part.mesh).cloned() {
+            let indices = source
+                .stage_indices
+                .iter()
+                .take(completed)
+                .flat_map(|stage| stage.iter().copied())
+                .collect();
+            partial.insert_indices(Indices::U32(indices));
+            partial.asset_usage = RenderAssetUsages::default();
+            let handle = ctx.meshes.add(partial);
+            private = Some((root, source, completed, handle.clone()));
+            handle
+        } else {
+            warn!("construction mesh source unavailable; withholding full mesh");
+            return;
+        }
+    } else {
+        part.mesh.clone()
+    };
     stats.triangles += part.triangles;
     stats.meshes += 1;
     let mut e = ctx.commands.spawn((
-        Mesh3d(part.mesh.clone()),
+        Mesh3d(mesh),
         MeshMaterial3d(part.material.clone()),
         Transform::IDENTITY,
         ChildOf(parent),
     ));
+    if let Some((owner, source, completed, partial)) = private {
+        e.insert(crate::render::construction::ConstructionPart {
+            owner,
+            original: part.mesh.clone(),
+            partial,
+            source,
+            completed,
+        });
+    }
     if part.team {
         e.insert(TeamPart);
     }
@@ -586,13 +731,16 @@ mod tests {
     /// The quad lies in the XY plane facing +Z; +u runs along +X, +v (down the
     /// image) along -Y.
     fn shade(texel: [u8; 3]) -> Vec3 {
-        let mut m = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
+        let mut m = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default(),
+        )
             .with_inserted_attribute(
                 Mesh::ATTRIBUTE_POSITION,
-                vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
+                vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0],
+            ],
             )
             .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 0.0, 1.0]; 4])
-            .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]])
+            .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]],
+        )
             .with_inserted_indices(Indices::U32(vec![0, 1, 2, 0, 2, 3]));
         m.generate_tangents().unwrap();
         let Some(bevy::mesh::VertexAttributeValues::Float32x4(t)) = m.attribute(Mesh::ATTRIBUTE_TANGENT) else {

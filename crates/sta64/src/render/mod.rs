@@ -2,6 +2,7 @@
 //! the ships on the map (docs/WORKPLAN.md, RND lane).
 
 pub mod anim;
+pub mod construction;
 pub mod fog;
 pub mod fx;
 pub mod hulls;

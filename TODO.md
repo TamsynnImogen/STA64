@@ -84,6 +84,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] Playable race selection: on an updated build, the Instant Action picker should offer only the effective `races.odf` slot entries, including slot 0; NPC unit race names must not add choices. Original A1 uses the A2FOExtensions interface-based fallback. Confirm the selected race’s interface and start units match. [Rule and overrides](docs/PLAYABLE_RACES.md).
 
+- [?] Station construction (#349, updated builds): build a Federation station in Armada 2 Classic. Its solid hull should appear in chunks; bees should leave the constructor's named bays after the takeoff delay, weld with sparks on the next chunk's edges, return home and then let the bays close. Cancel a second station and start another build to check returning bees and cleanup. Constructor timing/beam overrides and the station's optional `constructionChunks` are documented in [construction visuals](docs/CONSTRUCTION_VISUALS.md). Automated geometry/phase and windowless render checks are separate from this live acceptance check.
+
 ## Checked earlier (morning list)
 
 Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
