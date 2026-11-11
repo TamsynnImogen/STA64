@@ -125,6 +125,9 @@ existing path unchanged.
 
 Treat changed kinematic positions as real position updates, then perform the
 finished Craft-family ordinary tick even if immobile or engine-disabled.
+Native opt-in uses that same finished-actor tick as an explicit STA64 rule;
+it is not a claim about a legacy Native class. Native construction stays
+update-driven under its plain-GameObject policy.
 Apply further ordinary updates after actual separation/field position changes.
 Plain GameObject/incomplete timing is update-driven; terrain bypasses the
 geometry. In one A1 update, a previously false flag can arm from padded X/Z
