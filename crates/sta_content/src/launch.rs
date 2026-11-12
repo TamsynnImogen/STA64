@@ -47,7 +47,8 @@ fn bounding_circle(sod: &Sod) -> f32 {
 /// Collision radius, units, of a unit whose model exists only as a render
 /// replacement (glTF/GLB/M3D) with no readable SOD to measure. Equal to
 /// [`DEFAULT_CLEAR`], the stated size for an unreadable model; a placeholder
-/// until the engine's own size rule is ported. Units with no model at all
+/// until the engine's own size rule is ported. Not scaled by `ScaleSOD`.
+/// Units with no model at all
 /// (or only an unreadable SOD) keep radius zero, as before.
 pub const FALLBACK_RADIUS: i32 = DEFAULT_CLEAR;
 
