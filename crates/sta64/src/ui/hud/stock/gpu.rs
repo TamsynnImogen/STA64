@@ -110,6 +110,11 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         ];
     }
     let bar_variant = super::layout::info_variant(&super::super::model::info(&hud_feed));
+    let info = stock.pieces(match bar_variant {
+        0 => "infoLowBackgroundPanel",
+        1 => "infoMiddleBackgroundPanel",
+        _ => "infoBackgroundPanel",
+    });
     let player = hud_feed.view.player(hud_feed.player).expect("capture player");
     let whole = |value: Fixed| value.to_bits() / Fixed::ONE.to_bits();
     let crew_text = player.crew.map(|v| whole(v).to_string()).unwrap_or_default();
@@ -247,7 +252,11 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         .query::<(&GuiButton, &ImageNode)>()
         .iter(app.world())
         .count();
-    assert!(commands > 0, "{label}: no command button art resolved");
+    if matches!(hover_mode, HoverCapture::Low) {
+        assert_eq!(commands, 0, "{label}: hovering must not enable selection commands");
+    } else {
+        assert!(commands > 0, "{label}: no command button art resolved");
+    }
     let resources = app
         .world_mut()
         .query::<&super::info::StockText>()
