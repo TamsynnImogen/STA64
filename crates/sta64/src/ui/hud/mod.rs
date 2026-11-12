@@ -151,6 +151,8 @@ impl Plugin for HudPlugin {
             .add_systems(
                 Update,
                 (
+                    panels::reset_on_theme,
+                    panels::spawn_root,
                     feed_from_link.run_if(resource_exists::<SimLink>).run_if(not(resource_exists::<ExternalFeed>)),
                     fit_screen,
                     refresh,
@@ -164,7 +166,9 @@ impl Plugin for HudPlugin {
                     super::gui_sprites::paint.after(super::theme::WidgetPaint),
                 )
                     .chain()
-                    .in_set(GameSet::Ui),
+                    .in_set(GameSet::Ui)
+                    .after(crate::ui::profile::ProfileSync)
+                    .after(crate::ui::radar::RadarUi),
             );
     }
 }
@@ -221,7 +225,7 @@ fn refresh(
     }
     let now = models(&feed, state.page, layout.0.no_resource);
     let height = now.info.height();
-    let layout_changed = layout.is_changed() || state.height != height || state.drawn.is_none();
+    let layout_changed = layout.is_changed() || theme.is_changed() || state.height != height || state.drawn.is_none();
     let drawn = state.drawn.take();
     let l = &layout.0;
     let row = l.bottom_row(height);

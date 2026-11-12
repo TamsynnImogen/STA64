@@ -31,6 +31,7 @@ use super::theme::Theme;
 use crate::app::GameSet;
 use crate::sim_link::{ContentRes, SimLink, SimMsg};
 use crate::ui::i18n::{tr, trf};
+use crate::ui::profile::ProfileSync;
 
 /// Seconds a notice shows, fade included.
 pub const NOTICE_SECS: f32 = 5.0;
@@ -357,6 +358,43 @@ fn spawn_roots(mut commands: Commands, theme: Res<Theme>) {
     ));
 }
 
+/// The roots and tooltip persist across a theme switch. Rebuild only their
+/// displayed children; the active notice and chat history resources survive.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn retheme(
+    theme: Res<Theme>,
+    mut notices: ResMut<Notices>,
+    mut log: ResMut<ChatLog>,
+    mut notice_roots: Query<&mut Node, (With<NoticeRoot>, Without<ChatRoot>, Without<TipBox>)>,
+    mut chat_roots: Query<&mut Node, (With<ChatRoot>, Without<NoticeRoot>, Without<TipBox>)>,
+    mut tips: Query<(&mut Node, &mut BackgroundColor, &mut BorderColor), (With<TipBox>, Without<NoticeRoot>, Without<ChatRoot>)>,
+    mut tip_texts: Query<(&mut TextFont, &mut TextColor), With<TipText>>,
+) {
+    if !theme.is_changed() {
+        return;
+    }
+    for mut root in &mut notice_roots {
+        root.top = Val::Px(theme.pad * 4.0);
+        root.row_gap = Val::Px(theme.gap * 0.5);
+    }
+    for mut root in &mut chat_roots {
+        root.top = Val::Px(theme.pad * 4.0);
+        root.left = Val::Px(theme.pad);
+    }
+    for (mut node, mut background, mut border) in &mut tips {
+        node.max_width = Val::Px(theme.text_size * 20.0);
+        node.padding = UiRect::axes(Val::Px(theme.pad), Val::Px(theme.gap * 0.5));
+        background.0 = theme.panel;
+        *border = BorderColor::all(theme.accent2);
+    }
+    for (mut font, mut color) in &mut tip_texts {
+        font.font_size = bevy::text::FontSize::Px(theme.small_size);
+        color.0 = theme.text;
+    }
+    notices.dirty = true;
+    log.dirty = true;
+}
+
 fn draw_notices(
     mut commands: Commands,
     theme: Res<Theme>,
@@ -463,7 +501,7 @@ impl Plugin for NoticePlugin {
             .add_observer(on_over)
             .add_observer(on_out)
             .add_systems(Startup, spawn_roots)
-            .add_systems(Update, (events_to_notices, collect, age, (draw_notices, draw_chat, draw_tip)).chain().in_set(GameSet::Ui));
+            .add_systems(Update, (events_to_notices, collect, age, retheme, (draw_notices, draw_chat, draw_tip)).chain().in_set(GameSet::Ui).after(ProfileSync));
     }
 }
 
@@ -589,5 +627,33 @@ mod tests {
         assert_eq!(display(&mut app), Display::Flex);
         let words = app.world_mut().query_filtered::<&Text, With<TipText>>().single(app.world()).unwrap().0.clone();
         assert_eq!(words, "Metal");
+    }
+
+    #[test]
+    fn theme_switch_restyles_roots_without_losing_messages() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        configure_sets(&mut app);
+        app.add_plugins(NoticePlugin);
+        app.update();
+        app.world_mut().write_message(Notice::new(Severity::Warn, "Shields low"));
+        app.world_mut().write_message(ChatMsg { from: "Ada".into(), text: "Ready".into() });
+        app.update();
+        assert_eq!(app.world().resource::<Notices>().active.len(), 1);
+        assert_eq!(app.world().resource::<ChatLog>().lines.len(), 2);
+
+        let new_theme = crate::ui::profile::UiProfile::FleetOps.theme();
+        app.world_mut().insert_resource(new_theme.clone());
+        app.update();
+        assert_eq!(app.world().resource::<Notices>().active[0].text, "Shields low");
+        assert_eq!(app.world().resource::<ChatLog>().lines.len(), 2);
+        let tip = app.world_mut().query_filtered::<(&Node, &BackgroundColor, &BorderColor), With<TipBox>>().single(app.world()).unwrap();
+        assert_eq!(tip.0.padding.left, Val::Px(new_theme.pad));
+        assert_eq!(tip.1.0, new_theme.panel);
+        assert_eq!(tip.2.top, new_theme.accent2);
+        let notice_root = app.world_mut().query_filtered::<&Node, With<NoticeRoot>>().single(app.world()).unwrap();
+        assert_eq!(notice_root.row_gap, Val::Px(new_theme.gap * 0.5));
+        let lines = app.world_mut().query_filtered::<(&Text, &TextColor), With<NoticeLine>>().iter(app.world()).map(|(text, color)| (text.0.clone(), color.0)).collect::<Vec<_>>();
+        assert_eq!(lines, vec![("Shields low".to_owned(), new_theme.warn)]);
     }
 }

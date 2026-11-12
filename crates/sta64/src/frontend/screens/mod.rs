@@ -128,6 +128,7 @@ impl Plugin for ScreensPlugin {
         app.init_state::<Screen>()
             .init_resource::<ScreensConfig>()
             .init_resource::<Settings>()
+            .init_resource::<crate::ui::profile::UiPreference>()
             .init_resource::<SelectedMod>()
             .init_resource::<Browse>()
             .init_resource::<ListScroll>()
@@ -141,9 +142,15 @@ impl Plugin for ScreensPlugin {
             .add_systems(OnEnter(Screen::ModSelect), open_list)
             .add_systems(
                 Update,
-                (fit_scale, follow_data, on_keys, on_wheel, track_scroll, on_buttons, on_lists, on_settings, rebuild)
+                on_settings.in_set(GameSet::Ui).before(crate::ui::profile::ProfileSync).run_if(in_state(AppState::FrontEnd)),
+            )
+            .add_systems(
+                Update,
+                (fit_scale, follow_data, on_keys, on_wheel, track_scroll, on_buttons, on_lists, rebuild)
                     .chain()
                     .in_set(GameSet::Ui)
+                    .after(crate::ui::profile::ProfileSync)
+                    .after(on_settings)
                     .run_if(in_state(AppState::FrontEnd)),
             );
     }
@@ -362,6 +369,7 @@ fn on_settings(
     slider_keys: Query<&SettingSlider>,
     toggle_keys: Query<&SettingToggle>,
     mut settings: ResMut<Settings>,
+    mut ui_preference: ResMut<crate::ui::profile::UiPreference>,
 ) {
     for c in sliders.read() {
         if let Ok(k) = slider_keys.get(c.entity) {
@@ -371,6 +379,9 @@ fn on_settings(
     for c in toggles.read() {
         if let Ok(k) = toggle_keys.get(c.entity) {
             settings.set_flag(k.0, c.on);
+            if k.0 == SettingKey::LcarsUi {
+                ui_preference.lcars = c.on;
+            }
         }
     }
 }

@@ -122,6 +122,8 @@ pub struct LaunchConfig {
     pub control: Option<Control>,
     /// `--ui-gallery`: show the widget gallery instead of the viewer.
     pub ui_gallery: bool,
+    /// Explicitly use the LCARS interface instead of the game/mod stock profile.
+    pub lcars_ui: bool,
     /// `--frames 0,100`: save a frame at each of these ticks (needs `--headless`).
     pub frames: Vec<u64>,
     /// `--frame-dir <dir>`: where frames go (default `frames`).
@@ -163,6 +165,7 @@ Test bench (docs/TESTBENCH.md):
   --frame-size <WxH>       frame size (default: 640x360)
   --postfx <a,b,..>        opt-in post effects: bloom smaa fxaa vignette chromatic exposure aces reinhard cinematic (F8 cycles)
 
+  --lcars-ui               use the LCARS interface instead of the game/mod stock profile
   --ui-gallery             show every UI widget (LCARS kit)
 
   --help                   this text
@@ -215,6 +218,7 @@ impl LaunchConfig {
                     None => cfg.unknown.push("--seat (needs a seat number)".into()),
                 },
                 "--ui-gallery" => cfg.ui_gallery = true,
+                "--lcars-ui" => cfg.lcars_ui = true,
                 "--mission-report" => cfg.mission_report = true,
                 "--help" | "-h" => cfg.help = true,
                 "--scene" => cfg.scene = value(&mut args).map(PathBuf::from),
@@ -293,6 +297,13 @@ impl LaunchConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lcars_interface_is_an_explicit_presentation_option() {
+        assert!(!LaunchConfig::default().lcars_ui);
+        let cfg = LaunchConfig::parse(["--lcars-ui".to_owned()]);
+        assert!(cfg.lcars_ui && cfg.unknown.is_empty());
+    }
 
     fn parse(s: &str) -> LaunchConfig {
         LaunchConfig::parse(s.split_whitespace().map(String::from))

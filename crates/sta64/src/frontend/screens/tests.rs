@@ -12,7 +12,7 @@ use std::sync::Arc;
 use super::view::{MapList, ModList, SettingSlider, SettingToggle};
 use super::*;
 use crate::app::configure_sets;
-use crate::ui::theme::{ButtonClicked, ListItem, Slider, SliderChanged, Toggle, UiButton, WidgetState, click};
+use crate::ui::theme::{ButtonClicked, ListItem, Slider, SliderChanged, Toggle, ToggleChanged, UiButton, WidgetState, click};
 
 /// What the screens sent out, kept (messages expire after two updates).
 #[derive(Resource, Default)]
@@ -32,6 +32,7 @@ fn app() -> App {
     let mut app = App::new();
     app.add_plugins((MinimalPlugins, StatesPlugin));
     configure_sets(&mut app);
+    app.add_plugins(crate::ui::profile::UiProfilePlugin);
     app.insert_resource(ScreenData::fake())
         .insert_resource(ScreensConfig { own_camera: false, fit_scale: false, start: Screen::Main })
         .init_resource::<Seen>()
@@ -40,6 +41,13 @@ fn app() -> App {
     app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::FrontEnd);
     settle(&mut app);
     app
+}
+
+fn a2_install() -> std::path::PathBuf {
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let root = std::env::temp_dir().join(format!("sta64-screen-a2-{}-{nonce}", std::process::id()));
+    std::fs::create_dir_all(root.join("Data")).unwrap();
+    root
 }
 
 fn settle(app: &mut App) {
@@ -356,7 +364,7 @@ fn settings_sliders_and_toggles_write_the_settings() {
     let mut app = app();
     go(&mut app, Screen::Settings);
     assert_eq!(count::<Slider>(&mut app), 5);
-    assert_eq!(count::<Toggle>(&mut app), 3);
+    assert_eq!(count::<Toggle>(&mut app), 4);
     let music = app.world_mut().query::<(Entity, &SettingSlider)>().iter(app.world()).find(|(_, k)| k.0 == SettingKey::MusicVolume).unwrap().0;
     app.world_mut().get_mut::<Slider>(music).unwrap().value = 25.0;
     app.world_mut().write_message(SliderChanged { entity: music, value: 25.0 });
@@ -372,6 +380,48 @@ fn settings_sliders_and_toggles_write_the_settings() {
     assert_eq!(music, 25.0);
     let on = app.world_mut().query::<(&Toggle, &SettingToggle)>().iter(app.world()).find(|(_, k)| k.0 == SettingKey::Fullscreen).unwrap().0.on;
     assert!(on);
+}
+
+#[test]
+fn lcars_setting_updates_the_shared_ui_preference() {
+    let mut app = app();
+    go(&mut app, Screen::Settings);
+    assert!(has_text(&mut app, "LCARS interface"));
+    assert!(has_text(&mut app, "Off uses the game/mod default."));
+    assert!(!app.world().resource::<Settings>().lcars_ui);
+    assert!(!app.world().resource::<crate::ui::profile::UiPreference>().lcars);
+
+    let toggle = app.world_mut().query::<(Entity, &SettingToggle)>().iter(app.world()).find(|(_, k)| k.0 == SettingKey::LcarsUi).unwrap().0;
+    app.world_mut().write_message(ToggleChanged { entity: toggle, on: true });
+    settle(&mut app);
+    assert!(app.world().resource::<Settings>().lcars_ui);
+    assert!(app.world().resource::<crate::ui::profile::UiPreference>().lcars);
+}
+
+#[test]
+fn lcars_toggle_syncs_profile_theme_and_settings_screen_in_one_update() {
+    let root = a2_install();
+    let vfs = sta_vfs::Vfs::mount_install(&root, None).unwrap();
+    let mut app = app();
+    app.world_mut().insert_resource(crate::viewer::Mounted(vfs));
+    settle(&mut app);
+    assert_eq!(*app.world().resource::<crate::ui::profile::UiProfile>(), crate::ui::profile::UiProfile::Armada2);
+    go(&mut app, Screen::Settings);
+    let old_roots: Vec<Entity> = app.world_mut().query_filtered::<Entity, With<ScreenRoot>>().iter(app.world()).collect();
+    let old_accent = app.world().resource::<crate::ui::theme::Theme>().accent;
+    let toggle = app.world_mut().query::<(Entity, &SettingToggle)>().iter(app.world()).find(|(_, k)| k.0 == SettingKey::LcarsUi).unwrap().0;
+    app.world_mut().write_message(ToggleChanged { entity: toggle, on: true });
+    app.update();
+
+    assert!(app.world().resource::<Settings>().lcars_ui);
+    assert!(app.world().resource::<crate::ui::profile::UiPreference>().lcars);
+    assert_eq!(*app.world().resource::<crate::ui::profile::UiProfile>(), crate::ui::profile::UiProfile::Lcars);
+    assert_eq!(app.world().resource::<crate::ui::theme::Theme>().accent, crate::ui::theme::Theme::default().accent);
+    assert_ne!(old_accent, app.world().resource::<crate::ui::theme::Theme>().accent);
+    let new_roots: Vec<Entity> = app.world_mut().query_filtered::<Entity, With<ScreenRoot>>().iter(app.world()).collect();
+    assert_eq!(new_roots.len(), 1);
+    assert_ne!(old_roots, new_roots, "theme change rebuilds the settings screen in the same update");
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

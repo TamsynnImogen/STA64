@@ -317,6 +317,7 @@ pub enum SettingKey {
     Fullscreen,
     Vsync,
     ShowFps,
+    LcarsUi,
 }
 
 /// The player's settings. The screen edits them; what reads them (audio, the
@@ -332,11 +333,13 @@ pub struct Settings {
     pub fullscreen: bool,
     pub vsync: bool,
     pub show_fps: bool,
+    /// Explicit LCARS presentation override; false leaves the game/mod default in control.
+    pub lcars_ui: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { master: 80.0, music: 60.0, effects: 80.0, voice: 80.0, scroll_speed: 50.0, fullscreen: false, vsync: true, show_fps: false }
+        Settings { master: 80.0, music: 60.0, effects: 80.0, voice: 80.0, scroll_speed: 50.0, fullscreen: false, vsync: true, show_fps: false, lcars_ui: false }
     }
 }
 
@@ -357,6 +360,7 @@ impl Settings {
             SettingKey::Fullscreen => self.fullscreen,
             SettingKey::Vsync => self.vsync,
             SettingKey::ShowFps => self.show_fps,
+            SettingKey::LcarsUi => self.lcars_ui,
             _ => return None,
         })
     }
@@ -378,6 +382,7 @@ impl Settings {
             SettingKey::Fullscreen => self.fullscreen = on,
             SettingKey::Vsync => self.vsync = on,
             SettingKey::ShowFps => self.show_fps = on,
+            SettingKey::LcarsUi => self.lcars_ui = on,
             _ => {}
         }
     }

@@ -40,6 +40,7 @@ use super::theme::{Theme, ThemePlugin, mix, panel};
 use crate::app::GameSet;
 use crate::sim_link::{ContentRes, Selection, SimLink};
 use crate::ui::i18n::tr;
+use crate::ui::profile::ProfileSync;
 
 /// The square's side in theme units (Refit `MinimapSize`, at most 45% of the
 /// 1080-unit screen).
@@ -381,10 +382,7 @@ fn strip(theme: &Theme, station: bool) -> impl Bundle {
 }
 
 /// Spawn the radar bottom left, in the theme's panel. Does nothing if one exists.
-pub fn spawn_radar(mut commands: Commands, theme: Res<Theme>, existing: Query<(), With<RadarRoot>>) {
-    if !existing.is_empty() {
-        return;
-    }
+pub fn spawn_radar(mut commands: Commands, theme: Res<Theme>, existing: Query<(Entity, Option<&Children>), With<RadarRoot>>) {
     let t = &*theme;
     let content = (
         Node { flex_direction: FlexDirection::Column, row_gap: Val::Px(t.gap * 0.5), ..default() },
@@ -408,11 +406,17 @@ pub fn spawn_radar(mut commands: Commands, theme: Res<Theme>, existing: Query<()
             ),
         ],
     );
-    commands.spawn((
-        RadarRoot,
-        Node { position_type: PositionType::Absolute, left: Val::Px(10.0), bottom: Val::Px(10.0), ..default() },
-        children![panel(t, &tr("Radar"), content)],
-    ));
+    if let Some((root, children)) = existing.iter().next() {
+        if children.is_none_or(|children| children.is_empty()) {
+            commands.entity(root).with_child(panel(t, &tr("Radar"), content));
+        }
+    } else {
+        commands.spawn((
+            RadarRoot,
+            Node { position_type: PositionType::Absolute, left: Val::Px(10.0), bottom: Val::Px(10.0), ..default() },
+            children![panel(t, &tr("Radar"), content)],
+        ));
+    }
 }
 
 // ---- systems ---------------------------------------------------------------
@@ -601,6 +605,27 @@ fn drag(
 
 pub struct RadarPlugin;
 
+/// Radar UI is rebuilt and refreshed before the HUD positions its root.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RadarUi;
+
+fn rebuild_on_theme_change(
+    mut commands: Commands,
+    theme: Res<Theme>,
+    roots: Query<Option<&Children>, With<RadarRoot>>,
+    mut blips: ResMut<BlipEntities>,
+) {
+    if !theme.is_changed() {
+        return;
+    }
+    for children in &roots {
+        for child in children.into_iter().flatten() {
+            commands.entity(*child).despawn();
+        }
+    }
+    blips.0.clear();
+}
+
 impl Plugin for RadarPlugin {
     fn build(&self, app: &mut App) {
         if !app.is_plugin_added::<ThemePlugin>() {
@@ -615,7 +640,14 @@ impl Plugin for RadarPlugin {
             .add_systems(Startup, spawn_radar)
             .add_systems(
                 Update,
-                (feed_from_link.run_if(resource_exists::<SimLink>).run_if(not(resource_exists::<super::hud::ExternalFeed>)), drag, refresh, paint_filters).chain().in_set(GameSet::Ui),
+                (
+                    rebuild_on_theme_change,
+                    spawn_radar,
+                    feed_from_link.run_if(resource_exists::<SimLink>).run_if(not(resource_exists::<super::hud::ExternalFeed>)),
+                    drag,
+                    refresh,
+                    paint_filters,
+                ).chain().in_set(GameSet::Ui).in_set(RadarUi).after(ProfileSync),
             );
     }
 }
@@ -666,6 +698,8 @@ fn aim_at_camera(mut commands: Commands, cam: Option<Res<FrameUiCamera>>, roots:
 mod tests {
     use super::*;
     use crate::app::configure_sets;
+    use crate::render::fog::{FogGrid, FogState};
+    use crate::ui::radar_fog::RadarFog;
     use sta_bench::parse::SceneFile;
     use sta_bench::run::{Bench, RunConfig};
     use sta_sim::command::{Command, CommandKind, Order};
@@ -799,6 +833,47 @@ mod tests {
 
     fn count<C: Component>(app: &mut App) -> usize {
         app.world_mut().query_filtered::<(), With<C>>().iter(app.world()).count()
+    }
+
+    #[test]
+    fn theme_switch_rebuilds_ui_and_keeps_radar_data_and_fog() {
+        let (mut log, db, flagship) = log();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).init_resource::<Assets<Image>>();
+        configure_sets(&mut app);
+        app.add_plugins(RadarPlugin);
+        let map = RadarMap::of_bounds(Vec2::ZERO, Vec2::splat(2000.0));
+        app.world_mut().resource_mut::<RadarState>().map = Some(map);
+        app.world_mut().resource_mut::<RadarState>().map_fixed = true;
+        app.world_mut().resource_mut::<RadarState>().ships = Filter::Enemies;
+        app.world_mut().resource_mut::<RadarFeed>().clone_from(&omniscient(feed_at(&mut log, &db, 0)));
+        app.world_mut().resource_mut::<RadarFeed>().selected = vec![flagship];
+        app.insert_resource(FogState { grid: FogGrid::new([0.0, 0.0], [2000.0, 2000.0]), updates: 1 });
+        app.update();
+        let old_root = app.world_mut().query_filtered::<Entity, With<RadarRoot>>().single(app.world()).unwrap();
+        let old_square = app.world_mut().query_filtered::<Entity, With<RadarSquare>>().single(app.world()).unwrap();
+        let target = app.world_mut().spawn_empty().id();
+        app.world_mut().entity_mut(old_root).insert(UiTargetCamera(target));
+        assert!(count::<RadarFog>(&mut app) > 0);
+        let old_blips = count::<RadarBlip>(&mut app);
+        assert!(old_blips > 0);
+
+        let new_theme = crate::ui::profile::UiProfile::Armada2.theme();
+        app.world_mut().insert_resource(new_theme.clone());
+        app.update();
+        let new_root = app.world_mut().query_filtered::<Entity, With<RadarRoot>>().single(app.world()).unwrap();
+        let new_square = app.world_mut().query_filtered::<Entity, With<RadarSquare>>().single(app.world()).unwrap();
+        assert_eq!(old_root, new_root);
+        assert_eq!(app.world().get::<UiTargetCamera>(new_root).unwrap().0, target);
+        assert_ne!(old_square, new_square);
+        assert_eq!(app.world().get::<BackgroundColor>(new_square).unwrap().0, mix(new_theme.panel, new_theme.track, 0.5));
+        assert_eq!(app.world().get::<BorderColor>(new_square).unwrap().top, new_theme.accent2);
+        assert_eq!(count::<RadarBlip>(&mut app), old_blips);
+        assert_eq!(count::<RadarFog>(&mut app), 1);
+        let state = app.world().resource::<RadarState>();
+        assert_eq!((state.ships, state.map, state.map_fixed), (Filter::Enemies, Some(map), true));
+        assert_eq!(app.world().resource::<RadarFeed>().selected, vec![flagship]);
+        assert!(app.world().resource::<BlipEntities>().0.values().all(|&entity| app.world().get::<RadarBlip>(entity).is_some()));
     }
 
     #[test]

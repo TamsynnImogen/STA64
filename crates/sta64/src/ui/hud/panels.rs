@@ -17,6 +17,8 @@ use crate::ui::theme::{Theme, UiButton, WidgetState, progress_bar};
 #[derive(Component)]
 pub struct HudRoot;
 #[derive(Component)]
+pub(super) struct HudBody;
+#[derive(Component)]
 pub struct ResourceStrip;
 #[derive(Component)]
 pub struct InfoPanel;
@@ -128,15 +130,37 @@ fn at(x: f32, y: f32, w: f32, h: f32) -> Node {
     }
 }
 
-pub fn spawn_root(mut commands: Commands, theme: Res<Theme>, layout: Res<super::HudLayoutRes>, existing: Query<(), With<HudRoot>>) {
-    if !existing.is_empty() {
-        return;
-    }
+/// Rebuild persistent chrome on a theme switch while retaining gameplay/UI state.
+pub(super) fn reset_on_theme(
+    mut commands: Commands,
+    theme: Res<Theme>,
+    bodies: Query<Entity, With<HudBody>>,
+    mut state: ResMut<super::HudState>,
+) {
+    if !theme.is_changed() { return; }
+    for entity in &bodies { commands.entity(entity).despawn(); }
+    state.drawn = None;
+    state.height = None;
+}
+
+pub(super) fn spawn_root(
+    mut commands: Commands,
+    theme: Res<Theme>,
+    layout: Res<super::HudLayoutRes>,
+    existing: Query<Entity, With<HudRoot>>,
+    bodies: Query<(), With<HudBody>>,
+) {
+    if !bodies.is_empty() { return; }
+    // Retain the root and its camera/hosting metadata while replacing chrome.
+    let root = existing.single().unwrap_or_else(|_| commands.spawn((
+        HudRoot, Pickable::IGNORE,
+        Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
+    )).id());
     let l = &layout.0;
     let r = l.resources;
     let row = l.bottom_row(None);
     // The grid and the info panel are moved to their places on the first refresh.
-    commands.spawn((HudRoot, Pickable::IGNORE, Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() }, children![
+    commands.entity(root).with_child((HudBody, Pickable::IGNORE, Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() }, children![
         (
             ResourceStrip,
             BackgroundColor(theme.panel.with_alpha(0.85)),
