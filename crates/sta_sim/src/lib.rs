@@ -288,7 +288,7 @@ impl Sim {
             }
             Order::Special { units, slot, .. } => {
                 let Some(db) = self.content.clone() else { return false };
-                self.specials.order_special(&db, &self.units, c.player, units, *slot)
+                self.weapons.order_special(self.tick, &db, &self.units, &mut self.specials, &mut self.rng, c.player, units, *slot)
             }
             Order::Rally { builders, at } => {
                 let Some(db) = self.content.as_deref() else { return false };
@@ -312,7 +312,7 @@ impl Sim {
             combat::damage::recharge(&mut self.units, &db);
             self.specials.step(&mut self.units, &db, &mut self.events);
             let from = self.events.len();
-            self.weapons.step_with_perception(self.tick, &self.units, &db, &self.players, &self.perception, &mut self.events);
+            self.weapons.step_with_perception(self.tick, &self.units, &db, &self.players, &self.perception, &mut self.specials, &mut self.rng, &mut self.events);
             let mut lost = Vec::new();
             for (id, by) in combat::damage::apply(&mut self.units, &mut self.events, from) {
                 lost.extend(self.units.get(id).map(|u| u.owner));

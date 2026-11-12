@@ -151,6 +151,7 @@ impl Profile {
                 cheats: true,
                 a1_compat: false,
                 pay_on_queue: true,
+                ..off
             },
             // FOH rows: damage controls, PD cycles, resources, officers, rigs.
             Profile::Fo4 => Features {
@@ -161,10 +162,13 @@ impl Profile {
                 officer_capacity: true,
                 multi_yard_builds: true,
                 construction_rigs: true,
+                pd_energy: true,
+                pd_debt_timer: true,
+                weapon_shot_timing: true,
                 ..off
             },
             // Stock A2: plain rules, turrets only.
-            Profile::Sta2Classic => Features { turrets: true, ..off },
+            Profile::Sta2Classic => Features { turrets: true, point_defense_cycles: true, pd_energy: true, weapon_shot_timing: true, ..off },
             // A1: its own class labels and health model, officers.
             Profile::Sta1Classic => Features { officer_capacity: true, a1_compat: true, ..off },
         }
@@ -419,7 +423,7 @@ fn read_ini_named(root: &Path, name: &str) -> Option<Ini> {
 }
 
 /// Switch names, in `Features` declaration order.
-pub const FEATURE_NAMES: [&str; 22] = [
+pub const FEATURE_NAMES: [&str; 25] = [
     "weapon_damage_controls",
     "point_defense_cycles",
     "fire_arcs",
@@ -442,6 +446,9 @@ pub const FEATURE_NAMES: [&str; 22] = [
     "cheats",
     "a1_compat",
     "pay_on_queue",
+    "pd_energy",
+    "pd_debt_timer",
+    "weapon_shot_timing",
 ];
 
 impl Features {
@@ -469,6 +476,9 @@ impl Features {
             "cheats" => &mut self.cheats,
             "a1_compat" => &mut self.a1_compat,
             "pay_on_queue" => &mut self.pay_on_queue,
+            "pd_energy" => &mut self.pd_energy,
+            "pd_debt_timer" => &mut self.pd_debt_timer,
+            "weapon_shot_timing" => &mut self.weapon_shot_timing,
             _ => return None,
         })
     }
@@ -674,7 +684,10 @@ mod tests {
                 "extra_resources",
                 "officer_capacity",
                 "multi_yard_builds",
-                "construction_rigs"
+                "construction_rigs",
+                "pd_energy",
+                "pd_debt_timer",
+                "weapon_shot_timing"
             ]
         );
         assert!(!Profile::Fo4.features().pay_on_queue);
@@ -682,7 +695,7 @@ mod tests {
 
     #[test]
     fn defaults_table_sta2_classic() {
-        assert_eq!(on(&Profile::Sta2Classic.features()), ["turrets"]);
+        assert_eq!(on(&Profile::Sta2Classic.features()), ["point_defense_cycles", "turrets", "pd_energy", "weapon_shot_timing"]);
     }
 
     #[test]

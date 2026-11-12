@@ -408,8 +408,21 @@ impl Fnv {
 fn feature_bits(h: &mut Fnv, own: Option<&Features>, db: &Features) {
     if let Some(f) = own.filter(|f| *f != db) {
         h.byte(0xe3);
-        for b in f.bits() {
-            h.byte(b as u8);
+        hash_bits(h, f);
+    }
+}
+
+/// The first 22 switches always; the SIM-34/35 ones only when one is on, so
+/// content that does not use them keeps its hash.
+fn hash_bits(h: &mut Fnv, f: &Features) {
+    let bits = f.bits();
+    for b in &bits[..22] {
+        h.byte(*b as u8);
+    }
+    if bits[22..].iter().any(|b| *b) {
+        h.byte(0xe5);
+        for b in &bits[22..] {
+            h.byte(*b as u8);
         }
     }
 }
@@ -419,9 +432,7 @@ fn hash(db: &ContentDb) -> u64 { hash_inner(db, true) }
 fn hash_inner(db: &ContentDb, include_starting_rules: bool) -> u64 {
     let mut h = Fnv(0xcbf2_9ce4_8422_2325);
     h.u64(db.profile as u64);
-    for b in db.features.bits() {
-        h.byte(b as u8);
-    }
+    hash_bits(&mut h, &db.features);
     h.u64(db.defs.len() as u64);
     for (name, def) in &db.defs {
         h.str(name);
@@ -580,6 +591,13 @@ fn hash_inner(db: &ContentDb, include_starting_rules: bool) -> u64 {
                     h.fixed(w.energy_cost);
                     h.byte(w.disable_weapons as u8);
                     h.byte(w.decloak_on_hit as u8);
+                }
+                if w.initial_shot_delay_modifier.is_some() || w.ignore_shot_delay_effects || w.ordnance_defence {
+                    h.byte(0xe4);
+                    h.byte(w.initial_shot_delay_modifier.is_some() as u8);
+                    h.fixed(w.initial_shot_delay_modifier.unwrap_or(Fixed::ZERO));
+                    h.byte(w.ignore_shot_delay_effects as u8);
+                    h.byte(w.ordnance_defence as u8);
                 }
                 feature_bits(&mut h, w.features.as_ref(), &db.features);
             }
