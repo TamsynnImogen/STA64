@@ -600,3 +600,30 @@ fn finder_predicates_are_isolated_and_errors_remain_visible() {
     assert!(!g.global::<bool>("INVALID"));
     assert_eq!(g.global::<u32>("AGAIN"), HERO.0);
 }
+
+#[test]
+fn officer_limit_assignment_is_a_noop_at_the_rule_value_and_recorded_otherwise() {
+    use crate::runtime::MissionRuntime;
+    let rt = MissionRuntime::from_source(
+        "limits.lua",
+        "local cur = Player(0).maxOfficers; Player(0).maxOfficers = cur; Player(0).maxOfficers = cur + 1; T = 0",
+        1,
+    );
+    assert!(rt.errors().is_empty(), "{:?}", rt.errors());
+    let unsupported = rt.unsupported();
+    assert_eq!(unsupported.len(), 1, "{unsupported:?}");
+    assert!(unsupported[0].0.starts_with("Player.maxOfficers"), "{unsupported:?}");
+}
+
+#[test]
+fn entity_race_and_crew_assignments_do_not_abort_the_callback() {
+    use crate::runtime::MissionRuntime;
+    let mut rt = MissionRuntime::from_source(
+        "set.lua",
+        "MMM.register(function() local e = EntityFinder():find()[1]; if e then e.race = Race.find('fx'); e.crew = 5 end; DONE = true end)",
+        1,
+    );
+    rt.step(1);
+    assert!(rt.errors().is_empty(), "{:?}", rt.errors());
+    assert!(rt.eval::<bool>("return DONE == true").unwrap());
+}

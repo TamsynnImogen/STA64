@@ -61,6 +61,7 @@ mod entity_action;
 mod entity_ref;
 mod camera_intent;
 mod monitor;
+mod race;
 mod condition_monitor;
 mod player;
 mod timer;
@@ -428,6 +429,7 @@ pub(crate) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
 
     entity::install(lua, ctx)?;
     player::install(lua, ctx)?;
+    race::install(lua, ctx)?;
     monitor::install(lua, ctx)?;
     text_input::install(lua, ctx)?;
     timer::install(lua, ctx)?;

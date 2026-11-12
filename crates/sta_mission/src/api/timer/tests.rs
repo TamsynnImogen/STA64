@@ -31,7 +31,7 @@ fn exact_ticks_lookup_and_one_shot() {
     assert_eq!(eval::<i64>(&rt, "return #hits"), 0);
     step(&mut rt, 2); // 0.05 * 30 = 1.5 -> two ticks
     step(&mut rt, 3);
-    assert!(eval::<bool>(&rt, "return #hits == 1 and hits[1][1] == 'alpha' and hits[1][2] == 'h' and t.state == 'Stopped'"));
+    assert!(eval::<bool>(&rt, "return #hits == 1 and hits[1][1] == 'alpha' and hits[1][2].argument == 'h' and hits[1][2].id == 'h' and t.state == 'Stopped'"));
 }
 
 #[test]
@@ -225,4 +225,30 @@ fn tick_overflow_and_huge_intervals_reject_without_mutating() {
         &rt,
         "return not pcall(function() t.interval = 1e100 end) and t.interval == 2/30"
     ));
+}
+
+#[test]
+fn hook_object_carries_argument_and_id_like_installed_mmm_scripts() {
+    // Shape of `Timer Tutorial.lua`: the callback reads `hook.argument`, edits
+    // the list it carries and changes `timer.interval`.
+    let mut rt = MissionRuntime::from_source(
+        "T.lua",
+        r#"
+        list = {'a', 'b'}; seen = {}
+        t = Timer('explode', 0.1, Timer.State.Started)
+        t.repeats = true
+        t:hook('explodeShip', nil, function(timer, hook)
+            seen[#seen+1] = hook.argument[1]
+            table.remove(hook.argument, 1)
+            timer.interval = timer.interval * 0.5
+            if #hook.argument == 0 then timer.repeats = false end
+        end, list)
+    "#,
+        1,
+    );
+    for tick in 0..30 {
+        step(&mut rt, tick);
+    }
+    assert!(rt.errors().is_empty(), "{:?}", rt.errors());
+    assert!(eval::<bool>(&rt, "return #seen == 2 and seen[1] == 'a' and seen[2] == 'b' and t.state == 'Stopped'"));
 }
