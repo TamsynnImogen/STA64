@@ -22,6 +22,8 @@ pub mod fake;
 pub mod features;
 pub mod gui_cfg;
 pub mod launch;
+pub mod coverage;
+pub mod layered;
 pub mod index;
 pub mod legacy;
 pub mod profile;

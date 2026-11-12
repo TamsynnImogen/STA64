@@ -137,10 +137,23 @@ fn number(value: &str) -> Option<&str> {
     Some(first.trim_end_matches(';').trim_end_matches(['f', 'F']).trim_end_matches(';'))
 }
 
+/// Where the winning assignment of an ODF key came from (CON-34 `why`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeySource {
+    /// File name with `.odf`, as it was included.
+    pub file: String,
+    /// Which copy of that file: 0 is the highest-priority layer's, 1 the one
+    /// it hides (a self-include), and so on, as `resolve_layered` counts.
+    pub version: usize,
+    /// 1-based line of the assignment.
+    pub line: usize,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Odf {
     pub name: String,
     values: HashMap<String, String>,
+    sources: HashMap<String, KeySource>,
     /// Keys in first-definition order, original case.
     order: Vec<String>,
     /// Includes of the root's own name that had no lower version left, so
@@ -149,11 +162,17 @@ pub struct Odf {
 }
 
 impl Odf {
-    fn set(&mut self, key: &str, value: &str) {
+    fn set(&mut self, key: &str, value: &str, source: KeySource) {
         let k = key.to_ascii_lowercase();
+        self.sources.insert(k.clone(), source);
         if self.values.insert(k, value.to_owned()).is_none() {
             self.order.push(key.to_owned());
         }
+    }
+
+    /// The file, layer copy and line whose assignment of `key` won.
+    pub fn source(&self, key: &str) -> Option<&KeySource> {
+        self.sources.get(&key.to_ascii_lowercase())
     }
 
     /// Raw value text (quotes retained).
@@ -265,7 +284,7 @@ fn apply(
     }
     w.stack.pop();
     for e in &raw.entries {
-        odf.set(&e.key, &e.value);
+        odf.set(&e.key, &e.value, KeySource { file: file.clone(), version, line: e.line });
     }
     Ok(())
 }
