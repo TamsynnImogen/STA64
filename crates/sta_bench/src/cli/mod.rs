@@ -42,7 +42,8 @@ Usage: sta-bench <command> [options]
   session list | session stop --session ID
   drive --session ID \"<command>\"...  send bench commands to a session, print the answers
   capture list                     playtest captures, newest first (default: $XDG_DATA_HOME/sta64/captures)
-  capture check <folder|latest>    replay a capture headless to its tick; exit 1 when the digest differs
+  capture check <folder|latest>    replay a capture headless to its tick; exit 1 when the digest differs,
+                                   3 when it could not be replayed here (other content, mod or build)
       --install <root> --mod <name>  mount this install (default: the one the capture recorded)
       --fake                       the capture is of the bench's fake content
   diff <report-a> <report-b>       compare report directories; exit 1 when they differ

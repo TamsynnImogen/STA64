@@ -80,6 +80,11 @@ pub struct MountInfo {
     pub layers: Vec<MountLayer>,
 }
 
+/// `p` as an absolute path, so a capture checked from another directory finds it.
+fn absolute(p: &Path) -> String {
+    std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf()).display().to_string()
+}
+
 impl MountInfo {
     /// Reads the mount back from a VFS's layers, `(name, root)` highest
     /// priority first. A mod chain is `Data/Mods/<name>` over `Data`; a flat
@@ -99,13 +104,13 @@ impl MountInfo {
                 // A standalone mod mounts without `Data`: `<install>/Data/Mods/<name>`.
                 layers.first().and_then(|(_, r)| r.ancestors().nth(3))
             })
-            .map(|p| p.display().to_string());
+            .map(absolute);
         MountInfo {
             install_root,
             active_mod,
             layers: layers
                 .into_iter()
-                .map(|(n, r)| MountLayer { name: n.to_owned(), root: r.display().to_string() })
+                .map(|(n, r)| MountLayer { name: n.to_owned(), root: absolute(r) })
                 .collect(),
         }
     }

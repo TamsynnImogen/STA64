@@ -61,7 +61,7 @@ fn check(o: &Opts) -> Outcome {
     println!("{}: map {} tick {} digest {} ({:?}, {} commands)", dir.display(), i.map, i.tick, i.digest, i.start, cap.replay.commands.len());
     // Where the content comes from: the flags, else the mount the capture recorded.
     let install = o.install.clone().or_else(|| i.mount.install_root.as_ref().map(PathBuf::from));
-    let active = if o.install.is_some() || o.mod_name.is_some() { o.mod_name.clone() } else { i.mount.active_mod.clone() };
+    let active = o.mod_name.clone().or_else(|| i.mount.active_mod.clone());
     let (content, races) = if o.fake {
         (Arc::new(crate::run::fake_content()), None)
     } else {
@@ -78,9 +78,14 @@ fn check(o: &Opts) -> Outcome {
             println!("PASS  replayed to tick {} with digest {:#018x}{}", v.tick, v.digest, if v.snapshot_checked { "; snapshot restores to the same digest" } else { "" });
             Ok(0)
         }
-        Err(e @ (CaptureError::Replay(_) | CaptureError::SnapshotDigest { .. })) => {
+        Err(e @ (CaptureError::Replay(sta_sim::replay::ReplayError::Desync { .. }) | CaptureError::SnapshotDigest { .. })) => {
             println!("FAIL  {e}");
             Ok(1)
+        }
+        // Wrong content, mod, build or a damaged file: the capture was not tested at all.
+        Err(e @ (CaptureError::Replay(_) | CaptureError::Snapshot(_) | CaptureError::NeedsRaces)) => {
+            println!("ERROR {e}  (not a desync: the capture could not be replayed here)");
+            Ok(3)
         }
         Err(e) => Err(Fail::Error(e.to_string())),
     }

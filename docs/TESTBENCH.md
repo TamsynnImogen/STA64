@@ -456,8 +456,12 @@ Not captured: a rendered frame (the match has no in-app frame dump; the
 headless bench's frames draw stand-ins and are not the player's view, and a
 screen grab is out of the question). HUD state beyond the selection is not in
 it either. Capturing only reads the sim link's log and view, so it cannot
-change a digest. The command log is kept for every match from tick 0 (a few
-bytes per order); it is what the capture reads.
+change a digest. The command log is kept for every match from tick 0 (each
+order carries its unit ids, AI orders included: a few MB over a long game); it
+is what the capture reads. The capture is written on the frame of the key
+press, so that frame stalls for a moment. The git commit in the index is
+whatever `STA64_GIT_COMMIT` was set to when the binary was compiled, else
+unknown.
 
 ### Reproducing one
 
@@ -478,8 +482,18 @@ differs (tick 0 means the start state differs: other content, mod or build).
 `--fake` is for captures of the bench's own fake content (the tests).
 
 A capture only reproduces on the build and content it was taken with. When the
-sim has changed since, the digest drifts and `check` says so; the snapshot and
-the index (positions, ids, definitions) still describe the scene.
+sim has changed since, the digest drifts and `check` says FAIL (exit 1) with the
+first differing tick. When it cannot be replayed at all (other content or mod:
+content hash differs; a replay or snapshot format the build no longer reads) it
+says ERROR and exits 3, which is not a desync. In the last case `capture.json`
+and `capture.md` are still plain text for a person to read, though
+`Capture::load` refuses the folder.
+
+`--mod` defaults to the capture's recorded mod; `--install` alone keeps it.
+Computer players are not recorded or recreated (D3: controllers run on the
+host and their orders are in the log), so a sim replayed to the capture tick
+and then stepped further has idle AI seats: it matches the player's game up to
+the capture tick only.
 
 ### From a capture to a regression test
 
@@ -487,13 +501,13 @@ the index (positions, ids, definitions) still describe the scene.
    a different bug (or a sim change): say so on the issue.
 2. Read `capture.md`: the selected ids and definitions are the suspects;
    `note.txt` says what the player saw.
-3. Write the test against the library, not the folder, so it does not depend on
-   the player's files. For a bug that needs the capture's state, cut a small
-   fixture: the snapshot (`snapshot.sta`, content-hash checked) or the replay,
-   under `crates/<crate>/tests/fixtures/`, only when it holds no game files
-   (`MapDef` and unit names are STA64's own data; check that nothing licensed
-   is in it, as for any fixture). Usually the better test is a hand-built
-   scene that reproduces the same condition on `fake::db()`:
+3. **Never commit a capture, or any file cut from one.** `replay.star` holds the
+   map converted from the install's BZN, and the index and snapshot name unit
+   definitions read from the install: that is game data. A regression test in
+   the repo is either a hand-built scene on synthetic content (`fake::db()`)
+   that reproduces the same condition, or install-gated (it reads the
+   install at run time, skips when `STA64_TEST_INSTALL` is unset, and
+   keeps nothing from it). Write the test against the library, not the folder:
 
    ```rust
    // install-gated: the capture's own content

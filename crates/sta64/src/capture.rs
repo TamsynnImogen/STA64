@@ -48,7 +48,9 @@ pub struct MatchMeta {
 #[derive(Resource, Debug, Clone)]
 pub struct CaptureDir(pub PathBuf);
 
-/// The git commit the build was made from, when `build.rs` could ask git.
+/// The git commit the build was made from: whatever `STA64_GIT_COMMIT` was set to
+/// when it was compiled (CI, release scripts), else unknown. Not read from git by a
+/// build script: that would rebuild this crate on every commit.
 const COMMIT: Option<&str> = option_env!("STA64_GIT_COMMIT");
 
 fn build_info() -> BuildInfo {
