@@ -5628,6 +5628,13 @@ dependencies = [
 [[package]]
 name = "sta_net"
 version = "0.1.0"
+dependencies = [
+ "postcard",
+ "serde",
+ "sta_content",
+ "sta_core",
+ "sta_sim",
+]
 
 [[package]]
 name = "sta_odf"
