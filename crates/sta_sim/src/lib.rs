@@ -332,13 +332,11 @@ impl Sim {
         TickOutput { view: Arc::new(self.build_view()), events: std::mem::take(&mut self.events) }
     }
 
-    /// Live actors only; queued reservations/admission are not implemented.
+    /// Live actors plus the officers reserved by admitted, unfinished builds
+    /// (SIM-26, [`production::officers`]).
     fn officer_census(&self, player: PlayerId) -> Fixed {
         let Some(db) = self.content.as_deref() else { return Fixed::ZERO };
-        self.units.iter().filter(|u| u.owner == player && !u.flags.contains(view::UnitFlags::DYING))
-            .filter_map(|u| db.unit(u.def)).fold(Fixed::ZERO, |sum, def| {
-                Fixed::from_bits(sum.to_bits().saturating_add(def.build.officers.max(Fixed::ZERO).to_bits()))
-            })
+        self.production.officer_census(&self.units, db, player)
     }
 
     fn build_view(&self) -> WorldView {
