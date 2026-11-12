@@ -128,3 +128,27 @@ alternative on the first layer. System damage colours remain unavailable rather
 than being inferred from overall hull health. Authored
 zero-size cinematic areas remain disabled; a new 3D portrait renderer is outside
 this change. The LCARS option restores the existing Refit layout and grid.
+
+
+## Live feedback corrections
+
+The first optimized candidate (`6f38386`) exposed two presentation faults that
+synthetic component checks did not catch: wide-screen atlas pieces were
+letterboxed by Bevy's default `NodeImageMode::Auto`, and small CFG text slots
+shrunk the chosen bitmap font until lowercase ink was only a few pixels high.
+The follow-up uses `Stretch` for authored GUI rectangles, matching native
+independent-axis drawing. The installed-data GPU check now inspects pixels at
+a known resource-panel join; the old capture has a black gap at that join.
+
+Stock resource/info/filter labels explicitly use the scalable text fallback at
+a readable minimum size. Their authored position and width remain intact;
+a short legacy text rectangle does not clip the line's font height. Existing
+SPR fonts remain available to other consumers. The inspected Classic/FO4 CFGs
+do not name individual font files, and native font parity is not claimed by
+this readability correction.
+
+The same live Classic map (`3peace`) was checked read-only: the minimap cluster
+is at the expected normalized start position near (0.219, 0.219), and the large
+grey world shroud matches the mod's `Gshroud` RGB (65, 71, 85). Those are separate
+from the atlas/font faults; this HUD correction changes neither map projection,
+sensor rules, fog rendering nor original textures.
