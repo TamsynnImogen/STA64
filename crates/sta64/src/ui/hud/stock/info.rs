@@ -105,8 +105,7 @@ fn resource_text(feed: &HudFeed, id: usize) -> Option<String> {
     player.resources.get(slot).map(|v| whole(*v).to_string())
 }
 
-/// Stock A2's resource palette (ResourceDisplay::SetResource, 0x50a1f0;
-/// initializer 0x50a220 in the clean 8d3ba6ec executable). Roots' authored
+/// Stock A2's resource palette (read from the executable, static). Roots' authored
 /// resource_N_color overrides take priority, including white or black.
 fn resource_colour(layout: &StockLayout, id: usize, fallback: Color) -> Color {
     if let Some(colour) = layout.colour(&format!("resource_{id}_color")) {
