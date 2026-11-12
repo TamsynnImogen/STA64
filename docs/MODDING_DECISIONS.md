@@ -1,6 +1,7 @@
 # Modding v1: decisions for sign-off
 
-Status: **accepted** (Tammy and Cedric, 2026-11-11; merged in #352). Binding on
+Status: **accepted** (Tammy and Cedric, 2026-11-11; merged in #352; D5 amended
+2026-11-12 and approved by Tammy, see D5). Binding on
 all agent and human work in the areas below. Covers how STA64 treats existing Armada
 mods and what the first modding release contains. Background and evidence are
 in [MODDING-IDEAS.md](MODDING-IDEAS.md) and `docs/research/modding/`; this
@@ -31,9 +32,18 @@ ini" for adapting a mod.
 - `engine` keeps its existing meaning: the STA64 version a mod requires.
 - A mod's data chain comes from `kind` and `ParentMod`.
 
-**D5. v1 lineages: stock Armada II and Roots only.**
+**D5. v1 lineages: stock Armada II, stock Armada I and Roots.**
 FO 4.0, STA2 Classic and STA2 Classic Enhanced run on the Roots engine and are
-covered through it. Armada I, FO 3.2.7 and Dominion War are not covered in v1.
+covered through it. Stock Armada I runs as its own lineage (the `Sta1Classic`
+profile); mods of Armada I are not covered in v1. FO 3.2.7 and Dominion War are not covered in v1.
+
+*Amended 2026-11-12: Armada I moved into v1 (Cedric; approved by
+Tammy). It read "stock Armada II and Roots only" and listed Armada I with
+FO 3.2.7 and Dominion War as not covered. Already on main for it: the
+`Sta1Classic` profile (`sta_content`), the ZFS archive mount (`sta_vfs`, CON-15
+and CON-27), A1 BZN headers, binary bodies and MDF start locations (`sta_bzn`,
+CON-25, CON-26 and CON-28) and the A1 queue-capacity rule (SIM-20). What is
+still missing is CON-38..42 in WORKPLAN.*
 
 **D6. Mounting must follow the mod's own rules.**
 `standalone` and `ignoreParentMaps` are honoured. Today FO 4.0 mounts over base
@@ -86,7 +96,8 @@ of the rest of the plan.
 
 ## Not in v1
 
-Executable fingerprinting; Armada I, FO 3.2.7 and Dominion War lineages;
+Executable fingerprinting; mods of Armada I (the stock Armada I lineage is in
+v1, see D5); FO 3.2.7 and Dominion War lineages;
 emulating engine bugs as toggles; the TOML ODF patch format; trigger and
 timeline scripting for menu scenes; Lua in third-party packs; WASM; shader
 contracts and shims; pack manager UI and load-order editor; dependency
@@ -105,13 +116,14 @@ Added to `docs/WORKPLAN.md` (PR #352). Done-when is in WORKPLAN.
 | CON-36 | Inheritance for `.h` and `.tt` | D11 |
 | RND-28 | Recipe overrides, shader shadowing | D12 |
 | LUA-09 | Lua restriction | D13 |
+| CON-38..42 | Armada I map writer, text bodies, saved state, light colours, MDF parity (added 2026-11-12 with the D5 amendment, approved by Tammy) | D5 |
 
 v1 is done when: Classic Enhanced loads over its parent; FO 4.0 loads with no
 base Roots leaking in; the report prints coverage for every installed mod;
 peers on Classic and Classic Enhanced refuse to start and name the differing
 key while peers differing only by a texture or recipe folder are accepted; a
 replay names its packs; a recipe ini dropped in a mod folder changes a headless
-frame.
+frame; every stock Armada I map reads, writes and reads back equal (CON-38).
 
 ## Changing these decisions
 
