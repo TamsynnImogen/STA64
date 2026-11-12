@@ -1,46 +1,23 @@
 #!/usr/bin/env python3
 """Decode Armada rule DLLs (`*R.drl`) and write Lua mission scaffolds (LUA-07).
 
-What a `.drl` is (measured on the installed Armada II campaign; the
-measurement notes are kept outside the repository): a 32-bit debug-built PE DLL with no exports
-and no data table of rules. Its rules are machine code:
+What it implements (evidence: measured on the installed Armada II
+campaign; notes are kept outside the repository): a `.drl` holds no rule
+table, its rules are code. One function registers each rule with the
+engine's rule engine (name, condition function, action function) and links
+it to the `.dsl` variables that wake it; a condition reads those variables
+and object handles and calls the engine through `g_pSI`; an action calls
+one function the `.dsl` exports. The tool follows that code symbolically
+through every branch and reports anything it does not recognise instead of
+guessing. It writes, per mission, a Lua scaffold for the STA64 mission
+runtime: variables and handles by name, the rules in creation order with
+their conditions and dependencies, registered as named condition monitors
+(docs/MISSIONS.md), and one stub per `.dsl` action. Engine calls go to the
+`A2` table by the method's own name through a guard.
 
-- one registration function builds every rule by calling the engine's rule
-  engine: `p_WORLD->GetIIIE().create_rule(condition, action, "NameRule")`
-  (`character` vtable slot 0, `IIIE` slot 1, the `int (*)()`/`void (*)()`
-  overload) and stores the returned `rule *` in a global of the `.drl`;
-- it then links every rule to the variables that wake it:
-  `p_VAR->add_dependent_rule(rule)` (`hot_type` vtable slot 1);
-- each condition is a small function returning an int: it reads `.dsl`
-  variables (`hot_int`, `hot_float`, `dirty_int`, `timer_int`, through
-  their `operator int`/`operator float`, vtable slot 8) and object handles
-  (plain `int` globals of the `.dsl`), calls the engine through `g_pSI`
-  (`ScriptInterface` vtable) and combines the results with `&&`, `||`,
-  `!`, comparisons and float arithmetic;
-- each action is a one-line function calling one function the `.dsl`
-  exports (`void Name(void)`).
-
-`p_WORLD`, `g_pSI`, the variables, handles and action functions are all
-imported from the paired `<name>S.dsl` by name. Armada I's `.drl` files
-use the same rule engine but import `create_rule`, `add_dependent_rule`,
-`WORLD` and the engine queries from `Armada.exe` by name; they decode
-through the same path.
-
-This tool decodes that code symbolically (it follows the debug compiler's
-fixed instruction patterns through every branch; it does not guess) and
-writes, per mission, a Lua scaffold for the STA64 mission runtime: the
-`.dsl` variables and handles by name, the rules in creation order with
-their decoded conditions and dependencies, registered as named condition
-monitors (`Monitor(id, false, nil, predicate)` + `OnTrue` hook, see
-docs/MISSIONS.md), and one stub per `.dsl` action. Engine calls in
-conditions go to the `A2` table (crates/sta_mission/src/api/a2) by the
-method's own name, through a guard that counts names the runtime does not
-bind yet.
-
-Not recoverable from a `.drl`: the action bodies (they live in the `.dsl`),
-the values the `.dsl` gives its variables and handles, and the engine's
-firing policy (when IIIE re-evaluates a rule and whether it fires on a level
-or an edge). The scaffolds say so where it matters.
+Not recoverable from a `.drl`: the action bodies, the start values of
+variables and handles (both in the `.dsl`) and the engine's rule
+scheduling. Rule DLLs of another shape (Armada I's) are reported as skipped.
 
 Names and structure only: the scaffolds are written to `--out`, a folder the
 user chooses outside the repository, and nothing read from a game file is
@@ -67,8 +44,8 @@ import sys
 
 TOOL = "tools/drl_to_lua.py"
 
-# Vtable slots of the rule engine, measured from Armada2.exe + armada2.map
-# (checked again at run time when the map is available, see check_engine).
+# Rule-engine vtable slots the decoder relies on (measured; checked against the
+# user's executable at run time when its map is present, see check_engine).
 CHARACTER_GET_IIIE = 0  # character::GetIIIE()
 IIIE_CREATE_RULE = 1  # IIIE::create_rule(int (*)(), void (*)(), char *)
 HOT_ADD_DEPENDENT_RULE = 1  # hot_type::add_dependent_rule(rule *)
@@ -317,8 +294,7 @@ def check_engine(vt):
 REG32 = {"eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp"}
 REG8 = {"al": "eax", "cl": "ecx", "dl": "edx", "bl": "ebx", "ah": "eax"}
 NEG = {"==": "~=", "~=": "==", "<": ">=", ">=": "<", "<=": ">", ">": "<="}
-JCC = {"je": "==", "jne": "~=", "jl": "<", "jge": ">=", "jle": "<=", "jg": ">", "jb": "<", "jae": ">=",
-       "jbe": "<=", "ja": ">"}
+JCC = {"je": "==", "jne": "~=", "jl": "<", "jge": ">=", "jle": "<=", "jg": ">"}
 SETCC = {"sete": "==", "setne": "~=", "setl": "<", "setge": ">=", "setle": "<=", "setg": ">"}
 
 
@@ -333,8 +309,7 @@ class Drl:
         self.at = {a: i for i, (a, _) in enumerate(self.ins)}
         if not self.ins:
             raise DecodeError("no code")
-        # The incremental linker's jump table at the start of .text: one
-        # `jmp` per function; function pointers in the code point at it.
+        # Function entry thunks at the start of .text.
         self.thunks = {}
         for a, t in self.ins:
             if t == "int3":
@@ -345,12 +320,11 @@ class Drl:
             self.thunks[a] = int(m.group(1), 16)
         self.chkesp = self._chkesp()
         self.dlls = sorted({d for d, _ in self.pe.imports.values()})
-        self.world = [a for a, (_, s) in self.pe.imports.items() if plain_name(s) in ("p_WORLD", "WORLD")]
 
     # ---------------------------------------------------------- helpers
 
     def _chkesp(self):
-        """The debug runtime's stack check, called after every `cmp esi,esp`."""
+        """The debug runtime's stack check (a no-op for the decoder)."""
         seen = {}
         for i, (_, t) in enumerate(self.ins[:-1]):
             if re.match(r"cmp\s+e(si|di|bp),esp$", t):
@@ -447,11 +421,8 @@ class Drl:
         return None
 
     def take_args(self, st, i):
-        """The arguments of the call at instruction i, in declaration order.
-
-        The debug compiler saves esp in esi (or edi for a nested call) before
-        pushing a call's arguments and checks it right after the call
-        (`cmp esi,esp`), so the arguments are the pushes since that save."""
+        """The arguments of the call at instruction i, in declaration order:
+        the pushes since the stack pointer was saved for the call's check."""
         n = 0
         if i + 1 < len(self.ins):
             m = re.match(r"cmp\s+(e[sd]i),esp$", self.ins[i + 1][1])
@@ -506,21 +477,10 @@ class Drl:
                     target = self.read(st, ops)
                     args = self.take_args(st, i - 1)
                     st["r"]["eax"] = None
-                    if target is None:
-                        m = re.fullmatch(r"(?:DWORD PTR )?ds:(0x[0-9a-f]+)", ops)
-                        s = self.symbol(int(m.group(1), 16)) if m else None
-                        if s and plain_name(s[1]) == "create_rule" and len(args) >= 3:
-                            target = ("method", ("iiie",), IIIE_CREATE_RULE)
-                        elif s and plain_name(s[1]) == "add_dependent_rule" and args:
-                            this = st["r"].get("ecx")
-                            target = ("method", ("val", this[1]) if this and this[0] == "iat" else this,
-                                      HOT_ADD_DEPENDENT_RULE)
-                        elif s and plain_name(s[1]) == "GetIIIE":
-                            target = ("method", ("val", "WORLD"), CHARACTER_GET_IIIE)
                     if not target or target[0] != "method":
                         continue
                     obj, slot = target[1], target[2]
-                    if obj and obj[0] == "val" and plain_name(obj[1]) in ("p_WORLD", "WORLD") and slot == CHARACTER_GET_IIIE:
+                    if obj and obj[0] == "val" and plain_name(obj[1]) == "p_WORLD" and slot == CHARACTER_GET_IIIE:
                         st["r"]["eax"] = ("iiie",)
                     elif obj == ("iiie",) and slot == IIIE_CREATE_RULE and len(args) >= 3:
                         cond, act, name = args[0], args[1], args[2]
@@ -538,8 +498,6 @@ class Drl:
                     if mn in ("add", "sub") and ops.startswith("esp,"):
                         st["args"] = []
                     continue
-        if A1_create := [r for r in rules if not r]:
-            raise DecodeError(f"{len(A1_create)} incomplete rules")
         return rules, deps
 
     # ---------------------------------------------------------- conditions
@@ -729,7 +687,7 @@ class Drl:
             raise DecodeError(f"unsupported `and {ops}` at {a:#x}")
         if mn == "neg" and ops == "eax":
             v = r.get("eax")
-            # `neg; sbb; neg` is `x != 0`, `neg; sbb; inc` is `!x`.
+            # the two compiler idioms for `x != 0` and `!x`
             r["eax"] = as_bool(v[1]) if v and v[0] == "m1" else ("neg", v)
             return None
         if mn == "sbb" and ops == "eax,eax":
@@ -748,12 +706,12 @@ class Drl:
                 return None
             r["eax"] = ("arith", "+", v, ("const", 1))
             return None
-        if mn in ("add", "sub", "imul"):
+        if mn in ("add", "sub"):
             x, y = [s.strip() for s in ops.split(",", 1)]
             if x in REG32:
                 vx, vy = r.get(x), self.read(st, y)
                 st["flags"] = ("cmp", vx, vy) if mn == "sub" else ("test", ("arith", "+", vx, vy))
-                r[x] = ("arith", {"add": "+", "sub": "-", "imul": "*"}[mn], vx, vy)
+                r[x] = ("arith", {"add": "+", "sub": "-"}[mn], vx, vy)
                 return None
             raise DecodeError(f"unsupported `{mn} {ops}` at {a:#x}")
         # x87
@@ -767,9 +725,7 @@ class Drl:
                 return None
             raise DecodeError(f"unsupported `fstp {ops}` at {a:#x}")
         if mn in ("fld", "fild"):
-            v = self.fread(st, ops, a)
-            if mn == "fild" and v and v[0] == "const":
-                v = ("float", float(v[1]))
+            v = self.fread(st, ops, a, integer=mn == "fild")
             st["fpu"].append(v)
             return None
         if mn in ("fadd", "fsub", "fmul", "fdiv", "fsubr", "fdivr"):
@@ -782,11 +738,10 @@ class Drl:
             st["fpu"].append(v)
             return None
         if mn in ("fcomp", "fcom", "fcompp"):
-            top = fpop(st, a)
+            other = None if mn == "fcompp" else self.fread(st, ops, a)
+            top = fpop(st, a) if mn != "fcom" else fpeek(st, a)
             if mn == "fcompp":
                 other = fpop(st, a)
-            else:
-                other = self.fread(st, ops, a)
             st["fcmp"] = (top, other)
             return None
         if mn == "fnstsw" and ops == "ax":
@@ -797,12 +752,14 @@ class Drl:
             return None
         raise DecodeError(f"unsupported instruction `{mn} {ops}` at {a:#x}")
 
-    def fread(self, st, op, a):
+    def fread(self, st, op, a, integer=False):
         m = re.fullmatch(r"(DWORD|QWORD) PTR ds:(0x[0-9a-f]+)", op)
         if m:
             addr = int(m.group(2), 16)
             if self.symbol(addr):
                 return self.deref(("iat", self.symbol(addr)[1]))
+            if integer:
+                raise DecodeError(f"integer load from {addr:#x} at {a:#x}")
             return ("float", self.pe.f32(addr) if m.group(1) == "DWORD" else self.pe.f64(addr))
         m = re.fullmatch(r"(?:DWORD|QWORD) PTR \[ebp([+-]0x[0-9a-f]+)\]", op)
         if m:
@@ -811,8 +768,12 @@ class Drl:
         if m:
             return self.deref(st["r"].get(m.group(1)))
         m = re.fullmatch(r"st\((\d)\)", op)
-        if m and st["fpu"]:
-            return st["fpu"][-1 - int(m.group(1))] if int(m.group(1)) < len(st["fpu"]) else None
+        if m:
+            fpeek(st, a)
+            k = int(m.group(1))
+            if k >= len(st["fpu"]):
+                raise DecodeError(f"x87 st({k}) is empty at {a:#x}")
+            return st["fpu"][-1 - k]
         raise DecodeError(f"unsupported x87 operand `{op}` at {a:#x}")
 
 
@@ -991,6 +952,13 @@ def clone(st):
     return {k: (dict(v) if isinstance(v, dict) else list(v) if isinstance(v, list) else v) for k, v in st.items()}
 
 
+def fpeek(st, a):
+    """st(0) without popping; a pending call result is pushed first."""
+    if not st["fpu"]:
+        st["fpu"].append(fpop(st, a))
+    return st["fpu"][-1]
+
+
 def fpop(st, a):
     if st["fpu"]:
         return st["fpu"].pop()
@@ -1145,10 +1113,10 @@ def render(e, ctx="bool"):
     if k == "var":
         return f"S.{e[1]}" if ctx != "bool" else f"T(S.{e[1]})"
     if k in ("obj", "objf"):
-        return f"O.{e[1]}" if ctx != "bool" else f"T(O.{e[1]})"
+        return f"O.{e[1]}" if ctx == "arg" else f"N(O.{e[1]})" if ctx == "num" else f"T(O.{e[1]})"
     if k == "elem":
         s = f"(O.{e[1]} or {{}})[{e[2] + 1}]"
-        return s if ctx != "bool" else f"T({s})"
+        return s if ctx == "arg" else f"N({s})" if ctx == "num" else f"T({s})"
     if k == "array":
         return f"O.{e[1]}"
     if k == "call":
@@ -1185,7 +1153,7 @@ def scaffold(m):
     w("-- dependencies is marked dirty (that policy is not reproduced).")
     w("")
     w("local function T(v) return v ~= nil and v ~= false and v ~= 0 end")
-    w("local function N(v) if v == true then return 1 elseif not v then return 0 end return v end")
+    w("local function N(v) if v == true then return 1 elseif type(v) ~= 'number' then return 0 end return v end")
     w("")
     w("local Mission = {")
     w(f"    name = {lua_str(m['mission'])},")
@@ -1196,21 +1164,25 @@ def scaffold(m):
     w("    ruleMonitors = {},")
     w("    missing = {},      -- engine calls the runtime does not bind yet: name -> count")
     w("    failed = {},       -- engine calls that raised an error: name -> count")
+    w("    callFailed = false, -- set while a condition's engine call is unbound or failed")
     w("    time = 0,")
     w("}")
     w("")
     w("-- Engine calls of the conditions go to the A2 table by the ScriptInterface")
     w("-- method's own name. Unbound names and errors are counted, not raised, so an")
-    w("-- unported mission still runs.")
+    w("-- unported mission still runs; a rule whose engine call gave no answer does")
+    w("-- not hold that tick.")
     w("local function A(name, ...)")
     w("    local f = A2[name]")
     w("    if type(f) ~= 'function' then")
     w("        Mission.missing[name] = (Mission.missing[name] or 0) + 1")
+    w("        Mission.callFailed = true")
     w("        return nil")
     w("    end")
     w("    local ok, v = pcall(f, ...)")
     w("    if not ok then")
     w("        Mission.failed[name] = (Mission.failed[name] or 0) + 1")
+    w("        Mission.callFailed = true")
     w("        return nil")
     w("    end")
     w("    return v")
@@ -1274,7 +1246,9 @@ def scaffold(m):
     w("    end")
     w("    for i, rule in ipairs(self.rules) do")
     w("        local monitor = Monitor(rule.name, false, nil, function()")
-    w("            return rule.when(self.state, self.objects) == true")
+    w("            self.callFailed = false")
+    w("            local holds = rule.when(self.state, self.objects) == true")
+    w("            return holds and not self.callFailed  -- no answer from the engine: does not hold")
     w("        end, nil)")
     w("        monitor:hook(rule.name, MonitorHook.Type.OnTrue, nil, function()")
     w("            self[rule.action](self)")
@@ -1305,8 +1279,7 @@ def decode(path, engine=None):
     d = Drl(path, engine)
     if not any(plain_name(sym) == "g_pSI" for _, sym in d.pe.imports.values()) \
             and any(dll.lower() == "armada.exe" for dll in d.dlls):
-        raise Unsupported("Armada I rule DLL (release build; create_rule and the engine queries imported "
-                          "from Armada.exe by name): not decoded by this tool")
+        raise Unsupported("not an Armada II rule DLL (Armada I shape): not decoded by this tool")
     if d.pe.export_size:
         raise DecodeError("has an export table; rule DLLs have none")
     created, deps = d.rules()
@@ -1351,7 +1324,7 @@ def decode(path, engine=None):
         except DecodeError as ex:
             rule["condition_lua"] = None
             rule["error"] = str(ex)
-            errors.append(f"{name}: {ex}")
+            errors.append(f"{rule['name']}: {ex}")
         rules.append(rule)
     base = os.path.basename(path)
     mission = re.sub(r"[rR]\.drl$", "", base)
@@ -1433,6 +1406,44 @@ def find_drls(root):
     return sorted(out)
 
 
+def inside(path, root):
+    path, root = os.path.realpath(path), os.path.realpath(root)
+    try:
+        return os.path.commonpath([path, root]) == root
+    except ValueError:  # different drives
+        return False
+
+
+def refuse_output(path, installs):
+    """Why an output path is refused, or None. Output holds names read from
+    game files: never in the repository (its build folders excepted, for the
+    tests) and never in a game install."""
+    repo = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+    builds = [os.path.join(repo, "target")]
+    if os.environ.get("CARGO_TARGET_DIR"):
+        builds.append(os.environ["CARGO_TARGET_DIR"])
+    if inside(path, repo) and not any(inside(path, b) for b in builds):
+        return "is inside the repository: output holds names read from game files"
+    for root in installs:
+        if inside(path, root):
+            return f"is inside the install {root}: installs are read-only"
+    return None
+
+
+def install_subdirs(installs):
+    """One output folder name per install, distinct even for equal basenames."""
+    out, used = {}, set()
+    for root in installs:
+        base = re.sub(r"[^A-Za-z0-9_.-]+", "_", os.path.basename(os.path.normpath(root))) or "install"
+        name, n = base, 1
+        while name.lower() in used:
+            n += 1
+            name = f"{base}_{n}"
+        used.add(name.lower())
+        out[root] = name
+    return out
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--install", action="append", required=True, help="game root to search for *R.drl (repeatable)")
@@ -1460,12 +1471,15 @@ def main(argv=None):
     else:
         print("engine names: none (no Armada2.exe + armada2.map); engine calls are written as slot_<n>")
 
+    for flag, path in (("--out", a.out), ("--json", a.json)):
+        if path:
+            why = refuse_output(path, a.install)
+            if why:
+                sys.exit(f"{flag} {why}")
     if a.out:
-        repo = os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
         out = os.path.realpath(a.out)
-        if out == repo or out.startswith(repo + os.sep) and "/target/" not in out + "/":
-            sys.exit("--out is inside the repository: scaffolds hold names read from game files and stay out of it")
         os.makedirs(out, exist_ok=True)
+    subdirs = install_subdirs(a.install)
 
     report = {"installs": []}
     failed = skipped = 0
@@ -1513,7 +1527,7 @@ def main(argv=None):
                 "errors": m["errors"],
             })
             if a.out:
-                sub = os.path.join(out, re.sub(r"[^A-Za-z0-9_.-]+", "_", os.path.basename(os.path.normpath(root))))
+                sub = os.path.join(out, subdirs[root])
                 os.makedirs(sub, exist_ok=True)
                 with open(os.path.join(sub, m["mission"] + ".lua"), "w", encoding="utf-8", newline="\n") as fh:
                     fh.write(scaffold(m))

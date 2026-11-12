@@ -1,9 +1,9 @@
 """Tests for tools/drl_to_lua.py on synthetic code: no game file is read.
 
-The condition decoder is fed instruction lists in the shape the Armada II
-debug compiler emits (checked against the installed `.drl` files, see the
-LUA-07 PR); the scaffold renderer is checked against the synthetic scaffold
-that crates/sta_mission/tests/drl.rs loads into the mission runtime.
+The condition decoder is fed hand-written instruction lists in the shapes it
+implements (all addresses, slots and names here are made up); the scaffold
+renderer is checked against the synthetic scaffold that
+crates/sta_mission/tests/drl.rs loads into the mission runtime.
 """
 
 import importlib.util
@@ -61,7 +61,7 @@ class FakeDrl(drl.Drl):
 
 
 def hot(iat):
-    """Read a hot variable through its vtable (`operator int`, slot 8)."""
+    """Read a rule variable's value."""
     return f"""mov    eax,ds:{iat:#x}
 mov    ecx,DWORD PTR [eax]
 mov    edx,DWORD PTR ds:{iat:#x}
@@ -143,12 +143,12 @@ mov    ecx,DWORD PTR [edx]
 mov    eax,ds:0x10041008
 mov    edx,DWORD PTR [eax]
 mov    eax,DWORD PTR [edx]
-call   DWORD PTR [eax+0x4dc]
+call   DWORD PTR [eax+0x7f0]
 cmp    esi,esp
 call   {CHK:#x}
 and    eax,0xff"""
         got = self.decode(and_chain(hot(0x10041004), hot(0x10041000), call))
-        self.assertEqual(got, "T(S.p_ALWAYS_EVALUATE) and T(S.p_ALPHA) and T(A('slot_311', O.ship))")
+        self.assertEqual(got, "T(S.p_ALWAYS_EVALUATE) and T(S.p_ALPHA) and T(A('slot_508', O.ship))")
 
     def test_not_and_or_through_materialised_values(self):
         # !alpha, then (always || alpha) via a stored 0/1, as `||` compiles.
