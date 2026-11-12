@@ -220,9 +220,18 @@ impl StockLayout {
                 _ => None,
             }
         };
+        let mut x = (self.number("popupPaletteXA").unwrap_or(30.0) as f32 * self.scale.x).round();
+        // A window wider than the sheet's canvas (21:9 on the 16:9 variant) stretches the
+        // left panels with the x scale; the palette starts no further left than the
+        // minimap panel's right edge (the 16:9 sheet's 264 sits inside its 351 wide minimap).
+        if self.screen.x * self.canvas.y > self.screen.y * self.canvas.x * 1.001
+            && let Some(map) = self.panel("minimap")
+        {
+            x = x.max(map.x + map.w);
+        }
         Some(PaletteLayout {
             origin: Vec2::new(
-                (self.number("popupPaletteXA").unwrap_or(30.0) as f32 * self.scale.x).round(),
+                x,
                 (self.number("popupPaletteYA").unwrap_or(30.0) as f32 * self.scale.y).round(),
             ),
             cell: Vec2::new(cell.w, cell.h),
@@ -346,6 +355,74 @@ mod tests {
         cfg.names.remove("ResourcePanel");
         let unnamed = StockLayout::new(&cfg, l.screen).pieces("resourcePanel");
         assert_eq!(unnamed[0].name, "default_sprite");
+    }
+
+    /// Fleet Ops' 16:9 sheet (canvas 2134x1200, minimap panel 351 wide, palette at 264) on
+    /// ultrawide windows: the command cells start right of the minimap panel. Windows the
+    /// sheet fits (4:3, 16:10, 16:9) and Classic's 4:3 sheet place it as before.
+    #[test]
+    fn ultrawide_palette_clears_the_minimap_panel() {
+        let mut cfg = GuiLayout { canvas: (2134, 1200), ..Default::default() };
+        cfg.rects.insert("paletteSingleButtonArea".into(), rect(0, 0, 88, 88));
+        cfg.rects.insert("minimapPanelArea".into(), rect(-1, 818, 351, 383));
+        cfg.numbers.insert("popupPaletteXA".into(), 264.0);
+        cfg.numbers.insert("popupPaletteYA".into(), 940.0);
+        cfg.numbers.insert("staticPaletteWidthA".into(), 14.0);
+        cfg.numbers.insert("staticPaletteHeightA".into(), 20.0);
+        for screen in [Vec2::new(3440.0, 1440.0), Vec2::new(2560.0, 1080.0), Vec2::new(5120.0, 1440.0)] {
+            let l = StockLayout::new(&cfg, screen);
+            let map = l.panel("minimap").unwrap();
+            let p = l.palette().unwrap();
+            for row in 0..p.rows {
+                for col in 0..p.columns {
+                    let c = p.cell_rect(col, row);
+                    let inside = c.x < map.x + map.w && c.x + c.w > map.x && c.y < map.y + map.h && c.y + c.h > map.y;
+                    assert!(!inside, "{screen:?}: cell {col},{row} {c:?} overlaps the minimap {map:?}");
+                }
+            }
+        }
+        // Wider than the sheet by any margin (no dead band): 2560x1400 is 1.83 on the 1.78 sheet.
+        {
+            let l = StockLayout::new(&cfg, Vec2::new(2560.0, 1400.0));
+            let map = l.panel("minimap").unwrap();
+            assert!(l.palette().unwrap().origin.x >= map.x + map.w);
+        }
+        // Unchanged where the sheet fits: the authored x, scaled.
+        for screen in [Vec2::new(1920.0, 1080.0), Vec2::new(2134.0, 1200.0), Vec2::new(1600.0, 1200.0), Vec2::new(1920.0, 1200.0), Vec2::new(1280.0, 720.0)] {
+            let x = StockLayout::new(&cfg, screen).palette().unwrap().origin.x;
+            assert_eq!(x, (264.0 * screen.x / 2134.0).round(), "{screen:?}");
+        }
+        // Classic's sheet (4:3 canvas, palette at 355 right of its 350 wide minimap) is not moved.
+        let mut classic = GuiLayout { canvas: (1600, 1200), ..Default::default() };
+        classic.rects.insert("paletteSingleButtonArea".into(), rect(0, 0, 80, 80));
+        classic.rects.insert("minimapPanelArea".into(), rect(0, 816, 350, 384));
+        classic.numbers.insert("popupPaletteXA".into(), 355.0);
+        classic.numbers.insert("popupPaletteYA".into(), 825.0);
+        for screen in [Vec2::new(3440.0, 1440.0), Vec2::new(1920.0, 1080.0), Vec2::new(1600.0, 1200.0)] {
+            let x = StockLayout::new(&classic, screen).palette().unwrap().origin.x;
+            assert_eq!(x, (355.0 * screen.x / 1600.0).round(), "{screen:?}");
+        }
+    }
+
+    /// Install-gated: Fleet Ops 4.0's own federation 16x9 sheet at 21:9.
+    #[test]
+    fn installed_fleet_ops_palette_clears_the_minimap_at_21_9() {
+        let roots = std::path::Path::new("/home/cedric/Games/Heroic/Star Trek Armada II Fleet Operations Roots");
+        let Ok(vfs) = sta_vfs::Vfs::mount_install(roots, Some("Fleet Ops 4.0")) else {
+            eprintln!("FO4 not installed: skipped");
+            return;
+        };
+        let Some(cfg) = crate::game::gui_layout(&vfs, "gui_federation16x9.cfg") else { return };
+        for screen in [Vec2::new(3440.0, 1440.0), Vec2::new(2560.0, 1080.0)] {
+            let l = StockLayout::new(&cfg, screen);
+            let (Some(map), Some(p)) = (l.panel("minimap"), l.palette()) else { continue };
+            for row in 0..p.rows {
+                for col in 0..p.columns {
+                    let c = p.cell_rect(col, row);
+                    assert!(c.x >= map.x + map.w, "{screen:?}: {c:?} vs {map:?}");
+                }
+            }
+        }
     }
 
     #[test]
