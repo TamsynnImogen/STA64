@@ -571,20 +571,25 @@ impl SpriteFonts {
     /// The font and whole multiple `k` that draw text about `desired` physical pixels tall
     /// with glyph texels on whole pixels: the named font of the role when the mod has it,
     /// else the best of all. `k` rounds down (never past what was asked for by more than
-    /// a sixth of a glyph) and a multiple above 1 costs a tenth of `desired`, so a size
+    /// a sixth of a glyph) and a multiple above 1 costs 15% of `desired`, so a size
     /// between two fonts takes the nearer font at 1x rather than doubling a small one.
     pub fn crisp(&self, role: Option<FontRole>, desired: f32) -> Option<(&LoadedFont, u32)> {
         let k_for = |h: f32| ((desired / h + 0.15).floor() as u32).max(1);
         let named = role.and_then(|r| self.named(r.stem()));
         if let Some(f) = named {
-            return Some((f, k_for(f.font.height())));
+            let k = k_for(f.font.height());
+            // The role's font, unless its nearest size is far from the one wanted (a
+            // tooltip's 17 px is not drawn in a 23 px font because it is "small").
+            if (f.font.height() * k as f32 - desired).abs() <= 0.35 * desired {
+                return Some((f, k));
+            }
         }
         self.fonts
             .values()
             .filter(|f| f.font.height() > 0.0)
             .map(|f| {
                 let k = k_for(f.font.height());
-                let cost = (f.font.height() * k as f32 - desired).abs() + 0.1 * desired * (k - 1) as f32;
+                let cost = (f.font.height() * k as f32 - desired).abs() + 0.15 * desired * (k - 1) as f32;
                 (f, k, cost)
             })
             .min_by(|a, b| a.2.total_cmp(&b.2).then(a.1.cmp(&b.1)))
@@ -954,6 +959,9 @@ fn resolve_text(
                     color: colour,
                     ..default()
                 },
+                // Crisp glyph offsets and sizes are whole physical pixels already; taffy's
+                // per-node rounding of `cum + w` could move an edge by one at odd scales.
+                bevy::ui::LayoutConfig { use_rounding: crisp.is_none() },
                 Node {
                     position_type: PositionType::Absolute,
                     left: Val::Px(q.rect[0] * inv),
@@ -1870,16 +1878,9 @@ mod tests {
             assert_eq!(got, want, "{k}x");
             assert_eq!(lay.width, x);
         }
-        // On screen: logical px x UiScale give whole physical pixels (1440/1080 and 2.0).
-        for ui in [1440.0f32 / 1080.0, 2.0, 1.0] {
-            let lay = font.layout_physical(text, 1, None, Align::Left);
-            for q in &lay.quads {
-                for v in q.rect {
-                    let logical = v / ui;
-                    assert!((logical * ui - v).abs() < 1e-3 && (logical * ui).fract().abs() < 1e-3);
-                }
-            }
-        }
+        // Centred and right aligned text in a wider box rounds the offset to a whole pixel too.
+        let lay = font.layout_physical(text, 2, Some(500.0), Align::Center);
+        assert!(lay.quads.iter().all(|q| q.rect.iter().all(|v| v.fract() == 0.0)));
     }
 
     /// Resolves styled text crisp at the window's physical scale: whole-pixel glyph nodes.

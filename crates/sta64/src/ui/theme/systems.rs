@@ -137,7 +137,7 @@ pub fn paint_widgets(
         Without<Slider>,
     >,
     lists: Query<&List>,
-    mut texts: Query<(&ChildOf, &mut crate::ui::sprite_font::SpriteText), With<ButtonText>>,
+    mut texts: Query<(&ChildOf, &mut crate::ui::sprite_font::SpriteText, Option<&crate::ui::sprite_font::SpriteTextStyle>), With<ButtonText>>,
     mut plain: Query<(&ChildOf, &mut TextColor), (With<ButtonText>, Without<crate::ui::sprite_font::SpriteText>)>,
     mut marks: Query<(&ChildOf, &mut BackgroundColor), (With<RowMark>, Without<WidgetState>)>,
 ) {
@@ -152,9 +152,18 @@ pub fn paint_widgets(
             bg.0 = c;
         }
     }
-    for (parent, mut tc) in &mut texts {
+    for (parent, mut tc, style) in &mut texts {
         let disabled = q.get(parent.parent()).is_ok_and(|(s, ..)| *s == WidgetState::Disabled);
-        let c = if disabled { theme.text_off } else { theme.kit_text_on };
+        let on = q.get(parent.parent()).is_ok_and(|(_, t, ..)| t.is_some_and(|t| t.on));
+        // Kit labels (styled) read on the skin's pills; a toggle that is on is the bright
+        // accent, so its label stays the dark one; plain sprite text (the HUD's) keeps `text_on`.
+        let c = if disabled {
+            theme.text_off
+        } else if style.is_some() && !on {
+            theme.kit_text_on
+        } else {
+            theme.text_on
+        };
         if tc.color != c {
             tc.color = c;
         }
