@@ -5,18 +5,20 @@
 //!   `MAGIC` (`S64N`), [`PROTOCOL_VERSION`] (`u16` LE), body length (`u32`
 //!   LE). The header layout is frozen for every protocol version, so two
 //!   builds always learn each other's version even when nothing else
-//!   decodes.
+//!   decodes, and a relay can forward frames of any version
+//!   ([`peek_header`]).
 //! - A frame is at most [`MAX_FRAME_BYTES`]. Every string and list has a
 //!   bound ([`Message::validate`]); [`decode`] checks them after parsing and
 //!   [`encode`] refuses to send what [`decode`] would refuse to read.
 //! - [`decode`] never panics: wrong magic, another version, a truncated or
 //!   oversized frame, an unknown tag, trailing bytes and out-of-bound fields
 //!   are all [`ProtoError`]s.
+//! - Who may send what is [`Message::role`]; a turn record's commands are
+//!   checked by [`TurnCommands::authorize`].
 //! - Evolution: `postcard` is positional, so any layout change, even an
-//!   appended variant, is a [`PROTOCOL_VERSION`] bump. Within one version
-//!   nothing changes; there is no "skip unknown" rule. Commands ride inside
-//!   [`TurnCommands`] and are versioned by `SEAM_REV`, which [`Hello`]
-//!   carries and the host compares.
+//!   appended variant, is a [`PROTOCOL_VERSION`] bump. The messages embed
+//!   sim types (`Command`, `GameOptions`); the golden test pins their bytes,
+//!   so a change there fails it and forces the bump.
 //! - The rules digest of docs/MODDING_DECISIONS.md D10 is [`RulesDigest`],
 //!   supplied through [`RulesIdentity`]; CON-35 implements it. Until then
 //!   [`ContentHashRules`] stands in with `ContentDb::hash`.
@@ -54,15 +56,19 @@ pub const MAX_RACE_BYTES: usize = 32;
 pub const MAX_MAP_NAME_BYTES: usize = 128;
 /// Rule entries in one [`RulesPart`].
 pub const MAX_RULE_ENTRIES_PER_PART: usize = 256;
-/// Rule keys (`RTS_CFG.h:cfgPLANET_DEWARP_RADIUS_MULTIPLIER`).
+/// Parts of one peer's rule list: at most 16,384 entries in all, so a host
+/// never holds more than 64 frames for an unaccepted joiner.
+pub const MAX_RULE_PARTS: u16 = 64;
+/// Rule keys (`RTS_CFG.h:cfgPLANET_DEWARP_RADIUS_MULTIPLIER`). Longer keys
+/// are refused by [`wire_entries`]; CON-35 keeps its keys within this.
 pub const MAX_RULE_KEY_BYTES: usize = 96;
-/// Canonical rendering of a rule value.
+/// Rule values on the wire. A longer value travels as [`hashed_value`].
 pub const MAX_RULE_VALUE_BYTES: usize = 96;
-/// Commands one peer sends for one turn. A sender with more holds the rest
-/// for its next turn.
-pub const MAX_COMMANDS_PER_TURN: usize = 128;
-/// Turn records in one [`CatchUp`] frame.
-pub const MAX_CATCHUP_TURNS: usize = 256;
+/// Commands in one turn record. [`TurnCommands::fill`] also bounds the
+/// record by bytes; whatever does not fit waits for the next turn.
+pub const MAX_COMMANDS_PER_TURN: usize = 256;
+/// Scheduled changes in one turn record.
+pub const MAX_SCHEDULE_PER_TURN: usize = 8;
 /// Chat text.
 pub const MAX_CHAT_BYTES: usize = 256;
 /// Seats in a game: [`PlayerId::MAX_PLAYERS`]; a map may allow fewer.
@@ -103,7 +109,7 @@ pub enum ProtoError {
     Corrupt(String),
     /// Parsed, but a field breaks a bound or an invariant.
     Invalid(&'static str),
-    /// A turn's commands claim a player or a kind the sender may not send.
+    /// A message or command the sender may not send.
     Authority(&'static str),
 }
 
@@ -127,7 +133,7 @@ impl std::fmt::Display for ProtoError {
             ProtoError::Empty => write!(f, "empty frame"),
             ProtoError::Corrupt(e) => write!(f, "corrupt frame: {e}"),
             ProtoError::Invalid(what) => write!(f, "invalid message: {what}"),
-            ProtoError::Authority(what) => write!(f, "unauthorised command: {what}"),
+            ProtoError::Authority(what) => write!(f, "not allowed: {what}"),
         }
     }
 }
@@ -150,7 +156,7 @@ pub enum Message {
     Refuse(Refusal),
     /// Host to joiner after a rules digest mismatch: send your rule entries.
     RulesRequest,
-    /// One part of a peer's rule entries.
+    /// Joiner to host: one part of its rule entries.
     Rules(RulesPart),
     /// Host to all, in the lobby: map, options, seats.
     Lobby(LobbyState),
@@ -158,10 +164,14 @@ pub enum Message {
     SeatChoice(SeatChoice),
     /// Host to all: the game starts. Also the replay's setup.
     Start(Start),
-    /// Every peer, once per turn, in turn order without gaps.
+    /// Every peer, one per turn, in turn order without gaps.
     Turn(TurnCommands),
-    /// Host to all: a change that takes effect on a given turn.
-    Schedule(Scheduled),
+    /// Non-host to host: please schedule this (pause, speed, delay).
+    Request(Action),
+    /// Host to all: resume a paused game, effective on receipt.
+    Resume {
+        by: PlayerId,
+    },
     /// Any peer to host: a vote on a stalled player (Armada's drop dialog).
     DropVote(DropVote),
     /// Round-trip probe; answered with [`Message::Pong`] carrying the nonce.
@@ -175,24 +185,48 @@ pub enum Message {
     Chat(Chat),
     /// A peer's digest disagreed with ours.
     Desync(DesyncNotice),
-    /// A dropped connection asking for its seat back.
+    /// A lost connection asking for its seat back.
     Rejoin(Rejoin),
-    /// Host to a rejoining peer: turn records it missed.
-    CatchUp(CatchUp),
+    /// Host to a rejoining peer: accepted; replayed records follow.
+    Rejoined(Rejoined),
+    /// Host to a rejoining peer: a turn record it missed, any seat's.
+    Replayed(TurnCommands),
+    /// Host to a rejoining peer: the catch-up is complete; live play follows.
+    CatchUpDone,
     /// Leaving on purpose.
     Leave(LeaveReason),
 }
 
+/// Who may send a message, and to whom (docs/NET.md, section 9).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    /// Only the host sends it.
+    Host,
+    /// Only a non-host sends it, and only to the host.
+    ToHost,
+    /// Any seated peer, to the recipients it names.
+    Any,
+}
+
 /// The build a peer runs. Peers must match exactly (docs/NET.md,
-/// "Handshake").
+/// "Builds").
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EngineId {
     /// `sta64`, or a headless tool's name.
     pub name: String,
     /// Crate version (`0.1.0`).
     pub version: String,
-    /// Build identity (commit), empty when unknown.
+    /// Build identity (commit plus a dirty flag); empty when unknown.
     pub build: String,
+}
+
+impl EngineId {
+    /// Whether two builds may play together: equal in every field, and
+    /// both builds known. Two unknown builds never match, since nothing
+    /// says their sims are alike.
+    pub fn matches(&self, other: &EngineId) -> bool {
+        !self.build.is_empty() && self == other
+    }
 }
 
 /// An installed pack, shown in the lobby and recorded in replays; not
@@ -203,21 +237,15 @@ pub struct PackInfo {
     pub version: String,
 }
 
-/// The digest of resolved sim rules that peers compare (D10).
+/// The digest of resolved sim rules that peers compare (D10): 32 bytes,
+/// room for SHA-256. CON-35 defines its content.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum RulesDigest {
-    /// Transitional: `ContentDb::hash`, until CON-35 lands.
-    ContentHash(u64),
-    /// CON-35's digest of resolved rule values (32 bytes, e.g. SHA-256).
-    Rules([u8; 32]),
-}
+pub struct RulesDigest(pub [u8; 32]);
 
 /// First message from a joiner.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Hello {
     pub engine: EngineId,
-    /// `sta_core::SEAM_REV`: commands decode alike only on equal revisions.
-    pub seam_rev: u32,
     pub rules: RulesDigest,
     /// Content lineage (`STA2 Classic`); informational.
     pub lineage: String,
@@ -233,7 +261,8 @@ pub struct Welcome {
     pub slot: PlayerId,
     /// The host's seat, which runs computer players and the mission.
     pub host: PlayerId,
-    /// Presented by [`Rejoin`] to take the seat back.
+    /// Presented by [`Rejoin`] to take the seat back. Sent to the joiner
+    /// only.
     pub rejoin_token: u64,
 }
 
@@ -246,15 +275,14 @@ pub enum Refusal {
     InProgress,
     /// The host closed the game (Armada's "Game closed").
     Closed,
-    /// Another build.
+    /// Another build, or a build of unknown identity.
     Engine { host: EngineId },
-    /// Another command seam revision.
-    SeamRev { host: u32 },
-    /// The peers digest rules differently ([`RulesDigest`] variants differ).
-    RulesScheme,
     /// The rules differ; `key` is the first differing key (D10).
     RulesDiffer(RuleDiff),
-    /// Unknown seat or token.
+    /// The digests differ but no listed entry does: one side's
+    /// [`RulesIdentity::entries`] leaves out something its digest covers.
+    RulesUnlisted,
+    /// Unknown seat or token, or the seat was dropped.
     BadRejoin,
     /// The host removed the player.
     Kicked,
@@ -277,7 +305,8 @@ pub struct RuleDiff {
     pub joiner: Option<String>,
 }
 
-/// Part `part` of `parts` of a peer's rule entries, sorted by key.
+/// Part `part` of `parts` of a peer's rule entries, as [`wire_entries`]
+/// renders them, sorted by key across all parts.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RulesPart {
     pub part: u16,
@@ -303,7 +332,8 @@ pub enum Occupant {
     Idle,
 }
 
-/// One seat of a game.
+/// One seat of a game, with what its peer reported (D10: lineage and packs
+/// are shown and recorded, not compared).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Seat {
     pub slot: PlayerId,
@@ -312,15 +342,16 @@ pub struct Seat {
     pub occupant: Occupant,
     /// Display name.
     pub name: String,
+    /// The peer's lineage and packs; empty for computer and idle seats.
+    pub lineage: String,
+    pub packs: Vec<PackInfo>,
 }
 
-/// A seat in the lobby, with what its peer reported.
+/// A seat in the lobby.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LobbySeat {
     pub seat: Seat,
     pub ready: bool,
-    pub lineage: String,
-    pub packs: Vec<PackInfo>,
 }
 
 /// The host's lobby, sent whenever it changes.
@@ -365,12 +396,12 @@ impl Default for TurnConfig {
 impl TurnConfig {
     /// The first tick of `turn`; its commands apply on this tick.
     pub fn tick_of(&self, turn: u32) -> Tick {
-        Tick::from(turn) * Tick::from(self.ticks_per_turn)
+        Tick::from(turn) * Tick::from(self.ticks_per_turn.max(1))
     }
 
-    /// The turn that contains `tick`.
-    pub fn turn_of(&self, tick: Tick) -> u64 {
-        tick / Tick::from(self.ticks_per_turn.max(1))
+    /// The turn that contains `tick` (saturating far past any real game).
+    pub fn turn_of(&self, tick: Tick) -> u32 {
+        u32::try_from(tick / Tick::from(self.ticks_per_turn.max(1))).unwrap_or(u32::MAX)
     }
 
     fn validate(&self) -> Result<(), ProtoError> {
@@ -387,15 +418,14 @@ pub struct Start {
     pub seed: u64,
     pub map: MapRef,
     pub options: GameOptions,
-    /// Ascending slot.
+    /// Ascending slot, with every peer's lineage and packs for the replay.
     pub seats: Vec<Seat>,
-    /// The seat that runs computer players and the mission (WORKPLAN assumption D3).
+    /// The seat that runs computer players and the mission (WORKPLAN
+    /// assumption D3).
     pub host: PlayerId,
     pub turn: TurnConfig,
-    /// The host's rules digest, lineage and packs, for the replay (D10).
+    /// The rules digest every seated peer matched (D10).
     pub rules: RulesDigest,
-    pub lineage: String,
-    pub packs: Vec<PackInfo>,
 }
 
 impl Start {
@@ -420,8 +450,9 @@ impl Start {
             .collect()
     }
 
-    /// Whether the host may send commands as `player`: computer seats and
-    /// the mission script (WORKPLAN assumption D3).
+    /// Whether the host may send commands as `player` at the start of the
+    /// game: computer seats and the mission script (assumption D3). After
+    /// an AI takeover the router widens this to the taken-over seat.
     pub fn host_speaks_for(&self, player: PlayerId) -> bool {
         player == PlayerId::SCRIPT
             || self
@@ -431,31 +462,84 @@ impl Start {
     }
 }
 
-/// A sim digest at a tick.
+/// A sim digest at a tick: `Sim::digest` with the sim at `tick`, before
+/// that tick's commands apply (as `sta_sim::replay` records it).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TickDigest {
     pub tick: Tick,
     pub digest: u64,
 }
 
-/// One peer's commands for one turn. Every peer sends one per turn, empty
-/// or not, in order and without gaps.
+/// One peer's record for one turn. Every peer sends one per turn from
+/// turn `delay_turns` on (earlier turns are empty by definition), in order
+/// and without gaps.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TurnCommands {
     pub turn: u32,
-    /// The sending seat; the transport checks it is the connection's.
+    /// The sending seat; receivers check it against the relay's stamp.
     pub slot: PlayerId,
     /// Sorted by `(player, seq)`.
     pub commands: Vec<Command>,
+    /// Host only: changes that take effect at the start of this turn, in
+    /// order. Riding in the host's own stream, they can never arrive after
+    /// a peer has run the turn, and the replay keeps them.
+    pub schedule: Vec<Scheduled>,
     /// The sender's digest at the first tick of the latest turn it has
     /// run, if it has run one since its last report.
     pub digest: Option<TickDigest>,
 }
 
+/// Body bytes [`TurnCommands::fill`] leaves free for everything but the
+/// commands (tag, turn, slot, list lengths, digest) and the schedule.
+const TURN_OVERHEAD_BYTES: usize = 64;
+
 impl TurnCommands {
-    /// Checks that `sender` may send these commands: its own seat's, and,
-    /// for the host, those `host_speaks_for` allows. `Edit` comes only from
-    /// [`PlayerId::SCRIPT`] via the host, never from a player or the bench.
+    /// Builds the record for `turn`, taking from the front of `pending`
+    /// as many commands as fit by count and by bytes. Commands that do not
+    /// fit stay in `pending` for the next turn. A single command too large
+    /// for any frame is removed and returned, to be refused locally.
+    pub fn fill(
+        turn: u32,
+        slot: PlayerId,
+        schedule: Vec<Scheduled>,
+        digest: Option<TickDigest>,
+        pending: &mut Vec<Command>,
+    ) -> (TurnCommands, Vec<Command>) {
+        let schedule_bytes = postcard::to_allocvec(&schedule).map_or(MAX_BODY_BYTES, |b| b.len());
+        let budget = MAX_BODY_BYTES.saturating_sub(TURN_OVERHEAD_BYTES + schedule_bytes);
+        let (mut used, mut take) = (0, 0);
+        let mut too_big = Vec::new();
+        let mut i = 0;
+        while i < pending.len() && take < MAX_COMMANDS_PER_TURN {
+            let len = postcard::to_allocvec(&pending[i]).map_or(usize::MAX, |b| b.len());
+            if len > budget {
+                too_big.push(pending.remove(i));
+                continue;
+            }
+            if used + len > budget {
+                break;
+            }
+            used += len;
+            take += 1;
+            i += 1;
+        }
+        let commands = pending.drain(..take).collect();
+        (
+            TurnCommands {
+                turn,
+                slot,
+                commands,
+                schedule,
+                digest,
+            },
+            too_big,
+        )
+    }
+
+    /// Checks that `sender` may send this record: its own seat's commands,
+    /// and, for the host, those `host_speaks_for` allows and the schedule.
+    /// `Edit` comes only as [`PlayerId::SCRIPT`] from the host, never from
+    /// a player or the bench.
     pub fn authorize(
         &self,
         sender: PlayerId,
@@ -464,6 +548,9 @@ impl TurnCommands {
     ) -> Result<(), ProtoError> {
         if self.slot != sender {
             return Err(ProtoError::Authority("turn sent for another seat"));
+        }
+        if !is_host && !self.schedule.is_empty() {
+            return Err(ProtoError::Authority("schedule from a non-host"));
         }
         for c in &self.commands {
             let own = c.player == sender && sender.is_player();
@@ -480,26 +567,27 @@ impl TurnCommands {
     }
 }
 
-/// A change every peer applies at the start of `at_turn`.
+/// A change in the host's turn record, effective at that turn.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Scheduled {
-    pub at_turn: u32,
-    /// Who asked for it (for "X paused the game").
+    /// Who asked for it (for "X paused the game"); display only.
     pub by: PlayerId,
     pub action: Action,
 }
 
-/// What a [`Scheduled`] change does.
+/// What a [`Scheduled`] change or a [`Message::Request`] does.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Action {
+    /// Stop before running this turn; [`Message::Resume`] ends it.
     Pause,
-    Resume,
     /// New [`TurnConfig::delay_turns`] ("changed the network latency").
     SetDelay(u8),
     /// New [`TurnConfig::speed_percent`] ("changed the game speed").
     SetSpeed(u16),
-    /// The seat sends no more turns after `last_turn`; from `last_turn + 1`
-    /// it is eliminated or played by the host's AI.
+    /// Host only. The seat's records up to `last_turn` count, later ones are
+    /// discarded; from `last_turn + 1` it is eliminated or played by the
+    /// host's AI. The host decides it only after the relay has closed the
+    /// seat's connection (docs/NET.md, section 8).
     Drop {
         slot: PlayerId,
         last_turn: u32,
@@ -552,24 +640,25 @@ pub struct DesyncNotice {
     pub theirs: TickDigest,
 }
 
-/// A lost connection coming back.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// A lost connection coming back, with the same identity a joiner shows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Rejoin {
+    pub hello: Hello,
     pub slot: PlayerId,
     pub token: u64,
-    /// The next turn it needs, or `None` when it lost its sim and replays
-    /// the game from tick 0.
+    /// The first turn it lacks, or `None` when it lost its sim and replays
+    /// the game from tick 0 (the host then sends [`Message::Start`] first).
     pub next_turn: Option<u32>,
 }
 
-/// Turn records for a rejoining peer, oldest first.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CatchUp {
-    pub turns: Vec<TurnCommands>,
-    /// Scheduled changes in the same span.
-    pub schedule: Vec<Scheduled>,
-    /// Last frame of the catch-up; live turns follow.
-    pub done: bool,
+/// The host took a seat back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Rejoined {
+    /// The last of the seat's own records the host has; the peer resends
+    /// its kept records after it, or sends empty ones if it lost them.
+    pub last_turn: Option<u32>,
+    /// The token for the next rejoin; the old one is spent.
+    pub rejoin_token: u64,
 }
 
 /// Why a peer left.
@@ -581,7 +670,7 @@ pub enum LeaveReason {
 }
 
 // ---------------------------------------------------------------------------
-// Validation
+// Validation and roles
 // ---------------------------------------------------------------------------
 
 fn in_range<T: PartialOrd>(v: T, (lo, hi): (T, T), what: &'static str) -> Result<(), ProtoError> {
@@ -616,6 +705,13 @@ fn seat_id(p: PlayerId) -> Result<(), ProtoError> {
     }
 }
 
+fn engine(e: &EngineId) -> Result<(), ProtoError> {
+    for f in [&e.name, &e.version, &e.build] {
+        short(f, MAX_ENGINE_FIELD_BYTES, "engine id")?;
+    }
+    Ok(())
+}
+
 fn packs(p: &[PackInfo]) -> Result<(), ProtoError> {
     few(p, MAX_PACKS, "too many packs")?;
     for p in p {
@@ -625,10 +721,19 @@ fn packs(p: &[PackInfo]) -> Result<(), ProtoError> {
     Ok(())
 }
 
+fn hello(h: &Hello) -> Result<(), ProtoError> {
+    engine(&h.engine)?;
+    short(&h.lineage, MAX_LINEAGE_BYTES, "lineage")?;
+    short(&h.name, MAX_NAME_BYTES, "player name")?;
+    packs(&h.packs)
+}
+
 fn seat(s: &Seat) -> Result<(), ProtoError> {
     seat_id(s.slot)?;
     short(&s.race, MAX_RACE_BYTES, "race")?;
     short(&s.name, MAX_NAME_BYTES, "player name")?;
+    short(&s.lineage, MAX_LINEAGE_BYTES, "lineage")?;
+    packs(&s.packs)?;
     if let Occupant::Ai(n) = &s.occupant {
         short(n, MAX_RACE_BYTES, "AI name")?;
     }
@@ -653,12 +758,29 @@ fn drop_choice(c: &DropChoice) -> Result<(), ProtoError> {
     }
 }
 
+fn action(a: &Action) -> Result<(), ProtoError> {
+    match a {
+        Action::Pause => Ok(()),
+        Action::SetDelay(d) => in_range(*d, DELAY_TURNS_RANGE, "delay_turns"),
+        Action::SetSpeed(p) => in_range(*p, SPEED_PERCENT_RANGE, "speed_percent"),
+        Action::Drop { slot, then, .. } => {
+            seat_id(*slot)?;
+            drop_choice(then)
+        }
+    }
+}
+
 fn turn(t: &TurnCommands) -> Result<(), ProtoError> {
     seat_id(t.slot)?;
     few(
         &t.commands,
         MAX_COMMANDS_PER_TURN,
         "too many commands in a turn",
+    )?;
+    few(
+        &t.schedule,
+        MAX_SCHEDULE_PER_TURN,
+        "too many scheduled changes",
     )?;
     if t.commands
         .windows(2)
@@ -674,19 +796,33 @@ fn turn(t: &TurnCommands) -> Result<(), ProtoError> {
             short(text, MAX_MISSION_TEXT_BYTES, "mission text")?;
         }
     }
+    for s in &t.schedule {
+        seat_id(s.by)?;
+        action(&s.action)?;
+    }
     Ok(())
 }
 
-fn scheduled(s: &Scheduled) -> Result<(), ProtoError> {
-    match &s.action {
-        Action::Pause | Action::Resume => Ok(()),
-        Action::SetDelay(d) => in_range(*d, DELAY_TURNS_RANGE, "delay_turns"),
-        Action::SetSpeed(p) => in_range(*p, SPEED_PERCENT_RANGE, "speed_percent"),
-        Action::Drop { slot, then, .. } => {
-            seat_id(*slot)?;
-            drop_choice(then)
-        }
+fn rules_part(p: &RulesPart) -> Result<(), ProtoError> {
+    if p.parts == 0 || p.parts > MAX_RULE_PARTS || p.part >= p.parts {
+        return Err(ProtoError::Invalid("rules part out of range"));
     }
+    few(
+        &p.entries,
+        MAX_RULE_ENTRIES_PER_PART,
+        "too many rule entries",
+    )?;
+    for e in &p.entries {
+        short(&e.key, MAX_RULE_KEY_BYTES, "rule key")?;
+        short(&e.value, MAX_RULE_VALUE_BYTES, "rule value")?;
+    }
+    if p.entries
+        .windows(2)
+        .any(|w| w[0].key.as_bytes() >= w[1].key.as_bytes())
+    {
+        return Err(ProtoError::Invalid("rule keys not ascending"));
+    }
+    Ok(())
 }
 
 impl Message {
@@ -694,25 +830,13 @@ impl Message {
     /// context. [`decode`] runs it on every frame; [`encode`] before sending.
     pub fn validate(&self) -> Result<(), ProtoError> {
         match self {
-            Message::Hello(h) => {
-                for f in [&h.engine.name, &h.engine.version, &h.engine.build] {
-                    short(f, MAX_ENGINE_FIELD_BYTES, "engine id")?;
-                }
-                short(&h.lineage, MAX_LINEAGE_BYTES, "lineage")?;
-                short(&h.name, MAX_NAME_BYTES, "player name")?;
-                packs(&h.packs)
-            }
+            Message::Hello(h) => hello(h),
             Message::Welcome(w) => {
                 seat_id(w.slot)?;
                 seat_id(w.host)
             }
             Message::Refuse(r) => match r {
-                Refusal::Engine { host } => {
-                    for f in [&host.name, &host.version, &host.build] {
-                        short(f, MAX_ENGINE_FIELD_BYTES, "engine id")?;
-                    }
-                    Ok(())
-                }
+                Refusal::Engine { host } => engine(host),
                 Refusal::RulesDiffer(d) => {
                     short(&d.key, MAX_RULE_KEY_BYTES, "rule key")?;
                     for v in [&d.host, &d.joiner].into_iter().flatten() {
@@ -722,35 +846,13 @@ impl Message {
                 }
                 _ => Ok(()),
             },
-            Message::RulesRequest => Ok(()),
-            Message::Rules(p) => {
-                if p.parts == 0 || p.part >= p.parts {
-                    return Err(ProtoError::Invalid("rules part out of range"));
-                }
-                few(
-                    &p.entries,
-                    MAX_RULE_ENTRIES_PER_PART,
-                    "too many rule entries",
-                )?;
-                for e in &p.entries {
-                    short(&e.key, MAX_RULE_KEY_BYTES, "rule key")?;
-                    short(&e.value, MAX_RULE_VALUE_BYTES, "rule value")?;
-                }
-                if p.entries
-                    .windows(2)
-                    .any(|w| w[0].key.as_bytes() >= w[1].key.as_bytes())
-                {
-                    return Err(ProtoError::Invalid("rule keys not ascending"));
-                }
-                Ok(())
-            }
+            Message::RulesRequest | Message::CatchUpDone | Message::Leave(_) => Ok(()),
+            Message::Rules(p) => rules_part(p),
             Message::Lobby(l) => {
                 short(&l.map.name, MAX_MAP_NAME_BYTES, "map name")?;
                 few(&l.seats, MAX_SEATS, "too many seats")?;
                 for s in &l.seats {
                     seat(&s.seat)?;
-                    short(&s.lineage, MAX_LINEAGE_BYTES, "lineage")?;
-                    packs(&s.packs)?;
                 }
                 seats_ascending(l.seats.iter().map(|s| s.seat.slot))
             }
@@ -758,9 +860,6 @@ impl Message {
             Message::Start(s) => {
                 short(&s.map.name, MAX_MAP_NAME_BYTES, "map name")?;
                 few(&s.seats, MAX_SEATS, "too many seats")?;
-                if s.seats.is_empty() {
-                    return Err(ProtoError::Invalid("no seats"));
-                }
                 for x in &s.seats {
                     seat(x)?;
                 }
@@ -772,12 +871,14 @@ impl Message {
                 {
                     return Err(ProtoError::Invalid("host is not a seated peer"));
                 }
-                s.turn.validate()?;
-                short(&s.lineage, MAX_LINEAGE_BYTES, "lineage")?;
-                packs(&s.packs)
+                s.turn.validate()
             }
-            Message::Turn(t) => turn(t),
-            Message::Schedule(s) => scheduled(s),
+            Message::Turn(t) | Message::Replayed(t) => turn(t),
+            Message::Request(a) => match a {
+                Action::Drop { .. } => Err(ProtoError::Invalid("drops are voted, not requested")),
+                a => action(a),
+            },
+            Message::Resume { by } => seat_id(*by),
             Message::DropVote(v) => {
                 seat_id(v.slot)?;
                 v.choice.as_ref().map_or(Ok(()), drop_choice)
@@ -791,19 +892,50 @@ impl Message {
                 short(&c.text, MAX_CHAT_BYTES, "chat text")
             }
             Message::Desync(d) => seat_id(d.slot),
-            Message::Rejoin(r) => seat_id(r.slot),
-            Message::CatchUp(c) => {
-                few(&c.turns, MAX_CATCHUP_TURNS, "too many catch-up turns")?;
-                few(&c.schedule, MAX_CATCHUP_TURNS, "too many catch-up changes")?;
-                c.turns.iter().try_for_each(turn)?;
-                c.schedule.iter().try_for_each(scheduled)?;
-                let key = |t: &TurnCommands| (t.turn, t.slot);
-                if c.turns.windows(2).any(|w| key(&w[0]) >= key(&w[1])) {
-                    return Err(ProtoError::Invalid("catch-up turns not ascending"));
-                }
-                Ok(())
+            Message::Rejoin(r) => {
+                hello(&r.hello)?;
+                seat_id(r.slot)
             }
-            Message::Leave(_) => Ok(()),
+            Message::Rejoined(_) => Ok(()),
+        }
+    }
+
+    /// Who may send this message. Receivers check it against the relay's
+    /// stamp before acting on a message (docs/NET.md, section 9).
+    pub fn role(&self) -> Role {
+        match self {
+            Message::Welcome(_)
+            | Message::Refuse(_)
+            | Message::RulesRequest
+            | Message::Lobby(_)
+            | Message::Start(_)
+            | Message::Resume { .. }
+            | Message::Rejoined(_)
+            | Message::Replayed(_)
+            | Message::CatchUpDone => Role::Host,
+            Message::Hello(_)
+            | Message::Rules(_)
+            | Message::SeatChoice(_)
+            | Message::Request(_)
+            | Message::DropVote(_)
+            | Message::Rejoin(_) => Role::ToHost,
+            Message::Turn(_)
+            | Message::Ping { .. }
+            | Message::Pong { .. }
+            | Message::Chat(_)
+            | Message::Desync(_)
+            | Message::Leave(_) => Role::Any,
+        }
+    }
+
+    /// Checks [`Message::role`] for a message the relay stamped as from
+    /// `sender`, received by a peer that knows the host's seat. A joiner
+    /// before `Welcome` passes `sender_is_host` from the room's host flag.
+    pub fn check_sender(&self, sender_is_host: bool) -> Result<(), ProtoError> {
+        match (self.role(), sender_is_host) {
+            (Role::Host, false) => Err(ProtoError::Authority("host message from a non-host")),
+            (Role::ToHost, true) => Err(ProtoError::Authority("joiner message from the host")),
+            _ => Ok(()),
         }
     }
 }
@@ -821,9 +953,10 @@ fn header(version: u16, body_len: usize) -> [u8; HEADER_LEN] {
     h
 }
 
-/// Reads a header: `(version, body length)`. Checks magic and the length
-/// bound, not the version.
-fn read_header(bytes: &[u8]) -> Result<(u16, usize), ProtoError> {
+/// Reads a header of any version: `(version, body length)`. Checks magic
+/// and the length bound only, so a relay can forward every version's
+/// frames, the [`version_notice`] included. Peers use [`frame_len`].
+pub fn peek_header(bytes: &[u8]) -> Result<(u16, usize), ProtoError> {
     if bytes.len() < HEADER_LEN {
         if bytes.len() >= 4 && bytes[..4] != MAGIC {
             return Err(ProtoError::BadMagic);
@@ -863,7 +996,7 @@ pub fn encode(msg: &Message) -> Result<Vec<u8>, ProtoError> {
 
 /// Reads exactly one frame.
 pub fn decode(frame: &[u8]) -> Result<Message, ProtoError> {
-    let (version, len) = read_header(frame)?;
+    let (version, len) = peek_header(frame)?;
     if version != PROTOCOL_VERSION {
         return Err(ProtoError::Version { found: version });
     }
@@ -897,7 +1030,7 @@ pub fn decode(frame: &[u8]) -> Result<Message, ProtoError> {
 /// version (after which the stream is not read further) or an oversized
 /// declared length, so a reader never buffers more than [`MAX_FRAME_BYTES`].
 pub fn frame_len(prefix: &[u8]) -> Result<Option<usize>, ProtoError> {
-    match read_header(prefix) {
+    match peek_header(prefix) {
         Err(ProtoError::Truncated { .. }) => Ok(None),
         Err(e) => Err(e),
         Ok((version, _)) if version != PROTOCOL_VERSION => {
@@ -923,8 +1056,9 @@ pub fn version_notice() -> Vec<u8> {
 pub trait RulesIdentity {
     /// The digest of resolved sim-visible rule values.
     fn digest(&self) -> RulesDigest;
-    /// The resolved rules, sorted bytewise by key, keys unique: sent when
-    /// digests differ, so both sides can name the first differing key.
+    /// Every resolved rule the digest covers, sorted bytewise by key, keys
+    /// unique and at most [`MAX_RULE_KEY_BYTES`]: sent when digests differ,
+    /// so both sides can name the first differing key.
     fn entries(&self) -> Vec<RuleEntry>;
 }
 
@@ -934,7 +1068,9 @@ pub struct ContentHashRules(pub u64);
 
 impl RulesIdentity for ContentHashRules {
     fn digest(&self) -> RulesDigest {
-        RulesDigest::ContentHash(self.0)
+        let mut d = [0u8; 32];
+        d[..8].copy_from_slice(&self.0.to_le_bytes());
+        RulesDigest(d)
     }
 
     fn entries(&self) -> Vec<RuleEntry> {
@@ -945,7 +1081,99 @@ impl RulesIdentity for ContentHashRules {
     }
 }
 
-/// The first key where two sorted entry lists differ, by key or value.
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
+    })
+}
+
+/// How a value longer than [`MAX_RULE_VALUE_BYTES`] travels: `#` and its
+/// length and FNV-1a-64, so long values still compare exactly enough to
+/// name the key (both sides render their own the same way).
+pub fn hashed_value(value: &str) -> String {
+    format!("#{}:{:016x}", value.len(), fnv1a64(value.as_bytes()))
+}
+
+/// A rule list as it travels and as the host compares it: checked sorted,
+/// unique and within the key bound; long values replaced by
+/// [`hashed_value`]. Nothing is truncated.
+pub fn wire_entries(entries: &[RuleEntry]) -> Result<Vec<RuleEntry>, ProtoError> {
+    if entries
+        .windows(2)
+        .any(|w| w[0].key.as_bytes() >= w[1].key.as_bytes())
+    {
+        return Err(ProtoError::Invalid("rule keys not ascending"));
+    }
+    entries
+        .iter()
+        .map(|e| {
+            short(&e.key, MAX_RULE_KEY_BYTES, "rule key")?;
+            let value = if e.value.len() > MAX_RULE_VALUE_BYTES {
+                hashed_value(&e.value)
+            } else {
+                e.value.clone()
+            };
+            Ok(RuleEntry {
+                key: e.key.clone(),
+                value,
+            })
+        })
+        .collect()
+}
+
+/// Splits a rule list into [`RulesPart`]s that each fit a frame.
+pub fn rules_parts(entries: &[RuleEntry]) -> Result<Vec<RulesPart>, ProtoError> {
+    let wire = wire_entries(entries)?;
+    let chunks: Vec<&[RuleEntry]> = if wire.is_empty() {
+        vec![&[]]
+    } else {
+        wire.chunks(MAX_RULE_ENTRIES_PER_PART).collect()
+    };
+    if chunks.len() > usize::from(MAX_RULE_PARTS) {
+        return Err(ProtoError::Invalid("too many rule entries"));
+    }
+    let parts = chunks.len() as u16;
+    Ok(chunks
+        .into_iter()
+        .enumerate()
+        .map(|(i, c)| RulesPart {
+            part: i as u16,
+            parts,
+            entries: c.to_vec(),
+        })
+        .collect())
+}
+
+/// Collects a joiner's parts, which must arrive as `0..parts` in order with
+/// keys ascending across them. Feed each part as it arrives; `Ok(Some)`
+/// once the list is complete.
+#[derive(Debug, Default)]
+pub struct RulesAssembler {
+    entries: Vec<RuleEntry>,
+    next: u16,
+    parts: Option<u16>,
+}
+
+impl RulesAssembler {
+    pub fn push(&mut self, p: RulesPart) -> Result<Option<Vec<RuleEntry>>, ProtoError> {
+        rules_part(&p)?;
+        if p.part != self.next || self.parts.is_some_and(|n| n != p.parts) {
+            return Err(ProtoError::Invalid("rules parts out of order"));
+        }
+        if let (Some(last), Some(first)) = (self.entries.last(), p.entries.first())
+            && last.key.as_bytes() >= first.key.as_bytes()
+        {
+            return Err(ProtoError::Invalid("rule keys not ascending"));
+        }
+        self.parts = Some(p.parts);
+        self.next += 1;
+        self.entries.extend(p.entries);
+        Ok((self.next == p.parts).then(|| std::mem::take(&mut self.entries)))
+    }
+}
+
+/// The first key where two sorted lists differ, by key or value. Pass both
+/// through [`wire_entries`] first, so long values compare as their hashes.
 pub fn first_difference(host: &[RuleEntry], joiner: &[RuleEntry]) -> Option<RuleDiff> {
     let (mut h, mut j) = (host.iter().peekable(), joiner.iter().peekable());
     loop {
@@ -987,48 +1215,10 @@ pub fn first_difference(host: &[RuleEntry], joiner: &[RuleEntry]) -> Option<Rule
     }
 }
 
-/// Splits sorted entries into [`RulesPart`]s that each fit a frame.
-/// Entries over the key or value bound are truncated to it on a character
-/// boundary (the digest, not this list, is what peers agree on).
-pub fn rules_parts(entries: &[RuleEntry]) -> Vec<RulesPart> {
-    fn clip(s: &str, max: usize) -> String {
-        let mut end = s.len().min(max);
-        while !s.is_char_boundary(end) {
-            end -= 1;
-        }
-        s[..end].to_string()
-    }
-    let chunks: Vec<&[RuleEntry]> = if entries.is_empty() {
-        vec![&[]]
-    } else {
-        entries.chunks(MAX_RULE_ENTRIES_PER_PART).collect()
-    };
-    let parts = chunks.len().min(usize::from(u16::MAX)) as u16;
-    chunks
-        .into_iter()
-        .take(usize::from(parts))
-        .enumerate()
-        .map(|(i, c)| RulesPart {
-            part: i as u16,
-            parts,
-            entries: c
-                .iter()
-                .map(|e| RuleEntry {
-                    key: clip(&e.key, MAX_RULE_KEY_BYTES),
-                    value: clip(&e.value, MAX_RULE_VALUE_BYTES),
-                })
-                .collect(),
-        })
-        .collect()
-}
-
 /// FNV-1a 64 over the map's `postcard` encoding: equal on every peer that
-/// parsed the same map with the same seam revision.
-pub fn map_digest(map: &MapDef) -> u64 {
-    let bytes = postcard::to_allocvec(map).unwrap_or_default();
-    bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| {
-        (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
-    })
+/// parsed the same map with the same build. `None` if it cannot be encoded.
+pub fn map_digest(map: &MapDef) -> Option<u64> {
+    postcard::to_allocvec(map).ok().map(|b| fnv1a64(&b))
 }
 
 // ---------------------------------------------------------------------------
@@ -1062,6 +1252,16 @@ mod tests {
         ]
     }
 
+    fn hello_fixture() -> Hello {
+        Hello {
+            engine: engine(),
+            rules: ContentHashRules(9).digest(),
+            lineage: "FO 4.0".into(),
+            packs: packs_fixture(),
+            name: "Cedric".into(),
+        }
+    }
+
     fn cmd(player: u8, seq: u32) -> Command {
         Command {
             player: PlayerId(player),
@@ -1074,6 +1274,22 @@ mod tests {
         }
     }
 
+    fn edit(seq: u32) -> Command {
+        Command {
+            player: PlayerId::SCRIPT,
+            seq,
+            kind: CommandKind::Edit(Edit::Kill(EntityId(3))),
+        }
+    }
+
+    fn text(player: u8, seq: u32, t: &str) -> Command {
+        Command {
+            player: PlayerId(player),
+            seq,
+            kind: CommandKind::MissionText { text: t.into() },
+        }
+    }
+
     fn seat(slot: u8, occupant: Occupant) -> Seat {
         Seat {
             slot: PlayerId(slot),
@@ -1081,6 +1297,8 @@ mod tests {
             race: "Federation".into(),
             occupant,
             name: format!("p{slot}"),
+            lineage: "STA2 Classic".into(),
+            packs: packs_fixture(),
         }
     }
 
@@ -1096,12 +1314,11 @@ mod tests {
                 seat(0, Occupant::Peer),
                 seat(1, Occupant::Peer),
                 seat(2, Occupant::Ai("normal".into())),
+                seat(3, Occupant::Idle),
             ],
             host: PlayerId(0),
             turn: TurnConfig::default(),
-            rules: RulesDigest::Rules([7; 32]),
-            lineage: "STA2 Classic".into(),
-            packs: packs_fixture(),
+            rules: RulesDigest([7; 32]),
         }
     }
 
@@ -1109,11 +1326,58 @@ mod tests {
         TurnCommands {
             turn: 17,
             slot: PlayerId(1),
-            commands: vec![cmd(1, 3), cmd(1, 4)],
+            commands: vec![cmd(1, 3), cmd(1, 4), text(1, 5, "taunt")],
+            schedule: vec![],
             digest: Some(TickDigest {
                 tick: 45,
                 digest: 0xdead_beef,
             }),
+        }
+    }
+
+    /// The host's record: its own seat, a computer seat, the script, and a
+    /// schedule.
+    fn host_turn() -> TurnCommands {
+        TurnCommands {
+            turn: 20,
+            slot: PlayerId(0),
+            commands: vec![
+                cmd(0, 0),
+                cmd(2, 0),
+                edit(0),
+                text(PlayerId::SCRIPT.0, 1, ""),
+            ],
+            schedule: vec![
+                Scheduled {
+                    by: PlayerId(1),
+                    action: Action::Pause,
+                },
+                Scheduled {
+                    by: PlayerId(0),
+                    action: Action::SetDelay(HIGH_LATENCY_DELAY_TURNS),
+                },
+                Scheduled {
+                    by: PlayerId(0),
+                    action: Action::SetSpeed(150),
+                },
+                Scheduled {
+                    by: PlayerId(0),
+                    action: Action::Drop {
+                        slot: PlayerId(1),
+                        last_turn: 19,
+                        then: DropChoice::Eliminate,
+                    },
+                },
+                Scheduled {
+                    by: PlayerId(0),
+                    action: Action::Drop {
+                        slot: PlayerId(3),
+                        last_turn: 19,
+                        then: DropChoice::AiTakeover("hard".into()),
+                    },
+                },
+            ],
+            digest: None,
         }
     }
 
@@ -1125,14 +1389,7 @@ mod tests {
             joiner: None,
         };
         let mut v = vec![
-            Message::Hello(Hello {
-                engine: engine(),
-                seam_rev: sta_core::SEAM_REV,
-                rules: RulesDigest::ContentHash(9),
-                lineage: "FO 4.0".into(),
-                packs: packs_fixture(),
-                name: "Cedric".into(),
-            }),
+            Message::Hello(hello_fixture()),
             Message::Welcome(Welcome {
                 slot: PlayerId(1),
                 host: PlayerId(0),
@@ -1162,8 +1419,6 @@ mod tests {
                 seats: vec![LobbySeat {
                     seat: seat(0, Occupant::Idle),
                     ready: true,
-                    lineage: "STA2".into(),
-                    packs: packs_fixture(),
                 }],
                 closed: false,
             }),
@@ -1174,12 +1429,17 @@ mod tests {
             }),
             Message::Start(start()),
             Message::Turn(turn_msg()),
+            Message::Turn(host_turn()),
             Message::Turn(TurnCommands {
-                turn: 0,
+                turn: 2,
                 slot: PlayerId(0),
                 commands: vec![],
+                schedule: vec![],
                 digest: None,
             }),
+            Message::Request(Action::Pause),
+            Message::Request(Action::SetSpeed(50)),
+            Message::Resume { by: PlayerId(1) },
             Message::DropVote(DropVote {
                 slot: PlayerId(3),
                 choice: None,
@@ -1202,30 +1462,27 @@ mod tests {
                 },
             }),
             Message::Rejoin(Rejoin {
+                hello: hello_fixture(),
                 slot: PlayerId(1),
                 token: 5,
                 next_turn: Some(100),
             }),
             Message::Rejoin(Rejoin {
+                hello: hello_fixture(),
                 slot: PlayerId(1),
                 token: 5,
                 next_turn: None,
             }),
-            Message::CatchUp(CatchUp {
-                turns: vec![
-                    turn_msg(),
-                    TurnCommands {
-                        turn: 18,
-                        ..turn_msg()
-                    },
-                ],
-                schedule: vec![Scheduled {
-                    at_turn: 18,
-                    by: PlayerId(0),
-                    action: Action::Pause,
-                }],
-                done: true,
+            Message::Rejoined(Rejoined {
+                last_turn: Some(99),
+                rejoin_token: 6,
             }),
+            Message::Rejoined(Rejoined {
+                last_turn: None,
+                rejoin_token: 6,
+            }),
+            Message::Replayed(host_turn()),
+            Message::CatchUpDone,
             Message::Leave(LeaveReason::Quit),
             Message::Leave(LeaveReason::ToShell),
         ];
@@ -1234,36 +1491,13 @@ mod tests {
             Refusal::InProgress,
             Refusal::Closed,
             Refusal::Engine { host: engine() },
-            Refusal::SeamRev { host: 3 },
-            Refusal::RulesScheme,
             Refusal::RulesDiffer(diff),
+            Refusal::RulesUnlisted,
             Refusal::BadRejoin,
             Refusal::Kicked,
             Refusal::Protocol,
         ] {
             v.push(Message::Refuse(r));
-        }
-        for action in [
-            Action::Pause,
-            Action::Resume,
-            Action::SetDelay(HIGH_LATENCY_DELAY_TURNS),
-            Action::SetSpeed(150),
-            Action::Drop {
-                slot: PlayerId(1),
-                last_turn: 40,
-                then: DropChoice::Eliminate,
-            },
-            Action::Drop {
-                slot: PlayerId(1),
-                last_turn: 40,
-                then: DropChoice::AiTakeover("hard".into()),
-            },
-        ] {
-            v.push(Message::Schedule(Scheduled {
-                at_turn: 50,
-                by: PlayerId(1),
-                action,
-            }));
         }
         for scope in [
             ChatScope::All,
@@ -1294,11 +1528,27 @@ mod tests {
         }
     }
 
+    /// Pins the encoding of every sample. A change to any message, or to a
+    /// sim type a message embeds (`Command`, `GameOptions`), fails here:
+    /// bump `PROTOCOL_VERSION` and update the constant.
+    #[test]
+    fn golden_encoding_is_pinned() {
+        let all: Vec<u8> = samples().iter().flat_map(|m| encode(m).unwrap()).collect();
+        assert_eq!(PROTOCOL_VERSION, 1);
+        assert_eq!(
+            fnv1a64(&all),
+            GOLDEN,
+            "wire encoding changed: bump PROTOCOL_VERSION"
+        );
+    }
+
+    const GOLDEN: u64 = 3036109735231168885;
+
     #[test]
     fn header_is_little_endian_and_frozen() {
         let bytes = encode(&Message::Ping { nonce: 0 }).unwrap();
-        // Ping is tag 11, nonce 0: two body bytes.
-        assert_eq!(bytes, [b'S', b'6', b'4', b'N', 1, 0, 2, 0, 0, 0, 11, 0]);
+        // Ping is tag 12, nonce 0: two body bytes.
+        assert_eq!(bytes, [b'S', b'6', b'4', b'N', 1, 0, 2, 0, 0, 0, 12, 0]);
         assert_eq!(version_notice(), [b'S', b'6', b'4', b'N', 1, 0, 0, 0, 0, 0]);
     }
 
@@ -1318,6 +1568,25 @@ mod tests {
         }
     }
 
+    /// A stream reader: frames back to back, delivered a byte at a time.
+    #[test]
+    fn stream_of_frames_reassembles_byte_by_byte() {
+        let msgs = samples();
+        let stream: Vec<u8> = msgs.iter().flat_map(|m| encode(m).unwrap()).collect();
+        let (mut buf, mut got) = (Vec::new(), Vec::new());
+        for &b in &stream {
+            buf.push(b);
+            if let Some(n) = frame_len(&buf).unwrap()
+                && buf.len() == n
+            {
+                got.push(decode(&buf).unwrap());
+                buf.clear();
+            }
+        }
+        assert!(buf.is_empty());
+        assert_eq!(got, msgs);
+    }
+
     #[test]
     fn trailing_bytes_and_inflated_lengths_are_errors() {
         let mut bytes = encode(&Message::Turn(turn_msg())).unwrap();
@@ -1329,29 +1598,61 @@ mod tests {
         assert!(matches!(decode(&bytes), Err(ProtoError::Corrupt(_))));
     }
 
+    fn stop(units: std::ops::Range<u32>) -> Command {
+        Command {
+            player: PlayerId(1),
+            seq: units.start,
+            kind: CommandKind::Order(Order::Stop {
+                units: units.map(EntityId).collect(),
+            }),
+        }
+    }
+
     #[test]
     fn oversized_frames_are_refused_before_reading() {
         let mut h = version_notice();
         h[6..10].copy_from_slice(&(MAX_BODY_BYTES as u32 + 1).to_le_bytes());
         assert!(matches!(frame_len(&h), Err(ProtoError::TooLarge { .. })));
         assert!(matches!(decode(&h), Err(ProtoError::TooLarge { .. })));
+        assert!(matches!(peek_header(&h), Err(ProtoError::TooLarge { .. })));
         h[6..10].copy_from_slice(&u32::MAX.to_le_bytes());
         assert!(matches!(decode(&h), Err(ProtoError::TooLarge { .. })));
         // A message too big to send is refused at the sender too.
-        let huge = Command {
-            player: PlayerId(1),
-            seq: 0,
-            kind: CommandKind::Order(Order::Stop {
-                units: (20_000..60_000).map(EntityId).collect(),
-            }),
-        };
         let m = Message::Turn(TurnCommands {
             turn: 0,
             slot: PlayerId(1),
-            commands: vec![huge],
+            commands: vec![stop(20_000..60_000)],
+            schedule: vec![],
             digest: None,
         });
         assert!(matches!(encode(&m), Err(ProtoError::TooLarge { .. })));
+    }
+
+    #[test]
+    fn fill_bounds_a_record_by_bytes_and_count() {
+        // 20 commands of ~3 KB each: about 20 fit by bytes, the rest wait.
+        let mut pending: Vec<Command> = (0..40u32)
+            .map(|i| stop(100_000 + i * 1000..100_000 + i * 1000 + 1000))
+            .collect();
+        let (t, too_big) = TurnCommands::fill(5, PlayerId(1), vec![], None, &mut pending);
+        assert!(too_big.is_empty());
+        assert!(!t.commands.is_empty() && !pending.is_empty());
+        assert_eq!(t.commands.len() + pending.len(), 40);
+        assert!(encode(&Message::Turn(t)).is_ok());
+
+        // By count.
+        let mut pending: Vec<Command> = (0..300).map(|s| cmd(1, s)).collect();
+        let (t, _) = TurnCommands::fill(5, PlayerId(1), vec![], None, &mut pending);
+        assert_eq!(t.commands.len(), MAX_COMMANDS_PER_TURN);
+        assert_eq!(pending.len(), 300 - MAX_COMMANDS_PER_TURN);
+        assert!(encode(&Message::Turn(t)).is_ok());
+
+        // A command that fits no frame is handed back, the rest go on.
+        let mut pending = vec![stop(20_000..60_000), cmd(1, 70_000)];
+        let (t, too_big) = TurnCommands::fill(5, PlayerId(1), vec![], None, &mut pending);
+        assert_eq!(too_big.len(), 1);
+        assert_eq!(t.commands, [cmd(1, 70_000)]);
+        assert!(pending.is_empty());
     }
 
     #[test]
@@ -1360,6 +1661,8 @@ mod tests {
         bytes[4..6].copy_from_slice(&2u16.to_le_bytes());
         assert_eq!(decode(&bytes), Err(ProtoError::Version { found: 2 }));
         assert_eq!(frame_len(&bytes), Err(ProtoError::Version { found: 2 }));
+        // A relay still reads it.
+        assert_eq!(peek_header(&bytes), Ok((2, bytes.len() - HEADER_LEN)));
         // A version notice from another build reads as its version.
         let mut notice = version_notice();
         notice[4..6].copy_from_slice(&7u16.to_le_bytes());
@@ -1395,9 +1698,14 @@ mod tests {
             decode(&frame(&[0, 0x80, 0x80, 0x80, 0x80, 0x01])),
             Err(ProtoError::Corrupt(_))
         ));
-        // Chat with invalid UTF-8 text.
+        // Chat (tag 14) with invalid UTF-8 text.
         assert!(matches!(
-            decode(&frame(&[13, 0, 0, 1, 2, 0xff, 0xfe])),
+            decode(&frame(&[14, 0, 0, 1, 2, 0xff, 0xfe])),
+            Err(ProtoError::Corrupt(_))
+        ));
+        // A Turn whose command list claims u32::MAX entries.
+        assert!(matches!(
+            decode(&frame(&[8, 0, 1, 0xff, 0xff, 0xff, 0xff, 0x0f])),
             Err(ProtoError::Corrupt(_))
         ));
     }
@@ -1416,6 +1724,13 @@ mod tests {
         let body = postcard::to_allocvec(&chat).unwrap();
         assert_eq!(decode(&frame(&body)), Err(ProtoError::Invalid("chat text")));
 
+        let sched = |action| TurnCommands {
+            schedule: vec![Scheduled {
+                by: PlayerId(0),
+                action,
+            }],
+            ..host_turn()
+        };
         let bad = [
             Message::Chat(Chat {
                 from: PlayerId(0),
@@ -1428,19 +1743,39 @@ mod tests {
                 host: PlayerId(0),
                 rejoin_token: 0,
             }),
-            Message::Schedule(Scheduled {
-                at_turn: 0,
-                by: PlayerId(0),
-                action: Action::SetDelay(0),
+            Message::Turn(sched(Action::SetDelay(0))),
+            Message::Turn(sched(Action::SetSpeed(1000))),
+            Message::Turn(TurnCommands {
+                schedule: vec![Scheduled {
+                    by: PlayerId(9),
+                    action: Action::Pause,
+                }],
+                ..host_turn()
             }),
-            Message::Schedule(Scheduled {
-                at_turn: 0,
-                by: PlayerId(0),
-                action: Action::SetSpeed(1000),
+            Message::Turn(TurnCommands {
+                schedule: vec![
+                    Scheduled {
+                        by: PlayerId(0),
+                        action: Action::Pause
+                    };
+                    MAX_SCHEDULE_PER_TURN + 1
+                ],
+                ..host_turn()
             }),
+            Message::Request(Action::Drop {
+                slot: PlayerId(1),
+                last_turn: 0,
+                then: DropChoice::Eliminate,
+            }),
+            Message::Resume { by: PlayerId(200) },
             Message::Rules(RulesPart {
                 part: 1,
                 parts: 1,
+                entries: vec![],
+            }),
+            Message::Rules(RulesPart {
+                part: 0,
+                parts: MAX_RULE_PARTS + 1,
                 entries: vec![],
             }),
             Message::Rules(RulesPart {
@@ -1463,7 +1798,10 @@ mod tests {
             }),
             Message::Turn(TurnCommands {
                 commands: vec![cmd(255, 0)],
-                slot: PlayerId(1),
+                ..turn_msg()
+            }),
+            Message::Turn(TurnCommands {
+                commands: vec![text(1, 0, &"x".repeat(MAX_MISSION_TEXT_BYTES + 1))],
                 ..turn_msg()
             }),
             Message::Turn(TurnCommands {
@@ -1491,10 +1829,14 @@ mod tests {
                 seats: vec![seat(1, Occupant::Peer), seat(0, Occupant::Peer)],
                 ..start()
             }),
-            Message::CatchUp(CatchUp {
-                turns: vec![turn_msg(), turn_msg()],
-                schedule: vec![],
-                done: false,
+            Message::Rejoin(Rejoin {
+                hello: Hello {
+                    name: "n".repeat(MAX_NAME_BYTES + 1),
+                    ..hello_fixture()
+                },
+                slot: PlayerId(1),
+                token: 0,
+                next_turn: None,
             }),
         ];
         for m in bad {
@@ -1511,6 +1853,23 @@ mod tests {
     }
 
     #[test]
+    fn roles_follow_the_host() {
+        for m in samples() {
+            let host = m.check_sender(true);
+            let other = m.check_sender(false);
+            match m.role() {
+                Role::Host => assert!(host.is_ok() && other.is_err(), "{m:?}"),
+                Role::ToHost => assert!(host.is_err() && other.is_ok(), "{m:?}"),
+                Role::Any => assert!(host.is_ok() && other.is_ok(), "{m:?}"),
+            }
+        }
+        assert_eq!(Message::Start(start()).role(), Role::Host);
+        assert_eq!(Message::Replayed(turn_msg()).role(), Role::Host);
+        assert_eq!(Message::Hello(hello_fixture()).role(), Role::ToHost);
+        assert_eq!(Message::Turn(turn_msg()).role(), Role::Any);
+    }
+
+    #[test]
     fn authority_follows_seats_and_d3() {
         let s = start();
         let speaks = |p| s.host_speaks_for(p);
@@ -1521,50 +1880,66 @@ mod tests {
             "turn for another seat"
         );
 
-        // The host sends for its own seat, computer seats and the script.
-        let edit = Command {
-            player: PlayerId::SCRIPT,
-            seq: 0,
-            kind: CommandKind::Edit(Edit::Kill(EntityId(3))),
+        // The host sends for its own seat, computer seats and the script,
+        // and schedules changes.
+        assert_eq!(host_turn().authorize(PlayerId(0), true, speaks), Ok(()));
+        let as_host = |commands: Vec<Command>| TurnCommands {
+            commands,
+            schedule: vec![],
+            ..host_turn()
         };
-        let host_turn = TurnCommands {
-            turn: 1,
-            slot: PlayerId(0),
-            commands: vec![cmd(0, 0), cmd(2, 0), edit.clone()],
-            digest: None,
-        };
-        assert_eq!(host_turn.authorize(PlayerId(0), true, speaks), Ok(()));
-        // A non-host may not speak for the AI or the script...
-        let t = TurnCommands {
+        let as_peer = |commands: Vec<Command>| TurnCommands {
             slot: PlayerId(1),
-            commands: vec![cmd(2, 0)],
-            ..host_turn.clone()
+            commands,
+            ..as_host(vec![])
         };
-        assert!(t.authorize(PlayerId(1), false, speaks).is_err());
-        let t = TurnCommands {
-            slot: PlayerId(1),
-            commands: vec![edit],
-            ..host_turn.clone()
+        // A non-host may not speak for the AI or the script, nor schedule...
+        assert!(
+            as_peer(vec![cmd(2, 0)])
+                .authorize(PlayerId(1), false, speaks)
+                .is_err()
+        );
+        assert!(
+            as_peer(vec![edit(0)])
+                .authorize(PlayerId(1), false, speaks)
+                .is_err()
+        );
+        assert!(
+            as_peer(vec![text(PlayerId::SCRIPT.0, 0, "")])
+                .authorize(PlayerId(1), false, speaks)
+                .is_err()
+        );
+        let scheduled = TurnCommands {
+            schedule: host_turn().schedule,
+            ..as_peer(vec![])
         };
-        assert!(t.authorize(PlayerId(1), false, speaks).is_err());
-        // ...nor the host for another person's seat, and players never edit.
-        let t = TurnCommands {
-            commands: vec![cmd(1, 0)],
-            ..host_turn.clone()
-        };
-        assert!(t.authorize(PlayerId(0), true, speaks).is_err());
+        assert_eq!(
+            scheduled.authorize(PlayerId(1), false, speaks),
+            Err(ProtoError::Authority("schedule from a non-host"))
+        );
+        // ...nor the host for another person's seat, an idle seat or the
+        // bench, and players never edit.
+        for c in [cmd(1, 0), cmd(3, 0), cmd(255, 0)] {
+            assert!(
+                as_host(vec![c.clone()])
+                    .authorize(PlayerId(0), true, speaks)
+                    .is_err(),
+                "{c:?}"
+            );
+        }
         let own_edit = Command {
             player: PlayerId(0),
             seq: 1,
             kind: CommandKind::Edit(Edit::Kill(EntityId(3))),
         };
-        let t = TurnCommands {
-            commands: vec![own_edit],
-            ..host_turn
-        };
         assert_eq!(
-            t.authorize(PlayerId(0), true, speaks),
+            as_host(vec![own_edit]).authorize(PlayerId(0), true, speaks),
             Err(ProtoError::Authority("edit from a player"))
+        );
+        // Mission text from one's own seat is fine.
+        assert_eq!(
+            as_peer(vec![text(1, 0, "go")]).authorize(PlayerId(1), false, speaks),
+            Ok(())
         );
     }
 
@@ -1581,7 +1956,8 @@ mod tests {
             [
                 Control::Human,
                 Control::Remote,
-                Control::Ai("normal".into())
+                Control::Ai("normal".into()),
+                Control::Idle
             ]
         );
         let joiner: Vec<_> = s
@@ -1589,9 +1965,32 @@ mod tests {
             .into_iter()
             .map(|p| p.control)
             .collect();
-        assert_eq!(joiner, [Control::Remote, Control::Human, Control::Remote]);
+        assert_eq!(
+            joiner,
+            [
+                Control::Remote,
+                Control::Human,
+                Control::Remote,
+                Control::Idle
+            ]
+        );
         assert_eq!(s.turn.tick_of(10), 30);
         assert_eq!(s.turn.turn_of(32), 10);
+        assert_eq!(s.turn.turn_of(Tick::MAX), u32::MAX);
+    }
+
+    #[test]
+    fn engines_match_only_when_known_and_equal() {
+        assert!(engine().matches(&engine()));
+        let unknown = EngineId {
+            build: String::new(),
+            ..engine()
+        };
+        assert!(!unknown.matches(&unknown));
+        assert!(!engine().matches(&EngineId {
+            build: "abc124".into(),
+            ..engine()
+        }));
     }
 
     fn e(k: &str, v: &str) -> RuleEntry {
@@ -1632,28 +2031,76 @@ mod tests {
         );
     }
 
+    /// The whole D10 flow: the joiner's list split into parts, sent,
+    /// reassembled at the host and compared with the host's own.
+    fn send_and_compare(host: &[RuleEntry], joiner: &[RuleEntry]) -> Option<RuleDiff> {
+        let mut asm = RulesAssembler::default();
+        let mut got = None;
+        for p in rules_parts(joiner).unwrap() {
+            let Message::Rules(p) = decode(&encode(&Message::Rules(p)).unwrap()).unwrap() else {
+                unreachable!()
+            };
+            got = asm.push(p).unwrap();
+        }
+        first_difference(
+            &wire_entries(host).unwrap(),
+            &got.expect("all parts arrived"),
+        )
+    }
+
     #[test]
-    fn rules_parts_fit_frames_and_reassemble() {
-        let entries: Vec<_> = (0..1000)
+    fn rules_cross_the_wire_and_name_the_key() {
+        let long = "9".repeat(500);
+        let list: Vec<_> = (0..1000)
             .map(|i| {
                 e(
-                    &format!("RTS_CFG.h:key{i:05}{}", "k".repeat(80)),
-                    &"9".repeat(200),
+                    &format!("RTS_CFG.h:key{i:05}{}", "k".repeat(70)),
+                    if i % 7 == 0 { &long } else { "1" },
                 )
             })
             .collect();
-        let parts = rules_parts(&entries);
-        assert_eq!(parts.len(), 4);
-        let mut back = Vec::new();
-        for p in parts {
-            let m = Message::Rules(p);
-            assert_eq!(decode(&encode(&m).unwrap()), Ok(m.clone()));
-            let Message::Rules(p) = m else { unreachable!() };
-            back.extend(p.entries);
-        }
-        assert_eq!(back.len(), 1000);
-        assert!(back.iter().all(|r| r.key.len() <= MAX_RULE_KEY_BYTES && r.value.len() == MAX_RULE_VALUE_BYTES));
-        assert_eq!(rules_parts(&[]).len(), 1);
+        assert_eq!(rules_parts(&list).unwrap().len(), 4);
+        assert_eq!(send_and_compare(&list, &list), None);
+
+        // A difference past byte 96 of a long value is still found.
+        let mut other = list.clone();
+        other[700].value = format!("{}8", "9".repeat(499));
+        let d = send_and_compare(&list, &other).unwrap();
+        assert_eq!(d.key, list[700].key);
+        assert!(d.host.unwrap().starts_with("#500:"));
+
+        // Keys that share a long prefix stay distinct; over-long keys are
+        // refused, not cut.
+        let prefix = "p".repeat(MAX_RULE_KEY_BYTES - 1);
+        let close = [e(&format!("{prefix}a"), "1"), e(&format!("{prefix}b"), "1")];
+        assert_eq!(send_and_compare(&close, &close), None);
+        assert!(rules_parts(&[e(&"k".repeat(MAX_RULE_KEY_BYTES + 1), "1")]).is_err());
+        assert!(rules_parts(&[e("b", "1"), e("a", "1")]).is_err());
+        let too_many: Vec<_> = (0..MAX_RULE_ENTRIES_PER_PART * usize::from(MAX_RULE_PARTS) + 1)
+            .map(|i| e(&format!("{i:08}"), ""))
+            .collect();
+        assert!(rules_parts(&too_many).is_err());
+        assert_eq!(rules_parts(&[]).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn rules_assembler_refuses_disorder() {
+        let parts = rules_parts(
+            &(0..600)
+                .map(|i| e(&format!("{i:04}"), ""))
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        let mut asm = RulesAssembler::default();
+        assert!(asm.push(parts[1].clone()).is_err(), "out of order");
+        let mut asm = RulesAssembler::default();
+        asm.push(parts[0].clone()).unwrap();
+        assert!(asm.push(parts[0].clone()).is_err(), "duplicate");
+        let mut asm = RulesAssembler::default();
+        asm.push(parts[0].clone()).unwrap();
+        let mut back = parts[1].clone();
+        back.entries[0].key = "0000".into();
+        assert!(asm.push(back).is_err(), "keys going backwards across parts");
     }
 
     #[test]
