@@ -196,7 +196,7 @@ impl Entity {
         }
     }
 
-    /// Made from `def`, at full hull and shields.
+    /// Made from `def`, at its authored starting hull and shields (full if absent).
     pub fn from_def(
         def: &UnitDef,
         features: &Features,
@@ -214,8 +214,14 @@ impl Entity {
             owner
         };
         let mut e = Entity::new(kind, def.key, owner, pos, heading, def.movement);
-        e.hull = [def.hull; 2];
+        e.hull = [def.initial_hull.unwrap_or(def.hull), def.hull];
         e.shields = Shields::full(def.shields.max, features.directional_shields);
+        let strength = def.initial_shields.unwrap_or(def.shields.max);
+        e.shields.now = if e.shields.directional {
+            [strength; 4]
+        } else {
+            [strength, Fixed::ZERO, Fixed::ZERO, Fixed::ZERO]
+        };
         if matches!(kind, EntityKind::Craft | EntityKind::Station) {
             e.crew = Some([def.crew.max(Fixed::ZERO); 2]);
         }

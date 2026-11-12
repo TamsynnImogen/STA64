@@ -843,7 +843,7 @@ weapon#iconpos,0,0,9448,1,2 numbers,craft;shipyard;sensor;evolver;constructionri
 shotdelay#,0,0,6007,1,float,cannonimp,2;4;0.25
 extraweaponhardpoints,0,0,2289,0,string,craft;shipyard;pod;sensor;research,"""root"""
 buildablebyownerraceonly,0,0,2287,0,int,craft;shipyard;pod;sensor;research,1;0
-curhealth,0,0,2285,0,int,craft;shipyard;pod;sensor;research,4000;92.25;264
+curhealth,0,0,2285,1,int,craft;shipyard;pod;sensor;research,4000;92.25;264
 curshields,0,0,2285,1,int,craft;shipyard;pod;sensor;research,0;4000;103.25
 healthrate,0,0,2285,0,float,craft;shipyard;pod;sensor;research,4000.0;0;0.217
 maxshields,0,0,2285,1,int,craft;shipyard;pod;sensor;research,0;4000;103.25

@@ -7,6 +7,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 ## Needs your check
 
+- [?] A2 initial hull/shield pools: in the new optimized initial-pools candidate, start a fresh Classic match and hover a constructor. With no shield strength authored, both health-derived pools should be present; build another constructor/ship and compare. Partial curHealth/curShield values must begin below maximum, explicit zero must remain zero at spawn, and save/load must preserve live values. Check settled FPS; original ODFs remain untouched.
+
 - [?] UI-18 mouseover InfoBar: in the new optimized consumer build, hover a constructor, ship and station with nothing selected; then keep one selected while hovering another. The strip should show the hovered type and current hull/shield percentages, crew and energy with native icons/tints, while the main card/commands stay selected. Move off, over UI or into fog and check clearing/fallback, resizing, LCARS restoration and settled FPS. Use a fresh match for initialized crew; old saves preserve unknown unit crew.
 
 - [?] UI-18 live unit-status prerequisite: current/max crew is now canonical per craft/station and existing live special energy is exposed in UnitView. Snapshot 13 preserves initialized pools; older accepted saves keep unit crew unknown. The mouseover-bar consumer and its new optimized launcher follow separately; do not treat this prerequisite as a completed visual check.

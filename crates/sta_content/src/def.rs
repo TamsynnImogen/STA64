@@ -258,8 +258,13 @@ pub struct UnitDef {
     pub model: String,
     pub scale: Fixed,
     pub movement: MoveStats,
+    /// Maximum hull strength (`maxHealth`).
     pub hull: Fixed,
     pub shields: ShieldDef,
+    /// Authored starting hull; `None` starts at the hull maximum.
+    pub initial_hull: Option<Fixed>,
+    /// Authored starting shield strength per pool; `None` starts at maximum.
+    pub initial_shields: Option<Fixed>,
     pub crew: Fixed,
     /// Sensor range, units.
     pub sensor: Fixed,
@@ -323,6 +328,8 @@ impl UnitDef {
             movement: MoveStats::STATIC,
             hull: Fixed::ZERO,
             shields: ShieldDef::default(),
+            initial_hull: None,
+            initial_shields: None,
             crew: Fixed::ZERO,
             sensor: Fixed::ZERO,
             hardpoints: Vec::new(),
