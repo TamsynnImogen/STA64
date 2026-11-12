@@ -12,9 +12,9 @@
 //! - [`decode`] never panics: wrong magic, another version, a truncated or
 //!   oversized frame, an unknown tag, trailing bytes and out-of-bound fields
 //!   are all [`ProtoError`]s.
-//! - Evolution: `postcard` is positional, so a changed field or a removed
-//!   variant is a [`PROTOCOL_VERSION`] bump. Within one version nothing
-//!   changes; there is no "skip unknown" rule. Commands ride inside
+//! - Evolution: `postcard` is positional, so any layout change, even an
+//!   appended variant, is a [`PROTOCOL_VERSION`] bump. Within one version
+//!   nothing changes; there is no "skip unknown" rule. Commands ride inside
 //!   [`TurnCommands`] and are versioned by `SEAM_REV`, which [`Hello`]
 //!   carries and the host compares.
 //! - The rules digest of docs/MODDING_DECISIONS.md D10 is [`RulesDigest`],
@@ -138,8 +138,8 @@ impl std::error::Error for ProtoError {}
 // Messages
 // ---------------------------------------------------------------------------
 
-/// Everything peers say to each other. Tags are positional: append only
-/// within a version, and bump [`PROTOCOL_VERSION`] for anything else.
+/// Everything peers say to each other. Tags are positional: any change,
+/// appending included, bumps [`PROTOCOL_VERSION`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Message {
     /// Joiner to host, first message on a connection.
@@ -389,7 +389,7 @@ pub struct Start {
     pub options: GameOptions,
     /// Ascending slot.
     pub seats: Vec<Seat>,
-    /// The seat that runs computer players and the mission (D3).
+    /// The seat that runs computer players and the mission (WORKPLAN assumption D3).
     pub host: PlayerId,
     pub turn: TurnConfig,
     /// The host's rules digest, lineage and packs, for the replay (D10).
@@ -421,7 +421,7 @@ impl Start {
     }
 
     /// Whether the host may send commands as `player`: computer seats and
-    /// the mission script (D3).
+    /// the mission script (WORKPLAN assumption D3).
     pub fn host_speaks_for(&self, player: PlayerId) -> bool {
         player == PlayerId::SCRIPT
             || self
