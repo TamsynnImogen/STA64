@@ -3,8 +3,8 @@
 //! in sim seconds (see [`crate::pair`]; docs/TESTBENCH.md, "Paired scenes").
 //!
 //! Exit 0 when everything is within the pair's tolerances, 1 when something
-//! is beyond them or a side failed, 2 on usage, 75 when the original-game
-//! bench lock stays busy (BENCH-BUSY: run again). The report is written either way.
+//! is beyond them (the report is written) or a side failed (no report), 2 on usage, 75 when the original-game
+//! bench lock stays busy (BENCH-BUSY: run again).
 
 use std::fs;
 use std::io::{Read, Write};

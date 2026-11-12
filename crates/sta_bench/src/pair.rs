@@ -714,12 +714,13 @@ pub fn run_sta64(scene_text: &str, cfg: Arc<RunConfig>, schedule: &[Timed], end_
         let v = b.view_at(k)?;
         for u in &v.units {
             let Some(n) = named(u.id) else { continue };
-            let sp = u.energy.map_or(0.0, |e| to_f64(e[0]));
+            // No special-energy pool: no `sp=` (never a made-up 0).
+            let sp = u.energy.map_or(String::new(), |e| format!(" sp={:.3}", to_f64(e[0])));
             lines.push((
                 k,
                 4,
                 format!(
-                    "state t={:.3} obj={n} pos={:.3},{:.3},{:.3} hull={:.3} sh={:.3} sp={sp:.3}",
+                    "state t={:.3} obj={n} pos={:.3},{:.3},{:.3} hull={:.3} sh={:.3}{sp}",
                     secs_of(k),
                     to_f64(u.pos.x),
                     to_f64(u.pos.y),
@@ -986,9 +987,14 @@ pub fn compare(desc: &PairDesc, refit_dir: &Path, sta_dir: &Path, out: &Path) ->
     js += "\"commands\":[";
     let _ = writeln!(md, "## Commands\n\n| command | asked | original | STA64 |\n|---|---|---|---|");
     let sc = s.meta.get("commands").arr();
+    let mut used_cmd = vec![false; sc.len()];
     for (i, c) in r.meta.get("commands").arr().iter().enumerate() {
         let text = c.get("text").str().unwrap_or("");
-        let ours = sc.iter().find(|x| x.get("text").str() == Some(text)).and_then(|x| x.get("t").num());
+        let hit = sc.iter().enumerate().find(|(j, x)| !used_cmd[*j] && x.get("text").str() == Some(text));
+        let ours = hit.and_then(|(j, x)| {
+            used_cmd[j] = true;
+            x.get("t").num()
+        });
         let _ = write!(
             js,
             "{}{{\"text\":{},\"at\":{},\"refit_t\":{},\"sta64_t\":{}}}",
@@ -1017,7 +1023,7 @@ pub fn compare(desc: &PairDesc, refit_dir: &Path, sta_dir: &Path, out: &Path) ->
     keys.sort();
     keys.dedup();
     js += "\"events\":[";
-    let _ = writeln!(md, "\n## Events\n\n| kind | obj | weapon | n | original | STA64 | delta |\n|---|---|---|---|---|---|---|");
+    let _ = writeln!(md, "\n## Events\n\nPaired in order within kind, object and weapon: one burst missing early shifts the pairs after it.\n\n| kind | obj | weapon | n | original | STA64 | delta |\n|---|---|---|---|---|---|---|");
     let mut first = true;
     let mut ev_compared = 0;
     let empty = Vec::new();
@@ -1321,6 +1327,14 @@ pub fn install_config(root: &Path, mod_name: Option<&str>) -> Result<RunConfig, 
 /// art never go there).
 pub fn inside_checkout(p: &Path) -> bool {
     let abs = if p.is_absolute() { p.to_owned() } else { std::env::current_dir().map(|d| d.join(p)).unwrap_or_else(|_| p.to_owned()) };
+    // Resolve `..` and symlinks through the nearest part that exists.
+    let abs = abs
+        .ancestors()
+        .find_map(|a| {
+            let c = a.canonicalize().ok()?;
+            Some(c.join(abs.strip_prefix(a).ok()?))
+        })
+        .unwrap_or(abs);
     abs.ancestors().any(|a| a.join(".git").exists() && a.join("bench").join("pairs").is_dir())
 }
 

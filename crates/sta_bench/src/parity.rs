@@ -393,9 +393,30 @@ pub fn read_refit_marks(text: &str, run: &mut Run) {
             .and_then(|r| sim_t(&r.2))
             .or_else(|| raw.iter().find_map(|r| sim_t(&r.2)))
             .unwrap_or(0.0);
-        for (_, kind, fields) in raw {
+        // `fire.end` is dated back to the burst's last ordnance in the wall
+        // column, but its `t=` is the time it was written (FireGap later): its
+        // sim time is read off the wall column, between the marks around it.
+        let w0 = raw.first().map_or(0, |r| r.0 as u32);
+        let wall = |w: u64| f64::from((w as u32).wrapping_sub(w0) as i32);
+        let mut anchors: Vec<(f64, f64)> = raw
+            .iter()
+            .filter(|r| r.1 != "fire.end")
+            .filter_map(|r| Some((wall(r.0), sim_t(&r.2)?)))
+            .collect();
+        anchors.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let at_wall = |w: f64| -> Option<f64> {
+            let i = anchors.partition_point(|a| a.0 < w);
+            match (i.checked_sub(1).and_then(|j| anchors.get(j)), anchors.get(i)) {
+                (Some(a), Some(b)) if b.0 > a.0 => Some(a.1 + (b.1 - a.1) * (w - a.0) / (b.0 - a.0)),
+                (_, Some(b)) => Some(b.1),
+                (Some(a), None) => Some(a.1),
+                (None, None) => None,
+            }
+        };
+        for (w, kind, fields) in raw {
+            let t = if kind == "fire.end" { at_wall(wall(w)).or_else(|| sim_t(&fields)) } else { sim_t(&fields) };
             // A line without `t=` (none are written so) has no place on the axis.
-            if let Some(t) = sim_t(&fields) {
+            if let Some(t) = t {
                 run.marks.push(mark(t - origin, kind.to_owned(), fields));
             }
         }
@@ -821,6 +842,15 @@ mod tests {
         let m: Vec<_> = r.marks.iter().map(|m| (m.kind.as_str(), (m.t * 1000.0).round())).collect();
         assert_eq!(m, [("ready", 0.0), ("cmd", 3470.0), ("state", 3503.0)]);
         assert_eq!(support("state"), RefitOnly);
+        // `fire.end` is dated back in the wall column; its `t=` is FireGap later.
+        let mut r = Run::default();
+        read_refit_marks(
+            "1000 ready t=1.000 objects=1\n2000 state t=3.000 obj=a\n3000 state t=5.000 obj=a\n\
+             2500 fire.end t=6.000 obj=a weapon=w\n4000 state t=7.000 obj=a\n",
+            &mut r,
+        );
+        let fe = r.marks.iter().find(|m| m.kind == "fire.end").unwrap();
+        assert!((fe.t - 3.0).abs() < 1e-9, "{}", fe.t);
         assert_eq!(support("ord.new"), RefitOnly);
     }
 

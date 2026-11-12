@@ -73,7 +73,7 @@ class Ini(unittest.TestCase):
         self.assertLess(ini.index("[Marks]"), ini.index("[Object.ship]"))
 
     def test_simtime_forced_and_state_kept(self):
-        txt = "[Scene]\nFog=0\n[Marks]\nSimTime=0\nState=100\n[Pair]\nGames=a2\n"
+        txt = "[Scene]\nFog=0\n[Marks]\nSimTime=0\nState=100\n[Pair]\nGames=a2\nDuration=10\n"
         ini = rs.render_scene_ini(rs.load_pair(txt, "a2"))
         self.assertIn("SimTime=1", ini)
         self.assertNotIn("SimTime=0", ini)
@@ -81,14 +81,26 @@ class Ini(unittest.TestCase):
         self.assertNotIn("State=250", ini)
 
     def test_missing_marks_section_added(self):
-        ini = rs.render_scene_ini(rs.load_pair("[Scene]\nFog=0\n[Object.x]\nOdf=a\n[Pair]\nGames=a2\n", "a2"))
+        ini = rs.render_scene_ini(rs.load_pair("[Scene]\nFog=0\n[Object.x]\nOdf=a\n[Pair]\nGames=a2\nDuration=10\n", "a2"))
         self.assertIn("[Marks]\nSimTime=1\nState=250\n", ini)
 
     def test_refusals(self):
         with self.assertRaisesRegex(rs.PairError, "Armada I"):
             rs.load_pair(PAIR, "a1")
         with self.assertRaisesRegex(rs.PairError, "does not list"):
-            rs.load_pair("[Pair]\nGames=a2\n", "roots")
+            rs.load_pair("[Pair]\nGames=a2\nDuration=10\n", "roots")
+
+
+class Seconds(unittest.TestCase):
+    def test_suffix_and_required_duration(self):
+        p = rs.load_pair("[Pair]\nGames=a2\nDuration=12s\nFrames=2,5s\nAt=1.5s stop x\nroots.At=9 stop y\n", "a2")
+        self.assertEqual((p.duration, p.frames, p.at), (12.0, [2.0, 5.0], [(1.5, "stop x")]))
+        r = rs.load_pair("[Pair]\nGames=a2,roots\nDuration=3\nAt=1 stop x\nroots.At=9 stop y\n", "roots")
+        self.assertEqual(r.at, [(1.0, "stop x")])  # a prefixed At= is no override
+        with self.assertRaises(rs.PairError):
+            rs.load_pair("[Pair]\nGames=a2\n", "a2")
+        with self.assertRaises(rs.PairError):
+            rs.load_pair("[Pair]\nGames=a2\nDuration=x\n", "a2")
 
 
 class Marks(unittest.TestCase):
@@ -130,7 +142,7 @@ class Guards(unittest.TestCase):
             inside = os.path.join(d, "x", "out")
             self.assertEqual(rs.checkout_containing(inside), os.path.realpath(d))
             pf = os.path.join(d, "bench", "pairs", "p.ini")
-            open(pf, "w").write("[Pair]\nGames=a2\n")
+            open(pf, "w").write("[Pair]\nGames=a2\nDuration=10\n")
             self.assertEqual(rs.main(["--pair", pf, "--game", "a1", "--out", inside]), 2)
         with tempfile.TemporaryDirectory() as d:
             os.makedirs(os.path.join(d, ".git"))  # git but no bench/pairs
@@ -141,7 +153,7 @@ class Guards(unittest.TestCase):
             os.makedirs(os.path.join(d, ".git"))
             os.makedirs(os.path.join(d, "bench", "pairs"))
             pf = os.path.join(d, "bench", "pairs", "p.ini")
-            open(pf, "w").write("[Pair]\nGames=a2\n")
+            open(pf, "w").write("[Pair]\nGames=a2\nDuration=10\n")
             self.assertEqual(rs.main(["--pair", pf, "--game", "a2", "--out", os.path.join(d, "o"), "--dry-run"]), 2)
             self.assertFalse(os.path.exists(os.path.join(d, "o")))
 

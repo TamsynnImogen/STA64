@@ -26,7 +26,6 @@ import time
 
 KNOWN_GAMES = ("a1", "a2", "roots")
 SUPPORTED_GAMES = ("a2", "roots")
-DEFAULT_REFIT = "/home/cedric/Projects/armada2-refit"
 READY_TIMEOUT = 180.0
 
 
@@ -69,7 +68,8 @@ def apply_game(sections, game):
         own = {}
         for k, v in items:
             pre, dot, rest = k.partition(".")
-            if dot and pre.lower() == game:
+            # `At=` repeats and is never overridden per game (as in sta-bench).
+            if dot and pre.lower() == game and rest.lower() != "at":
                 own[rest.lower()] = (rest, v)
         new = []
         placed = set()
@@ -113,6 +113,18 @@ class Pair:
     pass
 
 
+def secs(v, what):
+    """Sim seconds, `3`, `3.2` or `3.2s` (as sta-bench reads them)."""
+    v = v.strip()
+    try:
+        x = float(v[:-1] if v.endswith("s") else v)
+    except ValueError:
+        raise PairError("%s: %r is not seconds" % (what, v))
+    if x < 0:
+        raise PairError("%s: %r is negative" % (what, v))
+    return x
+
+
 def load_pair(text, game):
     """Parse a pair file for `game` into a Pair (raises PairError on refusal)."""
     if game == "a1":
@@ -129,8 +141,10 @@ def load_pair(text, game):
     p.game = game
     items = section_items(resolved, "Pair")
     p.games = games
-    p.duration = float(get(items, "Duration", "10"))
-    p.frames = [float(x) for x in re.split(r"[,\s]+", get(items, "Frames", "").strip()) if x]
+    if get(items, "Duration") is None:
+        raise PairError("[Pair] needs Duration=<sim seconds>")
+    p.duration = secs(get(items, "Duration"), "Duration")
+    p.frames = [secs(x, "Frames") for x in re.split(r"[,\s]+", get(items, "Frames", "").strip()) if x]
     m = re.fullmatch(r"(\d+)x(\d+)", get(items, "Size", "1280x720").strip().lower())
     if not m:
         raise PairError("bad Size= %r" % get(items, "Size"))
@@ -143,7 +157,7 @@ def load_pair(text, game):
             mm = re.match(r"(\S+)\s+(.+)$", v)
             if not mm:
                 raise PairError("bad At=%r (want '<sim s> <command>')" % v)
-            p.at.append((float(mm.group(1)), mm.group(2).strip()))
+            p.at.append((secs(mm.group(1), "At"), mm.group(2).strip()))
     p.scene_sections = [(n, i) for n, i in resolved if n.lower() != "pair"]
     return p
 
@@ -414,6 +428,9 @@ class Runner:
         while ready_t(self.marks) is None:
             self.remaining()
             self.poll_marks()
+            if any(m["kind"] == "ready" and m["t"] is None for m in self.marks):
+                raise PairError("the ready mark has no t=: this Refit checkout's Scene.asi has no "
+                                "[Marks] SimTime (use the bench/measure-marks branch: --refit or $REFIT_ROOT)")
             time.sleep(0.1)
 
     def wait_t(self, target, lead=False):
@@ -435,23 +452,48 @@ class Runner:
         self.notes.append("%s missing in the game directory" % name)
         return False
 
+    def stop_new_sessions(self, before):
+        """A start that failed part-way may still have made a session: stop
+        any session with this driver's label that was not listed before."""
+        try:
+            now = self.bench.run(["session", "list"], 60)[0]
+        except Exception as e:  # noqa: BLE001 -- best effort, say why
+            self.say("session list after a failed start: %s" % e)
+            return
+        old = {l.split()[0] for l in before.splitlines() if l.split()}
+        for l in now.splitlines():
+            w = l.split()
+            if w and w[0] not in old and ("pair-%s" % self.p.game) in l:
+                o, rc, _ = self.bench.run(["session", "stop", w[0]], 300)
+                self.say("stopped half-started session %s rc=%d: %s" % (w[0], rc, o.strip()[-200:]))
+
     def go(self, scene_ini):
         p, out = self.p, self.out
         os.makedirs(os.path.join(out, "frames"), exist_ok=True)
         existing = self.bench.run(["session", "list"], 60)[0]
         self.say("session list before start:\n" + existing.strip())
-        o, rc, _ = self.bench.run(start_argv(p), min(900, self.remaining()))
-        self.log.write(o + "\n")
-        m = re.search(r"^session (\S+)", o, re.M)
-        if not m:
-            raise PairError("session start gave no session id (rc=%d): %s" % (rc, o[-500:]))
+        try:
+            o, rc, _ = self.bench.run(start_argv(p), min(900, self.remaining()))
+            self.log.write(o + "\n")
+            m = re.search(r"^session (\S+)", o, re.M)
+            if not m:
+                raise PairError("session start gave no session id (rc=%d): %s" % (rc, o[-500:]))
+        except BaseException:
+            self.stop_new_sessions(existing)
+            raise
         self.sid = m.group(1)
         self.say("started session %s" % self.sid)
         try:
             return self._run(scene_ini)
         finally:
-            o, rc, _ = self.bench.run(["session", "stop", self.sid], 300)
-            self.say("session stop %s rc=%d: %s" % (self.sid, rc, o.strip()[-300:]))
+            for attempt in (1, 2):
+                try:
+                    o, rc, _ = self.bench.run(["session", "stop", self.sid], 300)
+                except subprocess.TimeoutExpired:
+                    self.say("session stop %s timed out (attempt %d)" % (self.sid, attempt))
+                    continue
+                self.say("session stop %s rc=%d: %s" % (self.sid, rc, o.strip()[-300:]))
+                break
             self.say("session list after stop:\n" + self.bench.run(["session", "list"], 60)[0].strip())
 
     def _run(self, scene_ini):
@@ -575,6 +617,8 @@ def default_lock():
         txt = open(gitfile, encoding="utf-8").read().strip()
         if txt.startswith("gitdir:"):
             gd = txt.split(":", 1)[1].strip()
+            if not os.path.isabs(gd):
+                gd = os.path.normpath(os.path.join(root, gd))
             main = gd.split(os.sep + ".git" + os.sep)[0]
             if os.path.isdir(main):
                 root = main
@@ -603,7 +647,8 @@ def main(argv=None):
     ap.add_argument("--pair", required=True)
     ap.add_argument("--game", required=True, choices=KNOWN_GAMES)
     ap.add_argument("--out", required=True)
-    ap.add_argument("--refit", default=os.environ.get("REFIT_ROOT", DEFAULT_REFIT))
+    ap.add_argument("--refit", default=os.environ.get("REFIT_ROOT"),
+                    help="the Refit checkout (default $REFIT_ROOT); [Marks] SimTime needs its bench/measure-marks branch")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--timeout", type=float, default=600.0, help="wall seconds for the whole run")
     ap.add_argument("--lock", default=None, help="the bench lock file (default $STA64_BENCH_LOCK, else <STA64 checkout>/.claude/locks/bench.lock)")
@@ -616,7 +661,9 @@ def main(argv=None):
             raise PairError("--out %s is inside the git checkout %s; frames of stock art must stay out of the repository" % (a.out, co))
         scene_ini = render_scene_ini(p)
         out = os.path.abspath(a.out)
-        refit = os.path.abspath(a.refit)
+        if not a.refit and not a.dry_run:
+            raise PairError("name the Refit checkout: --refit PATH or $REFIT_ROOT")
+        refit = os.path.abspath(a.refit or ".")
         if a.dry_run:
             print_plan(p, scene_ini, out)
             return 0
@@ -626,6 +673,11 @@ def main(argv=None):
     except PairError as e:
         print("refit_side: %s" % e, file=sys.stderr)
         return 2
+    import signal
+
+    def _term(signum, frame):
+        raise KeyboardInterrupt("signal %d" % signum)
+    signal.signal(signal.SIGTERM, _term)
     lock = a.lock or default_lock()
     lfd = take_bench_lock(lock, a.lock_wait)
     if lfd is None:
