@@ -106,7 +106,7 @@ fn apply(vfs: Res<Mounted>, registry: Option<Res<EmbeddedAssetRegistry>>, server
         if let Some(server) = &server {
             // Already loaded under the embedded source: read it again. A shader not yet
             // loaded simply finds the shadow when it is first asked for.
-            let _ = server.reload(format!("embedded://{asset}"));
+            server.reload(format!("embedded://{asset}"));
         }
     }
 }
