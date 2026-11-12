@@ -195,6 +195,10 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [ ] Notices and tooltips look right: in a bench match a destroyed own unit shows a red "<Unit> destroyed" line at the top centre that fades after 5 s, an enemy loss a plain one, and a `Tooltip` node shows its text 0.35 s after the pointer rests ([notices.rs](crates/sta64/src/ui/notices.rs), UI-10)
 - [ ] In-match text (UI-15): start a skirmish as a non-default race and kill a ship; the notice appears top centre, clear of the info text at the top left, and the info panel's race field names the race you play, not the map's default ([notices.rs](crates/sta64/src/ui/notices.rs), [map/mod.rs](crates/sta64/src/map/mod.rs))
 
+- [ ] Engine measurements open point: stock A2 1.1 idle ship on **low** movement autonomy assisted an attacked ally when autonomy was set through the engine setter; confirm with the HUD's autonomy buttons on the bench before SIM-36 makes it final ([ENGINE_MEASUREMENTS.md](docs/research/ENGINE_MEASUREMENTS.md))
+- [ ] Engine measurements open point: decompile where stock and Roots choose impulse vs combat speed for an attack order (only the effect is measured; SIM-36)
+- [ ] Engine measurements open point: M1, M2 and M4 on Roots + FO 4.0 (only M3 measured; FO `ordnancedefenseweapon` is decompiled only; SIM-34)
+
 ## Done recently
 
 - [x] Map-confinement geometry prerequisite (SIM-22 stage 1): checked Fixed boundary volumes, strict edge comparisons, asymmetric upper projection and inspect-only reporting pass five focused tests, including a 405-point containment/idempotence grid. This is a pure shared helper; entity state, movement enforcement, profile/ODF defaults, save/replay integration and Lua ForceOntoMap remain unfinished. No new in-game test applies until that integration is delivered.
