@@ -660,6 +660,45 @@ mod tests {
         assert_eq!(app.world_mut().query_filtered::<&Node, With<TipBox>>().single(app.world()).unwrap().display, Display::None);
     }
 
+    /// Installed assets are local-only. Exercise the exact stop-command key
+    /// reported in a screenshot through mounted I18nPlugin and tooltip drawing.
+    #[test]
+    fn installed_command_tooltips_resolve_from_the_mounted_header() {
+        if std::env::var("STA64_TOOLTIP_TESTS").as_deref() != Ok("1") {
+            eprintln!("SKIP: set STA64_TOOLTIP_TESTS=1 STA64_TEST_INSTALL and optional STA64_TEST_MOD");
+            return;
+        }
+        let install = std::env::var("STA64_TEST_INSTALL").expect("STA64_TEST_INSTALL");
+        let active_mod = std::env::var("STA64_TEST_MOD").ok().filter(|s| !s.is_empty());
+        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod.as_deref()).unwrap();
+        let (index, _) = sta_content::OdfIndex::build(&vfs);
+        let odf = sta_assets::a2fmt::odf::Odf::load_layered("stop.odf", |name, version| {
+            index.load(&vfs, name, version).map(String::into_bytes)
+        }).expect("installed stop command");
+        let short = odf.get_str("tooltip").expect("stop tooltip").to_owned();
+        let verbose = odf.get_str("verbose").expect("stop verbose tooltip").to_owned();
+        assert_eq!(verbose, "GUI_CP_STOP_VTOOLTIP", "fixture must cover the reported key");
+        let table = sta_content::strings::StringTable::load(&vfs);
+        let expected = [short.as_str(), verbose.as_str()].map(|key| {
+            let text = table.get(key).expect("installed header entry");
+            assert!(!text.is_empty() && text != key, "fixture needs localized text for {key}");
+            text.to_owned()
+        });
+        let mut app = rig();
+        app.insert_resource(crate::viewer::Mounted(vfs))
+            .add_plugins(crate::ui::i18n::I18nPlugin);
+        app.update();
+        let e = app.world_mut().spawn(Tooltip::new(short).verbose(verbose)).id();
+        for (rest, expected) in [TIP_SHORT_SECS, TIP_VERBOSE_SECS].into_iter().zip(expected) {
+            *app.world_mut().resource_mut::<TipHover>() = TipHover { target: Some(e), rest };
+            app.update();
+            let text = app.world_mut().query_filtered::<&Text, With<TipText>>().single(app.world()).unwrap();
+            assert_eq!(text.0, expected);
+            eprintln!("mounted stop tooltip ({rest}s): {}", text.0);
+            assert_eq!(app.world_mut().query_filtered::<&Node, With<TipBox>>().single(app.world()).unwrap().display, Display::Flex);
+        }
+    }
+
     #[test]
     fn theme_switch_restyles_roots_without_losing_messages() {
         let mut app = App::new();

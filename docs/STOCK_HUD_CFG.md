@@ -319,3 +319,17 @@ text. Short and expanded tooltips follow the same rule, and retained tooltip
 nodes use the current `Strings` resource after a game/language change. This
 changes tooltip presentation only, with no new localization format or source
 data edits (D1/D2/D5/D11).
+
+An opt-in headless check loads the installed Stop command and native header,
+then asserts both actual tooltip text nodes through the mounted I18n plugin:
+
+```sh
+renice -n 19 -p $$ >/dev/null && STA64_TOOLTIP_TESTS=1 \
+  STA64_TEST_INSTALL=/path/to/install STA64_TEST_MOD="STA2 Classic" \
+  cargo test -p sta64 --lib --jobs 2 installed_command_tooltips_resolve_from_the_mounted_header -- --nocapture
+```
+
+This requires local game data, uses no OS input automation, and does not
+establish pixel rendering or native hover acceptance. The executable used for
+manual checks must contain tooltip commit `cf494a9` (merged in #417) or later;
+the older `maximum-crew-a17ceb3` artifact does not contain this fix.
