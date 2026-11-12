@@ -455,6 +455,12 @@ The matrix in `.github/workflows/ci.yml` has no game install, so:
   scenario files as fixtures), the command vocabulary, and tier-1 scenes
   built from a synthetic content fixture (our own JSON5 units and glTF
   meshes, no game data). The golden digests run here on all four platforms.
+- **bench job** (TOOL-06): `sta-bench check` runs every tier-1 scenario
+  in-process on each target and uploads `report.md` and `results.json` as the
+  `bench-report-<os>` artefact. The `golden-*` scenarios (`bench/scenarios/`)
+  are the committed digests: each is an existing scenario plus a last step
+  `Expect digest at tick N is "HEX"`. A change that moves a digest fails the
+  job on every target; replace the value on purpose and say why in the PR.
 - **game job**: after the build, `sta64 --sim-only --scene
   bench/scenes/synthetic.ini --ticks 300` checks the scene path end to end.
 - Scenarios that need the install run locally and skip when
