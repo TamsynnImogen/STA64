@@ -608,6 +608,13 @@ fn hash_inner(db: &ContentDb, include_starting_rules: bool) -> u64 {
         h.str("sta64.pathing-rules.v1");
         for value in pathing { h.u64(value); }
     }
+    // SIM-25: only when the header or a race has crew keys.
+    let crew = db.rules.crew_hash_values();
+    if include_starting_rules && !crew.is_empty() {
+        h.byte(0xf0);
+        h.str("sta64.crew-rules.v1");
+        for value in crew { h.u64(value); }
+    }
     h.0
 }
 

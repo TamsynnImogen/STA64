@@ -75,10 +75,21 @@ pub struct Loadout {
     pub source: String,
 }
 
+/// The crew keys of a race ODF: crew added to the team per second per
+/// starbase, and the modifier near a planet (read; the sim does not apply it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RaceCrew {
+    pub accumulation_rate: Fixed,
+    pub planet_modifier: Fixed,
+}
+
 /// Every race of an install.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Races {
     races: Vec<RaceDef>,
+    /// `crewAccumulationRate` / `planetCrewAccumulationModifier` per race
+    /// key (SIM-25), filled by the loader only.
+    crew: Vec<(String, RaceCrew)>,
     /// Legacy profiles and loaded catalogues are authoritative. Only a bare
     /// native/fake database may infer its choices from unit definitions.
     authoritative: bool,
@@ -136,13 +147,13 @@ impl Races {
             Ok(o) => o,
             Err(e) => {
                 warnings.push(Warning::new("races.odf", e.to_string()));
-                return (Races { races: Vec::new(), authoritative }, warnings);
+                return (Races { races: Vec::new(), crew: Vec::new(), authoritative }, warnings);
             }
         };
         let declared = nonnegative_integer(&list, "numberofraces");
         if list.raw("numberofraces").is_some() && declared.is_none() {
             warnings.push(Warning::new("races.odf", "numberOfRaces must be a nonnegative integer"));
-            return (Races { races: Vec::new(), authoritative }, warnings);
+            return (Races { races: Vec::new(), crew: Vec::new(), authoritative }, warnings);
         }
         // Walk authored keys rather than an arbitrary fixed cap or a potentially
         // enormous declared count. Inherited trailing keys are inactive when a
@@ -156,6 +167,7 @@ impl Races {
         entries.sort_unstable();
         let mut races = Vec::new();
         let mut interfaces = Vec::new();
+        let mut crew_rates: Vec<(String, RaceCrew)> = Vec::new();
         for i in entries {
             let Some(file) = list.str(&format!("race{i}")) else {
                 continue;
@@ -193,6 +205,16 @@ impl Races {
                         warnings.push(Warning::new(format!("{s}.odf"), "instantActionSlot must be a nonnegative integer"));
                     }
                     interfaces.push(o.raw("interfaceconfiguration").is_some());
+                    if o.raw("crewaccumulationrate").is_some() {
+                        let num = |k: &str, default: f32| o.f32(k).filter(|v| v.is_finite() && *v >= 0.0).unwrap_or(default);
+                        crew_rates.push((
+                            name.clone(),
+                            RaceCrew {
+                                accumulation_rate: Fixed::from_f64(f64::from(num("crewaccumulationrate", 0.0)).min(1.0e6)),
+                                planet_modifier: Fixed::from_f64(f64::from(num("planetcrewaccumulationmodifier", 1.0)).min(1.0e3)),
+                            },
+                        ));
+                    }
                     races.push(RaceDef {
                         stem: s,
                         name,
@@ -241,11 +263,22 @@ impl Races {
                 }
             }
         }
-        (Races { races, authoritative }, warnings)
+        (Races { races, crew: crew_rates, authoritative }, warnings)
     }
 
     pub fn from_defs(races: Vec<RaceDef>) -> Races {
-        Races { races, authoritative: true }
+        Races { races, crew: Vec::new(), authoritative: true }
+    }
+
+    /// The crew keys of a race by its key (`unitedfederation`), any case.
+    pub fn crew(&self, name: &str) -> Option<RaceCrew> {
+        let n = name.trim().to_ascii_lowercase();
+        self.crew.iter().find(|(k, _)| *k == n).map(|(_, c)| *c)
+    }
+
+    /// Every race's crew keys, in race order.
+    pub fn crew_rates(&self) -> impl Iterator<Item = (&str, RaceCrew)> {
+        self.crew.iter().map(|(k, c)| (k.as_str(), *c))
     }
 
     pub fn is_empty(&self) -> bool {

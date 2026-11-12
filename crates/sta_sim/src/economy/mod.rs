@@ -42,6 +42,7 @@ use crate::world::{Entities, EntityKind, Fnv, Table};
 /// Resource ids: dilithium, latinum, metal, biomatter.
 pub const RESOURCES: usize = 4;
 
+mod crew;
 mod personnel;
 
 /// What a fresh node holds.
