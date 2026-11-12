@@ -4,8 +4,8 @@
 //! [`Sim::from_setup`] places the map's objects only. [`Sim::from_setup_with_starts`]
 //! then gives every seat that has a start position its race's [`Loadout`]
 //! (`sta_content::Races`): the units on the start's spawn grid
-//! ([`START_SPACING`] apart, the place nearest the start first, so the yard
-//! stands on it) and the starting stock. A seat with no start position on the
+//! ([`START_SPACING`] apart, the first authored entry nearest the start) and
+//! the starting stock. A seat with no start position on the
 //! map gets nothing, as before. Both the game and the map corpus test build
 //! their skirmishes through this one function.
 

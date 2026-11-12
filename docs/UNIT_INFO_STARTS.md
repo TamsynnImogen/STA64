@@ -67,3 +67,28 @@ The current Classic `gui_interface.cfg` explicitly authors magenta
 (`0.65 0.65 0.65`) class text. These are mod data, not new engine constants.
 A fresh REA evidence bundle is retained privately under
 `STA64-artifacts/probes/ui17/native-ui18-font-colours-20261112.json`.
+
+## Validation of the integrated implementation
+
+- 440 client tests pass, with one existing ignored test. Name/type captions
+  survive selection changes, simulation ticks and snapshot continuation.
+- Scoped parser/content/simulation tests pass, including sparse/high numbered
+  keys, repeated units, empty starts and explicit missing-entry warnings.
+- Actual mounted Classic and FO4 start lists match their resolved authored
+  entries. Classic Federation places `fconst`, `fconst`, `fbase`, `fscout`.
+- 182 Classic and 2,099 FO4 nonempty craft-name pools pass the installed-data
+  reader check. Classic `fconst` has all 58 complete names and type caption
+  `Construction Ship`. These tests were explicitly run with install/mod paths.
+- Four windowless NVIDIA Vulkan captures pass: Classic/FO4 at 4:3 and 16:9.
+  The lead inspected the two wide captures; Classic's selected name/class
+  and top name are magenta as authored. The GPU fixture uses fake entity
+  labels; installed name-pool checks and save tests establish the naming path
+  separately. This is not live-match acceptance.
+- Strict all-target Clippy for the four changed crates, workspace/all-target
+  checking, and NDK29/API26 Android ARM64 client library checking pass.
+  Android compilation is not APK or device proof.
+
+Private logs/captures are under `STA64-artifacts/probes/ui17/unit-info-*`.
+The December desktop alpha scope, dependencies, original assets, accepted
+artifacts, network/save formats and Lua contracts remain unchanged. UI-18
+reference/live acceptance (#371) stays open.
