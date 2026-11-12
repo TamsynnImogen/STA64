@@ -1,0 +1,104 @@
+// CON-04: the content of `sta_content::fake::db()` as ODFs written in JSON5.
+// Loads (sta_content::json5::load_dir) to the same `ContentDb::hash()`.
+// Original and synthetic; no game data. Schema: docs/CONTENT_JSON5.md.
+{
+  profile: "native",
+
+  // Native defaults switch nearly everything on; the fake turns on three.
+  features: {
+    weapon_damage_controls: false,
+    point_defense_cycles: true,
+    fire_arcs: true,
+    directional_shields: true,
+    energy_systems: false,
+    turrets: false,
+    team_change_weapons: false,
+    extra_resources: false,
+    officer_capacity: false,
+    multi_yard_builds: false,
+    construction_rigs: false,
+    upgrade_pods: false,
+    hybrid_yards: false,
+    breeders: false,
+    collective_xp: false,
+    squadrons: false,
+    station_rotation: false,
+    wreckage: false,
+    craft_identity: false,
+    cheats: false,
+    a1_compat: false,
+    pay_on_queue: false,
+  },
+
+  odf: {
+    // ---- weapons: a launcher/cannon ODF names its ordnance ODF (`ordName`) ----
+    fx_beam: {
+      classLabel: "cannon", wpnName: "Beam", ordName: "fx_beam_ord",
+      range: 600, shotDelay: 1.5, fireSound: "fx_beam_fire",
+    },
+    fx_beam_ord: { classLabel: "phaser", damageBase: 20, lifespan: 0.5, shotGeometry: "fx_beam_red" },
+
+    fx_torpedo: {
+      classLabel: "launcher", wpnName: "Torpedo", ordName: "fx_torpedo_ord",
+      range: 900, shotDelay: 3, fireSound: "fx_torpedo_fire",
+    },
+    fx_torpedo_ord: { classLabel: "photontorpedo", damageBase: 60, shotSpeed: 400, shotGeometry: "fx_torpedo_glow" },
+
+    fx_pd: {
+      classLabel: "pointdefenselaser", wpnName: "Point defence", ordName: "fx_pd_ord",
+      range: 250, shotDelay: 0.3333333,
+      STA64_duration: 0.1, // seconds active; point-defence ordnance has no lifespan
+    },
+    fx_pd_ord: { classLabel: "pphaser", damageBase: 5 },
+
+    // ---- physics ODFs (`physicsFile`) ----
+    fx_phys_cruiser: { impulseSpeed: 140, forwardAccel: 1, turnOmega: 1, turnAlpha: 1, turnOmegaFractionAtRest: 0.2 },
+    fx_phys_frigate: { impulseSpeed: 200, forwardAccel: 1.5, turnOmega: 1.6, turnAlpha: 1.6, turnOmegaFractionAtRest: 0.3 },
+    fx_phys_miner:   { impulseSpeed: 110, forwardAccel: 0.8, turnOmega: 0.8, turnAlpha: 0.8, turnOmegaFractionAtRest: 0.2 },
+
+    // ---- units. shieldRate is per second (the sim takes it per tick, 30 Hz);
+    // buildTime is seconds. weaponHardPoints<N> names the model node of weapon<N>.
+    // STA64_fireArc<N> limits slot N on this unit alone to a half-width (radians):
+    // pi/4, "ahead, 90 degrees either side".
+    fx_cruiser: {
+      classLabel: "craft", unitName: "Cruiser", race: "fx", basename: "fx_cruiser",
+      physicsFile: "fx_phys_cruiser",
+      maxHealth: 800, maxShields: 400, shieldRate: 15, crewCost: 300, rangeScan: 1000,
+      weapon1: "fx_beam", weaponHardPoints1: "hp01", STA64_fireArc1: 0.7853981633974483,
+      weapon2: "fx_torpedo", weaponHardPoints2: "hp02",
+      dilithiumCost: 600, buildTime: 30, officerCost: 4,
+      eventSelect: "fx_cruiser_select", eventAcknowledge: "fx_cruiser_move", eventAttack: "fx_cruiser_attack",
+      fireball: "fx_explosion_large",
+    },
+    fx_frigate: {
+      classLabel: "craft", unitName: "Frigate", race: "fx", basename: "fx_frigate",
+      physicsFile: "fx_phys_frigate",
+      maxHealth: 300, maxShields: 150, shieldRate: 7.5, crewCost: 80, rangeScan: 1200,
+      weapon1: "fx_beam", weaponHardPoints1: "hp01", STA64_fireArc1: 0.7853981633974483,
+      dilithiumCost: 250, buildTime: 15, officerCost: 2,
+      fireball: "fx_explosion_small",
+    },
+    fx_station: {
+      classLabel: "starbase", unitName: "Station", race: "fx", basename: "fx_station",
+      maxHealth: 3000, maxShields: 1500, shieldRate: 30, crewCost: 1000, rangeScan: 1500,
+      weapon1: "fx_beam", weaponHardPoints1: "hp01",
+      weapon2: "fx_pd", weaponHardPoints2: "hp02",
+      dilithiumCost: 1200, buildTime: 60,
+      builditem1: "fx_miner",
+    },
+    fx_yard: {
+      classLabel: "shipyard", unitName: "Shipyard", race: "fx", basename: "fx_yard",
+      maxHealth: 2000, maxShields: 800, shieldRate: 30, crewCost: 500, rangeScan: 800,
+      dilithiumCost: 900, buildTime: 50,
+      builditem1: "fx_cruiser", builditem2: "fx_frigate",
+    },
+    fx_miner: {
+      classLabel: "freighter", unitName: "Miner", race: "fx", basename: "fx_miner",
+      physicsFile: "fx_phys_miner",
+      maxHealth: 250, maxShields: 100, shieldRate: 7.5, crewCost: 40, rangeScan: 600,
+      dilithiumCost: 400, buildTime: 20, officerCost: 1,
+      miner: 0, // explicit: the fake miner does not mine (the class alone would)
+    },
+    fx_moon: { classLabel: "planet", unitName: "Moon", basename: "fx_moon", ScaleSOD: 4 },
+  },
+}

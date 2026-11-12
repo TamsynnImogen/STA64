@@ -618,7 +618,7 @@ fn real_archive() -> Option<(String, Vec<u8>)> {
 /// `cargo test --release --test fpq -- --ignored --nocapture` with Roots installed
 /// (or `A2_FO_ODF_FPQ=<file>`): reports counts only.
 #[test]
-#[ignore]
+#[ignore = "needs a real Armada II install (or A2_FO_ODF_FPQ=<file>)"]
 fn real_odf_fpq_decompresses_and_parses() {
     let Some((path, data)) = real_archive() else {
         eprintln!("no Roots ODF.fpq found; skipping");

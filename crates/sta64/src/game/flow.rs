@@ -319,11 +319,13 @@ pub(crate) fn front_end_data(vfs: &sta_vfs::Vfs, catalogue: &mut Catalogue, inst
     let t0 = std::time::Instant::now();
     let content = catalogue.content(vfs)?;
     let (db, index, races) = (content.db.clone(), content.index.clone(), content.races.clone());
-    let mut names: Vec<String> = vfs.list("bzn").into_iter().filter(|p| p.ends_with(".bzn")).map(|p| p.trim_start_matches("bzn/").trim_end_matches(".bzn").to_owned()).collect();
+    // Star Trek: Legacy `.sol` maps (CON-20) sit beside the `.bzn` files and parse to the same `Map`.
+    let mut names: Vec<String> = vfs.list("bzn").into_iter().filter(|p| p.ends_with(".bzn") || p.ends_with(".sol")).map(|p| p.trim_start_matches("bzn/").trim_end_matches(".bzn").trim_end_matches(".sol").to_owned()).collect();
     names.sort();
+    names.dedup();
     let mut maps = Vec::new();
     for name in &names {
-        let Some(Ok(bytes)) = vfs.read(&format!("bzn/{name}.bzn")) else { continue };
+        let Some(Ok(bytes)) = vfs.read(&format!("bzn/{name}.bzn")).or_else(|| vfs.read(&format!("bzn/{name}.sol"))) else { continue };
         let Ok(map) = sta_bzn::parse(&bytes) else { continue };
         let converted = MapDef::convert_bzn_named_in(&map, name, &db, vfs, &index);
         for warning in converted.warnings.iter().filter(|w| w.file.ends_with(".mdf")) {
