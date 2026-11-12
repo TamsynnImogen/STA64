@@ -5,6 +5,7 @@ use std::sync::Arc;
 use sta_core::{ContentKey, Fixed};
 
 use crate::def::{DefRef, UnitDef, WeaponDef};
+use crate::digest::{self, Canon, ContentDigest, DigestEntry, fixed_text, group, quoted};
 use crate::features::{Features, Profile};
 use crate::resources::ResourceModel;
 use crate::index::OdfIndex;
@@ -40,7 +41,8 @@ pub struct ContentDb {
     defs: Vec<(String, Def)>,
     profile: Profile,
     features: Features,
-    /// What the game calls its stock slots (display only: not in the hash).
+    /// What the game calls its stock slots. The names are display text and
+    /// not in the digest; the slots and their aliases are.
     resources: ResourceModel,
     /// What may be built given what is owned (CON-06); `None` allows
     /// everything, as the fakes do.
@@ -51,21 +53,42 @@ pub struct ContentDb {
     has_map_confinement: bool,
     map_confinement_warnings: Vec<Warning>,
     rules: crate::Rules,
-    hash: u64,
+    /// The mounted layers' names, top first: informational (D10), recorded
+    /// in replays and snapshots, never compared.
+    packs: Vec<String>,
+    digest: ContentDigest,
 }
 
 impl ContentDb {
     pub fn rules(&self) -> &crate::Rules { &self.rules }
 
-    /// Narrow pre-personnel snapshot migration identity. Never use this for
-    /// a multiplayer/content handshake or for current-format snapshots.
-    pub fn hash_without_starting_rules(&self) -> u64 { hash_inner(self, false) }
-
-
     pub fn with_rules(mut self, rules: crate::Rules) -> Self {
         self.rules = rules;
-        self.hash = hash(&self);
+        self.digest = digest_of(&self);
         self
+    }
+
+    /// The names of the packs (mounted layers) this content came from, top
+    /// first; empty for content built in code. Informational only (D10).
+    pub fn packs(&self) -> &[String] {
+        &self.packs
+    }
+
+    /// This database with these pack names (the digest does not change).
+    pub fn with_packs(mut self, packs: Vec<String>) -> Self {
+        self.packs = packs;
+        self
+    }
+
+    /// The content lineage (the profile, D4) by name: `native`, `fo4`,
+    /// `sta2classic`, `sta1classic`.
+    pub fn lineage(&self) -> &'static str {
+        match self.profile {
+            Profile::Native => "native",
+            Profile::Fo4 => "fo4",
+            Profile::Sta2Classic => "sta2classic",
+            Profile::Sta1Classic => "sta1classic",
+        }
     }
 
     /// Load every unit and weapon definition from the ODFs of a mounted
@@ -97,7 +120,9 @@ impl ContentDb {
         warnings.extend(rule_warnings);
         let (db, radius_warnings) = db.with_rules(rules).with_launch_points_warned(vfs);
         warnings.extend(radius_warnings);
-        let db = db.with_resources(ResourceModel::from_strings(profile, &crate::StringTable::load(vfs)));
+        let db = db
+            .with_resources(ResourceModel::from_strings(profile, &crate::StringTable::load(vfs)))
+            .with_packs(vfs.layers().iter().map(|l| l.name().to_owned()).collect());
         if db.is_empty() {
             return Ok((db, warnings));
         }
@@ -124,7 +149,7 @@ impl ContentDb {
     }
 
     /// This database with every builder's [`LaunchPoint`](crate::LaunchPoint)
-    /// read from its model (SIM-16), and the hash recomputed.
+    /// read from its model (SIM-16), and the digest recomputed.
     pub fn with_launch_points(self, vfs: &sta_vfs::Vfs) -> ContentDb {
         self.with_launch_points_warned(vfs).0
     }
@@ -134,15 +159,15 @@ impl ContentDb {
     pub fn with_launch_points_warned(mut self, vfs: &sta_vfs::Vfs) -> (ContentDb, Vec<Warning>) {
         crate::launch::attach(vfs, self.defs.iter_mut().filter_map(|(_, d)| if let Def::Unit(u) = d { Some(u) } else { None }));
         let warnings = crate::launch::attach_radii(vfs, self.defs.iter_mut().filter_map(|(_, d)| if let Def::Unit(u) = d { Some(u) } else { None }));
-        self.hash = hash(&self);
+        self.digest = digest_of(&self);
         (self, warnings)
     }
 
-    /// This database gated by `tree` (replacing any), with the hash
+    /// This database gated by `tree` (replacing any), with the digest
     /// recomputed.
     pub fn with_tech_tree(mut self, tree: TechTree) -> ContentDb {
         self.tech = Some(Arc::new(tree));
-        self.hash = hash(&self);
+        self.digest = digest_of(&self);
         self
     }
 
@@ -200,11 +225,18 @@ impl ContentDb {
         self.defs.is_empty()
     }
 
-    /// FNV-1a over the sorted names, the profile, the features and every
-    /// number the sim reads. Peers compare it before a game; it is folded
-    /// into tick 0's digest (SIM-01).
+    /// The first eight bytes of the content [`digest`](ContentDb::digest):
+    /// replays and snapshots carry it, and every sim digest folds it in
+    /// (SIM-01), so tick 0 already tells different content apart.
     pub fn hash(&self) -> u64 {
-        self.hash
+        self.digest.hash64()
+    }
+
+    /// The keyed digest of every resolved sim-visible rule (D10): what
+    /// peers compare, and what names the first differing key when they
+    /// disagree. See [`crate::digest`].
+    pub fn digest(&self) -> &ContentDigest {
+        &self.digest
     }
 
     pub fn profile(&self) -> Profile {
@@ -220,6 +252,7 @@ impl ContentDb {
     /// This database with these slot names.
     pub fn with_resources(mut self, resources: ResourceModel) -> ContentDb {
         self.resources = resources;
+        self.digest = digest_of(&self);
         self
     }
 
@@ -372,243 +405,204 @@ impl ContentBuilder {
         let mut db = ContentDb {
             defs, profile: self.profile, features: self.features, resources,
             tech: self.tech.map(Arc::new), map_confinement, construction_confinement, has_map_confinement,
-            map_confinement_warnings, rules: crate::Rules::default(), hash: 0,
+            map_confinement_warnings, rules: crate::Rules::default(), packs: Vec::new(),
+            digest: ContentDigest::default(),
         };
-        db.hash = hash(&db);
+        db.digest = digest_of(&db);
         Ok(db)
     }
 }
 
-/// FNV-1a, the same function as `Sim::digest`.
-struct Fnv(u64);
+/// The switches that are on, by name: `[fire_arcs,turrets]`.
+fn features_text(f: &Features) -> String {
+    let on: Vec<&str> = f.bits().iter().zip(crate::FEATURE_NAMES).filter(|(b, _)| **b).map(|(_, n)| n).collect();
+    format!("[{}]", on.join(","))
+}
 
-impl Fnv {
-    fn byte(&mut self, b: u8) {
-        self.0 ^= b as u64;
-        self.0 = self.0.wrapping_mul(0x100_0000_01b3);
-    }
-    fn u64(&mut self, v: u64) {
-        for b in v.to_le_bytes() {
-            self.byte(b);
-        }
-    }
-    fn fixed(&mut self, v: Fixed) {
-        self.u64(v.to_bits() as u64);
-    }
-    fn str(&mut self, s: &str) {
-        self.u64(s.len() as u64);
-        for b in s.bytes() {
-            self.byte(b);
-        }
+fn confinement_text(r: Option<&crate::ConfinementRules>) -> String {
+    match r {
+        None => "-".into(),
+        Some(r) => group(
+            Canon::new()
+                .flag("capability", r.capability)
+                .int("spatial", r.spatial.hash_tag())
+                .int("initial", r.initial.hash_tag())
+                .flag("rearm", r.rearm)
+                .fixed("inset", r.inset)
+                .fixed("upper_epsilon", r.upper_epsilon),
+        ),
     }
 }
 
-/// A def's own switches, hashed only when they differ from the database-wide
-/// set, so fakes and defs without overrides hash as they did before.
-fn feature_bits(h: &mut Fnv, own: Option<&Features>, db: &Features) {
-    if let Some(f) = own.filter(|f| *f != db) {
-        h.byte(0xe3);
-        for b in f.bits() {
-            h.byte(b as u8);
-        }
+/// A unit's sim-visible values. Display strings (sounds, effects, model and
+/// node names) and the model scale (it reaches the sim only through the
+/// geometry entry) are left out.
+fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
+    let name = |r: &crate::DefRef| quoted(&r.odf.to_ascii_lowercase());
+    let m = &u.movement;
+    let mut c = Canon::new();
+    c.text("class", &u.class.0)
+        .text("race", &u.race)
+        .flag("starbase", u.is_starbase)
+        .raw("planet_role", match u.planet_role {
+            None => "-",
+            Some(crate::PlanetRole::Background) => "background",
+            Some(crate::PlanetRole::Producer) => "producer",
+        })
+        // Read only for a producer planet.
+        .int("planet_crew_gain", if u.planet_role == Some(crate::PlanetRole::Producer) { u.planet_crew_gain } else { 0 })
+        .list("movement", [m.max_speed, m.forward_accel, m.turn_omega, m.turn_alpha, m.turn_at_rest].into_iter().chain(m.smooth_fields()).map(fixed_text))
+        .fixed("hull", u.hull)
+        .fixed("shields", u.shields.max)
+        .fixed("shield_rate", u.shields.recharge)
+        // Effective values: an absent key and its default are the same rule.
+        .fixed("initial_hull", u.initial_hull.unwrap_or(u.hull))
+        .fixed("initial_shields", u.initial_shields.unwrap_or(u.shields.max))
+        .fixed("crew", u.crew)
+        .fixed("crew_capacity", u.maximum_crew.unwrap_or(u.crew).max(Fixed::ZERO))
+        .fixed("sensor", u.sensor)
+        .list(
+            "hardpoints",
+            u.hardpoints.iter().map(|h| {
+                let arc = h.arc.map_or_else(|| "-".into(), |a| format!("[{},{},{}]", fixed_text(a.dir.0), fixed_text(a.dir.1), fixed_text(a.min_dot)));
+                group(Canon::new().raw("weapon", &name(&h.weapon)).raw("arc", &arc))
+            }),
+        )
+        .list("cost", u.build.cost.iter().map(|c| fixed_text(*c)))
+        .int("build_ticks", u.build.ticks)
+        .fixed("officers", u.build.officers)
+        .int("queue_limit", db.build_queue_limit(u))
+        .list("builds", u.build.list.iter().map(name))
+        .raw("flagged_slots", &u.build.flagged_slots.as_ref().map_or_else(|| "-".into(), |f| format!("[{}]", f.iter().map(|s| quoted(s)).collect::<Vec<_>>().join(","))))
+        .raw("launch", &u.launch.as_ref().map_or_else(|| "-".into(), |l| {
+            format!("[{}]", [l.offset.0, l.offset.1, l.dir.0, l.dir.1, l.clear].map(fixed_text).join(","))
+        }))
+        .fixed("special_energy", u.special_energy_max)
+        .fixed("special_energy_rate", u.special_energy_rate)
+        // Effective: the `miner` key, else class `freighter`.
+        .flag("miner", u.mines())
+        .fixed("max_dilithium", u.max_dilithium)
+        .fixed("mining_rate", u.mining_rate)
+        .fixed("transfer_rate", u.transfer_rate)
+        .raw("resource", &u.resource.map_or_else(|| "-".into(), |r| r.to_string()))
+        .raw("nebula_pathing", &u.nebula_pathing.map_or_else(|| "-".into(), |n| {
+            group(Canon::new().raw("cost", &n.cost.map_or_else(|| "-".into(), |c| c.to_string())).flag("planned", n.planned))
+        }))
+        .flag("avoid_me", u.avoid_me)
+        .raw("features", &features_text(db.unit_features(u)))
+        // A disabled or unsupported map rule confines nothing, whatever its
+        // other fields say; the construction rule applies only under it.
+        .raw("confinement", &match db.map_confinement(u.key).filter(|r| r.is_enabled()) {
+            None => "-".to_owned(),
+            Some(r) => format!("{{map={};construction={}}}", confinement_text(Some(r)), confinement_text(db.construction_confinement(u.key))),
+        });
+    c.finish()
+}
+
+fn weapon_text(db: &ContentDb, w: &WeaponDef) -> String {
+    Canon::new()
+        .text("class", &w.class.0)
+        .raw("kind", match w.kind {
+            crate::WeaponKind::Beam => "beam",
+            crate::WeaponKind::Projectile => "projectile",
+            crate::WeaponKind::PointDefence => "point_defence",
+        })
+        .fixed("range", w.range)
+        .fixed("damage", w.damage)
+        .int("refire", w.refire)
+        .fixed("shot_speed", w.shot_speed)
+        .int("duration", w.duration)
+        .int("effect_ticks", w.effect_ticks)
+        .fixed("energy_drain", w.energy_drain)
+        .fixed("energy_cost", w.energy_cost)
+        .flag("disable_weapons", w.disable_weapons)
+        .flag("decloak_on_hit", w.decloak_on_hit)
+        .raw("features", &features_text(db.weapon_features(w)))
+        .finish()
+}
+
+/// A unit's collision geometry as the sim uses it: today the bounding
+/// radius (SIM-21; zero when no model was read). SIM-32 widens the value to
+/// the ellipsoid axes, radius and centre offset; the key stays.
+fn geometry_text(u: &UnitDef) -> String {
+    Canon::new().fixed("radius", u.radius).finish()
+}
+
+fn condition_text(c: &crate::Condition) -> String {
+    use crate::Condition as C;
+    match c {
+        C::Have { odf, must_not: false } => format!("have:{}", quoted(odf)),
+        C::Have { odf, must_not: true } => format!("lack:{}", quoted(odf)),
+        C::Ally(r) => format!("ally:{}", quoted(r)),
+        C::Race(r) => format!("race:{}", quoted(r)),
+        // The tooltips are display text.
+        C::Unique { max, .. } => format!("unique:{max}"),
+        C::CapList(n) => format!("cap:{}", quoted(n)),
     }
 }
 
-fn hash(db: &ContentDb) -> u64 { hash_inner(db, true) }
+/// A tech tree entry's gate: `{withheld=0;dependency_build_possible=1;requirements=[...]}`.
+fn tech_text(e: &crate::TechEntry) -> String {
+    let reqs = e.requirements.iter().map(|r| {
+        group(
+            Canon::new()
+                .raw("group", &r.group.map_or_else(|| "-".into(), |g| g.to_string()))
+                .flag("hide", r.hide_unavailable)
+                .list("when", r.conditions.iter().map(condition_text)),
+        )
+    });
+    group(
+        Canon::new()
+            .flag("withheld", e.withheld)
+            .flag("dependency_build_possible", e.dependency_build_possible)
+            .list("requirements", reqs),
+    )
+}
 
-fn hash_inner(db: &ContentDb, include_starting_rules: bool) -> u64 {
-    let mut h = Fnv(0xcbf2_9ce4_8422_2325);
-    h.u64(db.profile as u64);
-    for b in db.features.bits() {
-        h.byte(b as u8);
-    }
-    h.u64(db.defs.len() as u64);
+/// Every resolved sim-visible rule of `db` (see [`crate::digest`]).
+fn digest_entries(db: &ContentDb) -> Vec<DigestEntry> {
+    let mut out = db.rules.digest_entries();
+    out.push(DigestEntry::new("content:profile", db.lineage()));
+    out.push(DigestEntry::new("content:features", features_text(&db.features)));
+    out.push(DigestEntry::new("content:tech-tree", if db.tech.is_some() { "gated" } else { "none" }));
+    out.push(DigestEntry::new("resources:slots", format!("[{}]", crate::resources::KEYS.join(","))));
+    out.push(DigestEntry::new("resources:aliases", db.resources.aliases_text()));
+    // A definition's tech tree entry is part of its own entry (the `tech`
+    // field), not an entry of its own: Fleet Operations 4.0 has ~5,800 of
+    // them for its definitions, and with separate keys its rule list would
+    // come within 15% of the wire's bound (NET-01: 16,384). Entries for
+    // ODFs that are no definition here gate nothing the sim can meet:
+    // nothing can build or own such an ODF, so a condition on it holds or
+    // fails alike whatever the entry says (FO 4.0's tree has ~3,400).
+    let tech = |name: &str| db.tech.as_ref().and_then(|t| t.entry(name)).map_or_else(|| "-".to_owned(), tech_text);
     for (name, def) in &db.defs {
-        h.str(name);
         match def {
             Def::Unit(u) => {
-                h.byte(0);
-                h.str(&u.class.0);
-                // Native default false keeps the old hash path. A true
-                // legacy flag must participate before mission queries use it.
-                if u.is_starbase {
-                    h.byte(0xe6);
-                    h.byte(1);
-                }
-                // CON-30: None preserves old Native identities. The explicit
-                // domain/tags are independent of Rust enum layout and of
-                // pending SIM-22's 0xe7/0xe8 confinement records.
-                if let Some(role) = u.planet_role {
-                    h.byte(0xe9);
-                    h.str("sta64.planet-role.v1");
-                    h.byte(match role {
-                        crate::PlanetRole::Background => 0,
-                        crate::PlanetRole::Producer => 1,
-                    });
-                }
-                if u.planet_role == Some(crate::PlanetRole::Producer) {
-                    h.byte(0xea);
-                    h.str("sta64.planet-crew-gain.v1");
-                    h.u64(u.planet_crew_gain as i64 as u64);
-                }
-                // SIM-23: only nebulae carry it, so other hashes stay.
-                if let Some(n) = u.nebula_pathing {
-                    h.byte(0xee);
-                    h.str("sta64.nebula-pathing.v1");
-                    h.byte(u8::from(n.cost.is_some()));
-                    h.u64(n.cost.unwrap_or(0) as u64);
-                    h.byte(u8::from(n.planned));
-                }
-                let m = &u.movement;
-                for f in [u.scale, m.max_speed, m.forward_accel, m.turn_omega, m.turn_alpha, m.turn_at_rest] {
-                    h.fixed(f);
-                }
-                // Smooth-physics keys (SIM-15) only when set, so content
-                // without them hashes as before.
-                if m.has_smooth_keys() {
-                    for f in m.smooth_fields() {
-                        h.fixed(f);
-                    }
-                }
-                for f in [u.hull, u.shields.max, u.shields.recharge, u.crew, u.sensor] {
-                    h.fixed(f);
-                }
-                let capacity = u.maximum_crew.unwrap_or(u.crew).max(Fixed::ZERO);
-                if capacity != u.crew.max(Fixed::ZERO) {
-                    h.byte(0xed);
-                    h.str("sta64.maximum-crew.v1");
-                    h.fixed(capacity);
-                }
-                let initial_hull = u.initial_hull.unwrap_or(u.hull);
-                let initial_shields = u.initial_shields.unwrap_or(u.shields.max);
-                // Missing and explicit full strength are the same rule. Keep
-                // historical synthetic hashes when initialization is unchanged.
-                if initial_hull != u.hull || initial_shields != u.shields.max {
-                    h.byte(0xec);
-                    h.str("sta64.initial-health-shields.v1");
-                    h.fixed(initial_hull);
-                    h.fixed(initial_shields);
-                }
-                h.u64(u.hardpoints.len() as u64);
-                for hp in &u.hardpoints {
-                    h.u64(hp.weapon.key.0 as u64);
-                    match hp.arc {
-                        Some(a) => {
-                            h.byte(1);
-                            for f in [a.dir.0, a.dir.1, a.min_dot] {
-                                h.fixed(f);
-                            }
-                        }
-                        None => h.byte(0),
-                    }
-                }
-                h.u64(u.build.cost.len() as u64);
-                for &c in &u.build.cost {
-                    h.fixed(c);
-                }
-                // Only when set, so content without launch points keeps its hash.
-                if let Some(l) = &u.launch {
-                    h.byte(2);
-                    for f in [l.offset.0, l.offset.1, l.dir.0, l.dir.1, l.clear] {
-                        h.fixed(f);
-                    }
-                }
-                // Only when read, so content without models keeps its hash.
-                if u.radius > Fixed::ZERO {
-                    h.byte(3);
-                    h.fixed(u.radius);
-                }
-                h.u64(u.build.ticks);
-                h.fixed(u.build.officers);
-                // The old shared rule was five for every profile. Preserve
-                // its hashes only when the effective rule is still five.
-                let queue_limit = db.build_queue_limit(u);
-                if queue_limit != 5 {
-                    h.byte(0xe5);
-                    h.u64(u64::from(queue_limit));
-                }
-                h.u64(u.build.list.len() as u64);
-                for b in &u.build.list {
-                    h.u64(b.key.0 as u64);
-                }
-                // Later additions: hashed only when set, so databases made
-                // before them (the fakes) keep their hash.
-                let extra = [u.special_energy_max, u.special_energy_rate, u.max_dilithium, u.mining_rate, u.transfer_rate];
-                if u.miner || u.resource.is_some() || extra.iter().any(|f| *f != Fixed::ZERO) {
-                    h.byte(0xe1);
-                    h.byte(u.miner as u8);
-                    h.u64(u.resource.map_or(0, |r| r as u64 + 1));
-                    for f in extra {
-                        h.fixed(f);
-                    }
-                }
-                feature_bits(&mut h, u.features.as_ref(), &db.features);
-                // No new bytes for disabled/unsupported rules: old Native
-                // databases and genuine replay/save controls retain their hash.
-                if let Some(r) = db.map_confinement(u.key).filter(|r| r.is_enabled()) {
-                    h.byte(0xe7);
-                    h.byte(1); // resolved map-rule hash schema
-                    h.byte(r.spatial.hash_tag());
-                    h.byte(r.initial.hash_tag());
-                    h.byte(u8::from(r.rearm));
-                    h.fixed(r.inset);
-                    h.fixed(r.upper_epsilon);
-                    if let Some(c) = db.construction_confinement(u.key).filter(|c| *c != r) {
-                        h.byte(0xe8);
-                        h.byte(1);
-                        h.byte(c.spatial.hash_tag());
-                        h.byte(c.initial.hash_tag());
-                        h.byte(u8::from(c.rearm));
-                        h.fixed(c.inset);
-                        h.fixed(c.upper_epsilon);
-                    }
-                }
+                let value = format!("{};tech={}", unit_text(db, u), tech(name));
+                out.push(DigestEntry::new(digest::key("unit:", name), value));
+                out.push(DigestEntry::new(digest::key("geometry:", name), geometry_text(u)));
             }
             Def::Weapon(w) => {
-                h.byte(1);
-                h.str(&w.class.0);
-                h.byte(w.kind as u8);
-                for f in [w.range, w.damage, w.shot_speed] {
-                    h.fixed(f);
-                }
-                h.u64(w.refire);
-                h.u64(w.duration);
-                if w.effect_ticks != 0 || w.energy_drain != Fixed::ZERO || w.energy_cost != Fixed::ZERO || !w.disable_weapons || w.decloak_on_hit {
-                    h.byte(0xe2);
-                    h.u64(w.effect_ticks);
-                    h.fixed(w.energy_drain);
-                    h.fixed(w.energy_cost);
-                    h.byte(w.disable_weapons as u8);
-                    h.byte(w.decloak_on_hit as u8);
-                }
-                feature_bits(&mut h, w.features.as_ref(), &db.features);
+                let value = format!("{};tech={}", weapon_text(db, w), tech(name));
+                out.push(DigestEntry::new(digest::key("weapon:", name), value));
             }
         }
     }
-    // Hashed only when set, so databases without a tree keep their hash. The
-    // entries come out in sorted order, so the Debug text is stable.
     if let Some(t) = &db.tech {
-        h.byte(0xe3);
-        let entries: Vec<_> = t.entries().collect();
-        let caps: Vec<_> = t.capacity_lists().collect();
-        h.str(&format!("{entries:?}{caps:?}"));
+        for c in t.capacity_lists() {
+            let value = Canon::new()
+                .int("max", c.max)
+                .list("members", c.members.iter().map(|(odf, n)| format!("{}:{n}", quoted(odf))))
+                .finish();
+            // Keyed by lower-cased name in the tree, so unique.
+            out.push(DigestEntry::new(digest::key("techcap:", &c.name.to_ascii_lowercase()), value));
+        }
     }
-    let rules = db.rules.hash_values();
-    if include_starting_rules && !rules.is_empty() {
-        h.byte(0xeb);
-        h.str("sta64.starting-personnel-rules.v1");
-        for value in rules { h.u64(value); }
-    }
-    // SIM-23: only when `RTS_CFG.h` has the PATHING keys, so content without
-    // them keeps its hash; excluded with the other rules from the historical
-    // identity snapshots compare against.
-    let pathing = db.rules.pathing_hash_values();
-    if include_starting_rules && !pathing.is_empty() {
-        h.byte(0xed);
-        h.str("sta64.pathing-rules.v1");
-        for value in pathing { h.u64(value); }
-    }
-    h.0
+    out
+}
+
+fn digest_of(db: &ContentDb) -> ContentDigest {
+    ContentDigest::from_entries(digest_entries(db))
 }
 
 #[cfg(test)]
@@ -654,5 +648,111 @@ mod tests {
         let (db, warnings) = ContentDb::load_as(&sta_vfs::Vfs::default(), Profile::Fo4, &OdfIndex::default()).unwrap();
         assert!(db.is_empty() && warnings.is_empty());
         assert_eq!(db.profile(), Profile::Fo4);
+    }
+
+    /// `fake::db()` with `patch` applied to every definition.
+    fn patched(unit: impl Fn(&mut UnitDef), weapon: impl Fn(&mut WeaponDef)) -> ContentDb {
+        let fake = crate::fake::db();
+        let mut b = ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
+        for u in fake.units() {
+            let mut u = u.clone();
+            unit(&mut u);
+            b = b.unit(u);
+        }
+        for w in fake.weapons() {
+            let mut w = w.clone();
+            weapon(&mut w);
+            b = b.weapon(w);
+        }
+        b.build().unwrap()
+    }
+
+    /// The first differing key between the fake and a patched copy.
+    fn first_key(unit: impl Fn(&mut UnitDef), weapon: impl Fn(&mut WeaponDef)) -> Option<String> {
+        crate::fake::db().digest().first_difference(patched(unit, weapon).digest()).map(|d| d.key)
+    }
+
+    #[test]
+    fn display_strings_and_render_data_are_not_in_the_digest() {
+        let fake = crate::fake::db();
+        let art = patched(
+            |u| {
+                u.model = "hd_model".into();
+                u.scale = Fixed::from_int(3);
+                u.sounds.select = vec!["new_voice".into()];
+                u.fx.explosion = Some("big_boom".into());
+                for h in &mut u.hardpoints {
+                    h.node = "renamed_node".into();
+                }
+                if let Some(l) = &mut u.launch {
+                    l.node = Some("other".into());
+                }
+            },
+            |w| {
+                w.fire_sound = Some("pew".into());
+                w.fx = Some("beam_hd".into());
+            },
+        );
+        assert_eq!(art.digest(), fake.digest());
+        // Slot names are display text; pack names are informational.
+        let table = crate::StringTable::parse("\"GUI_RD_LATINUM_VTOOLTIP\", \"Gold-pressed: currency\",\n");
+        let names = ResourceModel::from_strings(fake.profile(), &table);
+        assert_eq!(names.name(crate::resources::LATINUM), "Gold-pressed");
+        let renamed = crate::fake::db().with_resources(names).with_packs(vec!["Some Pack".into()]);
+        assert_eq!(renamed.digest(), fake.digest());
+    }
+
+    #[test]
+    fn every_sim_visible_value_names_its_definition() {
+        let cruiser = |f: fn(&mut UnitDef)| move |u: &mut UnitDef| if u.odf == "fx_cruiser" { f(u) };
+        let none = |_: &mut WeaponDef| {};
+        assert_eq!(first_key(cruiser(|u| u.hull = u.hull + Fixed::ONE), none).as_deref(), Some("unit:fx_cruiser"));
+        assert_eq!(first_key(cruiser(|u| u.race = "other".into()), none).as_deref(), Some("unit:fx_cruiser"));
+        assert_eq!(first_key(cruiser(|u| u.avoid_me = true), none).as_deref(), Some("unit:fx_cruiser"));
+        assert_eq!(first_key(cruiser(|u| u.build.flagged_slots = Some(Vec::new())), none).as_deref(), Some("unit:fx_cruiser"));
+        assert_eq!(first_key(cruiser(|u| u.special_energy_max = Fixed::ONE), none).as_deref(), Some("unit:fx_cruiser"));
+        assert_eq!(first_key(cruiser(|u| u.radius = u.radius + Fixed::ONE), none).as_deref(), Some("geometry:fx_cruiser"));
+        let beam = |w: &mut WeaponDef| if w.odf == "fx_beam" { w.energy_cost = Fixed::ONE };
+        assert_eq!(first_key(|_| {}, beam).as_deref(), Some("weapon:fx_beam"));
+        // An absent key and its default are the same rule.
+        assert_eq!(first_key(cruiser(|u| u.initial_hull = Some(u.hull)), none), None);
+        assert_eq!(first_key(cruiser(|u| u.maximum_crew = Some(u.crew)), none), None);
+        // The field is named for a finer message.
+        let d = crate::fake::db().digest().first_difference(patched(cruiser(|u| u.sensor = Fixed::from_int(7)), none).digest()).unwrap();
+        assert_eq!(d.field().map(|f| (f.0, f.2)), Some(("sensor".to_owned(), Some("7".to_owned()))));
+    }
+
+    #[test]
+    fn the_tech_tree_is_in_each_definition_and_its_tooltips_are_not() {
+        let tree = |text: &str| TechTree::parse("t.xml", text).0;
+        let xml = |tip: &str| format!(
+            "<techtree><object ODF=\"fx_cruiser.odf\"><requirement><cap maxCapValue=\"2\" tooltip=\"{tip}\"/></requirement></object>\
+             <object ODF=\"not_a_def.odf\" buildPossible=\"false\"/></techtree>"
+        );
+        let a = crate::fake::db().with_tech_tree(tree(&xml("Only two")));
+        let b = crate::fake::db().with_tech_tree(tree(&xml("Nur zwei")));
+        assert_eq!(a.digest(), b.digest());
+        assert!(a.digest().get("unit:fx_cruiser").unwrap().contains("tech={withheld=0"), "{:?}", a.digest().get("unit:fx_cruiser"));
+        assert_ne!(a.hash(), crate::fake::db().hash());
+        // An entry for an ODF that is no definition gates nothing.
+        let c = crate::fake::db().with_tech_tree(tree(
+            "<techtree><object ODF=\"fx_cruiser.odf\"><requirement><cap maxCapValue=\"2\" tooltip=\"x\"/></requirement></object></techtree>",
+        ));
+        assert_eq!(a.digest(), c.digest());
+        assert_eq!(a.digest().first_difference(crate::fake::db().digest()).unwrap().key, "content:tech-tree");
+    }
+
+    #[test]
+    fn every_key_is_unique_bounded_and_the_digest_is_stable() {
+        let db = crate::fake::db();
+        let d = db.digest();
+        assert!(d.entries().windows(2).all(|w| w[0].key.as_bytes() < w[1].key.as_bytes()));
+        assert!(d.entries().iter().all(|e| e.key.len() <= digest::MAX_KEY_BYTES));
+        for k in ["content:profile", "content:features", "content:tech-tree", "resources:slots", "resources:aliases", "RTS_CFG.h:MP_OFFICER_LIMIT", "geometry:fx_cruiser", "unit:fx_cruiser", "weapon:fx_beam"] {
+            assert!(d.get(k).is_some(), "{k}");
+        }
+        assert_eq!(d.get("content:profile"), Some(db.lineage()));
+        assert_eq!(db.hash(), crate::fake::db().hash());
+        assert_eq!(db.hash(), d.hash64());
     }
 }

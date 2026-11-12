@@ -1,7 +1,7 @@
 //! Install-gated checks of the coverage report (CON-34, D7). With
 //! `STA64_TEST_INSTALL` set to an install root (Data/Mods/...), every
-//! installed mod is reported, and STA2 Classic Enhanced lists its 8 changed
-//! cfg lines as ignored.
+//! installed mod is reported, and STA2 Classic Enhanced's 8 changed cfg
+//! lines are the typed rules of CON-35, so none is ignored.
 
 use std::path::Path;
 
@@ -28,28 +28,19 @@ fn every_installed_mod_reports() {
 }
 
 #[test]
-fn classic_enhanced_lists_its_eight_changed_cfg_lines_as_ignored() {
+fn classic_enhanced_changes_eight_cfg_lines_and_all_are_typed_rules() {
     let Some(root) = root() else { return };
     let vfs = match Vfs::mount_install(Path::new(&root), Some("STA2 Classic Mod Enhanced Gameplay")) {
         Ok(v) => v,
         Err(_) => return, // not installed here
     };
     let r = coverage::check(&vfs);
-    let mut ignored: Vec<&str> = r.cfg.iter().filter(|c| !c.read).map(|c| c.key.as_str()).collect();
-    ignored.sort();
-    assert_eq!(
-        ignored,
-        [
-            "BASE_CREW_PER_SEC",
-            "CRAFT_DEFAULT_MOVEMENT_AUTONOMY",
-            "CRAFT_DEFAULT_SPECIALWEAPON_AUTONOMY",
-            "HARD_AI_COST_HANDICAP",
-            "HARD_AI_SPEED_HANDICAP",
-            "REPAIR_SHIP_DISTANCE",
-            "SHIELD_DAMAGE_PROTECTION",
-            "cfgFREIGHTERS_PER_NEBULA",
-        ]
-    );
+    let mut changed: Vec<&str> = r.cfg.iter().map(|c| c.key.as_str()).collect();
+    changed.sort();
+    // CON-35 typed exactly the keys the installed headers differ in (D9:
+    // first the keys Classic Enhanced changes), so none is ignored.
+    assert_eq!(changed, sta_content::CfgRules::KEYS);
+    assert!(r.cfg.iter().all(|c| c.read), "{:?}", r.cfg);
     // `why` names the layer and line for the file and for a key.
     let hits = coverage::why_file(&vfs, "RTS_CFG.h");
     assert_eq!(hits[0].layer, "STA2 Classic Mod Enhanced Gameplay");

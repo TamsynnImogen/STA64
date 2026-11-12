@@ -1,5 +1,9 @@
-//! Resolved starting personnel rules. No raw header values reach the simulation.
+//! The typed rules of `RTS_CFG.h` (D9): officer limits, the path planner,
+//! the keys Classic Enhanced changes, and each race's starting forces. No
+//! raw header value reaches the simulation; every value here is an entry of
+//! the content digest ([`Rules::digest_entries`], D10).
 
+use crate::digest::{Canon, DigestEntry, quoted};
 use crate::{Races, Warning};
 use sta_assets::cfg_h::CfgH;
 use sta_core::Fixed;
@@ -11,13 +15,131 @@ pub struct OfficerLimit {
     pub value: i32,
 }
 
-/// Narrow first slice of the typed rules seam; other RTS rules are not implied.
+/// The typed rules. Which `RTS_CFG.h` keys are typed is data-driven: the ones
+/// the sim reads and the ones the installed mods change (see [`CfgRules`]);
+/// [`TYPED_CFG_KEYS`] lists them for the coverage report.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Rules {
     pub officer_limits: Vec<OfficerLimit>,
     starts: Vec<StartRule>,
     /// `RTS_CFG.h`'s path-planner block, when the header has any of its keys.
     pathing: Option<PathingRules>,
+    /// The other typed `RTS_CFG.h` keys.
+    pub cfg: CfgRules,
+}
+
+const TYPED_LEN: usize = 3 + PathingRules::KEYS.len() + CfgRules::KEYS.len();
+
+/// Every `RTS_CFG.h` key [`Rules`] reads.
+pub const TYPED_CFG_KEYS: [&str; TYPED_LEN] = {
+    let mut out = [""; TYPED_LEN];
+    out[0] = "MP_OFFICER_LIMIT";
+    out[1] = "MP_OFFICER_LIST_SIZE";
+    out[2] = "SINGLE_PLAYER_OFFICER_LIMIT";
+    let mut i = 0;
+    while i < PathingRules::KEYS.len() {
+        out[3 + i] = PathingRules::KEYS[i];
+        i += 1;
+    }
+    let mut j = 0;
+    while j < CfgRules::KEYS.len() {
+        out[3 + i + j] = CfgRules::KEYS[j];
+        j += 1;
+    }
+    out
+};
+
+/// The `RTS_CFG.h` keys STA2 Classic Enhanced Gameplay changes against STA2
+/// Classic (the eight changed lines CON-34's coverage report finds in the
+/// installed headers), typed so the digest names them. `None`: the header
+/// does not set the key; no default is invented where the original engine's
+/// own default is not known. No sim system consumes them yet; they are
+/// rules, so peers must agree on them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CfgRules {
+    /// `SHIELD_DAMAGE_PROTECTION` (float; Classic 0.8, Enhanced 0.9).
+    pub shield_damage_protection: Option<Fixed>,
+    /// `REPAIR_SHIP_DISTANCE` (float; Classic 180, Enhanced 230).
+    pub repair_ship_distance: Option<Fixed>,
+    /// `BASE_CREW_PER_SEC` (float; Enhanced only, 30).
+    pub base_crew_per_sec: Option<Fixed>,
+    /// `cfgFREIGHTERS_PER_NEBULA` (int; Classic 1, Enhanced 3).
+    pub freighters_per_nebula: Option<i64>,
+    /// `HARD_AI_COST_HANDICAP` (float; Classic 0.6, Enhanced 0.5).
+    pub hard_ai_cost_handicap: Option<Fixed>,
+    /// `HARD_AI_SPEED_HANDICAP` (float; Classic 0.7, Enhanced 0.6).
+    pub hard_ai_speed_handicap: Option<Fixed>,
+    /// `CRAFT_DEFAULT_MOVEMENT_AUTONOMY` (int; Enhanced only, 1).
+    pub craft_default_movement_autonomy: Option<i64>,
+    /// `CRAFT_DEFAULT_SPECIALWEAPON_AUTONOMY` (int; Enhanced only, 1).
+    pub craft_default_specialweapon_autonomy: Option<i64>,
+}
+
+impl CfgRules {
+    /// The keys, in the order of [`texts`](CfgRules::texts).
+    pub const KEYS: [&'static str; 8] = [
+        "BASE_CREW_PER_SEC",
+        "CRAFT_DEFAULT_MOVEMENT_AUTONOMY",
+        "CRAFT_DEFAULT_SPECIALWEAPON_AUTONOMY",
+        "HARD_AI_COST_HANDICAP",
+        "HARD_AI_SPEED_HANDICAP",
+        "REPAIR_SHIP_DISTANCE",
+        "SHIELD_DAMAGE_PROTECTION",
+        "cfgFREIGHTERS_PER_NEBULA",
+    ];
+
+    /// Each value as the digest renders it (`unset` when absent), in
+    /// [`KEYS`](CfgRules::KEYS) order.
+    fn texts(&self) -> [String; 8] {
+        let real = |v: Option<Fixed>| v.map_or_else(|| "unset".to_owned(), crate::digest::fixed_text);
+        let int = |v: Option<i64>| v.map_or_else(|| "unset".to_owned(), |v| v.to_string());
+        [
+            real(self.base_crew_per_sec),
+            int(self.craft_default_movement_autonomy),
+            int(self.craft_default_specialweapon_autonomy),
+            real(self.hard_ai_cost_handicap),
+            real(self.hard_ai_speed_handicap),
+            real(self.repair_ship_distance),
+            real(self.shield_damage_protection),
+            int(self.freighters_per_nebula),
+        ]
+    }
+
+    fn from_cfg(cfg: &CfgH, warnings: &mut Vec<Warning>) -> CfgRules {
+        let mut warn = |key: &str, what: &str| warnings.push(Warning::new("RTS_CFG.h", format!("{key} is not {what}; treated as unset")));
+        let mut real = |key: &str| {
+            cfg.raw(key)?;
+            // As the header's `float` reads (f32), so equal text is equal everywhere.
+            let v = cfg.f32(key).filter(|v| v.is_finite() && v.abs() <= 1.0e9).map(|v| Fixed::from_f64(v as f64));
+            if v.is_none() {
+                warn(key, "a number");
+            }
+            v
+        };
+        let shield_damage_protection = real("SHIELD_DAMAGE_PROTECTION");
+        let repair_ship_distance = real("REPAIR_SHIP_DISTANCE");
+        let base_crew_per_sec = real("BASE_CREW_PER_SEC");
+        let hard_ai_cost_handicap = real("HARD_AI_COST_HANDICAP");
+        let hard_ai_speed_handicap = real("HARD_AI_SPEED_HANDICAP");
+        let mut int = |key: &str| {
+            cfg.raw(key)?;
+            let v = cfg.i64(key).map(|v| v.clamp(-1_000_000_000, 1_000_000_000));
+            if v.is_none() {
+                warn(key, "a whole number");
+            }
+            v
+        };
+        CfgRules {
+            shield_damage_protection,
+            repair_ship_distance,
+            base_crew_per_sec,
+            freighters_per_nebula: int("cfgFREIGHTERS_PER_NEBULA"),
+            hard_ai_cost_handicap,
+            hard_ai_speed_handicap,
+            craft_default_movement_autonomy: int("CRAFT_DEFAULT_MOVEMENT_AUTONOMY"),
+            craft_default_specialweapon_autonomy: int("CRAFT_DEFAULT_SPECIALWEAPON_AUTONOMY"),
+        }
+    }
 }
 
 /// The path planner's terrain costs (SIM-23), from `RTS_CFG.h`'s PATHING
@@ -101,25 +223,35 @@ impl PathingRules {
         })
     }
 
-    fn hash_values(&self) -> Vec<u64> {
-        vec![
-            u64::from(self.enabled),
-            self.default_cost as u64,
-            self.impassable as u64,
-            self.off_map_cost as u64,
-            self.nebula_cost as u64,
-            self.nebula_safety.to_bits() as u64,
-            self.resolution.to_bits() as u64,
+    /// Each value as the digest renders it, in [`KEYS`](PathingRules::KEYS) order.
+    fn texts(&self) -> [String; 7] {
+        let f = crate::digest::fixed_text;
+        [
+            u8::from(self.enabled).to_string(),
+            self.default_cost.to_string(),
+            self.impassable.to_string(),
+            self.off_map_cost.to_string(),
+            self.nebula_cost.to_string(),
+            f(self.nebula_safety),
+            f(self.resolution),
         ]
     }
 }
 
+/// A race's starting forces, as the sim gives them (`Races::loadout_with_mode`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct StartRule {
+    /// The race ODF's stem: unique, unlike the race key (`observer` and
+    /// `federation` share `federation`).
+    stem: String,
     race: String,
+    /// `instantActionSlot`; which race a key means depends on it.
+    slot: Option<i64>,
     normal: [i64; 4],
     lots: [i64; 4],
     crew: [Option<i64>; 2],
+    /// `standardUnits`, as the race ODF lists them.
+    units: Vec<String>,
 }
 
 impl Rules {
@@ -149,6 +281,7 @@ impl Rules {
             }
         }
         rules.pathing = PathingRules::from_cfg(&cfg, &mut warnings);
+        rules.cfg = CfgRules::from_cfg(&cfg, &mut warnings);
         (rules, warnings)
     }
 
@@ -163,12 +296,6 @@ impl Rules {
         self
     }
 
-    /// The path planner's values for the content hash; empty when the
-    /// header had none, so content without them keeps its hash.
-    pub(crate) fn pathing_hash_values(&self) -> Vec<u64> {
-        self.pathing.as_ref().map(PathingRules::hash_values).unwrap_or_default()
-    }
-
     /// Read `RTS_CFG.h` as the layers inherit it (D11: a header may include its
     /// own name from the layer below, see [`crate::layered`]). An include
     /// cycle is an error.
@@ -180,13 +307,18 @@ impl Rules {
         rules.starts = races
             .iter()
             .map(|race| StartRule {
+                stem: race.stem.clone(),
                 race: race.name.clone(),
+                slot: race.slot,
                 normal: race.stock.map(|n| n.clamp(0, 1_000_000_000)),
                 lots: race.lots_stock.map(|n| n.clamp(0, 1_000_000_000)),
                 crew: [race.normal_crew, race.lots_crew].map(|v| v.map(|n| n.clamp(0, 1_000_000_000))),
+                units: race.standard_units.clone(),
             })
             .collect();
-        rules.starts.sort_by(|a, b| a.race.cmp(&b.race));
+        // Stems are ODF names, unique per install; lookups go stem first.
+        rules.starts.sort_by(|a, b| a.stem.cmp(&b.stem));
+        rules.starts.dedup_by(|a, b| a.stem == b.stem);
         Ok((rules, warnings))
     }
 
@@ -194,24 +326,35 @@ impl Rules {
         self.officer_limits.get(choice).map(|limit| limit.value)
     }
 
-    /// Explicit numeric encoding; cosmetic labels and Rust native layouts are absent.
-    pub(crate) fn hash_values(&self) -> Vec<u64> {
-        if self.officer_limits.is_empty() && self.starts.is_empty() {
-            return Vec::new();
+    /// The rules as digest entries (D10): `RTS_CFG.h:<KEY>` for every typed
+    /// header key, with the resolved value (the stock value where the header
+    /// sets none and one is known, `unset` where not), and `race:<name>` for
+    /// each race's starting forces. Officer labels are display text and left
+    /// out; `SINGLE_PLAYER_OFFICER_LIMIT` resolves into `MP_OFFICER_LIMIT`.
+    pub fn digest_entries(&self) -> Vec<DigestEntry> {
+        let mut out = vec![DigestEntry::new(
+            "RTS_CFG.h:MP_OFFICER_LIMIT",
+            format!("[{}]", self.officer_limits.iter().map(|l| l.value.to_string()).collect::<Vec<_>>().join(",")),
+        )];
+        for (key, value) in PathingRules::KEYS.iter().zip(self.pathing().texts()) {
+            out.push(DigestEntry::new(format!("RTS_CFG.h:{key}"), value));
         }
-        let mut out = vec![self.officer_limits.len() as u64];
-        out.extend(self.officer_limits.iter().map(|limit| limit.value as u64));
-        out.push(self.starts.len() as u64);
-        for start in &self.starts {
-            // Faction identity is a simulation lookup key, unlike a display caption.
-            out.push(start.race.len() as u64);
-            out.extend(start.race.bytes().map(u64::from));
-            out.extend(start.normal.map(|n| n as u64));
-            out.extend(start.lots.map(|n| n as u64));
-            for crew in start.crew {
-                out.push(u64::from(crew.is_some()));
-                out.push(crew.unwrap_or(0) as u64);
-            }
+        for (key, value) in CfgRules::KEYS.iter().zip(self.cfg.texts()) {
+            out.push(DigestEntry::new(format!("RTS_CFG.h:{key}"), value));
+        }
+        for s in &self.starts {
+            let opt = |v: Option<i64>| v.map_or_else(|| "-".to_owned(), |v| v.to_string());
+            let nums = |v: [i64; 4]| format!("[{}]", v.map(|n| n.to_string()).join(","));
+            let value = Canon::new()
+                .text("race", &s.race)
+                .raw("slot", &opt(s.slot))
+                .raw("normal", &nums(s.normal))
+                .raw("lots", &nums(s.lots))
+                .raw("crew", &opt(s.crew[0]))
+                .raw("lots_crew", &opt(s.crew[1]))
+                .list("units", s.units.iter().map(|u| quoted(&u.to_ascii_lowercase())))
+                .finish();
+            out.push(DigestEntry::new(crate::digest::key("race:", &s.stem), value));
         }
         out
     }
@@ -231,14 +374,18 @@ mod pathing_tests {
         let (rules, warnings) = Rules::from_header(STOCK);
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(rules.pathing(), PathingRules::default());
-        assert!(!rules.pathing_hash_values().is_empty());
     }
 
     #[test]
-    fn a_header_without_the_block_keeps_the_hash_and_the_stock_values() {
+    fn a_header_without_the_block_digests_like_the_stock_block() {
+        // Values, not presence: absent and stock resolve alike.
         let (rules, _) = Rules::from_header("int SOMETHING_ELSE = 3;\n");
         assert_eq!(rules.pathing(), PathingRules::default());
-        assert!(rules.pathing_hash_values().is_empty());
+        let (stock, _) = Rules::from_header(STOCK);
+        assert_eq!(rules.digest_entries(), stock.digest_entries());
+        let d = crate::digest::ContentDigest::from_entries(rules.digest_entries());
+        assert_eq!(d.get("RTS_CFG.h:OFF_MAP_PATHING_COST"), Some("90000"));
+        assert_eq!(d.get("RTS_CFG.h:USE_PATH_PLANNING"), Some("1"));
     }
 
     #[test]
@@ -255,5 +402,63 @@ mod pathing_tests {
         let (bad, warnings) = Rules::from_header("float NEBULAE_PATHING_SAFETY_COEFFICIENT = wide;\n");
         assert_eq!(bad.pathing().nebula_safety, PathingRules::default().nebula_safety);
         assert_eq!(warnings.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod cfg_tests {
+    use super::*;
+    use crate::digest::ContentDigest;
+
+    /// The eight lines STA2 Classic Enhanced Gameplay changes, as both
+    /// headers write them (comments as in the installed files).
+    const CLASSIC: &str = "float HARD_AI_COST_HANDICAP = 0.6;\nfloat HARD_AI_SPEED_HANDICAP = 0.7;\n\
+        int cfgFREIGHTERS_PER_NEBULA = 1;\nfloat SHIELD_DAMAGE_PROTECTION = 0.8;\nfloat REPAIR_SHIP_DISTANCE = 180;\n";
+    const ENHANCED: &str = "float HARD_AI_COST_HANDICAP = 0.5; // JanB: decreased from 0.6\n\
+        float HARD_AI_SPEED_HANDICAP = 0.6; // JanB: decreased from 0.7\nint cfgFREIGHTERS_PER_NEBULA = 3;\n\
+        float SHIELD_DAMAGE_PROTECTION = 0.9; // JanB: increased from 0.8\nfloat BASE_CREW_PER_SEC = 30.0;\n\
+        float REPAIR_SHIP_DISTANCE = 230;\nint CRAFT_DEFAULT_MOVEMENT_AUTONOMY = 1;\nint CRAFT_DEFAULT_SPECIALWEAPON_AUTONOMY = 1;\n";
+
+    #[test]
+    fn the_enhanced_keys_are_typed() {
+        let (c, w) = Rules::from_header(CLASSIC);
+        assert!(w.is_empty(), "{w:?}");
+        let (e, w) = Rules::from_header(ENHANCED);
+        assert!(w.is_empty(), "{w:?}");
+        assert_eq!(c.cfg.freighters_per_nebula, Some(1));
+        assert_eq!(e.cfg.freighters_per_nebula, Some(3));
+        assert_eq!(e.cfg.shield_damage_protection, Some(Fixed::from_f64(0.9f32 as f64)));
+        assert_eq!(e.cfg.repair_ship_distance, Some(Fixed::from_int(230)));
+        assert_eq!(c.cfg.base_crew_per_sec, None);
+        assert_eq!(e.cfg.base_crew_per_sec, Some(Fixed::from_int(30)));
+        assert_eq!(e.cfg.craft_default_specialweapon_autonomy, Some(1));
+        // Every changed line is a differing digest key.
+        let (dc, de) = (ContentDigest::from_entries(c.digest_entries()), ContentDigest::from_entries(e.digest_entries()));
+        let keys: Vec<String> = dc.differences(&de).into_iter().map(|d| d.key).collect();
+        assert_eq!(keys, CfgRules::KEYS.map(|k| format!("RTS_CFG.h:{k}")));
+        let first = dc.first_difference(&de).unwrap();
+        assert_eq!((first.key.as_str(), first.ours.as_deref(), first.theirs.as_deref()), ("RTS_CFG.h:BASE_CREW_PER_SEC", Some("unset"), Some("30")));
+    }
+
+    #[test]
+    fn bad_values_warn_and_stay_unset() {
+        let (r, w) = Rules::from_header("float SHIELD_DAMAGE_PROTECTION = lots;\nint cfgFREIGHTERS_PER_NEBULA = 2.5;\n");
+        assert_eq!((r.cfg.shield_damage_protection, r.cfg.freighters_per_nebula), (None, None));
+        assert_eq!(w.len(), 2);
+    }
+
+    #[test]
+    fn every_typed_key_is_listed_once() {
+        let mut keys = TYPED_CFG_KEYS.to_vec();
+        keys.sort();
+        keys.dedup();
+        assert_eq!(keys.len(), TYPED_CFG_KEYS.len());
+        assert!(TYPED_CFG_KEYS.iter().all(|k| !k.is_empty()));
+        // The digest has one entry per typed key but the two officer keys
+        // that resolve into MP_OFFICER_LIMIT.
+        let d = ContentDigest::from_entries(Rules::default().digest_entries());
+        for k in TYPED_CFG_KEYS.iter().filter(|k| !matches!(**k, "MP_OFFICER_LIST_SIZE" | "SINGLE_PLAYER_OFFICER_LIMIT")) {
+            assert!(d.get(&format!("RTS_CFG.h:{k}")).is_some(), "{k}");
+        }
     }
 }

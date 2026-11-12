@@ -937,6 +937,9 @@ impl Bench {
         let replay = Replay {
             seam_rev: sta_sim::SEAM_REV,
             content_hash: r.setup.content.hash(),
+            lineage: r.setup.content.lineage().to_owned(),
+            packs: r.setup.content.packs().to_vec(),
+            peers: Vec::new(),
             seed: r.setup.seed,
             map: (*r.setup.map).clone(),
             players: r

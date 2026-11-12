@@ -64,3 +64,27 @@ and seam compatibility decision before those fields change.
 An Android library check is not APK or device proof. No graphics, lifecycle,
 input or Waydroid acceptance claim follows from these headless tests. The
 December 2026 desktop alpha remains the priority.
+
+## Format 3 (CON-35)
+
+Following the rule above (positional postcard fields change only with a
+format bump), CON-35 bumps the replay to STAR format 3 and the snapshot to
+STAS format 14 together. Format 3 adds, after the content hash, the
+recording peer's content lineage and pack names and a list of the other
+peers' (empty for a local game; NET-02 fills it from `Start`), per
+[MODDING_DECISIONS.md](MODDING_DECISIONS.md) D10. Format 14 adds the same
+lineage and pack names as a record between the fixed header and the body.
+Both are informational and never checked.
+
+The content hash in both is now the first eight bytes of the keyed rules
+digest (`sta_content::digest`), so no earlier file's hash can match a
+current database. Earlier formats are therefore refused by version, with
+an error that says the file is from an older STA64, rather than read and
+then refused for content; the narrow snapshot compatibility paths for
+formats 8 to 13 are removed. The genuine old fixtures stay in
+`crates/sta_sim/tests/fixtures/` as refusal cases. The games of
+`mining-v8.stas` and `unit-status-v12.stas` are rebuilt in tests, and the
+native control game is rerun from the v1 replay's commands; all still reach
+their recorded digests with unit crew left out and the old content hash
+substituted (`digest_before_crew`). `mining-idle-v9.stas` is only a refusal
+case now.

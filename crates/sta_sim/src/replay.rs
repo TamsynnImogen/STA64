@@ -15,6 +15,11 @@
 //!   Content is checked when a game is built from the replay.
 //! - [`GameOptions`] is recorded explicitly in format 2. When it gains
 //!   fields, add them here with a format bump.
+//! - Format 3 (CON-35) records the content lineage and pack names of the
+//!   recording peer and, for a networked game, of every other peer
+//!   (MODDING_DECISIONS D10). They are informational; only the content
+//!   hash is checked. Older formats are refused, not migrated: their content
+//!   hash is of the pre-CON-35 kind and can match no current database.
 
 use std::sync::Arc;
 
@@ -29,8 +34,10 @@ use crate::{SEAM_REV, Sim};
 
 /// First four bytes of every replay file.
 pub const MAGIC: [u8; 4] = *b"STAR";
-/// Bumped when the layout of [`Replay`] changes.
-pub const FORMAT_VERSION: u16 = 2;
+/// Bumped when the layout of [`Replay`] changes. Format 3 (CON-35) adds the
+/// lineage and pack names and carries the keyed content digest's hash;
+/// formats 1 and 2 are refused ([`ReplayError::FormatVersion`]).
+pub const FORMAT_VERSION: u16 = 3;
 /// Digest every this many ticks unless the recorder is told otherwise.
 pub const DEFAULT_DIGEST_EVERY: Tick = 30;
 
@@ -61,6 +68,9 @@ impl std::fmt::Display for ReplayError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ReplayError::BadMagic => write!(f, "not a replay file"),
+            ReplayError::FormatVersion { found } if *found < FORMAT_VERSION => {
+                write!(f, "replay format {found} is from an older STA64 and cannot be read (this build reads format {FORMAT_VERSION} only)")
+            }
             ReplayError::FormatVersion { found } => {
                 write!(f, "replay format {found}, expected {FORMAT_VERSION}")
             }
@@ -117,12 +127,32 @@ pub struct Logged {
     pub command: Command,
 }
 
+/// Where a peer's content came from (D10): shown, recorded, never compared.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PeerRec {
+    pub slot: PlayerId,
+    /// `ContentDb::lineage` of the peer's content.
+    pub lineage: String,
+    /// `ContentDb::packs` of the peer's content, top first.
+    pub packs: Vec<String>,
+}
+
 /// A recorded game.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Replay {
     pub seam_rev: u32,
-    /// `ContentDb::hash` of the content the game ran on.
+    /// `ContentDb::hash` of the content the game ran on: the first eight
+    /// bytes of its rules digest (D10).
     pub content_hash: u64,
+    /// `ContentDb::lineage` of the recording peer's content (format 3).
+    pub lineage: String,
+    /// `ContentDb::packs` of the recording peer's content, top first
+    /// (format 3). Informational: a replay plays on any content whose
+    /// digest matches, whatever its packs are called.
+    pub packs: Vec<String>,
+    /// Every other peer's lineage and packs in a networked game, as the
+    /// host's `Start` lists them (NET-02 fills it); empty for a local game.
+    pub peers: Vec<PeerRec>,
     pub seed: u64,
     pub map: MapDef,
     pub players: Vec<SeatRec>,
@@ -143,6 +173,9 @@ impl Replay {
         Replay {
             seam_rev: SEAM_REV,
             content_hash: setup.content.hash(),
+            lineage: setup.content.lineage().to_owned(),
+            packs: setup.content.packs().to_vec(),
+            peers: Vec::new(),
             seed: setup.seed,
             map: (*setup.map).clone(),
             players: setup
@@ -329,6 +362,12 @@ impl Recorder {
         &self.sim
     }
 
+    /// Records the other peers' lineages and packs (a networked game's
+    /// `Start`); informational, never checked on playback.
+    pub fn record_peers(&mut self, peers: Vec<PeerRec>) {
+        self.replay.peers = peers;
+    }
+
     /// Logs `commands` against the current tick and steps the sim.
     pub fn step(&mut self, commands: &[Command]) -> crate::TickOutput {
         let tick = self.sim.view().tick;
@@ -433,6 +472,33 @@ mod tests {
         assert_eq!(sim.view().tick, 200);
     }
 
+    #[test]
+    fn a_replay_names_its_lineage_and_packs() {
+        let mut s = setup();
+        let content = sta_content::fake::db().with_packs(vec!["STA2 Classic Mod Enhanced Gameplay".into(), "STA2 Classic Mod".into(), "Data".into()]);
+        // Pack names are informational: the digest does not change.
+        assert_eq!(content.hash(), sta_content::fake::db().hash());
+        s.content = Arc::new(content);
+        let mut rec = Recorder::new(&s);
+        rec.record_peers(vec![PeerRec { slot: PlayerId(1), lineage: "sta2classic".into(), packs: vec!["Data".into()] }]);
+        rec.step(&[]);
+        let replay = Replay::decode(&rec.finish().encode()).unwrap();
+        assert_eq!(replay.lineage, "native");
+        assert_eq!(replay.packs, ["STA2 Classic Mod Enhanced Gameplay", "STA2 Classic Mod", "Data"]);
+        assert_eq!(replay.peers[0].packs, ["Data"]);
+        // It plays on content with the same digest, whatever its packs are called.
+        assert!(replay.play(Arc::new(sta_content::fake::db())).is_ok());
+    }
+
+    #[test]
+    fn format_two_is_refused_with_a_clear_error() {
+        let mut bytes = record(10).0.encode();
+        bytes[4..6].copy_from_slice(&2u16.to_le_bytes());
+        let err = Replay::decode(&bytes).unwrap_err();
+        assert_eq!(err, ReplayError::FormatVersion { found: 2 });
+        assert!(err.to_string().contains("older STA64"), "{err}");
+    }
+
     // Genuine pre-integration Recorder output; provenance and old digests
     // are in tests/fixtures/native-control-v1.json. Never regenerate it
     // with a changed writer to make a compatibility test pass.
@@ -516,12 +582,17 @@ mod tests {
         }
         let (old, rest): (LegacyReplay, _) = postcard::take_from_bytes(&NATIVE_V1[6..]).unwrap();
         let mut replay = Replay { seam_rev: old.seam_rev, content_hash: old.content_hash,
+            lineage: String::new(), packs: Vec::new(), peers: Vec::new(),
             seed: old.seed, map: old.map, players: old.players, commands: old.commands,
             digests: old.digests, end_tick: old.end_tick, options: GameOptions::default() };
         assert!(rest.is_empty());
         assert_eq!(replay.seam_rev, 1);
-        replay.seam_rev = SEAM_REV;
+        assert_eq!(replay.content_hash, crate::unit_status_tests::LEGACY_FAKE_CONTENT_HASH);
         let db = Arc::new(sta_content::fake::db());
+        // The old content hash names no current database.
+        assert!(matches!(replay.play(db.clone()), Err(ReplayError::ContentMismatch { .. })));
+        replay.seam_rev = SEAM_REV;
+        replay.content_hash = db.hash();
         // Re-labelling old hashes cannot admit an incompatible history.
         assert!(matches!(replay.play(db.clone()), Err(ReplayError::Desync { tick: 0, .. })));
         // Test old command behaviour separately, removing only the new crew
