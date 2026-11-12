@@ -76,7 +76,7 @@ producer guard; its original tick-5 and tick-35 digests still match. Player
 crew stays 1200 and unit crew stays unknown despite a definition capacity of 300.
 
 Current content-backed worlds now include initialized crew in their full
-canonical hash. Nine earlier digest tests retain their old values as controls:
+canonical hash. Eight earlier current-world digest tests retain their old values as controls:
 a test-only snapshot clone clears only the new crew pools, then checks the
 original digest. Their new full digests are pinned separately. Historical
 command extraction checks every old fixture digest through the same control;
