@@ -297,6 +297,21 @@ to match run "<scenario>"`, `Expect mark "fire.start obj=shooter" by tick 90`,
   which writes `$STA64_BENCH_OUT/marks`; render marks have no source yet). `fire.start`/`fire.end` bracket a burst: shots of one
   hardpoint each no later than `FireGap` after the last ended (`fire.end` is
   the last `Fired` plus the weapon's `duration`).
+- **Measuring marks** (TOOL-16; Refit's `[Marks]` keys of the same names, on
+  both paths since `sta64` writes `Bench::marks()`): `Ordnance=1` adds
+  `ord.new` (`id obj weapon target at`) per shot and `ord.gone` (`id obj
+  weapon at life tgt_at d`) when the shot's hit lands (a shot that never hits
+  has none: the sim has no expiry event), the weapon named by its ordnance
+  ODF (`ordName`) as Refit names it; `OrdnanceSkip=` leaves out weapon ODF
+  prefixes. `State=<ms>` adds a `state` line per named scene object that
+  often (`pos hull sh`, `sp` when it has special energy; no `q`/`ma`/`swa`).
+  `bank` (a command) also writes a `bank` mark. `SimTime=1` puts `t=` (sim
+  seconds) first on every mark. `sta-bench parity` compares `state` as a
+  series (B resampled on A's times: position within `pos`, hull and shields
+  within `hull`, special-energy slope within `slope`), the others one by one
+  (`bank` resources within `hull`, `ord.gone` `d` within `pos` and `life`
+  within `time`); a kind not in the name table is compared by kind and object
+  and named in the notes.
 - **Checks** beyond the typed steps (grammar in `run/check.rs`; `Wait ... until`
   takes any predicate about the present):
 

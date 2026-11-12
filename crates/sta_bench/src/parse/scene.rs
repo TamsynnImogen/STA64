@@ -146,7 +146,7 @@ pub enum Start {
 }
 
 /// `[Marks]`.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MarksSection {
     /// `Enable`, default 1.
     pub enable: bool,
@@ -162,6 +162,9 @@ pub struct MarksSection {
     pub ordnance: bool,
     /// `State`, milliseconds: one `state` mark per scene craft that often.
     pub state_ms: Option<u32>,
+    /// `OrdnanceSkip`: weapon ODF name prefixes `Ordnance=1` leaves out
+    /// (`phaser,fphas` for the beams), lower case.
+    pub ordnance_skip: Vec<String>,
 }
 
 impl Default for MarksSection {
@@ -173,6 +176,7 @@ impl Default for MarksSection {
             sim_time: false,
             ordnance: false,
             state_ms: None,
+            ordnance_skip: Vec::new(),
         }
     }
 }
@@ -576,6 +580,15 @@ fn marks_section(e: &mut Entries, w: &mut Vec<ParseWarning>) -> Result<MarksSect
             int(v).and_then(|n| u32::try_from(n).map_err(|_| "expected milliseconds".into()))
         })?
         .filter(|&n| n > 0),
+        ordnance_skip: e
+            .string("OrdnanceSkip", w)
+            .map(|v| {
+                v.split(',')
+                    .map(|p| p.trim().to_ascii_lowercase())
+                    .filter(|p| !p.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default(),
     })
 }
 
@@ -818,8 +831,9 @@ mod tests {
             }
         );
         // Refit's measuring keys (`bench/measure-marks`): typed, not unknown.
-        let f = parse("[Marks]\nSimTime=1\nOrdnance=1\nState=250\n");
+        let f = parse("[Marks]\nSimTime=1\nOrdnance=1\nState=250\nOrdnanceSkip=phaser, FPHAS\n");
         assert!(f.marks.sim_time && f.marks.ordnance);
+        assert_eq!(f.marks.ordnance_skip, ["phaser", "fphas"]);
         assert_eq!(f.marks.state_ms, Some(250));
         assert!(f.unknown.is_empty());
         assert_eq!(parse("[Marks]\nState=0\n").marks.state_ms, None);

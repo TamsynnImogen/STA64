@@ -129,3 +129,26 @@ fn the_cli_runs_a_pair_on_fake_content() {
     assert_eq!(sta_bench::cli::main(a), 2, "refuses a report inside the checkout");
     let _ = fs::remove_dir_all(&root);
 }
+
+/// TOOL-16: the runner writes the measuring marks the scene's `[Marks]` asks for.
+#[test]
+fn the_runner_writes_measuring_marks() {
+    let desc = PairDesc::load(&pairs().join("firing.ini"), "a2").unwrap();
+    let scene = sta_bench::parse::SceneFile::parse(&desc.scene_text(&["fake"])).unwrap();
+    assert!(scene.marks.sim_time && scene.marks.ordnance && scene.marks.state_ms == Some(250));
+    let mut b = sta_bench::run::Bench::build(Arc::new(RunConfig::fake()), &scene).unwrap();
+    for _ in 0..150 {
+        b.advance();
+    }
+    let _ = b.exec(&sta_bench::parse::BenchCommand::Unknown { verb: "bank".into(), text: "bank 1".into() });
+    let text = sta_bench::run::marks::render(&b, &b.marks());
+    let lines: Vec<&str> = text.lines().collect();
+    let states: Vec<&&str> = lines.iter().filter(|l| l.contains(" state ")).collect();
+    // Every 250 ms (8 ticks rounded) for each of the two named objects, ticks 0..=150.
+    assert_eq!(states.len(), 2 * (150 / 8 + 1), "{text}");
+    assert!(states[0].contains(" t=0.000 ") && states[0].contains(" pos=") && states[0].contains(" hull="), "{}", states[0]);
+    assert!(lines.iter().any(|l| l.contains(" ord.new ") && l.contains(" obj=shooter") && l.contains(" target=target")), "{text}");
+    assert!(lines.iter().any(|l| l.contains(" ord.gone ") && l.contains(" life=") && l.contains(" d=")), "{text}");
+    assert!(lines.iter().any(|l| l.contains(" bank ") && l.contains(" team=1")), "{text}");
+    assert!(lines.iter().all(|l| l.split_whitespace().nth(2).is_some_and(|f| f.starts_with("t="))), "t= first on every mark:\n{text}");
+}

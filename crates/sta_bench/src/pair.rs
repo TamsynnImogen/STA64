@@ -31,7 +31,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use sta_core::{TICK_HZ, Tick};
-use sta_sim::SimEvent;
 
 use crate::parity::{self, PMark, Run, Support};
 use crate::parse::{SceneFile, parse_command};
@@ -581,7 +580,8 @@ pub struct Sta64Run {
 /// STA64's one hardpoint). `marks`: `(tick, kind, obj, weapon, line)`.
 fn merge_bursts(fire: &[(Tick, &'static str, String, String)], gap: Tick) -> Vec<(Tick, &'static str, String, String)> {
     // (obj, weapon) -> intervals
-    let mut open: BTreeMap<(String, String), Vec<(Tick, Option<Tick>)>> = BTreeMap::new();
+    type Intervals = Vec<(Tick, Option<Tick>)>;
+    let mut open: BTreeMap<(String, String), Intervals> = BTreeMap::new();
     for (t, kind, obj, w) in fire {
         let v = open.entry((obj.clone(), w.clone())).or_default();
         match *kind {
@@ -618,13 +618,8 @@ fn merge_bursts(fire: &[(Tick, &'static str, String, String)], gap: Tick) -> Vec
     out
 }
 
-/// The name the original's marks give a weapon: its ordnance ODF (`ordName`,
-/// what Refit reads from the ordnance's class), else the weapon ODF's own name.
 fn ordnance_label(db: &sta_content::ContentDb, weapon_odf: &str) -> String {
-    db.key(weapon_odf)
-        .and_then(|k| db.weapon(k))
-        .and_then(|w| w.raw.str("ordName").map(str::to_owned))
-        .unwrap_or_else(|| weapon_odf.to_owned())
+    db.key(weapon_odf).map_or_else(|| weapon_odf.to_owned(), |k| crate::marks::ordnance_label(db, k))
 }
 
 /// Run the description on STA64's sim in-process and write `dir`
@@ -673,14 +668,18 @@ pub fn run_sta64(scene_text: &str, cfg: Arc<RunConfig>, schedule: &[Timed], end_
     }
     // Events, Refit's names; fire bursts merged per shooter and weapon.
     let mut fire = Vec::new();
-    for m in b.marks() {
+    // The bench's own marks (`ord.new`/`ord.gone` with `Ordnance=1`, `bank`);
+    // its `state` lines are left out for the per-tick ones below.
+    for m in b.marks().into_iter().filter(|m| m.kind != "state") {
         let mut fields: BTreeMap<String, String> = BTreeMap::new();
         for (k, val) in &m.fields {
             let s = match val {
                 crate::marks::Val::Obj(id) => b.name_of(*id),
                 crate::marks::Val::Text(t) => t.clone(),
             };
-            fields.insert((*k).to_owned(), s);
+            if *k != "t" {
+                fields.insert((*k).to_owned(), s);
+            }
         }
         let kind = parity::canonical_ours(m.kind, &fields);
         if kind == "fire.start" || kind == "fire.end" {
@@ -697,17 +696,6 @@ pub fn run_sta64(scene_text: &str, cfg: Arc<RunConfig>, schedule: &[Timed], end_
     }
     for (tick, kind, o, w) in merge_bursts(&fire, gap) {
         lines.push((tick, 2, format!("{kind} t={:.3} obj={o} weapon={w}", secs_of(tick))));
-    }
-    // One ordnance mark per shot, as `[Marks] Ordnance=1` writes them.
-    for (tick, e) in &b.events {
-        if let SimEvent::Fired { shooter, weapon, target, .. } = e {
-            let w = ordnance_label(&cfg.content, cfg.content.name(*weapon).unwrap_or("?"));
-            let tg = match target {
-                sta_sim::command::Target::Entity(id) => b.name_of(*id),
-                _ => "point".into(),
-            };
-            lines.push((*tick, 3, format!("ord.new t={:.3} obj={} weapon={w} target={tg}", secs_of(*tick), b.name_of(*shooter))));
-        }
     }
     // A `state` line per named object every tick (Refit: every `State=` ms).
     for k in 0..=ticks {
@@ -731,7 +719,7 @@ pub fn run_sta64(scene_text: &str, cfg: Arc<RunConfig>, schedule: &[Timed], end_
             ));
         }
     }
-    lines.sort_by(|a, c| (a.0, a.1).cmp(&(c.0, c.1)));
+    lines.sort_by_key(|a| (a.0, a.1));
     let mut marks = String::new();
     for (t, _, l) in &lines {
         let _ = writeln!(marks, "{t} {l}");
@@ -771,7 +759,7 @@ pub fn sta64_run_json(content: &str, run: &Sta64Run, frames: &[(f64, Tick, Optio
             file.as_deref().map_or("null".into(), json::string)
         );
     }
-    let _ = write!(s, "],\"frames_note\":{}}}\n", json::string(frames_note));
+    let _ = writeln!(s, "],\"frames_note\":{}}}", json::string(frames_note));
     s
 }
 
@@ -930,6 +918,12 @@ pub struct Report {
 
 type EvKey = (String, String, String);
 
+/// Kinds paired one by one in the events table; the measuring kinds have
+/// tables of their own (series, ordnance counts).
+fn one_by_one(kind: &str) -> bool {
+    parity::support(kind) == Support::Both && !parity::MEASURING.contains(&kind)
+}
+
 fn event_key(m: &PMark) -> EvKey {
     let w = if m.kind.starts_with("fire.") { m.fields.get("weapon").cloned().unwrap_or_default().to_ascii_lowercase() } else { String::new() };
     (m.kind.clone(), m.obj.clone().unwrap_or_default(), w)
@@ -1010,7 +1004,7 @@ pub fn compare(desc: &PairDesc, refit_dir: &Path, sta_dir: &Path, out: &Path) ->
     js += "],";
 
     // Events.
-    let both = |m: &&PMark| parity::support(&m.kind) == Support::Both;
+    let both = |m: &&PMark| one_by_one(&m.kind);
     let group = |tr: &Trace| {
         let mut g: BTreeMap<EvKey, Vec<f64>> = BTreeMap::new();
         for m in tr.events.iter().filter(both) {
@@ -1066,7 +1060,7 @@ pub fn compare(desc: &PairDesc, refit_dir: &Path, sta_dir: &Path, out: &Path) ->
     js += "],";
     let skipped = |tr: &Trace| {
         let mut m: BTreeMap<String, usize> = BTreeMap::new();
-        for e in tr.events.iter().filter(|m| parity::support(&m.kind) != Support::Both) {
+        for e in tr.events.iter().filter(|m| !one_by_one(&m.kind)) {
             *m.entry(e.kind.clone()).or_default() += 1;
         }
         m

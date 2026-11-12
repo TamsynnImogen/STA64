@@ -58,6 +58,10 @@ pub struct Bench {
     paused: bool,
     pause_at: Option<Tick>,
     pub fire_gap: Tick,
+    /// The scene's `[Marks]`: which measuring marks to write (TOOL-16).
+    pub marks_cfg: crate::parse::scene::MarksSection,
+    /// Marks made by commands (`bank`), in order.
+    pub(crate) command_marks: Vec<Mark>,
     replay: Option<ReplayFeed>,
     rec: Option<Rec>,
     pub log: Vec<String>,
@@ -205,6 +209,8 @@ impl Bench {
             paused: false,
             pause_at: s.pause.map(|p| p.ticks(TICK_HZ)),
             fire_gap: (scene.marks.fire_gap * f64::from(TICK_HZ)).round() as Tick,
+            marks_cfg: scene.marks.clone(),
+            command_marks: Vec::new(),
             replay: replay_feed,
             rec: None,
             log,
@@ -840,15 +846,20 @@ impl Bench {
                     },
                 };
                 let p = v.players.iter().find(|p| p.id == pid).ok_or_else(|| format!("bank: no player {}", pid.0))?;
-                let names = ["dilithium", "latinum", "metal", "biomatter"];
+                const NAMES: [&str; 4] = ["dilithium", "latinum", "metal", "biomatter"];
                 let mut s = format!("bank team {} t={:.3}", pid.0, self.tick() as f64 / f64::from(TICK_HZ));
-                for (i, r) in p.resources.iter().enumerate() {
-                    let n = names.get(i).map_or_else(|| format!("r{i}"), |n| (*n).to_owned());
-                    s += &format!(" {n}={}", to_f64(*r));
+                let mut fields = vec![("team", marks::Val::Text(pid.0.to_string()))];
+                for (i, r) in p.resources.iter().enumerate().take(NAMES.len()) {
+                    s += &format!(" {}={}", NAMES[i], to_f64(*r));
+                    fields.push((NAMES[i], marks::Val::Text(format!("{:.1}", to_f64(*r)))));
                 }
                 if let Some(c) = p.crew {
                     s += &format!(" crew={}", to_f64(c));
+                    fields.push(("crew", marks::Val::Text(format!("{:.1}", to_f64(c)))));
                 }
+                // Also a `bank` mark, as Refit's command writes one.
+                let tick = self.tick();
+                self.command_marks.push(Mark { tick, kind: "bank", fields });
                 s
             }
             C::Colonize { .. } | C::Vent { .. } | C::EndMission { .. } => {

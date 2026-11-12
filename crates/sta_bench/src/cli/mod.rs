@@ -44,7 +44,7 @@ Usage: sta-bench <command> [options]
   diff <report-a> <report-b>       compare report directories; exit 1 when they differ
   parity <refit-out> <ours-out>    Refit's Scene.marks/Scene.objects.jsonl against our marks/objects.jsonl
                                    (run directories, or their logs/): objects by name, marks in sim seconds
-      --tol time=0.1,pos=1,hull=1  tolerances (seconds, world units, points)
+      --tol time=0.1,pos=1,hull=1,slope=0.5  tolerances (seconds, world units, points, special energy per second)
       --names                      print the Refit-to-ours mark-name table
   pair <pair> --game a2|roots      one scene description (bench/pairs/<pair>.ini) on the original game
                                    (Refit's bench, tools/pair/refit_side.py) and on STA64; report.md/.json

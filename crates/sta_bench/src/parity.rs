@@ -70,7 +70,14 @@ pub enum Support {
     Both,
     RefitOnly,
     OursOnly,
+    /// Not in [`NAME_MAP`]: compared by kind and object when both runs have
+    /// it, and named in the diff's notes, never dropped silently.
+    Unknown,
 }
+
+/// The measuring kinds (`[Marks] Ordnance=1`, `State=<ms>`, `bank`; TOOL-16).
+/// `state` is compared as a series per object, the others one by one.
+pub const MEASURING: &[&str] = &["state", "ord.new", "ord.gone", "bank"];
 
 /// One row of the mark-name table. `ours` is the kind (and fields) STA64's
 /// `marks.rs` writes; `refit` is the kind Refit's `Scene.asi` writes; the
@@ -127,13 +134,12 @@ pub const NAME_MAP: &[NameRow] = &[
     row("delivered", "delivered", None, OursOnly, ""),
     row("rejected", "rejected", None, OursOnly, ""),
     row("eliminated", "eliminated", None, OursOnly, ""),
-    // Refit's measuring marks (`[Marks] SimTime=1`, `Ordnance=1`, `State=<ms>`,
-    // `bench/measure-marks`). STA64 writes them only in a paired run
-    // (`sta-bench pair`, `pair.rs`), which compares them as series, not one by one.
-    row("state", "", None, RefitOnly, "a craft's pos/hull/sh/sp every State ms; compared as a series by `sta-bench pair`"),
-    row("ord.new", "", None, RefitOnly, "one ordnance fired; counted per shooter and weapon by `sta-bench pair`"),
-    row("ord.gone", "", None, RefitOnly, "one ordnance gone (life, distance to target)"),
-    row("bank", "", None, RefitOnly, "a team's resources (the `bank` command)"),
+    // Measuring marks (`[Marks] SimTime=1`, `Ordnance=1`, `State=<ms>`; Refit's
+    // `bench/measure-marks`, ours `run/marks.rs`), `t=` in sim seconds.
+    row("state", "state", None, Both, "pos hull sh sp every State ms (ours: no q/ma/swa); compared as a series per object: position, hull, shields, special-energy slope"),
+    row("ord.new", "ord.new", None, Both, "one shot: id obj weapon target at; weapon is the ordnance ODF (ordName) on both"),
+    row("ord.gone", "ord.gone", None, Both, "a shot's end: at life tgt_at d; ours only when it hits (the sim has no expiry event)"),
+    row("bank", "bank", None, Both, "a team's resources by name (the `bank` command); compared within the hull tolerance"),
 ];
 
 /// Support of a canonical kind (`action.*` and `menu.*` are the film
@@ -142,7 +148,7 @@ pub fn support(kind: &str) -> Support {
     if kind.starts_with("action.") || kind.starts_with("menu.") {
         return RefitOnly;
     }
-    NAME_MAP.iter().find(|r| r.refit == kind).map_or(RefitOnly, |r| r.support)
+    NAME_MAP.iter().find(|r| r.refit == kind).map_or(Support::Unknown, |r| r.support)
 }
 
 /// Our kind and fields into Refit's kind.
@@ -483,13 +489,15 @@ pub struct Tolerances {
     pub time: f64,
     /// World units (distance).
     pub pos: f64,
-    /// Hull and shield points.
+    /// Hull and shield points (and resources in `bank`).
     pub hull: f64,
+    /// Special energy per second: the slope of `sp` over a `state` series.
+    pub slope: f64,
 }
 
 impl Default for Tolerances {
     fn default() -> Self {
-        Self { time: 0.1, pos: 1.0, hull: 1.0 }
+        Self { time: 0.1, pos: 1.0, hull: 1.0, slope: 0.5 }
     }
 }
 
@@ -506,7 +514,8 @@ impl Tolerances {
                 "time" => t.time = v,
                 "pos" => t.pos = v,
                 "hull" => t.hull = v,
-                _ => return Err(format!("unknown tolerance `{k}` (time, pos, hull)")),
+                "slope" => t.slope = v,
+                _ => return Err(format!("unknown tolerance `{k}` (time, pos, hull, slope)")),
             }
         }
         Ok(t)
@@ -520,6 +529,13 @@ pub enum Finding {
     MarkOnlyIn { side: char, kind: String, obj: Option<String>, t: f64 },
     MarkTime { kind: String, obj: Option<String>, n: usize, a: f64, b: f64 },
     MarkField { kind: String, obj: Option<String>, n: usize, field: &'static str, a: String, b: String },
+    /// A `state` series: the first sample where `field` (pos distance, hull,
+    /// shields) is beyond tolerance; `a`/`b` the two values (pos: distance in b).
+    Series { obj: String, field: &'static str, t: f64, a: f64, b: f64 },
+    /// A `state` series: special energy per second (least squares) differs.
+    Slope { obj: String, a: f64, b: f64 },
+    /// A `state` series only one run has.
+    SeriesOnlyIn { side: char, obj: String },
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -560,6 +576,15 @@ impl Diff {
                 ),
                 Finding::MarkField { kind, obj, n, field, a, b } => {
                     writeln!(s, "  mark {kind}{} #{n} {field}: {a} vs {b}", o(obj))
+                }
+                Finding::Series { obj, field, t, a, b } => {
+                    writeln!(s, "  state obj={obj} {field} at {t:.3}s: {a:.3} vs {b:.3}")
+                }
+                Finding::Slope { obj, a, b } => {
+                    writeln!(s, "  state obj={obj} special energy slope: {a:.3}/s vs {b:.3}/s")
+                }
+                Finding::SeriesOnlyIn { side: c, obj } => {
+                    writeln!(s, "  state obj={obj} only in {}", side(*c))
                 }
             };
         }
@@ -619,16 +644,54 @@ fn compared_fields(kind: &str) -> &'static [&'static str] {
     match kind {
         "fire.start" | "fire.end" => &["weapon"],
         "destroyed" => &["by"],
+        "ord.new" | "ord.gone" => &["weapon"],
         _ => &[],
     }
 }
 
 type Key = (String, Option<String>);
 
+/// Fields compared as numbers within a tolerance, by kind.
+fn numeric_fields(kind: &str, tol: &Tolerances) -> &'static [(&'static str, ToleranceOf)] {
+    let _ = tol;
+    match kind {
+        "bank" => &[
+            ("dilithium", ToleranceOf::Hull),
+            ("latinum", ToleranceOf::Hull),
+            ("metal", ToleranceOf::Hull),
+            ("biomatter", ToleranceOf::Hull),
+            ("crew", ToleranceOf::Hull),
+            ("officers", ToleranceOf::Hull),
+        ],
+        "ord.gone" => &[("d", ToleranceOf::Pos), ("life", ToleranceOf::Time)],
+        _ => &[],
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ToleranceOf {
+    Time,
+    Pos,
+    Hull,
+}
+
+impl ToleranceOf {
+    fn of(self, t: &Tolerances) -> f64 {
+        match self {
+            ToleranceOf::Time => t.time,
+            ToleranceOf::Pos => t.pos,
+            ToleranceOf::Hull => t.hull,
+        }
+    }
+}
+
 fn group<'a>(r: &'a Run, skipped: &mut BTreeMap<String, usize>) -> BTreeMap<Key, Vec<&'a PMark>> {
     let mut g: BTreeMap<Key, Vec<&PMark>> = BTreeMap::new();
     for m in &r.marks {
-        if support(&m.kind) == Both {
+        if m.kind == "state" {
+            continue;
+        }
+        if matches!(support(&m.kind), Both | Support::Unknown) {
             g.entry((m.kind.clone(), m.obj.clone())).or_default().push(m);
         } else {
             *skipped.entry(m.kind.clone()).or_default() += 1;
@@ -686,6 +749,21 @@ pub fn diff(a: &Run, b: &Run, tol: &Tolerances) -> Diff {
                     b: y.t,
                 });
             }
+            for (f, which) in numeric_fields(kind, tol) {
+                let num = |m: &PMark| m.fields.get(*f).and_then(|v| v.parse::<f64>().ok());
+                if let (Some(p), Some(q)) = (num(x), num(y))
+                    && (p - q).abs() > which.of(tol)
+                {
+                    d.findings.push(Finding::MarkField {
+                        kind: kind.clone(),
+                        obj: obj.clone(),
+                        n: i + 1,
+                        field: f,
+                        a: p.to_string(),
+                        b: q.to_string(),
+                    });
+                }
+            }
             for f in compared_fields(kind) {
                 if let (Some(p), Some(q)) = (x.fields.get(*f), y.fields.get(*f))
                     && !p.eq_ignore_ascii_case(q)
@@ -712,6 +790,25 @@ pub fn diff(a: &Run, b: &Run, tol: &Tolerances) -> Diff {
             }
         }
     }
+    series(a, b, tol, &mut d);
+    let unknown: Vec<String> = {
+        let mut u: Vec<String> = a
+            .marks
+            .iter()
+            .chain(&b.marks)
+            .filter(|m| support(&m.kind) == Support::Unknown)
+            .map(|m| m.kind.clone())
+            .collect();
+        u.sort();
+        u.dedup();
+        u
+    };
+    if !unknown.is_empty() {
+        d.notes.push(format!(
+            "kinds not in the name table, compared by kind and object: {}",
+            unknown.join(", ")
+        ));
+    }
     for (s, sk) in [('A', &sa), ('B', &sb)] {
         if !sk.is_empty() {
             let l = sk.iter().map(|(k, n)| format!("{k} x{n}")).collect::<Vec<_>>().join(", ");
@@ -719,6 +816,98 @@ pub fn diff(a: &Run, b: &Run, tol: &Tolerances) -> Diff {
         }
     }
     d
+}
+
+/// One object's `state` samples: (t, pos, hull, sh, sp).
+type StateRow = (f64, Option<[f64; 3]>, Option<f64>, Option<f64>, Option<f64>);
+
+fn states_of(r: &Run) -> BTreeMap<String, Vec<StateRow>> {
+    let mut m: BTreeMap<String, Vec<StateRow>> = BTreeMap::new();
+    let num = |p: &PMark, k: &str| p.fields.get(k).and_then(|v| v.parse::<f64>().ok());
+    for p in r.marks.iter().filter(|p| p.kind == "state") {
+        let Some(o) = &p.obj else { continue };
+        let pos = p.fields.get("pos").and_then(|v| {
+            let x: Vec<f64> = v.split(',').filter_map(|c| c.parse().ok()).collect();
+            <[f64; 3]>::try_from(x).ok()
+        });
+        m.entry(o.clone()).or_default().push((p.t, pos, num(p, "hull"), num(p, "sh"), num(p, "sp")));
+    }
+    m
+}
+
+/// Linear between samples; `None` outside the series.
+fn interp(s: &[StateRow], t: f64, get: impl Fn(&StateRow) -> Option<[f64; 3]>) -> Option<[f64; 3]> {
+    let i = s.partition_point(|x| x.0 < t);
+    if i < s.len() && (s[i].0 - t).abs() < 1e-9 {
+        return get(&s[i]);
+    }
+    if i == 0 || i == s.len() {
+        return None;
+    }
+    let (x, y) = (&s[i - 1], &s[i]);
+    let (p, q) = (get(x)?, get(y)?);
+    let w = if y.0 > x.0 { (t - x.0) / (y.0 - x.0) } else { 0.0 };
+    Some([0, 1, 2].map(|k| p[k] + (q[k] - p[k]) * w))
+}
+
+/// Least-squares slope of `sp` over time.
+fn slope(s: &[StateRow]) -> Option<f64> {
+    let v: Vec<(f64, f64)> = s.iter().filter_map(|x| Some((x.0, x.4?))).collect();
+    if v.len() < 2 {
+        return None;
+    }
+    let n = v.len() as f64;
+    let (mt, ms) = (v.iter().map(|x| x.0).sum::<f64>() / n, v.iter().map(|x| x.1).sum::<f64>() / n);
+    let den: f64 = v.iter().map(|x| (x.0 - mt).powi(2)).sum();
+    (den > 0.0).then(|| v.iter().map(|x| (x.0 - mt) * (x.1 - ms)).sum::<f64>() / den)
+}
+
+/// `state` series of both runs, B resampled on A's sample times.
+fn series(a: &Run, b: &Run, tol: &Tolerances, d: &mut Diff) {
+    let (sa, sb) = (states_of(a), states_of(b));
+    for (o, xa) in &sa {
+        let Some(xb) = sb.get(o) else {
+            d.findings.push(Finding::SeriesOnlyIn { side: 'A', obj: o.clone() });
+            continue;
+        };
+        let one = |f: fn(&StateRow) -> Option<f64>| move |r: &StateRow| f(r).map(|v| [v, 0.0, 0.0]);
+        type Check = (&'static str, fn(&StateRow) -> Option<f64>, f64);
+        let checks: [Check; 2] =
+            [("hull", |r| r.2, tol.hull), ("shields", |r| r.3, tol.hull)];
+        let mut pos_done = false;
+        let mut done = [false; 2];
+        for r in xa {
+            d.marks_compared += 1;
+            if !pos_done
+                && let (Some(p), Some(q)) = (r.1, interp(xb, r.0, |x| x.1))
+            {
+                let dist = ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2) + (p[2] - q[2]).powi(2)).sqrt();
+                if dist > tol.pos {
+                    d.findings.push(Finding::Series { obj: o.clone(), field: "pos", t: r.0, a: 0.0, b: dist });
+                    pos_done = true;
+                }
+            }
+            for (i, (field, get, lim)) in checks.iter().enumerate() {
+                if done[i] {
+                    continue;
+                }
+                if let (Some(p), Some(q)) = (get(r), interp(xb, r.0, one(*get)).map(|v| v[0]))
+                    && (p - q).abs() > *lim
+                {
+                    d.findings.push(Finding::Series { obj: o.clone(), field, t: r.0, a: p, b: q });
+                    done[i] = true;
+                }
+            }
+        }
+        if let (Some(p), Some(q)) = (slope(xa), slope(xb))
+            && (p - q).abs() > tol.slope
+        {
+            d.findings.push(Finding::Slope { obj: o.clone(), a: p, b: q });
+        }
+    }
+    for o in sb.keys().filter(|o| !sa.contains_key(*o)) {
+        d.findings.push(Finding::SeriesOnlyIn { side: 'B', obj: o.clone() });
+    }
 }
 
 /// The mark-name table as text, for `sta-bench parity --names`.
@@ -734,6 +923,7 @@ pub fn names_table() -> String {
             Both => "both",
             RefitOnly => "refit only",
             OursOnly => "ours only",
+            Support::Unknown => "unknown",
         };
         let _ = writeln!(s, "{:<17} {ours:<18} {sup:<11} {}", r.refit, r.note);
     }
@@ -841,7 +1031,7 @@ mod tests {
         );
         let m: Vec<_> = r.marks.iter().map(|m| (m.kind.as_str(), (m.t * 1000.0).round())).collect();
         assert_eq!(m, [("ready", 0.0), ("cmd", 3470.0), ("state", 3503.0)]);
-        assert_eq!(support("state"), RefitOnly);
+        assert_eq!(support("state"), Both);
         // `fire.end` is dated back in the wall column; its `t=` is FireGap later.
         let mut r = Run::default();
         read_refit_marks(
@@ -851,7 +1041,54 @@ mod tests {
         );
         let fe = r.marks.iter().find(|m| m.kind == "fire.end").unwrap();
         assert!((fe.t - 3.0).abs() < 1e-9, "{}", fe.t);
-        assert_eq!(support("ord.new"), RefitOnly);
+        assert_eq!(support("ord.new"), Both);
+        assert_eq!(support("frobnicate"), Support::Unknown);
+    }
+
+    /// A synthetic run with every measuring kind (TOOL-16), in Refit's format
+    /// with `t=`; `shift` moves `a` after 2 s, `drain` changes its energy slope,
+    /// `gone` keeps or drops the `ord.gone`.
+    fn measuring(shift: f64, drain: f64, gone: bool) -> Run {
+        let mut t = String::from("1000 ready t=0.500 objects=2\n");
+        for i in 0..=20 {
+            let s = f64::from(i) * 0.25;
+            let z = 2000.0 + if s > 2.0 { shift } else { 0.0 };
+            let sp = 100.0 - drain * s;
+            t += &format!("{} state t={:.3} obj=a pos=2000.0,0.0,{z:.1} hull=500.0 sh=400.0 sp={sp:.1}\n", 1000 + i * 250, s + 0.5);
+        }
+        t += "1600 ord.new t=1.100 id=1 obj=a weapon=photono target=b at=2000.0,0.0,2000.0\n";
+        if gone {
+            t += "2100 ord.gone t=1.600 id=1 obj=a weapon=photono at=2000.0,0.0,2290.0 life=0.500 tgt_at=2000.0,0.0,2300.0 d=10.0\n";
+        }
+        t += "2600 bank t=2.100 team=1 dilithium=3500.0 latinum=1000.0 metal=0.0 biomatter=0.0 crew=750.0\n";
+        t += "2700 wobble t=2.200 obj=a\n";
+        let mut r = Run::default();
+        read_refit_marks(&t, &mut r);
+        r
+    }
+
+    #[test]
+    fn measuring_kinds_diff() {
+        let tol = Tolerances::parse("time=0.1,pos=5,hull=1,slope=0.5").unwrap();
+        let base = measuring(0.0, 2.0, true);
+        let same = diff(&base, &base.clone(), &tol);
+        assert!(same.is_empty(), "{}", same.report("a", "b"));
+        assert!(same.marks_compared > 20);
+        // Unknown kinds are named, not dropped.
+        assert!(same.notes.iter().any(|n| n.contains("not in the name table") && n.contains("wobble")), "{:?}", same.notes);
+        // Within tolerance: a 3-unit move, a 0.3/s slope change.
+        assert!(diff(&base, &measuring(3.0, 2.3, true), &tol).is_empty());
+        // Beyond: a moved position, a changed energy slope, a missing ord.gone.
+        let d = diff(&base, &measuring(40.0, 4.0, false), &tol);
+        let r = d.report("a", "b");
+        assert!(d.findings.iter().any(|f| matches!(f, Finding::Series { field: "pos", t, .. } if (*t - 2.25).abs() < 1e-6)), "{r}");
+        assert!(d.findings.iter().any(|f| matches!(f, Finding::Slope { a, b, .. } if (a + 2.0).abs() < 1e-6 && (b + 4.0).abs() < 1e-6)), "{r}");
+        assert!(d.findings.iter().any(|f| matches!(f, Finding::MarkOnlyIn { side: 'A', kind, .. } if kind == "ord.gone")), "{r}");
+        assert_eq!(d.findings.len(), 3, "{r}");
+        // A bank that differs beyond the hull tolerance.
+        let mut b = base.clone();
+        b.marks.iter_mut().find(|m| m.kind == "bank").unwrap().fields.insert("dilithium".into(), "3400.0".into());
+        assert!(matches!(diff(&base, &b, &tol).findings.as_slice(), [Finding::MarkField { field: "dilithium", .. }]));
     }
 
     #[test]
