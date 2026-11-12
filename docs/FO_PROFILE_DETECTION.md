@@ -1,5 +1,13 @@
 # Fleet Operations identity on the base Data layer
 
+> **Which order is in force.** The precedence list in this CON-31 contract
+> is the original. It has been amended (2026-11-12, approved by Tammy): the
+> order that applies is the five-step list under "Amended 2026-11-12" at the
+> end of this document, implemented by CON-43. The original text below is kept
+> for its history; where the two differ, the amendment wins. The CON-31
+> exclusion of `AssetVersion` no longer applies; `[modules]` lists are not
+> read at all (the extensions are native; Tammy, 2026-11-12).
+
 ## Pre-implementation contract (CON-31)
 
 A read-only load of the user's Roots content selected Sta2Classic although
@@ -12,8 +20,9 @@ Move only the existing authored `[Mod] Name` FO check so it applies to every
 VFS layer, including Data. Continue using the existing ASCII-insensitive
 `looks_like_fo` matcher. Keep folder-name hints limited to non-Data layers,
 and retain existing loader, A2-layout and empty-Native fallbacks. Do not inspect
-executable versions, directory paths, AssetVersion or `[modules]` lists to
-invent a second identification policy.
+executable versions, directory paths or AssetVersion to invent a second
+identification policy. (Amended 2026-11-12: `AssetVersion` is now read, see
+the end of this document; `[modules]` lists are not read at all.)
 
 The precedence remains:
 
@@ -129,12 +138,17 @@ receipts stay outside the repository. No original executable was run, no
 installation was modified, and no APK or device/visual acceptance is claimed
 for this source. The appended TODO item remains the user's manual check.
 
-## Proposed amendment (2026-11-12, Cedric; awaiting Tammy's approval)
+## Amended 2026-11-12 (Cedric; approved by Tammy)
 
-**Status: proposal.** Nothing above this heading changes until Tammy approves
-this section. The contract text stays as written; this section sits next to it.
-No code accompanies it. Evidence and its grades are in
-[research/CLASSIC_ENGINE.md](research/CLASSIC_ENGINE.md).
+**Status: approved, in force.** Proposed in #443 and approved by Tammy's merge
+the same day; implemented by CON-43. The CON-31 text above stays as written
+for its history; where it differs, this section wins. Evidence and its grades
+are in [research/CLASSIC_ENGINE.md](research/CLASSIC_ENGINE.md).
+
+**Tammy's review note (2026-11-12):** "probably can get rid of [modules] since
+A2FOExtensions will be fully integrated". Done: module lists are not read at
+all, because STA64 builds those extensions in natively. A mod that has a
+`[modules]` section loads without a warning; the section is ignored.
 
 ### Problem
 
@@ -148,16 +162,15 @@ weapon (its `shotDelay` was changed from 3.5 to 0.1 because the Roots engine
 obeys it) never fires, and the FO resource-name fallback and other `Fo4`
 defaults are chosen or skipped by the wrong rule.
 
-The sentence of the contract this proposal would replace:
+The sentence of the contract this amendment replaced:
 
 > Do not inspect executable versions, directory paths, AssetVersion or
-> `[modules]` lists to invent a second identification policy.
+> lists to invent a second identification policy.
 
-It would become: do not inspect executable versions or hashes, directory
-paths or `[modules]` lists; `AssetVersion` is read as described below, and
-only as described below.
+It is now: do not inspect executable versions or hashes or directory paths;
+`AssetVersion` is read as described below, and only as described below.
 
-### Proposed detection order
+### Detection order
 
 First hit wins.
 
@@ -233,6 +246,30 @@ lineage that includes Classic, which is not "Fleet Operations 4". This proposal
 does not decide it. A rename touches every `Profile::Fo4` use and the profile name in any persisted header, so it deserves
 its own decision.
 
+### Implementation notes (CON-43, 2026-11-12)
+
+- `Profile::detect_with_source` returns a `Detection`: the profile, the step
+  (`Explicit`, `Zfs`, `AssetVersion`, `HostBaseInfo`, `Heuristic`), the file
+  that decided, what was read there, the `packages.ini` version and the
+  warnings. `Profile::detect` is its `.profile`. `ContentDb::load` puts the
+  warnings first in its warning list.
+- Step 2 reads the `AssetVersion` of the top-most layer that states one,
+  `Data` included (the Roots base `Data/info.ini` says 50000). A child mod
+  without one inherits its mod parent's. A value below 50000 does not select
+  the lineage and the later steps go on, so a 30205 mod under a Roots host
+  still loads as Roots (step 3) and gets the warning below.
+- Step 3 finds the host `Data` as the mounted `Data` layer or, for a mod
+  folder under `Data/Mods`, that mod's grandparent. It reads `info.ini` and
+  `packages.ini` there and nothing else; D6 mounting is not touched.
+- Step 4 records `[FleetOps] Version=` (3.2.7 on the FO 3.x and Dominion War
+  installs; the Roots install's own file says 4.0.0). It selects nothing and
+  there is no profile variant for the 3.x engine.
+- The warning: when the detected profile is the Roots lineage, every layer
+  whose `AssetVersion` is below 50000 gets one ("older than the Roots
+  lineage this mod loads under"). A malformed value (not a whole number
+  in `0..=4294967295`) is ignored with a warning, whatever step decided.
+- `Fo4` keeps its name; the rename question below is still open.
+
 ### Tests an implementation must add
 
 Install-gated tests (skip cleanly without the install), using the Roots install:
@@ -256,6 +293,5 @@ Synthetic tests:
 - Detection results are unchanged for the existing `tests/base_profile.rs`
   cases.
 
-The implementation is the WORKPLAN package CON-43, blocked on approval of this
-amendment. After approval, MODDING_DECISIONS.md D4 (lineage order) and D5 would
+The implementation is the WORKPLAN package CON-43 (now unblocked). MODDING_DECISIONS.md D4 (lineage order) and D5 would
 need a follow-up wording change by the normal route; this PR does not touch it.
