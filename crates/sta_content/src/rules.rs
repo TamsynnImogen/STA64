@@ -158,6 +158,23 @@ impl Rules {
         (rules, warnings)
     }
 
+    /// The path planner's rules: the header's, else the stock values.
+    pub fn pathing(&self) -> PathingRules {
+        self.pathing.unwrap_or_default()
+    }
+
+    /// Set the path planner's rules (tests and content built in code).
+    pub fn with_pathing(mut self, pathing: PathingRules) -> Self {
+        self.pathing = Some(pathing);
+        self
+    }
+
+    /// The path planner's values for the content hash; empty when the
+    /// header had none, so content without them keeps its hash.
+    pub(crate) fn pathing_hash_values(&self) -> Vec<u64> {
+        self.pathing.as_ref().map(PathingRules::hash_values).unwrap_or_default()
+    }
+
     /// Read `RTS_CFG.h` as the layers inherit it (D11: a header may include its
     /// own name from the layer below, see [`crate::layered`]). An include
     /// cycle is an error.
@@ -203,5 +220,47 @@ impl Rules {
             }
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod pathing_tests {
+    use super::*;
+
+    /// The PATHING block as Armada II and Fleet Operations ship it.
+    const STOCK: &str = "// PATHING\nint OFF_MAP_PATHING_COST = 90000;\nfloat HIGHEST_QUADTREE_GRID_RESOLUTION = 50.0;\n\
+        int USE_PATH_PLANNING = 1;\nint IMPASSABLE_TERRAIN = -1;\nint DEFAULT_TERRAIN_VALUE = 100;\n\
+        float NEBULAE_PATHING_COST = 300.0;\nfloat NEBULAE_PATHING_SAFETY_COEFFICIENT = 1.8;\n\
+        float COLLISION_SAFETY_MARGIN = 1.2;\n";
+
+    #[test]
+    fn the_stock_header_matches_the_defaults() {
+        let (rules, warnings) = Rules::from_header(STOCK);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(rules.pathing(), PathingRules::default());
+        assert!(!rules.pathing_hash_values().is_empty());
+    }
+
+    #[test]
+    fn a_header_without_the_block_keeps_the_hash_and_the_stock_values() {
+        let (rules, _) = Rules::from_header("int SOMETHING_ELSE = 3;\n");
+        assert_eq!(rules.pathing(), PathingRules::default());
+        assert!(rules.pathing_hash_values().is_empty());
+    }
+
+    #[test]
+    fn a_mod_changes_what_it_sets_and_keeps_the_rest() {
+        let (rules, warnings) = Rules::from_header(
+            "int USE_PATH_PLANNING = 0;\nfloat NEBULAE_PATHING_COST = 450.0;\nint DEFAULT_TERRAIN_VALUE = 100;\nint OFF_MAP_PATHING_COST = DEFAULT_TERRAIN_VALUE * 4;\n",
+        );
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let p = rules.pathing();
+        assert!(!p.enabled);
+        assert_eq!(p.nebula_cost, 450);
+        assert_eq!(p.off_map_cost, 400);
+        assert_eq!(p.nebula_safety, PathingRules::default().nebula_safety);
+        let (bad, warnings) = Rules::from_header("float COLLISION_SAFETY_MARGIN = wide;\n");
+        assert_eq!(bad.pathing().collision_margin, PathingRules::default().collision_margin);
+        assert_eq!(warnings.len(), 1);
     }
 }
