@@ -272,6 +272,14 @@ fn welding_rigs_are_skipped_until_the_building_flag_clears() {
         }).collect::<Vec<_>>()
     };
 
+    // Its own units count even when the view shows them to no one (`hidden = 1`
+    // helpers that are tech-tree prerequisites): it plans from `units`.
+    let unseen = WorldView { units: vec![rig_view(1, false)], visibility: vec![(P0, Vec::new())], ..WorldView::default() };
+    let mut ai = SkirmishController::new(cfg.clone());
+    let mut out = Vec::new();
+    ai.plan(&unseen, &me, &mut out);
+    assert_eq!(builds(&out), [(EntityId(1), station_key)], "an own unit outside the visible set still counts");
+
     assert!(builds(&run(vec![rig_view(1, true)])).is_empty(), "a welding rig must not receive another build order");
     assert_eq!(builds(&run(vec![rig_view(1, true), rig_view(2, false)])), [(EntityId(2), station_key)]);
     assert_eq!(builds(&run(vec![rig_view(1, false)])), [(EntityId(1), station_key)], "the rig is available again once BUILDING clears");
