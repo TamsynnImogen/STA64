@@ -99,6 +99,7 @@ fn current_suffix_is_mandatory_and_rejects_noncanonical_rows() {
     ] {
         let mut bad = bytes[..end].to_vec();
         bad.extend(postcard::to_allocvec(&PersonnelRec { version: 1, rows }).unwrap());
+        bad.extend(postcard::to_allocvec(&UnitCrewRec { version: 1, rows: Vec::new() }).unwrap());
         assert!(Sim::from_snapshot(&bad, Some(setup.content.clone())).is_err());
     }
     let mut bad = bytes[..end].to_vec();

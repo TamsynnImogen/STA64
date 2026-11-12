@@ -253,6 +253,8 @@ fn welding_rigs_are_skipped_until_the_building_flag_clears() {
         speed: Fixed::ZERO,
         hull: [Fixed::ONE; 2],
         shields: [[Fixed::ZERO; 2]; 4],
+        crew: None,
+        energy: None,
         flags: sta_sim::view::UnitFlags::SELECTABLE.with(sta_sim::view::UnitFlags::BUILDING, building),
         progress: None,
     };

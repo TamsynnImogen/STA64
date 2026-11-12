@@ -97,9 +97,10 @@ fn last_unit_killed_eliminates_once() {
         player: PlayerId(2),
         seq: 1
     }));
+    assert_eq!(crate::unit_status_tests::digest_before_crew(&sim), 0x8ed0_6fd5_65be_9495);
     assert_eq!(
         sim.digest(),
-        0x8ed0_6fd5_65be_9495,
+        0xd909_d40c_8ba8_b95b,
         "digest after elimination"
     );
 }

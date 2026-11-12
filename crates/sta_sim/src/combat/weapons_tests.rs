@@ -137,7 +137,8 @@ fn firing_scene_marks_at_expected_ticks() {
     }));
     // Pinned: the digest of the run, mounts and shots included. Moved from
     // 0xe740_56a9_e426_fdd1 when SIM-05 began applying damage (shields drop).
-    assert_eq!(sim.digest(), 0x357d_b900_f0d7_a140);
+    assert_eq!(crate::unit_status_tests::digest_before_crew(&sim), 0x357d_b900_f0d7_a140);
+    assert_eq!(sim.digest(), 0x785b_08b0_2193_3eff);
 }
 
 #[test]

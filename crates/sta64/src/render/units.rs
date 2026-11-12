@@ -633,6 +633,8 @@ mod view_tests {
             speed: Fixed::ZERO,
             hull: [Fixed::from_int(hull), Fixed::from_int(100)],
             shields: [[Fixed::ZERO; 2]; 4],
+            crew: None,
+            energy: None,
             flags,
             progress: None,
         }

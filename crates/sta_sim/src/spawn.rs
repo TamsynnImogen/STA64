@@ -458,6 +458,7 @@ mod tests {
         }
         assert_eq!(sim.tick, 300);
         assert_eq!(sim.units.len(), 6);
+        assert_eq!(crate::unit_status_tests::digest_before_crew(&sim), 0x4098_02e0_f981_8a21);
         (sim.digest(), log)
     }
 
@@ -488,7 +489,7 @@ mod tests {
                 .any(|(_, e)| matches!(e, SimEvent::Rejected { .. })),
             "{log:?}"
         );
-        assert_eq!(digest, 0x4098_02e0_f981_8a21);
+        assert_eq!(digest, 0x9b60_78a5_12a7_c3c0);
     }
 
     #[test]

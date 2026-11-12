@@ -33,6 +33,8 @@ mod ownership;
 mod perception;
 #[cfg(test)]
 mod perception_tests;
+#[cfg(test)]
+mod unit_status_tests;
 pub mod present;
 pub mod production;
 mod avoid;
@@ -337,6 +339,12 @@ impl Sim {
         let units = self.units.iter().map(|entity| {
             let mut view = entity.view();
             view.flags = view.flags.with(view::UnitFlags::BUILDING, self.production.is_welding(entity.id));
+            view.energy = self.specials.energy_of(entity.id).and_then(|now| {
+                self.content.as_deref()
+                    .and_then(|db| db.unit(entity.def))
+                    .and_then(specials::energy_def)
+                    .map(|def| [now, def.max])
+            });
             view
         }).collect();
         let players = self
@@ -404,6 +412,18 @@ impl Sim {
             for (id, owner) in self.perception.iter() {
                 h.u64(id.0 as u64);
                 h.u64(owner.0 as u64);
+            }
+        }
+        let crew_count = self.units.iter().filter(|unit| unit.crew.is_some()).count();
+        if crew_count != 0 {
+            h.str("unit-crew-v1");
+            h.u64(crew_count as u64);
+            for unit in self.units.iter() {
+                if let Some([now, max]) = unit.crew {
+                    h.u64(unit.id.0 as u64);
+                    h.fixed(now);
+                    h.fixed(max);
+                }
             }
         }
         h.0

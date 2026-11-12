@@ -648,7 +648,7 @@ mod target_tests {
         let make = |id, odf, owner| UnitView {
             id: EntityId(id), def: db.key(odf).unwrap(), owner: PlayerId(owner),
             pos: SimVec3::ZERO, heading: (Fixed::ZERO, Fixed::ONE), speed: Fixed::ZERO,
-            hull: [Fixed::ONE; 2], shields: [[Fixed::ZERO; 2]; 4],
+            hull: [Fixed::ONE; 2], shields: [[Fixed::ZERO; 2]; 4], crew: None, energy: None,
             flags: UnitFlags::SELECTABLE, progress: None,
         };
         HudFeed {

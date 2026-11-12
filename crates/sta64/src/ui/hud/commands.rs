@@ -111,6 +111,7 @@ mod tests {
             id: EntityId(1), def: db.key("test_constructor").unwrap(), owner: PlayerId(0),
             pos: Vec3::ZERO, heading: (Fixed::ZERO, Fixed::ONE), speed: Fixed::ZERO,
             hull: [Fixed::ONE; 2], shields: [[Fixed::ZERO; 2]; 4],
+            crew: None, energy: None,
             flags: UnitFlags::SELECTABLE, progress: None,
         };
         let idle = one(&db, &unit);
@@ -177,6 +178,8 @@ mod tests {
             speed: Fixed::ZERO,
             hull: [Fixed::ONE; 2],
             shields: [[Fixed::ZERO; 2]; 4],
+            crew: None,
+            energy: None,
             flags: UnitFlags::SELECTABLE,
             progress: None,
         };
@@ -226,6 +229,7 @@ mod tests {
             id: EntityId(id), def: db.key(name).unwrap(), owner: PlayerId(0),
             pos: Vec3::ZERO, heading: (Fixed::ZERO, Fixed::ONE), speed: Fixed::ZERO,
             hull: [Fixed::ONE; 2], shields: [[Fixed::ZERO; 2]; 4],
+            crew: None, energy: None,
             flags: UnitFlags::SELECTABLE, progress: None,
         };
         let producer_view = make(1, "test_producer");
@@ -278,7 +282,7 @@ mod tests {
         let cap=|name| one(&db,&UnitView {
             id:EntityId(1),def:db.key(name).unwrap(),owner:PlayerId(0),pos:Vec3::ZERO,
             heading:(Fixed::ZERO,Fixed::ONE),speed:Fixed::ZERO,hull:[Fixed::ONE;2],
-            shields:[[Fixed::ZERO;2];4],flags:UnitFlags::SELECTABLE,progress:None,
+            shields:[[Fixed::ZERO;2];4],crew:None,energy:None,flags:UnitFlags::SELECTABLE,progress:None,
         });
         assert!(cap("normal").attack && cap("enabled").attack);
         assert!(!cap("disabled").attack && !cap("pd_only").attack && !cap("special_only").attack);

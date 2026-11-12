@@ -145,6 +145,8 @@ pub struct Entity {
     /// `[now, max]`.
     pub hull: [Fixed; 2],
     pub shields: Shields,
+    /// Current and maximum crew; unknown for bare or legacy entities.
+    pub crew: Option<[Fixed; 2]>,
     pub flags: UnitFlags,
     /// Building or under construction, 0..1.
     pub progress: Option<Fixed>,
@@ -183,6 +185,7 @@ impl Entity {
             stats,
             hull: [Fixed::ZERO; 2],
             shields: Shields::default(),
+            crew: None,
             // Shots in flight are the only thing a player cannot pick.
             flags: if kind == EntityKind::Projectile {
                 UnitFlags::default()
@@ -213,6 +216,9 @@ impl Entity {
         let mut e = Entity::new(kind, def.key, owner, pos, heading, def.movement);
         e.hull = [def.hull; 2];
         e.shields = Shields::full(def.shields.max, features.directional_shields);
+        if matches!(kind, EntityKind::Craft | EntityKind::Station) {
+            e.crew = Some([def.crew.max(Fixed::ZERO); 2]);
+        }
         e
     }
 
@@ -238,6 +244,8 @@ impl Entity {
             shields: self.shields.view(),
             flags: self.flags,
             progress: self.progress,
+            crew: self.crew,
+            energy: None,
         }
     }
 

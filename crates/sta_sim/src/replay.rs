@@ -499,13 +499,27 @@ mod tests {
         assert!(rest.is_empty());
         assert_eq!(replay.seam_rev, 1);
         replay.seam_rev = SEAM_REV;
-        let mut sim = replay.play(Arc::new(sta_content::fake::db())).unwrap();
+        let db = Arc::new(sta_content::fake::db());
+        // Re-labelling old hashes cannot admit an incompatible history.
+        assert!(matches!(replay.play(db.clone()), Err(ReplayError::Desync { tick: 0, .. })));
+        // Test old command behaviour separately, removing only the new crew
+        // metadata from each control digest. The public replay path stays strict.
+        let mut sim = Sim::from_setup(&replay.setup(db).unwrap());
+        for tick in 0..=replay.end_tick {
+            if let Some((_, expected)) = replay.digests.iter().find(|(at, _)| *at == tick) {
+                assert_eq!(crate::unit_status_tests::digest_before_crew(&sim), *expected);
+            }
+            if tick < replay.end_tick {
+                let commands: Vec<_> = replay.commands.iter().filter(|entry| entry.tick == tick).map(|entry| entry.command.clone()).collect();
+                sim.step(&commands);
+            }
+        }
         assert_eq!(sim.view().tick, 600);
-        assert_eq!(sim.digest(), 0xe551_eb38_7ec7_a1ee);
+        assert_eq!(crate::unit_status_tests::digest_before_crew(&sim), 0xe551_eb38_7ec7_a1ee);
         for _ in 0..300 {
             sim.step(&[]);
         }
-        assert_eq!(sim.digest(), 0x2b96_65c4_c00e_0f3b);
+        assert_eq!(crate::unit_status_tests::digest_before_crew(&sim), 0x2b96_65c4_c00e_0f3b);
     }
 
     #[test]

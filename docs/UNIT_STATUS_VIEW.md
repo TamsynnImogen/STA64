@@ -65,3 +65,25 @@ The existing December desktop alpha remains the priority. This is initialized
 unit-status state and presentation, not full crew-economy/boarding/casualty parity.
 The user merges the prerequisite before the client consumes it. Parent UI-18
 remains open for its broader native-reference gate.
+
+
+## Implementation evidence
+
+The core/status snapshot suite passes, including a genuine 274-byte v12/seam3
+fixture produced by preserved pre-change compiled libraries. The fixture and
+`unit-status-v12.json` / `make-unit-status-v12.rs` record input hashes and the
+producer guard; its original tick-5 and tick-35 digests still match. Player
+crew stays 1200 and unit crew stays unknown despite a definition capacity of 300.
+
+Current content-backed worlds now include initialized crew in their full
+canonical hash. Nine earlier digest tests retain their old values as controls:
+a test-only snapshot clone clears only the new crew pools, then checks the
+original digest. Their new full digests are pinned separately. Historical
+command extraction checks every old fixture digest through the same control;
+the real replay path rejects incompatible/relabelled old history. Production
+also checks that completed ships receive the canonical crew pool.
+
+Core, simulation, bench, AI, mission and content unit suites pass (617 tests in
+aggregate); the network crate has no library unit tests. Full client, strict
+Clippy, workspace and Android checks are tracked in the prerequisite PR/private
+receipts. These checks establish the data prerequisite, not the mouseover UI.

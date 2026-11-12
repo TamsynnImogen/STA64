@@ -7,6 +7,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 ## Needs your check
 
+- [?] UI-18 live unit-status prerequisite: current/max crew is now canonical per craft/station and existing live special energy is exposed in UnitView. Snapshot 13 preserves initialized pools; older accepted saves keep unit crew unknown. The mouseover-bar consumer and its new optimized launcher follow separately; do not treat this prerequisite as a completed visual check.
+
 - [?] UI-18 resource colour correction: compare Classic resource numbers with original Armada II (crew green, officers white, dilithium pale cyan, latinum yellow, metal grey); explicit `resource_N_color` overrides still win. Check the new candidate launcher and settled FPS; parent #371 remains open.
 
 - [?] Claimed bug #340: with artillery, check that a target inside weapon range but outside all allied sensors receives no new shots. Bring an allied scout into sight: fire should start; remove the scout: new fire should stop. Already launched projectiles continue.
