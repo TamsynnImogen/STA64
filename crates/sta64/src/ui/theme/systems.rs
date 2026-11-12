@@ -154,7 +154,7 @@ pub fn paint_widgets(
     }
     for (parent, mut tc) in &mut texts {
         let disabled = q.get(parent.parent()).is_ok_and(|(s, ..)| *s == WidgetState::Disabled);
-        let c = if disabled { theme.text_off } else { theme.text_on };
+        let c = if disabled { theme.text_off } else { theme.kit_text_on };
         if tc.color != c {
             tc.color = c;
         }

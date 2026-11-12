@@ -18,7 +18,7 @@ fn pill(theme: &Theme, w: f32) -> Node {
         height: Val::Px(theme.button_h),
         padding: UiRect::horizontal(Val::Px(theme.button_h * 0.5)),
         align_items: AlignItems::Center,
-        justify_content: JustifyContent::FlexEnd,
+        justify_content: if theme.caps_buttons { JustifyContent::FlexEnd } else { JustifyContent::Center },
         border_radius: BorderRadius::MAX,
         ..default()
     }

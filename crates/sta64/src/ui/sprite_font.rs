@@ -25,6 +25,8 @@ use bevy::image::{Image, ImageSampler};
 use bevy::picking::Pickable;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+use bevy::ui::UiScale;
+use bevy::window::PrimaryWindow;
 use sta_vfs::Vfs;
 
 use crate::viewer::Mounted;
@@ -277,6 +279,22 @@ impl SpriteFont {
             }
         }
         Layout { quads, width, height: h * laid.len().max(1) as f32 }
+    }
+}
+
+impl SpriteFont {
+    /// [`layout_block`](Self::layout_block) at an integer `k` times the font's texels, every
+    /// rectangle rounded to whole pixels: glyph texels land on whole physical pixels, so a
+    /// nearest-sampled sheet stays crisp and each pen position is the rounded running
+    /// total of the strips' advances (never a sum of separately rounded ones).
+    pub fn layout_physical(&self, text: &str, k: u32, max_width: Option<f32>, align: Align) -> Layout {
+        let mut lay = self.layout_block(text, k.max(1) as f32, max_width, align);
+        for q in &mut lay.quads {
+            q.rect = q.rect.map(f32::round);
+        }
+        lay.width = lay.width.ceil();
+        lay.height = lay.height.ceil();
+        lay
     }
 }
 
@@ -550,6 +568,29 @@ impl SpriteFonts {
         role.and_then(|r| self.named(r.stem())).or_else(|| self.pick(size))
     }
 
+    /// The font and whole multiple `k` that draw text about `desired` physical pixels tall
+    /// with glyph texels on whole pixels: the named font of the role when the mod has it,
+    /// else the best of all. `k` rounds down (never past what was asked for by more than
+    /// a sixth of a glyph) and a multiple above 1 costs a tenth of `desired`, so a size
+    /// between two fonts takes the nearer font at 1x rather than doubling a small one.
+    pub fn crisp(&self, role: Option<FontRole>, desired: f32) -> Option<(&LoadedFont, u32)> {
+        let k_for = |h: f32| ((desired / h + 0.15).floor() as u32).max(1);
+        let named = role.and_then(|r| self.named(r.stem()));
+        if let Some(f) = named {
+            return Some((f, k_for(f.font.height())));
+        }
+        self.fonts
+            .values()
+            .filter(|f| f.font.height() > 0.0)
+            .map(|f| {
+                let k = k_for(f.font.height());
+                let cost = (f.font.height() * k as f32 - desired).abs() + 0.1 * desired * (k - 1) as f32;
+                (f, k, cost)
+            })
+            .min_by(|a, b| a.2.total_cmp(&b.2).then(a.1.cmp(&b.1)))
+            .map(|(f, k, _)| (f, k))
+    }
+
     /// The font whose glyph height is nearest `size` px.
     pub fn pick(&self, size: f32) -> Option<&LoadedFont> {
         self.fonts.values().min_by(|a, b| {
@@ -760,7 +801,7 @@ fn load_glyph_words(vfs: Option<Res<Mounted>>, mut words: ResMut<GlyphWords>) {
     *words = found.or_else(builtin).unwrap_or_default();
 }
 
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn resolve_text(
     mut commands: Commands,
     fonts: Res<SpriteFonts>,
@@ -772,11 +813,18 @@ fn resolve_text(
         Option<Ref<ScalableText>>,
         Option<&SpriteLaid>,
     )>,
+    ui_scale: Option<Res<UiScale>>,
+    window: Query<&Window, With<PrimaryWindow>>,
+    mut last_px: Local<f32>,
     children: Query<&Children>,
     mut images: Query<&mut ImageNode>,
     mut texts: Query<&mut TextColor, With<Text>>,
 ) {
-    let all = fonts.is_changed() || words.as_ref().is_some_and(|w| w.is_changed());
+    // Physical pixels per logical px (UI scale x the window's scale factor).
+    let px = (ui_scale.map_or(1.0, |u| u.0) * window.single().map_or(1.0, |w| w.scale_factor())).max(0.1);
+    let px_changed = (*last_px - px).abs() > 1e-4;
+    *last_px = px;
+    let all = fonts.is_changed() || px_changed || words.as_ref().is_some_and(|w| w.is_changed());
     for (e, t, style, scalable, laid) in &q {
         let dirty = all
             || t.is_changed()
@@ -814,8 +862,17 @@ fn resolve_text(
             .get(e)
             .map(|children| children.iter().collect())
             .unwrap_or_default();
+        // Styled (kit) text is drawn crisp: a font and whole multiple that put glyph texels
+        // on whole physical pixels. Plain `sprite_text` keeps its scaled drawing.
+        let crisp = if styled && !style.native && scalable.is_none() {
+            fonts.crisp(style.role, t.size * px)
+        } else {
+            None
+        };
         let font = if scalable.is_some() {
             None
+        } else if let Some((f, _)) = crisp {
+            Some(f)
         } else {
             fonts.for_role(style.role, t.size)
         };
@@ -867,11 +924,16 @@ fn resolve_text(
             }
             continue;
         };
-        let scale = if style.native { 1.0 } else { t.size / f.font.height() };
-        let lay = f.font.layout_block(&t.text, scale, style.wrap, style.align);
+        // `inv` turns the layout's units into logical px (physical for crisp text).
+        let (lay, inv) = if let Some((_, k)) = crisp {
+            (f.font.layout_physical(&t.text, k, style.wrap.map(|w| w * px), style.align), 1.0 / px)
+        } else {
+            let scale = if style.native { 1.0 } else { t.size / f.font.height() };
+            (f.font.layout_block(&t.text, scale, style.wrap, style.align), 1.0)
+        };
         commands.entity(e).insert(Node {
-            width: Val::Px(lay.width.ceil()),
-            height: Val::Px(lay.height.ceil()),
+            width: Val::Px(if crisp.is_some() { lay.width * inv } else { lay.width.ceil() }),
+            height: Val::Px(if crisp.is_some() { lay.height * inv } else { lay.height.ceil() }),
             flex_shrink: 0.0,
             ..default()
         });
@@ -894,10 +956,10 @@ fn resolve_text(
                 },
                 Node {
                     position_type: PositionType::Absolute,
-                    left: Val::Px(q.rect[0]),
-                    top: Val::Px(q.rect[1]),
-                    width: Val::Px(q.rect[2]),
-                    height: Val::Px(q.rect[3]),
+                    left: Val::Px(q.rect[0] * inv),
+                    top: Val::Px(q.rect[1] * inv),
+                    width: Val::Px(q.rect[2] * inv),
+                    height: Val::Px(q.rect[3] * inv),
                     ..default()
                 },
                 Pickable::IGNORE,
@@ -1666,7 +1728,7 @@ mod tests {
         app.update();
         let kid = app.world().get::<Children>(c).unwrap()[0];
         assert_eq!(app.world().get::<Node>(c).unwrap().width, Val::Px(100.0));
-        assert_eq!(app.world().get::<Node>(kid).unwrap().left, Val::Px(47.5), "(100 - 5) / 2");
+        assert_eq!(app.world().get::<Node>(kid).unwrap().left, Val::Px(48.0), "(100 - 5) / 2, rounded to a whole pixel");
     }
 
     /// A label built before the install is mounted picks up the mod's font once it loads.
@@ -1752,5 +1814,132 @@ mod tests {
         assert_eq!(t.0.get(&0x7f).map(String::as_str), Some("0"));
         assert_eq!(t.0.get(&0x24).map(String::as_str), Some(" "));
         assert_eq!(t.0.len(), 32);
+    }
+
+    fn font_of_height(name: &str, h: f32) -> LoadedFont {
+        let mut f = ttf_like(h);
+        f.name = name.into();
+        LoadedFont::new(f, vec![])
+    }
+
+    #[test]
+    fn crisp_choice_takes_a_whole_multiple_of_the_nearer_font() {
+        let mut fonts = SpriteFonts::default();
+        for (n, h) in [("a", 14.0), ("b", 19.0), ("c", 23.0)] {
+            fonts.fonts.insert(n.into(), font_of_height(n, h));
+        }
+        let pick = |d: f32| {
+            let (f, k) = fonts.crisp(None, d).unwrap();
+            (f.font.name.clone(), k)
+        };
+        assert_eq!(pick(20.0), ("b".into(), 1));
+        // 3440x1440 body text: 20 logical x 1.333 = 26.7 physical: the 23 px font at 1x, not a doubled 14.
+        assert_eq!(pick(26.7), ("c".into(), 1));
+        // 4K: 40 physical px takes the 19 px font at 2x (38).
+        assert_eq!(pick(40.0), ("b".into(), 2));
+        // A named font wins over the nearest height, at the whole multiple that fits.
+        fonts.fonts.insert("fontmedium".into(), font_of_height("fontmedium", 17.0));
+        let (f, k) = fonts.crisp(Some(FontRole::Medium), 40.0).unwrap();
+        assert_eq!((f.font.name.as_str(), k), ("fontmedium", 2));
+    }
+
+    /// Glyph rectangles land on whole physical pixels and each pen position is the running
+    /// total of the strips' advances, at every multiple and UI scale.
+    #[test]
+    fn crisp_layout_is_whole_pixels_with_exact_advances() {
+        let h = 19.0;
+        let font = ttf_like(h);
+        let text = "Federation campaign";
+        for k in 1..=3u32 {
+            let lay = font.layout_physical(text, k, None, Align::Left);
+            let mut pen = 0.0f32;
+            for (q, ch) in lay.quads.iter().zip(text.chars()) {
+                assert_eq!(q.rect.map(|v| v.fract()), [0.0; 4], "{ch}: {:?} at {k}x", q.rect);
+                assert_eq!(q.rect[2], font.glyph(windows_1252(ch)).unwrap().1.w * k as f32, "{ch}: width is the strip's advance x {k}");
+                assert_eq!(q.rect[3], h * k as f32);
+            }
+            // Positions are the running sum of advances x k.
+            let mut x = 0.0;
+            let mut want = Vec::new();
+            for c in text.chars() {
+                let w = font.glyph(windows_1252(c)).unwrap().1.w * k as f32;
+                want.push(x); // spaces have a (blank) quad too
+                x += w;
+            }
+            let got: Vec<f32> = lay.quads.iter().map(|q| q.rect[0]).collect();
+            assert_eq!(got, want, "{k}x");
+            assert_eq!(lay.width, x);
+        }
+        // On screen: logical px x UiScale give whole physical pixels (1440/1080 and 2.0).
+        for ui in [1440.0f32 / 1080.0, 2.0, 1.0] {
+            let lay = font.layout_physical(text, 1, None, Align::Left);
+            for q in &lay.quads {
+                for v in q.rect {
+                    let logical = v / ui;
+                    assert!((logical * ui - v).abs() < 1e-3 && (logical * ui).fract().abs() < 1e-3);
+                }
+            }
+        }
+    }
+
+    /// Resolves styled text crisp at the window's physical scale: whole-pixel glyph nodes.
+    #[test]
+    fn styled_text_resolves_to_whole_physical_pixels_under_a_ui_scale() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<SpriteFonts>()
+            .init_resource::<GlyphWords>()
+            .insert_resource(UiScale(1440.0 / 1080.0))
+            .add_systems(Update, resolve_text);
+        let mut f = ttf_like(19.0);
+        f.name = "fontmedium".into();
+        let mut lf = LoadedFont::new(f, vec![(Handle::default(), UVec2::new(256, 256))]);
+        lf.font.reference = None;
+        app.world_mut().resource_mut::<SpriteFonts>().fonts.insert("fontmedium".into(), lf);
+        let e = app.world_mut().spawn(sprite_text_styled("Federation campaign", 20.0, Color::WHITE, SpriteTextStyle::role(FontRole::Medium))).id();
+        app.update();
+        let ui = 1440.0f32 / 1080.0;
+        let kids: Vec<Entity> = app.world().get::<Children>(e).unwrap().iter().collect();
+        assert!(!kids.is_empty());
+        for k in kids {
+            let n = app.world().get::<Node>(k).unwrap();
+            for v in [n.left, n.top, n.width, n.height] {
+                let Val::Px(v) = v else { panic!("px") };
+                let phys = v * ui;
+                assert!((phys - phys.round()).abs() < 1e-3, "{phys} is not a whole physical pixel");
+            }
+        }
+        // A UI scale change re-resolves.
+        app.insert_resource(UiScale(2.0));
+        app.update();
+        let kid = app.world().get::<Children>(e).unwrap()[0];
+        let Val::Px(w) = app.world().get::<Node>(kid).unwrap().width else { panic!() };
+        assert!(((w * 2.0) - (w * 2.0).round()).abs() < 1e-3);
+    }
+
+    /// Install-gated: the installs' own fonts, at the multiples the menus would use.
+    #[test]
+    fn installed_fonts_lay_out_crisp() {
+        for (label, root, m) in installs() {
+            let Ok(vfs) = Vfs::mount_install(&root, m.as_deref()) else { continue };
+            for font in read_fonts(&vfs) {
+                if !matches!(font.name.as_str(), "fontsmall" | "fontfinal4_13") {
+                    continue;
+                }
+                for k in 1..=2u32 {
+                    let lay = font.layout_physical("Federation campaign", k, None, Align::Left);
+                    let mut x = 0.0f32;
+                    let mut want = Vec::new();
+                    for c in "Federation campaign".chars() {
+                        let g = font.glyph(windows_1252(c)).map_or(0.0, |g| g.1.w) * k as f32;
+                        want.push(x.round());
+                        x += g;
+                    }
+                    let got: Vec<f32> = lay.quads.iter().map(|q| q.rect[0]).collect();
+                    assert_eq!(got, want, "{label}: {} at {k}x", font.name);
+                    assert!(lay.quads.iter().all(|q| q.rect.iter().all(|v| v.fract() == 0.0)), "{label}: {}", font.name);
+                }
+            }
+        }
     }
 }
