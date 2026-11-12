@@ -819,6 +819,38 @@ impl Bench {
                 );
                 "ok".into()
             }
+            C::Unknown { verb, text } if verb == "bank" => {
+                // Refit's `bank [<team> | <object>]` (read-only): a team's resources,
+                // `bank team 1 t=12.300 dilithium=... latinum=... metal=... biomatter=...`.
+                // STA64 keeps resources per player, and team N is player N here.
+                let arg = text.split_whitespace().nth(1);
+                let v = self.view();
+                let pid = match arg {
+                    None => v.players.first().map(|p| p.id).ok_or("no player")?,
+                    Some(a) => match a.parse::<u8>() {
+                        Ok(n) => PlayerId(n),
+                        Err(_) => {
+                            let id = self.resolve(a)?;
+                            v.units
+                                .iter()
+                                .find(|u| u.id == id)
+                                .map(|u| u.owner)
+                                .ok_or_else(|| format!("bank: `{a}` is gone"))?
+                        }
+                    },
+                };
+                let p = v.players.iter().find(|p| p.id == pid).ok_or_else(|| format!("bank: no player {}", pid.0))?;
+                let names = ["dilithium", "latinum", "metal", "biomatter"];
+                let mut s = format!("bank team {} t={:.3}", pid.0, self.tick() as f64 / f64::from(TICK_HZ));
+                for (i, r) in p.resources.iter().enumerate() {
+                    let n = names.get(i).map_or_else(|| format!("r{i}"), |n| (*n).to_owned());
+                    s += &format!(" {n}={}", to_f64(*r));
+                }
+                if let Some(c) = p.crew {
+                    s += &format!(" crew={}", to_f64(c));
+                }
+                s
+            }
             C::Colonize { .. } | C::Vent { .. } | C::EndMission { .. } => {
                 return Err("unsupported: colonize/vent/succeed/fail".into());
             }

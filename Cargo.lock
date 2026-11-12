@@ -5547,6 +5547,7 @@ dependencies = [
 name = "sta_bench"
 version = "0.1.0"
 dependencies = [
+ "png",
  "sta_bzn",
  "sta_content",
  "sta_core",

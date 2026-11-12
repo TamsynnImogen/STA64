@@ -11,11 +11,13 @@ thiserror.workspace = true
 sta_core.workspace = true
 sta_content.workspace = true
 sta_sim.workspace = true
+# Paired scenes (TOOL-15): content from an install, frames read and written as PNG.
+sta_vfs.workspace = true
+png = "0.18"
 
 [[bin]]
 name = "sta-bench"
 path = "src/bin/sta-bench.rs"
 
 [dev-dependencies]
-sta_vfs.workspace = true
 sta_bzn.workspace = true

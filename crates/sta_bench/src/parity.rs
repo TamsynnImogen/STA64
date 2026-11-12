@@ -127,6 +127,13 @@ pub const NAME_MAP: &[NameRow] = &[
     row("delivered", "delivered", None, OursOnly, ""),
     row("rejected", "rejected", None, OursOnly, ""),
     row("eliminated", "eliminated", None, OursOnly, ""),
+    // Refit's measuring marks (`[Marks] SimTime=1`, `Ordnance=1`, `State=<ms>`,
+    // `bench/measure-marks`). STA64 writes them only in a paired run
+    // (`sta-bench pair`, `pair.rs`), which compares them as series, not one by one.
+    row("state", "", None, RefitOnly, "a craft's pos/hull/sh/sp every State ms; compared as a series by `sta-bench pair`"),
+    row("ord.new", "", None, RefitOnly, "one ordnance fired; counted per shooter and weapon by `sta-bench pair`"),
+    row("ord.gone", "", None, RefitOnly, "one ordnance gone (life, distance to target)"),
+    row("bank", "", None, RefitOnly, "a team's resources (the `bank` command)"),
 ];
 
 /// Support of a canonical kind (`action.*` and `menu.*` are the film
@@ -139,7 +146,7 @@ pub fn support(kind: &str) -> Support {
 }
 
 /// Our kind and fields into Refit's kind.
-fn canonical_ours(kind: &str, fields: &BTreeMap<String, String>) -> String {
+pub(crate) fn canonical_ours(kind: &str, fields: &BTreeMap<String, String>) -> String {
     for r in NAME_MAP.iter().filter(|r| r.ours == kind && !r.ours.is_empty()) {
         match r.ours_when {
             Some((k, v)) if fields.get(k).map(String::as_str) == Some(v) => return r.refit.into(),
@@ -367,13 +374,38 @@ fn split_mark_line(line: &str) -> Option<(u64, &str, &str)> {
 
 /// Refit's `Scene.marks`: `TICK kind k=v ...` in `GetTickCount()` ms, `epoch`
 /// lines skipped. Time 0 is the `ready` mark, else the first mark.
+///
+/// With `[Marks] SimTime=1` every mark carries `t=`, the simulation's seconds;
+/// then the marks are placed by `t=` (minus the `ready` mark's), never by the
+/// wall clock, which runs at another rate than the sim on Roots and whenever
+/// the game speed is not 1.
 pub fn read_refit_marks(text: &str, run: &mut Run) {
-    let raw: Vec<(u64, &str, &str)> = text.lines().filter_map(split_mark_line).collect();
-    let origin = raw.iter().find(|r| r.1 == "ready").or(raw.first()).map_or(0, |r| r.0);
-    for (tick, kind, tail) in raw {
-        // GetTickCount wraps at 2^32 ms; the difference as i32 survives it.
-        let ms = f64::from((tick as u32).wrapping_sub(origin as u32) as i32);
-        run.marks.push(mark(ms / 1000.0, kind.to_owned(), fields_of(tail)));
+    let raw: Vec<(u64, &str, BTreeMap<String, String>)> = text
+        .lines()
+        .filter_map(split_mark_line)
+        .map(|(t, k, tail)| (t, k, fields_of(tail)))
+        .collect();
+    let sim_t = |f: &BTreeMap<String, String>| f.get("t").and_then(|t| t.parse::<f64>().ok());
+    if raw.iter().any(|r| sim_t(&r.2).is_some()) {
+        let origin = raw
+            .iter()
+            .find(|r| r.1 == "ready")
+            .and_then(|r| sim_t(&r.2))
+            .or_else(|| raw.iter().find_map(|r| sim_t(&r.2)))
+            .unwrap_or(0.0);
+        for (_, kind, fields) in raw {
+            // A line without `t=` (none are written so) has no place on the axis.
+            if let Some(t) = sim_t(&fields) {
+                run.marks.push(mark(t - origin, kind.to_owned(), fields));
+            }
+        }
+    } else {
+        let origin = raw.iter().find(|r| r.1 == "ready").or(raw.first()).map_or(0, |r| r.0);
+        for (tick, kind, fields) in raw {
+            // GetTickCount wraps at 2^32 ms; the difference as i32 survives it.
+            let ms = f64::from((tick as u32).wrapping_sub(origin as u32) as i32);
+            run.marks.push(mark(ms / 1000.0, kind.to_owned(), fields));
+        }
     }
     run.marks.sort_by(|a, b| a.t.total_cmp(&b.t));
 }
@@ -775,6 +807,21 @@ mod tests {
         let d = diff(&a, &b, &Tolerances::default());
         assert!(matches!(d.findings.as_slice(), [Finding::MarkOnlyIn { side: 'A', .. }]));
         assert!(d.notes.iter().any(|n| n.contains("cloak.done") && n.contains("ready")));
+    }
+
+    #[test]
+    fn sim_time_marks_use_t_not_the_wall_clock() {
+        // Roots ran 1.7x faster than the wall clock here: wall says 2.04 s, sim 3.47 s.
+        let mut r = Run::default();
+        read_refit_marks(
+            "epoch 0x01dd72e4 0x41d2ebeb 17629000\n17629080 ready t=1.297 objects=9\n\
+             17631119 cmd t=4.767 text=select I0\n17631200 state t=4.800 obj=I0 pos=1,0,2 hull=10 sh=5 sp=0\n",
+            &mut r,
+        );
+        let m: Vec<_> = r.marks.iter().map(|m| (m.kind.as_str(), (m.t * 1000.0).round())).collect();
+        assert_eq!(m, [("ready", 0.0), ("cmd", 3470.0), ("state", 3503.0)]);
+        assert_eq!(support("state"), RefitOnly);
+        assert_eq!(support("ord.new"), RefitOnly);
     }
 
     #[test]

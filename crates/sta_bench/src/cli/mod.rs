@@ -8,12 +8,14 @@
 //! sta-bench drive --session ID "<command>"...
 //! sta-bench diff <report-a> <report-b>
 //! sta-bench parity <refit-out> <ours-out> [--tol time=0.1,pos=1,hull=1] | --names
+//! sta-bench pair <pair> --game a2|roots [--refit-out DIR] [--install DIR] [--fake] [--out DIR]
 //! ```
 //!
 //! The logic is a library so `sta64`'s own tests can drive it with the binary
 //! they were built with; `src/bin/sta-bench.rs` is a shell around [`main`].
 
 mod diff;
+mod pair;
 mod parity;
 mod session;
 mod tier2;
@@ -44,6 +46,16 @@ Usage: sta-bench <command> [options]
                                    (run directories, or their logs/): objects by name, marks in sim seconds
       --tol time=0.1,pos=1,hull=1  tolerances (seconds, world units, points)
       --names                      print the Refit-to-ours mark-name table
+  pair <pair> --game a2|roots      one scene description (bench/pairs/<pair>.ini) on the original game
+                                   (Refit's bench, tools/pair/refit_side.py) and on STA64; report.md/.json
+                                   with events, state series and frames side by side, in sim seconds.
+                                   Exit 1 when something is beyond the pair's tolerances
+      --refit-out DIR              reuse an original-side run (refit.json ...) instead of starting one
+      --refit ROOT                 the Refit checkout the driver uses (default $REFIT_ROOT)
+      --install DIR, --mod NAME    STA64's content (default $STA64_TEST_INSTALL; the mod from Mod=)
+      --fake                       STA64 on the bench's fake content instead (tests)
+      --no-frames                  no sta64 --headless frame run
+      --out DIR                    where the pair's report goes (default $XDG_DATA_HOME/sta64/bench/pairs/<pair>-<game>)
 
 Common options:
   --bench-dir <dir>                directory holding scenes/ and scenarios/ (default: the repository's bench/)
@@ -68,6 +80,13 @@ pub(crate) struct Opts {
     pub repeat: u32,
     pub tol: Option<String>,
     pub names: bool,
+    pub game: Option<String>,
+    pub refit_out: Option<PathBuf>,
+    pub refit: Option<PathBuf>,
+    pub install: Option<PathBuf>,
+    pub mod_name: Option<String>,
+    pub fake: bool,
+    pub no_frames: bool,
     pub timeout: u64,
     pub rest: Vec<String>,
 }
@@ -96,6 +115,13 @@ fn parse(args: Vec<String>) -> Result<Opts, String> {
             }
             "--tol" => o.tol = Some(val(&a)?),
             "--names" => o.names = true,
+            "--game" => o.game = Some(val(&a)?),
+            "--refit-out" => o.refit_out = Some(val(&a)?.into()),
+            "--refit" => o.refit = Some(val(&a)?.into()),
+            "--install" => o.install = Some(val(&a)?.into()),
+            "--mod" => o.mod_name = Some(val(&a)?),
+            "--fake" => o.fake = true,
+            "--no-frames" => o.no_frames = true,
             "--frame-size" => o.frame_size = Some(val(&a)?),
             "--repeat" => o.repeat = val(&a)?.parse().map_err(|_| "--repeat: a number")?,
             "--timeout" => o.timeout = val(&a)?.parse().map_err(|_| "--timeout: seconds")?,
@@ -146,6 +172,7 @@ pub fn main(args: Vec<String>) -> i32 {
         "drive" => session::drive(&o),
         "diff" => diff::diff(&o),
         "parity" => parity::parity(&o),
+        "pair" => pair::pair(&o),
         other => Err(Fail::Usage(format!("unknown command `{other}`"))),
     };
     match result {
