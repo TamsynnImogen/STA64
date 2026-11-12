@@ -42,3 +42,28 @@ no-inferred-start regression tests; startup warning coverage; authored colour
 translation tests. Scoped Rust tests, strict Clippy, workspace/all-target and
 Android ARM64 library compilation precede publishing. Stage an optimized
 manual desktop build; native visual acceptance remains the user's check.
+
+## Confirmed font-colour mapping
+
+The pinned stock Armada2.exe SHA-256
+`8d3ba6ec826198daf3e0c7b3435e9ce8195293e56da7c87e0af2634eaa4693b3`
+loads `infoTextColor` in `FUN_004eff80` (string reference at `0x4f0642`)
+and copies it into both single and builder name/class GUIText objects.
+The clean FleetOpsHook pseudocode at
+`pseudocode/clean/full-20261021/functions/0x1ee05c.c` (DLL SHA-256
+`b53e91281be33ee998e30bd971b6c944cb4f5fb2174fb9f0cc756ca3ef94e8a9`)
+then overrides those pairs independently with `nameTextColor` and
+`classTextColor`. This is static evidence, not original-game execution.
+
+The stock renderer now uses these native keys with its existing
+`infoSingleNameTextColor` / `infoSingleClassTextColor` compatibility overrides
+retained at highest priority. Missing colours keep the theme fallback.
+`shipNameColor` controls the separate name above the panel. Resource text
+already uses the authored `resource_N_color` keys. Hull/shield status text
+remains unchanged; disabled bar colours are not text colours.
+
+The current Classic `gui_interface.cfg` explicitly authors magenta
+`infoTextColor` and `shipNameColor`. FO4 authors white names/info and grey
+(`0.65 0.65 0.65`) class text. These are mod data, not new engine constants.
+A fresh REA evidence bundle is retained privately under
+`STA64-artifacts/probes/ui17/native-ui18-font-colours-20261112.json`.
