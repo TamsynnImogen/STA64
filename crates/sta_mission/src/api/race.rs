@@ -1,11 +1,15 @@
 //! `Race`: `Race.find(name)`, `Race.getAll()` and race values.
 //!
-//! The races a mission can name are the ones the loaded content defines: every
-//! non-empty `race` of a unit definition (the same string `Entity.race` and
-//! `Player.race` return). Nothing is hard-coded; with no content the set is
-//! empty and `find` returns nil. `Race.name` is that string; MMM's
-//! `displayName`, `number`, `boardingStrength` and `repairStrength` are not
-//! bound here (they fall back to the permissive stubs).
+//! The races a mission can name are, for now, the distinct non-empty `race` of
+//! the loaded unit definitions (the same string `Entity.race` and `Player.race`
+//! return). Nothing is hard-coded; with no content the set is empty and `find`
+//! returns nil. The authoritative list is `races.odf` (`sta_content::Races`,
+//! which also has display names and slots), but `ContentDb` does not keep it
+//! and the mission config does not carry it: a race with no unit definition
+//! (a script-only race) is therefore not found until that is exposed (a
+//! content-side seam, listed in docs/LUA05_COMPLETION.md). `Race.name` is the
+//! string; `displayName`, `number`, `boardingStrength` and `repairStrength`
+//! are not bound (a race value answers them with the permissive stubs).
 
 use std::collections::BTreeSet;
 
@@ -23,6 +27,8 @@ impl UserData for Race {
     }
 
     fn add_methods<M: mlua::UserDataMethods<Self>>(m: &mut M) {
+        // `displayName`, `number` and the strengths are not bound: permissive stubs.
+        m.add_meta_method(mlua::MetaMethod::Index, |lua, _, _: Value| super::stub(lua));
         m.add_meta_method(mlua::MetaMethod::Eq, |_, a, b: mlua::UserDataRef<Race>| Ok(a.0 == b.0));
         m.add_meta_method(mlua::MetaMethod::ToString, |_, r, ()| Ok(r.0.clone()));
     }

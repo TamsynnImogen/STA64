@@ -602,51 +602,50 @@ fn finder_predicates_are_isolated_and_errors_remain_visible() {
 }
 
 #[test]
-fn officer_limit_assignment_is_a_noop_at_the_rule_value_and_recorded_otherwise() {
-    use crate::runtime::MissionRuntime;
-    let rt = MissionRuntime::from_source(
-        "limits.lua",
-        "local cur = Player(0).maxOfficers; Player(0).maxOfficers = cur; Player(0).maxOfficers = cur + 1; T = 0",
-        1,
-    );
-    assert!(rt.errors().is_empty(), "{:?}", rt.errors());
-    let unsupported = rt.unsupported();
-    assert_eq!(unsupported.len(), 1, "{unsupported:?}");
-    assert!(unsupported[0].0.starts_with("Player.maxOfficers"), "{unsupported:?}");
-}
-
-#[test]
-fn entity_race_and_crew_assignments_do_not_abort_the_callback() {
-    use crate::runtime::MissionRuntime;
-    let mut rt = MissionRuntime::from_source(
-        "set.lua",
-        "MMM.register(function() local e = EntityFinder():find()[1]; if e then e.race = Race.find('fx'); e.crew = 5 end; DONE = true end)",
-        1,
-    );
-    rt.step(1);
-    assert!(rt.errors().is_empty(), "{:?}", rt.errors());
-    assert!(rt.eval::<bool>("return DONE == true").unwrap());
+fn officer_limit_assignment_is_a_noop_at_the_limit_in_force_and_recorded_otherwise() {
+    let mut g = game("MMM.register(function() local cur = Player(0).maxOfficers; Player(0).maxOfficers = cur; Player(0).maxOfficers = cur + 1; Player(0).maxCrew = cur end)");
+    g.run(2);
+    let unsupported = g.rt.unsupported();
+    let officers: Vec<_> = unsupported.iter().filter(|(n, _)| n.starts_with("Player.maxOfficers")).collect();
+    // Two callbacks (two ticks) each assign cur + 1 once; the equal assignments are not recorded.
+    assert_eq!(officers.len(), 1, "{unsupported:?}");
+    assert_eq!(officers[0].1, 2, "{unsupported:?}");
+    assert!(!unsupported.iter().any(|(n, _)| n.starts_with("Player.maxCrew")), "{unsupported:?}");
 }
 
 #[test]
 fn recorded_assignments_keep_the_callback_running_and_name_each_gap() {
-    use crate::runtime::MissionRuntime;
-    let mut rt = MissionRuntime::from_source(
-        "set2.lua",
+    let mut g = game(
         "MMM.register(function()
             local p = Player(0)
             p.race = Race.find('fx'); p.color = Color(1, 0, 0); p.name = 'x'
             local e = EntityFinder():find()[1]
-            if e then e.shields = 1.0; e.movementAutonomy = 1; e.forward = Vector(1, 0, 0); e.omega = Vector(0, 1, 0) end
+            e.race = Race.find('fx'); e.crew = 5; e.shields = 1.0; e.movementAutonomy = 1
+            e.specialWeaponAutonomy = 1; e.forward = Vector(1, 0, 0); e.omega = Vector(0, 1, 0); e.name = 'n'
             DONE = true
         end)",
-        1,
     );
-    rt.step(1);
-    assert!(rt.errors().is_empty(), "{:?}", rt.errors());
-    assert!(rt.eval::<bool>("return DONE == true").unwrap());
-    let names: Vec<String> = rt.unsupported().into_iter().map(|(n, _)| n).collect();
-    for want in ["Player.race", "Player.color", "Player.name"] {
+    g.run(2);
+    assert!(g.global::<bool>("DONE"));
+    let names: Vec<String> = g.rt.unsupported().into_iter().map(|(n, _)| n).collect();
+    for want in [
+        "Player.race", "Player.color", "Player.name", "Entity.race", "Entity.crew", "Entity.shields",
+        "Entity.movementAutonomy", "Entity.specialWeaponAutonomy", "Entity.forward", "Entity.omega", "Entity.name",
+    ] {
         assert!(names.iter().any(|n| n.starts_with(want)), "{want} in {names:?}");
     }
+}
+
+#[test]
+fn condition_monitor_and_text_input_callbacks_get_a_hook_object_like_installed_scripts() {
+    let mut g = game(
+        "seen = {}
+        local m = Monitor('done', false, nil, function() return true end, nil)
+        m:hook('onDone', MonitorHook.Type.OnTrue, nil, function(monitor, hook)
+            seen[#seen+1] = hook.argument; seen[#seen+1] = hook.id
+        end, 7)",
+    );
+    g.run(2);
+    assert_eq!(g.global::<i64>("seen[1]"), 7);
+    assert_eq!(g.global::<String>("seen[2]"), "onDone");
 }

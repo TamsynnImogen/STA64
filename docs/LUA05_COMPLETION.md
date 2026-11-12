@@ -157,16 +157,25 @@ Partial slice of #149 from the installed-mission report (LUA-04), pure
 install base (`STA64_TEST_MOD=""`, 36 maps with a Lua mission, 300 ticks):
 run 2 / stubbed 0 / failed 34 before, run 6 / stubbed 11 / failed 19 after.
 
-- `Timer:hook` callbacks get `(timer, hook)` with `hook.argument` and
-  `hook.id`, as `Timer Tutorial.lua` reads them; a table argument's fields stay
-  reachable on the hook object for callers written against the plain value.
+- Hook callbacks get a hook object with `hook.argument` and `hook.id` as the
+  installed scripts read them: `Timer:hook` (`Timer Tutorial.lua`), condition
+  `Monitor` hooks (`Premonitions_Buildup.lua`) and `TextInput:hook`
+  (`TextInput Tutorial.lua`). A table argument's fields stay reachable on the
+  hook object for callers written against the plain value; scalar arguments
+  must now be read as `hook.argument` (a contract change; existing tests were
+  updated). A nil timer argument still defaults to the hook id (earlier bridge
+  behaviour, no installed script depends on it).
 - `Race.find(name)` / `Race.getAll()` and a race value with `name`, over the
-  races the loaded content defines (distinct unit-definition `race` strings;
-  no content, no races). MMM's `displayName`, `number` and strengths are not bound.
-- `Player(n).maxOfficers = x` (and `maxCrew`): a no-op when `x` equals the live
-  limit or any limit the rules define (`RTS_CFG.h` `SINGLE_PLAYER_OFFICER_LIMIT`,
-  `MP_OFFICER_LIMIT`, typed in `sta_content` `Rules`), which is every installed
-  use (199999); other values are recorded as unsupported.
+  distinct unit-definition `race` strings (no content, no races). MMM's
+  `displayName`, `number` and strengths are not bound. The authoritative list is
+  `races.odf` (`sta_content::Races`); a script-only race such as `freeborg`
+  is not found until content exposes it (seam below).
+- `Player(n).maxOfficers = x` (and `maxCrew`): a no-op when `x` equals the limit
+  in force (typed in `sta_content` `Rules` from `RTS_CFG.h`
+  `SINGLE_PLAYER_OFFICER_LIMIT` / `MP_OFFICER_LIMIT`; every installed use assigns
+  199999, the `unitcap_normal` value); any other value is recorded as
+  unsupported. A headless setup without a chosen limit reports 0, so there the
+  installed calls are recorded too.
 - Assignments the sim has no edit for are accepted and recorded in
   `MissionRuntime::unsupported()` instead of aborting the callback with
   "unknown field": `Entity.race`, `crew`, `shields`, `movementAutonomy`,
@@ -176,7 +185,8 @@ run 2 / stubbed 0 / failed 34 before, run 6 / stubbed 11 / failed 19 after.
 Seams these need (not worked around): a sim race edit, mutable crew, a shield
 percent edit (unmerged `seam/lua05-shield-edits`), movement and special-weapon
 autonomy, heading and angular velocity edits, entity and player names, a
-per-player officer-limit edit, player colour and name in the game setup. Open
+per-player officer-limit edit, player colour and name in the game setup, and
+the `races.odf` list (display names, slots) exposed by content to missions. Open
 report items not addressed: `giveOrder Go` with no point (path and `Craft`
 binding), the `Craft` and `Color` globals, duplicate Timer ids re-created in
 callbacks, `Objectives:load` of non-UTF-8 files, entities missing from the

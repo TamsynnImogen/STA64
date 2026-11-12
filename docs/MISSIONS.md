@@ -236,7 +236,7 @@ The metadata identifies these parameter positions; the following timing is an
 explicit STA64 bridge policy. Each active predicate runs once per tick before
 mission updates, in registration order, as `predicate(monitor, argument)`.
 It must return a boolean. `OnTrue` fires on a false-to-true edge relative to the
-initial state, committed before `callback(monitor, argument)`. Nil arguments
+initial state, committed before `callback(monitor, hook)` (`hook.argument`, `hook.id`, as installed scripts read them). Nil arguments
 are preserved. Named `.id` is the string ID and `.state` is the last boolean;
 legacy event monitor fields keep their previous behavior.
 
@@ -486,7 +486,7 @@ frontend input producer.
 
 The observed converted tutorial call is
 `TextInput:hook(id, receiverTable, callback, argument, luaPattern)`.
-The callback receives `(receiverTable, text, argument)`, preserving nil.
+The callback receives `(receiverTable, text, hook)` with `hook.argument` (nil preserved) and `hook.id`.
 IDs and patterns must be UTF-8 strings, patterns are bounded to 4096 bytes,
 and duplicate active IDs raise an error. Matching uses the builtin Lua
 `string.find` captured when the runtime installs the binding. An empty-subject

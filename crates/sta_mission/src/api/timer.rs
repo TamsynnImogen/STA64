@@ -322,22 +322,6 @@ pub(crate) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
     lua.globals().raw_set("Timer", class)
 }
 
-/// The second callback argument. Installed MMM scripts (`Timer Tutorial.lua`)
-/// read the value given to `:hook` as `hook.argument` (and `hook.id`). When
-/// the value is a table its fields stay reachable on the hook object too, so
-/// callers written against the plain-value shape keep working.
-fn hook_object(lua: &Lua, id: &str, value: Value) -> mlua::Result<mlua::Table> {
-    let hook = lua.create_table()?;
-    hook.raw_set("id", id)?;
-    if let Value::Table(t) = &value {
-        let meta = lua.create_table()?;
-        meta.raw_set("__index", t.clone())?;
-        hook.set_metatable(Some(meta))?;
-    }
-    hook.raw_set("argument", value)?;
-    Ok(hook)
-}
-
 /// Update due state before callbacks and keep no Ctx borrow across Lua calls.
 pub(crate) fn fire_timers(lua: &Lua, ctx: &Shared, errors: &mut Vec<String>) {
     let mut firings = Vec::new();
@@ -386,7 +370,7 @@ pub(crate) fn fire_timers(lua: &Lua, ctx: &Shared, errors: &mut Vec<String>) {
         crate::sandbox::refill(lua);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let handle = lua.create_userdata(Timer(index, ctx.clone()))?;
-            func.call::<MultiValue>((handle, hook_object(lua, &hook_id, value)?))
+            func.call::<MultiValue>((handle, super::hook_object(lua, &hook_id, value)?))
         }));
         let err = match result {
             Ok(Ok(_)) => continue,
