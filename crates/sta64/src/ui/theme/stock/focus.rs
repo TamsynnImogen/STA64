@@ -74,9 +74,42 @@ pub fn focusable_ancestor(w: &World, mut e: Entity) -> Option<Entity> {
     }
 }
 
+/// Marks the root of a modal screen (an options menu over the match, an editor
+/// dialog): while any exists, Tab walks only the focusables inside scopes.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct FocusScope;
+
+/// Whether the kit wants the keyboard or the wheel this frame, for game systems to
+/// check before acting on the same input (match hotkeys while typing, camera zoom
+/// while the pointer scrolls a list, the screen's Back on an Escape that closed a
+/// dropdown).
+#[derive(Resource, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct KitCapture {
+    /// A text field has focus, or the focused dropdown is open.
+    pub keyboard: bool,
+    /// The pointer is over an open dropdown list or a scrolling list.
+    pub pointer: bool,
+}
+
+/// Whether `e` and everything above it is displayed.
+pub fn is_displayed(w: &World, mut e: Entity) -> bool {
+    loop {
+        if w.get::<Node>(e).is_some_and(|n| n.display == Display::None) {
+            return false;
+        }
+        match w.get::<ChildOf>(e) {
+            Some(p) => e = p.parent(),
+            None => return true,
+        }
+    }
+}
+
 /// Every focusable, enabled, displayed widget in tree order.
 pub fn focus_order(w: &mut World) -> Vec<Entity> {
-    let mut roots: Vec<Entity> = w.query_filtered::<Entity, (With<Node>, Without<ChildOf>)>().iter(w).collect();
+    let mut roots: Vec<Entity> = w.query_filtered::<Entity, With<FocusScope>>().iter(w).collect();
+    if roots.is_empty() {
+        roots = w.query_filtered::<Entity, (With<Node>, Without<ChildOf>)>().iter(w).collect();
+    }
     roots.sort();
     let mut out = Vec::new();
     let mut stack: Vec<Entity> = roots.into_iter().rev().collect();
@@ -115,7 +148,11 @@ pub fn move_focus(w: &mut World, back: bool) {
 /// closes dropdowns the press is outside of and focuses the nearest focusable.
 pub fn press(w: &mut World, hits: &[Entity]) {
     super::dropdown::dismiss_outside(w, hits);
-    let focus = hits.first().and_then(|e| focusable_ancestor(w, *e));
+    // A disabled widget does not take focus (and leaves none behind).
+    let focus = hits
+        .first()
+        .and_then(|e| focusable_ancestor(w, *e))
+        .filter(|f| w.get::<WidgetState>(*f) != Some(&WidgetState::Disabled));
     w.resource_mut::<KitFocus>().0 = focus;
 }
 
@@ -148,16 +185,22 @@ pub fn kit_key(w: &mut World, key: KitKey) {
     if w.get_resource::<crate::platform::LifecycleGate>().is_some_and(|gate| !gate.is_foreground()) {
         return;
     }
-    let Some(e) = w.get_resource::<KitFocus>().and_then(|f| f.0) else {
+    let mut focused = w.get_resource::<KitFocus>().and_then(|f| f.0);
+    // Focus on something despawned or hidden (a tab panel switched away) is dropped,
+    // and the key goes on as if nothing had focus.
+    if let Some(e) = focused
+        && (w.get_entity(e).is_err() || !is_displayed(w, e))
+    {
+        super::dropdown::close(w, e);
+        w.resource_mut::<KitFocus>().0 = None;
+        focused = None;
+    }
+    let Some(e) = focused else {
         if key.code == KeyCode::Tab {
             move_focus(w, key.shift);
         }
         return;
     };
-    if w.get_entity(e).is_err() {
-        w.resource_mut::<KitFocus>().0 = None;
-        return;
-    }
     if key.code == KeyCode::Tab {
         super::dropdown::close(w, e);
         move_focus(w, key.shift);
@@ -180,6 +223,35 @@ pub fn kit_key(w: &mut World, key: KitKey) {
         // Buttons, toggles and check boxes.
         crate::ui::theme::click(w, e);
         super::checkbox::click(w, e);
+    }
+}
+
+/// Publish [`KitCapture`] for this frame.
+pub(super) fn capture(
+    focus: Res<KitFocus>,
+    fields: Query<(), With<super::TextField>>,
+    dropdowns: Query<&super::Dropdown>,
+    hover: Res<HoverMap>,
+    areas: Query<(), With<super::ScrollArea>>,
+    parents: Query<&ChildOf>,
+    mut out: ResMut<KitCapture>,
+) {
+    let keyboard = focus.0.is_some_and(|e| fields.contains(e) || dropdowns.get(e).is_ok_and(|d| d.open));
+    let pointer = hovered(&hover).into_iter().any(|h| {
+        let mut e = h;
+        loop {
+            if areas.contains(e) {
+                return true;
+            }
+            match parents.get(e) {
+                Ok(p) => e = p.parent(),
+                Err(_) => return false,
+            }
+        }
+    });
+    let now = KitCapture { keyboard, pointer };
+    if *out != now {
+        *out = now;
     }
 }
 

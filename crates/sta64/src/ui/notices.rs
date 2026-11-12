@@ -318,7 +318,7 @@ fn text(theme: &Theme, s: String, size: f32, color: Color) -> impl Bundle {
 
 /// The tooltip wraps at the box's width.
 fn tip_style(theme: &Theme) -> SpriteTextStyle {
-    SpriteTextStyle::role(super::theme::font_role(theme, theme.small_size)).wrapped(theme.text_size * 20.0 - 2.0 * theme.pad)
+    SpriteTextStyle::role(super::theme::font_role(theme, theme.small_size)).wrapped(theme.text_size * 20.0 - 2.0 * theme.pad - 4.0)
 }
 
 fn spawn_roots(mut commands: Commands, theme: Res<Theme>) {
@@ -420,7 +420,7 @@ fn draw_notices(
             commands.entity(root).with_child((
                 Node { padding: UiRect::axes(Val::Px(theme.pad), Val::Px(2.0)), max_width: Val::Percent(NOTICE_WIDTH_PCT), ..default() },
                 BackgroundColor(theme.panel.with_alpha(0.6)),
-                children![(NoticeLine(i), text(&theme, a.shown(), theme.text_size, colour(&theme, a.severity)))],
+                children![(NoticeLine(i), sprite_text_styled(a.shown(), theme.text_size, colour(&theme, a.severity), SpriteTextStyle::role(super::theme::font_role(&theme, theme.text_size)).wrap_to_parent()))],
             ));
         }
         return;

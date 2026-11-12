@@ -486,3 +486,113 @@ fn stock_labels_are_light_on_the_dark_pills() {
         assert!(lum(t.text) - lum(t.track) > 0.4, "{profile:?}: field text contrast");
     }
 }
+
+#[test]
+fn a_real_click_on_a_row_chooses_and_does_not_reopen_the_list() {
+    use bevy::picking::events::PointerClick;
+    use bevy::picking::pointer::{Location, PointerButton};
+    let mut app = app();
+    let d = open_dropdown(&mut app, &["A", "B", "C"]);
+    kit_click(app.world_mut(), d);
+    app.update();
+    let row = popup_rows(&mut app)[1].1;
+    // The event bubbles row -> list -> field, as the picking backend sends it.
+    let camera = app.world_mut().spawn_empty().id();
+    app.world_mut().trigger(PointerClick {
+        entity: row,
+        pointer: bevy::picking::events::Pointer::new(
+            PointerId::Mouse,
+            Location { target: bevy::camera::NormalizedRenderTarget::None { width: 1, height: 1 }, position: Vec2::ZERO },
+        ),
+        button: PointerButton::Primary,
+        hit: HitData::new(camera, 0.0, None, None),
+        duration: std::time::Duration::ZERO,
+        count: 1,
+    });
+    app.update();
+    let dd = app.world().get::<Dropdown>(d).unwrap();
+    assert_eq!((dd.selected, dd.open), (1, false), "chosen, and still closed");
+    assert!(popup_rows(&mut app).is_empty());
+}
+
+#[test]
+fn focus_on_a_hidden_panel_is_dropped_and_the_next_tab_is_not_lost() {
+    let mut app = app();
+    let theme = app.world().resource::<Theme>().clone();
+    let bar = app.world_mut().spawn(tab_bar(&theme, &["A", "B"], 0)).id();
+    let panel = app.world_mut().spawn(tab_panel(bar, 0)).id();
+    let f = app.world_mut().spawn((text_field(&theme, "", "", 100.0, 8, TextFilter::Any), ChildOf(panel))).id();
+    let other = app.world_mut().spawn(checkbox(&theme, "x", false)).id();
+    app.update();
+    press(app.world_mut(), &[f]);
+    assert_eq!(app.world().resource::<KitFocus>().0, Some(f));
+    let tabs: Vec<Entity> = app.world().get::<Children>(bar).unwrap().iter().collect();
+    kit_click(app.world_mut(), tabs[1]);
+    app.update();
+    // The panel is hidden: typing goes nowhere and Tab moves on at once.
+    kit_key(app.world_mut(), KitKey::typed("z"));
+    assert_eq!(app.world().get::<TextField>(f).unwrap().text, "");
+    assert_eq!(app.world().resource::<KitFocus>().0, None);
+    kit_key(app.world_mut(), KitKey::code(KeyCode::Tab));
+    assert!(app.world().resource::<KitFocus>().0.is_some());
+    let _ = other;
+}
+
+#[test]
+fn a_disabled_widget_does_not_take_focus_and_scopes_confine_tab() {
+    let mut app = app();
+    let theme = app.world().resource::<Theme>().clone();
+    let off = app.world_mut().spawn(checkbox(&theme, "off", false)).id();
+    app.world_mut().entity_mut(off).insert(WidgetState::Disabled);
+    press(app.world_mut(), &[off]);
+    assert_eq!(app.world().resource::<KitFocus>().0, None);
+    // A modal scope: Tab walks only inside it.
+    let behind = app.world_mut().spawn(checkbox(&theme, "behind", false)).id();
+    let modal = app.world_mut().spawn((Node::default(), FocusScope)).id();
+    let inside = app.world_mut().spawn((checkbox(&theme, "inside", false), ChildOf(modal))).id();
+    app.update();
+    assert_eq!(focus_order(app.world_mut()), vec![inside]);
+    let _ = behind;
+}
+
+#[test]
+fn the_kit_reports_when_it_wants_the_keyboard_or_the_wheel() {
+    let mut app = app();
+    let theme = app.world().resource::<Theme>().clone();
+    let f = app.world_mut().spawn(text_field(&theme, "", "", 100.0, 8, TextFilter::Any)).id();
+    app.update();
+    assert_eq!(*app.world().resource::<KitCapture>(), KitCapture::default());
+    press(app.world_mut(), &[f]);
+    app.update();
+    assert!(app.world().resource::<KitCapture>().keyboard);
+    let l = app.world_mut().spawn(scroll_list(&theme, &["a", "b"], None, 2)).id();
+    let camera = app.world_mut().spawn_empty().id();
+    app.world_mut().resource_mut::<HoverMap>().insert(PointerId::Mouse, [(l, HitData::new(camera, 0.0, None, None))].into_iter().collect());
+    app.update();
+    assert!(app.world().resource::<KitCapture>().pointer);
+}
+
+#[test]
+fn an_open_list_is_rebuilt_when_the_option_texts_change() {
+    let mut app = app();
+    let d = open_dropdown(&mut app, &["A", "B"]);
+    kit_click(app.world_mut(), d);
+    app.update();
+    app.world_mut().get_mut::<Dropdown>(d).unwrap().options = vec!["X".into(), "Y".into()];
+    app.update();
+    app.update();
+    let row = popup_rows(&mut app)[0].1;
+    let kid = app.world().get::<Children>(row).unwrap().iter().find_map(|k| app.world().get::<SpriteText>(k)).unwrap();
+    assert_eq!(kid.text, "X");
+}
+
+#[test]
+fn a_locked_hud_style_label_still_dims() {
+    // Labels that are plain `Text` (the HUD's command cells) are dimmed by the shared painter.
+    let mut app = app();
+    let theme = app.world().resource::<Theme>().clone();
+    let cell = app.world_mut().spawn((WidgetState::Disabled, BackgroundColor(Color::NONE), Node::default())).id();
+    let lab = app.world_mut().spawn((crate::ui::theme::ButtonText, Text::new("X"), TextColor(theme.text_on), ChildOf(cell))).id();
+    app.update();
+    assert_eq!(app.world().get::<TextColor>(lab).unwrap().0, theme.text_off);
+}

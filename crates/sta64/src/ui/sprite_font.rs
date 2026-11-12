@@ -318,7 +318,9 @@ pub fn coloured_glyphs(font: &SpriteFont, page: usize, tex: UVec2, rgba: &[u8]) 
     let mut out = Vec::new();
     for code in FIRST_CODE..=255u8 {
         let Some((gp, g)) = font.glyph(code) else { continue };
-        if gp != page || g.w <= 0.0 {
+        // Letters and digits are text even in a font drawn in colour; only the other
+        // codes can be pictures.
+        if gp != page || g.w <= 0.0 || code.is_ascii_alphanumeric() {
             continue;
         }
         let r = texel_rect(font.reference, tex, [g.x, g.y, g.w, p.height]);
@@ -690,6 +692,9 @@ pub struct SpriteTextStyle {
     /// Tint coloured glyphs (resource symbols) like the rest; they are drawn untinted
     /// by default.
     pub tint_all: bool,
+    /// Wrap to the parent's width once the text is wider than it (a notice line in a
+    /// box with a maximum width). Kept up to date by `fit_wrap` from the last layout.
+    pub wrap_parent: bool,
 }
 
 #[allow(dead_code)]
@@ -705,10 +710,24 @@ impl SpriteTextStyle {
         self.align = Align::Right;
         self
     }
+    pub fn wrap_to_parent(mut self) -> Self {
+        self.wrap_parent = true;
+        self
+    }
     pub fn wrapped(mut self, width: f32) -> Self {
         self.wrap = Some(width);
         self
     }
+}
+
+/// What a [`SpriteText`] was last laid out as: a change of colour alone (a fade) then
+/// recolours the glyphs instead of laying the text out again.
+#[derive(Component, Clone, Debug)]
+pub struct SpriteLaid {
+    text: String,
+    size: f32,
+    /// Per glyph quad: drawn untinted.
+    untinted: Vec<bool>,
 }
 
 /// A [`sprite_text`] bundle with a style (and the `Node` a UI entity needs).
@@ -732,7 +751,13 @@ fn load_glyph_words(vfs: Option<Res<Mounted>>, mut words: ResMut<GlyphWords>) {
         let table = GlyphWords::parse(&String::from_utf8_lossy(&bytes));
         (!table.0.is_empty()).then_some(table)
     });
-    *words = found.unwrap_or_default();
+    // Roots' fonts draw its resource icons and unit classes as pictures: without a table
+    // from the mod, the TTF shows the words Refit's fleetops set names for them.
+    let builtin = || {
+        (sta_content::Profile::detect(&vfs.0) == sta_content::Profile::Fo4)
+            .then(|| GlyphWords::parse(include_str!("../../assets/ui/glyphs-fleetops.ini")))
+    };
+    *words = found.or_else(builtin).unwrap_or_default();
 }
 
 #[allow(clippy::type_complexity)]
@@ -745,18 +770,40 @@ fn resolve_text(
         Ref<SpriteText>,
         Option<Ref<SpriteTextStyle>>,
         Option<Ref<ScalableText>>,
+        Option<&SpriteLaid>,
     )>,
     children: Query<&Children>,
-    images: Query<(), With<ImageNode>>,
-    texts: Query<(), With<Text>>,
+    mut images: Query<&mut ImageNode>,
+    mut texts: Query<&mut TextColor, With<Text>>,
 ) {
     let all = fonts.is_changed() || words.as_ref().is_some_and(|w| w.is_changed());
-    for (e, t, style, scalable) in &q {
+    for (e, t, style, scalable, laid) in &q {
         let dirty = all
             || t.is_changed()
             || style.as_ref().is_some_and(|s| s.is_changed())
             || scalable.as_ref().is_some_and(|s| s.is_added());
         if !dirty {
+            continue;
+        }
+        // Only the colour changed: recolour what is there.
+        let only_colour = !all
+            && !style.as_ref().is_some_and(|s| s.is_changed())
+            && !scalable.as_ref().is_some_and(|s| s.is_added())
+            && laid.is_some_and(|l| l.text == t.text && l.size == t.size);
+        if only_colour {
+            let laid = laid.unwrap();
+            for (i, kid) in children.get(e).into_iter().flat_map(|c| c.iter()).enumerate() {
+                if let Ok(mut img) = images.get_mut(kid) {
+                    let want = if laid.untinted.get(i).copied().unwrap_or(false) { Color::WHITE } else { t.color };
+                    if img.color != want {
+                        img.color = want;
+                    }
+                } else if let Ok(mut c) = texts.get_mut(kid)
+                    && c.0 != t.color
+                {
+                    c.0 = t.color;
+                }
+            }
             continue;
         }
         let style = style.as_deref().cloned().unwrap_or_default();
@@ -803,6 +850,7 @@ fn resolve_text(
                 };
                 commands.entity(e).insert(node);
             }
+            commands.entity(e).insert(SpriteLaid { text: t.text.clone(), size: t.size, untinted: Vec::new() });
             if let Some(&child) = existing.first().filter(|child| texts.contains(**child)) {
                 commands.entity(child).insert(label);
                 for &stale in &existing[1..] {
@@ -825,16 +873,15 @@ fn resolve_text(
             ..default()
         });
         let mut used = 0;
+        let mut untinted = Vec::new();
         for q in &lay.quads {
             let Some((image, tex)) = f.pages.get(q.page) else {
                 continue;
             };
             let rect = texel_rect(f.font.reference, *tex, q.src);
-            let colour = if !style.tint_all && f.coloured.contains(&q.code) {
-                Color::WHITE
-            } else {
-                t.color
-            };
+            let picture = !style.tint_all && f.coloured.contains(&q.code);
+            untinted.push(picture);
+            let colour = if picture { Color::WHITE } else { t.color };
             let glyph = (
                 ImageNode {
                     image: image.clone(),
@@ -865,6 +912,35 @@ fn resolve_text(
         for &stale in existing.iter().skip(used) {
             commands.entity(stale).despawn();
         }
+        commands.entity(e).insert(SpriteLaid { text: t.text.clone(), size: t.size, untinted });
+    }
+}
+
+/// `wrap_parent` text wraps to its parent's content width once it is wider (from the
+/// last frame's layout); a changed text starts unwrapped again.
+fn fit_wrap(
+    mut q: Query<(&ChildOf, &ComputedNode, &mut SpriteTextStyle, Ref<SpriteText>)>,
+    parents: Query<&ComputedNode>,
+) {
+    for (parent, node, mut style, text) in &mut q {
+        if !style.wrap_parent {
+            continue;
+        }
+        let Ok(p) = parents.get(parent.parent()) else { continue };
+        let k = p.inverse_scale_factor();
+        let (pad, border) = (p.padding(), p.border());
+        let avail = p.size().x * k - (pad.min_inset.x + pad.max_inset.x + border.min_inset.x + border.max_inset.x) * k;
+        let own = node.size().x * node.inverse_scale_factor();
+        let want = if avail > 1.0 && own > avail + 0.5 {
+            Some(avail.floor())
+        } else if text.is_changed() {
+            None
+        } else {
+            style.wrap
+        };
+        if style.wrap != want {
+            style.wrap = want;
+        }
     }
 }
 
@@ -874,6 +950,7 @@ impl Plugin for SpriteFontPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SpriteFonts>()
             .init_resource::<GlyphWords>()
+            .add_systems(Update, fit_wrap)
             .add_systems(
                 PostUpdate,
                 (load_fonts, load_glyph_words, resolve_text)
@@ -1446,7 +1523,8 @@ mod tests {
         // within a tolerance of the TTF block.
         let block = font.layout_block(PARAGRAPH, 1.0, Some(w), Align::Left);
         let widest = baked.iter().map(|l| ttf.measure(l, h)).fold(0.0, f32::max);
-        assert!((block.width - widest).abs() <= 0.5 * PARAGRAPH.len() as f32 / baked.len() as f32 + h);
+        let longest = baked.iter().map(|l| l.chars().count()).max().unwrap() as f32;
+        assert!((block.width - widest).abs() <= 0.5 * longest, "{} vs {widest}", block.width);
         assert_eq!(block.height, h * sprite.len() as f32);
     }
 
@@ -1642,5 +1720,34 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A fade changes only the colour: the glyph nodes are reused and recoloured.
+    #[test]
+    fn a_colour_change_recolours_without_laying_out_again() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).init_resource::<SpriteFonts>().init_resource::<GlyphWords>().add_systems(Update, resolve_text);
+        app.world_mut().resource_mut::<SpriteFonts>().fonts.insert("F".into(), test_font());
+        let e = app.world_mut().spawn(sprite_text(" !", 12.0, Color::WHITE)).id();
+        app.update();
+        let before: Vec<Entity> = app.world().get::<Children>(e).unwrap().iter().collect();
+        app.world_mut().get_mut::<SpriteText>(e).unwrap().color = Color::srgb(1.0, 0.0, 0.0);
+        app.update();
+        let after: Vec<Entity> = app.world().get::<Children>(e).unwrap().iter().collect();
+        assert_eq!(before, after);
+        assert_eq!(app.world().get::<ImageNode>(after[1]).unwrap().color, Color::srgb(1.0, 0.0, 0.0));
+        // A changed text still lays out.
+        app.world_mut().get_mut::<SpriteText>(e).unwrap().text = " ".into();
+        app.update();
+        assert_eq!(app.world().get::<Children>(e).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn the_builtin_fleetops_glyph_table_parses() {
+        let t = GlyphWords::parse(include_str!("../../assets/ui/glyphs-fleetops.ini"));
+        assert_eq!(t.0.get(&0x85).map(String::as_str), Some("Dilithium"));
+        assert_eq!(t.0.get(&0x7f).map(String::as_str), Some("0"));
+        assert_eq!(t.0.get(&0x24).map(String::as_str), Some(" "));
+        assert_eq!(t.0.len(), 32);
     }
 }

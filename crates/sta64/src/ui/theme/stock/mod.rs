@@ -43,7 +43,7 @@ use bevy::prelude::*;
 
 pub use checkbox::{Checkbox, CheckboxChanged, checkbox};
 pub use dropdown::{Dropdown, DropdownChanged, DropdownOption, DropdownPopup, MAX_ROWS, dropdown};
-pub use focus::{Focusable, KitFocus, KitKey, focus_order, focusable, kit_key, move_focus, press};
+pub use focus::{FocusScope, Focusable, KitCapture, KitFocus, KitKey, focus_order, focusable, is_displayed, kit_key, move_focus, press};
 pub use scroll::{ScrollArea, SliderStep, scroll_list, scroll_to_row, slider_focusable};
 pub use tabs::{Tab, TabBar, TabChanged, TabPanel, tab_bar, tab_panel};
 pub use text_field::{TextChanged, TextField, TextFilter, TextSubmitted, text_field};
@@ -83,8 +83,18 @@ pub fn kit_click(w: &mut World, e: Entity) {
     tabs::click(w, e);
 }
 
-fn on_click(ev: On<PointerClick>, mut commands: Commands) {
+/// `PointerClick` bubbles up the tree and global observers see every step: the first
+/// kit widget on the way handles it and stops it, so a row's click never reaches the
+/// dropdown that owns the list (which would toggle it open again).
+fn on_click(
+    mut ev: On<PointerClick>,
+    kit: Query<(), Or<(With<Checkbox>, With<Dropdown>, With<DropdownOption>, With<Tab>)>>,
+    mut commands: Commands,
+) {
     let e = ev.entity;
+    if kit.contains(e) {
+        ev.propagate(false);
+    }
     commands.queue(move |w: &mut World| kit_click(w, e));
 }
 
@@ -97,6 +107,7 @@ pub struct KitPlugin;
 impl Plugin for KitPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<KitFocus>()
+            .init_resource::<KitCapture>()
             .init_resource::<ButtonInput<MouseButton>>()
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<bevy::picking::hover::HoverMap>()
@@ -113,6 +124,7 @@ impl Plugin for KitPlugin {
                 (
                     focus::pointer_press,
                     focus::key_events,
+                    focus::capture,
                     scroll::wheel,
                     dropdown::hover_highlight,
                     dropdown::sync,

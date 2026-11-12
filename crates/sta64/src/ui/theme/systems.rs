@@ -138,6 +138,7 @@ pub fn paint_widgets(
     >,
     lists: Query<&List>,
     mut texts: Query<(&ChildOf, &mut crate::ui::sprite_font::SpriteText), With<ButtonText>>,
+    mut plain: Query<(&ChildOf, &mut TextColor), (With<ButtonText>, Without<crate::ui::sprite_font::SpriteText>)>,
     mut marks: Query<(&ChildOf, &mut BackgroundColor), (With<RowMark>, Without<WidgetState>)>,
 ) {
     for (state, toggle, item, parent, mut bg) in &mut q {
@@ -156,6 +157,13 @@ pub fn paint_widgets(
         let c = if disabled { theme.text_off } else { theme.text_on };
         if tc.color != c {
             tc.color = c;
+        }
+    }
+    for (parent, mut tc) in &mut plain {
+        let disabled = q.get(parent.parent()).is_ok_and(|(s, ..)| *s == WidgetState::Disabled);
+        let c = if disabled { theme.text_off } else { theme.text_on };
+        if tc.0 != c {
+            tc.0 = c;
         }
     }
     for (parent, mut bg) in &mut marks {

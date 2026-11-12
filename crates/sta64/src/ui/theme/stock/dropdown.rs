@@ -52,6 +52,15 @@ pub(super) struct DropdownArrow;
 #[derive(Component, Debug, Clone, Copy)]
 pub struct DropdownPopup {
     pub count: usize,
+    /// Hash of the option texts it shows, to rebuild the list when they change.
+    pub signature: u64,
+}
+
+fn signature(options: &[String]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    options.hash(&mut h);
+    h.finish()
 }
 #[derive(Component, Debug, Clone, Copy)]
 pub struct DropdownOption(pub usize);
@@ -216,7 +225,7 @@ pub(super) fn sync(
         let popup = kids.iter().find_map(|k| popups.get(k).ok());
         match (d.open, popup) {
             (true, None) => spawn_popup(&mut commands, &theme, e, d),
-            (true, Some((p, pop, _))) if pop.count != d.options.len() => {
+            (true, Some((p, pop, _))) if pop.count != d.options.len() || pop.signature != signature(&d.options) => {
                 commands.entity(p).despawn();
                 spawn_popup(&mut commands, &theme, e, d);
             }
@@ -239,7 +248,7 @@ fn spawn_popup(commands: &mut Commands, theme: &Theme, owner: Entity, d: &Dropdo
     scroll_to_row(&area, &mut pos, d.highlight);
     let popup = commands
         .spawn((
-            DropdownPopup { count: d.options.len() },
+            DropdownPopup { count: d.options.len(), signature: signature(&d.options) },
             area,
             pos,
             GlobalZIndex(1000),
