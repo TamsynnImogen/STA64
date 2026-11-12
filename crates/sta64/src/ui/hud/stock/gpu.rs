@@ -232,7 +232,25 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         assert_eq!(actual.as_deref(), visible.then_some(expected.as_str()), "{label} CFG personnel resource_{id}");
         eprintln!("{label}: resource_{id} visible={visible} expected={expected} actual={actual:?}");
     }
-
+    // Check the final text component too: source-label tests alone cannot
+    // catch a tint lost on the way to Bevy's actual renderer.
+    let defaults = [
+        Color::srgb(0.0, 1.0, 0.0), Color::WHITE,
+        Color::srgb(0.6, 0.9, 1.0), Color::srgb(1.0, 1.0, 0.0),
+        Color::srgb(0.8, 0.8, 0.8), Color::srgb(1.0, 0.0, 0.0),
+    ];
+    for (kind, text, children) in app.world_mut()
+        .query::<(&super::info::StockText, &crate::ui::sprite_font::SpriteText, &Children)>()
+        .iter(app.world())
+    {
+        let super::info::StockText::Resource(id) = *kind else { continue };
+        let expected = stock.colour(&format!("resource_{id}_color")).unwrap_or(defaults[id]);
+        assert_eq!(text.color, expected, "{label}: resource_{id} CFG/default tint");
+        let rendered = children.iter().filter_map(|child| app.world().get::<TextColor>(child)).collect::<Vec<_>>();
+        assert!(!rendered.is_empty(), "{label}: resource_{id} has no resolved text");
+        assert!(rendered.iter().all(|colour| colour.0 == expected), "{label}: resource_{id} lost its rendered tint");
+        eprintln!("{label}: resource_{id} rendered colour={expected:?}");
+    }
 
     let frames = Arc::new(Mutex::new(Vec::<Image>::new()));
     let output = Arc::clone(&frames);
@@ -255,6 +273,28 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         .unwrap_or_else(|| panic!("{label}: no GPU capture"));
     let dynamic = shot.try_into_dynamic().expect("GPU image conversion");
     let rgba = dynamic.to_rgba8();
+    // Classic has no colour overrides. Guard the visible green/cyan/yellow
+    // numerals in the real framebuffer, rather than just checking ECS state.
+    if profile == UiProfile::Armada2 {
+        let area = stock.panel("resource").unwrap();
+        let pixel_scale = size.y as f32 / 1080.0;
+        for id in [0, 2, 3] {
+            let rect = stock.at(Vec2::new(area.x, area.y), &format!("resource_{id}")).unwrap();
+            let rgb = stock.colour(&format!("resource_{id}_color")).unwrap_or(defaults[id]).to_srgba();
+            let expected = [rgb.red, rgb.green, rgb.blue].map(|v| (v * 255.0).round() as i16);
+            let mut matching = 0;
+            for y in (rect.y * pixel_scale).max(0.0) as u32..((rect.y + rect.h) * pixel_scale).min(size.y as f32) as u32 {
+                for x in (rect.x * pixel_scale).max(0.0) as u32..((rect.x + rect.w) * pixel_scale).min(size.x as f32) as u32 {
+                    let pixel = rgba.get_pixel(x, y);
+                    if (0..3).all(|channel| (pixel[channel] as i16 - expected[channel]).abs() <= 5) {
+                        matching += 1;
+                    }
+                }
+            }
+            assert!(matching >= 2, "{label}: resource_{id} has no visible {expected:?} text pixels");
+            eprintln!("{label}: resource_{id} colour-matched text pixels={matching}");
+        }
+    }
     // A2's first two resource atlas pieces meet at canvas x=256. On a wide
     // viewport Auto letterboxes both pieces and leaves a black gap here; native
     // independent-axis drawing must fill this authored join.

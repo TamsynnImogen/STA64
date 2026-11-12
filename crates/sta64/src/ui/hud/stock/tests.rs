@@ -315,7 +315,66 @@ fn missing_authored_colours_keep_theme_defaults() {
     assert_eq!(stock_colour_at(&mut app, "infoBuildName", false), theme.text);
     assert_eq!(stock_colour_at(&mut app, "infoBuildClass", false), theme.text_dim);
     assert_eq!(stock_colour_at(&mut app, "shipName", true), theme.text);
-    assert_eq!(resource_colour(&mut app, 2), theme.text);
+    assert_eq!(resource_colour(&mut app, 2), Color::srgba(0.6, 0.9, 1.0, 1.0));
+}
+
+#[test]
+fn stock_resources_render_all_six_native_default_colours() {
+    let cfg = inherited_config(
+        "",
+        "resource_0 = 4 5 30 10\nresource_3 = 30 10 80 30\nresource_5 = 320 10 80 30\n",
+    );
+    let mut app = app_with_content_and_config(content(), cfg, UiProfile::Armada2);
+    for (id, expected) in [
+        (0, Color::srgba(0.0, 1.0, 0.0, 1.0)),
+        (1, Color::srgba(1.0, 1.0, 1.0, 1.0)),
+        (2, Color::srgba(0.6, 0.9, 1.0, 1.0)),
+        (3, Color::srgba(1.0, 1.0, 0.0, 1.0)),
+        (4, Color::srgba(0.8, 0.8, 0.8, 1.0)),
+        (5, Color::srgba(1.0, 0.0, 0.0, 1.0)),
+    ] {
+        assert_eq!(resource_label(&mut app, id).unwrap().2, expected, "resource {id}");
+    }
+}
+
+#[test]
+fn authored_resource_colours_override_palette_and_survive_value_updates() {
+    let cfg = inherited_config(
+        "resource_0_color = 1 1 1 1\n",
+        "resource_0 = 4 5 30 10\nresource_3 = 30 10 80 30\nresource_5 = 320 10 80 30\nReSoUrCe_2_CoLoR = 0.25 0.5 0.75 0.4\nresource_5_color = 0 0 0 0.25\n",
+    );
+    let mut app = app_with_content_and_config(content(), cfg, UiProfile::Armada2);
+    let expected = [
+        Color::srgba(1.0, 1.0, 1.0, 1.0),
+        Color::srgba(1.0, 1.0, 1.0, 1.0),
+        Color::srgba(0.25, 0.5, 0.75, 0.4),
+        Color::srgba(1.0, 1.0, 0.0, 1.0),
+        Color::srgba(0.8, 0.8, 0.8, 1.0),
+        Color::srgba(0.0, 0.0, 0.0, 0.25),
+    ];
+    let before: Vec<_> = (0..6)
+        .map(|id| {
+            let (entity, _, colour, _) = resource_label(&mut app, id).unwrap();
+            assert_eq!(colour, expected[id], "resource {id}");
+            entity
+        })
+        .collect();
+
+    let mut feed = app.world().resource::<HudFeed>().clone();
+    let mut view = (*feed.view).clone();
+    view.players[0].crew = Some(Fixed::from_int(1200));
+    view.players[0].officers = [Fixed::from_int(16), Fixed::from_int(600)];
+    view.players[0].resources = [1234, 6, 42, 9].map(Fixed::from_int).to_vec();
+    feed.view = Arc::new(view);
+    *app.world_mut().resource_mut::<HudFeed>() = feed;
+    app.update();
+
+    for id in 0..6 {
+        let (entity, text, colour, _) = resource_label(&mut app, id).unwrap();
+        assert_eq!(entity, before[id], "resource {id} entity");
+        assert_eq!(colour, expected[id], "resource {id} colour");
+        assert_eq!(text, ["1200", "16/600", "1234", "6", "42", "9"][id]);
+    }
 }
 
 fn one<C: Component>(app: &mut App) -> Entity {

@@ -183,3 +183,41 @@ Five actual windowless NVIDIA Vulkan captures cover Classic and FO4 at 4:3 and
 through its CFG flags. The lead inspected the captures. Private evidence lives
 in `STA64-artifacts/probes/ui17/personnel-hud-*`. This is HUD rendering proof;
 live gameplay readability/FPS and the broader UI-18 reference gate remain open.
+
+
+## Resource text colour defaults
+
+An authored `resource_N_color` (RGB or RGBA, including white, black or zero
+alpha) wins through the existing case-insensitive CFG/include resolution.
+When absent, the six native resource IDs use Armada II's built-in palette:
+
+| ID | Resource | Default RGB |
+|---|---|---|
+| 0 | Crew | 0, 1, 0 |
+| 1 | Officers | 1, 1, 1 |
+| 2 | Dilithium | 0.6, 0.9, 1 |
+| 3 | Latinum | 1, 1, 0 |
+| 4 | Metal | 0.8, 0.8, 0.8 |
+| 5 | Biomatter | 1, 0, 0 |
+
+Classic does not author those overrides; previously its resource numerals
+incorrectly inherited the generic theme text colour. FO4's authored palette
+and per-faction overrides remain authoritative. The same widget supports both;
+no game assets or simulation/resource values change.
+
+Static evidence: clean `Armada2.exe`, SHA-256
+`8d3ba6ec826198daf3e0c7b3435e9ce8195293e56da7c87e0af2634eaa4693b3`.
+The initializer at `0x50a220..0x50a31c` allocates RGB triples in the pointer
+table `0x764664 + ID*4`. The setter at `0x50a1f0..0x50a219` reads this
+same table and copies RGB into the resource's text component at `+0x70`.
+The resource-panel loop calls it at `0x4ff813` with the current resource ID.
+This is original-A2 static evidence, independently checked with objdump;
+it does not claim original Roots execution. Native disassembly and subsequent
+local capture/build receipts are retained under
+`STA64-artifacts/probes/resource-colours/`.
+
+Regression checks cover all six defaults, explicit per-ID CFG overrides,
+include/case precedence and retaining tints across value updates. The installed
+windowless GPU check inspects resolved Bevy text colours and searches the
+Classic crew/dilithium/latinum slots for matching framebuffer pixels, so an
+all-white capture can no longer pass solely because its values are correct.
