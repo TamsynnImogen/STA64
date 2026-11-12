@@ -222,16 +222,29 @@ mod tests {
 
     #[test]
     fn hiding_changes_the_view_only() {
-        // State, digest and snapshot are the same whether or not the view hides
-        // a unit: the rule lives in the view alone.
-        let (s, races) = helper_setup(Some("1"));
-        let (mut a, _) = Sim::from_setup_with_starts(&s, &races);
-        let (mut b, _) = Sim::from_setup_with_starts(&s, &races);
-        for _ in 0..30 {
-            assert_eq!(a.step(&[]), b.step(&[]));
-        }
-        let restored = Sim::from_snapshot(&a.snapshot(), Some(s.content.clone())).unwrap();
-        assert_eq!(restored.view(), a.view());
-        assert_eq!(a.view().digest, a.digest());
+        // The same start with `hidden = 1` and `hidden = 0` runs the same world:
+        // after 30 ticks every unit's state is equal apart from SELECTABLE, and
+        // only the visible sets differ. (The digests differ by the content hash
+        // alone, since the two ODFs differ.)
+        let run = |hidden| {
+            let (s, races) = helper_setup(Some(hidden));
+            let (mut sim, _) = Sim::from_setup_with_starts(&s, &races);
+            for _ in 0..30 {
+                sim.step(&[]);
+            }
+            let restored = Sim::from_snapshot(&sim.snapshot(), Some(s.content.clone())).unwrap();
+            assert_eq!(restored.view(), sim.view(), "hidden = {hidden}");
+            sim.view()
+        };
+        let (hid, shown) = (run("1"), run("0"));
+        let strip = |v: &crate::WorldView| -> Vec<_> {
+            v.units.iter().cloned().map(|mut u| {
+                u.flags = u.flags.with(crate::view::UnitFlags::SELECTABLE, false);
+                u
+            }).collect()
+        };
+        assert_eq!(strip(&hid), strip(&shown));
+        assert_eq!(hid.players, shown.players);
+        assert_ne!(hid.visibility, shown.visibility);
     }
 }

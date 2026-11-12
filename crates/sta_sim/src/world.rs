@@ -73,14 +73,16 @@ impl EntityKind {
 
     /// Whether the player never sees `def`: its ODF says `hidden = 1`.
     ///
-    /// Armada II and Fleet Operations mark their engine helper objects this
-    /// way: the start pods and faction objects a race's `standardUnits` place
-    /// (`all_ai_pod`, `all_start`, `fed_effectsS`, ... all `classLabel = "pod"`,
-    /// `basename = "effect_empty"`, `mapicon = "mapicon_empty"`), the objects
-    /// their start weapons spawn (`effect_rm`, `unitcap_pod`), and map markers
-    /// (lights, `hook_*` sources). Such an object exists in the world (scripts
-    /// and weapons see it) but is not the player's to see or pick, so the view
-    /// shows it to no one ([`crate::Sim`]'s view; docs/START_HELPERS.md).
+    /// Fleet Operations and Dominion War mark their engine helpers this way:
+    /// the start pods and faction objects a race's `standardUnits` place
+    /// (`all_ai_pod`, `all_start`, `fed_effectsS`, ...: `classLabel = "pod"`,
+    /// `basename = "effect_empty"`, `mapicon = "mapicon_empty"`), the pods
+    /// their start weapons spawn (`unitcap_pod`, `ai_pod_*`) and map triggers
+    /// (`trigger_derelictcreation`). Such an object exists in the world
+    /// (scripts, weapons and the tech tree see it) but is not the player's to
+    /// pick, so the view leaves it out of every visible set
+    /// ([`crate::Sim`]'s view; docs/START_HELPERS.md). Some `hidden = 1`
+    /// effects do have models (FO's `effect_mstorm`); none reach the sim yet.
     pub fn hidden(def: &sta_content::UnitDef) -> bool {
         def.raw.i64("hidden").unwrap_or(0) != 0
     }

@@ -57,10 +57,26 @@ and the officer test of the unit-cap pods are **unverified**.
 
 The sim's view hides every unit whose ODF has `hidden = 1`
 (`EntityKind::hidden`): it is not `SELECTABLE` and is in no player's visible
-set, so the client neither draws it, puts it on the radar, nor lets it be
-hovered or picked (all of those follow `visible_to`). It stays in
-`WorldView::units` and in the sim, so missions find it by id and SIM-28 can
-run its lifecycle. State, digest, snapshot and replay are unchanged.
+set. In a seated match the client draws, radars, hovers and picks only what
+`visible_to` returns, so the helpers are gone from the screen. A view with no
+local seat (the `--map` viewer, the menu scene) or with no visibility data
+still draws everything. The helpers stay in `WorldView::units` and in the sim:
+missions find them by id (though `canPlayerSee` / `A2.IsVisibleToTeam` now
+answer false for them; what the original answers is unmeasured), the sim's
+tech tree counts them, and the skirmish AI takes its own units from `units`
+so their tech-tree role (Roots `tech1.tt`: `fbase.odf 1 fed_effectsS.odf`)
+holds for it too. Sim state, digest and snapshot are unchanged; AI decisions
+on installed FO/Roots/DW content can change, because enemy helpers left the
+AI's visible set (an AI could target an invincible enemy pod before).
+
+`hidden = 1` is not "never drawn" in general: FO/DW effects such as
+`effect_missilestormL` (`u_ball_obj`, model `effect_mstorm`) are hidden and
+clearly visual. None reach the sim yet (only replace/spawn weapons create
+them). When SIM-28 lands, drawing should follow the object's model and
+class, and `hidden` keep meaning "not selectable, not on the minimap".
+
+Not handled here: the sim does not read `invalidAsTarget`, so ships can still
+auto-fire at an enemy helper near its base.
 
 ## Left for SIM-28 (needs SIM-27, unmerged)
 
