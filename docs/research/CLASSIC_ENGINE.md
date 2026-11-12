@@ -110,8 +110,8 @@ Checked against `crates/sta_content/src/profile.rs` and its users on
 
 | Behaviour | `Fo4` | `Sta2Classic` | Finding |
 |---|---|---|---|
-| `point_defense_cycles` | on | off | Consumed in `sta_sim/src/combat/pd.rs`. Classic needs it on. Stock Armada II has this weapon too, so "off" is doubtful for stock as well; the stock rate is being measured (section 8). |
-| `pay_on_queue` (and `queueInstantDeduct`) | off | off | Only Native turns it on. The key is read in `sta_content/src/odf.rs`, but no Classic, FO 4.0 or Roots ODF uses it (being measured). |
+| `point_defense_cycles` | on | off | Consumed in `sta_sim/src/combat/pd.rs`. Classic needs it on. Stock Armada II has this weapon too, so "off" is doubtful for stock as well; measured in [ENGINE_MEASUREMENTS.md](ENGINE_MEASUREMENTS.md) M1: stock PD works with no rate limit, so "off" is wrong for stock. |
+| `pay_on_queue` (and `queueInstantDeduct`) | off | off | Only Native turns it on. The key is read in `sta_content/src/odf.rs`, but no Classic, FO 4.0 or Roots ODF uses it. Measured in [ENGINE_MEASUREMENTS.md](ENGINE_MEASUREMENTS.md) M3: stock, Classic and FO 4.0 all charge when the item starts. |
 | Resource-name fallback | FO names | stock names | Classic follows stock and the names are derivable from the string table. |
 | UI theme | FO | stock | Classic follows stock; derivable from the race ODF's `interfaceConfiguration`. |
 | Turrets, fire arcs, directional shields, queue limit, kinematics, confinement | identical | identical | The two profiles do not differ. |
@@ -144,11 +144,11 @@ place where the engine reads a key or constant stock Armada II never reads.
 - The remaining of the 29 keys not listed above, from the scripted key
   comparison; the full list is not copied here.
 
-## 8. Measurement plan (in progress)
+## 8. Measurement plan (done)
 
-A bench measurement on the Refit test bench (original game, headless) is in
-progress for four behaviours that data and changelogs do not settle. **No
-results are stated here.**
+A bench measurement on the Refit test bench (original game, headless) covered
+four behaviours that data and changelogs do not settle. The results are in
+[ENGINE_MEASUREMENTS.md](ENGINE_MEASUREMENTS.md); none are restated here.
 
 1. Point defence: firing rate and energy use, stock Armada II and Roots.
 2. Initial special-weapon delay (`initialShotDelayModifier`).
