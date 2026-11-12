@@ -7,6 +7,12 @@ half is [`crates/sta_net/src/proto.rs`](../crates/sta_net/src/proto.rs): the
 message types, their bounds, the framing, and the tests. Where this document
 and `proto.rs` disagree, that is a bug in one of them.
 
+Decisions made after this draft are in [NET_DECISIONS.md](NET_DECISIONS.md)
+(N1 to N6): lockstep stays, a desync is repaired by snapshot resync, an
+optional referee, and section digests. They answer open questions 3, 4 and 6
+and are built by NET-04, NET-05, NET-06 and SIM-31. NET-02 and NET-03 build
+this document as written.
+
 Decisions this design relies on:
 [MODDING_DECISIONS.md](MODDING_DECISIONS.md) D10 (peers agree on one digest of
 resolved rules; pack list informational; refusal names the differing key;
@@ -326,10 +332,12 @@ joiner                         host
      all seats (from `Start`), and the protocol version;
   4. stops the match. The host puts a final pause in its record; there is no
      resume, only leaving. As in Armada II, a desynced game is not repaired;
-     unlike Armada II, it does not run on in an undefined state.
+     unlike Armada II, it does not run on in an undefined state. NET-04
+     replaces this step with a resync (NET_DECISIONS N2).
 - Comparing two peers' replays of the same game shows the first digest that
   differs between machines; finding which subsystem diverged needs a state
-  dump (out of scope; open question 6).
+  dump (out of scope; open question 6). Section digests name it instead
+  (NET_DECISIONS N6).
 
 ## 8. Stalls, drops, leaving and rejoining
 
@@ -386,7 +394,7 @@ joiner                         host
   - Snapshot-based resync (sending state instead of history) is deferred: it
     needs a proof that a snapshot loaded on another machine continues with
     the same digests, and it is the only way to rejoin a long game quickly
-    (open question 4).
+    (open question 4). Decided: NET_DECISIONS N4, built by NET-04.
 
 ## 9. Relay model (for NET-03)
 
@@ -460,9 +468,12 @@ Every peer is untrusted, and so is anything relayed.
 - Observers / spectators (Fleet Operations has them). The seat model leaves
   room: an observer would be a connection with no seat that receives turns
   and sends none.
-- Multiplayer save and load (Armada II 1.1's Ctrl+S), and snapshot resync.
+- Multiplayer save and load (Armada II 1.1's Ctrl+S), and snapshot resync
+  (the latter until NET-04; NET_DECISIONS N2, N4).
 - Map download; peers need the same map file.
-- Playing on after a desync, by majority or otherwise.
+- Playing on after a desync, by majority or otherwise (until NET-04, and
+  then by resync from the host or a referee, never by majority;
+  NET_DECISIONS N2, N3, N5).
 - Peer-to-peer paths and NAT hole punching; the relay carries everything.
 - Encryption, accounts, matchmaking, the public game list (Refit's milestone
   3 is the model for later), a ping filter, anti-cheat.
@@ -503,15 +514,19 @@ Every peer is untrusted, and so is anything relayed.
    differences can play together?
 3. **After a desync**, stop the match for everyone (this draft), or do as
    Armada II did and let players carry on at their own risk?
+   **Decided:** neither; resync (NET_DECISIONS N2, N3).
 4. **Rejoin after a restart** replays the whole game headless. Is that
    acceptable for v1, or should snapshot resync (and the cross-machine
    snapshot determinism proof it needs) come first?
+   **Decided:** whole-log replay first, snapshot rejoin with NET-04
+   (NET_DECISIONS N4).
 5. **Drops.** Default outcome when a seat leaves or times out with no votes:
    AI takeover (with which AI) or elimination? And is "every connected human
    agrees, else the host decides" the right rule?
 6. **Desync diagnosis.** Should a desync also exchange a full state dump at
    the bad tick (bigger, but names the diverging entity), or are the two
    replays enough for v1?
+   **Decided:** no state dump; section digests (NET_DECISIONS N6).
 7. **The host leaving ends the game.** Acceptable for v1, given AI and Lua
    run only on the host?
 8. **D10 and the content key table.** Commands carry `ContentKey`s, so peers
