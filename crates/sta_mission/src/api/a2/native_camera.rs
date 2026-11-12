@@ -8,7 +8,7 @@ use sta_sim::present::{Arg, Presentation};
 use super::objects::{integer, live};
 use crate::api::Shared;
 
-fn arity(name: &str, args: &MultiValue, expected: usize) -> mlua::Result<()> {
+pub(super) fn arity(name: &str, args: &MultiValue, expected: usize) -> mlua::Result<()> {
     if args.len() == expected {
         Ok(())
     } else {
@@ -18,13 +18,13 @@ fn arity(name: &str, args: &MultiValue, expected: usize) -> mlua::Result<()> {
     }
 }
 
-fn entity(ctx: &Shared, name: &str, value: &Value) -> mlua::Result<Arg> {
+pub(super) fn entity(ctx: &Shared, name: &str, value: &Value) -> mlua::Result<Arg> {
     let id = EntityId(integer(name, value)?);
     live(ctx, name, id)?;
     Ok(Arg::Entity(id))
 }
 
-fn number(name: &str, value: &Value) -> mlua::Result<Arg> {
+pub(super) fn number(name: &str, value: &Value) -> mlua::Result<Arg> {
     let n = match value {
         Value::Integer(n) => *n as f64,
         Value::Number(n) => *n,
@@ -42,14 +42,14 @@ fn number(name: &str, value: &Value) -> mlua::Result<Arg> {
     Ok(Arg::Num(Fixed::from_f64(n)))
 }
 
-fn boolean(name: &str, value: &Value) -> mlua::Result<Arg> {
+pub(super) fn boolean(name: &str, value: &Value) -> mlua::Result<Arg> {
     match value {
         Value::Boolean(value) => Ok(Arg::Bool(*value)),
         _ => Err(mlua::Error::runtime(format!("A2.{name} requires a boolean"))),
     }
 }
 
-fn text(name: &str, value: &Value) -> mlua::Result<Arg> {
+pub(super) fn text(name: &str, value: &Value) -> mlua::Result<Arg> {
     let Value::String(value) = value else {
         return Err(mlua::Error::runtime(format!("A2.{name} requires a string")));
     };
@@ -69,7 +69,7 @@ fn point_index(name: &str, value: &Value) -> mlua::Result<Arg> {
     }
 }
 
-fn submit(ctx: &Shared, name: &str, args: Vec<Arg>) -> mlua::Result<()> {
+pub(super) fn submit(ctx: &Shared, name: &str, args: Vec<Arg>) -> mlua::Result<()> {
     let presentation = Presentation::Call {
         name: format!("A2.{name}"),
         args,

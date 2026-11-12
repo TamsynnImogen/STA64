@@ -15,12 +15,12 @@ user's own executables each time, and none are recorded here.
 | engine API size | 371 `ScriptInterface` methods | (imports only) |
 | distinct calls used | 138 | 213 |
 | call sites | 11708 | — |
-| A2 DLL-shaped callable | 28 | — |
-| missing A2 callable signatures | 104 | — |
+| A2 DLL-shaped callable | 43 | — |
+| missing A2 callable signatures | 89 | — |
 | MMM job-equivalent, not A2-shaped | 0 | — |
 | bound in STA64's Lua today | — | 6 |
-| in MMM's API, not yet bound | 23 | 27 |
-| no Lua equivalent (STA64 extension needed) | 81 | 144 |
+| in MMM's API, not yet bound | 21 | 27 |
+| no Lua equivalent (STA64 extension needed) | 68 | 144 |
 | script-state plumbing (n/a in Lua) | 6 | 36 |
 
 - **bound**: an existing `sta_mission` binding does the same job.
@@ -58,17 +58,17 @@ user's own executables each time, and none are recorded here.
 
 | call | scripts | call sites | status | Lua name |
 |---|---:|---:|:-:|---|
-| `void CineractiveShot(char *, float, int)` | 36 | 163 | new |  |
+| `void CineractiveShot(char *, float, int)` | 36 | 163 | A2 DLL-shaped | `A2.CineractiveShot` |
 | `void CineractiveStart(script *, bool)` | 36 | 201 | new |  |
 | `void FadeIn(script *, float, float, float, bool)` | 36 | 125 | MMM | `_Cineractive.fadeIn` |
 | `void FadeOut(script *, float, float, float, bool)` | 32 | 155 | MMM | `_Cineractive.fadeOut` |
-| `void CineractiveCameraOffset(char *, float, bool)` | 29 | 78 | MMM | `_Cineractive.setCameraOffset` |
-| `void CineractiveShot(int, int)` | 29 | 81 | new |  |
-| `void CenterCamera(int)` | 10 | 66 | new |  |
-| `void CineractiveCameraOffset(float, float, float, bool)` | 3 | 3 | MMM | `_Cineractive.setCameraOffset` |
-| `void CineractiveConstantSpeed(bool)` | 2 | 2 | new |  |
-| `void SetCameraZoom(float)` | 2 | 2 | new |  |
-| `void CineractiveShot(char *, int, int)` | 1 | 1 | new |  |
+| `void CineractiveCameraOffset(char *, float, bool)` | 29 | 78 | A2 DLL-shaped | `A2.CineractiveCameraOffset` |
+| `void CineractiveShot(int, int)` | 29 | 81 | A2 DLL-shaped | `A2.CineractiveShot` |
+| `void CenterCamera(int)` | 10 | 66 | A2 DLL-shaped | `A2.CenterCamera` |
+| `void CineractiveCameraOffset(float, float, float, bool)` | 3 | 3 | A2 DLL-shaped | `A2.CineractiveCameraOffset` |
+| `void CineractiveConstantSpeed(bool)` | 2 | 2 | A2 DLL-shaped | `A2.CineractiveConstantSpeed` |
+| `void SetCameraZoom(float)` | 2 | 2 | A2 DLL-shaped | `A2.SetCameraZoom` |
+| `void CineractiveShot(char *, int, int)` | 1 | 1 | A2 DLL-shaped | `A2.CineractiveShot` |
 
 ### Titles, text and objectives (13)
 
@@ -77,11 +77,11 @@ user's own executables each time, and none are recorded here.
 | `int AudioMessage(script *, char const *, bool)` | 36 | 368 | MMM | `_Media.playSound` |
 | `void RemoveTitle(int, bool)` | 36 | 197 | new |  |
 | `void StopAudioMessage(int)` | 36 | 190 | MMM | `_Media.stopSounds` |
-| `void MinimapMessage(int, int, float)` | 13 | 51 | new |  |
+| `void MinimapMessage(int, int, float)` | 13 | 51 | A2 DLL-shaped | `A2.MinimapMessage` |
 | `void RemoveSubtitle(int, bool)` | 11 | 39 | new |  |
-| `void RemoveFromAdLog(int)` | 8 | 115 | new |  |
+| `void RemoveFromAdLog(int)` | 8 | 115 | A2 DLL-shaped | `A2.RemoveFromAdLog` |
 | `bool IsAudioMessageDone(int)` | 2 | 9 | new |  |
-| `void MinimapMessage(char *, int, float, int)` | 2 | 4 | new |  |
+| `void MinimapMessage(char *, int, float, int)` | 2 | 4 | A2 DLL-shaped | `A2.MinimapMessage` |
 | `void ObjectivesDisplay_Set_Text_From_File(char *, bool)` | 2 | 6 | A2 DLL-shaped | `A2.ObjectivesDisplay_Set_Text_From_File` |
 | `int ShowSubtitle(int, int, char const *, bool)` | 1 | 2 | new |  |
 | `int ShowTitle(int, int, char const *, bool)` | 1 | 1 | new |  |
@@ -184,9 +184,9 @@ user's own executables each time, and none are recorded here.
 | `Vector3 const & GetLocation(char *, int)` | 1 | 18 | new |  |
 | `float GetCurrentHealth(int)` | 1 | 1 | A2 DLL-shaped | `A2.GetCurrentHealth` |
 | `void DamageEngines(int, float)` | 1 | 2 | new |  |
-| `void GridVisible(bool)` | 1 | 1 | new |  |
+| `void GridVisible(bool)` | 1 | 1 | A2 DLL-shaped | `A2.GridVisible` |
 | `void HideObject(int, bool)` | 1 | 2 | new |  |
-| `void RemoveBillboardEffect(int)` | 1 | 1 | new |  |
+| `void RemoveBillboardEffect(int)` | 1 | 1 | A2 DLL-shaped | `A2.RemoveBillboardEffect` |
 | `void SetMaxShields(int, float)` | 1 | 6 | new |  |
 
 ### Other (31)
@@ -210,7 +210,7 @@ user's own executables each time, and none are recorded here.
 | `bool IsExploding(int)` | 3 | 4 | new |  |
 | `bool IsOdf(int, char *)` | 3 | 7 | A2 DLL-shaped | `A2.IsOdf` |
 | `unsigned int RandomGetUnsigned(unsigned int)` | 3 | 28 | A2 DLL-shaped | `A2.RandomGetUnsigned` |
-| `void AddTransporterEffect(int)` | 3 | 5 | new |  |
+| `void AddTransporterEffect(int)` | 3 | 5 | A2 DLL-shaped | `A2.AddTransporterEffect` |
 | `void CraftCanRecrew(int, bool)` | 3 | 4 | new |  |
 | `void PointAt(int, int)` | 3 | 13 | MMM | `pointAt` |
 | `void SetForceOntoMap(int, bool)` | 3 | 91 | A2 DLL-shaped | `A2.SetForceOntoMap` |
@@ -223,7 +223,7 @@ user's own executables each time, and none are recorded here.
 | `void LoadCargoShip(int, int)` | 1 | 2 | new |  |
 | `void SetName(int, char const *)` | 1 | 3 | new |  |
 | `void SetWormholeDeleteOnTransport(int, bool)` | 1 | 2 | new |  |
-| `void Starfield_Load_New_Background_Geometry(char *, char *)` | 1 | 1 | new |  |
+| `void Starfield_Load_New_Background_Geometry(char *, char *)` | 1 | 1 | A2 DLL-shaped | `A2.Starfield_Load_New_Background_Geometry` |
 
 ## Armada I: engine functions the mission DLLs import
 
