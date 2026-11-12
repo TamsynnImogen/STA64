@@ -165,7 +165,7 @@ defaults are chosen or skipped by the wrong rule.
 The sentence of the contract this amendment replaced:
 
 > Do not inspect executable versions, directory paths, AssetVersion or
-> lists to invent a second identification policy.
+> `[modules]` lists to invent a second identification policy.
 
 It is now: do not inspect executable versions or hashes or directory paths;
 `AssetVersion` is read as described below, and only as described below.
@@ -256,19 +256,22 @@ its own decision.
 - Step 2 reads the `AssetVersion` of the top-most layer that states one,
   `Data` included (the Roots base `Data/info.ini` says 50000). A child mod
   without one inherits its mod parent's. A value below 50000 does not select
-  the lineage and the later steps go on, so a 30205 mod under a Roots host
-  still loads as Roots (step 3) and gets the warning below.
-- Step 3 finds the host `Data` as the mounted `Data` layer or, for a mod
-  folder under `Data/Mods`, that mod's grandparent. It reads `info.ini` and
+  the lineage, and it also skips step 3: a mod that states an older value
+  (designed for FO 3.x) is not a Roots mod even under a Roots host, though
+  the existing name heuristics still apply to mounted layers.
+- Step 3 runs only when no layer states an `AssetVersion`. It finds the host
+  `Data` as the mounted `Data` layer or, for a mod folder under `Data/Mods`,
+  that mod's grandparent (which must be named `Data`). It reads `info.ini` and
   `packages.ini` there and nothing else; D6 mounting is not touched.
 - Step 4 records `[FleetOps] Version=` (3.2.7 on the FO 3.x and Dominion War
   installs; the Roots install's own file says 4.0.0). It selects nothing and
   there is no profile variant for the 3.x engine.
-- The warning: when the detected profile is the Roots lineage, every layer
+- The warning: when the detected profile is the Roots lineage (for instance an
+  add-on over a Roots `Data`), every layer
   whose `AssetVersion` is below 50000 gets one ("older than the Roots
   lineage this mod loads under"). A malformed value (not a whole number
   in `0..=4294967295`) is ignored with a warning, whatever step decided.
-- `Fo4` keeps its name; the rename question below is still open.
+- `Fo4` keeps its name; the rename question above is still open.
 
 ### Tests an implementation must add
 

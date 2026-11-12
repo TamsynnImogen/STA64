@@ -188,26 +188,40 @@ fn host_base_info_not_naming_fo_changes_nothing() {
 }
 
 #[test]
-fn an_old_asset_version_under_a_roots_host_loads_as_roots_with_a_warning() {
+fn a_stated_old_asset_version_under_a_roots_host_is_not_roots() {
     let t = Tmp::new();
     t.file("Data/info.ini", "[mod]\nName=Fleet Operations: Roots\n");
     t.file("Data/odf/ship.odf", "classLabel=\"craft\"\nunitName=\"Ship\"\n");
     mod_with(&t, "Old", "[mod]\nName=Designed For FO 3.2.5\nstandalone=1\nAssetVersion=30205\n");
     let d = t.detect(Some("Old"));
-    assert_eq!((d.profile, d.step), (Profile::Fo4, DetectStep::HostBaseInfo));
+    assert_ne!(d.profile, Profile::Fo4, "a mod designed for FO 3.x is not a Roots mod");
+    assert_ne!(d.step, DetectStep::HostBaseInfo);
+    assert!(d.warnings.is_empty(), "no Roots lineage, so nothing is stale: {:?}", d.warnings);
+}
+
+#[test]
+fn an_old_asset_version_on_a_mod_loading_as_roots_warns_and_still_loads() {
+    // An add-on over a Roots base whose Data names Fleet Operations: the mounted Data layer
+    // makes the load Roots (existing name heuristic); the mod's own old value warns.
+    let t = Tmp::new();
+    t.file("Data/info.ini", "[mod]\nName=Fleet Operations: Roots\n");
+    t.file("Data/odf/ship.odf", "classLabel=\"craft\"\nunitName=\"Ship\"\n");
+    mod_with(&t, "Old", "[mod]\nName=Designed For FO 3.2.5\nAssetVersion=30205\n");
+    let vfs = t.mount(Some("Old"));
+    let d = Profile::detect_with_source(&vfs);
+    assert_eq!((d.profile, d.step), (Profile::Fo4, DetectStep::Heuristic));
     assert_eq!(d.warnings.len(), 1, "{:?}", d.warnings);
     assert!(d.warnings[0].message.contains("30205") && d.warnings[0].message.contains("older"), "{:?}", d.warnings[0]);
-    assert!(d.warnings[0].file.ends_with("Old/info.ini"));
+    assert!(std::path::Path::new(&d.warnings[0].file).ends_with("Old/info.ini"));
 
     // The warning reaches ContentDb::load; the load itself succeeds.
-    let vfs = t.mount(Some("Old"));
     let (index, _) = OdfIndex::build(&vfs);
     let (db, warnings) = ContentDb::load(&vfs, &index).unwrap();
     assert_eq!(db.profile(), Profile::Fo4);
     assert!(warnings.iter().any(|w| w.message.contains("AssetVersion 30205")), "{warnings:?}");
 
     // No warning at or above the lineage, and none outside it.
-    mod_with(&t, "Old", "[mod]\nstandalone=1\nAssetVersion=50000\n");
+    mod_with(&t, "Old", "[mod]\nAssetVersion=50000\n");
     assert!(t.detect(Some("Old")).warnings.is_empty());
     let plain = Tmp::new();
     plain.file("Data/odf/x.odf", "classLabel=\"craft\"\n");
@@ -215,6 +229,16 @@ fn an_old_asset_version_under_a_roots_host_loads_as_roots_with_a_warning() {
     let d = plain.detect(Some("Old"));
     assert_eq!(d.profile, Profile::Sta2Classic);
     assert!(d.warnings.is_empty(), "an old AssetVersion on a non-Roots load is not stale");
+}
+
+#[test]
+fn host_data_is_only_taken_from_a_folder_named_data() {
+    let t = Tmp::new();
+    t.file("elsewhere/info.ini", "[mod]\nName=Fleet Operations: Roots\n");
+    t.file("elsewhere/Mods/M/info.ini", "[mod]\nName=Plain\n");
+    let mut vfs = Vfs::default();
+    vfs.push_dir("M".into(), t.0.join("elsewhere/Mods/M")).unwrap();
+    assert_ne!(Profile::detect(&vfs), Profile::Fo4);
 }
 
 #[test]
