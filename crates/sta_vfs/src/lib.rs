@@ -4,6 +4,10 @@
 //! `active mod -> its ParentMod chain -> Data`. Lookups are case-insensitive on
 //! every platform, because Armada-era content mixes case freely and was only
 //! ever tested on Windows.
+//! A mod's own `info.ini` rules shape the stack (D6): a `standalone` mod ends
+//! the chain and base `Data` is not mounted under it; `ignoreParentMaps`
+//! hides the `bzn/` maps of every layer below the mod. A manifest's `engine`
+//! requirement must be met by this STA64 version (D4).
 //! An original flat A1 install with root ZFS files mounts as one `root` layer
 //! when no Data child or selected mod is present.
 //!
@@ -40,6 +44,8 @@ pub enum VfsError {
     ModNotFound(String),
     #[error("ParentMod cycle: {0}")]
     ParentCycle(String),
+    #[error("mod {name:?} needs STA64 {requirement}, this is {have}")]
+    Engine { name: String, requirement: String, have: String },
     #[error("archive {path}: {source}")]
     Archive {
         path: PathBuf,
@@ -157,14 +163,53 @@ impl Vfs {
             return Ok(vfs);
         };
 
+        let chain = match active_mod {
+            Some(name) => mod_chain_info(&data, name)?,
+            None => Vec::new(),
+        };
+        Vfs::mount_chain(&data, &chain)
+    }
+
+    /// Mount `chain` (child first) over `data`, by the mods' own rules (D6):
+    /// the chain ends at the first `standalone` mod, and then base `Data` is
+    /// not mounted at all; a mod with `ignoreParentMaps` hides the maps
+    /// (`bzn/`) of every layer below it. Each mod's manifest `engine`
+    /// requirement must be met by this STA64 version (D4).
+    pub(crate) fn mount_chain(data: &Path, chain: &[ChainMod]) -> Result<Self, VfsError> {
         let mut vfs = Vfs::default();
-        if let Some(name) = active_mod {
-            for (mod_name, dir) in mod_chain(&data, name)? {
-                vfs.push_dir(mod_name, dir)?;
+        let mut standalone = false;
+        for m in chain {
+            if let Some(Ok(manifest)) = manifest::manifest_text(&m.dir).map(|t| manifest::Manifest::parse(&t))
+                && !manifest.engine_ok()
+            {
+                return Err(VfsError::Engine {
+                    name: m.name.clone(),
+                    requirement: manifest.engine.map(|r| r.to_string()).unwrap_or_default(),
+                    have: manifest::engine_version().to_string(),
+                });
+            }
+            vfs.push_dir(m.name.clone(), m.dir.clone())?;
+            if m.standalone {
+                standalone = true;
+                break;
             }
         }
-        vfs.push_dir("Data".into(), data)?;
+        if !standalone {
+            vfs.push_dir("Data".into(), data.to_path_buf())?;
+        }
+        for (i, m) in chain.iter().enumerate().take(vfs.layers.len()) {
+            if m.ignore_parent_maps {
+                vfs.hide_below(i, MAP_DIR);
+            }
+        }
         Ok(vfs)
+    }
+
+    /// Drop every path under `prefix` from the layers below layer `above`.
+    fn hide_below(&mut self, above: usize, prefix: &str) {
+        for m in self.index.iter_mut().skip(above + 1) {
+            m.retain(|k, _| !k.starts_with(prefix));
+        }
     }
 
     /// Append a lower-priority layer: a directory plus its root `*.fpq` archives.
@@ -325,20 +370,48 @@ impl Vfs {
 
 /// Resolve `name` and its `ParentMod` ancestors, child first.
 pub fn mod_chain(data: &Path, name: &str) -> Result<Vec<(String, PathBuf)>, VfsError> {
+    Ok(walk_chain(data, name, false)?.into_iter().map(|m| (m.name, m.dir)).collect())
+}
+
+/// Folder of the maps a mod's `ignoreParentMaps` hides in the layers below it.
+const MAP_DIR: &str = "bzn/";
+
+/// One mod of a mount chain with the `info.ini` flags that shape the mount.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChainMod {
+    pub name: String,
+    pub dir: PathBuf,
+    /// `standalone=1`: runs over nothing; its `ParentMod` and base `Data` are not mounted.
+    pub standalone: bool,
+    /// `ignoreParentMaps=1`: the maps of every layer below are hidden.
+    pub ignore_parent_maps: bool,
+}
+
+/// As [`mod_chain`], but the chain ends at the first `standalone` mod (its
+/// `ParentMod`, if any, is not followed) and each entry carries its flags.
+pub fn mod_chain_info(data: &Path, name: &str) -> Result<Vec<ChainMod>, VfsError> {
+    walk_chain(data, name, true)
+}
+
+fn walk_chain(data: &Path, name: &str, stop_at_standalone: bool) -> Result<Vec<ChainMod>, VfsError> {
     let mods = find_child_ci(data, "Mods").ok_or_else(|| VfsError::ModNotFound(name.into()))?;
-    let mut chain = Vec::new();
+    let mut chain: Vec<ChainMod> = Vec::new();
     let mut seen = HashSet::new();
     let mut current = Some(name.to_owned());
     while let Some(n) = current {
         if !seen.insert(n.to_ascii_lowercase()) {
-            let names: Vec<_> = chain.iter().map(|(n, _): &(String, PathBuf)| n.as_str()).collect();
+            let names: Vec<_> = chain.iter().map(|m| m.name.as_str()).collect();
             return Err(VfsError::ParentCycle(format!("{} -> {n}", names.join(" -> "))));
         }
         let dir = find_child_ci(&mods, &n).ok_or_else(|| VfsError::ModNotFound(n.clone()))?;
-        current = find_child_ci(&dir, "info.ini")
+        let ini = find_child_ci(&dir, "info.ini")
             .and_then(|p| fs::read(&p).ok())
-            .and_then(|b| parent_mod(&String::from_utf8_lossy(&b)));
-        chain.push((n, dir));
+            .map(|b| mods::Ini::parse(&String::from_utf8_lossy(&b)))
+            .unwrap_or_default();
+        let parent = ini.get("mod", "ParentMod").map(str::trim).filter(|p| !p.is_empty()).map(str::to_owned);
+        let (standalone, ignore_parent_maps) = (ini.flag("standalone"), ini.flag("ignoreParentMaps"));
+        chain.push(ChainMod { name: n, dir, standalone, ignore_parent_maps });
+        current = if stop_at_standalone && standalone { None } else { parent };
     }
     Ok(chain)
 }
@@ -409,6 +482,9 @@ mod flat_install_tests;
 
 #[cfg(test)]
 mod flat_a2_tests;
+
+#[cfg(test)]
+mod mount_tests;
 
 #[cfg(test)]
 mod tests {

@@ -55,6 +55,9 @@ pub struct Ordered {
     pub manifest: Manifest,
     /// Root `.sta` archives: (file name, `content_hash`).
     pub sta: StaIds,
+    /// `info.ini` `standalone` and `ignoreParentMaps`: what the mount obeys (D6).
+    pub standalone: bool,
+    pub ignore_parent_maps: bool,
 }
 
 /// Mods to mount, highest priority first.
@@ -90,12 +93,17 @@ impl LoadOrder {
     /// Mount the order over `data` (the install's `Data` folder), as
     /// [`Vfs::mount_install`] mounts a `ParentMod` chain.
     pub fn mount(&self, data: &Path) -> Result<Vfs, VfsError> {
-        let mut vfs = Vfs::default();
-        for m in &self.mods {
-            vfs.push_dir(m.folder.clone(), m.path.clone())?;
-        }
-        vfs.push_dir("Data".into(), data.to_path_buf())?;
-        Ok(vfs)
+        let chain: Vec<crate::ChainMod> = self
+            .mods
+            .iter()
+            .map(|m| crate::ChainMod {
+                name: m.folder.clone(),
+                dir: m.path.clone(),
+                standalone: m.standalone,
+                ignore_parent_maps: m.ignore_parent_maps,
+            })
+            .collect();
+        Vfs::mount_chain(data, &chain)
     }
 }
 
@@ -136,7 +144,7 @@ pub fn resolve(mods: &[ModInfo], active: &str) -> Result<LoadOrder, OrderError> 
             return Ok(o.clone());
         }
         let (manifest, sta) = manifest_for(info).map_err(|error| OrderError::Manifest { folder: info.folder.clone(), error })?;
-        let o = Ordered { folder: info.folder.clone(), path: info.path.clone(), manifest, sta };
+        let o = Ordered { folder: info.folder.clone(), path: info.path.clone(), manifest, sta, standalone: info.standalone, ignore_parent_maps: info.ignore_parent_maps };
         cache.insert(key, o.clone());
         Ok(o)
     };

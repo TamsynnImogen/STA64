@@ -22,7 +22,9 @@
 //!
 //! A mod without a manifest (every mod folder today) gets one from its
 //! `info.ini` ([`Manifest::from_info`]): id from the folder name, `ParentMod`
-//! as a dependency on any version, `standalone` as the kind. Legacy versions
+//! as a dependency on any version (none when `standalone`), the `standalone`
+//! flag as the kind (a mod with neither is an addon over the game's data),
+//! `Profile` as the profile. Legacy versions
 //! (`4.0Z`, `v1.2Z (Original Gameplay)`) are kept as text; a requirement
 //! other than `*` on a mod with such a version cannot be checked and fails.
 //! Unknown keys are kept in [`Manifest::extra`] so a later STA64 can add
@@ -122,6 +124,44 @@ pub struct Manifest {
     pub generated: bool,
 }
 
+/// The manifest text a mod folder at `dir` carries: its loose `manifest.toml`,
+/// else one inside a root `.sta` archive.
+pub fn manifest_text(dir: &std::path::Path) -> Option<String> {
+    let entries: Vec<_> = std::fs::read_dir(dir).ok()?.flatten().collect();
+    if let Some(e) = entries.iter().find(|e| e.file_name().to_string_lossy().eq_ignore_ascii_case("manifest.toml"))
+        && let Ok(t) = std::fs::read_to_string(e.path())
+    {
+        return Some(t);
+    }
+    let mut stas: Vec<_> = entries.iter().map(|e| e.path()).filter(|p| p.is_file() && p.extension().is_some_and(|x| x.eq_ignore_ascii_case("sta"))).collect();
+    stas.sort();
+    for p in stas {
+        let Ok(a) = crate::sta::StaArchive::open(&p) else { continue };
+        if let Some(i) = a.find("manifest.toml")
+            && let Ok(b) = a.read(i)
+        {
+            return Some(String::from_utf8_lossy(&b).into_owned());
+        }
+    }
+    None
+}
+
+/// The STA64 version this build is, as a manifest `engine` requirement sees it.
+pub fn engine_version() -> Version {
+    Version::parse(env!("CARGO_PKG_VERSION")).unwrap_or_else(|_| Version::new(0, 0, 0))
+}
+
+impl Manifest {
+    /// Does this STA64 build meet the manifest's `engine` requirement (D4)?
+    /// No requirement always does. Pre-release builds are compared by their
+    /// release number.
+    pub fn engine_ok(&self) -> bool {
+        let mut v = engine_version();
+        v.pre = semver::Prerelease::EMPTY;
+        self.engine.as_ref().is_none_or(|r| r.matches(&v))
+    }
+}
+
 fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
 }
@@ -189,7 +229,8 @@ impl Manifest {
     /// The manifest a legacy mod would have, from its `info.ini`.
     pub fn from_info(info: &ModInfo) -> Manifest {
         let mut dependencies = BTreeMap::new();
-        if let Some(p) = &info.parent {
+        // A standalone mod runs over nothing but the game: its ParentMod is not followed (D6).
+        if let Some(p) = info.parent.as_ref().filter(|_| !info.standalone) {
             dependencies.insert(mod_id(p), VersionReq::STAR);
         }
         Manifest {
@@ -200,8 +241,8 @@ impl Manifest {
             authors: info.authors.clone(),
             licence: None,
             engine: None,
-            profile: None,
-            kind: if info.parent.is_some() { ModKind::Addon } else { ModKind::Standalone },
+            profile: info.ini.get("mod", "profile").map(str::trim).filter(|p| !p.is_empty()).map(str::to_owned),
+            kind: if info.standalone { ModKind::Standalone } else { ModKind::Addon },
             dependencies,
             load_after: Vec::new(),
             load_before: Vec::new(),
