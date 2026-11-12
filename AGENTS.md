@@ -136,6 +136,22 @@ issue and PR (`Implements D7`). Do not add a feature the "Not in v1" list
 excludes. If a decision is wrong or blocks you, comment on your issue and
 stop; changing a decision is a PR to that file approved by Tammy and Cedric.
 
+## Research and game files
+
+- Decompilation findings and measurements of the original games are not
+  committed unless STA64 needs them to work (a data table the code reads, a
+  test fixture you authored yourself). Keep them outside the repository, in a
+  separate research directory on your machine. Code comments, WORKPLAN rows and
+  PR bodies state the rule STA64 follows, the data keys it reads and the
+  evidence grade (measured / read from data / not measured), in a line or two:
+  no `docs/research/` write-ups, no measurement or bench run tables, no
+  pseudo-code, addresses or disassembly, no bench run logs.
+- Never commit game assets or anything copied or converted from them, in any
+  form: no textures, models, sounds, movies, maps, ODF/cfg/sprite/tech-tree
+  files or excerpts beyond a key name and a value, no frames showing game art,
+  no re-encoded copies. Tests that need them are install-gated and read the
+  install at run time.
+
 ## Builds
 
 The repository is built on people's own machines, often by several sessions

@@ -4,7 +4,8 @@ Status: **accepted** (Tammy and Cedric, 2026-11-11; merged in #352; D5 amended
 2026-11-12 and approved by Tammy, see D5). Binding on
 all agent and human work in the areas below. Covers how STA64 treats existing Armada
 mods and what the first modding release contains. Background and evidence are
-in [MODDING-IDEAS.md](MODDING-IDEAS.md) and `docs/research/modding/`; this
+in [MODDING-IDEAS.md](MODDING-IDEAS.md) and in research notes kept outside the
+repository; this
 document records decisions only.
 
 ## Scope of "mod"
@@ -89,8 +90,11 @@ render recipes can play together", meaning that peers whose installs differ
 only in art play together. That cannot hold for models: in every install
 99-100% of ships have no explicit size key (Roots base 43.7%), so the size of a
 unit comes from its SOD, as in the originals, and Armada II and Roots checksum
-the models between peers. Evidence, the original size rule and the open
-points: [research/COLLISION_GEOMETRY.md](research/COLLISION_GEOMETRY.md).
+the models between peers. The original size rule (read from the executable, static): the box over the
+whole SOD node hierarchy (all LOD and damage meshes) times `scaleSOD`, an
+enclosing ellipsoid, the largest semi-axis plus `shieldPad` as the bounding
+radius, and the sim position at the box centre. WORKPLAN SIM-32 holds the rule
+in full; the evidence notes are kept outside the repository.
 Implemented by CON-35 (digest) and SIM-32 (the original size rule).*
 
 **D11. Conflicts are solved by inheritance, not a new patch format.**

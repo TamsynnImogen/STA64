@@ -142,8 +142,8 @@ for this source. The appended TODO item remains the user's manual check.
 
 **Status: approved, in force.** Proposed in #443 and approved by Tammy's merge
 the same day; implemented by CON-43. The CON-31 text above stays as written
-for its history; where it differs, this section wins. Evidence and its grades
-are in [research/CLASSIC_ENGINE.md](research/CLASSIC_ENGINE.md).
+for its history; where it differs, this section wins. Evidence notes
+are kept outside the repository.
 
 **Tammy's review note (2026-11-12):** "probably can get rid of [modules] since
 A2FOExtensions will be fully integrated". Done: module lists are not read at
@@ -228,7 +228,7 @@ Not used:
   `interfaceConfiguration`, rig and damage-control behaviour from the presence
   of their ODF keys. `extra_resources` and `officer_capacity`, which `Sta2Classic` leaves off
   today, should be on for stock Armada II as well, since the stock game has
-  them. The per-profile review is in the research record.
+  them. The per-profile review is kept outside the repository.
 - `AssetVersion = 30205` and similar values below 50000 do not select the Roots
   lineage; a mod designed for Fleet Operations 3.x is not a Roots mod.
 - Optional, mirroring the original: when a mod's `AssetVersion` is older than
