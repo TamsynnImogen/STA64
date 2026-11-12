@@ -47,8 +47,15 @@ impl HudFeed {
         self.content.as_deref().and_then(|c| c.unit(u.def))
     }
 
-    fn name(&self, u: &UnitView) -> String {
+    pub(crate) fn name(&self, u: &UnitView) -> String {
         self.def(u).map_or_else(|| format!("#{}", u.id.0), |d| craft_names::instance(d, u.id))
+    }
+
+    /// Authored type caption for the mouseover strip, independent of craft name.
+    pub(crate) fn unit_label(&self, u: &UnitView) -> String {
+        self.def(u).map_or_else(|| format!("#{}", u.id.0), |d| {
+            craft_names::unit_name(d).unwrap_or(&d.class.0).to_owned()
+        })
     }
 
     /// The selected units the player may order.

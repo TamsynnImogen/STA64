@@ -1,6 +1,7 @@
 //! CFG/SPR presentation of the shared HUD actions. No simulation policy lives here.
 mod commands;
 mod info;
+pub(super) mod infobar;
 pub mod layout;
 
 use super::layout::R;
@@ -26,6 +27,8 @@ pub(super) struct StockBody;
 #[derive(Component)]
 pub(super) struct StockInfo;
 #[derive(Component)]
+pub(super) struct StockInfoBar;
+#[derive(Component)]
 pub(super) struct StockGrid;
 #[derive(Component)]
 pub(super) struct StockNav(i32);
@@ -37,6 +40,7 @@ pub(super) struct StockState {
     cfg: Option<GuiLayout>,
     profile: Option<UiProfile>,
     native: NativeCommands,
+    info_style: infobar::InfoStyle,
     info: Option<Info>,
     grid: Vec<Button>,
     page: Page,
@@ -258,6 +262,7 @@ pub(super) fn refresh(
     bodies: Query<Entity, With<StockBody>>,
     legacy: Query<Entity, With<HudBody>>,
     infos: Query<Entity, With<StockInfo>>,
+    info_bars: Query<Entity, With<StockInfoBar>>,
     grids: Query<Entity, With<StockGrid>>,
     mut state: ResMut<StockState>,
 ) {
@@ -282,6 +287,7 @@ pub(super) fn refresh(
     }
     let mount_changed = mounted.as_ref().is_some_and(|m| m.is_changed());
     if !state.loaded || mount_changed {
+        state.info_style = mounted.as_ref().map_or_else(infobar::InfoStyle::default, |m| infobar::InfoStyle::load(&m.0));
         state.native = mounted
             .as_ref()
             .map_or_else(NativeCommands::default, |m| NativeCommands::load(&m.0));
@@ -335,11 +341,16 @@ pub(super) fn refresh(
             for entity in &infos {
                 commands.entity(entity).despawn();
             }
+            for entity in &info_bars {
+                commands.entity(entity).despawn();
+            }
         }
         let parent = commands
             .spawn((StockInfo, Pickable::IGNORE, Node::default(), ChildOf(body)))
             .id();
         info::spawn(&mut commands, parent, &layout, &feed, &theme);
+        let bar = commands.spawn((StockInfoBar, Pickable::IGNORE, Node::default(), ChildOf(body))).id();
+        infobar::spawn(&mut commands, bar, &layout, &theme, layout::info_variant(&now));
     }
     state.info = Some(now.clone());
     let mut next = buttons(&feed, hud.page, &state.native);
@@ -360,12 +371,12 @@ pub(super) fn refresh(
     .into_iter()
     .flatten()
     .collect();
-    if matches!(now, Info::Single(_)) && layout.info_area(layout::info_variant(&now)).is_some() {
+    if layout.info_area(layout::info_variant(&now)).is_some() {
         let variant = layout::info_variant(&now);
         let origin =
             layout.info_origin(variant) + layout.point(&format!("infoBarOffset_{variant}")).unwrap_or(Vec2::ZERO);
         state.solid.extend(
-            ["shipName", "hull", "shields"]
+            ["shipName", "hull", "shields", "crew_amt", "energy_amt", "icon_hull", "icon_shields", "icon_crew_amt", "icon_energy_amt"]
                 .into_iter()
                 .filter_map(|key| layout.at(origin, key)),
         );
