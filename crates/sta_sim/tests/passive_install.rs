@@ -73,9 +73,9 @@ fn installed_resource_weapons_pay_their_odf_amounts_per_second() {
             let mut per_tick = 0i64;
             for h in &u.hardpoints {
                 if let Some(r) = db.weapon(h.weapon.key).and_then(|w| w.resource).filter(|r| !r.one_time && r.always_player) {
-                    for s in 0..4 {
-                        want[s] = want[s] + Fixed::from_bits(r.add[s].to_bits() * 60);
-                        per_tick += r.add[s].to_bits().abs() / 30 + 1;
+                    for (w, a) in want.iter_mut().zip(r.add) {
+                        *w = *w + Fixed::from_bits(a.to_bits() * 60);
+                        per_tick += a.to_bits().abs() / 30 + 1;
                     }
                 }
             }
@@ -86,9 +86,9 @@ fn installed_resource_weapons_pay_their_odf_amounts_per_second() {
             let got = |s: usize| got.get(s).copied().unwrap_or(Fixed::ZERO);
             // A starting stock is not set here, so negative adders clamp at zero.
             if want.iter().all(|w| *w >= Fixed::ZERO) {
-                for s in 0..4 {
-                    let diff = (got(s).to_bits() - want[s].to_bits()).abs();
-                    assert!(diff <= per_tick * 2, "{label} {} slot {s}: got {:?}, want {:?}", u.odf, got(s), want[s]);
+                for (s, w) in want.iter().enumerate() {
+                    let diff = (got(s).to_bits() - w.to_bits()).abs();
+                    assert!(diff <= per_tick * 2, "{label} {} slot {s}: got {:?}, want {w:?}", u.odf, got(s));
                 }
             }
             let other = sim.view().player(PlayerId(1)).map(|p| p.resources.clone()).unwrap_or_default();

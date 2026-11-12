@@ -89,10 +89,10 @@ impl Economy {
                 {
                     continue;
                 }
-                for slot in 0..RESOURCES {
-                    if g[slot] != Fixed::ZERO {
+                for (slot, add) in g.iter().enumerate() {
+                    if *add != Fixed::ZERO {
                         let s = &mut self.slot(u.owner)[slot];
-                        *s = Fixed::from_bits(s.to_bits().saturating_add(g[slot].to_bits())).max(Fixed::ZERO);
+                        *s = Fixed::from_bits(s.to_bits().saturating_add(add.to_bits())).max(Fixed::ZERO);
                     }
                 }
                 if crew_gain != Fixed::ZERO
