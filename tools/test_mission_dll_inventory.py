@@ -439,7 +439,7 @@ class MissionDllInventoryTests(unittest.TestCase):
             "int MinimapMessage(int, int, float)",
             "void GridVisible(int)",
             "void CineractiveShot(char *, int)",
-            # Registered module absent: not counted.
+            # Module registered, but no literal table.set of this name: not counted.
             "void CenterCamera(int)",
             "void AddTransporterEffect(int)",
         ):

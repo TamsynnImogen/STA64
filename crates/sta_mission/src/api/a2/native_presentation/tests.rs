@@ -6,7 +6,7 @@ use sta_content::{MapDef, MapObject};
 use sta_core::{EntityId, Fixed, PlayerId, TeamId, Vec3};
 use sta_sim::command::{CommandKind, Edit};
 use sta_sim::present::{Arg, Presentation};
-use sta_sim::setup::{Control, GameOptions, GameSetup, PlayerSetup};
+use sta_sim::setup::{Control, Controller, GameOptions, GameSetup, PlayerSetup};
 use sta_sim::{Sim, SimEvent, WorldSource};
 
 use crate::api::MissionConfig;
@@ -141,10 +141,32 @@ fn invalid_arity_types_ranges_and_handles_queue_nothing() {
         "A2.MinimapMessage(1,2,1/0)".to_owned(),
         "A2.MinimapMessage('t',2,3,'x')".to_owned(),
         "A2.MinimapMessage(1,2,3,4)".to_owned(),
+        "A2.MinimapMessage(7,2,3,4)".to_owned(),
+        "A2.MinimapMessage(1,2,3e10)".to_owned(),
+        "A2.RemoveFromAdLog(-2147483649)".to_owned(),
+        "A2.RemoveBillboardEffect(1e3)".to_owned(),
     ];
     for script in bad {
         assert!(rt.eval::<()>(&script).is_err(), "{script}");
         assert!(rt.take_commands().is_empty(), "partial command from {script}");
     }
     assert!(rt.errors().is_empty(), "{:?}", rt.errors());
+}
+
+#[test]
+fn signed_32_bit_bounds_and_dying_entities() {
+    let (setup, mut sim, id) = scene();
+    let mut rt = runtime(&sim, &setup);
+    rt.eval::<()>("A2.RemoveFromAdLog(-2147483648); A2.RemoveFromAdLog(2147483647)").unwrap();
+    let commands = rt.take_commands();
+    assert_eq!(commands.len(), 2);
+    assert_eq!(
+        commands[0].kind,
+        CommandKind::Edit(Edit::Present(call("RemoveFromAdLog", vec![Arg::Int(-2147483648)])))
+    );
+    sim.units.get_mut(id).unwrap().flags = sta_sim::view::UnitFlags::DYING;
+    let out = sim.step(&[]);
+    rt.think(&out.view, &out.events, &mut Vec::new());
+    assert!(rt.eval::<()>(&format!("A2.AddTransporterEffect({})", id.0)).is_err());
+    assert!(rt.take_commands().is_empty());
 }

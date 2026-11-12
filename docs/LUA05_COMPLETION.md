@@ -121,10 +121,16 @@ seam; no `sta_sim` change. Exact A2 inventory 28 used / 104 missing before,
   `MinimapMessage` overloads (`int,int,float` and `char*,int,float,int`, chosen
   by argument count). Each queues one SCRIPT `Edit::Present`
   `Call { name: "A2.<method>", args }`, validating the whole call first.
-  Raw ints (signed 32-bit), floats (finite, signed 32.32), flags and UTF-8
-  strings are retained, never interpreted; the entity of
-  `AddTransporterEffect` must be a current non-dying object, as in the camera
-  bridge. Whether native values mean a colour, id or duration is not claimed.
+  Ints are signed 32-bit Lua *integers* (an integral float such as `4/2` is
+  rejected, unlike `objects::integer` for handles; Lua 5.3's integer/float
+  distinction is kept strict), floats are finite and converted to the 32.32
+  `Fixed` of the presentation seam (deterministic, not the native 32-bit
+  float), flags must be Lua booleans, and strings must be UTF-8 without NUL
+  (native `char*` is byte-oriented; non-UTF-8 text is a stated limitation).
+  The entity of `AddTransporterEffect` must be a current non-dying object in
+  the previous tick's view, as in the camera bridge, so a handle spawned this
+  same tick is not yet accepted (revisit once a spawn binding returns pending
+  handles). Whether native values mean a colour, id or duration is not claimed.
   No client consumer exists: this is a queued request, not playback.
 
 ### Needs a `sta_sim` seam before Lua can bind them
