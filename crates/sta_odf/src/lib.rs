@@ -22,6 +22,8 @@
 
 use std::collections::HashMap;
 
+pub mod cst;
+pub use cst::{Cst, LineKind};
 pub mod diagnostics;
 pub use diagnostics::DuplicateEntry;
 
