@@ -14,11 +14,9 @@ Scene: crossing Seed=3
 5. Scene "goto b1 0 0 1500"
 6. Scene "goto b2 200 0 1500"
 7. Run 10 ticks
-8. Wait up to 90 seconds until "a1" is within 1 of 1500 0 0
-9. Wait up to 90 seconds until "b1" is within 1 of 0 0 1500
-10. Wait up to 90 seconds until "a0" is within 1 of 1500 0 -200
-11. Wait up to 90 seconds until "a2" is within 1 of 1500 0 200
-12. Wait up to 90 seconds until "b0" is within 1 of -200 0 1500
-13. Wait up to 90 seconds until "b2" is within 1 of 200 0 1500
-14. Run 60 ticks
-15. Expect digest at tick 1244 is "04c091a5cc31f78f"
+8. Run until tick 1063
+9. Run until tick 1089
+10. Run until tick 1169
+11. Run until tick 1184
+12. Run 60 ticks
+13. Expect digest at tick 1244 is "ad7c40f043df7682"

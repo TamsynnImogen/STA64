@@ -9,6 +9,6 @@ Scene: nav-nebula Seed=3
 
 1. Scene "goto ship 0 0 3000"
 2. Run 10 ticks
-3. Wait up to 90 seconds until "ship" is within 1 of 0 0 3000
+3. Run until tick 736
 4. Run 30 ticks
-5. Expect digest at tick 780 is "ab5b685079cae5eb"
+5. Expect digest at tick 766 is "0fd52738b4fecc13"

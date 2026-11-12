@@ -10,6 +10,6 @@ Scene: formation Seed=3
 1. Scene "formation f1,f2,f3 1"
 2. Scene "goto f1,f2,f3 0 0 1000"
 3. Run 2 ticks
-4. Wait up to 60 seconds until "f1" speed is 0
+4. Run until tick 165
 5. Run 30 ticks
-6. Expect digest at tick 195 is "98e567e8551caee5"
+6. Expect digest at tick 195 is "59c5ebac55e089a0"

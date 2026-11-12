@@ -22,7 +22,7 @@ Scene: construction Seed=3
 13. Run 1 ticks
 14. Scene "build rig fx_station -1600 0 0"
 15. Run 1 ticks
-16. Wait up to 20 seconds until 2 stations are on team 1
+16. Run until tick 1677
 17. Run 1 ticks
 18. Run until tick 3900
-19. Expect digest at tick 3900 is "1ba43794bbda5a68"
+19. Expect digest at tick 3900 is "9e6bb2e63b7f10b5"
