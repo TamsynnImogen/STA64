@@ -51,7 +51,7 @@ pub use race::{Loadout, RaceDef, Races, StartingResources};
 pub use resources::ResourceModel;
 pub use rules::{Rules, OfficerLimit};
 pub use profile::{resolve_features, Overrides, FEATURE_NAMES, ODF_KEY_PREFIX};
-pub use techtree::{Availability, BuildOption, CapacityList, Condition, Owned, Requirement, TechEntry, TechState, TechTree, Unmet};
+pub use techtree::{Availability, BuildOption, CapacityList, Condition, Owned, Requirement, TechEntry, TechState, TechTree, TtSource, Unmet};
 pub use map::{MapDef, MapObject, Region, RegionKind, RegionShape, Scenery, SceneryLight, SceneryPlanet, StartPos};
 pub use sta_core::{ContentKey, Fixed, Vec3};
 
@@ -69,6 +69,10 @@ pub enum ContentError {
     /// A definition names another that does not exist.
     #[error("{from} refers to {to}, which is not defined")]
     Dangling { from: String, to: String },
+    /// Files include each other in a loop (a file including its own name
+    /// means the layer below and is not one).
+    #[error("include cycle: {0}")]
+    IncludeCycle(String),
 }
 
 /// Content loading's result.

@@ -229,29 +229,80 @@ pub struct TechTree {
     entries: BTreeMap<String, TechEntry>,
     caps: BTreeMap<String, CapacityList>,
     files: Vec<String>,
+    sources: BTreeMap<String, TtSource>,
+}
+
+/// Where a tech tree entry's winning line is (CON-36 provenance for `why`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TtSource {
+    /// The file name as included.
+    pub file: String,
+    /// Which copy of that file: 0 is the one the game sees, 1 the one it
+    /// hides (a self-include), and so on.
+    pub version: usize,
+    /// 1-based line.
+    pub line: usize,
 }
 
 impl TechTree {
     /// Load a `.tt` (with its `#include`s) or `.xml` by file name; `load`
     /// maps a name (as written, e.g. `tech1.tt`) to its text. Missing
-    /// includes, include loops and malformed lines are warnings.
+    /// includes, include loops and malformed lines are warnings; only one
+    /// copy of each file exists here, so a file's include of its own name
+    /// finds nothing and is dropped. [`load_layered`](TechTree::load_layered)
+    /// is the layered form, where a loop is an error.
     pub fn load(name: &str, load: &mut dyn FnMut(&str) -> Option<String>) -> (TechTree, Vec<Warning>) {
+        let (tree, warnings, _) = Self::load_inner(name, &mut |n, v| if v == 0 { load(n) } else { None });
+        (tree, warnings)
+    }
+
+    /// Load over layered files (D11). `load(name, version)` returns the
+    /// `version`-th copy of `name` counting down from the highest-priority
+    /// layer (0 = the copy normally seen). A file including its own name
+    /// inherits the copy below it, as ODFs do; includes of other names that
+    /// lead back to a file being read are an error naming the chain.
+    pub fn load_layered(name: &str, load: &mut dyn FnMut(&str, usize) -> Option<String>) -> Result<(TechTree, Vec<Warning>), String> {
+        match Self::load_inner(name, load) {
+            (_, _, Some(cycle)) => Err(cycle),
+            (tree, warnings, None) => Ok((tree, warnings)),
+        }
+    }
+
+    fn load_inner(name: &str, load: &mut dyn FnMut(&str, usize) -> Option<String>) -> (TechTree, Vec<Warning>, Option<String>) {
         let mut tree = TechTree { name: name.to_owned(), ..Default::default() };
         let mut warnings = Vec::new();
-        match load(name) {
+        let mut cycle = None;
+        match load(name, 0) {
             Some(text) => {
                 if name.to_ascii_lowercase().ends_with(".xml") {
                     tree.files.push(name.to_owned());
                     parse_xml(name, &text, &mut tree, &mut warnings);
                 } else {
-                    let mut stack = vec![name.to_ascii_lowercase()];
-                    apply_tt(name, &text, load, &mut tree, &mut stack, &mut warnings);
+                    let mut stack = vec![(name.to_ascii_lowercase(), 0)];
+                    apply_tt(name, 0, &text, load, &mut tree, &mut stack, &mut warnings, &mut cycle);
                 }
             }
             None => warnings.push(Warning::new(name, "not found")),
         }
         tree.finish(&mut warnings);
-        (tree, warnings)
+        (tree, warnings, cycle)
+    }
+
+    /// The file, layer copy and line that set `odf`'s entry.
+    pub fn source(&self, odf: &str) -> Option<&TtSource> {
+        self.sources.get(&stem(odf))
+    }
+
+    /// The virtual path and layer of the `version`-th copy of the tech tree
+    /// file `base`, looked up beside `dir` (`techtree/`, or the root).
+    pub fn locate(vfs: &sta_vfs::Vfs, dir: &str, base: &str, version: usize) -> Option<(String, String)> {
+        for p in [format!("{dir}{base}"), format!("techtree/{base}"), base.to_owned()] {
+            let all = vfs.resolve_all(&p);
+            if !all.is_empty() {
+                return all.get(version).map(|(layer, _)| ((*layer).to_owned(), p));
+            }
+        }
+        None
     }
 
     /// Where the tech tree called `stem` (no extension) lives in a mounted
@@ -269,20 +320,28 @@ impl TechTree {
     }
 
     /// Load the tree [`find`](TechTree::find) names. Includes resolve beside
-    /// the including file, then under `techtree/`, then by bare name. `None`
-    /// when no such tree is mounted.
-    pub fn from_vfs(vfs: &sta_vfs::Vfs, stem: &str) -> Option<(TechTree, Vec<Warning>)> {
-        let path = Self::find(vfs, stem)?;
+    /// the including file, then under `techtree/`, then by bare name; a file
+    /// that includes its own name inherits the copy in the layer below (D11),
+    /// and a true include cycle is an error. `None` when no such tree is mounted.
+    pub fn from_vfs(vfs: &sta_vfs::Vfs, stem: &str) -> crate::Result<Option<(TechTree, Vec<Warning>)>> {
+        let Some(path) = Self::find(vfs, stem) else { return Ok(None) };
         let (dir, name) = match path.rsplit_once('/') {
             Some((d, n)) => (format!("{d}/"), n.to_owned()),
             None => (String::new(), path.clone()),
         };
-        let mut load = |n: &str| {
+        let mut load = |n: &str, version: usize| {
             let base = n.rsplit(['/', '\\']).next()?;
-            let bytes = [format!("{dir}{base}"), format!("techtree/{base}"), base.to_owned()].iter().find_map(|p| vfs.read(p))?.ok()?;
-            Some(String::from_utf8_lossy(&bytes).into_owned())
+            for p in [format!("{dir}{base}"), format!("techtree/{base}"), base.to_owned()] {
+                let all = vfs.resolve_all(&p);
+                if !all.is_empty() {
+                    let (layer, source) = *all.get(version)?;
+                    let bytes = vfs.read_from(vfs.layer_index(layer)?, source).ok()?;
+                    return Some(String::from_utf8_lossy(&bytes).into_owned());
+                }
+            }
+            None
         };
-        Some(TechTree::load(&name, &mut load))
+        TechTree::load_layered(&name, &mut load).map(Some).map_err(crate::ContentError::IncludeCycle)
     }
 
     /// Parse one `.tt` or `.xml` text with no includes available.
@@ -578,18 +637,22 @@ fn strip_comments(text: &str) -> String {
     out
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_tt(
     name: &str,
+    version: usize,
     text: &str,
-    load: &mut dyn FnMut(&str) -> Option<String>,
+    load: &mut dyn FnMut(&str, usize) -> Option<String>,
     tree: &mut TechTree,
-    stack: &mut Vec<String>,
+    stack: &mut Vec<(String, usize)>,
     warnings: &mut Vec<Warning>,
+    cycle: &mut Option<String>,
 ) {
     tree.files.push(name.to_owned());
     let text = strip_comments(text);
     let mut own: BTreeSet<String> = BTreeSet::new();
-    for raw in text.lines() {
+    let own_key = name.rsplit(['/', '\\']).next().unwrap_or(name).to_ascii_lowercase();
+    for (line_no, raw) in text.lines().enumerate() {
         let line = raw.trim();
         if line.is_empty() {
             continue;
@@ -598,16 +661,24 @@ fn apply_tt(
             let rest = rest.trim_start();
             if let Some(inc) = rest.strip_prefix("include") {
                 let inc = inc.trim().trim_matches(|c| c == '"' || c == '<' || c == '>');
-                let key = inc.to_ascii_lowercase();
-                if stack.contains(&key) {
-                    warnings.push(Warning::new(name, format!("include loop: {inc}")));
+                let key = inc.rsplit(['/', '\\']).next().unwrap_or(inc).to_ascii_lowercase();
+                // A file including its own name inherits the copy below it.
+                let target = if key == own_key { version + 1 } else { 0 };
+                if stack.contains(&(key.clone(), target)) {
+                    let mut chain: Vec<String> = stack.iter().map(|(k, _)| k.clone()).collect();
+                    chain.push(key);
+                    let chain = chain.join(" -> ");
+                    warnings.push(Warning::new(name, format!("include loop: {chain}")));
+                    cycle.get_or_insert(chain);
                 } else {
-                    match load(inc) {
+                    match load(inc, target) {
                         Some(t) => {
-                            stack.push(key);
-                            apply_tt(inc, &t, load, tree, stack, warnings);
+                            stack.push((key, target));
+                            apply_tt(inc, target, &t, load, tree, stack, warnings, cycle);
                             stack.pop();
                         }
+                        // The last copy including itself: nothing below to inherit.
+                        None if target > 0 => {}
                         None => warnings.push(Warning::new(name, format!("include not found: {inc}"))),
                     }
                 }
@@ -644,6 +715,7 @@ fn apply_tt(
         } else {
             Vec::new()
         };
+        tree.sources.insert(key.clone(), TtSource { file: name.to_owned(), version, line: line_no + 1 });
         tree.entries.insert(
             key.clone(),
             TechEntry { odf: key, withheld: n < 0, dependency_build_possible: n != -1, requirements },
@@ -1011,6 +1083,43 @@ mod tests {
         assert!(w.iter().any(|w| w.message.starts_with("include not found")), "{w:?}");
         let (_, w) = TechTree::load("zzz.tt", &mut |_| None);
         assert_eq!(w[0].message, "not found");
+    }
+
+    /// Layers by copy: `copies["name"][v]` is the `v`-th copy, top first.
+    fn layered(copies: &[(&str, &[&str])]) -> impl FnMut(&str, usize) -> Option<String> {
+        let map: BTreeMap<String, Vec<String>> = copies.iter().map(|(n, c)| (n.to_string(), c.iter().map(|s| s.to_string()).collect())).collect();
+        move |n, v| map.get(&n.to_ascii_lowercase())?.get(v).cloned()
+    }
+
+    #[test]
+    fn a_self_include_inherits_the_copy_below_with_provenance() {
+        let mut load = layered(&[(
+            "tech1.tt",
+            &[
+                "#include tech1.tt\nship.odf -1\nnew.odf 0\n",
+                "#include tech1.tt\nyard.odf 0\nship.odf 0\n",
+                "base.odf 0\nship.odf 0\nyard.odf -1\n",
+            ],
+        )]);
+        let (t, w) = TechTree::load_layered("tech1.tt", &mut load).unwrap();
+        assert!(w.is_empty(), "{w:?}");
+        assert!(t.entry("base").is_some(), "inherited from the bottom copy");
+        assert!(t.entry("ship").unwrap().withheld, "the top copy's line wins");
+        assert!(!t.entry("yard").unwrap().withheld, "the middle copy overrides the bottom");
+        let src = |o: &str| t.source(o).map(|s| (s.version, s.line)).unwrap();
+        assert_eq!(src("ship"), (0, 2));
+        assert_eq!(src("yard"), (1, 2));
+        assert_eq!(src("base"), (2, 1));
+        assert_eq!(src("new.odf"), (0, 3));
+    }
+
+    #[test]
+    fn a_true_include_cycle_is_an_error_but_a_self_include_is_not() {
+        let mut load = layered(&[("a.tt", &["#include b.tt\n"]), ("b.tt", &["#include a.tt\n"])]);
+        assert_eq!(TechTree::load_layered("a.tt", &mut load).unwrap_err(), "a.tt -> b.tt -> a.tt");
+        let mut lone = layered(&[("a.tt", &["#include a.tt\nx.odf 0\n"])]);
+        let (t, w) = TechTree::load_layered("a.tt", &mut lone).unwrap();
+        assert!(t.entry("x").is_some() && w.is_empty(), "{w:?}");
     }
 
     const XML: &str = r#"<?xml version="1.0"?>

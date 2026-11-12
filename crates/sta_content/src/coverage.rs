@@ -25,6 +25,7 @@ use sta_odf::Odf;
 use sta_vfs::{Source, Vfs};
 
 use crate::OdfIndex;
+use crate::TechTree;
 use crate::layered;
 
 /// ODF keys (lower case) some STA64 loader reads. Seed list taken from the
@@ -329,6 +330,17 @@ pub fn why_key(vfs: &Vfs, file: &str, key: &str) -> Option<KeyWhy> {
         let h = layered::resolve_header(vfs, file, 0)?;
         let e = h.entries.get(key)?;
         return Some(KeyWhy { file: e.file.clone(), layer: e.layer.clone(), line: e.line, value: e.value.clone() });
+    }
+    let lower = file.to_ascii_lowercase();
+    if lower.ends_with(".tt") || lower.ends_with(".xml") {
+        // A tech tree: the key is an ODF name; its line may sit in an included file or a lower layer.
+        let stem = lower.rsplit(['/', '\\']).next().unwrap_or(&lower).rsplit_once('.').map_or(lower.as_str(), |(s, _)| s).to_owned();
+        let path = TechTree::find(vfs, &stem)?;
+        let (dir, _) = path.rsplit_once('/').map_or((String::new(), path.as_str()), |(d, n)| (format!("{d}/"), n));
+        let (tree, _) = TechTree::from_vfs(vfs, &stem).ok()??;
+        let src = tree.source(key)?;
+        let (layer, from) = TechTree::locate(vfs, &dir, &src.file, src.version)?;
+        return Some(KeyWhy { file: from, layer, line: src.line, value: tree.entry(key).map(|e| e.odf.clone()).unwrap_or_default() });
     }
     let (index, _) = OdfIndex::build(vfs);
     let entry = index.get(file)?;

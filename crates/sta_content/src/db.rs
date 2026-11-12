@@ -90,7 +90,7 @@ impl ContentDb {
     pub fn load_as(vfs: &sta_vfs::Vfs, profile: Profile, index: &OdfIndex) -> Result<(ContentDb, Vec<Warning>)> {
         let (db, mut warnings) = crate::odf::load(vfs, profile, index)?;
         let (races, _) = crate::Races::load(vfs, index);
-        let (rules, rule_warnings) = crate::Rules::load(vfs, &races);
+        let (rules, rule_warnings) = crate::Rules::load(vfs, &races)?;
         warnings.extend(rule_warnings);
         let db = db.with_rules(rules).with_launch_points(vfs).with_resources(ResourceModel::from_strings(profile, &crate::StringTable::load(vfs)));
         if db.is_empty() {
@@ -98,7 +98,7 @@ impl ContentDb {
         }
         // The skirmish tree: `tech1`, from the top-most layer that has one.
         // A map may name another (CON-07/UI); `with_tech_tree` swaps it.
-        match TechTree::from_vfs(vfs, DEFAULT_TECH_TREE) {
+        match TechTree::from_vfs(vfs, DEFAULT_TECH_TREE)? {
             // Load what parses; the warnings (mostly duplicate entries in
             // Fleet Operations' files) are the caller's to show.
             Some((tree, w)) if !tree.is_empty() => {
