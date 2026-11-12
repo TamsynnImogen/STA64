@@ -367,7 +367,7 @@ pub fn default_loadout(db: &ContentDb, race: &str) -> Loadout {
     }
     let miner = of_race
         .iter()
-        .find(|u| (u.miner || u.class.0 == "freighter") && mobile(u))
+        .find(|u| u.mines() && mobile(u))
         .or_else(|| of_race.iter().filter(builds).find(|u| mobile(u)));
     if let Some(u) = miner {
         units.push(u.key);

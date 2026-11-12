@@ -97,7 +97,6 @@
       physicsFile: "fx_phys_miner",
       maxHealth: 250, maxShields: 100, shieldRate: 7.5, crewCost: 40, rangeScan: 600,
       dilithiumCost: 400, buildTime: 20, officerCost: 1,
-      miner: 0, // explicit: the fake miner does not mine (the class alone would)
     },
     fx_moon: { classLabel: "planet", unitName: "Moon", basename: "fx_moon", ScaleSOD: 4 },
   },
