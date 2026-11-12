@@ -951,6 +951,7 @@ impl Bench {
                 })
                 .collect(),
             options: r.setup.options.clone(),
+            starts: sta_sim::replay::StartRec::Bare,
             commands: r.commands.clone(),
             digests,
             end_tick: end,
