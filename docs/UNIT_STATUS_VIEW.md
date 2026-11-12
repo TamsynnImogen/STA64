@@ -87,3 +87,12 @@ Core, simulation, bench, AI, mission and content unit suites pass (617 tests in
 aggregate); the network crate has no library unit tests. Full client, strict
 Clippy, workspace and Android checks are tracked in the prerequisite PR/private
 receipts. These checks establish the data prerequisite, not the mouseover UI.
+
+
+The client suite also passes: 448 tests, one pre-existing ignored. Strict
+all-target Clippy across core/content/sim/bench/AI/mission/net/client, the
+workspace/all-target check and NDK29/API26 ARM64 client-library check pass.
+This is 1065 library test passes in aggregate. No new APK/device proof.
+Independent read-only review found no concrete defect in state, suffix admission,
+controls or fixture handling. Private logs/producers and their pinned receipts
+are under `STA64-artifacts/probes/unit-status/`.

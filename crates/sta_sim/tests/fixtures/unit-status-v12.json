@@ -7,7 +7,7 @@
   "synthetic_content_only": true,
   "files": [
     {
-      "path": "make-v12-fixture.rs",
+      "path": "make-unit-status-v12.rs",
       "sha256": "d84afc3163b412a92284912c003861b07f5002d5fb23416d9af582812c827d24",
       "bytes": 1394
     },
