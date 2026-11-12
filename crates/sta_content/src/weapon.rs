@@ -15,12 +15,13 @@
 //! | `duration` | ordnance `lifespan` seconds, beams only |
 //! | `fire_sound`, `fx` | `fireSound`; ordnance `shotGeometry` (else `sprite`) |
 //! | specials | `effectTimer`, `energyDrainRate`, `specialEnergyCost`, `disableWeapons` (default on), `decloakOnHit` |
+//! | `resource` (class `resourceweapon`) | `addDilithium`, `addLatinum`, `addMetal`, `addBiomatter` (signed), `oneTimeMode`, `alwaysActivePlayer`, `alwaysActiveAI` |
 //! | hardpoint arc | `restrictFireArc = 1` with `fireArc` as the half-width in radians (our reading) |
 
 use sta_core::Fixed;
 use sta_odf::Odf;
 
-use crate::def::{ClassLabel, FireArc, WeaponDef, WeaponKind};
+use crate::def::{ClassLabel, FireArc, ResourceWeaponDef, WeaponDef, WeaponKind};
 use crate::odf::{numbered, stem, Reader};
 use crate::Warning;
 
@@ -64,6 +65,22 @@ pub fn weapon_def(name: &str, odf: &Odf, ordnance: Option<&Odf>, warnings: &mut 
     d.energy_cost = r.fixed("specialEnergyCost");
     d.disable_weapons = r.flag("disableWeapons").unwrap_or(true);
     d.decloak_on_hit = r.flag("decloakOnHit").unwrap_or(false);
+
+    if own == "resourceweapon" {
+        let mut add = [Fixed::ZERO; crate::resources::SLOTS];
+        for (slot, key) in crate::resources::KEYS.iter().enumerate() {
+            // Signed: the Roots Tal Shiar weapons take (`addDilithium = -100`).
+            if let Some(v) = r.num(&format!("add{key}")) {
+                add[slot] = Fixed::from_f64(v);
+            }
+        }
+        d.resource = Some(ResourceWeaponDef {
+            add,
+            one_time: r.flag("oneTimeMode").unwrap_or(false),
+            always_player: r.flag("alwaysActivePlayer").unwrap_or(false),
+            always_ai: r.flag("alwaysActiveAI").unwrap_or(false),
+        });
+    }
 
     let arc = if r.flag("restrictFireArc") == Some(true) {
         r.num("fireArc").filter(|a| *a > 0.0).map(|half| FireArc {

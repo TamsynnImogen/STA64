@@ -581,6 +581,16 @@ fn hash_inner(db: &ContentDb, include_starting_rules: bool) -> u64 {
                     h.byte(w.disable_weapons as u8);
                     h.byte(w.decloak_on_hit as u8);
                 }
+                // SIM-24: only for resource weapons, so other content keeps its hash.
+                if let Some(r) = &w.resource {
+                    h.byte(0xef);
+                    for f in r.add {
+                        h.fixed(f);
+                    }
+                    h.byte(r.one_time as u8);
+                    h.byte(r.always_player as u8);
+                    h.byte(r.always_ai as u8);
+                }
                 feature_bits(&mut h, w.features.as_ref(), &db.features);
             }
         }
