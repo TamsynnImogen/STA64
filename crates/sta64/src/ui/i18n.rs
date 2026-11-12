@@ -13,12 +13,16 @@
 //!    `key<TAB>text` lines, for everything the game never had and for
 //!    translations.
 //!
+//! Tooltips resolve at display time through [`Strings::tooltip_text`]. Their
+//! native header entry takes priority over STA64 translations and source text.
+//!
 //! The text helpers are called from plain builder functions that have no
 //! `World`, so the active table lives behind a process-wide lock that the
 //! [`Strings`] resource keeps in step. Changing [`Language`] reloads it.
 //!
 //! The lint test at the bottom fails when a UI source file hands a string
-//! literal straight to a text-spawning helper instead of through [`tr`].
+//! literal straight to a text-spawning helper instead of through [`tr`] (or
+//! [`tooltip_key`] for text resolved when its tooltip is displayed).
 
 use std::collections::HashMap;
 use std::sync::{OnceLock, RwLock};
@@ -105,6 +109,16 @@ impl Strings {
         self.game.get_or_key(key)
     }
 
+    /// Tooltip entries in the native header are authoritative, including empty
+    /// entries. STA64 language/source text is a fallback only for missing keys.
+    pub fn tooltip_text<'a>(&'a self, key: &'a str) -> &'a str {
+        self.game.get(key)
+            .or_else(|| GAME_KEYS.iter().find(|(source, _)| *source == key)
+                .and_then(|(_, native)| self.game.get(native)))
+            .or_else(|| self.map.get(key).map(String::as_str))
+            .unwrap_or(key)
+    }
+
     /// Native menu caption from the mounted label.map, highest layer first.
     pub fn native_label(&self, key: &str) -> Option<&str> {
         self.labels.get(key).first().map(String::as_str)
@@ -116,6 +130,12 @@ impl Strings {
             *g = self.map.clone();
         }
     }
+}
+
+/// Retain a source tooltip key for deferred lookup, so native entries take
+/// priority and a language/game change does not leave a translated key behind.
+pub fn tooltip_key(key: &str) -> String {
+    key.to_owned()
 }
 
 fn parse_pairs(text: &str) -> impl Iterator<Item = (String, String)> + '_ {
@@ -281,6 +301,27 @@ mod tests {
         app.update();
         assert_eq!(app.world().resource::<Strings>().game_text("RACE"), "RACE");
         assert_eq!(app.world().resource::<Strings>().native_label("ol_normal"), None);
+    }
+
+    #[test]
+    fn tooltip_native_entries_win_and_only_missing_entries_fall_back() {
+        let root = TempRoot::new();
+        std::fs::write(root.0.join("Dynamic_Localized_Strings.h"),
+            "\"GUI_TIP\", \"Native tip\", \"GUI_VERBOSE\", \"Native details\", \"EMPTY\", \"\", \"GUI_CV_MIN_TOOLTIP\", \"Native strategic tip\"").unwrap();
+        std::fs::write(root.0.join("sta64_english.strings"),
+            "GUI_TIP\tSTA64 tip\nEMPTY\tDo not show\nSource tip\tTranslated source\nDouble click to return to strategic mode.\tSTA64 strategic tip\n").unwrap();
+        let mut vfs = Vfs::default();
+        vfs.push_dir("fixture".into(), root.0.clone()).unwrap();
+        let strings = Strings::load(&vfs, "english");
+        assert_eq!(strings.tooltip_text("GUI_TIP"), "Native tip");
+        assert_eq!(strings.tooltip_text("GUI_VERBOSE"), "Native details");
+        assert_eq!(strings.tooltip_text("EMPTY"), "");
+        assert_eq!(strings.tooltip_text("Source tip"), "Translated source");
+        assert_eq!(strings.tooltip_text("Literal ODF tip"), "Literal ODF tip");
+        assert_eq!(strings.tooltip_text("MISSING_KEY"), "MISSING_KEY");
+        assert_eq!(strings.tooltip_text(GAME_KEYS[0].0), "Native strategic tip");
+        // The tooltip priority does not change generic UI translation policy.
+        assert_eq!(strings.map.get(GAME_KEYS[0].0).map(String::as_str), Some("STA64 strategic tip"));
     }
 
     #[test]
