@@ -11,28 +11,18 @@
 //! get. `#include` works between entries. The schema is in
 //! `docs/CONTENT_JSON5.md`.
 //!
-//! Three things the ODF loader cannot express and the fakes need are read in
-//! a small final pass ([`finish`]), each from a key the ODF format already
-//! has or an `STA64_` extension in the style of `STA64_queueLimit`:
-//!
-//! - `miner = 0` on a `freighter` (the key exists; the ODF loader forces
-//!   class `freighter` to mine),
-//! - `eventAttack` (the key exists) fills the unit's attack acknowledgement,
-//! - `STA64_fireArc<N>`: half-width in radians of the arc of weapon slot `N`
-//!   on this unit alone (stock ODFs only limit a weapon everywhere it is
-//!   mounted, through `restrictFireArc` / `fireArc`),
-//! - `STA64_duration` on a weapon: seconds it stays active, for kinds whose
-//!   ordnance gives none (point defence).
+//! Keys beyond stock ODFs are read by the ODF loader itself, so installed ODFs
+//! and JSON5 agree: `miner = 0` (the key decides, see `UnitDef::mines`),
+//! `eventAttack`, and the `STA64_` extensions `STA64_fireArc<N>` (a slot's own
+//! fire arc) and `STA64_duration` (a weapon's active seconds).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use serde::Deserialize;
-use sta_core::Fixed;
 
-use crate::def::FireArc;
 use crate::features::Profile;
-use crate::odf::{numbered, stem};
+use crate::odf::stem;
 use crate::profile::Overrides;
 use crate::{ContentDb, ContentError, MapDef, Warning};
 
@@ -115,7 +105,7 @@ pub fn load_str(file: &str, text: &str) -> Result<(ContentDb, Vec<Warning>), Jso
         .map(|(n, k)| (stem(n), odf_text(k)))
         .collect();
     let stems: Vec<String> = texts.keys().cloned().collect();
-    let (db, mut warnings) =
+    let (db, warnings) =
         crate::odf::load_with(profile, &overrides, &stems, &mut |name, version| {
             if version == 0 {
                 texts.get(&stem(name)).cloned()
@@ -123,7 +113,6 @@ pub fn load_str(file: &str, text: &str) -> Result<(ContentDb, Vec<Warning>), Jso
                 None
             }
         })?;
-    let db = finish(&db, profile, &mut warnings)?;
     Ok((db, warnings))
 }
 
@@ -153,83 +142,10 @@ pub fn save_map(map: &MapDef) -> Result<String, Json5Error> {
     })
 }
 
-/// The final pass described in the module docs: rebuild the database with the
-/// few fields the ODF loader leaves to their keys.
-fn finish(
-    db: &ContentDb,
-    profile: Profile,
-    warnings: &mut Vec<Warning>,
-) -> Result<ContentDb, ContentError> {
-    let mut b = ContentDb::builder()
-        .profile(profile)
-        .features(db.features().clone());
-    let weapons: BTreeSet<String> = db.weapons().map(|w| stem(&w.odf)).collect();
-    for w in db.weapons() {
-        let mut w = w.clone();
-        if let Some(s) = w
-            .raw
-            .f32("STA64_duration")
-            .filter(|s| s.is_finite() && *s >= 0.0)
-        {
-            w.duration = sta_core::seconds_to_ticks(s as f64);
-        }
-        b = b.weapon(w);
-    }
-    for u in db.units() {
-        let mut u = u.clone();
-        let file = format!("{}.odf", u.odf);
-        if u.raw.raw("miner").is_some() && u.raw.f32("miner") == Some(0.0) {
-            u.miner = false;
-        }
-        if let Some(s) = u
-            .raw
-            .str("eventAttack")
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-        {
-            u.sounds.ack_attack = vec![s.to_owned()];
-        }
-        // Weapon slots that became hardpoints, in the loader's order.
-        let slots: Vec<u32> = numbered(&u.raw, "weapon")
-            .into_iter()
-            .filter(|(_, w)| weapons.contains(&stem(w)))
-            .map(|(n, _)| n)
-            .collect();
-        for key in u
-            .raw
-            .keys()
-            .filter(|k| k.to_ascii_lowercase().starts_with("sta64_firearc"))
-            .map(str::to_owned)
-            .collect::<Vec<_>>()
-        {
-            let n: Option<u32> = key["STA64_fireArc".len()..].parse().ok();
-            // f64, not the loader's f32: the angle's cosine is hashed.
-            let half = u
-                .raw
-                .raw(&key)
-                .and_then(|t| t.trim().parse::<f64>().ok())
-                .filter(|h| h.is_finite() && *h > 0.0);
-            match (n.and_then(|n| slots.iter().position(|s| *s == n)), half) {
-                (Some(i), Some(half)) if i < u.hardpoints.len() => {
-                    u.hardpoints[i].arc = Some(FireArc {
-                        dir: (Fixed::ZERO, Fixed::ONE),
-                        min_dot: Fixed::from_f64(half.min(std::f64::consts::PI).cos()),
-                    });
-                }
-                _ => warnings.push(Warning::new(
-                    &file,
-                    format!("{key} names no weapon slot or is not a positive angle; ignored"),
-                )),
-            }
-        }
-        b = b.unit(u);
-    }
-    b.build()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sta_core::Fixed;
     use std::path::PathBuf;
 
     fn fixtures() -> PathBuf {
@@ -357,11 +273,5 @@ mod tests {
             load_str("t", r#"{ profile: "zzz", odf: {} }"#),
             Err(Json5Error::Parse { .. })
         ));
-        let text = r#"{ odf: { a: { classLabel: "craft", unitName: "A", STA64_fireArc9: 1 } } }"#;
-        let (_, w) = load_str("t", text).unwrap();
-        assert!(
-            w.iter().any(|w| w.message.contains("STA64_fireArc9")),
-            "{w:?}"
-        );
     }
 }

@@ -362,7 +362,8 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
                 return false;
             }
             h.weapon = DefRef::new(w.clone());
-            h.arc = weapon_arcs.get(&w).copied().flatten();
+            // A slot's own `STA64_fireArc<N>` wins over its weapon's arc.
+            h.arc = h.arc.or_else(|| weapon_arcs.get(&w).copied().flatten());
             true
         });
         def.build.list.retain_mut(|b| {

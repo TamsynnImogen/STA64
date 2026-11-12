@@ -308,6 +308,17 @@ pub struct UnitDef {
 }
 
 impl UnitDef {
+    /// Whether the unit mines. The `miner` key decides when the ODF has one
+    /// (stock `freight.odf` says `miner = 1`; the Data Miner, `fdata.odf`, is
+    /// class `freighter` and says `miner = 0`); without it a `freighter` mines,
+    /// or the [`miner`](UnitDef::miner) flag a definition set by hand.
+    pub fn mines(&self) -> bool {
+        match self.raw.f32("miner") {
+            Some(v) => v != 0.0,
+            None => self.miner || self.class.0 == "freighter",
+        }
+    }
+
     /// `avoidMe = 1`: other units steer around and keep out of this one
     /// (moons and balls in Fleet Operations, SIM-21).
     pub fn avoid_me(&self) -> bool {

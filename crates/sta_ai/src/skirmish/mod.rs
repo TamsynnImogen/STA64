@@ -174,7 +174,7 @@ fn role_of(db: &ContentDb, key: ContentKey) -> Role {
         EntityKind::Station if d.build.list.is_empty() => Role::Fort,
         EntityKind::Station => Role::Yard,
         EntityKind::Craft if d.class.0 == "constructionrig" => Role::Rig,
-        EntityKind::Craft if d.class.0 == "freighter" || d.miner => Role::Miner,
+        EntityKind::Craft if d.mines() => Role::Miner,
         EntityKind::Craft if !d.hardpoints.is_empty() => Role::Warship,
         _ => Role::Other,
     }

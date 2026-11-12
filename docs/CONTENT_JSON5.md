@@ -52,17 +52,17 @@ when no install is present: the units and weapons of `sta_content::fake::db()`.
 - Unknown top-level keys are an error; ODF keys are not checked (as in ODFs).
   Problems the ODF loader would warn about come back as warnings.
 
-### Keys beyond what the ODF loader reads
+### Keys beyond stock ODFs
 
-A last pass reads the following. Each is an existing ODF key or an `STA64_`
-extension named in the style of `STA64_queueLimit`.
+The ODF loader reads these itself, so installed ODFs and JSON5 agree. Each is an
+existing ODF key or an `STA64_` extension in the style of `STA64_queueLimit`.
 
 | Key | Where | Meaning |
 |---|---|---|
-| `miner = 0` | unit | Existing key. A `freighter` does not mine. (The ODF loader makes every freighter a miner, although stock ODFs such as the Data Miner set `miner = 0`: a known difference between the two paths, for a follow-up in `unit.rs`.) |
+| `miner` | unit | Existing key. When present it decides whether the unit mines (`UnitDef::mines`): stock `freight.odf` says `miner = 1`, the Data Miner (`fdata.odf`, class `freighter`) says `miner = 0`. Without it a `freighter` mines. |
 | `eventAttack` | unit | Existing key. Fills the attack acknowledgement sound. |
-| `STA64_fireArc<N>` | unit | Half-width in radians of the fire arc of weapon slot `N` on this unit only. Stock ODFs limit a weapon wherever it is mounted (`restrictFireArc`, `fireArc`); `fake::db()` limits one beam on two units and not on a third. |
-| `STA64_duration` | weapon | Seconds the weapon stays active, when its ordnance gives no `lifespan` (point defence). |
+| `STA64_fireArc<N>` | unit | Half-width in radians of the fire arc of weapon slot `N` on this unit only. Stock ODFs limit a weapon wherever it is mounted (`restrictFireArc`, `fireArc`); `fake::db()` limits one beam on two units and not on a third. Wins over the weapon's own arc. |
+| `STA64_duration` | weapon | Seconds the weapon stays active, when its ordnance gives no `lifespan` (point defence). Overrides the ordnance's `lifespan`. |
 
 Not expressible, and not hashed, so not in the fixtures: the explosion sound
 and the damage-effect list of `fake::db()`.

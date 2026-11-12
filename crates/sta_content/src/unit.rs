@@ -137,7 +137,14 @@ pub(crate) fn unit_def_for_profile(name: &str, odf: &Odf, phys: Option<&Odf>, pr
             .raw(&format!("weaponHardPoints{n}"))
             .and_then(|h| words(h).into_iter().next())
             .unwrap_or_else(|| "root".to_owned());
-        d.hardpoints.push(Hardpoint { weapon: DefRef::new(weapon), node, arc: None });
+        // `STA64_fireArc<N>`: this slot's own half-width (radians), where stock ODFs
+        // only limit a weapon wherever it is mounted (`restrictFireArc`, `fireArc`).
+        let arc = odf
+            .raw(&format!("STA64_fireArc{n}"))
+            .and_then(|t| t.trim().trim_matches('"').parse::<f64>().ok())
+            .filter(|half| half.is_finite() && *half > 0.0)
+            .map(crate::weapon::fire_arc);
+        d.hardpoints.push(Hardpoint { weapon: DefRef::new(weapon), node, arc });
     }
 
     let mut cost: Vec<Fixed> = (0..crate::resources::SLOTS).map(|s| r.fixed(&crate::resources::cost_key(s))).collect();
@@ -157,12 +164,16 @@ pub(crate) fn unit_def_for_profile(name: &str, odf: &Odf, phys: Option<&Odf>, pr
 
     d.sounds.select = r.text("eventSelect").into_iter().collect();
     d.sounds.ack_move = r.text("eventAcknowledge").into_iter().collect();
+    d.sounds.ack_attack = r.text("eventAttack").into_iter().collect();
     d.sounds.ambient = r.text("ambientSound");
     d.fx.explosion = r.text("fireball");
 
     d.special_energy_max = r.fixed("maxSpecialEnergy");
     d.special_energy_rate = r.fixed("specialEnergyRate");
-    d.miner = d.class.0 == "freighter" || r.num("miner") == Some(1.0);
+    d.miner = match r.num("miner") {
+        Some(v) => v != 0.0,
+        None => d.class.0 == "freighter",
+    };
     d.max_dilithium = r.fixed("maxdilithium");
     d.mining_rate = r.fixed("miningRate");
     d.transfer_rate = r.fixed("dilithiumTransferRate");

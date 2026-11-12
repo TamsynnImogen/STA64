@@ -103,8 +103,7 @@ fn per_tick(per_second: Fixed) -> Fixed {
 
 fn cfg_of(db: &ContentDb, def: ContentKey) -> Option<Cfg> {
     let d = db.unit(def)?;
-    let miner = d.class.0 == "freighter" || d.miner;
-    if !miner {
+    if !d.mines() {
         return None;
     }
     // Zero means the definition does not say: the defaults apply.
