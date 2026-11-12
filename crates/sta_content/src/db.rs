@@ -470,6 +470,11 @@ fn hash_inner(db: &ContentDb, include_starting_rules: bool) -> u64 {
                         h.fixed(f);
                     }
                 }
+                // `warpSpeed` (SIM-36 seam) only when set.
+                if m.warp_speed != Fixed::ZERO {
+                    h.byte(0xef);
+                    h.fixed(m.warp_speed);
+                }
                 for f in [u.hull, u.shields.max, u.shields.recharge, u.crew, u.sensor] {
                     h.fixed(f);
                 }

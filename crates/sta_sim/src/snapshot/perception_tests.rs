@@ -17,6 +17,7 @@ fn split(bytes: &[u8]) -> (Body, Option<(Vec3, Vec3)>, BoundaryRec, PerceptionRe
     let (personnel, rest): (PersonnelRec, _) = postcard::take_from_bytes(rest).unwrap();
     assert!(personnel.rows.is_empty());
     let (_, rest): (UnitCrewRec, _) = postcard::take_from_bytes(rest).unwrap();
+    let (_, rest): (crate::autonomy::AutonomyWire, _) = postcard::take_from_bytes(rest).unwrap();
     assert!(rest.is_empty());
     (body, bounds, boundary, perception)
 }
@@ -38,6 +39,7 @@ fn join(
     }
     if u16::from_le_bytes(out[4..6].try_into().unwrap()) == FORMAT_VERSION {
         out.extend(postcard::to_allocvec(&UnitCrewRec { version: 1, rows: Vec::new() }).unwrap());
+        out.extend(postcard::to_allocvec(&crate::autonomy::AutonomyWire { version: 1, rows: Vec::new() }).unwrap());
     }
     out
 }

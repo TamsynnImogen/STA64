@@ -35,9 +35,11 @@ use crate::world::{Entities, Entity, EntityKind, Shields, Table};
 use crate::{Rng, Sim, SimEvent};
 
 pub const MAGIC: [u8; 4] = *b"STAS";
+/// Format 14 appends craft autonomy (SIM-38) after the format-13 unit-crew
+/// suffix. The Body and earlier suffix records remain unchanged.
+pub const FORMAT_VERSION: u16 = 14;
 /// Format 13 appends unit crew after the format-12 player-personnel suffix.
-/// The Body and earlier suffix records remain unchanged.
-pub const FORMAT_VERSION: u16 = 13;
+const UNIT_CREW_FORMAT: u16 = 13;
 const PERSONNEL_FORMAT: u16 = 12;
 const PERCEPTION_FORMAT: u16 = 11;
 const PREVIOUS_FORMAT: u16 = 10;
@@ -68,7 +70,7 @@ impl std::fmt::Display for SnapshotError {
         match self {
             SnapshotError::BadMagic => write!(f, "not a snapshot"),
             SnapshotError::FormatVersion { found } => {
-                write!(f, "snapshot format {found}, expected {FORMAT_VERSION} or compatible {PERSONNEL_FORMAT}/{PERCEPTION_FORMAT}/{PREVIOUS_FORMAT}/{LEGACY_CARGO_FORMAT}/{COMPATIBLE_MINING_FORMAT}")
+                write!(f, "snapshot format {found}, expected {FORMAT_VERSION} or compatible {UNIT_CREW_FORMAT}/{PERSONNEL_FORMAT}/{PERCEPTION_FORMAT}/{PREVIOUS_FORMAT}/{LEGACY_CARGO_FORMAT}/{COMPATIBLE_MINING_FORMAT}")
             }
             SnapshotError::SeamRev { found } => {
                 write!(f, "snapshot seam revision {found}, expected {SEAM_REV}")
@@ -246,6 +248,8 @@ impl EntityRec {
                 turn_control_angle: s.smooth[4],
                 turn_control_squared: s.smooth[5] != Fixed::ZERO,
                 forward_control_distance: s.smooth[6],
+                // From the definition, not the snapshot (see `MoveStats`).
+                warp_speed: Fixed::ZERO,
             },
             hull: self.hull,
             crew: None,
@@ -317,6 +321,7 @@ impl Sim {
             version: 1,
             rows: self.units.iter().filter_map(|unit| unit.crew.map(|pool| (unit.id, pool.map(Fixed::to_bits)))).collect(),
         }).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&crate::autonomy::AutonomyWire { version: 1, rows: self.autonomy.to_rec() }).expect("snapshot serialises"));
         out
     }
 
@@ -331,11 +336,11 @@ impl Sim {
             return Err(SnapshotError::BadMagic);
         }
         let found = u16::from_le_bytes([bytes[4], bytes[5]]);
-        if ![FORMAT_VERSION, PERSONNEL_FORMAT, PERCEPTION_FORMAT, PREVIOUS_FORMAT, LEGACY_CARGO_FORMAT, COMPATIBLE_MINING_FORMAT].contains(&found) {
+        if ![FORMAT_VERSION, UNIT_CREW_FORMAT, PERSONNEL_FORMAT, PERCEPTION_FORMAT, PREVIOUS_FORMAT, LEGACY_CARGO_FORMAT, COMPATIBLE_MINING_FORMAT].contains(&found) {
             return Err(SnapshotError::FormatVersion { found });
         }
         let seam = u32::from_le_bytes(bytes[6..10].try_into().unwrap());
-        let expected_seam = match found { FORMAT_VERSION => SEAM_REV, PERSONNEL_FORMAT => 3, PERCEPTION_FORMAT => 2, _ => 1 };
+        let expected_seam = match found { FORMAT_VERSION | UNIT_CREW_FORMAT => SEAM_REV, PERSONNEL_FORMAT => 3, PERCEPTION_FORMAT => 2, _ => 1 };
         if seam != expected_seam {
             return Err(SnapshotError::SeamRev { found: seam });
         }
@@ -351,7 +356,7 @@ impl Sim {
         if found < PREVIOUS_FORMAT && content.as_ref().is_some_and(|db| db.has_map_confinement()) {
             return Err(SnapshotError::Corrupt("old snapshot has no explicit confinement state".into()));
         }
-        let (bounds, boundary_rows, perception_rows, personnel_rows, crew_rows) = if found >= PREVIOUS_FORMAT {
+        let (bounds, boundary_rows, perception_rows, personnel_rows, crew_rows, autonomy_rows) = if found >= PREVIOUS_FORMAT {
             let (bounds, rest) = postcard::take_from_bytes(rest).map_err(|e| SnapshotError::Corrupt(e.to_string()))?;
             let (record, rest): (BoundaryRec, _) = postcard::take_from_bytes(rest).map_err(|e| SnapshotError::Corrupt(e.to_string()))?;
             if record.version != 1 { return Err(SnapshotError::Corrupt("unknown confinement record version".into())); }
@@ -367,21 +372,26 @@ impl Sim {
                 if record.version != 1 { return Err(SnapshotError::Corrupt("unknown personnel record version".into())); }
                 (record.rows, rest)
             } else { (Vec::new(), rest) };
-            let (crew_rows, rest) = if found == FORMAT_VERSION {
+            let (crew_rows, rest) = if found >= UNIT_CREW_FORMAT {
                 let (record, rest): (UnitCrewRec, _) = postcard::take_from_bytes(rest).map_err(|e| SnapshotError::Corrupt(e.to_string()))?;
                 if record.version != 1 { return Err(SnapshotError::Corrupt("unknown unit crew record version".into())); }
                 (record.rows, rest)
             } else { (Vec::new(), rest) };
+            let (autonomy_rows, rest) = if found == FORMAT_VERSION {
+                let (record, rest): (crate::autonomy::AutonomyWire, _) = postcard::take_from_bytes(rest).map_err(|e| SnapshotError::Corrupt(e.to_string()))?;
+                if record.version != 1 { return Err(SnapshotError::Corrupt("unknown autonomy record version".into())); }
+                (record.rows, rest)
+            } else { (Vec::new(), rest) };
             if !rest.is_empty() { return Err(SnapshotError::Corrupt("trailing bytes".into())); }
-            (bounds, record.rows, perception_rows, personnel_rows, crew_rows)
+            (bounds, record.rows, perception_rows, personnel_rows, crew_rows, autonomy_rows)
         } else if rest.is_empty() {
-            (None, Vec::new(), Vec::new(), Vec::new(), Vec::new())
+            (None, Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new())
         } else {
             let (bounds, rest) = postcard::take_from_bytes(rest).map_err(|e| SnapshotError::Corrupt(e.to_string()))?;
             if !rest.is_empty() {
                 return Err(SnapshotError::Corrupt("trailing bytes".into()));
             }
-            (bounds, Vec::new(), Vec::new(), Vec::new(), Vec::new())
+            (bounds, Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new())
         };
         let max_phase = if found == COMPATIBLE_MINING_FORMAT { 3 } else { 4 };
         if let Some(row) = b.economy.miners.iter().find(|row| row.5 > max_phase) {
@@ -436,6 +446,10 @@ impl Sim {
             .collect();
         let movement = Movement::from_rows(courses).ok_or_else(|| corrupt("courses"))?;
         let weapons = Weapons::from_rec(b.weapons).ok_or_else(|| corrupt("weapons"))?;
+        let autonomy = crate::autonomy::Autonomy::from_rec(autonomy_rows).ok_or_else(|| corrupt("autonomy"))?;
+        if autonomy.to_rec().iter().any(|(id, _)| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft)) {
+            return Err(corrupt("autonomy entity"));
+        }
         let specials = crate::specials::Specials::from_rec(b.specials).ok_or_else(|| corrupt("specials"))?;
         let mut economy = crate::economy::Economy::from_rec(&b.economy);
         economy.restore_personnel(personnel_rows, &b.players).map_err(|why| SnapshotError::Corrupt(why.into()))?;
@@ -459,6 +473,7 @@ impl Sim {
             production: crate::production::Production::from_rec(&b.production).ok_or_else(|| corrupt("rallies"))?,
             victory: crate::victory::Victory::from_rec(&b.victory),
             specials,
+            autonomy,
             nav: Default::default(),
         })
     }

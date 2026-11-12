@@ -21,6 +21,7 @@
 //! the entity model in [`world`], filled from the map by [`spawn`], with
 //! today's movement.
 
+pub mod autonomy;
 pub mod boundary;
 pub mod combat;
 pub mod command;
@@ -136,6 +137,8 @@ pub struct Sim {
     victory: victory::Victory,
     /// Special energy and cloaks (SIM-14); in the digest once any exists.
     specials: specials::Specials,
+    /// Craft autonomy levels that were set (SIM-38); in the digest once any exists.
+    autonomy: autonomy::Autonomy,
     /// Path planner grids and fields (SIM-23): a memo, not in the digest.
     nav: nav::Cache,
 }
@@ -162,6 +165,7 @@ impl Sim {
             production: Default::default(),
             victory: Default::default(),
             specials: Default::default(),
+            autonomy: Default::default(),
             nav: Default::default(),
         }
     }
@@ -290,6 +294,9 @@ impl Sim {
                 let Some(db) = self.content.clone() else { return false };
                 self.specials.order_special(&db, &self.units, c.player, units, *slot)
             }
+            Order::Autonomy { units, kind, level } => {
+                self.autonomy.order(&self.units, c.player, units, *kind, *level)
+            }
             Order::Rally { builders, at } => {
                 let Some(db) = self.content.as_deref() else { return false };
                 self.production.order_rally(db, &self.units, c.player, builders, *at)
@@ -353,6 +360,9 @@ impl Sim {
                 view.flags = view.flags.with(view::UnitFlags::SELECTABLE, false);
             }
             view.flags = view.flags.with(view::UnitFlags::BUILDING, self.production.is_welding(entity.id));
+            if matches!(entity.kind, EntityKind::Craft) {
+                view.autonomy = Some(self.autonomy.levels(entity.id));
+            }
             view.energy = self.specials.energy_of(entity.id).and_then(|now| {
                 self.content.as_deref()
                     .and_then(|db| db.unit(entity.def))
@@ -426,6 +436,9 @@ impl Sim {
             self.specials.hash_into(&mut h);
         }
         self.confinement.hash_into(&mut h);
+        if !self.autonomy.is_empty() {
+            self.autonomy.hash_into(&mut h);
+        }
         if !self.perception.is_empty() {
             h.str("perceived-team-v1");
             h.u64(self.perception.len() as u64);

@@ -78,6 +78,11 @@ pub struct MoveStats {
     /// `forwardControlDistance`, units: inside it the approach to a stop is
     /// damped. Default 70.
     pub forward_control_distance: Fixed,
+    /// `warpSpeed`, units per second; zero when the ODF has none. Read by the
+    /// attack approach (SIM-36) from the unit's definition: it is not part of
+    /// the smooth fields, the digest or the snapshot's stats mirror, so a
+    /// unit's own `stats` after a snapshot load carry zero here.
+    pub warp_speed: Fixed,
 }
 
 impl MoveStats {
@@ -151,6 +156,7 @@ const SMOOTH_DEFAULTS: MoveStats = MoveStats {
     turn_control_angle: Fixed::from_int(20),
     turn_control_squared: false,
     forward_control_distance: Fixed::from_int(70),
+    warp_speed: Fixed::ZERO,
 };
 
 impl Default for MoveStats {

@@ -271,6 +271,7 @@ impl Entity {
             progress: self.progress,
             crew: self.crew,
             energy: None,
+            autonomy: None,
         }
     }
 

@@ -93,6 +93,11 @@ pub struct UnitView {
     /// `[now, max]`; absent until special energy has a live row.
     #[serde(default)]
     pub energy: Option<[Fixed; 2]>,
+    /// `[movement, special weapon]` autonomy, 0 low, 1 medium, 2 high
+    /// (SIM-38); only craft carry it, `None` for everything else and for
+    /// sources that do not track it.
+    #[serde(default)]
+    pub autonomy: Option<[u8; 2]>,
 }
 
 /// Unit state bits.
