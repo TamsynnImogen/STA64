@@ -51,7 +51,7 @@ pub fn browser(vfs: &sta_vfs::Vfs, initial: Option<&str>, mount_summary: String)
     let index = initial
         .and_then(|n| {
             let n = n.to_ascii_lowercase();
-            maps.iter().position(|m| *m == n.trim_end_matches(".bzn"))
+            maps.iter().position(|m| *m == n.trim_end_matches(".bzn").trim_end_matches(".sol"))
         })
         .unwrap_or(0);
     MapBrowser {

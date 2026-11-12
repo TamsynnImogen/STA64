@@ -346,7 +346,7 @@ impl SolMap {
         start_locs.extend(self.starts.iter().enumerate().map(|(i, s)| StartLoc {
             pos: s.pos,
             kind: s.kind.clone(),
-            team: i as i32 + 1,
+            team: -1, // free: SOLs carry no locked team
             race: String::new(),
         }));
         Map {
@@ -570,7 +570,7 @@ pub(crate) mod tests {
         assert_eq!(m.start_locs[1].pos, [-500.0, 0.0, -500.0]);
         assert_eq!(
             (m.start_locs[3].team, m.start_locs[3].kind.as_str()),
-            (3, "ai-easy")
+            (-1, "ai-easy")
         );
         assert_eq!(m.objects.len(), 2);
         assert_eq!(m.objects[0].odf, "fcruiser");

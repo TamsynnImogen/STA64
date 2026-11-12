@@ -32,6 +32,12 @@ use crate::{Map, MapObject, StartLoc};
 pub enum WriteError {
     #[error("Armada 1 map bodies are not written")]
     Armada1,
+    #[error(
+        "Star Trek: Legacy SOL maps are not written; the BZN writer would produce a file that reads back as a broken SOL"
+    )]
+    Sol,
+    #[error("{0} start locations are announced but none are given")]
+    StartCount(i32),
     #[error("{field} is {len} bytes; the format holds {max}")]
     TooLong {
         field: &'static str,
@@ -59,7 +65,13 @@ pub fn write(map: &Map) -> Result<Vec<u8>, WriteError> {
     if map.a1.is_some() {
         return Err(WriteError::Armada1);
     }
+    if map.version == crate::sol::VERSION {
+        return Err(WriteError::Sol);
+    }
     check(map)?;
+    if map.binary && map.start_locs.is_empty() && map.start_count != 0 {
+        return Err(WriteError::StartCount(map.start_count));
+    }
     if map.binary {
         binary(map)
     } else {
@@ -84,6 +96,13 @@ fn check(map: &Map) -> Result<(), WriteError> {
         }
     }
     for (index, o) in map.objects.iter().enumerate() {
+        if o.odf.len() >= i16::MAX as usize {
+            return Err(WriteError::TooLong {
+                field: "odf name",
+                len: o.odf.len(),
+                max: i16::MAX as usize - 1,
+            });
+        }
         if o.odf.is_empty() {
             return Err(WriteError::EmptyOdf { index });
         }
@@ -425,6 +444,12 @@ mod tests {
                 "binary {binary}"
             );
         }
+    }
+
+    #[test]
+    fn a_sol_map_is_refused() {
+        let m = crate::parse(&crate::sol::tests::fixture()).unwrap();
+        assert_eq!(write(&m), Err(WriteError::Sol));
     }
 
     #[test]

@@ -37,6 +37,8 @@ impl std::error::Error for BmpError {}
 
 /// Largest edge accepted; the biggest shipped BMPs are a few thousand pixels.
 const MAX_EDGE: i64 = 16384;
+/// 64 megapixels (256 MiB of RGBA); the largest shipped BMPs are far smaller.
+const MAX_PIXELS: i64 = 64 * 1024 * 1024;
 
 const BI_RGB: u32 = 0;
 const BI_RLE8: u32 = 1;
@@ -148,6 +150,10 @@ pub fn decode(data: &[u8]) -> Result<Rgba, BmpError> {
     let top_down = height_raw < 0;
     let height = height_raw.abs();
     if width <= 0 || height == 0 || width > MAX_EDGE || height > MAX_EDGE {
+        return Err(BmpError::Dimensions(width, height_raw));
+    }
+    // The RLE paths allocate before reading data; bound the total, not only each edge.
+    if width * height > MAX_PIXELS {
         return Err(BmpError::Dimensions(width, height_raw));
     }
     let (w, h) = (width as usize, height as usize);
@@ -549,6 +555,8 @@ mod tests {
             decode(b"PNG not a bmp at all"),
             Err(BmpError::Header(_))
         ));
+        let huge = bmp(16384, 16384, 8, BI_RLE8, 0, &[], &[0, 1]);
+        assert!(matches!(decode(&huge), Err(BmpError::Dimensions(..))));
         let data = bmp(0, 4, 8, 0, 0, &[], &[]);
         assert!(matches!(decode(&data), Err(BmpError::Dimensions(0, 4))));
         let data = bmp(100, 100, 24, 0, 0, &[], &[0; 10]);
