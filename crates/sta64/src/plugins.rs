@@ -97,6 +97,11 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
         if let Some(r) = cfg.install_root.as_deref().and_then(|root| crate::audio::BankResolver::mount(root, cfg.active_mod.as_deref())) {
             app.insert_resource(crate::audio::Resolver(Box::new(r)));
         }
+        // MED-03 movie playback; MED-05 the intro movies before the front end.
+        app.add_plugins(crate::media::MediaPlugin);
+        if front_end {
+            app.insert_resource(crate::media::IntroSettings { enabled: !cfg.nointro }).add_plugins(crate::media::IntroPlugin);
+        }
         if cfg.skirmish {
             // A match: calm and battle music of the local race (set by `game::apply_race`),
             // not the viewer's silence.
