@@ -440,6 +440,14 @@ fn hash_inner(db: &ContentDb, include_starting_rules: bool) -> u64 {
                     h.str("sta64.planet-crew-gain.v1");
                     h.u64(u.planet_crew_gain as i64 as u64);
                 }
+                // SIM-23: only nebulae carry it, so other hashes stay.
+                if let Some(n) = u.nebula_pathing {
+                    h.byte(0xee);
+                    h.str("sta64.nebula-pathing.v1");
+                    h.byte(u8::from(n.cost.is_some()));
+                    h.u64(n.cost.unwrap_or(0) as u64);
+                    h.byte(u8::from(n.planned));
+                }
                 let m = &u.movement;
                 for f in [u.scale, m.max_speed, m.forward_accel, m.turn_omega, m.turn_alpha, m.turn_at_rest] {
                     h.fixed(f);
