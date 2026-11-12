@@ -5471,6 +5471,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "sta_media"
+version = "0.1.0"
+dependencies = [
+ "sta_vfs",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "sta_mission"
 version = "0.1.0"
 dependencies = [

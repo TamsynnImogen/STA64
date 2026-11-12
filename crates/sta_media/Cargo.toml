@@ -1,0 +1,17 @@
+[package]
+name = "sta_media"
+description = "Movie decoding (Bink 1, MP4) for STA64: frames and PCM, no engine dependencies"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["bink", "mp4"]
+# Bink 1 (`BIKf`..`BIKi`) video and audio, in `src/bink/` (MED-01).
+bink = []
+# MP4 demux and its codecs, in `src/mp4.rs` (MED-02).
+mp4 = []
+
+[dependencies]
+sta_vfs.workspace = true
+thiserror.workspace = true
