@@ -185,7 +185,7 @@ def a1_usage(dlls):
 # ---------------------------------------------------------------- report
 
 AREAS = [
-    ("Script state and save/load", r"hot_int|dirty_int|timer_int|\bin\(|\bout\(|load_scripts|save_scripts|linked_list|list_cell|new_script|character|AddToLoad|AddToSave|script::|WORLD"),
+    ("Script state and save/load", r"hot_int|dirty_int|timer_int|\bin\(|\bout\(|load_scripts|save_scripts|linked_list|list_cell|new_script|character|AddToLoad|AddToSave|script::|WORLD|hot_float|hot_type|IIIE::|group|Load_Rules|Load_Action_Scripts"),
     ("Bridge scenes and movies", r"Bridge|Movie|Cinematic"),
     ("Cineractives and camera", r"Cineractive|Camera|FadeIn|FadeOut|Letterbox"),
     ("Titles, text and objectives", r"Title|Text|Objective|AdLog|Subtitle|Message(?!.*Audio)|Hint|Tooltip"),
@@ -293,6 +293,180 @@ A2_SIGNATURES = {
 }
 
 
+# Exact Armada I import signatures implemented by the DLL-named `A1` table
+# (crates/sta_mission/src/api/a1/). The key is the demangled signature the
+# stock DLLs import from Armada.exe, the value the Lua name. An import counts
+# as callable only when the name is also bound by a literal
+# `table.set("Name", ...)` in a module registered by api/a1/mod.rs, so this
+# is source-level coverage, not proof of native simulation parity.
+A1_SIGNATURES = {
+    "void AI_Attack(int)": "A1.AI_Attack",
+    "void AI_Attack(int, Vector3)": "A1.AI_Attack",
+    "void AI_Attack(int, int)": "A1.AI_Attack",
+    "void AI_Team_Load_AIP(int, char *)": "A1.AI_Team_Load_AIP",
+    "float AddCrew(int, float)": "A1.AddCrew",
+    "int AddDilithium(int, int)": "A1.AddDilithium",
+    "float AddOfficers(int, float)": "A1.AddOfficers",
+    "void AddTransporterEffect(int)": "A1.AddTransporterEffect",
+    "void AllowMultipleSpecialWeaponFire(int, bool)": "A1.AllowMultipleSpecialWeaponFire",
+    "void Attack(int, Vector3)": "A1.Attack",
+    "void Attack(int, int, int)": "A1.Attack",
+    "void AttackMainEnemyBase(int, bool)": "A1.AttackMainEnemyBase",
+    "int AudioMessage(char const *)": "A1.AudioMessage",
+    "void Build(int, char *)": "A1.Build",
+    "int BuildObject(char *, int, char *, int)": "A1.BuildObject",
+    "int BuildObject(char *, int, int, float, float, float)": "A1.BuildObject",
+    "void CenterCamera(char *, int)": "A1.CenterCamera",
+    "void CineractiveCameraOffset(char *, float, bool)": "A1.CineractiveCameraOffset",
+    "void CineractiveCameraOffset(float, float, float, bool)": "A1.CineractiveCameraOffset",
+    "void CineractiveEnd(void)": "A1.CineractiveEnd",
+    "void CineractiveShot(char *, float, char *, float)": "A1.CineractiveShot",
+    "void CineractiveShot(char *, float, char *, int)": "A1.CineractiveShot",
+    "void CineractiveShot(char *, float, int)": "A1.CineractiveShot",
+    "void CineractiveShot(char *, int, char *, float)": "A1.CineractiveShot",
+    "void CineractiveShot(char *, int, char *, int)": "A1.CineractiveShot",
+    "void CineractiveShot(char *, int, int)": "A1.CineractiveShot",
+    "void CineractiveShot(int, int)": "A1.CineractiveShot",
+    "void CineractiveStart(void)": "A1.CineractiveStart",
+    "void ClearRestrictions(int)": "A1.ClearRestrictions",
+    "void Cloak(int)": "A1.Cloak",
+    "int CountUnits(int, char *)": "A1.CountUnits",
+    "int CountUnitsNearObject(int, float, int, char *)": "A1.CountUnitsNearObject",
+    "int CountUnitsNearPoint(char *, float, int, char *, int)": "A1.CountUnitsNearPoint",
+    "int CountVisibleUnits(int, int, bool, char *)": "A1.CountVisibleUnits",
+    "int CountVisibleUnitsNearObject(int, float, int, bool, char *)": "A1.CountVisibleUnitsNearObject",
+    "void CraftCannotDie(int, bool)": "A1.CraftCannotDie",
+    "int CreateSpecialFlag(int, char *)": "A1.CreateSpecialFlag",
+    "void Decloak(int)": "A1.Decloak",
+    "void DestroyCritical(int)": "A1.DestroyCritical",
+    "void DestroyEngines(int)": "A1.DestroyEngines",
+    "void DestroyLifeSupport(int)": "A1.DestroyLifeSupport",
+    "void DestroySensors(int)": "A1.DestroySensors",
+    "void DestroyShieldGenerator(int)": "A1.DestroyShieldGenerator",
+    "void DestroyWeapons(int)": "A1.DestroyWeapons",
+    "void DisableAllAITeams(void)": "A1.DisableAllAITeams",
+    "void DisableEngines(int, bool)": "A1.DisableEngines",
+    "void DisableShieldGenerator(int, bool)": "A1.DisableShieldGenerator",
+    "void DisableTeam(int)": "A1.DisableTeam",
+    "void DisableWeapons(int, bool)": "A1.DisableWeapons",
+    "bool DoesNotExist(int)": "A1.DoesNotExist",
+    "void EnableAllAITeams(void)": "A1.EnableAllAITeams",
+    "void EnableLight(int, bool)": "A1.EnableLight",
+    "void EnableTeam(int)": "A1.EnableTeam",
+    "void EnableWormholeTravel(int, bool)": "A1.EnableWormholeTravel",
+    "void EndCredits(void)": "A1.EndCredits",
+    "bool Exists(int)": "A1.Exists",
+    "void FadeIn(float, float, float)": "A1.FadeIn",
+    "void FadeOut(float, float, float)": "A1.FadeOut",
+    "void FadeRemove(void)": "A1.FadeRemove",
+    "void FailMission(float, char *)": "A1.FailMission",
+    "int GetAllyShipAttacks(int, int)": "A1.GetAllyShipAttacks",
+    "int GetAllyStationAttacks(int, int)": "A1.GetAllyStationAttacks",
+    "Vector3 GetAttackLocation(int, int)": "A1.GetAttackLocation",
+    "float GetCrew(int)": "A1.GetCrew",
+    "float GetDilithiumOnFreighter(int)": "A1.GetDilithiumOnFreighter",
+    "float GetDistance(int &, char *, int)": "A1.GetDistance",
+    "float GetDistance(int &, int &)": "A1.GetDistance",
+    "int GetHandle(char *)": "A1.GetHandle",
+    "Vector3 const & GetLocation(char *, int)": "A1.GetLocation",
+    "Vector3 const & GetLocation(int)": "A1.GetLocation",
+    "int GetLocationOfFlag(int)": "A1.GetLocationOfFlag",
+    "int GetNearestEnemy(int, float)": "A1.GetNearestEnemy",
+    "int GetNearestObjectNearMe(int, float, int, char *, int, bool)": "A1.GetNearestObjectNearMe",
+    "int GetNearestObjectNearPosition(Vector3 const &, float, int, char *, int, bool, int)": "A1.GetNearestObjectNearPosition",
+    "int GetNearestStarbase(int, int)": "A1.GetNearestStarbase",
+    "int GetNearestTranswarpGate(int)": "A1.GetNearestTranswarpGate",
+    "int GetPercievedTeamOfFlag(int)": "A1.GetPercievedTeamOfFlag",
+    "float GetRealShieldPercent(int)": "A1.GetRealShieldPercent",
+    "int GetRealTeam(int)": "A1.GetRealTeam",
+    "int GetRealTeamOfFlag(int)": "A1.GetRealTeamOfFlag",
+    "float GetShieldPercent(int)": "A1.GetShieldPercent",
+    "float GetTime(void)": "A1.GetTime",
+    "int GetTranswarpExitWormhole(int)": "A1.GetTranswarpExitWormhole",
+    "void Goto(int, char *, int)": "A1.Goto",
+    "void Goto(int, int, int)": "A1.Goto",
+    "void GridVisible(bool)": "A1.GridVisible",
+    "void ImmediateCloak(int)": "A1.ImmediateCloak",
+    "bool InAttackMode(int)": "A1.InAttackMode",
+    "bool InQueue(int)": "A1.InQueue",
+    "bool InStopMode(int)": "A1.InStopMode",
+    "bool IsAlive(int)": "A1.IsAlive",
+    "bool IsAudioMessageDone(int)": "A1.IsAudioMessageDone",
+    "bool IsCompromised(int, int)": "A1.IsCompromised",
+    "bool IsDerelict(int)": "A1.IsDerelict",
+    "bool IsExploding(int)": "A1.IsExploding",
+    "bool IsMoviePlaying(void)": "A1.IsMoviePlaying",
+    "bool IsThereARomulanSpyOnShip(int)": "A1.IsThereARomulanSpyOnShip",
+    "bool IsValid(int)": "A1.IsValid",
+    "bool IsVisibleToTeam(int, int)": "A1.IsVisibleToTeam",
+    "void LinkWormHoles(int, int)": "A1.LinkWormHoles",
+    "void Mine(int, int)": "A1.Mine",
+    "void MinimapMessage(char *, int, float, int)": "A1.MinimapMessage",
+    "void MinimapMessage(int, int, float)": "A1.MinimapMessage",
+    "void ObjectivesDisplay_Set_Text_From_File(char *)": "A1.ObjectivesDisplay_Set_Text_From_File",
+    "void ObjectivesDisplay_Set_Visibility(bool)": "A1.ObjectivesDisplay_Set_Visibility",
+    "void ObstacleAvoidence(bool)": "A1.ObstacleAvoidence",
+    "bool OutOfSpecialAttackMode(int)": "A1.OutOfSpecialAttackMode",
+    "void Patrol(int, char *)": "A1.Patrol",
+    "void PauseSimulation(void)": "A1.PauseSimulation",
+    "void PlayBridgeMovie(char *, int)": "A1.PlayBridgeMovie",
+    "void PointAt(int, char *)": "A1.PointAt",
+    "void PointAt(int, int)": "A1.PointAt",
+    "void PreLoadBridgeScene(BridgeDisplay::BridgeType)": "A1.PreLoadBridgeScene",
+    "bool RecruitSpecialForces(char *, int, int &)": "A1.RecruitSpecialForces",
+    "void RemoveAllCraft(bool, int)": "A1.RemoveAllCraft",
+    "void RemoveAllObjects(void)": "A1.RemoveAllObjects",
+    "void RemoveBillboardEffect(int)": "A1.RemoveBillboardEffect",
+    "void RemoveObject(int)": "A1.RemoveObject",
+    "void RemoveSubtitle(int, bool)": "A1.RemoveSubtitle",
+    "void RemoveTitle(int, bool)": "A1.RemoveTitle",
+    "int ReplaceObject(int, char *)": "A1.ReplaceObject",
+    "void ResetWarpSpeed(int)": "A1.ResetWarpSpeed",
+    "void RestrictSpecialFlag(int, SpecialFlag::Restriction)": "A1.RestrictSpecialFlag",
+    "void RestrictSpecialFlag(int, SpecialFlag::Restriction, int)": "A1.RestrictSpecialFlag",
+    "void SearchAndDestroy(int)": "A1.SearchAndDestroy",
+    "void SetBridgeSceneRace(BridgeDisplay::BridgeType)": "A1.SetBridgeSceneRace",
+    "void SetCrew(int, float)": "A1.SetCrew",
+    "int SetDilithium(int, int)": "A1.SetDilithium",
+    "void SetGreenAlert(int)": "A1.SetGreenAlert",
+    "void SetImpulseSpeed(int, float)": "A1.SetImpulseSpeed",
+    "void SetIsAITeam(int const &, bool const &)": "A1.SetIsAITeam",
+    "void SetMaxShields(int, float)": "A1.SetMaxShields",
+    "float SetOfficers(int, float)": "A1.SetOfficers",
+    "void SetPerceivedTeam(int, int)": "A1.SetPerceivedTeam",
+    "void SetPosition(int, char *)": "A1.SetPosition",
+    "void SetRace(int, char const *)": "A1.SetRace",
+    "void SetRealTeam(int, int)": "A1.SetRealTeam",
+    "void SetRedAlert(int)": "A1.SetRedAlert",
+    "void SetRelation(int, int, Team::TeamRelation)": "A1.SetRelation",
+    "void SetShieldPercent(int, float)": "A1.SetShieldPercent",
+    "void SetSpecialEnergy(int, float)": "A1.SetSpecialEnergy",
+    "void SetSpecialForcesFlag(int, bool)": "A1.SetSpecialForcesFlag",
+    "void SetSpecialWeaponAttackInterval(int, float)": "A1.SetSpecialWeaponAttackInterval",
+    "float SetTeamCrew(int, float)": "A1.SetTeamCrew",
+    "void SetWarpSpeed(int, float)": "A1.SetWarpSpeed",
+    "void SetWormholeTeam(int, int)": "A1.SetWormholeTeam",
+    "void SetYellowAlert(int)": "A1.SetYellowAlert",
+    "void ShowBridgeOnScreen(bool)": "A1.ShowBridgeOnScreen",
+    "void ShowBridgeScene(bool)": "A1.ShowBridgeScene",
+    "int ShowSubtitle(int, int, int, int, char const *, bool)": "A1.ShowSubtitle",
+    "int ShowTitle(int, int, int, int, char const *, bool)": "A1.ShowTitle",
+    "void Special_Attack(int, Vector3, char const *)": "A1.Special_Attack",
+    "void Special_Attack(int, char const *)": "A1.Special_Attack",
+    "void Special_Attack(int, int, char const *)": "A1.Special_Attack",
+    "void Starfield_Load_Background_Geometry(char *)": "A1.Starfield_Load_Background_Geometry",
+    "void StartCredits(void)": "A1.StartCredits",
+    "void Stop(int, int)": "A1.Stop",
+    "void StopAllShips(int, char const *, bool, bool)": "A1.StopAllShips",
+    "void StopAudioMessage(int)": "A1.StopAudioMessage",
+    "void StopMovie(void)": "A1.StopMovie",
+    "void SucceedMission(float, char *)": "A1.SucceedMission",
+    "void TransferFlag(int, int)": "A1.TransferFlag",
+    "bool UnderAttack(int, float)": "A1.UnderAttack",
+    "void UnpauseSimulation(void)": "A1.UnpauseSimulation",
+}
+
+
 def normalized_signature(sig):
     """Normalize demangled decoration while retaining the full call shape."""
     sig = re.sub(r"^(?:public|private|protected):\s*", "", sig.strip())
@@ -331,6 +505,48 @@ def a2_source_names(repo):
             )
         )
     return names
+
+
+def a1_source_names(repo):
+    """Literal A1 table.set names in registered production api/a1 modules."""
+    base = os.path.join(repo, "crates/sta_mission/src/api/a1")
+    try:
+        with open(os.path.join(base, "mod.rs"), encoding="utf-8") as source:
+            registration = source.read()
+    except OSError:
+        return set()
+    modules = re.findall(
+        r"\b([A-Za-z_][A-Za-z_0-9]*)::install\s*\(\s*lua\s*,\s*&env\s*,",
+        registration,
+    )
+    if not modules or not re.search(r'raw_set\s*\(\s*"A1"\s*,\s*table\s*\)', registration):
+        return set()
+    names = set()
+    for module in modules:
+        path = os.path.join(base, f"{module}.rs")
+        if not os.path.isfile(path):
+            continue
+        with open(path, encoding="utf-8") as source:
+            src = source.read()
+        names |= set(
+            re.findall(
+                r'(?m)^\s*table\s*\.\s*set\s*\(\s*"([A-Za-z_][A-Za-z_0-9]*)"\s*,',
+                src,
+            )
+        )
+    return names
+
+
+def a1_exact_for(sig, repo):
+    """Return the A1 Lua name only for an exact import signature and source binding."""
+    key = normalized_signature(sig)
+    lua_name = next(
+        (name for signature, name in A1_SIGNATURES.items() if normalized_signature(signature) == key),
+        "",
+    )
+    if not lua_name or lua_name.split(".", 1)[1] not in a1_source_names(repo):
+        return ""
+    return lua_name
 
 
 def a2_exact_for(sig, repo):
@@ -442,8 +658,11 @@ def main():
                 return "A2 DLL-shaped"
             if lua_for(name, sig):
                 return "MMM-equivalent"
-        elif lua_for(name, sig):
-            return "bound"
+        else:
+            if a1_exact_for(sig, a.repo):
+                return "A1 callable"
+            if lua_for(name, sig):
+                return "bound"
         if mmm_for(name):
             return "MMM"
         return "new"
@@ -465,6 +684,11 @@ def main():
         if not a2_exact_for(s, a.repo) and lua_for(method_name(s), s)
     )
     a1_cov = sum(1 for s, _ in a1 if lua_for(method_name(s), s))
+    a1_callable = sum(1 for s, _ in a1 if a1_exact_for(s, a.repo))
+    a1_missing = sum(
+        1 for s, _ in a1
+        if area(s) != "Script state and save/load" and not a1_exact_for(s, a.repo)
+    )
     L += ["## Summary", "",
           "| | Armada II | Armada I |", "|---|---:|---:|",
           f"| mission DLLs read | {len(a2_dlls)} | {len(a1_dlls)} |",
@@ -472,8 +696,8 @@ def main():
           f"| engine API size | {len(slots)} `ScriptInterface` methods | (imports only) |",
           f"| distinct calls used | {len(a2_used)} | {len(a1)} |",
           f"| call sites | {sum(use.values())} | — |",
-          f"| A2 DLL-shaped callable | {a2_cov} | — |",
-          f"| missing A2 callable signatures | {a2_missing} | — |",
+          f"| DLL-shaped callable (`A2` / `A1` table) | {a2_cov} | {a1_callable} |",
+          f"| missing callable signatures (missing A1 calls) | {a2_missing} | {a1_missing} |",
           f"| MMM job-equivalent, not A2-shaped | {a2_mmm_equiv} | — |",
           f"| bound in STA64's Lua today | — | {a1_cov} |",
           f"| in MMM's API, not yet bound | {sum(1 for _, s_ in a2_used if status(method_name(s_), s_, 'a2') == 'MMM')} | {sum(1 for s_, _ in a1 if status(method_name(s_), s_, 'a1') == 'MMM')} |",
@@ -483,13 +707,19 @@ def main():
           "- **A2 DLL-shaped**: the exact normalized ScriptInterface signature has a literal",
           "  production binding registered on the `A2` namespace; this is source-level coverage,",
           "  not proof of native simulation parity.",
+          "- **A1 callable**: the exact imported signature has a literal production binding",
+          "  registered on the `A1` namespace (crates/sta_mission/src/api/a1/); same source-level",
+          "  coverage. Some of those bindings retain the request without a simulation seam or",
+          "  raise a documented error (see that module's README); callable is not parity.",
           "- **MMM-equivalent**: an existing MMM-style Lua operation does the same job, but",
           "  it is not counted as an A2 DLL-shaped callable.",
           "- **MMM**: Fleet Operations' MMM Lua API ([MMM_API.md](MMM_API.md)) has it (same name, or the",
           "  alias noted), so converted scripts can call it once STA64 binds it.",
           "- **new**: no Lua API has it; STA64's runtime needs an extension (e.g. A1's bridge scenes).",
-          "- **n/a**: the DLLs' own variables, timers and save/load plumbing (`hot_int`, `timer_int`,",
-          "  `in`/`out`, `linked_list`); in Lua these are plain variables and the save system.", ""]
+          "- **n/a**: the DLLs' own variables, timers, save/load plumbing and rule/group",
+          "  machinery (`hot_int`, `hot_float`, `timer_int`, `in`/`out`, `linked_list`,",
+          "  `IIIE::create_rule`, `group`, `Load_Rules`); in Lua these are plain variables, monitors,",
+          "  tables and the save system.", ""]
 
     def table(title, rows, has_calls):
         out = [f"## {title}", ""]
@@ -512,7 +742,7 @@ def main():
                 n = method_name(sig)
                 api = "a2" if has_calls else "a1"
                 cells.append(status(n, sig, api))
-                display = a2_exact_for(sig, a.repo) if api == "a2" else ""
+                display = (a2_exact_for(sig, a.repo) if api == "a2" else a1_exact_for(sig, a.repo))
                 display = display or lua_for(n, sig) or mmm_for(n)
                 cells.append(f"`{display}`" if display else "")
                 out.append("| " + " | ".join(cells) + " |")
@@ -532,7 +762,8 @@ def main():
           "```"]
     open(a.out, "w").write("\n".join(L) + "\n")
     print(f"A2: {len(a2_dlls)} DLLs, {a2_scripts} scripts, {len(a2_used)}/{len(slots)} methods used, {sum(use.values())} calls; "
-          f"A2 callable {a2_cov}, missing {a2_missing}; A1: {len(a1_dlls)} DLLs, {len(a1)} imports, MMM-equivalent {a1_cov}")
+          f"A2 callable {a2_cov}, missing {a2_missing}; A1: {len(a1_dlls)} DLLs, {len(a1)} imports, "
+          f"A1 callable {a1_callable}, missing {a1_missing}, MMM-equivalent {a1_cov}")
 
 
 if __name__ == "__main__":

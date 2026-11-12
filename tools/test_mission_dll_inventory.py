@@ -541,6 +541,64 @@ class MissionDllInventoryTests(unittest.TestCase):
         (self.a2 / "unregistered.rs").write_text('table.set("IsAlive", fn);', encoding="utf-8")
         self.assertEqual(inventory.a2_exact_for("bool IsAlive(int)", self.repo), "")
 
+    def register_a1(self, module, source, registration=None):
+        a1 = self.api / "a1"
+        a1.mkdir(exist_ok=True)
+        (a1 / f"{module}.rs").write_text(source, encoding="utf-8")
+        (a1 / "tests.rs").write_text('table.set("TestOnly", value);', encoding="utf-8")
+        (a1 / "mod.rs").write_text(
+            registration
+            or f'{module}::install(lua, &env, &table)?; lua.globals().raw_set("A1", table)?;',
+            encoding="utf-8",
+        )
+
+    def test_a1_requires_exact_import_signature_literal_registration_and_namespace(self):
+        self.register_a1("presentation", 'table.set("StopMovie", f);\ntable.set("PlayBridgeMovie", f);\n')
+        self.assertEqual(inventory.a1_exact_for("void StopMovie(void)", self.repo), "A1.StopMovie")
+        self.assertEqual(
+            inventory.a1_exact_for("void PlayBridgeMovie(char *, int)", self.repo), "A1.PlayBridgeMovie"
+        )
+        # A different overload or return type is not the imported function.
+        self.assertEqual(inventory.a1_exact_for("void PlayBridgeMovie(char *)", self.repo), "")
+        self.assertEqual(inventory.a1_exact_for("bool StopMovie(void)", self.repo), "")
+        # A name the source does not bind is not callable even if the table lists it.
+        self.assertEqual(inventory.a1_exact_for("bool IsMoviePlaying(void)", self.repo), "")
+
+    def test_a1_enum_argument_signatures_are_matched_whole(self):
+        self.register_a1("presentation", 'table.set("SetBridgeSceneRace", f);\n')
+        self.assertEqual(
+            inventory.a1_exact_for("void SetBridgeSceneRace(BridgeDisplay::BridgeType)", self.repo),
+            "A1.SetBridgeSceneRace",
+        )
+
+    def test_a1_ignores_unregistered_modules_test_files_and_other_namespaces(self):
+        self.register_a1("presentation", "")
+        (self.api / "a1" / "unregistered.rs").write_text('table.set("StopMovie", f);', encoding="utf-8")
+        self.assertEqual(inventory.a1_exact_for("void StopMovie(void)", self.repo), "")
+        self.register_a1(
+            "presentation",
+            'table.set("StopMovie", f);',
+            registration='presentation::install(lua, &env, &table)?; lua.globals().raw_set("B1", table)?;',
+        )
+        self.assertEqual(inventory.a1_exact_for("void StopMovie(void)", self.repo), "")
+
+    def test_a1_rule_and_group_machinery_is_script_state_plumbing(self):
+        for sig in (
+            "rule * IIIE::create_rule(int (*)(void), void (*)(void), char *)",
+            "group::group(char *)",
+            "void Add_Team_To_Group(int, group &)",
+            "hot_float strength_team_1",
+            "int Load_Rules(char *)",
+        ):
+            self.assertEqual(inventory.area(sig), "Script state and save/load", sig)
+        self.assertNotEqual(inventory.area("void PlayBridgeMovie(char *, int)"), "Script state and save/load")
+
+    def test_every_a1_signature_names_a_distinct_overload(self):
+        keys = [inventory.normalized_signature(sig) for sig in inventory.A1_SIGNATURES]
+        self.assertEqual(len(keys), len(set(keys)))
+        for sig, lua_name in inventory.A1_SIGNATURES.items():
+            self.assertTrue(lua_name.startswith("A1."), sig)
+
 
 if __name__ == "__main__":
     unittest.main()

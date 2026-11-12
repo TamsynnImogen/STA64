@@ -1,0 +1,124 @@
+//! Armada I orders and AI calls. Orders are sent as the unit's owner, like a
+//! player's input; calls with no order or AI seam in the simulation are
+//! retained as `A1.<Name>` calls and counted (see `seams.rs`).
+//!
+//! The trailing `int` of `Goto` and `Stop` (1 in most stock calls, sometimes
+//! 0) is validated and ignored: its meaning is not measured.
+
+use mlua::{Lua, Table, Value};
+use sta_core::EntityId;
+use sta_sim::command::Order;
+
+use super::{A, Env, args_of, def};
+
+fn send(e: &Env, name: &str, id: EntityId, make: impl FnOnce(Vec<EntityId>) -> Order) -> mlua::Result<()> {
+    e.unit(name, id)?;
+    if e.ctx.borrow_mut().order(id, make) {
+        Ok(())
+    } else {
+        Err(mlua::Error::runtime(format!("A1.{name}: object {} has no player owner or the order could not be queued", id.0)))
+    }
+}
+
+pub(super) fn install(lua: &Lua, env: &Env, table: &Table) -> mlua::Result<()> {
+    // `Goto(unit, path, int)` moves along the path's points in order;
+    // `Goto(unit, target, int)` moves to the target's position.
+    table.set("Goto", def(lua, env, "Goto", &["hsi", "hhi"], |lua, e, ov, a| {
+        let id = a[0].id();
+        if ov == 0 {
+            let points = e.path(lua, "Goto", a[1].text())?;
+            for (n, to) in points.into_iter().enumerate() {
+                send(e, "Goto", id, |units| Order::Move { units, to, queue: n > 0 })?;
+            }
+        } else {
+            let to = e.unit("Goto", a[1].id())?.pos;
+            send(e, "Goto", id, |units| Order::Move { units, to, queue: false })?;
+        }
+        Ok(Value::Nil)
+    })?)?;
+    table.set("Stop", def(lua, env, "Stop", &["hi"], |_, e, _, a| {
+        send(e, "Stop", a[0].id(), |units| Order::Stop { units })?;
+        Ok(Value::Nil)
+    })?)?;
+    // `Attack(unit, target, int)`; the position form is an attack-move, which
+    // has no order in the simulation.
+    table.set("Attack", def(lua, env, "Attack", &["hhi", "hv"], |_, e, ov, a| {
+        if ov == 0 {
+            let target = e.unit("Attack", a[1].id())?.id;
+            send(e, "Attack", a[0].id(), |units| Order::Attack { units, target })?;
+        } else {
+            e.unit("Attack", a[0].id())?;
+            e.gap("Attack", "no attack-move order in the sim seam", args_of(a))?;
+        }
+        Ok(Value::Nil)
+    })?)?;
+    table.set("Mine", def(lua, env, "Mine", &["hh"], |_, e, _, a| {
+        let node = e.unit("Mine", a[1].id())?.id;
+        send(e, "Mine", a[0].id(), |units| Order::Mine { units, node })?;
+        Ok(Value::Nil)
+    })?)?;
+    table.set("Build", def(lua, env, "Build", &["hs"], |_, e, _, a| {
+        let odf = a[1].text();
+        let key = e
+            .ctx
+            .borrow()
+            .content
+            .as_ref()
+            .and_then(|db| db.key(odf.strip_suffix(".odf").unwrap_or(odf)))
+            .ok_or_else(|| mlua::Error::runtime(format!("A1.Build: unknown ODF '{odf}'")))?;
+        send(e, "Build", a[0].id(), |builder| Order::Build { builder: builder[0], what: key, at: None })?;
+        Ok(Value::Nil)
+    })?)?;
+    // `StopAllShips(team, odf-or-nil, bool, bool)`: stop every live unit of the
+    // team (matching the ODF when one is given). The two bools are not measured.
+    table.set("StopAllShips", def(lua, env, "StopAllShips", &["iSbb"], |_, e, _, a| {
+        let team = e.team("StopAllShips", a[0].int())?;
+        let ids: Vec<EntityId> = {
+            let c = e.ctx.borrow();
+            c.view
+                .units
+                .iter()
+                .filter(|u| u.owner == team && c.alive(u.id).is_some())
+                .filter(|u| match &a[1] {
+                    A::Str(s) if !s.is_empty() => {
+                        c.odf_name(u).trim_end_matches(".odf").eq_ignore_ascii_case(s.trim_end_matches(".odf"))
+                    }
+                    _ => true,
+                })
+                .map(|u| u.id)
+                .collect()
+        };
+        for id in ids {
+            e.ctx.borrow_mut().order(id, |units| Order::Stop { units });
+        }
+        Ok(Value::Nil)
+    })?)?;
+
+    // Queries over order state the view does not carry.
+    table.set("InStopMode", no_order_state(lua, env, "InStopMode")?)?;
+    table.set("InAttackMode", no_order_state(lua, env, "InAttackMode")?)?;
+    table.set("OutOfSpecialAttackMode", no_order_state(lua, env, "OutOfSpecialAttackMode")?)?;
+    table.set("InQueue", no_order_state(lua, env, "InQueue")?)?;
+    table.set("GetAttackLocation", def(lua, env, "GetAttackLocation", &["hh"], |_, e, _, _| {
+        Err(e.no_data("GetAttackLocation", "the world view carries no order target"))
+    })?)?;
+    // Hull below maximum is not "attacked in the last seconds", so it is not offered.
+    table.set("UnderAttack", def(lua, env, "UnderAttack", &["hf"], |_, e, _, a| {
+        e.unit("UnderAttack", a[0].id())?;
+        Err(e.no_data("UnderAttack", "no recent-damage record in the world view"))
+    })?)?;
+    table.set("GetAllyShipAttacks", def(lua, env, "GetAllyShipAttacks", &["ii"], |_, e, _, _| {
+        Err(e.no_data("GetAllyShipAttacks", "AI attack statistics are not in the world view"))
+    })?)?;
+    table.set("GetAllyStationAttacks", def(lua, env, "GetAllyStationAttacks", &["ii"], |_, e, _, _| {
+        Err(e.no_data("GetAllyStationAttacks", "AI attack statistics are not in the world view"))
+    })?)?;
+    Ok(())
+}
+
+fn no_order_state(lua: &Lua, env: &Env, name: &'static str) -> mlua::Result<mlua::Function> {
+    def(lua, env, name, &["h"], move |_, e, _, a| {
+        e.unit(name, a[0].id())?;
+        Err(e.no_data(name, "the world view carries no order state"))
+    })
+}
