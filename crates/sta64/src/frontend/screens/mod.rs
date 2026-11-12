@@ -401,14 +401,15 @@ fn rebuild(
     selected: Res<SelectedMod>,
     camera: Option<Res<ScreensCamera>>,
     scroll: Res<ListScroll>,
+    strings: Option<Res<crate::ui::i18n::Strings>>,
 ) {
     let Some(draft) = draft else { return };
-    if !(screen.is_changed() || draft.is_changed() || browse.is_changed() || selected.is_changed() || data.is_changed() || theme.is_changed()) {
+    if !(screen.is_changed() || draft.is_changed() || browse.is_changed() || selected.is_changed() || data.is_changed() || theme.is_changed() || strings.as_ref().is_some_and(|s| s.is_changed())) {
         return;
     }
     for e in &roots {
         commands.entity(e).despawn();
     }
-    let ctx = view::Ctx { theme: &theme, data: &data, draft: &draft, browse: &browse, settings: &settings, selected: &selected, scroll: &scroll };
+    let ctx = view::Ctx { theme: &theme, data: &data, strings: strings.as_deref(), draft: &draft, browse: &browse, settings: &settings, selected: &selected, scroll: &scroll };
     view::spawn(&mut commands, *screen.get(), &ctx, camera.map(|c| c.0));
 }
