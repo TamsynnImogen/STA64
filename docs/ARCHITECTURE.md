@@ -46,7 +46,7 @@ If Bevy ever stops fitting, only the `sta64` crate has to change.
 
 Dependencies only point down this picture, enforced by `Cargo.toml`. The
 format crates (`a2fmt`, `sta_fpq`, `sta_vfs`, `sta_odf`, `sta_bzn`,
-`sta_assets`, `sta_surface`) do not depend on `sta_core`; `sta_sim` never
+`sta_assets`, `sta_surface`, `sta_media`) do not depend on `sta_core`; `sta_sim` never
 depends on `sta_ai`, `sta_mission` or `sta_net`, which plug in through its
 traits. The seams between these crates are specified in
 [WORKPLAN.md](WORKPLAN.md), "Seams".

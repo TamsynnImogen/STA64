@@ -207,7 +207,10 @@ impl AudioDecoder {
         }
         let out_bytes = u32::from_le_bytes(record[..4].try_into().unwrap());
         let mut remaining = (out_bytes / self.format.bytes_per_sample()) as usize;
-        let mut out = Vec::with_capacity(remaining);
+        // Every block takes at least one 32-bit word: cap the reservation by
+        // what the record can actually yield, not by the declared size.
+        let most = (record.len() / 4).saturating_mul(self.total);
+        let mut out = Vec::with_capacity(remaining.min(most));
         let mut pos = 4;
         while remaining != 0 {
             if pos >= record.len() {
@@ -218,6 +221,13 @@ impl AudioDecoder {
             out.extend_from_slice(&samples[..take]);
             remaining -= take;
             pos += used;
+        }
+        // The declared size must account for every coded block.
+        if record.len().saturating_sub(pos) >= 4 {
+            return Err(format!(
+                "audio record declares {out_bytes} bytes but leaves {} bytes of blocks undecoded",
+                record.len() - pos
+            ));
         }
         Ok(out)
     }

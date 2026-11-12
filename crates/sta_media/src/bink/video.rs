@@ -1,8 +1,8 @@
 //! Bink 1 video: planes of 8x8 blocks coded through per-row "bundles" of
 //! Huffman-coded values. Follows the clean-room description in the MIT
 //! `mercs2_bink` specification (`SPEC-video.md`); the pre-`i` revisions
-//! differ only in the colour bundle, the plane size prefixes and the chroma
-//! plane order.
+//! differ only in the colour bundle and the plane size prefixes, and the
+//! pre-`h` ones also in the chroma plane order.
 
 use super::bits::Bits;
 use super::tables::{QUANT_INTER, QUANT_INTRA, SCAN, TREE_BYTES, TREE_MAXLEN, TREE_OFF};
@@ -895,7 +895,8 @@ impl VideoDecoder {
             PlaneBuf::new(yw, yh, yw, 0),
             PlaneBuf::new(cw, ch, cp, 128),
             PlaneBuf::new(cw, ch, cp, 128),
-            PlaneBuf::new(yw, yh, yw, 255),
+            // The alpha plane only exists when the header says so.
+            PlaneBuf::new(yw, if flags & FLAG_ALPHA != 0 { yh } else { 0 }, yw, 255),
         ];
         let old = revision < b'i';
         let ctxs = vec![

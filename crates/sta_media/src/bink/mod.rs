@@ -6,7 +6,9 @@
 //! the format, chiefly the MIT-licensed clean-room specifications published
 //! with the `mercs2_bink` crate (`SPEC-video.md`, `SPEC-audio.md`); no
 //! GPL/LGPL decoder source was used. Revisions before `i` differ in the
-//! colour bundle coding, plane size prefixes and chroma plane order.
+//! colour bundle coding and plane size prefixes, and revisions before `h`
+//! in the chroma plane order. Installed movies are `BIKf` and `BIKi`; `g`
+//! and `h` are accepted but untested.
 
 mod audio;
 mod bits;
@@ -21,6 +23,11 @@ use audio::{AudioDecoder, TrackFormat};
 use std::sync::Arc;
 use std::time::Duration;
 use video::VideoDecoder;
+
+/// Largest frame side decoded. The format allows 32767, which would make a
+/// tiny crafted file allocate gigabytes; the installed movies are at most
+/// 1104x848.
+pub const MAX_SIDE: u32 = 4096;
 
 /// The parsed container of a Bink file.
 #[derive(Clone, Debug, PartialEq)]
@@ -80,8 +87,21 @@ impl BinkHeader {
                 fps.num, fps.den
             )));
         }
+        if width > MAX_SIDE || height > MAX_SIDE {
+            return Err(MediaError::Unsupported(format!(
+                "Bink frame {width}x{height} (at most {MAX_SIDE}x{MAX_SIDE} is decoded)"
+            )));
+        }
         if n > 256 {
             return Err(MediaError::Corrupt(format!("{n} audio tracks")));
+        }
+        // Every frame packet holds a length word per track: bounds the
+        // per-track tables built from the header before any packet is read.
+        if (frames as u64 + 1) * (n as u64 + 1) * 4 > bytes.len() as u64 {
+            return Err(MediaError::Corrupt(format!(
+                "{frames} frames of {n} tracks cannot fit in {} bytes",
+                bytes.len()
+            )));
         }
         let mut tracks = Vec::with_capacity(n);
         for t in 0..n {
@@ -138,7 +158,7 @@ struct Track {
 
 /// A Bink movie being decoded.
 pub struct BinkSource {
-    bytes: Arc<[u8]>,
+    bytes: Arc<Vec<u8>>,
     header: BinkHeader,
     info: StreamInfo,
     video: VideoDecoder,
@@ -230,7 +250,7 @@ impl BinkSource {
             duration: Some(header.fps.periods_to_duration(header.frames as u64)),
         };
         Ok(Self {
-            bytes: bytes.into(),
+            bytes: Arc::new(bytes),
             header,
             info,
             video,
@@ -367,11 +387,7 @@ impl MediaSource for BinkSource {
             return Ok(None);
         }
         while self.decoded_video <= self.next_video {
-            let f = self.decoded_video;
-            if self.header.is_keyframe(f) && f == 0 {
-                self.video.reset();
-            }
-            self.decode_video(f)?;
+            self.decode_video(self.decoded_video)?;
         }
         let f = self.next_video;
         self.next_video += 1;
@@ -393,8 +409,16 @@ impl MediaSource for BinkSource {
             .rev()
             .find(|&f| self.header.is_keyframe(f))
             .unwrap_or(0);
-        self.video.reset();
-        self.decoded_video = key;
+        // The reference state holds frame `decoded_video - 1`: keep it when it
+        // lies between the key frame and the target (a forward seek), else
+        // restart at the key frame. The catch-up decoding happens in the next
+        // `next_event`; the installed movies have a single key frame (frame
+        // 0), so a backward seek re-decodes from the start (about 200 fps
+        // at 1104x848 in release).
+        if !(self.decoded_video > key && self.decoded_video <= target + 1) {
+            self.video.reset();
+            self.decoded_video = key;
+        }
         self.next_video = target;
         let at = fps.periods_to_duration(target as u64);
         for t in &mut self.tracks {
@@ -404,7 +428,10 @@ impl MediaSource for BinkSource {
             let f = t.starts[..frames]
                 .partition_point(|&s| s <= sample)
                 .saturating_sub(1);
-            t.next = f;
+            // Start one record early so the crossfade into the target record
+            // matches sequential decoding; its samples before the target are
+            // dropped.
+            t.next = f.saturating_sub(1);
             t.trim_until = sample;
             t.decoder.reset();
         }
@@ -552,6 +579,122 @@ mod tests {
                 src.next_event().unwrap(),
                 Some(MediaEvent::Video(_))
             ));
+        }
+    }
+
+    /// `tiny`'s frame with one audio track (flags) whose record is `record`.
+    fn with_audio(revision: u8, flags: u32, record: &[u8]) -> Vec<u8> {
+        let video = tiny(revision)[52..].to_vec();
+        let mut packet = (record.len() as u32).to_le_bytes().to_vec();
+        packet.extend_from_slice(record);
+        packet.extend_from_slice(&video);
+        let start = 44 + 12 + 8;
+        let end = start + packet.len();
+        let mut f = b"BIK".to_vec();
+        f.push(revision);
+        for v in [
+            end as u32 - 8,
+            1,
+            packet.len() as u32,
+            1,
+            16,
+            16,
+            15,
+            1,
+            0,
+            1,
+        ] {
+            f.extend_from_slice(&v.to_le_bytes());
+        }
+        for v in [4096u32, flags, 0, start as u32 | 1, end as u32] {
+            f.extend_from_slice(&v.to_le_bytes());
+        }
+        f.extend_from_slice(&packet);
+        f
+    }
+
+    /// Decode everything (bounded), returning the event count.
+    fn drain(bytes: Vec<u8>) -> Result<usize> {
+        let mut src = BinkSource::from_bytes(bytes)?;
+        let mut n = 0;
+        while src.next_event()?.is_some() {
+            n += 1;
+            assert!(n < 1000, "runaway event stream");
+        }
+        Ok(n)
+    }
+
+    #[test]
+    fn oversized_frames_are_refused_before_allocating() {
+        let mut f = tiny(b'i');
+        f[20..24].copy_from_slice(&0x7fffu32.to_le_bytes());
+        f[24..28].copy_from_slice(&0x7fffu32.to_le_bytes());
+        assert!(matches!(
+            BinkSource::from_bytes(f),
+            Err(MediaError::Unsupported(_))
+        ));
+    }
+
+    #[test]
+    fn track_tables_must_fit_the_file() {
+        let mut f = tiny(b'i');
+        f[40..44].copy_from_slice(&256u32.to_le_bytes());
+        assert!(BinkSource::from_bytes(f).is_err());
+    }
+
+    #[test]
+    fn a_synthetic_audio_track_decodes() {
+        // One RDFT block of silence: 960 samples declared (1920 bytes).
+        let mut record = 1920u32.to_le_bytes().to_vec();
+        record.extend_from_slice(&[0; 112]);
+        let n = drain(with_audio(b'i', 0xc000_5622, &record));
+        assert!(n.is_ok(), "{n:?}");
+    }
+
+    #[test]
+    fn a_huge_declared_audio_size_is_an_error_not_an_allocation() {
+        // RDFT mono 22 050 Hz track declaring 2 GiB of samples from 4 bytes.
+        let mut record = 0x7fff_fffeu32.to_le_bytes().to_vec();
+        record.extend_from_slice(&[0; 4]);
+        assert!(drain(with_audio(b'i', 0xc000_5622, &record)).is_err());
+    }
+
+    #[test]
+    fn an_audio_record_with_undeclared_blocks_is_corrupt() {
+        // Declares no samples but carries blocks.
+        let mut record = 0u32.to_le_bytes().to_vec();
+        record.extend_from_slice(&[0; 64]);
+        assert!(drain(with_audio(b'i', 0xc000_5622, &record)).is_err());
+    }
+
+    #[test]
+    fn mutated_and_truncated_movies_never_panic() {
+        let mut state = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let mut silence = 1920u32.to_le_bytes().to_vec();
+        silence.extend_from_slice(&[0; 112]);
+        let bases = [
+            tiny(b'i'),
+            tiny(b'f'),
+            with_audio(b'i', 0xc000_5622, &silence),
+        ];
+        for base in &bases {
+            for cut in 0..base.len() {
+                let _ = drain(base[..cut].to_vec());
+            }
+            for _ in 0..400 {
+                let mut f = base.clone();
+                for _ in 0..1 + next() % 6 {
+                    let i = (next() as usize) % f.len();
+                    f[i] = next() as u8;
+                }
+                let _ = drain(f);
+            }
         }
     }
 }

@@ -236,17 +236,14 @@ fn garbage_is_an_error_not_a_panic() {
     }
 }
 
-/// Opens every `.mp4` under `STA64_TEST_MP4_DIR` (or the Heroic Armada II
-/// install when it exists) and decodes it, or reports why not. Skipped when
-/// neither exists. Run with `--nocapture` to see the per-file lines.
+/// Opens every `.mp4` under `STA64_TEST_MP4_DIR` and decodes it. A file whose
+/// codec is not H.264/AAC (the installed Armada II `Intro.mp4` is AV1) is
+/// reported and passes; an H.264 or AAC file that fails, including one in a
+/// profile this build does not decode, fails the test. Skipped without the
+/// variable. Run with `--nocapture` to see the per-file lines.
 #[test]
 fn installed_movies() {
-    let dir = std::env::var_os("STA64_TEST_MP4_DIR")
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            let p = std::path::PathBuf::from("/home/cedric/Games/Heroic/Star Trek Armada II");
-            p.is_dir().then_some(p)
-        });
+    let dir = std::env::var_os("STA64_TEST_MP4_DIR").map(std::path::PathBuf::from);
     let Some(dir) = dir else {
         eprintln!("installed_movies: no install directory, skipped");
         return;
@@ -260,7 +257,9 @@ fn installed_movies() {
     for path in files {
         let file = std::fs::File::open(&path).unwrap();
         match Mp4Source::open(Box::new(file)) {
-            Err(MediaError::Unsupported(why)) => {
+            Err(MediaError::Unsupported(why))
+                if why.starts_with("mp4 video codec") || why.starts_with("mp4 audio codec") =>
+            {
                 println!("{}: unsupported ({why})", path.display())
             }
             Err(e) => panic!("{}: {e}", path.display()),
