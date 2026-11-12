@@ -10,7 +10,7 @@
 //! | `min_resource_force` | miners to keep |
 //! | `min_defense_force` | warships held back at home |
 //! | `min_attack_force` | size of the first wave |
-//! | `max_attack_force` | largest wave |
+//! | `max_attack_force` | ceiling of the wave size (waves are drawn between the minimum and it) |
 //! | `the_build_list` | standing build requests, in order |
 //!
 //! A key that is missing or out of range falls back to the default, so a
