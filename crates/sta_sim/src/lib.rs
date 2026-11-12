@@ -342,8 +342,16 @@ impl Sim {
     }
 
     fn build_view(&self) -> WorldView {
+        // `hidden = 1` objects (start pods, faction objects, map markers) stay in
+        // `units` for scripts, but no player sees or picks them (`EntityKind::hidden`).
+        // Only the view changes: state and digest do not.
+        let mut hidden: Vec<EntityId> = Vec::new();
         let units = self.units.iter().map(|entity| {
             let mut view = entity.view();
+            if self.content.as_deref().and_then(|db| db.unit(entity.def)).is_some_and(EntityKind::hidden) {
+                hidden.push(entity.id);
+                view.flags = view.flags.with(view::UnitFlags::SELECTABLE, false);
+            }
             view.flags = view.flags.with(view::UnitFlags::BUILDING, self.production.is_welding(entity.id));
             view.energy = self.specials.energy_of(entity.id).and_then(|now| {
                 self.content.as_deref()
@@ -371,7 +379,13 @@ impl Sim {
                     .collect(),
             })
             .collect();
-        let visibility = sensors::compute(&self.units, self.content.as_deref(), &self.players);
+        let mut visibility = sensors::compute(&self.units, self.content.as_deref(), &self.players);
+        if !hidden.is_empty() {
+            // Both lists ascend by id.
+            for (_, seen) in &mut visibility {
+                seen.retain(|id| hidden.binary_search(id).is_err());
+            }
+        }
         let perceived_owners = self.perception.iter().map(|(id, &owner)| (id, owner)).collect();
         WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners }
     }

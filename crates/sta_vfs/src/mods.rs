@@ -7,9 +7,10 @@
 //! `Name`, `Description`, `Author` (comma-separated), `Version`,
 //! `ParentMod`, `standalone`, `ignoreParentMaps`, `AssetVersion`,
 //! `Screenshot`, `Icon`, `SettingsDirectory`, `DefaultGameSpeed`, `Website`,
-//! `Email`. Fleet Ops Roots adds `[modules]` (`activeN` / `requiredN`: hook
-//! modules, which STA64 builds in natively; kept for the record). Every
-//! section stays readable through [`ModInfo::ini`].
+//! `Email`. Fleet Ops Roots also has a `[modules]` section (`activeN` /
+//! `requiredN`: hook modules); it is not read, because STA64 builds those
+//! extensions in natively (Tammy, 2026-11-12), and a mod that has one loads
+//! without a warning. Every section stays readable through [`ModInfo::ini`].
 //!
 //! The chain follows `ParentMod` as [`crate::mod_chain`] does (child first,
 //! names case-insensitive); here it is computed over the discovered list,
@@ -77,19 +78,20 @@ impl Ini {
         matches!(self.get("mod", key).map(str::trim), Some(v) if v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("yes"))
     }
 
-    /// `prefix0`, `prefix1`, ... in index order (gaps allowed).
-    fn numbered(&self, section: &str, prefix: &str) -> Vec<String> {
-        let mut v: Vec<(u32, String)> = self
-            .section(section)
-            .iter()
-            .filter_map(|(k, val)| {
-                let n = k.get(prefix.len()..)?.parse::<u32>().ok()?;
-                k[..prefix.len()].eq_ignore_ascii_case(prefix).then(|| (n, val.clone()))
-            })
-            .collect();
-        v.sort_by_key(|(n, _)| *n);
-        v.dedup_by_key(|(n, _)| *n);
-        v.into_iter().map(|(_, s)| s).filter(|s| !s.is_empty()).collect()
+    /// `AssetVersion` of the `[mod]` section: the Fleet Operations version the
+    /// mod was designed for (major x 10000 + minor x 100 + patch, so 3.2.5 is
+    /// 30205). `None` when the key is absent or empty; `Some(Err(raw))` with
+    /// the text as written when it is not a whole number in `0..=u32::MAX`
+    /// (negative, fractional, huge, words). Whitespace, one pair of single or
+    /// double quotes and a trailing `;` / `#` comment are tolerated.
+    pub fn asset_version(&self) -> Option<Result<u32, String>> {
+        let raw = self.get("mod", "AssetVersion")?;
+        let v = raw.split([';', '#']).next().unwrap_or("").trim();
+        let v = ['"', '\''].iter().find_map(|q| v.strip_prefix(*q)?.strip_suffix(*q)).unwrap_or(v).trim();
+        if v.is_empty() {
+            return None;
+        }
+        Some(if v.bytes().all(|b| b.is_ascii_digit()) { v.parse::<u32>().map_err(|_| raw.trim().to_owned()) } else { Err(raw.trim().to_owned()) })
     }
 }
 
@@ -115,9 +117,6 @@ pub struct ModInfo {
     pub asset_version: Option<u32>,
     pub default_game_speed: Option<i32>,
     pub settings_directory: Option<String>,
-    /// Roots hook modules (`[modules]` `activeN` / `requiredN`).
-    pub modules_active: Vec<String>,
-    pub modules_required: Vec<String>,
     /// Archives at the mod's root (`.sta`, `.fpq`, `.zfs`), sorted.
     pub archives: Vec<String>,
     /// Where `info.ini` came from: `None` for the folder, else the `.sta`.
@@ -140,11 +139,9 @@ impl ModInfo {
             parent: s("ParentMod"),
             standalone: ini.flag("standalone"),
             ignore_parent_maps: ini.flag("ignoreParentMaps"),
-            asset_version: s("AssetVersion").and_then(|v| v.parse().ok()),
+            asset_version: ini.asset_version().and_then(Result::ok),
             default_game_speed: s("DefaultGameSpeed").and_then(|v| v.parse().ok()),
             settings_directory: s("SettingsDirectory"),
-            modules_active: ini.numbered("modules", "active"),
-            modules_required: ini.numbered("modules", "required"),
             folder,
             path,
             archives,
@@ -290,13 +287,28 @@ mod tests {
     fn ini_parsing() {
         let ini = Ini::parse(
             "\u{feff}[Mod]\r\nName = Fleet Operations\r\n; comment\r\n//ParentMod=Old\r\nParentMod=\"STA2 Classic Mod\"\r\nName=Second\r\n\
-             [modules]\r\nactive2 = \"C\"\r\nactive0 = \"A\"\r\nactive1=\"\"\r\nrequired0 = R\r\n",
+             [modules]\r\nactive0 = \"A\"\r\n",
         );
         assert_eq!(ini.get("mod", "name"), Some("Fleet Operations"), "first assignment counts");
         assert_eq!(ini.get("MOD", "parentmod"), Some("STA2 Classic Mod"));
-        assert_eq!(ini.numbered("modules", "active"), ["A", "C"], "ordered by index, empty skipped");
-        assert_eq!(ini.numbered("modules", "required"), ["R"]);
         assert_eq!(ini.sections().collect::<Vec<_>>(), ["mod", "modules"]);
+    }
+
+    #[test]
+    fn asset_version_reads_tolerantly_and_reports_malformed_values() {
+        let v = |body: &str| Ini::parse(&format!("\u{feff}[Mod]\r\n{body}\r\n")).asset_version();
+        assert_eq!(v("AssetVersion=50000"), Some(Ok(50000)));
+        assert_eq!(v("assetversion = \" 30205 \" ; Fleet Ops 3.2.5"), Some(Ok(30205)));
+        assert_eq!(v("AssetVersion='49999'"), Some(Ok(49999)));
+        assert_eq!(v("AssetVersion=50000\r\nAssetVersion=1"), Some(Ok(50000)), "first assignment counts");
+        assert_eq!(v("AssetVersion="), None);
+        assert_eq!(v("Name=x"), None);
+        for bad in ["-5", "+50000", "5.0", "4294967296", "abc", "0x1234", "50 000", "'\"50000"] {
+            assert_eq!(v(&format!("AssetVersion={bad}")), Some(Err(bad.to_owned())), "{bad}");
+        }
+        assert_eq!(Ini::parse("[other]\nAssetVersion=50000").asset_version(), None, "only the [mod] section");
+        let modules = Ini::parse("[mod]\nName=x\n[modules]\nactive0=A2FOFeaturePack\nrequired0=Z\n");
+        assert_eq!(modules.get("mod", "name"), Some("x"), "a [modules] section is just another section");
     }
 
     #[test]
@@ -321,7 +333,6 @@ mod tests {
         assert_eq!(fo.authors, ["DOCa Cola", "Optec"]);
         assert_eq!((fo.version.as_deref(), fo.asset_version, fo.default_game_speed), (Some("4.0Z"), Some(50000), Some(7)));
         assert!(fo.standalone && fo.ignore_parent_maps && fo.parent.is_none());
-        assert_eq!(fo.modules_active, ["A2FOFeaturePack"]);
         assert_eq!(find_mod(&mods, "Sub").unwrap().name, "Sub", "no Name: the folder");
         assert_eq!(find_mod(&mods, "Noxter").unwrap().archives, ["ODF.fpq"]);
 

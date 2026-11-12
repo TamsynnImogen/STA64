@@ -18,6 +18,8 @@ pub struct MapData {
     /// Resized prefix positions used by the native factory before the final matrix.
     pub initial_positions: Vec<[f32; 3]>,
     pub mission_title: [u8; 64],
+    /// The mission block's serialized reference token (never a host address).
+    pub mission_reference: u32,
     pub paths: Vec<AiPath>,
     pub areas: Vec<AreaOfInterest>,
 }
@@ -182,6 +184,35 @@ fn placement(recs: &[Rec<'_>]) -> bool {
         && is(&recs[6], 11, 48)
 }
 
+/// The per-object colour of a light (class `DLight`): the three floats the native
+/// class payload opens with, right after the placement prefix (CON-41).
+///
+/// The payload is the class's own serialization, which is not otherwise imported
+/// (CON-40). Its order is the one the A2 text maps name: `lightColorRed`,
+/// `lightColorGreen`, `lightColorBlue`, then `pos`, `m_euler` (`velMag`,
+/// `velMagInv`, `vel`, `omega`, `accel`), `name`. A light is recognised by that
+/// record shape (three floats, a vector, two floats, three vectors, a 32-byte
+/// text); in the stock install all 106 lights have it and no other object does.
+/// `None` for anything else, and for a colour that is not finite.
+fn light_colour(recs: &[Rec<'_>], from: usize) -> Option<[f32; 3]> {
+    let p = recs.get(from..from + 10)?;
+    let shape = is(&p[0], 5, 4)
+        && is(&p[1], 5, 4)
+        && is(&p[2], 5, 4)
+        && is(&p[3], 9, 12)
+        && is(&p[4], 5, 4)
+        && is(&p[5], 5, 4)
+        && is(&p[6], 9, 12)
+        && is(&p[7], 9, 12)
+        && is(&p[8], 9, 12)
+        && is(&p[9], 2, 32);
+    if !shape {
+        return None;
+    }
+    let c = [0, 1, 2].map(|i| f32::from_le_bytes(p[i].data.try_into().unwrap()));
+    c.iter().all(|v| v.is_finite()).then_some(c)
+}
+
 fn mission(recs: &[Rec<'_>]) -> bool {
     is(&recs[0], 2, 40) && is(&recs[1], 8, 4) && is(&recs[2], 2, 64) && is(&recs[3], 2, 64) && is(&recs[4], 0, 64)
 }
@@ -278,7 +309,7 @@ pub(crate) fn parse_map(data: &[u8], header: Header) -> Result<Map, BznError> {
             label,
             initial_position: Some(position),
             transform,
-            light_colour: None,
+            light_colour: light_colour(&recs, matrix_at + 1),
         });
     }
 
@@ -289,7 +320,7 @@ pub(crate) fn parse_map(data: &[u8], header: Header) -> Result<Map, BznError> {
             "mission class (expected EmptyMission or Inst4XMission)",
         ));
     }
-    r.word(8, "mission reference")?;
+    let mission_reference = r.word(8, "mission reference")?;
     let scripts = [
         r.string(2, Some(64), "scriptName text64")?,
         r.string(2, Some(64), "ruleName text64")?,
@@ -384,6 +415,7 @@ pub(crate) fn parse_map(data: &[u8], header: Header) -> Result<Map, BznError> {
             object_refs,
             initial_positions,
             mission_title,
+            mission_reference,
             paths,
             areas,
         }),

@@ -27,6 +27,7 @@ use bevy::time::Real;
 use bevy::window::PrimaryWindow;
 use sta_sim::{PlayerId, SimEvent, UnitView};
 
+use super::sprite_font::{SpriteText, SpriteTextStyle, sprite_text_styled};
 use super::theme::Theme;
 use crate::app::GameSet;
 use crate::sim_link::{ContentRes, SimLink, SimMsg};
@@ -310,8 +311,14 @@ fn colour(theme: &Theme, s: Severity) -> Color {
     }
 }
 
-fn text(s: String, size: f32, color: Color) -> impl Bundle {
-    (Text::new(s), TextFont { font_size: bevy::text::FontSize::Px(size), ..default() }, TextColor(color), Pickable::IGNORE)
+/// Notice, chat and tooltip text (UI-16): the mod's sprite font where it has one.
+fn text(theme: &Theme, s: String, size: f32, color: Color) -> impl Bundle {
+    super::theme::kit_text(theme, s, size, color)
+}
+
+/// The tooltip wraps at the box's width.
+fn tip_style(theme: &Theme) -> SpriteTextStyle {
+    SpriteTextStyle::role(super::theme::font_role(theme, theme.small_size)).wrapped(theme.text_size * 20.0 - 2.0 * theme.pad - 4.0)
 }
 
 fn spawn_roots(mut commands: Commands, theme: Res<Theme>) {
@@ -354,7 +361,7 @@ fn spawn_roots(mut commands: Commands, theme: Res<Theme>) {
         },
         BackgroundColor(theme.panel),
         BorderColor::all(theme.accent2),
-        children![(TipText, text(String::new(), theme.small_size, theme.text))],
+        children![(TipText, sprite_text_styled(String::new(), theme.small_size, theme.text, tip_style(&theme)))],
     ));
 }
 
@@ -368,7 +375,7 @@ fn retheme(
     mut notice_roots: Query<&mut Node, (With<NoticeRoot>, Without<ChatRoot>, Without<TipBox>)>,
     mut chat_roots: Query<&mut Node, (With<ChatRoot>, Without<NoticeRoot>, Without<TipBox>)>,
     mut tips: Query<(&mut Node, &mut BackgroundColor, &mut BorderColor), (With<TipBox>, Without<NoticeRoot>, Without<ChatRoot>)>,
-    mut tip_texts: Query<(&mut TextFont, &mut TextColor), With<TipText>>,
+    mut tip_texts: Query<(&mut SpriteText, &mut SpriteTextStyle), With<TipText>>,
 ) {
     if !theme.is_changed() {
         return;
@@ -387,9 +394,10 @@ fn retheme(
         background.0 = theme.panel;
         *border = BorderColor::all(theme.accent2);
     }
-    for (mut font, mut color) in &mut tip_texts {
-        font.font_size = bevy::text::FontSize::Px(theme.small_size);
-        color.0 = theme.text;
+    for (mut words, mut style) in &mut tip_texts {
+        words.size = theme.small_size;
+        words.color = theme.text;
+        *style = tip_style(&theme);
     }
     notices.dirty = true;
     log.dirty = true;
@@ -400,7 +408,7 @@ fn draw_notices(
     theme: Res<Theme>,
     mut notices: ResMut<Notices>,
     root: Single<(Entity, Option<&Children>), With<NoticeRoot>>,
-    mut colours: Query<(&NoticeLine, &mut TextColor)>,
+    mut colours: Query<(&NoticeLine, &mut SpriteText)>,
 ) {
     let (root, kids) = *root;
     if notices.dirty {
@@ -412,14 +420,14 @@ fn draw_notices(
             commands.entity(root).with_child((
                 Node { padding: UiRect::axes(Val::Px(theme.pad), Val::Px(2.0)), max_width: Val::Percent(NOTICE_WIDTH_PCT), ..default() },
                 BackgroundColor(theme.panel.with_alpha(0.6)),
-                children![(NoticeLine(i), text(a.shown(), theme.text_size, colour(&theme, a.severity)))],
+                children![(NoticeLine(i), sprite_text_styled(a.shown(), theme.text_size, colour(&theme, a.severity), SpriteTextStyle::role(super::theme::font_role(&theme, theme.text_size)).wrap_to_parent()))],
             ));
         }
         return;
     }
     for (line, mut c) in &mut colours {
         if let Some(a) = notices.active.get(line.0) {
-            c.0 = colour(&theme, a.severity).with_alpha(a.alpha());
+            c.color = colour(&theme, a.severity).with_alpha(a.alpha());
         }
     }
 }
@@ -444,7 +452,7 @@ fn draw_chat(
             None => l.text.clone(),
         };
         let c = if l.from.is_some() { theme.accent2 } else { colour(&theme, l.severity) };
-        commands.entity(root).with_child(text(s, theme.small_size, c));
+        commands.entity(root).with_child(text(&theme, s, theme.small_size, c));
     }
 }
 
@@ -466,7 +474,7 @@ fn draw_tip(
     strings: Option<Res<crate::ui::i18n::Strings>>,
     window: Option<Single<&Window, With<PrimaryWindow>>>,
     mut boxed: Single<&mut Node, With<TipBox>>,
-    mut words: Single<&mut Text, With<TipText>>,
+    mut words: Single<&mut SpriteText, With<TipText>>,
 ) {
     let shown = hover.target.and_then(|e| tips.get(e).ok()).and_then(|t| t.text_at(hover.rest));
     let shown = shown.map(|text| strings.as_ref().map_or(text, |s| s.tooltip_text(text)))
@@ -475,8 +483,8 @@ fn draw_tip(
         boxed.display = Display::None;
         return;
     };
-    if words.0 != shown {
-        words.0 = shown.to_owned();
+    if words.text != shown {
+        words.text = shown.to_owned();
     }
     boxed.display = Display::Flex;
     if let Some(w) = window
@@ -538,7 +546,7 @@ mod tests {
     }
 
     fn texts(app: &mut App) -> Vec<String> {
-        app.world_mut().query_filtered::<&Text, With<TextColor>>().iter(app.world()).map(|t| t.0.clone()).collect()
+        app.world_mut().query::<&SpriteText>().iter(app.world()).map(|t| t.text.clone()).collect()
     }
 
     #[test]
@@ -628,7 +636,7 @@ mod tests {
             app.update();
         }
         assert_eq!(display(&mut app), Display::Flex);
-        let words = app.world_mut().query_filtered::<&Text, With<TipText>>().single(app.world()).unwrap().0.clone();
+        let words = app.world_mut().query_filtered::<&SpriteText, With<TipText>>().single(app.world()).unwrap().text.clone();
         assert_eq!(words, "Metal");
     }
 
@@ -639,7 +647,7 @@ mod tests {
         app.update();
         let e = app.world_mut().spawn(Tooltip::new(crate::ui::i18n::tooltip_key("Source tip")).verbose("GUI_DETAILS")).id();
         app.insert_resource(Strings::from_pairs("english", &[("Source tip", "Short tip"), ("GUI_DETAILS", "Detailed tip")]));
-        let words = |app: &mut App| app.world_mut().query_filtered::<&Text, With<TipText>>().single(app.world()).unwrap().0.clone();
+        let words = |app: &mut App| app.world_mut().query_filtered::<&SpriteText, With<TipText>>().single(app.world()).unwrap().text.clone();
         *app.world_mut().resource_mut::<TipHover>() = TipHover { target: Some(e), rest: TIP_SHORT_SECS };
         app.update();
         assert_eq!(words(&mut app), "Short tip");
@@ -723,7 +731,7 @@ mod tests {
         assert_eq!(tip.2.top, new_theme.accent2);
         let notice_root = app.world_mut().query_filtered::<&Node, With<NoticeRoot>>().single(app.world()).unwrap();
         assert_eq!(notice_root.row_gap, Val::Px(new_theme.gap * 0.5));
-        let lines = app.world_mut().query_filtered::<(&Text, &TextColor), With<NoticeLine>>().iter(app.world()).map(|(text, color)| (text.0.clone(), color.0)).collect::<Vec<_>>();
+        let lines = app.world_mut().query_filtered::<&SpriteText, With<NoticeLine>>().iter(app.world()).map(|t| (t.text.clone(), t.color)).collect::<Vec<_>>();
         assert_eq!(lines, vec![("Shields low".to_owned(), new_theme.warn)]);
     }
 }

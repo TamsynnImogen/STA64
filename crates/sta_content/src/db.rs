@@ -82,7 +82,10 @@ impl ContentDb {
     /// (`.xml` or `.tt`, see [`TechTree::find`]) and gates building (SIM-09);
     /// without one `tech_tree()` is `None` and a warning says so.
     pub fn load(vfs: &sta_vfs::Vfs, index: &OdfIndex) -> Result<(ContentDb, Vec<Warning>)> {
-        ContentDb::load_as(vfs, Profile::detect(vfs), index)
+        let detection = Profile::detect_with_source(vfs);
+        let (db, mut warnings) = ContentDb::load_as(vfs, detection.profile, index)?;
+        warnings.splice(0..0, detection.warnings);
+        Ok((db, warnings))
     }
 
     /// [`load`](ContentDb::load) with the profile given instead of detected
@@ -92,7 +95,9 @@ impl ContentDb {
         let (races, _) = crate::Races::load(vfs, index);
         let (rules, rule_warnings) = crate::Rules::load(vfs, &races)?;
         warnings.extend(rule_warnings);
-        let db = db.with_rules(rules).with_launch_points(vfs).with_resources(ResourceModel::from_strings(profile, &crate::StringTable::load(vfs)));
+        let (db, radius_warnings) = db.with_rules(rules).with_launch_points_warned(vfs);
+        warnings.extend(radius_warnings);
+        let db = db.with_resources(ResourceModel::from_strings(profile, &crate::StringTable::load(vfs)));
         if db.is_empty() {
             return Ok((db, warnings));
         }
@@ -120,11 +125,17 @@ impl ContentDb {
 
     /// This database with every builder's [`LaunchPoint`](crate::LaunchPoint)
     /// read from its model (SIM-16), and the hash recomputed.
-    pub fn with_launch_points(mut self, vfs: &sta_vfs::Vfs) -> ContentDb {
+    pub fn with_launch_points(self, vfs: &sta_vfs::Vfs) -> ContentDb {
+        self.with_launch_points_warned(vfs).0
+    }
+
+    /// [`with_launch_points`](ContentDb::with_launch_points) and the warnings
+    /// for units whose collision radius could not be read from a SOD.
+    pub fn with_launch_points_warned(mut self, vfs: &sta_vfs::Vfs) -> (ContentDb, Vec<Warning>) {
         crate::launch::attach(vfs, self.defs.iter_mut().filter_map(|(_, d)| if let Def::Unit(u) = d { Some(u) } else { None }));
-        crate::launch::attach_radii(vfs, self.defs.iter_mut().filter_map(|(_, d)| if let Def::Unit(u) = d { Some(u) } else { None }));
+        let warnings = crate::launch::attach_radii(vfs, self.defs.iter_mut().filter_map(|(_, d)| if let Def::Unit(u) = d { Some(u) } else { None }));
         self.hash = hash(&self);
-        self
+        (self, warnings)
     }
 
     /// This database gated by `tree` (replacing any), with the hash

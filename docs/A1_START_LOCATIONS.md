@@ -6,31 +6,28 @@ The OpenSourced-Space-RTS audit exposed the A1 map gap, and the existing
 A2FOExtensions MDF reader supplied an additional format lead. Check gameplay
 placement against the original A1 executable rather than inverting preview pixels.
 
-## Native evidence and limits
+## Original behaviour followed
 
-The pinned original GOG `Armada.exe` (SHA-256
-`1c37ee8e4a24380c950a91ce5a7f9f96c4fcf3d8ffc0cc7e58faec3835350be6`)
-has separate MDF preview and new-game placement paths:
+Evidence grade: read from the original A1 executable (static); the
+instruction-level notes are kept outside the repository.
 
-- MDF reader `0x4c0a50` reads `StartLocations`, accepting 2..8. Its missing or
-  out-of-range count falls back to eight. MDF writer `0x4c0cc0` projects the
-  first `Camera_i` point to a 118-unit preview grid. Those integer coordinates
-  lose precision; the A2FO host adapter's inverse-117 policy is not an original
-  A1 world-position rule.
-- New-game caller `0x440cc6` enters `0x442fd0`. For a team needing starting
-  forces, `0x4430b5..0x44312e` constructs its exact `Camera_i` label, calls
-  `0x4348d0`, and copies the first point's XYZ. Later placement constructs a
-  transform and calls the object factory at `0x443284`. Starting units can
-  receive additional native placement offsets; this helper resolves the base
-  point only, not that loadout algorithm.
-- Lookup `0x4348d0` compares complete labels case-sensitively and returns the
+- The MDF reader reads `StartLocations`, accepting 2..8; a missing or
+  out-of-range count falls back to eight. The MDF writer projects the first
+  `Camera_i` point to a 118-unit preview grid. Those integer coordinates lose
+  precision; the A2FO host adapter's inverse-117 policy is not an original A1
+  world-position rule.
+- A new game resolves a team's start through its exact `Camera_i` label and
+  copies the first point's XYZ. Starting units can receive additional native
+  placement offsets; this helper resolves the base point only, not that
+  loadout algorithm.
+- The label lookup compares complete labels case-sensitively and returns the
   first matching path in retained order. A missing path uses a native fallback
   with centre XZ and mean `SHIP_COMBAT_FLOOR`/`SHIP_COMBAT_CEILING` Y. These are
   configuration values, not the map's vertical bounds. Do not substitute the
   map Y midpoint or silently invent this fallback in the format crate.
 
 Private instruction captures and source fingerprints remain outside the repo.
-This is static source/binary evidence, not execution of the original game.
+Not executed in the original game.
 
 ## API and supported subset
 

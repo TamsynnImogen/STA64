@@ -18,7 +18,7 @@
 //! loads every font of the mounted install into [`SpriteFonts`] and turns each
 //! [`SpriteText`] into glyph nodes, or into a plain `Text` when there is no font.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{Image, ImageSampler};
@@ -189,6 +189,210 @@ impl SpriteFont {
     }
 }
 
+/// Horizontal alignment of a block of text inside its width.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[allow(dead_code)]
+pub enum Align {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
+/// Greedy word wrap: lines of `text` no wider than `max` by `measure`, breaking at
+/// spaces (a word wider than `max` breaks between characters) and at `\n`. The measure
+/// is a parameter so the sprite fonts and the TTF share one wrapping rule.
+pub fn wrap_lines(text: &str, max: f32, measure: &dyn Fn(&str) -> f32) -> Vec<String> {
+    let mut out = Vec::new();
+    for para in text.split('\n') {
+        let mut line = String::new();
+        let mut first = true;
+        for word in para.split(' ') {
+            if first {
+                line = word.to_owned();
+                first = false;
+            } else {
+                let candidate = format!("{line} {word}");
+                if measure(&candidate) <= max {
+                    line = candidate;
+                    continue;
+                }
+                out.push(std::mem::take(&mut line));
+                line = word.to_owned();
+            }
+            if measure(&line) > max {
+                // A single word wider than `max`: break it between characters.
+                let mut part = String::new();
+                for c in std::mem::take(&mut line).chars() {
+                    let mut next = part.clone();
+                    next.push(c);
+                    if !part.is_empty() && measure(&next) > max {
+                        out.push(std::mem::take(&mut part));
+                    }
+                    part.push(c);
+                }
+                line = part;
+            }
+        }
+        out.push(line);
+    }
+    out
+}
+
+impl SpriteFont {
+    /// Width of one line of `text` at `scale` (no `\n`).
+    pub fn measure(&self, text: &str, scale: f32) -> f32 {
+        self.layout(text, scale).width
+    }
+
+    /// A block of text: wrapped to `max_width` when given, each line aligned inside the
+    /// block (`max_width`, else the widest line). The block's `width` is that width and
+    /// its `height` is one glyph height per line.
+    pub fn layout_block(&self, text: &str, scale: f32, max_width: Option<f32>, align: Align) -> Layout {
+        let lines = match max_width {
+            Some(w) => wrap_lines(text, w, &|s| self.measure(s, scale)),
+            None => text.split('\n').map(str::to_owned).collect(),
+        };
+        let h = self.height() * scale;
+        let laid: Vec<Layout> = lines.iter().map(|l| self.layout(l, scale)).collect();
+        let widest = laid.iter().fold(0.0f32, |m, l| m.max(l.width));
+        // Left aligned text takes the width it needs; centred and right aligned text is
+        // aligned inside the whole box.
+        let width = match (max_width, align) {
+            (Some(w), Align::Center | Align::Right) => w,
+            _ => widest,
+        };
+        let mut quads = Vec::new();
+        for (i, l) in laid.iter().enumerate() {
+            let dx = match align {
+                Align::Left => 0.0,
+                Align::Center => ((width - l.width) / 2.0).max(0.0),
+                Align::Right => (width - l.width).max(0.0),
+            };
+            for q in &l.quads {
+                let mut q = *q;
+                q.rect[0] += dx;
+                q.rect[1] += i as f32 * h;
+                quads.push(q);
+            }
+        }
+        Layout { quads, width, height: h * laid.len().max(1) as f32 }
+    }
+}
+
+/// The game's named fonts. The GUI cfgs do not name font files (docs/STOCK_HUD_CFG.md);
+/// the games name them by role: the `Font<Role>.spr` of the mounted mod chain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[allow(dead_code)]
+pub enum FontRole {
+    Small,
+    Medium,
+    Large,
+    VeryLarge,
+}
+
+#[allow(dead_code)]
+impl FontRole {
+    pub const ALL: [FontRole; 4] = [Self::Small, Self::Medium, Self::Large, Self::VeryLarge];
+
+    /// The font file stem the VFS reports.
+    pub fn stem(self) -> &'static str {
+        match self {
+            Self::Small => "fontsmall",
+            Self::Medium => "fontmedium",
+            Self::Large => "fontlarge",
+            Self::VeryLarge => "fontverylarge",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|r| r.stem().eq_ignore_ascii_case(name.trim()))
+    }
+}
+
+/// Codes of `page` the font draws as coloured pictures (resource symbols, the red
+/// figures of Roots): glyphs whose ink is mostly not grey. Read from the page's pixels,
+/// so each mod's table decides. These are drawn untinted.
+pub fn coloured_glyphs(font: &SpriteFont, page: usize, tex: UVec2, rgba: &[u8]) -> Vec<u8> {
+    let Some(p) = font.pages.get(page) else { return Vec::new() };
+    let mut out = Vec::new();
+    for code in FIRST_CODE..=255u8 {
+        let Some((gp, g)) = font.glyph(code) else { continue };
+        // Letters and digits are text even in a font drawn in colour; only the other
+        // codes can be pictures.
+        if gp != page || g.w <= 0.0 || code.is_ascii_alphanumeric() {
+            continue;
+        }
+        let r = texel_rect(font.reference, tex, [g.x, g.y, g.w, p.height]);
+        let (mut ink, mut colour) = (0u32, 0u32);
+        for y in (r.min.y.round() as i64).max(0)..(r.max.y.round() as i64).min(i64::from(tex.y)) {
+            for x in (r.min.x.round() as i64).max(0)..(r.max.x.round() as i64).min(i64::from(tex.x)) {
+                let i = (y as usize * tex.x as usize + x as usize) * 4;
+                let Some(px) = rgba.get(i..i + 4) else { continue };
+                let (hi, lo) = (px[0].max(px[1]).max(px[2]), px[0].min(px[1]).min(px[2]));
+                if px[3] > 128 && hi > 64 {
+                    ink += 1;
+                    colour += u32::from(hi - lo > 60);
+                }
+            }
+        }
+        if ink >= 4 && colour * 10 >= ink * 3 {
+            out.push(code);
+        }
+    }
+    out
+}
+
+/// A mod's `[Glyphs]` table (Refit's `ui.ini` form): the codes its fonts draw as
+/// pictures, each with the word or figure to write where a font cannot draw it
+/// (`85 = Dilithium`). Read from the mounted `ui.ini`, else `info.ini`.
+#[derive(Resource, Default, Clone, Debug, PartialEq, Eq)]
+pub struct GlyphWords(pub BTreeMap<u8, String>);
+
+impl GlyphWords {
+    pub fn parse(text: &str) -> GlyphWords {
+        let ini = sta_vfs::mods::Ini::parse(text);
+        GlyphWords(
+            ini.section("glyphs")
+                .iter()
+                .filter_map(|(k, v)| Some((u8::from_str_radix(k.trim(), 16).ok()?, v.clone())))
+                .collect(),
+        )
+    }
+
+    /// `text` with every mapped code written as its word. A word is set apart by a
+    /// space from letters or figures beside it.
+    pub fn display(&self, text: &str) -> String {
+        if self.0.is_empty() {
+            return text.to_owned();
+        }
+        let mut out = String::new();
+        let mut pending_space = false;
+        for c in text.chars() {
+            let code = windows_1252(c);
+            let word = self.0.get(&code);
+            match word {
+                Some(w) => {
+                    let alpha = w.chars().next().is_some_and(char::is_alphabetic);
+                    if alpha && out.chars().last().is_some_and(char::is_alphanumeric) {
+                        out.push(' ');
+                    }
+                    out.push_str(w);
+                    pending_space = alpha;
+                }
+                None => {
+                    if pending_space && !c.is_whitespace() {
+                        out.push(' ');
+                    }
+                    pending_space = false;
+                    out.push(c);
+                }
+            }
+        }
+        out
+    }
+}
+
 /// The numbers of an animation strip: one entry per line after `@keyframes`, up to the
 /// first blank or `@` line.
 fn strip(lines: &[&str], id: &str) -> Vec<Vec<f32>> {
@@ -306,13 +510,25 @@ pub fn windows_1252(c: char) -> u8 {
     }
     HIGH.iter()
         .position(|h| *h == c)
-        .map_or(b'?', |i| 0x80 + i as u8)
+        .map_or_else(
+            // The games' own picture codes arrive as the control characters of the same number.
+            || if (0x80..0xa0).contains(&u) { u as u8 } else { b'?' },
+            |i| 0x80 + i as u8,
+        )
 }
 
 /// One loaded font: its table and, per page, the texture and its pixel size.
 pub struct LoadedFont {
     pub font: SpriteFont,
     pub pages: Vec<(Handle<Image>, UVec2)>,
+    /// Codes drawn as coloured pictures, untinted (see [`coloured_glyphs`]).
+    pub coloured: BTreeSet<u8>,
+}
+
+impl LoadedFont {
+    pub fn new(font: SpriteFont, pages: Vec<(Handle<Image>, UVec2)>) -> Self {
+        LoadedFont { font, pages, coloured: BTreeSet::new() }
+    }
 }
 
 /// Every sprite font of the mounted install, by file stem. Absent until a mod is
@@ -323,6 +539,17 @@ pub struct SpriteFonts {
 }
 
 impl SpriteFonts {
+    /// The font file `name` (a stem, any case), if the mounted install has it and it fits.
+    pub fn named(&self, name: &str) -> Option<&LoadedFont> {
+        self.fonts.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, f)| f)
+    }
+
+    /// The font of a role; the nearest by height to `size` when the mod has no (usable)
+    /// file of that name (Fleet Ops 4.0's FontMedium and up do not fit their sheets).
+    pub fn for_role(&self, role: Option<FontRole>, size: f32) -> Option<&LoadedFont> {
+        role.and_then(|r| self.named(r.stem())).or_else(|| self.pick(size))
+    }
+
     /// The font whose glyph height is nearest `size` px.
     pub fn pick(&self, size: f32) -> Option<&LoadedFont> {
         self.fonts.values().min_by(|a, b| {
@@ -409,13 +636,18 @@ fn load_fonts(
             );
             continue;
         }
+        let coloured: BTreeSet<u8> = decoded
+            .iter()
+            .enumerate()
+            .flat_map(|(i, (px, size))| coloured_glyphs(&font, i, *size, px))
+            .collect();
         let pages = decoded
             .into_iter()
             .map(|(px, size)| upload_page(px, size, &mut images))
             .collect();
-        fonts
-            .fonts
-            .insert(font.name.clone(), LoadedFont { font, pages });
+        let mut loaded = LoadedFont::new(font, pages);
+        loaded.coloured = coloured;
+        fonts.fonts.insert(loaded.font.name.clone(), loaded);
     }
     info!("sprite fonts: {} loaded", fonts.fonts.len());
 }
@@ -446,19 +678,138 @@ pub fn sprite_text(text: impl Into<String>, size: f32, color: Color) -> impl Bun
     )
 }
 
+/// How a [`SpriteText`] is set, beyond its text, size and colour. Optional: without it
+/// text is left aligned, unwrapped, in the font nearest `size`, as before.
+#[derive(Component, Clone, Debug, Default, PartialEq)]
+pub struct SpriteTextStyle {
+    /// The game's named font; the nearest by height when the mod lacks it.
+    pub role: Option<FontRole>,
+    pub align: Align,
+    /// Wrap to this width (px of the node's own space) and align inside it.
+    pub wrap: Option<f32>,
+    /// Draw the font at its own glyph height instead of scaling it to `size`.
+    pub native: bool,
+    /// Tint coloured glyphs (resource symbols) like the rest; they are drawn untinted
+    /// by default.
+    pub tint_all: bool,
+    /// Wrap to the parent's width once the text is wider than it (a notice line in a
+    /// box with a maximum width). Kept up to date by `fit_wrap` from the last layout.
+    pub wrap_parent: bool,
+}
+
+#[allow(dead_code)]
+impl SpriteTextStyle {
+    pub fn role(role: FontRole) -> Self {
+        SpriteTextStyle { role: Some(role), ..default() }
+    }
+    pub fn centered(mut self) -> Self {
+        self.align = Align::Center;
+        self
+    }
+    pub fn right(mut self) -> Self {
+        self.align = Align::Right;
+        self
+    }
+    pub fn wrap_to_parent(mut self) -> Self {
+        self.wrap_parent = true;
+        self
+    }
+    pub fn wrapped(mut self, width: f32) -> Self {
+        self.wrap = Some(width);
+        self
+    }
+}
+
+/// What a [`SpriteText`] was last laid out as: a change of colour alone (a fade) then
+/// recolours the glyphs instead of laying the text out again.
+#[derive(Component, Clone, Debug)]
+pub struct SpriteLaid {
+    text: String,
+    size: f32,
+    /// Per glyph quad: drawn untinted.
+    untinted: Vec<bool>,
+}
+
+/// A [`sprite_text`] bundle with a style (and the `Node` a UI entity needs).
+pub fn sprite_text_styled(
+    text: impl Into<String>,
+    size: f32,
+    color: Color,
+    style: SpriteTextStyle,
+) -> impl Bundle {
+    (sprite_text(text, size, color), style, Node::default())
+}
+
+/// Load the mod's `[Glyphs]` table (see [`GlyphWords`]) when the install changes.
+fn load_glyph_words(vfs: Option<Res<Mounted>>, mut words: ResMut<GlyphWords>) {
+    let Some(vfs) = vfs else { return };
+    if !vfs.is_changed() {
+        return;
+    }
+    let found = ["ui.ini", "info.ini"].into_iter().find_map(|name| {
+        let bytes = vfs.0.read(name)?.ok()?;
+        let table = GlyphWords::parse(&String::from_utf8_lossy(&bytes));
+        (!table.0.is_empty()).then_some(table)
+    });
+    // Roots' fonts draw its resource icons and unit classes as pictures: without a table
+    // from the mod, the TTF shows the words Refit's fleetops set names for them.
+    let builtin = || {
+        (sta_content::Profile::detect(&vfs.0) == sta_content::Profile::Fo4)
+            .then(|| GlyphWords::parse(include_str!("../../assets/ui/glyphs-fleetops.ini")))
+    };
+    *words = found.or_else(builtin).unwrap_or_default();
+}
+
 #[allow(clippy::type_complexity)]
 fn resolve_text(
     mut commands: Commands,
     fonts: Res<SpriteFonts>,
-    q: Query<
-        (Entity, &SpriteText, Option<&ScalableText>),
-        Or<(Changed<SpriteText>, Added<ScalableText>)>,
-    >,
+    words: Option<Res<GlyphWords>>,
+    q: Query<(
+        Entity,
+        Ref<SpriteText>,
+        Option<Ref<SpriteTextStyle>>,
+        Option<Ref<ScalableText>>,
+        Option<&SpriteLaid>,
+    )>,
     children: Query<&Children>,
-    images: Query<(), With<ImageNode>>,
-    texts: Query<(), With<Text>>,
+    mut images: Query<&mut ImageNode>,
+    mut texts: Query<&mut TextColor, With<Text>>,
 ) {
-    for (e, t, scalable) in &q {
+    let all = fonts.is_changed() || words.as_ref().is_some_and(|w| w.is_changed());
+    for (e, t, style, scalable, laid) in &q {
+        let dirty = all
+            || t.is_changed()
+            || style.as_ref().is_some_and(|s| s.is_changed())
+            || scalable.as_ref().is_some_and(|s| s.is_added());
+        if !dirty {
+            continue;
+        }
+        // Only the colour changed: recolour what is there.
+        let only_colour = !all
+            && !style.as_ref().is_some_and(|s| s.is_changed())
+            && !scalable.as_ref().is_some_and(|s| s.is_added())
+            && laid.is_some_and(|l| l.text == t.text && l.size == t.size);
+        if only_colour {
+            let laid = laid.unwrap();
+            for (i, kid) in children.get(e).into_iter().flat_map(|c| c.iter()).enumerate() {
+                if let Ok(mut img) = images.get_mut(kid) {
+                    let want = if laid.untinted.get(i).copied().unwrap_or(false) { Color::WHITE } else { t.color };
+                    if img.color != want {
+                        img.color = want;
+                    }
+                } else if let Ok(mut c) = texts.get_mut(kid)
+                    && c.0 != t.color
+                {
+                    c.0 = t.color;
+                }
+            }
+            continue;
+        }
+        // Plain `sprite_text` (the HUD's) keeps its old drawing: pictures tinted like the
+        // rest and no glyph words. A `SpriteTextStyle` opts in to both.
+        let styled = style.is_some();
+        let style = style.as_deref().cloned().unwrap_or_default();
         let existing: Vec<Entity> = children
             .get(e)
             .map(|children| children.iter().collect())
@@ -466,18 +817,43 @@ fn resolve_text(
         let font = if scalable.is_some() {
             None
         } else {
-            fonts.pick(t.size)
+            fonts.for_role(style.role, t.size)
         };
         let Some(f) = font else {
+            // The TTF cannot draw the pictures; write the mod's words for them.
+            let shown = words.as_ref().filter(|_| styled).map_or_else(|| t.text.clone(), |w| w.display(&t.text));
+            let justify = match style.align {
+                Align::Left => bevy::text::Justify::Left,
+                Align::Center => bevy::text::Justify::Center,
+                Align::Right => bevy::text::Justify::Right,
+            };
             let label = (
-                Text::new(t.text.clone()),
+                Text::new(shown),
                 TextFont {
                     font_size: bevy::text::FontSize::Px(t.size),
                     ..default()
                 },
                 TextColor(t.color),
+                TextLayout::new(
+                    justify,
+                    if style.wrap.is_some() {
+                        bevy::text::LineBreak::WordBoundary
+                    } else {
+                        bevy::text::LineBreak::NoWrap
+                    },
+                ),
                 Pickable::IGNORE,
             );
+            if let Some(w) = style.wrap {
+                // The box is as wide as the text up to `w`; aligned text fills it.
+                let node = if style.align == Align::Left {
+                    Node { max_width: Val::Px(w), flex_shrink: 0.0, ..default() }
+                } else {
+                    Node { width: Val::Px(w), flex_shrink: 0.0, ..default() }
+                };
+                commands.entity(e).insert(node);
+            }
+            commands.entity(e).insert(SpriteLaid { text: t.text.clone(), size: t.size, untinted: Vec::new() });
             if let Some(&child) = existing.first().filter(|child| texts.contains(**child)) {
                 commands.entity(child).insert(label);
                 for &stale in &existing[1..] {
@@ -491,8 +867,8 @@ fn resolve_text(
             }
             continue;
         };
-        let scale = t.size / f.font.height();
-        let lay = f.font.layout(&t.text, scale);
+        let scale = if style.native { 1.0 } else { t.size / f.font.height() };
+        let lay = f.font.layout_block(&t.text, scale, style.wrap, style.align);
         commands.entity(e).insert(Node {
             width: Val::Px(lay.width.ceil()),
             height: Val::Px(lay.height.ceil()),
@@ -500,16 +876,20 @@ fn resolve_text(
             ..default()
         });
         let mut used = 0;
+        let mut untinted = Vec::new();
         for q in &lay.quads {
             let Some((image, tex)) = f.pages.get(q.page) else {
                 continue;
             };
             let rect = texel_rect(f.font.reference, *tex, q.src);
+            let picture = styled && !style.tint_all && f.coloured.contains(&q.code);
+            untinted.push(picture);
+            let colour = if picture { Color::WHITE } else { t.color };
             let glyph = (
                 ImageNode {
                     image: image.clone(),
                     rect: Some(rect),
-                    color: t.color,
+                    color: colour,
                     ..default()
                 },
                 Node {
@@ -535,6 +915,35 @@ fn resolve_text(
         for &stale in existing.iter().skip(used) {
             commands.entity(stale).despawn();
         }
+        commands.entity(e).insert(SpriteLaid { text: t.text.clone(), size: t.size, untinted });
+    }
+}
+
+/// `wrap_parent` text wraps to its parent's content width once it is wider (from the
+/// last frame's layout); a changed text starts unwrapped again.
+fn fit_wrap(
+    mut q: Query<(&ChildOf, &ComputedNode, &mut SpriteTextStyle, Ref<SpriteText>)>,
+    parents: Query<&ComputedNode>,
+) {
+    for (parent, node, mut style, text) in &mut q {
+        if !style.wrap_parent {
+            continue;
+        }
+        let Ok(p) = parents.get(parent.parent()) else { continue };
+        let k = p.inverse_scale_factor();
+        let (pad, border) = (p.padding(), p.border());
+        let avail = p.size().x * k - (pad.min_inset.x + pad.max_inset.x + border.min_inset.x + border.max_inset.x) * k;
+        let own = node.size().x * node.inverse_scale_factor();
+        let want = if avail > 1.0 && own > avail + 0.5 {
+            Some(avail.floor())
+        } else if text.is_changed() {
+            None
+        } else {
+            style.wrap
+        };
+        if style.wrap != want {
+            style.wrap = want;
+        }
     }
 }
 
@@ -542,13 +951,16 @@ pub struct SpriteFontPlugin;
 
 impl Plugin for SpriteFontPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<SpriteFonts>().add_systems(
-            PostUpdate,
-            (load_fonts, resolve_text)
-                .chain()
-                .before(bevy::ui::UiSystems::Prepare)
-                .before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate),
-        );
+        app.init_resource::<SpriteFonts>()
+            .init_resource::<GlyphWords>()
+            .add_systems(Update, fit_wrap)
+            .add_systems(
+                PostUpdate,
+                (load_fonts, load_glyph_words, resolve_text)
+                    .chain()
+                    .before(bevy::ui::UiSystems::Prepare)
+                    .before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate),
+            );
     }
 }
 
@@ -636,10 +1048,7 @@ mod tests {
             f.pages[0].height = h;
             fonts.fonts.insert(
                 n.into(),
-                LoadedFont {
-                    font: f,
-                    pages: vec![],
-                },
+                LoadedFont::new(f, vec![]),
             );
         }
         assert_eq!(fonts.pick(12.0).unwrap().font.name, "S");
@@ -668,13 +1077,13 @@ mod tests {
         f.reference = None;
         app.world_mut().resource_mut::<SpriteFonts>().fonts.insert(
             "F".into(),
-            LoadedFont {
-                font: f,
-                pages: vec![
+            LoadedFont::new(
+                f,
+                vec![
                     (Handle::default(), UVec2::new(256, 128)),
                     (Handle::default(), UVec2::new(256, 128)),
                 ],
-            },
+            ),
         );
         let e = app
             .world_mut()
@@ -691,13 +1100,13 @@ mod tests {
     }
 
     fn test_font() -> LoadedFont {
-        LoadedFont {
-            font: SpriteFont::parse("F", SAMPLE).unwrap(),
-            pages: vec![
+        LoadedFont::new(
+            SpriteFont::parse("F", SAMPLE).unwrap(),
+            vec![
                 (Handle::default(), UVec2::new(256, 128)),
                 (Handle::default(), UVec2::new(256, 128)),
             ],
-        }
+        )
     }
 
     #[test]
@@ -1077,5 +1486,271 @@ mod tests {
         // A reference twice the sheet: every rectangle lands at the wrong place.
         f.reference = Some([512.0, 256.0]);
         assert!(page_fit(&f, 0, tex, &px).unwrap() < MIN_FIT);
+    }
+
+    /// A sprite font whose glyph widths are the baked TTF's advances at `h` px: what the
+    /// two layouts are compared on.
+    fn ttf_like(h: f32) -> SpriteFont {
+        let ttf = crate::ui::theme::font::SdfFont::regular();
+        let glyphs = (0x20u8..=0x7e)
+            .map(|c| GlyphEntry {
+                x: 0.0,
+                y: 0.0,
+                w: (ttf.glyph(c as char).unwrap().advance * h).round(),
+            })
+            .collect();
+        SpriteFont {
+            name: "T".into(),
+            reference: None,
+            pages: vec![Page { texture: "t".into(), height: h, glyphs }],
+        }
+    }
+
+    const PARAGRAPH: &str = "Shields are down on the Defiant and the Cardassian fleet is closing fast, so hold the line until reinforcements arrive";
+
+    #[test]
+    fn wrapped_text_matches_the_ttf_layout_within_a_tolerance() {
+        let ttf = crate::ui::theme::font::SdfFont::regular();
+        let (h, w) = (16.0, 220.0);
+        let font = ttf_like(h);
+        let sprite = wrap_lines(PARAGRAPH, w, &|s| font.measure(s, 1.0));
+        let baked = wrap_lines(PARAGRAPH, w, &|s| ttf.measure(s, h));
+        // Same rule, widths within half a pixel a glyph: the breaks agree or differ by one word.
+        assert!(sprite.len().abs_diff(baked.len()) <= 1, "{sprite:?} vs {baked:?}");
+        for line in &sprite {
+            assert!(font.measure(line, 1.0) <= w, "{line:?} overflows");
+        }
+        // Nothing is lost or reordered.
+        assert_eq!(sprite.join(" "), PARAGRAPH);
+        // Block bounds: width is the widest line, height a glyph height per line, each
+        // within a tolerance of the TTF block.
+        let block = font.layout_block(PARAGRAPH, 1.0, Some(w), Align::Left);
+        let widest = baked.iter().map(|l| ttf.measure(l, h)).fold(0.0, f32::max);
+        let longest = baked.iter().map(|l| l.chars().count()).max().unwrap() as f32;
+        assert!((block.width - widest).abs() <= 0.5 * longest, "{} vs {widest}", block.width);
+        assert_eq!(block.height, h * sprite.len() as f32);
+    }
+
+    #[test]
+    fn centred_and_right_text_sit_where_the_ttf_puts_it() {
+        let ttf = crate::ui::theme::font::SdfFont::regular();
+        let (h, w) = (16.0, 300.0);
+        let font = ttf_like(h);
+        let text = "Federation";
+        let at = |align| {
+            let b = font.layout_block(text, 1.0, Some(w), align);
+            (b.width, b.quads[0].rect[0])
+        };
+        let ink = ttf.measure(text, h);
+        let (bw, centre) = at(Align::Center);
+        assert_eq!(bw, w);
+        // The TTF centres the same line at (w - ink) / 2; the sprite font's own widths differ
+        // by rounding only.
+        assert!((centre - (w - ink) / 2.0).abs() <= text.len() as f32 * 0.5);
+        let (_, right) = at(Align::Right);
+        assert!((right - (w - ink)).abs() <= text.len() as f32 * 0.5);
+        assert_eq!(at(Align::Left).1, 0.0);
+        // Left text takes the width it needs, not the box's.
+        assert!(font.layout_block(text, 1.0, Some(w), Align::Left).width < w);
+    }
+
+    #[test]
+    fn long_words_break_between_characters_and_newlines_hold() {
+        let font = ttf_like(16.0);
+        let lines = wrap_lines("Supercalifragilisticexpialidocious", 80.0, &|s| font.measure(s, 1.0));
+        assert!(lines.len() > 1);
+        assert!(lines.iter().all(|l| font.measure(l, 1.0) <= 80.0 || l.chars().count() == 1));
+        assert_eq!(lines.concat(), "Supercalifragilisticexpialidocious");
+        assert_eq!(wrap_lines("a\nb", 500.0, &|s| font.measure(s, 1.0)), ["a", "b"]);
+        assert_eq!(wrap_lines("", 500.0, &|s| font.measure(s, 1.0)), [""]);
+    }
+
+    #[test]
+    fn named_fonts_win_over_the_nearest_height() {
+        let mut fonts = SpriteFonts::default();
+        for (n, h) in [("fontsmall", 14.0), ("fontmedium", 23.0), ("fontlarge", 30.0)] {
+            let mut f = SpriteFont::parse(n, SAMPLE).unwrap();
+            f.pages[0].height = h;
+            fonts.fonts.insert(n.into(), LoadedFont::new(f, vec![]));
+        }
+        // Medium is asked for at a size nearer FontLarge: the name decides.
+        let pick = |r, size| fonts.for_role(r, size).unwrap().font.name.clone();
+        assert_eq!(pick(Some(FontRole::Medium), 29.0), "fontmedium");
+        assert_eq!(pick(Some(FontRole::Small), 30.0), "fontsmall");
+        // A role the mod has no font for falls back to the nearest height; no role, as before.
+        assert_eq!(pick(Some(FontRole::VeryLarge), 29.0), "fontlarge");
+        assert_eq!(pick(None, 29.0), "fontlarge");
+        assert_eq!(FontRole::from_name("FontMedium"), Some(FontRole::Medium));
+        assert_eq!(FontRole::from_name("FontFinal4_16"), None);
+        assert!(fonts.named("FONTSMALL").is_some());
+    }
+
+    #[test]
+    fn coloured_glyphs_are_found_from_the_pixels() {
+        let mut f = SpriteFont::parse("F", SAMPLE).unwrap();
+        f.pages.truncate(1);
+        f.pages[0].glyphs = (0..8)
+            .map(|n| GlyphEntry { x: 12.0 * n as f32, y: 0.0, w: 10.0 })
+            .collect();
+        f.pages[0].height = 10.0;
+        f.reference = Some([128.0, 16.0]);
+        let tex = UVec2::new(128, 16);
+        let mut px = vec![0u8; 128 * 16 * 4];
+        let fill = |px: &mut Vec<u8>, n: usize, rgba: [u8; 4]| {
+            for y in 0..10 {
+                for x in 0..10 {
+                    let i = (y * 128 + 12 * n + x) * 4;
+                    px[i..i + 4].copy_from_slice(&rgba);
+                }
+            }
+        };
+        fill(&mut px, 0, [255, 255, 255, 255]); // 0x20: white, a letter's kind
+        fill(&mut px, 1, [220, 30, 30, 255]); // 0x21: red
+        fill(&mut px, 2, [200, 200, 200, 255]); // 0x22: grey
+        fill(&mut px, 3, [30, 200, 60, 255]); // 0x23: green
+        fill(&mut px, 4, [255, 0, 0, 0]); // 0x24: transparent
+        assert_eq!(coloured_glyphs(&f, 0, tex, &px), vec![0x21, 0x23]);
+    }
+
+    #[test]
+    fn glyph_words_follow_the_mods_table() {
+        let words = GlyphWords::parse("[Other]\n85 = Nope\n[Glyphs]\n; red figures\n7F = 0\n81 = 1\n85 = Dilithium\n87 = Supply\n80 = s\n24 = \" \"\n");
+        assert_eq!(words.0.get(&0x85).map(String::as_str), Some("Dilithium"));
+        let c = |code: u8| {
+            // The game's byte as the char the text carries.
+            char::from(code)
+        };
+        // The red figures are digits; a resource icon is its word, set apart by spaces.
+        let text = format!("{}{}{}{}250{}", c(0x7f), c(0x81), c(0x7f), c(0x85), c(0x87));
+        assert_eq!(words.display(&text), "010 Dilithium 250 Supply");
+        // Plain text and an empty table pass through.
+        assert_eq!(words.display("Hull 100%"), "Hull 100%");
+        assert_eq!(GlyphWords::default().display(&text), text);
+        // `$` is the cost lines' spacer.
+        assert_eq!(words.display("250$125"), "250 125");
+    }
+
+    /// Resolves styled text: the named font, untinted coloured glyphs, centring in a box.
+    #[test]
+    fn styled_sprite_text_uses_the_role_font_and_leaves_pictures_untinted() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).init_resource::<SpriteFonts>().init_resource::<GlyphWords>().add_systems(Update, resolve_text);
+        let mut big = test_font();
+        big.font.name = "fontlarge".into();
+        big.font.pages[0].height = 24.0;
+        big.coloured.insert(b'!');
+        app.world_mut().resource_mut::<SpriteFonts>().fonts.insert("fontsmall".into(), test_font());
+        app.world_mut().resource_mut::<SpriteFonts>().fonts.insert("fontlarge".into(), big);
+        // Size 12 is nearest FontSmall's 12; the role asks for FontLarge.
+        let e = app
+            .world_mut()
+            .spawn(sprite_text_styled(" !", 24.0, Color::srgb(0.0, 1.0, 0.0), SpriteTextStyle::role(FontRole::Large)))
+            .id();
+        app.update();
+        let kids: Vec<Entity> = app.world().get::<Children>(e).unwrap().iter().collect();
+        assert_eq!(kids.len(), 2);
+        let colour = |i: usize| app.world().get::<ImageNode>(kids[i]).unwrap().color;
+        assert_eq!(colour(0), Color::srgb(0.0, 1.0, 0.0), "text is tinted");
+        assert_eq!(colour(1), Color::WHITE, "a coloured picture is not");
+        // Opting out tints everything.
+        app.world_mut().entity_mut(e).insert(SpriteTextStyle { tint_all: true, ..SpriteTextStyle::role(FontRole::Large) });
+        app.update();
+        let kids: Vec<Entity> = app.world().get::<Children>(e).unwrap().iter().collect();
+        assert_eq!(app.world().get::<ImageNode>(kids[1]).unwrap().color, Color::srgb(0.0, 1.0, 0.0));
+
+        // Centred in a box wider than the text.
+        let c = app
+            .world_mut()
+            .spawn(sprite_text_styled(" ", 12.0, Color::WHITE, SpriteTextStyle::role(FontRole::Small).centered().wrapped(100.0)))
+            .id();
+        app.update();
+        let kid = app.world().get::<Children>(c).unwrap()[0];
+        assert_eq!(app.world().get::<Node>(c).unwrap().width, Val::Px(100.0));
+        assert_eq!(app.world().get::<Node>(kid).unwrap().left, Val::Px(47.5), "(100 - 5) / 2");
+    }
+
+    /// A label built before the install is mounted picks up the mod's font once it loads.
+    #[test]
+    fn text_resolved_without_fonts_is_redone_when_fonts_arrive() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).init_resource::<SpriteFonts>().init_resource::<GlyphWords>().add_systems(Update, resolve_text);
+        let e = app.world_mut().spawn(sprite_text(" ", 12.0, Color::WHITE)).id();
+        app.update();
+        let first = app.world().get::<Children>(e).unwrap()[0];
+        assert!(app.world().get::<Text>(first).is_some());
+        app.world_mut().resource_mut::<SpriteFonts>().fonts.insert("F".into(), test_font());
+        app.update();
+        let kids = app.world().get::<Children>(e).unwrap();
+        assert!(app.world().get::<ImageNode>(kids[0]).is_some());
+    }
+
+    /// The TTF cannot draw the games' picture codes: the mod's words stand in.
+    #[test]
+    fn ttf_fallback_writes_the_glyph_words() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).init_resource::<SpriteFonts>().insert_resource(GlyphWords::parse("[Glyphs]\n85 = Dilithium\n")).add_systems(Update, resolve_text);
+        let e = app.world_mut().spawn(sprite_text_styled(format!("50{}", char::from(0x85u8)), 12.0, Color::WHITE, SpriteTextStyle::default())).id();
+        app.update();
+        let kid = app.world().get::<Children>(e).unwrap()[0];
+        assert_eq!(app.world().get::<Text>(kid).unwrap().0, "50 Dilithium");
+    }
+
+    /// Install-gated: the mods' fonts, loaded as the client loads them, have letters in
+    /// white and whatever pictures they carry flagged coloured.
+    #[test]
+    fn installed_fonts_keep_letters_untinted_free() {
+        for (label, root, m) in installs() {
+            let Ok(vfs) = Vfs::mount_install(&root, m.as_deref()) else {
+                eprintln!("{label}: skipped");
+                continue;
+            };
+            for font in read_fonts(&vfs) {
+                let Some(decoded): Option<Vec<_>> = font.pages.iter().map(|p| decode_page(&vfs, &p.texture)).collect() else {
+                    continue;
+                };
+                let mut codes = Vec::new();
+                for (i, (px, size)) in decoded.iter().enumerate() {
+                    if page_fit(&font, i, *size, px).is_some_and(|f| f < MIN_FIT) {
+                        continue;
+                    }
+                    codes.extend(coloured_glyphs(&font, i, *size, px));
+                }
+                eprintln!("{label}: {} coloured codes {:02x?}", font.name, codes);
+                assert!(
+                    codes.iter().all(|c| !c.is_ascii_alphabetic()),
+                    "{label}: {} flags a letter as a coloured picture",
+                    font.name
+                );
+            }
+        }
+    }
+
+    /// A fade changes only the colour: the glyph nodes are reused and recoloured.
+    #[test]
+    fn a_colour_change_recolours_without_laying_out_again() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).init_resource::<SpriteFonts>().init_resource::<GlyphWords>().add_systems(Update, resolve_text);
+        app.world_mut().resource_mut::<SpriteFonts>().fonts.insert("F".into(), test_font());
+        let e = app.world_mut().spawn(sprite_text(" !", 12.0, Color::WHITE)).id();
+        app.update();
+        let before: Vec<Entity> = app.world().get::<Children>(e).unwrap().iter().collect();
+        app.world_mut().get_mut::<SpriteText>(e).unwrap().color = Color::srgb(1.0, 0.0, 0.0);
+        app.update();
+        let after: Vec<Entity> = app.world().get::<Children>(e).unwrap().iter().collect();
+        assert_eq!(before, after);
+        assert_eq!(app.world().get::<ImageNode>(after[1]).unwrap().color, Color::srgb(1.0, 0.0, 0.0));
+        // A changed text still lays out.
+        app.world_mut().get_mut::<SpriteText>(e).unwrap().text = " ".into();
+        app.update();
+        assert_eq!(app.world().get::<Children>(e).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn the_builtin_fleetops_glyph_table_parses() {
+        let t = GlyphWords::parse(include_str!("../../assets/ui/glyphs-fleetops.ini"));
+        assert_eq!(t.0.get(&0x85).map(String::as_str), Some("Dilithium"));
+        assert_eq!(t.0.get(&0x7f).map(String::as_str), Some("0"));
+        assert_eq!(t.0.get(&0x24).map(String::as_str), Some(" "));
+        assert_eq!(t.0.len(), 32);
     }
 }

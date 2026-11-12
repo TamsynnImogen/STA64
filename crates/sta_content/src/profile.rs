@@ -2,10 +2,11 @@
 //! (CON-05). [`Profile`] and [`Features`] are the S5 seam types in
 //! `features.rs`; this file gives them behaviour.
 //!
-//! # Detection ([`Profile::detect`])
+//! # Detection ([`Profile::detect`], [`Profile::detect_with_source`])
 //!
 //! Layers are the mounted [`Vfs`] layers, top-most (child mod) first; the
-//! last one is normally `Data`. The first rule that matches wins:
+//! last one is normally `Data`. The first step that matches wins (the order
+//! amended by CON-43, `docs/FO_PROFILE_DETECTION.md`; D4):
 //!
 //! 1. **Explicit** (D4: manifest, then `info.ini`, then the heuristics
 //!    below). First the `profile` key of any layer's `manifest.toml` (loose
@@ -15,16 +16,42 @@
 //!    [`Profile::from_name`]).
 //! 2. **Armada I layout.** Any layer holds a `.zfs` archive. (An `addon/`
 //!    directory is not a signature: Armada II and FO ship one too, and a
-//!    real FO Roots install detected as Armada I on it.)
-//! 3. **Fleet Operations.** Any layer whose `info.ini` `Name` contains
-//!    `fleet op`/`fleetop`/`fo4`/`fo 4`, including `Data`; a non-Data layer's
-//!    folder name with that signature; or the existing `mmm_loader.dll`
-//!    (FO's mission loader) hints at a mod layer or above `Data`.
-//! 4. **Stock Armada II.** Any other install: a `Data` layer, or a plain game
+//!    real FO Roots install detected as Armada I on it.) This keeps its
+//!    place ahead of every step below it.
+//! 3. **`AssetVersion`.** The top-most layer whose own `info.ini` has a valid
+//!    `[mod] AssetVersion` decides: `>= 50000` is the Roots lineage (today's
+//!    [`Profile::Fo4`]); a lower value (3.2.5 is 30205) does not select it and
+//!    the steps below go on. A value that is not a whole number is ignored
+//!    with a warning. The field is data the mod ships; it is not read from
+//!    an executable.
+//! 4. **Host base `Data/info.ini`.** For a mod whose own `info.ini` has no
+//!    `AssetVersion` (a stated older value skips this step): the install's base `Data/info.ini` is read, for its
+//!    `[Mod] Name` only (the matcher of step 6), even when D6 does not mount
+//!    `Data` under a `standalone` mod. It is never mounted or merged.
+//! 5. **`Data/packages.ini`.** `[FleetOps] Version=` is recorded in
+//!    [`Detection::fleetops_version`] and decides nothing: it identifies the
+//!    Fleet Operations engine version (3.2.7 for FO 3.x and Dominion War,
+//!    whose lineage is not in v1 (D5) and has no profile variant, so such
+//!    installs detect as before; the Roots install's own file says 4.0.0).
+//! 6. **Fleet Operations heuristics.** Any layer whose `info.ini` `Name`
+//!    contains `fleet op`/`fleetop`/`fo4`/`fo 4`, including `Data`; a non-Data
+//!    layer's folder name with that signature; or the existing
+//!    `mmm_loader.dll` (FO's mission loader) hints at a mod layer or above
+//!    `Data`.
+//! 7. **Stock Armada II.** Any other install: a `Data` layer, or a plain game
 //!    folder with an `odf/` directory, `ODF.fpq` or `Armada2.exe`, possibly
 //!    with mods that match nothing above.
-//! 5. **Native.** No `Data` layer and nothing matched (also the fallback for
+//! 8. **Native.** No `Data` layer and nothing matched (also the fallback for
 //!    unknown or custom content).
+//!
+//! (The amended contract counts the heuristics as one step, its step 5; they
+//! are numbered here in the order they run. `[modules]` lists are not read at
+//! all: STA64 builds those extensions in natively.)
+//!
+//! [`Detection`] reports which step and which file decided. When the detected
+//! profile is the Roots lineage and a layer's `AssetVersion` is lower than
+//! 50000, a [`Warning`](crate::Warning) says so; it is never a refusal
+//! (the original engine's incompatibility warning is skippable too).
 //!
 //! The FO and A1 signatures are heuristics from the documented layouts.
 //! Content-selection checks, including the install-gated test, do not prove
@@ -36,17 +63,18 @@
 //! over parent) < per-ODF overrides (`Feature_<name>` keys). Each source is an
 //! [`Overrides`]; later sources win per feature.
 //!
-//! Hookup: `ContentDb::load` calls `Profile::detect(vfs)` and
+//! Hookup: `ContentDb::load` calls `Profile::detect_with_source(vfs)` and
 //! `Overrides::from_vfs(vfs)`; db-wide features are
 //! `resolve_features(profile, &[&mod_ov])`, and a def's own are
 //! `resolve_features(profile, &[&mod_ov, &Overrides::from_odf_keys(..)])`,
 //! stored in `UnitDef::features` / `WeaponDef::features`.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use sta_vfs::Vfs;
 
+use crate::Warning;
 use crate::features::{Features, Profile};
 
 /// Profile names as written in `info.ini` (`Profile=`) and `.sta` manifests.
@@ -143,55 +171,198 @@ impl Profile {
     }
 
     /// Detect the profile of a mounted install; see the module docs for the
-    /// rule list.
+    /// rule list. [`detect_with_source`](Profile::detect_with_source) also
+    /// says which step and file decided.
     pub fn detect(vfs: &Vfs) -> Profile {
+        Profile::detect_with_source(vfs).profile
+    }
+
+    /// [`detect`](Profile::detect) with the deciding step and file, the
+    /// `packages.ini` version and the warnings.
+    pub fn detect_with_source(vfs: &Vfs) -> Detection {
         let layers = vfs.layers();
         let infos: Vec<Option<Ini>> = layers.iter().map(|l| read_info(&l.root)).collect();
+        let mut warnings = Vec::new();
+
+        // Each layer's own `AssetVersion`, read through sta_vfs's info.ini
+        // reader. A malformed value is dropped with a warning, whichever step
+        // ends up deciding.
+        let mut versions: Vec<Option<(u32, PathBuf)>> = Vec::new();
+        for l in layers {
+            let found = find_ci(&l.root, "info.ini").and_then(|p| {
+                let ini = sta_vfs::mods::Ini::parse(&String::from_utf8_lossy(&std::fs::read(&p).ok()?));
+                Some((ini.asset_version()?, p))
+            });
+            versions.push(match found {
+                Some((Ok(v), p)) => Some((v, p)),
+                Some((Err(raw), p)) => {
+                    warnings.push(Warning::new(p.display().to_string(), format!("AssetVersion {raw:?} is not a whole number; ignored")));
+                    None
+                }
+                None => None,
+            });
+        }
+
+        // The host install's base Data folder, mounted or not (D6 decides
+        // what is mounted; this only reads two files from it).
+        let host_data = layers.iter().find_map(|l| {
+            if l.name.eq_ignore_ascii_case("data") {
+                Some(l.root.clone())
+            } else {
+                let mods = l.root.parent().filter(|m| m.file_name().is_some_and(|n| n.eq_ignore_ascii_case("mods")))?;
+                mods.parent().filter(|d| d.file_name().is_some_and(|n| n.eq_ignore_ascii_case("data"))).map(Path::to_path_buf)
+            }
+        });
+        let fleetops_version = host_data.as_deref().and_then(read_fleetops_version);
+
+        let (profile, step, file, detail) = Profile::decide(layers, &infos, &versions, host_data.as_deref());
+
+        if profile == Profile::Fo4 {
+            for (v, p) in versions.iter().flatten().filter(|(v, _)| *v < ROOTS_ASSET_VERSION) {
+                warnings.push(Warning::new(
+                    p.display().to_string(),
+                    format!("AssetVersion {v} is older than the Roots lineage ({ROOTS_ASSET_VERSION}) this mod loads under; it may not work as designed"),
+                ));
+            }
+        }
+        Detection { profile, step, file, detail, fleetops_version, warnings }
+    }
+
+    fn decide(
+        layers: &[sta_vfs::Layer],
+        infos: &[Option<Ini>],
+        versions: &[Option<(u32, PathBuf)>],
+        host_data: Option<&Path>,
+    ) -> (Profile, DetectStep, Option<PathBuf>, String) {
+        let info_path = |l: &sta_vfs::Layer| find_ci(&l.root, "info.ini");
 
         // 1a. Explicit, manifest first (D4): `profile` of a `manifest.toml`.
         for l in layers {
             if let Some(Ok(m)) = sta_vfs::manifest::manifest_text(&l.root).map(|t| sta_vfs::manifest::Manifest::parse(&t))
                 && let Some(p) = m.profile.as_deref().and_then(Profile::from_name)
             {
-                return p;
+                return (p, DetectStep::Explicit, find_ci(&l.root, "manifest.toml"), format!("manifest profile = {}", p.name()));
             }
         }
         // 1b. Explicit, `info.ini`.
-        for ini in infos.iter().flatten() {
-            if let Some(p) = ini.get("mod", "profile").and_then(Profile::from_name) {
-                return p;
+        for (l, ini) in layers.iter().zip(infos) {
+            if let Some(p) = ini.as_ref().and_then(|i| i.get("mod", "profile")).and_then(Profile::from_name) {
+                return (p, DetectStep::Explicit, info_path(l), format!("[mod] Profile = {}", p.name()));
             }
         }
         // 2. Armada I layout.
         for l in layers {
             if !l.zfs.is_empty() || has_zfs_file(&l.root) {
-                return Profile::Sta1Classic;
+                return (Profile::Sta1Classic, DetectStep::Zfs, Some(l.root.clone()), "a .zfs archive".into());
             }
         }
-        // 3. Fleet Operations.
+        // 3. AssetVersion: the top-most layer that states one.
+        if let Some((v, p)) = versions.iter().flatten().next()
+            && *v >= ROOTS_ASSET_VERSION
+        {
+            return (Profile::Fo4, DetectStep::AssetVersion, Some(p.clone()), format!("AssetVersion = {v}"));
+        }
+        // 4. The host's base Data/info.ini, for its name only: a fallback for a
+        // mod that states no AssetVersion. A stated older value (a mod designed
+        // for FO 3.x) is not a Roots mod and skips this step.
+        if versions.iter().all(Option::is_none)
+            && let Some(data) = host_data
+            && let Some(p) = find_ci(data, "info.ini")
+            && let Some(ini) = read_info(data)
+            && let Some(name) = ini.get("mod", "name").filter(|n| looks_like_fo(n))
+        {
+            return (Profile::Fo4, DetectStep::HostBaseInfo, Some(p), format!("host base [mod] Name = {name}"));
+        }
+        // 6. Fleet Operations heuristics, then 7. / 8.
         let mut has_data = false;
-        for (l, ini) in layers.iter().zip(&infos) {
+        for (l, ini) in layers.iter().zip(infos) {
             let name = ini.as_ref().and_then(|i| i.get("mod", "name")).unwrap_or("");
             if looks_like_fo(name) {
-                return Profile::Fo4;
+                return (Profile::Fo4, DetectStep::Heuristic, info_path(l), format!("[mod] Name = {name}"));
             }
             if l.name.eq_ignore_ascii_case("data") {
                 has_data = true;
                 if l.root.parent().is_some_and(|r| has_child(r, "mmm_loader.dll", false)) {
-                    return Profile::Fo4;
+                    return (Profile::Fo4, DetectStep::Heuristic, l.root.parent().map(|r| r.join("mmm_loader.dll")), "mmm_loader.dll beside Data".into());
                 }
                 continue;
             }
             if has_child(&l.root, "odf", true) || has_child(&l.root, "odf.fpq", false) || has_child(&l.root, "armada2.exe", false) {
                 has_data = true;
             }
-            if looks_like_fo(&l.name) || has_child(&l.root, "mmm_loader.dll", false) {
-                return Profile::Fo4;
+            if looks_like_fo(&l.name) {
+                return (Profile::Fo4, DetectStep::Heuristic, Some(l.root.clone()), format!("layer folder name {:?}", l.name));
+            }
+            if has_child(&l.root, "mmm_loader.dll", false) {
+                return (Profile::Fo4, DetectStep::Heuristic, Some(l.root.join("mmm_loader.dll")), "mmm_loader.dll in the layer".into());
             }
         }
-        // 4. / 5.
-        if has_data { Profile::Sta2Classic } else { Profile::Native }
+        if has_data {
+            (Profile::Sta2Classic, DetectStep::Heuristic, None, "Armada II layout".into())
+        } else {
+            (Profile::Native, DetectStep::Heuristic, None, "nothing matched".into())
+        }
     }
+}
+
+/// `AssetVersion` from which a mod belongs to the Roots lineage: Fleet
+/// Operations 5.0 is 50000 (major x 10000 + minor x 100 + patch).
+pub const ROOTS_ASSET_VERSION: u32 = 50_000;
+
+/// Which detection step decided; see the module docs for the order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DetectStep {
+    /// A `Profile` in a `manifest.toml` or `info.ini` (step 1).
+    Explicit,
+    /// An Armada I `.zfs` archive (step 2).
+    Zfs,
+    /// A layer's own `AssetVersion` (step 3).
+    AssetVersion,
+    /// The host install's base `Data/info.ini` name, not mounted (step 4).
+    HostBaseInfo,
+    /// The existing layout, name and folder heuristics, and the fallbacks.
+    Heuristic,
+}
+
+/// What [`Profile::detect_with_source`] found and how.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Detection {
+    pub profile: Profile,
+    pub step: DetectStep,
+    /// The file (or archive/folder) that decided; `None` for a fallback.
+    pub file: Option<PathBuf>,
+    /// What was read there, e.g. `AssetVersion = 50000`.
+    pub detail: String,
+    /// `[FleetOps] Version=` of the host `Data/packages.ini` (3.2.7 on the
+    /// FO 3.x and Dominion War installs, not a v1 lineage): recorded, never
+    /// acted on.
+    pub fleetops_version: Option<String>,
+    /// Load warnings: malformed `AssetVersion`, older-than-lineage mods.
+    pub warnings: Vec<Warning>,
+}
+
+impl std::fmt::Display for Detection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} ({:?}: {}", self.profile.name(), self.step, self.detail)?;
+        if let Some(p) = &self.file {
+            write!(f, "; {}", p.display())?;
+        }
+        if let Some(v) = &self.fleetops_version {
+            write!(f, "; packages.ini [FleetOps] Version={v} (recorded only)")?;
+        }
+        write!(f, ")")
+    }
+}
+
+/// `[FleetOps] Version=` of `<data>/packages.ini`, if it reads and looks like
+/// a version (starts with a digit).
+fn read_fleetops_version(data: &Path) -> Option<String> {
+    let ini = read_ini_named(data, "packages.ini")?;
+    ini.get("fleetops", "version").filter(|v| v.starts_with(|c: char| c.is_ascii_digit())).map(str::to_owned)
+}
+
+fn find_ci(dir: &Path, name: &str) -> Option<PathBuf> {
+    std::fs::read_dir(dir).ok()?.flatten().find(|e| e.file_name().to_string_lossy().eq_ignore_ascii_case(name)).map(|e| e.path())
 }
 
 fn looks_like_fo(s: &str) -> bool {
@@ -223,7 +394,7 @@ impl Ini {
         let mut m = BTreeMap::new();
         let mut section = String::new();
         for line in text.lines() {
-            let line = line.trim();
+            let line = line.trim().trim_start_matches('\u{feff}');
             if let Some(s) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
                 section = s.trim().to_ascii_lowercase();
             } else if let Some((k, v)) = line.split_once('=') {
@@ -240,12 +411,11 @@ impl Ini {
 }
 
 fn read_info(root: &Path) -> Option<Ini> {
-    let p = std::fs::read_dir(root)
-        .ok()?
-        .flatten()
-        .find(|e| e.file_name().to_string_lossy().eq_ignore_ascii_case("info.ini"))?
-        .path();
-    Some(Ini::parse(&String::from_utf8_lossy(&std::fs::read(p).ok()?)))
+    read_ini_named(root, "info.ini")
+}
+
+fn read_ini_named(root: &Path, name: &str) -> Option<Ini> {
+    Some(Ini::parse(&String::from_utf8_lossy(&std::fs::read(find_ci(root, name)?).ok()?)))
 }
 
 /// Switch names, in `Features` declaration order.
