@@ -38,8 +38,6 @@ pub struct PathingRules {
     pub nebula_cost: i64,
     /// `NEBULAE_PATHING_SAFETY_COEFFICIENT` (1.8): nebula radius multiplier.
     pub nebula_safety: Fixed,
-    /// `COLLISION_SAFETY_MARGIN` (1.2): how much wider than reality solids are.
-    pub collision_margin: Fixed,
     /// `HIGHEST_QUADTREE_GRID_RESOLUTION` (50): the finest planner cell, units.
     pub resolution: Fixed,
 }
@@ -54,21 +52,19 @@ impl Default for PathingRules {
             nebula_cost: 300,
             // As the header's `float` reads (f32), so stock and absent agree.
             nebula_safety: Fixed::from_f64(1.8f32 as f64),
-            collision_margin: Fixed::from_f64(1.2f32 as f64),
             resolution: Fixed::from_int(50),
         }
     }
 }
 
 impl PathingRules {
-    const KEYS: [&'static str; 8] = [
+    const KEYS: [&'static str; 7] = [
         "USE_PATH_PLANNING",
         "DEFAULT_TERRAIN_VALUE",
         "IMPASSABLE_TERRAIN",
         "OFF_MAP_PATHING_COST",
         "NEBULAE_PATHING_COST",
         "NEBULAE_PATHING_SAFETY_COEFFICIENT",
-        "COLLISION_SAFETY_MARGIN",
         "HIGHEST_QUADTREE_GRID_RESOLUTION",
     ];
 
@@ -101,7 +97,6 @@ impl PathingRules {
             off_map_cost,
             nebula_cost,
             nebula_safety: real("NEBULAE_PATHING_SAFETY_COEFFICIENT", stock.nebula_safety),
-            collision_margin: real("COLLISION_SAFETY_MARGIN", stock.collision_margin),
             resolution: real("HIGHEST_QUADTREE_GRID_RESOLUTION", stock.resolution),
         })
     }
@@ -114,7 +109,6 @@ impl PathingRules {
             self.off_map_cost as u64,
             self.nebula_cost as u64,
             self.nebula_safety.to_bits() as u64,
-            self.collision_margin.to_bits() as u64,
             self.resolution.to_bits() as u64,
         ]
     }
@@ -230,8 +224,7 @@ mod pathing_tests {
     /// The PATHING block as Armada II and Fleet Operations ship it.
     const STOCK: &str = "// PATHING\nint OFF_MAP_PATHING_COST = 90000;\nfloat HIGHEST_QUADTREE_GRID_RESOLUTION = 50.0;\n\
         int USE_PATH_PLANNING = 1;\nint IMPASSABLE_TERRAIN = -1;\nint DEFAULT_TERRAIN_VALUE = 100;\n\
-        float NEBULAE_PATHING_COST = 300.0;\nfloat NEBULAE_PATHING_SAFETY_COEFFICIENT = 1.8;\n\
-        float COLLISION_SAFETY_MARGIN = 1.2;\n";
+        float NEBULAE_PATHING_COST = 300.0;\nfloat NEBULAE_PATHING_SAFETY_COEFFICIENT = 1.8;\n";
 
     #[test]
     fn the_stock_header_matches_the_defaults() {
@@ -259,8 +252,8 @@ mod pathing_tests {
         assert_eq!(p.nebula_cost, 450);
         assert_eq!(p.off_map_cost, 400);
         assert_eq!(p.nebula_safety, PathingRules::default().nebula_safety);
-        let (bad, warnings) = Rules::from_header("float COLLISION_SAFETY_MARGIN = wide;\n");
-        assert_eq!(bad.pathing().collision_margin, PathingRules::default().collision_margin);
+        let (bad, warnings) = Rules::from_header("float NEBULAE_PATHING_SAFETY_COEFFICIENT = wide;\n");
+        assert_eq!(bad.pathing().nebula_safety, PathingRules::default().nebula_safety);
         assert_eq!(warnings.len(), 1);
     }
 }

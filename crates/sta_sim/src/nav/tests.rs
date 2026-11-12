@@ -19,9 +19,21 @@ fn v(x: i32, z: i32) -> Vec3 {
 
 /// A `nebula_obj` definition from ODF text, as the content loader makes one.
 fn nebula(odf: &str, text: &str) -> UnitDef {
-    let mut u = UnitDef::new(odf, "nebula_obj");
     let text = format!("classLabel = \"nebula_obj\"\nunitName = \"{odf}\"\n{text}");
-    u.raw = Arc::new(sta_odf::resolve(odf, &mut |_| Some(text.clone())).unwrap());
+    let stems = [odf.to_owned()];
+    let (db, _) = sta_content::odf::load_with(
+        Default::default(),
+        &Default::default(),
+        &stems,
+        &mut |_, version| (version == 0).then(|| text.clone()),
+    )
+    .unwrap();
+    let u = db
+        .units()
+        .next()
+        .expect("a nebula_obj with unitName is a unit def")
+        .clone();
+    assert!(u.nebula_pathing.is_some());
     u
 }
 
@@ -78,7 +90,7 @@ fn sim_with(regions: Vec<Region>, db: Arc<ContentDb>) -> Sim {
         seed: 3,
         map: Arc::new(map),
         content: db,
-        players: vec![seat(1)],
+        players: vec![seat(1), seat(2)],
         options: GameOptions::default(),
     })
 }
@@ -246,19 +258,28 @@ fn a_ship_goes_through_the_gap_in_a_barrier() {
     assert!(worst >= 200.0 + 75.0 - 1.0, "touched a field: {worst}");
 }
 
+/// 900 * (sin, cos) of k * 30 degrees, rounded: a ring of field centres.
+const RING: [(i32, i32); 12] = [
+    (0, 900),
+    (450, 779),
+    (779, 450),
+    (900, 0),
+    (779, -450),
+    (450, -779),
+    (0, -900),
+    (-450, -779),
+    (-779, -450),
+    (-900, 0),
+    (-779, 450),
+    (-450, 779),
+];
+
 #[test]
-#[allow(clippy::disallowed_methods)] // platform trig only places the test's regions
 fn an_enclosed_goal_stops_at_the_nearest_reachable_point() {
     // Twelve fields of 300 on a ring of 900 round (0, 3000): no way in.
-    let ring: Vec<Region> = (0..12)
-        .map(|k| {
-            let a = k as f64 * std::f64::consts::PI / 6.0;
-            let (x, z) = (
-                (900.0 * a.sin()).round() as i32,
-                (3000.0 + 900.0 * a.cos()).round() as i32,
-            );
-            sphere(RegionKind::AsteroidField, "fx_asteroids", x, z, 300)
-        })
+    let ring: Vec<Region> = RING
+        .iter()
+        .map(|&(x, z)| sphere(RegionKind::AsteroidField, "fx_asteroids", x, 3000 + z, 300))
         .collect();
     let mut sim = sim(ring);
     let ship = put(&mut sim, "fx_cruiser", v(0, 0));
@@ -270,13 +291,19 @@ fn an_enclosed_goal_stops_at_the_nearest_reachable_point() {
     assert_eq!(u.target, None, "order still open at {:?}", u.pos.to_f32());
     assert_eq!(u.speed, Fixed::ZERO);
     let d = gap(u.pos, v(0, 3000));
-    // Outside the ring (900 + 300 + body 75), on the near side, and no
-    // further out than the planner's inflated edge plus a cell or two.
+    // Outside the ring, perhaps in a notch between two fields, touching
+    // none (each 300 + body 75), on the near side.
     assert!(
-        (1275.0..1700.0).contains(&d),
+        (1100.0..1700.0).contains(&d),
         "stopped {d} from the goal at {:?}",
         u.pos.to_f32()
     );
+    for &(x, z) in &RING {
+        assert!(
+            gap(u.pos, v(x, 3000 + z)) >= 375.0 - 1.0,
+            "touching the field at {x}, {z}"
+        );
+    }
     assert!(u.pos.z < Fixed::from_int(3000));
 }
 
@@ -347,7 +374,7 @@ fn the_route_digest_is_pinned() {
     assert_eq!(sim.digest(), ROUTE_DIGEST, "got {:#x}", sim.digest());
 }
 
-const ROUTE_DIGEST: u64 = 0xc1c7_c3e6_8c13_c419;
+const ROUTE_DIGEST: u64 = 0x62dc_3681_fe11_8172;
 
 #[test]
 fn a_group_crossing_a_nebula_keeps_out_of_it() {
@@ -380,4 +407,114 @@ fn a_group_crossing_a_nebula_keeps_out_of_it() {
         }
     }
     assert!(closest > 800.0, "a ship entered the nebula: {closest}");
+}
+
+#[test]
+fn a_goal_in_a_nebulas_safety_halo_is_still_reached_round_it() {
+    // (0, 2150) is 650 from the centre: outside the nebula (400), inside
+    // the halo planned round (720). The way there must not cut the nebula.
+    let centre = v(0, 1500);
+    let mut sim = sim(vec![sphere(RegionKind::Nebula, "fx_mutara", 0, 1500, 400)]);
+    let ship = put(&mut sim, "fx_cruiser", v(0, 0));
+    go(&mut sim, ship, v(0, 2150));
+    let mut closest = f64::MAX;
+    for _ in 0..3000 {
+        sim.step(&[]);
+        closest = closest.min(gap(sim.unit(ship).unwrap().pos, centre));
+    }
+    assert!(closest > 400.0, "entered the nebula: {closest}");
+    assert!(
+        gap(sim.unit(ship).unwrap().pos, v(0, 2150)) < 1.0,
+        "ended at {:?}",
+        sim.unit(ship).unwrap().pos.to_f32()
+    );
+}
+
+#[test]
+fn a_gap_sim21_can_fly_is_not_called_unreachable() {
+    // Two fields of 400 with 300 units between their edges: room for a body
+    // of 75 on either side, so the ship goes through and arrives.
+    let mut sim = sim(vec![
+        sphere(RegionKind::AsteroidField, "fx_asteroids", -550, 1500, 400),
+        sphere(RegionKind::AsteroidField, "fx_asteroids", 550, 1500, 400),
+    ]);
+    let ship = put(&mut sim, "fx_cruiser", v(0, 0));
+    go(&mut sim, ship, v(0, 3000));
+    for _ in 0..3000 {
+        sim.step(&[]);
+    }
+    assert!(
+        gap(sim.unit(ship).unwrap().pos, v(0, 3000)) < 1.0,
+        "ended at {:?}",
+        sim.unit(ship).unwrap().pos.to_f32()
+    );
+}
+
+#[test]
+fn a_craft_wedged_in_a_pocket_keeps_its_order() {
+    // Four fields of 300 round the ship, 380 from it: it fits (300 + 75),
+    // but its passable pocket is tiny. The planner must not end the order.
+    let regions = [(380, 0), (-380, 0), (0, 380), (0, -380)]
+        .iter()
+        .map(|&(x, z)| sphere(RegionKind::AsteroidField, "fx_asteroids", x, z, 300))
+        .collect();
+    let mut sim = sim(regions);
+    let ship = put(&mut sim, "fx_cruiser", v(0, 0));
+    go(&mut sim, ship, v(0, 3000));
+    for _ in 0..10 {
+        sim.step(&[]);
+    }
+    assert_eq!(sim.unit(ship).unwrap().target, Some(v(0, 3000)));
+}
+
+/// The cache is a memo: a sim whose cache is thrown away every tick (a
+/// snapshot round trip) runs the same digests as one that keeps it, with
+/// two owners, two body sizes and many goals churning it.
+#[test]
+fn a_cold_cache_every_tick_runs_the_same_digests() {
+    let db = content(None);
+    let regions = vec![
+        sphere(RegionKind::Nebula, "fx_mutara", 0, 2500, 800),
+        sphere(RegionKind::AsteroidField, "fx_asteroids", 2500, 2500, 400),
+    ];
+    let mut warm = sim_with(regions, db.clone());
+    put(&mut warm, "fx_moon", v(-2500, 2500));
+    let mut orders = Vec::new();
+    for k in 0..12 {
+        let owner = 1 + (k % 2) as u8;
+        let key = warm
+            .content()
+            .unwrap()
+            .key(if k % 3 == 0 {
+                "fx_frigate"
+            } else {
+                "fx_cruiser"
+            })
+            .unwrap();
+        let id = warm
+            .spawn_def(
+                key,
+                PlayerId(owner),
+                v(-3000 + k * 500, 0),
+                (Fixed::ZERO, Fixed::ONE),
+            )
+            .unwrap();
+        orders.push(Command {
+            player: PlayerId(owner),
+            seq: k as u32,
+            kind: CommandKind::Order(Order::Move {
+                units: vec![id],
+                to: v(3000 - k * 500, 5000),
+                queue: false,
+            }),
+        });
+    }
+    warm.step(&orders);
+    let mut cold = Sim::from_snapshot(&warm.snapshot(), Some(db.clone())).unwrap();
+    for _ in 0..200 {
+        warm.step(&[]);
+        cold = Sim::from_snapshot(&cold.snapshot(), Some(db.clone())).unwrap();
+        cold.step(&[]);
+        assert_eq!(warm.digest(), cold.digest(), "tick {}", warm.tick);
+    }
 }
