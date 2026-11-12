@@ -12,7 +12,7 @@
 //! | `range`, `refire` | `range`, `shotDelay` (else the first `shotDelay<n>`) seconds, as ticks |
 //! | `damage` | ordnance `damageBase` |
 //! | `shot_speed` | ordnance `shotSpeed`, projectiles only |
-//! | `duration` | ordnance `lifespan` seconds, beams only |
+//! | `duration` | ordnance `lifespan` seconds, beams only; `STA64_duration` seconds on the weapon ODF overrides it (point defence has no lifespan) |
 //! | `fire_sound`, `fx` | `fireSound`; ordnance `shotGeometry` (else `sprite`) |
 //! | specials | `effectTimer`, `energyDrainRate`, `specialEnergyCost`, `disableWeapons` (default on), `decloakOnHit` |
 //! | hardpoint arc | `restrictFireArc = 1` with `fireArc` as the half-width in radians (our reading) |
@@ -74,7 +74,7 @@ pub fn weapon_def(name: &str, odf: &Odf, ordnance: Option<&Odf>, warnings: &mut 
     d.energy_cost = r.fixed("specialEnergyCost");
     // `STA64_duration`: seconds the weapon stays active, for kinds whose ordnance
     // gives none (point defence). Overrides the ordnance's `lifespan`.
-    let own_duration = odf.raw("STA64_duration").map(|_| r.ticks("STA64_duration"));
+    let own_duration = r.num("STA64_duration").filter(|s| *s >= 0.0).map(sta_core::seconds_to_ticks);
     d.disable_weapons = r.flag("disableWeapons").unwrap_or(true);
     d.decloak_on_hit = r.flag("decloakOnHit").unwrap_or(false);
 

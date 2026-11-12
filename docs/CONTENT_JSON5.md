@@ -48,7 +48,7 @@ when no install is present: the units and weapons of `sta_content::fake::db()`.
 - What an ODF is (unit, weapon, other) follows from its keys exactly as for
   installed ODFs: `wpnName` or a weapon class makes a weapon; a unit class or
   `unitName` a unit; ordnance and physics ODFs are not definitions but are
-  found by `ordName` and `physicsFile`. `#include` between entries works.
+  found by `ordName` and `physicsFile`. An entry may inherit another with `"#include": "name.odf"` (or a list), written as the ODF's own `#include` line; the keys after it override.
 - Unknown top-level keys are an error; ODF keys are not checked (as in ODFs).
   Problems the ODF loader would warn about come back as warnings.
 

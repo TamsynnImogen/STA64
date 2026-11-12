@@ -11,11 +11,11 @@
 //! | `crew`, `maximum_crew` | `crewCost` (starting/build amount), optional `maximumCrew` (otherwise `crewCost`) |
 //! | `sensor` | `rangeScan` |
 //! | `movement` | the physics ODF named by `physicsFile`, see [`movement`] |
-//! | `hardpoints` | `weapon<n>` with `weaponHardPoints<n>` (first node named) |
+//! | `hardpoints` | `weapon<n>` with `weaponHardPoints<n>` (first node named); `STA64_fireArc<n>` the slot's own arc half-width in radians |
 //! | `build` | `dilithiumCost`, `latinumCost`, `metalCost`, `biomatterCost`, `buildTime` seconds, `officerCost`, `buildItem<n>` |
-//! | `sounds` | `eventSelect`, `eventAcknowledge`, `ambientSound` (event and file names, resolved by the client) |
+//! | `sounds` | `eventSelect`, `eventAcknowledge`, `eventAttack`, `ambientSound` (event and file names, resolved by the client) |
 //! | `fx` | `fireball` |
-//! | specials, mining | `maxSpecialEnergy`, `specialEnergyRate`, `miner`, `maxdilithium`, `miningRate`, `dilithiumTransferRate`, `resource` |
+//! | specials, mining | `maxSpecialEnergy`, `specialEnergyRate`, `miner` (`miner = 0` says not a miner even for class `freighter`: [`UnitDef::mines`]), `maxdilithium`, `miningRate`, `dilithiumTransferRate`, `resource` |
 
 use sta_core::{Fixed, TICK_HZ};
 use sta_odf::Odf;
@@ -139,11 +139,18 @@ pub(crate) fn unit_def_for_profile(name: &str, odf: &Odf, phys: Option<&Odf>, pr
             .unwrap_or_else(|| "root".to_owned());
         // `STA64_fireArc<N>`: this slot's own half-width (radians), where stock ODFs
         // only limit a weapon wherever it is mounted (`restrictFireArc`, `fireArc`).
-        let arc = odf
-            .raw(&format!("STA64_fireArc{n}"))
-            .and_then(|t| t.trim().trim_matches('"').parse::<f64>().ok())
-            .filter(|half| half.is_finite() && *half > 0.0)
-            .map(crate::weapon::fire_arc);
+        let arc_key = format!("STA64_fireArc{n}");
+        let arc = odf.raw(&arc_key).and_then(|t| {
+            // f64, not the ODF number reader's f32: the angle's cosine is hashed.
+            let text = t.trim().trim_end_matches([';', 'f', 'F']).trim().trim_matches('"');
+            match text.parse::<f64>() {
+                Ok(half) if half.is_finite() && half > 0.0 => Some(crate::weapon::fire_arc(half)),
+                _ => {
+                    r.warnings.push(Warning::new(&file, format!("{arc_key} = {t} is not a positive angle; no arc")));
+                    None
+                }
+            }
+        });
         d.hardpoints.push(Hardpoint { weapon: DefRef::new(weapon), node, arc });
     }
 
@@ -170,10 +177,9 @@ pub(crate) fn unit_def_for_profile(name: &str, odf: &Odf, phys: Option<&Odf>, pr
 
     d.special_energy_max = r.fixed("maxSpecialEnergy");
     d.special_energy_rate = r.fixed("specialEnergyRate");
-    d.miner = match r.num("miner") {
-        Some(v) => v != 0.0,
-        None => d.class.0 == "freighter",
-    };
+    let miner_key = r.num("miner");
+    d.miner = miner_key.is_some_and(|v| v != 0.0);
+    d.miner_off = miner_key == Some(0.0);
     d.max_dilithium = r.fixed("maxdilithium");
     d.mining_rate = r.fixed("miningRate");
     d.transfer_rate = r.fixed("dilithiumTransferRate");

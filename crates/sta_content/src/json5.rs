@@ -74,8 +74,16 @@ struct Doc {
 
 /// An entry rendered as ODF text.
 fn odf_text(keys: &BTreeMap<String, Val>) -> String {
-    let mut out = String::from("[GameObjectClass]\n");
-    for (k, v) in keys {
+    // An `"#include"` key (a name or a list) becomes the ODF's own include
+    // lines, which stock ODFs put first; the keys after them override.
+    let mut out = String::new();
+    if let Some(inc) = keys.get("#include") {
+        for line in inc.render().split("\" \"") {
+            out.push_str(&format!("#include \"{}\"\n", line.trim_matches('"')));
+        }
+    }
+    out.push_str("[GameObjectClass]\n");
+    for (k, v) in keys.iter().filter(|(k, _)| *k != "#include") {
         out.push_str(&format!("{k} = {}\n", v.render()));
     }
     out
@@ -257,6 +265,73 @@ mod tests {
         let g = db.weapon(db.key("gun").unwrap()).unwrap();
         assert_eq!(g.refire, sta_core::seconds_to_ticks(2.0));
         assert_eq!(g.shot_speed, Fixed::from_int(300));
+    }
+
+    /// The keys the games' own ODFs carry, and the `STA64_` extensions, are read by the ODF loader.
+    #[test]
+    fn shared_keys_are_read_by_the_odf_loader() {
+        let text = r##"{
+            odf: {
+                // The stock shape: the Data Miner includes freight.odf and says miner = 0.
+                freight: { classLabel: "freighter", unitName: "F", miner: 1 },
+                fdata:   { "#include": "freight.odf", unitName: "D", miner: 0 },
+                bare:    { classLabel: "freighter", unitName: "B" },
+                drone:   { classLabel: "craft", unitName: "C", miner: 1 },
+                plain:   { classLabel: "craft", unitName: "P" },
+                gun: { classLabel: "pointdefenselaser", wpnName: "G", ordName: "gun_ord", STA64_duration: 0.1 },
+                beam: { classLabel: "cannon", wpnName: "B", ordName: "beam_ord", restrictFireArc: 1, fireArc: 1.0, STA64_duration: -1 },
+                gun_ord: { classLabel: "pphaser", damageBase: 1 },
+                beam_ord: { classLabel: "phaser", damageBase: 1, lifespan: 0.5 },
+                ship: { classLabel: "craft", unitName: "S", eventAttack: "Atk",
+                        weapon1: "gun", weaponHardPoints1: "hp01", STA64_fireArc1: 0.5,
+                        weapon2: "gun", weaponHardPoints2: "hp02",
+                        weapon3: "beam", weaponHardPoints3: "hp03", STA64_fireArc3: 0.25,
+                        weapon4: "beam", weaponHardPoints4: "hp04",
+                        weapon5: "gun", weaponHardPoints5: "hp05", STA64_fireArc5: "abc" },
+            },
+        }"##;
+        let (db, warnings) = load_str("t", text).unwrap();
+        let mines = |n: &str| db.unit(db.key(n).unwrap()).unwrap().mines();
+        assert!(mines("freight") && mines("bare") && mines("drone"));
+        assert!(
+            !mines("fdata"),
+            "miner = 0 on a freighter that includes a miner"
+        );
+        assert!(!mines("plain"));
+        let ship = db.unit(db.key("ship").unwrap()).unwrap();
+        assert_eq!(ship.sounds.ack_attack, ["Atk"]);
+        let cos = |x: f64| Fixed::from_f64(x.cos());
+        assert_eq!(
+            ship.hardpoints[0].arc.expect("slot 1's own arc").min_dot,
+            cos(0.5)
+        );
+        assert!(ship.hardpoints[1].arc.is_none());
+        assert_eq!(
+            ship.hardpoints[2]
+                .arc
+                .expect("slot 3 wins over the weapon's")
+                .min_dot,
+            cos(0.25)
+        );
+        assert_eq!(
+            ship.hardpoints[3]
+                .arc
+                .expect("the weapon's own arc")
+                .min_dot,
+            cos(1.0)
+        );
+        assert!(ship.hardpoints[4].arc.is_none());
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.message.contains("STA64_fireArc5")),
+            "{warnings:?}"
+        );
+        let gun = db.weapon(db.key("gun").unwrap()).unwrap();
+        assert_eq!(gun.duration, sta_core::seconds_to_ticks(0.1));
+        // A negative STA64_duration is ignored: the ordnance's lifespan stands.
+        let beam = db.weapon(db.key("beam").unwrap()).unwrap();
+        assert_eq!(beam.duration, sta_core::seconds_to_ticks(0.5));
     }
 
     #[test]
