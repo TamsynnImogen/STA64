@@ -127,10 +127,10 @@ fn guard_setmetatable(lua: &Lua, globals: &Table) -> mlua::Result<()> {
     globals.raw_set(
         "setmetatable",
         lua.create_function(move |_, args: MultiValue| {
-            if let Some(Value::Table(meta)) = args.get(1) {
-                if !meta.raw_get::<Value>("__gc")?.is_nil() {
-                    return Err(restricted("setmetatable", "__gc finalizers are not available to mission scripts".into()));
-                }
+            if let Some(Value::Table(meta)) = args.get(1)
+                && !meta.raw_get::<Value>("__gc")?.is_nil()
+            {
+                return Err(restricted("setmetatable", "__gc finalizers are not available to mission scripts".into()));
             }
             original.call::<MultiValue>(args)
         })?,
@@ -175,13 +175,13 @@ fn guard_string(lua: &Lua, string: &Table) -> mlua::Result<()> {
             lua.create_function(move |_, args: MultiValue| {
                 let plain = name == "find" && args.get(3).is_some_and(|v| !matches!(v, Value::Nil | Value::Boolean(false)));
                 if !plain {
-                    if let Some(len) = byte_len(args.front()) {
-                        if len > PATTERN_SUBJECT_MAX {
-                            return Err(restricted(
-                                &format!("string.{name}"),
-                                format!("subject over {PATTERN_SUBJECT_MAX} bytes"),
-                            ));
-                        }
+                    if let Some(len) = byte_len(args.front())
+                        && len > PATTERN_SUBJECT_MAX
+                    {
+                        return Err(restricted(
+                            &format!("string.{name}"),
+                            format!("subject over {PATTERN_SUBJECT_MAX} bytes"),
+                        ));
                     }
                     if let Some(Value::String(pattern)) = args.get(1) {
                         let bytes = pattern.as_bytes();
