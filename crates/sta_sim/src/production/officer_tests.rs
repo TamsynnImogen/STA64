@@ -290,3 +290,25 @@ fn installed_rule_matches_the_data() {
     }
     assert_eq!(officers(&sim), [held + cost, held + cost]);
 }
+
+#[test]
+fn losing_the_builder_releases_reservations_and_a_deploy_keeps_the_census_through_welding() {
+    let mut sim = game(true, Some(20));
+    let yard = spawn(&mut sim, "off_yard", 0);
+    assert!(order(&mut sim, yard, "off_ship4", None));
+    assert!(order(&mut sim, yard, "off_ship4", None));
+    assert_eq!(officers(&sim)[0], n(8));
+    assert!(sim.despawn(yard, None));
+    sim.step(&[]);
+    assert_eq!(officers(&sim)[0], n(0), "a lost yard returns its queue's officers");
+
+    // A prepaid deploy holds 5 queued, and the weld site holds the same 5.
+    let rig = spawn(&mut sim, "off_rig", 0);
+    let site = Vec3 { x: n(4000), y: Fixed::ZERO, z: Fixed::ZERO };
+    assert!(order(&mut sim, rig, "off_station5", Some(site)));
+    assert_eq!(officers(&sim)[0], n(5));
+    sim.units.get_mut(rig).unwrap().pos = site;
+    sim.step(&[]);
+    assert!(!sim.production.is_deploying(rig));
+    assert_eq!(officers(&sim)[0], n(5), "reservation became the welding station, not both");
+}
