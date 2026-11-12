@@ -270,6 +270,9 @@ pub(super) fn refresh(
         for entity in &bodies {
             commands.entity(entity).despawn();
         }
+        if state.cfg.is_some() {
+            commands.insert_resource(crate::render::overlays::GaugeStyle::default());
+        }
         state.layout = None;
         state.loaded = false;
         state.solid.clear();
@@ -312,6 +315,10 @@ pub(super) fn refresh(
             .gui
             .as_ref()
             .map(|cfg| StockLayout::new(cfg, Vec2::new(1080.0 * config.aspect, 1080.0)));
+        commands.insert_resource(crate::render::overlays::GaugeStyle::from_cfg(
+            state.layout.as_ref().and_then(|layout| layout.number("selectionGaugeHeight")),
+            state.layout.as_ref().and_then(|layout| layout.number("selectionGaugeGap")),
+        ));
         state.info = None;
         state.grid.clear();
         commands

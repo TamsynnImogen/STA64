@@ -8,7 +8,7 @@ use super::super::layout::R;
 use super::super::model::{self, HudFeed, Info};
 use super::super::panels::GroupTile;
 use super::layout::{StockLayout, info_variant};
-use crate::ui::gui_sprites::GuiImage;
+use crate::ui::gui_sprites::{GuiImage, GuiImageSampling};
 use crate::ui::notices::Tooltip;
 use crate::ui::sprite_font::{ScalableText, SpriteText, sprite_text};
 use crate::ui::theme::{Theme, UiButton, WidgetState};
@@ -179,7 +179,7 @@ fn wireframe_layers(commands: &mut Commands, root: Entity, r: R, model: &str) {
         return;
     }
     for layer in 1..=5 {
-        let mut image = GuiImage::new("");
+        let mut image = GuiImage::new("").with_sampling(GuiImageSampling::Linear);
         image.names = wireframe_names(&stem, layer);
         commands.entity(root).with_child((node(r), Pickable::IGNORE, image));
     }
@@ -485,6 +485,29 @@ mod tests {
             ["fed_constw1", "fed_const_s"]
         );
         assert_eq!(wireframe_names("models/Fed_ConSt.SOD", 5), ["fed_constw5"]);
+    }
+
+    #[test]
+    fn stock_wireframe_layers_opt_into_linear_sampling() {
+        let mut world = World::new();
+        let root = world.spawn(Node::default()).id();
+        let rect = R::new(12.0, 18.0, 64.0, 64.0);
+        let mut queue = CommandQueue::default();
+        {
+            let mut commands = Commands::new(&mut queue, &world);
+            wireframe_layers(&mut commands, root, rect, "models/Fed_ConSt.SOD");
+        }
+        queue.apply(&mut world);
+        let children = world.get::<Children>(root).unwrap();
+        assert_eq!(children.len(), 5);
+        for (index, entity) in children.iter().enumerate() {
+            let image = world.get::<GuiImage>(entity).unwrap();
+            assert_eq!(image.sampling, GuiImageSampling::Linear);
+            assert_eq!(image.names, wireframe_names("fed_const", index + 1));
+            let node = world.get::<Node>(entity).unwrap();
+            assert_eq!((node.left, node.top, node.width, node.height),
+                (Val::Px(12.0), Val::Px(18.0), Val::Px(64.0), Val::Px(64.0)));
+        }
     }
 
     #[test]

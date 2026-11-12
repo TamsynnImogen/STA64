@@ -436,6 +436,43 @@ fn populated_info_bar(builder: bool, extra: &str) -> App {
 }
 
 #[test]
+fn bare_status_values_and_crew_change_colour_with_live_pools() {
+    use infobar::InfoBarField::{Hull, Shields, Crew};
+    let mut app = populated_info_bar(false, "systemIconHealthyColor=0 1 0\nsystemIconLowColor=1 1 0\nsystemIconCriticalColor=1 0 0\n");
+    assert_eq!(info_bar_label(&mut app, Hull).unwrap().1, "100");
+    let crew_node = info_bar_label(&mut app, Crew).unwrap().0;
+    let mut feed = app.world().resource::<HudFeed>().clone();
+    let mut view = (*feed.view).clone();
+    view.units[0].hull[0] = Fixed::from_int(50);
+    view.units[0].shields = [[Fixed::from_int(25), Fixed::from_int(100)]; 4];
+    view.units[0].crew = Some([Fixed::from_int(37), Fixed::from_int(150)]);
+    feed.view = Arc::new(view);
+    *app.world_mut().resource_mut::<HudFeed>() = feed;
+    app.update();
+    for (field, text, colour) in [
+        (Hull, "50", Color::srgb(1.0, 1.0, 0.0)),
+        (Shields, "25", Color::srgb(1.0, 0.0, 0.0)),
+        (Crew, "37", Color::srgb(1.0, 0.0, 0.0)),
+    ] {
+        let label = info_bar_label(&mut app, field).unwrap();
+        assert_eq!(label.1, text);
+        assert_eq!(label.2, colour);
+    }
+    assert_eq!(info_bar_label(&mut app, Crew).unwrap().0, crew_node);
+}
+
+#[test]
+fn resolved_cfg_supplies_optional_selection_gauge_dimensions() {
+    let mut app = populated_info_bar(false, "selectionGaugeHeight=3\nselectionGaugeGap=5\n");
+    assert_eq!(*app.world().resource::<crate::render::overlays::GaugeStyle>(),
+        crate::render::overlays::GaugeStyle { height: 3.0, gap: 5.0 });
+    *app.world_mut().resource_mut::<UiProfile>() = UiProfile::Lcars;
+    app.update();
+    assert_eq!(*app.world().resource::<crate::render::overlays::GaugeStyle>(),
+        crate::render::overlays::GaugeStyle::default());
+}
+
+#[test]
 fn hovered_info_bar_keeps_selected_card_and_updates_real_pools_in_place() {
     use infobar::InfoBarField::{Name, Hull, Shields, Crew, Energy};
     let mut app = populated_info_bar(true, "hull_color = 0.2 0.4 0.6 0.8\ncrew_amt_color = 0 1 1 1\nshipNameColor = 1 0 1 1\n");
@@ -444,7 +481,7 @@ fn hovered_info_bar_keeps_selected_card_and_updates_real_pools_in_place() {
     assert_eq!(info_bar_label(&mut app, Name).unwrap().1, "USS Test");
     app.world_mut().resource_mut::<crate::input::hover::HoveredUnit>().0 = Some(EntityId(2));
     app.update();
-    for (field, expected) in [(Name,"Construction Ship"), (Hull,"50%"), (Shields,"25%"), (Crew,"73"), (Energy,"3%")] {
+    for (field, expected) in [(Name,"Construction Ship"), (Hull,"50"), (Shields,"25"), (Crew,"73"), (Energy,"3")] {
         let label = info_bar_label(&mut app, field).unwrap();
         assert_eq!(label.1, expected);
         assert_eq!(label.3, Visibility::Inherited, "bar must follow HUD root visibility");
@@ -649,7 +686,7 @@ fn numeric_values_patch_existing_stock_entities() {
     assert!(new.iter().any(|(_, id, text)| *id == 2 && text == "1234"));
     let updated = app.world().get::<SpriteText>(hull.0).unwrap();
     assert_ne!(updated.text, hull.1);
-    assert_eq!(updated.text, "60%");
+    assert_eq!(updated.text, "60");
 }
 
 #[test]

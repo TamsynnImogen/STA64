@@ -208,17 +208,17 @@ fn value(unit: &UnitView, field: InfoBarField) -> Option<(String, Option<f32>)> 
                 i128::from(unit.hull[0].to_bits()),
                 i128::from(unit.hull[1].to_bits()),
             );
-            return percent(now, max).map(|p| (format!("{p}%"), ratio(now, max)));
+            return percent(now, max).map(|p| (p.to_string(), ratio(now, max)));
         }
         InfoBarField::Shields => {
             let (now, max) = shield_bits(unit);
-            return percent(now, max).map(|p| (format!("{p}%"), ratio(now, max)));
+            return percent(now, max).map(|p| (p.to_string(), ratio(now, max)));
         }
         InfoBarField::Crew => unit.crew?,
         InfoBarField::Energy => {
             let [now, max] = unit.energy?;
             let (now, max) = (i128::from(now.to_bits()), i128::from(max.to_bits()));
-            return percent(now, max).map(|p| (format!("{p}%"), ratio(now, max)));
+            return percent(now, max).map(|p| (p.to_string(), ratio(now, max)));
         }
         InfoBarField::Name => return None,
     };
@@ -394,8 +394,8 @@ mod tests {
         actor.hull = [Fixed::from_int(1), Fixed::from_int(2)];
         actor.shields = [[Fixed::from_int(1), Fixed::from_int(4)]; 4];
         actor.crew = Some([Fixed::from_int(73), Fixed::from_int(150)]);
-        assert_eq!(value(&actor, InfoBarField::Hull).unwrap().0, "50%");
-        assert_eq!(value(&actor, InfoBarField::Shields).unwrap().0, "25%");
+        assert_eq!(value(&actor, InfoBarField::Hull).unwrap().0, "50");
+        assert_eq!(value(&actor, InfoBarField::Shields).unwrap().0, "25");
         assert_eq!(value(&actor, InfoBarField::Crew).unwrap().0, "73");
         assert_eq!(value(&actor, InfoBarField::Energy), None);
         actor.crew = Some([Fixed::ZERO; 2]);

@@ -16,7 +16,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+mod geometry;
+#[cfg(test)]
+mod gpu;
+pub use geometry::{GaugeStyle, ModelBounds};
+
 use bevy::prelude::*;
+use bevy::transform::helper::TransformHelper;
 use sta_sim::{EntityId, UnitView};
 
 use crate::app::GameSet;
@@ -76,12 +82,13 @@ pub struct OverlaysPlugin;
 impl Plugin for OverlaysPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Selection>()
+            .init_resource::<GaugeStyle>()
             .init_resource::<OrderTargets>()
             .init_resource::<OverlayCounts>()
             .add_systems(Startup, make_assets.run_if(resource_exists::<Assets<Mesh>>).run_if(resource_exists::<Assets<StandardMaterial>>))
             .add_systems(
                 Update,
-                (sync_overlays, update_bars, update_lines, billboard, count)
+                (sync_overlays, update_bars, update_lines, billboard.after(crate::viewer::orbit_camera), count)
                     .chain()
                     .in_set(GameSet::Render)
                     .distributive_run_if(resource_exists::<SimLink>)
@@ -118,9 +125,9 @@ pub fn shield_share(u: &UnitView) -> Option<f32> {
     (max > 0.0).then(|| (now / max).clamp(0.0, 1.0))
 }
 
-/// Bar width, height and height above the unit's origin.
+/// Temporary world geometry before the camera/model bounds are available.
 fn bar_geometry(radius: f32) -> (f32, f32, f32) {
-    (radius * 1.6, (radius * 0.1).max(0.4), radius * 0.4 + 3.0)
+    (radius * 2.0, 0.4, radius + 3.0)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -183,14 +190,14 @@ fn sync_overlays(
                 } else {
                     (assets.shield.clone(), 1.0, y + h * 1.5)
                 };
-                let bar = commands.spawn((Name::new("bar"), overlay, Billboard, ChildOf(root), Transform::from_xyz(0.0, y, 0.0), Visibility::default())).id();
-                commands.spawn((ChildOf(bar), Mesh3d(assets.quad.clone()), MeshMaterial3d(assets.bar_back.clone()), Transform::from_scale(Vec3::new(w, h, 1.0))));
+                let bar = commands.spawn((Name::new("bar"), overlay, Billboard, ChildOf(root), Transform::from_xyz(0.0, y, 0.0).with_scale(Vec3::new(w, h, 1.0)), Visibility::Hidden)).id();
+                commands.spawn((ChildOf(bar), Mesh3d(assets.quad.clone()), MeshMaterial3d(assets.bar_back.clone()), Transform::default()));
                 commands.spawn((
                     ChildOf(bar),
                     BarFill { share },
                     Mesh3d(assets.quad.clone()),
                     MeshMaterial3d(mat),
-                    Transform::from_xyz(-(1.0 - share) * w * 0.5, 0.0, 0.01).with_scale(Vec3::new(w * share, h, 1.0)),
+                    Transform::from_xyz(-(1.0 - share) * 0.5, 0.0, 0.01).with_scale(Vec3::new(share, 1.0, 1.0)),
                 ));
             }
             OverlayKind::Line => {
@@ -205,7 +212,6 @@ fn update_bars(
     link: Res<SimLink>,
     hulls: Query<&HullShare>,
     ents: Res<SimEntities>,
-    radii: Query<&SelectRadius>,
     bars: Query<(&Overlay, &Children)>,
     mut fills: Query<(&mut BarFill, &mut Transform)>,
 ) {
@@ -216,13 +222,11 @@ fn update_bars(
             _ => continue,
         };
         let Some(share) = share else { continue };
-        let radius = ents.0.get(&o.unit).and_then(|e| radii.get(*e).ok()).map_or(DEFAULT_RADIUS, |r| r.0);
-        let (w, h, _) = bar_geometry(radius);
         for k in kids.iter() {
             if let Ok((mut f, mut tf)) = fills.get_mut(k) {
                 f.share = share;
-                tf.translation.x = -(1.0 - share) * w * 0.5;
-                tf.scale = Vec3::new(w * share, h, 1.0);
+                tf.translation.x = -(1.0 - share) * 0.5;
+                tf.scale = Vec3::new(share, 1.0, 1.0);
             }
         }
     }
@@ -245,13 +249,50 @@ fn update_lines(ents: Res<SimEntities>, targets: Res<OrderTargets>, units: Query
     }
 }
 
-/// Turn bars to face the camera (their parent may be rotated).
-fn billboard(cam: Query<&GlobalTransform, With<Camera3d>>, parents: Query<&GlobalTransform, Without<Billboard>>, mut bars: Query<(&ChildOf, &mut Transform), With<Billboard>>) {
-    let Some(cam) = cam.iter().next() else { return };
-    let cam_rot = cam.compute_transform().rotation;
-    for (p, mut tf) in &mut bars {
-        let parent_rot = parents.get(p.parent()).map_or(Quat::IDENTITY, |g| g.compute_transform().rotation);
-        tf.rotation = parent_rot.inverse() * cam_rot;
+/// Project the model container, then keep gauge height/spacing in screen pixels.
+#[allow(clippy::type_complexity)]
+fn billboard(
+    cam: Query<(Entity, &Camera, &Projection), crate::map::MainCamera>,
+    parents: Query<(Option<&ModelBounds>, Option<&SelectRadius>), Without<Billboard>>,
+    style: Res<GaugeStyle>,
+    metadata: Query<(Entity, &Overlay, &ChildOf), With<Billboard>>,
+    mut transforms: ParamSet<(TransformHelper, Query<(&mut Transform, &mut Visibility), With<Billboard>>)>,
+    mut updates: Local<Vec<(Entity, Option<Transform>)>>,
+) {
+    updates.clear();
+    {
+        // Unit/camera local transforms already changed in Update; ordinary
+        // GlobalTransform propagation happens later. Read the current hierarchy
+        // so gauges do not lag behind moving or rotating actors by one frame.
+        let helper = transforms.p0();
+        let camera = cam.single().ok().and_then(|(entity, camera, projection)| {
+            let transform = helper.compute_global_transform(entity).ok()?;
+            let size = camera.logical_viewport_size()?;
+            let clip = projection.get_clip_from_view() * transform.to_matrix().inverse();
+            Some((size, clip, clip.inverse(), transform.compute_transform().rotation))
+        });
+        for (entity, overlay, p) in &metadata {
+            let layout = camera.and_then(|(size, clip, inverse, rotation)| {
+                let parent = helper.compute_global_transform(p.parent()).ok()?;
+                let (bounds, radius) = parents.get(p.parent()).ok()?;
+                let bounds = bounds.copied().unwrap_or_else(|| ModelBounds::fallback(radius.map_or(DEFAULT_RADIUS, |r| r.0)));
+                let (screen, depth) = geometry::project(bounds, parent.to_matrix(), clip, size)?;
+                let rect = geometry::bar_rect(screen, overlay.kind == OverlayKind::ShieldBar, *style)?;
+                let world = geometry::world_bar(rect, depth, inverse, size, rotation)?;
+                Some(GlobalTransform::from(world).reparented_to(&parent))
+            });
+            updates.push((entity, layout));
+        }
+    }
+    let mut bars = transforms.p1();
+    for (entity, layout) in updates.iter() {
+        let Ok((mut tf, mut visibility)) = bars.get_mut(*entity) else { continue };
+        if let Some(layout) = layout {
+            *tf = *layout;
+            *visibility = Visibility::Inherited;
+        } else {
+            *visibility = Visibility::Hidden;
+        }
     }
 }
 
@@ -383,9 +424,59 @@ mod tests {
         let fills: Vec<_> = q.iter(app.world()).collect();
         assert_eq!(fills.len(), 1);
         assert_eq!(fills[0].0.share, 0.25);
-        let (w, _, _) = bar_geometry(DEFAULT_RADIUS);
-        assert!((fills[0].1.scale.x - w * 0.25).abs() < 1e-5);
-        assert!((fills[0].1.translation.x + 0.75 * w * 0.5).abs() < 1e-5);
+        assert!((fills[0].1.scale.x - 0.25).abs() < 1e-5);
+        assert!((fills[0].1.translation.x + 0.75 * 0.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn gauge_projection_uses_current_transforms_before_global_propagation() {
+        use bevy::camera::{CameraProjection, ComputedCameraValues, RenderTargetInfo};
+        let size = Vec2::new(1280.0, 720.0);
+        let mut projection = PerspectiveProjection::default();
+        projection.update(size.x, size.y);
+        let camera = Camera {
+            computed: ComputedCameraValues {
+                clip_from_view: projection.get_clip_from_view(),
+                target_info: Some(RenderTargetInfo { physical_size: UVec2::new(1280, 720), scale_factor: 1.0 }),
+                ..default()
+            }, ..default()
+        };
+        let mut app = App::new();
+        app.init_resource::<GaugeStyle>()
+            .init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<bevy::input::mouse::AccumulatedMouseMotion>()
+            .init_resource::<bevy::input::mouse::AccumulatedMouseScroll>()
+            .add_systems(Update, (billboard.after(crate::viewer::orbit_camera), crate::viewer::orbit_camera));
+        let camera_id = app.world_mut().spawn((Camera3d::default(), camera,
+            Projection::Perspective(projection.clone()),
+            Transform::from_xyz(0.0, 100.0, 300.0).looking_at(Vec3::ZERO, Vec3::Y),
+            crate::viewer::Orbit { focus: Vec3::ZERO, yaw: 0.0, pitch: 0.5, dist: 300.0, home: (Vec3::ZERO, 300.0) })).id();
+        let bounds = ModelBounds::fallback(20.0);
+        let actor = app.world_mut().spawn((Transform::default(), bounds)).id();
+        let bar = app.world_mut().spawn((Billboard,
+            Overlay { unit: EntityId(1), kind: OverlayKind::HullBar }, ChildOf(actor),
+            Transform::default(), Visibility::Hidden)).id();
+        // No TransformPlugin: globals deliberately remain stale throughout.
+        for (x, angle, distance) in [(0.0, 0.0, 300.0), (30.0, 0.8, 450.0)] {
+            let parent = Transform::from_xyz(x, 10.0, 0.0).with_rotation(Quat::from_rotation_y(angle));
+            *app.world_mut().get_mut::<Transform>(actor).unwrap() = parent;
+            {
+                let mut orbit = app.world_mut().get_mut::<crate::viewer::Orbit>(camera_id).unwrap();
+                orbit.focus = Vec3::new(x * 0.5, 0.0, 0.0);
+                orbit.yaw = angle * 0.3;
+                orbit.dist = distance;
+            }
+            app.update();
+            let camera = *app.world().get::<Transform>(camera_id).unwrap();
+            assert_eq!(*app.world().get::<Visibility>(bar).unwrap(), Visibility::Inherited);
+            let clip = projection.get_clip_from_view() * camera.to_matrix().inverse();
+            let (screen, _) = geometry::project(bounds, parent.to_matrix(), clip, size).unwrap();
+            let expected = geometry::bar_rect(screen, false, GaugeStyle::default()).unwrap();
+            let local = app.world().get::<Transform>(bar).unwrap();
+            let p = clip.project_point3(parent.transform_point(local.transform_point(Vec3::new(-0.5, 0.5, 0.0))));
+            let actual = Vec2::new(p.x + 1.0, 1.0 - p.y) * size * 0.5;
+            assert!((actual - expected.min).length() < 0.01, "current frame: {actual:?}, expected {expected:?}");
+        }
     }
 
     #[test]
