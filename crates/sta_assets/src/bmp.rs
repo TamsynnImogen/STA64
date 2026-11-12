@@ -71,7 +71,14 @@ impl Channel {
         let shift = mask.trailing_zeros();
         let bits = (mask >> shift).trailing_ones();
         // Masks wider than 8 bits keep their top 8 bits.
-        Some(if bits > 8 { Self { shift: shift + bits - 8, bits: 8 } } else { Self { shift, bits } })
+        Some(if bits > 8 {
+            Self {
+                shift: shift + bits - 8,
+                bits: 8,
+            }
+        } else {
+            Self { shift, bits }
+        })
     }
 
     fn get(self, v: u32) -> u8 {
@@ -94,7 +101,12 @@ struct Masks {
 impl Masks {
     fn new(r: u32, g: u32, b: u32, a: u32) -> Result<Self, BmpError> {
         let ch = |m| Channel::from_mask(m).ok_or(BmpError::Header("empty colour mask"));
-        Ok(Self { r: ch(r)?, g: ch(g)?, b: ch(b)?, a: Channel::from_mask(a) })
+        Ok(Self {
+            r: ch(r)?,
+            g: ch(g)?,
+            b: ch(b)?,
+            a: Channel::from_mask(a),
+        })
     }
 
     fn px(&self, v: u32, out: &mut [u8]) {
@@ -146,7 +158,11 @@ pub fn decode(data: &[u8]) -> Result<Rgba, BmpError> {
     let entry = if dib == 12 { 3 } else { 4 };
     let mut palette: Vec<[u8; 3]> = Vec::new();
     if bpp <= 8 {
-        let n = if colors_used > 0 && colors_used <= (1 << bpp) { colors_used } else { 1usize << bpp };
+        let n = if colors_used > 0 && colors_used <= (1 << bpp) {
+            colors_used
+        } else {
+            1usize << bpp
+        };
         for i in 0..n {
             let at = palette_at + i * entry;
             let Some(e) = data.get(at..at + 3) else { break };
@@ -165,7 +181,10 @@ pub fn decode(data: &[u8]) -> Result<Rgba, BmpError> {
             for y in 0..h {
                 let d = dst_row(y) * w * 4;
                 for x in 0..w {
-                    let c = palette.get(idx[y * w + x] as usize).copied().unwrap_or([0; 3]);
+                    let c = palette
+                        .get(idx[y * w + x] as usize)
+                        .copied()
+                        .unwrap_or([0; 3]);
                     out[d + x * 4..d + x * 4 + 3].copy_from_slice(&c);
                     out[d + x * 4 + 3] = 255;
                 }
@@ -174,7 +193,9 @@ pub fn decode(data: &[u8]) -> Result<Rgba, BmpError> {
         (BI_RGB, 1 | 4 | 8) => {
             let stride = (w * bpp as usize).div_ceil(32) * 4;
             for y in 0..h {
-                let row = rows.get(y * stride..y * stride + (w * bpp as usize).div_ceil(8)).ok_or(BmpError::Truncated)?;
+                let row = rows
+                    .get(y * stride..y * stride + (w * bpp as usize).div_ceil(8))
+                    .ok_or(BmpError::Truncated)?;
                 let d = dst_row(y) * w * 4;
                 for x in 0..w {
                     let i = match bpp {
@@ -197,13 +218,24 @@ pub fn decode(data: &[u8]) -> Result<Rgba, BmpError> {
             } else {
                 // Masks follow a 40-byte header, or are fields of the V3+ headers.
                 let at = 54;
-                let a = if compression == BI_ALPHABITFIELDS || dib >= 56 { u32le(data, at + 12).unwrap_or(0) } else { 0 };
-                Masks::new(u32le(data, at)?, u32le(data, at + 4)?, u32le(data, at + 8)?, a)?
+                let a = if compression == BI_ALPHABITFIELDS || dib >= 56 {
+                    u32le(data, at + 12).unwrap_or(0)
+                } else {
+                    0
+                };
+                Masks::new(
+                    u32le(data, at)?,
+                    u32le(data, at + 4)?,
+                    u32le(data, at + 8)?,
+                    a,
+                )?
             };
             let bytes = bpp as usize / 8;
             let stride = (w * bpp as usize).div_ceil(32) * 4;
             for y in 0..h {
-                let row = rows.get(y * stride..y * stride + w * bytes).ok_or(BmpError::Truncated)?;
+                let row = rows
+                    .get(y * stride..y * stride + w * bytes)
+                    .ok_or(BmpError::Truncated)?;
                 let d = dst_row(y) * w * 4;
                 for x in 0..w {
                     let p = &row[x * bytes..x * bytes + bytes];
@@ -219,7 +251,12 @@ pub fn decode(data: &[u8]) -> Result<Rgba, BmpError> {
         }
         (c, b) => return Err(BmpError::Unsupported(format!("{b}-bit, compression {c}"))),
     }
-    Ok(Rgba { width: w as u32, height: h as u32, has_alpha, pixels: out })
+    Ok(Rgba {
+        width: w as u32,
+        height: h as u32,
+        has_alpha,
+        pixels: out,
+    })
 }
 
 /// Expand an RLE4/RLE8 stream to one palette index per pixel, rows bottom-up as
@@ -240,7 +277,11 @@ fn rle_decode(src: &[u8], w: usize, h: usize, four_bit: bool) -> Result<Vec<u8>,
         i += 2;
         if n > 0 {
             for k in 0..n {
-                let val = if four_bit { if k % 2 == 0 { v >> 4 } else { v & 0x0f } } else { v };
+                let val = if four_bit {
+                    if k % 2 == 0 { v >> 4 } else { v & 0x0f }
+                } else {
+                    v
+                };
                 put(x, y, val);
                 x += 1;
             }
@@ -264,7 +305,11 @@ fn rle_decode(src: &[u8], w: usize, h: usize, four_bit: bool) -> Result<Vec<u8>,
                 let run = src.get(i..i + bytes).ok_or(BmpError::Truncated)?;
                 for k in 0..count {
                     let val = if four_bit {
-                        if k % 2 == 0 { run[k / 2] >> 4 } else { run[k / 2] & 0x0f }
+                        if k % 2 == 0 {
+                            run[k / 2] >> 4
+                        } else {
+                            run[k / 2] & 0x0f
+                        }
                     } else {
                         run[k]
                     };
@@ -337,7 +382,15 @@ mod tests {
     fn one_bit_palette_bottom_up() {
         // 9x2: stride 4 bytes. Stored row 0 is the bottom row.
         let p = pal(&[RED, WHITE]);
-        let data = bmp(9, 2, 1, 0, 0, &p, &[0b1010_1010, 0b1000_0000, 0, 0, 0, 0, 0, 0]);
+        let data = bmp(
+            9,
+            2,
+            1,
+            0,
+            0,
+            &p,
+            &[0b1010_1010, 0b1000_0000, 0, 0, 0, 0, 0, 0],
+        );
         let img = decode(&data).unwrap();
         assert_eq!((img.width, img.height, img.has_alpha), (9, 2, false));
         // Top row of the image is stored second: all index 0 = red.
@@ -402,7 +455,10 @@ mod tests {
         let data = bmp(7, 1, 4, BI_RLE4, 4, &p, &rle);
         let img = decode(&data).unwrap();
         let row: Vec<_> = (0..7).map(|x| px(&img, x, 0)[..3].to_vec()).collect();
-        assert_eq!(row, [GREEN, BLUE, GREEN, WHITE, RED, GREEN, BLUE].map(|c| c.to_vec()));
+        assert_eq!(
+            row,
+            [GREEN, BLUE, GREEN, WHITE, RED, GREEN, BLUE].map(|c| c.to_vec())
+        );
     }
 
     #[test]
@@ -415,7 +471,10 @@ mod tests {
     #[test]
     fn sixteen_bit_defaults_to_555() {
         // 0x7c00 = red, 0x03e0 = green, 0x001f = blue, 0x7fff = white
-        let pixels: Vec<u8> = [0x7c00u16, 0x03e0, 0x001f, 0x7fff].iter().flat_map(|v| v.to_le_bytes()).collect();
+        let pixels: Vec<u8> = [0x7c00u16, 0x03e0, 0x001f, 0x7fff]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
         let data = bmp(4, 1, 16, 0, 0, &[], &pixels);
         let img = decode(&data).unwrap();
         assert_eq!(px(&img, 0, 0), [255, 0, 0, 255]);
@@ -430,7 +489,10 @@ mod tests {
         for m in [0xf800u32, 0x07e0, 0x001f] {
             masks.extend(m.to_le_bytes());
         }
-        let pixels: Vec<u8> = [0xf800u16, 0x07e0].iter().flat_map(|v| v.to_le_bytes()).collect();
+        let pixels: Vec<u8> = [0xf800u16, 0x07e0]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
         let data = bmp(2, 1, 16, BI_BITFIELDS, 0, &masks, &pixels);
         let img = decode(&data).unwrap();
         assert_eq!(px(&img, 0, 0), [255, 0, 0, 255]);
@@ -483,7 +545,10 @@ mod tests {
 
     #[test]
     fn rejects_garbage() {
-        assert!(matches!(decode(b"PNG not a bmp at all"), Err(BmpError::Header(_))));
+        assert!(matches!(
+            decode(b"PNG not a bmp at all"),
+            Err(BmpError::Header(_))
+        ));
         let data = bmp(0, 4, 8, 0, 0, &[], &[]);
         assert!(matches!(decode(&data), Err(BmpError::Dimensions(0, 4))));
         let data = bmp(100, 100, 24, 0, 0, &[], &[0; 10]);
@@ -496,17 +561,26 @@ mod tests {
     fn loads_through_the_vfs() {
         let dir = std::env::temp_dir().join(format!("sta_bmp_vfs_{}", std::process::id()));
         std::fs::create_dir_all(dir.join("bitmaps")).unwrap();
-        std::fs::write(dir.join("bitmaps/t.bmp"), bmp(1, 1, 24, 0, 0, &[], &[0, 0, 255, 0])).unwrap();
+        std::fs::write(
+            dir.join("bitmaps/t.bmp"),
+            bmp(1, 1, 24, 0, 0, &[], &[0, 0, 255, 0]),
+        )
+        .unwrap();
         let mut vfs = Vfs::default();
         vfs.push_dir("t".into(), dir.clone()).unwrap();
         let img = load(&vfs, "bitmaps/t.bmp").unwrap();
         assert_eq!(px(&img, 0, 0), [255, 0, 0, 255]);
-        assert!(matches!(load(&vfs, "bitmaps/none.bmp"), Err(AssetError::NotFound(_))));
+        assert!(matches!(
+            load(&vfs, "bitmaps/none.bmp"),
+            Err(AssetError::NotFound(_))
+        ));
         let _ = std::fs::remove_dir_all(dir);
     }
 
     fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return;
+        };
         for e in rd.flatten() {
             let p = e.path();
             if p.is_dir() {
@@ -536,7 +610,16 @@ mod tests {
                 failures.push(format!("{}: {e}", f.display()));
             }
         }
-        eprintln!("decoded {} of {} BMPs", files.len() - failures.len(), files.len());
-        assert!(failures.is_empty(), "{} failed:\n{}", failures.len(), failures.join("\n"));
+        eprintln!(
+            "decoded {} of {} BMPs",
+            files.len() - failures.len(),
+            files.len()
+        );
+        assert!(
+            failures.is_empty(),
+            "{} failed:\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
     }
 }
