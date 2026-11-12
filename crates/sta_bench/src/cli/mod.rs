@@ -8,11 +8,13 @@
 //! sta-bench drive --session ID "<command>"...
 //! sta-bench diff <report-a> <report-b>
 //! sta-bench parity <refit-out> <ours-out> [--tol time=0.1,pos=1,hull=1] | --names
+//! sta-bench capture list | check <folder|latest> [--install <root> [--mod <name>]] [--fake]
 //! ```
 //!
 //! The logic is a library so `sta64`'s own tests can drive it with the binary
 //! they were built with; `src/bin/sta-bench.rs` is a shell around [`main`].
 
+mod capture;
 mod diff;
 mod parity;
 mod session;
@@ -39,6 +41,10 @@ Usage: sta-bench <command> [options]
   session start --scene <name> [Key=Value...]   start a headless sta64 and print its ID
   session list | session stop --session ID
   drive --session ID \"<command>\"...  send bench commands to a session, print the answers
+  capture list                     playtest captures, newest first (default: $XDG_DATA_HOME/sta64/captures)
+  capture check <folder|latest>    replay a capture headless to its tick; exit 1 when the digest differs
+      --install <root> --mod <name>  mount this install (default: the one the capture recorded)
+      --fake                       the capture is of the bench's fake content
   diff <report-a> <report-b>       compare report directories; exit 1 when they differ
   parity <refit-out> <ours-out>    Refit's Scene.marks/Scene.objects.jsonl against our marks/objects.jsonl
                                    (run directories, or their logs/): objects by name, marks in sim seconds
@@ -68,6 +74,9 @@ pub(crate) struct Opts {
     pub repeat: u32,
     pub tol: Option<String>,
     pub names: bool,
+    pub install: Option<PathBuf>,
+    pub mod_name: Option<String>,
+    pub fake: bool,
     pub timeout: u64,
     pub rest: Vec<String>,
 }
@@ -96,6 +105,9 @@ fn parse(args: Vec<String>) -> Result<Opts, String> {
             }
             "--tol" => o.tol = Some(val(&a)?),
             "--names" => o.names = true,
+            "--install" => o.install = Some(val(&a)?.into()),
+            "--mod" => o.mod_name = Some(val(&a)?).filter(|m| !m.is_empty()),
+            "--fake" => o.fake = true,
             "--frame-size" => o.frame_size = Some(val(&a)?),
             "--repeat" => o.repeat = val(&a)?.parse().map_err(|_| "--repeat: a number")?,
             "--timeout" => o.timeout = val(&a)?.parse().map_err(|_| "--timeout: seconds")?,
@@ -146,6 +158,7 @@ pub fn main(args: Vec<String>) -> i32 {
         "drive" => session::drive(&o),
         "diff" => diff::diff(&o),
         "parity" => parity::parity(&o),
+        "capture" => capture::capture_cmd(&o),
         other => Err(Fail::Usage(format!("unknown command `{other}`"))),
     };
     match result {
