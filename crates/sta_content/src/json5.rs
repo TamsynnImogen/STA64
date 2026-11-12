@@ -11,28 +11,18 @@
 //! get. `#include` works between entries. The schema is in
 //! `docs/CONTENT_JSON5.md`.
 //!
-//! Three things the ODF loader cannot express and the fakes need are read in
-//! a small final pass ([`finish`]), each from a key the ODF format already
-//! has or an `STA64_` extension in the style of `STA64_queueLimit`:
-//!
-//! - `miner = 0` on a `freighter` (the key exists; the ODF loader forces
-//!   class `freighter` to mine),
-//! - `eventAttack` (the key exists) fills the unit's attack acknowledgement,
-//! - `STA64_fireArc<N>`: half-width in radians of the arc of weapon slot `N`
-//!   on this unit alone (stock ODFs only limit a weapon everywhere it is
-//!   mounted, through `restrictFireArc` / `fireArc`),
-//! - `STA64_duration` on a weapon: seconds it stays active, for kinds whose
-//!   ordnance gives none (point defence).
+//! Keys beyond stock ODFs are read by the ODF loader itself, so installed ODFs
+//! and JSON5 agree: `miner = 0` (the key decides, see `UnitDef::mines`),
+//! `eventAttack`, and the `STA64_` extensions `STA64_fireArc<N>` (a slot's own
+//! fire arc) and `STA64_duration` (a weapon's active seconds).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use serde::Deserialize;
-use sta_core::Fixed;
 
-use crate::def::FireArc;
 use crate::features::Profile;
-use crate::odf::{numbered, stem};
+use crate::odf::stem;
 use crate::profile::Overrides;
 use crate::{ContentDb, ContentError, MapDef, Warning};
 
@@ -84,8 +74,16 @@ struct Doc {
 
 /// An entry rendered as ODF text.
 fn odf_text(keys: &BTreeMap<String, Val>) -> String {
-    let mut out = String::from("[GameObjectClass]\n");
-    for (k, v) in keys {
+    // An `"#include"` key (a name or a list) becomes the ODF's own include
+    // lines, which stock ODFs put first; the keys after them override.
+    let mut out = String::new();
+    if let Some(inc) = keys.get("#include") {
+        for line in inc.render().split("\" \"") {
+            out.push_str(&format!("#include \"{}\"\n", line.trim_matches('"')));
+        }
+    }
+    out.push_str("[GameObjectClass]\n");
+    for (k, v) in keys.iter().filter(|(k, _)| *k != "#include") {
         out.push_str(&format!("{k} = {}\n", v.render()));
     }
     out
@@ -115,7 +113,7 @@ pub fn load_str(file: &str, text: &str) -> Result<(ContentDb, Vec<Warning>), Jso
         .map(|(n, k)| (stem(n), odf_text(k)))
         .collect();
     let stems: Vec<String> = texts.keys().cloned().collect();
-    let (db, mut warnings) =
+    let (db, warnings) =
         crate::odf::load_with(profile, &overrides, &stems, &mut |name, version| {
             if version == 0 {
                 texts.get(&stem(name)).cloned()
@@ -123,7 +121,6 @@ pub fn load_str(file: &str, text: &str) -> Result<(ContentDb, Vec<Warning>), Jso
                 None
             }
         })?;
-    let db = finish(&db, profile, &mut warnings)?;
     Ok((db, warnings))
 }
 
@@ -153,83 +150,10 @@ pub fn save_map(map: &MapDef) -> Result<String, Json5Error> {
     })
 }
 
-/// The final pass described in the module docs: rebuild the database with the
-/// few fields the ODF loader leaves to their keys.
-fn finish(
-    db: &ContentDb,
-    profile: Profile,
-    warnings: &mut Vec<Warning>,
-) -> Result<ContentDb, ContentError> {
-    let mut b = ContentDb::builder()
-        .profile(profile)
-        .features(db.features().clone());
-    let weapons: BTreeSet<String> = db.weapons().map(|w| stem(&w.odf)).collect();
-    for w in db.weapons() {
-        let mut w = w.clone();
-        if let Some(s) = w
-            .raw
-            .f32("STA64_duration")
-            .filter(|s| s.is_finite() && *s >= 0.0)
-        {
-            w.duration = sta_core::seconds_to_ticks(s as f64);
-        }
-        b = b.weapon(w);
-    }
-    for u in db.units() {
-        let mut u = u.clone();
-        let file = format!("{}.odf", u.odf);
-        if u.raw.raw("miner").is_some() && u.raw.f32("miner") == Some(0.0) {
-            u.miner = false;
-        }
-        if let Some(s) = u
-            .raw
-            .str("eventAttack")
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-        {
-            u.sounds.ack_attack = vec![s.to_owned()];
-        }
-        // Weapon slots that became hardpoints, in the loader's order.
-        let slots: Vec<u32> = numbered(&u.raw, "weapon")
-            .into_iter()
-            .filter(|(_, w)| weapons.contains(&stem(w)))
-            .map(|(n, _)| n)
-            .collect();
-        for key in u
-            .raw
-            .keys()
-            .filter(|k| k.to_ascii_lowercase().starts_with("sta64_firearc"))
-            .map(str::to_owned)
-            .collect::<Vec<_>>()
-        {
-            let n: Option<u32> = key["STA64_fireArc".len()..].parse().ok();
-            // f64, not the loader's f32: the angle's cosine is hashed.
-            let half = u
-                .raw
-                .raw(&key)
-                .and_then(|t| t.trim().parse::<f64>().ok())
-                .filter(|h| h.is_finite() && *h > 0.0);
-            match (n.and_then(|n| slots.iter().position(|s| *s == n)), half) {
-                (Some(i), Some(half)) if i < u.hardpoints.len() => {
-                    u.hardpoints[i].arc = Some(FireArc {
-                        dir: (Fixed::ZERO, Fixed::ONE),
-                        min_dot: Fixed::from_f64(half.min(std::f64::consts::PI).cos()),
-                    });
-                }
-                _ => warnings.push(Warning::new(
-                    &file,
-                    format!("{key} names no weapon slot or is not a positive angle; ignored"),
-                )),
-            }
-        }
-        b = b.unit(u);
-    }
-    b.build()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sta_core::Fixed;
     use std::path::PathBuf;
 
     fn fixtures() -> PathBuf {
@@ -343,6 +267,73 @@ mod tests {
         assert_eq!(g.shot_speed, Fixed::from_int(300));
     }
 
+    /// The keys the games' own ODFs carry, and the `STA64_` extensions, are read by the ODF loader.
+    #[test]
+    fn shared_keys_are_read_by_the_odf_loader() {
+        let text = r##"{
+            odf: {
+                // The stock shape: the Data Miner includes freight.odf and says miner = 0.
+                freight: { classLabel: "freighter", unitName: "F", miner: 1 },
+                fdata:   { "#include": "freight.odf", unitName: "D", miner: 0 },
+                bare:    { classLabel: "freighter", unitName: "B" },
+                drone:   { classLabel: "craft", unitName: "C", miner: 1 },
+                plain:   { classLabel: "craft", unitName: "P" },
+                gun: { classLabel: "pointdefenselaser", wpnName: "G", ordName: "gun_ord", STA64_duration: 0.1 },
+                beam: { classLabel: "cannon", wpnName: "B", ordName: "beam_ord", restrictFireArc: 1, fireArc: 1.0, STA64_duration: -1 },
+                gun_ord: { classLabel: "pphaser", damageBase: 1 },
+                beam_ord: { classLabel: "phaser", damageBase: 1, lifespan: 0.5 },
+                ship: { classLabel: "craft", unitName: "S", eventAttack: "Atk",
+                        weapon1: "gun", weaponHardPoints1: "hp01", STA64_fireArc1: 0.5,
+                        weapon2: "gun", weaponHardPoints2: "hp02",
+                        weapon3: "beam", weaponHardPoints3: "hp03", STA64_fireArc3: 0.25,
+                        weapon4: "beam", weaponHardPoints4: "hp04",
+                        weapon5: "gun", weaponHardPoints5: "hp05", STA64_fireArc5: "abc" },
+            },
+        }"##;
+        let (db, warnings) = load_str("t", text).unwrap();
+        let mines = |n: &str| db.unit(db.key(n).unwrap()).unwrap().mines();
+        assert!(mines("freight") && mines("bare") && mines("drone"));
+        assert!(
+            !mines("fdata"),
+            "miner = 0 on a freighter that includes a miner"
+        );
+        assert!(!mines("plain"));
+        let ship = db.unit(db.key("ship").unwrap()).unwrap();
+        assert_eq!(ship.sounds.ack_attack, ["Atk"]);
+        let cos = |x: f64| Fixed::from_f64(x.cos());
+        assert_eq!(
+            ship.hardpoints[0].arc.expect("slot 1's own arc").min_dot,
+            cos(0.5)
+        );
+        assert!(ship.hardpoints[1].arc.is_none());
+        assert_eq!(
+            ship.hardpoints[2]
+                .arc
+                .expect("slot 3 wins over the weapon's")
+                .min_dot,
+            cos(0.25)
+        );
+        assert_eq!(
+            ship.hardpoints[3]
+                .arc
+                .expect("the weapon's own arc")
+                .min_dot,
+            cos(1.0)
+        );
+        assert!(ship.hardpoints[4].arc.is_none());
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.message.contains("STA64_fireArc5")),
+            "{warnings:?}"
+        );
+        let gun = db.weapon(db.key("gun").unwrap()).unwrap();
+        assert_eq!(gun.duration, sta_core::seconds_to_ticks(0.1));
+        // A negative STA64_duration is ignored: the ordnance's lifespan stands.
+        let beam = db.weapon(db.key("beam").unwrap()).unwrap();
+        assert_eq!(beam.duration, sta_core::seconds_to_ticks(0.5));
+    }
+
     #[test]
     fn bad_input_is_an_error_or_a_warning() {
         assert!(matches!(
@@ -357,11 +348,5 @@ mod tests {
             load_str("t", r#"{ profile: "zzz", odf: {} }"#),
             Err(Json5Error::Parse { .. })
         ));
-        let text = r#"{ odf: { a: { classLabel: "craft", unitName: "A", STA64_fireArc9: 1 } } }"#;
-        let (_, w) = load_str("t", text).unwrap();
-        assert!(
-            w.iter().any(|w| w.message.contains("STA64_fireArc9")),
-            "{w:?}"
-        );
     }
 }

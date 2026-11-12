@@ -327,7 +327,7 @@ fn install_skirmish_freighter_mines_a_moon() {
     // Put one beside it, as if built.
     let outpost = sta_sim::WorldSource::view(&sim).units.iter().find(|u| u.owner == PlayerId(0)).expect("a start unit").pos;
     let key = db.key("fminer").expect("the Federation miner");
-    assert!(db.unit(key).is_some_and(|d| d.class.0 == "freighter" || d.miner));
+    assert!(db.unit(key).is_some_and(|d| d.mines()));
     let at = sta_sim::Vec3::from_f32([outpost.x.to_f32() + 150.0, outpost.y.to_f32(), outpost.z.to_f32()]);
     sim.spawn_def(key, PlayerId(0), at, (sta_sim::Fixed::ZERO, sta_sim::Fixed::ONE)).expect("spawned");
     let mut link = SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), PlayerId(0));
