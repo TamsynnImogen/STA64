@@ -54,7 +54,7 @@ fn mount(cfg: &LaunchConfig) -> (sta_vfs::Vfs, String) {
 fn mission_report(vfs: &sta_vfs::Vfs) {
     use sta_mission::Resolution;
     let labels = sta_mission::Labels::load(vfs);
-    let mut maps: Vec<String> = vfs.list("bzn").into_iter().filter(|p| p.ends_with(".bzn")).collect();
+    let mut maps: Vec<String> = vfs.list("bzn").into_iter().filter(|p| p.ends_with(".bzn") || p.ends_with(".sol")).collect();
     maps.sort();
     let (mut lua, mut legacy, mut none) = (0, 0, 0);
     for p in &maps {

@@ -43,10 +43,11 @@ pub fn browser(vfs: &sta_vfs::Vfs, initial: Option<&str>, mount_summary: String)
     let mut maps: Vec<String> = vfs
         .list("bzn")
         .into_iter()
-        .filter(|p| p.ends_with(".bzn"))
-        .map(|p| p.trim_start_matches("bzn/").trim_end_matches(".bzn").to_owned())
+        .filter(|p| p.ends_with(".bzn") || p.ends_with(".sol"))
+        .map(|p| p.trim_start_matches("bzn/").trim_end_matches(".bzn").trim_end_matches(".sol").to_owned())
         .collect();
     maps.sort();
+    maps.dedup();
     let index = initial
         .and_then(|n| {
             let n = n.to_ascii_lowercase();
@@ -652,7 +653,7 @@ fn rebuild(
         return;
     };
     let header = format!("{name}  ({}/{})", browser.index + 1, browser.maps.len());
-    let map = match vfs.0.read(&format!("bzn/{name}.bzn")).map(|r| r.map_err(|e| e.to_string()).and_then(|d| sta_bzn::parse(&d).map_err(|e| e.to_string()))) {
+    let map = match vfs.0.read(&format!("bzn/{name}.bzn")).or_else(|| vfs.0.read(&format!("bzn/{name}.sol"))).map(|r| r.map_err(|e| e.to_string()).and_then(|d| sta_bzn::parse(&d).map_err(|e| e.to_string()))) {
         Some(Ok(m)) => m,
         Some(Err(e)) => {
             browser.info = format!("{header}\n{e}");
