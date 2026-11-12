@@ -627,3 +627,26 @@ fn entity_race_and_crew_assignments_do_not_abort_the_callback() {
     assert!(rt.errors().is_empty(), "{:?}", rt.errors());
     assert!(rt.eval::<bool>("return DONE == true").unwrap());
 }
+
+#[test]
+fn recorded_assignments_keep_the_callback_running_and_name_each_gap() {
+    use crate::runtime::MissionRuntime;
+    let mut rt = MissionRuntime::from_source(
+        "set2.lua",
+        "MMM.register(function()
+            local p = Player(0)
+            p.race = Race.find('fx'); p.color = Color(1, 0, 0); p.name = 'x'
+            local e = EntityFinder():find()[1]
+            if e then e.shields = 1.0; e.movementAutonomy = 1; e.forward = Vector(1, 0, 0); e.omega = Vector(0, 1, 0) end
+            DONE = true
+        end)",
+        1,
+    );
+    rt.step(1);
+    assert!(rt.errors().is_empty(), "{:?}", rt.errors());
+    assert!(rt.eval::<bool>("return DONE == true").unwrap());
+    let names: Vec<String> = rt.unsupported().into_iter().map(|(n, _)| n).collect();
+    for want in ["Player.race", "Player.color", "Player.name"] {
+        assert!(names.iter().any(|n| n.starts_with(want)), "{want} in {names:?}");
+    }
+}

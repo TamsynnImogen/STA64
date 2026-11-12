@@ -125,6 +125,20 @@ impl UserData for Entity {
             e.ctx.borrow_mut().unsupported("Entity.crew = x (needs a sim mutable-crew edit)");
             Ok(())
         });
+        // Other installed-mission assignments with no sim edit behind them yet
+        // (shield percent, autonomy, facing, angular velocity): accepted and
+        // recorded so the callback keeps running; the report names each.
+        for (name, need) in [
+            ("shields", "a sim shield edit (SetShieldPercent)"),
+            ("movementAutonomy", "a sim autonomy edit"),
+            ("forward", "a sim heading edit"),
+            ("omega", "a sim angular-velocity edit"),
+        ] {
+            f.add_field_method_set(name, move |_, e, _: Value| {
+                e.ctx.borrow_mut().unsupported(&format!("Entity.{name} = x (needs {need})"));
+                Ok(())
+            });
+        }
         // `odf` is the ODF name as a string (the real binding may return a
         // class object with `odf`/`name`/`label`; see the module docs).
         // Converted MMM scripts compare this property with file names such

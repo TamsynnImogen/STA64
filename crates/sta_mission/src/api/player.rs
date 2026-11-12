@@ -82,6 +82,18 @@ impl UserData for Player {
                 c.def(u).map(|d| d.race.clone()).filter(|r| !r.is_empty())
             }).unwrap_or_default())
         });
+        // Cosmetic or rule-level player settings with no sim state: accepted and
+        // recorded (a seat's race and display data come from the game setup).
+        for (name, need) in [
+            ("race", "a sim race edit"),
+            ("color", "a player-colour setting in the game setup"),
+            ("name", "a player-name setting in the game setup"),
+        ] {
+            f.add_field_method_set(name, move |_, p, _: Value| {
+                p.ctx.borrow_mut().unsupported(&format!("Player.{name} = x (needs {need})"));
+                Ok(())
+            });
+        }
         f.add_field_method_get("isAI", |_, _| Ok(false));
         f.add_field_method_get("slotType", |_, p| {
             Ok(if p.ctx.borrow().seat == p.id { "Human" } else { "None" })
