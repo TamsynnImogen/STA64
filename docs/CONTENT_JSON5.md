@@ -59,7 +59,7 @@ extension named in the style of `STA64_queueLimit`.
 
 | Key | Where | Meaning |
 |---|---|---|
-| `miner = 0` | unit | Existing key. A `freighter` does not mine. (The ODF loader makes every freighter a miner.) |
+| `miner = 0` | unit | Existing key. A `freighter` does not mine. (The ODF loader makes every freighter a miner, although stock ODFs such as the Data Miner set `miner = 0`: a known difference between the two paths, for a follow-up in `unit.rs`.) |
 | `eventAttack` | unit | Existing key. Fills the attack acknowledgement sound. |
 | `STA64_fireArc<N>` | unit | Half-width in radians of the fire arc of weapon slot `N` on this unit only. Stock ODFs limit a weapon wherever it is mounted (`restrictFireArc`, `fireArc`); `fake::db()` limits one beam on two units and not on a third. |
 | `STA64_duration` | weapon | Seconds the weapon stays active, when its ordnance gives no `lifespan` (point defence). |
