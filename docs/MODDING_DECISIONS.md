@@ -90,11 +90,8 @@ render recipes can play together", meaning that peers whose installs differ
 only in art play together. That cannot hold for models: in every install
 99-100% of ships have no explicit size key (Roots base 43.7%), so the size of a
 unit comes from its SOD, as in the originals, and Armada II and Roots checksum
-the models between peers. The original size rule (read from the executable, static): the box over the
-whole SOD node hierarchy (all LOD and damage meshes) times `scaleSOD`, an
-enclosing ellipsoid, the largest semi-axis plus `shieldPad` as the bounding
-radius, and the sim position at the box centre. WORKPLAN SIM-32 holds the rule
-in full; the evidence notes are kept outside the repository.
+the models between peers. The original size rule is stated in WORKPLAN SIM-32; the evidence notes are
+kept outside the repository.
 Implemented by CON-35 (digest) and SIM-32 (the original size rule).*
 
 **D11. Conflicts are solved by inheritance, not a new patch format.**

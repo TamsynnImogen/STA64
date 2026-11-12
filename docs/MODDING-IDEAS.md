@@ -8,7 +8,7 @@ Status: brainstorm, not a decision. Written to be resumed later. The
 investigation findings are kept outside the repository (see AGENTS.md); the RFC
 (`docs/MODDING.md`) is drafted from both.
 
-## ADOPTED PLAN (owner, 2026-11-11): follow review-fable.md
+## ADOPTED PLAN (owner, 2026-11-11): follow the Fable review
 
 The owner adopted the Fable review's recommendations. Everything below this
 section is brainstorm and evidence; where it conflicts with this section,
@@ -101,7 +101,7 @@ A *pack* = manifest + optional layers:
 - Mods, FleetOps, Refit, Roots are all packs with `extends` / `requires`.
   Roots is an *engine* (separate lineage, see below), not a pack that
   extends FleetOps; FO 4.0 / STA2 Classic are standalone packs requiring the
-  Roots engine (review-opus C2: needs a separate `engine =` axis).
+  Roots engine (Opus review C2: needs a separate `engine =` axis).
 
 **Profile** = base + set of named, documented, toggleable *quirks*
 (e.g. `a2.shield_regen_ignores_damage_delay`), not a per-exe monolith. A
@@ -199,7 +199,7 @@ MP factions 8 -> 16, autonomy rework, new RTS_CFG/ART_CFG keys. All
 engine-rule detours, so reimplementable as named quirks/tunables (`limit.*`,
 `cfg.*`, `odf.*`, `sim.*`, `a2.*` ID families).
 
-**Render (render-mods).** Refit is not a shader override: it is an `.asi`
+**Render.** Refit is not a shader override: it is an `.asi`
 replacing render steps with its own renderer, driven by ini "recipes".
 Roots' visual changes are data (SODs, DDS, ODF keys, cfg numbers) plus a
 ReShade post chain; only a bump-mesh path and cloak alpha are engine code.
@@ -216,7 +216,7 @@ Amendments to the slot idea:
 - Tiers: Roots data T0, Refit recipes/ini T1, ReShade preset T2, Refit
   shaders and Roots engine-code behaviour T3.
 
-**Repo (repo-seams).**
+**Repo.**
 - `sta_vfs` already has `manifest.toml` (deps, `[load]`), `order.rs` load
   order/`identity()`, `.sta` archives, `Vfs::resolve_all`. Extend it; no
   second manifest. But ~50 call sites use `Vfs::mount_install`, and mod
@@ -296,7 +296,7 @@ as caplist tooltips, so the canonical form needs those fields optional).
 | `.odf` | text object definition: weapons, build lists, ship stats, most gameplay data |
 | `.sod` | model |
 | `.spr` | sprite definition: tables of sprites over an atlas |
-| `.cfg` / `.h` | mostly UI; `dynamic_localized_strings.h` holds most strings; `RTS_CFG.h`/`ART_CFG.h` are tunables (see fo-hooks-asi.md) |
+| `.cfg` / `.h` | mostly UI; `dynamic_localized_strings.h` holds most strings; `RTS_CFG.h`/`ART_CFG.h` are tunables |
 | `.aip` | AI files |
 | `.tt` / `.xml` | tech trees (see dialects above) |
 
@@ -312,7 +312,7 @@ key-level `[patch]` fragments and `sta64 why`.
 size (64x64 px); `@tmaterial=` = blend/material mode for the atlas. Values
 observed by grep across installs (meaning of each not yet checked):
 `interface`, `additive`, `default`, `alphathreshold`, `add_nomipf`,
-`wormhole` (A1 only; review-opus found it absent in A2 stock sprites); `font` (A2+); `alpha` (FO/Roots, absent in A1).
+`wormhole` (A1 only; the Opus review found it absent in A2 stock sprites); `font` (A2+); `alpha` (FO/Roots, absent in A1).
 Other directives seen: `@referencewidth`/`@referenceheight` (non-square
 atlases, up to 2048 in FO/Roots), `@auto=square|column|row|scalar`,
 `@skip=off|(r,g,b)`. `@tmaterial` is a prime *profile-keyed enum*: the

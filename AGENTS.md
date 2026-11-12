@@ -143,7 +143,7 @@ stop; changing a decision is a PR to that file approved by Tammy and Cedric.
   test fixture you authored yourself). Keep them outside the repository, in a
   separate research directory on your machine. Code comments, WORKPLAN rows and
   PR bodies state the rule STA64 follows, the data keys it reads and the
-  evidence grade (measured / read from data / not measured), in a line or two:
+  evidence grade (measured / read from data / read from the executable, static / not measured), in a line or two:
   no `docs/research/` write-ups, no measurement or bench run tables, no
   pseudo-code, addresses or disassembly, no bench run logs.
 - Never commit game assets or anything copied or converted from them, in any
