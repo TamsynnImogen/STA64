@@ -343,7 +343,7 @@ impl SolMap {
             race: String::new(),
         };
         let mut start_locs = vec![neutral];
-        start_locs.extend(self.starts.iter().enumerate().map(|(i, s)| StartLoc {
+        start_locs.extend(self.starts.iter().map(|s| StartLoc {
             pos: s.pos,
             kind: s.kind.clone(),
             team: -1, // free: SOLs carry no locked team
