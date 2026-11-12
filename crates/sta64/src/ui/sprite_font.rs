@@ -806,6 +806,9 @@ fn resolve_text(
             }
             continue;
         }
+        // Plain `sprite_text` (the HUD's) keeps its old drawing: pictures tinted like the
+        // rest and no glyph words. A `SpriteTextStyle` opts in to both.
+        let styled = style.is_some();
         let style = style.as_deref().cloned().unwrap_or_default();
         let existing: Vec<Entity> = children
             .get(e)
@@ -818,7 +821,7 @@ fn resolve_text(
         };
         let Some(f) = font else {
             // The TTF cannot draw the pictures; write the mod's words for them.
-            let shown = words.as_ref().map_or_else(|| t.text.clone(), |w| w.display(&t.text));
+            let shown = words.as_ref().filter(|_| styled).map_or_else(|| t.text.clone(), |w| w.display(&t.text));
             let justify = match style.align {
                 Align::Left => bevy::text::Justify::Left,
                 Align::Center => bevy::text::Justify::Center,
@@ -879,7 +882,7 @@ fn resolve_text(
                 continue;
             };
             let rect = texel_rect(f.font.reference, *tex, q.src);
-            let picture = !style.tint_all && f.coloured.contains(&q.code);
+            let picture = styled && !style.tint_all && f.coloured.contains(&q.code);
             untinted.push(picture);
             let colour = if picture { Color::WHITE } else { t.color };
             let glyph = (
@@ -1686,7 +1689,7 @@ mod tests {
     fn ttf_fallback_writes_the_glyph_words() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins).init_resource::<SpriteFonts>().insert_resource(GlyphWords::parse("[Glyphs]\n85 = Dilithium\n")).add_systems(Update, resolve_text);
-        let e = app.world_mut().spawn(sprite_text(format!("50{}", char::from(0x85u8)), 12.0, Color::WHITE)).id();
+        let e = app.world_mut().spawn(sprite_text_styled(format!("50{}", char::from(0x85u8)), 12.0, Color::WHITE, SpriteTextStyle::default())).id();
         app.update();
         let kid = app.world().get::<Children>(e).unwrap()[0];
         assert_eq!(app.world().get::<Text>(kid).unwrap().0, "50 Dilithium");
