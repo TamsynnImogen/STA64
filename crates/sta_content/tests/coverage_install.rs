@@ -1,7 +1,8 @@
 //! Install-gated checks of the coverage report (CON-34, D7). With
 //! `STA64_TEST_INSTALL` set to an install root (Data/Mods/...), every
 //! installed mod is reported, and STA2 Classic Enhanced's 8 changed cfg
-//! lines are the typed rules of CON-35, so none is ignored.
+//! lines are the typed rules of CON-35, compared between peers but still
+//! reported as ignored until a system applies them.
 
 use std::path::Path;
 
@@ -28,7 +29,7 @@ fn every_installed_mod_reports() {
 }
 
 #[test]
-fn classic_enhanced_changes_eight_cfg_lines_and_all_are_typed_rules() {
+fn classic_enhanced_changes_eight_cfg_lines_typed_but_not_yet_applied() {
     let Some(root) = root() else { return };
     let vfs = match Vfs::mount_install(Path::new(&root), Some("STA2 Classic Mod Enhanced Gameplay")) {
         Ok(v) => v,
@@ -38,9 +39,10 @@ fn classic_enhanced_changes_eight_cfg_lines_and_all_are_typed_rules() {
     let mut changed: Vec<&str> = r.cfg.iter().map(|c| c.key.as_str()).collect();
     changed.sort();
     // CON-35 typed exactly the keys the installed headers differ in (D9:
-    // first the keys Classic Enhanced changes), so none is ignored.
+    // first the keys Classic Enhanced changes). Peers compare them, but no
+    // system applies them yet, so they are still reported as ignored.
     assert_eq!(changed, sta_content::CfgRules::KEYS);
-    assert!(r.cfg.iter().all(|c| c.read), "{:?}", r.cfg);
+    assert!(r.cfg.iter().all(|c| !c.read), "{:?}", r.cfg);
     // `why` names the layer and line for the file and for a key.
     let hits = coverage::why_file(&vfs, "RTS_CFG.h");
     assert_eq!(hits[0].layer, "STA2 Classic Mod Enhanced Gameplay");

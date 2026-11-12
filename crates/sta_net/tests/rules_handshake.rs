@@ -213,6 +213,26 @@ fn a_unit_whose_geometry_differs_is_refused_with_the_unit_and_the_value() {
 }
 
 #[test]
+fn a_changed_unit_is_refused_by_its_definition_key() {
+    let base = data("unit_base");
+    let host = peer(&[("Data", &base)]);
+    let tougher = SHIP.replace("maxHealth = 500", "maxHealth = 600");
+    let layer = Layer::new("unit_hull", &[("odf/ship.odf", tougher.as_bytes())]);
+    let joiner = peer(&[("Tough Ships", &layer), ("Data", &base)]);
+    let Some(Refusal::RulesDiffer(diff)) = handshake(&host, &joiner) else {
+        panic!("a unit change must refuse")
+    };
+    // The key names the definition. Its value is longer than the wire's
+    // bound, so both sides see it hashed (`#<len>:<fnv>`)...
+    assert_eq!(diff.key, "unit:ship");
+    assert!(diff.host.as_deref().is_some_and(|v| v.starts_with('#')), "{diff:?}");
+    assert_ne!(diff.host, diff.joiner);
+    // ... while a peer holding both lists names the field.
+    let local = host.digest().first_difference(joiner.digest()).unwrap();
+    assert_eq!(local.field().map(|f| f.0), Some("hull".to_owned()));
+}
+
+#[test]
 fn the_digest_is_the_same_on_every_load() {
     let base = data("det_base");
     let a = peer(&[("Data", &base)]);

@@ -8,8 +8,8 @@
 //!   STA64 loader reads it ([`READ_ODF_KEYS`]).
 //! - **Changed-but-ignored cfg keys**: `RTS_CFG.h` / `ART_CFG.h` entries whose
 //!   value differs from the version the file hides in a lower layer and that
-//!   no STA64 code reads ([`READ_CFG_KEYS`] and the typed rules,
-//!   [`crate::TYPED_CFG_KEYS`]); a mod's changes to them have no effect.
+//!   no STA64 code applies ([`READ_CFG_KEYS`] and the applied typed rules
+//!   of [`crate::TYPED_CFG_KEYS`]); a mod's changes to them have no effect.
 //! - **Unresolved map references**: objects, start-field and tech-tree files
 //!   a visible map names that no ODF or tech tree file provides.
 //!
@@ -88,8 +88,11 @@ fn odf_key_read(key: &str) -> bool {
         })
 }
 
+/// Read means applied. The keys of [`crate::CfgRules`] are typed and compared
+/// between peers (D10) but no system applies them yet, so a mod's change to
+/// them still has no effect in play and is reported as ignored.
 fn cfg_key_read(key: &str) -> bool {
-    READ_CFG_KEYS.contains(&key) || crate::TYPED_CFG_KEYS.contains(&key)
+    READ_CFG_KEYS.contains(&key) || (crate::TYPED_CFG_KEYS.contains(&key) && !crate::CfgRules::KEYS.contains(&key))
 }
 
 /// ODF key coverage of one layer.
@@ -446,8 +449,9 @@ mod tests {
         let (_t, vfs) = install("report");
         let r = check(&vfs);
         let keys: Vec<(&str, bool, Option<&str>, usize)> = r.cfg.iter().map(|c| (c.key.as_str(), c.read, c.was.as_deref(), c.line)).collect();
-        // SHIELD_DAMAGE_PROTECTION is a typed rule since CON-35.
-        assert_eq!(keys, [("SHIELD_DAMAGE_PROTECTION", true, Some("0.8"), 1), ("NEW_KEY", false, None, 4)]);
+        // SHIELD_DAMAGE_PROTECTION is typed and compared since CON-35, but
+        // nothing applies it yet.
+        assert_eq!(keys, [("SHIELD_DAMAGE_PROTECTION", false, Some("0.8"), 1), ("NEW_KEY", false, None, 4)]);
         assert_eq!(r.odf.files, 1);
         // classLabel, maxHealth (200 wins), mystery, weapon1, odd: 5 uses, 3 understood.
         assert_eq!((r.odf.uses, r.odf.understood), (5, 3));

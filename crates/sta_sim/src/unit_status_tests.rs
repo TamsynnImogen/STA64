@@ -9,12 +9,12 @@ use crate::{Fixed, PlayerId, Sim, Vec3, WorldSource};
 
 const AHEAD: (Fixed, Fixed) = (Fixed::ZERO, Fixed::ONE);
 
-/// Test-only control: retain every saved state field except the newly added
-/// crew pools, so existing gameplay goldens must still match byte-for-byte.
 /// `fake::db()`'s content hash before CON-35's keyed digest (FNV-1a over
 /// the old encoding). Goldens recorded before then fold it in.
 pub(crate) const LEGACY_FAKE_CONTENT_HASH: u64 = 0xc0d4_3c3a_94f1_650e;
 
+/// Test-only control: retain every saved state field except the newly added
+/// crew pools, so existing gameplay goldens must still match byte-for-byte.
 /// The digest as it was before unit crew and before CON-35: crew removed,
 /// and `fake::db()` content identified by its old hash, so state goldens
 /// recorded then still check the same state.

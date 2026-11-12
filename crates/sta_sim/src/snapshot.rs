@@ -702,7 +702,7 @@ mod tests {
     }
 
     #[test]
-    fn original_v8_mining_fixture_keeps_its_baseline_continuation() {
+    fn original_v8_mining_game_is_refused_as_a_file_and_rebuilt_keeps_its_continuation() {
         // The genuine file is refused by version now ...
         assert_eq!(u16::from_le_bytes(MINING_V8[4..6].try_into().unwrap()), 8);
         let db = Arc::new(sta_content::fake::db());
@@ -773,7 +773,7 @@ mod tests {
     }
 
     #[test]
-    fn new_or_unknown_mining_phases_cannot_masquerade_as_v8() {
+    fn old_formats_and_unknown_mining_phases_are_refused() {
         let (sim, db) = stopped_loaded_miner();
         let mut bytes = include_bytes!("../tests/fixtures/mining-idle-v9.stas").to_vec();
         bytes[4..6].copy_from_slice(&8u16.to_le_bytes());

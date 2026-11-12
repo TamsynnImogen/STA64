@@ -438,6 +438,17 @@ fn confinement_text(r: Option<&crate::ConfinementRules>) -> String {
 /// node names) and the model scale (it reaches the sim only through the
 /// geometry entry) are left out.
 fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
+    // Every field, so a new one fails to compile here until someone decides
+    // whether the sim reads it (then it is digested below) or not.
+    let UnitDef {
+        key: _, odf: _, class: _, is_starbase: _, planet_role: _, planet_crew_gain: _, race: _,
+        model: _, scale: _, movement: _, hull: _, shields: _, initial_hull: _, initial_shields: _,
+        crew: _, maximum_crew: _, sensor: _, hardpoints: _, build: _, launch: _, radius: _,
+        sounds: _, fx: _, special_energy_max: _, special_energy_rate: _, miner: _,
+        max_dilithium: _, mining_rate: _, transfer_rate: _, resource: _, features: _,
+        confinement: _, nebula_pathing: _, avoid_me: _, raw: _,
+    } = u;
+    let crate::BuildDef { cost: _, ticks: _, officers: _, list: _, queue_limit: _, flagged_slots: _ } = &u.build;
     let name = |r: &crate::DefRef| quoted(&r.odf.to_ascii_lowercase());
     let m = &u.movement;
     let mut c = Canon::new();
@@ -500,6 +511,12 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
 }
 
 fn weapon_text(db: &ContentDb, w: &WeaponDef) -> String {
+    // Every field, as in `unit_text`.
+    let WeaponDef {
+        key: _, odf: _, class: _, kind: _, range: _, damage: _, refire: _, shot_speed: _,
+        duration: _, fire_sound: _, fx: _, effect_ticks: _, energy_drain: _, energy_cost: _,
+        disable_weapons: _, decloak_on_hit: _, features: _, raw: _,
+    } = w;
     Canon::new()
         .text("class", &w.class.0)
         .raw("kind", match w.kind {
@@ -678,6 +695,9 @@ mod tests {
         let art = patched(
             |u| {
                 u.model = "hd_model".into();
+                // Only the field: a real scale change moves the radius, which
+                // `geometry:` compares (sta_net's rules_handshake tests that
+                // render-only models leave the geometry alone).
                 u.scale = Fixed::from_int(3);
                 u.sounds.select = vec!["new_voice".into()];
                 u.fx.explosion = Some("big_boom".into());
@@ -752,7 +772,7 @@ mod tests {
             assert!(d.get(k).is_some(), "{k}");
         }
         assert_eq!(d.get("content:profile"), Some(db.lineage()));
-        assert_eq!(db.hash(), crate::fake::db().hash());
+        // The value itself is pinned in fake.rs (and checked on four OSes).
         assert_eq!(db.hash(), d.hash64());
     }
 }

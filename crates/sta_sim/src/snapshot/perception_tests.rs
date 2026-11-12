@@ -41,7 +41,7 @@ fn join(
 }
 
 #[test]
-fn v11_roundtrip_and_continuation_keep_perceived_owner_separate() {
+fn roundtrip_and_continuation_keep_perceived_owner_separate() {
     let (mut sim, first, second) = live();
     sim.perception.insert(first, PlayerId(1));
     let saved = sim.snapshot();
@@ -61,7 +61,7 @@ fn v11_roundtrip_and_continuation_keep_perceived_owner_separate() {
 }
 
 #[test]
-fn v11_rejects_noncanonical_rows_unknown_version_missing_suffix_and_trailing_bytes() {
+fn rejects_noncanonical_perception_rows_unknown_version_missing_suffix_and_trailing_bytes() {
     let (mut sim, first, second) = live();
     sim.perception.insert(first, PlayerId(1));
     let bytes = sim.snapshot();

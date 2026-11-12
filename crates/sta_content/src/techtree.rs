@@ -497,7 +497,7 @@ impl TechTree {
         match &b.build.flagged_slots {
             // A menu builder: all its slots are plain.
             None => true,
-            Some(flagged) => ai || flagged.binary_search(&item).is_ok(),
+            Some(flagged) => ai || flagged.contains(&item),
         }
     }
 
