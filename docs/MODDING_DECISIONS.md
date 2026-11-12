@@ -58,13 +58,30 @@ A typed `Rules` struct is filled from `RTS_CFG.h` and ODF keys, starting with
 the keys Classic Enhanced changes. No new rules file and no keyed "quirk map"
 in v1. The simulation stops reading raw ODF keys directly.
 
-**D10. Peers must agree on one digest of resolved rules.**
+**D10. Peers must agree on one digest of resolved rules, model geometry included.**
 Multiplayer start, replays and saves compare a digest of the resolved
-sim-visible rules (values, not names), including the tech tree and resource
-model. The pack list is shown but informational: peers that differ only in
-textures, models or render recipes can play together. Two peers on Classic and
-Classic Enhanced refuse to start and name the differing key. Replays and
-snapshots record the lineage and pack names.
+sim-visible rules (values, not names), including the tech tree, the resource
+model and the derived collision geometry of every unit (ellipsoid axes,
+bounding radius and centre offset, computed from the profile's SOD with
+`scaleSOD` and `shieldPad`; not whole-file checksums of SODs). Definition keys
+are part of the comparison; display strings are not. Physics always reads
+geometry from the profile's SOD, never from a render-only replacement (glTF,
+M3D). The pack list is shown but informational: peers that differ only in
+textures, render-only models, geometry-identical re-exports or render recipes
+can play together; a model whose simulation geometry differs blocks the match.
+Two peers on Classic and Classic Enhanced refuse to start and name the
+differing key; for geometry the refusal names the unit and the differing
+value. Replays and snapshots record the lineage and pack names.
+
+*Amended 2026-11-12: model geometry is part of the rules (Cedric); awaiting
+Tammy's approval. It read "peers that differ only in textures, models or
+render recipes can play together", meaning that peers whose installs differ
+only in art play together. That cannot hold for models: in every install
+99-100% of ships have no explicit size key (Roots base 43.7%), so the size of a
+unit comes from its SOD, as in the originals, and Armada II and Roots checksum
+the models between peers. Evidence, the original size rule and the open
+points: [research/COLLISION_GEOMETRY.md](research/COLLISION_GEOMETRY.md).
+Implemented by CON-35 (digest) and SIM-32 (the original size rule).*
 
 **D11. Conflicts are solved by inheritance, not a new patch format.**
 A file in an upper layer may include its own name from the layer below (already
@@ -101,15 +118,17 @@ Added to `docs/WORKPLAN.md` (PR #352). Done-when is in WORKPLAN.
 |---|---|---|
 | CON-33 | Mount fix | D6 |
 | CON-34 | Coverage report and `why` | D7 |
-| CON-35 | Typed rules and digest (seam PR, needs NET-01) | D9, D10 |
+| CON-35 | Typed rules and digest, collision geometry included (seam PR, needs NET-01) | D9, D10 |
 | CON-36 | Inheritance for `.h` and `.tt` | D11 |
+| SIM-32 | Original size rule: collision geometry from the SOD (proposed 2026-11-12, pending Tammy's approval) | D10 |
 | RND-28 | Recipe overrides, shader shadowing | D12 |
 | LUA-09 | Lua restriction | D13 |
 
 v1 is done when: Classic Enhanced loads over its parent; FO 4.0 loads with no
 base Roots leaking in; the report prints coverage for every installed mod;
 peers on Classic and Classic Enhanced refuse to start and name the differing
-key while peers differing only by a texture or recipe folder are accepted; a
+key while peers differing only by a texture or recipe folder are accepted and a
+model whose collision geometry differs is refused with the unit named; a
 replay names its packs; a recipe ini dropped in a mod folder changes a headless
 frame.
 
