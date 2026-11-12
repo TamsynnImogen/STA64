@@ -10,11 +10,16 @@ default = ["bink", "mp4"]
 # Bink 1 (`BIKf`..`BIKi`) video and audio, in `src/bink/` (MED-01).
 bink = []
 # MP4 demux and its codecs, in `src/mp4.rs` (MED-02).
-mp4 = []
+mp4 = ["dep:oxideav-core", "dep:oxideav-mp4", "dep:oxideav-h264", "dep:oxideav-aac"]
 
 [dependencies]
 sta_vfs.workspace = true
 thiserror.workspace = true
+# MP4 (MED-02): pure-Rust OxideAV demuxer and codecs, all MIT, pinned exactly.
+oxideav-core = { version = "=0.1.43", optional = true }
+oxideav-mp4 = { version = "=0.0.11", optional = true }
+oxideav-h264 = { version = "=0.1.12", optional = true }
+oxideav-aac = { version = "=0.1.7", optional = true }
 
 [dev-dependencies]
 # Golden hashes in the install-gated tests.
