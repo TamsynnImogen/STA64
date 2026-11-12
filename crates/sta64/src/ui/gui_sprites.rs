@@ -1,5 +1,5 @@
-//! Mod-authored GUI button pictures. Only the selected GUI table and the global
-//! GUI table are consulted; missing or malformed art leaves the text button intact.
+//! Mod-authored GUI button and static panel pictures. GUI art consults the
+//! selected table then the global table; missing art preserves text fallback.
 //! The table is read through the mounted VFS (D1, D3); no executable content is
 //! loaded (D2).
 //! Animated offsets, tiling, non-interface materials, and blend directives are
@@ -18,6 +18,8 @@ use crate::viewer::Mounted;
 
 type PageKey = (String, Option<[u8; 3]>);
 type PageImage = (Handle<Image>, UVec2);
+type ArtKey = (Vec<String>, usize, GuiImageSource, bool);
+type ResolvedArt = Option<(Handle<Image>, Rect)>;
 
 #[derive(Resource, Default)]
 pub struct GuiSkin {
@@ -30,7 +32,7 @@ pub struct GuiSprites {
     selected: Option<SpriteTable>,
     global: Option<SpriteTable>,
     pages: HashMap<PageKey, Option<PageImage>>,
-    resolved: HashMap<Vec<String>, Option<(Handle<Image>, Rect)>>,
+    resolved: HashMap<ArtKey, ResolvedArt>,
     loaded: bool,
 }
 
@@ -41,9 +43,79 @@ pub struct GuiButton {
     pub keep_label: bool,
 }
 
+/// Optional tint palette for a GUI button's artwork.
+#[derive(Component)]
+pub struct GuiButtonColors {
+    pub normal: Color,
+    pub hovered: Color,
+    pub pressed: Color,
+    pub disabled: Color,
+    pub active: Color,
+}
+
+impl Default for GuiButtonColors {
+    fn default() -> Self {
+        Self {
+            normal: Color::WHITE,
+            hovered: Color::srgb(0.85, 0.85, 1.0),
+            pressed: Color::srgb(0.7, 0.7, 0.7),
+            disabled: Color::srgb(0.5, 0.5, 0.5),
+            active: Color::WHITE,
+        }
+    }
+}
+
+/// Marks an armed command so its normal artwork can use the active tint.
+#[derive(Component)]
+pub struct GuiActive(pub bool);
+
 /// Mark a direct child label of a [`GuiButton`] for picture/text fallback.
 #[derive(Component)]
 pub struct GuiButtonLabel;
+
+/// Which sprite table supplies a static GUI picture.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[allow(dead_code)] // Explicit shared-table opt-in for wireframe consumers.
+pub enum GuiImageSource {
+    #[default]
+    Gui,
+    SharedSprites,
+}
+
+/// A static SPR picture. `names` are ordered prefix candidates; `frame` selects
+/// the native `<prefix>.<frame>` entry when one exists.
+#[derive(Component)]
+pub struct GuiImage {
+    pub names: Vec<String>,
+    pub frame: usize,
+    pub color: Color,
+    pub source: GuiImageSource,
+}
+
+#[allow(dead_code)] // Builder methods are also exercised by isolated art fixtures.
+impl GuiImage {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self { names: vec![name.into()], frame: 0, color: Color::WHITE, source: GuiImageSource::Gui }
+    }
+
+    pub fn with_frame(mut self, frame: usize) -> Self {
+        self.frame = frame;
+        self
+    }
+
+    pub fn with_color(mut self, color: Color) -> Self {
+        self.color = color;
+        self
+    }
+
+    pub fn with_source(mut self, source: GuiImageSource) -> Self {
+        self.source = source;
+        self
+    }
+}
+
+#[derive(Component)]
+pub(crate) struct GuiImageFallbackColor(Color);
 
 fn table_path(name: &str) -> Option<String> {
     let path = sta_vfs::normalize(name);
@@ -165,18 +237,48 @@ fn ordered_sprites(names: &[String], selected: Option<&SpriteTable>, global: Opt
         .collect()
 }
 
+fn frame_sprites(
+    names: &[String],
+    frame: usize,
+    selected: Option<&SpriteTable>,
+    global: Option<&SpriteTable>,
+) -> Vec<Sprite> {
+    [selected, global]
+        .into_iter()
+        .flatten()
+        .flat_map(|table| {
+            names.iter().filter_map(move |name| {
+                let suffix = format!(".{frame}");
+                let entry = if name.ends_with(&suffix) { name.clone() } else { format!("{name}{suffix}") };
+                table.sprite(&entry).or_else(|| (frame == 0).then(|| table.sprite(name)).flatten())
+            })
+        })
+        .cloned()
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
 fn art(
-    button: &GuiButton,
+    names: &[String],
+    frame: usize,
+    source: GuiImageSource,
+    numbered: bool,
+    shared: Option<&SpriteTable>,
     vfs: &sta_vfs::Vfs,
     cache: &mut GuiSprites,
     images: &mut Assets<Image>,
     formats: CompressedImageFormats,
 ) -> Option<(Handle<Image>, Rect)> {
-    if let Some(found) = cache.resolved.get(&button.names) {
+    let key = (names.to_vec(), frame, source, numbered);
+    if let Some(found) = cache.resolved.get(&key) {
         return found.clone();
     }
     // Try every candidate in the chosen table before using the global table.
-    let candidates = ordered_sprites(&button.names, cache.selected.as_ref(), cache.global.as_ref());
+    let candidates = match source {
+        GuiImageSource::Gui if !numbered => ordered_sprites(names, cache.selected.as_ref(), cache.global.as_ref()),
+        GuiImageSource::Gui => frame_sprites(names, frame, cache.selected.as_ref(), cache.global.as_ref()),
+        GuiImageSource::SharedSprites => frame_sprites(names, frame, shared, None),
+    };
     let mut found = None;
     for sprite in candidates {
         let Some((handle, size)) = page(&sprite, vfs, cache, images, formats) else {
@@ -187,7 +289,7 @@ fn art(
             break;
         }
     }
-    cache.resolved.insert(button.names.clone(), found.clone());
+    cache.resolved.insert(key, found.clone());
     found
 }
 
@@ -201,21 +303,28 @@ pub fn paint(
     sprites: Option<ResMut<GuiSprites>>,
     images: Option<ResMut<Assets<Image>>>,
     device: Option<Res<bevy::render::renderer::RenderDevice>>,
+    shared: Option<Res<crate::render::sprites::SpriteTables>>,
     mut buttons: Query<
         (
             Entity,
             &GuiButton,
             &WidgetState,
+            Option<&GuiButtonColors>,
+            Option<&GuiActive>,
             Option<&mut ImageNode>,
             Option<&Children>,
             Option<&mut BackgroundColor>,
         ),
-        With<UiButton>,
+        (With<UiButton>, Without<GuiImage>),
+    >,
+    mut panels: Query<
+        (Entity, &GuiImage, Option<&mut ImageNode>, Option<&mut BackgroundColor>, Option<&GuiImageFallbackColor>),
+        Without<GuiButton>,
     >,
     mut labels: Query<&mut Visibility, With<GuiButtonLabel>>,
 ) {
     let (Some(mut sprites), Some(mut images)) = (sprites, images) else {
-        for (entity, _, _, image, children, _) in &mut buttons {
+        for (entity, _, _, _, _, image, children, _) in &mut buttons {
             if image.is_some() {
                 commands.entity(entity).remove::<ImageNode>();
             }
@@ -227,12 +336,21 @@ pub fn paint(
                 }
             }
         }
+        for (entity, _, image, background, fallback) in &mut panels {
+            if image.is_some() {
+                commands.entity(entity).remove::<ImageNode>();
+            }
+            if let (Some(mut background), Some(fallback)) = (background, fallback) {
+                background.0 = fallback.0;
+            }
+        }
         return;
     };
     let selected_path = skin.as_ref().and_then(|s| s.table.as_deref()).and_then(table_path);
     let reload = !sprites.loaded
         || mounted.as_ref().is_some_and(|m| m.is_changed())
         || skin.as_ref().is_some_and(|s| s.is_changed())
+        || shared.as_ref().is_some_and(|s| s.is_changed())
         || sprites.selected_path != selected_path;
     if reload {
         sprites.pages.clear();
@@ -256,21 +374,25 @@ pub fn paint(
         sprites.global = None;
         sprites.loaded = false;
     }
-    for (entity, button, state, image, children, background) in &mut buttons {
+    for (entity, button, state, colors, active, image, children, background) in &mut buttons {
         let found = if has_sources {
-            art(button, &mounted.as_ref().unwrap().0, &mut sprites, &mut images, formats)
+            art(&button.names, 0, GuiImageSource::Gui, false, None,
+                &mounted.as_ref().unwrap().0, &mut sprites, &mut images, formats)
         } else {
             None
         };
         if let Some((handle, rect)) = &found {
+            let default_colors = GuiButtonColors::default();
+            let colors = colors.unwrap_or(&default_colors);
             let node = ImageNode {
                 image: handle.clone(),
                 rect: Some(*rect),
                 color: match state {
-                    WidgetState::Normal => Color::WHITE,
-                    WidgetState::Hovered => Color::srgb(0.85, 0.85, 1.0),
-                    WidgetState::Pressed => Color::srgb(0.7, 0.7, 0.7),
-                    WidgetState::Disabled => Color::srgb(0.5, 0.5, 0.5),
+                    WidgetState::Normal if active.is_some_and(|a| a.0) => colors.active,
+                    WidgetState::Normal => colors.normal,
+                    WidgetState::Hovered => colors.hovered,
+                    WidgetState::Pressed => colors.pressed,
+                    WidgetState::Disabled => colors.disabled,
                 },
                 ..default()
             };
@@ -296,6 +418,41 @@ pub fn paint(
                         Visibility::Inherited
                     };
                 }
+            }
+        }
+    }
+    for (entity, panel, image, background, fallback) in &mut panels {
+        let source = match panel.source {
+            GuiImageSource::Gui if has_sources => Some((GuiImageSource::Gui, None)),
+            GuiImageSource::SharedSprites if mounted.is_some() =>
+                shared.as_ref().map(|table| (GuiImageSource::SharedSprites, Some(table.0.as_ref()))),
+            _ => None,
+        };
+        let found = source.and_then(|(source, table)| art(
+            &panel.names, panel.frame, source, true, table,
+            &mounted.as_ref().unwrap().0, &mut sprites, &mut images, formats,
+        ));
+        if let Some((handle, rect)) = found {
+            let node = ImageNode { image: handle, rect: Some(rect), color: panel.color, ..default() };
+            if let Some(mut image) = image {
+                if image.image != node.image || image.rect != node.rect || image.color != node.color {
+                    *image = node;
+                }
+            } else {
+                commands.entity(entity).insert(node);
+            }
+            if let Some(mut background) = background {
+                if fallback.is_none() {
+                    commands.entity(entity).insert(GuiImageFallbackColor(background.0));
+                }
+                background.0 = Color::NONE;
+            }
+        } else {
+            if image.is_some() {
+                commands.entity(entity).remove::<ImageNode>();
+            }
+            if let (Some(mut background), Some(fallback)) = (background, fallback) {
+                background.0 = fallback.0;
             }
         }
     }
@@ -334,6 +491,29 @@ mod tests {
     }
 
     #[test]
+    fn numbered_frames_follow_table_priority_and_are_distinct() {
+        let selected = SpriteTable::parse(b"second.0 chosen 0 0 2 2\nsecond.1 chosen 2 0 2 2\n");
+        let global = SpriteTable::parse(b"first.0 global 0 0 2 2\nfirst.1 global 0 0 2 2\n");
+        let names = vec!["first".into(), "second".into()];
+        let first = frame_sprites(&names, 0, Some(&selected), Some(&global));
+        let second = frame_sprites(&names, 1, Some(&selected), Some(&global));
+        assert_eq!(first[0].texture, "chosen");
+        assert_eq!(second[0].texture, "chosen");
+        assert_eq!(first[0].rect, [0.0, 0.0, 2.0, 2.0]);
+        assert_eq!(second[0].rect, [2.0, 0.0, 2.0, 2.0]);
+        assert_eq!(ordered_sprites(&names, Some(&selected), Some(&global)).len(), 0);
+    }
+
+    #[test]
+    fn shared_sprite_names_are_explicit() {
+        let selected = SpriteTable::parse(b"wire gui 0 0 2 2\n");
+        let shared = SpriteTable::parse(b"wire.0 shared 1 0 2 2\n");
+        let names = vec!["wire".into()];
+        assert_eq!(ordered_sprites(&names, Some(&selected), None)[0].texture, "gui");
+        assert_eq!(frame_sprites(&names, 0, Some(&shared), None)[0].texture, "shared");
+    }
+
+    #[test]
     fn table_loader_follows_includes() {
         let table = SpriteTable::load("sprites/gui_test.spr", |path| match path {
             "sprites/gui_test.spr" => Some(b"@include gui_parts.spr\n".to_vec()),
@@ -355,15 +535,15 @@ mod tests {
         fs::create_dir_all(data.join("sprites")).unwrap();
         fs::create_dir_all(data.join("textures/rgb")).unwrap();
         fs::write(data.join("sprites/gui_choice.spr"), b"@include parts.spr\n").unwrap();
-        fs::write(data.join("sprites/parts.spr"), b"second chosen 0 0 2 2\n").unwrap();
+        fs::write(data.join("sprites/parts.spr"), b"second chosen 0 0 2 2\npanel.0 chosen 0 0 2 2\npanel.1 chosen 2 0 2 2\n").unwrap();
         fs::write(data.join("sprites/gui_global.spr"), b"first global 0 0 2 2\n").unwrap();
         let tga = |red: u8| {
             let mut bytes = vec![0u8; 18];
             bytes[2] = 2; // uncompressed true colour
-            bytes[12] = 2;
+            bytes[12] = 4;
             bytes[14] = 2;
             bytes[16] = 24;
-            for _ in 0..4 {
+            for _ in 0..8 {
                 bytes.extend_from_slice(&[0, 0, red]);
             }
             bytes
@@ -395,7 +575,24 @@ mod tests {
             ))
             .add_child(label)
             .id();
+        let panel = app.world_mut().spawn((
+            GuiImage::new("panel").with_frame(1).with_color(Color::srgb(0.2, 0.4, 0.6)),
+            Node::default(),
+            BackgroundColor(Color::srgb(0.1, 0.2, 0.3)),
+            Visibility::Hidden,
+        )).id();
+        app.insert_resource(crate::render::sprites::SpriteTables(std::sync::Arc::new(
+            SpriteTable::parse(b"wire.0 chosen 0 0 2 2\n"),
+        )));
+        let wire = app.world_mut().spawn((
+            GuiImage::new("wire").with_source(GuiImageSource::SharedSprites),
+            Node::default(),
+        )).id();
         app.update();
+        assert_eq!(app.world().get::<ImageNode>(wire).unwrap().rect, Some(Rect::new(0.0, 0.0, 2.0, 2.0)));
+        assert_eq!(app.world().get::<ImageNode>(panel).unwrap().rect, Some(Rect::new(2.0, 0.0, 4.0, 2.0)));
+        assert_eq!(app.world().get::<ImageNode>(panel).unwrap().color, Color::srgb(0.2, 0.4, 0.6));
+        assert_eq!(app.world().get::<Visibility>(panel), Some(&Visibility::Hidden));
         let image = app.world().get::<ImageNode>(button).unwrap();
         assert_eq!(
             app.world()
@@ -427,16 +624,46 @@ mod tests {
             app.world().get::<ImageNode>(button).unwrap().color,
             Color::srgb(0.5, 0.5, 0.5)
         );
+        let palette = GuiButtonColors {
+            normal: Color::srgb(0.1, 0.1, 0.1),
+            hovered: Color::srgb(0.2, 0.2, 0.2),
+            pressed: Color::srgb(0.3, 0.3, 0.3),
+            disabled: Color::srgb(0.4, 0.4, 0.4),
+            active: Color::srgb(0.6, 0.6, 0.6),
+        };
+        app.world_mut().entity_mut(button).insert((palette, GuiActive(true)));
+        app.update();
+        assert_eq!(app.world().get::<ImageNode>(button).unwrap().color, Color::srgb(0.4, 0.4, 0.4));
+        *app.world_mut().get_mut::<WidgetState>(button).unwrap() = WidgetState::Pressed;
+        app.update();
+        assert_eq!(app.world().get::<ImageNode>(button).unwrap().color, Color::srgb(0.3, 0.3, 0.3));
+        *app.world_mut().get_mut::<WidgetState>(button).unwrap() = WidgetState::Hovered;
+        app.update();
+        assert_eq!(app.world().get::<ImageNode>(button).unwrap().color, Color::srgb(0.2, 0.2, 0.2));
+        *app.world_mut().get_mut::<WidgetState>(button).unwrap() = WidgetState::Normal;
+        app.update();
+        assert_eq!(app.world().get::<ImageNode>(button).unwrap().color, Color::srgb(0.6, 0.6, 0.6));
+        app.world_mut().get_mut::<GuiActive>(button).unwrap().0 = false;
+        app.update();
+        assert_eq!(app.world().get::<ImageNode>(button).unwrap().color, Color::srgb(0.1, 0.1, 0.1));
         app.world_mut().get_mut::<GuiButton>(button).unwrap().names = vec!["absent".into()];
+        app.world_mut().get_mut::<GuiImage>(panel).unwrap().names = vec!["absent".into()];
         app.update();
         assert!(app.world().get::<ImageNode>(button).is_none());
+        assert!(app.world().get::<ImageNode>(panel).is_none());
+        assert_eq!(app.world().get::<BackgroundColor>(panel).unwrap().0, Color::srgb(0.1, 0.2, 0.3));
         assert_eq!(app.world().get::<Visibility>(label), Some(&Visibility::Inherited));
         app.world_mut().get_mut::<GuiButton>(button).unwrap().names = vec!["first".into()];
+        app.world_mut().get_mut::<GuiImage>(panel).unwrap().names = vec!["panel".into()];
         app.update();
         assert!(app.world().get::<ImageNode>(button).is_some());
+        app.world_mut().remove_resource::<crate::render::sprites::SpriteTables>();
+        app.update();
+        assert!(app.world().get::<ImageNode>(wire).is_none());
         app.world_mut().remove_resource::<Mounted>();
         app.update();
         assert!(app.world().get::<ImageNode>(button).is_none());
+        assert!(app.world().get::<ImageNode>(panel).is_none());
         assert_eq!(app.world().get::<Visibility>(label), Some(&Visibility::Inherited));
         fs::remove_dir_all(root).unwrap();
     }
@@ -476,7 +703,8 @@ mod tests {
                     names: vec![(*name).into()],
                     keep_label: false,
                 };
-                let (handle, rect) = art(&button, &vfs, &mut cache, &mut images, CompressedImageFormats::empty())
+                let (handle, rect) = art(&button.names, 0, GuiImageSource::Gui, false, None,
+                    &vfs, &mut cache, &mut images, CompressedImageFormats::empty())
                     .unwrap_or_else(|| panic!("{table}: {name} did not resolve to valid artwork"));
                 let image = images.get(&handle).unwrap();
                 assert!(image.data.as_ref().is_some_and(|d| !d.is_empty()));

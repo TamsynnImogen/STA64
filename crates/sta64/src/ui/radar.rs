@@ -37,10 +37,14 @@ use sta_sim::view::{Relation, UnitFlags};
 use sta_sim::{EntityId, PlayerId, WorldView};
 
 use super::theme::{Theme, ThemePlugin, mix, panel};
+use super::gui_sprites::GuiImage;
 use crate::app::GameSet;
 use crate::sim_link::{ContentRes, Selection, SimLink};
 use crate::ui::i18n::tr;
 use crate::ui::profile::ProfileSync;
+use crate::ui::profile::UiProfile;
+use crate::ui::hud::HudConfig;
+use crate::ui::hud::stock::layout::StockLayout;
 
 /// The square's side in theme units (Refit `MinimapSize`, at most 45% of the
 /// 1080-unit screen).
@@ -312,6 +316,10 @@ pub fn dot_colour(theme: &Theme, f: Filter, lit: bool) -> Color {
 #[derive(Component)]
 pub struct RadarRoot;
 
+/// The replaceable presentation below the persistent radar owner.
+#[derive(Component)]
+struct RadarChrome;
+
 /// The map square; blips and the camera outline are its children.
 #[derive(Component)]
 pub struct RadarSquare;
@@ -381,9 +389,105 @@ fn strip(theme: &Theme, station: bool) -> impl Bundle {
     )
 }
 
+fn stock_rect(r: crate::ui::hud::layout::R) -> Node {
+    Node {
+        position_type: PositionType::Absolute,
+        left: Val::Px(r.x),
+        top: Val::Px(r.y),
+        width: Val::Px(r.w),
+        height: Val::Px(r.h),
+        ..default()
+    }
+}
+
+fn spawn_stock(commands: &mut Commands, root: Entity, theme: &Theme, cfg: &HudConfig) {
+    let Some(gui) = cfg.gui.as_ref() else { return };
+    let layout = StockLayout::new(gui, Vec2::new(1080.0 * cfg.aspect, 1080.0));
+    let area = layout.panel("minimap");
+    let chrome = commands.spawn((
+        RadarChrome,
+        Node {
+            position_type: PositionType::Relative,
+            width: Val::Px(area.map_or(0.0, |r| r.w)),
+            height: Val::Px(area.map_or(0.0, |r| r.h)),
+            display: if area.is_some() { Display::Flex } else { Display::None },
+            ..default()
+        },
+    )).id();
+    commands.entity(root).add_child(chrome);
+    let Some(_) = area else { return };
+
+    for piece in layout.pieces("minimapBackgroundPanel") {
+        commands.spawn((
+            stock_rect(piece.rect),
+            GuiImage::new(piece.name).with_frame(piece.frame),
+            Pickable::IGNORE,
+            ChildOf(chrome),
+        ));
+    }
+
+    let Some(display) = layout.rect("minimapDisplayArea") else { return };
+    commands.spawn((
+        stock_rect(display),
+        BackgroundColor(mix(theme.panel, theme.track, 0.5)),
+        Pickable::IGNORE,
+        ChildOf(chrome),
+    ));
+    if let Some(sprite) = layout.name("minimapBackgroundSprite") {
+        commands.spawn((stock_rect(display), GuiImage::new(sprite), Pickable::IGNORE, ChildOf(chrome)));
+    }
+    commands.spawn((
+        RadarSquare,
+        RelativeCursorPosition::default(),
+        Node { overflow: Overflow::clip(), ..stock_rect(display) },
+        BackgroundColor(Color::NONE),
+        ChildOf(chrome),
+    ));
+
+    for (station, key, fallback) in [
+        (false, "minimapShipFilterArea", "mapfilter_ship_button"),
+        (true, "minimapStationFilterArea", "mapfilter_station_button"),
+    ] {
+        let Some(rect) = layout.rect(key) else { continue };
+        let picture_key = if station { "minimapStationFilterButton" } else { "minimapShipFilterButton" };
+        let picture = layout.name(picture_key).unwrap_or(fallback);
+        let filter = commands.spawn((
+            FilterName { station },
+            stock_rect(rect),
+            GuiImage::new(picture),
+            ChildOf(chrome),
+        )).id();
+        commands.entity(filter).with_child(text(
+            tr(if station { "Stations" } else { "Ships" }),
+            theme.micro_size,
+            theme.text_dim,
+        ));
+    }
+}
+
 /// Spawn the radar bottom left, in the theme's panel. Does nothing if one exists.
-pub fn spawn_radar(mut commands: Commands, theme: Res<Theme>, existing: Query<(Entity, Option<&Children>), With<RadarRoot>>) {
+pub fn spawn_radar(
+    mut commands: Commands,
+    theme: Res<Theme>,
+    profile: Option<Res<UiProfile>>,
+    config: Option<Res<HudConfig>>,
+    existing: Query<(Entity, Option<&Children>), With<RadarRoot>>,
+) {
     let t = &*theme;
+    let stock = profile.is_some_and(|p| p.is_stock()) && config.as_ref().is_some_and(|c| c.gui.is_some());
+    let root = if let Some((root, children)) = existing.iter().next() {
+        if children.is_some_and(|children| !children.is_empty()) { return; }
+        root
+    } else {
+        commands.spawn((
+            RadarRoot,
+            Node { position_type: PositionType::Absolute, left: Val::Px(10.0), bottom: Val::Px(10.0), ..default() },
+        )).id()
+    };
+    if stock {
+        spawn_stock(&mut commands, root, t, config.as_ref().unwrap());
+        return;
+    }
     let content = (
         Node { flex_direction: FlexDirection::Column, row_gap: Val::Px(t.gap * 0.5), ..default() },
         children![
@@ -406,17 +510,7 @@ pub fn spawn_radar(mut commands: Commands, theme: Res<Theme>, existing: Query<(E
             ),
         ],
     );
-    if let Some((root, children)) = existing.iter().next() {
-        if children.is_none_or(|children| children.is_empty()) {
-            commands.entity(root).with_child(panel(t, &tr("Radar"), content));
-        }
-    } else {
-        commands.spawn((
-            RadarRoot,
-            Node { position_type: PositionType::Absolute, left: Val::Px(10.0), bottom: Val::Px(10.0), ..default() },
-            children![panel(t, &tr("Radar"), content)],
-        ));
-    }
+    commands.entity(root).with_child((RadarChrome, panel(t, &tr("Radar"), content)));
 }
 
 // ---- systems ---------------------------------------------------------------
@@ -436,18 +530,19 @@ pub fn feed_from_link(
 
 /// Place the blips and the camera outline.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::type_complexity)]
 pub fn refresh(
     mut commands: Commands,
     theme: Res<Theme>,
     feed: Res<RadarFeed>,
     mut state: ResMut<RadarState>,
     mut ents: ResMut<BlipEntities>,
-    square: Query<Entity, With<RadarSquare>>,
-    mut nodes: Query<(&mut Node, &mut BackgroundColor, &mut BorderColor), Without<RadarCamera>>,
+    square: Query<(Entity, &Node), (With<RadarSquare>, Without<RadarCamera>)>,
+    mut nodes: Query<(&mut Node, &mut BackgroundColor, &mut BorderColor), (Without<RadarCamera>, Without<RadarSquare>)>,
     outline: Query<(Entity, &RadarCamera)>,
-    mut lines_q: Query<(&mut Node, &mut UiTransform), With<RadarCamera>>,
+    mut lines_q: Query<(&mut Node, &mut UiTransform), (With<RadarCamera>, Without<RadarSquare>)>,
 ) {
-    let Ok(square) = square.single() else { return };
+    let Ok((square, square_node)) = square.single() else { return };
     if !state.map_fixed
         && let Some(fit) = RadarMap::fit(&feed.view)
     {
@@ -498,7 +593,10 @@ pub fn refresh(
         }
     }
     // The camera's footprint: four thin white lines, turned to the sides of the trapezoid.
-    let side = RADAR_SIDE - 2.0;
+    let side = Vec2::new(
+        match square_node.width { Val::Px(w) if w > 0.0 => w, _ => RADAR_SIDE },
+        match square_node.height { Val::Px(h) if h > 0.0 => h, _ => RADAR_SIDE },
+    ) - Vec2::splat(2.0);
     let lines: Vec<(Vec2, f32, f32)> = match feed.camera {
         Some(c) => (0..4)
             .map(|i| {
@@ -609,13 +707,24 @@ pub struct RadarPlugin;
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RadarUi;
 
+#[allow(clippy::type_complexity)]
 fn rebuild_on_theme_change(
     mut commands: Commands,
     theme: Res<Theme>,
+    profile: Option<Res<UiProfile>>,
+    config: Option<Res<HudConfig>>,
     roots: Query<Option<&Children>, With<RadarRoot>>,
     mut blips: ResMut<BlipEntities>,
+    mut previous: Local<Option<(Option<UiProfile>, Option<sta_content::GuiLayout>, f32)>>,
 ) {
-    if !theme.is_changed() {
+    let now = (
+        profile.as_ref().map(|p| **p),
+        config.as_ref().and_then(|c| c.gui.clone()),
+        config.as_ref().map_or(16.0 / 9.0, |c| c.aspect),
+    );
+    let changed = theme.is_changed() || previous.as_ref() != Some(&now);
+    *previous = Some(now);
+    if !changed {
         return;
     }
     for children in &roots {
@@ -923,5 +1032,103 @@ mod tests {
         app.world_mut().resource_mut::<RadarFeed>().view = Arc::new(WorldView::default());
         app.update();
         assert_eq!(count::<RadarBlip>(&mut app), 0);
+    }
+
+    fn stock_config() -> HudConfig {
+        let cfg = "\
+screenWidth = 1600
+screenHeight = 1200
+minimapPanelArea = 0 800 400 400
+minimapBackgroundPanel = \"map_panel\"
+minimapBackgroundPanelSize = 2
+minimapBackgroundPanel_0 = 0 0 400 400
+minimapBackgroundPanel_1 = 2 3 20 30
+minimapBackgroundSprite = \"map_background\"
+minimapDisplayArea = 10 20 320 280
+minimapShipFilterArea = 4 305 120 30
+minimapStationFilterArea = 140 305 120 30
+minimapShipFilterButton = \"ship_art\"
+minimapStationFilterButton = \"station_art\"
+";
+        let (parsed, warnings) = sta_content::GuiCfg::parse("radar.cfg", cfg);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        HudConfig { gui: Some(parsed.layout((1600, 1200))), aspect: 16.0 / 9.0, ..default() }
+    }
+
+    #[test]
+    fn stock_rectangles_art_filters_and_state_survive_rebuild() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).init_resource::<Assets<Image>>();
+        configure_sets(&mut app);
+        app.insert_resource(UiProfile::Armada2);
+        app.insert_resource(stock_config());
+        app.add_plugins(RadarPlugin);
+        let map = RadarMap::of_bounds(Vec2::ZERO, Vec2::splat(2000.0));
+        app.world_mut().resource_mut::<RadarState>().map = Some(map);
+        app.world_mut().resource_mut::<RadarState>().map_fixed = true;
+        app.world_mut().resource_mut::<RadarState>().ships = Filter::Enemies;
+        app.world_mut().resource_mut::<RadarFeed>().camera = Some([
+            Vec2::new(500.0, 500.0),
+            Vec2::new(1500.0, 500.0),
+            Vec2::new(1500.0, 1500.0),
+            Vec2::new(500.0, 1500.0),
+        ]);
+        app.insert_resource(FogState { grid: FogGrid::new([0.0, 0.0], [2000.0, 2000.0]), updates: 1 });
+        app.update();
+
+        let root = app.world_mut().query_filtered::<Entity, With<RadarRoot>>().single(app.world()).unwrap();
+        let square = app.world_mut().query_filtered::<Entity, With<RadarSquare>>().single(app.world()).unwrap();
+        let node = app.world().get::<Node>(square).unwrap();
+        assert_eq!((node.left, node.top, node.width, node.height),
+            (Val::Px(12.0), Val::Px(18.0), Val::Px(384.0), Val::Px(252.0)));
+        assert_eq!(count::<super::super::theme::Panel>(&mut app), 0);
+        assert_eq!(count::<FilterDot>(&mut app), 0);
+        assert_eq!(count::<FilterName>(&mut app), 2);
+        assert_eq!(count::<GuiImage>(&mut app), 5);
+        assert_eq!(count::<RadarFog>(&mut app), 1);
+        let outline = app.world_mut().query::<(&RadarCamera, &Node)>().iter(app.world())
+            .find(|(camera, _)| camera.0 == 0).map(|(_, node)| node.clone()).unwrap();
+        assert_eq!((outline.left, outline.top, outline.width),
+            (Val::Px(95.5), Val::Px(186.75), Val::Px(191.0)));
+        let names: Vec<_> = app.world_mut().query::<&GuiImage>().iter(app.world())
+            .map(|image| (image.names[0].clone(), image.frame)).collect();
+        assert!(names.contains(&("map_panel".to_owned(), 0)));
+        assert!(names.contains(&("map_panel".to_owned(), 1)));
+        assert!(names.contains(&("map_background".to_owned(), 0)));
+        assert!(names.contains(&("ship_art".to_owned(), 0)));
+        assert!(names.contains(&("station_art".to_owned(), 0)));
+
+        let target = app.world_mut().spawn_empty().id();
+        app.world_mut().entity_mut(root).insert(UiTargetCamera(target));
+        app.world_mut().insert_resource(UiProfile::Lcars);
+        app.update();
+        assert_eq!(app.world_mut().query_filtered::<Entity, With<RadarRoot>>().single(app.world()).unwrap(), root);
+        assert_ne!(app.world_mut().query_filtered::<Entity, With<RadarSquare>>().single(app.world()).unwrap(), square);
+        assert_eq!(app.world().get::<UiTargetCamera>(root).unwrap().0, target);
+        assert_eq!(count::<super::super::theme::Panel>(&mut app), 1);
+        assert_eq!(count::<GuiImage>(&mut app), 0);
+        assert_eq!(app.world().resource::<RadarState>().ships, Filter::Enemies);
+        assert_eq!(app.world().resource::<RadarState>().map, Some(map));
+    }
+
+    #[test]
+    fn stock_zero_filter_and_missing_panel_disable_only_their_chrome() {
+        let mut config = stock_config();
+        let gui = config.gui.as_mut().unwrap();
+        gui.rects.iter_mut().find(|(key, _)| key.eq_ignore_ascii_case("minimapShipFilterArea")).unwrap().1.w = 0;
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        configure_sets(&mut app);
+        app.insert_resource(UiProfile::FleetOps);
+        app.insert_resource(config);
+        app.add_plugins(RadarPlugin);
+        app.update();
+        assert_eq!(count::<FilterName>(&mut app), 1);
+        let root = app.world_mut().query_filtered::<Entity, With<RadarRoot>>().single(app.world()).unwrap();
+        app.world_mut().resource_mut::<HudConfig>().gui.as_mut().unwrap().panels.get_mut("minimap").unwrap().area = None;
+        app.update();
+        assert_eq!(count::<RadarSquare>(&mut app), 0);
+        let chrome = app.world().get::<Children>(root).unwrap()[0];
+        assert_eq!(app.world().get::<Node>(chrome).unwrap().display, Display::None);
     }
 }
