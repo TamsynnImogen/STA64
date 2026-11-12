@@ -42,7 +42,8 @@ impl UiProfile {
         t.text = Color::srgb_u8(222, 232, 237);
         t.text_dim = Color::srgb_u8(151, 170, 179);
         t.text_off = Color::srgb_u8(95, 112, 122);
-        t.text_on = Color::srgb_u8(8, 15, 19);
+        // Labels on the stock skin's dark pills and fields are light, not LCARS' black on bright.
+        t.text_on = Color::srgb_u8(222, 232, 237);
         t.title = accent;
         t.accent = accent;
         t.accent2 = accent2;
