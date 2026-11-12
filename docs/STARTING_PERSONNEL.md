@@ -49,3 +49,45 @@ handling, hashes ignoring cosmetic label edits, deterministic save/replay and
 historical reader tests; scoped strict Clippy/workspace/ARM64 checks. A later
 optimized HUD candidate needs live selection/resource-mode/FPS acceptance.
 December desktop alpha scope and original/accepted artifacts stay preserved.
+
+## Historical identity and replay boundary
+
+For old snapshot formats 8--11 only, admit the previous content identity with
+just the newly introduced starting-rules hash omitted; all prior unit/weapon/
+tech rules must still match. Restore no personnel for those historical records,
+then write current format/hash on the next save. A genuine unchanged v9 fixture
+is tested against this migration and unrelated unit changes still reject.
+Current-format snapshots and network identities never use the legacy hash.
+
+Replay format 2 persists the selected options. This does not implement recording
+a live Instant Action match: the existing Recorder starts a bare map through
+Sim::from_setup, whereas explicit faction starts use from_setup_with_starts.
+Do not claim that persisting these options resolves that separate pre-existing
+starting-force recording limitation. Current shared save/restore does preserve
+the actual initialized crew and officer maximum.
+
+## Dependency and ownership note
+
+Only a test-only dependency on the existing workspace sta_vfs crate is added to
+sta_sim, so the actual mounted content-to-simulation start path can be checked
+headlessly. No new external dependency/version is introduced. Mechanical client
+and AI fake literals use crew=None until their source exposes actual state.
+The subsequent HUD/setup consumer must start from the merged prerequisite.
+
+## Prerequisite verification
+
+581 shared asset/content/simulation tests and 302 bench/AI/mission tests pass;
+440 client tests pass with the mechanical seam updates. Existing ignored tests
+remain ignored. Strict seven-crate all-target Clippy, workspace/all-target and
+NDK29/API26 ARM64 client-library checks pass. This is not APK/device evidence.
+
+Explicit installed runs resolve Classic officer choices to 600/300/800/999 and
+FO4's authored choices to 99999. Classic's actual shared initial view has crew
+1200 (Normal) or 30000 (Lots), live officer census 16 and maximum 600. Both
+resource modes survive current snapshot round trips. Existing unrelated content
+warnings are retained; this is not complete native/mod compatibility acceptance.
+
+Private logs are under `STA64-artifacts/probes/ui17/personnel-*`. This shared
+prerequisite alone does not draw crew or expose setup selectors; the UI consumer
+follows after merge. No crew spending/regeneration, officer admission/reserved
+queue accounting, or per-unit current crew is claimed.

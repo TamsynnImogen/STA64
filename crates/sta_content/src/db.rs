@@ -50,10 +50,24 @@ pub struct ContentDb {
     construction_confinement: Vec<Option<crate::ConfinementRules>>,
     has_map_confinement: bool,
     map_confinement_warnings: Vec<Warning>,
+    rules: crate::Rules,
     hash: u64,
 }
 
 impl ContentDb {
+    pub fn rules(&self) -> &crate::Rules { &self.rules }
+
+    /// Narrow pre-personnel snapshot migration identity. Never use this for
+    /// a multiplayer/content handshake or for current-format snapshots.
+    pub fn hash_without_starting_rules(&self) -> u64 { hash_inner(self, false) }
+
+
+    pub fn with_rules(mut self, rules: crate::Rules) -> Self {
+        self.rules = rules;
+        self.hash = hash(&self);
+        self
+    }
+
     /// Load every unit and weapon definition from the ODFs of a mounted
     /// install (see [`crate::odf`]). ODFs that cannot make a definition are
     /// listed in the warnings, not errors.
@@ -75,7 +89,10 @@ impl ContentDb {
     /// (a lobby choice, a test).
     pub fn load_as(vfs: &sta_vfs::Vfs, profile: Profile, index: &OdfIndex) -> Result<(ContentDb, Vec<Warning>)> {
         let (db, mut warnings) = crate::odf::load(vfs, profile, index)?;
-        let db = db.with_launch_points(vfs).with_resources(ResourceModel::from_strings(profile, &crate::StringTable::load(vfs)));
+        let (races, _) = crate::Races::load(vfs, index);
+        let (rules, rule_warnings) = crate::Rules::load(vfs, &races);
+        warnings.extend(rule_warnings);
+        let db = db.with_rules(rules).with_launch_points(vfs).with_resources(ResourceModel::from_strings(profile, &crate::StringTable::load(vfs)));
         if db.is_empty() {
             return Ok((db, warnings));
         }
@@ -344,7 +361,7 @@ impl ContentBuilder {
         let mut db = ContentDb {
             defs, profile: self.profile, features: self.features, resources,
             tech: self.tech.map(Arc::new), map_confinement, construction_confinement, has_map_confinement,
-            map_confinement_warnings, hash: 0,
+            map_confinement_warnings, rules: crate::Rules::default(), hash: 0,
         };
         db.hash = hash(&db);
         Ok(db)
@@ -386,7 +403,9 @@ fn feature_bits(h: &mut Fnv, own: Option<&Features>, db: &Features) {
     }
 }
 
-fn hash(db: &ContentDb) -> u64 {
+fn hash(db: &ContentDb) -> u64 { hash_inner(db, true) }
+
+fn hash_inner(db: &ContentDb, include_starting_rules: bool) -> u64 {
     let mut h = Fnv(0xcbf2_9ce4_8422_2325);
     h.u64(db.profile as u64);
     for b in db.features.bits() {
@@ -538,6 +557,12 @@ fn hash(db: &ContentDb) -> u64 {
         let entries: Vec<_> = t.entries().collect();
         let caps: Vec<_> = t.capacity_lists().collect();
         h.str(&format!("{entries:?}{caps:?}"));
+    }
+    let rules = db.rules.hash_values();
+    if include_starting_rules && !rules.is_empty() {
+        h.byte(0xeb);
+        h.str("sta64.starting-personnel-rules.v1");
+        for value in rules { h.u64(value); }
     }
     h.0
 }

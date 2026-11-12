@@ -506,7 +506,7 @@ mod tests {
         };
         assert_eq!(resource_text(&feed, 1), None);
         feed.view = Arc::new(WorldView {
-            players: vec![PlayerView {
+            players: vec![PlayerView { crew: None,
                 id: PlayerId(1),
                 team: TeamId(1),
                 resources: vec![Fixed::ZERO; 4],

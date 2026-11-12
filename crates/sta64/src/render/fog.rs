@@ -527,7 +527,7 @@ mod tests {
     }
 
     fn player(id: u8, team: u8) -> PlayerView {
-        PlayerView { id: PlayerId(id), team: TeamId(team), resources: vec![], officers: [fx(0); 2], eliminated: false, relations: vec![] }
+        PlayerView { crew: None, id: PlayerId(id), team: TeamId(team), resources: vec![], officers: [fx(0); 2], eliminated: false, relations: vec![] }
     }
 
     fn view(units: Vec<UnitView>) -> WorldView {

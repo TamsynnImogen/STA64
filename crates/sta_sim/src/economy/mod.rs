@@ -42,6 +42,8 @@ use crate::world::{Entities, EntityKind, Fnv, Table};
 /// Resource ids: dilithium, latinum, metal, biomatter.
 pub const RESOURCES: usize = 4;
 
+mod personnel;
+
 /// What a fresh node holds.
 pub const RICHNESS: i32 = 1_000_000;
 
@@ -133,6 +135,7 @@ fn dist(a: Vec3, b: Vec3) -> Fixed {
 pub struct Economy {
     /// Ascending player id.
     stock: Vec<(PlayerId, [Fixed; RESOURCES])>,
+    personnel: Vec<(PlayerId, Option<Fixed>, Option<Fixed>)>,
     /// What is left in each node that has been mined.
     nodes: Table<Fixed>,
     miners: Table<Miner>,
@@ -149,7 +152,7 @@ pub struct EconomyRec {
 
 impl Economy {
     pub fn is_empty(&self) -> bool {
-        self.stock.is_empty() && self.nodes.is_empty() && self.miners.is_empty()
+        self.stock.is_empty() && self.nodes.is_empty() && self.miners.is_empty() && self.personnel.is_empty()
     }
 
     /// A player's stock per resource id; empty until they have any.
@@ -425,6 +428,7 @@ impl Economy {
             h.fixed(m.unloaded);
             h.u64(m.phase.code() as u64);
         }
+        self.hash_personnel(h);
     }
 
     /// The state in plain form, for the snapshot.

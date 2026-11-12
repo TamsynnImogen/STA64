@@ -162,6 +162,9 @@ fn a_start_unit_without_a_model_is_reported() {
         standard_units: vec!["fx_yard".into(), "fx_station".into()],
         minimal_units: Vec::new(),
         stock: [4000, 2000, 0, 500],
+        lots_stock: [8000, 4000, 0, 1000],
+        normal_crew: None,
+        lots_crew: None,
     };
     let races = Races::from_defs(vec![def]);
 

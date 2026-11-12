@@ -229,7 +229,8 @@ fn actual_force_commands_replay_with_star1_and_current_seam() {
     let replay = recording.finish();
     assert_eq!(replay.seam_rev, crate::SEAM_REV);
     let bytes = replay.encode();
-    assert_eq!(&bytes[..6], b"STAR\x01\0");
+    assert_eq!(&bytes[..4], b"STAR");
+    assert_eq!(u16::from_le_bytes(bytes[4..6].try_into().unwrap()), crate::replay::FORMAT_VERSION);
     let played = Replay::decode(&bytes).unwrap().play(setup.content).unwrap();
     assert_eq!(played.snapshot(), expected);
 }

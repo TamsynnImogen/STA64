@@ -950,6 +950,7 @@ impl Bench {
                     control: ControlRec::Idle,
                 })
                 .collect(),
+            options: r.setup.options.clone(),
             commands: r.commands.clone(),
             digests,
             end_tick: end,

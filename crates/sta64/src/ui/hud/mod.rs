@@ -658,7 +658,7 @@ mod target_tests {
     }
 
     fn player(id: u8, team: u8, relation: Option<Relation>) -> PlayerView {
-        PlayerView { id: PlayerId(id), team: TeamId(team), resources: Vec::new(), officers: [Fixed::ZERO; 2], eliminated: false,
+        PlayerView { crew: None, id: PlayerId(id), team: TeamId(team), resources: Vec::new(), officers: [Fixed::ZERO; 2], eliminated: false,
             relations: relation.map(|r| vec![(PlayerId(if id == 1 { 2 } else { 1 }), r)]).unwrap_or_default() }
     }
 

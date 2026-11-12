@@ -236,7 +236,7 @@ fn welding_rigs_are_skipped_until_the_building_flag_clears() {
         max: None,
         tech_level: None,
     }];
-    let me = PlayerView {
+    let me = PlayerView { crew: None,
         id: P0,
         team: TeamId(0),
         resources: vec![Fixed::from_int(10_000); 4],
