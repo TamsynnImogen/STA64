@@ -143,7 +143,7 @@ fn buttons(feed: &HudFeed, page: Page, native: &NativeCommands) -> Vec<Button> {
             }
         }
     }
-    // Stock A2 compacts visible buttons by command-type priority (0x44aaa0),
+    // Stock A2 compacts visible buttons by command-type priority (read from the executable),
     // not by preferredPosition alone. Equal-priority ordering uses the authored
     // preferred position then shared action order; native qsort ties are unspecified.
     buttons.sort_by_key(|b| {
@@ -157,8 +157,8 @@ fn buttons(feed: &HudFeed, page: Page, native: &NativeCommands) -> Vec<Button> {
     buttons
 }
 
-/// Twice the native static command priority, verified against the pinned A2
-/// command-name table at 0x6f45d4 and priority routine at 0x44aaa0.
+/// Twice the native static command priority (read from the stock A2 command-name
+/// table and priority routine; static evidence).
 fn command_rank(command: &str) -> u8 {
     match command.to_ascii_uppercase().as_str() {
         "NONE" => 0,
