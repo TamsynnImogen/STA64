@@ -224,7 +224,7 @@ impl StockLayout {
         // A window wider than the sheet's canvas (21:9 on the 16:9 variant) stretches the
         // left panels with the x scale; the palette starts no further left than the
         // minimap panel's right edge (the 16:9 sheet's 264 sits inside its 351 wide minimap).
-        if self.screen.x * self.canvas.y > self.screen.y * self.canvas.x * 1.05
+        if self.screen.x * self.canvas.y > self.screen.y * self.canvas.x * 1.001
             && let Some(map) = self.panel("minimap")
         {
             x = x.max(map.x + map.w);
@@ -381,8 +381,14 @@ mod tests {
                 }
             }
         }
+        // Wider than the sheet by any margin (no dead band): 2560x1400 is 1.83 on the 1.78 sheet.
+        {
+            let l = StockLayout::new(&cfg, Vec2::new(2560.0, 1400.0));
+            let map = l.panel("minimap").unwrap();
+            assert!(l.palette().unwrap().origin.x >= map.x + map.w);
+        }
         // Unchanged where the sheet fits: the authored x, scaled.
-        for screen in [Vec2::new(1920.0, 1080.0), Vec2::new(2134.0, 1200.0), Vec2::new(1600.0, 1200.0), Vec2::new(1920.0, 1200.0)] {
+        for screen in [Vec2::new(1920.0, 1080.0), Vec2::new(2134.0, 1200.0), Vec2::new(1600.0, 1200.0), Vec2::new(1920.0, 1200.0), Vec2::new(1280.0, 720.0)] {
             let x = StockLayout::new(&cfg, screen).palette().unwrap().origin.x;
             assert_eq!(x, (264.0 * screen.x / 2134.0).round(), "{screen:?}");
         }
