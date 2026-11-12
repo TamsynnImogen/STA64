@@ -19,8 +19,8 @@
 //!
 //! Race: the trait method [`SoundResolver::set_race`] was the smallest change that works
 //! for `BankResolver`, which already takes a race. `PlaySound` (a seam type) is left alone
-//! and no new resource is needed: [`sync_race`] reads the race of the local player's first
-//! unit from the view and passes it on when it changes. It applies to every event-named
+//! and no new resource is needed: [`sync_race`] reads the race most of the local player's
+//! units belong to ([`sta_content::dominant_race`]) and passes it on when it changes. It applies to every event-named
 //! sound, so advisor lines of AUD-02 and AUD-04 follow it too.
 
 use bevy::prelude::*;
@@ -169,7 +169,9 @@ fn sync_race(
     mut sent: Local<Option<Option<String>>>,
 ) {
     let (Some(link), Some(content), Some(me)) = (link, content, local.and_then(|l| l.0)) else { return };
-    let race = link.curr().units.iter().find(|u| u.owner == me).and_then(|u| content.0.unit(u.def)).map(|d| d.race.clone());
+    // The race most of the player's units belong to, not the first unit's: a skirmish start
+    // begins with shared helper units (`all_ai_pod`, race `borg`) that are nobody's race.
+    let race = sta_content::dominant_race(link.curr().units.iter().filter(|u| u.owner == me).filter_map(|u| content.0.unit(u.def)).map(|d| d.race.as_str())).map(str::to_owned);
     if race.is_some() && sent.as_ref() != Some(&race) {
         resolver.0.set_race(race.as_deref());
         *sent = Some(race);
@@ -275,7 +277,10 @@ mod tests {
         mute.movement = cruiser.movement;
         let mut base = UnitDef::new("base", "starbase");
         base.race = "federation".into();
-        ContentDb::builder().unit(cruiser).unit(warbird).unit(mute).unit(base).build().unwrap()
+        // A shared helper unit of another race, as Roots' start loadouts open with.
+        let mut pod = UnitDef::new("pod", "starbase");
+        pod.race = "borg".into();
+        ContentDb::builder().unit(cruiser).unit(warbird).unit(mute).unit(base).unit(pod).build().unwrap()
     }
 
     const WORLD: &str = r#"{ units: [
@@ -449,6 +454,18 @@ mod tests {
             all.extend(r.frame());
         }
         assert_eq!(all, ["BaseUnderAttack"], "the first simultaneous alert plays; the other is discarded and never queued; repeated hits stay rate limited");
+    }
+
+    #[test]
+    fn a_shared_helper_unit_first_does_not_make_the_player_borg() {
+        // Roots' loadouts put `all_ai_pod` (race borg) first for every race.
+        let r = rig(r#"{ units: [
+            { id: 1, def: "pod", owner: 0, rails: [{ at: 0, pos: { x: 0, y: 0, z: 0 } }] },
+            { id: 2, def: "base", owner: 0, rails: [{ at: 0, pos: { x: 10, y: 0, z: 0 } }] },
+            { id: 3, def: "cruiser", owner: 0, rails: [{ at: 0, pos: { x: 20, y: 0, z: 0 } }] },
+            { id: 9, def: "warbird", owner: 1, rails: [{ at: 0, pos: { x: 500, y: 0, z: 0 } }] },
+          ], events: [] }"#);
+        assert_eq!(*r.races.lock().unwrap(), [Some("federation".to_owned())]);
     }
 
     #[test]
