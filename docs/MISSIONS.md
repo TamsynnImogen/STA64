@@ -394,6 +394,40 @@ STA64 bridge policy, not a new simulation team rule.
 case 2. That gives the Lua conversion work (STA2 Classic Mod campaign, A1
 missions) a checklist straight from the installed content.
 
+## Lua sandbox
+
+Every mission Lua state is built by `sta_mission::sandbox::new_lua`
+(LUA-09, [MODDING_DECISIONS.md](MODDING_DECISIONS.md) D13); no other code
+calls `Lua::new()`. Scripts get an explicit set of standard libraries and
+limits:
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `std_libs()` | base, `coroutine`, `table`, `string`, `utf8`, `math` | `io`, `os`, `package` and `debug` are not opened |
+| `REMOVED_GLOBALS` | `load`, `loadstring`, `loadfile`, `dofile`, `require`, `collectgarbage` | no run-time compilation or loading; `string.dump` is removed too. `include()` (the VFS reader) is the only way to run another script, and it and the main script load as text only (precompiled bytecode is refused). `collectgarbage` goes because the host owns GC timing |
+| `MEMORY_LIMIT` | 256 MiB | an allocation past it raises a Lua memory error |
+| `INSTRUCTION_BUDGET` | 10,000,000 VM instructions | per host entry: the script load, each callback, each monitor, condition-monitor, timer or text-input hook, each `eval`. The hook fires every `HOOK_GRANULARITY` (10,000) instructions. The installed missions use at most about 30,000 in any one entry (`tests/missions.rs` prints the peak) |
+| `STRING_REP_MAX` | 16 MiB | longest `string.rep` result |
+| `PATTERN_SUBJECT_MAX`, `PATTERN_MAX`, `PATTERN_QUANTIFIERS_MAX` | 1024 B, 256 B, 3 | limits for `string.find/match/gmatch/gsub` with a pattern (`find` with the `plain` flag is exempt): the matcher backtracks inside one C call that the instruction hook cannot interrupt |
+
+`setmetatable` refuses a metatable with `__gc`: Lua runs finalizers with hooks
+off, so a looping finalizer could not be stopped.
+
+A runaway loop ends with the Lua error "mission script exceeded its
+instruction budget" in that entry only; the budget is refilled for the next
+one, and a callback that keeps failing is disabled as for any other error.
+`pcall` cannot swallow the error: the budget stays at zero until the host
+refills it and every function call checks it. The instruction count is the
+VM's, so it is the same on every peer. MMM's `:load` userdata methods
+(`Player`) are bound in Rust and are not the removed global.
+
+Known limit: the budget is per entry, not per tick, so a script that registers
+very many callbacks can still cost many entries' worth of time in one tick.
+Each such callback is bounded and a failing one is disabled; a per-tick budget
+is not implemented. Time spent inside one C call that is not capped above
+(for example `table.concat` or `..` on very large strings) is bounded only by
+the memory limit.
+
 ## Determinism
 
 Mission scripts change the simulation, so they must give identical results on
@@ -429,8 +463,9 @@ policies. Native RNG and mission save/resume parity are not claimed.
   `Player.Relation`.
 - [ ] Bind the runtime to `sta_sim` commands so scripts stay deterministic in
   lockstep; deterministic `math.*`.
-- Run every installed `missions/*.lua` headless against stub maps as a
-  regression test.
+- [x] Run every installed mission headless on its own map (LUA-04,
+  `sta_mission/tests/missions.rs`, install-gated): the report lists scripts
+  run, stubbed and failed.
 - [x] Inventory what the stock A1 and A2 mission DLLs call in the engine
   ([MISSION_DLL_API.md](MISSION_DLL_API.md), `tools/mission_dll_inventory.py`):
   A2's `.dsl` scripts call through `g_pSI` (a `ScriptInterface` vtable; 138 of

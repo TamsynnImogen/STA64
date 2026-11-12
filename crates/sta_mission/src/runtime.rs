@@ -251,7 +251,7 @@ impl MissionRuntime {
     ) -> MissionRuntime {
         let shared = Rc::new(RefCell::new(Shared::default()));
         let ctx: ApiShared = Rc::new(RefCell::new(Ctx::new(cfg, seed)));
-        let lua = Lua::new();
+        let lua = crate::sandbox::new_lua();
         let mut errors = Vec::new();
         if let Err(e) = Self::setup(&lua, &shared, &ctx, seed, Arc::new(Mutex::new(read)), path) {
             errors.push(format!("{path}: {e}"));
@@ -315,7 +315,7 @@ impl MissionRuntime {
                 let Some((p, src)) = found else {
                     return Err(mlua::Error::runtime(format!("include {name}: not found")));
                 };
-                lua.load(&src[..]).set_name(format!("@{p}")).exec()
+                lua.load(&src[..]).set_mode(mlua::chunk::ChunkMode::Text).set_name(format!("@{p}")).exec()
             })?,
         )?;
 
@@ -330,7 +330,7 @@ impl MissionRuntime {
             let r = read.lock().unwrap_or_else(|p| p.into_inner());
             r(path).ok_or_else(|| mlua::Error::runtime("not found"))?
         };
-        lua.load(&src[..]).set_name(format!("@{path}")).exec()
+        lua.load(&src[..]).set_mode(mlua::chunk::ChunkMode::Text).set_name(format!("@{path}")).exec()
     }
 
     /// Evaluate a chunk, returning only sealed owned data. Lua handles and
@@ -355,6 +355,7 @@ impl MissionRuntime {
     /// let _: Custom = rt.eval("return 1").unwrap();
     /// ```
     pub fn eval<T: EvalResult>(&self, chunk: &str) -> mlua::Result<T> {
+        crate::sandbox::refill(&self.inner.lua);
         self.inner.lua.load(chunk).eval()
     }
 
@@ -373,7 +374,15 @@ impl MissionRuntime {
     /// rt.eval_with::<(), _>("", Custom).unwrap();
     /// ```
     pub fn eval_with<T: EvalResult, A: EvalArgs>(&self, chunk: &str, args: A) -> mlua::Result<T> {
+        crate::sandbox::refill(&self.inner.lua);
         self.inner.lua.load(chunk).call(args)
+    }
+
+    /// The most VM instructions any one host entry (load, callback, monitor
+    /// pass) has used, against `sandbox::INSTRUCTION_BUDGET`.
+    pub fn instruction_peak(&self) -> u64 {
+        crate::sandbox::refill(&self.inner.lua);
+        crate::sandbox::peak_used(&self.inner.lua)
     }
 
     /// Errors so far: load errors and callback errors, oldest first.
@@ -444,10 +453,12 @@ impl MissionRuntime {
         }
         let time = tick as f64 / TICK_HZ as f64;
         let mut failures = Vec::new();
+        crate::sandbox::refill(&self.inner.lua);
         api::fire_monitors(&self.inner.lua, &self.inner.ctx, &mut failures);
         for cb in self.inner.callbacks.iter_mut().filter(|c| !c.disabled) {
             // A Lua error is a Result; catch_unwind also guards a panic in
             // a Rust function installed into the state.
+            crate::sandbox::refill(&self.inner.lua);
             let call = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| cb.func.call::<MultiValue>(time)));
             let err = match call {
                 Ok(Ok(_)) => continue,
@@ -481,6 +492,7 @@ impl Controller for MissionRuntime {
             failures = api::process_edit_feedback(&mut c);
             api::process_spawns(&mut c);
         }
+        crate::sandbox::refill(&self.inner.lua);
         api::fire_text_input(&self.inner.lua, &self.inner.ctx, &mut failures);
         let room = MAX_LOGGED.saturating_sub(self.errors.len());
         self.errors.extend(failures.into_iter().take(room));

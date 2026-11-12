@@ -109,7 +109,7 @@ fn read_script(vfs: &Vfs, name: &str) -> Option<(String, Vec<u8>)> {
 pub fn dry_run(vfs: &Vfs, path: &str) -> DryRun {
     let log: Log = Rc::new(RefCell::new(DryRun::default()));
     let result = (|| -> mlua::Result<()> {
-        let lua = Lua::new();
+        let lua = crate::sandbox::new_lua();
         let globals = lua.globals();
         // Unknown globals are API stubs.
         let gmt = lua.create_table()?;
@@ -137,7 +137,7 @@ pub fn dry_run(vfs: &Vfs, path: &str) -> DryRun {
                 log.borrow_mut().includes.push(name.clone());
                 match read_script(vfs, &name) {
                     Some((p, src)) => {
-                        if let Err(e) = lua.load(&src[..]).set_name(format!("@{p}")).exec() {
+                        if let Err(e) = lua.load(&src[..]).set_mode(mlua::chunk::ChunkMode::Text).set_name(format!("@{p}")).exec() {
                             log.borrow_mut().errors.push(format!("{p}: {e}"));
                         }
                     }
@@ -149,7 +149,7 @@ pub fn dry_run(vfs: &Vfs, path: &str) -> DryRun {
         }
 
         let src = vfs.read(path).ok_or_else(|| mlua::Error::runtime(format!("{path}: not found")))?.map_err(mlua::Error::external)?;
-        lua.load(&src[..]).set_name(format!("@{path}")).exec()
+        lua.load(&src[..]).set_mode(mlua::chunk::ChunkMode::Text).set_name(format!("@{path}")).exec()
     })();
     if let Err(e) = result {
         log.borrow_mut().errors.push(format!("{path}: {e}"));
