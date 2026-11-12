@@ -143,6 +143,16 @@ pub fn load_map_str(file: &str, text: &str) -> Result<MapDef, Json5Error> {
     })
 }
 
+/// The native map save format (CON-32): `MapDef` as JSON5, which
+/// [`load_map_str`] reads back to an equal `MapDef`. Numbers are plain; enums
+/// are externally tagged (see `docs/CONTENT_JSON5.md`).
+pub fn save_map(map: &MapDef) -> Result<String, Json5Error> {
+    ::json5::to_string(map).map_err(|e| Json5Error::Parse {
+        file: map.name.clone(),
+        message: e.to_string(),
+    })
+}
+
 /// The final pass described in the module docs: rebuild the database with the
 /// few fields the ODF loader leaves to their keys.
 fn finish(
@@ -279,6 +289,21 @@ mod tests {
         assert_eq!(
             load_map_str("two_bases.json5", &text).unwrap(),
             crate::fake::two_bases()
+        );
+    }
+
+    #[test]
+    fn saved_maps_read_back_equal() {
+        let map = crate::fake::two_bases();
+        let text = save_map(&map).unwrap();
+        assert_eq!(load_map_str("saved", &text).unwrap(), map);
+        // Fixed-point values survive exactly, not only the round numbers.
+        let mut odd = map.clone();
+        odd.starts[0].pos.x = Fixed::from_f64(1234.567);
+        odd.objects[0].heading = (Fixed::from_f64(0.6), Fixed::from_f64(0.8));
+        assert_eq!(
+            load_map_str("saved", &save_map(&odd).unwrap()).unwrap(),
+            odd
         );
     }
 

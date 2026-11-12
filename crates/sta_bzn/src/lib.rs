@@ -25,6 +25,7 @@ use std::collections::HashMap;
 
 pub mod a1;
 pub mod sol;
+pub mod write;
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum BznError {

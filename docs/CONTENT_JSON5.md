@@ -72,4 +72,4 @@ and the damage-effect list of `fake::db()`.
 `MapDef` derives serde. `two_bases.json5` is `fake::two_bases()`: plain numbers
 where the sim has `Fixed`, enums externally tagged (`kind: "Nebula"`,
 `shape: {Sphere: {...}}`). The same encoding is the native map save format
-(`sta_bzn::write`, CON-32).
+(`json5::save_map`, CON-32); BZN bytes are written by `sta_bzn::write`.
