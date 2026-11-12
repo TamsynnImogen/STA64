@@ -444,7 +444,7 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
         key: _, odf: _, class: _, is_starbase: _, planet_role: _, planet_crew_gain: _, race: _,
         model: _, scale: _, movement: _, hull: _, shields: _, initial_hull: _, initial_shields: _,
         crew: _, maximum_crew: _, sensor: _, hardpoints: _, build: _, launch: _, radius: _,
-        sounds: _, fx: _, special_energy_max: _, special_energy_rate: _, miner: _,
+        sounds: _, fx: _, special_energy_max: _, special_energy_rate: _, miner: _, miner_off: _,
         max_dilithium: _, mining_rate: _, transfer_rate: _, resource: _, features: _,
         confinement: _, nebula_pathing: _, avoid_me: _, hidden: _, raw: _,
     } = u;
