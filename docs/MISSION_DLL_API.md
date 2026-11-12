@@ -14,37 +14,26 @@ user's own executables each time, and none are recorded here.
 | scripts calling the engine | 36 (`.dsl`; `.drl` rules make no calls) | 59 |
 | engine API size | 371 `ScriptInterface` methods | (imports only) |
 | distinct calls used | 138 | 213 |
-| call sites | 11692 | — |
-| DLL-shaped callable (`A2` / `A1` table) | 43 | 172 |
-| missing callable signatures (missing A1 calls) | 89 | 0 |
-| &nbsp;&nbsp;of the A1 callable: working (sim- or view-backed) | — | 72 |
-| &nbsp;&nbsp;of the A1 callable: presentation event only, no consumer yet | — | 35 |
-| &nbsp;&nbsp;of the A1 callable: request retained and counted, no effect | — | 48 |
-| &nbsp;&nbsp;of the A1 callable: always raises (no data in the world view) | — | 17 |
+| call sites | 11708 | — |
+| A2 DLL-shaped callable | 43 | — |
+| missing A2 callable signatures | 89 | — |
 | MMM job-equivalent, not A2-shaped | 0 | — |
 | bound in STA64's Lua today | — | 6 |
-| in MMM's API, not yet bound | 21 | 0 |
-| no Lua equivalent (STA64 extension needed) | 68 | 0 |
-| script-state plumbing (n/a in Lua) | 6 | 41 |
+| in MMM's API, not yet bound | 21 | 27 |
+| no Lua equivalent (STA64 extension needed) | 68 | 144 |
+| script-state plumbing (n/a in Lua) | 6 | 36 |
 
 - **bound**: an existing `sta_mission` binding does the same job.
 - **A2 DLL-shaped**: the exact normalized ScriptInterface signature has a literal
   production binding registered on the `A2` namespace; this is source-level coverage,
   not proof of native simulation parity.
-- **A1 callable**: the exact imported signature has a literal production binding
-  registered on the `A1` namespace (crates/sta_mission/src/api/a1/); same source-level
-  coverage only: it does not mean the call changes the simulation. The rows below it
-  split the callable ones into working, event-only, retained-without-effect and
-  always-raises (classified from the A1 sources; see that module's README).
 - **MMM-equivalent**: an existing MMM-style Lua operation does the same job, but
   it is not counted as an A2 DLL-shaped callable.
 - **MMM**: Fleet Operations' MMM Lua API ([MMM_API.md](MMM_API.md)) has it (same name, or the
   alias noted), so converted scripts can call it once STA64 binds it.
 - **new**: no Lua API has it; STA64's runtime needs an extension (e.g. A1's bridge scenes).
-- **n/a**: the DLLs' own variables, timers, save/load plumbing and rule/group
-  machinery (`hot_int`, `hot_float`, `timer_int`, `in`/`out`, `linked_list`,
-  `IIIE::create_rule`, `group`, `Load_Rules`); in Lua these are plain variables, monitors,
-  tables and the save system.
+- **n/a**: the DLLs' own variables, timers and save/load plumbing (`hot_int`, `timer_int`,
+  `in`/`out`, `linked_list`); in Lua these are plain variables and the save system.
 
 ## Armada II: `ScriptInterface` methods the scripts call
 
@@ -52,9 +41,9 @@ user's own executables each time, and none are recorded here.
 
 | call | scripts | call sites | status | Lua name |
 |---|---:|---:|:-:|---|
-| `bool in(FileReader &, hot_int *)` | 36 | 661 | n/a |  |
-| `bool out(FileWriter &, hot_int *, char *)` | 36 | 661 | n/a |  |
-| `void ScriptDestroy_hot_int(hot_int *)` | 36 | 697 | n/a |  |
+| `bool in(FileReader &, hot_int *)` | 36 | 658 | n/a |  |
+| `bool out(FileWriter &, hot_int *, char *)` | 36 | 658 | n/a |  |
+| `void ScriptDestroy_hot_int(hot_int *)` | 36 | 694 | n/a |  |
 | `bool in(FileReader &, timer_int *)` | 35 | 657 | n/a |  |
 | `bool out(FileWriter &, timer_int *, char *)` | 35 | 657 | n/a |  |
 | `void ScriptDestroy_timer_int(timer_int *)` | 35 | 657 | n/a |  |
@@ -63,7 +52,7 @@ user's own executables each time, and none are recorded here.
 
 | call | scripts | call sites | status | Lua name |
 |---|---:|---:|:-:|---|
-| `void PlayCinematicMovie(script *, char *, int, bool)` | 24 | 93 | new |  |
+| `void PlayCinematicMovie(script *, char *, int, bool)` | 24 | 92 | new |  |
 
 ### Cineractives and camera (11)
 
@@ -75,7 +64,7 @@ user's own executables each time, and none are recorded here.
 | `void FadeOut(script *, float, float, float, bool)` | 32 | 155 | MMM | `_Cineractive.fadeOut` |
 | `void CineractiveCameraOffset(char *, float, bool)` | 29 | 78 | A2 DLL-shaped | `A2.CineractiveCameraOffset` |
 | `void CineractiveShot(int, int)` | 29 | 81 | A2 DLL-shaped | `A2.CineractiveShot` |
-| `void CenterCamera(int)` | 10 | 65 | A2 DLL-shaped | `A2.CenterCamera` |
+| `void CenterCamera(int)` | 10 | 66 | A2 DLL-shaped | `A2.CenterCamera` |
 | `void CineractiveCameraOffset(float, float, float, bool)` | 3 | 3 | A2 DLL-shaped | `A2.CineractiveCameraOffset` |
 | `void CineractiveConstantSpeed(bool)` | 2 | 2 | A2 DLL-shaped | `A2.CineractiveConstantSpeed` |
 | `void SetCameraZoom(float)` | 2 | 2 | A2 DLL-shaped | `A2.SetCameraZoom` |
@@ -85,7 +74,7 @@ user's own executables each time, and none are recorded here.
 
 | call | scripts | call sites | status | Lua name |
 |---|---:|---:|:-:|---|
-| `int AudioMessage(script *, char const *, bool)` | 36 | 364 | MMM | `_Media.playSound` |
+| `int AudioMessage(script *, char const *, bool)` | 36 | 368 | MMM | `_Media.playSound` |
 | `void RemoveTitle(int, bool)` | 36 | 197 | new |  |
 | `void StopAudioMessage(int)` | 36 | 190 | MMM | `_Media.stopSounds` |
 | `void MinimapMessage(int, int, float)` | 13 | 51 | A2 DLL-shaped | `A2.MinimapMessage` |
@@ -113,8 +102,8 @@ user's own executables each time, and none are recorded here.
 | call | scripts | call sites | status | Lua name |
 |---|---:|---:|:-:|---|
 | `void Goto(int, char *, bool, int)` | 25 | 484 | MMM | `missionGotoPath` |
-| `void Patrol(int, char *)` | 17 | 151 | MMM | `missionPatrolPath` |
-| `void SetImpulseSpeed(int, float)` | 17 | 328 | new |  |
+| `void Patrol(int, char *)` | 17 | 157 | MMM | `missionPatrolPath` |
+| `void SetImpulseSpeed(int, float)` | 17 | 334 | new |  |
 | `void AI_Attack(int, int)` | 10 | 82 | new |  |
 | `void Goto(int, int, bool, int)` | 9 | 40 | MMM | `missionGotoPath` |
 | `int BuildObject(char *, int, char *, int)` | 8 | 77 | new |  |
@@ -148,7 +137,7 @@ user's own executables each time, and none are recorded here.
 
 | call | scripts | call sites | status | Lua name |
 |---|---:|---:|:-:|---|
-| `void SetRealTeam(int, int)` | 13 | 76 | A2 DLL-shaped | `A2.SetRealTeam` |
+| `void SetRealTeam(int, int)` | 13 | 75 | A2 DLL-shaped | `A2.SetRealTeam` |
 | `void SetPerceivedTeam(int, int)` | 12 | 73 | A2 DLL-shaped | `A2.SetPerceivedTeam` |
 | `int GetRealTeam(int)` | 5 | 9 | A2 DLL-shaped | `A2.GetRealTeam` |
 | `void SetRace(int, char const *)` | 2 | 2 | new |  |
@@ -162,9 +151,9 @@ user's own executables each time, and none are recorded here.
 
 | call | scripts | call sites | status | Lua name |
 |---|---:|---:|:-:|---|
-| `int SetSpecialForcesFlag(int, bool)` | 34 | 1800 | new |  |
-| `void RemoveObject(int)` | 22 | 435 | A2 DLL-shaped | `A2.RemoveObject` |
-| `void CraftCannotDie(int, bool)` | 21 | 141 | A2 DLL-shaped | `A2.CraftCannotDie` |
+| `int SetSpecialForcesFlag(int, bool)` | 34 | 1806 | new |  |
+| `void RemoveObject(int)` | 22 | 438 | A2 DLL-shaped | `A2.RemoveObject` |
+| `void CraftCannotDie(int, bool)` | 20 | 139 | A2 DLL-shaped | `A2.CraftCannotDie` |
 | `Vector3 const & GetLocation(int)` | 19 | 163 | A2 DLL-shaped | `A2.GetLocation` |
 | `int GetNearestObjectNearPosition(Vector3 const &, float, int, char *, int, bool, int)` | 12 | 115 | new |  |
 | `void AllowAsTarget(int, int, bool)` | 10 | 74 | new |  |
@@ -175,12 +164,13 @@ user's own executables each time, and none are recorded here.
 | `void DestroyCritical(int)` | 7 | 12 | new |  |
 | `void SetCurrentHealth(int, float)` | 7 | 9 | A2 DLL-shaped | `A2.SetCurrentHealth` |
 | `void Cloak(int)` | 6 | 41 | A2 DLL-shaped | `A2.Cloak` |
-| `void SetShieldPercent(int, float)` | 6 | 20 | new |  |
+| `void SetShieldPercent(int, float)` | 6 | 21 | new |  |
 | `bool RecruitSpecialForces(char *, int, int &)` | 4 | 17 | new |  |
 | `float GetMaxHealth(int)` | 4 | 4 | A2 DLL-shaped | `A2.GetMaxHealth` |
 | `void DisableShieldGenerator(int, bool)` | 4 | 18 | new |  |
 | `void SetPosition(int, char *, int)` | 4 | 63 | new |  |
 | `void DamageSensors(int, float)` | 3 | 3 | new |  |
+| `void DamageShieldGenerator(int, float)` | 3 | 3 | new |  |
 | `void SetSpecialEnergy(int, float)` | 3 | 22 | A2 DLL-shaped | `A2.SetSpecialEnergy` |
 | `SiegeFleet * CreateNewSiegeFleet(void)` | 2 | 4 | new |  |
 | `bool Exists(int)` | 2 | 26 | A2 DLL-shaped | `A2.Exists` |
@@ -190,7 +180,6 @@ user's own executables each time, and none are recorded here.
 | `int CountVisibleUnitsNearObject(int, float, int, bool, char *)` | 2 | 10 | new |  |
 | `int GetNearestShipyard(int, int, bool)` | 2 | 9 | new |  |
 | `void DamageLifeSupport(int, float)` | 2 | 2 | new |  |
-| `void DamageShieldGenerator(int, float)` | 2 | 2 | new |  |
 | `void DamageWeapons(int, float)` | 2 | 2 | new |  |
 | `Vector3 const & GetLocation(char *, int)` | 1 | 18 | new |  |
 | `float GetCurrentHealth(int)` | 1 | 1 | A2 DLL-shaped | `A2.GetCurrentHealth` |
@@ -206,12 +195,12 @@ user's own executables each time, and none are recorded here.
 |---|---:|---:|:-:|---|
 | `void SetCanBeDecommissioned(int, bool)` | 28 | 48 | new |  |
 | `void DisableEngines(int, bool)` | 9 | 34 | A2 DLL-shaped | `A2.DisableEngines` |
-| `void SetGreenAlert(int)` | 9 | 51 | MMM | `Order.GreenAlert` |
+| `void SetGreenAlert(int)` | 9 | 52 | MMM | `Order.GreenAlert` |
 | `void PointAt(int, char *)` | 8 | 64 | MMM | `pointAt` |
 | `void Scout(int)` | 7 | 17 | MMM | `Order.Scout` |
 | `void ExplodeNow(int)` | 6 | 36 | new |  |
 | `void SetRedAlert(int)` | 6 | 35 | MMM | `Order.RedAlert` |
-| `void WaitForEnterKey(script *)` | 6 | 85 | new |  |
+| `void WaitForEnterKey(script *)` | 6 | 86 | new |  |
 | `void ButItCanBeDerelicted(int, bool)` | 5 | 5 | new |  |
 | `void SetAngularVelocity(int, Vector3 const &)` | 5 | 12 | new |  |
 | `void Decloak(int)` | 4 | 23 | A2 DLL-shaped | `A2.Decloak` |
@@ -227,10 +216,10 @@ user's own executables each time, and none are recorded here.
 | `void SetForceOntoMap(int, bool)` | 3 | 91 | A2 DLL-shaped | `A2.SetForceOntoMap` |
 | `void SetPlanetCivPop(int, int)` | 3 | 3 | new |  |
 | `bool IsCompromised(int, int)` | 2 | 14 | new |  |
-| `void LinkWormholes(int, int)` | 2 | 3 | new |  |
 | `bool DoesNotExist(int)` | 1 | 1 | A2 DLL-shaped | `A2.DoesNotExist` |
 | `bool IsStation(int)` | 1 | 1 | A2 DLL-shaped | `A2.IsStation` |
 | `int GetFirstCraft(void)` | 1 | 1 | new |  |
+| `void LinkWormholes(int, int)` | 1 | 2 | new |  |
 | `void LoadCargoShip(int, int)` | 1 | 2 | new |  |
 | `void SetName(int, char const *)` | 1 | 3 | new |  |
 | `void SetWormholeDeleteOnTransport(int, bool)` | 1 | 2 | new |  |
@@ -238,7 +227,7 @@ user's own executables each time, and none are recorded here.
 
 ## Armada I: engine functions the mission DLLs import
 
-### Script state and save/load (41)
+### Script state and save/load (36)
 
 | call | scripts | status | Lua name |
 |---|---:|:-:|---|
@@ -255,18 +244,14 @@ user's own executables each time, and none are recorded here.
 | `list_cell * linked_list::Add_Data(void *)` | 30 | n/a |  |
 | `script * character::new_script(char *)` | 30 | n/a |  |
 | `void script::add_step(int (*)(script *))` | 30 | n/a |  |
-| `void hot_type::add_dependent_rule(rule *)` | 29 | n/a |  |
-| `void hot_type::remove_dependent_rule(rule *)` | 29 | n/a |  |
 | `dirty_int ALWAYS_EVALUATE` | 28 | n/a |  |
 | `bool in(_iobuf *, int *, unsigned int)` | 26 | n/a |  |
 | `bool in(_iobuf *, timer_int *)` | 26 | n/a |  |
 | `bool out(_iobuf *, int *, unsigned int, char *)` | 26 | n/a |  |
 | `bool out(_iobuf *, timer_int *, char *)` | 26 | n/a |  |
 | `hot_int isCineractiveCancel` | 26 | n/a |  |
-| `rule * IIIE::create_rule(int (*)(void), void (*)(void), char *)` | 26 | n/a |  |
 | `timer_int::timer_int(char *)` | 26 | n/a |  |
 | `timer_int::~timer_int(void)` | 26 | n/a |  |
-| `void IIIE::trash_rule(rule *)` | 26 | n/a |  |
 | `void timer_int::start(float)` | 26 | n/a | `Timer.start` |
 | `void timer_int::stop(void)` | 24 | n/a | `Order.Stop` |
 | `bool in(_iobuf *, Vector3 *, unsigned int)` | 18 | n/a |  |
@@ -278,7 +263,6 @@ user's own executables each time, and none are recorded here.
 | `bool in(_iobuf *, float *, unsigned int)` | 3 | n/a |  |
 | `bool out(_iobuf *, float *, unsigned int, char *)` | 3 | n/a |  |
 | `rule * IIIE::create_rule(int (*)(character &), void (*)(character &), char *)` | 3 | n/a |  |
-| `void IIIE::trash_rule(char *)` | 3 | n/a |  |
 | `void group::add_group_entry_function(void (*)(character &), void (*)(character &))` | 3 | n/a |  |
 | `void group::remove_group_entry_function(void (*)(character &), void (*)(character &))` | 3 | n/a |  |
 | `hot_int moons_team_1` | 2 | n/a |  |
@@ -288,213 +272,218 @@ user's own executables each time, and none are recorded here.
 
 | call | scripts | status | Lua name |
 |---|---:|:-:|---|
-| `void ShowBridgeOnScreen(bool)` | 21 | A1 callable | `A1.ShowBridgeOnScreen` |
-| `void ShowBridgeScene(bool)` | 21 | A1 callable | `A1.ShowBridgeScene` |
-| `void SetBridgeSceneRace(BridgeDisplay::BridgeType)` | 20 | A1 callable | `A1.SetBridgeSceneRace` |
-| `void PlayBridgeMovie(char *, int)` | 19 | A1 callable | `A1.PlayBridgeMovie` |
-| `void PreLoadBridgeScene(BridgeDisplay::BridgeType)` | 19 | A1 callable | `A1.PreLoadBridgeScene` |
-| `void StopMovie(void)` | 19 | A1 callable | `A1.StopMovie` |
-| `bool IsMoviePlaying(void)` | 10 | A1 callable | `A1.IsMoviePlaying` |
+| `void ShowBridgeOnScreen(bool)` | 21 | new |  |
+| `void ShowBridgeScene(bool)` | 21 | new |  |
+| `void SetBridgeSceneRace(BridgeDisplay::BridgeType)` | 20 | new |  |
+| `void PlayBridgeMovie(char *, int)` | 19 | new |  |
+| `void PreLoadBridgeScene(BridgeDisplay::BridgeType)` | 19 | new |  |
+| `void StopMovie(void)` | 19 | MMM | `_Media.stopMovie` |
+| `bool IsMoviePlaying(void)` | 10 | new |  |
 
 ### Cineractives and camera (14)
 
 | call | scripts | status | Lua name |
 |---|---:|:-:|---|
-| `void CineractiveEnd(void)` | 26 | A1 callable | `A1.CineractiveEnd` |
-| `void CineractiveStart(void)` | 26 | A1 callable | `A1.CineractiveStart` |
-| `void CineractiveShot(int, int)` | 25 | A1 callable | `A1.CineractiveShot` |
-| `void CineractiveShot(char *, float, int)` | 21 | A1 callable | `A1.CineractiveShot` |
-| `void CineractiveShot(char *, int, int)` | 21 | A1 callable | `A1.CineractiveShot` |
-| `void FadeIn(float, float, float)` | 20 | A1 callable | `A1.FadeIn` |
-| `void FadeOut(float, float, float)` | 20 | A1 callable | `A1.FadeOut` |
-| `void CineractiveCameraOffset(char *, float, bool)` | 18 | A1 callable | `A1.CineractiveCameraOffset` |
-| `void CineractiveShot(char *, float, char *, int)` | 16 | A1 callable | `A1.CineractiveShot` |
-| `void CineractiveCameraOffset(float, float, float, bool)` | 13 | A1 callable | `A1.CineractiveCameraOffset` |
-| `void CineractiveShot(char *, int, char *, int)` | 13 | A1 callable | `A1.CineractiveShot` |
-| `void CenterCamera(char *, int)` | 5 | A1 callable | `A1.CenterCamera` |
-| `void CineractiveShot(char *, float, char *, float)` | 5 | A1 callable | `A1.CineractiveShot` |
-| `void CineractiveShot(char *, int, char *, float)` | 3 | A1 callable | `A1.CineractiveShot` |
+| `void CineractiveEnd(void)` | 26 | new |  |
+| `void CineractiveStart(void)` | 26 | new |  |
+| `void CineractiveShot(int, int)` | 25 | new |  |
+| `void CineractiveShot(char *, float, int)` | 21 | new |  |
+| `void CineractiveShot(char *, int, int)` | 21 | new |  |
+| `void FadeIn(float, float, float)` | 20 | MMM | `_Cineractive.fadeIn` |
+| `void FadeOut(float, float, float)` | 20 | MMM | `_Cineractive.fadeOut` |
+| `void CineractiveCameraOffset(char *, float, bool)` | 18 | MMM | `_Cineractive.setCameraOffset` |
+| `void CineractiveShot(char *, float, char *, int)` | 16 | new |  |
+| `void CineractiveCameraOffset(float, float, float, bool)` | 13 | MMM | `_Cineractive.setCameraOffset` |
+| `void CineractiveShot(char *, int, char *, int)` | 13 | new |  |
+| `void CenterCamera(char *, int)` | 5 | new |  |
+| `void CineractiveShot(char *, float, char *, float)` | 5 | new |  |
+| `void CineractiveShot(char *, int, char *, float)` | 3 | new |  |
 
 ### Titles, text and objectives (11)
 
 | call | scripts | status | Lua name |
 |---|---:|:-:|---|
-| `int AudioMessage(char const *)` | 26 | A1 callable | `A1.AudioMessage` |
-| `void StopAudioMessage(int)` | 25 | A1 callable | `A1.StopAudioMessage` |
-| `void ObjectivesDisplay_Set_Visibility(bool)` | 23 | A1 callable | `A1.ObjectivesDisplay_Set_Visibility` |
-| `int ShowTitle(int, int, int, int, char const *, bool)` | 22 | A1 callable | `A1.ShowTitle` |
-| `void RemoveTitle(int, bool)` | 22 | A1 callable | `A1.RemoveTitle` |
-| `int ShowSubtitle(int, int, int, int, char const *, bool)` | 20 | A1 callable | `A1.ShowSubtitle` |
-| `void ObjectivesDisplay_Set_Text_From_File(char *)` | 20 | A1 callable | `A1.ObjectivesDisplay_Set_Text_From_File` |
-| `void RemoveSubtitle(int, bool)` | 18 | A1 callable | `A1.RemoveSubtitle` |
-| `bool IsAudioMessageDone(int)` | 16 | A1 callable | `A1.IsAudioMessageDone` |
-| `void MinimapMessage(int, int, float)` | 11 | A1 callable | `A1.MinimapMessage` |
-| `void MinimapMessage(char *, int, float, int)` | 5 | A1 callable | `A1.MinimapMessage` |
+| `int AudioMessage(char const *)` | 26 | MMM | `_Media.playSound` |
+| `void StopAudioMessage(int)` | 25 | MMM | `_Media.stopSounds` |
+| `void ObjectivesDisplay_Set_Visibility(bool)` | 23 | new |  |
+| `int ShowTitle(int, int, int, int, char const *, bool)` | 22 | new |  |
+| `void RemoveTitle(int, bool)` | 22 | new |  |
+| `int ShowSubtitle(int, int, int, int, char const *, bool)` | 20 | new |  |
+| `void ObjectivesDisplay_Set_Text_From_File(char *)` | 20 | new |  |
+| `void RemoveSubtitle(int, bool)` | 18 | new |  |
+| `bool IsAudioMessageDone(int)` | 16 | new |  |
+| `void MinimapMessage(int, int, float)` | 11 | new |  |
+| `void MinimapMessage(char *, int, float, int)` | 5 | new |  |
 
 ### Orders and AI (30)
 
 | call | scripts | status | Lua name |
 |---|---:|:-:|---|
-| `void Goto(int, char *, int)` | 26 | A1 callable | `A1.Goto` |
-| `int BuildObject(char *, int, char *, int)` | 25 | A1 callable | `A1.BuildObject` |
-| `void SetWarpSpeed(int, float)` | 21 | A1 callable | `A1.SetWarpSpeed` |
-| `void Stop(int, int)` | 20 | A1 callable | `A1.Stop` |
-| `void AI_Team_Load_AIP(int, char *)` | 18 | A1 callable | `A1.AI_Team_Load_AIP` |
-| `void Goto(int, int, int)` | 18 | A1 callable | `A1.Goto` |
-| `void Attack(int, int, int)` | 13 | A1 callable | `A1.Attack` |
-| `void AI_Attack(int, int)` | 12 | A1 callable | `A1.AI_Attack` |
-| `void ResetWarpSpeed(int)` | 10 | A1 callable | `A1.ResetWarpSpeed` |
-| `void AI_Attack(int, Vector3)` | 9 | A1 callable | `A1.AI_Attack` |
-| `void Attack(int, Vector3)` | 8 | A1 callable | `A1.Attack` |
-| `void SetImpulseSpeed(int, float)` | 5 | A1 callable | `A1.SetImpulseSpeed` |
-| `void SetSpecialWeaponAttackInterval(int, float)` | 4 | A1 callable | `A1.SetSpecialWeaponAttackInterval` |
-| `void Build(int, char *)` | 3 | A1 callable | `A1.Build` |
-| `void Patrol(int, char *)` | 3 | A1 callable | `A1.Patrol` |
-| `void Special_Attack(int, Vector3, char const *)` | 3 | A1 callable | `A1.Special_Attack` |
-| `void Special_Attack(int, int, char const *)` | 3 | A1 callable | `A1.Special_Attack` |
-| `void StopAllShips(int, char const *, bool, bool)` | 3 | A1 callable | `A1.StopAllShips` |
-| `bool InStopMode(int)` | 2 | A1 callable | `A1.InStopMode` |
-| `bool OutOfSpecialAttackMode(int)` | 2 | A1 callable | `A1.OutOfSpecialAttackMode` |
-| `void Mine(int, int)` | 2 | A1 callable | `A1.Mine` |
-| `void Special_Attack(int, char const *)` | 2 | A1 callable | `A1.Special_Attack` |
-| `Vector3 GetAttackLocation(int, int)` | 1 | A1 callable | `A1.GetAttackLocation` |
-| `bool InAttackMode(int)` | 1 | A1 callable | `A1.InAttackMode` |
-| `bool UnderAttack(int, float)` | 1 | A1 callable | `A1.UnderAttack` |
-| `int BuildObject(char *, int, int, float, float, float)` | 1 | A1 callable | `A1.BuildObject` |
-| `int GetAllyShipAttacks(int, int)` | 1 | A1 callable | `A1.GetAllyShipAttacks` |
-| `int GetAllyStationAttacks(int, int)` | 1 | A1 callable | `A1.GetAllyStationAttacks` |
-| `void AI_Attack(int)` | 1 | A1 callable | `A1.AI_Attack` |
-| `void AttackMainEnemyBase(int, bool)` | 1 | A1 callable | `A1.AttackMainEnemyBase` |
+| `void Goto(int, char *, int)` | 26 | MMM | `missionGotoPath` |
+| `int BuildObject(char *, int, char *, int)` | 25 | new |  |
+| `void SetWarpSpeed(int, float)` | 21 | new |  |
+| `void Stop(int, int)` | 20 | MMM | `Order.Stop` |
+| `void AI_Team_Load_AIP(int, char *)` | 18 | new |  |
+| `void Goto(int, int, int)` | 18 | MMM | `missionGotoPath` |
+| `void Attack(int, int, int)` | 13 | MMM | `Order.Attack` |
+| `void AI_Attack(int, int)` | 12 | new |  |
+| `void ResetWarpSpeed(int)` | 10 | new |  |
+| `void AI_Attack(int, Vector3)` | 9 | new |  |
+| `void Attack(int, Vector3)` | 8 | MMM | `Order.Attack` |
+| `void SetImpulseSpeed(int, float)` | 5 | new |  |
+| `void SetSpecialWeaponAttackInterval(int, float)` | 4 | new |  |
+| `void Build(int, char *)` | 3 | MMM | `Order.Build` |
+| `void Patrol(int, char *)` | 3 | MMM | `missionPatrolPath` |
+| `void Special_Attack(int, Vector3, char const *)` | 3 | new |  |
+| `void Special_Attack(int, int, char const *)` | 3 | new |  |
+| `void StopAllShips(int, char const *, bool, bool)` | 3 | new |  |
+| `bool InStopMode(int)` | 2 | new |  |
+| `bool OutOfSpecialAttackMode(int)` | 2 | new |  |
+| `void Mine(int, int)` | 2 | MMM | `Type.Mine` |
+| `void Special_Attack(int, char const *)` | 2 | new |  |
+| `Vector3 GetAttackLocation(int, int)` | 1 | new |  |
+| `bool InAttackMode(int)` | 1 | new |  |
+| `bool UnderAttack(int, float)` | 1 | MMM | `underAttack` |
+| `int BuildObject(char *, int, int, float, float, float)` | 1 | new |  |
+| `int GetAllyShipAttacks(int, int)` | 1 | new |  |
+| `int GetAllyStationAttacks(int, int)` | 1 | new |  |
+| `void AI_Attack(int)` | 1 | new |  |
+| `void AttackMainEnemyBase(int, bool)` | 1 | new |  |
 
 ### Resources and crew (11)
 
 | call | scripts | status | Lua name |
 |---|---:|:-:|---|
-| `int SetDilithium(int, int)` | 20 | A1 callable | `A1.SetDilithium` |
-| `float SetOfficers(int, float)` | 9 | A1 callable | `A1.SetOfficers` |
-| `float SetTeamCrew(int, float)` | 9 | A1 callable | `A1.SetTeamCrew` |
-| `float AddCrew(int, float)` | 2 | A1 callable | `A1.AddCrew` |
-| `float AddOfficers(int, float)` | 2 | A1 callable | `A1.AddOfficers` |
-| `float GetCrew(int)` | 2 | A1 callable | `A1.GetCrew` |
-| `void SetCrew(int, float)` | 2 | A1 callable | `A1.SetCrew` |
-| `float GetDilithiumOnFreighter(int)` | 1 | A1 callable | `A1.GetDilithiumOnFreighter` |
-| `int AddDilithium(int, int)` | 1 | A1 callable | `A1.AddDilithium` |
-| `void EndCredits(void)` | 1 | A1 callable | `A1.EndCredits` |
-| `void StartCredits(void)` | 1 | A1 callable | `A1.StartCredits` |
+| `int SetDilithium(int, int)` | 20 | new |  |
+| `float SetOfficers(int, float)` | 9 | new |  |
+| `float SetTeamCrew(int, float)` | 9 | new |  |
+| `float AddCrew(int, float)` | 2 | new |  |
+| `float AddOfficers(int, float)` | 2 | new |  |
+| `float GetCrew(int)` | 2 | new |  |
+| `void SetCrew(int, float)` | 2 | new |  |
+| `float GetDilithiumOnFreighter(int)` | 1 | new |  |
+| `int AddDilithium(int, int)` | 1 | MMM | `Order.GiveResource` |
+| `void EndCredits(void)` | 1 | new |  |
+| `void StartCredits(void)` | 1 | new |  |
 
 ### Teams, players and relations (16)
 
 | call | scripts | status | Lua name |
 |---|---:|:-:|---|
-| `void SetRelation(int, int, Team::TeamRelation)` | 16 | A1 callable | `A1.SetRelation` |
-| `void DisableAllAITeams(void)` | 12 | A1 callable | `A1.DisableAllAITeams` |
-| `void EnableAllAITeams(void)` | 12 | A1 callable | `A1.EnableAllAITeams` |
-| `int GetNearestEnemy(int, float)` | 7 | A1 callable | `A1.GetNearestEnemy` |
-| `int GetRealTeam(int)` | 7 | A1 callable | `A1.GetRealTeam` |
-| `void SetRealTeam(int, int)` | 7 | A1 callable | `A1.SetRealTeam` |
-| `void SetPerceivedTeam(int, int)` | 5 | A1 callable | `A1.SetPerceivedTeam` |
-| `void SetRace(int, char const *)` | 3 | A1 callable | `A1.SetRace` |
-| `void DisableTeam(int)` | 2 | A1 callable | `A1.DisableTeam` |
-| `void EnableTeam(int)` | 2 | A1 callable | `A1.EnableTeam` |
-| `void SetIsAITeam(int const &, bool const &)` | 2 | A1 callable | `A1.SetIsAITeam` |
-| `bool IsVisibleToTeam(int, int)` | 1 | A1 callable | `A1.IsVisibleToTeam` |
-| `int GetPercievedTeamOfFlag(int)` | 1 | A1 callable | `A1.GetPercievedTeamOfFlag` |
-| `int GetRealTeamOfFlag(int)` | 1 | A1 callable | `A1.GetRealTeamOfFlag` |
-| `void Add_Team_To_Group(int, group &)` | 1 | A1 callable | `A1.Add_Team_To_Group` |
-| `void SetWormholeTeam(int, int)` | 1 | A1 callable | `A1.SetWormholeTeam` |
+| `void SetRelation(int, int, Team::TeamRelation)` | 16 | new |  |
+| `void DisableAllAITeams(void)` | 12 | new |  |
+| `void EnableAllAITeams(void)` | 12 | new |  |
+| `int GetNearestEnemy(int, float)` | 7 | new |  |
+| `int GetRealTeam(int)` | 7 | new |  |
+| `void SetRealTeam(int, int)` | 7 | new |  |
+| `void SetPerceivedTeam(int, int)` | 5 | new |  |
+| `void SetRace(int, char const *)` | 3 | new |  |
+| `void DisableTeam(int)` | 2 | new |  |
+| `void EnableTeam(int)` | 2 | new |  |
+| `void SetIsAITeam(int const &, bool const &)` | 2 | new |  |
+| `bool IsVisibleToTeam(int, int)` | 1 | new |  |
+| `int GetPercievedTeamOfFlag(int)` | 1 | new |  |
+| `int GetRealTeamOfFlag(int)` | 1 | new |  |
+| `void Add_Team_To_Group(int, group &)` | 1 | new |  |
+| `void SetWormholeTeam(int, int)` | 1 | new |  |
 
 ### Objects: create, find, query, change (48)
 
 | call | scripts | status | Lua name |
 |---|---:|:-:|---|
-| `int GetHandle(char *)` | 26 | A1 callable | `A1.GetHandle` |
-| `void GridVisible(bool)` | 26 | A1 callable | `A1.GridVisible` |
-| `void SetPosition(int, char *)` | 24 | A1 callable | `A1.SetPosition` |
-| `void SetSpecialForcesFlag(int, bool)` | 23 | A1 callable | `A1.SetSpecialForcesFlag` |
-| `void RemoveObject(int)` | 20 | A1 callable | `A1.RemoveObject` |
-| `int CountUnits(int, char *)` | 17 | A1 callable | `A1.CountUnits` |
-| `Vector3 const & GetLocation(int)` | 16 | A1 callable | `A1.GetLocation` |
-| `float GetDistance(int &, char *, int)` | 13 | A1 callable | `A1.GetDistance` |
-| `void CraftCannotDie(int, bool)` | 13 | A1 callable | `A1.CraftCannotDie` |
-| `void SetShieldPercent(int, float)` | 11 | A1 callable | `A1.SetShieldPercent` |
-| `float GetDistance(int &, int &)` | 10 | A1 callable | `A1.GetDistance` |
-| `float GetShieldPercent(int)` | 10 | A1 callable | `A1.GetShieldPercent` |
-| `int CountUnitsNearPoint(char *, float, int, char *, int)` | 10 | A1 callable | `A1.CountUnitsNearPoint` |
-| `void DestroyCritical(int)` | 10 | A1 callable | `A1.DestroyCritical` |
-| `bool IsAlive(int)` | 9 | A1 callable | `A1.IsAlive` |
-| `int CountUnitsNearObject(int, float, int, char *)` | 9 | A1 callable | `A1.CountUnitsNearObject` |
-| `int GetNearestStarbase(int, int)` | 9 | A1 callable | `A1.GetNearestStarbase` |
-| `Vector3 const & GetLocation(char *, int)` | 6 | A1 callable | `A1.GetLocation` |
-| `void Cloak(int)` | 6 | A1 callable | `A1.Cloak` |
-| `void DisableWeapons(int, bool)` | 6 | A1 callable | `A1.DisableWeapons` |
-| `void ImmediateCloak(int)` | 6 | A1 callable | `A1.ImmediateCloak` |
-| `bool RecruitSpecialForces(char *, int, int &)` | 5 | A1 callable | `A1.RecruitSpecialForces` |
-| `void FadeRemove(void)` | 5 | A1 callable | `A1.FadeRemove` |
-| `void RemoveAllCraft(bool, int)` | 5 | A1 callable | `A1.RemoveAllCraft` |
-| `void DestroyShieldGenerator(int)` | 4 | A1 callable | `A1.DestroyShieldGenerator` |
-| `void SetSpecialEnergy(int, float)` | 4 | A1 callable | `A1.SetSpecialEnergy` |
-| `float GetRealShieldPercent(int)` | 3 | A1 callable | `A1.GetRealShieldPercent` |
-| `int CreateSpecialFlag(int, char *)` | 3 | A1 callable | `A1.CreateSpecialFlag` |
-| `int GetLocationOfFlag(int)` | 3 | A1 callable | `A1.GetLocationOfFlag` |
-| `void DestroyLifeSupport(int)` | 3 | A1 callable | `A1.DestroyLifeSupport` |
-| `void DestroyWeapons(int)` | 3 | A1 callable | `A1.DestroyWeapons` |
-| `void SetMaxShields(int, float)` | 3 | A1 callable | `A1.SetMaxShields` |
-| `bool Exists(int)` | 2 | A1 callable | `A1.Exists` |
-| `int CountVisibleUnits(int, int, bool, char *)` | 2 | A1 callable | `A1.CountVisibleUnits` |
-| `int CountVisibleUnitsNearObject(int, float, int, bool, char *)` | 2 | A1 callable | `A1.CountVisibleUnitsNearObject` |
-| `int GetNearestObjectNearMe(int, float, int, char *, int, bool)` | 2 | A1 callable | `A1.GetNearestObjectNearMe` |
-| `int ReplaceObject(int, char *)` | 2 | A1 callable | `A1.ReplaceObject` |
-| `void DestroyEngines(int)` | 2 | A1 callable | `A1.DestroyEngines` |
-| `void DisableShieldGenerator(int, bool)` | 2 | A1 callable | `A1.DisableShieldGenerator` |
-| `void RemoveAllObjects(void)` | 2 | A1 callable | `A1.RemoveAllObjects` |
-| `void RestrictSpecialFlag(int, SpecialFlag::Restriction)` | 2 | A1 callable | `A1.RestrictSpecialFlag` |
-| `void SearchAndDestroy(int)` | 2 | A1 callable | `A1.SearchAndDestroy` |
-| `int GetNearestObjectNearPosition(Vector3 const &, float, int, char *, int, bool, int)` | 1 | A1 callable | `A1.GetNearestObjectNearPosition` |
-| `int GetNearestTranswarpGate(int)` | 1 | A1 callable | `A1.GetNearestTranswarpGate` |
-| `void AllowMultipleSpecialWeaponFire(int, bool)` | 1 | A1 callable | `A1.AllowMultipleSpecialWeaponFire` |
-| `void DestroySensors(int)` | 1 | A1 callable | `A1.DestroySensors` |
-| `void RemoveBillboardEffect(int)` | 1 | A1 callable | `A1.RemoveBillboardEffect` |
-| `void RestrictSpecialFlag(int, SpecialFlag::Restriction, int)` | 1 | A1 callable | `A1.RestrictSpecialFlag` |
+| `int GetHandle(char *)` | 26 | new |  |
+| `void GridVisible(bool)` | 26 | new |  |
+| `void SetPosition(int, char *)` | 24 | new |  |
+| `void SetSpecialForcesFlag(int, bool)` | 23 | new |  |
+| `void RemoveObject(int)` | 20 | bound | `Entity:remove` |
+| `int CountUnits(int, char *)` | 17 | new |  |
+| `Vector3 const & GetLocation(int)` | 16 | bound | `Entity.position` |
+| `float GetDistance(int &, char *, int)` | 13 | new |  |
+| `void CraftCannotDie(int, bool)` | 13 | bound | `Entity.invincible` |
+| `void SetShieldPercent(int, float)` | 11 | new |  |
+| `float GetDistance(int &, int &)` | 10 | new |  |
+| `float GetShieldPercent(int)` | 10 | new |  |
+| `int CountUnitsNearPoint(char *, float, int, char *, int)` | 10 | new |  |
+| `void DestroyCritical(int)` | 10 | new |  |
+| `bool IsAlive(int)` | 9 | bound | `Entity.destroyed / Entity.valid` |
+| `int CountUnitsNearObject(int, float, int, char *)` | 9 | new |  |
+| `int GetNearestStarbase(int, int)` | 9 | new |  |
+| `Vector3 const & GetLocation(char *, int)` | 6 | new |  |
+| `void Cloak(int)` | 6 | bound | `Entity:cloak` |
+| `void DisableWeapons(int, bool)` | 6 | MMM | `DamageFlags.DisableWeapons` |
+| `void ImmediateCloak(int)` | 6 | MMM | `immediateCloak` |
+| `bool RecruitSpecialForces(char *, int, int &)` | 5 | new |  |
+| `void FadeRemove(void)` | 5 | new |  |
+| `void RemoveAllCraft(bool, int)` | 5 | new |  |
+| `void DestroyShieldGenerator(int)` | 4 | new |  |
+| `void SetSpecialEnergy(int, float)` | 4 | new |  |
+| `float GetRealShieldPercent(int)` | 3 | new |  |
+| `int CreateSpecialFlag(int, char *)` | 3 | new |  |
+| `int GetLocationOfFlag(int)` | 3 | new |  |
+| `void DestroyLifeSupport(int)` | 3 | new |  |
+| `void DestroyWeapons(int)` | 3 | new |  |
+| `void SetMaxShields(int, float)` | 3 | new |  |
+| `bool Exists(int)` | 2 | MMM | `Path.exists` |
+| `int CountVisibleUnits(int, int, bool, char *)` | 2 | new |  |
+| `int CountVisibleUnitsNearObject(int, float, int, bool, char *)` | 2 | new |  |
+| `int GetNearestObjectNearMe(int, float, int, char *, int, bool)` | 2 | new |  |
+| `int ReplaceObject(int, char *)` | 2 | new |  |
+| `void DestroyEngines(int)` | 2 | new |  |
+| `void DisableShieldGenerator(int, bool)` | 2 | new |  |
+| `void RemoveAllObjects(void)` | 2 | new |  |
+| `void RestrictSpecialFlag(int, SpecialFlag::Restriction)` | 2 | new |  |
+| `void SearchAndDestroy(int)` | 2 | MMM | `Order.SearchAndDestroy` |
+| `int GetNearestObjectNearPosition(Vector3 const &, float, int, char *, int, bool, int)` | 1 | new |  |
+| `int GetNearestTranswarpGate(int)` | 1 | new |  |
+| `void AllowMultipleSpecialWeaponFire(int, bool)` | 1 | new |  |
+| `void DestroySensors(int)` | 1 | new |  |
+| `void RemoveBillboardEffect(int)` | 1 | new |  |
+| `void RestrictSpecialFlag(int, SpecialFlag::Restriction, int)` | 1 | new |  |
 
-### Other (35)
+### Other (40)
 
 | call | scripts | status | Lua name |
 |---|---:|:-:|---|
-| `float GetTime(void)` | 24 | A1 callable | `A1.GetTime` |
-| `void FailMission(float, char *)` | 24 | A1 callable | `A1.FailMission` |
-| `void SucceedMission(float, char *)` | 24 | A1 callable | `A1.SucceedMission` |
-| `bool IsCompromised(int, int)` | 20 | A1 callable | `A1.IsCompromised` |
-| `void ObstacleAvoidence(bool)` | 13 | A1 callable | `A1.ObstacleAvoidence` |
-| `void PointAt(int, int)` | 10 | A1 callable | `A1.PointAt` |
-| `bool IsValid(int)` | 9 | A1 callable | `A1.IsValid` |
-| `void UnpauseSimulation(void)` | 9 | A1 callable | `A1.UnpauseSimulation` |
-| `void PauseSimulation(void)` | 8 | A1 callable | `A1.PauseSimulation` |
-| `void PointAt(int, char *)` | 8 | A1 callable | `A1.PointAt` |
-| `bool InQueue(int)` | 7 | A1 callable | `A1.InQueue` |
-| `void Decloak(int)` | 7 | A1 callable | `A1.Decloak` |
-| `void LinkWormHoles(int, int)` | 7 | A1 callable | `A1.LinkWormHoles` |
-| `void SetRedAlert(int)` | 7 | A1 callable | `A1.SetRedAlert` |
-| `void EnableLight(int, bool)` | 6 | A1 callable | `A1.EnableLight` |
-| `void SetGreenAlert(int)` | 6 | A1 callable | `A1.SetGreenAlert` |
-| `bool IsExploding(int)` | 5 | A1 callable | `A1.IsExploding` |
-| `group::group(char *)` | 4 | A1 callable | `A1.GroupNew` |
-| `group::~group(void)` | 4 | A1 callable | `A1.GroupDelete` |
-| `int Load_Rules(char *)` | 4 | A1 callable | `A1.Load_Rules` |
-| `void Starfield_Load_Background_Geometry(char *)` | 4 | A1 callable | `A1.Starfield_Load_Background_Geometry` |
-| `void DisableEngines(int, bool)` | 3 | A1 callable | `A1.DisableEngines` |
-| `void TransferFlag(int, int)` | 3 | A1 callable | `A1.TransferFlag` |
-| `bool DoesNotExist(int)` | 2 | A1 callable | `A1.DoesNotExist` |
-| `float hot_float::operator float(void)` | 2 | A1 callable | `A1.hot_float_value` |
-| `hot_float strength_team_1` | 2 | A1 callable | `A1.strength_team_1` |
-| `hot_float strength_team_2` | 2 | A1 callable | `A1.strength_team_2` |
-| `void SetYellowAlert(int)` | 2 | A1 callable | `A1.SetYellowAlert` |
-| `bool IsDerelict(int)` | 1 | A1 callable | `A1.IsDerelict` |
-| `bool IsThereARomulanSpyOnShip(int)` | 1 | A1 callable | `A1.IsThereARomulanSpyOnShip` |
-| `int GetTranswarpExitWormhole(int)` | 1 | A1 callable | `A1.GetTranswarpExitWormhole` |
-| `int Load_Action_Scripts(char *)` | 1 | A1 callable | `A1.Load_Action_Scripts` |
-| `void AddTransporterEffect(int)` | 1 | A1 callable | `A1.AddTransporterEffect` |
-| `void ClearRestrictions(int)` | 1 | A1 callable | `A1.ClearRestrictions` |
-| `void EnableWormholeTravel(int, bool)` | 1 | A1 callable | `A1.EnableWormholeTravel` |
+| `void hot_type::add_dependent_rule(rule *)` | 29 | new |  |
+| `void hot_type::remove_dependent_rule(rule *)` | 29 | new |  |
+| `rule * IIIE::create_rule(int (*)(void), void (*)(void), char *)` | 26 | new |  |
+| `void IIIE::trash_rule(rule *)` | 26 | new |  |
+| `float GetTime(void)` | 24 | new |  |
+| `void FailMission(float, char *)` | 24 | new |  |
+| `void SucceedMission(float, char *)` | 24 | new |  |
+| `bool IsCompromised(int, int)` | 20 | new |  |
+| `void ObstacleAvoidence(bool)` | 13 | new |  |
+| `void PointAt(int, int)` | 10 | MMM | `pointAt` |
+| `bool IsValid(int)` | 9 | new |  |
+| `void UnpauseSimulation(void)` | 9 | new |  |
+| `void PauseSimulation(void)` | 8 | new |  |
+| `void PointAt(int, char *)` | 8 | MMM | `pointAt` |
+| `bool InQueue(int)` | 7 | new |  |
+| `void Decloak(int)` | 7 | bound | `Entity:decloak` |
+| `void LinkWormHoles(int, int)` | 7 | new |  |
+| `void SetRedAlert(int)` | 7 | MMM | `Order.RedAlert` |
+| `void EnableLight(int, bool)` | 6 | new |  |
+| `void SetGreenAlert(int)` | 6 | MMM | `Order.GreenAlert` |
+| `bool IsExploding(int)` | 5 | new |  |
+| `group::group(char *)` | 4 | new |  |
+| `group::~group(void)` | 4 | new |  |
+| `int Load_Rules(char *)` | 4 | new |  |
+| `void Starfield_Load_Background_Geometry(char *)` | 4 | new |  |
+| `void DisableEngines(int, bool)` | 3 | MMM | `DamageFlags.DisableEngines` |
+| `void IIIE::trash_rule(char *)` | 3 | new |  |
+| `void TransferFlag(int, int)` | 3 | new |  |
+| `bool DoesNotExist(int)` | 2 | new |  |
+| `float hot_float::operator float(void)` | 2 | new |  |
+| `hot_float strength_team_1` | 2 | new |  |
+| `hot_float strength_team_2` | 2 | new |  |
+| `void SetYellowAlert(int)` | 2 | MMM | `Order.YellowAlert` |
+| `bool IsDerelict(int)` | 1 | new |  |
+| `bool IsThereARomulanSpyOnShip(int)` | 1 | new |  |
+| `int GetTranswarpExitWormhole(int)` | 1 | new |  |
+| `int Load_Action_Scripts(char *)` | 1 | new |  |
+| `void AddTransporterEffect(int)` | 1 | new |  |
+| `void ClearRestrictions(int)` | 1 | new |  |
+| `void EnableWormholeTravel(int, bool)` | 1 | new |  |
 
 ## Armada II methods no stock mission calls
 
