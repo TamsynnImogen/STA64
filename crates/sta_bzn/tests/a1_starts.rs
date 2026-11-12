@@ -32,6 +32,7 @@ fn map(paths: Vec<AiPath>) -> MapData {
         object_refs: Vec::new(),
         initial_positions: Vec::new(),
         mission_title: [0; 64],
+        mission_reference: 0,
         paths,
         areas: Vec::new(),
     }

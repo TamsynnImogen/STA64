@@ -116,6 +116,13 @@ pub fn find_model(vfs: &Vfs, name: &str) -> Option<(String, ModelFormat)> {
     find_best(vfs, name, &MODEL_DIRS, &formats)
 }
 
+/// The best `.sod` for `name`, ignoring any glTF/GLB/M3D replacement: the
+/// simulation's geometry (collision radius, launch points) comes from the SOD
+/// even when the renderer shows another format. Lowest layer wins.
+pub fn find_sod(vfs: &Vfs, name: &str) -> Option<String> {
+    find_best(vfs, name, &MODEL_DIRS, &[(ModelFormat::Sod, "sod")]).map(|(p, _)| p)
+}
+
 /// All model names visible in the VFS (stems, lower case, sorted, deduplicated).
 pub fn list_models(vfs: &Vfs) -> Vec<String> {
     let mut out: Vec<String> = MODEL_DIRS

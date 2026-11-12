@@ -93,8 +93,9 @@ fn installed_mods_resolve_without_cycles() {
         let (index, _) = sta_content::OdfIndex::build(&vfs);
         let (db, _) = sta_content::ContentDb::load(&vfs, &index).unwrap_or_else(|e| panic!("{}: {e}", m.folder));
         eprintln!("{}: profile {:?}", m.folder, db.profile());
-        let expect = if m.folder.starts_with("Fleet Ops") { sta_content::Profile::Fo4 } else { sta_content::Profile::Sta2Classic };
-        assert_eq!(db.profile(), expect, "{}", m.folder);
+        // CON-43: every mod of a Roots install is on the Roots lineage (its own `AssetVersion` says
+        // so), Classic included; it was `Sta2Classic` between CON-33 and CON-43 by accident.
+        assert_eq!(db.profile(), sta_content::Profile::Fo4, "{}", m.folder);
         for stem in ["tech1", "tech1_multi", "earlytech_multi", "freetech_multi", "fulltech_multi"] {
             if let Some((t, w)) = TechTree::from_vfs(&vfs, stem).unwrap_or_else(|e| panic!("{} {stem}: {e}", m.folder)) {
                 eprintln!("{} {stem}: {} entries, {} warnings, files {:?}", m.folder, t.len(), w.len(), t.files());

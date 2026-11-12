@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 use a2fmt::sod::Sod;
 use sta_core::Fixed;
 
+use crate::Warning;
 use crate::def::{LaunchPoint, UnitDef};
 
 /// Clear radius, units, when the builder's model cannot be read.
@@ -43,25 +44,79 @@ fn bounding_circle(sod: &Sod) -> f32 {
     clear
 }
 
-/// Fill `radius` (SIM-21) of every unit from its model's bounding circle
-/// times `ScaleSOD`; units whose model cannot be read keep zero.
-pub fn attach_radii<'a>(vfs: &sta_vfs::Vfs, units: impl Iterator<Item = &'a mut UnitDef>) {
+/// Collision radius, units, of a unit whose model exists only as a render
+/// replacement (glTF/GLB/M3D) with no readable SOD to measure. Equal to
+/// [`DEFAULT_CLEAR`], the stated size for an unreadable model; a placeholder
+/// until the engine's own size rule is ported. Not scaled by `ScaleSOD`.
+/// Units with no model at all
+/// (or only an unreadable SOD) keep radius zero, as before.
+pub const FALLBACK_RADIUS: i32 = DEFAULT_CLEAR;
+
+/// What the VFS holds for a model name.
+enum ModelSod {
+    /// A readable SOD (the simulation's geometry).
+    Sod(Box<Sod>),
+    /// A render replacement exists but no readable SOD does.
+    RenderOnly,
+    /// No model, or only an unreadable SOD.
+    Missing,
+}
+
+/// The unit's SOD, read even when a higher layer (or the same one) supplies a
+/// glTF/GLB/M3D that the renderer prefers: the renderer's pick is tried first
+/// when it is a SOD (or an M3D that really holds one), then the best `.sod`.
+fn read_sod(vfs: &sta_vfs::Vfs, key: &str) -> ModelSod {
+    use sta_assets::ModelFormat;
+    let Some((path, format)) = sta_assets::find_model(vfs, key) else {
+        return ModelSod::Missing;
+    };
+    if matches!(format, ModelFormat::Sod | ModelFormat::M3d)
+        && let Ok(s) = sta_assets::load_sod(vfs, &path)
+    {
+        return ModelSod::Sod(Box::new(s));
+    }
+    if let Some(s) = sta_assets::find_sod(vfs, key).and_then(|p| sta_assets::load_sod(vfs, &p).ok()) {
+        return ModelSod::Sod(Box::new(s));
+    }
+    if format == ModelFormat::Sod {
+        ModelSod::Missing
+    } else {
+        ModelSod::RenderOnly
+    }
+}
+
+/// Fill `radius` (SIM-21) of every unit from its SOD's bounding circle times
+/// `ScaleSOD`, whatever render model replaces it. A unit with a render
+/// replacement but no readable SOD gets [`FALLBACK_RADIUS`] and a warning;
+/// one with no model at all keeps zero.
+pub fn attach_radii<'a>(vfs: &sta_vfs::Vfs, units: impl Iterator<Item = &'a mut UnitDef>) -> Vec<Warning> {
     let mut circles: BTreeMap<String, Option<f32>> = BTreeMap::new();
+    let mut warnings = Vec::new();
     for u in units {
         let key = u.model.to_ascii_lowercase().trim_end_matches(".sod").to_owned();
         if key.is_empty() {
             continue;
         }
-        let c = *circles.entry(key.clone()).or_insert_with(|| {
-            let (path, _) = sta_assets::find_model(vfs, &key)?;
-            sta_assets::load_sod(vfs, &path).ok().map(|s| bounding_circle(&s))
+        let c = *circles.entry(key.clone()).or_insert_with(|| match read_sod(vfs, &key) {
+            ModelSod::Sod(s) => Some(bounding_circle(&s)),
+            ModelSod::RenderOnly => Some(-1.0),
+            ModelSod::Missing => None,
         });
         let scale = u.scale.to_f32();
         let scale = if scale > 0.0 { scale } else { 1.0 };
-        if let Some(c) = c.filter(|c| *c > 0.0) {
-            u.radius = fx(c * scale);
+        match c {
+            Some(c) if c < 0.0 => {
+                u.radius = Fixed::from_int(FALLBACK_RADIUS);
+                warnings.push(Warning::new(
+                    format!("sod/{key}.sod"),
+                    format!("{}: no readable SOD for the collision radius (a render model replaces it); using {FALLBACK_RADIUS}", u.odf),
+                ));
+            }
+            Some(c) if c > 0.0 => u.radius = fx(c * scale),
+            _ => {}
         }
     }
+    warnings
 }
 
 /// The launch point of `def` from its model (`None`: model not readable).
@@ -131,9 +186,9 @@ pub fn attach<'a>(vfs: &sta_vfs::Vfs, units: impl Iterator<Item = &'a mut UnitDe
             .to_ascii_lowercase()
             .trim_end_matches(".sod")
             .to_owned();
-        let sod = sods.entry(key.clone()).or_insert_with(|| {
-            let (path, _) = sta_assets::find_model(vfs, &key)?;
-            sta_assets::load_sod(vfs, &path).ok()
+        let sod = sods.entry(key.clone()).or_insert_with(|| match read_sod(vfs, &key) {
+            ModelSod::Sod(s) => Some(*s),
+            _ => None,
         });
         u.launch = Some(launch_point(u, sod.as_ref()));
     }

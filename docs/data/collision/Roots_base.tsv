@@ -1,0 +1,602 @@
+kind	odf	class	race	model	scaleSOD	shieldPad	collisionRadius	layer
+ship	8472active.odf	evolver	species8472	8472_active	1.0	-20		roots
+ship	8472artillery.odf	craft	species8472	8472_cruise2	4.6	5		roots
+ship	8472artilleryr2.odf	craft	species8472	8472_cruise2	4.6	5		roots
+ship	8472artilleryr3.odf	craft	species8472	8472_cruise2	4.6	5		roots
+station	8472base.odf	starbase	species8472	8472_mother	2.25	1		roots
+station	8472baseb.odf	starbase	species8472	8472_mother	2.25	1		roots
+station	8472basebt.odf	starbase	species8472	8472_mother	2.25	1		roots
+station	8472basei.odf	starbase	species8472	8472_mother	2.25	1		roots
+station	8472baseib.odf	starbase	species8472	8472_mother	2.25	1		roots
+station	8472baset.odf	starbase	species8472	8472_mother	2.25	1		roots
+station	8472basicyard.odf	shipyard	species8472	8472_Incubator	2.75	3		roots
+ship	8472corvette.odf	craft	species8472	8472_scout	5.0			roots
+ship	8472cruiser.odf	craft	species8472	8472_cruiser	5.2	3		roots
+ship	8472cruiserr2.odf	craft	species8472	8472_cruiser	5.2	3		roots
+ship	8472cruiserr3.odf	craft	species8472	8472_cruiser	5.2	3		roots
+ship	8472destroyer.odf	craft	species8472	8472_destroy	5.2	1		roots
+ship	8472escort.odf	craft	species8472	8472_frigate	5.2			roots
+ship	8472escort2.odf	craft	species8472	8472_frigate	5.2			roots
+ship	8472escortr2.odf	craft	species8472	8472_frigate	5.2			roots
+ship	8472escortr3.odf	craft	species8472	8472_frigate	5.2			roots
+station	8472gate.odf	shipyard	species8472	8472_FluidicGate	0.1			roots
+ship	8472hbattleship.odf	craft	species8472	8472_battle	9.2	2		roots
+ship	8472hbattleship_ref.odf	craft	species8472	8472_battle	9.2	2		roots
+ship	8472hbattleship_refr2.odf	craft	species8472	8472_battle	9.2	2		roots
+ship	8472hbattleship_refr3.odf	craft	species8472	8472_battle	9.2	2		roots
+ship	8472hbattleshipr2.odf	craft	species8472	8472_battle	9.2	2		roots
+ship	8472hbattleshipr3.odf	craft	species8472	8472_battle	9.2	2		roots
+ship	8472miner.odf	freighter	species8472	8472_collector	3.2	2		roots
+station	8472miningstation.odf	mining	species8472	8472_transmuter	3.2	-2		roots
+ship	8472passive.odf	evolver	species8472	8472_passive	1.0	-240		roots
+station	8472reinforcement.odf	research	species8472	8472_FluidicGate	2.75	5		roots
+other	8472repair_pod.odf	u_ball_obj		effect_empty				roots
+other	8472repairb_pod.odf	u_ball_obj		effect_empty				roots
+ship	8472support.odf	craft	species8472	8472_behemoth	3.0	-4		roots
+ship	8472support0.odf	craft	species8472	8472_behemoth	3.0	-4		roots
+ship	8472support1.odf	craft	species8472	8472_behemoth	3.0	-4		roots
+ship	8472support1r2.odf	craft	species8472	8472_behemoth	3.0	-4		roots
+ship	8472support1r3.odf	craft	species8472	8472_behemoth	3.0	-4		roots
+ship	8472support2.odf	craft	species8472	8472_behemoth	3.0	-4		roots
+ship	8472support22.odf	craft	species8472	8472_behemoth	3.0	-4		roots
+ship	8472support2r2.odf	craft	species8472	8472_behemoth	3.0	-4		roots
+ship	8472support2r3.odf	craft	species8472	8472_behemoth	3.0	-4		roots
+ship	8472support3.odf	craft	species8472	8472_behemoth	3.0	-4		roots
+ship	8472support3r2.odf	craft	species8472	8472_behemoth	3.0	-4		roots
+ship	8472support3r3.odf	craft	species8472	8472_behemoth	3.0	-4		roots
+ship	8472supportr2.odf	craft	species8472	8472_behemoth	3.0	-4		roots
+ship	8472supportr3.odf	craft	species8472	8472_behemoth	3.0	-4		roots
+station	8472supportresearch.odf	shipyard	species8472	8472_AdvancedResearch	2.5	5		roots
+station	8472upgraderesearch.odf	shipyard	species8472	8472_BasicResearch	2.25	1		roots
+other	all_shields1.odf	u_ball_obj		effect_empty				roots
+other	all_weapons1.odf	u_ball_obj		effect_empty				roots
+other	anti_cloak_pod.odf	u_ball_obj		effect_empty				roots
+ship	bartillery.odf	craft	borg	bor_adaptor	0.698	-1		roots
+ship	bartilleryr2.odf	craft	borg	bor_adaptor	0.699	-1		roots
+ship	bartilleryr3.odf	craft	borg	bor_adaptor	0.7	-1		roots
+station	bbase.odf	starbase	borg	bor_assi_matrix	0.99	-50		roots
+station	bbaseb.odf	starbase	borg	bor_assi_matrix	0.989	-50		roots
+station	bbasebt.odf	starbase	borg	bor_assi_matrix	0.99	-50		roots
+station	bbasei.odf	starbase	borg	bor_assi_matrix	0.99	-50		roots
+station	bbaseib.odf	starbase	borg	bor_assi_matrix	0.989	-50		roots
+station	bbaset.odf	starbase	borg	bor_assi_matrix	0.99	-50		roots
+station	bbasicyard.odf	shipyard	borg	dom_mixedtech_yard_bor	1.3	-5		roots
+station	bbasicyardf.odf	shipyard	borg	dom_mixedtech_yard_bor	1.3	-5		roots
+ship	bconst.odf	constructionrig	borg	bor_assembler	0.6	-10		roots
+ship	bcorvette.odf	craft	borg	bor_detector	0.80			roots
+ship	bcruiser.odf	craft	borg	bor_interceptor	2.2	-2		roots
+ship	bcruiserr2.odf	craft	borg	bor_interceptor	2.201	-2		roots
+ship	bcruiserr3.odf	craft	borg	bor_interceptor	2.202	-2		roots
+station	bdbasicyard.odf	shipyard	borg	dom_yard	0.9			roots
+station	bdefenseplatform.odf	sensor	borg	bor_turret	0.8	5		roots
+ship	bdestroyer.odf	craft	borg	bor_pyramid	0.38			roots
+ship	bescort.odf	craft	borg	bor_dodeca	0.7	5		roots
+ship	bescortr2.odf	craft	borg	bor_dodeca	0.701	5		roots
+ship	bescortr3.odf	craft	borg	bor_dodeca	0.702	5		roots
+ship	bhbattleship.odf	craft	borg	bor_cube	1.32	-40		roots
+ship	bhbattleship0.odf	craft	borg	bor_cube	1.32	-40		roots
+ship	bhbattleship1.odf	craft	borg	bor_cube	1.32	-40		roots
+ship	bhbattleship1r2.odf	craft	borg	bor_cube	1.321	-40		roots
+ship	bhbattleship1r3.odf	craft	borg	bor_cube_tactical	1.322	-39		roots
+ship	bhbattleship2.odf	craft	borg	bor_cube	1.32	-40		roots
+ship	bhbattleship2r2.odf	craft	borg	bor_cube	1.321	-40		roots
+ship	bhbattleship2r3.odf	craft	borg	bor_cube_tactical	1.322	-39		roots
+ship	bhbattleshipr2.odf	craft	borg	bor_cube	1.321	-40		roots
+ship	bhbattleshipr3.odf	craft	borg	bor_cube_tactical	1.322	-39		roots
+ship	blbattleship.odf	craft	borg	bor_sphere	0.8	5		roots
+ship	blbattleship_ref.odf	craft	borg	bor_sphere	0.8	5		roots
+ship	blbattleship_refr2.odf	craft	borg	bor_sphere	0.801	5		roots
+ship	blbattleship_refr3.odf	craft	borg	bor_sphere	0.802	5		roots
+ship	blbattleshipr2.odf	craft	borg	bor_sphere	0.801	5		roots
+ship	blbattleshipr3.odf	craft	borg	bor_sphere	0.802	5		roots
+ship	bminer.odf	freighter	borg	bor_freighter	0.54	-10		roots
+station	bminingstation.odf	mining	borg	bor_resource_node	0.7	-2		roots
+ship	bor_dismantler.odf	freighter	borg	bor_workerbee	0.15			roots
+station	breinforcement.odf	research	borg	bor_incubation	0.7			roots
+station	bsensorarray.odf	sensor	borg	bor_sensor	1.4			roots
+ship	bsupport.odf	craft	borg	bor_diamond	0.9			roots
+ship	bsupport0.odf	craft	borg	bor_diamond	0.9			roots
+ship	bsupport1.odf	craft	borg	bor_diamond	0.9			roots
+ship	bsupport1r2.odf	craft	borg	bor_diamond	0.901			roots
+ship	bsupport1r3.odf	craft	borg	bor_diamond	0.902			roots
+ship	bsupport2.odf	craft	borg	bor_diamond	0.9			roots
+ship	bsupport2r2.odf	craft	borg	bor_diamond	0.901			roots
+ship	bsupport2r3.odf	craft	borg	bor_diamond	0.902			roots
+ship	bsupport3.odf	craft	borg	bor_diamond	0.9			roots
+ship	bsupport3r2.odf	craft	borg	bor_diamond	0.901			roots
+ship	bsupport3r3.odf	craft	borg	bor_diamond	0.902			roots
+ship	bsupportr2.odf	craft	borg	bor_diamond	0.901			roots
+ship	bsupportr3.odf	craft	borg	bor_diamond	0.9			roots
+station	bsupportresearch.odf	shipyard	borg	bor_col_matrix	0.5			roots
+station	bupgraderesearch.odf	shipyard	borg	bor_uni_matrix	0.7			roots
+station	cadvancedyard.odf	shipyard	cardassian	cyard2	2.5			roots
+ship	card_dismantler.odf	freighter	cardassian	cbee				roots
+other	card_warpine.odf	u_ball_obj	cardassian	effect_empty				roots
+ship	cartillery.odf	craft	cardassian	cartillery	0.7			roots
+ship	cartilleryr2.odf	craft	cardassian	cartillery	0.7			roots
+ship	cartilleryr3.odf	craft	cardassian	cartillery	0.7			roots
+station	cbase.odf	starbase	cardassian	cbase	1.79	-10		roots
+station	cbaseb.odf	starbase	cardassian	cbase	1.79	-10		roots
+station	cbasebt.odf	starbase	cardassian	cbase	1.79	-10		roots
+station	cbasei.odf	starbase	cardassian	cbase	1.79	-10		roots
+station	cbaseib.odf	starbase	cardassian	cbase	1.79	-10		roots
+station	cbaset.odf	starbase	cardassian	cbase	1.79	-10		roots
+station	cbasicyard.odf	shipyard	cardassian	cyard	1.4	-5		roots
+ship	cconst.odf	constructionrig	cardassian	card_construct	2.0	-10		roots
+ship	ccorvette.odf	craft	cardassian	card_hideki	2.7			roots
+ship	ccruiser.odf	craft	cardassian	dom_keldon	0.30			roots
+ship	ccruiser0.odf	craft	cardassian	dom_keldon	0.30			roots
+station	ccruiserm.odf	mining	cardassian	dom_keldon_m	0.30			roots
+station	ccruisermr2.odf	mining	cardassian	dom_keldon_m	0.30			roots
+station	ccruisermr3.odf	mining	cardassian	dom_keldon_m	0.30			roots
+ship	ccruiserr2.odf	craft	cardassian	dom_keldon	0.30			roots
+ship	ccruiserr3.odf	craft	cardassian	dom_keldon	0.30			roots
+station	cdefenseplatform.odf	sensor	cardassian	cturret	0.65			roots
+ship	cdefenseplatform2.odf	craft	cardassian	cturret	0.65			roots
+ship	cdefenseplatform2r2.odf	craft	cardassian	cturret	0.65			roots
+ship	cdefenseplatform2r3.odf	craft	cardassian	cturret	0.65			roots
+station	cdefenseplatformr2.odf	sensor	cardassian	cturret	0.65			roots
+station	cdefenseplatformr3.odf	sensor	cardassian	cturret	0.65			roots
+ship	cdestroyer.odf	craft	cardassian	dom_galor	0.3			roots
+ship	cdrone.odf	fighter	cardassian	card_hidekis	0.6		2	roots
+ship	cdrone2.odf	repairship	cardassian	card_hidekis	0.5			roots
+other	cdroneend.odf	u_ball_obj		effect_empty				roots
+station	cds9.odf	starbase	unitedfederation	fbasehq	1.4			roots
+ship	cescort.odf	craft	cardassian	ccruise3	0.75			roots
+ship	cescort3.odf	craft	cardassian	dom_keldon	0.35			roots
+ship	cescort4.odf	craft	cardassian	card_scout	0.9			roots
+ship	cescortr2.odf	craft	cardassian	ccruise3	0.75			roots
+ship	cescortr3.odf	craft	cardassian	ccruise3	0.75			roots
+ship	chbattleship.odf	craft	cardassian	cdreadnought	0.6	-8		roots
+ship	chbattleshipr2.odf	craft	cardassian	cdreadnought	0.6	-8		roots
+ship	chbattleshipr3.odf	craft	cardassian	cdreadnought	0.6	-8		roots
+ship	clbattleship.odf	craft	cardassian	cturret2	0.65			roots
+other	clbattleship_placeh_dummy.odf	u_ball_obj		effect_empty				roots
+ship	clbattleship_ref.odf	craft	cardassian	cturret2	0.65			roots
+ship	clbattleship_refr2.odf	craft	cardassian	cturret2	0.65			roots
+ship	clbattleship_refr3.odf	craft	cardassian	cturret2	0.65			roots
+ship	clbattleshipr2.odf	craft	cardassian	cturret2	0.65			roots
+ship	clbattleshipr3.odf	craft	cardassian	cturret2	0.65			roots
+ship	cminer.odf	freighter	cardassian	card_freight	0.7			roots
+station	cminingstation.odf	mining	cardassian	cmining	1.7			roots
+ship	cmissile.odf	craft	cardassian	csuper	1.1			roots
+other	cmissile_placeh_dummy.odf	u_ball_obj		effect_empty				roots
+station	creinforcement.odf	research	cardassian	card_super	3.3			roots
+station	csensorarray.odf	sensor	cardassian	csensor	1.1			roots
+ship	csupport.odf	craft	cardassian	csupport	0.75	-2		roots
+ship	csupport0.odf	craft	cardassian	csupport	0.75	-2		roots
+ship	csupport1.odf	craft	cardassian	csupport	0.75	-2		roots
+ship	csupport1r2.odf	craft	cardassian	csupport	0.75	-2		roots
+ship	csupport1r3.odf	craft	cardassian	csupport	0.75	-2		roots
+ship	csupport2.odf	craft	cardassian	csupport	0.75	-2		roots
+ship	csupport2r2.odf	craft	cardassian	csupport	0.75	-2		roots
+ship	csupport2r3.odf	craft	cardassian	csupport	0.75	-2		roots
+ship	csupport3.odf	craft	cardassian	csupport	0.75	-2		roots
+ship	csupport3r2.odf	craft	cardassian	csupport	0.75	-2		roots
+ship	csupport3r3.odf	craft	cardassian	csupport	0.75	-2		roots
+ship	csupportr2.odf	craft	cardassian	csupport	0.75	-2		roots
+ship	csupportr3.odf	craft	cardassian	csupport	0.75	-2		roots
+station	csupportresearch.odf	shipyard	cardassian	ctrading	3.0			roots
+station	cupgraderesearch.odf	shipyard	cardassian	cresear2	3.0			roots
+station	dadvancedyard.odf	shipyard	dominion	dom_large_yard	1.0			roots
+ship	dartillery.odf	craft	dominion	nbre_cruiserD	2.9			roots
+ship	dartilleryr2.odf	craft	dominion	nbre_cruiserD	2.9			roots
+ship	dartilleryr3.odf	craft	dominion	nbre_cruiserD	2.9			roots
+station	dbase.odf	starbase	dominion	dom_cloning_fac	0.97	-18		roots
+station	dbaseb.odf	starbase	dominion	dom_cloning_fac	0.97	-18		roots
+station	dbasebt.odf	starbase	dominion	dom_cloning_fac	0.97	-18		roots
+station	dbasei.odf	starbase	dominion	dom_cloning_fac	0.97	-18		roots
+station	dbaseib.odf	starbase	dominion	dom_cloning_fac	0.97	-18		roots
+station	dbaset.odf	starbase	dominion	dom_cloning_fac	0.97	-18		roots
+station	dbasicyard.odf	shipyard	dominion	dom_yard	0.9			roots
+ship	dconst.odf	constructionrig	dominion	dom_worker_ship	1.0	-15		roots
+ship	dcorvette.odf	craft	dominion	dom_destroyer	0.9			roots
+ship	dcorvettequick.odf	craft	dominion	dom_destroyer	0.9			roots
+ship	dcorvettewarp.odf	craft	dominion	dom_destroyer	0.9			roots
+ship	dcorvettewarp2.odf	craft	dominion	dom_destroyer	0.9			roots
+other	dcorvettewarp_placeh_dummy.odf	u_ball_obj		effect_empty				roots
+ship	dcruiser.odf	craft	dominion	dom_escort_cruiser	1.1	-2		roots
+ship	dcruiserr2.odf	craft	dominion	dom_escort_cruiser	1.1	-2		roots
+ship	dcruiserr3.odf	craft	dominion	dom_escort_cruiser	1.1	-2		roots
+station	ddefenseplatform.odf	sensor	dominion	dom_phaser_sentry	0.99			roots
+ship	descort.odf	craft	dominion	dom_warfrigate	0.85	-2		roots
+ship	descortr2.odf	craft	dominion	dom_warfrigate	0.85	-2		roots
+ship	descortr3.odf	craft	dominion	dom_warfrigate	0.85	-2		roots
+ship	dhbattleship.odf	craft	dominion	dom_dreadnought	1.17	-22		roots
+ship	dhbattleshipr2.odf	craft	dominion	dom_dreadnought	1.17	-22		roots
+ship	dhbattleshipr3.odf	craft	dominion	dom_dreadnought	1.17	-22		roots
+ship	dlbattleship.odf	craft	dominion	dom_battleship	1.1	-12		roots
+ship	dlbattleship_ref.odf	craft	dominion	dom_battleship	1.1	-12		roots
+ship	dlbattleship_refr2.odf	craft	dominion	dom_battleship	1.1	-12		roots
+ship	dlbattleship_refr3.odf	craft	dominion	dom_battleship	1.1	-12		roots
+ship	dlbattleshipr2.odf	craft	dominion	dom_battleship	1.1	-12		roots
+ship	dlbattleshipr3.odf	craft	dominion	dom_battleship	1.1	-12		roots
+other	dlight.odf	background_obj		dlight				roots
+ship	dminer.odf	freighter	dominion	dom_worker_ship_m	1.0	-15		roots
+station	dminingstation.odf	mining	dominion	dom_space_refinery	1.0			roots
+ship	dom_dismantler.odf	freighter	dominion	dom_s_workbee				roots
+other	dom_warpinbomb.odf	u_ball_obj	dominion	effect_empty				roots
+other	dom_warpine.odf	u_ball_obj	dominion	effect_empty				roots
+ship	dom_warpine2.odf	craft	dominion	dom_worker_ship_m	0.9			roots
+other	dom_warpineb.odf	u_ball_obj	dominion	effect_empty				roots
+station	dreinforcement.odf	research	dominion	dom_perimeter	1.0			roots
+station	dreinforcement2.odf	research	dominion	dom_perimeter	1.0			roots
+station	dsensorarray.odf	sensor	dominion	dom_sensor	0.9	-2		roots
+ship	dsupport.odf	craft	dominion	nbre_battleshipD	1.8	-2		roots
+ship	dsupport0.odf	craft	dominion	nbre_battleshipD	1.8	-2		roots
+ship	dsupport1.odf	craft	dominion	nbre_battleshipD	1.8	-2		roots
+ship	dsupport1r2.odf	craft	dominion	nbre_battleshipD	1.8	-2		roots
+ship	dsupport1r3.odf	craft	dominion	nbre_battleshipD	1.8	-2		roots
+ship	dsupport2.odf	craft	dominion	nbre_battleshipD	1.8	-2		roots
+ship	dsupport2r2.odf	craft	dominion	nbre_battleshipD	1.8	-2		roots
+ship	dsupport2r3.odf	craft	dominion	nbre_battleshipD	1.8	-2		roots
+ship	dsupport3.odf	craft	dominion	nbre_battleshipD	1.8	-2		roots
+ship	dsupport3r2.odf	craft	dominion	nbre_battleshipD	1.8	-2		roots
+ship	dsupport3r3.odf	craft	dominion	nbre_battleshipD	1.8	-2		roots
+ship	dsupportr2.odf	craft	dominion	nbre_battleshipD	1.8	-2		roots
+ship	dsupportr3.odf	craft	dominion	nbre_battleshipD	1.8	-2		roots
+station	dsupportresearch.odf	shipyard	dominion	dom_technology_lab	0.9			roots
+station	dupgraderesearch.odf	shipyard	dominion	dom_ketracel_fac				roots
+other	eff_bor_dismnt.odf	u_ball_obj		effect_empty				roots
+other	eff_card_dismnt.odf	u_ball_obj		effect_empty				roots
+other	eff_dom_dismnt.odf	u_ball_obj		effect_empty				roots
+other	eff_fed_dismnt.odf	u_ball_obj		effect_empty				roots
+other	eff_kli_dismnt.odf	u_ball_obj		effect_empty				roots
+other	eff_rom_dismnt.odf	u_ball_obj		effect_empty				roots
+other	effect_8472quantum.odf	u_ball_obj		effect_empty				roots
+other	effect_bor_dismantler.odf	u_ball_obj		effect_empty				roots
+other	effect_bregen.odf	u_ball_obj		effect_empty				roots
+other	effect_card_dismantler.odf	u_ball_obj		effect_empty				roots
+other	effect_dchant.odf	u_ball_obj		effect_empty				roots
+other	effect_disrupt.odf	u_ball_obj		effect_empty				roots
+other	effect_disrupt_drain.odf	u_ball_obj		effect_empty				roots
+other	effect_dom_dismantler.odf	u_ball_obj		effect_empty				roots
+other	effect_dom_weaponadd.odf	u_ball_obj		effect_empty				roots
+other	effect_drain.odf	u_ball_obj		effect_empty				roots
+other	effect_fed_dismantler.odf	u_ball_obj		effect_empty				roots
+other	effect_fleetsupply.odf	u_ball_obj		effect_empty				roots
+other	effect_ionstorm.odf	u_ball_obj		effect_ionstorm				roots
+other	effect_kli_dismantler.odf	u_ball_obj		effect_empty				roots
+other	effect_rdisrupt.odf	u_ball_obj		effect_empty				roots
+other	effect_rm.odf	u_ball_obj		effect_empty				roots
+other	effect_rma.odf	u_ball_obj		effect_empty				roots
+other	effect_rma1.odf	u_ball_obj		effect_empty				roots
+other	effect_rmaai.odf	u_ball_obj		effect_empty				roots
+other	effect_rmai.odf	u_ball_obj		effect_empty				roots
+other	effect_rom_dismantler.odf	u_ball_obj		effect_empty				roots
+other	effect_suppress_dtm.odf	u_ball_obj		effect_empty				roots
+other	effect_wbomb.odf	u_ball_obj		effect_empty				roots
+other	effect_wbomb2.odf	u_ball_obj		effect_empty				roots
+station	fadvancedyard.odf	shipyard	unitedfederation	fed_eraudi_yard				roots
+ship	fambassador.odf	craft	unitedfederation	fed_ambassador	1.5	-5		roots
+ship	fambassador0.odf	craft	unitedfederation	fed_ambassador	1.5	-5		roots
+ship	fambassador1.odf	craft	unitedfederation	fed_ambassador	1.5	-5		roots
+ship	fambassador1r2.odf	craft	unitedfederation	fed_ambassador	1.5	-5		roots
+ship	fambassador1r3.odf	craft	unitedfederation	fed_ambassador	1.5	-5		roots
+ship	fambassador2.odf	craft	unitedfederation	fed_ambassador	1.5	-5		roots
+ship	fambassador2r2.odf	craft	unitedfederation	fed_ambassador	1.5	-5		roots
+ship	fambassador2r3.odf	craft	unitedfederation	fed_ambassador	1.5	-5		roots
+ship	fambassador3.odf	craft	unitedfederation	fed_ambassador	1.5	-5		roots
+ship	fambassador3r2.odf	craft	unitedfederation	fed_ambassador	1.5	-5		roots
+ship	fambassador3r3.odf	craft	unitedfederation	fed_ambassador	1.5	-5		roots
+ship	fambassadorr2.odf	craft	unitedfederation	fed_ambassador	1.5	-5		roots
+ship	fambassadorr3.odf	craft	unitedfederation	fed_ambassador	1.5	-5		roots
+ship	fartillery.odf	craft	unitedfederation	fed_steamrunner	0.58			roots
+ship	fartilleryr2.odf	craft	unitedfederation	fed_steamrunner	0.58			roots
+ship	fartilleryr3.odf	craft	unitedfederation	fed_steamrunner	0.58			roots
+station	fbase.odf	starbase	unitedfederation	fed_outpost	0.99	-15		roots
+station	fbaseb.odf	starbase	unitedfederation	fed_outpost	0.99	-15		roots
+station	fbasebt.odf	starbase	unitedfederation	fed_outpost	0.99	-15		roots
+station	fbasei.odf	starbase	unitedfederation	fed_outpost	0.99	-15		roots
+station	fbaseib.odf	starbase	unitedfederation	fed_outpost	0.99	-15		roots
+station	fbaset.odf	starbase	unitedfederation	fed_outpost	0.99	-15		roots
+station	fbasicyard.odf	shipyard	unitedfederation	fed_antares_yard		-5		roots
+station	fbbase.odf	starbase	freeborg	bor_assi_matrix	0.99	-50		roots
+ship	fbconst.odf	constructionrig	freeborg	bor_assembler	0.61	-10		roots
+ship	fbcorvette.odf	craft	freeborg	bor_detector	0.80			roots
+ship	fbminer.odf	freighter	freeborg	bor_freighter	0.541	-10		roots
+ship	fcentaur.odf	craft	unitedfederation	fed_centaur	1.15			roots
+ship	fcheyenne.odf	craft	unitedfederation	fed_cheyenne	0.7			roots
+ship	fcheyenner2.odf	craft	unitedfederation	fed_cheyenne	0.7			roots
+ship	fcheyenner3.odf	craft	unitedfederation	fed_cheyenne	0.7			roots
+ship	fconst.odf	constructionrig	unitedfederation	fed_mediterranean				roots
+ship	fcorvette.odf	craft	unitedfederation	fed_saber	0.7			roots
+ship	fcruiser.odf	craft	unitedfederation	fed_akira	1.25	-8		roots
+ship	fcruiserr2.odf	craft	unitedfederation	fed_akira	1.25	-8		roots
+ship	fcruiserr3.odf	craft	unitedfederation	fed_akira	1.25	-8		roots
+station	fdefenseplatform.odf	sensor	unitedfederation	fed_platform_pulse		-1		roots
+ship	fdestroyer.odf	craft	unitedfederation	fed_norway	0.6			roots
+station	fds9.odf	starbase	unitedfederation	ds9	4.5			roots
+ship	fed_dismantler.odf	freighter	unitedfederation	fed_s_workbee				roots
+ship	fed_premonition.odf	craft	unitedfederation	fed_premonition	0.85			roots
+other	fed_warpin_placeh_dummy.odf	u_ball_obj		effect_empty				roots
+other	fed_warpine.odf	u_ball_obj	unitedfederation	effect_empty				roots
+ship	fed_warpine2.odf	craft	unitedfederation	fed_mediterranean	0.9			roots
+ship	fenterprise.odf	craft	unitedfederation	fed_sovereignent	2.65	-7		roots
+ship	fescort.odf	craft	unitedfederation	fed_defiant	2.2			roots
+ship	fescortr2.odf	craft	unitedfederation	fed_defiant	2.2			roots
+ship	fescortr3.odf	craft	unitedfederation	fed_defiant	2.2			roots
+ship	fexcelsior.odf	craft	unitedfederation	fed_excelsior	0.75	-3		roots
+ship	fexcelsiorr2.odf	craft	unitedfederation	fed_excelsior	0.75	-3		roots
+ship	fexcelsiorr3.odf	craft	unitedfederation	fed_excelsior	0.75	-3		roots
+ship	fhbattleship.odf	craft	unitedfederation	fed_sovereign	2.65	-7		roots
+ship	fhbattleshipr2.odf	craft	unitedfederation	fed_sovereign	2.65	-7		roots
+ship	fhbattleshipr3.odf	craft	unitedfederation	fed_sovereign	2.65	-7		roots
+ship	fintrepid.odf	craft	unitedfederation	fed_intrepid	3.2			roots
+ship	fintrepidr2.odf	craft	unitedfederation	fed_intrepid	3.2			roots
+ship	fintrepidr3.odf	craft	unitedfederation	fed_intrepid	3.2			roots
+ship	flbattleship.odf	craft	unitedfederation	fed_galaxy	1.45			roots
+ship	flbattleship_ref.odf	craft	unitedfederation	fed_galaxy	1.45			roots
+ship	flbattleship_refr2.odf	craft	unitedfederation	fed_galaxy	1.45			roots
+ship	flbattleship_refr3.odf	craft	unitedfederation	fed_galaxy	1.45			roots
+ship	flbattleshipr2.odf	craft	unitedfederation	fed_galaxy	1.45			roots
+ship	flbattleshipr3.odf	craft	unitedfederation	fed_galaxy	1.45			roots
+ship	fminer.odf	freighter	unitedfederation	fed_mandril		-10		roots
+station	fminingstation.odf	mining	unitedfederation	fed_storage_dock	0.99	-1		roots
+ship	fmiranda.odf	craft	unitedfederation	fed_miranda	1.2	-1		roots
+ship	fneworleans.odf	craft	unitedfederation	fed_neworleans	0.7	-2		roots
+ship	fneworleansr2.odf	craft	unitedfederation	fed_neworleans	0.7	-2		roots
+ship	fneworleansr3.odf	craft	unitedfederation	fed_neworleans	0.7	-2		roots
+ship	fnova.odf	craft	unitedfederation	fed_nova	1.1			roots
+station	freinforcement.odf	research	unitedfederation	fed_sf_command				roots
+station	fsensorarray.odf	sensor	unitedfederation	fed_platform_sensor				roots
+ship	fsupport.odf	craft	unitedfederation	fed_nebula	0.67	-5		roots
+ship	fsupport0.odf	craft	unitedfederation	fed_nebula	0.67	-5		roots
+ship	fsupport1.odf	craft	unitedfederation	fed_nebula	0.67	-5		roots
+ship	fsupport1r2.odf	craft	unitedfederation	fed_nebula	0.67	-5		roots
+ship	fsupport1r3.odf	craft	unitedfederation	fed_nebula	0.67	-5		roots
+ship	fsupport2.odf	craft	unitedfederation	fed_nebula	0.67	-5		roots
+ship	fsupport2r2.odf	craft	unitedfederation	fed_nebula	0.67	-5		roots
+ship	fsupport2r3.odf	craft	unitedfederation	fed_nebula	0.67	-5		roots
+ship	fsupport3.odf	craft	unitedfederation	fed_nebula	0.67	-5		roots
+ship	fsupport3r2.odf	craft	unitedfederation	fed_nebula	0.67	-5		roots
+ship	fsupport3r3.odf	craft	unitedfederation	fed_nebula	0.67	-5		roots
+ship	fsupportr2.odf	craft	unitedfederation	fed_nebula	0.67	-5		roots
+ship	fsupportr3.odf	craft	unitedfederation	fed_nebula	0.67	-5		roots
+station	fsupportresearch.odf	shipyard	unitedfederation	fed_sf_science				roots
+station	fupgraderesearch.odf	shipyard	unitedfederation	fed_sf_engineering				roots
+ship	hook_dilithiumsource.odf	craft	norace	effect_empty				roots
+ship	hook_tritaniumsource.odf	craft	norace	effect_empty				roots
+station	kadvancedyard.odf	shipyard	klingonempire	kli_imperial_yard		-5		roots
+ship	kartillery.odf	craft	klingonempire	kli_ktinga	1.4			roots
+ship	kartilleryr2.odf	craft	klingonempire	kli_ktinga	1.4			roots
+ship	kartilleryr3.odf	craft	klingonempire	kli_ktinga	1.4			roots
+station	kbase.odf	starbase	klingonempire	kli_kahless_station	1.22	-15		roots
+station	kbaseb.odf	starbase	klingonempire	kli_kahless_station	1.22	-15		roots
+station	kbasebt.odf	starbase	klingonempire	kli_kahless_station	1.22	-15		roots
+station	kbasei.odf	starbase	klingonempire	kli_kahless_station	1.22	-15		roots
+station	kbaseib.odf	starbase	klingonempire	kli_kahless_station	1.22	-15		roots
+station	kbaset.odf	starbase	klingonempire	kli_kahless_station	1.22	-15		roots
+station	kbasicyard.odf	shipyard	klingonempire	kli_battle_yard2	0.9			roots
+ship	kconst.odf	constructionrig	klingonempire	kli_chor	0.9			roots
+ship	kcorvette.odf	craft	klingonempire	kli_brel	0.85			roots
+ship	kcruiser.odf	craft	klingonempire	kli_vorcha	0.7			roots
+ship	kcruiserr2.odf	craft	klingonempire	kli_vorcha	0.7			roots
+ship	kcruiserr3.odf	craft	klingonempire	kli_vorcha	0.7			roots
+station	kdefenseplatform.odf	sensor	klingonempire	kli_mini_platform	1.25			roots
+ship	kdestroyer.odf	craft	klingonempire	kli_kvort	1.3			roots
+ship	kdestroyerr2.odf	craft	klingonempire	kli_kvort	1.3			roots
+ship	kdestroyerr3.odf	craft	klingonempire	kli_kvort	1.3			roots
+ship	kescort.odf	craft	klingonempire	kescort	0.38	-2		roots
+ship	kescortr2.odf	craft	klingonempire	kescort	0.38	-2		roots
+ship	kescortr3.odf	craft	klingonempire	kescort	0.38	-2		roots
+ship	khbattleship.odf	craft	klingonempire	kli_neghvar	0.84	-2		roots
+ship	khbattleshipr2.odf	craft	klingonempire	kli_neghvar	0.84	-2		roots
+ship	khbattleshipr3.odf	craft	klingonempire	kli_neghvar	0.84	-2		roots
+ship	klbattleship.odf	craft	klingonempire	kli_luspet	1.15	-5		roots
+ship	klbattleship_ref.odf	craft	klingonempire	kli_luspet	1.15	-5		roots
+ship	klbattleship_refr2.odf	craft	klingonempire	kli_luspet	1.15	-5		roots
+ship	klbattleship_refr3.odf	craft	klingonempire	kli_luspet	1.15	-5		roots
+ship	klbattleshipr2.odf	craft	klingonempire	kli_luspet	1.15	-5		roots
+ship	klbattleshipr3.odf	craft	klingonempire	kli_luspet	1.15	-5		roots
+ship	kli_dismantler.odf	freighter	klingonempire	kli_s_workbee				roots
+ship	kminer.odf	freighter	klingonempire	kli_topmey	0.75			roots
+station	kminingstation.odf	mining	klingonempire	kli_mining_station	0.99	-6		roots
+station	kreinforcement.odf	research	klingonempire	kli_moqbara_station	0.8			roots
+station	ksensorarray.odf	sensor	klingonempire	kli_scout_station	1.2			roots
+ship	ksupport.odf	craft	klingonempire	ksupport	0.75	-2		roots
+ship	ksupport0.odf	craft	klingonempire	ksupport	0.75	-2		roots
+ship	ksupport1.odf	craft	klingonempire	ksupport	0.75	-2		roots
+ship	ksupport1r2.odf	craft	klingonempire	ksupport	0.75	-2		roots
+ship	ksupport1r3.odf	craft	klingonempire	ksupport	0.75	-2		roots
+ship	ksupport2.odf	craft	klingonempire	ksupport	0.75	-2		roots
+ship	ksupport2r2.odf	craft	klingonempire	ksupport	0.75	-2		roots
+ship	ksupport2r3.odf	craft	klingonempire	ksupport	0.75	-2		roots
+ship	ksupport3.odf	craft	klingonempire	ksupport	0.75	-2		roots
+ship	ksupport3r2.odf	craft	klingonempire	ksupport	0.75	-2		roots
+ship	ksupport3r3.odf	craft	klingonempire	ksupport	0.75	-2		roots
+ship	ksupportr2.odf	craft	klingonempire	ksupport	0.75	-2		roots
+ship	ksupportr3.odf	craft	klingonempire	ksupport	0.75	-2		roots
+station	ksupportresearch.odf	shipyard	klingonempire	kli_field_research				roots
+station	kupgraderesearch.odf	shipyard	klingonempire	kli_armory				roots
+other	lwreck.odf	latinum		lwreck	3.5			roots
+other	lwreck2.odf	latinum		lwreck2	3.5			roots
+other	lwreckd.odf	latinum		lwreck	3.5			roots
+other	lwreckd2.odf	latinum		lwreck2	3.5			roots
+other	map_argus.odf	background_obj		map_argus				roots
+other	map_asteroid_large1.odf	latinum		map_asteroid_large1				roots
+other	map_asteroid_large2.odf	latinum		map_asteroid_large2				roots
+other	map_asteroid_large3.odf	latinum		map_asteroid_large3				roots
+other	map_asteroid_large4.odf	latinum		map_asteroid_large4				roots
+other	map_asteroid_small1.odf	latinum		map_asteroid_small1				roots
+other	map_asteroid_small2.odf	latinum		map_asteroid_small2				roots
+other	map_asteroid_small3.odf	latinum		map_asteroid_small3				roots
+other	map_asteroid_small4.odf	latinum		map_asteroid_small4				roots
+other	map_asteroidfield1.odf	latinum		map_asteroidfield1				roots
+other	map_asteroidfield2.odf	latinum		map_asteroidfield2				roots
+other	map_asteroidfield3.odf	latinum		map_asteroidfield3				roots
+other	map_asteroidfield4.odf	latinum		map_asteroidfield4				roots
+other	map_asteroidset1.odf	latinum		map_asteroidset1				roots
+other	map_asteroidset1bg.odf	latinum		map_asteroidset1				roots
+other	map_asteroidset2.odf	latinum		map_asteroidset2				roots
+other	map_asteroidset2bg.odf	latinum		map_asteroidset2				roots
+other	map_asteroidset_dust1.odf	latinum		map_asteroidset_dust1				roots
+other	map_asteroidset_dust2.odf	latinum		map_asteroidset_dust2				roots
+other	map_asteroidset_light1.odf	latinum		map_asteroidset_light1				roots
+other	map_asteroidset_light2.odf	latinum		map_asteroidset_light2				roots
+other	map_asteroidunique1.odf	latinum		map_asteroidunique1				roots
+other	map_asteroidunique2.odf	latinum		map_asteroidunique2				roots
+other	map_asteroidunique3.odf	latinum		map_asteroidunique3				roots
+other	map_biomatter_moon.odf	scrap		map_biomatter_moon				roots
+other	map_dilithium_moon1.odf	scrap		map_dilithium_moon1				roots
+other	map_dilithium_moon2.odf	scrap		map_dilithium_moon2				roots
+other	map_dilithium_moon3.odf	scrap		map_dilithium_moon3				roots
+other	map_dilithium_moon4.odf	scrap		map_dilithium_moon4				roots
+other	map_ice_dilithium_moon1.odf	scrap		map_ice_dilithium_moon1				roots
+other	map_ice_dilithium_moon2.odf	scrap		map_ice_dilithium_moon2				roots
+other	map_ice_dilithium_moon3.odf	scrap		map_ice_dilithium_moon3				roots
+other	map_ice_dilithium_moon4.odf	scrap		map_ice_dilithium_moon4				roots
+other	map_ice_tritanium_moon1.odf	scrap		map_ice_tritanium_moon1				roots
+other	map_ice_tritanium_moon2.odf	scrap		map_ice_tritanium_moon2				roots
+other	map_ice_tritanium_moon3.odf	scrap		map_ice_tritanium_moon3				roots
+other	map_ice_tritanium_moon4.odf	scrap		map_ice_tritanium_moon4				roots
+other	map_iceasteroid_large1.odf	latinum		map_iceasteroid_large1				roots
+other	map_iceasteroid_large2.odf	latinum		map_iceasteroid_large2				roots
+other	map_iceasteroid_large3.odf	latinum		map_iceasteroid_large3				roots
+other	map_iceasteroid_large4.odf	latinum		map_iceasteroid_large4				roots
+other	map_iceasteroid_small1.odf	latinum		map_iceasteroid_small1				roots
+other	map_iceasteroid_small2.odf	latinum		map_iceasteroid_small2				roots
+other	map_iceasteroid_small3.odf	latinum		map_iceasteroid_small3				roots
+other	map_iceasteroid_small4.odf	latinum		map_iceasteroid_small4				roots
+other	map_iceasteroidset1.odf	latinum		map_iceasteroidset1				roots
+other	map_iceasteroidset2.odf	latinum		map_iceasteroidset2				roots
+other	map_iceasteroidset_dust1.odf	background_obj		map_iceasteroidset_dust1				roots
+other	map_iceasteroidset_dust2.odf	background_obj		map_iceasteroidset_dust2				roots
+other	map_iceasteroidset_light1.odf	background_obj		map_iceasteroidset_light1				roots
+other	map_iceasteroidset_light2.odf	background_obj		map_iceasteroidset_light2				roots
+other	map_planet_classd01.odf	background_obj		map_planet_classd01	6			roots
+other	map_planet_classh01.odf	background_obj		map_planet_classh01	7			roots
+other	map_planet_classj01.odf	background_obj		map_planet_classj01	10			roots
+other	map_planet_classm01.odf	background_obj		map_planet_classm01	0.6			roots
+other	map_planet_classm02.odf	background_obj		map_planet_classm02	0.65			roots
+other	map_planet_classm03.odf	background_obj		map_planet_classm03	0.5			roots
+other	map_planet_classm04.odf	background_obj		map_planet_classm04	0.7			roots
+other	map_planet_classm05.odf	background_obj		map_planet_classm05	0.65			roots
+other	map_planet_classm06.odf	background_obj		map_planet_classm06	0.7			roots
+other	map_planet_classm07.odf	background_obj		map_planet_classm07	0.7			roots
+other	map_planet_classm08.odf	background_obj		map_planet_classm08	0.7			roots
+other	map_planet_classy01.odf	background_obj		map_planet_classy01	0.7			roots
+other	map_planet_earth.odf	background_obj		map_planet_classMEarth	0.6			roots
+other	map_planet_sun01.odf	background_obj		map_planet_sun01	1.0			roots
+other	map_planet_sun02.odf	background_obj		map_planet_sun02	1.0			roots
+other	map_tritanium_moon1.odf	scrap		map_tritanium_moon1				roots
+other	map_tritanium_moon2.odf	scrap		map_tritanium_moon2				roots
+other	map_tritanium_moon3.odf	scrap		map_tritanium_moon3				roots
+other	map_tritanium_moon4.odf	scrap		map_tritanium_moon4				roots
+ship	mcorvette.odf	craft	npc_maquis	fmaquis	1.33			roots
+ship	mmm_holder.odf	craft	ferengi	mmm_holder				roots
+ship	mmm_mapper.odf	craft	ferengi	mmm_mapper				roots
+other	mwreck.odf	latinum		mwreck	3.5			roots
+other	mwreck2.odf	latinum		mwreck2	3.5			roots
+other	mwreckd.odf	latinum		mwreck	3.5			roots
+other	mwreckd2.odf	latinum		mwreck2	3.5			roots
+ship	nbre_battleship.odf	craft	npc_breen	nbre_battleshipD	1.8	-2		roots
+ship	nbre_battleshipd.odf	craft	dominion	nbre_battleshipd				roots
+ship	nbre_battleshipdp.odf	evolver	dominion	nbre_battleshipdp				roots
+ship	nbre_battleshipdr2.odf	craft	dominion	nbre_battleship				roots
+ship	nbre_battleshipdr3.odf	craft	dominion	nbre_battleship				roots
+ship	nbre_battleshipdr4.odf	craft	dominion	nbre_battleship				roots
+ship	nbre_battleshipdr5.odf	craft	dominion	nbre_battleship				roots
+ship	nbre_battleshipdr6.odf	craft	dominion	nbre_battleship				roots
+ship	nbre_battleshipp.odf	evolver	npc_breen	nbre_battleshipp				roots
+ship	nbre_battleshipr2.odf	craft	npc_breen	nbre_battleship				roots
+ship	nbre_battleshipr3.odf	craft	npc_breen	nbre_battleship				roots
+ship	nbre_battleshipr4.odf	craft	npc_breen	nbre_battleship				roots
+ship	nbre_battleshipr5.odf	craft	npc_breen	nbre_battleship				roots
+ship	nbre_battleshipr6.odf	craft	npc_breen	nbre_battleship				roots
+ship	nbre_cruiser.odf	craft	npc_breen	nbre_cruiserD	2.9			roots
+ship	nbre_cruiserd.odf	craft	dominion	nbre_cruiserd				roots
+ship	nbre_cruiserdp.odf	evolver	dominion	nbre_cruiserdp				roots
+ship	nbre_cruiserdr2.odf	craft	dominion	nbre_cruiser				roots
+ship	nbre_cruiserdr3.odf	craft	dominion	nbre_cruiser				roots
+ship	nbre_cruiserdr4.odf	craft	dominion	nbre_cruiser				roots
+ship	nbre_cruiserdr5.odf	craft	dominion	nbre_cruiser				roots
+ship	nbre_cruiserdr6.odf	craft	dominion	nbre_cruiser				roots
+ship	nbre_cruiserp.odf	evolver	npc_breen	nbre_cruiserp				roots
+ship	nbre_cruiserr2.odf	craft	npc_breen	nbre_cruiser				roots
+ship	nbre_cruiserr3.odf	craft	npc_breen	nbre_cruiser				roots
+ship	nbre_cruiserr4.odf	craft	npc_breen	nbre_cruiser				roots
+ship	nbre_cruiserr5.odf	craft	npc_breen	nbre_cruiser				roots
+ship	nbre_cruiserr6.odf	craft	npc_breen	nbre_cruiser				roots
+ship	nfer_marauder.odf	craft	ferengi	nfer_marauder				roots
+ship	nfer_marauderr2.odf	craft	ferengi	nfer_marauder				roots
+ship	nfer_marauderr3.odf	craft	ferengi	nfer_marauder				roots
+station	npc_unityone.odf	shipyard	npc_wreckage	npc_unityone				roots
+station	radvancedyard.odf	shipyard	romulanempire	rom_warbird_yard	0.9			roots
+ship	rartillery.odf	craft	romulanempire	rom_serkas	1.0			roots
+ship	rartilleryr2.odf	craft	romulanempire	rom_serkas	1.0			roots
+ship	rartilleryr3.odf	craft	romulanempire	rom_serkas	1.0			roots
+station	rbase.odf	starbase	romulanempire	rom_starbase	0.89	-55		roots
+station	rbaseb.odf	starbase	romulanempire	rom_starbase	0.89	-55		roots
+station	rbasebt.odf	starbase	romulanempire	rom_starbase	0.89	-55		roots
+station	rbasei.odf	starbase	romulanempire	rom_starbase	0.89	-55		roots
+station	rbaseib.odf	starbase	romulanempire	rom_starbase	0.89	-55		roots
+station	rbaset.odf	starbase	romulanempire	rom_starbase	0.89	-55		roots
+station	rbasicyard.odf	shipyard	romulanempire	rom_staryard	0.9			roots
+ship	rconst.odf	constructionrig	romulanempire	rom_mogai	1.0	-10		roots
+ship	rcorvette.odf	craft	romulanempire	rom_talon	0.9			roots
+ship	rcruiser.odf	craft	romulanempire	rom_griffin	1.2			roots
+ship	rcruiserr2.odf	craft	romulanempire	rom_griffin	1.2			roots
+ship	rcruiserr3.odf	craft	romulanempire	nfer_marauder	1.2			roots
+station	rdefenseplatform.odf	sensor	romulanempire	rom_disruptor_turret	0.85			roots
+ship	rdestroyer.odf	craft	romulanempire	rdestroy	1.35			roots
+ship	refunddrone_dom.odf	fighter	unitedfederation	effect_empty	0.1			roots
+ship	refunddrone_dom_ai.odf	fighter	unitedfederation	effect_empty	0.1			roots
+ship	refunddrone_kli.odf	fighter	unitedfederation	effect_empty	0.1			roots
+ship	rescort.odf	craft	romulanempire	rom_rhienn	1.8			roots
+ship	rescortr2.odf	craft	romulanempire	rom_rhienn	1.8			roots
+ship	rescortr3.odf	craft	romulanempire	rom_rhienn	1.8			roots
+ship	rhbattleship.odf	craft	romulanempire	rscim	3.05	-38		roots
+ship	rhbattleshipr2.odf	craft	romulanempire	rscim	3.05	-38		roots
+ship	rhbattleshipr3.odf	craft	romulanempire	rscim	3.05	-38		roots
+ship	rlbattleship.odf	craft	romulanempire	rom_dderidex	0.58	-29		roots
+ship	rlbattleship_ref.odf	craft	romulanempire	rom_dderidex	0.58	-29		roots
+ship	rlbattleship_refr2.odf	craft	romulanempire	rom_dderidex	0.58	-29		roots
+ship	rlbattleship_refr3.odf	craft	romulanempire	rom_dderidex	0.58	-29		roots
+ship	rlbattleshipr2.odf	craft	romulanempire	rom_dderidex	0.58	-29		roots
+ship	rlbattleshipr3.odf	craft	romulanempire	rom_dderidex	0.58	-29		roots
+ship	rminer.odf	freighter	romulanempire	rom_fakairu	1.0	-10		roots
+station	rminingstation.odf	mining	romulanempire	rom_mining_colony	0.95	-1		roots
+ship	rom_dismantler.odf	freighter	romulanempire	rom_s_workbee				roots
+station	rreinforcement.odf	research	romulanempire	rom_cloaking_generator	1.0			roots
+station	rsensorarray.odf	sensor	romulanempire	rom_spy_satellite	1.0			roots
+ship	rsupport.odf	craft	romulanempire	rom_norexan	0.285	-1		roots
+ship	rsupport0.odf	craft	romulanempire	rom_norexan	0.285	-1		roots
+ship	rsupport1.odf	craft	romulanempire	rom_norexan	0.285	-1		roots
+ship	rsupport1r2.odf	craft	romulanempire	rom_norexan	0.285	-1		roots
+ship	rsupport1r3.odf	craft	romulanempire	rom_norexan	0.285	-1		roots
+ship	rsupport2.odf	craft	romulanempire	rom_norexan	0.285	-1		roots
+ship	rsupport2r2.odf	craft	romulanempire	rom_norexan	0.285	-1		roots
+ship	rsupport2r3.odf	craft	romulanempire	rom_norexan	0.285	-1		roots
+ship	rsupport3.odf	craft	romulanempire	rom_norexan	0.285	-1		roots
+ship	rsupport3r2.odf	craft	romulanempire	rom_norexan	0.285	-1		roots
+ship	rsupport3r3.odf	craft	romulanempire	rom_norexan	0.285	-1		roots
+ship	rsupportr2.odf	craft	romulanempire	rom_norexan	0.285	-1		roots
+ship	rsupportr3.odf	craft	romulanempire	rom_norexan	0.285	-1		roots
+station	rsupportresearch.odf	shipyard	romulanempire	rom_research_institute	1.0			roots
+station	rupgraderesearch.odf	shipyard	romulanempire	rom_upgrade_facility	1.0			roots
+station	sbasicyard.odf	shipyard	npc_sikarian	fed_mixedtech_yard_dom	1.0			roots
+ship	scruiser.odf	craft	npc_sikarian	dom_intercept_dest	1.2			roots
+ship	scruiserr2.odf	craft	npc_sikarian	dom_intercept_dest	1.2			roots
+ship	scruiserr3.odf	craft	npc_sikarian	dom_intercept_dest	1.2			roots
+station	sdefenseplatform.odf	sensor	npc_sikarian	dom_passiveprobe	2.0			roots
+other	sensordrone.odf	u_ball_obj		effect_empty				roots
+other	sensordrone_8472.odf	u_ball_obj		effect_empty				roots
+other	sensordrone_rom.odf	u_ball_obj		effect_empty				roots
+ship	sphere617.odf	craft	freeborg	bor_sphere	0.8	5		roots
+ship	sphere617b.odf	craft	borg	bor_sphere	0.8	5		roots
+other	swreck.odf	latinum		swreck	3.5			roots
+other	swreck2.odf	latinum		swreck2	3.5			roots
+other	swreckd.odf	latinum		swreck	3.5			roots
+other	swreckd2.odf	latinum		swreck2	3.5			roots
+ship	trigger_derelictcreation.odf	craft	npc_wreckage	trigger_general				roots
+ship	trigger_dilithium.odf	craft	npc_wreckage	trigger_dilithium				roots
+other	trigger_error.odf	scrap		trigger_error				roots
+ship	trigger_tritanium.odf	craft	npc_wreckage	trigger_tritanium				roots
+other	warpin_visual.odf	u_ball_obj		effect_warp				roots
+other	xlwreck.odf	latinum		xlwreck	3.5			roots
+other	xlwreck2.odf	latinum		xlwreck2	3.5			roots
+other	xlwreckd.odf	latinum		xlwreck	3.5			roots
+other	xlwreckd2.odf	latinum		xlwreck2	3.5			roots
+ship	zfercarg.odf	cargo_ship	ferengi	zfercarg				roots
+ship	zferscav.odf	craft	ferengi	nfer_marauder				roots
