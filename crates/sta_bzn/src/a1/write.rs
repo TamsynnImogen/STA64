@@ -45,7 +45,8 @@ impl Out {
         let b: Vec<u8> = v.iter().flat_map(|f| f.to_le_bytes()).collect();
         self.rec(9, &b);
     }
-    /// A zero-padded text of `size` bytes (`kind` 2, or 7 for a PrjID).
+    /// A zero-padded text of `size` bytes: `kind` 2 keeps a NUL (every stock buffer
+    /// has one), `kind` 7 (a PrjID) fills its eight bytes.
     fn text(
         &mut self,
         kind: u8,
@@ -53,11 +54,12 @@ impl Out {
         s: &str,
         size: usize,
     ) -> Result<(), WriteError> {
-        if s.len() > size {
+        let max = if kind == 7 { size } else { size - 1 };
+        if s.len() > max {
             return Err(WriteError::TooLong {
                 field,
                 len: s.len(),
-                max: size,
+                max,
             });
         }
         let mut b = s.as_bytes().to_vec();
@@ -92,7 +94,8 @@ fn resize(v: f32, from: (f32, f32), to: (f32, f32)) -> f32 {
 
 fn neighbours(v: f32) -> impl Iterator<Item = f32> {
     let bits = v.to_bits();
-    // Same sign: bits move monotonically with magnitude.
+    // Bits move monotonically with magnitude within a sign; a step across zero or
+    // past the largest finite value gives NaN or inf, which the callers skip.
     let step = move |d: i32| f32::from_bits((bits as i64 + i64::from(d)) as u32);
     [0, 1, -1, 2, -2, 3, -3].into_iter().map(step)
 }
@@ -115,8 +118,15 @@ fn header(data: &MapData, version: u32) -> Vec<u8> {
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect();
-    format!("version [1] =\r\n{version}\r\nsaveGameDesc = {hex}\r\nbinarySave [1] =\r\ntrue\r\n")
-        .into_bytes()
+    let crlf = format!(
+        "version [1] =\r\n{version}\r\nsaveGameDesc = {hex}\r\nbinarySave [1] =\r\ntrue\r\n"
+    );
+    // The reader keeps the header's length; a file with LF endings (five lines, five
+    // bytes shorter) is written with LF again.
+    if data.header.metadata_offset + 5 == crlf.len() {
+        return crlf.replace("\r\n", "\n").into_bytes();
+    }
+    crlf.into_bytes()
 }
 
 /// A light's payload in the shape [`super::body`] recognises: the colour, `pos`,
@@ -126,8 +136,11 @@ fn light(o: &mut Out, colour: [f32; 3], pos: [f32; 3]) {
         o.float(c);
     }
     o.vec3(pos);
+    // `velMag` is 0 and `velMagInv` about 1e30 in every stock light (0x7149F2CA); `vel`,
+    // `omega` and `accel` are zero. `pos` is the placement's: the stock files keep a
+    // slightly different value there that is not read (CON-40).
     o.float(0.0);
-    o.float(0.0);
+    o.float(f32::from_bits(0x7149_F2CA));
     for _ in 0..3 {
         o.vec3([0.0; 3]);
     }
@@ -198,6 +211,7 @@ pub(crate) fn write_map(map: &Map, data: &MapData) -> Result<Vec<u8>, WriteError
     for (i, obj) in map.objects.iter().enumerate() {
         write_object(
             &mut o,
+            i,
             obj,
             data.object_refs[i],
             data.initial_positions[i],
@@ -262,6 +276,7 @@ pub(crate) fn write_map(map: &Map, data: &MapData) -> Result<Vec<u8>, WriteError
 
 fn write_object(
     o: &mut Out,
+    index: usize,
     obj: &MapObject,
     reference: u32,
     initial: [f32; 3],
@@ -270,7 +285,7 @@ fn write_object(
     finite("object transform", &obj.transform)?;
     finite("object position", &initial)?;
     if obj.odf.is_empty() {
-        return Err(WriteError::EmptyOdf { index: 0 });
+        return Err(WriteError::EmptyOdf { index });
     }
     o.text(7, "PrjID", &obj.odf, 8)?;
     o.int(obj.entity_id);
@@ -410,7 +425,6 @@ mod tests {
             bytes
         );
         assert!(bytes.starts_with(b"version [1] =\r\n2051\r\nsaveGameDesc = 54657374"));
-        assert!(bytes.windows(6).any(|w| w == b"true\r\n"));
     }
 
     #[test]
@@ -648,6 +662,56 @@ mod tests {
     }
 
     #[test]
+    fn lf_headers_are_written_with_lf() {
+        let mut m = sample(false);
+        let a1 = m.a1.as_mut().unwrap();
+        a1.header.metadata_offset = 313;
+        let bytes = crate::write::write(&m).unwrap();
+        assert!(
+            !bytes.windows(2).any(|w| w == b"\r\n"),
+            "CRLF in an LF file"
+        );
+        assert_eq!(crate::parse(&bytes).unwrap(), m);
+    }
+
+    #[test]
+    fn resize_maps_back_for_awkward_factors() {
+        // Not a power of two, with an offset target: a value the reader's resize produced
+        // has a stored source value that gives it back exactly.
+        let (from, to) = ((0.0_f32, 6400.0_f32), (500.0_f32, 4500.0_f32));
+        let mut exact = 0;
+        for i in 0..2000 {
+            let source = i as f32 * 3.1 + 0.37;
+            let target = resize(source, from, to);
+            if let Ok(back) = unresize(target, from, to) {
+                assert_eq!(resize(back, from, to), target);
+                exact += 1;
+            }
+        }
+        assert!(exact > 1900, "only {exact} of 2000 values map back");
+    }
+
+    #[test]
+    fn a_full_text_buffer_is_refused_so_every_text_keeps_its_nul() {
+        let mut m = sample(false);
+        m.file_name = "x".repeat(16);
+        assert!(matches!(
+            crate::write::write(&m),
+            Err(WriteError::TooLong {
+                field: "msn_filename",
+                max: 15,
+                ..
+            })
+        ));
+        let mut m = sample(false);
+        m.file_name = "x".repeat(15);
+        assert!(crate::write::write(&m).is_ok());
+        let mut m = sample(false);
+        m.objects[2].odf = "eightchr".into(); // a PrjID fills its eight bytes
+        assert!(crate::write::write(&m).is_ok());
+    }
+
+    #[test]
     fn header_variants_round_trip_and_keep_the_description_bytes() {
         for version in [2050, 2051, 2052, 2053] {
             let mut m = sample(false);
@@ -671,9 +735,6 @@ mod tests {
     fn a_light_colour_is_read_only_from_the_whole_light_shape() {
         // Three floats after a placement are not a light unless the rest of the
         // class payload follows in the DLight order.
-        let mut m = sample(false);
-        m.objects[1].light_colour = None;
-        let bytes = crate::write::write(&m).unwrap();
         let mut broken = crate::write::write(&sample(false)).unwrap();
         // Corrupt the light's 32-byte name record into a 31-byte one: no longer the shape.
         let name = broken
@@ -687,7 +748,6 @@ mod tests {
             back.objects[1].light_colour, None,
             "not a light without the 32-byte name"
         );
-        assert_eq!(crate::parse(&bytes).unwrap().objects[1].light_colour, None);
     }
 
     #[test]

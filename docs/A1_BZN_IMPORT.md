@@ -201,3 +201,18 @@ record shape and reports the colour in `MapObject::light_colour`. The stock inst
 holds 106 lights, all with it and no other object has it; 72 are not white, so
 `MapDef` conversion now gives A1 maps their authored light colours
 (`crates/sta_content/tests/a1_lights.rs`).
+
+**What a written A1 file is.** Until CON-40 writes the native class payload, the
+files this writer produces are for STA64 (its reader, MapDef conversion, the editor),
+not for `Armada.exe`: the class payload is absent except a light's colour shape,
+whose other values are fillers (`velMag` 0, `velMagInv` 1e30 as in every stock
+light, zero vectors, `pos` the placement's; the stock files keep a slightly
+different `pos` that is not read). Text buffers keep a NUL (a 16-byte `file_name`
+holds 15 characters; PrjIDs fill their eight bytes). A file with LF line endings
+is written with LF. An editor that changes a placement, the description or a
+resized position must keep `MapData` consistent (`initial_positions`,
+`mission_title`, ...): the writer reads its output back and refuses a `Map` whose
+two halves disagree (`A1NotExact`). The native renderer's use of the light colour
+(linear 0..1 RGB, as the values are on n/255 steps) is not checked against a
+running original; that needs a frame of one light-heavy map from the original
+beside STA64's.

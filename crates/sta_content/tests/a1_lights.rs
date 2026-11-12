@@ -52,8 +52,6 @@ fn a1_lights_carry_their_file_colours() {
     );
     assert!(problems.is_empty(), "{problems:?}");
     assert_eq!(converted, file_lights);
-    assert!(
-        coloured > 0,
-        "no light has a colour but white: the colours were not read"
-    );
+    // The stock install: 106 lights, 72 of them not white (measured on the file bytes).
+    assert_eq!((file_lights, coloured), (106, 72));
 }
