@@ -70,7 +70,10 @@ pub fn sniff(head: &[u8]) -> Option<Container> {
     }
     if head.len() >= 8 {
         let tag = &head[4..8];
-        if matches!(tag, b"ftyp" | b"moov" | b"mdat" | b"free" | b"wide" | b"skip") {
+        if matches!(
+            tag,
+            b"ftyp" | b"moov" | b"mdat" | b"free" | b"wide" | b"skip"
+        ) {
             return Some(Container::Mp4);
         }
     }
@@ -90,7 +93,11 @@ impl Rational {
     }
 
     pub fn as_f64(self) -> f64 {
-        if self.den == 0 { 0.0 } else { self.num as f64 / self.den as f64 }
+        if self.den == 0 {
+            0.0
+        } else {
+            self.num as f64 / self.den as f64
+        }
     }
 
     /// Time of `count` periods of this rate (frames at a frame rate), exact
@@ -165,7 +172,12 @@ pub struct Plane {
 impl Plane {
     /// A tightly packed plane (`stride == width * bytes_per_pixel`).
     pub fn packed(width: u32, height: u32, bytes_per_pixel: usize, data: Vec<u8>) -> Self {
-        Self { width, height, stride: width as usize * bytes_per_pixel, data }
+        Self {
+            width,
+            height,
+            stride: width as usize * bytes_per_pixel,
+            data,
+        }
     }
 
     /// Row `y`, `stride` bytes (the last row may be shorter if the producer
@@ -197,7 +209,13 @@ pub struct ColorSpec {
 pub enum Picture {
     /// Planar 4:2:0: chroma planes are `ceil(w/2) x ceil(h/2)`. `a`, when
     /// present, is a full-size alpha plane.
-    Yuv420 { y: Plane, u: Plane, v: Plane, a: Option<Plane>, color: ColorSpec },
+    Yuv420 {
+        y: Plane,
+        u: Plane,
+        v: Plane,
+        a: Option<Plane>,
+        color: ColorSpec,
+    },
     /// Packed 8-bit RGBA (`bytes per pixel` 4).
     Rgba(Plane),
 }
@@ -249,7 +267,13 @@ impl VideoFrame {
 }
 
 /// Convert planar 4:2:0 to packed RGBA with 16.16 fixed-point coefficients.
-pub fn yuv420_to_rgba(y: &Plane, u: &Plane, v: &Plane, a: Option<&Plane>, color: ColorSpec) -> Vec<u8> {
+pub fn yuv420_to_rgba(
+    y: &Plane,
+    u: &Plane,
+    v: &Plane,
+    a: Option<&Plane>,
+    color: ColorSpec,
+) -> Vec<u8> {
     // Coefficients for R = Y' + cr_r*Cr, G = Y' - cb_g*Cb - cr_g*Cr, B = Y' + cb_b*Cb
     // (Kr, Kb from the matrix), scaled for the range.
     let (kr, kb) = match color.matrix {
@@ -257,8 +281,11 @@ pub fn yuv420_to_rgba(y: &Plane, u: &Plane, v: &Plane, a: Option<&Plane>, color:
         Matrix::Bt709 => (0.2126f64, 0.0722f64),
     };
     let kg = 1.0 - kr - kb;
-    let (y_scale, c_scale, y_off) =
-        if color.full_range { (1.0, 1.0, 0) } else { (255.0 / 219.0, 255.0 / 224.0, 16) };
+    let (y_scale, c_scale, y_off) = if color.full_range {
+        (1.0, 1.0, 0)
+    } else {
+        (255.0 / 219.0, 255.0 / 224.0, 16)
+    };
     let f = |x: f64| (x * 65536.0).round() as i32;
     let ys = f(y_scale);
     let cr_r = f(2.0 * (1.0 - kr) * c_scale);
@@ -307,7 +334,11 @@ pub struct AudioChunk {
 impl AudioChunk {
     /// Sample frames (samples per channel) in this chunk.
     pub fn frames(&self) -> usize {
-        if self.channels == 0 { 0 } else { self.samples.len() / self.channels as usize }
+        if self.channels == 0 {
+            0
+        } else {
+            self.samples.len() / self.channels as usize
+        }
     }
 }
 
@@ -350,7 +381,10 @@ pub struct Movie {
 
 impl std::fmt::Debug for Movie {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Movie").field("info", self.source.info()).field("finished", &self.finished).finish()
+        f.debug_struct("Movie")
+            .field("info", self.source.info())
+            .field("finished", &self.finished)
+            .finish()
     }
 }
 
@@ -358,7 +392,12 @@ impl Movie {
     /// Wrap an already opened source.
     pub fn from_source(source: Box<dyn MediaSource>) -> Self {
         let video_done = source.info().video.is_none();
-        Self { source, audio: VecDeque::new(), video_done, finished: false }
+        Self {
+            source,
+            audio: VecDeque::new(),
+            video_done,
+            finished: false,
+        }
     }
 
     /// Open a movie held in memory, the container found from its first bytes.
@@ -490,7 +529,10 @@ mod tests {
 
     #[test]
     fn unknown_bytes_are_refused() {
-        assert!(matches!(Movie::open_bytes(b"RIFF\0\0\0\0WAVEfmt ".to_vec()), Err(MediaError::UnknownFormat)));
+        assert!(matches!(
+            Movie::open_bytes(b"RIFF\0\0\0\0WAVEfmt ".to_vec()),
+            Err(MediaError::UnknownFormat)
+        ));
     }
 
     #[test]
@@ -498,20 +540,47 @@ mod tests {
         let r = Rational::new(30000, 1001);
         assert_eq!(r.periods_to_duration(30000), Duration::from_secs(1001));
         assert_eq!(r.duration_to_periods(Duration::from_secs(1001)), 30000);
-        assert_eq!(Rational::new(15, 1).duration_to_periods(Duration::from_millis(999)), 14);
+        assert_eq!(
+            Rational::new(15, 1).duration_to_periods(Duration::from_millis(999)),
+            14
+        );
     }
 
     #[test]
     fn grey_and_primaries_convert() {
         let plane = |w, h, v| Plane::packed(w, h, 1, vec![v; (w * h) as usize]);
-        let limited = ColorSpec { matrix: Matrix::Bt601, full_range: false };
-        let grey = yuv420_to_rgba(&plane(2, 2, 126), &plane(1, 1, 128), &plane(1, 1, 128), None, limited);
+        let limited = ColorSpec {
+            matrix: Matrix::Bt601,
+            full_range: false,
+        };
+        let grey = yuv420_to_rgba(
+            &plane(2, 2, 126),
+            &plane(1, 1, 128),
+            &plane(1, 1, 128),
+            None,
+            limited,
+        );
         assert!(grey.chunks(4).all(|p| p == [128, 128, 128, 255]));
-        let white = yuv420_to_rgba(&plane(1, 1, 235), &plane(1, 1, 128), &plane(1, 1, 128), None, limited);
+        let white = yuv420_to_rgba(
+            &plane(1, 1, 235),
+            &plane(1, 1, 128),
+            &plane(1, 1, 128),
+            None,
+            limited,
+        );
         assert_eq!(white, [255, 255, 255, 255]);
         // Full-range BT.601 red is Y 76, Cb 85, Cr 255.
-        let full = ColorSpec { matrix: Matrix::Bt601, full_range: true };
-        let red = yuv420_to_rgba(&plane(1, 1, 76), &plane(1, 1, 85), &plane(1, 1, 255), None, full);
+        let full = ColorSpec {
+            matrix: Matrix::Bt601,
+            full_range: true,
+        };
+        let red = yuv420_to_rgba(
+            &plane(1, 1, 76),
+            &plane(1, 1, 85),
+            &plane(1, 1, 255),
+            None,
+            full,
+        );
         assert!(red[0] >= 253 && red[1] <= 2 && red[2] <= 2, "{red:?}");
     }
 }
