@@ -51,8 +51,9 @@ fn feed(vfs: &sta_vfs::Vfs, options: GameOptions) -> HudFeed {
         seed: 71, map: Arc::new(map), content: db.clone(), options,
         players: vec![PlayerSetup { id: PlayerId(0), team: TeamId(0), race: race.name.clone(), control: Control::Human }],
     };
-    let (sim, warnings) = sta_sim::Sim::from_setup_with_starts(&setup, &races);
+    let (mut sim, warnings) = sta_sim::Sim::from_setup_with_starts(&setup, &races);
     eprintln!("installed HUD start warnings: {}", warnings.len());
+    sim.step(&[]); // Let the existing energy system initialize its actual live pools.
     let view = sim.view();
     let selected = view.units.iter().find(|u| u.owner == PlayerId(0)).expect("authored start unit").id;
     HudFeed { view, player: PlayerId(0), selected: vec![selected], content: Some(db) }
@@ -70,7 +71,10 @@ fn resolved_pieces(app: &mut App, pieces: &[super::layout::Piece]) -> usize {
         .count()
 }
 
-fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, label: &str, options: GameOptions) {
+#[derive(Clone, Copy)]
+enum HoverCapture { Selected, Low, Other }
+
+fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, label: &str, options: GameOptions, hover_mode: HoverCapture) {
     let layout = crate::game::gui_layout(&vfs, cfg).unwrap_or_else(|| panic!("installed {cfg} missing"));
     let stock = StockLayout::new(&layout, Vec2::new(1080.0 * size.x as f32 / size.y as f32, 1080.0));
     let resource = stock.pieces("resourcePanel");
@@ -80,7 +84,37 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         !resource.is_empty() || !minimap.is_empty() || !info.is_empty(),
         "{label}: CFG has no authored background pieces to check"
     );
-    let hud_feed = feed(&vfs, options);
+    let mut hud_feed = feed(&vfs, options);
+    let original = hud_feed.selected[0];
+    let hover = match hover_mode {
+        HoverCapture::Selected => None,
+        HoverCapture::Low => { hud_feed.selected.clear(); Some(original) },
+        HoverCapture::Other => Some(hud_feed.view.units.iter().find(|unit| {
+            unit.id != original && unit.def != hud_feed.view.unit(original).unwrap().def
+                && unit.flags.contains(sta_sim::view::UnitFlags::SELECTABLE)
+        }).expect("a distinct authored start actor for hover precedence").id),
+    };
+    let source = hover.or_else(|| hud_feed.selected.first().copied()).map(|id| hud_feed.view.unit(id).unwrap());
+    let mut expected_bar = Vec::new();
+    let percent = |now: i128, max: i128| (max > 0).then(|| format!("{}%",(now * 200 + max).div_euclid(max * 2)));
+    let whole = |value: Fixed| { let bits=value.to_bits(); if bits>0 { (bits/Fixed::ONE.to_bits()).max(1) } else { bits/Fixed::ONE.to_bits() } };
+    if let Some(unit) = source {
+        use super::infobar::InfoBarField::{Name,Hull,Shields,Crew,Energy};
+        let shield = unit.shields.iter().fold([0_i128;2], |[n,m],s| [n+i128::from(s[0].to_bits()),m+i128::from(s[1].to_bits())]);
+        expected_bar = vec![
+            (Name,"shipName",Some(if hover.is_some() {hud_feed.unit_label(unit)} else {hud_feed.name(unit)})),
+            (Hull,"hull",percent(i128::from(unit.hull[0].to_bits()),i128::from(unit.hull[1].to_bits()))),
+            (Shields,"shields",percent(shield[0],shield[1])),
+            (Crew,"crew_amt",unit.crew.map(|v| whole(v[0]).to_string())),
+            (Energy,"energy_amt",unit.energy.and_then(|v| percent(i128::from(v[0].to_bits()),i128::from(v[1].to_bits())))),
+        ];
+    }
+    let bar_variant = super::layout::info_variant(&super::super::model::info(&hud_feed));
+    let info = stock.pieces(match bar_variant {
+        0 => "infoLowBackgroundPanel",
+        1 => "infoMiddleBackgroundPanel",
+        _ => "infoBackgroundPanel",
+    });
     let player = hud_feed.view.player(hud_feed.player).expect("capture player");
     let whole = |value: Fixed| value.to_bits() / Fixed::ONE.to_bits();
     let crew_text = player.crew.map(|v| whole(v).to_string()).unwrap_or_default();
@@ -111,6 +145,7 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
     configure_sets(&mut app);
     app.insert_resource(ClearColor(Color::BLACK))
         .insert_resource(profile)
+        .insert_resource(crate::input::hover::HoveredUnit(hover))
         .insert_resource(profile.theme())
         .insert_resource(Mounted(vfs))
         .insert_resource(GuiSkin {
@@ -217,7 +252,11 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         .query::<(&GuiButton, &ImageNode)>()
         .iter(app.world())
         .count();
-    assert!(commands > 0, "{label}: no command button art resolved");
+    if matches!(hover_mode, HoverCapture::Low) {
+        assert_eq!(commands, 0, "{label}: hovering must not enable selection commands");
+    } else {
+        assert!(commands > 0, "{label}: no command button art resolved");
+    }
     let resources = app
         .world_mut()
         .query::<&super::info::StockText>()
@@ -243,13 +282,43 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         .query::<(&super::info::StockText, &crate::ui::sprite_font::SpriteText, &Children)>()
         .iter(app.world())
     {
-        let super::info::StockText::Resource(id) = *kind else { continue };
+        let super::info::StockText::Resource(id) = *kind;
         let expected = stock.colour(&format!("resource_{id}_color")).unwrap_or(defaults[id]);
         assert_eq!(text.color, expected, "{label}: resource_{id} CFG/default tint");
         let rendered = children.iter().filter_map(|child| app.world().get::<TextColor>(child)).collect::<Vec<_>>();
         assert!(!rendered.is_empty(), "{label}: resource_{id} has no resolved text");
         assert!(rendered.iter().all(|colour| colour.0 == expected), "{label}: resource_{id} lost its rendered tint");
         eprintln!("{label}: resource_{id} rendered colour={expected:?}");
+    }
+
+    for (field,key,expected) in &expected_bar {
+        let actual = app.world_mut().query::<(&super::infobar::InfoBarField,&crate::ui::sprite_font::SpriteText,&Visibility,&Children)>()
+            .iter(app.world()).find(|(kind,_,_,_)| **kind==*field)
+            .map(|(_,text,visibility,children)| (text.text.clone(),text.color,*visibility,children.iter().collect::<Vec<_>>()));
+        if stock.rect(key).is_none() {
+            assert!(actual.is_none(),"{label}: disabled InfoBar {key}");
+            continue;
+        }
+        let (text,colour,visibility,children)=actual.expect("authored InfoBar text slot");
+        assert_eq!(text,expected.clone().unwrap_or_default(),"{label}: hovered InfoBar {key}");
+        assert_eq!(visibility,if expected.is_some() {Visibility::Inherited} else {Visibility::Hidden});
+        if expected.is_some() {
+            let expected_colour=if *field==super::infobar::InfoBarField::Name {
+                stock.colour("shipNameColor").unwrap_or_else(|| profile.theme().text)
+            } else {stock.colour(&format!("{key}_color")).or_else(|| stock.colour(if *field==super::infobar::InfoBarField::Energy {"specialEnergyIconColor"} else {"systemIconHealthyColor"})).unwrap_or(Color::srgb(0.0,1.0,0.0))};
+            assert_eq!(colour,expected_colour,"{label}: InfoBar {key} tint");
+            assert!(children.iter().any(|&child| app.world().get::<TextColor>(child).is_some_and(|t| t.0==expected_colour)),"{label}: resolved InfoBar text tint");
+        }
+        eprintln!("{label}: InfoBar {key}={text:?} colour={colour:?} visibility={visibility:?}");
+    }
+    for (entity,kind,image,visibility) in app.world_mut().query::<(Entity,&super::infobar::InfoBarIcon,&GuiImage,&Visibility)>().iter(app.world()) {
+        let (_,key,expected)=expected_bar.iter().find(|(field,_,_)|*field==kind.0).unwrap();
+        assert_eq!(*visibility,if expected.is_some() {Visibility::Inherited} else {Visibility::Hidden});
+        if expected.is_some() {
+            assert_eq!(image.names,[*key]);
+            assert_eq!(image.color,stock.colour(&format!("{key}_color")).or_else(|| stock.colour(if kind.0==super::infobar::InfoBarField::Energy {"specialEnergyIconColor"} else {"systemIconHealthyColor"})).unwrap_or(Color::srgb(0.0,1.0,0.0)));
+            assert!(app.world().get::<ImageNode>(entity).is_some(),"{label}: resolved InfoBar icon {key}");
+        }
     }
 
     let frames = Arc::new(Mutex::new(Vec::<Image>::new()));
@@ -305,6 +374,21 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
             eprintln!("{label}: resource_{id} colour-matched text pixels={matching}");
         }
     }
+    if stock.colour("hull_color").is_none() && stock.colour("systemIconHealthyColor").is_none() {
+        let origin=stock.info_origin(bar_variant)+stock.point(&format!("infoBarOffset_{bar_variant}")).unwrap_or(Vec2::ZERO);
+        if let Some(rect)=stock.at(origin,"icon_hull") {
+            let scale=size.y as f32/1080.0;
+            let mut green=0;
+            for y in (rect.y*scale).max(0.0) as u32..((rect.y+rect.h)*scale).min(size.y as f32) as u32 {
+                for x in (rect.x*scale).max(0.0) as u32..((rect.x+rect.w)*scale).min(size.x as f32) as u32 {
+                    let p=rgba.get_pixel(x,y);
+                    if p[1]>150 && p[0]<80 && p[2]<80 {green+=1;}
+                }
+            }
+            assert!(green>=2,"{label}: native hull icon is not visibly status-tinted");
+            eprintln!("{label}: green InfoBar hull-icon pixels={green}");
+        }
+    }
     // A2's first two resource atlas pieces meet at canvas x=256. On a wide
     // viewport Auto letterboxes both pieces and leaves a black gap here; native
     // independent-axis drawing must fill this authored join.
@@ -350,13 +434,17 @@ fn installed_stock_hud_renders_on_gpu() {
         let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod.as_deref())
             .expect("installed stock VFS");
         let mode = if profile == UiProfile::FleetOps { "fo4" } else { "a2" };
-        capture_one(vfs, profile, size, cfg, &format!("{mode}-{ratio}"), GameOptions::default());
+        capture_one(vfs, profile, size, cfg, &format!("{mode}-{ratio}"), GameOptions::default(), HoverCapture::Selected);
     }
     if profile == UiProfile::Armada2 {
         let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod.as_deref()).unwrap();
         let mut options = GameOptions::default();
         options.starting_resources = sta_content::StartingResources::Lots;
         options.officer_limit = 1;
-        capture_one(vfs, profile, UVec2::new(1280,720), "gui_fed.cfg", "a2-lots-restricted-16x9", options);
+        capture_one(vfs, profile, UVec2::new(1280,720), "gui_fed.cfg", "a2-lots-restricted-16x9", options, HoverCapture::Selected);
+        for (mode,label) in [(HoverCapture::Low,"a2-hover-low-16x9"),(HoverCapture::Other,"a2-hover-other-16x9")] {
+            let vfs=sta_vfs::Vfs::mount_install(std::path::Path::new(&install),active_mod.as_deref()).unwrap();
+            capture_one(vfs,profile,UVec2::new(1280,720),"gui_fed.cfg",label,GameOptions::default(),mode);
+        }
     }
 }

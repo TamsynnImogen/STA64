@@ -16,8 +16,6 @@ use crate::ui::theme::{Theme, UiButton, WidgetState};
 #[derive(Component, Clone, Copy)]
 pub(in crate::ui::hud) enum StockText {
     Resource(usize),
-    Hull,
-    Shield,
 }
 
 #[derive(Component, Clone, Copy)]
@@ -233,7 +231,6 @@ fn spawn_single(
     feed: &HudFeed,
     theme: &Theme,
     origin: Vec2,
-    variant: usize,
     single: &model::Single,
 ) {
     if let Some(r) = chosen_rect(
@@ -309,36 +306,7 @@ fn spawn_single(
     {
         bar(commands, root, r, progress, theme.warn, StockBar::Progress(r.w));
     }
-    // The native infoBarOffset is a local offset to the separate top stats frame.
-    let stats = origin + layout.point(&format!("infoBarOffset_{variant}")).unwrap_or(Vec2::ZERO);
-    for (key, value, kind) in [
-        ("shipName", single.name.clone(), None),
-        (
-            "hull",
-            format!("{}/{}", single.hull_now, single.hull_max),
-            Some(StockText::Hull),
-        ),
-        (
-            "shields",
-            single
-                .shield
-                .map(|v| format!("{}%", (v * 100.0).round() as i32))
-                .unwrap_or_default(),
-            Some(StockText::Shield),
-        ),
-    ] {
-        if value.is_empty() {
-            continue;
-        }
-        if let Some(r) = layout.at(stats, key) {
-            let color = if key == "shipName" {
-                layout.colour("shipNameColor").unwrap_or(theme.text)
-            } else {
-                theme.text
-            };
-            text(commands, root, r, value, color, theme.small_size, kind);
-        }
-    }
+
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -418,7 +386,7 @@ pub(super) fn spawn(commands: &mut Commands, root: Entity, layout: &StockLayout,
     }
     match &info {
         Info::None => {}
-        Info::Single(single) => spawn_single(commands, root, layout, feed, theme, origin, variant, single),
+        Info::Single(single) => spawn_single(commands, root, layout, feed, theme, origin, single),
         Info::Group(tiles) => spawn_group(commands, root, layout, feed, theme, origin, variant, tiles),
     }
 }
@@ -430,15 +398,9 @@ pub(in crate::ui::hud) fn update(
 ) {
     let info = model::info(&feed);
     for (kind, mut text) in &mut texts {
-        let value = match (kind, &info) {
-            (StockText::Resource(id), _) => Some(resource_text(&feed, *id).unwrap_or_default()),
-            (StockText::Hull, Info::Single(s)) => Some(format!("{}/{}", s.hull_now, s.hull_max)),
-            (StockText::Shield, Info::Single(s)) => s.shield.map(|v| format!("{}%", (v * 100.0).round() as i32)),
-            _ => None,
-        };
-        if let Some(value) = value
-            && text.text != value
-        {
+        let StockText::Resource(id) = kind;
+        let value = resource_text(&feed, *id).unwrap_or_default();
+        if text.text != value {
             text.text = value;
         }
     }

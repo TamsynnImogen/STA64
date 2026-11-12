@@ -5,6 +5,7 @@
 //! the sim link stamps and routes them. Systems run in `GameSet::Input`.
 
 pub mod context;
+pub mod hover;
 pub mod keys;
 pub mod orders;
 pub mod select;

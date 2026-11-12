@@ -272,8 +272,7 @@ fn inherited_a2_info_colour_tints_single_and_builder_text() {
         assert_eq!(stock_colour_at(&mut app, name_key, false), Color::srgba(1.0, 0.0, 1.0, 1.0));
         assert_eq!(stock_colour_at(&mut app, class_key, false), Color::srgba(1.0, 0.0, 1.0, 1.0));
         assert_eq!(stock_colour_at(&mut app, "shipName", true), Color::srgba(0.0, 1.0, 0.0, 1.0));
-        let fallback_text = app.world().resource::<Theme>().text;
-        assert_eq!(stock_colour_at(&mut app, "hull", true), fallback_text);
+        assert_eq!(stock_colour_at(&mut app, "hull", true), Color::srgb(0.0, 1.0, 0.0));
         assert_eq!(resource_colour(&mut app, 2), Color::srgba(1.0, 0.0, 0.0, 1.0));
     }
 }
@@ -377,6 +376,150 @@ fn authored_resource_colours_override_palette_and_survive_value_updates() {
     }
 }
 
+fn info_bar_label(app: &mut App, field: infobar::InfoBarField) -> Option<(Entity, String, Color, Visibility, Node)> {
+    app.world_mut().query::<(Entity, &infobar::InfoBarField, &SpriteText, &Visibility, &ChildOf)>()
+        .iter(app.world()).find_map(|(entity, kind, text, visibility, parent)| {
+            (*kind == field).then(|| (entity, text.text.clone(), text.color, *visibility,
+                app.world().get::<Node>(parent.parent()).unwrap().clone()))
+        })
+}
+
+fn info_bar_content(builder: bool) -> Arc<ContentDb> {
+    let base = content_with_build_count(usize::from(builder));
+    let mut db = ContentDb::builder().profile(base.profile()).features(base.features().clone());
+    for weapon in base.weapons() { db = db.weapon(weapon.clone()); }
+    for unit in base.units() {
+        let mut unit = unit.clone();
+        if unit.odf == "fx_cruiser" {
+            unit.raw = Arc::new(sta_odf::resolve("unit", &mut |_| Some(
+                "unitName = \"Construction Ship\"\npossibleCraftNames = \"USS Test\"".into()
+            )).unwrap());
+        }
+        db = db.unit(unit);
+    }
+    Arc::new(db.build().unwrap())
+}
+
+const INFO_BAR_CFG: &str = "\
+shields = 110 10 50 20
+crew_amt = 200 10 50 20
+energy_amt = 300 10 60 20
+icon_hull = 0 10 24 24
+icon_shields = 80 10 24 24
+icon_crew_amt = 170 10 24 24
+icon_energy_amt = 270 10 24 24
+infoBarOffset_0 = 11 7 0 0
+infoBarOffset_1 = 22 -3 0 0
+infoBarOffset_2 = 33 4 0 0
+";
+
+fn populated_info_bar(builder: bool, extra: &str) -> App {
+    let cfg = inherited_config(extra, INFO_BAR_CFG);
+    let mut app = app_with_content_and_config(info_bar_content(builder), cfg, UiProfile::Armada2);
+    let mut feed = app.world().resource::<HudFeed>().clone();
+    let mut view = (*feed.view).clone();
+    view.units[0].hull = [Fixed::from_int(100); 2];
+    view.units[0].shields = [[Fixed::from_int(100); 2]; 4];
+    view.units[0].crew = Some([Fixed::from_int(150); 2]);
+    view.units[0].energy = Some([Fixed::from_int(600); 2]);
+    let mut other = view.units[0].clone();
+    other.id = EntityId(2);
+    other.hull[0] = Fixed::from_int(50);
+    other.shields = [[Fixed::from_int(25), Fixed::from_int(100)]; 4];
+    other.crew = Some([Fixed::from_int(73), Fixed::from_int(150)]);
+    other.energy = Some([Fixed::from_int(17), Fixed::from_int(600)]);
+    view.units.push(other);
+    feed.view = Arc::new(view);
+    *app.world_mut().resource_mut::<HudFeed>() = feed;
+    app.update();
+    app
+}
+
+#[test]
+fn hovered_info_bar_keeps_selected_card_and_updates_real_pools_in_place() {
+    use infobar::InfoBarField::{Name, Hull, Shields, Crew, Energy};
+    let mut app = populated_info_bar(true, "hull_color = 0.2 0.4 0.6 0.8\ncrew_amt_color = 0 1 1 1\nshipNameColor = 1 0 1 1\n");
+    let fields = [Name, Hull, Shields, Crew, Energy];
+    let ids: Vec<_> = fields.iter().map(|&field| info_bar_label(&mut app, field).unwrap().0).collect();
+    assert_eq!(info_bar_label(&mut app, Name).unwrap().1, "USS Test");
+    app.world_mut().resource_mut::<crate::input::hover::HoveredUnit>().0 = Some(EntityId(2));
+    app.update();
+    for (field, expected) in [(Name,"Construction Ship"), (Hull,"50%"), (Shields,"25%"), (Crew,"73"), (Energy,"3%")] {
+        let label = info_bar_label(&mut app, field).unwrap();
+        assert_eq!(label.1, expected);
+        assert_eq!(label.3, Visibility::Inherited, "bar must follow HUD root visibility");
+    }
+    assert_eq!(info_bar_label(&mut app, Hull).unwrap().2, Color::srgba(0.2,0.4,0.6,0.8));
+    assert_eq!(info_bar_label(&mut app, Crew).unwrap().2, Color::srgb(0.0,1.0,1.0));
+    assert_eq!(info_bar_label(&mut app, Name).unwrap().2, Color::srgb(1.0,0.0,1.0));
+    assert_eq!(app.world().resource::<HudFeed>().selected, [EntityId(1)]);
+    assert_eq!(app.world().resource::<Selection>().0, [EntityId(1)]);
+    for (old, field) in ids.iter().zip(fields) {
+        assert_eq!(*old, info_bar_label(&mut app, field).unwrap().0);
+    }
+    let crew = info_bar_label(&mut app, Crew).unwrap().4;
+    assert_eq!((crew.left,crew.top,crew.width,crew.height),
+        (Val::Px(760.0),Val::Px(823.0),Val::Px(60.0),Val::Px(18.0)));
+    let icons: Vec<_> = app.world_mut().query::<(&infobar::InfoBarIcon, &crate::ui::gui_sprites::GuiImage, &Visibility)>()
+        .iter(app.world()).map(|(kind,image,visibility)| (kind.0,image.color,*visibility,image.names.clone())).collect();
+    assert_eq!(icons.len(),4);
+    let icon = icons.iter().find(|i| i.0 == Crew).unwrap();
+    assert_eq!(icon.1, Color::srgb(0.0,1.0,1.0));
+    assert_eq!(icon.2, Visibility::Inherited);
+    assert_eq!(icon.3, ["crew_amt"]);
+    let mut feed = app.world().resource::<HudFeed>().clone();
+    let mut view = (*feed.view).clone();
+    view.units[1].crew = Some([Fixed::from_int(41), Fixed::from_int(150)]);
+    view.units[1].energy = None;
+    feed.view = Arc::new(view);
+    *app.world_mut().resource_mut::<HudFeed>() = feed;
+    app.update();
+    assert_eq!(info_bar_label(&mut app, Crew).unwrap().1, "41");
+    assert_eq!(info_bar_label(&mut app, Energy).unwrap().3, Visibility::Hidden);
+    assert_eq!(info_bar_label(&mut app, Crew).unwrap().0, ids[3]);
+    app.world_mut().resource_mut::<crate::input::hover::HoveredUnit>().0 = None;
+    app.update();
+    assert_eq!(info_bar_label(&mut app, Name).unwrap().1, "USS Test");
+    assert_eq!(info_bar_label(&mut app, Crew).unwrap().1, "150");
+}
+
+#[test]
+fn no_selection_hover_uses_low_offset_and_missing_or_hidden_targets_clear_stats() {
+    use infobar::InfoBarField::{Name,Crew};
+    let mut app = populated_info_bar(false, "");
+    let mut feed = app.world().resource::<HudFeed>().clone();
+    feed.selected.clear();
+    *app.world_mut().resource_mut::<HudFeed>() = feed;
+    app.world_mut().resource_mut::<crate::input::hover::HoveredUnit>().0 = Some(EntityId(2));
+    app.update();
+    assert_eq!(info_bar_label(&mut app, Name).unwrap().1,"Construction Ship");
+    let node = info_bar_label(&mut app, Crew).unwrap().4;
+    assert_eq!((node.left,node.top), (Val::Px(733.0),Val::Px(825.0)));
+    let mut feed = app.world().resource::<HudFeed>().clone();
+    let mut view = (*feed.view).clone();
+    view.visibility = vec![(feed.player,vec![EntityId(1)])];
+    feed.view = Arc::new(view);
+    *app.world_mut().resource_mut::<HudFeed>() = feed;
+    app.update();
+    assert_eq!(info_bar_label(&mut app, Name).unwrap().3, Visibility::Hidden);
+    assert_eq!(info_bar_label(&mut app, Crew).unwrap().1, "");
+    let mut feed = app.world().resource::<HudFeed>().clone();
+    feed.selected = vec![EntityId(99)]; // No indexing panic or stale source.
+    *app.world_mut().resource_mut::<HudFeed>() = feed;
+    app.update();
+    assert_eq!(info_bar_label(&mut app, Crew).unwrap().3, Visibility::Hidden);
+}
+
+#[test]
+fn middle_info_bar_and_zero_area_fields_follow_independent_cfg_axes() {
+    use infobar::InfoBarField::{Crew,Energy};
+    let mut app = populated_info_bar(false, "icon_energy_amt = 0 0 0 0\ncrew_amt = 0 0 0 0\n");
+    assert!(info_bar_label(&mut app, Crew).is_none());
+    let energy = info_bar_label(&mut app, Energy).unwrap().4;
+    assert_eq!((energy.left,energy.top), (Val::Px(866.0),Val::Px(816.0)));
+    assert!(app.world_mut().query::<&infobar::InfoBarIcon>().iter(app.world()).all(|i| i.0 != Energy));
+}
+
 fn one<C: Component>(app: &mut App) -> Entity {
     app.world_mut()
         .query_filtered::<Entity, With<C>>()
@@ -475,9 +618,9 @@ fn numeric_values_patch_existing_stock_entities() {
         app.world_mut()
             .query::<(Entity, &info::StockText, &SpriteText)>()
             .iter(app.world())
-            .filter_map(|(e, kind, text)| match kind {
-                info::StockText::Resource(id) => Some((e, *id, text.text.clone())),
-                _ => None,
+            .map(|(e, kind, text)| {
+                let info::StockText::Resource(id) = kind;
+                (e, *id, text.text.clone())
             })
             .collect()
     };
@@ -486,9 +629,9 @@ fn numeric_values_patch_existing_stock_entities() {
     assert!(old.iter().any(|(_, id, text)| *id == 4 && text == "700"));
     let hull = app
         .world_mut()
-        .query::<(Entity, &info::StockText, &SpriteText)>()
+        .query::<(Entity, &infobar::InfoBarField, &SpriteText)>()
         .iter(app.world())
-        .find(|(_, kind, _)| matches!(kind, info::StockText::Hull))
+        .find(|(_, kind, _)| matches!(kind, infobar::InfoBarField::Hull))
         .map(|(e, _, text)| (e, text.text.clone()))
         .unwrap();
     let mut feed = app.world().resource::<HudFeed>().clone();
@@ -506,7 +649,7 @@ fn numeric_values_patch_existing_stock_entities() {
     assert!(new.iter().any(|(_, id, text)| *id == 2 && text == "1234"));
     let updated = app.world().get::<SpriteText>(hull.0).unwrap();
     assert_ne!(updated.text, hull.1);
-    assert_eq!(updated.text, "60/100");
+    assert_eq!(updated.text, "60%");
 }
 
 #[test]

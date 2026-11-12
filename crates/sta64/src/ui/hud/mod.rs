@@ -140,6 +140,7 @@ impl Plugin for HudPlugin {
             .init_resource::<HudFeed>()
             .init_resource::<HudState>()
             .init_resource::<HudPointer>()
+            .init_resource::<crate::input::hover::HoveredUnit>()
             .init_resource::<stock::StockState>()
             .init_resource::<super::gui_sprites::GuiSkin>()
             .init_resource::<super::gui_sprites::GuiSprites>()
@@ -165,6 +166,8 @@ impl Plugin for HudPlugin {
                     panels::update_values.before(super::theme::WidgetPaint),
                     host,
                     pointer,
+                    crate::input::hover::track.run_if(not(resource_exists::<ExternalFeed>)),
+                    stock::infobar::update,
                     press,
                     place_on_click.run_if(resource_exists::<Aim>),
                     ghost::update_ghost,

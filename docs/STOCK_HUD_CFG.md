@@ -221,3 +221,79 @@ include/case precedence and retaining tints across value updates. The installed
 windowless GPU check inspects resolved Bevy text colours and searches the
 Classic crew/dilithium/latinum slots for matching framebuffer pixels, so an
 all-white capture can no longer pass solely because its values are correct.
+
+
+## Mouseover InfoBar
+
+The separate InfoBar now follows the visible/selectable actor under the map
+cursor without changing Selection. It uses the same body/strategic picker as
+selection and orders, after fresh HUD hit testing. Hover is cleared over UI,
+outside the cursor/window, in menu scenes, for hidden/dying/nonselectable or
+removed actors, and when there is no live match. The bar can appear with no
+selection; when nothing is hovered it falls back to a single selected actor.
+The selected detail card and command panel keep their own selected actor.
+
+The selected panel's variant determines the origin:
+`infoPanelArea_0/1/2 + infoBarOffset_0/1/2`. Native CFG text rectangles are
+`hull`, `shields`, `crew_amt`, `energy_amt` and `shipName`; icon rectangles
+are `icon_hull`, `icon_shields`, `icon_crew_amt` and `icon_energy_amt`.
+Their GUI SPR names are `hull`, `shields`, `crew_amt` and `energy_amt`, resolved
+through the selected GUI table then `gui_global.spr`. Zero-area rectangles
+suppress their own element. The authored CFG scales independently on both axes.
+
+Hull, shields and energy show rounded whole percentages with the native `%`
+suffix; crew shows actual current crew. Percentages derive from live current/max
+pools, not definition capacities. Unknown
+unit pools stay blank with their icons hidden; known zero stays zero. Hover
+uses the authored `unitName` type caption; the selected-single fallback retains
+its stable possibleCraftNames instance caption. The main card retains both
+identity rows. `shipNameColor` controls the strip caption.
+
+Native numeric/icon tints follow faction ODF `crewYellowStatus` and
+`crewRedStatus` thresholds (defaults 0.5/0.25): strictly above yellow is green,
+strictly above red is yellow, otherwise nonnegative is red. Negative status
+is grey; a zero-capacity crew pool uses the native fully-crewed colour.
+The existing A2FOCraftIdentity GUI palette commands are also honoured:
+`systemIconHealthyColor`, `systemIconLowColor`, `systemIconCriticalColor` and
+`systemIconDestroyedColor` for hull/shield/crew status, plus the independent
+`specialEnergyIconColor`. The extension's healthy/low/critical boundaries are
+strictly above 50%, above 25%, and positive through 25%; zero percent uses the
+destroyed colour. Each missing palette command leaves its native fallback.
+This reuses the existing extension interface and does not load its binary.
+No subsystem-disabled state is fabricated from the currently exposed unit pools.
+
+Explicit numeric text and icon tint overrides may be supplied with these
+**additional STA64 GUI CFG keys** (not claims of original-A2 commands):
+
+```cfg
+hull_color = 0 1 0 1
+shields_color = 0 1 0 1
+crew_amt_color = 0 1 0 1
+energy_amt_color = 0 1 0 1
+```
+
+RGB/RGBA, inheritance and case-insensitive lookup follow the existing GUI CFG
+parser. An explicit per-field value wins over the A2FO palette and native status tint
+for that field and its icon. Original data is not edited. These optional presentation fields do
+not change simulation thresholds or crew/energy mechanics.
+
+The data prerequisite is merged #381: current crew and initialized energy are
+shared UnitView values. No capacity is substituted for unknown current crew;
+older snapshots preserve that unknown state. Crew spending/regeneration,
+casualties and boarding remain separate gameplay work.
+
+Static evidence from clean A2 SHA-256
+`8d3ba6ec826198daf3e0c7b3435e9ce8195293e56da7c87e0af2634eaa4693b3`:
+InfoBar loader near `0x4ef7fc..0x4efb4a` reads native text/icon areas and
+copies the name colour; percent getters `0x4ecd40`/`0x4ed000` multiply by 100;
+formatting near `0x4ece4a` uses floor(percent + 0.5) and the `%` literal at
+`0x70ad50`; energy uses the same format near `0x4edb9a` with `%` at `0x70af4c`.
+Current crew comes from
+actor state near `0x4ed3cf`. Status colour selection is `0x4ec5d0`, with race
+threshold defaults loaded at `0x48b52b..0x48b558`. White icon art requires tint.
+Private native receipts are in `STA64-artifacts/probes/unit-status/native-infobar*`.
+This is static original-A2 evidence, not original Roots runtime acceptance.
+
+Text/icon nodes persist across hover and value changes, following their HUD
+root visibility. The integrated checks and optimized launcher are recorded in
+the consumer PR; native live comparison and settled FPS remain a manual gate.
