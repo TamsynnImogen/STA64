@@ -7,13 +7,11 @@ tracks delivery of the shared profile/ODF capacity resolver and station
 admission check. Before this change the shared queue admitted five total jobs
 for every profile. The active head remains in the count until completion.
 
-Read-only inspection of the pinned owned GOG Armada 1 executable establishes
-an ordinary producer insertion limit of five. Its start path retains the head;
-its finish path removes it and decrements the count. The pinned stock Armada 2
-and Fleet Operations host insertion paths limit their native linked queues to
-ten. These are static findings, not original-game runtime acceptance. Private
-hashes and excerpts are retained outside the repository; no binary data,
-addresses or disassembly belong here.
+Original limits (read from the executables, static; not original-game runtime
+acceptance): Armada 1 admits at most five jobs per ordinary producer, the head
+staying in the count until it finishes; stock Armada 2 and Fleet Operations
+limit their native linked queues to ten. Private hashes and excerpts are
+retained outside the repository.
 
 The owned A2FOExtensions source also describes a separate logical queue of
 100 jobs, grouped into ten visible slots and materialized into the ten-node
