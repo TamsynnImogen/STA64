@@ -273,6 +273,23 @@ A2_SIGNATURES = {
     "void SetPerceivedTeam(int, int)": "A2.SetPerceivedTeam",
     "int GetPerceivedTeam(int)": "A2.GetPerceivedTeam",
     "void ObjectivesDisplay_Set_Text_From_File(char*, bool)": "A2.ObjectivesDisplay_Set_Text_From_File",
+    # Exact presentation requests (native_camera.rs, native_presentation.rs):
+    # one queued `Edit::Present` per call, no client consumer yet.
+    "void CenterCamera(int)": "A2.CenterCamera",
+    "void SetCameraZoom(float)": "A2.SetCameraZoom",
+    "void CineractiveConstantSpeed(bool)": "A2.CineractiveConstantSpeed",
+    "void CineractiveCameraOffset(float, float, float, bool)": "A2.CineractiveCameraOffset",
+    "void CineractiveCameraOffset(char*, float, bool)": "A2.CineractiveCameraOffset",
+    "void CineractiveShot(int, int)": "A2.CineractiveShot",
+    "void CineractiveShot(char*, int, int)": "A2.CineractiveShot",
+    "void CineractiveShot(char*, float, int)": "A2.CineractiveShot",
+    "void AddTransporterEffect(int)": "A2.AddTransporterEffect",
+    "void RemoveBillboardEffect(int)": "A2.RemoveBillboardEffect",
+    "void GridVisible(bool)": "A2.GridVisible",
+    "void RemoveFromAdLog(int)": "A2.RemoveFromAdLog",
+    "void Starfield_Load_New_Background_Geometry(char*, char*)": "A2.Starfield_Load_New_Background_Geometry",
+    "void MinimapMessage(int, int, float)": "A2.MinimapMessage",
+    "void MinimapMessage(char*, int, float, int)": "A2.MinimapMessage",
 }
 
 

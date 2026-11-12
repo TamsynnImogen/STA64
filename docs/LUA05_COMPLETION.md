@@ -103,3 +103,43 @@ sim confinement/ownership effects, pending spawn order, correlated rejection
 feedback, host objective transactions, inventory source coverage, standard and
 installed 1800-tick mission probes, Clippy/workspace and ARM64 checks. Keep all
 other campaign diagnostics visible and preserve original reference inputs.
+
+## Presentation-request slice (Cedric's session)
+
+Partial slice of #149 over the existing `Edit::Present` / `Presentation::Call`
+seam; no `sta_sim` change. Exact A2 inventory 28 used / 104 missing before,
+43 / 89 after (`tools/mission_dll_inventory.py`).
+
+- The eight camera signatures of [LUA05_CAMERA_REQUESTS.md](LUA05_CAMERA_REQUESTS.md)
+  were bound and tested in `native_camera.rs` but not yet credited by the
+  inventory tool; `A2_SIGNATURES` now lists them (name-level source check, as
+  for every other entry).
+- `api/a2/native_presentation.rs` binds seven more exact void requests with
+  no handle, script pointer or completion contract: `AddTransporterEffect(int)`,
+  `RemoveBillboardEffect(int)`, `GridVisible(bool)`, `RemoveFromAdLog(int)`,
+  `Starfield_Load_New_Background_Geometry(char*, char*)` and both
+  `MinimapMessage` overloads (`int,int,float` and `char*,int,float,int`, chosen
+  by argument count). Each queues one SCRIPT `Edit::Present`
+  `Call { name: "A2.<method>", args }`, validating the whole call first.
+  Raw ints (signed 32-bit), floats (finite, signed 32.32), flags and UTF-8
+  strings are retained, never interpreted; the entity of
+  `AddTransporterEffect` must be a current non-dying object, as in the camera
+  bridge. Whether native values mean a colour, id or duration is not claimed.
+  No client consumer exists: this is a queued request, not playback.
+
+### Needs a `sta_sim` seam before Lua can bind them
+
+`Edit::Subsystem` (other than engines/weapons), `Alert`, `MaxSpeed`,
+`Targetable` and `Decommissionable` exist in the seam but `Sim::apply_edit`
+rejects them, so these calls cannot take effect yet:
+`SetImpulseSpeed`/`ResetImpulseSpeed`/`GetImpulseSpeed` (20 scripts),
+`SetCanBeDecommissioned` (28), `AllowAsTarget(id, team, bool)` (10; the edit has
+no team argument), `DisableShieldGenerator`/`DisableLifeSupport`/`DisableSensors`,
+`SetRedAlert`/`SetYellowAlert`/`SetGreenAlert`. Also needing sim state or
+edits: `SetShieldPercent`/`SetMaxShields` (unmerged `seam/lua05-shield-edits`),
+`SetCrew`/`GetCrew` (no mutable crew), `SetRace`, `SetPosition`, `HideObject`,
+`SetAngularVelocity`, `Damage*`, `ExplodeNow`/`DestroyCritical`, `StuffIntoWormhole`
+and wormhole/planet population calls, `BuildObject`, `SetName`, and the AI/AIP
+calls. Script-pointer calls (`CineractiveStart`, `FadeIn/Out`, `AudioMessage`,
+`PlayMusic`, `PlayCinematicMovie`, `WaitForEnterKey`) need the script-handle
+lifecycle contract.

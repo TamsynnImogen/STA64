@@ -410,6 +410,41 @@ class MissionDllInventoryTests(unittest.TestCase):
         (self.a2 / "controls.rs").write_text('table.set("SetPerceivedTeam", fn);\n', encoding="utf-8")
         self.assertEqual(inventory.a2_exact_for("int GetPerceivedTeam(int)", self.repo), "")
 
+    def test_presentation_request_signatures_need_registered_literals_and_exact_shapes(self):
+        self.register_a2(
+            "",
+            registration=(
+                'native_camera::install(lua, ctx, &a2)?; '
+                'native_presentation::install(lua, ctx, &a2)?; '
+                'lua.globals().raw_set("A2", a2)?;'
+            ),
+        )
+        (self.a2 / "native_camera.rs").write_text(
+            'table.set("CineractiveShot", fn);\n', encoding="utf-8"
+        )
+        (self.a2 / "native_presentation.rs").write_text(
+            'table.set("MinimapMessage", fn);\ntable.set("GridVisible", fn);\n', encoding="utf-8"
+        )
+        for sig, name in (
+            ("void CineractiveShot(char *, float, int)", "A2.CineractiveShot"),
+            ("void CineractiveShot(int, int)", "A2.CineractiveShot"),
+            ("void MinimapMessage(int, int, float)", "A2.MinimapMessage"),
+            ("void MinimapMessage(char *, int, float, int)", "A2.MinimapMessage"),
+            ("void GridVisible(bool)", "A2.GridVisible"),
+        ):
+            self.assertEqual(inventory.a2_exact_for(sig, self.repo), name, sig)
+        for sig in (
+            "void MinimapMessage(int, int)",
+            "void MinimapMessage(char *, int, float)",
+            "int MinimapMessage(int, int, float)",
+            "void GridVisible(int)",
+            "void CineractiveShot(char *, int)",
+            # Registered module absent: not counted.
+            "void CenterCamera(int)",
+            "void AddTransporterEffect(int)",
+        ):
+            self.assertEqual(inventory.a2_exact_for(sig, self.repo), "", sig)
+
     def test_current_health_writer_requires_exact_void_integer_float_call_shape(self):
         self.register_a2(
             'table.set("SetCurrentHealth", fn);\n',
