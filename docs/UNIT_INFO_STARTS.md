@@ -1,0 +1,94 @@
+# Authored unit information and normal starting forces
+
+Follow-up to UI-18 (#371), based on the user's live Classic HUD check.
+Implements modding decisions D1/D7/D9/D10/D11. Original data stays read-only.
+
+## Design before implementation
+
+The HUD currently uses ODF stems as instance names and class labels as type
+captions. Read `unitName` as the type caption, falling back to the existing
+class label when absent. Read `possibleCraftNames` as a quoted list, including
+continuation rows and ordinary include/parent overrides. Preserve spaces,
+punctuation and authored case. With no names, use `unitName`, then the ODF
+stem; undefined content retains the existing entity-ID fallback.
+
+Names are cosmetic: select one with a fixed portable integer mixer of the
+entity ID and ODF stem. This is a pseudorandom distribution over the authored
+pool, stable across ticks, selection changes and save/replay reconstruction
+of the same entity. It is not a new random draw on each HUD rebuild. Identical
+entity IDs and definitions in separate matches can receive the same name;
+uniqueness, seed-dependent variation and script-driven renaming are not
+claimed. Do not consume simulation RNG, add mutable simulated name state,
+change content hashes, or alter save/network formats for this display fix.
+Both stock and LCARS use the shared HUD model.
+
+Normal starting forces for a known faction come only from `standardUnitsX`,
+in numeric order, preserving repeated entries. Do not append `minimalUnits`,
+replace an authored ODF via `originalClass`, deduplicate, or infer builders.
+A defined empty list stays empty. Unknown definitions use the existing bare
+content fallback. Missing/unsupported entries are skipped with an explicit
+startup warning. This exposes rather than disguises missing FO4 start-effect
+and faction-object lifecycle behavior; it does not implement those backends.
+
+Font colours will be traced from the mounted HUD CFG and sprite-font data
+before changing the renderer. Explicit author values take priority over
+fallback colours. Font readability changes must remain intact.
+
+## Verification gates
+
+Synthetic quoted-list/include/override tests; actual constructor name-pool
+inspection; stable HUD names and authored type captions; duplicate/order and
+no-inferred-start regression tests; startup warning coverage; authored colour
+translation tests. Scoped Rust tests, strict Clippy, workspace/all-target and
+Android ARM64 library compilation precede publishing. Stage an optimized
+manual desktop build; native visual acceptance remains the user's check.
+
+## Confirmed font-colour mapping
+
+The pinned stock Armada2.exe SHA-256
+`8d3ba6ec826198daf3e0c7b3435e9ce8195293e56da7c87e0af2634eaa4693b3`
+loads `infoTextColor` in `FUN_004eff80` (string reference at `0x4f0642`)
+and copies it into both single and builder name/class GUIText objects.
+The clean FleetOpsHook pseudocode at
+`pseudocode/clean/full-20261021/functions/0x1ee05c.c` (DLL SHA-256
+`b53e91281be33ee998e30bd971b6c944cb4f5fb2174fb9f0cc756ca3ef94e8a9`)
+then overrides those pairs independently with `nameTextColor` and
+`classTextColor`. This is static evidence, not original-game execution.
+
+The stock renderer now uses these native keys with its existing
+`infoSingleNameTextColor` / `infoSingleClassTextColor` compatibility overrides
+retained at highest priority. Missing colours keep the theme fallback.
+`shipNameColor` controls the separate name above the panel. Resource text
+already uses the authored `resource_N_color` keys. Hull/shield status text
+remains unchanged; disabled bar colours are not text colours.
+
+The current Classic `gui_interface.cfg` explicitly authors magenta
+`infoTextColor` and `shipNameColor`. FO4 authors white names/info and grey
+(`0.65 0.65 0.65`) class text. These are mod data, not new engine constants.
+A fresh REA evidence bundle is retained privately under
+`STA64-artifacts/probes/ui17/native-ui18-font-colours-20261112.json`.
+
+## Validation of the integrated implementation
+
+- 440 client tests pass, with one existing ignored test. Name/type captions
+  survive selection changes, simulation ticks and snapshot continuation.
+- Scoped parser/content/simulation tests pass, including sparse/high numbered
+  keys, repeated units, empty starts and explicit missing-entry warnings.
+- Actual mounted Classic and FO4 start lists match their resolved authored
+  entries. Classic Federation places `fconst`, `fconst`, `fbase`, `fscout`.
+- 182 Classic and 2,099 FO4 nonempty craft-name pools pass the installed-data
+  reader check. Classic `fconst` has all 58 complete names and type caption
+  `Construction Ship`. These tests were explicitly run with install/mod paths.
+- Four windowless NVIDIA Vulkan captures pass: Classic/FO4 at 4:3 and 16:9.
+  The lead inspected the two wide captures; Classic's selected name/class
+  and top name are magenta as authored. The GPU fixture uses fake entity
+  labels; installed name-pool checks and save tests establish the naming path
+  separately. This is not live-match acceptance.
+- Strict all-target Clippy for the four changed crates, workspace/all-target
+  checking, and NDK29/API26 Android ARM64 client library checking pass.
+  Android compilation is not APK or device proof.
+
+Private logs/captures are under `STA64-artifacts/probes/ui17/unit-info-*`.
+The December desktop alpha scope, dependencies, original assets, accepted
+artifacts, network/save formats and Lua contracts remain unchanged. UI-18
+reference/live acceptance (#371) stays open.

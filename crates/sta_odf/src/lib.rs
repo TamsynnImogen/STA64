@@ -7,6 +7,7 @@
 //!   name across all known ODF folders, so the folder is organisational only.
 //! - Later assignments override earlier ones, so an ODF's own keys override
 //!   anything it includes.
+//! - Quoted list rows may continue an assignment on following lines.
 //! - Fleet Operations layers its files (a mod's over its parent's over the
 //!   game's). An include of the root file's own name is its **next version
 //!   down** ([`resolve_layered`]): a mod's `x.odf` that includes `x.odf`
@@ -49,12 +50,14 @@ pub struct RawOdf {
 
 pub fn parse(text: &str) -> RawOdf {
     let mut out = RawOdf::default();
+    let mut continuation: Option<usize> = None;
     for (i, line) in text.lines().enumerate() {
         let line = strip_comment(line).trim();
         if line.is_empty() {
             continue;
         }
         if let Some(rest) = line.strip_prefix('#') {
+            continuation = None;
             let rest = rest.trim_start();
             if rest.len() >= 7 && rest[..7].eq_ignore_ascii_case("include") {
                 let name = unquote(rest[7..].trim());
@@ -64,6 +67,20 @@ pub fn parse(text: &str) -> RawOdf {
             }
             continue;
         }
+        if line.starts_with('[') && line.ends_with(']') {
+            continuation = None;
+            continue;
+        }
+        if is_quoted_continuation(line) {
+            if let Some(entry) = continuation.and_then(|index| out.entries.get_mut(index)) {
+                if !entry.value.is_empty() {
+                    entry.value.push(' ');
+                }
+                entry.value.push_str(line);
+            }
+            continue;
+        }
+        continuation = None;
         if let Some((k, v)) = line.split_once('=') {
             let key = k.trim();
             if !key.is_empty() {
@@ -72,10 +89,26 @@ pub fn parse(text: &str) -> RawOdf {
                     value: v.trim().to_owned(),
                     line: i + 1,
                 });
+                continuation = Some(out.entries.len() - 1);
             }
         }
     }
     out
+}
+
+fn is_quoted_continuation(line: &str) -> bool {
+    let mut rest = line.trim();
+    if !rest.starts_with('"') {
+        return false;
+    }
+    while let Some(quoted) = rest.strip_prefix('"') {
+        let Some(end) = quoted.find('"') else { return false };
+        rest = quoted[end + 1..].trim_start();
+        if rest.is_empty() {
+            return true;
+        }
+    }
+    false
 }
 
 fn strip_comment(line: &str) -> &str {
@@ -259,6 +292,65 @@ mod tests {
         assert_eq!(raw.entries.len(), 3);
         assert_eq!(raw.entries[1].value, "\"Uses // inside\"");
         assert_eq!(raw.entries[2].line, 6);
+    }
+
+    #[test]
+    fn quoted_lists_continue_across_blank_and_comment_rows() {
+        let raw = parse(
+            "possibleCraftNames = \"USS A\" \"USS B\" // inline\n\
+             // between rows\n\n\
+             \"USS C\" \"A=B // C\" \"https://fleet.example/ship\" // trailing\n\
+             maxHealth = 12\n",
+        );
+        assert_eq!(raw.entries.len(), 2);
+        assert_eq!(raw.entries[0].line, 1);
+        assert_eq!(raw.entries[0].value, "\"USS A\" \"USS B\" \"USS C\" \"A=B // C\" \"https://fleet.example/ship\"");
+        assert_eq!(raw.entries[1].value, "12");
+
+        let empty_first = parse("possibleCraftNames =\n\"USS A\" \"USS B\"\n\"USS C\"\n");
+        assert_eq!(empty_first.entries[0].value, "\"USS A\" \"USS B\" \"USS C\"");
+    }
+
+    #[test]
+    fn continuation_stops_at_content_boundaries_and_new_assignments() {
+        let raw = parse(
+            "names = \"first\"\n\
+             stray content\n\"not added\"\n\
+             #include \"parent.odf\"\n\"not added either\"\n\
+             names =\n\
+             [section]\n\"still not added\"\n\
+             names = \"last\"\n\"A=B\"\n",
+        );
+        assert_eq!(raw.includes, ["parent.odf"]);
+        assert_eq!(raw.entries.iter().map(|entry| entry.value.as_str()).collect::<Vec<_>>(), ["\"first\"", "", "\"last\" \"A=B\""]);
+        assert_eq!(raw.entries.iter().map(|entry| entry.line).collect::<Vec<_>>(), [1, 6, 9]);
+        let duplicates = raw.duplicates();
+        assert_eq!(duplicates.len(), 2);
+        assert_eq!(duplicates[1].replacement.line, 9);
+    }
+
+    #[test]
+    fn quoted_list_includes_and_layered_override_keep_precedence() {
+        let mut load = |name: &str, version: usize| match (name, version) {
+            ("ship.odf", 0) => Some("#include \"ship.odf\"\npossibleCraftNames = \"Mod Ship\"\n".to_owned()),
+            ("ship.odf", 1) => Some("#include \"shared.odf\"\npossibleCraftNames =\n\"Parent Ship\"\n".to_owned()),
+            ("shared.odf", 0) => Some("possibleCraftNames = \"Shared Ship\"\n".to_owned()),
+            _ => None,
+        };
+        let odf = resolve_layered("ship", &mut load).unwrap();
+        assert_eq!(odf.raw("possibleCraftNames"), Some("\"Mod Ship\""));
+
+        let mut load = |name: &str| match name {
+            "child.odf" => Some("#include \"parent.odf\"\n".to_owned()),
+            "parent.odf" => Some("possibleCraftNames =\n\"Parent Ship\"\n".to_owned()),
+            _ => None,
+        };
+        assert_eq!(resolve("child", &mut load).unwrap().raw("possibleCraftNames"), Some("\"Parent Ship\""));
+
+        let raw = parse("possibleCraftNames = \"Old\"\npossibleCraftNames =\n");
+        assert_eq!(raw.entries[1].value, "");
+        let mut load = |_: &str| Some("possibleCraftNames = \"Old\"\npossibleCraftNames =\n".to_owned());
+        assert_eq!(resolve("ship", &mut load).unwrap().raw("possibleCraftNames"), Some(""));
     }
 
     #[test]

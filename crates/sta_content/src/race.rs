@@ -13,18 +13,12 @@
 //!   places (a construction ship), and the stock of a start at the "normal"
 //!   and "lots" resource settings (`normaldilithium`, `normallatinum`, ...).
 //!
-//! [`Races::loadout`] is the one rule for a seat's start: the race's standard
-//! units that are craft or stations, plus the first minimal unit when it is
-//! the race's own and has a build list (a builder the player can use at once;
-//! start units are placed, not bought, so their cost is no condition), and the
-//! "normal" stock. Only Roots' `standardunits` hold freighters (`fminer`). Fleet Operations 4.0 starts a race with a stub outpost that builds
-//! nothing and names the working one (`originalclass`): that one is placed
-//! instead. When no unit can build, the race's [`basic_builder`] comes along. A race the data does
-//! not describe, or one whose units are not in the database, falls back to
-//! [`default_loadout`]: the race's first shipyard (else starbase) that builds
-//! something, and its first miner (else builder), with [`DEFAULT_STOCK`].
+//! [`Races::loadout`] uses only a known race's resolved `standardunits` in
+//! authored numeric order, including duplicates, and its "normal" stock.
+//! Unresolved entries are skipped; an empty authored start stays empty.
+//! Unknown races use [`default_loadout`], the synthetic bare-content fallback.
 
-use crate::odf::{CRAFT_CLASSES, Loader};
+use crate::odf::Loader;
 use crate::{ContentDb, ContentKey, Fixed, Profile, Warning};
 
 /// Resources per player: dilithium, latinum, metal, biomatter.
@@ -81,8 +75,10 @@ fn stem(name: &str) -> String {
 }
 
 fn numbered(odf: &sta_odf::Odf, prefix: &str) -> Vec<String> {
-    (1..=32)
-        .map_while(|i| odf.str(&format!("{prefix}{i}")).map(stem))
+    crate::odf::numbered(odf, prefix)
+        .into_iter()
+        .filter(|(i, _)| *i > 0)
+        .map(|(_, raw)| stem(raw))
         .filter(|s| !s.is_empty())
         .collect()
 }
@@ -257,69 +253,17 @@ impl Races {
     /// What a seat of `race` (a unit race key) starts with.
     pub fn loadout(&self, db: &ContentDb, race: &str) -> Loadout {
         if let Some(r) = self.get_playable(race).or_else(|| self.get(race)) {
-            let is_craft = |k: ContentKey| {
-                db.unit(k)
-                    .is_some_and(|u| CRAFT_CLASSES.contains(&u.class.0.as_str()))
+            let units = r.standard_units.iter().filter_map(|s| {
+                db.key(s).filter(|&k| db.unit(k).is_some())
+            }).collect();
+            return Loadout {
+                units,
+                stock: r.stock.map(|n| Fixed::from_int(n.clamp(0, 1_000_000_000) as i32)),
+                source: format!("race {}", r.stem),
             };
-            let mut units: Vec<ContentKey> = Vec::new();
-            // The standard units, then the first minimal unit when it is the race's own
-            // (Fleet Operations 4.0 names `fconst` for every race: not a builder of theirs).
-            let own = |k: ContentKey| {
-                db.unit(k)
-                    .is_some_and(|u| u.race.eq_ignore_ascii_case(&r.name))
-            };
-            // Start units are placed, not bought: what they cost is no condition (Fleet Operations
-            // 4.0's `fconst` costs a slot its start stock lacks and is still the start ship).
-            let minimal = r
-                .minimal_units
-                .iter()
-                .take(1)
-                .filter(|s| db.key(s).is_some_and(|k| own(k) && has_build_list(db, k)));
-            for s in r.standard_units.iter().chain(minimal) {
-                let Some(mut k) = db.key(s).filter(|&k| is_craft(k)) else {
-                    continue;
-                };
-                // Fleet Operations 4.0's start outpost is a stub (`fed_outpostS`) that names
-                // the working one it stands for (`originalclass = "fed_outpostY"`).
-                if !can_build(db, k, &r.name) {
-                    let original = db
-                        .unit(k)
-                        .and_then(|u| u.raw.str("originalclass"))
-                        .map(crate::odf::stem);
-                    if let Some(o) = original
-                        .and_then(|o| db.key(&o))
-                        .filter(|&o| can_build(db, o, &r.name))
-                    {
-                        k = o;
-                    }
-                }
-                if !units.contains(&k) {
-                    units.push(k);
-                }
-            }
-            // A seat that cannot build at all (the stub names no working station) gets
-            // its race's basic construction ship.
-            let builds = |k: &ContentKey| can_build(db, *k, &r.name);
-            if !units.is_empty() && !units.iter().any(builds) {
-                units.extend(basic_builder(db, &r.name));
-            }
-            if !units.is_empty() {
-                return Loadout {
-                    units,
-                    stock: r
-                        .stock
-                        .map(|n| Fixed::from_int(n.clamp(0, 1_000_000_000) as i32)),
-                    source: format!("race {}", r.stem),
-                };
-            }
         }
         default_loadout(db, race)
     }
-}
-
-/// Whether a unit has a build list at all (a construction ship or station).
-fn has_build_list(db: &ContentDb, key: ContentKey) -> bool {
-    db.unit(key).is_some_and(|u| !u.build.list.is_empty())
 }
 
 /// Whether a seat of `race` owning `key` can build something at once: it has a
@@ -519,24 +463,26 @@ mod tests {
     }
 
     #[test]
-    fn loadout_takes_craft_and_stations_of_the_data() {
-        // The fake content stands in: `fx_effects` is not defined, so it is skipped.
+    fn loadout_uses_only_resolved_authored_standard_units() {
+        // This checks authored list handling, not missing FO lifecycle parity.
         let db = crate::fake::db();
         let mut def = races().get("federation").cloned().unwrap();
         def.name = "fx".into();
-        // `fx_miner` is `fx`'s own, so it comes with the standard units.
+        def.standard_units = vec![
+            "fx_station".into(), "fx_effects".into(), "fx_yard".into(),
+            "fx_station".into(), "fx_beam".into(),
+        ];
         let r = Races::from_defs(vec![def]);
         let l = r.loadout(&db, "fx");
         let names: Vec<_> = l.units.iter().map(|&k| db.name(k).unwrap()).collect();
-        // `fx_miner` builds nothing, so the minimal unit is not taken.
-        assert_eq!(names, ["fx_yard", "fx_station"]);
+        assert_eq!(names, ["fx_station", "fx_yard", "fx_station"]);
         assert_eq!(l.source, "race federation");
         assert_eq!(l.stock[0], Fixed::from_int(4000));
     }
 
     #[test]
-    fn a_stub_outpost_is_replaced_by_the_station_it_names() {
-        // Fleet Operations 4.0: `fed_outpostS` builds nothing and says `originalclass = "fed_outpostY"`.
+    fn known_empty_and_stub_starts_do_not_infer_units() {
+        // Authored correctness does not supply missing FO lifecycle parity.
         let base = crate::fake::db();
         let mut stub = crate::UnitDef::new("fx_outposts", "shipyard");
         stub.race = "fx".into();
@@ -560,9 +506,31 @@ mod tests {
         def.name = "fx".into();
         def.standard_units = vec!["fx_outposts".into()];
         def.minimal_units.clear();
-        let l = Races::from_defs(vec![def]).loadout(&db, "fx");
+        let l = Races::from_defs(vec![def.clone()]).loadout(&db, "fx");
         let names: Vec<_> = l.units.iter().map(|&k| db.name(k).unwrap()).collect();
-        assert_eq!(names, ["fx_yard"]);
+        assert_eq!(names, ["fx_outposts"]);
+        def.standard_units.clear();
+        def.minimal_units = vec!["fx_yard".into()];
+        let empty = Races::from_defs(vec![def.clone()]).loadout(&db, "fx");
+        assert!(empty.units.is_empty());
+        assert_eq!(empty.source, "race federation");
+        def.standard_units = vec!["missing".into()];
+        let missing = Races::from_defs(vec![def]).loadout(&db, "fx");
+        assert!(missing.units.is_empty());
+        assert_eq!(missing.source, "race federation");
+    }
+
+    #[test]
+    fn numbered_start_keys_keep_gaps_high_indexes_and_repeated_values() {
+        let (races, warnings) = Races::load_with(&mut loader(&[
+            ("races", "race0=fx"),
+            ("fx", "name=fx\ninstantActionSlot=0\nstandardUnits0=fx_miner\nstandardUnits1=fx_station\nstandardUnits3=fx_yard\nstandardUnits40=fx_station"),
+        ]));
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(races.get("fx").unwrap().standard_units, ["fx_station", "fx_yard", "fx_station"]);
+        let db = crate::fake::db();
+        let names: Vec<_> = races.loadout(&db, "fx").units.iter().map(|&k| db.name(k).unwrap()).collect();
+        assert_eq!(names, ["fx_station", "fx_yard", "fx_station"]);
     }
 
     #[test]

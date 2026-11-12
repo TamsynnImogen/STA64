@@ -10,8 +10,7 @@
 //!   slot "Tritanium" (`GUI_RD_*_VTOOLTIP`);
 //! - a moon named for a resource fills the slot of that name (its resource
 //!   ODF's `amt<slot>`: `amtlatinum` on Fleet Ops 4.0's tritanium moon);
-//! - on Fleet Ops 4.0 the Federation can pay for a structure on a
-//!   construction ship's build list at tick 0.
+//! - normal start stock comes from the race ODF, independently of unit costs.
 
 use std::path::{Path, PathBuf};
 
@@ -165,62 +164,25 @@ fn every_game_names_and_feeds_its_resources() {
     }
 }
 
-/// Fleet Ops 4.0, Federation: the start stock pays for a structure of a
-/// construction ship's list (RTS_CFG's `normal*` start of `federation.odf`:
-/// 4000 dilithium, 2000 latinum (the Tritanium), 0 metal, 500 biomatter (the Supply)),
-/// and no start unit costs a slot the stock lacks.
+/// Normal starting stock is authored by the faction, not inferred from the
+/// cost of a minimal-start ship or a synthetic playable replacement.
 #[test]
-fn fo4_federation_can_afford_a_structure_at_tick_zero() {
+fn fo4_federation_start_stock_comes_from_the_race() {
     let i = &installs()[0];
     let Some(vfs) = mount(i) else { return };
     let (index, _) = OdfIndex::build(&vfs);
     let (db, _) = ContentDb::load(&vfs, &index).unwrap();
     let (races, _) = Races::load(&vfs, &index);
     assert_eq!(db.profile(), Profile::Fo4);
-    let l = races.loadout(&db, "unitedfederation");
-    assert_eq!(l.stock.map(f), [4000, 2000, 0, 500]);
-    // The data's minimal start ship (`minimalunits1 = "fconst.odf"`) is placed even though its
-    // cost names a slot the stock lacks.
-    assert!(
-        l.units.iter().any(|k| db.unit(*k).unwrap().odf == "fconst"),
-        "the Federation starts with its construction ship fconst"
-    );
-    // The construction ships the start yard builds, and what they build.
-    let mut affordable = Vec::new();
-    for k in &l.units {
-        let yard = db.unit(*k).unwrap();
-        let ships: Vec<_> = yard
-            .build
-            .list
-            .iter()
-            .filter_map(|r| db.unit(r.key))
-            .filter(|u| u.class.0 == "constructionrig")
-            .collect();
-        for ship in &ships {
-            for s in ship.build.list.iter().filter_map(|r| db.unit(r.key)) {
-                let pays = s
-                    .build
-                    .cost
-                    .iter()
-                    .enumerate()
-                    .all(|(slot, c)| *c <= l.stock[slot]);
-                eprintln!(
-                    "  {} -> {}: cost {:?} pays {pays}",
-                    ship.odf,
-                    s.odf,
-                    s.build.cost.iter().map(|v| f(*v)).collect::<Vec<_>>()
-                );
-                if pays && s.build.cost.iter().any(|c| *c > Fixed::ZERO) {
-                    affordable.push(format!("{} -> {}", ship.odf, s.odf));
-                }
-            }
+    let race = races.get_playable("unitedfederation").unwrap();
+    let loadout = races.loadout(&db, "unitedfederation");
+    assert_eq!(loadout.stock.map(f), [4000, 2000, 0, 500]);
+    assert_eq!(loadout.stock.map(f), race.stock);
+    // minimalUnits belongs to the separate minimal-start option. A normal
+    // start must not buy or insert that ship to make its resource model work.
+    for name in &race.minimal_units {
+        if !race.standard_units.contains(name) {
+            assert!(!loadout.units.iter().any(|k| db.unit(*k).unwrap().odf == *name));
         }
-        // The yard's own list, for a race that places the construction ship.
-        assert!(!yard.build.list.is_empty() || ships.is_empty());
     }
-    assert!(
-        !affordable.is_empty(),
-        "no structure of a construction ship's list is payable from {:?}",
-        l.stock
-    );
 }

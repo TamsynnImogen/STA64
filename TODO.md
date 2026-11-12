@@ -96,6 +96,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] Station construction live follow-up (#349): on the updated candidate, confirm the wider outward bee stand-off makes `weldbeam` visible and no station chunks appear until the first welding interval has completed. During welding, Move and queued Move must leave the constructor fixed; Stop cancels the unfinished station (the active weld remains non-refundable) and permits a new order. Check the same with a second build and note FPS. `STA64_workerBeeStandOff` is overrideable on the constructor ODF. This follows the rejected first candidate; it does not mark that earlier visual check accepted.
 
+- [?] UI-18 authored labels/colours and starts (#371): in Classic/Federation, check both starting constructors, select/reselect a new ship and confirm a stable full craft name plus its `unitName` type. Check selected and builder labels, the top name, and FO4 separate name/class colours against the mounted CFG. Known factions use only their standardUnits list; FO4 start-effect/faction lifecycle remains unsupported, without synthetic constructor injection. See [UNIT_INFO_STARTS.md](docs/UNIT_INFO_STARTS.md).
+
 - [?] Faction display names (#371): the race picker should show the faction ODF `displayKey` through `Dynamic_Localized_Strings.h`, falling back to the literal display key when absent. Check Classic and FO4 captions and cycle/launch a race; simulation IDs must remain unchanged. See [RACE_DISPLAY_NAMES.md](docs/RACE_DISPLAY_NAMES.md).
 
 ## Checked earlier (morning list)

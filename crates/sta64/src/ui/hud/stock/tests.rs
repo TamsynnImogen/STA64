@@ -107,11 +107,15 @@ fn feed(db: &Arc<ContentDb>) -> HudFeed {
 }
 
 fn app_with_content(db: Arc<ContentDb>) -> App {
+    app_with_content_and_config(db, config(), UiProfile::Armada2)
+}
+
+fn app_with_content_and_config(db: Arc<ContentDb>, config: HudConfig, profile: UiProfile) -> App {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
     configure_sets(&mut app);
-    app.insert_resource(UiProfile::Armada2)
-        .insert_resource(config())
+    app.insert_resource(profile)
+        .insert_resource(config)
         .insert_resource(feed(&db))
         .insert_resource(ExternalFeed)
         .insert_resource(Selection(vec![EntityId(1)]))
@@ -124,6 +128,111 @@ fn app_with_content(db: Arc<ContentDb>) -> App {
 
 fn app() -> App {
     app_with_content(content())
+}
+
+fn inherited_config(overlay: &str, base_extra: &str) -> HudConfig {
+    let race = format!("#include \"interface.cfg\"\n{overlay}");
+    let interface = format!("{CFG}\ninfoSingleClassTextArea = 10 100 200 30\ninfoBuildName = 20 10 200 30\ninfoBuildClass = 20 100 200 30\nshipName = 10 140 200 30\n{base_extra}");
+    let (cfg, warnings) = GuiCfg::load("race.cfg", &mut |name| match name {
+        "race.cfg" => Some(race.clone()),
+        "interface.cfg" => Some(interface.clone()),
+        _ => None,
+    });
+    assert!(warnings.is_empty(), "{warnings:?}");
+    HudConfig {
+        gui: Some(cfg.layout_auto()),
+        fit_scale: false,
+        ..default()
+    }
+}
+
+fn stock_colour_at(app: &mut App, key: &str, top_strip: bool) -> Color {
+    let expected = {
+        let layout = app.world().resource::<StockState>().layout.as_ref().unwrap();
+        let info = model::info(app.world().resource::<HudFeed>());
+        let variant = layout::info_variant(&info);
+        let mut origin = layout.info_origin(variant);
+        if top_strip {
+            origin += layout.point(&format!("infoBarOffset_{variant}")).unwrap_or(Vec2::ZERO);
+        }
+        layout.at(origin, key).unwrap()
+    };
+    app.world_mut()
+        .query::<(&SpriteText, &ChildOf)>()
+        .iter(app.world())
+        .filter_map(|(text, parent)| {
+            let node = app.world().get::<Node>(parent.parent())?;
+            ((node.left, node.top) == (Val::Px(expected.x), Val::Px(expected.y))).then_some(text.color)
+        })
+        .next()
+        .unwrap_or_else(|| panic!("missing SpriteText at {key}"))
+}
+
+fn resource_colour(app: &mut App, id: usize) -> Color {
+    app.world_mut()
+        .query::<(&info::StockText, &SpriteText)>()
+        .iter(app.world())
+        .find_map(|(kind, text)| matches!(kind, info::StockText::Resource(n) if *n == id).then_some(text.color))
+        .unwrap()
+}
+
+#[test]
+fn inherited_a2_info_colour_tints_single_and_builder_text() {
+    let cfg = inherited_config("", "infoTextColor = 1 0 1 1\nshipNameColor = 0 1 0 1\nresource_2_color = 1 0 0 1\n");
+    for build_count in [0, 1] {
+        let mut app = app_with_content_and_config(content_with_build_count(build_count), cfg.clone(), UiProfile::Armada2);
+        let (name_key, class_key) = if build_count == 0 {
+            ("infoSingleNameTextArea", "infoSingleClassTextArea")
+        } else {
+            ("infoBuildName", "infoBuildClass")
+        };
+        assert_eq!(stock_colour_at(&mut app, name_key, false), Color::srgba(1.0, 0.0, 1.0, 1.0));
+        assert_eq!(stock_colour_at(&mut app, class_key, false), Color::srgba(1.0, 0.0, 1.0, 1.0));
+        assert_eq!(stock_colour_at(&mut app, "shipName", true), Color::srgba(0.0, 1.0, 0.0, 1.0));
+        let fallback_text = app.world().resource::<Theme>().text;
+        assert_eq!(stock_colour_at(&mut app, "hull", true), fallback_text);
+        assert_eq!(resource_colour(&mut app, 2), Color::srgba(1.0, 0.0, 0.0, 1.0));
+    }
+}
+
+#[test]
+fn fo_separate_colours_and_legacy_overrides_take_precedence() {
+    let cfg = inherited_config(
+        "infoSingleNameTextColor = 0 1 1 1\ninfoSingleClassTextColor = 1 1 0 1\n",
+        "nameTextColor = 1 0 0 1\nclassTextColor = 0 0 1 1\ninfoTextColor = 1 0 1 1\n",
+    );
+    for build_count in [0, 1] {
+        let mut app = app_with_content_and_config(content_with_build_count(build_count), cfg.clone(), UiProfile::FleetOps);
+        let (name_key, class_key) = if build_count == 0 {
+            ("infoSingleNameTextArea", "infoSingleClassTextArea")
+        } else {
+            ("infoBuildName", "infoBuildClass")
+        };
+        assert_eq!(stock_colour_at(&mut app, name_key, false), Color::srgba(0.0, 1.0, 1.0, 1.0));
+        assert_eq!(stock_colour_at(&mut app, class_key, false), Color::srgba(1.0, 1.0, 0.0, 1.0));
+    }
+
+    let cfg = inherited_config("", "nameTextColor = 1 0 0 1\nclassTextColor = 0 0 1 1\ninfoTextColor = 1 0 1 1\n");
+    for build_count in [0, 1] {
+        let mut app = app_with_content_and_config(content_with_build_count(build_count), cfg.clone(), UiProfile::FleetOps);
+        let (name_key, class_key) = if build_count == 0 {
+            ("infoSingleNameTextArea", "infoSingleClassTextArea")
+        } else {
+            ("infoBuildName", "infoBuildClass")
+        };
+        assert_eq!(stock_colour_at(&mut app, name_key, false), Color::srgba(1.0, 0.0, 0.0, 1.0));
+        assert_eq!(stock_colour_at(&mut app, class_key, false), Color::srgba(0.0, 0.0, 1.0, 1.0));
+    }
+}
+
+#[test]
+fn missing_authored_colours_keep_theme_defaults() {
+    let mut app = app_with_content_and_config(content(), inherited_config("", ""), UiProfile::Armada2);
+    let theme = app.world().resource::<Theme>().clone();
+    assert_eq!(stock_colour_at(&mut app, "infoBuildName", false), theme.text);
+    assert_eq!(stock_colour_at(&mut app, "infoBuildClass", false), theme.text_dim);
+    assert_eq!(stock_colour_at(&mut app, "shipName", true), theme.text);
+    assert_eq!(resource_colour(&mut app, 2), theme.text);
 }
 
 fn one<C: Component>(app: &mut App) -> Entity {

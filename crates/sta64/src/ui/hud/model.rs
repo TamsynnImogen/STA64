@@ -16,6 +16,9 @@ use crate::ui::i18n::tr;
 use super::layout::{GRID_COLS, GRID_ROWS, InfoHeight};
 use super::commands;
 
+#[path = "craft_names.rs"]
+mod craft_names;
+
 /// Everything the HUD reads: the view, whose HUD it is, the selection and the
 /// content. Filled from the sim link, the selection and the content resource
 /// ([`feed_from_link`](super::feed_from_link)); frame runs and tests write it
@@ -45,7 +48,7 @@ impl HudFeed {
     }
 
     fn name(&self, u: &UnitView) -> String {
-        self.content.as_deref().and_then(|c| c.name(u.def)).map_or_else(|| format!("#{}", u.id.0), str::to_owned)
+        self.def(u).map_or_else(|| format!("#{}", u.id.0), |d| craft_names::instance(d, u.id))
     }
 
     /// The selected units the player may order.
@@ -69,9 +72,9 @@ fn frac(v: [Fixed; 2]) -> f32 {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Single {
     pub id: EntityId,
-    /// The def's name.
+    /// Stable choice from `possibleCraftNames`, then `unitName` or ODF stem.
     pub name: String,
-    /// The def's class label (`craft`, `starbase`, ...).
+    /// Authored `unitName`, falling back to the definition's class label.
     pub class: String,
     pub own: bool,
     /// Hull as 0..1 and the numbers.
@@ -125,7 +128,7 @@ pub fn info(feed: &HudFeed) -> Info {
             Info::Single(Single {
                 id: u.id,
                 name: feed.name(u),
-                class: def.map_or_else(String::new, |d| d.class.0.clone()),
+                class: def.map_or_else(String::new, |d| craft_names::unit_name(d).unwrap_or(&d.class.0).to_owned()),
                 own: u.owner == feed.player,
                 hull: frac(u.hull),
                 hull_now: u.hull[0].to_f32().round() as i32,
@@ -617,6 +620,51 @@ mod tests {
             b = b.tech_tree(TechTree::parse("t.tt", t).0);
         }
         b.build().unwrap()
+    }
+
+    #[test]
+    fn authored_names_survive_ticks_selection_and_snapshot_restore() {
+        use sta_sim::{Sim, WorldSource};
+        use sta_sim::setup::{GameSetup, GameOptions, PlayerSetup, Control};
+
+        let odf = sta_odf::resolve("ship", &mut |_| Some(
+            "classLabel = \"craft\"\nunitName = \"Construction Ship\"\nmaxHealth = 100\npossibleCraftNames =\n \"USS First\" \"USS Second\"\n \"USS Third\"".to_owned()
+        )).unwrap();
+        let def = sta_content::unit::unit_def("fx_constructor", &odf, None, &mut Vec::new());
+        let db = Arc::new(ContentDb::builder().unit(def).build().unwrap());
+        let setup = GameSetup {
+            seed: 77,
+            map: Arc::new(sta_content::MapDef::empty()),
+            content: db.clone(),
+            players: vec![PlayerSetup { id: ME, team: TeamId(1), race: "fx".into(), control: Control::Human }],
+            options: GameOptions::default(),
+        };
+        let mut sim = Sim::from_setup(&setup);
+        let id = sim.spawn_def(db.key("fx_constructor").unwrap(), ME, Vec3::ZERO, (Fixed::ZERO, Fixed::ONE)).unwrap();
+        let mut f = HudFeed { view: sim.view(), player: ME, selected: vec![id], content: Some(db.clone()) };
+        let Info::Single(before) = info(&f) else { panic!("single selection") };
+        assert_eq!(before.class, "Construction Ship");
+        assert!(["USS First", "USS Second", "USS Third"].contains(&before.name.as_str()));
+        let digest = sim.digest();
+        for _ in 0..3 {
+            f.selected.clear();
+            assert_eq!(info(&f), Info::None);
+            f.selected.push(id);
+            let Info::Single(card) = info(&f) else { panic!("single selection") };
+            assert_eq!(card.name, before.name);
+        }
+        assert_eq!(sim.digest(), digest, "displaying names must not consume sim RNG");
+        sim.step(&[]);
+        let saved = sim.snapshot();
+        let mut restored = Sim::from_snapshot(&saved, Some(db)).unwrap();
+        f.view = restored.view();
+        let Info::Single(after) = info(&f) else { panic!("restored selection") };
+        assert_eq!((after.name, after.class), (before.name.clone(), before.class));
+        // Continuation from a save stays identical, including the gameplay RNG.
+        assert_eq!(sim.step(&[]).view.digest, restored.step(&[]).view.digest);
+        f.view = restored.view();
+        let Info::Single(after_tick) = info(&f) else { panic!("selection after tick") };
+        assert_eq!(after_tick.name, before.name);
     }
 
     #[test]

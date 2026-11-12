@@ -221,7 +221,11 @@ fn spawn_single(
             root,
             r,
             single.name.clone(),
-            layout.colour("infoSingleNameTextColor").unwrap_or(theme.text),
+            layout
+                .colour("infoSingleNameTextColor")
+                .or_else(|| layout.colour("nameTextColor"))
+                .or_else(|| layout.colour("infoTextColor"))
+                .unwrap_or(theme.text),
             theme.small_size,
             None,
         );
@@ -238,7 +242,11 @@ fn spawn_single(
             root,
             r,
             single.class.clone(),
-            layout.colour("infoSingleClassTextColor").unwrap_or(theme.text_dim),
+            layout
+                .colour("infoSingleClassTextColor")
+                .or_else(|| layout.colour("classTextColor"))
+                .or_else(|| layout.colour("infoTextColor"))
+                .unwrap_or(theme.text_dim),
             theme.micro_size,
             None,
         );
@@ -296,7 +304,12 @@ fn spawn_single(
             continue;
         }
         if let Some(r) = layout.at(stats, key) {
-            text(commands, root, r, value, theme.text, theme.small_size, kind);
+            let color = if key == "shipName" {
+                layout.colour("shipNameColor").unwrap_or(theme.text)
+            } else {
+                theme.text
+            };
+            text(commands, root, r, value, color, theme.small_size, kind);
         }
     }
 }
