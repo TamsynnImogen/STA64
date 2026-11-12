@@ -388,3 +388,98 @@ fn a_special_order_while_reloading_is_refused_not_queued() {
     sim.step(&[order()]);
     assert!(sim.specials.cloak_state(c).is_some(), "accepted once ready");
 }
+
+/// The fixture cloaker with a PD hardpoint ahead of its cloak.
+fn pd_then_cloak(pd_energy: bool) -> (Sim, EntityId) {
+    let fixture = crate::specials::fixture::db();
+    let mut f = fixture.features().clone();
+    f.pd_energy = pd_energy;
+    let mut b = ContentDb::builder().profile(fixture.profile()).features(f);
+    for w in fixture.weapons().cloned() {
+        b = b.weapon(w);
+    }
+    for mut u in fixture.units().cloned() {
+        if u.odf == "fx_cloaker" {
+            let pd = sta_content::Hardpoint {
+                weapon: sta_content::DefRef::new("fx_pd"),
+                node: "hp03".into(),
+                arc: None,
+            };
+            u.hardpoints.insert(0, pd);
+        }
+        b = b.unit(u);
+    }
+    let db = b.build().unwrap();
+    let key = db.key("fx_cloaker").unwrap();
+    let mut sim = Sim::from_setup(&GameSetup {
+        seed: 3,
+        map: Arc::new(sta_content::MapDef::empty()),
+        content: Arc::new(db),
+        players: vec![seat(1)],
+        options: GameOptions::default(),
+    });
+    let c = sim.spawn_def(key, PlayerId(1), v(0, 0), AHEAD).unwrap();
+    (sim, c)
+}
+
+#[test]
+fn a_pd_hardpoint_takes_a_special_slot_only_under_pd_energy() {
+    let order = |c| {
+        cmd(
+            PlayerId(1),
+            CommandKind::Order(Order::Special {
+                units: vec![c],
+                slot: 0,
+                target: Target::Point(v(0, 0)),
+            }),
+        )
+    };
+    // Without pd_energy the cloak keeps slot 0 (recorded orders stay valid).
+    let (mut sim, c) = pd_then_cloak(false);
+    sim.step(&[order(c)]);
+    assert!(sim.specials.cloak_state(c).is_some());
+    // With it the PD comes first and slot 0 toggles it, not the cloak.
+    let (mut sim, c) = pd_then_cloak(true);
+    sim.step(&[order(c)]);
+    assert!(sim.specials.cloak_state(c).is_none());
+    assert!(sim.weapons.pd_on(c, 0));
+}
+
+#[test]
+fn a_unit_that_starts_with_weapons_off_or_is_ordered_first_still_gets_its_initial_reload() {
+    // Order on the spawn tick, before any weapons step: the cloak (modifier 1,
+    // shotDelay 90) is refused, not ready at once.
+    let fixture = crate::specials::fixture::db();
+    let mut f = fixture.features().clone();
+    f.weapon_shot_timing = true;
+    let mut b = ContentDb::builder().profile(fixture.profile()).features(f);
+    for mut w in fixture.weapons().cloned() {
+        if w.odf.starts_with("fx_cloak") {
+            w.refire = 90;
+            w.initial_shot_delay_modifier = Some(Fixed::ONE);
+        }
+        b = b.weapon(w);
+    }
+    for u in fixture.units().cloned() {
+        b = b.unit(u);
+    }
+    let db = b.build().unwrap();
+    let key = db.key("fx_cloaker").unwrap();
+    let mut sim = Sim::from_setup(&GameSetup {
+        seed: 3,
+        map: Arc::new(sta_content::MapDef::empty()),
+        content: Arc::new(db),
+        players: vec![seat(1)],
+        options: GameOptions::default(),
+    });
+    let c = sim.spawn_def(key, PlayerId(1), v(0, 0), AHEAD).unwrap();
+    sim.step(&[cmd(
+        PlayerId(1),
+        CommandKind::Order(Order::Special {
+            units: vec![c],
+            slot: 0,
+            target: Target::Point(v(0, 0)),
+        }),
+    )]);
+    assert!(sim.specials.cloak_state(c).is_none(), "refused on the spawn tick");
+}

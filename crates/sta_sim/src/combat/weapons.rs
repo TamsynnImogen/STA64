@@ -90,6 +90,9 @@ fn scaled(refire: u64, factor: Fixed) -> u64 {
 /// special launcher measured on stock and Roots; for regular weapons the
 /// rule is read from the engine's code only (not measured).
 fn initial_reload(w: &sta_content::WeaponDef, rng: &mut Rng) -> u64 {
+    if w.refire == 0 {
+        return 0;
+    }
     let m = w.initial_shot_delay_modifier.unwrap_or(-Fixed::ONE);
     if m == Fixed::ZERO {
         0
@@ -105,7 +108,7 @@ fn initial_reload(w: &sta_content::WeaponDef, rng: &mut Rng) -> u64 {
 /// weapon sets `ignoreShotDelayEffects`. Team modifier and crew penalty are
 /// not modelled. At least one tick.
 fn shot_reload(timing: bool, w: &sta_content::WeaponDef, rng: &mut Rng) -> u64 {
-    if timing && !w.ignore_shot_delay_effects {
+    if timing && w.refire > 0 && !w.ignore_shot_delay_effects {
         let jitter = draw(rng) * Fixed::from_int(5) / Fixed::from_int(100);
         scaled(w.refire, Fixed::ONE + jitter).max(1)
     } else {
@@ -183,6 +186,27 @@ impl Weapons {
 
     pub fn attack_of(&self, unit: EntityId) -> Option<EntityId> {
         self.attack.get(unit).copied()
+    }
+
+    /// Make a unit's mounts with their initial reload when any of its weapons
+    /// uses `weapon_shot_timing` and it has none yet.
+    fn init_mounts(&mut self, tick: u64, db: &ContentDb, id: EntityId, def: &sta_content::UnitDef, rng: &mut Rng) {
+        if self.mounts.get(id).is_some() {
+            return;
+        }
+        let timed = |hp: &sta_content::Hardpoint| {
+            db.weapon(hp.weapon.key)
+                .filter(|w| w.kind != WeaponKind::PointDefence && db.weapon_features(w).weapon_shot_timing)
+        };
+        if !def.hardpoints.iter().any(|hp| timed(hp).is_some()) {
+            return;
+        }
+        let ready = def
+            .hardpoints
+            .iter()
+            .map(|hp| Mount { ready: tick + timed(hp).map_or(0, |w| initial_reload(w, rng)) })
+            .collect();
+        self.mounts.insert(id, ready);
     }
 
     /// Is the PD weapon at hardpoint `i` of `unit` switched on (energy model)?
@@ -322,26 +346,17 @@ impl Weapons {
         // explored fog.
         let visibility = crate::sensors::compute(units, Some(db), teams);
         for u in units.iter() {
-            if u.flags.contains(UnitFlags::WEAPONS_OFF) {
-                continue;
-            }
             let Some(def) = db.unit(u.def) else { continue };
             if def.hardpoints.is_empty() {
                 continue;
             }
-            // SIM-35: a weapon is created with an initial reload. A unit's
-            // mounts are made the first tick it is seen, the creation tick
-            // for all practical purposes; ascending id keeps the draws stable.
-            if db.unit_features(def).weapon_shot_timing && self.mounts.get(u.id).is_none() {
-                let ready = def
-                    .hardpoints
-                    .iter()
-                    .map(|hp| {
-                        let r = db.weapon(hp.weapon.key).filter(|w| w.kind != WeaponKind::PointDefence);
-                        Mount { ready: tick + r.map_or(0, |w| initial_reload(w, rng)) }
-                    })
-                    .collect();
-                self.mounts.insert(u.id, ready);
+            // SIM-35: a weapon is created with an initial reload, also when
+            // its unit starts with weapons off. A unit's mounts are made the
+            // first tick it is seen, the creation tick for all practical
+            // purposes; ascending id keeps the draws stable.
+            self.init_mounts(tick, db, u.id, def, rng);
+            if u.flags.contains(UnitFlags::WEAPONS_OFF) {
+                continue;
             }
             for (i, hp) in def.hardpoints.iter().enumerate() {
                 if self.mounts.get(u.id).is_some_and(|m| m[i].ready > tick) {
@@ -371,7 +386,7 @@ impl Weapons {
                         .insert(u.id, vec![Mount { ready: 0 }; def.hardpoints.len()]);
                 }
                 if let Some(m) = self.mounts.get_mut(u.id) {
-                    m[i].ready = tick + shot_reload(db.unit_features(def).weapon_shot_timing, w, rng);
+                    m[i].ready = tick + shot_reload(db.weapon_features(w).weapon_shot_timing, w, rng);
                 }
                 events.push(SimEvent::Fired {
                     shooter: u.id,
@@ -431,7 +446,8 @@ impl Weapons {
             };
             let Some(def) = db.unit(u.def) else { continue };
             let Some((i, kind, w)) = specials::specials_indexed(db, def).nth(slot as usize) else { continue };
-            let timing = db.unit_features(def).weapon_shot_timing;
+            self.init_mounts(tick, db, id, def, rng);
+            let timing = db.weapon_features(w).weapon_shot_timing;
             if timing && self.mounts.get(id).is_some_and(|m| m[i].ready > tick) {
                 continue;
             }

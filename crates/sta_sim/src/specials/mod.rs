@@ -108,10 +108,7 @@ pub fn specials_of<'a>(
     db: &'a ContentDb,
     u: &'a UnitDef,
 ) -> impl Iterator<Item = (SpecialKind, &'a WeaponDef)> {
-    u.hardpoints.iter().filter_map(|h| {
-        let w = db.weapon(h.weapon.key)?;
-        Some((SpecialKind::of(w)?, w))
-    })
+    specials_indexed(db, u).map(|(_, k, w)| (k, w))
 }
 
 /// The unit's specials with their hardpoint index, in hardpoint order.
@@ -121,7 +118,10 @@ pub fn specials_indexed<'a>(
 ) -> impl Iterator<Item = (usize, SpecialKind, &'a WeaponDef)> {
     u.hardpoints.iter().enumerate().filter_map(|(i, h)| {
         let w = db.weapon(h.weapon.key)?;
-        Some((i, SpecialKind::of(w)?, w))
+        let kind = SpecialKind::of(w)?;
+        // A PD weapon is a special (and takes a slot) only under `pd_energy`,
+        // so slot numbers of other content do not shift.
+        (kind != SpecialKind::PointDefence || db.weapon_features(w).pd_energy).then_some((i, kind, w))
     })
 }
 

@@ -39,6 +39,11 @@
 //!   `shotDelay` after a shot, with no jitter and no debt. FO's list of
 //!   already-engaged ordnance has no effect here, since an intercept removes
 //!   the shot at once, so it is not modelled.
+//! - A unit whose weapons are muted (`WEAPONS_OFF`) neither drains nor fires,
+//!   and a PD weapon that is on stays on and its timer stands still. Not
+//!   measured; chosen so a mute is not an energy sink.
+//! - Nothing in the HUD or the AI toggles PD yet, so no profile turns
+//!   `pd_energy` on by default; content opts in with `Feature_pd_energy`.
 //! - Snapshot: the rows stay `Vec<u64>`. Rows of units with energy-model
 //!   state start with `u64::MAX` and carry `[ready, on, timer bits]` per
 //!   hardpoint; other rows are unchanged, so old snapshots load.
@@ -146,7 +151,7 @@ impl Pd {
     ) -> bool {
         let Some(w) = db.weapon(def.hardpoints[i].weapon.key) else { return false };
         let feats = db.weapon_features(w);
-        if !feats.pd_energy {
+        if !(feats.pd_energy && feats.point_defense_cycles) {
             return false;
         }
         if self.ready.get(id).is_none() {
@@ -200,9 +205,6 @@ impl Pd {
         rng: &mut Rng,
         events: &mut Vec<SimEvent>,
     ) {
-        if !db.features().point_defense_cycles {
-            return;
-        }
         let gone: Vec<EntityId> = self
             .ready
             .iter()
@@ -226,6 +228,9 @@ impl Pd {
                     continue;
                 }
                 let feats = db.weapon_features(w);
+                if !feats.point_defense_cycles {
+                    continue;
+                }
                 if feats.pd_energy {
                     self.energy_cycle(tick, u.id, def, i, w, feats.pd_debt_timer, u, units, teams, shots, specials, rng, events);
                     continue;

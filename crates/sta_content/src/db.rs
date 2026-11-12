@@ -592,12 +592,11 @@ fn hash_inner(db: &ContentDb, include_starting_rules: bool) -> u64 {
                     h.byte(w.disable_weapons as u8);
                     h.byte(w.decloak_on_hit as u8);
                 }
-                if w.initial_shot_delay_modifier.is_some() || w.ignore_shot_delay_effects || w.ordnance_defence {
+                if w.initial_shot_delay_modifier.is_some() || w.ignore_shot_delay_effects {
                     h.byte(0xe4);
                     h.byte(w.initial_shot_delay_modifier.is_some() as u8);
                     h.fixed(w.initial_shot_delay_modifier.unwrap_or(Fixed::ZERO));
                     h.byte(w.ignore_shot_delay_effects as u8);
-                    h.byte(w.ordnance_defence as u8);
                 }
                 feature_bits(&mut h, w.features.as_ref(), &db.features);
             }
