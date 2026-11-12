@@ -340,6 +340,9 @@ pub struct UnitDef {
     /// `avoidMe = 1`: other units steer around and keep out of this one
     /// (moons and balls in Fleet Operations, SIM-21).
     pub avoid_me: bool,
+    /// `hidden = 1` (a whole number, nonzero on): a start helper or effect
+    /// that exists in the world but is no player's to see or pick.
+    pub hidden: bool,
     /// The resolved ODF, so loaders and tools can reach keys no field reads.
     /// The simulation never reads it (D9): what it needs is a typed field.
     /// Empty for definitions not made from an ODF.
@@ -409,6 +412,7 @@ impl UnitDef {
             confinement: crate::ConfinementOverrides::default(),
             nebula_pathing: None,
             avoid_me: false,
+            hidden: false,
             raw: Arc::new(raw),
         }
     }

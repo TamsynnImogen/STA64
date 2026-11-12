@@ -77,6 +77,7 @@ impl Legacy {
             def.movement = self.movement(vfs, &odf);
             // The typed fields the sim reads instead of the raw ODF (D9).
             def.avoid_me = odf.bool("avoidMe").unwrap_or(false);
+            def.hidden = odf.i64("hidden").unwrap_or(0) != 0;
             let energy = |key: &str| Fixed::from_f64(odf.f32(key).filter(|v| v.is_finite()).unwrap_or(0.0).max(0.0) as f64);
             def.special_energy_max = energy("maxSpecialEnergy");
             def.special_energy_rate = energy("specialEnergyRate");

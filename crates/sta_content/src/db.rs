@@ -446,7 +446,7 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
         crew: _, maximum_crew: _, sensor: _, hardpoints: _, build: _, launch: _, radius: _,
         sounds: _, fx: _, special_energy_max: _, special_energy_rate: _, miner: _,
         max_dilithium: _, mining_rate: _, transfer_rate: _, resource: _, features: _,
-        confinement: _, nebula_pathing: _, avoid_me: _, raw: _,
+        confinement: _, nebula_pathing: _, avoid_me: _, hidden: _, raw: _,
     } = u;
     let crate::BuildDef { cost: _, ticks: _, officers: _, list: _, queue_limit: _, flagged_slots: _ } = &u.build;
     let name = |r: &crate::DefRef| quoted(&r.odf.to_ascii_lowercase());
@@ -500,6 +500,7 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
             group(Canon::new().raw("cost", &n.cost.map_or_else(|| "-".into(), |c| c.to_string())).flag("planned", n.planned))
         }))
         .flag("avoid_me", u.avoid_me)
+        .flag("hidden", u.hidden)
         .raw("features", &features_text(db.unit_features(u)))
         // A disabled or unsupported map rule confines nothing, whatever its
         // other fields say; the construction rule applies only under it.

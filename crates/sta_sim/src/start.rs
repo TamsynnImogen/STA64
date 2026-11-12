@@ -155,11 +155,9 @@ mod tests {
         let mut pod = sta_content::UnitDef::new("fx_pod", "pod");
         pod.race = "fx".into();
         pod.hull = Fixed::from_int(100);
-        let keys = format!(
-            "classlabel = \"pod\"\nbasename = \"effect_empty\"\nmapicon = \"mapicon_empty\"\n{}",
-            hidden.map(|h| format!("hidden = {h}\n")).unwrap_or_default()
-        );
-        pod.raw = Arc::new(sta_odf::resolve("fx_pod", &mut |_| Some(keys.clone())).unwrap());
+        pod.model = "effect_empty".into();
+        // As the ODF loader types `hidden` (whole number, nonzero is on).
+        pod.hidden = hidden.is_some_and(|h| h.parse::<i64>().is_ok_and(|v| v != 0));
         b = b.unit(pod);
         let mut s = setup();
         s.content = Arc::new(b.build().unwrap());

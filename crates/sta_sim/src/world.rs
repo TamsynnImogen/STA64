@@ -84,7 +84,7 @@ impl EntityKind {
     /// ([`crate::Sim`]'s view; docs/START_HELPERS.md). Some `hidden = 1`
     /// effects do have models (FO's `effect_mstorm`); none reach the sim yet.
     pub fn hidden(def: &sta_content::UnitDef) -> bool {
-        def.raw.i64("hidden").unwrap_or(0) != 0
+        def.hidden
     }
 
     /// The kind for a definition, from its ODF class (docs/data/odf_classes.md).
