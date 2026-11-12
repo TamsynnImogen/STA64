@@ -34,8 +34,8 @@ ini" for adapting a mod.
 
 **D5. v1 lineages: stock Armada II, stock Armada I and Roots.**
 FO 4.0, STA2 Classic and STA2 Classic Enhanced run on the Roots engine and are
-covered through it. Armada I runs as its own lineage (the `Sta1Classic`
-profile). FO 3.2.7 and Dominion War are not covered in v1.
+covered through it. Stock Armada I runs as its own lineage (the `Sta1Classic`
+profile); mods of Armada I are not covered in v1. FO 3.2.7 and Dominion War are not covered in v1.
 
 *Amended 2026-11-12: Armada I moved into v1 (Cedric); awaiting Tammy's
 approval. It read "stock Armada II and Roots only" and listed Armada I with
@@ -96,7 +96,8 @@ of the rest of the plan.
 
 ## Not in v1
 
-Executable fingerprinting; FO 3.2.7 and Dominion War lineages;
+Executable fingerprinting; mods of Armada I (the stock Armada I lineage is in
+v1, see D5); FO 3.2.7 and Dominion War lineages;
 emulating engine bugs as toggles; the TOML ODF patch format; trigger and
 timeline scripting for menu scenes; Lua in third-party packs; WASM; shader
 contracts and shims; pack manager UI and load-order editor; dependency
@@ -122,7 +123,7 @@ base Roots leaking in; the report prints coverage for every installed mod;
 peers on Classic and Classic Enhanced refuse to start and name the differing
 key while peers differing only by a texture or recipe folder are accepted; a
 replay names its packs; a recipe ini dropped in a mod folder changes a headless
-frame; every installed Armada I map reads, writes and reads back equal (CON-38).
+frame; every stock Armada I map reads, writes and reads back equal (CON-38).
 
 ## Changing these decisions
 
