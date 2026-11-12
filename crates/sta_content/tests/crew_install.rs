@@ -10,7 +10,9 @@ use sta_vfs::Vfs;
 
 const ROOTS: &str = "/home/cedric/Games/Heroic/Star Trek Armada II Fleet Operations Roots";
 
-fn rates(active: Option<&str>) -> Option<(Option<i64>, Vec<(String, f64)>)> {
+type Rates = (Option<i64>, Vec<(String, f64)>);
+
+fn rates(active: Option<&str>) -> Option<Rates> {
     let root = Path::new(ROOTS);
     if !root.is_dir() {
         return None;
