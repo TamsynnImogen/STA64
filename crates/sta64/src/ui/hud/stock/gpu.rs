@@ -273,6 +273,12 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         .unwrap_or_else(|| panic!("{label}: no GPU capture"));
     let dynamic = shot.try_into_dynamic().expect("GPU image conversion");
     let rgba = dynamic.to_rgba8();
+    if let Ok(dir) = std::env::var("STA64_HUD_CAPTURE_DIR") {
+        std::fs::create_dir_all(&dir).unwrap();
+        dynamic
+            .save(std::path::Path::new(&dir).join(format!("stock-{label}.png")))
+            .unwrap();
+    }
     // Classic has no colour overrides. Guard the visible green/cyan/yellow
     // numerals in the real framebuffer, rather than just checking ECS state.
     if profile == UiProfile::Armada2 {
@@ -282,11 +288,15 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
             let rect = stock.at(Vec2::new(area.x, area.y), &format!("resource_{id}")).unwrap();
             let rgb = stock.colour(&format!("resource_{id}_color")).unwrap_or(defaults[id]).to_srgba();
             let expected = [rgb.red, rgb.green, rgb.blue].map(|v| (v * 255.0).round() as i16);
+            // Small five-digit glyphs can have no fully covered pixels.
+            // Cyan needs a tighter tolerance to distinguish white text on
+            // its blue panel. These bounds also reject the old white captures.
+            let tolerance = if id == 2 { 24 } else { 64 };
             let mut matching = 0;
             for y in (rect.y * pixel_scale).max(0.0) as u32..((rect.y + rect.h) * pixel_scale).min(size.y as f32) as u32 {
                 for x in (rect.x * pixel_scale).max(0.0) as u32..((rect.x + rect.w) * pixel_scale).min(size.x as f32) as u32 {
                     let pixel = rgba.get_pixel(x, y);
-                    if (0..3).all(|channel| (pixel[channel] as i16 - expected[channel]).abs() <= 5) {
+                    if (0..3).all(|channel| (pixel[channel] as i16 - expected[channel]).abs() <= tolerance) {
                         matching += 1;
                     }
                 }
@@ -312,12 +322,6 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
     let coloured = rgba.pixels().filter(|p| p[0] > 20 || p[1] > 20 || p[2] > 20).count();
     eprintln!("{label}: {commands} command images, {resources} resource fields, {coloured} nonblack pixels");
     assert!(coloured > 500, "{label}: HUD did not visibly render");
-    if let Ok(dir) = std::env::var("STA64_HUD_CAPTURE_DIR") {
-        std::fs::create_dir_all(&dir).unwrap();
-        dynamic
-            .save(std::path::Path::new(&dir).join(format!("stock-{label}.png")))
-            .unwrap();
-    }
 }
 
 #[test]
