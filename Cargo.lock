@@ -5505,6 +5505,7 @@ dependencies = [
  "sta_content",
  "sta_core",
  "sta_odf",
+ "sta_vfs",
 ]
 
 [[package]]

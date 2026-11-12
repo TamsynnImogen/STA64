@@ -144,6 +144,9 @@ pub struct PlayerView {
     pub eliminated: bool,
     /// Toward every other player, ascending id.
     pub relations: Vec<(PlayerId, Relation)>,
+    /// Current initialized crew stock; None means the source has no crew state.
+    #[serde(default)]
+    pub crew: Option<Fixed>,
 }
 
 /// What one step of a [`WorldSource`](crate::WorldSource) produces.

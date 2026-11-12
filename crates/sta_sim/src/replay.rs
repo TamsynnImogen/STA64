@@ -13,7 +13,7 @@
 //!   rejects a file whose magic, format or seam revision it does not know,
 //!   or whose body leaves trailing bytes.
 //!   Content is checked when a game is built from the replay.
-//! - Not in the file yet: [`GameOptions`] is empty today. When it gains
+//! - [`GameOptions`] is recorded explicitly in format 2. When it gains
 //!   fields, add them here with a format bump.
 
 use std::sync::Arc;
@@ -30,7 +30,7 @@ use crate::{SEAM_REV, Sim};
 /// First four bytes of every replay file.
 pub const MAGIC: [u8; 4] = *b"STAR";
 /// Bumped when the layout of [`Replay`] changes.
-pub const FORMAT_VERSION: u16 = 1;
+pub const FORMAT_VERSION: u16 = 2;
 /// Digest every this many ticks unless the recorder is told otherwise.
 pub const DEFAULT_DIGEST_EVERY: Tick = 30;
 
@@ -126,6 +126,7 @@ pub struct Replay {
     pub seed: u64,
     pub map: MapDef,
     pub players: Vec<SeatRec>,
+    pub options: GameOptions,
     /// Ascending tick, then `(player, seq)`.
     pub commands: Vec<Logged>,
     /// `(tick, digest)`, ascending; starts with tick 0.
@@ -202,7 +203,7 @@ impl Replay {
                     },
                 })
                 .collect(),
-            options: GameOptions::default(),
+            options: self.options.clone(),
         })
     }
 
@@ -278,6 +279,7 @@ impl Recorder {
                     },
                 })
                 .collect(),
+            options: setup.options.clone(),
             commands: Vec::new(),
             digests: vec![(0, sim.digest())],
             end_tick: 0,
@@ -444,7 +446,7 @@ mod tests {
         assert_eq!(&NATIVE_V1[..6], b"STAR\x01\x00");
         assert_eq!(
             Replay::decode(NATIVE_V1).unwrap_err(),
-            ReplayError::SeamRev { found: 1 }
+            ReplayError::FormatVersion { found: 1 }
         );
     }
 
@@ -485,7 +487,15 @@ mod tests {
     fn historical_native_commands_retain_their_default_simulation_golden() {
         // Test-only extraction of known old commands, not a public replay
         // migration path. The real decoder above correctly rejects revision 1.
-        let (mut replay, rest): (Replay, _) = postcard::take_from_bytes(&NATIVE_V1[6..]).unwrap();
+        #[derive(Deserialize)]
+        struct LegacyReplay {
+            seam_rev: u32, content_hash: u64, seed: u64, map: MapDef,
+            players: Vec<SeatRec>, commands: Vec<Logged>, digests: Vec<(Tick,u64)>, end_tick: Tick,
+        }
+        let (old, rest): (LegacyReplay, _) = postcard::take_from_bytes(&NATIVE_V1[6..]).unwrap();
+        let mut replay = Replay { seam_rev: old.seam_rev, content_hash: old.content_hash,
+            seed: old.seed, map: old.map, players: old.players, commands: old.commands,
+            digests: old.digests, end_tick: old.end_tick, options: GameOptions::default() };
         assert!(rest.is_empty());
         assert_eq!(replay.seam_rev, 1);
         replay.seam_rev = SEAM_REV;

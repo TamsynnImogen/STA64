@@ -15,3 +15,6 @@ serde.workspace = true
 # The fakes: ScriptedSource reads JSON5 timelines, ViewLog writes postcard.
 json5.workspace = true
 postcard.workspace = true
+
+[dev-dependencies]
+sta_vfs.workspace = true

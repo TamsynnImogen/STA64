@@ -27,6 +27,14 @@ pub const RESOURCES: usize = 4;
 /// The stock of a fallback start (Fleet Operations' "normal" federation).
 pub const DEFAULT_STOCK: [i32; RESOURCES] = [4000, 2000, 0, 500];
 
+/// The authored starting-resource choice for a skirmish seat.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum StartingResources {
+    #[default]
+    Normal,
+    Lots,
+}
+
 /// One race ODF.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RaceDef {
@@ -50,6 +58,11 @@ pub struct RaceDef {
     pub minimal_units: Vec<String>,
     /// The "normal" start stock per resource id.
     pub stock: [i64; RESOURCES],
+    /// The "lots" start stock per resource id.
+    pub lots_stock: [i64; RESOURCES],
+    /// Authored crew stock, absent when the ODF does not configure it.
+    pub normal_crew: Option<i64>,
+    pub lots_crew: Option<i64>,
 }
 
 /// What a seat starts with.
@@ -57,6 +70,7 @@ pub struct RaceDef {
 pub struct Loadout {
     pub units: Vec<ContentKey>,
     pub stock: [Fixed; RESOURCES],
+    pub crew: Option<Fixed>,
     /// Where it came from: `race <stem>` or `default`.
     pub source: String,
 }
@@ -163,7 +177,17 @@ impl Races {
                             .filter(|v| !v.is_empty())
                             .map(str::to_owned)
                     };
-                    let stock = |k: &str| o.i64(&format!("normal{k}")).unwrap_or(0).max(0);
+                    let stock = |mode: &str, k: &str| o.i64(&format!("{mode}{k}")).unwrap_or(0).max(0);
+                    let mut crew = |mode: &str| {
+                        let key = format!("{mode}crew");
+                        let value = nonnegative_integer(&o, &key);
+                        if o.raw(&key).is_some() && value.is_none() {
+                            warnings.push(Warning::new(format!("{s}.odf"), format!("{key} must be a nonnegative integer")));
+                        }
+                        value
+                    };
+                    let normal_crew = crew("normal");
+                    let lots_crew = crew("lots");
                     let slot = nonnegative_integer(&o, "instantactionslot");
                     if o.raw("instantactionslot").is_some() && slot.is_none() {
                         warnings.push(Warning::new(format!("{s}.odf"), "instantActionSlot must be a nonnegative integer"));
@@ -181,11 +205,19 @@ impl Races {
                         standard_units: numbered(&o, "standardunits"),
                         minimal_units: numbered(&o, "minimalunits"),
                         stock: [
-                            stock("dilithium"),
-                            stock("latinum"),
-                            stock("metal"),
-                            stock("biomatter"),
+                            stock("normal", "dilithium"),
+                            stock("normal", "latinum"),
+                            stock("normal", "metal"),
+                            stock("normal", "biomatter"),
                         ],
+                        lots_stock: [
+                            stock("lots", "dilithium"),
+                            stock("lots", "latinum"),
+                            stock("lots", "metal"),
+                            stock("lots", "biomatter"),
+                        ],
+                        normal_crew,
+                        lots_crew,
                     });
                 }
                 Err(e) => warnings.push(Warning::new(format!("{s}.odf"), e.to_string())),
@@ -252,13 +284,23 @@ impl Races {
 
     /// What a seat of `race` (a unit race key) starts with.
     pub fn loadout(&self, db: &ContentDb, race: &str) -> Loadout {
+        self.loadout_with_mode(db, race, StartingResources::Normal)
+    }
+
+    /// What a seat starts with under the selected resource mode.
+    pub fn loadout_with_mode(&self, db: &ContentDb, race: &str, mode: StartingResources) -> Loadout {
         if let Some(r) = self.get_playable(race).or_else(|| self.get(race)) {
             let units = r.standard_units.iter().filter_map(|s| {
                 db.key(s).filter(|&k| db.unit(k).is_some())
             }).collect();
+            let (stock, crew) = match mode {
+                StartingResources::Normal => (r.stock, r.normal_crew),
+                StartingResources::Lots => (r.lots_stock, r.lots_crew),
+            };
             return Loadout {
                 units,
-                stock: r.stock.map(|n| Fixed::from_int(n.clamp(0, 1_000_000_000) as i32)),
+                stock: stock.map(|n| Fixed::from_int(n.clamp(0, 1_000_000_000) as i32)),
+                crew: crew.map(|n| Fixed::from_int(n.clamp(0, 1_000_000_000) as i32)),
                 source: format!("race {}", r.stem),
             };
         }
@@ -333,6 +375,7 @@ pub fn default_loadout(db: &ContentDb, race: &str) -> Loadout {
     Loadout {
         units,
         stock: DEFAULT_STOCK.map(Fixed::from_int),
+        crew: None,
         source: "default".into(),
     }
 }
@@ -541,6 +584,54 @@ mod tests {
         assert_eq!(names, ["fx_yard", "fx_miner"]);
         assert_eq!(l.source, "default");
         assert_eq!(l.stock, DEFAULT_STOCK.map(Fixed::from_int));
+        assert_eq!(l.crew, None);
+        let lots = Races::default().loadout_with_mode(&db, "fx", StartingResources::Lots);
+        assert_eq!(lots.stock, l.stock);
+        assert_eq!(lots.crew, None);
         assert!(Races::default().loadout(&db, "nobody").units.is_empty());
+    }
+
+    #[test]
+    fn resolved_modes_keep_authored_stock_crew_and_exact_units() {
+        let (races, warnings) = Races::load_with(&mut loader(&[
+            ("races", "race0=child"),
+            ("base", "name=fx\ninstantActionSlot=0\nstandardUnits1=fx_station\nstandardUnits2=fx_yard\nstandardUnits3=fx_station\nnormalDilithium=11\nnormalLatinum=12\nnormalMetal=13\nnormalBiomatter=14\nlotsDilithium=21\nlotsLatinum=22\nlotsMetal=23\nlotsBiomatter=24\nnormalCrew=0\nlotsCrew=31"),
+            ("child", "#include \"base.odf\"\nnormalLatinum=17\nlotsMetal=27\nlotsCrew=37"),
+        ]));
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let race = races.get("child").unwrap();
+        assert_eq!(race.stock, [11, 17, 13, 14]);
+        assert_eq!(race.lots_stock, [21, 22, 27, 24]);
+        assert_eq!(race.normal_crew, Some(0));
+        assert_eq!(race.lots_crew, Some(37));
+        let db = crate::fake::db();
+        let normal = races.loadout(&db, "fx");
+        let lots = races.loadout_with_mode(&db, "fx", StartingResources::Lots);
+        let names = |l: &Loadout| l.units.iter().map(|&k| db.name(k).unwrap().to_owned()).collect::<Vec<_>>();
+        assert_eq!(names(&normal), ["fx_station", "fx_yard", "fx_station"]);
+        assert_eq!(names(&lots), names(&normal));
+        assert_eq!(normal.stock, [11, 17, 13, 14].map(Fixed::from_int));
+        assert_eq!(lots.stock, [21, 22, 27, 24].map(Fixed::from_int));
+        assert_eq!(normal.crew, Some(Fixed::ZERO));
+        assert_eq!(lots.crew, Some(Fixed::from_int(37)));
+    }
+
+    #[test]
+    fn missing_and_invalid_crew_remain_absent() {
+        let (races, warnings) = Races::load_with(&mut loader(&[
+            ("races", "race0=missing\nrace1=invalid"),
+            ("missing", "name=missing\ninstantActionSlot=0"),
+            ("invalid", "name=invalid\ninstantActionSlot=1\nnormalCrew=-1\nlotsCrew=word"),
+        ]));
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(warnings.iter().any(|w| w.message.contains("normalcrew")));
+        assert!(warnings.iter().any(|w| w.message.contains("lotscrew")));
+        for race in races.iter() {
+            assert_eq!(race.normal_crew, None);
+            assert_eq!(race.lots_crew, None);
+        }
+        let db = crate::fake::db();
+        assert_eq!(races.loadout(&db, "missing").crew, None);
+        assert_eq!(races.loadout_with_mode(&db, "invalid", StartingResources::Lots).crew, None);
     }
 }

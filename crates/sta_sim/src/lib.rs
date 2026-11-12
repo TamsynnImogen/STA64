@@ -324,6 +324,15 @@ impl Sim {
         TickOutput { view: Arc::new(self.build_view()), events: std::mem::take(&mut self.events) }
     }
 
+    /// Live actors only; queued reservations/admission are not implemented.
+    fn officer_census(&self, player: PlayerId) -> Fixed {
+        let Some(db) = self.content.as_deref() else { return Fixed::ZERO };
+        self.units.iter().filter(|u| u.owner == player && !u.flags.contains(view::UnitFlags::DYING))
+            .filter_map(|u| db.unit(u.def)).fold(Fixed::ZERO, |sum, def| {
+                Fixed::from_bits(sum.to_bits().saturating_add(def.build.officers.max(Fixed::ZERO).to_bits()))
+            })
+    }
+
     fn build_view(&self) -> WorldView {
         let units = self.units.iter().map(|entity| {
             let mut view = entity.view();
@@ -337,7 +346,8 @@ impl Sim {
                 id,
                 team,
                 resources: self.economy.stock_of(id),
-                officers: [Fixed::ZERO; 2],
+                officers: self.economy.officer_limit(id).map_or([Fixed::ZERO; 2], |limit| [self.officer_census(id), limit]),
+                crew: self.economy.crew_of(id),
                 eliminated: self.victory.is_eliminated(id),
                 relations: self
                     .players

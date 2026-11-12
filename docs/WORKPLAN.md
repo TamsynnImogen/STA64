@@ -117,7 +117,7 @@ pub struct TeamId(pub u8);
 pub type Tick = u64;
 pub const TICK_HZ: u32 = 30;
 pub struct ContentKey(pub u32);             // index into ContentDb's name-sorted table
-pub const SEAM_REV: u32 = 2;                // versions the postcard command/view surface
+pub const SEAM_REV: u32 = 3;                // versions the postcard command/view surface
 ```
 
 - Space is the maps': Direct3D left-handed, +Y up, ODF/BZN units. Headings
@@ -129,13 +129,16 @@ pub const SEAM_REV: u32 = 2;                // versions the postcard command/vie
   `ContentDb::hash()` it came from.
 - Evolution: additive only. Moving or renaming a type is a breaking change.
 
-The [perceived-team prerequisite](PERCEIVED_TEAM.md) introduces a versioned
-command/view boundary at revision 2. Real ownership remains authoritative;
-global perceived identity has a separate default-empty view table and edit.
-Revision-1 replay/view logs are rejected explicitly. Snapshot format 11 retains
-narrow readers for historical formats 8/9/10 with seam 1; this is save migration,
-not general backward network/replay compatibility. Desktop and Android share
-the same state and rules; the December 2026 desktop alpha remains the priority.
+The [starting-personnel prerequisite](STARTING_PERSONNEL.md) introduces revision
+3 for optional player crew and recorded setup choices. Replay format 2 rejects
+previous formats/revisions before decoding. Snapshot format 12 appends a
+mandatory personnel record; narrow readers retain historical 8/9/10 (seam 1)
+and 11 (seam 2). Historical records keep crew/officer maxima unknown, and only
+the newly introduced rules-hash contribution may be omitted for that save
+migration. Current snapshots and network identities require the full hash.
+Perceived identity remains independent of real ownership as in
+[PERCEIVED_TEAM.md](PERCEIVED_TEAM.md). Desktop and Android share the same state
+and rules; the December 2026 desktop alpha remains the priority.
 
 ### S2. Commands — `sta_sim::command`
 

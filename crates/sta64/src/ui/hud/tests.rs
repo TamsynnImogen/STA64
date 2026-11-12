@@ -50,7 +50,7 @@ fn content(tree: Option<&str>) -> ContentDb {
 }
 
 fn player(id: u8, team: u8, stock: [f64; 4]) -> PlayerView {
-    PlayerView {
+    PlayerView { crew: None,
         id: PlayerId(id),
         team: TeamId(team),
         resources: stock.iter().map(|v| Fixed::from_f64(*v)).collect(),

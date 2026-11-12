@@ -35,9 +35,10 @@ use crate::world::{Entities, Entity, EntityKind, Shields, Table};
 use crate::{Rng, Sim, SimEvent};
 
 pub const MAGIC: [u8; 4] = *b"STAS";
-/// Format 11 appends perceived-team rows after the format-10 confinement suffix.
+/// Format 12 appends personnel rows after the format-11 perceived-team suffix.
 /// The Body and earlier suffix remain unchanged.
-pub const FORMAT_VERSION: u16 = 11;
+pub const FORMAT_VERSION: u16 = 12;
+const PERCEPTION_FORMAT: u16 = 11;
 const PREVIOUS_FORMAT: u16 = 10;
 const LEGACY_CARGO_FORMAT: u16 = 9;
 // Only compatible while Body is byte-for-byte the format-8 record schema.
@@ -66,7 +67,7 @@ impl std::fmt::Display for SnapshotError {
         match self {
             SnapshotError::BadMagic => write!(f, "not a snapshot"),
             SnapshotError::FormatVersion { found } => {
-                write!(f, "snapshot format {found}, expected {FORMAT_VERSION} or compatible {PREVIOUS_FORMAT}/{LEGACY_CARGO_FORMAT}/{COMPATIBLE_MINING_FORMAT}")
+                write!(f, "snapshot format {found}, expected {FORMAT_VERSION} or compatible {PERCEPTION_FORMAT}/{PREVIOUS_FORMAT}/{LEGACY_CARGO_FORMAT}/{COMPATIBLE_MINING_FORMAT}")
             }
             SnapshotError::SeamRev { found } => {
                 write!(f, "snapshot seam revision {found}, expected {SEAM_REV}")
@@ -161,6 +162,13 @@ struct BoundaryRec {
 struct PerceptionRec {
     version: u8,
     rows: Vec<(EntityId, PlayerId)>,
+}
+
+/// Mandatory v12 suffix. Earlier Body and suffix schemas are unchanged.
+#[derive(Serialize, Deserialize)]
+struct PersonnelRec {
+    version: u8,
+    rows: Vec<(PlayerId, Option<i64>, Option<i64>)>,
 }
 
 fn kind_from(b: u8) -> Option<EntityKind> {
@@ -295,6 +303,7 @@ impl Sim {
             version: 1,
             rows: self.perception.iter().map(|(id, player)| (id, *player)).collect(),
         }).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&PersonnelRec { version: 1, rows: self.economy.personnel_rec() }).expect("snapshot serialises"));
         out
     }
 
@@ -309,17 +318,19 @@ impl Sim {
             return Err(SnapshotError::BadMagic);
         }
         let found = u16::from_le_bytes([bytes[4], bytes[5]]);
-        if ![FORMAT_VERSION, PREVIOUS_FORMAT, LEGACY_CARGO_FORMAT, COMPATIBLE_MINING_FORMAT].contains(&found) {
+        if ![FORMAT_VERSION, PERCEPTION_FORMAT, PREVIOUS_FORMAT, LEGACY_CARGO_FORMAT, COMPATIBLE_MINING_FORMAT].contains(&found) {
             return Err(SnapshotError::FormatVersion { found });
         }
         let seam = u32::from_le_bytes(bytes[6..10].try_into().unwrap());
-        let expected_seam = if found == FORMAT_VERSION { SEAM_REV } else { 1 };
+        let expected_seam = match found { FORMAT_VERSION => SEAM_REV, PERCEPTION_FORMAT => 2, _ => 1 };
         if seam != expected_seam {
             return Err(SnapshotError::SeamRev { found: seam });
         }
         let saved = u64::from_le_bytes(bytes[10..18].try_into().unwrap());
         let given = content.as_ref().map_or(0, |c| c.hash());
-        if saved != given {
+        let historical_personnel_identity = found < FORMAT_VERSION && content.as_ref()
+            .is_some_and(|db| db.hash_without_starting_rules() == saved);
+        if saved != given && !historical_personnel_identity {
             return Err(SnapshotError::ContentMismatch { saved, given });
         }
         let (b, rest): (Body, &[u8]) = postcard::take_from_bytes(&bytes[HEADER..])
@@ -327,27 +338,32 @@ impl Sim {
         if found < PREVIOUS_FORMAT && content.as_ref().is_some_and(|db| db.has_map_confinement()) {
             return Err(SnapshotError::Corrupt("old snapshot has no explicit confinement state".into()));
         }
-        let (bounds, boundary_rows, perception_rows) = if found >= PREVIOUS_FORMAT {
+        let (bounds, boundary_rows, perception_rows, personnel_rows) = if found >= PREVIOUS_FORMAT {
             let (bounds, rest) = postcard::take_from_bytes(rest).map_err(|e| SnapshotError::Corrupt(e.to_string()))?;
             let (record, rest): (BoundaryRec, _) = postcard::take_from_bytes(rest).map_err(|e| SnapshotError::Corrupt(e.to_string()))?;
             if record.version != 1 { return Err(SnapshotError::Corrupt("unknown confinement record version".into())); }
-            let (perception_rows, rest) = if found == FORMAT_VERSION {
+            let (perception_rows, rest) = if found >= PERCEPTION_FORMAT {
                 let (record, rest): (PerceptionRec, _) = postcard::take_from_bytes(rest).map_err(|e| SnapshotError::Corrupt(e.to_string()))?;
                 if record.version != 1 { return Err(SnapshotError::Corrupt("unknown perceived-team record version".into())); }
                 (record.rows, rest)
             } else {
                 (Vec::new(), rest)
             };
+            let (personnel_rows, rest) = if found == FORMAT_VERSION {
+                let (record, rest): (PersonnelRec, _) = postcard::take_from_bytes(rest).map_err(|e| SnapshotError::Corrupt(e.to_string()))?;
+                if record.version != 1 { return Err(SnapshotError::Corrupt("unknown personnel record version".into())); }
+                (record.rows, rest)
+            } else { (Vec::new(), rest) };
             if !rest.is_empty() { return Err(SnapshotError::Corrupt("trailing bytes".into())); }
-            (bounds, record.rows, perception_rows)
+            (bounds, record.rows, perception_rows, personnel_rows)
         } else if rest.is_empty() {
-            (None, Vec::new(), Vec::new())
+            (None, Vec::new(), Vec::new(), Vec::new())
         } else {
             let (bounds, rest) = postcard::take_from_bytes(rest).map_err(|e| SnapshotError::Corrupt(e.to_string()))?;
             if !rest.is_empty() {
                 return Err(SnapshotError::Corrupt("trailing bytes".into()));
             }
-            (bounds, Vec::new(), Vec::new())
+            (bounds, Vec::new(), Vec::new(), Vec::new())
         };
         let max_phase = if found == COMPATIBLE_MINING_FORMAT { 3 } else { 4 };
         if let Some(row) = b.economy.miners.iter().find(|row| row.5 > max_phase) {
@@ -365,7 +381,7 @@ impl Sim {
             Entities::from_parts(list, b.next_entity).ok_or_else(|| corrupt("entity ids"))?;
         let (mut confinement, _) = crate::boundary::state::Confinement::prepare(content.as_deref(), bounds);
         confinement.restore(&units, boundary_rows).map_err(|why| SnapshotError::Corrupt(why.into()))?;
-        let perception = if found == FORMAT_VERSION {
+        let perception = if found >= PERCEPTION_FORMAT {
             crate::perception::restore(&units, perception_rows)
                 .map_err(|why| SnapshotError::Corrupt(why.into()))?
         } else {
@@ -388,6 +404,8 @@ impl Sim {
         let movement = Movement::from_rows(courses).ok_or_else(|| corrupt("courses"))?;
         let weapons = Weapons::from_rec(b.weapons).ok_or_else(|| corrupt("weapons"))?;
         let specials = crate::specials::Specials::from_rec(b.specials).ok_or_else(|| corrupt("specials"))?;
+        let mut economy = crate::economy::Economy::from_rec(&b.economy);
+        economy.restore_personnel(personnel_rows, &b.players).map_err(|why| SnapshotError::Corrupt(why.into()))?;
         Ok(Sim {
             tick: b.tick,
             rng: Rng(b.rng),
@@ -404,7 +422,7 @@ impl Sim {
             events: b.events,
             movement,
             weapons,
-            economy: crate::economy::Economy::from_rec(&b.economy),
+            economy,
             production: crate::production::Production::from_rec(&b.production).ok_or_else(|| corrupt("rallies"))?,
             victory: crate::victory::Victory::from_rec(&b.victory),
             specials,
@@ -810,3 +828,7 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+#[path = "snapshot/personnel_tests.rs"]
+mod personnel_tests;

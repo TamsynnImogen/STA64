@@ -14,7 +14,7 @@
 
 use std::path::{Path, PathBuf};
 
-use sta_content::race::skirmish_races;
+use sta_content::race::{skirmish_races, StartingResources};
 use sta_content::resources::{self, SLOTS};
 use sta_content::{ContentDb, Fixed, OdfIndex, Profile, Races};
 use sta_vfs::Vfs;
@@ -117,6 +117,14 @@ fn every_game_names_and_feeds_its_resources() {
         }
         for race in skirmish_races(&races, &db) {
             let l = races.loadout(&db, &race);
+            let def = races.get_playable(&race).expect("offered race is playable");
+            let lots = races.loadout_with_mode(&db, &race, StartingResources::Lots);
+            let fixed = |n: i64| Fixed::from_int(n.clamp(0, 1_000_000_000) as i32);
+            assert_eq!(l.stock, def.stock.map(fixed), "{} {race}: normal stock", i.label);
+            assert_eq!(lots.stock, def.lots_stock.map(fixed), "{} {race}: lots stock", i.label);
+            assert_eq!(l.crew, def.normal_crew.map(fixed), "{} {race}: normal crew", i.label);
+            assert_eq!(lots.crew, def.lots_crew.map(fixed), "{} {race}: lots crew", i.label);
+            assert_eq!(l.units, lots.units, "{} {race}: resource mode keeps start units", i.label);
             eprintln!(
                 "  {race}: start stock {:?}",
                 l.stock.iter().map(|v| f(*v)).collect::<Vec<_>>()

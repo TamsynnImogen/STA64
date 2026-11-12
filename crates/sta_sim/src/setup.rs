@@ -8,6 +8,7 @@
 //!   bit-deterministic and replays never rerun them.
 
 use std::sync::Arc;
+use serde::{Serialize, Deserialize};
 
 use sta_content::{ContentDb, MapDef};
 use sta_core::{PlayerId, TeamId};
@@ -51,11 +52,14 @@ pub enum Control {
     Idle,
 }
 
-/// Game rules chosen in setup. Empty until the packages that need options
-/// (victory conditions, starting resources, ...) add them, with defaults.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+/// Native starting choices, shared by all peers and persisted in replays.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[non_exhaustive]
-pub struct GameOptions {}
+pub struct GameOptions {
+    pub starting_resources: sta_content::StartingResources,
+    /// Authored MP_OFFICER_LIMIT row; zero selects its first/default entry.
+    pub officer_limit: u32,
+}
 
 /// A computer player or a mission: reads views and events, writes commands.
 pub trait Controller: Send {

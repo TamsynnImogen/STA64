@@ -206,6 +206,7 @@ fn race(name: &str, slot: Option<i64>) -> RaceDef {
         stem: name.into(), name: name.into(), display_key: None, slot, interface: None, interface_sprites: None,
         single_player_music: None, multiplayer_music: None,
         standard_units: Vec::new(), minimal_units: Vec::new(), stock: [0; 4],
+        lots_stock: [0; 4], normal_crew: None, lots_crew: None,
     }
 }
 

@@ -68,7 +68,7 @@ fn feed(vfs: &sta_vfs::Vfs, profile: UiProfile) -> HudFeed {
     )
     .expect("selected fake cruiser");
     let mut view = (*source.step(&[]).view).clone();
-    view.players = vec![PlayerView {
+    view.players = vec![PlayerView { crew: None,
         id: PlayerId(1),
         team: TeamId(1),
         resources: [3000, 20, 700, 5].map(Fixed::from_int).to_vec(),

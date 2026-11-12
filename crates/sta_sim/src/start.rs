@@ -40,8 +40,13 @@ impl Sim {
                     }
                 }
             }
-            let loadout = races.loadout(&s.content, &p.race);
+            let loadout = races.loadout_with_mode(&s.content, &p.race, s.options.starting_resources);
             sim.place_start(p.id, start, &loadout);
+            let limit = s.content.rules().officer_limit(s.options.officer_limit as usize).map(Fixed::from_int);
+            if limit.is_none() && !s.content.rules().officer_limits.is_empty() {
+                warnings.push(Warning::new("RTS_CFG.h", format!("officer choice {} is unavailable for player {}", s.options.officer_limit, p.id.0)));
+            }
+            sim.economy.set_personnel(p.id, loadout.crew, limit);
         }
         (sim, warnings)
     }
@@ -53,6 +58,7 @@ impl Sim {
             self.spawn_def(key, player, pos, heading);
         }
         self.economy.set_stock(player, loadout.stock);
+        self.economy.set_personnel(player, loadout.crew, None);
     }
 }
 
@@ -113,6 +119,7 @@ mod tests {
             single_player_music: None, multiplayer_music: None,
             standard_units: vec!["fx_station".into(), "missing".into(), "fx_beam".into(), "fx_station".into()],
             minimal_units: vec!["fx_miner".into()], stock: [7, 0, 0, 0],
+            lots_stock: [0; 4], normal_crew: None, lots_crew: None,
         }]);
         let (sim, warnings) = Sim::from_setup_with_starts(&s, &races);
         let mine: Vec<_> = sim.view().units.iter()
