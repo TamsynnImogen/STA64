@@ -359,7 +359,9 @@ pub trait MediaSource: Send {
     fn info(&self) -> &StreamInfo;
 
     /// The next decoded video frame or audio chunk in stream order; `None`
-    /// once every track has ended.
+    /// once every track has ended. After an error the source's state is
+    /// unspecified until the next [`MediaSource::seek`]; [`Movie`] treats an
+    /// error as the end of the movie.
     fn next_event(&mut self) -> Result<Option<MediaEvent>>;
 
     /// Reposition so that the next video frame is the one shown at `to`
@@ -402,6 +404,12 @@ impl Movie {
 
     /// Open a movie held in memory, the container found from its first bytes.
     pub fn open_bytes(bytes: Vec<u8>) -> Result<Self> {
+        // Bink keeps the whole file: hand the buffer over without a copy.
+        #[cfg(feature = "bink")]
+        if sniff(&bytes) == Some(Container::Bink) {
+            return guard(|| bink::BinkSource::from_bytes(bytes))
+                .map(|s| Self::from_source(Box::new(s)));
+        }
         Self::open_reader(Box::new(Cursor::new(bytes)))
     }
 
@@ -411,15 +419,17 @@ impl Movie {
         let mut head = [0u8; 16];
         let n = read_up_to(&mut reader, &mut head)?;
         reader.seek(std::io::SeekFrom::Start(0))?;
-        let source: Box<dyn MediaSource> = match sniff(&head[..n]) {
-            #[cfg(feature = "bink")]
-            Some(Container::Bink) => Box::new(bink::BinkSource::open(reader)?),
-            #[cfg(feature = "mp4")]
-            Some(Container::Mp4) => Box::new(mp4::Mp4Source::open(reader)?),
-            #[allow(unreachable_patterns)]
-            Some(c) => return Err(MediaError::Unsupported(format!("{c:?} support not built"))),
-            None => return Err(MediaError::UnknownFormat),
-        };
+        let source: Box<dyn MediaSource> = guard(move || -> Result<Box<dyn MediaSource>> {
+            match sniff(&head[..n]) {
+                #[cfg(feature = "bink")]
+                Some(Container::Bink) => Ok(Box::new(bink::BinkSource::open(reader)?)),
+                #[cfg(feature = "mp4")]
+                Some(Container::Mp4) => Ok(Box::new(mp4::Mp4Source::open(reader)?)),
+                #[allow(unreachable_patterns)]
+                Some(c) => Err(MediaError::Unsupported(format!("{c:?} support not built"))),
+                None => Err(MediaError::UnknownFormat),
+            }
+        })?;
         Ok(Self::from_source(source))
     }
 
@@ -447,12 +457,15 @@ impl Movie {
         if self.finished {
             return Ok(None);
         }
-        let event = self.source.next_event()?;
-        if event.is_none() {
+        let source = &mut self.source;
+        let event = guard(|| source.next_event());
+        if !matches!(event, Ok(Some(_))) {
+            // End of stream, or an error: either ends the movie (an error
+            // is reported once) until the next seek.
             self.finished = true;
             self.video_done = true;
         }
-        Ok(event)
+        event
     }
 
     /// The next video frame; audio decoded on the way waits in
@@ -490,7 +503,8 @@ impl Movie {
     /// See [`MediaSource::seek`]. Clears queued audio and end-of-stream.
     pub fn seek(&mut self, to: Duration) -> Result<Duration> {
         self.audio.clear();
-        let at = self.source.seek(to)?;
+        let source = &mut self.source;
+        let at = guard(|| source.seek(to))?;
         self.finished = false;
         self.video_done = self.source.info().video.is_none();
         Ok(at)
@@ -499,6 +513,22 @@ impl Movie {
     /// Every track has ended and the audio queue is empty.
     pub fn is_finished(&self) -> bool {
         self.finished && self.audio.is_empty()
+    }
+}
+
+/// Run decoder code, turning a panic inside it (a bug or a hostile file
+/// tripping a dependency) into an error instead of unwinding into the game.
+fn guard<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(r) => r,
+        Err(p) => {
+            let what = p
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| p.downcast_ref::<String>().cloned())
+                .unwrap_or_default();
+            Err(MediaError::Corrupt(format!("decoder panicked: {what}")))
+        }
     }
 }
 

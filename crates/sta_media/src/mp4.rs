@@ -14,7 +14,8 @@
 //! * Audio: AAC-LC decodes to interleaved `f32`. The encoder delay (priming)
 //!   and end padding are removed using the container's gapless information
 //!   (`iTunSMPB` or the edit list), so the PCM starts at the movie's time 0
-//!   and is exactly the stated length.
+//!   and is exactly the stated length. A file with neither keeps the
+//!   encoder's priming samples (as ffmpeg does for such files).
 //! * Seek: video seeks to the sync sample at or before the target and decodes
 //!   forward, dropping frames before the target; audio restarts two packets
 //!   early (AAC needs one frame of overlap) and drops samples before the
@@ -42,8 +43,16 @@ const AAC_PREROLL_PACKETS: i64 = 2;
 /// [`SharedReader`] so they can interleave reads without disturbing each
 /// other.
 struct SharedReader {
-    inner: Arc<Mutex<Box<dyn ReadSeek>>>,
+    inner: Arc<Mutex<Shared>>,
     pos: u64,
+}
+
+/// The one underlying reader and where it currently is, so reads that
+/// continue where the previous one stopped need no seek (keeps a buffered
+/// reader's buffer).
+struct Shared {
+    reader: Box<dyn ReadSeek>,
+    pos: Option<u64>,
 }
 
 impl Read for SharedReader {
@@ -52,9 +61,13 @@ impl Read for SharedReader {
             .inner
             .lock()
             .map_err(|_| std::io::Error::other("reader poisoned"))?;
-        g.seek(SeekFrom::Start(self.pos))?;
-        let n = g.read(buf)?;
+        if g.pos != Some(self.pos) {
+            g.pos = None;
+            g.reader.seek(SeekFrom::Start(self.pos))?;
+        }
+        let n = g.reader.read(buf)?;
         self.pos += n as u64;
+        g.pos = Some(self.pos);
         Ok(n)
     }
 }
@@ -69,7 +82,8 @@ impl Seek for SharedReader {
                     .inner
                     .lock()
                     .map_err(|_| std::io::Error::other("reader poisoned"))?;
-                let end = g.seek(SeekFrom::End(0))?;
+                g.pos = None;
+                let end = g.reader.seek(SeekFrom::End(0))?;
                 end.checked_add_signed(d)
             }
         };
@@ -101,10 +115,7 @@ fn registry() -> RuntimeContext {
     ctx
 }
 
-fn open_demuxer(
-    shared: &Arc<Mutex<Box<dyn ReadSeek>>>,
-    ctx: &RuntimeContext,
-) -> Result<Mp4Demuxer> {
+fn open_demuxer(shared: &Arc<Mutex<Shared>>, ctx: &RuntimeContext) -> Result<Mp4Demuxer> {
     let r = SharedReader {
         inner: shared.clone(),
         pos: 0,
@@ -256,7 +267,11 @@ impl VideoPipe {
         let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
         let take = |p: &core::VideoPlane, pw: u32, ph: u32| -> Result<Plane> {
             let (pw_us, ph_us) = (pw as usize, ph as usize);
-            if p.stride < pw_us || p.data.len() < p.stride * (ph_us - 1) + pw_us {
+            if pw_us == 0
+                || ph_us == 0
+                || p.stride < pw_us
+                || p.data.len() < p.stride * (ph_us - 1) + pw_us
+            {
                 return Err(MediaError::Corrupt(
                     "decoded plane smaller than the picture".into(),
                 ));
@@ -594,7 +609,7 @@ pub struct Mp4Source {
 impl Mp4Source {
     /// Read the container header from `reader`.
     pub fn open(reader: Box<dyn ReadSeek>) -> Result<Self> {
-        let shared = Arc::new(Mutex::new(reader));
+        let shared = Arc::new(Mutex::new(Shared { reader, pos: None }));
         let ctx = registry();
         let probe = open_demuxer(&shared, &ctx)?;
         let streams: Vec<core::StreamInfo> = probe.streams().to_vec();
@@ -680,7 +695,7 @@ impl Mp4Source {
     }
 
     fn open_video(
-        shared: &Arc<Mutex<Box<dyn ReadSeek>>>,
+        shared: &Arc<Mutex<Shared>>,
         ctx: &RuntimeContext,
         s: &core::StreamInfo,
     ) -> Result<VideoPipe> {
@@ -705,26 +720,26 @@ impl Mp4Source {
             }
         };
         let delta = match first.pts {
-            Some(p) => p - samples[0].composition_time,
+            Some(p) => p.saturating_sub(samples[0].composition_time),
             None => 0,
         };
         demux.seek_to(s.index, i64::MIN / 2).map_err(corrupt)?;
         let mut sync_pts: Vec<i64> = samples
             .iter()
             .filter(|x| x.sync)
-            .map(|x| x.composition_time + delta)
+            .map(|x| x.composition_time.saturating_add(delta))
             .collect();
         sync_pts.sort_unstable();
         let mut order: Vec<(i64, i64)> = samples
             .iter()
-            .map(|x| (x.composition_time + delta, x.duration))
+            .map(|x| (x.composition_time.saturating_add(delta), x.duration))
             .collect();
         order.sort_by_key(|x| x.0);
         let pts: Vec<i64> = order.iter().map(|x| x.0).collect();
         let mut durations: Vec<i64> = order.iter().map(|x| x.1).collect();
         // Display duration: until the next frame's time (the last keeps its own).
         for i in 0..pts.len().saturating_sub(1) {
-            durations[i] = pts[i + 1] - pts[i];
+            durations[i] = pts[i + 1].saturating_sub(pts[i]);
         }
         Ok(VideoPipe {
             demux,
@@ -747,7 +762,7 @@ impl Mp4Source {
     }
 
     fn open_audio(
-        shared: &Arc<Mutex<Box<dyn ReadSeek>>>,
+        shared: &Arc<Mutex<Shared>>,
         ctx: &RuntimeContext,
         s: &core::StreamInfo,
     ) -> Result<AudioPipe> {
@@ -790,15 +805,32 @@ fn audio_rate(a: &[AudioInfo]) -> u32 {
 fn frame_rate(v: &VideoPipe) -> Rational {
     // Frames per second from the average spacing, reduced.
     let n = v.pts.len() as i64;
-    let span = v.pts.last().copied().unwrap_or(0) - v.pts.first().copied().unwrap_or(0)
-        + v.durations.last().copied().unwrap_or(0);
+    let span = v
+        .pts
+        .last()
+        .copied()
+        .unwrap_or(0)
+        .saturating_sub(v.pts.first().copied().unwrap_or(0))
+        .saturating_add(v.durations.last().copied().unwrap_or(0));
     if n == 0 || span <= 0 {
         return Rational::new(0, 1);
     }
     let num = n as i128 * v.tb.1 as i128;
     let den = span as i128 * v.tb.0 as i128;
+    if num <= 0 || den <= 0 {
+        return Rational::new(0, 1);
+    }
     let g = gcd(num as u128, den as u128).max(1) as i128;
-    Rational::new((num / g) as u32, (den / g) as u32)
+    let (mut num, mut den) = (num / g, den / g);
+    // Keep the ratio representable (approximate only for absurd timebases).
+    while num > u32::MAX as i128 || den > u32::MAX as i128 {
+        num >>= 1;
+        den >>= 1;
+    }
+    if num <= 0 || den <= 0 {
+        return Rational::new(0, 1);
+    }
+    Rational::new(num as u32, den as u32)
 }
 
 fn gcd(a: u128, b: u128) -> u128 {

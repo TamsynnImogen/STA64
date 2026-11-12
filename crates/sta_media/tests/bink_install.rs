@@ -178,6 +178,10 @@ fn golden_hashes_of_installed_movies() {
         checked += 1;
     }
     eprintln!("{checked}/{} golden movies checked", GOLDENS.len());
+    assert!(
+        checked > 0,
+        "STA64_TEST_MOVIE_DIRS is set but holds none of the golden movies"
+    );
 }
 
 #[test]
@@ -277,8 +281,15 @@ fn seeking_an_installed_movie_matches_sequential_decoding() {
     eprintln!("seeking in {}", path.display());
     let mut movie = Movie::open_bytes(bytes.clone()).unwrap();
     let mut frames = Vec::new();
+    let mut pcm: Vec<Vec<f32>> = vec![Vec::new(); movie.info().audio.len()];
     while let Some(f) = movie.next_video_frame().unwrap() {
         frames.push(f);
+        for c in movie.take_audio() {
+            pcm[c.track].extend_from_slice(&c.samples);
+        }
+    }
+    for c in movie.take_audio() {
+        pcm[c.track].extend_from_slice(&c.samples);
     }
     let fps = movie.info().video.as_ref().unwrap().frame_rate;
     for target in [frames.len() as u64 / 2, 3, frames.len() as u64 - 1, 0] {
@@ -300,6 +311,10 @@ fn seeking_an_installed_movie_matches_sequential_decoding() {
             let rate = movie.info().audio[first.track].sample_rate;
             let want = sta_media::Rational::new(rate, 1).duration_to_periods(at);
             assert_eq!(first.first_frame, want, "audio resumes at the seek target");
+            // Bit-identical to sequential decoding, crossfade included.
+            let start = (want * first.channels as u64) as usize;
+            let seq = &pcm[first.track][start..start + first.samples.len()];
+            assert_eq!(first.samples, seq, "audio after seeking to frame {target}");
         }
     }
     // Run to the end again: end of stream is reported and sticks.
