@@ -341,6 +341,8 @@ fn on_buttons(
             Act::Cycle(row, Col::Control) => draft.cycle_control(row),
             Act::Cycle(row, Col::Race) => draft.cycle_race(&data, row),
             Act::Cycle(row, Col::Team) => draft.cycle_team(row),
+            Act::CycleResources => draft.cycle_resources(),
+            Act::CycleOfficerLimit => draft.cycle_officer_limit(&data),
             Act::Launch => {
                 if let Some(setup) = draft.to_setup(&data) {
                     start.write(StartGame(setup));

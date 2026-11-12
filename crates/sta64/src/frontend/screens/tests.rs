@@ -6,7 +6,7 @@ use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 use sta_sim::setup::{Control, GameSetup};
 use sta_sim::{PlayerId, TeamId};
-use sta_content::{RaceDef, Races};
+use sta_content::{RaceDef, Races, Rules, StartingResources};
 use std::sync::Arc;
 
 use super::view::{MapList, ModList, SettingSlider, SettingToggle};
@@ -29,11 +29,15 @@ fn record(mut seen: ResMut<Seen>, mut a: MessageReader<StartGame>, mut b: Messag
 }
 
 fn app() -> App {
+    app_with_data(ScreenData::fake())
+}
+
+fn app_with_data(data: ScreenData) -> App {
     let mut app = App::new();
     app.add_plugins((MinimalPlugins, StatesPlugin));
     configure_sets(&mut app);
     app.add_plugins(crate::ui::profile::UiProfilePlugin);
-    app.insert_resource(ScreenData::fake())
+    app.insert_resource(data)
         .insert_resource(ScreensConfig { own_camera: false, fit_scale: false, start: Screen::Main })
         .init_resource::<Seen>()
         .add_systems(Last, record)
@@ -81,6 +85,19 @@ fn entity_with(app: &mut App, want: Act) -> Entity {
     app.world_mut().query::<(Entity, &Act)>().iter(app.world()).find(|(_, a)| **a == want).unwrap_or_else(|| panic!("no {want:?} control")).0
 }
 
+fn disabled_button_named(app: &mut App, name: &str) -> Entity {
+    let buttons: Vec<_> = app.world_mut()
+        .query_filtered::<(Entity, &WidgetState, &Children), With<UiButton>>()
+        .iter(app.world())
+        .map(|(entity, state, children)| (entity, *state, children[0]))
+        .collect();
+    let (entity, state, _) = buttons.into_iter()
+        .find(|(_, _, child)| app.world().get::<Text>(*child).is_some_and(|text| text.0.eq_ignore_ascii_case(name)))
+        .unwrap_or_else(|| panic!("no {name} button"));
+    assert_eq!(state, WidgetState::Disabled, "{name} should be disabled");
+    entity
+}
+
 fn press(app: &mut App, want: Act) {
     let e = entity_with(app, want);
     click(app.world_mut(), e);
@@ -97,6 +114,13 @@ fn draft(app: &App) -> SetupDraft {
 
 fn started(app: &mut App) -> Vec<GameSetup> {
     app.world().resource::<Seen>().start.clone()
+}
+
+fn with_officer_rules(mut data: ScreenData, header: &str) -> ScreenData {
+    let (rules, warnings) = Rules::from_header(header);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    data.content = Arc::new(data.content.as_ref().clone().with_rules(rules));
+    data
 }
 
 #[test]
@@ -118,7 +142,7 @@ fn every_screen_is_reached_by_state_and_replaces_the_last() {
     let mut app = app();
     let want: [(Screen, &str, usize); 5] = [
         (Screen::SinglePlayer, "Single player", 6),
-        (Screen::Setup, "Instant action", 2 * 3 + 3),
+        (Screen::Setup, "Instant action", 2 * 3 + 5),
         (Screen::MapSelect, "Select map", 2),
         (Screen::Settings, "Options", 1),
         (Screen::ModSelect, "Mods", 2),
@@ -211,6 +235,92 @@ fn race(name: &str, slot: Option<i64>) -> RaceDef {
 }
 
 #[test]
+fn starting_choices_follow_authored_rows_into_launch_and_round_trip() {
+    let data = with_officer_rules(
+        ScreenData::fake(),
+        r#"
+        int MP_OFFICER_LIST_SIZE = 4;
+        Officer MP_OFFICER_LIMIT[4] = {
+            "ol_normal", 600, "ol_restricted", 300, "ol_more", 800, "ol_max", 999,
+        };
+    "#,
+    );
+    let mut app = app_with_data(data);
+    go(&mut app, Screen::Setup);
+    assert!(has_text(&mut app, "Resources: Normal"));
+    assert!(has_text(&mut app, "ol_normal: 600"));
+    assert_eq!(
+        draft(&app).options.starting_resources,
+        StartingResources::Normal
+    );
+    assert_eq!(draft(&app).options.officer_limit, 0);
+    press(&mut app, Act::CycleResources);
+    assert!(has_text(&mut app, "Resources: Lots"));
+    for (index, caption) in [
+        (1, "ol_restricted: 300"),
+        (2, "ol_more: 800"),
+        (3, "ol_max: 999"),
+    ] {
+        press(&mut app, Act::CycleOfficerLimit);
+        assert_eq!(draft(&app).options.officer_limit, index);
+        assert!(has_text(&mut app, caption), "missing {caption}");
+    }
+    press(&mut app, Act::Launch);
+    let sent = started(&mut app);
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].options.starting_resources, StartingResources::Lots);
+    assert_eq!(sent[0].options.officer_limit, 3);
+    assert_eq!(
+        SetupDraft::from_setup(&sent[0], app.world().resource::<ScreenData>()),
+        Some(draft(&app))
+    );
+    press(&mut app, Act::CycleOfficerLimit);
+    assert_eq!(draft(&app).options.officer_limit, 0);
+    press(&mut app, Act::CycleResources);
+    assert_eq!(
+        draft(&app).options.starting_resources,
+        StartingResources::Normal
+    );
+}
+
+#[test]
+fn custom_officer_order_and_zero_are_preserved_and_mount_change_resets_choice() {
+    let data = with_officer_rules(
+        ScreenData::fake(),
+        r#"
+        int MP_OFFICER_LIST_SIZE = 3;
+        Officer MP_OFFICER_LIMIT[3] = {"unusual", 17, "none", 0, "ol_normal", 600};
+    "#,
+    );
+    let mut app = app_with_data(data);
+    go(&mut app, Screen::Setup);
+    assert!(has_text(&mut app, "unusual: 17"));
+    press(&mut app, Act::CycleOfficerLimit);
+    assert!(has_text(&mut app, "none: 0"));
+    press(&mut app, Act::CycleOfficerLimit);
+    assert!(has_text(&mut app, "ol_normal: 600"));
+    // Map changes retain an authored choice while the same mount stays active.
+    let mounted = app.world().resource::<ScreenData>().clone();
+    app.world_mut()
+        .resource_mut::<SetupDraft>()
+        .set_map(&mounted, 1);
+    settle(&mut app);
+    assert_eq!(draft(&app).options.officer_limit, 2);
+    // A new mount may have fewer rows; follow_data resets the stale index.
+    app.world_mut().resource_mut::<ScreenData>().content = Arc::new(
+        sta_content::fake::db().with_rules(
+            Rules::from_header(
+                "int MP_OFFICER_LIST_SIZE = 1; Officer MP_OFFICER_LIMIT[1] = {\"only\", 0};",
+            )
+            .0,
+        ),
+    );
+    settle(&mut app);
+    assert_eq!(draft(&app).options.officer_limit, 0);
+    assert!(has_text(&mut app, "only: 0"));
+}
+
+#[test]
 fn race_picker_uses_catalogue_slots_even_without_start_units() {
     let mut data = ScreenData::fake();
     // The fake database contains `fx` units, but the mounted race list does not.
@@ -245,7 +355,9 @@ fn explicit_empty_or_nonplayable_catalogue_cannot_launch_inferred_unit_race() {
     let mut app = app();
     app.world_mut().resource_mut::<ScreenData>().races = Arc::new(Races::from_defs(vec![]));
     go(&mut app, Screen::Setup);
-    assert_eq!(app.world_mut().query_filtered::<&WidgetState, With<UiButton>>().iter(app.world()).filter(|s| **s == WidgetState::Disabled).count(), 1);
+    let launch = disabled_button_named(&mut app, "Launch");
+    click(app.world_mut(), launch);
+    settle(&mut app);
     assert!(started(&mut app).is_empty());
 }
 
@@ -356,7 +468,9 @@ fn no_maps_means_nothing_to_launch() {
     settle(&mut app);
     assert_eq!(screen(&app), Screen::Setup);
     assert!(has_text(&mut app, "No maps found."));
-    assert_eq!(app.world_mut().query_filtered::<&WidgetState, With<UiButton>>().iter(app.world()).filter(|s| **s == WidgetState::Disabled).count(), 1);
+    let launch = disabled_button_named(&mut app, "Launch");
+    click(app.world_mut(), launch);
+    settle(&mut app);
     assert!(started(&mut app).is_empty());
 }
 
