@@ -255,16 +255,17 @@ impl Weapons {
         self.shots = flying;
 
         // Compute after this tick's movement, using the same shared-vision rule
-        // as WorldView (which then also leaves out `hidden = 1` units; the sim
-        // does not read `invalidAsTarget` yet). Do not use last tick's view or
-        // explored fog.
+        // as WorldView (which then also leaves out `hidden = 1` units).
+        // `invalidAsTarget = 1` units are never picked, ordered or not (SIM-28).
+        // Do not use last tick's view or explored fog.
         let visibility = crate::sensors::compute(units, Some(db), teams);
         for u in units.iter() {
             if u.flags.contains(UnitFlags::WEAPONS_OFF) {
                 continue;
             }
             let Some(def) = db.unit(u.def) else { continue };
-            if def.hardpoints.is_empty() {
+            // Effect objects (`u_ball_obj`) carry effect spawners, not guns (SIM-28).
+            if def.hardpoints.is_empty() || def.class.0 == "u_ball_obj" {
                 continue;
             }
             for (i, hp) in def.hardpoints.iter().enumerate() {
@@ -287,7 +288,7 @@ impl Weapons {
                 let seen = (!teams.is_empty()).then(|| visibility.iter()
                     .find(|(player, _)| *player == u.owner)
                     .map_or(&[][..], |(_, ids)| ids.as_slice()));
-                let Some(t) = self.pick(u, w.range, arc, units, teams, perception, seen) else {
+                let Some(t) = self.pick(db, u, w.range, arc, units, teams, perception, seen) else {
                     continue;
                 };
                 if self.mounts.get(u.id).is_none() {
@@ -354,7 +355,7 @@ impl Weapons {
         ids: &[EntityId],
         target: EntityId,
     ) -> bool {
-        if !units.get(target).is_some_and(|t| t.hull[1] > Fixed::ZERO) {
+        if !units.get(target).is_some_and(|t| t.hull[1] > Fixed::ZERO && !db.unit(t.def).is_some_and(|d| d.invalid_as_target)) {
             return false;
         }
         let mut any = false;
@@ -377,6 +378,7 @@ impl Weapons {
     #[allow(clippy::too_many_arguments)]
     fn pick<'a>(
         &self,
+        db: &ContentDb,
         u: &Entity,
         range: Fixed,
         arc: Option<FireArc>,
@@ -393,6 +395,7 @@ impl Weapons {
                 && seen.is_none_or(|ids| ids.binary_search(&t.id).is_ok())
                 && !unseen(t)
                 && t.hull[1] > Fixed::ZERO
+                && !db.unit(t.def).is_some_and(|d| d.invalid_as_target)
                 && flat(u.pos, t.pos).1 <= range
                 && in_arc(u.heading, arc, u.pos, t.pos)
         };

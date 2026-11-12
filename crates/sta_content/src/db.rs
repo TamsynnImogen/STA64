@@ -542,6 +542,14 @@ fn hash_inner(db: &ContentDb, include_starting_rules: bool) -> u64 {
                         h.fixed(f);
                     }
                 }
+                // SIM-28: only when set, so content without them keeps its hash.
+                if u.hidden || u.invalid_as_target || u.life.is_some() {
+                    h.byte(0xef);
+                    h.str("sta64.lifecycle.v1");
+                    h.byte(u.hidden as u8);
+                    h.byte(u.invalid_as_target as u8);
+                    h.u64(u.life.unwrap_or(0));
+                }
                 feature_bits(&mut h, u.features.as_ref(), &db.features);
                 // No new bytes for disabled/unsupported rules: old Native
                 // databases and genuine replay/save controls retain their hash.
@@ -580,6 +588,11 @@ fn hash_inner(db: &ContentDb, include_starting_rules: bool) -> u64 {
                     h.fixed(w.energy_cost);
                     h.byte(w.disable_weapons as u8);
                     h.byte(w.decloak_on_hit as u8);
+                }
+                if let Some(r) = &w.replace {
+                    h.byte(0xf0);
+                    h.str("sta64.replace.v1");
+                    h.str(&format!("{r:?}"));
                 }
                 feature_bits(&mut h, w.features.as_ref(), &db.features);
             }

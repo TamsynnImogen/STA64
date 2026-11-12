@@ -51,6 +51,8 @@ pub const UNIT_CLASSES: &[&str] = &[
     "cargo_ship",
     "fighter",
     "scavenger",
+    // Effect objects (`effect_rm`, ...): hidden, short-lived (SIM-28).
+    "u_ball_obj",
     "colony",
     "trading_station",
     "minearray",

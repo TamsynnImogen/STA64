@@ -73,20 +73,24 @@ fn installed_starts_show_their_units_and_hide_their_helpers() {
                 options: GameOptions::default(),
             };
             let (mut sim, _) = Sim::from_setup_with_starts(&setup, &races);
+            // What is placed is the authored list at tick 0; the helpers then run
+            // their lifecycle (SIM-28, tests/start_effects_install.rs).
+            let placed_view = sim.view();
             for _ in 0..5 * sta_core::TICK_HZ {
                 sim.step(&[]);
             }
             let view = sim.view();
             let expected: Vec<_> = races.loadout(&db, &race).units;
             for p in [PlayerId(0), PlayerId(1)] {
-                let placed: Vec<_> = view.units.iter().filter(|u| u.owner == p).collect();
+                let placed: Vec<_> = placed_view.units.iter().filter(|u| u.owner == p).collect();
                 let defs: Vec<_> = placed.iter().map(|u| u.def).collect();
                 if defs != expected {
                     let n = |ks: &[sta_core::ContentKey]| ks.iter().map(|&k| db.name(k).unwrap_or("?").to_owned()).collect::<Vec<_>>();
                     failures.push(format!("{label} {race} seat {}: placed {:?}, authored {:?}", p.0, n(&defs), n(&expected)));
                 }
                 let mine = view.visible_to(p);
-                for u in &placed {
+                // Units the lifecycle has since removed (expired pods) are not checked again.
+                for u in placed.iter().filter(|u| view.units.iter().any(|now| now.id == u.id)) {
                     let name = db.name(u.def).unwrap_or("?");
                     let selectable = u.flags.contains(UnitFlags::SELECTABLE);
                     let seen = mine.iter().any(|v| v.id == u.id);

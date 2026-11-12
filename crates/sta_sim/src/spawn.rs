@@ -89,6 +89,7 @@ impl Sim {
         ));
         self.confinement.initialize(self.units.get_mut(id).expect("spawned"));
         self.events.push(SimEvent::Spawned { id });
+        self.register_lifecycle(id);
         Some(id)
     }
 
@@ -105,6 +106,7 @@ impl Sim {
         self.perception.remove(id);
         self.production.remove_rally_entity(id);
         self.production.remove_weld_site(id);
+        self.start_effects.remove(id);
         self.events.push(SimEvent::Destroyed { id, by });
         true
     }

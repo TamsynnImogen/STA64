@@ -5,7 +5,8 @@
 //! then gives every seat that has a start position its race's [`Loadout`]
 //! (`sta_content::Races`): the units on the start's spawn grid
 //! ([`START_SPACING`] apart, the first authored entry nearest the start) and
-//! the starting stock. A seat with no start position on the
+//! the starting stock; hidden helper pods and effects then run their
+//! lifecycle (`start_effects.rs`, SIM-28). A seat with no start position on the
 //! map gets nothing, as before. Both the game and the map corpus test build
 //! their skirmishes through this one function.
 //!
@@ -37,7 +38,11 @@ impl Sim {
             let Some(start) = s.map.start_for(p.id.0) else { continue };
             if let Some(race) = races.get_playable(&p.race).or_else(|| races.get(&p.race)) {
                 for (index, odf) in race.standard_units.iter().enumerate() {
-                    if s.content.key(odf).is_some_and(|key| s.content.unit(key).is_some()) {
+                    if let Some(key) = s.content.key(odf).filter(|&key| s.content.unit(key).is_some()) {
+                        // Placed; whatever of its lifecycle the sim does not run is listed once.
+                        if warned.insert((race.stem.clone(), index)) {
+                            warnings.extend(crate::start_effects::warnings(&s.content, &format!("{}.odf", race.stem), &race.name, odf, key));
+                        }
                         continue;
                     }
                     if warned.insert((race.stem.clone(), index)) {
@@ -200,6 +205,7 @@ mod tests {
             hidden.map(|h| format!("hidden = {h}\n")).unwrap_or_default()
         );
         pod.raw = Arc::new(sta_odf::resolve("fx_pod", &mut |_| Some(keys.clone())).unwrap());
+        pod.hidden = hidden.is_some_and(|h| h == "1");
         b = b.unit(pod);
         let mut s = setup();
         s.content = Arc::new(b.build().unwrap());
