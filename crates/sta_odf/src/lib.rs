@@ -140,8 +140,8 @@ fn number(value: &str) -> Option<&str> {
 /// Where the winning assignment of an ODF key came from (CON-34 `why`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeySource {
-    /// File name with `.odf`, as it was included.
-    pub file: String,
+    /// File name with `.odf`, as it was included (shared between the keys of one file).
+    pub file: std::sync::Arc<str>,
     /// Which copy of that file: 0 is the highest-priority layer's, 1 the one
     /// it hides (a self-include), and so on, as `resolve_layered` counts.
     pub version: usize,
@@ -262,6 +262,7 @@ fn apply(
     let key = file.to_ascii_lowercase();
     let text = load(&file, version).ok_or_else(|| OdfError::IncludeNotFound(name.to_owned()))?;
     let raw = parse(&text);
+    let file_arc: std::sync::Arc<str> = file.as_str().into();
     w.stack.push((key, version));
     for inc in &raw.includes {
         let inc_key = with_odf_ext(inc).to_ascii_lowercase();
@@ -284,7 +285,7 @@ fn apply(
     }
     w.stack.pop();
     for e in &raw.entries {
-        odf.set(&e.key, &e.value, KeySource { file: file.clone(), version, line: e.line });
+        odf.set(&e.key, &e.value, KeySource { file: std::sync::Arc::clone(&file_arc), version, line: e.line });
     }
     Ok(())
 }

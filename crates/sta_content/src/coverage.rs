@@ -209,7 +209,7 @@ pub fn cfg_changes(vfs: &Vfs, name: &str) -> Vec<CfgChange> {
         if was.as_deref() == Some(e.value.as_str()) {
             continue;
         }
-        out.push(CfgChange { file: name.to_owned(), key: key.clone(), was, now: e.value.clone(), layer: e.layer.clone(), line: e.line, read: cfg_key_read(key) });
+        out.push(CfgChange { file: e.file.clone(), key: key.clone(), was, now: e.value.clone(), layer: e.layer.clone(), line: e.line, read: cfg_key_read(key) });
     }
     out.sort_by_key(|c| c.line);
     out
@@ -313,6 +313,17 @@ fn describe(vfs: &Vfs, layer: &str, source: &Source) -> String {
     }
 }
 
+/// A tech tree entry as its line reads: the prerequisites, or why it is withheld.
+fn tt_value(tree: &TechTree, key: &str) -> String {
+    let Some(e) = tree.entry(key) else { return String::new() };
+    let needs = tree.prerequisites(key).join(" ");
+    match (e.withheld, needs.is_empty()) {
+        (true, _) => "withheld".to_owned(),
+        (false, true) => "no prerequisites".to_owned(),
+        (false, false) => format!("needs {needs}"),
+    }
+}
+
 /// The assignment of a key that a loader sees.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyWhy {
@@ -340,7 +351,7 @@ pub fn why_key(vfs: &Vfs, file: &str, key: &str) -> Option<KeyWhy> {
         let (tree, _) = TechTree::from_vfs(vfs, &stem).ok()??;
         let src = tree.source(key)?;
         let (layer, from) = TechTree::locate(vfs, &dir, &src.file, src.version)?;
-        return Some(KeyWhy { file: from, layer, line: src.line, value: tree.entry(key).map(|e| e.odf.clone()).unwrap_or_default() });
+        return Some(KeyWhy { file: from, layer, line: src.line, value: tt_value(&tree, key) });
     }
     let (index, _) = OdfIndex::build(vfs);
     let entry = index.get(file)?;
@@ -349,14 +360,20 @@ pub fn why_key(vfs: &Vfs, file: &str, key: &str) -> Option<KeyWhy> {
     let src = odf.source(key)?;
     let hit = index.versions(&src.file).get(src.version).map(|e| (e.layer, e.path.clone()));
     let layer = hit.as_ref().and_then(|(l, _)| vfs.layers().get(*l)).map_or_else(String::new, |l| l.name().to_owned());
-    Some(KeyWhy { file: hit.map_or(src.file.clone(), |(_, p)| p), layer, line: src.line, value: odf.raw(key).unwrap_or_default().to_owned() })
+    Some(KeyWhy { file: hit.map_or_else(|| src.file.to_string(), |(_, p)| p), layer, line: src.line, value: odf.raw(key).unwrap_or_default().to_owned() })
 }
 
 /// `why_file` and (with a key) `why_key` as text.
 pub fn why_text(vfs: &Vfs, file: &str, key: Option<&str>) -> String {
     let mut out = String::new();
     let norm = if file.contains('/') || file.contains('\\') || file.contains('.') { file.to_owned() } else { format!("{file}.odf") };
-    for h in why_file(vfs, &norm).iter().chain(odf_hits(vfs, file).iter()) {
+    let lower = norm.to_ascii_lowercase();
+    let mut hits = why_file(vfs, &norm);
+    if hits.is_empty() && (lower.ends_with(".tt") || lower.ends_with(".xml")) {
+        // Tech trees sit under techtree/ (or the root, as Armada I's ZFS names them).
+        hits = why_file(vfs, &format!("techtree/{norm}"));
+    }
+    for h in hits.iter().chain(odf_hits(vfs, file).iter()) {
         let _ = writeln!(out, "{} {}  {}", if h.winner { "wins   " } else { "hidden " }, h.layer, h.from);
     }
     if out.is_empty() {

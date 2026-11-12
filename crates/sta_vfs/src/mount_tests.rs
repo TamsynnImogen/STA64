@@ -154,7 +154,18 @@ fn load_order_mount_obeys_the_same_rules() {
     let v = order.mount(&t.0.join("Data")).unwrap();
     assert_eq!(layers(&v), ["Fleet Ops 4.0"]);
     assert_eq!(text(&v, "odf/base_only.odf"), None);
-    let _: &Path = &t.0;
+}
+
+#[test]
+fn a_manifest_that_says_standalone_mounts_without_data() {
+    let t = fo_install("manifestkind");
+    t.write("Data/Mods/Packed/info.ini", "[mod]\nName=Packed\n");
+    t.write("Data/Mods/Packed/manifest.toml", "[mod]\nid='packed'\nkind='standalone'\n");
+    assert_eq!(layers(&t.mount("Packed").unwrap()), ["Packed"]);
+    // A manifest without `kind` and without dependencies is not taken for standalone.
+    t.write("Data/Mods/Plain/info.ini", "[mod]\n");
+    t.write("Data/Mods/Plain/manifest.toml", "[mod]\nid='plain'\n");
+    assert_eq!(layers(&t.mount("Plain").unwrap()), ["Plain", "Data"]);
 }
 
 /// With STA64_TEST_INSTALL (a Roots install): every installed mod mounts by its own
@@ -164,8 +175,6 @@ fn real_install_if_available() {
     let Ok(root) = std::env::var("STA64_TEST_INSTALL") else { return };
     let data = super::find_child_ci(Path::new(&root), "Data").expect("Data folder");
     let (mods, _) = crate::mods::list_mods(&data).unwrap();
-    let base = Vfs::mount_install(Path::new(&root), None).unwrap();
-    let base_maps: std::collections::HashSet<String> = base.list("bzn").into_iter().collect();
     for m in &mods {
         let v = Vfs::mount_install(Path::new(&root), Some(&m.folder)).unwrap();
         let names = layers(&v);
@@ -178,7 +187,6 @@ fn real_install_if_available() {
         if m.ignore_parent_maps {
             let leaked = maps.iter().filter(|p| !matches!(v.resolve(p), Some((0, _)))).count();
             assert_eq!(leaked, 0, "{}: a parent or base map leaks through ignoreParentMaps", m.folder);
-            let _ = &base_maps;
         }
     }
     assert!(!mods.is_empty());

@@ -171,8 +171,8 @@ impl Vfs {
     }
 
     /// Mount `chain` (child first) over `data`, by the mods' own rules (D6):
-    /// the chain ends at the first `standalone` mod, and then base `Data` is
-    /// not mounted at all; a mod with `ignoreParentMaps` hides the maps
+    /// base `Data` is not mounted at all when any mod of the chain is
+    /// `standalone` ([`mod_chain_info`] ends a chain at the first one); a mod with `ignoreParentMaps` hides the maps
     /// (`bzn/`) of every layer below it. Each mod's manifest `engine`
     /// requirement must be met by this STA64 version (D4).
     pub(crate) fn mount_chain(data: &Path, chain: &[ChainMod]) -> Result<Self, VfsError> {
@@ -189,10 +189,7 @@ impl Vfs {
                 });
             }
             vfs.push_dir(m.name.clone(), m.dir.clone())?;
-            if m.standalone {
-                standalone = true;
-                break;
-            }
+            standalone |= m.standalone;
         }
         if !standalone {
             vfs.push_dir("Data".into(), data.to_path_buf())?;
@@ -409,7 +406,11 @@ fn walk_chain(data: &Path, name: &str, stop_at_standalone: bool) -> Result<Vec<C
             .map(|b| mods::Ini::parse(&String::from_utf8_lossy(&b)))
             .unwrap_or_default();
         let parent = ini.get("mod", "ParentMod").map(str::trim).filter(|p| !p.is_empty()).map(str::to_owned);
-        let (standalone, ignore_parent_maps) = (ini.flag("standalone"), ini.flag("ignoreParentMaps"));
+        // `standalone` in info.ini, or a manifest that says `kind = "standalone"` (D4).
+        let manifest_standalone = manifest::manifest_text(&dir)
+            .and_then(|t| manifest::Manifest::parse(&t).ok())
+            .is_some_and(|m| m.kind_explicit && m.kind == manifest::ModKind::Standalone);
+        let (standalone, ignore_parent_maps) = (ini.flag("standalone") || manifest_standalone, ini.flag("ignoreParentMaps"));
         chain.push(ChainMod { name: n, dir, standalone, ignore_parent_maps });
         current = if stop_at_standalone && standalone { None } else { parent };
     }

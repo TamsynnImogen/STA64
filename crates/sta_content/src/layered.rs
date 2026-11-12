@@ -150,6 +150,13 @@ pub fn resolve(vfs: &Vfs, name: &str, version: usize) -> Result<Option<Resolved>
     Ok(w.apply(name, version)?.then_some(w.out))
 }
 
+/// The typed reader over the inherited text of `name`: what the game sees
+/// of a cfg header once self-includes are expanded. `None` when no layer has
+/// the file or it cycles ([`crate::Rules::load`] reports the cycle).
+pub fn cfg_h(vfs: &Vfs, name: &str) -> Option<sta_assets::cfg_h::CfgH> {
+    resolve(vfs, name, 0).ok().flatten().map(|r| sta_assets::cfg_h::CfgH::parse(&r.text))
+}
+
 /// [`resolve`]'s entries; `None` when there is no such copy or it cycles.
 pub fn resolve_header(vfs: &Vfs, name: &str, version: usize) -> Option<Header> {
     resolve(vfs, name, version).ok().flatten().map(|r| r.header)

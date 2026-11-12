@@ -144,7 +144,8 @@ pub fn resolve(mods: &[ModInfo], active: &str) -> Result<LoadOrder, OrderError> 
             return Ok(o.clone());
         }
         let (manifest, sta) = manifest_for(info).map_err(|error| OrderError::Manifest { folder: info.folder.clone(), error })?;
-        let o = Ordered { folder: info.folder.clone(), path: info.path.clone(), manifest, sta, standalone: info.standalone, ignore_parent_maps: info.ignore_parent_maps };
+        let standalone = info.standalone || (manifest.kind_explicit && manifest.kind == crate::manifest::ModKind::Standalone);
+        let o = Ordered { folder: info.folder.clone(), path: info.path.clone(), manifest, sta, standalone, ignore_parent_maps: info.ignore_parent_maps };
         cache.insert(key, o.clone());
         Ok(o)
     };

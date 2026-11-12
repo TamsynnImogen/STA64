@@ -122,6 +122,8 @@ pub struct Manifest {
     pub extra: toml::Table,
     /// Where it came from: `manifest.toml`, or generated from `info.ini`.
     pub generated: bool,
+    /// `kind` was written in the file (a missing one is guessed from the dependencies).
+    pub kind_explicit: bool,
 }
 
 /// The manifest text a mod folder at `dir` carries: its loose `manifest.toml`,
@@ -206,6 +208,7 @@ impl Manifest {
                 dependencies.insert(k.to_ascii_lowercase(), r);
             }
         }
+        let kind_explicit = kind_text.is_some();
         let kind = match kind_text.as_deref() {
             Some("addon") => ModKind::Addon,
             Some("standalone") => ModKind::Standalone,
@@ -223,7 +226,7 @@ impl Manifest {
         if !m.is_empty() {
             extra.insert("mod".into(), toml::Value::Table(m));
         }
-        Ok(Manifest { id, name, version, description, authors, licence, engine, profile, kind, dependencies, load_after, load_before, extra, generated: false })
+        Ok(Manifest { id, name, version, description, authors, licence, engine, profile, kind, dependencies, load_after, load_before, extra, generated: false, kind_explicit })
     }
 
     /// The manifest a legacy mod would have, from its `info.ini`.
@@ -248,6 +251,7 @@ impl Manifest {
             load_before: Vec::new(),
             extra: toml::Table::new(),
             generated: true,
+            kind_explicit: false,
         }
     }
 }

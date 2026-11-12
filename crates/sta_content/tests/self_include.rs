@@ -46,7 +46,9 @@ fn tech_tree_inherits_its_parent_and_why_names_layer_and_line() {
     let w = coverage::why_key(&vfs, "tech1.tt", "yard").unwrap();
     assert_eq!((w.layer.as_str(), w.line), ("Data", 2));
     let w = coverage::why_key(&vfs, "tech1.tt", "ship").unwrap();
-    assert_eq!((w.layer.as_str(), w.line), ("Child", 2));
+    assert_eq!((w.layer.as_str(), w.line, w.value.as_str()), ("Child", 2, "withheld"));
+    let text = coverage::why_text(&vfs, "tech1.tt", Some("yard"));
+    assert!(!text.contains("no layer provides") && text.contains("wins") && text.contains("needs base"), "{text}");
 }
 
 #[test]
@@ -78,8 +80,9 @@ fn cfg_self_include_shows_in_why_and_not_as_a_change() {
     assert_eq!(changed, ["SHIELD_DAMAGE_PROTECTION"], "only what the child states is a change");
 }
 
-/// Classic Enhanced's tech trees `#include` their own names (`tech1.tt` etc. over Classic's):
-/// they must resolve with provenance, and no tree of any installed mod may cycle.
+/// No tree or header of any installed mod may cycle, and every mod's content loads. (The
+/// installed Classic Enhanced ships full copies, not self-includes; the inheritance itself is
+/// covered by the synthetic tests above.) Also records the profile each mod mounts as.
 #[test]
 fn installed_mods_resolve_without_cycles() {
     let Ok(root) = std::env::var("STA64_TEST_INSTALL") else { return };
@@ -88,7 +91,10 @@ fn installed_mods_resolve_without_cycles() {
     for m in &mods {
         let vfs = Vfs::mount_install(Path::new(&root), Some(&m.folder)).unwrap();
         let (index, _) = sta_content::OdfIndex::build(&vfs);
-        sta_content::ContentDb::load(&vfs, &index).unwrap_or_else(|e| panic!("{}: {e}", m.folder));
+        let (db, _) = sta_content::ContentDb::load(&vfs, &index).unwrap_or_else(|e| panic!("{}: {e}", m.folder));
+        eprintln!("{}: profile {:?}", m.folder, db.profile());
+        let expect = if m.folder.starts_with("Fleet Ops") { sta_content::Profile::Fo4 } else { sta_content::Profile::Sta2Classic };
+        assert_eq!(db.profile(), expect, "{}", m.folder);
         for stem in ["tech1", "tech1_multi", "earlytech_multi", "freetech_multi", "fulltech_multi"] {
             if let Some((t, w)) = TechTree::from_vfs(&vfs, stem).unwrap_or_else(|e| panic!("{} {stem}: {e}", m.folder)) {
                 eprintln!("{} {stem}: {} entries, {} warnings, files {:?}", m.folder, t.len(), w.len(), t.files());
