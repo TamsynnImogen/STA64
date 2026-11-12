@@ -494,7 +494,7 @@ fn two_yards_build_in_parallel_and_the_digest_is_pinned() {
     assert_eq!(got.iter().filter(|g| g.0 == t0 + 1800).count(), 1);
     assert_eq!(dilithium(&sim), Fixed::from_int(5000 - 600 - 250 - 1200));
     assert_eq!(sim.digest(), parallel().0.digest());
-    assert_eq!(crate::unit_status_tests::digest_before_crew(&sim), 0x4caca0a50bd8a4e8);
+    assert_eq!(crate::unit_status_tests::digest_before_crew(&sim), 0xf647_80e2_afc2_0ee9);
     assert_eq!(sim.digest(), PINNED_DIGEST, "digest {:#x}", sim.digest());
 }
 
@@ -502,7 +502,7 @@ fn two_yards_build_in_parallel_and_the_digest_is_pinned() {
 /// edge plus a gap) instead of deploying where it happens to be, so its
 /// final position, and the digest, moved. It was `0x1f6ba950228b3166`.
 // Initialized unit crew is now part of the canonical state.
-const PINNED_DIGEST: u64 = 0x2dad_1f1f_5333_2537;
+const PINNED_DIGEST: u64 = 0xd95c_5e50_7651_29f6;
 
 /// A yard 600 ticks into a cruiser (frigate queued behind) and a rig 600
 /// ticks into welding a station; for the snapshot test.

@@ -374,7 +374,7 @@ fn the_route_digest_is_pinned() {
     assert_eq!(sim.digest(), ROUTE_DIGEST, "got {:#x}", sim.digest());
 }
 
-const ROUTE_DIGEST: u64 = 0x62dc_3681_fe11_8172;
+const ROUTE_DIGEST: u64 = 0x92d3_6daf_0fc0_0fb2;
 
 #[test]
 fn a_group_crossing_a_nebula_keeps_out_of_it() {

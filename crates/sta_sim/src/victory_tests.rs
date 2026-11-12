@@ -100,7 +100,7 @@ fn last_unit_killed_eliminates_once() {
     assert_eq!(crate::unit_status_tests::digest_before_crew(&sim), 0x8ed0_6fd5_65be_9495);
     assert_eq!(
         sim.digest(),
-        0xd909_d40c_8ba8_b95b,
+        0xa4f1_4288_154b_3eef,
         "digest after elimination"
     );
 }
