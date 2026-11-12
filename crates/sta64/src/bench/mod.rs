@@ -199,7 +199,10 @@ fn run_headless_inner(cfg: &LaunchConfig) -> i32 {
         if let Some(root) = &cfg.install_root
             && let Ok(vfs) = sta_vfs::Vfs::mount_install(root, cfg.active_mod.as_deref())
         {
-            // The systems that read the mounted files also read the sprite tables.
+            // The systems that read the mounted files also read the sprite tables and
+            // the texture and part caches (the map view and the viewer make these too).
+            app.init_resource::<crate::render::textures::TextureCache>()
+                .init_resource::<crate::render::model_scene::PartCache>();
             app.insert_resource(crate::render::sprites::SpriteTables(Arc::new(sta_assets::load_sprite_table(&vfs))));
             app.insert_resource(crate::viewer::Mounted(vfs));
         }
