@@ -1,6 +1,7 @@
 use super::*;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 struct Fixture(PathBuf);
@@ -10,7 +11,16 @@ impl Fixture {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("sta_gltf_{}_{}", std::process::id(), stamp));
+        // pid + clock alone collided on coarse-clock hosts (macOS CI); the
+        // counter makes every fixture in this process unique.
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "sta_gltf_{}_{}_{}",
+            std::process::id(),
+            stamp,
+            n
+        ));
         fs::create_dir(&root).unwrap();
         Self(root)
     }
