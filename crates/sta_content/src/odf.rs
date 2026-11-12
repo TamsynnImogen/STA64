@@ -364,7 +364,8 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
                 return false;
             }
             h.weapon = DefRef::new(w.clone());
-            h.arc = weapon_arcs.get(&w).copied().flatten();
+            // A slot's own `STA64_fireArc<N>` wins over its weapon's arc.
+            h.arc = h.arc.or_else(|| weapon_arcs.get(&w).copied().flatten());
             true
         });
         def.build.list.retain_mut(|b| {
@@ -529,7 +530,7 @@ mod tests {
         assert!(near(c.energy_drain, 15.0) && near(c.energy_cost, 50.0));
         assert!(!c.disable_weapons && c.decloak_on_hit);
         let m = db.unit(db.key("fminer").unwrap()).unwrap();
-        assert!(m.miner && near(m.max_dilithium, 300.0) && near(m.mining_rate, 20.0) && near(m.transfer_rate, 30.0));
+        assert!(m.mines() && near(m.max_dilithium, 300.0) && near(m.mining_rate, 20.0) && near(m.transfer_rate, 30.0));
         assert_eq!(db.unit(db.key("moon").unwrap()).unwrap().resource, Some(1));
         assert_eq!(db.unit(db.key("fcruiser").unwrap()).unwrap().resource, None);
     }
