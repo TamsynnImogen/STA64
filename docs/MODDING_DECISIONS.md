@@ -1,6 +1,7 @@
 # Modding v1: decisions for sign-off
 
-Status: **accepted** (Tammy and Cedric, 2026-11-11; merged in #352). Binding on
+Status: **accepted** (Tammy and Cedric, 2026-11-11; merged in #352; D5 amended
+2026-11-12 and approved by Tammy, see D5). Binding on
 all agent and human work in the areas below. Covers how STA64 treats existing Armada
 mods and what the first modding release contains. Background and evidence are
 in [MODDING-IDEAS.md](MODDING-IDEAS.md) and `docs/research/modding/`; this
@@ -31,9 +32,18 @@ ini" for adapting a mod.
 - `engine` keeps its existing meaning: the STA64 version a mod requires.
 - A mod's data chain comes from `kind` and `ParentMod`.
 
-**D5. v1 lineages: stock Armada II and Roots only.**
+**D5. v1 lineages: stock Armada II, stock Armada I and Roots.**
 FO 4.0, STA2 Classic and STA2 Classic Enhanced run on the Roots engine and are
-covered through it. Armada I, FO 3.2.7 and Dominion War are not covered in v1.
+covered through it. Stock Armada I runs as its own lineage (the `Sta1Classic`
+profile); mods of Armada I are not covered in v1. FO 3.2.7 and Dominion War are not covered in v1.
+
+*Amended 2026-11-12: Armada I moved into v1 (Cedric; approved by
+Tammy). It read "stock Armada II and Roots only" and listed Armada I with
+FO 3.2.7 and Dominion War as not covered. Already on main for it: the
+`Sta1Classic` profile (`sta_content`), the ZFS archive mount (`sta_vfs`, CON-15
+and CON-27), A1 BZN headers, binary bodies and MDF start locations (`sta_bzn`,
+CON-25, CON-26 and CON-28) and the A1 queue-capacity rule (SIM-20). What is
+still missing is CON-38..42 in WORKPLAN.*
 
 **D6. Mounting must follow the mod's own rules.**
 `standalone` and `ignoreParentMaps` are honoured. Today FO 4.0 mounts over base
@@ -58,13 +68,30 @@ A typed `Rules` struct is filled from `RTS_CFG.h` and ODF keys, starting with
 the keys Classic Enhanced changes. No new rules file and no keyed "quirk map"
 in v1. The simulation stops reading raw ODF keys directly.
 
-**D10. Peers must agree on one digest of resolved rules.**
+**D10. Peers must agree on one digest of resolved rules, model geometry included.**
 Multiplayer start, replays and saves compare a digest of the resolved
-sim-visible rules (values, not names), including the tech tree and resource
-model. The pack list is shown but informational: peers that differ only in
-textures, models or render recipes can play together. Two peers on Classic and
-Classic Enhanced refuse to start and name the differing key. Replays and
-snapshots record the lineage and pack names.
+sim-visible rules (values, not names), including the tech tree, the resource
+model and the derived collision geometry of every unit (ellipsoid axes,
+bounding radius and centre offset, computed from the profile's SOD with
+`scaleSOD` and `shieldPad`; not whole-file checksums of SODs). Definition keys
+are part of the comparison; display strings are not. Physics always reads
+geometry from the profile's SOD, never from a render-only replacement (glTF,
+M3D). The pack list is shown but informational: peers that differ only in
+textures, render-only models, geometry-identical re-exports or render recipes
+can play together; a model whose simulation geometry differs blocks the match.
+Two peers on Classic and Classic Enhanced refuse to start and name the
+differing key; for geometry the refusal names the unit and the differing
+value. Replays and snapshots record the lineage and pack names.
+
+*Amended 2026-11-12: model geometry is part of the rules (Cedric); awaiting
+Tammy's approval. It read "peers that differ only in textures, models or
+render recipes can play together", meaning that peers whose installs differ
+only in art play together. That cannot hold for models: in every install
+99-100% of ships have no explicit size key (Roots base 43.7%), so the size of a
+unit comes from its SOD, as in the originals, and Armada II and Roots checksum
+the models between peers. Evidence, the original size rule and the open
+points: [research/COLLISION_GEOMETRY.md](research/COLLISION_GEOMETRY.md).
+Implemented by CON-35 (digest) and SIM-32 (the original size rule).*
 
 **D11. Conflicts are solved by inheritance, not a new patch format.**
 A file in an upper layer may include its own name from the layer below (already
@@ -86,7 +113,8 @@ of the rest of the plan.
 
 ## Not in v1
 
-Executable fingerprinting; Armada I, FO 3.2.7 and Dominion War lineages;
+Executable fingerprinting; mods of Armada I (the stock Armada I lineage is in
+v1, see D5); FO 3.2.7 and Dominion War lineages;
 emulating engine bugs as toggles; the TOML ODF patch format; trigger and
 timeline scripting for menu scenes; Lua in third-party packs; WASM; shader
 contracts and shims; pack manager UI and load-order editor; dependency
@@ -101,17 +129,20 @@ Added to `docs/WORKPLAN.md` (PR #352). Done-when is in WORKPLAN.
 |---|---|---|
 | CON-33 | Mount fix | D6 |
 | CON-34 | Coverage report and `why` | D7 |
-| CON-35 | Typed rules and digest (seam PR, needs NET-01) | D9, D10 |
+| CON-35 | Typed rules and digest, collision geometry included (seam PR, needs NET-01) | D9, D10 |
 | CON-36 | Inheritance for `.h` and `.tt` | D11 |
+| SIM-32 | Original size rule: collision geometry from the SOD (proposed 2026-11-12, pending Tammy's approval) | D10 |
 | RND-28 | Recipe overrides, shader shadowing | D12 |
 | LUA-09 | Lua restriction | D13 |
+| CON-38..42 | Armada I map writer, text bodies, saved state, light colours, MDF parity (added 2026-11-12 with the D5 amendment, approved by Tammy) | D5 |
 
 v1 is done when: Classic Enhanced loads over its parent; FO 4.0 loads with no
 base Roots leaking in; the report prints coverage for every installed mod;
 peers on Classic and Classic Enhanced refuse to start and name the differing
-key while peers differing only by a texture or recipe folder are accepted; a
+key while peers differing only by a texture or recipe folder are accepted and a
+model whose collision geometry differs is refused with the unit named; a
 replay names its packs; a recipe ini dropped in a mod folder changes a headless
-frame.
+frame; every stock Armada I map reads, writes and reads back equal (CON-38).
 
 ## Changing these decisions
 

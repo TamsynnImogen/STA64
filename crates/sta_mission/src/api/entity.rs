@@ -114,6 +114,33 @@ impl UserData for Entity {
         f.add_field_method_get("race", |_, e| {
             Ok(e.with(|c, u| u.and_then(|u| c.def(u)).map(|d| d.race.clone()).unwrap_or_default()))
         });
+        // Mutable race and crew are not sim state (SetRace and SetCrew need a
+        // sim edit); the assignment is accepted and recorded as unsupported so
+        // the rest of the callback still runs.
+        f.add_field_method_set("race", |_, e, _: Value| {
+            e.ctx.borrow_mut().unsupported("Entity.race = x (needs a sim SetRace edit)");
+            Ok(())
+        });
+        f.add_field_method_set("crew", |_, e, _: Value| {
+            e.ctx.borrow_mut().unsupported("Entity.crew = x (needs a sim mutable-crew edit)");
+            Ok(())
+        });
+        // Other installed-mission assignments with no sim edit behind them yet
+        // (shield percent, autonomy, facing, angular velocity): accepted and
+        // recorded so the callback keeps running; the report names each.
+        for (name, need) in [
+            ("shields", "a sim shield edit (SetShieldPercent)"),
+            ("movementAutonomy", "a sim autonomy edit"),
+            ("forward", "a sim heading edit"),
+            ("omega", "a sim angular-velocity edit"),
+            ("specialWeaponAutonomy", "a sim autonomy edit"),
+            ("name", "a sim SetName edit"),
+        ] {
+            f.add_field_method_set(name, move |_, e, _: Value| {
+                e.ctx.borrow_mut().unsupported(&format!("Entity.{name} = x (needs {need})"));
+                Ok(())
+            });
+        }
         // `odf` is the ODF name as a string (the real binding may return a
         // class object with `odf`/`name`/`label`; see the module docs).
         // Converted MMM scripts compare this property with file names such

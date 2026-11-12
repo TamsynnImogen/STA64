@@ -61,6 +61,7 @@ mod entity_action;
 mod entity_ref;
 mod camera_intent;
 mod monitor;
+mod race;
 mod condition_monitor;
 mod player;
 mod timer;
@@ -398,6 +399,24 @@ pub(crate) fn vector(lua: &Lua, p: (f64, f64, f64)) -> mlua::Result<mlua::Table>
 }
 
 /// What an unknown field of a bound object returns: a permissive stub.
+/// The hook argument of a callback. Installed MMM scripts read the value given
+/// to `:hook` as `hook.argument` (and `hook.id`): `Timer Tutorial.lua`
+/// (timers), `Premonitions_Buildup.lua` (condition monitors) and
+/// `TextInput Tutorial.lua` (text input). When
+/// the value is a table its fields stay reachable on the hook object too, so
+/// callers written against the plain-value shape keep working.
+pub(crate) fn hook_object(lua: &Lua, id: &str, value: Value) -> mlua::Result<mlua::Table> {
+    let hook = lua.create_table()?;
+    hook.raw_set("id", id)?;
+    if let Value::Table(t) = &value {
+        let meta = lua.create_table()?;
+        meta.raw_set("__index", t.clone())?;
+        hook.set_metatable(Some(meta))?;
+    }
+    hook.raw_set("argument", value)?;
+    Ok(hook)
+}
+
 pub(crate) fn stub(lua: &Lua) -> mlua::Result<Value> {
     match lua.globals().raw_get::<Value>("__stub")? {
         Value::Function(f) => f.call(()),
@@ -428,6 +447,7 @@ pub(crate) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
 
     entity::install(lua, ctx)?;
     player::install(lua, ctx)?;
+    race::install(lua, ctx)?;
     monitor::install(lua, ctx)?;
     text_input::install(lua, ctx)?;
     timer::install(lua, ctx)?;

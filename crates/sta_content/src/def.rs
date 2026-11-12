@@ -302,9 +302,22 @@ pub struct UnitDef {
     pub features: Option<Features>,
     /// Owning-unit map-confinement overrides; resolved once through ContentDb.
     pub confinement: crate::ConfinementOverrides,
+    /// Path-planner rules of a `nebula_obj` (SIM-23); `None` for every other
+    /// class, and for content that predates them.
+    pub nebula_pathing: Option<NebulaPathing>,
     /// The resolved ODF, so keys no field reads yet stay reachable. Empty for
     /// definitions not made from an ODF.
     pub raw: Arc<sta_odf::Odf>,
+}
+
+/// What a nebula costs the path planner (SIM-23), from its ODF.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NebulaPathing {
+    /// `pathing_cost`, on the scale of `RTS_CFG.h`'s `DEFAULT_TERRAIN_VALUE`;
+    /// `None`: not set, `NEBULAE_PATHING_COST` applies.
+    pub cost: Option<i64>,
+    /// `addToPathPlanner` (default 1): 0 leaves the nebula out of planning.
+    pub planned: bool,
 }
 
 impl UnitDef {
@@ -351,6 +364,7 @@ impl UnitDef {
             resource: None,
             features: None,
             confinement: crate::ConfinementOverrides::default(),
+            nebula_pathing: None,
             raw: Arc::new(raw),
         }
     }

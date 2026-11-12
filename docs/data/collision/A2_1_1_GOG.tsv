@@ -1,0 +1,241 @@
+kind	odf	class	race	model	scaleSOD	shieldPad	collisionRadius	layer
+ship	8472_active.odf	evolver	species8472	8472_active				a2
+station	8472_advancedresearch.odf	research	species8472	8472_advancedresearch				a2
+station	8472_basicresearch.odf	research	species8472	8472_basicresearch				a2
+ship	8472_battle.odf	craft	species8472	8472_battle				a2
+ship	8472_behemoth.odf	craft	species8472	8472_behemoth				a2
+ship	8472_collector.odf	freighter	species8472	8472_collector				a2
+ship	8472_cruise1.odf	craft	species8472	8472_cruise1				a2
+ship	8472_cruise2.odf	craft	species8472	8472_cruise2				a2
+ship	8472_defender.odf	constructionrig	species8472	8472_defender				a2
+ship	8472_destroy.odf	craft	species8472	8472_destroy				a2
+station	8472_fluidicgate.odf	shipyard	species8472	8472_fluidicgate	2.0			a2
+ship	8472_frigate.odf	craft	species8472	8472_frigate				a2
+station	8472_heromothership.odf	starbase	species8472	8472_heromother				a2
+station	8472_mothership.odf	starbase	species8472	8472_mother				a2
+ship	8472_passive.odf	evolver	species8472	8472_passive				a2
+ship	8472_scout.odf	craft	species8472	8472_scout				a2
+station	8472_sentinel.odf	sensor	species8472	8472_sentinel				a2
+station	8472_shipupgraderesearch.odf	research	species8472	8472_shipupgraderesearch				a2
+station	8472_transmuter.odf	mining	species8472	8472_transmuter				a2
+ship	assault.odf	craft		assault				a2
+other	aster.odf	asteroid		sscr_1				a2
+other	asteroid.odf	scrap		sscr_1				a2
+ship	bassault.odf	craft	borg	bassault	0.7			a2
+ship	battle.odf	craft		battle				a2
+ship	battle2.odf	craft		battle2				a2
+station	bbase.odf	starbase	borg	bbase				a2
+ship	bbattle.odf	craft	borg	bbattle				a2
+ship	bbattle1.odf	craft	borg	bbattle1				a2
+ship	bbattle2.odf	craft	borg	bbattle2				a2
+ship	bbattle3.odf	craft	borg	bbattle3				a2
+ship	bbattle4.odf	craft	borg	bbattle4				a2
+station	bcolony.odf	colony	borg	bcolony				a2
+ship	bconst.odf	constructionrig	borg	bconst				a2
+ship	bcruise1.odf	craft	borg	bcruise1				a2
+ship	bcruise2.odf	craft	borg	bcruise2	0.5			a2
+ship	bcruise3.odf	craft	borg	bcruise3	1.0			a2
+ship	bdestroy.odf	craft	borg	bdestroy	0.5			a2
+ship	bfreight.odf	freighter	borg	bfreight				a2
+ship	bfrigate.odf	craft	borg	bfrigate	1.0			a2
+ship	blocutus.odf	craft	borg	bbattle	1.3f			a2
+ship	bmama.odf	craft	borg	bmama				a2
+station	bmining.odf	mining	borg	bmining				a2
+station	bomega.odf	sensor	borg	bomega				a2
+station	bportal.odf	sensor	borg	bportal				a2
+ship	bqueen.odf	craft	borg	bqueen	3.0			a2
+station	brecycle.odf	shipyard	borg	brecycle				a2
+station	bresear.odf	research	borg	bresear				a2
+station	bresear2.odf	research	borg	bresear2				a2
+ship	bscout.odf	craft	borg	bscout	0.85			a2
+station	bsensor.odf	sensor	borg	bsensor				a2
+ship	bspecial.odf	craft	borg	bspecial	2.5			a2
+station	bsuperbl.odf	sensor	borg	bsuperbl				a2
+station	btechass.odf	research	borg	btechass				a2
+station	bturret.odf	sensor	borg	bturret				a2
+station	bturret2.odf	sensor	borg	bturret2				a2
+station	bupgrade.odf	research	borg	bupgrade				a2
+station	byard.odf	shipyard	borg	byard	1.0			a2
+station	byard2.odf	shipyard	borg	byard2	1.0			a2
+station	cardassian_super_station.odf	shipyard	cardassian	cardassian_super_station	1.0			a2
+ship	cargo.odf	cargo_ship		cargo				a2
+ship	cassault.odf	craft	cardassian	cassault				a2
+station	cbase.odf	starbase	cardassian	cbase	1.5			a2
+ship	cbattle.odf	craft	cardassian	cbattle	1.73			a2
+ship	cbattle2.odf	craft	cardassian	cbattle2	1.36			a2
+ship	ccargo.odf	cargo_ship	cardassian	ccargo				a2
+station	ccolony.odf	colony	cardassian	ccolony	1.5			a2
+ship	cconst.odf	constructionrig	cardassian	cconst				a2
+ship	ccruise1.odf	craft	cardassian	ccruise1	1.2			a2
+ship	ccruise2.odf	craft	cardassian	ccruise2	1.44			a2
+ship	ccruise3.odf	craft	cardassian	ccruise3	1.15			a2
+ship	cdestroy.odf	craft	cardassian	cdestroy				a2
+ship	cdestroy2.odf	craft	cardassian	cdestroy2	0.85			a2
+ship	cfreight.odf	freighter	cardassian	cfreight				a2
+ship	cfrigate.odf	craft	cardassian	cfrigate	1.35			a2
+ship	ckentar.odf	craft	cardassian	ckentar	1.5			a2
+station	cmining.odf	mining	cardassian	cmining				a2
+station	colony.odf	colony		colony				a2
+ship	const.odf	constructionrig		const				a2
+station	corbital.odf	p_mining	cardassian	corbital				a2
+station	cquantum.odf	starbase	cardassian	cquantum				a2
+ship	craft.odf	craft		craft				a2
+station	cresear.odf	research	cardassian	cresear				a2
+station	cresear2.odf	research	cardassian	cresear2				a2
+ship	cruise1.odf	craft		cruise1				a2
+ship	cruise2.odf	craft		cruise2				a2
+ship	cruise3.odf	craft		cruise3				a2
+ship	cscout.odf	craft	cardassian	cscout	1.1			a2
+station	csensor.odf	sensor	cardassian	csensor				a2
+ship	cspecial.odf	craft	cardassian	cspecial	2.0			a2
+ship	csrepair.odf	repairship	cardassian	csrepair				a2
+ship	csuper.odf	craft	cardassian	csuper	0.5			a2
+station	ctrading.odf	trading_station	cardassian	ctrading	3.5			a2
+station	cturret.odf	sensor	cardassian	cturret				a2
+station	cturret2.odf	sensor	cardassian	cturret2				a2
+station	cupgrade.odf	research	cardassian	cupgrade				a2
+station	cyard.odf	shipyard	cardassian	cyard	1.0			a2
+station	cyard2.odf	shipyard	cardassian	cyard2	1.40			a2
+ship	destroy.odf	craft		destroy				a2
+other	dlight.odf	background_obj		dlight				a2
+station	f6bsuper.odf	sensor	borg	bsuperbl				a2
+ship	fassault.odf	craft	federation	fassault				a2
+station	fbase.odf	starbase	federation	fbase	2.0			a2
+station	fbasehq.odf	starbase	federation	fbasehq				a2
+ship	fbattle.odf	craft	federation	fbattle	1.4			a2
+ship	fbbridge.odf	craft	federation	fbbridge	1.76			a2
+ship	fcaddebostan.odf	craft	federation	fspecial	2.00			a2
+ship	fcargo.odf	cargo_ship	federation	fcargo				a2
+station	fcolony.odf	colony	federation	fcolony	1.5			a2
+ship	fconst.odf	constructionrig	federation	fconst				a2
+ship	fcruise1.odf	craft	federation	fcruise1	1.92			a2
+ship	fcruise2.odf	craft	federation	fcruise2				a2
+ship	fcruise3.odf	craft	federation	fcruise3	1.5			a2
+ship	fdata.odf	freighter	federation	fdata				a2
+ship	fdestroy.odf	craft	federation	fdestroy	0.8			a2
+ship	fdestroy2.odf	craft	federation	fdestroy2	0.8			a2
+ship	fente.odf	craft	federation	fente	1.7			a2
+ship	ffreight.odf	freighter	federation	ffreight				a2
+ship	ffrigate.odf	craft	federation	ffrigate	1.75			a2
+ship	fgalaxy.odf	craft	federation	fgalaxy	2.78			a2
+ship	fincursion.odf	craft	federation	fincursion	0.8			a2
+station	fmining.odf	mining	federation	fmining				a2
+station	forbital.odf	p_mining	federation	forbital				a2
+ship	freight.odf	freighter		freight				a2
+station	fresear.odf	research	federation	fresear				a2
+station	fresear2.odf	research	federation	fresear2				a2
+ship	frigate.odf	craft		frigate				a2
+ship	fsaucer.odf	craft	federation	fsaucer	2.78			a2
+ship	fscout.odf	craft	federation	fscout				a2
+station	fsensor.odf	sensor	federation	fsensor				a2
+station	fsensor_neutral_zone.odf	sensor	federation	fsensor				a2
+ship	fspecial.odf	craft	federation	fspecial	2.00			a2
+ship	fsrepair.odf	repairship	federation	fsrepair				a2
+station	fsuperbl.odf	sensor	federation	fsuperbl	4.0			a2
+station	ftrading.odf	trading_station	federation	ftrading	2.0			a2
+station	fturret.odf	sensor	federation	fturret				a2
+station	fturret2.odf	sensor	federation	fturret2				a2
+station	fupgrade.odf	research	federation	fupgrade				a2
+station	fyard.odf	shipyard	federation	fyard	1.50			a2
+station	fyard2.odf	shipyard	federation	fyard2	1.50			a2
+ship	kassault.odf	craft	klingon	kassault				a2
+station	kbase.odf	starbase	klingon	kbase	1.75			a2
+ship	kbattle.odf	craft	klingon	kbattle	0.95			a2
+ship	kbattle2.odf	craft	klingon	kbattle2	1.0			a2
+ship	kbekta.odf	craft	klingon	kbekta	1.0			a2
+ship	kcargo.odf	cargo_ship	klingon	kcargo				a2
+station	kcolony.odf	colony	klingon	kcolony	1.5			a2
+ship	kconst.odf	constructionrig	klingon	kconst				a2
+ship	kcruise1.odf	craft	klingon	kcruise1				a2
+ship	kcruise2.odf	craft	klingon	kcruise2	1.3			a2
+ship	kcruise3.odf	craft	klingon	kcruise3				a2
+ship	kdestroy.odf	craft	klingon	kdestroy				a2
+ship	ken_special.odf	craft	federation	fspecial	2.0			a2
+ship	kfreight.odf	freighter	klingon	kfreight				a2
+ship	kfrigate.odf	craft	klingon	kfrigate				a2
+station	kmarbase.odf	starbase	klingon	kbase	1.75			a2
+ship	kmartok.odf	craft	klingon	kbattle	1.4			a2
+station	kmining.odf	mining	klingon	kmining				a2
+station	korbital.odf	p_mining	klingon	korbital				a2
+station	kprison.odf	starbase	klingon	kbase	1.75			a2
+station	kresear.odf	research	klingon	kresear				a2
+station	kresear2.odf	research	klingon	kresear2				a2
+ship	kscout.odf	craft	klingon	kscout				a2
+station	ksensor.odf	sensor	klingon	ksensor				a2
+ship	kspecial.odf	craft	klingon	kspecial				a2
+ship	ksrepair.odf	repairship	klingon	ksrepair				a2
+ship	ksuper.odf	craft	klingon	ksuper				a2
+station	ksuperbl.odf	shipyard	klingon	ksuperbl				a2
+station	ktrading.odf	trading_station	klingon	ktrading	2.0			a2
+station	kturret.odf	sensor	klingon	kturret				a2
+station	kturret2.odf	sensor	klingon	kturret2				a2
+station	kupgrade.odf	research	klingon	kupgrade				a2
+station	kyard.odf	shipyard	klingon	kyard	1.7			a2
+station	kyard2.odf	shipyard	klingon	kyard2	1.9			a2
+other	latinum.odf	latinum		latinum				a2
+other	master1.odf	asteroid		master1				a2
+other	mcomet.odf	scrap		mcomet				a2
+other	mdmoon.odf	scrap		mdmoon				a2
+other	mdmoon1.odf	scrap		mdmoon1				a2
+other	mdmoon2.odf	scrap		mdmoon2				a2
+other	mdmoon3.odf	scrap		mdmoon3				a2
+other	mgate.odf	background_obj		mgate				a2
+other	mmooninf.odf	scrap		mmooninf				a2
+other	mnebula.odf	background_obj		mnebula3				a2
+ship	momega.odf	craft	alien	momega				a2
+other	mplanet.odf	planet_obj		mplanet				a2
+other	msun1.odf	background_obj		msun1				a2
+other	msun2.odf	background_obj		msun2				a2
+other	msun3.odf	background_obj		msun3				a2
+ship	mtest.odf	craft	federation	mtest				a2
+other	muball.odf	u_ball_obj		Wuitrbal				a2
+other	mwreck.odf	background_obj		mwreck				a2
+station	orbital.odf	p_mining		orbital				a2
+other	pb_clssd.odf	planet	norace	pb_clssd				a2
+other	pb_clssh.odf	planet	norace	pb_clssh				a2
+other	pb_clssj.odf	planet	norace	pb_clssj				a2
+other	pb_clssk.odf	planet	norace	pb_clssk				a2
+other	pb_clssl.odf	planet	norace	pb_clssl				a2
+other	pb_clssm.odf	planet	norace	pb_clssm				a2
+other	planet.odf	planet	norace	planet				a2
+ship	player.odf	craft		fbattle				a2
+ship	rassault.odf	craft	romulan	rassault				a2
+station	rbase.odf	starbase	romulan	rbase	1.5			a2
+ship	rbattle.odf	craft	romulan	rbattle	1.2			a2
+ship	rbattle2.odf	craft	romulan	rbattle2	1.2			a2
+ship	rcargo.odf	cargo_ship	romulan	rcargo				a2
+station	rcolony.odf	colony	romulan	rcolony	1.5			a2
+ship	rconst.odf	constructionrig	romulan	rconst				a2
+ship	rcruise1.odf	craft	romulan	rcruise1				a2
+ship	rcruise2.odf	craft	romulan	rcruise2				a2
+ship	rcruise3.odf	craft	romulan	rcruise3				a2
+ship	rdestroy.odf	craft	romulan	rdestroy				a2
+ship	repairbase.odf	repairship		repairbase				a2
+station	research.odf	research		research				a2
+ship	rfreight.odf	freighter	romulan	rfreight				a2
+ship	rfrigate.odf	craft	romulan	rfrigate				a2
+station	rmining.odf	mining	romulan	rmining				a2
+station	rorbital.odf	p_mining	romulan	rorbital	1.25			a2
+station	rresear.odf	research	romulan	rresear				a2
+station	rresear2.odf	research	romulan	rresear2				a2
+ship	rscout.odf	craft	romulan	rscout				a2
+station	rsensor.odf	sensor	romulan	rsensor				a2
+ship	rspecial.odf	craft	romulan	rspecial				a2
+ship	rsrepair.odf	repairship	romulan	rsrepair				a2
+ship	rsuper.odf	craft	romulan	rsuper				a2
+station	rsuperbl.odf	shipyard	romulan	rsuperbl	3.0			a2
+station	rtrading.odf	trading_station	romulan	rtrading	1.75			a2
+station	rturret.odf	sensor	romulan	rturret				a2
+station	rturret2.odf	sensor	romulan	rturret2				a2
+station	rupgrade.odf	research	romulan	rupgrade	0.25			a2
+station	ryard.odf	shipyard	romulan	ryard	1.4			a2
+station	ryard2.odf	shipyard	romulan	ryard2	1.95			a2
+ship	saucer.odf	craft		saucer				a2
+ship	scoutbase.odf	craft		scoutbase				a2
+ship	special.odf	craft		special				a2
+other	sscr_1.odf	scrap		sscr_1				a2
+ship	super.odf	craft		super				a2
+station	turret.odf	sensor		turret				a2
+ship	zfercarg.odf	cargo_ship	ferengi	zfercarg				a2
+ship	zferscav.odf	scavenger	ferengi	zferengi	1.3			a2
+ship	zflag.odf	craft	federation	zflag				a2

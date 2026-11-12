@@ -600,3 +600,52 @@ fn finder_predicates_are_isolated_and_errors_remain_visible() {
     assert!(!g.global::<bool>("INVALID"));
     assert_eq!(g.global::<u32>("AGAIN"), HERO.0);
 }
+
+#[test]
+fn officer_limit_assignment_is_a_noop_at_the_limit_in_force_and_recorded_otherwise() {
+    let mut g = game("MMM.register(function() local cur = Player(0).maxOfficers; Player(0).maxOfficers = cur; Player(0).maxOfficers = cur + 1; Player(0).maxCrew = cur end)");
+    g.run(2);
+    let unsupported = g.rt.unsupported();
+    let officers: Vec<_> = unsupported.iter().filter(|(n, _)| n.starts_with("Player.maxOfficers")).collect();
+    // Two callbacks (two ticks) each assign cur + 1 once; the equal assignments are not recorded.
+    assert_eq!(officers.len(), 1, "{unsupported:?}");
+    assert_eq!(officers[0].1, 2, "{unsupported:?}");
+    assert!(!unsupported.iter().any(|(n, _)| n.starts_with("Player.maxCrew")), "{unsupported:?}");
+}
+
+#[test]
+fn recorded_assignments_keep_the_callback_running_and_name_each_gap() {
+    let mut g = game(
+        "MMM.register(function()
+            local p = Player(0)
+            p.race = Race.find('fx'); p.color = Color(1, 0, 0); p.name = 'x'
+            local e = EntityFinder():find()[1]
+            e.race = Race.find('fx'); e.crew = 5; e.shields = 1.0; e.movementAutonomy = 1
+            e.specialWeaponAutonomy = 1; e.forward = Vector(1, 0, 0); e.omega = Vector(0, 1, 0); e.name = 'n'
+            DONE = true
+        end)",
+    );
+    g.run(2);
+    assert!(g.global::<bool>("DONE"));
+    let names: Vec<String> = g.rt.unsupported().into_iter().map(|(n, _)| n).collect();
+    for want in [
+        "Player.race", "Player.color", "Player.name", "Entity.race", "Entity.crew", "Entity.shields",
+        "Entity.movementAutonomy", "Entity.specialWeaponAutonomy", "Entity.forward", "Entity.omega", "Entity.name",
+    ] {
+        assert!(names.iter().any(|n| n.starts_with(want)), "{want} in {names:?}");
+    }
+}
+
+#[test]
+fn condition_monitor_and_text_input_callbacks_get_a_hook_object_like_installed_scripts() {
+    let mut g = game(
+        "seen = {}
+        local m = Monitor('done', false, nil, function() return true end, nil)
+        m:hook('onDone', MonitorHook.Type.OnTrue, nil, function(monitor, hook)
+            seen[#seen+1] = hook.argument; seen[#seen+1] = hook.id
+        end, 7)",
+    );
+    g.run(2);
+    assert_eq!(g.global::<i64>("seen[1]"), 7);
+    assert_eq!(g.global::<String>("seen[2]"), "onDone");
+}

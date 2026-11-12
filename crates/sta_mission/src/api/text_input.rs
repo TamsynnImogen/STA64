@@ -187,7 +187,7 @@ pub(crate) fn fire(lua: &Lua, ctx: &Shared, errors: &mut Vec<String>) {
             let result = match matched {
                 Ok(Value::Nil) => continue,
                 Ok(_) => error(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    callback.call::<Value>((receiver, text.as_str(), argument))
+                    callback.call::<Value>((receiver, text.as_str(), super::hook_object(lua, &id, argument)?))
                 }))),
                 Err(err) => Err(err),
             };
