@@ -86,6 +86,7 @@ pub fn kit_click(w: &mut World, e: Entity) {
 /// `PointerClick` bubbles up the tree and global observers see every step: the first
 /// kit widget on the way handles it and stops it, so a row's click never reaches the
 /// dropdown that owns the list (which would toggle it open again).
+#[allow(clippy::type_complexity)]
 fn on_click(
     mut ev: On<PointerClick>,
     kit: Query<(), Or<(With<Checkbox>, With<Dropdown>, With<DropdownOption>, With<Tab>)>>,
