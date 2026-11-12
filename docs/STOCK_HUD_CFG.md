@@ -82,17 +82,14 @@ pages rather than inheriting the LCARS build-list limit. Menu and paging actions
 change presentation only; build, targeting, stop and formation actions still use
 the shared HUD handlers.
 
-Native evidence was checked against the read-only Armada2.exe SHA-256
-`8d3ba6ec826198daf3e0c7b3435e9ce8195293e56da7c87e0af2634eaa4693b3`:
-
-- `0x50aaa0`: StandardBackground count, `default_sprite`, `.n` / `_n` pairing.
-- `0x5358f0`: independent canvas scaling for rectangles.
-- `0x4eadf0`, `0x4ff450`, `0x4f2ee0`: minimap, resource IDs and selection variants.
-- `0x4fa990`, `0x4fbdd0`, `0x4fc670`: palette configuration and upward static rows.
-- `0x519070`, `0x44e1d0`, `0x6f45d4`, `0x44aaa0`: command metadata,
-  command-name mapping and the static command-type priority.
-- `0x4f7820`, `0x4f7a60`, `0x4f7e20`: five same-slot craft wireframe layers
-  named `<basename>w1` through `w5`, and the noncraft `_s` form.
+Original behaviour followed (read from the stock A2 executable, static; the
+instruction-level notes are kept outside the repository): the standard
+background count with `default_sprite` and `.n` / `_n` pairing; independent
+canvas scaling of rectangles; minimap, resource-ID and selection-panel
+variants; palette configuration with upward static rows; command metadata,
+command-name mapping and the static command-type priority; five same-slot
+craft wireframe layers named `<basename>w1` through `w5`, and the noncraft
+`_s` form.
 
 These are static findings, not original-engine runtime or Fleet Ops equivalence
 claims. Evidence bundles and captures remain outside the repository with the
@@ -205,16 +202,10 @@ incorrectly inherited the generic theme text colour. FO4's authored palette
 and per-faction overrides remain authoritative. The same widget supports both;
 no game assets or simulation/resource values change.
 
-Static evidence: clean `Armada2.exe`, SHA-256
-`8d3ba6ec826198daf3e0c7b3435e9ce8195293e56da7c87e0af2634eaa4693b3`.
-The initializer at `0x50a220..0x50a31c` allocates RGB triples in the pointer
-table `0x764664 + ID*4`. The setter at `0x50a1f0..0x50a219` reads this
-same table and copies RGB into the resource's text component at `+0x70`.
-The resource-panel loop calls it at `0x4ff813` with the current resource ID.
-This is original-A2 static evidence, independently checked with objdump;
-it does not claim original Roots execution. Native disassembly and subsequent
-local capture/build receipts are retained under
-`STA64-artifacts/probes/resource-colours/`.
+Evidence: read from the stock A2 executable (static). It allocates one RGB
+triple per resource ID in a table, and the resource panel sets the resource's
+text colour from that table with the current resource ID. This does not claim
+original Roots execution. Notes are kept outside the repository.
 
 Regression checks cover all six defaults, explicit per-ID CFG overrides,
 include/case precedence and retaining tints across value updates. The installed
@@ -283,16 +274,12 @@ shared UnitView values. No capacity is substituted for unknown current crew;
 older snapshots preserve that unknown state. Crew spending/regeneration,
 casualties and boarding remain separate gameplay work.
 
-Static evidence from clean A2 SHA-256
-`8d3ba6ec826198daf3e0c7b3435e9ce8195293e56da7c87e0af2634eaa4693b3`:
-InfoBar loader near `0x4ef7fc..0x4efb4a` reads native text/icon areas and
-copies the name colour; percent getters `0x4ecd40`/`0x4ed000` multiply by 100;
-formatting near `0x4ece4a` uses floor(percent + 0.5) and the `%` literal at
-`0x70ad50`; energy uses the same format near `0x4edb9a` with `%` at `0x70af4c`.
-Current crew comes from
-actor state near `0x4ed3cf`. Status colour selection is `0x4ec5d0`, with race
-threshold defaults loaded at `0x48b52b..0x48b558`. White icon art requires tint.
-Private native receipts are in `STA64-artifacts/probes/unit-status/native-infobar*`.
+Evidence: read from the stock A2 executable (static). The info bar loader
+reads native text and icon areas and copies the name colour; percent getters
+multiply by 100 and the display uses floor(percent + 0.5) with a `%` literal;
+energy uses the same format; current crew comes from actor state; status colour
+selection uses race threshold defaults. White icon art requires tint. Private
+native receipts are kept outside the repository.
 This is static original-A2 evidence, not original Roots runtime acceptance.
 The current bare-number presentation follows the supplied stock reference and
 user direction; the original literal above is not used as a display requirement.
