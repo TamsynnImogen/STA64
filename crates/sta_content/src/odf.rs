@@ -333,7 +333,7 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
             }
             None => None,
         };
-        let mut def = crate::unit::unit_def(s, odf, phys.as_deref(), &mut warnings);
+        let mut def = crate::unit::unit_def_for_profile(s, odf, phys.as_deref(), profile, &mut warnings);
         // A node's resource: the slot its resource ODF fills (`amtlatinum` on Fleet Ops 4.0's
         // tritanium moon, `amtmetal` on Roots'), else the game's word for it in the text.
         if let Some(text) = odf.str("resource").map(str::trim).filter(|t| !t.is_empty()) {

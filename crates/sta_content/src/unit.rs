@@ -6,8 +6,8 @@
 //! |---|---|
 //! | `class`, `race` | `classLabel`, `race` |
 //! | `model`, `scale` | `basename` (else the ODF's own name), `ScaleSOD` |
-//! | `hull` | `maxHealth` |
-//! | `shields` | `maxShields` (`curShields` if that is missing), `shieldRate` per second |
+//! | `hull`, `initial_hull` | `maxHealth`, optional `curHealth` (otherwise maximum) |
+//! | `shields`, `initial_shields` | `maxShield`/`maxShields`, `curShield`/`curShields`, `shieldRate` per second; A2/FO absent strength inherits health |
 //! | `crew` | `crewCost` (our reading: the crew a unit carries is what it costs) |
 //! | `sensor` | `rangeScan` |
 //! | `movement` | the physics ODF named by `physicsFile`, see [`movement`] |
@@ -84,6 +84,10 @@ fn resource_id(text: &str) -> u8 {
 /// Weapon and build references carry ODF names only; [`crate::odf::load_with`]
 /// drops those that are not defined and fills the arcs.
 pub fn unit_def(name: &str, odf: &Odf, phys: Option<&Odf>, warnings: &mut Vec<Warning>) -> UnitDef {
+    unit_def_for_profile(name, odf, phys, crate::Profile::Native, warnings)
+}
+
+pub(crate) fn unit_def_for_profile(name: &str, odf: &Odf, phys: Option<&Odf>, profile: crate::Profile, warnings: &mut Vec<Warning>) -> UnitDef {
     let file = format!("{}.odf", stem(name));
     let class = odf.class_label().unwrap_or("");
     let mut d = UnitDef::new(name.trim().trim_end_matches(".odf"), class);
@@ -99,8 +103,27 @@ pub fn unit_def(name: &str, odf: &Odf, phys: Option<&Odf>, warnings: &mut Vec<Wa
         _ => Fixed::ONE,
     };
     d.hull = r.fixed("maxHealth");
-    let max_shields = if odf.raw("maxShields").is_some() { r.fixed("maxShields") } else { r.fixed("curShields") };
+    d.initial_hull = odf.raw("curHealth").map(|_| r.fixed("curHealth"));
+    // Test presence, not value: an authored zero must never inherit health.
+    let shield_key = |singular, plural| {
+        if odf.raw(singular).is_some() { Some(singular) }
+        else if odf.raw(plural).is_some() { Some(plural) }
+        else { None }
+    };
+    let max_key = shield_key("maxShield", "maxShields");
+    let current_key = shield_key("curShield", "curShields");
+    d.initial_shields = current_key.map(|key| r.fixed(key));
+    let max_shields = match max_key {
+        Some(key) => r.fixed(key),
+        None => d.initial_shields.unwrap_or_default(),
+    };
     d.shields = ShieldDef { max: max_shields, recharge: r.fixed("shieldRate") / Fixed::from_int(TICK_HZ as i32) };
+    if matches!(profile, crate::Profile::Sta2Classic | crate::Profile::Fo4)
+        && max_key.is_none() && current_key.is_none()
+    {
+        d.shields.max = d.hull;
+        d.initial_shields = d.initial_hull;
+    }
     d.crew = r.fixed("crewCost");
     d.sensor = r.fixed("rangeScan");
 

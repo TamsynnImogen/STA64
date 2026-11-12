@@ -41,3 +41,16 @@ suites, client regression tests, strict Clippy, workspace and ARM64 checks.
 Stage an optimized desktop candidate and keep manual HUD/FPS acceptance
 separate from headless and compiler evidence. December desktop alpha remains
 the priority; this is one shared implementation across platforms.
+
+## Implementation evidence
+
+Seven synthetic content tests and four simulation/installed-data tests pass.
+The read-only installed Classic constructor now exposes live hull 150/150 and
+shields 150/150. Partial/zero/directional pools, effective hashes, resolved
+inheritance, yard completion and save continuation are covered. Content and
+simulation all-target suites, bench/mission/AI library suites and all 460
+client library tests pass (one existing client test ignored). Strict
+content/simulation/client Clippy, workspace/all-target and NDK29/API26 ARM64
+client-library checks pass. This does not establish a new APK/device run.
+The PR and private initial-pools artifact receipt track installed GPU captures,
+the optimized candidate and remaining manual visual/FPS acceptance.

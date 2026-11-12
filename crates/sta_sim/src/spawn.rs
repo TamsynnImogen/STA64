@@ -69,7 +69,7 @@ impl Sim {
         (sim, warnings)
     }
 
-    /// Spawn an entity from a unit definition at full hull and shields.
+    /// Spawn an entity at the definition's starting hull and shield strengths.
     /// `None` without content, or when `key` is not a unit.
     pub fn spawn_def(
         &mut self,

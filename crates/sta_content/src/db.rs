@@ -454,6 +454,16 @@ fn hash_inner(db: &ContentDb, include_starting_rules: bool) -> u64 {
                 for f in [u.hull, u.shields.max, u.shields.recharge, u.crew, u.sensor] {
                     h.fixed(f);
                 }
+                let initial_hull = u.initial_hull.unwrap_or(u.hull);
+                let initial_shields = u.initial_shields.unwrap_or(u.shields.max);
+                // Missing and explicit full strength are the same rule. Keep
+                // historical synthetic hashes when initialization is unchanged.
+                if initial_hull != u.hull || initial_shields != u.shields.max {
+                    h.byte(0xec);
+                    h.str("sta64.initial-health-shields.v1");
+                    h.fixed(initial_hull);
+                    h.fixed(initial_shields);
+                }
                 h.u64(u.hardpoints.len() as u64);
                 for hp in &u.hardpoints {
                     h.u64(hp.weapon.key.0 as u64);
