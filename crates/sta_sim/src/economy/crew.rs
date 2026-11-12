@@ -7,7 +7,8 @@
 //!   `race`. A race without the key, or with 0 (Fleet Ops Roots' playable
 //!   races), adds nothing. A starbase is a unit of class `starbase`.
 //! - Capacity: the larger of `STARTING_CREW_CAPACITY` (`RTS_CFG.h`) and the sum
-//!   of the owned finished stations' `maxCrewGain`. A stock above the capacity
+//!   of the owned finished stations' `maxCrewGain` plus owned Producer planets'
+//!   `planet_crew_gain` (capped at 1e9). A stock above the capacity
 //!   (capacity shrank) is left as it is, never clamped down.
 //! - Fractions use the same exact scheme as [`super::passive`]: no state.
 //! - Not implemented, with the reason: `planetCrewAccumulationModifier`
@@ -46,34 +47,35 @@ impl Economy {
                 continue;
             }
             let add = Fixed::from_bits(tick_gain(rate, tick).min(i128::from(i64::MAX)) as i64);
-            self.personnel[i] = (player, Some((crew + add).min(cap)), limit);
+            self.personnel[i] = (player, Some(Fixed::from_bits(crew.to_bits().saturating_add(add.to_bits())).min(cap)), limit);
         }
     }
 }
 
-/// `(accumulation bits per second, capacity from stations)` of one team.
+/// `(accumulation bits per second, capacity from stations and planets)` of one team.
 fn team_numbers(units: &Entities, db: &ContentDb, rules: &sta_content::CrewRules, player: PlayerId) -> (i128, Fixed) {
-    let (mut rate, mut capacity) = (0i128, Fixed::ZERO);
+    const LIMIT: i128 = 1_000_000_000;
+    let (mut rate, mut capacity) = (0i128, 0i128);
     for u in units.iter() {
-        if u.owner != player
-            || u.kind != EntityKind::Station
-            || u.flags.contains(UnitFlags::DYING)
-            || u.progress.is_some_and(|p| p < Fixed::ONE)
-        {
+        if u.owner != player || u.flags.contains(UnitFlags::DYING) || u.progress.is_some_and(|p| p < Fixed::ONE) {
             continue;
         }
         let Some(def) = db.unit(u.def) else { continue };
-        if let Some(gain) = def.raw.f32("maxCrewGain").filter(|g| g.is_finite() && *g > 0.0) {
-            capacity = capacity + Fixed::from_f64(f64::from(gain.min(1.0e9)));
+        if def.planet_role == Some(sta_content::PlanetRole::Producer) {
+            capacity += i128::from(def.planet_crew_gain.max(0));
+            continue;
         }
-        if def.class.0 == "starbase" {
-            let race = def.race.trim().to_ascii_lowercase();
-            if let Some((_, r)) = rules.races.iter().find(|(k, _)| *k == race) {
-                rate += i128::from(r.to_bits());
-            }
+        if u.kind != EntityKind::Station {
+            continue;
+        }
+        capacity += i128::from(def.crew_gain.to_bits()) >> 32;
+        if def.class.0 == "starbase"
+            && let Some((_, r)) = rules.races.iter().find(|(k, _)| k.eq_ignore_ascii_case(def.race.trim()))
+        {
+            rate += i128::from(r.to_bits());
         }
     }
-    (rate, capacity)
+    (rate, Fixed::from_int(capacity.clamp(0, LIMIT) as i32))
 }
 
 #[cfg(test)]
@@ -98,6 +100,7 @@ mod tests {
         let mut base = UnitDef::new("fx_starbase", "starbase");
         base.race = "fx".into();
         base.hull = Fixed::from_int(500);
+        base.crew_gain = Fixed::from_f64(gain.split('=').nth(1).and_then(|v| v.trim().parse().ok()).unwrap_or(0.0));
         base.raw = Arc::new(sta_odf::resolve("fx_starbase", &mut |_| Some(format!("classlabel = \"starbase\"\n{gain}"))).unwrap());
         let rules = Rules::default().with_crew(CrewRules { starting_capacity: starting, races: vec![("fx".into(), Fixed::from_f64(rate))] });
         Arc::new(b.unit(base).build().unwrap().with_rules(rules))
@@ -180,6 +183,17 @@ mod tests {
         let mut sim = game(Arc::new(sta_content::fake::db()), 750);
         run(&mut sim, 30 * 10);
         assert_eq!(crew(&sim, 0), Fixed::from_int(750));
+    }
+
+    #[test]
+    fn station_capacity_is_part_of_the_content_hash_and_a_foreign_base_gives_nothing() {
+        assert_ne!(db(4.0, Some(250), "maxCrewGain = 3000\n").hash(), db(4.0, Some(250), "maxCrewGain = 3001\n").hash());
+        assert_ne!(db(4.0, Some(250), "").hash(), db(4.0, Some(250), "maxCrewGain = 5\n").hash());
+        let mut sim = game(db(4.0, Some(250), "maxCrewGain = 3000\n"), 750);
+        spawn(&mut sim, "fx_starbase", 1);
+        run(&mut sim, 30 * 10);
+        assert_eq!(crew(&sim, 0), Fixed::from_int(750), "an enemy starbase feeds its own owner only");
+        assert!(crew(&sim, 1) > Fixed::from_int(750));
     }
 
     #[test]

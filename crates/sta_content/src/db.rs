@@ -542,6 +542,11 @@ fn hash_inner(db: &ContentDb, include_starting_rules: bool) -> u64 {
                         h.fixed(f);
                     }
                 }
+                // SIM-25: only for stations that add crew capacity.
+                if u.crew_gain != Fixed::ZERO {
+                    h.byte(0xf2);
+                    h.fixed(u.crew_gain);
+                }
                 feature_bits(&mut h, u.features.as_ref(), &db.features);
                 // No new bytes for disabled/unsupported rules: old Native
                 // databases and genuine replay/save controls retain their hash.

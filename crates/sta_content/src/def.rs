@@ -269,6 +269,8 @@ pub struct UnitDef {
     pub crew: Fixed,
     /// `maximumCrew`; absent means the starting crew amount.
     pub maximum_crew: Option<Fixed>,
+    /// `maxCrewGain` of a station (SIM-25): what it adds to its team's crew capacity.
+    pub crew_gain: Fixed,
     /// Sensor range, units.
     pub sensor: Fixed,
     pub hardpoints: Vec<Hardpoint>,
@@ -348,6 +350,7 @@ impl UnitDef {
             initial_shields: None,
             crew: Fixed::ZERO,
             maximum_crew: None,
+            crew_gain: Fixed::ZERO,
             sensor: Fixed::ZERO,
             hardpoints: Vec::new(),
             build: BuildDef::default(),
