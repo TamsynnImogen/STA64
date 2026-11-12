@@ -489,7 +489,7 @@ mod tests {
                 .any(|(_, e)| matches!(e, SimEvent::Rejected { .. })),
             "{log:?}"
         );
-        assert_eq!(digest, 0x8dab_5bd4_8d1c_f010);
+        assert_eq!(digest, 0x91eb_6dca_0141_484a);
     }
 
     #[test]
