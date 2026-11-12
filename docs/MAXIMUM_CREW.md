@@ -12,13 +12,10 @@ reader. Preserve explicit zero. Spawn the real current/capacity pair through
 Entity::from_def, used by maps, starting fleets, scripts and production. No UI
 capacity substitution, player-crew spending, regeneration or casualty changes.
 
-Pinned original-A2 static evidence (Armada2.exe SHA256
-8d3ba6ec826198daf3e0c7b3435e9ce8195293e56da7c87e0af2634eaa4693b3):
-0x4bf24d..0x4bf265 reads maximumCrew into class+0x200 with crewCost(class+0x84)
-as the missing-key fallback. 0x4c1a6c..0x4c1a92 independently initializes
-actor maximum+0x1c4 from that capacity and current+0x1dc from crewCost.
-There is no constructor clamp between these two writes. Crew status at
-0x4ed2d9..0x4ed2e5 divides actor current by actor maximum.
+Original A2 (read from the executable, static): `maximumCrew` is read into the
+class capacity with `crewCost` as the missing-key fallback; the actor's maximum
+is initialised from that capacity and its current crew from `crewCost`, with no
+clamp between the two writes. Crew status divides actor current by actor maximum.
 
 Keep explicit capacity below starting crew rather than silently rewriting
 either authored value. The existing pool representation already holds both;

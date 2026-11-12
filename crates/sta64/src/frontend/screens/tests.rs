@@ -74,7 +74,10 @@ fn roots(app: &mut App) -> Vec<Screen> {
 }
 
 fn texts(app: &mut App) -> Vec<String> {
-    app.world_mut().query::<&Text>().iter(app.world()).map(|t| t.0.clone()).collect()
+    // Kit text is a `SpriteText` (UI-16); its TTF `Text` child exists once the font plugin has run.
+    let mut out: Vec<String> = app.world_mut().query::<&crate::ui::sprite_font::SpriteText>().iter(app.world()).map(|t| t.text.clone()).collect();
+    out.extend(app.world_mut().query::<&Text>().iter(app.world()).map(|t| t.0.clone()));
+    out
 }
 
 fn has_text(app: &mut App, s: &str) -> bool {
@@ -92,7 +95,7 @@ fn disabled_button_named(app: &mut App, name: &str) -> Entity {
         .map(|(entity, state, children)| (entity, *state, children[0]))
         .collect();
     let (entity, state, _) = buttons.into_iter()
-        .find(|(_, _, child)| app.world().get::<Text>(*child).is_some_and(|text| text.0.eq_ignore_ascii_case(name)))
+        .find(|(_, _, child)| app.world().get::<crate::ui::sprite_font::SpriteText>(*child).is_some_and(|text| text.text.eq_ignore_ascii_case(name)))
         .unwrap_or_else(|| panic!("no {name} button"));
     assert_eq!(state, WidgetState::Disabled, "{name} should be disabled");
     entity

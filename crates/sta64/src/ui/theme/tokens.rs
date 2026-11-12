@@ -20,6 +20,10 @@ pub struct Theme {
     pub text_off: Color,
     /// Text on a bright fill (every LCARS pill).
     pub text_on: Color,
+    /// Text on the menu widget kit's pills, fields and tabs (`theme/stock`). The HUD
+    /// reads `text_on`; this one is the kit's own, so a skin can light it without
+    /// touching the HUD.
+    pub kit_text_on: Color,
     pub title: Color,
     /// Gold: selection, fills, the "on" state.
     pub accent: Color,
@@ -92,6 +96,7 @@ impl Default for Theme {
             text_dim: c(0xff9a9ac8),
             text_off: c(0xff55556e),
             text_on: c(0xff000000),
+            kit_text_on: c(0xff000000),
             title: c(0xfff4b84c),
             accent: c(0xfff4b84c),
             accent2: c(0xff9c9cde),

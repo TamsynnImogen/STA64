@@ -7,8 +7,10 @@
 //!
 //! # What it knows
 //!
-//! - Units: only what `WorldView::visible_to(seat)` shows. Enemy ships and
-//!   stations are seen when a sensor of its team reaches them, and not before.
+//! - Units: its own (all of `WorldView::units` it owns, hidden helpers
+//!   included), and of the others only what `WorldView::visible_to(seat)`
+//!   shows. Enemy ships and stations are seen when a sensor of its team
+//!   reaches them, and not before.
 //! - The map: start positions and where resource objects are placed. That is
 //!   static data every player has in front of them in the lobby and on the
 //!   minimap, so it comes in through [`SkirmishConfig`] rather than the view.
@@ -182,7 +184,7 @@ fn role_of(db: &ContentDb, key: ContentKey) -> Role {
         EntityKind::Station if d.build.list.is_empty() => Role::Fort,
         EntityKind::Station => Role::Yard,
         EntityKind::Craft if d.class.0 == "constructionrig" => Role::Rig,
-        EntityKind::Craft if d.class.0 == "freighter" || d.miner => Role::Miner,
+        EntityKind::Craft if d.mines() => Role::Miner,
         EntityKind::Craft if !d.hardpoints.is_empty() => Role::Warship,
         _ => Role::Other,
     }
@@ -411,7 +413,12 @@ impl SkirmishController {
         let seat = self.cfg.player;
         let mut own: Vec<Own> = Vec::new();
         let mut foes: Vec<Foe> = Vec::new();
-        for u in view.visible_to(seat) {
+        // Its own units from `units`: the view leaves `hidden = 1` objects out of
+        // every visible set, but a seat's hidden pods (Roots' `fed_effectsS`, FO's
+        // research pods) still count as tech-tree prerequisites, as in the sim.
+        let mine = view.units.iter().filter(|u| u.owner == seat);
+        let others = view.visible_to(seat).into_iter().filter(|u| u.owner != seat);
+        for u in mine.chain(others) {
             if u.flags.contains(UnitFlags::DYING) {
                 continue;
             }

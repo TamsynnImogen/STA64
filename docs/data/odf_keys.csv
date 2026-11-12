@@ -46,7 +46,7 @@ lifesupporttargethardpoints,99,177,2117,0,string list,craft;shipyard;sensor;rese
 enginestargethardpoints,99,174,2117,0,string list,craft;shipyard;sensor;research;wingman,"""hp01"" ""hp02"" ""hp03"" ""hp04"" ""hp05"" ""h…;""hp23"" ""hp24"" ""hp25"" ""hp26"" ""hp27"" ""h…;""hp34"" ""hp35"" ""hp36"" ""hp37"" ""hp38"" ""h…"
 weaponstargethardpoints,99,170,2117,0,string list,craft;shipyard;sensor;research;wingman,"""hp01"" ""hp02"" ""hp03"" ""hp04"" ""hp05"" ""h…;""hp01"" ""hp02"" ""hp03"" ""hp04"" ""hp05"";""hp03"" ""hp04"" ""hp05"" ""hp06"" ""hp07"" ""h…"
 possiblecraftnames,93,176,2102,1,empty,craft;shipyard;sensor;research;wingman,";""USS Abernethy"" ""USS Agrippa"" ""USS Ai…;""USS Accel"" ""USS Africa"" ""USS Al Ramm…"
-eventattack,35,45,2287,0,string,craft;shipyard;pod;sensor;research,"""StarbaseAttack"";""Basic3CruiserAttack"";""Basic2DestroyerAttack"""
+eventattack,35,45,2287,1,string,craft;shipyard;pod;sensor;research,"""StarbaseAttack"";""Basic3CruiserAttack"";""Basic2DestroyerAttack"""
 hullhitpercent,35,21,2289,0,float,craft;shipyard;pod;sensor;research,71.0f;78.0f;94
 lifesupporthitpercent,35,21,2289,0,float,craft;shipyard;pod;sensor;research,7.0f;2;8.0f
 sensorshitpercent,35,21,2289,0,int,craft;shipyard;pod;sensor;research,0;7.5f;13.0f

@@ -67,7 +67,8 @@ pub struct List {
 #[derive(Component, Debug, Clone, Copy)]
 pub struct ListItem(pub usize);
 
-fn text(s: impl Into<String>, size: f32, color: Color) -> impl Bundle {
+/// Plain baked-TTF text, for frames the HUD shares (`panel`): unchanged from before UI-16.
+fn ttf_text(s: impl Into<String>, size: f32, color: Color) -> impl Bundle {
     (
         Text::new(s.into()),
         TextFont { font_size: bevy::text::FontSize::Px(size), ..default() },
@@ -76,8 +77,14 @@ fn text(s: impl Into<String>, size: f32, color: Color) -> impl Bundle {
     )
 }
 
+/// Kit text (UI-16): the mod's sprite font of the role this size stands for, the baked
+/// TTF where the mod has none. The colour lives in [`SpriteText`].
+pub(super) fn text(theme: &Theme, s: impl Into<String>, size: f32, color: Color) -> impl Bundle {
+    super::stock::kit_text(theme, s, size, color)
+}
+
 pub fn label(theme: &Theme, s: &str) -> impl Bundle {
-    (UiLabel, Node::default(), children![text(s, theme.text_size, theme.text)])
+    (UiLabel, Node::default(), children![text(theme, s, theme.text_size, theme.text)])
 }
 
 /// A pill, `button_h` tall; its label sits at the right as on a console.
@@ -94,7 +101,7 @@ fn pill(theme: &Theme, w: f32) -> Node {
 }
 
 fn pill_label(theme: &Theme, s: &str) -> impl Bundle {
-    (ButtonText, text(theme.caps(s, theme.caps_buttons), theme.text_size, theme.text_on))
+    (ButtonText, text(theme, theme.caps(s, theme.caps_buttons), theme.text_size, theme.text_on))
 }
 
 /// A flat lavender pill, black capitals at the right. Hover, pressed and
@@ -179,7 +186,7 @@ pub fn list(theme: &Theme, items: &[&str], selected: Option<usize>) -> impl Bund
                         },
                         BackgroundColor(if selected == Some(i) { theme.accent } else { Color::NONE }),
                     ),
-                    text(*s, theme.text_size, theme.text),
+                    text(theme, *s, theme.text_size, theme.text),
                 ],
             )
         })
@@ -249,7 +256,7 @@ pub fn panel(theme: &Theme, title: &str, content: impl Bundle) -> impl Bundle {
                         Node { flex_grow: 1.0, column_gap: Val::Px(g), height: Val::Px(top), align_items: AlignItems::Center, ..default() },
                         children![
                             bar(theme.accent2, top, false),
-                            text(theme.caps(title, theme.caps_titles), theme.title_size, theme.title),
+                            ttf_text(theme.caps(title, theme.caps_titles), theme.title_size, theme.title),
                             (
                                 Node {
                                     width: Val::Px(theme.cap_w),
