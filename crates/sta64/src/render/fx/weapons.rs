@@ -39,7 +39,7 @@ use sta_sim::command::Target;
 use sta_sim::{ContentKey, EntityId, SimEvent, TICK_HZ, Tick};
 
 use super::quad::{self, FxQuadMaterial, Look};
-use super::recipe::{self, Recipe, Shape};
+use super::recipe::{OrdnanceRecipes, Recipe, Shape};
 use crate::app::GameSet;
 use crate::clock::AnimClock;
 use crate::render::units::to_bevy;
@@ -92,6 +92,12 @@ pub struct WeaponFxPlugin;
 
 impl Plugin for WeaponFxPlugin {
     fn build(&self, app: &mut App) {
+        // RND-28: the recipes a mod's mounted files lay over Refit's, read as the files
+        // are mounted (`ordnance/ordnance.ini`, D12).
+        app.init_resource::<OrdnanceRecipes>().add_systems(
+            Update,
+            load_recipes.run_if(resource_exists_and_changed::<crate::viewer::Mounted>).before(spawn_fx),
+        );
         app.add_systems(
             Update,
             (spawn_fx, update_fx, attach_visuals, apply_alpha)
@@ -122,8 +128,8 @@ fn name_colour(class: &str, fx: Option<&str>) -> Option<Vec3> {
 /// The recipe a weapon draws with: Refit's, by ODF name, else its kind's defaults in
 /// the weapon's colour (class and effect name, else the ODF's `lightColor`: three
 /// numbers, 0..1 or 0..255).
-fn recipe_for(def: &sta_content::WeaponDef) -> Recipe {
-    if let Some(r) = recipe::bundled().get(&def.odf.to_ascii_lowercase()) {
+fn recipe_for(def: &sta_content::WeaponDef, recipes: &OrdnanceRecipes) -> Recipe {
+    if let Some(r) = recipes.0.get(&def.odf.to_ascii_lowercase()) {
         return r.clone();
     }
     let shape = if def.kind == WeaponKind::Beam { Shape::Beam } else { Shape::Bolt };
@@ -162,9 +168,14 @@ fn shot_seed(shooter: EntityId, weapon: ContentKey, tick: Tick) -> f32 {
     (h & 1023) as f32 * 0.01
 }
 
+fn load_recipes(vfs: Res<crate::viewer::Mounted>, mut recipes: ResMut<OrdnanceRecipes>) {
+    *recipes = OrdnanceRecipes::from_vfs(&vfs.0);
+}
+
 fn spawn_fx(
     mut cmds: Commands,
     mut msgs: MessageReader<SimMsg>,
+    recipes: Res<OrdnanceRecipes>,
     clock: Res<AnimClock>,
     link: Res<SimLink>,
     content: Res<ContentRes>,
@@ -177,7 +188,7 @@ fn spawn_fx(
                 let Some(def) = content.0.weapon(*weapon) else { continue };
                 let Some(from) = point(&link, *shooter, alpha) else { continue };
                 let to = target_point(&link, target, alpha).unwrap_or(from);
-                let recipe = recipe_for(def);
+                let recipe = recipe_for(def, &recipes);
                 let seed = shot_seed(*shooter, *weapon, clock.tick());
                 let mk = |kind, life: f32, look: Look| WeaponFx {
                     kind,

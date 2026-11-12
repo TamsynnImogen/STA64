@@ -3,9 +3,11 @@
 
 pub mod anim;
 pub mod construction;
+pub mod cull;
 pub mod fog;
 pub mod fx;
 pub mod hulls;
+pub mod lod_switch;
 pub mod materials;
 pub mod model_scene;
 pub mod moons;
@@ -14,7 +16,9 @@ pub mod overlays;
 pub mod particles;
 pub mod planet;
 pub mod post;
+pub mod profile;
 pub mod rock;
+pub mod shader_shadow;
 pub mod space;
 pub mod sprites;
 pub mod strategic;

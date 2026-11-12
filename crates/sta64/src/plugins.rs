@@ -66,6 +66,8 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
         // render —
         app.add_plugins(crate::render::hulls::HullPlugin);
         app.add_plugins(crate::render::post::PostFxPlugin::from_cfg(cfg));
+        // RND-07 cull distances and marks, RND-22 render profile, RND-28 developer shader shadowing
+        app.add_plugins((crate::render::cull::CullPlugin, crate::render::profile::ProfilePlugin, crate::render::shader_shadow::ShaderShadowPlugin));
 
         // ui —
         app.add_plugins(crate::ui::theme::ThemePlugin);
