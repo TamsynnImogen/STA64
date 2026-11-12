@@ -82,7 +82,10 @@ impl ContentDb {
     /// (`.xml` or `.tt`, see [`TechTree::find`]) and gates building (SIM-09);
     /// without one `tech_tree()` is `None` and a warning says so.
     pub fn load(vfs: &sta_vfs::Vfs, index: &OdfIndex) -> Result<(ContentDb, Vec<Warning>)> {
-        ContentDb::load_as(vfs, Profile::detect(vfs), index)
+        let detection = Profile::detect_with_source(vfs);
+        let (db, mut warnings) = ContentDb::load_as(vfs, detection.profile, index)?;
+        warnings.splice(0..0, detection.warnings);
+        Ok((db, warnings))
     }
 
     /// [`load`](ContentDb::load) with the profile given instead of detected
