@@ -254,8 +254,10 @@ impl Weapons {
         }
         self.shots = flying;
 
-        // Compute after this tick's movement, using the exact same shared-vision
-        // rule as WorldView. Do not use last tick's view or explored fog.
+        // Compute after this tick's movement, using the same shared-vision rule
+        // as WorldView (which then also leaves out `hidden = 1` units; the sim
+        // does not read `invalidAsTarget` yet). Do not use last tick's view or
+        // explored fog.
         let visibility = crate::sensors::compute(units, Some(db), teams);
         for u in units.iter() {
             if u.flags.contains(UnitFlags::WEAPONS_OFF) {

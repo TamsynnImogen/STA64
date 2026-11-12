@@ -86,11 +86,12 @@ impl Ini {
     /// double quotes and a trailing `;` / `#` comment are tolerated.
     pub fn asset_version(&self) -> Option<Result<u32, String>> {
         let raw = self.get("mod", "AssetVersion")?;
-        let v = raw.split([';', '#']).next().unwrap_or("").trim().trim_matches(['"', '\'']).trim();
+        let v = raw.split([';', '#']).next().unwrap_or("").trim();
+        let v = ['"', '\''].iter().find_map(|q| v.strip_prefix(*q)?.strip_suffix(*q)).unwrap_or(v).trim();
         if v.is_empty() {
             return None;
         }
-        Some(v.parse::<u32>().map_err(|_| raw.trim().to_owned()))
+        Some(if v.bytes().all(|b| b.is_ascii_digit()) { v.parse::<u32>().map_err(|_| raw.trim().to_owned()) } else { Err(raw.trim().to_owned()) })
     }
 }
 
@@ -302,7 +303,7 @@ mod tests {
         assert_eq!(v("AssetVersion=50000\r\nAssetVersion=1"), Some(Ok(50000)), "first assignment counts");
         assert_eq!(v("AssetVersion="), None);
         assert_eq!(v("Name=x"), None);
-        for bad in ["-5", "5.0", "4294967296", "abc", "0x1234", "50 000"] {
+        for bad in ["-5", "+50000", "5.0", "4294967296", "abc", "0x1234", "50 000", "'\"50000"] {
             assert_eq!(v(&format!("AssetVersion={bad}")), Some(Err(bad.to_owned())), "{bad}");
         }
         assert_eq!(Ini::parse("[other]\nAssetVersion=50000").asset_version(), None, "only the [mod] section");
