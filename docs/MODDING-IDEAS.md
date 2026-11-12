@@ -58,14 +58,14 @@ differing key, while peers differing only by texture/recipe folder are
 accepted; a replay names its packs; a recipe ini dropped in a mod folder
 changes a headless frame.
 
-**Non-goals for v1:** exe fingerprinting, FO 3.2.7 / Dominion War / A1
-lineages, bug-emulation quirks, TOML `[patch]` for ODF, trigger/timeline DSL,
+**Non-goals for v1:** exe fingerprinting, A1 mods (stock A1 and, since the
+2026-11-12 amendments to D5, FO 3.2.7 / Dominion War are in v1), bug-emulation quirks, TOML `[patch]` for ODF, trigger/timeline DSL,
 third-party pack Lua, WASM, shader contracts and shims, pack UI/load-order
 editor, dependency fetching, signing policy, string-table overlay, hot reload
 beyond dev shadowing, `.asi`/hook importer, per-match rule toggles.
 
 **Can wait:** script tiers; slot contract/versioning; pack UI; distribution,
-signing, trust; FO3 and A1 lineages; localisation overlay; whether Refit's
+signing, trust; A1 mods; localisation overlay; whether Refit's
 recipe format ever diverges from STA64's.
 
 **Next:** claim packages per AGENTS.md (new IDs via a WORKPLAN PR, next free

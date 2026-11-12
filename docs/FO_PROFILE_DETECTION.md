@@ -189,9 +189,9 @@ First hit wins.
    has no `AssetVersion`. It reuses the existing `looks_like_fo` name matcher;
    D6 mounting is unchanged.
 4. **`[FleetOps] Version=` in `Data/packages.ini`.** FO 3.2.7 and Dominion War
-   installs have no `info.ini`, but both carry `Version=3.2.7`. Not needed for
-   v1 (both lineages are excluded by D5); listed so the scheme has a place for
-   them.
+   installs have no `info.ini`, but both carry `Version=3.2.7`. CON-43 only
+   records it; since the 2026-11-12 D5 amendment the lineage is in v1 and
+   CON-44 makes this step select the FO 3.2.7 profile.
 5. **The existing heuristics** (name matcher, A2 layout, ZFS archive signature,
    Native fallback). Unchanged: stock Armada II, Armada I, Native.
 
@@ -262,8 +262,8 @@ its own decision.
   folder under `Data/Mods`, that mod's grandparent. It reads `info.ini` and
   `packages.ini` there and nothing else; D6 mounting is not touched.
 - Step 4 records `[FleetOps] Version=` (3.2.7 on the FO 3.x and Dominion War
-  installs; the Roots install's own file says 4.0.0). It selects nothing and
-  there is no profile variant for the 3.x engine.
+  installs; the Roots install's own file says 4.0.0). In CON-43 it selects
+  nothing; the profile variant for the 3.x engine is CON-44.
 - The warning: when the detected profile is the Roots lineage, every layer
   whose `AssetVersion` is below 50000 gets one ("older than the Roots
   lineage this mod loads under"). A malformed value (not a whole number
