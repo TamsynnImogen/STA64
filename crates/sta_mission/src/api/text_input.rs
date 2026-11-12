@@ -180,6 +180,7 @@ pub(crate) fn fire(lua: &Lua, ctx: &Shared, errors: &mut Vec<String>) {
             let Some((id, receiver, callback, argument, pattern)) = hook else {
                 continue;
             };
+            crate::sandbox::refill(lua);
             let matched = error(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 find.call::<Value>((text.as_str(), pattern.as_str()))
             })));

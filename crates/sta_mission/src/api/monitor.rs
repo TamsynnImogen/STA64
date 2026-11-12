@@ -274,6 +274,7 @@ pub(crate) fn fire_monitors(lua: &Lua, ctx: &Shared, errors: &mut Vec<String>) {
         }
     }
     for (hook, func, id) in firings {
+        crate::sandbox::refill(lua);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match id {
             Some(id) => handle(lua, ctx, id).and_then(|e| func.call::<MultiValue>(e)),
             None => func.call::<MultiValue>(()),

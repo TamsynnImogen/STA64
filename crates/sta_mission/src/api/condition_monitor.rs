@@ -209,6 +209,7 @@ pub(crate) fn fire(lua: &Lua, ctx: &Shared, errors: &mut Vec<String>) {
         if !ctx.borrow().conditions.monitors[index].active {
             continue;
         }
+        crate::sandbox::refill(lua);
         let result = error(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             predicate.call::<Value>((lua.create_userdata(Monitor(index, ctx.clone()))?, argument))
         })))
@@ -260,6 +261,7 @@ pub(crate) fn fire(lua: &Lua, ctx: &Shared, errors: &mut Vec<String>) {
             let Some((function, argument)) = callback else {
                 continue;
             };
+            crate::sandbox::refill(lua);
             let result = error(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 function.call::<Value>((lua.create_userdata(Monitor(index, ctx.clone()))?, argument))
             })));

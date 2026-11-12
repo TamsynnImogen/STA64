@@ -404,18 +404,29 @@ limits:
 | Constant | Value | Meaning |
 |---|---|---|
 | `std_libs()` | base, `coroutine`, `table`, `string`, `utf8`, `math` | `io`, `os`, `package` and `debug` are not opened |
-| `REMOVED_GLOBALS` | `load`, `loadstring`, `loadfile`, `dofile`, `require` | no run-time compilation or loading; `string.dump` is removed too. `include()` (the VFS reader) is the only way to run another script |
+| `REMOVED_GLOBALS` | `load`, `loadstring`, `loadfile`, `dofile`, `require`, `collectgarbage` | no run-time compilation or loading; `string.dump` is removed too. `include()` (the VFS reader) is the only way to run another script, and it and the main script load as text only (precompiled bytecode is refused). `collectgarbage` goes because the host owns GC timing |
 | `MEMORY_LIMIT` | 256 MiB | an allocation past it raises a Lua memory error |
-| `INSTRUCTION_BUDGET` | 100,000,000 VM instructions | per host entry: the script load, each callback, each monitor pass, each `eval`. The hook fires every `HOOK_GRANULARITY` (10,000) instructions |
+| `INSTRUCTION_BUDGET` | 10,000,000 VM instructions | per host entry: the script load, each callback, each monitor, condition-monitor, timer or text-input hook, each `eval`. The hook fires every `HOOK_GRANULARITY` (10,000) instructions. The installed missions use at most about 30,000 in any one entry (`tests/missions.rs` prints the peak) |
+| `STRING_REP_MAX` | 16 MiB | longest `string.rep` result |
+| `PATTERN_SUBJECT_MAX`, `PATTERN_MAX`, `PATTERN_QUANTIFIERS_MAX` | 1024 B, 256 B, 3 | limits for `string.find/match/gmatch/gsub` with a pattern (`find` with the `plain` flag is exempt): the matcher backtracks inside one C call that the instruction hook cannot interrupt |
+
+`setmetatable` refuses a metatable with `__gc`: Lua runs finalizers with hooks
+off, so a looping finalizer could not be stopped.
 
 A runaway loop ends with the Lua error "mission script exceeded its
 instruction budget" in that entry only; the budget is refilled for the next
 one, and a callback that keeps failing is disabled as for any other error.
-`pcall` cannot swallow the error for long: the budget stays at zero until the
-host refills it. The instruction count is the VM's, so it is the same on every
-peer. MMM's `:load` userdata methods (`Player`) are bound in Rust and are not
-the removed global. The limits are far above what the 78 to 96 installed
-scripts of each mod use (all still run 300 ticks).
+`pcall` cannot swallow the error: the budget stays at zero until the host
+refills it and every function call checks it. The instruction count is the
+VM's, so it is the same on every peer. MMM's `:load` userdata methods
+(`Player`) are bound in Rust and are not the removed global.
+
+Known limit: the budget is per entry, not per tick, so a script that registers
+very many callbacks can still cost many entries' worth of time in one tick.
+Each such callback is bounded and a failing one is disabled; a per-tick budget
+is not implemented. Time spent inside one C call that is not capped above
+(for example `table.concat` or `..` on very large strings) is bounded only by
+the memory limit.
 
 ## Determinism
 

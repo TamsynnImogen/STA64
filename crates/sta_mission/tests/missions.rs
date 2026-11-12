@@ -63,6 +63,9 @@ struct Outcome {
     errors: Vec<String>,
     stubs: Vec<(String, u32)>,
     callbacks: usize,
+    /// Most VM instructions one host entry used (the LUA-09 budget is
+    /// `sandbox::INSTRUCTION_BUDGET` per entry).
+    peak: u64,
 }
 
 fn check(label: &str, vfs_arc: Arc<Vfs>) {
@@ -148,6 +151,11 @@ fn check(label: &str, vfs_arc: Arc<Vfs>) {
         stubbed.len(),
         failed.len()
     );
+    let peak = run.iter().chain(&stubbed).chain(&failed).map(|(_, o)| o.peak).max().unwrap_or(0);
+    eprintln!(
+        "peak instructions in any one entry: {peak} of {} allowed",
+        sta_mission::sandbox::INSTRUCTION_BUDGET
+    );
     eprintln!("mission scripts in missions/: {}, run by some map: {}, not named by any map: {}", all_scripts.len(), seen_scripts.len(), unbound.len());
     for (n, o) in &run {
         eprintln!("  RUN     {n} ({} callbacks)", o.callbacks);
@@ -187,7 +195,7 @@ fn run_one(map: &Arc<MapDef>, db: &Arc<ContentDb>, races: &Races, vfs: &Arc<Vfs>
         view: Some((*sim.view()).clone()),
         ..Default::default()
     };
-    let mut rt = MissionRuntime::from_vfs_with(vfs.clone(), script, 1, cfg);
+    let mut rt = MissionRuntime::from_vfs_with(vfs.clone(), script, SEED, cfg);
     let mut events = Vec::new();
     let mut tick = 0;
     for _ in 0..TICKS {
@@ -201,7 +209,7 @@ fn run_one(map: &Arc<MapDef>, db: &Arc<ContentDb>, races: &Races, vfs: &Arc<Vfs>
     if tick != TICKS {
         errors.push(format!("stopped at tick {tick}"));
     }
-    Outcome { errors, stubs: rt.unsupported(), callbacks: rt.active_callbacks() }
+    Outcome { errors, stubs: rt.unsupported(), callbacks: rt.active_callbacks(), peak: rt.instruction_peak() }
 }
 
 fn setup_for(map: &Arc<MapDef>, db: &Arc<ContentDb>, races: &Races) -> GameSetup {

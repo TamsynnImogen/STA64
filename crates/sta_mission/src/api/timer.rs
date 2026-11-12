@@ -366,6 +366,7 @@ pub(crate) fn fire_timers(lua: &Lua, ctx: &Shared, errors: &mut Vec<String>) {
         if !valid {
             continue;
         }
+        crate::sandbox::refill(lua);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let handle = lua.create_userdata(Timer(index, ctx.clone()))?;
             func.call::<MultiValue>((handle, value))

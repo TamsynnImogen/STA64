@@ -315,7 +315,7 @@ impl MissionRuntime {
                 let Some((p, src)) = found else {
                     return Err(mlua::Error::runtime(format!("include {name}: not found")));
                 };
-                lua.load(&src[..]).set_name(format!("@{p}")).exec()
+                lua.load(&src[..]).set_mode(mlua::chunk::ChunkMode::Text).set_name(format!("@{p}")).exec()
             })?,
         )?;
 
@@ -330,7 +330,7 @@ impl MissionRuntime {
             let r = read.lock().unwrap_or_else(|p| p.into_inner());
             r(path).ok_or_else(|| mlua::Error::runtime("not found"))?
         };
-        lua.load(&src[..]).set_name(format!("@{path}")).exec()
+        lua.load(&src[..]).set_mode(mlua::chunk::ChunkMode::Text).set_name(format!("@{path}")).exec()
     }
 
     /// Evaluate a chunk, returning only sealed owned data. Lua handles and
@@ -376,6 +376,13 @@ impl MissionRuntime {
     pub fn eval_with<T: EvalResult, A: EvalArgs>(&self, chunk: &str, args: A) -> mlua::Result<T> {
         crate::sandbox::refill(&self.inner.lua);
         self.inner.lua.load(chunk).call(args)
+    }
+
+    /// The most VM instructions any one host entry (load, callback, monitor
+    /// pass) has used, against `sandbox::INSTRUCTION_BUDGET`.
+    pub fn instruction_peak(&self) -> u64 {
+        crate::sandbox::refill(&self.inner.lua);
+        crate::sandbox::peak_used(&self.inner.lua)
     }
 
     /// Errors so far: load errors and callback errors, oldest first.
@@ -482,7 +489,6 @@ impl Controller for MissionRuntime {
             let mut c = self.inner.ctx.borrow_mut();
             c.view = view.clone();
             c.events = events.to_vec();
-            crate::sandbox::refill(&self.inner.lua);
             failures = api::process_edit_feedback(&mut c);
             api::process_spawns(&mut c);
         }
