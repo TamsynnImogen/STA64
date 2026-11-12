@@ -159,13 +159,11 @@ at once. Bevy makes `sta64` heavy.
   `STA64_SCCACHE=0`, `SCCACHE_DIR`, and the opt-in `STA64_MOLD=1`; see the
   header of `tools/agent-cargo`. Its self-test is
   `tools/agent-cargo-selftest.sh` (no build). CI does not use the wrapper.
-  Without the wrapper (or where `flock` is missing), the plain form is the
-  fallback:
-
-  Every cargo command runs at low priority with two jobs:
+  Fallback without the wrapper (or where `flock` is missing):
   `renice -n 19 -p $$ >/dev/null && cargo test -p sta_sim --jobs 2`.
   (`nice`/`ionice` prefixes are refused by Claude Code's worktree guard;
-  `renice` on the shell is not.)
+  `renice` on the shell is not.) The workspace check shares one target
+  directory, `<main checkout>/.claude/target-check`, across worktrees.
 - One cargo command at a time per agent, in the foreground; no background
   builds, no `pkill`.
 - Scope to the packages you changed (`-p`). Prefer `cargo check` while
