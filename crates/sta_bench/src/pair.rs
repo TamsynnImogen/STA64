@@ -618,6 +618,15 @@ fn merge_bursts(fire: &[(Tick, &'static str, String, String)], gap: Tick) -> Vec
     out
 }
 
+/// The name the original's marks give a weapon: its ordnance ODF (`ordName`,
+/// what Refit reads from the ordnance's class), else the weapon ODF's own name.
+fn ordnance_label(db: &sta_content::ContentDb, weapon_odf: &str) -> String {
+    db.key(weapon_odf)
+        .and_then(|k| db.weapon(k))
+        .and_then(|w| w.raw.str("ordName").map(str::to_owned))
+        .unwrap_or_else(|| weapon_odf.to_owned())
+}
+
 /// Run the description on STA64's sim in-process and write `dir`
 /// (`Scene.ini`, `Scene.marks`, `Scene.objects.jsonl`, `bench.log`).
 /// `schedule`: the commands and when they land; `end_t`: sim seconds to run.
@@ -675,7 +684,8 @@ pub fn run_sta64(scene_text: &str, cfg: Arc<RunConfig>, schedule: &[Timed], end_
         }
         let kind = parity::canonical_ours(m.kind, &fields);
         if kind == "fire.start" || kind == "fire.end" {
-            let (o, w) = (fields.get("obj").cloned().unwrap_or_default(), fields.get("weapon").cloned().unwrap_or_default());
+            let o = fields.get("obj").cloned().unwrap_or_default();
+            let w = ordnance_label(&cfg.content, fields.get("weapon").map_or("", String::as_str));
             fire.push((m.tick, if kind == "fire.start" { "fire.start" } else { "fire.end" }, o, w));
             continue;
         }
@@ -691,7 +701,7 @@ pub fn run_sta64(scene_text: &str, cfg: Arc<RunConfig>, schedule: &[Timed], end_
     // One ordnance mark per shot, as `[Marks] Ordnance=1` writes them.
     for (tick, e) in &b.events {
         if let SimEvent::Fired { shooter, weapon, target, .. } = e {
-            let w = cfg.content.name(*weapon).unwrap_or("?");
+            let w = ordnance_label(&cfg.content, cfg.content.name(*weapon).unwrap_or("?"));
             let tg = match target {
                 sta_sim::command::Target::Entity(id) => b.name_of(*id),
                 _ => "point".into(),
