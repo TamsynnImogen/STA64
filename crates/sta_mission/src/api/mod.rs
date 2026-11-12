@@ -66,7 +66,7 @@ mod condition_monitor;
 mod player;
 mod timer;
 mod objectives;
-mod objectives_file;
+pub(crate) mod objectives_file;
 mod spawn;
 mod text_input;
 #[cfg(test)]
