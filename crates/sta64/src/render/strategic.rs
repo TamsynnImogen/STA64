@@ -1,6 +1,6 @@
 //! Strategic icons: zoomed out, each team's ships and stations show as solid
 //! team-coloured icons at a fixed screen size (as in Sins of a Solar Empire and
-//! Supreme Commander), fading in as the model gets too small to make out.
+//! Supreme Commander), replacing the model when it gets too small to make out.
 //!
 //! Stock Armada II only grows small objects a little in its strategic view
 //! (`cfgMIN_STRATEGIC_VIEW_OBJECT_RADIUS` 25, at most x1.75); on large maps that
@@ -12,10 +12,9 @@
 //!   load (`sta_assets::silhouette`, the same look). Ships turn with their heading.
 //! - Without a model: an arrow for ships, a square for stations, a circle for
 //!   support craft.
-//! - Each icon fades in as its object's on-screen radius falls from
-//!   [`FADE_START_PX`] to [`FADE_FULL_PX`]. Tab cycles auto / always / off.
-//! - Zoomed out past [`STRATEGIC_HEIGHT`] (or Tab on "always") the view is
-//!   strategic: models hide, every unit shows as an icon, a grid is drawn on the
+//! - Each icon replaces its model below [`SYMBOL_ENTER_PX`] and returns to the
+//!   model above [`MODEL_RETURN_PX`]. Tab cycles auto / always / off.
+//! - Zoomed out past [`STRATEGIC_HEIGHT`] the view gains a grid on the
 //!   map plane, and a height bar drops from each unit to it. Icons within
 //!   [`STACK_RADIUS_PX`] on screen merge into one fleet icon with a count badge,
 //!   grouped by id order (see [`stack`]).
@@ -29,9 +28,9 @@ use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
-/// On-screen radius (px) where an icon starts to show, and where it is solid.
-pub const FADE_START_PX: f32 = 14.0;
-pub const FADE_FULL_PX: f32 = 7.0;
+/// Projected-radius thresholds in logical pixels, with a hysteresis interval.
+pub const SYMBOL_ENTER_PX: f32 = 7.0;
+pub const MODEL_RETURN_PX: f32 = 10.0;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Shape {
@@ -45,8 +44,12 @@ pub enum Shape {
 pub struct Strategic {
     pub shape: Shape,
     pub colour: Color,
-    /// World radius (for the fade and the icon's size tier).
+    /// Model radius after ScaleSOD; root/parent scale is applied when projecting.
     pub radius: f32,
+    /// The model-bound centre in local Bevy coordinates.
+    pub centre: Vec3,
+    /// This frame's exclusive representation choice, including offscreen roots.
+    pub symbol: bool,
     /// How much the icon shows this frame (0 hidden, 1 solid), and where.
     pub shown: f32,
     pub screen: Vec2,
@@ -55,11 +58,17 @@ pub struct Strategic {
     /// is a sprite in an atlas; `None`: the generic `shape`.
     pub image: Option<Handle<Image>>,
     pub uv: Option<[f32; 4]>,
+    owned_visibility: Option<Visibility>,
 }
 
 impl Strategic {
     pub fn new(shape: Shape, colour: Color, radius: f32) -> Self {
-        Strategic { shape, colour, radius, shown: 0.0, screen: Vec2::ZERO, size_px: icon_size(shape, radius), image: None, uv: None }
+        Strategic { shape, colour, radius, centre: Vec3::ZERO, symbol: false, shown: 0.0, screen: Vec2::ZERO, size_px: icon_size(shape, radius), image: None, uv: None, owned_visibility: None }
+    }
+
+    pub fn with_centre(mut self, centre: Vec3) -> Self {
+        self.centre = centre;
+        self
     }
 
     /// With a silhouette image (`uv`: its rectangle in an atlas).
@@ -69,6 +78,12 @@ impl Strategic {
         self.size_px = silhouette_size(self.radius);
         self
     }
+}
+
+/// Midpoint of imported model bounds after ScaleSOD, mirrored into Bevy's Z convention.
+pub fn centre_for_bounds(lo: [f32; 3], hi: [f32; 3], scale: f32) -> Vec3 {
+    let mid = (Vec3::from(lo) + Vec3::from(hi)) * (0.5 * scale);
+    Vec3::new(mid.x, mid.y, -mid.z)
 }
 
 /// A silhouette's edge in pixels: small craft 18, growing with size to 40.
@@ -135,9 +150,34 @@ pub fn shape_for(class: &str, mobile: bool) -> Shape {
     }
 }
 
-/// How much an icon shows for an object `px` pixels in radius on screen.
-pub fn fade(px: f32) -> f32 {
-    ((FADE_START_PX - px) / (FADE_START_PX - FADE_FULL_PX)).clamp(0.0, 1.0)
+/// Choose one representation; retain the previous choice inside the gap.
+pub fn symbol_for_radius(mode: Mode, previous: bool, px: f32) -> bool {
+    match mode {
+        Mode::Always => true,
+        Mode::Off => false,
+        Mode::Auto if previous => px < MODEL_RETURN_PX,
+        Mode::Auto => px <= SYMBOL_ENTER_PX,
+    }
+}
+
+fn gate_model(s: &mut Strategic, visibility: &mut Visibility, symbol: bool) -> bool {
+    let externally_hidden = s.owned_visibility.is_none() && *visibility == Visibility::Hidden;
+    if symbol && !externally_hidden {
+        if s.owned_visibility.is_none() {
+            s.owned_visibility = Some(*visibility);
+        }
+        *visibility = Visibility::Hidden;
+    } else if let Some(original) = s.owned_visibility.take() {
+        *visibility = original;
+    }
+    s.symbol = symbol;
+    !externally_hidden
+}
+
+/// UI nodes use viewport-local coordinates scaled by `UiScale`.
+fn icon_node_geometry(screen: Vec2, viewport_min: Vec2, size_px: f32, ui_scale: f32) -> (Vec2, f32) {
+    let scale = if ui_scale > 0.0 { ui_scale } else { 1.0 };
+    ((screen - viewport_min - Vec2::splat(size_px * 0.5)) / scale, size_px / scale)
 }
 
 #[derive(Resource, Default, Clone, Copy, PartialEq, Eq, Debug)]
@@ -194,7 +234,6 @@ pub struct StrategicView {
     pub grid_lines: usize,
     /// Units whose own icon is folded into another's.
     pub folded: std::collections::BTreeSet<EntityId>,
-    models_hidden: bool,
 }
 
 /// Merge units whose screen distance is under `radius_px` into stacks. Units go
@@ -243,11 +282,14 @@ impl Plugin for StrategicPlugin {
             .init_resource::<StrategicView>()
             .add_systems(Startup, make_masks)
             .add_systems(Update, (toggle, ensure_icons, attach).chain())
-            .add_systems(PostUpdate, (compute, draw.run_if(resource_exists::<bevy::gizmos::config::GizmoConfigStore>)).chain().before(update))
-            // After this frame's transforms, before the UI lays the icons out.
+            .add_systems(PostUpdate, draw.run_if(resource_exists::<bevy::gizmos::config::GizmoConfigStore>).after(update))
+            // The handoff precedes both model visibility propagation and UI layout.
             .add_systems(
                 PostUpdate,
-                update.after(TransformSystems::Propagate).before(bevy::ui::UiSystems::Prepare),
+                update.after(TransformSystems::Propagate)
+                    .after(bevy::camera::CameraUpdateSystems)
+                    .before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate)
+                    .before(bevy::ui::UiSystems::Prepare),
             );
     }
 }
@@ -350,61 +392,6 @@ fn ensure_icons(
     }
 }
 
-fn view_params(cam: Option<&Camera>, proj: Option<&Projection>) -> f32 {
-    let view = cam.and_then(|c| c.logical_viewport_size()).unwrap_or(Vec2::new(1280.0, 720.0));
-    let fov = match proj {
-        Some(Projection::Perspective(p)) => p.fov,
-        _ => 0.8,
-    };
-    view.y * 0.5 / (fov * 0.5).tan()
-}
-
-/// Decide the mode, stack icons, list height bars, count grid lines, and show
-/// models or hide them.
-#[allow(clippy::type_complexity)]
-fn compute(
-    mode: Res<Mode>,
-    camera: Query<(&Camera, &Transform, Option<&Projection>), crate::map::MainCamera>,
-    mut units: Query<(&SimEntity, &Transform, &mut Visibility), With<Strategic>>,
-    mut view: ResMut<StrategicView>,
-) {
-    let Ok((cam, tf, proj)) = camera.single() else { return };
-    let eye = tf.translation;
-    let fwd = tf.forward().as_vec3();
-    let active = match *mode {
-        Mode::Always => true,
-        Mode::Off => false,
-        Mode::Auto => eye.y.abs() > STRATEGIC_HEIGHT,
-    };
-    view.active = active;
-    view.icons.clear();
-    view.bars.clear();
-    view.folded.clear();
-    view.grid_lines = 0;
-    if active {
-        let list: Vec<(EntityId, Vec3)> = units.iter().map(|(s, t, _)| (s.0, t.translation)).collect();
-        view.icons = stack(&list, eye, fwd, view_params(Some(cam), proj), STACK_RADIUS_PX);
-        let folded: Vec<EntityId> = view.icons.iter().flat_map(|i| i.members.iter().skip(1).copied()).collect();
-        view.folded.extend(folded);
-        view.bars = list
-            .iter()
-            .map(|&(unit, p)| HeightBar { unit, top: p, bottom: Vec3::new(p.x, 0.0, p.z) })
-            .collect();
-        view.bars.sort_by_key(|b| b.unit);
-        view.grid_lines = (GRID_HALF_CELLS as usize * 2 + 1) * 2;
-    }
-    // Units that appear while strategic hide too; coming back restores them once.
-    if active || view.models_hidden {
-        for (_, _, mut v) in &mut units {
-            let want = if active { Visibility::Hidden } else { Visibility::Inherited };
-            if *v != want {
-                *v = want;
-            }
-        }
-    }
-    view.models_hidden = active;
-}
-
 fn draw(view: Res<StrategicView>, camera: Query<&Transform, crate::map::MainCamera>, mut gizmos: Gizmos) {
     if !view.active {
         return;
@@ -480,17 +467,28 @@ fn attach(mut commands: Commands, masks: Res<Masks>, added: Query<(Entity, &Stra
 fn update(
     mut commands: Commands,
     mode: Res<Mode>,
-    camera: Query<(&Camera, &GlobalTransform, &Projection), crate::map::MainCamera>,
-    mut objects: Query<(&GlobalTransform, &mut Strategic, Option<&SimEntity>)>,
+    camera: Query<(Entity, &Camera, &GlobalTransform, &Projection), crate::map::MainCamera>,
+    mut objects: Query<(&GlobalTransform, &mut Strategic, &mut Visibility, Option<&SimEntity>), With<Strategic>>,
     selection: Res<Selection>,
-    mut icons: Query<(Entity, &Icon, &mut Node, &mut ImageNode, &mut UiTransform)>,
-    mut outlines: Query<&mut Visibility, Without<Icon>>,
+    mut icons: Query<(Entity, &Icon, &mut Node, &mut ImageNode, &mut UiTransform, Option<&UiTargetCamera>)>,
+    mut outlines: Query<&mut Visibility, (Without<Icon>, Without<Strategic>)>,
     mut texts: Query<&mut Text>,
-    sv: Res<StrategicView>,
+    mut sv: ResMut<StrategicView>,
     images: Res<Assets<Image>>,
+    ui_scale: Option<Res<UiScale>>,
 ) {
-    let Ok((cam, cam_tf, proj)) = camera.single() else { return };
-    let Some(view) = cam.logical_viewport_size() else { return };
+    let Ok((camera_e, cam, cam_tf, proj)) = camera.single() else {
+        clear_unprojected(&mut objects, &mut icons, &mut sv);
+        return;
+    };
+    let Some(view) = cam.logical_viewport_size() else {
+        clear_unprojected(&mut objects, &mut icons, &mut sv);
+        return;
+    };
+    let Some(viewport) = cam.logical_viewport_rect() else {
+        clear_unprojected(&mut objects, &mut icons, &mut sv);
+        return;
+    };
     let fov = match proj {
         Projection::Perspective(p) => p.fov,
         _ => 0.8,
@@ -499,33 +497,64 @@ fn update(
     let focal = view.y * 0.5 / (fov * 0.5).tan();
     let eye = cam_tf.translation();
     let fwd = cam_tf.forward().as_vec3();
-    for (icon_e, icon, mut node, mut img, mut ui_tf) in &mut icons {
-        let Ok((gt, mut s, sim)) = objects.get_mut(icon.target) else {
+    let scale = ui_scale.map_or(1.0, |s| if s.0 > 0.0 { s.0 } else { 1.0 });
+    sv.active = match *mode {
+        Mode::Always => true,
+        Mode::Off => false,
+        Mode::Auto => eye.y.abs() > STRATEGIC_HEIGHT,
+    };
+    sv.grid_lines = if sv.active { (GRID_HALF_CELLS as usize * 2 + 1) * 2 } else { 0 };
+    sv.icons.clear();
+    sv.bars.clear();
+    sv.folded.clear();
+    let mut list = Vec::new();
+    for (gt, mut s, mut visibility, sim) in &mut objects {
+        let pos = gt.transform_point(s.centre);
+        let depth = (pos - eye).dot(fwd);
+        let screen = if depth > 1.0 { cam.world_to_viewport(cam_tf, pos).ok().filter(|p| viewport.contains(*p)) } else { None };
+        let root_scale = gt.to_scale_rotation_translation().0.abs().max_element();
+        let projected_radius = if depth > 1.0 { s.radius * root_scale * focal / depth } else { f32::INFINITY };
+        let symbol = symbol_for_radius(*mode, s.symbol, projected_radius);
+        let eligible = gate_model(&mut s, &mut visibility, symbol);
+        s.shown = if symbol && eligible && screen.is_some() { 1.0 } else { 0.0 };
+        if let Some(p) = screen {
+            s.screen = p;
+        }
+        if s.shown > 0.0
+            && let Some(sim) = sim
+        {
+            list.push((sim.0, pos));
+        }
+    }
+    sv.icons = stack(&list, eye, fwd, focal, STACK_RADIUS_PX);
+    let folded: Vec<EntityId> = sv.icons.iter().flat_map(|i| i.members.iter().skip(1).copied()).collect();
+    sv.folded.extend(folded);
+    if sv.active {
+        sv.bars = list.iter().map(|&(unit, p)| HeightBar { unit, top: p, bottom: Vec3::new(p.x, 0.0, p.z) }).collect();
+        sv.bars.sort_by_key(|b| b.unit);
+    }
+    for (icon_e, icon, mut node, mut img, mut ui_tf, target_camera) in &mut icons {
+        if target_camera.is_none_or(|target| target.0 != camera_e) {
+            commands.entity(icon_e).insert(UiTargetCamera(camera_e));
+        }
+        let Ok((gt, mut s, _, sim)) = objects.get_mut(icon.target) else {
             commands.entity(icon_e).despawn();
             continue;
         };
         let selected = sim.is_some_and(|e| selection.0.contains(&e.0));
-        let pos = gt.translation();
-        let depth = (pos - eye).dot(fwd);
-        let screen = if depth > 1.0 { cam.world_to_viewport(cam_tf, pos).ok() } else { None };
-        let shown = match (*mode, screen) {
-            (_, None) | (Mode::Off, _) => 0.0,
-            (Mode::Always, _) => 1.0,
-            (Mode::Auto, _) if sv.active => 1.0,
-            (Mode::Auto, _) => fade(s.radius * focal / depth),
-        };
-        s.shown = shown;
-        let Some(p) = screen.filter(|_| shown > 0.0) else {
+        let Some(p) = (s.shown > 0.0).then_some(s.screen) else {
             node.display = Display::None;
             continue;
         };
-        s.screen = p;
         let id = sim.map(|e| e.0);
         // Folded into a fleet icon: only the leader draws.
-        let folded = sv.active && id.is_some_and(|i| sv.folded.contains(&i));
+        let folded = id.is_some_and(|i| sv.folded.contains(&i));
+        if folded {
+            s.shown = 0.0;
+        }
         let count = id.and_then(|i| sv.icons.iter().find(|s| s.leader == i)).map_or(1, StackIcon::count);
         if let Ok(mut v) = outlines.get_mut(icon.badge) {
-            *v = if sv.active && count > 1 { Visibility::Inherited } else { Visibility::Hidden };
+            *v = if count > 1 && !folded { Visibility::Inherited } else { Visibility::Hidden };
         }
         if count > 1
             && let Ok(mut t) = texts.get_mut(icon.badge)
@@ -534,9 +563,12 @@ fn update(
             t.0 = count.to_string();
         }
         node.display = if folded { Display::None } else { Display::Flex };
-        node.left = Val::Px(p.x - s.size_px * 0.5);
-        node.top = Val::Px(p.y - s.size_px * 0.5);
-        img.color = s.colour.with_alpha(shown);
+        let (ui_pos, ui_size) = icon_node_geometry(p, viewport.min, s.size_px, scale);
+        node.width = Val::Px(ui_size);
+        node.height = Val::Px(ui_size);
+        node.left = Val::Px(ui_pos.x);
+        node.top = Val::Px(ui_pos.y);
+        img.color = s.colour;
         // An atlas sprite: its rectangle in pixels once the atlas has loaded.
         if img.rect.is_none()
             && let (Some(uv), Some(h)) = (s.uv, s.image.as_ref())
@@ -549,6 +581,7 @@ fn update(
         // shapes only the ships' arrow turns.
         if s.image.is_some() || s.shape == Shape::Arrow {
             // Point along the heading as it falls on the screen.
+            let pos = gt.transform_point(s.centre);
             let ahead = cam.world_to_viewport(cam_tf, pos + gt.forward().as_vec3() * s.radius.max(1.0)).ok();
             if let Some(a) = ahead.map(|a| a - p).filter(|d| d.length_squared() > 1e-6) {
                 // The mask points up (-y on screen); UI rotation is clockwise.
@@ -561,18 +594,70 @@ fn update(
     }
 }
 
+#[allow(clippy::type_complexity)]
+fn clear_unprojected(
+    objects: &mut Query<(&GlobalTransform, &mut Strategic, &mut Visibility, Option<&SimEntity>), With<Strategic>>,
+    icons: &mut Query<(Entity, &Icon, &mut Node, &mut ImageNode, &mut UiTransform, Option<&UiTargetCamera>)>,
+    view: &mut StrategicView,
+) {
+    view.active = false;
+    view.icons.clear();
+    view.bars.clear();
+    view.folded.clear();
+    view.grid_lines = 0;
+    for (_, mut s, mut visibility, _) in objects.iter_mut() {
+        s.shown = 0.0;
+        s.symbol = false;
+        if let Some(original) = s.owned_visibility.take() {
+            *visibility = original;
+        }
+    }
+    for (_, _, mut node, _, _, _) in icons.iter_mut() {
+        node.display = Display::None;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn icons_fade_in_as_ships_shrink() {
-        assert_eq!(fade(40.0), 0.0);
-        assert_eq!(fade(FADE_START_PX), 0.0);
-        assert_eq!(fade(FADE_FULL_PX), 1.0);
-        assert_eq!(fade(1.0), 1.0);
-        let mid = fade((FADE_START_PX + FADE_FULL_PX) * 0.5);
-        assert!((mid - 0.5).abs() < 1e-5);
+    fn exclusive_handoff_has_a_hysteresis_gap_and_mode_overrides() {
+        assert!(!symbol_for_radius(Mode::Auto, false, 7.01));
+        assert!(symbol_for_radius(Mode::Auto, false, 7.0));
+        assert!(symbol_for_radius(Mode::Auto, true, 9.99));
+        assert!(!symbol_for_radius(Mode::Auto, true, 10.0));
+        assert!(symbol_for_radius(Mode::Always, false, 100.0));
+        assert!(!symbol_for_radius(Mode::Off, true, 0.0));
+    }
+
+    #[test]
+    fn model_bounds_centre_uses_scale_and_z_mirror() {
+        assert_eq!(centre_for_bounds([2.0, -4.0, 6.0], [6.0, 2.0, 10.0], 2.0), Vec3::new(8.0, -2.0, -16.0));
+        assert_eq!(Strategic::new(Shape::Square, Color::WHITE, 2.0).with_centre(Vec3::X).centre, Vec3::X);
+    }
+
+    #[test]
+    fn root_visibility_is_restored_only_when_owned() {
+        // No SimEntity is needed: this is the same gate used for static roots.
+        let mut static_root = Strategic::new(Shape::Square, Color::WHITE, 20.0);
+        let mut visible = Visibility::Visible;
+        assert!(gate_model(&mut static_root, &mut visible, true));
+        assert_eq!(visible, Visibility::Hidden);
+        assert!(static_root.symbol);
+        assert!(gate_model(&mut static_root, &mut visible, false));
+        assert_eq!(visible, Visibility::Visible);
+        let mut hidden = Visibility::Hidden;
+        assert!(!gate_model(&mut static_root, &mut hidden, true));
+        assert_eq!(hidden, Visibility::Hidden);
+        assert_eq!(static_root.owned_visibility, None);
+    }
+
+    #[test]
+    fn ui_geometry_is_viewport_local_and_unscaled() {
+        let (pos, size) = icon_node_geometry(Vec2::new(500.0, 350.0), Vec2::new(100.0, 50.0), 20.0, 2.0);
+        assert_eq!(pos, Vec2::new(195.0, 145.0));
+        assert_eq!(size, 10.0);
     }
 
     #[test]
@@ -613,6 +698,7 @@ mod tests {
 #[cfg(test)]
 mod view_tests {
     use super::*;
+    use bevy::camera::{CameraProjection, ComputedCameraValues, RenderTargetInfo};
     use crate::app::configure_sets;
     use crate::render::units::{LocalPlayer, add_view_systems};
     use crate::sim_link::{SimLink, SimLinkPlugin};
@@ -628,6 +714,7 @@ mod view_tests {
         let db = sta_content::ContentDb::builder().build().unwrap();
         let source = ScriptedSource::from_json5(text, &db).unwrap();
         app.add_plugins(MinimalPlugins)
+            .add_plugins(bevy::transform::TransformPlugin)
             .add_plugins(AssetPlugin::default())
             .init_asset::<Image>()
             .init_resource::<Selection>()
@@ -640,7 +727,17 @@ mod view_tests {
         configure_sets(&mut app);
         add_view_systems(&mut app);
         app.add_plugins(StrategicPlugin);
-        app.world_mut().spawn((Camera3d::default(), Transform::from_xyz(0.0, cam_y, 0.0).looking_to(Vec3::NEG_Y, Vec3::NEG_Z)));
+        let mut projection = PerspectiveProjection::default();
+        projection.update(1280.0, 720.0);
+        let camera = Camera {
+            computed: ComputedCameraValues {
+                clip_from_view: projection.get_clip_from_view(),
+                target_info: Some(RenderTargetInfo { physical_size: UVec2::new(1280, 720), scale_factor: 1.0 }),
+                ..default()
+            },
+            ..default()
+        };
+        app.world_mut().spawn((Camera3d::default(), camera, Projection::Perspective(projection), Transform::from_xyz(0.0, cam_y, 0.0).looking_to(Vec3::NEG_Y, Vec3::NEG_Z)));
         app
     }
 
@@ -659,6 +756,65 @@ mod view_tests {
     fn visible(app: &mut App, id: u32) -> Visibility {
         let mut q = app.world_mut().query::<(&SimEntity, &Visibility)>();
         *q.iter(app.world()).find(|(s, _)| s.0 == EntityId(id)).unwrap().1
+    }
+
+    fn camera_height(app: &mut App, y: f32) {
+        let mut q = app.world_mut().query_filtered::<&mut Transform, With<Camera3d>>();
+        q.single_mut(app.world_mut()).unwrap().translation.y = y;
+        app.update();
+    }
+
+    fn static_state(app: &mut App, root: Entity) -> (Visibility, bool, f32, Display) {
+        let s = app.world().get::<Strategic>(root).unwrap();
+        let visibility = *app.world().get::<Visibility>(root).unwrap();
+        let symbol = s.symbol;
+        let shown = s.shown;
+        let mut icons = app.world_mut().query::<(&Icon, &Node)>();
+        let display = icons.iter(app.world()).find(|(i, _)| i.target == root).unwrap().1.display;
+        (visibility, symbol, shown, display)
+    }
+
+    #[test]
+    fn static_roots_handoff_exclusively_at_projected_thresholds() {
+        let mut app = rig(&world(&[]), None, 1600.0);
+        let small = app.world_mut().spawn((Strategic::new(Shape::Arrow, Color::WHITE, 20.0), Transform::default(), Visibility::Inherited)).id();
+        let large = app.world_mut().spawn((Strategic::new(Shape::Square, Color::WHITE, 300.0), Transform::from_xyz(400.0, 0.0, 0.0), Visibility::Inherited)).id();
+        app.update();
+        app.update();
+        assert_eq!(static_state(&mut app, small), (Visibility::Inherited, false, 0.0, Display::None));
+        camera_height(&mut app, 2500.0); // ~6.8 px for the small root
+        assert_eq!(static_state(&mut app, small), (Visibility::Hidden, true, 1.0, Display::Flex));
+        assert_eq!(static_state(&mut app, large), (Visibility::Inherited, false, 0.0, Display::None));
+        camera_height(&mut app, 2100.0); // ~8.1 px: retain symbol
+        assert_eq!(static_state(&mut app, small), (Visibility::Hidden, true, 1.0, Display::Flex));
+        camera_height(&mut app, 1800.0); // ~9.5 px: still symbol
+        assert_eq!(static_state(&mut app, small), (Visibility::Hidden, true, 1.0, Display::Flex));
+        camera_height(&mut app, 1600.0); // >10 px: restore model
+        assert_eq!(static_state(&mut app, small), (Visibility::Inherited, false, 0.0, Display::None));
+    }
+
+    #[test]
+    fn hidden_static_root_stays_hidden_and_camera_loss_restores_owned_visibility() {
+        let mut app = rig(&world(&[]), None, 300.0);
+        let hidden = app.world_mut().spawn((Strategic::new(Shape::Square, Color::WHITE, 20.0), Transform::default(), Visibility::Hidden)).id();
+        let owned = app.world_mut().spawn((Strategic::new(Shape::Arrow, Color::WHITE, 20.0), Transform::from_xyz(200.0, 0.0, 0.0), Visibility::Visible)).id();
+        app.update();
+        *app.world_mut().resource_mut::<Mode>() = Mode::Always;
+        app.update();
+        assert_eq!(static_state(&mut app, hidden), (Visibility::Hidden, true, 0.0, Display::None));
+        assert_eq!(static_state(&mut app, owned), (Visibility::Hidden, true, 1.0, Display::Flex));
+        *app.world_mut().resource_mut::<Mode>() = Mode::Off;
+        app.update();
+        assert_eq!(static_state(&mut app, hidden), (Visibility::Hidden, false, 0.0, Display::None));
+        assert_eq!(static_state(&mut app, owned), (Visibility::Visible, false, 0.0, Display::None));
+        *app.world_mut().resource_mut::<Mode>() = Mode::Always;
+        app.update();
+        let mut q = app.world_mut().query_filtered::<Entity, With<Camera3d>>();
+        let camera = q.single(app.world()).unwrap();
+        app.world_mut().despawn(camera);
+        app.update();
+        assert_eq!(static_state(&mut app, hidden), (Visibility::Hidden, false, 0.0, Display::None));
+        assert_eq!(static_state(&mut app, owned), (Visibility::Visible, false, 0.0, Display::None));
     }
 
     #[test]
@@ -732,12 +888,19 @@ mod view_tests {
         let mut all = rig(&world(&us), None, 6000.0);
         all.update();
         all.update();
-        assert_eq!(view(&all).icons.len(), 3);
+        assert_eq!(view(&all).icons.len(), 2);
+        let mut q = all.world_mut().query::<(&SimEntity, &Strategic)>();
+        assert_eq!(q.iter(all.world()).find(|(e, _)| e.0 == EntityId(2)).unwrap().1.shown, 0.0);
         let mut mine = rig(&world(&us), Some(PlayerId(1)), 6000.0);
         mine.update();
         mine.update();
-        let n = view(&mine).icons.len();
-        let seen = mine.world().resource::<SimLink>().curr().visible_to(PlayerId(1)).len();
-        assert_eq!(n, seen);
+        let drawn: Vec<EntityId> = view(&mine).icons.iter().flat_map(|icon| icon.members.iter().copied()).collect();
+        let seen: Vec<EntityId> = mine.world().resource::<SimLink>().curr().visible_to(PlayerId(1)).iter().map(|u| u.id).collect();
+        assert!(drawn.iter().all(|id| seen.contains(id)));
+        assert_eq!(drawn, vec![EntityId(1), EntityId(3)]);
     }
 }
+
+#[cfg(test)]
+#[path = "strategic_gpu.rs"]
+mod gpu_tests;
