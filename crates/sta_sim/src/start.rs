@@ -108,7 +108,7 @@ mod tests {
         // Authored placement is covered here; missing FO lifecycle effects are separate.
         let s = setup();
         let races = Races::from_defs(vec![RaceDef {
-            stem: "fx".into(), name: "fx".into(), slot: Some(0),
+            stem: "fx".into(), name: "fx".into(), display_key: None, slot: Some(0),
             interface: None, interface_sprites: None,
             single_player_music: None, multiplayer_music: None,
             standard_units: vec!["fx_station".into(), "missing".into(), "fx_beam".into(), "fx_station".into()],

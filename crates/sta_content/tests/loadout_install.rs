@@ -153,6 +153,7 @@ fn a_start_unit_without_a_model_is_reported() {
     let def = RaceDef {
         stem: "fx".into(),
         name: "fx".into(),
+        display_key: None,
         slot: Some(1),
         interface: None,
         interface_sprites: None,

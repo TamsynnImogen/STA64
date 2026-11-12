@@ -34,6 +34,8 @@ pub struct RaceDef {
     pub stem: String,
     /// The race key of its units, lower case (`unitedfederation`).
     pub name: String,
+    /// Authored localization key or literal caption; never a simulation race ID.
+    pub display_key: Option<String>,
     /// `instantactionslot`: `None` when the race is not playable.
     pub slot: Option<i64>,
     /// `interfaceconfiguration` (`gui_federation.cfg`).
@@ -170,6 +172,7 @@ impl Races {
                     races.push(RaceDef {
                         stem: s,
                         name,
+                        display_key: text("displaykey"),
                         slot,
                         interface: text("interfaceconfiguration"),
                         interface_sprites: text("interfacesprites"),
@@ -421,6 +424,24 @@ mod tests {
         assert_eq!(child.interface_sprites.as_deref(), Some("authored.spr"));
         assert_eq!(races.get("blank").unwrap().interface_sprites, None);
         assert_eq!(races.get("absent").unwrap().interface_sprites, None);
+    }
+
+    #[test]
+    fn display_key_preserves_authored_case_literal_and_inheritance() {
+        let (races, warnings) = Races::load_with(&mut loader(&[
+            ("races", "race0=child\nrace1=literal\nrace2=blank\nrace3=absent"),
+            ("parent", "name=internal_fed\ndisplayKey=GUI_RD_FEDERATION"),
+            ("child", "#include \"parent.odf\"\ninstantActionSlot=0"),
+            ("literal", "name=internal_borg\ndisplayKey=\"Borg Collective\"\ninstantActionSlot=1"),
+            ("blank", "name=blank\ndisplayKey=\" \""),
+            ("absent", "name=absent"),
+        ]));
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(races.get("child").unwrap().display_key.as_deref(), Some("GUI_RD_FEDERATION"));
+        assert_eq!(races.get("literal").unwrap().display_key.as_deref(), Some("Borg Collective"));
+        assert_eq!(races.get("blank").unwrap().display_key, None);
+        assert_eq!(races.get("absent").unwrap().display_key, None);
+        assert_eq!(races.playable().iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), ["internal_fed", "internal_borg"]);
     }
 
     #[test]

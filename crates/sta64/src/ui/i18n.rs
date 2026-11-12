@@ -50,6 +50,7 @@ impl Default for Language {
 pub struct Strings {
     pub language: String,
     map: HashMap<String, String>,
+    game: StringTable,
 }
 
 fn active() -> &'static RwLock<HashMap<String, String>> {
@@ -78,6 +79,7 @@ impl Strings {
         Strings {
             language: language.to_owned(),
             map,
+            game,
         }
     }
 
@@ -90,7 +92,14 @@ impl Strings {
                 .iter()
                 .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
                 .collect(),
+            game: StringTable::default(),
         }
+    }
+
+    /// Resolve a native game key from the mounted `Dynamic_Localized_Strings.h`.
+    /// An absent key is displayed literally, as in the game's string table.
+    pub fn game_text<'a>(&'a self, key: &'a str) -> &'a str {
+        self.game.get_or_key(key)
     }
 
     /// Makes this the table [`tr`] reads.
@@ -127,14 +136,18 @@ pub fn trf(key: &str, args: &[&dyn std::fmt::Display]) -> String {
     s
 }
 
-/// Reloads the table when [`Language`] changes. The host mounts the install as [`crate::viewer::Mounted`]; with
-/// no install the table stays empty.
+/// Reloads the table when [`Language`] or the mounted install changes.
+/// With no install the table stays empty.
 fn reload(
     lang: Res<Language>,
     vfs: Option<Res<crate::viewer::Mounted>>,
     mut strings: ResMut<Strings>,
+    mut had_mount: Local<bool>,
 ) {
-    if !lang.is_changed() && strings.language == lang.0 {
+    let mounted = vfs.is_some();
+    let mount_changed = vfs.as_ref().is_some_and(|v| v.is_changed()) || *had_mount != mounted;
+    *had_mount = mounted;
+    if !lang.is_changed() && !mount_changed && strings.language == lang.0 {
         return;
     }
     *strings = match vfs {
@@ -161,6 +174,32 @@ impl Plugin for I18nPlugin {
 mod tests {
     use super::*;
 
+    struct TempRoot(std::path::PathBuf);
+
+    impl TempRoot {
+        fn new() -> Self {
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!("sta64_i18n_{}_{stamp}", std::process::id()));
+            std::fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TempRoot {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn mount(path: &std::path::Path) -> crate::viewer::Mounted {
+        let mut vfs = Vfs::default();
+        vfs.push_dir("test".into(), path.to_owned()).unwrap();
+        crate::viewer::Mounted(vfs)
+    }
+
     #[test]
     fn falls_back_to_the_key_and_formats() {
         assert_eq!(tr("Zzz unlikely key"), "Zzz unlikely key");
@@ -174,6 +213,56 @@ mod tests {
         assert_eq!(g.get("GUI_B"), Some("b"));
         let p: Vec<_> = parse_pairs("# c\nHold\tHalten\n").collect();
         assert_eq!(p, vec![("Hold".to_owned(), "Halten".to_owned())]);
+    }
+
+    #[test]
+    fn native_keys_load_from_layers_with_literal_fallback() {
+        let root = TempRoot::new();
+        let base = root.0.join("base");
+        let upper = root.0.join("upper");
+        std::fs::create_dir(&base).unwrap();
+        std::fs::create_dir(&upper).unwrap();
+        std::fs::write(base.join("Dynamic_Localized_Strings.h"), b"\"RACE_A\", \"Caf\xe9\", \"RACE_B\", \"Base\", \"GUI_CV_MIN_TOOLTIP\", \"Native tooltip\"").unwrap();
+        std::fs::write(upper.join("Dynamic_Localized_Strings.h"), "\"RACE_B\", \"Über\"").unwrap();
+        std::fs::write(upper.join("sta64_english.strings"), "Double click to return to strategic mode.\tSTA64 tooltip\n").unwrap();
+        let mut vfs = Vfs::default();
+        vfs.push_dir("upper".into(), upper).unwrap();
+        vfs.push_dir("base".into(), base).unwrap();
+        let strings = Strings::load(&vfs, "english");
+        assert_eq!(strings.game_text("RACE_A"), "Café");
+        assert_eq!(strings.game_text("RACE_B"), "Über");
+        assert_eq!(strings.game_text("Literal Race"), "Literal Race");
+        assert!(!strings.map.contains_key("RACE_A"));
+        assert_eq!(strings.game_text("GUI_CV_MIN_TOOLTIP"), "Native tooltip");
+        assert_eq!(strings.map.get("Double click to return to strategic mode.").map(String::as_str), Some("STA64 tooltip"));
+    }
+
+    #[test]
+    fn same_language_mount_insert_replace_and_remove_reload_strings() {
+        let root = TempRoot::new();
+        let first = root.0.join("first");
+        let second = root.0.join("second");
+        std::fs::create_dir(&first).unwrap();
+        std::fs::create_dir(&second).unwrap();
+        std::fs::write(first.join("Dynamic_Localized_Strings.h"), "\"RACE\", \"First\"").unwrap();
+        std::fs::write(second.join("Dynamic_Localized_Strings.h"), "\"RACE\", \"Second\"").unwrap();
+        let mut app = App::new();
+        app.add_plugins(I18nPlugin);
+        app.update();
+        assert_eq!(app.world().resource::<Strings>().game_text("RACE"), "RACE");
+
+        app.insert_resource(mount(&first));
+        app.update();
+        assert_eq!(app.world().resource::<Strings>().game_text("RACE"), "First");
+        assert_eq!(app.world().resource::<Strings>().language, "english");
+
+        app.insert_resource(mount(&second));
+        app.update();
+        assert_eq!(app.world().resource::<Strings>().game_text("RACE"), "Second");
+
+        app.world_mut().remove_resource::<crate::viewer::Mounted>();
+        app.update();
+        assert_eq!(app.world().resource::<Strings>().game_text("RACE"), "RACE");
     }
 
     #[test]

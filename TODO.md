@@ -98,6 +98,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] UI-18 authored labels/colours and starts (#371): in Classic/Federation, check both starting constructors, select/reselect a new ship and confirm a stable full craft name plus its `unitName` type. Check selected and builder labels, the top name, and FO4 separate name/class colours against the mounted CFG. Known factions use only their standardUnits list; FO4 start-effect/faction lifecycle remains unsupported, without synthetic constructor injection. See [UNIT_INFO_STARTS.md](docs/UNIT_INFO_STARTS.md).
 
+- [?] Faction display names (#371): the race picker should show the faction ODF `displayKey` through `Dynamic_Localized_Strings.h`, falling back to the literal display key when absent. Check Classic and FO4 captions and cycle/launch a race; simulation IDs must remain unchanged. See [RACE_DISPLAY_NAMES.md](docs/RACE_DISPLAY_NAMES.md).
+
 ## Checked earlier (morning list)
 
 - [x] Construction live-feedback fixes accepted (2026-11-11, `construction-a1666d0`): the user confirmed visible beams, later chunk reveal and the constructor staying fixed under normal/queued movement. Automated Stop/cancellation and snapshot checks pass. FPS was not reported; this does not complete broader native/Android checks above.

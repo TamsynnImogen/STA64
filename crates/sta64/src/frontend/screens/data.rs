@@ -82,6 +82,17 @@ impl ScreenData {
         sta_content::race::skirmish_races(&self.races, &self.content)
     }
 
+    /// User-facing caption, separate from the canonical ID used by setup/simulation.
+    pub fn race_label(&self, id: &str, strings: Option<&crate::ui::i18n::Strings>) -> String {
+        if id.is_empty() { return crate::ui::i18n::tr("none"); }
+        let key = self.races.get_playable(id).or_else(|| self.races.get(id))
+            .and_then(|race| race.display_key.as_deref());
+        match key {
+            Some(key) => strings.map_or(key, |strings| strings.game_text(key)).to_owned(),
+            None => id.to_owned(),
+        }
+    }
+
     /// Every mod in a `Data` folder (CON-13), and a note for each folder skipped.
     pub fn mods_in(data: &Path) -> (Vec<ModEntry>, Vec<String>) {
         match sta_vfs::mods::list_mods(data) {

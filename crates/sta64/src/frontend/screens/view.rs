@@ -77,6 +77,7 @@ fn scroll_list(theme: &Theme, rows: &[&str], picked: Option<usize>, scroll: f32,
 pub struct Ctx<'a> {
     pub theme: &'a Theme,
     pub data: &'a ScreenData,
+    pub strings: Option<&'a crate::ui::i18n::Strings>,
     pub draft: &'a SetupDraft,
     pub browse: &'a Browse,
     pub settings: &'a Settings,
@@ -160,6 +161,7 @@ fn setup(ctx: &Ctx) -> impl Bundle {
     let draft = ctx.draft.clone();
     let map = ctx.data.maps.get(draft.map).map(|m| (m.title().to_owned(), m.slots()));
     let can_launch = draft.to_setup(ctx.data).is_some();
+    let race_labels: Vec<_> = draft.seats.iter().map(|seat| ctx.data.race_label(&seat.race, ctx.strings)).collect();
     content(ctx.theme, move |p| {
         p.spawn((
             row(t.gap),
@@ -171,7 +173,7 @@ fn setup(ctx: &Ctx) -> impl Bundle {
                 children![
                     cell(&t, 130.0, &trf("Player {0}", &[&(i + 1)])),
                     (button(&t, seat.control.label(), 200.0 - t.gap), Act::Cycle(i, Col::Control)),
-                    (button(&t, if seat.race.is_empty() { "none" } else { &seat.race }, 260.0 - t.gap), Act::Cycle(i, Col::Race)),
+                    (button(&t, &race_labels[i], 260.0 - t.gap), Act::Cycle(i, Col::Race)),
                     (button(&t, &trf("Team {0}", &[&(seat.team + 1)]), 160.0 - t.gap), Act::Cycle(i, Col::Team)),
                 ],
             ));

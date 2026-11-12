@@ -203,7 +203,7 @@ fn setup_round_trips_through_a_game_setup() {
 
 fn race(name: &str, slot: Option<i64>) -> RaceDef {
     RaceDef {
-        stem: name.into(), name: name.into(), slot, interface: None, interface_sprites: None,
+        stem: name.into(), name: name.into(), display_key: None, slot, interface: None, interface_sprites: None,
         single_player_music: None, multiplayer_music: None,
         standard_units: Vec::new(), minimal_units: Vec::new(), stock: [0; 4],
     }
@@ -638,4 +638,79 @@ fn reveal_moves_the_offset_only_as_far_as_needed() {
     assert_eq!(reveal(0.0, 9, 100, 10.0, 50.0), 50.0, "scrolled down to the row's bottom");
     assert_eq!(reveal(200.0, 5, 100, 10.0, 50.0), 50.0, "scrolled up to the row's top");
     assert_eq!(reveal(0.0, 99, 100, 10.0, 50.0), 950.0, "never past the end");
+}
+
+fn race_strings(text: &str) -> crate::ui::i18n::Strings {
+    let root = a2_install();
+    std::fs::write(root.join("Data/Dynamic_Localized_Strings.h"), text).unwrap();
+    let vfs = sta_vfs::Vfs::mount_install(&root, None).unwrap();
+    let strings = crate::ui::i18n::Strings::load(&vfs, "english");
+    std::fs::remove_dir_all(root).unwrap();
+    strings
+}
+
+#[test]
+fn race_captions_translate_display_keys_and_preserve_literal_fallbacks() {
+    let mut data = ScreenData::fake();
+    let mut translated = race("fx", Some(0));
+    translated.stem = "human".into();
+    translated.display_key = Some("GUI_FACTION".into());
+    // A nonplayable ODF stem must not shadow the canonical race emitted by setup.
+    let mut shadow = race("observer", None);
+    shadow.stem = "fx".into();
+    shadow.display_key = Some("Wrong observer label".into());
+    let mut literal = race("other", Some(1));
+    literal.display_key = Some("Fancy Faction".into());
+    let mut missing = race("missing", Some(2));
+    missing.display_key = Some("GUI_NOT_PRESENT".into());
+    data.races = Arc::new(Races::from_defs(vec![shadow, translated, literal, missing, race("bare", Some(3))]));
+    let strings = race_strings("\"GUI_FACTION\", \"The Federation\"");
+    assert_eq!(data.race_label("fx", Some(&strings)), "The Federation");
+    assert_eq!(data.race_label("other", Some(&strings)), "Fancy Faction");
+    assert_eq!(data.race_label("missing", Some(&strings)), "GUI_NOT_PRESENT");
+    assert_eq!(data.race_label("bare", Some(&strings)), "bare");
+    assert_eq!(data.race_label("unknown", Some(&strings)), "unknown");
+    assert_eq!(data.race_label("fx", None), "GUI_FACTION");
+}
+
+#[test]
+fn setup_renders_race_captions_and_refreshes_strings_without_replacing_ids() {
+    let mut app = app();
+    let mut data = ScreenData::fake();
+    let mut faction = race("fx", Some(0));
+    faction.display_key = Some("GUI_FACTION".into());
+    data.races = Arc::new(Races::from_defs(vec![faction]));
+    app.insert_resource(data);
+    app.insert_resource(race_strings("\"GUI_FACTION\", \"The Federation\""));
+    go(&mut app, Screen::Setup);
+    assert!(has_text(&mut app, "The Federation"));
+    assert!(!has_text(&mut app, "GUI_FACTION"));
+    assert!(app.world().resource::<SetupDraft>().seats.iter().all(|seat| seat.race == "fx"));
+    app.insert_resource(race_strings("\"GUI_FACTION\", \"Updated Faction\""));
+    settle(&mut app);
+    assert!(has_text(&mut app, "Updated Faction"));
+    assert!(!has_text(&mut app, "The Federation"));
+    let setup = app.world().resource::<SetupDraft>().to_setup(app.world().resource::<ScreenData>()).unwrap();
+    assert!(setup.players.iter().all(|player| player.race == "fx"));
+}
+
+#[test]
+fn installed_race_display_keys_resolve_federation_caption() {
+    let Ok(root) = std::env::var("STA64_TEST_INSTALL") else {
+        eprintln!("SKIP: set STA64_TEST_INSTALL and STA64_TEST_MOD for installed race captions");
+        return;
+    };
+    let active = std::env::var("STA64_TEST_MOD").ok();
+    let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), active.as_deref()).unwrap();
+    let (index, _) = sta_content::OdfIndex::build(&vfs);
+    let (races, warnings) = Races::load(&vfs, &index);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let faction = races.playable().into_iter().find(|race| ["federation", "unitedfederation"].contains(&race.name.as_str())).unwrap();
+    let id = faction.name.clone();
+    let display_key = faction.display_key.clone().expect("installed federation displayKey");
+    let mut data = ScreenData::fake();
+    data.races = Arc::new(races);
+    let strings = crate::ui::i18n::Strings::load(&vfs, "english");
+    assert_eq!(data.race_label(&id, Some(&strings)), "Federation");
+    eprintln!("race caption: {} id={id} displayKey={display_key} -> Federation", active.as_deref().unwrap_or("base"));
 }
