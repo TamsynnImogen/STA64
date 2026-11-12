@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Decode Armada rule DLLs (`*R.drl`) and write Lua mission scaffolds (LUA-07).
 
-What a `.drl` is (measured on the installed Armada II campaign, see the
-LUA-07 PR for the numbers): a 32-bit debug-built PE DLL with no exports
+What a `.drl` is (measured on the installed Armada II campaign; the
+measurement notes are kept outside the repository): a 32-bit debug-built PE DLL with no exports
 and no data table of rules. Its rules are machine code:
 
 - one registration function builds every rule by calling the engine's rule
@@ -1224,10 +1224,9 @@ def scaffold(m):
     w("}")
     w(f"Mission.objectNames = {{ {', '.join(lua_str(o) for o in m['objects'])} }}")
     w("")
-    w("-- Start values. The engine creates every hot_int with -1 and every timer_int")
-    w("-- with 0 (Armada2.exe constructors); the .dsl's setup then assigns its own, which")
-    w("-- the hand port puts here (unlisted variables start at 0). The engine's")
-    w("-- ALWAYS_EVALUATE is never assigned and keeps -1.")
+    w("-- Start values: the .dsl's setup assigns them; the hand port puts them here")
+    w("-- (unlisted variables start at 0). The engine's ALWAYS_EVALUATE reads -1")
+    w("-- (measured).")
     w("Mission.initial = {")
     for v in m["variables"]:
         if v.get("engine") and v["kind"] == "dirty_int":
@@ -1257,9 +1256,8 @@ def scaffold(m):
         else:
             w(f"Mission[{lua_str(a)}] = function(self) self.ran[#self.ran + 1] = {lua_str(a)} end")
     w("")
-    w("-- timer_int: reads 1 once its remaining time drops below zero (timer_int::update);")
-    w("-- the engine then clears it over later rule passes (set_clean: 1 -> 2 -> 0). Here")
-    w("-- starting or stopping a timer clears it.")
+    w("-- timer_int: reads 1 once its time has run out (measured); here starting or")
+    w("-- stopping a timer clears it.")
     w("function Mission:startTimer(name, seconds)")
     w("    self.timers[name] = self.time + seconds")
     w("    self.state[name] = 0")

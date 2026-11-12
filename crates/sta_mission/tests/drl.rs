@@ -49,7 +49,11 @@ fn synthetic_scaffold_registers_rules_and_fires_actions() {
         .eval("local t = {} for i, m in ipairs(__drl.ruleMonitors) do t[i] = m.id end return t")
         .unwrap();
     assert_eq!(names, ["AlphaRule", "TimerRule", "MissingRule"]);
-    assert_eq!(rt.eval::<i64>("return __drl.state.p_ALWAYS_EVALUATE").unwrap(), -1);
+    assert_eq!(
+        rt.eval::<i64>("return __drl.state.p_ALWAYS_EVALUATE")
+            .unwrap(),
+        -1
+    );
     assert_eq!(rt.eval::<i64>("return __drl.state.p_ALPHA").unwrap(), 0);
 
     // Monitors registered during setup start polling on the next tick.
@@ -98,10 +102,19 @@ fn installed_a2_fed01_scaffold_loads_and_registers_its_rules() {
         String::from_utf8_lossy(&run.stderr)
     );
     // "  missions/a2_fed01R.drl: 50 rules, 82 dependencies, 50/50 conditions, ..."
-    let line = report.lines().find(|l| l.contains("a2_fed01R.drl:")).expect("a2_fed01R.drl decoded");
+    let line = report
+        .lines()
+        .find(|l| l.contains("a2_fed01R.drl:"))
+        .expect("a2_fed01R.drl decoded");
     let count = |what: &str| -> u32 {
         let at = line.find(what).unwrap();
-        line[..at].trim_end().rsplit([' ', '/']).next().unwrap().parse().unwrap()
+        line[..at]
+            .trim_end()
+            .rsplit([' ', '/'])
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap()
     };
     let rules = count(" rules");
     let decoded = count(" conditions");
@@ -186,10 +199,9 @@ Mission.variables = {
 }
 Mission.objectNames = { 'ship' }
 
--- Start values. The engine creates every hot_int with -1 and every timer_int
--- with 0 (Armada2.exe constructors); the .dsl's setup then assigns its own, which
--- the hand port puts here (unlisted variables start at 0). The engine's
--- ALWAYS_EVALUATE is never assigned and keeps -1.
+-- Start values: the .dsl's setup assigns them; the hand port puts them here
+-- (unlisted variables start at 0). The engine's ALWAYS_EVALUATE reads -1
+-- (measured).
 Mission.initial = {
     p_ALWAYS_EVALUATE = -1,
 }
@@ -221,9 +233,8 @@ function Mission:Do_Alpha() self.ran[#self.ran + 1] = 'Do_Alpha' end
 function Mission:Do_Timer() self.ran[#self.ran + 1] = 'Do_Timer' end
 function Mission:Do_Missing() self.ran[#self.ran + 1] = 'Do_Missing' end
 
--- timer_int: reads 1 once its remaining time drops below zero (timer_int::update);
--- the engine then clears it over later rule passes (set_clean: 1 -> 2 -> 0). Here
--- starting or stopping a timer clears it.
+-- timer_int: reads 1 once its time has run out (measured); here starting or
+-- stopping a timer clears it.
 function Mission:startTimer(name, seconds)
     self.timers[name] = self.time + seconds
     self.state[name] = 0
