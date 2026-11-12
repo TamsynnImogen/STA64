@@ -16,6 +16,7 @@ members = [
     "crates/sta_net",
     "crates/sta_ai",
     "crates/sta_fontbake",
+    "crates/sta_media",
     "crates/sta64",
 ]
 # `cargo run` (and bare `cargo build`/`cargo test`) target the game; use

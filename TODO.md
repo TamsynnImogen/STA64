@@ -117,6 +117,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] UI-18 crew/officers (#371): use the new personnel HUD build in Classic/Federation. Normal should show crew1200 and officers16/600 at the fresh start; Lots should show crew30000, and Restricted/More/Max should use the configured300/800/999 maxima. Check resource text stays in CFG slots/colours after resizing; noCrew/noOfficers and zero-area slots must stay hidden. Confirm FPS. Crew spending/regeneration and officer queue admission are separate work; this checks starting values and live-actor census.
 
+- [?] Movie decoding (MED-01/MED-02, `sta_media`): nothing plays in game until MED-03. To check the decoders, run `STA64_TEST_MOVIE_DIRS="<A1>:<A2>:<FO Roots>" cargo test -p sta_media --release --test bink_install -- --nocapture` (every installed `.bik` decodes to its stated frames and audio; 7 golden hashes), and dump a movie with `cargo run -p sta_media --release --example media_dump -- <movie> --yuv out.yuv --pcm out` to view `out.yuv` (`ffplay -f rawvideo -pixel_format yuv420p -video_size WxH out.yuv`) and listen to `out.0.s16le`. MP4 decodes H.264 + AAC-LC; the installed Armada II `Intro.mp4` is AV1 and is reported as unsupported.
+
 ## Checked earlier (morning list)
 
 - [x] Construction live-feedback fixes accepted (2026-11-11, `construction-a1666d0`): the user confirmed visible beams, later chunk reveal and the constructor staying fixed under normal/queued movement. Automated Stop/cancellation and snapshot checks pass. FPS was not reported; this does not complete broader native/Android checks above.
