@@ -463,11 +463,14 @@ fn on_out(ev: On<PointerOut>, mut hover: ResMut<TipHover>) {
 fn draw_tip(
     hover: Res<TipHover>,
     tips: Query<&Tooltip>,
+    strings: Option<Res<crate::ui::i18n::Strings>>,
     window: Option<Single<&Window, With<PrimaryWindow>>>,
     mut boxed: Single<&mut Node, With<TipBox>>,
     mut words: Single<&mut Text, With<TipText>>,
 ) {
     let shown = hover.target.and_then(|e| tips.get(e).ok()).and_then(|t| t.text_at(hover.rest));
+    let shown = shown.map(|text| strings.as_ref().map_or(text, |s| s.tooltip_text(text)))
+        .filter(|text| !text.is_empty());
     let Some(shown) = shown else {
         boxed.display = Display::None;
         return;
@@ -627,6 +630,34 @@ mod tests {
         assert_eq!(display(&mut app), Display::Flex);
         let words = app.world_mut().query_filtered::<&Text, With<TipText>>().single(app.world()).unwrap().0.clone();
         assert_eq!(words, "Metal");
+    }
+
+    #[test]
+    fn tooltip_draw_resolves_short_verbose_and_reload_without_rebuilding_node() {
+        use crate::ui::i18n::Strings;
+        let mut app = rig();
+        app.update();
+        let e = app.world_mut().spawn(Tooltip::new(crate::ui::i18n::tooltip_key("Source tip")).verbose("GUI_DETAILS")).id();
+        app.insert_resource(Strings::from_pairs("english", &[("Source tip", "Short tip"), ("GUI_DETAILS", "Detailed tip")]));
+        let words = |app: &mut App| app.world_mut().query_filtered::<&Text, With<TipText>>().single(app.world()).unwrap().0.clone();
+        *app.world_mut().resource_mut::<TipHover>() = TipHover { target: Some(e), rest: TIP_SHORT_SECS };
+        app.update();
+        assert_eq!(words(&mut app), "Short tip");
+        app.insert_resource(Strings::from_pairs("german", &[("Source tip", "Kurzer Hinweis"), ("GUI_DETAILS", "Detailed tip")]));
+        app.update();
+        assert_eq!(words(&mut app), "Kurzer Hinweis");
+        app.world_mut().resource_mut::<TipHover>().rest = TIP_VERBOSE_SECS;
+        app.update();
+        assert_eq!(words(&mut app), "Detailed tip");
+        app.insert_resource(Strings::from_pairs("german", &[("GUI_DETAILS", "Neue Details")]));
+        app.update();
+        assert_eq!(words(&mut app), "Neue Details");
+        app.insert_resource(Strings::default());
+        app.update();
+        assert_eq!(words(&mut app), "GUI_DETAILS");
+        app.insert_resource(Strings::from_pairs("english", &[("GUI_DETAILS", "")]));
+        app.update();
+        assert_eq!(app.world_mut().query_filtered::<&Node, With<TipBox>>().single(app.world()).unwrap().display, Display::None);
     }
 
     #[test]

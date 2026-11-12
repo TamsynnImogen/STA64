@@ -136,10 +136,10 @@ fn buttons(feed: &HudFeed, page: Page, native: &NativeCommands) -> Vec<Button> {
         if let Some(meta) = metadata(native, &button.act) {
             button.sprite_names = meta.sprite_names();
             if let Some(tip) = &meta.tooltip {
-                button.tip = crate::ui::i18n::tr(tip);
+                button.tip = tip.clone();
             }
             if let Some(verbose) = &meta.verbose {
-                button.verbose = Some(crate::ui::i18n::tr(verbose));
+                button.verbose = Some(verbose.clone());
             }
         }
     }
