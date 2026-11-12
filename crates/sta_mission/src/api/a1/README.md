@@ -53,31 +53,13 @@ error). Reads see the last world snapshot, as for `A2`.
 
 The race text is empty for type 0 (no `Text` argument is sent).
 
-## Measured on the Armada I install (read-only, `objdump`)
+## Evidence grade
 
-Every `missions/*.dsl` and `AI/*.dsl` was disassembled and the arguments
-pushed before each import call read (immediates, and strings from the DLL's
-own data; nothing recorded here beyond the values):
-
-- `BridgeDisplay::BridgeType` is an int 0..4. In the same scripts the values
-  go with the race of the bridge movies played: 1 with `F*.bik`, 2 with
-  `K*.bik`, 3 with `R*.bik`, 4 with `B*.bik`. 0 appears in the finale and
-  Klingon 4/5 scripts; its meaning is not measured (race name left empty).
-- `ShowTitle` / `ShowSubtitle(x, y, width, height, text, flag)` take a
-  rectangle in 640x480 pixels: titles `(0, 0, 200, 70)`, subtitles
-  `(0, 380, 640, 40)` or `(65, 140, 640, 40)`; the flag is 1 in every call.
-- `SetShieldPercent` values are 0.3, 0.5 and 0.7: a fraction 0..1;
-  `GetShieldPercent` returns the same scale (current over maximum, all
-  facings).
-- `GetNearestEnemy(object, radius)` radii are 450; `StopAllShips(team, odf or
-  NULL, bool, bool)` passes a null second argument; `AI_Team_Load_AIP(team,
-  file)` names `.aip` files (`dominion.aip`, `borg4d.aip`).
-- `PlayBridgeMovie(name, flag)` flag: 1 in most calls, 0 and -1 for the
-  `Martok.bik` and `Sela.bik` character movies.
-- `Team::TeamRelation` values passed to `SetRelation`: 0, 1, 2. The mapping
-  (0 enemy, 1 ally, 2 neutral) is a provisional guess in `teams.rs`.
-- `FadeIn/FadeOut(f, f, f)`: (1,0,0), (3,0,0), (4,5,0), (5,7,0)...; the first
-  is read as seconds, the others are retained.
+Argument shapes come from the DLL import signatures (read from data). The
+bridge type to race mapping, title rectangle layout and shield-percent scale
+are measured from the install's mission DLLs (details kept outside the
+repository). `Team::TeamRelation` values and everything listed next are not
+measured.
 
 ## Not measured (guesses are flagged in the code comments)
 

@@ -131,7 +131,7 @@ const CASES: &[(&str, &str, Expect)] = &[
     ("SetBridgeSceneRace", "A1.SetBridgeSceneRace(4)", Fine),
     ("ShowBridgeScene", "A1.ShowBridgeScene(true)", Fine),
     ("ShowBridgeOnScreen", "A1.ShowBridgeOnScreen(false)", Fine),
-    ("PlayBridgeMovie", "A1.PlayBridgeMovie('F1DEM1.bik', 1)", Fine),
+    ("PlayBridgeMovie", "A1.PlayBridgeMovie('intro_a.bik', 1)", Fine),
     ("StopMovie", "A1.StopMovie()", Fine),
     ("IsMoviePlaying", "assert(A1.IsMoviePlaying() == false)", Fine),
     // Cineractives and camera.
@@ -169,7 +169,7 @@ const CASES: &[(&str, &str, Expect)] = &[
     ("SetWarpSpeed", "A1.SetWarpSpeed(a, 30)", Fine),
     ("ResetWarpSpeed", "A1.ResetWarpSpeed(a)", Fine),
     ("Stop", "A1.Stop(a, 1)", Fine),
-    ("AI_Team_Load_AIP", "A1.AI_Team_Load_AIP(1, 'dominion.aip')", Fine),
+    ("AI_Team_Load_AIP", "A1.AI_Team_Load_AIP(1, 'team.aip')", Fine),
     ("Attack", "A1.Attack(a, b, 1)", Fine),
     ("Attack", "A1.Attack(a, Vector(1, 2, 3))", Fine),
     ("AI_Attack", "A1.AI_Attack(1, 0)", Fine),
@@ -287,7 +287,7 @@ const CASES: &[(&str, &str, Expect)] = &[
     ("EnableLight", "A1.EnableLight(a, true)", Fine),
     ("SetGreenAlert", "A1.SetGreenAlert(a)", Fine),
     ("IsExploding", "assert(A1.IsExploding(a) == false)", Fine),
-    ("Starfield_Load_Background_Geometry", "A1.Starfield_Load_Background_Geometry('MbgBorg.sod')", Fine),
+    ("Starfield_Load_Background_Geometry", "A1.Starfield_Load_Background_Geometry('bg_a.sod')", Fine),
     ("DisableEngines", "A1.DisableEngines(a, true)", Fine),
     ("TransferFlag", "A1.TransferFlag(1, 2)", Fine),
     ("DoesNotExist", "assert(A1.DoesNotExist(0))", Fine),
@@ -380,7 +380,7 @@ fn bridge_scene_calls_are_presentation_events_in_call_order() {
     let (mut rt, commands) = run(
         &s,
         "A1.PreLoadBridgeScene(1); A1.SetBridgeSceneRace(4); A1.ShowBridgeScene(true); A1.ShowBridgeOnScreen(true); \
-         A1.PlayBridgeMovie('B1COL6.bik', 1); playing = A1.IsMoviePlaying()",
+         A1.PlayBridgeMovie('intro_b.bik', 1); playing = A1.IsMoviePlaying()",
     );
     assert_eq!(
         presented(&commands),
@@ -389,19 +389,19 @@ fn bridge_scene_calls_are_presentation_events_in_call_order() {
             call("SetBridgeSceneRace", vec![Arg::Int(4), Arg::Text("borg".into())]),
             call("ShowBridgeScene", vec![Arg::Bool(true)]),
             call("ShowBridgeOnScreen", vec![Arg::Bool(true)]),
-            Presentation::Movie { name: "B1COL6.bik".into(), in_panel: true, skippable: true },
+            Presentation::Movie { name: "intro_b.bik".into(), in_panel: true, skippable: true },
         ]
     );
     assert!(rt.eval::<bool>("return playing").unwrap());
     // The host reports completion; a stop request also ends it.
     rt.eval::<()>("A1.MovieDone()").unwrap();
     assert!(!rt.eval::<bool>("return A1.IsMoviePlaying()").unwrap());
-    rt.eval::<()>("A1.PlayBridgeMovie('Sela.bik', -1); A1.StopMovie()").unwrap();
+    rt.eval::<()>("A1.PlayBridgeMovie('talk_a.bik', -1); A1.StopMovie()").unwrap();
     assert!(!rt.eval::<bool>("return A1.IsMoviePlaying()").unwrap());
     assert_eq!(
         presented(&rt.take_commands()),
         vec![
-            Presentation::Movie { name: "Sela.bik".into(), in_panel: true, skippable: true },
+            Presentation::Movie { name: "talk_a.bik".into(), in_panel: true, skippable: true },
             Presentation::StopMovie
         ]
     );

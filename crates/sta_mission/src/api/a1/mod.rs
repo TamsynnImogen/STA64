@@ -28,8 +28,7 @@
 //! Arguments are validated strictly: exact arity per overload, integral
 //! handles, finite numbers, strict booleans; a malformed call is a Lua error
 //! and queues nothing. What each argument means is taken from the DLL import
-//! signature and the constants the stock DLLs pass (measured with `objdump`
-//! on the Armada I install; README.md lists them), and anything not measured
+//! signature and the constants the stock DLLs pass (evidence grades in README.md), and anything not measured
 //! is said so there.
 
 use std::cell::RefCell;

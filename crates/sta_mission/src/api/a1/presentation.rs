@@ -3,40 +3,33 @@
 //! objectives display. Each queues `Edit::Present` from `PlayerId::SCRIPT`;
 //! nothing here plays media or moves a camera.
 //!
-//! # Bridge scenes (measured on the Armada I install)
+//! # Bridge scenes
 //!
-//! `BridgeDisplay::BridgeType` is an integer in the DLLs: 0, 1, 2, 3, 4. The
-//! values correlate with the race of the bridge movies played in the same
-//! script (`F*.bik` Federation, `K*.bik` Klingon, `R*.bik` Romulan, `B*.bik`
-//! Borg): 1 Federation, 2 Klingon, 3 Romulan, 4 Borg. 0 appears in finale and
-//! Klingon 4/5 scripts with no race of its own; its meaning is not measured,
-//! so it is passed through as 0 with an empty race name.
+//! `BridgeDisplay::BridgeType` is an integer 0..=4: 1 Federation, 2 Klingon,
+//! 3 Romulan, 4 Borg (measured from the stock DLLs); 0 is passed through with
+//! an empty race name (not measured).
 //!
 //! The scene calls are `Presentation::Call` `A1.PreLoadBridgeScene` /
 //! `A1.SetBridgeSceneRace` with `[Int type, Text race]` and
 //! `A1.ShowBridgeScene` / `A1.ShowBridgeOnScreen` with `[Bool]`, for the
 //! bridge display (MED-03 and UI) to consume. Movies use the typed events:
 //! `PlayBridgeMovie(name, flag)` is `Presentation::Movie { in_panel: true,
-//! skippable: true }`, `StopMovie` is `Presentation::StopMovie`. The flag (1
-//! in most stock calls, 0 and -1 for the `Martok.bik` and `Sela.bik`
-//! character movies) is validated and its meaning is not measured, so it is
-//! dropped.
+//! skippable: true }`, `StopMovie` is `Presentation::StopMovie`. The flag is
+//! validated and dropped (meaning not measured).
 //!
 //! # Completion
 //!
 //! `IsMoviePlaying` and `IsAudioMessageDone` need the client's answer. Until
-//! a host reports it with `A1.MovieDone()` / `A1.AudioMessageDone(id)` (not
-//! DLL calls; MED-03 / the audio mixer use them) a movie or message counts as
-//! still playing until stopped.
+//! a host reports it with `A1.MovieDone()` / `A1.AudioMessageDone(id)` a movie
+//! or message counts as still playing until stopped.
 //!
-//! # Titles (measured)
+//! # Titles
 //!
-//! `ShowTitle` / `ShowSubtitle(x, y, width, height, text, flag)` pass the
-//! rectangle in 640x480 screen pixels: titles `(0, 0, 200, 70)`, subtitles
-//! `(0, 380, 640, 40)` or `(65, 140, 640, 40)`; the flag is 1 in every stock
-//! call and not measured. The typed `Presentation::Title` (no placement) is
-//! queued and the rectangle is kept in `A1.ShowTitle` / `A1.ShowSubtitle`
-//! calls `[Int id, x, y, width, height, Bool flag]`.
+//! `ShowTitle` / `ShowSubtitle(x, y, width, height, text, flag)`: the
+//! rectangle is in 640x480 screen pixels (measured), the flag is not
+//! measured. The typed `Presentation::Title` (no placement) is queued and the
+//! rectangle is kept in `A1.ShowTitle` / `A1.ShowSubtitle` calls
+//! `[Int id, x, y, width, height, Bool flag]`.
 
 use mlua::{Function, Lua, Table, Value};
 use sta_sim::present::{Arg, Presentation};
