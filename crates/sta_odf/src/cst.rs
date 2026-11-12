@@ -216,11 +216,9 @@ fn classify(src: &[u8], text: Range<usize>, eol: Range<usize>, open: &mut bool) 
         line.continues = *open;
     } else {
         *open = false;
-        if let Some((k, _)) = code.split_once('=') {
-            if !k.trim().is_empty() {
-                line.kind = LineKind::Entry;
-                *open = true;
-            }
+        if code.split_once('=').is_some_and(|(k, _)| !k.trim().is_empty()) {
+            line.kind = LineKind::Entry;
+            *open = true;
         }
     }
     line
