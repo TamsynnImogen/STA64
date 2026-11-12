@@ -445,7 +445,7 @@ a command acts on"):
 - Each run writes `$XDG_DATA_HOME/sta64/bench/results/<run>/` with `latest`
   pointing at it: `index.html`, `report.md`, `results.json`, and per case
   `log.txt`, `bench.log`, `objects.jsonl`, `marks`, `frames/`.
-- CI uploads `report.md` and `results.json`, never frames.
+- CI uploads `report.md`, `results.json` and the `digests` files, never frames.
 
 ## CI
 
@@ -454,13 +454,14 @@ The matrix in `.github/workflows/ci.yml` has no game install, so:
 - **core job**: `cargo test -p sta_bench` runs the parsers (Refit's scene and
   scenario files as fixtures), the command vocabulary, and tier-1 scenes
   built from a synthetic content fixture (our own JSON5 units and glTF
-  meshes, no game data). The golden digests run here on all four platforms.
-- **bench job** (TOOL-06): `sta-bench check` runs every tier-1 scenario
-  in-process on each target and uploads `report.md` and `results.json` as the
-  `bench-report-<os>` artefact. The `golden-*` scenarios (`bench/scenarios/`)
-  are the committed digests: each is an existing scenario plus a last step
-  `Expect digest at tick N is "HEX"`. A change that moves a digest fails the
-  job on every target; replace the value on purpose and say why in the PR.
+  meshes, no game data). The golden digests run here on all four platforms:
+  the `golden-*` scenarios (`bench/scenarios/`, TOOL-06) are an existing
+  scenario's scene and commands plus a last step `Expect digest at tick N is
+  "HEX"`, so a change that moves a digest fails the job on every target (replace
+  the value on purpose and say why in the PR). After the tests the job runs
+  `sta-bench check --out bench-report` and uploads `report.md`, `results.json`
+  and the per-tick `digests` files as `bench-report-<os>`, to compare a drifting
+  platform with `sta-bench diff`; never frames.
 - **game job**: after the build, `sta64 --sim-only --scene
   bench/scenes/synthetic.ini --ticks 300` checks the scene path end to end.
 - Scenarios that need the install run locally and skip when

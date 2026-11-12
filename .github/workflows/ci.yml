@@ -31,33 +31,25 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace --exclude sta64
       - run: cargo clippy --workspace --exclude sta64 --all-targets -- -D warnings
-
-  # TOOL-06: every tier-1 bench scenario in-process, including the `golden-*`
-  # scenarios whose last step pins a digest, on every target. Needs no install
-  # and no renderer. Uploads report.md and results.json (never frames).
-  bench:
-    name: bench goldens (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON((github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-ci')) && '["ubuntu-latest","ubuntu-24.04-arm","windows-latest","macos-latest"]' || '["ubuntu-latest"]') }}
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - run: rustup show active-toolchain
-      - uses: Swatinem/rust-cache@v2
-      - name: sta-bench check
+      # TOOL-06: the bench report, with its per-tick digests, so a platform that
+      # drifts can be compared with `sta-bench diff`. `cargo test` above already
+      # ran every tier-1 scenario, including the `golden-*` ones that pin a
+      # digest; this reuses the build and keeps the report (never frames).
+      - name: sta-bench check (report)
+        if: success() || failure()
         run: cargo run -p sta_bench --bin sta-bench -- check --out bench-report
       - name: Upload bench report
-        if: always()
+        if: success() || failure()
         uses: actions/upload-artifact@v4
         with:
           name: bench-report-${{ matrix.os }}
           path: |
             bench-report/**/report.md
             bench-report/**/results.json
+            bench-report/**/digests
             !bench-report/latest/**
-          if-no-files-found: ignore
+          if-no-files-found: warn
+          overwrite: true
           retention-days: 14
 
   game:
