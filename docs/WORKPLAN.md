@@ -471,7 +471,7 @@ seam rather than writes.
 
 **Modding rules are decided:** [MODDING_DECISIONS.md](MODDING_DECISIONS.md) (D1-D13, accepted) binds every package that touches mod loading, the VFS mount, profiles, `RTS_CFG.h`/ODF rules, render recipes or mission Lua. Packages CON-33..36, RND-28 and LUA-09 implement it.
 
-**Armada I is in v1** (D5 as amended 2026-11-12, awaiting Tammy's approval), the stock game only; mods of Armada I come later. The
+**Armada I is in v1** (D5 as amended 2026-11-12, approved by Tammy), the stock game only; mods of Armada I come later. The
 A1 packages (CON-15, CON-25..28, UI-19, LUA-06, MED-04 and the A1 parts of the
 shared ones) are v1 work and join the milestones their needs allow: UI-19 in
 INT-M7, LUA-06 and MED-04 in INT-M6. CON-38..42 close what the merged A1 map
