@@ -9,9 +9,8 @@ use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use bevy::ui::{UiScale, UiTargetCamera};
 use bevy::window::ExitCondition;
 use sta_content::ContentDb;
-use sta_sim::fake::ScriptedSource;
-use sta_sim::view::PlayerView;
-use sta_sim::{EntityId, Fixed, PlayerId, TeamId, WorldSource};
+use sta_sim::{Fixed, PlayerId, TeamId, WorldSource};
+use sta_sim::setup::{GameSetup, GameOptions, PlayerSetup, Control};
 
 use super::super::{ExternalFeed, HudConfig, HudFeed, HudPlugin, panels::HudRoot};
 use super::layout::StockLayout;
@@ -36,52 +35,27 @@ fn aim_roots(
     }
 }
 
-fn feed(vfs: &sta_vfs::Vfs, profile: UiProfile) -> HudFeed {
-    let fake = sta_content::fake::db();
-    let model = match profile {
-        UiProfile::Armada2 => "fcruise1",
-        UiProfile::FleetOps => "fed_akira",
-        UiProfile::Lcars => unreachable!(),
+fn feed(vfs: &sta_vfs::Vfs, options: GameOptions) -> HudFeed {
+    // Exercise the real mounted content -> shared starting sim -> HUD path.
+    // Fake ship/player values cannot expose a lost crew/officer binding.
+    let (index, _) = sta_content::OdfIndex::build(vfs);
+    let (db, _) = ContentDb::load(vfs, &index).expect("installed content");
+    let (races, _) = sta_content::Races::load(vfs, &index);
+    let race = races.get_playable("federation")
+        .or_else(|| races.get_playable("unitedfederation"))
+        .or_else(|| races.playable().first().copied()).expect("playable capture faction");
+    let mut map = sta_content::fake::two_bases();
+    map.objects.clear();
+    let db = Arc::new(db);
+    let setup = GameSetup {
+        seed: 71, map: Arc::new(map), content: db.clone(), options,
+        players: vec![PlayerSetup { id: PlayerId(0), team: TeamId(0), race: race.name.clone(), control: Control::Human }],
     };
-    let found = sta_assets::find_model(vfs, model).is_some();
-    eprintln!(
-        "stock GPU model {model}: {}",
-        if found { "mounted" } else { "unavailable" }
-    );
-    let mut builder = ContentDb::builder()
-        .profile(fake.profile())
-        .features(fake.features().clone());
-    for weapon in fake.weapons() {
-        builder = builder.weapon(weapon.clone());
-    }
-    for unit in fake.units() {
-        let mut unit = unit.clone();
-        if found && unit.odf == "fx_cruiser" {
-            unit.model = model.to_owned();
-        }
-        builder = builder.unit(unit);
-    }
-    let db = Arc::new(builder.build().expect("fake content with installed model name"));
-    let mut source = ScriptedSource::from_json5(
-        "{ units: [{ id: 1, def: 'fx_cruiser', owner: 1, hull: 100, rails: [{ at: 0, pos: { x: 0, y: 0, z: 0 } }] }] }",
-        &db,
-    )
-    .expect("selected fake cruiser");
-    let mut view = (*source.step(&[]).view).clone();
-    view.players = vec![PlayerView { crew: None,
-        id: PlayerId(1),
-        team: TeamId(1),
-        resources: [3000, 20, 700, 5].map(Fixed::from_int).to_vec(),
-        officers: [Fixed::ZERO; 2],
-        eliminated: false,
-        relations: Vec::new(),
-    }];
-    HudFeed {
-        view: Arc::new(view),
-        player: PlayerId(1),
-        selected: vec![EntityId(1)],
-        content: Some(db),
-    }
+    let (sim, warnings) = sta_sim::Sim::from_setup_with_starts(&setup, &races);
+    eprintln!("installed HUD start warnings: {}", warnings.len());
+    let view = sim.view();
+    let selected = view.units.iter().find(|u| u.owner == PlayerId(0)).expect("authored start unit").id;
+    HudFeed { view, player: PlayerId(0), selected: vec![selected], content: Some(db) }
 }
 
 fn resolved_pieces(app: &mut App, pieces: &[super::layout::Piece]) -> usize {
@@ -96,7 +70,7 @@ fn resolved_pieces(app: &mut App, pieces: &[super::layout::Piece]) -> usize {
         .count()
 }
 
-fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, label: &str) {
+fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, label: &str, options: GameOptions) {
     let layout = crate::game::gui_layout(&vfs, cfg).unwrap_or_else(|| panic!("installed {cfg} missing"));
     let stock = StockLayout::new(&layout, Vec2::new(1080.0 * size.x as f32 / size.y as f32, 1080.0));
     let resource = stock.pieces("resourcePanel");
@@ -106,7 +80,12 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         !resource.is_empty() || !minimap.is_empty() || !info.is_empty(),
         "{label}: CFG has no authored background pieces to check"
     );
-    let hud_feed = feed(&vfs, profile);
+    let hud_feed = feed(&vfs, options);
+    let player = hud_feed.view.player(hud_feed.player).expect("capture player");
+    let whole = |value: Fixed| value.to_bits() / Fixed::ONE.to_bits();
+    let crew_text = player.crew.map(|v| whole(v).to_string()).unwrap_or_default();
+    let officer_text = format!("{}/{}", whole(player.officers[0]), whole(player.officers[1]));
+    let selection = hud_feed.selected.clone();
     let radar_feed = RadarFeed {
         view: hud_feed.view.clone(),
         player: hud_feed.player,
@@ -147,7 +126,7 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         .insert_resource(hud_feed)
         .insert_resource(radar_feed)
         .insert_resource(ExternalFeed)
-        .insert_resource(Selection(vec![EntityId(1)]))
+        .insert_resource(Selection(selection))
         .init_resource::<ButtonInput<MouseButton>>()
         .init_resource::<ButtonInput<KeyCode>>()
         .add_plugins(HudPlugin)
@@ -246,6 +225,14 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         .filter(|text| matches!(text, super::info::StockText::Resource(_)))
         .count();
     assert!(resources > 0, "{label}: no live resource text");
+    for (id, flag, expected) in [(0, "noCrew", crew_text), (1, "noOfficers", officer_text)] {
+        let visible = stock.number(flag).is_none_or(|v| v == 0.0) && stock.rect(&format!("resource_{id}")).is_some();
+        let actual = app.world_mut().query::<(&super::info::StockText, &crate::ui::sprite_font::SpriteText)>()
+            .iter(app.world()).find_map(|(kind,text)| matches!(kind, super::info::StockText::Resource(n) if *n == id).then(|| text.text.clone()));
+        assert_eq!(actual.as_deref(), visible.then_some(expected.as_str()), "{label} CFG personnel resource_{id}");
+        eprintln!("{label}: resource_{id} visible={visible} expected={expected} actual={actual:?}");
+    }
+
 
     let frames = Arc::new(Mutex::new(Vec::<Image>::new()));
     let output = Arc::clone(&frames);
@@ -319,6 +306,13 @@ fn installed_stock_hud_renders_on_gpu() {
         let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod.as_deref())
             .expect("installed stock VFS");
         let mode = if profile == UiProfile::FleetOps { "fo4" } else { "a2" };
-        capture_one(vfs, profile, size, cfg, &format!("{mode}-{ratio}"));
+        capture_one(vfs, profile, size, cfg, &format!("{mode}-{ratio}"), GameOptions::default());
+    }
+    if profile == UiProfile::Armada2 {
+        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod.as_deref()).unwrap();
+        let mut options = GameOptions::default();
+        options.starting_resources = sta_content::StartingResources::Lots;
+        options.officer_limit = 1;
+        capture_one(vfs, profile, UVec2::new(1280,720), "gui_fed.cfg", "a2-lots-restricted-16x9", options);
     }
 }

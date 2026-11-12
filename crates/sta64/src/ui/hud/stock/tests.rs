@@ -176,6 +176,89 @@ fn resource_colour(app: &mut App, id: usize) -> Color {
         .unwrap()
 }
 
+fn resource_label(app: &mut App, id: usize) -> Option<(Entity, String, Color, Node)> {
+    app.world_mut()
+        .query::<(Entity, &info::StockText, &SpriteText, &ChildOf)>()
+        .iter(app.world())
+        .find_map(|(entity, kind, text, parent)| {
+            matches!(kind, info::StockText::Resource(n) if *n == id).then(|| {
+                (entity, text.text.clone(), text.color, app.world().get::<Node>(parent.parent()).unwrap().clone())
+            })
+        })
+}
+
+fn set_personnel(app: &mut App, crew: Option<Fixed>, officers: [Fixed; 2]) {
+    let mut feed = app.world().resource::<HudFeed>().clone();
+    let mut view = (*feed.view).clone();
+    view.players[0].crew = crew;
+    view.players[0].officers = officers;
+    feed.view = Arc::new(view);
+    *app.world_mut().resource_mut::<HudFeed>() = feed;
+    app.update();
+}
+
+#[test]
+fn personnel_uses_inherited_cfg_rectangles_colours_and_live_values() {
+    let cfg = inherited_config(
+        "resourcePanelArea = 13 7 400 80\nresource_0 = 17 9 73 21\nresource_0_color = 0 1 1 1\nresource_1_color = 1 1 0 1\n",
+        "resource_0 = 4 5 30 10\nresource_0_color = 1 0 0 1\n",
+    );
+    let mut app = app_with_content_and_config(content(), cfg, UiProfile::Armada2);
+    let (crew_entity, crew, crew_color, crew_node) = resource_label(&mut app, 0).unwrap();
+    let (officer_entity, officers, officer_color, officer_node) = resource_label(&mut app, 1).unwrap();
+    assert_eq!(crew, "");
+    assert_eq!(officers, "0/0");
+    assert_eq!(crew_color, Color::srgba(0.0, 1.0, 1.0, 1.0));
+    assert_eq!(officer_color, Color::srgba(1.0, 1.0, 0.0, 1.0));
+    // The 1600x1200 CFG maps independently to the 1920x1080 test viewport.
+    assert_eq!((crew_node.left, crew_node.top, crew_node.width, crew_node.height),
+        (Val::Px(36.0), Val::Px(14.0), Val::Px(88.0), Val::Px(19.0)));
+    assert_eq!((officer_node.left, officer_node.top, officer_node.width, officer_node.height),
+        (Val::Px(280.0), Val::Px(15.0), Val::Px(96.0), Val::Px(27.0)));
+    set_personnel(&mut app, Some(Fixed::from_int(1200)), [Fixed::from_int(16), Fixed::from_int(600)]);
+    assert_eq!(resource_label(&mut app, 0).unwrap().0, crew_entity);
+    assert_eq!(resource_label(&mut app, 0).unwrap().1, "1200");
+    assert_eq!(resource_label(&mut app, 1).unwrap().0, officer_entity);
+    assert_eq!(resource_label(&mut app, 1).unwrap().1, "16/600");
+    set_personnel(&mut app, Some(Fixed::from_int(30000)), [Fixed::from_int(16), Fixed::from_int(300)]);
+    assert_eq!(resource_label(&mut app, 0).unwrap().1, "30000");
+    assert_eq!(resource_label(&mut app, 1).unwrap().1, "16/300");
+    set_personnel(&mut app, None, [Fixed::ZERO; 2]);
+    assert_eq!(resource_label(&mut app, 0).unwrap().1, "");
+    set_personnel(&mut app, Some(Fixed::ZERO), [Fixed::ZERO; 2]);
+    assert_eq!(resource_label(&mut app, 0).unwrap().1, "0");
+}
+
+#[test]
+fn personnel_flags_and_zero_rectangles_suppress_only_authored_labels() {
+    for extra in ["noCrew = 1\nnoOfficers = 1\n", "resource_0 = 8 8 0 20\nresource_1 = 9 9 40 0\n"] {
+        let mut app = app_with_content_and_config(content(), inherited_config(extra, "resource_0 = 4 5 30 10\n"), UiProfile::Armada2);
+        set_personnel(&mut app, Some(Fixed::from_int(1200)), [Fixed::from_int(16), Fixed::from_int(600)]);
+        assert!(resource_label(&mut app, 0).is_none());
+        assert!(resource_label(&mut app, 1).is_none());
+        assert_eq!(resource_label(&mut app, 2).unwrap().1, "3000");
+        assert_eq!(resource_label(&mut app, 4).unwrap().1, "700");
+    }
+}
+
+#[test]
+fn stock_resources_and_officers_format_large_fixed_values_exactly() {
+    let cfg = inherited_config("resource_0 = 4 5 30 10\nresource_3 = 30 10 80 30\nresource_5 = 320 10 80 30\n", "");
+    let mut app = app_with_content_and_config(content(), cfg, UiProfile::Armada2);
+    let mut feed = app.world().resource::<HudFeed>().clone();
+    let mut view = (*feed.view).clone();
+    view.players[0].crew = Some(Fixed::from_int(16_777_217));
+    view.players[0].officers = [Fixed::from_int(16_777_217), Fixed::from_int(16_777_218)];
+    view.players[0].resources = [Fixed::from_int(16_777_217); 4].to_vec();
+    feed.view = Arc::new(view);
+    *app.world_mut().resource_mut::<HudFeed>() = feed;
+    app.update();
+    for id in [0, 2, 3, 4, 5] {
+        assert_eq!(resource_label(&mut app, id).unwrap().1, "16777217");
+    }
+    assert_eq!(resource_label(&mut app, 1).unwrap().1, "16777217/16777218");
+}
+
 #[test]
 fn inherited_a2_info_colour_tints_single_and_builder_text() {
     let cfg = inherited_config("", "infoTextColor = 1 0 1 1\nshipNameColor = 0 1 0 1\nresource_2_color = 1 0 0 1\n");

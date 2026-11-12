@@ -6,6 +6,7 @@ use bevy::ecs::hierarchy::ChildSpawner;
 use bevy::ecs::spawn::SpawnWith;
 use bevy::prelude::*;
 use bevy::ui::UiTargetCamera;
+use sta_content::StartingResources;
 
 use super::data::{Browse, ScreenData, SelectedMod, SettingKey, SetupDraft, Settings};
 use super::{Col, ListScroll, Screen};
@@ -30,6 +31,8 @@ pub enum Act {
     /// Mod select's Use Mod.
     UseMod,
     Cycle(usize, Col),
+    CycleResources,
+    CycleOfficerLimit,
     Launch,
     Exit,
 }
@@ -162,6 +165,23 @@ fn setup(ctx: &Ctx) -> impl Bundle {
     let map = ctx.data.maps.get(draft.map).map(|m| (m.title().to_owned(), m.slots()));
     let can_launch = draft.to_setup(ctx.data).is_some();
     let race_labels: Vec<_> = draft.seats.iter().map(|seat| ctx.data.race_label(&seat.race, ctx.strings)).collect();
+    let (resource_key, resource_fallback) = match draft.options.starting_resources {
+        StartingResources::Normal => ("sr_normal", "Resources: Normal"),
+        StartingResources::Lots => ("sr_lots", "Resources: Lots"),
+    };
+    let resources = ctx.strings.and_then(|strings| strings.native_label(resource_key))
+        .filter(|text| !text.trim().is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| tr(resource_fallback));
+    let officer = ctx.data.content.rules().officer_limits.get(draft.options.officer_limit as usize)
+        .map(|choice| {
+            let caption = ctx.strings.and_then(|strings| strings.native_label(&choice.key))
+                .filter(|text| !text.trim().is_empty())
+                .or_else(|| (!choice.key.trim().is_empty()).then_some(choice.key.as_str()))
+                .map(str::to_owned)
+                .unwrap_or_else(|| tr("Officer limit unavailable"));
+            format!("{caption}: {}", choice.value)
+        });
     content(ctx.theme, move |p| {
         p.spawn((
             row(t.gap),
@@ -186,6 +206,14 @@ fn setup(ctx: &Ctx) -> impl Bundle {
                 p.spawn(label(&t, &tr("No maps found.")));
             }
         }
+        p.spawn(row(t.gap)).with_children(|r| {
+            r.spawn((button(&t, &resources, 280.0), Act::CycleResources));
+            if let Some(caption) = &officer {
+                r.spawn((button(&t, caption, 360.0), Act::CycleOfficerLimit));
+            } else {
+                r.spawn(disabled_button(&t, &tr("Officer limit unavailable"), 360.0));
+            }
+        });
         p.spawn(row(t.gap)).with_children(|r| {
             if can_launch {
                 r.spawn((button(&t, &tr("Launch"), 220.0), Act::Launch));

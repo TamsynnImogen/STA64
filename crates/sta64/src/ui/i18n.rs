@@ -24,7 +24,7 @@ use std::collections::HashMap;
 use std::sync::{OnceLock, RwLock};
 
 use bevy::prelude::*;
-use sta_content::strings::StringTable;
+use sta_content::strings::{StringTable, LabelMap};
 use sta_vfs::Vfs;
 
 /// STA64 call-site key -> the game's own string key, for the strings the
@@ -51,6 +51,7 @@ pub struct Strings {
     pub language: String,
     map: HashMap<String, String>,
     game: StringTable,
+    labels: LabelMap,
 }
 
 fn active() -> &'static RwLock<HashMap<String, String>> {
@@ -80,6 +81,7 @@ impl Strings {
             language: language.to_owned(),
             map,
             game,
+            labels: LabelMap::load(vfs),
         }
     }
 
@@ -93,6 +95,7 @@ impl Strings {
                 .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
                 .collect(),
             game: StringTable::default(),
+            labels: LabelMap::default(),
         }
     }
 
@@ -100,6 +103,11 @@ impl Strings {
     /// An absent key is displayed literally, as in the game's string table.
     pub fn game_text<'a>(&'a self, key: &'a str) -> &'a str {
         self.game.get_or_key(key)
+    }
+
+    /// Native menu caption from the mounted label.map, highest layer first.
+    pub fn native_label(&self, key: &str) -> Option<&str> {
+        self.labels.get(key).first().map(String::as_str)
     }
 
     /// Makes this the table [`tr`] reads.
@@ -225,6 +233,8 @@ mod tests {
         std::fs::write(base.join("Dynamic_Localized_Strings.h"), b"\"RACE_A\", \"Caf\xe9\", \"RACE_B\", \"Base\", \"GUI_CV_MIN_TOOLTIP\", \"Native tooltip\"").unwrap();
         std::fs::write(upper.join("Dynamic_Localized_Strings.h"), "\"RACE_B\", \"Über\"").unwrap();
         std::fs::write(upper.join("sta64_english.strings"), "Double click to return to strategic mode.\tSTA64 tooltip\n").unwrap();
+        std::fs::write(base.join("label.map"), "+ ol_normal {Officer Limit: Normal}\n+ sr_normal {Resources: Normal}\n").unwrap();
+        std::fs::write(upper.join("label.map"), "+ ol_normal {Custom Officer Caption}\n").unwrap();
         let mut vfs = Vfs::default();
         vfs.push_dir("upper".into(), upper).unwrap();
         vfs.push_dir("base".into(), base).unwrap();
@@ -232,6 +242,9 @@ mod tests {
         assert_eq!(strings.game_text("RACE_A"), "Café");
         assert_eq!(strings.game_text("RACE_B"), "Über");
         assert_eq!(strings.game_text("Literal Race"), "Literal Race");
+        assert_eq!(strings.native_label("OL_NORMAL"), Some("Custom Officer Caption"));
+        assert_eq!(strings.native_label("sr_normal"), Some("Resources: Normal"));
+        assert_eq!(strings.native_label("missing"), None);
         assert!(!strings.map.contains_key("RACE_A"));
         assert_eq!(strings.game_text("GUI_CV_MIN_TOOLTIP"), "Native tooltip");
         assert_eq!(strings.map.get("Double click to return to strategic mode.").map(String::as_str), Some("STA64 tooltip"));
@@ -246,6 +259,8 @@ mod tests {
         std::fs::create_dir(&second).unwrap();
         std::fs::write(first.join("Dynamic_Localized_Strings.h"), "\"RACE\", \"First\"").unwrap();
         std::fs::write(second.join("Dynamic_Localized_Strings.h"), "\"RACE\", \"Second\"").unwrap();
+        std::fs::write(first.join("label.map"), "+ ol_normal {First Limit}\n").unwrap();
+        std::fs::write(second.join("label.map"), "+ ol_normal {Second Limit}\n").unwrap();
         let mut app = App::new();
         app.add_plugins(I18nPlugin);
         app.update();
@@ -254,15 +269,18 @@ mod tests {
         app.insert_resource(mount(&first));
         app.update();
         assert_eq!(app.world().resource::<Strings>().game_text("RACE"), "First");
+        assert_eq!(app.world().resource::<Strings>().native_label("ol_normal"), Some("First Limit"));
         assert_eq!(app.world().resource::<Strings>().language, "english");
 
         app.insert_resource(mount(&second));
         app.update();
         assert_eq!(app.world().resource::<Strings>().game_text("RACE"), "Second");
+        assert_eq!(app.world().resource::<Strings>().native_label("ol_normal"), Some("Second Limit"));
 
         app.world_mut().remove_resource::<crate::viewer::Mounted>();
         app.update();
         assert_eq!(app.world().resource::<Strings>().game_text("RACE"), "RACE");
+        assert_eq!(app.world().resource::<Strings>().native_label("ol_normal"), None);
     }
 
     #[test]

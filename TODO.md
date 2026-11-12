@@ -100,6 +100,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] Faction display names (#371): the race picker should show the faction ODF `displayKey` through `Dynamic_Localized_Strings.h`, falling back to the literal display key when absent. Check Classic and FO4 captions and cycle/launch a race; simulation IDs must remain unchanged. See [RACE_DISPLAY_NAMES.md](docs/RACE_DISPLAY_NAMES.md).
 
+- [?] UI-18 crew/officers (#371): use the new personnel HUD build in Classic/Federation. Normal should show crew1200 and officers16/600 at the fresh start; Lots should show crew30000, and Restricted/More/Max should use the configured300/800/999 maxima. Check resource text stays in CFG slots/colours after resizing; noCrew/noOfficers and zero-area slots must stay hidden. Confirm FPS. Crew spending/regeneration and officer queue admission are separate work; this checks starting values and live-actor census.
+
 ## Checked earlier (morning list)
 
 - [x] Construction live-feedback fixes accepted (2026-11-11, `construction-a1666d0`): the user confirmed visible beams, later chunk reveal and the constructor staying fixed under normal/queued movement. Automated Stop/cancellation and snapshot checks pass. FPS was not reported; this does not complete broader native/Android checks above.

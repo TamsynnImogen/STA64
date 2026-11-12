@@ -50,9 +50,8 @@ Refit layout/grid. Gameplay/capability/command handling remains shared.
 
 ## Scope and proof boundaries
 
-Top-right full menu functions (UI-20), production queue views (UI-26), crew
-values not exposed by the shared view and future resources are not fabricated
-by a new presentation. Show supported live values and record unavailable
+Top-right full menu functions (UI-20), production queue views (UI-26), per-unit
+current crew and future resources are not fabricated by a new presentation. Show supported live values and record unavailable
 fields explicitly. A CFG can hide its own element; no gameplay is disabled
 merely by choosing a HUD or platform.
 
@@ -121,7 +120,7 @@ or native visual acceptance. Android library checking is separate from an APK.
 
 UI-18 remains open until visual comparison against original A2/FO Roots reference
 frames and command order for representative unit classes passes. Missing shared
-crew/energy data, UI-26 production jobs, UI-20 top-right menu backends, named font
+per-unit current crew/energy data, UI-26 production jobs, UI-20 top-right menu backends, named font
 selection and per-system damage-state wireframe colouring are not fabricated. The
 selection panel composes the authored wireframe layers in one slot, with an `_s`
 alternative on the first layer. System damage colours remain unavailable rather
@@ -152,3 +151,35 @@ is at the expected normalized start position near (0.219, 0.219), and the large
 grey world shroud matches the mod's `Gshroud` RGB (65, 71, 85). Those are separate
 from the atlas/font faults; this HUD correction changes neither map projection,
 sensor rules, fog rendering nor original textures.
+
+## Starting personnel resource binding
+
+After the shared #377 prerequisite, stock resource ID0 reads optional current
+player crew from PlayerView; ID1 reads the existing live-actor officer census
+and configured maximum. `resource_0`/`resource_1` rectangles, inherited
+`resource_N_color`, `noCrew`/`noOfficers` and disabled rectangles govern the
+rendering. No replacement positions, pools or caps are inferred by the HUD.
+Unknown crew stays blank; authored zero is shown as zero. Integer formatting
+uses Fixed bits rather than a float conversion, preserving large exact counts.
+
+Setup retains Normal/Lots and the selected native MP officer row in GameOptions.
+Captions use mounted `label.map` keys `sr_normal`, `sr_lots` and the authored
+`ol_*` keys, with translated/literal fallbacks. These are the existing frontend
+controls; full native frontend layout reproduction is outside this correction.
+Unlimited is not presented as Lots. Crew production/regeneration and officer
+queue reservations/admission remain separate missing gameplay systems.
+
+The installed GPU fixture now loads actual mounted definitions and faction
+starts into the shared simulation before building HudFeed. It checks crew and
+officer source text against that view and native visibility flags, then captures
+the real HUD. Classic Lots/Restricted adds a separate wide capture. This closes
+the previous fake-player fixture gap; live gameplay/FPS acceptance is separate.
+
+Verified follow-up: 446 client tests pass (one existing ignored), strict client
+all-target Clippy, workspace/all-target and NDK29/API26 ARM64 library checks pass.
+Five actual windowless NVIDIA Vulkan captures cover Classic and FO4 at 4:3 and
+16:9 plus Classic Lots/Restricted. Classic source labels and pixels show
+1200 /16/600 normally, 30000 /16/300 for Lots/Restricted; FO4 hides both fields
+through its CFG flags. The lead inspected the captures. Private evidence lives
+in `STA64-artifacts/probes/ui17/personnel-hud-*`. This is HUD rendering proof;
+live gameplay readability/FPS and the broader UI-18 reference gate remain open.

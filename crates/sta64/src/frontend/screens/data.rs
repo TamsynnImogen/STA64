@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use bevy::prelude::*;
-use sta_content::{ContentDb, Fixed, MapDef, StartPos, Vec3 as SimVec3};
+use sta_content::{ContentDb, Fixed, MapDef, StartPos, StartingResources, Vec3 as SimVec3};
 use sta_sim::setup::{Control, GameOptions, GameSetup, PlayerSetup};
 use sta_sim::{PlayerId, TeamId};
 
@@ -198,13 +198,14 @@ pub struct SetupDraft {
     pub map: usize,
     pub seed: u64,
     pub seats: Vec<Seat>,
+    pub options: GameOptions,
 }
 
 impl SetupDraft {
     /// The first map, seat 0 the player, the others computers, every seat its
     /// own team, the races in turn.
     pub fn new(data: &ScreenData) -> SetupDraft {
-        let mut d = SetupDraft { map: 0, seed: 1, seats: Vec::new() };
+        let mut d = SetupDraft { map: 0, seed: 1, seats: Vec::new(), options: GameOptions::default() };
         d.set_map(data, 0);
         d
     }
@@ -213,6 +214,9 @@ impl SetupDraft {
     /// start slots, new ones are computers.
     pub fn set_map(&mut self, data: &ScreenData, map: usize) {
         self.map = map.min(data.maps.len().saturating_sub(1));
+        if self.options.officer_limit as usize >= data.content.rules().officer_limits.len() {
+            self.options.officer_limit = 0;
+        }
         let slots = data.maps.get(self.map).map_or(1, MapEntry::slots);
         let races = data.races();
         self.seats.truncate(slots);
@@ -270,6 +274,20 @@ impl SetupDraft {
         }
     }
 
+    pub fn cycle_resources(&mut self) {
+        self.options.starting_resources = match self.options.starting_resources {
+            StartingResources::Normal => StartingResources::Lots,
+            StartingResources::Lots => StartingResources::Normal,
+        };
+    }
+
+    pub fn cycle_officer_limit(&mut self, data: &ScreenData) {
+        let count = data.content.rules().officer_limits.len();
+        if count > 0 {
+            self.options.officer_limit = ((self.options.officer_limit as usize + 1) % count) as u32;
+        }
+    }
+
     /// The setup a match starts from: seat `i` is `PlayerId(i)` on the map's
     /// start slot `i`. `None` when the draft names no map.
     pub fn to_setup(&self, data: &ScreenData) -> Option<GameSetup> {
@@ -288,7 +306,7 @@ impl SetupDraft {
                 .enumerate()
                 .map(|(i, s)| PlayerSetup { id: PlayerId(i as u8), team: TeamId(s.team), race: s.race.clone(), control: s.control.control() })
                 .collect(),
-            options: GameOptions::default(),
+            options: self.options.clone(),
         })
     }
 
@@ -299,6 +317,7 @@ impl SetupDraft {
             map,
             seed: setup.seed,
             seats: setup.players.iter().map(|p| Seat { control: SeatControl::of(&p.control), race: p.race.clone(), team: p.team.0 }).collect(),
+            options: setup.options.clone(),
         })
     }
 }

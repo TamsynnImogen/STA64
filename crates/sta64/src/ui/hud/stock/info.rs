@@ -2,7 +2,7 @@
 
 use bevy::picking::Pickable;
 use bevy::prelude::*;
-use sta_sim::EntityId;
+use sta_sim::{EntityId, Fixed};
 
 use super::super::layout::R;
 use super::super::model::{self, HudFeed, Info};
@@ -90,14 +90,21 @@ fn resource_slot(id: usize) -> Option<usize> {
     }
 }
 
+fn whole(v: Fixed) -> i64 {
+    v.to_bits() / Fixed::ONE.to_bits()
+}
+
 fn resource_text(feed: &HudFeed, id: usize) -> Option<String> {
     let player = feed.view.player(feed.player)?;
+    if id == 0 {
+        return player.crew.map(|crew| whole(crew).to_string());
+    }
     if id == 1 {
         let [used, cap] = player.officers;
-        return Some(format!("{}/{}", used.to_f32() as i64, cap.to_f32() as i64));
+        return Some(format!("{}/{}", whole(used), whole(cap)));
     }
     let slot = resource_slot(id)?;
-    player.resources.get(slot).map(|v| (v.to_f32() as i64).to_string())
+    player.resources.get(slot).map(|v| whole(*v).to_string())
 }
 
 fn info_background(variant: usize) -> &'static str {
@@ -171,6 +178,7 @@ fn spawn_resource(commands: &mut Commands, root: Entity, layout: &StockLayout, f
     }
     // CFG resource IDs are different from the shared four-slot stock vector.
     for (id, flag) in [
+        (0, "noCrew"),
         (1, "noOfficers"),
         (2, "noDilithium"),
         (3, "noLatinum"),
@@ -445,7 +453,7 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
-    fn resource_ids_follow_native_order_and_omit_unavailable_crew() {
+    fn resource_ids_follow_native_stock_order() {
         assert_eq!(
             (0..6).map(resource_slot).collect::<Vec<_>>(),
             [None, None, Some(0), Some(1), Some(2), Some(3)]
@@ -505,6 +513,7 @@ mod tests {
             ..default()
         };
         assert_eq!(resource_text(&feed, 1), None);
+        assert_eq!(resource_text(&feed, 0), None);
         feed.view = Arc::new(WorldView {
             players: vec![PlayerView { crew: None,
                 id: PlayerId(1),
@@ -517,8 +526,17 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(resource_text(&feed, 1).as_deref(), Some("0/0"));
+        assert_eq!(resource_text(&feed, 0), None);
         Arc::make_mut(&mut feed.view).players[0].officers = [Fixed::from_int(3), Fixed::from_int(10)];
         assert_eq!(resource_text(&feed, 1).as_deref(), Some("3/10"));
+        Arc::make_mut(&mut feed.view).players[0].crew = Some(Fixed::ZERO);
+        assert_eq!(resource_text(&feed, 0).as_deref(), Some("0"));
+    }
+
+    #[test]
+    fn fixed_whole_values_truncate_toward_zero_without_float_rounding() {
+        assert_eq!(whole(Fixed::from_bits(Fixed::ONE.to_bits() * 16_777_217)), 16_777_217);
+        assert_eq!(whole(Fixed::from_bits(-Fixed::ONE.to_bits() - 1)), -1);
     }
 
     #[test]
