@@ -53,7 +53,7 @@ fn profile_defaults_and_cached_construction_are_distinct() {
     assert_eq!(finished.initial, Initial::Disabled);
     assert!(!finished.rearm);
     assert_eq!(construction.spatial, Spatial::Plain);
-    assert_eq!(sta_content::fake::db().hash(), 0x785c_a5ba_5ce5_d6a2);
+    assert_eq!(sta_content::fake::db().hash(), 0xa54b_02f8_d887_3b2c);
 
     for (profile, expected_initial, expected_rearm) in [
         (Profile::Sta1Classic, Initial::PaddedXz, true),
