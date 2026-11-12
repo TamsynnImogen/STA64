@@ -578,7 +578,13 @@ impl Diff {
                     writeln!(s, "  mark {kind}{} #{n} {field}: {a} vs {b}", o(obj))
                 }
                 Finding::Series { obj, field, t, a, b } => {
-                    writeln!(s, "  state obj={obj} {field} at {t:.3}s: {a:.3} vs {b:.3}")
+                    if *field == "pos" {
+                        writeln!(s, "  state obj={obj} pos at {t:.3}s: {b:.3} apart")
+                    } else if *field == "end" {
+                        writeln!(s, "  state obj={obj} series ends at {a:.3}s vs {b:.3}s")
+                    } else {
+                        writeln!(s, "  state obj={obj} {field} at {t:.3}s: {a:.3} vs {b:.3}")
+                    }
                 }
                 Finding::Slope { obj, a, b } => {
                     writeln!(s, "  state obj={obj} special energy slope: {a:.3}/s vs {b:.3}/s")
@@ -898,6 +904,12 @@ fn series(a: &Run, b: &Run, tol: &Tolerances, d: &mut Diff) {
                     done[i] = true;
                 }
             }
+        }
+        // A series that stops early (the object gone) on one side.
+        if let (Some(ea), Some(eb)) = (xa.last().map(|r| r.0), xb.last().map(|r| r.0))
+            && (ea - eb).abs() > tol.time
+        {
+            d.findings.push(Finding::Series { obj: o.clone(), field: "end", t: ea.min(eb), a: ea, b: eb });
         }
         if let (Some(p), Some(q)) = (slope(xa), slope(xb))
             && (p - q).abs() > tol.slope

@@ -301,10 +301,15 @@ to match run "<scenario>"`, `Expect mark "fire.start obj=shooter" by tick 90`,
   both paths since `sta64` writes `Bench::marks()`): `Ordnance=1` adds
   `ord.new` (`id obj weapon target at`) per shot and `ord.gone` (`id obj
   weapon at life tgt_at d`) when the shot's hit lands (a shot that never hits
-  has none: the sim has no expiry event), the weapon named by its ordnance
-  ODF (`ordName`) as Refit names it; `OrdnanceSkip=` leaves out weapon ODF
-  prefixes. `State=<ms>` adds a `state` line per named scene object that
-  often (`pos hull sh`, `sp` when it has special energy; no `q`/`ma`/`swa`).
+  has none: the sim has no expiry event; a hit is matched to the oldest open
+  shot of its shooter and weapon, since hits carry no shot id; the original
+  writes `ord.gone` for misses too, so a miss there is an only-in-original
+  finding and shifts the `ord.gone` pairs after it), the weapon named by its ordnance
+  ODF (`ordName`) as Refit names it; `OrdnanceSkip=` leaves out weapon or
+  ordnance ODF prefixes. `State=<ms>` adds a `state` line per named scene
+  object that often, rounded to whole ticks (`pos hull sh`, `sp` when it has
+  special energy; no `q`/`ma`/`swa`); a series that ends early on one side is
+  a finding.
   `bank` (a command) also writes a `bank` mark. `SimTime=1` puts `t=` (sim
   seconds) first on every mark. `sta-bench parity` compares `state` as a
   series (B resampled on A's times: position within `pos`, hull and shields

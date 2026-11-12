@@ -57,8 +57,10 @@ fn ordnance(b: &Bench) -> Vec<Mark> {
     for (tick, e) in &b.events {
         match e {
             SimEvent::Fired { shooter, weapon, target, .. } => {
+                // Refit matches the ordnance ODF; the weapon ODF is checked too.
                 let odf = db.name(*weapon).unwrap_or("?").to_ascii_lowercase();
-                if skip.iter().any(|p| odf.starts_with(p.as_str())) {
+                let ord = ordnance_label(db, *weapon).to_ascii_lowercase();
+                if skip.iter().any(|p| odf.starts_with(p.as_str()) || ord.starts_with(p.as_str())) {
                     continue;
                 }
                 n += 1;
