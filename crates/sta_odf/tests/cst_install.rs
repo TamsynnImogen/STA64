@@ -121,6 +121,10 @@ fn every_installed_odf_round_trips_and_formats_to_the_same_values() {
             }
         }
     }
+    assert!(
+        resolved > 0,
+        "nothing resolved: the comparison proves nothing"
+    );
     eprintln!(
         "EDT-06: {} ODF paths, {copies} layer copies round-tripped ({crlf} with CRLF, {non_utf8} not UTF-8), \
          {changed} changed by the formatter; {resolved} names resolved identically ({unresolved} unresolvable in both)",

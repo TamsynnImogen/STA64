@@ -15,8 +15,16 @@
 //! are untouched, so the formatted file resolves to the same values as the
 //! input (checked against `install` ODFs in `tests/cst_install.rs`). The
 //! "grouped layout after the FO Guide templates" of the WORKPLAN row is not
-//! done here: it needs the templates, and it reorders keys, which the
-//! byte-identical guarantee above rules out for a default run.
+//! done here: `format_odfs.py` and the templates are not in the repository,
+//! and reordering keys can change what a layered resolve returns when a key
+//! is written twice (the last wins) and changes [`crate::Odf::keys`] order.
+//! It belongs in an opt-in mode over this tree.
+//!
+//! Dropping repeated blank lines shifts the line numbers the reader reports
+//! (`Entry::line`, duplicate diagnostics) for a formatted file.
+//!
+//! Lines that are not valid UTF-8 are classified as the reader sees them (it
+//! decodes lossily), but [`Cst::format`] copies them verbatim.
 
 use std::ops::Range;
 
@@ -52,6 +60,10 @@ pub struct Line {
     comment: Option<usize>,
     /// For a [`LineKind::Continuation`]: an entry is open above it.
     pub continues: bool,
+    /// The text is valid UTF-8, so `comment` is a byte offset into it. When
+    /// it is not, the line was classified on its lossy decoding and
+    /// `comment` is `None`.
+    valid: bool,
 }
 
 /// The syntax tree of one ODF file.
@@ -85,9 +97,16 @@ impl Cst {
         }
     }
 
-    /// The input, byte for byte.
+    /// The file rebuilt from its lines and their terminators: the input,
+    /// byte for byte. (Built from the tree, not copied, so comparing it with
+    /// the input checks the tree.)
     pub fn to_bytes(&self) -> Vec<u8> {
-        self.src.clone()
+        let mut out = Vec::with_capacity(self.src.len());
+        for l in &self.lines {
+            out.extend_from_slice(self.text(l));
+            out.extend_from_slice(self.eol(l));
+        }
+        out
     }
 
     pub fn lines(&self) -> &[Line] {
@@ -108,7 +127,8 @@ impl Cst {
     pub fn includes(&self) -> Vec<String> {
         let mut out = Vec::new();
         for l in self.lines.iter().filter(|l| l.kind == LineKind::Directive) {
-            let Some(code) = self.code(l) else { continue };
+            let text = String::from_utf8_lossy(self.text(l));
+            let code = text[..comment_start(&text).unwrap_or(text.len())].trim();
             let rest = code.strip_prefix('#').unwrap_or("").trim_start();
             if rest.len() >= 7
                 && rest.is_char_boundary(7)
@@ -123,19 +143,13 @@ impl Cst {
         out
     }
 
-    /// Code part of a line (before the comment), trimmed; `None` when the
-    /// line is not valid UTF-8.
-    fn code(&self, line: &Line) -> Option<&str> {
-        let t = std::str::from_utf8(self.text(line)).ok()?;
-        Some(t[..line.comment.unwrap_or(t.len())].trim())
-    }
-
     /// The formatted file. Idempotent. See the module docs for what changes.
     pub fn format(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(self.src.len());
         let mut blank_run = 0;
         for l in &self.lines {
-            let Ok(text) = std::str::from_utf8(self.text(l)) else {
+            let text = std::str::from_utf8(self.text(l)).ok().filter(|_| l.valid);
+            let Some(text) = text else {
                 blank_run = 0;
                 out.extend_from_slice(self.text(l));
                 out.extend_from_slice(self.eol(l));
@@ -169,7 +183,7 @@ impl Cst {
                 _ => out.extend_from_slice(code.as_bytes()),
             }
             if let Some(c) = comment {
-                if !code.is_empty() {
+                if !code.is_empty() && code != "\u{feff}" {
                     out.push(b' ');
                 }
                 out.extend_from_slice(c.as_bytes());
@@ -187,15 +201,15 @@ fn classify(src: &[u8], text: Range<usize>, eol: Range<usize>, open: &mut bool) 
         eol,
         comment: None,
         continues: false,
+        valid: true,
     };
-    let Ok(s) = std::str::from_utf8(&src[text]) else {
-        // Not text: the reader (which decodes lossily) sees replacement
-        // characters; keep the line as it is and as an unknown row.
-        *open = false;
-        return line;
-    };
+    // The reader decodes lossily; so does the classification. Every syntax
+    // character is ASCII, so the decoding cannot change what it finds.
+    let lossy = String::from_utf8_lossy(&src[text]);
+    line.valid = matches!(lossy, std::borrow::Cow::Borrowed(_));
+    let s: &str = &lossy;
     let cut = comment_start(s);
-    line.comment = cut;
+    line.comment = cut.filter(|_| line.valid);
     let code = s[..cut.unwrap_or(s.len())].trim();
     if code.is_empty() {
         line.kind = if cut.is_some() {
@@ -216,7 +230,10 @@ fn classify(src: &[u8], text: Range<usize>, eol: Range<usize>, open: &mut bool) 
         line.continues = *open;
     } else {
         *open = false;
-        if code.split_once('=').is_some_and(|(k, _)| !k.trim().is_empty()) {
+        if code
+            .split_once('=')
+            .is_some_and(|(k, _)| !k.trim().is_empty())
+        {
             line.kind = LineKind::Entry;
             *open = true;
         }
@@ -390,5 +407,51 @@ mod tests {
             }
         }
         assert!(n > 0, "no fixture ODFs found");
+    }
+
+    #[test]
+    fn matches_the_reader_on_edge_cases_and_never_panics() {
+        let cases: &[&[u8]] = &[
+            b"#remark\xc3\xa9 x\n",
+            b"#includ\xc3\xa9 \"a.odf\"\n",
+            b"#abcdef\xe9\n",
+            b"#include \"caf\xe9.odf\" // c\nname = \"Caf\xe9\"\n\"more\"\n",
+            b"\xef\xbb\xbf// bom comment\n",
+            b"a = \"x // y\" // z\n\"q\"\n  \"r\" \"s\"  \n= nokey\n[sec]\n\"orphan\"\n",
+            b"a = \"unbalanced\n// still inside the quote\n",
+            b"k =\n\"a\"\n\n// c\n\"b\"\nnext = 1\n\"c\"\n",
+            b"\0\0=\0\n",
+        ];
+        for &c in cases {
+            let cst = Cst::parse(c);
+            assert_eq!(cst.to_bytes(), c);
+            let lossy = String::from_utf8_lossy(c).into_owned();
+            let raw = parse(&lossy);
+            assert_eq!(cst.includes(), raw.includes, "{c:?}");
+            let entries = cst
+                .lines()
+                .iter()
+                .filter(|l| l.kind == LineKind::Entry)
+                .count();
+            assert_eq!(entries, raw.entries.len(), "{c:?}");
+            let out = cst.format();
+            assert_eq!(Cst::parse(&out).format(), out, "{c:?} idempotent");
+            same_values(&lossy, &String::from_utf8_lossy(&out));
+        }
+    }
+
+    #[test]
+    fn non_utf8_lines_are_classified_like_the_reader_but_kept_verbatim() {
+        let src: &[u8] = b"name = \"Caf\xe9\"\n\"more\"\n";
+        let cst = Cst::parse(src);
+        assert_eq!(cst.lines()[0].kind, LineKind::Entry);
+        assert!(cst.lines()[1].continues);
+        assert_eq!(cst.format(), src);
+    }
+
+    #[test]
+    fn a_bom_before_a_comment_gets_no_space() {
+        let src = "\u{feff}// x\n";
+        assert_eq!(Cst::parse(src.as_bytes()).format(), src.as_bytes());
     }
 }

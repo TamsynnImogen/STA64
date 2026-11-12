@@ -61,7 +61,7 @@ pub fn parse(text: &str) -> RawOdf {
         if let Some(rest) = line.strip_prefix('#') {
             continuation = None;
             let rest = rest.trim_start();
-            if rest.len() >= 7 && rest[..7].eq_ignore_ascii_case("include") {
+            if rest.get(..7).is_some_and(|w| w.eq_ignore_ascii_case("include")) {
                 let name = unquote(rest[7..].trim());
                 if !name.is_empty() {
                     out.includes.push(name.to_owned());

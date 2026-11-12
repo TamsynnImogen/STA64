@@ -19,7 +19,12 @@ use sta_odf::Cst;
 const USAGE: &str = "Usage: odf_fmt [--write] [--report FILE] PATH...\n       odf_fmt --help";
 
 fn collect(path: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
-    if path.is_dir() {
+    let meta = fs::symlink_metadata(path)?;
+    if meta.file_type().is_symlink() {
+        // Never follow links: a loop would not end, and a rewrite would
+        // replace the link instead of its target.
+        eprintln!("odf_fmt: skipping symlink {}", path.display());
+    } else if meta.is_dir() {
         let mut entries: Vec<_> = fs::read_dir(path)?.collect::<Result<_, _>>()?;
         entries.sort_by_key(|e| e.file_name());
         for e in entries {
@@ -32,6 +37,27 @@ fn collect(path: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
         out.push(path.to_owned());
     }
     Ok(())
+}
+
+/// Temp file beside the target (new, never a followed link), same
+/// permissions, flushed to disk, then renamed over it.
+fn write_atomically(target: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let tmp = target.with_extension("odf.fmt-tmp");
+    let result = (|| {
+        let mut f = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)?;
+        f.write_all(bytes)?;
+        f.set_permissions(fs::metadata(target)?.permissions())?;
+        f.sync_all()?;
+        fs::rename(&tmp, target)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result
 }
 
 fn json_str(s: &str) -> String {
@@ -68,7 +94,7 @@ fn run() -> Result<i32, String> {
     }
     let mut files = Vec::new();
     for p in &paths {
-        if p.is_file() {
+        if fs::symlink_metadata(p).is_ok_and(|m| m.is_file()) {
             files.push(p.clone());
         } else {
             collect(p, &mut files).map_err(|e| format!("{}: {e}", p.display()))?;
@@ -84,7 +110,7 @@ fn run() -> Result<i32, String> {
             }
         };
         let cst = Cst::parse(&bytes);
-        // Defence in depth: never write from a tree that cannot rebuild the file.
+        // Never write from a tree that cannot rebuild the file.
         if cst.to_bytes() != bytes {
             errors.push((f.clone(), "syntax tree is not lossless".into()));
             continue;
@@ -94,9 +120,7 @@ fn run() -> Result<i32, String> {
             continue;
         }
         if write {
-            let tmp = f.with_extension("odf.fmt-tmp");
-            if let Err(e) = fs::write(&tmp, &out).and_then(|()| fs::rename(&tmp, f)) {
-                let _ = fs::remove_file(&tmp);
+            if let Err(e) = write_atomically(f, &out) {
                 errors.push((f.clone(), e.to_string()));
                 continue;
             }
