@@ -15,13 +15,17 @@ user's own executables each time, and none are recorded here.
 | engine API size | 371 `ScriptInterface` methods | (imports only) |
 | distinct calls used | 138 | 213 |
 | call sites | 11692 | — |
-| DLL-shaped callable (`A2` / `A1` table) | 43 | 164 |
+| DLL-shaped callable (`A2` / `A1` table) | 43 | 172 |
 | missing callable signatures (missing A1 calls) | 89 | 0 |
+| &nbsp;&nbsp;of the A1 callable: working (sim- or view-backed) | — | 72 |
+| &nbsp;&nbsp;of the A1 callable: presentation event only, no consumer yet | — | 35 |
+| &nbsp;&nbsp;of the A1 callable: request retained and counted, no effect | — | 48 |
+| &nbsp;&nbsp;of the A1 callable: always raises (no data in the world view) | — | 17 |
 | MMM job-equivalent, not A2-shaped | 0 | — |
 | bound in STA64's Lua today | — | 6 |
 | in MMM's API, not yet bound | 21 | 0 |
 | no Lua equivalent (STA64 extension needed) | 68 | 0 |
-| script-state plumbing (n/a in Lua) | 6 | 49 |
+| script-state plumbing (n/a in Lua) | 6 | 41 |
 
 - **bound**: an existing `sta_mission` binding does the same job.
 - **A2 DLL-shaped**: the exact normalized ScriptInterface signature has a literal
@@ -29,8 +33,9 @@ user's own executables each time, and none are recorded here.
   not proof of native simulation parity.
 - **A1 callable**: the exact imported signature has a literal production binding
   registered on the `A1` namespace (crates/sta_mission/src/api/a1/); same source-level
-  coverage. Some of those bindings retain the request without a simulation seam or
-  raise a documented error (see that module's README); callable is not parity.
+  coverage only: it does not mean the call changes the simulation. The rows below it
+  split the callable ones into working, event-only, retained-without-effect and
+  always-raises (classified from the A1 sources; see that module's README).
 - **MMM-equivalent**: an existing MMM-style Lua operation does the same job, but
   it is not counted as an A2 DLL-shaped callable.
 - **MMM**: Fleet Operations' MMM Lua API ([MMM_API.md](MMM_API.md)) has it (same name, or the
@@ -233,7 +238,7 @@ user's own executables each time, and none are recorded here.
 
 ## Armada I: engine functions the mission DLLs import
 
-### Script state and save/load (49)
+### Script state and save/load (41)
 
 | call | scripts | status | Lua name |
 |---|---:|:-:|---|
@@ -267,9 +272,6 @@ user's own executables each time, and none are recorded here.
 | `bool in(_iobuf *, Vector3 *, unsigned int)` | 18 | n/a |  |
 | `bool out(_iobuf *, Vector3 *, unsigned int, char *)` | 18 | n/a |  |
 | `hot_int isCineractiveDone` | 11 | n/a |  |
-| `group::group(char *)` | 4 | n/a |  |
-| `group::~group(void)` | 4 | n/a |  |
-| `int Load_Rules(char *)` | 4 | n/a |  |
 | `void * script::nth_param_ptr(int)` | 4 | n/a |  |
 | `void AI_Team_Load_AIP(character &, char *)` | 4 | n/a |  |
 | `void script::add_character_param(character *)` | 4 | n/a |  |
@@ -279,13 +281,8 @@ user's own executables each time, and none are recorded here.
 | `void IIIE::trash_rule(char *)` | 3 | n/a |  |
 | `void group::add_group_entry_function(void (*)(character &), void (*)(character &))` | 3 | n/a |  |
 | `void group::remove_group_entry_function(void (*)(character &), void (*)(character &))` | 3 | n/a |  |
-| `float hot_float::operator float(void)` | 2 | n/a |  |
-| `hot_float strength_team_1` | 2 | n/a |  |
-| `hot_float strength_team_2` | 2 | n/a |  |
 | `hot_int moons_team_1` | 2 | n/a |  |
 | `hot_int moons_team_2` | 2 | n/a |  |
-| `int Load_Action_Scripts(char *)` | 1 | n/a |  |
-| `void Add_Team_To_Group(int, group &)` | 1 | n/a |  |
 
 ### Bridge scenes and movies (7)
 
@@ -385,7 +382,7 @@ user's own executables each time, and none are recorded here.
 | `void EndCredits(void)` | 1 | A1 callable | `A1.EndCredits` |
 | `void StartCredits(void)` | 1 | A1 callable | `A1.StartCredits` |
 
-### Teams, players and relations (15)
+### Teams, players and relations (16)
 
 | call | scripts | status | Lua name |
 |---|---:|:-:|---|
@@ -403,6 +400,7 @@ user's own executables each time, and none are recorded here.
 | `bool IsVisibleToTeam(int, int)` | 1 | A1 callable | `A1.IsVisibleToTeam` |
 | `int GetPercievedTeamOfFlag(int)` | 1 | A1 callable | `A1.GetPercievedTeamOfFlag` |
 | `int GetRealTeamOfFlag(int)` | 1 | A1 callable | `A1.GetRealTeamOfFlag` |
+| `void Add_Team_To_Group(int, group &)` | 1 | A1 callable | `A1.Add_Team_To_Group` |
 | `void SetWormholeTeam(int, int)` | 1 | A1 callable | `A1.SetWormholeTeam` |
 
 ### Objects: create, find, query, change (48)
@@ -458,7 +456,7 @@ user's own executables each time, and none are recorded here.
 | `void RemoveBillboardEffect(int)` | 1 | A1 callable | `A1.RemoveBillboardEffect` |
 | `void RestrictSpecialFlag(int, SpecialFlag::Restriction, int)` | 1 | A1 callable | `A1.RestrictSpecialFlag` |
 
-### Other (28)
+### Other (35)
 
 | call | scripts | status | Lua name |
 |---|---:|:-:|---|
@@ -479,14 +477,21 @@ user's own executables each time, and none are recorded here.
 | `void EnableLight(int, bool)` | 6 | A1 callable | `A1.EnableLight` |
 | `void SetGreenAlert(int)` | 6 | A1 callable | `A1.SetGreenAlert` |
 | `bool IsExploding(int)` | 5 | A1 callable | `A1.IsExploding` |
+| `group::group(char *)` | 4 | A1 callable | `A1.GroupNew` |
+| `group::~group(void)` | 4 | A1 callable | `A1.GroupDelete` |
+| `int Load_Rules(char *)` | 4 | A1 callable | `A1.Load_Rules` |
 | `void Starfield_Load_Background_Geometry(char *)` | 4 | A1 callable | `A1.Starfield_Load_Background_Geometry` |
 | `void DisableEngines(int, bool)` | 3 | A1 callable | `A1.DisableEngines` |
 | `void TransferFlag(int, int)` | 3 | A1 callable | `A1.TransferFlag` |
 | `bool DoesNotExist(int)` | 2 | A1 callable | `A1.DoesNotExist` |
+| `float hot_float::operator float(void)` | 2 | A1 callable | `A1.hot_float_value` |
+| `hot_float strength_team_1` | 2 | A1 callable | `A1.strength_team_1` |
+| `hot_float strength_team_2` | 2 | A1 callable | `A1.strength_team_2` |
 | `void SetYellowAlert(int)` | 2 | A1 callable | `A1.SetYellowAlert` |
 | `bool IsDerelict(int)` | 1 | A1 callable | `A1.IsDerelict` |
 | `bool IsThereARomulanSpyOnShip(int)` | 1 | A1 callable | `A1.IsThereARomulanSpyOnShip` |
 | `int GetTranswarpExitWormhole(int)` | 1 | A1 callable | `A1.GetTranswarpExitWormhole` |
+| `int Load_Action_Scripts(char *)` | 1 | A1 callable | `A1.Load_Action_Scripts` |
 | `void AddTransporterEffect(int)` | 1 | A1 callable | `A1.AddTransporterEffect` |
 | `void ClearRestrictions(int)` | 1 | A1 callable | `A1.ClearRestrictions` |
 | `void EnableWormholeTravel(int, bool)` | 1 | A1 callable | `A1.EnableWormholeTravel` |

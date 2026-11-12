@@ -1,9 +1,9 @@
 # LUA-06 Armada I mission calls (`A1` table)
 
 The stock Armada I missions import 213 engine functions by name from
-`Armada.exe` (`docs/MISSION_DLL_API.md`). 49 are the DLLs' own plumbing (hot
-and timer variables, save/load, rule and group registration, `Load_Rules`):
-plain Lua variables, monitors and tables here. The other 164 imported
+`Armada.exe` (`docs/MISSION_DLL_API.md`). 41 are the DLLs' own plumbing (hot
+and timer variables, save/load, rule registration): plain Lua variables,
+monitors and tables here. The other 172 imported
 signatures are bound as `A1.<Name>`, one Lua function per name, overloads
 selected by argument count and type. Nothing is bound that no stock DLL
 imports, except two host reports (below) and `A1.paths`.
@@ -55,11 +55,17 @@ The race text is empty for type 0 (no `Text` argument is sent).
 
 ## Evidence grade
 
-Argument shapes come from the DLL import signatures (read from data). The
-bridge type to race mapping, title rectangle layout and shield-percent scale
-are measured from the install's mission DLLs (details kept outside the
-repository). `Team::TeamRelation` values and everything listed next are not
-measured.
+Argument shapes: read from the DLL import signatures. The bridge type to race
+mapping, the title/subtitle rectangle layout and the shield fraction scale
+were measured on the install's mission DLLs; details live outside the
+repository. Everything under "Not measured" is a guess flagged in the code.
+
+## Which calls do what
+
+"Callable" in `docs/MISSION_DLL_API.md` only means the name and signature are
+bound. The generated summary splits them: working (sim- or view-backed),
+presentation events with no consumer yet, retained-and-counted requests with
+no effect, and calls that always raise for lack of world-view data.
 
 ## Not measured (guesses are flagged in the code comments)
 
@@ -68,7 +74,7 @@ The third argument of `Goto`/`Stop` (the trailing `int`), the flag of
 `CountVisible*` searches and of `RemoveAllCraft`, whether the third
 argument of the `...Near...` searches is a team or a relation filter (read as a
 team, -1 any), the meaning of bridge type 0, the `TeamRelation` values, the
-restriction masks of `RestrictSpecialFlag` (0x20, 0x400), what `IsCompromised`
+restriction masks of `RestrictSpecialFlag`, what `IsCompromised`
 and `GetLocationOfFlag` return, and the delay of `FailMission` /
 `SucceedMission` (retained, not applied).
 
@@ -85,7 +91,9 @@ and `GetLocationOfFlag` return, and the delay of `FailMission` /
 
 ## Not available until a sim seam exists
 
-Writes are retained as `Call A1.<Name>` and counted in `unsupported()`:
+Writes are retained as `Call A1.<Name>` and counted in `unsupported()` (also `Load_Rules` and
+`Load_Action_Scripts`, which load nothing and return 0). `SetRelation` sets only the
+mission-local override (provisional 0/1/2 mapping) and is counted too:
 `SetPosition SetWarpSpeed ResetWarpSpeed Patrol SearchAndDestroy PointAt
 Special_Attack Attack(unit, Vector) SetSpecialWeaponAttackInterval AI_Attack
 AttackMainEnemyBase SetShieldPercent SetMaxShields DestroyCritical Destroy*
@@ -95,7 +103,7 @@ EnableLight ReplaceObject RecruitSpecialForces SetRace SetWormholeTeam
 SetOfficers AddOfficers SetTeamCrew AddCrew SetCrew DisableAllAITeams
 EnableAllAITeams DisableTeam EnableTeam SetIsAITeam`.
 
-Queries raise an error naming the missing data: `InStopMode InAttackMode
+Queries raise an error naming the missing data (also `strength_team_1`, `strength_team_2`, `hot_float_value`): `InStopMode InAttackMode
 OutOfSpecialAttackMode InQueue GetAttackLocation UnderAttack
 GetAllyShipAttacks GetAllyStationAttacks GetDilithiumOnFreighter
 IsCompromised IsDerelict IsThereARomulanSpyOnShip GetTranswarpExitWormhole
@@ -106,3 +114,6 @@ GetNearestTranswarpGate`.
 Special flags (`CreateSpecialFlag` ...) are tracked in the runtime only.
 
 No stock mission was run through this table; the tests use fake content.
+
+`GroupNew`, `GroupDelete` and `Add_Team_To_Group` are runtime bookkeeping only.
+`AddDilithium`/`SetDilithium` chain within a tick (writes are absolute; the view is a snapshot).

@@ -42,7 +42,7 @@ fn no_data(lua: &Lua, env: &Env, name: &'static str, spec: &'static [&'static st
 
 pub(super) fn install(lua: &Lua, env: &Env, table: &Table) -> mlua::Result<()> {
     // Movement and position.
-    table.set("SetPosition", gap_write(lua, env, "SetPosition", &["hs", "hsi"], "no teleport edit in the sim seam")?)?;
+    table.set("SetPosition", gap_write(lua, env, "SetPosition", &["hs"], "no teleport edit in the sim seam")?)?;
     table.set("SetWarpSpeed", gap_write(lua, env, "SetWarpSpeed", &["hf"], "no warp-speed seam in the sim")?)?;
     table.set("ResetWarpSpeed", gap_write(lua, env, "ResetWarpSpeed", &["h"], "no warp-speed seam in the sim")?)?;
     table.set("Patrol", gap_write(lua, env, "Patrol", &["hs"], "no patrol order in the sim seam")?)?;
@@ -80,11 +80,49 @@ pub(super) fn install(lua: &Lua, env: &Env, table: &Table) -> mlua::Result<()> {
         e.gap("ReplaceObject", "no object replacement in the sim seam", args_of(a))?;
         Ok(Value::Integer(0))
     })?)?;
-    table.set("RecruitSpecialForces", def(lua, env, "RecruitSpecialForces", &["sii"], |_, e, _, a| {
-        e.team("RecruitSpecialForces", a[1].int())?;
-        e.gap("RecruitSpecialForces", "no special-forces recruitment in the sim seam", args_of(a))?;
-        Ok(Value::Boolean(false))
+    // `RecruitSpecialForces(name, team, out)` returns success and leaves the
+    // out-reference unchanged: no seam, so (false, out).
+    let recruit_env = env.clone();
+    table.set("RecruitSpecialForces", lua.create_function(move |_, args: mlua::MultiValue| {
+        let (_, a) = recruit_env.parse("RecruitSpecialForces", &["sii"], &args)?;
+        recruit_env.team("RecruitSpecialForces", a[1].int())?;
+        recruit_env.gap("RecruitSpecialForces", "no special-forces recruitment in the sim seam", args_of(&a))?;
+        Ok((false, a[2].int()))
     })?)?;
+    // Loading rule and action-script DLLs by name: a converted mission is one
+    // Lua file, so nothing is loaded; 0 is the failure status.
+    table.set("Load_Rules", def(lua, env, "Load_Rules", &["s"], |_, e, _, a| {
+        e.gap("Load_Rules", "converted missions are one Lua file; no rule DLL is loaded", args_of(a))?;
+        Ok(Value::Integer(0))
+    })?)?;
+    table.set("Load_Action_Scripts", def(lua, env, "Load_Action_Scripts", &["s"], |_, e, _, a| {
+        e.gap("Load_Action_Scripts", "converted missions are one Lua file; no action script is loaded", args_of(a))?;
+        Ok(Value::Integer(0))
+    })?)?;
+    // Script groups of teams: plain bookkeeping.
+    table.set("GroupNew", def(lua, env, "GroupNew", &["s"], |_, e, _, a| {
+        let mut st = e.st.borrow_mut();
+        st.next_group += 1;
+        let id = st.next_group;
+        st.groups.insert(id, (a[0].text().to_owned(), Default::default()));
+        Ok(Value::Integer(i64::from(id)))
+    })?)?;
+    table.set("GroupDelete", def(lua, env, "GroupDelete", &["i"], |_, e, _, a| {
+        let id = u32::try_from(a[0].int()).unwrap_or(0);
+        e.st.borrow_mut().groups.remove(&id).map(|_| Value::Nil).ok_or_else(|| mlua::Error::runtime("A1.GroupDelete: unknown group"))
+    })?)?;
+    table.set("Add_Team_To_Group", def(lua, env, "Add_Team_To_Group", &["ii"], |_, e, _, a| {
+        e.team("Add_Team_To_Group", a[0].int())?;
+        let id = u32::try_from(a[1].int()).unwrap_or(0);
+        let mut st = e.st.borrow_mut();
+        let (_, members) = st.groups.get_mut(&id).ok_or_else(|| mlua::Error::runtime("A1.Add_Team_To_Group: unknown group"))?;
+        members.insert(a[0].int());
+        Ok(Value::Nil)
+    })?)?;
+    // Team strength variables: no strength metric in the world view.
+    table.set("strength_team_1", no_data(lua, env, "strength_team_1", &[""], "no team strength metric in the world view")?)?;
+    table.set("strength_team_2", no_data(lua, env, "strength_team_2", &[""], "no team strength metric in the world view")?)?;
+    table.set("hot_float_value", no_data(lua, env, "hot_float_value", &[""], "no team strength metric in the world view")?)?;
 
     // Queries with no data behind them.
     table.set("IsCompromised", no_data(lua, env, "IsCompromised", &["hi"], "the meaning of compromised (and its data) is not known")?)?;

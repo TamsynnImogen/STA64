@@ -4,9 +4,10 @@
 //! use `ArmadaTeams`: 1..8 are slots 0..7, 0 is neutral).
 //!
 //! `SetRelation(a, b, relation)` takes `Team::TeamRelation` as the DLLs pass
-//! it: the stock calls use 0, 1 and 2. The meaning of those values is NOT
-//! measured (no enum or string table in the install); `relation_of` is the one
-//! provisional mapping (0 enemy, 1 ally, 2 neutral) and is easy to change.
+//! it, an int. The meaning of the values is NOT measured; `relation_of` is the
+//! one provisional mapping (0 enemy, 1 ally, 2 neutral) and is easy to change.
+//! It only sets the mission-local override (`Player:setRelation` does the
+//! same); the sim has no relation edit, which `unsupported()` records.
 
 use mlua::{Lua, Table, Value};
 use sta_sim::command::Edit;
@@ -31,17 +32,26 @@ fn dilithium(e: &Env, name: &str, team: i64, n: i64, add: bool) -> mlua::Result<
     if !player.is_player() {
         return Err(mlua::Error::runtime(format!("A1.{name} requires a player team")));
     }
-    let amount = {
+    let amount = i32::try_from(n).map_err(|_| mlua::Error::runtime(format!("A1.{name} amount out of range")))?;
+    let tick = e.ctx.borrow().view.tick;
+    // Writes are absolute and the view is a snapshot: within one tick, build on
+    // the value this call last wrote instead of the stale view.
+    let base = {
         let c = e.ctx.borrow();
-        let now = c
-            .view
-            .player(player)
-            .and_then(|p| p.resources.get(usize::from(DILITHIUM)))
-            .map_or(0.0, |v| f64::from(v.to_f32()));
-        if add { now + n as f64 } else { n as f64 }
+        match e.st.borrow().dilithium.get(&player) {
+            Some((t, v)) if *t == tick => *v,
+            _ => c
+                .view
+                .player(player)
+                .and_then(|p| p.resources.get(usize::from(DILITHIUM)))
+                .copied()
+                .unwrap_or(sta_core::Fixed::ZERO),
+        }
     };
-    e.edit(name, Edit::Cargo(player, DILITHIUM, sta_core::Fixed::from_f64(amount)))?;
-    Ok(Value::Integer(amount as i64))
+    let new = if add { base + sta_core::Fixed::from_int(amount) } else { sta_core::Fixed::from_int(amount) };
+    e.edit(name, Edit::Cargo(player, DILITHIUM, new))?;
+    e.st.borrow_mut().dilithium.insert(player, (tick, new));
+    Ok(Value::Integer((new.to_f32() as f64).round() as i64))
 }
 
 pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::Result<()> {
@@ -53,7 +63,9 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
         let (from, to) = (e.team("SetRelation", a[0].int())?, e.team("SetRelation", a[1].int())?);
         let rel = relation_of(a[2].int())
             .ok_or_else(|| mlua::Error::runtime("A1.SetRelation requires a relation value 0, 1 or 2"))?;
-        e.ctx.borrow_mut().relations.insert((from, to), rel);
+        let mut c = e.ctx.borrow_mut();
+        c.relations.insert((from, to), rel);
+        c.unsupported("A1.SetRelation: mission-local override only; no relation edit in the sim seam");
         Ok(Value::Nil)
     })?)?;
 
@@ -110,22 +122,22 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
     table.set("SetOfficers", def(lua, env, "SetOfficers", &["if"], |_, e, _, a| {
         e.team("SetOfficers", a[0].int())?;
         e.gap("SetOfficers", "no officer-stock edit in the sim seam", args_of(a))?;
-        Ok(Value::Nil)
+        Ok(Value::Number(a[1].num()))
     })?)?;
     table.set("AddOfficers", def(lua, env, "AddOfficers", &["if"], |_, e, _, a| {
         e.team("AddOfficers", a[0].int())?;
         e.gap("AddOfficers", "no officer-stock edit in the sim seam", args_of(a))?;
-        Ok(Value::Nil)
+        Ok(Value::Number(a[1].num()))
     })?)?;
     table.set("SetTeamCrew", def(lua, env, "SetTeamCrew", &["if"], |_, e, _, a| {
         e.team("SetTeamCrew", a[0].int())?;
         e.gap("SetTeamCrew", "no crew-stock edit in the sim seam", args_of(a))?;
-        Ok(Value::Nil)
+        Ok(Value::Number(a[1].num()))
     })?)?;
     table.set("AddCrew", def(lua, env, "AddCrew", &["if"], |_, e, _, a| {
         e.team("AddCrew", a[0].int())?;
         e.gap("AddCrew", "no crew-stock edit in the sim seam", args_of(a))?;
-        Ok(Value::Nil)
+        Ok(Value::Number(a[1].num()))
     })?)?;
     table.set("SetCrew", def(lua, env, "SetCrew", &["hf"], |_, e, _, a| {
         e.unit("SetCrew", a[0].id())?;

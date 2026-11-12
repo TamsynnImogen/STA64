@@ -1,5 +1,6 @@
 import importlib.util
 import pathlib
+import re
 import tempfile
 import unittest
 
@@ -582,16 +583,50 @@ class MissionDllInventoryTests(unittest.TestCase):
         )
         self.assertEqual(inventory.a1_exact_for("void StopMovie(void)", self.repo), "")
 
-    def test_a1_rule_and_group_machinery_is_script_state_plumbing(self):
+    def test_only_rule_engine_plumbing_is_script_state(self):
         for sig in (
             "rule * IIIE::create_rule(int (*)(void), void (*)(void), char *)",
-            "group::group(char *)",
-            "void Add_Team_To_Group(int, group &)",
-            "hot_float strength_team_1",
-            "int Load_Rules(char *)",
+            "void IIIE::trash_rule(char *)",
+            "void hot_type::add_dependent_rule(rule *)",
         ):
             self.assertEqual(inventory.area(sig), "Script state and save/load", sig)
-        self.assertNotEqual(inventory.area("void PlayBridgeMovie(char *, int)"), "Script state and save/load")
+        for sig in (
+            "void Add_Team_To_Group(int, group &)",
+            "int Load_Rules(char *)",
+            "int Load_Action_Scripts(char *)",
+            "hot_float strength_team_1",
+            "group::group(char *)",
+            "void PlayBridgeMovie(char *, int)",
+        ):
+            self.assertNotEqual(inventory.area(sig), "Script state and save/load", sig)
+
+    def test_a1_commented_out_registrations_do_not_count(self):
+        self.register_a1("presentation", '// table.set("StopMovie", f);\n    // table.set("PlayBridgeMovie", f);\n')
+        self.assertEqual(inventory.a1_exact_for("void StopMovie(void)", self.repo), "")
+
+    def test_a1_kinds_separate_working_retained_and_erroring_calls(self):
+        a1 = self.api / "a1"
+        self.register_a1("seams", "")
+        (a1 / "seams.rs").write_text(
+            'table.set("SetPosition", gap_write(lua, env, "SetPosition", &["hs"], "x")?)?;\n'
+            'table.set("InQueue", no_data(lua, env, "InQueue", &["h"], "x")?)?;\n'
+            'table.set("Stop", def(lua, env, "Stop", &["hi"], |_, e, _, a| { Ok(Value::Nil) })?)?;\n'
+            '// table.set("Ghost", gap_write(lua, env, "Ghost", &[], "x")?)?;\n',
+            encoding="utf-8",
+        )
+        kinds = inventory.a1_kinds(self.repo)
+        self.assertEqual(kinds, {"SetPosition": "retained", "InQueue": "error", "Stop": "working"})
+
+    def test_a1_cases_cover_every_signature_overload(self):
+        tests = (SCRIPT.parent.parent / "crates/sta_mission/src/api/a1/tests.rs").read_text(encoding="utf-8")
+        cased = {}
+        for name in re.findall(r'(?m)^    \("(\w+)", "', tests):
+            cased[name] = cased.get(name, 0) + 1
+        declared = {}
+        for lua_name in inventory.A1_SIGNATURES.values():
+            n = lua_name.split(".", 1)[1]
+            declared[n] = declared.get(n, 0) + 1
+        self.assertEqual(cased, declared)
 
     def test_every_a1_signature_names_a_distinct_overload(self):
         keys = [inventory.normalized_signature(sig) for sig in inventory.A1_SIGNATURES]

@@ -145,20 +145,20 @@ const CASES: &[(&str, &str, Expect)] = &[
     ("CineractiveShot", "A1.CineractiveShot('P', 0.5, 'Q', 0.25)", Fine),
     ("CineractiveShot", "A1.CineractiveShot('P', 1, 'Q', 0.25)", Fine),
     ("FadeIn", "A1.FadeIn(1, 0, 0)", Fine),
-    ("FadeOut", "A1.FadeOut(4, 5, 0)", Fine),
+    ("FadeOut", "A1.FadeOut(2, 0.5, 0)", Fine),
     ("CineractiveCameraOffset", "A1.CineractiveCameraOffset('P', 0.3, true)", Fine),
     ("CineractiveCameraOffset", "A1.CineractiveCameraOffset(60, 80, 80, true)", Fine),
-    ("CenterCamera", "A1.CenterCamera('Camera_1', 0)", Fine),
+    ("CenterCamera", "A1.CenterCamera('cam_path', 0)", Fine),
     // Titles, audio, objectives.
     ("AudioMessage", "assert(A1.AudioMessage('m.wav') == 1)", Fine),
     ("StopAudioMessage", "A1.StopAudioMessage(A1.AudioMessage('m.wav'))", Fine),
     ("IsAudioMessageDone", "assert(A1.IsAudioMessageDone(7) == true)", Fine),
     ("ObjectivesDisplay_Set_Visibility", "A1.ObjectivesDisplay_Set_Visibility(false)", Fine),
     ("ObjectivesDisplay_Set_Text_From_File", "A1.ObjectivesDisplay_Set_Text_From_File('none.txt')", Fine),
-    ("ShowTitle", "assert(A1.ShowTitle(0, 0, 200, 70, 'T', true) == 1)", Fine),
-    ("RemoveTitle", "A1.RemoveTitle(A1.ShowTitle(0, 0, 200, 70, 'T', true), true)", Fine),
-    ("ShowSubtitle", "assert(A1.ShowSubtitle(0, 380, 640, 40, 'S', true) == 1)", Fine),
-    ("RemoveSubtitle", "A1.RemoveSubtitle(A1.ShowSubtitle(0, 380, 640, 40, 'S', true), true)", Fine),
+    ("ShowTitle", "assert(A1.ShowTitle(1, 2, 3, 4, 'T', true) == 1)", Fine),
+    ("RemoveTitle", "A1.RemoveTitle(A1.ShowTitle(1, 2, 3, 4, 'T', true), true)", Fine),
+    ("ShowSubtitle", "assert(A1.ShowSubtitle(5, 10, 300, 20, 'S', true) == 1)", Fine),
+    ("RemoveSubtitle", "A1.RemoveSubtitle(A1.ShowSubtitle(5, 10, 300, 20, 'S', true), true)", Fine),
     ("MinimapMessage", "A1.MinimapMessage(1, 2, 3.0)", Fine),
     ("MinimapMessage", "A1.MinimapMessage('m', 1, 2.0, 3)", Fine),
     // Orders and AI.
@@ -197,10 +197,10 @@ const CASES: &[(&str, &str, Expect)] = &[
     // Resources and crew.
     ("SetDilithium", "assert(A1.SetDilithium(0, 500) == 500)", Fine),
     ("AddDilithium", "assert(A1.AddDilithium(0, 10) >= 10)", Fine),
-    ("SetOfficers", "A1.SetOfficers(0, 100.0)", Fine),
+    ("SetOfficers", "assert(A1.SetOfficers(0, 100.0) == 100.0)", Fine),
     ("AddOfficers", "A1.AddOfficers(0, 1.0)", Fine),
     ("SetTeamCrew", "A1.SetTeamCrew(0, 10.0)", Fine),
-    ("AddCrew", "A1.AddCrew(0, 5.0)", Fine),
+    ("AddCrew", "assert(A1.AddCrew(0, 5.0) == 5.0)", Fine),
     ("GetCrew", "A1.GetCrew(a)", Either),
     ("SetCrew", "A1.SetCrew(a, 5.0)", Fine),
     ("GetDilithiumOnFreighter", "A1.GetDilithiumOnFreighter(a)", Fail),
@@ -226,6 +226,14 @@ const CASES: &[(&str, &str, Expect)] = &[
     ("GetHandle", "assert(A1.GetHandle('hero') == a)", Fine),
     ("GridVisible", "A1.GridVisible(false)", Fine),
     ("SetPosition", "A1.SetPosition(a, 'P')", Fine),
+    ("Load_Rules", "assert(A1.Load_Rules('r') == 0)", Fine),
+    ("Load_Action_Scripts", "assert(A1.Load_Action_Scripts('s') == 0)", Fine),
+    ("GroupNew", "assert(A1.GroupNew('g') == 1)", Fine),
+    ("GroupDelete", "A1.GroupDelete(A1.GroupNew('g'))", Fine),
+    ("Add_Team_To_Group", "A1.Add_Team_To_Group(1, A1.GroupNew('g'))", Fine),
+    ("strength_team_1", "A1.strength_team_1()", Fail),
+    ("strength_team_2", "A1.strength_team_2()", Fail),
+    ("hot_float_value", "A1.hot_float_value()", Fail),
     ("SetSpecialForcesFlag", "A1.SetSpecialForcesFlag(a, true)", Fine),
     ("RemoveObject", "A1.RemoveObject(a)", Fine),
     ("CountUnits", "assert(A1.CountUnits(0, nil) == 2)", Fine),
@@ -244,7 +252,7 @@ const CASES: &[(&str, &str, Expect)] = &[
     ("Cloak", "A1.Cloak(a)", Fine),
     ("DisableWeapons", "A1.DisableWeapons(a, true)", Fine),
     ("ImmediateCloak", "A1.ImmediateCloak(a)", Fine),
-    ("RecruitSpecialForces", "assert(A1.RecruitSpecialForces('x', 0, 0) == false)", Fine),
+    ("RecruitSpecialForces", "local ok, out = A1.RecruitSpecialForces('x', 0, 7); assert(ok == false and out == 7)", Fine),
     ("FadeRemove", "A1.FadeRemove()", Fine),
     ("RemoveAllCraft", "A1.RemoveAllCraft(true, -1)", Fine),
     ("DestroyShieldGenerator", "A1.DestroyShieldGenerator(a)", Fine),
@@ -263,8 +271,8 @@ const CASES: &[(&str, &str, Expect)] = &[
     ("DestroyEngines", "A1.DestroyEngines(a)", Fine),
     ("DisableShieldGenerator", "A1.DisableShieldGenerator(a, true)", Fine),
     ("RemoveAllObjects", "A1.RemoveAllObjects()", Fine),
-    ("RestrictSpecialFlag", "A1.RestrictSpecialFlag(f, 1024)", Fine),
-    ("RestrictSpecialFlag", "A1.RestrictSpecialFlag(f, 32, 0)", Fine),
+    ("RestrictSpecialFlag", "A1.RestrictSpecialFlag(f, 1)", Fine),
+    ("RestrictSpecialFlag", "A1.RestrictSpecialFlag(f, 2, 0)", Fine),
     ("GetNearestObjectNearPosition", "assert(A1.GetNearestObjectNearPosition(Vector(95, 0, 0), 20, 1, nil, -1, false, 0) == b)", Fine),
     ("GetNearestTranswarpGate", "A1.GetNearestTranswarpGate(a)", Fail),
     ("AllowMultipleSpecialWeaponFire", "A1.AllowMultipleSpecialWeaponFire(a, true)", Fine),
@@ -286,7 +294,7 @@ const CASES: &[(&str, &str, Expect)] = &[
     ("SetRedAlert", "A1.SetRedAlert(a)", Fine),
     ("EnableLight", "A1.EnableLight(a, true)", Fine),
     ("SetGreenAlert", "A1.SetGreenAlert(a)", Fine),
-    ("IsExploding", "assert(A1.IsExploding(a) == false)", Fine),
+    ("IsExploding", "assert(A1.IsExploding(a) == false and A1.IsExploding(0) == false)", Fine),
     ("Starfield_Load_Background_Geometry", "A1.Starfield_Load_Background_Geometry('bg_a.sod')", Fine),
     ("DisableEngines", "A1.DisableEngines(a, true)", Fine),
     ("TransferFlag", "A1.TransferFlag(1, 2)", Fine),
@@ -338,7 +346,7 @@ fn malformed_calls_are_errors_that_queue_nothing() {
     for script in [
         "A1.StopMovie(1)",
         "A1.ShowBridgeScene(1)",
-        "A1.PreLoadBridgeScene(5)",
+        "A1.PreLoadBridgeScene(9)",
         "A1.PreLoadBridgeScene('a')",
         "A1.PlayBridgeMovie('x')",
         "A1.PlayBridgeMovie(1, 1)",
@@ -412,7 +420,7 @@ fn bridge_scene_calls_are_presentation_events_in_call_order() {
 #[test]
 fn cineractive_calls_drive_the_shared_mode_and_retain_shots() {
     let s = scene();
-    let (rt, commands) = run(&s, "A1.CineractiveStart(); A1.CineractiveShot('P', 0.5, b); A1.FadeOut(4, 5, 0); A1.CineractiveEnd()");
+    let (rt, commands) = run(&s, "A1.CineractiveStart(); A1.CineractiveShot('P', 0.5, b); A1.FadeOut(2, 0.5, 0); A1.CineractiveEnd()");
     let events = presented(&commands);
     assert_eq!(events[0], Presentation::Cineractive { on: true, skippable: false });
     assert_eq!(
@@ -421,9 +429,9 @@ fn cineractive_calls_drive_the_shared_mode_and_retain_shots() {
     );
     assert_eq!(
         events[2],
-        call("FadeOut", vec![Arg::Num(Fixed::from_int(4)), Arg::Num(Fixed::from_int(5)), Arg::Num(Fixed::ZERO)])
+        call("FadeOut", vec![Arg::Num(Fixed::from_int(2)), Arg::Num(Fixed::from_f64(0.5)), Arg::Num(Fixed::ZERO)])
     );
-    assert_eq!(events[3], Presentation::Fade { out: true, seconds: Fixed::from_int(4), rgb: [0, 0, 0] });
+    assert_eq!(events[3], Presentation::Fade { out: true, seconds: Fixed::from_int(2), rgb: [0, 0, 0] });
     assert_eq!(events[4], Presentation::Cineractive { on: false, skippable: false });
     assert!(rt.unsupported().is_empty());
 }
@@ -431,14 +439,14 @@ fn cineractive_calls_drive_the_shared_mode_and_retain_shots() {
 #[test]
 fn titles_keep_their_rectangle_and_ids_are_per_mission() {
     let s = scene();
-    let (_, commands) = run(&s, "t = A1.ShowTitle(0, 0, 200, 70, 'RESURRECTION', true); u = A1.ShowSubtitle(65, 140, 640, 40, 'OMEGA', true); A1.RemoveTitle(t, true); A1.RemoveSubtitle(u, true)");
+    let (_, commands) = run(&s, "t = A1.ShowTitle(7, 8, 9, 10, 'Title A', true); u = A1.ShowSubtitle(5, 10, 300, 20, 'Sub A', true); A1.RemoveTitle(t, true); A1.RemoveSubtitle(u, true)");
     assert_eq!(
         presented(&commands),
         vec![
-            Presentation::Title { id: 1, text: "RESURRECTION".into(), subtitle: false, seconds: None },
-            call("ShowTitle", vec![Arg::Int(1), Arg::Int(0), Arg::Int(0), Arg::Int(200), Arg::Int(70), Arg::Bool(true)]),
-            Presentation::Title { id: 2, text: "OMEGA".into(), subtitle: true, seconds: None },
-            call("ShowSubtitle", vec![Arg::Int(2), Arg::Int(65), Arg::Int(140), Arg::Int(640), Arg::Int(40), Arg::Bool(true)]),
+            Presentation::Title { id: 1, text: "Title A".into(), subtitle: false, seconds: None },
+            call("ShowTitle", vec![Arg::Int(1), Arg::Int(7), Arg::Int(8), Arg::Int(9), Arg::Int(10), Arg::Bool(true)]),
+            Presentation::Title { id: 2, text: "Sub A".into(), subtitle: true, seconds: None },
+            call("ShowSubtitle", vec![Arg::Int(2), Arg::Int(5), Arg::Int(10), Arg::Int(300), Arg::Int(20), Arg::Bool(true)]),
             Presentation::RemoveTitle { id: 1 },
             Presentation::RemoveTitle { id: 2 },
         ]
@@ -632,7 +640,7 @@ fn mission_outcome_is_retained_and_finishes_the_mission() {
 #[test]
 fn special_flags_follow_their_unit() {
     let s = scene();
-    let (rt, _) = run(&s, "g = A1.CreateSpecialFlag(b, 'Martok'); A1.RestrictSpecialFlag(g, 1024); A1.SetPerceivedTeam(b, 0)");
+    let (rt, _) = run(&s, "g = A1.CreateSpecialFlag(b, 'Hero2'); A1.RestrictSpecialFlag(g, 1); A1.SetPerceivedTeam(b, 0)");
     assert_eq!(rt.eval::<i64>("return A1.GetLocationOfFlag(g)").unwrap(), i64::from(s.ids[1].0));
     assert_eq!(rt.eval::<i64>("return A1.GetRealTeamOfFlag(g)").unwrap(), 1);
     rt.eval::<()>("A1.ClearRestrictions(g)").unwrap();
@@ -674,4 +682,59 @@ fn build_object_handles_resolve_after_the_receipt() {
     let commands = rt.take_commands();
     assert_eq!(commands[0].kind, CommandKind::Order(Order::Stop { units: vec![id] }));
     assert_eq!(commands[0].player, PlayerId(1));
+}
+
+#[test]
+fn dilithium_writes_in_one_tick_build_on_each_other() {
+    let s = scene();
+    let (rt, commands) = run(&s, "x = A1.SetDilithium(1, 100); y = A1.AddDilithium(1, 50); z = A1.AddDilithium(1, 25)");
+    let amounts: Vec<Fixed> = commands
+        .iter()
+        .map(|c| match &c.kind {
+            CommandKind::Edit(Edit::Cargo(PlayerId(1), 0, v)) => *v,
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(amounts, vec![Fixed::from_int(100), Fixed::from_int(150), Fixed::from_int(175)]);
+    assert_eq!(rt.eval::<(i64, i64, i64)>("return x, y, z").unwrap(), (100, 150, 175));
+}
+
+#[test]
+fn remove_all_craft_filters_by_team() {
+    let s = scene();
+    let [_, b, _, far] = s.ids;
+    let (_, commands) = run(&s, "A1.RemoveAllCraft(true, 1)");
+    let killed: BTreeSet<EntityId> = commands
+        .iter()
+        .map(|c| match &c.kind {
+            CommandKind::Edit(Edit::Kill(id)) => *id,
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(killed, BTreeSet::from([b, far]));
+}
+
+#[test]
+fn failed_spawn_handles_are_no_object_for_queries_and_errors_elsewhere() {
+    let s = scene();
+    // A sim without content rejects the spawn request.
+    let mut sim = Sim::new(3);
+    let cfg = MissionConfig { content: Some(s.db.clone()), view: Some((*sim.view()).clone()), ..MissionConfig::default() };
+    let mut rt = MissionRuntime::from_source_with("fail.lua", "A1.paths.Q = { {x=1,y=0,z=0} }; h = A1.BuildObject('fx_cruiser', 0, 'Q', 0)", 3, cfg);
+    let first = rt.take_commands();
+    let out = sim.step(&first);
+    let mut later = Vec::new();
+    use sta_sim::setup::Controller;
+    rt.think(&out.view, &out.events, &mut later);
+    assert!(!rt.eval::<bool>("return A1.Exists(h) or A1.IsAlive(h)").unwrap());
+    assert!(rt.eval::<bool>("return A1.DoesNotExist(h)").unwrap());
+    let err = rt.eval::<()>("A1.RemoveObject(h)").expect_err("failed spawn").to_string();
+    assert!(err.contains("A1.RemoveObject"), "{err}");
+}
+
+#[test]
+fn immediate_cloak_errors_name_their_own_call() {
+    let s = scene();
+    let message = fails(&s, "A1.ImmediateCloak(999999)");
+    assert!(message.contains("A1.ImmediateCloak") && !message.contains("A1.Cloak"), "{message}");
 }

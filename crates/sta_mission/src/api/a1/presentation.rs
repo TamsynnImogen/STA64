@@ -31,7 +31,7 @@
 //! rectangle is kept in `A1.ShowTitle` / `A1.ShowSubtitle` calls
 //! `[Int id, x, y, width, height, Bool flag]`.
 
-use mlua::{Function, Lua, Table, Value};
+use mlua::{Function, Lua, ObjectLike, Table, Value};
 use sta_sim::present::{Arg, Presentation};
 
 use super::{A, Env, args_of, def, objects, rename_error};
@@ -68,13 +68,13 @@ fn flag_call(lua: &Lua, env: &Env, name: &'static str) -> mlua::Result<Function>
 
 fn cineractive(lua: &Lua, on: bool) -> mlua::Result<()> {
     // The same singleton the converted `Cineractive.active = on` drives.
-    lua.load(format!("Cineractive.active = {on}")).exec()
+    let singleton: mlua::AnyUserData = lua.globals().raw_get("Cineractive")?;
+    singleton.set("active", on)
 }
 
 fn fade(lua: &Lua, env: &Env, name: &'static str, out: bool) -> mlua::Result<Function> {
-    // `FadeIn/FadeOut(f, f, f)`: the stock values are (1,0,0), (3,0,0),
-    // (4,5,0), (5,7,0)... The first is read as the fade time in seconds (as
-    // MMM's fadeIn/fadeOut); the other two are retained, meaning not measured.
+    // `FadeIn/FadeOut(f, f, f)`: the first is read as the fade time in seconds
+    // (as MMM's fadeIn/fadeOut); the other two are retained, meaning not measured.
     def(lua, env, name, &["fff"], move |_, e, _, a| {
         e.call(name, args_of(a))?;
         let seconds = a[0].num();

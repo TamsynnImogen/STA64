@@ -185,7 +185,7 @@ def a1_usage(dlls):
 # ---------------------------------------------------------------- report
 
 AREAS = [
-    ("Script state and save/load", r"hot_int|dirty_int|timer_int|\bin\(|\bout\(|load_scripts|save_scripts|linked_list|list_cell|new_script|character|AddToLoad|AddToSave|script::|WORLD|hot_float|hot_type|IIIE::|group|Load_Rules|Load_Action_Scripts"),
+    ("Script state and save/load", r"hot_int|dirty_int|timer_int|\bin\(|\bout\(|load_scripts|save_scripts|linked_list|list_cell|new_script|character|AddToLoad|AddToSave|script::|WORLD|\bhot_type::|\bIIIE::"),
     ("Bridge scenes and movies", r"Bridge|Movie|Cinematic"),
     ("Cineractives and camera", r"Cineractive|Camera|FadeIn|FadeOut|Letterbox"),
     ("Titles, text and objectives", r"Title|Text|Objective|AdLog|Subtitle|Message(?!.*Audio)|Hint|Tooltip"),
@@ -300,6 +300,14 @@ A2_SIGNATURES = {
 # `table.set("Name", ...)` in a module registered by api/a1/mod.rs, so this
 # is source-level coverage, not proof of native simulation parity.
 A1_SIGNATURES = {
+    "hot_float strength_team_1": "A1.strength_team_1",
+    "hot_float strength_team_2": "A1.strength_team_2",
+    "float hot_float::operator float(void)": "A1.hot_float_value",
+    "group::group(char *)": "A1.GroupNew",
+    "group::~group(void)": "A1.GroupDelete",
+    "void Add_Team_To_Group(int, group &)": "A1.Add_Team_To_Group",
+    "int Load_Rules(char *)": "A1.Load_Rules",
+    "int Load_Action_Scripts(char *)": "A1.Load_Action_Scripts",
     "void AI_Attack(int)": "A1.AI_Attack",
     "void AI_Attack(int, Vector3)": "A1.AI_Attack",
     "void AI_Attack(int, int)": "A1.AI_Attack",
@@ -528,6 +536,8 @@ def a1_source_names(repo):
             continue
         with open(path, encoding="utf-8") as source:
             src = source.read()
+        # A commented-out registration is not a binding.
+        src = "\n".join(line for line in src.splitlines() if not line.lstrip().startswith("//"))
         names |= set(
             re.findall(
                 r'(?m)^\s*table\s*\.\s*set\s*\(\s*"([A-Za-z_][A-Za-z_0-9]*)"\s*,',
@@ -535,6 +545,53 @@ def a1_source_names(repo):
             )
         )
     return names
+
+
+def a1_kinds(repo):
+    """name -> 'retained' | 'error' | 'presentation' | 'working', from the A1 sources.
+
+    `retained`: bound through `gap_write` or `.gap("Name"` (the request is kept and
+    counted, nothing happens). `error`: bound through `no_data` / `no_order_state`
+    (always raises). `presentation`: bound in presentation.rs and only queues an
+    event (no consumer yet). Everything else is `working`. Mixed names (an
+    implemented overload beside a retained one) stay `working` (A1_PARTIAL).
+    """
+    base = os.path.join(repo, "crates/sta_mission/src/api/a1")
+    kinds = {}
+    sources = {}
+    for module in ("objects", "orders", "teams", "presentation", "seams"):
+        try:
+            with open(os.path.join(base, f"{module}.rs"), encoding="utf-8") as source:
+                text = source.read()
+        except OSError:
+            continue
+        sources[module] = "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("//"))
+    retained = set()
+    errors = set()
+    for text in sources.values():
+        retained |= set(re.findall(r'gap_write\(\s*lua,\s*env,\s*"(\w+)"', text))
+        retained |= set(re.findall(r'\.gap\(\s*"(\w+)"', text))
+        errors |= set(re.findall(r'(?:no_data|no_order_state)\(\s*lua,\s*env,\s*"(\w+)"', text))
+        errors |= set(re.findall(r'\.no_data\(\s*"(\w+)"', text))
+    retained -= A1_PARTIAL
+    errors -= A1_PARTIAL
+    queries = {"IsMoviePlaying", "IsAudioMessageDone"}
+    presentation = {
+        n for n in re.findall(r'(?m)^\s*table\s*\.\s*set\s*\(\s*"(\w+)"', sources.get("presentation", ""))
+        if not n.startswith("ObjectivesDisplay_") and n not in queries
+    }
+    for name in a1_source_names(repo):
+        kinds[name] = (
+            "error" if name in errors and name not in retained else
+            "retained" if name in retained else
+            "presentation" if name in presentation else
+            "working"
+        )
+    return kinds
+
+
+# Names with an implemented overload beside a retained one: counted as working.
+A1_PARTIAL = {"Attack", "GetCrew"}
 
 
 def a1_exact_for(sig, repo):
@@ -685,6 +742,11 @@ def main():
     )
     a1_cov = sum(1 for s, _ in a1 if lua_for(method_name(s), s))
     a1_callable = sum(1 for s, _ in a1 if a1_exact_for(s, a.repo))
+    kinds = a1_kinds(a.repo)
+    a1_by_kind = collections.Counter(
+        kinds.get(a1_exact_for(s, a.repo).split(".", 1)[-1], "working")
+        for s, _ in a1 if a1_exact_for(s, a.repo)
+    )
     a1_missing = sum(
         1 for s, _ in a1
         if area(s) != "Script state and save/load" and not a1_exact_for(s, a.repo)
@@ -698,6 +760,10 @@ def main():
           f"| call sites | {sum(use.values())} | — |",
           f"| DLL-shaped callable (`A2` / `A1` table) | {a2_cov} | {a1_callable} |",
           f"| missing callable signatures (missing A1 calls) | {a2_missing} | {a1_missing} |",
+          f"| &nbsp;&nbsp;of the A1 callable: working (sim- or view-backed) | — | {a1_by_kind['working']} |",
+          f"| &nbsp;&nbsp;of the A1 callable: presentation event only, no consumer yet | — | {a1_by_kind['presentation']} |",
+          f"| &nbsp;&nbsp;of the A1 callable: request retained and counted, no effect | — | {a1_by_kind['retained']} |",
+          f"| &nbsp;&nbsp;of the A1 callable: always raises (no data in the world view) | — | {a1_by_kind['error']} |",
           f"| MMM job-equivalent, not A2-shaped | {a2_mmm_equiv} | — |",
           f"| bound in STA64's Lua today | — | {a1_cov} |",
           f"| in MMM's API, not yet bound | {sum(1 for _, s_ in a2_used if status(method_name(s_), s_, 'a2') == 'MMM')} | {sum(1 for s_, _ in a1 if status(method_name(s_), s_, 'a1') == 'MMM')} |",
@@ -709,8 +775,9 @@ def main():
           "  not proof of native simulation parity.",
           "- **A1 callable**: the exact imported signature has a literal production binding",
           "  registered on the `A1` namespace (crates/sta_mission/src/api/a1/); same source-level",
-          "  coverage. Some of those bindings retain the request without a simulation seam or",
-          "  raise a documented error (see that module's README); callable is not parity.",
+          "  coverage only: it does not mean the call changes the simulation. The rows below it",
+          "  split the callable ones into working, event-only, retained-without-effect and",
+          "  always-raises (classified from the A1 sources; see that module's README).",
           "- **MMM-equivalent**: an existing MMM-style Lua operation does the same job, but",
           "  it is not counted as an A2 DLL-shaped callable.",
           "- **MMM**: Fleet Operations' MMM Lua API ([MMM_API.md](MMM_API.md)) has it (same name, or the",
@@ -763,7 +830,7 @@ def main():
     open(a.out, "w").write("\n".join(L) + "\n")
     print(f"A2: {len(a2_dlls)} DLLs, {a2_scripts} scripts, {len(a2_used)}/{len(slots)} methods used, {sum(use.values())} calls; "
           f"A2 callable {a2_cov}, missing {a2_missing}; A1: {len(a1_dlls)} DLLs, {len(a1)} imports, "
-          f"A1 callable {a1_callable}, missing {a1_missing}, MMM-equivalent {a1_cov}")
+          f"A1 callable {a1_callable} ({dict(a1_by_kind)}), missing {a1_missing}, MMM-equivalent {a1_cov}")
 
 
 if __name__ == "__main__":

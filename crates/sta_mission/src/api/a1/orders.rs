@@ -2,8 +2,8 @@
 //! player's input; calls with no order or AI seam in the simulation are
 //! retained as `A1.<Name>` calls and counted (see `seams.rs`).
 //!
-//! The trailing `int` of `Goto` and `Stop` (1 in most stock calls, sometimes
-//! 0) is validated and ignored: its meaning is not measured.
+//! The trailing `int` of `Goto` and `Stop` is validated and ignored: its
+//! meaning is not measured.
 
 use mlua::{Lua, Table, Value};
 use sta_core::EntityId;
@@ -25,6 +25,10 @@ pub(super) fn install(lua: &Lua, env: &Env, table: &Table) -> mlua::Result<()> {
     // `Goto(unit, target, int)` moves to the target's position.
     table.set("Goto", def(lua, env, "Goto", &["hsi", "hhi"], |lua, e, ov, a| {
         let id = a[0].id();
+        // Check everything before queueing the first leg, so a failure leaves nothing queued.
+        if !e.unit("Goto", id)?.owner.is_player() {
+            return Err(mlua::Error::runtime("A1.Goto: object has no player owner"));
+        }
         if ov == 0 {
             let points = e.path(lua, "Goto", a[1].text())?;
             for (n, to) in points.into_iter().enumerate() {
@@ -64,7 +68,7 @@ pub(super) fn install(lua: &Lua, env: &Env, table: &Table) -> mlua::Result<()> {
             .borrow()
             .content
             .as_ref()
-            .and_then(|db| db.key(odf.strip_suffix(".odf").unwrap_or(odf)))
+            .and_then(|db| db.key(super::objects::stem(odf)))
             .ok_or_else(|| mlua::Error::runtime(format!("A1.Build: unknown ODF '{odf}'")))?;
         send(e, "Build", a[0].id(), |builder| Order::Build { builder: builder[0], what: key, at: None })?;
         Ok(Value::Nil)

@@ -1,6 +1,6 @@
 //! DLL-named Armada I mission calls (LUA-06): the `A1` table.
 //!
-//! Armada I's stock missions are compiled DLLs that import engine functions
+//! Armada I's missions are compiled DLLs that import engine functions
 //! by name from `Armada.exe` (docs/MISSIONS.md, docs/MISSION_DLL_API.md). This
 //! module binds those names, with their imported argument shapes, so a
 //! converted mission can call `A1.Name(...)`. It mirrors [`super::a2`].
@@ -69,6 +69,11 @@ pub(super) struct State {
     /// Sounds started and not yet reported done or stopped.
     pub sounds_active: BTreeSet<u32>,
     pub movie_playing: bool,
+    /// Dilithium a team was last set to this tick, so several writes in one
+    /// tick build on each other instead of on the stale view.
+    pub dilithium: BTreeMap<PlayerId, (u64, Fixed)>,
+    pub groups: BTreeMap<u32, (String, BTreeSet<i64>)>,
+    pub next_group: u32,
     pub flags: BTreeMap<u32, Flag>,
     pub next_flag: u32,
 }
@@ -155,13 +160,16 @@ impl Env {
         if raw < TOKEN_BASE {
             return None;
         }
-        let st = self.st.borrow();
-        let Some(handle) = st.pending.get(&raw) else {
+        let mut st = self.st.borrow_mut();
+        let Some(handle) = st.pending.get(&raw).cloned() else {
             return Some(Err("is not a known pending object"));
         };
         Some(match handle.state.get() {
             SpawnStatus::Resolved(id) => Ok(id),
-            SpawnStatus::Failed => Err("could not be built (the spawn failed)"),
+            SpawnStatus::Failed => {
+                st.pending.remove(&raw);
+                Err("could not be built (the spawn failed)")
+            }
             SpawnStatus::Queued | SpawnStatus::Submitted(_) => Err("is still being built; use it after the next tick"),
         })
     }
@@ -364,15 +372,21 @@ pub(super) fn def(
 /// The `A2` function of the same operation, under the `A1` name: pending
 /// handles are resolved first and errors name `A1`.
 fn alias(lua: &Lua, env: &Env, a2: &Table, name: &'static str) -> mlua::Result<Function> {
+    alias_as(lua, env, a2, name, name)
+}
+
+/// [`alias`] under another A1 name (errors are reported under it).
+fn alias_as(lua: &Lua, env: &Env, a2: &Table, name: &'static str, a2_name: &'static str) -> mlua::Result<Function> {
     // Existence queries treat a pending or failed spawn as "no such object".
     let lenient = matches!(name, "Exists" | "DoesNotExist" | "IsAlive");
-    let f: Function = a2.get(name)?;
+    let f: Function = a2.get(a2_name)?;
     let env = env.clone();
     lua.create_function(move |_, args: MultiValue| {
         let mut mapped = Vec::with_capacity(args.len());
-        for v in args {
+        // Every aliased call takes its object handle first; no other argument is one.
+        for (position, v) in args.into_iter().enumerate() {
             let resolved = match &v {
-                Value::Integer(n) => u32::try_from(*n).ok().and_then(|raw| env.token(raw)),
+                Value::Integer(n) if position == 0 => u32::try_from(*n).ok().and_then(|raw| env.token(raw)),
                 _ => None,
             };
             mapped.push(match resolved {
@@ -384,7 +398,10 @@ fn alias(lua: &Lua, env: &Env, a2: &Table, name: &'static str) -> mlua::Result<F
                 None => v,
             });
         }
-        f.call::<MultiValue>(MultiValue::from_vec(mapped)).map_err(rename_error)
+        f.call::<MultiValue>(MultiValue::from_vec(mapped)).map_err(|e| {
+            let e = rename_error(e);
+            mlua::Error::runtime(e.to_string().replace(&format!("A1.{a2_name}"), &format!("A1.{name}")))
+        })
     })
 }
 

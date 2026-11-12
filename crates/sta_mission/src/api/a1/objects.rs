@@ -18,7 +18,7 @@ use sta_sim::view::{Relation, UnitView};
 use super::{A, Env, Flag, TOKEN_BASE, alias, def};
 use crate::api::{Ctx, dist, pos_f64, vector};
 
-fn stem(name: &str) -> &str {
+pub(super) fn stem(name: &str) -> &str {
     match name.get(name.len().saturating_sub(4)..) {
         Some(suffix) if suffix.eq_ignore_ascii_case(".odf") => &name[..name.len() - 4],
         _ => name,
@@ -62,6 +62,11 @@ fn near<'c>(c: &'c Ctx, q: &Query) -> Vec<&'c UnitView> {
     found.into_iter().map(|(_, u)| u).collect()
 }
 
+/// The A2 station classification; its errors (unclassified class) propagate.
+fn station(is_station: &mlua::Function, id: EntityId) -> mlua::Result<bool> {
+    is_station.call::<bool>(i64::from(id.0)).map_err(super::rename_error)
+}
+
 fn handle_value(id: Option<EntityId>) -> Value {
     Value::Integer(id.map_or(0, |id| i64::from(id.0)))
 }
@@ -84,7 +89,7 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
     table.set("Cloak", alias(lua, env, a2, "Cloak")?)?;
     table.set("Decloak", alias(lua, env, a2, "Decloak")?)?;
     // No separate immediate-cloak seam: the same cloak order.
-    table.set("ImmediateCloak", alias(lua, env, a2, "Cloak")?)?;
+    table.set("ImmediateCloak", super::alias_as(lua, env, a2, "ImmediateCloak", "Cloak")?)?;
     table.set("DisableWeapons", alias(lua, env, a2, "DisableWeapons")?)?;
     table.set("DisableEngines", alias(lua, env, a2, "DisableEngines")?)?;
     table.set("SetSpecialEnergy", alias(lua, env, a2, "SetSpecialEnergy")?)?;
@@ -107,9 +112,9 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
     })?)?;
 
     table.set("IsExploding", def(lua, env, "IsExploding", &["h"], |_, e, _, a| {
+        // An object that is gone from the view is not exploding.
         let c = e.ctx.borrow();
-        let unit = c.unit(a[0].id()).ok_or_else(|| mlua::Error::runtime("A1.IsExploding: no such object"))?;
-        Ok(Value::Boolean(unit.flags.contains(sta_sim::view::UnitFlags::DYING)))
+        Ok(Value::Boolean(c.unit(a[0].id()).is_some_and(|u| u.flags.contains(sta_sim::view::UnitFlags::DYING))))
     })?)?;
 
     // `GetLocation(handle)` and `GetLocation(path, point)`.
@@ -134,7 +139,7 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
     })?)?;
 
     // Shield strength now over maximum across the facings, 0..1 (the
-    // constants the DLLs pass to SetShieldPercent are 0.3, 0.5 and 0.7).
+    // SetShieldPercent takes the same fraction).
     // The "real" variant has no separate source: perception does not alter shields.
     table.set("GetShieldPercent", def(lua, env, "GetShieldPercent", &["h"], |_, e, _, a| {
         Ok(Value::Number(shield_fraction(&e.unit("GetShieldPercent", a[0].id())?)))
@@ -217,6 +222,7 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
     // (-1: any), by the A2 station classification; the second argument's
     // reading as a team is not measured.
     let is_station: mlua::Function = a2.get("IsStation")?;
+    let is_station_all = is_station.clone();
     table.set("GetNearestStarbase", def(lua, env, "GetNearestStarbase", &["hi"], move |_, e, _, a| {
         let me = e.unit("GetNearestStarbase", a[0].id())?;
         let owner = e.team_filter("GetNearestStarbase", a[1].int())?;
@@ -227,7 +233,7 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
             near(&c, &q).into_iter().map(|u| u.id).collect()
         };
         for id in candidates {
-            if is_station.call::<bool>(i64::from(id.0)).unwrap_or(false) {
+            if station(&is_station, id)? {
                 return Ok(handle_value(Some(id)));
             }
         }
@@ -265,18 +271,24 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
 
     // `RemoveAllCraft(bool, team)`: every live non-station unit of `team`
     // (-1: any). The bool is not measured and ignored.
-    table.set("RemoveAllCraft", def(lua, env, "RemoveAllCraft", &["bi"], |_, e, _, a| {
+    table.set("RemoveAllCraft", def(lua, env, "RemoveAllCraft", &["bi"], move |_, e, _, a| {
         let owner = e.team_filter("RemoveAllCraft", a[1].int())?;
-        let ids: Vec<EntityId> = {
+        let candidates: Vec<EntityId> = {
             let c = e.ctx.borrow();
             c.view
                 .units
                 .iter()
                 .filter(|u| c.alive(u.id).is_some() && owner.is_none_or(|o| u.owner == o))
-                .filter(|u| !c.def(u).is_some_and(|d| d.is_starbase))
                 .map(|u| u.id)
                 .collect()
         };
+        // Craft are what is not a station, by the same classification as GetNearestStarbase.
+        let mut ids = Vec::new();
+        for id in candidates {
+            if !station(&is_station_all, id)? {
+                ids.push(id);
+            }
+        }
         for id in ids {
             e.edit("RemoveAllCraft", Edit::Kill(id))?;
         }
@@ -362,9 +374,10 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
     })?)?;
     // The unit carrying the flag, and the owners of that unit.
     table.set("GetLocationOfFlag", def(lua, env, "GetLocationOfFlag", &["i"], |_, e, _, a| {
-        let st = e.st.borrow();
-        let flag = st.flags.get(&(a[0].int() as u32)).ok_or_else(|| mlua::Error::runtime("A1.GetLocationOfFlag: unknown flag"))?;
-        Ok(handle_value(Some(flag.unit)))
+        let unit = e.st.borrow().flags.get(&(a[0].int() as u32)).map(|f| f.unit)
+            .ok_or_else(|| mlua::Error::runtime("A1.GetLocationOfFlag: unknown flag"))?;
+        e.unit("GetLocationOfFlag", unit)?;
+        Ok(handle_value(Some(unit)))
     })?)?;
     table.set("GetRealTeamOfFlag", def(lua, env, "GetRealTeamOfFlag", &["i"], |_, e, _, a| flag_team(e, "GetRealTeamOfFlag", a[0].int(), false))?)?;
     table.set("GetPercievedTeamOfFlag", def(lua, env, "GetPercievedTeamOfFlag", &["i"], |_, e, _, a| flag_team(e, "GetPercievedTeamOfFlag", a[0].int(), true))?)?;
