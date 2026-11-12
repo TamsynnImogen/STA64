@@ -71,6 +71,20 @@ impl EntityKind {
         }
     }
 
+    /// Whether the player never sees `def`: its ODF says `hidden = 1`.
+    ///
+    /// Armada II and Fleet Operations mark their engine helper objects this
+    /// way: the start pods and faction objects a race's `standardUnits` place
+    /// (`all_ai_pod`, `all_start`, `fed_effectsS`, ... all `classLabel = "pod"`,
+    /// `basename = "effect_empty"`, `mapicon = "mapicon_empty"`), the objects
+    /// their start weapons spawn (`effect_rm`, `unitcap_pod`), and map markers
+    /// (lights, `hook_*` sources). Such an object exists in the world (scripts
+    /// and weapons see it) but is not the player's to see or pick, so the view
+    /// shows it to no one ([`crate::Sim`]'s view; docs/START_HELPERS.md).
+    pub fn hidden(def: &sta_content::UnitDef) -> bool {
+        def.raw.i64("hidden").unwrap_or(0) != 0
+    }
+
     /// The kind for a definition, from its ODF class (docs/data/odf_classes.md).
     /// Unlisted classes that can move count as craft, the rest as props.
     pub fn of(class: &ClassLabel, movement: &MoveStats) -> EntityKind {
