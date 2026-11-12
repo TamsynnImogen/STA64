@@ -191,7 +191,14 @@ fn spawn_fx(
             SimEvent::Fired { shooter, weapon, target, .. } => {
                 let Some(def) = content.0.weapon(*weapon) else { continue };
                 let Some(from) = point(&link, *shooter, alpha) else { continue };
-                let to = target_point(&link, target, alpha).unwrap_or(from);
+                // A target the shot has just killed is gone from this tick's view: its last place
+                // is in the one before, so the killing beam still reaches it.
+                let to = target_point(&link, target, alpha)
+                    .or_else(|| match target {
+                        Target::Entity(id) => link.prev().unit(*id).map(|u| to_bevy(u.pos.to_f32())),
+                        _ => None,
+                    })
+                    .unwrap_or(from);
                 let recipe = recipe_for(def, &recipes);
                 let seed = shot_seed(*shooter, *weapon, clock.tick());
                 let mk = |kind, life: f32, look: Look| WeaponFx {
@@ -268,24 +275,26 @@ fn update_fx(
             cmds.entity(e).try_despawn();
             continue;
         }
-        // A beam is the shooter's: with it gone there is nothing to hold it, so it ends
-        // at once, and the flare at its far end with it. With the target gone it has
-        // nothing to hit, so it falls off over the phaser's last quarter second instead
-        // of hanging at the last end for the rest of the ordnance's `lifespan`. (The
-        // engine treats a gone owner or target as none: Refit's `shot_parties`.) Shots
-        // in flight keep flying to where their target was.
-        if matches!(fx.kind, FxKind::Beam | FxKind::Impact) {
-            if point(&link, fx.shooter, alpha).is_none() {
-                cmds.entity(e).try_despawn();
-                continue;
-            }
-            if !fx.target_lost && matches!(fx.target, Target::Entity(id) if point(&link, id, alpha).is_none()) {
-                fx.target_lost = true;
-                fx.life = fx.life.min(age + BEAM_FALL * TICK_HZ as f32);
-            }
+        // What a shot hangs on is its shooter: with it gone the beam, its far flare and the
+        // muzzle flare end at once; with the target gone the beam has nothing to hit and
+        // falls off over the phaser's last quarter second instead of hanging at the last
+        // end for the rest of the ordnance's `lifespan`. Assumed, not measured: how long
+        // the original engine keeps a beam after its owner or target dies (Refit's
+        // `shot_parties` treats a gone one as none). Shots in flight keep flying.
+        let shooter_at = point(&link, fx.shooter, alpha);
+        if shooter_at.is_none() && matches!(fx.kind, FxKind::Beam | FxKind::Impact | FxKind::Flash) {
+            cmds.entity(e).try_despawn();
+            continue;
+        }
+        if matches!(fx.kind, FxKind::Beam | FxKind::Impact)
+            && !fx.target_lost
+            && matches!(fx.target, Target::Entity(id) if point(&link, id, alpha).is_none())
+        {
+            fx.target_lost = true;
+            fx.life = fx.life.min(age + BEAM_FALL * TICK_HZ as f32);
         }
         let k = (age / fx.life).clamp(0.0, 1.0);
-        if let Some(p) = point(&link, fx.shooter, alpha) {
+        if let Some(p) = shooter_at {
             fx.from = p;
         }
         if let Some(p) = target_point(&link, &fx.target, alpha) {
@@ -441,8 +450,8 @@ mod tests {
     }
 
     /// A beam fired at tick 45 by unit 1 at unit 2; `until` ends a unit (the script's
-    /// `Destroyed`). Per frame: the beams and impacts alive and the shortest life.
-    fn beam_run(shooter_until: Option<u64>, target_until: Option<u64>, frames: usize) -> Vec<(usize, f32)> {
+    /// `Destroyed`). Per frame: the beams and impacts alive, the shortest life and the longest beam.
+    fn beam_run(shooter_until: Option<u64>, target_until: Option<u64>, frames: usize) -> Vec<(usize, f32, f32)> {
         let db = sta_content::fake::db();
         let beam = db.key("fx_beam").unwrap().0;
         let until = |u: Option<u64>| u.map_or(String::new(), |t| format!(", until: {t}"));
@@ -468,7 +477,8 @@ mod tests {
             app.update();
             let mut q = app.world_mut().query::<&WeaponFx>();
             let live: Vec<&WeaponFx> = q.iter(app.world()).filter(|f| matches!(f.kind, FxKind::Beam | FxKind::Impact)).collect();
-            out.push((live.len(), live.iter().map(|f| f.life).fold(f32::MAX, f32::min)));
+            let reach = live.iter().filter(|f| f.kind == FxKind::Beam).map(|f| f.to.distance(f.from)).fold(0.0, f32::max);
+            out.push((live.len(), live.iter().map(|f| f.life).fold(f32::MAX, f32::min), reach));
         }
         out
     }
@@ -490,12 +500,21 @@ mod tests {
     fn a_beam_falls_off_when_its_target_is_destroyed_instead_of_hanging() {
         let cut = beam_run(None, Some(47), 70);
         assert!(cut.iter().any(|r| r.0 == 2), "the beam was drawn");
-        // Its life was cut to the fall (about 11 ticks), under the 15 of its lifespan.
+        // Its life was cut to the fall (a quarter second: 7.5 ticks), under the 15 of its lifespan.
         let life = cut.iter().filter(|r| r.0 == 2).map(|r| r.1).fold(f32::MAX, f32::min);
         assert!(life < 14.0, "life {life}");
         let last = cut.iter().rposition(|r| r.0 == 2).unwrap();
         let alone_last = beam_run(None, None, 70).iter().rposition(|r| r.0 == 2).unwrap();
         assert!(last + 2 <= alone_last, "still drawn at frame {last}, a lone beam at {alone_last}");
+    }
+
+    #[test]
+    fn the_beam_that_kills_its_target_still_reaches_it() {
+        // The target is gone from the view on the tick the beam is read.
+        let run = beam_run(None, Some(45), 70);
+        let reach = run.iter().map(|r| r.2).fold(0.0, f32::max);
+        assert!(reach > 500.0, "the killing beam was {reach} long, the target 600 away");
+        assert_eq!(run[69].0, 0);
     }
 
     #[test]
