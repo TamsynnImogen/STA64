@@ -155,7 +155,7 @@ lifecycle contract.
 Partial slice of #149 from the installed-mission report (LUA-04), pure
 `sta_mission` bindings; no `sta_sim` change. Before/after on the FO Roots
 install base (`STA64_TEST_MOD=""`, 36 maps with a Lua mission, 300 ticks):
-run 2 / stubbed 0 / failed 34 before, run 6 / stubbed 11 / failed 19 after.
+run 2 / stubbed 0 / failed 34 before, run 3 / stubbed 16 / failed 17 after.
 
 - Hook callbacks get a hook object with `hook.argument` and `hook.id` as the
   installed scripts read them: `Timer:hook` (`Timer Tutorial.lua`), condition
