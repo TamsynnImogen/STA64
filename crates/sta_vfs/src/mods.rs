@@ -73,7 +73,7 @@ impl Ini {
         self.sections.keys().map(String::as_str)
     }
 
-    fn flag(&self, key: &str) -> bool {
+    pub(crate) fn flag(&self, key: &str) -> bool {
         matches!(self.get("mod", key).map(str::trim), Some(v) if v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("yes"))
     }
 

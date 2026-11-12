@@ -7,8 +7,10 @@
 //! Layers are the mounted [`Vfs`] layers, top-most (child mod) first; the
 //! last one is normally `Data`. The first rule that matches wins:
 //!
-//! 1. **Explicit.** A `Profile = <name>` key in the `[Mod]` section of any
-//!    layer's `info.ini`, top-most layer first. Names: `native`/`sta64`,
+//! 1. **Explicit** (D4: manifest, then `info.ini`, then the heuristics
+//!    below). First the `profile` key of any layer's `manifest.toml` (loose
+//!    or in a root `.sta`), then a `Profile = <name>` key in the `[Mod]`
+//!    section of any layer's `info.ini`; top-most layer first. Names: `native`/`sta64`,
 //!    `fo4`/`fo`, `sta2`/`sta2classic`, `sta1`/`sta1classic` (see
 //!    [`Profile::from_name`]).
 //! 2. **Armada I layout.** Any layer holds a `.zfs` archive. (An `addon/`
@@ -146,7 +148,15 @@ impl Profile {
         let layers = vfs.layers();
         let infos: Vec<Option<Ini>> = layers.iter().map(|l| read_info(&l.root)).collect();
 
-        // 1. Explicit.
+        // 1a. Explicit, manifest first (D4): `profile` of a `manifest.toml`.
+        for l in layers {
+            if let Some(Ok(m)) = sta_vfs::manifest::manifest_text(&l.root).map(|t| sta_vfs::manifest::Manifest::parse(&t))
+                && let Some(p) = m.profile.as_deref().and_then(Profile::from_name)
+            {
+                return p;
+            }
+        }
+        // 1b. Explicit, `info.ini`.
         for ini in infos.iter().flatten() {
             if let Some(p) = ini.get("mod", "profile").and_then(Profile::from_name) {
                 return p;

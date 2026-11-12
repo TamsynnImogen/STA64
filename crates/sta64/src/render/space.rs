@@ -397,7 +397,7 @@ mod tests {
     fn fo4_files_give_the_expected_star_sizes() {
         let roots = std::path::Path::new("/home/cedric/Games/Heroic/Star Trek Armada II Fleet Operations Roots");
         let Ok(vfs) = sta_vfs::Vfs::mount_install(roots, Some("Fleet Ops 4.0")) else { return };
-        let cfg = vfs.read("ART_CFG.h").and_then(Result::ok).map(|b| sta_assets::cfg_h::CfgH::parse(&String::from_utf8_lossy(&b)));
+        let cfg = sta_content::layered::cfg_h(&vfs, "ART_CFG.h");
         assert_eq!(StarSizing::from_cfg(cfg.as_ref()), StarSizing::default());
         let odf = vfs.list("odf").into_iter().find(|p| p.to_ascii_lowercase().ends_with("stars_default.odf")).unwrap();
         let text = String::from_utf8_lossy(&vfs.read(&odf).unwrap().unwrap()).into_owned();

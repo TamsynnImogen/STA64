@@ -270,8 +270,8 @@ mod tests {
         let Ok(root) = std::env::var("STA64_TEST_INSTALL") else { return };
         let m = std::env::var("STA64_TEST_MOD").ok();
         let vfs = Vfs::mount_install(Path::new(&root), m.as_deref()).unwrap();
-        let sounds = match vfs.read("RTS_CFG.h") {
-            Some(Ok(b)) => UiSounds::from_cfg(&CfgH::parse(&String::from_utf8_lossy(&b))),
+        let sounds = match sta_content::layered::cfg_h(&vfs, "RTS_CFG.h") {
+            Some(c) => UiSounds::from_cfg(&c),
             _ => UiSounds::default(),
         };
         let missing = sounds.unresolved(|n| sound_exists(&vfs, n));

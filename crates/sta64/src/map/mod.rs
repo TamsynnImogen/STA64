@@ -1032,7 +1032,7 @@ fn rebuild(
             })
             .collect();
         let sizing = crate::render::space::StarSizing::from_cfg(
-            vfs.0.read("ART_CFG.h").and_then(Result::ok).map(|b| sta_assets::cfg_h::CfgH::parse(&String::from_utf8_lossy(&b))).as_ref(),
+            sta_content::layered::cfg_h(&vfs.0, "ART_CFG.h").as_ref(),
         );
         let stars = commands.spawn((Sky, Transform::IDENTITY, Visibility::default())).id();
         let mut loader = Loader {

@@ -158,27 +158,13 @@ impl Rules {
         (rules, warnings)
     }
 
-    /// The path planner's rules: the header's, else the stock values.
-    pub fn pathing(&self) -> PathingRules {
-        self.pathing.unwrap_or_default()
-    }
-
-    /// Set the path planner's rules (tests and content built in code).
-    pub fn with_pathing(mut self, pathing: PathingRules) -> Self {
-        self.pathing = Some(pathing);
-        self
-    }
-
-    /// The path planner's values for the content hash; empty when the
-    /// header had none, so content without them keeps its hash.
-    pub(crate) fn pathing_hash_values(&self) -> Vec<u64> {
-        self.pathing.as_ref().map(PathingRules::hash_values).unwrap_or_default()
-    }
-
-    pub(crate) fn load(vfs: &sta_vfs::Vfs, races: &Races) -> (Self, Vec<Warning>) {
-        let mut warnings = Vec::new();
-        let text = header(vfs, "RTS_CFG.h", 0, &mut Vec::new(), &mut warnings).unwrap_or_default();
-        let (mut rules, parsed) = Self::from_header(&text);
+    /// Read `RTS_CFG.h` as the layers inherit it (D11: a header may include its
+    /// own name from the layer below, see [`crate::layered`]). An include
+    /// cycle is an error.
+    pub(crate) fn load(vfs: &sta_vfs::Vfs, races: &Races) -> Result<(Self, Vec<Warning>), crate::ContentError> {
+        let resolved = crate::layered::resolve(vfs, "RTS_CFG.h", 0).map_err(|e| crate::ContentError::IncludeCycle(e.0))?.unwrap_or_default();
+        let mut warnings = resolved.warnings;
+        let (mut rules, parsed) = Self::from_header(&resolved.text);
         warnings.extend(parsed);
         rules.starts = races
             .iter()
@@ -190,7 +176,7 @@ impl Rules {
             })
             .collect();
         rules.starts.sort_by(|a, b| a.race.cmp(&b.race));
-        (rules, warnings)
+        Ok((rules, warnings))
     }
 
     pub fn officer_limit(&self, choice: usize) -> Option<i32> {
@@ -217,104 +203,5 @@ impl Rules {
             }
         }
         out
-    }
-}
-
-/// Ordinary textual includes; self-inclusion deliberately selects the next
-/// mounted version. No implicit lower-layer merge when a file shadows its parent.
-fn header(
-    vfs: &sta_vfs::Vfs,
-    name: &str,
-    version: usize,
-    stack: &mut Vec<(String, usize)>,
-    warnings: &mut Vec<Warning>,
-) -> Option<String> {
-    let key = sta_vfs::normalize(name);
-    if stack.contains(&(key.clone(), version)) || stack.len() >= 128 {
-        warnings.push(Warning::new(name, "header include cycle/depth limit"));
-        return None;
-    }
-    let versions = vfs.resolve_all(name);
-    let (layer, source) = *versions.get(version)?;
-    let layer = vfs.layer_index(layer)?;
-    let bytes = match vfs.read_from(layer, source) {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            warnings.push(Warning::new(name, error.to_string()));
-            return None;
-        }
-    };
-    let text = String::from_utf8_lossy(&bytes);
-    stack.push((key.clone(), version));
-    let mut next = version;
-    let mut out = String::new();
-    for line in text.lines() {
-        let stripped = line.trim();
-        if let Some(rest) = stripped.strip_prefix("#include") {
-            let include = rest.trim().split('"').nth(1);
-            if let Some(include) = include {
-                let include_key = sta_vfs::normalize(include);
-                let target_version = if include_key == key {
-                    next += 1;
-                    next
-                } else {
-                    0
-                };
-                if let Some(parent) = header(vfs, include, target_version, stack, warnings) {
-                    out.push_str(&parent);
-                } else if include_key != key {
-                    warnings.push(Warning::new(name, format!("header include unavailable: {include}")));
-                }
-            } else {
-                warnings.push(Warning::new(name, "unsupported header include syntax"));
-            }
-        } else {
-            out.push_str(line);
-            out.push('\n');
-        }
-    }
-    stack.pop();
-    Some(out)
-}
-
-#[cfg(test)]
-mod pathing_tests {
-    use super::*;
-
-    /// The PATHING block as Armada II and Fleet Operations ship it.
-    const STOCK: &str = "// PATHING\nint OFF_MAP_PATHING_COST = 90000;\nfloat HIGHEST_QUADTREE_GRID_RESOLUTION = 50.0;\n\
-        int USE_PATH_PLANNING = 1;\nint IMPASSABLE_TERRAIN = -1;\nint DEFAULT_TERRAIN_VALUE = 100;\n\
-        float NEBULAE_PATHING_COST = 300.0;\nfloat NEBULAE_PATHING_SAFETY_COEFFICIENT = 1.8;\n\
-        float COLLISION_SAFETY_MARGIN = 1.2;\n";
-
-    #[test]
-    fn the_stock_header_matches_the_defaults() {
-        let (rules, warnings) = Rules::from_header(STOCK);
-        assert!(warnings.is_empty(), "{warnings:?}");
-        assert_eq!(rules.pathing(), PathingRules::default());
-        assert!(!rules.pathing_hash_values().is_empty());
-    }
-
-    #[test]
-    fn a_header_without_the_block_keeps_the_hash_and_the_stock_values() {
-        let (rules, _) = Rules::from_header("int SOMETHING_ELSE = 3;\n");
-        assert_eq!(rules.pathing(), PathingRules::default());
-        assert!(rules.pathing_hash_values().is_empty());
-    }
-
-    #[test]
-    fn a_mod_changes_what_it_sets_and_keeps_the_rest() {
-        let (rules, warnings) = Rules::from_header(
-            "int USE_PATH_PLANNING = 0;\nfloat NEBULAE_PATHING_COST = 450.0;\nint DEFAULT_TERRAIN_VALUE = 100;\nint OFF_MAP_PATHING_COST = DEFAULT_TERRAIN_VALUE * 4;\n",
-        );
-        assert!(warnings.is_empty(), "{warnings:?}");
-        let p = rules.pathing();
-        assert!(!p.enabled);
-        assert_eq!(p.nebula_cost, 450);
-        assert_eq!(p.off_map_cost, 400);
-        assert_eq!(p.nebula_safety, PathingRules::default().nebula_safety);
-        let (bad, warnings) = Rules::from_header("float COLLISION_SAFETY_MARGIN = wide;\n");
-        assert_eq!(bad.pathing().collision_margin, PathingRules::default().collision_margin);
-        assert_eq!(warnings.len(), 1);
     }
 }
