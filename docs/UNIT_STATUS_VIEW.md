@@ -12,8 +12,10 @@ must never substitute for the hovered actor's current crew.
 
 Add `Entity.crew: Option<[Fixed; 2]>` for current and maximum crew. Crew is a
 common physical unit pool like hull/shields. `Entity::new` keeps it unknown;
-`Entity::from_def` initializes a real pool from nonnegative typed UnitDef.crew
-for craft/stations, including explicit zero. All content-backed spawn paths,
+`Entity::from_def` initializes current crew from nonnegative typed `crewCost`
+and capacity from `maximumCrew` (missing capacity falls back to `crewCost`)
+for craft/stations, including explicit zero. See [capacity correction](MAXIMUM_CREW.md).
+All content-backed spawn paths,
 including yard production and rig deployment, already use this constructor.
 No player-stock debit, boarding, casualties or regeneration is added here.
 The initialized pool is genuine canonical state; ownership changes preserve it,
@@ -31,6 +33,9 @@ unknown suffix versions, missing suffix and trailing bytes. Versions 8–12 keep
 all existing validation/migration rules and restore crew as unknown; never fill
 historical crew from current definitions. Version 12 still consumes its player
 personnel suffix; version 13 consumes both.
+The maximumCrew correction permits nonnegative over-capacity pools produced
+by native-style initialization; negative values remain invalid. This changes
+one admission condition, not the serialized record layout.
 
 Hash a tagged, ordered crew suffix only when any known pool exists; include
 known-zero presence. Unknown-only worlds preserve prior digests. Snapshot 13

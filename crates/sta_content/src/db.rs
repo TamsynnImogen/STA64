@@ -454,6 +454,12 @@ fn hash_inner(db: &ContentDb, include_starting_rules: bool) -> u64 {
                 for f in [u.hull, u.shields.max, u.shields.recharge, u.crew, u.sensor] {
                     h.fixed(f);
                 }
+                let capacity = u.maximum_crew.unwrap_or(u.crew).max(Fixed::ZERO);
+                if capacity != u.crew.max(Fixed::ZERO) {
+                    h.byte(0xed);
+                    h.str("sta64.maximum-crew.v1");
+                    h.fixed(capacity);
+                }
                 let initial_hull = u.initial_hull.unwrap_or(u.hull);
                 let initial_shields = u.initial_shields.unwrap_or(u.shields.max);
                 // Missing and explicit full strength are the same rule. Keep

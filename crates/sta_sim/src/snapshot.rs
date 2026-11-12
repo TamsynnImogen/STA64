@@ -401,7 +401,9 @@ impl Sim {
             return Err(corrupt("unit crew rows"));
         }
         for (id, [now, max]) in crew_rows {
-            if now < 0 || max < 0 || now > max {
+            // Native creation permits starting crew above an authored capacity;
+            // preserve both independent nonnegative values without refilling.
+            if now < 0 || max < 0 {
                 return Err(SnapshotError::Corrupt("invalid unit crew pool".into()));
             }
             let unit = units.get_mut(id).ok_or_else(|| SnapshotError::Corrupt("unknown unit crew entity".into()))?;

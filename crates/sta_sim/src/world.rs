@@ -223,7 +223,10 @@ impl Entity {
             [strength, Fixed::ZERO, Fixed::ZERO, Fixed::ZERO]
         };
         if matches!(kind, EntityKind::Craft | EntityKind::Station) {
-            e.crew = Some([def.crew.max(Fixed::ZERO); 2]);
+            e.crew = Some([
+                def.crew.max(Fixed::ZERO),
+                def.maximum_crew.unwrap_or(def.crew).max(Fixed::ZERO),
+            ]);
         }
         e
     }
