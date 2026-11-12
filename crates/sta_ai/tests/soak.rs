@@ -2,8 +2,8 @@
 //! `two_bases` map, ten seeded games, the first few played twice.
 //!
 //! The seed reaches the games through the AI's seeded draws (wave sizes
-//! between the AIP's `min_attack_force` and `max_attack_force`, the mix of
-//! ships built), so seeds play different games. The soak asserts that:
+//! between the AIP's `min_attack_force` and the growing ceiling up to
+//! `max_attack_force`), so seeds play different games. The soak asserts that:
 //! different decision ticks, and both seats win some of the ten (a winner
 //! that never changes is an ordering bias, as the seat-staggered planning
 //! once was). Note that `Sim::digest()` also hashes the RNG state, so digests

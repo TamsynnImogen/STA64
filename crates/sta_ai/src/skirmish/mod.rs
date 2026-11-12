@@ -30,15 +30,16 @@
 //!    near a station bring them and the waiting reinforcements out.
 //! 4. **Attack waves.** When enough warships wait at the rally point they go
 //!    out as a wave, to the nearest visible enemy, else to the enemy starts
-//!    in turn. Each wave is a little larger than the last, up to the AIP's
-//!    maximum.
+//!    in turn. The ceiling on a wave grows by one with each wave up to the
+//!    AIP's maximum, and each wave's size is drawn from the seeded stream
+//!    between the AIP's minimum and that ceiling (the first is the minimum).
 //!
 //! # Determinism
 //!
 //! Everything it computes is [`Fixed`] or integer. All collections are
 //! ordered (`BTreeMap`, sorted `Vec`), the view arrives in ascending id, and
-//! its one random choice draws from a splitmix64 stream seeded from the game
-//! seed and the seat. The same views and events give the same commands.
+//! its two random choices (the fleet mix and the wave size) draw from a
+//! splitmix64 stream seeded from the game seed and the seat. The same views and events give the same commands.
 //!
 //! # Using it
 //!
@@ -87,6 +88,13 @@ const RALLY_DISTANCE: i32 = 900;
 const GOAL_REACHED: i32 = 600;
 /// Engage range when a ship has no real weapon to measure.
 const FALLBACK_RANGE: i32 = 300;
+
+/// The splitmix64 output function: a full-avalanche mix of one word.
+fn mix(mut z: u64) -> u64 {
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
 
 /// Everything a skirmish controller needs besides the view. The sim hands a
 /// [`Controller`] no seat, content or map, so they come in here.
@@ -290,7 +298,9 @@ pub struct SkirmishController {
 impl SkirmishController {
     pub fn new(cfg: SkirmishConfig) -> SkirmishController {
         // splitmix64 wants a nonzero-ish start; mix the seat in.
-        let rng = cfg.seed ^ (u64::from(cfg.player.0) + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        // Both are mixed first: XORing the raw values would make one seat's
+        // stream another seed's stream shifted by a draw.
+        let rng = mix(cfg.seed) ^ mix(u64::from(cfg.player.0) + 1);
         let wave_size = cfg.params.min_attack.max(1);
         SkirmishController {
             cfg,
@@ -320,10 +330,7 @@ impl SkirmishController {
 
     fn next_u64(&mut self) -> u64 {
         self.rng = self.rng.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.rng;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
+        mix(self.rng)
     }
 
     /// Learn from the last tick's events (every call, whatever the period).

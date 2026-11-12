@@ -291,22 +291,20 @@ fn every_seat_plans_on_the_same_ticks() {
     let mut sim = Sim::from_setup(&s);
     start(&mut sim, &s);
     let mut ctl: Vec<_> = (0..2).map(|i| reg.create_for_seat(SKIRMISH, &s, PlayerId(i)).unwrap()).collect();
-    let mut planned: [BTreeSet<Tick>; 2] = Default::default();
+    let mut planned = [0usize; 2];
     for _ in 0..90 {
         let view = sim.view();
         let mut all = Vec::new();
         for (i, c) in ctl.iter_mut().enumerate() {
             let mut out = Vec::new();
             c.think(&view, &[], &mut out);
-            if !out.is_empty() {
-                planned[i].insert(view.tick);
-            }
+            assert!(view.tick.is_multiple_of(PERIOD) || out.is_empty(), "seat {i} planned off the period, at tick {}", view.tick);
+            planned[i] += usize::from(!out.is_empty());
             all.extend(out);
         }
         sim.step(&all);
     }
-    assert!(!planned[0].is_empty());
-    assert_eq!(planned[0], planned[1]);
+    assert!(planned[0] > 0 && planned[0] == planned[1], "{planned:?}");
 }
 
 /// The next wave's size is drawn from the seed between the AIP's minimum and
