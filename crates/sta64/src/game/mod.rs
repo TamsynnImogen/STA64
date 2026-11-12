@@ -173,6 +173,37 @@ pub fn gui_layout(vfs: &sta_vfs::Vfs, name: &str) -> Option<sta_content::GuiLayo
     Some(cfg.layout_auto())
 }
 
+#[derive(Default)]
+pub struct GuiCandidates {
+    source: Option<String>,
+    mounted: bool,
+    layouts: Vec<(String, sta_content::GuiLayout)>,
+}
+
+fn gui_names(name: &str) -> Vec<String> {
+    let Some(stem) = name.get(..name.len().saturating_sub(4)).filter(|_| name.to_ascii_lowercase().ends_with(".cfg")) else {
+        return vec![name.to_owned()];
+    };
+    const ASPECTS: [&str; 4] = ["4x3", "5x4", "16x10", "16x9"];
+    if ASPECTS.iter().any(|suffix| stem.to_ascii_lowercase().ends_with(suffix)) {
+        return vec![name.to_owned()];
+    }
+    let mut names = vec![name.to_owned()];
+    names.extend(ASPECTS.map(|suffix| format!("{stem}{suffix}.cfg")));
+    names
+}
+
+fn closest_gui(layouts: &[(String, sta_content::GuiLayout)], aspect: f32) -> Option<(&str, &sta_content::GuiLayout)> {
+    let aspect = if aspect.is_finite() && aspect > 0.0 { aspect } else { 16.0 / 9.0 };
+    layouts.iter()
+        .filter_map(|(name, layout)| {
+            let (w, h) = layout.canvas;
+            (w > 0 && h > 0).then_some((name.as_str(), layout, (w as f32 / h as f32 - aspect).abs()))
+        })
+        .min_by(|a, b| a.2.total_cmp(&b.2))
+        .map(|(name, layout, _)| (name, layout))
+}
+
 /// Point the HUD and the music at the local race, when the match is (re)built.
 pub fn apply_race(
     race: Option<Res<LocalRace>>,
@@ -180,24 +211,55 @@ pub fn apply_race(
     hud: Option<ResMut<crate::ui::hud::HudConfig>>,
     music: Option<ResMut<crate::audio::MusicConfig>>,
     skin: Option<ResMut<crate::ui::gui_sprites::GuiSkin>>,
+    mut candidates: Local<GuiCandidates>,
 ) {
     let Some(race) = race else {
+        candidates.source = None;
+        candidates.mounted = false;
+        candidates.layouts.clear();
         if let Some(mut skin) = skin
             && skin.table.is_some()
         {
             skin.table = None;
         }
+        if let Some(mut hud) = hud && hud.gui.is_some() {
+            hud.gui = None;
+        }
         return;
     };
-    if !race.is_changed() { return; }
-    if let Some(mut skin) = skin {
+    if let Some(mut skin) = skin && skin.table != race.interface_sprites {
         skin.table.clone_from(&race.interface_sprites);
     }
-    if let (Some(mut hud), Some(vfs), Some(cfg)) = (hud, vfs, &race.interface) {
-        hud.gui = gui_layout(&vfs.0, cfg);
-        info!("hud: {} for {}", cfg, race.name);
+    let source = race.interface.as_ref();
+    if race.is_changed()
+        || vfs.as_ref().is_some_and(|v| v.is_changed())
+        || candidates.source.as_ref() != source
+        || candidates.mounted != vfs.is_some()
+    {
+        candidates.source = source.cloned();
+        candidates.mounted = vfs.is_some();
+        candidates.layouts.clear();
+        if let (Some(vfs), Some(cfg)) = (&vfs, source) {
+            for name in gui_names(cfg) {
+                let basename = name.rsplit(['/', '\\']).next().unwrap_or(&name);
+                if vfs.0.read(&format!("misc/{basename}")).is_some()
+                    && let Some(layout) = gui_layout(&vfs.0, &name)
+                {
+                    candidates.layouts.push((name, layout));
+                }
+            }
+        }
     }
-    if let Some(mut music) = music {
+    if let Some(mut hud) = hud {
+        let chosen = closest_gui(&candidates.layouts, hud.aspect);
+        if hud.gui.as_ref() != chosen.map(|(_, layout)| layout) {
+            hud.gui = chosen.map(|(_, layout)| layout.clone());
+            if let Some((name, _)) = chosen {
+                info!("hud: {} for {}", name, race.name);
+            }
+        }
+    }
+    if race.is_changed() && let Some(mut music) = music {
         music.calm = race.music.iter().cloned().collect();
         info!("music: {:?} for {}", music.calm, race.name);
     }
@@ -290,12 +352,70 @@ impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
         // Headless frame runs have no notice plugin; the match still posts its notices.
         app.add_message::<Notice>()
-            .add_systems(Update, (apply_race.before(crate::ui::gui_sprites::paint), outcome).in_set(crate::app::GameSet::Ui));
+            .add_systems(Update, (apply_race.before(crate::ui::radar::RadarUi).before(crate::ui::gui_sprites::paint), outcome).in_set(crate::app::GameSet::Ui));
     }
 }
 
 /// Keeps `Arc<Races>` handy for the map view.
 pub type SharedRaces = Arc<Races>;
+
+#[cfg(test)]
+mod gui_selection_tests {
+    use super::*;
+
+    #[test]
+    fn suffixes_are_only_probed_for_unsuffixed_names() {
+        assert_eq!(gui_names("gui_fed.cfg").iter().map(String::as_str).collect::<Vec<_>>(), vec![
+            "gui_fed.cfg", "gui_fed4x3.cfg", "gui_fed5x4.cfg",
+            "gui_fed16x10.cfg", "gui_fed16x9.cfg",
+        ]);
+        assert_eq!(gui_names("gui_fed16x9.cfg"), vec!["gui_fed16x9.cfg".to_string()]);
+    }
+
+    #[test]
+    fn race_cfg_tracks_canvas_aspect_mount_and_absence() {
+        use crate::ui::gui_sprites::GuiSkin;
+        use crate::ui::hud::HudConfig;
+        use crate::viewer::Mounted;
+        use std::fs;
+
+        let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let root = std::env::temp_dir().join(format!("sta64-race-gui-{}-{nonce}", std::process::id()));
+        let misc = root.join("Data/misc");
+        fs::create_dir_all(&misc).unwrap();
+        fs::write(misc.join("gui_test.cfg"), b"screenWidth=1600\nscreenHeight=1200\n").unwrap();
+        fs::write(misc.join("gui_test16x9.cfg"), b"screenWidth=2134\nscreenHeight=1200\n").unwrap();
+        let mut app = App::new();
+        app.insert_resource(HudConfig { aspect: 4.0 / 3.0, ..default() })
+            .init_resource::<GuiSkin>()
+            .insert_resource(Mounted(sta_vfs::Vfs::mount_install(&root, None).unwrap()))
+            .add_systems(Update, apply_race);
+        app.insert_resource(LocalRace {
+            name: "test".into(), interface: Some("gui_test.cfg".into()),
+            interface_sprites: Some("gui_test.spr".into()), music: None,
+        });
+        app.update();
+        assert_eq!(app.world().resource::<HudConfig>().gui.as_ref().unwrap().canvas, (1600, 1200));
+        app.world_mut().resource_mut::<HudConfig>().aspect = 16.0 / 9.0;
+        app.update();
+        assert_eq!(app.world().resource::<HudConfig>().gui.as_ref().unwrap().canvas, (2134, 1200));
+        app.world_mut().resource_mut::<LocalRace>().interface = Some("gui_test16x9.cfg".into());
+        app.world_mut().resource_mut::<HudConfig>().aspect = 4.0 / 3.0;
+        app.update();
+        assert_eq!(app.world().resource::<HudConfig>().gui.as_ref().unwrap().canvas, (2134, 1200));
+        app.world_mut().remove_resource::<Mounted>();
+        app.update();
+        assert!(app.world().resource::<HudConfig>().gui.is_none());
+        app.world_mut().resource_mut::<LocalRace>().interface = None;
+        app.update();
+        assert!(app.world().resource::<HudConfig>().gui.is_none());
+        app.world_mut().remove_resource::<LocalRace>();
+        app.update();
+        assert!(app.world().resource::<HudConfig>().gui.is_none());
+        assert!(app.world().resource::<GuiSkin>().table.is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+}
 
 #[cfg(test)]
 mod flow_tests;

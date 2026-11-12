@@ -32,6 +32,7 @@ pub mod layout;
 pub mod model;
 pub mod commands;
 mod panels;
+pub mod stock;
 
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -139,6 +140,7 @@ impl Plugin for HudPlugin {
             .init_resource::<HudFeed>()
             .init_resource::<HudState>()
             .init_resource::<HudPointer>()
+            .init_resource::<stock::StockState>()
             .init_resource::<super::gui_sprites::GuiSkin>()
             .init_resource::<super::gui_sprites::GuiSprites>()
             .init_resource::<ghost::PlacementBounds>()
@@ -156,6 +158,10 @@ impl Plugin for HudPlugin {
                     feed_from_link.run_if(resource_exists::<SimLink>).run_if(not(resource_exists::<ExternalFeed>)),
                     fit_screen,
                     refresh,
+                    stock::refresh,
+                    stock::update_values,
+                    stock::active,
+                    stock::navigate,
                     panels::update_values.before(super::theme::WidgetPaint),
                     host,
                     pointer,
@@ -211,6 +217,7 @@ fn refresh(
     feed: Res<HudFeed>,
     layout: Res<HudLayoutRes>,
     config: Res<HudConfig>,
+    profile: Option<Res<crate::ui::profile::UiProfile>>,
     mut state: ResMut<HudState>,
     mut strip: Query<(Entity, &mut Node, Option<&Children>), (With<ResourceStrip>, Without<InfoPanel>, Without<GridPanel>)>,
     mut info_panel: Query<(Entity, &mut Node, Option<&Children>), (With<InfoPanel>, Without<ResourceStrip>, Without<GridPanel>)>,
@@ -222,6 +229,10 @@ fn refresh(
     }
     if state.page == Page::Formations && !commands::shared(&feed).move_order {
         state.page = Page::Top;
+    }
+    if stock::enabled(profile.as_deref(), &config) {
+        state.drawn = None; state.height = None;
+        return;
     }
     let now = models(&feed, state.page, layout.0.no_resource);
     let height = now.info.height();
@@ -297,19 +308,24 @@ fn log_line(l: &HudLayout, height: Option<InfoHeight>, page: Page, m: &Models, r
 /// Put the radar and the notices where HUD.md has them.
 fn host(
     layout: Res<HudLayoutRes>,
+    stock: Res<stock::StockState>,
     mut radar: Query<&mut Node, (With<RadarRoot>, Without<NoticeRoot>)>,
     mut notices: Query<&mut Node, (With<NoticeRoot>, Without<RadarRoot>)>,
 ) {
     let l = &layout.0;
     for mut n in &mut radar {
-        let (left, bottom) = (Val::Px(l.minimap.x), Val::Px(l.screen.y - l.minimap.bottom()));
-        if n.left != left || n.bottom != bottom {
-            n.left = left;
-            n.bottom = bottom;
+        if let Some(layout) = &stock.layout {
+            if let Some(r) = layout.panel("minimap") {
+                n.left = Val::Px(r.x); n.top = Val::Px(r.y);
+                n.bottom = Val::Auto; n.right = Val::Auto;
+            }
+        } else {
+            n.left = Val::Px(l.minimap.x); n.bottom = Val::Px(l.screen.y - l.minimap.bottom());
+            n.top = Val::Auto; n.right = Val::Auto;
         }
     }
     for mut n in &mut notices {
-        let top = Val::Px(l.notices_top());
+        let top = Val::Px(stock.layout.as_ref().and_then(|l| l.panel("resource")).map_or_else(|| l.notices_top(), |r| r.bottom()+8.0));
         if n.top != top {
             n.top = top;
         }
@@ -322,11 +338,13 @@ fn pointer(
     scale: Res<UiScale>,
     layout: Res<HudLayoutRes>,
     state: Res<HudState>,
+    stock: Res<stock::StockState>,
     mut out: ResMut<HudPointer>,
 ) {
     let over = window.and_then(|w| w.cursor_position()).is_some_and(|c| {
         let p = c / scale.0.max(1e-3);
-        layout.0.solid(state.height).iter().any(|r| r.contains(p))
+        if stock.layout.is_some() { stock.solid.iter().any(|r| r.contains(p)) }
+        else { layout.0.solid(state.height).iter().any(|r| r.contains(p)) }
     });
     if out.0 != over {
         out.0 = over;
@@ -367,6 +385,7 @@ fn press(
         };
         match act {
             Act::OpenBuild => state.page = Page::Build,
+            Act::OpenNativeMenu(id) => state.page = Page::Native(*id),
             Act::OpenFormations if commands::shared(&feed).move_order => state.page = Page::Formations,
             Act::Back => {
                 state.page = Page::Top;

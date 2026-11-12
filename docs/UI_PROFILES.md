@@ -55,7 +55,8 @@ chrome colours and dimensions, notice retention and loading progress. Strict
 client Clippy across all targets, workspace/all-targets and NDK29/API26 ARM64
 library checks passed. General settings persistence, stock HUD art/layout and
 original-game visual equivalence are not established by these foundation tests.
-UI-18 is the next implementation stage of the user's current request.
+UI-18's CFG/SPR renderer and current verification boundaries are documented in
+[STOCK_HUD_CFG.md](STOCK_HUD_CFG.md). Its native reference acceptance remains open.
 
 ## Native research retained for UI-18
 

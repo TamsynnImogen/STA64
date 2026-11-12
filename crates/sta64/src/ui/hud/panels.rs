@@ -148,14 +148,20 @@ pub(super) fn spawn_root(
     theme: Res<Theme>,
     layout: Res<super::HudLayoutRes>,
     existing: Query<Entity, With<HudRoot>>,
-    bodies: Query<(), With<HudBody>>,
+    bodies: Query<Entity, With<HudBody>>,
+    config: Res<super::HudConfig>,
+    profile: Option<Res<crate::ui::profile::UiProfile>>,
 ) {
-    if !bodies.is_empty() { return; }
     // Retain the root and its camera/hosting metadata while replacing chrome.
     let root = existing.single().unwrap_or_else(|_| commands.spawn((
         HudRoot, Pickable::IGNORE,
         Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
     )).id());
+    if super::stock::enabled(profile.as_deref(), &config) {
+        for entity in &bodies { commands.entity(entity).despawn(); }
+        return;
+    }
+    if !bodies.is_empty() { return; }
     let l = &layout.0;
     let r = l.resources;
     let row = l.bottom_row(None);

@@ -148,6 +148,8 @@ pub enum Page {
     Top,
     Build,
     Formations,
+    /// Authored stock command menu; its stable ID comes from loaded ODF metadata.
+    Native(u32),
 }
 
 /// What pressing a cell does.
@@ -155,6 +157,7 @@ pub enum Page {
 pub enum Act {
     OpenBuild,
     OpenFormations,
+    OpenNativeMenu(u32),
     Back,
     /// Arm a map target; completed by the HUD's target click system.
     Target(TargetMode),
@@ -311,7 +314,7 @@ fn button(cell: usize, label: &str, act: Act, tip: &str) -> Button {
         Act::Cancel(_) => (vec!["b_cancel".into()], false),
         Act::Formation(_) => (vec!["b_form".into()], true),
         // No verified native ID for these actions; use the existing label.
-        Act::Special(_) | Act::Build { .. } => (Vec::new(), false),
+        Act::Special(_) | Act::Build { .. } | Act::OpenNativeMenu(_) => (Vec::new(), false),
     };
     Button { cell, label: label.to_uppercase(), act, look: Look::Ready, tip: tip.to_owned(), verbose: None, sprite_names, keep_label }
 }
@@ -346,6 +349,12 @@ pub fn builder(feed: &HudFeed) -> Option<&UnitView> {
 /// formations (D F G) for own units; nothing for an enemy or nothing selected.
 /// Build page: the builder's list fills the cells but cancel (T) and back (G).
 pub fn grid(feed: &HudFeed, page: Page) -> Vec<Button> {
+    grid_with_capacity(feed, page, GRID_COLS * GRID_ROWS)
+}
+
+/// Shared action construction with a presentation-specific build capacity.
+/// Stock palettes page the full list; the LCARS wrapper preserves its 15 cells.
+pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) -> Vec<Button> {
     let own = feed.own_selection();
     if own.is_empty() {
         return Vec::new();
@@ -369,7 +378,7 @@ pub fn grid(feed: &HudFeed, page: Page) -> Vec<Button> {
             .def(b)
             .is_some_and(|d| d.movement.max_speed > Fixed::ZERO);
         let mut out = Vec::new();
-        let cells = (0..GRID_COLS * GRID_ROWS).filter(|c| *c != CANCEL_CELL && *c != BACK_CELL);
+        let cells = (0..capacity).filter(|c| *c != CANCEL_CELL && *c != BACK_CELL);
         for (cell, it) in cells.zip(&items) {
             let verbose = match &it.why {
                 Some(w) => format!("{}. Cost: {}", w, cost_text(&it.cost, &names)),
@@ -443,7 +452,7 @@ pub fn command(feed: &HudFeed, act: &Act) -> Option<(CommandKind, Vec<EntityId>)
     let own = feed.own_selection();
     let caps = commands::shared(feed);
     match act {
-        Act::OpenBuild | Act::OpenFormations | Act::Back | Act::Target(_) => None,
+        Act::OpenBuild | Act::OpenFormations | Act::OpenNativeMenu(_) | Act::Back | Act::Target(_) => None,
         Act::Stop if caps.stop => {
             Some((CommandKind::Order(Order::Stop { units: own.clone() }), own))
         }
