@@ -194,6 +194,7 @@ impl Pd {
     }
 
     /// One tick of point defence: remove the shots the ready PD mounts take.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn step(
         &mut self,
         tick: u64,
