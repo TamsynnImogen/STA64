@@ -206,8 +206,13 @@ pub(crate) fn unit_under(cursor: Vec2, ray: Ray3d, units: &Targetable) -> Option
         return Some(id);
     }
     let mut best: Option<(f32, EntityId)> = None;
-    for (u, radius, gt, _) in units {
-        let to = gt.translation() - ray.origin;
+    for (u, radius, gt, strategic) in units {
+        // A symbol replaces this model, so its invisible sphere cannot steal a
+        // click (including when the symbol is folded into a fleet leader).
+        if strategic.is_some_and(|s| s.symbol) {
+            continue;
+        }
+        let to = visual_centre(gt, strategic) - ray.origin;
         let t = to.dot(*ray.direction);
         if t < 0.0 {
             continue;
@@ -218,6 +223,12 @@ pub(crate) fn unit_under(cursor: Vec2, ray: Ray3d, units: &Targetable) -> Option
         }
     }
     best.map(|b| b.1)
+}
+
+/// Model pivots can be outside the visible hull. Match the icon's anchor for
+/// model picking and box/type selection without changing simulation positions.
+fn visual_centre(gt: &GlobalTransform, strategic: Option<&Strategic>) -> Vec3 {
+    gt.transform_point(strategic.map_or(Vec3::ZERO, |s| s.centre))
 }
 
 fn push_unique(v: &mut Vec<EntityId>, id: EntityId) {
@@ -367,10 +378,10 @@ pub fn select(
         // A box takes ships only; Shift adds them to ships (a selected station is dropped).
         sel.retain(|&s| ship(s));
         let (lo, hi) = (start.min(cursor), start.max(cursor));
-        for (u, _, gt, _) in &units {
+        for (u, _, gt, strategic) in &units {
             if is_own(&link, u.0)
                 && ship(u.0)
-                && let Some(p) = aim.project(gt.translation())
+                && let Some(p) = aim.project(visual_centre(gt, strategic))
                 && p.cmpge(lo).all()
                 && p.cmple(hi).all()
             {
@@ -389,8 +400,8 @@ pub fn select(
             // Same def, so all ships or all stations; never mixed with the old selection.
             sel.retain(|&s| ship(s) == ship(id));
             let def = def_of(&link, id);
-            for (u, _, gt, _) in &units {
-                if is_own(&link, u.0) && def_of(&link, u.0) == def && aim.on_screen(gt.translation()) {
+            for (u, _, gt, strategic) in &units {
+                if is_own(&link, u.0) && def_of(&link, u.0) == def && aim.on_screen(visual_centre(gt, strategic)) {
                     push_unique(&mut sel, u.0);
                 }
             }
@@ -552,6 +563,54 @@ mod tests {
     fn sorted(mut v: Vec<EntityId>) -> Vec<EntityId> {
         v.sort();
         v
+    }
+
+    #[test]
+    fn strategic_click_uses_drawn_icon_and_never_the_replaced_model_sphere() {
+        let mut app = app();
+        let entity = app
+            .world_mut()
+            .query::<(Entity, &SimEntity)>()
+            .iter(app.world())
+            .find(|(_, id)| id.0 == A)
+            .unwrap()
+            .0;
+        let mut icon = Strategic::new(crate::render::strategic::Shape::Arrow, Color::WHITE, 20.0);
+        icon.symbol = true;
+        icon.shown = 1.0;
+        // Deliberately distinct from A's model sphere at (100,100).
+        icon.screen = Vec2::new(300.0, 100.0);
+        app.world_mut().entity_mut(entity).insert(icon);
+        click(&mut app, 100.0, 100.0);
+        assert!(sel(&app).is_empty(), "replaced model stole a click");
+        click(&mut app, 300.0, 100.0);
+        assert_eq!(sel(&app), [A], "drawn icon must win over B's model sphere");
+        // Folding hides the icon and must remove its hitbox as well.
+        app.world_mut().get_mut::<Strategic>(entity).unwrap().shown = 0.0;
+        click(&mut app, 300.0, 100.0);
+        assert_eq!(sel(&app), [B]);
+    }
+
+    #[test]
+    fn offset_model_picking_and_box_use_the_same_visual_centre_as_its_icon() {
+        let mut app = app();
+        let entity = app
+            .world_mut()
+            .query::<(Entity, &SimEntity)>()
+            .iter(app.world())
+            .find(|(_, id)| id.0 == A)
+            .unwrap()
+            .0;
+        app.world_mut().entity_mut(entity).insert(
+            Strategic::new(crate::render::strategic::Shape::Arrow, Color::WHITE, 20.0)
+                .with_centre(Vec3::new(300.0, 0.0, 100.0)),
+        );
+        click(&mut app, 100.0, 100.0);
+        assert!(sel(&app).is_empty());
+        click(&mut app, 400.0, 200.0);
+        assert_eq!(sel(&app), [A]);
+        drag(&mut app, (380.0, 180.0), (420.0, 220.0));
+        assert_eq!(sel(&app), [A]);
     }
 
     #[test]

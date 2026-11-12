@@ -281,7 +281,10 @@ fn attach_models(
         // model's bounds, and for team-owned things a strategic icon of the right
         // shape (the mod's `<model>_sv` sprite, else a silhouette of the model). Units
         // that come into sight, or are placed at the start, are drawn here.
-        let radius = model.bounds().map(|(lo, hi)| (Vec3::from(hi) - Vec3::from(lo)).length() * 0.5).unwrap_or(20.0) * if scale > 0.0 { scale } else { 1.0 };
+        let model_scale = if scale > 0.0 { scale } else { 1.0 };
+        let bounds = model.bounds();
+        let radius = bounds.map(|(lo, hi)| (Vec3::from(hi) - Vec3::from(lo)).length() * 0.5).unwrap_or(20.0) * model_scale;
+        let centre = bounds.map(|(lo, hi)| crate::render::strategic::centre_for_bounds(lo, hi, model_scale)).unwrap_or_default();
         let mobile = def.movement.max_speed > sta_sim::Fixed::ZERO;
         let owned = owner.is_some_and(|o| o.0 != sta_sim::world::NEUTRAL);
         // A resource (a moon) is neutral and never moves, but is clicked for its info and
@@ -292,7 +295,7 @@ fn attach_models(
         let class = def.class.0.as_str();
         if owned && !matches!(class, "background_obj" | "latinum" | "asteroidfield" | "nebula_obj" | "planet" | "wormhole_obj") {
             let mut icon = crate::render::strategic::Strategic::new(crate::render::strategic::shape_for(class, mobile), team.0, radius,
-            );
+            ).with_centre(centre);
             let sv = tables.0.sprite(&format!("{}_sv", def.model));
             let tex = sv.and_then(|sprite| {
                 let tex = (Loader { vfs: &vfs.0, cache: &mut cache, images: &mut images, formats,

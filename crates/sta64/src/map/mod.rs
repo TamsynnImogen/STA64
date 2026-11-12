@@ -932,7 +932,8 @@ fn rebuild(
         if o.team > 0 && !matches!(class.as_str(), "background_obj" | "latinum" | "asteroidfield" | "nebula_obj" | "planet" | "wormhole_obj") {
             let radius = model.bounds().map(|(lo, hi)| (Vec3::from(hi) - Vec3::from(lo)).length() * 0.5).unwrap_or(20.0) * scale;
             let mobile = units_before != units;
-            let mut icon = crate::render::strategic::Strategic::new(crate::render::strategic::shape_for(&class, mobile), team, radius);
+            let centre = model.bounds().map(|(lo, hi)| crate::render::strategic::centre_for_bounds(lo, hi, scale)).unwrap_or_default();
+            let mut icon = crate::render::strategic::Strategic::new(crate::render::strategic::shape_for(&class, mobile), team, radius).with_centre(centre);
             let sv = tables.0.sprite(&format!("{}_sv", def.model));
             if let Some(sprite) = sv
                 && let Some(tex) = (Loader { vfs: &vfs.0, cache: &mut cache, images: &mut images, formats }).colour(&sprite.texture, false)

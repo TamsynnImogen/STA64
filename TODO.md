@@ -120,7 +120,7 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 
 ## Now (M2: a map you can fly in)
 
-- [ ] Strategic view, next: stack overlapping icons into one fleet icon with a count (Sins-style); grid/height bars at strategic zoom (`cfgSTRATEGIC_GRID_RENDER`)
+- [?] Strategic view (#365): zoom out/in in Classic and FO4. Each ship/station should switch exclusively between its hull and an icon at the hull centre; small zoom changes near the handoff should not flicker. Check resized windows/HUD scaling, icon clicks, fleet count/folding, Tab Auto/Always/Off and constructor/station selection. Grid/height bars and stacking already exist; broader RND-27 distance-LOD/culling remains planned. See [handoff contract](docs/STRATEGIC_HANDOFF.md).
 - [x] Custom SOD blend names mapped in `render/materials.rs` (table-driven; our reading of the effect names, not engine source; unknown names log once) — #80
 - [?] Ships with weapon/effect parts (`wtractor`, `whobber`, `wtranscoil`, `xcritical05`) show them as additive glow, not plain opaque — #80
 - [?] Fog of war and shroud (RND-13): the draw is ready but the map view does not insert `FogBounds` or a `LocalPlayer` yet, so nothing shows in `--map`; `sta64 --headless --clock bench --frames 0,60 --frame-dir out --scene bench/scenes/fog.ini` (needs a GPU) shows unseen ground dimmed, never-seen ground black, round edges, and the discs following the sensors (compare `fog-off.ini`)
