@@ -793,8 +793,8 @@ fn metadata_groups_only_available_actions() {
                 button: key.into(),
                 preferred: None,
                 menu: Some(menu.into()),
-                tooltip: None,
-                verbose: None,
+                tooltip: Some("GUI_MOVE_TOOLTIP".into()),
+                verbose: Some("GUI_MOVE_VERBOSE".into()),
                 normal: None,
                 hovered: None,
                 pressed: None,
@@ -809,6 +809,9 @@ fn metadata_groups_only_available_actions() {
     assert!(!shown.iter().any(|b| b.act == Act::Target(TargetMode::Mine)));
     let grouped = buttons(&feed, Page::Native(0), &native);
     assert!(grouped.iter().any(|b| b.act == Act::Target(TargetMode::Move)));
+    let move_button = grouped.iter().find(|b| b.act == Act::Target(TargetMode::Move)).unwrap();
+    assert_eq!(move_button.tip, "GUI_MOVE_TOOLTIP");
+    assert_eq!(move_button.verbose.as_deref(), Some("GUI_MOVE_VERBOSE"));
     assert!(!grouped.iter().any(|b| b.act == Act::Target(TargetMode::Mine)));
 }
 

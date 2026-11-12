@@ -308,3 +308,14 @@ gauges); these are not claimed as original-A2 commands. See [display evidence](D
 Text/icon nodes persist across hover and value changes, following their HUD
 root visibility. The integrated checks and optimized launcher are recorded in
 the consumer PR; native live comparison and settled FPS remain a manual gate.
+
+Command ODF `tooltip`/`verbose` and build-unit ODF `tooltip`/`verboseTooltip`
+are preserved as authored keys until hover text is drawn. The mounted game's
+`Dynamic_Localized_Strings.h` supplies the text first, through the existing
+layered string-table reader. Only an absent entry falls back to STA64 language
+text and then the ODF/source value; a present empty translation stays empty and
+hides that tooltip. Missing build ODF fields retain generated build/cost/reason
+text. Short and expanded tooltips follow the same rule, and retained tooltip
+nodes use the current `Strings` resource after a game/language change. This
+changes tooltip presentation only, with no new localization format or source
+data edits (D1/D2/D5/D11).

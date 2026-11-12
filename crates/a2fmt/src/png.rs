@@ -367,7 +367,7 @@ mod tests {
 
     /// Reads the file named by `A2_TEST_TITLE_PNG` (Roots' own art, never in the repo).
     #[test]
-    #[ignore]
+    #[ignore = "needs A2_TEST_TITLE_PNG pointing at a real Roots title PNG"]
     fn title_box_of_a_real_file() {
         let Ok(p) = std::env::var("A2_TEST_TITLE_PNG") else { return };
         let i = decode(&std::fs::read(p).unwrap()).unwrap();

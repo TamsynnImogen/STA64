@@ -21,10 +21,14 @@ fn field(kind: RegionKind, shape: RegionShape) -> Region {
 /// lines up exactly). Returns the closest it got to `centre` and where it
 /// ended.
 fn fly(regions: Vec<Region>, centre: Vec3) -> (Fixed, Vec3) {
+    fly_with(regions, centre, sta_content::fake::db())
+}
+
+fn fly_with(regions: Vec<Region>, centre: Vec3, db: sta_content::ContentDb) -> (Fixed, Vec3) {
     let mut map = MapDef::empty();
     map.regions = regions;
     let seat = |id| PlayerSetup { id: PlayerId(id), team: TeamId(id), race: "fx".into(), control: Control::Idle };
-    let db = Arc::new(sta_content::fake::db());
+    let db = Arc::new(db);
     let cruiser = db.key("fx_cruiser").unwrap();
     let setup = GameSetup { seed: 3, map: Arc::new(map), content: db, players: vec![seat(1)], options: GameOptions::default() };
     let mut sim = Sim::from_setup(&setup);
@@ -64,8 +68,12 @@ fn the_same_flight_without_a_field_crosses_it() {
 
 #[test]
 fn nebulae_are_not_obstacles() {
+    // Not solids: nothing pushes a unit out. SIM-23's planner routes round
+    // them by cost, so it is switched off here (`USE_PATH_PLANNING = 0`).
     let centre = v(1500, 20);
-    let (closest, _) = fly(vec![field(RegionKind::Nebula, RegionShape::Sphere { centre, radius: Fixed::from_int(400) })], centre);
+    let off = sta_content::PathingRules { enabled: false, ..Default::default() };
+    let db = sta_content::fake::db().with_rules(sta_content::Rules::default().with_pathing(off));
+    let (closest, _) = fly_with(vec![field(RegionKind::Nebula, RegionShape::Sphere { centre, radius: Fixed::from_int(400) })], centre, db);
     assert!(closest < Fixed::from_int(100));
 }
 

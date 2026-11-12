@@ -12,7 +12,7 @@ use sta_sim::command::{CommandKind, Order};
 use sta_sim::movement::{FORM_COLUMN, FORM_LINE, FORM_WEDGE};
 use sta_sim::{ContentKey, EntityId, Fixed, PlayerId, UnitView, WorldView};
 
-use crate::ui::i18n::tr;
+use crate::ui::i18n::{tr, tooltip_key};
 use super::layout::{GRID_COLS, GRID_ROWS, InfoHeight};
 use super::commands;
 
@@ -373,10 +373,10 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
     let builder = caps.build.then(|| builder(feed)).flatten();
     if page == Page::Formations && caps.move_order {
         return vec![
-            button(0, &tr("Line"), Act::Formation(FORM_LINE), &tr("Formation: line")),
-            button(1, &tr("Column"), Act::Formation(FORM_COLUMN), &tr("Formation: column")),
-            button(2, &tr("Wedge"), Act::Formation(FORM_WEDGE), &tr("Formation: wedge")),
-            button(BACK_CELL, &tr("Back"), Act::Back, &tr("Back")),
+            button(0, &tr("Line"), Act::Formation(FORM_LINE), &tooltip_key("Formation: line")),
+            button(1, &tr("Column"), Act::Formation(FORM_COLUMN), &tooltip_key("Formation: column")),
+            button(2, &tr("Wedge"), Act::Formation(FORM_WEDGE), &tooltip_key("Formation: wedge")),
+            button(BACK_CELL, &tr("Back"), Act::Back, &tooltip_key("Back")),
         ];
     }
     if page == Page::Build
@@ -390,6 +390,7 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
         let mut out = Vec::new();
         let cells = (0..capacity).filter(|c| *c != CANCEL_CELL && *c != BACK_CELL);
         for (cell, it) in cells.zip(&items) {
+            let definition = feed.content.as_deref().and_then(|db| db.unit(it.key));
             let verbose = match &it.why {
                 Some(w) => format!("{}. Cost: {}", w, cost_text(&it.cost, &names)),
                 None => format!("Cost: {}", cost_text(&it.cost, &names)),
@@ -404,51 +405,53 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
                     site,
                 },
                 look: it.look,
-                tip: format!("Build {}", it.odf),
-                verbose: Some(verbose),
+                tip: definition.and_then(|d| d.raw.str("tooltip")).map(str::to_owned)
+                    .unwrap_or_else(|| format!("Build {}", it.odf)),
+                verbose: Some(definition.and_then(|d| d.raw.str("verboseTooltip"))
+                    .map_or(verbose, str::to_owned)),
                 sprite_names: feed.content.as_deref().and_then(|db| db.unit(it.key))
                     .map_or_else(Vec::new, |def| build_sprite_names(&def.model, &it.odf)),
                 keep_label: false,
             });
         }
-        out.push(button(CANCEL_CELL, &tr("Cancel"), Act::Cancel(b.id), &tr("Cancel the queue")));
-        out.push(button(BACK_CELL, &tr("Back"), Act::Back, &tr("Back")));
+        out.push(button(CANCEL_CELL, &tr("Cancel"), Act::Cancel(b.id), &tooltip_key("Cancel the queue")));
+        out.push(button(BACK_CELL, &tr("Back"), Act::Back, &tooltip_key("Back")));
         out.sort_by_key(|b| b.cell);
         return out;
     }
     let mut out = Vec::new();
     if builder.is_some() {
-        out.push(button(0, &tr("Build"), Act::OpenBuild, &tr("Build")));
+        out.push(button(0, &tr("Build"), Act::OpenBuild, &tooltip_key("Build")));
     }
     if caps.rally {
         out.push(button(
             1,
             &tr("Rally"),
             Act::Target(TargetMode::Rally),
-            &tr("Set rally point"),
+            &tooltip_key("Set rally point"),
         ));
     }
     if caps.move_order {
-        out.push(button(2, &tr("Move"), Act::Target(TargetMode::Move), &tr("Move")));
-        out.push(button(7, &tr("Formations"), Act::OpenFormations, &tr("Choose formation")));
+        out.push(button(2, &tr("Move"), Act::Target(TargetMode::Move), &tooltip_key("Move")));
+        out.push(button(7, &tr("Formations"), Act::OpenFormations, &tooltip_key("Choose formation")));
     }
     if caps.stop {
-        out.push(button(6, &tr("Stop"), Act::Stop, &tr("Stop")));
+        out.push(button(6, &tr("Stop"), Act::Stop, &tooltip_key("Stop")));
     }
     if caps.attack {
         out.push(button(
             3,
             &tr("Attack"),
             Act::Target(TargetMode::Attack),
-            &tr("Attack"),
+            &tooltip_key("Attack"),
         ));
     }
     if caps.mine {
-        out.push(button(4, &tr("Mine"), Act::Target(TargetMode::Mine), &tr("Mine")));
+        out.push(button(4, &tr("Mine"), Act::Target(TargetMode::Mine), &tooltip_key("Mine")));
     }
     for (i, (slot, _)) in caps.specials.iter().enumerate() {
         if let Some(cell) = [5, 10, 11, 12, 13, 14].get(i) {
-            out.push(button(*cell, &tr("Cloak"), Act::Special(*slot), &tr("Toggle cloak")));
+            out.push(button(*cell, &tr("Cloak"), Act::Special(*slot), &tooltip_key("Toggle cloak")));
         }
     }
     out.sort_by_key(|b| b.cell);
@@ -951,6 +954,28 @@ mod tests {
         assert_eq!(build_sprite_names("fed_excelsior", "fed_excelsiorA"), ["b_fed_excelsior", "b_fed_excelsiorA"]);
         assert_eq!(build_sprite_names("FX_Cruiser.SOD", "fx_cruiser.odf"), ["b_FX_Cruiser"]);
         assert_eq!(build_sprite_names("models/fed_excelsior.GlB", "fed_excelsiorA"), ["b_fed_excelsior", "b_fed_excelsiorA"]);
+    }
+
+    #[test]
+    fn build_buttons_preserve_authored_tooltip_keys_with_generated_fallback() {
+        let fake = sta_content::fake::db();
+        let mut db = ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
+        for weapon in fake.weapons() { db = db.weapon(weapon.clone()); }
+        for unit in fake.units() {
+            let mut unit = unit.clone();
+            if unit.odf == "fx_cruiser" {
+                unit.raw = Arc::new(sta_odf::resolve("unit", &mut |_| Some(
+                    "tooltip = \"GUI_BUILD_CRUISER\"\nverboseTooltip = \"GUI_BUILD_CRUISER_DETAILS\"".to_owned()
+                )).unwrap());
+            }
+            db = db.unit(unit);
+        }
+        let f = feed(db.build().unwrap(), vec![unit(&fake, 2, "fx_yard", 1, 100.0, None)], &[2]);
+        let buttons = grid(&f, Page::Build);
+        assert_eq!(buttons[0].tip, "GUI_BUILD_CRUISER");
+        assert_eq!(buttons[0].verbose.as_deref(), Some("GUI_BUILD_CRUISER_DETAILS"));
+        assert_eq!(buttons[1].tip, "Build fx_frigate");
+        assert!(buttons[1].verbose.as_deref().unwrap().starts_with("Cost:"));
     }
 
     const TREE: &str = "fx_cruiser 0\nfx_frigate 1 fx_station\nfx_yard 0\nfx_station 0\n";

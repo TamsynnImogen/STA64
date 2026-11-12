@@ -90,7 +90,7 @@ impl ContentDb {
     pub fn load_as(vfs: &sta_vfs::Vfs, profile: Profile, index: &OdfIndex) -> Result<(ContentDb, Vec<Warning>)> {
         let (db, mut warnings) = crate::odf::load(vfs, profile, index)?;
         let (races, _) = crate::Races::load(vfs, index);
-        let (rules, rule_warnings) = crate::Rules::load(vfs, &races);
+        let (rules, rule_warnings) = crate::Rules::load(vfs, &races)?;
         warnings.extend(rule_warnings);
         let db = db.with_rules(rules).with_launch_points(vfs).with_resources(ResourceModel::from_strings(profile, &crate::StringTable::load(vfs)));
         if db.is_empty() {
@@ -98,7 +98,7 @@ impl ContentDb {
         }
         // The skirmish tree: `tech1`, from the top-most layer that has one.
         // A map may name another (CON-07/UI); `with_tech_tree` swaps it.
-        match TechTree::from_vfs(vfs, DEFAULT_TECH_TREE) {
+        match TechTree::from_vfs(vfs, DEFAULT_TECH_TREE)? {
             // Load what parses; the warnings (mostly duplicate entries in
             // Fleet Operations' files) are the caller's to show.
             Some((tree, w)) if !tree.is_empty() => {
@@ -579,6 +579,15 @@ fn hash_inner(db: &ContentDb, include_starting_rules: bool) -> u64 {
         h.byte(0xeb);
         h.str("sta64.starting-personnel-rules.v1");
         for value in rules { h.u64(value); }
+    }
+    // SIM-23: only when `RTS_CFG.h` has the PATHING keys, so content without
+    // them keeps its hash; excluded with the other rules from the historical
+    // identity snapshots compare against.
+    let pathing = db.rules.pathing_hash_values();
+    if include_starting_rules && !pathing.is_empty() {
+        h.byte(0xed);
+        h.str("sta64.pathing-rules.v1");
+        for value in pathing { h.u64(value); }
     }
     h.0
 }

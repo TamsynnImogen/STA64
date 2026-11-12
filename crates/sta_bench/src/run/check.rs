@@ -10,6 +10,7 @@
 //! Expect "OBJ" exists | does not exist                    [at tick N]
 //! Expect "OBJ" FIELD is CMP                               [at tick N]
 //! Expect "OBJ" is within R of (X Y Z | "OBJ2")            [at tick N]
+//! Expect "OBJ" was never within R of X Y Z                (every tick run)
 //! Expect player P resource NAME is CMP                    [at tick N]
 //! Expect player P is [not] eliminated                     [at tick N]
 //! Expect player P sees "OBJ" | does not see "OBJ"         [at tick N]
@@ -104,6 +105,12 @@ pub enum Pred {
         yes: bool,
         at: Option<Tick>,
     },
+    /// The object kept out of a sphere at every tick run so far (SIM-23).
+    NeverNear {
+        obj: String,
+        radius: f64,
+        to: [f64; 3],
+    },
     Resource {
         player: u8,
         res: usize,
@@ -138,7 +145,7 @@ impl Pred {
             | Pred::Resource { at, .. }
             | Pred::Eliminated { at, .. }
             | Pred::Sees { at, .. } => at.is_none(),
-            Pred::Mark { .. } => false,
+            Pred::Mark { .. } | Pred::NeverNear { .. } => false,
         }
     }
 }
@@ -418,6 +425,16 @@ fn pred(c: &mut Cur) -> Result<Pred, String> {
                 yes: false,
                 at: c.opt_at()?,
             }
+        } else if c.eat("was never within") {
+            let radius = c.number()?;
+            if !c.eat("of") {
+                return Err("`was never within R of X Y Z`".into());
+            }
+            Pred::NeverNear {
+                obj,
+                radius,
+                to: [c.number()?, c.number()?, c.number()?],
+            }
         } else if c.eat("is within") {
             let radius = c.number()?;
             if !c.eat("of") {
@@ -576,6 +593,22 @@ pub fn eval(b: &Bench, p: &Pred) -> Result<String, String> {
             let msg =
                 format!("`{obj}` is {d:.2} from {there:?} at tick {tick} (want within {radius})");
             if d <= *radius { Ok(msg) } else { Err(msg) }
+        }
+        Pred::NeverNear { obj, radius, to } => {
+            let id = b.resolve(obj)?;
+            let mut closest: Option<(f64, Tick)> = None;
+            for tick in 0..=b.tick() {
+                let Ok(view) = b.view_at(tick) else { continue };
+                if let Some(u) = view.unit(id) {
+                    let d = dist([to_f64(u.pos.x), to_f64(u.pos.y), to_f64(u.pos.z)], *to);
+                    if closest.is_none_or(|(c, _)| d < c) {
+                        closest = Some((d, tick));
+                    }
+                }
+            }
+            let (d, tick) = closest.ok_or_else(|| format!("`{obj}` never existed"))?;
+            let msg = format!("`{obj}` came within {d:.2} of {to:?} at tick {tick} (want never within {radius})");
+            if d > *radius { Ok(msg) } else { Err(msg) }
         }
         Pred::Exists { obj, yes, at } => {
             let view = match at {

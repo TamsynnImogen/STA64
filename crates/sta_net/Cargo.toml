@@ -5,5 +5,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-# Bevy-free; sits above sta_sim (docs/WORKPLAN.md, "Seams"). Empty until its lane starts.
+# Bevy-free; sits above sta_sim (docs/WORKPLAN.md, "Seams"). The wire format
+# is postcard behind a fixed little-endian frame header (docs/NET.md).
 [dependencies]
+sta_core = { workspace = true, features = ["serde"] }
+sta_content.workspace = true
+sta_sim.workspace = true
+serde.workspace = true
+postcard.workspace = true

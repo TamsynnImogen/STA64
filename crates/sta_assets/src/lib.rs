@@ -18,6 +18,7 @@ use sta_vfs::Vfs;
 pub use a2fmt;
 
 pub mod audio;
+pub mod bmp;
 pub mod cfg_h;
 pub mod dds;
 pub mod gltf;
@@ -136,6 +137,7 @@ pub enum AssetError {
     Sod(String, a2fmt::sod::Error),
     Tga(String, a2fmt::tga::Error),
     Dds(String, dds::DdsError),
+    Bmp(String, bmp::BmpError),
     M3d(String, String),
     Gltf(String, String),
     Unsupported(String),
@@ -149,6 +151,7 @@ impl std::fmt::Display for AssetError {
             Self::Sod(n, e) => write!(f, "{n}: SOD {e:?}"),
             Self::Tga(n, e) => write!(f, "{n}: TGA {e:?}"),
             Self::Dds(n, e) => write!(f, "{n}: DDS {e}"),
+            Self::Bmp(n, e) => write!(f, "{n}: BMP {e}"),
             Self::M3d(n, e) => write!(f, "{n}: M3D {e}"),
             Self::Gltf(n, e) => write!(f, "{n}: glTF {e}"),
             Self::Unsupported(n) => write!(f, "{n}: no CPU decoder for this format"),

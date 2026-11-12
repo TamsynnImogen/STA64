@@ -211,3 +211,14 @@ fn contentdb_load_uses_fo_defaults_and_preserves_mod_then_odf_zero_overrides() {
     let ship = db.unit(db.key("ship").unwrap()).unwrap();
     assert!(!db.unit_features(ship).weapon_damage_controls);
 }
+
+#[test]
+fn manifest_profile_outranks_info_ini_profile_and_heuristics() {
+    // D4: manifest, then info.ini, then heuristics.
+    let t = Tmp::new();
+    t.dir("Data");
+    t.file("Data/Mods/Pack/info.ini", "[Mod]\nName=Fleet Operations Addon\nProfile=Native\n");
+    assert_eq!(t.detect(Some("Pack")), Profile::Native, "info.ini beats the Fleet Operations name");
+    t.file("Data/Mods/Pack/manifest.toml", "[mod]\nid = \"pack\"\nprofile = \"sta2\"\n");
+    assert_eq!(t.detect(Some("Pack")), Profile::Sta2Classic, "manifest beats info.ini");
+}

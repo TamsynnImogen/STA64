@@ -453,7 +453,7 @@ fn spawn_stock(commands: &mut Commands, root: Entity, theme: &Theme, cfg: &HudCo
         let picture = layout.name(picture_key).unwrap_or(fallback);
         let filter = commands.spawn((
             FilterName { station },
-            crate::ui::notices::Tooltip::new(tr(if station { "Stations" } else { "Ships" })),
+            crate::ui::notices::Tooltip::new(crate::ui::i18n::tooltip_key(if station { "Stations" } else { "Ships" })),
             stock_rect(rect),
             GuiImage::new(picture),
             ChildOf(chrome),

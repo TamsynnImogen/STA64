@@ -24,6 +24,8 @@
 use std::collections::HashMap;
 
 pub mod a1;
+pub mod sol;
+pub mod write;
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum BznError {
@@ -39,6 +41,8 @@ pub enum BznError {
     UnsupportedArmada1Feature(&'static str),
     #[error("invalid Armada 1 BZN record {record}: expected {expected}")]
     InvalidArmada1Body { record: usize, expected: &'static str },
+    #[error(transparent)]
+    Sol(#[from] sol::SolError),
     #[error("Armada 1 BZN declares {declared} objects, found {found} placement records")]
     Armada1ObjectCount { declared: usize, found: usize },
 }
@@ -104,6 +108,10 @@ pub struct Map {
 pub fn parse(data: &[u8]) -> Result<Map, BznError> {
     if !data.starts_with(b"version") {
         return Err(BznError::NotBzn);
+    }
+    // Star Trek: Legacy maps share the header; their version tells them apart.
+    if sol::is_sol(data) {
+        return Ok(sol::parse(data)?.to_map());
     }
     if a1::has_header_marker(data) {
         let header = a1::inspect_header(data)?;
