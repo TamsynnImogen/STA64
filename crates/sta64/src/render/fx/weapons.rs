@@ -96,7 +96,7 @@ impl Plugin for WeaponFxPlugin {
         // are mounted (`ordnance/ordnance.ini`, D12).
         app.init_resource::<OrdnanceRecipes>().add_systems(
             Update,
-            load_recipes.run_if(resource_exists_and_changed::<crate::viewer::Mounted>),
+            load_recipes.run_if(resource_exists_and_changed::<crate::viewer::Mounted>).before(spawn_fx),
         );
         app.add_systems(
             Update,

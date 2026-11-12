@@ -53,7 +53,7 @@ pub const DEFAULT_LOD: [f32; 4] = [1000.0, 500.0, 300.0, 100.0];
 /// The distances in force.
 #[derive(Resource, Clone, Copy, Debug, PartialEq)]
 pub struct CullParams {
-    /// Past this an object is not drawn.
+    /// Past this an object's model is not drawn: a strategic object becomes its symbol.
     pub cull: f32,
     /// Share of `cull` where the fade starts.
     pub fade_from: f32,
@@ -75,11 +75,23 @@ impl CullParams {
         let d = CullParams::default();
         let Some(c) = cfg else { return d };
         let pos = |k: &str, v: f32| c.f32(k).filter(|x| *x > 0.0).unwrap_or(v);
-        let mut lod = d.lod;
+        // A file with LOD keys states its own levels: a level it lacks (Armada I has
+        // three) is no level, not A2's default. A file with none keeps the defaults.
+        let mut lod = [0.0; 4];
+        let mut any = false;
         for (i, l) in lod.iter_mut().enumerate() {
-            *l = pos(&format!("DETAIL_2_LOD_{i}_DISTANCE"), *l);
+            if let Some(v) = c.f32(&format!("DETAIL_2_LOD_{i}_DISTANCE")).filter(|x| *x > 0.0) {
+                *l = v;
+                any = true;
+            }
         }
-        CullParams { cull: pos("cfgOBJECT_CULLING_DISTANCE", d.cull), fade_from: d.fade_from, far: pos("FAR_CLIPPING_PLANE", d.far), near: pos("NEAR_CLIPPING_PLANE", d.near), lod }
+        if !any {
+            lod = d.lod;
+        }
+        let far = pos("FAR_CLIPPING_PLANE", d.far);
+        // No culling key (Armada I): nothing is drawn past the far plane either.
+        let cull = pos("cfgOBJECT_CULLING_DISTANCE", d.cull.min(far));
+        CullParams { cull, fade_from: d.fade_from, far, near: pos("NEAR_CLIPPING_PLANE", d.near), lod }
     }
 
     /// The engine's distance of an object from the camera, for culling.
@@ -173,6 +185,10 @@ fn mark_counts(stats: Res<CullStats>, clock: Option<Res<AnimClock>>, mut marks: 
         return;
     }
     *last = Some(*stats);
+    // One line, replaced as the counts change: a long match must not grow the marks.
+    if marks.0.last().is_some_and(|m| m.kind == "render.cull") {
+        marks.0.pop();
+    }
     marks.0.push(Mark {
         tick: tick(&clock),
         kind: "render.cull",
@@ -202,7 +218,10 @@ mod tests {
         );
         let p = CullParams::from_cfg(Some(&cfg));
         assert_eq!((p.cull, p.far, p.near), (3500.0, 100000.0, 35.0));
-        assert_eq!(p.lod, [1200.0, 500.0, 300.0, 100.0]);
+        assert_eq!(p.lod, [1200.0, 0.0, 0.0, 0.0], "a file's own levels, not A2's for the ones it lacks");
+        // Armada I: no culling key, a short far plane.
+        let a1 = CfgH::parse("float FAR_CLIPPING_PLANE = 1400.0;");
+        assert_eq!(CullParams::from_cfg(Some(&a1)).cull, 1400.0);
         assert_eq!(CullParams::from_cfg(None), CullParams::default());
         // A zero is a file switching the value off, not a distance.
         let zero = CfgH::parse("float cfgOBJECT_CULLING_DISTANCE = 0.0;");

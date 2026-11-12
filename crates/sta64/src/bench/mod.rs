@@ -196,9 +196,15 @@ fn run_headless_inner(cfg: &LaunchConfig) -> i32 {
         // `--install-root` (and `--mod`) mount the files the frame reads: the mod's own
         // Gshroud / Gfog art, its ordnance recipes (RND-28) and, with
         // `STA64_DEV_SHADER_SHADOW=1`, its shader shadows.
-        if let Some(root) = &cfg.install_root
-            && let Ok(vfs) = sta_vfs::Vfs::mount_install(root, cfg.active_mod.as_deref())
+        let mounted = cfg.install_root.as_ref().map(|root| sta_vfs::Vfs::mount_install(root, cfg.active_mod.as_deref()));
+        if let Some(Err(e)) = &mounted
+            && cfg.active_mod.is_some()
         {
+            // The install root defaults to the executable's folder, which is no install;
+            // a requested mod that does not mount is worth saying (the frame draws stock).
+            eprintln!("bench: --mod {:?} not mounted, drawing without its files: {e}", cfg.active_mod);
+        }
+        if let Some(Ok(vfs)) = mounted {
             // The systems that read the mounted files also read the sprite tables and
             // the texture and part caches (the map view and the viewer make these too).
             app.init_resource::<crate::render::textures::TextureCache>()

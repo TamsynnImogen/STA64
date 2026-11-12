@@ -49,11 +49,33 @@ pub fn enabled() -> bool {
 }
 
 /// The shadows the mounted files hold: `(embedded path, source)`, in [`EMBEDDED`] order.
+/// A file that is there but unreadable is logged and left out.
 pub fn shadows(vfs: &sta_vfs::Vfs) -> Vec<(&'static str, Vec<u8>)> {
     EMBEDDED
         .iter()
-        .filter_map(|path| Some((*path, vfs.read(&format!("{VFS_DIR}/{path}"))?.ok()?)))
+        .filter_map(|path| match vfs.read(&format!("{VFS_DIR}/{path}"))? {
+            Ok(bytes) => Some((*path, bytes)),
+            Err(e) => {
+                warn!("shader shadow {VFS_DIR}/{path} unreadable, not used: {e}");
+                None
+            }
+        })
         .collect()
+}
+
+/// The embedded source of one listed shader, to put back when a remount drops its shadow.
+fn embedded_source(path: &str) -> Option<&'static [u8]> {
+    Some(match path {
+        "render/fog.wesl" => include_bytes!("fog.wesl"),
+        "render/hulls.wesl" => include_bytes!("hulls.wesl"),
+        "render/nebula.wesl" => include_bytes!("nebula.wesl"),
+        "render/planet.wesl" => include_bytes!("planet.wesl"),
+        "render/rock.wesl" => include_bytes!("rock.wesl"),
+        "render/fx/fire.wesl" => include_bytes!("fx/fire.wesl"),
+        "render/fx/quad.wesl" => include_bytes!("fx/quad.wesl"),
+        "render/fx/shield.wesl" => include_bytes!("fx/shield.wesl"),
+        _ => return None,
+    })
 }
 
 pub struct ShaderShadowPlugin;
@@ -66,10 +88,19 @@ impl Plugin for ShaderShadowPlugin {
     }
 }
 
-fn apply(vfs: Res<Mounted>, registry: Option<Res<EmbeddedAssetRegistry>>, server: Option<Res<AssetServer>>) {
+fn apply(vfs: Res<Mounted>, registry: Option<Res<EmbeddedAssetRegistry>>, server: Option<Res<AssetServer>>, mut shadowed: Local<Vec<&'static str>>) {
     let Some(registry) = registry else { return };
-    for (path, source) in shadows(&vfs.0) {
-        warn!("shader shadow (developer option, unstable): {VFS_DIR}/{path} replaces embedded://sta64/{path}");
+    let found = shadows(&vfs.0);
+    // A remount that drops a shadow gets the embedded source back.
+    let dropped: Vec<&'static str> = shadowed.iter().copied().filter(|p| found.iter().all(|(f, _)| f != p)).collect();
+    let restore = dropped.into_iter().filter_map(|p| Some((p, embedded_source(p)?.to_vec())));
+    *shadowed = found.iter().map(|(p, _)| *p).collect();
+    // A shader whose shadow does not compile logs Bevy's pipeline error and stops
+    // drawing; nothing falls back on its own (developer option, unstable).
+    for (path, source) in restore.chain(found) {
+        if shadowed.contains(&path) {
+            warn!("shader shadow (developer option, unstable): {VFS_DIR}/{path} replaces embedded://sta64/{path}");
+        }
         let asset = format!("sta64/{path}");
         registry.insert_asset(PathBuf::new(), Path::new(&asset), source);
         if let Some(server) = &server {
@@ -105,6 +136,11 @@ mod tests {
         assert_eq!(found[0].0, "render/fx/quad.wesl");
         assert_eq!(found[0].1, b"// mine");
         assert!(shadows(&sta_vfs::Vfs::default()).is_empty());
+    }
+
+    #[test]
+    fn every_listed_shader_can_be_restored() {
+        assert!(EMBEDDED.iter().all(|p| embedded_source(p).is_some_and(|b| !b.is_empty())));
     }
 
     #[test]

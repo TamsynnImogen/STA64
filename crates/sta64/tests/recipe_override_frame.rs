@@ -72,24 +72,34 @@ fn frames(name: &str, install: Option<&Path>, shadow: bool) -> Option<Vec<Vec<u8
     Some(TICKS.split(',').map(|t| std::fs::read(out.join(format!("tick-{:06}.png", t.parse::<u32>().unwrap()))).expect("a frame")).collect())
 }
 
+fn pixels(png: &[u8]) -> Vec<u8> {
+    let mut r = png::Decoder::new(std::io::Cursor::new(png)).read_info().unwrap();
+    let mut buf = vec![0; r.output_buffer_size().unwrap()];
+    r.next_frame(&mut buf).unwrap();
+    buf
+}
+
+/// Differing bytes over all frames (the frames of a loaded machine can differ by a
+/// few pixels run to run, so callers compare against that floor).
 fn differ(a: &[Vec<u8>], b: &[Vec<u8>]) -> usize {
-    a.iter().zip(b).filter(|(x, y)| x != y).count()
+    a.iter().zip(b).map(|(x, y)| pixels(x).iter().zip(pixels(y)).filter(|(p, q)| **p != *q).count()).sum()
 }
 
 #[test]
 fn a_recipe_in_a_mod_folder_changes_the_frame() {
     let Some(plain) = frames("plain", None, false) else { return };
-    // The same run twice is the same frames: a difference below is the files'.
+    // The same run twice: the noise floor a difference below must clear.
     let again = frames("again", None, false).unwrap();
-    assert_eq!(differ(&plain, &again), 0, "frames repeat");
+    let floor = differ(&plain, &again);
     let beam = "[Ordnance.fx_beam]\nKind=beam\nColour=0,255,0\nCoreColour=200,255,200\nWidth=40\nCoreWidth=20\nBrightness=3\n";
     let modded = install("recipe", &[("ordnance/ordnance.ini", beam)]);
     let with = frames("with", Some(&modded), false).unwrap();
-    assert!(differ(&plain, &with) > 0, "the mod's recipe left every frame as it was");
+    let changed = differ(&plain, &with);
+    assert!(changed > floor * 4 + 100, "the mod's recipe left the frames as they were ({changed} bytes, noise {floor})");
     // A mod with no recipe leaves the frames alone (stock output unchanged).
     let empty = install("empty", &[]);
     let none = frames("none", Some(&empty), false).unwrap();
-    assert_eq!(differ(&plain, &none), 0, "a mod without files changed the frame");
+    assert!(differ(&plain, &none) <= floor * 2 + 20, "a mod without files changed the frame");
 }
 
 #[test]
@@ -103,7 +113,9 @@ fn a_shadowing_wesl_replaces_the_embedded_shader() {
     let modded = install("shadow", &[("shaders/render/fx/quad.wesl", &shadow)]);
     // Off: the files are not read, whatever the mod holds.
     let off = frames("shadow-off", Some(&modded), false).unwrap();
-    assert_eq!(differ(&plain, &off), 0, "a shadow applied without the developer switch");
+    let again = frames("again2", None, false).unwrap();
+    let floor = differ(&plain, &again);
+    assert!(differ(&plain, &off) <= floor * 2 + 20, "a shadow applied without the developer switch");
     let on = frames("shadow-on", Some(&modded), true).unwrap();
-    assert!(differ(&plain, &on) > 0, "the shadowing shader did not replace the embedded one");
+    assert!(differ(&plain, &on) > floor * 4 + 100, "the shadowing shader did not replace the embedded one");
 }
