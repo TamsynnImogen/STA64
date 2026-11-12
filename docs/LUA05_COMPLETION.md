@@ -149,3 +149,35 @@ and wormhole/planet population calls, `BuildObject`, `SetName`, and the AI/AIP
 calls. Script-pointer calls (`CineractiveStart`, `FadeIn/Out`, `AudioMessage`,
 `PlayMusic`, `PlayCinematicMovie`, `WaitForEnterKey`) need the script-handle
 lifecycle contract.
+
+## Mission object gaps slice (Cedric's session)
+
+Partial slice of #149 from the installed-mission report (LUA-04), pure
+`sta_mission` bindings; no `sta_sim` change. Before/after on the FO Roots
+install base (`STA64_TEST_MOD=""`, 36 maps with a Lua mission, 300 ticks):
+run 2 / stubbed 0 / failed 34 before, run 6 / stubbed 11 / failed 19 after.
+
+- `Timer:hook` callbacks get `(timer, hook)` with `hook.argument` and
+  `hook.id`, as `Timer Tutorial.lua` reads them; a table argument's fields stay
+  reachable on the hook object for callers written against the plain value.
+- `Race.find(name)` / `Race.getAll()` and a race value with `name`, over the
+  races the loaded content defines (distinct unit-definition `race` strings;
+  no content, no races). MMM's `displayName`, `number` and strengths are not bound.
+- `Player(n).maxOfficers = x` (and `maxCrew`): a no-op when `x` equals the live
+  limit or any limit the rules define (`RTS_CFG.h` `SINGLE_PLAYER_OFFICER_LIMIT`,
+  `MP_OFFICER_LIMIT`, typed in `sta_content` `Rules`), which is every installed
+  use (199999); other values are recorded as unsupported.
+- Assignments the sim has no edit for are accepted and recorded in
+  `MissionRuntime::unsupported()` instead of aborting the callback with
+  "unknown field": `Entity.race`, `crew`, `shields`, `movementAutonomy`,
+  `specialWeaponAutonomy`, `forward`, `omega`, `name`; `Player.race`, `color`,
+  `name`.
+
+Seams these need (not worked around): a sim race edit, mutable crew, a shield
+percent edit (unmerged `seam/lua05-shield-edits`), movement and special-weapon
+autonomy, heading and angular velocity edits, entity and player names, a
+per-player officer-limit edit, player colour and name in the game setup. Open
+report items not addressed: `giveOrder Go` with no point (path and `Craft`
+binding), the `Craft` and `Color` globals, duplicate Timer ids re-created in
+callbacks, `Objectives:load` of non-UTF-8 files, entities missing from the
+headless map.

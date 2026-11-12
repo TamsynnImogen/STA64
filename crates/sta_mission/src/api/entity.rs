@@ -133,6 +133,8 @@ impl UserData for Entity {
             ("movementAutonomy", "a sim autonomy edit"),
             ("forward", "a sim heading edit"),
             ("omega", "a sim angular-velocity edit"),
+            ("specialWeaponAutonomy", "a sim autonomy edit"),
+            ("name", "a sim SetName edit"),
         ] {
             f.add_field_method_set(name, move |_, e, _: Value| {
                 e.ctx.borrow_mut().unsupported(&format!("Entity.{name} = x (needs {need})"));
