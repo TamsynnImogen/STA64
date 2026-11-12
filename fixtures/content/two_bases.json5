@@ -1,0 +1,28 @@
+// CON-04: `sta_content::fake::two_bases()` as a native map (MapDef as JSON5).
+// Two starts facing each other across a mineable moon, a nebula on one
+// flank, an asteroid field on the other. Original and synthetic.
+{
+  name: "fx_two_bases",
+  label: "Two Bases",
+  mission: null,
+  bounds: [{x: -8192, y: -2048, z: -8192}, {x: 8192, y: 2048, z: 8192}],
+  starts: [
+    {slot: 0, pos: {x: -4000, y: 0, z: 0}, heading: [1, 0]},
+    {slot: 1, pos: {x: 4000, y: 0, z: 0}, heading: [-1, 0]},
+  ],
+  objects: [
+    {odf: "fx_moon", owner: null, pos: {x: 0, y: 0, z: 0}, heading: [0, 1], label: "moon"},
+  ],
+  regions: [
+    {kind: "Nebula", odf: "fx_nebula", shape: {Sphere: {centre: {x: 0, y: 0, z: 3000}, radius: 1200}}},
+    {kind: "AsteroidField", odf: "fx_asteroids",
+     shape: {Box: {min: {x: -1500, y: -200, z: -4000}, max: {x: 1500, y: 200, z: -2500}}}},
+  ],
+  scenery: {
+    sky: "fx_sky",
+    starfield: "fx_stars",
+    ambient: [0.1, 0.1, 0.15],
+    planets: [{odf: "fx_planet", pos: [20000, -3000, 15000], radius: 6000}],
+    lights: [{pos: [-30000, 10000, 0], colour: [1, 0.95, 0.9]}],
+  },
+}

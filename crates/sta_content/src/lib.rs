@@ -23,6 +23,7 @@ pub mod features;
 pub mod gui_cfg;
 pub mod launch;
 pub mod index;
+pub mod json5;
 pub mod legacy;
 pub mod profile;
 pub mod planet;
