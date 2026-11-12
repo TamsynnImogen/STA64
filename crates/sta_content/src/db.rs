@@ -574,6 +574,15 @@ fn hash_inner(db: &ContentDb, include_starting_rules: bool) -> u64 {
         h.str("sta64.starting-personnel-rules.v1");
         for value in rules { h.u64(value); }
     }
+    // SIM-23: only when `RTS_CFG.h` has the PATHING keys, so content without
+    // them keeps its hash; excluded with the other rules from the historical
+    // identity snapshots compare against.
+    let pathing = db.rules.pathing_hash_values();
+    if include_starting_rules && !pathing.is_empty() {
+        h.byte(0xed);
+        h.str("sta64.pathing-rules.v1");
+        for value in pathing { h.u64(value); }
+    }
     h.0
 }
 

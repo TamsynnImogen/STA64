@@ -457,6 +457,7 @@ impl Sim {
             production: crate::production::Production::from_rec(&b.production).ok_or_else(|| corrupt("rallies"))?,
             victory: crate::victory::Victory::from_rec(&b.victory),
             specials,
+            nav: Default::default(),
         })
     }
 }

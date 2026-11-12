@@ -7,6 +7,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 ## Needs your check
 
+- [?] SIM-23 pathfinding: in a fresh skirmish on a map with nebulae and planets (e.g. a stock A2 map with a Metreon/fluidic nebula, an FO map with blocking-field walls), order a ship straight across a nebula, through a planet, and into a walled-off spot. It should fly round the nebula and planet (never entering), go through gaps in barriers, and stop at the nearest reachable point when the goal is walled in; an order *into* a nebula should still fly straight in. Compare the routes with stock A2/FO behaviour, and watch settled FPS with a large fleet ordered across a nebula.
+
 - [?] UI-18 display fidelity: use the new optimized display-fidelity launcher on Classic/Federation and FO4. Compare enlarged station/ship wireframes with the supplied stock reference; zoom, pan and rotate while selected and check that thin gauges stay above model bounds without lagging or disappearing. Hover values should use bare numbers and live health/crew tints. Try LCARS switching and report settled FPS. Existing original texture resolution still limits fine detail.
 
 - [?] A2 initial hull/shield pools: in the new optimized initial-pools candidate, start a fresh Classic match and hover a constructor. With no shield strength authored, both health-derived pools should be present; build another constructor/ship and compare. Partial curHealth/curShield values must begin below maximum, explicit zero must remain zero at spawn, and save/load must preserve live values. Check settled FPS; original ODFs remain untouched.
