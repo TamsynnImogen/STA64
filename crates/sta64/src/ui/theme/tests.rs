@@ -32,12 +32,12 @@ fn gallery_has_every_widget_type() {
     let mut app = app();
     assert_eq!(count::<GalleryRoot>(&mut app), 1);
     assert_eq!(count::<Panel>(&mut app), 1);
-    assert_eq!(count::<UiButton>(&mut app), 4);
+    assert_eq!(count::<UiButton>(&mut app), 2);
     assert_eq!(count::<Toggle>(&mut app), 2);
     assert_eq!(count::<Slider>(&mut app), 1);
     assert_eq!(count::<ProgressBar>(&mut app), 1);
     assert_eq!(count::<List>(&mut app), 1);
-    assert_eq!(count::<ListItem>(&mut app), 4);
+    assert_eq!(count::<ListItem>(&mut app), 8);
     assert!(count::<UiLabel>(&mut app) >= 5);
 }
 
@@ -65,11 +65,11 @@ fn disabled_button_is_dark_with_dim_text() {
     let d = app.world_mut().query::<(Entity, &WidgetState)>().iter(app.world()).find(|(_, s)| **s == WidgetState::Disabled).unwrap().0;
     assert_eq!(bg(&app, d), theme.button_off);
     let kid = app.world().get::<Children>(d).unwrap()[0];
-    assert_eq!(app.world().get::<TextColor>(kid).unwrap().0, theme.text_off);
+    assert_eq!(app.world().get::<crate::ui::sprite_font::SpriteText>(kid).unwrap().color, theme.text_off);
     // An enabled pill's label is black.
     let b = first::<UiButton>(&mut app);
     let kid = app.world().get::<Children>(b).unwrap()[0];
-    assert_eq!(app.world().get::<TextColor>(kid).unwrap().0, theme.text_on);
+    assert_eq!(app.world().get::<crate::ui::sprite_font::SpriteText>(kid).unwrap().color, theme.text_on);
 }
 
 #[test]
@@ -97,7 +97,7 @@ fn selected_list_row_has_the_gold_mark() {
     let mut app = app();
     app.update();
     let theme = app.world().resource::<Theme>().clone();
-    let row = app.world_mut().query::<(Entity, &ListItem)>().iter(app.world()).find(|(_, i)| i.0 == 0).unwrap().0;
+    let row = app.world_mut().query::<(Entity, &ListItem)>().iter(app.world()).find(|(_, i)| i.0 == 1).unwrap().0;
     assert_eq!(bg(&app, row), theme.row_sel);
     let mark = app.world().get::<Children>(row).unwrap()[0];
     assert_eq!(bg(&app, mark), theme.accent);
