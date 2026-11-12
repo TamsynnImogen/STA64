@@ -21,6 +21,8 @@
 //! - Selected units' icons get a green outline; clicks and drag boxes select by
 //!   icon when it shows (see `input::select`).
 
+use crate::render::cull::{CullParams, CullStats};
+use crate::render::lod_switch::{self, Class, Representation, SwitchParams};
 use crate::render::units::{FromView, NeedsModel, SelectRadius, TeamColour};
 use crate::sim_link::{Selection, SimEntity};
 use sta_sim::EntityId;
@@ -150,14 +152,14 @@ pub fn shape_for(class: &str, mobile: bool) -> Shape {
     }
 }
 
-/// Choose one representation; retain the previous choice inside the gap.
+/// Choose one representation by projected size alone; retain the previous choice
+/// inside the gap. The map's per-object choice, with distance and class, is
+/// [`lod_switch::decide`]; this is that rule at a distance that never culls.
+#[cfg(test)]
 pub fn symbol_for_radius(mode: Mode, previous: bool, px: f32) -> bool {
-    match mode {
-        Mode::Always => true,
-        Mode::Off => false,
-        Mode::Auto if previous => px < MODEL_RETURN_PX,
-        Mode::Auto => px <= SYMBOL_ENTER_PX,
-    }
+    let t = lod_switch::Thresholds { enter_px: SYMBOL_ENTER_PX, return_px: MODEL_RETURN_PX };
+    let prev = if previous { Representation::Symbol } else { Representation::Model };
+    lod_switch::decide(mode, prev, px, 0.0, &CullParams::default(), t) == Representation::Symbol
 }
 
 fn gate_model(s: &mut Strategic, visibility: &mut Visibility, symbol: bool) -> bool {
@@ -280,6 +282,9 @@ impl Plugin for StrategicPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Mode>()
             .init_resource::<StrategicView>()
+            .init_resource::<CullParams>()
+            .init_resource::<CullStats>()
+            .init_resource::<SwitchParams>()
             .add_systems(Startup, make_masks)
             .add_systems(Update, (toggle, ensure_icons, attach).chain())
             .add_systems(PostUpdate, draw.run_if(resource_exists::<bevy::gizmos::config::GizmoConfigStore>).after(update))
@@ -476,7 +481,11 @@ fn update(
     mut sv: ResMut<StrategicView>,
     images: Res<Assets<Image>>,
     ui_scale: Option<Res<UiScale>>,
+    cull: Res<CullParams>,
+    switch: Res<SwitchParams>,
+    mut stats: ResMut<CullStats>,
 ) {
+    *stats = CullStats::default();
     let Ok((camera_e, cam, cam_tf, proj)) = camera.single() else {
         clear_unprojected(&mut objects, &mut icons, &mut sv);
         return;
@@ -514,7 +523,10 @@ fn update(
         let screen = if depth > 1.0 { cam.world_to_viewport(cam_tf, pos).ok().filter(|p| viewport.contains(*p)) } else { None };
         let root_scale = gt.to_scale_rotation_translation().0.abs().max_element();
         let projected_radius = if depth > 1.0 { s.radius * root_scale * focal / depth } else { f32::INFINITY };
-        let symbol = symbol_for_radius(*mode, s.symbol, projected_radius);
+        let distance = CullParams::distance(eye, pos);
+        stats.count(&cull, distance);
+        let previous = if s.symbol { Representation::Symbol } else { Representation::Model };
+        let symbol = lod_switch::decide(*mode, previous, projected_radius, distance, &cull, switch.of(Class::of(s.shape))) == Representation::Symbol;
         let eligible = gate_model(&mut s, &mut visibility, symbol);
         s.shown = if symbol && eligible && screen.is_some() { 1.0 } else { 0.0 };
         if let Some(p) = screen {
@@ -791,6 +803,69 @@ mod view_tests {
         assert_eq!(static_state(&mut app, small), (Visibility::Hidden, true, 1.0, Display::Flex));
         camera_height(&mut app, 1600.0); // >10 px: restore model
         assert_eq!(static_state(&mut app, small), (Visibility::Inherited, false, 0.0, Display::None));
+    }
+
+    /// RND-27: a camera-distance sweep, up and back, over every class and several
+    /// sizes (and the culling distance, which a tall camera reaches with the lateral
+    /// offsets): in no frame are the model and the symbol both drawn, and the model
+    /// is drawn exactly when the object is not a symbol.
+    #[test]
+    fn distance_sweep_has_no_frame_with_both_model_and_symbol() {
+        let mut app = rig(&world(&[]), None, 100.0);
+        let kinds = [(Shape::Arrow, 15.0), (Shape::Arrow, 90.0), (Shape::Arrow, 220.0), (Shape::Square, 40.0), (Shape::Square, 320.0), (Shape::Circle, 25.0)];
+        let roots: Vec<Entity> = kinds
+            .iter()
+            .enumerate()
+            .map(|(i, (shape, r))| {
+                app.world_mut().spawn((Strategic::new(*shape, Color::WHITE, *r), Transform::from_xyz(i as f32 * 900.0 - 2200.0, 0.0, 0.0), Visibility::Inherited)).id()
+            })
+            .collect();
+        app.update();
+        app.update();
+        let heights: Vec<f32> = (0..400).map(|i| 100.0 + i as f32 * 60.0).collect();
+        let mut seen_symbol = [false; 6];
+        let mut seen_model = [false; 6];
+        for y in heights.iter().chain(heights.iter().rev()) {
+            camera_height(&mut app, *y);
+            for (i, root) in roots.iter().enumerate() {
+                let (visibility, symbol, _, display) = static_state(&mut app, *root);
+                let model = visibility != Visibility::Hidden;
+                assert!(!(model && display == Display::Flex), "both drawn: class {i} at height {y}");
+                assert_eq!(model, !symbol, "model drawn iff not a symbol: class {i} at height {y}");
+                seen_symbol[i] |= symbol;
+                seen_model[i] |= !symbol;
+            }
+        }
+        assert!(seen_symbol.iter().all(|s| *s) && seen_model.iter().all(|m| *m), "the sweep crosses every handoff");
+    }
+
+    #[test]
+    fn culled_objects_hand_to_their_symbol_and_return_through_the_band() {
+        // Camera 1000 up counts 250 (a quarter): lateral offset sets the distance.
+        let mut app = rig(&world(&[]), None, 1000.0);
+        let far = app.world_mut().spawn((Strategic::new(Shape::Square, Color::WHITE, 5000.0), Transform::from_xyz(0.0, 0.0, 0.0), Visibility::Inherited)).id();
+        app.update();
+        app.update();
+        let place = |app: &mut App, x: f32| {
+            app.world_mut().entity_mut(far).insert(Transform::from_xyz(x, 0.0, 0.0));
+            app.update();
+            app.update();
+        };
+        // Huge on screen: only the distance decides. d = sqrt(x^2 + 250^2).
+        let d = |x: f32| (x * x + 250.0f32 * 250.0).sqrt();
+        place(&mut app, 2000.0);
+        assert!(d(2000.0) < 2520.0);
+        assert!(!app.world().get::<Strategic>(far).unwrap().symbol);
+        place(&mut app, 2800.0);
+        assert!(d(2800.0) >= 2800.0);
+        assert!(app.world().get::<Strategic>(far).unwrap().symbol);
+        place(&mut app, 2600.0); // inside the culling distance, inside the band
+        assert!(d(2600.0) > 2520.0 && d(2600.0) < 2800.0);
+        assert!(app.world().get::<Strategic>(far).unwrap().symbol);
+        place(&mut app, 2400.0);
+        assert!(d(2400.0) < 2520.0);
+        assert!(!app.world().get::<Strategic>(far).unwrap().symbol);
+        assert!(app.world().resource::<CullStats>().objects >= 1);
     }
 
     #[test]
