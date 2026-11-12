@@ -30,15 +30,16 @@
 //!    near a station bring them and the waiting reinforcements out.
 //! 4. **Attack waves.** When enough warships wait at the rally point they go
 //!    out as a wave, to the nearest visible enemy, else to the enemy starts
-//!    in turn. Each wave is a little larger than the last, up to the AIP's
-//!    maximum.
+//!    in turn. The ceiling on a wave grows by one with each wave up to the
+//!    AIP's maximum, and each wave's size is drawn from the seeded stream
+//!    between the AIP's minimum and that ceiling (the first is the minimum).
 //!
 //! # Determinism
 //!
 //! Everything it computes is [`Fixed`] or integer. All collections are
 //! ordered (`BTreeMap`, sorted `Vec`), the view arrives in ascending id, and
-//! its one random choice draws from a splitmix64 stream seeded from the game
-//! seed and the seat. The same views and events give the same commands.
+//! its two random choices (the fleet mix and the wave size) draw from a
+//! splitmix64 stream seeded from the game seed and the seat. The same views and events give the same commands.
 //!
 //! # Using it
 //!
@@ -87,6 +88,13 @@ const RALLY_DISTANCE: i32 = 900;
 const GOAL_REACHED: i32 = 600;
 /// Engage range when a ship has no real weapon to measure.
 const FALLBACK_RANGE: i32 = 300;
+
+/// The splitmix64 output function: a full-avalanche mix of one word.
+fn mix(mut z: u64) -> u64 {
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
 
 /// Everything a skirmish controller needs besides the view. The sim hands a
 /// [`Controller`] no seat, content or map, so they come in here.
@@ -282,12 +290,17 @@ pub struct SkirmishController {
     mining: BTreeMap<EntityId, EntityId>,
     waves: Vec<Wave>,
     wave_size: usize,
+    /// Size of the wave that goes next: drawn from the seeded generator
+    /// between the AIP's minimum and the current ceiling.
+    next_wave: usize,
 }
 
 impl SkirmishController {
     pub fn new(cfg: SkirmishConfig) -> SkirmishController {
         // splitmix64 wants a nonzero-ish start; mix the seat in.
-        let rng = cfg.seed ^ (u64::from(cfg.player.0) + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        // Both are mixed first: XORing the raw values would make one seat's
+        // stream another seed's stream shifted by a draw.
+        let rng = mix(cfg.seed) ^ mix(u64::from(cfg.player.0) + 1);
         let wave_size = cfg.params.min_attack.max(1);
         SkirmishController {
             cfg,
@@ -302,6 +315,7 @@ impl SkirmishController {
             mining: BTreeMap::new(),
             waves: Vec::new(),
             wave_size,
+            next_wave: wave_size,
         }
     }
 
@@ -316,10 +330,7 @@ impl SkirmishController {
 
     fn next_u64(&mut self) -> u64 {
         self.rng = self.rng.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.rng;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
+        mix(self.rng)
     }
 
     /// Learn from the last tick's events (every call, whatever the period).
@@ -649,6 +660,14 @@ impl SkirmishController {
         }
     }
 
+    /// After a wave goes: the ceiling grows by one, and the next wave's size
+    /// is drawn between the AIP's minimum and the new ceiling.
+    fn raise_ceiling_and_draw(&mut self) {
+        self.wave_size = (self.wave_size + 1).min(self.cfg.params.max_attack);
+        let (lo, hi) = (self.cfg.params.min_attack.max(1), self.wave_size.max(1));
+        self.next_wave = lo + (self.next_u64() % (hi.saturating_sub(lo) + 1) as u64) as usize;
+    }
+
     /// Defence and attack waves.
     fn military(&mut self, tick: Tick, own: &[Own], foes: &[Foe], stations: &[Vec3], home: Vec3, out: &mut Vec<Command>) {
         let ships: Vec<Own> = own.iter().filter(|o| o.role == Role::Warship).copied().collect();
@@ -675,11 +694,14 @@ impl SkirmishController {
             for s in spare {
                 self.go(tick, out, s.id, rally_at);
             }
-            let size = self.wave_size.min(self.cfg.params.max_attack).max(1);
+            let size = self.next_wave.min(self.cfg.params.max_attack).max(1);
             if spare.len() >= size && !starts.is_empty() {
                 let members: BTreeSet<EntityId> = spare.iter().take(size).map(|s| s.id).collect();
                 self.waves.push(Wave { members, goal: 0 });
-                self.wave_size = (size + 1).min(self.cfg.params.max_attack);
+                // The ceiling grows by one a wave up to the AIP's
+                // `max_attack_force`; each wave is anything from the AIP's
+                // `min_attack_force` up to it, so seeded games differ.
+                self.raise_ceiling_and_draw();
             }
         } else {
             for s in guard.iter().chain(spare) {
@@ -719,7 +741,7 @@ impl Controller for SkirmishController {
     fn think(&mut self, view: &WorldView, events: &[SimEvent], out: &mut Vec<Command>) {
         self.absorb(view.tick, events);
         let Some(me) = view.player(self.cfg.player) else { return };
-        if me.eliminated || !(view.tick + Tick::from(self.cfg.player.0)).is_multiple_of(PERIOD) {
+        if me.eliminated || !view.tick.is_multiple_of(PERIOD) {
             return;
         }
         self.plan(view, me, out);

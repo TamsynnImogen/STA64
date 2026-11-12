@@ -18,9 +18,10 @@
 //! reader takes from a file. It is not a byte copy of the original: unread
 //! parts of a file (records the reader skips, formatting, the spare strings)
 //! are written in a canonical form, so [`write`] of a map read from an install
-//! is not byte-equal to its file. Armada 1 bodies ([`Map::a1`]) are not
-//! written ([`WriteError::Armada1`]); neither are light colours in binary maps
-//! (the binary format has none) or more than two scripts in text maps.
+//! is not byte-equal to its file. Armada 1 bodies ([`Map::a1`]) are written by
+//! [`crate::a1`] (CON-38, light colours CON-41). Light colours cannot be written
+//! in A2/FO binary maps (the reader takes none from them) and text maps hold
+//! two scripts.
 //!
 //! The native save format for editor-made maps is `MapDef` as JSON5
 //! (`sta_content::json5::save_map`).
@@ -30,8 +31,10 @@ use crate::{Map, MapObject, StartLoc};
 /// Why a map could not be written.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum WriteError {
-    #[error("Armada 1 map bodies are not written")]
-    Armada1,
+    #[error("the Armada 1 map does not reproduce through its own record layout (a count, a bound or a resized position that float rounding cannot map back)")]
+    A1NotExact,
+    #[error("the Armada 1 body written for this map does not read back: {0}")]
+    A1Reparse(String),
     #[error(
         "Star Trek: Legacy SOL maps are not written; the BZN writer would produce a file that reads back as a broken SOL"
     )]
@@ -62,8 +65,8 @@ const LABEL: usize = 40;
 
 /// Write `map` in its own format ([`Map::binary`]).
 pub fn write(map: &Map) -> Result<Vec<u8>, WriteError> {
-    if map.a1.is_some() {
-        return Err(WriteError::Armada1);
+    if let Some(data) = &map.a1 {
+        return crate::a1::write_map(map, data);
     }
     if map.version == crate::sol::VERSION {
         return Err(WriteError::Sol);
@@ -476,7 +479,7 @@ mod tests {
 
     /// Install-gated, like the reader's own: with `STA64_TEST_BZN_DIRS`
     /// (colon-separated dirs), every A2/FO map reads, writes and reads again
-    /// to an equal `Map`. Armada 1 maps are counted, not written.
+    /// to an equal `Map`, Armada 1 maps included.
     #[test]
     fn installed_maps_round_trip() {
         let Ok(dirs) = std::env::var("STA64_TEST_BZN_DIRS") else {
@@ -497,10 +500,7 @@ mod tests {
                 let Ok(m) = crate::parse(&std::fs::read(&p).unwrap()) else {
                     continue;
                 };
-                if m.a1.is_some() {
-                    a1 += 1;
-                    continue;
-                }
+                a1 += m.a1.is_some() as usize;
                 if m.version == crate::sol::VERSION {
                     sol += 1;
                 }
@@ -522,7 +522,7 @@ mod tests {
             }
         }
         eprintln!(
-            "round trip: {ok} equal ({bin} binary), {a1} Armada 1 not written, {sol} SOL, {} failed",
+            "round trip: {ok} equal ({bin} binary), {a1} of them Armada 1, {sol} SOL, {} failed",
             failed.len()
         );
         for f in failed.iter().take(15) {
@@ -555,7 +555,8 @@ mod tests {
             tech_tree_file,
             race,
             start_count,
-            start_locs
+            start_locs,
+            a1
         );
         for (i, (x, y)) in a.objects.iter().zip(&b.objects).enumerate() {
             if x != y {
