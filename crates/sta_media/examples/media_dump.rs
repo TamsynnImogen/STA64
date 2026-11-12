@@ -42,13 +42,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
     let mut frames = 0u64;
+    if max_frames == 0 {
+        return Err("--frames must be at least 1".into());
+    }
     let mut samples = vec![0u64; info.audio.len()];
     while let Some(event) = movie.next_event()? {
         match event {
             MediaEvent::Video(f) => {
-                if frames >= max_frames {
-                    break;
-                }
                 frames += 1;
                 if let (Some(out), Picture::Yuv420 { y, u, v, .. }) = (&mut yuv, &f.picture) {
                     for p in [y, u, v] {
@@ -56,6 +56,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             out.write_all(&p.row(r)[..p.width as usize])?;
                         }
                     }
+                }
+                if frames >= max_frames {
+                    break;
                 }
             }
             MediaEvent::Audio(c) => {

@@ -5474,6 +5474,7 @@ dependencies = [
 name = "sta_media"
 version = "0.1.0"
 dependencies = [
+ "sha2",
  "sta_vfs",
  "thiserror 2.0.21",
 ]

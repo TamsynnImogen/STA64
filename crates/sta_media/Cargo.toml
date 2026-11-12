@@ -15,3 +15,7 @@ mp4 = []
 [dependencies]
 sta_vfs.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+# Golden hashes in the install-gated tests.
+sha2.workspace = true

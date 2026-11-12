@@ -128,7 +128,7 @@ pub(crate) struct AudioDecoder {
     /// Interleaved int16 values one block produces before overlap removal.
     total: usize,
     overlap: usize,
-    prev: Vec<i16>,
+    prev: Vec<i32>,
     first: bool,
     fft: Fft,
     /// DCT pre-twist `e^{i pi j / 2n}`.
@@ -284,16 +284,20 @@ impl AudioDecoder {
                 self.inverse_rdft(&coeffs, out);
             }
         }
-        // To int16, interleaving the separately coded channels.
-        let mut block = vec![0i16; self.total];
+        // To integers, interleaving the separately coded channels. Values are
+        // clipped to 16 bits only after the crossfade, as ffmpeg does; the
+        // 2007 binkw32 described by the mercs2_bink specification clips
+        // before it, which differs only on clipping passages (decision
+        // recorded in the MED-01 PR).
+        let mut block = vec![0i32; self.total];
         if self.ch_loop == 1 {
             for (o, x) in block.iter_mut().zip(pcm.iter()) {
-                *o = to_i16(*x * self.scale);
+                *o = to_int(*x * self.scale);
             }
         } else {
             for i in 0..n {
                 for ch in 0..self.ch_loop {
-                    block[i * self.ch_loop + ch] = to_i16(pcm[ch * n + i] * self.scale);
+                    block[i * self.ch_loop + ch] = to_int(pcm[ch * n + i] * self.scale);
                 }
             }
         }
@@ -302,12 +306,16 @@ impl AudioDecoder {
             self.first = false;
         } else {
             for (i, (out, prev)) in block[..m].iter_mut().zip(&self.prev).enumerate() {
-                let s = *prev as i32 * (m - i) as i32 + *out as i32 * i as i32;
-                *out = s.div_euclid(m as i32) as i16;
+                let s = *prev as i64 * (m - i) as i64 + *out as i64 * i as i64;
+                *out = s.div_euclid(m as i64) as i32;
             }
         }
         self.prev.copy_from_slice(&block[self.total - m..]);
         block.truncate(self.total - m);
+        let block = block
+            .iter()
+            .map(|&v| v.clamp(-32768, 32767) as i16)
+            .collect();
         Ok((block, b.words_used_bytes()))
     }
 
@@ -349,9 +357,9 @@ fn read_float29(b: &mut Bits) -> Result<f32, String> {
     Ok(if v & 0x1000_0000 != 0 { -f } else { f })
 }
 
-/// Round half to even and saturate.
-fn to_i16(x: f64) -> i16 {
-    x.round_ties_even().clamp(-32768.0, 32767.0) as i16
+/// Round half to even (saturating far outside the 16-bit range).
+fn to_int(x: f64) -> i32 {
+    x.round_ties_even().clamp(-1e9, 1e9) as i32
 }
 
 #[cfg(test)]
