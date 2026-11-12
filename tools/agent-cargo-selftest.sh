@@ -40,6 +40,10 @@ o=$(STA64_LOCK_WAIT=5 STA64_LOCK_DIR="$tmp/x" STA64_SCCACHE=0 "$w" --dry-run tes
 expect lock-dir-override "$o" "$tmp/x/light.lock"; expect lock-wait "$o" "wait 5s"
 o=$(STA64_SCCACHE=0 "$w" --dry-run check -p sta_sim 2>&1); refute sccache-off "$o" "RUSTC_WRAPPER"
 
+o=$(dry --heavy check -p sta_sim);  expect heavy2-dry "$o" "heavy2.lock"; expect heavy2-bench-dry "$o" "bench.lock"
+o=$(dry --bench ./a2test run hud);   expect bench-class "$o" "class:  bench"; expect bench-lock "$o" "bench.lock (shared)"
+expect bench-cmd "$o" "cmd:    ./a2test run hud"; refute bench-no-cargo "$o" "CARGO_INCREMENTAL"
+
 # sccache opt-in by presence, with a fake binary.
 mkdir -p "$tmp/bin"; printf '#!/bin/sh\nexit 0\n' > "$tmp/bin/sccache"; chmod +x "$tmp/bin/sccache"
 o=$(PATH="$tmp/bin:$PATH" SCCACHE_DIR=/x/y "$w" --dry-run check -p sta_sim 2>&1)
@@ -61,12 +65,25 @@ if command -v flock >/dev/null 2>&1; then
   expect lock-free-runs "$o" "ran-fake-cargo"
   [ "$rc" = 3 ] || { echo "FAIL exit-code: $rc, want 3"; fails=$((fails+1)); }
   ( exec 8>"$tmp/locks/heavy.lock"; flock -n 8 ) || { echo "FAIL lock-leak (background child kept the lock)"; fails=$((fails+1)); }
-  ( exec 8>"$tmp/locks/heavy.lock"; flock -n 8 && touch "$tmp/held" && sleep 4 ) &
+  ( exec 8>"$tmp/locks/check.lock"; flock -n 8 && touch "$tmp/held" && sleep 4 ) &
   holder=$!
   n=0; while [ ! -e "$tmp/held" ] && [ "$n" -lt 50 ]; do sleep 0.1; n=$((n+1)); done
-  o=$(PATH="$tmp/bin:$PATH" STA64_SCCACHE=0 STA64_LOCK_WAIT=1 STA64_LOCK_DIR="$tmp/locks" "$w" --heavy check -p sta_sim 2>&1); rc=$?
+  o=$(PATH="$tmp/bin:$PATH" STA64_SCCACHE=0 STA64_LOCK_WAIT=1 STA64_LOCK_DIR="$tmp/locks" "$w" --check check -p sta_sim 2>&1); rc=$?
   expect lock-busy "$o" "LOCK-BUSY"; [ "$rc" = 75 ] || { echo "FAIL lock-busy: exit $rc, want 75"; fails=$((fails+1)); }
   wait "$holder" 2>/dev/null
+  # Second heavy slot: heavy.lock busy and bench.lock free => runs on heavy2.
+  rm -f "$tmp/held"
+  ( exec 8>"$tmp/locks/heavy.lock"; flock -n 8 && touch "$tmp/held" && sleep 5 ) &
+  holder=$!
+  n=0; while [ ! -e "$tmp/held" ] && [ "$n" -lt 50 ]; do sleep 0.1; n=$((n+1)); done
+  o=$(PATH="$tmp/bin:$PATH" STA64_SCCACHE=0 STA64_LOCK_WAIT=1 STA64_LOCK_DIR="$tmp/locks" "$w" --heavy check -p sta_sim 2>&1)
+  expect heavy2-slot "$o" "ran-fake-cargo"
+  # ... but not while a bench session holds bench.lock (taken through --bench).
+  PATH="$tmp/bin:$PATH" STA64_LOCK_DIR="$tmp/locks" "$w" --bench sleep 4 &
+  bench=$!; sleep 1
+  o=$(PATH="$tmp/bin:$PATH" STA64_SCCACHE=0 STA64_LOCK_WAIT=1 STA64_LOCK_DIR="$tmp/locks" "$w" --heavy check -p sta_sim 2>&1); rc=$?
+  expect no-heavy2-during-bench "$o" "LOCK-BUSY"; [ "$rc" = 75 ] || { echo "FAIL no-heavy2-during-bench: exit $rc"; fails=$((fails+1)); }
+  wait "$bench" 2>/dev/null; wait "$holder" 2>/dev/null
 else
   echo "skip: flock not installed, lock contention checks not run"
 fi

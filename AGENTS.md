@@ -153,6 +153,13 @@ at once. Bevy makes `sta64` heavy.
   tools/agent-cargo --dry-run test -p sta_sim # print lock, env, command; run nothing
   ```
 
+  Heavy builds have two slots (`heavy.lock`, `heavy2.lock`): the second is
+  allowed only while no original-game bench session runs. Whoever runs one
+  holds `bench.lock` for its duration through the same tool
+  (`tools/agent-cargo --bench ./a2test run hud`; shared, so several bench
+  games may hold it); a heavy build that finds `heavy.lock` busy then waits
+  on it instead of taking the second slot.
+
   `LOCK-BUSY` (exit 75) means another agent holds the lock for longer than
   `STA64_LOCK_WAIT` seconds (default 540, under an agent tool call's
   10-minute limit): wait and run it again. Other knobs: `STA64_LOCK_DIR`,
