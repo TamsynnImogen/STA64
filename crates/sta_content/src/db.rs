@@ -592,7 +592,24 @@ fn hash_inner(db: &ContentDb, include_starting_rules: bool) -> u64 {
                 if let Some(r) = &w.replace {
                     h.byte(0xf0);
                     h.str("sta64.replace.v1");
-                    h.str(&format!("{r:?}"));
+                    for on in r.instant {
+                        h.byte(on as u8);
+                    }
+                    h.u64(r.delay);
+                    h.u64(r.mode as u64);
+                    h.u64(r.required_officers.map_or(0, |n| n as u64 + 1));
+                    h.u64(r.entries.len() as u64);
+                    for e in &r.entries {
+                        h.str(e.condition.as_deref().unwrap_or(""));
+                        h.u64(e.classes.len() as u64);
+                        for c in &e.classes {
+                            h.str(&c.odf);
+                            h.u64(u64::from(c.weight));
+                            for f in c.offset {
+                                h.fixed(f);
+                            }
+                        }
+                    }
                 }
                 feature_bits(&mut h, w.features.as_ref(), &db.features);
             }

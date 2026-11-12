@@ -10,16 +10,20 @@
 //!   itself that many seconds after it appears.
 //! - **Instant replacement.** A hardpoint weapon of class `replaceweapon` with
 //!   `replacementInstantPlayer` / `AI` / `Derelict` set for the owner's kind
-//!   fires `replacementInstantDelay` seconds after the object appears (the
-//!   first such weapon in hardpoint order; the source is gone after it fires).
+//!   fires `replacementInstantDelay` seconds after the object appears (every
+//!   such weapon is scheduled in hardpoint order; once one has spawned the
+//!   source is gone and the rest find nothing; with equal ticks expiry runs
+//!   first).
 //!   Entries whose `replacement<i>condition` is absent or names the source
 //!   ODF are candidates: mode 0 spawns the chosen class of every candidate,
 //!   mode 2 of the first. An entry's class is drawn by `randomweight` from the
 //!   sim generator, else its first class. Replacements appear at the source's
 //!   position plus `replacement<i>Class<j>Position` (world axes), with its
-//!   owner and heading, and run their own lifecycles. `requiredOfficers`
-//!   needs the owner's officer maximum to reach it; with none set it does not
-//!   fire. The source is removed when something was spawned.
+//!   owner and heading, and run their own lifecycles. The source is removed
+//!   when something was spawned. Weapons with `requiredOfficers` (the
+//!   unit-cap pods) are **not run**: removing `<race>_effectsS` would drop a
+//!   tech-tree requirement of the race's starbase, and what the original does
+//!   is not measured; they are listed as unsupported.
 //! - An owner is a *player* (human, remote, idle seat), *AI* (`Control::Ai`) or
 //!   *derelict* (no owner).
 //!
@@ -138,7 +142,7 @@ impl Sim {
             self.start_effects.add(Row { at: self.tick + life, id, act: Act::Expire });
         }
         for (i, hp) in def.hardpoints.iter().enumerate().take(256) {
-            if let Some(r) = db.weapon(hp.weapon.key).and_then(|w| w.replace.as_ref()).filter(|r| r.fires_for(kind)) {
+            if let Some(r) = db.weapon(hp.weapon.key).and_then(|w| w.replace.as_ref()).filter(|r| r.fires_for(kind) && r.required_officers.is_none()) {
                 self.start_effects.add(Row { at: self.tick + r.delay, id, act: Act::Replace(i as u8) });
             }
         }
@@ -166,12 +170,6 @@ impl Sim {
         let Some(weapon) = def.hardpoints.get(hardpoint as usize).and_then(|hp| db.weapon(hp.weapon.key)) else { return };
         let Some(r) = weapon.replace.as_ref() else { return };
         let (owner, pos, heading, source_odf) = (source.owner, source.pos, source.heading, def.odf.clone());
-        if let Some(need) = r.required_officers {
-            let reached = self.economy.officer_limit(owner).is_some_and(|limit| limit >= Fixed::from_int(need.clamp(0, 1_000_000_000) as i32));
-            if !reached {
-                return;
-            }
-        }
         let picks = self.pick_replacements(r, &source_odf);
         let mut spawned = false;
         for (odf, offset) in picks {
@@ -229,6 +227,9 @@ pub fn unsupported(db: &ContentDb, key: sta_core::ContentKey) -> Vec<String> {
                 Some(r) => {
                     if !matches!(r.mode, 0 | 2) {
                         out.push(format!("{}: replacementMode {} is not simulated", w.odf, r.mode));
+                    }
+                    if let Some(n) = r.required_officers {
+                        out.push(format!("{}: requiredOfficers {n} (unit-cap replacement) is not simulated", w.odf));
                     }
                     for class in r.entries.iter().flat_map(|e| &e.classes) {
                         match db.key(&class.odf).filter(|&c| db.unit(c).is_some()) {
@@ -396,21 +397,16 @@ mod tests {
     }
 
     #[test]
-    fn required_officers_need_the_owners_maximum() {
+    fn officer_gated_replacements_are_not_run_and_are_listed() {
         let (mut sim, db) = game(&[(0, Control::Human)]);
-        sim.economy.set_personnel(PlayerId(0), None, Some(Fixed::from_int(99_999)));
-        let low = put(&mut sim, &db, "gated", PlayerId(0));
+        sim.economy.set_personnel(PlayerId(0), None, Some(Fixed::from_int(599_997)));
+        let pod = put(&mut sim, &db, "gated", PlayerId(0));
         for _ in 0..40 {
             sim.step(&[]);
         }
-        assert!(sim.unit(low).is_some());
-        sim.economy.set_personnel(PlayerId(0), None, Some(Fixed::from_int(299_999)));
-        let high = put(&mut sim, &db, "gated", PlayerId(0));
-        for _ in 0..31 {
-            sim.step(&[]);
-        }
-        assert!(sim.unit(high).is_none());
-        assert_eq!(names(&sim, &db).iter().filter(|n| *n == "unitcap").count(), 1);
+        assert!(sim.unit(pod).is_some(), "the faction object stays");
+        assert!(sim.start_effects.is_empty());
+        assert_eq!(unsupported(&db, db.key("gated").unwrap()), ["need_officers: requiredOfficers 299999 (unit-cap replacement) is not simulated"]);
     }
 
     #[test]
