@@ -8,15 +8,17 @@
 
 pub mod font;
 mod gallery;
+mod stock;
 mod systems;
 mod tokens;
 mod widgets;
 
 use bevy::prelude::*;
 
-pub use gallery::{GalleryPlugin, GalleryRoot, spawn_gallery};
+pub use gallery::{GalleryPlugin, GalleryProfileBar, GalleryRoot, spawn_gallery};
 pub use systems::{ButtonClicked, ListSelected, SliderChanged, ToggleChanged, click, row_colour, state_colour};
 pub use tokens::{Theme, mix, scale};
+pub use stock::*;
 pub use widgets::*;
 
 use crate::app::GameSet;
@@ -32,6 +34,10 @@ impl Plugin for ThemePlugin {
         if !app.is_plugin_added::<crate::ui::i18n::I18nPlugin>() {
             app.add_plugins(crate::ui::i18n::I18nPlugin);
         }
+        if !app.is_plugin_added::<crate::ui::sprite_font::SpriteFontPlugin>() {
+            app.add_plugins(crate::ui::sprite_font::SpriteFontPlugin);
+        }
+        app.add_plugins(stock::KitPlugin);
         app.init_resource::<Theme>()
             .add_message::<ButtonClicked>()
             .add_message::<ToggleChanged>()
