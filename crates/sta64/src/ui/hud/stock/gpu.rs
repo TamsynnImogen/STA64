@@ -74,6 +74,29 @@ fn resolved_pieces(app: &mut App, pieces: &[super::layout::Piece]) -> usize {
 #[derive(Clone, Copy)]
 enum HoverCapture { Selected, Low, Other }
 
+/// Independent installed-data expectation: current crew is compared with its
+/// actual live capacity, not crewCost. Resolve authored palette/thresholds.
+fn crew_colour(vfs: &sta_vfs::Vfs, feed: &HudFeed, unit: &sta_sim::UnitView, stock: &StockLayout) -> Color {
+    if let Some(colour) = stock.colour("crew_amt_color") { return colour; }
+    let [now, max] = unit.crew.expect("visible crew pool");
+    let ratio = if max == Fixed::ZERO { 1.0 } else { (now.to_bits() as f64 / max.to_bits() as f64).min(1.0) };
+    let tier = if ratio <= 0.0 { "systemIconDestroyedColor" }
+        else if ratio > 0.5 { "systemIconHealthyColor" }
+        else if ratio > 0.25 { "systemIconLowColor" }
+        else { "systemIconCriticalColor" };
+    if let Some(colour) = stock.colour(tier) { return colour; }
+    let (index, _) = sta_content::OdfIndex::build(vfs);
+    let (races, _) = sta_content::Races::load(vfs, &index);
+    let race = feed.content.as_ref().and_then(|db| db.unit(unit.def)).and_then(|def| races.get(&def.race));
+    let Some(race) = race else { return Color::srgb(0.0, 1.0, 0.0) };
+    let odf = sta_assets::a2fmt::odf::Odf::load_layered(&format!("{}.odf",race.stem), |name, version| index.load(vfs,name,version).map(String::into_bytes)).unwrap();
+    let yellow = odf.get_f32("crewYellowStatus").filter(|v| v.is_finite()).unwrap_or(0.5) as f64;
+    let red = odf.get_f32("crewRedStatus").filter(|v| v.is_finite()).unwrap_or(0.25) as f64;
+    if ratio > yellow { Color::srgb(0.0, 1.0, 0.0) }
+    else if ratio > red { Color::srgb(1.0, 1.0, 0.0) }
+    else { Color::srgb(1.0, 0.0, 0.0) }
+}
+
 fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, label: &str, options: GameOptions, hover_mode: HoverCapture) {
     let layout = crate::game::gui_layout(&vfs, cfg).unwrap_or_else(|| panic!("installed {cfg} missing"));
     let stock = StockLayout::new(&layout, Vec2::new(1080.0 * size.x as f32 / size.y as f32, 1080.0));
@@ -95,6 +118,16 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         }).expect("a distinct authored start actor for hover precedence").id),
     };
     let source = hover.or_else(|| hud_feed.selected.first().copied()).map(|id| hud_feed.view.unit(id).unwrap());
+    let crew_tint = source.filter(|unit| unit.crew.is_some()).map(|unit| {
+        eprintln!("{label}: live unit crew current/capacity={:?}", unit.crew);
+        crew_colour(&vfs, &hud_feed, unit, &stock)
+    });
+    if std::env::var("STA64_VERIFY_CLASSIC_CREW").as_deref() == Ok("1") && matches!(hover_mode, HoverCapture::Other) {
+        let unit = source.expect("Classic starbase hover fixture");
+        assert_eq!(hud_feed.content.as_ref().unwrap().unit(unit.def).unwrap().odf, "fbase");
+        assert_eq!(unit.crew, Some([Fixed::from_int(150), Fixed::from_int(1500)]));
+        assert_eq!(crew_tint, Some(Color::srgb(1.0, 0.0, 0.0)), "Classic starbase at10percent must be red");
+    }
     let mut expected_bar = Vec::new();
     let percent = |now: i128, max: i128| (max > 0).then(|| (now * 200 + max).div_euclid(max * 2).to_string());
     let whole = |value: Fixed| { let bits=value.to_bits(); if bits>0 { (bits/Fixed::ONE.to_bits()).max(1) } else { bits/Fixed::ONE.to_bits() } };
@@ -305,7 +338,8 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         if expected.is_some() {
             let expected_colour=if *field==super::infobar::InfoBarField::Name {
                 stock.colour("shipNameColor").unwrap_or_else(|| profile.theme().text)
-            } else {stock.colour(&format!("{key}_color")).or_else(|| stock.colour(if *field==super::infobar::InfoBarField::Energy {"specialEnergyIconColor"} else {"systemIconHealthyColor"})).unwrap_or(Color::srgb(0.0,1.0,0.0))};
+            } else if *field==super::infobar::InfoBarField::Crew {crew_tint.unwrap()}
+            else {stock.colour(&format!("{key}_color")).or_else(|| stock.colour(if *field==super::infobar::InfoBarField::Energy {"specialEnergyIconColor"} else {"systemIconHealthyColor"})).unwrap_or(Color::srgb(0.0,1.0,0.0))};
             assert_eq!(colour,expected_colour,"{label}: InfoBar {key} tint");
             assert!(children.iter().any(|&child| app.world().get::<TextColor>(child).is_some_and(|t| t.0==expected_colour)),"{label}: resolved InfoBar text tint");
         }
@@ -316,7 +350,9 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         assert_eq!(*visibility,if expected.is_some() {Visibility::Inherited} else {Visibility::Hidden});
         if expected.is_some() {
             assert_eq!(image.names,[*key]);
-            assert_eq!(image.color,stock.colour(&format!("{key}_color")).or_else(|| stock.colour(if kind.0==super::infobar::InfoBarField::Energy {"specialEnergyIconColor"} else {"systemIconHealthyColor"})).unwrap_or(Color::srgb(0.0,1.0,0.0)));
+            let tint = if kind.0==super::infobar::InfoBarField::Crew {crew_tint.unwrap()}
+                else {stock.colour(&format!("{key}_color")).or_else(|| stock.colour(if kind.0==super::infobar::InfoBarField::Energy {"specialEnergyIconColor"} else {"systemIconHealthyColor"})).unwrap_or(Color::srgb(0.0,1.0,0.0))};
+            assert_eq!(image.color,tint);
             assert!(app.world().get::<ImageNode>(entity).is_some(),"{label}: resolved InfoBar icon {key}");
         }
     }
@@ -342,6 +378,23 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         .unwrap_or_else(|| panic!("{label}: no GPU capture"));
     let dynamic = shot.try_into_dynamic().expect("GPU image conversion");
     let rgba = dynamic.to_rgba8();
+    if crew_tint == Some(Color::srgb(1.0, 0.0, 0.0)) {
+        let origin=stock.info_origin(bar_variant)+stock.point(&format!("infoBarOffset_{bar_variant}")).unwrap_or(Vec2::ZERO);
+        let scale=size.y as f32/1080.0;
+        for key in ["crew_amt", "icon_crew_amt"] {
+            if let Some(rect)=stock.at(origin,key) {
+                let mut red=0;
+                for y in (rect.y*scale).max(0.0) as u32..((rect.y+rect.h)*scale).min(size.y as f32) as u32 {
+                    for x in (rect.x*scale).max(0.0) as u32..((rect.x+rect.w)*scale).min(size.x as f32) as u32 {
+                        let p=rgba.get_pixel(x,y);
+                        if p[0]>150 && p[1]<80 && p[2]<80 {red+=1;}
+                    }
+                }
+                assert!(red>=2,"{label}: {key} is not visibly red for low current/capacity");
+                eprintln!("{label}: red {key} pixels={red}");
+            }
+        }
+    }
     if let Ok(dir) = std::env::var("STA64_HUD_CAPTURE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         dynamic

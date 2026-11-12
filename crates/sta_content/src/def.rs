@@ -265,7 +265,10 @@ pub struct UnitDef {
     pub initial_hull: Option<Fixed>,
     /// Authored starting shield strength per pool; `None` starts at maximum.
     pub initial_shields: Option<Fixed>,
+    /// Starting crew and build cost (`crewCost`), separate from capacity.
     pub crew: Fixed,
+    /// `maximumCrew`; absent means the starting crew amount.
+    pub maximum_crew: Option<Fixed>,
     /// Sensor range, units.
     pub sensor: Fixed,
     pub hardpoints: Vec<Hardpoint>,
@@ -331,6 +334,7 @@ impl UnitDef {
             initial_hull: None,
             initial_shields: None,
             crew: Fixed::ZERO,
+            maximum_crew: None,
             sensor: Fixed::ZERO,
             hardpoints: Vec::new(),
             build: BuildDef::default(),

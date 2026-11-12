@@ -7,6 +7,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 ## Needs your check
 
+- [?] maximumCrew correction: in the new optimized maximum-crew build, start a fresh Classic/Federation match and select/hover the starbase. Crew should remain150 but be red against maximumCrew1500 (10%); a constructor without maximumCrew should retain its normal full-crew colour. Check a newly built unit and settled FPS. Old saved pools are not refilled or silently migrated.
+
 - [?] UI-18 display fidelity: use the new optimized display-fidelity launcher on Classic/Federation and FO4. Compare enlarged station/ship wireframes with the supplied stock reference; zoom, pan and rotate while selected and check that thin gauges stay above model bounds without lagging or disappearing. Hover values should use bare numbers and live health/crew tints. Try LCARS switching and report settled FPS. Existing original texture resolution still limits fine detail.
 
 - [?] A2 initial hull/shield pools: in the new optimized initial-pools candidate, start a fresh Classic match and hover a constructor. With no shield strength authored, both health-derived pools should be present; build another constructor/ship and compare. Partial curHealth/curShield values must begin below maximum, explicit zero must remain zero at spawn, and save/load must preserve live values. Check settled FPS; original ODFs remain untouched.

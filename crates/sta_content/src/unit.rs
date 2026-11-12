@@ -8,7 +8,7 @@
 //! | `model`, `scale` | `basename` (else the ODF's own name), `ScaleSOD` |
 //! | `hull`, `initial_hull` | `maxHealth`, optional `curHealth` (otherwise maximum) |
 //! | `shields`, `initial_shields` | `maxShield`/`maxShields`, `curShield`/`curShields`, `shieldRate` per second; A2/FO absent strength inherits health |
-//! | `crew` | `crewCost` (our reading: the crew a unit carries is what it costs) |
+//! | `crew`, `maximum_crew` | `crewCost` (starting/build amount), optional `maximumCrew` (otherwise `crewCost`) |
 //! | `sensor` | `rangeScan` |
 //! | `movement` | the physics ODF named by `physicsFile`, see [`movement`] |
 //! | `hardpoints` | `weapon<n>` with `weaponHardPoints<n>` (first node named) |
@@ -125,6 +125,7 @@ pub(crate) fn unit_def_for_profile(name: &str, odf: &Odf, phys: Option<&Odf>, pr
         d.initial_shields = d.initial_hull;
     }
     d.crew = r.fixed("crewCost");
+    d.maximum_crew = odf.raw("maximumCrew").map(|_| r.fixed("maximumCrew"));
     d.sensor = r.fixed("rangeScan");
 
     for (n, raw) in numbered(odf, "weapon") {

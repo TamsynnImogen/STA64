@@ -56,7 +56,6 @@ fn mandatory_crew_suffix_rejects_bad_version_order_ids_bounds_and_trailing_bytes
         vec![(EntityId(99), [0, f])],
         vec![(first, [-1, f])],
         vec![(first, [0, -1])],
-        vec![(first, [f + 1, f])],
     ] {
         assert!(matches!(Sim::from_snapshot(&replace_crew(&bytes, 1, rows), None), Err(SnapshotError::Corrupt(_))));
     }

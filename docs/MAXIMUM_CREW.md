@@ -37,3 +37,19 @@ red150 label/icon in a mounted-data GPU capture. Run shared/client regressions,
 strict/workspace/ARM64 checks, full CI and an optimized manual candidate.
 Original data and previous builds stay intact. December desktop alpha remains
 the priority, with one shared simulation across platforms.
+
+## Implementation evidence
+
+All six focused content/simulation tests pass, including current150/capacity1500,
+missing-key fallback, inherited zero, capacity-sensitive hashes, map/script/yard
+creation and save continuation without refilling. Shared all-target and
+bench/AI/mission suites pass; genuine legacy fixtures and Native default hashes
+are retained. All468 client tests pass (one existing ignored).
+
+Seven mounted Classic/FO4 NVIDIA captures pass. The explicit Classic fbase
+fixture asserts a live150/1500 pool, red150 text and a red crew icon; the
+framebuffer contains96 red text pixels and81 red icon pixels. Constructor
+crew stays full/green. Strict content/sim/client all-target Clippy, workspace
+and NDK29/API26 ARM64 client-library checks pass. No new APK/device claim.
+The PR and private maximum-crew artifact receipt record the optimized build
+and pending fresh-match visual/FPS acceptance.
