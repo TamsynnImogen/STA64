@@ -521,6 +521,8 @@ mod tests {
             speed: fx(0),
             hull: [fx(100), fx(100)],
             shields: [[fx(0), fx(0)]; 4],
+            crew: None,
+            energy: None,
             flags: UnitFlags::SELECTABLE,
             progress: None,
         }

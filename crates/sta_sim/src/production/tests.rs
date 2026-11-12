@@ -482,19 +482,27 @@ fn two_yards_build_in_parallel_and_the_digest_is_pinned() {
     let (sim, log, [a, b], t0) = parallel();
     let got = built(&log);
     assert_eq!(got.len(), 3, "{log:?}");
+    // Completed production uses the same initialized canonical crew pool.
+    for &(_, _, id) in &got {
+        let unit = sim.unit(id).unwrap();
+        let definition = sim.content.as_ref().unwrap().unit(unit.def).unwrap();
+        assert_eq!(unit.crew, Some([definition.crew.max(Fixed::ZERO); 2]));
+    }
     let at = |builder: EntityId| got.iter().find(|g| g.1 == builder).unwrap().0;
     assert_eq!(at(a), t0 + 900);
     assert_eq!(at(b), t0 + 450);
     assert_eq!(got.iter().filter(|g| g.0 == t0 + 1800).count(), 1);
     assert_eq!(dilithium(&sim), Fixed::from_int(5000 - 600 - 250 - 1200));
     assert_eq!(sim.digest(), parallel().0.digest());
+    assert_eq!(crate::unit_status_tests::digest_before_crew(&sim), 0x4caca0a50bd8a4e8);
     assert_eq!(sim.digest(), PINNED_DIGEST, "digest {:#x}", sim.digest());
 }
 
 /// Re-pinned by SIM-21: the rig now parks beside its site (the footprint's
 /// edge plus a gap) instead of deploying where it happens to be, so its
 /// final position, and the digest, moved. It was `0x1f6ba950228b3166`.
-const PINNED_DIGEST: u64 = 0x4caca0a50bd8a4e8;
+// Initialized unit crew is now part of the canonical state.
+const PINNED_DIGEST: u64 = 0x2dad_1f1f_5333_2537;
 
 /// A yard 600 ticks into a cruiser (frigate queued behind) and a rig 600
 /// ticks into welding a station; for the snapshot test.

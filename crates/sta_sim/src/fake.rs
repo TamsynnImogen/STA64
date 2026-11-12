@@ -38,6 +38,12 @@ struct RailUnit {
     /// Full hull; the view shows `[hull, hull]`.
     #[serde(default)]
     hull: Fixed,
+    /// Optional `[current, maximum]` crew for fixture views.
+    #[serde(default)]
+    crew: Option<[Fixed; 2]>,
+    /// Optional `[current, maximum]` energy for fixture views.
+    #[serde(default)]
+    energy: Option<[Fixed; 2]>,
     /// Ascending `at`. The unit appears at the first point (a `Spawned`
     /// event unless that is tick 0), moves in straight lines between points
     /// and stays at the last one.
@@ -68,6 +74,8 @@ struct Rail {
     def: ContentKey,
     owner: PlayerId,
     hull: Fixed,
+    crew: Option<[Fixed; 2]>,
+    energy: Option<[Fixed; 2]>,
     points: Vec<RailPoint>,
     until: Option<Tick>,
 }
@@ -116,7 +124,7 @@ impl ScriptedSource {
             if u.rails.windows(2).any(|w| w[0].at >= w[1].at) {
                 return Err(format!("unit {}: rail points must have ascending `at`", u.id.0));
             }
-            rails.push(Rail { id: u.id, def, owner: u.owner, hull: u.hull, points: u.rails, until: u.until });
+            rails.push(Rail { id: u.id, def, owner: u.owner, hull: u.hull, crew: u.crew, energy: u.energy, points: u.rails, until: u.until });
         }
         rails.sort_by_key(|r| r.id);
         if rails.windows(2).any(|w| w[0].id == w[1].id) {
@@ -180,6 +188,8 @@ impl Rail {
             speed,
             hull,
             shields: [[Fixed::ZERO; 2]; 4],
+            crew: self.crew,
+            energy: self.energy,
             flags: UnitFlags::SELECTABLE,
             progress: None,
         })
@@ -335,6 +345,27 @@ mod tests {
     }
 
     #[test]
+    fn scripted_source_preserves_optional_crew_and_energy() {
+        let db = sta_content::fake::db();
+        let source = ScriptedSource::from_json5(
+            r#"{
+                units: [
+                    { id: 1, crew: [0, 20], energy: [3, 10], rails: [{ at: 0, pos: {x:0,y:0,z:0} }] },
+                    { id: 2, rails: [{ at: 0, pos: {x:0,y:0,z:0} }] },
+                ]
+            }"#,
+            &db,
+        ).unwrap();
+        let view = source.view();
+        let known = view.unit(EntityId(1)).unwrap();
+        assert_eq!(known.crew, Some([Fixed::ZERO, Fixed::from_int(20)]));
+        assert_eq!(known.energy, Some([Fixed::from_int(3), Fixed::from_int(10)]));
+        let unknown = view.unit(EntityId(2)).unwrap();
+        assert_eq!(unknown.crew, None);
+        assert_eq!(unknown.energy, None);
+    }
+
+    #[test]
     fn scripted_source_rejects_bad_timelines() {
         let db = sta_content::fake::db();
         assert!(ScriptedSource::from_json5("{ units: [{ id: 1, def: \"nope\", rails: [{ at: 0, pos: {x:0,y:0,z:0} }] }] }", &db).is_err());
@@ -418,5 +449,12 @@ mod tests {
         assert!(ViewLog::from_bytes(&bytes).unwrap_err().contains("seam revision 1"));
         // The old payload need not decode as today's WorldView to identify it.
         assert!(ViewLog::from_bytes(&[1]).unwrap_err().contains("seam revision 1"));
+    }
+
+    #[test]
+    fn view_log_refuses_revision_three_before_decoding_view() {
+        // The revision prefix alone is sufficient to reject this legacy log;
+        // no revision-3 UnitView payload is present to decode.
+        assert!(ViewLog::from_bytes(&[3]).unwrap_err().contains("seam revision 3"));
     }
 }

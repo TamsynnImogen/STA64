@@ -415,6 +415,8 @@ mod tests {
             speed: Fixed::ZERO,
             hull: [Fixed::ONE, Fixed::ONE],
             shields: [[Fixed::ZERO, Fixed::ZERO]; 4],
+            crew: None,
+            energy: None,
             flags: Default::default(),
             progress: None,
         };

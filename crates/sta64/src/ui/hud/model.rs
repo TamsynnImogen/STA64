@@ -581,6 +581,8 @@ mod tests {
             speed: Fixed::ZERO,
             hull: [f(hull), f(100.0)],
             shields: shield,
+            crew: None,
+            energy: None,
             flags: UnitFlags::SELECTABLE,
             progress: progress.map(f),
         }

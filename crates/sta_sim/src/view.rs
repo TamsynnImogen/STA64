@@ -87,6 +87,12 @@ pub struct UnitView {
     pub flags: UnitFlags,
     /// Building or under construction, 0..1.
     pub progress: Option<Fixed>,
+    /// `[now, max]`; absent when unit crew has not been initialized.
+    #[serde(default)]
+    pub crew: Option<[Fixed; 2]>,
+    /// `[now, max]`; absent until special energy has a live row.
+    #[serde(default)]
+    pub energy: Option<[Fixed; 2]>,
 }
 
 /// Unit state bits.
