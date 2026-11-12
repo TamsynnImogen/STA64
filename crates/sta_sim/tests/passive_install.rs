@@ -53,7 +53,7 @@ fn installed_resource_weapons_pay_their_odf_amounts_per_second() {
             })
             .collect();
         eprintln!("{label}: {} carrier units of always-active resource weapons", carriers.len());
-        for u in carriers.iter().take(25) {
+        for u in carriers.iter() {
             let mut map = MapDef::empty();
             map.objects = vec![MapObject {
                 odf: u.odf.clone(),

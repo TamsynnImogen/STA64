@@ -430,6 +430,8 @@ pub struct ResourceWeaponDef {
     /// Signed amount per resource slot (dilithium, latinum, metal,
     /// biomatter): `addDilithium`, `addLatinum`, `addMetal`, `addBiomatter`.
     pub add: [Fixed; 4],
+    /// Signed crew per second (`addCrew`), onto the team's crew stock.
+    pub crew: Fixed,
     /// `oneTimeMode`: a lump sum, not a rate. Default off.
     pub one_time: bool,
     /// `alwaysActivePlayer`: works for a human seat without being triggered.

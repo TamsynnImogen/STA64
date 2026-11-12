@@ -15,7 +15,7 @@
 //! | `duration` | ordnance `lifespan` seconds, beams only |
 //! | `fire_sound`, `fx` | `fireSound`; ordnance `shotGeometry` (else `sprite`) |
 //! | specials | `effectTimer`, `energyDrainRate`, `specialEnergyCost`, `disableWeapons` (default on), `decloakOnHit` |
-//! | `resource` (class `resourceweapon`) | `addDilithium`, `addLatinum`, `addMetal`, `addBiomatter` (signed), `oneTimeMode`, `alwaysActivePlayer`, `alwaysActiveAI` |
+//! | `resource` (class `resourceweapon`) | `addDilithium`, `addLatinum`, `addMetal`, `addBiomatter`, `addCrew` (signed), `oneTimeMode`, `alwaysActivePlayer`, `alwaysActiveAI` |
 //! | hardpoint arc | `restrictFireArc = 1` with `fireArc` as the half-width in radians (our reading) |
 
 use sta_core::Fixed;
@@ -76,6 +76,7 @@ pub fn weapon_def(name: &str, odf: &Odf, ordnance: Option<&Odf>, warnings: &mut 
         }
         d.resource = Some(ResourceWeaponDef {
             add,
+            crew: r.num("addCrew").map_or(Fixed::ZERO, Fixed::from_f64),
             one_time: r.flag("oneTimeMode").unwrap_or(false),
             always_player: r.flag("alwaysActivePlayer").unwrap_or(false),
             always_ai: r.flag("alwaysActiveAI").unwrap_or(false),

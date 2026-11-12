@@ -4,8 +4,8 @@
 //! Source: Fleet Operations 3.x and later (Roots, Fleet Ops 4.0, Dominion
 //! War); stock Armada I and II have no such class. A unit or station lists
 //! the weapon like any other (`f_generate_supply` on `fbase`, hardpoint
-//! `root`), and the engine applies `addDilithium`, `addLatinum`, `addMetal`
-//! and `addBiomatter` to the owner. `alwaysActivePlayer` / `alwaysActiveAI`
+//! `root`), and the engine applies `addDilithium`, `addLatinum`, `addMetal`,
+//! `addBiomatter` and `addCrew` to the owner. `alwaysActivePlayer` / `alwaysActiveAI`
 //! say whether the weapon works without being triggered for a human or an AI
 //! seat; with neither set it is a button ability (`bor_recycle_dilithium`,
 //! `buttonslot = 1`), which this module leaves alone.
@@ -71,13 +71,35 @@ impl Economy {
                 if !active(r, ai) {
                     continue;
                 }
-                for slot in 0..RESOURCES {
-                    if r.add[slot] == Fixed::ZERO {
-                        continue;
+                // One application is all or nothing: a weapon that converts
+                // (positive and negative adders) does not pay out what it
+                // cannot afford. (Our choice; not measured on the original.)
+                let mut g = [Fixed::ZERO; RESOURCES];
+                for (slot, add) in r.add.iter().enumerate() {
+                    if *add != Fixed::ZERO {
+                        g[slot] = gain(*add, tick);
                     }
-                    let g = gain(r.add[slot], tick);
-                    let s = &mut self.slot(u.owner)[slot];
-                    *s = (*s + g).max(Fixed::ZERO);
+                }
+                let crew_gain = if r.crew != Fixed::ZERO { gain(r.crew, tick) } else { Fixed::ZERO };
+                let have = self.stock_of(u.owner);
+                let held = |slot: usize| have.get(slot).copied().unwrap_or(Fixed::ZERO);
+                let crew_have = self.crew_of(u.owner);
+                if (0..RESOURCES).any(|s| g[s] < Fixed::ZERO && held(s) + g[s] < Fixed::ZERO)
+                    || (crew_gain < Fixed::ZERO && crew_have.is_some_and(|c| c + crew_gain < Fixed::ZERO))
+                {
+                    continue;
+                }
+                for slot in 0..RESOURCES {
+                    if g[slot] != Fixed::ZERO {
+                        let s = &mut self.slot(u.owner)[slot];
+                        *s = Fixed::from_bits(s.to_bits().saturating_add(g[slot].to_bits())).max(Fixed::ZERO);
+                    }
+                }
+                if crew_gain != Fixed::ZERO
+                    && let Some(c) = crew_have
+                {
+                    let limit = self.officer_limit(u.owner);
+                    self.set_personnel(u.owner, Some(Fixed::from_bits(c.to_bits().saturating_add(crew_gain.to_bits())).max(Fixed::ZERO)), limit);
                 }
             }
         }
@@ -295,8 +317,27 @@ mod tests {
         };
         let (a, b) = (make(), make());
         assert_eq!(a.digest(), b.digest());
-        let one = odf(0.2) * Fixed::from_int(20);
-        assert!(stock(&a, 0)[3] >= one + one);
+        near(stock(&a, 0)[3], over(odf(0.2), 20 * SECOND + 7) + over(odf(0.2), 20 * SECOND + 7));
+    }
+
+    #[test]
+    fn a_converter_pays_nothing_it_cannot_afford_and_add_crew_reaches_the_crew_stock() {
+        let convert = "adddilithium = 5\naddbiomatter = -0.33\nalwaysactiveplayer = 1\nclasslabel = \"resourceweapon\"\n";
+        let mut sim = game(db(&[("convert", convert)]));
+        spawn(&mut sim, "fx_convert", 0);
+        run(&mut sim, 3 * SECOND);
+        assert_eq!(stock(&sim, 0), [Fixed::ZERO; RESOURCES], "no biomatter to pay with: nothing is made");
+        let c = Command { player: PlayerId::BENCH, seq: 1, kind: CommandKind::Edit(Edit::Cargo(PlayerId(0), 3, Fixed::from_int(10))) };
+        sim.step(&[c]);
+        run(&mut sim, SECOND);
+        assert!(stock(&sim, 0)[0] > Fixed::from_int(4));
+        assert!(stock(&sim, 0)[3] < Fixed::from_int(10));
+        let crew = "addCrew = 2\nalwaysactiveplayer = 1\nclasslabel = \"resourceweapon\"\n";
+        let mut sim = game(db(&[("crewgen", crew)]));
+        sim.economy.set_personnel(PlayerId(0), Some(Fixed::from_int(100)), None);
+        spawn(&mut sim, "fx_crewgen", 0);
+        run(&mut sim, 10 * SECOND);
+        near(sim.economy.crew_of(PlayerId(0)).unwrap() - Fixed::from_int(100), over(Fixed::from_int(2), 10 * SECOND + 1));
     }
 
     #[test]

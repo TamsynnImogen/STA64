@@ -587,6 +587,10 @@ fn hash_inner(db: &ContentDb, include_starting_rules: bool) -> u64 {
                     for f in r.add {
                         h.fixed(f);
                     }
+                    if r.crew != Fixed::ZERO {
+                        h.byte(0xf1);
+                        h.fixed(r.crew);
+                    }
                     h.byte(r.one_time as u8);
                     h.byte(r.always_player as u8);
                     h.byte(r.always_ai as u8);
