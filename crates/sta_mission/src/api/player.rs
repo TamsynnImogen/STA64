@@ -82,6 +82,18 @@ impl UserData for Player {
                 c.def(u).map(|d| d.race.clone()).filter(|r| !r.is_empty())
             }).unwrap_or_default())
         });
+        // Cosmetic or rule-level player settings with no sim state: accepted and
+        // recorded (a seat's race and display data come from the game setup).
+        for (name, need) in [
+            ("race", "a sim race edit"),
+            ("color", "a player-colour setting in the game setup"),
+            ("name", "a player-name setting in the game setup"),
+        ] {
+            f.add_field_method_set(name, move |_, p, _: Value| {
+                p.ctx.borrow_mut().unsupported(&format!("Player.{name} = x (needs {need})"));
+                Ok(())
+            });
+        }
         f.add_field_method_get("isAI", |_, _| Ok(false));
         f.add_field_method_get("slotType", |_, p| {
             Ok(if p.ctx.borrow().seat == p.id { "Human" } else { "None" })
@@ -89,6 +101,21 @@ impl UserData for Player {
         for name in ["maxOfficers", "maxCrew"] {
             f.add_field_method_get(name, |_, p| {
                 Ok(p.ctx.borrow().view.player(p.id).map_or(0.0, |v| v.officers[1].to_f32() as f64))
+            });
+            // The limit is a typed rule (RTS_CFG.h SINGLE_PLAYER_OFFICER_LIMIT /
+            // MP_OFFICER_LIMIT) held by the economy; the sim has no edit to
+            // change it per player. Assigning the limit already in force changes
+            // nothing (installed missions assign 199999, the unitcap_normal /
+            // SINGLE_PLAYER_OFFICER_LIMIT value); any other value is recorded as
+            // unsupported, never pretended. A headless setup without a chosen
+            // limit reports 0, so there the call is recorded too.
+            f.add_field_method_set(name, move |_, p, value: f64| {
+                let mut c = p.ctx.borrow_mut();
+                let current = c.view.player(p.id).map(|v| v.officers[1].to_f32() as f64);
+                if current != Some(value) {
+                    c.unsupported(&format!("Player.{name} = x (differs from the rule; needs a sim officer-limit edit)"));
+                }
+                Ok(())
             });
         }
         f.add_field_method_get("resources", resources);

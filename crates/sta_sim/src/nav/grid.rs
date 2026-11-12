@@ -1,10 +1,9 @@
 //! The navigation grid and the searches over it (SIM-23).
 //!
 //! All arithmetic is integer: positions are [`Fixed`] bits (32.32), squared
-//! distances are compared in `i128`, path costs are `u64` (stored as `u32`,
-//! saturating, in a field). Searches visit
-//! cells by `(cost, index)`, so ties always break toward the lower index and
-//! every target computes the same field.
+//! distances are compared in `i128`, path costs are saturating `u64`.
+//! Searches visit cells by `(cost, index)`, so ties always break toward the
+//! lower index and every target computes the same field.
 
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, VecDeque};
@@ -18,9 +17,9 @@ pub(crate) const BLOCKED: u32 = 0;
 /// A cell that is in no component (blocked).
 const NO_COMPONENT: u32 = u32::MAX;
 /// Unreached in a field.
-pub(crate) const FAR: u32 = u32::MAX;
+const FAR: u64 = u64::MAX;
 /// Step weights: orthogonal and diagonal (10 and 14 for 1 and about sqrt 2).
-const ORTHOGONAL: u64 = 10;
+pub(crate) const ORTHOGONAL: u64 = 10;
 const DIAGONAL: u64 = 14;
 /// The eight moves, in the fixed order every search uses.
 const MOVES: [(i64, i64, bool); 8] = [
@@ -36,17 +35,18 @@ const MOVES: [(i64, i64, bool); 8] = [
 
 const FRAC: u32 = 32;
 
-/// Whole world units below `v` (floor).
+/// Whole world units at or below `v` (floor).
 pub(crate) fn floor_units(v: Fixed) -> i64 {
     v.to_bits() >> FRAC
 }
 
 /// Whole world units at or above `v` (ceiling).
 pub(crate) fn ceil_units(v: Fixed) -> i64 {
-    -((-v.to_bits()) >> FRAC)
+    (-((-(v.to_bits() as i128)) >> FRAC)) as i64
 }
 
-/// A region with a path cost: a nebula (SIM-23).
+/// A region with a path cost: a nebula, as planned round (its radius times
+/// the safety coefficient).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Hazard {
     pub shape: Solid,
@@ -77,8 +77,6 @@ pub(crate) struct Spec {
     pub default_cost: u32,
     /// The craft's body radius.
     pub body: Fixed,
-    /// `COLLISION_SAFETY_MARGIN`: solids and bodies are this much wider.
-    pub margin: Fixed,
     pub solids: Vec<Solid>,
     pub hazards: Vec<Hazard>,
     pub area: Option<Area>,
@@ -90,6 +88,8 @@ pub(crate) struct Grid {
     /// Per cell, row-major (`z * width + x`).
     cost: Vec<u32>,
     component: Vec<u32>,
+    /// Cells per component.
+    sizes: Vec<u32>,
 }
 
 fn sq(v: i128) -> i128 {
@@ -97,7 +97,7 @@ fn sq(v: i128) -> i128 {
 }
 
 /// Squared distance (in squared Fixed bits) from `(x, z)` to `shape`; zero
-/// inside.
+/// inside a box, from the centre for a sphere.
 fn distance2(x: i64, z: i64, shape: &Solid) -> i128 {
     match *shape {
         Solid::Sphere { centre, .. } => {
@@ -120,40 +120,35 @@ fn distance2(x: i64, z: i64, shape: &Solid) -> i128 {
 
 /// The XZ extent of `shape` grown by `grow`, in Fixed bits.
 fn extent(shape: &Solid, grow: Fixed) -> (i64, i64, i64, i64) {
+    let g = grow.to_bits();
     match *shape {
-        Solid::Sphere { centre, .. } => {
-            let g = grow.to_bits();
-            (
-                centre.x.to_bits().saturating_sub(g),
-                centre.z.to_bits().saturating_sub(g),
-                centre.x.to_bits().saturating_add(g),
-                centre.z.to_bits().saturating_add(g),
-            )
-        }
-        Solid::Box { min, max } => {
-            let g = grow.to_bits();
-            (
-                min.x.to_bits().saturating_sub(g),
-                min.z.to_bits().saturating_sub(g),
-                max.x.to_bits().saturating_add(g),
-                max.z.to_bits().saturating_add(g),
-            )
-        }
+        Solid::Sphere { centre, .. } => (
+            centre.x.to_bits().saturating_sub(g),
+            centre.z.to_bits().saturating_sub(g),
+            centre.x.to_bits().saturating_add(g),
+            centre.z.to_bits().saturating_add(g),
+        ),
+        Solid::Box { min, max } => (
+            min.x.to_bits().saturating_sub(g),
+            min.z.to_bits().saturating_sub(g),
+            max.x.to_bits().saturating_add(g),
+            max.z.to_bits().saturating_add(g),
+        ),
     }
 }
 
 impl Spec {
-    /// How far round `solid` a cell centre is blocked: for a sphere the
-    /// distance from its centre, for a box from its faces.
+    /// How far round `solid` a cell centre is blocked: the solid's radius
+    /// plus the body (SIM-21's own contact distance) for a sphere, the body
+    /// from the faces for a box.
     pub(crate) fn reach(&self, solid: &Solid) -> Fixed {
         match *solid {
-            Solid::Sphere { radius, .. } => (radius + self.body) * self.margin,
-            Solid::Box { .. } => self.body * self.margin,
+            Solid::Sphere { radius, .. } => radius + self.body,
+            Solid::Box { .. } => self.body,
         }
     }
 
-    /// The hazard's shape's reach: its radius (spheres; the multiplier is
-    /// already in it) or zero (boxes).
+    /// The hazard shape's own reach: its radius (spheres) or zero (boxes).
     fn hazard_reach(h: &Hazard) -> Fixed {
         match h.shape {
             Solid::Sphere { radius, .. } => radius,
@@ -259,12 +254,7 @@ impl Grid {
             for j in j0..=j1 {
                 for i in i0..=i1 {
                     let (x, z) = spec.centre_bits(i, j);
-                    let d2 = distance2(x, z, s);
-                    let blocked = match s {
-                        Solid::Sphere { .. } => d2 < r2,
-                        Solid::Box { .. } => d2 <= r2,
-                    };
-                    if blocked {
+                    if distance2(x, z, s) < r2 {
                         cost[(j * w + i) as usize] = BLOCKED;
                     }
                 }
@@ -274,6 +264,7 @@ impl Grid {
             spec,
             cost,
             component: vec![NO_COMPONENT; n],
+            sizes: Vec::new(),
         };
         grid.label();
         grid
@@ -304,8 +295,13 @@ impl Grid {
         Some(self.component[k as usize]).filter(|&c| c != NO_COMPONENT)
     }
 
+    /// Cells in component `c`.
+    pub(crate) fn size(&self, c: u32) -> u32 {
+        self.sizes[c as usize]
+    }
+
     /// The cost of entering `k`: a blocked cell (only ever a search's own
-    /// goal or start) costs open space.
+    /// goal) costs open space.
     fn enter(&self, k: u32) -> u64 {
         match self.cost(k) {
             BLOCKED => self.spec.default_cost as u64,
@@ -351,31 +347,35 @@ impl Grid {
 
     /// Connected components of passable cells, numbered in index order.
     fn label(&mut self) {
-        let mut next = 0;
         let mut queue = VecDeque::new();
+        let mut sizes = Vec::new();
         for start in 0..self.len() as u32 {
             if !self.passable(start) || self.component[start as usize] != NO_COMPONENT {
                 continue;
             }
-            self.component[start as usize] = next;
+            let label = sizes.len() as u32;
+            let mut size = 1u32;
+            self.component[start as usize] = label;
             queue.push_back(start);
             while let Some(k) = queue.pop_front() {
-                let mut found = [u32::MAX; 8];
+                let mut found = [NO_COMPONENT; 8];
                 for (slot, (m, _)) in found.iter_mut().zip(self.moves(k)) {
                     *slot = m;
                 }
                 for m in found {
-                    if m != u32::MAX
+                    if m != NO_COMPONENT
                         && self.cost[m as usize] != BLOCKED
                         && self.component[m as usize] == NO_COMPONENT
                     {
-                        self.component[m as usize] = next;
+                        self.component[m as usize] = label;
+                        size += 1;
                         queue.push_back(m);
                     }
                 }
             }
-            next += 1;
+            sizes.push(size);
         }
+        self.sizes = sizes;
     }
 
     /// The passable cell nearest `p`: its own, else the nearest within three
@@ -406,11 +406,12 @@ impl Grid {
     }
 
     /// The cell of `component` nearest `t`: distance in half cells, then
-    /// nearest `p` (so of equally near cells the unit takes the one on its
-    /// own side), then index.
-    pub(crate) fn nearest_in(&self, component: u32, t: Vec3, p: Vec3) -> Option<u32> {
+    /// nearest the cell `from` (so of equally near cells the unit takes the
+    /// one on its own side), then index.
+    pub(crate) fn nearest_in(&self, component: u32, t: Vec3, from: u32) -> Option<u32> {
         let half = (self.spec.cell / 2).max(1) as u128;
-        let mut best: Option<(u128, i128, u32)> = None;
+        let (fi, fj) = self.coords(from);
+        let mut best: Option<(u128, i64, u32)> = None;
         for k in 0..self.len() as u32 {
             if self.component[k as usize] != component {
                 continue;
@@ -419,8 +420,7 @@ impl Grid {
             let (x, z) = self.spec.centre_bits(i, j);
             let d2 = sq(x as i128 - t.x.to_bits() as i128) + sq(z as i128 - t.z.to_bits() as i128);
             let band = ((d2 >> (2 * FRAC)) as u128).isqrt() / half;
-            let near =
-                sq(x as i128 - p.x.to_bits() as i128) + sq(z as i128 - p.z.to_bits() as i128);
+            let near = (i - fi) * (i - fi) + (j - fj) * (j - fj);
             if best.is_none_or(|b| (band, near, k) < b) {
                 best = Some((band, near, k));
             }
@@ -434,7 +434,7 @@ impl Grid {
         let mut dist = vec![FAR; self.len()];
         let mut heap = BinaryHeap::new();
         dist[goal as usize] = 0;
-        heap.push(Reverse((0u32, goal)));
+        heap.push(Reverse((0u64, goal)));
         while let Some(Reverse((d, n))) = heap.pop() {
             if d > dist[n as usize] {
                 continue;
@@ -443,7 +443,7 @@ impl Grid {
             // A move m -> n is the reverse of n -> m here: the same cells
             // either way, so the corner rule reads the same.
             for (m, w) in self.moves(n).filter(|&(m, _)| self.passable(m)) {
-                let nd = (d as u64 + w * enter).min(FAR as u64 - 1) as u32;
+                let nd = d.saturating_add(w * enter).min(FAR - 1);
                 if nd < dist[m as usize] {
                     dist[m as usize] = nd;
                     heap.push(Reverse((nd, m)));
@@ -465,7 +465,7 @@ impl Grid {
             if rest == FAR || (m != field.goal && !self.passable(m)) {
                 continue;
             }
-            let total = rest as u64 + w * self.enter(m);
+            let total = rest.saturating_add(w * self.enter(m));
             if best.is_none_or(|b| total < b.0) {
                 best = Some((total, m));
             }
@@ -473,39 +473,10 @@ impl Grid {
         best.map(|(_, m)| m)
     }
 
-    /// Whether the straight leg `a` -> `b` crosses no blocked cell and no
-    /// cell dearer than `limit`, apart from the cells holding its ends.
-    /// Sampled at a quarter cell along the longer axis; integer throughout.
-    pub(crate) fn clear(&self, a: Vec3, b: Vec3, limit: u32) -> bool {
-        let (ax, az, bx, bz) = (
-            a.x.to_bits() as i128,
-            a.z.to_bits() as i128,
-            b.x.to_bits() as i128,
-            b.z.to_bits() as i128,
-        );
-        let step = ((self.spec.cell as i128) << FRAC) / 4;
-        let span = (bx - ax).abs().max((bz - az).abs());
-        let n = (span / step.max(1) + 1).min(1 << 16);
-        let (first, last) = (self.cell_of(a), self.cell_of(b));
-        for s in 1..n {
-            let x = ax + (bx - ax) * s / n;
-            let z = az + (bz - az) * s / n;
-            let k = self.index(self.spec.cell_of_bits(x as i64, z as i64));
-            if k == first || k == last {
-                continue;
-            }
-            let c = self.cost(k);
-            if c == BLOCKED || c > limit {
-                return false;
-            }
-        }
-        true
-    }
-
     /// The cost of flying the straight leg `a` -> `b`, in a field's units
     /// (`10 * cell cost` per cell width), or `None` when it crosses a
-    /// blocked cell other than the one it starts in. Sampled like
-    /// [`clear`](Grid::clear); integer throughout.
+    /// blocked cell other than the one it starts in. Sampled at a quarter
+    /// cell along the longer axis; integer throughout.
     pub(crate) fn line_cost(&self, a: Vec3, b: Vec3) -> Option<u64> {
         let (ax, az, bx, bz) = (
             a.x.to_bits() as i128,
@@ -528,8 +499,7 @@ impl Grid {
                 c => c as i128,
             };
         }
-        let len = (sq(bx - ax) + sq(bz - az)) as u128;
-        let len = len.isqrt() as i128;
+        let len = ((sq(bx - ax) + sq(bz - az)) as u128).isqrt() as i128;
         let cost = ORTHOGONAL as i128 * len * sum / (n * ((self.spec.cell as i128) << FRAC));
         Some(cost.clamp(0, u64::MAX as i128) as u64)
     }
@@ -539,7 +509,7 @@ impl Grid {
 #[derive(Debug)]
 pub(crate) struct Field {
     pub goal: u32,
-    dist: Vec<u32>,
+    dist: Vec<u64>,
 }
 
 impl Field {
@@ -549,6 +519,10 @@ impl Field {
 
     /// The cost to go from `k`.
     pub(crate) fn dist(&self, k: u32) -> u64 {
-        self.dist[k as usize] as u64
+        self.dist[k as usize]
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.dist.len()
     }
 }

@@ -18,8 +18,10 @@ stops every timer. `unhook(name)` removes one hook; `unhook()` removes all.
 `id`, `interval`, `repeats`, `state` and hook count `hooks` are readable;
 `interval` and `repeats` are writable.
 
-The callback receives the timer handle and the fourth hook argument, or the
-hook name when that argument is nil. Non-nil conditions are rejected until
+The callback receives the timer handle and a hook object with `argument` (the
+fourth hook argument, or the hook name when that argument is nil, kept from
+the earlier bridge) and `id`, as installed MMM scripts read them; a table
+argument's fields also stay reachable on the hook object. Non-nil conditions are rejected until
 their contract is established. Due callbacks run in registration order, with
 no context borrow held during Lua calls. Restarting/stopping/unhooking can
 invalidate later firings queued for that timer in the same pass. At most one

@@ -5,7 +5,9 @@
 
 mod body;
 mod starts;
+mod write;
 pub(crate) use body::parse_map;
+pub(crate) use write::write_map;
 pub use body::{AiPath, AreaOfInterest, MapData};
 pub use starts::{StartError, mdf_start_count, player_start_positions};
 

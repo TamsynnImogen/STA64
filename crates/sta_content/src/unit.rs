@@ -184,6 +184,14 @@ pub(crate) fn unit_def_for_profile(name: &str, odf: &Odf, phys: Option<&Odf>, pr
     d.mining_rate = r.fixed("miningRate");
     d.transfer_rate = r.fixed("dilithiumTransferRate");
     d.resource = r.text("resource").map(|t| resource_id(&t));
+    // SIM-23: a nebula's path-planner cost (`pathing_cost`, a whole number
+    // in every stock and FO file; a fraction rounds) and `addToPathPlanner`.
+    if d.class.0.eq_ignore_ascii_case("nebula_obj") {
+        d.nebula_pathing = Some(crate::NebulaPathing {
+            cost: r.num("pathing_cost").map(|v| v.round() as i64),
+            planned: r.num("addToPathPlanner").is_none_or(|v| v != 0.0),
+        });
+    }
 
     d.movement = movement(phys, &file, warnings);
     d
