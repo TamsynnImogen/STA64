@@ -165,9 +165,66 @@ pub fn bundled() -> &'static BTreeMap<String, Recipe> {
     R.get_or_init(|| parse(include_str!("ordnance.ini")))
 }
 
+/// Where a mod keeps ordnance recipes in the mounted files, as nebulae and surfaces
+/// keep theirs under `nebulae/` and `surfaces/` (MODDING_DECISIONS D12).
+pub const VFS_PATH: &str = "ordnance/ordnance.ini";
+
+/// The ordnance recipes in force: the bundled ones, with every `[Ordnance.<odf>]`
+/// section of each mounted layer's `ordnance/ordnance.ini` laid over them, highest
+/// layer last (RND-28). A section replaces the bundled one of its name whole; a
+/// weapon the files do not name keeps the bundled recipe, else its kind's default.
+#[derive(bevy::prelude::Resource, Debug, Clone, PartialEq)]
+pub struct OrdnanceRecipes(pub BTreeMap<String, Recipe>);
+
+impl Default for OrdnanceRecipes {
+    fn default() -> Self {
+        OrdnanceRecipes(bundled().clone())
+    }
+}
+
+impl OrdnanceRecipes {
+    /// The bundled recipes under every layer's file, per recipe name.
+    pub fn from_vfs(vfs: &sta_vfs::Vfs) -> OrdnanceRecipes {
+        let mut out = bundled().clone();
+        // `resolve_all` lists the layers providing the path, highest first: lay the
+        // lowest down first so the highest wins.
+        for (layer, source) in vfs.resolve_all(VFS_PATH).into_iter().rev() {
+            let Some(index) = vfs.layer_index(layer) else { continue };
+            if let Ok(bytes) = vfs.read_from(index, source) {
+                out.extend(parse(&String::from_utf8_lossy(&bytes)));
+            }
+        }
+        OrdnanceRecipes(out)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn layer(vfs: &mut sta_vfs::Vfs, name: &str, ini: &str) {
+        let dir = std::env::temp_dir().join(format!("sta64-recipes-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("ordnance")).unwrap();
+        std::fs::write(dir.join("ordnance/ordnance.ini"), ini).unwrap();
+        vfs.push_dir(name.into(), dir).unwrap();
+    }
+
+    #[test]
+    fn mounted_recipes_override_bundled_ones_highest_layer_last() {
+        // No file: exactly the bundled recipes (stock output unchanged).
+        assert_eq!(OrdnanceRecipes::from_vfs(&sta_vfs::Vfs::default()), OrdnanceRecipes::default());
+        let mut vfs = sta_vfs::Vfs::default();
+        // `push_dir` appends lower-priority layers: the mod first, then its parent.
+        layer(&mut vfs, "mod", "[Ordnance.tracbm]\nKind=bolt\nSize=3\n\n[Ordnance.mymod_gun]\nKind=beam\nWidth=7\n");
+        layer(&mut vfs, "base", "[Ordnance.tracbm]\nKind=beam\n\n[Ordnance.base_gun]\nKind=beam\nWidth=9\n");
+        let r = OrdnanceRecipes::from_vfs(&vfs).0;
+        assert_eq!(r["tracbm"].shape, Shape::Bolt, "the higher layer's section wins");
+        assert_eq!(r["tracbm"].size, 3.0);
+        assert_eq!(r["mymod_gun"].width, 7.0);
+        assert_eq!(r["base_gun"].width, 9.0, "a lower layer's other sections stay");
+        assert_eq!(r["ionstm"], bundled()["ionstm"], "an unnamed bundled recipe is kept");
+    }
 
     #[test]
     fn bundled_recipes_parse_with_their_kinds() {
