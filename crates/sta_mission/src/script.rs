@@ -109,7 +109,7 @@ fn read_script(vfs: &Vfs, name: &str) -> Option<(String, Vec<u8>)> {
 pub fn dry_run(vfs: &Vfs, path: &str) -> DryRun {
     let log: Log = Rc::new(RefCell::new(DryRun::default()));
     let result = (|| -> mlua::Result<()> {
-        let lua = Lua::new();
+        let lua = crate::sandbox::new_lua();
         let globals = lua.globals();
         // Unknown globals are API stubs.
         let gmt = lua.create_table()?;

@@ -394,6 +394,29 @@ STA64 bridge policy, not a new simulation team rule.
 case 2. That gives the Lua conversion work (STA2 Classic Mod campaign, A1
 missions) a checklist straight from the installed content.
 
+## Lua sandbox
+
+Every mission Lua state is built by `sta_mission::sandbox::new_lua`
+(LUA-09, [MODDING_DECISIONS.md](MODDING_DECISIONS.md) D13); no other code
+calls `Lua::new()`. Scripts get an explicit set of standard libraries and
+limits:
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `std_libs()` | base, `coroutine`, `table`, `string`, `utf8`, `math` | `io`, `os`, `package` and `debug` are not opened |
+| `REMOVED_GLOBALS` | `load`, `loadstring`, `loadfile`, `dofile`, `require` | no run-time compilation or loading; `string.dump` is removed too. `include()` (the VFS reader) is the only way to run another script |
+| `MEMORY_LIMIT` | 256 MiB | an allocation past it raises a Lua memory error |
+| `INSTRUCTION_BUDGET` | 100,000,000 VM instructions | per host entry: the script load, each callback, each monitor pass, each `eval`. The hook fires every `HOOK_GRANULARITY` (10,000) instructions |
+
+A runaway loop ends with the Lua error "mission script exceeded its
+instruction budget" in that entry only; the budget is refilled for the next
+one, and a callback that keeps failing is disabled as for any other error.
+`pcall` cannot swallow the error for long: the budget stays at zero until the
+host refills it. The instruction count is the VM's, so it is the same on every
+peer. MMM's `:load` userdata methods (`Player`) are bound in Rust and are not
+the removed global. The limits are far above what the 78 to 96 installed
+scripts of each mod use (all still run 300 ticks).
+
 ## Determinism
 
 Mission scripts change the simulation, so they must give identical results on
@@ -429,8 +452,9 @@ policies. Native RNG and mission save/resume parity are not claimed.
   `Player.Relation`.
 - [ ] Bind the runtime to `sta_sim` commands so scripts stay deterministic in
   lockstep; deterministic `math.*`.
-- Run every installed `missions/*.lua` headless against stub maps as a
-  regression test.
+- [x] Run every installed mission headless on its own map (LUA-04,
+  `sta_mission/tests/missions.rs`, install-gated): the report lists scripts
+  run, stubbed and failed.
 - [x] Inventory what the stock A1 and A2 mission DLLs call in the engine
   ([MISSION_DLL_API.md](MISSION_DLL_API.md), `tools/mission_dll_inventory.py`):
   A2's `.dsl` scripts call through `g_pSI` (a `ScriptInterface` vtable; 138 of

@@ -218,7 +218,7 @@ mod tests {
     ];
 
     fn state() -> Lua {
-        let lua = Lua::new();
+        let lua = crate::sandbox::new_lua();
         install(&lua, 12345).unwrap();
         lua.globals().set("xs", XS.to_vec()).unwrap();
         lua
@@ -286,8 +286,8 @@ mod tests {
 
     #[test]
     fn same_seed_same_sequence() {
-        let a = Lua::new();
-        let b = Lua::new();
+        let a = crate::sandbox::new_lua();
+        let b = crate::sandbox::new_lua();
         install(&a, 99).unwrap();
         install(&b, 99).unwrap();
         let src = "local t={} for i=1,50 do t[i]=math.random(1000) end return t";

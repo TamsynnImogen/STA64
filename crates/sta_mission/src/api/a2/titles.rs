@@ -115,7 +115,7 @@ mod tests {
     use sta_sim::command::CommandKind;
 
     fn runtime() -> (Lua, Shared) {
-        let lua = Lua::new();
+        let lua = crate::sandbox::new_lua();
         let ctx = Rc::new(RefCell::new(Ctx::new(MissionConfig::default(), 1)));
         install(&lua, &ctx).unwrap();
         (lua, ctx)
