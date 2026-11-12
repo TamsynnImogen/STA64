@@ -256,14 +256,17 @@ pub(crate) fn fire(lua: &Lua, ctx: &Shared, errors: &mut Vec<String>) {
                     .hooks
                     .iter()
                     .find(|h| h.serial == serial && h.active)
-                    .map(|h| (h.function.clone(), h.argument.clone()))
+                    .map(|h| (h.function.clone(), h.argument.clone(), h.id.clone()))
             };
-            let Some((function, argument)) = callback else {
+            let Some((function, argument, hook_id)) = callback else {
                 continue;
             };
             crate::sandbox::refill(lua);
             let result = error(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                function.call::<Value>((lua.create_userdata(Monitor(index, ctx.clone()))?, argument))
+                function.call::<Value>((
+                    lua.create_userdata(Monitor(index, ctx.clone()))?,
+                    super::hook_object(lua, &hook_id, argument)?,
+                ))
             })));
             if let Err(err) = result {
                 let mut c = ctx.borrow_mut();

@@ -349,11 +349,12 @@ pub(crate) fn fire_timers(lua: &Lua, ctx: &Shared, errors: &mut Vec<String>) {
                     timer.version,
                     h.func.clone(),
                     h.value.clone(),
+                    h.id.clone(),
                 ));
             }
         }
     }
-    for (index, hook, serial, version, func, value) in firings {
+    for (index, hook, serial, version, func, value, hook_id) in firings {
         let valid = {
             let c = ctx.borrow();
             c.timers.timers.get(index).is_some_and(|t| {
@@ -369,7 +370,7 @@ pub(crate) fn fire_timers(lua: &Lua, ctx: &Shared, errors: &mut Vec<String>) {
         crate::sandbox::refill(lua);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let handle = lua.create_userdata(Timer(index, ctx.clone()))?;
-            func.call::<MultiValue>((handle, value))
+            func.call::<MultiValue>((handle, super::hook_object(lua, &hook_id, value)?))
         }));
         let err = match result {
             Ok(Ok(_)) => continue,

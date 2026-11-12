@@ -29,7 +29,7 @@ fn accepted_seat_text_runs_before_monitor_and_queues_replayable_presentation() {
         r#"
         owner = { count = 0 }
         TextInput:hook('next', owner, function(self, text, arg)
-            assert(arg == nil)
+            assert(arg.argument == nil)
             self.count = self.count + 1
             UI:addSubtitle(text, 1, 2, 3, false)
         end, nil, '^[Nn][Ee][Xx][Tt]$')

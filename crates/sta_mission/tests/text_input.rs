@@ -42,7 +42,7 @@ fn seat_pattern_nil_argument_and_captured_find_queue_one_command() {
         r#"
         R={name='receiver'}; LOG={}
         TextInput:hook('answer', R, function(self, text, argument)
-            assert(self==R and argument==nil)
+            assert(self==R and argument.argument==nil)
             LOG[#LOG+1]=text
             Player(0).resources.dilithium=17
         end, nil, '^answer%s+%d+$')
@@ -76,8 +76,8 @@ fn event_identity_is_consumed_once_per_tick_and_hooks_run_in_registration_order(
     let mut rt = runtime(
         r#"
         LOG={}; R={}
-        TextInput:hook('a',R,function(_,text,arg) LOG[#LOG+1]='a:'..text..':'..arg end,'A','.')
-        TextInput:hook('b',R,function(_,text,arg) LOG[#LOG+1]='b:'..text..':'..arg end,'B','.')
+        TextInput:hook('a',R,function(_,text,arg) LOG[#LOG+1]='a:'..text..':'..arg.argument end,'A','.')
+        TextInput:hook('b',R,function(_,text,arg) LOG[#LOG+1]='b:'..text..':'..arg.argument end,'B','.')
     "#,
         0,
     );

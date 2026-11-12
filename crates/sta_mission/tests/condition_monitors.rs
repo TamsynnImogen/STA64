@@ -34,7 +34,7 @@ fn initial_true_suppresses_first_true_then_edge_commits_before_callback() {
         end, nil)
         m:hook('hit', MonitorHook.Type.OnTrue, nil, function(instance, arg)
             FIRED = FIRED + 1
-            SEEN = {instance == m, arg == nil, instance.id, instance.state, instance.hooks}
+            SEEN = {instance == m, arg.argument == nil, instance.id, instance.state, instance.hooks}
             Player(0).resources.dilithium = 7
         end, nil)
     "#,
@@ -69,7 +69,7 @@ fn cancellation_and_new_registrations_are_safe_within_a_poll_batch() {
         first = Monitor('first', false, nil, function() return P end, nil)
         other = Monitor('other', false, nil, function() return P end, nil)
         first:hook('one', MonitorHook.Type.OnTrue, nil, function(instance, arg)
-            assert(instance == first and arg == 'caller')
+            assert(instance == first and arg.argument == 'caller')
             put('first')
             first:unhook('later')
             other:stop()
