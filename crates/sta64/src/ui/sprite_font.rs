@@ -429,6 +429,11 @@ pub struct SpriteText {
     pub color: Color,
 }
 
+/// Opt in to scalable Bevy text even when the mounted install has sprite fonts.
+/// Useful for authored UI slots whose bitmap font would shrink below readable ink size.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct ScalableText;
+
 /// The bundle for a [`SpriteText`] (resolved on the next `PostUpdate`).
 pub fn sprite_text(text: impl Into<String>, size: f32, color: Color) -> impl Bundle {
     (
@@ -441,20 +446,29 @@ pub fn sprite_text(text: impl Into<String>, size: f32, color: Color) -> impl Bun
     )
 }
 
+#[allow(clippy::type_complexity)]
 fn resolve_text(
     mut commands: Commands,
     fonts: Res<SpriteFonts>,
-    q: Query<(Entity, &SpriteText), Changed<SpriteText>>,
+    q: Query<
+        (Entity, &SpriteText, Option<&ScalableText>),
+        Or<(Changed<SpriteText>, Added<ScalableText>)>,
+    >,
     children: Query<&Children>,
     images: Query<(), With<ImageNode>>,
     texts: Query<(), With<Text>>,
 ) {
-    for (e, t) in &q {
+    for (e, t, scalable) in &q {
         let existing: Vec<Entity> = children
             .get(e)
             .map(|children| children.iter().collect())
             .unwrap_or_default();
-        let Some(f) = fonts.pick(t.size) else {
+        let font = if scalable.is_some() {
+            None
+        } else {
+            fonts.pick(t.size)
+        };
+        let Some(f) = font else {
             let label = (
                 Text::new(t.text.clone()),
                 TextFont {
@@ -763,6 +777,48 @@ mod tests {
         app.world_mut().get_mut::<SpriteText>(label).unwrap().text = "99".into();
         app.update();
         assert_eq!(app.world().get::<Children>(label).unwrap().len(), 1);
+        assert_eq!(app.world().get::<Children>(label).unwrap()[0], child);
+        assert_eq!(app.world().get::<Text>(child).unwrap().0, "99");
+    }
+
+    #[test]
+    fn scalable_text_uses_ttf_with_valid_sprite_fonts_and_reuses_number_child() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<SpriteFonts>()
+            .add_systems(Update, resolve_text);
+        app.world_mut()
+            .resource_mut::<SpriteFonts>()
+            .fonts
+            .insert("F".into(), test_font());
+        let label = app
+            .world_mut()
+            .spawn(sprite_text("!!", 18.0, Color::WHITE))
+            .id();
+        app.update();
+        assert_eq!(app.world().get::<Children>(label).unwrap().len(), 2);
+        assert!(
+            app.world()
+                .get::<Children>(label)
+                .unwrap()
+                .iter()
+                .all(|e| app.world().get::<ImageNode>(e).is_some())
+        );
+
+        // A late opt-in must resolve without changing SpriteText itself.
+        app.world_mut().entity_mut(label).insert(ScalableText);
+        app.update();
+        let child = app.world().get::<Children>(label).unwrap()[0];
+        assert_eq!(app.world().get::<Children>(label).unwrap().len(), 1);
+        assert!(app.world().get::<ImageNode>(child).is_none());
+        assert_eq!(app.world().get::<Text>(child).unwrap().0, "!!");
+        assert_eq!(
+            app.world().get::<TextFont>(child).unwrap().font_size,
+            bevy::text::FontSize::Px(18.0)
+        );
+
+        app.world_mut().get_mut::<SpriteText>(label).unwrap().text = "99".into();
+        app.update();
         assert_eq!(app.world().get::<Children>(label).unwrap()[0], child);
         assert_eq!(app.world().get::<Text>(child).unwrap().0, "99");
     }

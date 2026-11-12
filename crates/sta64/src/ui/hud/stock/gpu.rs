@@ -268,6 +268,20 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         .unwrap_or_else(|| panic!("{label}: no GPU capture"));
     let dynamic = shot.try_into_dynamic().expect("GPU image conversion");
     let rgba = dynamic.to_rgba8();
+    // A2's first two resource atlas pieces meet at canvas x=256. On a wide
+    // viewport Auto letterboxes both pieces and leaves a black gap here; native
+    // independent-axis drawing must fill this authored join.
+    if profile == UiProfile::Armada2 && size.x as f32 / size.y as f32 > 1.5 {
+        let x = (256.0 * size.x as f32 / stock.canvas.x).round() as u32;
+        let y = (38.0 * size.y as f32 / stock.canvas.y).round() as u32;
+        for x in x.saturating_sub(3)..=(x + 3).min(size.x - 1) {
+            let pixel = rgba.get_pixel(x, y.min(size.y - 1));
+            assert!(
+                pixel[0].max(pixel[1]).max(pixel[2]) > 20,
+                "{label}: black gap at resource atlas join ({x},{y})"
+            );
+        }
+    }
     let coloured = rgba.pixels().filter(|p| p[0] > 20 || p[1] > 20 || p[2] > 20).count();
     eprintln!("{label}: {commands} command images, {resources} resource fields, {coloured} nonblack pixels");
     assert!(coloured > 500, "{label}: HUD did not visibly render");

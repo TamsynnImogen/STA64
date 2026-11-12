@@ -453,15 +453,18 @@ fn spawn_stock(commands: &mut Commands, root: Entity, theme: &Theme, cfg: &HudCo
         let picture = layout.name(picture_key).unwrap_or(fallback);
         let filter = commands.spawn((
             FilterName { station },
+            crate::ui::notices::Tooltip::new(tr(if station { "Stations" } else { "Ships" })),
             stock_rect(rect),
             GuiImage::new(picture),
             ChildOf(chrome),
         )).id();
-        commands.entity(filter).with_child(text(
-            tr(if station { "Stations" } else { "Ships" }),
-            theme.micro_size,
-            theme.text_dim,
-        ));
+        // Tiny authored filter icons (FO) have no room for an extra caption;
+        // their tooltip retains the label without overlapping the neighbouring icon.
+        if rect.h >= 18.0 {
+            commands.entity(filter).with_child(text(
+                tr(if station { "Stations" } else { "Ships" }), theme.micro_size.max(18.0), theme.text,
+            ));
+        }
     }
 }
 

@@ -235,7 +235,7 @@ fn spawn_button(
             GuiButtonLabel,
             Text::new(b.label.clone()),
             TextFont {
-                font_size: (rect.h * 0.17).clamp(9.0, 18.0).into(),
+                font_size: (rect.h * 0.22).clamp(18.0, 22.0).into(),
                 ..default()
             },
             TextColor(theme.text),
@@ -436,7 +436,7 @@ pub(super) fn refresh(
                         children![(
                             Text::new(label),
                             TextFont {
-                                font_size: 14.0.into(),
+                                font_size: 18.0.into(),
                                 ..default()
                             },
                             TextColor(theme.text),

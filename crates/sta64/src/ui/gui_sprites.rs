@@ -387,6 +387,7 @@ pub fn paint(
             let node = ImageNode {
                 image: handle.clone(),
                 rect: Some(*rect),
+                image_mode: bevy::ui::widget::NodeImageMode::Stretch,
                 color: match state {
                     WidgetState::Normal if active.is_some_and(|a| a.0) => colors.active,
                     WidgetState::Normal => colors.normal,
@@ -397,7 +398,7 @@ pub fn paint(
                 ..default()
             };
             if let Some(mut image) = image {
-                if image.image != node.image || image.rect != node.rect || image.color != node.color {
+                if image.image != node.image || image.rect != node.rect || image.color != node.color || image.image_mode != node.image_mode {
                     *image = node;
                 }
             } else {
@@ -433,9 +434,9 @@ pub fn paint(
             &mounted.as_ref().unwrap().0, &mut sprites, &mut images, formats,
         ));
         if let Some((handle, rect)) = found {
-            let node = ImageNode { image: handle, rect: Some(rect), color: panel.color, ..default() };
+            let node = ImageNode { image: handle, rect: Some(rect), color: panel.color, image_mode: bevy::ui::widget::NodeImageMode::Stretch, ..default() };
             if let Some(mut image) = image {
-                if image.image != node.image || image.rect != node.rect || image.color != node.color {
+                if image.image != node.image || image.rect != node.rect || image.color != node.color || image.image_mode != node.image_mode {
                     *image = node;
                 }
             } else {

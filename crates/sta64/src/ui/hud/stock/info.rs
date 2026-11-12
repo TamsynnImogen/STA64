@@ -10,7 +10,7 @@ use super::super::panels::GroupTile;
 use super::layout::{StockLayout, info_variant};
 use crate::ui::gui_sprites::GuiImage;
 use crate::ui::notices::Tooltip;
-use crate::ui::sprite_font::{SpriteText, sprite_text};
+use crate::ui::sprite_font::{ScalableText, SpriteText, sprite_text};
 use crate::ui::theme::{Theme, UiButton, WidgetState};
 
 #[derive(Component, Clone, Copy)]
@@ -53,7 +53,7 @@ fn text(commands: &mut Commands, root: Entity, r: R, value: String, color: Color
     // SpriteFontPlugin replaces the SpriteText entity's Node while resolving glyphs.
     // Keep authored placement on a separate parent that it never rewrites.
     let wrapper = commands.spawn((node(r), Pickable::IGNORE)).id();
-    let mut e = commands.spawn(sprite_text(value, size.min(r.h.max(1.0)), color));
+    let mut e = commands.spawn((Node::default(), sprite_text(value, size.max(18.0), color), ScalableText));
     if let Some(kind) = kind {
         e.insert(kind);
     }
@@ -531,6 +531,9 @@ mod tests {
             .query_filtered::<Entity, With<StockText>>()
             .single(&world)
             .unwrap();
+        assert_eq!(world.get::<SpriteText>(inner).unwrap().size, 18.0);
+        assert!(world.get::<ScalableText>(inner).is_some());
+        assert!(world.get::<Node>(inner).is_some());
         let wrapper = world.get::<ChildOf>(inner).unwrap().parent();
         assert_eq!(world.get::<ChildOf>(wrapper).unwrap().parent(), root);
         // SpriteFontPlugin::resolve_text replaces this inner Node with glyph dimensions.
