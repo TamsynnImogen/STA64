@@ -7,6 +7,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 ## Needs your check
 
+- [?] UI-18 resource colour correction: compare Classic resource numbers with original Armada II (crew green, officers white, dilithium pale cyan, latinum yellow, metal grey); explicit `resource_N_color` overrides still win. Check the new candidate launcher and settled FPS; parent #371 remains open.
+
 - [?] Claimed bug #340: with artillery, check that a target inside weapon range but outside all allied sensors receives no new shots. Bring an allied scout into sight: fire should start; remove the scout: new fire should stop. Already launched projectiles continue.
 - [?] Claimed bugs #341/#344: while stock, hull, shields or build progress change, check that the HUD stays continuously visible. Mobile builders have no Rally; yards do. Unarmed, point-defence-only and authored `canAttack=0` actors have no Attack. Open Formations, choose a supported formation and return with Back; selection changes must clear an unavailable page.
 - [?] Claimed bug #342: watch individual worker bees during a station build. Each welding beam must be off while waiting/travelling/returning and on during its stationary welding phase; check textured beams as well as sparks.

@@ -107,6 +107,25 @@ fn resource_text(feed: &HudFeed, id: usize) -> Option<String> {
     player.resources.get(slot).map(|v| whole(*v).to_string())
 }
 
+/// Stock A2's resource palette (ResourceDisplay::SetResource, 0x50a1f0;
+/// initializer 0x50a220 in the clean 8d3ba6ec executable). Roots' authored
+/// resource_N_color overrides take priority, including white or black.
+fn resource_colour(layout: &StockLayout, id: usize, fallback: Color) -> Color {
+    if let Some(colour) = layout.colour(&format!("resource_{id}_color")) {
+        return colour;
+    }
+    let [r, g, b] = match id {
+        0 => [0.0, 1.0, 0.0],
+        1 => [1.0, 1.0, 1.0],
+        2 => [0.6, 0.9, 1.0],
+        3 => [1.0, 1.0, 0.0],
+        4 => [0.8, 0.8, 0.8],
+        5 => [1.0, 0.0, 0.0],
+        _ => return fallback,
+    };
+    Color::srgb(r, g, b)
+}
+
 fn info_background(variant: usize) -> &'static str {
     match variant {
         0 => "infoLowBackgroundPanel",
@@ -193,7 +212,7 @@ fn spawn_resource(commands: &mut Commands, root: Entity, layout: &StockLayout, f
         let Some(r) = layout.at(origin, &format!("resource_{id}")) else {
             continue;
         };
-        let color = layout.colour(&format!("resource_{id}_color")).unwrap_or(theme.text);
+        let color = resource_colour(layout, id, theme.text);
         text(
             commands,
             root,
