@@ -146,7 +146,7 @@ pub fn run(cfg: LaunchConfig) {
         .insert_resource(teams);
     if cfg.mode() == app::Mode::FrontEnd {
         // INT-M4: no mode flag, so the front end; a match is built from its setup screen.
-        let rts = vfs.read("RTS_CFG.h").and_then(Result::ok).map(|b| sta_assets::cfg_h::CfgH::parse(&String::from_utf8_lossy(&b)));
+        let rts = sta_content::layered::cfg_h(&vfs, "RTS_CFG.h");
         let mut catalogue = map::Catalogue::default();
         let mut screens = frontend::screens::ScreensConfig::default();
         let maps = match game::flow::front_end_data(&vfs, &mut catalogue, cfg.install_root.as_deref()) {
@@ -177,7 +177,7 @@ pub fn run(cfg: LaunchConfig) {
     } else if let Some(m) = &cfg.map {
         let maps = map::browser(&vfs, Some(m.as_str()).filter(|m| !m.is_empty()), browser.mount_summary.clone());
         println!("{} maps visible", maps.maps.len());
-        let rts = vfs.read("RTS_CFG.h").and_then(Result::ok).map(|b| sta_assets::cfg_h::CfgH::parse(&String::from_utf8_lossy(&b)));
+        let rts = sta_content::layered::cfg_h(&vfs, "RTS_CFG.h");
         // A skirmish plays seat 0 unless told otherwise.
         let seat = cfg.seat.or(cfg.skirmish.then_some(0));
         if cfg.skirmish {
