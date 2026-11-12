@@ -174,3 +174,30 @@ and checks an actual built client mission report. Subsequent
 [MDF/Camera_i helpers](A1_START_LOCATIONS.md) and the
 [selected-map seam](SELECTED_MAP_CONVERSION.md) add checked start conversion.
 Original data is not moved or rewritten.
+
+## Writer and light colours (CON-38, CON-41)
+
+`sta_bzn::write::write` writes a map that has `Map::a1` (crate `a1/write.rs`) in
+the layout above, replacing `WriteError::Armada1`. It reads its own output back
+and returns only bytes that reproduce the `Map`. Not written, by design: the upper
+24 bits of each tag (zero; the native readers compare the type byte), padding
+after a text's NUL (zero), and the native class payload between placements (CON-40),
+except a light's colour shape. A resized map is written with its source bounds and
+positions mapped back; where float rounding makes that inexact the write fails
+(`WriteError::A1NotExact`).
+
+Measured on the stock install (`STA64_TEST_A1_BZN_DIR=<A1 bzn dir> cargo test -p
+sta_bzn --lib every_stock_a1_map_round_trips -- --nocapture`): all 49 maps read,
+write and read back to an equal `Map`; every header is byte-equal to the original's
+(CRLF, 256 lower-case hex digits); and each map's records equal the original's,
+byte for byte, apart from those three things. The mission block's reference token
+is now retained (`MapData::mission_reference`; it is non-zero in all 49 maps).
+
+**Light colours.** A `DLight` object's class payload opens, right after the
+placement prefix, with `lightColorRed/Green/Blue` as three floats, then `pos`,
+`velMag`, `velMagInv`, `vel`, `omega`, `accel` and the 32-byte `name`: the order
+the A2 text maps name field by field (`Duel.bzn`). The reader recognises that
+record shape and reports the colour in `MapObject::light_colour`. The stock install
+holds 106 lights, all with it and no other object has it; 72 are not white, so
+`MapDef` conversion now gives A1 maps their authored light colours
+(`crates/sta_content/tests/a1_lights.rs`).

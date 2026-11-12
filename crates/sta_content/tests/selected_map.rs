@@ -103,6 +103,7 @@ fn source_map() -> sta_bzn::Map {
         object_refs: vec![0, 0],
         initial_positions: vec![[10.0, 2.0, 20.0], [90.0, 0.0, 80.0]],
         mission_title: [0; 64],
+        mission_reference: 0,
         paths: vec![
             path("Camera_5", [25.0, 1.0, 25.0]),
             path("Camera_2", [0.0, -7.25, 50.0]),
