@@ -235,7 +235,7 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
     // Check the final text component too: source-label tests alone cannot
     // catch a tint lost on the way to Bevy's actual renderer.
     let defaults = [
-        Color::srgb(0.0, 1.0, 0.0), Color::WHITE,
+        Color::srgb(0.0, 1.0, 0.0), Color::srgb(1.0, 1.0, 1.0),
         Color::srgb(0.6, 0.9, 1.0), Color::srgb(1.0, 1.0, 0.0),
         Color::srgb(0.8, 0.8, 0.8), Color::srgb(1.0, 0.0, 0.0),
     ];
