@@ -2,7 +2,7 @@
 
 use super::*;
 
-const MSHELL_A2: &str = "// Misc. missions here: (and tutorial missions)\r\nsyn_tut1.bzn\r\n-\r\n// Fed missions here:\r\nsyn_fed01.bzn\r\nsyn_fed02.bzn\r\nsyn_fed03.bzn\r\n-\r\nsyn_kl01.bzn\r\n-\r\n-\r\n";
+const MSHELL_A2: &str = "// drills\r\nsyn_tut1.bzn\r\n-\r\n// first fleet\r\nsyn_fed01.bzn // opener\r\nsyn_fed02.bzn\r\nsyn_fed03.bzn\r\n-\r\nsyn_kl01.bzn\r\n-\r\n-\r\n";
 
 const LABELS: &str = "single_player {\n\t+ federation_incomplete\t{Finish the first fleet}\n\t+ klingon_incomplete {}\n\t+ tutorials {Drills}\n\t+ federation_campaign {First Fleet}\n\t+ klingon_campaign {Second Fleet}\n}\nmission_select {\n\t+ syn_fed01.bzn\t{First Light}\n\t+ syn_fed02.bzn\t{Second Wind}\n}\n";
 
@@ -64,12 +64,19 @@ impl MissionHost for FakeHost {
 #[test]
 fn mshell_groups_per_layout() {
     assert_eq!(
-        parse_mshell(MSHELL_A2, ShellLayout::Armada2),
+        parse_mshell(MSHELL_A2, ShellLayout::Armada2).0,
         vec![vec!["syn_tut1.bzn"], vec!["syn_fed01.bzn", "syn_fed02.bzn", "syn_fed03.bzn"], vec!["syn_kl01.bzn"], vec![]]
     );
     let a1 = "f1.bzn\r\nf2.bzn\r\nnone\r\nnone\r\nk1.bzn\r\nnone \r\nnone\r\nb1.bzn\r\nnone";
-    assert_eq!(parse_mshell(a1, ShellLayout::Armada1), vec![vec!["f1.bzn", "f2.bzn"], vec!["k1.bzn"], vec!["b1.bzn"]]);
-    assert_eq!(parse_mshell("-\r\n-\r\n-\r\n-\r\n", ShellLayout::Armada2), vec![Vec::<String>::new(); 4]);
+    let (groups, warn) = parse_mshell(a1, ShellLayout::Armada1);
+    assert_eq!(groups, vec![vec!["f1.bzn", "f2.bzn"], vec!["k1.bzn"], vec!["b1.bzn"]]);
+    assert!(warn.is_some(), "9 lines do not make 5 equal slots");
+    // Five slots of three lines; the empty second slot keeps its place.
+    let a1 = "f1.bzn\r\nf2.bzn\r\nnone\r\nnone\r\nnone\r\nnone\r\nr1.bzn\r\nnone\r\nnone\r\nb1.bzn\r\nb2.bzn\r\nb3.bzn\r\nx1.bzn\r\nnone\r\nnone";
+    let (groups, warn) = parse_mshell(a1, ShellLayout::Armada1);
+    assert_eq!(warn, None);
+    assert_eq!(groups, vec![vec!["f1.bzn", "f2.bzn"], vec![], vec!["r1.bzn"], vec!["b1.bzn", "b2.bzn", "b3.bzn"], vec!["x1.bzn"]]);
+    assert_eq!(parse_mshell("-\r\n-\r\n-\r\n-\r\n", ShellLayout::Armada2).0, vec![Vec::<String>::new(); 4]);
 }
 
 #[test]
@@ -108,7 +115,7 @@ fn legacy_dll_missions_are_reported_with_their_end_calls() {
     let src = MemSource::new()
         .with("mshell.set", "x1.bzn\r\n-\r\n")
         .with("bzn/x1.bzn", "not parsed")
-        .with("missions/x1S.dsl", b"MZ\0\0x1_A.txt\0x1_intro.bik\0?SucceedMission@@YAXMPAD@Z\0?FailMission@@YAXMPAD@Z\0".to_vec());
+        .with("missions/x1S.dsl", b"MZ\0\0x1_A.txt\0x1_intro.bik\0SucceedMission\0FailMission\0".to_vec());
     // The resolver only sees DLLs the map names; give the source a parsed map
     // instead by asking for the DLL through the Map's scripts.
     let map = sta_bzn::Map { scripts: vec!["x1S.dsl".into()], ..Default::default() };
@@ -133,11 +140,11 @@ fn legacy_dll_missions_are_reported_with_their_end_calls() {
 
 #[test]
 fn includes_and_dll_pairs_are_scanned() {
-    assert_eq!(includes(br#"include("A_Monitor.lua") include 'B.lua' x.include = 1"#), ["A_Monitor.lua", "B.lua"]);
-    assert_eq!(legacy_files(&["a2_Tutorial1r.drl".into()]), ["a2_Tutorial1r.drl", "a2_Tutorial1S.dsl"]);
+    assert_eq!(includes(br#"include("A_helper.lua") include 'B.lua' x.include = 1"#), ["A_helper.lua", "B.lua"]);
+    assert_eq!(legacy_files(&["m7r.drl".into()]), ["m7r.drl", "m7S.dsl"]);
     let src = MemSource::new()
-        .with("missions/M.lua", "include(\"M_Monitor.lua\")\n")
-        .with("missions/M_Monitor.lua", "include(\"M.lua\") Objectives:load(\"M_Objectives1.txt\") Mission:finish(true, 0)\n");
+        .with("missions/M.lua", "include(\"M_helper.lua\")\n")
+        .with("missions/M_helper.lua", "include(\"M.lua\") Objectives:load(\"M_Objectives1.txt\") Mission:finish(true, 0)\n");
     let texts = lua_texts(&src, "missions/M.lua");
     assert_eq!(texts.len(), 2, "the cycle back to M.lua is not followed");
 }
@@ -145,7 +152,7 @@ fn includes_and_dll_pairs_are_scanned() {
 #[test]
 fn lua_string_literals_name_files() {
     let lua = br#"Objectives:load( "Co_Objectives1.txt" ) UI:play('intro movie.bik') x = "a.lua""#;
-    assert_eq!(file_names(lua), ["Co_Objectives1.txt", "movie.bik"]);
+    assert_eq!(file_names(lua), ["Co_Objectives1.txt", "intro movie.bik"]);
 }
 
 #[test]
@@ -154,19 +161,55 @@ fn unlock_chain_and_stock_counter_rule() {
     let mut r = CampaignRunner::new(book);
     assert_eq!(r.open_campaigns(), ["tutorials", "federation"], "borg is empty, klingon locked");
     assert_eq!(r.progress.available(&r.book, "federation"), 0..1);
-    assert_eq!(r.record("federation", 0, true), Transition::Next { campaign: "federation".into(), mission: 1 });
+    assert_eq!(r.record("federation", 0, true).unwrap(), Transition::Next { campaign: "federation".into(), mission: 1 });
     assert_eq!(r.progress.state("federation"), CampaignState { reached: 1, complete: false });
     // Replaying an earlier mission moves nothing; a loss moves nothing.
-    assert_eq!(r.record("federation", 0, true), Transition::Next { campaign: "federation".into(), mission: 1 });
-    assert_eq!(r.record("federation", 1, false), Transition::Lost { campaign: "federation".into(), mission: 1 });
+    assert_eq!(r.record("federation", 0, true).unwrap(), Transition::Next { campaign: "federation".into(), mission: 1 });
+    assert_eq!(r.record("federation", 1, false).unwrap(), Transition::Lost { campaign: "federation".into(), mission: 1 });
     assert_eq!(r.progress.state("federation").reached, 1);
-    r.record("federation", 1, true);
+    r.record("federation", 1, true).unwrap();
     assert_eq!(
-        r.record("federation", 2, true),
+        r.record("federation", 2, true).unwrap(),
         Transition::CampaignComplete { campaign: "federation".into(), unlocked: vec!["klingon".into()] }
     );
     assert_eq!(r.progress.state("federation"), CampaignState { reached: 2, complete: true });
     assert!(r.progress.is_open(&r.book, "klingon"));
+}
+
+#[test]
+fn record_rejects_unknown_campaigns_and_missions() {
+    let mut r = CampaignRunner::new(CampaignBook::load(&source(), ShellLayout::Armada2));
+    assert_eq!(r.record("nope", 0, true), Err(StartError::UnknownCampaign("nope".into())));
+    assert_eq!(r.record("federation", 3, true), Err(StartError::NoSuchMission { campaign: "federation".into(), mission: 3 }));
+    assert_eq!(r.progress.state("federation"), CampaignState::default());
+}
+
+#[test]
+fn oversized_counters_are_clamped_not_overflowed() {
+    let book = CampaignBook::load(&source(), ShellLayout::Armada2);
+    let mut p = CampaignProgress::new(&book);
+    p.campaigns.insert("federation".into(), CampaignState { reached: usize::MAX, complete: false });
+    assert_eq!(p.available(&book, "federation"), 0..3);
+    let r = CampaignRunner::with_progress(book, p);
+    assert_eq!(r.progress.state("federation").reached, 2);
+}
+
+#[test]
+fn stem_survives_multibyte_names() {
+    let m = |bzn: &str| CampaignMission {
+        index: 0,
+        bzn: bzn.into(),
+        title: None,
+        map_present: false,
+        script: MissionScript::None,
+        objective_files: vec![],
+        briefing: None,
+        movies: vec![],
+        end_calls: vec![],
+    };
+    assert_eq!(m("dir/M01.BZN").stem(), "M01");
+    assert_eq!(m("\u{e9}\u{e9}").stem(), "\u{e9}\u{e9}");
+    assert_eq!(m("ab\u{e9}").stem(), "ab\u{e9}");
 }
 
 #[test]
@@ -184,7 +227,7 @@ fn give_all_missions_opens_everything() {
 fn progress_round_trips_byte_for_byte() {
     let book = CampaignBook::load(&source(), ShellLayout::Armada2);
     let mut r = CampaignRunner::new(book);
-    r.record("federation", 0, true);
+    r.record("federation", 0, true).unwrap();
     r.progress.carried.insert("fleet name".into(), "Task Force 7 / 100%".into());
     r.progress.carried.insert("empty".into(), String::new());
     let text = r.progress.save();
@@ -196,10 +239,19 @@ fn progress_round_trips_byte_for_byte() {
     assert_eq!(CampaignProgress::restore("sta64-campaign-progress 2\nend\n"), Err(ProgressError::Version(2)));
     assert!(matches!(CampaignProgress::restore("hello"), Err(ProgressError::Format(1, _))));
     assert!(matches!(CampaignProgress::restore(&text.replace("end\n", "")), Err(ProgressError::Format(..))));
-    assert!(matches!(
-        CampaignProgress::restore(&text.replace("campaign federation 1 0", "campaign federation 1 2")),
-        Err(ProgressError::Format(..))
-    ));
+    for (from, to) in [
+        ("campaign federation 1 0", "campaign federation 1 2"),
+        ("campaign federation 1 0", "campaign federation +1 0"),
+        ("campaign federation 1 0", "campaign federation 01 0"),
+        ("campaign federation 1 0", "campaign Federation%41 1 0"),
+        ("fleet%20name", "fleet%20name%2"),
+    ] {
+        assert!(matches!(CampaignProgress::restore(&text.replace(from, to)), Err(ProgressError::Format(..))), "{to}");
+    }
+    let upper = text.replacen(&format!("{:016x}", r.progress.book), &format!("{:016X}", r.progress.book), 1);
+    if upper != text {
+        assert!(matches!(CampaignProgress::restore(&upper), Err(ProgressError::Format(..))));
+    }
     let other = CampaignBook::load(&source().with("mshell.set", "a.bzn\r\n-\r\n"), ShellLayout::Armada2);
     assert!(matches!(CampaignProgress::restore_for(&other, &text), Err(ProgressError::Book { .. })));
 }
@@ -213,6 +265,9 @@ fn runner_plays_mission_one_to_its_win_and_selects_mission_two() {
     assert!(matches!(r.start(&host, "klingon", 0, 1), Err(StartError::Locked { .. })));
     assert!(matches!(r.start(&host, "federation", 1, 1), Err(StartError::Locked { .. })));
     assert!(matches!(r.start(&host, "tutorials", 0, 1), Err(StartError::Blocked(_))));
+    r.start(&host, "federation", 0, 7).unwrap();
+    assert!(matches!(r.start(&host, "federation", 0, 7), Err(StartError::Busy)));
+    assert_eq!(r.abandon(), Some(Transition::Lost { campaign: "federation".into(), mission: 0 }));
 
     let active = r.start(&host, "federation", 0, 7).unwrap();
     let briefing = active.runtime().objective_briefing().expect("script loaded its objectives");
@@ -253,3 +308,17 @@ fn same_seed_same_outcome_tick() {
 }
 
 const TICK_HZ_U64: u64 = sta_sim::TICK_HZ as u64;
+
+#[test]
+fn outcome_follows_lua_truthiness_and_unhooked_finish_is_no_win() {
+    let play = |script: &str| {
+        let src = Arc::new(source().with("missions/syn_fed01.lua", script.to_owned()));
+        let mut r = CampaignRunner::new(CampaignBook::load(&*src, ShellLayout::Armada2));
+        let a = r.start(&FakeHost(src.clone()), "federation", 0, 1).unwrap();
+        a.run(10).expect("mission ends")
+    };
+    assert!(play("MMM.register(function() Mission:finish(1) end)\n").won);
+    assert!(!play("MMM.register(function() Mission:finish(nil) end)\n").won);
+    // A reference kept before the hook: the runtime's finished flag still ends it, as no win.
+    assert!(!play("local finish = Mission.finish\nMMM.register(function() finish(Mission, true) end)\n").won);
+}

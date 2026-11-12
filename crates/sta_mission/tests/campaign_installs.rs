@@ -101,22 +101,27 @@ fn play_first(game: &str, vfs: Vfs) -> CampaignBook {
         .find(|c| runner.book.campaign(c).is_some_and(|c| c.missions.len() >= 2))
         .expect("an open campaign with two missions");
     let first = runner.book.campaign(&campaign).unwrap().missions[0].bzn.clone();
-    let how = match runner.start(&host, &campaign, 0, 1) {
-        Ok(a) => match a.run(HORIZON) {
+    let is_lua = matches!(runner.book.campaign(&campaign).unwrap().missions[0].script, MissionScript::Lua { .. });
+    let how = if is_lua {
+        // A mission that resolves to Lua must load and run cleanly: no fallback.
+        let a = runner.start(&host, &campaign, 0, 1).unwrap_or_else(|e| panic!("[{game}] {campaign} #1 {first}: {e}"));
+        let ended = a.run(HORIZON);
+        assert!(a.runtime().errors().is_empty(), "[{game}] {first}: {:?}", a.runtime().errors());
+        match ended {
             Some(o) => format!("installed script ended it itself (won {})", o.won),
             None => {
-                let errors = a.runtime().errors().len();
                 a.runtime().eval::<()>("Mission:finish(true, 0)").expect("script's own win call");
-                format!("installed script ran {HORIZON} ticks ({errors} errors), win ended through Mission:finish(true, 0)")
+                format!("installed script ran {HORIZON} ticks without errors; win ended by the test through Mission:finish(true, 0)")
             }
-        },
-        Err(StartError::Blocked(why)) => {
-            eprintln!("[{game}] {campaign} #1 {first} blocked: {why}");
-            let a = runner.start(&StandIn(&host), &campaign, 0, 1).expect("stand-in starts on the real map");
-            a.run(HORIZON).expect("stand-in wins");
-            "stand-in script on the real map".into()
         }
-        Err(e) => panic!("[{game}] {campaign} #1: {e}"),
+    } else {
+        match runner.start(&host, &campaign, 0, 1) {
+            Err(StartError::Blocked(why)) => eprintln!("[{game}] {campaign} #1 {first} blocked: {why}"),
+            other => panic!("[{game}] {campaign} #1 {first} has no Lua script yet started: {:?}", other.err()),
+        }
+        let a = runner.start(&StandIn(&host), &campaign, 0, 1).expect("stand-in starts on the real map");
+        a.run(HORIZON).expect("stand-in wins");
+        "stand-in script on the real map".into()
     };
     let tick = runner.active().unwrap().sim().tick;
     let a = runner.active_mut().unwrap();

@@ -60,7 +60,7 @@ use crate::Resolution;
 /// Where campaign data is read from: the mounted game ([`Vfs`]) or files in
 /// memory ([`MemSource`]) for tests and tools.
 pub trait CampaignSource {
-    /// A file by VFS-style path (`mshell.set`, `bzn/a2_fed01.bzn`).
+    /// A file by VFS-style path (`mshell.set`, `bzn/m01.bzn`).
     fn read(&self, path: &str) -> Option<Vec<u8>>;
 
     fn exists(&self, path: &str) -> bool {
@@ -198,7 +198,7 @@ pub enum MissionScript {
 /// The objectives text a mission names, as the runtime parses it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Briefing {
-    /// The file it came from (`objectives/a2_fed01_A.txt`).
+    /// The file it came from (`objectives/m01_goals.txt`).
     pub file: String,
     pub title: String,
     pub text: String,
@@ -210,7 +210,7 @@ pub struct Briefing {
 pub struct CampaignMission {
     /// 0-based position in its campaign.
     pub index: usize,
-    /// The map as `mshell.set` lists it (`a2_fed01.bzn`).
+    /// The map as `mshell.set` lists it (`m01.bzn`).
     pub bzn: String,
     /// `mission_select` title from `label.map`.
     pub title: Option<String>,
@@ -229,10 +229,10 @@ pub struct CampaignMission {
 }
 
 impl CampaignMission {
-    /// The stem of the map (`a2_fed01`).
+    /// The stem of the map (`m01`).
     pub fn stem(&self) -> &str {
         let s = self.bzn.rsplit(['/', '\\']).next().unwrap_or(&self.bzn);
-        s.len().checked_sub(4).filter(|&n| s[n..].eq_ignore_ascii_case(".bzn")).map_or(s, |n| &s[..n])
+        map_stem(s)
     }
 }
 
@@ -278,7 +278,11 @@ impl CampaignBook {
         let labels = src.labels();
         let mut warnings = Vec::new();
         let groups = match src.read("mshell.set") {
-            Some(b) => parse_mshell(&sta_content::strings::decode_text(&b), layout),
+            Some(b) => {
+                let (groups, warn) = parse_mshell(&sta_content::strings::decode_text(&b), layout);
+                warnings.extend(warn);
+                groups
+            }
             None => {
                 warnings.push("no mshell.set: no campaigns".to_owned());
                 Vec::new()
@@ -379,29 +383,68 @@ fn blocked_reason(layout: ShellLayout, m: &CampaignMission) -> Option<String> {
     }
 }
 
-/// `mshell.set`'s groups of `.bzn` names.
-fn parse_mshell(text: &str, layout: ShellLayout) -> Vec<Vec<String>> {
-    let mut groups = Vec::new();
-    let mut cur: Vec<String> = Vec::new();
-    for line in text.lines() {
-        let t = line.trim();
-        if t.is_empty() || t.starts_with("//") {
-            continue;
-        }
-        match layout {
-            ShellLayout::Armada2 if t == "-" => groups.push(std::mem::take(&mut cur)),
-            ShellLayout::Armada1 if t.eq_ignore_ascii_case("none") => {
-                if !cur.is_empty() {
+/// `mshell.set`'s groups of `.bzn` names, and a warning when a group
+/// boundary had to be guessed.
+///
+/// Lines are trimmed and a `//` comment is cut off. Armada II closes each
+/// group with `-`. Armada I pads groups of equal width with `none`: when the
+/// line count divides evenly by the shell's slots, each slot is that many
+/// lines and an all-`none` slot is an empty campaign (kept, so later
+/// campaigns stay in their slots); otherwise groups are split at `none` runs
+/// and the result is flagged (not measured).
+fn parse_mshell(text: &str, layout: ShellLayout) -> (Vec<Vec<String>>, Option<String>) {
+    let lines: Vec<&str> = text
+        .lines()
+        .map(|l| l.split("//").next().unwrap_or("").trim())
+        .filter(|t| !t.is_empty())
+        .collect();
+    let is_none = |t: &str| t.eq_ignore_ascii_case("none");
+    match layout {
+        ShellLayout::Armada2 => {
+            let mut groups = Vec::new();
+            let mut cur: Vec<String> = Vec::new();
+            for t in lines {
+                if t == "-" {
                     groups.push(std::mem::take(&mut cur));
+                } else {
+                    cur.push(t.to_owned());
                 }
             }
-            _ => cur.push(t.to_owned()),
+            if !cur.is_empty() {
+                groups.push(cur);
+            }
+            (groups, None)
+        }
+        ShellLayout::Armada1 => {
+            let slots = layout.slots().len();
+            if !lines.is_empty() && lines.len() % slots == 0 {
+                let width = lines.len() / slots;
+                let groups = lines
+                    .chunks(width)
+                    .map(|c| c.iter().filter(|t| !is_none(t)).map(|t| (*t).to_owned()).collect())
+                    .collect();
+                return (groups, None);
+            }
+            let mut groups = Vec::new();
+            let mut cur: Vec<String> = Vec::new();
+            for t in lines {
+                if is_none(t) {
+                    if !cur.is_empty() {
+                        groups.push(std::mem::take(&mut cur));
+                    }
+                } else {
+                    cur.push(t.to_owned());
+                }
+            }
+            if !cur.is_empty() {
+                groups.push(cur);
+            }
+            let warn = (!groups.is_empty()).then(|| {
+                format!("mshell.set does not split into {slots} equal slots; groups split at `none` lines (an empty campaign would shift later ones)")
+            });
+            (groups, warn)
         }
     }
-    if !cur.is_empty() {
-        groups.push(cur);
-    }
-    groups
 }
 
 fn load_mission(src: &dyn CampaignSource, labels: &LabelMap, index: usize, bzn: &str) -> CampaignMission {
@@ -409,7 +452,8 @@ fn load_mission(src: &dyn CampaignSource, labels: &LabelMap, index: usize, bzn: 
     let map_bytes = src.read(&map_path);
     let map = map_bytes.as_deref().and_then(|b| sta_bzn::parse(b).ok()).unwrap_or_default();
     let exists = |p: &str| src.exists(p);
-    let script = match crate::resolve_with(&exists, labels.get(bzn), bzn, &map) {
+    let map_file = format!("{}.bzn", map_stem(bzn));
+    let script = match crate::resolve_with(&exists, labels.get(&map_file), bzn, &map) {
         Resolution::Lua { path, .. } => MissionScript::Lua { path },
         Resolution::LegacyDll { files } => MissionScript::LegacyDll { files },
         Resolution::None => MissionScript::None,
@@ -443,7 +487,7 @@ fn load_mission(src: &dyn CampaignSource, labels: &LabelMap, index: usize, bzn: 
     CampaignMission {
         index,
         bzn: bzn.to_owned(),
-        title: labels.get(bzn).first().cloned(),
+        title: labels.get(&map_file).first().cloned(),
         map_present: map_bytes.is_some(),
         script,
         objective_files,
@@ -453,8 +497,8 @@ fn load_mission(src: &dyn CampaignSource, labels: &LabelMap, index: usize, bzn: 
     }
 }
 
-/// A Lua mission and every file it `include()`s (the installed Roots
-/// missions end and load objectives in their `*_Monitor.lua` includes).
+/// A Lua mission and every file it `include()`s: a mission may end or load
+/// its objectives from an included file.
 fn lua_texts(src: &dyn CampaignSource, path: &str) -> Vec<Vec<u8>> {
     let mut seen = vec![path.to_ascii_lowercase()];
     let mut todo = vec![path.to_owned()];
@@ -507,6 +551,15 @@ fn legacy_files(files: &[String]) -> Vec<String> {
     out
 }
 
+/// `x.bzn` -> `x` (case-insensitive), any other name unchanged.
+fn map_stem(name: &str) -> &str {
+    let name = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    match name.len().checked_sub(4).and_then(|n| name.get(n..).map(|ext| (n, ext))) {
+        Some((n, ext)) if ext.eq_ignore_ascii_case(".bzn") => &name[..n],
+        _ => name,
+    }
+}
+
 fn contains(hay: &[u8], needle: &[u8]) -> bool {
     hay.windows(needle.len()).any(|w| w == needle)
 }
@@ -522,8 +575,9 @@ fn file_names(bytes: &[u8]) -> Vec<String> {
         let s = s.trim();
         let lower = s.to_ascii_lowercase();
         if (lower.ends_with(".txt") || lower.ends_with(".bik")) && s.len() > 4 && !s.contains("  ") {
-            // A run may carry preceding words (`load( "X.txt"` splits at the quote).
-            out.push(s.rsplit(' ').next().unwrap_or(s).to_owned());
+            // Quotes and brackets end a run, so a Lua literal arrives whole,
+            // spaces included.
+            out.push(s.to_owned());
         }
     }
     out
@@ -630,12 +684,14 @@ impl CampaignProgress {
     /// The missions the shell lists for an open campaign (0..=reached).
     pub fn available(&self, book: &CampaignBook, campaign: &str) -> std::ops::Range<usize> {
         match book.campaign(campaign) {
-            Some(c) if self.is_open(book, campaign) => 0..(self.state(campaign).reached + 1).min(c.missions.len()),
+            Some(c) if self.is_open(book, campaign) => 0..self.state(campaign).reached.saturating_add(1).min(c.missions.len()),
             _ => 0..0,
         }
     }
 
-    /// The versioned text form: deterministic for equal progress.
+    /// The versioned text form: deterministic for equal progress. It carries
+    /// [`CampaignBook::digest`], so progress saved before `mshell.set` (or the
+    /// shell layout) changed is refused by [`CampaignProgress::restore_for`].
     pub fn save(&self) -> String {
         let mut s = format!("{PROGRESS_MAGIC} {PROGRESS_VERSION}\nbook {:016x}\n", self.book);
         for (id, st) in &self.campaigns {
@@ -671,11 +727,14 @@ impl CampaignProgress {
             let f: Vec<&str> = line.split(' ').collect();
             match f.as_slice() {
                 ["book", d] if book.is_none() => {
+                    if d.len() != 16 || !d.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+                        return Err(bad(n, "book digest is not 16 lower-case hex digits"));
+                    }
                     book = Some(u64::from_str_radix(d, 16).map_err(|_| bad(n, "bad book digest"))?);
                 }
                 ["campaign", id, reached, complete] => {
                     let st = CampaignState {
-                        reached: reached.parse().map_err(|_| bad(n, "bad mission counter"))?,
+                        reached: canonical_number(reached).ok_or_else(|| bad(n, "bad mission counter"))?,
                         complete: match *complete {
                             "0" => false,
                             "1" => true,
@@ -710,11 +769,16 @@ impl CampaignProgress {
         if p.book != book.digest() {
             return Err(ProgressError::Book { saved: p.book, current: book.digest() });
         }
+        p.fit(book);
+        Ok(p)
+    }
+
+    /// Every campaign of `book` listed, each counter within its campaign.
+    pub fn fit(&mut self, book: &CampaignBook) {
         for c in &book.campaigns {
-            let st = p.campaigns.entry(c.id.clone()).or_default();
+            let st = self.campaigns.entry(c.id.clone()).or_default();
             st.reached = st.reached.min(c.missions.len().saturating_sub(1));
         }
-        Ok(p)
     }
 }
 
@@ -731,7 +795,18 @@ fn escape(s: &str) -> String {
     if o.is_empty() { "%".to_owned() } else { o }
 }
 
+/// Decimal digits without sign or leading zero.
+fn canonical_number(s: &str) -> Option<usize> {
+    (!s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()) && (s == "0" || !s.starts_with('0'))).then(|| s.parse().ok()).flatten()
+}
+
+/// The inverse of [`escape`], accepting only what `escape` writes.
 fn unescape(s: &str) -> Option<String> {
+    let out = unescape_any(s)?;
+    (escape(&out) == s).then_some(out)
+}
+
+fn unescape_any(s: &str) -> Option<String> {
     if s == "%" {
         return Some(String::new());
     }
@@ -806,6 +881,9 @@ pub enum StartError {
     Locked { campaign: String, mission: usize },
     /// The host or the mission cannot run it (see [`CampaignBook::blocked`]).
     Blocked(String),
+    /// A mission is still active: [`CampaignRunner::finish`] or
+    /// [`CampaignRunner::abandon`] it first.
+    Busy,
 }
 
 impl std::fmt::Display for StartError {
@@ -815,6 +893,7 @@ impl std::fmt::Display for StartError {
             StartError::NoSuchMission { campaign, mission } => write!(f, "{campaign} has no mission {mission}"),
             StartError::Locked { campaign, mission } => write!(f, "{campaign} mission {mission} is locked"),
             StartError::Blocked(why) => write!(f, "cannot run: {why}"),
+            StartError::Busy => write!(f, "a mission is still active"),
         }
     }
 }
@@ -835,7 +914,11 @@ pub struct ActiveMission {
 
 /// Wraps the mission-ending calls so the runner sees the outcome. Runs once
 /// after the script has loaded; names that do not exist yet are skipped, so
-/// the A2 / A1 bindings are picked up as soon as they are merged.
+/// the A2 / A1 bindings are picked up as soon as they are merged. Blind spots:
+/// a call during the script's top-level load, and a function reference the
+/// script kept before the hook; the runtime's own finished flag catches the
+/// latter for `Mission.finish` (counted as a loss, result unknown). Success
+/// follows Lua truthiness.
 const OUTCOME_HOOK: &str = r#"
 local function record(won, delay)
   if rawget(_G, "__sta64_outcome") == nil then
@@ -849,7 +932,7 @@ local function wrap(t, name, fixed)
   rawset(t, name, function(...)
     local a, b = ...
     if a == t then a, b = select(2, ...) end
-    if fixed == nil then record(a == true, b) else record(fixed, a) end
+    if fixed == nil then record(a ~= nil and a ~= false, b) else record(fixed, a) end
     return f(...)
   end)
 end
@@ -907,6 +990,11 @@ impl ActiveMission {
                 self.runtime.eval("local o = rawget(_G, '__sta64_outcome') if o then return o.won, o.delay end");
             if let Ok((Some(won), delay)) = got {
                 self.outcome = Some(MissionOutcome { won, delay: delay.unwrap_or(0.0), tick });
+            } else if self.runtime.finished() {
+                // The script reached the real finish without passing the hook
+                // (it kept a reference from before the hook was installed):
+                // the result is unknown, so it never advances progress.
+                self.outcome = Some(MissionOutcome { won: false, delay: 0.0, tick });
             }
         }
         self.outcome
@@ -939,7 +1027,8 @@ impl CampaignRunner {
     }
 
     /// A runner over saved progress.
-    pub fn with_progress(book: CampaignBook, progress: CampaignProgress) -> CampaignRunner {
+    pub fn with_progress(book: CampaignBook, mut progress: CampaignProgress) -> CampaignRunner {
+        progress.fit(&book);
         CampaignRunner { book, progress, active: None }
     }
 
@@ -953,6 +1042,9 @@ impl CampaignRunner {
 
     /// Start `mission` of `campaign` (an open campaign, a mission reached).
     pub fn start(&mut self, host: &dyn MissionHost, campaign: &str, mission: usize, seed: u64) -> Result<&mut ActiveMission, StartError> {
+        if self.active.is_some() {
+            return Err(StartError::Busy);
+        }
         let c = self.book.campaign(campaign).ok_or_else(|| StartError::UnknownCampaign(campaign.to_owned()))?;
         let m = c
             .missions
@@ -993,15 +1085,29 @@ impl CampaignRunner {
     /// host decides, e.g. an abort as a loss) and say what comes next.
     pub fn finish(&mut self, outcome: MissionOutcome) -> Option<Transition> {
         let a = self.active.take()?;
-        Some(self.record(&a.campaign, a.mission, outcome.won))
+        self.record(&a.campaign, a.mission, outcome.won).ok()
+    }
+
+    /// Drop the active mission unfinished (the player aborts): a loss.
+    pub fn abandon(&mut self) -> Option<Transition> {
+        let a = self.active.take()?;
+        self.record(&a.campaign, a.mission, false).ok()
     }
 
     /// Apply a mission's result to the progress (the stock shell's rule).
-    pub fn record(&mut self, campaign: &str, mission: usize, won: bool) -> Transition {
-        if !won {
-            return Transition::Lost { campaign: campaign.to_owned(), mission };
+    pub fn record(&mut self, campaign: &str, mission: usize, won: bool) -> Result<Transition, StartError> {
+        let count = self
+            .book
+            .campaign(campaign)
+            .ok_or_else(|| StartError::UnknownCampaign(campaign.to_owned()))?
+            .missions
+            .len();
+        if mission >= count {
+            return Err(StartError::NoSuchMission { campaign: campaign.to_owned(), mission });
         }
-        let count = self.book.campaign(campaign).map_or(0, |c| c.missions.len());
+        if !won {
+            return Ok(Transition::Lost { campaign: campaign.to_owned(), mission });
+        }
         let open_before: Vec<String> = self.open_campaigns();
         let st = self.progress.campaigns.entry(campaign.to_owned()).or_default();
         let last = mission + 1 >= count;
@@ -1013,9 +1119,9 @@ impl CampaignRunner {
         }
         if last {
             let unlocked = self.open_campaigns().into_iter().filter(|c| !open_before.contains(c)).collect();
-            Transition::CampaignComplete { campaign: campaign.to_owned(), unlocked }
+            Ok(Transition::CampaignComplete { campaign: campaign.to_owned(), unlocked })
         } else {
-            Transition::Next { campaign: campaign.to_owned(), mission: mission + 1 }
+            Ok(Transition::Next { campaign: campaign.to_owned(), mission: mission + 1 })
         }
     }
 
