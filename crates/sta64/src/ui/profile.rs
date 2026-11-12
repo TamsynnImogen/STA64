@@ -42,8 +42,10 @@ impl UiProfile {
         t.text = Color::srgb_u8(222, 232, 237);
         t.text_dim = Color::srgb_u8(151, 170, 179);
         t.text_off = Color::srgb_u8(95, 112, 122);
-        // Labels on the stock skin's dark pills and fields are light, not LCARS' black on bright.
-        t.text_on = Color::srgb_u8(222, 232, 237);
+        t.text_on = Color::srgb_u8(8, 15, 19);
+        // The menu kit's labels on the stock skin's dark pills and fields are light, not
+        // LCARS' black on bright. (`text_on` stays as it was: the HUD reads it.)
+        t.kit_text_on = Color::srgb_u8(222, 232, 237);
         t.title = accent;
         t.accent = accent;
         t.accent2 = accent2;

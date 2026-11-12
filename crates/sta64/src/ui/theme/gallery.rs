@@ -87,12 +87,12 @@ fn build(commands: &mut Commands, t: &Theme, profile: UiProfile) {
             label(t, "Buttons"),
             (
                 Node { column_gap: Val::Px(t.gap), ..default() },
-                children![button(t, "Engage", 160.0), disabled_button(t, "Disabled", 160.0)],
+                children![stock::kit_button(t, "Engage", 160.0), disabled_button(t, "Disabled", 160.0)],
             ),
             label(t, "Toggles"),
             (
                 Node { column_gap: Val::Px(t.gap), ..default() },
-                children![toggle(t, "On", true, 160.0), toggle(t, "Off", false, 160.0)],
+                children![stock::kit_toggle(t, "On", true, 160.0), stock::kit_toggle(t, "Off", false, 160.0)],
             ),
             label(t, "Check boxes"),
             stock::checkbox(t, "Show tooltips", true),

@@ -26,6 +26,7 @@
 //! [`kit_click`] and [`press`] drive the same paths without a window, for tests and
 //! the bench.
 
+mod buttons;
 mod checkbox;
 mod dropdown;
 mod focus;
@@ -41,6 +42,7 @@ mod tests;
 use bevy::picking::events::PointerClick;
 use bevy::prelude::*;
 
+pub use buttons::{KitLabel, kit_button, kit_toggle};
 pub use checkbox::{Checkbox, CheckboxChanged, checkbox};
 pub use dropdown::{Dropdown, DropdownChanged, DropdownOption, DropdownPopup, MAX_ROWS, dropdown};
 pub use focus::{FocusScope, Focusable, KitCapture, KitFocus, KitKey, focus_order, focusable, is_displayed, kit_key, move_focus, press};
@@ -130,7 +132,7 @@ impl Plugin for KitPlugin {
                     dropdown::hover_highlight,
                     dropdown::sync,
                     text_field::sync,
-                    (checkbox::paint, dropdown::paint, tabs::sync, dropdown::flip_popups, focus::paint_focus),
+                    (checkbox::paint, buttons::paint, dropdown::paint, tabs::sync, dropdown::flip_popups, focus::paint_focus),
                 )
                     .chain()
                     .in_set(KitSet)

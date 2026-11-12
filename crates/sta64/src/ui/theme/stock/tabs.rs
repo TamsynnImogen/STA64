@@ -49,7 +49,7 @@ pub fn tab_bar(theme: &Theme, labels: &[&str], selected: usize) -> impl Bundle {
                     ..default()
                 },
                 BackgroundColor(theme.button),
-                children![(ButtonText, kit_text(theme, theme.caps(s, theme.caps_buttons), theme.text_size, theme.text_on))],
+                children![(ButtonText, kit_text(theme, theme.caps(s, theme.caps_buttons), theme.text_size, theme.kit_text_on))],
             )
         })
         .collect();
@@ -118,7 +118,7 @@ pub(super) fn sync(
         if bg.0 != want {
             bg.0 = want;
         }
-        let ink = if *state == WidgetState::Disabled { theme.text_off } else { theme.text_on };
+        let ink = if *state == WidgetState::Disabled { theme.text_off } else { theme.kit_text_on };
         for kid in kids.iter() {
             if let Ok(mut t) = labels.get_mut(kid)
                 && t.color != ink

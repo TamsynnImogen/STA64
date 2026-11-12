@@ -67,6 +67,16 @@ pub struct List {
 #[derive(Component, Debug, Clone, Copy)]
 pub struct ListItem(pub usize);
 
+/// Plain baked-TTF text, for frames the HUD shares (`panel`): unchanged from before UI-16.
+fn ttf_text(s: impl Into<String>, size: f32, color: Color) -> impl Bundle {
+    (
+        Text::new(s.into()),
+        TextFont { font_size: bevy::text::FontSize::Px(size), ..default() },
+        TextColor(color),
+        Pickable::IGNORE,
+    )
+}
+
 /// Kit text (UI-16): the mod's sprite font of the role this size stands for, the baked
 /// TTF where the mod has none. The colour lives in [`SpriteText`].
 pub(super) fn text(theme: &Theme, s: impl Into<String>, size: f32, color: Color) -> impl Bundle {
@@ -246,7 +256,7 @@ pub fn panel(theme: &Theme, title: &str, content: impl Bundle) -> impl Bundle {
                         Node { flex_grow: 1.0, column_gap: Val::Px(g), height: Val::Px(top), align_items: AlignItems::Center, ..default() },
                         children![
                             bar(theme.accent2, top, false),
-                            text(theme, theme.caps(title, theme.caps_titles), theme.title_size, theme.title),
+                            ttf_text(theme.caps(title, theme.caps_titles), theme.title_size, theme.title),
                             (
                                 Node {
                                     width: Val::Px(theme.cap_w),

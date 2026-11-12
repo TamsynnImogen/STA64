@@ -482,7 +482,7 @@ fn stock_labels_are_light_on_the_dark_pills() {
             let c = c.to_srgba();
             0.2126 * c.red + 0.7152 * c.green + 0.0722 * c.blue
         };
-        assert!(lum(t.text_on) - lum(t.button) > 0.4, "{profile:?}: pill label contrast");
+        assert!(lum(t.kit_text_on) - lum(t.button) > 0.4, "{profile:?}: pill label contrast");
         assert!(lum(t.text) - lum(t.track) > 0.4, "{profile:?}: field text contrast");
     }
 }
@@ -595,4 +595,42 @@ fn a_locked_hud_style_label_still_dims() {
     let lab = app.world_mut().spawn((crate::ui::theme::ButtonText, Text::new("X"), TextColor(theme.text_on), ChildOf(cell))).id();
     app.update();
     assert_eq!(app.world().get::<TextColor>(lab).unwrap().0, theme.text_off);
+}
+
+/// The stock HUD reads these tokens and the shared painter's output for plain-`Text`
+/// labels: this PR must not move them (values as on main).
+#[test]
+fn hud_visible_tokens_and_painter_output_are_unchanged() {
+    let c = Color::srgb_u8;
+    for profile in [UiProfile::Armada2, UiProfile::FleetOps] {
+        let t = profile.theme();
+        assert_eq!(t.text_on, c(8, 15, 19), "{profile:?}");
+        assert_eq!(t.text, c(222, 232, 237), "{profile:?}");
+        assert_eq!(t.text_dim, c(151, 170, 179), "{profile:?}");
+        assert_eq!(t.text_off, c(95, 112, 122), "{profile:?}");
+        assert_eq!(t.panel, c(10, 17, 23), "{profile:?}");
+        assert_eq!(t.button, c(45, 63, 74), "{profile:?}");
+        assert_eq!(t.button_hot, c(68, 91, 104), "{profile:?}");
+        assert_eq!((t.text_size, t.small_size, t.micro_size, t.heading_size), (20.0, 17.0, 14.0, 22.0));
+    }
+    let l = Theme::default();
+    assert_eq!(l.text_on, Color::srgb_u8(0, 0, 0));
+    // The kit's own token is the only thing the stock skins add; LCARS keeps its look.
+    assert_eq!(l.kit_text_on, l.text_on);
+    assert_ne!(UiProfile::Armada2.theme().kit_text_on, UiProfile::Armada2.theme().text_on);
+
+    // The shared painter still colours plain-Text button labels (the HUD's) text_on, or
+    // text_off when the cell is disabled.
+    let mut app = app();
+    app.insert_resource(UiProfile::Armada2.theme());
+    let theme = app.world().resource::<Theme>().clone();
+    let cell = |app: &mut App, state| {
+        let cell = app.world_mut().spawn((state, BackgroundColor(Color::NONE), Node::default())).id();
+        app.world_mut().spawn((crate::ui::theme::ButtonText, Text::new("X"), TextColor(Color::WHITE), ChildOf(cell))).id()
+    };
+    let on = cell(&mut app, WidgetState::Normal);
+    let off = cell(&mut app, WidgetState::Disabled);
+    app.update();
+    assert_eq!(app.world().get::<TextColor>(on).unwrap().0, theme.text_on);
+    assert_eq!(app.world().get::<TextColor>(off).unwrap().0, theme.text_off);
 }

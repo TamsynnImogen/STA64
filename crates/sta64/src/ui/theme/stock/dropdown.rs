@@ -91,7 +91,7 @@ pub fn dropdown(theme: &Theme, options: &[&str], selected: usize, w: f32) -> imp
         BackgroundColor(theme.button),
         BorderColor::all(theme.accent2),
         children![
-            (DropdownLabel, kit_text(theme, shown, theme.text_size, theme.text_on)),
+            (DropdownLabel, kit_text(theme, shown, theme.text_size, theme.kit_text_on)),
             (
                 DropdownArrow,
                 Pickable::IGNORE,
@@ -102,7 +102,7 @@ pub fn dropdown(theme: &Theme, options: &[&str], selected: usize, w: f32) -> imp
                     margin: UiRect::bottom(Val::Px(4.0)),
                     ..default()
                 },
-                BorderColor::all(theme.text_on),
+                BorderColor::all(theme.kit_text_on),
                 UiTransform::from_rotation(Rot2::degrees(45.0)),
             ),
         ],
@@ -328,7 +328,7 @@ pub(super) fn paint(
         if border.top != edge {
             *border = BorderColor::all(edge);
         }
-        let ink = if *state == WidgetState::Disabled { theme.text_off } else { theme.text_on };
+        let ink = if *state == WidgetState::Disabled { theme.text_off } else { theme.kit_text_on };
         for kid in kids.iter() {
             if let Ok(mut t) = labels.get_mut(kid)
                 && t.color != ink
