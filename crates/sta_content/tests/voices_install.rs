@@ -32,7 +32,10 @@ fn every_playable_race_speaks_with_its_own_voices() {
     for m in [None, Some("Fleet Ops 4.0"), Some("STA2 Classic Mod")] {
         let vfs = match Vfs::mount_install(Path::new(&root), m) {
             Ok(v) => v,
-            Err(_) => continue, // not installed here
+            Err(e) => {
+                assert!(m.is_some(), "base Roots must mount: {e}");
+                continue; // the mod is not installed here
+            }
         };
         let label = m.unwrap_or("base Roots");
         let (index, _) = OdfIndex::build(&vfs);
@@ -40,11 +43,15 @@ fn every_playable_race_speaks_with_its_own_voices() {
         let (races, _) = Races::load(&vfs, &index);
         let bank = SoundBank::load(&vfs);
         let mut owned: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut leading_helpers = 0;
         for r in races.playable() {
             // The player's race, as its start units say it.
             let loadout = races.loadout(&db, &r.name);
             let unit_races: Vec<&str> = loadout.units.iter().filter_map(|k| db.unit(*k)).map(|d| d.race.as_str()).collect();
             let dominant = dominant_race(unit_races.iter().copied()).unwrap_or_default();
+            if unit_races.first().is_some_and(|f| norm(f) != norm(&r.name)) {
+                leading_helpers += 1; // the bug: "the first unit's race" is not this player's
+            }
             assert!(
                 norm(dominant) == norm(&r.name),
                 "{label}: race {} starts with {unit_races:?}, whose dominant race is {dominant:?}",
@@ -60,7 +67,7 @@ fn every_playable_race_speaks_with_its_own_voices() {
                 if own.is_empty() {
                     continue; // the event has no sound of this race: it falls back to the shared ones
                 }
-                for variant in 0..own.len().max(1) {
+                for variant in 0..own.len() {
                     let pick = bank.events.pick(ev, Some(dominant), variant).unwrap();
                     assert!(own.contains(&pick.file.as_str()), "{label}: {} {ev} variant {variant} resolved {:?}, not one of its own {own:?}", r.name, pick.file);
                 }
@@ -68,6 +75,7 @@ fn every_playable_race_speaks_with_its_own_voices() {
                 checked += 1;
             }
             eprintln!("{label}: {} {} select events with own sounds, {} files", r.name, checked, files.len());
+            assert!(checked > 0, "{label}: no select event of {} has a sound tagged for it", r.name);
             owned.insert(r.name.clone(), files);
         }
         // Where two races' data for one event are disjoint, they resolve to different files.
@@ -100,6 +108,10 @@ fn every_playable_race_speaks_with_its_own_voices() {
         }
         eprintln!("{label}: {compared} event/race pairs resolve to different files, {shared_by_data} share a file in the data itself");
         assert!(compared > 0);
+        if m.is_none() {
+            // Roots' loadouts open with shared helper units of other races (`all_ai_pod`, `all_start`).
+            assert!(leading_helpers > 0, "{label}: expected start loadouts led by another race's helper unit");
+        }
         assert!(owned.values().any(|f| !f.is_empty()), "{label}: no race has its own select sounds");
     }
 }

@@ -347,6 +347,7 @@ mod tests {
         use bevy::image::CompressedImageFormats;
         let table = SpriteTable::load("sprites.spr", |_| Some(b"sprite_table\n@tmaterial=additive\n@reference=128\nbstar.0 no_such_texture 0 0 16 16\n".to_vec()));
         assert!(table.sprite("bstar.0").is_some());
+        assert_eq!(star_quads(&[("bstar.0".to_owned(), 50, 1.0)], &StarSizing::default(), 1).len(), 50, "stars are generated; only the texture is missing");
         let mut world = World::new();
         let (mut meshes, mut materials, mut images) = (Assets::<Mesh>::default(), Assets::<StandardMaterial>::default(), Assets::<Image>::default());
         let mut cache = crate::render::textures::TextureCache::default();
