@@ -282,6 +282,9 @@ pub struct SkirmishController {
     mining: BTreeMap<EntityId, EntityId>,
     waves: Vec<Wave>,
     wave_size: usize,
+    /// Size of the wave that goes next: drawn from the seeded generator
+    /// between the AIP's minimum and the current ceiling.
+    next_wave: usize,
 }
 
 impl SkirmishController {
@@ -302,6 +305,7 @@ impl SkirmishController {
             mining: BTreeMap::new(),
             waves: Vec::new(),
             wave_size,
+            next_wave: wave_size,
         }
     }
 
@@ -649,6 +653,14 @@ impl SkirmishController {
         }
     }
 
+    /// After a wave goes: the ceiling grows by one, and the next wave's size
+    /// is drawn between the AIP's minimum and the new ceiling.
+    fn raise_ceiling_and_draw(&mut self) {
+        self.wave_size = (self.wave_size + 1).min(self.cfg.params.max_attack);
+        let (lo, hi) = (self.cfg.params.min_attack.max(1), self.wave_size.max(1));
+        self.next_wave = lo + (self.next_u64() % (hi.saturating_sub(lo) + 1) as u64) as usize;
+    }
+
     /// Defence and attack waves.
     fn military(&mut self, tick: Tick, own: &[Own], foes: &[Foe], stations: &[Vec3], home: Vec3, out: &mut Vec<Command>) {
         let ships: Vec<Own> = own.iter().filter(|o| o.role == Role::Warship).copied().collect();
@@ -675,11 +687,14 @@ impl SkirmishController {
             for s in spare {
                 self.go(tick, out, s.id, rally_at);
             }
-            let size = self.wave_size.min(self.cfg.params.max_attack).max(1);
+            let size = self.next_wave.min(self.cfg.params.max_attack).max(1);
             if spare.len() >= size && !starts.is_empty() {
                 let members: BTreeSet<EntityId> = spare.iter().take(size).map(|s| s.id).collect();
                 self.waves.push(Wave { members, goal: 0 });
-                self.wave_size = (size + 1).min(self.cfg.params.max_attack);
+                // The ceiling grows by one a wave up to the AIP's
+                // `max_attack_force`; each wave is anything from the AIP's
+                // `min_attack_force` up to it, so seeded games differ.
+                self.raise_ceiling_and_draw();
             }
         } else {
             for s in guard.iter().chain(spare) {
@@ -719,7 +734,7 @@ impl Controller for SkirmishController {
     fn think(&mut self, view: &WorldView, events: &[SimEvent], out: &mut Vec<Command>) {
         self.absorb(view.tick, events);
         let Some(me) = view.player(self.cfg.player) else { return };
-        if me.eliminated || !(view.tick + Tick::from(self.cfg.player.0)).is_multiple_of(PERIOD) {
+        if me.eliminated || !view.tick.is_multiple_of(PERIOD) {
             return;
         }
         self.plan(view, me, out);

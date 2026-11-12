@@ -1,14 +1,14 @@
 //! AI-vs-AI soak (AI-03): the skirmish AI on both seats of the fake
 //! `two_bases` map, ten seeded games, the first few played twice.
 //!
-//! Limits, stated plainly: `Sim::digest()` hashes the RNG state, which is
-//! seeded from the game seed, so every seed gives a different digest even
-//! though, on the fake map, the seed does not change how the game is played
-//! (all ten games are decided at the same tick by the same seat). The soak
-//! therefore proves ten non-panicking, replayable games, not ten different
-//! ones; the outcome fields (`won_at`, `winners`, `units`) are what show it.
-//! It also shows seat 1 winning every mirror game, which looks like an
-//! order bias (reported on the PR, not asserted).
+//! The seed reaches the games through the AI's seeded draws (wave sizes
+//! between the AIP's `min_attack_force` and `max_attack_force`, the mix of
+//! ships built), so seeds play different games. The soak asserts that:
+//! different decision ticks, and both seats win some of the ten (a winner
+//! that never changes is an ordering bias, as the seat-staggered planning
+//! once was). Note that `Sim::digest()` also hashes the RNG state, so digests
+//! differ per seed regardless; the outcome fields are what show the games
+//! differ.
 //!
 //! Done when: ten seeded games end without panic, and a seed gives the same
 //! digest on every run. "End" means the game plays to a winner inside the
@@ -29,7 +29,7 @@ use sta_sim::{Sim, SimEvent, WorldSource};
 /// The ten soak seeds.
 const SEEDS: [u64; 10] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 /// Bound of the default soak: sim minutes per game.
-const MINUTES: u64 = 45;
+const MINUTES: u64 = 60;
 /// Bound of the long soak.
 const LONG_MINUTES: u64 = 90;
 /// Seeds that are played a second time to compare in the default soak.
@@ -166,6 +166,10 @@ fn play(seed: u64, minutes: u64) -> Outcome {
 
 fn soak(minutes: u64, replayed: usize) {
     let mut undecided = Vec::new();
+    let (mut won_at, mut winners) = (
+        std::collections::BTreeSet::new(),
+        std::collections::BTreeSet::new(),
+    );
     for (i, seed) in SEEDS.into_iter().enumerate() {
         let a = play(seed, minutes);
         eprintln!(
@@ -186,10 +190,23 @@ fn soak(minutes: u64, replayed: usize) {
         if a.won_at.is_none() {
             undecided.push(seed);
         }
+        won_at.insert(a.won_at);
+        winners.extend(a.winners.iter().flatten().copied());
     }
     assert!(
         undecided.is_empty(),
         "games with no winner inside {minutes} sim minutes: seeds {undecided:?}"
+    );
+    assert!(
+        won_at.len() >= SEEDS.len() / 2,
+        "seeds play the same game: only {} distinct decisive ticks in {}",
+        won_at.len(),
+        SEEDS.len()
+    );
+    assert_eq!(
+        winners.len(),
+        2,
+        "one seat wins every game ({winners:?}): an ordering bias"
     );
 }
 
@@ -206,7 +223,7 @@ fn three_minute_digest_is_pinned() {
     let o = play(1, 3);
     assert_eq!(
         (o.digest, o.trace),
-        (1289232927201968193, 14022552443996342725),
+        (17905072880465085464, 16869378545008149703),
         "pinned digest and trace of seed 1 at 3 sim minutes"
     );
 }

@@ -276,3 +276,58 @@ fn welding_rigs_are_skipped_until_the_building_flag_clears() {
     assert_eq!(builds(&run(vec![rig_view(1, true), rig_view(2, false)])), [(EntityId(2), station_key)]);
     assert_eq!(builds(&run(vec![rig_view(1, false)])), [(EntityId(1), station_key)], "the rig is available again once BUILDING clears");
 }
+
+/// Both seats plan on the same ticks. A stagger by seat number once gave seat
+/// 1 every plan one tick before seat 0, which decided mirror games for it.
+#[test]
+fn every_seat_plans_on_the_same_ticks() {
+    let s = GameSetup {
+        players: (0..2)
+            .map(|i| PlayerSetup { id: PlayerId(i), team: TeamId(i), race: "fx".into(), control: Control::Ai(SKIRMISH.into()) })
+            .collect(),
+        ..setup(1, sta_content::fake::db())
+    };
+    let reg = Registry::builtin();
+    let mut sim = Sim::from_setup(&s);
+    start(&mut sim, &s);
+    let mut ctl: Vec<_> = (0..2).map(|i| reg.create_for_seat(SKIRMISH, &s, PlayerId(i)).unwrap()).collect();
+    let mut planned: [BTreeSet<Tick>; 2] = Default::default();
+    for _ in 0..90 {
+        let view = sim.view();
+        let mut all = Vec::new();
+        for (i, c) in ctl.iter_mut().enumerate() {
+            let mut out = Vec::new();
+            c.think(&view, &[], &mut out);
+            if !out.is_empty() {
+                planned[i].insert(view.tick);
+            }
+            all.extend(out);
+        }
+        sim.step(&all);
+    }
+    assert!(!planned[0].is_empty());
+    assert_eq!(planned[0], planned[1]);
+}
+
+/// The next wave's size is drawn from the seed between the AIP's minimum and
+/// the growing ceiling, so seeded games differ; and a seed gives the same
+/// draws every time.
+#[test]
+fn wave_sizes_are_drawn_from_the_seed_within_the_aip_range() {
+    let sizes = |seed: u64| {
+        let s = setup(seed, sta_content::fake::db());
+        let mut c = SkirmishController::new(SkirmishConfig::from_setup(&s, P0).unwrap());
+        let (lo, hi) = (c.cfg.params.min_attack, c.cfg.params.max_attack);
+        (0..12)
+            .map(|_| {
+                c.raise_ceiling_and_draw();
+                assert!((lo..=hi).contains(&c.next_wave), "{} outside {lo}..={hi}", c.next_wave);
+                assert!(c.next_wave <= c.wave_size);
+                c.next_wave
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(sizes(5), sizes(5));
+    let all: BTreeSet<Vec<usize>> = (1..=8).map(sizes).collect();
+    assert!(all.len() > 4, "eight seeds, {} different wave plans", all.len());
+}
