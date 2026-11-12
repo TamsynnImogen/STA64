@@ -2,12 +2,13 @@
 
 Research record, 2026-11-12, Cedric's session. These measurements were taken on
 the original games running on Refit's test bench (`armada2-refit`, `testbench/`),
-in reflink clones of the installs under `/home/cedric/Games/Heroic/`. The installs
-themselves were never written. Where a measurement left a mechanism unclear, the
+in reflink clones of the user's installs. The installs themselves were never
+written. Where a measurement left a mechanism unclear, the
 original executables were decompiled with Ghidra, working on copies. The
 repository holds no game data, frames or decompiled listings. ODF values are quoted
 only as short facts, and every rule below is given as short pseudo-code.
 
+It carries out the measurement plan in [CLASSIC_ENGINE.md](CLASSIC_ENGINE.md) §8.
 The WORKPLAN rows that implement these rules are SIM-33 to SIM-36, and TOOL-16
 covers the parity-tool additions.
 
@@ -100,9 +101,12 @@ too, so build queues were followed through the bank instead.
 |---|---|---|
 | Stock A2 1.1 | 1st at the click (queue was empty); then 12.1 s and 12.1 s apart | 2 launches, 6 of 6 charges |
 | Roots + Classic | 1st at the click; then 12.5 / 12.7 s and 11.5 / 11.8 s apart | 2 launches, 6 of 6 |
-| Roots + FO 4.0 | 57.2, 125.6, 195.8 s: about 69 to 70 s apart | 1 launch, 3 of 3 |
+| Roots + FO 4.0 | 1st at the first click (game time 57.2 s, Instant Action), then 68.4 s and 70.2 s later | 1 launch, 3 of 3 |
 
-The bank value matched the HUD counters on all three engines. Grade: **measured**.
+The bank value matched the HUD counters on all three engines. The FO 4.0 yard
+measured (`fed_antares_yardZ`) sets no `queueInstantDeduct`, the FO producer key
+that makes a producer charge at enqueue, so this measurement does not contradict
+that key. Grade: **measured**.
 
 **Rule (all measured lineages).**
 - A producer's queue is FIFO.
@@ -195,12 +199,12 @@ Roots PD tick (ArmadaL's patched PointDefenseLaser):
   - It keeps a list of ordnance already engaged, cleared when it is switched off.
 
 **Rule for STA64, per lineage.**
-- All lineages:
-  - PD drains `specialEnergyCost` per second while toggled on, and switches off
-    at 0.
-  - Roots: activation needs energy ≥ `specialEnergyCost` (decompiled).
-- Stock A2 1.1: no rate limit.
-- Roots (Classic and the key-absent default): the debt timer above.
+- All lineages: PD drains `specialEnergyCost` per second while toggled on, and
+  switches off at 0 (measured).
+- Stock A2 1.1: no rate limit (measured). Stock intercepted 53 of 55; the two
+  misses were not analysed.
+- Roots (Classic and the key-absent default): the debt timer above (measured and
+  decompiled); activation needs energy ≥ `specialEnergyCost` (decompiled only).
 - FO `ordnancedefenseweapon`: a reset-to-`shotDelay` timer and an engaged list
   (decompiled only).
 
@@ -244,6 +248,11 @@ each shot (all lineages): reload = shotDelay * (1 + U[0, 0.05])
 
 So **0.0 is not stock**. Classic's 0.0 makes specials ready at once. The Roots
 default, key absent or −1, reproduces stock's random initial reload.
+
+The creation rule is decompiled from the generic weapon constructor, so it applies
+to every weapon, but only a special launcher was **measured**; regular weapons are
+not measured. Stock 1.1 has no `initialShotDelayModifier` key; it is a Roots ODF
+key.
 
 **Rule for STA64.** Set the reload timer once, at weapon creation:
 - by default, U[0, 1) × shotDelay;
@@ -303,10 +312,12 @@ Stock A2 1.1:
 - **En route.** No targets of opportunity are engaged.
 - **Assist.** An idle ship near an attacked ally moves in at `combatSpeed`
   whatever its movement autonomy (as measured).
-- **Construction.** A construction ship holds fire while building.
+- **Construction.** A construction ship holds fire while it flies to the site
+  and builds; transit and building were not separated.
 
 Roots:
-- **Far attack.** Use `impulseSpeed` while the target is beyond weapon range.
+- **Far attack.** Travel at `impulseSpeed` all the way, closing right onto the
+  target. What happens inside weapon range beyond that was not separated.
 - **En route.** Engage targets of opportunity.
 - **Assist.** Only high movement autonomy moves in to assist, at `impulseSpeed`.
 - **Construction.** A construction ship fires while building.
@@ -315,6 +326,8 @@ Default autonomies come from `RTS_CFG.h`.
 - Decompiled defaults: movement 1, special weapon 0.
 - Roots and FO 4.0 set movement 1, special 2.
 - Classic Enhanced sets 1 and 1.
+- Plain Classic sets neither, so the defaults 1 and 0 apply (the state marks read
+  1 and 0 on Classic).
 
 ---
 
@@ -333,3 +346,5 @@ Default autonomies come from `RTS_CFG.h`.
   1.3 s on Roots. A key-event mark on the bench would tighten it.
 - **Roots, `initialShotDelayModifier` > 0** (e.g. 1.0) was not run. It is
   decompiled only.
+- **Regular weapons' initial reload** is decompiled only; M2 measured a special.
+- **FO 3.2.7** was not measured for any question.

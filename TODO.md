@@ -6,6 +6,7 @@ this file is what's being worked on now and what needs checking by eye.
 Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your check in game/viewer
 
 ## Needs your check
+- [?] Engine measurements open point: on stock A2 1.1, an idle ship on **low** movement autonomy assisted an attacked ally when the autonomy was set through the engine setter. Set low autonomy with the HUD's autonomy buttons and check whether it still moves in to help; SIM-36 waits on this ([ENGINE_MEASUREMENTS.md](docs/research/ENGINE_MEASUREMENTS.md))
 
 - [?] SIM-23 pathfinding: in a fresh skirmish on a map with nebulae and planets (e.g. a stock A2 map with a Metreon/fluidic nebula, an FO map with blocking-field walls), order a ship straight across a nebula, through a planet, and into a walled-off spot. It should fly round the nebula and planet (never entering), go through gaps in barriers, and stop at the nearest reachable point when the goal is walled in; an order *into* a nebula should still fly straight in. Compare the routes with stock A2/FO behaviour, and watch settled FPS with a large fleet ordered across a nebula.
 
@@ -194,10 +195,8 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [ ] LCARS widget gallery looks right: `cargo run -p sta64 -- --ui-gallery` (pills, elbows, hover/press, slider drag); screenshot it as the local baseline ([STYLE.md](crates/sta64/src/ui/theme/STYLE.md))
 - [ ] Notices and tooltips look right: in a bench match a destroyed own unit shows a red "<Unit> destroyed" line at the top centre that fades after 5 s, an enemy loss a plain one, and a `Tooltip` node shows its text 0.35 s after the pointer rests ([notices.rs](crates/sta64/src/ui/notices.rs), UI-10)
 - [ ] In-match text (UI-15): start a skirmish as a non-default race and kill a ship; the notice appears top centre, clear of the info text at the top left, and the info panel's race field names the race you play, not the map's default ([notices.rs](crates/sta64/src/ui/notices.rs), [map/mod.rs](crates/sta64/src/map/mod.rs))
-
-- [ ] Engine measurements open point: stock A2 1.1 idle ship on **low** movement autonomy assisted an attacked ally when autonomy was set through the engine setter; confirm with the HUD's autonomy buttons on the bench before SIM-36 makes it final ([ENGINE_MEASUREMENTS.md](docs/research/ENGINE_MEASUREMENTS.md))
-- [ ] Engine measurements open point: decompile where stock and Roots choose impulse vs combat speed for an attack order (only the effect is measured; SIM-36)
-- [ ] Engine measurements open point: M1, M2 and M4 on Roots + FO 4.0 (only M3 measured; FO `ordnancedefenseweapon` is decompiled only; SIM-34)
+- [ ] Engine measurements, not measured yet: where stock and Roots choose impulse vs combat speed for an attack order (only the effect is measured; SIM-36) ([ENGINE_MEASUREMENTS.md](docs/research/ENGINE_MEASUREMENTS.md))
+- [ ] Engine measurements, not measured yet: M1, M2 and M4 on Roots + FO 4.0 (only M3 measured; FO `ordnancedefenseweapon` decompiled only; SIM-34)
 
 ## Done recently
 
