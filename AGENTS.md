@@ -141,7 +141,28 @@ stop; changing a decision is a PR to that file approved by Tammy and Cedric.
 The repository is built on people's own machines, often by several sessions
 at once. Bevy makes `sta64` heavy.
 
-- Every cargo command runs at low priority with two jobs:
+- Run cargo through the wrapper, which encodes the machine-wide policy (low
+  priority, a lock per build class so heavy builds queue instead of piling up,
+  `--jobs 2`, `CARGO_INCREMENTAL=0`, `CARGO_PROFILE_DEV_DEBUG=0`, and sccache
+  when it is installed):
+
+  ```sh
+  tools/agent-cargo check -p sta_sim          # light crate
+  tools/agent-cargo check -p sta64            # heavy (Bevy), inferred
+  tools/agent-cargo check --workspace --all-targets   # shared check target dir
+  tools/agent-cargo --dry-run test -p sta_sim # print lock, env, command; run nothing
+  ```
+
+  `LOCK-BUSY` (exit 75) means another agent holds the lock for longer than
+  `STA64_LOCK_WAIT` seconds (default 540, under an agent tool call's
+  10-minute limit): wait and run it again. Other knobs: `STA64_LOCK_DIR`,
+  `STA64_SCCACHE=0`, `SCCACHE_DIR`, and the opt-in `STA64_MOLD=1`; see the
+  header of `tools/agent-cargo`. Its self-test is
+  `tools/agent-cargo-selftest.sh` (no build). CI does not use the wrapper.
+  Without the wrapper (or where `flock` is missing), the plain form is the
+  fallback:
+
+  Every cargo command runs at low priority with two jobs:
   `renice -n 19 -p $$ >/dev/null && cargo test -p sta_sim --jobs 2`.
   (`nice`/`ionice` prefixes are refused by Claude Code's worktree guard;
   `renice` on the shell is not.)
