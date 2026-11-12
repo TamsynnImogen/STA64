@@ -92,13 +92,18 @@ impl UserData for Player {
             });
             // The limit is a typed rule (RTS_CFG.h SINGLE_PLAYER_OFFICER_LIMIT /
             // MP_OFFICER_LIMIT) held by the economy; the sim has no edit to
-            // change it per player. Installed missions assign the rule's own
-            // value (`Player(1).maxOfficers = 199999`), which changes nothing;
-            // any other value is recorded as unsupported, never pretended.
+            // change it per player. Installed missions assign a value the rules
+            // define (`Player(1).maxOfficers = 199999` is
+            // SINGLE_PLAYER_OFFICER_LIMIT), which changes nothing; any other
+            // value is recorded as unsupported, never pretended.
             f.add_field_method_set(name, move |_, p, value: f64| {
                 let mut c = p.ctx.borrow_mut();
                 let current = c.view.player(p.id).map(|v| v.officers[1].to_f32() as f64);
-                if current != Some(value) {
+                let from_rules = c
+                    .content
+                    .as_ref()
+                    .is_some_and(|db| db.rules().officer_limits.iter().any(|l| f64::from(l.value) == value));
+                if current != Some(value) && !from_rules {
                     c.unsupported(&format!("Player.{name} = x (differs from the rule; needs a sim officer-limit edit)"));
                 }
                 Ok(())
