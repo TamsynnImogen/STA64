@@ -302,6 +302,7 @@ to match run "<scenario>"`, `Expect mark "fire.start obj=shooter" by tick 90`,
   Expect [no] mark "KIND k=v ..." (by tick N | at tick N | between ticks A and B)
   Expect "OBJ" FIELD [at tick N] is CMP          hull hull.max shield[.fore|.aft|.port|.starboard] shield.max speed x y z
   Expect "OBJ" is within R of (X Y Z | "OBJ2") [at tick N]
+  Expect "OBJ" was never within R of X Y Z            (every tick run so far)
   Expect "OBJ" exists | does not exist [at tick N]
   Expect player P resource NAME [at tick N] is CMP   dilithium latinum metal biomatter
   Expect player P is [not] eliminated [at tick N]

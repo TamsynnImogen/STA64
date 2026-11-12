@@ -38,6 +38,7 @@ mod unit_status_tests;
 pub mod present;
 pub mod production;
 mod avoid;
+mod nav;
 mod regions;
 pub mod replay;
 pub mod setup;
@@ -135,6 +136,8 @@ pub struct Sim {
     victory: victory::Victory,
     /// Special energy and cloaks (SIM-14); in the digest once any exists.
     specials: specials::Specials,
+    /// Path planner grids and fields (SIM-23): a memo, not in the digest.
+    nav: nav::Cache,
 }
 
 impl Sim {
@@ -159,6 +162,7 @@ impl Sim {
             production: Default::default(),
             victory: Default::default(),
             specials: Default::default(),
+            nav: Default::default(),
         }
     }
 
@@ -297,9 +301,11 @@ impl Sim {
     fn advance(&mut self) -> TickOutput {
         self.hold_welding_builders();
         self.constrain_targets();
+        let routed = self.route_orders();
         let held = self.steer_around();
         self.step_kinematics();
         self.restore_targets(held);
+        self.restore_targets(routed);
         self.separate_units();
         self.push_out_of_fields();
         if let Some(db) = self.content.clone() {

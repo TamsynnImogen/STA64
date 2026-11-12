@@ -2,6 +2,7 @@
 
 use crate::{Races, Warning};
 use sta_assets::cfg_h::CfgH;
+use sta_core::Fixed;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OfficerLimit {
@@ -15,6 +16,108 @@ pub struct OfficerLimit {
 pub struct Rules {
     pub officer_limits: Vec<OfficerLimit>,
     starts: Vec<StartRule>,
+    /// `RTS_CFG.h`'s path-planner block, when the header has any of its keys.
+    pathing: Option<PathingRules>,
+}
+
+/// The path planner's terrain costs (SIM-23), from `RTS_CFG.h`'s PATHING
+/// block. Missing keys keep the stock value, which Armada II and Fleet
+/// Operations ship identically. Costs are on the scale of
+/// `DEFAULT_TERRAIN_VALUE`; `IMPASSABLE_TERRAIN` marks a blocked cell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PathingRules {
+    /// `USE_PATH_PLANNING` (1).
+    pub enabled: bool,
+    /// `DEFAULT_TERRAIN_VALUE` (100): open space.
+    pub default_cost: i64,
+    /// `IMPASSABLE_TERRAIN` (-1).
+    pub impassable: i64,
+    /// `OFF_MAP_PATHING_COST` (90000): outside the map, when a unit may go there.
+    pub off_map_cost: i64,
+    /// `NEBULAE_PATHING_COST` (300): a nebula whose ODF sets no `pathing_cost`.
+    pub nebula_cost: i64,
+    /// `NEBULAE_PATHING_SAFETY_COEFFICIENT` (1.8): nebula radius multiplier.
+    pub nebula_safety: Fixed,
+    /// `COLLISION_SAFETY_MARGIN` (1.2): how much wider than reality solids are.
+    pub collision_margin: Fixed,
+    /// `HIGHEST_QUADTREE_GRID_RESOLUTION` (50): the finest planner cell, units.
+    pub resolution: Fixed,
+}
+
+impl Default for PathingRules {
+    fn default() -> Self {
+        PathingRules {
+            enabled: true,
+            default_cost: 100,
+            impassable: -1,
+            off_map_cost: 90_000,
+            nebula_cost: 300,
+            // As the header's `float` reads (f32), so stock and absent agree.
+            nebula_safety: Fixed::from_f64(1.8f32 as f64),
+            collision_margin: Fixed::from_f64(1.2f32 as f64),
+            resolution: Fixed::from_int(50),
+        }
+    }
+}
+
+impl PathingRules {
+    const KEYS: [&'static str; 8] = [
+        "USE_PATH_PLANNING",
+        "DEFAULT_TERRAIN_VALUE",
+        "IMPASSABLE_TERRAIN",
+        "OFF_MAP_PATHING_COST",
+        "NEBULAE_PATHING_COST",
+        "NEBULAE_PATHING_SAFETY_COEFFICIENT",
+        "COLLISION_SAFETY_MARGIN",
+        "HIGHEST_QUADTREE_GRID_RESOLUTION",
+    ];
+
+    fn from_cfg(cfg: &CfgH, warnings: &mut Vec<Warning>) -> Option<Self> {
+        if !Self::KEYS.iter().any(|k| cfg.raw(k).is_some()) {
+            return None;
+        }
+        let stock = Self::default();
+        let mut bad = |key: &str| warnings.push(Warning::new("RTS_CFG.h", format!("{key} is not a number; the stock value is used")));
+        let mut int = |key: &str, default: i64| match cfg.raw(key) {
+            None => default,
+            Some(_) => cfg.i64(key).or_else(|| cfg.f32(key).filter(|v| v.is_finite()).map(|v| v.round() as i64)).map(|v| v.clamp(-1_000_000_000, 1_000_000_000)).unwrap_or_else(|| { bad(key); default }),
+        };
+        let enabled = int("USE_PATH_PLANNING", 1) != 0;
+        let default_cost = int("DEFAULT_TERRAIN_VALUE", stock.default_cost);
+        let impassable = int("IMPASSABLE_TERRAIN", stock.impassable);
+        let off_map_cost = int("OFF_MAP_PATHING_COST", stock.off_map_cost);
+        let nebula_cost = int("NEBULAE_PATHING_COST", stock.nebula_cost);
+        let mut real = |key: &str, default: Fixed| match cfg.raw(key) {
+            None => default,
+            Some(_) => match cfg.f32(key).filter(|v| v.is_finite() && *v >= 0.0 && *v <= 1.0e6) {
+                Some(v) => Fixed::from_f64(v as f64),
+                None => { warnings.push(Warning::new("RTS_CFG.h", format!("{key} is not a number; the stock value is used"))); default }
+            },
+        };
+        Some(PathingRules {
+            enabled,
+            default_cost,
+            impassable,
+            off_map_cost,
+            nebula_cost,
+            nebula_safety: real("NEBULAE_PATHING_SAFETY_COEFFICIENT", stock.nebula_safety),
+            collision_margin: real("COLLISION_SAFETY_MARGIN", stock.collision_margin),
+            resolution: real("HIGHEST_QUADTREE_GRID_RESOLUTION", stock.resolution),
+        })
+    }
+
+    fn hash_values(&self) -> Vec<u64> {
+        vec![
+            u64::from(self.enabled),
+            self.default_cost as u64,
+            self.impassable as u64,
+            self.off_map_cost as u64,
+            self.nebula_cost as u64,
+            self.nebula_safety.to_bits() as u64,
+            self.collision_margin.to_bits() as u64,
+            self.resolution.to_bits() as u64,
+        ]
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,6 +154,7 @@ impl Rules {
                 ));
             }
         }
+        rules.pathing = PathingRules::from_cfg(&cfg, &mut warnings);
         (rules, warnings)
     }
 

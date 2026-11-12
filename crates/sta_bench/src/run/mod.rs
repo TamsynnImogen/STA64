@@ -14,6 +14,8 @@
 mod bench;
 pub mod check;
 mod json;
+/// Maps and the nebula for the pathfinding scenes (SIM-23).
+mod nav;
 pub mod marks;
 mod report;
 
@@ -67,7 +69,13 @@ impl RunConfig {
         .into_iter()
         .map(|(a, b)| (a.to_owned(), b.to_owned()))
         .collect();
-        let maps = [("fx_two_bases".to_owned(), sta_content::fake::two_bases()), ("fx_field".to_owned(), field_map())]
+        let maps = [
+            ("fx_two_bases".to_owned(), sta_content::fake::two_bases()),
+            ("fx_field".to_owned(), field_map()),
+            ("fx_nebula_cross".to_owned(), nav::nebula_map()),
+            ("fx_barrier".to_owned(), nav::barrier_map()),
+            ("fx_enclosed".to_owned(), nav::enclosed_map()),
+        ]
             .into_iter()
             .collect();
         RunConfig {
@@ -654,7 +662,7 @@ pub fn fake_content() -> ContentDb {
     let mut world = UnitDef::new("fx_world", "planet");
     world.model = "fx_world".into();
     world.radius = Fixed::from_int(400);
-    b = b.unit(bulk).unit(world);
+    b = b.unit(bulk).unit(world).unit(nav::metreon());
     b.unit(dread).tech_tree(tree).build().expect("fake content plus a rig is consistent")
 }
 
