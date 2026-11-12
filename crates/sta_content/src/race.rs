@@ -406,6 +406,30 @@ pub fn skirmish_races(races: &Races, db: &ContentDb) -> Vec<String> {
     out
 }
 
+/// The race a player's forces belong to: the `race` key that most of `unit_races` share
+/// (empty values are ignored; a tie goes to the one seen first).
+///
+/// A start loadout is not all of one race: Roots' `standardUnits` begin with the shared
+/// helper units `all_ai_pod` (race `borg`) and `all_start` (race `species8472`) for every
+/// race, so "the race of the first unit" names Borg for a Federation player. What the player
+/// chose is what its units mostly are, and that is read from their ODFs.
+pub fn dominant_race<'a>(unit_races: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
+    let mut counts: Vec<(&str, usize)> = Vec::new();
+    for r in unit_races.into_iter().filter(|r| !r.trim().is_empty()) {
+        match counts.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case(r)) {
+            Some((_, n)) => *n += 1,
+            None => counts.push((r, 1)),
+        }
+    }
+    let mut best: Option<(&str, usize)> = None;
+    for (r, n) in counts {
+        if best.is_none_or(|(_, b)| n > b) {
+            best = Some((r, n));
+        }
+    }
+    best.map(|(r, _)| r)
+}
+
 #[cfg(test)]
 #[path = "race/eligibility_tests.rs"]
 mod eligibility_tests;
