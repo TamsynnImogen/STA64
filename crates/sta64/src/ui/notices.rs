@@ -647,7 +647,7 @@ mod tests {
         app.update();
         let e = app.world_mut().spawn(Tooltip::new(crate::ui::i18n::tooltip_key("Source tip")).verbose("GUI_DETAILS")).id();
         app.insert_resource(Strings::from_pairs("english", &[("Source tip", "Short tip"), ("GUI_DETAILS", "Detailed tip")]));
-        let words = |app: &mut App| app.world_mut().query_filtered::<&Text, With<TipText>>().single(app.world()).unwrap().0.clone();
+        let words = |app: &mut App| app.world_mut().query_filtered::<&SpriteText, With<TipText>>().single(app.world()).unwrap().text.clone();
         *app.world_mut().resource_mut::<TipHover>() = TipHover { target: Some(e), rest: TIP_SHORT_SECS };
         app.update();
         assert_eq!(words(&mut app), "Short tip");
