@@ -121,7 +121,7 @@ Follow-up source review found no confirmed defect.
 CON-26 validates known typed metadata, the type byte, placement prefixes,
 transforms, labels/teams, mission data and bounds against original GOG/native
 and A2FO evidence. Native class payload between placements is not a saved-state
-importer; binary per-object light colours also need further work.
+importer; binary per-object light colours are read (CON-41) and the map body is written back (CON-38), see [the import contract](A1_BZN_IMPORT.md).
 The selected-map adapter maps precise Camera_i first points to existing
 zero-based player slots and shared Fixed/heading conversion. MDF preview grid
 positions are not used as world positions. Native missing-path fallbacks and
