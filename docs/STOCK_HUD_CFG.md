@@ -241,8 +241,9 @@ Their GUI SPR names are `hull`, `shields`, `crew_amt` and `energy_amt`, resolved
 through the selected GUI table then `gui_global.spr`. Zero-area rectangles
 suppress their own element. The authored CFG scales independently on both axes.
 
-Hull, shields and energy show rounded whole percentages with the native `%`
-suffix; crew shows actual current crew. Percentages derive from live current/max
+Hull, shields and energy show rounded whole percentages as bare numbers,
+without a `%` suffix, following the user's stock reference correction; crew
+shows actual current crew. Percentages derive from live current/max
 pools, not definition capacities. Unknown
 unit pools stay blank with their icons hidden; known zero stays zero. Hover
 uses the authored `unitName` type caption; the selected-single fallback retains
@@ -293,6 +294,16 @@ actor state near `0x4ed3cf`. Status colour selection is `0x4ec5d0`, with race
 threshold defaults loaded at `0x48b52b..0x48b558`. White icon art requires tint.
 Private native receipts are in `STA64-artifacts/probes/unit-status/native-infobar*`.
 This is static original-A2 evidence, not original Roots runtime acceptance.
+The current bare-number presentation follows the supplied stock reference and
+user direction; the original literal above is not used as a display requirement.
+
+Stock wireframes opt into linear texture filtering when resized. The sampler
+is isolated in page and resolved-art caches; other GUI pictures and sprite
+fonts retain their existing sampling. CFG rectangles and SPR crops are unchanged.
+World selection gauges use projected model bounds with two-pixel height and
+gap defaults. Optional `selectionGaugeHeight` and `selectionGaugeGap` in the
+resolved race GUI CFG are STA64-only pixel overrides (zero height disables
+gauges); these are not claimed as original-A2 commands. See [display evidence](DISPLAY_FIDELITY.md).
 
 Text/icon nodes persist across hover and value changes, following their HUD
 root visibility. The integrated checks and optimized launcher are recorded in

@@ -96,7 +96,7 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
     };
     let source = hover.or_else(|| hud_feed.selected.first().copied()).map(|id| hud_feed.view.unit(id).unwrap());
     let mut expected_bar = Vec::new();
-    let percent = |now: i128, max: i128| (max > 0).then(|| format!("{}%",(now * 200 + max).div_euclid(max * 2)));
+    let percent = |now: i128, max: i128| (max > 0).then(|| (now * 200 + max).div_euclid(max * 2).to_string());
     let whole = |value: Fixed| { let bits=value.to_bits(); if bits>0 { (bits/Fixed::ONE.to_bits()).max(1) } else { bits/Fixed::ONE.to_bits() } };
     if let Some(unit) = source {
         use super::infobar::InfoBarField::{Name,Hull,Shields,Crew,Energy};

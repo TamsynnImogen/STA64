@@ -16,9 +16,9 @@ use sta_assets::a2fmt::spr::{Skip, Sprite, SpriteTable};
 use crate::ui::theme::{UiButton, WidgetState};
 use crate::viewer::Mounted;
 
-type PageKey = (String, Option<[u8; 3]>);
+type PageKey = (String, Option<[u8; 3]>, GuiImageSampling);
 type PageImage = (Handle<Image>, UVec2);
-type ArtKey = (Vec<String>, usize, GuiImageSource, bool);
+type ArtKey = (Vec<String>, usize, GuiImageSource, bool, GuiImageSampling);
 type ResolvedArt = Option<(Handle<Image>, Rect)>;
 
 #[derive(Resource, Default)]
@@ -82,6 +82,24 @@ pub enum GuiImageSource {
     SharedSprites,
 }
 
+/// Texture filtering for one GUI picture. Buttons and ordinary pictures keep
+/// the existing crisp sampling unless a consumer explicitly opts in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum GuiImageSampling {
+    #[default]
+    Nearest,
+    Linear,
+}
+
+impl GuiImageSampling {
+    fn sampler(self) -> ImageSampler {
+        match self {
+            Self::Nearest => ImageSampler::nearest(),
+            Self::Linear => ImageSampler::linear(),
+        }
+    }
+}
+
 /// A static SPR picture. `names` are ordered prefix candidates; `frame` selects
 /// the native `<prefix>.<frame>` entry when one exists.
 #[derive(Component)]
@@ -90,12 +108,13 @@ pub struct GuiImage {
     pub frame: usize,
     pub color: Color,
     pub source: GuiImageSource,
+    pub sampling: GuiImageSampling,
 }
 
 #[allow(dead_code)] // Builder methods are also exercised by isolated art fixtures.
 impl GuiImage {
     pub fn new(name: impl Into<String>) -> Self {
-        Self { names: vec![name.into()], frame: 0, color: Color::WHITE, source: GuiImageSource::Gui }
+        Self { names: vec![name.into()], frame: 0, color: Color::WHITE, source: GuiImageSource::Gui, sampling: GuiImageSampling::Nearest }
     }
 
     pub fn with_frame(mut self, frame: usize) -> Self {
@@ -110,6 +129,11 @@ impl GuiImage {
 
     pub fn with_source(mut self, source: GuiImageSource) -> Self {
         self.source = source;
+        self
+    }
+
+    pub fn with_sampling(mut self, sampling: GuiImageSampling) -> Self {
+        self.sampling = sampling;
         self
     }
 }
@@ -158,6 +182,7 @@ fn crop(sprite: &Sprite, size: UVec2) -> Option<Rect> {
 
 fn page(
     sprite: &Sprite,
+    sampling: GuiImageSampling,
     vfs: &sta_vfs::Vfs,
     cache: &mut GuiSprites,
     images: &mut Assets<Image>,
@@ -167,7 +192,7 @@ fn page(
         Skip::Colour(c) => Some(c),
         Skip::Unset | Skip::Off => None,
     };
-    let key = (sprite.texture.to_ascii_lowercase(), key_colour);
+    let key = (sprite.texture.to_ascii_lowercase(), key_colour, sampling);
     if let Some(found) = cache.pages.get(&key) {
         return found.clone();
     }
@@ -209,12 +234,12 @@ fn page(
                 ImageType::Extension(ext),
                 formats,
                 true,
-                ImageSampler::nearest(),
+                sampling.sampler(),
                 RenderAssetUsages::RENDER_WORLD,
             )
             .ok()?
         };
-        image.sampler = ImageSampler::nearest();
+        image.sampler = sampling.sampler();
         let size = UVec2::new(
             image.texture_descriptor.size.width,
             image.texture_descriptor.size.height,
@@ -263,13 +288,14 @@ fn art(
     frame: usize,
     source: GuiImageSource,
     numbered: bool,
+    sampling: GuiImageSampling,
     shared: Option<&SpriteTable>,
     vfs: &sta_vfs::Vfs,
     cache: &mut GuiSprites,
     images: &mut Assets<Image>,
     formats: CompressedImageFormats,
 ) -> Option<(Handle<Image>, Rect)> {
-    let key = (names.to_vec(), frame, source, numbered);
+    let key = (names.to_vec(), frame, source, numbered, sampling);
     if let Some(found) = cache.resolved.get(&key) {
         return found.clone();
     }
@@ -281,7 +307,7 @@ fn art(
     };
     let mut found = None;
     for sprite in candidates {
-        let Some((handle, size)) = page(&sprite, vfs, cache, images, formats) else {
+        let Some((handle, size)) = page(&sprite, sampling, vfs, cache, images, formats) else {
             continue;
         };
         if let Some(rect) = crop(&sprite, size) {
@@ -376,7 +402,7 @@ pub fn paint(
     }
     for (entity, button, state, colors, active, image, children, background) in &mut buttons {
         let found = if has_sources {
-            art(&button.names, 0, GuiImageSource::Gui, false, None,
+            art(&button.names, 0, GuiImageSource::Gui, false, GuiImageSampling::Nearest, None,
                 &mounted.as_ref().unwrap().0, &mut sprites, &mut images, formats)
         } else {
             None
@@ -430,7 +456,7 @@ pub fn paint(
             _ => None,
         };
         let found = source.and_then(|(source, table)| art(
-            &panel.names, panel.frame, source, true, table,
+            &panel.names, panel.frame, source, true, panel.sampling, table,
             &mounted.as_ref().unwrap().0, &mut sprites, &mut images, formats,
         ));
         if let Some((handle, rect)) = found {
@@ -582,6 +608,10 @@ mod tests {
             BackgroundColor(Color::srgb(0.1, 0.2, 0.3)),
             Visibility::Hidden,
         )).id();
+        let smooth_panel = app.world_mut().spawn((
+            GuiImage::new("panel").with_frame(1).with_sampling(GuiImageSampling::Linear),
+            Node::default(),
+        )).id();
         app.insert_resource(crate::render::sprites::SpriteTables(std::sync::Arc::new(
             SpriteTable::parse(b"wire.0 chosen 0 0 2 2\n"),
         )));
@@ -592,6 +622,28 @@ mod tests {
         app.update();
         assert_eq!(app.world().get::<ImageNode>(wire).unwrap().rect, Some(Rect::new(0.0, 0.0, 2.0, 2.0)));
         assert_eq!(app.world().get::<ImageNode>(panel).unwrap().rect, Some(Rect::new(2.0, 0.0, 4.0, 2.0)));
+        let nearest = app.world().get::<ImageNode>(panel).unwrap().image.clone();
+        let linear = app.world().get::<ImageNode>(smooth_panel).unwrap().image.clone();
+        assert_ne!(nearest, linear);
+        assert_eq!(app.world().get::<ImageNode>(button).unwrap().image, nearest);
+        assert_eq!(app.world().get::<ImageNode>(wire).unwrap().image, nearest);
+        assert_eq!(app.world().get::<ImageNode>(smooth_panel).unwrap().rect, Some(Rect::new(2.0, 0.0, 4.0, 2.0)));
+        let images = app.world().resource::<Assets<Image>>();
+        assert_eq!(images.get(&nearest).unwrap().sampler, ImageSampler::nearest());
+        assert_eq!(images.get(&linear).unwrap().sampler, ImageSampler::linear());
+        assert_eq!(images.get(&nearest).unwrap().data, images.get(&linear).unwrap().data);
+        assert_eq!(app.world().resource::<GuiSprites>().pages.len(), 2);
+        assert_eq!(app.world().resource::<GuiSprites>().resolved.len(), 4);
+        app.update();
+        assert_eq!(app.world().get::<ImageNode>(panel).unwrap().image, nearest);
+        assert_eq!(app.world().get::<ImageNode>(smooth_panel).unwrap().image, linear);
+        assert_eq!(app.world().resource::<GuiSprites>().pages.len(), 2);
+        app.world_mut().get_mut::<GuiImage>(panel).unwrap().sampling = GuiImageSampling::Linear;
+        app.update();
+        assert_eq!(app.world().get::<ImageNode>(panel).unwrap().image, linear);
+        app.world_mut().get_mut::<GuiImage>(panel).unwrap().sampling = GuiImageSampling::Nearest;
+        app.update();
+        assert_eq!(app.world().get::<ImageNode>(panel).unwrap().image, nearest);
         assert_eq!(app.world().get::<ImageNode>(panel).unwrap().color, Color::srgb(0.2, 0.4, 0.6));
         assert_eq!(app.world().get::<Visibility>(panel), Some(&Visibility::Hidden));
         let image = app.world().get::<ImageNode>(button).unwrap();
@@ -704,7 +756,7 @@ mod tests {
                     names: vec![(*name).into()],
                     keep_label: false,
                 };
-                let (handle, rect) = art(&button.names, 0, GuiImageSource::Gui, false, None,
+                let (handle, rect) = art(&button.names, 0, GuiImageSource::Gui, false, GuiImageSampling::Nearest, None,
                     &vfs, &mut cache, &mut images, CompressedImageFormats::empty())
                     .unwrap_or_else(|| panic!("{table}: {name} did not resolve to valid artwork"));
                 let image = images.get(&handle).unwrap();

@@ -25,7 +25,12 @@ width/anchor, with a selection-radius fallback only for missing bounds. Use
 screen-pixel thickness and spacing, not radius-scaled thickness. Hide invalid,
 behind-camera or offscreen projections safely. Height and gap defaults can be
 overridden by optional STA64-only selectionGaugeHeight/selectionGaugeGap in
-the resolved race GUI CFG. Existing HUD bar rectangles remain authoritative.
+the resolved race GUI CFG (finite0..128 pixel values; zero height hides them).
+LCARS switching clears stock-only overrides. Existing HUD bar rectangles remain authoritative.
+The existing mesh path places gauges just ahead of the nearest model-bounds
+depth to prevent self-occlusion. Current hierarchy transforms are read with
+Bevy TransformHelper, explicitly after orbit_camera, before normal global
+propagation; a first-frame test runs the real camera updater with stale globals.
 
 Following the user's stock reference, numeric hull/shield/energy status values
 show rounded percentages as bare integers, without a percent glyph. Current
@@ -39,3 +44,18 @@ bounds, invalid projection handling, live values/colours and overlay cleanup.
 Run client regressions, mounted offscreen rendering, strict/workspace/ARM64
 checks and stage an optimized manual candidate. Original files and prior builds
 stay intact; December desktop alpha remains the priority.
+
+## Verification
+
+The current client suite passes468 tests (one existing ignored), including
+sampler/cache isolation, bare status numbers and live colour changes, CFG
+overrides/reset, bounds conversion, zoom/rotation/scaling, immediate camera
+updates and existing overlay destruction/selection cleanup. Two windowless
+NVIDIA captures measure both bars at2 pixels with a2-pixel gap; partial fill
+widths shrink from103/52 to40/20 pixels at the farther camera. The initial
+depth-occlusion failure is retained privately alongside the corrected probe.
+Seven mounted Classic/FO4 HUD captures pass, including low and other-unit hover.
+Strict client/all-target Clippy, workspace/all-target and NDK29/API26 ARM64
+client-library checks pass. Optimized build/manual evidence follows in the PR
+and artifact receipt. ARM64 compilation is not APK/device validation.
+This is scoped rendering evidence, not full original-game visual parity.
