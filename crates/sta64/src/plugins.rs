@@ -69,11 +69,14 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
 
         // ui —
         app.add_plugins(crate::ui::theme::ThemePlugin);
+        app.insert_resource(crate::ui::profile::UiPreference { lcars: cfg.lcars_ui })
+            .add_plugins(crate::ui::profile::UiProfilePlugin);
         app.add_plugins(crate::ui::notices::NoticePlugin);
         if front_end {
             // INT-M4: the front end's screens over the menu scene, the loading screen.
             app.add_plugins(crate::frontend::scene::MenuScenePlugin);
             app.add_plugins(crate::frontend::screens::ScreensPlugin);
+            app.world_mut().resource_mut::<crate::frontend::screens::Settings>().lcars_ui = cfg.lcars_ui;
             app.add_plugins(crate::frontend::loading::LoadingPlugin);
         }
         if cfg.skirmish || front_end {

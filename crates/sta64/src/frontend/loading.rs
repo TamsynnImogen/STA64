@@ -420,7 +420,7 @@ impl Plugin for LoadingPlugin {
                 Update,
                 (
                     apply_reports,
-                    rebuild_on_info_change,
+                    rebuild_on_info_or_theme_change,
                     show_screen,
                     layer_sky,
                     hide_screen,
@@ -431,7 +431,8 @@ impl Plugin for LoadingPlugin {
                     log_marks,
                 )
                     .chain()
-                    .in_set(GameSet::Ui),
+                    .in_set(GameSet::Ui)
+                    .after(crate::ui::profile::ProfileSync),
             );
     }
 }
@@ -725,9 +726,9 @@ fn layer_sky(mut commands: Commands, sky: Query<&Children, With<LoadingSky>>, la
     }
 }
 
-/// The mission's words changed under a shown screen: build it again.
-fn rebuild_on_info_change(commands: Commands, info: Res<LoadInfo>, parts: Query<Entity, ScreenParts>) {
-    if info.is_changed() && !info.is_added() {
+/// Rebuild presentation after words or theme change without resetting load progress.
+fn rebuild_on_info_or_theme_change(commands: Commands, info: Res<LoadInfo>, theme: Res<Theme>, parts: Query<Entity, ScreenParts>) {
+    if (info.is_changed() && !info.is_added()) || theme.is_changed() {
         despawn_all(commands, &parts);
     }
 }
@@ -1061,6 +1062,26 @@ mod tests {
         }
         assert_eq!(count::<LoadingRoot>(&mut app), 0);
         assert_eq!(count::<LoadingCamera>(&mut app), 0);
+    }
+
+    #[test]
+    fn theme_switch_rebuilds_loading_chrome_without_resetting_progress() {
+        let mut app = app();
+        app.world_mut().write_message(LoadReport::counts(LoadStage::Mount, 1, 2));
+        app.update();
+        let old_root = app.world_mut().query_filtered::<Entity, With<LoadingRoot>>().single(app.world()).unwrap();
+        let progress = app.world().resource::<LoadProgress>().fraction();
+        let stock = crate::ui::profile::UiProfile::FleetOps.theme();
+        *app.world_mut().resource_mut::<Theme>() = stock.clone();
+        app.update();
+        let root = app.world_mut().query_filtered::<Entity, With<LoadingRoot>>().single(app.world()).unwrap();
+        assert_ne!(root, old_root);
+        assert_eq!(app.world().resource::<LoadProgress>().fraction(), progress);
+        let camera = app.world_mut().query_filtered::<&Camera, With<LoadingCamera>>().single(app.world()).unwrap();
+        let ClearColorConfig::Custom(color) = &camera.clear_color else { panic!("expected theme clear colour") };
+        assert_eq!(*color, stock.panel);
+        app.update();
+        assert_eq!(app.world_mut().query_filtered::<Entity, With<LoadingRoot>>().single(app.world()).unwrap(), root);
     }
 
     #[test]

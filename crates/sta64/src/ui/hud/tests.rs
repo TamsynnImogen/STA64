@@ -432,3 +432,39 @@ fn mobile_constructor_cannot_arm_a_rally_target() {
     app.update();
     assert_eq!(app.world().resource::<HudState>().page,Page::Top);
 }
+
+#[test]
+fn theme_switch_rebuilds_hud_chrome_but_preserves_selection_and_command_page() {
+    let mut app = app(content(None), &[1]);
+    let builder = cell(&mut app, |a| *a == Act::OpenBuild);
+    press(&mut app, builder);
+    assert_eq!(app.world().resource::<HudState>().page, Page::Build);
+    let old_root = one::<HudRoot>(&mut app);
+    let old_strip = one::<ResourceStrip>(&mut app);
+    let camera = app.world_mut().spawn_empty().id();
+    app.world_mut().entity_mut(old_root).insert(UiTargetCamera(camera));
+    let selected = app.world().resource::<Selection>().0.clone();
+    let stock = crate::ui::profile::UiProfile::FleetOps.theme();
+    *app.world_mut().resource_mut::<Theme>() = stock.clone();
+    app.update();
+    let root = one::<HudRoot>(&mut app);
+    let strip = one::<ResourceStrip>(&mut app);
+    let info = one::<InfoPanel>(&mut app);
+    assert_eq!(root, old_root);
+    assert_eq!(app.world().get::<UiTargetCamera>(root).unwrap().0, camera);
+    assert!(app.world().get_entity(old_strip).is_err());
+    assert_eq!(app.world().get::<BackgroundColor>(strip).unwrap().0, stock.panel.with_alpha(0.85));
+    assert_eq!(app.world().get::<BorderColor>(strip).unwrap().left, stock.accent2);
+    assert_eq!(app.world().get::<Node>(info).unwrap().border.left, Val::Px(stock.side_bar));
+    assert_eq!(app.world().resource::<Selection>().0, selected);
+    assert_eq!(app.world().resource::<HudState>().page, Page::Build);
+    assert!(queued(&mut app).is_empty());
+    // Ordinary ticks keep the new controls stable; only another theme change rebuilds.
+    app.update();
+    assert_eq!(one::<HudRoot>(&mut app), root);
+    *app.world_mut().resource_mut::<Theme>() = Theme::default();
+    app.update();
+    let strip = one::<ResourceStrip>(&mut app);
+    assert_eq!(app.world().get::<BorderColor>(strip).unwrap().left, Theme::default().accent2);
+    assert_eq!(app.world().resource::<HudState>().page, Page::Build);
+}

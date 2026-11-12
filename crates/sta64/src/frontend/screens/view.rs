@@ -238,6 +238,8 @@ fn settings(ctx: &Ctx) -> impl Bundle {
                 (toggle(&t, &tr("Show FPS"), s.show_fps, 220.0), SettingToggle(SettingKey::ShowFps)),
             ],
         ));
+        p.spawn((row(t.gap), children![cell(&t, 240.0, &tr("LCARS interface")), (toggle(&t, &tr("On"), s.lcars_ui, 220.0), SettingToggle(SettingKey::LcarsUi))]));
+        p.spawn(label(&t, &tr("Off uses the game/mod default.")));
         p.spawn((button(&t, &tr("Previous menu"), 220.0), Act::Goto(Screen::Main)));
     })
 }
