@@ -331,6 +331,8 @@ type MapState<'w> = (
     Res<'w, crate::render::nebula::NoiseVolume>,
     Res<'w, MapSeat>,
     Option<Res<'w, crate::game::SkirmishCfg>>,
+    Option<Res<'w, crate::render::profile::RenderProfile>>,
+    Option<Res<'w, crate::render::profile::ProfileEffects>>,
 );
 
 /// The ambient light and the two map lights, as one system parameter.
@@ -363,6 +365,7 @@ impl Plugin for MapPlugin {
             .add_plugins(crate::render::planet::PlanetPlugin)
             .add_plugins(crate::render::rock::RockPlugin)
             .add_plugins(crate::render::nebula::NebulaPlugin)
+            .add_plugins(crate::render::stock::StockBackgroundsPlugin)
             .add_plugins(crate::render::strategic::StrategicPlugin)
             .init_resource::<crate::render::strategic::Silhouettes>()
             .add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default())
@@ -634,7 +637,8 @@ fn rebuild(
     lighting: Lighting,
 ) {
     let (mut silhouettes, mut ambient, mut lights) = lighting;
-    let (mut particles, mut selection, mut queue, mut clock, mut limits, mut planet_materials, mut nebula_materials, noise, seat, skirmish_cfg) = state;
+    let (mut particles, mut selection, mut queue, mut clock, mut limits, mut planet_materials, mut nebula_materials, noise, seat, skirmish_cfg, profile, profile_effects) = state;
+    let gas_volumes = crate::render::stock::nebula::volumetric(profile.as_deref(), profile_effects.as_deref());
     if !browser.dirty {
         return;
     }
@@ -786,7 +790,7 @@ fn rebuild(
                 let radius = if latinum { 100.0 } else { odf.f32("effectRadius").filter(|r| *r > 10.0 && *r < 5000.0).unwrap_or(300.0) };
                 (r.unwrap_or_else(|| sta_surface::nebula::NebulaRecipe::parse("")), radius, Vec::new())
             });
-            if crate::render::nebula::recipe(&vfs.0, &key).is_some() {
+            if gas_volumes && crate::render::nebula::recipe(&vfs.0, &key).is_some() {
                 entry.2.push([o.transform[9], o.transform[10], -o.transform[11]]);
                 nebulae += 1;
                 drawn += 1;

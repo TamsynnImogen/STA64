@@ -22,6 +22,7 @@ pub mod rock;
 pub mod shader_shadow;
 pub mod shadows;
 pub mod space;
+pub mod stock;
 pub mod sprites;
 pub mod strategic;
 pub mod surfaces;

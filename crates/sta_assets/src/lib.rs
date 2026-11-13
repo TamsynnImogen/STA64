@@ -75,11 +75,14 @@ impl ModelFormat {
 const TEXTURE_DIRS: [&str; 2] = ["textures", "textures/rgb"];
 const MODEL_DIRS: [&str; 1] = ["sod"];
 
-/// Strip any extension a reference carries; SODs and ODFs name textures by stem.
+/// Strip a file extension a reference carries; SODs and ODFs name textures by stem.
+/// Only a known file extension is stripped: the sky domes' textures are named
+/// `MbgDom1.3` (the dot is part of the name; `MbgDom1.3.tga` is the file).
 fn stem(name: &str) -> &str {
+    const EXTS: [&str; 15] = ["tga", "bmp", "dds", "png", "jpg", "jpeg", "sod", "m3d", "glb", "gltf", "odf", "spr", "wav", "ogg", "mp3"];
     let base = name.rsplit(['/', '\\']).next().unwrap_or(name);
     match base.rfind('.') {
-        Some(i) if i > 0 => &base[..i],
+        Some(i) if i > 0 && EXTS.iter().any(|e| base[i + 1..].eq_ignore_ascii_case(e)) => &base[..i],
         _ => base,
     }
 }
@@ -286,6 +289,8 @@ mod tests {
         assert_eq!(stem("fdefiant"), "fdefiant");
         assert_eq!(stem("Textures\\RGB\\fdefiant.TGA"), "fdefiant");
         assert_eq!(stem(".hidden"), ".hidden");
+        assert_eq!(stem("MbgDom1.3"), "MbgDom1.3");
+        assert_eq!(stem("MbgDom1.3.TGA"), "MbgDom1.3");
     }
 
     #[test]

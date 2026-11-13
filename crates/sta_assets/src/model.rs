@@ -217,7 +217,14 @@ impl Model {
                             height: m.height_map().map(str::to_owned),
                             ..Default::default()
                         };
-                        let blend = m.texture_material.to_ascii_lowercase();
+                        // Before 1.7 the name is an ident of the file's texture-material
+                        // table, not a blend mode: such a mesh draws as `default` (the
+                        // alpha-tested reading of its mode bytes is a hull matter, RND-24).
+                        let blend = if sod.texture_materials.iter().any(|t| t.ident.eq_ignore_ascii_case(&m.texture_material)) {
+                            "default".to_owned()
+                        } else {
+                            m.texture_material.to_ascii_lowercase()
+                        };
                         NodeKind::Mesh(Mesh {
                             positions: m.positions.clone(),
                             uvs: m.uvs.clone(),
