@@ -681,6 +681,17 @@ fn typed(text: &str) -> Result<Option<StepKind>, ParseError> {
     Ok(None)
 }
 
+/// A frame's name is a file name: letters, digits, `-`, `_` and `.`, at most 64,
+/// not starting with a dot (so it cannot leave the frame directory) or `tick-` (the
+/// names `--frames` writes).
+pub fn is_shot_name(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 64
+        && !s.starts_with('.')
+        && !s.starts_with("tick-")
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
 fn expect(c: &mut Cur) -> Result<Option<StepKind>, ParseError> {
     if c.eat("no crash") {
         return Ok(c.done().then_some(StepKind::ExpectNoCrash));

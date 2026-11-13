@@ -210,7 +210,12 @@ Refit's names (`fire.end obj=shooter`, `cloak.done obj=warbird`).
     each other's files; `session stop` exits 1 if the source install changed.
   - `pair <pair> --game a2|roots`: one description on the original game and
     on STA64, compared in sim seconds ("Paired scenes", below).
-  - Not yet: frames from a session, `Take a screenshot`/`Expect shots` steps.
+  - `session start --render [--frame-size WxH]` gives the session a renderer
+    (a GPU; without one the start fails and says so): `drive --session ID
+    "frame NAME"` writes `<session>/frames/NAME.png` and answers `frame NAME
+    tick T <path> pixels <hash>` once the file is there. `NAME` is letters,
+    digits, `-`, `_` and `.`. Without `--render` the command answers
+    `! unsupported: frame`.
 
 - **Frames** (`sta64 --headless --frames 0,100 --frame-dir D --frame-size WxH`,
   `crates/sta64/src/bench/frames.rs`): a windowless render app draws into an
@@ -221,6 +226,40 @@ Refit's names (`fire.end obj=shooter`, `cloak.done obj=warbird`).
   `camera`: the bench has no install to load models from, so the game's own
   renderers join when they can run without one. Without a GPU adapter `sta64`
   exits 77 ("no GPU adapter") and `sta-bench`/the tests skip with a message.
+  **A session frame is the same picture:** `frame NAME` in a session started
+  with `--render` (`sta64 --control stdio --frame-dir D`, no `--frames`) holds
+  the sim, lets the picture settle for the same frames and reads the same
+  offscreen target, so at tick T it is byte for byte the `--frames T` frame of
+  the same scene and camera (`session_frames_equal_the_frames_option`, a GPU
+  test). Both are drawn after the same 5 warm-up and 8 settle frames; a session
+  that has run ticks since its start cannot differ, because held frames do not
+  advance the animation clock.
+
+  **Screenshot steps** (tier 2, `sta-bench run NAME --tier 2`):
+
+  ```markdown
+  1. Take a screenshot called "first"
+  2. Run 100 ticks
+  3. Take a screenshot called "later"
+  4. Expect shots "first" and "later" to match within 1
+  ```
+
+  At tier 1 (`check`, `cargo test`) `Take a screenshot` records the name and
+  the tick (names are unique; letters, digits, `-`, `_`, `.`) and
+  `Expect shots` fails only when it names a screenshot not taken before it;
+  both are reported as skipped. With `--tier 2` the in-process run is followed
+  by one `sta64 --headless --frames` run at the recorded ticks (together with
+  `--frames`/the default first and last tick), the frames are saved in the case
+  report as `frames/NAME.png`, and each `Expect shots` is judged: the mean
+  absolute difference over all channels (0..255) of the two frames must be at
+  most `X` (default 0, identical); the report line gives the mean, the largest
+  difference and the share of pixels that differ. Without a GPU adapter the
+  steps stay skipped. The frames are drawn from the scene, not from the steps:
+  orders and edits a scenario gives with `Order`/`Scene "..."` steps are not
+  replayed in the `sta64` process, so put what a frame needs in the scene file.
+  `Dump the frame called` is still skipped. A screenshot is always the in-app
+  offscreen frame, never a capture of the screen. Example:
+  `bench/scenarios/shots-planet.md`.
 
 **Two tiers.** Most checks (orders, combat, economy, AI, missions) are
 **tier 1**: `sta_bench` + `sta_sim` in-process, milliseconds per case, run by

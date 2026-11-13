@@ -125,6 +125,9 @@ pub enum BenchCommand {
     /// `zoom [level]`; no level only reads.
     Zoom(Option<f64>),
     Center(String),
+    /// `frame <name>`: save the picture at this tick as `<name>.png`. Only a
+    /// session started with a renderer answers it (docs/TESTBENCH.md, "Frames").
+    Frame(String),
     /// `hud`, `grid`, `cursor`, `notices`, `tooltips`, `hover`, `shieldfx`.
     Display {
         system: System,
@@ -414,6 +417,13 @@ fn parse_words(w: &[&str], text: &str) -> Result<BenchCommand, String> {
         "center" => {
             arity(a, 1, 1, "center <name>")?;
             BenchCommand::Center(a[0].to_owned())
+        }
+"frame" => {
+            arity(a, 1, 1, "frame <name>")?;
+            if !crate::parse::scenario::is_shot_name(a[0]) {
+                return Err(format!("frame name `{}`: letters, digits, `-`, `_` and `.` only (at most 64)", a[0]));
+            }
+            BenchCommand::Frame(a[0].to_owned())
         }
         "hud" | "grid" | "cursor" | "notices" | "tooltips" | "hover" | "shieldfx" => {
             arity(a, 1, 1, &format!("{verb} on|off"))?;
@@ -800,6 +810,9 @@ mod tests {
         assert_eq!(cmd("zoom"), BenchCommand::Zoom(None));
         assert_eq!(cmd("zoom 0.37"), BenchCommand::Zoom(Some(0.37)));
         assert_eq!(cmd("center mine"), BenchCommand::Center("mine".into()));
+        assert_eq!(cmd("frame first-look.2"), BenchCommand::Frame("first-look.2".into()));
+        assert!(err("frame").starts_with("usage: frame"));
+        assert!(err("frame a/b").contains("letters, digits"));
         assert_eq!(
             cmd("hud off"),
             BenchCommand::Display {
