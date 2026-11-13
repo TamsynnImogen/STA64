@@ -143,6 +143,9 @@ pub struct Sim {
     start_effects: start_effects::StartEffects,
     /// Path planner grids and fields (SIM-23): a memo, not in the digest.
     nav: nav::Cache,
+    /// Subsystem switches and damage set by missions (SIM-55); in the digest
+    /// once any exists.
+    subsystems: combat::damage::Subsystems,
     /// Units whose team just changed (SIM-29): `activateOnTeamChange` weapons
     /// engage on the tick's weapon pass. Filled by the tick's commands and
     /// drained by the same tick, so it is empty between ticks and not saved.
@@ -173,6 +176,7 @@ impl Sim {
             specials: Default::default(),
             start_effects: Default::default(),
             nav: Default::default(),
+            subsystems: Default::default(),
             team_changes: Vec::new(),
         }
     }
@@ -449,6 +453,9 @@ impl Sim {
         }
         if !self.start_effects.is_empty() {
             self.start_effects.hash_into(&mut h);
+        }
+        if !self.subsystems.is_empty() {
+            self.subsystems.hash_into(&mut h);
         }
         let crew_count = self.units.iter().filter(|unit| unit.crew.is_some()).count();
         if crew_count != 0 {

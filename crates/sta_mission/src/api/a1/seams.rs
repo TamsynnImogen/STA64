@@ -54,8 +54,19 @@ pub(super) fn install(lua: &Lua, env: &Env, table: &Table) -> mlua::Result<()> {
     table.set("AI_Attack", gap_write(lua, env, "AI_Attack", &["ii", "iv", "i"], "no AI team attack seam in the sim")?)?;
     table.set("AttackMainEnemyBase", gap_write(lua, env, "AttackMainEnemyBase", &["ib"], "no AI team attack seam in the sim")?)?;
     // Damage and shields.
-    table.set("SetShieldPercent", gap_write(lua, env, "SetShieldPercent", &["hf"], "no shield edit in the sim seam")?)?;
-    table.set("SetMaxShields", gap_write(lua, env, "SetMaxShields", &["hf"], "no maximum-shield edit in the sim seam")?)?;
+    // SIM-55: a fraction of the maximum, and the new maximum.
+    table.set("SetShieldPercent", def(lua, env, "SetShieldPercent", &["hf"], |_, e, _, a| {
+        let id = a[0].id();
+        e.unit("SetShieldPercent", id)?;
+        e.edit("SetShieldPercent", sta_sim::command::Edit::ShieldPercent(id, sta_core::Fixed::from_f64(a[1].num())))?;
+        Ok(Value::Nil)
+    })?)?;
+    table.set("SetMaxShields", def(lua, env, "SetMaxShields", &["hf"], |_, e, _, a| {
+        let id = a[0].id();
+        e.unit("SetMaxShields", id)?;
+        e.edit("SetMaxShields", sta_sim::command::Edit::MaxShields(id, sta_core::Fixed::from_f64(a[1].num())))?;
+        Ok(Value::Nil)
+    })?)?;
     table.set("DestroyCritical", gap_write(lua, env, "DestroyCritical", &["h"], "no critical-system damage in the sim seam")?)?;
     table.set("DestroyShieldGenerator", gap_write(lua, env, "DestroyShieldGenerator", &["h"], "no subsystem destruction in the sim seam")?)?;
     table.set("DestroyLifeSupport", gap_write(lua, env, "DestroyLifeSupport", &["h"], "no subsystem destruction in the sim seam")?)?;

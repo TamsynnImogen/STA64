@@ -575,6 +575,13 @@ fn hash_inner(db: &ContentDb, include_starting_rules: bool) -> u64 {
                     h.byte(0xf2);
                     h.fixed(u.crew_gain);
                 }
+                // SIM-55: only for units with any system hit points.
+                if u.system_hit_points.iter().any(|f| *f != Fixed::ZERO) {
+                    h.byte(0xf7);
+                    for f in u.system_hit_points {
+                        h.fixed(f);
+                    }
+                }
                 // SIM-39: only for units with the key.
                 if u.sane_crew_loss {
                     h.byte(0xf6);

@@ -134,6 +134,13 @@ pub(crate) fn unit_def_for_profile(name: &str, odf: &Odf, phys: Option<&Odf>, pr
         d.crew_gain = r.fixed("maxCrewGain").min(Fixed::from_int(1_000_000_000));
     }
     d.sane_crew_loss = r.flag("saneCrewLossMethod").unwrap_or(false);
+    d.system_hit_points = [
+        r.fixed("enginesHitPoints"),
+        r.fixed("weaponsHitPoints"),
+        r.fixed("shieldGeneratorHitPoints"),
+        r.fixed("lifeSupportHitPoints"),
+        r.fixed("sensorsHitPoints"),
+    ];
     d.sensor = r.fixed("rangeScan");
 
     for (n, raw) in numbered(odf, "weapon") {

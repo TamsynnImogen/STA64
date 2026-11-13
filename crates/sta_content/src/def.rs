@@ -283,6 +283,11 @@ pub struct UnitDef {
     /// `saneCrewLossMethod` (SIM-39): a hit's crew loss is in absolute crew
     /// points; without it the loss is a percent of the unit's maximum crew.
     pub sane_crew_loss: bool,
+    /// Hit points of the unit's systems (SIM-55), in the order engines,
+    /// weapons, shield generator, life support, sensors: `enginesHitPoints`,
+    /// `weaponsHitPoints`, `shieldGeneratorHitPoints`, `lifeSupportHitPoints`,
+    /// `sensorsHitPoints`. 0 when the key is absent.
+    pub system_hit_points: [Fixed; 5],
     /// Sensor range, units.
     pub sensor: Fixed,
     pub hardpoints: Vec<Hardpoint>,
@@ -385,6 +390,7 @@ impl UnitDef {
             maximum_crew: None,
             crew_gain: Fixed::ZERO,
             sane_crew_loss: false,
+            system_hit_points: [Fixed::ZERO; 5],
             sensor: Fixed::ZERO,
             hardpoints: Vec::new(),
             build: BuildDef::default(),

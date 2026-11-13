@@ -35,10 +35,14 @@ use crate::world::{Entities, Entity, EntityKind, Shields, Table};
 use crate::{Rng, Sim, SimEvent};
 
 pub const MAGIC: [u8; 4] = *b"STAS";
+/// Format 17 appends the mission-set subsystem switches and damage (SIM-55)
+/// after the earlier suffixes (15 is CON-35's provenance, 16 SIM-38's autonomy,
+/// both between the format-14 rows and this one once merged); formats 12 to 14
+/// are read with none. The Body and earlier suffix records remain unchanged.
+pub const FORMAT_VERSION: u16 = 17;
 /// Format 14 appends the pending start-helper lifecycle rows (SIM-28) after
-/// the format-13 unit crew suffix; formats 12 and 13 are read with none.
-/// The Body and earlier suffix records remain unchanged.
-pub const FORMAT_VERSION: u16 = 14;
+/// the format-13 unit crew suffix.
+const START_EFFECTS_FORMAT: u16 = 14;
 /// Format 13 appends unit crew after the format-12 player-personnel suffix.
 const CREW_FORMAT: u16 = 13;
 const PERSONNEL_FORMAT: u16 = 12;
@@ -71,7 +75,7 @@ impl std::fmt::Display for SnapshotError {
         match self {
             SnapshotError::BadMagic => write!(f, "not a snapshot"),
             SnapshotError::FormatVersion { found } => {
-                write!(f, "snapshot format {found}, expected {FORMAT_VERSION} or compatible {CREW_FORMAT}/{PERSONNEL_FORMAT}/{PERCEPTION_FORMAT}/{PREVIOUS_FORMAT}/{LEGACY_CARGO_FORMAT}/{COMPATIBLE_MINING_FORMAT}")
+                write!(f, "snapshot format {found}, expected {FORMAT_VERSION} or compatible {START_EFFECTS_FORMAT}/{CREW_FORMAT}/{PERSONNEL_FORMAT}/{PERCEPTION_FORMAT}/{PREVIOUS_FORMAT}/{LEGACY_CARGO_FORMAT}/{COMPATIBLE_MINING_FORMAT}")
             }
             SnapshotError::SeamRev { found } => {
                 write!(f, "snapshot seam revision {found}, expected {SEAM_REV}")
@@ -180,6 +184,13 @@ struct PersonnelRec {
 struct UnitCrewRec {
     version: u8,
     rows: Vec<(EntityId, [i64; 2])>,
+}
+
+/// Mandatory v16 suffix: switched-off and damaged subsystems (SIM-55).
+#[derive(Serialize, Deserialize)]
+struct SubsystemsRec {
+    version: u8,
+    rows: Vec<(EntityId, crate::combat::damage::SubsystemRow)>,
 }
 
 /// Mandatory v14 suffix: pending start-helper lifecycle rows (SIM-28).
@@ -328,6 +339,7 @@ impl Sim {
             rows: self.units.iter().filter_map(|unit| unit.crew.map(|pool| (unit.id, pool.map(Fixed::to_bits)))).collect(),
         }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&StartEffectsRec { version: 1, rows: self.start_effects.to_rec() }).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&SubsystemsRec { version: 1, rows: self.subsystems.to_rows() }).expect("snapshot serialises"));
         out
     }
 
@@ -342,11 +354,11 @@ impl Sim {
             return Err(SnapshotError::BadMagic);
         }
         let found = u16::from_le_bytes([bytes[4], bytes[5]]);
-        if ![FORMAT_VERSION, CREW_FORMAT, PERSONNEL_FORMAT, PERCEPTION_FORMAT, PREVIOUS_FORMAT, LEGACY_CARGO_FORMAT, COMPATIBLE_MINING_FORMAT].contains(&found) {
+        if ![FORMAT_VERSION, START_EFFECTS_FORMAT, CREW_FORMAT, PERSONNEL_FORMAT, PERCEPTION_FORMAT, PREVIOUS_FORMAT, LEGACY_CARGO_FORMAT, COMPATIBLE_MINING_FORMAT].contains(&found) {
             return Err(SnapshotError::FormatVersion { found });
         }
         let seam = u32::from_le_bytes(bytes[6..10].try_into().unwrap());
-        let expected_seam = match found { FORMAT_VERSION | CREW_FORMAT => SEAM_REV, PERSONNEL_FORMAT => 3, PERCEPTION_FORMAT => 2, _ => 1 };
+        let expected_seam = match found { FORMAT_VERSION | START_EFFECTS_FORMAT | CREW_FORMAT => SEAM_REV, PERSONNEL_FORMAT => 3, PERCEPTION_FORMAT => 2, _ => 1 };
         if seam != expected_seam {
             return Err(SnapshotError::SeamRev { found: seam });
         }
@@ -362,7 +374,7 @@ impl Sim {
         if found < PREVIOUS_FORMAT && content.as_ref().is_some_and(|db| db.has_map_confinement()) {
             return Err(SnapshotError::Corrupt("old snapshot has no explicit confinement state".into()));
         }
-        let (bounds, boundary_rows, perception_rows, personnel_rows, crew_rows, effect_rows) = if found >= PREVIOUS_FORMAT {
+        let (bounds, boundary_rows, perception_rows, personnel_rows, crew_rows, effect_rows, subsystem_rows) = if found >= PREVIOUS_FORMAT {
             let (bounds, rest) = postcard::take_from_bytes(rest).map_err(|e| SnapshotError::Corrupt(e.to_string()))?;
             let (record, rest): (BoundaryRec, _) = postcard::take_from_bytes(rest).map_err(|e| SnapshotError::Corrupt(e.to_string()))?;
             if record.version != 1 { return Err(SnapshotError::Corrupt("unknown confinement record version".into())); }
@@ -383,21 +395,26 @@ impl Sim {
                 if record.version != 1 { return Err(SnapshotError::Corrupt("unknown unit crew record version".into())); }
                 (record.rows, rest)
             } else { (Vec::new(), rest) };
-            let (effect_rows, rest) = if found == FORMAT_VERSION {
+            let (effect_rows, rest) = if found >= START_EFFECTS_FORMAT {
                 let (record, rest): (StartEffectsRec, _) = postcard::take_from_bytes(rest).map_err(|e| SnapshotError::Corrupt(e.to_string()))?;
                 if record.version != 1 { return Err(SnapshotError::Corrupt("unknown start effects record version".into())); }
                 (record.rows, rest)
             } else { (Vec::new(), rest) };
+            let (subsystem_rows, rest) = if found == FORMAT_VERSION {
+                let (record, rest): (SubsystemsRec, _) = postcard::take_from_bytes(rest).map_err(|e| SnapshotError::Corrupt(e.to_string()))?;
+                if record.version != 1 { return Err(SnapshotError::Corrupt("unknown subsystems record version".into())); }
+                (record.rows, rest)
+            } else { (Vec::new(), rest) };
             if !rest.is_empty() { return Err(SnapshotError::Corrupt("trailing bytes".into())); }
-            (bounds, record.rows, perception_rows, personnel_rows, crew_rows, effect_rows)
+            (bounds, record.rows, perception_rows, personnel_rows, crew_rows, effect_rows, subsystem_rows)
         } else if rest.is_empty() {
-            (None, Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new())
+            (None, Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new())
         } else {
             let (bounds, rest) = postcard::take_from_bytes(rest).map_err(|e| SnapshotError::Corrupt(e.to_string()))?;
             if !rest.is_empty() {
                 return Err(SnapshotError::Corrupt("trailing bytes".into()));
             }
-            (bounds, Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new())
+            (bounds, Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new())
         };
         let max_phase = if found == COMPATIBLE_MINING_FORMAT { 3 } else { 4 };
         if let Some(row) = b.economy.miners.iter().find(|row| row.5 > max_phase) {
@@ -455,6 +472,10 @@ impl Sim {
         let specials = crate::specials::Specials::from_rec(b.specials).ok_or_else(|| corrupt("specials"))?;
         let start_effects = crate::start_effects::StartEffects::from_rec(effect_rows, |id| units.contains(id))
             .ok_or_else(|| corrupt("start effect rows"))?;
+        let subsystems = crate::combat::damage::Subsystems::from_rows(subsystem_rows).ok_or_else(|| corrupt("subsystem rows"))?;
+        if subsystems.to_rows().iter().any(|(id, _)| !units.get(*id).is_some_and(|u| matches!(u.kind, EntityKind::Craft | EntityKind::Station))) {
+            return Err(corrupt("subsystem entity"));
+        }
         let mut economy = crate::economy::Economy::from_rec(&b.economy);
         economy.restore_personnel(personnel_rows, &b.players).map_err(|why| SnapshotError::Corrupt(why.into()))?;
         Ok(Sim {
@@ -479,6 +500,7 @@ impl Sim {
             specials,
             start_effects,
             nav: Default::default(),
+            subsystems,
             team_changes: Vec::new(),
         })
     }

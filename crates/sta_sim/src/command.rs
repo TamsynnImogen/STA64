@@ -104,8 +104,9 @@ pub enum Edit {
     /// that tick (see [`crate::present`]).
     Present(crate::present::Presentation),
     /// A subsystem on or off (mission `Disable*` calls). `Engines` and
-    /// `Weapons` act like [`Edit::Engines`] / [`Edit::Weapons`]; the others
-    /// are rejected until the package owning that subsystem applies them.
+    /// `Weapons` act like [`Edit::Engines`] / [`Edit::Weapons`]; `Shields`,
+    /// `LifeSupport` and `Sensors` are recorded as switched off or on
+    /// (SIM-55; the combat consequences are not modelled, see `combat/damage.rs`).
     Subsystem(EntityId, Subsystem, bool),
     /// Alert state (mission `SetRedAlert` and friends). Rejected until a
     /// package models alert states.
@@ -139,6 +140,18 @@ pub enum Edit {
     /// Global target identity, independent of ownership. SCRIPT/BENCH only.
     /// Appended tag 21 preserves all older edit tags.
     PerceivedTeam(EntityId, PlayerId),
+    /// Mission `SetShieldPercent` / `Entity.shields` (SIM-55): every shield
+    /// pool of a live craft or station to this fraction of its maximum,
+    /// clamped to 0..1. SCRIPT/BENCH only. Appended tag 22.
+    ShieldPercent(EntityId, Fixed),
+    /// Mission `SetMaxShields` (SIM-55): the maximum, and every pool with it,
+    /// to this value (negative reads as 0). SCRIPT/BENCH only. Appended tag 23.
+    MaxShields(EntityId, Fixed),
+    /// Mission `Damage<Subsystem>` (SIM-55): add this many points of damage to
+    /// one subsystem, clamped to 0..its hit points (negative repairs). Rejected
+    /// for a unit whose ODF has no hit points for it. SCRIPT/BENCH only.
+    /// Appended tag 24.
+    SubsystemDamage(EntityId, Subsystem, Fixed),
 }
 
 /// A unit system a mission can switch on or off.
@@ -268,6 +281,21 @@ mod tests {
             let c = Command { player: PlayerId::SCRIPT, seq: 9, kind: CommandKind::Edit(Edit::Hull(id, hull)) };
             let bytes = postcard::to_allocvec(&c).unwrap();
             assert_eq!(postcard::from_bytes::<Command>(&bytes).unwrap(), c);
+        }
+    }
+
+    #[test]
+    fn shield_and_subsystem_edits_append_tags_22_to_24() {
+        let id = EntityId(1);
+        let edits = [
+            (22, Edit::ShieldPercent(id, Fixed::ONE)),
+            (23, Edit::MaxShields(id, Fixed::ONE)),
+            (24, Edit::SubsystemDamage(id, Subsystem::Sensors, Fixed::ONE)),
+        ];
+        for (tag, edit) in edits {
+            let bytes = postcard::to_allocvec(&edit).unwrap();
+            assert_eq!(bytes[0], tag, "{edit:?}");
+            assert_eq!(postcard::from_bytes::<Edit>(&bytes).unwrap(), edit);
         }
     }
 

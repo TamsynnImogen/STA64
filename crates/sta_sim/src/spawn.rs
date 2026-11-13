@@ -118,6 +118,7 @@ impl Sim {
         self.production.remove_rally_entity(id);
         self.production.remove_weld_site(id);
         self.start_effects.remove(id);
+        self.subsystems.remove(id);
         if let Some(by) = destroyed_by {
             self.events.push(SimEvent::Destroyed { id, by });
         }
@@ -186,6 +187,7 @@ impl Sim {
                 };
                 u.hull[0] = u.hull[1];
                 u.shields = crate::world::Shields::full(u.shields.max, u.shields.directional);
+                self.subsystems.repair(id);
                 true
             }
             Edit::Immortal(id, on) => self.set_flag(id, UnitFlags::IMMORTAL, on),
@@ -219,6 +221,10 @@ impl Sim {
             Edit::Subsystem(id, Subsystem::Weapons, on) => {
                 self.apply_edit(from, &Edit::Weapons(id, on))
             }
+            Edit::Subsystem(id, sub, on) => self.edit_subsystem_switch(id, sub, on),
+            Edit::SubsystemDamage(id, sub, points) => self.edit_subsystem_damage(id, sub, points),
+            Edit::ShieldPercent(id, fraction) => self.edit_shield_percent(id, fraction),
+            Edit::MaxShields(id, max) => self.edit_max_shields(id, max),
             // The rest land with the package that owns what they change.
             _ => false,
         }

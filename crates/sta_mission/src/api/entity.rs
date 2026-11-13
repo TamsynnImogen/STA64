@@ -125,11 +125,20 @@ impl UserData for Entity {
             e.ctx.borrow_mut().unsupported("Entity.crew = x (needs a sim mutable-crew edit)");
             Ok(())
         });
+        // `Entity.shields = 1.0`: a fraction of the maximum (SIM-55).
+        f.add_field_method_set("shields", |_, e, to: f64| {
+            if !to.is_finite() { return Err(mlua::Error::runtime("Entity.shields requires a finite number")); }
+            let mut c = e.ctx.borrow_mut();
+            match e.key.id() {
+                Some(id) => super::edit_feedback::queue(&mut c, "Entity.shields", Edit::ShieldPercent(id, sta_core::Fixed::from_f64(to)))?,
+                None => c.unsupported("entity.shields: pending or failed spawn"),
+            }
+            Ok(())
+        });
         // Other installed-mission assignments with no sim edit behind them yet
-        // (shield percent, autonomy, facing, angular velocity): accepted and
+        // (autonomy, facing, angular velocity): accepted and
         // recorded so the callback keeps running; the report names each.
         for (name, need) in [
-            ("shields", "a sim shield edit (SetShieldPercent)"),
             ("movementAutonomy", "a sim autonomy edit"),
             ("forward", "a sim heading edit"),
             ("omega", "a sim angular-velocity edit"),

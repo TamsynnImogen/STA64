@@ -614,13 +614,29 @@ fn officer_limit_assignment_is_a_noop_at_the_limit_in_force_and_recorded_otherwi
 }
 
 #[test]
+fn entity_shields_is_a_fraction_of_the_maximum_applied_by_the_sim() {
+    let mut g = game(
+        "MMM.register(function()
+            local e = EntityFinder():find()[2]
+            e.shields = 0.0
+            DONE = true
+        end)",
+    );
+    g.run(3);
+    assert!(g.global::<bool>("DONE"));
+    assert!(g.rt.unsupported().iter().all(|(n, _)| !n.contains("Entity.shields")));
+    let hero = g.sim.units.get(HERO).unwrap();
+    assert!(hero.shields.now[0] < hero.shields.max, "{:?}", hero.shields);
+}
+
+#[test]
 fn recorded_assignments_keep_the_callback_running_and_name_each_gap() {
     let mut g = game(
         "MMM.register(function()
             local p = Player(0)
             p.race = Race.find('fx'); p.color = Color(1, 0, 0); p.name = 'x'
             local e = EntityFinder():find()[1]
-            e.race = Race.find('fx'); e.crew = 5; e.shields = 1.0; e.movementAutonomy = 1
+            e.race = Race.find('fx'); e.crew = 5; e.movementAutonomy = 1
             e.specialWeaponAutonomy = 1; e.forward = Vector(1, 0, 0); e.omega = Vector(0, 1, 0); e.name = 'n'
             DONE = true
         end)",
@@ -629,7 +645,7 @@ fn recorded_assignments_keep_the_callback_running_and_name_each_gap() {
     assert!(g.global::<bool>("DONE"));
     let names: Vec<String> = g.rt.unsupported().into_iter().map(|(n, _)| n).collect();
     for want in [
-        "Player.race", "Player.color", "Player.name", "Entity.race", "Entity.crew", "Entity.shields",
+        "Player.race", "Player.color", "Player.name", "Entity.race", "Entity.crew",
         "Entity.movementAutonomy", "Entity.specialWeaponAutonomy", "Entity.forward", "Entity.omega", "Entity.name",
     ] {
         assert!(names.iter().any(|n| n.starts_with(want)), "{want} in {names:?}");

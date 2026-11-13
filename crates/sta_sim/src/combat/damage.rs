@@ -15,18 +15,30 @@
 //! - Crew (SIM-39, `Features::crew_loss_on_hit`): a hit that damages the
 //!   shields kills crew, see [`lose_crew`].
 //!
-//! Holds no state of its own: shields, hull and crew live on the entity, so
-//! snapshots and the digest already cover it.
+//! - Mission edits (SIM-55): [`Sim::edit_shield_percent`] and
+//!   [`Sim::edit_max_shields`] write the shield pools, [`Subsystems`] keeps the
+//!   switches and damage points of the shield generator, life support and
+//!   sensors (the engines and weapons switches stay unit flags), and damage
+//!   points of all five systems.
 //!
-//! Not yet: systems damage (weapons or engines offline below a hull
-//! threshold): `UnitDef` has no fields for it.
+//! Shields, hull and crew live on the entity, so snapshots and the digest
+//! already cover them; [`Subsystems`] is the one state of its own.
+//!
+//! Not yet: what a switched-off or damaged system does. The sim records it
+//! and nothing else reads it: the original's effect (a dead shield generator
+//! absorbing nothing, life support draining crew, sensors) is not measured.
+//! Systems damage from hits (weapons or engines offline below a hull
+//! threshold) is not modelled either.
 
+use serde::{Deserialize, Serialize};
 use sta_content::ContentDb;
-use sta_core::{EntityId, Fixed};
+use sta_core::{EntityId, Fixed, PlayerId};
 
+use crate::command::Subsystem;
 use crate::event::SimEvent;
 use crate::view::UnitFlags;
-use crate::world::Entities;
+use crate::world::{Entities, EntityKind, Fnv, Table};
+use crate::Sim;
 
 /// Recharge every unit's shields by its definition's rate.
 pub(crate) fn recharge(units: &mut Entities, db: &ContentDb) {
@@ -134,4 +146,174 @@ pub(crate) fn apply(
         }
     }
     killed
+}
+
+/// The five systems, in the order of `UnitDef::system_hit_points`.
+fn system(sub: Subsystem) -> usize {
+    match sub {
+        Subsystem::Engines => 0,
+        Subsystem::Weapons => 1,
+        Subsystem::Shields => 2,
+        Subsystem::LifeSupport => 3,
+        Subsystem::Sensors => 4,
+    }
+}
+
+/// One unit's switched-off systems (bit `n` of `off` is system `n`, only the
+/// shield generator, life support and sensors) and damage points per system,
+/// as fixed-point bits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct SubsystemRow {
+    pub off: u8,
+    pub damage: [i64; 5],
+}
+
+/// The units that have a switched-off or damaged system (SIM-55); a unit with
+/// neither has no row. In the digest and the snapshot once any exists.
+#[derive(Debug, Clone, Default)]
+pub struct Subsystems {
+    rows: Table<SubsystemRow>,
+}
+
+impl Subsystems {
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+
+    pub fn get(&self, id: EntityId) -> Option<SubsystemRow> {
+        self.rows.get(id).copied()
+    }
+
+    fn edit(&mut self, id: EntityId, f: impl FnOnce(&mut SubsystemRow)) {
+        let mut row = self.get(id).unwrap_or_default();
+        f(&mut row);
+        if row == SubsystemRow::default() {
+            self.rows.remove(id);
+        } else {
+            self.rows.insert(id, row);
+        }
+    }
+
+    pub(crate) fn remove(&mut self, id: EntityId) {
+        self.rows.remove(id);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_off_for_test(&mut self, id: EntityId) {
+        self.edit(id, |r| r.off |= 0b100);
+    }
+
+    /// Mend the damage points (a bench `Heal`); the switches stay as set.
+    pub(crate) fn repair(&mut self, id: EntityId) {
+        self.edit(id, |r| r.damage = [0; 5]);
+    }
+
+    pub(crate) fn to_rows(&self) -> Vec<(EntityId, SubsystemRow)> {
+        self.rows.iter().map(|(id, r)| (id, *r)).collect()
+    }
+
+    /// `None` for rows out of order, with unknown switch bits or negative damage.
+    pub(crate) fn from_rows(rows: Vec<(EntityId, SubsystemRow)>) -> Option<Subsystems> {
+        let valid = rows.iter().all(|(_, r)| r.off & !0b1_1100 == 0 && r.damage.iter().all(|d| *d >= 0) && *r != SubsystemRow::default());
+        valid.then(|| Table::from_rows(rows)).flatten().map(|rows| Subsystems { rows })
+    }
+
+    pub(crate) fn hash_into(&self, h: &mut Fnv) {
+        h.str("subsystems-v1");
+        h.u64(self.rows.len() as u64);
+        for (id, r) in self.rows.iter() {
+            h.u64(id.0 as u64);
+            h.u64(u64::from(r.off));
+            for d in r.damage {
+                h.u64(d as u64);
+            }
+        }
+    }
+}
+
+impl Sim {
+    /// A live craft or station, which is what has shields and systems.
+    fn live_ship(&self, id: EntityId) -> bool {
+        self.units.get(id).is_some_and(|u| matches!(u.kind, EntityKind::Craft | EntityKind::Station) && u.hull[0] > Fixed::ZERO)
+    }
+
+    /// `SetShieldPercent`: every pool in use to `fraction` of the maximum.
+    /// Rule read from the executable (static): current = max x fraction. For a
+    /// directional unit every facing gets it (not measured).
+    pub(crate) fn edit_shield_percent(&mut self, id: EntityId, fraction: Fixed) -> bool {
+        if !self.live_ship(id) {
+            return false;
+        }
+        let u = self.units.get_mut(id).expect("live ship");
+        let level = u.shields.max * fraction.max(Fixed::ZERO).min(Fixed::ONE);
+        let pools = if u.shields.directional { 4 } else { 1 };
+        u.shields.now[..pools].fill(level);
+        true
+    }
+
+    /// `SetMaxShields`: the maximum and every pool in use to `max` (read from
+    /// the executable, static; negative reads as 0).
+    pub(crate) fn edit_max_shields(&mut self, id: EntityId, max: Fixed) -> bool {
+        if !self.live_ship(id) {
+            return false;
+        }
+        let u = self.units.get_mut(id).expect("live ship");
+        let max = max.max(Fixed::ZERO);
+        u.shields.max = max;
+        let pools = if u.shields.directional { 4 } else { 1 };
+        u.shields.now[..pools].fill(max);
+        true
+    }
+
+    /// `Disable<System>` for the systems that are not unit flags.
+    pub(crate) fn edit_subsystem_switch(&mut self, id: EntityId, sub: Subsystem, on: bool) -> bool {
+        match sub {
+            Subsystem::Engines => self.apply_edit(PlayerId::SCRIPT, &crate::command::Edit::Engines(id, on)),
+            Subsystem::Weapons => self.apply_edit(PlayerId::SCRIPT, &crate::command::Edit::Weapons(id, on)),
+            _ => {
+                let n = system(sub);
+                if !self.live_ship(id) {
+                    return false;
+                }
+                self.subsystems.edit(id, |r| {
+                    r.off = if on { r.off & !(1 << n) } else { r.off | (1 << n) };
+                });
+                true
+            }
+        }
+    }
+
+    /// `Damage<System>`: add `points` (negative repairs), clamped to 0..the
+    /// system's hit points. A unit whose ODF has none for it rejects.
+    pub(crate) fn edit_subsystem_damage(&mut self, id: EntityId, sub: Subsystem, points: Fixed) -> bool {
+        let n = system(sub);
+        if !self.live_ship(id) {
+            return false;
+        }
+        let Some(hp) = self.content.as_deref().and_then(|db| db.unit(self.units.get(id)?.def)).map(|d| d.system_hit_points[n]) else {
+            return false;
+        };
+        if hp <= Fixed::ZERO {
+            return false;
+        }
+        self.subsystems.edit(id, |r| {
+            let now = Fixed::from_bits(r.damage[n]);
+            r.damage[n] = (now.to_bits().saturating_add(points.to_bits())).clamp(0, hp.to_bits());
+        });
+        true
+    }
+
+    /// Whether the system is switched on (by `Disable<System>`), and its damage
+    /// points. Engines and weapons answer from the unit flags.
+    pub fn subsystem_state(&self, id: EntityId, sub: Subsystem) -> Option<(bool, Fixed)> {
+        let n = system(sub);
+        let u = self.units.get(id)?;
+        let row = self.subsystems.get(id).unwrap_or_default();
+        let on = match sub {
+            Subsystem::Engines => !u.flags.contains(UnitFlags::ENGINES_OFF),
+            Subsystem::Weapons => !u.flags.contains(UnitFlags::WEAPONS_OFF),
+            _ => row.off & (1 << n) == 0,
+        };
+        Some((on, Fixed::from_bits(row.damage[n])))
+    }
 }

@@ -58,4 +58,8 @@ fn classic_ordnance_and_units_carry_the_crew_loss_keys() {
     let sane = |n: &str| db.units().find(|u| u.odf.eq_ignore_ascii_case(n)).map(|u| u.sane_crew_loss);
     assert!(sane("fassault").unwrap_or(true));
     assert!(!sane("fcruise2").unwrap_or(false));
+    // SIM-55: the system hit points (engines, weapons, shield generator, life support, sensors).
+    if let Some(u) = db.units().find(|u| u.odf.eq_ignore_ascii_case("fassault")) {
+        assert_eq!(u.system_hit_points.map(|f| f.to_f32()), [120.0, 80.0, 120.0, 100.0, 80.0]);
+    }
 }
