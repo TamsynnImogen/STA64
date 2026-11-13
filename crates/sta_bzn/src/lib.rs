@@ -292,7 +292,7 @@ fn parse_binary(recs: &[Rec]) -> Map {
         m.objects.push(o);
         i += 4;
     }
-    m.paths = paths::from_records(recs);
+    m.paths = paths::from_records(&recs[objects_from.min(recs.len())..]);
     m
 }
 
@@ -386,7 +386,7 @@ fn fields(text: &str) -> Vec<Field> {
         } else {
             // `name = value`: hex when a length field just announced it.
             let value = match last_len {
-                Some(n) if n > 0 && is_hex(rhs) && rhs.len() / 2 == n => decode_hex(rhs),
+                Some(n) if n > 0 && is_hex(rhs) && rhs.len() / 2 == n && !matches!(lhs, "pathType" | "old_ptr") => decode_hex(rhs),
                 _ => rhs.to_owned(),
             };
             last_len = None;

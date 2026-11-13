@@ -95,14 +95,14 @@ pub(crate) fn from_records(recs: &[Rec]) -> Vec<MapPath> {
     Vec::new()
 }
 
-/// `pathType` of a text map: hex of a little-endian u32, or (when the field
-/// reader already decoded the hex as text) its first byte.
+/// `pathType` of a text map: hex of a little-endian u32 (the field reader
+/// never decodes this field as text).
 fn text_type(v: &str) -> u32 {
     if v.len() == 8 && v.bytes().all(|c| c.is_ascii_hexdigit()) {
         let b: Vec<u8> = (0..4).map(|i| u8::from_str_radix(&v[2 * i..2 * i + 2], 16).unwrap_or(0)).collect();
         u32::from_le_bytes([b[0], b[1], b[2], b[3]])
     } else {
-        v.bytes().next().map_or(0, u32::from)
+        0
     }
 }
 
@@ -113,7 +113,10 @@ pub(crate) fn from_fields(fs: &[Field]) -> Vec<MapPath> {
     for f in &fs[start + 1..] {
         let v = f.values.first().map(String::as_str).unwrap_or("");
         match f.name.as_str() {
-            "[AiPath]" => out.push(MapPath::default()),
+            "[AiPath]" => {
+                out.push(MapPath::default());
+                axis.clear();
+            }
             name => {
                 let Some(p) = out.last_mut() else { continue };
                 match name {
@@ -140,4 +143,63 @@ pub(crate) fn from_fields(fs: &[Field]) -> Vec<MapPath> {
 /// ignoring ASCII case.
 pub fn find<'a>(paths: &'a [MapPath], name: &str) -> Option<&'a MapPath> {
     paths.iter().find(|p| p.label == name).or_else(|| paths.iter().find(|p| p.label.eq_ignore_ascii_case(name)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rec(kind: u32, data: &[u8]) -> Vec<u8> {
+        let mut v = kind.to_le_bytes().to_vec();
+        v.extend((data.len() as u32).to_le_bytes());
+        v.extend(data);
+        v
+    }
+    fn path(label: &str) -> Vec<u8> {
+        let mut v = rec(0, &[0; 4]);
+        v.extend(rec(4, &(label.len() as i32).to_le_bytes()));
+        v.extend(rec(0, label.as_bytes()));
+        v.extend(rec(4, &1i32.to_le_bytes()));
+        v.extend(rec(9, &[0u8; 12]));
+        v.extend(rec(0, &0u32.to_le_bytes()));
+        v.extend(rec(5, &0.5f32.to_le_bytes()));
+        v.extend(rec(4, &1i32.to_le_bytes()));
+        v
+    }
+    fn parse_all(bytes: &[u8]) -> Vec<MapPath> {
+        let mut recs = Vec::new();
+        let mut at = 0;
+        while at < bytes.len() {
+            let size = u32::from_le_bytes(bytes[at + 4..at + 8].try_into().unwrap()) as usize;
+            recs.push(Rec { kind: u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()), data: &bytes[at + 8..at + 8 + size] });
+            at += 8 + size;
+        }
+        from_records(&recs)
+    }
+
+    #[test]
+    fn a_decoy_count_before_the_list_and_a_truncated_list() {
+        // A stray count of 1 followed by a complete path, then the real list of 2 ending the file.
+        let mut b = rec(4, &1i32.to_le_bytes());
+        b.extend(path("decoy"));
+        b.extend(rec(4, &2i32.to_le_bytes()));
+        b.extend(path("a"));
+        b.extend(path("b"));
+        // The decoy chain does not end the file, so it is not taken; the real list is.
+        let labels: Vec<String> = parse_all(&b).into_iter().map(|p| p.label).collect();
+        assert_eq!(labels, ["a", "b"]);
+        // A list cut short has no complete list at the end.
+        let mut t = rec(4, &2i32.to_le_bytes());
+        t.extend(path("a"));
+        assert!(parse_all(&t).is_empty());
+    }
+
+    #[test]
+    fn text_path_type_survives_a_last_z_of_four() {
+        let text = "[AiPaths]\ncount [1] =\n1\n[AiPath]\nold_ptr = 00000000\nsize [1] =\n1\nm_pLabel = p\npointCount [1] =\n1\npoints [1] =\n  x [1] =\n1\n  y [1] =\n2\n  z [1] =\n4\npathType = 02000100\nasteroid_belt_speed [1] =\n0.01\nm_nebula_type [1] =\n1\n";
+        let p = from_fields(&crate::fields(text));
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0].path_type, 0x0001_0002);
+        assert_eq!(p[0].points, [[1.0, 2.0, 4.0]]);
+    }
 }

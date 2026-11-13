@@ -38,6 +38,7 @@ fn every_installed_map_has_a_sane_path_list() {
     }
     let (mut maps, mut paths, mut points) = (0, 0, 0);
     let mut empty: Vec<String> = Vec::new();
+    let mut duplicates: Vec<String> = Vec::new();
     for root in roots {
         let mut files = Vec::new();
         bzn_files(&root, &mut files);
@@ -65,13 +66,19 @@ fn every_installed_map_has_a_sane_path_list() {
                 assert!(p.belt_speed.is_finite() && p.belt_speed >= 0.0, "{}: {}", f.display(), p.label);
                 points += p.points.len();
             }
+            let mut seen = std::collections::BTreeSet::new();
+            for p in &map.paths {
+                if !seen.insert(p.label.to_ascii_lowercase()) {
+                    duplicates.push(format!("{}: {}", f.file_name().unwrap().to_string_lossy(), p.label));
+                }
+            }
             paths += map.paths.len();
             // Write then parse gives the same map.
             let again = sta_bzn::parse(&sta_bzn::write::write(&map).unwrap()).unwrap();
             assert_eq!(again.paths, map.paths, "{}: paths do not survive a write", f.display());
         }
     }
-    eprintln!("{maps} maps, {paths} paths, {points} points; empty lists: {empty:?}");
+    eprintln!("{maps} maps, {paths} paths, {points} points; empty lists: {empty:?}; duplicate labels (case-insensitive): {} {duplicates:?}", duplicates.len());
     assert!(maps > 0, "no map found under the given roots");
     assert!(empty.len() * 50 <= maps, "too many maps without a path list: {empty:?}");
 }
