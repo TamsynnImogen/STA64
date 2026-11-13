@@ -460,7 +460,7 @@ sta-bench pair move --game a2 --refit-out <earlier>/refit --install ...   # reus
   Refit's `Scene.asi` never reads: `Games=a2,roots`, `Duration=` (sim seconds
   after the scene is built), `Frames=3,8` (sim seconds), `Size=WxH`,
   `Tol=time=0.25,pos=5,hull=1[,frame=8]`, `At=<s> <command>` (repeatable, the
-  timeline, in the command vocabulary), and per game `Launch=`, `Race=`,
+  timeline, in the command vocabulary; `a; b` gives several at one time), and per game `Launch=`, `Race=`,
   `Mod=`. Any key may be prefixed by a game, in any section (`roots.Odf=`,
   `roots.Size=1280x960`, `fake.Odf=fx_cruiser`): for that game it replaces
   the plain key; other games' prefixed keys are dropped. **Armada I is not
@@ -478,11 +478,19 @@ sta-bench pair move --game a2 --refit-out <earlier>/refit --install ...   # reus
   `bench/measure-marks` branch (`--refit` or `$REFIT_ROOT` names that
   checkout). Commands land late (one `drive` round trip, and the sim may run
   faster than the wall clock), so nothing is compared on the asked time.
+  `rclick <object>` is a player's right-click with the current `select`ion:
+  `camera on` the object, the bench's pointer to the middle of the view
+  (`UiCenter=X,Y` when the object is drawn elsewhere) and the right button; it
+  has no `cmd` mark, so it lands at the sim time the marks' `epoch` lines put
+  the button press at. A simulation that stops advancing for 45 s of wall time
+  (a mission map's briefing pauses it) fails the run.
 - **The STA64 side** runs the same text in-process on the install's content
   (`--install`, `--mod`, or `--fake` for tests), each command on the tick
   nearest to when it **landed on the original**, frames at the original's
-  frame times. It writes the original's file formats: `Scene.marks` (Refit's
-  names; fire bursts merged per shooter and weapon as Refit marks them; one
+  frame times; `rclick` gives the order `sta_sim::context` picks for the
+  selection (the client's right-click rule), else a move to the object's place. It writes the original's file formats: `Scene.marks` (Refit's
+  names; fire bursts merged per shooter and weapon as Refit marks them, a
+  projectile firing from its shot until its hit as Refit follows ordnance; one
   `ord.new` per shot; a `state` line per named object every tick), `run.json`,
   and frames from `sta64 --headless` (`--sta64`/`$STA64_BIN`). Those frames are
   still the bench's stand-in shapes on fake content (TOOL-04), so the visual
