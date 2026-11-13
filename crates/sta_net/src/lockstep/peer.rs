@@ -10,6 +10,7 @@ use sta_content::{ContentDb, MapDef};
 use sta_core::{PlayerId, Tick};
 use sta_sim::command::{Command, CommandRouter};
 use sta_sim::replay::Replay;
+use sta_sim::digest::SectionDigests;
 use sta_sim::setup::GameSetup;
 use sta_sim::{SimEvent, WorldSource};
 
@@ -146,6 +147,8 @@ impl Peer {
     pub fn step(&mut self) -> StepOutcome {
         if self.tick.is_multiple_of(self.ticks_per_turn) && self.digested != Some(self.tick) {
             self.digested = Some(self.tick);
+            let sections = self.sim.section_digests();
+            self.router.set_sections(self.tick, sections.values().to_vec());
             self.router.set_digest(self.tick, self.sim.digest());
         }
         let Some(mut cmds) = self.router.take_ready(self.tick) else {
@@ -221,6 +224,9 @@ impl Peer {
                 let _ = writeln!(s, "digest at that tick, seat {}: {d:#018x}", seat.0);
             }
         }
+        if let Some(tick) = tick {
+            self.sections_report(&mut s, tick);
+        }
         if let Some(n) = self.router.desync() {
             let _ = writeln!(
                 s,
@@ -255,6 +261,30 @@ impl Peer {
             let _ = writeln!(s, "engine, seat {}: {} {} {}", seat.0, e.name, e.version, e.build);
         }
         s
+    }
+
+    /// The section digests known for `tick` and the sections that differ
+    /// (NET_DECISIONS N6). Lines, in seat order:
+    /// `section digests at that tick, seat N: roster=0x.., movement=0x.., ...`
+    /// and `first differing sections, seat A against seat B: movement, combat`
+    /// (A is this seat, B another that sent its digests).
+    fn sections_report(&self, s: &mut String, tick: Tick) {
+        let name = |i: usize| SectionDigests::NAMES.get(i).map_or_else(|| format!("section#{i}"), |n| (*n).to_owned());
+        let known = self.router.sections_at(tick);
+        for (seat, d) in &known {
+            let list: Vec<String> = d.iter().enumerate().map(|(i, v)| format!("{}={v:#018x}", name(i))).collect();
+            let _ = writeln!(s, "section digests at that tick, seat {}: {}", seat.0, list.join(", "));
+        }
+        let me = self.router.me();
+        let Some((_, ours)) = known.iter().find(|(p, _)| *p == me) else {
+            return;
+        };
+        for (seat, theirs) in known.iter().filter(|(p, _)| *p != me) {
+            let n = ours.len().max(theirs.len());
+            let differing: Vec<String> = (0..n).filter(|&i| ours.get(i) != theirs.get(i)).map(name).collect();
+            let text = if differing.is_empty() { "none".to_owned() } else { differing.join(", ") };
+            let _ = writeln!(s, "first differing sections, seat {} against seat {}: {text}", me.0, seat.0);
+        }
     }
 
     /// Writes `<stem>.star` (the replay) and `<stem>.star.desync.txt` into

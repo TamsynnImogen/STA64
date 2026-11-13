@@ -12,6 +12,8 @@ sta_core.workspace = true
 sta_content.workspace = true
 sta_sim.workspace = true
 sta_vfs.workspace = true
+# Desync diagnosis (NET-06): `sta-bench desync` calls `sta_net::diagnose` (Bevy-free).
+sta_net.workspace = true
 # Paired scenes on install content (TOOL-17): the pair's map is read from the install.
 sta_bzn.workspace = true
 serde.workspace = true
