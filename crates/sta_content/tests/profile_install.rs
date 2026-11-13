@@ -5,8 +5,8 @@
 //! - `STA64_TEST_STOCK_A2`: a stock Armada II root (loose files or `Data`).
 //! - `STA64_TEST_A1`: an Armada I root (`assets.zfs`).
 //! - `STA64_TEST_FO3` (optional, several roots separated by the platform path
-//!   separator): Fleet Operations 3.x / Dominion War roots; their detection
-//!   is recorded, and must stay what it was before CON-43.
+//!   separator), `STA64_TEST_FO327_INSTALL`, `STA64_TEST_DW_INSTALL`: Fleet
+//!   Operations 3.2.7 / Dominion War roots; they detect as `Fo3` (CON-44).
 
 use std::path::{Path, PathBuf};
 
@@ -64,14 +64,56 @@ fn classic_content_identity_moves_with_its_profile_back_to_roots() {
     }
 }
 
+/// The FO 3.2.7 and Dominion War roots: `STA64_TEST_FO3` (a path list) plus the
+/// single-install variables the mission tests use.
+fn fo3_roots() -> Vec<PathBuf> {
+    let mut v: Vec<PathBuf> = std::env::var_os("STA64_TEST_FO3").map(|r| std::env::split_paths(&r).collect()).unwrap_or_default();
+    for var in ["STA64_TEST_FO327_INSTALL", "STA64_TEST_DW_INSTALL"] {
+        v.extend(std::env::var_os(var).map(PathBuf::from));
+    }
+    v.sort();
+    v.dedup();
+    v
+}
+
 #[test]
-fn fleet_operations_3x_installs_detect_as_before_and_record_their_version() {
-    let Some(roots) = std::env::var_os("STA64_TEST_FO3") else { return };
-    for root in std::env::split_paths(&roots) {
+fn fleet_operations_3x_installs_detect_as_fo3_by_packages_ini() {
+    for root in fo3_roots() {
         let d = detect(&root, None);
-        // Before CON-43 these were `Sta2Classic` by the Armada II layout (no `info.ini`, no FO name);
-        // the 3.x engine has no profile variant in v1 (D5).
-        assert_eq!((d.profile, d.step), (Profile::Sta2Classic, DetectStep::Heuristic), "{root:?}");
+        // CON-44 (D5): no `info.ini`, `[FleetOps] Version=3.2.7` in `Data/packages.ini`.
+        assert_eq!((d.profile, d.step), (Profile::Fo3, DetectStep::PackagesIni), "{root:?}");
         assert_eq!(d.fleetops_version.as_deref(), Some("3.2.7"), "{root:?}");
+        assert!(d.file.as_deref().is_some_and(|p| p.ends_with("packages.ini")), "{root:?}");
+        assert!(d.warnings.is_empty(), "{root:?}: {:?}", d.warnings);
+    }
+}
+
+#[test]
+fn fo3_content_loads_under_its_own_lineage_and_the_profile_is_in_the_identity() {
+    for root in fo3_roots() {
+        let vfs = Vfs::mount_install(&root, None).unwrap();
+        let (index, _) = sta_content::OdfIndex::build(&vfs);
+        let (db, _) = sta_content::ContentDb::load(&vfs, &index).unwrap();
+        let (as_a2, _) = sta_content::ContentDb::load_as(&vfs, Profile::Sta2Classic, &index).unwrap();
+        eprintln!("{root:?}: fo3 hash {:016x}, as sta2classic {:016x}", db.hash(), as_a2.hash());
+        assert_eq!((db.profile(), db.lineage()), (Profile::Fo3, "fo3"));
+        assert_ne!(db.hash(), as_a2.hash());
+        // The data the feature row cites (see `Profile::features`): FO's own PD class,
+        // slots beyond dilithium charged, build yards.
+        assert!(db.weapons().any(|w| w.ordnance_defence), "{root:?}: ordnancedefenseweapon");
+        assert!(db.units().any(|u| u.build.cost.iter().skip(1).any(|c| c.to_bits() > 0)), "{root:?}: latinum/metal/biomatter costs");
+        assert_eq!(db.resources().name(1), "Tritanium", "{root:?}");
+        assert_eq!(db.resources().name(3), "Supply", "{root:?}");
+    }
+}
+
+#[test]
+fn other_installs_keep_their_profile_and_the_fake_hash_is_unchanged() {
+    assert_eq!(sta_content::fake::db().hash(), 0x9ef5_3881_3050_10f8);
+    if let Some(root) = std::env::var_os("STA64_TEST_STOCK_A2").map(PathBuf::from) {
+        assert_eq!(detect(&root, None).profile, Profile::Sta2Classic);
+    }
+    if let Some(root) = std::env::var_os("STA64_TEST_INSTALL").map(PathBuf::from) {
+        assert_eq!(detect(&root, None).profile, Profile::Fo4);
     }
 }

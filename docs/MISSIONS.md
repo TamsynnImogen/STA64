@@ -12,6 +12,11 @@ A native 64-bit STA64 build cannot load 32-bit Windows DLLs on any platform,
 including Windows. So STA64 never loads `.drl`, `.dsl`, `.dll` or
 `mmm_loader.dll`.
 
+Legacy compiled scripts (A2 and A1 mission DLLs) reach the player by conversion
+to Lua on their own machine from their own install, never shipped; the
+interim route is the Python converter, the release target a Rust port run by
+the game (WORKPLAN LUA-15 and the note under the LUA table).
+
 ## How MMM picks a script (from its source)
 
 MMM (Megadroid's Mission Mod, github.com/chreden/mmm) runs
@@ -461,6 +466,37 @@ data = read from the install; not measured):
   measured; fades release themselves). `A2.HostPending()` lists what is open.
 - **Bool arguments**: a `bool` parameter (decorated name `_N`) is passed as a Lua
   boolean; the pushed word is an int.
+- **Arguments passed by address** (exe, from the decorated signatures): a
+  `Vector3 &` (`SetAngularVelocity`, `SetVelocity`, `GetNearestObjectNearPosition`) is
+  the Vector the code built in a stack slot just before the call, so the script
+  passes a Vector; an `int &` input (`GetDistance`, handles) is the value; the
+  `int &` of `RecruitSpecialForces` is an out parameter (the script's slot gets
+  the handle the binding returns as its second result); a `char *` is the string
+  the code formatted (the C runtime's `sprintf` is modelled, as are `strcmp`,
+  `Vector3(x, y, z)` and the debug report) or the image's text. The DLL's `std::vector`
+  members (a local or a function-static vector, with its SEH frame and `atexit`) are
+  recognised by their compiled bodies and modelled as Lua tables; an iterator is a byte
+  offset from `begin()`. No address is
+  ever passed on as a table: an address left over makes that one function
+  undecoded.
+- **Globals the DLL does not export** (data): a read-only constant or a static
+  nothing writes is inlined from the DLL image; a static the code writes (or
+  hands out) is a slot of the script's `G`, started from the image. The
+  variables the engine writes (team strength, moons, warp tries, the cineractive
+  flags) are read through a counted access (`Mission_.engineReads[name]`); a host
+  that binds `A2.EngineVariable(name)` supplies the value, else the engine's
+  start value is read (the engine's own writes are not reproduced).
+- **Script names**: the converted script is written under the stem of every map
+  that names the mission DLL in its script section (the UI tutorial's map
+  `a2_tutorial_UI` runs `a2_Tutorial1`), as the mission resolver looks a script up by
+  the map's stem.
+- **`BuildObject` is synchronous** (exe): the object is built and added to the
+  world inside the call and its handle returned, so a mission may order it at
+  once. STA64 builds through the sim's command queue (receipt one tick later; a
+  same-tick spawn needs a sim seam, not made): a void order or setter given a
+  still-pending handle is held and replayed by the first `A2` call after the
+  receipt (`DEFERRED_ON_PENDING` in `dll_objects.rs`; a script that makes no `A2` call after the receipt leaves it held until its next one); queries on the pending
+  handle still raise and are counted.
 - Calls with no sim seam stay counted and non-raising (`shared_calls.rs`:
   retained as presentation calls) or raising (`no_data_fn`).
 

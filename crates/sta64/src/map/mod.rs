@@ -361,6 +361,7 @@ type MapState<'w> = (
     Option<Res<'w, crate::game::mission_host::MissionLaunch>>,
     Option<Res<'w, crate::render::profile::RenderProfile>>,
     Option<Res<'w, crate::render::profile::ProfileEffects>>,
+    crate::game::net_match::NetBuild<'w>,
 );
 
 /// The ambient light and the two map lights, as one system parameter.
@@ -665,7 +666,7 @@ fn rebuild(
     lighting: Lighting,
 ) {
     let (mut silhouettes, mut ambient, mut lights) = lighting;
-    let (mut particles, mut selection, mut queue, mut clock, mut limits, mut planet_materials, mut nebula_materials, noise, seat, skirmish_cfg, mission_launch, profile, profile_effects) = state;
+    let (mut particles, mut selection, mut queue, mut clock, mut limits, mut planet_materials, mut nebula_materials, noise, seat, skirmish_cfg, mission_launch, profile, profile_effects, mut net) = state;
     let gas_volumes = crate::render::stock::nebula::volumetric(profile.as_deref(), profile_effects.as_deref());
     if !browser.dirty {
         return;
@@ -705,9 +706,31 @@ fn rebuild(
             return;
         }
     };
-    let SimSide { setup, sim, warnings: sim_warnings, controllers, skirmish, mission } = match mission_launch.as_deref() {
-        Some(launch) => build_mission_sim(&map, &name, &content, &index, &vfs.0, &races, launch),
-        None => build_sim(&map, &name, &content, &index, &vfs.0, seat.0, skirmish_cfg.as_deref().map(|c| (c, &*races))),
+    // A match from the multiplayer lobby (INT-M5): the sim is the host's `Start` over this
+    // machine's own copy of the map, refused unless it is the host's map.
+    let mut net_match = net.take();
+    let side = match net_match.take() {
+        Some(nm) => {
+            let own = MapDef::convert_bzn_named_in(&map, &name, &content, &vfs.0, &index).map;
+            match crate::game::net_match::build_side(&nm, own, &races) {
+                Ok(n) => {
+                    net_match = Some(nm);
+                    Some(SimSide { warnings: 0, setup: n.setup, sim: n.sim, controllers: n.controllers, skirmish: Some(Ok(n.seats)), mission: None })
+                }
+                Err(why) => {
+                    warn!("net match refused: {why}");
+                    browser.info = format!("{header}\n{why}");
+                    net.fail(nm, why);
+                    return;
+                }
+            }
+        }
+        None => None,
+    };
+    let SimSide { setup, sim, warnings: sim_warnings, controllers, skirmish, mission } = match (side, mission_launch.as_deref()) {
+        (Some(side), _) => side,
+        (None, Some(launch)) => build_mission_sim(&map, &name, &content, &index, &vfs.0, &races, launch),
+        (None, None) => build_sim(&map, &name, &content, &index, &vfs.0, seat.0, skirmish_cfg.as_deref().map(|c| (c, &*races))),
     };
     let mut skirmish_note = None;
     let mut played_race = None;
@@ -1166,13 +1189,24 @@ fn rebuild(
     // The sim, stepped by the sim link. Without a seat the view orders any team's ships,
     // so the link speaks as the bench, which the sim does not restrict to its own units;
     // with one it speaks as the seat and the sim holds it to its own.
-    crate::capture::arm(
-        &mut commands,
-        SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), seat_player.unwrap_or(PlayerId::BENCH)).with_controllers(controllers),
-        &setup,
-        is_match,
-        &vfs.0,
-    );
+    let mut net_error = None;
+    match net_match {
+        // The link steps only through the lockstep peer (the sim's replay is the peer's).
+        Some(nm) => match crate::game::net_match::link(nm, &setup, sim, &races, controllers, &net.options()) {
+            Ok((link, game)) => {
+                commands.insert_resource(link);
+                commands.insert_resource(game);
+            }
+            Err(why) => net_error = Some(why),
+        },
+        None => crate::capture::arm(
+            &mut commands,
+            SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), seat_player.unwrap_or(PlayerId::BENCH)).with_controllers(controllers),
+            &setup,
+            is_match,
+            &vfs.0,
+        ),
+    }
 
     missing.sort();
     missing.dedup();
@@ -1218,6 +1252,10 @@ fn rebuild(
     }
     if !missing.is_empty() {
         info.push_str(&format!("\nnot found: {}", missing.iter().take(12).cloned().collect::<Vec<_>>().join(", ")));
+    }
+    if let Some(why) = net_error {
+        info.push_str(&format!("\n{why}"));
+        net.failed_with(why);
     }
     info!("map {}", info.replace('\n', " | "));
     browser.info = info;

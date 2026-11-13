@@ -9,6 +9,9 @@
 //! netplay join --relay 127.0.0.1:7864 --code K7M-Q2X --ticks 9000 --hz 30
 //! ```
 //!
+//! With `--referee` the host also waits for a referee (`referee` bin, NET-05)
+//! after the players: start it once the players have joined.
+//!
 //! Every process prints `DONE tick=<n> digest=<hex>` at the end; they must
 //! agree.
 
@@ -59,6 +62,7 @@ fn main() {
     let role = args.next().unwrap_or_else(|| die("host or join"));
     let (mut relay, mut code, mut peers, mut ticks, mut hz) =
         (String::new(), String::new(), 2u8, 3_000u64, 30u64);
+    let mut want_referee = false;
     while let Some(a) = args.next() {
         let mut v = || args.next().unwrap_or_else(|| die(&format!("{a} needs a value")));
         match a.as_str() {
@@ -67,6 +71,7 @@ fn main() {
             "--peers" => peers = v().parse().unwrap_or_else(|_| die("--peers")),
             "--ticks" => ticks = v().parse().unwrap_or_else(|_| die("--ticks")),
             "--hz" => hz = v().parse().unwrap_or_else(|_| die("--hz")),
+            "--referee" => want_referee = true,
             _ => die(&format!("unknown argument {a}")),
         }
     }
@@ -80,6 +85,7 @@ fn main() {
     let opts = ClientOptions::default();
     let wait = Duration::from_secs(120);
 
+    let mut referee_slot = None;
     let (mut t, start) = if role == "host" {
         let mut t = NetTransport::create(relay.as_str(), "", &opts)
             .unwrap_or_else(|e| die(&e.to_string()));
@@ -101,6 +107,26 @@ fn main() {
             if ok {
                 joined += 1;
                 println!("JOINED seat {}", from.0);
+            }
+        }
+        // The referee joins after the players (its relay seat follows theirs),
+        // is admitted like a joiner and receives `Start` with the others.
+        while want_referee && referee_slot.is_none() {
+            let (from, msg) = wait_msg(&mut t, wait);
+            let Message::RefereeHello(hello) = msg else { continue };
+            if from.0 < peers {
+                let _ = t.send(Destination::Seat(from), &Message::Refuse(Refusal::Protocol));
+                continue;
+            }
+            match admit(&engine(), rules, &hello, rules) {
+                Ok(()) => {
+                    let _ = t.send(Destination::Seat(from), &sta_net::referee::welcome(from, PlayerId(0)));
+                    println!("REFEREE seat {}", from.0);
+                    referee_slot = Some(from);
+                }
+                Err(e) => {
+                    let _ = t.send(Destination::Seat(from), &Message::Refuse(e.refusal()));
+                }
             }
         }
         let start = Start {
@@ -166,6 +192,11 @@ fn main() {
     let mut peer = Peer::start(&start, me, db.clone(), map, Box::new(t))
         .unwrap_or_else(|e| die(&e.to_string()));
 
+    if let Some(r) = referee_slot {
+        peer.router_mut()
+            .seat_referee(Some(r))
+            .unwrap_or_else(|e| die(&e.to_string()));
+    }
     let mut seq = 0u32;
     if me == start.host {
         let cruiser = db.key("fx_cruiser").unwrap_or_else(|| die("fake content"));

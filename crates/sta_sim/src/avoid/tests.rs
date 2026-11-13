@@ -203,3 +203,150 @@ fn own_stations_are_not_solid_but_enemy_ones_are() {
         assert_eq!(closest > 100.0, solid, "closest {closest}");
     }
 }
+
+// A craft confined to the map (Fleet Operations' `forceOntoMap`) that rests
+// against one of the border asteroid fields used to be held still with its
+// order kept: the field counted as "on the leg" although the leg led away from
+// it, and when no checked detour existed `steer_around` froze the craft, so
+// every later order was accepted and never moved. Authored layout, no game data.
+
+fn fo4_content() -> Arc<ContentDb> {
+    let mut craft = sta_content::UnitDef::new("craft", "craft");
+    craft.hull = Fixed::from_int(100);
+    craft.radius = Fixed::from_int(100);
+    craft.movement = sta_content::MoveStats::from_f32(135.0, 2.0, 2.0, 2.0, 1.0);
+    // A capital ship's turning limits, as a Fleet Operations hull has them.
+    craft.movement.max_speed = Fixed::from_int(135);
+    craft.movement.combat_speed = Fixed::from_int(135);
+    craft.movement.turn_at_rest = Fixed::ONE;
+    craft.movement.turn_alpha_at_rest = Fixed::ONE;
+    craft.movement.forward_accel = Fixed::from_f64(0.45);
+    craft.movement.turn_omega = Fixed::from_f64(0.105);
+    craft.movement.turn_alpha = Fixed::from_f64(0.25);
+    craft.movement.too_close_to_turn = Fixed::from_int(120);
+    craft.movement.path_lead = Fixed::from_int(300);
+    craft.movement.turn_control_angle = Fixed::from_int(20);
+    craft.movement.forward_control_distance = Fixed::from_int(70);
+    Arc::new(
+        ContentDb::builder()
+            .profile(sta_content::Profile::Fo4)
+            .unit(craft)
+            .build()
+            .unwrap(),
+    )
+}
+
+fn field(x: i32, z: i32) -> Region {
+    Region {
+        kind: RegionKind::AsteroidField,
+        odf: "trigger_blocking".into(),
+        shape: RegionShape::Sphere {
+            centre: v(x, z),
+            radius: Fixed::from_int(400),
+        },
+    }
+}
+
+/// A ring of overlapping fields round the east edge of a 6200-unit map.
+fn confined_sim(extra: Vec<Region>) -> Sim {
+    let mut map = MapDef::empty();
+    map.bounds = (v(100, 100), v(6300, 6300));
+    map.bounds.0.y = Fixed::from_int(-10);
+    map.bounds.1.y = Fixed::from_int(10);
+    map.regions = vec![field(4590, 2541), field(4530, 2009), field(4049, 1756)];
+    map.regions.extend(extra);
+    Sim::from_setup(&GameSetup {
+        seed: 3,
+        map: Arc::new(map),
+        content: fo4_content(),
+        players: vec![PlayerSetup {
+            id: PlayerId(1),
+            team: TeamId(1),
+            race: "fx".into(),
+            control: Control::Idle,
+        }],
+        options: GameOptions::default(),
+    })
+}
+
+#[test]
+fn a_confined_craft_resting_on_a_border_field_leaves_it() {
+    let mut sim = confined_sim(Vec::new());
+    // Resting at contact distance (400 + 75) from the first field.
+    let id = put(&mut sim, "craft", 1, v(4159, 2354));
+    assert_eq!(sim.force_onto_map(id), Some(true));
+    let start = sim.unit(id).unwrap().pos;
+    go(&mut sim, 1, &[id], v(3799, 2921));
+    for _ in 0..600 {
+        sim.step(&[]);
+    }
+    let end = sim.unit(id).unwrap();
+    assert!(
+        gap(start, end.pos) > 100.0 || end.target.is_none(),
+        "frozen at {:?} with order {:?}",
+        end.pos,
+        end.target
+    );
+    assert!(gap(end.pos, v(3799, 2921)) < 60.0, "ended at {:?}", end.pos);
+}
+
+/// Whatever a player orders across and into a field of obstacles, the order
+/// ends (arrival, or the sim ending it) within a bound: a craft never keeps a
+/// move order it makes no progress on. Own deterministic generator, so the
+/// layout and orders are the same on every run.
+#[test]
+fn random_orders_across_a_field_of_obstacles_always_end() {
+    let mut seed: u64 = 0x2545_f491_4f6c_dd1d;
+    let mut next = |n: i32| {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        (seed >> 33) as i32 % n
+    };
+    // A ring of fields round the map (16 at 2900 from its middle) and some
+    // scattered ones, with passable gaps between all of them.
+    let regions: Vec<Region> = [(6100, 3200), (5879, 4310), (5251, 5251), (4310, 5879), (3200, 6100), (2090, 5879), (1149, 5251), (521, 4310), (300, 3200), (521, 2090), (1149, 1149), (2090, 521), (3200, 300), (4310, 521), (5251, 1149), (5879, 2090), (2000, 2000), (4400, 4300), (1800, 4300), (4300, 1700)]
+        .into_iter()
+        .map(|(x, z)| field(x, z))
+        .collect();
+    for confined in [true, false] {
+        let mut sim = confined_sim(Vec::new());
+        sim.regions = regions.clone();
+        let id = put(&mut sim, "craft", 1, v(3200, 3200));
+        if !confined {
+            sim.step(&[Command {
+                player: PlayerId::SCRIPT,
+                seq: 0,
+                kind: CommandKind::Edit(crate::command::Edit::ForceOntoMap { id, enabled: false }),
+            }]);
+        }
+        for order in 0..40 {
+            // Targets anywhere in the open map (not within a field's contact
+            // distance and margin: a destination pushed out to the far side
+            // of a field is an orbit the planner does not yet settle).
+            let to = loop {
+                let to = v(150 + next(6000), 150 + next(6000));
+                let free = regions.iter().all(|r| match r.shape {
+                    RegionShape::Sphere { centre, .. } => gap(centre, to) > 650.0,
+                    _ => true,
+                });
+                if free {
+                    break to;
+                }
+            };
+            go(&mut sim, 1, &[id], to);
+            let mut ticks = 0;
+            while sim.unit(id).unwrap().target.is_some() && ticks < 4000 {
+                sim.step(&[]);
+                ticks += 1;
+                            }
+            let u = sim.unit(id).unwrap();
+            assert!(
+                u.target.is_none(),
+                "confined={confined} order {order} to {:?} still alive at {:?} after {ticks} ticks",
+                to,
+                u.pos
+            );
+        }
+    }
+}

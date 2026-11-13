@@ -81,7 +81,7 @@ impl ResourceModel {
     /// the latinum slot is the tritanium, the biomatter slot the supply.
     pub fn for_profile(profile: Profile) -> ResourceModel {
         match profile {
-            Profile::Fo4 => ResourceModel::new(["Dilithium", "Tritanium", "Collective Connections", "Supply"]),
+            Profile::Fo4 | Profile::Fo3 => ResourceModel::new(["Dilithium", "Tritanium", "Collective Connections", "Supply"]),
             // Roots' own ODFs name tritanium for the metal; the aliases keep an
             // install whose table is missing readable.
             Profile::Native | Profile::Sta2Classic | Profile::Sta1Classic => {

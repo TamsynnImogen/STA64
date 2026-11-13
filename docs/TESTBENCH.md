@@ -786,6 +786,28 @@ before.
    or `Fault::Inject` (`crates/sta_net/tests/lockstep.rs`, "NET-06") around
    the command and entity the report names, and fix the sim.
 
+## Install digest goldens (`sta-bench golden`, TOOL-12)
+
+```sh
+sta-bench golden --install "<root>" [--mod "<mod folder>"] [map...] [--ticks 300] [--seed S] \
+    [--json <file|->] [--record <file>] [--against <file>]
+```
+
+Mounts the install, loads its content (`ContentDb::load`), converts every readable map
+(or the named ones), starts each as a skirmish (`Sim::from_setup_with_starts`: one idle seat
+per start position, at least two, the content's playable races in turn) and steps it twice.
+The report is strict JSON: the profile, the content hash and, per map, the seat and unit
+counts and the digests at tick 0 and the last tick. Exit 0; 1 when a map panics, the two runs
+end on different digests, or `--against` finds a difference (profile, content hash, ticks,
+seed, a map's digests, a map missing or new); 2 for usage. Used for the FO 3.2.7 and Dominion
+War installs (`fo3` profile, D5); any install works.
+
+`--record` writes a golden. It derives from the install and the code, so it is **not**
+committed (see "CI"): keep it beside the install notes and run `--against` after a change
+to content loading or the sim. The install-gated test `sta_bench/tests/golden_install.rs`
+(`STA64_TEST_FO327_INSTALL`, `STA64_TEST_DW_INSTALL`, or `STA64_TEST_FO3`) checks the
+machinery without pinning a value.
+
 ## Sessions and reports
 
 A thin layer over Refit's conventions (`testbench/README.md`, "Which session
