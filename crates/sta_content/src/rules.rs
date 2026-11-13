@@ -168,7 +168,8 @@ pub struct CfgRules {
     pub shield_damage_protection: Option<Fixed>,
     /// `REPAIR_SHIP_DISTANCE` (float; Classic 180, Enhanced 230).
     pub repair_ship_distance: Option<Fixed>,
-    /// `BASE_CREW_PER_SEC` (float; Enhanced only, 30).
+    /// `BASE_CREW_PER_SEC` (float; Enhanced only, 30). See
+    /// [`yard_crew_per_sec`](CfgRules::yard_crew_per_sec).
     pub base_crew_per_sec: Option<Fixed>,
     /// `cfgFREIGHTERS_PER_NEBULA` (int; Classic 1, Enhanced 3).
     pub freighters_per_nebula: Option<i64>,
@@ -186,6 +187,17 @@ pub struct CfgRules {
 }
 
 impl CfgRules {
+    /// The engine's yard crew refill rate when `RTS_CFG.h` does not set
+    /// `BASE_CREW_PER_SEC` (read from the executable, static).
+    pub const DEFAULT_CREW_PER_SEC: i32 = 20;
+
+    /// Crew per second a yard refills (`BASE_CREW_PER_SEC`, D9): the header's
+    /// value, else 20. A negative value reads as 0. No sim system refills
+    /// crew at a yard yet; this is the rate it will use.
+    pub fn yard_crew_per_sec(&self) -> Fixed {
+        self.base_crew_per_sec.unwrap_or(Fixed::from_int(Self::DEFAULT_CREW_PER_SEC)).max(Fixed::ZERO)
+    }
+
     /// The keys, in the order of [`texts`](CfgRules::texts).
     pub const KEYS: [&'static str; 8] = [
         "BASE_CREW_PER_SEC",
@@ -711,6 +723,10 @@ mod cfg_tests {
         assert_eq!(e.cfg.repair_ship_distance, Some(Fixed::from_int(230)));
         assert_eq!(c.cfg.base_crew_per_sec, None);
         assert_eq!(e.cfg.base_crew_per_sec, Some(Fixed::from_int(30)));
+        assert_eq!(c.cfg.yard_crew_per_sec(), Fixed::from_int(20), "absent key: the engine default");
+        assert_eq!(e.cfg.yard_crew_per_sec(), Fixed::from_int(30));
+        let neg = CfgRules { base_crew_per_sec: Some(Fixed::from_int(-5)), ..CfgRules::default() };
+        assert_eq!(neg.yard_crew_per_sec(), Fixed::ZERO);
         assert_eq!(e.autonomy(), AutonomyRules { movement: 1, special_weapon: 1 });
         // Every changed line is a differing digest key.
         let (dc, de) = (ContentDigest::from_entries(c.digest_entries()), ContentDigest::from_entries(e.digest_entries()));

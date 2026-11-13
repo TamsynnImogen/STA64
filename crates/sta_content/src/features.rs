@@ -91,8 +91,10 @@ pub struct Features {
     /// `shieldCrewModifier`, `saneCrewLossMethod`), one location roll per hit
     /// (system hit points, crew, hull), system-death crew loss, the
     /// life-support drain and the derelict latch. Off: a hit is shields, then
-    /// hull. Off for Roots and A1: the Roots hook's damage paths and the A1
-    /// executable were not analysed.
+    /// hull. On in every Armada II family profile (the stock routines run
+    /// under `FleetOpsHook.dll` too, read from the executable, static; the
+    /// profiles differ only by data keys); off for A1, whose executable was
+    /// not analysed.
     pub crew_loss_on_hit: bool,
     /// An attack approach stops `0.2 W + 5` inside weapon range, or 80 from
     /// 100 up (the Roots engine, SIM-36; read from the executable, measured).

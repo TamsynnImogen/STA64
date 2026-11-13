@@ -1,13 +1,17 @@
 //! Crew casualties as the original computes them (SIM-39).
 //!
 //! Only for weapons whose resolved features have `crew_loss_on_hit` (stock
-//! Armada II rules: Classic and Fleet Ops 3.2.7). Evidence grades: **S** read
+//! Armada II rules, every Armada II family profile). Evidence grades: **S** read
 //! from the executable (static), **M** measured on stock Armada II, **D** read
 //! from data, **N** not measured. The Armada II routines are the same code in
-//! every Armada II family executable (S); `FleetOpsHook.dll`'s own damage,
-//! boarding and recrew paths were not analysed (N), so no behaviour of theirs
-//! is assumed, and Roots (profile off) keeps the plain shield-then-hull hit.
-//! Armada I's executable was not analysed (N), its profile is off as well.
+//! every Armada II family executable (S), and `FleetOpsHook.dll` (FO 3.2.7,
+//! Roots, FO 4.0, Classic inside Roots) patches nothing on this path (S), so
+//! the profiles differ only by the data keys read here: FO and Roots data set
+//! `shieldCrewModifier`, `hullCrewModifier` and `damageThreshold` to 0 and
+//! `SHIELD_DAMAGE_PROTECTION` to 1, so the shield and hull laws do nothing
+//! there (D), while system-death crew loss and the life-support drain still
+//! act. Not run: that Classic inside Roots hits like stock (N). Armada I's
+//! executable was not analysed (N), its profile is off.
 //!
 //! One hit, in the order the engine does it (S, with M where noted):
 //!

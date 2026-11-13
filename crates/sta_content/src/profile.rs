@@ -155,6 +155,8 @@ impl Profile {
                 cheats: true,
                 a1_compat: false,
                 pay_on_queue: true,
+                // SIM-39: the casualty model STA64 implements.
+                crew_loss_on_hit: true,
                 ..off
             },
             // FOH rows: damage controls, PD cycles, resources, officers, rigs.
@@ -168,6 +170,10 @@ impl Profile {
                 construction_rigs: true,
                 weapon_shot_timing: true,
                 start_fire_hold: true,
+                // SIM-39: stock casualty code; the hook never replaces it
+                // (read from the executable, static). Roots data zeroes the
+                // shield and hull crew modifiers, so those laws do nothing.
+                crew_loss_on_hit: true,
                 // SIM-36: the Roots engine (also running STA2 Classic, CON-43).
                 attack_buffer_roots: true,
                 attack_opportunity_fire: true,
@@ -184,8 +190,8 @@ impl Profile {
             //   `idle_assist`, `assist_on_ally_fire`) keep the stock value: the
             //   engine the 3.x launcher loads (`Data/Armada2.ldl`) is the stock
             //   executable with small differences (read from the executable,
-            //   static). Not measured on 3.2.7: what the 3.x `FleetOpsHook.dll`
-            //   patches in it was not analysed, so no Roots rule (`pd_energy`,
+            //   static). `FleetOpsHook.dll` patches nothing on the casualty path
+            //   (read from the executable, static); no Roots rule (`pd_energy`,
             //   `pd_debt_timer`, the Roots attack and assist bits) is assumed.
             // - `point_defense_cycles` on: the 3.2.7 PD weapons are FO's own
             //   `ordnancedefenseweapon` class (read from data); their timing is
@@ -767,7 +773,8 @@ mod tests {
     #[test]
     fn defaults_table_native() {
         let f = Profile::Native.features();
-        assert_eq!(on(&f).len(), 21);
+        assert_eq!(on(&f).len(), 22);
+        assert!(f.crew_loss_on_hit);
         assert!(!f.a1_compat && f.pay_on_queue && f.cheats);
     }
 
@@ -785,6 +792,7 @@ mod tests {
                 "construction_rigs",
                 "weapon_shot_timing",
                 "start_fire_hold",
+                "crew_loss_on_hit",
                 "attack_buffer_roots",
                 "attack_opportunity_fire",
                 "target_score",
@@ -839,6 +847,7 @@ mod tests {
     #[test]
     fn defaults_table_sta1_classic() {
         assert_eq!(on(&Profile::Sta1Classic.features()), ["officer_capacity", "a1_compat"]);
+        assert!(!Profile::Sta1Classic.features().crew_loss_on_hit, "A1's executable was not analysed");
     }
 
     #[test]

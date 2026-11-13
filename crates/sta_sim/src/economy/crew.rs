@@ -18,7 +18,7 @@
 //! - Not implemented, with the reason: planets' own `crewAccumulationRate` (Classic
 //!   Enhanced planets carry the key; not measured); `planetCrewAccumulationModifier`
 //!   (what counts as "close to a planet" is not measured); `crewRetreatRatio`,
-//!   `BASE_CREW_PER_SEC`. Per-unit crew: loss from hits, system deaths, the
+//!   the yard refill (`CfgRules::yard_crew_per_sec`, `BASE_CREW_PER_SEC`, default 20). Per-unit crew: loss from hits, system deaths, the
 //!   life-support drain and the derelict latch is `combat/casualty.rs`
 //!   (SIM-39); boarding losses are not implemented (SIM-46), and recovery
 //!   (station RECREW at `recrewRate`, yard recrew 20 per second from the team
