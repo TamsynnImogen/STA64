@@ -273,6 +273,7 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
     // as the new owner here, where the engine keeps the original (SIM-59).
     table.set("IsCompromised", query(lua, ctx, "IsCompromised", 2, |c, a| {
         let id = handle("IsCompromised", a, 0)?;
+        c.note_query(id, "IsCompromised");
         // Any integer is accepted, as the engine's own compare does: a team
         // number that no seat has just makes every object compromised.
         let team = int("IsCompromised", a, 1)?;

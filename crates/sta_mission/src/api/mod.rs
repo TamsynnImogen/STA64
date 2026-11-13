@@ -233,9 +233,9 @@ pub(crate) struct Ctx {
     /// Every object id the view has shown, so a handle that never existed can
     /// be told from one that died.
     pub seen: BTreeSet<EntityId>,
-    /// The last condition query on an object that never existed: view tick
+    /// The first condition query on an object that never existed: view tick
     /// and call name (`SucceedMission` and `FailMission` are blocked when they
-    /// follow it closely).
+    /// follow it while some call is unsupported).
     pub never_existed: Cell<Option<(u64, &'static str)>>,
     pub aips_taken: usize,
     pub playback: Playback,
@@ -303,7 +303,9 @@ impl Ctx {
     /// a gap in the sim or the script, not something the mission decided.
     pub fn note_query(&self, id: EntityId, call: &'static str) {
         if self.unit(id).is_none() && !self.seen.contains(&id) {
-            self.never_existed.set(Some((self.view.tick, call)));
+            if self.never_existed.get().is_none() {
+                self.never_existed.set(Some((self.view.tick, call)));
+            }
         }
     }
 

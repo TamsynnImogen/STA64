@@ -377,15 +377,19 @@ fn the_last_end_call_wins_until_the_mission_has_ended() {
 
 #[test]
 fn an_end_decided_by_an_object_that_never_existed_is_blocked_not_a_loss() {
-    // Asking whether handle 0 is alive and failing the mission on the answer.
-    let s = "local done\nMMM.register(function(t) if t >= 1 and not done and not A2.IsAlive(0) then done = true; A2.FailMission(A2.GetTime(), 0) end end)\n";
+    // Asking whether handle 0 is alive and failing the mission on the answer,
+    // with an unsupported call counted before: undecidable.
+    let s = "pcall(A2.Colonize, 0, 0)\nlocal done\nMMM.register(function(t) if t >= 1 and not done and not A2.IsAlive(0) then done = true; A2.FailMission(A2.GetTime(), 0) end end)\n";
     let (o, state) = run_end(s, 300);
     assert!(o.is_none(), "no outcome");
     match state {
         MissionEndState::Blocked(why) => assert!(why.contains("IsAlive") && why.contains("never existed"), "{why}"),
         other => panic!("{other:?}"),
     }
-    // The same end on a unit that existed and died is the mission's own.
+    // The same query with no unsupported call counted stands as the mission's own.
+    let s = "local done\nMMM.register(function(t) if t >= 1 and not done and not A2.IsAlive(0) then done = true; A2.FailMission(A2.GetTime(), 0) end end)\n";
+    assert!(!run_end(s, 300).0.unwrap().won);
+    // And an end with no query at all.
     let s = "local done\nMMM.register(function(t) if t >= 1 and not done then done = true; A2.FailMission(A2.GetTime(), 0) end end)\n";
     assert!(!run_end(s, 300).0.unwrap().won);
 }
