@@ -80,6 +80,10 @@ class FakePe:
     def f32(self, addr):
         return 1.5
 
+    def f64(self, addr):
+        import struct as _s
+        return _s.unpack_from("<d", self.data, addr - BASE)[0]
+
 
 def put(addr, *words, size=4):
     """Write little-endian words (or bytes, size=1) into the fake image."""
@@ -442,7 +446,7 @@ class ByPointerTests(unittest.TestCase):
         ])
         self.assertIsNone(f.error)
         src = render(d, f)
-        self.assertIn("t[1] = AO('RecruitSpecialForces', 'odf_a', 3, 0)", src)
+        self.assertIn("t[1] = AO('RecruitSpecialForces', 'odf_a', 3, L[-20])", src)
         self.assertIn("L[-20] = OUTV(L[-20])", src)
 
     def test_sprintf_into_a_buffer_then_the_buffer_as_a_string(self):
@@ -469,15 +473,31 @@ class ByPointerTests(unittest.TestCase):
         self.assertEqual(d.helper_kind(STRCMP_FN), "strcmp")
         self.assertIn("STRCMP('race_x', 'race_y')", render(d, f))
 
-    def test_the_debug_report_is_modelled(self):
-        # `assert`: push ..., push type, call report, add esp: the reporter answers 0
+    def test_the_debug_report_is_modelled_only_when_every_call_site_is_a_report(self):
         report = ["push   ebp", "mov    ebp,esp", "stos   WORD PTR es:[edi],ax", "pop    ebp", "ret"]
-        d, f = lift_body([
-            "push   0x10040030", "push   0x0", "push   0x5d", "push   0x10040040", "push   0x2",
-            f"call   {REPORT_FN:#x}", "add    esp,0x14", "cmp    eax,0x1", "jne    0x1000200c" if False else "nop",
-        ], {REPORT_FN: report})
+        site = ["push   0x10040030", "push   0x0", "push   0x5d", "push   0x10040040", "push   0x2",
+                f"call   {REPORT_FN:#x}", "add    esp,0x14"]
+        d, f = lift_body(site * 10, {REPORT_FN: report})
         self.assertIsNone(f.error)
         self.assertEqual(d.helper_kind(REPORT_FN), "report")
+        # a routine that merely follows a `stos WORD` and is called with small constants is lifted
+        d, f = lift_body(site * 3, {REPORT_FN: report})
+        self.assertIsNone(d.helper_kind(REPORT_FN))
+
+    def test_strcmp_of_a_stack_buffer_is_a_string(self):
+        d, f = lift_body([
+            "push   0x7", "push   0x10040030", "lea    eax,[ebp-0x30]", "push   eax", f"call   {SPRINTF_FN:#x}", "add    esp,0xc",
+            "push   0x10040050", "lea    ecx,[ebp-0x30]", "push   ecx", f"call   {STRCMP_FN:#x}", "add    esp,0x8",
+        ], {SPRINTF_FN: SPRINTF_BODY, STRCMP_FN: STRCMP_BODY})
+        self.assertIsNone(f.error)
+        self.assertIn("STRCMP(L[-48], 'race_x')", render(d, f))
+
+    def test_a_double_nothing_writes_is_its_image_value(self):
+        import struct as _s
+        put(0x10040400, *_s.unpack("<II", _s.pack("<d", 2.5)))
+        d, f = lift_body(["fld    QWORD PTR ds:0x10040400", "fstp   DWORD PTR [ebp-0x4]"])
+        self.assertIsNone(f.error)
+        self.assertIn("L[-4] = 2.5", render(d, f))
 
     def test_a_static_the_code_never_writes_is_its_image_value(self):
         put(0x10040100, 0x40000000)  # a read-only float constant
@@ -574,8 +594,8 @@ class PreludeTests(unittest.TestCase):
             pathlib.Path(name).unlink()
 
     def test_sprintf_strcmp_and_float_bits(self):
-        out = self.run_lua("print(SPRINTF('p%i_%d_%s', 3, 4.0, 'x'), STRCMP('a', 'a'), STRCMP('a', 'b'), FB(1065353216), FB(0.5))")
-        self.assertEqual(out, "p3_4_x\t0\t-1\t1.0\t0.5")
+        out = self.run_lua("print(SPRINTF('%ld%%|%5d|%x', 9, 3, -1), SPRINTF('p%i_%d_%s', 3, 4.0, 'x'), STRCMP('a', 'a'), STRCMP('a', 'b'), FB(1065353216), FB(0.5))")
+        self.assertEqual(out, "9%|    3|ffffffff\tp3_4_x\t0\t-1\t1.0\t0.5")
 
     def test_engine_written_variables_are_counted_and_bindable(self):
         out = self.run_lua(

@@ -98,7 +98,6 @@ const DEFERRED_ON_PENDING: &[&str] = &[
     "SearchAndDestroy",
     "SetAngularVelocity",
     "SetCanBeDecommissioned",
-    "SetCombatSpeed",
     "SetCrew",
     "SetCurrentHealth",
     "SetForceOntoMap",
@@ -110,7 +109,6 @@ const DEFERRED_ON_PENDING: &[&str] = &[
     "SetRedAlert",
     "SetShieldPercent",
     "SetSpecialEnergy",
-    "SetVelocity",
     "SetYellowAlert",
     "Special_Attack",
     "Stop",
@@ -143,6 +141,16 @@ enum Token {
     Unknown,
 }
 
+/// A script value that names a `BuildObject` token (an integer, or an integral float).
+fn raw_token(v: &Value) -> Option<u32> {
+    let raw = match v {
+        Value::Integer(n) => u32::try_from(*n).ok(),
+        Value::Number(n) if n.fract() == 0.0 && *n >= 0.0 && *n <= f64::from(u32::MAX) => Some(*n as u32),
+        _ => None,
+    };
+    raw.filter(|r| *r >= TOKEN_BASE)
+}
+
 impl State {
     fn token(&self, raw: u32) -> Token {
         match self.pending.get(&raw).map(|h| h.state.get()) {
@@ -163,30 +171,18 @@ impl State {
 
     /// Whether `v` is a `BuildObject` token whose object is not built yet.
     fn is_pending(&self, v: &Value) -> bool {
-        let raw = match v {
-            Value::Integer(n) => u32::try_from(*n).ok(),
-            _ => None,
-        };
-        raw.filter(|r| *r >= TOKEN_BASE).is_some_and(|r| matches!(self.token(r), Token::Pending))
+        raw_token(v).is_some_and(|r| matches!(self.token(r), Token::Pending))
     }
 
     /// Whether `v` is a token whose spawn failed.
     fn is_failed(&self, v: &Value) -> bool {
-        let raw = match v {
-            Value::Integer(n) => u32::try_from(*n).ok(),
-            _ => None,
-        };
-        raw.filter(|r| *r >= TOKEN_BASE).is_some_and(|r| matches!(self.token(r), Token::Failed))
+        raw_token(v).is_some_and(|r| matches!(self.token(r), Token::Failed))
     }
 
     /// A value a script passed in: a resolved token becomes its entity id.
     fn translate(&self, v: Value) -> Value {
-        let raw = match &v {
-            Value::Integer(n) => u32::try_from(*n).ok(),
-            Value::Number(n) if n.fract() == 0.0 && *n >= 0.0 && *n <= f64::from(u32::MAX) => Some(*n as u32),
-            _ => None,
-        };
-        match raw.filter(|r| *r >= TOKEN_BASE).map(|r| self.token(r)) {
+        let raw = raw_token(&v);
+        match raw.map(|r| self.token(r)) {
             Some(Token::Id(id)) => Value::Integer(i64::from(id.0)),
             _ => v,
         }
@@ -782,7 +778,7 @@ fn replay(st: &St) {
             }
         }
     }
-    // calls made by the replay itself were deferred again into `deferred`: keep order
+    // calls made during the replay that were held again: keep them after the older ones
     let mut s = st.borrow_mut();
     waiting.append(&mut s.deferred);
     s.deferred = waiting;

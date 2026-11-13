@@ -227,13 +227,20 @@ class Dsl:
                 kind = "vec3"
         if kind is None and any(t.startswith("stos   WORD PTR es:[edi]") for t in self.ins_text(i, 400)):
             sites = self.call_sites(addr)
-            if sites and all(self.is_assert_site(j) for j in sites):
+            if len(sites) >= 10 and all(self.is_assert_site(j) for j in sites):
                 kind = "report"
         self._kinds[addr] = kind
         return kind
 
     def ins_text(self, i, n):
-        return [t for _, t in self.ins[i:i + n]]
+        """The instructions of the function at index i (up to n): to its `int3` padding."""
+        out, seen_ret = [], False
+        for _, t in self.ins[i:i + n]:
+            if t == "int3" and seen_ret:
+                break
+            seen_ret = seen_ret or t.startswith("ret")
+            out.append(t)
+        return out
 
     def call_sites(self, addr):
         if not hasattr(self, "_sites"):
@@ -1125,7 +1132,7 @@ class Lifter:
             outlv = None
             if plain in OUT_INT_PARAMS and params and params[-1] == "AH" and raw[-1] and raw[-1][0] == "addr":
                 outlv = raw[-1][1]  # `int &out`: the engine writes the handle through it
-                raw = raw[:-1] + [("const", 0)]
+                raw = raw[:-1] + [self.load(st, outlv, a)]  # the binding echoes it back when nothing was recruited
             args = self.typed(raw, params, plain, a, st)
             f.engine_calls[plain] = f.engine_calls.get(plain, 0) + 1
             call = ("call", plain, args)
@@ -1133,6 +1140,7 @@ class Lifter:
                 call = ("callout", plain, args)
                 t = self.new_tmp(ntmp)
                 stmts.append(("set", t, call))
+                self.snap(st, stmts, reads_location(outlv))
                 stmts.append(("set", outlv, ("outval", outlv)))
                 if outlv in st.mem:
                     del st.mem[outlv]
@@ -1286,12 +1294,17 @@ class Lifter:
         n = int(mm.group(1), 16) // 4
         if n > len(st.args):
             raise DecodeError(f"{kind} call with {n} arguments, {len(st.args)} pushed at {a:#x}")
-        args = [self.arg(x, a) for x in reversed(st.args[len(st.args) - n:])]
+        raw = list(reversed(st.args[len(st.args) - n:]))
         if kind == "report":
             # the debug reporter: no debugger is attached, it answers 0 (ignore)
             self.clobber(st)
             st.r["eax"] = ("const", 0)
             return None
+        def string_arg(v):
+            v = self.arg(v, a)
+            return self.by_pointer(st, "PD", v[1], kind, a) if v and v[0] == "addr" and v[1][0] in ("loc", "gvar") else v
+
+        args = [string_arg(x) if (kind == "strcmp" or k == 1 or k > 1) else self.arg(x, a) for k, x in enumerate(raw)]
         if kind == "strcmp":
             if len(args) != 2:
                 raise DecodeError(f"strcmp with {len(args)} arguments at {a:#x}")
@@ -1301,9 +1314,10 @@ class Lifter:
             st.r["eax"] = t
             return None
         # sprintf(buffer, format, ...)
-        if len(args) < 2 or not args[0] or args[0][0] != "addr":
-            raise DecodeError(f"sprintf into {args and args[0] and args[0][0]} at {a:#x}")
-        lv = args[0][1]
+        buf = self.arg(raw[0], a) if raw else None
+        if len(args) < 2 or not buf or buf[0] != "addr":
+            raise DecodeError(f"sprintf into {buf and buf[0]} at {a:#x}")
+        lv = buf[1]
         if lv[0] == "gvar":
             self.d.static_refs[lv[1]] = "str"
         fmt = args[1]
@@ -1416,6 +1430,8 @@ class Lifter:
         if m:
             addr = int(m.group(2), 16)
             g = d.global_at(addr)
+            if m.group(1) == "QWORD" and not g and d.static_class(addr) in ("rodata", "const") and not integer:
+                return ("float", d.pe.f64(addr))  # a double nothing writes: its image value
             if g or d.pe.section_of(addr) in (".data", ".bss"):
                 return self.read(st, op, a)
             if integer:
@@ -2052,8 +2068,11 @@ local function SPRINTF(fmt, ...)
             i = i + 1
         else
             local j = i + 1
-            while j <= #fmt and ('-+ #0123456789.'):find(fmt:sub(j, j), 1, true) do j = j + 1 end
-            local flags, conv = fmt:sub(i + 1, j - 1), fmt:sub(j, j)
+            while j <= #fmt and ('-+ 0123456789.'):find(fmt:sub(j, j), 1, true) do j = j + 1 end
+            local flags = fmt:sub(i + 1, j - 1)
+            while j <= #fmt and ('hlLIw#'):find(fmt:sub(j, j), 1, true) do j = j + 1 end  -- length modifiers
+            local conv = fmt:sub(j, j)
+            if conv == '' then break end
             i = j + 1
             if conv == '%' then
                 out[#out + 1] = '%'
@@ -2064,7 +2083,7 @@ local function SPRINTF(fmt, ...)
                 elseif conv == 'c' then out[#out + 1] = string.char(I(v) & 0xff)
                 elseif conv == 'u' then out[#out + 1] = string.format('%' .. flags .. 'd', I(v) & 0xffffffff)
                 elseif conv == 'i' or conv == 'd' then out[#out + 1] = string.format('%' .. flags .. 'd', I(v))
-                else out[#out + 1] = string.format('%' .. flags .. conv, I(v)) end
+                else out[#out + 1] = string.format('%' .. flags .. conv, I(v) & 0xffffffff) end
             end
         end
     end
@@ -2386,7 +2405,7 @@ function Mission:runRules()
         end
         if var.kind == 'timer_int' then
             if var.value == 1 then var.value = 2 elseif var.value ~= 0 then var.value = 0 else var.dirty = false end
-            S[var.p] = var.value
+            if not Mission.engineWritten[var.p] then S[var.p] = var.value end
         elseif var.kind ~= 'dirty_int' then
             var.dirty = false
         end

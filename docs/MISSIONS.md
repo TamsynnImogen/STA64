@@ -487,7 +487,7 @@ data = read from the install; not measured):
   once. STA64 builds through the sim's command queue (receipt one tick later; a
   same-tick spawn needs a sim seam, not made): a void order or setter given a
   still-pending handle is held and replayed by the first `A2` call after the
-  receipt (`DEFERRED_ON_PENDING` in `dll_objects.rs`); queries on the pending
+  receipt (`DEFERRED_ON_PENDING` in `dll_objects.rs`; a script that makes no `A2` call after the receipt leaves it held until its next one); queries on the pending
   handle still raise and are counted.
 - Calls with no sim seam stay counted and non-raising (`shared_calls.rs`:
   retained as presentation calls) or raising (`no_data_fn`).
