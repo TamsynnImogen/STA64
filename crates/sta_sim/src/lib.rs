@@ -25,6 +25,7 @@ pub mod autonomy;
 pub mod boundary;
 pub mod combat;
 pub mod command;
+pub mod context;
 pub mod digest;
 pub mod economy;
 pub mod event;

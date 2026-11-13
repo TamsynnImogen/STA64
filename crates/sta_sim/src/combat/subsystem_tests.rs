@@ -305,3 +305,11 @@ fn each_edit_changes_its_own_section_digest() {
         let _ = (before, full);
     }
 }
+
+#[test]
+fn section_rows_itemise_the_subsystem_state() {
+    let (mut sim, id, _) = world();
+    assert!(script(&mut sim, Edit::SubsystemDamage(id, Subsystem::Weapons, Fixed::from_int(30))));
+    let rows = sim.section_rows("combat").unwrap();
+    assert!(rows.iter().any(|r| r.entity == Some(id) && r.field.starts_with("subsystems")), "{rows:?}");
+}

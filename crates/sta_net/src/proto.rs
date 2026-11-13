@@ -33,7 +33,7 @@ use sta_sim::setup::{Control, GameOptions, PlayerSetup};
 /// First four bytes of every frame.
 pub const MAGIC: [u8; 4] = *b"S64N";
 /// Bumped whenever any message's encoding changes.
-pub const PROTOCOL_VERSION: u16 = 1;
+pub const PROTOCOL_VERSION: u16 = 2;
 /// Magic, version and body length.
 pub const HEADER_LEN: usize = 10;
 /// Largest frame, header included.
@@ -196,6 +196,9 @@ pub enum Message {
     CatchUpDone,
     /// Leaving on purpose.
     Leave(LeaveReason),
+    /// Protocol 2: a peer's section digests for one turn, sent once after a
+    /// digest mismatch there (NET_DECISIONS N6).
+    Sections(SectionReport),
 }
 
 /// Who may send a message, and to whom (docs/NET.md, section 9).
@@ -469,6 +472,22 @@ impl Start {
 pub struct TickDigest {
     pub tick: Tick,
     pub digest: u64,
+}
+
+/// Most section digests one [`SectionReport`] carries: room for sections the
+/// sim adds later, small enough that a hostile peer's report stays tiny.
+pub const MAX_SECTIONS: usize = 16;
+
+/// A peer's per-section digests (`sta_sim::digest::SectionDigests::values`,
+/// in that order) for the state at `tick`, the first tick of a turn, as in
+/// [`TickDigest`]. Sent to everyone once per mismatching turn, after
+/// `Desync`; a peer keeps at most [`DIGESTS_KEPT`](crate::lockstep::DIGESTS_KEPT)
+/// ticks of them per seat.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SectionReport {
+    pub tick: Tick,
+    /// One digest per section, at least one, at most [`MAX_SECTIONS`].
+    pub digests: Vec<u64>,
 }
 
 /// One peer's record for one turn. Every peer sends one per turn from
@@ -893,6 +912,12 @@ impl Message {
                 short(&c.text, MAX_CHAT_BYTES, "chat text")
             }
             Message::Desync(d) => seat_id(d.slot),
+            Message::Sections(r) => {
+                if r.digests.is_empty() {
+                    return Err(ProtoError::Invalid("section report without digests"));
+                }
+                few(&r.digests, MAX_SECTIONS, "too many sections")
+            }
             Message::Rejoin(r) => {
                 hello(&r.hello)?;
                 seat_id(r.slot)
@@ -925,6 +950,7 @@ impl Message {
             | Message::Pong { .. }
             | Message::Chat(_)
             | Message::Desync(_)
+            | Message::Sections(_)
             | Message::Leave(_) => Role::Any,
         }
     }
@@ -1512,6 +1538,10 @@ mod tests {
             }),
             Message::Replayed(host_turn()),
             Message::CatchUpDone,
+            Message::Sections(SectionReport {
+                tick: 90,
+                digests: vec![1, 2, 3, 4, 5],
+            }),
             Message::Leave(LeaveReason::Quit),
             Message::Leave(LeaveReason::ToShell),
         ];
@@ -1563,7 +1593,7 @@ mod tests {
     #[test]
     fn golden_encoding_is_pinned() {
         let all: Vec<u8> = samples().iter().flat_map(|m| encode(m).unwrap()).collect();
-        assert_eq!(PROTOCOL_VERSION, 1);
+        assert_eq!(PROTOCOL_VERSION, 2);
         assert_eq!(
             fnv1a64(&all),
             GOLDEN,
@@ -1571,14 +1601,14 @@ mod tests {
         );
     }
 
-    const GOLDEN: u64 = 3036109735231168885;
+    const GOLDEN: u64 = 11462243403197721320;
 
     #[test]
     fn header_is_little_endian_and_frozen() {
         let bytes = encode(&Message::Ping { nonce: 0 }).unwrap();
         // Ping is tag 12, nonce 0: two body bytes.
-        assert_eq!(bytes, [b'S', b'6', b'4', b'N', 1, 0, 2, 0, 0, 0, 12, 0]);
-        assert_eq!(version_notice(), [b'S', b'6', b'4', b'N', 1, 0, 0, 0, 0, 0]);
+        assert_eq!(bytes, [b'S', b'6', b'4', b'N', 2, 0, 2, 0, 0, 0, 12, 0]);
+        assert_eq!(version_notice(), [b'S', b'6', b'4', b'N', 2, 0, 0, 0, 0, 0]);
     }
 
     #[test]
@@ -1687,11 +1717,11 @@ mod tests {
     #[test]
     fn other_versions_and_magic_are_named() {
         let mut bytes = encode(&Message::Ping { nonce: 3 }).unwrap();
-        bytes[4..6].copy_from_slice(&2u16.to_le_bytes());
-        assert_eq!(decode(&bytes), Err(ProtoError::Version { found: 2 }));
-        assert_eq!(frame_len(&bytes), Err(ProtoError::Version { found: 2 }));
+        bytes[4..6].copy_from_slice(&1u16.to_le_bytes());
+        assert_eq!(decode(&bytes), Err(ProtoError::Version { found: 1 }));
+        assert_eq!(frame_len(&bytes), Err(ProtoError::Version { found: 1 }));
         // A relay still reads it.
-        assert_eq!(peek_header(&bytes), Ok((2, bytes.len() - HEADER_LEN)));
+        assert_eq!(peek_header(&bytes), Ok((1, bytes.len() - HEADER_LEN)));
         // A version notice from another build reads as its version.
         let mut notice = version_notice();
         notice[4..6].copy_from_slice(&7u16.to_le_bytes());
@@ -1730,6 +1760,11 @@ mod tests {
         // Chat (tag 14) with invalid UTF-8 text.
         assert!(matches!(
             decode(&frame(&[14, 0, 0, 1, 2, 0xff, 0xfe])),
+            Err(ProtoError::Corrupt(_))
+        ));
+        // Sections (tag 21) claiming u32::MAX digests, with none behind them.
+        assert!(matches!(
+            decode(&frame(&[21, 90, 0xff, 0xff, 0xff, 0xff, 0x0f])),
             Err(ProtoError::Corrupt(_))
         ));
         // A Turn whose command list claims u32::MAX entries.
@@ -1820,6 +1855,14 @@ mod tests {
                         value: String::new(),
                     },
                 ],
+            }),
+            Message::Sections(SectionReport {
+                tick: 3,
+                digests: vec![0; MAX_SECTIONS + 1],
+            }),
+            Message::Sections(SectionReport {
+                tick: 3,
+                digests: Vec::new(),
             }),
             Message::Turn(TurnCommands {
                 commands: vec![cmd(1, 4), cmd(1, 3)],

@@ -10,6 +10,7 @@
 //! sta-bench parity <refit-out> <ours-out> [--tol time=0.1,pos=1,hull=1] | --names
 //! sta-bench pair <pair> --game a2|roots [--refit-out DIR] [--install DIR] [--fake] [--out DIR]
 //! sta-bench capture list | check <folder|latest> [--install <root> [--mod <name>]] [--fake]
+//! sta-bench desync <a.star> <b.star> [--install <root> [--mod <name>]] [--fake] [--json <file|->]
 //! ```
 //!
 //! The logic is a library so `sta64`'s own tests can drive it with the binary
@@ -17,6 +18,7 @@
 
 mod capture;
 mod clone;
+mod desync;
 mod diff;
 mod jobs;
 mod pair;
@@ -53,6 +55,15 @@ Usage: sta-bench <command> [options]
                                    3 when it could not be replayed here (other content, mod or build)
       --install <root> --mod <name>  mount this install (default: the one the capture recorded)
       --fake                       the capture is of the bench's fake content
+  desync <a.star> <b.star>         two peers' desync replays (and the .desync.txt beside each): re-simulate both
+                                   and print the first differing tick, the sections and entity fields that
+                                   differ there, and the commands before it. Exit 0 no divergence, 1 diverged,
+                                   3 an input is unreadable or does not reproduce (not a verdict)
+      --install <root> [--mod <name>]  the content both peers ran on (or --fake for the bench's fake content)
+      --json <file|->              also write the machine-readable report (`-`: only JSON, to stdout)
+      --history N                  turns of commands to list before the tick (default 3)
+      --max-rows N                 differing rows listed per section (default 64)
+      --turn-ticks N               ticks per turn (default: read from the replays' digest spacing)
   diff <report-a> <report-b>       compare report directories; exit 1 when they differ
   parity <refit-out> <ours-out>    Refit's Scene.marks/Scene.objects.jsonl against our marks/objects.jsonl
                                    (run directories, or their logs/): objects by name, marks in sim seconds
@@ -102,6 +113,10 @@ pub(crate) struct Opts {
     pub timeout: u64,
     pub jobs: Option<usize>,
     pub gpu_jobs: Option<usize>,
+    pub json: Option<PathBuf>,
+    pub history: Option<u32>,
+    pub max_rows: Option<usize>,
+    pub turn_ticks: Option<u32>,
     pub rest: Vec<String>,
 }
 
@@ -140,6 +155,10 @@ fn parse(args: Vec<String>) -> Result<Opts, String> {
             "--repeat" => o.repeat = val(&a)?.parse().map_err(|_| "--repeat: a number")?,
             "--jobs" => o.jobs = Some(val(&a)?.parse().map_err(|_| "--jobs: a number")?),
             "--gpu-jobs" => o.gpu_jobs = Some(val(&a)?.parse().map_err(|_| "--gpu-jobs: a number")?),
+            "--json" => o.json = Some(val(&a)?.into()),
+            "--history" => o.history = Some(val(&a)?.parse().map_err(|_| "--history: a number of turns")?),
+            "--max-rows" => o.max_rows = Some(val(&a)?.parse().map_err(|_| "--max-rows: a number")?),
+            "--turn-ticks" => o.turn_ticks = Some(val(&a)?.parse().map_err(|_| "--turn-ticks: a number of ticks")?),
             "--timeout" => o.timeout = val(&a)?.parse().map_err(|_| "--timeout: seconds")?,
             _ if a.starts_with("--") => return Err(format!("unknown option {a}")),
             _ => o.rest.push(a),
@@ -190,6 +209,7 @@ pub fn main(args: Vec<String>) -> i32 {
         "parity" => parity::parity(&o),
         "pair" => pair::pair(&o),
         "capture" => capture::capture_cmd(&o),
+        "desync" => desync::desync(&o),
         other => Err(Fail::Usage(format!("unknown command `{other}`"))),
     };
     match result {
