@@ -1,6 +1,3 @@
-//! Quarantined (#619): these wait on wall-clock deadlines and fail under the parallel sta64 suite.
-//! Run them with `cargo test -p sta64 --lib net_match -- --ignored`.
-//!
 //! A match from the lobby, played by several client `App`s in lockstep (INT-M5). Everything
 //! is headless: no window, no GPU, no audio. The clients connect through a relay in this
 //! process on 127.0.0.1 with an OS-chosen port; every wait is a loop on a real condition with
@@ -205,11 +202,36 @@ fn until(apps: &mut [App], what: &str, cond: impl Fn(&[App]) -> bool) {
             return;
         }
         if Instant::now() >= end {
-            let said: Vec<_> = apps.iter().map(|a| a.world().get_resource::<NetGame>().map(|g| (g.tick(), g.read(|s| s.said.clone())))).collect();
+            let said: Vec<_> = apps.iter().map(|a| a.world().get_resource::<NetGame>().map(|g| (g.tick(), g.read(|s| s.said.clone()), dump(g)))).collect();
             panic!("timed out waiting for: {what}; peers: {said:#?}");
         }
         std::thread::yield_now();
     }
+}
+
+/// What a peer's router and resync state say, for a failure message.
+fn dump(g: &NetGame) -> String {
+    g.with_peer(|p| {
+        let r = p.router();
+        let tick = r.desync().map(|n| n.theirs.tick).or_else(|| r.peer_desync().map(|(_, n)| n.ours.tick));
+        format!(
+            "halted={} desync={:?} peer_desync_from={:?} digests@{tick:?}={:?} resyncing={} failed={} diverged_from_host={:?}",
+            r.halted(),
+            r.desync().map(|n| (n.slot.0, n.ours.tick)),
+            r.peer_desync().map(|(f, _)| f.0),
+            tick.map(|t| r.digests_at(t)),
+            p.resyncing(),
+            p.resync_failed(),
+            p.diverged_from_host(),
+        )
+    })
+}
+
+/// Presses a guest's Ready once the lobby has the host's table and the button is there: the
+/// guest's screen follows the host's `Lobby` message, which no other app's state implies.
+fn ready_up(apps: &mut [App], guest: usize) {
+    pump_apps(&mut refs(apps), "the guest's Ready button is enabled", |a| act_entity(a[guest], MpAct::ToggleReady).is_some());
+    press(&mut apps[guest], MpAct::ToggleReady);
 }
 
 fn refs(apps: &mut [App]) -> Vec<&mut App> {
@@ -236,7 +258,7 @@ fn launch(relay: &Relay, n_guests: usize, map: usize, computers: &[usize], o: &N
         pump_apps(&mut refs(&mut apps), "the guest is seated", move |a| in_screen(a[i], Screen::Lobby) && session_of(a[0]).view().seats.iter().filter(|s| s.kind == crate::frontend::lobby::Kind::Human).count() == seats);
     }
     for i in 1..=n_guests {
-        press(&mut apps[i], MpAct::ToggleReady);
+        ready_up(&mut apps, i);
     }
     pump_apps(&mut refs(&mut apps), "the host may launch", |a| act_entity(a[0], MpAct::Launch).is_some());
     press(&mut apps[0], MpAct::Launch);
@@ -293,7 +315,6 @@ fn sleep_ms(ms: u64) {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "flaky under parallel load, see #619; run with --ignored"]
 fn two_clients_play_three_thousand_ticks_in_step_with_scripted_orders() {
     let (r, dir) = (fast_relay(), tmp("two"));
     let mut apps = launch(&r, 1, 0, &[], &opts(&dir));
@@ -330,7 +351,6 @@ fn two_clients_play_three_thousand_ticks_in_step_with_scripted_orders() {
 }
 
 #[test]
-#[ignore = "flaky under parallel load, see #619; run with --ignored"]
 fn three_clients_play_in_step() {
     let (r, dir) = (fast_relay(), tmp("three"));
     let mut apps = launch(&r, 2, 1, &[], &opts(&dir));
@@ -343,7 +363,6 @@ fn three_clients_play_in_step() {
 }
 
 #[test]
-#[ignore = "flaky under parallel load, see #619; run with --ignored"]
 fn the_host_runs_the_computer_seat_and_every_peer_agrees_to_the_snapshot() {
     let (r, dir) = (fast_relay(), tmp("ai"));
     let mut apps = launch(&r, 1, 1, &[2], &opts(&dir));
@@ -381,7 +400,6 @@ fn the_host_runs_the_computer_seat_and_every_peer_agrees_to_the_snapshot() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "flaky under parallel load, see #619; run with --ignored"]
 fn a_client_that_stalls_is_waited_for_in_words_and_resumes() {
     let (r, dir) = (fast_relay(), tmp("stall"));
     let mut apps = launch(&r, 2, 1, &[], &opts(&dir));
@@ -418,7 +436,6 @@ fn a_client_that_stalls_is_waited_for_in_words_and_resumes() {
 }
 
 #[test]
-#[ignore = "flaky under parallel load, see #619; run with --ignored"]
 fn a_client_that_drops_is_marked_and_the_others_play_on() {
     let (r, dir) = (fast_relay(), tmp("drop"));
     let mut apps = launch(&r, 2, 1, &[], &opts(&dir));
@@ -446,7 +463,6 @@ fn a_client_that_drops_is_marked_and_the_others_play_on() {
 }
 
 #[test]
-#[ignore = "flaky under parallel load, see #619; run with --ignored"]
 fn the_host_leaving_ends_the_match_for_the_others_with_a_message() {
     let (r, dir) = (fast_relay(), tmp("hostleft"));
     let mut apps = launch(&r, 1, 0, &[], &opts(&dir));
@@ -466,7 +482,6 @@ fn the_host_leaving_ends_the_match_for_the_others_with_a_message() {
 }
 
 #[test]
-#[ignore = "flaky under parallel load, see #619; run with --ignored"]
 fn a_removed_client_is_back_at_the_multiplayer_screen_with_the_reason() {
     let (r, dir) = (fast_relay(), tmp("removed"));
     let mut apps = launch(&r, 2, 1, &[], &opts(&dir));
@@ -485,7 +500,6 @@ fn a_removed_client_is_back_at_the_multiplayer_screen_with_the_reason() {
 }
 
 #[test]
-#[ignore = "flaky under parallel load, see #619; run with --ignored"]
 fn a_protocol_violation_is_a_kick() {
     let (r, dir) = (fast_relay(), tmp("violation"));
     let mut apps = launch(&r, 2, 1, &[], &opts(&dir));
@@ -537,11 +551,10 @@ fn side_of(path: &Path, data: &ScreenData) -> sta_net::diagnose::Side {
 }
 
 #[test]
-#[ignore = "flaky under parallel load, see #619; run with --ignored"]
 fn an_injected_desync_halts_every_peer_and_writes_reports_the_diagnosis_localises() {
     let (r, dir) = (fast_relay(), tmp("desync"));
     // The host will not repair anyone (a seat with no resyncs left): the match stays stopped.
-    let o = NetOptions { limits: Some(ResyncLimits { resyncs_per_seat: 0, min_attempt_interval: Duration::from_millis(1), ..ResyncLimits::default() }), ..opts(&dir) };
+    let o = NetOptions { limits: Some(ResyncLimits { resyncs_per_seat: 0, min_attempt_interval: Duration::from_millis(1), repair_wait: Duration::from_secs(3), ..ResyncLimits::default() }), ..opts(&dir) };
     let mut apps = launch(&r, 2, 1, &[], &o);
     run_to(&mut apps, 300);
     // Damage on seat 1's sim only, applied on its next step.
@@ -593,7 +606,6 @@ fn an_injected_desync_halts_every_peer_and_writes_reports_the_diagnosis_localise
 }
 
 #[test]
-#[ignore = "flaky under parallel load, see #619; run with --ignored"]
 fn a_repairable_desync_is_repaired_and_the_reports_are_still_written() {
     let (r, dir) = (fast_relay(), tmp("repair"));
     let o = NetOptions { limits: Some(ResyncLimits { min_attempt_interval: Duration::from_millis(1), bytes_per_sec: 100_000_000, burst_bytes: 100_000_000, ..ResyncLimits::default() }), ..opts(&dir) };
@@ -616,7 +628,6 @@ fn a_repairable_desync_is_repaired_and_the_reports_are_still_written() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "flaky under parallel load, see #619; run with --ignored"]
 fn a_peer_with_another_map_refuses_the_start_naming_it() {
     let (r, dir) = (fast_relay(), tmp("map"));
     let o = opts(&dir);
@@ -631,7 +642,7 @@ fn a_peer_with_another_map_refuses_the_start_naming_it() {
     let code = session_of(&apps[0]).code().to_string();
     join_through_screens(&mut apps[1], &r, "Riker", &code, "");
     pump_apps(&mut refs(&mut apps), "seated", |a| in_screen(a[1], Screen::Lobby) && session_of(a[0]).view().seats[1].kind == crate::frontend::lobby::Kind::Human);
-    press(&mut apps[1], MpAct::ToggleReady);
+    ready_up(&mut apps, 1);
     pump_apps(&mut refs(&mut apps), "may launch", |a| act_entity(a[0], MpAct::Launch).is_some());
     press(&mut apps[0], MpAct::Launch);
     until(&mut apps, "the guest refuses", |a| state(&a[1]) == AppState::FrontEnd && a[1].world().resource::<Multiplayer>().notice.is_some());
