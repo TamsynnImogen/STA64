@@ -53,6 +53,9 @@ pub struct ProgressProbe {
     pub first_objective_tick: Option<u64>,
     pub reports: usize,
     pub unsupported: Vec<(String, u32)>,
+    /// Reads of variables the engine writes (team strength, moons, warp tries): the script's
+    /// counted `engineReads`, for a host to bind (`A2.EngineVariable`) later.
+    pub engine_reads: Vec<(String, u32)>,
 }
 
 fn counted(v: &[(String, u32)]) -> String {
@@ -75,7 +78,7 @@ impl ProgressProbe {
         let scripts: Vec<String> =
             self.scripts.iter().map(|(n, left, w)| format!("[{},{},{}]", json_string(n), left, w)).collect();
         format!(
-            "{{\"campaign\":{},\"index\":{},\"bzn\":{},\"started\":{},\"start_error\":{},\"ticks\":{},\"ended\":{},\"errors\":{},\"rules\":{},\"rules_held\":{},\"last_rule\":{},\"last_step\":{},\"steps_run\":{},\"distinct_steps\":{},\"problems\":[{}],\"missing\":{},\"failed\":{},\"invalid\":{},\"unresolved\":{},\"handles_resolved\":{},\"blocked\":[{}],\"scripts\":[{}],\"step_errors\":{},\"objectives\":{},\"first_objective_tick\":{},\"reports\":{},\"unsupported\":{}}}",
+            "{{\"campaign\":{},\"index\":{},\"bzn\":{},\"started\":{},\"start_error\":{},\"ticks\":{},\"ended\":{},\"errors\":{},\"rules\":{},\"rules_held\":{},\"last_rule\":{},\"last_step\":{},\"steps_run\":{},\"distinct_steps\":{},\"problems\":[{}],\"missing\":{},\"failed\":{},\"invalid\":{},\"unresolved\":{},\"handles_resolved\":{},\"blocked\":[{}],\"scripts\":[{}],\"step_errors\":{},\"objectives\":{},\"first_objective_tick\":{},\"reports\":{},\"unsupported\":{},\"engine_reads\":{}}}",
             json_string(&self.campaign),
             self.index,
             json_string(&self.bzn),
@@ -107,6 +110,7 @@ impl ProgressProbe {
             self.first_objective_tick.map_or("null".into(), |t| t.to_string()),
             self.reports,
             counted(&self.unsupported),
+            counted(&self.engine_reads),
         )
     }
 }
@@ -178,6 +182,7 @@ fn read(rt: &crate::runtime::MissionRuntime, p: &mut ProgressProbe) {
         .collect();
     p.step_errors = rt.eval("return Mission_.stepErrors").unwrap_or_default();
     p.unsupported = rt.unsupported();
+    p.engine_reads = counts(rt, "engineReads");
 }
 
 /// Run one mission up to `ticks` ticks and describe how far it got. `standin`
