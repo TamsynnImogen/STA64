@@ -15,6 +15,8 @@ outline mesh and material.
 
 The shader participates in the existing developer-only shader shadowing path
 (D12), including restoration of the embedded source when a shadow is removed.
+It is classified as shared presentation under both Stock and Refit, separately
+from the preserved Refit-derived shader list.
 
 This is native client presentation (D1, D2). It uses existing world views and
 resolved ODF metadata, without adding rules, simulation state, content digest
