@@ -35,7 +35,7 @@ pub use ui::{UiContext, UiSound, UiSoundPlugin, UiSounds};
 pub use voices::{VoiceConfig, VoiceNames, VoicePlugin};
 
 use crate::app::{GameSet, Mode};
-use crate::sim_link::{Bus, PlaySound};
+use crate::sim_link::{Bus, PlaySound, StopSounds};
 
 /// Turns a bare sound name into decoded audio.
 pub trait SoundResolver: Send + Sync {
@@ -189,11 +189,12 @@ impl Plugin for AudioPlugin {
         app.world_mut().get_resource_or_insert_with(|| AudioTestTones(tones));
         app.add_plugins((MusicPlugin, UiSoundPlugin, SfxPlugin, VoicePlugin))
             .add_message::<PlaySound>()
+            .add_message::<StopSounds>()
             .init_resource::<Volumes>()
             .insert_resource(Resolver(Box::new(StubResolver::default())))
             .add_message::<crate::frontend::screens::ModChosen>()
             .add_systems(Update, remount_sound.in_set(GameSet::Audio).before(play_sounds))
-            .add_systems(Update, (sync_volumes, sync_listener, play_sounds, audio_test_key).chain().in_set(GameSet::Audio));
+            .add_systems(Update, (sync_volumes, sync_listener, play_sounds, stop_sounds, audio_test_key).chain().in_set(GameSet::Audio));
         // Manual check: `sta64 --audio-test` plays a tone on each bus at startup, F9 repeats it.
         if tones {
             app.add_systems(Startup, test_tones);
@@ -245,6 +246,13 @@ fn play_sounds(mut msgs: MessageReader<PlaySound>, mut mixer: NonSendMut<Mixer>,
         if let Some(sound) = tones.0.then(|| builtin(&m.name)).flatten().or_else(|| resolver.0.resolve(&m.name)) {
             mixer.backend.play(&sound, m.bus, m.at.map(|p| p.to_f32()));
         }
+    }
+}
+
+/// A mission's `Media:stopSounds()`: what plays on the bus stops (not queued, not decoded).
+fn stop_sounds(mut msgs: MessageReader<StopSounds>, mut mixer: NonSendMut<Mixer>) {
+    for m in msgs.read() {
+        mixer.backend.stop_bus(m.bus);
     }
 }
 

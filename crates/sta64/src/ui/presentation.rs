@@ -13,7 +13,12 @@
 //! | objectives and briefing (host state, not a `Presentation`) | the modal panel of [`ObjectivesView`], toggled with Alt+O | rectangles of `objectivesPanelArea` and the text areas in A2 stock `gui_glob16x12.cfg`, the A1 `gui_glob.cfg` panel; the completed-line tick **not measured** |
 //! | a message box ([`MessageBox`]) | the same panel with an OK button | the original's message display reuses the objectives keys |
 //! | `Movie`, `StopMovie` | MED-03 | |
-//! | `Sound`, `StopSound`, `Music`, `StopMusic`, `Effect`, `WaitForKey`, other `Call`s | **not shown** (audio and effects lanes); each kind is listed once in [`Unhandled`] | |
+//! | `Sound`, `StopSound` | `PlaySound` on the voice bus / `StopSounds` (the audio lane resolves the name) | |
+//! | `Music`, `StopMusic`, `Effect`, `WaitForKey`, other `Call`s | **not shown** (audio and effects lanes); each kind is listed once in [`Unhandled`] | |
+//!
+//! While a cineractive is on, the HUD and the notices are hidden and the fog layers are not drawn (the cinematic view's render list holds no HUD panel and the terrain pass draws fog and shroud only in the RTS view: Refit, read from the executable, static), and its end clears the fade.
+//!
+//! [`PresentationLog`] (opt in by inserting it) records every presentation request with the sim tick it was consumed on, for tests and mission timeline tools.
 //!
 //! **Answers.** The script learns that a movie ended, a message was dismissed or a
 //! cineractive skipped through [`ScriptReply`] messages. There is no command kind to
@@ -32,7 +37,7 @@ use sta_sim::present::{Arg, Presentation};
 
 use crate::app::GameSet;
 use crate::media::{MovieFinished, MovieId, mission::Requested};
-use crate::sim_link::SimMsg;
+use crate::sim_link::{Bus, PlaySound, SimMsg, StopSounds};
 use crate::ui::i18n::Strings;
 use crate::ui::sprite_font::{SpriteTextStyle, sprite_text_styled};
 use crate::ui::theme::{ButtonClicked, Theme, UiButton, button, font_role};
@@ -129,6 +134,11 @@ pub struct CineractiveClock {
 /// A cineractive that has been off this long (real seconds) counts as over: the next one starts a new hold.
 pub const NEW_HOLD_AFTER_SECS: f32 = 5.0;
 
+/// A host-level record of the mission's presentation requests, in arrival order, with the sim
+/// tick of the view that carried them. Opt in: insert the resource (tests, timeline tools).
+#[derive(Resource, Default, Debug, Clone)]
+pub struct PresentationLog(pub Vec<(u64, Presentation)>);
+
 /// Cineractive mode as the script set it.
 #[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CineractiveState {
@@ -198,6 +208,8 @@ pub struct FadeState {
     target: f32,
     rate: f32,
     pub rgb: [u8; 3],
+    /// A fade was asked for since the cineractive began.
+    touched: bool,
 }
 
 impl FadeState {
@@ -287,9 +299,16 @@ pub(crate) fn consume(
     mut cineractive: ResMut<CineractiveState>,
     mut clock: ResMut<CineractiveClock>,
     mut unhandled: ResMut<Unhandled>,
+    mut play: MessageWriter<PlaySound>,
+    mut stop: MessageWriter<StopSounds>,
+    mut log: Option<ResMut<PresentationLog>>,
+    link: Option<Res<crate::sim_link::SimLink>>,
 ) {
     for SimMsg(e) in events.read() {
         let SimEvent::Present(p) = e else { continue };
+        if let Some(log) = log.as_mut() {
+            log.0.push((link.as_deref().map_or(0, |l| l.curr().tick), p.clone()));
+        }
         match p {
             Presentation::Title { id, text, subtitle, seconds } => titles.add(TitleItem {
                 id: *id,
@@ -299,11 +318,28 @@ pub(crate) fn consume(
                 left: seconds.map(|s| s.to_f32()),
             }),
             Presentation::RemoveTitle { id } => titles.remove(*id),
-            Presentation::Fade { out, seconds, rgb } => fade.start(*out, seconds.to_f32(), *rgb),
+            Presentation::Fade { out, seconds, rgb } => {
+                // The first fade a cineractive asks for, when it is a fade in, comes up from black:
+                // the stock openings call `fadeIn` at their first tick and begin black, so nothing of
+                // the RTS view shows before the first shot (the original's start colour is inferred:
+                // not measured; a fade in on a screen already faded out runs from there as before).
+                if !*out && cineractive.on && !fade.touched && fade.alpha == 0.0 {
+                    fade.alpha = 1.0;
+                }
+                fade.touched = true;
+                fade.start(*out, seconds.to_f32(), *rgb);
+            }
             Presentation::Cineractive { on, skippable } => {
                 // A new cineractive (even one started in the frame the last one ended) can be skipped anew.
                 if !(*on && cineractive.on) {
                     clock.skipped_for = None;
+                }
+                // The fade is the cinematic view's own (`ScreenFade` is in that view's render list
+                // only, read from the executable by Refit, static): the view that comes back
+                // starts clear, so a script that fades out and ends the cineractive in the same
+                // breath (the Roots missions do) hands over a visible game, not a black one.
+                if !*on && cineractive.on {
+                    *fade = FadeState::default();
                 }
                 *cineractive = CineractiveState { on: *on, skippable: *on && *skippable };
             }
@@ -332,15 +368,19 @@ pub(crate) fn consume(
             }
             // Shown elsewhere (movies, MED-03; the camera, camera_cinematic).
             Presentation::Movie { .. } | Presentation::StopMovie | Presentation::Shot { .. } | Presentation::CameraOffset { .. } => {}
+            Presentation::Call { name, .. } if name == "Camera.center" => {}
             Presentation::Call { name, .. } if matches!(name.split_once('.').map_or("", |x| x.1), "CenterCamera" | "SetCameraZoom" | "CineractiveConstantSpeed" | "CineractiveCameraOffset" | "CineractiveShot") => {}
             Presentation::Call { name, .. } => {
                 unhandled.note(name);
             }
-            Presentation::Sound { .. } => {
-                unhandled.note("Sound");
+            // A script's voice or message sound goes to the audio layer by name (the resolver
+            // finds `Data/sounds/...` by stem, events by name); the host answers the script.
+            Presentation::Sound { name, .. } => {
+                play.write(PlaySound { name: name.clone(), at: None, bus: Bus::Voice });
             }
+            // `Media:stopSounds()` stops every script sound: the voice bus (not per sound).
             Presentation::StopSound { .. } => {
-                unhandled.note("StopSound");
+                stop.write(StopSounds { bus: Bus::Voice });
             }
             Presentation::Music { .. } => {
                 unhandled.note("Music");
@@ -361,7 +401,22 @@ pub(crate) fn consume(
     }
 }
 
-fn run_clock(time: Res<Time<Real>>, mut titles: ResMut<Titles>, mut fade: ResMut<FadeState>) {
+/// No HUD over a cutscene: the roots of the HUD and of the notices are hidden while the script's
+/// cineractive is on and come back with it.
+#[allow(clippy::type_complexity)]
+fn hide_hud_in_cineractive(cine: Res<CineractiveState>, mut roots: Query<&mut Visibility, Or<(With<crate::ui::hud::HudRoot>, With<crate::ui::notices::NoticeRoot>)>>) {
+    let want = if cine.on { Visibility::Hidden } else { Visibility::Inherited };
+    for mut v in &mut roots {
+        v.set_if_neq(want);
+    }
+}
+
+fn run_clock(time: Res<Time<Real>>, mut titles: ResMut<Titles>, mut fade: ResMut<FadeState>, state: Option<Res<State<crate::app::AppState>>>) {
+    // Titles and fades the sim raised while the game was still loading start when it is shown
+    // (the sim runs from the loading screen, and the opening's first fade in must be seen).
+    if state.is_some_and(|s| *s.get() == crate::app::AppState::Loading) {
+        return;
+    }
     let dt = time.delta_secs();
     if !titles.items.is_empty() {
         titles.tick(dt);
@@ -631,11 +686,13 @@ impl Plugin for PresentationPlugin {
             .add_message::<crate::media::mission::Requested>()
             .add_message::<MovieFinished>()
             .add_message::<SimMsg>()
+            .add_message::<PlaySound>()
+            .add_message::<StopSounds>()
             .add_message::<ButtonClicked>()
             .add_systems(Startup, spawn_layers.run_if(resource_exists::<Theme>))
             .add_systems(
                 Update,
-                (consume, run_clock, movie_replies, skip_cineractive, apply_replies, toggle_objectives, queue_messages, ok_pressed, draw_titles.run_if(resource_exists::<Theme>), draw_fade, draw_panel.run_if(resource_exists::<Theme>)).chain().in_set(GameSet::Ui),
+                (consume, hide_hud_in_cineractive, run_clock, movie_replies, skip_cineractive, apply_replies, toggle_objectives, queue_messages, ok_pressed, draw_titles.run_if(resource_exists::<Theme>), draw_fade, draw_panel.run_if(resource_exists::<Theme>)).chain().in_set(GameSet::Ui),
             );
     }
 }
