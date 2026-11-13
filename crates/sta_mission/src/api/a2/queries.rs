@@ -7,6 +7,8 @@ use crate::api::{Shared, dist, pos_f64};
 
 mod station;
 
+pub(super) use station::craft_family;
+
 fn odf_stem(name: &str) -> &str {
     match name.get(name.len().saturating_sub(4)..) {
         Some(suffix) if suffix.eq_ignore_ascii_case(".odf") => &name[..name.len() - 4],

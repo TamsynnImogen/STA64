@@ -16,6 +16,7 @@ use super::Shared;
 
 mod camera;
 mod conditions;
+mod dll_objects;
 mod controls;
 mod media;
 mod native_camera;
@@ -48,6 +49,9 @@ pub(super) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
     a2.set("paths", lua.create_table()?)?;
     conditions::install(lua, ctx, &a2)?;
     subsystems::install(lua, ctx, &a2)?;
+    dll_objects::install(lua, ctx, &a2)?;
+    // Keep last: wraps every function above (pending BuildObject handles).
+    dll_objects::finish(lua, &a2)?;
     lua.globals().raw_set("A2", a2)?;
     Ok(())
 }
