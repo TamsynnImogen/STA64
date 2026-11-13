@@ -350,6 +350,8 @@ impl EntityRec {
                 // Not in the snapshot: `from_snapshot` re-reads it from the
                 // definition once the entities exist.
                 warp_speed: Fixed::ZERO,
+                too_close_for_warp: Fixed::ZERO,
+                heading_close_for_warp: Fixed::ZERO,
             },
             hull: self.hull,
             crew: None,
@@ -519,6 +521,8 @@ impl Sim {
                 let Some(unit) = units.get_mut(id) else { continue };
                 if let Some(def) = db.unit(unit.def) {
                     unit.stats.warp_speed = def.movement.warp_speed;
+                    unit.stats.too_close_for_warp = def.movement.too_close_for_warp;
+                    unit.stats.heading_close_for_warp = def.movement.heading_close_for_warp;
                 }
             }
         }

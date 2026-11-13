@@ -168,7 +168,7 @@ pub(crate) fn rotate_by(mut h: (Fixed, Fixed), a: Fixed) -> (Fixed, Fixed) {
     }
 }
 
-fn pi() -> Fixed {
+pub(crate) fn pi() -> Fixed {
     Fixed::from_f64(std::f64::consts::PI)
 }
 

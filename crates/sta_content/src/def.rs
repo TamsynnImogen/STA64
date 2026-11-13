@@ -83,6 +83,14 @@ pub struct MoveStats {
     /// the smooth fields, the digest or the snapshot's stats mirror; a
     /// snapshot load re-reads it from the definition.
     pub warp_speed: Fixed,
+    /// `tooCloseForWarp` (Armada I physics ODFs), units: a move or attack
+    /// whose goal is farther than this goes to warp (SIM-64). Zero when the
+    /// ODF has none (Armada II and later: warp on a plain move is opt-in).
+    /// Like `warp_speed` the sim reads it from the definition.
+    pub too_close_for_warp: Fixed,
+    /// `headingCloseEnoughForWarp` (Armada I), degrees: the craft may warp
+    /// while its heading is within this of the goal. Zero when absent.
+    pub heading_close_for_warp: Fixed,
 }
 
 impl MoveStats {
@@ -157,6 +165,8 @@ const SMOOTH_DEFAULTS: MoveStats = MoveStats {
     turn_control_squared: false,
     forward_control_distance: Fixed::from_int(70),
     warp_speed: Fixed::ZERO,
+    too_close_for_warp: Fixed::ZERO,
+    heading_close_for_warp: Fixed::ZERO,
 };
 
 impl Default for MoveStats {

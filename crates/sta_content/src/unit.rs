@@ -48,6 +48,11 @@ pub fn movement(phys: Option<&Odf>, file: &str, warnings: &mut Vec<Warning>) -> 
     if let Some(v) = r.num("warpSpeed").filter(|v| *v > 0.0) {
         m.warp_speed = Fixed::from_f64(v);
     }
+    // Armada I's warp-on-move keys (SIM-64); an ODF without `tooCloseForWarp` never asks.
+    if let Some(v) = r.num("tooCloseForWarp").filter(|v| *v > 0.0) {
+        m.too_close_for_warp = Fixed::from_f64(v);
+        m.heading_close_for_warp = Fixed::from_f64(r.num("headingCloseEnoughForWarp").unwrap_or(0.0).clamp(0.0, 180.0));
+    }
     m
 }
 
@@ -253,6 +258,21 @@ mod tests {
     fn odf(text: &str) -> Odf {
         let text = text.to_owned();
         sta_odf::resolve("p.odf", &mut |_| Some(text.clone())).unwrap()
+    }
+
+    /// Armada I's warp-on-move keys (SIM-64), as `fastphys.odf` writes them
+    /// (trailing `;` included); Armada II's physics files have neither.
+    #[test]
+    fn armada_one_warp_keys_are_read_and_absent_keys_leave_them_zero() {
+        let ph = odf("impulseSpeed = 20\nwarpSpeed = 100\ntooCloseForWarp = 10;\nheadingCloseEnoughForWarp = 30;\n");
+        let m = movement(Some(&ph), "p.odf", &mut Vec::new());
+        assert_eq!((m.too_close_for_warp, m.heading_close_for_warp), (Fixed::from_int(10), Fixed::from_int(30)));
+        assert!(m.warp_speed > m.max_speed);
+        let none = movement(Some(&odf("impulseSpeed = 20\nwarpSpeed = 100\n")), "p.odf", &mut Vec::new());
+        assert_eq!((none.too_close_for_warp, none.heading_close_for_warp), (Fixed::ZERO, Fixed::ZERO));
+        // A heading band without a distance asks for nothing.
+        let band = movement(Some(&odf("impulseSpeed = 20\nheadingCloseEnoughForWarp = 30\n")), "p.odf", &mut Vec::new());
+        assert_eq!(band.heading_close_for_warp, Fixed::ZERO);
     }
 
     /// The smooth-physics keys of a stock-shaped physics ODF (values and the

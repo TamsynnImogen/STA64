@@ -40,6 +40,13 @@
 //!   attack approach does (aligned, above 0.9 of impulse speed, out at the
 //!   engine's lead distance). Whether the engine's extra team gate lets it
 //!   warp is not established.
+//! - **Plain move on Armada I (SIM-64).** A physics ODF with `tooCloseForWarp`
+//!   (and `headingCloseEnoughForWarp`, degrees) makes every plain move a warp
+//!   move: warp while the goal is farther than `tooCloseForWarp` and the craft
+//!   faces it within the heading band, impulse otherwise; no speed gate, no
+//!   player modifier. Read from the executable (Armada.exe 1.2), static; the
+//!   drop-out uses the lead above (the engine stops at `tooCloseToTurn` and
+//!   coasts: not measured). A unit without the key never warps on a plain move.
 //!
 //! State is in snapshots (format 21) and in the digest once any exists.
 
@@ -279,6 +286,27 @@ impl Sim {
         true
     }
 
+    /// A plain move of a craft whose physics ODF has `tooCloseForWarp`
+    /// (Armada I; SIM-64) is flown like a warp move: past that distance the
+    /// engine moves at warp, while the craft faces its goal. Crafts with a
+    /// scripted order or an attack keep it; Armada II and Fleet Operations
+    /// physics have no such key, so their plain moves never warp.
+    pub(crate) fn auto_warp_moves(&mut self, player: PlayerId, ids: &[EntityId]) {
+        for &id in ids {
+            let Some(u) = self.units.get(id) else { continue };
+            if (player.is_player() && u.owner != player)
+                || u.kind != EntityKind::Craft
+                || u.stats.too_close_for_warp <= Fixed::ZERO
+                || u.stats.warp_speed <= u.stats.max_speed
+                || self.scripted.job(id).is_some()
+                || self.weapons.attack_of(id).is_some()
+            {
+                continue;
+            }
+            self.scripted.rows.insert(id, Job::Warp);
+        }
+    }
+
     fn random_unit(&mut self) -> Fixed {
         let r = self.rng.next_u64();
         Fixed::from_int(((r >> 40) & 0xFFFF) as i32) / Fixed::from_int(65536)
@@ -420,11 +448,23 @@ impl Sim {
             let (vi, vw) = (u.stats.max_speed, u.stats.warp_speed);
             let (gx, gz) = (goal.x - u.pos.x, goal.z - u.pos.z);
             let to_goal = (gx * gx + gz * gz).sqrt();
-            let aligned = to_goal > Fixed::ZERO && (u.heading.0 * gx + u.heading.1 * gz) / to_goal > Fixed::from_f64(0.99);
             let phase = self.approach_warp.phase(id);
             let was = phase == Some(approach::IN_WARP);
+            // Armada I's physics ODFs set the distance and the heading band
+            // (SIM-64); a unit without `tooCloseForWarp` takes Armada II's.
+            let keyed = u.stats.too_close_for_warp > Fixed::ZERO;
+            let aligned = if keyed && u.stats.heading_close_for_warp > Fixed::ZERO {
+                let band = u.stats.heading_close_for_warp * crate::kinematics::pi() / Fixed::from_int(180);
+                to_goal > Fixed::ZERO && crate::kinematics::atan2(u.heading.0 * gz - u.heading.1 * gx, u.heading.0 * gx + u.heading.1 * gz).abs() < band
+            } else {
+                to_goal > Fixed::ZERO && (u.heading.0 * gx + u.heading.1 * gz) / to_goal > Fixed::from_f64(0.99)
+            };
+            let too_close = if keyed { u.stats.too_close_for_warp } else { too_close_to_warp() };
             let can = vw > vi && aligned && to_goal >= approach::warp_lead(vw, vi, db_radius(self, u));
-            let warp = if was { can } else { can && to_goal > too_close_to_warp() && u.speed > Fixed::from_f64(0.9) * vi };
+            // Armada II gates the start on 0.9 of impulse speed; Armada I's
+            // throttle factor applies at once.
+            let up_to_speed = keyed || u.speed > Fixed::from_f64(0.9) * vi;
+            let warp = if was { can } else { can && to_goal > too_close && up_to_speed };
             let mut plan = Plan { warp, ..Plan::default() };
             if warp {
                 self.approach_warp.set_phase(id, approach::IN_WARP);
