@@ -262,7 +262,7 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
         if c.alive(id).is_none() {
             return Ok(-1.0);
         }
-        let pop = c.view.colonies.iter().find(|r| r.id == id).map_or(0.0, |r| f64::from(r.population.to_f32()).trunc());
+        let pop = c.view.colonies.iter().find(|r| r.id == id).map_or(0.0, |r| (r.population.to_bits() as f64 / 4_294_967_296.0).trunc());
         Ok(pop)
     })?)?;
     // An object gone from the view is not exploding.

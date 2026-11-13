@@ -298,7 +298,7 @@ pub enum Edit {
     /// planet's cap on the next tick; a value of 0 or less neutralizes an
     /// owned planet). Creates the planet's population row. Rejected for any
     /// other target (STA64 policy; the original has no type check).
-    /// SCRIPT/BENCH only. Appended tag 46.
+    /// SCRIPT/BENCH only. Appended after `PlayerRace`: wire tag 44 on this branch (the tag is the position; it becomes 46 once #659 and #665 are merged ahead of it).
     PlanetPopulation(EntityId, Fixed),
 }
 
@@ -478,7 +478,7 @@ mod tests {
             (41, Edit::MaxShieldsKeep(id, Fixed::ONE)),
             (42, Edit::UnitRace(id, "x".into())),
             (43, Edit::PlayerRace(PlayerId(0), "x".into())),
-            (46, Edit::PlanetPopulation(id, Fixed::ONE)),
+            (44, Edit::PlanetPopulation(id, Fixed::ONE)),
         ];
         for (tag, edit) in edits {
             let bytes = postcard::to_allocvec(&edit).unwrap();

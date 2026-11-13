@@ -46,7 +46,7 @@
 //! per second to its owner (`economy::crew`). A planet with no row has
 //! population 0 and is not neutralised (the map-load path is not measured).
 //!
-//! State is in snapshots (format 24) and in the digest once any row exists.
+//! State is in snapshots (format 27 on this branch) and in the digest once any row exists.
 
 use std::collections::BTreeMap;
 
@@ -126,7 +126,7 @@ pub struct ColonyView {
     pub colonizer: Option<EntityId>,
 }
 
-/// The snapshot form of [`Colonies`] (format 24).
+/// The snapshot form of [`Colonies`] (format 27 on this branch).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ColoniesRec {
     pub version: u8,
@@ -138,9 +138,28 @@ pub struct ColoniesRec {
 
 // ---- small rules, each tested ----
 
+/// Integer square root of a `u128` (Newton, exact floor).
+fn isqrt(n: u128) -> u128 {
+    if n < 2 {
+        return n;
+    }
+    let mut x = 1u128 << (128 - n.leading_zeros()).div_ceil(2);
+    loop {
+        let y = (x + n / x) >> 1;
+        if y >= x {
+            return x;
+        }
+        x = y;
+    }
+}
+
+/// XZ distance in 128-bit arithmetic, so map-sized separations do not wrap the
+/// 32.32 multiply (the review of this package found the naive form overflowing
+/// above about 46 000 units).
 fn flat(a: Vec3, b: Vec3) -> Fixed {
-    let (dx, dz) = (a.x - b.x, a.z - b.z);
-    (dx * dx + dz * dz).sqrt()
+    let (dx, dz) = (i128::from(a.x.to_bits()) - i128::from(b.x.to_bits()), i128::from(a.z.to_bits()) - i128::from(b.z.to_bits()));
+    let d = isqrt((dx * dx + dz * dz) as u128);
+    Fixed::from_bits(i64::try_from(d).unwrap_or(i64::MAX))
 }
 
 /// The ship is close enough to start: centre distance at most
@@ -154,7 +173,7 @@ pub(crate) fn in_colonize_range(dist: Fixed, orbit_range: Fixed, planet_radius: 
 pub(crate) fn approach_point(planet: Vec3, ship: Vec3, heading: (Fixed, Fixed), planet_radius: Fixed, ship_radius: Fixed, orbit_range: Fixed) -> Vec3 {
     let want = (planet_radius + planet_radius + ship_radius + orbit_range - Fixed::from_int(100)).max(Fixed::ZERO);
     let (dx, dz) = (ship.x - planet.x, ship.z - planet.z);
-    let d = (dx * dx + dz * dz).sqrt();
+    let d = flat(ship, planet);
     let (ux, uz) = if d > Fixed::ZERO { (dx / d, dz / d) } else { (-heading.0, -heading.1) };
     Vec3 { x: planet.x + ux * want, y: ship.y, z: planet.z + uz * want }
 }
@@ -169,7 +188,10 @@ pub(crate) fn growth_per_second(pop: Fixed, cap: Fixed, race_rate: Fixed, civili
     if cap <= Fixed::ZERO {
         return Fixed::ZERO;
     }
-    (Fixed::from_int(4) * pop / cap + Fixed::ONE) * race_rate * civilian_modifier * cfg_modifier * Fixed::from_f64(0.2)
+    // The population is clamped to the cap first and divided before multiplying, so
+    // a script-set value cannot wrap the 32.32 product.
+    let pop = pop.max(Fixed::ZERO).min(cap);
+    (Fixed::from_int(4) * (pop / cap) + Fixed::ONE) * race_rate * civilian_modifier * cfg_modifier * Fixed::from_f64(0.2)
 }
 
 /// Crew per second a planet of `pop` people gives its owner.
@@ -264,6 +286,13 @@ impl Colonies {
         {
             return None;
         }
+        const LIMIT: i64 = 1_000_000_000i64 << 32;
+        let in_range = |bits: i64| (-LIMIT..=LIMIT).contains(&bits);
+        if !rec.planets.iter().all(|r| in_range(r.1))
+            || !rec.ships.iter().all(|r| (0..=LIMIT).contains(&r.3) && (0..=LIMIT).contains(&r.4) && r.3 <= r.4 && in_range(r.5))
+        {
+            return None;
+        }
         let planets: BTreeMap<_, _> = rec
             .planets
             .into_iter()
@@ -350,7 +379,7 @@ impl Sim {
         let Some(db) = self.content.clone() else { return false };
         let Some(rules) = db.rules().population().copied() else { return false };
         let Some(pl) = self.units.get(planet).filter(|p| alive(p)) else { return false };
-        if !db.unit(pl.def).is_some_and(|d| d.planet_role == Some(PlanetRole::Producer) && d.planet_colonizable) {
+        if !db.unit(pl.def).is_some_and(|d| d.planet_role == Some(PlanetRole::Producer) && d.planet_colonizable && rules.cap(d.planet_max_population) > Fixed::ZERO) {
             return false;
         }
         if self.colonies.row(planet).is_some_and(|r| r.colonizer.is_some()) {
@@ -507,8 +536,9 @@ impl Sim {
     /// The pods are done: the planet is the ship owner's and the ship is consumed.
     fn finish_colonization(&mut self, ship: EntityId, planet: EntityId, owner: PlayerId, planet_owner: PlayerId) {
         self.colonies.end_process(ship, false);
-        if planet_owner != owner {
-            self.transfer_owner(PlayerId::SCRIPT, planet, owner);
+        // A refused transfer (eliminated seat, unrepresentable owner) keeps the ship.
+        if planet_owner != owner && !self.transfer_owner(PlayerId::SCRIPT, planet, owner) {
+            return;
         }
         self.retire(ship);
     }

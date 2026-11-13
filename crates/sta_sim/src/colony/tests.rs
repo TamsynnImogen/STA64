@@ -518,3 +518,39 @@ fn two_runs_agree_and_colony_state_reaches_the_digest() {
     let plain = game(content(true));
     assert!(plain.colonies().is_empty());
 }
+
+#[test]
+fn distances_across_the_whole_map_do_not_wrap() {
+    // 60 000 units apart: the squared sum overflows a 32.32 product (review of #669).
+    let d = flat(at(-30_000, 0), at(30_000, 0));
+    close(d, 60_000.0, 0.01);
+    let d = flat(at(-40_000, -40_000), at(40_000, 40_000));
+    close(d, 113_137.08, 0.1);
+    let p = approach_point(at(0, 0), at(60_000, 0), (Fixed::ONE, Fixed::ZERO), n(100), n(10), n(150));
+    // 2 x 100 + 10 + 150 - 100 = 260 from the planet, on the line toward the ship.
+    close(p.x, 260.0, 0.01);
+    assert!(p.x > Fixed::ZERO && p.x < n(1000));
+}
+
+#[test]
+fn a_colonizable_planet_with_no_population_cap_is_refused_and_the_ship_kept() {
+    let mut data = content(true);
+    let mut sim = game(Arc::clone(&data));
+    let _ = &mut data;
+    let dead = spawn(&mut sim, "fx_pl_d", NEUTRAL, at(500, 0));
+    let s = spawn(&mut sim, "fx_colony", PlayerId(0), at(300, 0));
+    assert!(!colonize(&mut sim, 0, s, dead));
+    assert!(sim.units.get(s).is_some());
+}
+
+#[test]
+fn a_snapshot_row_with_a_forged_population_is_refused() {
+    let db = content(true);
+    let mut sim = game(Arc::clone(&db));
+    let planet = spawn(&mut sim, "fx_pl_h", NEUTRAL, at(0, 0));
+    set_pop(&mut sim, planet, 10);
+    let mut bad = sim.colonies().to_rec();
+    bad.planets[0].1 = i64::MAX;
+    let bytes = crate::snapshot::chain_with_colonies(&sim.snapshot(), &bad);
+    assert!(Sim::from_snapshot(&bytes, Some(db)).is_err());
+}
