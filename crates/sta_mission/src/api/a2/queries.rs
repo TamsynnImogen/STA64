@@ -47,7 +47,10 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
     let c = ctx.clone();
     table.set(
         "GetDistance",
-        lua.create_function(move |_, args: MultiValue| {
+        lua.create_function(move |lua, args: MultiValue| {
+            if args.len() == 3 {
+                return super::conditions::path_distance(&mut c.borrow_mut(), lua, &args);
+            }
             let first = handle("GetDistance", &args, 2)?;
             let second = sta_core::EntityId(integer("GetDistance", &args[1])?);
             let (a, b) = {

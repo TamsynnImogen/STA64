@@ -15,6 +15,7 @@ use mlua::Lua;
 use super::Shared;
 
 mod camera;
+mod conditions;
 mod controls;
 mod media;
 mod native_camera;
@@ -44,6 +45,8 @@ pub(super) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
     objects::install(lua, ctx, &a2)?;
     queries::install(lua, ctx, &a2)?;
     random::install(lua, ctx, &a2)?;
+    a2.set("paths", lua.create_table()?)?;
+    conditions::install(lua, ctx, &a2)?;
     subsystems::install(lua, ctx, &a2)?;
     lua.globals().raw_set("A2", a2)?;
     Ok(())
