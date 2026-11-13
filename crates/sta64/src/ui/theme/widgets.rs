@@ -94,14 +94,15 @@ fn pill(theme: &Theme, w: f32) -> Node {
         height: Val::Px(theme.button_h),
         padding: UiRect::horizontal(Val::Px(theme.button_h * 0.5)),
         align_items: AlignItems::Center,
-        justify_content: JustifyContent::FlexEnd,
+        // LCARS pills set their label at the right, as on a console; the stock skins centre it.
+        justify_content: if theme.caps_buttons { JustifyContent::FlexEnd } else { JustifyContent::Center },
         border_radius: BorderRadius::MAX,
         ..default()
     }
 }
 
 fn pill_label(theme: &Theme, s: &str) -> impl Bundle {
-    (ButtonText, text(theme, theme.caps(s, theme.caps_buttons), theme.text_size, theme.text_on))
+    (ButtonText, text(theme, theme.caps(s, theme.caps_buttons), theme.text_size, theme.kit_text_on))
 }
 
 /// A flat lavender pill, black capitals at the right. Hover, pressed and
@@ -240,6 +241,12 @@ fn bar(color: Color, h: f32, right_cap: bool) -> impl Bundle {
 /// pale one bottom left joined by the side bar, the title in gold capitals in
 /// the top bar's gap with a sky cap after it, and a gold end bar along the foot.
 pub fn panel(theme: &Theme, title: &str, content: impl Bundle) -> impl Bundle {
+    panel_with(theme, ttf_text(theme.caps(title, theme.caps_titles), theme.title_size, theme.title), content)
+}
+
+/// [`panel`] with the title bundle given: the baked TTF for the frames the HUD shares,
+/// [`kit_text`](super::stock::kit_text) (the mod's sprite font) for menus.
+pub fn panel_with(theme: &Theme, title: impl Bundle, content: impl Bundle) -> impl Bundle {
     let g = theme.bar_gap;
     let top = theme.title_size + 6.0;
     let side = theme.side_bar;
@@ -256,7 +263,7 @@ pub fn panel(theme: &Theme, title: &str, content: impl Bundle) -> impl Bundle {
                         Node { flex_grow: 1.0, column_gap: Val::Px(g), height: Val::Px(top), align_items: AlignItems::Center, ..default() },
                         children![
                             bar(theme.accent2, top, false),
-                            ttf_text(theme.caps(title, theme.caps_titles), theme.title_size, theme.title),
+                            title,
                             (
                                 Node {
                                     width: Val::Px(theme.cap_w),

@@ -74,6 +74,11 @@ pub fn kit_text(theme: &Theme, s: impl Into<String>, size: f32, color: Color) ->
     sprite_text_styled(s, size, color, SpriteTextStyle::role(font_role(theme, size)))
 }
 
+/// [`panel`](super::panel) with its title in the theme's sprite font (menus).
+pub fn kit_panel(theme: &Theme, title: &str, content: impl Bundle) -> impl Bundle {
+    super::panel_with(theme, kit_text(theme, theme.caps(title, theme.caps_titles), theme.title_size, theme.title), content)
+}
+
 /// What a click on `e` does for the widgets of this module (the LCARS kit's `click`
 /// handles buttons, toggles and list rows). Public so tests click without a pointer.
 pub fn kit_click(w: &mut World, e: Entity) {
