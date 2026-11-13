@@ -292,7 +292,7 @@ mod tests {
         let make = |id, name, owner| UnitView {
             id: EntityId(id), def: db.key(name).unwrap(), owner,
             pos: SimVec3::ZERO, heading: (Fixed::ZERO, Fixed::ONE), speed: Fixed::ZERO,
-            hull: [Fixed::ONE; 2], shields: [[Fixed::ZERO; 2]; 4], crew: None, energy: None,
+            hull: [Fixed::ONE; 2], shields: [[Fixed::ZERO; 2]; 4], crew: None, energy: None, autonomy: None,
             flags: UnitFlags::SELECTABLE, progress: None,
         };
         let view = WorldView {
