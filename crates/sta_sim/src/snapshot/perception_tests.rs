@@ -10,7 +10,8 @@ fn live() -> (Sim, EntityId, EntityId) {
 }
 
 fn split(bytes: &[u8]) -> (Body, Option<(Vec3, Vec3)>, BoundaryRec, PerceptionRec) {
-    let (body, rest) = postcard::take_from_bytes(&bytes[HEADER..]).unwrap();
+    let (_, rest): (Provenance, _) = postcard::take_from_bytes(&bytes[HEADER..]).unwrap();
+    let (body, rest) = postcard::take_from_bytes(rest).unwrap();
     let (bounds, rest) = postcard::take_from_bytes(rest).unwrap();
     let (boundary, rest) = postcard::take_from_bytes(rest).unwrap();
     let (perception, rest) = postcard::take_from_bytes(rest).unwrap();
@@ -31,24 +32,19 @@ fn join(
     perception: &PerceptionRec,
 ) -> Vec<u8> {
     let mut out = bytes[..HEADER].to_vec();
+    out.extend(postcard::to_allocvec(&Provenance::default()).unwrap());
     out.extend(postcard::to_allocvec(body).unwrap());
     out.extend(postcard::to_allocvec(&bounds).unwrap());
     out.extend(postcard::to_allocvec(boundary).unwrap());
     out.extend(postcard::to_allocvec(perception).unwrap());
-    if u16::from_le_bytes(out[4..6].try_into().unwrap()) >= PERSONNEL_FORMAT {
-        out.extend(postcard::to_allocvec(&PersonnelRec { version: 1, rows: Vec::new() }).unwrap());
-    }
-    if u16::from_le_bytes(out[4..6].try_into().unwrap()) >= CREW_FORMAT {
-        out.extend(postcard::to_allocvec(&UnitCrewRec { version: 1, rows: Vec::new() }).unwrap());
-    }
-    if u16::from_le_bytes(out[4..6].try_into().unwrap()) == FORMAT_VERSION {
-        out.extend(postcard::to_allocvec(&StartEffectsRec { version: 1, rows: Vec::new() }).unwrap());
-    }
+    out.extend(postcard::to_allocvec(&PersonnelRec { version: 1, rows: Vec::new() }).unwrap());
+    out.extend(postcard::to_allocvec(&UnitCrewRec { version: 1, rows: Vec::new() }).unwrap());
+    out.extend(postcard::to_allocvec(&StartEffectsRec { version: 1, rows: Vec::new() }).unwrap());
     out
 }
 
 #[test]
-fn v11_roundtrip_and_continuation_keep_perceived_owner_separate() {
+fn roundtrip_and_continuation_keep_perceived_owner_separate() {
     let (mut sim, first, second) = live();
     sim.perception.insert(first, PlayerId(1));
     let saved = sim.snapshot();
@@ -68,7 +64,7 @@ fn v11_roundtrip_and_continuation_keep_perceived_owner_separate() {
 }
 
 #[test]
-fn v11_rejects_noncanonical_rows_unknown_version_missing_suffix_and_trailing_bytes() {
+fn rejects_noncanonical_perception_rows_unknown_version_missing_suffix_and_trailing_bytes() {
     let (mut sim, first, second) = live();
     sim.perception.insert(first, PlayerId(1));
     let bytes = sim.snapshot();
@@ -93,6 +89,7 @@ fn v11_rejects_noncanonical_rows_unknown_version_missing_suffix_and_trailing_byt
         Err(SnapshotError::Corrupt(why)) if why.contains("perceived-team record version")
     ));
     let mut missing = bytes[..HEADER].to_vec();
+    missing.extend(postcard::to_allocvec(&Provenance::default()).unwrap());
     missing.extend(postcard::to_allocvec(&body).unwrap());
     missing.extend(postcard::to_allocvec(&bounds).unwrap());
     missing.extend(postcard::to_allocvec(&boundary).unwrap());
@@ -104,27 +101,24 @@ fn v11_rejects_noncanonical_rows_unknown_version_missing_suffix_and_trailing_byt
 }
 
 #[test]
-fn historical_v10_seam1_layout_restores_empty_perception_and_mismatched_seams_reject() {
+fn historical_v10_layout_and_mismatched_seams_reject() {
     let (mut sim, first, _) = live();
     sim.perception.insert(first, PlayerId(1));
     let bytes = sim.snapshot();
     let (body, bounds, boundary, _) = split(&bytes);
+    // The format-10 layout (no provenance, no perception suffix) is refused
+    // by version since CON-35.
     let mut old = bytes[..HEADER].to_vec();
-    old[4..6].copy_from_slice(&PREVIOUS_FORMAT.to_le_bytes());
+    old[4..6].copy_from_slice(&10_u16.to_le_bytes());
     old[6..10].copy_from_slice(&1_u32.to_le_bytes());
     old.extend(postcard::to_allocvec(&body).unwrap());
     old.extend(postcard::to_allocvec(&bounds).unwrap());
     old.extend(postcard::to_allocvec(&boundary).unwrap());
-    let restored = Sim::from_snapshot(&old, None).unwrap();
-    assert_eq!(restored.perceived_owner(first), Some(PlayerId(0)));
-    assert!(restored.perception.iter().next().is_none());
+    assert_eq!(Sim::from_snapshot(&old, None).err(), Some(SnapshotError::FormatVersion { found: 10 }));
     let mut wrong_new = bytes.clone();
     wrong_new[6..10].copy_from_slice(&1_u32.to_le_bytes());
     assert!(matches!(
         Sim::from_snapshot(&wrong_new, None),
         Err(SnapshotError::SeamRev { found: 1 })
     ));
-    let mut wrong_old = old;
-    wrong_old[6..10].copy_from_slice(&SEAM_REV.to_le_bytes());
-    assert!(matches!(Sim::from_snapshot(&wrong_old, None), Err(SnapshotError::SeamRev { found }) if found == SEAM_REV));
 }

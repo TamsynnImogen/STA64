@@ -1,7 +1,7 @@
 # Modding v1: decisions for sign-off
 
-Status: **accepted** (Tammy and Cedric, 2026-11-11; merged in #352; D5 amended
-2026-11-12 and approved by Tammy, see D5). Binding on
+Status: **accepted** (Tammy and Cedric, 2026-11-11; merged in #352; D5 and D10
+amended 2026-11-12 and approved by Tammy, see D5 and D10). Binding on
 all agent and human work in the areas below. Covers how STA64 treats existing Armada
 mods and what the first modding release contains. Background and evidence are
 in [MODDING-IDEAS.md](MODDING-IDEAS.md) and in research notes kept outside the
@@ -84,8 +84,8 @@ Two peers on Classic and Classic Enhanced refuse to start and name the
 differing key; for geometry the refusal names the unit and the differing
 value. Replays and snapshots record the lineage and pack names.
 
-*Amended 2026-11-12: model geometry is part of the rules (Cedric); awaiting
-Tammy's approval. It read "peers that differ only in textures, models or
+*Amended 2026-11-12: model geometry is part of the rules (Cedric; approved by
+Tammy). It read "peers that differ only in textures, models or
 render recipes can play together", meaning that peers whose installs differ
 only in art play together. That cannot hold for models: in every install
 99-100% of ships have no explicit size key (Roots base 43.7%), so the size of a
