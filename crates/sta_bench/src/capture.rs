@@ -186,6 +186,19 @@ pub struct CaptureIndex {
     /// Where the cursor pointed on the ground plane, sim map space.
     pub cursor_world: Option<[f32; 3]>,
     pub camera: Option<CameraPose>,
+    /// What the client's own click picking returned for the cursor ray at that moment (the
+    /// unit a click would take), apart from `hovered`, which the HUD's gates also filter.
+    #[serde(default)]
+    pub pick: Option<UnitInfo>,
+    /// The pointer was over a HUD panel (map clicks are ignored there).
+    #[serde(default)]
+    pub pointer_over_hud: Option<bool>,
+    /// A placement or a targeting command was waiting for its click (map selection is off).
+    #[serde(default)]
+    pub click_pending: Option<bool>,
+    /// The window's logical size.
+    #[serde(default)]
+    pub window: Option<[f32; 2]>,
     /// Commands in the replay.
     pub commands: usize,
     pub has_snapshot: bool,
@@ -229,6 +242,10 @@ impl CaptureIndex {
             selection: Vec::new(),
             hovered: None,
             cursor_world: None,
+            pick: None,
+            pointer_over_hud: None,
+            click_pending: None,
+            window: None,
             camera: None,
             commands: replay.commands.len(),
             has_snapshot: false,
@@ -374,7 +391,7 @@ impl Capture {
         }
         put(NOTE_FILE, self.note.as_bytes())?;
         put(REPORT_FILE, report(&index).as_bytes())?;
-        let json = json5::to_string(&index).map_err(|e| CaptureError::Index(e.to_string()))?;
+        let json = serde_json::to_string_pretty(&index).map_err(|e| CaptureError::Index(e.to_string()))?;
         // The index goes last: a folder without it is an unfinished capture.
         put(INDEX_FILE, json.as_bytes())
     }
@@ -512,6 +529,14 @@ pub fn report(i: &CaptureIndex) -> String {
     }
     if let Some(u) = &i.hovered {
         let _ = writeln!(s, "\nUnder the cursor: {}", unit(u));
+    }
+    if let Some(u) = &i.pick {
+        let _ = writeln!(s, "\nClick pick: {}", unit(u));
+    } else if i.cursor_world.is_some() {
+        let _ = writeln!(s, "\nClick pick: nothing");
+    }
+    if i.pointer_over_hud.is_some() || i.click_pending.is_some() || i.window.is_some() {
+        let _ = writeln!(s, "Pointer over HUD: {:?}, click pending: {:?}, window: {:?}", i.pointer_over_hud, i.click_pending, i.window);
     }
     if let Some(c) = i.cursor_world {
         let _ = writeln!(s, "\nCursor on the ground: ({:.0}, {:.0}, {:.0}) in map space.", c[0], c[1], c[2]);
