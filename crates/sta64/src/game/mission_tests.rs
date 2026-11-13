@@ -145,10 +145,13 @@ fn campaigns(app: &App) -> &Campaigns {
 fn a_synthetic_campaign_plays_from_the_screens_and_progress_survives_a_restart() {
     let dir = temp_dir("host");
     let mut app = app(fixture(false, Some(&dir)));
+    // The front end's browser lists multiplayer maps only; the mission's map is added by name.
+    app.insert_resource(crate::map::MapBrowser { maps: vec!["blueamber".into()], index: 0, dirty: false, mount_summary: String::new(), info: String::new() });
 
     // Mission 1 (federation): its script wins after a second of game time.
     start_from_screens(&mut app, 1);
     assert!(app.world().contains_resource::<MissionHandle>() && app.world().contains_resource::<MissionRun>());
+    assert!(app.world().resource::<crate::map::MapBrowser>().maps.iter().any(|m| m == "syn_fed01"), "the mission's map is built by name");
     assert_eq!(app.world().resource::<Seen>().began, ["syn_fed01.bzn"], "MissionBegan names the map");
     assert!(app.world().resource::<ObjectivesView>().visible, "the objectives open with the mission");
     // The script runs with the sim: its objective reaches the view, then it is completed and the mission ends.

@@ -301,7 +301,9 @@ pub fn outcome(
     mut shown: Local<Option<Verdict>>,
     mut notices: MessageWriter<Notice>,
     banner: Query<Entity, With<EndBanner>>,
+    mission: Option<Res<mission_host::MissionRun>>,
 ) {
+    let link = link.filter(|_| mission.is_none());
     let Some(link) = link else {
         for e in &banner {
             commands.entity(e).despawn();

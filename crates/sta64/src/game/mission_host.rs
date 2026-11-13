@@ -173,7 +173,15 @@ struct Shared(Arc<Mutex<MissionRuntime>>);
 
 impl Controller for Shared {
     fn think(&mut self, view: &WorldView, events: &[SimEvent], out: &mut Vec<Command>) {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner).think(view, events, out);
+        let mut rt = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        // No audio lane plays `Presentation::Sound` yet: acknowledge each message on the tick it
+        // was raised (tick-exact, not frame-rate dependent), through the host-side reply function.
+        for e in events {
+            if let SimEvent::Present(Presentation::Sound { id, .. }) = e {
+                acknowledge_audio(&rt, *id);
+            }
+        }
+        rt.think(view, events, out);
     }
 }
 
@@ -190,8 +198,6 @@ pub struct MissionRun {
     pub close_at: Option<u64>,
     /// `LeaveMatch` was written.
     pub leaving: bool,
-    /// Audio message ids already acknowledged.
-    answered_audio: Vec<u32>,
 }
 
 /// The answers to the script, from the client, and the audio acknowledgement.
@@ -237,6 +243,7 @@ fn on_start_mission(
     mut notices: MessageWriter<Notice>,
     info: Option<ResMut<LoadInfo>>,
     progress: Option<ResMut<LoadProgress>>,
+    browser: Option<ResMut<crate::map::MapBrowser>>,
 ) {
     let Some(StartMission { campaign, mission }) = starts.read().last().cloned() else { return };
     let Some(campaigns) = campaigns else { return };
@@ -253,19 +260,25 @@ fn on_start_mission(
         let m = campaigns.mission(&campaign, mission).map(|(_, m)| m);
         let b = m.and_then(|m| m.briefing.as_ref());
         *info = LoadInfo {
-            kicker: format!("{} {}", crate::frontend::campaign::campaign_name(campaigns.book.campaign(&campaign).expect("launched")), mission + 1),
+            kicker: format!("{} {}", campaigns.book.campaign(&campaign).map_or_else(String::new, crate::frontend::campaign::campaign_name), mission + 1),
             title: launch.title.clone(),
             briefing: b.map(|b| b.text.trim().split("\n\n").map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()).collect()).unwrap_or_default(),
             objectives: b.map(|b| b.goals.clone()).unwrap_or_default(),
             background: String::new(),
         };
     }
+    // The front end lists only multiplayer maps; a mission's map is built by name all the same.
+    if let Some(mut b) = browser
+        && !b.maps.iter().any(|m| m.eq_ignore_ascii_case(&launch.map))
+    {
+        b.maps.push(launch.map.clone());
+    }
     if let Some(mut p) = progress {
         p.begin();
     }
     commands.insert_resource(MapSeat(Some(launch.player().0)));
     commands.insert_resource(ActiveMatch { setup: launch.placeholder(data.content.clone()), requested: false, frames: 0 });
-    commands.insert_resource(MissionRun { campaign, mission, began: false, outcome: None, close_at: None, leaving: false, answered_audio: Vec::new() });
+    commands.insert_resource(MissionRun { campaign, mission, began: false, outcome: None, close_at: None, leaving: false });
     commands.insert_resource(launch);
     next.set(AppState::Loading);
 }
@@ -288,7 +301,6 @@ fn run_mission(
     link: Res<SimLink>,
     mut run: ResMut<MissionRun>,
     mut replies: MessageReader<ScriptReply>,
-    mut sims: MessageReader<SimMsg>,
     mut view: Option<ResMut<ObjectivesView>>,
     log: Option<Res<MissionMovieLog>>,
     mut leave: MessageWriter<LeaveMatch>,
@@ -296,14 +308,6 @@ fn run_mission(
     let tick = link.curr().tick;
     for r in replies.read() {
         handle.with(|rt| deliver_reply_host_side(rt, r));
-    }
-    for SimMsg(e) in sims.read() {
-        if let SimEvent::Present(Presentation::Sound { id, .. }) = e
-            && !run.answered_audio.contains(id)
-        {
-            run.answered_audio.push(*id);
-            handle.with(|rt| acknowledge_audio(rt, *id));
-        }
     }
     if let Some(v) = view.as_mut() {
         let mut want = (**v).clone();
@@ -316,11 +320,11 @@ fn run_mission(
         && let Some(o) = handle.with(|rt| scan_outcome(rt, tick))
     {
         info!("mission: {} {} at tick {tick} (closes after {}s)", run.campaign, if o.won { "won" } else { "lost" }, o.delay);
-        run.close_at = Some(tick + (o.delay.max(0.0) * f64::from(TICK_HZ)).ceil() as u64);
+        run.close_at = Some(tick.saturating_add((o.delay.clamp(0.0, 600.0) * f64::from(TICK_HZ)).ceil() as u64));
         run.outcome = Some(o);
     }
     if let (Some(close), false) = (run.close_at, run.leaving) {
-        let waited_long = tick >= close + MOVIE_WAIT_SECS * u64::from(TICK_HZ);
+        let waited_long = tick >= close.saturating_add(MOVIE_WAIT_SECS * u64::from(TICK_HZ));
         if tick >= close && (waited_long || !log.is_some_and(|l| l.busy())) {
             run.leaving = true;
             leave.write(LeaveMatch);

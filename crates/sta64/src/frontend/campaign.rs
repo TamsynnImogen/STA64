@@ -220,6 +220,12 @@ impl Campaigns {
         let mut runner = CampaignRunner::with_progress(self.book.clone(), self.progress.clone());
         let transition = runner.record(campaign, mission, result == RunResult::Won).ok()?;
         self.progress = runner.progress;
+        if self.load_warning.take().is_some()
+            && let Some(p) = self.store.path()
+        {
+            // A file that could not be used is kept aside, not overwritten.
+            let _ = std::fs::rename(p, p.with_extension("bad"));
+        }
         let save_error = self.store.save(&self.progress).err();
         if let Some(e) = &save_error {
             warn!("campaign: progress not saved: {e}");
@@ -303,7 +309,11 @@ pub(crate) fn on_buttons(
     mut next: ResMut<NextState<Screen>>,
     mut start: MessageWriter<StartMission>,
 ) {
-    let Some(mut campaigns) = campaigns else { return };
+    let Some(mut campaigns) = campaigns else {
+        clicks.clear();
+        picks.clear();
+        return;
+    };
     for p in picks.read() {
         if lists.contains(p.list) && campaigns.mission != p.index {
             campaigns.mission = p.index;

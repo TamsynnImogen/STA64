@@ -239,9 +239,10 @@ fn drive_load(
 }
 
 /// F10 leaves the match at any time; Enter or Esc once it is decided.
-fn leave_keys(keys: Option<Res<ButtonInput<KeyCode>>>, link: Option<Res<SimLink>>, mut leave: MessageWriter<LeaveMatch>) {
+fn leave_keys(keys: Option<Res<ButtonInput<KeyCode>>>, link: Option<Res<SimLink>>, mission: Option<Res<super::mission_host::MissionRun>>, mut leave: MessageWriter<LeaveMatch>) {
     let (Some(keys), Some(link)) = (keys, link) else { return };
-    let decided = verdict(link.curr(), link.player()).is_some();
+    // A mission ends by its script, not by elimination.
+    let decided = mission.is_none() && verdict(link.curr(), link.player()).is_some();
     if keys.just_pressed(KeyCode::F10) || (decided && keys.any_just_pressed([KeyCode::Enter, KeyCode::Escape])) {
         leave.write(LeaveMatch);
     }
@@ -386,7 +387,10 @@ fn remount(
                     commands.insert_resource(campaigns);
                     commands.insert_resource(movies);
                 }
-                None => commands.remove_resource::<crate::frontend::campaign::Campaigns>(),
+                None => {
+                    commands.remove_resource::<crate::frontend::campaign::Campaigns>();
+                    commands.remove_resource::<crate::media::campaign::MissionMovies>();
+                }
             }
         }
         Err(e) => {
