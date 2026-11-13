@@ -119,9 +119,10 @@ pub fn specials_indexed<'a>(
     u.hardpoints.iter().enumerate().filter_map(|(i, h)| {
         let w = db.weapon(h.weapon.key)?;
         let kind = SpecialKind::of(w)?;
-        // A PD weapon is a special (and takes a slot) only under `pd_energy`,
+        // A PD weapon is a special (and takes a slot) only under `pd_energy` with
+        // `point_defense_cycles`, the bits its toggle needs,
         // so slot numbers of other content do not shift.
-        (kind != SpecialKind::PointDefence || db.weapon_features(w).pd_energy).then_some((i, kind, w))
+        (kind != SpecialKind::PointDefence || { let f = db.weapon_features(w); f.pd_energy && f.point_defense_cycles }).then_some((i, kind, w))
     })
 }
 

@@ -297,7 +297,7 @@ pub struct SkirmishController {
     /// between the AIP's minimum and the current ceiling.
     next_wave: usize,
     /// Last tick an enemy fired at or hit each unit (AI-04).
-    pd_attacked: BTreeMap<EntityId, Tick>,
+    pd_attacked: BTreeMap<EntityId, (Tick, EntityId)>,
     /// Units whose point defence is on, from `PointDefenceChanged`.
     pd_on: BTreeSet<EntityId>,
 }
@@ -760,7 +760,7 @@ impl Controller for SkirmishController {
             return;
         }
         self.plan(view, me, out);
-        self.point_defence(view, out);
+        self.point_defence(view, me, out);
     }
 }
 

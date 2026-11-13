@@ -13,7 +13,15 @@
 //!
 //! The AI reads the unit's own energy from the view and learns the switch
 //! from `SimEvent::PointDefenceChanged`; it sends `Order::Special` with
-//! [`sta_sim::specials::point_defence_slot`].
+//! [`sta_sim::specials::point_defence_slot`] (the unit's first PD weapon).
+//!
+//! Limits, known: the view does not carry the PD switch, so a controller
+//! built mid-game (snapshot load, replay seek) or handed a unit whose PD is
+//! already on assumes it is off, and a script that toggles PD behind its
+//! back is not seen; a UI-31 seam field would fix this. The policy does not
+//! tell beam attacks (which PD cannot stop) from ordnance, and it asks for
+//! twice the weapon's cost in the pool before switching on again, so an
+//! emptied pool does not make it flap.
 
 use sta_core::{EntityId, Fixed, TICK_HZ, Tick};
 use sta_sim::command::{Command, Order, Target};
@@ -31,9 +39,10 @@ impl SkirmishController {
     /// Note an attack on `target` at `tick`; the event stream is global, so
     /// only own units are looked up later.
     pub(super) fn note_attack(&mut self, tick: Tick, event: &SimEvent) {
+        self.pd_attacked.retain(|_, (t, _)| tick.saturating_sub(*t) < QUIET);
         match event {
-            SimEvent::Fired { target: Target::Entity(t), .. } | SimEvent::Hit { target: t, .. } => {
-                self.pd_attacked.insert(*t, tick);
+            SimEvent::Fired { shooter, target: Target::Entity(t), .. } | SimEvent::Hit { by: shooter, target: t, .. } => {
+                self.pd_attacked.insert(*t, (tick, *shooter));
             }
             SimEvent::PointDefenceChanged { id, on } => {
                 if *on {
@@ -47,7 +56,7 @@ impl SkirmishController {
     }
 
     /// Toggle PD on own units that have it.
-    pub(super) fn point_defence(&mut self, view: &WorldView, out: &mut Vec<Command>) {
+    pub(super) fn point_defence(&mut self, view: &WorldView, me: &sta_sim::view::PlayerView, out: &mut Vec<Command>) {
         let db = std::sync::Arc::clone(&self.cfg.content);
         let seat = self.cfg.player;
         let tick = view.tick;
@@ -62,12 +71,25 @@ impl SkirmishController {
                 .filter_map(|h| db.weapon(h.weapon.key))
                 .find(|w| w.kind == WeaponKind::PointDefence)
                 .map_or(Fixed::ZERO, |w| w.energy_cost);
-            let attacked = self.pd_attacked.get(&u.id).is_some_and(|t| tick.saturating_sub(*t) < QUIET);
+            // An attack counts when its shooter is an enemy of this seat.
+            let enemy = |shooter: EntityId| {
+                view.units
+                    .binary_search_by_key(&shooter, |s| s.id)
+                    .ok()
+                    .map(|i| view.units[i].owner)
+                    .is_some_and(|o| me.relations.iter().any(|&(p, r)| p == o && r == sta_sim::view::Relation::Enemy))
+            };
+            let attacked = self
+                .pd_attacked
+                .get(&u.id)
+                .is_some_and(|&(t, shooter)| tick.saturating_sub(t) < QUIET && enemy(shooter));
             let on = self.pd_on.contains(&u.id);
-            let can_pay = u.energy.is_some_and(|[now, _]| now >= cost && now > Fixed::ZERO);
+            let can_pay = u.energy.is_some_and(|[now, _]| now >= cost + cost && now > Fixed::ZERO);
             if (attacked && !on && can_pay) || (!attacked && on) {
                 let order = Order::Special { units: vec![u.id], slot, target: Target::None };
-                self.issue(tick, out, vec![u.id], order, None, None);
+                // No units in the record: a refused toggle must not clear the
+                // unit's move, attack or mining state (`absorb`).
+                self.issue(tick, out, Vec::new(), order, None, None);
             }
         }
         // Forget what no longer exists.

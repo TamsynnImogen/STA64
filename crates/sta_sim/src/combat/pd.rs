@@ -45,10 +45,12 @@
 //! - The toggle is `Order::Special` on the weapon's slot
 //!   ([`crate::specials::point_defence_slot`]); every change, including the
 //!   auto-off, raises `SimEvent::PointDefenceChanged`. `Fo4` and `Sta2Classic`
-//!   turn `pd_energy` on (SIM-37): the original's PD weapon is a `toggle = 1`
-//!   special (read from the data of Classic and FO 4.0), the executable
-//!   handles a toggle request by flipping the switch (read from the
-//!   executable, static), and PD stands off until switched on (measured).
+//!   keep `pd_energy` off by default until a HUD button can toggle PD (UI-31;
+//!   SIM-37 then flips the profile defaults). The original's PD weapon is a
+//!   `toggle = 1` special (read from the data of Classic and FO 4.0), the
+//!   executable handles a toggle request by flipping the switch (read from the
+//!   executable, static), and PD stood off until switched on in the stock A2
+//!   and Roots + Classic bench runs (measured).
 //! - Snapshot: the rows stay `Vec<u64>`. Rows of units with energy-model
 //!   state start with `u64::MAX` and carry `[ready, on, timer bits]` per
 //!   hardpoint; other rows are unchanged, so old snapshots load.
