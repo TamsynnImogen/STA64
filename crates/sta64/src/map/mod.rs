@@ -1114,8 +1114,12 @@ fn rebuild(
     // The sim, stepped by the sim link. Without a seat the view orders any team's ships,
     // so the link speaks as the bench, which the sim does not restrict to its own units;
     // with one it speaks as the seat and the sim holds it to its own.
-    commands.insert_resource(
+    crate::capture::arm(
+        &mut commands,
         SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), seat_player.unwrap_or(PlayerId::BENCH)).with_controllers(controllers),
+        &setup,
+        is_match,
+        &vfs.0,
     );
 
     missing.sort();

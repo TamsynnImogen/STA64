@@ -52,8 +52,7 @@ that it did.
 
 ## 2. What the original games do
 
-Checked in the installs on this machine (`/home/cedric/Games/Heroic/`:
-Armada, Armada II stock, Fleet Operations, FO Roots) and in Refit's
+Checked in the installs on this machine (Armada, Armada II stock, Fleet Operations, FO Roots) and in Refit's
 DirectPlay trace, rather than guessed. Every item below either shaped a
 decision or is listed out of scope.
 
