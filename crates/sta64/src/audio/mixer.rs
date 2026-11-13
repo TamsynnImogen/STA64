@@ -73,6 +73,14 @@ pub struct Sound {
     pub frames: Arc<[[f32; 2]]>,
 }
 
+/// One error a device's output stream reported (a lost device, `POLLERR`, an xrun).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StreamFault {
+    pub message: String,
+    /// A glitch the stream survives (underrun, rerouted device); anything else needs a reopen.
+    pub benign: bool,
+}
+
 /// What the game needs from an audio device.
 pub trait AudioBackend {
     fn name(&self) -> &'static str;
@@ -92,6 +100,12 @@ pub trait AudioBackend {
     fn stop_bus(&mut self, bus: Bus);
     /// Listener position and its right-hand direction.
     fn set_listener(&mut self, pos: [f32; 3], right: [f32; 3]);
+    /// Move up to `max` queued stream errors into `out` (never blocks, never logs) and return
+    /// how many more the device dropped unreported since the last call. Devices without an
+    /// error channel report nothing. [`Resilient`](super::resilient::Resilient) polls this.
+    fn poll_errors(&mut self, _max: usize, _out: &mut Vec<StreamFault>) -> u64 {
+        0
+    }
 }
 
 /// The mixer: owns the backend (a non-send resource: audio devices are not `Send` everywhere).
@@ -114,6 +128,8 @@ pub struct KiraAudio {
     tracks: HashMap<Bus, TrackHandle>,
     playing: Vec<(Bus, StaticSoundHandle)>,
     listener: ([f32; 3], [f32; 3]),
+    /// `num_stream_errors_discarded` at the last poll.
+    discarded_seen: u64,
 }
 
 impl KiraAudio {
@@ -124,7 +140,7 @@ impl KiraAudio {
         for bus in [Bus::Music, Bus::Sfx, Bus::Voice, Bus::Ui] {
             tracks.insert(bus, manager.add_sub_track(TrackBuilder::new()).map_err(|e| e.to_string())?);
         }
-        Ok(Self { manager, tracks, playing: Vec::new(), listener: ([0.0; 3], [1.0, 0.0, 0.0]) })
+        Ok(Self { manager, tracks, playing: Vec::new(), listener: ([0.0; 3], [1.0, 0.0, 0.0]), discarded_seen: 0 })
     }
 }
 
@@ -203,6 +219,22 @@ impl AudioBackend for KiraAudio {
 
     fn set_listener(&mut self, pos: [f32; 3], right: [f32; 3]) {
         self.listener = (pos, right);
+    }
+
+    /// cpal's error callback pushes into a 64-slot ring that kira's own thread forwards into
+    /// a second ring; neither logs, and overflow is only counted. Here the second is drained.
+    fn poll_errors(&mut self, max: usize, out: &mut Vec<StreamFault>) -> u64 {
+        use kira::backend::cpal::cpal::ErrorKind;
+        let backend = self.manager.backend_mut();
+        for _ in 0..max {
+            let Some(e) = backend.pop_error() else { break };
+            let benign = matches!(e.kind(), ErrorKind::Xrun | ErrorKind::DeviceChanged | ErrorKind::RealtimeDenied);
+            out.push(StreamFault { message: e.to_string(), benign });
+        }
+        let total = backend.num_stream_errors_discarded().unwrap_or(0);
+        let fresh = total.saturating_sub(self.discarded_seen);
+        self.discarded_seen = total;
+        fresh
     }
 }
 

@@ -15,6 +15,7 @@
 mod mixer;
 mod music;
 mod null;
+mod resilient;
 mod sfx;
 mod ui;
 mod voices;
@@ -25,7 +26,8 @@ use std::sync::Arc;
 use bevy::prelude::*;
 use bevy::time::Real;
 
-pub use mixer::{AudioBackend, KiraAudio, MixBus, Mixer, Sound, Volumes};
+pub use mixer::{AudioBackend, KiraAudio, MixBus, Mixer, Sound, StreamFault, Volumes};
+pub use resilient::{Policy, Resilient};
 pub use music::{Context as MusicContext, MusicConfig, MusicPlugin};
 pub use null::{Call, CallLog, NullAudio};
 pub use sfx::{SfxConfig, SfxNames, SfxPlugin, VoiceLimiter};
@@ -154,13 +156,8 @@ pub fn choose_backend(mode: Mode) -> Box<dyn AudioBackend> {
     if !mode.has_window() {
         return Box::new(NullAudio::new().0);
     }
-    match KiraAudio::new() {
-        Ok(k) => Box::new(k),
-        Err(e) => {
-            warn!("audio: no output device ({e}); sound is off");
-            Box::new(NullAudio::new().0)
-        }
-    }
+    // Opens now; a missing device or a later stream error leaves null audio and retries.
+    Box::new(Resilient::new(Box::new(|| KiraAudio::new().map(|k| Box::new(k) as Box<dyn AudioBackend>)), Policy::default()))
 }
 
 /// Adds the mixer (unless one is already inserted), volumes and the playback systems.
@@ -436,9 +433,5 @@ mod tests {
         assert_eq!(choose_backend(Mode::Bench { headless: false, sim_only: true }).name(), "null");
     }
 
-    #[test]
-    fn windowed_never_panics_without_a_device() {
-        let name = choose_backend(Mode::Viewer).name();
-        assert!(name == "kira" || name == "null");
-    }
+    // No test opens a real output device here: the open/recover logic is in `resilient`'s tests.
 }
