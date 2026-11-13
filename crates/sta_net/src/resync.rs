@@ -1261,7 +1261,8 @@ impl Peer {
                 // What the repaired seat reported before its repair is gone
                 // with the state it described (a count of 0 loaded nothing).
                 if r.count > 0 {
-                    self.router.forget_reports_of(r.slot, r.turn);
+                    let tpt = Tick::from(self.ticks_per_turn.max(1));
+                    self.router.forget_reports_of(r.slot, Tick::from(r.turn) * tpt);
                 }
                 if r.last && self.net.client.is_none() && self.diverged_from_host().is_none() {
                     // A release with nothing resynced (count 0) loaded no
@@ -1699,9 +1700,6 @@ impl Peer {
                 self.router.send_message(Destination::All, &Message::Arrived(Arrived { slot: from, turn })).ok();
             }
             SnapshotKind::Resync => {
-                // Its reports sent before this ack are all here (one
-                // connection, in order) and described the replaced state.
-                self.router.forget_reports_of(from, turn);
                 let count = self.net.host.ledger(from).map_or(0, |l| l.resyncs);
                 let last = {
                     let g = self.net.host.group.as_mut();

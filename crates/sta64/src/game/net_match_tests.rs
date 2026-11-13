@@ -56,27 +56,28 @@ fn one_at_a_time() -> std::sync::MutexGuard<'static, ()> {
     ONE_MATCH_AT_A_TIME.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// What moves while a match is alive: every peer's tick, what it said and what its overlay shows.
-fn progress(apps: &[App]) -> Vec<(u64, usize, Vec<String>)> {
+/// What moves while a match is alive: every peer's tick and what it said (not the overlay, whose
+/// stall line counts seconds by itself), and which screen and state each app is in.
+fn progress(apps: &[App]) -> Vec<(u64, usize, String)> {
     apps.iter()
         .map(|a| {
             let (tick, said) = a.world().get_resource::<NetGame>().map_or((0, 0), |g| (g.tick(), g.read(|s| s.said.len())));
-            (tick, said, a.world().get_resource::<NetStatus>().map(|s| s.0.clone()).unwrap_or_default())
+            (tick, said, format!("{:?}", state(a)))
         })
         .collect()
 }
 
-/// A deadline that moves on while the apps make progress, under a cap so that a line that
-/// changes forever (a stall's seconds) cannot keep a broken wait alive for good.
+/// A deadline that moves on while the apps make progress, under a cap so that a match that
+/// keeps running without ever meeting the condition still fails.
 struct Watch {
-    seen: Vec<(u64, usize, Vec<String>)>,
+    seen: Vec<(u64, usize, String)>,
     end: Instant,
     cap: Instant,
 }
 
 impl Watch {
     fn new(apps: &[App]) -> Watch {
-        Watch { seen: progress(apps), end: Instant::now() + STALLED, cap: Instant::now() + 15 * STALLED }
+        Watch { seen: progress(apps), end: Instant::now() + STALLED, cap: Instant::now() + 10 * STALLED }
     }
 
     /// Whether the apps went `STALLED` without progress.

@@ -1138,7 +1138,10 @@ fn only_the_diverged_peer_is_resynced_three_peers_and_the_host_wins_when_it_diff
 
 /// Steps the peers in `who` round-robin, `rounds` times at most, until `done`;
 /// whether it got there. A count of rounds, not a clock: the loopback has no
-/// latency, so the outcome does not depend on how fast the machine is.
+/// latency, so the outcome does not depend on how fast the machine is. (The
+/// resync's own timers still read the clock: these tests rely on the
+/// snapshot fitting the transfer's burst and a 1 ms request interval, so no
+/// wait on them is needed.)
 fn rounds_until(g: &mut Game, who: &[usize], rounds: usize, done: impl Fn(&Game) -> bool) -> bool {
     for _ in 0..rounds {
         if done(g) {
