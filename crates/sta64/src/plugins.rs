@@ -98,6 +98,8 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
             // INT-M3: the HUD (with the radar) for the local seat's race (`game::apply_race`
             // sets its layout), and the match's result.
             app.add_plugins(crate::ui::hud::HudPlugin);
+            // UI-34: Esc opens the in-game menu over the match (Resume, Options, Exit, Quit).
+            app.add_plugins(crate::ui::ingame_menu::InGameMenuPlugin);
         }
 
         // audio —

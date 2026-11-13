@@ -65,7 +65,9 @@ impl Plugin for InputPlugin {
                     .distributive_run_if(resource_exists::<crate::sim_link::SimLink>)
                     // The front end's scene links a sim of ships for show: a click on a menu
                     // button (or the backdrop) must not select or order them.
-                    .distributive_run_if(not(resource_exists::<crate::frontend::scene::MenuScene>)),
+                    .distributive_run_if(not(resource_exists::<crate::frontend::scene::MenuScene>))
+                    // The in-game menu (UI-34) is over the match: nothing under it takes a click or a key.
+                    .distributive_run_if(crate::ui::ingame_menu::menu_closed),
             );
     }
 }

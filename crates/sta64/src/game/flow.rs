@@ -120,7 +120,7 @@ impl Plugin for FlowPlugin {
             .add_message::<ModChosen>()
             .add_message::<LeaveMatch>()
             .add_systems(Startup, |mut next: ResMut<NextState<AppState>>| next.set(AppState::FrontEnd))
-            .add_systems(OnEnter(AppState::FrontEnd), (clear_match, open_scene).chain())
+            .add_systems(OnEnter(AppState::FrontEnd), (clear_match, reset_input, open_scene).chain())
             .add_systems(OnEnter(AppState::Loading), close_scene)
             .add_systems(
                 Update,
@@ -281,6 +281,38 @@ fn clear_match(
         p.dismiss();
     }
     leave.clear();
+}
+
+/// Back at the front end (UI-34): what the player's input and the HUD held for the match goes:
+/// control groups, move targets, the drag, the cursor aim, a placement or target waiting for a
+/// click, and the animation clock's pause.
+fn reset_input(
+    groups: Option<ResMut<crate::input::select::ControlGroups>>,
+    targets: Option<ResMut<crate::input::orders::OrderTargets>>,
+    drag: Option<ResMut<crate::input::select::Drag>>,
+    aim: Option<ResMut<crate::input::orders::Aim>>,
+    hud: Option<ResMut<crate::ui::hud::HudState>>,
+    clock: Option<ResMut<crate::clock::AnimClock>>,
+) {
+    if let Some(mut g) = groups {
+        *g = default();
+    }
+    if let Some(mut t) = targets {
+        t.0.clear();
+    }
+    if let Some(mut d) = drag {
+        *d = default();
+    }
+    if let Some(mut a) = aim {
+        *a = default();
+    }
+    if let Some(mut h) = hud {
+        h.placing = None;
+        h.targeting = None;
+    }
+    if let Some(mut c) = clock {
+        c.set_paused(false);
+    }
 }
 
 type MatchUi = Or<(With<crate::ui::hud::HudRoot>, With<crate::ui::radar::RadarRoot>)>;
