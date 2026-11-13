@@ -10,7 +10,7 @@ fn world() -> (Sim, EntityId, Arc<ContentDb>) {
 }
 
 fn row() -> crate::watchdog::Row {
-    crate::watchdog::Row { target: Vec3::ZERO, best: Fixed::ZERO, since: 0, reported: false }
+    crate::watchdog::Row { target: Vec3::ZERO, best: Fixed::ZERO, since: 0, reported: false, anchor: Vec3::ZERO, anchored: 0 }
 }
 
 #[test]

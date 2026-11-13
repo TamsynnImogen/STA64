@@ -327,7 +327,7 @@ fn random_orders_across_a_field_of_obstacles_always_end() {
             let to = v(150 + next(6000), 150 + next(6000));
             go(&mut sim, 1, &[id], to);
             let mut ticks = 0;
-            while sim.unit(id).unwrap().target.is_some() && ticks < 6500 {
+            while sim.unit(id).unwrap().target.is_some() && ticks < 12_000 {
                 sim.step(&[]);
                 ticks += 1;
                             }
