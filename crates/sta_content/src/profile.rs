@@ -12,7 +12,7 @@
 //!    below). First the `profile` key of any layer's `manifest.toml` (loose
 //!    or in a root `.sta`), then a `Profile = <name>` key in the `[Mod]`
 //!    section of any layer's `info.ini`; top-most layer first. Names: `native`/`sta64`,
-//!    `fo4`/`fo`, `sta2`/`sta2classic`, `sta1`/`sta1classic` (see
+//!    `fo4`/`fo`, `fo3`/`fo327`/`fleetops3`, `sta2`/`sta2classic`, `sta1`/`sta1classic` (see
 //!    [`Profile::from_name`]).
 //! 2. **Armada I layout.** Any layer holds a `.zfs` archive. (An `addon/`
 //!    directory is not a signature: Armada II and FO ship one too, and a
@@ -177,23 +177,27 @@ impl Profile {
                 ..off
             },
             // FO 3.2.7 (CON-44, D5). Each bit from the 3.2.7 and Dominion War
-            // installs (docs/FO_PROFILE_DETECTION.md, "FO 3.2.7 evidence"):
-            // - engine rules measured on stock A2 (`turrets`, `weapon_shot_timing`,
-            //   `start_fire_hold`, `crew_loss_on_hit`) stay on: `Data/Armada2.ldl`,
-            //   the engine the launcher loads, is the stock Armada2.exe but for ~0.5 %
-            //   of its bytes (read from the executable, static); what the 3.x
-            //   `FleetOpsHook.dll` patches in it is not measured, so no Roots rule
-            //   (`pd_energy`, `pd_debt_timer`) is assumed.
+            // installs, with its evidence grade:
+            // - Engine rules measured on stock A2 (`turrets`, `weapon_shot_timing`,
+            //   `start_fire_hold`, `crew_loss_on_hit`, and SIM-36's
+            //   `attack_combat_speed`, `builder_hold_fire`, `target_score`,
+            //   `idle_assist`, `assist_on_ally_fire`) keep the stock value: the
+            //   engine the 3.x launcher loads (`Data/Armada2.ldl`) is the stock
+            //   executable with small differences (read from the executable,
+            //   static). Not measured on 3.2.7: what the 3.x `FleetOpsHook.dll`
+            //   patches in it was not analysed, so no Roots rule (`pd_energy`,
+            //   `pd_debt_timer`, the Roots attack and assist bits) is assumed.
             // - `point_defense_cycles` on: the 3.2.7 PD weapons are FO's own
-            //   `ordnancedefenseweapon` class (read from data); their timing is not
-            //   measured on 3.2.7.
-            // - `extra_resources`: ODFs of both installs charge latinum, metal and
-            //   biomatter slots (read from data). `officer_capacity`: `RTS_CFG.h`
-            //   carries `MP_OFFICER_LIMIT` and the single-player limit (read from
-            //   data). `multi_yard_builds`: `buildyard` class and `builditem*`
-            //   availability keys (read from data). `construction_rigs`: the
-            //   `constructionrig` class with worker-bee and welding keys (read from
-            //   data).
+            //   `ordnancedefenseweapon` class (read from data); their timing is
+            //   not measured on 3.2.7.
+            // - `extra_resources` on: ODFs of both installs charge latinum, metal
+            //   and biomatter slots in thousands of units, stock in tens (read
+            //   from data). `multi_yard_builds` on: `buildyard` class ODFs and
+            //   `builditem*` availability keys, which stock lacks (read from data).
+            // - `officer_capacity`, `construction_rigs` stay at the stock value
+            //   (off): the keys the data offers (`MP_OFFICER_LIMIT`, the
+            //   `constructionrig` class) are stock A2's too, so they do not tell
+            //   3.2.7 apart; not measured.
             // - `weapon_damage_controls`: no key of the 3.2.7 data names it; not
             //   measured, off. `pay_on_queue`: its ODF key is absent, off.
             Profile::Fo3 => Features {
@@ -203,9 +207,12 @@ impl Profile {
                 start_fire_hold: true,
                 crew_loss_on_hit: true,
                 extra_resources: true,
-                officer_capacity: true,
                 multi_yard_builds: true,
-                construction_rigs: true,
+                attack_combat_speed: true,
+                builder_hold_fire: true,
+                target_score: true,
+                idle_assist: true,
+                assist_on_ally_fire: true,
                 ..off
             },
             // Stock A2: plain rules, turrets, point-defence cycles and the
@@ -796,12 +803,15 @@ mod tests {
                 "point_defense_cycles",
                 "turrets",
                 "extra_resources",
-                "officer_capacity",
                 "multi_yard_builds",
-                "construction_rigs",
                 "weapon_shot_timing",
                 "start_fire_hold",
-                "crew_loss_on_hit"
+                "crew_loss_on_hit",
+                "attack_combat_speed",
+                "builder_hold_fire",
+                "target_score",
+                "idle_assist",
+                "assist_on_ally_fire"
             ]
         );
         let f = Profile::Fo3.features();

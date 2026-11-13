@@ -136,8 +136,7 @@ fn run_once(setup: &GameSetup, races: &Races, ticks: u64) -> (usize, usize, usiz
 }
 
 fn one_map(name: &str, map: &Arc<MapDef>, db: &Arc<ContentDb>, races: &Races, seed: u64, ticks: u64) -> MapGolden {
-    let setup = setup_for(map, db, races, seed);
-    let go = || catch_unwind(AssertUnwindSafe(|| run_once(&setup, races, ticks)));
+    let go = || catch_unwind(AssertUnwindSafe(|| run_once(&setup_for(map, db, races, seed), races, ticks)));
     let panic_text = |p: Box<dyn std::any::Any + Send>| {
         p.downcast_ref::<String>().cloned().or_else(|| p.downcast_ref::<&str>().map(|s| (*s).to_owned())).unwrap_or_else(|| "panic".into())
     };
@@ -218,7 +217,7 @@ pub fn collect(vfs: &Vfs, mod_name: Option<&str>, only: &[String], ticks: u64, s
                 })
             })
             .collect();
-        workers.into_iter().flat_map(|w| w.join().unwrap_or_default()).collect()
+        workers.into_iter().flat_map(|w| w.join().expect("a golden worker panicked outside a map run")).collect()
     });
     done.sort_by_key(|d| d.0);
     let mut all: Vec<MapGolden> = failed;
@@ -299,10 +298,6 @@ pub(crate) fn golden(o: &Opts) -> Outcome {
         say(format!("  FAIL {}: {}", m.map, m.error.as_deref().unwrap_or("the second run ended on another digest")));
         code = 1;
     }
-    if let Some(p) = &o.record {
-        std::fs::write(p, &json).map_err(|e| Fail::Error(format!("{}: {e}", p.display())))?;
-        say(format!("recorded {}", p.display()));
-    }
     if let Some(p) = &o.against {
         let text = std::fs::read_to_string(p).map_err(|e| Fail::Error(format!("{}: {e}", p.display())))?;
         let recorded: Golden = json5::from_str(&text).map_err(|e| Fail::Error(format!("{}: {e}", p.display())))?;
@@ -314,6 +309,10 @@ pub(crate) fn golden(o: &Opts) -> Outcome {
         if !diff.is_empty() {
             code = 1;
         }
+    }
+    if let Some(p) = &o.record {
+        std::fs::write(p, &json).map_err(|e| Fail::Error(format!("{}: {e}", p.display())))?;
+        say(format!("recorded {}", p.display()));
     }
     Ok(code)
 }
