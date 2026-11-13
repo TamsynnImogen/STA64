@@ -1,11 +1,12 @@
 //! A freighter with a mining beam circles its resource for the whole harvest (issue #345).
+#![allow(clippy::disallowed_methods)] // measuring floats in a test, not sim state
 use super::tests::*;
 use super::*;
 use crate::command::{Command, CommandKind, Order};
 use crate::event::MinerPhase;
 use crate::world::NEUTRAL;
 use crate::{Sim, WorldSource};
-use sta_content::{DefRef, Hardpoint, UnitDef, WeaponDef, WeaponKind};
+use sta_content::{DefRef, Hardpoint, WeaponDef, WeaponKind};
 
 const RANGE: i32 = 180;
 
@@ -28,7 +29,6 @@ fn orbit_game() -> Sim {
     orbiter.hardpoints = vec![Hardpoint { weapon: DefRef::new("fx_minebeam"), node: "hp01".into(), arc: None }];
     let mut moon = base.units().find(|u| u.odf == "fx_moon").unwrap().clone();
     moon.radius = Fixed::from_int(40);
-    let _: &UnitDef = &moon;
     orbit_content(b.weapon(beam).unit(orbiter).unit(moon))
 }
 

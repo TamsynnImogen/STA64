@@ -47,7 +47,7 @@ pub struct MiningShot {
 pub struct MiningWeapon {
     pub key: ContentKey,
     pub hardpoint: u8,
-    /// Weapon `range`: the orbit radius.
+    /// Weapon `range`.
     pub range: f32,
     /// Weapon `shotDelay` in ticks: the beam's cadence.
     pub refire: Tick,
@@ -229,7 +229,7 @@ mod tests {
                 .iter()
                 .map(|w| {
                     let d = db.weapon(w.key).unwrap();
-                    format!("{} (range {} -> orbit radius, shotDelay {} ticks, lifespan {} ticks)", d.odf, w.range, w.refire, d.duration)
+                    format!("{} (range {}, shotDelay {} ticks, lifespan {} ticks)", d.odf, w.range, w.refire, d.duration)
                 })
                 .collect();
             println!(

@@ -146,8 +146,13 @@ fn node_resource(db: &ContentDb, def: ContentKey) -> u8 {
 const MINING_BEAM_CLASS: &str = "minebm";
 /// RTS_CFG `ANCHOR_PURSUIT_POINT_ANGLE` (pi/6 in every install): the pursuit point on the orbit is
 /// this far ahead of the freighter. cos and sin of it.
-const PURSUIT_COS: f64 = 0.866_025_403_784_438_6;
-const PURSUIT_SIN: f64 = 0.5;
+const PURSUIT_COS: Fixed = Fixed::from_bits(3_719_550_787);
+const PURSUIT_SIN: Fixed = Fixed::from_bits(2_147_483_648);
+/// Height layer constants: 7.5, 2/15, k 5/6 (moons, planets) and 1/2 (latinum nebula).
+const LAYER_MID: Fixed = Fixed::from_bits(32_212_254_720);
+const LAYER_STEP: Fixed = Fixed::from_bits(572_662_306);
+const K_MOON: Fixed = Fixed::from_bits(3_579_139_413);
+const K_NEBULA: Fixed = Fixed::from_bits(2_147_483_648);
 /// How far inside the weapon range a freighter starts working (the original's `approachRange - 15`).
 const APPROACH_SLACK: i32 = 15;
 
@@ -165,7 +170,7 @@ fn work_distance(db: &ContentDb, miner: ContentKey, node: ContentKey) -> Fixed {
     match mining_range(db, miner) {
         Some(r) => {
             let radii = db.unit(miner).map_or(Fixed::ZERO, |d| d.radius) + db.unit(node).map_or(Fixed::ZERO, |d| d.radius);
-            r - Fixed::from_int(APPROACH_SLACK) + radii
+            (r - Fixed::from_int(APPROACH_SLACK) + radii).max(Fixed::ONE)
         }
         None => reach(),
     }
@@ -181,14 +186,14 @@ fn orbit_point(db: &ContentDb, id: EntityId, pos: Vec3, node_def: ContentKey, no
     if len < Fixed::ONE {
         return None;
     }
-    let (c, s) = (Fixed::from_f64(PURSUIT_COS), Fixed::from_f64(PURSUIT_SIN));
+    let (c, s) = (PURSUIT_COS, PURSUIT_SIN);
     let (rx, rz) = (dx * c + dz * s, dz * c - dx * s);
     let k = range / len;
     let nd = db.unit(node_def);
     let radius = nd.map_or(Fixed::ZERO, |d| d.radius);
-    let kk = if nd.is_some_and(|d| d.class.0 == "latinum") { Fixed::from_f64(0.5) } else { Fixed::from_f64(5.0 / 6.0) };
-    let layer = Fixed::from_int((id.0 & 15) as i32) - Fixed::from_f64(7.5);
-    let y = node.y + layer * Fixed::from_f64(2.0 / 15.0) * radius * kk;
+    let kk = if nd.is_some_and(|d| d.class.0 == "latinum") { K_NEBULA } else { K_MOON };
+    let layer = Fixed::from_int((id.0 & 15) as i32) - LAYER_MID;
+    let y = node.y + layer * LAYER_STEP * radius * kk;
     Some(Vec3 { x: node.x + rx * k, y, z: node.z + rz * k })
 }
 
@@ -476,6 +481,10 @@ impl Economy {
                         break;
                     }
                 }
+            }
+            if was == Phase::Mining && m.phase != Phase::Mining && units.get(id).is_some_and(|u| u.target.is_some()) && m.phase != Phase::ToNode {
+                // The orbit point must not outlive the work (ToDock steers on its own next tick).
+                set_target(units, id, None);
             }
             if m.phase != was {
                 events.push(SimEvent::MinerPhase { id, phase: m.phase.announced(), node: m.node, dock });
