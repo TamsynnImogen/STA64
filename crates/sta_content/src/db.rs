@@ -619,6 +619,11 @@ fn hash_inner(db: &ContentDb, include_starting_rules: bool) -> u64 {
     // SIM-23: only when `RTS_CFG.h` has the PATHING keys, so content without
     // them keeps its hash; excluded with the other rules from the historical
     // identity snapshots compare against.
+    let autonomy = db.rules.autonomy_hash_values();
+    if include_starting_rules && !autonomy.is_empty() {
+        h.str("sta64.autonomy-rules.v1");
+        for value in autonomy { h.u64(value); }
+    }
     let pathing = db.rules.pathing_hash_values();
     if include_starting_rules && !pathing.is_empty() {
         h.byte(0xed);
