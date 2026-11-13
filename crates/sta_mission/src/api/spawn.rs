@@ -150,17 +150,20 @@ pub(super) fn default_mine_node(c: &Ctx, actor: &EntityRef) -> Option<EntityRef>
 
 pub(super) fn queue_spawn(c: &mut Ctx, odf: ContentKey, owner: PlayerId, pos: Vec3) -> Result<EntityRef, &'static str> {
     if !owner.is_player() && owner != NEUTRAL {
-        return Err("Entity.add requires a player slot 0..7 or a neutral resource owner");
+        return Err("Entity.add requires a player slot 0..7 or the neutral owner");
     }
     let content = c.content.as_ref().ok_or("Entity.add requires content")?;
     let def = content.unit(odf).ok_or("Entity.add requires a unit definition")?;
-    // Match the core's resource-neutrality classification, including explicit
-    // resource metadata on definitions whose class has a different kind.
+    // Neutral is the owner of what no team plays: resources and the map's
+    // fixtures (props: gates, wormholes, background objects), as the core
+    // classifies them (explicit resource metadata counts as a resource). Craft
+    // and stations need a player: a neutral one would have no one to order it.
+    // (Armada I missions build team-0 gates, LUA-17; read from data.)
     if owner == NEUTRAL
-        && EntityKind::of_def(def) != EntityKind::Resource
+        && matches!(EntityKind::of_def(def), EntityKind::Craft | EntityKind::Station | EntityKind::Projectile)
         && def.resource.is_none()
     {
-        return Err("Entity.add neutral ownership requires a resource definition");
+        return Err("Entity.add neutral ownership requires a resource or a prop definition");
     }
     let heading = (Fixed::ZERO, Fixed::ONE);
     // This is request data for getters, not a unit inserted in the world.

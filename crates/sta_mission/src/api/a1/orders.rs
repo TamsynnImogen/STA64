@@ -20,6 +20,9 @@ fn send(e: &Env, name: &str, id: EntityId, make: impl FnOnce(Vec<EntityId>) -> O
     }
 }
 
+/// How long after its last shot a unit counts as in attack mode (not measured).
+const ATTACK_MODE_SECONDS: u32 = 3;
+
 pub(super) fn install(lua: &Lua, env: &Env, table: &Table) -> mlua::Result<()> {
     // `Goto(unit, path, int)` moves along the path's points in order;
     // `Goto(unit, target, int)` moves to the target's position.
@@ -100,9 +103,22 @@ pub(super) fn install(lua: &Lua, env: &Env, table: &Table) -> mlua::Result<()> {
 
     // Queries over order state the view does not carry.
     table.set("InStopMode", no_order_state(lua, env, "InStopMode")?)?;
-    table.set("InAttackMode", no_order_state(lua, env, "InAttackMode")?)?;
     table.set("OutOfSpecialAttackMode", no_order_state(lua, env, "OutOfSpecialAttackMode")?)?;
-    table.set("InQueue", no_order_state(lua, env, "InQueue")?)?;
+    // The view carries no order queue, so these two answer from what it does carry
+    // (LUA-17; approximations, not measured against the original):
+    // `InQueue(unit)`: the craft is still under way (speed above zero), which is how
+    // stock missions use it ("arrived": near the point and no longer in its queue).
+    table.set("InQueue", def(lua, env, "InQueue", &["h"], |_, e, _, a| {
+        Ok(Value::Boolean(e.unit("InQueue", a[0].id())?.speed > sta_core::Fixed::ZERO))
+    })?)?;
+    // `InAttackMode(unit)`: the unit fired a weapon within the last
+    // `ATTACK_MODE_SECONDS` (stock missions ask it before ordering an idle patrol to engage).
+    table.set("InAttackMode", def(lua, env, "InAttackMode", &["h"], |_, e, _, a| {
+        let id = e.unit("InAttackMode", a[0].id())?.id;
+        let c = e.ctx.borrow();
+        let within = u64::from(ATTACK_MODE_SECONDS * sta_core::TICK_HZ);
+        Ok(Value::Boolean(c.last_fired.get(&id).is_some_and(|t| c.view.tick.saturating_sub(*t) <= within)))
+    })?)?;
     table.set("GetAttackLocation", def(lua, env, "GetAttackLocation", &["hh"], |_, e, _, _| {
         Err(e.no_data("GetAttackLocation", "the world view carries no order target"))
     })?)?;

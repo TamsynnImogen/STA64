@@ -9,7 +9,7 @@ How M2–M5 split into parallel work packages: [WORKPLAN.md](WORKPLAN.md).
 - [x] `sta_sim`: fixed-point maths, deterministic tick + digest
 - [x] `sta64`: Bevy window, mounts the install and reports what it found
 
-## M1: See the content
+## M1: See the content (complete)
 - [x] `sta_fpq` (FPQ v2 archives) mounted in the VFS — byte-identical to liblzo2 on Sigma's 2,872-entry `ODF.fpq`
 - [x] ODF index across all ODF folders and A1 `addon/`, with duplicate warnings; [installed and synthetic validation](M1_VALIDATION.md)
 - [x] `sta_assets`: layer-aware lookup (KTX2 > DDS > TGA > PNG; GLB > glTF > SOD), TGA decode
@@ -22,7 +22,7 @@ How M2–M5 split into parallel work packages: [WORKPLAN.md](WORKPLAN.md).
 - [x] Particle emitters (`@emitter`: spray and cloud)
 - [x] M3D models loaded natively (A2FOM3D's parser; diffuse, bump, specular, glow kept)
 - Star Trek: Legacy LOD nodes (type 11) and effect nodes (type 2); M3D 1.93 layout
-- glTF/GLB models in the viewer
+- [x] glTF/GLB models in the viewer (static CON-09; GLB viewer orbit check waived by Cedric on 2026-11-13, not tested)
 
 ## M2: A map you can fly in
 - [x] `sta_bzn`: text and binary BZN (typed-record stream); all 517 installed maps

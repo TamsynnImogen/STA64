@@ -69,8 +69,6 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
         ("DisableSave", "", "no save lock in the mission API"),
         ("EnableSave", "", "no save lock in the mission API"),
         ("EnableTeam", "i", "no AI enable seam in the sim"),
-        ("DisableLifeSupport", "ib", "no subsystem disable edit in the sim seam"),
-        ("DisableSensors", "ib", "no subsystem disable edit in the sim seam"),
         ("EnableWormholeTravel", "ib", "no wormhole travel switch in the sim seam"),
         ("AllowMultipleSpecialWeaponFire", "ib", "no special-weapon switch in the sim seam"),
         ("ShowTradesTo", "i", "no trade display in the mission API"),
