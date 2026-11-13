@@ -16,12 +16,16 @@ use super::Shared;
 
 mod camera;
 mod conditions;
+mod dll_objects;
 mod controls;
 mod media;
 mod native_camera;
+mod native_flow;
 mod native_presentation;
+mod native_text;
 mod objectives;
 mod objects;
+mod orders;
 mod queries;
 mod random;
 mod subsystems;
@@ -40,6 +44,8 @@ pub(super) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
     let a2 = lua.create_table()?;
     native_camera::install(lua, ctx, &a2)?;
     native_presentation::install(lua, ctx, &a2)?;
+    native_flow::install(lua, ctx, &a2)?;
+    native_text::install(lua, ctx, &a2)?;
     controls::install(lua, ctx, &a2)?;
     objectives::install(lua, ctx, &a2)?;
     objects::install(lua, ctx, &a2)?;
@@ -48,6 +54,10 @@ pub(super) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
     a2.set("paths", lua.create_table()?)?;
     conditions::install(lua, ctx, &a2)?;
     subsystems::install(lua, ctx, &a2)?;
+    orders::install(lua, ctx, &a2)?;
+    dll_objects::install(lua, ctx, &a2)?;
+    // Keep last: wraps every function above (pending BuildObject handles).
+    dll_objects::finish(lua, &a2)?;
     lua.globals().raw_set("A2", a2)?;
     Ok(())
 }

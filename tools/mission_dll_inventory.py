@@ -296,6 +296,19 @@ A2_SIGNATURES = {
     "int GetDilithium(int)": "A2.GetDilithium",
     "int GetLatinum(int)": "A2.GetLatinum",
     "int GetMetal(int)": "A2.GetMetal",
+    # Script-taking presentation calls (native_flow.rs) and titles (native_text.rs).
+    "void FadeIn(script *, float, float, float, bool)": "A2.FadeIn",
+    "void FadeOut(script *, float, float, float, bool)": "A2.FadeOut",
+    "void CineractiveStart(script *, bool)": "A2.CineractiveStart",
+    "int AudioMessage(script *, char const *, bool)": "A2.AudioMessage",
+    "int PlayMusic(script *, char const *, bool)": "A2.PlayMusic",
+    "void StopAudioMessage(int)": "A2.StopAudioMessage",
+    "void PlayCinematicMovie(script *, char *, int, bool)": "A2.PlayCinematicMovie",
+    "void WaitForEnterKey(script *)": "A2.WaitForEnterKey",
+    "int ShowTitle(int, int, char const *, bool)": "A2.ShowTitle",
+    "int ShowSubtitle(int, int, char const *, bool)": "A2.ShowSubtitle",
+    "void RemoveTitle(int, bool)": "A2.RemoveTitle",
+    "void RemoveSubtitle(int, bool)": "A2.RemoveSubtitle",
     "void SetForceOntoMap(int, bool)": "A2.SetForceOntoMap",
     "void SetRealTeam(int, int)": "A2.SetRealTeam",
     "void SetPerceivedTeam(int, int)": "A2.SetPerceivedTeam",
@@ -318,7 +331,83 @@ A2_SIGNATURES = {
     "void Starfield_Load_New_Background_Geometry(char*, char*)": "A2.Starfield_Load_New_Background_Geometry",
     "void MinimapMessage(int, int, float)": "A2.MinimapMessage",
     "void MinimapMessage(char*, int, float, int)": "A2.MinimapMessage",
+    # Object creation, searches and flags (dll_objects.rs). Calls the sim seam
+    # cannot serve are bound there as raising-and-counted (`no_data_fn`).
+    "int BuildObject(char*, int, char*, int)": "A2.BuildObject",
+    "int BuildObject(char*, int, int, float, float, float)": "A2.BuildObject",
+    "int SetSpecialForcesFlag(int, bool)": "A2.SetSpecialForcesFlag",
+    "bool RecruitSpecialForces(char*, int, int&)": "A2.RecruitSpecialForces",
+    "int GetNearestObjectNearPosition(Vector3 const&, float, int, char*, int, bool, int)": "A2.GetNearestObjectNearPosition",
+    "int GetNearestObjectNearMe(int, float, int, char*, int, bool)": "A2.GetNearestObjectNearMe",
+    "int GetFirstCraft(void)": "A2.GetFirstCraft",
+    "Vector3 const& GetLocation(char*, int)": "A2.GetLocation",
+    "void DestroyCritical(int)": "A2.DestroyCritical",
+    "void ExplodeNow(int)": "A2.ExplodeNow",
+    "void SetCanBeDecommissioned(int, bool)": "A2.SetCanBeDecommissioned",
+    "void DisableShieldGenerator(int, bool)": "A2.DisableShieldGenerator",
+    "void SetPosition(int, char*)": "A2.SetPosition",
+    "void SetPosition(int, char*, int)": "A2.SetPosition",
+    "void SetShieldPercent(int, float)": "A2.SetShieldPercent",
+    "void SetMaxShields(int, float)": "A2.SetMaxShields",
+    "void AllowAsTarget(int, int, bool)": "A2.AllowAsTarget",
+    "void DamageEngines(int, float)": "A2.DamageEngines",
+    "void DamageSensors(int, float)": "A2.DamageSensors",
+    "void DamageLifeSupport(int, float)": "A2.DamageLifeSupport",
+    "void DamageShieldGenerator(int, float)": "A2.DamageShieldGenerator",
+    "void DamageWeapons(int, float)": "A2.DamageWeapons",
+    "void HideObject(int, bool)": "A2.HideObject",
+    "void ButItCanBeDerelicted(int, bool)": "A2.ButItCanBeDerelicted",
+    "void CraftCanRepair(int, bool)": "A2.CraftCanRepair",
+    "void CraftCanRecrew(int, bool)": "A2.CraftCanRecrew",
+    "void SetName(int, char const*)": "A2.SetName",
+    "void SetPlanetCivPop(int, int)": "A2.SetPlanetCivPop",
+    "void SetAngularVelocity(int, Vector3 const&)": "A2.SetAngularVelocity",
+    "void StuffIntoWormhole(int, int)": "A2.StuffIntoWormhole",
+    "void LinkWormholes(int, int)": "A2.LinkWormholes",
+    "void SetWormholeDeleteOnTransport(int, bool)": "A2.SetWormholeDeleteOnTransport",
+    "void LoadCargoShip(int, int)": "A2.LoadCargoShip",
+    "int GetNearestShipyard(int, int, bool)": "A2.GetNearestShipyard",
+    "SiegeFleet* CreateNewSiegeFleet(void)": "A2.CreateNewSiegeFleet",
 }
+
+# Order, AI, crew and team calls (api/a2/orders.rs). Mixed names (an overload that
+# works beside one that raises) are counted as bound, like `A1_PARTIAL`.
+A2_ORDER_SIGNATURES = {
+    "void Goto(int, char *, bool, int)": "A2.Goto",
+    "void Goto(int, int, bool, int)": "A2.Goto",
+    "void Patrol(int, char *)": "A2.Patrol",
+    "void SetImpulseSpeed(int, float)": "A2.SetImpulseSpeed",
+    "void ResetImpulseSpeed(int)": "A2.ResetImpulseSpeed",
+    "float GetImpulseSpeed(int)": "A2.GetImpulseSpeed",
+    "void AI_Attack(int, int)": "A2.AI_Attack",
+    "void AI_Attack(int)": "A2.AI_Attack",
+    "void AI_Attack(int, Vector3)": "A2.AI_Attack",
+    "void Attack(int, int, int)": "A2.Attack",
+    "void Stop(int, int)": "A2.Stop",
+    "void Colonize(int, int)": "A2.Colonize",
+    "void Mine(int, int)": "A2.Mine",
+    "void Special_Attack(int, int, char const *)": "A2.Special_Attack",
+    "void Special_Attack(int, char const *)": "A2.Special_Attack",
+    "void AttackMainEnemyBase(int, bool)": "A2.AttackMainEnemyBase",
+    "Vector3 GetAttackLocation(int, int)": "A2.GetAttackLocation",
+    "int GetAllyStationAttacks(int, int)": "A2.GetAllyStationAttacks",
+    "void AI_Team_Load_AIP(int, char *)": "A2.AI_Team_Load_AIP",
+    "void SetCommandMoveAutonomyLow(int)": "A2.SetCommandMoveAutonomyLow",
+    "void SetCommandWhatWhoVO(int, AiCommand, int, bool)": "A2.SetCommandWhatWhoVO",
+    "void SetCommandWhatWhoParamVO(int, AiCommand, int, long, bool)": "A2.SetCommandWhatWhoParamVO",
+    "void SetCommandWhatWhoWhereVO(int, AiCommand, char *, Vector3, bool)": "A2.SetCommandWhatWhoWhereVO",
+    "void SetCrew(int, float)": "A2.SetCrew",
+    "void SetRace(int, char const *)": "A2.SetRace",
+    "Vector3 GetMainEnemyBaseLocation(int)": "A2.GetMainEnemyBaseLocation",
+    "int GetNearestEnemy(int, float)": "A2.GetNearestEnemy",
+    "void SearchAndDestroy(int)": "A2.SearchAndDestroy",
+    "void Scout(int)": "A2.Scout",
+    "void SetRedAlert(int)": "A2.SetRedAlert",
+    "void SetGreenAlert(int)": "A2.SetGreenAlert",
+    "void PointAt(int, char *)": "A2.PointAt",
+    "void PointAt(int, int)": "A2.PointAt",
+}
+A2_SIGNATURES.update(A2_ORDER_SIGNATURES)
 
 
 # Exact Armada I import signatures implemented by the DLL-named `A1` table
@@ -622,14 +711,32 @@ def a1_kinds(repo):
 A1_PARTIAL = {"Attack", "GetCrew"}
 
 
+# Calls bound through `def` (argument-validating) in orders.rs whose body
+# always raises-and-counts for a live unit, or for the content the stock
+# scripts use; the source scan below cannot see them. Keep in step with
+# api/a2/orders.rs: AI_Team_Load_AIP (no AIP runs), SetCommandWhatWhoParamVO
+# (a parameter has no order), GetAttackLocation (the unit radius is not in the
+# content, SIM-21 `radius` is zero).
+A2_RAISING_THROUGH_DEF = {"AI_Team_Load_AIP", "SetCommandWhatWhoParamVO", "GetAttackLocation"}
+
+
 def a2_raising(repo):
     """Names of A2 calls bound only to raise-and-count (no data behind them)."""
+    base = os.path.join(repo, "crates/sta_mission/src/api/a2")
+    names = set(A2_RAISING_THROUGH_DEF)
     try:
-        with open(os.path.join(repo, "crates/sta_mission/src/api/a2/conditions.rs"), encoding="utf-8") as f:
-            src = "\n".join(l for l in f.read().splitlines() if not l.lstrip().startswith("//"))
+        files = sorted(f for f in os.listdir(base) if f.endswith(".rs") and f != "tests.rs")
     except OSError:
-        return set()
-    return set(re.findall(r'no_data_fn\(\s*lua,\s*ctx,\s*"(\w+)"', src))
+        return names
+    for name in files:
+        try:
+            with open(os.path.join(base, name), encoding="utf-8") as f:
+                src = "\n".join(l for l in f.read().splitlines() if not l.lstrip().startswith("//"))
+        except OSError:
+            continue
+        names |= set(re.findall(r'no_data_fn\(\s*lua,\s*ctx,\s*"(\w+)"', src))
+        names |= set(re.findall(r'\braising\(\s*lua,\s*&?env,\s*"(\w+)"', src))
+    return names
 
 
 def param_count(sig):
