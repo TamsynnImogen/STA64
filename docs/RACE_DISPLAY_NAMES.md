@@ -22,7 +22,7 @@ alias and STA64 language-file behavior remains unchanged.
 
 Race eligibility, ordering, cycling and `PlayerSetup.race` continue to use the
 canonical IDs. No simulation, save, protocol, dependency or original-data change
-is involved. This implements D1/D7 from MODDING_DECISIONS.md; it adds no new
+is involved. This implements D1/D7 from ADR 0004; it adds no new
 string overlay format.
 
 Tests cover inherited/literal/missing/blank display keys, native table lookup and
