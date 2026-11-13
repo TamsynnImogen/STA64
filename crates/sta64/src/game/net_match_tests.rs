@@ -145,6 +145,16 @@ fn script(mut queue: ResMut<CommandQueue>, link: Option<Res<SimLink>>, mut st: L
     }
 }
 
+/// Pauses the clock once the peer has reached the tick, so two peers can be compared at one tick.
+#[derive(Resource)]
+struct Stop(u64);
+
+fn stop_at(stop: Res<Stop>, game: Option<Res<NetGame>>, mut clock: ResMut<AnimClock>) {
+    if game.is_some_and(|g| g.tick() >= stop.0) {
+        clock.set_paused(true);
+    }
+}
+
 fn client(data: ScreenData, o: NetOptions) -> App {
     let mut app = App::new();
     app.set_error_handler(bevy::ecs::error::panic).add_plugins((MinimalPlugins, StatesPlugin));
@@ -161,6 +171,7 @@ fn client(data: ScreenData, o: NetOptions) -> App {
         .insert_resource(OwnMap::default())
         .insert_resource(o)
         .add_plugins((FlowPlugin, SimLinkPlugin, ScreensPlugin))
+        .add_systems(Update, stop_at.in_set(crate::app::GameSet::Bench).run_if(resource_exists::<Stop>))
         .add_systems(Update, build_match.run_if(resource_exists::<ActiveMatch>).in_set(crate::app::GameSet::Bench))
         .add_systems(Update, script.in_set(crate::app::GameSet::Input).run_if(resource_exists::<SimLink>).run_if(resource_exists::<NetGame>));
     app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::FrontEnd);
@@ -341,14 +352,17 @@ fn the_host_runs_the_computer_seat_and_every_peer_agrees_to_the_snapshot() {
     assert_eq!(controllers(&mut apps[1]), 0, "the guest does not");
     run_to(&mut apps, 3000);
     assert!(assert_same_digests(&apps) >= 900);
-    // Equal state, not only equal digests: the snapshots at the same tick are the same bytes.
-    let tick = apps.iter().map(|a| game(a).tick()).min().unwrap();
-    let _ = tick;
-    let (a, b) = (apps[0].world_mut().resource_mut::<SimLink>().snapshot(), apps[1].world_mut().resource_mut::<SimLink>().snapshot());
-    let (ta, tb) = (game(&apps[0]).tick(), game(&apps[1]).tick());
-    if ta == tb {
-        assert!(a.is_some() && a == b, "the snapshots differ at tick {ta}");
+    // Equal state, not only equal digests: with both peers frozen at the same tick the snapshots are the same bytes.
+    let target = apps.iter().map(|a| game(a).tick()).max().unwrap() + 30;
+    for a in &mut apps {
+        // One tick a frame from here, so no peer overshoots the target.
+        a.world_mut().insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_micros(33_400)));
+        // Run each peer to exactly `target` by stepping its sim link only while below it.
+        a.world_mut().insert_resource(Stop(target));
     }
+    until(&mut apps, "both peers sit at the target tick", |a| a.iter().all(|x| game(x).tick() == target));
+    let (a, b) = (apps[0].world_mut().resource_mut::<SimLink>().snapshot(), apps[1].world_mut().resource_mut::<SimLink>().snapshot());
+    assert!(a.is_some() && a == b, "the snapshots differ at tick {target}");
     // The AI's commands went through the router like a player's: the replay holds seat 2's orders on both.
     for a in &apps {
         let from_ai = game(a).with_peer(|p| p.replay().commands.iter().filter(|l| l.command.player == PlayerId(2)).count());

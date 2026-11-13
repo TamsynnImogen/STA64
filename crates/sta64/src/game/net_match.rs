@@ -22,6 +22,9 @@
 //!   drop), resync events (a seat that keeps abusing the host's patience is kicked), the
 //!   desync report (written once when the match halts), stalls and endings. What the
 //!   player sees is in [`super::net_overlay`].
+//! - **Not built**: a seat that is connected but frozen is waited for without end (NET.md
+//!   section 8's vote: wait, eliminate, AI takeover), and a deliberate quit is held for the
+//!   same grace as a lost connection (no `Leave` is sent or read).
 //! - **What a drop does to the dropped player's units is an open design question**
 //!   (docs/NET.md section 8, open question 9): this layer keeps NET-02's behaviour. The seat
 //!   is closed in the router (`Action::Drop`, recorded as `DropChoice::Eliminate`, the only
@@ -39,7 +42,7 @@ use std::time::{Duration, Instant};
 use bevy::prelude::*;
 use sta_content::{MapDef, Races};
 use sta_core::{PlayerId, Tick};
-use sta_net::lockstep::{Fault, Peer, RouterEvent, StepOutcome, TransportError};
+use sta_net::lockstep::{Fault, Peer, RouterEvent, StepOutcome};
 use sta_net::proto::{self, Action, DropChoice, Start};
 use sta_net::resync::{ResyncEvent, ResyncLimits};
 use sta_net::transport::{CloseReason, NetControl};
@@ -104,8 +107,7 @@ pub enum Ending {
     ConnectionLost(String),
     /// The host sent something that breaks the protocol.
     HostProtocol(String),
-    /// The peer could not keep up with the host's state (a failed resync is not an
-    /// ending: the match stays stopped, see [`Fault`]'s desync report).
+    /// This player left on purpose.
     Left,
 }
 
@@ -175,7 +177,7 @@ pub struct NetShared {
     fresh: Vec<(Severity, String)>,
     /// Seats rejoining or back.
     pub rejoining: BTreeSet<PlayerId>,
-    /// Frames the stepping asked for a turn that was not complete, in all.
+    /// Steps that found the next turn incomplete, in all.
     pub stalls: u64,
     /// The first protocol violation per seat (the text the host kicked it for).
     pub violations: BTreeMap<PlayerId, String>,
@@ -527,7 +529,7 @@ pub fn protocol_reaction(me: PlayerId, host: PlayerId, from: PlayerId) -> Reacti
     }
 }
 
-/// What the desync report is called: the same for every seat of a match, unique to the seat.
+/// What the desync report is called: the time it was written, the seat and the tick.
 fn report_stem(s: &NetShared, tick: Tick) -> String {
     let when = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
     format!("desync-{when}-seat{}-tick{tick}", s.me.0)
@@ -593,7 +595,7 @@ impl NetShared {
                     format!("{name} dropped out of the game. Their ships stay where they are and take no orders; what should happen to a dropped player's forces is not decided yet, so nothing is eliminated or handed to the computer."),
                 );
             }
-            RouterEvent::Transport(TransportError::Closed) | RouterEvent::Transport(_) => {}
+            RouterEvent::Transport(_) => {}
             _ => {}
         }
     }
@@ -680,7 +682,7 @@ impl NetShared {
             .departed
             .iter()
             .filter(|(seat, since)| {
-                !self.dropped.contains_key(seat) && !self.peer.rejoin_in_progress(**seat) && (self.drop_now.contains(seat) || now.saturating_duration_since(**since) >= self.opts.drop_grace)
+                !self.dropped.contains_key(seat) && (self.drop_now.contains(seat) || (!self.peer.rejoin_in_progress(**seat) && now.saturating_duration_since(**since) >= self.opts.drop_grace))
             })
             .map(|(s, _)| *s)
             .collect();
@@ -689,6 +691,7 @@ impl NetShared {
             let last_turn = self.peer.router().last_record(seat).unwrap_or(0);
             // NET-02's behaviour, said plainly in the overlay: see the module notes.
             self.peer.router_mut().schedule(Action::Drop { slot: seat, last_turn, then: DropChoice::Eliminate });
+            // One extension per drop: `extend_lead` is documented as called once per drop.
             self.peer.router_mut().extend_lead();
             self.departed.remove(&seat);
             self.drop_now.remove(&seat);
@@ -699,7 +702,10 @@ impl NetShared {
     fn duties(&mut self, now: Instant) {
         // The connection first: a closed one ends the match whatever else is pending.
         if self.ending.is_none() {
-            let gone = self.control.take_departures();
+            // Only one reader takes departure markers: on the host that is the peer's departure
+            // source (it hands them to the rejoin logic and to `departures`), else a marker
+            // read here would never reach `note_departed` and the seat would never be dropped.
+            let gone = if self.is_host() { Vec::new() } else { self.control.take_departures() };
             if self.is_host() {
                 let seen: Vec<PlayerId> = std::mem::take(&mut *self.departures.lock().unwrap_or_else(|e| e.into_inner()));
                 for seat in seen {
@@ -711,12 +717,18 @@ impl NetShared {
                         }
                     }
                 }
-            } else if gone.contains(&self.host) {
+            }
+            let host_gone = gone.contains(&self.host);
+            if host_gone {
                 self.end(Ending::HostLeft);
             }
             if let Some(r) = self.control.close_reason() {
                 // A host whose room closes, or a peer whose connection ended.
-                let why = if self.is_host() { lost_text(&r) } else if matches!(r, CloseReason::RelayClosed) && self.control.take_departures().contains(&self.host) { Ending::HostLeft } else { lost_text(&r) };
+                let why = match (&r, self.is_host()) {
+                    // The host's own relay closed: nobody removed the host.
+                    (CloseReason::RelayClosed, true) => Ending::ConnectionLost("the relay closed the room".into()),
+                    _ => lost_text(&r),
+                };
                 self.end(why);
             }
         }
