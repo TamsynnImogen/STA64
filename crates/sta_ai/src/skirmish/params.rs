@@ -58,24 +58,34 @@ impl Params {
     /// Defaults overridden by whatever `aip` sets sensibly.
     pub fn from_aip(aip: &Aip) -> Params {
         let mut p = Params::default();
+        p.overlay(aip);
+        p
+    }
+
+    /// Load `aip` over these values, as the original's AIP switch does (AI-06;
+    /// read from the executable, static): a key the file sets (and that is in
+    /// range) replaces the value, a key it leaves out keeps the value, and the
+    /// build list is replaced only when the file has `the_build_list`.
+    pub fn overlay(&mut self, aip: &Aip) {
         let count = |key: &str, lo: i64, hi: i64| aip.int(key).filter(|v| (lo..=hi).contains(v)).map(|v| v as usize);
         if let Some(v) = count("min_resource_force", 1, MINERS_MAX) {
-            p.miners = v;
+            self.miners = v;
         }
         if let Some(v) = count("min_defense_force", 0, 64) {
-            p.defence = v;
+            self.defence = v;
         }
         if let Some(v) = count("min_attack_force", 1, 64) {
-            p.min_attack = v;
+            self.min_attack = v;
         }
         if let Some(v) = count("max_attack_force", 1, 64) {
-            p.max_attack = v;
+            self.max_attack = v;
         }
         // An AIP's `max_attack_force 1` beside a larger minimum is a typo
         // the game tolerates; so do we.
-        p.max_attack = p.max_attack.max(p.min_attack);
-        p.build_list = aip.build_list("the_build_list").unwrap_or_default();
-        p
+        self.max_attack = self.max_attack.max(self.min_attack);
+        if let Some(list) = aip.build_list("the_build_list") {
+            self.build_list = list;
+        }
     }
 }
 
@@ -102,5 +112,14 @@ mod tests {
         let (aip, _) = Aip::parse("t.aip", "int min_resource_force = 0;\nint min_attack_force = -3;\n");
         let p = Params::from_aip(&aip);
         assert_eq!((p.miners, p.min_attack), (DEFAULT_MINERS, DEFAULT_MIN_ATTACK));
+    }
+
+    #[test]
+    fn overlay_keeps_what_the_file_leaves_out() {
+        let (first, _) = Aip::parse("a.aip", "int min_resource_force = 5;\nint min_attack_force = 6;\n");
+        let mut p = Params::from_aip(&first);
+        let (second, _) = Aip::parse("b.aip", "int min_attack_force = 9;\n");
+        p.overlay(&second);
+        assert_eq!((p.miners, p.min_attack), (5, 9));
     }
 }
