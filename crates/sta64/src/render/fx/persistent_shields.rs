@@ -191,10 +191,8 @@ fn sync_outlines(
         materials.as_deref_mut(),
         state.material.as_ref(),
         cameras.iter().next(),
-    ) {
-        if let Some(mut material) = materials.get_mut(handle) {
-            material.params.eye = eye.translation().extend(1.0);
-        }
+    ) && let Some(mut material) = materials.get_mut(handle) {
+        material.params.eye = eye.translation().extend(1.0);
     }
 
     let visible = match local.as_ref().and_then(|l| l.0) {
