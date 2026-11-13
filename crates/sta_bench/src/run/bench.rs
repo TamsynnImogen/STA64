@@ -618,6 +618,39 @@ impl Bench {
                 );
                 "ok".into()
             }
+            C::RightClick(n) => {
+                let t = self.living(n)?;
+                let own: Vec<EntityId> = self.selection.iter().copied().filter(|&id| self.sim.unit(id).is_some()).collect();
+                if own.is_empty() {
+                    return Err("rclick: nothing selected".into());
+                }
+                let owner = self.sim.unit(own[0]).map_or(PlayerId::BENCH, |e| e.owner);
+                let view = self.sim.view();
+                match sta_sim::context::context_order(Some(&*self.cfg.content), &view, owner, &own, t) {
+                    Some(o) => {
+                        let what = format!("{o:?}").split([' ', '{']).next().unwrap_or("?").to_owned();
+                        self.order(&own, o, format!("rclick {n}"));
+                        what
+                    }
+                    None => {
+                        // No vote: a move to the point, the group keeping its places.
+                        let to = self.sim.unit(t).expect("living").pos;
+                        let n_own = Fixed::from_int(own.len() as i32);
+                        let (mut cx, mut cz) = (Fixed::ZERO, Fixed::ZERO);
+                        for &id in &own {
+                            let p = self.sim.unit(id).expect("living").pos;
+                            cx = cx + p.x / n_own;
+                            cz = cz + p.z / n_own;
+                        }
+                        for &id in &own {
+                            let p = self.sim.unit(id).expect("living").pos;
+                            let at = Vec3 { x: to.x + p.x - cx, y: to.y, z: to.z + p.z - cz };
+                            self.order(&[id], Order::Move { units: vec![id], to: at, queue: false }, format!("rclick {n}"));
+                        }
+                        "Move".into()
+                    }
+                }
+            }
             C::Stop(n) => {
                 let id = self.living(n)?;
                 self.order(&[id], Order::Stop { units: vec![id] }, format!("stop {n}"));

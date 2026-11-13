@@ -1,88 +1,21 @@
 //! Context orders (UI-14): what a right-click on a unit means for the
-//! selection. A freighter on a resource mines it, a ship on an enemy
-//! attacks, a stationary builder rallies, anything else moves (in
+//! selection, decided by [`sta_sim::context::context_order`] (the
+//! originals' group vote: the highest-priority order any selected unit
+//! would take goes to the whole selection; no vote is a move, in
 //! `orders.rs`). The same decision drives the cursor.
-//!
-//! Resources are known by what the content says they are (the sim's own
-//! [`EntityKind`] rule on class), whoever owns them; miners by the same
-//! test the sim uses (class `freighter`, or `miner 1`).
 
 use bevy::prelude::*;
 use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon};
-use sta_content::ContentDb;
-use sta_core::Fixed;
-use sta_sim::command::{Order, Target};
-use sta_sim::view::{Relation, UnitFlags};
-use sta_sim::world::EntityKind;
-use sta_sim::{EntityId, WorldView};
+use sta_sim::command::Order;
 
 use super::orders::Aim;
 use super::select::{Targetable, own_selection, unit_under};
 use crate::sim_link::{ContentRes, Selection, SimLink};
 
-/// A resource node: a moon, asteroid or latinum field, by its definition.
-fn is_resource(db: &ContentDb, view: &WorldView, id: EntityId) -> bool {
-    view.unit(id).and_then(|u| db.unit(u.def)).is_some_and(EntityKind::mineable_def)
-}
-
-fn is_miner(db: &ContentDb, view: &WorldView, id: EntityId) -> bool {
-    view.unit(id).and_then(|u| db.unit(u.def)).is_some_and(|d| d.mines())
-}
-
-fn is_enemy(view: &WorldView, me: sta_sim::PlayerId, owner: sta_sim::PlayerId) -> bool {
-    if owner == me || !owner.is_player() {
-        return false;
-    }
-    if let Some(relation) = view.player(me).and_then(|p| p.relations.iter().find(|(id, _)| *id == owner).map(|(_, r)| *r)) {
-        return relation == Relation::Enemy;
-    }
-    match (view.player(me), view.player(owner)) {
-        (Some(a), Some(b)) => a.team != b.team,
-        _ => true, // Legacy/minimal views may omit player metadata.
-    }
-}
-
-/// The whole selected group must consist of finished, own, stationary
-/// builders. Mobile construction rigs keep their right-click Move behavior.
-pub(super) fn rally_builders(
-    db: Option<&ContentDb>,
-    view: &WorldView,
-    me: sta_sim::PlayerId,
-    own: &[EntityId],
-) -> bool {
-    let Some(db) = db else { return false };
-    !own.is_empty() && own.iter().all(|&id| {
-        view.unit(id).is_some_and(|u| {
-            u.owner == me
-                && !u.flags.contains(UnitFlags::DYING)
-                && u.progress.is_none_or(|p| p >= Fixed::ONE)
-                && db.unit(u.def).is_some_and(|d| {
-                    !d.build.list.is_empty()
-                        && d.movement.max_speed == Fixed::ZERO
-                        && (matches!(EntityKind::of_def(d), EntityKind::Station | EntityKind::Craft)
-                            || EntityKind::producer_def(d))
-                })
-        })
-    })
-}
-
-/// The order a right-click on `target` gives `own`, or `None` for a plain
-/// move. `me` is the clicking player.
-pub fn context_order(db: Option<&ContentDb>, view: &WorldView, me: sta_sim::PlayerId, own: &[EntityId], target: EntityId) -> Option<Order> {
-    let t = view.unit(target)?;
-    if t.flags.contains(UnitFlags::DYING) {
-        return None;
-    }
-    if rally_builders(db, view, me, own) {
-        return Some(Order::Rally { builders: own.to_vec(), at: Target::Entity(target) });
-    }
-    if let Some(db) = db.filter(|db| is_resource(db, view, target)) {
-        let miners: Vec<EntityId> = own.iter().copied().filter(|&id| is_miner(db, view, id)).collect();
-        // Mixed groups keep the existing Move fallback.
-        return (miners.len() == own.len() && !miners.is_empty()).then_some(Order::Mine { units: miners, node: target });
-    }
-    is_enemy(view, me, t.owner).then(|| Order::Attack { units: own.to_vec(), target })
-}
+// The rule (the originals' group vote) lives in the sim crate, where the
+// bench's `rclick` uses it too.
+pub(super) use sta_sim::context::rally_builders;
+pub use sta_sim::context::context_order;
 
 /// The cursor shows the order a right-click would give: a crosshair for an
 /// attack, a pointing hand for mining or rally, the arrow otherwise.
@@ -127,8 +60,11 @@ pub fn cursor(
 mod tests {
     use std::sync::Arc;
 
-    use sta_content::{DefRef, UnitDef, fake};
+    use sta_content::{ContentDb, DefRef, UnitDef, fake};
     use sta_core::{Fixed, TeamId};
+    use sta_sim::command::Target;
+    use sta_sim::view::{Relation, UnitFlags};
+    use sta_sim::{EntityId, WorldView};
     use sta_sim::command::{CommandKind, LocalRouter};
     use sta_sim::setup::{Control, GameOptions, GameSetup, PlayerSetup};
     use sta_sim::{PlayerId, Sim, TickOutput, Vec3 as SimVec3, WorldSource};
@@ -278,6 +214,17 @@ mod tests {
         let cmds = right_click_at(&mut app, 100.0);
         assert_eq!(cmds, [CommandKind::Order(Order::Rally { builders: vec![ids[5]], at: Target::Entity(ids[1]) })]);
         assert!(app.world_mut().resource_mut::<Messages<OrderIssued>>().drain().next().is_none());
+    }
+
+    #[test]
+    fn mixed_group_on_a_moon_sends_mine_to_the_whole_selection() {
+        let (mut app, ids) = app(1);
+        app.world_mut().insert_resource(Selection(vec![ids[0], ids[1]]));
+        let cmds = right_click_at(&mut app, 6000.0);
+        assert!(
+            matches!(&cmds[..], [CommandKind::Order(Order::Mine { units, node })] if units.len() == 2 && *node == ids[4]),
+            "{cmds:?}"
+        );
     }
 
     #[test]

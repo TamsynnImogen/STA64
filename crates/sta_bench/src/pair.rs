@@ -33,7 +33,8 @@ use std::sync::Arc;
 use sta_core::{TICK_HZ, Tick};
 
 use crate::parity::{self, PMark, Run, Support};
-use crate::parse::{SceneFile, parse_command};
+use crate::parse::SceneFile;
+use crate::parse::command::parse_command_list;
 use crate::run::{Bench, RunConfig, json, to_f64};
 
 /// Games the original-game bench runs. Armada I is not one: Refit's bench
@@ -270,7 +271,8 @@ impl PairDesc {
             let _ = k;
             let (t, cmd) = v.split_once(char::is_whitespace).ok_or_else(|| format!("At={v}: expected `<seconds> <command>`"))?;
             let t = seconds(t).ok_or_else(|| format!("At={v}: `{t}` is not seconds"))?;
-            parse_command(cmd.trim()).map_err(|e| format!("At={v}: {e}"))?;
+            // `a; b` runs several commands at one time, as Refit's `drive scene` does.
+            parse_command_list(cmd.trim()).map_err(|e| format!("At={v}: {e}"))?;
             at.push((t, cmd.trim().to_owned()));
         }
         Ok(PairDesc {
@@ -640,9 +642,9 @@ pub fn run_sta64(scene_text: &str, cfg: Arc<RunConfig>, schedule: &[Timed], end_
         let now = b.tick();
         while next < sched.len() && sched[next].0 <= now {
             let text = sched[next].1;
-            let ans = match parse_command(text) {
-                Ok(Some(c)) => b.exec_timed(&c),
-                Ok(None) => "! empty".into(),
+            let ans = match parse_command_list(text) {
+                Ok(cs) if cs.is_empty() => "! empty".into(),
+                Ok(cs) => cs.iter().map(|c| b.exec_timed(c)).collect::<Vec<_>>().join(" | "),
                 Err(e) => format!("! {e}"),
             };
             answers.push((now, text.to_owned(), ans));
@@ -693,6 +695,25 @@ pub fn run_sta64(scene_text: &str, cfg: Arc<RunConfig>, schedule: &[Timed], end_
             let _ = write!(s, " {k}={v}");
         }
         lines.push((m.tick, 2, s));
+    }
+    // Refit's bursts follow the ordnance list: a shot is firing while its
+    // ordnance exists. A projectile's `Fired` ends nothing (duration 0), so
+    // each shot also counts from `ord.new` to its `ord.gone` (the hit).
+    let mut flying: BTreeMap<String, (Tick, String, String)> = BTreeMap::new();
+    for m in b.marks().into_iter().filter(|m| m.kind == "ord.new" || m.kind == "ord.gone") {
+        let field = |k: &str| {
+            m.fields.iter().find(|f| f.0 == k).map(|f| match &f.1 {
+                crate::marks::Val::Obj(id) => b.name_of(*id),
+                crate::marks::Val::Text(t) => t.clone(),
+            })
+        };
+        let Some(id) = field("id") else { continue };
+        if m.kind == "ord.new" {
+            flying.insert(id, (m.tick, field("obj").unwrap_or_default(), field("weapon").unwrap_or_default()));
+        } else if let Some((t0, o, w)) = flying.remove(&id) {
+            fire.push((t0, "fire.start", o.clone(), w.clone()));
+            fire.push((m.tick, "fire.end", o, w));
+        }
     }
     for (tick, kind, o, w) in merge_bursts(&fire, gap) {
         lines.push((tick, 2, format!("{kind} t={:.3} obj={o} weapon={w}", secs_of(tick))));

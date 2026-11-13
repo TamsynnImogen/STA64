@@ -24,6 +24,7 @@
 pub mod boundary;
 pub mod combat;
 pub mod command;
+pub mod context;
 pub mod economy;
 pub mod event;
 pub mod fake;

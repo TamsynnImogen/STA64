@@ -27,6 +27,7 @@ import time
 KNOWN_GAMES = ("a1", "a2", "roots")
 SUPPORTED_GAMES = ("a2", "roots")
 READY_TIMEOUT = 180.0
+STALL_WALL = 45
 
 
 class PairError(Exception):
@@ -149,6 +150,16 @@ def load_pair(text, game):
     if not m:
         raise PairError("bad Size= %r" % get(items, "Size"))
     p.size = (int(m.group(1)), int(m.group(2)))
+    # `rclick` (a player's right-click): where the RTS camera centres an object
+    # on screen; default the middle of the window.
+    uc = get(items, "UiCenter")
+    if uc:
+        mc = re.fullmatch(r"\s*(\d+)\s*,\s*(\d+)\s*", uc)
+        if not mc:
+            raise PairError("bad UiCenter= %r (want X,Y pixels)" % uc)
+        p.ui_center = (int(mc.group(1)), int(mc.group(2)))
+    else:
+        p.ui_center = (p.size[0] // 2, p.size[1] // 2)
     p.race = get(items, "Race")
     p.launch = shlex.split(get(items, "Launch", "") or "")
     p.at = []
@@ -275,6 +286,46 @@ def checkout_containing(path):
         d = parent
 
 
+def is_rclick(cmd):
+    """`rclick <object>`: a player's right-click on an object with the current
+    selection (`select a b ...` first), through the bench's pointer, not a
+    scene command: the order the game's own context logic picks."""
+    return cmd.split()[:1] == ["rclick"]
+
+
+def parse_epochs(text):
+    """`epoch <hi> <lo> <tick>` lines: (GetTickCount, unix seconds) pairs."""
+    out = []
+    for line in text.splitlines():
+        w = line.split()
+        if len(w) == 4 and w[0] == "epoch":
+            try:
+                ft = (int(w[1], 16) << 32) | int(w[2], 16)
+                out.append((int(w[3]), ft / 1e7 - 11644473600.0))
+            except ValueError:
+                pass
+    return out
+
+
+def t_at_wall(marks, epochs, wall):
+    """The sim time at host wall-clock `wall`: through the latest epoch line
+    (GetTickCount <-> host clock) to a tick, then interpolated between the two
+    marks with `t=` around it. None when it cannot be placed."""
+    if not epochs:
+        return None
+    tick0, unix0 = epochs[-1]
+    tick = tick0 + (wall - unix0) * 1000.0
+    pts = sorted((m["tick"], m["t"]) for m in marks if m["t"] is not None)
+    before = [x for x in pts if x[0] <= tick]
+    after = [x for x in pts if x[0] >= tick]
+    if not before or not after:
+        return None
+    (k0, t0), (k1, t1) = before[-1], after[0]
+    if k1 == k0:
+        return t0
+    return t0 + (t1 - t0) * (tick - k0) / (k1 - k0)
+
+
 # ---------------------------------------------------------------- the bench
 
 class Bench:
@@ -322,7 +373,9 @@ def print_plan(p, scene_ini, out):
     print("duration:      %g sim s after ready" % p.duration)
     print("timeline:")
     for t, _, kind, x in events(p):
-        if kind == "at":
+        if kind == "at" and is_rclick(x):
+            print("  t=%g  %s: scene 'camera on <target>', pointer to %d,%d, right button" % ((t, x) + p.ui_center))
+        elif kind == "at":
             print("  t=%g  scene %s" % (t, x))
         else:
             print("  t=%g  pause, shot pair-f%d -> frames/f%d.png, objects -> objects-f%d.jsonl, resume" % (t, x, x, x))
@@ -347,6 +400,7 @@ class Runner:
         self.samples = []   # (wall, sim t) pairs, for the sim rate
         self.latency = 1.0  # wall seconds a drive command takes (moving average)
         self.end_idx = None
+        self.ui_wall = {}   # index in sent -> host wall time of a right-click
 
     def say(self, msg):
         line = "[wall %s] %s" % (time.strftime("%H:%M:%S"), msg)
@@ -403,6 +457,28 @@ class Runner:
         self.say("scene %r (sim t=%s, %.1fs wall, rc=%d) -> %s" % (cmd, self.t_now(), dt, rc, out.replace("\n", " | ")))
         return out
 
+    def rclick(self, cmd):
+        """`rclick <object>`: centre the RTS camera on it, then move the
+        bench's pointer onto the middle of the view and press the right
+        button, as a player does (Roots' shell wants the pointer over a spot
+        before it takes a click). Lands when the button went down."""
+        target = cmd.split()[1] if len(cmd.split()) > 1 else ""
+        self.scene("camera on %s" % target)
+        time.sleep(0.6)
+        cx, cy = self.p.ui_center
+        drive = ["drive", "--session", self.sid]
+        self.bench.run(drive + ["move", str(cx + 4), str(cy)], min(30, self.remaining()))
+        time.sleep(0.3)
+        self.bench.run(drive + ["move", str(cx), str(cy)], min(30, self.remaining()))
+        time.sleep(0.3)
+        out, rc, dt = self.bench.run(drive + ["click", str(cx), str(cy), "--button", "3"], min(30, self.remaining()))
+        wall = time.time() - min(dt, 0.2) / 2
+        self.sent.append(cmd)
+        self.answers[len(self.sent) - 1] = out.strip()
+        self.ui_wall[len(self.sent) - 1] = wall
+        self.poll_marks()
+        self.say("%s (sim t~%s, %.1fs wall, rc=%d) -> %s" % (cmd, self.t_now(), dt, rc, out.strip().replace("\n", " | ")))
+
     def find_files(self):
         sd = os.path.expanduser("~/.cache/a2test/sessions/%s/session.json" % self.sid)
         work = json.load(open(sd))["work"]
@@ -435,12 +511,21 @@ class Runner:
 
     def wait_t(self, target, lead=False):
         """Return when sim t reaches target; with lead, early by what a command takes
-        to land (measured drive latency times the sim rate), so it lands near target."""
+        to land (measured drive latency times the sim rate), so it lands near target.
+        A simulation that stops advancing for STALL_WALL seconds (the game paused
+        itself: a mission briefing, a menu) fails the run instead of waiting for
+        the timeout."""
+        seen, since = None, time.time()
         while True:
             self.poll_marks()
             t = self.t_now()
             if t is not None and t + (self.rate() * self.latency if lead else 0.0) >= target:
                 return
+            if t != seen:
+                seen, since = t, time.time()
+            elif time.time() - since > STALL_WALL:
+                raise PairError("the simulation stopped at t=%s for %ds of wall time (the game paused "
+                                "itself? a mission map opens a briefing: use a skirmish or empty map)" % (t, STALL_WALL))
             self.remaining()
             time.sleep(0.1)
 
@@ -522,7 +607,9 @@ class Runner:
             frames = []
             for t, _, kind, x in events(p):
                 self.wait_t(r0 + t, lead=True)
-                if kind == "at":
+                if kind == "at" and is_rclick(x):
+                    self.rclick(x)
+                elif kind == "at":
                     self.scene(x)
                 else:
                     frames.append(self.frame(x, t))
@@ -565,6 +652,15 @@ class Runner:
         self.poll_marks()
         r0 = ready_t(self.marks)
         times = match_commands(self.marks, self.sent)
+        if self.ui_wall:
+            try:
+                epochs = parse_epochs(open(self.marks_path, errors="replace").read())
+            except OSError:
+                epochs = []
+            for i, wall in self.ui_wall.items():
+                times[i] = t_at_wall(self.marks, [e for e in epochs if e[1] <= wall] or epochs, wall)
+                if times[i] is not None:
+                    times[i] = round(times[i], 3)
         cmds = []
         idx = 0
         for t, c in p.at:

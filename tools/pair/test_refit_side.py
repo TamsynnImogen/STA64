@@ -134,6 +134,25 @@ epoch 0x01dd72e7 0x8c5e6c41 1000
         self.assertIsNone(rs.ready_t(rs.parse_marks("5 state t=1.0\n")))
 
 
+class RightClick(unittest.TestCase):
+    def test_is_rclick_and_ui_center(self):
+        self.assertTrue(rs.is_rclick("rclick moon"))
+        self.assertFalse(rs.is_rclick("attack a b"))
+        p = rs.load_pair(PAIR, "a2")
+        self.assertEqual(p.ui_center, (640, 360))
+        p = rs.load_pair(PAIR.replace("Duration=12", "Duration=12\nroots.UiCenter=600,500"), "roots")
+        self.assertEqual(p.ui_center, (600, 500))
+
+    def test_t_at_wall(self):
+        # FILETIME of unix 1000.0 s: (1000 + 11644473600) * 1e7.
+        ft = int((1000 + 11644473600) * 10**7)
+        txt = "epoch 0x%08x 0x%08x 5000\n5000 state t=1.0\n6000 state t=2.0\n" % (ft >> 32, ft & 0xffffffff)
+        marks, epochs = rs.parse_marks(txt), rs.parse_epochs(txt)
+        self.assertEqual(epochs, [(5000, 1000.0)])
+        self.assertAlmostEqual(rs.t_at_wall(marks, epochs, 1000.5), 1.5, places=3)
+        self.assertIsNone(rs.t_at_wall(marks, epochs, 1002.0))
+
+
 class Guards(unittest.TestCase):
     def test_out_in_checkout_refused(self):
         with tempfile.TemporaryDirectory() as d:
