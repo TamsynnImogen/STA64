@@ -367,7 +367,7 @@ pub fn default_loadout(db: &ContentDb, race: &str) -> Loadout {
     }
     let miner = of_race
         .iter()
-        .find(|u| (u.miner || u.class.0 == "freighter") && mobile(u))
+        .find(|u| u.mines() && mobile(u))
         .or_else(|| of_race.iter().filter(builds).find(|u| mobile(u)));
     if let Some(u) = miner {
         units.push(u.key);
@@ -404,6 +404,30 @@ pub fn skirmish_races(races: &Races, db: &ContentDb) -> Vec<String> {
             .collect();
     }
     out
+}
+
+/// The race a player's forces belong to: the `race` key that most of `unit_races` share
+/// (empty values are ignored; a tie goes to the one seen first).
+///
+/// A start loadout is not all of one race: Roots' `standardUnits` begin with the shared
+/// helper units `all_ai_pod` (race `borg`) and `all_start` (race `species8472`) for every
+/// race, so "the race of the first unit" names Borg for a Federation player. What the player
+/// chose is what its units mostly are, and that is read from their ODFs.
+pub fn dominant_race<'a>(unit_races: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
+    let mut counts: Vec<(&str, usize)> = Vec::new();
+    for r in unit_races.into_iter().filter(|r| !r.trim().is_empty()) {
+        match counts.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case(r)) {
+            Some((_, n)) => *n += 1,
+            None => counts.push((r, 1)),
+        }
+    }
+    let mut best: Option<(&str, usize)> = None;
+    for (r, n) in counts {
+        if best.is_none_or(|(_, b)| n > b) {
+            best = Some((r, n));
+        }
+    }
+    best.map(|(r, _)| r)
 }
 
 #[cfg(test)]

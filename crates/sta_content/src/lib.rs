@@ -48,7 +48,7 @@ pub use planet::PlanetRole;
 pub use gui_cfg::{Colour, GuiCfg, GuiLayout, GuiValue, Panel, Rect};
 pub use index::{OdfEntry, OdfIndex};
 pub use strings::{LabelMap, StringTable};
-pub use race::{Loadout, RaceDef, Races, StartingResources};
+pub use race::{Loadout, RaceDef, Races, StartingResources, dominant_race};
 pub use resources::ResourceModel;
 pub use rules::{Rules, OfficerLimit, PathingRules};
 pub use profile::{resolve_features, DetectStep, Detection, Overrides, ROOTS_ASSET_VERSION, FEATURE_NAMES, ODF_KEY_PREFIX};

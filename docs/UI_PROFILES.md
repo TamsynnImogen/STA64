@@ -58,28 +58,25 @@ original-game visual equivalence are not established by these foundation tests.
 UI-18's CFG/SPR renderer and current verification boundaries are documented in
 [STOCK_HUD_CFG.md](STOCK_HUD_CFG.md). Its native reference acceptance remains open.
 
-## Native research retained for UI-18
+## Original behaviour followed for UI-18
 
-Read-only Ghidra 12.1.4 analysis of the pinned stock A2 reference
-`8d3ba6ec826198daf3e0c7b3435e9ce8195293e56da7c87e0af2634eaa4693b3`
-confirms:
+Evidence grade: read from the stock A2 executable (static, Ghidra); the
+function-level notes are kept outside the repository.
 
-- `0x0050aaa0` reads `<panel>Size` with default zero, then loops only over
-  `0..size`, resolving sprite `<configured-name>.<n>` and CFG `<panel>_<n>`.
-  Zero is not a request to draw a single full-panel sprite.
-- `0x005358f0` scales rectangle x/width and y/height separately by the active
-  dimensions divided by CFG canvas dimensions, with nearest-integer rounding.
-  The recovered FleetOpsHook parameter DB parser's `CacheDimensions` defaults
-  to 1600x1200, overridden by `screenWidth`/`screenHeight`.
-- `0x004ff450` consumes six resource IDs gated by `no<Name>` and loads the
-  corresponding `resource_<id>` rectangle. The pointer table at `0x006fc7d8`
-  resolves Crew, Officers, Dilithium, Latinum, Metal, Biomatter in that order.
+- A panel reads `<panel>Size` with default zero, then loops only over `0..size`,
+  resolving sprite `<configured-name>.<n>` and CFG `<panel>_<n>`. Zero is not a
+  request to draw a single full-panel sprite.
+- Rectangles scale x/width and y/height separately by the active dimensions
+  divided by the CFG canvas dimensions, with nearest-integer rounding. The
+  FleetOpsHook parameter DB parser's `CacheDimensions` defaults to 1600x1200,
+  overridden by `screenWidth`/`screenHeight`.
+- Six resource IDs gated by `no<Name>` each load their `resource_<id>`
+  rectangle, in the order Crew, Officers, Dilithium, Latinum, Metal, Biomatter.
   Those GUI IDs differ from STA64's four stock resource-vector indices.
-- `0x004f2ee0` chooses info panel 0 for no selected object, panel 1 for a
-  normal single object or a group of at most eight, and panel 2 for the builder
-  display or larger groups. This differs from the LCARS renderer's height enum.
+- The info panel is 0 for no selected object, 1 for a normal single object or
+  a group of at most eight, and 2 for the builder display or larger groups. This
+  differs from the LCARS renderer's height enum.
 
-The private evidence bundle is in `STA64-artifacts/probes/ui17/native-a2-hud.json`.
-These are static A2 findings and installed FO CFG/SPR observations, not original
-runtime verification or a claim that all FO-specific extensions are recovered.
-Original executable/data files were not changed or run.
+These are static A2 findings and installed FO CFG/SPR observations, not
+original runtime verification or a claim that all FO-specific extensions are
+recovered. Original executable/data files were not changed or run.

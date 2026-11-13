@@ -12,7 +12,7 @@
 //! | `range`, `refire` | `range`, `shotDelay` (else the first `shotDelay<n>`) seconds, as ticks |
 //! | `damage` | ordnance `damageBase` |
 //! | `shot_speed` | ordnance `shotSpeed`, projectiles only |
-//! | `duration` | ordnance `lifespan` seconds, beams only |
+//! | `duration` | ordnance `lifespan` seconds, beams only; `STA64_duration` seconds on the weapon ODF overrides it (point defence has no lifespan) |
 //! | `fire_sound`, `fx` | `fireSound`; ordnance `shotGeometry` (else `sprite`) |
 //! | specials | `effectTimer`, `energyDrainRate`, `specialEnergyCost`, `disableWeapons` (default on), `decloakOnHit` |
 //! | `resource` (class `resourceweapon`) | `addDilithium`, `addLatinum`, `addMetal`, `addBiomatter`, `addCrew` (signed), `oneTimeMode`, `alwaysActivePlayer`, `alwaysActiveAI` |
@@ -30,6 +30,16 @@ pub const BEAM_CLASSES: &[&str] = &["phaser", "utribeam", "unibeam", "pdlbeam", 
 
 /// Weapon classes that shoot down ordnance.
 const POINT_DEFENCE: &[&str] = &["ordnancedefenseweapon", "pointdefenselaser"];
+
+/// An arc ahead of the mount, `half` radians either side.
+pub(crate) fn fire_arc(half: f64) -> FireArc {
+    FireArc {
+        dir: (Fixed::ZERO, Fixed::ONE),
+        // Loader-only trigonometry; `ContentDb::hash` catches a platform
+        // whose cosine differs in the last bit.
+        min_dot: Fixed::from_f64(half.min(std::f64::consts::PI).cos()),
+    }
+}
 
 /// The definition of weapon `name`, and the arc its hardpoints are limited to.
 pub fn weapon_def(name: &str, odf: &Odf, ordnance: Option<&Odf>, warnings: &mut Vec<Warning>) -> (WeaponDef, Option<FireArc>) {
@@ -63,6 +73,9 @@ pub fn weapon_def(name: &str, odf: &Odf, ordnance: Option<&Odf>, warnings: &mut 
     d.effect_ticks = r.ticks("effectTimer");
     d.energy_drain = r.fixed("energyDrainRate");
     d.energy_cost = r.fixed("specialEnergyCost");
+    // `STA64_duration`: seconds the weapon stays active, for kinds whose ordnance
+    // gives none (point defence). Overrides the ordnance's `lifespan`.
+    let own_duration = r.num("STA64_duration").filter(|s| *s >= 0.0).map(sta_core::seconds_to_ticks);
     d.disable_weapons = r.flag("disableWeapons").unwrap_or(true);
     d.decloak_on_hit = r.flag("decloakOnHit").unwrap_or(false);
 
@@ -84,12 +97,7 @@ pub fn weapon_def(name: &str, odf: &Odf, ordnance: Option<&Odf>, warnings: &mut 
     }
 
     let arc = if r.flag("restrictFireArc") == Some(true) {
-        r.num("fireArc").filter(|a| *a > 0.0).map(|half| FireArc {
-            dir: (Fixed::ZERO, Fixed::ONE),
-            // Loader-only trigonometry; `ContentDb::hash` catches a platform
-            // whose cosine differs in the last bit.
-            min_dot: Fixed::from_f64(half.min(std::f64::consts::PI).cos()),
-        })
+        r.num("fireArc").filter(|a| *a > 0.0).map(fire_arc)
     } else {
         None
     };
@@ -105,6 +113,9 @@ pub fn weapon_def(name: &str, odf: &Odf, ordnance: Option<&Odf>, warnings: &mut 
     } else if kind != WeaponKind::Beam || d.range > Fixed::ZERO && d.effect_ticks == 0 && d.energy_cost == Fixed::ZERO {
         // A weapon that shoots but has no ordnance to read damage from.
         warnings.push(Warning::new(&file, "no ordName (or its ODF is missing): damage 0"));
+    }
+    if let Some(ticks) = own_duration {
+        d.duration = ticks;
     }
     (d, arc)
 }
