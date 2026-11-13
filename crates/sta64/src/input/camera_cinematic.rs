@@ -131,7 +131,7 @@ fn consume(
     }
     for SimMsg(e) in events.read() {
         let SimEvent::Present(p) = e else { continue };
-        let current = orbit.iter().next().map(|o| of(&o));
+        let current = orbit.iter().next().map(of);
         match p {
             Presentation::Cineractive { on, .. } => {
                 if *on && !cam.locked {
