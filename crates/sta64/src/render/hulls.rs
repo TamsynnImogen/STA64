@@ -82,6 +82,10 @@ pub struct HullParams {
     pub uv: Vec4,
     pub dvec: [Vec4; DIRS],
     pub dcol: [Vec4; DIRS],
+    /// The Key's shadow map (`shadows.rs`): world to u, v, depth along the Key.
+    pub sh: [Vec4; 3],
+    /// x 1 with a map; y one texel (u, v); z the depth bias; w how much of the Key a shadow takes.
+    pub shp: Vec4,
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Clone, Debug)]
@@ -95,6 +99,9 @@ pub struct HullMaterial {
     #[texture(3)]
     #[sampler(4)]
     pub normal: Option<Handle<Image>>,
+    /// The Key's shadow map, read by `hulls.wesl` when `params.shp.x` says there is one.
+    #[texture(5)]
+    pub shadow: Option<Handle<Image>>,
     pub double_sided: bool,
 }
 
@@ -131,18 +138,31 @@ impl Material for HullMaterial {
 }
 
 /// The scene's lights and eye, as the shader takes them.
-#[derive(Resource, Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Resource, Clone, Debug, Default, PartialEq)]
 pub struct HullView {
     eye: Vec4,
     dvec: [Vec4; DIRS],
     dcol: [Vec4; DIRS],
+    sh: [Vec4; 3],
+    shp: Vec4,
+    shadow: Option<Handle<Image>>,
 }
 
 impl HullView {
-    fn write(&self, p: &mut HullParams) {
+    pub(crate) fn write(&self, p: &mut HullParams) {
         p.eye = self.eye;
         p.dvec = self.dvec;
         p.dcol = self.dcol;
+        p.sh = self.sh;
+        p.shp = self.shp;
+    }
+
+    /// The Key's shadow map as `shadows.rs` fitted it this frame (RND-15).
+    pub fn set_shadow(&mut self, key: &crate::render::shadows::KeyShadow) {
+        self.sh = key.rows;
+        // A texel, the depth bias of the hulls (half the gas's), and the whole Key taken.
+        self.shp = Vec4::new(key.params.x, key.params.w, key.params.y * 0.5, 1.0);
+        self.shadow = Some(key.image.clone());
     }
 }
 
@@ -214,7 +234,7 @@ fn update_view(
         let c = l.color.to_linear();
         (t.back().as_vec3(), Vec3::new(c.red, c.green, c.blue), l.illuminance)
     }));
-    let now = HullView { eye: cam.translation().extend(1.0), dvec, dcol };
+    let now = HullView { eye: cam.translation().extend(1.0), dvec, dcol, ..view.clone() };
     let moved = (now.eye - view.eye).length_squared() > 1e-4;
     if !moved && now.dvec == view.dvec && now.dcol == view.dcol {
         return;
@@ -256,6 +276,7 @@ pub fn hull_material(m: &StandardMaterial, part: &HullPart, view: &HullView) -> 
         params,
         texture: m.base_color_texture.clone(),
         normal: m.normal_map_texture.clone(),
+        shadow: view.shadow.clone(),
         double_sided: m.double_sided || m.cull_mode.is_none(),
     }
 }
