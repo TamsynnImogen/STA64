@@ -43,6 +43,7 @@ pub mod production;
 mod avoid;
 mod nav;
 mod regions;
+mod watchdog;
 pub mod replay;
 pub mod setup;
 pub mod snapshot;
@@ -151,6 +152,8 @@ pub struct Sim {
     engagement: combat::targeting::Engagement,
     /// Pending start-helper lifecycle steps (SIM-28); in the digest once any exist.
     start_effects: start_effects::StartEffects,
+    /// Move orders that make no progress (stuck detector): in snapshots, not in the digest.
+    watchdog: watchdog::Watchdog,
     /// Path planner grids and fields (SIM-23): a memo, not in the digest.
     nav: nav::Cache,
     /// Subsystem switches and damage set by missions (SIM-55); in the digest
@@ -188,6 +191,7 @@ impl Sim {
             approach_warp: Default::default(),
             engagement: Default::default(),
             start_effects: Default::default(),
+            watchdog: Default::default(),
             nav: Default::default(),
             subsystems: Default::default(),
             team_changes: Vec::new(),
@@ -359,6 +363,7 @@ impl Sim {
         self.step_start_effects();
         self.hold_welding_builders();
         self.constrain_targets();
+        self.watch_orders();
         self.assist_idle();
         let plans = self.steer_attackers();
         let routed = self.route_orders();

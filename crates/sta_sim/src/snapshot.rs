@@ -43,8 +43,8 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// (CON-35) added the [`Provenance`] record and the keyed content digest's
 /// hash. Format 17 appends the mission-set subsystem switches and damage
 /// (SIM-55). Format 18 (SIM-36) appends the attack approach record
-/// (crafts in warp) last. Only the current format is read.
-pub const FORMAT_VERSION: u16 = 18;
+/// (crafts in warp). Format 19 appends the stuck-order watch rows last. Only the current format is read.
+pub const FORMAT_VERSION: u16 = 19;
 
 const HEADER: usize = 4 + 2 + 4 + 8;
 
@@ -170,6 +170,13 @@ struct EntityRec {
     shields_directional: bool,
     flags: UnitFlags,
     progress: Option<Fixed>,
+}
+
+/// Format 19: the stuck-order watch rows (`watchdog`).
+#[derive(Serialize, Deserialize)]
+struct WatchRec {
+    version: u8,
+    rows: Vec<(EntityId, crate::watchdog::Row)>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -398,6 +405,7 @@ impl Sim {
         out.extend(postcard::to_allocvec(&crate::autonomy::AutonomyWire { version: 1, rows: self.autonomy.to_rec() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&SubsystemsRec { version: 1, rows: self.subsystems.to_rows() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&AttackRec { version: 1, warp: self.approach_warp.to_rec(), engagement: self.engagement.to_rec() }).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&WatchRec { version: 1, rows: self.watchdog.to_rec() }).expect("snapshot serialises"));
         out
     }
 
@@ -443,6 +451,9 @@ impl Sim {
         if record.version != 1 { return Err(SnapshotError::Corrupt("unknown attack approach record version".into())); }
         let warp_rows = record.warp;
         let engagement_rows = record.engagement;
+        let (record, rest): (WatchRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        if record.version != 1 { return Err(SnapshotError::Corrupt("unknown order watch record version".into())); }
+        let watch_rows = record.rows;
         if !rest.is_empty() { return Err(SnapshotError::Corrupt("trailing bytes".into())); }
         if let Some(row) = b.economy.miners.iter().find(|row| row.5 > 4) {
             return Err(SnapshotError::Corrupt(format!("mining phase {} is not supported", row.5)));
@@ -506,6 +517,10 @@ impl Sim {
         if autonomy.to_rec().iter().any(|(id, _)| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft)) {
             return Err(corrupt("autonomy entity"));
         }
+        let watchdog = crate::watchdog::Watchdog::from_rec(watch_rows).ok_or_else(|| corrupt("order watch rows"))?;
+        if watchdog.to_rec().iter().any(|(id, _)| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft)) {
+            return Err(corrupt("order watch entity"));
+        }
         let approach_warp = crate::movement::approach::Warp::from_rec(warp_rows).ok_or_else(|| SnapshotError::Corrupt("attack warp rows out of order or of an unknown phase".into()))?;
         if approach_warp.to_rec().iter().any(|(id, _)| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft)) {
             return Err(SnapshotError::Corrupt("attack warp entity is not a craft".into()));
@@ -551,6 +566,7 @@ impl Sim {
             specials,
             autonomy,
             approach_warp,
+            watchdog,
             engagement,
             start_effects,
             nav: Default::default(),
