@@ -134,6 +134,9 @@ pub struct LaunchConfig {
     pub frame_size: Option<(u32, u32)>,
     /// `--postfx bloom,smaa`: opt-in post effects (render/post.rs).
     pub postfx: Vec<String>,
+    /// `--install-content`: with `--headless --frames`, build the scene on the install's
+    /// content and draw it with the map view's renderers (TOOL-17).
+    pub install_content: bool,
     /// Arguments not understood, kept for the warning.
     pub unknown: Vec<String>,
 }
@@ -166,6 +169,8 @@ Test bench (docs/TESTBENCH.md):
   --frames <t,t,..>        save a PNG frame at each of these ticks (headless, needs a GPU adapter)
   --frame-dir <dir>        where frames go (default: frames)
   --frame-size <WxH>       frame size (default: 640x360)
+  --install-content        with --headless --frames: the install's own content (--install-root, --mod): the
+                           scene's Map=, its units' models, sky, nebulae, planets and effects (no window, no audio)
   --postfx <a,b,..>        opt-in post effects: bloom smaa fxaa vignette chromatic exposure aces reinhard cinematic (F8 cycles)
 
   --lcars-ui               use the LCARS interface instead of the game/mod stock profile
@@ -247,6 +252,7 @@ impl LaunchConfig {
                     _ => cfg.unknown.push("--frames (needs ticks like 0,100)".into()),
                 },
                 "--postfx" => cfg.postfx.extend(value(&mut args)),
+                "--install-content" => cfg.install_content = true,
                 "--frame-dir" => cfg.frame_dir = value(&mut args).map(PathBuf::from),
                 "--frame-size" => match value(&mut args).and_then(|v| v.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))) {
                     Some(wh) => cfg.frame_size = Some(wh),

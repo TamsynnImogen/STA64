@@ -182,6 +182,36 @@ impl View {
         }
     }
 
+    /// Whether the scene (or a command) has put the camera somewhere.
+    pub(super) fn is_set(&self) -> bool {
+        self.orbit.is_some() || self.eye.is_some()
+    }
+
+    /// Where the scene's camera is: `(eye, look-at)` in render space (the sim's Z
+    /// mirrored), from the bench's current objects; `None` when no camera is set or
+    /// its target is not an object of the bench (yet). The same pose for the stand-in
+    /// frames and for the install's (`pair_view`).
+    pub(super) fn pose(&self, bench: &sta_bench::run::Bench) -> Option<(Vec3, Vec3)> {
+        let resolve = |t: &Target| match t {
+            Target::Point(p) => Some(Vec3::new(p[0] as f32, p[1] as f32, -p[2] as f32)),
+            Target::Object(n) => {
+                let id = bench.resolve(n).ok()?;
+                let u = bench.view().units.iter().find(|u| u.id == id)?;
+                Some(Vec3::new(fixed(u.pos.x), fixed(u.pos.y), -fixed(u.pos.z)))
+            }
+        };
+        if let Some((target, yaw, pitch, dist)) = &self.orbit {
+            resolve(target).map(|c| {
+                let (y, p) = (yaw.to_radians(), pitch.to_radians());
+                (c + *dist * Vec3::new(y.sin() * p.cos(), p.sin(), -y.cos() * p.cos()), c)
+            })
+        } else if let Some((eye, look)) = &self.eye {
+            resolve(look).map(|c| (Vec3::new(eye.x, eye.y, -eye.z), c))
+        } else {
+            None
+        }
+    }
+
     /// Note a command line's effect on the camera (the bench itself answers
     /// "ok (no renderer at tier 1)" for these).
     pub fn observe(&mut self, line: &str) {
@@ -319,11 +349,9 @@ fn sync_world(
         }
         keep
     });
-    let mut at: BTreeMap<EntityId, Vec3> = BTreeMap::new();
     for u in &world.units {
         // Render space, as the game's (`to_bevy`): the sim's Z runs the other way.
         let pos = Vec3::new(fixed(u.pos.x), fixed(u.pos.y), -fixed(u.pos.z));
-        at.insert(u.id, pos);
         let yaw = fixed(u.heading.0).atan2(-fixed(u.heading.1));
         let t = Transform::from_translation(pos).with_rotation(Quat::from_rotation_y(yaw));
         if let Some(&e) = proxies.0.get(&u.id) {
@@ -344,21 +372,8 @@ fn sync_world(
             .id();
         proxies.0.insert(u.id, e);
     }
-    let resolve = |t: &Target| match t {
-        Target::Point(p) => Some(Vec3::new(p[0] as f32, p[1] as f32, -p[2] as f32)),
-        Target::Object(n) => bench.resolve(n).ok().and_then(|id| at.get(&id).copied()),
-    };
     let Ok(mut cam) = camera.single_mut() else { return };
-    let placed = if let Some((target, yaw, pitch, dist)) = &view.orbit {
-        resolve(target).map(|c| {
-            let (y, p) = (yaw.to_radians(), pitch.to_radians());
-            (c + *dist * Vec3::new(y.sin() * p.cos(), p.sin(), -y.cos() * p.cos()), c)
-        })
-    } else if let Some((eye, look)) = &view.eye {
-        resolve(look).map(|c| (Vec3::new(eye.x, eye.y, -eye.z), c))
-    } else {
-        Some((Vec3::new(0.0, 600.0, -900.0), Vec3::ZERO))
-    };
+    let placed = if view.is_set() { view.pose(bench) } else { Some((Vec3::new(0.0, 600.0, -900.0), Vec3::ZERO)) };
     if let Some((eye, look)) = placed {
         *cam = Transform::from_translation(eye).looking_at(look, Vec3::Y);
     }
