@@ -18,7 +18,7 @@ fn pill(theme: &Theme, w: f32) -> Node {
         height: Val::Px(theme.button_h),
         padding: UiRect::horizontal(Val::Px(theme.button_h * 0.5)),
         align_items: AlignItems::Center,
-        justify_content: JustifyContent::FlexEnd,
+        justify_content: if theme.caps_buttons { JustifyContent::FlexEnd } else { JustifyContent::Center },
         border_radius: BorderRadius::MAX,
         ..default()
     }
@@ -41,12 +41,12 @@ pub fn kit_toggle(theme: &Theme, s: &str, on: bool, w: f32) -> impl Bundle {
 
 pub(super) fn paint(
     theme: Res<Theme>,
-    states: Query<&WidgetState>,
+    states: Query<(&WidgetState, Option<&Toggle>)>,
     mut labels: Query<(&ChildOf, &mut SpriteText), With<KitLabel>>,
 ) {
     for (parent, mut t) in &mut labels {
-        let disabled = states.get(parent.parent()).is_ok_and(|s| *s == WidgetState::Disabled);
-        let want = if disabled { theme.text_off } else { theme.kit_text_on };
+        let (disabled, on) = states.get(parent.parent()).map_or((false, false), |(s, t)| (*s == WidgetState::Disabled, t.is_some_and(|t| t.on)));
+        let want = if disabled { theme.text_off } else if on { theme.text_on } else { theme.kit_text_on };
         if t.color != want {
             t.color = want;
         }

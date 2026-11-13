@@ -1,0 +1,214 @@
+#!/usr/bin/env bash
+# agent-cargo: run cargo under the build policy that agent sessions share on
+# one machine (AGENTS.md, "Builds"). Not used by CI.
+#
+#   tools/agent-cargo [--heavy|--light|--check] [--dry-run] <cargo args...>
+#   tools/agent-cargo --bench [--dry-run] <command...>   (not cargo; see below)
+#
+# Policy: low priority (renice 19), one build per lock class at a time (flock),
+# `--jobs 2`, CARGO_INCREMENTAL=0, CARGO_PROFILE_DEV_DEBUG=0.
+#
+#   --heavy   lock heavy.lock; anything compiling sta64 or a Bevy crate. A second
+#             slot, heavy2.lock, is allowed while no original-game bench session
+#             runs: heavy.lock is tried without waiting; if it is busy and
+#             bench.lock can be taken (and is released at once), wait on
+#             heavy2.lock; otherwise wait on heavy.lock.
+#   --light   lock light.lock, else light2.lock (two light builds at once)
+#   --bench   for whoever runs an original-game bench session: takes bench.lock
+#             (shared, so up to the bench's own session limit can hold it) and
+#             runs <command...> (not cargo) under it. Hold it for as long as
+#             the session lives, e.g.
+#               tools/agent-cargo --bench ./a2test run hud
+#             While any holder exists, --heavy builds get no second slot.
+#   --check   lock check.lock and CARGO_TARGET_DIR=<main checkout>/.claude/target-check
+#   (none)    inferred: `-p sta64` or any crate depending on bevy, or no
+#             `-p` at all => heavy; `check --workspace` => check; else light
+#
+# Environment:
+#   STA64_LOCK_DIR    lock directory (default <main checkout>/.claude/locks)
+#   STA64_LOCK_WAIT   seconds to wait for a lock (default 540: agent tool
+#                     calls time out at 10 minutes). On timeout: prints
+#                     LOCK-BUSY, exits 75; wait and retry.
+#   STA64_SCCACHE=0   do not use sccache even if it is on PATH
+#   SCCACHE_DIR       default ~/.cache/sta64-sccache
+#   SCCACHE_CACHE_SIZE default 20G
+#   SCCACHE_SERVER_PORT default 4229 (not sccache's 4226, so a server someone
+#                     else runs with other settings is never reused)
+#   STA64_MOLD=1      link with mold (opt-in, never default; needs mold on PATH)
+#
+# Without flock or renice (macOS, Windows shells, minimal containers) those
+# steps are skipped and cargo still runs with the env and jobs settings.
+# --dry-run prints the resolved class, lock, env and command and runs nothing.
+
+set -u
+
+dry=0
+class=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --heavy) class=heavy ;;
+    --light) class=light ;;
+    --check) class=check ;;
+    --bench) class=bench ;;
+    --dry-run) dry=1 ;;
+    --help|-h) sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) break ;;
+  esac
+  shift
+done
+[ $# -gt 0 ] || { echo "agent-cargo: no cargo arguments (try --help)" >&2; exit 2; }
+
+# Main checkout: worktrees share the git common dir, whose parent is the main
+# working tree (a bare/odd layout falls back to the current top level).
+common=$(cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd -P) || common=""
+if [ -n "$common" ] && [ "$(basename "$common")" = ".git" ]; then
+  main_root=$(dirname "$common")
+else
+  main_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+fi
+lock_dir=${STA64_LOCK_DIR:-$main_root/.claude/locks}
+wait_s=${STA64_LOCK_WAIT:-540}
+case "$wait_s" in ''|*[!0-9]*) echo "agent-cargo: STA64_LOCK_WAIT must be whole seconds" >&2; exit 2 ;; esac
+
+# Parse the cargo arguments (only before a literal `--`).
+sub=""; workspace=0; has_jobs=0; no_pkg=1; heavy_pkg=0
+heavy_crates=" sta64 "
+here=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+for f in "$here"/Cargo.toml "$here"/*/Cargo.toml "$here"/crates/*/Cargo.toml; do
+  [ -f "$f" ] || continue
+  if grep -Eq '^[[:space:]]*(bevy[A-Za-z0-9_-]*[[:space:]]*(=|\.)|\[(dev-|build-)?dependencies\.bevy)' "$f" 2>/dev/null; then
+    # the first `name =` is the package name while [package] comes first
+    n=$(sed -n 's/^name[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$f" | head -n 1)
+    [ -n "$n" ] && heavy_crates="$heavy_crates$n "
+  fi
+done
+is_heavy() { set -- "${1%%[@:]*}"; case "$heavy_crates" in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+
+want_pkg=0
+skip=0
+for a in "$@"; do
+  [ "$a" = "--" ] && break
+  if [ "$skip" = 1 ]; then skip=0; continue; fi
+  if [ "$want_pkg" = 1 ]; then
+    want_pkg=0; no_pkg=0; is_heavy "$a" && heavy_pkg=1; continue
+  fi
+  case "$a" in
+    +*) ;;
+    --color|--config|-C|-Z|--explain) [ -z "$sub" ] && skip=1 ;;
+    -p|--package) want_pkg=1 ;;
+    --package=*) no_pkg=0; is_heavy "${a#--package=}" && heavy_pkg=1 ;;
+    -p?*) no_pkg=0; is_heavy "${a#-p}" && heavy_pkg=1 ;;
+    --workspace|--all) workspace=1 ;;
+    -j|--jobs|-j?*|--jobs=*) has_jobs=1 ;;
+    -*) ;;
+    *) [ -z "$sub" ] && sub=$a ;;
+  esac
+done
+
+if [ -z "$class" ]; then
+  if [ "$workspace" = 1 ] && { [ "$sub" = check ] || [ "$sub" = c ]; }; then class=check
+  elif [ "$heavy_pkg" = 1 ] || [ "$workspace" = 1 ] || [ "$no_pkg" = 1 ]; then class=heavy
+  else class=light
+  fi
+fi
+
+args=("$@")
+
+# Environment for this invocation only.
+# CARGO_BUILD_JOBS is `--jobs 2` without touching the arguments (after `--`
+# they would reach the test binary); an explicit -j/--jobs wins.
+envs=(CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0)
+[ "$has_jobs" = 0 ] && envs+=(CARGO_BUILD_JOBS=2)
+[ "$class" = check ] && envs+=("CARGO_TARGET_DIR=$main_root/.claude/target-check")
+if [ "$class" = bench ]; then envs=(STA64_BENCH_LOCK=1); fi
+
+sccache_on=0
+if [ "$class" != bench ] && [ "${STA64_SCCACHE:-1}" != 0 ] && [ -z "${RUSTC_WRAPPER:-}" ] && command -v sccache >/dev/null 2>&1; then
+  sccache_on=1
+  envs+=(RUSTC_WRAPPER=sccache "SCCACHE_DIR=${SCCACHE_DIR:-$HOME/.cache/sta64-sccache}" "SCCACHE_CACHE_SIZE=${SCCACHE_CACHE_SIZE:-20G}"
+    "SCCACHE_SERVER_PORT=${SCCACHE_SERVER_PORT:-4229}")  # own server: a running one on the default port would ignore these settings
+fi
+if [ "$class" != bench ] && [ "${STA64_MOLD:-0}" = 1 ]; then
+  if [ "$(uname -s)" != Linux ]; then
+    echo "agent-cargo: STA64_MOLD=1 is Linux-only; linking normally" >&2
+  elif [ -n "${CARGO_ENCODED_RUSTFLAGS:-}" ]; then
+    echo "agent-cargo: CARGO_ENCODED_RUSTFLAGS is set and wins; mold not applied" >&2
+  elif command -v mold >/dev/null 2>&1; then
+    envs+=("RUSTFLAGS=${RUSTFLAGS:+$RUSTFLAGS }-C link-arg=-fuse-ld=mold")
+  else
+    echo "agent-cargo: STA64_MOLD=1 but mold is not on PATH; linking normally" >&2
+  fi
+fi
+
+have_flock=0; command -v flock >/dev/null 2>&1 && have_flock=1
+have_renice=0; command -v renice >/dev/null 2>&1 && have_renice=1
+
+if [ "$dry" = 1 ]; then
+  echo "class:  $class"
+  if [ "$have_flock" = 1 ]; then
+    if [ "$class" = light ]; then echo "lock:   $lock_dir/light.lock (else $lock_dir/light2.lock), wait ${wait_s}s"
+    elif [ "$class" = heavy ]; then echo "lock:   $lock_dir/heavy.lock; if busy and $lock_dir/bench.lock is free, wait ${wait_s}s on $lock_dir/heavy2.lock; else wait ${wait_s}s on heavy.lock"
+    elif [ "$class" = bench ]; then echo "lock:   $lock_dir/bench.lock (shared), wait ${wait_s}s"
+    else echo "lock:   $lock_dir/$class.lock, wait ${wait_s}s"; fi
+  else echo "lock:   none (flock not found)"; fi
+  [ "$have_renice" = 1 ] && echo "nice:   renice -n 19" || echo "nice:   none (renice not found)"
+  echo "sccache: $([ "$sccache_on" = 1 ] && echo on || echo off)"
+  for e in "${envs[@]}"; do echo "env:    $e"; done
+  if [ "$class" = bench ]; then printf 'cmd:   '; else printf 'cmd:    cargo'; fi
+  printf ' %q' "${args[@]}"; echo
+  exit 0
+fi
+
+[ "$have_renice" = 1 ] && [ "$class" != bench ] && renice -n 19 -p $$ >/dev/null 2>&1
+
+if [ "$have_flock" = 1 ]; then
+  mkdir -p "$lock_dir" || { echo "agent-cargo: cannot create $lock_dir" >&2; exit 2; }
+  if [ "$class" = light ]; then
+    exec 9>"$lock_dir/light.lock" || { echo "agent-cargo: cannot open lock in $lock_dir" >&2; exit 2; }
+    if ! flock -n 9; then
+      exec 9>"$lock_dir/light2.lock" || { echo "agent-cargo: cannot open lock in $lock_dir" >&2; exit 2; }
+      flock -w "$wait_s" 9 || { echo LOCK-BUSY; exit 75; }
+    fi
+  elif [ "$class" = heavy ]; then
+    exec 9>"$lock_dir/heavy.lock" || { echo "agent-cargo: cannot open lock in $lock_dir" >&2; exit 2; }
+    if ! flock -n 9; then
+      # Busy: a second slot only while no bench session holds bench.lock.
+      exec 8>"$lock_dir/bench.lock" || { echo "agent-cargo: cannot open lock in $lock_dir" >&2; exit 2; }
+      if flock -n 8; then
+        flock -u 8; exec 8>&-
+        exec 9>"$lock_dir/heavy2.lock" || { echo "agent-cargo: cannot open lock in $lock_dir" >&2; exit 2; }
+      else
+        exec 8>&-
+      fi
+      # One wait only (on heavy2 or heavy), so a call stays under 10 minutes.
+      flock -w "$wait_s" 9 || { echo LOCK-BUSY; exit 75; }
+    fi
+  elif [ "$class" = bench ]; then
+    exec 9>"$lock_dir/bench.lock" || { echo "agent-cargo: cannot open lock in $lock_dir" >&2; exit 2; }
+    flock -s -w "$wait_s" 9 || { echo LOCK-BUSY; exit 75; }
+  else
+    exec 9>"$lock_dir/$class.lock" || { echo "agent-cargo: cannot open lock in $lock_dir" >&2; exit 2; }
+    flock -w "$wait_s" 9 || { echo LOCK-BUSY; exit 75; }
+  fi
+fi
+
+# The sccache server is started inside the lock but without its descriptor,
+# so a daemon outliving cargo cannot keep the lock. (A server that dies
+# mid-build is restarted by rustc with fd 9 closed too, see below.)
+if [ "$sccache_on" = 1 ]; then
+  env "${envs[@]}" sccache --start-server >/dev/null 2>&1 9>&- || true
+fi
+
+# Run cargo as a child with the lock descriptor closed: only this script holds
+# the lock, so nothing cargo starts (rustc, build scripts, a running game,
+# daemons) can keep it after cargo exits. Signals are forwarded.
+if [ "$class" = bench ]; then
+  env "${envs[@]}" "${args[@]}" 9>&- &
+else
+  env "${envs[@]}" cargo "${args[@]}" 9>&- &
+fi
+pid=$!
+trap 'kill -TERM "$pid" 2>/dev/null' TERM INT HUP
+wait "$pid"; rc=$?
+if kill -0 "$pid" 2>/dev/null; then wait "$pid"; rc=$?; fi
+exit "$rc"

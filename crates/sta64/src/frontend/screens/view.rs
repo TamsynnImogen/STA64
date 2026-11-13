@@ -12,7 +12,7 @@ use super::data::{Browse, ScreenData, SelectedMod, SettingKey, SetupDraft, Setti
 use super::{Col, ListScroll, Screen};
 use crate::app::AppState;
 use crate::ui::i18n::{tr, trf};
-use crate::ui::theme::{Theme, button, disabled_button, label, list, panel, slider, toggle};
+use crate::ui::theme::{Theme, button, disabled_button, kit_panel, label, list, slider, toggle};
 
 /// A screen's root node: everything of the screen hangs under it.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,7 +106,7 @@ fn frame(commands: &mut Commands, ctx: &Ctx, screen: Screen, camera: Option<Enti
         DespawnOnExit(AppState::FrontEnd),
         // Clear: the menu scene (UI-06) shows through.
         Node { width: Val::Percent(100.0), height: Val::Percent(100.0), align_items: AlignItems::Center, justify_content: JustifyContent::Center, ..default() },
-        children![(Node { width: Val::Px(width), flex_direction: FlexDirection::Column, ..default() }, children![panel(ctx.theme, title, content)])],
+        children![(Node { width: Val::Px(width), flex_direction: FlexDirection::Column, ..default() }, children![kit_panel(ctx.theme, title, content)])],
     ));
     if let Some(c) = camera {
         root.insert(UiTargetCamera(c));
