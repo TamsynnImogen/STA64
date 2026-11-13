@@ -67,7 +67,7 @@ fn _every_sim_field_is_decided(s: &Sim) {
     let Sim {
         tick: _, rng: _, units: _, labels: _, players: _, ai_seats: _, content: _, starts: _, regions: _,
         bounds: _, confinement: _, perception: _, events: _, weapons: _, movement: _, economy: _,
-        production: _, victory: _, specials: _, autonomy: _, start_effects: _, nav: _, subsystems: _, scripted: _, switches: _, team_changes: _, appearance_factions: _, approach_warp: _, engagement: _, watchdog: _,
+        production: _, victory: _, specials: _, autonomy: _, start_effects: _, nav: _, subsystems: _, attrs: _, scripted: _, switches: _, team_changes: _, approach_warp: _, engagement: _, watchdog: _,
     } = s;
 }
 
@@ -216,6 +216,9 @@ impl Sim {
         if !self.switches.is_empty() {
             self.switches.hash_into(&mut h);
         }
+        if !self.attrs.is_empty() {
+            self.attrs.hash_into(&mut h);
+        }
         h.0
     }
 
@@ -356,6 +359,14 @@ impl Sim {
                 for (id, r) in self.subsystems.to_rows() {
                     row(Some(id), "subsystems (off bits, damage)", format!("{:#04x}, {:?}", r.off, r.damage.map(|d| fx(Fixed::from_bits(d)))));
                 }
+                // SIM-54: itemised mission-set names and races.
+                let a = self.attrs.view();
+                for (id, r) in &a.races {
+                    row(Some(*id), "race (script)", format!("{r:?}"));
+                }
+                for (p, r) in &a.player_races {
+                    row(None, "player race (script)", format!("{} {r:?}", p.0));
+                }
             }
             "economy" => {
                 for e in self.units.iter() {
@@ -443,6 +454,7 @@ mod tests {
             ("flags", Box::new(|s| s.units.iter_mut().next().unwrap().flags = crate::view::UnitFlags::default()), "combat"),
             ("crew", Box::new(|s| s.units.iter_mut().next().unwrap().crew = Some([Fixed::ONE; 2])), "combat"),
             ("subsystems", Box::new(|s| { let id = s.units.iter().next().unwrap().id; s.subsystems.set_off_for_test(id); }), "combat"),
+            ("script race", Box::new(|s| { let id = s.units.iter().next().unwrap().id; s.attrs.set_race(id, "x"); }), "combat"),
             ("owner", Box::new(|s| s.units.iter_mut().next().unwrap().owner = PlayerId(1)), "roster"),
             ("label", Box::new(|s| { let id = s.units.iter().next().unwrap().id; s.labels.insert(id, "x".into()); }), "roster"),
             ("progress", Box::new(|s| s.units.iter_mut().next().unwrap().progress = Some(Fixed::from_int(1))), "economy"),

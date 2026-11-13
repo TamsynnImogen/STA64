@@ -250,6 +250,40 @@ pub enum Edit {
     /// Mission `SetSpecialForcesFlag` (SIM-58): the flag the original's script
     /// order gate, assist and AI planner read. Craft only. Appended tag 37.
     SpecialForces(EntityId, bool),
+    /// Roots `Entity.maxHull =` (SIM-54): this unit's maximum hull. A negative
+    /// value is accepted and ignored (the original keeps the old maximum);
+    /// zero (kept as the least positive maximum, so the unit stays hittable) and large values are accepted, capped at 1e9. The
+    /// current hull is not rescaled or clamped, so it may exceed the maximum
+    /// (read from the executable, static). Dying units and non-units are
+    /// rejected. SCRIPT/BENCH only. Appended tag 38.
+    MaxHull(EntityId, Fixed),
+    /// Roots `Entity.maxCrew =` (SIM-54): this unit's maximum crew, floored at
+    /// 0 and capped at 1e9; the current crew is clamped down to it and never
+    /// raised. Rejected for a unit with no crew pool. SCRIPT/BENCH only.
+    /// Appended tag 39.
+    MaxCrew(EntityId, Fixed),
+    /// Roots `Entity.hullValue =` (SIM-54; A2 `SetCurrentHealth` and Roots `Entity.hull =` still send
+    /// [`Edit::Hull`], which clamps): the unit's
+    /// current hull in points, with no upper clamp (it may exceed the maximum).
+    /// An immortal unit ignores a lower value; zero or less leaves the least
+    /// positive hull (the original does not destroy at 0, the next hit does).
+    /// Rejected for a dying unit. SCRIPT/BENCH only. Appended tag 40.
+    HullValue(EntityId, Fixed),
+    /// Roots `Entity.maxShields =` (SIM-54): only the maximum, floored at 0 and
+    /// capped at 1e9; the current shield pools are not touched (Roots writes
+    /// the field raw; A2 `SetMaxShields` is [`Edit::MaxShields`], which sets
+    /// both). SCRIPT/BENCH only. Appended tag 41.
+    MaxShieldsKeep(EntityId, Fixed),
+    /// A2 `SetRace` / Roots `Entity.race =` (SIM-54): this unit's race (the
+    /// unit only; team, tech tree and AI are unchanged). The name must be a
+    /// race some unit definition carries, matched case-insensitively and stored as the content spells it; anything
+    /// else is rejected. SCRIPT/BENCH only. Appended tag 42.
+    UnitRace(EntityId, String),
+    /// Roots `Player.race =` (SIM-54): the seat's race, with the same name
+    /// rule as [`Edit::UnitRace`]; rejected for a seat the sim does not have.
+    /// The sim keeps and shows it; no rule reads it yet. SCRIPT/BENCH only.
+    /// Appended tag 43.
+    PlayerRace(PlayerId, String),
 }
 
 /// The largest turn rate (radians per second) a script may set.
@@ -410,6 +444,24 @@ mod tests {
             (28, Edit::Position(id, Vec3::from_f32([1.0, 2.0, -3.0]))),
             (29, Edit::Heading(id, (Fixed::ONE, Fixed::ZERO))),
             (30, Edit::AngularVelocity(id, Fixed::ONE)),
+        ];
+        for (tag, edit) in edits {
+            let bytes = postcard::to_allocvec(&edit).unwrap();
+            assert_eq!(bytes[0], tag, "{edit:?}");
+            assert_eq!(postcard::from_bytes::<Edit>(&bytes).unwrap(), edit);
+        }
+    }
+
+    #[test]
+    fn attribute_edits_append_tags_38_to_43() {
+        let id = EntityId(1);
+        let edits = [
+            (38, Edit::MaxHull(id, Fixed::ONE)),
+            (39, Edit::MaxCrew(id, Fixed::ONE)),
+            (40, Edit::HullValue(id, Fixed::ONE)),
+            (41, Edit::MaxShieldsKeep(id, Fixed::ONE)),
+            (42, Edit::UnitRace(id, "x".into())),
+            (43, Edit::PlayerRace(PlayerId(0), "x".into())),
         ];
         for (tag, edit) in edits {
             let bytes = postcard::to_allocvec(&edit).unwrap();

@@ -19,23 +19,26 @@ impl Economy {
             .and_then(|i| self.personnel[i].2)
     }
 
-    /// `Edit::MaxOfficers`: only a seat whose officer limit is initialized.
+    /// `Edit::MaxOfficers` for a seat: the original writes the field raw
+    /// (read from the executable, static), so a seat whose data gave no limit
+    /// takes the script's value as its limit.
     pub(crate) fn edit_officer_limit(&mut self, player: PlayerId, value: Fixed) -> bool {
-        let Ok(i) = self.personnel.binary_search_by_key(&player, |r| r.0) else { return false };
-        if self.personnel[i].2.is_none() {
-            return false;
+        let value = value.max(Fixed::ZERO).min(Fixed::from_int(1_000_000_000));
+        match self.personnel.binary_search_by_key(&player, |r| r.0) {
+            Ok(i) => self.personnel[i].2 = Some(value),
+            Err(i) => self.personnel.insert(i, (player, None, Some(value))),
         }
-        self.personnel[i].2 = Some(value.max(Fixed::ZERO).min(Fixed::from_int(1_000_000_000)));
         true
     }
 
-    /// `Edit::TeamCrew`: only a seat whose crew stock is initialized.
+    /// `Edit::TeamCrew` for a seat: a raw write in the original (read from the
+    /// executable, static), so a seat with no stock yet starts one.
     pub(crate) fn edit_team_crew(&mut self, player: PlayerId, value: Fixed) -> bool {
-        let Ok(i) = self.personnel.binary_search_by_key(&player, |r| r.0) else { return false };
-        if self.personnel[i].1.is_none() {
-            return false;
+        let value = value.max(Fixed::ZERO).min(Fixed::from_int(1_000_000_000));
+        match self.personnel.binary_search_by_key(&player, |r| r.0) {
+            Ok(i) => self.personnel[i].1 = Some(value),
+            Err(i) => self.personnel.insert(i, (player, Some(value), None)),
         }
-        self.personnel[i].1 = Some(value.max(Fixed::ZERO).min(Fixed::from_int(1_000_000_000)));
         true
     }
 

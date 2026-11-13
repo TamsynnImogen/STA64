@@ -37,6 +37,9 @@ pub struct WorldView {
     /// real owner; this never grants command authority or sensor sharing.
     #[serde(default)]
     pub perceived_owners: Vec<(EntityId, PlayerId)>,
+    /// Mission-set names and races (SIM-54); empty when nothing was set.
+    #[serde(default)]
+    pub attrs: crate::attrs::AttrsView,
 }
 
 impl WorldView {

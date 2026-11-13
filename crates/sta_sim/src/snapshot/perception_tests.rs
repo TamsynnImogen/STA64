@@ -10,13 +10,31 @@ fn live() -> (Sim, EntityId, EntityId) {
 }
 
 fn split(bytes: &[u8]) -> (Body, Option<(Vec3, Vec3)>, BoundaryRec, PerceptionRec) {
-    let segments = chain::split(bytes);
-    (
-        postcard::from_bytes(&segments[2]).unwrap(),
-        postcard::from_bytes(&segments[3]).unwrap(),
-        postcard::from_bytes(&segments[4]).unwrap(),
-        postcard::from_bytes(&segments[5]).unwrap(),
-    )
+    let (_, rest): (Provenance, _) = postcard::take_from_bytes(&bytes[HEADER..]).unwrap();
+    let (body, rest) = postcard::take_from_bytes(rest).unwrap();
+    let (bounds, rest) = postcard::take_from_bytes(rest).unwrap();
+    let (boundary, rest) = postcard::take_from_bytes(rest).unwrap();
+    let (perception, rest) = postcard::take_from_bytes(rest).unwrap();
+    let (personnel, rest): (PersonnelRec, _) = postcard::take_from_bytes(rest).unwrap();
+    assert!(personnel.rows.is_empty());
+    let (_, rest): (UnitCrewRec, _) = postcard::take_from_bytes(rest).unwrap();
+    let (effects, rest): (StartEffectsRec, _) = postcard::take_from_bytes(rest).unwrap();
+    assert!(effects.rows.is_empty());
+    let (autonomy, rest): (crate::autonomy::AutonomyWire, _) = postcard::take_from_bytes(rest).unwrap();
+    assert!(autonomy.rows.is_empty());
+    let (subsystems, rest): (SubsystemsRec, _) = postcard::take_from_bytes(rest).unwrap();
+    assert!(subsystems.rows.is_empty());
+    let (attack, rest): (AttackRec, _) = postcard::take_from_bytes(rest).unwrap();
+    assert!(attack.warp.is_empty());
+    let (watch, rest): (WatchRec, _) = postcard::take_from_bytes(rest).unwrap();
+    assert!(watch.rows.is_empty());
+    let (scripted, rest): (ScriptedRec, _) = postcard::take_from_bytes(rest).unwrap();
+    assert!(scripted.rows.is_empty());
+    let (switches, rest): (SwitchesRec, _) = postcard::take_from_bytes(rest).unwrap();
+    assert!(switches.rows.is_empty());
+    let (_, rest): (crate::attrs::AttrsRec, _) = postcard::take_from_bytes(rest).unwrap();
+    assert!(rest.is_empty());
+    (body, bounds, boundary, perception)
 }
 
 fn join(
@@ -26,12 +44,23 @@ fn join(
     boundary: &BoundaryRec,
     perception: &PerceptionRec,
 ) -> Vec<u8> {
-    let mut segments = chain::split(bytes);
-    segments[2] = chain::enc(body);
-    segments[3] = chain::enc(&bounds);
-    segments[4] = chain::enc(boundary);
-    segments[5] = chain::enc(perception);
-    chain::join(&segments)
+    let mut out = bytes[..HEADER].to_vec();
+    out.extend(postcard::to_allocvec(&Provenance::default()).unwrap());
+    out.extend(postcard::to_allocvec(body).unwrap());
+    out.extend(postcard::to_allocvec(&bounds).unwrap());
+    out.extend(postcard::to_allocvec(boundary).unwrap());
+    out.extend(postcard::to_allocvec(perception).unwrap());
+    out.extend(postcard::to_allocvec(&PersonnelRec { version: 1, rows: Vec::new() }).unwrap());
+    out.extend(postcard::to_allocvec(&UnitCrewRec { version: 1, rows: Vec::new() }).unwrap());
+    out.extend(postcard::to_allocvec(&StartEffectsRec { version: 1, rows: Vec::new() }).unwrap());
+    out.extend(postcard::to_allocvec(&crate::autonomy::AutonomyWire { version: 1, rows: Vec::new() }).unwrap());
+    out.extend(postcard::to_allocvec(&SubsystemsRec { version: 1, rows: Vec::new() }).unwrap());
+    out.extend(postcard::to_allocvec(&AttackRec { version: 1, warp: Vec::new(), engagement: Default::default() }).unwrap());
+    out.extend(postcard::to_allocvec(&WatchRec { version: 1, rows: Vec::new() }).unwrap());
+    out.extend(postcard::to_allocvec(&ScriptedRec { version: 1, rows: Vec::new() }).unwrap());
+    out.extend(postcard::to_allocvec(&SwitchesRec { version: 1, rows: Vec::new() }).unwrap());
+    out.extend(postcard::to_allocvec(&crate::attrs::AttrsRec { version: 1, races: Vec::new(), player_races: Vec::new() }).unwrap());
+    out
 }
 
 #[test]
