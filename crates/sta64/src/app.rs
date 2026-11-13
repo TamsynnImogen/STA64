@@ -137,6 +137,9 @@ pub struct LaunchConfig {
     /// `--install-content`: with `--headless --frames`, build the scene on the install's
     /// content and draw it with the map view's renderers (TOOL-17).
     pub install_content: bool,
+    /// `--perf <out.json>` and the `--perf-*` options: a performance run of the install's
+    /// map view (TOOL-18, docs/TESTBENCH.md "Performance runs").
+    pub perf: Option<crate::bench::perf::PerfOpts>,
     /// Arguments not understood, kept for the warning.
     pub unknown: Vec<String>,
 }
@@ -171,6 +174,8 @@ Test bench (docs/TESTBENCH.md):
   --frame-size <WxH>       frame size (default: 640x360)
   --install-content        with --headless --frames: the install's own content (--install-root, --mod): the
                            scene's Map=, its units' models, sky, nebulae, planets and effects (no window, no audio)
+  --perf <out.json>        with --headless --install-content: a performance run of the scene's map (docs/TESTBENCH.md,
+                           Performance runs; --perf-frames, --perf-warmup, --perf-reps, --perf-variants, --perf-camera)
   --postfx <a,b,..>        opt-in post effects: bloom smaa fxaa vignette chromatic exposure aces reinhard cinematic (F8 cycles)
 
   --lcars-ui               use the LCARS interface instead of the game/mod stock profile
@@ -253,6 +258,12 @@ impl LaunchConfig {
                 },
                 "--postfx" => cfg.postfx.extend(value(&mut args)),
                 "--install-content" => cfg.install_content = true,
+                "--perf" | "--perf-frames" | "--perf-warmup" | "--perf-reps" | "--perf-variants" | "--perf-camera" | "--perf-systems" | "--perf-no-sync" => {
+                    let v = if a == "--perf-systems" || a == "--perf-no-sync" { None } else { value(&mut args) };
+                    if let Err(e) = cfg.perf.get_or_insert_with(Default::default).set(&a, v.as_deref()) {
+                        cfg.unknown.push(e);
+                    }
+                }
                 "--frame-dir" => cfg.frame_dir = value(&mut args).map(PathBuf::from),
                 "--frame-size" => match value(&mut args).and_then(|v| v.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))) {
                     Some(wh) => cfg.frame_size = Some(wh),

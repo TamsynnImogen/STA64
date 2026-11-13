@@ -786,6 +786,46 @@ before.
    or `Fault::Inject` (`crates/sta_net/tests/lockstep.rs`, "NET-06") around
    the command and entity the report names, and fix the sim.
 
+## Performance runs
+
+TOOL-18. Where a frame's time goes, measured on the install's own map, offscreen:
+
+```sh
+tools/agent-cargo --heavy build --release -p sta64 --features perf-trace   # perf-trace: per-system times
+sta-bench perf 4alliance --install "/path/to/Star Trek Armada II" \
+    --camera "orbit 0 0 0 30 40 900" --profile refit,stock --sizes 1920x1080,3440x1440
+```
+
+`sta-bench perf <map|scene.ini>` starts one `sta64 --headless --install-content --perf` per profile
+(`STA64_RENDER_PROFILE`) and size and writes `$XDG_DATA_HOME/sta64/bench/perf/<label>/` (never into
+a checkout): a `<profile>-<WxH>.json` per run, `results.md` over all of them. Headless as ever: an
+offscreen image, no window, no display server, no audio, no screen capture; the frame loop is not
+paced (no vsync, no sleep). The HUD and menus are not in the picture (a headless app has none).
+
+What one run reports (`--perf-frames`, `--perf-warmup`, `--perf-reps`, `--perf-camera still|sweep`):
+
+- frame time (mean, p50, p95, max) with the GPU waited for at the end of every frame (`--perf-no-sync`
+  leaves that out), and the main world's CPU time;
+- GPU time per render pass from Bevy's render diagnostics (wgpu timestamp queries; the report says
+  when the adapter has none, and falls back to the differences below);
+- CPU time per system and schedule with `--perf-systems` (a build with `--features perf-trace`, which
+  turns on Bevy's tracing spans; spans cost a little, so read these as shares, not as absolutes);
+- entities, visible meshes, triangles drawn, visible rocks, whether the shadow pass is on.
+
+Cost is attributed **by difference**: `--variants base,no-rocks,no-nebula+no-rocks` runs each variant
+(a `+` list of toggles) in interleaved rounds (base, a, b, base, a, b, ...) so a load that changes
+while it runs touches every variant alike; the table gives each variant's median of round means, the
+spread (min-max) to read it against, and the difference from `base`. Toggles: `no-rocks`,
+`no-planets`, `no-nebula`, `no-sky`, `no-shadows`, `no-fog`, `std-hulls` (Bevy's PBR instead of the
+hull shader), and the quality settings of `render/quality.rs`. Record the machine with every number:
+the report carries the load average at the start and end and the competing processes (other `sta64`
+runs, compilers); on a loaded machine trust the differences, not the absolutes, and run again when
+the spread is wide. Two sizes (1920x1080 against 3440x1440) separate fill-rate from CPU cost: a
+cost that does not change with the pixel count is CPU or vertex work.
+
+Regression guard that does not depend on the machine's speed: the counts tests in
+`sta64/src/render/` (draw items of a rock field, a pass that is skipped when nothing needs it).
+
 ## Sessions and reports
 
 A thin layer over Refit's conventions (`testbench/README.md`, "Which session

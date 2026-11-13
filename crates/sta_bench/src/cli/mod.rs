@@ -8,6 +8,7 @@
 //! sta-bench drive --session ID "<command>"...
 //! sta-bench diff <report-a> <report-b>
 //! sta-bench parity <refit-out> <ours-out> [--tol time=0.1,pos=1,hull=1] | --names
+//! sta-bench perf <map|scene.ini> --install <root> [--mod <name>] [--profile refit,stock] [--sizes WxH,..]
 //! sta-bench pair <pair> --game a2|roots [--refit-out DIR] [--install DIR] [--fake] [--out DIR]
 //! sta-bench capture list | check <folder|latest> [--install <root> [--mod <name>]] [--fake]
 //! sta-bench desync <a.star> <b.star> [--install <root> [--mod <name>]] [--fake] [--json <file|->]
@@ -23,6 +24,7 @@ mod diff;
 mod jobs;
 mod pair;
 mod parity;
+mod perf;
 mod session;
 mod tier2;
 
@@ -64,6 +66,15 @@ Usage: sta-bench <command> [options]
       --history N                  turns of commands to list before the tick (default 3)
       --max-rows N                 differing rows listed per section (default 64)
       --turn-ticks N               ticks per turn (default: read from the replays' digest spacing)
+  perf <map|scene.ini>             performance run of the install's map view (headless sta64 per profile and size):
+                                   frame, CPU and GPU times and the cost of what a variant leaves out, as a table
+      --install <root> [--mod <name>]  the content drawn (required)
+      --camera \"orbit x y z yaw pitch distance\"  the view of a map name (a scene .ini carries its own)
+      --profile refit,stock        render profiles (default both); --sizes 1920x1080,3440x1440 (default both)
+      --measure N --warmup N --reps N  frames measured, frames to settle, interleaved rounds (300, 90, 3)
+      --variants base,no-rocks,a+b  what to compare (default the attribution set; names in docs/TESTBENCH.md)
+      --perf-camera still|sweep    a fixed camera, or one swinging about its target; --systems per-system CPU times
+      --label NAME                 results in $XDG_DATA_HOME/sta64/bench/perf/<label>/ (or --out DIR)
   diff <report-a> <report-b>       compare report directories; exit 1 when they differ
   parity <refit-out> <ours-out>    Refit's Scene.marks/Scene.objects.jsonl against our marks/objects.jsonl
                                    (run directories, or their logs/): objects by name, marks in sim seconds
@@ -117,6 +128,16 @@ pub(crate) struct Opts {
     pub history: Option<u32>,
     pub max_rows: Option<usize>,
     pub turn_ticks: Option<u32>,
+    pub camera: Option<String>,
+    pub profile: Option<String>,
+    pub sizes: Option<String>,
+    pub measure: Option<u32>,
+    pub warmup: Option<u32>,
+    pub reps: Option<u32>,
+    pub variants: Option<String>,
+    pub perf_camera: Option<String>,
+    pub systems: bool,
+    pub label: Option<String>,
     pub rest: Vec<String>,
 }
 
@@ -159,6 +180,16 @@ fn parse(args: Vec<String>) -> Result<Opts, String> {
             "--history" => o.history = Some(val(&a)?.parse().map_err(|_| "--history: a number of turns")?),
             "--max-rows" => o.max_rows = Some(val(&a)?.parse().map_err(|_| "--max-rows: a number")?),
             "--turn-ticks" => o.turn_ticks = Some(val(&a)?.parse().map_err(|_| "--turn-ticks: a number of ticks")?),
+            "--camera" => o.camera = Some(val(&a)?),
+            "--profile" => o.profile = Some(val(&a)?),
+            "--sizes" => o.sizes = Some(val(&a)?),
+            "--measure" => o.measure = Some(val(&a)?.parse().map_err(|_| "--measure: a number of frames")?),
+            "--warmup" => o.warmup = Some(val(&a)?.parse().map_err(|_| "--warmup: a number of frames")?),
+            "--reps" => o.reps = Some(val(&a)?.parse().map_err(|_| "--reps: a number")?),
+            "--variants" => o.variants = Some(val(&a)?),
+            "--perf-camera" => o.perf_camera = Some(val(&a)?),
+            "--systems" => o.systems = true,
+            "--label" => o.label = Some(val(&a)?),
             "--timeout" => o.timeout = val(&a)?.parse().map_err(|_| "--timeout: seconds")?,
             _ if a.starts_with("--") => return Err(format!("unknown option {a}")),
             _ => o.rest.push(a),
@@ -208,6 +239,7 @@ pub fn main(args: Vec<String>) -> i32 {
         "diff" => diff::diff(&o),
         "parity" => parity::parity(&o),
         "pair" => pair::pair(&o),
+        "perf" => perf::perf(&o),
         "capture" => capture::capture_cmd(&o),
         "desync" => desync::desync(&o),
         other => Err(Fail::Usage(format!("unknown command `{other}`"))),

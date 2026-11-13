@@ -198,6 +198,7 @@ impl Plugin for ShadowPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "shadows.wesl");
         app.add_plugins(MaterialPlugin::<ShadowCasterMaterial>::default())
+            .init_resource::<crate::render::quality::RenderQuality>()
             .add_systems(Startup, setup)
             .add_systems(Update, add_proxies)
             .add_systems(
@@ -298,6 +299,7 @@ fn can_shade(frustum: &Frustum, c: Vec3, r: f32, to_key: Vec3) -> bool {
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn update(
     profile: Option<Res<RenderProfile>>,
+    quality: Res<crate::render::quality::RenderQuality>,
     main: Query<&Frustum, MainCamera>,
     lights: Query<(&GlobalTransform, &DirectionalLight), Without<ShadowCamera>>,
     proxies: Query<(&GlobalTransform, &bevy::camera::primitives::Aabb, &InheritedVisibility), (With<ShadowProxy>, Without<ShadowCamera>)>,
@@ -308,7 +310,7 @@ fn update(
 ) {
     let Ok((mut cam, mut tf, mut gt, mut proj)) = camera.single_mut() else { return };
     // Stock parity: only the Refit profile draws ship shadows in gas and on hulls (RND-22).
-    let drawing = profile.is_some_and(|p| *p == RenderProfile::Refit);
+    let drawing = quality.shadows && profile.is_some_and(|p| *p == RenderProfile::Refit);
     let to_key = key_direction(lights.iter().map(|(t, l)| (t.back().as_vec3(), l.illuminance)));
     let fitted = (|| {
         if !drawing {

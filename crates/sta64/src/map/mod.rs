@@ -304,7 +304,7 @@ pub type MainCamera = (With<Camera3d>, Without<BackgroundCamera>);
 
 #[derive(Component)]
 #[require(Propagate<RenderLayers> = Propagate(RenderLayers::layer(BACKGROUND_LAYER)))]
-struct Sky;
+pub(crate) struct Sky;
 
 /// A `background_obj` (suns, background planets, wrecks, gates) at its place in the
 /// map, drawn before the scene.
@@ -322,6 +322,10 @@ struct FpsText;
 /// The map's lights: 0 the key, 1 the fill. Aimed by the map's `dlight` objects.
 #[derive(Component)]
 struct MapLight(usize);
+
+/// An asteroid field's root (its rocks are its descendants); the performance run hides it.
+#[derive(Component)]
+pub(crate) struct AsteroidField;
 
 /// Constant rotation about a local axis (asteroid fields orbit, rocks tumble).
 #[derive(Component)]
@@ -862,6 +866,7 @@ fn rebuild(
                     to_bevy(&Matrix34 { m: o.transform }),
                     Visibility::default(),
                     ChildOf(root),
+                    AsteroidField,
                     Spin { axis: Vec3::Y, speed: orbit },
                 ))
                 .id();
