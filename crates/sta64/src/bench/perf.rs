@@ -81,7 +81,12 @@ impl PerfOpts {
             "--perf-frames" => self.frames = num(v)?,
             "--perf-warmup" => self.warmup = num(v)?,
             "--perf-reps" => self.reps = num(v)?,
-            "--perf-variants" => self.variants = v.unwrap_or("base").split(',').map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()).collect(),
+            "--perf-variants" => {
+                self.variants = v.unwrap_or("").split(',').map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()).collect();
+                if self.variants.is_empty() {
+                    return Err("--perf-variants (needs at least one, e.g. base)".into());
+                }
+            }
             "--perf-camera" => match v {
                 Some(c @ ("still" | "sweep")) => self.camera = c.into(),
                 _ => return Err("--perf-camera (still or sweep)".into()),
@@ -179,6 +184,9 @@ mod span_layer {
             }
         }
         fn on_exit(&self, id: &Id, ctx: Context<'_, S>) {
+            if !RECORDING.load(Ordering::Relaxed) {
+                return;
+            }
             if let Some(span) = ctx.span(id) {
                 let mut ext = span.extensions_mut();
                 let Some(Entered(t)) = ext.remove::<Entered>() else { return };
@@ -240,7 +248,11 @@ struct PerfRun {
     frame_no: u64,
 }
 
-pub(super) fn add(app: &mut App, opts: &PerfOpts) {
+pub(super) fn add(app: &mut App, opts: &PerfOpts, cfg: &LaunchConfig) {
+    if opts.out.is_none() || cfg.unknown.iter().any(|u| u.starts_with("--perf")) {
+        eprintln!("--perf needs an output path and valid --perf-* options: {}", cfg.unknown.join("; "));
+        std::process::exit(2);
+    }
     let mut variants = Vec::new();
     for v in &opts.variants {
         match parse_variant(v) {
@@ -331,7 +343,13 @@ fn apply_variant(
         Option<&crate::render::nebula::NebulaBoards>,
         Option<&crate::map::Sky>,
         Option<&crate::render::planet::PlanetBody>,
-    )>,
+    ), Or<(
+        With<crate::map::AsteroidField>,
+        With<crate::render::nebula::NebulaField>,
+        With<crate::render::nebula::NebulaBoards>,
+        With<crate::map::Sky>,
+        With<crate::render::planet::PlanetBody>,
+    )>>,
     fog: Option<ResMut<crate::render::fog::FogSettings>>,
     hulls: Option<ResMut<crate::render::hulls::HullLighting>>,
     quality: Option<ResMut<crate::render::quality::RenderQuality>>,
@@ -389,7 +407,7 @@ fn apply_variant(
 /// from the scene's pose, so it does not drift), as a player panning does: what is keyed to
 /// the camera's movement (rock materials, shadow fit, culling) is exercised.
 #[allow(clippy::type_complexity)]
-fn sweep(run: Res<PerfRun>, time: Res<Time<Real>>, mut cameras: Query<(&mut Transform, &Camera), (With<Camera3d>, Without<crate::map::BackgroundCamera>)>) {
+fn sweep(run: Res<PerfRun>, mut cameras: Query<(&mut Transform, &Camera), (With<Camera3d>, Without<crate::map::BackgroundCamera>)>) {
     if run.opts.camera != "sweep" {
         return;
     }
@@ -399,10 +417,19 @@ fn sweep(run: Res<PerfRun>, time: Res<Time<Real>>, mut cameras: Query<(&mut Tran
         return;
     }
     let pivot = tf.translation + fwd * (-tf.translation.y / fwd.y);
-    let angle = 0.25 * (time.elapsed_secs() * 0.8).sin();
+    // Phase from the frames of the round, so every round of every variant swings alike.
+    let angle = 0.25 * (run.round.frame_ms.len() as f32 * 0.013).sin();
     let turn = Quat::from_rotation_y(angle);
     tf.translation = pivot + turn * (tf.translation - pivot);
     tf.rotation = turn * tf.rotation;
+}
+
+fn median(sorted: &[f64]) -> f64 {
+    match sorted.len() {
+        0 => 0.0,
+        n if n % 2 == 1 => sorted[n / 2],
+        n => (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0,
+    }
 }
 
 fn percentile(sorted: &[f64], p: f64) -> f64 {
@@ -539,10 +566,15 @@ fn drive(
         let name = adapter.map(|a| format!("{} ({:?})", a.name, a.backend)).unwrap_or_default();
         let ts = device.is_some_and(|d| d.features().contains(bevy::render::settings::WgpuFeatures::TIMESTAMP_QUERY));
         match write_report(&run, &name, ts) {
-            Ok(p) => println!("perf report {}", p.display()),
-            Err(e) => eprintln!("perf report: {e}"),
+            Ok(p) => {
+                println!("perf report {}", p.display());
+                exit.write(AppExit::Success);
+            }
+            Err(e) => {
+                eprintln!("perf report: {e}");
+                exit.write(AppExit::from_code(1));
+            }
         }
-        exit.write(AppExit::Success);
     }
 }
 
@@ -593,7 +625,7 @@ fn write_report(run: &PerfRun, adapter: &str, timestamps: bool) -> Result<PathBu
             );
         }
         means.sort_by(f64::total_cmp);
-        let med = percentile(&means, 0.5);
+        let med = median(&means);
         variants.push(
             Obj::new()
                 .str("name", name)
@@ -665,7 +697,7 @@ mod json {
             self
         }
         pub fn num(self, k: &str, v: f64) -> Obj {
-            self.raw(k, if v.is_finite() { format!("{v:.4}") } else { "null".into() })
+            self.raw(k, if v.is_finite() { format!("{v:.4}") } else { "0".into() })
         }
         pub fn int(self, k: &str, v: u64) -> Obj {
             self.raw(k, v.to_string())
@@ -726,6 +758,15 @@ mod tests {
         assert_eq!((o.frames, o.variants.len(), o.sync), (120, 2, false));
         assert!(o.set("--perf-frames", Some("many")).is_err());
         assert!(o.set("--perf-camera", Some("spin")).is_err());
+    }
+
+    #[test]
+    fn the_median_of_an_even_count_is_the_midpoint() {
+        assert_eq!(median(&[1.0, 3.0]), 2.0);
+        assert_eq!(median(&[1.0, 2.0, 9.0]), 2.0);
+        assert_eq!(median(&[]), 0.0);
+        let mut o = PerfOpts::default();
+        assert!(o.set("--perf-variants", Some(",")).is_err());
     }
 
     #[test]

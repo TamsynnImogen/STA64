@@ -106,10 +106,18 @@ struct RockMaterials(std::collections::HashMap<MaterialKey, Handle<RockMaterial>
 
 type MaterialKey = (String, [u32; 3], [u32; 3]);
 
+/// The shared materials go with the match: once no part uses a rock material, they are dropped
+/// (a later map or mod makes its own).
+fn forget(mut shared: ResMut<RockMaterials>, parts: Query<(), With<RockMat>>) {
+    if !shared.0.is_empty() && parts.is_empty() {
+        shared.0.clear();
+    }
+}
+
 /// What a part's material depends on: parts with the same key share one (the per-instance
 /// axes and centre are not part of it, they come from the instance's transform).
 fn material_key(part: &RockPart) -> MaterialKey {
-    (part.recipe.clone(), part.centre.to_array().map(f32::to_bits), part.inv_extent.to_array().map(f32::to_bits))
+    (part.recipe.to_ascii_lowercase(), part.centre.to_array().map(f32::to_bits), part.inv_extent.to_array().map(f32::to_bits))
 }
 
 pub struct RockPlugin;
@@ -119,7 +127,7 @@ impl Plugin for RockPlugin {
         embedded_asset!(app, "rock.wesl");
         app.add_plugins(MaterialPlugin::<RockMaterial>::default())
             .init_resource::<RockMaterials>()
-            .add_systems(Update, apply.after(crate::render::surfaces::poll))
+            .add_systems(Update, (apply.after(crate::render::surfaces::poll), forget))
             .add_systems(PostUpdate, update.after(TransformSystems::Propagate));
     }
 }

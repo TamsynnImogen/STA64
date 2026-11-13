@@ -252,12 +252,15 @@ pub fn markdown(what: &str, install: &Path, mod_name: Option<&str>, runs: &[Run]
             }
             let _ = writeln!(s, "Map: {}.\n", kinds.iter().map(|(k, v)| format!("{v} {k}")).collect::<Vec<_>>().join(", "));
         }
-        let base = rep.variants.first();
+        let base = rep.variants.iter().find(|v| v.name == "base").or(rep.variants.first());
         let base_ms = base.map_or(0.0, |b| b.median_of_means_ms);
         let _ = writeln!(s, "| variant | frame ms (median) | fps | spread ms | vs base ms | main CPU ms | GPU wait ms | GPU passes ms | visible meshes |");
         let _ = writeln!(s, "|---|---:|---:|---:|---:|---:|---:|---:|---:|");
         for v in &rep.variants {
-            let mid = v.reps.get(v.reps.len() / 2);
+            // The round whose mean is the median one (the middle of the rounds by mean).
+            let mut order: Vec<&Rep> = v.reps.iter().collect();
+            order.sort_by(|a, b| a.frame_ms.mean.total_cmp(&b.frame_ms.mean));
+            let mid = order.get(order.len() / 2).copied();
             let _ = writeln!(
                 s,
                 "| {} | {:.2} | {:.1} | {:.2}-{:.2} | {:+.2} | {:.2} | {:.2} | {:.2} | {} |",

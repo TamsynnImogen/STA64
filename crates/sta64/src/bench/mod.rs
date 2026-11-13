@@ -194,7 +194,7 @@ fn run_headless_inner(cfg: &LaunchConfig) -> i32 {
             if let Some((player, bounds)) = fog {
                 app.insert_resource(crate::render::units::LocalPlayer(Some(player))).insert_resource(bounds);
             }
-            perf::add(&mut app, opts);
+            perf::add(&mut app, opts, cfg);
         }
     } else if cfg.perf.is_some() {
         eprintln!("--perf needs --install-content (and --install-root): it measures the install's map view");

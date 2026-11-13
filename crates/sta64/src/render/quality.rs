@@ -2,7 +2,6 @@
 //! renderer had before the setting existed; the performance run (`bench/perf.rs`)
 //! switches them to measure what each costs.
 
-use bevy::camera::visibility::RenderLayers;
 use bevy::core_pipeline::prepass::DepthPrepass;
 use bevy::prelude::*;
 
@@ -61,32 +60,37 @@ impl Plugin for QualityPlugin {
     }
 }
 
-/// Write the settings that live on cameras when they differ from what was last written (at
-/// start: from the defaults the cameras are made with, so the defaults touch nothing and post
-/// FX keeps the multisampling it took over).
+/// Write the settings that live on cameras: to a camera made after the setting was chosen
+/// (the match's cameras come with the match), and to every map camera when it changes.
+/// The defaults touch nothing. Not the shadow camera, and not a camera post FX took the
+/// multisampling of (FXAA/SMAA).
 #[allow(clippy::type_complexity)]
 fn apply(
     mut commands: Commands,
     quality: Res<RenderQuality>,
     mut last: Local<Option<RenderQuality>>,
-    cameras: Query<(Entity, &RenderLayers, Has<DepthPrepass>), (With<Camera3d>, With<Msaa>, Without<crate::render::shadows::ShadowCamera>)>,
-    main: Query<Entity, crate::map::MainCamera>,
+    cameras: Query<
+        (Entity, Has<DepthPrepass>, Has<crate::map::BackgroundCamera>),
+        (With<Camera3d>, Without<crate::render::shadows::ShadowCamera>, Without<crate::render::post::PostFxMsaa>),
+    >,
+    added: Query<(), Added<Camera3d>>,
 ) {
     let prev = (*last).unwrap_or_default();
     *last = Some(*quality);
-    if prev == *quality {
-        return;
-    }
+    let default = RenderQuality::default();
     let msaa = match quality.msaa {
         1 => Msaa::Off,
         2 => Msaa::Sample2,
         _ => Msaa::Sample4,
     };
-    for (e, _, has) in &cameras {
-        if prev.msaa != quality.msaa {
+    for (e, has, background) in &cameras {
+        let fresh = added.contains(e);
+        // A new camera gets what differs from the defaults it was made with; others what changed.
+        let from = if fresh { default } else { prev };
+        if from.msaa != quality.msaa {
             commands.entity(e).insert(msaa);
         }
-        if main.contains(e) && prev.depth_prepass != quality.depth_prepass {
+        if !background && from.depth_prepass != quality.depth_prepass {
             if quality.depth_prepass && !has {
                 commands.entity(e).insert(DepthPrepass);
             } else if !quality.depth_prepass && has {
