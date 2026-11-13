@@ -27,20 +27,21 @@ digest) into the PR. If you need a seam to change, stop and open a seam PR
 Status lives in the issues, not here. This file changes only when the plan
 changes.
 
-## Where main is (2026-11-12)
+## Where main is (2026-11-12, refreshed after #447)
 
 The round-0 carve is done: R0-2 (seams and fakes) and R0-3 (the `sta64` split)
 are merged, and the sim, content database, bench, HUD and front end all run
 on the seams. Per merged PR titles, the packages on main are:
 
-- **CON:** 01-03, 05-19, 22-31 (CON-04, 20, 21 and 32-37 are not).
-- **SIM:** 01-22 and 24 (SIM-23 and 25-30 are not).
-- **RND:** 01-06, 08-11, 13-20 (RND-07, 12 and 21-30 are not).
-- **UI:** 01-10, 12-15, 17, 18, 26, 27 (UI-11, 16, 19-22, 25 and 28-30 are not; UI-18 stays open for its reference-frame gate).
-- **AUD:** 01-05. **AI:** 01, 02. **INT:** M2, M3, M4.
-- **TOOL:** 01-05, 07, 08, 10 (TOOL-06, 09 and 11 are not).
-- **LUA:** 01-03 and 05 (LUA-05 stays open until its inventory reports 0 missing calls).
-- **EDT:** 03, 07-11. **MED, NET:** none yet.
+- **CON:** 01-34, 36, 38, 41 and 43 (CON-35, 37, 39, 40, 42, 44 and 45 are not).
+- **SIM:** 01-23 (SIM-24-32 are not; SIM-24 has only its row on main, #358).
+- **RND:** 01-11, 13, 14, 16-20, 22, 27 and 28 (RND-12, 15, 21, 23-26, 29 and 30 are not; RND-15 has only its row on main, #175).
+- **UI:** 01-10, 12-15, 17, 18 and 27 (UI-11, 16, 19-22, 25, 26 and 28-30 are not; UI-26 has only its row on main, #358; UI-18 stays open for its reference-frame gate).
+- **AUD:** 01-05 (AUD-06 is not). **AI:** 01-03. **INT:** M2, M3, M4.
+- **TOOL:** 01-05, 07, 08 and 10 (TOOL-06, 09, 11 and 12 are not).
+- **LUA:** 01-05 and 09 (LUA-05 stays open until its inventory reports 0 missing calls; LUA-06-08 are not).
+- **EDT:** 06-11 (EDT-01, 02, 04, 05 and 12 are not; EDT-03 has only a row amendment on main).
+- **MED:** 01, 02. **NET:** 01 (NET-02-06 are not).
 
 The TESTBENCH design, `sta_bench`, the `sta64` bench modes and frames
 (`docs/TESTBENCH.md`) are on main. Status per package lives in the issues;
@@ -833,7 +834,7 @@ and fixes seams through seam PRs.
 | INT-M6 | Campaigns playable per game: front end → campaign → mission sequence → back, with intros, for each campaign the installs hold (A1, A2, FO as each has them) | LUA-08, UI-25, MED-04, MED-05, UI-22, INT-M4 | Scenario plays the first mission of one campaign per game to its win condition and lands on the next briefing; progress survives a restart | M | Sonnet |
 | INT-M7 | Stock parity pass: stock HUD, menus, effects, nebulae and cloak as defaults on each game; Refit and LCARS reachable as options | UI-18..UI-22, RND-22..RND-27, SIM-23, INT-M3, TOOL-15 | Per game, bench frames of HUD, menu, nebula, hull, beam and cloak scenes match the stock reference within the stated tolerance; options switch to Refit/LCARS and back | M | Sonnet |
 
-Counts: CON 43, SIM 30, RND 30, UI 28, AUD 6, MED 5, TOOL 11, LUA 9, AI 3, NET 3, EDT 12, INT 6 (186), plus 3 in round 0.
+Counts: CON 45, SIM 32, RND 30, UI 28, AUD 6, MED 5, TOOL 12, LUA 9, AI 3, NET 6, EDT 12, INT 6 (194), plus 3 in round 0.
 
 ## Dependency graph
 
