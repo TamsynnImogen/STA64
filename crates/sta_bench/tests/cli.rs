@@ -117,7 +117,7 @@ fn report_files(dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
                     // Drop the run id: `{"run":"<stamp>-<pid>",...`.
                     let t = String::from_utf8(body).unwrap();
                     let at = t.find(",\"passed\"").unwrap();
-                    body = t[at..].as_bytes().to_vec();
+                    body = t.as_bytes()[at..].to_vec();
                 }
                 out.insert(rel, body);
             }
