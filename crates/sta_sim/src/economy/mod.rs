@@ -452,20 +452,31 @@ impl Economy {
                     }
                     Phase::ToDock => {
                         let Some(at) = nearest_station(units, owner, pos) else {
+                            // No station: the orbit point must not outlive the work.
+                            set_target(units, id, None);
                             break;
                         };
                         // Off a moon the freighter keeps circling until the station lies on its
                         // outer side, then peels off (read from the executable, static; the
                         // latinum nebula and planets leave at once).
+                        // (Not when the station lies inside the orbit band, or the freighter sits on the
+                        // node's centre: there is no outer side to wait for.)
                         if let (Some(range), Some(np)) = (mining_range(db, def), node_pos)
                             && db.unit(node_def).is_none_or(|d| d.class.0 != "latinum")
                             && dist(pos, np) <= range * ORBIT_BAND
+                            && dist(at, np) > range * ORBIT_BAND
                             && (at.x - pos.x) * (pos.x - np.x) + (at.z - pos.z) * (pos.z - np.z) <= Fixed::ZERO
+                            && let Some(p) = orbit_point(db, id, pos, node_def, np, range)
                         {
-                            set_target(units, id, orbit_point(db, id, pos, node_def, np, range));
+                            set_target(units, id, Some(p));
                             break;
                         }
-                        let arrive = if mining_range(db, def).is_some() { Fixed::from_int(DOCK_ARRIVE) } else { reach() };
+                        // Arrival must lie beyond the smooth model's own "too close to turn" stop.
+                        let arrive = if mining_range(db, def).is_some() {
+                            Fixed::from_int(DOCK_ARRIVE).max(db.unit(def).map_or(Fixed::ZERO, |d| d.movement.too_close_to_turn) + Fixed::from_int(10))
+                        } else {
+                            reach()
+                        };
                         if dist(pos, at) <= arrive {
                             set_target(units, id, None);
                             dock = Some(at);
@@ -499,10 +510,6 @@ impl Economy {
                         break;
                     }
                 }
-            }
-            if was == Phase::Mining && m.phase != Phase::Mining && units.get(id).is_some_and(|u| u.target.is_some()) && m.phase != Phase::ToNode {
-                // The orbit point must not outlive the work (ToDock steers on its own next tick).
-                set_target(units, id, None);
             }
             if m.phase != was {
                 events.push(SimEvent::MinerPhase { id, phase: m.phase.announced(), node: m.node, dock });

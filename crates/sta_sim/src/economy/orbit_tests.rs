@@ -12,8 +12,12 @@ const RANGE: i32 = 180;
 
 /// The fake content plus a freighter with a mining beam (`fx_orbiter`) and a moon with a radius.
 fn orbit_game() -> Sim {
+    orbit_game_with(None)
+}
+
+fn orbit_game_with(profile: Option<sta_content::Profile>) -> Sim {
     let base = sta_content::fake::db();
-    let mut b = sta_content::ContentDb::builder().profile(base.profile()).features(base.features().clone());
+    let mut b = sta_content::ContentDb::builder().profile(profile.unwrap_or(base.profile())).features(base.features().clone());
     for u in base.units().filter(|u| u.odf != "fx_moon") {
         let mut u = u.clone();
         if u.odf == "fx_station" {
@@ -191,12 +195,14 @@ fn the_first_trip_circles_whatever_the_approach() {
         let mut late_radii = Vec::new();
         for t in 0..3000u32 {
             let out = sim.step(&[]);
+            let mut harvested = false;
             for e in &out.events {
                 if let SimEvent::MinerPhase { phase, .. } = e {
                     if *phase == MinerPhase::Mining { mining = Some(t); last = flat(&sim, m, c).1; }
-                    if *phase == MinerPhase::ToDock && mining.is_some() { break; }
+                    harvested |= *phase == MinerPhase::ToDock && mining.is_some();
                 }
             }
+            if harvested { break; }
             if let Some(t0) = mining {
                 let (r, a) = flat(&sim, m, c);
                 let mut d = a - last;
@@ -254,25 +260,70 @@ fn the_return_leg_is_ordinary_movement_round_obstacles() {
     assert!((((p.x - sc.x).to_f32()).powi(2) + ((p.z - sc.z).to_f32()).powi(2)).sqrt() < 120.0);
 }
 
-/// A full hold keeps the freighter circling until the station is on its outer side.
+/// A full hold keeps the freighter circling while the station is on its inner side, and it
+/// leaves only once the station is on the outer side.
 #[test]
 fn it_peels_off_the_orbit_when_the_station_is_on_its_outer_side() {
+    let mut tried = 0;
+    for (sx, sz) in [(-500, 0), (0, 500), (0, -500), (500, 300), (-300, -400), (-400, 300), (300, -450)] {
+        let mut sim = orbit_game();
+        let moon = spawn(&mut sim, "fx_moon", NEUTRAL, v(0, 0));
+        spawn(&mut sim, "fx_station", PlayerId(0), v(2000, 0));
+        let m = spawn(&mut sim, "fx_orbiter", PlayerId(0), v(sx, sz));
+        assert!(mine(&mut sim, 0, m, moon));
+        until(&mut sim, m, MinerPhase::ToDock, 3000);
+        let c = sim.unit(moon).unwrap().pos;
+        let outer = |sim: &Sim| {
+            let p = sim.unit(m).unwrap().pos;
+            (2000.0 - p.x.to_f32()) * p.x.to_f32() - p.z.to_f32() * p.z.to_f32() + 0.0 > 0.0
+        };
+        // Only a start whose hold filled with the station on the inner side tells us anything.
+        if outer(&sim) {
+            continue;
+        }
+        tried += 1;
+        let (mut waited, mut left_with_outer) = (0, None);
+        for _ in 0..900u32 {
+            sim.step(&[]);
+            if flat(&sim, m, c).0 > 1.5 * RANGE as f32 {
+                left_with_outer = Some(outer(&sim));
+                break;
+            }
+            waited += 1;
+        }
+        assert!(waited > 15, "start ({sx},{sz}): it left at once ({waited} ticks) with the station on its inner side");
+        assert_eq!(left_with_outer, Some(true), "start ({sx},{sz}): it left with the station on the inner side");
+    }
+    assert!(tried > 0, "no start filled its hold with the station on the inner side");
+}
+
+/// A station inside the orbit band cannot be waited for: no endless orbit.
+#[test]
+fn a_station_inside_the_orbit_band_does_not_trap_a_full_freighter() {
     let mut sim = orbit_game();
     let moon = spawn(&mut sim, "fx_moon", NEUTRAL, v(0, 0));
-    spawn(&mut sim, "fx_station", PlayerId(0), v(2000, 0));
+    spawn(&mut sim, "fx_station", PlayerId(0), v(0, 150));
     let m = spawn(&mut sim, "fx_orbiter", PlayerId(0), v(500, 0));
     assert!(mine(&mut sim, 0, m, moon));
-    until(&mut sim, m, MinerPhase::ToDock, 3000);
-    let c = sim.unit(moon).unwrap().pos;
-    let mut left_band = None;
-    for t in 0..600u32 {
-        sim.step(&[]);
-        let (r, _) = flat(&sim, m, c);
-        let p = sim.unit(m).unwrap().pos;
-        // Station along +x: outer side is x beyond the freighter's radial direction.
-        let outer = (2000.0 - p.x.to_f32()) * p.x.to_f32() + (0.0 - p.z.to_f32()) * p.z.to_f32() > 0.0;
-        if r > 1.5 * RANGE as f32 { left_band = Some((t, outer)); break; }
+    let mut delivered = false;
+    for _ in 0..3000 {
+        delivered |= sim.step(&[]).events.iter().any(|e| matches!(e, SimEvent::Delivered { .. }));
     }
-    let (_, outer_when_leaving) = left_band.expect("it never left the orbit");
-    assert!(outer_when_leaving, "it left with the station on the inner side");
+    assert!(delivered);
+}
+
+/// On the smooth movement model of the real profiles (a craft nearly at its point stops: "too
+/// close to turn"), several freighters on one station all get to unload.
+#[test]
+fn several_freighters_unload_at_one_station_on_the_smooth_model() {
+    let mut sim = orbit_game_with(Some(sta_content::Profile::Sta2Classic));
+    let moon = spawn(&mut sim, "fx_moon", NEUTRAL, v(0, 0));
+    spawn(&mut sim, "fx_station", PlayerId(0), v(1500, 0));
+    let ms: Vec<_> = (0..4).map(|i| spawn(&mut sim, "fx_orbiter", PlayerId(0), v(500 + i * 30, i * 50))).collect();
+    sim.step(&[Command { player: PlayerId(0), seq: 1, kind: CommandKind::Order(Order::Mine { units: ms, node: moon }) }]);
+    let mut delivered = 0;
+    for _ in 0..9000 {
+        delivered += sim.step(&[]).events.iter().filter(|e| matches!(e, SimEvent::Delivered { .. })).count();
+    }
+    assert!(delivered >= 8, "{delivered} deliveries: some freighter never unloaded");
 }
