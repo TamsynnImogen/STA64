@@ -10,13 +10,13 @@ of EDT-01 is not in it yet.
 tools/agent-cargo --light run -p sta_tools --bin odf_fmt -- [--grouped] [--groups FILE] [--write | --check] [--report FILE] PATH...
 ```
 
-`PATH` is an `.odf` file or a folder searched recursively (symlinks are skipped).
+`PATH` is a file (formatted whatever its extension) or a folder searched recursively for `.odf` (symlinks are skipped). A path starting with `--` needs `./`.
 
 | Mode | Does |
 |---|---|
 | (none) | Dry run: lists the files that would change. Exit 1 if any would. |
 | `--write` | Rewrites changed files atomically (temp file beside it, same permissions, fsync, rename). |
-| `--check` | Writes nothing. Verifies per file that the tree rebuilds it byte for byte, that formatting is idempotent, and that includes, keys and values read the same afterwards. Failures name the file and the key, never content. Exit 1 on any failure. |
+| `--check` | Writes nothing. Verifies per file that the tree rebuilds it byte for byte, that formatting is idempotent, and that includes, keys and values read the same afterwards. Failures name the file and the key, never content. Exit 1 on a failed check only; unlike `rustfmt --check` it does not fail because a file is not yet formatted (the summary counts those). |
 | `--grouped` | Also gathers the entries by key group (below). Combines with the modes above. |
 | `--groups FILE` | `--grouped` with your own table instead of the built-in one. |
 | `--report FILE` | JSON summary (files, mode, changed, errors, failed). |
@@ -34,10 +34,11 @@ or a check failed, 2 usage or I/O error.
 * `--grouped` additionally reorders entries by group, with one blank line between
   groups. An entry moves with the comment lines directly above it and the
   continuation rows below it; a comment set off by a blank line stays under the
-  entry above it (or at the top). Entries never cross a `#` directive or a
+  entry above it (or at the top); the comment glued to the first entry of the
+  file is the file header and stays on top. Entries never cross a `#` directive or a
   `[section]` row. Keys the table does not name form the last group, in file
-  order. A file where a key occurs twice (any case) or with a line that is not
-  UTF-8 is only whitespace-formatted, because order decides which duplicate wins.
+  order. A file where a key occurs twice (any case), or with a line that is not
+  UTF-8, starting with a byte-order mark or holding a bare CR is only whitespace-formatted, because order decides which duplicate wins.
 
 ## The group table
 

@@ -35,13 +35,24 @@ pub fn write_atomically(target: &Path, bytes: &[u8]) -> io::Result<()> {
         .file_name()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no file name"))?
         .to_owned();
-    name.push(".fmt-tmp");
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    name.push(format!(
+        ".fmt-tmp-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     let tmp = target.with_file_name(name);
+    let perms = fs::metadata(target)?.permissions();
+    if perms.readonly() {
+        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "target is read-only"));
+    }
+    // Created first, so the cleanup below only ever removes our own file.
+    let mut f = fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
     let result = (|| {
-        let mut f = fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
         f.write_all(bytes)?;
-        f.set_permissions(fs::metadata(target)?.permissions())?;
+        f.set_permissions(perms)?;
         f.sync_all()?;
+        drop(f);
         fs::rename(&tmp, target)
     })();
     if result.is_err() {

@@ -111,6 +111,11 @@ pub fn check_bytes(bytes: &[u8], layout: Layout) -> Vec<String> {
     } else if let Some(i) = (0..ka.len()).find(|&i| ka[i] != kb[i]) {
         problems.push(format!("entry differs at key {}", json_str(&ka[i].0)));
     }
+    // No line may be lost, duplicated or edited beyond whitespace.
+    let lines = |b: &[u8]| String::from_utf8_lossy(b).split(['\n', '\r']).filter(|l| !l.trim().is_empty()).count();
+    if matches!(layout, Layout::Grouped(_)) && lines(bytes) != lines(&out) {
+        problems.push("the number of non-blank lines changed".to_owned());
+    }
     let (ia, ib) = (eol_kinds(bytes), eol_kinds(&out));
     if (ib.0 && !ia.0) || (ib.1 && !ia.1) || (ib.2 && !ia.2) {
         problems.push("a line-ending kind appeared that the file did not have".to_owned());
@@ -335,7 +340,7 @@ mod tests {
         fs::write(&f, CRLF).unwrap();
         assert_eq!(go(&["--grouped", "--write", f.to_str().unwrap()]).0, 0);
         let after = fs::read(&f).unwrap();
-        assert_eq!(after, b"classLabel = \"x\"\r\n\r\n// c\r\nweapon1 = \"a\"\r\n\r\nzzz = 1\r\n");
+        assert_eq!(after, b"// c\r\nclassLabel = \"x\"\r\n\r\nweapon1 = \"a\"\r\n\r\nzzz = 1\r\n");
         assert_eq!(go(&["--grouped", f.to_str().unwrap()]).0, 0);
         fs::remove_dir_all(&d).unwrap();
     }

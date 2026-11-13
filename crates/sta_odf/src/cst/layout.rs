@@ -13,9 +13,11 @@
 //!   between entries are regenerated (one between groups).
 //! * Entries never cross an `#` directive, a `[section]` row, a line the
 //!   reader ignores or a continuation row without an entry above it.
-//! * Comment lines after the last entry of a stretch stay after it.
-//! * A file is only reordered when no key occurs twice (any case) and every
-//!   line is UTF-8. A repeated key means the last one wins, which order would
+//! * Comment lines after the last entry of a stretch stay at the end of the
+//!   stretch. The comment glued to the first entry of the file is the file's
+//!   header and stays on top.
+//! * A file is only reordered when no key occurs twice (any case), every
+//!   line is UTF-8, none starts with a byte-order mark and none holds a bare CR. A repeated key means the last one wins, which order would
 //!   change, and the reader's key order ([`crate::Odf::keys`]) is the file's
 //!   order, so such a file is only whitespace-formatted.
 
@@ -143,7 +145,13 @@ impl Cst {
     }
 
     fn regroup(&self, table: &GroupTable) -> Option<Vec<u8>> {
-        if self.lines.iter().any(|l| !l.valid) {
+        // Not reordered: foreign bytes; a byte-order mark (it must stay the
+        // first bytes of the file); a bare CR inside a line (another reader
+        // may split there and see keys this one does not).
+        if self.lines.iter().any(|l| {
+            let t = self.text(l);
+            !l.valid || t.starts_with("\u{feff}".as_bytes()) || t.contains(&b'\r')
+        }) {
             return None;
         }
         let mut seen = std::collections::HashSet::new();
@@ -171,14 +179,15 @@ impl Cst {
                 LineKind::Directive | LineKind::Section | LineKind::Other
             ) || (l.kind == LineKind::Continuation && !l.continues);
             if barrier {
-                rows.extend(self.group_body(&body, table, &blank)?);
+                rows.extend(self.group_body(&body, table, &blank, rows.is_empty())?);
                 body.clear();
                 rows.push(row(l));
             } else {
                 body.push(l);
             }
         }
-        rows.extend(self.group_body(&body, table, &blank)?);
+        let first = rows.is_empty();
+        rows.extend(self.group_body(&body, table, &blank, first)?);
 
         let last = rows.len().saturating_sub(1);
         let mut out = Vec::with_capacity(self.src.len() + 64);
@@ -202,6 +211,7 @@ impl Cst {
         body: &[&Line],
         table: &GroupTable,
         blank: &dyn Fn() -> Row,
+        first: bool,
     ) -> Option<Vec<Row>> {
         let row = |l: &Line| -> Row { (self.text(l).to_vec(), self.eol(l).to_vec()) };
         if !body.iter().any(|l| l.kind == LineKind::Entry) {
@@ -239,7 +249,10 @@ impl Cst {
                         let run = std::mem::take(&mut pending);
                         match items.last_mut() {
                             Some(prev) => prev.tail.extend(run),
-                            None => header.extend(run),
+                            None => {
+                                header.extend(run);
+                                header.push(blank());
+                            }
                         }
                         blank_after_pending = false;
                     }
@@ -251,10 +264,18 @@ impl Cst {
                         let run = std::mem::take(&mut pending);
                         match items.last_mut() {
                             Some(prev) => prev.tail.extend(run),
-                            None => header.extend(run),
+                            None => {
+                                header.extend(run);
+                                header.push(blank());
+                            }
                         }
                     }
                     blank_after_pending = false;
+                    // The comment glued to the first entry of the file is
+                    // the file's header: it stays on top.
+                    if first && items.is_empty() {
+                        header.extend(std::mem::take(&mut pending));
+                    }
                     let mut lines = std::mem::take(&mut pending);
                     lines.push(row(l));
                     // Continuation rows may follow after comments or blanks.
@@ -292,10 +313,7 @@ impl Cst {
         if lead_blank {
             out.push(blank());
         }
-        if !header.is_empty() {
-            out.extend(header);
-            out.push(blank());
-        }
+        out.extend(header);
         let mut prev = None;
         for it in items {
             if prev.is_some_and(|p| p != it.group) {

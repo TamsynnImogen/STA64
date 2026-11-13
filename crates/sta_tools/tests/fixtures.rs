@@ -20,6 +20,10 @@ fn fixtures() -> Vec<(&'static str, Vec<u8>)> {
         ("no final newline", b"weapon1 = 1\nclassLabel = 2".to_vec()),
         ("only comments", b"// nothing\n\n// here\n".to_vec()),
         ("empty", Vec::new()),
+        ("glued header", b"// Federation ship\nweapon1 = 1\nclassLabel = 2\n// end\n".to_vec()),
+        ("comment between entry and continuation", b"k = \"a\"\n// c\n\n\"b\"\nclassLabel = 1\n".to_vec()),
+        ("sections", b"// h\n[A]\nweapon1 = 1\nrace = 2\n[B]\n// x\nweapon2 = 1\nclassLabel = 2\n".to_vec()),
+        ("bare cr", b"weapon1 = 1\rclassLabel = 2\nrace = 3\n".to_vec()),
         ("orphans", b"\"orphan\"\nstray text\n= nokey\nrace = 1\nclassLabel = 2\n".to_vec()),
     ]
 }
@@ -68,7 +72,7 @@ fn the_binary_checks_formats_and_reports() {
     let st = Command::new(bin).args(["--check", "--grouped", "--report"]).arg(&report).arg(&d).output().unwrap();
     assert_eq!(st.status.code(), Some(0), "{}", String::from_utf8_lossy(&st.stderr));
     let json = fs::read_to_string(&report).unwrap();
-    assert!(json.contains("\"files\":10") && json.contains("\"failed\":[]"), "{json}");
+    assert!(json.contains("\"files\":14") && json.contains("\"failed\":[]"), "{json}");
 
     // Dry run exits 1 and writes nothing; --write then --grouped dry run exits 0.
     let before = fs::read(d.join("f0.odf")).unwrap();
@@ -78,4 +82,19 @@ fn the_binary_checks_formats_and_reports() {
     assert_eq!(Command::new(bin).arg("--grouped").arg(&d).status().unwrap().code(), Some(0));
     assert_eq!(Command::new(bin).arg("--bogus").status().unwrap().code(), Some(2));
     fs::remove_dir_all(&d).unwrap();
+}
+
+#[test]
+fn bom_bare_cr_and_headers_are_handled() {
+    let t = GroupTable::fo();
+    // A BOM must stay the first bytes: the file is not reordered.
+    let bom = b"\xef\xbb\xbfclassLabel = \"x\"\nmaxHealth = 5\nrace = 1\n";
+    assert_eq!(Cst::parse(bom).format_grouped(t), Cst::parse(bom).format());
+    let cr = b"weapon1 = 1\rclassLabel = 2\nrace = 3\n";
+    assert_eq!(Cst::parse(cr).format_grouped(t), Cst::parse(cr).format());
+    // The comment glued to the first entry is the file header and stays on top.
+    let h = b"// Federation ship\nweapon1 = 1\nclassLabel = 2\n";
+    let out = Cst::parse(h).format_grouped(t);
+    assert_eq!(out, b"// Federation ship\nclassLabel = 2\n\nweapon1 = 1\n");
+    assert_eq!(Cst::parse(&out).format_grouped(t), out);
 }
