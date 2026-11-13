@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Stage clean-room A2 Lua ports into a new missions directory."""
+"""Stage A2 Lua ports kept outside the repository into a new missions directory.
+
+The ports are not part of STA64 or its release (WORKPLAN, note under the LUA table)."""
 
 import argparse
 import hashlib
