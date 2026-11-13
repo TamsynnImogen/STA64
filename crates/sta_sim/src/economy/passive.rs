@@ -22,8 +22,8 @@
 //!   add metal per second); a station still being built, or dying, produces nothing.
 //!
 //! Not yet: `oneTimeMode` weapons (lump sums such as `all_supply_routes_bio`
-//! `addBiomatter = 250`) ride on hidden `pod` items that the sim does not
-//! spawn, so there is no activation moment to grant them at; they are skipped,
+//! `addBiomatter = 250`) ride on hidden `pod` items; SIM-28 spawns start
+//! helpers and their replacements, but no pod activation moment exists yet to grant them at; they are skipped,
 //! never run as a rate. Button-activated resource weapons are skipped too.
 
 use sta_content::{ContentDb, ResourceWeaponDef};

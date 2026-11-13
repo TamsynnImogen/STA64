@@ -71,10 +71,11 @@ fn installed_resource_weapons_pay_their_odf_amounts_per_second() {
             });
             // SIM-28: hidden carriers with a lifetime or an instant replacement end early and
             // may hand over to successors (chains), so only the other-seat check applies to them.
-            let ends_early = u.life.is_some()
+            let ends_early = u.hidden
+                && (u.life.is_some()
                 || u.hardpoints.iter().filter_map(|h| db.weapon(h.weapon.key).and_then(|w| w.replace.as_ref())).any(|r| {
                     r.fires_for(sta_content::lifecycle::Owner::Player) && r.required_officers.is_none()
-                });
+                }));
             let mut want = [Fixed::ZERO; 4];
             let mut per_tick = 0i64;
             for h in &u.hardpoints {
