@@ -126,7 +126,7 @@ pub(crate) fn unit_def_for_profile(name: &str, odf: &Odf, phys: Option<&Odf>, pr
         None => d.initial_shields.unwrap_or_default(),
     };
     d.shields = ShieldDef { max: max_shields, recharge: r.fixed("shieldRate") / Fixed::from_int(TICK_HZ as i32) };
-    if matches!(profile, crate::Profile::Sta2Classic | crate::Profile::Fo4)
+    if matches!(profile, crate::Profile::Sta2Classic | crate::Profile::Fo4 | crate::Profile::Fo3)
         && max_key.is_none() && current_key.is_none()
     {
         d.shields.max = d.hull;

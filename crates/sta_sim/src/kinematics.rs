@@ -87,7 +87,7 @@ impl Model {
     /// analysed and flies the native model until it is.
     pub fn of(profile: Profile) -> Model {
         match profile {
-            Profile::Sta2Classic | Profile::Fo4 => Model::Smooth,
+            Profile::Sta2Classic | Profile::Fo4 | Profile::Fo3 => Model::Smooth,
             Profile::Native | Profile::Sta1Classic => Model::Native,
         }
     }

@@ -86,6 +86,7 @@ impl ContentDb {
         match self.profile {
             Profile::Native => "native",
             Profile::Fo4 => "fo4",
+            Profile::Fo3 => "fo3",
             Profile::Sta2Classic => "sta2classic",
             Profile::Sta1Classic => "sta1classic",
         }

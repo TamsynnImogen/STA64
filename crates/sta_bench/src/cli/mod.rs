@@ -10,6 +10,7 @@
 //! sta-bench parity <refit-out> <ours-out> [--tol time=0.1,pos=1,hull=1] | --names
 //! sta-bench pair <pair> --game a2|roots [--refit-out DIR] [--install DIR] [--fake] [--out DIR]
 //! sta-bench capture list | check <folder|latest> [--install <root> [--mod <name>]] [--fake]
+//! sta-bench golden --install <root> [--mod <name>] [map...] [--ticks N] [--seed S] [--json <file|->] [--record <file>] [--against <file>]
 //! sta-bench desync <a.star> <b.star> [--install <root> [--mod <name>]] [--fake] [--json <file|->]
 //! ```
 //!
@@ -20,6 +21,7 @@ mod capture;
 mod clone;
 mod desync;
 mod diff;
+pub mod golden;
 mod jobs;
 mod pair;
 mod parity;
@@ -64,6 +66,13 @@ Usage: sta-bench <command> [options]
       --history N                  turns of commands to list before the tick (default 3)
       --max-rows N                 differing rows listed per section (default 64)
       --turn-ticks N               ticks per turn (default: read from the replays' digest spacing)
+  golden --install <root> [map...]  an install's content identity and sim digests per skirmish start, as JSON (D5):
+                                   each map stepped twice; exit 1 on a panic, a non-repeatable digest or --against differences
+      --mod <name>                 the mod to mount over the install's Data
+      --ticks N, --seed S          ticks per run (default 300), setup seed
+      --json <file|->              write the report (`-`: only JSON, to stdout)
+      --record <file>              write the report as a golden (keep it outside the repository: it derives from the install)
+      --against <file>             compare with a recorded golden; exit 1 on any difference
   diff <report-a> <report-b>       compare report directories; exit 1 when they differ
   parity <refit-out> <ours-out>    Refit's Scene.marks/Scene.objects.jsonl against our marks/objects.jsonl
                                    (run directories, or their logs/): objects by name, marks in sim seconds
@@ -117,6 +126,10 @@ pub(crate) struct Opts {
     pub history: Option<u32>,
     pub max_rows: Option<usize>,
     pub turn_ticks: Option<u32>,
+    pub ticks: Option<u64>,
+    pub seed: Option<u64>,
+    pub record: Option<PathBuf>,
+    pub against: Option<PathBuf>,
     pub rest: Vec<String>,
 }
 
@@ -159,6 +172,10 @@ fn parse(args: Vec<String>) -> Result<Opts, String> {
             "--history" => o.history = Some(val(&a)?.parse().map_err(|_| "--history: a number of turns")?),
             "--max-rows" => o.max_rows = Some(val(&a)?.parse().map_err(|_| "--max-rows: a number")?),
             "--turn-ticks" => o.turn_ticks = Some(val(&a)?.parse().map_err(|_| "--turn-ticks: a number of ticks")?),
+            "--ticks" => o.ticks = Some(val(&a)?.parse().map_err(|_| "--ticks: a number")?),
+            "--seed" => o.seed = Some(val(&a)?.parse().map_err(|_| "--seed: a number")?),
+            "--record" => o.record = Some(val(&a)?.into()),
+            "--against" => o.against = Some(val(&a)?.into()),
             "--timeout" => o.timeout = val(&a)?.parse().map_err(|_| "--timeout: seconds")?,
             _ if a.starts_with("--") => return Err(format!("unknown option {a}")),
             _ => o.rest.push(a),
@@ -210,6 +227,7 @@ pub fn main(args: Vec<String>) -> i32 {
         "pair" => pair::pair(&o),
         "capture" => capture::capture_cmd(&o),
         "desync" => desync::desync(&o),
+        "golden" => golden::golden(&o),
         other => Err(Fail::Usage(format!("unknown command `{other}`"))),
     };
     match result {

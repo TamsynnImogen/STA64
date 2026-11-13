@@ -269,21 +269,49 @@ fn a_malformed_asset_version_is_ignored_with_a_warning() {
     }
 }
 
-// Step 5: packages.ini.
+// Step 5: packages.ini (CON-44: a 3.x version selects the FO 3.2.7 lineage).
 
 #[test]
-fn packages_ini_version_is_recorded_and_selects_nothing() {
+fn packages_ini_version_3_selects_the_fo3_lineage() {
     let t = Tmp::new();
     t.file("Data/odf/x.odf", "classLabel=\"craft\"\n");
     t.file("Data/Packages.INI", "[FleetOps]\r\nVersion=3.2.7\r\nMMpack=false\r\n");
     let d = t.detect(None);
     assert_eq!(d.fleetops_version.as_deref(), Some("3.2.7"));
-    assert_eq!((d.profile, d.step), (Profile::Sta2Classic, DetectStep::Heuristic), "an FO 3.x install detects as before");
+    assert_eq!((d.profile, d.step), (Profile::Fo3, DetectStep::PackagesIni));
+    assert!(d.file.as_deref().is_some_and(|p| p.file_name().unwrap().eq_ignore_ascii_case("packages.ini")));
     assert!(d.to_string().contains("Version=3.2.7"), "{d}");
 
-    // Seen from a mod as well, though only the host Data carries it.
+    // A mod of the 3.x install (no info.ini of its own, or one without AssetVersion)
+    // runs on the 3.x engine; the host Data carries the version.
     mod_with(&t, "M", "[mod]\nName=Plain\nstandalone=1\n");
-    assert_eq!(t.detect(Some("M")).fleetops_version.as_deref(), Some("3.2.7"));
+    let d = t.detect(Some("M"));
+    assert_eq!((d.profile, d.fleetops_version.as_deref()), (Profile::Fo3, Some("3.2.7")));
+    // A mod designed for 3.2.5 (AssetVersion 30205) is a 3.x mod too.
+    mod_with(&t, "M", "[mod]\nAssetVersion=30205\nstandalone=1\n");
+    assert_eq!(t.detect(Some("M")).profile, Profile::Fo3);
+}
+
+#[test]
+fn only_a_major_of_3_selects_fo3_and_the_steps_before_it_still_win() {
+    for (v, want) in [("4.0.0", Profile::Sta2Classic), ("5.1.0", Profile::Sta2Classic), ("30.2", Profile::Sta2Classic), ("3", Profile::Fo3), ("3.0", Profile::Fo3)] {
+        let t = Tmp::new();
+        t.file("Data/odf/x.odf", "classLabel=\"craft\"\n");
+        t.file("Data/packages.ini", format!("[FleetOps]\nVersion={v}\n"));
+        assert_eq!(t.detect(None).profile, want, "{v}");
+    }
+    let t = Tmp::new();
+    t.file("Data/packages.ini", "[FleetOps]\nVersion=3.2.7\n");
+    t.file("Data/odf/x.odf", "classLabel=\"craft\"\n");
+    // Explicit Profile= wins; a Roots AssetVersion wins; the A1 ZFS rule wins (see above).
+    mod_with(&t, "E", "[mod]\nProfile=Sta2Classic\n");
+    assert_eq!(t.detect(Some("E")).profile, Profile::Sta2Classic);
+    mod_with(&t, "R", "[mod]\nAssetVersion=50000\n");
+    assert_eq!(t.detect(Some("R")).profile, Profile::Fo4);
+    // The name matcher of the base Data/info.ini (step 4) is ahead of it.
+    t.file("Data/info.ini", "[mod]\nName=Fleet Operations: Roots\n");
+    mod_with(&t, "P", "[mod]\nName=Plain\nstandalone=1\n");
+    assert_eq!(t.detect(Some("P")).profile, Profile::Fo4);
 }
 
 #[test]
