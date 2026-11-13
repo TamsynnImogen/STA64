@@ -140,6 +140,8 @@ impl Plugin for ViewerPlugin {
                     orbit_camera,
                     hud,
                     model_scene::animate,
+                    crate::render::anim::play_idle,
+                    crate::render::anim::play_events,
                     sprites::animate,
                     sprites::face_camera,
                     crate::render::particles::simulate,
