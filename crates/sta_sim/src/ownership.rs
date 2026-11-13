@@ -73,7 +73,9 @@ impl Sim {
         unit.target = None;
         unit.owner = to;
         if new_team {
-            self.team_changes.push(id);
+            if !self.team_changes.contains(&id) {
+                self.team_changes.push(id);
+            }
         }
         true
     }
@@ -81,10 +83,10 @@ impl Sim {
     /// SIM-29: after a completed change of team, every special of the unit
     /// whose weapon says `activateOnTeamChange = 1` is engaged for the final
     /// owner on this tick's weapon pass, under the weapon's own rules (energy
-    /// cost, reload under `weapon_shot_timing`; a refused one is dropped).
+    /// cost for a cloak; point defence also its reload under `weapon_shot_timing`; a refused one is dropped).
     /// Needs `Features::team_change_weapons`. A cloak is engaged (never
     /// toggled off), a point-defence weapon switched on if it is off. Same-team
-    /// handovers and neutral owners activate nothing; the engine's alliance-only
+    /// handovers and units handed to the neutral owner activate nothing (a unit going from the neutral owner to a player counts as a team change); the engine's alliance-only
     /// and race-only changes have no counterpart here.
     pub(crate) fn activate_team_change_weapons(&mut self, db: &sta_content::ContentDb) {
         for id in std::mem::take(&mut self.team_changes) {

@@ -182,3 +182,26 @@ fn corrupt_subsystem_rows_are_rejected() {
     assert!(Subsystems::from_rows(vec![row(0, [0; 5])]).is_none(), "an empty row is never written");
     assert!(Subsystems::from_rows(vec![row(4, [0; 5]), row(4, [0; 5])]).is_none());
 }
+
+#[test]
+fn a_huge_maximum_is_capped_and_recharge_cannot_wrap() {
+    let (mut sim, id, _) = world();
+    assert!(script(&mut sim, Edit::MaxShields(id, Fixed::from_bits(i64::MAX))));
+    assert_eq!(sim.units.get(id).unwrap().shields.max, Fixed::from_int(1_000_000_000));
+    for _ in 0..5 {
+        sim.step(&[]);
+    }
+    assert!(now(&sim, id) > Fixed::ZERO);
+}
+
+#[test]
+fn damage_above_the_hit_points_in_a_snapshot_is_corrupt() {
+    use crate::combat::damage::SubsystemRow;
+    let (mut sim, id, d) = world();
+    assert!(script(&mut sim, Edit::SubsystemDamage(id, Subsystem::Weapons, Fixed::from_int(30))));
+    let ok = sim.snapshot();
+    assert!(Sim::from_snapshot(&ok, Some(Arc::clone(&d))).is_ok());
+    let mut bad = sim.clone();
+    bad.subsystems = crate::combat::damage::Subsystems::from_rows(vec![(id, SubsystemRow { off: 0, damage: [0, Fixed::from_int(81).to_bits(), 0, 0, 0] })]).unwrap();
+    assert!(Sim::from_snapshot(&bad.snapshot(), Some(d)).is_err());
+}

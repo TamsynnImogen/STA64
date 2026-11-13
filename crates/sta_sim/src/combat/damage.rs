@@ -80,9 +80,11 @@ fn lose_crew(t: &mut crate::world::Entity, db: &ContentDb, weapon: sta_core::Con
     let Some(c) = w.crew_loss.filter(|_| db.weapon_features(w).crew_loss_on_hit) else { return };
     let Some([now, max]) = t.crew else { return };
     let over = (shield_damage - c.threshold).max(Fixed::ZERO);
-    let mut points = over * c.shield;
+    // Saturating: absurd ordnance values must not wrap the product.
+    let sat = |a: Fixed, b: Fixed| Fixed::from_bits((i128::from(a.to_bits()) * i128::from(b.to_bits()) >> 32).clamp(0, i128::from(i64::MAX)) as i64);
+    let mut points = sat(over, c.shield);
     if !def.sane_crew_loss {
-        points = max * points / Fixed::from_int(100);
+        points = Fixed::from_bits(sat(max, points).to_bits() / 100);
     }
     if points > Fixed::ZERO {
         t.crew = Some([(now - points).max(Fixed::ZERO), max]);
@@ -258,7 +260,7 @@ impl Sim {
             return false;
         }
         let u = self.units.get_mut(id).expect("live ship");
-        let max = max.max(Fixed::ZERO);
+        let max = max.max(Fixed::ZERO).min(Fixed::from_int(1_000_000_000));
         u.shields.max = max;
         let pools = if u.shields.directional { 4 } else { 1 };
         u.shields.now[..pools].fill(max);

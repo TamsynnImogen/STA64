@@ -58,12 +58,14 @@ pub(super) fn install(lua: &Lua, env: &Env, table: &Table) -> mlua::Result<()> {
     table.set("SetShieldPercent", def(lua, env, "SetShieldPercent", &["hf"], |_, e, _, a| {
         let id = a[0].id();
         e.unit("SetShieldPercent", id)?;
+        if !a[1].num().is_finite() { return Err(mlua::Error::runtime("A1.SetShieldPercent requires a finite number")); }
         e.edit("SetShieldPercent", sta_sim::command::Edit::ShieldPercent(id, sta_core::Fixed::from_f64(a[1].num())))?;
         Ok(Value::Nil)
     })?)?;
     table.set("SetMaxShields", def(lua, env, "SetMaxShields", &["hf"], |_, e, _, a| {
         let id = a[0].id();
         e.unit("SetMaxShields", id)?;
+        if !a[1].num().is_finite() { return Err(mlua::Error::runtime("A1.SetMaxShields requires a finite number")); }
         e.edit("SetMaxShields", sta_sim::command::Edit::MaxShields(id, sta_core::Fixed::from_f64(a[1].num())))?;
         Ok(Value::Nil)
     })?)?;

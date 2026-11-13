@@ -186,7 +186,7 @@ struct UnitCrewRec {
     rows: Vec<(EntityId, [i64; 2])>,
 }
 
-/// Mandatory v16 suffix: switched-off and damaged subsystems (SIM-55).
+/// Mandatory v17 suffix: switched-off and damaged subsystems (SIM-55).
 #[derive(Serialize, Deserialize)]
 struct SubsystemsRec {
     version: u8,
@@ -475,6 +475,14 @@ impl Sim {
         let subsystems = crate::combat::damage::Subsystems::from_rows(subsystem_rows).ok_or_else(|| corrupt("subsystem rows"))?;
         if subsystems.to_rows().iter().any(|(id, _)| !units.get(*id).is_some_and(|u| matches!(u.kind, EntityKind::Craft | EntityKind::Station))) {
             return Err(corrupt("subsystem entity"));
+        }
+        if let Some(db) = content.as_deref() {
+            for (id, row) in subsystems.to_rows() {
+                let hp = units.get(id).and_then(|u| db.unit(u.def)).map(|d| d.system_hit_points);
+                if hp.is_some_and(|hp| row.damage.iter().zip(hp).any(|(d, hp)| *d > hp.to_bits())) {
+                    return Err(corrupt("subsystem damage above hit points"));
+                }
+            }
         }
         let mut economy = crate::economy::Economy::from_rec(&b.economy);
         economy.restore_personnel(personnel_rows, &b.players).map_err(|why| SnapshotError::Corrupt(why.into()))?;

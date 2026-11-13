@@ -110,3 +110,17 @@ fn the_key_reaches_the_content_hash_and_the_state_snapshots_after_a_swap() {
         assert_eq!(copy.digest(), sim.digest());
     }
 }
+
+#[test]
+fn two_swaps_in_one_batch_activate_once_and_neutral_to_player_counts() {
+    let d = db(true, true, "0");
+    let (mut sim, id) = world(&d);
+    let c = |seq, to: u8| Command { player: PlayerId::SCRIPT, seq, kind: CommandKind::Edit(Edit::Team(id, PlayerId(to))) };
+    sim.step(&[c(1, 2), c(2, 1)]);
+    assert!(cloaking(&sim, id));
+    let (mut sim, id) = world(&d);
+    give(&mut sim, id, crate::world::NEUTRAL.0);
+    assert!(!cloaking(&sim, id));
+    give(&mut sim, id, 2);
+    assert!(cloaking(&sim, id));
+}

@@ -314,6 +314,9 @@ impl Sim {
 
     /// Move every unit one tick and close the tick with its view.
     fn advance(&mut self) -> TickOutput {
+        if self.content.is_none() {
+            self.team_changes.clear();
+        }
         self.step_start_effects();
         self.hold_welding_builders();
         self.constrain_targets();
