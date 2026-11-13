@@ -195,16 +195,44 @@ pub struct Timed<T> {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Offset {
     Fixed(V3),
-    /// A path relative to its first point (points 1.. minus point 0).
+    /// A path relative to its first point: the whole path's curve from point 1 on, minus
+    /// point 0 (`(n - 2) / speed` seconds).
     Path(PathRun),
+}
+
+impl Offset {
+    /// The offset and its direction `secs` after it started.
+    fn at(&self, secs: f64) -> (V3, V3) {
+        match self {
+            Offset::Fixed(v) => (*v, [0.0, 0.0, 1.0]),
+            Offset::Path(run) if run.points.len() >= 2 => {
+                let t = (1.0 + run.speed.max(0.0) * secs.max(0.0)).min((run.points.len() - 1) as f64);
+                let (p, d) = run.at(t);
+                (sub(p, run.points[0]), d)
+            }
+            Offset::Path(_) => ([0.0; 3], [0.0, 0.0, 1.0]),
+        }
+    }
+
+    fn done(&self, secs: f64) -> bool {
+        match self {
+            Offset::Fixed(_) => true,
+            Offset::Path(run) => {
+                let segments = run.points.len().saturating_sub(2) as f64;
+                segments == 0.0 || (run.speed > 0.0 && run.speed * secs >= segments)
+            }
+        }
+    }
 }
 
 /// The current shot.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Shot {
     pub eye: Timed<Track>,
-    /// `None`: look along the eye track.
+    /// `None`: no target; the camera looks along the eye track, or along the offset track
+    /// when [`Shot::along_offset`] (the `bool` of the shot's no-target form).
     pub target: Option<Timed<Track>>,
+    pub along_offset: bool,
     pub offset: Timed<Offset>,
     /// The offset is in the eye track's frame.
     pub relative: bool,
@@ -217,12 +245,19 @@ impl Shot {
         Shot {
             eye: Timed { what: Track::Fixed([0.0; 3]), since: tick },
             target: Some(Timed { what: Track::Fixed([0.0; 3]), since: tick }),
+            along_offset: false,
             offset: Timed { what: Offset::Fixed([0.0; 3]), since: tick },
             relative: false,
             constant_speed: false,
         }
     }
 }
+
+/// The longest a cineractive holds the player before a host releases it (seconds of game
+/// time in headless runs, real seconds in the client): a script that never ends one (a path of
+/// speed 0, a lost reply) cannot hold the camera for good. The longest stock intro read, A2
+/// fed10's first shot, takes 184 s to its end (shot model, static).
+pub const MAX_HOLD_SECS: u32 = 300;
 
 fn secs(ticks: f64) -> f64 {
     ticks / f64::from(TICK_HZ)
@@ -244,6 +279,11 @@ pub struct Cineractive {
     pub cancel: bool,
     /// A skip the mission object has not answered yet (MMM's `cineractiveFinish(true)`).
     pub skip_pending: bool,
+    /// The tick this cineractive started.
+    pub started: u64,
+    /// Values still to write once after a release ended it in the same breath (the cancel
+    /// the script may wait on, an A2 step it holds).
+    pub final_values: Option<(i64, i64)>,
 }
 
 fn path<'a>(paths: &'a [(String, Vec<[f32; 3]>)], name: &str) -> Option<&'a [[f32; 3]]> {
@@ -264,13 +304,20 @@ fn path_track(paths: &[(String, Vec<[f32; 3]>)], name: &str, n: &Arg) -> Option<
     }
 }
 
-/// One side of a `CineractiveShot`: a track and the arguments it used, or no target (`bool`).
-fn shot_side(paths: &[(String, Vec<[f32; 3]>)], args: &[Arg]) -> Option<(Option<Track>, usize)> {
+/// One side of a `CineractiveShot`.
+enum Side {
+    Track(Track),
+    /// No target; `true` looks along the offset track.
+    NoTarget(bool),
+}
+
+/// One side of a `CineractiveShot` and how many arguments it used.
+fn shot_side(paths: &[(String, Vec<[f32; 3]>)], args: &[Arg]) -> Option<(Side, usize)> {
     match args {
-        [Arg::Entity(id), ..] => Some((Some(Track::Object(*id)), 1)),
-        [Arg::Int(id), ..] => Some((Some(Track::Object(EntityId(u32::try_from(*id).ok()?))), 1)),
-        [Arg::Text(name), n @ (Arg::Int(_) | Arg::Num(_)), ..] => Some((Some(path_track(paths, name, n)?), 2)),
-        [Arg::Bool(_), ..] => Some((None, 1)),
+        [Arg::Entity(id), ..] => Some((Side::Track(Track::Object(*id)), 1)),
+        [Arg::Int(id), ..] => Some((Side::Track(Track::Object(EntityId(u32::try_from(*id).ok()?))), 1)),
+        [Arg::Text(name), n @ (Arg::Int(_) | Arg::Num(_)), ..] => Some((Side::Track(path_track(paths, name, n)?), 2)),
+        [Arg::Bool(b), ..] => Some((Side::NoTarget(*b), 1)),
         _ => None,
     }
 }
@@ -299,8 +346,13 @@ impl Cineractive {
             Presentation::Cineractive { on, .. } => {
                 if *on && !self.active {
                     // A new cineractive: tracks at the origin and done, skip state cleared.
-                    *self = Cineractive { active: true, shot: Some(Shot::origin(tick)), shot_tick: tick, ..Cineractive::default() };
-                } else if !*on {
+                    *self = Cineractive { active: true, shot: Some(Shot::origin(tick)), shot_tick: tick, started: tick, ..Cineractive::default() };
+                } else if !*on && self.active {
+                    // A cancel set in the same breath as the end (a host's release) has not been
+                    // written yet: it is, once.
+                    if self.cancel {
+                        self.final_values = Some((i64::from(self.done_at(tick.saturating_add(1))), 1));
+                    }
                     self.active = false;
                     self.skip_pending = false;
                 }
@@ -317,10 +369,16 @@ impl Cineractive {
                         }
                     }
                     ("Cineractive", "lookFrom") => match args.as_slice() {
-                        [Arg::Text(path_name), Arg::Num(speed), ..] => {
-                            // `CineractiveShot(name, speed, true)`: eye path, no target, offset reset.
-                            if let Some(t) = path_track(paths, path_name, &Arg::Num(*speed)) {
-                                self.cut(t, None, tick);
+                        [Arg::Text(path_name), speed @ (Arg::Num(_) | Arg::Int(_)), ..] => {
+                            // `CineractiveShot(name, speed, true)`: eye path, no target (looking
+                            // along the offset track), offset reset. The speed is a float.
+                            let speed = match speed {
+                                Arg::Int(i) => Fixed::from_int(i32::try_from(*i).unwrap_or(0)),
+                                Arg::Num(n) => *n,
+                                _ => Fixed::ZERO,
+                            };
+                            if let Some(t) = path_track(paths, path_name, &Arg::Num(speed)) {
+                                self.cut(t, Side::NoTarget(true), tick);
                             }
                         }
                         [a] => {
@@ -350,20 +408,25 @@ impl Cineractive {
                 }
             }
             // MMM `setCameraOffset(v)`: `CineractiveCameraOffset(x, y, z, true)`.
-            Presentation::CameraOffset { offset, .. } => {
+            Presentation::CameraOffset { offset, relative } => {
                 if let Some(s) = self.shot.as_mut() {
                     s.offset = Timed { what: Offset::Fixed(v3(offset)), since: tick };
-                    s.relative = true;
+                    s.relative = *relative;
                 }
             }
             _ => {}
         }
     }
 
-    fn cut(&mut self, eye: Track, target: Option<Track>, tick: u64) {
+    fn cut(&mut self, eye: Track, target: Side, tick: u64) {
+        let (target, along_offset) = match target {
+            Side::Track(what) => (Some(Timed { what, since: tick }), false),
+            Side::NoTarget(b) => (None, b),
+        };
         self.shot = Some(Shot {
             eye: Timed { what: eye, since: tick },
-            target: target.map(|what| Timed { what, since: tick }),
+            target,
+            along_offset,
             offset: Timed { what: Offset::Fixed([0.0; 3]), since: tick },
             relative: false,
             constant_speed: false,
@@ -375,7 +438,7 @@ impl Cineractive {
     fn shot_call(&mut self, args: &[Arg], tick: u64, paths: &[(String, Vec<[f32; 3]>)]) {
         // An invalid call still writes Done = 0 (static), and changes nothing else.
         self.shot_tick = tick;
-        let Some((Some(eye), used)) = shot_side(paths, args) else { return };
+        let Some((Side::Track(eye), used)) = shot_side(paths, args) else { return };
         let Some((target, rest)) = shot_side(paths, &args[used..]) else { return };
         if used + rest != args.len() {
             return;
@@ -401,9 +464,7 @@ impl Cineractive {
                 if let (Some(p), Some(speed)) = (path(paths, name), n(speed))
                     && !p.is_empty()
                 {
-                    let pts = points(p);
-                    let rel_points = pts[1..].iter().map(|q| sub(*q, pts[0])).collect();
-                    s.offset = Timed { what: Offset::Path(PathRun { points: rel_points, speed }), since: tick };
+                    s.offset = Timed { what: Offset::Path(PathRun { points: points(p), speed }), since: tick };
                     s.relative = *rel;
                 }
             }
@@ -422,10 +483,7 @@ impl Cineractive {
             Track::Path(run) => run.done(el(t.since), constant),
             _ => true,
         };
-        let offset = match &s.offset.what {
-            Offset::Path(run) => run.done(el(s.offset.since), false),
-            Offset::Fixed(_) => true,
-        };
+        let offset = s.offset.what.done(el(s.offset.since));
         track(&s.eye, s.constant_speed) && s.target.as_ref().is_none_or(|t| track(t, false)) && offset
     }
 
@@ -433,6 +491,11 @@ impl Cineractive {
     /// isCineractiveCancel)`; `None` when none runs (the variables keep their values).
     pub fn engine_values(&self, tick: u64) -> Option<(i64, i64)> {
         self.active.then(|| (i64::from(self.done_at(tick)), i64::from(self.cancel)))
+    }
+
+    /// [`Cineractive::engine_values`], or the values a release left to write (taken once).
+    pub fn take_engine_values(&mut self, tick: u64) -> Option<(i64, i64)> {
+        self.engine_values(tick).or_else(|| self.final_values.take())
     }
 
     /// The player asked to skip (Space): Cancel reads 1 from the next update.
@@ -459,10 +522,7 @@ impl Cineractive {
         }
         let s = self.shot.as_ref()?;
         let (eye_base, eye_dir) = Self::track_at(&s.eye, now, s.constant_speed, locate)?;
-        let off = match &s.offset.what {
-            Offset::Fixed(v) => *v,
-            Offset::Path(run) => run.at(run.param(secs(now - s.offset.since as f64), false)).0,
-        };
+        let (off, off_dir) = s.offset.what.at(secs(now - s.offset.since as f64));
         let off = if s.relative {
             let f = norm(eye_dir);
             let f = if len(f) < 0.5 { [0.0, 0.0, 1.0] } else { f };
@@ -478,7 +538,11 @@ impl Cineractive {
         let eye = add(eye_base, off);
         let look = match &s.target {
             Some(t) => Self::track_at(t, now, false, locate)?.0,
-            None => add(eye, norm(eye_dir)),
+            None => {
+                let dir = if s.along_offset { off_dir } else { eye_dir };
+                let dir = if len(dir) > 1e-9 { norm(dir) } else { [0.0, 0.0, 1.0] };
+                add(eye, dir)
+            }
         };
         Some((eye, look))
     }

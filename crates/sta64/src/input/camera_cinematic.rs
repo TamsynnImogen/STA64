@@ -24,7 +24,9 @@
 //!
 //! The paths are the map's AiPaths in game space ([`ScenePaths`], filled by the mission
 //! host from the launch). A shot is timed from the tick the script raised it (one tick
-//! before the view that carries its event) and placed at the interpolated sim time.
+//! before the view that carries its event) and placed at the interpolated sim time. A frame
+//! that runs several ticks at once stamps their requests with its last tick (`SimMsg` carries
+//! no tick): the camera then trails the script's timing by those ticks, display only.
 //!
 //! **Not consumed, listed once in [`Unhandled`]**: `SetCameraZoom` (A2 `SetZoomLevel`,
 //! not wired to the orbit camera), offsets outside a cineractive.
@@ -172,6 +174,13 @@ fn consume(
             Presentation::Call { name, args } if name == "A2.CenterCamera" => {
                 let entity = args.iter().find_map(|a| if let Arg::Entity(id) = a { Some(*id) } else { None });
                 match (entity.and_then(|id| spot(&Spot::Entity(id), link.as_deref(), &paths)), orbit.iter_mut().next()) {
+                    // During a cineractive the strategy camera behind it moves (the original's
+                    // RTS camera is not the one the shots drive): it comes back there.
+                    (Some(at), Some(_)) if cam.locked => {
+                        if let Some(saved) = cam.saved.as_mut() {
+                            saved.focus = at;
+                        }
+                    }
                     (Some(at), Some(mut o)) => o.focus = at,
                     _ => {
                         unhandled.note(name);

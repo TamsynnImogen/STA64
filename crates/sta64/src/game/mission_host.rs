@@ -279,8 +279,8 @@ pub fn deliver_reply_host_side(rt: &MissionRuntime, reply: &ScriptReply) {
         }
         // A forced end: the cancel the script may wait on, and the mode off whatever it does.
         ScriptReply::CineractiveReleased => {
-            rt.skip_cineractive();
-            rt.eval::<()>(REPORT_CINERACTIVE)
+            rt.release_cineractive();
+            Ok(())
         }
         // The enum is non-exhaustive outside this crate; a kind added later gets its arm here.
     };
@@ -296,7 +296,6 @@ fn acknowledge_audio(rt: &MissionRuntime, id: u32) {
 
 const REPORT_MOVIE: &str = "for _, n in ipairs({'A1', 'A2'}) do local t = rawget(_G, n) if type(t) == 'table' then local f = rawget(t, 'MovieDone') if f then pcall(f) end end end";
 const REPORT_AUDIO: &str = "local id = ... for _, n in ipairs({'A1', 'A2'}) do local t = rawget(_G, n) if type(t) == 'table' then local f = rawget(t, 'AudioMessageDone') if f then pcall(f, id) end end end";
-const REPORT_CINERACTIVE: &str = "local c = rawget(_G, 'Cineractive') if c ~= nil then pcall(function() c.active = false end) end";
 
 // ---------------------------------------------------------------------------
 // Systems

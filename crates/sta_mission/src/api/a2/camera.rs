@@ -153,7 +153,7 @@ impl UserData for Cineractive {
             // Starting one makes it skippable (MMM resets the flag on `active = true`, and
             // the A1/A2 skip key always works there: read from the executables, static);
             // a script that wants it otherwise sets `skippable` afterwards.
-            if on && !c.active {
+            if on {
                 c.skippable = true;
             }
             c.active = on;

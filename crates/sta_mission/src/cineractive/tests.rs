@@ -139,8 +139,15 @@ fn mmm_look_from_a_path_looks_along_it_and_look_at_sets_a_target() {
     c.observe(&call("Cineractive.lookFrom", vec![Arg::Text("RUN".into()), num(1.0)]), 0, &paths());
     let (eye, look) = c.pose(HZ as f64, &|_| None).unwrap();
     assert!(len(sub(eye, [100.0, 0.0, 0.0])) < 1e-6);
-    assert!(look[0] > eye[0], "looks along the path");
-    c.observe(&Presentation::CameraOffset { offset: sta_core::Vec3 { x: Fixed::ZERO, y: Fixed::from_int(100), z: Fixed::ZERO }, relative: false }, 0, &paths());
+    // `CineractiveShot(name, speed, true)`: no target, looking along the (fixed, zero) offset
+    // track: world +z.
+    assert!(len(sub(look, add(eye, [0.0, 0.0, 1.0]))) < 1e-9, "{look:?}");
+    // An integer speed is the same float.
+    let mut d = Cineractive::default();
+    d.observe(&on(), 0, &paths());
+    d.observe(&call("Cineractive.lookFrom", vec![Arg::Text("RUN".into()), Arg::Int(1)]), 0, &paths());
+    assert_eq!(d.shot, c.shot);
+    c.observe(&Presentation::CameraOffset { offset: sta_core::Vec3 { x: Fixed::ZERO, y: Fixed::from_int(100), z: Fixed::ZERO }, relative: true }, 0, &paths());
     c.observe(&call("Cineractive.lookAt", vec![Arg::Entity(EntityId(3))]), HZ, &paths());
     let (eye, look) = c.pose(HZ as f64, &|_| Some(([0.0, 0.0, 900.0], [0.0, 0.0, 1.0]))).unwrap();
     assert!(len(sub(eye, [100.0, 100.0, 0.0])) < 1e-6, "{eye:?}");
@@ -248,6 +255,53 @@ mod runtime {
     }
 
     #[test]
+    fn a_release_writes_the_cancel_and_lets_the_held_step_go() {
+        // The same mission with a shot that never ends (speed 0).
+        let src = MISSION.replace("A2.CineractiveShot('RUN', 1.0, 'Camera_1', 0)", "A2.CineractiveShot('RUN', 0.0, 'Camera_1', 0)");
+        let cfg = MissionConfig { paths: super::paths(), ..MissionConfig::default() };
+        let mut rt = MissionRuntime::from_source_with("missions/T.lua", &src, 1, cfg);
+        let mut out = Vec::new();
+        for t in 0..50 {
+            rt.think(&view(t), &[], &mut out);
+        }
+        assert_eq!(get(&rt, "released"), None, "a speed-0 path never finishes");
+        rt.release_cineractive();
+        assert!(!rt.cineractive().active);
+        for t in 50..55 {
+            rt.think(&view(t), &[], &mut out);
+        }
+        assert!(rt.errors().is_empty(), "{:?}", rt.errors());
+        assert_eq!(get(&rt, "cancel"), Some(50));
+        assert_eq!(get(&rt, "released"), Some(50));
+    }
+
+    #[test]
+    fn an_mmm_skip_without_hooks_still_ends_a_skippable_cineractive() {
+        let src = "MMM.register(function(t) if not rawget(_G, 'STARTED') then rawset(_G, 'STARTED', true) Cineractive.active = true end end)";
+        let mut rt = MissionRuntime::from_source("missions/T.lua", src, 1);
+        let mut out = Vec::new();
+        rt.think(&view(0), &[], &mut out);
+        assert!(rt.cineractive().active);
+        rt.skip_cineractive();
+        rt.think(&view(1), &[], &mut out);
+        assert!(!rt.cineractive().active);
+    }
+
+    #[test]
+    fn a_skip_does_not_end_a_converted_missions_cineractive() {
+        let mut rt = mission();
+        let mut out = Vec::new();
+        for t in 0..5 {
+            rt.think(&view(t), &[], &mut out);
+        }
+        // The script below ends it itself once it reads the cancel; before its update it is on.
+        rt.skip_cineractive();
+        assert!(rt.cineractive().active);
+        rt.think(&view(5), &[], &mut out);
+        assert_eq!(get(&rt, "cancel"), Some(5));
+    }
+
+    #[test]
     fn an_mmm_skip_ends_a_skippable_cineractive_with_finish_true() {
         let src = r#"
             local M = {}
@@ -268,4 +322,42 @@ mod runtime {
         assert_eq!(rt.eval::<Option<bool>>("return R.forced").unwrap(), Some(true));
         assert!(!rt.cineractive().active);
     }
+}
+
+#[test]
+fn the_no_target_bool_picks_the_eye_or_the_offset_direction() {
+    let mut c = Cineractive::default();
+    c.observe(&on(), 0, &paths());
+    // `(path, float, false)`: look along the eye path (+x).
+    c.observe(&call("A2.CineractiveShot", vec![Arg::Text("RUN".into()), num(1.0), Arg::Bool(false)]), 0, &paths());
+    let (eye, look) = c.pose(15.0, &|_| None).unwrap();
+    assert!(look[0] > eye[0] && (look[2] - eye[2]).abs() < 1e-9, "{eye:?} {look:?}");
+    // `true`: along the offset track; a path offset looks along its own direction.
+    c.observe(&call("A2.CineractiveShot", vec![Arg::Text("RUN".into()), num(1.0), Arg::Bool(true)]), 0, &paths());
+    c.observe(&call("A2.CineractiveCameraOffset", vec![Arg::Text("UNEVEN".into()), num(1.0), Arg::Bool(false)]), 0, &paths());
+    let (eye, look) = c.pose(15.0, &|_| None).unwrap();
+    assert!(look[0] > eye[0], "{eye:?} {look:?}");
+}
+
+#[test]
+fn an_offset_path_follows_the_whole_curve_from_its_second_point() {
+    let mut c = Cineractive::default();
+    c.observe(&on(), 0, &paths());
+    c.observe(&call("A1.CineractiveShot", vec![Arg::Text("ONE".into()), Arg::Int(0), Arg::Entity(EntityId(1))]), 0, &paths());
+    c.observe(&call("A1.CineractiveCameraOffset", vec![Arg::Text("RUN".into()), num(1.0), Arg::Bool(false)]), 0, &paths());
+    // At the start the offset is point 1 minus point 0; at the end, point 4 minus point 0.
+    let at = |_| Some(([0.0; 3], [0.0, 0.0, 1.0]));
+    assert!(len(sub(c.pose(0.0, &at).unwrap().0, [105.0, 6.0, 7.0])) < 1e-6);
+    assert!(len(sub(c.pose((3 * HZ) as f64, &at).unwrap().0, [405.0, 6.0, 7.0])) < 1e-6);
+}
+
+#[test]
+fn a_release_in_the_same_breath_as_the_end_still_writes_the_cancel_once() {
+    let mut c = Cineractive::default();
+    c.observe(&on(), 0, &paths());
+    c.observe(&call("A2.CineractiveShot", vec![Arg::Text("RUN".into()), num(0.0), Arg::Bool(false)]), 1, &paths());
+    c.skip();
+    c.observe(&Presentation::Cineractive { on: false, skippable: true }, 5, &paths());
+    assert_eq!(c.take_engine_values(6), Some((0, 1)));
+    assert_eq!(c.take_engine_values(7), None);
 }

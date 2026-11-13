@@ -224,6 +224,9 @@ fn object_callback(lua: &Lua, object: Table, ctx: ApiShared) -> mlua::Result<Fun
                 }
             }
             was_active |= api::cineractive_active(lua)?;
+        } else if matches!(object.raw_get::<Value>("engineVars")?, Value::Table(_)) {
+            // A converted A1/A2 mission answers a skip through `isCineractiveCancel` alone.
+            ctx.borrow_mut().cine.skip_pending = false;
         }
         if let Some(update) = object.get::<Option<Function>>("update")? {
             update.call::<MultiValue>((object.clone(), time))?;
@@ -261,8 +264,9 @@ fn object_callback(lua: &Lua, object: Table, ctx: ApiShared) -> mlua::Result<Fun
 /// nonzero (`Cineractive::Update`, static). Objects without those fields are left alone.
 fn cineractive_engine_update(lua: &Lua, object: &Table, ctx: &ApiShared) -> mlua::Result<()> {
     let values = {
-        let c = ctx.borrow();
-        c.cine.engine_values(c.view.tick)
+        let mut c = ctx.borrow_mut();
+        let tick = c.view.tick;
+        c.cine.take_engine_values(tick)
     };
     let Some((done, cancel)) = values else { return Ok(()) };
     if (done != 0 || cancel != 0)
@@ -288,6 +292,29 @@ impl MissionRuntime {
     /// `cineractiveFinish(true)`. Host-side, outside the command stream (SIM-61).
     pub fn skip_cineractive(&self) {
         self.inner.ctx.borrow_mut().cine.skip();
+    }
+
+    /// End the running cineractive for the script (a host's cap, a fault, the mission's end):
+    /// the cancel it may wait on is written (an A2 step held by `CineractiveStart` is let go) and
+    /// `Cineractive.active` is set off. Host-side, outside the command stream (SIM-61).
+    pub fn release_cineractive(&self) {
+        self.skip_cineractive();
+        self.inner.ctx.borrow_mut().cine.skip_pending = false;
+        if let Err(e) = api::set_cineractive_active(&self.inner.lua, false) {
+            self.inner.ctx.borrow_mut().log.push(format!("cineractive release: {e}"));
+        }
+    }
+
+    /// An MMM mission with no cineractive hooks (a function callback, an object without
+    /// `cineractiveFinish`): MMM still ends a skippable cineractive on the skip key.
+    fn skip_without_hooks(&self) {
+        if !std::mem::take(&mut self.inner.ctx.borrow_mut().cine.skip_pending) {
+            return;
+        }
+        let lua = &self.inner.lua;
+        if api::cineractive_active(lua).unwrap_or(false) && api::cineractive_skippable(lua).unwrap_or(false) {
+            let _ = api::set_cineractive_active(lua, false);
+        }
     }
 
     /// The cineractive state the script's requests built (for hosts and tests).
@@ -614,6 +641,7 @@ impl Controller for MissionRuntime {
         let room = MAX_LOGGED.saturating_sub(self.errors.len());
         self.errors.extend(failures.into_iter().take(room));
         self.step(view.tick);
+        self.skip_without_hooks();
         out.extend(api::drain_commands(&self.inner.ctx));
     }
 }

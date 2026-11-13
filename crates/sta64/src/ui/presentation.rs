@@ -109,7 +109,7 @@ pub const SKIP_GRACE_SECS: f32 = 10.0;
 /// script that never ends it (a lost reply, an aborted callback, a path of speed 0) cannot leave
 /// the player without camera and input for good. The longest stock intro read is A2 fed10's
 /// first shot, 184 s to its end (shot model, static); Roots intros run under a minute.
-pub const MAX_HOLD_SECS: f32 = 300.0;
+pub const MAX_HOLD_SECS: f32 = sta_mission::cineractive::MAX_HOLD_SECS as f32;
 /// After a skip, how long (real seconds) the script has to end the cineractive itself (A1 fed1
 /// plays a 5 s zoom-out first) before it is released for it.
 pub const AFTER_SKIP_SECS: f32 = 30.0;
@@ -285,6 +285,7 @@ pub(crate) fn consume(
     mut titles: ResMut<Titles>,
     mut fade: ResMut<FadeState>,
     mut cineractive: ResMut<CineractiveState>,
+    mut clock: ResMut<CineractiveClock>,
     mut unhandled: ResMut<Unhandled>,
 ) {
     for SimMsg(e) in events.read() {
@@ -299,7 +300,13 @@ pub(crate) fn consume(
             }),
             Presentation::RemoveTitle { id } => titles.remove(*id),
             Presentation::Fade { out, seconds, rgb } => fade.start(*out, seconds.to_f32(), *rgb),
-            Presentation::Cineractive { on, skippable } => *cineractive = CineractiveState { on: *on, skippable: *on && *skippable },
+            Presentation::Cineractive { on, skippable } => {
+                // A new cineractive (even one started in the frame the last one ended) can be skipped anew.
+                if !(*on && cineractive.on) {
+                    clock.skipped_for = None;
+                }
+                *cineractive = CineractiveState { on: *on, skippable: *on && *skippable };
+            }
             // A2 `UI.addTitle(text, x, y, seconds, flag)`: the placement the typed form lacks.
             Presentation::Call { name, args } if name == "UI.addTitle" || name == "UI.addSubtitle" => {
                 let subtitle = name == "UI.addSubtitle";
@@ -773,6 +780,24 @@ mod tests {
         app.world_mut().resource_mut::<CineractiveClock>().skipped_for = Some(AFTER_SKIP_SECS);
         app.update();
         assert_eq!(replies(&mut app), [ScriptReply::CineractiveReleased]);
+    }
+
+    #[test]
+    fn a_cineractive_started_in_the_frame_the_skipped_one_ended_can_be_skipped_again() {
+        let mut app = app();
+        send(&mut app, Presentation::Cineractive { on: true, skippable: true });
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Space);
+        app.update();
+        assert_eq!(replies(&mut app), [ScriptReply::CineractiveSkipped]);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(KeyCode::Space);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+        // End and start in one frame.
+        app.world_mut().write_message(SimMsg(SimEvent::Present(Presentation::Cineractive { on: false, skippable: true })));
+        send(&mut app, Presentation::Cineractive { on: true, skippable: true });
+        assert_eq!(app.world().resource::<CineractiveClock>().skipped_for, None);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Space);
+        app.update();
+        assert_eq!(replies(&mut app), [ScriptReply::CineractiveSkipped]);
     }
 
     #[test]
