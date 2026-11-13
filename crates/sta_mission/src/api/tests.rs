@@ -55,6 +55,7 @@ fn game(script: &str) -> Game {
         content: Some(content),
         labels: sim.labels.iter().map(|(id, l)| (id, l.clone())).collect(),
         view: Some((*sim.view()).clone()),
+        paths: Vec::new(),
         player_numbering: super::PlayerNumbering::Slots,
     };
     let rt = MissionRuntime::from_source_with("missions/T.lua", script, 1, cfg);

@@ -863,6 +863,11 @@ pub trait MissionHost {
     /// ([`resolved_script`] runs the one the book resolved).
     fn script(&self, _campaign: &Campaign, mission: &CampaignMission) -> Result<(String, ScriptReader), String>;
 
+    /// The map's named paths `(label, points)`, in file order, for `A2.paths`.
+    fn map_paths(&self, _campaign: &Campaign, _mission: &CampaignMission) -> Vec<(String, Vec<[f32; 3]>)> {
+        Vec::new()
+    }
+
     /// The seat the mission runs as and its player numbering.
     fn seat(&self) -> (PlayerId, PlayerNumbering) {
         (PlayerId(0), PlayerNumbering::Slots)
@@ -1062,6 +1067,7 @@ impl CampaignRunner {
             player_numbering: numbering,
             content: Some(setup.content.clone()),
             labels: sim.labels.iter().map(|(id, l)| (id, l.clone())).collect(),
+            paths: host.map_paths(c, m),
             view: Some((*sim.view()).clone()),
         };
         let runtime = MissionRuntime::load_with(&path, seed, cfg, move |p| reader(p));
@@ -1179,6 +1185,11 @@ impl MissionHost for VfsHost {
 
     fn script(&self, _campaign: &Campaign, mission: &CampaignMission) -> Result<(String, ScriptReader), String> {
         resolved_script(mission, self.reader())
+    }
+
+    fn map_paths(&self, _campaign: &Campaign, mission: &CampaignMission) -> Vec<(String, Vec<[f32; 3]>)> {
+        let Some(Ok(bytes)) = self.vfs.read(&format!("bzn/{}", mission.bzn)) else { return Vec::new() };
+        sta_bzn::parse(&bytes).map(|m| m.paths.into_iter().map(|p| (p.label, p.points)).collect()).unwrap_or_default()
     }
 
     fn seat(&self) -> (PlayerId, PlayerNumbering) {

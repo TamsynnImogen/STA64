@@ -51,7 +51,23 @@ pub(super) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
     objects::install(lua, ctx, &a2)?;
     queries::install(lua, ctx, &a2)?;
     random::install(lua, ctx, &a2)?;
-    a2.set("paths", lua.create_table()?)?;
+    // `A2.paths[label] = { {x=, y=, z=}, ... }` from the map's `AiPaths` (CON-47):
+    // the first path of a label wins (the engine looks a name up in list order).
+    let paths = lua.create_table()?;
+    for (label, points) in &ctx.borrow().paths {
+        if paths.raw_get::<mlua::Value>(label.as_str())?.is_nil() {
+            let list = lua.create_table()?;
+            for (i, p) in points.iter().enumerate() {
+                let point = lua.create_table()?;
+                point.set("x", f64::from(p[0]))?;
+                point.set("y", f64::from(p[1]))?;
+                point.set("z", f64::from(p[2]))?;
+                list.set(i + 1, point)?;
+            }
+            paths.set(label.as_str(), list)?;
+        }
+    }
+    a2.set("paths", paths)?;
     conditions::install(lua, ctx, &a2)?;
     subsystems::install(lua, ctx, &a2)?;
     orders::install(lua, ctx, &a2)?;
