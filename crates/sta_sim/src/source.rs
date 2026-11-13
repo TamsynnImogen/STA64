@@ -17,4 +17,12 @@ pub trait WorldSource: Send {
     fn step(&mut self, commands: &[Command]) -> TickOutput;
     /// The world now: after the last step, or at tick 0 before any.
     fn view(&self) -> Arc<WorldView>;
+    /// The whole world as snapshot bytes ([`Sim::snapshot`]), for sources that
+    /// can: the playtest capture (TOOL-14) reads it, nothing in the sim does.
+    /// The fakes have no state to save and answer `None`.
+    ///
+    /// [`Sim::snapshot`]: crate::Sim::snapshot
+    fn snapshot(&self) -> Option<Vec<u8>> {
+        None
+    }
 }

@@ -45,15 +45,11 @@ manual desktop build; native visual acceptance remains the user's check.
 
 ## Confirmed font-colour mapping
 
-The pinned stock Armada2.exe SHA-256
-`8d3ba6ec826198daf3e0c7b3435e9ce8195293e56da7c87e0af2634eaa4693b3`
-loads `infoTextColor` in `FUN_004eff80` (string reference at `0x4f0642`)
-and copies it into both single and builder name/class GUIText objects.
-The clean FleetOpsHook pseudocode at
-`pseudocode/clean/full-20261021/functions/0x1ee05c.c` (DLL SHA-256
-`b53e91281be33ee998e30bd971b6c944cb4f5fb2174fb9f0cc756ca3ef94e8a9`)
+Stock A2 loads `infoTextColor` and copies it into both the single and builder
+name/class GUIText objects (read from the executable, static). FleetOpsHook
 then overrides those pairs independently with `nameTextColor` and
-`classTextColor`. This is static evidence, not original-game execution.
+`classTextColor` (read from the hook, static). Not original-game execution.
+Instruction-level notes are kept outside the repository.
 
 The stock renderer now uses these native keys with its existing
 `infoSingleNameTextColor` / `infoSingleClassTextColor` compatibility overrides
@@ -65,8 +61,7 @@ remains unchanged; disabled bar colours are not text colours.
 The current Classic `gui_interface.cfg` explicitly authors magenta
 `infoTextColor` and `shipNameColor`. FO4 authors white names/info and grey
 (`0.65 0.65 0.65`) class text. These are mod data, not new engine constants.
-A fresh REA evidence bundle is retained privately under
-`STA64-artifacts/probes/ui17/native-ui18-font-colours-20261112.json`.
+The evidence bundle is retained privately, outside the repository.
 
 ## Validation of the integrated implementation
 

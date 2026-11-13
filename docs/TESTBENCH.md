@@ -521,6 +521,99 @@ compared. What a parity run finds is recorded as an observation (a number
 and the scene that measured it), which `ARCHITECTURE.md`, "Legal boundary"
 allows; the frames stay local.
 
+## Playtest captures
+
+A playtester who sees a bug presses **Ctrl+F12** in a match (`Action::Capture`
+in the key bindings: F12 with the group modifier held). The game writes a
+folder and shows "Capture saved: <path>" as a notice; the game goes on. The
+folder is a bug report a fix agent can replay without the player's screenshot.
+`sta_bench::capture` owns the layout, `sta64/src/capture.rs` the hotkey.
+
+Where: `$STA64_CAPTURE_DIR`, else `$XDG_DATA_HOME/sta64/captures` (Windows
+`%LOCALAPPDATA%\sta64\captures`, macOS `~/Library/Application Support/sta64/captures`),
+one `<UTC stamp>-t<tick>/` folder per capture. Never inside a game install.
+
+| File | What |
+|---|---|
+| `capture.json` | the index (`CaptureIndex`): tick, digest, map, seed, content hash, profile, seats (race, control), the mount (install root, active mod, layers in priority order), build (version, git commit, OS), selected units (id, definition, owner, race, position, hull, flags), the unit under the cursor, the cursor on the ground (map space), the camera pose |
+| `capture.md` | the same for people |
+| `replay.star` | a `sta_sim::replay::Replay`: the start configuration (the whole `MapDef` is in it), every command the sim was given, digests every 30 ticks |
+| `snapshot.sta` | `Sim::snapshot` at the capture tick |
+| `note.txt` | the player's words: `STA64_CAPTURE_NOTE` if it was set, else empty |
+
+Not captured: a rendered frame (the match has no in-app frame dump; the
+headless bench's frames draw stand-ins and are not the player's view, and a
+screen grab is out of the question). HUD state beyond the selection is not in
+it either. Capturing only reads the sim link's log and view, so it cannot
+change a digest. The command log is kept for every match from tick 0 (each
+order carries its unit ids, AI orders included: a few MB over a long game); it
+is what the capture reads. The capture is written on the frame of the key
+press, so that frame stalls for a moment. The git commit in the index is
+whatever `STA64_GIT_COMMIT` was set to when the binary was compiled, else
+unknown.
+
+### Reproducing one
+
+```sh
+sta-bench capture list                       # newest first
+sta-bench capture check latest               # or a folder; exit 0 when it reproduces
+sta-bench capture check <folder> --install "<install root>" --mod "<mod folder>"
+```
+
+`check` mounts the install the capture recorded (override with `--install` and
+`--mod`; the mod chain and the content hash must be the playtester's), loads
+its content and races as the game does, builds the sim the way the game did
+(`index.start`: a skirmish places the seats' starting forces), replays the
+command log to the capture tick, comparing every recorded digest on the way,
+and checks the digest at the tick against the index's. It also restores
+`snapshot.sta` and compares that digest. A failure names the first tick that
+differs (tick 0 means the start state differs: other content, mod or build).
+`--fake` is for captures of the bench's own fake content (the tests).
+
+A capture only reproduces on the build and content it was taken with. When the
+sim has changed since, the digest drifts and `check` says FAIL (exit 1) with the
+first differing tick. When it cannot be replayed at all (other content or mod:
+content hash differs; a replay or snapshot format the build no longer reads) it
+says ERROR and exits 3, which is not a desync. In the last case `capture.json`
+and `capture.md` are still plain text for a person to read, though
+`Capture::load` refuses the folder.
+
+`--mod` defaults to the capture's recorded mod; `--install` alone keeps it.
+Computer players are not recorded or recreated (D3: controllers run on the
+host and their orders are in the log), so a sim replayed to the capture tick
+and then stepped further has idle AI seats: it matches the player's game up to
+the capture tick only.
+
+### From a capture to a regression test
+
+1. `sta-bench capture check <folder>` first. A capture that does not replay is
+   a different bug (or a sim change): say so on the issue.
+2. Read `capture.md`: the selected ids and definitions are the suspects;
+   `note.txt` says what the player saw.
+3. **Never commit a capture, or any file cut from one.** `replay.star` holds the
+   map converted from the install's BZN, and the index and snapshot name unit
+   definitions read from the install: that is game data. A regression test in
+   the repo is either a hand-built scene on synthetic content (`fake::db()`)
+   that reproduces the same condition, or install-gated (it reads the
+   install at run time, skips when `STA64_TEST_INSTALL` is unset, and
+   keeps nothing from it). Write the test against the library, not the folder:
+
+   ```rust
+   // install-gated: the capture's own content
+   let (db, races) = sta_bench::capture::load_install(root, Some("Fleet Ops 4.0"))?;
+   let cap = sta_bench::capture::Capture::load(folder)?;
+   let mut sim = cap.replay_to_tick(db, Some(&races))?;   // the sim at the capture tick, digest checked
+   sim.step(&[]);                                          // run on, then assert the fixed behaviour
+   ```
+
+4. For a scene-level scenario (`bench/scenarios/*.md`), the capture's index
+   gives the unit definitions, positions and owners to place with `Object`
+   sections and to `Select`, `Order` and `Expect` on. (`Start=snapshot:` and
+   `Start=replay:` are the planned way to start from the capture's own files,
+   see "Starting points"; the runner does not read them yet.)
+5. Put the capture's tick, digest and the folder name in the issue, not the
+   folder itself.
+
 ## Sessions and reports
 
 A thin layer over Refit's conventions (`testbench/README.md`, "Which session
@@ -534,7 +627,7 @@ a command acts on"):
 - Each run writes `$XDG_DATA_HOME/sta64/bench/results/<run>/` with `latest`
   pointing at it: `index.html`, `report.md`, `results.json`, and per case
   `log.txt`, `bench.log`, `objects.jsonl`, `marks`, `frames/`.
-- CI uploads `report.md` and `results.json`, never frames.
+- CI uploads `report.md`, `results.json` and the `digests` files, never frames.
 
 ## CI
 
@@ -543,7 +636,31 @@ The matrix in `.github/workflows/ci.yml` has no game install, so:
 - **core job**: `cargo test -p sta_bench` runs the parsers (Refit's scene and
   scenario files as fixtures), the command vocabulary, and tier-1 scenes
   built from a synthetic content fixture (our own JSON5 units and glTF
-  meshes, no game data). The golden digests run here on all four platforms.
+  meshes, no game data). The golden digests run here on all four platforms:
+  the `golden-*` scenarios (`bench/scenarios/`, TOOL-06) are an existing
+  scenario's scene and commands plus a last step `Expect digest at tick N is
+  "HEX"`, so a change that moves a digest fails the job on every target (replace
+  the value on purpose and say why in the PR). After the tests the job runs
+  `sta-bench check --out bench-report` and uploads `report.md`, `results.json`
+  and the per-tick `digests` files as `bench-report-<os>`, to compare a drifting
+  platform with `sta-bench diff`; never frames.
+- **Re-pinning a golden** (a PR that changes sim output, or fake content, will
+  see `golden-*` scenarios fail with `digest at tick N is NEW, wanted OLD`):
+  1. Run `cargo run -p sta_bench --bin sta-bench -- run golden-planet golden-firing
+     ...` (all `golden-*`, `sta-bench list` names them) on your branch merged
+     with current `origin/main`. Only the goldens whose digest moved need work.
+  2. For each, work out which change of *yours* moves it (a content field, a
+     rule, a system order). If you cannot attribute it, it is a bug or a
+     determinism problem: do not re-pin.
+  3. Replace the value in `bench/scenarios/golden-<name>.md` (the failing step
+     prints the new one). Keep goldens on fixed ticks (`Run N ticks`, `Run until
+     tick N`), not `Wait until`, whose end tick moves with behaviour.
+  4. The PR body names every re-pinned golden, the old and new digest, and the
+     one-line reason (e.g. "golden-mining: miners now pay the unload fee").
+     A PR that moves none says so. Goldens are of STA64's own output on the
+     fake content; never pin anything derived from an install.
+  5. Merge `origin/main` again before asking for review: another PR may have
+     moved the same golden, and the later one re-pins on top.
 - **game job**: after the build, `sta64 --sim-only --scene
   bench/scenes/synthetic.ini --ticks 300` checks the scene path end to end.
 - Scenarios that need the install run locally and skip when

@@ -25,7 +25,7 @@
 //!    with a warning. The field is data the mod ships; it is not read from
 //!    an executable.
 //! 4. **Host base `Data/info.ini`.** For a mod whose own `info.ini` has no
-//!    `AssetVersion`: the install's base `Data/info.ini` is read, for its
+//!    `AssetVersion` (a stated older value skips this step): the install's base `Data/info.ini` is read, for its
 //!    `[Mod] Name` only (the matcher of step 6), even when D6 does not mount
 //!    `Data` under a `standalone` mod. It is never mounted or merged.
 //! 5. **`Data/packages.ini`.** `[FleetOps] Version=` is recorded in
@@ -63,7 +63,7 @@
 //! over parent) < per-ODF overrides (`Feature_<name>` keys). Each source is an
 //! [`Overrides`]; later sources win per feature.
 //!
-//! Hookup: `ContentDb::load` calls `Profile::detect(vfs)` and
+//! Hookup: `ContentDb::load` calls `Profile::detect_with_source(vfs)` and
 //! `Overrides::from_vfs(vfs)`; db-wide features are
 //! `resolve_features(profile, &[&mod_ov])`, and a def's own are
 //! `resolve_features(profile, &[&mod_ov, &Overrides::from_odf_keys(..)])`,
@@ -210,7 +210,7 @@ impl Profile {
                 Some(l.root.clone())
             } else {
                 let mods = l.root.parent().filter(|m| m.file_name().is_some_and(|n| n.eq_ignore_ascii_case("mods")))?;
-                Some(mods.parent()?.to_path_buf())
+                mods.parent().filter(|d| d.file_name().is_some_and(|n| n.eq_ignore_ascii_case("data"))).map(Path::to_path_buf)
             }
         });
         let fleetops_version = host_data.as_deref().and_then(read_fleetops_version);
@@ -262,8 +262,11 @@ impl Profile {
         {
             return (Profile::Fo4, DetectStep::AssetVersion, Some(p.clone()), format!("AssetVersion = {v}"));
         }
-        // 4. The host's base Data/info.ini, for its name only.
-        if let Some(data) = host_data
+        // 4. The host's base Data/info.ini, for its name only: a fallback for a
+        // mod that states no AssetVersion. A stated older value (a mod designed
+        // for FO 3.x) is not a Roots mod and skips this step.
+        if versions.iter().all(Option::is_none)
+            && let Some(data) = host_data
             && let Some(p) = find_ci(data, "info.ini")
             && let Some(ini) = read_info(data)
             && let Some(name) = ini.get("mod", "name").filter(|n| looks_like_fo(n))
