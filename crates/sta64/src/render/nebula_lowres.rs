@@ -58,7 +58,7 @@ pub struct NebulaLowRes {
 struct LowView {
     world_from_clip: Mat4,
     size: Vec4,
-    /// x 1 when the view's colour is 8-bit: the gas's light is clipped at 1, as the
+    /// y, z the view's size; x 1 when the view's colour is 8-bit: the gas's light is clipped at 1, as the
     /// per-pixel march's blend clips it, before the filter averages it.
     flags: Vec4,
 }
@@ -114,7 +114,7 @@ fn extract(
                 c.insert(*l);
             }
             None => {
-                c.remove::<NebulaLowRes>();
+                c.remove::<(NebulaLowRes, LowPlan)>();
             }
         }
     }
@@ -255,15 +255,15 @@ struct LowPlan {
     fields: Vec<(BindGroup, [u32; 4])>,
 }
 
-/// The pixel rectangle of a world-space box on a `w` x `h` target, or `None` when it is
+/// The pixel rectangle of a world-space box on the `w` x `h` view's target 1/`n` the size, or `None` when it is
 /// off screen. A box with a corner at or behind the eye covers the whole target.
-fn box_rect(clip_from_world: &Mat4, lo: Vec3, hi: Vec3, w: u32, h: u32) -> Option<[u32; 4]> {
+fn box_rect(clip_from_world: &Mat4, lo: Vec3, hi: Vec3, w: u32, h: u32, n: u32) -> Option<[u32; 4]> {
     let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
     for i in 0..8 {
         let p = Vec3::new(if i & 1 == 0 { lo.x } else { hi.x }, if i & 2 == 0 { lo.y } else { hi.y }, if i & 4 == 0 { lo.z } else { hi.z });
         let c = *clip_from_world * p.extend(1.0);
         if c.w <= 1e-3 {
-            return Some([0, 0, w, h]);
+            return Some([0, 0, w.div_ceil(n), h.div_ceil(n)]);
         }
         let (nx, ny) = (c.x / c.w, c.y / c.w);
         x0 = x0.min(nx);
@@ -271,13 +271,16 @@ fn box_rect(clip_from_world: &Mat4, lo: Vec3, hi: Vec3, w: u32, h: u32) -> Optio
         y0 = y0.min(ny);
         y1 = y1.max(ny);
     }
-    // Normalised device (y up) to pixels (y down), a texel of margin for the filter.
-    let px = |n: f32, len: u32| (n * 0.5 + 0.5) * len as f32;
-    let py = |n: f32, len: u32| (0.5 - n * 0.5) * len as f32;
+    // Normalised device (y up) to the view's pixels (y down), then to the small target's
+    // texels (the last one may cover fewer view pixels), a texel of margin for the filter.
+    let (lw, lh) = (w.div_ceil(n), h.div_ceil(n));
+    let nf = n as f32;
+    let px = |v: f32, len: u32| (v * 0.5 + 0.5) * len as f32 / nf;
+    let py = |v: f32, len: u32| (0.5 - v * 0.5) * len as f32 / nf;
     let left = (px(x0, w) - 2.0).floor().max(0.0);
-    let right = (px(x1, w) + 2.0).ceil().min(w as f32);
+    let right = (px(x1, w) + 2.0).ceil().min(lw as f32);
     let top = (py(y1, h) - 2.0).floor().max(0.0);
-    let bottom = (py(y0, h) + 2.0).ceil().min(h as f32);
+    let bottom = (py(y0, h) + 2.0).ceil().min(lh as f32);
     (right > left && bottom > top).then_some([left as u32, top as u32, (right - left) as u32, (bottom - top) as u32])
 }
 
@@ -311,7 +314,7 @@ fn prepare(
                 .iter()
                 .filter_map(|f| {
                     let p = &f.material.params;
-                    let rect = box_rect(&clip_from_world, p.box_lo.truncate(), p.box_hi.truncate(), lw, lh)?;
+                    let rect = box_rect(&clip_from_world, p.box_lo.truncate(), p.box_hi.truncate(), full.width, full.height, n)?;
                     let centre = (p.box_lo.truncate() + p.box_hi.truncate()) * 0.5;
                     Some((centre.distance_squared(eye), f, rect))
                 })
@@ -321,7 +324,7 @@ fn prepare(
             }
             seen.sort_by(|a, b| b.0.total_cmp(&a.0));
             let near = view.clip_from_view.w_axis.z;
-            let lv = LowView { world_from_clip: clip_from_world.inverse(), size: Vec4::new(lw as f32, lh as f32, n as f32, near), flags: Vec4::new(if target.main_texture_format() == TextureFormat::Rgba16Float { 0.0 } else { 1.0 }, 0.0, 0.0, 0.0) };
+            let lv = LowView { world_from_clip: clip_from_world.inverse(), size: Vec4::new(lw as f32, lh as f32, n as f32, near), flags: Vec4::new(if target.main_texture_format() == TextureFormat::Rgba16Float { 0.0 } else { 1.0 }, full.width as f32, full.height as f32, 0.0) };
             let mut ub = UniformBuffer::from(lv);
             ub.write_buffer(&device, &queue);
             let samples = msaa.samples();
@@ -454,17 +457,17 @@ mod tests {
     #[test]
     fn a_box_ahead_covers_its_projection_and_one_behind_nothing() {
         let m = view();
-        let r = box_rect(&m, Vec3::new(-10.0, -10.0, -110.0), Vec3::new(10.0, 10.0, -90.0), 100, 100).unwrap();
+        let r = box_rect(&m, Vec3::new(-10.0, -10.0, -110.0), Vec3::new(10.0, 10.0, -90.0), 100, 100, 1).unwrap();
         // About 10/90 of the half width either side of the centre, plus the margin.
         assert!(r[0] >= 30 && r[0] <= 45 && r[2] >= 10 && r[2] <= 40, "{r:?}");
-        assert_eq!(box_rect(&m, Vec3::new(-10.0, -10.0, 90.0), Vec3::new(10.0, 10.0, 110.0), 100, 100), Some([0, 0, 100, 100]));
+        assert_eq!(box_rect(&m, Vec3::new(-10.0, -10.0, 90.0), Vec3::new(10.0, 10.0, 110.0), 100, 100, 1), Some([0, 0, 100, 100]));
         // Far off to the side, off screen.
-        assert_eq!(box_rect(&m, Vec3::new(1000.0, -10.0, -110.0), Vec3::new(1010.0, 10.0, -90.0), 100, 100), None);
+        assert_eq!(box_rect(&m, Vec3::new(1000.0, -10.0, -110.0), Vec3::new(1010.0, 10.0, -90.0), 100, 100, 1), None);
     }
 
     #[test]
     fn an_eye_inside_a_box_covers_the_whole_target() {
         let m = view();
-        assert_eq!(box_rect(&m, Vec3::splat(-50.0), Vec3::splat(50.0), 64, 32), Some([0, 0, 64, 32]));
+        assert_eq!(box_rect(&m, Vec3::splat(-50.0), Vec3::splat(50.0), 64, 32, 1), Some([0, 0, 64, 32]));
     }
 }

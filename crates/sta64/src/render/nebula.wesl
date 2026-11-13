@@ -363,7 +363,7 @@ fn fragment(i: FragIn) -> @location(0) vec4<f32> {
 struct LowView {
     world_from_clip: mat4x4<f32>,
     size: vec4<f32>,       // the target's width and height, n, the camera's near plane
-    flags: vec4<f32>,      // x 1: 8-bit colour, clip the light at 1
+    flags: vec4<f32>,      // x 1: 8-bit colour, clip the light at 1; y, z the view's size
 };
 @group(0) @binding(30) var low_depth: texture_2d<f32>;
 @group(0) @binding(31) var<uniform> lv: LowView;
@@ -376,7 +376,9 @@ struct LowIn {
 @fragment
 fn fragment_low(i: LowIn) -> @location(0) vec4<f32> {
     let eye = k.eye.xyz;
-    let ndc = vec2<f32>(i.uv.x * 2.0 - 1.0, 1.0 - i.uv.y * 2.0);
+    // The texel's centre in the view's pixels (the last texel may reach past the view).
+    let vp = i.position.xy * lv.size.z;
+    let ndc = vec2<f32>(vp.x / lv.flags.y * 2.0 - 1.0, 1.0 - vp.y / lv.flags.z * 2.0);
     let p = lv.world_from_clip * vec4<f32>(ndc, 1.0, 1.0);
     let d = normalize(p.xyz / p.w - eye);
     let span = box_span(eye, d);
