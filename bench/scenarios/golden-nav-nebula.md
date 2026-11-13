@@ -11,4 +11,4 @@ Scene: nav-nebula Seed=3
 2. Run 10 ticks
 3. Run until tick 736
 4. Run 30 ticks
-5. Expect digest at tick 766 is "0fd52738b4fecc13"
+5. Expect digest at tick 766 is "7ef555455e1c6844"

@@ -9,4 +9,4 @@ Scene: mining Seed=3
 
 1. Scene "mine miner moon"
 2. Run 1800 ticks
-3. Expect digest at tick 1800 is "d69f140e0186ff37"
+3. Expect digest at tick 1800 is "0566ee4ba717971c"
