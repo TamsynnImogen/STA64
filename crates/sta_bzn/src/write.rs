@@ -98,6 +98,14 @@ fn check(map: &Map) -> Result<(), WriteError> {
             return Err(WriteError::NotFinite("start location"));
         }
     }
+    for p in &map.paths {
+        if !p.points.iter().flatten().all(|f| f.is_finite()) || !p.belt_speed.is_finite() {
+            return Err(WriteError::NotFinite("path point"));
+        }
+        if p.label.contains('\0') || p.label.contains(['\r', '\n']) {
+            return Err(WriteError::NotFinite("path label"));
+        }
+    }
     for (index, o) in map.objects.iter().enumerate() {
         if o.odf.len() >= i16::MAX as usize {
             return Err(WriteError::TooLong {
@@ -237,6 +245,23 @@ fn binary(map: &Map) -> Result<Vec<u8>, WriteError> {
         let t: Vec<u8> = o.transform.iter().flat_map(|f| f.to_le_bytes()).collect();
         r.rec(11, &t);
     }
+    // The path list ends the file (see `crate::paths`); the pointer word is 0.
+    r.i32(map.paths.len() as i32);
+    for p in &map.paths {
+        r.rec(0, &0u32.to_le_bytes());
+        r.i32(p.label.len() as i32);
+        if !p.label.is_empty() {
+            r.rec(0, p.label.as_bytes());
+        }
+        r.i32(p.points.len() as i32);
+        if !p.points.is_empty() {
+            let b: Vec<u8> = p.points.iter().flatten().flat_map(|f| f.to_le_bytes()).collect();
+            r.rec(9, &b);
+        }
+        r.rec(0, &p.path_type.to_le_bytes());
+        r.f32(p.belt_speed);
+        r.i32(p.nebula_type);
+    }
     Ok(r.0)
 }
 
@@ -353,6 +378,24 @@ fn text(map: &Map) -> Result<String, WriteError> {
     for o in &map.objects {
         text_object(&mut out, o);
     }
+    out.push_str(&format!("[AiPaths]\r\ncount [1] =\r\n{}\r\n", map.paths.len()));
+    for p in &map.paths {
+        out.push_str(&format!(
+            "[AiPath]\r\nold_ptr = 00000000\r\nsize [1] =\r\n{}\r\nm_pLabel = {}\r\npointCount [1] =\r\n{}\r\npoints [{}] =\r\n",
+            p.label.len(),
+            p.label,
+            p.points.len(),
+            p.points.len()
+        ));
+        for v in &p.points {
+            out.push_str(&format!("  x [1] =\r\n{}\r\n  y [1] =\r\n{}\r\n  z [1] =\r\n{}\r\n", v[0], v[1], v[2]));
+        }
+        let t = p.path_type.to_le_bytes();
+        out.push_str(&format!(
+            "pathType = {:02x}{:02x}{:02x}{:02x}\r\nasteroid_belt_speed [1] =\r\n{}\r\nm_nebula_type [1] =\r\n{}\r\n",
+            t[0], t[1], t[2], t[3], p.belt_speed, p.nebula_type
+        ));
+    }
     Ok(out)
 }
 
@@ -410,8 +453,36 @@ mod tests {
                     light_colour: None,
                 },
             ],
+            paths: vec![
+                crate::MapPath {
+                    label: "pat_1".into(),
+                    points: vec![[1.0, 2.0, 3.0], [-4.5, 0.0, 9.25], [7.0, 0.5, 8.0]],
+                    path_type: 2,
+                    belt_speed: 0.01,
+                    nebula_type: 1,
+                },
+                crate::MapPath { label: "abcd".into(), points: vec![[10.0, 0.0, 20.0]], path_type: 0, belt_speed: 0.0, nebula_type: 0 },
+                crate::MapPath { label: String::new(), points: Vec::new(), path_type: 0, belt_speed: 0.5, nebula_type: -1 },
+            ],
             a1: None,
         }
+    }
+
+    #[test]
+    fn a_map_without_paths_round_trips_and_reads_none() {
+        for binary in [true, false] {
+            let mut m = sample(binary);
+            m.paths.clear();
+            assert_eq!(crate::parse(&write(&m).unwrap()).unwrap(), m);
+        }
+    }
+
+    #[test]
+    fn path_labels_are_found_exactly_then_ignoring_case() {
+        let m = sample(true);
+        assert_eq!(crate::paths::find(&m.paths, "pat_1").unwrap().points.len(), 3);
+        assert_eq!(crate::paths::find(&m.paths, "PAT_1").unwrap().label, "pat_1");
+        assert!(crate::paths::find(&m.paths, "nope").is_none());
     }
 
     #[test]

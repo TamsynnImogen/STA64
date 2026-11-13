@@ -359,6 +359,14 @@ mod tests {
         "Notice::new",
         "Tooltip::new",
         "verbose",
+        "checkbox",
+        "dropdown",
+        "tab_bar",
+        "text_field",
+        "kit_text",
+        "act_button",
+        "off_button",
+        "sprite_text_styled",
     ];
 
     /// Files that may keep literals, and why.

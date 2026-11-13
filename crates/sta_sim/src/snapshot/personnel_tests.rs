@@ -75,63 +75,41 @@ fn crew_zero_absence_and_mutation_have_distinct_saved_hashes() {
     assert_eq!(sim.view().player(PlayerId(0)).unwrap().crew, None);
 }
 
-fn before_personnel(bytes: &[u8]) -> usize {
-    let (_, rest): (Body, _) = postcard::take_from_bytes(&bytes[HEADER..]).unwrap();
-    let (_, rest): (Option<(Vec3, Vec3)>, _) = postcard::take_from_bytes(rest).unwrap();
-    let (_, rest): (BoundaryRec, _) = postcard::take_from_bytes(rest).unwrap();
-    let (_, rest): (PerceptionRec, _) = postcard::take_from_bytes(rest).unwrap();
-    bytes.len() - rest.len()
-}
 
 #[test]
 fn current_suffix_is_mandatory_and_rejects_noncanonical_rows() {
     let (setup, races) = setup(StartingResources::Normal, 0);
     let (sim, _) = Sim::from_setup_with_starts(&setup, &races);
     let bytes = sim.snapshot();
-    let end = before_personnel(&bytes);
-    assert!(Sim::from_snapshot(&bytes[..end], Some(setup.content.clone())).is_err());
+    let content = || Some(setup.content.clone());
+    assert!(Sim::from_snapshot(&bytes, content()).is_ok());
+    assert!(Sim::from_snapshot(&chain::before(&bytes, chain::PERSONNEL), content()).is_err());
     let valid = (PlayerId(0), Some(Fixed::ONE.to_bits()), Some(Fixed::ONE.to_bits()));
-    for rows in [
-        vec![valid, valid],
-        vec![(PlayerId(9), valid.1, valid.2)],
-        vec![(PlayerId(0), None, None)],
-        vec![(PlayerId(0), Some(-1), None)],
+    for (rows, why) in [
+        (vec![valid, valid], "personnel rows out of order/duplicate"),
+        (vec![(PlayerId(9), valid.1, valid.2)], "invalid personnel player/value"),
+        (vec![(PlayerId(0), None, None)], "invalid personnel player/value"),
+        (vec![(PlayerId(0), Some(-1), None)], "invalid personnel player/value"),
     ] {
-        let mut bad = bytes[..end].to_vec();
-        bad.extend(postcard::to_allocvec(&PersonnelRec { version: 1, rows }).unwrap());
-        bad.extend(postcard::to_allocvec(&UnitCrewRec { version: 1, rows: Vec::new() }).unwrap());
-        assert!(Sim::from_snapshot(&bad, Some(setup.content.clone())).is_err());
+        let bad = chain::with(&bytes, chain::PERSONNEL, chain::enc(&PersonnelRec { version: 1, rows }));
+        assert_eq!(chain::corrupt(&bad, content()), why);
     }
-    let mut bad = bytes[..end].to_vec();
-    bad.extend(
-        postcard::to_allocvec(&PersonnelRec {
-            version: 2,
-            rows: Vec::new(),
-        })
-        .unwrap(),
-    );
-    assert!(Sim::from_snapshot(&bad, Some(setup.content.clone())).is_err());
+    let bad = chain::with(&bytes, chain::PERSONNEL, chain::enc(&PersonnelRec { version: 2, rows: Vec::new() }));
+    assert_eq!(chain::corrupt(&bad, content()), "unknown personnel record version");
     let mut trailing = bytes.clone();
     trailing.push(0);
-    assert!(Sim::from_snapshot(&trailing, Some(setup.content)).is_err());
+    assert_eq!(chain::corrupt(&trailing, content()), "trailing bytes");
 }
 
 #[test]
-fn structural_v11_reader_keeps_personnel_unknown_and_checks_its_seam() {
+fn the_v11_layout_is_refused_by_version() {
     let (setup, races) = setup(StartingResources::Normal, 0);
     let (sim, _) = Sim::from_setup_with_starts(&setup, &races);
     let bytes = sim.snapshot();
-    let mut old = bytes[..before_personnel(&bytes)].to_vec();
+    let mut old = chain::before(&bytes, chain::PERSONNEL);
     old[4..6].copy_from_slice(&11u16.to_le_bytes());
     old[6..10].copy_from_slice(&2u32.to_le_bytes());
-    let loaded = Sim::from_snapshot(&old, Some(setup.content.clone())).unwrap();
-    assert_eq!(loaded.view().player(PlayerId(0)).unwrap().crew, None);
-    assert_eq!(loaded.economy.officer_limit(PlayerId(0)), None);
-    old[6..10].copy_from_slice(&SEAM_REV.to_le_bytes());
-    assert!(matches!(
-        Sim::from_snapshot(&old, Some(setup.content)),
-        Err(SnapshotError::SeamRev { .. })
-    ));
+    assert_eq!(Sim::from_snapshot(&old, Some(setup.content)).err(), Some(SnapshotError::FormatVersion { found: 11 }));
 }
 
 #[test]
@@ -147,28 +125,25 @@ fn replay_roundtrips_start_choices_and_rejects_previous_format() {
 }
 
 #[test]
-fn genuine_v9_fixture_migrates_only_the_new_rules_identity() {
+fn starting_rules_are_part_of_the_saved_identity() {
+    // The pre-CON-35 migration path (a format-9 save loading under content
+    // that only added starting rules) is gone with the old formats; the
+    // rules now simply are part of the one content hash.
     let bytes = include_bytes!("../../tests/fixtures/native-control-v9.stas");
     let legacy = Arc::new(sta_content::fake::db());
     let rules = Rules::from_header("int SINGLE_PLAYER_OFFICER_LIMIT=600;").0;
     let current = Arc::new(sta_content::fake::db().with_rules(rules));
-    assert_eq!(current.hash_without_starting_rules(), legacy.hash());
     assert_ne!(current.hash(), legacy.hash());
-    let mut old = Sim::from_snapshot(bytes, Some(legacy)).unwrap();
-    let mut migrated = Sim::from_snapshot(bytes, Some(current.clone())).unwrap();
-    assert_eq!(migrated.view().player(PlayerId(0)).unwrap().crew, None);
-    for _ in 0..30 {
-        old.step(&[]);
-        migrated.step(&[]);
-        assert_eq!(old.view().units, migrated.view().units);
-        assert_eq!(old.view().players, migrated.view().players);
-    }
-    let saved = migrated.snapshot();
-    assert_eq!(u64::from_le_bytes(saved[10..18].try_into().unwrap()), current.hash());
-    assert_eq!(
-        Sim::from_snapshot(&saved, Some(current)).unwrap().view(),
-        migrated.view()
-    );
+    let diff = legacy.digest().first_difference(current.digest()).unwrap();
+    assert_eq!((diff.key.as_str(), diff.theirs.as_deref()), ("RTS_CFG.h:MP_OFFICER_LIMIT", Some("[600]")));
+    assert_eq!(Sim::from_snapshot(bytes, Some(current.clone())).err(), Some(SnapshotError::FormatVersion { found: 9 }));
+    let mut sim = Sim::new(9);
+    sim.content = Some(legacy);
+    assert!(matches!(
+        Sim::from_snapshot(&sim.snapshot(), Some(current)),
+        Err(SnapshotError::ContentMismatch { .. })
+    ));
+    let bytes = sim.snapshot();
     let changed = sta_content::fake::db();
     let mut builder = ContentDb::builder();
     for u in changed.units() {
@@ -180,7 +155,7 @@ fn genuine_v9_fixture_migrates_only_the_new_rules_identity() {
         builder = builder.weapon(w.clone());
     }
     assert!(matches!(
-        Sim::from_snapshot(bytes, Some(Arc::new(builder.build().unwrap()))),
+        Sim::from_snapshot(&bytes, Some(Arc::new(builder.build().unwrap()))),
         Err(SnapshotError::ContentMismatch { .. })
     ));
 }

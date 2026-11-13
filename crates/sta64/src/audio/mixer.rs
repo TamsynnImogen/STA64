@@ -4,11 +4,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use bevy::prelude::*;
-use kira::sound::PlaybackState;
+use kira::sound::{PlaybackState, SoundData};
 use kira::sound::static_sound::{StaticSoundData, StaticSoundHandle, StaticSoundSettings};
 use kira::track::{TrackBuilder, TrackHandle};
 use kira::{AudioManager, AudioManagerSettings, Decibels, DefaultBackend, Frame, Panning, Tween};
 
+use crate::media::PcmStream;
 use crate::sim_link::Bus;
 
 /// Mixer buses: the four `PlaySound` buses plus the master they all route to.
@@ -81,6 +82,10 @@ pub trait AudioBackend {
     fn bus_busy(&self, bus: Bus) -> bool;
     /// Advance a headless backend's playback clock; real devices use their own clock.
     fn advance(&mut self, _seconds: f64) {}
+    /// Start pulling `stream` (a movie's audio, MED-03) at the device's pace on `bus`;
+    /// the backend calls `stream.mark_attached()` when it will. The default takes nothing,
+    /// and the movie then runs on the wall clock, silent.
+    fn play_stream(&mut self, _stream: &PcmStream, _bus: Bus) {}
     fn set_bus_volume(&mut self, bus: MixBus, volume: f32);
     fn stop_all(&mut self);
     /// Stop what is playing on one bus (music switches tracks without cutting sfx).
@@ -154,6 +159,14 @@ impl AudioBackend for KiraAudio {
         }
     }
 
+    fn play_stream(&mut self, stream: &PcmStream, bus: Bus) {
+        let Some(t) = self.tracks.get_mut(&bus) else { return };
+        match t.play(StreamData(stream.clone())) {
+            Ok(()) => stream.mark_attached(),
+            Err(e) => warn!("audio: starting a movie's sound failed: {e}"),
+        }
+    }
+
     fn bus_busy(&self, bus: Bus) -> bool {
         self.playing.iter().any(|(b, handle)| *b == bus && handle.state() != PlaybackState::Stopped)
     }
@@ -190,5 +203,76 @@ impl AudioBackend for KiraAudio {
 
     fn set_listener(&mut self, pos: [f32; 3], right: [f32; 3]) {
         self.listener = (pos, right);
+    }
+}
+
+/// A movie's audio as a `kira` sound: pulls from the stream and resamples it
+/// (linear) to the device rate. Silent while the stream is starved; finished
+/// when it is drained or cancelled.
+struct StreamData(PcmStream);
+
+impl SoundData for StreamData {
+    type Error = std::convert::Infallible;
+    type Handle = ();
+
+    fn into_sound(self) -> Result<(Box<dyn kira::sound::Sound>, ()), Self::Error> {
+        let rate = self.0.sample_rate() as f64;
+        Ok((Box::new(StreamSound { stream: self.0, rate, local: vec![[0.0; 2]; 512], len: 0, at: 0, a: [0.0; 2], b: [0.0; 2], frac: 1.0 }), ()))
+    }
+}
+
+struct StreamSound {
+    stream: PcmStream,
+    rate: f64,
+    local: Vec<[f32; 2]>,
+    len: usize,
+    at: usize,
+    a: [f32; 2],
+    b: [f32; 2],
+    /// Position between `a` and `b`; `>= 1` means the next source frame is needed.
+    frac: f64,
+}
+
+impl StreamSound {
+    fn next_source(&mut self) -> Option<[f32; 2]> {
+        if self.at >= self.len {
+            self.len = self.stream.pull(&mut self.local);
+            self.at = 0;
+            if self.len == 0 {
+                return None;
+            }
+        }
+        let f = self.local[self.at];
+        self.at += 1;
+        Some(f)
+    }
+}
+
+impl kira::sound::Sound for StreamSound {
+    fn process(&mut self, out: &mut [Frame], dt: f64, _info: &kira::info::Info) {
+        let step = dt * self.rate;
+        for o in out {
+            while self.frac >= 1.0 {
+                match self.next_source() {
+                    Some(f) => {
+                        self.a = self.b;
+                        self.b = f;
+                        self.frac -= 1.0;
+                    }
+                    None => break,
+                }
+            }
+            if self.frac >= 1.0 {
+                *o = Frame::ZERO; // starved: hold the clock until data arrives
+                continue;
+            }
+            let t = self.frac as f32;
+            *o = Frame::new(self.a[0] + (self.b[0] - self.a[0]) * t, self.a[1] + (self.b[1] - self.a[1]) * t);
+            self.frac += step;
+        }
+    }
+
+    fn finished(&self) -> bool {
+        self.stream.is_cancelled() || (self.stream.is_drained() && self.at >= self.len && self.frac >= 1.0)
     }
 }

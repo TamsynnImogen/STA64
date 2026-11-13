@@ -5508,7 +5508,9 @@ dependencies = [
  "sta_bzn",
  "sta_content",
  "sta_core",
+ "sta_media",
  "sta_mission",
+ "sta_net",
  "sta_odf",
  "sta_sim",
  "sta_surface",
@@ -5522,6 +5524,7 @@ version = "0.1.0"
 dependencies = [
  "sta_content",
  "sta_core",
+ "sta_net",
  "sta_sim",
  "thiserror 2.0.21",
 ]
@@ -5547,9 +5550,13 @@ dependencies = [
 name = "sta_bench"
 version = "0.1.0"
 dependencies = [
+ "json5",
+ "png",
+ "serde",
  "sta_bzn",
  "sta_content",
  "sta_core",
+ "sta_net",
  "sta_sim",
  "sta_vfs",
  "thiserror 2.0.21",
@@ -5569,6 +5576,7 @@ dependencies = [
  "a2fmt",
  "json5",
  "serde",
+ "sha2",
  "sta_assets",
  "sta_bzn",
  "sta_core",
@@ -5618,6 +5626,7 @@ version = "0.1.0"
 dependencies = [
  "libm",
  "mlua",
+ "sta_ai",
  "sta_bzn",
  "sta_content",
  "sta_core",
@@ -5629,11 +5638,13 @@ dependencies = [
 name = "sta_net"
 version = "0.1.0"
 dependencies = [
+ "getrandom 0.4.3",
  "postcard",
  "serde",
  "sta_content",
  "sta_core",
  "sta_sim",
+ "sta_vfs",
 ]
 
 [[package]]
@@ -5651,6 +5662,7 @@ dependencies = [
  "json5",
  "postcard",
  "serde",
+ "sta_bzn",
  "sta_content",
  "sta_core",
  "sta_odf",

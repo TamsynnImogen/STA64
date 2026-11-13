@@ -4,12 +4,15 @@
 use std::sync::{Arc, Mutex};
 
 use super::mixer::{AudioBackend, MixBus, Sound};
+use crate::media::PcmStream;
 use crate::sim_link::Bus;
 
 /// One request the backend received.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Call {
     Play { name: String, bus: Bus, at: Option<[f32; 3]> },
+    /// A movie's audio stream was attached (`PlayStream` of `sample_rate` Hz).
+    PlayStream { sample_rate: u32, bus: Bus },
     BusVolume { bus: MixBus, volume: f32 },
     StopAll,
     StopBus { bus: Bus },
@@ -34,12 +37,13 @@ impl CallLog {
 pub struct NullAudio {
     log: CallLog,
     voice_remaining: f64,
+    streams: Vec<PcmStream>,
 }
 
 impl NullAudio {
     pub fn new() -> (Self, CallLog) {
         let log = CallLog::default();
-        (Self { log: log.clone(), voice_remaining: 0.0 }, log)
+        (Self { log: log.clone(), voice_remaining: 0.0, streams: Vec::new() }, log)
     }
     fn push(&self, c: Call) {
         self.log.0.lock().unwrap().push(c);
@@ -56,11 +60,29 @@ impl AudioBackend for NullAudio {
         }
         self.push(Call::Play { name: sound.name.clone(), bus, at });
     }
+    fn play_stream(&mut self, stream: &PcmStream, bus: Bus) {
+        stream.mark_attached();
+        self.streams.push(stream.clone());
+        self.push(Call::PlayStream { sample_rate: stream.sample_rate(), bus });
+    }
     fn bus_busy(&self, bus: Bus) -> bool {
         bus == Bus::Voice && self.voice_remaining > 0.0
     }
     fn advance(&mut self, seconds: f64) {
         if seconds.is_finite() && seconds > 0.0 {
+            // A silent device consumes streams in real time, so movies keep their clock.
+            self.streams.retain(|s| !s.is_cancelled() && !s.is_drained());
+            let mut sink = [[0.0f32; 2]; 1024];
+            for s in &self.streams {
+                let mut want = (seconds * s.sample_rate() as f64).round() as usize;
+                while want > 0 {
+                    let n = s.pull(&mut sink[..want.min(1024)]);
+                    if n == 0 {
+                        break;
+                    }
+                    want -= n;
+                }
+            }
             self.voice_remaining = (self.voice_remaining - seconds).max(0.0);
         }
     }

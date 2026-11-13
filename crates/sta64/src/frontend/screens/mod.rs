@@ -24,10 +24,12 @@ use sta_sim::setup::GameSetup;
 
 mod data;
 pub mod frame;
+pub mod stock;
 #[cfg(test)]
 mod tests;
 mod view;
 
+pub use crate::frontend::lobby::{LobbyPlugin, MpFields, Multiplayer, NetGameReady, NetLaunch};
 pub use data::{Browse, MAX_SEATS, MapEntry, ModEntry, SKIRMISH_AI, ScreenData, Seat, SeatControl, SelectedMod, SettingKey, Settings, SetupDraft};
 pub use view::{Act, ScreenRoot};
 
@@ -46,6 +48,31 @@ pub enum Screen {
     MapSelect,
     Settings,
     ModSelect,
+    /// A campaign's mission list (UI-25, `frontend::campaign`).
+    Missions,
+    /// A mission's briefing (UI-25).
+    Briefing,
+    /// What follows a mission (UI-25).
+    Debrief,
+    /// The player's name and the relay (UI-11, `frontend::lobby`).
+    Multiplayer,
+    /// Open a room (UI-11).
+    HostGame,
+    /// Join a room by its code (UI-11).
+    JoinGame,
+    /// The room: seat table, chat, launch (UI-11).
+    Lobby,
+}
+
+/// The screen map select returns to: Game Setup for Instant Action, the lobby for a host
+/// choosing the room's map (UI-11).
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MapReturn(pub Screen);
+
+impl Default for MapReturn {
+    fn default() -> Self {
+        MapReturn(Screen::Setup)
+    }
 }
 
 /// Where the open list (map or mod select) is scrolled, in logical pixels.
@@ -93,6 +120,8 @@ pub struct ModChosen(pub Option<String>);
 /// How the plugin sits in the host.
 #[derive(Resource, Debug, Clone)]
 pub struct ScreensConfig {
+    /// Stock arrangement (UI-22, default) or UI-07's plain layouts.
+    pub layout: stock::ScreenLayout,
     /// Spawn a 2D camera while in the front end.
     pub own_camera: bool,
     /// Scale the UI to the primary window (`UiScale` = height / 1080).
@@ -103,7 +132,7 @@ pub struct ScreensConfig {
 
 impl Default for ScreensConfig {
     fn default() -> Self {
-        ScreensConfig { own_camera: true, fit_scale: true, start: Screen::Main }
+        ScreensConfig { layout: stock::ScreenLayout::Stock, own_camera: true, fit_scale: true, start: Screen::Main }
     }
 }
 
@@ -131,11 +160,17 @@ impl Plugin for ScreensPlugin {
             .init_resource::<crate::ui::profile::UiPreference>()
             .init_resource::<SelectedMod>()
             .init_resource::<Browse>()
+            .init_resource::<MapReturn>()
             .init_resource::<ListScroll>()
+            .init_resource::<stock::StockBox>()
+            .init_resource::<stock::OptionsTab>()
+            .init_resource::<stock::Refocus>()
             .init_resource::<ButtonInput<KeyCode>>()
             .add_message::<MouseWheel>()
             .add_message::<StartGame>()
             .add_message::<ModChosen>()
+            .add_message::<crate::frontend::campaign::StartMission>()
+            .add_plugins(crate::frontend::lobby::LobbyPlugin)
             .add_systems(Startup, make_draft)
             .add_systems(OnEnter(AppState::FrontEnd), enter_front_end)
             .add_systems(OnEnter(Screen::MapSelect), open_list)
@@ -146,7 +181,7 @@ impl Plugin for ScreensPlugin {
             )
             .add_systems(
                 Update,
-                (fit_scale, follow_data, on_keys, on_wheel, track_scroll, on_buttons, on_lists, rebuild)
+                (fit_scale, stock::track_box, follow_data, on_keys, on_wheel, track_scroll, on_buttons, on_lists, crate::frontend::campaign::on_buttons, stock::on_dropdowns, stock::track_tab, rebuild, crate::frontend::campaign::rebuild, stock::restore_focus, (crate::frontend::lobby::drive, crate::frontend::lobby::on_buttons, crate::frontend::lobby::on_dropdowns, crate::frontend::lobby::on_text, crate::frontend::lobby::sync_map, crate::frontend::lobby::rebuild, crate::frontend::lobby::restore_focus).chain())
                     .chain()
                     .in_set(GameSet::Ui)
                     .after(crate::ui::profile::ProfileSync)
@@ -162,7 +197,7 @@ fn make_draft(mut commands: Commands, data: Res<ScreenData>, draft: Option<Res<S
     }
 }
 
-fn enter_front_end(mut commands: Commands, config: Res<ScreensConfig>, theme: Res<crate::ui::theme::Theme>, mut next: ResMut<NextState<Screen>>) {
+pub(crate) fn enter_front_end(mut commands: Commands, config: Res<ScreensConfig>, theme: Res<crate::ui::theme::Theme>, mut next: ResMut<NextState<Screen>>) {
     next.set(config.start);
     if config.own_camera {
         commands.spawn((Camera2d, Camera { clear_color: ClearColorConfig::Custom(theme.panel), ..default() }, DespawnOnExit(AppState::FrontEnd)));
@@ -312,16 +347,24 @@ fn on_buttons(
     mut start: MessageWriter<StartGame>,
     mut chosen: MessageWriter<ModChosen>,
     mut exit: MessageWriter<AppExit>,
+    screen: Res<State<Screen>>,
+    mut map_return: ResMut<MapReturn>,
 ) {
     let Some(mut draft) = draft else { return };
     for ButtonClicked(e) in clicks.read() {
         let Ok(&act) = acts.get(*e) else { continue };
         match act {
             Act::Goto(s) => {
-                next.set(s);
+                // Map select's Cancel goes back to whoever opened it.
+                if *screen.get() == Screen::MapSelect && s == Screen::Setup {
+                    next.set(std::mem::take(&mut *map_return).0);
+                } else {
+                    next.set(s);
+                }
             }
             Act::PickMap => {
                 browse.map = draft.map;
+                *map_return = MapReturn::default();
                 next.set(Screen::MapSelect);
             }
             Act::PickMod => {
@@ -330,7 +373,7 @@ fn on_buttons(
             }
             Act::TakeMap => {
                 draft.set_map(&data, browse.map);
-                next.set(Screen::Setup);
+                next.set(std::mem::take(&mut *map_return).0);
             }
             Act::UseMod => {
                 let folder = browse.mod_row.checked_sub(1).and_then(|i| data.mods.get(i)).map(|m| m.folder.clone());
@@ -403,15 +446,19 @@ fn rebuild(
     selected: Res<SelectedMod>,
     camera: Option<Res<ScreensCamera>>,
     scroll: Res<ListScroll>,
+    config: Res<ScreensConfig>,
+    stock_box: Res<stock::StockBox>,
+    options_tab: Res<stock::OptionsTab>,
     strings: Option<Res<crate::ui::i18n::Strings>>,
+    campaigns: Option<Res<crate::frontend::campaign::Campaigns>>,
 ) {
     let Some(draft) = draft else { return };
-    if !(screen.is_changed() || draft.is_changed() || browse.is_changed() || selected.is_changed() || data.is_changed() || theme.is_changed() || strings.as_ref().is_some_and(|s| s.is_changed())) {
+    if !(screen.is_changed() || campaigns.as_ref().is_some_and(|c| c.is_changed()) || draft.is_changed() || browse.is_changed() || selected.is_changed() || data.is_changed() || theme.is_changed() || stock_box.is_changed() || config.is_changed() || strings.as_ref().is_some_and(|s| s.is_changed())) {
         return;
     }
     for e in &roots {
         commands.entity(e).despawn();
     }
-    let ctx = view::Ctx { theme: &theme, data: &data, strings: strings.as_deref(), draft: &draft, browse: &browse, settings: &settings, selected: &selected, scroll: &scroll };
+    let ctx = view::Ctx { theme: &theme, data: &data, strings: strings.as_deref(), draft: &draft, browse: &browse, settings: &settings, selected: &selected, scroll: &scroll, layout: config.layout, stock_box: stock_box.0, options_tab: options_tab.0, campaigns: campaigns.as_deref() };
     view::spawn(&mut commands, *screen.get(), &ctx, camera.map(|c| c.0));
 }

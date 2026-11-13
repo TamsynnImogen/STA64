@@ -5,8 +5,9 @@
 //! normally, [`NullAudio`] (records calls) when headless or when no sound device
 //! opens. Name to sound resolution is `sta_assets::audio` (CON-10): [`BankResolver`]
 //! wraps it and `plugins.rs` installs it when there is an install to read. Without
-//! one the [`StubResolver`] stays, and only generated test tones named
-//! `audio-test:<hz>` are audible.
+//! one the [`StubResolver`] stays and every sound resolves to nothing (one log
+//! line, AUD-06). Generated tones named `audio-test:<hz>` are heard only under
+//! `--audio-test` ([`AudioTestTones`]).
 
 // The API is for AUD-02..05 and tests; the binary does not use all of it yet.
 #![allow(dead_code, unused_imports)]
@@ -44,20 +45,26 @@ pub trait SoundResolver: Send + Sync {
     fn set_race(&mut self, _race: Option<&str>) {}
 }
 
-/// Resolves nothing; logs each unknown name once.
+/// Resolves nothing and says so once: without an install there is no sound data (AUD-06).
 #[derive(Default)]
 pub struct StubResolver {
-    warned: HashSet<String>,
+    warned: bool,
 }
 
 impl SoundResolver for StubResolver {
     fn resolve(&mut self, name: &str) -> Option<Sound> {
-        if self.warned.insert(name.to_string()) {
-            info!("audio: no resolver for sound {name:?} yet");
+        if !std::mem::replace(&mut self.warned, true) {
+            info!("audio: no game install, so sound is silent (first request: {name:?})");
         }
         None
     }
 }
+
+/// Whether generated `audio-test:<hz>` tones are audible: only for the manual
+/// `sta64 --audio-test` check. The plugin sets it from the command line unless a
+/// test inserted it first.
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct AudioTestTones(pub bool);
 
 #[derive(Resource)]
 pub struct Resolver(pub Box<dyn SoundResolver>);
@@ -79,6 +86,12 @@ impl BankResolver {
     pub fn new(vfs: sta_vfs::Vfs) -> Self {
         let bank = sta_assets::audio::SoundBank::load(&vfs);
         Self { vfs, bank, race: None, variant: 0, warned: HashSet::new() }
+    }
+
+    /// The UI sound names this install's `RTS_CFG.h` gives, limited to files it has (AUD-05/06).
+    pub fn ui_sounds(&self) -> UiSounds {
+        let asked = sta_content::layered::cfg_h(&self.vfs, "RTS_CFG.h").map_or_else(|| UiSounds::from_cfg(&sta_assets::cfg_h::CfgH::parse("")), |c| UiSounds::from_cfg(&c));
+        asked.existing(|n| ui::sound_exists(&self.vfs, n))
     }
 
     /// Mount `root` (+ `active_mod`) as the game does; `None` and a warning when it fails.
@@ -166,13 +179,15 @@ impl Plugin for AudioPlugin {
         if app.world().get_non_send::<Mixer>().is_none() {
             app.insert_non_send(Mixer::new(choose_backend(self.mode)));
         }
+        let tones = std::env::args().any(|a| a == "--audio-test");
+        app.world_mut().get_resource_or_insert_with(|| AudioTestTones(tones));
         app.add_plugins((MusicPlugin, UiSoundPlugin, SfxPlugin, VoicePlugin))
             .add_message::<PlaySound>()
             .init_resource::<Volumes>()
             .insert_resource(Resolver(Box::new(StubResolver::default())))
             .add_systems(Update, (sync_volumes, sync_listener, play_sounds, audio_test_key).chain().in_set(GameSet::Audio));
         // Manual check: `sta64 --audio-test` plays a tone on each bus at startup, F9 repeats it.
-        if std::env::args().any(|a| a == "--audio-test") {
+        if tones {
             app.add_systems(Startup, test_tones);
         }
     }
@@ -190,7 +205,7 @@ fn sync_volumes(volumes: Res<Volumes>, mut mixer: NonSendMut<Mixer>, mut sent: L
     *sent = Some(*volumes);
 }
 
-fn sync_listener(cam: Query<&GlobalTransform, With<Camera3d>>, mut mixer: NonSendMut<Mixer>) {
+fn sync_listener(cam: Query<&GlobalTransform, crate::map::MainCamera>, mut mixer: NonSendMut<Mixer>) {
     if let Some(t) = cam.iter().next() {
         // Sounds are placed in map space; the renderer mirrors Z, so mirror the camera back.
         let (p, r) = (t.translation(), t.right());
@@ -198,7 +213,7 @@ fn sync_listener(cam: Query<&GlobalTransform, With<Camera3d>>, mut mixer: NonSen
     }
 }
 
-fn play_sounds(mut msgs: MessageReader<PlaySound>, mut mixer: NonSendMut<Mixer>, mut resolver: ResMut<Resolver>, time: Option<Res<Time<Real>>>) {
+fn play_sounds(mut msgs: MessageReader<PlaySound>, mut mixer: NonSendMut<Mixer>, mut resolver: ResMut<Resolver>, tones: Res<AudioTestTones>, time: Option<Res<Time<Real>>>) {
     mixer.backend.advance(time.map_or(0.0, |t| t.delta_secs_f64()));
     for m in msgs.read() {
         // Admission belongs here so advisor, mission and unit lines share the
@@ -206,7 +221,7 @@ fn play_sounds(mut msgs: MessageReader<PlaySound>, mut mixer: NonSendMut<Mixer>,
         if m.bus == Bus::Voice && mixer.backend.bus_busy(Bus::Voice) {
             continue;
         }
-        if let Some(sound) = builtin(&m.name).or_else(|| resolver.0.resolve(&m.name)) {
+        if let Some(sound) = tones.0.then(|| builtin(&m.name)).flatten().or_else(|| resolver.0.resolve(&m.name)) {
             mixer.backend.play(&sound, m.bus, m.at.map(|p| p.to_f32()));
         }
     }
@@ -310,7 +325,7 @@ mod tests {
     fn app() -> (App, CallLog) {
         let (null, log) = NullAudio::new();
         let mut app = App::new();
-        app.insert_non_send(Mixer::new(Box::new(null)));
+        app.insert_non_send(Mixer::new(Box::new(null))).insert_resource(AudioTestTones(true));
         app.add_plugins(AudioPlugin::default());
         app.update();
         log.drain();
@@ -361,6 +376,30 @@ mod tests {
         app.update();
         assert_eq!(log.drain(), vec![Call::Play { name: "ping.wav".into(), bus: Bus::Ui, at: None }]);
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn without_an_install_or_audio_test_every_sound_is_silent() {
+        let (null, log) = NullAudio::new();
+        let mut app = App::new();
+        app.insert_non_send(Mixer::new(Box::new(null)));
+        app.add_plugins(AudioPlugin::default());
+        app.update();
+        log.drain();
+        assert!(!app.world().resource::<AudioTestTones>().0, "tones are off without --audio-test");
+        for bus in [Bus::Music, Bus::Sfx, Bus::Voice, Bus::Ui] {
+            app.world_mut().write_message(PlaySound { name: "audio-test:440".into(), at: None, bus });
+            app.world_mut().write_message(PlaySound { name: "click.wav".into(), at: None, bus });
+        }
+        app.update();
+        assert!(log.calls().is_empty(), "nothing resolves, no tone plays");
+    }
+
+    #[test]
+    fn the_stub_logs_once_and_resolves_nothing() {
+        let mut r = StubResolver::default();
+        assert!(r.resolve("a.wav").is_none() && r.resolve("b.wav").is_none());
+        assert!(r.warned);
     }
 
     #[test]

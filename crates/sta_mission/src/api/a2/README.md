@@ -88,7 +88,7 @@ are also accepted. Reloading replaces the list with fresh IDs, so handles
 from an earlier file cannot accidentally modify a new goal. The runtime's
 objective list and briefing remain host-only state; client display,
 replication and objective presentation are still pending. `Player:loadAIP`
-records the requested file and an unsupported diagnostic; it does not run AI.
+queues the requested file for the host (AI-06); a host without AI seats ignores it.
 
 The ignored `tests/a2_port_intro.rs` probes accept `STA64_A2_PORTS` pointing
 to the external ports' `a2/missions` folder and `STA64_A2_OBJECTIVES`
@@ -491,3 +491,170 @@ formatting/diff checks pass. The library check is not an APK or device result;
 the separate SIM-22 APK does not contain this independent branch's adapter.
 No new in-game eye-check applies to this host-state-only addition. The parent
 LUA-05 package and complete mission playback remain unfinished.
+
+
+## Rule-condition queries (LUA-10)
+
+The stock Armada II rule DLLs (`R.drl`) call the engine from their rule
+conditions (28 distinct signatures; `docs/MISSION_DLL_API.md` lists them with
+rule-DLL counts and condition sites). `conditions.rs` binds all of them on
+`A2`. Counts (`CountUnits`, `CountUnitsNearObject`, `CountVisibleUnits*`,
+`CountStations`), `GetCrew`, `GetDilithium`/`GetLatinum`/`GetMetal`,
+`GetTime`, `HasTimeElapsed`, `IsExploding` and `GetDistance(object, path,
+point)` read the latest view (paths come from `A2.paths`, which the host
+fills; a missing path raises and is counted). `UnderAttack(object, seconds)`
+is a `Hit` on the object within that mission time (the runtime keeps the last
+hit tick per object). `IsAudioMessageDone` / `IsMoviePlaying` follow
+`Media:playSound` / `playMovie` and the client's reports
+(`A2.AudioMessageDone(id)`, `A2.MovieDone()`).
+
+Bound but raising (counted in `unsupported()` as `A2.<Name>: <why>`, never a
+guessed value): `CountCapitalShips` (no capital-ship class in the content
+data), `IsShipAliveAndOffMap`, `IsCargoShipReadyToLoad`,
+`IsCargoShipFullAndReadyToSend`, `GetLatinumTraded` (no cargo, off-map or
+trade state in the world view).
+
+`IsCompromised(object, team)` (LUA-12) is true when the object has been lost
+to `team`: gone or dying, not a craft or station, a derelict (crew under one
+with a positive maximum), or owned by another team than `team` (numbered like
+`GetRealTeam`). Read from the executable, static; not measured. Approximated:
+the engine's derelict latch (the `CraftCannotDie` exemption, clearing only
+when crew returns to one) and the original owner during a temporary takeover
+(listed on SIM-59; `GetRealTeam` has the same approximation).
+
+Evidence: signatures and argument constants read from the executable and the
+rule DLLs, static. The team / radius / ODF-filter readings follow the `A1`
+bindings and are not measured; the `UnderAttack` and `HasTimeElapsed` meanings
+are not measured.
+
+## Orders, AI, crew and team calls (`orders.rs`)
+
+DLL-named `A2.Goto Stop Attack AI_Attack Mine SetImpulseSpeed ResetImpulseSpeed
+GetImpulseSpeed SetRedAlert SetGreenAlert GetNearestEnemy
+GetAttackLocation` and the `SetCommandWhat{Who,WhoParam,WhoWhere}VO` family.
+Every call uses the exact argument shapes of the DLL (overloads by argument
+type), strict validation, and the rules below, read from the executable's
+`ScriptInterfaceImp` bodies (static) and from the stock scripts' argument
+constants. Orders are sent as the unit's owner; edits are SCRIPT edits.
+
+- An absent or dying unit (or target) is left alone: no command, no error, as
+  the engine does. A wrong argument shape is a Lua error and queues nothing.
+- `Goto(unit, path|object, warp, int)` is GO (GO_WARP when `warp`); the `int`
+  is never read. A path is `A2.paths[name]` (host-filled, as for
+  `GetDistance`): `Order::Move` to its first point, the rest queued. An object
+  is a snapshot of its position (whether the engine tracks it: not measured).
+  `warp = true` has no order in the seam and raises, counted.
+- `Stop`, `Attack(unit, object, int)` and `AI_Attack(unit, object)` map to
+  `Order::Stop` / `Order::Attack`; the extra `int` is never read. `Mine` maps
+  to `Order::Mine`; an absent node means "mine without a target" (the nearest
+  node in the view, as the omitted-target Mine helper chooses).
+- `SetImpulseSpeed` / `ResetImpulseSpeed` / `SetRedAlert` / `SetGreenAlert`
+  queue `Edit::MaxSpeed` / `Edit::Alert` through the edit-feedback tracker. The
+  sim rejects both edits today (no movement or alert package applies them):
+  the rejection is counted as `A2.<Name>: simulation rejected edit`, so a
+  mission sees the call succeed while the world does not change. `GetImpulseSpeed`
+  returns the value this runtime last set, else the class `impulseSpeed`.
+- `BuildObject` lives in `dll_objects.rs` (next section). Its handle is a
+  token (`0x40000000 + request`); `dll_objects::finish`, installed last, wraps
+  every `A2` function so the token means the built unit once the spawn receipt
+  is in. An order of this file sent to a token that is still pending, or whose
+  spawn failed, raises and is counted (`A2.<Name>: handle is still being
+  built; use it after the next tick` / `handle names no object: spawn
+  failed`); an absent or dead real handle stays a silent no-op as in the
+  engine.
+- Path names are looked up exactly first, else by the one key that matches
+  ignoring case; two such keys are an error (`dll_objects::lookup_path`).
+- `GetNearestEnemy(unit, r)`: nearest enemy by XZ distance inside the square
+  of half side `r` that can see the unit; 0 if none. `GetAttackLocation(a, b)`:
+  the point of `a`'s bounding sphere (`UnitDef::radius`) toward `b`, or one
+  radius along +x without `b`; raises when the radius is not in the content.
+- `SetCommandWhat...VO` (bound here, not in `native_text.rs`): `WhatWhoVO` maps
+  GO, ATTACK and MINE toward an object to orders; `WhatWhoWhereVO` maps BUILD at
+  a position; both objects must be live or nothing happens. `WhatWhoParamVO`
+  raises (a parameter has no order); other commands raise, counted. The voice
+  flag is not measured and not applied.
+
+Raising and counted (no seam): `Patrol SearchAndDestroy Scout Colonize
+Special_Attack SetCommandMoveAutonomyLow PointAt SetCrew SetRace CraftCanRepair
+GetMainEnemyBaseLocation AttackMainEnemyBase GetAllyStationAttacks`,
+`AI_Attack` without a target or toward a point, and the warp form of `Goto`.
+`AI_Team_Load_AIP` is accepted like `Player:loadAIP`: the request is queued
+and the host gives it to the seat's AI (`MissionRuntime::take_aip_requests`,
+`sta_ai::MissionAiHub`; AI-06). Each reason is in `unsupported()` as `A2.<Name>: <why>`.
+
+
+## Object creation, searches and flags (step 2)
+
+`dll_objects.rs`. Grades: exe = read from the executable, static; args = read
+from the stock scripts' constants; not measured otherwise.
+
+- `A2.SetSpecialForcesFlag(h, on)` (1800 stock calls) stores a mission-side
+  flag on a live Craft and returns `h`; an invalid handle returns 0 with no
+  effect (exe). The flag means "reserved for the script, not for AI teams";
+  no AI team runs in a mission runtime, so its consumer today is
+  `RecruitSpecialForces`. It emits no command.
+- `A2.RecruitSpecialForces(odf, team[, out])` returns `ok, handle`: the first
+  unflagged craft of that team and ODF is flagged (exe).
+- `A2.BuildObject` (path form and object form) queues a SCRIPT spawn and
+  returns a pending handle (`0x4000_0000 + request`, as `A1`). `finish` wraps
+  every `A2` function so a token with a spawn receipt reaches it as the real
+  id; before the receipt it names no object (existence queries say no; the
+  order calls of `orders.rs` raise and count). Path index out of range or an
+  unknown ODF returns 0 (exe for the index; the ODF case is counted); a path
+  missing from `A2.paths` raises and is counted (the engine's behaviour for a
+  missing path is not measured). The object form
+  accepts only a zero offset (rotation convention not measured).
+- `A2.GetNearestObjectNearPosition` / `NearMe`: exe filters (radius < 0
+  unlimited, team < 0 any, perceived flag, exclude handle); squared XZ
+  distance, ties to the later unit. Mask other than -1 raises (not measured);
+  derelict crafts are not skipped (no derelict state in the view).
+- `A2.GetFirstCraft`, `A2.GetLocation(path, index)` (0-based, `A2.paths`).
+- `DestroyCritical` queues a lethal `Damage`, `ExplodeNow` a `Kill`,
+  `SetCanBeDecommissioned` the typed edit the sim rejects today (reported and
+  counted by the edit feedback); `DisableShieldGenerator`, `SetShieldPercent`,
+  `SetMaxShields` and `Damage<System>` are applied by the sim (SIM-55).
+- Calls with no sim seam (position, per-team targeting, hidden/derelict/name/population/wormhole/cargo/fleet state) raise
+  and are counted; see `seams()` for each reason.
+
+
+## Script-taking presentation and title calls (LUA-05)
+
+`native_flow.rs` binds `FadeIn`, `FadeOut`, `CineractiveStart`, `AudioMessage`,
+`PlayMusic`, `StopAudioMessage`, `PlayCinematicMovie` and `WaitForEnterKey`;
+`native_text.rs` binds `ShowTitle`, `ShowSubtitle`, `RemoveTitle` and
+`RemoveSubtitle`. All queue SCRIPT `Edit::Present` events; there is no client
+consumer yet, so nothing is played or shown.
+
+The DLL's leading `script *` is the first Lua argument: any table that stands
+for the calling script. In the engine the trailing bool is "don't wait": false
+adds one reference to the script's current step, released when the fade ends,
+the sound or movie finishes, or Enter is pressed. The binding records the same
+count; `A2.ScriptWaits(script)` returns it so a converted step machine can
+advance at zero. Nothing blocks the Lua call. Releases: a fade after
+`delay + duration` mission seconds, a sound by `A2.AudioMessageDone(id)` or
+`A2.StopAudioMessage(id)`, a movie by `A2.MovieDone()`, plus three host reports
+that are not DLL calls: `A2.EnterKeyDone(id)` (id of the queued `WaitForKey`),
+`A2.CineractiveStartDone()`. Until a host reports them those waits stay open.
+
+- `FadeIn/FadeOut(script, duration, delay, white, dontWait)`: typed `Fade` when
+  the delay is 0 (black, or white when the third float is non-zero), otherwise
+  `Call A2.FadeIn|FadeOut [duration, delay, white]` since `Fade` has no delay.
+- `AudioMessage` / `PlayMusic(script, name, dontWait)` return the overlay id
+  (one counter from 1 for both); with a wait they return -1, playing nothing,
+  once `Mission.finish` has run. Voice is `Sound { id }`, music is `Call
+  A2.PlayMusic [id, name]` (the typed `Music` has no id); `StopAudioMessage(id)`
+  queues `StopSound` only for an id still playing.
+- `CineractiveStart` sets the shared `Cineractive.active`; `PlayCinematicMovie`
+  queues a full-screen skippable `Movie` (skippability not measured) and
+  `IsMoviePlaying` follows; `WaitForEnterKey` queues `WaitForKey { id }`.
+- Titles: ids count from 0 for titles and subtitles together. A show queues the
+  typed `Title` (label key as text) and `Call A2.ShowTitle|ShowSubtitle [id, x,
+  y, fadeIn]`; negative x means centred (client). `RemoveTitle|RemoveSubtitle
+  (id, fade)` queue `RemoveTitle` and a `Call [id, fade]`, only for an id on
+  screen, as the engine ignores others.
+- The `SetCommandWhat...VO` calls are in `orders.rs` (see above).
+
+Evidence: argument roles, the don't-wait inversion, the fade fields, id
+counters and the mission-over rule read from the executable, static. Not
+measured: release of a stopped sound's wait, the cineractive wait's release,
+counter reset on mission load, movie `int` (1 in every stock call).

@@ -38,7 +38,7 @@ fn app_with_data(data: ScreenData) -> App {
     configure_sets(&mut app);
     app.add_plugins(crate::ui::profile::UiProfilePlugin);
     app.insert_resource(data)
-        .insert_resource(ScreensConfig { own_camera: false, fit_scale: false, start: Screen::Main })
+        .insert_resource(ScreensConfig { layout: stock::ScreenLayout::Plain, own_camera: false, fit_scale: false, start: Screen::Main })
         .init_resource::<Seen>()
         .add_systems(Last, record)
         .add_plugins(ScreensPlugin);
@@ -74,7 +74,10 @@ fn roots(app: &mut App) -> Vec<Screen> {
 }
 
 fn texts(app: &mut App) -> Vec<String> {
-    app.world_mut().query::<&Text>().iter(app.world()).map(|t| t.0.clone()).collect()
+    // Kit text is a `SpriteText` (UI-16); its TTF `Text` child exists once the font plugin has run.
+    let mut out: Vec<String> = app.world_mut().query::<&crate::ui::sprite_font::SpriteText>().iter(app.world()).map(|t| t.text.clone()).collect();
+    out.extend(app.world_mut().query::<&Text>().iter(app.world()).map(|t| t.0.clone()));
+    out
 }
 
 fn has_text(app: &mut App, s: &str) -> bool {
@@ -92,7 +95,7 @@ fn disabled_button_named(app: &mut App, name: &str) -> Entity {
         .map(|(entity, state, children)| (entity, *state, children[0]))
         .collect();
     let (entity, state, _) = buttons.into_iter()
-        .find(|(_, _, child)| app.world().get::<Text>(*child).is_some_and(|text| text.0.eq_ignore_ascii_case(name)))
+        .find(|(_, _, child)| app.world().get::<crate::ui::sprite_font::SpriteText>(*child).is_some_and(|text| text.text.eq_ignore_ascii_case(name)))
         .unwrap_or_else(|| panic!("no {name} button"));
     assert_eq!(state, WidgetState::Disabled, "{name} should be disabled");
     entity
@@ -131,10 +134,10 @@ fn entering_the_front_end_shows_the_main_screen() {
     for s in ["Star Trek Armada", "Single player", "Instant action", "Multiplayer", "Mods", "Options", "Exit"] {
         assert!(has_text(&mut app, s), "{s}");
     }
-    // Six entries; the lobby's Multiplayer is not there to click yet.
+    // Six entries, all working: Multiplayer opens the lobby's connection screen (UI-11).
     assert_eq!(count::<UiButton>(&mut app), 6);
     let off = app.world_mut().query::<&WidgetState>().iter(app.world()).filter(|s| **s == WidgetState::Disabled).count();
-    assert_eq!(off, 1);
+    assert_eq!(off, 0);
 }
 
 #[test]
@@ -460,7 +463,7 @@ fn no_maps_means_nothing_to_launch() {
     let mut app = App::new();
     app.add_plugins((MinimalPlugins, StatesPlugin));
     configure_sets(&mut app);
-    app.insert_resource(ScreensConfig { own_camera: false, fit_scale: false, start: Screen::Setup })
+    app.insert_resource(ScreensConfig { layout: stock::ScreenLayout::Plain, own_camera: false, fit_scale: false, start: Screen::Setup })
         .init_resource::<Seen>()
         .add_systems(Last, record)
         .add_plugins(ScreensPlugin);
@@ -592,6 +595,8 @@ fn installed_mods_come_from_the_data_folder() {
 #[test]
 fn disabled_entries_do_not_click() {
     let mut app = app();
+    // Single player's Load game is off.
+    go(&mut app, Screen::SinglePlayer);
     let off = app.world_mut().query::<(Entity, &WidgetState)>().iter(app.world()).find(|(_, s)| **s == WidgetState::Disabled).unwrap().0;
     click(app.world_mut(), off);
     assert_eq!(app.world().resource::<Messages<ButtonClicked>>().len(), 0);
@@ -614,7 +619,7 @@ fn many_maps_app(n: usize) -> App {
     app.add_plugins((MinimalPlugins, StatesPlugin));
     configure_sets(&mut app);
     app.insert_resource(data)
-        .insert_resource(ScreensConfig { own_camera: false, fit_scale: false, start: Screen::Setup })
+        .insert_resource(ScreensConfig { layout: stock::ScreenLayout::Plain, own_camera: false, fit_scale: false, start: Screen::Setup })
         .init_resource::<Seen>()
         .add_systems(Last, record)
         .add_plugins(ScreensPlugin);

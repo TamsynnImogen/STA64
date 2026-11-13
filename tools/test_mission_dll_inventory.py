@@ -1,5 +1,6 @@
 import importlib.util
 import pathlib
+import re
 import tempfile
 import unittest
 
@@ -61,8 +62,14 @@ class MissionDllInventoryTests(unittest.TestCase):
             ),
             "A2.GetLocation",
         )
+        # The (path, index) overload is bound by dll_objects.rs; a signature
+        # that matches no known overload stays unmapped.
         self.assertEqual(
-            inventory.a2_exact_for("Vector3 const & GetLocation(char *, int)", self.repo), ""
+            inventory.a2_exact_for("Vector3 const & GetLocation(char *, int)", self.repo),
+            "A2.GetLocation",
+        )
+        self.assertEqual(
+            inventory.a2_exact_for("Vector3 const & GetLocation(char *, float)", self.repo), ""
         )
         self.assertEqual(inventory.a2_exact_for("void SetRealTeam(int, int)", self.repo), "")
         self.assertEqual(inventory.a2_exact_for("void Cloak(int)", self.repo), "")
@@ -185,10 +192,73 @@ class MissionDllInventoryTests(unittest.TestCase):
         for signature in [
             "int GetDistance(int&, int&)",
             "float GetDistance(int, int)",
-            "float GetDistance(int&, char*, int)",
             "float GetDistance(int&, int&, int)",
+            "float GetDistance(int&, char const*, int)",
         ]:
             self.assertEqual(inventory.a2_exact_for(signature, self.repo), "", signature)
+        # The path overload is its own exact signature, served by the same name.
+        self.assertEqual(
+            inventory.a2_exact_for("float GetDistance(int&, char*, int)", self.repo), "A2.GetDistance"
+        )
+
+    def test_param_count_reads_void_and_comma_lists(self):
+        self.assertEqual(inventory.param_count("float GetTime(void)"), 0)
+        self.assertEqual(inventory.param_count("float GetTime()"), 0)
+        self.assertEqual(inventory.param_count("bool IsAlive(int)"), 1)
+        self.assertEqual(inventory.param_count("int CountVisibleUnits(int,int,bool,char*)"), 4)
+
+    def test_rule_condition_calls_are_working_raising_or_missing(self):
+        self.register_a2(
+            'table.set("CountUnits", f);\ntable.set("IsCompromised", no_data_fn(lua, ctx, "IsCompromised", "why")?)?;\n'
+        )
+        (self.a2 / "conditions.rs").write_text(
+            '// no_data_fn(lua, ctx, "Commented", "x")\n'
+            'table.set("IsCompromised", no_data_fn(lua, ctx, "IsCompromised", "why")?)?;\n',
+            encoding="utf-8",
+        )
+        raising = inventory.a2_raising(self.repo)
+        # Bindings found in the source, plus the explicit always-raising `def` calls.
+        self.assertEqual(raising, {"IsCompromised"} | inventory.A2_RAISING_THROUGH_DEF)
+        self.assertTrue({"AI_Team_Load_AIP", "GetAttackLocation"} <= raising)
+        kind = lambda sig: inventory.a2_condition_kind(sig, self.repo, raising)
+        self.assertEqual(kind("int CountUnits(int,char*)"), "working")
+        self.assertEqual(kind("bool IsCompromised(int,int)"), "raises")
+        self.assertEqual(kind("bool UnderAttack(int,float)"), "missing")
+
+    def test_a1_condition_kind_treats_error_bindings_as_raising(self):
+        kinds = {"IsCompromised": "error", "CountUnits": "working", "GetTime": "presentation"}
+        self.register_a1_names(["IsCompromised", "CountUnits"])
+        self.assertEqual(inventory.a1_condition_kind("bool IsCompromised(int, int)", self.repo, kinds), "raises")
+        self.assertEqual(inventory.a1_condition_kind("int CountUnits(int, char *)", self.repo, kinds), "working")
+        self.assertEqual(inventory.a1_condition_kind("float GetTime(void)", self.repo, kinds), "missing")
+
+    def test_rule_section_counts_pairs_and_sites_per_kind(self):
+        self.register_a2('table.set("CountUnits", f);\ntable.set("IsCompromised", f);\n')
+        (self.a2 / "conditions.rs").write_text(
+            'table.set("IsCompromised", no_data_fn(lua, ctx, "IsCompromised", "why")?)?;\n', encoding="utf-8"
+        )
+        rules = [{
+            "label": "Fake A2", "drls": 2, "rules": 5, "decoded": 5, "failed": 0,
+            "calls": {
+                "int CountUnits(int,char*)": ({"a.drl", "b.drl"}, 4),
+                "bool IsCompromised(int,int)": ({"a.drl"}, 3),
+                "bool UnderAttack(int,float)": ({"b.drl"}, 2),
+            },
+        }]
+        text = "\n".join(inventory.rule_section(rules, 0, [], self.repo, {}))
+        self.assertIn("| Fake A2 | 2 | 5 | 5 | 3 | 4 | 2 | 1 | 1 | 9 | 4 |", text)
+        self.assertIn("| `int CountUnits(int,char*)` | 2 | 4 | working | `A2.CountUnits` |", text)
+        self.assertIn("| `bool UnderAttack(int,float)` | 1 | 2 | missing |  |", text)
+        self.assertNotIn("make no calls", text)
+
+    def register_a1_names(self, names):
+        a1 = self.api / "a1"
+        a1.mkdir(exist_ok=True)
+        (a1 / "mod.rs").write_text(
+            'objects::install(lua, &env, &a2, &table)?; table.raw_set("A1", table)?;'.replace("table.raw_set", "lua.globals().raw_set").replace('"A1", table)', '"A1", table)'),
+            encoding="utf-8",
+        )
+        (a1 / "objects.rs").write_text("".join(f'table.set("{n}", f)?;\n' for n in names), encoding="utf-8")
 
     def test_race_coverage_keeps_pointer_qualifiers_distinct(self):
         self.register_a2(
@@ -540,6 +610,98 @@ class MissionDllInventoryTests(unittest.TestCase):
         self.register_a2("")
         (self.a2 / "unregistered.rs").write_text('table.set("IsAlive", fn);', encoding="utf-8")
         self.assertEqual(inventory.a2_exact_for("bool IsAlive(int)", self.repo), "")
+
+    def register_a1(self, module, source, registration=None):
+        a1 = self.api / "a1"
+        a1.mkdir(exist_ok=True)
+        (a1 / f"{module}.rs").write_text(source, encoding="utf-8")
+        (a1 / "tests.rs").write_text('table.set("TestOnly", value);', encoding="utf-8")
+        (a1 / "mod.rs").write_text(
+            registration
+            or f'{module}::install(lua, &env, &table)?; lua.globals().raw_set("A1", table)?;',
+            encoding="utf-8",
+        )
+
+    def test_a1_requires_exact_import_signature_literal_registration_and_namespace(self):
+        self.register_a1("presentation", 'table.set("StopMovie", f);\ntable.set("PlayBridgeMovie", f);\n')
+        self.assertEqual(inventory.a1_exact_for("void StopMovie(void)", self.repo), "A1.StopMovie")
+        self.assertEqual(
+            inventory.a1_exact_for("void PlayBridgeMovie(char *, int)", self.repo), "A1.PlayBridgeMovie"
+        )
+        # A different overload or return type is not the imported function.
+        self.assertEqual(inventory.a1_exact_for("void PlayBridgeMovie(char *)", self.repo), "")
+        self.assertEqual(inventory.a1_exact_for("bool StopMovie(void)", self.repo), "")
+        # A name the source does not bind is not callable even if the table lists it.
+        self.assertEqual(inventory.a1_exact_for("bool IsMoviePlaying(void)", self.repo), "")
+
+    def test_a1_enum_argument_signatures_are_matched_whole(self):
+        self.register_a1("presentation", 'table.set("SetBridgeSceneRace", f);\n')
+        self.assertEqual(
+            inventory.a1_exact_for("void SetBridgeSceneRace(BridgeDisplay::BridgeType)", self.repo),
+            "A1.SetBridgeSceneRace",
+        )
+
+    def test_a1_ignores_unregistered_modules_test_files_and_other_namespaces(self):
+        self.register_a1("presentation", "")
+        (self.api / "a1" / "unregistered.rs").write_text('table.set("StopMovie", f);', encoding="utf-8")
+        self.assertEqual(inventory.a1_exact_for("void StopMovie(void)", self.repo), "")
+        self.register_a1(
+            "presentation",
+            'table.set("StopMovie", f);',
+            registration='presentation::install(lua, &env, &table)?; lua.globals().raw_set("B1", table)?;',
+        )
+        self.assertEqual(inventory.a1_exact_for("void StopMovie(void)", self.repo), "")
+
+    def test_only_rule_engine_plumbing_is_script_state(self):
+        for sig in (
+            "rule * IIIE::create_rule(int (*)(void), void (*)(void), char *)",
+            "void IIIE::trash_rule(char *)",
+            "void hot_type::add_dependent_rule(rule *)",
+        ):
+            self.assertEqual(inventory.area(sig), "Script state and save/load", sig)
+        for sig in (
+            "void Add_Team_To_Group(int, group &)",
+            "int Load_Rules(char *)",
+            "int Load_Action_Scripts(char *)",
+            "hot_float strength_team_1",
+            "group::group(char *)",
+            "void PlayBridgeMovie(char *, int)",
+        ):
+            self.assertNotEqual(inventory.area(sig), "Script state and save/load", sig)
+
+    def test_a1_commented_out_registrations_do_not_count(self):
+        self.register_a1("presentation", '// table.set("StopMovie", f);\n    // table.set("PlayBridgeMovie", f);\n')
+        self.assertEqual(inventory.a1_exact_for("void StopMovie(void)", self.repo), "")
+
+    def test_a1_kinds_separate_working_retained_and_erroring_calls(self):
+        a1 = self.api / "a1"
+        self.register_a1("seams", "")
+        (a1 / "seams.rs").write_text(
+            'table.set("SetPosition", gap_write(lua, env, "SetPosition", &["hs"], "x")?)?;\n'
+            'table.set("InQueue", no_data(lua, env, "InQueue", &["h"], "x")?)?;\n'
+            'table.set("Stop", def(lua, env, "Stop", &["hi"], |_, e, _, a| { Ok(Value::Nil) })?)?;\n'
+            '// table.set("Ghost", gap_write(lua, env, "Ghost", &[], "x")?)?;\n',
+            encoding="utf-8",
+        )
+        kinds = inventory.a1_kinds(self.repo)
+        self.assertEqual(kinds, {"SetPosition": "retained", "InQueue": "error", "Stop": "working"})
+
+    def test_a1_cases_cover_every_signature_overload(self):
+        tests = (SCRIPT.parent.parent / "crates/sta_mission/src/api/a1/tests.rs").read_text(encoding="utf-8")
+        cased = {}
+        for name in re.findall(r'(?m)^    \("(\w+)", "', tests):
+            cased[name] = cased.get(name, 0) + 1
+        declared = {}
+        for lua_name in inventory.A1_SIGNATURES.values():
+            n = lua_name.split(".", 1)[1]
+            declared[n] = declared.get(n, 0) + 1
+        self.assertEqual(cased, declared)
+
+    def test_every_a1_signature_names_a_distinct_overload(self):
+        keys = [inventory.normalized_signature(sig) for sig in inventory.A1_SIGNATURES]
+        self.assertEqual(len(keys), len(set(keys)))
+        for sig, lua_name in inventory.A1_SIGNATURES.items():
+            self.assertTrue(lua_name.startswith("A1."), sig)
 
 
 if __name__ == "__main__":

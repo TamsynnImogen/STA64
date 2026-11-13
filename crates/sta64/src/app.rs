@@ -99,6 +99,8 @@ pub struct LaunchConfig {
     /// `Some("")`: `--map` without a name (the map browser).
     pub map: Option<String>,
     pub mission_report: bool,
+    /// `--nointro` (the executables' own argument): skip the intro movies (MED-05).
+    pub nointro: bool,
     /// `--skirmish [<map>]`: play a match on the map (the map view with a seat,
     /// starting forces, an opponent, the HUD and audio); `map` holds its name.
     pub skirmish: bool,
@@ -132,6 +134,9 @@ pub struct LaunchConfig {
     pub frame_size: Option<(u32, u32)>,
     /// `--postfx bloom,smaa`: opt-in post effects (render/post.rs).
     pub postfx: Vec<String>,
+    /// `--install-content`: with `--headless --frames`, build the scene on the install's
+    /// content and draw it with the map view's renderers (TOOL-17).
+    pub install_content: bool,
     /// Arguments not understood, kept for the warning.
     pub unknown: Vec<String>,
 }
@@ -152,6 +157,7 @@ Usage: sta64 [options]
   --race <name>            with --skirmish: your race, e.g. federation (default: the first playable)
   --opponent-race <name>   with --skirmish: the opponent's race (default: the next playable one)
   --mission-report         print which mission script every map would run, then exit
+  --nointro                skip the logo and title movies at start
 
 Test bench (docs/TESTBENCH.md):
   --scene <ini>            load a bench scene
@@ -163,6 +169,8 @@ Test bench (docs/TESTBENCH.md):
   --frames <t,t,..>        save a PNG frame at each of these ticks (headless, needs a GPU adapter)
   --frame-dir <dir>        where frames go (default: frames)
   --frame-size <WxH>       frame size (default: 640x360)
+  --install-content        with --headless --frames: the install's own content (--install-root, --mod): the
+                           scene's Map=, its units' models, sky, nebulae, planets and effects (no window, no audio)
   --postfx <a,b,..>        opt-in post effects: bloom smaa fxaa vignette chromatic exposure aces reinhard cinematic (F8 cycles)
 
   --lcars-ui               use the LCARS interface instead of the game/mod stock profile
@@ -220,6 +228,7 @@ impl LaunchConfig {
                 "--ui-gallery" => cfg.ui_gallery = true,
                 "--lcars-ui" => cfg.lcars_ui = true,
                 "--mission-report" => cfg.mission_report = true,
+                "--nointro" | "-nointro" => cfg.nointro = true,
                 "--help" | "-h" => cfg.help = true,
                 "--scene" => cfg.scene = value(&mut args).map(PathBuf::from),
                 "--headless" => cfg.headless = true,
@@ -243,6 +252,7 @@ impl LaunchConfig {
                     _ => cfg.unknown.push("--frames (needs ticks like 0,100)".into()),
                 },
                 "--postfx" => cfg.postfx.extend(value(&mut args)),
+                "--install-content" => cfg.install_content = true,
                 "--frame-dir" => cfg.frame_dir = value(&mut args).map(PathBuf::from),
                 "--frame-size" => match value(&mut args).and_then(|v| v.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))) {
                     Some(wh) => cfg.frame_size = Some(wh),
@@ -329,6 +339,16 @@ mod tests {
         assert_eq!(parse("").mode(), Mode::FrontEnd);
         assert_eq!(parse("--install-root /g --mod FO").mode(), Mode::FrontEnd);
         assert_eq!(parse("").clock_mode(), ClockMode::Wall);
+    }
+
+    #[test]
+    fn nointro_is_the_executables_own_flag() {
+        assert!(!parse("").nointro);
+        for a in ["--nointro", "-nointro"] {
+            let c = parse(a);
+            assert!(c.nointro && c.unknown.is_empty(), "{a}");
+            assert_eq!(c.mode(), Mode::FrontEnd);
+        }
     }
 
     #[test]

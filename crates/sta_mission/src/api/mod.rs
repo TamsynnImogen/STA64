@@ -27,7 +27,7 @@
 //!   radius}`; results ascend by id;
 //! - `Player(n)` / `Player.get(n)`, `Game.localPlayer`: `number name race
 //!   color isAI slotType maxOfficers maxCrew resources`, `getRelation`,
-//!   `setRelation`, `loadAIP` (recorded, no effect);
+//!   `setRelation`, `loadAIP` (queued for the host's AI seats, AI-06);
 //! - `Objectives.objectives:add(title | {title, description})` returning an
 //!   objective (`state title description id`, `:complete()`, `:fail()`),
 //!   `Objectives.visible`, `Objectives.count`;
@@ -54,6 +54,7 @@ use sta_sim::command::{Command, CommandKind, Edit, Order};
 use sta_sim::view::{Relation, UnitFlags, UnitView, WorldView};
 use sta_sim::SimEvent;
 
+mod a1;
 mod a2;
 mod entity;
 mod edit_feedback;
@@ -62,11 +63,12 @@ mod entity_ref;
 mod camera_intent;
 mod monitor;
 mod race;
+mod search;
 mod condition_monitor;
 mod player;
 mod timer;
 mod objectives;
-mod objectives_file;
+pub(crate) mod objectives_file;
 mod spawn;
 mod text_input;
 #[cfg(test)]
@@ -151,6 +153,8 @@ pub struct MissionConfig {
     pub content: Option<Arc<ContentDb>>,
     /// Map labels by entity (`sim.labels`), for `EntityFinder` and `label`.
     pub labels: BTreeMap<EntityId, String>,
+    /// The map's named paths in file order, `(label, points)`, for `A2.paths` (CON-47).
+    pub paths: Vec<(String, Vec<[f32; 3]>)>,
     /// The world before the first tick, so a script's load-time finds work.
     pub view: Option<WorldView>,
 }
@@ -181,6 +185,14 @@ pub struct ObjectiveBriefing {
     pub notes: String,
 }
 
+/// What the mission started that the client has not yet reported finished
+/// (`A2.IsAudioMessageDone`, `A2.IsMoviePlaying`).
+#[derive(Default)]
+pub(crate) struct Playback {
+    pub sounds: std::collections::BTreeSet<u32>,
+    pub movie: bool,
+}
+
 pub(crate) type MissionReader = Arc<Mutex<dyn Fn(&str) -> Option<Vec<u8>> + Send>>;
 
 /// Script-visible state; see the module docs.
@@ -190,6 +202,7 @@ pub(crate) struct Ctx {
     pub seed: u64,
     pub content: Option<Arc<ContentDb>>,
     pub labels: BTreeMap<EntityId, String>,
+    pub paths: Vec<(String, Vec<[f32; 3]>)>,
     pub view: WorldView,
     pub events: Vec<SimEvent>,
     pub commands: Vec<Command>,
@@ -212,7 +225,13 @@ pub(crate) struct Ctx {
     pub log: Vec<String>,
     /// Orders and names the API accepted but could not carry out, by name.
     pub unsupported: BTreeMap<String, u32>,
+    /// AIP loads the script asked for, in call order; the host takes them
+    /// ([`crate::MissionRuntime::take_aip_requests`]).
     pub loaded_aips: Vec<(PlayerId, String)>,
+    pub aips_taken: usize,
+    pub playback: Playback,
+    /// The view tick of the last `Hit` each object took (`A2.UnderAttack`).
+    pub last_hit: BTreeMap<EntityId, u64>,
 }
 
 pub(crate) type Shared = Rc<RefCell<Ctx>>;
@@ -225,6 +244,7 @@ impl Ctx {
             seed,
             content: cfg.content,
             labels: cfg.labels,
+            paths: cfg.paths,
             view: cfg.view.unwrap_or_default(),
             events: Vec::new(),
             commands: Vec::new(),
@@ -247,6 +267,9 @@ impl Ctx {
             log: Vec::new(),
             unsupported: BTreeMap::new(),
             loaded_aips: Vec::new(),
+            aips_taken: 0,
+            playback: Playback::default(),
+            last_hit: BTreeMap::new(),
         }
     }
 
@@ -265,6 +288,20 @@ impl Ctx {
 
     pub fn odf_name(&self, u: &UnitView) -> String {
         self.content.as_ref().and_then(|c| c.name(u.def)).unwrap_or_default().to_owned()
+    }
+
+    /// Where a script sees `id`: the point of its latest queued `SetPosition`
+    /// this tick, else the view's position (the engine moves the object at the
+    /// call, so a `PointAt` right after a `SetPosition` aims from the new place).
+    pub fn placed(&self, id: EntityId, view_pos: Vec3) -> Vec3 {
+        self.commands
+            .iter()
+            .rev()
+            .find_map(|c| match &c.kind {
+                CommandKind::Edit(Edit::Position(who, to)) if *who == id => Some(*to),
+                _ => None,
+            })
+            .unwrap_or(view_pos)
     }
 
     pub fn try_push(&mut self, player: PlayerId, kind: CommandKind) -> Result<u32, &'static str> {
@@ -452,6 +489,7 @@ pub(crate) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
     text_input::install(lua, ctx)?;
     timer::install(lua, ctx)?;
     a2::install(lua, ctx)?;
+    a1::install(lua, ctx)?;
 
     let mission = lua.create_table()?;
     let c = ctx.clone();

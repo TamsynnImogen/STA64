@@ -591,6 +591,7 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f32(1.0)))
             .insert_non_send(Mixer::new(Box::new(null)))
+            .insert_resource(crate::audio::AudioTestTones(true))
             .add_plugins(crate::audio::AudioPlugin::default())
             .insert_resource(cfg)
             .insert_resource(ctx);

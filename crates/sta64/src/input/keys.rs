@@ -7,15 +7,13 @@
 //! key, so rebinding changes which key triggers the action. Control groups
 //! (digits 1..9) and the Shift/Ctrl modifiers are bound the same way.
 //!
-//! Persistence is a plain text file, one `action = Key` line each (see
-//! [`KeyBindings::to_text`] / [`KeyBindings::from_text`], [`KeyBindings::load`] /
-//! [`KeyBindings::save`]). The game has no settings path yet, so the resource
-//! lives in memory with the defaults; follow-up: the settings package picks the
-//! file location and calls `load` at startup and `save` after a rebind.
+//! Persistence is plain text, one `action = Key` line each (see
+//! [`KeyBindings::to_text`] / [`KeyBindings::from_text`]). The lines are part of
+//! STA64's settings file (`ui/settings.rs`, UI-29), which loads them at startup
+//! and writes them after a rebind.
 //! Orders read Stop and Formation from here too.
 
 use std::collections::BTreeMap;
-use std::path::Path;
 
 use bevy::prelude::*;
 use sta_sim::movement::{FORM_COLUMN, FORM_LINE, FORM_WEDGE};
@@ -38,11 +36,12 @@ pub enum Action {
     Stop,
     /// Set the selection's formation: one of the `movement::FORM_*` kinds.
     Formation(u8),
+    /// Held with `GroupModifier` (Ctrl): write a playtest capture folder (TOOL-14).
+    Capture,
 }
 
-#[allow(dead_code)] // settings file API, until the settings package wires it
 impl Action {
-    pub const ALL: [Action; 17] = [
+    pub const ALL: [Action; 18] = [
         Action::AddModifier,
         Action::GroupModifier,
         Action::CentreModifier,
@@ -60,6 +59,7 @@ impl Action {
         Action::Formation(FORM_LINE),
         Action::Formation(FORM_COLUMN),
         Action::Formation(FORM_WEDGE),
+        Action::Capture,
     ];
 
     pub fn name(self) -> String {
@@ -73,6 +73,7 @@ impl Action {
             Action::Formation(FORM_LINE) => "formation_line".into(),
             Action::Formation(FORM_COLUMN) => "formation_column".into(),
             Action::Formation(_) => "formation_wedge".into(),
+            Action::Capture => "capture".into(),
         }
     }
 
@@ -108,6 +109,7 @@ impl Default for KeyBindings {
         m.insert(Action::Formation(FORM_LINE), vec![KeyCode::F1]);
         m.insert(Action::Formation(FORM_COLUMN), vec![KeyCode::F2]);
         m.insert(Action::Formation(FORM_WEDGE), vec![KeyCode::F3]);
+        m.insert(Action::Capture, vec![KeyCode::F12]);
         for (n, k) in DIGITS.into_iter().enumerate() {
             m.insert(Action::Group(n as u8), vec![k]);
         }
@@ -115,7 +117,7 @@ impl Default for KeyBindings {
     }
 }
 
-#[allow(dead_code)] // rebind/load/save: wired by the settings package
+#[allow(dead_code)] // rebind: the options screen (UI-20) calls it
 impl KeyBindings {
     pub fn keys(&self, a: Action) -> &[KeyCode] {
         self.0.get(&a).map_or(&[], |v| v.as_slice())
@@ -148,23 +150,37 @@ impl KeyBindings {
     pub fn from_text(text: &str) -> KeyBindings {
         let mut b = KeyBindings::default();
         for line in text.lines() {
-            let Some((name, keys)) = line.split_once('=') else { continue };
-            let Some(a) = Action::from_name(name.trim()) else { continue };
-            let ks: Vec<KeyCode> = keys.split(',').filter_map(|k| parse_key(k.trim())).collect();
-            if !ks.is_empty() {
-                b.0.insert(a, ks);
+            if let Some((name, keys)) = line.split_once('=')
+                && let Some(a) = Action::from_name(name.trim())
+            {
+                let _ = b.bind_from_text(a, keys);
             }
         }
         b
     }
 
-    /// The file's bindings, or the defaults when it cannot be read.
-    pub fn load(path: &Path) -> KeyBindings {
-        std::fs::read_to_string(path).map(|t| KeyBindings::from_text(&t)).unwrap_or_default()
-    }
-
-    pub fn save(&self, path: &Path) -> std::io::Result<()> {
-        std::fs::write(path, self.to_text())
+    /// Bind `a` to the keys of a `Key, Key` list. Keys the list names that are not
+    /// bindable are reported in the error and skipped; a list with no bindable key
+    /// leaves the binding as it was.
+    pub fn bind_from_text(&mut self, a: Action, keys: &str) -> Result<(), String> {
+        let mut ok = Vec::new();
+        let mut bad = Vec::new();
+        for k in keys.split(',').map(str::trim).filter(|k| !k.is_empty()) {
+            match parse_key(k) {
+                Some(k) => ok.push(k),
+                None => bad.push(k),
+            }
+        }
+        if !ok.is_empty() {
+            self.0.insert(a, ok);
+        }
+        if !bad.is_empty() {
+            Err(format!("{}: unknown key(s) '{}'", a.name(), bad.join(", ")))
+        } else if keys.trim().is_empty() {
+            Err(format!("{}: no key given", a.name()))
+        } else {
+            Ok(())
+        }
     }
 }
 

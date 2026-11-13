@@ -6,31 +6,28 @@ The OpenSourced-Space-RTS audit exposed the A1 map gap, and the existing
 A2FOExtensions MDF reader supplied an additional format lead. Check gameplay
 placement against the original A1 executable rather than inverting preview pixels.
 
-## Native evidence and limits
+## Original behaviour followed
 
-The pinned original GOG `Armada.exe` (SHA-256
-`1c37ee8e4a24380c950a91ce5a7f9f96c4fcf3d8ffc0cc7e58faec3835350be6`)
-has separate MDF preview and new-game placement paths:
+Evidence grade: read from the original A1 executable (static); the
+instruction-level notes are kept outside the repository.
 
-- MDF reader `0x4c0a50` reads `StartLocations`, accepting 2..8. Its missing or
-  out-of-range count falls back to eight. MDF writer `0x4c0cc0` projects the
-  first `Camera_i` point to a 118-unit preview grid. Those integer coordinates
-  lose precision; the A2FO host adapter's inverse-117 policy is not an original
-  A1 world-position rule.
-- New-game caller `0x440cc6` enters `0x442fd0`. For a team needing starting
-  forces, `0x4430b5..0x44312e` constructs its exact `Camera_i` label, calls
-  `0x4348d0`, and copies the first point's XYZ. Later placement constructs a
-  transform and calls the object factory at `0x443284`. Starting units can
-  receive additional native placement offsets; this helper resolves the base
-  point only, not that loadout algorithm.
-- Lookup `0x4348d0` compares complete labels case-sensitively and returns the
+- The MDF reader reads `StartLocations`, accepting 2..8; a missing or
+  out-of-range count falls back to eight. The MDF writer projects the first
+  `Camera_i` point to a 118-unit preview grid. Those integer coordinates lose
+  precision; the A2FO host adapter's inverse-117 policy is not an original A1
+  world-position rule.
+- A new game resolves a team's start through its exact `Camera_i` label and
+  copies the first point's XYZ. Starting units can receive additional native
+  placement offsets; this helper resolves the base point only, not that
+  loadout algorithm.
+- The label lookup compares complete labels case-sensitively and returns the
   first matching path in retained order. A missing path uses a native fallback
   with centre XZ and mean `SHIP_COMBAT_FLOOR`/`SHIP_COMBAT_CEILING` Y. These are
   configuration values, not the map's vertical bounds. Do not substitute the
   map Y midpoint or silently invent this fallback in the format crate.
 
 Private instruction captures and source fingerprints remain outside the repo.
-This is static source/binary evidence, not execution of the original game.
+Not executed in the original game.
 
 ## API and supported subset
 
@@ -118,3 +115,37 @@ original BZN/MDF SHA-256 values remained unchanged.
 Workspace all-targets checking, formatting and diff checks passed. An offline
 workspace lock refresh changed zero packages and left `Cargo.lock` unchanged.
 No new APK or device/runtime claim is made for these helpers.
+
+## Native reader and missing-path fallback (CON-42)
+
+Evidence grade: read from the original A1 executable (static); not executed in
+the original game, and the map-list enumeration that decides which maps are
+offered was not traced.
+
+- `native_mdf_start_count` follows the original reader, which never fails:
+  an absent file, missing key, unparsable value or count outside 2..8 give
+  eight. The key matches as a case-insensitive prefix on a line that also
+  holds `=`; the first such line wins; the value is read as `= %d`
+  (so `2x` is 2); an LF followed by a space or tab continues the line; the
+  file ends at its first NUL. A failed `%d` leaves an uninitialised native
+  field, modelled as eight. `#include` lines are not followed. A UTF-8 BOM, leading blanks or CR-only line
+  endings keep the key from matching at line start and give eight (the strict
+  reader accepted them); `%d` overflow is not measured.
+- `player_start_positions_with_fallback`: a team with no `Camera_i` path starts
+  at the map's centre XZ and the mean of `SHIP_COMBAT_FLOOR` and
+  `SHIP_COMBAT_CEILING` (read from `RTS_CFG.h`; without both keys a missing
+  path still rejects the result). A present but empty or non-finite path
+  still rejects the result: native behaviour there is not measured.
+- Content conversion uses the native count only. STA64's own choice (not a
+  measured rule): seats are offered only for the leading run of teams that
+  have a `Camera_i` path, with a warning when that is fewer than the count
+  (fewer than two gives no starts). The native fallback point is not used for
+  seats, because it would stack them on the map centre and what the original
+  setup screen and spawn path do with such seats was not traced. The fallback
+  helper stays available in `sta_bzn`. A map with no companion keeps no starts
+  (not measured; native lists appear to enumerate `.mdf` files). All 28 stock
+  companions give the same 113 starts as before. The done-when item for maps
+  without a companion and for extra seats stays open: not measured.
+- Leading blanks before the key: the native comparison is at line start, so
+  ` StartLocations = 4` gives eight; this follows the static reading and was
+  not run on the original.

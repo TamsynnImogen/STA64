@@ -1,11 +1,11 @@
 # Modding v1: decisions for sign-off
 
-Status: **accepted** (Tammy and Cedric, 2026-11-11; merged in #352; D5 amended
-2026-11-12 and approved by Tammy, see D5; D5 amended again 2026-11-12 for FO
-3.2.7, awaiting Tammy's formal approval of the wording). Binding on
+Status: **accepted** (Tammy and Cedric, 2026-11-11; merged in #352; D5 and D10
+amended 2026-11-12 and approved by Tammy, see D5 and D10). Binding on
 all agent and human work in the areas below. Covers how STA64 treats existing Armada
 mods and what the first modding release contains. Background and evidence are
-in [MODDING-IDEAS.md](MODDING-IDEAS.md) and `docs/research/modding/`; this
+in [MODDING-IDEAS.md](MODDING-IDEAS.md) and in research notes kept outside the
+repository; this
 document records decisions only.
 
 ## Scope of "mod"
@@ -104,14 +104,14 @@ Two peers on Classic and Classic Enhanced refuse to start and name the
 differing key; for geometry the refusal names the unit and the differing
 value. Replays and snapshots record the lineage and pack names.
 
-*Amended 2026-11-12: model geometry is part of the rules (Cedric); awaiting
-Tammy's approval. It read "peers that differ only in textures, models or
+*Amended 2026-11-12: model geometry is part of the rules (Cedric; approved by
+Tammy). It read "peers that differ only in textures, models or
 render recipes can play together", meaning that peers whose installs differ
 only in art play together. That cannot hold for models: in every install
 99-100% of ships have no explicit size key (Roots base 43.7%), so the size of a
 unit comes from its SOD, as in the originals, and Armada II and Roots checksum
-the models between peers. Evidence, the original size rule and the open
-points: [research/COLLISION_GEOMETRY.md](research/COLLISION_GEOMETRY.md).
+the models between peers. The original size rule is stated in WORKPLAN SIM-32; the evidence notes are
+kept outside the repository.
 Implemented by CON-35 (digest) and SIM-32 (the original size rule).*
 
 **D11. Conflicts are solved by inheritance, not a new patch format.**

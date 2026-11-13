@@ -218,6 +218,7 @@ fn external_a2_campaign_ports_start_on_installed_maps() {
                 content: Some(db.clone()),
                 labels: sim.labels.iter().map(|(id, label)| (id, label.clone())).collect(),
                 view: Some((*sim.view()).clone()),
+                paths: Vec::new(),
             };
             let startup_path = match &resolution {
                 Resolution::Lua { path, .. } if matched => path.as_str(),

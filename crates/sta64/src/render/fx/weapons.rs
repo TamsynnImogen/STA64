@@ -13,7 +13,9 @@
 //! - **Beam** (`WeaponKind::Beam`, or a recipe of kind beam/cone): a ribbon from the
 //!   shooter to the target, both followed live each frame, `duration` ticks long.
 //!   Brightness rises over the recipe's `FadeIn` and falls over the last 0.25 s (the
-//!   phaser lights' envelope). A flare sits at the emitter (`Emitter` half widths) and
+//!   phaser lights' envelope). The beam ends at once when its shooter is gone, and falls
+//!   off over that last 0.25 s when its target unit is gone, rather than hanging at the
+//!   last ends for the rest of the lifespan. A flare sits at the emitter (`Emitter` half widths) and
 //!   at the impact (`Impact`), as in Refit's `Fx::beam`.
 //! - **Cone** (recipe `Kind=cone`: tractor, holding, assimilation beams): Refit's
 //!   fans-and-vapour cone, `Spread` of the target's radius wide at the target. The
@@ -82,6 +84,16 @@ pub struct WeaponFx {
     recipe: Recipe,
     look: Look,
     seed: f32,
+    /// The target (a unit) has gone: the beam is falling off from there.
+    target_lost: bool,
+}
+
+impl WeaponFx {
+    /// Where the effect starts now (render space).
+    #[cfg(test)]
+    pub fn origin(&self) -> Vec3 {
+        self.from
+    }
 }
 
 /// Opacity 0..1, applied to the material when there is one.
@@ -94,6 +106,8 @@ impl Plugin for WeaponFxPlugin {
     fn build(&self, app: &mut App) {
         // RND-28: the recipes a mod's mounted files lay over Refit's, read as the files
         // are mounted (`ordnance/ordnance.ini`, D12).
+        // RND-29: a freighter's mining beam is drawn as a shot of its mining weapon, from where it orbits.
+        app.add_plugins(super::super::mining::MiningPlugin);
         app.init_resource::<OrdnanceRecipes>().add_systems(
             Update,
             load_recipes.run_if(resource_exists_and_changed::<crate::viewer::Mounted>).before(spawn_fx),
@@ -129,7 +143,9 @@ fn name_colour(class: &str, fx: Option<&str>) -> Option<Vec3> {
 /// the weapon's colour (class and effect name, else the ODF's `lightColor`: three
 /// numbers, 0..1 or 0..255).
 fn recipe_for(def: &sta_content::WeaponDef, recipes: &OrdnanceRecipes) -> Recipe {
-    if let Some(r) = recipes.0.get(&def.odf.to_ascii_lowercase()) {
+    // By the weapon's ODF name, else by its ordnance class (`minebm`, `tracbm`: one recipe
+    // for every weapon of the class).
+    if let Some(r) = recipes.0.get(&def.odf.to_ascii_lowercase()).or_else(|| recipes.0.get(&def.class.0)) {
         return r.clone();
     }
     let shape = if def.kind == WeaponKind::Beam { Shape::Beam } else { Shape::Bolt };
@@ -150,9 +166,14 @@ fn point(link: &SimLink, id: EntityId, alpha: f32) -> Option<Vec3> {
     link.interpolate(id, alpha).map(|(p, _)| to_bevy(p))
 }
 
-fn target_point(link: &SimLink, t: &Target, alpha: f32) -> Option<Vec3> {
+/// How far a unit is drawn from its sim place ([`super::super::mining`]).
+fn shifted(offsets: &Option<Res<super::super::mining::VisualOffsets>>, id: EntityId) -> Vec3 {
+    offsets.as_ref().and_then(|o| o.0.get(&id)).copied().unwrap_or(Vec3::ZERO)
+}
+
+fn target_point(link: &SimLink, offsets: &Option<Res<super::super::mining::VisualOffsets>>, t: &Target, alpha: f32) -> Option<Vec3> {
     match t {
-        Target::Entity(id) => point(link, *id, alpha),
+        Target::Entity(id) => point(link, *id, alpha).map(|p| p + shifted(offsets, *id)),
         Target::Point(p) => Some(to_bevy(p.to_f32())),
         _ => None,
     }
@@ -172,9 +193,12 @@ fn load_recipes(vfs: Res<crate::viewer::Mounted>, mut recipes: ResMut<OrdnanceRe
     *recipes = OrdnanceRecipes::from_vfs(&vfs.0);
 }
 
-fn spawn_fx(
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn spawn_fx(
     mut cmds: Commands,
+    offsets: Option<Res<super::super::mining::VisualOffsets>>,
     mut msgs: MessageReader<SimMsg>,
+    mut mining: MessageReader<super::super::mining::MiningShot>,
     recipes: Res<OrdnanceRecipes>,
     clock: Res<AnimClock>,
     link: Res<SimLink>,
@@ -182,12 +206,25 @@ fn spawn_fx(
     live: Query<(Entity, &WeaponFx)>,
 ) {
     let alpha = clock.alpha();
-    for SimMsg(ev) in msgs.read() {
+    // A freighter's mining beam is drawn as a shot but is not one for anyone else.
+    let mined: Vec<SimEvent> = mining
+        .read()
+        .map(|s| SimEvent::Fired { shooter: s.shooter, weapon: s.weapon, hardpoint: 0, target: Target::Entity(s.node) })
+        .collect();
+    for ev in msgs.read().map(|m| &m.0).chain(mined.iter()) {
         match ev {
             SimEvent::Fired { shooter, weapon, target, .. } => {
                 let Some(def) = content.0.weapon(*weapon) else { continue };
-                let Some(from) = point(&link, *shooter, alpha) else { continue };
-                let to = target_point(&link, target, alpha).unwrap_or(from);
+                // A shooter drawn off its sim place (an orbiting miner) shoots from where it is drawn.
+                let Some(from) = point(&link, *shooter, alpha).map(|p| p + shifted(&offsets, *shooter)) else { continue };
+                // A target the shot has just killed is gone from this tick's view: its last place
+                // is in the one before, so the killing beam still reaches it.
+                let to = target_point(&link, &offsets, target, alpha)
+                    .or_else(|| match target {
+                        Target::Entity(id) => link.prev().unit(*id).map(|u| to_bevy(u.pos.to_f32())),
+                        _ => None,
+                    })
+                    .unwrap_or(from);
                 let recipe = recipe_for(def, &recipes);
                 let seed = shot_seed(*shooter, *weapon, clock.tick());
                 let mk = |kind, life: f32, look: Look| WeaponFx {
@@ -203,6 +240,7 @@ fn spawn_fx(
                     recipe: recipe.clone(),
                     look,
                     seed,
+                    target_lost: false,
                 };
                 // Refit's emitter flare: `Fx::flare` at the start, `Emitter` half widths.
                 let flare = Look::flare(recipe.col, FLARE_CORE, 3.5, recipe.star, FLARE_STAR_SHARP, 0.0, 20.0, seed);
@@ -249,6 +287,7 @@ fn envelope(age: f32, life: f32, fade_in: f32) -> f32 {
 #[allow(clippy::type_complexity)]
 fn update_fx(
     mut cmds: Commands,
+    offsets: Option<Res<super::super::mining::VisualOffsets>>,
     clock: Res<AnimClock>,
     link: Res<SimLink>,
     camera: Query<&GlobalTransform, crate::map::MainCamera>,
@@ -263,11 +302,29 @@ fn update_fx(
             cmds.entity(e).try_despawn();
             continue;
         }
-        let k = (age / fx.life).clamp(0.0, 1.0);
-        if let Some(p) = point(&link, fx.shooter, alpha) {
-            fx.from = p;
+        // What a shot hangs on is its shooter: with it gone the beam, its far flare and the
+        // muzzle flare end at once; with the target gone the beam has nothing to hit and
+        // falls off over the phaser's last quarter second instead of hanging at the last
+        // end for the rest of the ordnance's `lifespan`. Assumed, not measured: how long
+        // the original engine keeps a beam after its owner or target dies (Refit's
+        // `shot_parties` treats a gone one as none). Shots in flight keep flying.
+        let shooter_at = point(&link, fx.shooter, alpha);
+        if shooter_at.is_none() && matches!(fx.kind, FxKind::Beam | FxKind::Impact | FxKind::Flash) {
+            cmds.entity(e).try_despawn();
+            continue;
         }
-        if let Some(p) = target_point(&link, &fx.target, alpha) {
+        if matches!(fx.kind, FxKind::Beam | FxKind::Impact)
+            && !fx.target_lost
+            && matches!(fx.target, Target::Entity(id) if point(&link, id, alpha).is_none())
+        {
+            fx.target_lost = true;
+            fx.life = fx.life.min(age + BEAM_FALL * TICK_HZ as f32);
+        }
+        let k = (age / fx.life).clamp(0.0, 1.0);
+        if let Some(p) = shooter_at {
+            fx.from = p + shifted(&offsets, fx.shooter);
+        }
+        if let Some(p) = target_point(&link, &offsets, &fx.target, alpha) {
             fx.to = p;
         }
         let r = fx.recipe.clone();
@@ -417,6 +474,82 @@ mod tests {
             frames.push(rows);
         }
         frames
+    }
+
+    /// A beam fired at tick 45 by unit 1 at unit 2; `until` ends a unit (the script's
+    /// `Destroyed`). Per frame: the beams and impacts alive, the shortest life and the longest beam.
+    fn beam_run(shooter_until: Option<u64>, target_until: Option<u64>, frames: usize) -> Vec<(usize, f32, f32)> {
+        let db = sta_content::fake::db();
+        let beam = db.key("fx_beam").unwrap().0;
+        let until = |u: Option<u64>| u.map_or(String::new(), |t| format!(", until: {t}"));
+        let text = format!(
+            "{{ units: [
+                {{ id: 1, def: \"fx_cruiser\", owner: 0, hull: 800, rails: [{{ at: 0, pos: {{ x: 0, y: 0, z: 0 }} }}]{} }},
+                {{ id: 2, def: \"fx_frigate\", owner: 1, hull: 400, rails: [{{ at: 0, pos: {{ x: 0, y: 0, z: 600 }} }}]{} }},
+            ], events: [{{ at: 45, event: {{ Fired: {{ shooter: 1, weapon: {beam}, hardpoint: 0, target: {{ Entity: 2 }} }} }} }}] }}",
+            until(shooter_until),
+            until(target_until)
+        );
+        let src = ScriptedSource::from_json5(&text, &db).unwrap();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / TICK_HZ as f64)))
+            .add_plugins(SimLinkPlugin)
+            .insert_resource(ContentRes(std::sync::Arc::new(db)))
+            .insert_resource(SimLink::new(Box::new(src), Box::new(LocalRouter::new()), PlayerId(0)))
+            .add_plugins(WeaponFxPlugin);
+        configure_sets(&mut app);
+        let mut out = Vec::new();
+        for _ in 0..frames {
+            app.update();
+            let mut q = app.world_mut().query::<&WeaponFx>();
+            let live: Vec<&WeaponFx> = q.iter(app.world()).filter(|f| matches!(f.kind, FxKind::Beam | FxKind::Impact)).collect();
+            let reach = live.iter().filter(|f| f.kind == FxKind::Beam).map(|f| f.to.distance(f.from)).fold(0.0, f32::max);
+            out.push((live.len(), live.iter().map(|f| f.life).fold(f32::MAX, f32::min), reach));
+        }
+        out
+    }
+
+    #[test]
+    fn a_beam_ends_the_frame_its_shooter_is_destroyed() {
+        // Alone it lives 15 ticks from tick 45.
+        let alone = beam_run(None, None, 70);
+        assert!(alone[52].0 == 2 && alone[56].0 == 2, "a beam and its flare while firing");
+        // The shooter goes at tick 50: nothing of the beam is left within a frame or two.
+        let cut = beam_run(Some(50), None, 70);
+        assert_eq!(cut[47].0, 2, "firing before the shooter goes");
+        let gone = (48..70).find(|&i| cut[i].0 == 0).expect("the beam ended");
+        assert!(gone <= 51, "beam still drawn at frame {gone}, the shooter went at tick 50");
+        assert!(cut[gone..].iter().all(|r| r.0 == 0), "it came back");
+    }
+
+    #[test]
+    fn a_beam_falls_off_when_its_target_is_destroyed_instead_of_hanging() {
+        let cut = beam_run(None, Some(47), 70);
+        assert!(cut.iter().any(|r| r.0 == 2), "the beam was drawn");
+        // Its life was cut to the fall (a quarter second: 7.5 ticks), under the 15 of its lifespan.
+        let life = cut.iter().filter(|r| r.0 == 2).map(|r| r.1).fold(f32::MAX, f32::min);
+        assert!(life < 14.0, "life {life}");
+        let last = cut.iter().rposition(|r| r.0 == 2).unwrap();
+        let alone_last = beam_run(None, None, 70).iter().rposition(|r| r.0 == 2).unwrap();
+        assert!(last + 2 <= alone_last, "still drawn at frame {last}, a lone beam at {alone_last}");
+    }
+
+    #[test]
+    fn the_beam_that_kills_its_target_still_reaches_it() {
+        // The target is gone from the view on the tick the beam is read.
+        let run = beam_run(None, Some(45), 70);
+        let reach = run.iter().map(|r| r.2).fold(0.0, f32::max);
+        assert!(reach > 500.0, "the killing beam was {reach} long, the target 600 away");
+        assert_eq!(run[69].0, 0);
+    }
+
+    #[test]
+    fn a_beam_ends_with_its_lifespan() {
+        let alone = beam_run(None, None, 80);
+        let last = alone.iter().rposition(|r| r.0 == 2).unwrap();
+        // Fired at tick 45 for 15 ticks: gone by about tick 60.
+        assert!((57..=61).contains(&last), "last drawn at frame {last}");
     }
 
     #[test]

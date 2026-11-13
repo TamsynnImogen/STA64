@@ -11,3 +11,8 @@ sta_content.workspace = true
 sta_core.workspace = true
 sta_sim.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+# A host and a joiner built as the multiplayer start builds them
+# (tests/ai_seats_multiplayer.rs).
+sta_net.workspace = true

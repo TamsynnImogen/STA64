@@ -137,31 +137,35 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
         })?,
     )?;
 
+    // Twelve overloads in the executable (decorated names, static): the first
+    // argument is a handle or a path name, then a path point (int) or
+    // parameter (float), then a handle, a second path with its point or
+    // parameter, a flag, or nothing. Each shape retains its arguments.
     let c = ctx.clone();
     table.set(
         "CineractiveShot",
         lua.create_function(move |_, args: MultiValue| {
-            let arguments = match args.len() {
-                2 => vec![
-                    entity(&c, "CineractiveShot", &args[0])?,
-                    entity(&c, "CineractiveShot", &args[1])?,
-                ],
-                3 => {
-                    let path = text("CineractiveShot", &args[0])?;
-                    let parameter = match &args[1] {
-                        Value::Integer(_) => point_index("CineractiveShot", &args[1])?,
-                        Value::Number(_) => number("CineractiveShot", &args[1])?,
-                        _ => {
-                            return Err(mlua::Error::runtime(
-                                "A2.CineractiveShot requires an integer path index or floating path parameter",
-                            ));
-                        }
-                    };
-                    vec![path, parameter, entity(&c, "CineractiveShot", &args[2])?]
+            let is_text = |v: &Value| matches!(v, Value::String(_));
+            let is_num = |v: &Value| matches!(v, Value::Integer(_) | Value::Number(_));
+            let is_bool = |v: &Value| matches!(v, Value::Boolean(_));
+            let param = |v: &Value| match v {
+                Value::Integer(_) => point_index("CineractiveShot", v),
+                _ => number("CineractiveShot", v),
+            };
+            let n = "CineractiveShot";
+            let a: Vec<&Value> = args.iter().collect();
+            let arguments = match a.as_slice() {
+                [x, y] if is_bool(y) => vec![entity(&c, n, x)?, boolean(n, y)?],
+                [x, y] => vec![entity(&c, n, x)?, entity(&c, n, y)?],
+                [p, t, z] if is_text(p) && is_num(t) && is_bool(z) => vec![text(n, p)?, param(t)?, boolean(n, z)?],
+                [p, t, z] if is_text(p) && is_num(t) => vec![text(n, p)?, param(t)?, entity(&c, n, z)?],
+                [h, p, t] if is_text(p) && is_num(t) => vec![entity(&c, n, h)?, text(n, p)?, param(t)?],
+                [p, t, q, u] if is_text(p) && is_num(t) && is_text(q) && is_num(u) => {
+                    vec![text(n, p)?, param(t)?, text(n, q)?, param(u)?]
                 }
                 _ => {
                     return Err(mlua::Error::runtime(
-                        "A2.CineractiveShot requires exactly 2 or 3 argument(s)",
+                        "A2.CineractiveShot: no overload takes these arguments (2 to 4 of handle/path/number/flag)",
                     ));
                 }
             };

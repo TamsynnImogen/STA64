@@ -1,6 +1,7 @@
 //! Cloak-capable fake content, for the specials tests and the `cloak`
 //! bench scenario. Add it to `fake::db()`'s content with a builder; no game
-//! data. The keys sit in each definition's `raw` ODF, where [`super`] reads them.
+//! data. The values sit in the typed fields the ODF loader fills from the
+//! keys named in [`super`].
 //!
 //! | name | role |
 //! |---|---|
@@ -8,23 +9,24 @@
 //! | `fx_cloaker_frail` | 100 energy, cost 10, drain 30/s, no regeneration: runs dry |
 //! | `fx_cloaker_loud` | instant cloak that leaves weapons on: firing decloaks it, a hit decloaks it |
 
-use std::sync::Arc;
-
 use sta_content::{
     DefRef, FireArc, Fixed, Hardpoint, MoveStats, ShieldDef, UnitDef, WeaponDef, WeaponKind,
 };
 
-fn odf(name: &str, text: &str) -> Arc<sta_odf::Odf> {
-    Arc::new(sta_odf::resolve(name, &mut |_| Some(text.to_owned())).expect("fixture ODF resolves"))
-}
-
-fn device(name: &str, keys: &str) -> WeaponDef {
+/// A cloaking device: `effectTimer` seconds, `energyDrainRate`,
+/// `specialEnergyCost`, `disableWeapons`, `decloakOnHit`.
+fn device(name: &str, seconds: f64, drain: i32, cost: i32, disable_weapons: bool, decloak_on_hit: bool) -> WeaponDef {
     let mut w = WeaponDef::new(name, "cloakingdeviceimp", WeaponKind::Beam);
-    w.raw = odf(name, keys);
+    w.effect_ticks = sta_core::seconds_to_ticks(seconds);
+    w.energy_drain = Fixed::from_int(drain);
+    w.energy_cost = Fixed::from_int(cost);
+    w.disable_weapons = disable_weapons;
+    w.decloak_on_hit = decloak_on_hit;
     w
 }
 
-fn cloaker(name: &str, device_name: &str, energy: &str) -> UnitDef {
+/// `energy`: `maxSpecialEnergy` and `specialEnergyRate`.
+fn cloaker(name: &str, device_name: &str, energy: (Fixed, Fixed)) -> UnitDef {
     let mut u = UnitDef::new(name, "craft");
     u.race = "fx".into();
     u.model = "fx_frigate".into();
@@ -52,38 +54,22 @@ fn cloaker(name: &str, device_name: &str, energy: &str) -> UnitDef {
             arc: None,
         },
     ];
-    u.raw = odf(name, energy);
+    (u.special_energy_max, u.special_energy_rate) = energy;
     u
 }
 
 /// The units and weapons to add; `fx_beam` must come from `fake::db()`.
 pub fn defs() -> (Vec<UnitDef>, Vec<WeaponDef>) {
     let weapons = vec![
-        device(
-            "fx_cloak",
-            "effectTimer = 1.0\nenergyDrainRate = 15.0\nspecialEnergyCost = 50\n",
-        ),
-        device(
-            "fx_cloak_frail",
-            "effectTimer = 1.0\nenergyDrainRate = 30.0\nspecialEnergyCost = 10\n",
-        ),
-        device(
-            "fx_cloak_loud",
-            "effectTimer = 0\ndisableWeapons = 0\ndecloakOnHit = 1\n",
-        ),
+        device("fx_cloak", 1.0, 15, 50, true, false),
+        device("fx_cloak_frail", 1.0, 30, 10, true, false),
+        device("fx_cloak_loud", 0.0, 0, 0, false, true),
     ];
+    let int = Fixed::from_int;
     let units = vec![
-        cloaker(
-            "fx_cloaker",
-            "fx_cloak",
-            "maxSpecialEnergy = 600\nspecialEnergyRate = 6.0\n",
-        ),
-        cloaker(
-            "fx_cloaker_frail",
-            "fx_cloak_frail",
-            "maxSpecialEnergy = 100\nspecialEnergyRate = 0\n",
-        ),
-        cloaker("fx_cloaker_loud", "fx_cloak_loud", ""),
+        cloaker("fx_cloaker", "fx_cloak", (int(600), int(6))),
+        cloaker("fx_cloaker_frail", "fx_cloak_frail", (int(100), Fixed::ZERO)),
+        cloaker("fx_cloaker_loud", "fx_cloak_loud", (Fixed::ZERO, Fixed::ZERO)),
     ];
     (units, weapons)
 }

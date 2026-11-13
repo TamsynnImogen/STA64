@@ -146,7 +146,7 @@ pub enum Start {
 }
 
 /// `[Marks]`.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MarksSection {
     /// `Enable`, default 1.
     pub enable: bool,
@@ -154,6 +154,17 @@ pub struct MarksSection {
     pub fire_gap: f64,
     /// `Still`, seconds, default 0.3.
     pub still: f64,
+    /// `SimTime`, default 0: every mark carries `t=`, the simulation's
+    /// seconds (Refit's `bench/measure-marks`; STA64's marks always have the
+    /// tick, so this only shapes what the original-game side writes).
+    pub sim_time: bool,
+    /// `Ordnance`, default 0: one `ord.new` / `ord.gone` mark per ordnance.
+    pub ordnance: bool,
+    /// `State`, milliseconds: one `state` mark per scene craft that often.
+    pub state_ms: Option<u32>,
+    /// `OrdnanceSkip`: weapon ODF name prefixes `Ordnance=1` leaves out
+    /// (`phaser,fphas` for the beams), lower case.
+    pub ordnance_skip: Vec<String>,
 }
 
 impl Default for MarksSection {
@@ -162,6 +173,10 @@ impl Default for MarksSection {
             enable: true,
             fire_gap: 1.0,
             still: 0.3,
+            sim_time: false,
+            ordnance: false,
+            state_ms: None,
+            ordnance_skip: Vec::new(),
         }
     }
 }
@@ -559,6 +574,21 @@ fn marks_section(e: &mut Entries, w: &mut Vec<ParseWarning>) -> Result<MarksSect
         enable: e.flag("Enable", w)?.unwrap_or(d.enable),
         fire_gap: e.float("FireGap", w)?.unwrap_or(d.fire_gap),
         still: e.float("Still", w)?.unwrap_or(d.still),
+        sim_time: e.flag("SimTime", w)?.unwrap_or(d.sim_time),
+        ordnance: e.flag("Ordnance", w)?.unwrap_or(d.ordnance),
+        state_ms: e.get("State", w, |v| {
+            int(v).and_then(|n| u32::try_from(n).map_err(|_| "expected milliseconds".into()))
+        })?
+        .filter(|&n| n > 0),
+        ordnance_skip: e
+            .string("OrdnanceSkip", w)
+            .map(|v| {
+                v.split(',')
+                    .map(|p| p.trim().to_ascii_lowercase())
+                    .filter(|p| !p.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default(),
     })
 }
 
@@ -797,8 +827,15 @@ mod tests {
             MarksSection {
                 enable: false,
                 fire_gap: 2.5,
-                still: 0.3
+                ..MarksSection::default()
             }
         );
+        // Refit's measuring keys (`bench/measure-marks`): typed, not unknown.
+        let f = parse("[Marks]\nSimTime=1\nOrdnance=1\nState=250\nOrdnanceSkip=phaser, FPHAS\n");
+        assert!(f.marks.sim_time && f.marks.ordnance);
+        assert_eq!(f.marks.ordnance_skip, ["phaser", "fphas"]);
+        assert_eq!(f.marks.state_ms, Some(250));
+        assert!(f.unknown.is_empty());
+        assert_eq!(parse("[Marks]\nState=0\n").marks.state_ms, None);
     }
 }

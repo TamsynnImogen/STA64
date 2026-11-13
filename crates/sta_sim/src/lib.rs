@@ -21,9 +21,12 @@
 //! the entity model in [`world`], filled from the map by [`spawn`], with
 //! today's movement.
 
+pub mod autonomy;
 pub mod boundary;
 pub mod combat;
 pub mod command;
+pub mod context;
+pub mod digest;
 pub mod economy;
 pub mod event;
 pub mod fake;
@@ -49,6 +52,8 @@ pub mod specials;
 pub mod spatial;
 pub mod spawn;
 pub mod start;
+mod start_effects;
+pub use start_effects::unsupported as unsupported_start_lifecycle;
 pub mod tech;
 pub mod victory;
 pub mod view;
@@ -61,7 +66,7 @@ pub use sta_core::{ContentKey, EntityId, Fixed, PlayerId, SEAM_REV, TICK_HZ, Tea
 /// Movement limits now live with the rest of a unit's definition.
 pub use sta_content::MoveStats;
 
-pub use event::SimEvent;
+pub use event::{MinerPhase, SimEvent};
 pub use source::WorldSource;
 pub use view::{TickOutput, UnitView, WorldView};
 
@@ -105,9 +110,11 @@ pub struct Sim {
     pub labels: Table<String>,
     /// Seats from the game setup, ascending id; in the digest.
     players: Vec<(PlayerId, TeamId)>,
-    /// The seats whose setup said `Control::Ai`, ascending (SIM-09: the tech
-    /// gate lets AI seats build the engine's unlisted tail slots). From the
-    /// setup like `players`, so not in the digest.
+    /// The seats whose setup said `Control::Ai` or `Control::RemoteAi`,
+    /// ascending (SIM-09: the tech gate lets AI seats build the engine's
+    /// unlisted tail slots; passive economy and start helpers read it too).
+    /// Session state, identical on every peer; in the digest once any
+    /// exists. Which machine runs the AI is not state and is not kept here.
     ai_seats: Vec<PlayerId>,
     /// What spawns resolve against; `None` for a sim made with [`Sim::new`].
     content: Option<Arc<ContentDb>>,
@@ -136,8 +143,19 @@ pub struct Sim {
     victory: victory::Victory,
     /// Special energy and cloaks (SIM-14); in the digest once any exists.
     specials: specials::Specials,
+    /// Craft autonomy levels that were set (SIM-38); in the digest once any exists.
+    autonomy: autonomy::Autonomy,
+    /// Pending start-helper lifecycle steps (SIM-28); in the digest once any exist.
+    start_effects: start_effects::StartEffects,
     /// Path planner grids and fields (SIM-23): a memo, not in the digest.
     nav: nav::Cache,
+    /// Subsystem switches and damage set by missions (SIM-55); in the digest
+    /// once any exists.
+    subsystems: combat::damage::Subsystems,
+    /// Units whose team just changed (SIM-29): `activateOnTeamChange` weapons
+    /// engage on the tick's weapon pass. Filled by the tick's commands and
+    /// drained by the same tick, so it is empty between ticks and not saved.
+    team_changes: Vec<EntityId>,
 }
 
 impl Sim {
@@ -162,7 +180,11 @@ impl Sim {
             production: Default::default(),
             victory: Default::default(),
             specials: Default::default(),
+            autonomy: Default::default(),
+            start_effects: Default::default(),
             nav: Default::default(),
+            subsystems: Default::default(),
+            team_changes: Vec::new(),
         }
     }
 
@@ -288,7 +310,10 @@ impl Sim {
             }
             Order::Special { units, slot, .. } => {
                 let Some(db) = self.content.clone() else { return false };
-                self.specials.order_special(&db, &self.units, c.player, units, *slot)
+                self.weapons.order_special(self.tick, &db, &self.units, &mut self.specials, &mut self.rng, &mut self.events, c.player, units, *slot)
+            }
+            Order::Autonomy { units, kind, level } => {
+                self.autonomy.order(&self.units, c.player, units, *kind, *level)
             }
             Order::Rally { builders, at } => {
                 let Some(db) = self.content.as_deref() else { return false };
@@ -299,6 +324,10 @@ impl Sim {
 
     /// Move every unit one tick and close the tick with its view.
     fn advance(&mut self) -> TickOutput {
+        if self.content.is_none() {
+            self.team_changes.clear();
+        }
+        self.step_start_effects();
         self.hold_welding_builders();
         self.constrain_targets();
         let routed = self.route_orders();
@@ -310,11 +339,12 @@ impl Sim {
         self.push_out_of_fields();
         if let Some(db) = self.content.clone() {
             combat::damage::recharge(&mut self.units, &db);
+            self.activate_team_change_weapons(&db);
             self.specials.step(&mut self.units, &db, &mut self.events);
             let from = self.events.len();
-            self.weapons.step_with_perception(self.tick, &self.units, &db, &self.players, &self.perception, &mut self.events);
+            self.weapons.step_with_perception(self.tick, &self.units, &db, &self.players, &self.perception, &mut self.specials, &mut self.rng, &mut self.events);
             let mut lost = Vec::new();
-            for (id, by) in combat::damage::apply(&mut self.units, &mut self.events, from) {
+            for (id, by) in combat::damage::apply(&mut self.units, &db, &mut self.events, from) {
                 lost.extend(self.units.get(id).map(|u| u.owner));
                 self.despawn(id, by);
             }
@@ -323,6 +353,8 @@ impl Sim {
         }
         if let Some(db) = &self.content {
             self.economy.step(&mut self.units, db, &mut self.events);
+            self.economy.step_passive(&self.units, db, &self.players, &self.ai_seats, self.tick);
+            self.economy.step_crew(&self.units, db, self.tick);
             self.production.step(&mut self.units, db, &mut self.economy, &mut self.events, &mut self.confinement);
         }
         self.hold_welding_builders();
@@ -332,19 +364,28 @@ impl Sim {
         TickOutput { view: Arc::new(self.build_view()), events: std::mem::take(&mut self.events) }
     }
 
-    /// Live actors only; queued reservations/admission are not implemented.
+    /// Live actors plus the officers reserved by admitted, unfinished builds
+    /// (SIM-26, [`production::officers`]).
     fn officer_census(&self, player: PlayerId) -> Fixed {
         let Some(db) = self.content.as_deref() else { return Fixed::ZERO };
-        self.units.iter().filter(|u| u.owner == player && !u.flags.contains(view::UnitFlags::DYING))
-            .filter_map(|u| db.unit(u.def)).fold(Fixed::ZERO, |sum, def| {
-                Fixed::from_bits(sum.to_bits().saturating_add(def.build.officers.max(Fixed::ZERO).to_bits()))
-            })
+        self.production.officer_census(&self.units, db, player)
     }
 
     fn build_view(&self) -> WorldView {
+        // `hidden = 1` objects (start pods, faction objects, map markers) stay in
+        // `units` for scripts, but no player sees or picks them (`EntityKind::hidden`).
+        // Only the view changes: state and digest do not.
+        let mut hidden: Vec<EntityId> = Vec::new();
         let units = self.units.iter().map(|entity| {
             let mut view = entity.view();
+            if self.content.as_deref().and_then(|db| db.unit(entity.def)).is_some_and(EntityKind::hidden) {
+                hidden.push(entity.id);
+                view.flags = view.flags.with(view::UnitFlags::SELECTABLE, false);
+            }
             view.flags = view.flags.with(view::UnitFlags::BUILDING, self.production.is_welding(entity.id));
+            if matches!(entity.kind, EntityKind::Craft) {
+                view.autonomy = Some(self.autonomy.levels(entity.id));
+            }
             view.energy = self.specials.energy_of(entity.id).and_then(|now| {
                 self.content.as_deref()
                     .and_then(|db| db.unit(entity.def))
@@ -371,7 +412,13 @@ impl Sim {
                     .collect(),
             })
             .collect();
-        let visibility = sensors::compute(&self.units, self.content.as_deref(), &self.players);
+        let mut visibility = sensors::compute(&self.units, self.content.as_deref(), &self.players);
+        if !hidden.is_empty() {
+            // Both lists ascend by id.
+            for (_, seen) in &mut visibility {
+                seen.retain(|id| hidden.binary_search(id).is_err());
+            }
+        }
         let perceived_owners = self.perception.iter().map(|(id, &owner)| (id, owner)).collect();
         WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners }
     }
@@ -380,14 +427,28 @@ impl Sim {
     /// hash goes in first, so tick 0's digest already tells peers with
     /// different content apart (S5), and every later one carries it.
     pub fn digest(&self) -> u64 {
+        self.digest_with_content_hash(self.content.as_ref().map_or(0, |c| c.hash()))
+    }
+
+    /// [`Sim::digest`] with `content_hash` in place of the content's: lets
+    /// tests compare state against goldens recorded under an older content
+    /// hash scheme (CON-35 changed every content hash, not the state).
+    pub(crate) fn digest_with_content_hash(&self, content_hash: u64) -> u64 {
         let mut h = Fnv::new();
         h.u64(self.tick);
         h.u64(self.rng.0);
-        h.u64(self.content.as_ref().map_or(0, |c| c.hash()));
+        h.u64(content_hash);
         h.u64(self.players.len() as u64);
         for &(p, t) in &self.players {
             h.u64(p.0 as u64);
             h.u64(t.0 as u64);
+        }
+        if !self.ai_seats.is_empty() {
+            h.str("ai_seats");
+            h.u64(self.ai_seats.len() as u64);
+            for p in &self.ai_seats {
+                h.u64(p.0 as u64);
+            }
         }
         self.units.hash_into(&mut h);
         self.movement.hash_into(&mut h);
@@ -412,6 +473,9 @@ impl Sim {
             self.specials.hash_into(&mut h);
         }
         self.confinement.hash_into(&mut h);
+        if !self.autonomy.is_empty() {
+            self.autonomy.hash_into(&mut h);
+        }
         if !self.perception.is_empty() {
             h.str("perceived-team-v1");
             h.u64(self.perception.len() as u64);
@@ -419,6 +483,12 @@ impl Sim {
                 h.u64(id.0 as u64);
                 h.u64(owner.0 as u64);
             }
+        }
+        if !self.start_effects.is_empty() {
+            self.start_effects.hash_into(&mut h);
+        }
+        if !self.subsystems.is_empty() {
+            self.subsystems.hash_into(&mut h);
         }
         let crew_count = self.units.iter().filter(|unit| unit.crew.is_some()).count();
         if crew_count != 0 {
@@ -466,6 +536,10 @@ impl WorldSource for Sim {
 
     fn view(&self) -> Arc<WorldView> {
         Arc::new(self.build_view())
+    }
+
+    fn snapshot(&self) -> Option<Vec<u8>> {
+        Some(Sim::snapshot(self))
     }
 }
 

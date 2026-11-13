@@ -9,7 +9,7 @@ mod write;
 pub(crate) use body::parse_map;
 pub(crate) use write::write_map;
 pub use body::{AiPath, AreaOfInterest, MapData};
-pub use starts::{StartError, mdf_start_count, player_start_positions};
+pub use starts::{StartError, mdf_start_count, native_mdf_start_count, player_start_positions, player_start_positions_with_fallback};
 
 /// Lossless A1 front matter. The offset identifies metadata, not an object list.
 #[derive(Debug, Clone, PartialEq, Eq)]

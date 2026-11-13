@@ -25,7 +25,7 @@
 //!    with a warning. The field is data the mod ships; it is not read from
 //!    an executable.
 //! 4. **Host base `Data/info.ini`.** For a mod whose own `info.ini` has no
-//!    `AssetVersion`: the install's base `Data/info.ini` is read, for its
+//!    `AssetVersion` (a stated older value skips this step): the install's base `Data/info.ini` is read, for its
 //!    `[Mod] Name` only (the matcher of step 6), even when D6 does not mount
 //!    `Data` under a `standalone` mod. It is never mounted or merged.
 //! 5. **`Data/packages.ini`.** `[FleetOps] Version=` is recorded in
@@ -63,7 +63,7 @@
 //! over parent) < per-ODF overrides (`Feature_<name>` keys). Each source is an
 //! [`Overrides`]; later sources win per feature.
 //!
-//! Hookup: `ContentDb::load` calls `Profile::detect(vfs)` and
+//! Hookup: `ContentDb::load` calls `Profile::detect_with_source(vfs)` and
 //! `Overrides::from_vfs(vfs)`; db-wide features are
 //! `resolve_features(profile, &[&mod_ov])`, and a def's own are
 //! `resolve_features(profile, &[&mod_ov, &Overrides::from_odf_keys(..)])`,
@@ -151,6 +151,7 @@ impl Profile {
                 cheats: true,
                 a1_compat: false,
                 pay_on_queue: true,
+                ..off
             },
             // FOH rows: damage controls, PD cycles, resources, officers, rigs.
             Profile::Fo4 => Features {
@@ -161,10 +162,15 @@ impl Profile {
                 officer_capacity: true,
                 multi_yard_builds: true,
                 construction_rigs: true,
+                weapon_shot_timing: true,
+                start_fire_hold: true,
                 ..off
             },
-            // Stock A2: plain rules, turrets only.
-            Profile::Sta2Classic => Features { turrets: true, ..off },
+            // Stock A2: plain rules, turrets, point-defence cycles and the
+            // original shot timing. `pd_energy` stays off until a HUD button
+            // can toggle point defence (UI-31); then SIM-37's one-line flip:
+            // `Sta2Classic` `pd_energy`, `Fo4` `pd_energy` + `pd_debt_timer`.
+            Profile::Sta2Classic => Features { turrets: true, point_defense_cycles: true, weapon_shot_timing: true, start_fire_hold: true, crew_loss_on_hit: true, ..off },
             // A1: its own class labels and health model, officers.
             Profile::Sta1Classic => Features { officer_capacity: true, a1_compat: true, ..off },
         }
@@ -210,7 +216,7 @@ impl Profile {
                 Some(l.root.clone())
             } else {
                 let mods = l.root.parent().filter(|m| m.file_name().is_some_and(|n| n.eq_ignore_ascii_case("mods")))?;
-                Some(mods.parent()?.to_path_buf())
+                mods.parent().filter(|d| d.file_name().is_some_and(|n| n.eq_ignore_ascii_case("data"))).map(Path::to_path_buf)
             }
         });
         let fleetops_version = host_data.as_deref().and_then(read_fleetops_version);
@@ -262,8 +268,11 @@ impl Profile {
         {
             return (Profile::Fo4, DetectStep::AssetVersion, Some(p.clone()), format!("AssetVersion = {v}"));
         }
-        // 4. The host's base Data/info.ini, for its name only.
-        if let Some(data) = host_data
+        // 4. The host's base Data/info.ini, for its name only: a fallback for a
+        // mod that states no AssetVersion. A stated older value (a mod designed
+        // for FO 3.x) is not a Roots mod and skips this step.
+        if versions.iter().all(Option::is_none)
+            && let Some(data) = host_data
             && let Some(p) = find_ci(data, "info.ini")
             && let Some(ini) = read_info(data)
             && let Some(name) = ini.get("mod", "name").filter(|n| looks_like_fo(n))
@@ -416,7 +425,7 @@ fn read_ini_named(root: &Path, name: &str) -> Option<Ini> {
 }
 
 /// Switch names, in `Features` declaration order.
-pub const FEATURE_NAMES: [&str; 22] = [
+pub const FEATURE_NAMES: [&str; 27] = [
     "weapon_damage_controls",
     "point_defense_cycles",
     "fire_arcs",
@@ -439,6 +448,11 @@ pub const FEATURE_NAMES: [&str; 22] = [
     "cheats",
     "a1_compat",
     "pay_on_queue",
+    "pd_energy",
+    "pd_debt_timer",
+    "weapon_shot_timing",
+    "start_fire_hold",
+    "crew_loss_on_hit",
 ];
 
 impl Features {
@@ -466,6 +480,11 @@ impl Features {
             "cheats" => &mut self.cheats,
             "a1_compat" => &mut self.a1_compat,
             "pay_on_queue" => &mut self.pay_on_queue,
+            "pd_energy" => &mut self.pd_energy,
+            "pd_debt_timer" => &mut self.pd_debt_timer,
+            "weapon_shot_timing" => &mut self.weapon_shot_timing,
+            "start_fire_hold" => &mut self.start_fire_hold,
+            "crew_loss_on_hit" => &mut self.crew_loss_on_hit,
             _ => return None,
         })
     }
@@ -671,7 +690,9 @@ mod tests {
                 "extra_resources",
                 "officer_capacity",
                 "multi_yard_builds",
-                "construction_rigs"
+                "construction_rigs",
+                "weapon_shot_timing",
+                "start_fire_hold"
             ]
         );
         assert!(!Profile::Fo4.features().pay_on_queue);
@@ -679,7 +700,7 @@ mod tests {
 
     #[test]
     fn defaults_table_sta2_classic() {
-        assert_eq!(on(&Profile::Sta2Classic.features()), ["turrets"]);
+        assert_eq!(on(&Profile::Sta2Classic.features()), ["point_defense_cycles", "turrets", "weapon_shot_timing", "start_fire_hold", "crew_loss_on_hit"]);
     }
 
     #[test]

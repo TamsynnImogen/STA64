@@ -51,6 +51,8 @@ pub const UNIT_CLASSES: &[&str] = &[
     "cargo_ship",
     "fighter",
     "scavenger",
+    // Effect objects (`effect_rm`, ...): hidden, short-lived (SIM-28).
+    "u_ball_obj",
     "colony",
     "trading_station",
     "minearray",
@@ -344,6 +346,10 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
         let file = format!("{s}.odf");
         def.planet_role = crate::planet::resolve(&file, odf, profile, &mut warnings);
         def.planet_crew_gain = crate::planet::resolve_crew_gain(&file, odf, profile, def.planet_role, &mut warnings);
+        def.planet_crew_modifier = crate::planet::resolve_crew_modifier(&file, odf, profile, def.planet_role, &mut warnings);
+        def.planet_colonizable = crate::planet::resolve_colonizable(&file, odf, profile, def.planet_role, &mut warnings);
+        def.planet_civilian_population_modifier =
+            crate::planet::resolve_civilian_population_modifier(&file, odf, profile, def.planet_role, &mut warnings);
         def.build.queue_limit = build_queue_limit(&file, odf, &mut warnings);
         def.is_starbase = station_flag(&file, odf, profile, &mut warnings);
         let mut native = Overrides::default();
@@ -362,7 +368,8 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
                 return false;
             }
             h.weapon = DefRef::new(w.clone());
-            h.arc = weapon_arcs.get(&w).copied().flatten();
+            // A slot's own `STA64_fireArc<N>` wins over its weapon's arc.
+            h.arc = h.arc.or_else(|| weapon_arcs.get(&w).copied().flatten());
             true
         });
         def.build.list.retain_mut(|b| {
@@ -527,7 +534,7 @@ mod tests {
         assert!(near(c.energy_drain, 15.0) && near(c.energy_cost, 50.0));
         assert!(!c.disable_weapons && c.decloak_on_hit);
         let m = db.unit(db.key("fminer").unwrap()).unwrap();
-        assert!(m.miner && near(m.max_dilithium, 300.0) && near(m.mining_rate, 20.0) && near(m.transfer_rate, 30.0));
+        assert!(m.mines() && near(m.max_dilithium, 300.0) && near(m.mining_rate, 20.0) && near(m.transfer_rate, 30.0));
         assert_eq!(db.unit(db.key("moon").unwrap()).unwrap().resource, Some(1));
         assert_eq!(db.unit(db.key("fcruiser").unwrap()).unwrap().resource, None);
     }

@@ -78,6 +78,11 @@ pub struct MoveStats {
     /// `forwardControlDistance`, units: inside it the approach to a stop is
     /// damped. Default 70.
     pub forward_control_distance: Fixed,
+    /// `warpSpeed`, units per second; zero when the ODF has none. Read by the
+    /// attack approach (SIM-36) from the unit's definition: it is not part of
+    /// the smooth fields, the digest or the snapshot's stats mirror; a
+    /// snapshot load re-reads it from the definition.
+    pub warp_speed: Fixed,
 }
 
 impl MoveStats {
@@ -151,6 +156,7 @@ const SMOOTH_DEFAULTS: MoveStats = MoveStats {
     turn_control_angle: Fixed::from_int(20),
     turn_control_squared: false,
     forward_control_distance: Fixed::from_int(70),
+    warp_speed: Fixed::ZERO,
 };
 
 impl Default for MoveStats {
@@ -216,6 +222,34 @@ pub struct BuildDef {
     /// STA64_queueLimit: total station jobs, including the active head.
     /// None selects the profile default; Some(0) disables new admissions.
     pub queue_limit: Option<u32>,
+    /// Items (lower-case ODF stems) whose `builditem#` slot carries a
+    /// `builditem#availability` or `builditem#provided` line; `None` when no
+    /// slot of this builder carries one (a menu builder). Read by
+    /// `TechTree::availability_for_builder` for items the tree does not list.
+    pub flagged_slots: Option<Vec<String>>,
+}
+
+impl BuildDef {
+    /// [`flagged_slots`](BuildDef::flagged_slots) as a builder's ODF gives them.
+    pub fn flagged_slots_of(odf: &sta_odf::Odf) -> Option<Vec<String>> {
+        let mut any = false;
+        let mut items = Vec::new();
+        for k in odf.keys() {
+            let l = k.to_ascii_lowercase();
+            let Some(rest) = l.strip_prefix("builditem") else { continue };
+            let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+            if digits == 0 || !matches!(&rest[digits..], "availability" | "provided") {
+                continue;
+            }
+            any = true;
+            if let Some(v) = odf.raw(&format!("builditem{}", &rest[..digits])) {
+                items.push(crate::techtree::stem(v.trim().trim_matches('"')));
+            }
+        }
+        items.sort();
+        items.dedup();
+        any.then_some(items)
+    }
 }
 
 /// Sound names a unit uses; the client resolves them (CON-10, AUD-02/03).
@@ -254,6 +288,15 @@ pub struct UnitDef {
     /// Effective signed `maxCrewGain` contribution for a Producer planet.
     /// Zero for other roles; this is not a crew stock or population count.
     pub planet_crew_gain: i32,
+    /// Effective `crewModifier` of a Background planet (CON-37). `None` for
+    /// other roles and where neither the ODF nor a measured profile fallback
+    /// (Armada I: 1.2) supplies one. An authored zero is `Some(0)`.
+    pub planet_crew_modifier: Option<Fixed>,
+    /// Effective `isColonizable` of a Producer planet (CON-37); false for other roles.
+    pub planet_colonizable: bool,
+    /// Effective `civilianPopulationModifier` of a Producer planet (CON-37);
+    /// zero for other roles.
+    pub planet_civilian_population_modifier: Fixed,
     pub race: String,
     pub model: String,
     pub scale: Fixed,
@@ -269,6 +312,16 @@ pub struct UnitDef {
     pub crew: Fixed,
     /// `maximumCrew`; absent means the starting crew amount.
     pub maximum_crew: Option<Fixed>,
+    /// `maxCrewGain` of a station (SIM-25): what it adds to its team's crew capacity.
+    pub crew_gain: Fixed,
+    /// `saneCrewLossMethod` (SIM-39): a hit's crew loss is in absolute crew
+    /// points; without it the loss is a percent of the unit's maximum crew.
+    pub sane_crew_loss: bool,
+    /// Hit points of the unit's systems (SIM-55), in the order engines,
+    /// weapons, shield generator, life support, sensors: `enginesHitPoints`,
+    /// `weaponsHitPoints`, `shieldGeneratorHitPoints`, `lifeSupportHitPoints`,
+    /// `sensorsHitPoints`. 0 when the key is absent.
+    pub system_hit_points: [Fixed; 5],
     /// Sensor range, units.
     pub sensor: Fixed,
     pub hardpoints: Vec<Hardpoint>,
@@ -285,8 +338,12 @@ pub struct UnitDef {
     pub special_energy_max: Fixed,
     /// Special energy regained per second (`specialEnergyRate`).
     pub special_energy_rate: Fixed,
-    /// A freighter that mines (`miner = 1`, or class `freighter`).
+    /// The ODF's `miner` key is set and non-zero. Class `freighter` also mines:
+    /// read [`UnitDef::mines`], not this, to ask whether a unit mines.
     pub miner: bool,
+    /// The ODF says `miner = 0`: not a miner even if class `freighter` (the Data
+    /// Miner of stock Armada II).
+    pub miner_off: bool,
     /// Hold size (`maxdilithium`); zero: not set, the consumer's default.
     pub max_dilithium: Fixed,
     /// Units mined per second (`miningRate`); zero: not set.
@@ -305,8 +362,19 @@ pub struct UnitDef {
     /// Path-planner rules of a `nebula_obj` (SIM-23); `None` for every other
     /// class, and for content that predates them.
     pub nebula_pathing: Option<NebulaPathing>,
-    /// The resolved ODF, so keys no field reads yet stay reachable. Empty for
-    /// definitions not made from an ODF.
+    /// `avoidMe = 1`: other units steer around and keep out of this one
+    /// (moons and balls in Fleet Operations, SIM-21).
+    pub avoid_me: bool,
+    /// `hidden = 1`: the player never sees or picks it (start helpers).
+    pub hidden: bool,
+    /// `invalidAsTarget = 1`: automatic target selection skips it.
+    pub invalid_as_target: bool,
+    /// `autoExpireTime` (else `lifeTimer`) in ticks; the object removes itself
+    /// that long after it appears (SIM-28).
+    pub life: Option<Tick>,
+    /// The resolved ODF, so loaders and tools can reach keys no field reads.
+    /// The simulation never reads it (D9): what it needs is a typed field.
+    /// Empty for definitions not made from an ODF.
     pub raw: Arc<sta_odf::Odf>,
 }
 
@@ -321,10 +389,16 @@ pub struct NebulaPathing {
 }
 
 impl UnitDef {
-    /// `avoidMe = 1`: other units steer around and keep out of this one
-    /// (moons and balls in Fleet Operations, SIM-21).
+    /// Whether the unit mines. The `miner` key decides when the ODF has one
+    /// (stock `freight.odf` says `miner = 1`; the Data Miner, `fdata.odf`, is
+    /// class `freighter` and says `miner = 0`); without it a `freighter` mines.
+    pub fn mines(&self) -> bool {
+        !self.miner_off && (self.miner || self.class.0 == "freighter")
+    }
+
+    /// [`avoid_me`](UnitDef::avoid_me) (the field).
     pub fn avoid_me(&self) -> bool {
-        self.raw.bool("avoidMe").unwrap_or(false)
+        self.avoid_me
     }
 
     /// A definition with everything zero or empty, to fill field by field.
@@ -338,6 +412,9 @@ impl UnitDef {
             is_starbase: false,
             planet_role: None,
             planet_crew_gain: 0,
+            planet_crew_modifier: None,
+            planet_colonizable: false,
+            planet_civilian_population_modifier: Fixed::ZERO,
             race: String::new(),
             model: String::new(),
             scale: Fixed::ONE,
@@ -348,6 +425,9 @@ impl UnitDef {
             initial_shields: None,
             crew: Fixed::ZERO,
             maximum_crew: None,
+            crew_gain: Fixed::ZERO,
+            sane_crew_loss: false,
+            system_hit_points: [Fixed::ZERO; 5],
             sensor: Fixed::ZERO,
             hardpoints: Vec::new(),
             build: BuildDef::default(),
@@ -358,6 +438,7 @@ impl UnitDef {
             special_energy_max: Fixed::ZERO,
             special_energy_rate: Fixed::ZERO,
             miner: false,
+            miner_off: false,
             max_dilithium: Fixed::ZERO,
             mining_rate: Fixed::ZERO,
             transfer_rate: Fixed::ZERO,
@@ -365,6 +446,10 @@ impl UnitDef {
             features: None,
             confinement: crate::ConfinementOverrides::default(),
             nebula_pathing: None,
+            avoid_me: false,
+            hidden: false,
+            invalid_as_target: false,
+            life: None,
             raw: Arc::new(raw),
         }
     }
@@ -413,11 +498,59 @@ pub struct WeaponDef {
     pub disable_weapons: bool,
     /// Cloak: a hit decloaks (`decloakOnHit`, default off).
     pub decloak_on_hit: bool,
+    /// `initialShotDelayModifier` (a Roots key): `None` when absent, which
+    /// the engine treats as -1 (see `sta_sim::combat::weapons`).
+    pub initial_shot_delay_modifier: Option<Fixed>,
+    /// `ignoreShotDelayEffects` (FO): no shot jitter, no team modifier.
+    pub ignore_shot_delay_effects: bool,
+    /// The weapon's own class is `ordnancedefenseweapon` (FO's point-defence
+    /// class, as opposed to `pointdefenselaser`).
+    pub ordnance_defence: bool,
+    /// `activateOnTeamChange` (an FO mod key, default 0): the weapon's special
+    /// is engaged for its new owner after a completed team change (SIM-29).
+    pub activate_on_team_change: bool,
+    /// The ordnance's crew-loss keys (SIM-39); `None` when it has none of them.
+    pub crew_loss: Option<OrdnanceCrewLoss>,
     /// Feature switches resolved for this weapon, as [`UnitDef::features`];
     /// `None`: the database-wide set. Read through
     /// `ContentDb::weapon_features`.
     pub features: Option<Features>,
+    /// `resourceweapon` class only (SIM-24): what the weapon adds to its
+    /// owner's stock and who it works for. `None` for every other class.
+    pub resource: Option<ResourceWeaponDef>,
+    /// An instant `replaceweapon` (SIM-28); `None` for every other weapon.
+    pub replace: Option<crate::lifecycle::ReplaceDef>,
     pub raw: Arc<sta_odf::Odf>,
+}
+
+/// What a hit of this ordnance does to the target's crew (SIM-39): its
+/// `damageThreshold`, `shieldCrewModifier` and `hullCrewModifier`. Absent keys
+/// read as 0 (no loss).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct OrdnanceCrewLoss {
+    /// `damageThreshold`: damage below it costs no crew.
+    pub threshold: Fixed,
+    /// `shieldCrewModifier`: crew lost per point of shield damage over the threshold.
+    pub shield: Fixed,
+    /// `hullCrewModifier`: the same for hull damage (read, not applied: not measured).
+    pub hull: Fixed,
+}
+
+/// The keys of a `resourceweapon` (Fleet Operations 3.x and later; stock
+/// Armada I and II have none), read by [`crate::weapon::weapon_def`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResourceWeaponDef {
+    /// Signed amount per resource slot (dilithium, latinum, metal,
+    /// biomatter): `addDilithium`, `addLatinum`, `addMetal`, `addBiomatter`.
+    pub add: [Fixed; 4],
+    /// Signed crew per second (`addCrew`), onto the team's crew stock.
+    pub crew: Fixed,
+    /// `oneTimeMode`: a lump sum, not a rate. Default off.
+    pub one_time: bool,
+    /// `alwaysActivePlayer`: works for a human seat without being triggered.
+    pub always_player: bool,
+    /// `alwaysActiveAI`: the same for an AI seat.
+    pub always_ai: bool,
 }
 
 impl WeaponDef {
@@ -442,7 +575,14 @@ impl WeaponDef {
             energy_cost: Fixed::ZERO,
             disable_weapons: true,
             decloak_on_hit: false,
+            initial_shot_delay_modifier: None,
+            ignore_shot_delay_effects: false,
+            ordnance_defence: false,
+            activate_on_team_change: false,
+            crew_loss: None,
             features: None,
+            resource: None,
+            replace: None,
             raw: Arc::new(raw),
         }
     }

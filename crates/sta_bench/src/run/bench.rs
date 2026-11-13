@@ -58,6 +58,10 @@ pub struct Bench {
     paused: bool,
     pause_at: Option<Tick>,
     pub fire_gap: Tick,
+    /// The scene's `[Marks]`: which measuring marks to write (TOOL-16).
+    pub marks_cfg: crate::parse::scene::MarksSection,
+    /// Marks made by commands (`bank`), in order.
+    pub(crate) command_marks: Vec<Mark>,
     replay: Option<ReplayFeed>,
     rec: Option<Rec>,
     pub log: Vec<String>,
@@ -94,6 +98,14 @@ impl Bench {
     /// Build a scene: the start (empty map, named map, snapshot or replay),
     /// then the scene file's objects on top.
     pub fn build(cfg: Arc<RunConfig>, scene: &SceneFile) -> Result<Bench, String> {
+        Bench::build_after(cfg, scene, 0)
+    }
+
+    /// [`Bench::build`], with the mission run `lead` ticks before the scene's
+    /// objects are placed, as the original builds its scene some way into
+    /// the mission (`sta-bench pair` passes the original's `ready` time, so
+    /// rules on mission time line up). Marks still count from the build.
+    pub fn build_after(cfg: Arc<RunConfig>, scene: &SceneFile, lead: Tick) -> Result<Bench, String> {
         let s = &scene.scene;
         let cfg = match &s.profile {
             Some(name) => {
@@ -122,6 +134,11 @@ impl Bench {
                     .map_err(|e| format!("Start=replay:{file}: {e}"))?;
                 let r =
                     Replay::decode(&bytes).map_err(|e| format!("Start=replay:{file}: {e:?}"))?;
+                // The bench builds bare maps only; a race-start recording would
+                // otherwise fail as a tick-0 desync.
+                if r.starts != sta_sim::replay::StartRec::Bare {
+                    return Err(format!("Start=replay:{file}: {}", sta_sim::replay::ReplayError::StartsNeedRaces));
+                }
                 let setup = r
                     .setup(content.clone())
                     .map_err(|e| format!("Start=replay:{file}: {e:?}"))?;
@@ -188,6 +205,13 @@ impl Bench {
             }
         };
 
+        let mut sim = sim;
+        // A lead-in replays nothing: only a scene built from its map takes one
+        // (the steps' events, a map's first `Spawned`, are not kept).
+        let lead = if s.start.is_some() { 0 } else { lead };
+        for _ in 0..lead {
+            sim.step(&[]);
+        }
         let base_tick = sim.tick;
         let mut b = Bench {
             cfg,
@@ -205,6 +229,8 @@ impl Bench {
             paused: false,
             pause_at: s.pause.map(|p| p.ticks(TICK_HZ)),
             fire_gap: (scene.marks.fire_gap * f64::from(TICK_HZ)).round() as Tick,
+            marks_cfg: scene.marks.clone(),
+            command_marks: Vec::new(),
             replay: replay_feed,
             rec: None,
             log,
@@ -223,7 +249,7 @@ impl Bench {
             b.log.push("camera: no renderer at tier 1, ignored".into());
         }
         b.rec = rec_setup.map(|setup| Rec {
-            digests: vec![(0, b.sim.digest())],
+            digests: vec![(b.sim.tick, b.sim.digest())],
             setup,
             commands: Vec::new(),
         });
@@ -612,6 +638,39 @@ impl Bench {
                 );
                 "ok".into()
             }
+            C::RightClick(n) => {
+                let t = self.living(n)?;
+                let own: Vec<EntityId> = self.selection.iter().copied().filter(|&id| self.sim.unit(id).is_some()).collect();
+                if own.is_empty() {
+                    return Err("rclick: nothing selected".into());
+                }
+                let owner = self.sim.unit(own[0]).map_or(PlayerId::BENCH, |e| e.owner);
+                let view = self.sim.view();
+                match sta_sim::context::context_order(Some(&*self.cfg.content), &view, owner, &own, t) {
+                    Some(o) => {
+                        let what = format!("{o:?}").split([' ', '{']).next().unwrap_or("?").to_owned();
+                        self.order(&own, o, format!("rclick {n}"));
+                        what
+                    }
+                    None => {
+                        // No vote: a move to the point, the group keeping its places.
+                        let to = self.sim.unit(t).expect("living").pos;
+                        let n_own = Fixed::from_int(own.len() as i32);
+                        let (mut cx, mut cz) = (Fixed::ZERO, Fixed::ZERO);
+                        for &id in &own {
+                            let p = self.sim.unit(id).expect("living").pos;
+                            cx = cx + p.x / n_own;
+                            cz = cz + p.z / n_own;
+                        }
+                        for &id in &own {
+                            let p = self.sim.unit(id).expect("living").pos;
+                            let at = Vec3 { x: to.x + p.x - cx, y: to.y, z: to.z + p.z - cz };
+                            self.order(&[id], Order::Move { units: vec![id], to: at, queue: false }, format!("rclick {n}"));
+                        }
+                        "Move".into()
+                    }
+                }
+            }
             C::Stop(n) => {
                 let id = self.living(n)?;
                 self.order(&[id], Order::Stop { units: vec![id] }, format!("stop {n}"));
@@ -819,6 +878,43 @@ impl Bench {
                 );
                 "ok".into()
             }
+            C::Unknown { verb, text } if verb == "bank" => {
+                // Refit's `bank [<team> | <object>]` (read-only): a team's resources,
+                // `bank team 1 t=12.300 dilithium=... latinum=... metal=... biomatter=...`.
+                // STA64 keeps resources per player, and team N is player N here.
+                let arg = text.split_whitespace().nth(1);
+                let v = self.view();
+                let pid = match arg {
+                    None => v.players.first().map(|p| p.id).ok_or("no player")?,
+                    Some(a) => match a.parse::<u8>() {
+                        Ok(n) => PlayerId(n),
+                        Err(_) => {
+                            let id = self.resolve(a)?;
+                            v.units
+                                .iter()
+                                .find(|u| u.id == id)
+                                .map(|u| u.owner)
+                                .ok_or_else(|| format!("bank: `{a}` is gone"))?
+                        }
+                    },
+                };
+                let p = v.players.iter().find(|p| p.id == pid).ok_or_else(|| format!("bank: no player {}", pid.0))?;
+                const NAMES: [&str; 4] = ["dilithium", "latinum", "metal", "biomatter"];
+                let mut s = format!("bank team {} t={:.3}", pid.0, self.tick() as f64 / f64::from(TICK_HZ));
+                let mut fields = vec![("team", marks::Val::Text(pid.0.to_string()))];
+                for (i, r) in p.resources.iter().enumerate().take(NAMES.len()) {
+                    s += &format!(" {}={}", NAMES[i], to_f64(*r));
+                    fields.push((NAMES[i], marks::Val::Text(format!("{:.1}", to_f64(*r)))));
+                }
+                if let Some(c) = p.crew {
+                    s += &format!(" crew={}", to_f64(c));
+                    fields.push(("crew", marks::Val::Text(format!("{:.1}", to_f64(c)))));
+                }
+                // Also a `bank` mark, as Refit's command writes one.
+                let tick = self.tick();
+                self.command_marks.push(Mark { tick, kind: "bank", fields });
+                s
+            }
             C::Colonize { .. } | C::Vent { .. } | C::EndMission { .. } => {
                 return Err("unsupported: colonize/vent/succeed/fail".into());
             }
@@ -887,7 +983,7 @@ impl Bench {
         Ok(format!(
             "snapshot at tick {} -> {}",
             self.sim.tick,
-            path.display()
+            file
         ))
     }
 
@@ -937,6 +1033,9 @@ impl Bench {
         let replay = Replay {
             seam_rev: sta_sim::SEAM_REV,
             content_hash: r.setup.content.hash(),
+            lineage: r.setup.content.lineage().to_owned(),
+            packs: r.setup.content.packs().to_vec(),
+            peers: Vec::new(),
             seed: r.setup.seed,
             map: (*r.setup.map).clone(),
             players: r
@@ -951,6 +1050,7 @@ impl Bench {
                 })
                 .collect(),
             options: r.setup.options.clone(),
+            starts: sta_sim::replay::StartRec::Bare,
             commands: r.commands.clone(),
             digests,
             end_tick: end,
@@ -966,7 +1066,7 @@ impl Bench {
         Ok(format!(
             "replay of {end} ticks, {} commands -> {}",
             replay.commands.len(),
-            path.display()
+            file
         ))
     }
 

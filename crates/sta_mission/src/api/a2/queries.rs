@@ -7,6 +7,8 @@ use crate::api::{Shared, dist, pos_f64};
 
 mod station;
 
+pub(super) use station::craft_family;
+
 fn odf_stem(name: &str) -> &str {
     match name.get(name.len().saturating_sub(4)..) {
         Some(suffix) if suffix.eq_ignore_ascii_case(".odf") => &name[..name.len() - 4],
@@ -47,7 +49,10 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
     let c = ctx.clone();
     table.set(
         "GetDistance",
-        lua.create_function(move |_, args: MultiValue| {
+        lua.create_function(move |lua, args: MultiValue| {
+            if args.len() == 3 {
+                return super::conditions::path_distance(&mut c.borrow_mut(), lua, &args);
+            }
             let first = handle("GetDistance", &args, 2)?;
             let second = sta_core::EntityId(integer("GetDistance", &args[1])?);
             let (a, b) = {

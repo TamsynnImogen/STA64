@@ -10,14 +10,12 @@ page and resolved-art cache keys so shared texture pages cannot change other
 buttons or sprite fonts. Do not mutate original art or scale the whole HUD.
 
 World gauges currently scale thickness with the model's selection sphere and
-sit near its origin, which puts wide station bars across the hull. Pinned
-Armada2.exe SHA256 8d3ba6ec826198daf3e0c7b3435e9ce8195293e56da7c87e0af2634eaa4693b3
-instead projects eight model-bounds corners (0x5081b0/0x5082c0, called with
-scale1 at0x50971d), then uses the resulting screen rectangle. Gauge height is
-the integer2 at0x70dcd8; shield top is rectangle top minus height minus2
-(0x5089ad..5089c1), hull top is rectangle top minus height plus2
-(0x508af7..508b0b). These are static original-A2 findings, not original-game
-execution or general FO parity proof.
+sit near its origin, which puts wide station bars across the hull. Stock A2
+instead projects the eight model-bounds corners and uses the resulting screen
+rectangle: gauge height is a small integer, the shield gauge sits that height
+plus 2 px above the rectangle top and the hull gauge that height minus 2 px
+(read from the executable, static; not original-game execution or general FO
+parity proof).
 
 Retain the existing overlay lifecycle and shared view values. Supply converted,
 scaled local model bounds on model attachment; project those bounds for gauge

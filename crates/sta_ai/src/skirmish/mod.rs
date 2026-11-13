@@ -7,8 +7,10 @@
 //!
 //! # What it knows
 //!
-//! - Units: only what `WorldView::visible_to(seat)` shows. Enemy ships and
-//!   stations are seen when a sensor of its team reaches them, and not before.
+//! - Units: its own (all of `WorldView::units` it owns, hidden helpers
+//!   included), and of the others only what `WorldView::visible_to(seat)`
+//!   shows. Enemy ships and stations are seen when a sensor of its team
+//!   reaches them, and not before.
 //! - The map: start positions and where resource objects are placed. That is
 //!   static data every player has in front of them in the lobby and on the
 //!   minimap, so it comes in through [`SkirmishConfig`] rather than the view.
@@ -50,6 +52,7 @@
 //! [`SkirmishConfig::with_aip`] instead.
 
 mod params;
+mod pd;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -182,7 +185,7 @@ fn role_of(db: &ContentDb, key: ContentKey) -> Role {
         EntityKind::Station if d.build.list.is_empty() => Role::Fort,
         EntityKind::Station => Role::Yard,
         EntityKind::Craft if d.class.0 == "constructionrig" => Role::Rig,
-        EntityKind::Craft if d.class.0 == "freighter" || d.miner => Role::Miner,
+        EntityKind::Craft if d.mines() => Role::Miner,
         EntityKind::Craft if !d.hardpoints.is_empty() => Role::Warship,
         _ => Role::Other,
     }
@@ -293,6 +296,10 @@ pub struct SkirmishController {
     /// Size of the wave that goes next: drawn from the seeded generator
     /// between the AIP's minimum and the current ceiling.
     next_wave: usize,
+    /// Last tick an enemy fired at or hit each unit (AI-04).
+    pd_attacked: BTreeMap<EntityId, (Tick, EntityId)>,
+    /// Units whose point defence is on, from `PointDefenceChanged`.
+    pd_on: BTreeSet<EntityId>,
 }
 
 impl SkirmishController {
@@ -316,7 +323,30 @@ impl SkirmishController {
             waves: Vec::new(),
             wave_size,
             next_wave: wave_size,
+            pd_attacked: BTreeMap::new(),
+            pd_on: BTreeSet::new(),
         }
+    }
+
+    /// Replace the tuning while the controller keeps its state (AI-06: a mission
+    /// loading an AIP). The wave ceiling is kept inside the new range.
+    pub fn set_params(&mut self, mut params: Params) {
+        params.max_attack = params.max_attack.max(params.min_attack);
+        self.cfg.params = params;
+        let (lo, hi) = (self.cfg.params.min_attack.max(1), self.cfg.params.max_attack.max(1));
+        self.wave_size = self.wave_size.clamp(lo, hi);
+        self.next_wave = self.next_wave.clamp(lo, self.wave_size);
+    }
+
+    /// Number this controller's commands from `base` (clear of another sender
+    /// for the same player).
+    pub fn set_seq_base(&mut self, base: u32) {
+        self.seq = base;
+    }
+
+    /// The tuning in force.
+    pub fn params(&self) -> &Params {
+        &self.cfg.params
     }
 
     /// For [`Registry::register_seat`](crate::Registry::register_seat).
@@ -337,6 +367,7 @@ impl SkirmishController {
     fn absorb(&mut self, tick: Tick, events: &[SimEvent]) {
         let me = self.cfg.player;
         for e in events {
+            self.note_attack(tick, e);
             match e {
                 SimEvent::Rejected { player, seq } if *player == me => {
                     if let Some(s) = self.sent.remove(seq) {
@@ -411,7 +442,12 @@ impl SkirmishController {
         let seat = self.cfg.player;
         let mut own: Vec<Own> = Vec::new();
         let mut foes: Vec<Foe> = Vec::new();
-        for u in view.visible_to(seat) {
+        // Its own units from `units`: the view leaves `hidden = 1` objects out of
+        // every visible set, but a seat's hidden pods (Roots' `fed_effectsS`, FO's
+        // research pods) still count as tech-tree prerequisites, as in the sim.
+        let mine = view.units.iter().filter(|u| u.owner == seat);
+        let others = view.visible_to(seat).into_iter().filter(|u| u.owner != seat);
+        for u in mine.chain(others) {
             if u.flags.contains(UnitFlags::DYING) {
                 continue;
             }
@@ -745,6 +781,7 @@ impl Controller for SkirmishController {
             return;
         }
         self.plan(view, me, out);
+        self.point_defence(view, me, out);
     }
 }
 

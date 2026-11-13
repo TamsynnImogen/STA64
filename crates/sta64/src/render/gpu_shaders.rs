@@ -133,7 +133,7 @@ fn rock_planet_and_nebula_pipelines_build() {
             ));
             commands.spawn((
                 Mesh3d(mesh.clone()),
-                MeshMaterial3d(nebulae.add(NebulaMaterial { params: NebulaParams::default(), noise: None, envelope: None })),
+                MeshMaterial3d(nebulae.add(NebulaMaterial { params: NebulaParams::default(), noise: None, envelope: None, shadow: None })),
             ));
             // The nebula with its extras on: the core's pulse and ring, the swirl and
             // lightning (RND-05). Their branches are uniform-driven, so this is the same
@@ -153,7 +153,7 @@ fn rock_planet_and_nebula_pipelines_build() {
             };
             commands.spawn((
                 Mesh3d(mesh),
-                MeshMaterial3d(nebulae.add(NebulaMaterial { params: extras, noise: None, envelope: None })),
+                MeshMaterial3d(nebulae.add(NebulaMaterial { params: extras, noise: None, envelope: None, shadow: None })),
             ));
         },
     );

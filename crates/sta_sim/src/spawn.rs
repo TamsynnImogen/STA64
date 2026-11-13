@@ -33,7 +33,7 @@ impl Sim {
         sim.ai_seats = s
             .players
             .iter()
-            .filter(|p| matches!(p.control, crate::setup::Control::Ai(_)))
+            .filter(|p| matches!(p.control, crate::setup::Control::Ai(_) | crate::setup::Control::RemoteAi(_)))
             .map(|p| p.id)
             .collect();
         sim.ai_seats.sort();
@@ -89,6 +89,7 @@ impl Sim {
         ));
         self.confinement.initialize(self.units.get_mut(id).expect("spawned"));
         self.events.push(SimEvent::Spawned { id });
+        self.register_lifecycle(id);
         Some(id)
     }
 
@@ -97,15 +98,31 @@ impl Sim {
     ///
     /// Packages that keep a `Table` of their own drop its row here.
     pub fn despawn(&mut self, id: EntityId, by: Option<EntityId>) -> bool {
+        self.remove_entity(id, Some(by))
+    }
+
+    /// [`Sim::despawn`] without the [`SimEvent::Destroyed`]: a start helper
+    /// that ends its lifecycle (expiry, replacement) did not die, so notices,
+    /// music and effects must not react (SIM-28).
+    pub(crate) fn retire(&mut self, id: EntityId) -> bool {
+        self.remove_entity(id, None)
+    }
+
+    fn remove_entity(&mut self, id: EntityId, destroyed_by: Option<Option<EntityId>>) -> bool {
         if self.units.remove(id).is_none() {
             return false;
         }
         self.labels.remove(id);
         self.confinement.remove(id);
         self.perception.remove(id);
+        self.autonomy.remove(id);
         self.production.remove_rally_entity(id);
         self.production.remove_weld_site(id);
-        self.events.push(SimEvent::Destroyed { id, by });
+        self.start_effects.remove(id);
+        self.subsystems.remove(id);
+        if let Some(by) = destroyed_by {
+            self.events.push(SimEvent::Destroyed { id, by });
+        }
         true
     }
 
@@ -171,6 +188,7 @@ impl Sim {
                 };
                 u.hull[0] = u.hull[1];
                 u.shields = crate::world::Shields::full(u.shields.max, u.shields.directional);
+                self.subsystems.repair(id);
                 true
             }
             Edit::Immortal(id, on) => self.set_flag(id, UnitFlags::IMMORTAL, on),
@@ -204,6 +222,26 @@ impl Sim {
             Edit::Subsystem(id, Subsystem::Weapons, on) => {
                 self.apply_edit(from, &Edit::Weapons(id, on))
             }
+            Edit::Subsystem(id, sub, on) => self.edit_subsystem_switch(id, sub, on),
+            Edit::SubsystemDamage(id, sub, points) => self.edit_subsystem_damage(id, sub, points),
+            Edit::ShieldPercent(id, fraction) => self.edit_shield_percent(id, fraction),
+            Edit::MaxShields(id, max) => self.edit_max_shields(id, max),
+            Edit::MaxOfficers(player, value) => self.economy.edit_officer_limit(player, value),
+            Edit::TeamCrew(player, value) => self.economy.edit_team_crew(player, value),
+            Edit::UnitCrew(id, value) => {
+                let Some(u) = self.units.get_mut(id).filter(|u| u.hull[0] > Fixed::ZERO && matches!(u.kind, crate::world::EntityKind::Craft | crate::world::EntityKind::Station)) else {
+                    return false;
+                };
+                let Some([now, max]) = u.crew else { return false };
+                // Cap: the maximum crew, but never below what the unit already
+                // holds (starting crew may exceed it). Whether the original clamps
+                // `SetCrew` at the maximum is NOT measured.
+                u.crew = Some([value.max(Fixed::ZERO).min(max.max(now)), max]);
+                true
+            }
+            Edit::Position(id, to) => self.edit_position(id, to),
+            Edit::Heading(id, dir) => self.edit_heading(id, dir),
+            Edit::AngularVelocity(id, omega) => self.edit_angular_velocity(id, omega),
             // The rest land with the package that owns what they change.
             _ => false,
         }
@@ -489,7 +527,7 @@ mod tests {
                 .any(|(_, e)| matches!(e, SimEvent::Rejected { .. })),
             "{log:?}"
         );
-        assert_eq!(digest, 0x9b60_78a5_12a7_c3c0);
+        assert_eq!(digest, 0x9620_de0c_9c45_52e4);
     }
 
     #[test]
@@ -808,7 +846,8 @@ mod tests {
         for t in 0..30 * 30 {
             let out = WorldSource::step(&mut sim, &[]);
             assert_eq!(
-                out.view.units,
+                // Autonomy joins the view in the sim, not on the entity.
+                out.view.units.iter().cloned().map(|mut u| { u.autonomy = None; u }).collect::<Vec<_>>(),
                 sim.units.iter().map(Entity::view).collect::<Vec<_>>()
             );
             let c = out.view.unit(EntityId(2)).unwrap();

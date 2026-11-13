@@ -9,8 +9,10 @@ license.workspace = true
 # on dedicated servers, and stay bit-identical across platforms for lockstep.
 [dependencies]
 sta_core = { workspace = true, features = ["serde"] }
+# Typed content only: the sim reads no raw ODF or file (MODDING_DECISIONS D9),
+# so neither `sta_odf` nor `sta_vfs` is a dependency (install-gated tests
+# mount installs through `sta_vfs` as a dev-dependency).
 sta_content.workspace = true
-sta_odf.workspace = true
 serde.workspace = true
 # The fakes: ScriptedSource reads JSON5 timelines, ViewLog writes postcard.
 json5.workspace = true
@@ -18,3 +20,7 @@ postcard.workspace = true
 
 [dev-dependencies]
 sta_vfs.workspace = true
+sta_bzn.workspace = true
+# Tests build ODFs for the content loader (`weapon_def`); the sim itself
+# reads no raw ODF (tests/no_raw_odf.rs).
+sta_odf.workspace = true

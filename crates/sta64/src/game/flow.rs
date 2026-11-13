@@ -114,7 +114,7 @@ impl Plugin for FlowPlugin {
         if !app.world().contains_resource::<State<AppState>>() {
             app.init_state::<AppState>();
         }
-        app.insert_resource(Flow)
+        app.add_plugins(super::mission_host::MissionHostPlugin).insert_resource(Flow)
             .add_message::<Notice>()
             .add_message::<StartGame>()
             .add_message::<ModChosen>()
@@ -239,9 +239,10 @@ fn drive_load(
 }
 
 /// F10 leaves the match at any time; Enter or Esc once it is decided.
-fn leave_keys(keys: Option<Res<ButtonInput<KeyCode>>>, link: Option<Res<SimLink>>, mut leave: MessageWriter<LeaveMatch>) {
+fn leave_keys(keys: Option<Res<ButtonInput<KeyCode>>>, link: Option<Res<SimLink>>, mission: Option<Res<super::mission_host::MissionRun>>, mut leave: MessageWriter<LeaveMatch>) {
     let (Some(keys), Some(link)) = (keys, link) else { return };
-    let decided = verdict(link.curr(), link.player()).is_some();
+    // A mission ends by its script, not by elimination.
+    let decided = mission.is_none() && verdict(link.curr(), link.player()).is_some();
     if keys.just_pressed(KeyCode::F10) || (decided && keys.any_just_pressed([KeyCode::Enter, KeyCode::Escape])) {
         leave.write(LeaveMatch);
     }
@@ -380,6 +381,17 @@ fn remount(
             commands.insert_resource(d.screens);
             commands.insert_resource(MenuSceneSource(d.scene));
             commands.insert_resource(MenuMusic(d.menu_music));
+            // The campaigns follow the mount (UI-25 / INT-M6).
+            match super::mission_host::load_campaigns(&vfs, Some(root), folder.as_deref()) {
+                Some((campaigns, movies)) => {
+                    commands.insert_resource(campaigns);
+                    commands.insert_resource(movies);
+                }
+                None => {
+                    commands.remove_resource::<crate::frontend::campaign::Campaigns>();
+                    commands.remove_resource::<crate::media::campaign::MissionMovies>();
+                }
+            }
         }
         Err(e) => {
             notices.write(Notice::new(Severity::Bad, format!("Cannot load content: {e}")));

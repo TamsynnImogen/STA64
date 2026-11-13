@@ -33,8 +33,12 @@
 //! - Accepted: any def the content db has, if the builder's `build.list` is
 //!   empty or names it. Tech prerequisites
 //!   are checked before this, in `Sim::apply` ([`crate::tech`], SIM-09).
-//! - Not yet: officers (no officer stock exists on the player), cooperative
-//!   multi-yard builds on one item,
+//! - Officers ([`officers`], SIM-26): a build's `officerCost` is reserved when
+//!   it is paid (queued under `pay_on_queue`, started otherwise) and counted
+//!   in the player's officer census with the live actors. Over the player's
+//!   limit an order is refused (`pay_on_queue`), or its head waits unstarted.
+//!   Cancel and loss of the builder release it.
+//! - Not yet: cooperative multi-yard builds on one item,
 //!   `Features::construction_rigs` gating.
 //! - A rig's site must pass [`site::check_site`] (inside the map, clear of other
 //!   objects) or the order is rejected.
@@ -51,6 +55,7 @@ use crate::event::SimEvent;
 use crate::world::{Entities, Entity, EntityKind, Fnv, Table};
 
 mod launch;
+pub(crate) mod officers;
 pub mod rally;
 pub mod site;
 mod transfer;
@@ -286,7 +291,7 @@ impl Production {
                 if queued >= limit {
                     return false;
                 }
-                if pay_now && !pay(eco, db, owner, what) {
+                if pay_now && !(self.officers_admit(units, db, eco, owner, what) && pay(eco, db, owner, what)) {
                     return false;
                 }
                 let item = Item {
@@ -314,7 +319,7 @@ impl Production {
                 if site::check_site(db, bounds, what, at, others).is_err() {
                     return false;
                 }
-                if pay_now && !pay(eco, db, owner, what) {
+                if pay_now && !(self.officers_admit(units, db, eco, owner, what) && pay(eco, db, owner, what)) {
                     return false;
                 }
                 self.deploys.insert(
@@ -451,9 +456,15 @@ impl Production {
                     }
                 }
             }
+            // SIM-26: a waiting head starts only once its officers fit.
+            let admitted = match self.queues.get(yard).and_then(|q| q.first()) {
+                Some(h) if !h.started && !h.paid => self.officers_admit(units, db, eco, h.owner, h.def),
+                _ => true,
+            };
             let q = self.queues.get_mut(yard).expect("listed");
             if let Some(head) = q.first_mut()
                 && !head.started
+                && admitted
                 && (head.paid || pay(eco, db, head.owner, head.def))
             {
                 head.paid = true;
@@ -489,7 +500,7 @@ impl Production {
                 continue;
             }
             self.deploys.remove(rig);
-            if !d.paid && !pay(eco, db, d.owner, d.def) {
+            if !d.paid && !(self.officers_admit(units, db, eco, d.owner, d.def) && pay(eco, db, d.owner, d.def)) {
                 continue;
             }
             let Some(def) = db.unit(d.def) else { continue };
@@ -643,3 +654,9 @@ mod charge_tests;
 
 #[cfg(test)]
 mod queue_limit_tests;
+
+#[cfg(test)]
+mod start_charge_tests;
+
+#[cfg(test)]
+mod officer_tests;

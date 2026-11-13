@@ -71,6 +71,27 @@ pub enum Order {
     /// clears it; entity positions are resolved when a unit is produced.
     /// Appended: existing postcard Order tags must keep their values.
     Rally { builders: Vec<EntityId>, at: Target },
+    /// Set the movement or special-weapon autonomy of craft (SIM-38).
+    /// Appended: existing postcard Order tags keep their values (`Rally` is
+    /// 8, this is 9).
+    Autonomy { units: Vec<EntityId>, kind: AutonomyKind, level: AutonomyLevel },
+}
+
+/// Which autonomy an [`Order::Autonomy`] sets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum AutonomyKind {
+    Movement,
+    SpecialWeapon,
+}
+
+/// An autonomy level as the originals have it: 0, 1, 2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum AutonomyLevel {
+    Low,
+    Medium,
+    High,
 }
 
 /// Direct changes to the world: the bench's edits (docs/TESTBENCH.md,
@@ -104,8 +125,9 @@ pub enum Edit {
     /// that tick (see [`crate::present`]).
     Present(crate::present::Presentation),
     /// A subsystem on or off (mission `Disable*` calls). `Engines` and
-    /// `Weapons` act like [`Edit::Engines`] / [`Edit::Weapons`]; the others
-    /// are rejected until the package owning that subsystem applies them.
+    /// `Weapons` act like [`Edit::Engines`] / [`Edit::Weapons`]; `Shields`,
+    /// `LifeSupport` and `Sensors` are recorded as switched off or on
+    /// (SIM-55; the combat consequences are not modelled, see `combat/damage.rs`).
     Subsystem(EntityId, Subsystem, bool),
     /// Alert state (mission `SetRedAlert` and friends). Rejected until a
     /// package models alert states.
@@ -139,7 +161,57 @@ pub enum Edit {
     /// Global target identity, independent of ownership. SCRIPT/BENCH only.
     /// Appended tag 21 preserves all older edit tags.
     PerceivedTeam(EntityId, PlayerId),
+    /// Mission `SetShieldPercent` / `Entity.shields` (SIM-55): every shield
+    /// pool of a live craft or station to this fraction of its maximum,
+    /// clamped to 0..1. SCRIPT/BENCH only. Appended tag 22.
+    ShieldPercent(EntityId, Fixed),
+    /// Mission `SetMaxShields` (SIM-55): the maximum, and every pool with it,
+    /// to this value (negative reads as 0). SCRIPT/BENCH only. Appended tag 23.
+    MaxShields(EntityId, Fixed),
+    /// Mission `Damage<Subsystem>` (SIM-55): add this many points of damage to
+    /// one subsystem, clamped to 0..its hit points (negative repairs). Rejected
+    /// for a unit whose ODF has no hit points for it. SCRIPT/BENCH only.
+    /// Appended tag 24.
+    SubsystemDamage(EntityId, Subsystem, Fixed),
+    /// Mission `Player.maxOfficers` (SIM-54): the player's officer limit,
+    /// floored at 0 and capped at 1e9. Rejected for a seat with no initialized
+    /// officer limit. SCRIPT/BENCH only. Appended tag 25.
+    MaxOfficers(PlayerId, Fixed),
+    /// Mission `SetCrew` / `Entity.crew` (SIM-54): a craft's or station's
+    /// current crew, floored at 0 and capped at its maximum crew or what it
+    /// already holds, whichever is higher (the clamp is not measured). Rejected
+    /// for a unit with no crew pool. SCRIPT/BENCH only. Appended tag 26.
+    UnitCrew(EntityId, Fixed),
+    /// Mission `resources.crew` (SIM-54): the player's crew stock, floored at 0
+    /// and capped at 1e9 (not clamped to the team capacity, which a stock may
+    /// exceed). Rejected for a seat with no initialized stock. SCRIPT/BENCH
+    /// only. Appended tag 27.
+    TeamCrew(PlayerId, Fixed),
+    /// Mission `SetPosition` (SIM-57): move a unit to this point at once with
+    /// its speed zeroed; heading, turn rate, target and queued waypoints are
+    /// kept. A unit whose ForceOntoMap flag is set is then confined by the map
+    /// rule (the position update of `boundary`); there is no solid-contact
+    /// recovery, as in the original. Rejected for a dying unit and for one under
+    /// construction (STA64 policy, not measured). SCRIPT/BENCH only. Appended
+    /// tag 28.
+    Position(EntityId, Vec3),
+    /// Mission `PointAt` / Roots `Entity.forward =` (SIM-57): face this
+    /// direction at once (x, z of a horizontal direction; the sim normalises
+    /// it; a zero direction or a dying unit is rejected). Speed, turn rate and
+    /// orders are kept. SCRIPT/BENCH only. Appended tag 29.
+    Heading(EntityId, (Fixed, Fixed)),
+    /// Mission `SetAngularVelocity` / Roots `Entity.omega =` (SIM-57): the
+    /// yaw turn rate in radians per second, positive from +X toward +Z,
+    /// clamped to +-[`MAX_SCRIPT_OMEGA`]. Stored only for a craft with its
+    /// engines off, which then turns without decay; for any other live unit
+    /// the edit is accepted and changes nothing (a craft under its own
+    /// steering has the value overwritten within a tick in the original).
+    /// A dying unit is rejected. SCRIPT/BENCH only. Appended tag 30.
+    AngularVelocity(EntityId, Fixed),
 }
+
+/// The largest turn rate (radians per second) a script may set.
+pub const MAX_SCRIPT_OMEGA: i32 = 100;
 
 /// A unit system a mission can switch on or off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -268,6 +340,39 @@ mod tests {
             let c = Command { player: PlayerId::SCRIPT, seq: 9, kind: CommandKind::Edit(Edit::Hull(id, hull)) };
             let bytes = postcard::to_allocvec(&c).unwrap();
             assert_eq!(postcard::from_bytes::<Command>(&bytes).unwrap(), c);
+        }
+    }
+
+    #[test]
+    fn shield_subsystem_and_personnel_edits_append_tags_22_to_27() {
+        let id = EntityId(1);
+        let edits = [
+            (22, Edit::ShieldPercent(id, Fixed::ONE)),
+            (23, Edit::MaxShields(id, Fixed::ONE)),
+            (24, Edit::SubsystemDamage(id, Subsystem::Sensors, Fixed::ONE)),
+            (25, Edit::MaxOfficers(PlayerId(0), Fixed::ONE)),
+            (26, Edit::UnitCrew(id, Fixed::ONE)),
+            (27, Edit::TeamCrew(PlayerId(0), Fixed::ONE)),
+        ];
+        for (tag, edit) in edits {
+            let bytes = postcard::to_allocvec(&edit).unwrap();
+            assert_eq!(bytes[0], tag, "{edit:?}");
+            assert_eq!(postcard::from_bytes::<Edit>(&bytes).unwrap(), edit);
+        }
+    }
+
+    #[test]
+    fn placement_and_facing_edits_append_tags_28_to_30() {
+        let id = EntityId(1);
+        let edits = [
+            (28, Edit::Position(id, Vec3::from_f32([1.0, 2.0, -3.0]))),
+            (29, Edit::Heading(id, (Fixed::ONE, Fixed::ZERO))),
+            (30, Edit::AngularVelocity(id, Fixed::ONE)),
+        ];
+        for (tag, edit) in edits {
+            let bytes = postcard::to_allocvec(&edit).unwrap();
+            assert_eq!(bytes[0], tag, "{edit:?}");
+            assert_eq!(postcard::from_bytes::<Edit>(&bytes).unwrap(), edit);
         }
     }
 

@@ -2,22 +2,26 @@
 //! be saved, a mission can `Start=snapshot:`, and a bench can rewind.
 //!
 //! Layout: `MAGIC`, [`FORMAT_VERSION`] (u16 LE), the seam revision (u32 LE),
-//! the content hash (u64 LE), then the [`Body`] in `postcard`. The header is
-//! read first so a wrong file, version or content set is refused before
-//! anything else is parsed.
+//! the content hash (u64 LE), then in `postcard` the [`Provenance`] (content
+//! lineage and pack names, D10), the [`Body`], the map bounds and the
+//! versioned confinement, perceived-team, personnel and unit-crew records.
+//! The fixed header is read first so a wrong file, version or content set is
+//! refused before anything else is parsed; [`snapshot_info`] reads the
+//! header and provenance alone, for a load screen.
 //!
 //! The [`ContentDb`] is not stored (it is not serialisable, and the files
 //! are the player's own): the snapshot keeps its hash and [`Sim::from_snapshot`]
 //! takes the database from the caller and refuses one that hashes differently.
+//! Lineage and packs are informational and never checked.
 //!
 //! Adding a subsystem's state (weapons from SIM-04, say) is one field on
 //! [`Body`], filled in [`Sim::snapshot`] and read back in
 //! [`Sim::from_snapshot`], plus a [`FORMAT_VERSION`] bump. Old layouts are
-//! refused, not generally migrated. Formats 8/9 retain the old Body and optional
-//! bounds; their narrow read path requires disabled confinement capability,
-//! and format 8 accepts only its original mining phases. Format 10 adds explicit
-//! bounds and a mandatory versioned confinement record after that old Body.
-//! Format 11 appends a mandatory versioned perceived-team record.
+//! refused, not migrated. Format 14 (SIM-28) appended the pending start-helper
+//! lifecycle rows; format 15 (CON-35) is the first with provenance and with
+//! the keyed content digest's hash. Formats 8 to 14, which earlier builds
+//! read with narrow compatibility paths, carry a content hash of the old
+//! kind that matches no current database, so they are refused by version.
 //!
 //! The state types of other crates (`MoveStats`) have no serde, so the body
 //! uses small mirror records here instead of touching those crates.
@@ -35,17 +39,54 @@ use crate::world::{Entities, Entity, EntityKind, Shields, Table};
 use crate::{Rng, Sim, SimEvent};
 
 pub const MAGIC: [u8; 4] = *b"STAS";
-/// Format 13 appends unit crew after the format-12 player-personnel suffix.
-/// The Body and earlier suffix records remain unchanged.
-pub const FORMAT_VERSION: u16 = 13;
-const PERSONNEL_FORMAT: u16 = 12;
-const PERCEPTION_FORMAT: u16 = 11;
-const PREVIOUS_FORMAT: u16 = 10;
-const LEGACY_CARGO_FORMAT: u16 = 9;
-// Only compatible while Body is byte-for-byte the format-8 record schema.
-const COMPATIBLE_MINING_FORMAT: u16 = 8;
+/// Format 16 (SIM-38) appended craft autonomy after the start-helper rows; 15
+/// (CON-35) added the [`Provenance`] record and the keyed content digest's
+/// hash. Format 17 appends the mission-set subsystem switches and damage
+/// (SIM-55) last. Only the current format is read.
+pub const FORMAT_VERSION: u16 = 17;
 
 const HEADER: usize = 4 + 2 + 4 + 8;
+
+/// Where the snapshot's content came from (D10): shown, never compared.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Provenance {
+    /// `ContentDb::lineage`; empty for a sim without content.
+    pub lineage: String,
+    /// `ContentDb::packs`, top first.
+    pub packs: Vec<String>,
+}
+
+/// What a snapshot says about itself without loading it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotInfo {
+    pub content_hash: u64,
+    pub provenance: Provenance,
+}
+
+/// Reads a snapshot's header and [`Provenance`] only, refusing a wrong file,
+/// format or seam revision as [`Sim::from_snapshot`] does.
+pub fn snapshot_info(bytes: &[u8]) -> Result<SnapshotInfo, SnapshotError> {
+    let content_hash = check_header(bytes)?;
+    let (provenance, _): (Provenance, _) =
+        postcard::take_from_bytes(&bytes[HEADER..]).map_err(|e| SnapshotError::Corrupt(e.to_string()))?;
+    Ok(SnapshotInfo { content_hash, provenance })
+}
+
+/// Magic, format and seam revision; the saved content hash.
+fn check_header(bytes: &[u8]) -> Result<u64, SnapshotError> {
+    if bytes.len() < HEADER || bytes[..4] != MAGIC {
+        return Err(SnapshotError::BadMagic);
+    }
+    let found = u16::from_le_bytes([bytes[4], bytes[5]]);
+    if found != FORMAT_VERSION {
+        return Err(SnapshotError::FormatVersion { found });
+    }
+    let seam = u32::from_le_bytes(bytes[6..10].try_into().unwrap());
+    if seam != SEAM_REV {
+        return Err(SnapshotError::SeamRev { found: seam });
+    }
+    Ok(u64::from_le_bytes(bytes[10..18].try_into().unwrap()))
+}
 
 /// Why a snapshot could not be loaded.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,8 +108,11 @@ impl std::fmt::Display for SnapshotError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             SnapshotError::BadMagic => write!(f, "not a snapshot"),
+            SnapshotError::FormatVersion { found } if *found < FORMAT_VERSION => {
+                write!(f, "snapshot format {found} is from an older STA64 and cannot be read (this build reads format {FORMAT_VERSION} only)")
+            }
             SnapshotError::FormatVersion { found } => {
-                write!(f, "snapshot format {found}, expected {FORMAT_VERSION} or compatible {PERSONNEL_FORMAT}/{PERCEPTION_FORMAT}/{PREVIOUS_FORMAT}/{LEGACY_CARGO_FORMAT}/{COMPATIBLE_MINING_FORMAT}")
+                write!(f, "snapshot format {found}, expected {FORMAT_VERSION}")
             }
             SnapshotError::SeamRev { found } => {
                 write!(f, "snapshot seam revision {found}, expected {SEAM_REV}")
@@ -179,6 +223,20 @@ struct UnitCrewRec {
     rows: Vec<(EntityId, [i64; 2])>,
 }
 
+/// Mandatory suffix since v14: pending start-helper lifecycle rows (SIM-28).
+#[derive(Serialize, Deserialize)]
+struct StartEffectsRec {
+    version: u8,
+    rows: crate::start_effects::Rows,
+}
+
+/// Mandatory suffix since v17: switched-off and damaged subsystems (SIM-55).
+#[derive(Serialize, Deserialize)]
+struct SubsystemsRec {
+    version: u8,
+    rows: Vec<(EntityId, crate::combat::damage::SubsystemRow)>,
+}
+
 fn kind_from(b: u8) -> Option<EntityKind> {
     Some(match b {
         0 => EntityKind::Craft,
@@ -246,6 +304,9 @@ impl EntityRec {
                 turn_control_angle: s.smooth[4],
                 turn_control_squared: s.smooth[5] != Fixed::ZERO,
                 forward_control_distance: s.smooth[6],
+                // Not in the snapshot: `from_snapshot` re-reads it from the
+                // definition once the entities exist.
+                warp_speed: Fixed::ZERO,
             },
             hull: self.hull,
             crew: None,
@@ -304,6 +365,11 @@ impl Sim {
         out.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
         out.extend_from_slice(&SEAM_REV.to_le_bytes());
         out.extend_from_slice(&self.content.as_ref().map_or(0, |c| c.hash()).to_le_bytes());
+        let provenance = self.content.as_ref().map_or_else(Provenance::default, |c| Provenance {
+            lineage: c.lineage().to_owned(),
+            packs: c.packs().to_vec(),
+        });
+        out.extend(postcard::to_allocvec(&provenance).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&body).expect("snapshot serialises"));
         // The new suffix is mandatory, even without content, bounds or actors.
         out.extend(postcard::to_allocvec(&self.bounds).expect("snapshot serialises"));
@@ -317,6 +383,9 @@ impl Sim {
             version: 1,
             rows: self.units.iter().filter_map(|unit| unit.crew.map(|pool| (unit.id, pool.map(Fixed::to_bits)))).collect(),
         }).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&StartEffectsRec { version: 1, rows: self.start_effects.to_rec() }).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&crate::autonomy::AutonomyWire { version: 1, rows: self.autonomy.to_rec() }).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&SubsystemsRec { version: 1, rows: self.subsystems.to_rows() }).expect("snapshot serialises"));
         out
     }
 
@@ -327,67 +396,40 @@ impl Sim {
         bytes: &[u8],
         content: Option<Arc<ContentDb>>,
     ) -> Result<Sim, SnapshotError> {
-        if bytes.len() < HEADER || bytes[..4] != MAGIC {
-            return Err(SnapshotError::BadMagic);
-        }
-        let found = u16::from_le_bytes([bytes[4], bytes[5]]);
-        if ![FORMAT_VERSION, PERSONNEL_FORMAT, PERCEPTION_FORMAT, PREVIOUS_FORMAT, LEGACY_CARGO_FORMAT, COMPATIBLE_MINING_FORMAT].contains(&found) {
-            return Err(SnapshotError::FormatVersion { found });
-        }
-        let seam = u32::from_le_bytes(bytes[6..10].try_into().unwrap());
-        let expected_seam = match found { FORMAT_VERSION => SEAM_REV, PERSONNEL_FORMAT => 3, PERCEPTION_FORMAT => 2, _ => 1 };
-        if seam != expected_seam {
-            return Err(SnapshotError::SeamRev { found: seam });
-        }
-        let saved = u64::from_le_bytes(bytes[10..18].try_into().unwrap());
+        let saved = check_header(bytes)?;
         let given = content.as_ref().map_or(0, |c| c.hash());
-        let historical_personnel_identity = found < PERSONNEL_FORMAT && content.as_ref()
-            .is_some_and(|db| db.hash_without_starting_rules() == saved);
-        if saved != given && !historical_personnel_identity {
+        if saved != given {
             return Err(SnapshotError::ContentMismatch { saved, given });
         }
-        let (b, rest): (Body, &[u8]) = postcard::take_from_bytes(&bytes[HEADER..])
-            .map_err(|e| SnapshotError::Corrupt(e.to_string()))?;
-        if found < PREVIOUS_FORMAT && content.as_ref().is_some_and(|db| db.has_map_confinement()) {
-            return Err(SnapshotError::Corrupt("old snapshot has no explicit confinement state".into()));
-        }
-        let (bounds, boundary_rows, perception_rows, personnel_rows, crew_rows) = if found >= PREVIOUS_FORMAT {
-            let (bounds, rest) = postcard::take_from_bytes(rest).map_err(|e| SnapshotError::Corrupt(e.to_string()))?;
-            let (record, rest): (BoundaryRec, _) = postcard::take_from_bytes(rest).map_err(|e| SnapshotError::Corrupt(e.to_string()))?;
-            if record.version != 1 { return Err(SnapshotError::Corrupt("unknown confinement record version".into())); }
-            let (perception_rows, rest) = if found >= PERCEPTION_FORMAT {
-                let (record, rest): (PerceptionRec, _) = postcard::take_from_bytes(rest).map_err(|e| SnapshotError::Corrupt(e.to_string()))?;
-                if record.version != 1 { return Err(SnapshotError::Corrupt("unknown perceived-team record version".into())); }
-                (record.rows, rest)
-            } else {
-                (Vec::new(), rest)
-            };
-            let (personnel_rows, rest) = if found >= PERSONNEL_FORMAT {
-                let (record, rest): (PersonnelRec, _) = postcard::take_from_bytes(rest).map_err(|e| SnapshotError::Corrupt(e.to_string()))?;
-                if record.version != 1 { return Err(SnapshotError::Corrupt("unknown personnel record version".into())); }
-                (record.rows, rest)
-            } else { (Vec::new(), rest) };
-            let (crew_rows, rest) = if found == FORMAT_VERSION {
-                let (record, rest): (UnitCrewRec, _) = postcard::take_from_bytes(rest).map_err(|e| SnapshotError::Corrupt(e.to_string()))?;
-                if record.version != 1 { return Err(SnapshotError::Corrupt("unknown unit crew record version".into())); }
-                (record.rows, rest)
-            } else { (Vec::new(), rest) };
-            if !rest.is_empty() { return Err(SnapshotError::Corrupt("trailing bytes".into())); }
-            (bounds, record.rows, perception_rows, personnel_rows, crew_rows)
-        } else if rest.is_empty() {
-            (None, Vec::new(), Vec::new(), Vec::new(), Vec::new())
-        } else {
-            let (bounds, rest) = postcard::take_from_bytes(rest).map_err(|e| SnapshotError::Corrupt(e.to_string()))?;
-            if !rest.is_empty() {
-                return Err(SnapshotError::Corrupt("trailing bytes".into()));
-            }
-            (bounds, Vec::new(), Vec::new(), Vec::new(), Vec::new())
-        };
-        let max_phase = if found == COMPATIBLE_MINING_FORMAT { 3 } else { 4 };
-        if let Some(row) = b.economy.miners.iter().find(|row| row.5 > max_phase) {
-            return Err(SnapshotError::Corrupt(format!(
-                "mining phase {} is not supported by snapshot format {found}", row.5
-            )));
+        let corrupt_postcard = |e: postcard::Error| SnapshotError::Corrupt(e.to_string());
+        // Informational; read past (and checked to parse).
+        let (_, rest): (Provenance, &[u8]) = postcard::take_from_bytes(&bytes[HEADER..]).map_err(corrupt_postcard)?;
+        let (b, rest): (Body, &[u8]) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        let (bounds, rest) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        let (record, rest): (BoundaryRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        if record.version != 1 { return Err(SnapshotError::Corrupt("unknown confinement record version".into())); }
+        let boundary_rows = record.rows;
+        let (record, rest): (PerceptionRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        if record.version != 1 { return Err(SnapshotError::Corrupt("unknown perceived-team record version".into())); }
+        let perception_rows = record.rows;
+        let (record, rest): (PersonnelRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        if record.version != 1 { return Err(SnapshotError::Corrupt("unknown personnel record version".into())); }
+        let personnel_rows = record.rows;
+        let (record, rest): (UnitCrewRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        if record.version != 1 { return Err(SnapshotError::Corrupt("unknown unit crew record version".into())); }
+        let crew_rows = record.rows;
+        let (record, rest): (StartEffectsRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        if record.version != 1 { return Err(SnapshotError::Corrupt("unknown start effects record version".into())); }
+        let effect_rows = record.rows;
+        let (record, rest): (crate::autonomy::AutonomyWire, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        if record.version != 1 { return Err(SnapshotError::Corrupt("unknown autonomy record version".into())); }
+        let autonomy_rows = record.rows;
+        let (record, rest): (SubsystemsRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        if record.version != 1 { return Err(SnapshotError::Corrupt("unknown subsystems record version".into())); }
+        let subsystem_rows = record.rows;
+        if !rest.is_empty() { return Err(SnapshotError::Corrupt("trailing bytes".into())); }
+        if let Some(row) = b.economy.miners.iter().find(|row| row.5 > 4) {
+            return Err(SnapshotError::Corrupt(format!("mining phase {} is not supported", row.5)));
         }
 
         let list = b
@@ -397,6 +439,18 @@ impl Sim {
             .collect::<Result<Vec<_>, _>>()?;
         let mut units =
             Entities::from_parts(list, b.next_entity).ok_or_else(|| corrupt("entity ids"))?;
+        // `warpSpeed` is a per-definition stat that a spawn copies and the
+        // snapshot does not carry: re-read it (typed `UnitDef` field) so a
+        // restored sim equals a live one.
+        if let Some(db) = content.as_deref() {
+            let ids: Vec<EntityId> = units.iter().map(|u| u.id).collect();
+            for id in ids {
+                let Some(unit) = units.get_mut(id) else { continue };
+                if let Some(def) = db.unit(unit.def) {
+                    unit.stats.warp_speed = def.movement.warp_speed;
+                }
+            }
+        }
         if crew_rows.windows(2).any(|pair| pair[0].0 >= pair[1].0) {
             return Err(corrupt("unit crew rows"));
         }
@@ -414,12 +468,8 @@ impl Sim {
         }
         let (mut confinement, _) = crate::boundary::state::Confinement::prepare(content.as_deref(), bounds);
         confinement.restore(&units, boundary_rows).map_err(|why| SnapshotError::Corrupt(why.into()))?;
-        let perception = if found >= PERCEPTION_FORMAT {
-            crate::perception::restore(&units, perception_rows)
-                .map_err(|why| SnapshotError::Corrupt(why.into()))?
-        } else {
-            Table::default()
-        };
+        let perception = crate::perception::restore(&units, perception_rows)
+            .map_err(|why| SnapshotError::Corrupt(why.into()))?;
         let labels = Table::from_rows(b.labels).ok_or_else(|| corrupt("labels"))?;
         let courses = b
             .courses
@@ -436,7 +486,25 @@ impl Sim {
             .collect();
         let movement = Movement::from_rows(courses).ok_or_else(|| corrupt("courses"))?;
         let weapons = Weapons::from_rec(b.weapons).ok_or_else(|| corrupt("weapons"))?;
+        let autonomy = crate::autonomy::Autonomy::from_rec(autonomy_rows).ok_or_else(|| corrupt("autonomy"))?;
+        if autonomy.to_rec().iter().any(|(id, _)| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft)) {
+            return Err(corrupt("autonomy entity"));
+        }
         let specials = crate::specials::Specials::from_rec(b.specials).ok_or_else(|| corrupt("specials"))?;
+        let start_effects = crate::start_effects::StartEffects::from_rec(effect_rows, |id| units.contains(id))
+            .ok_or_else(|| corrupt("start effect rows"))?;
+        let subsystems = crate::combat::damage::Subsystems::from_rows(subsystem_rows).ok_or_else(|| SnapshotError::Corrupt("invalid subsystem rows".into()))?;
+        if subsystems.to_rows().iter().any(|(id, _)| !units.get(*id).is_some_and(|u| matches!(u.kind, EntityKind::Craft | EntityKind::Station))) {
+            return Err(SnapshotError::Corrupt("subsystem entity is not a craft or station".into()));
+        }
+        if let Some(db) = content.as_deref() {
+            for (id, row) in subsystems.to_rows() {
+                let hp = units.get(id).and_then(|u| db.unit(u.def)).map(|d| d.system_hit_points);
+                if hp.is_some_and(|hp| row.damage.iter().zip(hp).any(|(d, hp)| *d > hp.to_bits())) {
+                    return Err(SnapshotError::Corrupt("subsystem damage above hit points".into()));
+                }
+            }
+        }
         let mut economy = crate::economy::Economy::from_rec(&b.economy);
         economy.restore_personnel(personnel_rows, &b.players).map_err(|why| SnapshotError::Corrupt(why.into()))?;
         Ok(Sim {
@@ -459,10 +527,22 @@ impl Sim {
             production: crate::production::Production::from_rec(&b.production).ok_or_else(|| corrupt("rallies"))?,
             victory: crate::victory::Victory::from_rec(&b.victory),
             specials,
+            autonomy,
+            start_effects,
             nav: Default::default(),
+            subsystems,
+            team_changes: Vec::new(),
         })
     }
 }
+
+#[cfg(test)]
+#[path = "snapshot/subsystem_tests.rs"]
+mod subsystem_tests;
+
+#[cfg(test)]
+#[path = "snapshot/chain.rs"]
+mod chain;
 
 #[cfg(test)]
 #[path = "snapshot/confinement_tests.rs"]
@@ -669,24 +749,69 @@ mod tests {
 
     const MINING_V8: &[u8] = include_bytes!("../tests/fixtures/mining-v8.stas");
 
-    #[test]
-    fn original_v8_mining_fixture_keeps_its_baseline_continuation() {
+    /// The game `tests/fixtures/mining-v8.stas` was saved from (its JSON
+    /// record): seed 3, fake content, empty map, seats 0 and 1 idle, moon,
+    /// station and miner at the origin, seat 0's mine order, 99 more ticks.
+    /// Format 8 is refused since CON-35, so the state is rebuilt here.
+    fn mining_v8_state() -> (Sim, Arc<sta_content::ContentDb>) {
+        use crate::setup::{Control, GameOptions, GameSetup, PlayerSetup};
         let db = Arc::new(sta_content::fake::db());
+        let seat = |id| PlayerSetup { id: PlayerId(id), team: TeamId(id), race: "fx".into(), control: Control::Idle };
+        let mut sim = Sim::from_setup(&GameSetup {
+            seed: 3,
+            map: Arc::new(sta_content::MapDef::empty()),
+            content: db.clone(),
+            players: vec![seat(0), seat(1)],
+            options: GameOptions::default(),
+        });
+        let ahead = (Fixed::ZERO, Fixed::ONE);
+        for (odf, owner) in [("fx_moon", crate::world::NEUTRAL), ("fx_station", PlayerId(0)), ("fx_miner", PlayerId(0))] {
+            sim.spawn_def(db.key(odf).unwrap(), owner, Vec3::ZERO, ahead).unwrap();
+        }
+        sim.step(&[cmd(0, Order::Mine { units: vec![EntityId(3)], node: EntityId(1) })]);
+        for _ in 0..99 {
+            sim.step(&[]);
+        }
+        (sim, db)
+    }
+
+    #[test]
+    fn original_v8_mining_game_is_refused_as_a_file_and_rebuilt_keeps_its_continuation() {
+        // The genuine file is refused by version now ...
         assert_eq!(u16::from_le_bytes(MINING_V8[4..6].try_into().unwrap()), 8);
-        let mut live = Sim::from_snapshot(MINING_V8, Some(db)).unwrap();
+        let db = Arc::new(sta_content::fake::db());
+        assert_eq!(Sim::from_snapshot(MINING_V8, Some(db)).err(), Some(SnapshotError::FormatVersion { found: 8 }));
+        // ... and the same game rebuilt keeps its recorded digests (crew
+        // and the post-CON-35 content hash left out, as they were then).
+        let (mut live, _) = mining_v8_state();
         assert_eq!(live.tick, 100);
-        assert_eq!(live.digest(), 0x14c7_0e04_4af1_fb70);
+        assert_eq!(crate::unit_status_tests::digest_before_crew(&live), 0x14c7_0e04_4af1_fb70);
         assert_eq!(live.economy.to_rec().miners[0].3, Fixed::from_int(50).to_bits());
         for _ in 0..800 { live.step(&[]); }
         assert_eq!(live.tick, 900);
-        assert_eq!(live.digest(), 0x1fad_adc8_8e06_0e5a);
+        assert_eq!(crate::unit_status_tests::digest_before_crew(&live), 0x1fad_adc8_8e06_0e5a);
         assert_eq!(live.view().player(PlayerId(0)).unwrap().resources[0], Fixed::from_int(150));
         assert_eq!(u16::from_le_bytes(live.snapshot()[4..6].try_into().unwrap()), FORMAT_VERSION);
     }
 
+    #[test]
+    fn a_snapshot_names_its_lineage_and_packs() {
+        let packs = vec!["Fleet Ops 4.0".to_owned(), "Data".to_owned()];
+        let db = Arc::new(sta_content::fake::db().with_packs(packs.clone()));
+        let mut sim = Sim::new(5);
+        sim.content = Some(db.clone());
+        let bytes = sim.snapshot();
+        let info = snapshot_info(&bytes).unwrap();
+        assert_eq!(info.content_hash, db.hash());
+        assert_eq!(info.provenance, Provenance { lineage: "native".into(), packs });
+        // Informational: content with the same digest loads, whatever its packs.
+        let loaded = Sim::from_snapshot(&bytes, Some(Arc::new(sta_content::fake::db()))).unwrap();
+        assert_eq!(loaded.digest(), sim.digest());
+        assert_eq!(snapshot_info(&Sim::new(5).snapshot()).unwrap().provenance, Provenance::default());
+    }
+
     fn stopped_loaded_miner() -> (Sim, Arc<sta_content::ContentDb>) {
-        let db = Arc::new(sta_content::fake::db());
-        let mut sim = Sim::from_snapshot(MINING_V8, Some(db.clone())).unwrap();
+        let (mut sim, db) = mining_v8_state();
         let stopped = sim.step(&[Command {
             player: PlayerId(0), seq: 0,
             kind: CommandKind::Order(Order::Stop { units: vec![EntityId(3)] }),
@@ -722,16 +847,18 @@ mod tests {
     }
 
     #[test]
-    fn new_or_unknown_mining_phases_cannot_masquerade_as_v8() {
+    fn old_formats_and_unknown_mining_phases_are_refused() {
         let (sim, db) = stopped_loaded_miner();
         let mut bytes = include_bytes!("../tests/fixtures/mining-idle-v9.stas").to_vec();
-        bytes[4..6].copy_from_slice(&COMPATIBLE_MINING_FORMAT.to_le_bytes());
-        assert!(matches!(Sim::from_snapshot(&bytes, Some(db.clone())), Err(SnapshotError::Corrupt(why)) if why.contains("mining phase 4")));
+        bytes[4..6].copy_from_slice(&8u16.to_le_bytes());
+        assert_eq!(Sim::from_snapshot(&bytes, Some(db.clone())).err(), Some(SnapshotError::FormatVersion { found: 8 }));
 
         let bytes = sim.snapshot();
-        let (mut body, suffix): (Body, _) = postcard::take_from_bytes(&bytes[HEADER..]).unwrap();
+        let (provenance, rest): (Provenance, _) = postcard::take_from_bytes(&bytes[HEADER..]).unwrap();
+        let (mut body, suffix): (Body, _) = postcard::take_from_bytes(rest).unwrap();
         body.economy.miners[0].5 = 5;
         let mut unknown = bytes[..HEADER].to_vec();
+        unknown.extend(postcard::to_allocvec(&provenance).unwrap());
         unknown.extend(postcard::to_allocvec(&body).unwrap());
         unknown.extend_from_slice(suffix);
         assert!(matches!(Sim::from_snapshot(&unknown, Some(db)), Err(SnapshotError::Corrupt(why)) if why.contains("mining phase 5")));
@@ -740,6 +867,14 @@ mod tests {
     #[test]
     fn mid_pd_saturation_snapshot_continues_identically() {
         let (mut live, db) = crate::combat::pd_tests::mid_saturation();
+        assert!(live.weapons.shots_in_flight() > 0);
+        let fired = assert_continues(&mut live, db, 300);
+        assert!(fired > 0);
+    }
+
+    #[test]
+    fn mid_pd_energy_snapshot_keeps_the_timer_and_continues_identically() {
+        let (mut live, db) = crate::combat::engine_timing_tests::mid_saturation_energy();
         assert!(live.weapons.shots_in_flight() > 0);
         let fired = assert_continues(&mut live, db, 300);
         assert!(fired > 0);

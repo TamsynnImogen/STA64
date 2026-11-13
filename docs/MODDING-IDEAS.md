@@ -5,15 +5,14 @@
 > it (including the "ADOPTED PLAN" section below), the decisions file wins.
 
 Status: brainstorm, not a decision. Written to be resumed later. The
-investigation findings go in `docs/research/modding/` (see bottom); the RFC
+investigation findings are kept outside the repository (see AGENTS.md); the RFC
 (`docs/MODDING.md`) is drafted from both.
 
-## ADOPTED PLAN (owner, 2026-11-11): follow review-fable.md
+## ADOPTED PLAN (owner, 2026-11-11): follow the Fable review
 
 The owner adopted the Fable review's recommendations. Everything below this
 section is brainstorm and evidence; where it conflicts with this section,
-**this section wins**. Source: `docs/research/modding/review-fable.md`
-(findings, evidence, file refs). Superseded by it: compat tiers T0-T3 (use a
+**this section wins**. Source: the Fable review (kept outside the repository). Superseded by it: compat tiers T0-T3 (use a
 measured coverage report), TOML `[patch]` for ODFs, keyed quirk map, `engine =`
 as lineage key, MOD-01..13 list, shader contracts/shims/`new-effect`.
 
@@ -102,7 +101,7 @@ A *pack* = manifest + optional layers:
 - Mods, FleetOps, Refit, Roots are all packs with `extends` / `requires`.
   Roots is an *engine* (separate lineage, see below), not a pack that
   extends FleetOps; FO 4.0 / STA2 Classic are standalone packs requiring the
-  Roots engine (review-opus C2: needs a separate `engine =` axis).
+  Roots engine (Opus review C2: needs a separate `engine =` axis).
 
 **Profile** = base + set of named, documented, toggleable *quirks*
 (e.g. `a2.shield_regen_ignores_damage_delay`), not a per-exe monolith. A
@@ -182,29 +181,25 @@ unknown: first thing to find out.
 
 ## Investigation findings (2026-11-11)
 
-Full reports: `docs/research/modding/{fo-hooks-asi,render-mods,repo-seams}.md`.
-Summaries are the agents' own; formulas and ODF.fpq contents are unverified.
+The full reports (install inspection, fact checks, repo survey) are research
+notes and are kept outside the repository. Summaries are the agents' own;
+formulas and ODF.fpq contents are unverified.
 
-**Code lineages (fo-hooks-asi).** Four engine lineages: **stock A1** (own
-exe; the survey found only IPX/ddraw shims there and did not look for A1
-community patches or hooks, so A1 is the least-surveyed lineage), and the
-A2 family: stock A2, FO 3.2.7 (in-memory `FleetOpsHook.dll`, stock exe renamed
-`Armada2.ldl` behind a loader), Roots 5.0Z11 (patched `ArmadaL.exe` plus its
-own hook). "FO 4.0" (v4.0Z, ported to the Roots engine; same `ArmadaL.exe` md5 as
-Roots) and "STA2 Classic" are standalone data/rules mods under Roots
-`Data/Mods/`. The original pre-Roots FO 4.0 release, if it had its own hook
-build, is not installed here and is unsurveyed. FO plain and Dominion War are code-identical. Profiles
-therefore key on code lineage plus a data-mod layer, matching the pack model.
-Fingerprints: `.test` exe section,
-`AssetVersion=50000`, `Armada2.ldl`. Every `.asi` except
-`STA2WidescreenPatch.asi` is Refit's own. Roots' `devstuff/Engine_Changelog.txt`
-(616 lines) is the best quirk source: sentinel ODF keys (`hitChanceMod`,
-`lodShift`, `avoidanceclass`, `percentNebulaWarn`), MP factions 8 -> 16,
-autonomy rework, new RTS_CFG/ART_CFG keys. All engine-rule detours, so
-reimplementable as named quirks/tunables (`limit.*`, `cfg.*`, `odf.*`, `sim.*`,
-`a2.*` ID families).
+**Code lineages.** Four engine lineages: **stock A1** (own exe; only
+compatibility shims were found, and no A1 community patches or hooks were
+looked for, so A1 is the least-surveyed lineage), and the A2 family: stock A2,
+FO 3.2.7 (in-memory `FleetOpsHook.dll` behind a loader), Roots 5.0Z11 (patched
+`ArmadaL.exe` plus its own hook). "FO 4.0" and "STA2 Classic" are standalone
+data/rules mods under Roots `Data/Mods/`. FO plain and Dominion War are
+code-identical. Profiles therefore key on code lineage plus a data-mod layer,
+matching the pack model. Every `.asi` except `STA2WidescreenPatch.asi` is
+Refit's own. Roots' shipped engine changelog is the best quirk source: sentinel
+ODF keys (`hitChanceMod`, `lodShift`, `avoidanceclass`, `percentNebulaWarn`),
+MP factions 8 -> 16, autonomy rework, new RTS_CFG/ART_CFG keys. All
+engine-rule detours, so reimplementable as named quirks/tunables (`limit.*`,
+`cfg.*`, `odf.*`, `sim.*`, `a2.*` ID families).
 
-**Render (render-mods).** Refit is not a shader override: it is an `.asi`
+**Render.** Refit is not a shader override: it is an `.asi`
 replacing render steps with its own renderer, driven by ini "recipes".
 Roots' visual changes are data (SODs, DDS, ODF keys, cfg numbers) plus a
 ReShade post chain; only a bump-mesh path and cloak alpha are engine code.
@@ -221,7 +216,7 @@ Amendments to the slot idea:
 - Tiers: Roots data T0, Refit recipes/ini T1, ReShade preset T2, Refit
   shaders and Roots engine-code behaviour T3.
 
-**Repo (repo-seams).**
+**Repo.**
 - `sta_vfs` already has `manifest.toml` (deps, `[load]`), `order.rs` load
   order/`identity()`, `.sta` archives, `Vfs::resolve_all`. Extend it; no
   second manifest. But ~50 call sites use `Vfs::mount_install`, and mod
@@ -301,7 +296,7 @@ as caplist tooltips, so the canonical form needs those fields optional).
 | `.odf` | text object definition: weapons, build lists, ship stats, most gameplay data |
 | `.sod` | model |
 | `.spr` | sprite definition: tables of sprites over an atlas |
-| `.cfg` / `.h` | mostly UI; `dynamic_localized_strings.h` holds most strings; `RTS_CFG.h`/`ART_CFG.h` are tunables (see fo-hooks-asi.md) |
+| `.cfg` / `.h` | mostly UI; `dynamic_localized_strings.h` holds most strings; `RTS_CFG.h`/`ART_CFG.h` are tunables |
 | `.aip` | AI files |
 | `.tt` / `.xml` | tech trees (see dialects above) |
 
@@ -317,7 +312,7 @@ key-level `[patch]` fragments and `sta64 why`.
 size (64x64 px); `@tmaterial=` = blend/material mode for the atlas. Values
 observed by grep across installs (meaning of each not yet checked):
 `interface`, `additive`, `default`, `alphathreshold`, `add_nomipf`,
-`wormhole` (A1 only; review-opus found it absent in A2 stock sprites); `font` (A2+); `alpha` (FO/Roots, absent in A1).
+`wormhole` (A1 only; the Opus review found it absent in A2 stock sprites); `font` (A2+); `alpha` (FO/Roots, absent in A1).
 Other directives seen: `@referencewidth`/`@referenceheight` (non-square
 atlases, up to 2048 in FO/Roots), `@auto=square|column|row|scalar`,
 `@skip=off|(r,g,b)`. `@tmaterial` is a prime *profile-keyed enum*: the
@@ -366,7 +361,7 @@ params from the profile (ART_CFG keys mapped to pack tunables). The sim
 exposes only the affector state; colour mixing and wave maths stay render-side
 (no determinism risk).
 
-## Opus review (docs/research/modding/review-opus.md)
+## Opus review (kept outside the repository)
 
 Corrections above applied. Open decisions from the review, not yet adopted:
 session manifest/lock for peers+replays+saves (C1); `engine =` axis (C2);

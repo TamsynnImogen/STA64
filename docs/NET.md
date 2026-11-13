@@ -52,8 +52,7 @@ that it did.
 
 ## 2. What the original games do
 
-Checked in the installs on this machine (`/home/cedric/Games/Heroic/`:
-Armada, Armada II stock, Fleet Operations, FO Roots) and in Refit's
+Checked in the installs on this machine (Armada, Armada II stock, Fleet Operations, FO Roots) and in Refit's
 DirectPlay trace, rather than guessed. Every item below either shaped a
 decision or is listed out of scope.
 
@@ -157,7 +156,7 @@ Every message is one frame:
 ```
 offset size  field
 0      4     magic "S64N"
-4      2     protocol version, u16 little-endian (PROTOCOL_VERSION = 1)
+4      2     protocol version, u16 little-endian (PROTOCOL_VERSION = 3)
 6      4     body length, u32 little-endian, <= MAX_FRAME_BYTES - 10
 10     n     body: one `Message` in postcard
 ```
@@ -184,7 +183,7 @@ offset size  field
 `MAX_FRAME_BYTES` is 64 KiB. Every variable-length field has its own bound
 (`proto.rs` constants): player names 32 bytes, chat 256, mission text 4096
 (S2's `MAX_MISSION_TEXT_BYTES`), at most 256 commands and 8 scheduled changes
-per turn record, 16 packs per peer, 256 rule entries per `Rules` part and 64
+per turn record, 16 packs per peer, 16 section digests per `Sections`, 256 rule entries per `Rules` part and 64
 parts. `Message::validate` checks them all; `decode` runs it on every frame
 and `encode` refuses to send anything `decode` would refuse.
 
@@ -241,10 +240,10 @@ joiner                         host
   are compared. Lineage and packs are shown in the lobby and recorded in the
   replay; peers that differ only in textures, models or render recipes play
   together (D10).
-- `RulesDigest` is 32 bytes, room for SHA-256 over CON-35's resolved rules.
-  Until CON-35 lands, `ContentHashRules` puts today's `ContentDb::hash()`
-  (names, profile, features and every number the sim reads) in its first
-  eight bytes.
+- `RulesDigest` is 32 bytes: SHA-256 over CON-35's keyed entries of the
+  resolved rules (`ContentDb::digest`, `sta_content::digest`). Its first
+  eight bytes are `ContentDb::hash()`, which the sim digest, replays and
+  snapshots carry.
 - **Naming the key.** A digest cannot say what differs, so on a mismatch the
   host asks for the joiner's resolved rules (`RulesRequest`). The joiner sends
   them as `Rules` parts (`rules_parts`): sorted by key across all parts, keys
@@ -263,18 +262,18 @@ joiner                         host
 - **The seam for CON-35** is the `RulesIdentity` trait in `proto.rs`:
   `digest()` and `entries()` (every resolved key/value pair the digest
   covers, in a canonical rendering, sorted bytewise, keys unique and at most
-  96 bytes). `ContentHashRules` implements it today with one entry,
-  `content.hash`, so the whole flow works and is tested before CON-35 lands.
-  CON-35 then provides the real implementation and nothing in the protocol
-  changes.
-- **A question for CON-35 (flagged on #401).** Commands carry `ContentKey`s,
-  which index the name-sorted content table (S1). Two peers with equal rule
-  values but a different set of definition names would decode each other's
-  keys as different units. D10 says the digest covers "values, not names";
-  one reading that stays within it is that each definition's resolved values
-  are an entry keyed by the definition, so the set of definitions is
-  covered. Whether that reading is right is for CON-35 and, if it changes
-  D10, for a decision PR approved by Tammy and Cedric (open question 8).
+  96 bytes). The content digest (`sta_content::ContentDigest`, from
+  `ContentDb::digest()`) implements it, and `rules_refusal` is the host's
+  comparison. Keys are `RTS_CFG.h:<KEY>` for the typed header rules,
+  `unit:<odf>` and `weapon:<odf>` for each definition (its tech tree entry
+  included), `geometry:<odf>` for each unit's collision geometry,
+  `race:<stem>`, `techcap:<name>`, `resources:*` and `content:*`. Fleet
+  Operations 4.0 lists about 8,400 entries (33 parts), half the bound.
+- **Definition keys (flagged on #401, answered by the D10 amendment).**
+  Commands carry `ContentKey`s, which index the name-sorted content table
+  (S1), so peers must agree on the set of definitions, not only their
+  values. D10 as amended says definition keys are part of the comparison:
+  each definition is an entry keyed by its (lower-cased) ODF name.
 
 ## 6. Lobby, start and play
 
@@ -290,8 +289,8 @@ joiner                         host
   randomness), map, `GameOptions`, the seats (slot, team, race, occupant,
   name, and each peer's lineage and packs), the host's seat, the
   `TurnConfig`, and the rules digest everyone matched. The replay header
-  takes the digest, lineages and packs from here (CON-35 adds those fields to
-  the replay). `Start::player_setups(me)` maps seats to the sim's `Control` as
+  takes the digest, lineages and packs from here (replay format 4, CON-35:
+  `Replay::lineage`, `packs`, and `peers` through `Recorder::record_peers`). `Start::player_setups(me)` maps seats to the sim's `Control` as
   seen from seat `me`: own seat `Human`, other people `Remote`, computer
   players `Ai` on the host and `Remote` elsewhere.
 - **Turn records.** `TurnCommands { turn, slot, commands, schedule, digest }`,
@@ -321,6 +320,11 @@ joiner                         host
   divergence at *T* is seen about one turn plus one network trip after both
   peers have run *T*. NET-02's acceptance ("detected within 1 turn") is its
   own to measure against this.
+  *NET-02 as built:* the record a peer sends at the start of turn *T* (for
+  turn *T + delay*) carries its digest of the state at *T*'s first tick,
+  taken before *T* runs. A peer that finds a mismatch halts before sending
+  that record, so its `Desync` notice carries both digests and receivers
+  compare it like a record.
 - On a mismatch the peer:
   1. sends `Desync { slot, ours, theirs }` to everyone;
   2. writes its **replay** (`sta_sim::replay`, the same `Recorder` log it has
@@ -333,11 +337,25 @@ joiner                         host
   4. stops the match. The host puts a final pause in its record; there is no
      resume, only leaving. As in Armada II, a desynced game is not repaired;
      unlike Armada II, it does not run on in an undefined state. NET-04
-     replaces this step with a resync (NET_DECISIONS N2).
-- Comparing two peers' replays of the same game shows the first digest that
-  differs between machines; finding which subsystem diverged needs a state
-  dump (out of scope; open question 6). Section digests name it instead
-  (NET_DECISIONS N6).
+     replaces this step with a resync (NET_DECISIONS N2): see "NET-04 as
+     built" in section 9.
+- **Section digests (NET-06, NET_DECISIONS N6; protocol 2).** Beside each
+  turn's digest a peer keeps `Sim::section_digests()` (roster, movement,
+  combat, economy, rng; `sta_sim::digest`) for the same 64 turns. On a
+  mismatch at turn *T* a peer sends `Sections { tick, digests }` once for *T*
+  (appended message, tag 21: one `u64` per section in `SectionDigests::NAMES`
+  order, at most `MAX_SECTIONS` = 16, ticks on a turn boundary only; a
+  receiver keeps at most 64 turns per seat, oldest out). The sidecar then
+  lists every seat's section digests for the first differing tick and one
+  `first differing sections, seat A against seat B: movement, combat` line
+  per other seat. No state dump travels.
+- **Offline bisect.** The sidecar names a turn and a section; the replays
+  name everything else. `sta-bench desync <a.star> <b.star>` (TESTBENCH.md,
+  "Reproducing a desync") re-simulates both replays, finds the first *tick*
+  whose state differs (before the turn boundary the router noticed it on),
+  prints the entity fields that differ in the differing sections and the
+  commands applied just before, and cross-checks each sidecar. It needs no
+  `sta64` build.
 
 ## 8. Stalls, drops, leaving and rejoining
 
@@ -358,6 +376,13 @@ joiner                         host
   last record before it, and puts `Action::Drop { slot, last_turn, then }` in
   its record. Every peer counts that seat's records up to `last_turn` and has
   no others.
+  *NET-02 amendment.* The host is itself stalled on that seat, so its next
+  record cannot wait for the next turn boundary, and a peer stalled on the
+  seat cannot read the record that releases it by running turns. So the host
+  sends the record carrying the `Drop` at once, a turn beyond its usual lead
+  (`LockstepRouter::extend_lead`; a sender's lead may be any size, 3.2), and a
+  receiver takes a `Drop` into account when the host's record arrives, not
+  when its turn is reached. `last_turn` is final, so this is safe.
 - **What a drop does to the sim** must be in the command log, or the replay
   will not reproduce it. AI takeover is: the host's AI sends that seat's
   commands from `last_turn + 1`. Elimination is not yet: no `Command`
@@ -391,10 +416,11 @@ joiner                         host
   - The host can do this because it keeps the whole turn log, which it needs
     for its replay anyway: a 30-minute game is 18,000 turns per seat, mostly
     empty, well under a megabyte.
-  - Snapshot-based resync (sending state instead of history) is deferred: it
-    needs a proof that a snapshot loaded on another machine continues with
-    the same digests, and it is the only way to rejoin a long game quickly
-    (open question 4). Decided: NET_DECISIONS N4, built by NET-04.
+  - *NET-04 as built* rejoins from a snapshot in every case (a restarted
+    client has no sim, and a client that kept its sim is brought to the same
+    turn by the same path, since the host keeps no log): `next_turn` is
+    informational, and the whole-log catch-up described above is not built.
+    Section 9, "NET-04 as built", has the flow.
 
 ## 9. Relay model (for NET-03)
 
@@ -413,9 +439,9 @@ joiner                         host
 
   | Role | Messages |
   |---|---|
-  | Host only | `Welcome`, `Refuse`, `RulesRequest`, `Lobby`, `Start`, `Resume`, `Rejoined`, `Replayed`, `CatchUpDone` |
-  | Non-host, to the host only | `Hello`, `Rules`, `SeatChoice`, `Request`, `DropVote`, `Rejoin` |
-  | Any seated peer | `Turn`, `Ping`, `Pong`, `Chat`, `Desync`, `Leave` |
+  | Host only | `Welcome`, `Refuse`, `RulesRequest`, `Lobby`, `Start`, `Resume`, `Rejoined`, `Replayed`, `CatchUpDone`, `SnapshotOffer`, `SnapshotPart`, `SnapshotRefused`, `Resynced`, `Arrived` |
+  | Non-host, to the host only | `Hello`, `Rules`, `SeatChoice`, `Request`, `DropVote`, `Rejoin`, `ResyncRequest`, `ResyncAck` |
+  | Any seated peer | `Turn`, `Ping`, `Pong`, `Chat`, `Desync`, `Sections`, `Leave` |
 
 - **Directed frames.** The envelope carries a destination mask and the relay
   delivers to it only. Everything in the handshake and rejoin goes only
@@ -432,6 +458,141 @@ joiner                         host
   limit on rooms and on join-code lookups.
 - Direct peer-to-peer paths (hole punching) are an optimisation the protocol
   does not depend on; v1 relays everything (section 11).
+
+*NET-03 as built* (`crates/sta_net/src/transport/`, `bin/relay.rs`):
+
+- **Transport: TCP, standard library only.** One connection per peer to the
+  relay; a reader and a writer thread per connection. Reliable and ordered per
+  sender, which is all the router needs, so loss and reorder do not occur at
+  this layer; slowness does, and is the router's stall. A QUIC or WebSocket
+  transport would be another implementation of `lockstep::Transport`.
+- **Envelope** between client and relay (`transport::wire`): `u32` length,
+  kind byte, fields; its own version (`RELAY_VERSION`), independent of
+  `PROTOCOL_VERSION`. Client to relay: `Create`, `Join` (optionally reclaiming a
+  vacated seat), `Data { mask, frame }`, `Keepalive`, `Kick`, `SetOpen`, `Leave`.
+  Relay to client: `Created`, `Joined`, `Refused`, `Data { from, from_host, frame }`,
+  `Departed`, `Keepalive`. The relay checks only the frame header (`peek_header`,
+  any version) and that the frame fills the envelope exactly.
+- **Seat = relay slot = `PlayerId`.** The host is seat 0 and joiners take the
+  lowest free seat, so the relay's stamp is the game's seat. A lobby that wants
+  computer players in particular seats must give them seats no joiner holds.
+- **Room codes** are six characters from a 31-character alphabet without
+  look-alikes (`K7M-Q2X`), from OS randomness; an optional password of at most
+  32 bytes (sent in the clear, like everything; section 10).
+- **Departure markers.** Forwarding and departures happen under one lock, so
+  for every receiver a seat's frames precede its marker. `NetControl::
+  take_departures` yields a marker only after `poll` has returned everything
+  before it. `Kick` (host only) removes a seat's connection under the same lock,
+  so frames still in flight from it are discarded and the marker is the last
+  word. After the host's connection ends the room accepts nobody new.
+- **Closed rooms and rejoin.** `SetOpen(false)` (the host sends it at `Start`)
+  stops new joiners; a seat that vacates in a closed room is reserved, and only a
+  `Join` that names it (`NetTransport::rejoin`) may take it. The relay cannot
+  tell whose seat it was; the host does, by the `Rejoin` token, and may kick an
+  impostor.
+- **Limits** (`RelayConfig`): 15 s idle (keepalives every 5 s), 5 s for the
+  handshake, 10 s to finish a half-sent envelope, 128 KiB/s per connection,
+  16 connections and 4 rooms per address, 512 connections and 128 rooms in
+  all, 10 failed joins per address per minute, and a bounded outgoing queue per
+  connection (a client that cannot keep up is disconnected, not buffered).
+  The client bounds its inbox (4 MiB) and send queue the same way and checks
+  the relay's messages as strictly as a peer's.
+- **Router bounds** (NET-03 hardening of NET-02): a seat more than
+  `MAX_QUEUED_TURNS` (128) records ahead is faulted; digest bookkeeping keeps
+  only ticks the peer itself has digests for; unread events are capped
+  (`MAX_EVENTS`).
+- **Not built:** ping-based delay adaptation and the stall timer (they need the
+  game's clock; INT/UI), encryption and accounts (section 11). The
+  `Rejoin` catch-up exchange over `rejoin` is NET-04's (below).
+
+*NET-04 as built* (`crates/sta_net/src/resync.rs`, protocol version 3):
+
+- **Two paths, one transfer.** A *rejoin* (a seat whose connection was lost
+  comes back, section 8) and a *resync* (a peer that desynced is repaired,
+  NET_DECISIONS N2 to N4) share the transfer: `[Start]`, `SnapshotOffer`,
+  numbered `SnapshotPart`s, the records every seat has queued as `Replayed`,
+  `CatchUpDone`, all directed host to peer. They share nothing else. The
+  rejoiner has no sim or router and is a `Rejoiner` that ends in a `Peer`; the
+  resyncing peer is a stopped `Peer` that asks (`ResyncRequest`), loads and
+  continues. Neither ever replays the log from turn 0: the host keeps no log
+  beyond the router's queues, so the whole-log rejoin of the original design
+  (and N4's "fallback") is not built.
+- **Wire (appended, tags 22 to 28; existing tags unmoved).** `SnapshotOffer`
+  (kind, tick, snapshot format, content hash, full digest, section digests,
+  size, chunk, part count, FNV-1a hash, and the host's `RouterSeed`: next turn,
+  current `TurnConfig`, each seat's next turn and drop, the seats the host
+  speaks for, last `seq` seen per sender and player, pending resumes),
+  `SnapshotPart`, `SnapshotRefused`, `ResyncRequest`, `ResyncAck`, `Resynced`
+  (every player is told, N3), `Arrived` (a rejoin completed, the signal NET-03
+  noted was missing). Bounds: a snapshot is at most 8 MiB in at most 256 parts
+  of at most 32 KiB; at most 1024 catch-up records (8 MiB of wire bytes); an
+  offer's counts must agree before a byte is buffered, and what a receiver
+  holds grows with what has arrived, not with what the offer claims.
+- **Turn boundary.** The snapshot is the sim at a turn's first tick, before its
+  commands apply, taken by the host's `Peer::step` when it reaches the
+  boundary (the same state the per-turn digest covers), with the router's queue
+  at that moment. A rejoiner (or resyncer) adopts the seed, then releases the
+  queued turns through its ordinary `step`, so a host that is ahead of the
+  stalled seat costs the rejoiner a fast-forward, not the others a wait.
+- **Rejoin flow.** The client reclaims its seat at the relay
+  (`NetTransport::rejoin`), sends `Rejoin` (the `Hello` of a joiner, its
+  token); the host checks it is that seat (the relay's stamp), that the seat
+  is vacated (the departure marker was read), the token, the build and rules,
+  and its limits, answers `Rejoined` (the new token, the old one spent) and
+  serves `Start`, the offer, the parts, the records and `CatchUpDone`; the
+  rejoiner loads, verifies the digest and every section digest (a mismatch
+  names the sections), builds its `Peer`, replays its live stash, and sends
+  `ResyncAck`; the host tells everyone `Arrived`. The others stall on the seat
+  until then (the stall dialog and the drop vote are the lobby's; the host must
+  not drop a seat for which `Peer::rejoin_in_progress` is true).
+- **Resync flow.** The peers that find a mismatch stop (NET.md section 7,
+  steps 1 to 3 as before). A stopped peer whose digest at the first differing
+  tick differs from the host's sends `ResyncRequest` (that tick, its digest,
+  its next turn); the host checks that this is a divergence it knows of,
+  runs on to its next turn boundary, waits until it holds the records every
+  seat sent up to the requester's position, and serves. The requester loads,
+  verifies, adopts the router state (keeping any live record the host's copy
+  does not cover, and requiring those it does cover to be identical), clears
+  its stop and acks with its digest. The host compares the ack with the
+  snapshot's digest and tells everyone `Resynced` (the last one releases the
+  peers that were stopped but not diverged, the host included). A wrong ack, a
+  failed load or a refusal leaves the match stopped for that peer, as
+  section 7 says (N4.4). The host, even when its state is the odd one out,
+  wins (N3): the others request.
+- **Limits.** Per seat, a fixed ledger (rejoins 8, resyncs 3 per match, five
+  bad rejoin attempts, a request interval of 2 s; requests inside it are not
+  answered); a seat over its limit is refused `LimitReached` and the host
+  raises `ResyncEvent::LimitReached`, which the stall dialog reads (N4.5); a
+  seat with too many bad attempts raises `SeatAbuse`, which the lobby may
+  answer with a kick. At most 2 transfers at a time; a transfer is paced at
+  96 KiB/s (the relay's limit is 128 KiB/s per connection), and has a send
+  deadline, an ack deadline and, on the receiver, offer, idle and total
+  deadlines.
+- **Trust model.** The host's state is accepted (N3, until a referee exists,
+  N5): at the moment of loading no second source exists, since the other peers
+  are stopped or have sent nothing the host did not also see. A receiver
+  checks that it asked; the sender; format; content hash; the snapshot's own
+  provenance against the host seat in `Start`; sizes and order; the FNV hash
+  (damage only); the header; that the snapshot loads; the full and section
+  digests; the authority of every catch-up record. Afterwards every live
+  record that repeats one the host carried must be identical to it, and every
+  digest in later records is compared with the loaded sim as always, so a
+  host that lies about the state is found by the first peer that disagrees and
+  the match stops. What the host can still do is choose the state the game
+  continues from; that is what N3 accepts.
+- **Replay.** A resynced peer's replay keeps the commands it applied before the
+  snapshot's tick and goes on from it; its sidecar says where it was resynced
+  and that its earlier digests may differ from the authority's. The
+  authority's replay is the replay of record. A rejoined peer's replay holds no
+  commands before its snapshot and says so. No replay format change was
+  needed.
+- **AI seats.** Which seats are computer players is session state (the tech
+  gate and passive income read it inside `step`): `Start::player_setups`
+  gives every non-host peer `Control::RemoteAi` for an AI seat, so all peers
+  build the same `Sim::ai_seats`, which is in the full and roster digests and
+  in the snapshot. Only the host runs the controller; its commands travel
+  through the router like a player's. A seat taken over by the AI after a
+  drop does not join `ai_seats` on any peer.
 
 ## 10. Security
 
@@ -468,8 +629,8 @@ Every peer is untrusted, and so is anything relayed.
 - Observers / spectators (Fleet Operations has them). The seat model leaves
   room: an observer would be a connection with no seat that receives turns
   and sends none.
-- Multiplayer save and load (Armada II 1.1's Ctrl+S), and snapshot resync
-  (the latter until NET-04; NET_DECISIONS N2, N4).
+- Multiplayer save and load (Armada II 1.1's Ctrl+S). (Snapshot resync is
+  built by NET-04.)
 - Map download; peers need the same map file.
 - Playing on after a desync, by majority or otherwise (until NET-04, and
   then by resync from the host or a referee, never by majority;
@@ -491,9 +652,9 @@ Every peer is untrusted, and so is anything relayed.
 - **NET-03** builds the transport (reliable ordered frames; the envelope with
   the sender stamp, host flag and destination mask; departure markers), the
   relay rooms with codes and passwords, rejoin transport and limits.
-- **CON-35** implements `RulesIdentity` for its typed rules (keys at most 96
-  bytes, every covered value listed; section 5) and adds rules digest,
-  lineages and packs to the replay and snapshot headers.
+- **CON-35** (done) implements `RulesIdentity` with the keyed content digest
+  (keys at most 96 bytes, every covered value listed; section 5) and adds
+  lineages and packs to the replay (format 4) and snapshot (format 15).
 - **UI-11** shows the lobby, the refusal with the named key, the stall
   dialog, and the High Latency box. It will find that `GameOptions` (S7) does
   not yet express all of Armada II's multiplayer setup data: `RTS_CFG.h` has
@@ -533,6 +694,8 @@ Every peer is untrusted, and so is anything relayed.
    must also agree on the set of definitions, not only rule values. Is the
    reading in section 5 (each definition an entry, valued by its resolved
    values) within D10, or does D10 need a decision PR?
+   **Decided:** D10 as amended on 2026-11-12 compares definition keys; CON-35
+   keys each definition's entry by its ODF name.
 9. **Elimination as a command.** Agree that NET-02 adds an S2 command (a
    `SCRIPT` edit) that eliminates a player, so a dropped seat's elimination
    is in the replay?

@@ -71,6 +71,23 @@ impl EntityKind {
         }
     }
 
+    /// Whether the player never sees `def`: its ODF says `hidden = 1`.
+    ///
+    /// Fleet Operations and Dominion War mark their engine helpers this way:
+    /// the start pods and faction objects a race's `standardUnits` place
+    /// (`all_ai_pod`, `all_start`, `fed_effectsS`, ...: `classLabel = "pod"`,
+    /// `basename = "effect_empty"`, `mapicon = "mapicon_empty"`), the pods
+    /// their start weapons spawn (`unitcap_pod`, `ai_pod_*`) and map triggers
+    /// (`trigger_derelictcreation`). Such an object exists in the world
+    /// (scripts, weapons and the tech tree see it) but is not the player's to
+    /// pick, so the view leaves it out of every visible set
+    /// ([`crate::Sim`]'s view). Their lifecycle (expiry, replacement) is
+    /// `start_effects.rs`. Some `hidden = 1` effects do have models (FO's
+    /// `effect_mstorm`); none reach the sim yet.
+    pub fn hidden(def: &sta_content::UnitDef) -> bool {
+        def.hidden
+    }
+
     /// The kind for a definition, from its ODF class (docs/data/odf_classes.md).
     /// Unlisted classes that can move count as craft, the rest as props.
     pub fn of(class: &ClassLabel, movement: &MoveStats) -> EntityKind {
@@ -255,6 +272,7 @@ impl Entity {
             progress: self.progress,
             crew: self.crew,
             energy: None,
+            autonomy: None,
         }
     }
 

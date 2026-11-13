@@ -12,7 +12,7 @@ use super::data::{Browse, ScreenData, SelectedMod, SettingKey, SetupDraft, Setti
 use super::{Col, ListScroll, Screen};
 use crate::app::AppState;
 use crate::ui::i18n::{tr, trf};
-use crate::ui::theme::{Theme, button, disabled_button, label, list, panel, slider, toggle};
+use crate::ui::theme::{Theme, button, disabled_button, kit_panel, label, list, slider, toggle};
 
 /// A screen's root node: everything of the screen hangs under it.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,10 +86,20 @@ pub struct Ctx<'a> {
     pub settings: &'a Settings,
     pub selected: &'a SelectedMod,
     pub scroll: &'a ListScroll,
+    pub layout: super::stock::ScreenLayout,
+    /// The box the stock screens are laid out in, logical px.
+    pub stock_box: Vec2,
+    /// The options screen's selected tab.
+    pub options_tab: usize,
+    /// The installed campaigns (UI-25), for Single Player's cards.
+    pub campaigns: Option<&'a crate::frontend::campaign::Campaigns>,
 }
 
 /// Spawn `screen`; `camera` is the UI camera when the host has one of its own.
 pub fn spawn(commands: &mut Commands, screen: Screen, ctx: &Ctx, camera: Option<Entity>) {
+    if ctx.layout == super::stock::ScreenLayout::Stock && super::stock::covers(screen) {
+        return super::stock::spawn(commands, screen, ctx, camera);
+    }
     match screen {
         Screen::Main => frame(commands, ctx, screen, camera, &tr("Star Trek Armada"), 520.0, main_menu(ctx)),
         Screen::SinglePlayer => frame(commands, ctx, screen, camera, &tr("Single player"), 620.0, single_player(ctx)),
@@ -97,6 +107,8 @@ pub fn spawn(commands: &mut Commands, screen: Screen, ctx: &Ctx, camera: Option<
         Screen::MapSelect => frame(commands, ctx, screen, camera, &tr("Select map"), 760.0, map_select(ctx)),
         Screen::Settings => frame(commands, ctx, screen, camera, &tr("Options"), 760.0, settings(ctx)),
         Screen::ModSelect => frame(commands, ctx, screen, camera, &tr("Mods"), 900.0, mod_select(ctx)),
+        // Drawn by `frontend::campaign` (UI-25) and `frontend::lobby` (UI-11), which have their own systems.
+        Screen::Missions | Screen::Briefing | Screen::Debrief | Screen::Multiplayer | Screen::HostGame | Screen::JoinGame | Screen::Lobby => {}
     }
 }
 
@@ -106,7 +118,7 @@ fn frame(commands: &mut Commands, ctx: &Ctx, screen: Screen, camera: Option<Enti
         DespawnOnExit(AppState::FrontEnd),
         // Clear: the menu scene (UI-06) shows through.
         Node { width: Val::Percent(100.0), height: Val::Percent(100.0), align_items: AlignItems::Center, justify_content: JustifyContent::Center, ..default() },
-        children![(Node { width: Val::Px(width), flex_direction: FlexDirection::Column, ..default() }, children![panel(ctx.theme, title, content)])],
+        children![(Node { width: Val::Px(width), flex_direction: FlexDirection::Column, ..default() }, children![kit_panel(ctx.theme, title, content)])],
     ));
     if let Some(c) = camera {
         root.insert(UiTargetCamera(c));
@@ -137,8 +149,7 @@ fn main_menu(ctx: &Ctx) -> impl Bundle {
     content(ctx.theme, move |p| {
         p.spawn((button(&t, &tr("Single player"), w), Act::Goto(Screen::SinglePlayer)));
         p.spawn((button(&t, &tr("Instant action"), w), Act::Goto(Screen::Setup)));
-        // The lobby (UI-11) opens this.
-        p.spawn(disabled_button(&t, &tr("Multiplayer"), w));
+        p.spawn((button(&t, &tr("Multiplayer"), w), Act::Goto(Screen::Multiplayer)));
         p.spawn((button(&t, &tr("Mods"), w), Act::PickMod));
         p.spawn((button(&t, &tr("Options"), w), Act::Goto(Screen::Settings)));
         p.spawn((button(&t, &tr("Exit"), w), Act::Exit));
@@ -147,12 +158,23 @@ fn main_menu(ctx: &Ctx) -> impl Bundle {
 
 fn single_player(ctx: &Ctx) -> impl Bundle {
     let t = ctx.theme.clone();
+    let cards: Vec<Option<(String, bool)>> = (0..4).map(|i| crate::frontend::campaign::card(ctx.campaigns, i)).collect();
     let w = 520.0;
     content(ctx.theme, move |p| {
-        // The campaigns need the mission scripts (LUA lane); the cards stand
-        // where Refit's `single_player.rs` has them.
-        for name in ["Tutorials", "Federation campaign", "Klingon campaign", "Borg campaign"] {
-            p.spawn(disabled_button(&t, &tr(name), w));
+        // The cards stand where Refit's `single_player.rs` has them; with the installed
+        // campaigns (UI-25) each opens its mission list, else they stay off.
+        for (i, name) in ["Tutorials", "Federation campaign", "Klingon campaign", "Borg campaign"].into_iter().enumerate() {
+            match cards[i].clone() {
+                Some((text, true)) => {
+                    p.spawn((button(&t, &text, w), crate::frontend::campaign::CampaignAct::Card(i)));
+                }
+                Some((text, false)) => {
+                    p.spawn(disabled_button(&t, &text, w));
+                }
+                None => {
+                    p.spawn(disabled_button(&t, &tr(name), w));
+                }
+            }
         }
         p.spawn(disabled_button(&t, &tr("Load game"), w));
         p.spawn((button(&t, &tr("Previous menu"), w), Act::Goto(Screen::Main)));

@@ -1,2 +1,6 @@
 /target
 *.log
+/.claude/locks/
+/.claude/target-check/
+__pycache__/
+*.pyc
