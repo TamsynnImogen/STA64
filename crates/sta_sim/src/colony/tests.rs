@@ -492,16 +492,9 @@ fn a_snapshot_with_a_dangling_colony_row_is_refused() {
     let mut sim = game(Arc::clone(&db));
     let planet = spawn(&mut sim, "fx_pl_h", NEUTRAL, at(0, 0));
     set_pop(&mut sim, planet, 10);
-    let mut bytes = sim.snapshot();
-    // The colony record is the last: rewrite its planet id to one that does not exist.
-    let rec = sim.colonies().to_rec();
-    let good = postcard::to_allocvec(&rec).unwrap();
-    assert!(bytes.ends_with(&good));
-    let mut bad = rec;
+    let mut bad = sim.colonies().to_rec();
     bad.planets[0].0 = EntityId(4000);
-    let cut = bytes.len() - good.len();
-    bytes.truncate(cut);
-    bytes.extend(postcard::to_allocvec(&bad).unwrap());
+    let bytes = crate::snapshot::chain_with_colonies(&sim.snapshot(), &bad);
     assert!(Sim::from_snapshot(&bytes, Some(db)).is_err());
 }
 

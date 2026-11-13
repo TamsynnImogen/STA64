@@ -649,6 +649,12 @@ impl Sim {
     }
 }
 
+/// Test helper: `bytes` with the colony record replaced.
+#[cfg(test)]
+pub(crate) fn chain_with_colonies(bytes: &[u8], rec: &crate::colony::ColoniesRec) -> Vec<u8> {
+    chain::with(bytes, chain::COLONIES, chain::enc(rec))
+}
+
 #[cfg(test)]
 #[path = "snapshot/subsystem_tests.rs"]
 mod subsystem_tests;

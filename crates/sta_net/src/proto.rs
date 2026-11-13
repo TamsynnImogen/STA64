@@ -2025,7 +2025,7 @@ mod tests {
         );
     }
 
-    const GOLDEN: u64 = 2227328615839948453;
+    const GOLDEN: u64 = 14411688607191275600;
 
     /// Tags are positional and never move: NET-04 appended 22 to 28 after
     /// `Sections` (21), the last tag of protocol 2.
@@ -2218,8 +2218,8 @@ mod tests {
         assert_eq!(peek_header(&bytes), Ok((1, bytes.len() - HEADER_LEN)));
         // A version notice from another build reads as its version.
         let mut notice = version_notice();
-        notice[4..6].copy_from_slice(&7u16.to_le_bytes());
-        assert_eq!(decode(&notice), Err(ProtoError::Version { found: 7 }));
+        notice[4..6].copy_from_slice(&8u16.to_le_bytes());
+        assert_eq!(decode(&notice), Err(ProtoError::Version { found: 8 }));
         // Our own version with no body is not a message.
         assert_eq!(decode(&version_notice()), Err(ProtoError::Empty));
         bytes[0] = b'X';
