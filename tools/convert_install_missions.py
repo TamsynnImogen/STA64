@@ -66,6 +66,14 @@ def data_dir(env=None, system=None):
     return os.path.join(base, "sta64") if base else None
 
 
+def child(d, name):
+    """`d/name` for a folder spelled in any case, or None."""
+    try:
+        return next((os.path.join(d, n) for n in os.listdir(d) if n.lower() == name.lower() and os.path.isdir(os.path.join(d, n))), None)
+    except OSError:
+        return None
+
+
 def is_armada1(install):
     """An Armada I root: Armada.exe and no Armada2.exe (`tools/a1_to_lua.py` converts it)."""
     names = {n.lower() for n in os.listdir(install)}
@@ -99,11 +107,14 @@ def main(argv=None):
         sys.exit(f"--install {a.install}: not a folder")
     names = {n.lower() for n in os.listdir(install)}
     if "armada.exe" not in names and "armada2.exe" not in names:
-        sys.exit(f"--install {a.install}: neither an Armada I root (Armada.exe) nor an Armada II root (Armada2.exe) "
-                 "(point --install at the game's own folder, the one holding the .exe)")
+        data = child(install, "Data")
+        if data and any(n.lower() in ("armada2.exe", "armadal.exe") for n in os.listdir(data)):
+            sys.exit(f"--install {a.install}: a Fleet Operations style install (engine in Data/): it ships Lua missions, "
+                     "there are no mission DLLs to convert")
+        sys.exit(f"--install {a.install}: neither an Armada I root (Armada.exe) nor an Armada II root (Armada2.exe)")
     installs = [install]
     # Only the base game's own missions folder: never a mod's DLLs under Data/Mods (D6).
-    mdir = next((os.path.join(install, d, "missions") for d in ("", "Data") if os.path.isdir(os.path.join(install, d, "missions"))), None)
+    mdir = next((m for m in (child(install, "missions"), child(child(install, "Data") or install, "missions")) if m), None)
     if not mdir:
         sys.exit(f"--install {a.install}: no missions folder")
     out = a.out
@@ -120,14 +131,14 @@ def main(argv=None):
     else:
         cmd = [sys.executable, "-I", str(HERE / "dsl_to_lua.py"), "--out", out, "--engine", install, "--install", mdir]
         # The base game's maps name the mission DLLs: each map gets the script under its own stem.
-        bdir = os.path.join(os.path.dirname(mdir), "bzn")
-        if os.path.isdir(bdir):
+        bdir = child(os.path.dirname(mdir), "bzn")
+        if bdir:
             cmd += ["--install", bdir]
     for m in a.only or []:
         cmd += ["--only", m]
     print(f"converting {install} -> {out}", flush=True)
     outm = os.path.join(out, "missions")
-    if os.path.isdir(outm):  # a re-run replaces the previous conversion
+    if os.path.isdir(outm) and not a.only:  # a full re-run replaces the previous conversion
         for f in os.listdir(outm):
             if f.endswith(".lua"):
                 os.remove(os.path.join(outm, f))
