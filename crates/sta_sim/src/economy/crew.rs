@@ -212,11 +212,7 @@ mod tests {
     fn an_unfinished_starbase_adds_no_crew() {
         let mut sim = game(db(4.0, Some(250), "maxCrewGain = 3000\n"), 750);
         let key = sim.content().unwrap().key("fx_starbase").unwrap();
-        let (cmd, at) = (
-            Edit::Spawn { odf: key, player: PlayerId(0), pos: Vec3 { x: Fixed::ZERO, y: Fixed::ZERO, z: Fixed::ZERO }, heading: (Fixed::ZERO, Fixed::ONE) },
-            (),
-        );
-        let _ = at;
+        let cmd = Edit::Spawn { odf: key, player: PlayerId(0), pos: Vec3 { x: Fixed::ZERO, y: Fixed::ZERO, z: Fixed::ZERO }, heading: (Fixed::ZERO, Fixed::ONE) };
         sim.step(&[Command { player: PlayerId::BENCH, seq: 0, kind: CommandKind::Edit(cmd) }]);
         let id = sim.units.iter().next().unwrap().id;
         sim.units.get_mut(id).unwrap().progress = Some(Fixed::from_f64(0.5));
