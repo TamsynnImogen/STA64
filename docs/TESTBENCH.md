@@ -670,7 +670,7 @@ one `<UTC stamp>-t<tick>/` folder per capture. Never inside a game install.
 
 | File | What |
 |---|---|
-| `capture.json` | the index (`CaptureIndex`): tick, digest, map, seed, content hash, profile, seats (race, control), the mount (install root, active mod, layers in priority order), build (version, git commit, OS), selected units (id, definition, owner, race, position, hull, flags), the unit under the cursor, the cursor on the ground (map space), the camera pose |
+| `capture.json` | the index (`CaptureIndex`): tick, digest, map, seed, content hash, profile, seats (race, control), the mount (install root, active mod, layers in priority order), build (version, git commit, OS), selected units (id, definition, owner, race, position, hull, flags), the unit under the cursor, the cursor on the ground (map space), the camera pose, what the click picking returned for the cursor ray (`pick`), whether the pointer was over a HUD panel (`pointer_over_hud`), whether a placement or targeting click was pending (`click_pending`) and the window size. Strict JSON (`jq` reads it); older captures with bare keys still load |
 | `capture.md` | the same for people |
 | `replay.star` | a `sta_sim::replay::Replay`: the start configuration (the whole `MapDef` is in it), every command the sim was given, digests every 30 ticks |
 | `snapshot.sta` | `Sim::snapshot` at the capture tick |

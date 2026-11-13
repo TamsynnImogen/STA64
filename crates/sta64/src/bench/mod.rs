@@ -147,7 +147,7 @@ fn run_headless_inner(cfg: &LaunchConfig) -> i32 {
     if cfg.frames.is_empty() {
         app.add_plugins(MinimalPlugins.set(runner));
     } else {
-        // The audio device is never opened: a bench frame has no sound.
+        // The audio device is never opened: a bench frame has no sound (bevy_audio is not compiled in).
         // Frames: the renderer without a window (an offscreen image target).
         use bevy::render::RenderPlugin;
         use bevy::window::ExitCondition;
@@ -156,8 +156,7 @@ fn run_headless_inner(cfg: &LaunchConfig) -> i32 {
                 .set(WindowPlugin { primary_window: None, exit_condition: ExitCondition::DontExit, ..default() })
                 .set(RenderPlugin { synchronous_pipeline_compilation: true, ..default() })
                 .set(ImagePlugin::default_linear())
-                .disable::<bevy::winit::WinitPlugin>()
-                .disable::<bevy::audio::AudioPlugin>(),
+                .disable::<bevy::winit::WinitPlugin>(),
         )
         .add_plugins(runner);
         if let Some(info) = app.world().get_resource::<bevy::render::renderer::RenderAdapterInfo>()

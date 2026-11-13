@@ -156,8 +156,13 @@ pub fn apply(
     cams: Query<Entity, NotBackground>,
     added: Query<Entity, (Added<Camera3d>, Without<BackgroundCamera>)>,
     marked: Query<(), With<PostFxMsaa>>,
+    profile: Option<Res<crate::render::profile::RenderProfile>>,
+    effects: Option<Res<crate::render::profile::ProfileEffects>>,
 ) {
-    if !fx.is_changed() && added.is_empty() {
+    // Stock (RND-24): the original draws with no tonemapper unless one is asked for.
+    let stock = matches!((profile.as_deref(), effects.as_deref()), (Some(p), Some(e)) if e.implementation(*p, crate::render::profile::Effect::Post) == crate::render::profile::RenderProfile::Stock);
+    let stock_changed = profile.as_ref().is_some_and(|p| p.is_changed()) || effects.as_ref().is_some_and(|e| e.is_changed());
+    if !fx.is_changed() && added.is_empty() && !stock_changed {
         return;
     }
     for e in &cams {
@@ -176,7 +181,7 @@ pub fn apply(
         if !fx.bloom && !fx.auto_exposure {
             cam.try_remove::<Hdr>();
         }
-        cam.try_insert(fx.tonemapping.unwrap_or_default());
+        cam.try_insert(fx.tonemapping.unwrap_or(if stock { Tonemapping::None } else { Tonemapping::default() }));
         if fx.vignette {
             cam.try_insert(Vignette { intensity: fx.vignette_intensity, ..default() });
         } else {

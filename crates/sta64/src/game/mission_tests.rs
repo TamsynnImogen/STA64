@@ -246,6 +246,39 @@ fn leaving_a_mission_abandons_it_and_changes_nothing() {
     assert_eq!(app.world().resource::<Seen>().ended, 1);
 }
 
+/// UI-34: Esc, Exit to main menu and Yes end a mission as F10 does: an abandon, progress unchanged, the
+/// same debrief; and the menu is closed and the sim runs again for the next one.
+#[test]
+fn leaving_a_mission_through_the_in_game_menu_abandons_it_as_f10_does() {
+    use crate::ui::ingame_menu::{InGameMenu, InGameMenuPlugin, MenuAct, MenuPage};
+    let mut app = app(fixture(false, None));
+    app.add_plugins(InGameMenuPlugin);
+    start_from_screens(&mut app, 1);
+    settle(&mut app, 3);
+    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Escape);
+    settle(&mut app, 1);
+    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(KeyCode::Escape);
+    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+    assert!(app.world().resource::<InGameMenu>().open);
+    assert!(app.world().resource::<crate::clock::AnimClock>().paused(), "single player pauses");
+    let ask = app.world_mut().query::<(Entity, &MenuAct)>().iter(app.world()).find(|(_, a)| **a == MenuAct::AskExit).unwrap().0;
+    click(app.world_mut(), ask);
+    settle(&mut app, 3);
+    assert_eq!(app.world().resource::<InGameMenu>().page, MenuPage::ConfirmExit);
+    assert_eq!(campaigns(&app).progress.state("federation").reached, 0);
+    let yes = app.world_mut().query::<(Entity, &MenuAct)>().iter(app.world()).find(|(_, a)| **a == MenuAct::Confirm).unwrap().0;
+    click(app.world_mut(), yes);
+    settle(&mut app, 5);
+    assert_eq!(state(&app), AppState::FrontEnd);
+    assert_eq!(screen(&app), Screen::Debrief);
+    assert_eq!(campaigns(&app).debrief.as_ref().unwrap().result, RunResult::Abandoned);
+    assert_eq!(campaigns(&app).progress.state("federation").reached, 0);
+    assert_eq!(app.world().resource::<Seen>().ended, 1);
+    assert!(!app.world().resource::<InGameMenu>().open);
+    assert!(!app.world().resource::<crate::clock::AnimClock>().paused());
+    assert_eq!(app.world_mut().query::<&crate::ui::ingame_menu::MenuRoot>().iter(app.world()).count(), 0);
+}
+
 #[test]
 fn a_blocked_mission_does_not_start() {
     let mut cs = fixture(false, None);
