@@ -43,8 +43,8 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// (CON-35) added the [`Provenance`] record and the keyed content digest's
 /// hash. Format 17 appends the mission-set subsystem switches and damage
 /// (SIM-55). Format 18 (SIM-36) appends the attack approach record
-/// (crafts in warp). Format 19 appends the stuck-order watch rows last. Only the current format is read.
-pub const FORMAT_VERSION: u16 = 19;
+/// (crafts in warp). Format 19 appends the stuck-order watch rows last; format 20 adds each row's anchor position and tick. Only the current format is read.
+pub const FORMAT_VERSION: u16 = 20;
 
 const HEADER: usize = 4 + 2 + 4 + 8;
 
