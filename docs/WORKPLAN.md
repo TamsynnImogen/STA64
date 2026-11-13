@@ -863,7 +863,8 @@ where lanes meet in one PR.
   seams change additively only (new variants, new fields with defaults, new
   methods). A breaking change waits for the milestone boundary, bumps
   `SEAM_REV`, and the seam PR fixes every caller on main.
-- **Merging:** rebase on `main`, CI green, done-when shown. The user merges.
+- **Merging:** rebase on `main`, CI green (what a PR runs and when to add
+  `full-ci`: AGENTS.md "Finishing"), done-when shown. The user merges.
   Squash merge, one commit per package.
 - **Stale fakes:** when the real thing lands (CON-03, SIM-04), fakes stay
   and keep working; tests that used them keep running in CI.

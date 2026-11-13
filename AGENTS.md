@@ -102,7 +102,18 @@ paths fall under an open freeze wait; ones elsewhere carry on.
   decisions the plan did not dictate, and new `TODO.md` check lines.
 - Open it as a draft until the *done when* check passes on your branch; mark
   it ready after that. The user merges; agents never merge their own PRs.
-- CI runs only `ubuntu-latest` on PRs; the full 4-OS matrix runs on `main`. Add the `full-ci` label to a PR that touches determinism or platform code to run all four OSes pre-merge.
+- CI on a PR runs `core crates` on `ubuntu-latest` always, and `sta64` on
+  `ubuntu-latest` only when the PR touches `crates/sta64/`, `assets/`,
+  `bench/`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml` or the CI
+  workflow. The full 4-OS matrix (Linux x86-64 and ARM, macOS, Windows) runs on
+  every push to `main`, one run at a time (later pushes collapse into one
+  pending run). Add the `full-ci` label to a PR that touches file paths or
+  line endings, platform code, determinism (digests, RNG, float or hash
+  ordering, goldens) or file formats (saves, snapshots, network protocol,
+  content formats), so all four OSes run before the merge.
+- Because a PR that does not touch `sta64` no longer builds it, run
+  `cargo check --workspace --all-targets` and the tests of every crate you
+  changed locally before pushing (see "Builds"), whatever CI will run.
 - Rebase on `origin/main` before asking for review. Regenerate `Cargo.lock`
   (`cargo update -w`), never hand-merge it.
 - Never push to `main`, never force-push a branch someone else has pulled.
