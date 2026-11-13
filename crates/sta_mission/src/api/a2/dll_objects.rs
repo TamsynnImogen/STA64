@@ -631,7 +631,6 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
 
 /// Calls the current sim seam cannot serve, each with the reason.
 fn seams(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()> {
-    table.set("SetPosition", no_data_fn(lua, ctx, "SetPosition", "the sim command seam has no teleport edit")?)?;
     // Shield and subsystem damage edits (SIM-55): SetShieldPercent takes a
     // fraction of the maximum (as the Roots missions write `shields = 1.0`),
     // SetMaxShields the new maximum, Damage<System> points of damage.
@@ -648,7 +647,6 @@ fn seams(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()> {
     table.set("CraftCanRecrew", no_data_fn(lua, ctx, "CraftCanRecrew", "the sim has no per-craft recrew switch")?)?;
     table.set("SetName", no_data_fn(lua, ctx, "SetName", "the sim and view carry no per-object display name")?)?;
     table.set("SetPlanetCivPop", no_data_fn(lua, ctx, "SetPlanetCivPop", "the sim has no planet population edit")?)?;
-    table.set("SetAngularVelocity", no_data_fn(lua, ctx, "SetAngularVelocity", "the sim command seam has no angular-velocity edit")?)?;
     table.set("StuffIntoWormhole", no_data_fn(lua, ctx, "StuffIntoWormhole", "the sim has no wormhole transport edit")?)?;
     table.set("LinkWormholes", no_data_fn(lua, ctx, "LinkWormholes", "the sim has no wormhole link edit")?)?;
     table.set("SetWormholeDeleteOnTransport", no_data_fn(lua, ctx, "SetWormholeDeleteOnTransport", "the sim has no wormhole transport rules")?)?;

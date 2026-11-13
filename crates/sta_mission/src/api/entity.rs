@@ -151,13 +151,50 @@ impl UserData for Entity {
             }
             Ok(())
         });
+        // SIM-57: `forward = Vector(x, y, z)` faces the unit along (x, z) at once;
+        // `omega = Vector(x, y, z)` sets its turn rate, y being the yaw (positive
+        // turns +z toward +x, as in Armada II, whose rule the Roots engine is
+        // taken to share: not measured on Roots). Bad input is recorded, not raised.
+        for (name, label) in [("forward", "Entity.forward"), ("omega", "Entity.omega")] {
+            f.add_field_method_set(name, move |_, e, value: Value| {
+                let mut c = e.ctx.borrow_mut();
+                let num = |t: &mlua::Table, k: &str| match t.raw_get::<Value>(k) {
+                    Ok(Value::Number(n)) if n.is_finite() => Some(n),
+                    Ok(Value::Integer(n)) => Some(n as f64),
+                    _ => None,
+                };
+                let Value::Table(t) = value else {
+                    c.unsupported(&format!("{label} = non-Vector"));
+                    return Ok(());
+                };
+                let (Some(x), Some(y), Some(z)) = (num(&t, "x"), num(&t, "y"), num(&t, "z")) else {
+                    c.unsupported(&format!("{label} = a Vector without finite x, y and z"));
+                    return Ok(());
+                };
+                let Some(id) = e.key.id() else {
+                    c.unsupported(&format!("{label}: pending or failed spawn"));
+                    return Ok(());
+                };
+                let edit = if name == "forward" {
+                    // Scaled to unit size here only to keep the Fixed conversion in range.
+                    let m = x.abs().max(z.abs());
+                    if m < 1e-9 {
+                        c.unsupported("Entity.forward = a Vector with no horizontal direction");
+                        return Ok(());
+                    }
+                    Edit::Heading(id, (sta_core::Fixed::from_f64(x / m), sta_core::Fixed::from_f64(z / m)))
+                } else {
+                    Edit::AngularVelocity(id, sta_core::Fixed::from_f64(-y.clamp(-(sta_sim::command::MAX_SCRIPT_OMEGA as f64), sta_sim::command::MAX_SCRIPT_OMEGA as f64)))
+                };
+                super::edit_feedback::queue(&mut c, label, edit)?;
+                Ok(())
+            });
+        }
         // Other installed-mission assignments with no sim edit behind them yet
-        // (autonomy, facing, angular velocity): accepted and
+        // (autonomy, names): accepted and
         // recorded so the callback keeps running; the report names each.
         for (name, need) in [
             ("movementAutonomy", "a sim autonomy edit"),
-            ("forward", "a sim heading edit"),
-            ("omega", "a sim angular-velocity edit"),
             ("specialWeaponAutonomy", "a sim autonomy edit"),
             ("name", "a sim SetName edit"),
         ] {

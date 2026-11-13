@@ -653,6 +653,33 @@ fn entity_shields_is_a_fraction_of_the_maximum_applied_by_the_sim() {
 }
 
 #[test]
+fn entity_forward_and_omega_queue_sim_edits_and_bad_input_is_recorded() {
+    let mut g = game(
+        "MMM.register(function()
+            local e = EntityFinder():find()[2]
+            e.forward = Vector(0, 3, -4)
+            e.omega = Vector(0, 0.5, 0)
+            e.forward = Vector(0, 5, 0)
+            e.forward = Vector(0/0, 0, 1)
+            e.omega = 5
+            DONE = true
+        end)",
+    );
+    g.run(3);
+    assert!(g.global::<bool>("DONE"), "bad input must not abort the callback");
+    let hero = g.sim.units.get(HERO).unwrap();
+    // y is ignored for the facing; (0, -4) normalised is -z.
+    assert_eq!(hero.heading, (sta_core::Fixed::ZERO, -sta_core::Fixed::ONE));
+    // The omega edit reached the sim and was accepted; the unit's engines are on, so it changed nothing.
+    assert_eq!(hero.omega, sta_core::Fixed::ZERO);
+    let names: Vec<String> = g.rt.unsupported().into_iter().map(|(n, _)| n).collect();
+    assert!(names.iter().any(|n| n.contains("no horizontal direction")), "{names:?}");
+    assert!(names.iter().any(|n| n.contains("Entity.forward = a Vector without finite")), "{names:?}");
+    assert!(names.iter().any(|n| n.contains("Entity.omega = non-Vector")), "{names:?}");
+    assert!(!names.iter().any(|n| n.contains("simulation rejected")), "{names:?}");
+}
+
+#[test]
 fn recorded_assignments_keep_the_callback_running_and_name_each_gap() {
     let mut g = game(
         "MMM.register(function()
@@ -660,7 +687,7 @@ fn recorded_assignments_keep_the_callback_running_and_name_each_gap() {
             p.race = Race.find('fx'); p.color = Color(1, 0, 0); p.name = 'x'
             local e = EntityFinder():find()[1]
             e.race = Race.find('fx'); e.movementAutonomy = 1
-            e.specialWeaponAutonomy = 1; e.forward = Vector(1, 0, 0); e.omega = Vector(0, 1, 0); e.name = 'n'
+            e.specialWeaponAutonomy = 1; e.name = 'n'
             DONE = true
         end)",
     );
@@ -669,7 +696,7 @@ fn recorded_assignments_keep_the_callback_running_and_name_each_gap() {
     let names: Vec<String> = g.rt.unsupported().into_iter().map(|(n, _)| n).collect();
     for want in [
         "Player.race", "Player.color", "Player.name", "Entity.race",
-        "Entity.movementAutonomy", "Entity.specialWeaponAutonomy", "Entity.forward", "Entity.omega", "Entity.name",
+        "Entity.movementAutonomy", "Entity.specialWeaponAutonomy", "Entity.name",
     ] {
         assert!(names.iter().any(|n| n.starts_with(want)), "{want} in {names:?}");
     }
