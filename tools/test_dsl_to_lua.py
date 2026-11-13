@@ -46,6 +46,7 @@ SI_NAMES = [
     "?MoveTo@ScriptInterfaceImp@@UAEXHPAD@Z",  # 2
     "?IsAlive@ScriptInterfaceImp@@UAE_NH@Z",  # 3
     "?SetSpeed@ScriptInterfaceImp@@UAEXHM@Z",  # 4
+    "?Enable@ScriptInterfaceImp@@UAEXH_N@Z",  # 5
 ]
 ENGINE = {"ScriptInterfaceImp": SI_NAMES}
 
@@ -226,6 +227,17 @@ class LiftTests(unittest.TestCase):
         self.assertIn("do return 0 end", src)
         self.assertEqual(f.engine_calls, {"GetHandle": 1, "MoveTo": 1, "SetSpeed": 1})
         self.assertTrue(luac_ok(src))
+
+    def test_a_bool_parameter_is_passed_as_a_lua_boolean(self):
+        # Enable(ship, 1): the pushed word is an int, the binding takes a boolean
+        body = PROLOGUE + ["mov    esi,esp", "push   0x1", f"mov    eax,ds:{SHIP:#x}", "push   eax",
+                           f"mov    ecx,DWORD PTR ds:{SI:#x}", "mov    edx,DWORD PTR [ecx]",
+                           f"mov    ecx,DWORD PTR ds:{SI:#x}", "call   DWORD PTR [edx+0x14]",
+                           "cmp    esi,esp", f"call   {CHK:#x}", "xor    eax,eax"] + EPILOGUE
+        d = make({STEP: body})
+        f = dsl.Lifter(d).lift(STEP)
+        self.assertIsNone(f.error)
+        self.assertIn("A('Enable', O.ship, true)", render(d, f))
 
     def test_if_else_becomes_gotos(self):
         d = make({STEP: branch_body()})

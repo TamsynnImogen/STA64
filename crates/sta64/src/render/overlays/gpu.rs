@@ -135,7 +135,7 @@ fn selection_gauges_render_in_screen_pixels_on_hardware() {
         hull: [Fixed::from_int(1), Fixed::from_int(2)],
         shields: [[Fixed::from_int(1), Fixed::from_int(4)]; 4],
         crew: None,
-        energy: None,
+        energy: None, autonomy: None,
         flags: Default::default(),
         progress: None,
     };

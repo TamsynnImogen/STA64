@@ -47,6 +47,12 @@ pub enum Screen {
     MapSelect,
     Settings,
     ModSelect,
+    /// A campaign's mission list (UI-25, `frontend::campaign`).
+    Missions,
+    /// A mission's briefing (UI-25).
+    Briefing,
+    /// What follows a mission (UI-25).
+    Debrief,
 }
 
 /// Where the open list (map or mod select) is scrolled, in logical pixels.
@@ -142,6 +148,7 @@ impl Plugin for ScreensPlugin {
             .add_message::<MouseWheel>()
             .add_message::<StartGame>()
             .add_message::<ModChosen>()
+            .add_message::<crate::frontend::campaign::StartMission>()
             .add_systems(Startup, make_draft)
             .add_systems(OnEnter(AppState::FrontEnd), enter_front_end)
             .add_systems(OnEnter(Screen::MapSelect), open_list)
@@ -152,7 +159,7 @@ impl Plugin for ScreensPlugin {
             )
             .add_systems(
                 Update,
-                (fit_scale, stock::track_box, follow_data, on_keys, on_wheel, track_scroll, on_buttons, on_lists, stock::on_dropdowns, stock::track_tab, rebuild, stock::restore_focus)
+                (fit_scale, stock::track_box, follow_data, on_keys, on_wheel, track_scroll, on_buttons, on_lists, crate::frontend::campaign::on_buttons, stock::on_dropdowns, stock::track_tab, rebuild, crate::frontend::campaign::rebuild, stock::restore_focus)
                     .chain()
                     .in_set(GameSet::Ui)
                     .after(crate::ui::profile::ProfileSync)
@@ -168,7 +175,7 @@ fn make_draft(mut commands: Commands, data: Res<ScreenData>, draft: Option<Res<S
     }
 }
 
-fn enter_front_end(mut commands: Commands, config: Res<ScreensConfig>, theme: Res<crate::ui::theme::Theme>, mut next: ResMut<NextState<Screen>>) {
+pub(crate) fn enter_front_end(mut commands: Commands, config: Res<ScreensConfig>, theme: Res<crate::ui::theme::Theme>, mut next: ResMut<NextState<Screen>>) {
     next.set(config.start);
     if config.own_camera {
         commands.spawn((Camera2d, Camera { clear_color: ClearColorConfig::Custom(theme.panel), ..default() }, DespawnOnExit(AppState::FrontEnd)));
@@ -413,14 +420,15 @@ fn rebuild(
     stock_box: Res<stock::StockBox>,
     options_tab: Res<stock::OptionsTab>,
     strings: Option<Res<crate::ui::i18n::Strings>>,
+    campaigns: Option<Res<crate::frontend::campaign::Campaigns>>,
 ) {
     let Some(draft) = draft else { return };
-    if !(screen.is_changed() || draft.is_changed() || browse.is_changed() || selected.is_changed() || data.is_changed() || theme.is_changed() || stock_box.is_changed() || config.is_changed() || strings.as_ref().is_some_and(|s| s.is_changed())) {
+    if !(screen.is_changed() || campaigns.as_ref().is_some_and(|c| c.is_changed()) || draft.is_changed() || browse.is_changed() || selected.is_changed() || data.is_changed() || theme.is_changed() || stock_box.is_changed() || config.is_changed() || strings.as_ref().is_some_and(|s| s.is_changed())) {
         return;
     }
     for e in &roots {
         commands.entity(e).despawn();
     }
-    let ctx = view::Ctx { theme: &theme, data: &data, strings: strings.as_deref(), draft: &draft, browse: &browse, settings: &settings, selected: &selected, scroll: &scroll, layout: config.layout, stock_box: stock_box.0, options_tab: options_tab.0 };
+    let ctx = view::Ctx { theme: &theme, data: &data, strings: strings.as_deref(), draft: &draft, browse: &browse, settings: &settings, selected: &selected, scroll: &scroll, layout: config.layout, stock_box: stock_box.0, options_tab: options_tab.0, campaigns: campaigns.as_deref() };
     view::spawn(&mut commands, *screen.get(), &ctx, camera.map(|c| c.0));
 }

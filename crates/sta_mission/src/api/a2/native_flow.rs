@@ -58,8 +58,18 @@ struct Wait {
     kind: Kind,
 }
 
+/// Something the client would play or ask for, kept for [`HostPending`]:
+/// (kind, id, name, mission tick it started).
+struct Started {
+    kind: &'static str,
+    id: i64,
+    name: String,
+    tick: u64,
+}
+
 struct Flow {
     waits: Vec<Wait>,
+    started: Vec<Started>,
     /// `AudioOverlay`'s id counter: starts at 1, shared by voice and music.
     next_sound: u32,
     next_key: u32,
@@ -67,7 +77,7 @@ struct Flow {
 
 fn flow<R>(lua: &Lua, f: impl FnOnce(&mut Flow) -> R) -> R {
     if lua.app_data_ref::<RefCell<Flow>>().is_none() {
-        lua.set_app_data(RefCell::new(Flow { waits: Vec::new(), next_sound: 1, next_key: 1 }));
+        lua.set_app_data(RefCell::new(Flow { waits: Vec::new(), started: Vec::new(), next_sound: 1, next_key: 1 }));
     }
     let cell = lua.app_data_ref::<RefCell<Flow>>().expect("flow state");
     let mut state = cell.borrow_mut();
@@ -123,6 +133,17 @@ fn present(ctx: &Shared, name: &str, event: Presentation) -> mlua::Result<()> {
         .try_push(sta_core::PlayerId::SCRIPT, CommandKind::Edit(Edit::Present(event)))
         .map(|_| ())
         .map_err(|reason| mlua::Error::runtime(format!("A2.{name}: {reason}")))
+}
+
+fn log_start(lua: &Lua, ctx: &Shared, kind: &'static str, id: i64, name: &str) {
+    let tick = ctx.borrow().view.tick;
+    flow(lua, |f| {
+        if kind == "movie" {
+            // One movie plays at a time.
+            f.started.retain(|s| s.kind != "movie");
+        }
+        f.started.push(Started { kind, id, name: name.to_owned(), tick });
+    });
 }
 
 fn add_wait(lua: &Lua, script: Table, kind: Kind) {
@@ -187,6 +208,7 @@ fn sound_call(
             return Ok(-1_i64);
         }
         let id = alloc_sound(lua, name)?;
+        let file_name = file.clone();
         let event = if music {
             Presentation::Call {
                 name: format!("A2.{name}"),
@@ -197,6 +219,7 @@ fn sound_call(
         };
         present(&c, name, event)?;
         c.borrow_mut().playback.sounds.insert(id);
+        log_start(lua, &c, if music { "music" } else { "sound" }, i64::from(id), &file_name);
         if !dont_wait {
             add_wait(lua, script, Kind::Sound(id));
         }
@@ -225,6 +248,7 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
         })?,
     )?;
 
+    let c = ctx.clone();
     table.set(
         "CineractiveStart",
         lua.create_function(move |lua, args: MultiValue| {
@@ -235,6 +259,7 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
             let singleton: mlua::AnyUserData = lua.globals().raw_get("Cineractive")?;
             singleton.set("active", true)?;
             if !dont_wait {
+                log_start(lua, &c, "cineractive", 0, "");
                 add_wait(lua, script, Kind::Cineractive);
             }
             Ok(())
@@ -256,12 +281,14 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
             // Always 1 in the stock scripts and unused by the video start.
             int32("PlayCinematicMovie", "mode", &args[2])?;
             let dont_wait = flag("PlayCinematicMovie", &args[3])?;
+            let movie_name = file.clone();
             present(
                 &c,
                 "PlayCinematicMovie",
                 Presentation::Movie { name: file, in_panel: false, skippable: true },
             )?;
             c.borrow_mut().playback.movie = true;
+            log_start(lua, &c, "movie", 0, &movie_name);
             if !dont_wait {
                 add_wait(lua, script, Kind::Movie);
             }
@@ -281,6 +308,7 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
                 id
             });
             present(&c, "WaitForEnterKey", Presentation::WaitForKey { id })?;
+            log_start(lua, &c, "key", i64::from(id), "");
             add_wait(lua, script, Kind::Key(id));
             Ok(())
         })?,
@@ -303,6 +331,39 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
                 });
                 f.waits.iter().filter(|w| w.script.to_pointer() == script.to_pointer()).count() as i64
             }))
+        })?,
+    )?;
+
+    // What a host must still report (not a DLL call): a list of
+    // `{kind, id, name, tick}` for sounds and music not yet finished, a movie
+    // playing, Enter waits and cineractive starts held, oldest first.
+    let c = ctx.clone();
+    table.set(
+        "HostPending",
+        lua.create_function(move |lua, args: MultiValue| {
+            arity("HostPending", &args, 0)?;
+            let ctx = c.borrow();
+            let out = lua.create_table()?;
+            flow(lua, |f| {
+                let waits = &f.waits;
+                f.started.retain(|s| match s.kind {
+                    "sound" | "music" => ctx.playback.sounds.contains(&(s.id as u32)),
+                    "movie" => ctx.playback.movie,
+                    "key" => waits.iter().any(|w| matches!(w.kind, Kind::Key(k) if i64::from(k) == s.id)),
+                    "cineractive" => waits.iter().any(|w| matches!(w.kind, Kind::Cineractive)),
+                    _ => false,
+                });
+                for (i, s) in f.started.iter().enumerate() {
+                    let row = lua.create_table()?;
+                    row.set("kind", s.kind)?;
+                    row.set("id", s.id)?;
+                    row.set("name", s.name.as_str())?;
+                    row.set("tick", s.tick)?;
+                    out.set(i + 1, row)?;
+                }
+                Ok::<(), mlua::Error>(())
+            })?;
+            Ok(out)
         })?,
     )?;
 
