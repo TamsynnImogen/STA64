@@ -14,6 +14,7 @@
 
 pub mod frames;
 pub mod marks;
+mod pair_view;
 
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
@@ -37,6 +38,9 @@ fn build(cfg: &LaunchConfig) -> Result<Bench, String> {
     let path = cfg.scene.as_deref().ok_or("--sim-only and --headless need --scene <ini>")?;
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let scene = SceneFile::parse(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+    if cfg.install_content {
+        return Bench::build(Arc::new(pair_view::install_config(cfg, &scene)?), &scene);
+    }
     Bench::build(Arc::new(RunConfig::fake()), &scene)
 }
 
@@ -143,6 +147,7 @@ fn run_headless_inner(cfg: &LaunchConfig) -> i32 {
     if cfg.frames.is_empty() {
         app.add_plugins(MinimalPlugins.set(runner));
     } else {
+        // The audio device is never opened: a bench frame has no sound.
         // Frames: the renderer without a window (an offscreen image target).
         use bevy::render::RenderPlugin;
         use bevy::window::ExitCondition;
@@ -150,7 +155,9 @@ fn run_headless_inner(cfg: &LaunchConfig) -> i32 {
             DefaultPlugins
                 .set(WindowPlugin { primary_window: None, exit_condition: ExitCondition::DontExit, ..default() })
                 .set(RenderPlugin { synchronous_pipeline_compilation: true, ..default() })
-                .disable::<bevy::winit::WinitPlugin>(),
+                .set(ImagePlugin::default_linear())
+                .disable::<bevy::winit::WinitPlugin>()
+                .disable::<bevy::audio::AudioPlugin>(),
         )
         .add_plugins(runner);
         if let Some(info) = app.world().get_resource::<bevy::render::renderer::RenderAdapterInfo>()
@@ -169,7 +176,13 @@ fn run_headless_inner(cfg: &LaunchConfig) -> i32 {
     if matches!(cfg.control, Some(Control::Stdio)) {
         app.insert_resource(Channel(SyncCell::new(spawn_stdin())));
     }
-    if !cfg.frames.is_empty() {
+    if cfg.install_content && !cfg.frames.is_empty() {
+        // TOOL-17: the install's content, drawn by the client's own renderers.
+        if let Err(e) = pair_view::add(&mut app, cfg, scene_camera) {
+            eprintln!("{e}");
+            return 2;
+        }
+    } else if !cfg.frames.is_empty() {
         frames::add(&mut app, cfg, scene_camera);
         // The effects read the sim through a link; this one is fed the bench's views
         // and events as they happen (`bench_frame`).

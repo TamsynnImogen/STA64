@@ -935,7 +935,7 @@ impl Bench {
         Ok(format!(
             "snapshot at tick {} -> {}",
             self.sim.tick,
-            path.display()
+            file
         ))
     }
 
@@ -1018,7 +1018,7 @@ impl Bench {
         Ok(format!(
             "replay of {end} ticks, {} commands -> {}",
             replay.commands.len(),
-            path.display()
+            file
         ))
     }
 
