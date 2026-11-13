@@ -18,6 +18,8 @@ sta_net.workspace = true
 sta_bzn.workspace = true
 serde.workspace = true
 json5.workspace = true
+# The capture index is written as strict JSON (`jq` reads it); read with json5 so the older JSON5 form still loads.
+serde_json.workspace = true
 # Paired scenes (TOOL-15): frames read and written as PNG.
 png = "0.18"
 

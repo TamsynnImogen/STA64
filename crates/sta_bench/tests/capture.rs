@@ -277,3 +277,24 @@ fn the_check_command_passes_a_capture_and_fails_a_tampered_one() {
     // Without --fake and without a recorded install, the command says what is missing.
     assert_eq!(sta_bench::cli::main(vec!["capture".into(), "check".into(), good.display().to_string()]), 1);
 }
+
+#[test]
+fn the_index_is_strict_json_and_the_older_json5_form_still_loads() {
+    let content = Arc::new(sta_content::fake::db());
+    let s = setup(content.clone(), sta_content::fake::two_bases(), ["fx", "fx"]);
+    let mut game = Played::start(&s, Some(&Races::default()));
+    for _ in 0..5 {
+        game.step(&[]);
+    }
+    let cap = game.capture(&content, StartMode::Starts, MountInfo::default());
+    let dir = cap.write(&scratch("strict_json")).unwrap();
+    let text = std::fs::read_to_string(dir.join(capture::INDEX_FILE)).unwrap();
+    // `jq` and every JSON parser read it (the writer used to emit JSON5: bare keys).
+    let v: serde_json::Value = serde_json::from_str(&text).expect("capture.json is strict JSON");
+    assert_eq!(v["tick"], 5);
+    // Captures taken before the fix have bare keys; they still load.
+    let old = json5::to_string(&Capture::load(&dir).unwrap().index).unwrap();
+    assert!(serde_json::from_str::<serde_json::Value>(&old).is_err(), "the old form is not JSON");
+    std::fs::write(dir.join(capture::INDEX_FILE), old).unwrap();
+    assert_eq!(Capture::load(&dir).unwrap().index, cap.index);
+}

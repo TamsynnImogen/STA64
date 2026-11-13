@@ -37,9 +37,23 @@ class KeyAndDir(unittest.TestCase):
     def test_refuses_an_output_inside_the_install(self):
         with tempfile.TemporaryDirectory() as t:
             os.makedirs(os.path.join(t, "missions"))
+            open(os.path.join(t, "Armada2.exe"), "w").close()
             with self.assertRaises(SystemExit) as e:
                 c.main(["--install", t, "--out", os.path.join(t, "out")])
             self.assertIn("inside the install", str(e.exception))
+
+    def test_a_folder_that_is_neither_game_is_named_as_such(self):
+        with tempfile.TemporaryDirectory() as t:
+            with self.assertRaises(SystemExit) as e:
+                c.main(["--install", t])
+            self.assertIn("neither an Armada I root", str(e.exception))
+
+    def test_armada1_is_told_from_armada2_by_the_exe(self):
+        with tempfile.TemporaryDirectory() as t:
+            open(os.path.join(t, "Armada.exe"), "w").close()
+            self.assertTrue(c.is_armada1(t))
+            open(os.path.join(t, "Armada2.exe"), "w").close()
+            self.assertFalse(c.is_armada1(t))
 
 
 if __name__ == "__main__":

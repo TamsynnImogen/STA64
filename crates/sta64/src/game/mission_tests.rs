@@ -246,6 +246,39 @@ fn leaving_a_mission_abandons_it_and_changes_nothing() {
     assert_eq!(app.world().resource::<Seen>().ended, 1);
 }
 
+/// UI-34: Esc, Exit to main menu and Yes end a mission as F10 does: an abandon, progress unchanged, the
+/// same debrief; and the menu is closed and the sim runs again for the next one.
+#[test]
+fn leaving_a_mission_through_the_in_game_menu_abandons_it_as_f10_does() {
+    use crate::ui::ingame_menu::{InGameMenu, InGameMenuPlugin, MenuAct, MenuPage};
+    let mut app = app(fixture(false, None));
+    app.add_plugins(InGameMenuPlugin);
+    start_from_screens(&mut app, 1);
+    settle(&mut app, 3);
+    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Escape);
+    settle(&mut app, 1);
+    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(KeyCode::Escape);
+    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+    assert!(app.world().resource::<InGameMenu>().open);
+    assert!(app.world().resource::<crate::clock::AnimClock>().paused(), "single player pauses");
+    let ask = app.world_mut().query::<(Entity, &MenuAct)>().iter(app.world()).find(|(_, a)| **a == MenuAct::AskExit).unwrap().0;
+    click(app.world_mut(), ask);
+    settle(&mut app, 3);
+    assert_eq!(app.world().resource::<InGameMenu>().page, MenuPage::ConfirmExit);
+    assert_eq!(campaigns(&app).progress.state("federation").reached, 0);
+    let yes = app.world_mut().query::<(Entity, &MenuAct)>().iter(app.world()).find(|(_, a)| **a == MenuAct::Confirm).unwrap().0;
+    click(app.world_mut(), yes);
+    settle(&mut app, 5);
+    assert_eq!(state(&app), AppState::FrontEnd);
+    assert_eq!(screen(&app), Screen::Debrief);
+    assert_eq!(campaigns(&app).debrief.as_ref().unwrap().result, RunResult::Abandoned);
+    assert_eq!(campaigns(&app).progress.state("federation").reached, 0);
+    assert_eq!(app.world().resource::<Seen>().ended, 1);
+    assert!(!app.world().resource::<InGameMenu>().open);
+    assert!(!app.world().resource::<crate::clock::AnimClock>().paused());
+    assert_eq!(app.world_mut().query::<&crate::ui::ingame_menu::MenuRoot>().iter(app.world()).count(), 0);
+}
+
 #[test]
 fn a_blocked_mission_does_not_start() {
     let mut cs = fixture(false, None);
@@ -324,6 +357,74 @@ fn a_mission_is_deterministic_run_to_run() {
         }).collect()
     }
     assert_eq!(run(), run());
+}
+
+// ---------------------------------------------------------------------------
+// The player is never left without control; a gap is not a loss
+// ---------------------------------------------------------------------------
+
+/// The synthetic campaigns with the tutorial mission's script replaced.
+fn with_tutorial_script(script: &str) -> Campaigns {
+    use crate::frontend::campaign::tests::{FakeHost, source};
+    let src = std::sync::Arc::new(source(false).with("missions/syn_tut1.lua", script));
+    let book = sta_mission::campaign::CampaignBook::load(&*src, sta_mission::campaign::ShellLayout::Armada2);
+    Campaigns::new(book, std::sync::Arc::new(FakeHost(src)), crate::frontend::campaign::ProgressStore::none())
+}
+
+/// The synthetic tutorial mission, started by the request the briefing's Start writes.
+fn start_direct(app: &mut App) {
+    settle(app, 4);
+    app.world_mut().write_message(crate::frontend::campaign::StartMission { campaign: "tutorials".into(), mission: 0 });
+    settle(app, 3);
+    until(app, 300, |a| state(a) == AppState::InGame);
+}
+
+#[test]
+fn a_script_that_faults_gives_the_player_the_cineractive_back() {
+    // A cineractive that cannot be skipped, and a callback that raises before it ends it.
+    let script = "local began = false\nMMM.register(function(t) if not began then began = true Cineractive.active = true Cineractive.skippable = false end if t >= 0.5 then error('boom') end if t > 1e9 then Mission:finish(true, 0) end end)\n";
+    let mut app = app(with_tutorial_script(script));
+    settle(&mut app, 4);
+    app.world_mut().write_message(crate::frontend::campaign::StartMission { campaign: "tutorials".into(), mission: 0 });
+    let (mut was_on, mut released) = (false, false);
+    for _ in 0..600 {
+        app.update();
+        let on = app.world().resource::<crate::ui::presentation::CineractiveState>().on;
+        was_on |= on;
+        if was_on && !on {
+            released = true;
+            break;
+        }
+        if state(&app) == AppState::InGame && !app.world().contains_resource::<MissionHandle>() {
+            break;
+        }
+    }
+    let errors = app.world().resource::<MissionHandle>().with(|rt| rt.errors().to_vec());
+    assert!(was_on, "the cineractive began (errors {errors:?})");
+    assert!(released, "and the fault released it (errors {errors:?})");
+    let faults = app.world().resource::<MissionHandle>().with(|rt| rt.errors().iter().filter(|e| is_fault(e)).count());
+    assert!(faults >= 1, "the fault is what released it");
+}
+
+#[test]
+fn a_loss_after_an_unsupported_name_is_not_counted_as_a_loss() {
+    // The script touches a name STA64 does not bind, then loses.
+    let script = "local gap = NoSuchBinding.x\nMMM.register(function(t) if t >= 0.2 then Mission:finish(false, 0) end end)\n";
+    let mut app = app(with_tutorial_script(script));
+    start_direct(&mut app);
+    until(&mut app, 300, |a| state(a) == AppState::FrontEnd);
+    settle(&mut app, 4);
+    assert_eq!(campaigns(&app).debrief.as_ref().unwrap().result, RunResult::Abandoned, "blocked, not lost");
+    assert_eq!(campaigns(&app).progress.state("tutorials").reached, 0);
+}
+
+#[test]
+fn a_loss_with_nothing_unsupported_is_still_a_loss() {
+    let mut app = app(with_tutorial_script("MMM.register(function(t) if t >= 0.2 then Mission:finish(false, 0) end end)\n"));
+    start_direct(&mut app);
+    until(&mut app, 300, |a| state(a) == AppState::FrontEnd);
+    settle(&mut app, 4);
+    assert_eq!(campaigns(&app).debrief.as_ref().unwrap().result, RunResult::Lost);
 }
 
 // ---------------------------------------------------------------------------
@@ -523,6 +624,62 @@ fn install_gated_roots_first_mission_starts_from_the_screens_and_runs() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// With `STA64_TEST_ROOTS_INSTALL`: Fleet Operations Roots' "Politics by Other Means" starts, its
+/// intro cineractive runs and ends, no camera hold outlives it, the mission is not lost in its
+/// first tick (it replaces the player's craft and adds a relay station the script looks up at once)
+/// and the script raises no fault.
+#[test]
+fn install_gated_roots_politics_by_other_means_plays_its_intro_and_never_holds_the_camera() {
+    let Ok(root) = std::env::var("STA64_TEST_ROOTS_INSTALL") else {
+        eprintln!("SKIP: set STA64_TEST_ROOTS_INSTALL to Fleet Operations Roots for the intro run");
+        return;
+    };
+    let dir = temp_dir("politics");
+    let vfs = sta_vfs::Vfs::mount_install(Path::new(&root), None).expect("mounts");
+    let (mut campaigns, _) = load_campaigns_in(&vfs, Some(Path::new(&root)), None, |b| crate::frontend::campaign::ProgressStore::in_dir(&dir, b)).expect("Roots has campaigns");
+    let (campaign, mission) = campaigns
+        .book
+        .campaigns
+        .iter()
+        .find_map(|c| c.missions.iter().find(|m| m.title.as_deref() == Some("Politics by Other Means")).map(|m| (c.id.clone(), m.index)))
+        .expect("the mission is in the book");
+    let mut open = campaigns.book.clone();
+    open.give_all_missions = true;
+    campaigns.progress.apply_give_all(&open);
+    let mut app = base(campaigns);
+    app.insert_resource(crate::viewer::Mounted(vfs))
+        .init_resource::<crate::map::Catalogue>()
+        .add_plugins(crate::input::camera_cinematic::CinematicCameraPlugin)
+        .add_systems(Update, build_install.run_if(resource_exists::<ActiveMatch>).run_if(resource_exists::<MissionLaunch>));
+    app.world_mut().spawn((crate::viewer::Orbit { focus: Vec3::ZERO, yaw: 0.0, pitch: 0.7, dist: 400.0, home: (Vec3::ZERO, 1.0) }, Transform::default()));
+    settle(&mut app, 4);
+    app.world_mut().write_message(crate::frontend::campaign::StartMission { campaign, mission });
+    settle(&mut app, 3);
+    until(&mut app, 600, |a| state(a) == AppState::InGame);
+    let saw_intro = std::cell::Cell::new(false);
+    let held_without_state = std::cell::Cell::new(false);
+    until(&mut app, 20_000, |a| {
+        let on = a.world().resource::<crate::ui::presentation::CineractiveState>().on;
+        saw_intro.set(saw_intro.get() | on);
+        held_without_state.set(held_without_state.get() | (a.world().resource::<crate::input::camera_cinematic::CinematicCamera>().locked && !on));
+        a.world().resource::<SimLink>().curr().tick >= 1400 || state(a) != AppState::InGame
+    });
+    assert_eq!(state(&app), AppState::InGame, "the mission is not over after its intro");
+    assert!(saw_intro.get(), "the intro cineractive ran");
+    assert!(!held_without_state.get(), "the camera is held only while a cineractive is on");
+    assert!(!app.world().resource::<crate::ui::presentation::CineractiveState>().on, "the intro ended");
+    assert!(!app.world().resource::<crate::input::camera_cinematic::CinematicCamera>().locked, "no hold outlives the intro");
+    assert!(app.world().resource::<MissionRun>().outcome.is_none());
+    let errors = app.world().resource::<MissionHandle>().with(|rt| rt.errors().to_vec());
+    // The one fault left is the 30-minute timer hook: the script keeps its clock in the relay
+    // platform's `maxHull`, which STA64 cannot set yet (a sim max-hull edit, WORKPLAN SIM-54/55),
+    // so the interval it computes is negative. It comes after the intro and is not one of the
+    // causes fixed here.
+    let others: Vec<_> = errors.iter().filter(|e| is_fault(e) && !e.contains("Timer: interval")).collect();
+    assert!(others.is_empty(), "script faults: {errors:?}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// With `STA64_TEST_A2_STOCK_INSTALL` and `STA64_TEST_A2_CONVERTED` (the `--out` folder of
 /// `tools/dsl_to_lua.py`): an Armada II campaign mission from the locally converted missions,
 /// mounted as the top layer, starts from the screen flow and runs 300 ticks.
@@ -635,8 +792,8 @@ fn install_gated_stock_a2_campaign_is_startable_after_conversion() {
     let total: usize = cs.book.campaigns.iter().map(|c| c.missions.len()).sum();
     let blocked = cs.book.blocked();
     eprintln!("stock A2: {total} missions, {} blocked, {} experimental", blocked.len(), cs.experimental.len());
-    assert!(cs.experimental.len() >= 30, "the conversion supplies the stock missions");
-    assert!(blocked.len() * 2 < total, "most missions can start: {blocked:?}");
+    assert!(cs.experimental.len() == total, "the conversion supplies the stock missions");
+    assert!(blocked.is_empty(), "every stock mission can start: {blocked:?}");
     let cards: Vec<usize> = (0..cs.book.campaigns.len()).filter(|i| cs.state(&cs.book.campaigns[*i].id, 0) == crate::frontend::campaign::MissionState::Ready).collect();
     assert!(!cards.is_empty(), "a campaign whose first mission starts");
     for card in cards {

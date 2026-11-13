@@ -62,6 +62,12 @@ pub enum SimEvent {
     /// starts or, failing that, when the watch ends it. Not hashed.
     /// Appended to preserve every existing postcard event tag.
     OrderBlocked { id: EntityId },
+    /// The sim ended a craft's move order itself (the stuck-order watch): its
+    /// target and queued legs are cleared. A controller that remembers the
+    /// order should forget it; `OrderBlocked` alone does not mean that (the
+    /// SIM-22 hold keeps the order). Not hashed. Appended to preserve every
+    /// existing postcard event tag.
+    OrderAbandoned { id: EntityId },
 }
 
 /// Where a freighter is in `ToNode -> Mining -> ToDock -> Unloading` ([`SimEvent::MinerPhase`]).

@@ -19,7 +19,10 @@
 //! A pose is the map camera's own `Orbit` (focus, yaw, pitch, distance), which any
 //! "look from here at there" is, up to `Orbit`'s pitch limit (a near-vertical shot is
 //! clamped); nothing here moves the camera any other way. A skip of the cineractive
-//! (`ScriptReply::CineractiveSkipped`) gives the camera back too.
+//! (`ScriptReply::CineractiveSkipped`) gives the camera back too; that reply is how every end
+//! that is not the script's own reaches here (Space or Esc, the grace and the cap of
+//! `ui::presentation`, the host's release when the script faults, see `game::mission_host`).
+//! Only a cineractive holds the camera: a shot outside one moves it once.
 //!
 //! **Not consumed, and listed once in [`Unhandled`]**: `CameraOffset` and the calls
 //! `SetCameraZoom`, `CineractiveConstantSpeed`, `CineractiveCameraOffset` and
@@ -84,7 +87,13 @@ pub struct CinematicCamera {
     glide: Option<(Pose, f32, f32)>,
     /// Shots that came before a pose could be computed, for tests and the bench.
     pub shots: u32,
+    /// When (real seconds) the last shot outside a cineractive moved the camera.
+    loose_at: Option<f32>,
 }
+
+/// A shot outside a cineractive moves the camera at most this often (real seconds): a script that
+/// issues one every tick would otherwise pin the camera with nothing the player could skip.
+const LOOSE_SHOT_EVERY_SECS: f32 = 1.0;
 
 fn lerp_pose(a: &Pose, b: &Pose, t: f32) -> Pose {
     let mut dyaw = (b.yaw - a.yaw) % std::f32::consts::TAU;
@@ -119,6 +128,7 @@ fn consume(
     mut unhandled: ResMut<Unhandled>,
     mut orbit: Query<&mut Orbit>,
     mut replies: MessageReader<ScriptReply>,
+    time: Res<Time<Real>>,
 ) {
     // The player skipped the cineractive: the camera is theirs again.
     if replies.read().any(|r| *r == ScriptReply::CineractiveSkipped) && cam.locked {
@@ -155,11 +165,20 @@ fn consume(
                 let pose = pose_looking(f, a);
                 cam.shots += 1;
                 let secs = seconds.to_f32();
-                // A shot outside cineractive mode takes the camera until the next one
-                // ends it; the A2 scripts always bracket shots in cineractive mode.
+                // A shot outside cineractive mode is one move of the camera, not a hold: the
+                // A2 scripts bracket shots in cineractive mode, and a hold nothing brackets
+                // would have no end the player could count on.
                 if !cam.locked {
-                    cam.locked = true;
-                    cam.saved = current;
+                    let now = time.elapsed_secs();
+                    if cam.loose_at.is_some_and(|at| now - at < LOOSE_SHOT_EVERY_SECS) {
+                        unhandled.note("Shot outside a cineractive, more than once a second");
+                        continue;
+                    }
+                    cam.loose_at = Some(now);
+                    if let Some(mut o) = orbit.iter_mut().next() {
+                        (o.focus, o.yaw, o.pitch, o.dist) = (pose.focus, pose.yaw, pose.pitch, pose.dist);
+                    }
+                    continue;
                 }
                 cam.glide = (secs > 0.0).then(|| (current.or(cam.target).unwrap_or(pose), secs, secs));
                 cam.target = Some(pose);
@@ -284,6 +303,20 @@ mod tests {
     }
 
     #[test]
+    fn a_shot_outside_cineractive_mode_moves_the_camera_once_and_holds_nothing() {
+        let mut app = app();
+        let before = orbit(&mut app);
+        send(&mut app, Presentation::Shot { from: Spot::Position(sv(100, 20, 30)), at: Spot::Position(sta_core::Vec3::ZERO), seconds: Fixed::ZERO });
+        assert_ne!(orbit(&mut app), before);
+        assert!(!app.world().resource::<CinematicCamera>().locked);
+        // The player can move it away at once, and a second shot at once does not pin it back.
+        app.world_mut().query::<&mut Orbit>().single_mut(app.world_mut()).unwrap().dist = 5.0;
+        send(&mut app, Presentation::Shot { from: Spot::Position(sv(7, 7, 7)), at: Spot::Position(sta_core::Vec3::ZERO), seconds: Fixed::ZERO });
+        assert_eq!(orbit(&mut app).dist, 5.0);
+        assert_eq!(app.world().resource::<Unhandled>().count("Shot outside a cineractive, more than once a second"), 1);
+    }
+
+    #[test]
     fn skipping_the_cineractive_gives_the_camera_back() {
         let mut app = app();
         let before = orbit(&mut app);
@@ -323,6 +356,7 @@ mod tests {
     fn a_path_point_shot_uses_the_hosts_paths() {
         let mut app = app();
         app.world_mut().resource_mut::<ScenePaths>().0.insert("cam".into(), vec![Vec3::new(0.0, 0.0, 50.0), Vec3::new(10.0, 10.0, 10.0)]);
+        send(&mut app, Presentation::Cineractive { on: true, skippable: true });
         send(&mut app, Presentation::Shot { from: Spot::PathPoint { path: "cam".into(), index: 1 }, at: Spot::PathPoint { path: "cam".into(), index: 0 }, seconds: Fixed::ZERO });
         let tf = *app.world_mut().query::<&Transform>().single(app.world()).unwrap();
         assert!(tf.translation.distance(Vec3::new(10.0, 10.0, 10.0)) < 1e-2);

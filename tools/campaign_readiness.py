@@ -109,7 +109,10 @@ STUB_PREFIX = "stub "
 def is_unsupported_stop(error, unsupported):
     """Mirror of `sta_mission::readiness::is_unsupported_stop`: the error is a
     stop at a bound-but-unsupported call (`A1.X`/`A2.X is not available`, or
-    the text of a counted `unsupported` entry), not a runtime error."""
+    the text of a counted `unsupported` entry, or an edit the sim rejected:
+    `<call>: simulation rejected <edit>`), not a runtime error."""
+    if ": simulation rejected " in error:
+        return True
     for k, _ in unsupported:
         if not k.startswith(STUB_PREFIX) and k in error:
             return True
