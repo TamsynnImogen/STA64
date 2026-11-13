@@ -225,7 +225,10 @@ def msvc_params(symbol):
 
 
 
-def engine_vtables(root):
+ENGINE_CLASSES = ("ScriptInterfaceImp", "character", "IIIE", "hot_int", "hot_float", "dirty_int", "timer_int")
+
+
+def engine_vtables(root, classes=ENGINE_CLASSES):
     """{class: [mangled method per vtable slot]} from Armada2.exe + armada2.map."""
     files = {f.lower(): os.path.join(root, f) for f in os.listdir(root)}
     exe, mapf = files.get("armada2.exe"), files.get("armada2.map")
@@ -239,7 +242,7 @@ def engine_vtables(root):
     pe = Pe(exe)
     text = next((pe.base + va, vs) for nm, va, vs, _, _ in pe.sections if nm.startswith(".text"))
     out = {}
-    for cls in ("ScriptInterfaceImp", "character", "IIIE", "hot_int", "hot_float", "dirty_int", "timer_int"):
+    for cls in classes:
         vt = next((a for a, v in names.items() if v == f"??_7{cls}@@6B@"), None)
         if vt is None:
             continue
@@ -1084,6 +1087,10 @@ def lua_str(s):
 
 def lua_num(x):
     if isinstance(x, float):
+        if x != x:
+            return "(0/0)"
+        if x in (float("inf"), float("-inf")):
+            return "math.huge" if x > 0 else "(-math.huge)"
         if x == int(x) and abs(x) < 1e15:
             return f"{int(x)}.0"
         return repr(x)
