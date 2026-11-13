@@ -192,15 +192,20 @@ fn captures_in_the_same_second_get_their_own_folders_and_list_newest_first() {
 
 #[test]
 fn the_mount_is_read_back_from_the_layers() {
+    // Paths are stored absolute, so a capture can be checked from any directory: on
+    // Windows `/games/Armada2` gains a drive letter and backslashes.
+    let abs = |p: &str| std::path::absolute(p).unwrap().display().to_string();
+    let root = abs("/games/Armada2");
     let data = Path::new("/games/Armada2/Data");
     let modroot = Path::new("/games/Armada2/Data/Mods/FO");
     let m = MountInfo::from_layers([("FO", modroot), ("Data", data)]);
-    assert_eq!((m.install_root.as_deref(), m.active_mod.as_deref()), (Some("/games/Armada2"), Some("FO")));
+    assert_eq!((m.install_root.as_deref(), m.active_mod.as_deref()), (Some(root.as_str()), Some("FO")));
     assert_eq!(m.layers.len(), 2);
+    assert_eq!(m.layers[0].root, abs("/games/Armada2/Data/Mods/FO"));
     let stock = MountInfo::from_layers([("Data", data)]);
-    assert_eq!((stock.install_root.as_deref(), stock.active_mod.as_deref()), (Some("/games/Armada2"), None));
+    assert_eq!((stock.install_root.as_deref(), stock.active_mod.as_deref()), (Some(root.as_str()), None));
     let standalone = MountInfo::from_layers([("Roots", Path::new("/games/Armada2/Data/Mods/Roots"))]);
-    assert_eq!((standalone.install_root.as_deref(), standalone.active_mod.as_deref()), (Some("/games/Armada2"), Some("Roots")));
+    assert_eq!((standalone.install_root.as_deref(), standalone.active_mod.as_deref()), (Some(root.as_str()), Some("Roots")));
 }
 
 /// A capture of a real skirmish on the installed game: two playable races on
