@@ -46,10 +46,10 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// (crafts in warp). Format 19 appends stuck-order watch rows; format 20
 /// adds their anchor, start distance and birth tick. Format 21 appends scripted
 /// orders (SIM-56) and per-craft switches (SIM-58). Format 22 appends mission
-/// attributes (SIM-54). Format 23 appends cosmetic seat factions. Format 26 (SIM-30) appends
+/// attributes (SIM-54). Format 23 appends cosmetic seat factions. Format 27 (SIM-30) appends
 /// the planet population rows and colony ship orders (renumbered at push time).
 /// Only the current format is read.
-pub const FORMAT_VERSION: u16 = 26;
+pub const FORMAT_VERSION: u16 = 27;
 
 const HEADER: usize = 4 + 2 + 4 + 8;
 

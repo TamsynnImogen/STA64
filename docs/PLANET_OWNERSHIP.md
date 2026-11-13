@@ -90,7 +90,7 @@ Each owned planet adds `P / cfgPOP_HEAVY x rate x 4` crew per second to its
 owner. An owned planet with 0 people goes neutral next tick, people kept.
 Weapon damage that reaches a populated planet's hull costs `0.1 x damage`
 people and leaves the hull alone (shield absorption comes first, not measured).
-`Edit::PlanetPopulation` (tag 45, mission `SetPlanetCivPop`) sets the people
+`Edit::PlanetPopulation` (tag 46, mission `SetPlanetCivPop`) sets the people
 raw; STA64 restricts it to Producer planets.
 
 Not implemented: the Borg colonizing beam and its enemy-planet cleansing
