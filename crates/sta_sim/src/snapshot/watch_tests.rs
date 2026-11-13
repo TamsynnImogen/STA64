@@ -10,7 +10,7 @@ fn world() -> (Sim, EntityId, Arc<ContentDb>) {
 }
 
 fn row() -> crate::watchdog::Row {
-    crate::watchdog::Row { target: Vec3::ZERO, best: Fixed::ZERO, since: 0, reported: false, anchor: Vec3::ZERO, anchored: 0 }
+    crate::watchdog::Row { target: Vec3::ZERO, best: Fixed::ZERO, since: 0, reported: false, anchor: Vec3::ZERO, anchored: 0, start: Fixed::ZERO, born: 0 }
 }
 
 #[test]
@@ -22,6 +22,8 @@ fn malformed_watch_records_are_rejected_for_the_right_reason() {
     assert!(Sim::from_snapshot(&ok, Some(db.clone())).is_ok());
     assert_eq!(load(chain::enc(&WatchRec { version: 1, rows: vec![(id, row()), (id, row())] })), "order watch rows out of order");
     assert_eq!(load(chain::enc(&WatchRec { version: 1, rows: vec![(EntityId(999), row())] })), "order watch entity is not a craft");
+    let future = crate::watchdog::Row { since: u64::MAX, ..row() };
+    assert_eq!(load(chain::enc(&WatchRec { version: 1, rows: vec![(id, future)] })), "order watch row from the future");
     assert_eq!(load(chain::enc(&WatchRec { version: 2, rows: Vec::new() })), "unknown order watch record version");
     let trailing = [chain::split(&bytes).concat(), vec![0]].concat();
     assert_eq!(chain::corrupt(&trailing, Some(db.clone())), "trailing bytes");

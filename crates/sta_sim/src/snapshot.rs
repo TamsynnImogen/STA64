@@ -43,7 +43,7 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// (CON-35) added the [`Provenance`] record and the keyed content digest's
 /// hash. Format 17 appends the mission-set subsystem switches and damage
 /// (SIM-55). Format 18 (SIM-36) appends the attack approach record
-/// (crafts in warp). Format 19 appends the stuck-order watch rows last; format 20 adds each row's anchor position and tick. Only the current format is read.
+/// (crafts in warp). Format 19 appends the stuck-order watch rows last; format 20 adds each row's anchor, start distance and birth tick. Only the current format is read.
 pub const FORMAT_VERSION: u16 = 20;
 
 const HEADER: usize = 4 + 2 + 4 + 8;
@@ -172,7 +172,7 @@ struct EntityRec {
     progress: Option<Fixed>,
 }
 
-/// Format 19: the stuck-order watch rows (`watchdog`).
+/// Format 19, changed in 20: the stuck-order watch rows (`watchdog`).
 #[derive(Serialize, Deserialize)]
 struct WatchRec {
     version: u8,
@@ -516,6 +516,9 @@ impl Sim {
         let autonomy = crate::autonomy::Autonomy::from_rec(autonomy_rows).ok_or_else(|| corrupt("autonomy"))?;
         if autonomy.to_rec().iter().any(|(id, _)| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft)) {
             return Err(corrupt("autonomy entity"));
+        }
+        if watch_rows.iter().any(|(_, r)| r.since > b.tick || r.anchored > b.tick || r.born > b.tick) {
+            return Err(SnapshotError::Corrupt("order watch row from the future".into()));
         }
         let watchdog = crate::watchdog::Watchdog::from_rec(watch_rows).ok_or_else(|| corrupt("order watch rows"))?;
         if watchdog.to_rec().iter().any(|(id, _)| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft)) {

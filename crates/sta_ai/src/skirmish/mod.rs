@@ -369,11 +369,11 @@ impl SkirmishController {
         for e in events {
             self.note_attack(tick, e);
             match e {
-                // The sim ended or held a move order it could not serve (walled
-                // in, or no nearer for a long while): forget it, so the next
-                // plan sends the order again instead of treating it as live.
-                // Only this seat's craft have a memo.
-                SimEvent::OrderBlocked { id } => {
+                // The sim ended a move order it could not serve (the stuck-order
+                // watch: no nearer for a long while): forget it, so the next plan
+                // sends the order again. `OrderBlocked` alone is a hold that keeps
+                // the order, so it is not this. Only this seat's craft have a memo.
+                SimEvent::OrderAbandoned { id } => {
                     self.orders.remove(id);
                 }
                 SimEvent::Rejected { player, seq } if *player == me => {

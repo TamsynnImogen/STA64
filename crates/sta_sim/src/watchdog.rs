@@ -3,8 +3,8 @@
 //! Steering, the path planner and the kinematics models each end an order
 //! they can serve; this is the safety net under all of them. A craft with a
 //! move target keeps a row and an order ends, with its target and queued legs
-//! cleared (as a Stop does) and [`SimEvent::OrderBlocked`] raised unless it
-//! already was, on either of two counts:
+//! cleared (as a Stop does) and [`SimEvent::OrderAbandoned`] raised ([`SimEvent::OrderBlocked`]
+//! too unless it already was), on any of three counts:
 //!
 //! - **still**: the craft has not moved [`GAIN`] units from where it was for
 //!   [`STILL`] ticks (two minutes): walled in, held by SIM-22, or a deadlock
@@ -15,7 +15,9 @@
 //!   it cannot reach, or a detour that never ends. [`TRAVEL`] is above the
 //!   longest wall of blocking fields in the stock Fleet Operations and Roots
 //!   maps (36 000 units, `nirvana2`: measured from the maps' objects), so a
-//!   craft flying round a whole wall is not cut off.
+//!   craft flying round a whole wall is not cut off;
+//! - **overdue**: however it creeps nearer, an order lives at most twice the
+//!   flight time of its first distance plus [`TRAVEL`] at top speed.
 //!
 //! A new target restarts the row, so a craft chasing a moving target or
 //! flying queued legs never trips it; so does every move, stop or formation
@@ -59,7 +61,11 @@ pub(crate) struct Row {
     /// Where the craft last moved [`GAIN`] units from, and the tick it got there.
     pub anchor: Vec3,
     pub anchored: u64,
+    /// The distance when the order began, and the tick: the order's overall deadline.
+    pub start: Fixed,
+    pub born: u64,
 }
+
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Watchdog {
     rows: Table<Row>,
@@ -112,7 +118,7 @@ impl Sim {
                 continue;
             };
             let here = distance(u.pos, target);
-            let fresh = Row { target, best: here, since: tick, reported: false, anchor: u.pos, anchored: tick };
+            let fresh = Row { target, best: here, since: tick, reported: false, anchor: u.pos, anchored: tick, start: here, born: tick };
             let (pos, speed) = (u.pos, u.stats.max_speed);
             let row = match self.watchdog.rows.get_mut(id) {
                 Some(r) if r.target == target => r,
@@ -128,10 +134,16 @@ impl Sim {
             // Ticks to fly TRAVEL units at top speed (speed > 0: mobile).
             let travel = ((TRAVEL as u128) << 32) * TICK_HZ as u128 / (speed.to_bits().max(1) as u128);
             let going_round = travel.min(u64::MAX as u128) as u64;
-            if here + Fixed::from_int(GAIN) <= row.best {
+            // However it creeps nearer, an order lives at most twice the time
+            // to fly its first distance plus TRAVEL at top speed.
+            let deadline = ((row.start.to_bits().max(0) as u128 + ((TRAVEL as u128) << 32)) * 2 * TICK_HZ as u128
+                / (speed.to_bits().max(1) as u128)).min(u64::MAX as u128) as u64;
+            let overdue = tick.saturating_sub(row.born) >= deadline.max(STILL);
+            if here + Fixed::from_int(GAIN) <= row.best && !overdue {
                 row.best = here;
                 row.since = tick;
-            } else if tick.saturating_sub(row.anchored) >= STILL
+            } else if overdue
+                || tick.saturating_sub(row.anchored) >= STILL
                 || tick.saturating_sub(row.since) >= going_round.max(STILL)
             {
                 ended.push((id, row.reported));
@@ -143,6 +155,7 @@ impl Sim {
             if let Some(u) = self.units.get_mut(id) {
                 u.target = None;
             }
+            self.events.push(SimEvent::OrderAbandoned { id });
             if !reported {
                 self.events.push(SimEvent::OrderBlocked { id });
             }

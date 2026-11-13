@@ -350,5 +350,8 @@ fn an_order_the_sim_could_not_serve_is_sent_again() {
     assert_eq!(out.len(), 1, "the same order is not repeated while it is live");
     ai.absorb(2, &[SimEvent::OrderBlocked { id: unit }]);
     ai.go(3, &mut out, unit, to);
-    assert_eq!(out.len(), 2, "after OrderBlocked the AI sends it again");
+    assert_eq!(out.len(), 1, "a hold keeps the order: not sent again");
+    ai.absorb(4, &[SimEvent::OrderAbandoned { id: unit }]);
+    ai.go(5, &mut out, unit, to);
+    assert_eq!(out.len(), 2, "after OrderAbandoned the AI sends it again");
 }
