@@ -26,6 +26,7 @@
 //! runs in a bare `App` (`flow_tests`).
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use bevy::prelude::*;
 use sta_content::MapDef;
 use sta_sim::setup::{Control, GameSetup};
@@ -123,6 +124,8 @@ impl Plugin for FlowPlugin {
             .add_systems(Startup, |mut next: ResMut<NextState<AppState>>| next.set(AppState::FrontEnd))
             .add_systems(OnEnter(AppState::FrontEnd), (clear_match, open_scene).chain())
             .add_systems(OnEnter(AppState::Loading), close_scene)
+            // A remount keeps no lookup of the previous mount: before anything reads the new one.
+            .add_systems(Update, invalidate_mount_caches.before(GameSet::Input).run_if(resource_exists_and_changed::<Mounted>).run_if(not(resource_added::<Mounted>)))
             .add_systems(
                 Update,
                 (
@@ -135,6 +138,37 @@ impl Plugin for FlowPlugin {
                 )
                     .in_set(GameSet::Ui),
             );
+    }
+}
+
+/// Everything cached by name from the mounted files (decoded textures with their misses, parts,
+/// unit models, moon variants, silhouettes, surface recipes) and the sprite tables are rebuilt
+/// from the new mount; systems that already follow `Mounted`'s change (fonts, fog art, i18n,
+/// HUD sprites, cull and weapon tables, radar colours) need nothing here.
+#[allow(clippy::too_many_arguments)]
+fn invalidate_mount_caches(
+    vfs: Res<Mounted>,
+    textures: Option<ResMut<crate::render::textures::TextureCache>>,
+    parts: Option<ResMut<crate::render::model_scene::PartCache>>,
+    models: Option<ResMut<crate::render::units::UnitModels>>,
+    moons: Option<ResMut<crate::render::moons::MoonVariants>>,
+    silhouettes: Option<ResMut<crate::render::strategic::Silhouettes>>,
+    surfaces: Option<ResMut<crate::render::surfaces::Surfaces>>,
+    tables: Option<ResMut<crate::render::sprites::SpriteTables>>,
+) {
+    fn reset<T: Resource<Mutability = bevy::ecs::component::Mutable> + Default>(r: Option<ResMut<T>>) {
+        if let Some(mut r) = r {
+            *r = T::default();
+        }
+    }
+    reset(textures);
+    reset(parts);
+    reset(models);
+    reset(moons);
+    reset(silhouettes);
+    reset(surfaces);
+    if let Some(mut t) = tables {
+        t.0 = Arc::new(sta_assets::load_sprite_table(&vfs.0));
     }
 }
 
@@ -377,22 +411,14 @@ fn remount(
     match front_end_data(&vfs, &mut catalogue, Some(root)) {
         Ok(d) => {
             info!("mounted {}", vfs.layers().iter().map(|l| l.name()).collect::<Vec<_>>().join(" -> "));
+            browser.mount_summary = crate::mount_summary(root, &vfs);
             browser.maps = d.screens.maps.iter().map(|m| m.def.name.clone()).collect();
             commands.insert_resource(SetupDraft::new(&d.screens));
             commands.insert_resource(d.screens);
             commands.insert_resource(MenuSceneSource(d.scene));
             commands.insert_resource(MenuMusic(d.menu_music));
             // The campaigns follow the mount (UI-25 / INT-M6).
-            match super::mission_host::load_campaigns(&vfs, Some(root), folder.as_deref()) {
-                Some((campaigns, movies)) => {
-                    commands.insert_resource(campaigns);
-                    commands.insert_resource(movies);
-                }
-                None => {
-                    commands.remove_resource::<crate::frontend::campaign::Campaigns>();
-                    commands.remove_resource::<crate::media::campaign::MissionMovies>();
-                }
-            }
+            apply_campaigns(&mut commands, super::mission_host::load_campaigns(&vfs, Some(root), folder.as_deref()));
         }
         Err(e) => {
             notices.write(Notice::new(Severity::Bad, format!("Cannot load content: {e}")));
@@ -400,6 +426,22 @@ fn remount(
         }
     }
     mounted.0 = vfs;
+}
+
+/// Make the campaign resources match the mount: the book when the install has campaigns, none
+/// when it has not. The movie catalogue always exists (empty without campaigns): the media
+/// tracker reads it every frame, so removing it on a remount to a campaign-less mod panicked.
+pub(crate) fn apply_campaigns(commands: &mut Commands, loaded: Option<(crate::frontend::campaign::Campaigns, crate::media::campaign::MissionMovies)>) {
+    match loaded {
+        Some((campaigns, movies)) => {
+            commands.insert_resource(campaigns);
+            commands.insert_resource(movies);
+        }
+        None => {
+            commands.remove_resource::<crate::frontend::campaign::Campaigns>();
+            commands.insert_resource(crate::media::campaign::MissionMovies::default());
+        }
+    }
 }
 
 /// The maps of `data` as the map view's browser lists them.
