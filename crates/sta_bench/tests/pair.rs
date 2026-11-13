@@ -94,7 +94,8 @@ fn a_pair_compares_and_repeats() {
     assert!(f.get("mean").num().is_some() && f.get("within").eq(&pair::Jv::Null));
     assert!(root.join("a/frames/f0.png").is_file());
     let side = pair::read_png(&root.join("a/frames/f0.png")).unwrap();
-    assert_eq!((side.w, side.h), (24, 6));
+    assert_eq!((side.w, side.h), (32, 6));
+    assert!(f.get("metrics").get("regions").get("bg").get("share").num().is_some() && f.get("metrics").get("lowfreq").num().is_some());
     assert!(a.md.contains("## State series") && a.md.contains("synthetic"));
     assert_eq!(j.get("out_of_tolerance").num(), Some(a.out_of_tolerance as f64));
     let _ = fs::remove_dir_all(&root);
