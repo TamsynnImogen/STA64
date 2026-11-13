@@ -373,7 +373,7 @@ pub fn spawn_field(
         core: Vec4::new(r.core[0], r.core[1], 0.0, 0.0),
         opac: Vec4::new(r.opacity / reach, env.ydev, 0.0, 0.0),
         key: Vec4::ZERO,
-        scat: Vec4::ZERO,
+        scat: Vec4::new(0.0, 0.0, 16.0, 0.0),
         box_lo: lo.extend(1.0),
         box_hi: hi.extend(0.0),
         cam_fwd: Vec4::NEG_Z,
@@ -427,6 +427,7 @@ fn update(
     camera: Query<(&GlobalTransform, &Projection), crate::map::MainCamera>,
     lights: Query<(&GlobalTransform, &DirectionalLight)>,
     shadow: Option<Res<crate::render::shadows::KeyShadow>>,
+    quality: Option<Res<crate::render::quality::RenderQuality>>,
     mut fields: Query<&mut NebulaField>,
     mut materials: ResMut<Assets<NebulaMaterial>>,
     clock: Res<crate::clock::AnimClock>,
@@ -461,7 +462,7 @@ fn update(
         p.key = key.extend(share);
         // Ships' shadows through the gas (RND-15).
         apply_shadow(p, shadow.as_deref());
-        p.scat = Vec4::new(1.0 + g * g, 2.0 * g, 0.0, 0.0);
+        p.scat = Vec4::new(1.0 + g * g, 2.0 * g, quality.as_deref().map_or(16, |q| q.nebula_steps) as f32, 0.0);
         p.flow.x = (t * r.flow_speed) % 100.0;
         // Edge-on dimming: a long path through a thin field adds up; dim it unless
         // the gas's own opacity already does.

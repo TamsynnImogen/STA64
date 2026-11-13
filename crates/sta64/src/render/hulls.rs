@@ -228,7 +228,11 @@ fn update_view(
     sun: Query<(&GlobalTransform, &DirectionalLight)>,
     mut view: ResMut<HullView>,
     mut materials: ResMut<Assets<HullMaterial>>,
+    switches: Option<Res<crate::render::quality::PerfSwitches>>,
 ) {
+    if switches.is_some_and(|s| s.freeze_hull_materials) {
+        return;
+    }
     let Ok(cam) = camera.single() else { return };
     let (dvec, dcol) = lights(sun.iter().map(|(t, l)| {
         let c = l.color.to_linear();

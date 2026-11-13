@@ -25,7 +25,7 @@ use crate::pair;
 const NO_ADAPTER: i32 = 77;
 
 /// The variants run when `--variants` is not given: the attribution set.
-pub const DEFAULT_VARIANTS: &str = "base,no-rocks,no-planets,no-nebula,no-sky,no-shadows,no-fog,std-hulls";
+pub const DEFAULT_VARIANTS: &str = "base,no-rocks,no-planets,no-nebula,no-sky,no-shadows,no-fog,std-hulls,msaa-off,msaa-2,no-prepass,freeze-rocks,freeze-hulls";
 
 #[derive(Deserialize, Default, Debug)]
 #[serde(default)]
@@ -42,7 +42,6 @@ pub struct Stat {
 pub struct Counts {
     pub entities: u64,
     pub visible_meshes: u64,
-    pub triangles: u64,
     pub rocks_visible: u64,
     pub shadow_pass_active: bool,
 }
@@ -59,6 +58,7 @@ pub struct SysCost {
 pub struct Rep {
     pub frame_ms: Stat,
     pub main_cpu_ms: Stat,
+    pub gpu_wait_ms: Stat,
     pub gpu_pass_ms: BTreeMap<String, f64>,
     pub gpu_top_level_total_ms: f64,
     pub systems: BTreeMap<String, SysCost>,
@@ -254,13 +254,13 @@ pub fn markdown(what: &str, install: &Path, mod_name: Option<&str>, runs: &[Run]
         }
         let base = rep.variants.first();
         let base_ms = base.map_or(0.0, |b| b.median_of_means_ms);
-        let _ = writeln!(s, "| variant | frame ms (median) | fps | spread ms | vs base ms | main CPU ms | GPU passes ms | visible meshes | triangles |");
+        let _ = writeln!(s, "| variant | frame ms (median) | fps | spread ms | vs base ms | main CPU ms | GPU wait ms | GPU passes ms | visible meshes |");
         let _ = writeln!(s, "|---|---:|---:|---:|---:|---:|---:|---:|---:|");
         for v in &rep.variants {
             let mid = v.reps.get(v.reps.len() / 2);
             let _ = writeln!(
                 s,
-                "| {} | {:.2} | {:.1} | {:.2}-{:.2} | {:+.2} | {:.2} | {:.2} | {} | {} |",
+                "| {} | {:.2} | {:.1} | {:.2}-{:.2} | {:+.2} | {:.2} | {:.2} | {:.2} | {} |",
                 v.name,
                 v.median_of_means_ms,
                 v.fps_median,
@@ -268,9 +268,9 @@ pub fn markdown(what: &str, install: &Path, mod_name: Option<&str>, runs: &[Run]
                 v.max_of_means_ms,
                 v.median_of_means_ms - base_ms,
                 mid.map_or(0.0, |m| m.main_cpu_ms.mean),
+                mid.map_or(0.0, |m| m.gpu_wait_ms.mean),
                 mid.map_or(0.0, |m| m.gpu_top_level_total_ms),
                 mid.map_or(0, |m| m.counts.visible_meshes),
-                mid.map_or(0, |m| m.counts.triangles),
             );
         }
         if let Some(b) = base.and_then(|b| b.reps.first()) {
@@ -287,7 +287,7 @@ pub fn markdown(what: &str, install: &Path, mod_name: Option<&str>, runs: &[Run]
                     let _ = writeln!(s, "- `{k}`: {:.3} ms, {:.1} calls", v.ms_per_frame, v.calls_per_frame);
                 }
             }
-            let _ = writeln!(s, "\nCounts (base): {} entities, {} visible meshes ({} rocks), {} triangles, shadow pass {}.\n", b.counts.entities, b.counts.visible_meshes, b.counts.rocks_visible, b.counts.triangles, if b.counts.shadow_pass_active { "on" } else { "off" });
+            let _ = writeln!(s, "\nCounts (base): {} entities, {} visible meshes ({} rocks), shadow pass {}.\n", b.counts.entities, b.counts.visible_meshes, b.counts.rocks_visible, if b.counts.shadow_pass_active { "on" } else { "off" });
         }
     }
     s
@@ -303,7 +303,7 @@ mod tests {
           "load_avg_start":"1 2 3","competing_processes_start":{"sta64":1},"scenery":["asteroid field at 0 0 0"],
           "variants":[{"name":"base","median_of_means_ms":20.0,"min_of_means_ms":19.0,"max_of_means_ms":21.0,"fps_median":50.0,
             "reps":[{"frame_ms":{"mean":20.0},"main_cpu_ms":{"mean":5.0},"gpu_pass_ms":{"main_opaque_pass_3d":3.0},"gpu_top_level_total_ms":3.0,
-              "systems":{"system: foo":{"ms_per_frame":1.5,"calls_per_frame":1.0}},"counts":{"entities":9,"visible_meshes":4,"triangles":100}}]},
+              "systems":{"system: foo":{"ms_per_frame":1.5,"calls_per_frame":1.0}},"counts":{"entities":9,"visible_meshes":4}}]},
             {"name":"no-rocks","median_of_means_ms":15.0,"min_of_means_ms":14.0,"max_of_means_ms":16.0,"fps_median":66.0,"reps":[]}]}"#;
         let report: Report = json5::from_str(json).expect("parses");
         let md = markdown("m", Path::new("/g"), None, &[Run { profile: "refit".into(), size: "3440x1440".into(), report }]);

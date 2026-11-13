@@ -11,7 +11,7 @@
 //!   where the adapter has them; the report says when it has not);
 //! - **CPU time per system and per schedule** (`--perf-systems`, needs a build with the
 //!   `perf-trace` feature: it adds up Bevy's own tracing spans);
-//! - **counts**: entities, visible meshes, triangles drawn, rocks, shadow pass.
+//! - **counts**: entities, visible meshes, visible rocks, whether the shadow pass is on.
 //!
 //! Cost is attributed **by difference**: `--perf-variants base,no-rocks,no-nebula+no-rocks`
 //! runs each variant (a `+` list of [`TOGGLES`]) for `--perf-reps` rounds, interleaved
@@ -45,6 +45,12 @@ pub const TOGGLES: &[(&str, &str)] = &[
     ("no-shadows", "the key-light shadow pass off"),
     ("no-fog", "fog and shroud layers off"),
     ("std-hulls", "hulls in Bevy's PBR instead of the hull shader"),
+    ("msaa-off", "no multisampling on the map's cameras"),
+    ("msaa-2", "2x multisampling"),
+    ("no-prepass", "the map camera's depth prepass off (the nebula march reads it)"),
+    ("neb-steps8", "nebula march with 8 steps instead of 16"),
+    ("freeze-rocks", "rock materials not rewritten when the camera moves (lighting goes stale: measurement only)"),
+    ("freeze-hulls", "hull materials not rewritten when the camera moves (measurement only)"),
 ];
 
 /// The `--perf*` options.
@@ -106,6 +112,8 @@ type Totals = BTreeMap<(&'static str, String), (u64, u64)>;
 
 static TOTALS: Mutex<Totals> = Mutex::new(BTreeMap::new());
 static RECORDING: AtomicBool = AtomicBool::new(false);
+/// Nanoseconds the render thread spent waiting for the GPU since the last frame was counted.
+static GPU_WAIT_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// The log plugin of the headless app: with `--perf-systems`, one more layer that adds up
 /// the time spent in each system's and schedule's span (it needs the `perf-trace` build).
@@ -193,6 +201,8 @@ mod span_layer {
 struct Round {
     frame_ms: Vec<f64>,
     main_ms: Vec<f64>,
+    /// Per frame: the render thread's wait for the GPU, milliseconds.
+    wait_ms: Vec<f64>,
     /// GPU milliseconds per pass: (sum, samples).
     gpu: BTreeMap<String, (f64, u32)>,
     counts: Counts,
@@ -204,7 +214,6 @@ struct Round {
 struct Counts {
     entities: usize,
     visible_meshes: usize,
-    triangles: u64,
     rocks_visible: usize,
     shadow_active: bool,
 }
@@ -280,7 +289,9 @@ pub(super) fn add(app: &mut App, opts: &PerfOpts) {
 /// The end of the render world's frame: wait until the GPU has finished it, so the frame
 /// time is the slower of CPU and GPU, not the CPU's alone.
 fn wait_for_gpu(device: Res<bevy::render::renderer::RenderDevice>) {
+    let t = Instant::now();
     let _ = device.poll(bevy::render::render_resource::PollType::wait_indefinitely());
+    GPU_WAIT_NS.fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
 }
 
 fn loadavg() -> String {
@@ -324,11 +335,10 @@ fn apply_variant(
     fog: Option<ResMut<crate::render::fog::FogSettings>>,
     hulls: Option<ResMut<crate::render::hulls::HullLighting>>,
     quality: Option<ResMut<crate::render::quality::RenderQuality>>,
+    switches: Option<ResMut<crate::render::quality::PerfSwitches>>,
 ) {
+    // Every frame, not only on a change: the map spawns its objects over the first frames.
     let want = run.plan.get(run.at).copied();
-    if run.applied == want {
-        return;
-    }
     let Some(i) = want else { return };
     let toggles = run.variants[i].1.clone();
     let on = |t: &str| toggles.iter().any(|x| x == t);
@@ -337,21 +347,40 @@ fn apply_variant(
             || ((neb.is_some() || boards.is_some()) && on("no-nebula"))
             || (sky.is_some() && on("no-sky"))
             || (planet.is_some() && on("no-planets"));
-        if hide {
-            *vis = Visibility::Hidden;
-        } else if *vis == Visibility::Hidden {
-            *vis = Visibility::Inherited;
+        let want = if hide { Visibility::Hidden } else { Visibility::Inherited };
+        if *vis != want {
+            *vis = want;
         }
     }
     if let Some(mut f) = fog {
-        f.fog = !on("no-fog");
-        f.shroud = !on("no-fog");
+        let want = crate::render::fog::FogSettings { fog: !on("no-fog"), shroud: !on("no-fog") };
+        if *f != want {
+            *f = want;
+        }
     }
     if let Some(mut h) = hulls {
-        h.on = !on("std-hulls");
+        let want = !on("std-hulls");
+        if h.on != want {
+            h.on = want;
+        }
     }
     if let Some(mut q) = quality {
-        q.shadows = !on("no-shadows");
+        let d = crate::render::quality::RenderQuality::default();
+        let want = crate::render::quality::RenderQuality {
+            shadows: !on("no-shadows"),
+            msaa: if on("msaa-off") { 1 } else if on("msaa-2") { 2 } else { d.msaa },
+            depth_prepass: !on("no-prepass"),
+            nebula_steps: if on("neb-steps8") { 8 } else { d.nebula_steps },
+        };
+        if *q != want {
+            *q = want;
+        }
+    }
+    if let Some(mut w) = switches {
+        let want = crate::render::quality::PerfSwitches { freeze_rock_materials: on("freeze-rocks"), freeze_hull_materials: on("freeze-hulls") };
+        if *w != want {
+            *w = want;
+        }
     }
     run.applied = want;
 }
@@ -359,6 +388,7 @@ fn apply_variant(
 /// `--perf-camera sweep`: the camera swings about the ground point it looks at (every frame
 /// from the scene's pose, so it does not drift), as a player panning does: what is keyed to
 /// the camera's movement (rock materials, shadow fit, culling) is exercised.
+#[allow(clippy::type_complexity)]
 fn sweep(run: Res<PerfRun>, time: Res<Time<Real>>, mut cameras: Query<(&mut Transform, &Camera), (With<Camera3d>, Without<crate::map::BackgroundCamera>)>) {
     if run.opts.camera != "sweep" {
         return;
@@ -400,8 +430,7 @@ fn stats(v: &[f64]) -> String {
 fn drive(
     mut run: ResMut<PerfRun>,
     diagnostics: Res<DiagnosticsStore>,
-    meshes: Res<Assets<Mesh>>,
-    visible: Query<(&ViewVisibility, &Mesh3d, Option<&crate::render::rock::RockPart>)>,
+    visible: Query<(&ViewVisibility, Option<&crate::render::rock::RockPart>), With<Mesh3d>>,
     all: Query<Entity>,
     shadow_cam: Query<&Camera, With<crate::render::shadows::ShadowCamera>>,
     scenery: Query<(&GlobalTransform, Option<&crate::map::AsteroidField>, Option<&crate::render::nebula::NebulaField>, Option<&crate::render::nebula::NebulaBoards>, Option<&crate::render::planet::PlanetBody>)>,
@@ -432,11 +461,13 @@ fn drive(
             RECORDING.store(true, Ordering::Relaxed);
         }
         run.seen_gpu.clear();
+        GPU_WAIT_NS.store(0, Ordering::Relaxed);
         return;
     }
     if let (Some(dt), Some(m)) = (dt, main_ms) {
         run.round.frame_ms.push(dt);
         run.round.main_ms.push(m);
+        run.round.wait_ms.push(GPU_WAIT_NS.swap(0, Ordering::Relaxed) as f64 / 1e6);
     }
     // GPU passes: each new measurement once.
     let mut fresh = Vec::new();
@@ -460,14 +491,11 @@ fn drive(
     }
     // The round is done: counts, systems.
     let mut counts = Counts { entities: all.iter().count(), shadow_active: shadow_cam.iter().any(|c| c.is_active), ..default() };
-    for (vis, mesh, rock) in &visible {
+    for (vis, rock) in &visible {
         if vis.get() {
             counts.visible_meshes += 1;
             if rock.is_some() {
                 counts.rocks_visible += 1;
-            }
-            if let Some(m) = meshes.get(&mesh.0) {
-                counts.triangles += m.indices().map(|i| i.len() as u64 / 3).unwrap_or(m.count_vertices() as u64 / 3);
             }
         }
     }
@@ -548,6 +576,7 @@ fn write_report(run: &PerfRun, adapter: &str, timestamps: bool) -> Result<PathBu
                 Obj::new()
                     .raw("frame_ms", stats(&r.frame_ms))
                     .raw("main_cpu_ms", stats(&r.main_ms))
+                    .raw("gpu_wait_ms", stats(&r.wait_ms))
                     .raw("gpu_pass_ms", gpu.done())
                     .num("gpu_top_level_total_ms", gpu_total)
                     .raw("systems", systems.done())
@@ -556,8 +585,7 @@ fn write_report(run: &PerfRun, adapter: &str, timestamps: bool) -> Result<PathBu
                         Obj::new()
                             .int("entities", r.counts.entities as u64)
                             .int("visible_meshes", r.counts.visible_meshes as u64)
-                            .int("triangles", r.counts.triangles)
-                            .int("rocks_visible", r.counts.rocks_visible as u64)
+                                            .int("rocks_visible", r.counts.rocks_visible as u64)
                             .boolean("shadow_pass_active", r.counts.shadow_active)
                             .done(),
                     )

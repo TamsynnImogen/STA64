@@ -395,6 +395,7 @@ impl Plugin for MapPlugin {
                 pan: None,
             })
             .add_plugins(crate::render::planet::PlanetPlugin)
+            .add_plugins(crate::render::quality::QualityPlugin)
             .add_plugins(crate::render::rock::RockPlugin)
             .add_plugins(crate::render::nebula::NebulaPlugin)
             .add_plugins(crate::render::stock::StockBackgroundsPlugin)

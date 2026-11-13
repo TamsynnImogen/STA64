@@ -373,6 +373,48 @@ fn update(
 mod tests {
     use super::*;
 
+    /// Whether the shadow camera is active after one frame of `update` on a scene with the
+    /// Key, a camera, and (or not) one hull proxy in view.
+    fn pass_runs(shadows: bool, profile: RenderProfile, caster: bool) -> bool {
+        let mut app = App::new();
+        app.insert_resource(profile)
+            .insert_resource(crate::render::quality::RenderQuality { shadows, ..default() })
+            .insert_resource(KeyShadow::off(Handle::default()))
+            .add_systems(Update, update);
+        let cam = app
+            .world_mut()
+            .spawn((
+                ShadowCamera,
+                Camera { is_active: false, ..default() },
+                Transform::default(),
+                GlobalTransform::default(),
+                Projection::Orthographic(OrthographicProjection::default_3d()),
+            ))
+            .id();
+        app.world_mut().spawn((Camera3d::default(), Frustum::default()));
+        app.world_mut().spawn((GlobalTransform::default(), DirectionalLight::default()));
+        if caster {
+            app.world_mut().spawn((
+                ShadowProxy,
+                GlobalTransform::default(),
+                bevy::camera::primitives::Aabb::from_min_max(-Vec3::ONE, Vec3::ONE),
+                InheritedVisibility::VISIBLE,
+            ));
+        }
+        app.update();
+        app.world().get::<Camera>(cam).expect("camera").is_active
+    }
+
+    /// Regression guard (a pass is skipped when nothing needs it, whatever the machine's speed):
+    /// the shadow pass runs only under the Refit profile, with the setting on and a hull to cast.
+    #[test]
+    fn the_shadow_pass_is_skipped_when_nothing_needs_it() {
+        assert!(pass_runs(true, RenderProfile::Refit, true));
+        assert!(!pass_runs(true, RenderProfile::Refit, false), "no hull in view");
+        assert!(!pass_runs(false, RenderProfile::Refit, true), "setting off");
+        assert!(!pass_runs(true, RenderProfile::Stock, true), "stock draws no ship shadows");
+    }
+
     #[test]
     fn residual_split_round_trips_to_better_than_a_half_float() {
         for d in [0.0f32, 0.1234567, 0.5, 0.987654] {
