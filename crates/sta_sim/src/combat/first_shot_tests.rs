@@ -26,6 +26,11 @@ fn v(x: i32, z: i32) -> Vec3 {
 /// The fake content, shot timing on, the hold as asked, every `fx_beam`
 /// with `initialShotDelayModifier` = `modifier` and no jitter.
 fn db(hold: bool, modifier: Option<f64>) -> Arc<ContentDb> {
+    db_with(hold, modifier, None)
+}
+
+/// [`db`] with `fx_beam`'s refire set to `refire` ticks.
+fn db_with(hold: bool, modifier: Option<f64>, refire: Option<u64>) -> Arc<ContentDb> {
     let fake = sta_content::fake::db();
     let mut f: Features = fake.features().clone();
     f.weapon_shot_timing = true;
@@ -36,6 +41,9 @@ fn db(hold: bool, modifier: Option<f64>) -> Arc<ContentDb> {
         if w.odf == "fx_beam" {
             w.initial_shot_delay_modifier = modifier.map(Fixed::from_f64);
             w.ignore_shot_delay_effects = true;
+            if let Some(r) = refire {
+                w.refire = r;
+            }
         }
         b = b.weapon(w);
     }
@@ -101,18 +109,22 @@ fn an_attack_order_adds_no_delay_and_a_late_unit_is_not_held() {
 
 #[test]
 fn the_initial_reload_still_runs_from_creation_under_the_hold() {
-    // Random initial reloads (key absent): every weapon whose draw ran out
-    // during the hold fires on the first tick after it, the others later.
-    let db = db(true, None);
+    // Random initial reloads (key absent) of U[0,1) x 150 ticks: a draw that
+    // ran out during the hold fires on the first tick after it, a longer one
+    // on its own tick counted from creation (not from the hold's end).
+    let refire = 150;
+    let db = db_with(true, None, Some(refire));
     let mut s = sim(&db);
     let ids: Vec<EntityId> =
-        (0..12).map(|i| s.spawn_def(db.key("fx_frigate").unwrap(), PlayerId(1), v(2000 + 10 * i, 2000), AHEAD).unwrap()).collect();
-    s.spawn_def(db.key("fx_station").unwrap(), PlayerId(2), v(2050, 2300), AHEAD).unwrap();
-    let f = fired(&mut s, 200, &mut |_| vec![]);
+        (0..24).map(|i| s.spawn_def(db.key("fx_frigate").unwrap(), PlayerId(1), v(2000 + 10 * i, 2000), AHEAD).unwrap()).collect();
+    s.spawn_def(db.key("fx_station").unwrap(), PlayerId(2), v(2100, 2300), AHEAD).unwrap();
+    let f = fired(&mut s, 2 * refire, &mut |_| vec![]);
     let firsts: Vec<u64> = ids.iter().map(|&i| first_of(&f, i)).collect();
-    assert!(firsts.iter().all(|t| *t >= START_HOLD_TICKS), "{firsts:?}");
-    let refire = db.weapon(db.key("fx_beam").unwrap()).unwrap().refire;
-    assert!(firsts.iter().all(|t| *t < refire.max(START_HOLD_TICKS + 1)), "{firsts:?}");
+    assert!(firsts.iter().all(|t| (START_HOLD_TICKS..refire).contains(t)), "{firsts:?}");
+    let held = firsts.iter().filter(|t| **t == START_HOLD_TICKS).count();
+    let later = firsts.iter().filter(|t| **t > START_HOLD_TICKS).count();
+    // With 24 draws both kinds occur (seeded): some held, some after the hold.
+    assert!(held > 0 && later > 0, "{firsts:?}");
 }
 
 #[test]

@@ -140,5 +140,10 @@ fn mining_and_tractor_beams_do_not_vote_attack() {
     let e = sim.spawn_def(db.key("fx_frigate").unwrap(), PlayerId(1), at(3000.0), h).unwrap();
     let v = sim.view();
     assert_eq!(context_order(Some(&db), &v, PlayerId(0), &[m, r], e), None);
-    assert_eq!(context_order(Some(&db), &v, PlayerId(0), &[m, r, c], e), Some(Order::Attack { units: vec![m, r, c], target: e }));
+    let attack = context_order(Some(&db), &v, PlayerId(0), &[m, r, c], e).unwrap();
+    assert_eq!(attack, Order::Attack { units: vec![m, r, c], target: e });
+    // The sim takes it for the cruiser only; the miner and the rig keep theirs.
+    sim.step(&[Command { player: PlayerId(0), seq: 0, kind: CommandKind::Order(attack.clone()) }]);
+    assert_eq!((sim.weapons.attack_of(m), sim.weapons.attack_of(r), sim.weapons.attack_of(c)), (None, None, Some(e)));
+    assert_eq!(super::takers(Some(&db), &v, &attack), vec![c]);
 }

@@ -168,7 +168,10 @@ def load_pair(text, game):
             mm = re.match(r"(\S+)\s+(.+)$", v)
             if not mm:
                 raise PairError("bad At=%r (want '<sim s> <command>')" % v)
-            p.at.append((secs(mm.group(1), "At"), mm.group(2).strip()))
+            cmd = mm.group(2).strip()
+            if ";" in cmd and any(is_rclick(c.strip()) for c in cmd.split(";")):
+                raise PairError("At=%r: rclick is a pointer action, not a scene command: give it an At= of its own" % v)
+            p.at.append((secs(mm.group(1), "At"), cmd))
     p.scene_sections = [(n, i) for n, i in resolved if n.lower() != "pair"]
     return p
 
@@ -253,19 +256,26 @@ def latest_t(marks):
 
 def match_commands(marks, sent):
     """For each sent command text (in send order) the t of the first unused
-    `cmd` mark with that text, else None."""
+    `cmd` mark with that text, else None. `a; b` is marked command by
+    command: the first part's mark lands it, and every part's mark is used
+    up so a later command of the same text cannot take one of them."""
     cmds = [m for m in marks if m["kind"] == "cmd"]
     used = [False] * len(cmds)
     res = []
     for text in sent:
         found = None
-        # `a; b` is marked command by command: the first one's mark lands it.
-        first = text.split(";")[0].strip()
-        for i, m in enumerate(cmds):
-            if not used[i] and (m["text"] or "").strip() == first:
-                used[i] = True
-                found = m["t"]
-                break
+        start = 0
+        for k, part in enumerate(p.strip() for p in text.split(";")):
+            for i in range(start, len(cmds)):
+                if not used[i] and (cmds[i]["text"] or "").strip() == part:
+                    used[i] = True
+                    start = i + 1
+                    if k == 0:
+                        found = cmds[i]["t"]
+                    break
+            else:
+                if k == 0:
+                    break
         res.append(found)
     return res
 
@@ -473,8 +483,11 @@ class Runner:
         time.sleep(0.3)
         self.bench.run(drive + ["move", str(cx), str(cy)], min(30, self.remaining()))
         time.sleep(0.3)
+        t0 = time.time()
         out, rc, dt = self.bench.run(drive + ["click", str(cx), str(cy), "--button", "3"], min(30, self.remaining()))
-        wall = time.time() - min(dt, 0.2) / 2
+        # The press happened while `drive click` ran: take the middle (an
+        # uncertainty of half its run, a few tenths of a second).
+        wall = (t0 + time.time()) / 2
         self.sent.append(cmd)
         self.answers[len(self.sent) - 1] = out.strip()
         self.ui_wall[len(self.sent) - 1] = wall

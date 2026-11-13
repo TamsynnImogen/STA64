@@ -45,21 +45,26 @@ fn is_miner(db: &ContentDb, view: &WorldView, id: EntityId) -> bool {
     view.unit(id).and_then(|u| db.unit(u.def)).is_some_and(|d| d.mines())
 }
 
-/// A weapon that attacks: not point defence or a special, and not a tool.
-/// Measured on stock A2 and Roots + Classic: a freighter (its mining beams,
-/// ordnance class `minebm`) and a construction ship (its tractor beam, a
-/// `toggleweapon`) take no part in an attack vote; what the engine's own
-/// "can attack" test reads is not known.
-fn attacks(w: &sta_content::WeaponDef) -> bool {
-    let tool = w.class.0 == "minebm" || w.raw.str("classLabel").is_some_and(|c| c.eq_ignore_ascii_case("toggleweapon"));
-    w.kind != sta_content::WeaponKind::PointDefence && !crate::specials::is_special(w) && !tool
+/// Armed for the vote, as the sim's `Order::Attack` takes it
+/// ([`can_attack`](crate::combat::weapons::can_attack)).
+fn is_armed(db: &ContentDb, view: &WorldView, id: EntityId) -> bool {
+    view.unit(id).and_then(|u| db.unit(u.def)).is_some_and(|d| crate::combat::weapons::can_attack(db, d))
 }
 
-/// Armed for the vote: a hardpoint with a weapon that [`attacks`].
-fn is_armed(db: &ContentDb, view: &WorldView, id: EntityId) -> bool {
-    view.unit(id)
-        .and_then(|u| db.unit(u.def))
-        .is_some_and(|d| d.hardpoints.iter().any(|hp| db.weapon(hp.weapon.key).is_some_and(attacks)))
+/// The units of `order` that carry it out (the sim drops it for the rest):
+/// the miners of a Mine, the armed units of an Attack, everyone otherwise.
+/// For the client's destination lines and acknowledgements.
+pub fn takers(db: Option<&ContentDb>, view: &WorldView, order: &Order) -> Vec<EntityId> {
+    let keep = |ids: &[EntityId], f: &dyn Fn(&ContentDb, EntityId) -> bool| match db {
+        Some(db) => ids.iter().copied().filter(|&id| f(db, id)).collect(),
+        None => ids.to_vec(),
+    };
+    match order {
+        Order::Mine { units, .. } => keep(units, &|db, id| is_miner(db, view, id)),
+        Order::Attack { units, .. } => keep(units, &|db, id| is_armed(db, view, id)),
+        Order::Rally { builders, .. } => builders.clone(),
+        _ => Vec::new(),
+    }
 }
 
 fn is_enemy(view: &WorldView, me: PlayerId, owner: PlayerId) -> bool {

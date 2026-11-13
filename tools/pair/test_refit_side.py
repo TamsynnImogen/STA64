@@ -133,6 +133,12 @@ epoch 0x01dd72e7 0x8c5e6c41 1000
     def test_command_list_lands_with_its_first_command(self):
         ms = rs.parse_marks("1100 cmd t=1.03 text=goto ship 2000 0 3200\n1101 cmd t=1.03 text=pause\n")
         self.assertEqual(rs.match_commands(ms, ["goto ship 2000 0 3200; pause"]), [1.03])
+        # The list used up the `pause` mark: a later pause finds none.
+        self.assertEqual(rs.match_commands(ms, ["goto ship 2000 0 3200; pause", "pause"]), [1.03, None])
+
+    def test_rclick_refused_in_a_list(self):
+        with self.assertRaises(rs.PairError):
+            rs.load_pair(PAIR.replace("At=5 weapons ship on", "At=5 select ship; rclick turner"), "a2")
 
     def test_no_ready(self):
         self.assertIsNone(rs.ready_t(rs.parse_marks("5 state t=1.0\n")))

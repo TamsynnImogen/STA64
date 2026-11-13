@@ -499,9 +499,13 @@ sta-bench pair move --game a2 --refit-out <earlier>/refit --install ...   # reus
   (`--install`, `--mod`, or `--fake` for tests), each command on the tick
   nearest to when it **landed on the original**, frames at the original's
   frame times; `rclick` gives the order `sta_sim::context` picks for the
-  selection (the client's right-click rule), else a move to the object's place. It writes the original's file formats: `Scene.marks` (Refit's
+  selection (the client's right-click rule), else a move to the object's place.
+  Its scene is built at the original's `ready` time (the mission runs empty
+  until then), so rules on mission time, such as no fire in the first 2 s
+  (SIM-53), line up; `sta64 --headless` frames still start the scene at 0. It writes the original's file formats: `Scene.marks` (Refit's
   names; fire bursts merged per shooter and weapon as Refit marks them, a
-  projectile firing from its shot until its hit as Refit follows ordnance; one
+  projectile firing from its shot until its hit as Refit follows ordnance,
+  with `[Marks] Ordnance=1`; one
   `ord.new` per shot; a `state` line per named object every tick), `run.json`,
   and frames from `sta64 --headless` (`--sta64`/`$STA64_BIN`). Those frames are
   still the bench's stand-in shapes on fake content (TOOL-04), so the visual

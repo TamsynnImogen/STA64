@@ -78,11 +78,26 @@ pub fn facing(heading: (Fixed, Fixed), at: Vec3, from: Vec3) -> u8 {
     }
 }
 
+/// Does this weapon attack units? Not point defence or a special, and not a
+/// tool: a mining beam (ordnance class `minebm`) or a tractor beam (a
+/// `toggleweapon`). Measured on stock A2 and Roots + STA2 Classic: a
+/// freighter and a construction ship neither vote nor take part in an attack
+/// order (the engine's own "can attack" test was not read).
+pub fn attacks_units(w: &sta_content::WeaponDef) -> bool {
+    let tool = w.class.0 == "minebm" || w.raw.str("classLabel").is_some_and(|c| c.eq_ignore_ascii_case("toggleweapon"));
+    w.kind != WeaponKind::PointDefence && !crate::specials::is_special(w) && !tool
+}
+
+/// Armed for an attack order: a hardpoint whose weapon [`attacks_units`].
+pub fn can_attack(db: &ContentDb, def: &sta_content::UnitDef) -> bool {
+    def.hardpoints.iter().any(|hp| db.weapon(hp.weapon.key).is_some_and(attacks_units))
+}
+
 /// Under `start_fire_hold`, no weapon fires at a unit before this much
 /// mission time (SIM-53): every craft holds fire for the first two seconds
 /// of a game, also with its weapons long ready. Measured on stock A2 1.1 and Roots + STA2
-/// Classic (scenes built from 0.3 to 1.9 s into the mission: first shots on
-/// the first frame after 2.0 s; built later, no hold); no ODF or cfg key
+/// Classic (scenes built 0.33 to 0.86 s into the mission: first shots on the
+/// first frame after 2.0 s; built at 5.1 s, no hold); no ODF or cfg key
 /// sets it, and the engine code that holds fire was not found (not
 /// measured: Armada I, point defence and specials, which keep their rules).
 pub const START_HOLD_TICKS: u64 = 2 * TICK_HZ as u64;
@@ -509,7 +524,8 @@ impl Weapons {
     }
 
     /// Apply an `Attack` order: every listed unit of `player` (any, for
-    /// scripts and the bench) that can shoot is set on `target`. False when
+    /// scripts and the bench) that [`can_attack`] is set on `target`; the
+    /// others keep what they were doing. False when
     /// the target is not a valid one or no unit took the order.
     pub(crate) fn order_attack(
         &mut self,
@@ -524,7 +540,7 @@ impl Weapons {
         }
         let mut any = false;
         for &id in ids {
-            let armed = |u: &Entity| db.unit(u.def).is_some_and(|d| !d.hardpoints.is_empty());
+            let armed = |u: &Entity| db.unit(u.def).is_some_and(|d| can_attack(db, d));
             if id != target
                 && units
                     .get(id)

@@ -206,6 +206,9 @@ impl Bench {
         };
 
         let mut sim = sim;
+        // A lead-in replays nothing: only a scene built from its map takes one
+        // (the steps' events, a map's first `Spawned`, are not kept).
+        let lead = if s.start.is_some() { 0 } else { lead };
         for _ in 0..lead {
             sim.step(&[]);
         }

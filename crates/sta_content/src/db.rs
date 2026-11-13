@@ -412,7 +412,7 @@ fn feature_bits(h: &mut Fnv, own: Option<&Features>, db: &Features) {
     }
 }
 
-/// The first 22 switches always; the SIM-34/35 ones only when one is on, so
+/// The first 22 switches always; the SIM-34/35/53 ones only when one is on, so
 /// content that does not use them keeps its hash.
 fn hash_bits(h: &mut Fnv, f: &Features) {
     let bits = f.bits();

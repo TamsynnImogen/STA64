@@ -272,7 +272,10 @@ impl PairDesc {
             let (t, cmd) = v.split_once(char::is_whitespace).ok_or_else(|| format!("At={v}: expected `<seconds> <command>`"))?;
             let t = seconds(t).ok_or_else(|| format!("At={v}: `{t}` is not seconds"))?;
             // `a; b` runs several commands at one time, as Refit's `drive scene` does.
-            parse_command_list(cmd.trim()).map_err(|e| format!("At={v}: {e}"))?;
+            let list = parse_command_list(cmd.trim()).map_err(|e| format!("At={v}: {e}"))?;
+            if list.len() > 1 && list.iter().any(|c| matches!(c.command, crate::parse::BenchCommand::RightClick(_))) {
+                return Err(format!("At={v}: rclick is a pointer action on the original: give it an At= of its own"));
+            }
             at.push((t, cmd.trim().to_owned()));
         }
         Ok(PairDesc {

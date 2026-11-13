@@ -81,11 +81,13 @@ pub fn order(
         .and_then(|t| super::context::context_order(content.as_deref().map(|c| &*c.0), view, me, &own, t))
     {
         let kind = OrderKind::of(&order);
-        // A new order replaces the old destination line.
-        clear_targets(&mut targets, &own);
+        // The whole selection gets the order; only those that carry it out
+        // lose their destination line and acknowledge it.
+        let takers = sta_sim::context::takers(content.as_deref().map(|c| &*c.0), view, &order);
+        clear_targets(&mut targets, &takers);
         queue.0.push(CommandKind::Order(order));
-        if let Some(kind) = kind {
-            issued.write(OrderIssued { units: own.clone(), kind });
+        if let Some(kind) = kind.filter(|_| !takers.is_empty()) {
+            issued.write(OrderIssued { units: takers, kind });
         }
         return;
     }
