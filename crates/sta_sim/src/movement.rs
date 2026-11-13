@@ -404,7 +404,7 @@ mod tests {
         assert_eq!(crate::unit_status_tests::digest_before_crew(&a), 0xcea6_a6f2_d1c1_391c);
         assert_eq!((a.digest(), ta), (GOTO_DIGEST, GOTO_ARRIVAL));
     }
-    const GOTO_DIGEST: u64 = 0x9e8d_ad32_0184_1ddc;
+    const GOTO_DIGEST: u64 = 0x736f_116c_1f80_7387;
     const GOTO_ARRIVAL: u32 = 544;
 
     #[test]

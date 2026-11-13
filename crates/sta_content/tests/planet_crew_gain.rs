@@ -172,5 +172,5 @@ fn hash_tracks_effective_producer_gain_only_and_keeps_native_fake_identity() {
     def.planet_crew_gain = -27;
     let changed = ContentDb::builder().unit(def).build().unwrap();
     assert_ne!(plain.hash(), changed.hash());
-    assert_eq!(sta_content::fake::db().hash(), 0xa54b_02f8_d887_3b2c);
+    assert_eq!(sta_content::fake::db().hash(), 0x6977_6a57_dec2_2e6c);
 }

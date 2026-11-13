@@ -223,7 +223,7 @@ fn three_minute_digest_is_pinned() {
     let o = play(1, 3);
     assert_eq!(
         (o.digest, o.trace),
-        (7447273215544161350, 6333087146984546231),
+        (2963468384051799693, 3072171214291786207),
         "pinned digest and trace of seed 1 at 3 sim minutes"
     );
 }

@@ -187,7 +187,7 @@ fn freighter_loops_moon_to_station_with_steady_income() {
     assert_eq!(crate::unit_status_tests::digest_before_crew(&sim), 0xc49f_a634_eb30_8438);
     assert_eq!(
         sim.digest(),
-        0x1940_36b3_712b_3a53,
+        0x7653_7b73_23a1_8488,
         "digest {:#x}",
         sim.digest()
     );

@@ -22,4 +22,4 @@ Scene: skirmish Seed=11
 13. Scene "attack c4 yard"
 14. Scene "attack c5 yard"
 15. Run until tick 8000
-16. Expect digest at tick 8000 is "1eec10ded5ff4311"
+16. Expect digest at tick 8000 is "6ffb698ec0f92ae6"

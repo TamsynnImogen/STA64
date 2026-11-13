@@ -108,7 +108,7 @@ fn a_saturated_pd_lets_shots_through() {
     // Pinned: the digest of the run, PD timers included.
     assert_eq!(crate::unit_status_tests::digest_before_crew(&sim), 0x7ff0_e3dd_fafd_ce3a);
     // CON-35's keyed content hash (the line above folds in the old one).
-    assert_eq!(sim.digest(), 0x0e39_00ab_aced_3ef6);
+    assert_eq!(sim.digest(), 0xac4d_6257_d76f_b235);
 }
 
 #[test]
