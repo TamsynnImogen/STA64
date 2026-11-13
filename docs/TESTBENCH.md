@@ -353,9 +353,13 @@ to match run "<scenario>"`, `Expect mark "fire.start obj=shooter" by tick 90`,
 - **Saved starts.** `Save snapshot as "F"` and `Save replay as "F"` write under
   `RunConfig::data_dir`; a scenario with `Start=snapshot:F` / `Start=replay:F`
   reads it back, and `Expect digest at tick N to match run "<saver>"` compares
-  the two runs. `tests/scenes.rs` clears a private data directory and runs
-  scenarios in name order, so the saver is named to sort first
-  (`snapshot-save` < `snapshot-start`, `replay-save` < `replay-start`). A
+  the two runs. `RunConfig::fake()` gives each config its own data directory
+  (no two runs share files) and `sta-bench check|run` removes it at the end. The
+  parallel runner reads the dependency from the files themselves: a case whose
+  scene starts from F runs after the case that saves F, at any `--jobs`, so
+  names need not sort saver first (`tests/scenes.rs` runs in name order and
+  still names them that way). A `to match run` re-run saves into its own
+  subdirectory. A
   replay records every command that reached the sim, and scene and `spawn`
   placements (made with `Sim::spawn_def`) as `Edit::Spawn` on their tick;
   `Save replay as` plays the file back from tick 0 and fails on a digest
