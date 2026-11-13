@@ -219,7 +219,8 @@ pub(crate) fn pair(o: &Opts) -> Outcome {
     let sta_dir = out.join("sta64");
     let _ = fs::remove_dir_all(&sta_dir);
     let scene = desc.scene_text(if o.fake { &["fake"] } else { &[] });
-    let run = pair::run_sta64(&scene, Arc::new(cfg), &sched, end_t, &sta_dir).map_err(|e| Fail::Error(format!("STA64 side: {e}")))?;
+    let lead = meta.get("ready_t").num().unwrap_or(0.0);
+    let run = pair::run_sta64_after(&scene, Arc::new(cfg), &sched, end_t, lead, &sta_dir).map_err(|e| Fail::Error(format!("STA64 side: {e}")))?;
     let times = pair::frame_times(&desc, Some(&meta));
     let (files, note) = if times.is_empty() {
         (Vec::new(), "no frames asked".to_owned())

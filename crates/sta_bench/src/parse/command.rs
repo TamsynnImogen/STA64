@@ -162,6 +162,10 @@ pub enum BenchCommand {
         target: String,
     },
     Stop(String),
+    /// `rclick <name>`: a player's right-click on an object with the current
+    /// `select`ion, the order the context rule picks (the original side
+    /// drives the game's own pointer).
+    RightClick(String),
     Build {
         rig: String,
         odf: String,
@@ -492,6 +496,10 @@ fn parse_words(w: &[&str], text: &str) -> Result<BenchCommand, String> {
         "stop" => {
             arity(a, 1, 1, "stop <name>")?;
             BenchCommand::Stop(a[0].to_owned())
+        }
+        "rclick" => {
+            arity(a, 1, 1, "rclick <name>")?;
+            BenchCommand::RightClick(a[0].to_owned())
         }
         "build" => {
             let u = "build <rig> <odf> <x y z | object>";
@@ -880,6 +888,7 @@ mod tests {
             }
         );
         assert_eq!(cmd("stop shooter"), BenchCommand::Stop("shooter".into()));
+        assert_eq!(cmd("rclick moon"), BenchCommand::RightClick("moon".into()));
         assert_eq!(
             cmd("build rig fyard 10 0 20"),
             BenchCommand::Build {

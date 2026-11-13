@@ -98,6 +98,14 @@ impl Bench {
     /// Build a scene: the start (empty map, named map, snapshot or replay),
     /// then the scene file's objects on top.
     pub fn build(cfg: Arc<RunConfig>, scene: &SceneFile) -> Result<Bench, String> {
+        Bench::build_after(cfg, scene, 0)
+    }
+
+    /// [`Bench::build`], with the mission run `lead` ticks before the scene's
+    /// objects are placed, as the original builds its scene some way into
+    /// the mission (`sta-bench pair` passes the original's `ready` time, so
+    /// rules on mission time line up). Marks still count from the build.
+    pub fn build_after(cfg: Arc<RunConfig>, scene: &SceneFile, lead: Tick) -> Result<Bench, String> {
         let s = &scene.scene;
         let cfg = match &s.profile {
             Some(name) => {
@@ -197,6 +205,13 @@ impl Bench {
             }
         };
 
+        let mut sim = sim;
+        // A lead-in replays nothing: only a scene built from its map takes one
+        // (the steps' events, a map's first `Spawned`, are not kept).
+        let lead = if s.start.is_some() { 0 } else { lead };
+        for _ in 0..lead {
+            sim.step(&[]);
+        }
         let base_tick = sim.tick;
         let mut b = Bench {
             cfg,
@@ -234,7 +249,7 @@ impl Bench {
             b.log.push("camera: no renderer at tier 1, ignored".into());
         }
         b.rec = rec_setup.map(|setup| Rec {
-            digests: vec![(0, b.sim.digest())],
+            digests: vec![(b.sim.tick, b.sim.digest())],
             setup,
             commands: Vec::new(),
         });
@@ -622,6 +637,39 @@ impl Bench {
                     format!("attack {who} {target}"),
                 );
                 "ok".into()
+            }
+            C::RightClick(n) => {
+                let t = self.living(n)?;
+                let own: Vec<EntityId> = self.selection.iter().copied().filter(|&id| self.sim.unit(id).is_some()).collect();
+                if own.is_empty() {
+                    return Err("rclick: nothing selected".into());
+                }
+                let owner = self.sim.unit(own[0]).map_or(PlayerId::BENCH, |e| e.owner);
+                let view = self.sim.view();
+                match sta_sim::context::context_order(Some(&*self.cfg.content), &view, owner, &own, t) {
+                    Some(o) => {
+                        let what = format!("{o:?}").split([' ', '{']).next().unwrap_or("?").to_owned();
+                        self.order(&own, o, format!("rclick {n}"));
+                        what
+                    }
+                    None => {
+                        // No vote: a move to the point, the group keeping its places.
+                        let to = self.sim.unit(t).expect("living").pos;
+                        let n_own = Fixed::from_int(own.len() as i32);
+                        let (mut cx, mut cz) = (Fixed::ZERO, Fixed::ZERO);
+                        for &id in &own {
+                            let p = self.sim.unit(id).expect("living").pos;
+                            cx = cx + p.x / n_own;
+                            cz = cz + p.z / n_own;
+                        }
+                        for &id in &own {
+                            let p = self.sim.unit(id).expect("living").pos;
+                            let at = Vec3 { x: to.x + p.x - cx, y: to.y, z: to.z + p.z - cz };
+                            self.order(&[id], Order::Move { units: vec![id], to: at, queue: false }, format!("rclick {n}"));
+                        }
+                        "Move".into()
+                    }
+                }
             }
             C::Stop(n) => {
                 let id = self.living(n)?;
