@@ -7,7 +7,7 @@ use sta_sim::command::{Command, CommandRouter};
 
 use super::transport::{Destination, Incoming, Transport, TransportError};
 use crate::proto::{
-    MAX_SCHEDULE_PER_TURN, Action, DesyncNotice, DropChoice, Message, Occupant, ProtoError, RouterSeed, Scheduled, SeatSeed, SectionReport, SeqSeen, Start, TickDigest,
+    MAX_SCHEDULE_PER_TURN, Action, DesyncNotice, DropChoice, Message, Occupant, ProtoError, RouterSeed, Scheduled, SeatSeed, SectionReport, SenderKind, SeqSeen, Start, TickDigest,
     TurnCommands, TurnConfig,
 };
 
@@ -36,6 +36,21 @@ pub const MAX_INBOUND_BYTES: usize = crate::proto::MAX_SNAPSHOT_BYTES + 4 * 1024
 /// Duplicate records one seat may re-send after a catch-up (each is dropped
 /// or compared with the copy the host sent).
 const MAX_DUPLICATES: u32 = 2 * MAX_QUEUED_TURNS as u32;
+
+/// Digest mismatches a referee's router keeps, and desync claims it keeps
+/// to check (NET-05): a hostile seat cannot grow either.
+pub const MAX_REFEREE_FINDINGS: usize = 64;
+
+/// A seat whose digest differs from the referee's (NET-05), the earliest
+/// such tick per seat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Divergence {
+    pub seat: PlayerId,
+    /// The seat's reported digest.
+    pub theirs: TickDigest,
+    /// The referee's own at the same tick.
+    pub reference: u64,
+}
 
 /// Why a received message was not applied. The message's sender is faulted:
 /// a real transport disconnects it, and the sim stalls on its seat until the
@@ -129,6 +144,14 @@ pub enum RouterEvent {
     Transport(TransportError),
     /// `take_ready` was asked for a turn other than the next one.
     OutOfSequence { asked: u32, expected: u32 },
+    /// The host named the room's referee (`None`: there is none).
+    Referee(Option<PlayerId>),
+    /// The referee's digest at `tick` differs from this peer's, and every
+    /// seat agrees with this peer: the referee is the odd one out and is
+    /// not believed from here on (NET-05, `referee::judge`).
+    RefereeOutvoted { tick: Tick },
+    /// Referee: a seat's digest differs from the referee's.
+    SeatDiverged(Divergence),
 }
 
 #[derive(Debug, Default)]
@@ -205,6 +228,24 @@ pub struct LockstepRouter {
     inbound_bytes: usize,
     expect_catch_up: bool,
     tolerant: BTreeMap<PlayerId, u32>,
+    // NET-05: the referee. `referee` is the slot the host named (or, in a
+    // referee's own router, its own); `spectator` marks a referee's router:
+    // it sends no record, never halts, and keeps what it finds.
+    referee: Option<PlayerId>,
+    spectator: bool,
+    /// Peer: referee digests that differ from ours, until every seat's
+    /// digest for the tick is known and `referee::judge` can say who is odd.
+    referee_pending: BTreeMap<Tick, u64>,
+    /// The referee was found to be the odd one out: its digests are ignored.
+    referee_ignored: bool,
+    /// Referee: the first mismatch per seat, and the desync claims peers sent.
+    divergences: BTreeMap<PlayerId, Divergence>,
+    claims: Vec<(PlayerId, DesyncNotice)>,
+    seated: bool,
+    /// Digests and desync notices for ticks up to this one are history: a
+    /// resync loaded the state at it, and what a diverged seat sent before
+    /// may still be in flight.
+    stale_before: Tick,
 }
 
 impl LockstepRouter {
@@ -214,6 +255,27 @@ impl LockstepRouter {
         start: &Start,
         me: PlayerId,
         transport: Box<dyn Transport>,
+    ) -> Result<LockstepRouter, ProtoError> {
+        LockstepRouter::build(start, me, transport, false)
+    }
+
+    /// The router of a referee (NET-05) on the connection in slot `me`,
+    /// which is no seat of `start`: it assembles every seat's turns and
+    /// compares every digest like any router, sends no record, never halts,
+    /// and sends its own digest for each turn (`Message::Reference`).
+    pub fn spectator(
+        start: &Start,
+        me: PlayerId,
+        transport: Box<dyn Transport>,
+    ) -> Result<LockstepRouter, ProtoError> {
+        LockstepRouter::build(start, me, transport, true)
+    }
+
+    fn build(
+        start: &Start,
+        me: PlayerId,
+        transport: Box<dyn Transport>,
+        spectator: bool,
     ) -> Result<LockstepRouter, ProtoError> {
         let delay = u32::from(start.turn.delay_turns);
         let mut seats = BTreeMap::new();
@@ -233,7 +295,11 @@ impl LockstepRouter {
                 Occupant::Idle => {}
             }
         }
-        if !seats.contains_key(&me) {
+        if spectator {
+            if seats.contains_key(&me) || start.seats.iter().any(|s| s.slot == me) || me.0 as usize >= crate::proto::MAX_SEATS {
+                return Err(ProtoError::Invalid("a referee's slot is a seat of the game"));
+            }
+        } else if !seats.contains_key(&me) {
             return Err(ProtoError::Invalid("local seat is not a person's seat"));
         }
         if !seats.contains_key(&start.host) {
@@ -275,6 +341,14 @@ impl LockstepRouter {
             inbound_bytes: 0,
             expect_catch_up: false,
             tolerant: BTreeMap::new(),
+            referee: spectator.then_some(me),
+            spectator,
+            referee_pending: BTreeMap::new(),
+            referee_ignored: false,
+            divergences: BTreeMap::new(),
+            claims: Vec::new(),
+            seated: false,
+            stale_before: 0,
         })
     }
 
@@ -288,6 +362,110 @@ impl LockstepRouter {
     /// Whether this peer is the host.
     pub fn is_host(&self) -> bool {
         self.me == self.host
+    }
+
+    /// Whether this is a referee's router ([`LockstepRouter::spectator`]).
+    pub fn is_spectator(&self) -> bool {
+        self.spectator
+    }
+
+    /// The slot the host named as the room's referee, if any (a referee's own
+    /// router: its own slot).
+    pub fn referee(&self) -> Option<PlayerId> {
+        self.referee
+    }
+
+    /// Who decides a desync here: the referee when there is one and it has
+    /// not been found to be the odd one out (NET_DECISIONS N5), else the
+    /// host (N3).
+    pub fn authority(&self) -> PlayerId {
+        match self.referee {
+            Some(r) if !self.referee_ignored && !self.spectator => r,
+            _ => self.host,
+        }
+    }
+
+    /// Whether the host is the authority (no referee, or an ignored one).
+    pub fn host_is_authority(&self) -> bool {
+        self.authority() == self.host
+    }
+
+    /// Host: names the referee (or `None`: there is none) to everyone and
+    /// takes it as the authority itself. `slot` must be no seat of the game.
+    pub fn seat_referee(&mut self, slot: Option<PlayerId>) -> Result<(), ProtoError> {
+        if !self.is_host() {
+            return Err(ProtoError::Authority("only the host names the referee"));
+        }
+        self.adopt_referee(slot).map_err(|e| match e {
+            RouterError::Proto(p) => p,
+            _ => ProtoError::Invalid("referee"),
+        })?;
+        self.send(Destination::All, &Message::RefereeSeated { slot });
+        Ok(())
+    }
+
+    fn adopt_referee(&mut self, slot: Option<PlayerId>) -> Result<(), RouterError> {
+        if let Some(s) = slot
+            && (self.seats.contains_key(&s) || s == self.host || s == self.me && !self.spectator)
+        {
+            return Err(RouterError::Proto(ProtoError::Invalid(
+                "the referee is no player's seat",
+            )));
+        }
+        if self.spectator {
+            self.seated = slot == Some(self.me);
+            return Ok(());
+        }
+        if slot != self.referee {
+            self.referee_ignored = false;
+            self.referee_pending.clear();
+            self.unchecked.retain(|(p, _)| Some(*p) != self.referee);
+        }
+        self.referee = slot;
+        self.note(RouterEvent::Referee(slot));
+        Ok(())
+    }
+
+    /// Referee: the seats whose digest differed from ours, the earliest
+    /// tick of each.
+    pub fn divergences(&self) -> Vec<Divergence> {
+        self.divergences.values().copied().collect()
+    }
+
+    /// Referee: takes the desync claims peers sent since the last call, to
+    /// be checked against the digests the referee holds. At most
+    /// [`MAX_REFEREE_FINDINGS`] are kept between calls, the newest.
+    pub fn take_claims(&mut self) -> Vec<(PlayerId, DesyncNotice)> {
+        std::mem::take(&mut self.claims)
+    }
+
+    /// Referee: whether the host has seated this referee (`RefereeSeated`).
+    /// A referee that is not seated sends and serves nothing.
+    pub fn seated(&self) -> bool {
+        self.seated
+    }
+
+    /// The seats that still send records and whose digest for `tick` is
+    /// known here, and those whose is not.
+    pub fn digest_coverage(&self, tick: Tick) -> (Vec<(PlayerId, u64)>, Vec<PlayerId>) {
+        let known = self.seen.get(&tick);
+        let mut have = Vec::new();
+        let mut missing = Vec::new();
+        for (&p, s) in &self.seats {
+            if s.last_turn.is_some() {
+                continue;
+            }
+            match known.and_then(|k| k.get(&p)) {
+                Some(&d) => have.push((p, d)),
+                None => missing.push(p),
+            }
+        }
+        (have, missing)
+    }
+
+    /// This router's own digest at `tick`, if it still holds it.
+    pub fn own_digest(&self, tick: Tick) -> Option<u64> {
+        self.ours.get(&tick).copied()
     }
 
     /// The current turn timing; `delay_turns` and `speed_percent` follow the
@@ -406,7 +584,11 @@ impl LockstepRouter {
             return;
         }
         self.seen.entry(tick).or_default().insert(self.me, digest);
-        self.digest_to_send = Some(TickDigest { tick, digest });
+        if self.spectator {
+            self.send(Destination::All, &Message::Reference(TickDigest { tick, digest }));
+        } else {
+            self.digest_to_send = Some(TickDigest { tick, digest });
+        }
         while self.ours.len() > DIGESTS_KEPT {
             let Some(&oldest) = self.ours.keys().next() else {
                 break;
@@ -463,7 +645,7 @@ impl LockstepRouter {
     /// seat uses it to put an `Action::Drop` where its peers can read it
     /// without the host advancing.
     pub fn extend_lead(&mut self) {
-        if self.halted() {
+        if self.halted() || self.spectator {
             return;
         }
         let target = self.next_send;
@@ -592,6 +774,9 @@ impl LockstepRouter {
                 Err(e) => self.note(RouterEvent::Transport(e)),
             }
         }
+        if !self.referee_pending.is_empty() {
+            self.settle_referee();
+        }
     }
 
     /// Handles one message as stamped by the transport. Messages that are
@@ -599,13 +784,50 @@ impl LockstepRouter {
     /// above and ignored here.
     pub fn receive(&mut self, from: PlayerId, msg: Message) -> Result<(), RouterError> {
         msg.validate().map_err(RouterError::Proto)?;
-        msg.check_sender(from == self.host)
-            .map_err(RouterError::Proto)?;
-        if !self.seats.contains_key(&from) {
+        let kind = if from == self.host
+            && !(self.spectator && matches!(msg, Message::ResyncRequest(_) | Message::ResyncAck(_)))
+        {
+            SenderKind::Host
+        } else if Some(from) == self.referee && from != self.me {
+            SenderKind::Referee
+        } else if from == self.host
+            && self.spectator
+            && matches!(msg, Message::ResyncRequest(_) | Message::ResyncAck(_))
+        {
+            // The host asks the referee like any seat when it is the one
+            // that differs.
+            SenderKind::Peer
+        } else {
+            SenderKind::Peer
+        };
+        msg.check_sender_kind(kind).map_err(RouterError::Proto)?;
+        if !self.seats.contains_key(&from) && kind != SenderKind::Referee {
             return Err(RouterError::UnknownSeat(from));
         }
         match msg {
+            Message::RefereeSeated { slot } => self.adopt_referee(slot),
+            Message::Reference(d) => {
+                if !self.referee_ignored {
+                    self.compare(from, d);
+                    self.settle_referee();
+                }
+                Ok(())
+            }
             Message::Turn(rec) => self.receive_turn(from, rec),
+            Message::Desync(notice) if notice.ours.tick.max(notice.theirs.tick) <= self.stale_before => Ok(()),
+            Message::Desync(notice) if self.spectator => {
+                // A referee does not stop: it keeps the claim, to be checked
+                // against the digests it holds. The digest the claim gives as
+                // the claimer's own is its report (a seat that stopped sends no
+                // record with it), noted as a divergence but never entered
+                // among the turn records' digests.
+                self.note_claimed(from, notice.ours);
+                if self.claims.len() >= MAX_REFEREE_FINDINGS {
+                    self.claims.remove(0);
+                }
+                self.claims.push((from, notice));
+                Ok(())
+            }
             Message::Desync(notice) => {
                 // The reporter halted before it could send its own digest
                 // for that turn; the notice carries both. Compare it as if
@@ -644,7 +866,7 @@ impl LockstepRouter {
             }
             // Rejoin and resync traffic belongs to the layer above (NET-04).
             Message::Rejoin(_) | Message::ResyncRequest(_) | Message::ResyncAck(_) => {
-                if self.is_host() {
+                if self.is_host() || self.spectator {
                     let size = postcard::to_allocvec(&msg).map_or(crate::proto::MAX_FRAME_BYTES, |b| b.len() + 16);
                     self.stash(from, msg, size);
                     Ok(())
@@ -664,7 +886,7 @@ impl LockstepRouter {
             | Message::CatchUpDone => {
                 // Only when this peer asked for a snapshot: an unsolicited
                 // transfer is dropped, never buffered.
-                if self.expect_catch_up {
+                if self.expect_catch_up && from == self.authority() {
                     // Counted at what the frame weighs, so a flood of large
                     // records is bounded by bytes and not by count.
                     let size = match &msg {
@@ -861,6 +1083,19 @@ impl LockstepRouter {
         self.peer_desync = None;
     }
 
+    /// [`LockstepRouter::clear_desync`] for a resync that left every seat at
+    /// the state of `turn`'s first tick: what any seat reported for a tick up
+    /// to it (a digest, a desync notice) described the state that was
+    /// replaced, and is dropped, including what is still in flight.
+    pub fn clear_desync_at(&mut self, turn: u32) {
+        self.clear_desync();
+        let tick = Tick::from(turn) * Tick::from(self.cfg.ticks_per_turn.max(1));
+        self.stale_before = self.stale_before.max(tick);
+        let floor = self.stale_before;
+        self.unchecked.retain(|(_, d)| d.tick > floor);
+        self.referee_pending.retain(|t, _| *t > floor);
+    }
+
     /// This router's state at a turn boundary, for a snapshot taken there
     /// (the sim at the first tick of `next_turn`, before its commands apply),
     /// and the records every seat has queued from that turn on, seat by seat
@@ -1003,6 +1238,7 @@ impl LockstepRouter {
         self.ours.clear();
         self.seen.clear();
         self.unchecked.clear();
+        self.referee_pending.clear();
         self.our_sections.clear();
         self.their_sections.clear();
         self.sections_sent.clear();
@@ -1015,9 +1251,13 @@ impl LockstepRouter {
             .filter(|&&p| p != self.me)
             .map(|&p| (p, 0))
             .collect();
+        // This seat's own queued records were written by the state that was
+        // replaced: their digests are not compared.
+        let me = self.me;
         let digests: Vec<(PlayerId, TickDigest)> = self
             .seats
             .iter()
+            .filter(|(p, _)| **p != me)
             .flat_map(|(&p, s)| s.queue.iter().filter_map(move |r| r.digest.map(|d| (p, d))))
             .collect();
         for (p, d) in digests {
@@ -1029,6 +1269,9 @@ impl LockstepRouter {
     // ---- digests ----------------------------------------------------------
 
     fn compare(&mut self, slot: PlayerId, theirs: TickDigest) {
+        if theirs.tick <= self.stale_before {
+            return;
+        }
         // Only ticks this peer has digests for are kept, so a hostile peer
         // cannot grow the map by naming ticks.
         if self.ours.contains_key(&theirs.tick) {
@@ -1038,6 +1281,29 @@ impl LockstepRouter {
                 .insert(slot, theirs.digest);
         }
         match self.ours.get(&theirs.tick) {
+            Some(&d) if d != theirs.digest && self.spectator => {
+                // A referee is the reference: it records which seat differs
+                // and goes on. Its section digests go out once, so the seat
+                // (and every peer's sidecar) can name the sections.
+                self.announce_sections(theirs.tick);
+                let found = Divergence {
+                    seat: slot,
+                    theirs,
+                    reference: d,
+                };
+                let known = self.divergences.get(&slot).is_some_and(|f| f.theirs.tick <= theirs.tick);
+                if !known && (self.divergences.contains_key(&slot) || self.divergences.len() < MAX_REFEREE_FINDINGS) {
+                    self.divergences.insert(slot, found);
+                    self.note(RouterEvent::SeatDiverged(found));
+                }
+            }
+            Some(&d) if d != theirs.digest && Some(slot) == self.referee => {
+                // The referee's digest is not ours: who is odd is judged once
+                // every seat's digest for the tick is known.
+                if self.referee_pending.len() < DIGESTS_KEPT {
+                    self.referee_pending.insert(theirs.tick, theirs.digest);
+                }
+            }
             Some(&d) if d != theirs.digest => {
                 let notice = DesyncNotice {
                     slot,
@@ -1070,6 +1336,67 @@ impl LockstepRouter {
                         self.unchecked.remove(i);
                     }
                     self.unchecked.push((slot, theirs));
+                }
+            }
+        }
+    }
+
+    /// Referee: a seat's own digest as given in a `Desync` claim.
+    pub fn note_claimed(&mut self, slot: PlayerId, ours: TickDigest) {
+        let Some(&d) = self.ours.get(&ours.tick) else { return };
+        if d == ours.digest {
+            return;
+        }
+        self.announce_sections(ours.tick);
+        let found = Divergence { seat: slot, theirs: ours, reference: d };
+        let known = self.divergences.get(&slot).is_some_and(|f| f.theirs.tick <= ours.tick);
+        if !known && (self.divergences.contains_key(&slot) || self.divergences.len() < MAX_REFEREE_FINDINGS) {
+            self.divergences.insert(slot, found);
+            self.note(RouterEvent::SeatDiverged(found));
+        }
+    }
+
+    /// Decides the referee digests that differed from ours (peers, NET-05):
+    /// once every seat's digest for the tick is known, `referee::judge` says
+    /// whether this peer differs from the referee (then it is a mismatch like
+    /// any other: the match stops, the peer asks the referee for the state)
+    /// or every seat agrees against it (then the referee is the odd one out
+    /// and is no longer believed).
+    fn settle_referee(&mut self) {
+        let Some(referee) = self.referee else { return };
+        let ticks: Vec<Tick> = self.referee_pending.keys().copied().collect();
+        for tick in ticks {
+            let (have, missing) = self.digest_coverage(tick);
+            if !missing.is_empty() {
+                continue;
+            }
+            let Some(reference) = self.referee_pending.remove(&tick) else { continue };
+            let seats: Vec<u64> = have.iter().map(|(_, d)| *d).collect();
+            match crate::referee::judge(&seats, reference) {
+                crate::referee::Verdict::RefereeOutvoted => {
+                    self.referee_ignored = true;
+                    self.referee_pending.clear();
+                    self.unchecked.retain(|(p, _)| *p != referee);
+                    self.note(RouterEvent::RefereeOutvoted { tick });
+                    return;
+                }
+                crate::referee::Verdict::ReferenceStands => {
+                    let theirs = TickDigest { tick, digest: reference };
+                    let Some(&mine) = self.ours.get(&tick) else { continue };
+                    let notice = DesyncNotice {
+                        slot: referee,
+                        ours: TickDigest { tick, digest: mine },
+                        theirs,
+                    };
+                    let first = self.desync.is_none();
+                    self.announce_sections(tick);
+                    if self.desync.is_none_or(|n| tick < n.theirs.tick) {
+                        self.desync = Some(notice);
+                    }
+                    if first {
+                        self.note(RouterEvent::Desync(notice));
+                        self.send(Destination::All, &Message::Desync(notice));
+                    }
                 }
             }
         }
@@ -1111,6 +1438,9 @@ impl LockstepRouter {
 
 impl CommandRouter for LockstepRouter {
     fn submit(&mut self, cmd: Command) {
+        if self.spectator {
+            return self.reject(&cmd, "a referee sends no commands");
+        }
         let is_host = self.is_host();
         let probe = TurnCommands {
             turn: 0,
@@ -1173,7 +1503,9 @@ impl CommandRouter for LockstepRouter {
             });
             return None;
         }
-        self.flush(turn);
+        if !self.spectator {
+            self.flush(turn);
+        }
 
         let mut released: Vec<TurnCommands> = Vec::new();
         if turn >= self.start_delay {

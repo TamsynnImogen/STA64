@@ -156,7 +156,7 @@ Every message is one frame:
 ```
 offset size  field
 0      4     magic "S64N"
-4      2     protocol version, u16 little-endian (PROTOCOL_VERSION = 3)
+4      2     protocol version, u16 little-endian (PROTOCOL_VERSION = 4)
 6      4     body length, u32 little-endian, <= MAX_FRAME_BYTES - 10
 10     n     body: one `Message` in postcard
 ```
@@ -439,9 +439,10 @@ joiner                         host
 
   | Role | Messages |
   |---|---|
-  | Host only | `Welcome`, `Refuse`, `RulesRequest`, `Lobby`, `Start`, `Resume`, `Rejoined`, `Replayed`, `CatchUpDone`, `SnapshotOffer`, `SnapshotPart`, `SnapshotRefused`, `Resynced`, `Arrived` |
-  | Non-host, to the host only | `Hello`, `Rules`, `SeatChoice`, `Request`, `DropVote`, `Rejoin`, `ResyncRequest`, `ResyncAck` |
+  | Host only | `Welcome`, `Refuse`, `RulesRequest`, `Lobby`, `Start`, `Resume`, `Rejoined`, `Replayed`, `CatchUpDone`, `SnapshotOffer`, `SnapshotPart`, `SnapshotRefused`, `Resynced`, `Arrived`, `RefereeSeated` |
+  | Non-host, to the host only | `Hello`, `RefereeHello`, `Rules`, `SeatChoice`, `Request`, `DropVote`, `Rejoin`, `ResyncRequest`, `ResyncAck` (to the referee when there is one) |
   | Any seated peer | `Turn`, `Ping`, `Pong`, `Chat`, `Desync`, `Sections`, `Leave` |
+  | The referee only | `Reference`; also `Sections`, `Ping`, `Pong`, `Leave`, and, when it serves a resync, the host's `SnapshotOffer`, `SnapshotPart`, `SnapshotRefused`, `Replayed`, `CatchUpDone`, `Resynced` |
 
 - **Directed frames.** The envelope carries a destination mask and the relay
   delivers to it only. Everything in the handshake and rejoin goes only
@@ -593,6 +594,68 @@ joiner                         host
   in the snapshot. Only the host runs the controller; its commands travel
   through the router like a player's. A seat taken over by the AI after a
   drop does not join `ai_seats` on any peer.
+
+*NET-05 as built* (`crates/sta_net/src/referee.rs`, `bin/referee.rs`, protocol version 4;
+NET_DECISIONS N5):
+
+- **A connection without a seat.** The referee takes a relay slot like a joiner
+  (so a room holds at most 7 players beside it), passes the joiner's handshake
+  as `RefereeHello` (build and rules digest; `referee::admit_referee` is
+  `admit`, so another rules digest is refused naming the key), receives `Start`
+  and every turn record, and sends none. The host names it to the room with
+  `RefereeSeated { slot }` (`Peer::seat_referee`, after `Start`; `None` takes
+  it away again), and the slot must be none of the game's seats. The relay is
+  unchanged: it still reads headers only.
+- **Wire (appended, tags 29 to 31; existing tags unmoved).** `RefereeHello`,
+  `RefereeSeated`, `Reference` (the referee's digest for each turn, from the
+  slot the host named, a new `Role::Referee`), and `SnapshotRefusal::HostEndsMatch`.
+  `Message::check_sender_kind` tells host, seat and referee apart; the old
+  `check_sender(bool)` is the host/seat case and refuses `Reference`.
+- **Its digest is the truth.** A peer compares `Reference` as it compares a
+  seat's record digest, but a difference is decided only once every seat's digest
+  for that tick is known (`referee::judge`): if every seat agrees with the others
+  and the referee alone differs, the referee is the odd one out and the peer
+  ignores it from then on (`RouterEvent::RefereeOutvoted`, `authority()` is the
+  host again). Otherwise the match stops as in NET.md section 7, and a peer that
+  differs from the referee asks the *referee* for the state
+  (`Peer::diverged_from_authority`), the host included.
+- **It serves the NET-04 transfer.** The referee is a `Peer` on a spectator
+  router (`LockstepRouter::spectator`: no record sent, never halts, keeps every
+  seat's first diverging tick) and runs the same host-side code of `resync.rs`
+  (limits, ledger, pacing, bounded parts) with its own sim and queues. It tells
+  everyone with `Resynced`. With a referee seated the host serves rejoins only
+  (it holds the tokens); it refuses resync requests (`Unsupported`). A snapshot
+  from the referee is not checked against the host seat's lineage and packs
+  (D10: informational), only against content hash and digests.
+- **A diverged host.** `RefereePolicy::resync_host` (default `false`, one place:
+  `referee::resync_host`): `false` ends the match with the reports (the host's
+  request is refused `HostEndsMatch`, everyone stays stopped, the reports are
+  written); `true` resyncs the host from the referee. The skirmish AI is proved
+  to carry on across the reload (`sta_ai/tests/referee_host_resync.rs`); mission
+  Lua is not, which is why the default is `false`.
+- **Findings.** For each seat whose digest differs from its own the referee keeps
+  the first tick, and, from the section digests the seat sends after a mismatch
+  (and its own), the sections that differ (`FindingKind::Diverged`); a seat that
+  differs but sends no section digests is `SectionsUnknown`, and one whose
+  sections are the referee's is `MisreportedDigest`. `Referee::write_report`
+  writes its replay (the replay of record) and a sidecar in the format
+  `Peer::desync_sidecar` writes plus `verdict:` lines, so `sta-bench desync`
+  takes them as it takes a peer's.
+- **Hostile input.** A seat's `Desync` claim is checked against the digests the
+  referee holds: when every seat agrees with the referee at that tick the stop is
+  for nothing and the referee releases the peers (`Resynced { last }`, at most one
+  per `RefereeLimits::release_interval`); a claim whose own digest contradicts the
+  seat's records is counted against that seat (`Referee::false_claims`). One
+  pending claim per seat, 64 findings, 64 turns of digests and sections per seat,
+  `MAX_QUEUED_TURNS` records per seat, the NET-04 inbound bounds. What grows with
+  the match is the referee's replay: `RefereeLimits` ends it (reports written) at
+  a command count, a tick count, or after no progress.
+- **Not built.** A referee that joins a running game: the relay closes the room at
+  `Start` (section 9) and the host keeps no log, so it would need a room that stays
+  open to `RefereeHello` and a `SnapshotKind` for it; a referee that crashes cannot
+  return. The host takes it away with `seat_referee(None)` and N3 applies again.
+  The lobby's UI, kick and ban of a seat that lies, elimination and seat
+  reassignment are the open questions' (section 13).
 
 ## 10. Security
 
