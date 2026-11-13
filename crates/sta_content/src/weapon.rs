@@ -15,7 +15,7 @@
 //! | `duration` | ordnance `lifespan` seconds, beams only; `STA64_duration` seconds on the weapon ODF overrides it (point defence has no lifespan) |
 //! | `fire_sound`, `fx` | `fireSound`; ordnance `shotGeometry` (else `sprite`) |
 //! | specials | `effectTimer`, `energyDrainRate`, `specialEnergyCost`, `disableWeapons` (default on), `decloakOnHit` |
-//! | shot timing | `initialShotDelayModifier` (signed; absent stays `None`), `ignoreShotDelayEffects`; `ordnance_defence` is the weapon's own class `ordnancedefenseweapon`, `toggle` its own class `toggleweapon` |
+//! | shot timing | `initialShotDelayModifier` (signed; absent stays `None`), `ignoreShotDelayEffects`; `ordnance_defence` is the weapon's own class `ordnancedefenseweapon` |
 //! | `resource` (class `resourceweapon`) | `addDilithium`, `addLatinum`, `addMetal`, `addBiomatter`, `addCrew` (signed), `oneTimeMode`, `alwaysActivePlayer`, `alwaysActiveAI` |
 //! | hardpoint arc | `restrictFireArc = 1` with `fireArc` as the half-width in radians (our reading) |
 
@@ -83,7 +83,6 @@ pub fn weapon_def(name: &str, odf: &Odf, ordnance: Option<&Odf>, warnings: &mut 
     d.initial_shot_delay_modifier = r.num("initialShotDelayModifier").map(Fixed::from_f64);
     d.ignore_shot_delay_effects = r.flag("ignoreShotDelayEffects").unwrap_or(false);
     d.ordnance_defence = own == "ordnancedefenseweapon";
-    d.toggle = own == "toggleweapon";
 
     if own == "resourceweapon" {
         let mut add = [Fixed::ZERO; crate::resources::SLOTS];
@@ -149,11 +148,5 @@ mod tests {
         assert!(w.ordnance_defence && w.kind == WeaponKind::PointDefence);
         let w = parse("[WeaponClass]\nclassLabel = \"pointdefenselaser\"\n");
         assert!(!w.ordnance_defence);
-    }
-
-    #[test]
-    fn toggle_is_the_weapons_own_class() {
-        assert!(parse("[WeaponClass]\nclassLabel = \"toggleweapon\"\n").toggle);
-        assert!(!parse("[WeaponClass]\nclassLabel = \"cannon\"\n").toggle);
     }
 }

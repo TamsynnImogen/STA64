@@ -79,12 +79,12 @@ pub fn facing(heading: (Fixed, Fixed), at: Vec3, from: Vec3) -> u8 {
 }
 
 /// Does this weapon attack units? Not point defence or a special, and not a
-/// tool: a mining beam (ordnance class `minebm`) or a tractor beam (a
-/// `toggleweapon`). Measured on stock A2 and Roots + STA2 Classic: a
+/// tool: a mining beam or a tractor beam (ordnance classes `minebm`,
+/// `tractor_bm`). Measured on stock A2 and Roots + STA2 Classic: a
 /// freighter and a construction ship neither vote nor take part in an attack
 /// order (the engine's own "can attack" test was not read).
 pub fn attacks_units(w: &sta_content::WeaponDef) -> bool {
-    let tool = w.class.0 == "minebm" || w.toggle;
+    let tool = matches!(w.class.0.as_str(), "minebm" | "tractor_bm");
     w.kind != WeaponKind::PointDefence && !crate::specials::is_special(w) && !tool
 }
 

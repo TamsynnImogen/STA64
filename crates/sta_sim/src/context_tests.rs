@@ -95,7 +95,7 @@ fn units_that_cannot_carry_the_winning_order_keep_their_own() {
 }
 
 /// A freighter whose mining beam is a hardpoint, and a construction rig with
-/// a tractor beam (a `toggleweapon`), as stock ODFs give them: neither votes
+/// a tractor beam (ordnance class `tractor_bm`), as stock ODFs give them: neither votes
 /// Attack, so on an enemy they get a plain move.
 #[test]
 fn mining_and_tractor_beams_do_not_vote_attack() {
@@ -110,8 +110,7 @@ fn mining_and_tractor_beams_do_not_vote_attack() {
     }
     let mut mine = WeaponDef::new("fx_minebeam", "minebm", WeaponKind::Projectile);
     mine.damage = Fixed::from_int(15);
-    let mut tractor = WeaponDef::new("fx_tractor", "tractor_bm", WeaponKind::Beam);
-    tractor.toggle = true;
+    let tractor = WeaponDef::new("fx_tractor", "tractor_bm", WeaponKind::Beam);
     let hp = |w: &str| Hardpoint { weapon: DefRef::new(w), node: "hp01".into(), arc: None };
     let mut miner = fake.unit(fake.key("fx_miner").unwrap()).unwrap().clone();
     miner.odf = "fx_armed_miner".into();

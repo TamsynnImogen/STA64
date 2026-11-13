@@ -490,9 +490,6 @@ pub struct WeaponDef {
     /// The weapon's own class is `ordnancedefenseweapon` (FO's point-defence
     /// class, as opposed to `pointdefenselaser`).
     pub ordnance_defence: bool,
-    /// The weapon's own class is `toggleweapon` (a tractor beam): a tool, it
-    /// takes no part in attack orders (SIM-53 / the right-click vote).
-    pub toggle: bool,
     /// Feature switches resolved for this weapon, as [`UnitDef::features`];
     /// `None`: the database-wide set. Read through
     /// `ContentDb::weapon_features`.
@@ -547,7 +544,6 @@ impl WeaponDef {
             initial_shot_delay_modifier: None,
             ignore_shot_delay_effects: false,
             ordnance_defence: false,
-            toggle: false,
             features: None,
             resource: None,
             replace: None,
