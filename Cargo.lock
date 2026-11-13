@@ -5549,6 +5549,7 @@ name = "sta_bench"
 version = "0.1.0"
 dependencies = [
  "json5",
+ "png",
  "serde",
  "sta_bzn",
  "sta_content",

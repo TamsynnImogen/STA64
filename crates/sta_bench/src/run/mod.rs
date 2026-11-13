@@ -13,7 +13,7 @@
 
 mod bench;
 pub mod check;
-mod json;
+pub(crate) mod json;
 /// Maps and the nebula for the pathfinding scenes (SIM-23).
 mod nav;
 pub mod marks;
