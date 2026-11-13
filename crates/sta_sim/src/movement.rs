@@ -175,6 +175,11 @@ impl Sim {
         if ids.is_empty() {
             return false;
         }
+        // A re-issued order starts the stuck-order watch afresh, even to the
+        // same point.
+        for &id in &ids {
+            self.watchdog.remove(id);
+        }
         match *order {
             Order::Move { to, queue, .. } => self.move_group(&ids, to, queue),
             Order::Stop { .. } => {

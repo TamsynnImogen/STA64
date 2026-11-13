@@ -284,10 +284,10 @@ impl Sim {
                 held.push((u.id, real));
             }
         }
-        for (id, real) in blocked {
+        for id in blocked {
             // Once per order, however long the craft waits (the stuck-order
             // watch ends the order if it never gets out).
-            if self.watchdog.report(id, real) {
+            if self.watchdog.report(id) {
                 self.events.push(crate::SimEvent::OrderBlocked { id });
             }
         }
@@ -381,11 +381,12 @@ fn away_from(p: Vec3, a: Vec3, far: Fixed) -> Vec3 {
     Vec3 { x: p.x + dx * k, y: a.y, z: p.z + dz * k }
 }
 
-/// Hold a craft still with its order kept: no checked route serves it (a
-/// craft walled in by solids and the map volume, SIM-22). `blocked` gets the
-/// craft and its order's target each tick it holds.
-fn hold(unit: &mut crate::Unit, real: Vec3, held: &mut Vec<(EntityId, Vec3)>, blocked: &mut Vec<(EntityId, Vec3)>) {
-    blocked.push((unit.id, real));
+/// Hold a craft still with its order kept for now: no checked route serves it
+/// (a craft walled in by solids and the map volume, SIM-22). `blocked` gets
+/// the craft each tick it holds; the stuck-order watch ends the order if it
+/// never gets out.
+fn hold(unit: &mut crate::Unit, real: Vec3, held: &mut Vec<(EntityId, Vec3)>, blocked: &mut Vec<EntityId>) {
+    blocked.push(unit.id);
     unit.target = None;
     unit.speed = Fixed::ZERO;
     unit.omega = Fixed::ZERO;

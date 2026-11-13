@@ -519,7 +519,7 @@ impl Sim {
         }
         let watchdog = crate::watchdog::Watchdog::from_rec(watch_rows).ok_or_else(|| corrupt("order watch rows"))?;
         if watchdog.to_rec().iter().any(|(id, _)| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft)) {
-            return Err(corrupt("order watch entity"));
+            return Err(SnapshotError::Corrupt("order watch entity is not a craft".into()));
         }
         let approach_warp = crate::movement::approach::Warp::from_rec(warp_rows).ok_or_else(|| SnapshotError::Corrupt("attack warp rows out of order or of an unknown phase".into()))?;
         if approach_warp.to_rec().iter().any(|(id, _)| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft)) {
@@ -583,6 +583,9 @@ mod subsystem_tests;
 #[cfg(test)]
 #[path = "snapshot/attack_tests.rs"]
 mod attack_tests;
+#[cfg(test)]
+#[path = "snapshot/watch_tests.rs"]
+mod watch_tests;
 
 #[cfg(test)]
 #[path = "snapshot/chain.rs"]

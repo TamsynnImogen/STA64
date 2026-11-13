@@ -15,9 +15,13 @@
 //!
 //! The rule is STA64's own (the originals' data has no key for it, and no
 //! original-game measurement of how a stuck craft ends was made: not
-//! measured). It is conservative: a minute of game time without getting
-//! nearer, by a metric that only rises while the craft moves away from its
-//! destination (the way round a field is a few hundred units).
+//! measured). It is conservative: two minutes of game time without getting
+//! nearer (a way round a field or wall is a few thousand units at most; a
+//! longer one is not planned for). Rows restart on every move, stop or
+//! formation order, even to the same point. A deploying rig is not watched.
+//! Systems that re-aim a craft every tick (attack approach, mining) have
+//! their target cleared like any other and may raise the event again after
+//! another interval.
 //!
 //! The rows are bookkeeping that follows from the orders and positions, so
 //! they are in snapshots (a restored sim must time out on the same tick) but
@@ -29,8 +33,8 @@ use sta_core::{EntityId, Fixed, Vec3};
 use crate::world::{EntityKind, Table};
 use crate::{Sim, SimEvent, TICK_HZ};
 
-/// Ticks without getting nearer before the order ends: 60 seconds.
-const LIMIT: u64 = 60 * TICK_HZ as u64;
+/// Ticks without getting nearer before the order ends: two minutes.
+const LIMIT: u64 = 120 * TICK_HZ as u64;
 /// Units nearer than the best so far that count as progress.
 const GAIN: i32 = 8;
 
@@ -73,9 +77,10 @@ impl Watchdog {
     }
 
     /// Mark the order of `id` as reported; true when it was not before.
-    pub(crate) fn report(&mut self, id: EntityId, target: Vec3) -> bool {
+    /// (Not keyed on the target: the planner may have swapped in an aim point.)
+    pub(crate) fn report(&mut self, id: EntityId) -> bool {
         match self.rows.get_mut(id) {
-            Some(r) if r.target == target && !r.reported => {
+            Some(r) if !r.reported => {
                 r.reported = true;
                 true
             }
@@ -92,7 +97,7 @@ impl Sim {
         let ids: Vec<EntityId> = self.units.iter().map(|u| u.id).collect();
         for id in ids {
             let Some(u) = self.units.get(id) else { continue };
-            let watched = u.kind == EntityKind::Craft && u.mobile() && !self.production.is_welding(id);
+            let watched = u.kind == EntityKind::Craft && u.mobile() && !self.production.is_welding(id) && !self.production.is_deploying(id);
             let Some(target) = u.target.filter(|_| watched) else {
                 self.watchdog.remove(id);
                 continue;
