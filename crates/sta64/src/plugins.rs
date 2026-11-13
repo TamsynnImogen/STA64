@@ -55,6 +55,11 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
         app.add_plugins(InputPlugin);
     }
 
+    // UI-30: scripted camera shots from mission presentation requests
+    if map_view {
+        app.add_plugins(crate::input::camera_cinematic::CinematicCameraPlugin);
+    }
+
     // bench —
     // TOOL-14 playtest capture (Ctrl+F12 in a match)
     if map_view {
@@ -80,6 +85,8 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
         app.insert_resource(crate::ui::profile::UiPreference { lcars: cfg.lcars_ui })
             .add_plugins(crate::ui::profile::UiProfilePlugin);
         app.add_plugins(crate::ui::notices::NoticePlugin);
+        // UI-30: titles, fades, the objectives panel and the replies for mission presentation.
+        app.add_plugins(crate::ui::presentation::PresentationPlugin);
         if front_end {
             // INT-M4: the front end's screens over the menu scene, the loading screen.
             app.add_plugins(crate::frontend::scene::MenuScenePlugin);
