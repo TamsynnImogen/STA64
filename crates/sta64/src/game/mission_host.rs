@@ -45,7 +45,7 @@ use bevy::prelude::*;
 use sta_content::{ContentDb, MapDef, Races};
 use sta_core::{PlayerId, TICK_HZ};
 use sta_mission::api::PlayerNumbering;
-use sta_mission::campaign::{Campaign, CampaignBook, CampaignMission, MissionHost, MissionOutcome, ScriptReader, launch_runtime, map_setup, resolved_script, scan_outcome};
+use sta_mission::campaign::{Campaign, CampaignBook, CampaignMission, MissionHost, MissionOutcome, ScriptReader, launch_runtime, map_setup, read_map_paths, resolved_script, scan_outcome};
 use sta_mission::runtime::MissionRuntime;
 use sta_sim::command::Command;
 use sta_sim::present::Presentation;
@@ -82,6 +82,8 @@ pub struct MissionLaunch {
     pub script: String,
     reader: ScriptReader,
     seat: (PlayerId, PlayerNumbering),
+    /// The map's named paths for `A2.paths`.
+    paths: Vec<(String, Vec<[f32; 3]>)>,
 }
 
 impl std::fmt::Debug for MissionLaunch {
@@ -111,6 +113,7 @@ impl MissionLaunch {
             script,
             reader,
             seat: campaigns.host.seat(),
+            paths: campaigns.host.map_paths(c, m),
         })
     }
 
@@ -135,7 +138,7 @@ impl MissionLaunch {
 
     /// Load the script over the built game and share it between the link and the host.
     pub fn attach(&self, setup: &GameSetup, sim: &Sim) -> Result<MissionHandle, String> {
-        let runtime = launch_runtime(&self.script, self.reader.clone(), self.seed, self.seat, setup, sim).map_err(|e| e.to_string())?;
+        let runtime = launch_runtime(&self.script, self.reader.clone(), self.seed, self.seat, setup, sim, self.paths.clone()).map_err(|e| e.to_string())?;
         Ok(MissionHandle(Arc::new(Mutex::new(runtime))))
     }
 
@@ -408,6 +411,10 @@ impl MissionHost for ClientHost {
     fn script(&self, _: &Campaign, mission: &CampaignMission) -> Result<(String, ScriptReader), String> {
         let vfs = self.vfs.clone();
         resolved_script(mission, Arc::new(move |p| vfs.read(p).and_then(Result::ok)))
+    }
+
+    fn map_paths(&self, _: &Campaign, mission: &CampaignMission) -> Vec<(String, Vec<[f32; 3]>)> {
+        read_map_paths(&self.vfs, &mission.bzn)
     }
 
     fn seat(&self) -> (PlayerId, PlayerNumbering) {

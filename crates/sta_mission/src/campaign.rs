@@ -865,6 +865,11 @@ pub trait MissionHost {
     /// ([`resolved_script`] runs the one the book resolved).
     fn script(&self, _campaign: &Campaign, mission: &CampaignMission) -> Result<(String, ScriptReader), String>;
 
+    /// The map's named paths `(label, points)`, in file order, for `A2.paths`.
+    fn map_paths(&self, _campaign: &Campaign, _mission: &CampaignMission) -> Vec<(String, Vec<[f32; 3]>)> {
+        Vec::new()
+    }
+
     /// The seat the mission runs as and its player numbering.
     fn seat(&self) -> (PlayerId, PlayerNumbering) {
         (PlayerId(0), PlayerNumbering::Slots)
@@ -964,8 +969,8 @@ pub fn scan_outcome(runtime: &MissionRuntime, tick: u64) -> Option<MissionOutcom
 }
 
 /// Load a mission script over a game that is already built: the runtime of
-/// `path` (read through `reader`) for `seat`, with the sim's labels and first
-/// view, and [`scan_outcome`]'s hook installed. [`CampaignRunner::start`] uses
+/// `path` (read through `reader`) for `seat`, with the sim's labels, the map's
+/// named `paths` ([`read_map_paths`]) and first view, and [`scan_outcome`]'s hook installed. [`CampaignRunner::start`] uses
 /// it; so does a host that owns its own sim (the client, INT-M6).
 pub fn launch_runtime(
     path: &str,
@@ -974,12 +979,14 @@ pub fn launch_runtime(
     seat: (PlayerId, PlayerNumbering),
     setup: &GameSetup,
     sim: &Sim,
+    paths: Vec<(String, Vec<[f32; 3]>)>,
 ) -> Result<MissionRuntime, StartError> {
     let cfg = MissionConfig {
         seat: Some(seat.0),
         player_numbering: seat.1,
         content: Some(setup.content.clone()),
         labels: sim.labels.iter().map(|(id, l)| (id, l.clone())).collect(),
+        paths,
         view: Some((*sim.view()).clone()),
     };
     let runtime = MissionRuntime::load_with(path, seed, cfg, move |p| reader(p));
@@ -988,6 +995,13 @@ pub fn launch_runtime(
     }
     runtime.eval::<()>(OUTCOME_HOOK).map_err(|e| StartError::Blocked(format!("outcome hook: {e}")))?;
     Ok(runtime)
+}
+
+/// The named paths of the map `bzn` (`a2_fed03.bzn`) in `vfs`, in file order,
+/// for `A2.paths`; empty when the map cannot be read or holds none.
+pub fn read_map_paths(vfs: &Vfs, bzn: &str) -> Vec<(String, Vec<[f32; 3]>)> {
+    let Some(Ok(bytes)) = vfs.read(&format!("bzn/{bzn}")) else { return Vec::new() };
+    sta_bzn::parse(&bytes).map(|m| m.paths.into_iter().map(|p| (p.label, p.points)).collect()).unwrap_or_default()
 }
 
 impl ActiveMission {
@@ -1094,7 +1108,7 @@ impl CampaignRunner {
         let (path, reader) = host.script(c, m).map_err(StartError::Blocked)?;
         let setup = host.game_setup(c, m, seed).map_err(StartError::Blocked)?;
         let sim = Sim::from_setup(&setup);
-        let runtime = launch_runtime(&path, reader, seed, host.seat(), &setup, &sim)?;
+        let runtime = launch_runtime(&path, reader, seed, host.seat(), &setup, &sim, host.map_paths(c, m))?;
         self.active = Some(ActiveMission {
             campaign: campaign.to_owned(),
             mission,
@@ -1205,6 +1219,10 @@ impl MissionHost for VfsHost {
 
     fn script(&self, _campaign: &Campaign, mission: &CampaignMission) -> Result<(String, ScriptReader), String> {
         resolved_script(mission, self.reader())
+    }
+
+    fn map_paths(&self, _campaign: &Campaign, mission: &CampaignMission) -> Vec<(String, Vec<[f32; 3]>)> {
+        read_map_paths(&self.vfs, &mission.bzn)
     }
 
     fn seat(&self) -> (PlayerId, PlayerNumbering) {

@@ -153,6 +153,8 @@ pub struct MissionConfig {
     pub content: Option<Arc<ContentDb>>,
     /// Map labels by entity (`sim.labels`), for `EntityFinder` and `label`.
     pub labels: BTreeMap<EntityId, String>,
+    /// The map's named paths in file order, `(label, points)`, for `A2.paths` (CON-47).
+    pub paths: Vec<(String, Vec<[f32; 3]>)>,
     /// The world before the first tick, so a script's load-time finds work.
     pub view: Option<WorldView>,
 }
@@ -200,6 +202,7 @@ pub(crate) struct Ctx {
     pub seed: u64,
     pub content: Option<Arc<ContentDb>>,
     pub labels: BTreeMap<EntityId, String>,
+    pub paths: Vec<(String, Vec<[f32; 3]>)>,
     pub view: WorldView,
     pub events: Vec<SimEvent>,
     pub commands: Vec<Command>,
@@ -238,6 +241,7 @@ impl Ctx {
             seed,
             content: cfg.content,
             labels: cfg.labels,
+            paths: cfg.paths,
             view: cfg.view.unwrap_or_default(),
             events: Vec::new(),
             commands: Vec::new(),

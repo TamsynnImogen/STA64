@@ -134,3 +134,16 @@ fn unknown_presentation_methods_remain_stubbed_and_are_reported() {
         ]
     );
 }
+
+#[test]
+fn a2_paths_are_filled_from_the_map_first_label_wins() {
+    let paths = vec![
+        ("pat_1".to_owned(), vec![[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]),
+        ("pat_1".to_owned(), vec![[9.0, 9.0, 9.0]]),
+        ("Cam".to_owned(), vec![[0.5, 0.0, 0.0]]),
+    ];
+    let rt = MissionRuntime::from_source_with("p.lua", "", 1, MissionConfig { paths, ..MissionConfig::default() });
+    assert_eq!(rt.eval::<f64>("return A2.paths.pat_1[2].z").unwrap(), 6.0);
+    assert_eq!(rt.eval::<i64>("return #A2.paths.pat_1").unwrap(), 2);
+    assert_eq!(rt.eval::<f64>("return A2.paths.Cam[1].x").unwrap(), 0.5);
+}
