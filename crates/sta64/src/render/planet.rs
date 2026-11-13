@@ -386,7 +386,7 @@ fn place_glows(
 
 fn update(
     camera: Query<&GlobalTransform, crate::map::MainCamera>,
-    lights: Query<(&GlobalTransform, &DirectionalLight)>,
+    lights: Query<(&GlobalTransform, &DirectionalLight, Option<&crate::map::MapLightSource>)>,
     planets: Query<(&GlobalTransform, &PlanetBody)>,
     mut materials: ResMut<Assets<PlanetMaterial>>,
     clock: Res<crate::clock::AnimClock>,
@@ -396,9 +396,15 @@ fn update(
     let stock = stock_scenery(profile.as_deref(), effects.as_deref());
     let Ok(cam) = camera.single() else { return };
     // Brightest light first: the key.
-    let mut ls: Vec<(Vec3, Vec3, f32)> = lights
-        .iter()
-        .map(|(t, l)| {
+    // Stock: the lights the hulls use (`hulls::stock_light_set`); Refit: every directional light.
+    let set: Vec<(Vec3, &DirectionalLight)> = if stock {
+        crate::render::hulls::stock_light_set(lights.iter())
+    } else {
+        lights.iter().map(|(t, l, _)| (t.back().as_vec3(), l)).collect()
+    };
+    let mut ls: Vec<(Vec3, Vec3, f32)> = set
+        .into_iter()
+        .map(|(to, l)| {
             // Stock multiplies display-space values (as the engine's fixed pipeline does), so its light
             // colour is the map's own sRGB value; Refit's shader works in linear.
             let c = if stock {
@@ -408,7 +414,7 @@ fn update(
                 let c = l.color.to_linear();
                 Vec3::new(c.red, c.green, c.blue)
             };
-            (t.back().as_vec3(), c, l.illuminance)
+            (to, c, l.illuminance)
         })
         .collect();
     ls.sort_by(|a, b| b.2.total_cmp(&a.2));
@@ -440,6 +446,8 @@ fn update(
 
 #[cfg(test)]
 mod tests {
+    use bevy::prelude::*;
+
     /// The shader must parse and validate (naga, as wgpu runs it), with Bevy's
     /// material bind group filled in.
     /// The path `embedded_asset!` registers must be the one the material asks for.
@@ -475,6 +483,12 @@ mod tests {
     }
 
     fn run_update(profile: super::RenderProfile) -> super::PlanetParams {
+        run_update_with(profile, Vec3::new(0.0, 0.0, 10.0), false)
+    }
+
+    /// `own`: the two lights are the map's (`MapLightSource`) and a stray third light (a viewer's or the menu
+    /// scene's, brightest of all) is present.
+    fn run_update_with(profile: super::RenderProfile, eye: Vec3, own: bool) -> super::PlanetParams {
         use super::*;
         let mut app = App::new();
         let mut effects = ProfileEffects::default();
@@ -492,12 +506,18 @@ mod tests {
             clouds: None,
             alpha: AlphaMode::Opaque,
         });
-        app.world_mut().spawn((Camera3d::default(), GlobalTransform::from(Transform::from_xyz(0.0, 0.0, 10.0))));
+        app.world_mut().spawn((Camera3d::default(), GlobalTransform::from(Transform::from_translation(eye))));
         let light = |lux: f32, colour: Color, from: Vec3| {
             (DirectionalLight { illuminance: lux, color: colour, ..default() }, GlobalTransform::from(Transform::IDENTITY.looking_to(-from, Vec3::Y)))
         };
-        app.world_mut().spawn(light(6000.0, Color::srgb(1.0, 0.5, 0.25), Vec3::Y));
-        app.world_mut().spawn(light(1500.0, Color::srgb(0.2, 0.4, 1.0), Vec3::NEG_Y));
+        let a = app.world_mut().spawn(light(6000.0, Color::srgb(1.0, 0.5, 0.25), Vec3::Y)).id();
+        let b = app.world_mut().spawn(light(1500.0, Color::srgb(0.2, 0.4, 1.0), Vec3::NEG_Y)).id();
+        if own {
+            for e in [a, b] {
+                app.world_mut().entity_mut(e).insert(crate::map::MapLightSource(true));
+            }
+            app.world_mut().spawn(light(9000.0, Color::WHITE, Vec3::X));
+        }
         app.world_mut().spawn((
             GlobalTransform::IDENTITY,
             PlanetBody { materials: vec![handle.clone()], ground: vec![], shell: None, ground_name: String::new(), atmo_name: String::new(), applied: None },
@@ -523,5 +543,27 @@ mod tests {
         assert!((refit.dcol0.w - super::SUN).abs() < 1e-6);
         let lin = Color::srgb(0.2, 0.4, 1.0).to_linear();
         assert!((refit.dcol1.x - lin.red * super::FILL).abs() < 1e-5, "Refit keeps linear light colours");
+    }
+
+    /// The planet takes the lights the hulls take: with the map's own lights present a stray directional
+    /// light does not light planets, and the direction is the hull shader's (`GlobalTransform::back`).
+    #[test]
+    fn stock_planet_light_set_is_the_hulls() {
+        let p = run_update_with(super::RenderProfile::Stock, Vec3::new(0.0, 0.0, 10.0), true);
+        assert!(p.dvec0.truncate().abs_diff_eq(Vec3::Y, 1e-5) && p.dvec1.truncate().abs_diff_eq(Vec3::NEG_Y, 1e-5), "{:?} {:?}", p.dvec0, p.dvec1);
+        assert!(p.dcol0.truncate().abs_diff_eq(Vec3::new(1.0, 0.5, 0.25), 1e-5), "the stray 9000 lux light must not be the key");
+    }
+
+    /// Stock shading reads no camera: moving the camera changes only `eye`.
+    #[test]
+    fn stock_planet_params_do_not_depend_on_the_camera() {
+        let a = run_update_with(super::RenderProfile::Stock, Vec3::new(0.0, 0.0, 10.0), true);
+        let b = run_update_with(super::RenderProfile::Stock, Vec3::new(-300.0, 40.0, -90.0), true);
+        assert_ne!(a.eye, b.eye);
+        let mut b2 = b;
+        b2.eye = a.eye;
+        assert_eq!(format!("{a:?}"), format!("{b2:?}"));
+        let stock = include_str!("planet.wesl").split("fn stock(").nth(1).unwrap().split("\n}\n").next().unwrap();
+        assert!(!stock.contains("p.eye"), "the Stock look must not read the camera");
     }
 }
