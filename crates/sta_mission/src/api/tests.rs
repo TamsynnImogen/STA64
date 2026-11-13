@@ -615,6 +615,27 @@ fn officers_and_crew_assignments_queue_the_typed_edits_and_are_not_counted() {
 }
 
 #[test]
+fn personnel_assignment_edge_cases_are_recorded_not_aborting() {
+    let mut g = game("MMM.register(function() local e = EntityFinder():find()[2]; e.crew = nil; e.crew = 0/0; Player(0).maxOfficers = 5; DONE = true end)");
+    for _ in 0..3 {
+        let mut out = Vec::new();
+        g.rt.think(&g.view, &g.events, &mut out);
+        let o = g.sim.step(&out);
+        g.view = o.view;
+        g.events = o.events;
+    }
+    assert!(g.global::<bool>("DONE"), "the callback was not aborted: {:?}", g.rt.errors());
+    let names: Vec<String> = g.rt.unsupported().into_iter().map(|(n, _)| n).collect();
+    for want in ["Entity.crew = non-number", "Entity.crew = non-finite", "Player.maxOfficers: simulation rejected"] {
+        assert!(names.iter().any(|n| n.contains(want)), "{want} in {names:?}");
+    }
+    let mut g = game("MMM.register(function() Player(0).maxOfficers = 0/0 end)");
+    let mut out = Vec::new();
+    g.rt.think(&g.view, &g.events, &mut out);
+    assert!(g.rt.errors().iter().any(|e| e.contains("requires a finite number")), "{:?}", g.rt.errors());
+}
+
+#[test]
 fn entity_shields_is_a_fraction_of_the_maximum_applied_by_the_sim() {
     let mut g = game(
         "MMM.register(function()

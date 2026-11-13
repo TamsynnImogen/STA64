@@ -231,8 +231,11 @@ impl Sim {
                 let Some(u) = self.units.get_mut(id).filter(|u| u.hull[0] > Fixed::ZERO && matches!(u.kind, crate::world::EntityKind::Craft | crate::world::EntityKind::Station)) else {
                     return false;
                 };
-                let Some([_, max]) = u.crew else { return false };
-                u.crew = Some([value.max(Fixed::ZERO).min(max), max]);
+                let Some([now, max]) = u.crew else { return false };
+                // Cap: the maximum crew, but never below what the unit already
+                // holds (starting crew may exceed it). Whether the original clamps
+                // `SetCrew` at the maximum is NOT measured.
+                u.crew = Some([value.max(Fixed::ZERO).min(max.max(now)), max]);
                 true
             }
             // The rest land with the package that owns what they change.

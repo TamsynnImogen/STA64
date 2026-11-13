@@ -157,8 +157,9 @@ pub enum Edit {
     /// officer limit. SCRIPT/BENCH only. Appended tag 25.
     MaxOfficers(PlayerId, Fixed),
     /// Mission `SetCrew` / `Entity.crew` (SIM-54): a craft's or station's
-    /// current crew, clamped to 0..its maximum crew. Rejected for a unit with
-    /// no crew pool. SCRIPT/BENCH only. Appended tag 26.
+    /// current crew, floored at 0 and capped at its maximum crew or what it
+    /// already holds, whichever is higher (the clamp is not measured). Rejected
+    /// for a unit with no crew pool. SCRIPT/BENCH only. Appended tag 26.
     UnitCrew(EntityId, Fixed),
     /// Mission `resources.crew` (SIM-54): the player's crew stock, floored at 0
     /// and capped at 1e9 (not clamped to the team capacity, which a stock may

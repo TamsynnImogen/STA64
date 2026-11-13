@@ -63,7 +63,9 @@ fn resources(lua: &Lua, p: &Player) -> mlua::Result<mlua::Table> {
             match RESOURCES.iter().find(|(n, _)| *n == k) {
                 Some((_, i)) => c.edit(Edit::Cargo(id, *i, Fixed::from_f64(v))),
                 // SIM-54: the crew stock.
-                None if k == "crew" && v.is_finite() => c.edit(Edit::TeamCrew(id, Fixed::from_f64(v))),
+                None if k == "crew" && v.is_finite() => {
+                    super::edit_feedback::queue(&mut c, "Player.resources.crew", Edit::TeamCrew(id, Fixed::from_f64(v)))?;
+                }
                 None => c.unsupported(&format!("resources.{k} = x")),
             }
             Ok(())
@@ -114,11 +116,15 @@ impl UserData for Player {
             f.add_field_method_set(name, move |_, p, value: f64| {
                 let mut c = p.ctx.borrow_mut();
                 let current = c.view.player(p.id).map(|v| v.officers[1].to_f32() as f64);
-                if name == "maxOfficers" && value.is_finite() {
+                if !value.is_finite() {
+                    return Err(mlua::Error::runtime(format!("Player.{name} requires a finite number")));
+                }
+                if name == "maxOfficers" {
                     // SIM-54: the officer limit edit; assigning the limit already in
-                    // force changes nothing and is not sent.
+                    // force changes nothing and is not sent. A seat with no officer
+                    // limit is rejected by the sim and counted by the edit feedback.
                     if current != Some(value) {
-                        c.edit(Edit::MaxOfficers(p.id, Fixed::from_f64(value)));
+                        super::edit_feedback::queue(&mut c, "Player.maxOfficers", Edit::MaxOfficers(p.id, Fixed::from_f64(value)))?;
                     }
                 } else if current != Some(value) {
                     c.unsupported(&format!("Player.{name} = x (differs from the rule; needs a sim officer-limit edit)"));

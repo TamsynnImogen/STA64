@@ -469,15 +469,15 @@ impl Sim {
         let specials = crate::specials::Specials::from_rec(b.specials).ok_or_else(|| corrupt("specials"))?;
         let start_effects = crate::start_effects::StartEffects::from_rec(effect_rows, |id| units.contains(id))
             .ok_or_else(|| corrupt("start effect rows"))?;
-        let subsystems = crate::combat::damage::Subsystems::from_rows(subsystem_rows).ok_or_else(|| corrupt("subsystem rows"))?;
+        let subsystems = crate::combat::damage::Subsystems::from_rows(subsystem_rows).ok_or_else(|| SnapshotError::Corrupt("invalid subsystem rows".into()))?;
         if subsystems.to_rows().iter().any(|(id, _)| !units.get(*id).is_some_and(|u| matches!(u.kind, EntityKind::Craft | EntityKind::Station))) {
-            return Err(corrupt("subsystem entity"));
+            return Err(SnapshotError::Corrupt("subsystem entity is not a craft or station".into()));
         }
         if let Some(db) = content.as_deref() {
             for (id, row) in subsystems.to_rows() {
                 let hp = units.get(id).and_then(|u| db.unit(u.def)).map(|d| d.system_hit_points);
                 if hp.is_some_and(|hp| row.damage.iter().zip(hp).any(|(d, hp)| *d > hp.to_bits())) {
-                    return Err(corrupt("subsystem damage above hit points"));
+                    return Err(SnapshotError::Corrupt("subsystem damage above hit points".into()));
                 }
             }
         }
@@ -510,6 +510,14 @@ impl Sim {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "snapshot/subsystem_tests.rs"]
+mod subsystem_tests;
+
+#[cfg(test)]
+#[path = "snapshot/chain.rs"]
+mod chain;
 
 #[cfg(test)]
 #[path = "snapshot/confinement_tests.rs"]

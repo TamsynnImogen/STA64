@@ -121,9 +121,20 @@ impl UserData for Entity {
             Ok(())
         });
         // SIM-54: current crew, clamped by the sim to 0..the maximum crew.
-        f.add_field_method_set("crew", |_, e, to: f64| {
-            if !to.is_finite() { return Err(mlua::Error::runtime("Entity.crew requires a finite number")); }
+        f.add_field_method_set("crew", |_, e, value: Value| {
             let mut c = e.ctx.borrow_mut();
+            let to = match value {
+                Value::Number(n) => n,
+                Value::Integer(n) => n as f64,
+                _ => {
+                    c.unsupported("Entity.crew = non-number");
+                    return Ok(());
+                }
+            };
+            if !to.is_finite() {
+                c.unsupported("Entity.crew = non-finite number");
+                return Ok(());
+            }
             match e.key.id() {
                 Some(id) => super::edit_feedback::queue(&mut c, "Entity.crew", Edit::UnitCrew(id, sta_core::Fixed::from_f64(to)))?,
                 None => c.unsupported("entity.crew: pending or failed spawn"),
