@@ -4,6 +4,7 @@
 //! and pushes commands into [`CommandQueue`](crate::sim_link::CommandQueue);
 //! the sim link stamps and routes them. Systems run in `GameSet::Input`.
 
+pub mod camera_cinematic;
 pub mod context;
 pub mod hover;
 pub mod keys;
