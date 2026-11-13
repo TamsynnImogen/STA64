@@ -40,6 +40,9 @@
 //! a modal over a match wants, so this menu is centred. Captions: the mounted `label.map` where
 //! it has the key (`return`, `options`), translated English otherwise.
 //!
+//! The menu belongs to the front end flow (`AppState`): with `--skirmish` (no `FlowPlugin`, no state
+//! changes) it stays inert.
+//!
 //! # Runs only in a match
 //!
 //! Every system here is gated on `AppState::InGame` (the state, not resources that exist only
@@ -253,7 +256,8 @@ fn spawn_menu(commands: &mut Commands, page: MenuPage, parts: &Parts, b: Vec2) {
         .spawn((
             MenuRoot,
             DespawnOnExit(AppState::InGame),
-            GlobalZIndex(800),
+            // Above the mission's message panel (920), titles (900) and fades (950); below notices (1000).
+            GlobalZIndex(960),
             // The whole window: dims the match and takes the pointer, so nothing under it is hit.
             Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), align_items: AlignItems::Center, justify_content: JustifyContent::Center, ..default() },
             BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.55)),
@@ -328,6 +332,7 @@ fn keys_and_requests(
     link: Option<Res<SimLink>>,
     mission: Option<Res<crate::game::mission_host::MissionRun>>,
     hud: Option<ResMut<crate::ui::hud::HudState>>,
+    drag: Option<ResMut<crate::input::select::Drag>>,
 ) {
     let asked = requests.read().count() > 0;
     let pressed = keys.as_deref().is_some_and(|k| match bindings.as_deref() {
@@ -354,6 +359,10 @@ fn keys_and_requests(
         if let Some(mut h) = hud {
             h.placing = None;
             h.targeting = None;
+        }
+        // A drag in progress must not end as a box select at a menu button.
+        if let Some(mut d) = drag {
+            *d = default();
         }
     }
 }
@@ -389,9 +398,10 @@ fn buttons(
 }
 
 /// Single player stops the sim while the menu is open; a networked match never does.
-fn pause(menu: Res<InGameMenu>, net: Option<Res<NetworkedMatch>>, clock: Option<ResMut<AnimClock>>) {
+fn pause(menu: Res<InGameMenu>, net: Option<Res<NetworkedMatch>>, game: Option<Res<crate::game::net_match::NetGame>>, clock: Option<ResMut<AnimClock>>) {
     let Some(mut clock) = clock else { return };
-    let want = menu.open && net.is_none();
+    // A lockstep match (INT-M5's `NetGame`, or whoever inserts the marker) never waits for a menu.
+    let want = menu.open && net.is_none() && game.is_none();
     if clock.paused() != want {
         clock.set_paused(want);
     }

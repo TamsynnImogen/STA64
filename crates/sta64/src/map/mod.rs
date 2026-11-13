@@ -413,7 +413,7 @@ impl Plugin for MapPlugin {
                     crate::clock::advance_idle_clock.run_if(not(resource_exists::<crate::sim_link::SimLink>)),
                     input,
                     rebuild,
-                    radar_click,
+                    radar_click.run_if(crate::ui::ingame_menu::menu_closed),
                     // Under the in-game menu (UI-34) the camera stands still.
                     pan_keys.run_if(crate::ui::ingame_menu::menu_closed),
                     crate::viewer::orbit_camera.run_if(crate::ui::ingame_menu::menu_closed),
@@ -455,6 +455,8 @@ pub(crate) fn clear_match(
     // The sim ids the match's entities answered to; the menu scene's units are made again from its view.
     entities.0.clear();
     commands.remove_resource::<crate::render::fog::FogState>();
+    // The playtest capture's record of how the match began (a networked match does not write one).
+    commands.remove_resource::<crate::capture::MatchMeta>();
     for e in &q {
         commands.entity(e).despawn();
     }

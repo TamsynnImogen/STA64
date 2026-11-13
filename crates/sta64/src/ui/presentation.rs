@@ -129,6 +129,12 @@ pub struct Titles {
 }
 
 impl Titles {
+    /// Take every title down (the layer redraws).
+    pub fn clear(&mut self) {
+        self.items.clear();
+        self.dirty = true;
+    }
+
     fn add(&mut self, item: TitleItem) {
         self.items.retain(|t| t.id != item.id);
         self.items.push(item);
