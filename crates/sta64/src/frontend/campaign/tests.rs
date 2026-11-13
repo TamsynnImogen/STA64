@@ -412,6 +412,39 @@ fn a_blocked_mission_shows_its_reason_and_cannot_be_started() {
 }
 
 #[test]
+fn a_mission_waiting_for_a_conversion_says_what_to_run_and_a_converted_one_is_marked() {
+    let mut cs = fixture(false, None);
+    cs.progress.campaigns.get_mut("federation").unwrap().complete = true;
+    for b in cs.blocked.iter_mut() {
+        b.reason = "legacy DLL only (syn_kl01R.drl): needs a Lua conversion on LUA-05".into();
+    }
+    assert!(cs.awaits_conversion());
+    cs.convert_hint = Some(crate::game::mission_host::convert_hint(Path::new("/games/a2")));
+    let hint = cs.convert_hint.clone().unwrap();
+    assert!(hint.contains("tools/convert_install_missions.py --install \"/games/a2\""), "{hint}");
+    let mut app = app_with(cs, None, 1.0);
+    go(&mut app, Screen::SinglePlayer);
+    press(&mut app, CampaignAct::Card(2));
+    let texts: Vec<String> = app.world_mut().query::<&crate::ui::sprite_font::SpriteText>().iter(app.world()).map(|t| t.text.clone()).collect();
+    assert!(texts.contains(&hint), "{hint:?} in {texts:?}");
+
+    // A mounted conversion marks the missions whose script it holds, in the list and the details.
+    let dir = temp_dir("converted");
+    std::fs::create_dir_all(dir.join("missions")).unwrap();
+    std::fs::write(dir.join("missions/syn_fed01.lua"), "-- converted\n").unwrap();
+    let mut cs = fixture(true, None);
+    cs.mark_converted(&dir, &Default::default());
+    assert_eq!(cs.experimental.iter().collect::<Vec<_>>(), ["syn_fed01.bzn"]);
+    let mut app = app_with(cs, None, 1.0);
+    go(&mut app, Screen::SinglePlayer);
+    press(&mut app, CampaignAct::Card(1));
+    let texts: Vec<String> = app.world_mut().query::<&crate::ui::sprite_font::SpriteText>().iter(app.world()).map(|t| t.text.clone()).collect();
+    assert!(texts.iter().any(|t| t.contains("(experimental)")), "{texts:?}");
+    assert!(texts.iter().any(|t| t.starts_with("Experimental: converted")), "{texts:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn the_debrief_offers_the_next_mission_or_a_retry() {
     let mut cs = fixture(true, None);
     cs.finish("federation", 0, RunResult::Won);

@@ -81,6 +81,9 @@ pub struct Single {
     pub id: EntityId,
     /// Stable choice from `possibleCraftNames`, then `unitName` or ODF stem.
     pub name: String,
+    /// Companion values from the same selected craft-name row, when present.
+    pub captain: Option<String>,
+    pub registry: Option<String>,
     /// Authored `unitName`, falling back to the definition's class label.
     pub class: String,
     pub own: bool,
@@ -130,11 +133,20 @@ pub fn info(feed: &HudFeed) -> Info {
         [] => Info::None,
         [u] => {
             let def = feed.def(u);
+            let (name, captain, registry) = def.map_or_else(
+                || (format!("#{}", u.id.0), None, None),
+                |d| {
+                    let identity = craft_names::identity(d, u.id);
+                    (identity.name, identity.captain, identity.registry)
+                },
+            );
             let shields: Vec<[Fixed; 2]> = u.shields.to_vec();
             let (now, max) = shields.iter().fold((0.0, 0.0), |(n, m), s| (n + s[0].to_f32(), m + s[1].to_f32()));
             Info::Single(Single {
                 id: u.id,
-                name: feed.name(u),
+                name,
+                captain,
+                registry,
                 class: def.map_or_else(String::new, |d| craft_names::unit_name(d).unwrap_or(&d.class.0).to_owned()),
                 own: u.owner == feed.player,
                 hull: frac(u.hull),

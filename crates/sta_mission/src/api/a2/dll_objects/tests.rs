@@ -139,7 +139,6 @@ fn build_object_queues_a_spawn_and_its_handle_resolves_after_the_receipt() {
     // The pending token is flagged at once and is no object yet.
     assert_eq!(rt.eval::<u32>("return f").unwrap(), token);
     assert!(!rt.eval::<bool>("return A2.Exists(h)").unwrap());
-    assert!(rt.eval::<()>("A2.RemoveObject(h)").is_err());
     let commands = rt.take_commands();
     assert!(matches!(&commands[0].kind, CommandKind::Edit(Edit::SpawnRequest { player, pos, .. })
         if *player == PlayerId(1) && *pos == Vec3::from_f32([50.0, 0.0, 0.0])));
@@ -367,11 +366,13 @@ fn orders_to_a_pending_or_failed_token_raise_and_are_counted() {
         3,
         cfg,
     );
-    for call in ["A2.Goto(h, 'Q', false, 0)", "A2.Stop(h, 0)", "A2.SetRedAlert(h)", "A2.GetImpulseSpeed(h)", "A2.SetImpulseSpeed(h, 1.0)"] {
-        let err = rt.eval::<()>(call).expect_err(call).to_string();
-        assert!(err.contains("still being built"), "{call}: {err}");
+    // Calls that need the object itself raise; void orders and setters are held (see the next test).
+    let err = rt.eval::<()>("A2.GetImpulseSpeed(h)").expect_err("query").to_string();
+    assert!(err.contains("still being built"), "{err}");
+    assert!(unsupported(&rt, "still being built") >= 1);
+    for call in ["A2.Goto(h, 'Q', false, 0)", "A2.Stop(h, 0)", "A2.SetImpulseSpeed(h, 1.0)", "A2.SetRedAlert(h)"] {
+        rt.eval::<()>(call).expect(call);
     }
-    assert!(unsupported(&rt, "still being built") >= 4);
     // A real but absent handle stays a silent no-op.
     rt.eval::<()>("A2.Stop(123456, 0); A2.SetRedAlert(123456)").unwrap();
 
@@ -388,6 +389,52 @@ fn orders_to_a_pending_or_failed_token_raise_and_are_counted() {
     let err = rt.eval::<()>("A2.Stop(h, 0)").expect_err("failed token").to_string();
     assert!(err.contains("spawn failed"), "{err}");
     assert_eq!(unsupported(&rt, "A2.Stop: handle names no object: spawn failed"), 1);
+}
+
+#[test]
+fn an_order_given_to_a_handle_built_this_tick_is_held_and_replayed_after_the_receipt() {
+    // Rule (exe, static): BuildObject returns a usable handle at once. Here the spawn is queued
+    // and its receipt is one tick later, so a void order on the pending handle waits for it.
+    let s = scene();
+    let mut sim = Sim::from_setup(&game(&s.db));
+    let cfg = MissionConfig { content: Some(s.db.clone()), view: Some((*sim.view()).clone()), ..MissionConfig::default() };
+    let src = "A2.paths.Q = { {x=40,y=0,z=0}, {x=50,y=0,z=0} }; h = A2.BuildObject('fx_cruiser', 1, 'Q', 1); \
+               A2.PointAt(h, 'Q'); A2.SetAngularVelocity(h, Vector(0, 0.5, 0)); A2.SetImpulseSpeed(h, 2.0)";
+    let mut rt = MissionRuntime::from_source_with("held.lua", src, 3, cfg);
+    assert!(rt.errors().is_empty(), "{:?}", rt.errors());
+    let commands = rt.take_commands();
+    assert_eq!(commands.len(), 1, "only the spawn request is queued: {commands:?}");
+    assert_eq!(unsupported(&rt, "still being built"), 0, "holding is not a failure");
+    let out = sim.step(&commands);
+    let id = out.events.iter().find_map(|e| match e { SimEvent::ScriptSpawned { id, .. } => Some(*id), _ => None }).unwrap();
+    rt.think(&out.view, &out.events, &mut Vec::new());
+    // The first A2 call after the receipt replays the held orders, in order.
+    assert!(rt.eval::<bool>("return A2.Exists(h)").unwrap());
+    let kinds: Vec<_> = rt.take_commands().into_iter().map(|c| c.kind).collect();
+    assert!(matches!(kinds[0], CommandKind::Edit(Edit::Heading(i, _)) if i == id), "{kinds:?}");
+    assert!(matches!(kinds[1], CommandKind::Edit(Edit::AngularVelocity(i, _)) if i == id), "{kinds:?}");
+    assert!(matches!(kinds[2], CommandKind::Edit(Edit::MaxSpeed(i, Some(_))) if i == id), "{kinds:?}");
+    assert_eq!(kinds.len(), 3);
+    // Nothing is replayed twice.
+    assert!(rt.eval::<bool>("return A2.Exists(h)").unwrap());
+    assert!(rt.take_commands().is_empty());
+}
+
+#[test]
+fn an_order_held_for_a_failed_spawn_is_dropped() {
+    let s = scene();
+    let mut sim = Sim::new(3); // no content: the spawn is rejected
+    let cfg = MissionConfig { content: Some(s.db.clone()), view: Some((*sim.view()).clone()), ..MissionConfig::default() };
+    let mut rt = MissionRuntime::from_source_with(
+        "dropped.lua",
+        "A2.paths.Q = { {x=40,y=0,z=0}, {x=50,y=0,z=0} }; h = A2.BuildObject('fx_cruiser', 1, 'Q', 1); A2.PointAt(h, 'Q')",
+        3,
+        cfg,
+    );
+    assert!(rt.errors().is_empty(), "{:?}", rt.errors());
+    let _ = advance(&mut rt, &mut sim);
+    assert!(!rt.eval::<bool>("return A2.Exists(h)").unwrap());
+    assert!(rt.take_commands().is_empty(), "no order for an object that was never built");
 }
 
 #[test]

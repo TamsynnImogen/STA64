@@ -20,6 +20,11 @@
 
 use sta_core::{EntityId, Fixed, PlayerId, Vec3};
 
+pub mod approach;
+#[cfg(test)]
+#[path = "movement/approach_tests.rs"]
+pub(crate) mod approach_tests;
+
 use crate::command::Order;
 use crate::world::{Fnv, Table};
 use crate::Sim;
@@ -59,6 +64,11 @@ impl Movement {
     /// Detach owner-bound courses and formation on an ownership request.
     pub(crate) fn clear(&mut self, id: EntityId) {
         self.courses.remove(id);
+    }
+
+    /// Drop the queued legs of `id`, keeping its formation.
+    pub(crate) fn clear_waypoints(&mut self, id: EntityId) {
+        self.edit(id, |c| c.waypoints.clear());
     }
 
     /// Courses ascending by id, for snapshots.
@@ -165,6 +175,11 @@ impl Sim {
         if ids.is_empty() {
             return false;
         }
+        // A re-issued order starts the stuck-order watch afresh, even to the
+        // same point.
+        for &id in &ids {
+            self.watchdog.remove(id);
+        }
         match *order {
             Order::Move { to, queue, .. } => self.move_group(&ids, to, queue),
             Order::Stop { .. } => {
@@ -206,7 +221,8 @@ impl Sim {
             .map_or(FORM_NONE, |c| c.formation);
         let dests = self.destinations(ids, to, kind);
         for (&id, dest) in ids.iter().zip(dests) {
-            let idle = self.unit(id).is_some_and(|u| u.target.is_none());
+            // An attacking craft is busy: a queued leg waits for the attack (SIM-36).
+            let idle = self.unit(id).is_some_and(|u| u.target.is_none()) && self.weapons.attack_of(id).is_none();
             if queue && !idle {
                 self.movement.edit(id, |c| c.waypoints.push(dest));
             } else {
@@ -253,7 +269,8 @@ impl Sim {
         for (id, c) in self.movement.courses.iter() {
             match self.units.get(id) {
                 None => gone.push(id),
-                Some(u) if u.target.is_none() && !c.waypoints.is_empty() => next.push(id),
+                // A craft attacking holds its queued legs until the attack ends (SIM-36).
+                Some(u) if u.target.is_none() && !c.waypoints.is_empty() && self.weapons.attack_of(id).is_none() => next.push(id),
                 _ => {}
             }
         }

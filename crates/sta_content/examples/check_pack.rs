@@ -3,6 +3,7 @@
 //! ```text
 //! cargo run -p sta_content --example check_pack -- <root> [<mod> | --all]
 //! cargo run -p sta_content --example check_pack -- <root> <mod> --why <file> [<key>]
+//! cargo run -p sta_content --example check_pack -- <root> [<mod>] --keys | --cfg-unread
 //! ```
 //!
 //! `<root>` is an install (with `Data`). Without a mod the `Data` layer is
@@ -42,6 +43,13 @@ fn run(args: &[String]) -> Result<(), String> {
             // Every ODF key no loader is known to read, most used first.
             for (k, n) in coverage::check(&mount(root, target)?).odf.unknown {
                 println!("{k}\t{n}");
+            }
+            return Ok(());
+        }
+        [flag] if flag == "--cfg-unread" => {
+            // Every own cfg entry no STA64 code reads: file, line, key, value.
+            for c in coverage::check(&mount(root, target)?).cfg_unread {
+                println!("{}\t{}\t{}\t{}", c.file, c.line, c.key, c.value);
             }
             return Ok(());
         }

@@ -59,6 +59,7 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
         "Exists",
         lua.create_function(move |_, args: MultiValue| {
             let id = handle("Exists", &args, 1)?;
+            c.borrow().note_query(id, "Exists");
             Ok(c.borrow().unit(id).is_some())
         })?,
     )?;
@@ -68,6 +69,7 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
         "DoesNotExist",
         lua.create_function(move |_, args: MultiValue| {
             let id = handle("DoesNotExist", &args, 1)?;
+            c.borrow().note_query(id, "DoesNotExist");
             Ok(c.borrow().unit(id).is_none())
         })?,
     )?;
@@ -77,6 +79,7 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
         "IsAlive",
         lua.create_function(move |_, args: MultiValue| {
             let id = handle("IsAlive", &args, 1)?;
+            c.borrow().note_query(id, "IsAlive");
             Ok(c.borrow().alive(id).is_some())
         })?,
     )?;

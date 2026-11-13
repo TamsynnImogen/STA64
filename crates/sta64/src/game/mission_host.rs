@@ -518,13 +518,46 @@ impl MissionHost for ClientHost {
 /// install has no campaign mission (Fleet Ops 4.0 and Dominion War list none) or cannot be mounted
 /// again for the scripts. Progress is read from the platform config directory.
 pub fn load_campaigns(vfs: &sta_vfs::Vfs, install_root: Option<&std::path::Path>, active_mod: Option<&str>) -> Option<(Campaigns, MissionMovies)> {
-    load_campaigns_in(vfs, install_root, active_mod, ProgressStore::platform)
+    // The conversion covers the base game only (D6: a mod's chain is not converted).
+    let converted = install_root.filter(|_| active_mod.is_none_or(str::is_empty)).and_then(|r| crate::platform::converted_missions_dir(r, None));
+    load_campaigns_with(vfs, install_root, active_mod, converted.as_deref(), ProgressStore::platform)
 }
 
-/// [`load_campaigns`] with the progress store given (tests keep the player's file out of it).
+/// [`load_campaigns`] without the user's converted missions, and with the progress store
+/// given (tests keep the player's files out of it).
 pub fn load_campaigns_in(vfs: &sta_vfs::Vfs, install_root: Option<&std::path::Path>, active_mod: Option<&str>, store: impl FnOnce(&CampaignBook) -> ProgressStore) -> Option<(Campaigns, MissionMovies)> {
+    load_campaigns_with(vfs, install_root, active_mod, None, store)
+}
+
+/// The command that converts an install's missions (shown by the missions screen).
+pub fn convert_hint(install_root: &std::path::Path) -> String {
+    format!("Run once from the STA64 checkout, then restart: python3 tools/convert_install_missions.py --install \"{}\"", install_root.display())
+}
+
+/// [`load_campaigns_in`] with the converted-missions folder `converted` (when it holds
+/// scripts) mounted below the install: maps with no Lua of their own run the converted one,
+/// marked experimental (D6: the layer follows the install and mod it was made for; the
+/// install's own scripts win). Without it, missions that wait for a conversion carry the
+/// command to run.
+pub fn load_campaigns_with(
+    vfs: &sta_vfs::Vfs,
+    install_root: Option<&std::path::Path>,
+    active_mod: Option<&str>,
+    converted: Option<&std::path::Path>,
+    store: impl FnOnce(&CampaignBook) -> ProgressStore,
+) -> Option<(Campaigns, MissionMovies)> {
     let t0 = std::time::Instant::now();
-    let book = CampaignBook::load_vfs(vfs);
+    let mut host_vfs = match sta_vfs::Vfs::mount_install(install_root?, active_mod) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!("campaigns: cannot mount the install for the mission scripts: {e}");
+            return None;
+        }
+    };
+    let own: std::collections::BTreeSet<String> = host_vfs.list("missions").into_iter().map(|p| p.to_ascii_lowercase()).collect();
+    let mounted = converted.filter(|d| sta_mission::converted::mount(&mut host_vfs, d));
+    // The book reads the same layers the scripts will be read from.
+    let book = CampaignBook::load_vfs(&host_vfs);
     for w in &book.warnings {
         warn!("campaigns: {w}");
     }
@@ -533,16 +566,19 @@ pub fn load_campaigns_in(vfs: &sta_vfs::Vfs, install_root: Option<&std::path::Pa
         info!("campaigns: none in this install");
         return None;
     }
-    let host_vfs = match sta_vfs::Vfs::mount_install(install_root?, active_mod) {
-        Ok(v) => v,
-        Err(e) => {
-            warn!("campaigns: cannot mount the install for the mission scripts: {e}");
-            return None;
-        }
-    };
     let movies = MissionMovies::from_book(&book, vfs);
     let store = store(&book);
-    let campaigns = Campaigns::new(book, Arc::new(ClientHost::new(Arc::new(host_vfs))), store);
+    let mut campaigns = Campaigns::new(book, Arc::new(ClientHost::new(Arc::new(host_vfs))), store);
+    if let Some(dir) = mounted {
+        campaigns.mark_converted(dir, &own);
+        info!("campaigns: {} missions run converted scripts from {} (experimental)", campaigns.experimental.len(), dir.display());
+    } else if campaigns.awaits_conversion()
+        && active_mod.is_none_or(str::is_empty)
+        && let Some(root) = install_root
+    {
+        campaigns.convert_hint = Some(convert_hint(root));
+        info!("campaigns: missions wait for a Lua conversion; {}", campaigns.convert_hint.as_deref().unwrap_or_default());
+    }
     if let Some(w) = &campaigns.load_warning {
         warn!("campaigns: saved progress not used: {w}");
     }
