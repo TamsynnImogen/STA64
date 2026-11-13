@@ -13,7 +13,7 @@
 //! | objectives and briefing (host state, not a `Presentation`) | the modal panel of [`ObjectivesView`], toggled with Alt+O | rectangles of `objectivesPanelArea` and the text areas in A2 stock `gui_glob16x12.cfg`, the A1 `gui_glob.cfg` panel; the completed-line tick **not measured** |
 //! | a message box ([`MessageBox`]) | the same panel with an OK button | the original's message display reuses the objectives keys |
 //! | `Movie`, `StopMovie` | MED-03 | |
-//! | `Sound`, `StopSound` | `PlaySound` on the voice bus / `StopSounds` (the audio lane resolves the name) | |
+//! | `Sound`, `StopSound` | `PlaySound` on the UI bus (no admission limit) / `StopSounds` (the audio lane resolves the name) | |
 //! | `Music`, `StopMusic`, `Effect`, `WaitForKey`, other `Call`s | **not shown** (audio and effects lanes); each kind is listed once in [`Unhandled`] | |
 //!
 //! While a cineractive is on, the HUD and the notices are hidden and the fog layers are not drawn (the cinematic view's render list holds no HUD panel and the terrain pass draws fog and shroud only in the RTS view: Refit, read from the executable, static), and its end clears the fade.
@@ -376,11 +376,13 @@ pub(crate) fn consume(
             // A script's voice or message sound goes to the audio layer by name (the resolver
             // finds `Data/sounds/...` by stem, events by name); the host answers the script.
             Presentation::Sound { name, .. } => {
-                play.write(PlaySound { name: name.clone(), at: None, bus: Bus::Voice });
+                // The UI bus: the voice bus drops a line while another plays (a unit's acknowledgement,
+                // the script's previous message, which the host reports finished at once).
+                play.write(PlaySound { name: name.clone(), at: None, bus: Bus::Ui });
             }
-            // `Media:stopSounds()` stops every script sound: the voice bus (not per sound).
+            // `Media:stopSounds()` stops every script sound: that bus (not per sound).
             Presentation::StopSound { .. } => {
-                stop.write(StopSounds { bus: Bus::Voice });
+                stop.write(StopSounds { bus: Bus::Ui });
             }
             Presentation::Music { .. } => {
                 unhandled.note("Music");
@@ -401,10 +403,9 @@ pub(crate) fn consume(
     }
 }
 
-/// No HUD over a cutscene: the roots of the HUD and of the notices are hidden while the script's
-/// cineractive is on and come back with it.
-#[allow(clippy::type_complexity)]
-fn hide_hud_in_cineractive(cine: Res<CineractiveState>, mut roots: Query<&mut Visibility, Or<(With<crate::ui::hud::HudRoot>, With<crate::ui::notices::NoticeRoot>)>>) {
+/// The notices are hidden over a cutscene (the HUD and radar roots follow the same state in
+/// `game::flow::show_match_ui`, their single owner).
+fn hide_notices_in_cineractive(cine: Res<CineractiveState>, mut roots: Query<&mut Visibility, With<crate::ui::notices::NoticeRoot>>) {
     let want = if cine.on { Visibility::Hidden } else { Visibility::Inherited };
     for mut v in &mut roots {
         v.set_if_neq(want);
@@ -692,7 +693,7 @@ impl Plugin for PresentationPlugin {
             .add_systems(Startup, spawn_layers.run_if(resource_exists::<Theme>))
             .add_systems(
                 Update,
-                (consume, hide_hud_in_cineractive, run_clock, movie_replies, skip_cineractive, apply_replies, toggle_objectives, queue_messages, ok_pressed, draw_titles.run_if(resource_exists::<Theme>), draw_fade, draw_panel.run_if(resource_exists::<Theme>)).chain().in_set(GameSet::Ui),
+                (consume, hide_notices_in_cineractive, run_clock, movie_replies, skip_cineractive, apply_replies, toggle_objectives, queue_messages, ok_pressed, draw_titles.run_if(resource_exists::<Theme>), draw_fade, draw_panel.run_if(resource_exists::<Theme>)).chain().in_set(GameSet::Ui),
             );
     }
 }
@@ -746,6 +747,42 @@ mod tests {
         let ids: Vec<_> = app.world().resource::<Titles>().items.iter().map(|t| t.id).collect();
         assert_eq!(ids, [3]);
         assert_eq!(app.world().resource::<Unhandled>().list(), Vec::<(&str, u32)>::new());
+    }
+
+    #[test]
+    fn a_script_sound_reaches_the_audio_layer_and_stop_sounds_stops_it() {
+        let mut app = app();
+        send(&mut app, Presentation::Sound { id: 1, name: "Voice.mp3".into(), at: None });
+        let heard: Vec<String> = app.world_mut().resource_mut::<Messages<PlaySound>>().drain().map(|m| m.name).collect();
+        assert_eq!(heard, ["Voice.mp3"]);
+        send(&mut app, Presentation::StopSound { id: 1 });
+        assert_eq!(app.world_mut().resource_mut::<Messages<StopSounds>>().drain().count(), 1);
+        assert_eq!(app.world().resource::<Unhandled>().count("Sound"), 0);
+    }
+
+    #[test]
+    fn a_cineractive_opens_black_and_its_end_clears_the_fade() {
+        let mut app = app();
+        send(&mut app, Presentation::Cineractive { on: true, skippable: true });
+        send(&mut app, Presentation::Fade { out: false, seconds: Fixed::from_int(2), rgb: [0; 3] });
+        assert!(app.world().resource::<FadeState>().alpha > 0.99, "the first fade in starts from black");
+        send(&mut app, Presentation::Fade { out: true, seconds: Fixed::ZERO, rgb: [0; 3] });
+        assert_eq!(app.world().resource::<FadeState>().alpha, 1.0);
+        send(&mut app, Presentation::Cineractive { on: false, skippable: true });
+        assert_eq!(app.world().resource::<FadeState>().alpha, 0.0, "the game is not left black");
+        // Outside a cineractive a fade in does not jump to black.
+        send(&mut app, Presentation::Fade { out: false, seconds: Fixed::from_int(2), rgb: [0; 3] });
+        assert_eq!(app.world().resource::<FadeState>().alpha, 0.0);
+    }
+
+    #[test]
+    fn the_notices_are_hidden_over_a_cineractive() {
+        let mut app = app();
+        let root = app.world_mut().spawn((crate::ui::notices::NoticeRoot, Visibility::Inherited)).id();
+        send(&mut app, Presentation::Cineractive { on: true, skippable: true });
+        assert_eq!(*app.world().get::<Visibility>(root).unwrap(), Visibility::Hidden);
+        send(&mut app, Presentation::Cineractive { on: false, skippable: true });
+        assert_eq!(*app.world().get::<Visibility>(root).unwrap(), Visibility::Inherited);
     }
 
     #[test]

@@ -385,7 +385,7 @@ fn run_mission(
     log: Option<Res<MissionMovieLog>>,
     mut leave: MessageWriter<LeaveMatch>,
     cine: Option<Res<crate::ui::presentation::CineractiveState>>,
-    mut opened: Local<Option<(String, usize)>>,
+    mut opened: Local<(Option<(String, usize)>, u64)>,
 ) {
     let tick = link.curr().tick;
     // A script that faults may have lost the callback that ends its cineractive: give the player
@@ -407,9 +407,14 @@ fn run_mission(
         handle.with(|rt| want.fill(&rt.objectives(), rt.objective_briefing().as_ref()));
         // The panel opens once for a mission, when it has text or objectives and no cineractive is on.
         let key = (run.campaign.clone(), run.mission);
-        if *opened != Some(key.clone()) && (!want.items.is_empty() || !want.briefing.is_empty()) && !cine.as_deref().is_some_and(|c| c.on) {
+        // The sim's clock running backwards is a restart of the mission: it opens its panel again.
+        if tick < opened.1 {
+            opened.0 = None;
+        }
+        opened.1 = tick;
+        if opened.0 != Some(key.clone()) && (!want.items.is_empty() || !want.briefing.is_empty()) && !cine.as_deref().is_some_and(|c| c.on) {
             want.visible = true;
-            *opened = Some(key);
+            opened.0 = Some(key);
         }
         if want != **v {
             **v = want;

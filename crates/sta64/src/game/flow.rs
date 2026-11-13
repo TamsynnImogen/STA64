@@ -363,9 +363,11 @@ type MatchUi = Or<(With<crate::ui::hud::HudRoot>, With<crate::ui::radar::RadarRo
 /// The HUD and the radar belong to the match: hidden in the front end and the load.
 fn show_match_ui(
     state: Option<Res<State<AppState>>>,
+    cine: Option<Res<crate::ui::presentation::CineractiveState>>,
     mut ui: Query<&mut Visibility, MatchUi>,
 ) {
-    let want = if state.is_some_and(|s| *s.get() == AppState::InGame) { Visibility::Inherited } else { Visibility::Hidden };
+    // Not over a script's cineractive either: the cinematic view has no HUD panel (Refit, static).
+    let want = if state.is_some_and(|s| *s.get() == AppState::InGame) && !cine.is_some_and(|c| c.on) { Visibility::Inherited } else { Visibility::Hidden };
     for mut v in &mut ui {
         v.set_if_neq(want);
     }
