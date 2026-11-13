@@ -69,6 +69,12 @@ fn installed_resource_weapons_pay_their_odf_amounts_per_second() {
                 players: vec![seat(0), seat(1)],
                 options: GameOptions::default(),
             });
+            // SIM-28: hidden carriers with a lifetime or an instant replacement end early and
+            // may hand over to successors (chains), so only the other-seat check applies to them.
+            let ends_early = u.life.is_some()
+                || u.hardpoints.iter().filter_map(|h| db.weapon(h.weapon.key).and_then(|w| w.replace.as_ref())).any(|r| {
+                    r.fires_for(sta_content::lifecycle::Owner::Player) && r.required_officers.is_none()
+                });
             let mut want = [Fixed::ZERO; 4];
             let mut per_tick = 0i64;
             for h in &u.hardpoints {
@@ -85,7 +91,7 @@ fn installed_resource_weapons_pay_their_odf_amounts_per_second() {
             let got = sim.view().player(PlayerId(0)).map(|p| p.resources.clone()).unwrap_or_default();
             let got = |s: usize| got.get(s).copied().unwrap_or(Fixed::ZERO);
             // A starting stock is not set here, so negative adders clamp at zero.
-            if want.iter().all(|w| *w >= Fixed::ZERO) {
+            if !ends_early && want.iter().all(|w| *w >= Fixed::ZERO) {
                 for (s, w) in want.iter().enumerate() {
                     let diff = (got(s).to_bits() - w.to_bits()).abs();
                     assert!(diff <= per_tick * 2, "{label} {} slot {s}: got {:?}, want {w:?}", u.odf, got(s));
