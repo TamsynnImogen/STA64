@@ -240,10 +240,10 @@ joiner                         host
   are compared. Lineage and packs are shown in the lobby and recorded in the
   replay; peers that differ only in textures, models or render recipes play
   together (D10).
-- `RulesDigest` is 32 bytes, room for SHA-256 over CON-35's resolved rules.
-  Until CON-35 lands, `ContentHashRules` puts today's `ContentDb::hash()`
-  (names, profile, features and every number the sim reads) in its first
-  eight bytes.
+- `RulesDigest` is 32 bytes: SHA-256 over CON-35's keyed entries of the
+  resolved rules (`ContentDb::digest`, `sta_content::digest`). Its first
+  eight bytes are `ContentDb::hash()`, which the sim digest, replays and
+  snapshots carry.
 - **Naming the key.** A digest cannot say what differs, so on a mismatch the
   host asks for the joiner's resolved rules (`RulesRequest`). The joiner sends
   them as `Rules` parts (`rules_parts`): sorted by key across all parts, keys
@@ -262,18 +262,18 @@ joiner                         host
 - **The seam for CON-35** is the `RulesIdentity` trait in `proto.rs`:
   `digest()` and `entries()` (every resolved key/value pair the digest
   covers, in a canonical rendering, sorted bytewise, keys unique and at most
-  96 bytes). `ContentHashRules` implements it today with one entry,
-  `content.hash`, so the whole flow works and is tested before CON-35 lands.
-  CON-35 then provides the real implementation and nothing in the protocol
-  changes.
-- **A question for CON-35 (flagged on #401).** Commands carry `ContentKey`s,
-  which index the name-sorted content table (S1). Two peers with equal rule
-  values but a different set of definition names would decode each other's
-  keys as different units. D10 says the digest covers "values, not names";
-  one reading that stays within it is that each definition's resolved values
-  are an entry keyed by the definition, so the set of definitions is
-  covered. Whether that reading is right is for CON-35 and, if it changes
-  D10, for a decision PR approved by Tammy and Cedric (open question 8).
+  96 bytes). The content digest (`sta_content::ContentDigest`, from
+  `ContentDb::digest()`) implements it, and `rules_refusal` is the host's
+  comparison. Keys are `RTS_CFG.h:<KEY>` for the typed header rules,
+  `unit:<odf>` and `weapon:<odf>` for each definition (its tech tree entry
+  included), `geometry:<odf>` for each unit's collision geometry,
+  `race:<stem>`, `techcap:<name>`, `resources:*` and `content:*`. Fleet
+  Operations 4.0 lists about 8,400 entries (33 parts), half the bound.
+- **Definition keys (flagged on #401, answered by the D10 amendment).**
+  Commands carry `ContentKey`s, which index the name-sorted content table
+  (S1), so peers must agree on the set of definitions, not only their
+  values. D10 as amended says definition keys are part of the comparison:
+  each definition is an entry keyed by its (lower-cased) ODF name.
 
 ## 6. Lobby, start and play
 
@@ -289,8 +289,8 @@ joiner                         host
   randomness), map, `GameOptions`, the seats (slot, team, race, occupant,
   name, and each peer's lineage and packs), the host's seat, the
   `TurnConfig`, and the rules digest everyone matched. The replay header
-  takes the digest, lineages and packs from here (CON-35 adds those fields to
-  the replay). `Start::player_setups(me)` maps seats to the sim's `Control` as
+  takes the digest, lineages and packs from here (replay format 4, CON-35:
+  `Replay::lineage`, `packs`, and `peers` through `Recorder::record_peers`). `Start::player_setups(me)` maps seats to the sim's `Control` as
   seen from seat `me`: own seat `Human`, other people `Remote`, computer
   players `Ai` on the host and `Remote` elsewhere.
 - **Turn records.** `TurnCommands { turn, slot, commands, schedule, digest }`,
@@ -561,9 +561,9 @@ Every peer is untrusted, and so is anything relayed.
 - **NET-03** builds the transport (reliable ordered frames; the envelope with
   the sender stamp, host flag and destination mask; departure markers), the
   relay rooms with codes and passwords, rejoin transport and limits.
-- **CON-35** implements `RulesIdentity` for its typed rules (keys at most 96
-  bytes, every covered value listed; section 5) and adds rules digest,
-  lineages and packs to the replay and snapshot headers.
+- **CON-35** (done) implements `RulesIdentity` with the keyed content digest
+  (keys at most 96 bytes, every covered value listed; section 5) and adds
+  lineages and packs to the replay (format 4) and snapshot (format 15).
 - **UI-11** shows the lobby, the refusal with the named key, the stall
   dialog, and the High Latency box. It will find that `GameOptions` (S7) does
   not yet express all of Armada II's multiplayer setup data: `RTS_CFG.h` has
@@ -603,6 +603,8 @@ Every peer is untrusted, and so is anything relayed.
    must also agree on the set of definitions, not only rule values. Is the
    reading in section 5 (each definition an entry, valued by its resolved
    values) within D10, or does D10 need a decision PR?
+   **Decided:** D10 as amended on 2026-11-12 compares definition keys; CON-35
+   keys each definition's entry by its ODF name.
 9. **Elimination as a command.** Agree that NET-02 adds an S2 command (a
    `SCRIPT` edit) that eliminates a player, so a dropped seat's elimination
    is in the replay?

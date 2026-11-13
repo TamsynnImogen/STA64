@@ -20,8 +20,9 @@
 //!   sim types (`Command`, `GameOptions`); the golden test pins their bytes,
 //!   so a change there fails it and forces the bump.
 //! - The rules digest of docs/MODDING_DECISIONS.md D10 is [`RulesDigest`],
-//!   supplied through [`RulesIdentity`]; CON-35 implements it. Until then
-//!   [`ContentHashRules`] stands in with `ContentDb::hash`.
+//!   supplied through [`RulesIdentity`], which the content database's keyed
+//!   digest implements (`ContentDb::digest`, CON-35); [`rules_refusal`] is
+//!   the host's comparison.
 
 use serde::{Deserialize, Serialize};
 use sta_content::MapDef;
@@ -1077,8 +1078,9 @@ pub fn version_notice() -> Vec<u8> {
 // Rules identity (D10) and map identity
 // ---------------------------------------------------------------------------
 
-/// What a peer compares at the handshake (D10). CON-35 implements it for
-/// its typed `Rules`; until then [`ContentHashRules`] does.
+/// What a peer compares at the handshake (D10), implemented by the content
+/// database's keyed digest ([`sta_content::ContentDigest`], CON-35): pass
+/// `content_db.digest()`.
 pub trait RulesIdentity {
     /// The digest of resolved sim-visible rule values.
     fn digest(&self) -> RulesDigest;
@@ -1088,23 +1090,46 @@ pub trait RulesIdentity {
     fn entries(&self) -> Vec<RuleEntry>;
 }
 
-/// The transitional rules identity: `ContentDb::hash` and nothing finer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ContentHashRules(pub u64);
-
-impl RulesIdentity for ContentHashRules {
+/// The resolved rules of a `ContentDb` (`ContentDb::digest`): SHA-256 over
+/// its keyed entries, and the entries in their canonical rendering
+/// (`RTS_CFG.h:<KEY>`, `unit:<odf>`, `geometry:<odf>`, ...; see
+/// `sta_content::digest`).
+impl RulesIdentity for sta_content::ContentDigest {
     fn digest(&self) -> RulesDigest {
-        let mut d = [0u8; 32];
-        d[..8].copy_from_slice(&self.0.to_le_bytes());
-        RulesDigest(d)
+        RulesDigest(self.sha256())
     }
 
     fn entries(&self) -> Vec<RuleEntry> {
-        vec![RuleEntry {
-            key: "content.hash".into(),
-            value: format!("{:016x}", self.0),
-        }]
+        self.entries()
+            .iter()
+            .map(|e| RuleEntry {
+                key: e.key.clone(),
+                value: e.value.clone(),
+            })
+            .collect()
     }
+}
+
+/// The host's verdict on a joiner's rules (D10), given the joiner's digest
+/// from its `Hello` and, when that differs, its entry list as the
+/// [`RulesAssembler`] returned it. `None`: the rules agree. Otherwise
+/// [`Refusal::RulesDiffer`] with the first differing key and both values,
+/// or [`Refusal::RulesUnlisted`] when the digests differ but no entry does.
+/// `joiner_entries` is only read when the digests differ.
+pub fn rules_refusal(
+    host: &dyn RulesIdentity,
+    joiner_digest: RulesDigest,
+    joiner_entries: &[RuleEntry],
+) -> Result<Option<Refusal>, ProtoError> {
+    if host.digest() == joiner_digest {
+        return Ok(None);
+    }
+    let ours = wire_entries(&host.entries())?;
+    let theirs = wire_entries(joiner_entries)?;
+    Ok(Some(match first_difference(&ours, &theirs) {
+        Some(diff) => Refusal::RulesDiffer(diff),
+        None => Refusal::RulesUnlisted,
+    }))
 }
 
 fn fnv1a64(bytes: &[u8]) -> u64 {
@@ -1281,7 +1306,11 @@ mod tests {
     fn hello_fixture() -> Hello {
         Hello {
             engine: engine(),
-            rules: ContentHashRules(9).digest(),
+            rules: RulesDigest({
+                let mut d = [0; 32];
+                d[0] = 9;
+                d
+            }),
             lineage: "FO 4.0".into(),
             packs: packs_fixture(),
             name: "Cedric".into(),
@@ -2064,13 +2093,37 @@ mod tests {
             "cfgC"
         );
         assert_eq!(first_difference(&[], &classic).unwrap().key, "cfgA");
+    }
 
-        let a = ContentHashRules(1);
-        let b = ContentHashRules(2);
-        assert_ne!(a.digest(), b.digest());
+    /// A content digest of `(key, value)` entries.
+    fn digest_of(entries: &[(&str, &str)]) -> sta_content::ContentDigest {
+        sta_content::ContentDigest::from_entries(
+            entries
+                .iter()
+                .map(|(k, v)| sta_content::DigestEntry::new(*k, *v))
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn the_content_digest_is_the_rules_identity() {
+        let classic = digest_of(&[("RTS_CFG.h:A", "1"), ("unit:x", "hull=1")]);
+        let enhanced = digest_of(&[("RTS_CFG.h:A", "3"), ("unit:x", "hull=1")]);
+        assert_eq!(RulesIdentity::digest(&classic).0, classic.sha256());
+        assert_ne!(RulesIdentity::digest(&classic), RulesIdentity::digest(&enhanced));
+        assert_eq!(rules_refusal(&classic, RulesIdentity::digest(&classic), &[]).unwrap(), None);
         assert_eq!(
-            first_difference(&a.entries(), &b.entries()).unwrap().key,
-            "content.hash"
+            rules_refusal(&classic, RulesIdentity::digest(&enhanced), &RulesIdentity::entries(&enhanced)).unwrap(),
+            Some(Refusal::RulesDiffer(RuleDiff {
+                key: "RTS_CFG.h:A".into(),
+                host: Some("1".into()),
+                joiner: Some("3".into())
+            }))
+        );
+        // A joiner whose list leaves out what its digest covers.
+        assert_eq!(
+            rules_refusal(&classic, RulesIdentity::digest(&enhanced), &RulesIdentity::entries(&classic)).unwrap(),
+            Some(Refusal::RulesUnlisted)
         );
     }
 

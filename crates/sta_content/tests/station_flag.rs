@@ -66,7 +66,7 @@ fn absent_zero_and_integer_truth_are_consistent_across_profiles() {
             assert_ne!(set.hash(), absent.hash());
         }
     }
-    assert_eq!(sta_content::fake::db().hash(), 0xc0d4_3c3a_94f1_650e);
+    assert_eq!(sta_content::fake::db().hash(), 0x9ef5_3881_3050_10f8);
 }
 
 #[test]

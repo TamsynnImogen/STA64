@@ -494,21 +494,11 @@ impl TechTree {
             return false;
         }
         let Some(b) = db.key(&builder).and_then(|k| db.unit(k)) else { return false };
-        let raw = &b.raw;
-        let mut builder_flags = false;
-        let mut slot_flagged = false;
-        for k in raw.keys() {
-            let l = k.to_ascii_lowercase();
-            let Some(rest) = l.strip_prefix("builditem") else { continue };
-            let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
-            if digits == 0 || !matches!(&rest[digits..], "availability" | "provided") {
-                continue;
-            }
-            builder_flags = true;
-            let n = &rest[..digits];
-            slot_flagged |= raw.raw(&format!("builditem{n}")).is_some_and(|v| stem(v.trim().trim_matches('"')) == item);
+        match &b.build.flagged_slots {
+            // A menu builder: all its slots are plain.
+            None => true,
+            Some(flagged) => ai || flagged.contains(&item),
         }
-        slot_flagged || !builder_flags || ai
     }
 
     /// A builder's build list, in button order, each with its availability
@@ -1236,6 +1226,8 @@ mod tests {
         let raw = |n: &str, t: &str| std::sync::Arc::new(sta_odf::resolve(n, &mut |_| Some(t.to_owned())).unwrap());
         let mut y = UnitDef::new(yard, "shipyard");
         y.raw = raw(yard, slot);
+        // As the ODF loader types them.
+        y.build.flagged_slots = crate::BuildDef::flagged_slots_of(&y.raw);
         let mut b = ContentDb::builder();
         for (n, t) in extra {
             let mut u = UnitDef::new(n, "craft");

@@ -292,5 +292,5 @@ fn effective_hash_records_ignore_noops_and_preserve_native_fake_identity() {
     assert_ne!(plain.hash(), background.hash());
     assert_ne!(plain.hash(), producer.hash());
     assert_ne!(background.hash(), producer.hash());
-    assert_eq!(sta_content::fake::db().hash(), 0xc0d4_3c3a_94f1_650e);
+    assert_eq!(sta_content::fake::db().hash(), 0x9ef5_3881_3050_10f8);
 }
