@@ -258,23 +258,6 @@ mod tests {
 
     #[test]
     fn a_set_autonomy_level_changes_the_combat_section_and_the_full_digest() {
-        let (sections, full) = effect(|s| {
-            let id = s.units.iter().next().unwrap().id;
-            s.step(&[]);
-            let cmd = Command {
-                player: PlayerId(0),
-                seq: 1,
-                kind: CommandKind::Order(Order::Autonomy {
-                    units: vec![id],
-                    kind: crate::command::AutonomyKind::Movement,
-                    level: crate::command::AutonomyLevel::High,
-                }),
-            };
-            s.step(&[cmd]);
-        });
-        // The ticks moved the roster and others too; the level must be in combat.
-        assert!(sections.contains(&"combat"), "{sections:?}");
-        assert!(full);
         let before = sim();
         let mut after = before.clone();
         let id = after.units.iter().next().unwrap().id;
