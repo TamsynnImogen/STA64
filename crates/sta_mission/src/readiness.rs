@@ -19,7 +19,10 @@ const STUB_PREFIX: &str = "stub ";
 
 /// Split the runtime's `unsupported()` list into names no binding exists for
 /// (unbound) and calls that are bound but raise or ignore the request.
-pub fn classify(counted: &[(String, u32)]) -> (Vec<(String, u32)>, Vec<(String, u32)>) {
+/// Counted names with their counts.
+pub type Counted = Vec<(String, u32)>;
+
+pub fn classify(counted: &[(String, u32)]) -> (Counted, Counted) {
     counted.iter().cloned().partition(|(k, _)| k.starts_with(STUB_PREFIX))
 }
 
