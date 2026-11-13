@@ -1447,7 +1447,7 @@ def convert(dsl_path, drl_path, map_name=None):
     w("    vars = {}, state = {}, objects = {}, globals = {}, timers = {}, scripts = {},")
     w("    rules = {}, affected = {}, satisfied = {}, fired = {}, fireCount = {}, ran = {},")
     w("    calls = {}, missing = {}, failed = {}, notDecoded = {}, stepErrors = {},")
-    w("    conditionErrors = {}, engineVars = {}, stepCount = 0, callFailed = false,")
+    w("    conditionErrors = {}, engineVars = {}, engineWritten = {}, engineReads = {}, stepCount = 0, callFailed = false,")
     w("    problems = {}, problemOrder = {}, blocked = {}, invalid = {}, unresolved = {},")
     w("    undecoded = {},")
     w("}")

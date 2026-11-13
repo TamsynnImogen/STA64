@@ -324,6 +324,19 @@ class Steps(unittest.TestCase):
         self.assertIn("A('Count', 3, nil)", render(d, f))
 
 
+class Prelude(unittest.TestCase):
+    def test_every_table_the_shared_engine_indexes_is_created(self):
+        # the shared prelude and engine of tools/dsl_to_lua.py index Mission.<x>[...]:
+        # each such table must exist in the A1 Mission_ literal
+        import re
+        S, R = Missions().mission()
+        _, src, _ = a1.convert(S, R, "test1")
+        literal = src[src.index("Mission_ = {"):src.index("\n}\n")]
+        used = set(re.findall(r"Mission\.(\w+)\[", dsl.PRELUDE + dsl.ENGINE + a1.A1_PRELUDE))
+        missing = sorted(n for n in used if not re.search(rf"\b{n} = {{}}", literal))
+        self.assertEqual(missing, [])
+
+
 class Missions(unittest.TestCase):
     maxDiff = 2000
 
