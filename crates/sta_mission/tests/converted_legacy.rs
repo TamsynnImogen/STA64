@@ -166,10 +166,15 @@ fn every_converted_a2_mission_loads_and_runs() {
     let mut files: Vec<PathBuf> = std::fs::read_dir(out.join("missions")).unwrap().map(|e| e.unwrap().path()).collect();
     files.sort();
     assert_eq!(files.len(), 36, "{files:?}");
+    // the UI tutorial's map runs a2_Tutorial1: its script is named by the map's stem
+    assert!(files.iter().any(|f| f.ends_with("a2_tutorial_ui.lua")), "{files:?}");
     let mut all: std::collections::BTreeMap<String, bool> = Default::default();
     for f in files {
         let name = format!("missions/{}", f.file_name().unwrap().to_string_lossy());
         let source = std::fs::read_to_string(&f).unwrap();
+        // no address is handed to Lua as a table, and at most the one std-container step is undecoded
+        assert!(!source.contains("Ref("), "{name}: a by-address argument was left as a table");
+        assert!(source.matches("(not decoded:").count() <= 1, "{name}: more undecoded functions than before");
         let mut rt = sta_mission::runtime::MissionRuntime::from_source(&name, &source, 7);
         assert!(rt.errors().is_empty(), "{name}: {:?}", rt.errors());
         for at in 0..300 {
