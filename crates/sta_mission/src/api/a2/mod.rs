@@ -78,6 +78,7 @@ pub(super) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
     dll_objects::install(lua, ctx, &a2)?;
     handles::install(lua, ctx, &a2)?;
     shared_calls::install(lua, ctx, &a2)?;
+    super::taint::wrap(lua, ctx, &a2)?;
     // Keep last: wraps every function above (pending BuildObject handles).
     dll_objects::finish(lua, &a2)?;
     lua.globals().raw_set("A2", a2)?;

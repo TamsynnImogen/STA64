@@ -17,9 +17,9 @@ user's own executables each time, and none are recorded here.
 | call sites | 11692 | — |
 | DLL-shaped callable (`A2` / `A1` table) | 130 | 172 |
 | missing callable signatures (missing A1 calls) | 2 | 0 |
-| &nbsp;&nbsp;of the A1 callable: working (sim- or view-backed) | — | 77 |
+| &nbsp;&nbsp;of the A1 callable: working (sim- or view-backed) | — | 80 |
 | &nbsp;&nbsp;of the A1 callable: presentation event only, no consumer yet | — | 35 |
-| &nbsp;&nbsp;of the A1 callable: request retained and counted, no effect | — | 45 |
+| &nbsp;&nbsp;of the A1 callable: request retained and counted, no effect | — | 42 |
 | &nbsp;&nbsp;of the A1 callable: always raises (no data in the world view) | — | 15 |
 | MMM job-equivalent, not A2-shaped | 0 | — |
 | bound in STA64's Lua today | — | 6 |

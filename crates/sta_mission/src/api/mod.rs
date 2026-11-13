@@ -42,7 +42,7 @@
 //! otherwise. Unbound names fall back to the runtime's permissive stubs, also
 //! as the fallback for unknown fields of bound objects.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -66,6 +66,7 @@ mod race;
 mod search;
 mod condition_monitor;
 mod player;
+mod taint;
 mod timer;
 mod objectives;
 pub(crate) mod objectives_file;
@@ -233,10 +234,8 @@ pub(crate) struct Ctx {
     /// Every object id the view has shown, so a handle that never existed can
     /// be told from one that died.
     pub seen: BTreeSet<EntityId>,
-    /// The first condition query on an object that never existed: view tick
-    /// and call name (`SucceedMission` and `FailMission` are blocked when they
-    /// follow it while some call is unsupported).
-    pub never_existed: Cell<Option<(u64, &'static str)>>,
+    /// Which answers may rest on a gap ([`taint`]).
+    pub taint: taint::Taint,
     pub aips_taken: usize,
     pub playback: Playback,
     /// The view tick of the last `Hit` each object took (`A2.UnderAttack`).
@@ -291,21 +290,10 @@ impl Ctx {
             loaded_aips: Vec::new(),
             mission_end: None,
             seen,
-            never_existed: Cell::new(None),
+            taint: taint::Taint::default(),
             aips_taken: 0,
             playback: Playback::default(),
             last_hit: BTreeMap::new(),
-        }
-    }
-
-    /// A condition query was asked about `id`: remember when it names an
-    /// object that never existed (0, never in a view), whose answer is then
-    /// a gap in the sim or the script, not something the mission decided.
-    pub fn note_query(&self, id: EntityId, call: &'static str) {
-        if self.unit(id).is_none() && !self.seen.contains(&id) {
-            if self.never_existed.get().is_none() {
-                self.never_existed.set(Some((self.view.tick, call)));
-            }
         }
     }
 

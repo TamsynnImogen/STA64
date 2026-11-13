@@ -154,6 +154,7 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
     // Searches over live units: `-1` as a team means any; a null ODF any ODF.
     table.set("CountUnits", query(lua, ctx, "CountUnits", 2, |c, a| {
         let owner = team_filter(c, "CountUnits", int("CountUnits", a, 0)?)?;
+        c.note_team_query(owner, "CountUnits");
         let odf = text("CountUnits", a, 1)?;
         let n = c
             .view
@@ -166,7 +167,9 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
     })?)?;
     table.set("CountUnitsNearObject", query(lua, ctx, "CountUnitsNearObject", 4, |c, a| {
         let name = "CountUnitsNearObject";
-        let centre = alive(c, name, handle(name, a, 0)?)?;
+        let id = handle(name, a, 0)?;
+        c.note_query(id, name);
+        let centre = alive(c, name, id)?;
         let odf = text(name, a, 3)?;
         let q = Query {
             center: pos_f64(centre.pos),
@@ -184,10 +187,12 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
         let observer = team(c, name, int(name, a, 0)?)?;
         boolean(name, a, 2)?;
         let odf = text(name, a, 3)?;
+        let owner = team_filter(c, name, int(name, a, 1)?)?;
+        c.note_team_query(owner, name);
         let q = Query {
             center: (0.0, 0.0, 0.0),
             radius: f64::INFINITY,
-            owner: team_filter(c, name, int(name, a, 1)?)?,
+            owner,
             odf: odf.as_deref(),
             exclude: EntityId::NONE,
             seen_by: Some(observer),
@@ -218,6 +223,7 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
         let candidates: Vec<EntityId> = {
             let c = c.borrow();
             let owner = team_filter(&c, "CountStations", int("CountStations", &args, 0)?)?;
+            c.note_team_query(owner, "CountStations");
             c.view.units.iter().filter(|u| c.alive(u.id).is_some() && owner.is_none_or(|o| u.owner == o)).map(|u| u.id).collect()
         };
         let mut n = 0i64;
