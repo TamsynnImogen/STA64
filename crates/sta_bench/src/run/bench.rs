@@ -98,6 +98,14 @@ impl Bench {
     /// Build a scene: the start (empty map, named map, snapshot or replay),
     /// then the scene file's objects on top.
     pub fn build(cfg: Arc<RunConfig>, scene: &SceneFile) -> Result<Bench, String> {
+        Bench::build_after(cfg, scene, 0)
+    }
+
+    /// [`Bench::build`], with the mission run `lead` ticks before the scene's
+    /// objects are placed, as the original builds its scene some way into
+    /// the mission (`sta-bench pair` passes the original's `ready` time, so
+    /// rules on mission time line up). Marks still count from the build.
+    pub fn build_after(cfg: Arc<RunConfig>, scene: &SceneFile, lead: Tick) -> Result<Bench, String> {
         let s = &scene.scene;
         let cfg = match &s.profile {
             Some(name) => {
@@ -192,6 +200,10 @@ impl Bench {
             }
         };
 
+        let mut sim = sim;
+        for _ in 0..lead {
+            sim.step(&[]);
+        }
         let base_tick = sim.tick;
         let mut b = Bench {
             cfg,
@@ -229,7 +241,7 @@ impl Bench {
             b.log.push("camera: no renderer at tier 1, ignored".into());
         }
         b.rec = rec_setup.map(|setup| Rec {
-            digests: vec![(0, b.sim.digest())],
+            digests: vec![(b.sim.tick, b.sim.digest())],
             setup,
             commands: Vec::new(),
         });

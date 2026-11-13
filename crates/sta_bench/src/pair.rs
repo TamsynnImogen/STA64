@@ -628,14 +628,24 @@ fn ordnance_label(db: &sta_content::ContentDb, weapon_odf: &str) -> String {
 /// (`Scene.ini`, `Scene.marks`, `Scene.objects.jsonl`, `bench.log`).
 /// `schedule`: the commands and when they land; `end_t`: sim seconds to run.
 pub fn run_sta64(scene_text: &str, cfg: Arc<RunConfig>, schedule: &[Timed], end_t: f64, dir: &Path) -> Result<Sta64Run, String> {
+    run_sta64_after(scene_text, cfg, schedule, end_t, 0.0, dir)
+}
+
+/// [`run_sta64`] with the scene built `lead_t` sim seconds into the mission,
+/// where the original built it (its `ready` time), so that rules on mission
+/// time (no fire before 2 s, SIM-53) line up. Times written stay relative to
+/// the build, as the original's are.
+pub fn run_sta64_after(scene_text: &str, cfg: Arc<RunConfig>, schedule: &[Timed], end_t: f64, lead_t: f64, dir: &Path) -> Result<Sta64Run, String> {
     fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     fs::write(dir.join("Scene.ini"), scene_text).map_err(|e| e.to_string())?;
     let scene = SceneFile::parse(scene_text).map_err(|e| format!("scene: {e}"))?;
     let gap = tick_of(scene.marks.fire_gap);
-    let mut b = Bench::build(cfg.clone(), &scene)?;
-    let mut sched: Vec<(Tick, &str)> = schedule.iter().map(|c| (tick_of(c.t), c.text.as_str())).collect();
+    let mut b = Bench::build_after(cfg.clone(), &scene, tick_of(lead_t))?;
+    let b0 = b.tick();
+    let rs = |t: Tick| secs_of(t.saturating_sub(b0));
+    let mut sched: Vec<(Tick, &str)> = schedule.iter().map(|c| (b0 + tick_of(c.t), c.text.as_str())).collect();
     sched.sort_by_key(|c| c.0);
-    let end = tick_of(end_t);
+    let end = b0 + tick_of(end_t);
     let mut answers = Vec::new();
     let mut next = 0;
     loop {
@@ -663,10 +673,10 @@ pub fn run_sta64(scene_text: &str, cfg: Arc<RunConfig>, schedule: &[Timed], end_
         let n = b.name_of(id);
         (!n.starts_with('#')).then_some(n)
     };
-    let v0 = b.view_at(0)?;
-    lines.push((0, 0, format!("ready t=0.000 objects={}", v0.units.len())));
+    let v0 = b.view_at(b0)?;
+    lines.push((b0, 0, format!("ready t=0.000 objects={}", v0.units.len())));
     for (tick, text, _) in &answers {
-        lines.push((*tick, 1, format!("cmd t={:.3} text={text}", secs_of(*tick))));
+        lines.push((*tick, 1, format!("cmd t={:.3} text={text}", rs(*tick))));
     }
     // Events, Refit's names; fire bursts merged per shooter and weapon.
     let mut fire = Vec::new();
@@ -690,7 +700,7 @@ pub fn run_sta64(scene_text: &str, cfg: Arc<RunConfig>, schedule: &[Timed], end_
             fire.push((m.tick, if kind == "fire.start" { "fire.start" } else { "fire.end" }, o, w));
             continue;
         }
-        let mut s = format!("{kind} t={:.3}", secs_of(m.tick));
+        let mut s = format!("{kind} t={:.3}", rs(m.tick));
         for (k, v) in &fields {
             let _ = write!(s, " {k}={v}");
         }
@@ -716,10 +726,10 @@ pub fn run_sta64(scene_text: &str, cfg: Arc<RunConfig>, schedule: &[Timed], end_
         }
     }
     for (tick, kind, o, w) in merge_bursts(&fire, gap) {
-        lines.push((tick, 2, format!("{kind} t={:.3} obj={o} weapon={w}", secs_of(tick))));
+        lines.push((tick, 2, format!("{kind} t={:.3} obj={o} weapon={w}", rs(tick))));
     }
     // A `state` line per named object every tick (Refit: every `State=` ms).
-    for k in 0..=ticks {
+    for k in b0..=ticks {
         let v = b.view_at(k)?;
         for u in &v.units {
             let Some(n) = named(u.id) else { continue };
@@ -730,7 +740,7 @@ pub fn run_sta64(scene_text: &str, cfg: Arc<RunConfig>, schedule: &[Timed], end_
                 4,
                 format!(
                     "state t={:.3} obj={n} pos={:.3},{:.3},{:.3} hull={:.3} sh={:.3}{sp}",
-                    secs_of(k),
+                    rs(k),
                     to_f64(u.pos.x),
                     to_f64(u.pos.y),
                     to_f64(u.pos.z),
@@ -743,12 +753,13 @@ pub fn run_sta64(scene_text: &str, cfg: Arc<RunConfig>, schedule: &[Timed], end_
     lines.sort_by_key(|a| (a.0, a.1));
     let mut marks = String::new();
     for (t, _, l) in &lines {
-        let _ = writeln!(marks, "{t} {l}");
+        let _ = writeln!(marks, "{} {l}", t.saturating_sub(b0));
     }
     fs::write(dir.join("Scene.marks"), marks).map_err(|e| e.to_string())?;
     fs::write(dir.join("Scene.objects.jsonl"), b.objects_jsonl()).map_err(|e| e.to_string())?;
     fs::write(dir.join("bench.log"), b.log.join("\n") + "\n").map_err(|e| e.to_string())?;
-    Ok(Sta64Run { ticks, digest, answers })
+    let answers = answers.into_iter().map(|(t, c, a)| (t - b0, c, a)).collect();
+    Ok(Sta64Run { ticks: ticks - b0, digest, answers })
 }
 
 /// `run.json` of the STA64 side.

@@ -259,8 +259,10 @@ def match_commands(marks, sent):
     res = []
     for text in sent:
         found = None
+        # `a; b` is marked command by command: the first one's mark lands it.
+        first = text.split(";")[0].strip()
         for i, m in enumerate(cmds):
-            if not used[i] and (m["text"] or "").strip() == text.strip():
+            if not used[i] and (m["text"] or "").strip() == first:
                 used[i] = True
                 found = m["t"]
                 break

@@ -10,6 +10,11 @@
 //!   client derives `fire.end` as the `Fired` tick plus `duration`). A
 //!   projectile flies at `shot_speed` toward its target's current position and
 //!   hits on the tick it arrives; its first move is the tick after it fired.
+//! - Under `start_fire_hold` nothing fires before [`START_HOLD_TICKS`] of
+//!   mission time (SIM-53). An
+//!   `Attack` order adds no delay of its own: a mount fires on the first
+//!   tick its reload allows (a new unit's initial reload, SIM-35), and a
+//!   re-order onto another target takes effect at each mount's next shot.
 //! - Targets: an `Attack` order, else the nearest enemy in the weapon's range
 //!   (ties to the lowest id). Point-defence weapons do not shoot at units (`pd.rs` runs them).
 //! - `Hit` carries the weapon's damage as `hull` and zero `shield`: applying
@@ -72,6 +77,15 @@ pub fn facing(heading: (Fixed, Fixed), at: Vec3, from: Vec3) -> u8 {
         2
     }
 }
+
+/// Under `start_fire_hold`, no weapon fires at a unit before this much
+/// mission time (SIM-53): every craft holds fire for the first two seconds
+/// of a game, also with its weapons long ready. Measured on stock A2 1.1 and Roots + STA2
+/// Classic (scenes built from 0.3 to 1.9 s into the mission: first shots on
+/// the first frame after 2.0 s; built later, no hold); no ODF or cfg key
+/// sets it, and the engine code that holds fire was not found (not
+/// measured: Armada I, point defence and specials, which keep their rules).
+pub const START_HOLD_TICKS: u64 = 2 * TICK_HZ as u64;
 
 /// A draw from the sim's RNG in [0, 1).
 pub(super) fn draw(rng: &mut Rng) -> Fixed {
@@ -366,6 +380,9 @@ impl Weapons {
                     continue;
                 };
                 if w.kind == WeaponKind::PointDefence || crate::specials::is_special(w) {
+                    continue;
+                }
+                if tick < START_HOLD_TICKS && db.weapon_features(w).start_fire_hold {
                     continue;
                 }
                 let arc = if db.features().fire_arcs {

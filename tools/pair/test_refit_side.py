@@ -130,6 +130,10 @@ epoch 0x01dd72e7 0x8c5e6c41 1000
         self.assertEqual(rs.rel(1.03, 0.7), 0.33)
         self.assertIsNone(rs.rel(None, 0.7))
 
+    def test_command_list_lands_with_its_first_command(self):
+        ms = rs.parse_marks("1100 cmd t=1.03 text=goto ship 2000 0 3200\n1101 cmd t=1.03 text=pause\n")
+        self.assertEqual(rs.match_commands(ms, ["goto ship 2000 0 3200; pause"]), [1.03])
+
     def test_no_ready(self):
         self.assertIsNone(rs.ready_t(rs.parse_marks("5 state t=1.0\n")))
 

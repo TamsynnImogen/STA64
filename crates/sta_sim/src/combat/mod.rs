@@ -12,3 +12,5 @@ pub(crate) mod pd_tests;
 mod weapons_tests;
 #[cfg(test)]
 pub(crate) mod engine_timing_tests;
+#[cfg(test)]
+mod first_shot_tests;

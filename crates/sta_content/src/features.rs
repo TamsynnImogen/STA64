@@ -79,11 +79,14 @@ pub struct Features {
     /// reloading (SIM-35; special launchers measured, regular weapons only
     /// read from the engine's code).
     pub weapon_shot_timing: bool,
+    /// No weapon fires at a unit in the first two seconds of mission time
+    /// (SIM-53; measured on stock A2 and Roots + STA2 Classic).
+    pub start_fire_hold: bool,
 }
 
 impl Features {
     /// Every switch, in declaration order, for the content hash.
-    pub(crate) fn bits(&self) -> [bool; 25] {
+    pub(crate) fn bits(&self) -> [bool; 26] {
         [
             self.weapon_damage_controls,
             self.point_defense_cycles,
@@ -110,6 +113,7 @@ impl Features {
             self.pd_energy,
             self.pd_debt_timer,
             self.weapon_shot_timing,
+            self.start_fire_hold,
         ]
     }
 }
