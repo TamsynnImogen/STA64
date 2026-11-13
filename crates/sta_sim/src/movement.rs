@@ -216,7 +216,8 @@ impl Sim {
             .map_or(FORM_NONE, |c| c.formation);
         let dests = self.destinations(ids, to, kind);
         for (&id, dest) in ids.iter().zip(dests) {
-            let idle = self.unit(id).is_some_and(|u| u.target.is_none());
+            // An attacking craft is busy: a queued leg waits for the attack (SIM-36).
+            let idle = self.unit(id).is_some_and(|u| u.target.is_none()) && self.weapons.attack_of(id).is_none();
             if queue && !idle {
                 self.movement.edit(id, |c| c.waypoints.push(dest));
             } else {
@@ -263,7 +264,8 @@ impl Sim {
         for (id, c) in self.movement.courses.iter() {
             match self.units.get(id) {
                 None => gone.push(id),
-                Some(u) if u.target.is_none() && !c.waypoints.is_empty() => next.push(id),
+                // A craft attacking holds its queued legs until the attack ends (SIM-36).
+                Some(u) if u.target.is_none() && !c.waypoints.is_empty() && self.weapons.attack_of(id).is_none() => next.push(id),
                 _ => {}
             }
         }

@@ -72,6 +72,11 @@ impl Warp {
         self.on.remove(id);
     }
 
+    /// The attack ended: out of warp the usual way (the warp-out runs on).
+    pub(crate) fn end(&mut self, id: EntityId) {
+        self.on.remove(id);
+    }
+
     pub(crate) fn hash_into(&self, h: &mut Fnv) {
         h.str("attack-warp-v1");
         h.u64(self.on.len() as u64);
@@ -126,9 +131,35 @@ impl Sim {
         let f = db.features();
         let min_warp = db.rules().approach().min_move_warp_distance;
         let mut plans = Vec::new();
-        for (id, tid) in self.weapons.attacks() {
+        let attacks = self.weapons.attacks();
+        // What the attacker's team sees. A target it cannot see (out of sensor
+        // range, or cloaked to it) is flown to where the craft was last steered,
+        // at impulse and without warp; the order stands and the approach resumes
+        // once the target is seen again, so nothing homes on what is not seen.
+        // (The Roots + Classic attack on a target 3800 away on mp02eye ran at
+        // impulse to about 1400, then warped: measured once; this reading of it
+        // is not established.) Seatless sims (bench, legacy) are omniscient, as
+        // their views are.
+        let seats = !self.players.is_empty();
+        let seen = if attacks.is_empty() || !seats { Vec::new() } else { crate::sensors::compute(&self.units, Some(&db), &self.players) };
+        let team = |p: sta_core::PlayerId| self.players.iter().find(|x| x.0 == p).map(|x| x.1);
+        for (id, tid) in attacks {
             let (Some(u), Some(t)) = (self.units.get(id), self.units.get(tid)) else { continue };
-            if u.kind != EntityKind::Craft || !u.mobile() || t.hull[1] <= Fixed::ZERO || self.production.is_welding(id) {
+            let cloaked = t.flags.contains(crate::view::UnitFlags::CLOAKED) && team(t.owner) != team(u.owner);
+            let visible = !seats || seen.iter().find(|(p, _)| *p == u.owner).is_some_and(|(_, ids)| ids.binary_search(&tid).is_ok());
+            if cloaked || !visible {
+                let last = u.target.unwrap_or(t.pos);
+                let craft = u.kind == EntityKind::Craft && u.mobile();
+                self.approach_warp.end(id);
+                if craft {
+                    if let Some(u) = self.units.get_mut(id) {
+                        u.target = Some(last);
+                    }
+                    plans.push((id, Plan::default()));
+                }
+                continue;
+            }
+            if u.kind != EntityKind::Craft || !u.mobile() || t.hull[1] <= Fixed::ZERO || self.production.is_welding(id) || self.production.is_deploying(id) || self.economy.is_mining(id) {
                 continue;
             }
             let Some(def) = db.unit(u.def) else { continue };

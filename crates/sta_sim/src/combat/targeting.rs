@@ -19,7 +19,9 @@
 //! within its sensor range (`rangeScan`) itself or an ally hit in the last
 //! second, attacks that ally's last attacker; under `assist_on_ally_fire`
 //! (stock) one that fired in the last second also draws it in, onto its own
-//! best target in scan range. The attack is an
+//! best target in scan range. The craft itself counts as one of the allies
+//! (as the engine reads it): an idle craft that fired takes an attack order on
+//! its best target and closes in. The attack is an
 //! ordinary attack order, so the approach rules apply (stock: `combatSpeed`).
 //! Read from the executable (stock, static); measured on stock at every movement
 //! autonomy (helper 600 from an attacked ally assists, 1500 does not) and on
@@ -81,7 +83,7 @@ impl Engagement {
                 _ => {}
             }
         }
-        let old = |t: u64| tick >= t + window();
+        let old = |t: u64| tick >= t.saturating_add(window());
         let stale: Vec<EntityId> = self.hit.iter().filter(|(_, h)| old(h.0)).map(|(id, _)| id).collect();
         for id in stale {
             self.hit.remove(id);
@@ -111,8 +113,12 @@ impl Engagement {
         (self.hit.iter().map(|(id, h)| (id, *h)).collect(), self.fired.iter().map(|(id, t)| (id, *t)).collect())
     }
 
-    /// `None` when rows do not ascend.
-    pub(crate) fn from_rec(r: EngagementRec) -> Option<Engagement> {
+    /// `None` when rows do not ascend, a tick is after `now`, or a row's
+    /// entity is not `exists`.
+    pub(crate) fn from_rec(r: EngagementRec, now: u64, exists: impl Fn(EntityId) -> bool) -> Option<Engagement> {
+        if r.0.iter().any(|(id, (t, _))| *t > now || !exists(*id)) || r.1.iter().any(|(id, t)| *t > now || !exists(*id)) {
+            return None;
+        }
         Some(Engagement { hit: Table::from_rows(r.0)?, fired: Table::from_rows(r.1)? })
     }
 }
@@ -155,7 +161,6 @@ pub(crate) fn best<'a>(db: &ContentDb, u: &Entity, reach: Fixed, candidates: imp
 
 /// Can `t` be picked automatically by a craft of team `mine`: an enemy (by
 /// perceived owner), alive, not cloaked to it, targetable, and seen.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn candidate(
     db: &ContentDb,
     u: &Entity,
@@ -196,6 +201,7 @@ impl Sim {
                 && self.movement.course(u.id).is_none_or(|c| c.waypoints.is_empty())
                 && !self.production.is_deploying(u.id)
                 && !self.production.is_welding(u.id)
+                && !self.economy.is_mining(u.id)
                 && !u.flags.contains(UnitFlags::WEAPONS_OFF)
                 && !u.flags.contains(UnitFlags::CLOAKED);
             if !idle || (f.assist_high_autonomy_only && self.autonomy.levels(u.id)[0] < 2) {
@@ -212,11 +218,11 @@ impl Sim {
                 if !(a.id == u.id || (team(a.owner) == Some(mine) && a.hull[1] > Fixed::ZERO && near(a))) {
                     continue;
                 }
-                if let Some((_, by)) = self.engagement.hit.get(a.id) {
-                    if let Some(t) = self.units.get(*by).filter(|t| candidate(&db, u, t, mine, &team, &self.perception, seen)) {
-                        pick = Some(t.id);
-                        break;
-                    }
+                if let Some((_, by)) = self.engagement.hit.get(a.id)
+                    && let Some(t) = self.units.get(*by).filter(|t| candidate(&db, u, t, mine, &team, &self.perception, seen))
+                {
+                    pick = Some(t.id);
+                    break;
                 }
                 if f.assist_on_ally_fire && self.engagement.fired.get(a.id).is_some() {
                     let reach = def.sensor.max(range);

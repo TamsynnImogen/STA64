@@ -510,7 +510,8 @@ impl Sim {
         if approach_warp.to_rec().iter().any(|(id, _)| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft)) {
             return Err(SnapshotError::Corrupt("attack warp entity is not a craft".into()));
         }
-        let engagement = crate::combat::targeting::Engagement::from_rec(engagement_rows).ok_or_else(|| corrupt("engagement"))?;
+        let engagement = crate::combat::targeting::Engagement::from_rec(engagement_rows, b.tick, |id| units.contains(id))
+            .ok_or_else(|| SnapshotError::Corrupt("engagement rows out of order, from the future or of an unknown entity".into()))?;
         let specials = crate::specials::Specials::from_rec(b.specials).ok_or_else(|| corrupt("specials"))?;
         let start_effects = crate::start_effects::StartEffects::from_rec(effect_rows, |id| units.contains(id))
             .ok_or_else(|| corrupt("start effect rows"))?;

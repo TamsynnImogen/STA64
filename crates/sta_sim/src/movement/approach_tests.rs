@@ -34,6 +34,10 @@ pub(crate) fn db(profile: Profile, warp_distance: Option<i32>) -> ContentDb {
     ship.sensor = n(1200);
     ship.hull = n(100_000);
     ship.hardpoints = vec![sta_content::Hardpoint { weapon: sta_content::DefRef::new("st_pulse"), node: "hp01".into(), arc: None }];
+    // The same ship seeing the whole stage, as the measured scenes did (`Fog=0`).
+    let mut seer = ship.clone();
+    seer.odf = "st_seer".into();
+    seer.sensor = n(6000);
     let mut target = ship.clone();
     target.odf = "st_target".into();
     target.hardpoints.clear();
@@ -46,6 +50,7 @@ pub(crate) fn db(profile: Profile, warp_distance: Option<i32>) -> ContentDb {
         .features(profile.features())
         .weapon(gun)
         .unit(ship)
+        .unit(seer)
         .unit(target)
         .build()
         .expect("consistent")
@@ -70,7 +75,7 @@ const AHEAD: (Fixed, Fixed) = (Fixed::ZERO, Fixed::ONE);
 pub(crate) fn run(profile: Profile, warp: Option<i32>, dist: i32, ticks: u32) -> (Sim, Vec<(u32, Fixed, Fixed)>) {
     let mut sim = sim(db(profile, warp));
     let db = Arc::clone(sim.content.as_ref().unwrap());
-    let s = sim.spawn_def(db.key("st_destroy").unwrap(), PlayerId(1), v(0, 0), AHEAD).unwrap();
+    let s = sim.spawn_def(db.key("st_seer").unwrap(), PlayerId(1), v(0, 0), AHEAD).unwrap();
     let t = sim.spawn_def(db.key("st_target").unwrap(), PlayerId(2), v(0, dist), AHEAD).unwrap();
     let order = Command { player: PlayerId(1), seq: 0, kind: CommandKind::Order(Order::Attack { units: vec![s], target: t }) };
     let mut out = Vec::new();
@@ -150,6 +155,53 @@ fn an_attacker_in_range_does_not_move_and_its_target_moving_away_restarts_the_ap
     WorldSource::step(&mut sim, &[]);
     WorldSource::step(&mut sim, &[]);
     assert!(sim.unit(EntityId(1)).unwrap().speed > Fixed::ZERO);
+}
+
+#[test]
+fn an_unseen_or_cloaked_target_is_flown_to_without_warp_and_the_order_stands() {
+    let mut sim = sim(db(Profile::Sta2Classic, Some(1100)));
+    let db = Arc::clone(sim.content.as_ref().unwrap());
+    let s = sim.spawn_def(db.key("st_destroy").unwrap(), PlayerId(1), v(0, 0), AHEAD).unwrap();
+    let t = sim.spawn_def(db.key("st_target").unwrap(), PlayerId(2), v(0, 3000), AHEAD).unwrap();
+    let order = Command { player: PlayerId(1), seq: 0, kind: CommandKind::Order(Order::Attack { units: vec![s], target: t }) };
+    WorldSource::step(&mut sim, &[order]);
+    let mut top = Fixed::ZERO;
+    for _ in 0..30 * 10 {
+        WorldSource::step(&mut sim, &[]);
+        top = top.max(sim.unit(s).unwrap().speed);
+    }
+    assert!(top <= n(140), "no warp toward an unseen target: {:?}", top);
+    assert_eq!(sim.weapons.attack_of(s), Some(t));
+    // Close by but cloaked: no homing, the craft holds its last goal.
+    let at = sim.unit(s).unwrap().pos;
+    sim.units.get_mut(t).unwrap().pos = Vec3 { x: at.x + n(300), y: at.y, z: at.z + n(300) };
+    let u = sim.units.get_mut(t).unwrap();
+    u.flags = u.flags.with(crate::view::UnitFlags::CLOAKED, true);
+    let goal = sim.unit(s).unwrap().target;
+    WorldSource::step(&mut sim, &[]);
+    assert_eq!(sim.weapons.attack_of(s), Some(t));
+    assert_eq!(sim.unit(s).unwrap().target, goal);
+}
+
+#[test]
+fn a_dead_target_leaves_no_course_and_queued_legs_wait_for_the_attack() {
+    let (mut sim, _) = run(Profile::Sta2Classic, Some(1100), 1000, 30 * 5);
+    let (s, t) = (EntityId(1), EntityId(2));
+    let mv = Command { player: PlayerId(1), seq: 1, kind: CommandKind::Order(Order::Move { units: vec![s], to: v(-500, 0), queue: true }) };
+    for _ in 0..30 * 10 {
+        WorldSource::step(&mut sim, &[]);
+    }
+    WorldSource::step(&mut sim, &[mv]);
+    for _ in 0..30 * 2 {
+        WorldSource::step(&mut sim, &[]);
+    }
+    assert_eq!(sim.weapons.attack_of(s), Some(t));
+    assert!(sim.movement.course(s).is_some_and(|c| c.waypoints == [v(-500, 0)]), "the leg waits");
+    let kill = Command { player: PlayerId::BENCH, seq: 0, kind: CommandKind::Edit(crate::command::Edit::Kill(t)) };
+    WorldSource::step(&mut sim, &[kill]);
+    WorldSource::step(&mut sim, &[]);
+    assert_eq!(sim.weapons.attack_of(s), None);
+    assert_eq!(sim.unit(s).unwrap().target, Some(v(-500, 0)), "on to the queued leg, not the old goal");
 }
 
 #[test]

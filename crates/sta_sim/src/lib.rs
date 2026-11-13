@@ -316,11 +316,18 @@ impl Sim {
             Order::Attack { units, target } => {
                 let Some(db) = self.content.clone() else { return false };
                 let ok = self.weapons.order_attack(&db, &self.units, c.player, units, *target);
-                // The attack replaces queued legs (SIM-36); the approach sets the course.
-                for &id in units {
-                    if self.weapons.attack_of(id) == Some(*target) {
-                        self.movement.clear_waypoints(id);
-                    }
+                // The attack replaces queued legs, mining and a pending build
+                // site of the crafts that took it (SIM-36); the approach sets
+                // the course.
+                let took: Vec<EntityId> = units.iter().copied()
+                    .filter(|&id| self.weapons.attack_of(id) == Some(*target) && self.unit(id).is_some_and(|u| u.orderable()))
+                    .collect();
+                for &id in &took {
+                    self.movement.clear_waypoints(id);
+                }
+                if !took.is_empty() {
+                    self.economy.cancel(&self.units, c.player, &took);
+                    self.production.cancel(&db, &self.units, &mut self.economy, c.player, &took);
                 }
                 ok
             }
@@ -368,6 +375,13 @@ impl Sim {
             self.weapons.hold_fire(held);
             self.weapons.step_with_perception(self.tick, &self.units, &db, &self.players, &self.perception, &mut self.specials, &mut self.rng, &mut self.events);
             self.record_engagement(from);
+            // An attack whose target is gone leaves no course behind (SIM-36).
+            for id in self.weapons.take_ended() {
+                if let Some(u) = self.units.get_mut(id).filter(|u| u.kind == EntityKind::Craft) {
+                    u.target = None;
+                }
+                self.approach_warp.end(id);
+            }
             let mut lost = Vec::new();
             for (id, by) in combat::damage::apply(&mut self.units, &db, &mut self.events, from) {
                 lost.extend(self.units.get(id).map(|u| u.owner));

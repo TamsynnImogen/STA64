@@ -16,8 +16,9 @@
 //!   tick its reload allows (a new unit's initial reload, SIM-35), and a
 //!   re-order onto another target takes effect at each mount's next shot.
 //! - Targets: an `Attack` order, else the nearest enemy in the weapon's range
-//!   (ties to the lowest id). Under `attack_opportunity_fire` (Roots) a weapon
-//!   whose ordered target is out of reach takes the nearest enemy instead. Point-defence weapons do not shoot at units (`pd.rs` runs them).
+//!   (ties to the lowest id); under `target_score` one best-scoring enemy per
+//!   craft (`targeting`). Under `attack_opportunity_fire` (Roots) a weapon whose
+//!   ordered target is out of reach takes another enemy as if it had no order. Point-defence weapons do not shoot at units (`pd.rs` runs them).
 //! - `Hit` carries the weapon's damage as `hull` and zero `shield`: applying
 //!   it (shields, hull, destruction) is `damage.rs`, which rewrites the split.
 //!
@@ -178,6 +179,9 @@ pub struct Weapons {
     /// construction ship flying to its site or building). Set by the sim
     /// before each step from production state; not state of its own.
     held: Vec<EntityId>,
+    /// Units whose attack ended this step because the target is gone; the
+    /// sim takes them right after the step (not state of its own).
+    ended: Vec<EntityId>,
 }
 
 /// [`Weapons`] as the snapshot stores it (SIM-10).
@@ -211,6 +215,7 @@ impl Weapons {
             next_shot: r.next_shot,
             pd: Pd::from_rec(r.pd)?,
             held: Vec::new(),
+            ended: Vec::new(),
         })
     }
 
@@ -228,6 +233,16 @@ impl Weapons {
         ids.sort();
         ids.dedup();
         self.held = ids;
+    }
+
+    /// End `unit`'s attack order.
+    pub(crate) fn drop_attack(&mut self, unit: EntityId) {
+        self.attack.remove(unit);
+    }
+
+    /// The units whose attack ended in the last step (their target is gone).
+    pub(crate) fn take_ended(&mut self) -> Vec<EntityId> {
+        std::mem::take(&mut self.ended)
     }
 
     /// Every attack order, `(unit, target)` ascending by unit.
@@ -349,6 +364,9 @@ impl Weapons {
             .collect();
         for id in gone {
             self.attack.remove(id);
+            if units.contains(id) {
+                self.ended.push(id);
+            }
         }
         let gone: Vec<EntityId> = self
             .mounts
@@ -608,16 +626,14 @@ impl Weapons {
                 return hittable(t).then_some(t);
             }
         }
+        let ordered = self.attack.get(u.id).copied();
         let mine = team(u.owner)?;
         // SIM-36 `target_score`: one target per craft, the best-scoring enemy
         // within its longest regular weapon range; this weapon fires at it
         // when it can (see `targeting`).
         if db.unit(u.def).is_some_and(|d| db.unit_features(d).target_score) {
             let reach = db.unit(u.def).and_then(|d| crate::movement::approach::attack_range(db, d)).unwrap_or(range);
-            let candidates = units.iter().filter(|t| {
-                let visible = seen.is_none_or(|ids| ids.binary_search(&t.id).is_ok());
-                visible && super::targeting::candidate(db, u, t, mine, &team, perception, seen)
-            });
+            let candidates = units.iter().filter(|t| Some(t.id) != ordered && super::targeting::candidate(db, u, t, mine, &team, perception, seen));
             return super::targeting::best(db, u, reach, candidates).filter(|t| hittable(t));
         }
         let mut best: Option<(Fixed, &Entity)> = None;

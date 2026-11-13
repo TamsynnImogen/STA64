@@ -253,11 +253,11 @@ pub(crate) fn step_planned(model: Model, u: &mut Unit, leg: Leg, plan: Plan) {
         advance(u, dt);
         return;
     }
-    if u.target.is_none() {
-        if let Some(p) = plan.face {
-            face(model, u, p, dt);
-            return;
-        }
+    if u.target.is_none()
+        && let Some(p) = plan.face
+    {
+        face(model, u, p, dt);
+        return;
     }
     let impulse = u.stats.max_speed;
     u.stats.max_speed = cap;
