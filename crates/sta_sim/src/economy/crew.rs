@@ -106,7 +106,6 @@ mod tests {
         base.race = "fx".into();
         base.hull = Fixed::from_int(500);
         base.crew_gain = Fixed::from_f64(gain.split('=').nth(1).and_then(|v| v.trim().parse().ok()).unwrap_or(0.0));
-        base.raw = Arc::new(sta_odf::resolve("fx_starbase", &mut |_| Some(format!("classlabel = \"starbase\"\n{gain}"))).unwrap());
         let rules = Rules::default().with_crew(CrewRules { starting_capacity: starting, races: vec![("fx".into(), Fixed::from_f64(rate))] });
         Arc::new(b.unit(base).build().unwrap().with_rules(rules))
     }

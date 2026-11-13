@@ -32,6 +32,7 @@ use std::sync::Arc;
 
 use sta_core::{TICK_HZ, Tick};
 
+use crate::pair_metrics::{self, MetricTol, frame_metrics};
 use crate::parity::{self, PMark, Run, Support};
 use crate::parse::{SceneFile, parse_command};
 use crate::run::{Bench, RunConfig, json, to_f64};
@@ -145,11 +146,14 @@ pub struct PairTol {
     /// Mean absolute difference (0..255) a frame pair may have; `None`: frames
     /// are reported, not judged (the default while STA64 draws stand-ins).
     pub frame: Option<f64>,
+    /// The frame metrics robust to a small misalignment, each opt-in
+    /// ([`MetricTol`]).
+    pub metrics: MetricTol,
 }
 
 impl Default for PairTol {
     fn default() -> Self {
-        Self { time: 0.25, pos: 5.0, hull: 1.0, frame: None }
+        Self { time: 0.25, pos: 5.0, hull: 1.0, frame: None, metrics: MetricTol::default() }
     }
 }
 
@@ -165,7 +169,8 @@ impl PairTol {
                 "pos" => t.pos = v,
                 "hull" => t.hull = v,
                 "frame" => t.frame = Some(v),
-                k => return Err(format!("unknown tolerance `{k}` (time, pos, hull, frame)")),
+                k if t.metrics.set(k, v) => {}
+                k => return Err(format!("unknown tolerance `{k}` (time, pos, hull, frame, {})", MetricTol::KEYS)),
             }
         }
         Ok(t)
@@ -176,6 +181,7 @@ impl PairTol {
         if let Some(f) = self.frame {
             let _ = write!(s, ",frame={f}");
         }
+        s += &self.metrics.text();
         s
     }
 }
@@ -198,6 +204,10 @@ pub struct PairDesc {
     pub at: Vec<(f64, String)>,
     /// `Mod=`: the mod STA64 mounts for this game (Refit's launch names it too).
     pub mod_name: Option<String>,
+    /// The map the original loads and STA64 loads with it: `Map=` of `[Pair]`, else the
+    /// map `Launch=` names (`-nointro a2_borg01`, `... fulltech.bzn`), lower case, no
+    /// extension. `None`: STA64's empty map (a unit-level scene).
+    pub map: Option<String>,
     /// The pair file as written.
     pub text: String,
 }
@@ -283,6 +293,7 @@ impl PairDesc {
             tol,
             at,
             mod_name: one("mod").filter(|m| !m.is_empty()),
+            map: one("map").filter(|m| !m.is_empty()).map(|m| map_stem(&m)).or_else(|| one("launch").and_then(|l| launch_map(&l))),
             text: text.to_owned(),
         })
     }
@@ -295,11 +306,96 @@ impl PairDesc {
 
     /// The scene STA64 runs: this game's keys, then `extra` (`fake` for the
     /// bench's fake content) on top.
+    ///
+    /// With `map` in `extra`, a pair that names a map (`PairDesc::map`) gets `Map=` and
+    /// `MapObjects=keep` in `[Scene]`: the original always has the launch map's own
+    /// objects, so the frames STA64 draws have them too. Keys the file sets itself stay.
+    /// The measuring run (marks, states) leaves `map` out: the map's own units fight and
+    /// would change what a scene measures, and the original's marks name only the scene's
+    /// objects.
     pub fn scene_text(&self, extra: &[&str]) -> String {
         let mut g = vec![self.game.as_str()];
         g.extend_from_slice(extra);
-        materialize(&self.text, &g)
+        let text = materialize(&self.text, &g);
+        match &self.map {
+            Some(m) if extra.contains(&"map") => with_map(&text, m),
+            _ => text,
+        }
     }
+}
+
+/// `a2_borg01.bzn` -> `a2_borg01`.
+fn map_stem(s: &str) -> String {
+    let s = s.trim().trim_matches('"');
+    let l = s.to_ascii_lowercase();
+    l.strip_suffix(".bzn").or_else(|| l.strip_suffix(".sol")).unwrap_or(&l).to_owned()
+}
+
+/// The map a game command line names: its last argument that is neither a
+/// flag nor a flag's value (`-mod "STA2 Classic Mod"`).
+pub fn launch_map(launch: &str) -> Option<String> {
+    let mut args: Vec<String> = Vec::new();
+    let (mut cur, mut quoted, mut any) = (String::new(), false, false);
+    for c in launch.chars() {
+        match c {
+            '"' => {
+                quoted = !quoted;
+                any = true;
+            }
+            c if c.is_whitespace() && !quoted => {
+                if any || !cur.is_empty() {
+                    args.push(std::mem::take(&mut cur));
+                    any = false;
+                }
+            }
+            c => cur.push(c),
+        }
+    }
+    if any || !cur.is_empty() {
+        args.push(cur);
+    }
+    let mut map = None;
+    let mut it = args.into_iter();
+    while let Some(a) = it.next() {
+        if matches!(a.to_ascii_lowercase().as_str(), "-mod" | "--mod") {
+            it.next();
+        } else if !a.is_empty() && !a.starts_with('-') && !a.chars().all(|c| c.is_ascii_digit()) {
+            // A bare number is a flag's value (`-res 1280`), not a map.
+            map = Some(map_stem(&a));
+        }
+    }
+    map
+}
+
+/// `text` with `Map=<map>` and `MapObjects=keep` added to `[Scene]` unless it sets them.
+fn with_map(text: &str, map: &str) -> String {
+    let secs = sections(text);
+    let scene = secs.iter().find(|s| s.name.as_deref().is_some_and(|n| n.eq_ignore_ascii_case("scene")));
+    let has = |k: &str| scene.is_some_and(|s| s.lines.iter().any(|l| matches!(l, Line::Kv(x, _) if x.eq_ignore_ascii_case(k))));
+    let mut add = String::new();
+    if !has("map") {
+        let _ = writeln!(add, "Map={map}");
+    }
+    if !has("mapobjects") {
+        add += "MapObjects=keep\n";
+    }
+    if add.is_empty() {
+        return text.to_owned();
+    }
+    let mut out = String::new();
+    let mut done = false;
+    for line in text.lines() {
+        out += line;
+        out.push('\n');
+        if !done && line.trim().eq_ignore_ascii_case("[scene]") {
+            out += &add;
+            done = true;
+        }
+    }
+    if !done {
+        out = format!("[Scene]\n{add}{out}");
+    }
+    out
 }
 
 // ---- a small JSON reader (refit.json, run.json) -------------------------
@@ -1196,9 +1292,14 @@ pub fn compare(desc: &PairDesc, refit_dir: &Path, sta_dir: &Path, out: &Path) ->
     if rf.is_empty() {
         let _ = writeln!(md, "No frames were asked for.");
     } else {
-        let _ = writeln!(md, "Each pair is written as `frames/f<i>.png`: original | STA64 | difference (x4, red). Frames are game-derived and stay local.\n\n| frame | t original | STA64 tick | mean | max | differing | >16 | judged |\n|---|---|---|---|---|---|---|---|");
+        let _ = writeln!(
+            md,
+            "STA64 side: {}.\n\nEach pair is written as `frames/f<i>.png`: original | STA64 | difference (x4, red) | blurred difference (x4, red). Frames are game-derived and stay local. `mean`, `max`, `differing` and `>16` are per pixel; the metrics below are robust to a small misalignment.\n\n| frame | t original | STA64 tick | mean | max | differing | >16 | judged |\n|---|---|---|---|---|---|---|---|",
+            s.meta.get("frames_note").str().unwrap_or("not taken")
+        );
     }
     let _ = fs::create_dir_all(out.join("frames"));
+    let mut measured: Vec<(String, pair_metrics::FrameMetrics)> = Vec::new();
     for (i, fr) in rf.iter().enumerate() {
         let t = fr.get("t").num().or(fr.get("at").num());
         let sfr = sf.get(i);
@@ -1211,14 +1312,23 @@ pub fn compare(desc: &PairDesc, refit_dir: &Path, sta_dir: &Path, out: &Path) ->
         };
         match res {
             Ok((ia, ib)) => {
-                let d = frame_diff(&ia, &ib);
-                let judged = tol.frame.map(|lim| d.mean <= lim);
-                over += usize::from(judged == Some(false));
+                let m = frame_metrics(&ia, &ib);
+                let d = m.plain;
+                // Judged: the plain mean when `frame=` is set, and each metric with a limit.
+                let mut breaches: Vec<String> = Vec::new();
+                if let Some(lim) = tol.frame.filter(|lim| d.mean > *lim) {
+                    breaches.push(format!("frame {:.2} > {lim}", d.mean));
+                }
+                for (k, v, lim) in tol.metrics.exceeded(&m) {
+                    breaches.push(format!("{k} {v:.2} > {lim}"));
+                }
+                let judged = (tol.frame.is_some() || !tol.metrics.text().is_empty()).then_some(breaches.is_empty());
+                over += breaches.len();
                 let name = format!("frames/f{i}.png");
-                write_png(&out.join(&name), &side_by_side(&ia, &ib))?;
+                write_png(&out.join(&name), &pair_metrics::strip(&ia, &ib))?;
                 let _ = write!(
                     js,
-                    "{}{{\"i\":{i},\"t\":{},\"sta64_tick\":{},\"pair\":{},\"size\":[{},{}],\"sta64_size\":[{},{}],\"mean\":{},\"max\":{},\"share\":{},\"share16\":{},\"within\":{}}}",
+                    "{}{{\"i\":{i},\"t\":{},\"sta64_tick\":{},\"pair\":{},\"size\":[{},{}],\"sta64_size\":[{},{}],\"mean\":{},\"max\":{},\"share\":{},\"share16\":{},\"within\":{},\"breaches\":[{}],\"metrics\":{}}}",
                     if i > 0 { "," } else { "" },
                     jnum(t),
                     jnum(tick),
@@ -1231,7 +1341,9 @@ pub fn compare(desc: &PairDesc, refit_dir: &Path, sta_dir: &Path, out: &Path) ->
                     d.max,
                     jnum(Some(d.share)),
                     jnum(Some(d.share16)),
-                    judged.map_or("null".into(), |b| b.to_string())
+                    judged.map_or("null".into(), |b| b.to_string()),
+                    breaches.iter().map(|b| json::string(b)).collect::<Vec<_>>().join(","),
+                    pair_metrics::metrics_json(&m)
                 );
                 let _ = writeln!(
                     md,
@@ -1242,14 +1354,23 @@ pub fn compare(desc: &PairDesc, refit_dir: &Path, sta_dir: &Path, out: &Path) ->
                     d.max,
                     d.share * 100.0,
                     d.share16 * 100.0,
-                    judged.map_or("no (reported only)", |b| if b { "within" } else { "**over**" })
+                    match judged {
+                        None => "no (reported only)".to_owned(),
+                        Some(true) => "within".to_owned(),
+                        Some(false) => format!("**over**: {}", breaches.join("; ")),
+                    }
                 );
+                measured.push((format!("f{i}"), m));
             }
             Err(e) => {
                 let _ = write!(js, "{}{{\"i\":{i},\"t\":{},\"error\":{}}}", if i > 0 { "," } else { "" }, jnum(t), json::string(&e));
                 let _ = writeln!(md, "| f{i} | {} | - | - | - | - | - | {e} |", t.map_or("-".into(), |t| format!("{t:.3}")));
             }
         }
+    }
+    if !measured.is_empty() {
+        let rows: Vec<(String, &pair_metrics::FrameMetrics)> = measured.iter().map(|(n, m)| (n.clone(), m)).collect();
+        md += &pair_metrics::metrics_md(&rows);
     }
     js += "],";
     let notes: Vec<String> = r.meta.get("notes").arr().iter().filter_map(Jv::str).map(str::to_owned).collect();
@@ -1305,15 +1426,29 @@ pub fn read_meta(dir: &Path, file: &str) -> Result<Jv, String> {
     parse_json(&t).ok_or_else(|| format!("{}: not JSON", p.display()))
 }
 
-/// Content from an install (and mod), for the STA64 side of a real pair.
-pub fn install_config(root: &Path, mod_name: Option<&str>) -> Result<RunConfig, String> {
+/// Content from an install (and mod), for the STA64 side of a real pair, with
+/// the install's maps `maps` (stems under `bzn/`) for `Map=`. The maps are
+/// converted as the map view converts them (`MapDef::convert_bzn_named_in`),
+/// so the same scene builds the same sim in the bench and in the client.
+pub fn install_config(root: &Path, mod_name: Option<&str>, maps: &[String]) -> Result<RunConfig, String> {
     let vfs = sta_vfs::Vfs::mount_install(root, mod_name).map_err(|e| format!("{}: {e:?}", root.display()))?;
     let (index, _) = sta_content::OdfIndex::build(&vfs);
     let (db, _) = sta_content::ContentDb::load(&vfs, &index).map_err(|e| format!("content: {e:?}"))?;
     let mut cfg = RunConfig::fake();
-    cfg.content = Arc::new(db);
     cfg.aliases.clear();
     cfg.maps.clear();
+    for name in maps {
+        let stem = map_stem(name);
+        let data = [format!("bzn/{stem}.bzn"), format!("bzn/{stem}.sol")]
+            .iter()
+            .find_map(|p| vfs.read(p))
+            .ok_or_else(|| format!("Map={stem}: no bzn/{stem}.bzn in the install"))?
+            .map_err(|e| format!("Map={stem}: {e}"))?;
+        let bzn = sta_bzn::parse(&data).map_err(|e| format!("Map={stem}: {e}"))?;
+        let conv = sta_content::MapDef::convert_bzn_named_in(&bzn, &stem, &db, &vfs, &index);
+        cfg.maps.insert(stem, conv.map);
+    }
+    cfg.content = Arc::new(db);
     Ok(cfg)
 }
 
@@ -1376,6 +1511,43 @@ mod tests {
         assert_eq!(s.objects[0].odf, "fx_cruiser");
         assert_eq!(s.marks.state_ms, Some(250));
         assert!(s.unknown.is_empty(), "{:?}", s.unknown);
+    }
+
+    #[test]
+    fn the_pairs_map_comes_from_the_launch_line_or_the_key() {
+        assert_eq!(launch_map("-nointro a2_borg01").as_deref(), Some("a2_borg01"));
+        assert_eq!(launch_map("-nointro -mod \"STA2 Classic Mod\" FullTech.bzn").as_deref(), Some("fulltech"));
+        assert_eq!(launch_map("-nointro"), None);
+        assert_eq!(launch_map("-nointro a2_x -res 1280").as_deref(), Some("a2_x"));
+        assert_eq!(launch_map("-mod \"x y\""), None);
+        let text = PAIR.replace("roots.Mod=STA2 Classic Mod", "roots.Mod=STA2 Classic Mod\na2.Launch=-nointro a2_borg01\nroots.Launch=-nointro -mod \"STA2 Classic Mod\" fulltech.bzn");
+        let a = PairDesc::parse("p", &text, "a2").unwrap();
+        let r = PairDesc::parse("p", &text, "roots").unwrap();
+        assert_eq!((a.map.as_deref(), r.map.as_deref()), (Some("a2_borg01"), Some("fulltech")));
+        // An explicit `Map=` wins; none at all is the empty map.
+        let e = PairDesc::parse("p", &text.replace("[Pair]\n", "[Pair]\nMap=A2_Other.bzn\n"), "a2").unwrap();
+        assert_eq!(e.map.as_deref(), Some("a2_other"));
+        assert_eq!(PairDesc::parse("p", PAIR, "a2").unwrap().map, None);
+        // The scene text gets `Map=` and `MapObjects=keep` after `[Scene]`, once, unless the file says; never on fake content.
+        assert!(!a.scene_text(&[]).contains("Map="));
+        let s = a.scene_text(&["map"]);
+        assert!(s.contains("[Scene]\nMap=a2_borg01\nMapObjects=keep\n"), "{s}");
+        let parsed = SceneFile::parse(&s).unwrap();
+        assert_eq!(parsed.scene.map.as_deref(), Some("a2_borg01"));
+        assert_eq!(parsed.map_objects(), crate::parse::scene::MapObjects::Keep);
+        assert!(!a.scene_text(&["fake"]).contains("Map="));
+        let own = text.replace("[Scene]\n", "[Scene]\nMapObjects=strip\n");
+        let s = PairDesc::parse("p", &own, "a2").unwrap().scene_text(&["map"]);
+        assert!(s.contains("Map=a2_borg01") && s.contains("MapObjects=strip") && !s.contains("MapObjects=keep"), "{s}");
+    }
+
+    #[test]
+    fn metric_tolerances_parse_and_print() {
+        let t = PairTol::parse("time=0.1,frame=9,lowfreq=2.5,lum=3,colour=4,bg=1,fg=2,tile=6,midfreq=3,shift=1,bright=0.05").unwrap();
+        assert_eq!((t.time, t.frame, t.metrics.lowfreq, t.metrics.colour, t.metrics.bright), (0.1, Some(9.0), Some(2.5), Some(4.0), Some(0.05)));
+        assert!(t.text().contains("lowfreq=2.5") && t.text().contains("frame=9"));
+        assert!(PairTol::parse("sharpness=1").unwrap_err().contains("lowfreq"));
+        assert_eq!(PairTol::default().metrics.text(), "");
     }
 
     #[test]

@@ -12,6 +12,8 @@ sta_core.workspace = true
 sta_content.workspace = true
 sta_sim.workspace = true
 sta_vfs.workspace = true
+# Paired scenes on install content (TOOL-17): the pair's map is read from the install.
+sta_bzn.workspace = true
 serde.workspace = true
 json5.workspace = true
 # Paired scenes (TOOL-15): frames read and written as PNG.
@@ -22,4 +24,3 @@ name = "sta-bench"
 path = "src/bin/sta-bench.rs"
 
 [dev-dependencies]
-sta_bzn.workspace = true

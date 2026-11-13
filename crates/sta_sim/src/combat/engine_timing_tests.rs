@@ -27,10 +27,6 @@ fn v(x: i32, z: i32) -> Vec3 {
 
 const AHEAD: (Fixed, Fixed) = (Fixed::ZERO, Fixed::ONE);
 
-fn odf(name: &str, text: &str) -> Arc<sta_odf::Odf> {
-    Arc::new(sta_odf::resolve(name, &mut |_| Some(text.to_owned())).expect("ODF resolves"))
-}
-
 /// The fake content with `features`, `units` and `weapons` edited by `edit`.
 fn content(
     features: impl FnOnce(&mut Features),
@@ -85,7 +81,9 @@ fn pd_db(debt: bool, fo_class: bool) -> ContentDb {
                 w.ordnance_defence = fo_class;
             }
             for u in units.iter_mut().filter(|u| u.odf == "fx_station") {
-                u.raw = odf("fx_station", "maxSpecialEnergy = 500\nspecialEnergyRate = 10\n");
+                // `maxSpecialEnergy = 500`, `specialEnergyRate = 10`, as the loader types them.
+                u.special_energy_max = Fixed::from_int(500);
+                u.special_energy_rate = Fixed::from_int(10);
             }
         },
     )

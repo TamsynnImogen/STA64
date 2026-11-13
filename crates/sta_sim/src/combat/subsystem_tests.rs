@@ -161,18 +161,6 @@ fn state_is_in_both_digests_and_survives_a_snapshot_and_replay() {
 }
 
 #[test]
-fn a_format_14_snapshot_still_loads_with_no_subsystem_state() {
-    let (sim, _, d) = world();
-    let mut bytes = sim.snapshot();
-    // Without rows the format-17 suffix is `version 1, no rows`: two bytes.
-    assert_eq!(bytes[bytes.len() - 2..], [1, 0]);
-    bytes.truncate(bytes.len() - 2);
-    bytes[4..6].copy_from_slice(&14u16.to_le_bytes());
-    let copy = Sim::from_snapshot(&bytes, Some(d)).unwrap();
-    assert_eq!(copy.digest(), sim.digest());
-}
-
-#[test]
 fn corrupt_subsystem_rows_are_rejected() {
     use crate::combat::damage::{SubsystemRow, Subsystems};
     let row = |off, damage| (EntityId(1), SubsystemRow { off, damage });

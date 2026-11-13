@@ -283,11 +283,13 @@ fn file_inherited_energy_defaults_respect_explicit_child_overrides() {
 
         let fake = sta_content::fake::db();
         let (mut units, weapons) = sta_sim::specials::fixture::defs();
-        units
-            .iter_mut()
-            .find(|u| u.odf == "fx_cloaker")
-            .unwrap()
-            .raw = raw;
+        let unit = units.iter_mut().find(|u| u.odf == "fx_cloaker").unwrap();
+        // The typed fields the ODF loader fills from the resolved keys; the
+        // sim reads no raw ODF (D9).
+        let typed = |key: &str| Fixed::from_f64(raw.f32(key).unwrap_or(0.0).max(0.0) as f64);
+        unit.special_energy_max = typed("maxSpecialEnergy");
+        unit.special_energy_rate = typed("specialEnergyRate");
+        unit.raw = raw;
         let mut builder = ContentDb::builder()
             .profile(fake.profile())
             .features(fake.features().clone());
