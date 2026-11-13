@@ -23,7 +23,7 @@
 use std::collections::HashMap;
 
 pub mod cst;
-pub use cst::{Cst, LineKind};
+pub use cst::{Cst, GroupTable, LineKind};
 pub mod diagnostics;
 pub use diagnostics::DuplicateEntry;
 

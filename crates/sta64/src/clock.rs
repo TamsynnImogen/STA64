@@ -155,6 +155,13 @@ impl AnimClock {
         self.frame_dt = dt;
     }
 
+    /// A frame the bench holds still (a frame settling, a paused session): nothing
+    /// integrated per frame moves and `wall` stays, so a held picture is the one
+    /// the last tick left, however many frames it is held for.
+    pub fn hold(&mut self) {
+        self.frame_dt = 0.0;
+    }
+
     /// One tick ran.
     pub fn ticked(&mut self) {
         self.tick += 1;
