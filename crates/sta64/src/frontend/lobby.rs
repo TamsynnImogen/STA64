@@ -87,6 +87,8 @@ pub const KICK_GRACE: Duration = Duration::from_millis(1500);
 pub const JOIN_ANSWER: Duration = Duration::from_secs(15);
 /// Chat lines kept.
 pub const CHAT_KEPT: usize = 100;
+/// Match messages kept from the lobby for the router, at most.
+const EARLY_KEPT: usize = 512;
 
 // ---------------------------------------------------------------------------
 // What the screens know about maps and sides
@@ -424,6 +426,7 @@ struct Guest {
 struct Pending {
     hello: Hello,
     assembler: RulesAssembler,
+    at: Instant,
 }
 
 /// What a session is doing.
@@ -816,6 +819,9 @@ impl Session {
             p.team = p.team.min(slots as u8 - 1);
         }
         self.host_team = self.host_team.min(slots as u8 - 1);
+        for g in self.guests.iter_mut().flatten() {
+            g.team = g.team.min(slots as u8 - 1);
+        }
     }
 
     /// Host: choose the map. Refused when it has fewer slots than the highest seat held by
@@ -868,6 +874,7 @@ impl Session {
         } else {
             self.plan[slot].race = race;
         }
+        self.reset_ready();
         self.broadcast_lobby();
     }
 
@@ -882,6 +889,7 @@ impl Session {
         } else {
             self.plan[slot].team = team;
         }
+        self.reset_ready();
         self.broadcast_lobby();
     }
 
@@ -933,7 +941,7 @@ impl Session {
         if text.is_empty() || !matches!(self.phase, Phase::Open) || (!self.host && !self.welcomed) {
             return;
         }
-        let msg = Message::Chat(proto::Chat { from: self.me, scope: proto::ChatScope::All, recipients: !(1u8 << self.me.0), text: text.clone() });
+        let msg = Message::Chat(proto::Chat { from: self.me, scope: proto::ChatScope::All, recipients: 1u8.checked_shl(u32::from(self.me.0)).map_or(0xFF, |b| !b), text: text.clone() });
         self.send(Destination::All, &msg);
         let from = self.name_of(self.me);
         self.push_chat(ChatLine { from, text });
@@ -966,8 +974,8 @@ impl Session {
         if self.host || !self.welcomed || !matches!(self.phase, Phase::Open) {
             return;
         }
-        let ready = self.guest_view().seats.iter().find(|s| s.me).is_some_and(|s| s.ready);
-        let c = SeatChoice { team: TeamId(team), race: race.to_owned(), ready };
+        // A change of side or team takes the ready mark back: what was agreed to has changed.
+        let c = SeatChoice { team: TeamId(team), race: race.to_owned(), ready: false };
         self.send(Destination::Seat(PlayerId(0)), &Message::SeatChoice(c.clone()));
         self.my_choice = Some(c);
     }
@@ -1019,7 +1027,15 @@ impl Session {
         }
         while let Some(t) = self.transport.as_mut() {
             match t.poll() {
-                Ok(Some(inc)) => self.handle(inc, now),
+                Ok(Some(inc)) => {
+                    // A departure marker the poll has just passed comes before this frame: a seat
+                    // freed and taken again must be emptied before its new occupant is admitted.
+                    self.departures();
+                    if !matches!(self.phase, Phase::Open | Phase::Joining) {
+                        return;
+                    }
+                    self.handle(inc, now);
+                }
                 Ok(None) => break,
                 Err(TransportError::Frame(e)) => self.on_bad_frame(&e),
                 Err(TransportError::Closed) => {
@@ -1034,10 +1050,14 @@ impl Session {
         if !matches!(self.phase, Phase::Open | Phase::Joining) {
             return;
         }
-        for seat in self.control.take_departures() {
-            self.on_departure(seat);
-            if !matches!(self.phase, Phase::Open | Phase::Joining) {
-                return;
+        self.departures();
+        if !matches!(self.phase, Phase::Open | Phase::Joining) {
+            return;
+        }
+        // A joiner that was asked for its rules and never answered is refused.
+        for i in 1..MAX_SEATS {
+            if self.pending[i].as_ref().is_some_and(|p| now.duration_since(p.at) > JOIN_ANSWER) {
+                self.refuse(PlayerId(i as u8), Refusal::Protocol, now);
             }
         }
         if let Some(r) = self.control.close_reason() {
@@ -1054,6 +1074,15 @@ impl Session {
         if !self.host && !self.welcomed && now.duration_since(self.asked) > JOIN_ANSWER {
             self.control.leave();
             self.end(Ended::NoAnswer);
+        }
+    }
+
+    fn departures(&mut self) {
+        for seat in self.control.take_departures() {
+            self.on_departure(seat);
+            if !matches!(self.phase, Phase::Open | Phase::Joining) {
+                return;
+            }
         }
     }
 
@@ -1116,6 +1145,9 @@ impl Session {
         if self.guests[i].is_some() || self.pending[i].is_some() {
             return self.refuse(from, Refusal::Protocol, now);
         }
+        if self.kicks.iter().any(|(s, _)| *s == from) {
+            return self.refuse(from, Refusal::Kicked, now);
+        }
         if self.closed {
             return self.refuse(from, Refusal::Closed, now);
         }
@@ -1129,7 +1161,7 @@ impl Session {
             return self.admit(from, h);
         }
         // The rules differ: ask for the joiner's entries to name the first key.
-        self.pending[i] = Some(Pending { hello: h, assembler: RulesAssembler::default() });
+        self.pending[i] = Some(Pending { hello: h, assembler: RulesAssembler::default(), at: now });
         self.send(Destination::Seat(from), &Message::RulesRequest);
         self.changed = true;
     }
@@ -1161,6 +1193,15 @@ impl Session {
             name = clean_name(&format!("{name} {}", i + 1), &name);
         }
         let token = random_u64();
+        // The relay chose this seat. A computer or idle seat planned here moves to the highest open slot
+        // (dropped if none), so the table the host edits is the table everyone sees.
+        if matches!(self.plan[i].kind, Kind::Computer | Kind::Idle) {
+            let moved = self.plan[i].clone();
+            if let Some(k) = (0..self.plan.len()).rev().find(|&k| k != i && self.plan[k].kind == Kind::Open && self.guests[k].is_none()) {
+                self.plan[k] = moved;
+            }
+            self.plan[i].kind = Kind::Open;
+        }
         let plan = &self.plan[i];
         self.guests[i] = Some(Guest { name, lineage: h.lineage, packs: h.packs, engine: h.engine, race: plan.race.clone(), team: plan.team, ready: false, token });
         self.send(Destination::Seat(from), &Message::Welcome(Welcome { slot: from, host: self.me, rejoin_token: token }));
@@ -1291,6 +1332,9 @@ impl Session {
             return Err("The game setup is not valid.".into());
         }
         let _ = self.control.set_open(false);
+        for (s, _) in std::mem::take(&mut self.kicks) {
+            let _ = self.control.kick(s);
+        }
         let msg = Message::Start(start.clone());
         for i in 1..MAX_SEATS {
             if self.guests[i].is_some() {
@@ -1341,7 +1385,7 @@ impl Session {
             }
             Message::Start(s) if from == PlayerId(0) && self.welcomed => self.on_start(s),
             Message::Chat(c) if self.welcomed => {
-                if c.from == from {
+                if c.from == from && (from == PlayerId(0) || self.guest_view().seats.iter().any(|x| x.slot == from.0 && x.kind == Kind::Human)) {
                     let name = self.name_of(from);
                     let text = c.text.trim().to_owned();
                     if !text.is_empty() {
@@ -1351,7 +1395,7 @@ impl Session {
             }
             // Everything else is the match's (a peer that has started sends turns at once):
             // kept for the router.
-            Message::Turn(_) | Message::Replayed(_) | Message::Ping { .. } | Message::Pong { .. } | Message::Desync(_) | Message::Sections(_) | Message::Request(_) | Message::Resume { .. } | Message::DropVote(_) => {
+            Message::Turn(_) | Message::Replayed(_) | Message::Ping { .. } | Message::Pong { .. } | Message::Desync(_) | Message::Sections(_) | Message::Request(_) | Message::Resume { .. } | Message::DropVote(_) | Message::Leave(_) if self.early.len() < EARLY_KEPT => {
                 self.early.push_back(Incoming { from, msg });
             }
             _ => {}
@@ -1740,7 +1784,6 @@ pub fn on_text(mut changes: MessageReader<TextChanged>, mut submits: MessageRead
     for c in submits.read() {
         let Ok((F::Chat, _)) = texts.get(c.entity) else { continue };
         let text = std::mem::take(&mut fields.chat);
-        fields.focus = None;
         if let Some(s) = mp.session.as_mut() {
             s.say(&text);
         }
