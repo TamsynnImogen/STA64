@@ -12,6 +12,11 @@ A native 64-bit STA64 build cannot load 32-bit Windows DLLs on any platform,
 including Windows. So STA64 never loads `.drl`, `.dsl`, `.dll` or
 `mmm_loader.dll`.
 
+Legacy compiled scripts (A2 and A1 mission DLLs) reach the player by conversion
+to Lua on their own machine from their own install, never shipped; the
+interim route is the Python converter, the release target a Rust port run by
+the game (WORKPLAN LUA-15 and the note under the LUA table).
+
 ## How MMM picks a script (from its source)
 
 MMM (Megadroid's Mission Mod, github.com/chreden/mmm) runs
