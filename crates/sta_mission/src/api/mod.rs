@@ -254,6 +254,11 @@ pub(crate) struct Ctx {
     pub playback: Playback,
     /// The view tick of the last `Hit` each object took (`A2.UnderAttack`).
     pub last_hit: BTreeMap<EntityId, u64>,
+    /// The view tick each object last fired a weapon (`A1.InAttackMode`).
+    pub last_fired: BTreeMap<EntityId, u64>,
+    /// Presentation requests a script made with a start delay (a fade's `delay`), by the view
+    /// tick they are due: queued as `Edit::Present` at the first update on or after it (LUA-17).
+    pub delayed: Vec<(u64, sta_sim::present::Presentation)>,
     /// The cineractive shots the script placed (UI-36), fed from every presentation request.
     pub cine: crate::cineractive::Cineractive,
 }
@@ -311,6 +316,8 @@ impl Ctx {
             aips_taken: 0,
             playback: Playback::default(),
             last_hit: BTreeMap::new(),
+            last_fired: BTreeMap::new(),
+            delayed: Vec::new(),
             cine: crate::cineractive::Cineractive::default(),
         }
     }
@@ -355,6 +362,22 @@ impl Ctx {
         }
         self.commands.push(Command { player, seq, kind });
         Ok(seq)
+    }
+
+    /// Queue `p` to be presented `seconds` after the current view tick ([`Ctx::delayed`]).
+    pub fn present_later(&mut self, seconds: f64, p: sta_sim::present::Presentation) {
+        let due = self.view.tick + (seconds.max(0.0) * f64::from(sta_core::TICK_HZ)).round() as u64;
+        self.delayed.push((due, p));
+    }
+
+    /// Queue the delayed presentations that are due at the current view tick, in request order.
+    pub fn flush_delayed(&mut self) {
+        let now = self.view.tick;
+        let (due, later): (Vec<_>, Vec<_>) = std::mem::take(&mut self.delayed).into_iter().partition(|(t, _)| *t <= now);
+        self.delayed = later;
+        for (_, p) in due {
+            self.push(PlayerId::SCRIPT, CommandKind::Edit(Edit::Present(p)));
+        }
     }
 
     pub fn push(&mut self, player: PlayerId, kind: CommandKind) {

@@ -2278,6 +2278,10 @@ end
 -- 0 (read from the executable, static, for the setters read; assumed for the
 -- rest), where an A2 binding insists on an unsigned handle and raises. That
 -- raise is answered 0 here and counted in Mission.invalid, not as a failure.
+-- The same guard covers a handle whose object has died or been removed (the
+-- binding raises "object N is not alive"): missions keep polling the handles of
+-- destroyed units, and a raise would block the whole rule (LUA-17; assumed for
+-- the queries, not measured).
 local function negative(...)
     for i = 1, select('#', ...) do
         local v = select(i, ...)
@@ -2298,7 +2302,8 @@ local function A(name, ...)
     end
     local ok, v = pcall(f, ...)
     if not ok then
-        if tostring(v):find('unsigned integer', 1, true) and negative(...) then
+        if (tostring(v):find('unsigned integer', 1, true) and negative(...))
+            or tostring(v):find(' is not alive', 1, true) then
             Mission.invalid[name] = (Mission.invalid[name] or 0) + 1
             return 0
         end
