@@ -77,6 +77,8 @@ impl Install {
         tga.extend_from_slice(&[0, 0, 255]);
         write("Textures/RGB/paint_a.tga", &tga);
         write("Textures/RGB/paint_b.tga", &tga);
+        write("Textures/RGB/glow_b.tga", &tga);
+        write("Textures/RGB/spec_b.tga", &tga);
         Self(root)
     }
     fn mount(&self) -> Mounted {
@@ -110,7 +112,7 @@ fn view(owner: u8) -> WorldView {
     view
 }
 
-fn model() -> Arc<Model> {
+fn model(auxiliary_maps: bool) -> Arc<Model> {
     Arc::new(Model {
         format: SourceFormat::M3d,
         version: 2.0,
@@ -129,6 +131,8 @@ fn model() -> Arc<Model> {
                     blend: "default".into(),
                     maps: Maps {
                         diffuse: Some("paint".into()),
+                        glow: auxiliary_maps.then(|| "glow".into()),
+                        specular: auxiliary_maps.then(|| "spec".into()),
                         ..Default::default()
                     },
                     faces: vec![[(0, 0), (1, 1), (2, 2)]],
@@ -144,6 +148,15 @@ fn model() -> Arc<Model> {
 
 #[test]
 fn private_faction_material_converts_before_hull_apply_and_follows_capture() {
+    run_capture_test(false);
+}
+
+#[test]
+fn captured_auxiliary_faction_maps_switch_back_to_standard_and_restore_hull() {
+    run_capture_test(true);
+}
+
+fn run_capture_test(auxiliary_maps: bool) {
     let install = Install::new();
     let mut def = UnitDef::new("synthetic", "craft");
     def.model = "synthetic".into();
@@ -172,6 +185,9 @@ fn private_faction_material_converts_before_hull_apply_and_follows_capture() {
     app.add_message::<AssetEvent<StandardMaterial>>();
     app.add_plugins(AppearancePlugin);
     app.add_systems(Update, (apply.in_set(HullApply), follow_source).chain());
+    if auxiliary_maps {
+        app.world_mut().resource_mut::<HullView>().set_stock(true);
+    }
 
     let normal = app
         .world_mut()
@@ -188,7 +204,7 @@ fn private_faction_material_converts_before_hull_apply_and_follows_capture() {
         .world_mut()
         .spawn((
             SimEntity(EntityId(1)),
-            ModelInstance::new(key, model(), 1.0, &definition),
+            ModelInstance::new(key, model(auxiliary_maps), 1.0, &definition),
             HullShare(1.0),
             TeamColour(Color::srgb(0.8, 0.4, 0.2)),
         ))
@@ -212,7 +228,16 @@ fn private_faction_material_converts_before_hull_apply_and_follows_capture() {
                 base,
             },
             TeamPart,
-            HullPart::default(),
+            HullPart {
+                stock: auxiliary_maps.then_some(crate::render::stock::hulls::StockLight {
+                    ambient: [0.5; 3],
+                    diffuse: [0.9, 0.8, 0.7],
+                    specular: [0.2; 3],
+                    power: 40.0,
+                    model: 1,
+                }),
+                ..default()
+            },
             MeshMaterial3d(Handle::<StandardMaterial>::default()),
             Transform::IDENTITY,
             ChildOf(node),
@@ -249,6 +274,14 @@ fn private_faction_material_converts_before_hull_apply_and_follows_capture() {
     let first_texture = first.texture.clone();
     assert!(first_texture.is_some());
     assert_eq!(first.normal.as_ref(), Some(&normal));
+    let alpha_texture = first_texture.clone();
+    let alpha = app
+        .world()
+        .resource::<Assets<StandardMaterial>>()
+        .get(&private)
+        .unwrap();
+    assert!(alpha.emissive_texture.is_none());
+    assert!(alpha.metallic_roughness_texture.is_none());
 
     app.world_mut()
         .resource_mut::<SimLink>()
@@ -264,22 +297,88 @@ fn private_faction_material_converts_before_hull_apply_and_follows_capture() {
         .unwrap();
     let beta_texture = standard.base_color_texture.clone();
     assert!(beta_texture.is_some() && beta_texture != first_texture);
-    assert_eq!(standard.normal_map_texture.as_ref(), Some(&normal));
-    assert_eq!(app.world().get::<HullSource>(part).unwrap().source, private);
-    // In this minimal app the asset event bridge is explicit; follow_source
-    // observes it on the next update, just as the normal AssetPlugin does.
-    app.world_mut()
-        .write_message(AssetEvent::<StandardMaterial>::Modified { id: private.id() });
-    app.update();
-    let hull = app
-        .world()
-        .resource::<Assets<HullMaterial>>()
-        .get(&hull_handle)
-        .unwrap();
-    assert_eq!(hull.texture, beta_texture);
-    assert_eq!(hull.normal.as_ref(), Some(&normal));
-    let tint = Color::srgb(0.1, 0.7, 0.9).to_linear();
-    assert!((hull.params.tint.x - tint.red).abs() < 1e-6);
-    assert!((hull.params.tint.y - tint.green).abs() < 1e-6);
-    assert!((hull.params.tint.z - tint.blue).abs() < 1e-6);
+    let beta_glow = standard.emissive_texture.clone();
+    let beta_specular = standard.metallic_roughness_texture.clone();
+    if auxiliary_maps {
+        assert!(beta_glow.is_some(), "beta capture loads its glow map");
+        assert!(
+            beta_specular.is_some(),
+            "beta capture loads its specular map"
+        );
+        assert_eq!(standard.normal_map_texture.as_ref(), Some(&normal));
+        assert!(app.world().get::<HullSource>(part).is_none());
+        assert!(
+            app.world()
+                .get::<MeshMaterial3d<StandardMaterial>>(part)
+                .is_some()
+        );
+        assert!(
+            app.world()
+                .get::<MeshMaterial3d<HullMaterial>>(part)
+                .is_none()
+        );
+
+        // Capturing alpha removes both faction-only maps and makes this same
+        // private material eligible for hull conversion in the capture frame.
+        app.world_mut()
+            .resource_mut::<SimLink>()
+            .feed(Arc::new(view(0)));
+        app.world_mut()
+            .entity_mut(root)
+            .insert(TeamColour(Color::srgb(0.8, 0.4, 0.2)));
+        app.update();
+        let alpha = app
+            .world()
+            .resource::<Assets<StandardMaterial>>()
+            .get(&private)
+            .unwrap();
+        assert!(alpha.emissive_texture.is_none());
+        assert!(alpha.metallic_roughness_texture.is_none());
+        assert_eq!(alpha.base_color_texture, alpha_texture);
+        assert_eq!(alpha.normal_map_texture.as_ref(), Some(&normal));
+        assert_eq!(app.world().get::<HullSource>(part).unwrap().source, private);
+        assert!(
+            app.world()
+                .get::<MeshMaterial3d<HullMaterial>>(part)
+                .is_some()
+        );
+        let source = app.world().get::<HullSource>(part).unwrap();
+        let restored = app
+            .world()
+            .resource::<Assets<HullMaterial>>()
+            .get(&source.hull)
+            .unwrap();
+        assert_eq!(restored.params.mamb.w, 1.0);
+        assert_eq!(restored.texture, alpha_texture);
+        assert_eq!(restored.normal.as_ref(), Some(&normal));
+    } else {
+        assert!(beta_glow.is_none());
+        assert!(beta_specular.is_none());
+        assert_eq!(app.world().get::<HullSource>(part).unwrap().source, private);
+        assert_eq!(
+            app.world()
+                .resource::<Assets<HullMaterial>>()
+                .get(&hull_handle)
+                .unwrap()
+                .texture,
+            beta_texture,
+            "capture refreshes the cached hull in the same frame"
+        );
+        // In this minimal app the asset event bridge is explicit; follow_source
+        // observes it on the next update, just as the normal AssetPlugin does.
+        app.world_mut()
+            .write_message(AssetEvent::<StandardMaterial>::Modified { id: private.id() });
+        app.update();
+        let hull = app
+            .world()
+            .resource::<Assets<HullMaterial>>()
+            .get(&hull_handle)
+            .unwrap();
+        assert_eq!(hull.texture, beta_texture);
+        assert_eq!(hull.normal.as_ref(), Some(&normal));
+        let tint = Color::srgb(0.1, 0.7, 0.9).to_linear();
+        assert!((hull.params.tint.x - tint.red).abs() < 1e-6);
+        assert!((hull.params.tint.y - tint.green).abs() < 1e-6);
+        assert!((hull.params.tint.z - tint.blue).abs() < 1e-6);
+    }
 }

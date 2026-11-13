@@ -617,6 +617,7 @@ fn spawn_mesh(
         let hull = (native.is_none() && !ctx.unlit && rock.is_none()).then_some(crate::render::hulls::HullPart {
             self_illum,
             cut_alpha: group.blend == "default" && !self_illum,
+            stock: lm.map(crate::render::stock::hulls::StockLight::from_material),
         },
         );
         let part = CachedPart {

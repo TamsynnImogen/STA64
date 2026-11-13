@@ -97,6 +97,27 @@ pub struct MessageBox {
     pub text: String,
 }
 
+/// How long (real seconds) a cineractive the script made non-skippable holds the player before
+/// Space or Esc may end it anyway. A skippable one ends at once.
+pub const SKIP_GRACE_SECS: f32 = 10.0;
+/// The longest a cineractive may hold the player (real seconds): then it ends by itself, so a
+/// script that never ends it (a lost reply, an aborted callback) cannot leave the player without
+/// camera and input for good. The longest cineractive of the Roots missions read runs well under a minute.
+pub const MAX_HOLD_SECS: f32 = 180.0;
+
+/// How long the current cineractive has held the player.
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq)]
+pub struct CineractiveClock {
+    /// Real seconds a cineractive has held the player; kept across a brief gap, so a script that
+    /// raises it again as soon as it ends does not earn a fresh grace and cap each time.
+    pub held: f32,
+    /// How long no cineractive has been on.
+    off_for: f32,
+}
+
+/// A cineractive that has been off this long (real seconds) counts as over: the next one starts a new hold.
+pub const NEW_HOLD_AFTER_SECS: f32 = 5.0;
+
 /// Cineractive mode as the script set it.
 #[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CineractiveState {
@@ -129,6 +150,12 @@ pub struct Titles {
 }
 
 impl Titles {
+    /// Take every title down (the layer redraws).
+    pub fn clear(&mut self) {
+        self.items.clear();
+        self.dirty = true;
+    }
+
     fn add(&mut self, item: TitleItem) {
         self.items.retain(|t| t.id != item.id);
         self.items.push(item);
@@ -241,7 +268,7 @@ fn num(a: &Arg) -> Option<f32> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn consume(
+pub(crate) fn consume(
     mut events: MessageReader<SimMsg>,
     strings: Option<Res<Strings>>,
     mut titles: ResMut<Titles>,
@@ -337,10 +364,37 @@ fn movie_replies(mut requested: MessageReader<Requested>, mut finished: MessageR
     }
 }
 
-fn skip_cineractive(keys: Res<ButtonInput<KeyCode>>, mut state: ResMut<CineractiveState>, mut out: MessageWriter<ScriptReply>) {
-    if state.on && state.skippable && keys.just_pressed(KeyCode::Space) {
+/// The rules by which a cineractive ends besides the script ending it (the script's own end is
+/// `Presentation::Cineractive { on: false }`, handled in `consume`):
+///
+/// - Space or Esc ends a skippable one at once (`cineractiveCancel` is Space in `Input.map`);
+/// - a non-skippable one yields to Space or Esc after [`SKIP_GRACE_SECS`];
+/// - any one ends by itself after [`MAX_HOLD_SECS`];
+/// - the host ends it with `ScriptReply::CineractiveSkipped` when the script faults or the mission ends.
+///
+/// Every end is a `ScriptReply::CineractiveSkipped`, which the camera and the script hear.
+fn skip_cineractive(keys: Res<ButtonInput<KeyCode>>, time: Res<Time<Real>>, mut state: ResMut<CineractiveState>, mut clock: ResMut<CineractiveClock>, mut out: MessageWriter<ScriptReply>) {
+    if !state.on {
+        clock.off_for += time.delta_secs();
+        if clock.off_for >= NEW_HOLD_AFTER_SECS {
+            clock.held = 0.0;
+        }
+        return;
+    }
+    clock.off_for = 0.0;
+    clock.held += time.delta_secs();
+    let pressed = keys.just_pressed(KeyCode::Space) || keys.just_pressed(KeyCode::Escape);
+    if (pressed && (state.skippable || clock.held >= SKIP_GRACE_SECS)) || clock.held >= MAX_HOLD_SECS {
+        // `held` stays: a cineractive raised again at once is released again at once.
         *state = CineractiveState::default();
         out.write(ScriptReply::CineractiveSkipped);
+    }
+}
+
+/// An end that came from outside (the host's fault or mission-end release) clears the state too.
+pub(crate) fn apply_replies(mut replies: MessageReader<ScriptReply>, mut state: ResMut<CineractiveState>) {
+    if replies.read().any(|r| *r == ScriptReply::CineractiveSkipped) {
+        *state = CineractiveState::default();
     }
 }
 
@@ -510,15 +564,37 @@ fn ok_pressed(
 
 pub struct PresentationPlugin;
 
+/// Back at the front end (UI-34): titles, fades, queued message boxes, pending movie replies and the
+/// objectives panel of the match are gone, whatever ended it (a mission's debrief, F10, the in-game menu).
+fn reset_presentation(
+    mut titles: ResMut<Titles>,
+    mut fade: ResMut<FadeState>,
+    mut cine: ResMut<CineractiveState>,
+    mut movies: ResMut<PendingMovies>,
+    mut view: ResMut<ObjectivesView>,
+    mut queue: ResMut<MessageQueue>,
+) {
+    titles.items.clear();
+    // `Titles::default()` is not dirty, so the layer would keep what it drew.
+    titles.dirty = true;
+    *fade = default();
+    *cine = default();
+    movies.0.clear();
+    *view = default();
+    queue.0.clear();
+}
+
 impl Plugin for PresentationPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Titles>()
             .init_resource::<FadeState>()
             .init_resource::<CineractiveState>()
+            .init_resource::<CineractiveClock>()
             .init_resource::<Unhandled>()
             .init_resource::<PendingMovies>()
             .init_resource::<ObjectivesView>()
             .init_resource::<MessageQueue>()
+            .add_systems(OnEnter(crate::app::AppState::FrontEnd), reset_presentation)
             .add_message::<ScriptReply>()
             .add_message::<MessageBox>()
             .add_message::<crate::media::mission::Requested>()
@@ -528,7 +604,7 @@ impl Plugin for PresentationPlugin {
             .add_systems(Startup, spawn_layers.run_if(resource_exists::<Theme>))
             .add_systems(
                 Update,
-                (consume, run_clock, movie_replies, skip_cineractive, toggle_objectives, queue_messages, ok_pressed, draw_titles.run_if(resource_exists::<Theme>), draw_fade, draw_panel.run_if(resource_exists::<Theme>)).chain().in_set(GameSet::Ui),
+                (consume, run_clock, movie_replies, skip_cineractive, apply_replies, toggle_objectives, queue_messages, ok_pressed, draw_titles.run_if(resource_exists::<Theme>), draw_fade, draw_panel.run_if(resource_exists::<Theme>)).chain().in_set(GameSet::Ui),
             );
     }
 }
@@ -600,6 +676,46 @@ mod tests {
     }
 
     #[test]
+    fn a_non_skippable_cineractive_yields_after_the_grace_and_ends_by_itself_in_the_end() {
+        let mut app = app();
+        send(&mut app, Presentation::Cineractive { on: true, skippable: false });
+        let press = |app: &mut App, k: KeyCode| {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.release(k);
+            keys.clear();
+            keys.press(k);
+            app.update();
+        };
+        press(&mut app, KeyCode::Escape);
+        assert!(replies(&mut app).is_empty(), "inside the grace Esc does nothing");
+        app.world_mut().resource_mut::<CineractiveClock>().held = SKIP_GRACE_SECS;
+        press(&mut app, KeyCode::Escape);
+        assert_eq!(replies(&mut app), [ScriptReply::CineractiveSkipped]);
+        assert!(!app.world().resource::<CineractiveState>().on);
+        // Nothing is pressed: the hold ends at the cap.
+        send(&mut app, Presentation::Cineractive { on: true, skippable: false });
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+        app.world_mut().resource_mut::<CineractiveClock>().held = MAX_HOLD_SECS;
+        app.update();
+        assert_eq!(replies(&mut app), [ScriptReply::CineractiveSkipped]);
+        assert!(!app.world().resource::<CineractiveState>().on);
+        // A script that raises it again at once earns no new grace: it is released again at once.
+        send(&mut app, Presentation::Cineractive { on: true, skippable: false });
+        app.update();
+        assert_eq!(replies(&mut app), [ScriptReply::CineractiveSkipped]);
+        assert!(!app.world().resource::<CineractiveState>().on);
+    }
+
+    #[test]
+    fn a_release_from_the_host_clears_the_state() {
+        let mut app = app();
+        send(&mut app, Presentation::Cineractive { on: true, skippable: false });
+        app.world_mut().write_message(ScriptReply::CineractiveSkipped);
+        app.update();
+        assert!(!app.world().resource::<CineractiveState>().on);
+    }
+
+    #[test]
     fn space_skips_a_skippable_cineractive_only() {
         let mut app = app();
         send(&mut app, Presentation::Cineractive { on: true, skippable: false });
@@ -639,6 +755,26 @@ mod tests {
         app.update();
         assert_eq!(replies(&mut app), [ScriptReply::MessageDismissed { id: 4 }]);
         assert!(app.world().resource::<MessageQueue>().0.is_empty());
+    }
+
+    #[test]
+    fn the_briefing_panel_closes_on_enter_and_never_holds_a_message_back() {
+        let mut app = app();
+        app.world_mut().resource_mut::<ObjectivesView>().visible = true;
+        app.world_mut().write_message(MessageBox { id: 9, title: "t".into(), text: "x".into() });
+        app.update();
+        // The message is in front; Enter dismisses it, the next Enter closes the panel.
+        for want_visible in [true, false] {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.release(KeyCode::Enter);
+            keys.clear();
+            keys.press(KeyCode::Enter);
+            app.update();
+            assert_eq!(app.world().resource::<ObjectivesView>().visible, want_visible);
+        }
+        assert_eq!(replies(&mut app), [ScriptReply::MessageDismissed { id: 9 }]);
+        // Nothing the panel shows is a camera hold: the cineractive state is independent of it.
+        assert!(!app.world().resource::<CineractiveState>().on);
     }
 
     #[test]

@@ -35,9 +35,13 @@ pub struct Model {
 #[derive(Debug, Clone)]
 pub struct LightingMaterial {
     pub name: String,
+    /// SOD only (M3D carries none: zero).
+    pub ambient: [f32; 3],
     pub diffuse: [f32; 3],
     pub specular: [f32; 3],
     pub power: f32,
+    /// SOD lighting-model byte (0, 1, 2); M3D: 2.
+    pub model: u8,
     pub self_illuminating: bool,
 }
 
@@ -261,9 +265,11 @@ impl Model {
                 .iter()
                 .map(|m| LightingMaterial {
                     name: m.name.clone(),
+                    ambient: m.ambient,
                     diffuse: m.diffuse,
                     specular: m.specular,
                     power: m.power,
+                    model: m.model,
                     self_illuminating: m.self_illuminating,
                 })
                 .collect(),

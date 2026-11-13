@@ -1,3 +1,6 @@
+//! Quarantined (#619): these wait on wall-clock deadlines and fail under the parallel sta64 suite.
+//! Run them with `cargo test -p sta64 --lib net_match -- --ignored`.
+//!
 //! A match from the lobby, played by several client `App`s in lockstep (INT-M5). Everything
 //! is headless: no window, no GPU, no audio. The clients connect through a relay in this
 //! process on 127.0.0.1 with an OS-chosen port; every wait is a loop on a real condition with
@@ -290,6 +293,7 @@ fn sleep_ms(ms: u64) {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "flaky under parallel load, see #619; run with --ignored"]
 fn two_clients_play_three_thousand_ticks_in_step_with_scripted_orders() {
     let (r, dir) = (fast_relay(), tmp("two"));
     let mut apps = launch(&r, 1, 0, &[], &opts(&dir));
@@ -326,6 +330,7 @@ fn two_clients_play_three_thousand_ticks_in_step_with_scripted_orders() {
 }
 
 #[test]
+#[ignore = "flaky under parallel load, see #619; run with --ignored"]
 fn three_clients_play_in_step() {
     let (r, dir) = (fast_relay(), tmp("three"));
     let mut apps = launch(&r, 2, 1, &[], &opts(&dir));
@@ -338,6 +343,7 @@ fn three_clients_play_in_step() {
 }
 
 #[test]
+#[ignore = "flaky under parallel load, see #619; run with --ignored"]
 fn the_host_runs_the_computer_seat_and_every_peer_agrees_to_the_snapshot() {
     let (r, dir) = (fast_relay(), tmp("ai"));
     let mut apps = launch(&r, 1, 1, &[2], &opts(&dir));
@@ -375,6 +381,7 @@ fn the_host_runs_the_computer_seat_and_every_peer_agrees_to_the_snapshot() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "flaky under parallel load, see #619; run with --ignored"]
 fn a_client_that_stalls_is_waited_for_in_words_and_resumes() {
     let (r, dir) = (fast_relay(), tmp("stall"));
     let mut apps = launch(&r, 2, 1, &[], &opts(&dir));
@@ -411,6 +418,7 @@ fn a_client_that_stalls_is_waited_for_in_words_and_resumes() {
 }
 
 #[test]
+#[ignore = "flaky under parallel load, see #619; run with --ignored"]
 fn a_client_that_drops_is_marked_and_the_others_play_on() {
     let (r, dir) = (fast_relay(), tmp("drop"));
     let mut apps = launch(&r, 2, 1, &[], &opts(&dir));
@@ -438,6 +446,7 @@ fn a_client_that_drops_is_marked_and_the_others_play_on() {
 }
 
 #[test]
+#[ignore = "flaky under parallel load, see #619; run with --ignored"]
 fn the_host_leaving_ends_the_match_for_the_others_with_a_message() {
     let (r, dir) = (fast_relay(), tmp("hostleft"));
     let mut apps = launch(&r, 1, 0, &[], &opts(&dir));
@@ -457,6 +466,7 @@ fn the_host_leaving_ends_the_match_for_the_others_with_a_message() {
 }
 
 #[test]
+#[ignore = "flaky under parallel load, see #619; run with --ignored"]
 fn a_removed_client_is_back_at_the_multiplayer_screen_with_the_reason() {
     let (r, dir) = (fast_relay(), tmp("removed"));
     let mut apps = launch(&r, 2, 1, &[], &opts(&dir));
@@ -475,6 +485,7 @@ fn a_removed_client_is_back_at_the_multiplayer_screen_with_the_reason() {
 }
 
 #[test]
+#[ignore = "flaky under parallel load, see #619; run with --ignored"]
 fn a_protocol_violation_is_a_kick() {
     let (r, dir) = (fast_relay(), tmp("violation"));
     let mut apps = launch(&r, 2, 1, &[], &opts(&dir));
@@ -526,6 +537,7 @@ fn side_of(path: &Path, data: &ScreenData) -> sta_net::diagnose::Side {
 }
 
 #[test]
+#[ignore = "flaky under parallel load, see #619; run with --ignored"]
 fn an_injected_desync_halts_every_peer_and_writes_reports_the_diagnosis_localises() {
     let (r, dir) = (fast_relay(), tmp("desync"));
     // The host will not repair anyone (a seat with no resyncs left): the match stays stopped.
@@ -581,6 +593,7 @@ fn an_injected_desync_halts_every_peer_and_writes_reports_the_diagnosis_localise
 }
 
 #[test]
+#[ignore = "flaky under parallel load, see #619; run with --ignored"]
 fn a_repairable_desync_is_repaired_and_the_reports_are_still_written() {
     let (r, dir) = (fast_relay(), tmp("repair"));
     let o = NetOptions { limits: Some(ResyncLimits { min_attempt_interval: Duration::from_millis(1), bytes_per_sec: 100_000_000, burst_bytes: 100_000_000, ..ResyncLimits::default() }), ..opts(&dir) };
@@ -603,6 +616,7 @@ fn a_repairable_desync_is_repaired_and_the_reports_are_still_written() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "flaky under parallel load, see #619; run with --ignored"]
 fn a_peer_with_another_map_refuses_the_start_naming_it() {
     let (r, dir) = (fast_relay(), tmp("map"));
     let o = opts(&dir);

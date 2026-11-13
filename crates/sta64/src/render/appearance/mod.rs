@@ -373,6 +373,14 @@ fn sync(
                         material.uv_transform = target.uv_transform;
                     }
                     *target = material;
+                    // Capture can introduce or remove glow/specular maps. Recheck
+                    // hull-shader eligibility in HullApply this same frame rather
+                    // than leave a previously converted part on the old pipeline.
+                    commands
+                        .entity(entity)
+                        .insert(MeshMaterial3d(private.handle.clone()))
+                        .remove::<super::hulls::HullSource>()
+                        .remove::<MeshMaterial3d<super::hulls::HullMaterial>>();
                 }
             } else {
                 let handle = standard.add(material);
