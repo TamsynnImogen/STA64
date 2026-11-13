@@ -125,7 +125,7 @@ impl Plugin for FlowPlugin {
             .add_systems(OnEnter(AppState::FrontEnd), (clear_match, open_scene).chain())
             .add_systems(OnEnter(AppState::Loading), close_scene)
             // A remount keeps no lookup of the previous mount: before anything reads the new one.
-            .add_systems(Update, invalidate_mount_caches.before(GameSet::Input).run_if(resource_exists_and_changed::<Mounted>).run_if(not(resource_added::<Mounted>)))
+            .add_systems(Update, invalidate_mount_caches.in_set(GameSet::Ui).after(remount).run_if(resource_exists_and_changed::<Mounted>).run_if(not(resource_added::<Mounted>)))
             .add_systems(
                 Update,
                 (
@@ -298,7 +298,15 @@ fn clear_match(
     seat: Option<ResMut<MapSeat>>,
     progress: Option<ResMut<LoadProgress>>,
     mut leave: ResMut<Messages<LeaveMatch>>,
+    entities: Option<ResMut<crate::sim_link::SimEntities>>,
 ) {
+    // The match's ships are the link's: they go with it, so the menu scene (whose sim reuses the
+    // ids 1.. ) does not inherit their models, symbols and hidden visibility.
+    if let Some(mut e) = entities {
+        for (_, ent) in std::mem::take(&mut e.0) {
+            commands.entity(ent).try_despawn();
+        }
+    }
     commands.remove_resource::<ActiveMatch>();
     commands.remove_resource::<SimLink>();
     commands.remove_resource::<SkirmishCfg>();
