@@ -286,6 +286,20 @@ impl Ctx {
         self.content.as_ref().and_then(|c| c.name(u.def)).unwrap_or_default().to_owned()
     }
 
+    /// Where a script sees `id`: the point of its latest queued `SetPosition`
+    /// this tick, else the view's position (the engine moves the object at the
+    /// call, so a `PointAt` right after a `SetPosition` aims from the new place).
+    pub fn placed(&self, id: EntityId, view_pos: Vec3) -> Vec3 {
+        self.commands
+            .iter()
+            .rev()
+            .find_map(|c| match &c.kind {
+                CommandKind::Edit(Edit::Position(who, to)) if *who == id => Some(*to),
+                _ => None,
+            })
+            .unwrap_or(view_pos)
+    }
+
     pub fn try_push(&mut self, player: PlayerId, kind: CommandKind) -> Result<u32, &'static str> {
         let seq = self.seq.get(&player).copied().unwrap_or(0)
             .checked_add(1).ok_or("command sequence exhausted")?;

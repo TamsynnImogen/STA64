@@ -42,12 +42,33 @@ fn no_data(lua: &Lua, env: &Env, name: &'static str, spec: &'static [&'static st
 
 pub(super) fn install(lua: &Lua, env: &Env, table: &Table) -> mlua::Result<()> {
     // Movement and position.
-    table.set("SetPosition", gap_write(lua, env, "SetPosition", &["hs"], "no teleport edit in the sim seam")?)?;
+    // SetPosition and PointAt (SIM-57): the Armada II rules (instant, speed
+    // zeroed, orders kept; yaw only), read from the Armada II executable and
+    // measured there; the Armada I executable is not measured.
+    table.set("SetPosition", def(lua, env, "SetPosition", &["hs"], |lua, e, _, a| {
+        let unit = e.unit("SetPosition", a[0].id())?;
+        let to = e.path_point(lua, "SetPosition", a[1].text(), 0)?;
+        e.edit("SetPosition", sta_sim::command::Edit::Position(unit.id, to))?;
+        Ok(Value::Nil)
+    })?)?;
     table.set("SetWarpSpeed", gap_write(lua, env, "SetWarpSpeed", &["hf"], "no warp-speed seam in the sim")?)?;
     table.set("ResetWarpSpeed", gap_write(lua, env, "ResetWarpSpeed", &["h"], "no warp-speed seam in the sim")?)?;
     table.set("Patrol", gap_write(lua, env, "Patrol", &["hs"], "no patrol order in the sim seam")?)?;
     table.set("SearchAndDestroy", gap_write(lua, env, "SearchAndDestroy", &["h"], "no search-and-destroy order in the sim seam")?)?;
-    table.set("PointAt", gap_write(lua, env, "PointAt", &["hh", "hs"], "no facing order in the sim seam")?)?;
+    table.set("PointAt", def(lua, env, "PointAt", &["hh", "hs"], |lua, e, ov, a| {
+        let unit = e.unit("PointAt", a[0].id())?;
+        let to = if ov == 0 { let t = e.unit("PointAt", a[1].id())?; e.ctx.borrow().placed(t.id, t.pos) } else { e.path_point(lua, "PointAt", a[1].text(), 0)? };
+        let (from, to) = { let c = e.ctx.borrow(); (c.placed(unit.id, unit.pos), to) };
+        let (dx, dz) = (f64::from(to.x.to_f32()) - f64::from(from.x.to_f32()), f64::from(to.z.to_f32()) - f64::from(from.z.to_f32()));
+        let len = dx.hypot(dz);
+        if len < 1e-6 {
+            e.ctx.borrow_mut().unsupported("A1.PointAt: the unit is at the target (no direction to face)");
+            return Ok(Value::Nil);
+        }
+        let heading = (sta_core::Fixed::from_f64(dx / len), sta_core::Fixed::from_f64(dz / len));
+        e.edit("PointAt", sta_sim::command::Edit::Heading(unit.id, heading))?;
+        Ok(Value::Nil)
+    })?)?;
     table.set("Special_Attack", gap_write(lua, env, "Special_Attack", &["hvs", "hhs", "hs"], "special weapons are named; the order takes a slot index")?)?;
     table.set("SetSpecialWeaponAttackInterval", gap_write(lua, env, "SetSpecialWeaponAttackInterval", &["if"], "no special-weapon interval seam in the sim")?)?;
     // AI team orders.

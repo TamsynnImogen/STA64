@@ -187,7 +187,25 @@ pub enum Edit {
     /// exceed). Rejected for a seat with no initialized stock. SCRIPT/BENCH
     /// only. Appended tag 27.
     TeamCrew(PlayerId, Fixed),
+    /// Mission `SetPosition` / Roots `Entity.position =` (SIM-57): move a live
+    /// unit to this point at once, then run the map-confinement update the
+    /// ordinary position path runs. Rejected for a unit that is dying.
+    /// SCRIPT/BENCH only. Appended tag 28.
+    Position(EntityId, Vec3),
+    /// Mission `PointAt` / Roots `Entity.forward =` (SIM-57): face this
+    /// direction at once (x, z of a horizontal direction; the sim normalises
+    /// it; a zero direction is rejected). SCRIPT/BENCH only. Appended tag 29.
+    Heading(EntityId, (Fixed, Fixed)),
+    /// Mission `SetAngularVelocity` / Roots `Entity.omega =` (SIM-57): the
+    /// unit's current turn rate about the vertical axis, radians per second,
+    /// positive from +X toward +Z, clamped to +-[`MAX_SCRIPT_OMEGA`]. The
+    /// steering model then acts on it as on any turn rate. SCRIPT/BENCH only.
+    /// Appended tag 30.
+    AngularVelocity(EntityId, Fixed),
 }
+
+/// The largest turn rate (radians per second) a script may set.
+pub const MAX_SCRIPT_OMEGA: i32 = 100;
 
 /// A unit system a mission can switch on or off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -329,6 +347,21 @@ mod tests {
             (25, Edit::MaxOfficers(PlayerId(0), Fixed::ONE)),
             (26, Edit::UnitCrew(id, Fixed::ONE)),
             (27, Edit::TeamCrew(PlayerId(0), Fixed::ONE)),
+        ];
+        for (tag, edit) in edits {
+            let bytes = postcard::to_allocvec(&edit).unwrap();
+            assert_eq!(bytes[0], tag, "{edit:?}");
+            assert_eq!(postcard::from_bytes::<Edit>(&bytes).unwrap(), edit);
+        }
+    }
+
+    #[test]
+    fn placement_and_facing_edits_append_tags_28_to_30() {
+        let id = EntityId(1);
+        let edits = [
+            (28, Edit::Position(id, Vec3::from_f32([1.0, 2.0, -3.0]))),
+            (29, Edit::Heading(id, (Fixed::ONE, Fixed::ZERO))),
+            (30, Edit::AngularVelocity(id, Fixed::ONE)),
         ];
         for (tag, edit) in edits {
             let bytes = postcard::to_allocvec(&edit).unwrap();
