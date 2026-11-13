@@ -6,16 +6,20 @@
 //! - `Presentation::Cineractive { on, .. }`: on takes the camera from the player
 //!   (the map's own input systems still run, but their result is replaced every
 //!   frame by the shot's pose) and remembers where it was; off gives it back there;
-//! - `Presentation::Shot { from, at, seconds }` (A2 `Cineractive.lookFrom` / `lookAt`,
-//!   A1 `CineractiveShot`): the camera looks from `from` at `at`. `seconds` 0 puts it
+//! - `Presentation::Shot { from, at, seconds }` (A2 `Cineractive.lookFrom` / `lookAt`;
+//!   A1's `CineractiveShot` arrives as a `Call` and is listed below): the camera looks from `from` at `at`. `seconds` 0 puts it
 //!   there on the tick the request applies; more glides to it over that many seconds
 //!   of real time (the glide is display only: the pose it ends in is the request's);
-//! - `Call { name: "A2.CenterCamera" | "A1.CenterCamera", .. }` with an entity: the
-//!   camera's focus moves to the entity, distance and angles kept (the call's name
-//!   says what it does; it is not a shot and leaves the player in control).
+//! - `Call { name: "A2.CenterCamera", [Entity] }`: the camera's focus moves to the
+//!   entity, distance and angles kept (it is not a shot and leaves the player in
+//!   control). A1's `CenterCamera` takes a path name and point index, not an entity,
+//!   and is listed below. An entity's place is read when the request is read, not
+//!   followed afterwards.
 //!
 //! A pose is the map camera's own `Orbit` (focus, yaw, pitch, distance), which any
-//! "look from here at there" is exactly; nothing here moves the camera any other way.
+//! "look from here at there" is, up to `Orbit`'s pitch limit (a near-vertical shot is
+//! clamped); nothing here moves the camera any other way. A skip of the cineractive
+//! (`ScriptReply::CineractiveSkipped`) gives the camera back too.
 //!
 //! **Not consumed, and listed once in [`Unhandled`]**: `CameraOffset` and the calls
 //! `SetCameraZoom`, `CineractiveConstantSpeed`, `CineractiveCameraOffset` and
@@ -34,7 +38,7 @@ use sta_sim::SimEvent;
 use sta_sim::present::{Arg, Presentation, Spot};
 
 use crate::sim_link::{SimLink, SimMsg};
-use crate::ui::presentation::Unhandled;
+use crate::ui::presentation::{ScriptReply, Unhandled};
 use crate::viewer::Orbit;
 
 /// Map paths by name: points in Bevy space (the host fills it from the map).
@@ -114,7 +118,17 @@ fn consume(
     mut cam: ResMut<CinematicCamera>,
     mut unhandled: ResMut<Unhandled>,
     mut orbit: Query<&mut Orbit>,
+    mut replies: MessageReader<ScriptReply>,
 ) {
+    // The player skipped the cineractive: the camera is theirs again.
+    if replies.read().any(|r| *r == ScriptReply::CineractiveSkipped) && cam.locked {
+        cam.locked = false;
+        cam.target = None;
+        cam.glide = None;
+        if let (Some(saved), Some(mut o)) = (cam.saved.take(), orbit.iter_mut().next()) {
+            (o.focus, o.yaw, o.pitch, o.dist) = (saved.focus, saved.yaw, saved.pitch, saved.dist);
+        }
+    }
     for SimMsg(e) in events.read() {
         let SimEvent::Present(p) = e else { continue };
         let current = orbit.iter().next().map(|o| of(&o));
@@ -147,10 +161,10 @@ fn consume(
                     cam.locked = true;
                     cam.saved = current;
                 }
-                cam.glide = (secs > 0.0).then(|| (cam.target.or(current).unwrap_or(pose), secs, secs));
+                cam.glide = (secs > 0.0).then(|| (current.or(cam.target).unwrap_or(pose), secs, secs));
                 cam.target = Some(pose);
             }
-            Presentation::Call { name, args } if name == "A2.CenterCamera" || name == "A1.CenterCamera" => {
+            Presentation::Call { name, args } if name == "A2.CenterCamera" => {
                 let entity = args.iter().find_map(|a| if let Arg::Entity(id) = a { Some(*id) } else { None });
                 match (entity.and_then(|id| spot(&Spot::Entity(id), link.as_deref(), &paths)), orbit.iter_mut().next()) {
                     (Some(at), Some(mut o)) => o.focus = at,
@@ -206,7 +220,10 @@ impl Plugin for CinematicCameraPlugin {
         app.init_resource::<CinematicCamera>()
             .init_resource::<ScenePaths>()
             .init_resource::<Unhandled>()
-            .add_systems(Update, (consume, hold).chain().after(crate::app::GameSet::SimLink).before(crate::app::GameSet::Render));
+            .add_message::<ScriptReply>()
+            // After the map's pan and orbit systems, so the shot, not the player's input
+            // of this frame, is what is drawn.
+            .add_systems(Update, (consume, hold.after(crate::viewer::orbit_camera)).chain().after(crate::app::GameSet::SimLink).before(crate::app::GameSet::Render));
     }
 }
 
@@ -251,19 +268,32 @@ mod tests {
         let mut app = app();
         let before = orbit(&mut app);
         send(&mut app, Presentation::Cineractive { on: true, skippable: false });
-        let (from, at) = (sv(100, 20, 0), sta_core::Vec3::ZERO);
+        let (from, at) = (sv(100, 20, 30), sta_core::Vec3::ZERO);
         send(&mut app, Presentation::Shot { from: Spot::Position(from), at: Spot::Position(at), seconds: Fixed::ZERO });
         let during = orbit(&mut app);
         assert_ne!(during, before);
         let tf = *app.world_mut().query::<&Transform>().single(app.world()).unwrap();
-        // x is kept, z mirrored: the shot looks from +x, and the camera sits there.
-        assert!(tf.translation.distance(Vec3::new(100.0, 20.0, 0.0)) < 1e-2, "{:?}", tf.translation);
+        // x is kept, z mirrored (sim z 30 is Bevy -30).
+        assert!(tf.translation.distance(Vec3::new(100.0, 20.0, -30.0)) < 1e-2, "{:?}", tf.translation);
         // The player's input cannot move it while locked.
         app.world_mut().query::<&mut Orbit>().single_mut(app.world_mut()).unwrap().dist = 5.0;
         app.update();
         assert_eq!(orbit(&mut app), during);
         send(&mut app, Presentation::Cineractive { on: false, skippable: false });
         assert_eq!(orbit(&mut app), before);
+    }
+
+    #[test]
+    fn skipping_the_cineractive_gives_the_camera_back() {
+        let mut app = app();
+        let before = orbit(&mut app);
+        send(&mut app, Presentation::Cineractive { on: true, skippable: true });
+        send(&mut app, Presentation::Shot { from: Spot::Position(sv(5, 5, 5)), at: Spot::Position(sta_core::Vec3::ZERO), seconds: Fixed::ZERO });
+        assert_ne!(orbit(&mut app), before);
+        app.world_mut().write_message(ScriptReply::CineractiveSkipped);
+        app.update();
+        assert_eq!(orbit(&mut app), before);
+        assert!(!app.world().resource::<CinematicCamera>().locked);
     }
 
     #[test]

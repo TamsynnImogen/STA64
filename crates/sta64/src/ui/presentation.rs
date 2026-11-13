@@ -170,8 +170,7 @@ impl FadeState {
             self.alpha = self.target;
             self.rate = 0.0;
         } else {
-            // A fade in starts from the colour; a fade out from the picture.
-            self.alpha = if out { self.alpha.min(0.0) } else { 1.0f32.min(self.alpha.max(1.0)) };
+            // Runs on from the alpha it is at, so a fade never flashes the other way first.
             self.rate = 1.0 / seconds;
         }
     }
@@ -322,7 +321,9 @@ fn run_clock(time: Res<Time<Real>>, mut titles: ResMut<Titles>, mut fade: ResMut
     if !titles.items.is_empty() {
         titles.tick(dt);
     }
-    fade.tick(dt);
+    if fade.rate > 0.0 {
+        fade.tick(dt);
+    }
 }
 
 fn movie_replies(mut requested: MessageReader<Requested>, mut finished: MessageReader<MovieFinished>, mut pending: ResMut<PendingMovies>, mut out: MessageWriter<ScriptReply>) {
