@@ -233,3 +233,50 @@ fn the_context_follows_the_app_state() {
     assert_eq!(ctx, UiContext::Hud);
     assert_eq!(sounds.name(UiSound::Click, ctx), sounds.hud_click);
 }
+
+/// Mod switches (campaign mount, campaign-less mount, and back) never leave a system without a
+/// resource it reads every frame: the media tracker reads the movie catalogue unconditionally,
+/// and remounting to a campaign-less mod (Fleet Ops 4.0) used to remove it.
+#[test]
+fn remounting_between_campaign_and_campaign_less_content_keeps_the_resources_systems_read() {
+    use crate::frontend::campaign::Campaigns;
+    use crate::media::campaign::{CampaignMoviesPlugin, MissionMovies};
+    use crate::media::mission::Requested;
+    use crate::media::{MovieFinished, StopMovie};
+
+    fn apply(app: &mut App, loaded: Option<(Campaigns, MissionMovies)>) {
+        let mut commands = app.world_mut().commands();
+        apply_campaigns(&mut commands, loaded);
+        app.world_mut().flush();
+        for _ in 0..3 {
+            app.update();
+        }
+    }
+    fn with_campaigns() -> Option<(Campaigns, MissionMovies)> {
+        let cs = crate::frontend::campaign::tests::fixture(false, None);
+        let movies = MissionMovies::from_book_with(&cs.book, |_| None);
+        Some((cs, movies))
+    }
+
+    let mut app = App::new();
+    app.set_error_handler(bevy::ecs::error::panic)
+        .add_plugins(MinimalPlugins)
+        .add_message::<Requested>()
+        .add_message::<MovieFinished>()
+        .add_message::<StopMovie>()
+        .add_plugins(CampaignMoviesPlugin);
+    configure_sets(&mut app);
+    app.update();
+    // Campaigns -> none -> campaigns -> none -> none (a mod with no movies after one with none).
+    apply(&mut app, with_campaigns());
+    assert!(app.world().contains_resource::<Campaigns>());
+    assert!(!app.world().resource::<MissionMovies>().missions.is_empty());
+    apply(&mut app, None);
+    assert!(!app.world().contains_resource::<Campaigns>());
+    assert!(app.world().resource::<MissionMovies>().missions.is_empty(), "the old mod's movies do not survive");
+    apply(&mut app, with_campaigns());
+    assert!(app.world().contains_resource::<Campaigns>());
+    apply(&mut app, None);
+    apply(&mut app, None);
+    assert!(app.world().contains_resource::<MissionMovies>());
+}

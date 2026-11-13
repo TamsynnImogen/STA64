@@ -382,16 +382,7 @@ fn remount(
             commands.insert_resource(MenuSceneSource(d.scene));
             commands.insert_resource(MenuMusic(d.menu_music));
             // The campaigns follow the mount (UI-25 / INT-M6).
-            match super::mission_host::load_campaigns(&vfs, Some(root), folder.as_deref()) {
-                Some((campaigns, movies)) => {
-                    commands.insert_resource(campaigns);
-                    commands.insert_resource(movies);
-                }
-                None => {
-                    commands.remove_resource::<crate::frontend::campaign::Campaigns>();
-                    commands.remove_resource::<crate::media::campaign::MissionMovies>();
-                }
-            }
+            apply_campaigns(&mut commands, super::mission_host::load_campaigns(&vfs, Some(root), folder.as_deref()));
         }
         Err(e) => {
             notices.write(Notice::new(Severity::Bad, format!("Cannot load content: {e}")));
@@ -399,6 +390,22 @@ fn remount(
         }
     }
     mounted.0 = vfs;
+}
+
+/// Make the campaign resources match the mount: the book when the install has campaigns, none
+/// when it has not. The movie catalogue always exists (empty without campaigns): the media
+/// tracker reads it every frame, so removing it on a remount to a campaign-less mod panicked.
+pub(crate) fn apply_campaigns(commands: &mut Commands, loaded: Option<(crate::frontend::campaign::Campaigns, crate::media::campaign::MissionMovies)>) {
+    match loaded {
+        Some((campaigns, movies)) => {
+            commands.insert_resource(campaigns);
+            commands.insert_resource(movies);
+        }
+        None => {
+            commands.remove_resource::<crate::frontend::campaign::Campaigns>();
+            commands.insert_resource(crate::media::campaign::MissionMovies::default());
+        }
+    }
 }
 
 /// The maps of `data` as the map view's browser lists them.
