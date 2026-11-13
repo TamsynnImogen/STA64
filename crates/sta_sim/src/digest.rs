@@ -8,7 +8,7 @@
 //! |---|---|
 //! | `roster` | tick, content hash, seats and teams, who exists (id, kind, definition, owner), labels, perceived owners, eliminations, pending start-effect rows |
 //! | `movement` | position, heading, speed, turn rate, target and movement stats of every entity; queued waypoints and formations; map confinement |
-//! | `combat` | hull, shields, status flags, unit crew; weapon mounts, shots and attack orders; point defence; special energy and cloaks; craft autonomy levels |
+//! | `combat` | hull, shields, status flags, unit crew; weapon mounts, shots and attack orders; point defence; special energy and cloaks; craft autonomy levels; subsystem switches and damage |
 //! | `economy` | stock, nodes, freighters, personnel; yard queues, rig deploys and rallies; build progress |
 //! | `rng` | the sim generator |
 //!
@@ -67,7 +67,7 @@ fn _every_sim_field_is_decided(s: &Sim) {
     let Sim {
         tick: _, rng: _, units: _, labels: _, players: _, ai_seats: _, content: _, starts: _, regions: _,
         bounds: _, confinement: _, perception: _, events: _, weapons: _, movement: _, economy: _,
-        production: _, victory: _, specials: _, autonomy: _, start_effects: _, nav: _,
+        production: _, victory: _, specials: _, autonomy: _, start_effects: _, nav: _, subsystems: _, team_changes: _,
     } = s;
 }
 
@@ -189,6 +189,9 @@ impl Sim {
         // SIM-38: autonomy decides assists and targets of opportunity.
         if !self.autonomy.is_empty() {
             self.autonomy.hash_into(&mut h);
+        }
+        if !self.subsystems.is_empty() {
+            self.subsystems.hash_into(&mut h);
         }
         h.0
     }
@@ -314,6 +317,13 @@ impl Sim {
                 if !self.specials.is_empty() {
                     row(None, "specials and cloaks (hash)", block("specials", &|h| self.specials.hash_into(h)));
                 }
+                if !self.autonomy.is_empty() {
+                    row(None, "autonomy levels (hash)", block("autonomy", &|h| self.autonomy.hash_into(h)));
+                }
+                // SIM-55: itemised, one row per unit with a switched-off or damaged system.
+                for (id, r) in self.subsystems.to_rows() {
+                    row(Some(id), "subsystems (off bits, damage)", format!("{:#04x}, {:?}", r.off, r.damage.map(|d| fx(Fixed::from_bits(d)))));
+                }
             }
             "economy" => {
                 for e in self.units.iter() {
@@ -400,6 +410,7 @@ mod tests {
             ("shields", Box::new(|s| s.units.iter_mut().next().unwrap().shields.max = Fixed::from_int(5)), "combat"),
             ("flags", Box::new(|s| s.units.iter_mut().next().unwrap().flags = crate::view::UnitFlags::default()), "combat"),
             ("crew", Box::new(|s| s.units.iter_mut().next().unwrap().crew = Some([Fixed::ONE; 2])), "combat"),
+            ("subsystems", Box::new(|s| { let id = s.units.iter().next().unwrap().id; s.subsystems.set_off_for_test(id); }), "combat"),
             ("owner", Box::new(|s| s.units.iter_mut().next().unwrap().owner = PlayerId(1)), "roster"),
             ("label", Box::new(|s| { let id = s.units.iter().next().unwrap().id; s.labels.insert(id, "x".into()); }), "roster"),
             ("progress", Box::new(|s| s.units.iter_mut().next().unwrap().progress = Some(Fixed::from_int(1))), "economy"),

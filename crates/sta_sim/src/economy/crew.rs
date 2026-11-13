@@ -17,11 +17,11 @@
 //!   the exact cap is not measured.
 //! - Not implemented, with the reason: planets' own `crewAccumulationRate` (Classic
 //!   Enhanced planets carry the key; not measured); `planetCrewAccumulationModifier`
-//!   (what counts as "close to a planet" is not measured); per-unit crew loss
-//!   from hits (`hullCrewModifier`, `shieldCrewModifier`, `saneCrewLossMethod`:
-//!   the law measured on the original is not a single formula); per-unit crew
-//!   recovery (measured: none without a repair ship or yard, and the sim has
-//!   no repair yet); `crewRetreatRatio`, `BASE_CREW_PER_SEC`.
+//!   (what counts as "close to a planet" is not measured); `crewRetreatRatio`,
+//!   `BASE_CREW_PER_SEC`. Per-unit crew: loss from shield hits is
+//!   `combat/damage.rs` (SIM-39); hull-hit loss, system-loss drains and
+//!   boarding are not implemented (not measured), recovery needs a repair
+//!   ship or yard (`recrewRate`, SIM-41/SIM-40: none without one, measured).
 
 use sta_content::ContentDb;
 use sta_core::{Fixed, PlayerId, TICK_HZ};

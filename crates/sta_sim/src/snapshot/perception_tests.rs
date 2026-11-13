@@ -22,6 +22,8 @@ fn split(bytes: &[u8]) -> (Body, Option<(Vec3, Vec3)>, BoundaryRec, PerceptionRe
     assert!(effects.rows.is_empty());
     let (autonomy, rest): (crate::autonomy::AutonomyWire, _) = postcard::take_from_bytes(rest).unwrap();
     assert!(autonomy.rows.is_empty());
+    let (subsystems, rest): (SubsystemsRec, _) = postcard::take_from_bytes(rest).unwrap();
+    assert!(subsystems.rows.is_empty());
     assert!(rest.is_empty());
     (body, bounds, boundary, perception)
 }
@@ -43,6 +45,7 @@ fn join(
     out.extend(postcard::to_allocvec(&UnitCrewRec { version: 1, rows: Vec::new() }).unwrap());
     out.extend(postcard::to_allocvec(&StartEffectsRec { version: 1, rows: Vec::new() }).unwrap());
     out.extend(postcard::to_allocvec(&crate::autonomy::AutonomyWire { version: 1, rows: Vec::new() }).unwrap());
+    out.extend(postcard::to_allocvec(&SubsystemsRec { version: 1, rows: Vec::new() }).unwrap());
     out
 }
 

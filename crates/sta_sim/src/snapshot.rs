@@ -39,10 +39,11 @@ use crate::world::{Entities, Entity, EntityKind, Shields, Table};
 use crate::{Rng, Sim, SimEvent};
 
 pub const MAGIC: [u8; 4] = *b"STAS";
-/// Format 16 (SIM-38) appends craft autonomy after the start-helper rows.
-/// Format 15 (CON-35) added the [`Provenance`] record and the keyed content
-/// digest's hash. Only the current format is read.
-pub const FORMAT_VERSION: u16 = 16;
+/// Format 16 (SIM-38) appended craft autonomy after the start-helper rows; 15
+/// (CON-35) added the [`Provenance`] record and the keyed content digest's
+/// hash. Format 17 appends the mission-set subsystem switches and damage
+/// (SIM-55) last. Only the current format is read.
+pub const FORMAT_VERSION: u16 = 17;
 
 const HEADER: usize = 4 + 2 + 4 + 8;
 
@@ -229,6 +230,13 @@ struct StartEffectsRec {
     rows: crate::start_effects::Rows,
 }
 
+/// Mandatory suffix since v17: switched-off and damaged subsystems (SIM-55).
+#[derive(Serialize, Deserialize)]
+struct SubsystemsRec {
+    version: u8,
+    rows: Vec<(EntityId, crate::combat::damage::SubsystemRow)>,
+}
+
 fn kind_from(b: u8) -> Option<EntityKind> {
     Some(match b {
         0 => EntityKind::Craft,
@@ -377,6 +385,7 @@ impl Sim {
         }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&StartEffectsRec { version: 1, rows: self.start_effects.to_rec() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&crate::autonomy::AutonomyWire { version: 1, rows: self.autonomy.to_rec() }).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&SubsystemsRec { version: 1, rows: self.subsystems.to_rows() }).expect("snapshot serialises"));
         out
     }
 
@@ -415,6 +424,9 @@ impl Sim {
         let (record, rest): (crate::autonomy::AutonomyWire, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         if record.version != 1 { return Err(SnapshotError::Corrupt("unknown autonomy record version".into())); }
         let autonomy_rows = record.rows;
+        let (record, rest): (SubsystemsRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        if record.version != 1 { return Err(SnapshotError::Corrupt("unknown subsystems record version".into())); }
+        let subsystem_rows = record.rows;
         if !rest.is_empty() { return Err(SnapshotError::Corrupt("trailing bytes".into())); }
         if let Some(row) = b.economy.miners.iter().find(|row| row.5 > 4) {
             return Err(SnapshotError::Corrupt(format!("mining phase {} is not supported", row.5)));
@@ -481,6 +493,18 @@ impl Sim {
         let specials = crate::specials::Specials::from_rec(b.specials).ok_or_else(|| corrupt("specials"))?;
         let start_effects = crate::start_effects::StartEffects::from_rec(effect_rows, |id| units.contains(id))
             .ok_or_else(|| corrupt("start effect rows"))?;
+        let subsystems = crate::combat::damage::Subsystems::from_rows(subsystem_rows).ok_or_else(|| SnapshotError::Corrupt("invalid subsystem rows".into()))?;
+        if subsystems.to_rows().iter().any(|(id, _)| !units.get(*id).is_some_and(|u| matches!(u.kind, EntityKind::Craft | EntityKind::Station))) {
+            return Err(SnapshotError::Corrupt("subsystem entity is not a craft or station".into()));
+        }
+        if let Some(db) = content.as_deref() {
+            for (id, row) in subsystems.to_rows() {
+                let hp = units.get(id).and_then(|u| db.unit(u.def)).map(|d| d.system_hit_points);
+                if hp.is_some_and(|hp| row.damage.iter().zip(hp).any(|(d, hp)| *d > hp.to_bits())) {
+                    return Err(SnapshotError::Corrupt("subsystem damage above hit points".into()));
+                }
+            }
+        }
         let mut economy = crate::economy::Economy::from_rec(&b.economy);
         economy.restore_personnel(personnel_rows, &b.players).map_err(|why| SnapshotError::Corrupt(why.into()))?;
         Ok(Sim {
@@ -506,9 +530,19 @@ impl Sim {
             autonomy,
             start_effects,
             nav: Default::default(),
+            subsystems,
+            team_changes: Vec::new(),
         })
     }
 }
+
+#[cfg(test)]
+#[path = "snapshot/subsystem_tests.rs"]
+mod subsystem_tests;
+
+#[cfg(test)]
+#[path = "snapshot/chain.rs"]
+mod chain;
 
 #[cfg(test)]
 #[path = "snapshot/confinement_tests.rs"]

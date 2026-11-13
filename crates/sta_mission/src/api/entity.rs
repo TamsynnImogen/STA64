@@ -114,22 +114,47 @@ impl UserData for Entity {
         f.add_field_method_get("race", |_, e| {
             Ok(e.with(|c, u| u.and_then(|u| c.def(u)).map(|d| d.race.clone()).unwrap_or_default()))
         });
-        // Mutable race and crew are not sim state (SetRace and SetCrew need a
-        // sim edit); the assignment is accepted and recorded as unsupported so
+        // Mutable race is not sim state (SetRace needs a sim edit); the assignment is accepted and recorded as unsupported so
         // the rest of the callback still runs.
         f.add_field_method_set("race", |_, e, _: Value| {
             e.ctx.borrow_mut().unsupported("Entity.race = x (needs a sim SetRace edit)");
             Ok(())
         });
-        f.add_field_method_set("crew", |_, e, _: Value| {
-            e.ctx.borrow_mut().unsupported("Entity.crew = x (needs a sim mutable-crew edit)");
+        // SIM-54: current crew, clamped by the sim to 0..the maximum crew.
+        f.add_field_method_set("crew", |_, e, value: Value| {
+            let mut c = e.ctx.borrow_mut();
+            let to = match value {
+                Value::Number(n) => n,
+                Value::Integer(n) => n as f64,
+                _ => {
+                    c.unsupported("Entity.crew = non-number");
+                    return Ok(());
+                }
+            };
+            if !to.is_finite() {
+                c.unsupported("Entity.crew = non-finite number");
+                return Ok(());
+            }
+            match e.key.id() {
+                Some(id) => super::edit_feedback::queue(&mut c, "Entity.crew", Edit::UnitCrew(id, sta_core::Fixed::from_f64(to)))?,
+                None => c.unsupported("entity.crew: pending or failed spawn"),
+            }
+            Ok(())
+        });
+        // `Entity.shields = 1.0`: a fraction of the maximum (SIM-55).
+        f.add_field_method_set("shields", |_, e, to: f64| {
+            if !to.is_finite() { return Err(mlua::Error::runtime("Entity.shields requires a finite number")); }
+            let mut c = e.ctx.borrow_mut();
+            match e.key.id() {
+                Some(id) => super::edit_feedback::queue(&mut c, "Entity.shields", Edit::ShieldPercent(id, sta_core::Fixed::from_f64(to)))?,
+                None => c.unsupported("entity.shields: pending or failed spawn"),
+            }
             Ok(())
         });
         // Other installed-mission assignments with no sim edit behind them yet
-        // (shield percent, autonomy, facing, angular velocity): accepted and
+        // (autonomy, facing, angular velocity): accepted and
         // recorded so the callback keeps running; the report names each.
         for (name, need) in [
-            ("shields", "a sim shield edit (SetShieldPercent)"),
             ("movementAutonomy", "a sim autonomy edit"),
             ("forward", "a sim heading edit"),
             ("omega", "a sim angular-velocity edit"),

@@ -511,6 +511,11 @@ impl Weapons {
         any
     }
 
+    /// Is the point-defence weapon at hardpoint `i` of `id` switched on (SIM-29)?
+    pub(crate) fn pd_is_on(&self, id: EntityId, i: usize) -> bool {
+        self.pd.is_on(id, i)
+    }
+
     /// Drop the attack orders of the listed units that `player` may order.
     pub(crate) fn stop_attack(&mut self, units: &Entities, player: PlayerId, ids: &[EntityId]) {
         for &id in ids {

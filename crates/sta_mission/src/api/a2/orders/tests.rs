@@ -287,7 +287,6 @@ fn calls_with_no_seam_validate_then_raise_and_are_counted() {
         ("A2.SetCommandMoveAutonomyLow(a)", "A2.SetCommandMoveAutonomyLow"),
         ("A2.PointAt(a, 'P')", "A2.PointAt"),
         ("A2.PointAt(a, b)", "A2.PointAt"),
-        ("A2.SetCrew(a, 0.0)", "A2.SetCrew"),
         ("A2.SetRace(a, 'borg')", "A2.SetRace"),
         ("A2.CraftCanRepair(a, true)", "A2.CraftCanRepair"),
         ("A2.GetMainEnemyBaseLocation(1)", "A2.GetMainEnemyBaseLocation"),
