@@ -6,11 +6,13 @@
 //! from data, **N** not measured. The Armada II routines are the same code in
 //! every Armada II family executable (S), and `FleetOpsHook.dll` (FO 3.2.7,
 //! Roots, FO 4.0, Classic inside Roots) patches nothing on this path (S), so
-//! the profiles differ only by the data keys read here: FO and Roots data set
-//! `shieldCrewModifier`, `hullCrewModifier` and `damageThreshold` to 0 and
-//! `SHIELD_DAMAGE_PROTECTION` to 1, so the shield and hull laws do nothing
-//! there (D), while system-death crew loss and the life-support drain still
-//! act. Not run: that Classic inside Roots hits like stock (N). Armada I's
+//! the profiles differ only by the data keys read here: FO and Roots data
+//! carry no `shieldProtection` and set `SHIELD_DAMAGE_PROTECTION` to 1, so no
+//! damage bleeds through the shields and the shield crew law never fires (D);
+//! `hullCrewModifier` is 0 on almost all their ordnance, but a crew-location
+//! roll still kills `min(H, 1)` crew, and system hit points, system-death crew
+//! loss, `damageVariance` and the life-support drain act as in every profile.
+//! Not run: that Classic inside Roots hits like stock (N). Armada I's
 //! executable was not analysed (N), its profile is off.
 //!
 //! One hit, in the order the engine does it (S, with M where noted):

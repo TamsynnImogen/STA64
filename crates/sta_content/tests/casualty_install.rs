@@ -102,6 +102,13 @@ fn every_installed_profile_loads_the_casualty_keys() {
             c.units, c.sane, c.protection, c.crew_hit, c.hull_hit, c.sys_hit, c.sys_loss, c.ls_loss, c.recrew, c.variance, c.modifiers, c.thresholds, c.hull_mod, c.shield_mod, c.shield_law, c.hull_law, c.cfg_protection, c.facing,
         );
         assert!(c.units > 0, "{label}");
+        let want = match label {
+            "A1" => "Sta1Classic",
+            "A2" => "Sta2Classic",
+            "FO 3.2.7" | "DW" => "Fo3",
+            _ => "Fo4",
+        };
+        assert_eq!(profile, want, "{label}: detected profile");
         match label {
             "A1" => assert!(c.sane == 0 && c.crew_hit == 0, "A1 has neither saneCrewLossMethod nor crewHitPercent"),
             "A2" | "Classic" => {
@@ -122,7 +129,7 @@ fn every_installed_profile_loads_the_casualty_keys() {
                 // The hull-location law has a few damaging ordnance with a modifier
                 // (found 2026-11-13: `fed_magnana`, `kli_overload` in FO 3.2.7 / 4.0, plus
                 // `card_ion_storm`, `card_overload`, `gchainp` in Dominion War); any other
-                // would lose crew per hit once shields are down.
+                // would add a percent-of-crew loss to each crew-location hit.
                 let extra: Vec<_> = c.hull_law.iter().filter(|n| !["fed_magnana", "kli_overload", "card_ion_storm", "card_overload", "gchainp"].contains(&n.as_str())).collect();
                 assert!(extra.is_empty(), "{label}: ordnance with a hull crew modifier: {extra:?}");
                 assert_eq!(c.crew_per_sec, sta_core::Fixed::from_int(20), "{label}");

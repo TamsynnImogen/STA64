@@ -21,7 +21,7 @@
 //!   the yard refill (`CfgRules::yard_crew_per_sec`, `BASE_CREW_PER_SEC`, default 20). Per-unit crew: loss from hits, system deaths, the
 //!   life-support drain and the derelict latch is `combat/casualty.rs`
 //!   (SIM-39); boarding losses are not implemented (SIM-46), and recovery
-//!   (station RECREW at `recrewRate`, yard recrew 20 per second from the team
+//!   (station RECREW at `recrewRate`, yard recrew at `yard_crew_per_sec` from the team
 //!   pool) is not either; a ship does not regain crew by itself (measured).
 
 use sta_content::ContentDb;

@@ -93,7 +93,7 @@ pub struct Features {
     /// life-support drain and the derelict latch. Off: a hit is shields, then
     /// hull. On in every Armada II family profile (Sta2Classic, Fo3, Fo4) (the stock routines run
     /// under `FleetOpsHook.dll` too, read from the executable, static; the
-    /// profiles differ only by data keys); off for Native (it has no original to match) and for A1, whose
+    /// profiles differ only by data keys); off for Native (turning it on would re-pin every golden digest) and for A1, whose
     /// executable was not analysed.
     pub crew_loss_on_hit: bool,
     /// An attack approach stops `0.2 W + 5` inside weapon range, or 80 from

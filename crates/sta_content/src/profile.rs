@@ -131,7 +131,8 @@ impl Profile {
     pub fn features(self) -> Features {
         let off = Features::default();
         match self {
-            // Everything STA64 implements, except A1 compatibility.
+            // Most of what STA64 implements (not the stock engine rules, nor
+            // `crew_loss_on_hit`), except A1 compatibility.
             Profile::Native => Features {
                 weapon_damage_controls: true,
                 point_defense_cycles: true,
@@ -169,8 +170,9 @@ impl Profile {
                 weapon_shot_timing: true,
                 start_fire_hold: true,
                 // SIM-39: stock casualty code; the hook never replaces it
-                // (read from the executable, static). Roots data zeroes the
-                // shield and hull crew modifiers, so those laws do nothing.
+                // (read from the executable, static). Roots data has no shield
+                // bleed-through, so the shield law never fires; the location
+                // roll, system hit points and damage variance now apply.
                 crew_loss_on_hit: true,
                 // SIM-36: the Roots engine (also running STA2 Classic, CON-43).
                 attack_buffer_roots: true,
@@ -772,7 +774,7 @@ mod tests {
     fn defaults_table_native() {
         let f = Profile::Native.features();
         assert_eq!(on(&f).len(), 21);
-        // Left off: it would move every golden digest; Native has no original to match.
+        // Left off: it would re-pin every golden digest.
         assert!(!f.crew_loss_on_hit);
         assert!(!f.a1_compat && f.pay_on_queue && f.cheats);
     }
