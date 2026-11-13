@@ -299,6 +299,7 @@ impl Sim {
             Edit::MaxShieldsKeep(id, v) => self.edit_max_shields_keep(id, v),
             Edit::UnitRace(id, ref race) => self.edit_unit_race(id, race),
             Edit::PlayerRace(p, ref race) => self.edit_player_race(p, race),
+            Edit::Reserved44 => false,
             Edit::Position(id, to) => self.edit_position(id, to),
             Edit::Heading(id, dir) => self.edit_heading(id, dir),
             Edit::AngularVelocity(id, omega) => self.edit_angular_velocity(id, omega),

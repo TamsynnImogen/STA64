@@ -290,6 +290,12 @@ pub enum Edit {
     /// The sim keeps and shows it; no rule reads it yet. SCRIPT/BENCH only.
     /// Appended tag 43.
     PlayerRace(PlayerId, String),
+    /// Tag 44 is #659's (SIM-54 crew and officer stock edit), which merges first.
+    /// This placeholder keeps the positional tags of this branch aligned with
+    /// main after that merge; replace it with #659's variant when it lands.
+    /// Always rejected.
+    #[doc(hidden)]
+    Reserved44,
     /// Mission `SetRelation(a, b, r)` / Roots `Player:setRelation` (SIM-63):
     /// seat `from`'s own view of seat `to` becomes `relation` (directional:
     /// the reverse view is untouched). Both must be configured, distinct
@@ -298,7 +304,7 @@ pub enum Edit {
     /// default (same team Ally, other team Enemy) removes the override. Wire
     /// bounds: seats are bytes and `Relation` has three variants (Ally,
     /// Neutral, Enemy); a variant index above 2 fails to decode. SCRIPT/BENCH
-    /// only. Appended tag 44.
+    /// only. Appended tag 45.
     SetRelation { from: PlayerId, to: PlayerId, relation: crate::view::Relation },
 }
 
@@ -469,14 +475,14 @@ mod tests {
     }
 
     #[test]
-    fn set_relation_appends_tag_44_and_bounds_the_relation() {
+    fn set_relation_appends_tag_45_and_bounds_the_relation() {
         let e = Edit::SetRelation { from: PlayerId(1), to: PlayerId(2), relation: crate::view::Relation::Ally };
         let bytes = postcard::to_allocvec(&e).unwrap();
-        assert_eq!(bytes, [44, 1, 2, 0]);
+        assert_eq!(bytes, [45, 1, 2, 0]);
         assert_eq!(postcard::from_bytes::<Edit>(&bytes).unwrap(), e);
         // Neutral and Enemy are 1 and 2; nothing above decodes.
-        assert!(postcard::from_bytes::<Edit>(&[44, 1, 2, 3]).is_err());
-        assert!(postcard::from_bytes::<Edit>(&[44, 1, 2]).is_err());
+        assert!(postcard::from_bytes::<Edit>(&[45, 1, 2, 3]).is_err());
+        assert!(postcard::from_bytes::<Edit>(&[45, 1, 2]).is_err());
     }
 
     #[test]
