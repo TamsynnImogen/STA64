@@ -382,10 +382,79 @@ fn install_skirmish_freighter_mines_a_moon() {
         }).collect();
         println!("{kind}: moon {moon_id:?} at {:?} start {at:?} end {f:?} rejected {rejected} delivered {delivered} regions {inside:?}", moon_pos);
         tried.push(kind.clone());
-        if rejected || !delivered {
+        // A freighter next to a hostile base can be shot before it delivers: delivery is only
+        // required of one that is still alive.
+        if rejected || (f.is_some() && !delivered) {
             failed.push(kind);
         }
     }
     assert!(!tried.is_empty(), "the map places resource moons");
     assert!(failed.is_empty(), "no mining of {failed:?} (tried {tried:?})");
+}
+
+/// With `STA64_TEST_INSTALL` (+ `STA64_TEST_MOD`, `STA64_TEST_MAP`): which unit the real picking
+/// (`unit_under`) returns for rays aimed at the centre of each resource moon of a real map, with
+/// the pickable set the map view gives (a click radius from the model's bounds for mobile,
+/// player-owned and resource units; hidden `hidden = 1` units are not drawn). Strategic icons are
+/// not modelled. Prints one line per moon.
+#[test]
+fn install_map_picks_resource_moons() {
+    use bevy::ecs::system::RunSystemOnce;
+    use bevy::prelude::*;
+    let Ok(root) = std::env::var("STA64_TEST_INSTALL") else { return };
+    let m = std::env::var("STA64_TEST_MOD").unwrap_or_default();
+    let map_name = std::env::var("STA64_TEST_MAP").unwrap_or_else(|_| "Adapt".into());
+    let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(m.as_str()).filter(|m| !m.is_empty())).unwrap();
+    let (index, _) = sta_content::OdfIndex::build(&vfs);
+    let (db, _) = ContentDb::load(&vfs, &index).unwrap();
+    let (races, _) = Races::load(&vfs, &index);
+    let db = Arc::new(db);
+    let bzn = sta_bzn::parse(&vfs.read(&format!("bzn/{map_name}.bzn")).expect("map exists").unwrap()).unwrap();
+    let cfg = SkirmishCfg { seat: 0, opponent: Opponent::Skirmish, race: Some("federation".into()), opponent_race: None };
+    let side = crate::map::build_sim(&bzn, &map_name, &db, &index, &vfs, Some(0), Some((&cfg, &races)));
+    side.skirmish.expect("a skirmish").unwrap_or_else(|e| panic!("{e}"));
+    let view = sta_sim::WorldSource::view(&side.sim);
+    let mut app = App::new();
+    let mut names = std::collections::HashMap::new();
+    let mut pickable = 0;
+    for u in &view.units {
+        let Some(def) = db.unit(u.def) else { continue };
+        names.insert(u.id, format!("{}@{}", def.odf, u.owner.0));
+        if def.raw.i64("hidden").unwrap_or(0) != 0 {
+            continue;
+        }
+        let owned = u.owner != sta_sim::world::NEUTRAL;
+        if !(def.movement.max_speed > sta_sim::Fixed::ZERO || owned || def.resource.is_some()) {
+            continue;
+        }
+        let Some((path, fmt)) = sta_assets::find_model(&vfs, def.model.to_ascii_lowercase().trim_end_matches(".sod")) else { continue };
+        let Ok(model) = sta_assets::load_model(&vfs, &path, fmt) else { continue };
+        let scale = def.raw.f32("ScaleSOD").filter(|s| *s > 0.0).unwrap_or(1.0);
+        let radius = model.bounds().map(|(lo, hi)| (Vec3::from(hi) - Vec3::from(lo)).length() * 0.5).unwrap_or(20.0) * scale;
+        let p = crate::render::units::to_bevy(u.pos.to_f32());
+        app.world_mut().spawn((crate::sim_link::SimEntity(u.id), crate::render::units::SelectRadius(radius.max(5.0)), GlobalTransform::from(Transform::from_translation(p))));
+        pickable += 1;
+    }
+    println!("pickable entities: {pickable}");
+    let mut bad = 0;
+    for u in &view.units {
+        let Some(def) = db.unit(u.def).filter(|d| d.resource.is_some()) else { continue };
+        let centre = crate::render::units::to_bevy(u.pos.to_f32());
+        let mut hits: std::collections::BTreeMap<String, usize> = Default::default();
+        for az in [0.0f32, 90.0, 180.0, 270.0] {
+            for pitch in [35.0f32, 55.0, 75.0, 89.0] {
+                let (a, p) = (az.to_radians(), pitch.to_radians());
+                let dir = Vec3::new(a.cos() * p.cos(), -p.sin(), a.sin() * p.cos());
+                let ray = Ray3d::new(centre - dir * 4000.0, Dir3::new(dir).unwrap());
+                let hit = app.world_mut().run_system_once(move |units: crate::input::select::Targetable| crate::input::select::unit_under(Vec2::ZERO, ray, &units)).unwrap();
+                let name = hit.map(|id| names.get(&id).cloned().unwrap_or_default()).unwrap_or_else(|| "nothing".into());
+                *hits.entry(name).or_default() += 1;
+            }
+        }
+        let own = hits.get(&format!("{}@{}", def.odf, u.owner.0)).copied().unwrap_or(0);
+        bad += usize::from(own < 16);
+        println!("{:?} {}: {hits:?}", u.id, def.odf);
+    }
+    println!("moons not always picked: {bad}");
+    assert_eq!(bad, 0, "a ray at a moon's centre picks the moon");
 }
