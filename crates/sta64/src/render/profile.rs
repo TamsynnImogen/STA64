@@ -82,7 +82,7 @@ pub enum Effect {
 /// on Bevy's own stages).
 pub const REFIT_EFFECTS: &[(Effect, &str, &[&str])] = &[
     (Effect::Materials, "RND-04", &[]),
-    (Effect::Scenery, "RND-05", &["nebula.wesl", "rock.wesl", "planet.wesl"]),
+    (Effect::Scenery, "RND-05", &["nebula.wesl", "nebula_lowres.wesl", "rock.wesl", "planet.wesl"]),
     (Effect::Hulls, "RND-06", &["hulls.wesl"]),
     (Effect::Weapons, "RND-09", &["fx/quad.wesl"]),
     (Effect::Impacts, "RND-10", &["fx/shield.wesl", "fx/fire.wesl"]),
