@@ -538,7 +538,7 @@ a command acts on"):
 - Each run writes `$XDG_DATA_HOME/sta64/bench/results/<run>/` with `latest`
   pointing at it: `index.html`, `report.md`, `results.json`, and per case
   `log.txt`, `bench.log`, `objects.jsonl`, `marks`, `frames/`.
-- CI uploads `report.md` and `results.json`, never frames.
+- CI uploads `report.md`, `results.json` and the `digests` files, never frames.
 
 ## CI
 
@@ -547,7 +547,31 @@ The matrix in `.github/workflows/ci.yml` has no game install, so:
 - **core job**: `cargo test -p sta_bench` runs the parsers (Refit's scene and
   scenario files as fixtures), the command vocabulary, and tier-1 scenes
   built from a synthetic content fixture (our own JSON5 units and glTF
-  meshes, no game data). The golden digests run here on all four platforms.
+  meshes, no game data). The golden digests run here on all four platforms:
+  the `golden-*` scenarios (`bench/scenarios/`, TOOL-06) are an existing
+  scenario's scene and commands plus a last step `Expect digest at tick N is
+  "HEX"`, so a change that moves a digest fails the job on every target (replace
+  the value on purpose and say why in the PR). After the tests the job runs
+  `sta-bench check --out bench-report` and uploads `report.md`, `results.json`
+  and the per-tick `digests` files as `bench-report-<os>`, to compare a drifting
+  platform with `sta-bench diff`; never frames.
+- **Re-pinning a golden** (a PR that changes sim output, or fake content, will
+  see `golden-*` scenarios fail with `digest at tick N is NEW, wanted OLD`):
+  1. Run `cargo run -p sta_bench --bin sta-bench -- run golden-planet golden-firing
+     ...` (all `golden-*`, `sta-bench list` names them) on your branch merged
+     with current `origin/main`. Only the goldens whose digest moved need work.
+  2. For each, work out which change of *yours* moves it (a content field, a
+     rule, a system order). If you cannot attribute it, it is a bug or a
+     determinism problem: do not re-pin.
+  3. Replace the value in `bench/scenarios/golden-<name>.md` (the failing step
+     prints the new one). Keep goldens on fixed ticks (`Run N ticks`, `Run until
+     tick N`), not `Wait until`, whose end tick moves with behaviour.
+  4. The PR body names every re-pinned golden, the old and new digest, and the
+     one-line reason (e.g. "golden-mining: miners now pay the unload fee").
+     A PR that moves none says so. Goldens are of STA64's own output on the
+     fake content; never pin anything derived from an install.
+  5. Merge `origin/main` again before asking for review: another PR may have
+     moved the same golden, and the later one re-pins on top.
 - **game job**: after the build, `sta64 --sim-only --scene
   bench/scenes/synthetic.ini --ticks 300` checks the scene path end to end.
 - Scenarios that need the install run locally and skip when
