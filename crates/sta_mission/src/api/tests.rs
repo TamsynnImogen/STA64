@@ -777,9 +777,25 @@ fn a_handle_that_never_existed_blocks_only_after_a_handle_producing_gap() {
 fn a_read_after_the_end_call_does_not_block_it_and_the_last_call_wins() {
     let s = "A2.FailMission(0, 0)\npcall(A2.Colonize, 3, 5)\nlocal _ = A2.IsAlive(3)";
     assert_eq!(end_state(s), MissionEndState::Ended { won: false });
-    // A blocked call followed by a clean one: the clean one stands.
-    let s = "pcall(A2.Colonize, 3, 5)\nlocal _ = A2.IsAlive(3)\nA2.FailMission(0, 0)\nA2.NoteGap('x')\nA2.SucceedMission(0, 0)";
+    // Reads never clear: a call after a tainted read is blocked, whatever it is.
+    let s = "pcall(A2.Colonize, 3, 5)\nlocal _ = A2.IsAlive(3)\nA2.FailMission(0, 0)\nA2.SucceedMission(0, 0)";
+    match end_state(s) {
+        MissionEndState::Blocked(why) => assert!(why.contains("SucceedMission"), "{why}"),
+        other => panic!("{other:?}"),
+    }
+    // Two clean calls: the last one decides.
+    assert_eq!(end_state("A2.FailMission(0, 0)\nA2.SucceedMission(0, 0)"), MissionEndState::Ended { won: true });
+    assert_eq!(end_state("A2.SucceedMission(0, 0)\nA2.FailMission(0, 0)"), MissionEndState::Ended { won: false });
+}
+
+#[test]
+fn a_raising_read_and_a_non_handle_integer_are_judged_apart() {
+    // IsShipAliveAndOffMap has no data: its answer is a guess, so it is a tainted read.
+    let s = "pcall(A2.IsShipAliveAndOffMap, 3)\nif A2.IsAlive(2) then A2.SucceedMission(0, 0) end";
     assert!(matches!(end_state(s), MissionEndState::Blocked(_)));
+    // A failed call whose first integer is no object (an objective index) taints nothing.
+    let s = "pcall(A2.Colonize, 900, 901)\nif A2.CountUnits(A2.GetRealTeam(4), 0) > 0 then A2.SucceedMission(0, 0) end";
+    assert_eq!(end_state(s), MissionEndState::Ended { won: true });
 }
 
 #[test]

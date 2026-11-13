@@ -15,6 +15,8 @@
 //!   positive integer, later arguments only above 8 (small integers there
 //!   are team numbers), and no small integer of a call that takes a team
 //!   first (`Count...`, `SetRelation`, resource calls). The owner each had at that time is kept.
+//! * A read (`Is...`, `Count...`, `Get...`, `Does...`) that is itself a gap call
+//!   gave no answer, so it is a tainted read.
 //! * A gap call that should have returned a handle (`BuildObject`,
 //!   `GetHandle`, `GetNearest...`, ...) records that handles may be missing
 //!   because of a gap.
@@ -73,6 +75,11 @@ fn world_effect(name: &str) -> bool {
     )
 }
 
+/// Calls that ask the world something (`Is...`, `Count...`, `Get...`, `Does...`).
+fn reads_state(name: &str) -> bool {
+    ["Is", "Count", "Get", "Does", "Exists", "UnderAttack"].iter().any(|p| name.starts_with(p))
+}
+
 /// Calls whose first argument is a team number, not a handle.
 fn team_first(name: &str) -> bool {
     name.starts_with("Count")
@@ -101,6 +108,11 @@ impl Ctx {
             }
             let Ok(n) = u32::try_from(*n) else { continue };
             let id = EntityId(n);
+            // Only an object the view has shown, or a pending `BuildObject`
+            // token, is a handle; any other integer is a value.
+            if !self.seen.contains(&id) && n < 0x4000_0000 {
+                continue;
+            }
             let owner = self.unit(id).map(|u| u.owner);
             self.taint.handles.entry(id).or_insert(owner);
         }
@@ -109,6 +121,14 @@ impl Ctx {
         }
         if yields_handle(name) && self.taint.handle_gap.is_none() {
             self.taint.handle_gap = Some(name.to_owned());
+        }
+    }
+
+    /// A read that raised or was unsupported answers nothing: the script
+    /// gets nil (or its own guess) in place of the game's answer.
+    pub fn answerless_read(&self, name: &str) {
+        if reads_state(name) {
+            self.tainted_read(name, "that gave no answer".to_owned());
         }
     }
 
@@ -164,7 +184,9 @@ pub(super) fn wrap(lua: &Lua, ctx: &Shared, a2: &Table) -> mlua::Result<()> {
                 _ => return Ok(()),
             };
             let rest: Vec<Value> = it.collect();
-            c.borrow_mut().gap(&name, &rest);
+            let mut c = c.borrow_mut();
+            c.gap(&name, &rest);
+            c.answerless_read(&name);
             Ok(())
         })?,
     )?;
@@ -187,7 +209,9 @@ pub(super) fn wrap(lua: &Lua, ctx: &Shared, a2: &Table) -> mlua::Result<()> {
                 let out = inner.call::<MultiValue>(args);
                 let after: u32 = c.borrow().unsupported.values().sum();
                 if out.is_err() || after > before {
-                    c.borrow_mut().gap(&key, &kept);
+                    let mut c = c.borrow_mut();
+                    c.gap(&key, &kept);
+                    c.answerless_read(&key);
                 }
                 out
             })?,
