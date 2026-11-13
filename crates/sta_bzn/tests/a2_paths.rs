@@ -20,7 +20,7 @@ fn bzn_files(dir: &Path, out: &mut Vec<PathBuf>) {
 fn roots() -> Vec<PathBuf> {
     let mut r: Vec<PathBuf> = ["STA64_TEST_A2_STOCK_INSTALL", "STA64_TEST_ROOTS_INSTALL"]
         .iter()
-        .filter_map(|k| std::env::var_os(k))
+        .filter_map(std::env::var_os)
         .map(PathBuf::from)
         .collect();
     if let Some(v) = std::env::var_os("STA64_TEST_A2_BZN_DIRS") {
