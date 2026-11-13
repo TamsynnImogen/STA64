@@ -46,10 +46,10 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// (crafts in warp). Format 19 appends stuck-order watch rows; format 20
 /// adds their anchor, start distance and birth tick. Format 21 appends scripted
 /// orders (SIM-56) and per-craft switches (SIM-58). Format 22 appends mission
-/// attributes (SIM-54). Format 23 appends cosmetic seat factions. Format 25 appends mission-set
+/// attributes (SIM-54). Format 23 appends cosmetic seat factions. Format 26 appends mission-set
 /// relations between seats (SIM-63).
 /// Only the current format is read.
-pub const FORMAT_VERSION: u16 = 25;
+pub const FORMAT_VERSION: u16 = 26;
 
 const HEADER: usize = 4 + 2 + 4 + 8;
 
@@ -184,7 +184,7 @@ struct AppearanceRec {
     factions: Vec<(PlayerId, String)>,
 }
 
-/// Format 25: mission-set relations between seats (SIM-63): `(from, to, code)`
+/// Format 26: mission-set relations between seats (SIM-63): `(from, to, code)`
 /// with code 0 Enemy, 1 Neutral, 2 Ally, only pairs that differ from the
 /// team default.
 #[derive(Serialize, Deserialize)]
