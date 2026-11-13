@@ -9,7 +9,8 @@
 // RND-05 adds the core's pulse, the ring's colours about the core, the swirl (the gas
 // wanders round two circles about its place) and the lightning (up to four flashes
 // that light the gas about them), as Refit's gas_colour and march do.
-// Not ported yet: ship shadows, temporal smoothing, the baked volume (the gas is
+// RND-15 adds the ships' shadows (`key_lit`, after Refit's world_nebula.hlsl).
+// Not ported yet: temporal smoothing, the baked volume (the gas is
 // evaluated directly at each step).
 
 struct NebulaParams {
@@ -48,6 +49,10 @@ struct NebulaParams {
     flash2: vec4<f32>,
     flash3: vec4<f32>,
     flash_c: vec4<f32>,   // rgb the lightning's colour; w 1 / its radius squared
+    sh0: vec4<f32>,       // the Key's shadow map (shadows.rs): world -> u,
+    sh1: vec4<f32>,       //   v,
+    sh2: vec4<f32>,       //   and depth along the Key (0..1 over the hulls)
+    shp: vec4<f32>,       //   x 1: there is a map (0: none), y the depth bias, z the penumbra (u, v per depth behind the caster), w a texel (u, v)
 };
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> k: NebulaParams;
@@ -55,6 +60,8 @@ struct NebulaParams {
 @group(constants::MATERIAL_BIND_GROUP) @binding(2) var s_noise_sampler: sampler;
 @group(constants::MATERIAL_BIND_GROUP) @binding(3) var s_env: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(4) var s_env_sampler: sampler;
+// The Key's shadow map: r + g / 2048 the depth of the nearest hull along the Key, 1 where none.
+@group(constants::MATERIAL_BIND_GROUP) @binding(5) var s_shadow: texture_2d<f32>;
 
 @if(DEPTH_PREPASS && MULTISAMPLED)
 @group(0) @binding(20) var depth_prepass_texture: texture_depth_multisampled_2d;
@@ -207,8 +214,49 @@ fn flashes_at(p: vec3<f32>) -> f32 {
          + k.flash2.w * exp(-dot(d2, d2) * k.flash_c.w) + k.flash3.w * exp(-dot(d3, d3) * k.flash_c.w);
 }
 
-// One step: rgb the light the gas adds over `thick`; a its optical depth.
-fn march_step(p: vec3<f32>, dist: f32, thick: f32, ph: f32) -> vec4<f32> {
+fn shadow_depth(uv: vec2<f32>) -> f32 {
+    let dim = textureDimensions(s_shadow);
+    let px = clamp(vec2<i32>(floor(uv * vec2<f32>(dim))), vec2<i32>(0), vec2<i32>(dim) - vec2<i32>(1));
+    let t = textureLoad(s_shadow, px, 0);
+    return t.r + t.g / 2048.0;
+}
+
+// How much of the Key reaches p past the hulls (0..1): a ship's shadow through the gas.
+// The light is a disc, not a point, so a shadow is sharp next to the hull and widens into
+// its penumbra the farther behind the hull the gas is. Two reads, as PCSS does with many:
+// the first, anywhere in the widest penumbra possible at p's depth, finds a caster and how
+// far in front of p it is; the second, within the penumbra that distance gives, is the
+// answer. Each read is a point of a disc picked from the pixel's thresholds u and the step
+// kk: one pixel's answer is 0 or 1, and the steps along its ray add them up into a soft
+// edge. Outside the map (it covers the hulls in view), the Key is not blocked.
+fn key_lit(p: vec3<f32>, u: vec2<f32>, kk: f32) -> f32 {
+    if k.shp.x <= 0.0 {
+        return 1.0;
+    }
+    let q = vec4<f32>(p, 1.0);
+    let s = vec3<f32>(dot(q, k.sh0), dot(q, k.sh1), dot(q, k.sh2));
+    if s.z < k.shp.y || s.x < 0.0 || s.x > 1.0 || s.y < 0.0 || s.y > 1.0 {
+        return 1.0;
+    }
+    let a = fract(u + kk * vec2<f32>(0.3819660, 0.5698403) + vec2<f32>(0.25, 0.75));
+    let b = fract(a + vec2<f32>(0.5, 0.5));
+    let da = vec2<f32>(cos(a.x * 6.2831853), sin(a.x * 6.2831853)) * sqrt(a.y);
+    let db = vec2<f32>(cos(b.x * 6.2831853), sin(b.x * 6.2831853)) * sqrt(b.y);
+    // The map is cleared to 1 and its hulls lie well inside 0..1, so a 1 is no hull, not a
+    // hull at the far end: gas beyond every hull along the Key (z > 1) would otherwise be
+    // in shadow wherever there is no hull at all.
+    let z = s.z - k.shp.y;
+    let zc = min(z, 0.999);
+    let half_texel = 0.5 * k.shp.w;
+    var d = shadow_depth(s.xy + da * (half_texel + z * k.shp.z));
+    let r = half_texel + select(0.0, (z - d) * k.shp.z, d < zc);
+    d = shadow_depth(s.xy + db * r);
+    return select(1.0, 0.0, d < zc);
+}
+
+// One step: rgb the light the gas adds over `thick`; a its optical depth. u: the pixel's
+// two thresholds; kk: the step's place along the ray (0..1), for the shadow's sampling.
+fn march_step(p: vec3<f32>, dist: f32, thick: f32, ph: f32, u: vec2<f32>, kk: f32) -> vec4<f32> {
     var pa = p;
     if k.fine.z > 0.0 {
         pa = p + flow_at(p) * k.fine.z;
@@ -235,7 +283,7 @@ fn march_step(p: vec3<f32>, dist: f32, thick: f32, ph: f32) -> vec4<f32> {
         c = core_effects(c, p);
     }
     if k.key.w > 0.0 {
-        c *= 1.0 - k.key.w + k.key.w * ph;
+        c *= 1.0 - k.key.w + k.key.w * ph * key_lit(p, u, kk);
     }
     if k.pulse.z > 0.5 {
         let f = flashes_at(p);
@@ -277,13 +325,14 @@ fn fragment(i: FragIn) -> @location(0) vec4<f32> {
     let q = exp2(log2(s1 / s0) / f32(STEPS));
     let ph = key_phase(dot(k.key.xyz, d));
     let jit = fract(sin(dot(i.position.xy, vec2<f32>(12.9898, 78.233))) * 43758.5453);
+    let u = vec2<f32>(jit, fract(sin(dot(i.position.xy, vec2<f32>(39.3468, 11.135))) * 43758.5453));
     var acc = vec4<f32>(0.0);
     var a = s0;
     for (var n = 0; n < STEPS; n++) {
         let th = a * (q - 1.0);
         let j = fract(jit + f32(n) * 0.6180340);
         let s = a + j * th;
-        acc += march_step(eye + d * s, s, th, ph);
+        acc += march_step(eye + d * s, s, th, ph, u, f32(n) / f32(STEPS));
         a += th;
     }
     // Premultiplied: the gas's light added, what lies behind dimmed by its optical depth.

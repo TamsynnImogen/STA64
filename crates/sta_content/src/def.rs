@@ -425,6 +425,14 @@ pub struct WeaponDef {
     pub disable_weapons: bool,
     /// Cloak: a hit decloaks (`decloakOnHit`, default off).
     pub decloak_on_hit: bool,
+    /// `initialShotDelayModifier` (a Roots key): `None` when absent, which
+    /// the engine treats as -1 (see `sta_sim::combat::weapons`).
+    pub initial_shot_delay_modifier: Option<Fixed>,
+    /// `ignoreShotDelayEffects` (FO): no shot jitter, no team modifier.
+    pub ignore_shot_delay_effects: bool,
+    /// The weapon's own class is `ordnancedefenseweapon` (FO's point-defence
+    /// class, as opposed to `pointdefenselaser`).
+    pub ordnance_defence: bool,
     /// Feature switches resolved for this weapon, as [`UnitDef::features`];
     /// `None`: the database-wide set. Read through
     /// `ContentDb::weapon_features`.
@@ -454,6 +462,9 @@ impl WeaponDef {
             energy_cost: Fixed::ZERO,
             disable_weapons: true,
             decloak_on_hit: false,
+            initial_shot_delay_modifier: None,
+            ignore_shot_delay_effects: false,
+            ordnance_defence: false,
             features: None,
             raw: Arc::new(raw),
         }

@@ -190,7 +190,7 @@ fn sync_volumes(volumes: Res<Volumes>, mut mixer: NonSendMut<Mixer>, mut sent: L
     *sent = Some(*volumes);
 }
 
-fn sync_listener(cam: Query<&GlobalTransform, With<Camera3d>>, mut mixer: NonSendMut<Mixer>) {
+fn sync_listener(cam: Query<&GlobalTransform, crate::map::MainCamera>, mut mixer: NonSendMut<Mixer>) {
     if let Some(t) = cam.iter().next() {
         // Sounds are placed in map space; the renderer mirrors Z, so mirror the camera back.
         let (p, r) = (t.translation(), t.right());

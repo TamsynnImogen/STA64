@@ -5,6 +5,7 @@
 
 pub mod capture;
 pub mod marks;
+pub mod pair;
 pub mod parity;
 pub mod parse;
 pub mod cli;
