@@ -78,7 +78,7 @@ fn recv(t: &mut NetTransport) -> sta_net::lockstep::Incoming {
         match t.poll() {
             Ok(Some(m)) => return m,
             Ok(None) => {}
-            Err(e) => panic!("transport failed: {e}"),
+            Err(e) => panic!("transport failed: {e} ({:?})", t.control().close_reason()),
         }
         assert!(Instant::now() < end, "no message arrived");
         thread::sleep(Duration::from_millis(1));
@@ -416,7 +416,6 @@ fn injected_latency_stalls_but_never_diverges() {
 }
 
 #[test]
-#[ignore = "timing-flaky on CI; fixed by fix/net-transport-test-flakes"]
 fn a_held_connection_stalls_the_others_and_play_resumes_in_sync() {
     let r = relay();
     let proxy = Proxy::new(r.local_addr(), 0);
@@ -662,7 +661,6 @@ fn rooms_check_codes_passwords_capacity_and_the_open_flag() {
 }
 
 #[test]
-#[ignore = "timing-flaky on CI; fixed by fix/net-transport-test-flakes"]
 fn a_lost_seat_can_be_taken_back_only_while_it_is_vacated() {
     let r = relay();
     let (mut host, code) = open_room(r.local_addr());
@@ -856,7 +854,6 @@ fn envelope(payload: &[u8]) -> Vec<u8> {
 }
 
 #[test]
-#[ignore = "timing-flaky on CI; fixed by fix/net-transport-test-flakes"]
 fn malformed_first_messages_are_refused_without_panic_or_allocation() {
     let r = relay_with(fast_cfg());
     let big = (MAX_ENVELOPE_BYTES as u32 + 1).to_le_bytes();
@@ -952,7 +949,6 @@ fn a_frame_with_a_good_header_and_a_bad_body_is_the_receivers_to_refuse() {
 }
 
 #[test]
-#[ignore = "timing-flaky on CI; fixed by fix/net-transport-test-flakes"]
 fn slow_silent_and_flooding_clients_are_cut_off() {
     let r = relay_with(RelayConfig {
         bytes_per_sec: 20_000,
@@ -1038,7 +1034,6 @@ fn slow_silent_and_flooding_clients_are_cut_off() {
 }
 
 #[test]
-#[ignore = "timing-flaky on CI; fixed by fix/net-transport-test-flakes"]
 fn limits_per_address_hold() {
     let r = relay_with(RelayConfig {
         max_connections_per_ip: 3,
