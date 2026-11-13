@@ -492,9 +492,10 @@ pub fn play(host: &VfsHost, book: &CampaignBook, campaign: &str, index: usize, c
                         ev.push(Event { tick, kind: "spawned", what: format!("p{} {name} #{}", u.owner.0, id.0) });
                     }
                 }
-                SimEvent::Destroyed { id, .. } => {
-                    let who = owners.get(id).cloned().unwrap_or_else(|| "?".into());
-                    ev.push(Event { tick, kind: "destroyed", what: format!("{who} #{}", id.0) });
+                SimEvent::Destroyed { id, by } => {
+                    let name = |i: &EntityId| owners.get(i).cloned().unwrap_or_else(|| "?".into());
+                    let killer = by.as_ref().map_or(String::new(), |b| format!(" by {} #{}", name(b), b.0));
+                    ev.push(Event { tick, kind: "destroyed", what: format!("{} #{}{killer}", name(id), id.0) });
                 }
                 SimEvent::Rejected { player, seq } if *player == SEAT => {
                     let what = plan.as_ref().and_then(|p| p.sent.get(seq)).cloned().unwrap_or_default();

@@ -23,10 +23,13 @@ Reference file (kept outside the repository, it describes a stock mission):
     # comment
     tolerance 2.0                 seconds a timed entry may be off (default 2)
     strict present objective      kinds whose unreferenced events are listed as extra
+    ignore <text>                 events containing the text are never extra
     <time> <kind> <text>          one expected event, in order
 
 `<time>` is seconds from the start (`12.5`), relative to the previous expected
-event (`+3`), or `*` (any time). `<kind>` is a timeline kind (`present`, `call`,
+event (`+3`), `*` (any time, in order) or `~` (any time, in any order: an event
+the player's actions trigger, such as a first-contact message). Events of one
+tick are unordered among themselves. `<kind>` is a timeline kind (`present`, `call`,
 `objective`, `briefing`, `rule`, `end`, ...); `<text>` must occur in the event's
 `what` (case-sensitive). Expected events are matched in order, each after the
 previous match; the report lists every difference: missing, out of order,
@@ -52,8 +55,8 @@ def parse_timeline(text):
 
 
 def parse_reference(text):
-    """-> (entries, tolerance, strict kinds); an entry is dict(t, rel, kind, text, line)."""
-    entries, tol, strict = [], 2.0, set()
+    """-> (entries, tolerance, strict kinds, ignored texts); an entry is dict(t, rel, kind, text, line, free)."""
+    entries, tol, strict, ignore = [], 2.0, set(), []
     for n, raw in enumerate(text.splitlines(), 1):
         line = raw.strip()
         if not line or line.startswith("#"):
@@ -65,27 +68,38 @@ def parse_reference(text):
         if head == "strict":
             strict |= set(rest.split())
             continue
+        if head == "ignore":
+            ignore.append(rest.strip())
+            continue
         kind, _, what = rest.strip().partition(" ")
-        if head == "*":
+        free = head == "~"
+        if head in ("*", "~"):
             t, rel = None, False
         elif head.startswith("+"):
             t, rel = float(head[1:]), True
         else:
             t, rel = float(head), False
-        entries.append({"t": t, "rel": rel, "kind": kind, "text": what.strip(), "line": n})
-    return entries, tol, strict
+        entries.append({"t": t, "rel": rel, "kind": kind, "text": what.strip(), "line": n, "free": free})
+    return entries, tol, strict, ignore
 
 
 def matches(e, r):
     return e["kind"] == r["kind"] and r["text"] in e["what"]
 
 
-def compare(timeline, entries, tol=2.0, strict=()):
+def compare(timeline, entries, tol=2.0, strict=(), ignore=()):
     """Ordered match of `entries` against `timeline`. -> list of difference strings."""
     diffs, at, prev_t, used = [], 0, 0.0, set()
     for r in entries:
-        hit = next((i for i in range(at, len(timeline)) if i not in used and matches(timeline[i], r)), None)
         label = f"line {r['line']}: {r['kind']} {r['text']!r}"
+        if r.get("free"):
+            hit = next((i for i in range(len(timeline)) if i not in used and matches(timeline[i], r)), None)
+            if hit is None:
+                diffs.append(f"missing: {label}")
+            else:
+                used.add(hit)
+            continue
+        hit = next((i for i in range(at, len(timeline)) if i not in used and matches(timeline[i], r)), None)
         if hit is None:
             earlier = next((i for i in range(0, at) if i not in used and matches(timeline[i], r)), None)
             if earlier is not None:
@@ -96,7 +110,10 @@ def compare(timeline, entries, tol=2.0, strict=()):
             continue
         e = timeline[hit]
         used.add(hit)
-        at = hit + 1
+        # the next expected event may be anywhere in the same tick
+        at = hit
+        while at > 0 and timeline[at - 1].get("tick") == e.get("tick"):
+            at -= 1
         if r["t"] is not None:
             want = prev_t + r["t"] if r["rel"] else r["t"]
             if abs(e["t"] - want) > tol:
@@ -105,7 +122,7 @@ def compare(timeline, entries, tol=2.0, strict=()):
     if strict and entries:
         last = max(used) if used else -1
         for i, e in enumerate(timeline[: last + 1]):
-            if i not in used and e["kind"] in strict:
+            if i not in used and e["kind"] in strict and not any(x in e["what"] for x in ignore):
                 diffs.append(f"extra: {e['t']:.2f} s {e['kind']} {e['what'][:160]}")
     return diffs
 
@@ -174,8 +191,8 @@ def main(argv=None):
     if args.summary or not args.reference:
         print(summary(timeline))
     if args.reference:
-        entries, tol, strict = parse_reference(open(args.reference, encoding="utf-8").read())
-        diffs = compare(timeline, entries, tol, strict)
+        entries, tol, strict, ignore = parse_reference(open(args.reference, encoding="utf-8").read())
+        diffs = compare(timeline, entries, tol, strict, ignore)
         print(f"reference: {len(entries)} expected events, {len(diffs)} differences (tolerance {tol} s)")
         for d in diffs:
             print("  " + d)

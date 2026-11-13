@@ -5,8 +5,8 @@
 //! the repository's converter into the target directory (never into the
 //! repository), mounts the output over the install and plays it with a plan
 //! from `tests/playthrough/` (a scripted player that gives orders through the
-//! normal command interface). It checks the outcome and the order in which the
-//! objectives complete. Needs `python3` and `objdump`; skipped when the
+//! normal command interface). It checks the outcome and the order of the
+//! briefings (the objective panels the script shows). Needs `python3` and `objdump`; skipped when the
 //! variable is not set. Prints the timeline's summary on failure.
 
 use std::path::{Path, PathBuf};
@@ -55,11 +55,6 @@ fn dump(p: &Playthrough) -> String {
         .join("\n")
 }
 
-/// The first tick each objective (by id) reached `Completed`, in completion order.
-fn completed(p: &Playthrough) -> Vec<String> {
-    p.of("objective").filter(|e| e.what.contains("Completed")).map(|e| e.what.clone()).collect()
-}
-
 /// Armada I, Federation 1 "Premonitions": build a starbase and a mining station, destroy the
 /// Dominion, then the Borg that follow the Premonition through the gate; the Enterprise survives.
 #[test]
@@ -87,7 +82,6 @@ fn a1_federation_1_is_won_by_a_competent_player() {
     let first = p.of("objective").next().map(|e| e.tick);
     assert!(released.is_some() && released <= first, "opening:\n{log}");
     assert!(p.of("error").next().is_none(), "script errors:\n{log}");
-    eprintln!("completed: {:?}", completed(&p));
 }
 
 /// The lose condition of the same mission: the Enterprise is lost.

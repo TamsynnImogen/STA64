@@ -2,7 +2,7 @@
 -- Objectives (F1OB1..3): build a starbase and a mining station, defeat the Dominion
 -- attack, then destroy the Borg; the Enterprise, the Premonition and the bases survive.
 local function built(odf) for _, u in ipairs(units{mine = true, odf = odf}) do if not u.building then return true end end return false end
-local function warships() local o = {} for _, u in ipairs(units{mine = true}) do if u.odf ~= "fconst" and u.odf ~= "fbase" and u.odf ~= "fmining" and u.odf ~= "ffreight" and u.maxhull > 0 and not u.building then o[#o + 1] = u end end return o end
+local function warships() local o = {} for _, u in ipairs(units{mine = true}) do if u.odf ~= "fconst" and u.odf ~= "fbase" and u.odf ~= "fmining" and u.odf ~= "ffreight" and u.odf ~= "fyard" and u.maxhull > 0 and not u.building then o[#o + 1] = u end end return o end
 local function hunt(odfs, timeout)
   local t0 = now()
   local last = {}
@@ -30,12 +30,25 @@ con = label("Fedcon1")
 build(con, "fmining", 5850, 1250)
 wait_until(function() return built("fmining") end, 400)
 note("mining station built")
--- the base builds freighters and escorts while the fleet fights
+-- the base builds a freighter; a shipyard builds escorts while the fleet fights
 local base = units{mine = true, odf = "fbase"}[1]
 if base then build(base, "ffreight") end
+con = label("Fedcon1")
+build(con, "fyard", 5300, 1350)
+wait_until(function() return built("fyard") end, 400)
+note("shipyard built")
+local yard = units{mine = true, odf = "fyard"}[1]
+for _ = 1, 4 do build(yard, "fdestroy") end
 hunt({ "zjemdest" }, 900)
 note("Dominion destroyed")
+-- The Premonition comes out of a gate in the north-west, chased by the Borg: the fleet
+-- sets off at once, before the cineractive locks the controls.
+local rescue = paths.PREMOSTART[1]
+move(warships(), rescue.x, rescue.z)
+wait_until(function() return #units{ like = "bcruise", enemy = true } > 0 end, 300)
 wait_until(control, 300)
+note("Borg here")
+for _, w in ipairs(warships()) do note(string.format("%s #%d at %.0f from the rescue point, hull %.0f", w.odf, w.id, dist(w, rescue), w.hull)) end
 hunt({ "bcruise1", "bcruise2" }, 900)
 note("Borg destroyed")
 wait(600)
