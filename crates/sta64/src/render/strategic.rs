@@ -394,7 +394,7 @@ fn toggle(keys: Res<ButtonInput<KeyCode>>, mut mode: ResMut<Mode>) {
 
 /// Units drawn from the view get an icon too (an arrow in the owner's colour).
 #[allow(clippy::type_complexity)]
-fn ensure_icons(
+pub(crate) fn ensure_icons(
     mut commands: Commands,
     units: Query<(Entity, Option<&TeamColour>, Option<&SelectRadius>), (With<FromView>, With<SimEntity>, Without<Strategic>, Without<NeedsModel>)>,
 ) {

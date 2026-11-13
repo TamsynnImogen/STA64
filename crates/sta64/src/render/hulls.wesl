@@ -26,6 +26,10 @@ struct HullParams {
     dcol: array<vec4<f32>, 4>,  // its colour; a: 1 for the Key
     sh: array<vec4<f32>, 3>,    // the Key's shadow map (shadows.rs): world -> u, v, depth along the Key
     shp: vec4<f32>,             // x 1: there is a map (0: none); y one texel (u, v); z the depth bias; w how much of the Key a shadow takes
+    // The Stock profile (RND-24, render/stock/hulls.rs): the SOD lighting material's own colours.
+    mamb: vec4<f32>,  // ambient colour; a: 1 draws the group the stock way (amb.rgb is then the scene's ambient light), 0 Refit's look
+    mdif: vec4<f32>,  // diffuse colour
+    mspc: vec4<f32>,  // specular colour; a: its exponent
 };
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> k: HullParams;
@@ -106,8 +110,43 @@ fn map_shadow(wp: vec3<f32>, n: vec3<f32>) -> f32 {
     return lit / 9.0;
 }
 
+fn to_srgb(c: vec3<f32>) -> vec3<f32> {
+    let x = clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
+    return select(1.055 * pow(x, vec3<f32>(1.0 / 2.4)) - vec3<f32>(0.055), 12.92 * x, x <= vec3<f32>(0.0031308));
+}
+
+fn from_srgb(c: vec3<f32>) -> vec3<f32> {
+    return select(pow((c + vec3<f32>(0.055)) / 1.055, vec3<f32>(2.4)), c / 12.92, c <= vec3<f32>(0.04045));
+}
+
+// Stock: the original engine's fixed-function lighting from the SOD material, per light
+// diffuse colour times N.L, specular added after the texture, the lit colour clipped at 1.
+fn shade_stock(n: vec3<f32>, wp: vec3<f32>, t: vec4<f32>) -> vec4<f32> {
+    let v = normalize(k.eye.xyz - wp);
+    var sum = k.mamb.rgb * k.amb.rgb;
+    var spec = vec3<f32>(0.0);
+    for (var j = 0; j < 4; j++) {
+        let l = k.dvec[j].xyz;
+        let c = k.dcol[j].rgb;
+        sum += k.mdif.rgb * c * max(0.0, dot(n, l));
+        let h = normalize(l + v);
+        if dot(n, l) > 0.0 {
+            spec += c * pow(max(0.0, dot(n, h)), k.mspc.a);
+        }
+    }
+    // The engine multiplies the colours as stored (gamma-space numbers, no linear light):
+    // the texture and the team colour are taken as such, the result goes out as such.
+    let ts = to_srgb(t.rgb);
+    let lit = ts * to_srgb(k.tint.rgb) * sum + spec * k.mspc.rgb * k.misc.y;
+    let c = clamp(mix(lit, ts * max(k.amb.a, 1.0), saturate(t.a * min(k.amb.a, 1.0))), vec3<f32>(0.0), vec3<f32>(1.0));
+    return vec4<f32>(from_srgb(c), k.misc.x);
+}
+
 // Everything after the normal: the lights, the texture, the night lights.
 fn shade(n: vec3<f32>, wp: vec3<f32>, t: vec4<f32>) -> vec4<f32> {
+    if k.mamb.a > 0.5 {
+        return shade_stock(n, wp, t);
+    }
     let v = normalize(k.eye.xyz - wp);
     var sum = k.amb.rgb;
     var spec = vec3<f32>(0.0);

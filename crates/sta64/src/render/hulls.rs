@@ -57,6 +57,8 @@ pub struct HullPart {
     /// The texture's alpha is a cut-out (a `default` mesh whose group is not
     /// self-illuminating: open girders).
     pub cut_alpha: bool,
+    /// The group's SOD lighting material, for the Stock profile (`render/stock/hulls.rs`).
+    pub stock: Option<crate::render::stock::hulls::StockLight>,
 }
 
 /// Hull lighting on (Refit's look) or off (Bevy's PBR, as before): the A/B switch.
@@ -86,6 +88,11 @@ pub struct HullParams {
     pub sh: [Vec4; 3],
     /// x 1 with a map; y one texel (u, v); z the depth bias; w how much of the Key a shadow takes.
     pub shp: Vec4,
+    /// Stock profile (RND-24): the SOD lighting material (`mamb.w` 1 draws the group the
+    /// stock way, 0 as Refit's look does).
+    pub mamb: Vec4,
+    pub mdif: Vec4,
+    pub mspc: Vec4,
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Clone, Debug)]
@@ -143,16 +150,33 @@ pub struct HullView {
     eye: Vec4,
     dvec: [Vec4; DIRS],
     dcol: [Vec4; DIRS],
+    /// The Stock look's lights: towards each, and the colour as the light's own
+    /// (gamma-space) numbers, every light the map's own at full weight.
+    sdvec: [Vec4; DIRS],
+    sdcol: [Vec4; DIRS],
     sh: [Vec4; 3],
     shp: Vec4,
     shadow: Option<Handle<Image>>,
+    /// The Stock profile draws hulls (RND-24) and the scene's ambient light colour.
+    pub(crate) stock: bool,
+    pub(crate) ambient: Vec3,
 }
 
 impl HullView {
+    /// The view for the Stock look (tests).
+    #[cfg(test)]
+    pub(crate) fn set_stock(&mut self, on: bool) {
+        self.stock = on;
+    }
+
     pub(crate) fn write(&self, p: &mut HullParams) {
+        if p.mamb.w > 0.5 {
+            p.amb = self.ambient.extend(p.amb.w);
+        }
         p.eye = self.eye;
-        p.dvec = self.dvec;
-        p.dcol = self.dcol;
+        let stock = p.mamb.w > 0.5;
+        p.dvec = if stock { self.sdvec } else { self.dvec };
+        p.dcol = if stock { self.sdcol } else { self.dcol };
         p.sh = self.sh;
         p.shp = self.shp;
     }
@@ -184,7 +208,7 @@ impl HullSource {
 
 /// The hull material made for each `StandardMaterial` (parts share materials).
 #[derive(Resource, Default)]
-struct HullMaterials(HashMap<AssetId<StandardMaterial>, Handle<HullMaterial>>);
+struct HullMaterials(HashMap<AssetId<StandardMaterial>, (Handle<HullMaterial>, HullPart)>);
 
 pub struct HullPlugin;
 
@@ -195,6 +219,7 @@ impl Plugin for HullPlugin {
             .init_resource::<HullLighting>()
             .init_resource::<HullView>()
             .init_resource::<HullMaterials>()
+            .add_plugins(crate::render::stock::hulls::StockHullsPlugin)
             .add_systems(Update, (toggle, update_view, apply, follow_source).chain());
     }
 }
@@ -208,38 +233,73 @@ fn toggle(keys: Res<ButtonInput<KeyCode>>, mut lighting: ResMut<HullLighting>) {
 
 /// The directional lights, brightest first: the Key at full colour, the rest scaled by
 /// their illuminance over the Key's. (Towards-the-light direction, colour, key flag.)
-fn lights(lights: impl Iterator<Item = (Vec3, Vec3, f32)>) -> ([Vec4; DIRS], [Vec4; DIRS]) {
-    let mut ls: Vec<(Vec3, Vec3, f32)> = lights.collect();
+///
+/// The third value is the same colours as the light's own (gamma-space) numbers, which the
+/// Stock look multiplies as the original engine does.
+fn lights(lights: impl Iterator<Item = (Vec3, Vec3, f32, Vec3)>) -> ([Vec4; DIRS], [Vec4; DIRS], [Vec4; DIRS]) {
+    let mut ls: Vec<(Vec3, Vec3, f32, Vec3)> = lights.collect();
     ls.sort_by(|a, b| b.2.total_cmp(&a.2));
     let mut dvec = [Vec4::ZERO; DIRS];
     let mut dcol = [Vec4::ZERO; DIRS];
+    let mut raw = [Vec4::ZERO; DIRS];
     let key = ls.first().map_or(1.0, |k| k.2.max(1e-3));
-    for (i, (to, col, lux)) in ls.into_iter().take(DIRS).enumerate() {
+    for (i, (to, col, lux, rcol)) in ls.into_iter().take(DIRS).enumerate() {
         dvec[i] = to.extend(0.0);
         let k = if i == 0 { 1.0 } else { lux / key };
-        dcol[i] = (col * k).extend(if i == 0 { 1.0 } else { 0.0 });
+        let flag = if i == 0 { 1.0 } else { 0.0 };
+        dcol[i] = (col * k).extend(flag);
+        raw[i] = (rcol * k).extend(flag);
     }
-    (dvec, dcol)
+    (dvec, dcol, raw)
 }
 
 /// Each frame: the eye and the lights, written into the materials when they changed.
+#[allow(clippy::too_many_arguments)]
 fn update_view(
     camera: Query<&GlobalTransform, crate::map::MainCamera>,
-    sun: Query<(&GlobalTransform, &DirectionalLight)>,
+    sun: Query<(&GlobalTransform, &DirectionalLight, Option<&crate::map::MapLightSource>)>,
+    ambient: Option<Res<GlobalAmbientLight>>,
+    profile: Option<Res<crate::render::profile::RenderProfile>>,
+    effects: Option<Res<crate::render::profile::ProfileEffects>>,
+    standard: Res<Assets<StandardMaterial>>,
     mut view: ResMut<HullView>,
+    made: Res<HullMaterials>,
     mut materials: ResMut<Assets<HullMaterial>>,
 ) {
     let Ok(cam) = camera.single() else { return };
-    let (dvec, dcol) = lights(sun.iter().map(|(t, l)| {
+    let (dvec, dcol, _) = lights(sun.iter().map(|(t, l, _)| {
         let c = l.color.to_linear();
-        (t.back().as_vec3(), Vec3::new(c.red, c.green, c.blue), l.illuminance)
+        (t.back().as_vec3(), Vec3::new(c.red, c.green, c.blue), l.illuminance, Vec3::ZERO)
     }));
-    let now = HullView { eye: cam.translation().extend(1.0), dvec, dcol, ..view.clone() };
+    // Stock: the map's own lights, each at its colour (the original sets one D3D light per
+    // `dlight`); a scene that has none (the viewer) takes every light as above.
+    let own = sun.iter().any(|(_, _, s)| s.is_some_and(|s| s.0));
+    let (sdvec, _, sdcol) = lights(sun.iter().filter(|(_, _, s)| !own || s.is_some_and(|s| s.0)).map(|(t, l, _)| {
+        let r = l.color.to_srgba();
+        (t.back().as_vec3(), Vec3::ZERO, if own { 1.0 } else { l.illuminance }, Vec3::new(r.red, r.green, r.blue))
+    }));
+    let stock = matches!((profile, effects), (Some(p), Some(e)) if e.implementation(*p, crate::render::profile::Effect::Hulls) == crate::render::profile::RenderProfile::Stock);
+    let amb = ambient.map_or(Vec3::ZERO, |a| {
+        let c = a.color.to_srgba();
+        Vec3::new(c.red, c.green, c.blue)
+    });
+    let now = HullView { eye: cam.translation().extend(1.0), dvec, dcol, sdvec, sdcol, stock, ambient: amb, ..view.clone() };
     let moved = (now.eye - view.eye).length_squared() > 1e-4;
-    if !moved && now.dvec == view.dvec && now.dcol == view.dcol {
+    if !moved && now.dvec == view.dvec && now.dcol == view.dcol && now.sdvec == view.sdvec && now.sdcol == view.sdcol && now.stock == view.stock && now.ambient == view.ambient {
         return;
     }
+    let switched = now.stock != view.stock;
     *view = now;
+    if switched {
+        // The profile changed: every hull material is made again in the other look.
+        for (id, (h, part)) in &made.0 {
+            if let (Some(std), Some(mut m)) = (standard.get(*id), materials.get_mut(h)) {
+                let shadow = m.shadow.clone();
+                *m = hull_material(std, part, &view);
+                m.shadow = shadow;
+            }
+        }
+    }
     for (_, m) in materials.iter_mut() {
         view.write(&mut m.params);
     }
@@ -270,6 +330,9 @@ pub fn hull_material(m: &StandardMaterial, part: &HullPart, view: &HullView) -> 
         cut: Vec4::new(if cut { 1.0 } else { 0.0 }, if bump { BUMP } else { 0.0 }, KNEE, 0.0),
         ..default()
     };
+    if view.stock {
+        crate::render::stock::hulls::apply_material(&mut params, m, part);
+    }
     set_source(&mut params, m);
     view.write(&mut params);
     HullMaterial {
@@ -312,7 +375,8 @@ fn apply(
         let hull = made
             .0
             .entry(mat.0.id())
-            .or_insert_with(|| hulls.add(hull_material(std, part, &view)))
+            .or_insert_with(|| (hulls.add(hull_material(std, part, &view)), *part))
+            .0
             .clone();
         let mut ec = commands.entity(e);
         ec.try_insert(HullSource { source: mat.0.clone(), hull: hull.clone(), shown: lighting.on });
@@ -347,7 +411,7 @@ fn follow_source(
 ) {
     for ev in changed.read() {
         let AssetEvent::Modified { id } = ev else { continue };
-        let (Some(h), Some(std)) = (made.0.get(id), standard.get(*id)) else { continue };
+        let (Some((h, _)), Some(std)) = (made.0.get(id), standard.get(*id)) else { continue };
         let Some(mut m) = hulls.get_mut(h) else { continue };
         set_source(&mut m.params, std);
     }
@@ -542,10 +606,10 @@ mod tests {
         let bumped = hull_material(&StandardMaterial { normal_map_texture: Some(Handle::default()), ..standard() }, &HullPart::default(), &view);
         assert_eq!(bumped.params.misc, Vec4::new(1.0, BORG_SPEC, BORG_SPEC_POW, BORG_SUN));
         assert_eq!(bumped.params.cut.y, BUMP);
-        let glow = hull_material(&standard(), &HullPart { self_illum: true, cut_alpha: false }, &view);
+        let glow = hull_material(&standard(), &HullPart { self_illum: true, cut_alpha: false, ..default() }, &view);
         assert_eq!(glow.params.amb.w, SELF_ILLUM);
         assert_eq!(glow.params.cut.x, 0.0);
-        let open = hull_material(&standard(), &HullPart { self_illum: false, cut_alpha: true }, &view);
+        let open = hull_material(&standard(), &HullPart { self_illum: false, cut_alpha: true, ..default() }, &view);
         assert_eq!(open.params.cut.x, 1.0);
     }
 
@@ -560,9 +624,9 @@ mod tests {
 
     #[test]
     fn lights_are_brightest_first_with_the_key_flagged() {
-        let (dvec, dcol) = lights([
-            (Vec3::X, Vec3::ONE, 1500.0),
-            (Vec3::Y, Vec3::new(1.0, 0.5, 0.0), 6000.0),
+        let (dvec, dcol, _) = lights([
+            (Vec3::X, Vec3::ONE, 1500.0, Vec3::ONE),
+            (Vec3::Y, Vec3::new(1.0, 0.5, 0.0), 6000.0, Vec3::new(1.0, 0.7, 0.0)),
         ].into_iter());
         assert_eq!(dvec[0].truncate(), Vec3::Y);
         assert_eq!(dcol[0], Vec4::new(1.0, 0.5, 0.0, 1.0));
