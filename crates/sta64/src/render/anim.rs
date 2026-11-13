@@ -22,10 +22,30 @@
 //! - a model **without a sim unit** (the model viewer, a map-view ship, an effect
 //!   model) has nothing to wait for and plays on its own, then rests a period
 //!   ([`Trigger::Idle`]; the rest is ours, nothing in the model says it);
-//! - a unit that neither builds nor fires (workers at work, deploy, transwarp) has no
-//!   sim event that says when ([`Trigger::None`]); the track rests. Docking is the
-//!   same: the sim emits no docking event (`UnitFlags::DOCKED` is never set), so it
-//!   waits for one, and only needs another arm in [`triggers`].
+//! - a unit that neither builds nor fires and takes deposits (class `mining`,
+//!   `p_mining`, or `is_starbase`) plays while a freighter is docked at it
+//!   ([`Trigger::Dock`], the view's `UnitFlags::DOCKED`): looped while docked, at rest
+//!   otherwise;
+//! - any other unit that neither builds nor fires has no event that says when
+//!   ([`Trigger::None`]); the track rests.
+//!
+//! What the original engine does, per trigger (read from the executable, static; the
+//! owning functions are `ConstructionRig::StartBuild` / `WorkerBeeHasReturned`,
+//! `ResourceTransferInterface::SetDock`, `Shipyard::SetRepairDock` and
+//! `Weapon::Simulate`): every call sets the owner's animation flags and restarts its
+//! clock. Flag 1 loops, flag 2 plays forward once and holds the last key, flag 4 plays
+//! backwards once and holds the first key. A rig sets 2 at `StartBuild` and 4 once the
+//! last worker bee is back: **workers at work** is the construction hold already done
+//! by `ConstructionBays` (open from the start of the build until every worker is
+//! home). A freighter docking at a transfer station sets 1 on the station (loop) and
+//! its leaving disables the station's animation (rest). A craft docking at a shipyard
+//! sets 2 and its leaving 4 when the ODF's `repairAnimation` is not 0; the sim has no
+//! repair dock yet, so that one has no signal. A weapon with `animateOwner = 1` sets 2
+//! on its owner at every shot (what [`Trigger::Fire`] approximates by "armed", since
+//! the weapon key is not in the content database yet). **Deploy** has no trigger of its
+//! own in the engine: a unit that deploys either builds (the rig above) or is armed
+//! (`bor_dodeca_relay*` plays on its own weapon); wormhole objects (`wtranwrp`) are
+//! animated by the generator that opens and closes them, not by a unit's own state.
 //!
 //! The choice is read from the unit's content, never from a model or track name.
 use crate::clock::AnimClock;
@@ -43,21 +63,85 @@ pub enum Trigger {
     Build,
     /// The unit is armed and builds nothing: its own [`SimEvent::Fired`].
     Fire,
+    /// The unit takes deposits and builds nothing and is not armed: loops while a
+    /// freighter is docked at it ([`sta_sim::view::UnitFlags::DOCKED`]).
+    Dock,
+    /// ODF `animation = 2`: loops all the time.
+    Loop,
+    /// ODF `animation = 1`: plays forward once when construction finishes and holds.
+    Once,
     /// No sim unit: plays by itself, once each period of rest.
     Idle,
     /// A unit that neither builds nor fires: nothing in the sim says when.
     None,
 }
 
-/// The trigger of a model's event tracks from what its unit can do (`build.list` and
-/// `hardpoints` of its definition, as `(builds, armed)`); `None` for the unit: no sim
-/// unit.
-pub fn trigger_for(unit: Option<(bool, bool)>) -> Trigger {
+/// The ODF `animation` key (`GameObjectClass`, read from the executable, static): 0 or
+/// absent and 3 are off (the model rests on its first key; only events animate it), 1
+/// plays every track forward once when the object is made and holds the last key, 2 loops
+/// every track. Other values do nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AnimMode {
+    #[default]
+    Off,
+    Once,
+    Loop,
+}
+
+impl AnimMode {
+    pub fn of(def: &sta_content::UnitDef) -> AnimMode {
+        match def.raw.i64("animation") {
+            Some(1) => AnimMode::Once,
+            Some(2) => AnimMode::Loop,
+            _ => AnimMode::Off,
+        }
+    }
+}
+
+/// What a unit's content says it can do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Caps {
+    /// `build.list` is not empty.
+    pub builds: bool,
+    /// Has a weapon whose shots animate its owner (see [`owner_animates`]).
+    pub armed: bool,
+    /// Takes deposits from freighters: class `mining` / `p_mining`, or `is_starbase`.
+    pub drop_off: bool,
+    pub mode: AnimMode,
+}
+
+/// Whether a shot of this weapon animates its owner: the weapon's ODF `animateOwner` (read
+/// from the executable, static: `Weapon::Simulate` plays the owner forward once per shot
+/// when it is set). A weapon with no ODF text behind it (native content, test content) has
+/// no such key to read, so its shots count.
+pub fn owner_animates(w: &sta_content::WeaponDef) -> bool {
+    w.raw.class_label().is_none() || w.raw.i64("animateOwner").is_some_and(|v| v != 0)
+}
+
+impl Caps {
+    pub fn of(def: &sta_content::UnitDef, db: &sta_content::ContentDb) -> Caps {
+        Caps {
+            builds: !def.build.list.is_empty(),
+            armed: def.hardpoints.iter().any(|h| db.weapon(h.weapon.key).is_some_and(owner_animates)),
+            drop_off: def.is_starbase || matches!(def.class.0.as_str(), "mining" | "p_mining" | "starbase"),
+            mode: AnimMode::of(def),
+        }
+    }
+}
+
+/// The trigger of a model's event tracks from what its unit can do; `None` for the
+/// unit: no sim unit. A builder's tracks are its bay; then the unit's own `animation`
+/// key (loop, or once at completion); then its owner-animating weapons; a drop-off that
+/// is none of these plays while docked.
+pub fn trigger_for(unit: Option<Caps>) -> Trigger {
     match unit {
         None => Trigger::Idle,
-        Some((true, _)) => Trigger::Build,
-        Some((false, true)) => Trigger::Fire,
-        Some((false, false)) => Trigger::None,
+        Some(c) if c.builds => Trigger::Build,
+        Some(c) if c.mode == AnimMode::Loop => Trigger::Loop,
+        Some(c) if c.mode == AnimMode::Once => Trigger::Once,
+        Some(c) if c.armed => Trigger::Fire,
+        Some(c) if c.drop_off => Trigger::Dock,
+        Some(_) => Trigger::None,
     }
 }
 
@@ -185,6 +269,32 @@ pub fn pose(track: &NodeAnim, elapsed: Option<f32>) -> (Transform, bool) {
     (key_pose(track, k), true)
 }
 
+/// The pose of a looped play `elapsed` seconds in (`None`: at rest on the first key):
+/// forward over the period, then again, as the engine's flag 1 does.
+pub fn loop_pose(track: &NodeAnim, elapsed: Option<f32>) -> Transform {
+    let Some(t) = elapsed else {
+        return key_pose(track, 0);
+    };
+    let n = key_count(track);
+    let x = t.rem_euclid(track.period);
+    key_pose(track, ((x / track.period * n as f32) as usize).min(n - 1))
+}
+
+/// The pose of a forward-once play `elapsed` seconds in: it holds the last key at the end
+/// (the engine's flag 2); `None`: not started, the first key.
+pub fn once_pose(track: &NodeAnim, elapsed: Option<f32>) -> Transform {
+    let Some(t) = elapsed else {
+        return key_pose(track, 0);
+    };
+    let n = key_count(track);
+    key_pose(track, ((t.max(0.0) / track.period * n as f32) as usize).min(n - 1))
+}
+
+/// Whether the unit has finished construction (or never was under construction).
+fn complete(link: &crate::sim_link::SimLink, id: sta_sim::EntityId) -> bool {
+    link.curr().unit(id).is_some_and(|u| u.progress.is_none_or(|p| p >= sta_sim::Fixed::ONE))
+}
+
 /// The unit whose event tracks `event` plays, and the trigger kind it is for.
 pub fn triggers(event: &SimEvent) -> Option<(sta_sim::EntityId, Trigger)> {
     match event {
@@ -217,7 +327,7 @@ pub fn assign_triggers(
             (Some(id), Some(c)) => {
                 let def = link.curr().unit(id).and_then(|u| c.0.unit(u.def));
                 match def {
-                    Some(d) => Some((!d.build.list.is_empty(), !d.hardpoints.is_empty())),
+                    Some(d) => Some(Caps::of(d, &c.0)),
                     None => continue,
                 }
             }
@@ -249,12 +359,20 @@ pub fn play_idle(clock: Res<AnimClock>, mut q: Query<&mut EventAnim>, owners: Qu
 /// Starts the event tracks of every builder an event names.
 pub fn start_events(
     mut msgs: MessageReader<SimMsg>,
+    content: Option<Res<crate::sim_link::ContentRes>>,
     ents: Res<SimEntities>,
     clock: Res<AnimClock>,
     mut q: Query<&mut EventAnim>,
 ) {
     let mut roots = std::collections::HashSet::new();
     for SimMsg(ev) in msgs.read() {
+        // A shot animates its owner only if the weapon's ODF says so.
+        if let SimEvent::Fired { weapon, .. } = ev
+            && let Some(w) = content.as_deref().and_then(|c| c.0.weapon(*weapon))
+            && !owner_animates(w)
+        {
+            continue;
+        }
         if let Some((id, kind)) = triggers(ev)
             && let Some(root) = ents.0.get(&id)
         {
@@ -273,6 +391,128 @@ pub fn start_events(
     }
 }
 
+/// Drives the state-based triggers from the view: a drop-off's tracks start when a
+/// freighter docks at it (the view's [`sta_sim::view::UnitFlags::DOCKED`]) and end when the
+/// last one leaves; a `Once` unit's start when it is complete. Both read the view, so a unit
+/// that is already docked or complete when the client joins or loads plays from the first frame.
+pub fn track_docks(
+    link: Res<crate::sim_link::SimLink>,
+    clock: Res<AnimClock>,
+    roots: Query<&crate::sim_link::SimEntity>,
+    mut q: Query<&mut EventAnim>,
+) {
+    let now = clock.now();
+    for mut a in &mut q {
+        if !matches!(a.trigger, Trigger::Dock | Trigger::Once) {
+            continue;
+        }
+        let Some(id) = roots.get(a.root).ok().map(|id| id.0) else { continue };
+        if a.trigger == Trigger::Once {
+            if a.started.is_none() && complete(&link, id) {
+                a.started = Some(now);
+            }
+            continue;
+        }
+        let docked = link
+            .curr()
+            .unit(id)
+            .is_some_and(|u| u.flags.contains(sta_sim::view::UnitFlags::DOCKED));
+        match (docked, a.started.is_some()) {
+            (true, false) => a.started = Some(now),
+            (false, true) => a.started = None,
+            _ => {}
+        }
+    }
+}
+
+/// How an ambient (cycle) track of a unit with a sim entity is held back.
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
+pub enum AmbientGate {
+    /// Rests until a freighter docks, then loops while one is docked.
+    Docked(Option<f64>),
+    /// Plays forward once from the moment the unit is complete, then holds the last key.
+    Once(Option<f64>),
+}
+
+/// Marks an ambient track as looked at, so it is gated once.
+#[derive(Component)]
+pub struct GateChecked;
+
+/// What the unit's `animation` key and class make of its ambient tracks (the engine animates every
+/// track of the model alike; this is the part that differs from looping all the time):
+/// a drop-off whose key is off rests until docked, any unit with key 1 plays once. Key 2
+/// keeps looping; the same for units with key off that are not drop-offs (the engine rests
+/// them too, not applied here).
+pub fn ambient_gate(mode: AnimMode, drop_off: bool) -> Option<AmbientGate> {
+    match (mode, drop_off) {
+        (AnimMode::Once, _) => Some(AmbientGate::Once(None)),
+        (AnimMode::Off, true) => Some(AmbientGate::Docked(None)),
+        _ => None,
+    }
+}
+
+/// Ambient tracks not yet looked at.
+type UngatedAmbient = (With<NodeAnim>, Without<EventAnim>, Without<GateChecked>);
+
+/// Gives each ambient track its gate once its unit's definition is known.
+pub fn assign_gates(
+    mut commands: Commands,
+    link: Res<crate::sim_link::SimLink>,
+    content: Option<Res<crate::sim_link::ContentRes>>,
+    roots: Query<&crate::sim_link::SimEntity>,
+    fresh: Query<(Entity, &crate::render::appearance::ModelNode), UngatedAmbient>,
+) {
+    for (e, node) in &fresh {
+        let Ok(id) = roots.get(node.root).map(|id| id.0) else {
+            // No sim unit (model viewer, map objects): loops, as before.
+            commands.entity(e).insert(GateChecked);
+            continue;
+        };
+        let Some(c) = content.as_deref() else { continue };
+        let Some(def) = link.curr().unit(id).and_then(|u| c.0.unit(u.def)) else { continue };
+        let caps = Caps::of(def, &c.0);
+        let mut ec = commands.entity(e);
+        ec.insert(GateChecked);
+        if let Some(g) = ambient_gate(caps.mode, caps.drop_off) {
+            ec.insert(g);
+        }
+    }
+}
+
+/// Poses gated ambient tracks.
+pub fn play_gated(
+    link: Res<crate::sim_link::SimLink>,
+    clock: Res<AnimClock>,
+    roots: Query<&crate::sim_link::SimEntity>,
+    mut q: Query<(&NodeAnim, &crate::render::appearance::ModelNode, &mut AmbientGate, &mut Transform)>,
+) {
+    let now = clock.now();
+    for (track, node, mut gate, mut tf) in &mut q {
+        let Ok(id) = roots.get(node.root).map(|id| id.0) else { continue };
+        let (next, pose) = match *gate {
+            AmbientGate::Docked(start) => {
+                let docked = link.curr().unit(id).is_some_and(|u| u.flags.contains(sta_sim::view::UnitFlags::DOCKED));
+                let start = match (docked, start) {
+                    (true, None) => Some(now),
+                    (false, Some(_)) => None,
+                    (_, s) => s,
+                };
+                (AmbientGate::Docked(start), loop_pose(track, start.map(|s| (now - s) as f32)))
+            }
+            AmbientGate::Once(start) => {
+                let start = start.or_else(|| complete(&link, id).then_some(now));
+                (AmbientGate::Once(start), once_pose(track, start.map(|s| (now - s) as f32)))
+            }
+        };
+        if *gate != next {
+            *gate = next;
+        }
+        if *tf != pose {
+            *tf = pose;
+        }
+    }
+}
+
 /// Poses event tracks: at rest on the first key, or mid-play.
 pub fn play_events(clock: Res<AnimClock>,
     bays: Option<Res<crate::render::fx::specials::ConstructionBays>>,
@@ -281,6 +521,18 @@ pub fn play_events(clock: Res<AnimClock>,
 ) {
     let now = clock.now();
     for (mut a, mut tf) in &mut q {
+        if matches!(a.trigger, Trigger::Dock | Trigger::Loop | Trigger::Once) {
+            let elapsed = a.started.map(|s| (now - s) as f32);
+            let p = match a.trigger {
+                Trigger::Once => once_pose(&a.track, elapsed),
+                Trigger::Loop => loop_pose(&a.track, Some(now as f32)),
+                _ => loop_pose(&a.track, elapsed),
+            };
+            if *tf != p {
+                *tf = p;
+            }
+            continue;
+        }
         let held = roots
             .get(a.root)
             .ok()
@@ -337,7 +589,7 @@ pub fn add_systems(app: &mut App) {
     use crate::app::GameSet;
     app.add_message::<SimMsg>().add_systems(
         Update,
-        (assign_triggers, play_idle, start_events, play_events)
+        (assign_triggers, assign_gates, play_idle, start_events, track_docks, play_gated, play_events)
             .chain()
             .after(crate::render::fx::specials::ConstructionSet)
             .in_set(GameSet::Interpolate)
@@ -526,11 +778,73 @@ mod tests {
 
     #[test]
     fn what_a_unit_can_do_picks_its_trigger() {
-        assert_eq!(trigger_for(Some((true, true))), Trigger::Build);
-        assert_eq!(trigger_for(Some((true, false))), Trigger::Build);
-        assert_eq!(trigger_for(Some((false, true))), Trigger::Fire);
-        assert_eq!(trigger_for(Some((false, false))), Trigger::None);
+        let c = |builds, armed, drop_off| Some(Caps { builds, armed, drop_off, mode: AnimMode::Off });
+        assert_eq!(trigger_for(c(true, true, false)), Trigger::Build);
+        assert_eq!(trigger_for(c(true, false, true)), Trigger::Build);
+        assert_eq!(trigger_for(c(false, true, false)), Trigger::Fire);
+        // An armed drop-off keeps its weapons' tracks on its shots.
+        assert_eq!(trigger_for(c(false, true, true)), Trigger::Fire);
+        assert_eq!(trigger_for(c(false, false, true)), Trigger::Dock);
+        assert_eq!(trigger_for(c(false, false, false)), Trigger::None);
         assert_eq!(trigger_for(None), Trigger::Idle);
+        // The unit's `animation` key outranks everything but a bay.
+        let m = |mode, armed| Some(Caps { builds: false, armed, drop_off: true, mode });
+        assert_eq!(trigger_for(m(AnimMode::Loop, true)), Trigger::Loop);
+        assert_eq!(trigger_for(m(AnimMode::Once, false)), Trigger::Once);
+        let yard = Some(Caps { builds: true, armed: false, drop_off: false, mode: AnimMode::Loop });
+        assert_eq!(trigger_for(yard), Trigger::Build);
+    }
+
+    fn odf(text: &str) -> std::sync::Arc<sta_odf::Odf> {
+        let text = text.to_owned();
+        std::sync::Arc::new(sta_odf::resolve("u", &mut |_| Some(text.clone())).unwrap())
+    }
+
+    fn unit(class: &str, starbase: bool, odf_text: &str) -> sta_content::UnitDef {
+        let mut d = sta_content::UnitDef::new("x", class);
+        d.is_starbase = starbase;
+        d.raw = odf(&format!("[GameObjectClass]\nclassLabel = \"{class}\"\n{odf_text}\n"));
+        d
+    }
+
+    #[test]
+    fn caps_are_read_from_the_class_and_the_starbase_flag() {
+        let db = sta_content::fake::db();
+        let of = |class: &str, starbase: bool| Caps::of(&unit(class, starbase, ""), &db).drop_off;
+        assert!(of("mining", false) && of("p_mining", false) && of("starbase", false) && of("shipyard", true));
+        assert!(!of("shipyard", false) && !of("pod", false) && !of("sensor", false) && !of("freighter", false));
+    }
+
+    /// `animation`: absent and 0 and 3 off, 1 once, 2 loop (executable, static; the ODF
+    /// comments say the same: "play forward when construction is finished", "looped").
+    #[test]
+    fn the_animation_key_gives_the_mode() {
+        let mode = |t: &str| AnimMode::of(&unit("sensor", false, t));
+        assert_eq!(mode(""), AnimMode::Off);
+        assert_eq!(mode("animation = 0"), AnimMode::Off);
+        assert_eq!(mode("animation = 3"), AnimMode::Off);
+        assert_eq!(mode("animation = 1"), AnimMode::Once);
+        assert_eq!(mode("animation = 2"), AnimMode::Loop);
+    }
+
+    #[test]
+    fn ambient_tracks_are_gated_only_where_the_engine_rests_them() {
+        assert_eq!(ambient_gate(AnimMode::Off, true), Some(AmbientGate::Docked(None)));
+        assert_eq!(ambient_gate(AnimMode::Once, false), Some(AmbientGate::Once(None)));
+        assert_eq!(ambient_gate(AnimMode::Loop, true), None);
+        assert_eq!(ambient_gate(AnimMode::Off, false), None);
+    }
+
+    /// A weapon's shots animate its owner only if its ODF says `animateOwner`; a weapon with no
+    /// ODF text behind it keeps the old "every shot" behaviour.
+    #[test]
+    fn a_weapon_animates_its_owner_by_its_odf() {
+        let mut w = sta_content::WeaponDef::new("w", "cannon", sta_content::WeaponKind::Beam);
+        assert!(owner_animates(&w), "no ODF text");
+        w.raw = odf("[GameObjectClass]\nclassLabel = \"cannon\"\n");
+        assert!(!owner_animates(&w));
+        w.raw = odf("[GameObjectClass]\nclassLabel = \"cannon\"\nanimateOwner = 1\n");
+        assert!(owner_animates(&w));
     }
 
     const FIRED: &str = "{ Fired: { shooter: 1, weapon: 0, hardpoint: 0, target: { Entity: 1 } } }";
@@ -555,6 +869,129 @@ mod tests {
     fn a_unit_with_no_event_to_wait_for_rests() {
         assert_eq!(peak_after("fx_miner", FIRED), 0.0);
         assert_eq!(peak_after("fx_miner", BUILT), 0.0);
+    }
+
+    /// A source that raises `DOCKED` on unit 1 for ticks `from..to`, as the sim does while a
+    /// freighter unloads there.
+    struct DockSource {
+        inner: sta_sim::fake::ScriptedSource,
+        from: u64,
+        to: u64,
+        tick: u64,
+    }
+
+    impl DockSource {
+        fn flagged(&self, v: std::sync::Arc<sta_sim::WorldView>) -> std::sync::Arc<sta_sim::WorldView> {
+            let mut v = (*v).clone();
+            let on = (self.from..self.to).contains(&self.tick);
+            for u in &mut v.units {
+                u.flags = u.flags.with(sta_sim::view::UnitFlags::DOCKED, on);
+            }
+            std::sync::Arc::new(v)
+        }
+    }
+
+    impl sta_sim::WorldSource for DockSource {
+        fn step(&mut self, c: &[sta_sim::command::Command]) -> sta_sim::TickOutput {
+            self.tick += 1;
+            let mut out = self.inner.step(c);
+            out.view = self.flagged(out.view);
+            out
+        }
+        fn view(&self) -> std::sync::Arc<sta_sim::WorldView> {
+            self.flagged(self.inner.view())
+        }
+    }
+
+    /// The door's x at each frame while unit 1 (a drop-off with no build list and no weapons)
+    /// is docked at for ticks 30..`to`; `joined`: the client starts with the unit already docked.
+    fn dock_app(to: u64, joined: bool) -> (App, Entity) {
+        use sta_sim::command::LocalRouter;
+        let mut db = sta_content::fake::db();
+        let mut builder = sta_content::ContentDb::builder().profile(db.profile()).features(db.features().clone());
+        for u in db.units() {
+            builder = builder.unit(u.clone());
+        }
+        for w in db.weapons() {
+            builder = builder.weapon(w.clone());
+        }
+        db = builder.unit(sta_content::UnitDef::new("fx_dock", "mining")).build().unwrap();
+        let text = "{ units: [{ id: 1, def: \"fx_dock\", owner: 0, hull: 800, rails: [{ at: 0, pos: { x: 0, y: 0, z: 0 } }] }], events: [] }";
+        let inner = sta_sim::fake::ScriptedSource::from_json5(text, &db).unwrap();
+        let src = DockSource { inner, from: if joined { 0 } else { 30 }, to, tick: 0 };
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f64(1.0 / 60.0)))
+            .configure_sets(Update, (crate::app::GameSet::SimLink, crate::app::GameSet::Interpolate).chain())
+            .add_plugins(crate::sim_link::SimLinkPlugin)
+            .init_resource::<SimEntities>()
+            .insert_resource(crate::sim_link::ContentRes(std::sync::Arc::new(db)))
+            .insert_resource(crate::sim_link::SimLink::new(Box::new(src), Box::new(LocalRouter::new()), sta_sim::PlayerId(0)));
+        add_systems(&mut app);
+        app.update();
+        let root = app.world_mut().spawn(crate::sim_link::SimEntity(sta_sim::EntityId(1))).id();
+        app.world_mut().resource_mut::<SimEntities>().0.insert(sta_sim::EntityId(1), root);
+        (app, root)
+    }
+
+    fn dock_run(to: u64, frames: usize, joined: bool) -> Vec<f32> {
+        let (mut app, root) = dock_app(to, joined);
+        let node = app.world_mut().spawn((EventAnim::new(door(), root), Transform::IDENTITY)).id();
+        (0..frames)
+            .map(|_| {
+                app.update();
+                app.world().get::<Transform>(node).unwrap().translation.x
+            })
+            .collect()
+    }
+
+    /// An ambient (cycle) track of a drop-off whose ODF has no `animation` key rests until a
+    /// freighter docks, loops while it is docked and rests again after: the stock mining
+    /// stations (A1 and A2 `fmining`, `kmining`, `rmining`, `bmining`).
+    #[test]
+    fn an_ambient_track_of_a_drop_off_loops_only_while_docked() {
+        let (mut app, root) = dock_app(300, false);
+        let node = app
+            .world_mut()
+            .spawn((
+                door(),
+                crate::render::appearance::ModelNode { root, index: 0 },
+                Transform::IDENTITY,
+            ))
+            .id();
+        let xs: Vec<f32> = (0..900)
+            .map(|_| {
+                app.update();
+                app.world().get::<Transform>(node).unwrap().translation.x
+            })
+            .collect();
+        assert!(xs[..40].iter().all(|&x| x == 0.0), "rests before the dock");
+        assert!(xs[100..560].iter().cloned().fold(0.0, f32::max) > 10.0, "loops while docked");
+        assert!(xs[700..].iter().all(|&x| x == 0.0), "rests after");
+        assert!(app.world().get::<AmbientGate>(node).is_some());
+    }
+
+    /// A drop-off's track loops while a freighter is docked and rests on the first key before
+    /// and after (the engine's flag 1 at `SetDock`, animation off when the freighter leaves).
+    #[test]
+    fn a_drop_offs_track_loops_while_docked_and_rests_otherwise() {
+        // 60 fps frames; the sim ticks at 30 Hz, so tick 30..300 is about frames 60..600.
+        let xs = dock_run(300, 900, false);
+        assert!(xs[..40].iter().all(|&x| x == 0.0), "rests before the dock");
+        let docked = &xs[100..560];
+        assert!(docked.iter().cloned().fold(0.0, f32::max) > 10.0, "plays while docked");
+        // Looped: with a 2 s period it passes the first key again during the dock.
+        let wraps = docked.windows(2).filter(|w| w[1] < w[0]).count();
+        assert!(wraps >= 2, "wraps {wraps}");
+        assert!(xs[700..].iter().all(|&x| x == 0.0), "rests after the dock");
+    }
+
+    /// A client that joins (or loads a snapshot) while a freighter is docked plays at once:
+    /// the state is in the view, not in an event it missed.
+    #[test]
+    fn a_client_joining_mid_dock_shows_the_dock_animation() {
+        let xs = dock_run(10_000, 200, true);
+        assert!(xs[..200].iter().cloned().fold(0.0, f32::max) > 10.0);
     }
 
     /// A model with no sim unit plays by itself, on the wall clock, and rests between.
@@ -602,13 +1039,18 @@ mod tests {
         let mut bad = Vec::new();
         // Each model's unit, from the ODFs: what it builds and whether it is armed.
         let (index, _) = sta_content::OdfIndex::build(&vfs);
-        let caps: std::collections::BTreeMap<String, (bool, bool)> = match sta_content::ContentDb::load(&vfs, &index) {
+        let caps: std::collections::BTreeMap<String, Caps> = match sta_content::ContentDb::load(&vfs, &index) {
             Ok((db, _)) => {
                 let mut m = std::collections::BTreeMap::new();
                 for u in db.units() {
-                    let e = m.entry(u.model.to_ascii_lowercase()).or_insert((false, false));
-                    e.0 |= !u.build.list.is_empty();
-                    e.1 |= !u.hardpoints.is_empty();
+                    let c = Caps::of(u, &db);
+                    let e = m.entry(u.model.to_ascii_lowercase()).or_insert(Caps::default());
+                    e.builds |= c.builds;
+                    e.armed |= c.armed;
+                    e.drop_off |= c.drop_off;
+                    if e.mode == AnimMode::Off {
+                        e.mode = c.mode;
+                    }
                 }
                 m
             }
