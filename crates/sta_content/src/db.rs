@@ -516,7 +516,8 @@ fn weapon_text(db: &ContentDb, w: &WeaponDef) -> String {
     let WeaponDef {
         key: _, odf: _, class: _, kind: _, range: _, damage: _, refire: _, shot_speed: _,
         duration: _, fire_sound: _, fx: _, effect_ticks: _, energy_drain: _, energy_cost: _,
-        disable_weapons: _, decloak_on_hit: _, features: _, raw: _,
+        disable_weapons: _, decloak_on_hit: _, initial_shot_delay_modifier: _,
+        ignore_shot_delay_effects: _, ordnance_defence: _, features: _, raw: _,
     } = w;
     Canon::new()
         .text("class", &w.class.0)
@@ -535,6 +536,10 @@ fn weapon_text(db: &ContentDb, w: &WeaponDef) -> String {
         .fixed("energy_cost", w.energy_cost)
         .flag("disable_weapons", w.disable_weapons)
         .flag("decloak_on_hit", w.decloak_on_hit)
+        // Signed; absent is not zero (SIM-35).
+        .opt_fixed("initial_shot_delay_modifier", w.initial_shot_delay_modifier)
+        .flag("ignore_shot_delay_effects", w.ignore_shot_delay_effects)
+        .flag("ordnance_defence", w.ordnance_defence)
         .raw("features", &features_text(db.weapon_features(w)))
         .finish()
 }

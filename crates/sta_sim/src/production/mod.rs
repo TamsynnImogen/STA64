@@ -643,3 +643,6 @@ mod charge_tests;
 
 #[cfg(test)]
 mod queue_limit_tests;
+
+#[cfg(test)]
+mod start_charge_tests;

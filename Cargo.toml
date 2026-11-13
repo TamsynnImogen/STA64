@@ -46,6 +46,7 @@ sta_bench = { path = "crates/sta_bench" }
 sta_net = { path = "crates/sta_net" }
 sta_ai = { path = "crates/sta_ai" }
 sta_fontbake = { path = "crates/sta_fontbake" }
+sta_media = { path = "crates/sta_media" }
 bevy = "0.20.1"
 thiserror = "2"
 # Snapshots, replays and the wire (postcard); native content and fakes (json5).

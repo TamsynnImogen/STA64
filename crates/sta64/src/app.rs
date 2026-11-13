@@ -99,6 +99,8 @@ pub struct LaunchConfig {
     /// `Some("")`: `--map` without a name (the map browser).
     pub map: Option<String>,
     pub mission_report: bool,
+    /// `--nointro` (the executables' own argument): skip the intro movies (MED-05).
+    pub nointro: bool,
     /// `--skirmish [<map>]`: play a match on the map (the map view with a seat,
     /// starting forces, an opponent, the HUD and audio); `map` holds its name.
     pub skirmish: bool,
@@ -152,6 +154,7 @@ Usage: sta64 [options]
   --race <name>            with --skirmish: your race, e.g. federation (default: the first playable)
   --opponent-race <name>   with --skirmish: the opponent's race (default: the next playable one)
   --mission-report         print which mission script every map would run, then exit
+  --nointro                skip the logo and title movies at start
 
 Test bench (docs/TESTBENCH.md):
   --scene <ini>            load a bench scene
@@ -220,6 +223,7 @@ impl LaunchConfig {
                 "--ui-gallery" => cfg.ui_gallery = true,
                 "--lcars-ui" => cfg.lcars_ui = true,
                 "--mission-report" => cfg.mission_report = true,
+                "--nointro" | "-nointro" => cfg.nointro = true,
                 "--help" | "-h" => cfg.help = true,
                 "--scene" => cfg.scene = value(&mut args).map(PathBuf::from),
                 "--headless" => cfg.headless = true,
@@ -329,6 +333,16 @@ mod tests {
         assert_eq!(parse("").mode(), Mode::FrontEnd);
         assert_eq!(parse("--install-root /g --mod FO").mode(), Mode::FrontEnd);
         assert_eq!(parse("").clock_mode(), ClockMode::Wall);
+    }
+
+    #[test]
+    fn nointro_is_the_executables_own_flag() {
+        assert!(!parse("").nointro);
+        for a in ["--nointro", "-nointro"] {
+            let c = parse(a);
+            assert!(c.nointro && c.unknown.is_empty(), "{a}");
+            assert_eq!(c.mode(), Mode::FrontEnd);
+        }
     }
 
     #[test]

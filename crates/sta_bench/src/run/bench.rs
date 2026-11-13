@@ -58,6 +58,10 @@ pub struct Bench {
     paused: bool,
     pause_at: Option<Tick>,
     pub fire_gap: Tick,
+    /// The scene's `[Marks]`: which measuring marks to write (TOOL-16).
+    pub marks_cfg: crate::parse::scene::MarksSection,
+    /// Marks made by commands (`bank`), in order.
+    pub(crate) command_marks: Vec<Mark>,
     replay: Option<ReplayFeed>,
     rec: Option<Rec>,
     pub log: Vec<String>,
@@ -205,6 +209,8 @@ impl Bench {
             paused: false,
             pause_at: s.pause.map(|p| p.ticks(TICK_HZ)),
             fire_gap: (scene.marks.fire_gap * f64::from(TICK_HZ)).round() as Tick,
+            marks_cfg: scene.marks.clone(),
+            command_marks: Vec::new(),
             replay: replay_feed,
             rec: None,
             log,
@@ -818,6 +824,43 @@ impl Bench {
                     format!("mine {}", ships.join(",")),
                 );
                 "ok".into()
+            }
+            C::Unknown { verb, text } if verb == "bank" => {
+                // Refit's `bank [<team> | <object>]` (read-only): a team's resources,
+                // `bank team 1 t=12.300 dilithium=... latinum=... metal=... biomatter=...`.
+                // STA64 keeps resources per player, and team N is player N here.
+                let arg = text.split_whitespace().nth(1);
+                let v = self.view();
+                let pid = match arg {
+                    None => v.players.first().map(|p| p.id).ok_or("no player")?,
+                    Some(a) => match a.parse::<u8>() {
+                        Ok(n) => PlayerId(n),
+                        Err(_) => {
+                            let id = self.resolve(a)?;
+                            v.units
+                                .iter()
+                                .find(|u| u.id == id)
+                                .map(|u| u.owner)
+                                .ok_or_else(|| format!("bank: `{a}` is gone"))?
+                        }
+                    },
+                };
+                let p = v.players.iter().find(|p| p.id == pid).ok_or_else(|| format!("bank: no player {}", pid.0))?;
+                const NAMES: [&str; 4] = ["dilithium", "latinum", "metal", "biomatter"];
+                let mut s = format!("bank team {} t={:.3}", pid.0, self.tick() as f64 / f64::from(TICK_HZ));
+                let mut fields = vec![("team", marks::Val::Text(pid.0.to_string()))];
+                for (i, r) in p.resources.iter().enumerate().take(NAMES.len()) {
+                    s += &format!(" {}={}", NAMES[i], to_f64(*r));
+                    fields.push((NAMES[i], marks::Val::Text(format!("{:.1}", to_f64(*r)))));
+                }
+                if let Some(c) = p.crew {
+                    s += &format!(" crew={}", to_f64(c));
+                    fields.push(("crew", marks::Val::Text(format!("{:.1}", to_f64(c)))));
+                }
+                // Also a `bank` mark, as Refit's command writes one.
+                let tick = self.tick();
+                self.command_marks.push(Mark { tick, kind: "bank", fields });
+                s
             }
             C::Colonize { .. } | C::Vent { .. } | C::EndMission { .. } => {
                 return Err("unsupported: colonize/vent/succeed/fail".into());

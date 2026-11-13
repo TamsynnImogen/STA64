@@ -199,6 +199,8 @@ Refit's names (`fire.end obj=shooter`, `cloak.done obj=warbird`).
     behind a named pipe (Unix), state in `<results parent>/sessions/<id>/`.
   - `diff A B`: two report directories, per case: digests (first differing
     tick), marks, objects by name, frames byte for byte; exit 1 on a difference.
+  - `pair <pair> --game a2|roots`: one description on the original game and
+    on STA64, compared in sim seconds ("Paired scenes", below).
   - Not yet: isolated install clones per session, `--jobs`, `index.html`,
     frames from a session, `Take a screenshot`/`Expect shots` steps.
 - **Frames** (`sta64 --headless --frames 0,100 --frame-dir D --frame-size WxH`,
@@ -295,6 +297,26 @@ to match run "<scenario>"`, `Expect mark "fire.start obj=shooter" by tick 90`,
   which writes `$STA64_BENCH_OUT/marks`; render marks have no source yet). `fire.start`/`fire.end` bracket a burst: shots of one
   hardpoint each no later than `FireGap` after the last ended (`fire.end` is
   the last `Fired` plus the weapon's `duration`).
+- **Measuring marks** (TOOL-16; Refit's `[Marks]` keys of the same names, on
+  both paths since `sta64` writes `Bench::marks()`): `Ordnance=1` adds
+  `ord.new` (`id obj weapon target at`) per shot and `ord.gone` (`id obj
+  weapon at life tgt_at d`) when the shot's hit lands (a shot that never hits
+  has none: the sim has no expiry event; a hit is matched to the oldest open
+  shot of its shooter and weapon, since hits carry no shot id; the original
+  writes `ord.gone` for misses too, so a miss there is an only-in-original
+  finding and shifts the `ord.gone` pairs after it), the weapon named by its ordnance
+  ODF (`ordName`) as Refit names it; `OrdnanceSkip=` leaves out weapon or
+  ordnance ODF prefixes. `State=<ms>` adds a `state` line per named scene
+  object that often, rounded to whole ticks (`pos hull sh`, `sp` when it has
+  special energy; no `q`/`ma`/`swa`); a series that ends early on one side is
+  a finding.
+  `bank` (a command) also writes a `bank` mark. `SimTime=1` puts `t=` (sim
+  seconds) first on every mark. `sta-bench parity` compares `state` as a
+  series (B resampled on A's times: position within `pos`, hull and shields
+  within `hull`, special-energy slope within `slope`), the others one by one
+  (`bank` resources within `hull`, `ord.gone` `d` within `pos` and `life`
+  within `time`); a kind not in the name table is compared by kind and object
+  and named in the notes.
 - **Checks** beyond the typed steps (grammar in `run/check.rs`; `Wait ... until`
   takes any predicate about the present):
 
@@ -422,6 +444,73 @@ both engines:
    vocabulary. `sta-bench diff`: object lists by name (positions after T seconds, hull
    over time, who is dying), marks by kind on a common sim-seconds axis, and
    frames side by side with a heat map.
+
+### Paired scenes (`sta-bench pair`, TOOL-15)
+
+One description runs on both engines and leaves one report:
+
+```sh
+sta-bench pair move --game a2 --install "$A2_INSTALL" --refit "$REFIT_WT"
+sta-bench pair firing --game roots --install "$ROOTS_INSTALL"      # Mod= from the pair file
+sta-bench pair move --game a2 --refit-out <earlier>/refit --install ...   # reuse an original run
+```
+
+- **The description** is `bench/pairs/<name>.ini`: a scene file in Refit's
+  format (`[Scene]`, `[Marks]`, `[Object.*]`) plus a `[Pair]` section
+  Refit's `Scene.asi` never reads: `Games=a2,roots`, `Duration=` (sim seconds
+  after the scene is built), `Frames=3,8` (sim seconds), `Size=WxH`,
+  `Tol=time=0.25,pos=5,hull=1[,frame=8]`, `At=<s> <command>` (repeatable, the
+  timeline, in the command vocabulary), and per game `Launch=`, `Race=`,
+  `Mod=`. Any key may be prefixed by a game, in any section (`roots.Odf=`,
+  `roots.Size=1280x960`, `fake.Odf=fx_cruiser`): for that game it replaces
+  the plain key; other games' prefixed keys are dropped. **Armada I is not
+  supported** (Refit's bench has no A1 profile, PLAN-ARMADA1); A1 keeps
+  install-reading checks.
+- **The original side** is `tools/pair/refit_side.py` (stdlib Python; `--dry-run`
+  prints the plan). It starts one Refit bench session (stock A2: `--mod stock
+  --clock bench`, 1280x720; Roots: `--game fo-roots --layers display,asiloader`,
+  1280x960), installs the materialised scene with `[Marks] SimTime=1` and
+  `State=250` forced on, launches, waits for `scene ready`, sends each `At=`
+  command and pauses for each frame when the **sim time** read from
+  `Scene.marks` reaches it (`drive shot`, of the bench's own headless display),
+  and records when each actually landed. It always stops its session (the
+  clone is deleted). `SimTime=`, `Ordnance=`, `State=` and `bank` need Refit's
+  `bench/measure-marks` branch (`--refit` or `$REFIT_ROOT` names that
+  checkout). Commands land late (one `drive` round trip, and the sim may run
+  faster than the wall clock), so nothing is compared on the asked time.
+- **The STA64 side** runs the same text in-process on the install's content
+  (`--install`, `--mod`, or `--fake` for tests), each command on the tick
+  nearest to when it **landed on the original**, frames at the original's
+  frame times. It writes the original's file formats: `Scene.marks` (Refit's
+  names; fire bursts merged per shooter and weapon as Refit marks them; one
+  `ord.new` per shot; a `state` line per named object every tick), `run.json`,
+  and frames from `sta64 --headless` (`--sta64`/`$STA64_BIN`). Those frames are
+  still the bench's stand-in shapes on fake content (TOOL-04), so the visual
+  pairs show where things are, not how they look, until the stock renderers
+  (RND-23..26) can draw without an install there.
+- **The report** (`report.md` for people, `report.json` for tools) is computed
+  from the two side directories alone, so it is reproducible: commands (asked,
+  landed on each side); events paired by kind, object and weapon (`fire.start`,
+  `fire.end`, `destroyed`, cloak) with time deltas; ordnance counts per shooter
+  and weapon; each object's `state` series sampled at the original's sample
+  times (position distance, hull, shields, special energy: max, mean, first
+  time over) and motion figures (start, top speed, arrival); frames side by
+  side (`frames/f<i>.png`: original | STA64 | difference x4) with mean, max and
+  share of differing pixels. Frames are judged only when the pair sets
+  `frame=`. Exit 1 when anything is beyond the tolerances.
+- **Where it goes**: `$XDG_DATA_HOME/sta64/bench/pairs/<pair>-<game>/`
+  (`refit/`, `sta64/`, `report.*`, `frames/`). Both tools refuse a path inside
+  a checkout: the frames are the game's art.
+- **One original game at a time.** The driver holds an exclusive `flock` on
+  the bench lock for its whole run (`$STA64_BENCH_LOCK`, default
+  `.claude/locks/bench.lock` of the main checkout; `--lock`), waits up to
+  540 s for it (`--lock-wait`), and otherwise exits 75 `BENCH-BUSY` (so does
+  `sta-bench pair`): run again. Anything else that starts a game with
+  `./a2test` takes the same lock:
+  `exec 8>"$STA64_BENCH_LOCK" && flock -w 540 8 || { echo BENCH-BUSY; exit 75; }`.
+- **Rules for agents**: the lock above, reniced (the driver renices itself); compare in sim seconds only; a scene-script
+  `attack` does not move ships on Roots (a player's right-click does), so
+  write movement as `goto`. STA64's `Scene.marks` keeps `t=` beside the tick.
 
 What it is for: cull and LOD distances, weapon timing (burst length, gap,
 first shot after an order, from `fire.start`/`fire.end`), ODF behaviour

@@ -798,6 +798,14 @@ mod tests {
         assert!(fired > 0);
     }
 
+    #[test]
+    fn mid_pd_energy_snapshot_keeps_the_timer_and_continues_identically() {
+        let (mut live, db) = crate::combat::engine_timing_tests::mid_saturation_energy();
+        assert!(live.weapons.shots_in_flight() > 0);
+        let fired = assert_continues(&mut live, db, 300);
+        assert!(fired > 0);
+    }
+
     /// A snapshot after P2 is eliminated (P3 still alive) continues the same,
     /// and the eliminated seat's orders are still rejected.
     #[test]

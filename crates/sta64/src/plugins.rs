@@ -69,6 +69,8 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
     if cfg.mode().has_window() {
         // render —
         app.add_plugins(crate::render::hulls::HullPlugin);
+        // RND-15: the Key's shadow map for the nebulae's gas and the hulls
+        app.add_plugins(crate::render::shadows::ShadowPlugin);
         app.add_plugins(crate::render::post::PostFxPlugin::from_cfg(cfg));
         // RND-07 cull distances and marks, RND-22 render profile, RND-28 developer shader shadowing
         app.add_plugins((crate::render::cull::CullPlugin, crate::render::profile::ProfilePlugin, crate::render::shader_shadow::ShaderShadowPlugin));
@@ -96,6 +98,11 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
         // CON-10: real sounds in place of the stub resolver.
         if let Some(r) = cfg.install_root.as_deref().and_then(|root| crate::audio::BankResolver::mount(root, cfg.active_mod.as_deref())) {
             app.insert_resource(crate::audio::Resolver(Box::new(r)));
+        }
+        // MED-03 movie playback; MED-05 the intro movies before the front end.
+        app.add_plugins(crate::media::MediaPlugin);
+        if front_end {
+            app.insert_resource(crate::media::IntroSettings { enabled: !cfg.nointro }).add_plugins(crate::media::IntroPlugin);
         }
         if cfg.skirmish {
             // A match: calm and battle music of the local race (set by `game::apply_race`),
