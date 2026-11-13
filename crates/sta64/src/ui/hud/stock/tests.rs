@@ -14,6 +14,7 @@ use crate::ui::hud::{Armed, ExternalFeed, HudPlugin};
 use crate::ui::sprite_font::SpriteText;
 use crate::ui::theme::click;
 
+
 const CFG: &str = "\
 screenWidth = 1600
 screenHeight = 1200
@@ -865,3 +866,6 @@ fn disabled_info_variant_does_not_leave_invisible_stats_input_regions() {
             .any(|r| r.contains(Vec2::new(1100.0, 100.0)))
     );
 }
+
+#[path = "identity_tests.rs"]
+mod identity_tests;
