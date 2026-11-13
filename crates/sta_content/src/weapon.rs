@@ -15,6 +15,7 @@
 //! | `duration` | ordnance `lifespan` seconds, beams only; `STA64_duration` seconds on the weapon ODF overrides it (point defence has no lifespan) |
 //! | `fire_sound`, `fx` | `fireSound`; ordnance `shotGeometry` (else `sprite`) |
 //! | specials | `effectTimer`, `energyDrainRate`, `specialEnergyCost`, `disableWeapons` (default on), `decloakOnHit` |
+//! | shot timing | `initialShotDelayModifier` (signed; absent stays `None`), `ignoreShotDelayEffects`; `ordnance_defence` is the weapon's own class `ordnancedefenseweapon` |
 //! | hardpoint arc | `restrictFireArc = 1` with `fireArc` as the half-width in radians (our reading) |
 
 use sta_core::Fixed;
@@ -77,6 +78,9 @@ pub fn weapon_def(name: &str, odf: &Odf, ordnance: Option<&Odf>, warnings: &mut 
     let own_duration = r.num("STA64_duration").filter(|s| *s >= 0.0).map(sta_core::seconds_to_ticks);
     d.disable_weapons = r.flag("disableWeapons").unwrap_or(true);
     d.decloak_on_hit = r.flag("decloakOnHit").unwrap_or(false);
+    d.initial_shot_delay_modifier = r.num("initialShotDelayModifier").map(Fixed::from_f64);
+    d.ignore_shot_delay_effects = r.flag("ignoreShotDelayEffects").unwrap_or(false);
+    d.ordnance_defence = own == "ordnancedefenseweapon";
 
     let arc = if r.flag("restrictFireArc") == Some(true) {
         r.num("fireArc").filter(|a| *a > 0.0).map(fire_arc)
@@ -100,4 +104,30 @@ pub fn weapon_def(name: &str, odf: &Odf, ordnance: Option<&Odf>, warnings: &mut 
         d.duration = ticks;
     }
     (d, arc)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(text: &str) -> WeaponDef {
+        let odf = sta_odf::resolve("w", &mut |_| Some(text.to_owned())).unwrap();
+        weapon_def("w", &odf, None, &mut Vec::new()).0
+    }
+
+    #[test]
+    fn shot_timing_keys() {
+        let w = parse("[WeaponClass]\nclassLabel = \"cannon\"\nshotDelay = 2.0\n");
+        assert_eq!(w.initial_shot_delay_modifier, None);
+        assert!(!w.ignore_shot_delay_effects && !w.ordnance_defence);
+        let w = parse("[WeaponClass]\nclassLabel = \"cannon\"\ninitialShotDelayModifier = 0.0\nignoreShotDelayEffects = 1\n");
+        assert_eq!(w.initial_shot_delay_modifier, Some(Fixed::ZERO));
+        assert!(w.ignore_shot_delay_effects);
+        let w = parse("[WeaponClass]\nclassLabel = \"cannon\"\ninitialShotDelayModifier = -0.5\n");
+        assert_eq!(w.initial_shot_delay_modifier, Some(Fixed::from_f64(-0.5)));
+        let w = parse("[WeaponClass]\nclassLabel = \"ordnancedefenseweapon\"\n");
+        assert!(w.ordnance_defence && w.kind == WeaponKind::PointDefence);
+        let w = parse("[WeaponClass]\nclassLabel = \"pointdefenselaser\"\n");
+        assert!(!w.ordnance_defence);
+    }
 }
