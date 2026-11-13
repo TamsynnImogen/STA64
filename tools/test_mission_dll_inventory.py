@@ -63,7 +63,7 @@ class MissionDllInventoryTests(unittest.TestCase):
             "A2.GetLocation",
         )
         self.assertEqual(
-            inventory.a2_exact_for("Vector3 const & GetLocation(char *, int)", self.repo), ""
+            inventory.a2_exact_for("Vector3 const & GetLocation(char *, float)", self.repo), ""
         )
         self.assertEqual(inventory.a2_exact_for("void SetRealTeam(int, int)", self.repo), "")
         self.assertEqual(inventory.a2_exact_for("void Cloak(int)", self.repo), "")

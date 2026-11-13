@@ -567,3 +567,34 @@ GetMainEnemyBaseLocation AttackMainEnemyBase GetAllyStationAttacks
 AI_Team_Load_AIP`, `AI_Attack` without a target or toward a point, and the
 warp form of `Goto`. `AI_Team_Load_AIP` also records the file like
 `Player:loadAIP`. Each reason is in `unsupported()` as `A2.<Name>: <why>`.
+
+
+## Object creation, searches and flags (step 2)
+
+`dll_objects.rs`. Grades: exe = read from the executable, static; args = read
+from the stock scripts' constants; not measured otherwise.
+
+- `A2.SetSpecialForcesFlag(h, on)` (1800 stock calls) stores a mission-side
+  flag on a live Craft and returns `h`; an invalid handle returns 0 with no
+  effect (exe). The flag means "reserved for the script, not for AI teams";
+  no AI team runs in a mission runtime, so its consumer today is
+  `RecruitSpecialForces`. It emits no command.
+- `A2.RecruitSpecialForces(odf, team[, out])` returns `ok, handle`: the first
+  unflagged craft of that team and ODF is flagged (exe).
+- `A2.BuildObject` (path form and object form) queues a SCRIPT spawn and
+  returns a pending handle (`0x4000_0000 + request`, as `A1`). `finish` wraps
+  every `A2` function so a token with a spawn receipt reaches it as the real
+  id; before the receipt it names no object. Path index out of range or an
+  unknown ODF returns 0 (exe; the ODF case is counted). The object form
+  accepts only a zero offset (rotation convention not measured).
+- `A2.GetNearestObjectNearPosition` / `NearMe`: exe filters (radius < 0
+  unlimited, team < 0 any, perceived flag, exclude handle); squared XZ
+  distance, ties to the later unit. Mask other than -1 raises (not measured);
+  derelict crafts are not skipped (no derelict state in the view).
+- `A2.GetFirstCraft`, `A2.GetLocation(path, index)` (0-based, `A2.paths`).
+- `DestroyCritical` queues a lethal `Damage`, `ExplodeNow` a `Kill`,
+  `SetCanBeDecommissioned` / `DisableShieldGenerator` the typed edits the sim
+  rejects today (reported and counted by the edit feedback).
+- Calls with no sim seam (position, shields, per-team targeting, subsystem
+  damage, hidden/derelict/name/population/wormhole/cargo/fleet state) raise
+  and are counted; see `seams()` for each reason.

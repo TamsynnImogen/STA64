@@ -318,6 +318,43 @@ A2_SIGNATURES = {
     "void Starfield_Load_New_Background_Geometry(char*, char*)": "A2.Starfield_Load_New_Background_Geometry",
     "void MinimapMessage(int, int, float)": "A2.MinimapMessage",
     "void MinimapMessage(char*, int, float, int)": "A2.MinimapMessage",
+    # Object creation, searches and flags (dll_objects.rs). Calls the sim seam
+    # cannot serve are bound there as raising-and-counted (`no_data_fn`).
+    "int BuildObject(char*, int, char*, int)": "A2.BuildObject",
+    "int BuildObject(char*, int, int, float, float, float)": "A2.BuildObject",
+    "int SetSpecialForcesFlag(int, bool)": "A2.SetSpecialForcesFlag",
+    "bool RecruitSpecialForces(char*, int, int&)": "A2.RecruitSpecialForces",
+    "int GetNearestObjectNearPosition(Vector3 const&, float, int, char*, int, bool, int)": "A2.GetNearestObjectNearPosition",
+    "int GetNearestObjectNearMe(int, float, int, char*, int, bool)": "A2.GetNearestObjectNearMe",
+    "int GetFirstCraft(void)": "A2.GetFirstCraft",
+    "Vector3 const& GetLocation(char*, int)": "A2.GetLocation",
+    "void DestroyCritical(int)": "A2.DestroyCritical",
+    "void ExplodeNow(int)": "A2.ExplodeNow",
+    "void SetCanBeDecommissioned(int, bool)": "A2.SetCanBeDecommissioned",
+    "void DisableShieldGenerator(int, bool)": "A2.DisableShieldGenerator",
+    "void SetPosition(int, char*)": "A2.SetPosition",
+    "void SetPosition(int, char*, int)": "A2.SetPosition",
+    "void SetShieldPercent(int, float)": "A2.SetShieldPercent",
+    "void SetMaxShields(int, float)": "A2.SetMaxShields",
+    "void AllowAsTarget(int, int, bool)": "A2.AllowAsTarget",
+    "void DamageEngines(int, float)": "A2.DamageEngines",
+    "void DamageSensors(int, float)": "A2.DamageSensors",
+    "void DamageLifeSupport(int, float)": "A2.DamageLifeSupport",
+    "void DamageShieldGenerator(int, float)": "A2.DamageShieldGenerator",
+    "void DamageWeapons(int, float)": "A2.DamageWeapons",
+    "void HideObject(int, bool)": "A2.HideObject",
+    "void ButItCanBeDerelicted(int, bool)": "A2.ButItCanBeDerelicted",
+    "void CraftCanRepair(int, bool)": "A2.CraftCanRepair",
+    "void CraftCanRecrew(int, bool)": "A2.CraftCanRecrew",
+    "void SetName(int, char const*)": "A2.SetName",
+    "void SetPlanetCivPop(int, int)": "A2.SetPlanetCivPop",
+    "void SetAngularVelocity(int, Vector3 const&)": "A2.SetAngularVelocity",
+    "void StuffIntoWormhole(int, int)": "A2.StuffIntoWormhole",
+    "void LinkWormholes(int, int)": "A2.LinkWormholes",
+    "void SetWormholeDeleteOnTransport(int, bool)": "A2.SetWormholeDeleteOnTransport",
+    "void LoadCargoShip(int, int)": "A2.LoadCargoShip",
+    "int GetNearestShipyard(int, int, bool)": "A2.GetNearestShipyard",
+    "SiegeFleet* CreateNewSiegeFleet(void)": "A2.CreateNewSiegeFleet",
 }
 
 # Order, AI, crew and team calls (api/a2/orders.rs). Mixed names (an overload that
@@ -666,17 +703,20 @@ A1_PARTIAL = {"Attack", "GetCrew"}
 
 def a2_raising(repo):
     """Names of A2 calls bound only to raise-and-count (no data behind them)."""
+    base = os.path.join(repo, "crates/sta_mission/src/api/a2")
     names = set()
-    for module, pattern in (
-        ("conditions", r'no_data_fn\(\s*lua,\s*ctx,\s*"(\w+)"'),
-        ("orders", r'\braising\(\s*lua,\s*&?env,\s*"(\w+)"'),
-    ):
+    try:
+        files = sorted(f for f in os.listdir(base) if f.endswith(".rs") and f != "tests.rs")
+    except OSError:
+        return names
+    for name in files:
         try:
-            with open(os.path.join(repo, f"crates/sta_mission/src/api/a2/{module}.rs"), encoding="utf-8") as f:
+            with open(os.path.join(base, name), encoding="utf-8") as f:
                 src = "\n".join(l for l in f.read().splitlines() if not l.lstrip().startswith("//"))
         except OSError:
             continue
-        names |= set(re.findall(pattern, src))
+        names |= set(re.findall(r'no_data_fn\(\s*lua,\s*ctx,\s*"(\w+)"', src))
+        names |= set(re.findall(r'\braising\(\s*lua,\s*&?env,\s*"(\w+)"', src))
     return names
 
 

@@ -1,5 +1,5 @@
 //! DLL-named order, AI and team calls of the Armada II `ScriptInterface`
-//! (LUA-05): `Goto Stop Attack AI_Attack Mine SetImpulseSpeed ... BuildObject`.
+//! (LUA-05): `Goto Stop Attack AI_Attack Mine SetImpulseSpeed ...` (`BuildObject` lives in `dll_objects`).
 //!
 //! Rules, each from the executable's own `ScriptInterfaceImp` bodies (read from
 //! the executable, static) unless marked otherwise:
@@ -22,12 +22,6 @@
 //!   measured in the XZ plane, and whose owner can see the unit; 0 when none.
 //!   Not measured: the engine's grid rounding of the square, tie order, and
 //!   whether its `isEnemy` is exactly the view's `Relation::Enemy`.
-//! - `BuildObject(odf, team, path, index)` spawns at the 0-based point of the
-//!   path (0 when the index is past the path); `BuildObject(odf, team, ref, x,
-//!   y, z)` at the reference unit's local offset. The request is queued and the
-//!   call returns a handle usable by every `A2` call once the spawn receipt is
-//!   in (`TOKEN_BASE + request`, see [`resolve_all`]). Offsets other than zero
-//!   need the unit's orientation, which the view does not carry: unsupported.
 //! - Paths come from `A2.paths[name]`, the table the host fills from the map
 //!   (points 1-based, `{x=,y=,z=}`), as for `GetDistance`.
 //!
@@ -48,13 +42,9 @@ use sta_core::{EntityId, Fixed, PlayerId, Vec3};
 use sta_sim::command::{AlertState, Edit, Order};
 use sta_sim::view::{Relation, UnitView};
 
-use crate::api::entity_ref::{EntityRef, SpawnHandle, SpawnStatus};
+use crate::api::entity_ref::EntityRef;
 use crate::api::search::stem;
 use crate::api::{Shared, edit_feedback, pos_f64, spawn, to_vec3, vector};
-
-/// Handles at or above this are pending spawns (`BuildObject`): the request
-/// number is `handle - TOKEN_BASE`. Real entity ids stay far below it.
-const TOKEN_BASE: u32 = 0x4000_0000;
 
 /// `AiCommand` values (read from the executable) the `SetCommand*VO` calls use.
 const CMD_STOP: i64 = 3;
@@ -67,7 +57,6 @@ const CMD_LAST: i64 = 56;
 
 #[derive(Default)]
 struct State {
-    pending: BTreeMap<u32, Rc<SpawnHandle>>,
     /// The impulse speed this runtime last set per unit.
     speed: BTreeMap<EntityId, Fixed>,
 }
@@ -269,17 +258,6 @@ impl Env {
         }
         Ok(out)
     }
-
-    /// A pending `BuildObject` handle: `None` for any other number.
-    fn resolve(&self, raw: i64) -> Option<Result<EntityId, &'static str>> {
-        let raw = u32::try_from(raw).ok().filter(|r| *r >= TOKEN_BASE)?;
-        let handle = self.st.borrow().pending.get(&raw).cloned()?;
-        Some(match handle.state.get() {
-            SpawnStatus::Resolved(id) => Ok(id),
-            SpawnStatus::Failed => Err("could not be built (the spawn failed)"),
-            SpawnStatus::Queued | SpawnStatus::Submitted(_) => Err("is still being built; use it after the next tick"),
-        })
-    }
 }
 
 /// Bind one DLL-named function.
@@ -439,49 +417,6 @@ fn nearest_enemy(env: &Env, a: &[P]) -> mlua::Result<Value> {
     Ok(Value::Integer(best.map_or(0, |(_, id)| i64::from(id.0))))
 }
 
-/// `BuildObject`: queue the spawn and return a pending handle.
-fn build_object(lua: &Lua, env: &Env, overload: usize, a: &[P]) -> mlua::Result<Value> {
-    let name = "BuildObject";
-    let owner = env.team(name, a[1].int())?;
-    let odf = a[0].text();
-    let pos = if overload == 0 {
-        let points = env.path(lua, name, a[2].text())?;
-        // An index past the path builds nothing; the engine returns 0.
-        let Some(p) = usize::try_from(a[3].int()).ok().and_then(|i| points.get(i)) else {
-            return if a[3].int() < 0 {
-                Err(mlua::Error::runtime("A2.BuildObject requires a non-negative path index"))
-            } else {
-                Ok(Value::Integer(0))
-            };
-        };
-        *p
-    } else {
-        let Some(reference) = env.alive(a[2].id()) else { return Ok(Value::Integer(0)) };
-        if [a[3].num(), a[4].num(), a[5].num()].iter().any(|v| *v != 0.0) {
-            return Err(env.gap(name, "a local offset needs the reference's orientation, which the view lacks"));
-        }
-        reference.pos
-    };
-    let request = {
-        let mut c = env.ctx.borrow_mut();
-        let key = c
-            .content
-            .as_ref()
-            .and_then(|db| db.key(stem(odf)))
-            .ok_or_else(|| mlua::Error::runtime(format!("A2.BuildObject: unknown ODF '{odf}'")))?;
-        spawn::queue_spawn(&mut c, key, owner, pos).map_err(mlua::Error::runtime)?
-    };
-    let EntityRef::Spawn(handle) = request else {
-        return Err(mlua::Error::runtime("A2.BuildObject: spawn was not queued"));
-    };
-    let token = u32::try_from(handle.request)
-        .ok()
-        .and_then(|r| TOKEN_BASE.checked_add(r))
-        .ok_or_else(|| mlua::Error::runtime("A2.BuildObject: spawn handles exhausted"))?;
-    env.st.borrow_mut().pending.insert(token, handle);
-    Ok(Value::Integer(i64::from(token)))
-}
-
 /// The commands the `SetCommandWhat...VO` calls can map onto the sim's orders.
 fn command_name(what: i64) -> String {
     match what {
@@ -568,9 +503,6 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
     table.set("SetRedAlert", alert(lua, &env, "SetRedAlert", AlertState::Red)?)?;
     table.set("SetGreenAlert", alert(lua, &env, "SetGreenAlert", AlertState::Green)?)?;
 
-    // Spawns.
-    table.set("BuildObject", def(lua, &env, "BuildObject", &["sisi", "sihfff"], build_object)?)?;
-
     // Queries.
     table.set("GetNearestEnemy", def(lua, &env, "GetNearestEnemy", &["hf"], |_, e, _, a| nearest_enemy(e, a))?)?;
     table.set("GetAttackLocation", def(lua, &env, "GetAttackLocation", &["hh"], |lua, e, _, a| attack_location(e, lua, a))?)?;
@@ -646,60 +578,7 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
         nothing()
     })?)?;
 
-    resolve_all(lua, &env, table)
-}
-
-/// Every `A2` function installed so far resolves `BuildObject` handles in its
-/// arguments: a known handle becomes the real entity once the spawn receipt
-/// is in. An unresolved one is an error, except in the existence queries,
-/// which treat it as "no such object". Other numbers pass through. Must run
-/// after the other `A2` installs, so it is the last one in `a2/mod.rs`.
-fn resolve_all(lua: &Lua, env: &Env, table: &Table) -> mlua::Result<()> {
-    let functions: Vec<(String, Function)> = table
-        .pairs::<String, Value>()
-        .filter_map(Result::ok)
-        .filter_map(|(k, v)| match v {
-            Value::Function(f) => Some((k, f)),
-            _ => None,
-        })
-        .collect();
-    for (name, f) in functions {
-        let lenient = matches!(name.as_str(), "Exists" | "DoesNotExist" | "IsAlive");
-        let env = env.clone();
-        let label = name.clone();
-        let wrapped = lua.create_function(move |_, args: MultiValue| {
-            let mut mapped = Vec::with_capacity(args.len());
-            for v in args {
-                let resolved = match &v {
-                    Value::Integer(n) => env.resolve(*n),
-                    _ => None,
-                };
-                mapped.push(match resolved {
-                    None => v,
-                    Some(Ok(id)) => Value::Integer(i64::from(id.0)),
-                    Some(Err(_)) if lenient => Value::Integer(0),
-                    Some(Err(why)) => {
-                        return Err(mlua::Error::runtime(format!("A2.{label}: object {why}")));
-                    }
-                });
-            }
-            f.call::<MultiValue>(MultiValue::from_vec(mapped)).map_err(root_error)
-        })?;
-        table.raw_set(name.as_str(), wrapped)?;
-    }
     Ok(())
-}
-
-/// The error a wrapped function raised, without the callback layers around it.
-fn root_error(e: mlua::Error) -> mlua::Error {
-    let mut e = &e;
-    while let mlua::Error::CallbackError { cause, .. } = e {
-        e = cause;
-    }
-    match e {
-        mlua::Error::RuntimeError(m) => mlua::Error::runtime(m.clone()),
-        other => mlua::Error::runtime(other.to_string()),
-    }
 }
 
 #[cfg(test)]

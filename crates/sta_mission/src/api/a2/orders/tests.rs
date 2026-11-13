@@ -319,62 +319,6 @@ fn driven(s: &mut Scene, rt: &mut MissionRuntime, ticks: u32) {
 }
 
 #[test]
-fn build_object_returns_a_handle_every_a2_call_resolves_after_the_receipt() {
-    let mut s = scene();
-    let mut rt = runtime(&s);
-    rt.eval::<()>("h = A2.BuildObject('fx_frigate', 1, 'F', 1); assert(h >= 0x40000000)").unwrap();
-    // Not built yet: the existence queries say no, other calls say why.
-    rt.eval::<()>("assert(not A2.Exists(h) and A2.DoesNotExist(h) and not A2.IsAlive(h))").unwrap();
-    let err = rt.eval::<()>("A2.GetLocation(h)").unwrap_err().to_string();
-    assert!(err.contains("still being built"), "{err}");
-    let err = rt.eval::<()>("A2.Stop(h, 1)").unwrap_err().to_string();
-    assert!(err.contains("still being built"), "{err}");
-    driven(&mut s, &mut rt, 4);
-    let built: Vec<_> = s.view.units.iter().filter(|u| u.owner == PlayerId(1) && u.pos == at(2500)).collect();
-    assert_eq!(built.len(), 1, "one frigate at the path point");
-    let id = built[0].id;
-    rt.eval::<()>("assert(A2.Exists(h) and A2.IsAlive(h))").unwrap();
-    let handle: i64 = rt.eval("return h").unwrap();
-    assert!(handle >= 0x4000_0000);
-    let loc: (f64, f64, f64) = rt.eval("local v = A2.GetLocation(h); return v.x, v.y, v.z").unwrap();
-    assert_eq!(loc, (2500.0, 0.0, 0.0));
-    // An order to the built unit goes to its real id, from its owner (slot 1).
-    rt.take_commands();
-    rt.eval::<()>("A2.Stop(h, 1)").unwrap();
-    let commands = rt.take_commands();
-    assert_eq!(commands[0].player, PlayerId(1));
-    assert_eq!(commands[0].kind, CommandKind::Order(Order::Stop { units: vec![id] }));
-}
-
-#[test]
-fn build_object_edge_cases() {
-    let s = scene();
-    // Past the path: nothing is built and the call returns 0, as the engine does.
-    let (_, commands) = run(&s, "assert(A2.BuildObject('fx_frigate', 1, 'P', 3) == 0)");
-    assert!(commands.is_empty());
-    let (_, commands) = run(&s, "assert(A2.BuildObject('fx_frigate', 1, 99999, 0, 0, 0) == 0)");
-    assert!(commands.is_empty());
-    let (_, err) = fails(&s, "A2.BuildObject('fx_frigate', 1, 'P', -1)");
-    assert!(err.contains("non-negative"), "{err}");
-    let (_, err) = fails(&s, "A2.BuildObject('nothing_like_it', 1, 'P', 0)");
-    assert!(err.contains("unknown ODF"), "{err}");
-    let (_, err) = fails(&s, "A2.BuildObject('fx_frigate', 77, 'P', 0)");
-    assert!(err.contains("team"), "{err}");
-    // The reference overload with a zero offset builds at the reference.
-    let (_, commands) = run(&s, "assert(A2.BuildObject('fx_frigate.odf', 1, b, 0.0, 0.0, 0.0) >= 0x40000000)");
-    assert_eq!(commands.len(), 1);
-    match &commands[0].kind {
-        CommandKind::Edit(Edit::SpawnRequest { player, pos, .. }) => {
-            assert_eq!((*player, *pos), (PlayerId(1), at(100)));
-        }
-        other => panic!("{other:?}"),
-    }
-    // A local offset needs the reference's orientation: unsupported.
-    let (rt, _) = fails(&s, "A2.BuildObject('fx_frigate', 1, b, 0.0, 0.0, 5.0)");
-    assert!(counted(&rt, "A2.BuildObject: a local offset"));
-}
-
-#[test]
 fn get_nearest_enemy_uses_the_xz_square_the_relation_and_visibility() {
     let s = scene();
     let (b, far) = (s.ids[1], s.ids[3]);
