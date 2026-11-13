@@ -221,12 +221,14 @@ impl Sim {
                     continue;
                 }
                 let (cx, cz) = (c.x - p.x, c.z - p.z);
-                // A solid not ahead of the craft (behind it or abeam, e.g.
-                // one it rests against while leaving) is not on the leg.
-                if cx * ux + cz * uz <= Fixed::ZERO {
+                // A round solid not ahead of the craft (behind it or abeam, e.g.
+                // one it rests against while leaving) is not on the leg (a
+                // box is steered round as its bounding circle, which a craft
+                // inside it may still head into).
+                if matches!(o.solid, Solid::Sphere { .. }) && cx * ux + cz * uz <= Fixed::ZERO {
                     continue;
                 }
-                let s = (cx * ux + cz * uz).min(len);
+                let s = (cx * ux + cz * uz).max(Fixed::ZERO).min(len);
                 let (qx, qz) = (cx - ux * s, cz - uz * s);
                 if (qx * qx + qz * qz).sqrt() < reach && hit.is_none_or(|h| s < h.0) {
                     hit = Some((s, c, r + ur + margin, o.solid));
@@ -245,9 +247,14 @@ impl Sim {
                     // on the ring dips a hair inside the contact distance).
                     // Separation keeps it out of the solid.
                     .or_else(|| {
+                        // The leg only skims the blocker: its closest approach
+                        // to the centre stays within a couple of units of the
+                        // contact distance (never through it to the far side).
                         let away = {
-                            let (dp, dt) = ((p.x - c.x, p.z - c.z), (t.x - c.x, t.z - c.z));
-                            dt.0 * dt.0 + dt.1 * dt.1 > dp.0 * dp.0 + dp.1 * dp.1
+                            let (cx, cz) = (c.x - p.x, c.z - p.z);
+                            let s = (cx * ux + cz * uz).max(Fixed::ZERO).min(len);
+                            let (qx, qz) = (cx - ux * s, cz - uz * s);
+                            (qx * qx + qz * qz).sqrt() + Fixed::from_int(2) >= ring - margin
                         };
                         (legal_target(&volume, p, t, ur, &solids)
                             || (away && legal_target(&volume, t, t, ur, &solids)))
@@ -262,7 +269,16 @@ impl Sim {
             };
             // An aim point nearer than the arrival radius would be "reached"
             // by a craft at rest: push it out along the same bearing.
-            let target = if target == real { target } else { away_from(p, target, far) };
+            let target = if target == real {
+                target
+            } else {
+                let pushed = away_from(p, target, far);
+                // The pushed point must be as legal as the one it replaces.
+                match volume {
+                    Some(v) if pushed != target && !crate::boundary::contact::legal_target(&v, p, pushed, ur, &solids) => target,
+                    _ => pushed,
+                }
+            };
             u.target = Some(target);
             if t == real {
                 held.push((u.id, real));
@@ -350,7 +366,7 @@ impl Sim {
 /// `a`, or the point on the same bearing from `p` at `far` if it is nearer.
 fn away_from(p: Vec3, a: Vec3, far: Fixed) -> Vec3 {
     let (dx, dz) = (a.x - p.x, a.z - p.z);
-    if dx.abs() >= far || dz.abs() >= far && far > Fixed::ZERO {
+    if far == Fixed::ZERO || dx.abs() >= far || dz.abs() >= far {
         return a;
     }
     let d = (dx * dx + dz * dz).sqrt();

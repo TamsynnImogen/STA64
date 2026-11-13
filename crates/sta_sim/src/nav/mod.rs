@@ -558,6 +558,12 @@ fn plan(cache: &mut Cache, spec: Spec, p: Vec3, t: Vec3, reach: Fixed, lead: Fix
             Plan::Aim(c)
         };
     }
+    // A goal already within the arrival radius is flown to directly: an aim
+    // point there would be "reached" by a craft at rest (and the order put
+    // back) every tick.
+    if exact && lead > Fixed::ZERO && within(p, t, lead) {
+        return Plan::Keep;
+    }
     let field = cache.field(id, &grid, goal);
     if !field.reaches(start) {
         return Plan::Keep;
