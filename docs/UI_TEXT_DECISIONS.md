@@ -85,14 +85,20 @@ explicit and the set can grow by one row at a time.
 ## Icons
 
 **T7. Two kinds of icon, two formats.**
-- *Flat, single-colour icons* (race emblems, command and status symbols of
-  our own screens): authored as SVG in the repository (our own work only),
+- *Flat, single-colour icons of our own design* (command, status and
+  navigation symbols of our own screens): authored as SVG in the repository,
   baked at build time by `sta_fontbake` into an SDF atlas, tinted by the
   theme, sharp at every UI scale.
-- *Painted icons* (the games' build buttons, resource icons, portraits): stay
-  raster, read from the install's SPR tables and textures through the mod
-  chain (UI-27). They are not vectorised. A mod replaces them the way it
-  replaces any texture, at whatever resolution it ships.
+- *The games' icons* (build buttons, resource icons, portraits, race
+  emblems): stay raster, read from the install's SPR tables and textures
+  through the mod chain (UI-27). They are not vectorised. A mod replaces them
+  the way it replaces any texture, at whatever resolution it ships.
+
+Race emblems and every other franchise symbol are never committed or
+released, in any form: a redrawn SVG of an emblem is still the rights
+holder's mark, not our work. Where our own screens show a race (lobby, race
+picker), the emblem comes from the player's install at run time, and the
+race's name is the fallback when the install has none.
 
 SVG is a source format only. STA64 does not load or rasterise SVG at run time
 in v1.
@@ -108,8 +114,8 @@ resolves to neither is drawn as the word.
 Markup in legacy string tables or in mod tooltips (see T5); a STA64-only
 strings file for mods (string-table overlays stay excluded by
 MODDING_DECISIONS); Markdown; tags for font size, links or images by path;
-loading SVG at run time; fonts supplied by a mod as TTF/OTF; vectorising the
-games' painted icons; converting a mod's sprite fonts or icons to another
+loading SVG at run time; fonts supplied by a mod as TTF/OTF; vectorising or
+redrawing the games' icons and emblems; converting a mod's sprite fonts or icons to another
 format.
 
 ## Open questions for sign-off
