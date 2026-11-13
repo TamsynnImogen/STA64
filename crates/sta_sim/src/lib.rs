@@ -467,6 +467,7 @@ impl Sim {
         // `units` for scripts, but no player sees or picks them (`EntityKind::hidden`).
         // Only the view changes: state and digest do not.
         let mut hidden: Vec<EntityId> = Vec::new();
+        let docked = self.economy.docked_stations(&self.units);
         let units = self.units.iter().map(|entity| {
             let mut view = entity.view();
             if self.content.as_deref().and_then(|db| db.unit(entity.def)).is_some_and(EntityKind::hidden) {
@@ -474,6 +475,7 @@ impl Sim {
                 view.flags = view.flags.with(view::UnitFlags::SELECTABLE, false);
             }
             view.flags = view.flags.with(view::UnitFlags::BUILDING, self.production.is_welding(entity.id));
+            view.flags = view.flags.with(view::UnitFlags::DOCKED, docked.contains(&entity.id));
             if matches!(entity.kind, EntityKind::Craft) {
                 view.autonomy = Some(self.autonomy.levels(entity.id));
             }

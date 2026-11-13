@@ -152,6 +152,46 @@ fn a_miner_announces_each_phase_of_its_cycle() {
     assert!(seen.windows(2).all(|w| w[0] != w[1]));
 }
 
+/// A station shows `DOCKED` in the view exactly while a freighter unloads at it (RND-21),
+/// and a world with no mining never raises it.
+#[test]
+fn a_station_is_docked_while_a_freighter_unloads_at_it() {
+    use crate::view::UnitFlags;
+    let mut sim = game();
+    let moon = spawn(&mut sim, "fx_moon", NEUTRAL, v(0, 0));
+    let near = spawn(&mut sim, "fx_station", PlayerId(0), v(0, 0));
+    let far = spawn(&mut sim, "fx_station", PlayerId(0), v(900, 900));
+    let m = spawn(&mut sim, "fx_miner", PlayerId(0), v(0, 0));
+    let docked = |sim: &Sim, id| sim.view().units.iter().find(|u| u.id == id).unwrap().flags.contains(UnitFlags::DOCKED);
+    assert!(!docked(&sim, near) && !docked(&sim, m));
+    assert!(mine(&mut sim, 0, m, moon));
+    let mut seen = Vec::new();
+    for _ in 0..1250 {
+        let out = sim.step(&[]);
+        let phase = out.events.iter().rev().find_map(|e| match e {
+            SimEvent::MinerPhase { phase, .. } => Some(*phase),
+            _ => None,
+        });
+        seen.push((phase, docked(&sim, near)));
+        // Only the station the freighter unloads at; never the freighter or a far station.
+        assert!(!docked(&sim, far) && !docked(&sim, m));
+    }
+    let on: Vec<bool> = seen.iter().map(|s| s.1).collect();
+    assert!(on.contains(&true) && on.contains(&false), "docked for part of the cycle only");
+    // Docked from the tick it unloads to the tick it leaves, in one run each time.
+    let runs = on.windows(2).filter(|w| w[0] != w[1]).count();
+    assert!(runs >= 3, "{runs} flag changes over two cycles");
+    // The flag follows the unloading phase.
+    for (i, (phase, d)) in seen.iter().enumerate() {
+        if *phase == Some(crate::event::MinerPhase::Unloading) {
+            assert!(d, "unloading at tick {i}");
+        }
+        if matches!(phase, Some(crate::event::MinerPhase::Mining | crate::event::MinerPhase::ToNode)) {
+            assert!(!d, "{phase:?} at tick {i}");
+        }
+    }
+}
+
 /// A mined-out node with nothing carried ends the cycle: the miner is announced idle.
 #[test]
 fn a_miner_whose_node_is_gone_is_announced_idle() {
