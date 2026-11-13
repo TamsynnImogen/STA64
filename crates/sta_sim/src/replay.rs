@@ -43,8 +43,10 @@ use crate::{SEAM_REV, Sim};
 pub const MAGIC: [u8; 4] = *b"STAR";
 /// Bumped when the layout of [`Replay`] changes. Format 4 (CON-35) adds the
 /// lineage and pack names and carries the keyed content digest's hash;
-/// formats 1 to 3 are refused ([`ReplayError::FormatVersion`]).
-pub const FORMAT_VERSION: u16 = 4;
+/// format 5 adds `ControlRec::RemoteAi` and digests the AI seats, so the
+/// digests of a replay with a computer player differ from format 4's;
+/// formats 1 to 4 are refused ([`ReplayError::FormatVersion`]).
+pub const FORMAT_VERSION: u16 = 5;
 /// Digest every this many ticks unless the recorder is told otherwise.
 pub const DEFAULT_DIGEST_EVERY: Tick = 30;
 
@@ -138,6 +140,8 @@ pub enum ControlRec {
     Remote,
     Ai(String),
     Idle,
+    /// A computer player run by the host, recorded by a non-host peer.
+    RemoteAi(String),
 }
 
 /// How a recorded game's seats got their starting forces.
@@ -221,6 +225,7 @@ impl Replay {
                         Control::Human => ControlRec::Human,
                         Control::Remote => ControlRec::Remote,
                         Control::Ai(n) => ControlRec::Ai(n.clone()),
+                        Control::RemoteAi(n) => ControlRec::RemoteAi(n.clone()),
                         // Idle, and any seat kind added later: nothing sends for them.
                         _ => ControlRec::Idle,
                     },
@@ -314,6 +319,7 @@ impl Replay {
                         ControlRec::Human => Control::Human,
                         ControlRec::Remote => Control::Remote,
                         ControlRec::Ai(n) => Control::Ai(n.clone()),
+                        ControlRec::RemoteAi(n) => Control::RemoteAi(n.clone()),
                         ControlRec::Idle => Control::Idle,
                     },
                 })

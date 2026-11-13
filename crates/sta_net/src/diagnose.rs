@@ -265,7 +265,7 @@ fn setup_differences(a: &Replay, b: &Replay) -> Vec<&'static str> {
     let seats = |r: &Replay| -> Vec<_> {
         r.players
             .iter()
-            .map(|p| (p.id, p.team, p.race.clone(), if let ControlRec::Ai(n) = &p.control { Some(n.clone()) } else { None }, p.control == ControlRec::Idle))
+            .map(|p| (p.id, p.team, p.race.clone(), if let ControlRec::Ai(n) | ControlRec::RemoteAi(n) = &p.control { Some(n.clone()) } else { None }, p.control == ControlRec::Idle))
             .collect()
     };
     if seats(a) != seats(b) {

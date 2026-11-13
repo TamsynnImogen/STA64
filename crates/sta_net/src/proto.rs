@@ -454,7 +454,8 @@ pub struct Start {
 impl Start {
     /// The players as the peer in seat `me` sets up its sim: its own seat
     /// is human; computer players run on the host only and arrive like
-    /// remote input everywhere else.
+    /// remote input everywhere else, but every peer keeps them as AI seats
+    /// (`Control::RemoteAi`): which seats are AI is simulation state.
     pub fn player_setups(&self, me: PlayerId) -> Vec<PlayerSetup> {
         self.seats
             .iter()
@@ -466,7 +467,7 @@ impl Start {
                     Occupant::Peer if s.slot == me => Control::Human,
                     Occupant::Peer => Control::Remote,
                     Occupant::Ai(name) if me == self.host => Control::Ai(name.clone()),
-                    Occupant::Ai(_) => Control::Remote,
+                    Occupant::Ai(name) => Control::RemoteAi(name.clone()),
                     Occupant::Idle => Control::Idle,
                 },
             })
@@ -2447,7 +2448,7 @@ mod tests {
             [
                 Control::Remote,
                 Control::Human,
-                Control::Remote,
+                Control::RemoteAi("normal".into()),
                 Control::Idle
             ]
         );
