@@ -24,7 +24,7 @@ fn a_freighter_mines_every_moon_kind_a_map_places() {
     let (index, _) = OdfIndex::build(&vfs);
     let (db, _) = ContentDb::load(&vfs, &index).unwrap();
     let db = Arc::new(db);
-    let Some(path) = vfs.list("bzn").into_iter().find(|p| p.to_ascii_lowercase().ends_with(&format!("{}.bzn", name.to_ascii_lowercase()))) else { return };
+    let path = vfs.list("bzn").into_iter().find(|p| p.to_ascii_lowercase().ends_with(&format!("{}.bzn", name.to_ascii_lowercase()))).expect("map exists");
     let bzn = sta_bzn::parse(&vfs.read(&path).unwrap().unwrap()).unwrap();
     let map = Arc::new(MapDef::convert_bzn_in(&bzn, &db, &vfs, &index).map);
     let new_sim = || {
