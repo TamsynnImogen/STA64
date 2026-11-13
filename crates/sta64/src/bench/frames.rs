@@ -13,6 +13,13 @@
 //! offscreen target, readback, encoding); the game's own renderers join the
 //! headless app when they can run without an install.
 //!
+//! A session (`--control stdio --frame-dir D`, no `--frames`) draws the same way
+//! when asked: the `frame NAME` command holds the sim, lets the picture settle
+//! for the same [`SETTLE`] frames and writes `D/NAME.png` from the same target,
+//! so a session frame at tick T is the `--frames T` frame of the same scene,
+//! camera and render settings. The command's answer line is printed once the
+//! file is written.
+//!
 //! No adapter (no GPU, no software Vulkan): `sta64` exits [`NO_ADAPTER`] and
 //! says so, and callers skip rather than fail.
 
@@ -62,6 +69,9 @@ pub struct Capture {
     settle: u32,
     waiting: bool,
     saved: Arc<AtomicUsize>,
+    /// Session mode: frames are asked for by `frame NAME`, not by tick.
+    on_demand: bool,
+    request: Option<String>,
 }
 
 /// What the capture lets this frame do.
@@ -89,7 +99,33 @@ impl Capture {
             settle: SETTLE,
             waiting: false,
             saved: Arc::new(AtomicUsize::new(0)),
+            on_demand: cfg.frames.is_empty(),
+            request: None,
         }
+    }
+
+    /// Whether this capture answers `frame NAME` (a session) rather than a tick list.
+    pub fn on_demand(&self) -> bool {
+        self.on_demand
+    }
+
+    /// A `frame NAME` request is still being drawn or written; the session reads
+    /// no further command until it is answered.
+    pub fn pending(&self) -> bool {
+        self.request.is_some()
+    }
+
+    /// `frame NAME`: the picture at the tick the bench is on now.
+    pub fn request(&mut self, name: &str) -> Result<(), String> {
+        if !self.on_demand {
+            return Err("frame: this run captures at the ticks of --frames".into());
+        }
+        if self.request.is_some() {
+            return Err("frame: another frame is still being drawn".into());
+        }
+        self.request = Some(name.to_owned());
+        self.settle = SETTLE;
+        Ok(())
     }
 
     /// The image the frames are read from.
@@ -103,6 +139,9 @@ impl Capture {
     }
 
     pub fn done(&self) -> bool {
+        if self.on_demand {
+            return self.request.is_none();
+        }
         self.next >= self.ticks.len()
     }
 
@@ -117,9 +156,30 @@ impl Capture {
                 self.waiting = false;
                 self.next += 1;
                 self.settle = SETTLE;
+                self.request = None;
             } else {
                 return Gate::Hold;
             }
+        }
+        if self.on_demand {
+            let Some(name) = self.request.clone() else { return Gate::Run(Tick::MAX) };
+            if self.settle > 0 {
+                self.settle -= 1;
+                return Gate::Hold;
+            }
+            let path = self.dir.join(format!("{name}.png"));
+            let _ = std::fs::create_dir_all(&self.dir);
+            let saved = self.saved.clone();
+            let shown = path.clone();
+            commands
+                .spawn(Screenshot::image(self.target.clone()))
+                .observe(save_to_disk(path))
+                .observe(move |c: On<ScreenshotCaptured>| {
+                    println!("frame {name} tick {tick} {} pixels {:016x}", shown.display(), fnv(c.image.data.as_deref().unwrap_or(&[])));
+                    saved.fetch_add(1, Ordering::Release);
+                });
+            self.waiting = true;
+            return Gate::Hold;
         }
         let Some(&at) = self.ticks.get(self.next) else {
             return Gate::Run(Tick::MAX);
