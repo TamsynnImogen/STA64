@@ -268,6 +268,7 @@ class Lifted:
         self.params = 0
         self.loops = 0
         self.loctypes = {}
+        self.floatlocs = set()
 
 
 class Lifter:
@@ -359,8 +360,15 @@ class Lifter:
         try:
             leaders, seen = self.blocks(start)
             f.instructions = len(seen)
+            # stack slots the function uses as floats (x87 DWORD operands)
+            for x in seen:
+                t = d.ins[d.at[x]][1]
+                m = re.fullmatch(r"f(?!i)\w+\s+DWORD PTR \[ebp([+-]0x[0-9a-f]+)\]", t)
+                if m:
+                    f.floatlocs.add(int(m.group(1), 16))
             lset = set(leaders)
             ntmp = [0]
+            self.ntmp = ntmp
             reg_in = {}
             ends = {}
             succs = {}
@@ -419,17 +427,27 @@ class Lifter:
                 need = set()
                 for s in succs.get(b, []):
                     need |= reg_in.get(s, set())
-                stores = []
+                pairs = []
                 for r in sorted(need):
                     v = st.r.get(r)
                     if v is None or v == ("reg", r):
                         continue
-                    stores.append(("set", ("reg", r), v))
-                if stores:
+                    pairs.append((("reg", r), v))
+                if pairs:
                     k = len(stmts)
                     while k > 0 and stmts[k - 1][0] in ("goto", "if", "return", "switch"):
                         k -= 1
-                    stmts[k:k] = stores
+                    # a branch after the stores must still see the old register values
+                    for j in range(k, len(stmts)):
+                        sj = stmts[j]
+                        if sj[0] in ("if", "switch") and contains(sj[1], lambda e: e[0] == "reg"):
+                            ntmp[0] += 1
+                            t = ("tmp", ntmp[0])
+                            stmts.insert(k, ("set", t, sj[1]))
+                            k += 1
+                            stmts[j + 1] = (sj[0], t) + sj[2:]
+                    # all registers are stored at once (a multiple assignment)
+                    stmts.insert(k, ("multiset", pairs))
         except DecodeError as e:
             f.error = str(e)
         return f
@@ -440,7 +458,8 @@ class Lifter:
         if mn in ("int3", "nop", "fnclex", "fwait", "wait", "cld"):
             return None
         if mn == "ret":
-            stmts.append(("return", r.get("eax")))
+            v = r.get("eax", "unset")
+            stmts.append(("return", self.read(st, "eax", a) if v == "unset" else v))
             return "ret"
         if mn == "push":
             if ops == "ebp" or (ops in ("ebx", "esi", "edi") and not st.body):
@@ -765,12 +784,43 @@ class Lifter:
             raise DecodeError(f"store of an unknown value at {a:#x}")
         if v[0] == "const" and self.is_float_slot(lv):
             v = ("float", struct.unpack("<f", struct.pack("<I", v[1] & 0xFFFFFFFF))[0])
+        v = self.snap(st, stmts, reads_location(lv), v)
         stmts.append(("set", lv, v))
+
+    def snap(self, st, stmts, test, value=None):
+        """Before a write: values the block still holds that read the written
+        memory are copied to temps, so they keep the value they were read with."""
+        cache = {}
+
+        def fix(v):
+            if v is None or not isinstance(v, tuple) or not contains(v, test):
+                return v
+            if v[0] in ("tmp", "addr", "code", "const", "float", "str"):
+                return v
+            if v not in cache:
+                self.ntmp[0] += 1
+                t = ("tmp", self.ntmp[0])
+                stmts.append(("set", t, v))
+                cache[v] = t
+            return cache[v]
+
+        for k in list(st.r):
+            st.r[k] = fix(st.r[k])
+        st.args = [fix(v) for v in st.args]
+        st.fpu = [fix(v) for v in st.fpu]
+        st.fret = fix(st.fret)
+        for k in list(st.mem):
+            if st.mem[k] != lv_value(k):  # a slot that holds its own value needs no copy
+                st.mem[k] = fix(st.mem[k])
+        # (flags are not kept: the compiler compares right before it branches)
+        return fix(value)
 
     def is_float_slot(self, lv):
         """A global the compiler stores a float into as raw bits."""
         if lv[0] == "vfield":
             return True
+        if lv[0] == "loc":
+            return lv[1] in self.cur.floatlocs
         if lv[0] in ("obj", "elem"):
             g = next((x for x in self.d.data.values() if x[0] == lv[1]), None)
             return bool(g) and g[1] in ("float", "floatarray")
@@ -829,10 +879,15 @@ class Lifter:
                 return ("cmp", "<=", v, ("const", 0))
             if mn == "jg":
                 return ("cmp", ">", v, ("const", 0))
+        if flags[0] == "test" and mn in ("ja", "jbe", "jb", "jae"):
+            v = flags[1]
+            return {"ja": truth(v), "jbe": drl.negate(truth(v)), "jb": FALSE_, "jae": TRUE_}[mn]
         if flags[0] == "cmp":
             x, y = flags[1], flags[2]
             if x is None or y is None:
                 raise DecodeError(f"compare of an unknown value at {a:#x}")
+            if mn in ("jb", "jae", "jbe", "ja"):
+                return ("cmp", JCC[mn], ("u", x), ("u", y))
             if mn in ("js", "jns"):
                 return ("cmp", JCC[mn], ("arith", "-", x, y), ("const", 0))
             return ("cmp", JCC[mn], x, y)
@@ -874,6 +929,10 @@ class Lifter:
             if d.is_chkstk(body):
                 st.body = False  # `mov eax,N; call _chkstk`: a large frame's prologue
                 return None
+            if not d.is_ftol(body):
+                # an internal function may write any global, variable or handed-out slot
+                self.snap(st, stmts, lambda e: e[0] in ("obj", "elem", "vfield", "glob", "var", "locidx")
+                          or (e[0] == "loc" and e in st.escaped))
             if d.is_ftol(body):
                 v = self.fpop(st, a)
                 st.r["eax"] = ("ftol", v)
@@ -899,6 +958,8 @@ class Lifter:
             st.fret = t
             return None
         tgt = self.read(st, ops, a)
+        # an engine call may write through a slot address the function handed out
+        self.snap(st, stmts, lambda e: e[0] == "loc" and e in st.escaped)
         if not tgt or tgt[0] != "method":
             raise DecodeError(f"indirect call `{ops}` ({tgt and tgt[0]}) at {a:#x}")
         obj, slot = tgt[1], tgt[2]
@@ -914,8 +975,11 @@ class Lifter:
             hidden = 1 if ret and ret.startswith("?A") else 0
             n = sum(push_count(p) for p in params) + hidden
             raw = self.take(st, n, a)
+            slot_out = None
             if hidden:
-                raw = raw[1:]
+                slot_out, raw = raw[0], raw[1:]
+                if not (slot_out and slot_out[0] == "addr" and slot_out[1][0] == "loc"):
+                    raise DecodeError(f"{plain}: struct return into {slot_out} at {a:#x}")
             args = self.typed(raw, params, plain, a)
             f.engine_calls[plain] = f.engine_calls.get(plain, 0) + 1
             call = ("call", plain, args)
@@ -927,6 +991,15 @@ class Lifter:
             t = self.new_tmp(ntmp)
             stmts.append(("set", t, special or call))
             self.clobber(st)
+            if slot_out:
+                # the returned vector is copied into the caller's slot
+                off = slot_out[1][1]
+                pairs = [(("loc", off + 4 * k), ("field", t, k)) for k in range(3)]
+                stmts.append(("multiset", pairs))
+                for lv, _ in pairs:
+                    st.mem.pop(lv, None)
+                st.r["eax"] = slot_out
+                return None
             cls = re.fullmatch(r"PAV(\w+)@@", ret or "")
             st.r["eax"] = ("objref", t, cls.group(1)) if cls and cls.group(1) in OBJECT_CLASSES else t
             st.fret = t if ret == "M" else None
@@ -955,6 +1028,7 @@ class Lifter:
                 st.r["eax"] = t
                 st.fret = t
                 return None
+            self.snap(st, stmts, lambda e: e[0] == "var" and e[1] == name)
             stmts.append(("var", name, op, [self.arg(x, a) for x in args]))
             self.clobber(st)
             return None
@@ -1081,7 +1155,10 @@ class Lifter:
             return st.fpu[-1 - k]
         if op == "st":
             return self.fread(st, "st(0)", a)
-        return self.read(st, op, a)
+        v = self.read(st, op, a)
+        if not integer and op.startswith("DWORD PTR") and v and v[0] == "const":
+            v = ("float", struct.unpack("<f", struct.pack("<I", v[1] & 0xFFFFFFFF))[0])
+        return v
 
     def x87(self, f, st, stmts, a, mn, ops):
         if mn in ("fld", "fild"):
@@ -1094,7 +1171,16 @@ class Lifter:
             v = self.fpop(st, a) if mn.endswith("p") else (st.fpu[-1] if st.fpu else st.fret)
             if mn.startswith("fi"):
                 v = ("ftol", v)
-            if ops.startswith("st("):
+            m = re.fullmatch(r"st\((\d)\)", ops)
+            if m:
+                k = int(m.group(1))
+                if k:
+                    # st(k) := st(0) (then the pop above): st(k) counts from before the pop
+                    if mn.endswith("p"):
+                        k -= 1
+                    if k >= len(st.fpu):
+                        raise DecodeError(f"`{mn} {ops}` on a short x87 stack at {a:#x}")
+                    st.fpu[-1 - k] = v
                 return None
             self.store(f, st, stmts, ops, v, a)
             return None
@@ -1103,12 +1189,24 @@ class Lifter:
             base = mn.rstrip("p") if mn.endswith("rp") or mn in ("faddp", "fsubp", "fmulp", "fdivp") else mn
             base = base.replace("fi", "f")
             op = {"fadd": "+", "fsub": "-", "fmul": "*", "fdiv": "/", "fsubr": "r-", "fdivr": "r/"}[base]
-            if ops in ("", "st(1),st") or mn.endswith("p"):
+            m = re.fullmatch(r"st\((\d)\),st", ops)
+            if mn.endswith("p") or ops == "":
+                k = int(m.group(1)) if m else 1
                 y = self.fpop(st, a)
-                x = self.fpop(st, a)
-                # st(1) = st(1) op st(0), pop
-                v = fbinop(op, x, y)
-                st.fpu.append(v)
+                if k - 1 >= len(st.fpu):
+                    if st.fret is not None and k == 1:
+                        st.fpu.append(self.fpop(st, a))
+                    else:
+                        raise DecodeError(f"`{mn} {ops}` on a short x87 stack at {a:#x}")
+                # st(k) = st(k) op st(0), pop
+                st.fpu[-k] = fbinop(op, st.fpu[-k], y)
+                return None
+            if m and m.group(1) != "0":
+                k = int(m.group(1))
+                top = self.fread(st, "st(0)", a)
+                if k >= len(st.fpu):
+                    raise DecodeError(f"`{mn} {ops}` on a short x87 stack at {a:#x}")
+                st.fpu[-1 - k] = fbinop(op, st.fpu[-1 - k], top)
                 return None
             top = self.fpop(st, a)
             if ops in ("st(0),st", "st,st(0)", "st(0),st(0)", "st,st"):
@@ -1139,10 +1237,10 @@ class Lifter:
                 top = self.fpop(st, a)
                 other = self.fpop(st, a)
             else:
-                other = self.fread(st, ops, a) if ops else None
-                top = self.fpop(st, a) if mn != "fcom" else (st.fpu[-1] if st.fpu else self.fpop(st, a))
-                if other is None:
-                    other = self.fpop(st, a)
+                top = self.fread(st, "st(0)", a)
+                other = self.fread(st, ops or "st(1)", a)
+                if mn != "fcom":
+                    self.fpop(st, a)
             st.fcmp = (top, other)
             return None
         if mn == "fnstsw":
@@ -1199,10 +1297,40 @@ def d_immediate(d, n):
     return ("const", n - (1 << 32) if n >= 1 << 31 else n)
 
 
+def reads_location(lv):
+    """A test for expressions that read memory location lv."""
+    k = lv[0]
+    if k in ("loc", "locidx"):
+        if k == "locidx":
+            return lambda e: e[0] in ("loc", "locidx")
+        return lambda e: e == lv or e[0] == "locidx"
+    if k in ("obj", "elem", "vfield"):
+        return lambda e: e[0] in ("obj", "elem", "vfield") and e[1] == lv[1]
+    if k == "gvar":
+        return lambda e: e[0] == "glob" and e[1] == lv[1]
+    if k == "param":
+        return lambda e: e == lv
+    return lambda e: False
+
+
+def contains(e, test):
+    """Whether expression e has a node for which test(node) holds."""
+    if isinstance(e, tuple):
+        if e and isinstance(e[0], str) and test(e):
+            return True
+        return any(contains(x, test) for x in e[1:]) or (bool(e) and not isinstance(e[0], str) and contains(e[0], test))
+    if isinstance(e, list):
+        return any(contains(x, test) for x in e)
+    return False
+
+
 def fbinop(op, x, y):
     """x87 arithmetic: floating point, no 32-bit wrap."""
     v = drl.binop(op, x, y)
     return ("farith",) + v[1:]
+
+
+TRUE_, FALSE_ = ("const", 1), ("const", 0)
 
 
 def truth(v):
@@ -1343,10 +1471,12 @@ def render_expr(e, nm, ctx="num"):
             s = f"((I({x}) & 0xffffffff) >> I({y}))"
         else:
             raise DecodeError(f"cannot render arith {op}")
+    elif k == "u":
+        s = f"U({render_expr(e[1], nm)})"
     elif k == "farith":
         s = f"({render_expr(e[2], nm)} {e[1]} {render_expr(e[3], nm)})"
     elif k == "neg":
-        s = f"(-{render_expr(e[1], nm)})"
+        s = f"(-({render_expr(e[1], nm)}))"
     elif k == "bnot":
         s = f"(~I({render_expr(e[1], nm)}))"
     elif k == "abs":
@@ -1430,6 +1560,48 @@ def render_lv(lv, nm):
     raise DecodeError(f"cannot assign to {k}")
 
 
+CALLS = ("call", "fcall", "mcall", "newvar", "varq", "newscript", "enginevar")
+
+
+def first_effect(e, n):
+    """In Lua's evaluation order (arguments left to right, then the call),
+    whether temp n is reached ("tmp") before any call completes ("call")."""
+    if isinstance(e, list):
+        for x in e:
+            r = first_effect(x, n)
+            if r:
+                return r
+        return None
+    if not isinstance(e, tuple) or not e:
+        return None
+    if e == ("tmp", n):
+        return "tmp"
+    if not isinstance(e[0], str):
+        return first_effect(list(e), n)
+    for x in e[1:]:
+        r = first_effect(x, n)
+        if r:
+            return r
+    return "call" if e[0] in CALLS else None
+
+
+def stmt_exprs(s):
+    k = s[0]
+    if k == "set":
+        return [s[2]]
+    if k == "multiset":
+        return [v for _, v in s[1]]
+    if k == "var":
+        return list(s[3])
+    if k == "bindvar":
+        return [s[3]]
+    if k in ("eval", "if", "return", "switch", "trashrule"):
+        return [s[1]]
+    if k == "addstep":
+        return [s[1]]
+    return []
+
+
 def inline_temps(blocks):
     """`t[n] = <call>` used once, by the next statement of the same block,
     is written in place of that use."""
@@ -1477,6 +1649,8 @@ def inline_temps(blocks):
                 n = prev[1][1]
                 if prev[2][0] in ("newscript",):
                     break
+                if first_effect(stmt_exprs(cur), n) != "tmp":
+                    break  # another call would run first: keep the compiler's order
                 new = subst(cur, n, prev[2])
                 if new == cur:
                     break
@@ -1517,6 +1691,9 @@ def render_stmt(s, nm):
     k = s[0]
     if k == "set":
         return f"{render_lv(s[1], nm)} = {render_expr(s[2], nm, 'arg')}"
+    if k == "multiset":
+        return (", ".join(render_lv(lv, nm) for lv, _ in s[1]) + " = "
+                + ", ".join(render_expr(v, nm, "arg") for _, v in s[1]))
     if k == "eval":
         return render_expr(s[1], nm, "arg")
     if k == "bindvar":
@@ -1560,6 +1737,7 @@ local function IDIV(x, y) x, y = I(x), I(y) if y == 0 then return 0 end local q 
 local function IMOD(x, y) x, y = I(x), I(y) if y == 0 then return 0 end return x - IDIV(x, y) * y end
 local function VEC(v, k) if type(v) ~= 'table' and type(v) ~= 'userdata' then return 0 end local ok, r = pcall(function() return ({v.x, v.y, v.z})[k] end) return ok and r or 0 end
 local function Ref(name) return { ref = name } end
+local function U(x) return I(x) & 0xffffffff end
 local function ULT(x, y) return math.ult(I(x) & 0xffffffff, I(y) & 0xffffffff) end
 
 local Mission = Mission_

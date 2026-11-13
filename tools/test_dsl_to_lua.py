@@ -279,6 +279,23 @@ class LiftTests(unittest.TestCase):
         self.assertIn("t[1] = NewScript('DoThing')", src)
         self.assertIn("AddStep(t[1], M.DoThing_step, 'DoThing_step')", src)
 
+    def test_swap_keeps_the_values_read_before_the_writes(self):
+        body = PROLOGUE + ["mov    eax,DWORD PTR [ebp-0x4]", "mov    ecx,DWORD PTR [ebp-0x8]",
+                           "mov    DWORD PTR [ebp-0x4],ecx", "mov    DWORD PTR [ebp-0x8],eax",
+                           "xor    eax,eax"] + EPILOGUE
+        d = make({STEP: body})
+        f = dsl.Lifter(d).lift(STEP)
+        self.assertIsNone(f.error)
+        src = render(d, f)
+        self.assertIn("t[1] = L[-4]", src)
+        self.assertIn("L[-4] = L[-8]", src)
+        self.assertIn("L[-8] = t[1]", src)
+
+    def test_negated_literal_is_not_a_comment(self):
+        nm = dsl.Namer(make({STEP: STEP_BODY}), {}, {})
+        self.assertEqual(dsl.render_expr(("neg", ("const", -1)), nm), "(-(-1))")
+        self.assertEqual(dsl.drl.lua_num(float("inf")), "math.huge")
+
     def test_return_types(self):
         self.assertEqual(dsl.msvc_ret(SI_NAMES[3]), "_N")
         self.assertEqual(dsl.msvc_ret(SI_NAMES[2]), "X")

@@ -1087,6 +1087,10 @@ def lua_str(s):
 
 def lua_num(x):
     if isinstance(x, float):
+        if x != x:
+            return "(0/0)"
+        if x in (float("inf"), float("-inf")):
+            return "math.huge" if x > 0 else "(-math.huge)"
         if x == int(x) and abs(x) < 1e15:
             return f"{int(x)}.0"
         return repr(x)
