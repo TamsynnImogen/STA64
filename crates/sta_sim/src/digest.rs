@@ -256,7 +256,8 @@ mod tests {
 
     #[test]
     fn each_kind_of_state_changes_its_own_section_only() {
-        let cases: Vec<(&str, Box<dyn FnOnce(&mut Sim)>, &str)> = vec![
+        type Change = Box<dyn FnOnce(&mut Sim)>;
+        let cases: Vec<(&str, Change, &str)> = vec![
             ("hull", Box::new(|s| s.units.iter_mut().next().unwrap().hull[0] = Fixed::from_int(5)), "combat"),
             ("shields", Box::new(|s| s.units.iter_mut().next().unwrap().shields.max = Fixed::from_int(5)), "combat"),
             ("flags", Box::new(|s| s.units.iter_mut().next().unwrap().flags = crate::view::UnitFlags::default()), "combat"),
