@@ -27,7 +27,7 @@
 //!   radius}`; results ascend by id;
 //! - `Player(n)` / `Player.get(n)`, `Game.localPlayer`: `number name race
 //!   color isAI slotType maxOfficers maxCrew resources`, `getRelation`,
-//!   `setRelation`, `loadAIP` (recorded, no effect);
+//!   `setRelation`, `loadAIP` (queued for the host's AI seats, AI-06);
 //! - `Objectives.objectives:add(title | {title, description})` returning an
 //!   objective (`state title description id`, `:complete()`, `:fail()`),
 //!   `Objectives.visible`, `Objectives.count`;
@@ -225,7 +225,10 @@ pub(crate) struct Ctx {
     pub log: Vec<String>,
     /// Orders and names the API accepted but could not carry out, by name.
     pub unsupported: BTreeMap<String, u32>,
+    /// AIP loads the script asked for, in call order; the host takes them
+    /// ([`crate::MissionRuntime::take_aip_requests`]).
     pub loaded_aips: Vec<(PlayerId, String)>,
+    pub aips_taken: usize,
     pub playback: Playback,
     /// The view tick of the last `Hit` each object took (`A2.UnderAttack`).
     pub last_hit: BTreeMap<EntityId, u64>,
@@ -264,6 +267,7 @@ impl Ctx {
             log: Vec::new(),
             unsupported: BTreeMap::new(),
             loaded_aips: Vec::new(),
+            aips_taken: 0,
             playback: Playback::default(),
             last_hit: BTreeMap::new(),
         }

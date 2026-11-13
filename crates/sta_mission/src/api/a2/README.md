@@ -88,7 +88,7 @@ are also accepted. Reloading replaces the list with fresh IDs, so handles
 from an earlier file cannot accidentally modify a new goal. The runtime's
 objective list and briefing remain host-only state; client display,
 replication and objective presentation are still pending. `Player:loadAIP`
-records the requested file and an unsupported diagnostic; it does not run AI.
+queues the requested file for the host (AI-06); a host without AI seats ignores it.
 
 The ignored `tests/a2_port_intro.rs` probes accept `STA64_A2_PORTS` pointing
 to the external ports' `a2/missions` folder and `STA64_A2_OBJECTIVES`
@@ -568,10 +568,11 @@ constants. Orders are sent as the unit's owner; edits are SCRIPT edits.
 
 Raising and counted (no seam): `Patrol SearchAndDestroy Scout Colonize
 Special_Attack SetCommandMoveAutonomyLow PointAt SetCrew SetRace CraftCanRepair
-GetMainEnemyBaseLocation AttackMainEnemyBase GetAllyStationAttacks
-AI_Team_Load_AIP`, `AI_Attack` without a target or toward a point, and the
-warp form of `Goto`. `AI_Team_Load_AIP` also records the file like
-`Player:loadAIP`. Each reason is in `unsupported()` as `A2.<Name>: <why>`.
+GetMainEnemyBaseLocation AttackMainEnemyBase GetAllyStationAttacks`,
+`AI_Attack` without a target or toward a point, and the warp form of `Goto`.
+`AI_Team_Load_AIP` is accepted like `Player:loadAIP`: the request is queued
+and the host gives it to the seat's AI (`MissionRuntime::take_aip_requests`,
+`sta_ai::MissionAiHub`; AI-06). Each reason is in `unsupported()` as `A2.<Name>: <why>`.
 
 
 ## Object creation, searches and flags (step 2)

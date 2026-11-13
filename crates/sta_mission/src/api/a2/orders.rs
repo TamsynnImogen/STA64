@@ -527,11 +527,12 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
     table.set("AttackMainEnemyBase", raising(lua, &env, "AttackMainEnemyBase", &["hb"], "the AI team's strategic map (its main enemy base) is not in the world view")?)?;
     table.set("GetAllyStationAttacks", raising(lua, &env, "GetAllyStationAttacks", &["ii"], "the AI team's attack statistics are not in the world view")?)?;
 
-    // AI scripts: the request is kept for the host, nothing runs it.
+    // AI plan: the request is queued for the host, which gives it to the
+    // seat's AI (`MissionRuntime::take_aip_requests`, `sta_ai::MissionAiHub`).
     table.set("AI_Team_Load_AIP", def(lua, &env, "AI_Team_Load_AIP", &["is"], |_, e, _, a| {
         let team = e.team("AI_Team_Load_AIP", a[0].int())?;
         e.ctx.borrow_mut().loaded_aips.push((team, a[1].text().to_owned()));
-        Err(e.gap("AI_Team_Load_AIP", "no AI script (AIP) runs in the simulation"))
+        nothing()
     })?)?;
 
     // Unit state with no edit in the seam.

@@ -5624,6 +5624,7 @@ version = "0.1.0"
 dependencies = [
  "libm",
  "mlua",
+ "sta_ai",
  "sta_bzn",
  "sta_content",
  "sta_core",

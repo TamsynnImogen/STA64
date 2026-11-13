@@ -426,6 +426,15 @@ impl MissionRuntime {
     /// (`stub global <name>` / `stub field <path>`). Lookup counts are not
     /// function-call counts. Lookup keys may be dynamically computed strings;
     /// function arguments are not inspected.
+    /// AIP loads (`AI_Team_Load_AIP`, `Player:loadAIP`) asked for since the
+    /// last call, in call order, with the seat they name (AI-06).
+    pub fn take_aip_requests(&self) -> Vec<(sta_core::PlayerId, String)> {
+        let mut c = self.inner.ctx.borrow_mut();
+        let out = c.loaded_aips[c.aips_taken..].to_vec();
+        c.aips_taken = c.loaded_aips.len();
+        out
+    }
+
     pub fn unsupported(&self) -> Vec<(String, u32)> {
         self.inner.ctx.borrow().unsupported.iter().map(|(k, v)| (k.clone(), *v)).collect()
     }

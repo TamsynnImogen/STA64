@@ -73,7 +73,6 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
         let player = e.team("AI_Team_Load_AIP", a[0].int())?;
         let mut c = e.ctx.borrow_mut();
         c.loaded_aips.push((player, a[1].text().to_owned()));
-        c.unsupported("Player.loadAIP");
         Ok(Value::Nil)
     })?)?;
 
