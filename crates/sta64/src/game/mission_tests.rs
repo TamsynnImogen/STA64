@@ -261,12 +261,10 @@ fn leaving_a_mission_through_the_in_game_menu_abandons_it_as_f10_does() {
     app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
     assert!(app.world().resource::<InGameMenu>().open);
     assert!(app.world().resource::<crate::clock::AnimClock>().paused(), "single player pauses");
-    for (act, page) in [(MenuAct::AskExit, MenuPage::ConfirmExit)] {
-        let e = app.world_mut().query::<(Entity, &MenuAct)>().iter(app.world()).find(|(_, a)| **a == act).unwrap().0;
-        click(app.world_mut(), e);
-        settle(&mut app, 3);
-        assert_eq!(app.world().resource::<InGameMenu>().page, page);
-    }
+    let ask = app.world_mut().query::<(Entity, &MenuAct)>().iter(app.world()).find(|(_, a)| **a == MenuAct::AskExit).unwrap().0;
+    click(app.world_mut(), ask);
+    settle(&mut app, 3);
+    assert_eq!(app.world().resource::<InGameMenu>().page, MenuPage::ConfirmExit);
     assert_eq!(campaigns(&app).progress.state("federation").reached, 0);
     let yes = app.world_mut().query::<(Entity, &MenuAct)>().iter(app.world()).find(|(_, a)| **a == MenuAct::Confirm).unwrap().0;
     click(app.world_mut(), yes);

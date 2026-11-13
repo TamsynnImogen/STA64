@@ -282,7 +282,7 @@ fn exit_to_the_main_menu_leaves_nothing_of_the_match_and_the_next_match_is_a_fre
     assert_eq!(menu(&app), InGameMenu::default());
     assert!(!app.world().resource::<AnimClock>().paused());
     assert_eq!(app.world_mut().query::<&crate::map::MatchEntity>().iter(app.world()).count(), 0);
-    assert!(app.world().resource::<crate::sim_link::SimEntities>().0.get(&sta_sim::EntityId(9999)).is_none());
+    assert!(!app.world().resource::<crate::sim_link::SimEntities>().0.contains_key(&sta_sim::EntityId(9999)));
     assert_eq!(menu_roots(&mut app), 0);
     assert!(app.world().resource::<crate::input::select::ControlGroups>().groups.iter().all(Vec::is_empty));
     assert!(app.world().resource::<crate::input::orders::OrderTargets>().0.is_empty());
