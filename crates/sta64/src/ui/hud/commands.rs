@@ -6,7 +6,7 @@ use sta_content::ContentDb;
 use sta_sim::specials::{SpecialKind, specials_of};
 use sta_sim::view::UnitFlags;
 use sta_sim::world::EntityKind;
-use sta_sim::{Fixed, UnitView};
+use sta_sim::{EntityId, Fixed, UnitView};
 
 use super::model::{HudFeed, finished};
 
@@ -85,10 +85,17 @@ pub fn shared(feed: &HudFeed) -> Capabilities {
         common.attack &= next.attack;
         common.build &= next.build;
         common.rally &= next.rally;
-        common.mine &= next.mine;
+        // Mine shows when any selected unit can mine; the others simply do not get the order (see `miners`).
+        common.mine |= next.mine;
         common.specials.retain(|s| next.specials.contains(s));
     }
     common
+}
+
+/// The members of `ids` that can take a Mine order (the rest of a mixed selection do not receive it).
+pub fn miners(feed: &HudFeed, ids: &[EntityId]) -> Vec<EntityId> {
+    let Some(db) = feed.content.as_deref() else { return Vec::new() };
+    ids.iter().copied().filter(|id| feed.view.unit(*id).is_some_and(|u| one(db, u).mine)).collect()
 }
 
 #[cfg(test)]

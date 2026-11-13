@@ -589,7 +589,9 @@ fn target_order(
             let db = feed.content.as_deref()?;
             let def = db.unit(u.def)?;
             if u.flags.contains(UnitFlags::DYING) || !EntityKind::mineable_def(def) { return None; }
-            vec![Order::Mine { units: ids.clone(), node: id }]
+            let miners = commands::miners(feed, &ids);
+            if miners.is_empty() { return None; }
+            vec![Order::Mine { units: miners, node: id }]
         }
         TargetMode::Rally => {
             let at = match target.and_then(|id| feed.view.unit(id).filter(|u| !u.flags.contains(UnitFlags::DYING)).map(|_| id)) {
@@ -665,6 +667,8 @@ mod target_tests {
             relations: relation.map(|r| vec![(PlayerId(if id == 1 { 2 } else { 1 }), r)]).unwrap_or_default() }
     }
 
+    fn target_order_available(f: &HudFeed) -> bool { target_mode_available(f, TargetMode::Mine) }
+
     #[test]
     fn target_actions_make_supported_orders() {
         let p = Some(SimVec3::from_f32([10.0, 0.0, 20.0]));
@@ -676,6 +680,12 @@ mod target_tests {
         let f = feed(&[2]);
         assert!(matches!(target_order(&f, TargetMode::Mine, Some(EntityId(5)), p), Some((orders, _)) if matches!(orders.as_slice(), [Order::Mine { node: EntityId(5), .. }])));
         assert!(target_order(&f, TargetMode::Mine, Some(EntityId(4)), p).is_none());
+        // A mixed selection: Mine is offered and only the miner receives the order.
+        let f = feed(&[1, 2]);
+        assert!(target_order_available(&f));
+        assert!(matches!(target_order(&f, TargetMode::Mine, Some(EntityId(5)), p), Some((orders, _)) if matches!(orders.as_slice(), [Order::Mine { units, node: EntityId(5) }] if units == &[EntityId(2)])));
+        // No miner among the selection: no order.
+        assert!(target_order(&feed(&[1]), TargetMode::Mine, Some(EntityId(5)), p).is_none());
         let f = feed(&[3]);
         assert!(matches!(target_order(&f, TargetMode::Rally, None, p), Some((orders, _)) if matches!(orders.as_slice(), [Order::Rally { builders, at: Target::Point(_) }] if builders == &[EntityId(3)])));
         assert!(matches!(target_order(&f, TargetMode::Rally, Some(EntityId(4)), p), Some((orders, _)) if matches!(orders.as_slice(), [Order::Rally { at: Target::Entity(EntityId(4)), .. }])));

@@ -565,6 +565,14 @@ fn fixed(strings: Option<&Strings>, key: &str, fallback: &str) -> String {
     strings.map(|s| s.game_text(key)).filter(|t| *t != key).unwrap_or(fallback).to_owned()
 }
 
+/// Whether the briefing text already closes with `heading` as a line of its own (case and a trailing colon
+/// ignored), so the panel must not draw it a second time.
+fn text_ends_with_heading(body: &str, heading: &str) -> bool {
+    let norm = |t: &str| t.trim().trim_end_matches(':').trim_end().to_lowercase();
+    let want = norm(heading);
+    !want.is_empty() && body.lines().rev().find(|l| !l.trim().is_empty()).is_some_and(|l| norm(l) == want)
+}
+
 /// The panel is A2 stock's `objectivesPanelArea=192 80 1280 1024` of 1600x1200, the
 /// title and text 30/50 px in, the OK button at (952, 948) of 252x60 inside it.
 fn draw_panel(
@@ -609,7 +617,12 @@ fn draw_panel(
             p.spawn(line(c.body.clone(), theme.text));
         }
         if c.message.is_none() && !c.lines.is_empty() {
-            p.spawn(head(fixed(s, "GUI_OD_OBJECTIVES", "OBJECTIVES:"), summary_colour));
+            // Armada I's objective files carry their own `OBJECTIVES:` line just above the goals (it is
+            // the end of the briefing text, and A1 has no `GUI_OD_OBJECTIVES` string); A2's do not.
+            let heading = fixed(s, "GUI_OD_OBJECTIVES", "OBJECTIVES:");
+            if !text_ends_with_heading(&c.body, &heading) {
+                p.spawn(head(heading, summary_colour));
+            }
             for l in &c.lines {
                 let (mark, colour) = match l.state {
                     ObjectiveState::Active => ("* ", theme.text),
@@ -973,6 +986,33 @@ mod tests {
         app.world_mut().resource_mut::<ObjectivesView>().visible = false;
         app.update();
         assert!(app.world_mut().query::<&PanelRoot>().iter(app.world()).next().is_none());
+    }
+
+    #[test]
+    fn an_objectives_heading_in_the_briefing_text_is_not_drawn_twice() {
+        assert!(text_ends_with_heading("TITLE TEXT\n\nOBJECTIVES:\n", "OBJECTIVES:"));
+        assert!(text_ends_with_heading("Go.\nobjectives", "OBJECTIVES:"));
+        assert!(!text_ends_with_heading("Go.", "OBJECTIVES:"));
+        assert!(!text_ends_with_heading("OBJECTIVES:\nGo.", "OBJECTIVES:"));
+        assert!(!text_ends_with_heading("", "OBJECTIVES:"));
+
+        let mut app = app();
+        app.insert_resource(Theme::default());
+        app.update();
+        let texts = |app: &mut App| app.world_mut().query::<&SpriteText>().iter(app.world()).map(|t| t.text.clone()).collect::<Vec<_>>();
+        let obj = [Objective { id: 1, title: "Find".into(), description: String::new(), state: ObjectiveState::Active }];
+        // An A1-shaped briefing: the text ends with the heading, then the goals follow.
+        app.world_mut().resource_mut::<ObjectivesView>().fill(&obj, Some(&ObjectiveBriefing { file: "f".into(), title: "Mission 1".into(), text: "Go.\n\nOBJECTIVES:".into(), notes: String::new() }));
+        app.world_mut().resource_mut::<ObjectivesView>().visible = true;
+        app.update();
+        let t = texts(&mut app);
+        assert_eq!(t.iter().filter(|x| x.contains("OBJECTIVES:")).count(), 1, "{t:?}");
+        assert!(t.iter().any(|x| x == "* Find"));
+        // An A2-shaped briefing (no heading in the text): the panel draws it.
+        app.world_mut().resource_mut::<ObjectivesView>().fill(&obj, Some(&ObjectiveBriefing { file: "f".into(), title: "Mission 1".into(), text: "Go.".into(), notes: String::new() }));
+        app.update();
+        let t = texts(&mut app);
+        assert_eq!(t.iter().filter(|x| x.contains("OBJECTIVES:")).count(), 1, "{t:?}");
     }
 
     #[test]

@@ -99,8 +99,18 @@ pub fn update_ghost(
         let at = aim.as_ref().and_then(|a| a.0).and_then(|a| ground_point(a.ray, y));
         match at {
             Some(at) => {
-                t.translation = to_bevy(at.to_f32());
-                g.status = Some(site_status(&feed, bounds.as_deref().and_then(|b| b.0.as_ref()), armed, at));
+                // The placement rule the sim applies: an orbital station snaps onto a planet's orbit.
+                match feed.content.as_deref() {
+                    Some(db) => {
+                        let site = crate::placement::ghost_site(db, bounds.as_deref().and_then(|b| b.0.as_ref()), &feed.view, armed.what, armed.builder, at);
+                        t.translation = to_bevy(site.at.to_f32());
+                        g.status = Some(site.status);
+                    }
+                    None => {
+                        t.translation = to_bevy(at.to_f32());
+                        g.status = Some(Ok(()));
+                    }
+                }
                 *vis = Visibility::Inherited;
             }
             None => *vis = Visibility::Hidden,
@@ -241,6 +251,67 @@ mod tests {
         assert!(blocked.emissive_texture.is_none());
         assert_eq!(blocked.emissive, LinearRgba::BLACK);
         assert_ne!(source.base_color, blocked.base_color);
+    }
+
+    /// An orbital station's ghost follows the sim's placement rule (it snaps onto the planet's
+    /// orbit and is refused in open space), not the ordinary site rule.
+    #[test]
+    fn an_orbital_ghost_snaps_to_the_planet_and_is_refused_in_open_space() {
+        use crate::input::select::AimState;
+        use sta_content::{ContentDb, MoveStats, UnitDef};
+        use sta_sim::view::UnitView;
+        use sta_sim::view::UnitFlags;
+        use sta_sim::{EntityId, Fixed, PlayerId, WorldView};
+        use std::sync::Arc;
+
+        let fake = sta_content::fake::db();
+        let mut rig = UnitDef::new("fx_rig", "constructionrig");
+        rig.movement = MoveStats::from_f32(140.0, 1.0, 1.0, 1.0, 0.2);
+        let mut orbital = UnitDef::new("fx_orbital", "p_mining");
+        orbital.orbit_time = Some(Fixed::from_int(120));
+        let mut planet = UnitDef::new("fx_world", "planet");
+        planet.radius = Fixed::from_int(200);
+        planet.resource = Some(2);
+        planet.can_have_orbital_station = true;
+        let mut b = ContentDb::builder().profile(fake.profile()).features(fake.features().clone()).unit(rig).unit(orbital).unit(planet);
+        for w in fake.weapons() {
+            b = b.weapon(w.clone());
+        }
+        for u in fake.units() {
+            b = b.unit(u.clone());
+        }
+        let db = b.build().unwrap();
+        let unit = |id, odf: &str, x: i32| UnitView {
+            id: EntityId(id), def: db.key(odf).unwrap(), owner: PlayerId(0),
+            pos: SimVec3 { x: Fixed::from_int(x), y: Fixed::ZERO, z: Fixed::ZERO }, heading: (Fixed::ZERO, Fixed::ONE), speed: Fixed::ZERO,
+            hull: [Fixed::ONE; 2], shields: [[Fixed::ZERO; 2]; 4], crew: None, energy: None, autonomy: None,
+            flags: UnitFlags::SELECTABLE, progress: None,
+        };
+        let what = db.key("fx_orbital").unwrap();
+        let view = WorldView { units: vec![unit(1, "fx_world", 1000), unit(2, "fx_rig", 0)], ..Default::default() };
+        let aim_at = |x: f32, z: f32| Aim(Some(AimState {
+            cursor: Vec2::ZERO,
+            ray: Ray3d::new(Vec3::new(x, 100.0, -z), Dir3::NEG_Y),
+            clip_from_world: Mat4::IDENTITY,
+            size: Vec2::new(800.0, 600.0),
+        }));
+
+        let mut world = World::new();
+        world.insert_resource(HudFeed { view: Arc::new(view), player: PlayerId(0), selected: Vec::new(), content: Some(Arc::new(db)) });
+        let state = HudState { placing: Some(Armed { builder: EntityId(2), what, odf: "fx_orbital".into() }), ..Default::default() };
+        world.insert_resource(state);
+        let ghost = world.spawn((Ghost { def: what, status: None, painted: None, own: Vec::new() }, Transform::default(), Visibility::Hidden)).id();
+
+        world.insert_resource(aim_at(1100.0, 0.0));
+        world.run_system_once(update_ghost).unwrap();
+        assert_eq!(world.get::<Ghost>(ghost).unwrap().status, Some(Ok(())));
+        // Radius 200 + 75 from the planet's centre, on the cursor's bearing.
+        assert_eq!(world.get::<Transform>(ghost).unwrap().translation.x, 1275.0);
+
+        world.insert_resource(aim_at(3000.0, 3000.0));
+        world.run_system_once(update_ghost).unwrap();
+        assert_eq!(world.get::<Ghost>(ghost).unwrap().status, Some(Err(SiteError::Blocked)));
+        assert_eq!(world.get::<Transform>(ghost).unwrap().translation.x, 3000.0);
     }
 }
 
