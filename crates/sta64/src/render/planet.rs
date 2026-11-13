@@ -1,6 +1,6 @@
 //! Under the Stock profile (RND-23) a planet is drawn as the engine draws it: the same ground
 //! hemispheres and cloud shell, each texel times the sum of the map's lights (every directional
-//! light at its colour, equal weight, plus [`STOCK_AMBIENT`]) added in display (sRGB) space as
+//! light of the two the map view places, at its colour, equal weight, plus [`STOCK_AMBIENT`]) added in display (sRGB) space as
 //! Direct3D 8's fixed pipeline does; no recipe surface, haze, glint or halo (`planet.wesl`, `stock`).
 //! The rest of this header is the Refit look.
 //!
@@ -14,7 +14,7 @@
 //! in half the ground's own hue and half sky blue, glint 0.3^40, halo 1.0 reaching
 //! 4% of the radius above the ground, x2 brighter looking toward the sun.
 
-use crate::render::profile::{refit_active, Effect, ProfileEffects, RenderProfile};
+use crate::render::profile::{Effect, ProfileEffects, RenderProfile};
 use crate::render::space;
 use crate::render::textures::Loader;
 use bevy::asset::{embedded_asset, AssetPath};
@@ -120,6 +120,16 @@ pub struct PlanetBody {
     applied: Option<(bool, bool, f32)>,
 }
 
+/// Whether the Stock look is the one drawing planets. Apps without the profile resources (the front end's
+/// own frame app) draw the Refit look, as `profile::ProfileEffects::implementation` falls back.
+fn stock_scenery(profile: Option<&RenderProfile>, effects: Option<&ProfileEffects>) -> bool {
+    matches!((profile, effects), (Some(p), Some(e)) if e.implementation(*p, Effect::Scenery) == RenderProfile::Stock)
+}
+
+fn refit_scenery(profile: Option<Res<RenderProfile>>, effects: Option<Res<ProfileEffects>>) -> bool {
+    !stock_scenery(profile.as_deref(), effects.as_deref())
+}
+
 pub struct PlanetPlugin;
 
 impl Plugin for PlanetPlugin {
@@ -127,7 +137,7 @@ impl Plugin for PlanetPlugin {
         embedded_asset!(app, "planet.wesl");
         app.add_plugins(MaterialPlugin::<PlanetMaterial>::default())
             .init_resource::<crate::render::surfaces::Surfaces>()
-            .add_systems(Update, ((crate::render::surfaces::poll, apply_surfaces).chain().run_if(refit_active(Effect::Scenery)), place_glows))
+            .add_systems(Update, ((crate::render::surfaces::poll, apply_surfaces).chain().run_if(refit_scenery), place_glows))
             .add_systems(PostUpdate, update.after(TransformSystems::Propagate));
     }
 }
@@ -203,7 +213,7 @@ pub fn spawn(
                 missing.push(name);
             }
             let m = materials.add(PlanetMaterial {
-                params: PlanetParams { mode: Vec4::new(0.0, 0.0, 0.0, 0.0), ..params },
+                params: PlanetParams { mode: Vec4::ZERO, ..params },
                 texture: tex,
                 albedo: None,
                 relief: None,
@@ -383,17 +393,22 @@ fn update(
     profile: Option<Res<RenderProfile>>,
     effects: Option<Res<ProfileEffects>>,
 ) {
-    let stock = match (profile, effects) {
-        (Some(p), Some(e)) => e.implementation(*p, Effect::Scenery) == RenderProfile::Stock,
-        _ => false,
-    };
+    let stock = stock_scenery(profile.as_deref(), effects.as_deref());
     let Ok(cam) = camera.single() else { return };
     // Brightest light first: the key.
     let mut ls: Vec<(Vec3, Vec3, f32)> = lights
         .iter()
         .map(|(t, l)| {
-            let c = l.color.to_linear();
-            (t.back().as_vec3(), Vec3::new(c.red, c.green, c.blue), l.illuminance)
+            // Stock multiplies display-space values (as the engine's fixed pipeline does), so its light
+            // colour is the map's own sRGB value; Refit's shader works in linear.
+            let c = if stock {
+                let c = l.color.to_srgba();
+                Vec3::new(c.red, c.green, c.blue)
+            } else {
+                let c = l.color.to_linear();
+                Vec3::new(c.red, c.green, c.blue)
+            };
+            (t.back().as_vec3(), c, l.illuminance)
         })
         .collect();
     ls.sort_by(|a, b| b.2.total_cmp(&a.2));
@@ -491,21 +506,22 @@ mod tests {
         app.world().resource::<Assets<PlanetMaterial>>().get(&handle).unwrap().params
     }
 
-    /// Stock: every map light at its own colour and full weight (the engine's fixed pipeline). Refit
-    /// keeps its key x1.2 and fill x0.315.
+    /// Stock: every map light at its own (sRGB) colour and full weight (the engine's fixed pipeline). Refit
+    /// keeps its linear colours, key x1.2 and fill x0.315.
     #[test]
     fn stock_lights_planets_with_both_map_lights_at_full_weight() {
         use bevy::prelude::*;
         let stock = run_update(super::RenderProfile::Stock);
         assert_eq!(stock.mode.y, 1.0);
         let (k, f) = (stock.dcol0.truncate(), stock.dcol1.truncate());
-        let c = |c: Color| { let l = c.to_linear(); Vec3::new(l.red, l.green, l.blue) };
+        let c = |c: Color| { let l = c.to_srgba(); Vec3::new(l.red, l.green, l.blue) };
         assert!(k.abs_diff_eq(c(Color::srgb(1.0, 0.5, 0.25)), 1e-5), "{k:?}");
         assert!(f.abs_diff_eq(c(Color::srgb(0.2, 0.4, 1.0)), 1e-5), "{f:?}");
         assert!(stock.dvec0.truncate().abs_diff_eq(Vec3::Y, 1e-5) && stock.dvec1.truncate().abs_diff_eq(Vec3::NEG_Y, 1e-5));
         let refit = run_update(super::RenderProfile::Refit);
         assert_eq!(refit.mode.y, 0.0);
         assert!((refit.dcol0.w - super::SUN).abs() < 1e-6);
-        assert!((refit.dcol1.x - c(Color::srgb(0.2, 0.4, 1.0)).x * super::FILL).abs() < 1e-5);
+        let lin = Color::srgb(0.2, 0.4, 1.0).to_linear();
+        assert!((refit.dcol1.x - lin.red * super::FILL).abs() < 1e-5, "Refit keeps linear light colours");
     }
 }
