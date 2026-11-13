@@ -49,6 +49,7 @@ pub const TOGGLES: &[(&str, &str)] = &[
     ("msaa-2", "2x multisampling"),
     ("no-prepass", "the map camera's depth prepass off (the nebula march reads it)"),
     ("neb-steps8", "nebula march with 8 steps instead of the default"),
+    ("neb-steps12", "nebula march with 12 steps instead of the default"),
     ("neb-full", "nebula march at the view's size (one ray per pixel, the box path)"),
     ("neb-half", "nebula march at half size per axis (`nebula_lowres.rs`)"),
     ("neb-quarter", "nebula march at a quarter size per axis"),
@@ -392,7 +393,7 @@ fn apply_variant(
             shadows: !on("no-shadows"),
             msaa: if on("msaa-off") { 1 } else if on("msaa-2") { 2 } else { d.msaa },
             depth_prepass: !on("no-prepass"),
-            nebula_steps: if on("neb-steps8") { 8 } else { crate::render::quality::default_nebula_steps(scale) },
+            nebula_steps: if on("neb-steps8") { 8 } else if on("neb-steps12") { 12 } else { d.nebula_steps },
             nebula_scale: scale,
         };
         if *q != want {

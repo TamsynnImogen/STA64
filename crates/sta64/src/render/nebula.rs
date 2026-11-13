@@ -137,6 +137,10 @@ impl Material for NebulaMaterial {
         _key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
         descriptor.primitive.cull_mode = Some(Face::Front);
+        // The module has a second entry point (the low-resolution march, `nebula_lowres.rs`).
+        if let Some(f) = descriptor.fragment.as_mut() {
+            f.entry_point = Some("fragment".into());
+        }
         if let Some(ds) = descriptor.depth_stencil.as_mut() {
             ds.depth_compare = Some(CompareFunction::Always);
             ds.depth_write_enabled = Some(false);
@@ -432,7 +436,7 @@ pub fn spawn_field(
 #[allow(clippy::too_many_arguments)]
 fn update(
     mut commands: Commands,
-    camera: Query<(Entity, &GlobalTransform, &Projection, Has<NebulaLowRes>), crate::map::MainCamera>,
+    camera: Query<(Entity, &GlobalTransform, &Projection, Has<NebulaLowRes>, &Camera), crate::map::MainCamera>,
     lights: Query<(&GlobalTransform, &DirectionalLight)>,
     shadow: Option<Res<crate::render::shadows::KeyShadow>>,
     quality: Option<Res<crate::render::quality::RenderQuality>>,
@@ -440,10 +444,14 @@ fn update(
     mut materials: ResMut<Assets<NebulaMaterial>>,
     clock: Res<crate::clock::AnimClock>,
 ) {
-    let Ok((cam_entity, cam, proj, has_low)) = camera.single() else { return };
+    let Ok((cam_entity, cam, proj, has_low, camera_info)) = camera.single() else { return };
+    let cam_size = camera_info.physical_target_size();
     // The march at a fraction of the view's size needs the depth prepass to stop at the
     // scene and a perspective view to find its rays.
-    let divisor = quality.as_deref().map_or(1, |q| q.nebula_scale);
+    let divisor = match quality.as_deref().map_or(0, |q| q.nebula_scale) {
+        0 => cam_size.map_or(1, |s| crate::render::quality::auto_nebula_scale(s.x, s.y)),
+        d => d,
+    };
     let low = divisor > 1 && quality.as_deref().is_none_or(|q| q.depth_prepass) && matches!(proj, Projection::Perspective(_)) && !fields.is_empty();
     if low {
         commands.entity(cam_entity).insert(NebulaLowRes { divisor });
@@ -459,6 +467,10 @@ fn update(
         .max_by(|a, b| a.1.illuminance.total_cmp(&b.1.illuminance))
         .map(|(t, _)| t.back().as_vec3())
         .unwrap_or(Vec3::Y);
+    let steps = match quality.as_deref().map_or(0, |q| q.nebula_steps) {
+        0 => crate::render::quality::default_nebula_steps(if low { divisor } else { 1 }),
+        n => n,
+    };
     let fwd = cam.forward().as_vec3();
     let t = clock.wall() as f32;
     for (entity, mut f, has) in &mut fields {
@@ -485,7 +497,7 @@ fn update(
         p.key = key.extend(share);
         // Ships' shadows through the gas (RND-15).
         apply_shadow(p, shadow.as_deref());
-        p.scat = Vec4::new(1.0 + g * g, 2.0 * g, quality.as_deref().map_or(16, |q| q.nebula_steps) as f32, 0.0);
+        p.scat = Vec4::new(1.0 + g * g, 2.0 * g, steps as f32, 0.0);
         p.flow.x = (t * r.flow_speed) % 100.0;
         // Edge-on dimming: a long path through a thin field adds up; dim it unless
         // the gas's own opacity already does.

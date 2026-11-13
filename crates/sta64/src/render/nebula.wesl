@@ -363,6 +363,7 @@ fn fragment(i: FragIn) -> @location(0) vec4<f32> {
 struct LowView {
     world_from_clip: mat4x4<f32>,
     size: vec4<f32>,       // the target's width and height, n, the camera's near plane
+    flags: vec4<f32>,      // x 1: 8-bit colour, clip the light at 1
 };
 @group(0) @binding(30) var low_depth: texture_2d<f32>;
 @group(0) @binding(31) var<uniform> lv: LowView;
@@ -389,5 +390,6 @@ fn fragment_low(i: LowIn) -> @location(0) vec4<f32> {
     if s1 <= s0 {
         return vec4<f32>(0.0);
     }
-    return march(eye, d, s0, s1, i.position.xy);
+    let m = march(eye, d, s0, s1, i.position.xy);
+    return vec4<f32>(select(m.rgb, min(m.rgb, vec3<f32>(1.0)), lv.flags.x > 0.5), m.a);
 }

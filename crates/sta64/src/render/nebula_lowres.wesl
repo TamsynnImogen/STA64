@@ -1,8 +1,8 @@
 // The reduced-resolution nebula march's two screen passes (RND-34, `nebula_lowres.rs`).
 //
 // `downsample` reduces the scene's depth prepass to the march's target size: the
-// farthest depth of each n x n block (reverse-Z: the smallest value; 0 where any pixel
-// of the block shows no geometry), which is how far the block's march may run.
+// farthest depth of each n x n block, read at every other pixel (reverse-Z: the smallest
+// value; 0 where a pixel read shows no geometry), which is how far the block's march may run.
 // `composite` lays the march's picture over the view at full size. A pixel takes the
 // four nearest texels of the small picture, bilinearly, but only those whose depth is
 // within 5% of its own; none within 5%: the one nearest in depth. That keeps gas from
@@ -11,6 +11,7 @@
 struct LowView {
     world_from_clip: mat4x4<f32>,
     size: vec4<f32>,       // the march target's width and height, n, the camera's near plane
+    flags: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> v: LowView;
@@ -36,9 +37,11 @@ fn downsample(i: ScreenIn) -> @location(0) vec4<f32> {
     let n = i32(v.size.z);
     let dim = vec2<i32>(textureDimensions(scene_depth));
     let base = vec2<i32>(i.position.xy) * n;
+    // Every other pixel of the block in each direction (all four of a 2 x 2 block).
+    let st = max(n / 2, 1);
     var z = 1.0;
-    for (var y = 0; y < n; y++) {
-        for (var x = 0; x < n; x++) {
+    for (var y = 0; y < n; y += st) {
+        for (var x = 0; x < n; x += st) {
             z = min(z, textureLoad(scene_depth, min(base + vec2<i32>(x, y), dim - vec2<i32>(1)), 0));
         }
     }

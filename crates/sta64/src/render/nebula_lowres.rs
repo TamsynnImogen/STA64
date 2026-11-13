@@ -58,6 +58,9 @@ pub struct NebulaLowRes {
 struct LowView {
     world_from_clip: Mat4,
     size: Vec4,
+    /// x 1 when the view's colour is 8-bit: the gas's light is clipped at 1, as the
+    /// per-pixel march's blend clips it, before the filter averages it.
+    flags: Vec4,
 }
 
 /// The fields in view this frame, as the main world has them.
@@ -87,12 +90,14 @@ impl Plugin for NebulaLowResPlugin {
     }
 }
 
+type Cameras<'w, 's> = Query<'w, 's, (RenderEntity, Option<&'static NebulaLowRes>), With<Camera3d>>;
+
 fn extract(
     mut commands: Commands,
     mut out: ResMut<ExtractedFields>,
     fields: Extract<Query<(&NebulaField, &InheritedVisibility)>>,
     materials: Extract<Res<Assets<NebulaMaterial>>>,
-    cameras: Extract<Query<(RenderEntity, Option<&NebulaLowRes>), With<Camera3d>>>,
+    cameras: Extract<Cameras>,
 ) {
     out.0.clear();
     for (f, vis) in &fields {
@@ -273,7 +278,7 @@ fn box_rect(clip_from_world: &Mat4, lo: Vec3, hi: Vec3, w: u32, h: u32) -> Optio
     let right = (px(x1, w) + 2.0).ceil().min(w as f32);
     let top = (py(y1, h) - 2.0).floor().max(0.0);
     let bottom = (py(y0, h) + 2.0).ceil().min(h as f32);
-    (right > left && bottom > top).then(|| [left as u32, top as u32, (right - left) as u32, (bottom - top) as u32])
+    (right > left && bottom > top).then_some([left as u32, top as u32, (right - left) as u32, (bottom - top) as u32])
 }
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
@@ -316,7 +321,7 @@ fn prepare(
             }
             seen.sort_by(|a, b| b.0.total_cmp(&a.0));
             let near = view.clip_from_view.w_axis.z;
-            let lv = LowView { world_from_clip: clip_from_world.inverse(), size: Vec4::new(lw as f32, lh as f32, n as f32, near) };
+            let lv = LowView { world_from_clip: clip_from_world.inverse(), size: Vec4::new(lw as f32, lh as f32, n as f32, near), flags: Vec4::new(if target.main_texture_format() == TextureFormat::Rgba16Float { 0.0 } else { 1.0 }, 0.0, 0.0, 0.0) };
             let mut ub = UniformBuffer::from(lv);
             ub.write_buffer(&device, &queue);
             let samples = msaa.samples();
@@ -443,7 +448,7 @@ mod tests {
 
     fn view() -> Mat4 {
         // A camera at the origin looking down -Z, reverse-Z infinite perspective, 1:1.
-        Mat4::perspective_infinite_reverse_rh(std::f32::consts::FRAC_PI_2, 1.0, 1.0)
+        Mat4::from_cols(Vec4::X, Vec4::Y, Vec4::new(0.0, 0.0, 0.0, -1.0), Vec4::new(0.0, 0.0, 1.0, 0.0))
     }
 
     #[test]
