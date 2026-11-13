@@ -280,6 +280,9 @@ pub struct UnitDef {
     pub maximum_crew: Option<Fixed>,
     /// `maxCrewGain` of a station (SIM-25): what it adds to its team's crew capacity.
     pub crew_gain: Fixed,
+    /// `saneCrewLossMethod` (SIM-39): a hit's crew loss is in absolute crew
+    /// points; without it the loss is a percent of the unit's maximum crew.
+    pub sane_crew_loss: bool,
     /// Sensor range, units.
     pub sensor: Fixed,
     pub hardpoints: Vec<Hardpoint>,
@@ -381,6 +384,7 @@ impl UnitDef {
             crew: Fixed::ZERO,
             maximum_crew: None,
             crew_gain: Fixed::ZERO,
+            sane_crew_loss: false,
             sensor: Fixed::ZERO,
             hardpoints: Vec::new(),
             build: BuildDef::default(),
@@ -458,6 +462,8 @@ pub struct WeaponDef {
     /// The weapon's own class is `ordnancedefenseweapon` (FO's point-defence
     /// class, as opposed to `pointdefenselaser`).
     pub ordnance_defence: bool,
+    /// The ordnance's crew-loss keys (SIM-39); `None` when it has none of them.
+    pub crew_loss: Option<OrdnanceCrewLoss>,
     /// Feature switches resolved for this weapon, as [`UnitDef::features`];
     /// `None`: the database-wide set. Read through
     /// `ContentDb::weapon_features`.
@@ -468,6 +474,19 @@ pub struct WeaponDef {
     /// An instant `replaceweapon` (SIM-28); `None` for every other weapon.
     pub replace: Option<crate::lifecycle::ReplaceDef>,
     pub raw: Arc<sta_odf::Odf>,
+}
+
+/// What a hit of this ordnance does to the target's crew (SIM-39): its
+/// `damageThreshold`, `shieldCrewModifier` and `hullCrewModifier`. Absent keys
+/// read as 0 (no loss).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct OrdnanceCrewLoss {
+    /// `damageThreshold`: damage below it costs no crew.
+    pub threshold: Fixed,
+    /// `shieldCrewModifier`: crew lost per point of shield damage over the threshold.
+    pub shield: Fixed,
+    /// `hullCrewModifier`: the same for hull damage (read, not applied: not measured).
+    pub hull: Fixed,
 }
 
 /// The keys of a `resourceweapon` (Fleet Operations 3.x and later; stock
@@ -512,6 +531,7 @@ impl WeaponDef {
             initial_shot_delay_modifier: None,
             ignore_shot_delay_effects: false,
             ordnance_defence: false,
+            crew_loss: None,
             features: None,
             resource: None,
             replace: None,

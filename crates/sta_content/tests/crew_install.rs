@@ -38,3 +38,24 @@ fn classic_federation_accumulates_four_per_second_and_roots_none() {
         }
     }
 }
+
+/// SIM-39: the per-hit crew keys are typed from the ordnance and the unit
+/// ODFs (stock Armada II rules via the Classic mod; absent installs skip).
+#[test]
+fn classic_ordnance_and_units_carry_the_crew_loss_keys() {
+    let root = Path::new(ROOTS);
+    if !root.is_dir() {
+        return;
+    }
+    let Ok(vfs) = Vfs::mount_install(root, Some("STA2 Classic Mod")) else { return };
+    let (index, _) = OdfIndex::build(&vfs);
+    let Ok((db, _)) = ContentDb::load(&vfs, &index) else { return };
+    let close = |f: sta_core::Fixed, v: f32| (f.to_f32() - v).abs() < 1e-4;
+    if let Some(w) = db.weapons().find(|w| w.odf.eq_ignore_ascii_case("fgphaso")) {
+        let c = w.crew_loss.expect("fgphaso carries crew-loss keys");
+        assert!(close(c.threshold, 25.0) && close(c.shield, 0.2) && close(c.hull, 0.1), "{c:?}");
+    }
+    let sane = |n: &str| db.units().find(|u| u.odf.eq_ignore_ascii_case(n)).map(|u| u.sane_crew_loss);
+    assert!(sane("fassault").unwrap_or(true));
+    assert!(!sane("fcruise2").unwrap_or(false));
+}

@@ -5,6 +5,8 @@ pub mod pd;
 pub mod weapons;
 
 #[cfg(test)]
+mod crew_loss_tests;
+#[cfg(test)]
 mod damage_tests;
 #[cfg(test)]
 pub(crate) mod pd_tests;

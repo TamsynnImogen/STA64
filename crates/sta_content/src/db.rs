@@ -575,6 +575,10 @@ fn hash_inner(db: &ContentDb, include_starting_rules: bool) -> u64 {
                     h.byte(0xf2);
                     h.fixed(u.crew_gain);
                 }
+                // SIM-39: only for units with the key.
+                if u.sane_crew_loss {
+                    h.byte(0xf6);
+                }
                 // SIM-28: only when set, so content without them keeps its hash.
                 if u.hidden || u.invalid_as_target || u.life.is_some() {
                     h.byte(0xef);
@@ -627,6 +631,13 @@ fn hash_inner(db: &ContentDb, include_starting_rules: bool) -> u64 {
                     h.byte(w.initial_shot_delay_modifier.is_some() as u8);
                     h.fixed(w.initial_shot_delay_modifier.unwrap_or(Fixed::ZERO));
                     h.byte(w.ignore_shot_delay_effects as u8);
+                }
+                // SIM-39: only for ordnance with a crew-loss key.
+                if let Some(c) = &w.crew_loss {
+                    h.byte(0xf2);
+                    h.fixed(c.threshold);
+                    h.fixed(c.shield);
+                    h.fixed(c.hull);
                 }
                 // SIM-24: only for resource weapons, so other content keeps its hash.
                 if let Some(r) = &w.resource {

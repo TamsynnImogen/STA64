@@ -321,7 +321,7 @@ impl Sim {
             let from = self.events.len();
             self.weapons.step_with_perception(self.tick, &self.units, &db, &self.players, &self.perception, &mut self.specials, &mut self.rng, &mut self.events);
             let mut lost = Vec::new();
-            for (id, by) in combat::damage::apply(&mut self.units, &mut self.events, from) {
+            for (id, by) in combat::damage::apply(&mut self.units, &db, &mut self.events, from) {
                 lost.extend(self.units.get(id).map(|u| u.owner));
                 self.despawn(id, by);
             }

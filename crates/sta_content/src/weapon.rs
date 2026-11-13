@@ -110,6 +110,12 @@ pub fn weapon_def(name: &str, odf: &Odf, ordnance: Option<&Odf>, warnings: &mut 
     if let Some(ord) = ordnance {
         let mut o = Reader { odf: ord, file: &file, warnings };
         d.damage = o.fixed("damageBase");
+        let loss = crate::def::OrdnanceCrewLoss {
+            threshold: o.fixed("damageThreshold"),
+            shield: o.fixed("shieldCrewModifier"),
+            hull: o.fixed("hullCrewModifier"),
+        };
+        d.crew_loss = (loss != crate::def::OrdnanceCrewLoss::default()).then_some(loss);
         d.fx = o.text("shotGeometry").or_else(|| o.text("sprite"));
         match kind {
             WeaponKind::Beam => d.duration = o.ticks("lifespan"),

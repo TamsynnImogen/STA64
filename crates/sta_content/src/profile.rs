@@ -169,7 +169,7 @@ impl Profile {
             // original shot timing. `pd_energy` stays off until a HUD button
             // can toggle point defence (UI-31); then SIM-37's one-line flip:
             // `Sta2Classic` `pd_energy`, `Fo4` `pd_energy` + `pd_debt_timer`.
-            Profile::Sta2Classic => Features { turrets: true, point_defense_cycles: true, weapon_shot_timing: true, ..off },
+            Profile::Sta2Classic => Features { turrets: true, point_defense_cycles: true, weapon_shot_timing: true, crew_loss_on_hit: true, ..off },
             // A1: its own class labels and health model, officers.
             Profile::Sta1Classic => Features { officer_capacity: true, a1_compat: true, ..off },
         }
@@ -424,7 +424,7 @@ fn read_ini_named(root: &Path, name: &str) -> Option<Ini> {
 }
 
 /// Switch names, in `Features` declaration order.
-pub const FEATURE_NAMES: [&str; 25] = [
+pub const FEATURE_NAMES: [&str; 26] = [
     "weapon_damage_controls",
     "point_defense_cycles",
     "fire_arcs",
@@ -450,6 +450,7 @@ pub const FEATURE_NAMES: [&str; 25] = [
     "pd_energy",
     "pd_debt_timer",
     "weapon_shot_timing",
+    "crew_loss_on_hit",
 ];
 
 impl Features {
@@ -480,6 +481,7 @@ impl Features {
             "pd_energy" => &mut self.pd_energy,
             "pd_debt_timer" => &mut self.pd_debt_timer,
             "weapon_shot_timing" => &mut self.weapon_shot_timing,
+            "crew_loss_on_hit" => &mut self.crew_loss_on_hit,
             _ => return None,
         })
     }
@@ -694,7 +696,7 @@ mod tests {
 
     #[test]
     fn defaults_table_sta2_classic() {
-        assert_eq!(on(&Profile::Sta2Classic.features()), ["point_defense_cycles", "turrets", "weapon_shot_timing"]);
+        assert_eq!(on(&Profile::Sta2Classic.features()), ["point_defense_cycles", "turrets", "weapon_shot_timing", "crew_loss_on_hit"]);
     }
 
     #[test]
