@@ -119,10 +119,18 @@ pub fn specials_indexed<'a>(
     u.hardpoints.iter().enumerate().filter_map(|(i, h)| {
         let w = db.weapon(h.weapon.key)?;
         let kind = SpecialKind::of(w)?;
-        // A PD weapon is a special (and takes a slot) only under `pd_energy`,
+        // A PD weapon is a special (and takes a slot) only under `pd_energy` with
+        // `point_defense_cycles`, the bits its toggle needs,
         // so slot numbers of other content do not shift.
-        (kind != SpecialKind::PointDefence || db.weapon_features(w).pd_energy).then_some((i, kind, w))
+        (kind != SpecialKind::PointDefence || { let f = db.weapon_features(w); f.pd_energy && f.point_defense_cycles }).then_some((i, kind, w))
     })
+}
+
+/// The `Order::Special` slot of the unit's point-defence weapon, when point
+/// defence is a toggled special for it (`Features::pd_energy`). A HUD button
+/// or a controller sends `Order::Special { slot, .. }` with it (SIM-37).
+pub fn point_defence_slot(db: &ContentDb, u: &UnitDef) -> Option<u8> {
+    specials_indexed(db, u).position(|(_, k, _)| k == SpecialKind::PointDefence).map(|n| n as u8)
 }
 
 pub fn cloak_def(db: &ContentDb, u: &UnitDef) -> Option<CloakDef> {
