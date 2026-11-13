@@ -586,13 +586,13 @@ joiner                         host
   authority's replay is the replay of record. A rejoined peer's replay holds no
   commands before its snapshot and says so. No replay format change was
   needed.
-- **Known gap.** `Sim::ai_seats` is set from `Control::Ai`, which only the host
-  has (`Start::player_setups` gives every other peer `Remote`), and it is
-  not in the digest. A snapshot loaded from the host therefore carries the
-  host's `ai_seats` into the peer, which differs from the other peers'.
-  Games with computer players should not go live before this is settled
-  (NET-02/SIM): either all peers set the same `ai_seats`, or it joins the
-  digest.
+- **AI seats.** Which seats are computer players is session state (the tech
+  gate and passive income read it inside `step`): `Start::player_setups`
+  gives every non-host peer `Control::RemoteAi` for an AI seat, so all peers
+  build the same `Sim::ai_seats`, which is in the full and roster digests and
+  in the snapshot. Only the host runs the controller; its commands travel
+  through the router like a player's. A seat taken over by the AI after a
+  drop does not join `ai_seats` on any peer.
 
 ## 10. Security
 
