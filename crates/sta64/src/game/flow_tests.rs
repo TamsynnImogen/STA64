@@ -233,3 +233,72 @@ fn the_context_follows_the_app_state() {
     assert_eq!(ctx, UiContext::Hud);
     assert_eq!(sounds.name(UiSound::Click, ctx), sounds.hud_click);
 }
+
+/// Mod switches (campaign mount, campaign-less mount, and back) never leave a system without a
+/// resource it reads every frame: the media tracker reads the movie catalogue unconditionally,
+/// and remounting to a campaign-less mod (Fleet Ops 4.0) used to remove it.
+#[test]
+fn remounting_between_campaign_and_campaign_less_content_keeps_the_resources_systems_read() {
+    use crate::frontend::campaign::Campaigns;
+    use crate::media::campaign::{CampaignMoviesPlugin, MissionMovies};
+    use crate::media::mission::Requested;
+    use crate::media::{MovieFinished, StopMovie};
+
+    fn apply(app: &mut App, loaded: Option<(Campaigns, MissionMovies)>) {
+        let mut commands = app.world_mut().commands();
+        apply_campaigns(&mut commands, loaded);
+        app.world_mut().flush();
+        for _ in 0..3 {
+            app.update();
+        }
+    }
+    fn with_campaigns() -> Option<(Campaigns, MissionMovies)> {
+        let cs = crate::frontend::campaign::tests::fixture(false, None);
+        let movies = MissionMovies::from_book_with(&cs.book, |_| None);
+        Some((cs, movies))
+    }
+
+    let mut app = App::new();
+    app.set_error_handler(bevy::ecs::error::panic)
+        .add_plugins(MinimalPlugins)
+        .add_message::<Requested>()
+        .add_message::<MovieFinished>()
+        .add_message::<StopMovie>()
+        .add_plugins(CampaignMoviesPlugin);
+    configure_sets(&mut app);
+    app.update();
+    // Campaigns -> none -> campaigns -> none -> none (a mod with no movies after one with none).
+    apply(&mut app, with_campaigns());
+    assert!(app.world().contains_resource::<Campaigns>());
+    assert!(!app.world().resource::<MissionMovies>().missions.is_empty());
+    apply(&mut app, None);
+    assert!(!app.world().contains_resource::<Campaigns>());
+    assert!(app.world().resource::<MissionMovies>().missions.is_empty(), "the old mod's movies do not survive");
+    apply(&mut app, with_campaigns());
+    assert!(app.world().contains_resource::<Campaigns>());
+    apply(&mut app, None);
+    apply(&mut app, None);
+    assert!(app.world().contains_resource::<MissionMovies>());
+}
+
+/// A remount drops what was cached by name from the previous mount: the texture cache keeps misses
+/// (`None`), so a texture only the new mod has (`PA_ECFR0` of STA2 Classic) stayed "not found".
+#[test]
+fn a_remount_invalidates_the_name_caches() {
+    use crate::render::textures::TextureCache;
+    use crate::render::units::UnitModels;
+    use crate::viewer::Mounted;
+    let (mut app, _) = app();
+    app.insert_resource(Mounted(sta_vfs::Vfs::default()))
+        .init_resource::<TextureCache>()
+        .init_resource::<UnitModels>()
+        .insert_resource(crate::render::sprites::SpriteTables(std::sync::Arc::new(sta_assets::load_sprite_table(&sta_vfs::Vfs::default()))));
+    settle(&mut app, 3);
+    app.world_mut().resource_mut::<TextureCache>().map.insert("pa_ecfr0".into(), None);
+    settle(&mut app, 2);
+    assert!(app.world().resource::<TextureCache>().map.contains_key("pa_ecfr0"), "an unchanged mount keeps its cache");
+    // What `remount` does last.
+    app.world_mut().resource_mut::<Mounted>().0 = sta_vfs::Vfs::default();
+    settle(&mut app, 2);
+    assert!(app.world().resource::<TextureCache>().map.is_empty(), "the old mount's misses do not survive");
+}

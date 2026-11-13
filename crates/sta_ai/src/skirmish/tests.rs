@@ -337,3 +337,21 @@ fn wave_sizes_are_drawn_from_the_seed_within_the_aip_range() {
     let all: BTreeSet<Vec<usize>> = (1..=8).map(sizes).collect();
     assert!(all.len() > 4, "eight seeds, {} different wave plans", all.len());
 }
+
+#[test]
+fn an_order_the_sim_could_not_serve_is_sent_again() {
+    let s = setup(1, sta_content::fake::db());
+    let mut ai = SkirmishController::new(SkirmishConfig::from_setup(&s, P0).unwrap());
+    let unit = EntityId(7);
+    let to = Vec3 { x: Fixed::from_int(10), y: Fixed::ZERO, z: Fixed::from_int(20) };
+    let mut out = Vec::new();
+    ai.go(0, &mut out, unit, to);
+    ai.go(1, &mut out, unit, to);
+    assert_eq!(out.len(), 1, "the same order is not repeated while it is live");
+    ai.absorb(2, &[SimEvent::OrderBlocked { id: unit }]);
+    ai.go(3, &mut out, unit, to);
+    assert_eq!(out.len(), 1, "a hold keeps the order: not sent again");
+    ai.absorb(4, &[SimEvent::OrderAbandoned { id: unit }]);
+    ai.go(5, &mut out, unit, to);
+    assert_eq!(out.len(), 2, "after OrderAbandoned the AI sends it again");
+}

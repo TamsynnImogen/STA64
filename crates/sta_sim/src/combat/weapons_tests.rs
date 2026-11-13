@@ -146,6 +146,10 @@ fn fire_arc_blocks_the_beam_but_not_the_torpedo() {
     // Behind the shooter: the beam's fore arc excludes it, the torpedo's
     // all-round mount fires.
     let (mut sim, s, t) = firing(v(2000, 0, 1650));
+    // Engines off: an attacker in range would otherwise turn to face its
+    // target (SIM-36) and bring the beam to bear.
+    let u = sim.units.get_mut(s).unwrap();
+    u.flags = u.flags.with(crate::view::UnitFlags::ENGINES_OFF, true);
     let ev = run(&mut sim, Some(attack(1, s, t)), 100);
     assert!(marks(&ev, 0).0.is_empty());
     assert_eq!(marks(&ev, 1).0, [0, 90]);

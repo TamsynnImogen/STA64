@@ -10,7 +10,7 @@ use std::time::Instant;
 use sta_content::{ContentDb, MapDef};
 use sta_core::{PlayerId, Tick};
 use sta_sim::command::{Command, CommandRouter};
-use sta_sim::replay::Replay;
+use sta_sim::replay::{Replay, StartRec};
 use sta_sim::digest::SectionDigests;
 use sta_sim::setup::GameSetup;
 use sta_sim::{SimEvent, WorldSource};
@@ -104,6 +104,39 @@ impl Peer {
         transport: Box<dyn Transport>,
     ) -> Result<Peer, ProtoError> {
         let router = LockstepRouter::new(start, me, transport)?;
+        Peer::with_router(start, setup, sim, router)
+    }
+
+    /// A referee's peer (NET-05, NET_DECISIONS N5) on the connection in slot
+    /// `me`, which is no seat of `start`: it runs the whole game from `Start`
+    /// and the others' turn records on its own content, sends no record, and
+    /// never stops for a desync (see `LockstepRouter::spectator`). Wrap it in
+    /// a [`Referee`](crate::referee::Referee) for the verdicts and reports.
+    pub fn spectator(
+        start: &Start,
+        me: PlayerId,
+        content: Arc<ContentDb>,
+        map: Arc<MapDef>,
+        transport: Box<dyn Transport>,
+    ) -> Result<Peer, ProtoError> {
+        let setup = GameSetup {
+            seed: start.seed,
+            map,
+            content,
+            players: start.player_setups(me),
+            options: start.options.clone(),
+        };
+        let sim = Sim::from_setup(&setup);
+        let router = LockstepRouter::spectator(start, me, transport)?;
+        Peer::with_router(start, &setup, sim, router)
+    }
+
+    fn with_router(
+        start: &Start,
+        setup: &GameSetup,
+        sim: Sim,
+        router: LockstepRouter,
+    ) -> Result<Peer, ProtoError> {
         let mut replay = Replay::new(setup);
         replay.digests.push((0, sim.digest()));
         Ok(Peer {
@@ -120,6 +153,14 @@ impl Peer {
             net: NetState::default(),
             replay_from: 0,
         })
+    }
+
+    /// Records how the sim's seats got their starting forces in the replay
+    /// (`StartRec::Races` after `Sim::from_setup_with_starts`), so a desync
+    /// report is rebuilt the way the game was (INT-M5). The default is
+    /// `StartRec::Bare`, which is what [`Peer::start`] builds.
+    pub fn set_starts(&mut self, starts: StartRec) {
+        self.replay.starts = starts;
     }
 
     /// Records each seat's build identity (from its `Hello`) for the desync
@@ -252,7 +293,8 @@ impl Peer {
             .router
             .desync()
             .map(|n| n.theirs.tick)
-            .or_else(|| self.router.peer_desync().map(|(_, n)| n.ours.tick));
+            .or_else(|| self.router.peer_desync().map(|(_, n)| n.ours.tick))
+            .or_else(|| self.router.divergences().iter().map(|d| d.theirs.tick).min());
         if let Some(tick) = tick {
             let _ = writeln!(s, "first differing tick: {tick}");
             for (seat, d) in self.router.digests_at(tick) {
@@ -274,6 +316,13 @@ impl Peer {
                 s,
                 "reported by seat {}: tick {}, its {:#018x}, against seat {} {:#018x}",
                 from.0, n.ours.tick, n.ours.digest, n.slot.0, n.theirs.digest
+            );
+        }
+        for d in self.router.divergences() {
+            let _ = writeln!(
+                s,
+                "referee: seat {} reported {:#018x} at tick {}, the referee's is {:#018x}",
+                d.seat.0, d.theirs.digest, d.theirs.tick, d.reference
             );
         }
         for seat in &self.start.seats {

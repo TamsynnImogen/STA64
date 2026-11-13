@@ -247,6 +247,10 @@ pub enum ResyncEvent {
     Repaired { turn: u32 },
     /// This peer's catch-up failed; the match stays stopped (N4.4).
     Failed(CatchUpError),
+    /// Referee: a seat asked for the state and the policy
+    /// (`RefereePolicy::resync_host`) does not resync the host: the match
+    /// ends with the reports.
+    HostEndsMatch { slot: PlayerId },
     /// This peer is not diverged but the host has not said the desync was
     /// repaired in [`ResyncLimits::repair_wait`]: the stall dialog's cue.
     RepairOverdue,
@@ -273,11 +277,16 @@ pub struct ResyncNote {
 pub(crate) struct Expect {
     pub kind: SnapshotKind,
     pub host: PlayerId,
+    /// Who sends the transfer: the host, or the referee when there is one
+    /// (NET-05). Anything else is not the transfer's.
+    pub source: PlayerId,
     /// The seats that send records.
     pub seats: Vec<PlayerId>,
     pub content_hash: u64,
-    /// The host seat's lineage and pack names in `Start`.
-    pub provenance: (String, Vec<String>),
+    /// The host seat's lineage and pack names in `Start`; `None` from a
+    /// referee, whose lineage and packs are its own (D10: informational;
+    /// the content hash and the digests are what must agree).
+    pub provenance: Option<(String, Vec<String>)>,
 }
 
 /// What a finished catch-up delivers, structurally checked.
@@ -329,6 +338,10 @@ impl CatchUp {
         }
     }
 
+    pub(crate) fn source(&self) -> PlayerId {
+        self.expect.source
+    }
+
     /// Deadlines.
     pub(crate) fn check_time(&self, now: Instant) -> Result<(), CatchUpError> {
         let since = |t: Instant| now.saturating_duration_since(t);
@@ -352,8 +365,8 @@ impl CatchUp {
         msg: Message,
         now: Instant,
     ) -> Result<Option<Delivered>, CatchUpError> {
-        if from != self.expect.host {
-            return Err(CatchUpError::Protocol("snapshot traffic from a non-host"));
+        if from != self.expect.source {
+            return Err(CatchUpError::Protocol("snapshot traffic from the wrong sender"));
         }
         self.last = now;
         match msg {
@@ -432,8 +445,9 @@ impl CatchUp {
             if info.content_hash != o.content_hash {
                 return Err(CatchUpError::Damaged("content hash differs from the offer's"));
             }
-            let (lineage, packs) = &self.expect.provenance;
-            if &info.provenance.lineage != lineage || &info.provenance.packs != packs {
+            if let Some((lineage, packs)) = &self.expect.provenance
+                && (&info.provenance.lineage != lineage || &info.provenance.packs != packs)
+            {
                 return Err(CatchUpError::Provenance);
             }
             self.verified = true;
@@ -731,6 +745,7 @@ impl Rejoiner {
                 | Message::Sections(_)
                 | Message::Leave(_)
                 | Message::Resume { .. }
+                | Message::RefereeSeated { .. }
         ) {
             let size = postcard::to_allocvec(&msg).map_or(usize::MAX / 2, |b| b.len() + 16);
             if self.live.len() >= Self::MAX_LIVE || self.live_bytes + size > Self::MAX_LIVE_BYTES {
@@ -778,6 +793,7 @@ impl Rejoiner {
                 let expect = Expect {
                     kind: SnapshotKind::Rejoin,
                     host: self.host,
+                    source: self.host,
                     seats: start
                         .seats
                         .iter()
@@ -785,10 +801,10 @@ impl Rejoiner {
                         .map(|s| s.slot)
                         .collect(),
                     content_hash: self.content.hash(),
-                    provenance: (
+                    provenance: Some((
                         host_seat.lineage.clone(),
                         host_seat.packs.iter().map(|p| p.name.clone()).collect(),
-                    ),
+                    )),
                 };
                 let catch = Box::new(CatchUp::new(expect, self.limits.clone(), now));
                 self.state = RejoinState::Catching {
@@ -1024,6 +1040,8 @@ pub(crate) struct NetState {
     overdue_noted: bool,
     /// After a transient refusal (`Busy`, `Timeout`): ask again after this.
     retry_after: Option<Instant>,
+    /// NET-05: what a referee does when the host is the diverged one.
+    pub(crate) referee_policy: crate::referee::RefereePolicy,
 }
 
 impl NetState {
@@ -1066,6 +1084,18 @@ impl Peer {
         });
     }
 
+    /// Whether this peer serves resyncs: the referee, and the host while
+    /// there is no referee (N3, N5).
+    pub(crate) fn serves(&self) -> bool {
+        self.router.is_spectator() || (self.router.is_host() && self.router.host_is_authority())
+    }
+
+    /// Referee: what to do when the host is the one that differs (see
+    /// [`crate::referee::RefereePolicy`]).
+    pub fn set_referee_policy(&mut self, policy: crate::referee::RefereePolicy) {
+        self.net.referee_policy = policy;
+    }
+
     /// Replaces the default [`ResyncLimits`].
     pub fn set_resync_limits(&mut self, limits: ResyncLimits) {
         self.net.host.limits = limits;
@@ -1075,6 +1105,11 @@ impl Peer {
     /// (`NetControl::take_departures`): it may rejoin. Ends a transfer in
     /// progress to it.
     pub fn note_departed(&mut self, slot: PlayerId) {
+        // The referee's connection ended: the host unseats it, so whoever
+        // reclaims the relay slot is not believed (NET-05).
+        if self.router.is_host() && self.router.referee() == Some(slot) {
+            let _ = self.router.seat_referee(None);
+        }
         self.net.host.vacated.insert(slot);
         self.net.host.jobs.retain(|j| j.seat != slot);
     }
@@ -1176,7 +1211,7 @@ impl Peer {
             self.net_dispatch(from, msg, now);
         }
         self.net_progress_client(now);
-        if self.router.is_host() {
+        if self.router.is_host() || self.router.is_spectator() {
             self.host_timers(now);
             self.host_serve(now);
             // A stopped host that owes a snapshot runs on to the turn
@@ -1212,6 +1247,10 @@ impl Peer {
             Message::Rejoin(r) => self.on_rejoin(from, r, now),
             Message::ResyncRequest(r) => self.on_resync_request(from, r, now),
             Message::ResyncAck(a) => self.on_ack(from, a),
+            // Only the authority says who was resynced (the referee when
+            // there is one, N5): a host's word does not release peers that
+            // wait for a referee, and a seat's is refused by the router.
+            Message::Resynced(_) if from != self.router.authority() => {}
             Message::Resynced(r) => {
                 self.net.note(ResyncEvent::Resynced {
                     slot: r.slot,
@@ -1220,7 +1259,13 @@ impl Peer {
                     last: r.last,
                 });
                 if r.last && self.net.client.is_none() && self.diverged_from_host().is_none() {
-                    self.router.clear_desync();
+                    // A release with nothing resynced (count 0) loaded no
+                    // state: nothing is stale.
+                    if r.count == 0 {
+                        self.router.release_tick(r.turn);
+                    } else {
+                        self.router.clear_desync_at(r.turn);
+                    }
                     self.net.waiting_since = None;
                 }
             }
@@ -1238,6 +1283,10 @@ impl Peer {
                 let Some(c) = self.net.client.as_mut() else {
                     return;
                 };
+                // A stray transfer from anyone but the one asked is not ours.
+                if from != c.source() {
+                    return;
+                }
                 match c.feed(from, m, now) {
                     Ok(None) => {}
                     Ok(Some(d)) => self.apply_resync(d),
@@ -1259,10 +1308,16 @@ impl Peer {
 
     // ---- the diverged peer ------------------------------------------------
 
-    /// The first tick at which this peer's digest differs from the host's,
-    /// and this peer's digest there; `None` when it does not differ or the
-    /// host's is not known (yet).
+    /// The first tick at which this peer's digest differs from the
+    /// authority's (the host's, or the referee's when there is one), and this
+    /// peer's digest there; `None` when it does not differ or the
+    /// authority's is not known (yet).
     pub fn diverged_from_host(&self) -> Option<(Tick, u64)> {
+        self.diverged_from_authority()
+    }
+
+    /// See [`Peer::diverged_from_host`].
+    pub fn diverged_from_authority(&self) -> Option<(Tick, u64)> {
         let tick = self
             .router
             .desync()
@@ -1270,12 +1325,14 @@ impl Peer {
             .or_else(|| self.router.peer_desync().map(|(_, n)| n.ours.tick))?;
         let known = self.router.digests_at(tick);
         let ours = known.iter().find(|(p, _)| *p == self.router.me())?.1;
-        let host = known.iter().find(|(p, _)| *p == self.router.host_seat())?.1;
-        (ours != host).then_some((tick, ours))
+        let theirs = known.iter().find(|(p, _)| *p == self.router.authority())?.1;
+        (ours != theirs).then_some((tick, ours))
     }
 
     fn net_progress_client(&mut self, now: Instant) {
-        if self.router.is_host() {
+        // The host asks too when a referee is the authority: its state may
+        // be the diverged one (N5).
+        if self.router.is_host() && self.router.host_is_authority() || self.router.is_spectator() {
             return;
         }
         if let Some(c) = self.net.client.as_ref()
@@ -1292,18 +1349,20 @@ impl Peer {
             }
             return;
         }
-        match self.diverged_from_host() {
+        match self.diverged_from_authority() {
             Some((tick, digest)) => {
                 let req = ResyncRequest {
                     tick,
                     digest,
                     position: self.router.next_turn(),
                 };
-                let host = self.router.host_seat();
+                let host = self.router.authority();
                 let content_hash = self.content.hash();
                 let hs = self.start.seats.iter().find(|s| s.slot == self.start.host);
-                let provenance = hs.map_or((String::new(), Vec::new()), |s| {
-                    (s.lineage.clone(), s.packs.iter().map(|p| p.name.clone()).collect())
+                let provenance = (host == self.router.host_seat()).then(|| {
+                    hs.map_or((String::new(), Vec::new()), |s| {
+                        (s.lineage.clone(), s.packs.iter().map(|p| p.name.clone()).collect())
+                    })
                 });
                 let seats: Vec<PlayerId> = self.router.seats();
                 self.router.expect_catch_up(true);
@@ -1316,7 +1375,8 @@ impl Peer {
                     self.net.client = Some(CatchUp::new(
                         Expect {
                             kind: SnapshotKind::Resync,
-                            host,
+                            host: self.router.host_seat(),
+                            source: host,
                             seats,
                             content_hash,
                             provenance,
@@ -1358,7 +1418,7 @@ impl Peer {
                 // N4.4: still not the authority's state: the match ends. Tell
                 // the host what we hold.
                 if let CatchUpError::Digest { ours, .. } = &e {
-                    let host = self.router.host_seat();
+                    let host = self.router.authority();
                     let ack = ResyncAck { tick: d.offer.tick, digest: *ours };
                     self.send_to(host, &Message::ResyncAck(ack));
                 }
@@ -1394,7 +1454,7 @@ impl Peer {
         self.net.note(ResyncEvent::Repaired {
             turn: d.offer.seed.turn,
         });
-        let host = self.router.host_seat();
+        let host = self.router.authority();
         self.send_to(
             host,
             &Message::ResyncAck(ResyncAck {
@@ -1514,6 +1574,9 @@ impl Peer {
             phase: Phase::Await,
         });
         self.net.note(ResyncEvent::RejoinAccepted { slot: from });
+        if let Some(r) = self.router.referee() {
+            self.send_to(from, &Message::RefereeSeated { slot: Some(r) });
+        }
         let last = self.router.last_record(from);
         self.send_to(
             from,
@@ -1525,11 +1588,24 @@ impl Peer {
     }
 
     fn on_resync_request(&mut self, from: PlayerId, r: ResyncRequest, now: Instant) {
-        if !self.router.is_host() || from == self.router.host_seat() {
+        let host = self.router.host_seat();
+        if !self.router.is_host() && !self.router.is_spectator() {
+            return;
+        }
+        // The host never asks itself; the referee is asked by everyone.
+        if from == host && !self.router.is_spectator() {
             return;
         }
         if !self.attempt_allowed(from, now) {
             return;
+        }
+        // The host with a referee in the room is not the authority (N5).
+        if !self.serves() {
+            return self.refuse(from, SnapshotRefusal::Unsupported);
+        }
+        if from == host && !crate::referee::resync_host(&self.net.referee_policy) {
+            self.net.note(ResyncEvent::HostEndsMatch { slot: from });
+            return self.refuse(from, SnapshotRefusal::HostEndsMatch);
         }
         let limits = self.net.host.limits.clone();
         let resyncs = self.net.host.ledger.get(usize::from(from.0)).map_or(0, |l| l.resyncs);
@@ -1550,8 +1626,11 @@ impl Peer {
         let theirs = known.iter().find(|(p, _)| *p == from).map(|x| x.1);
         let plausible = r.position <= self.router.next_turn().saturating_add(256)
             && mine.is_some()
-            && theirs == Some(r.digest)
-            && mine != theirs;
+            // A seat that stopped at the mismatch sent no record with its
+            // digest: what it says it holds counts when it is not the
+            // authority's own.
+            && theirs.map_or(self.router.is_spectator(), |t| t == r.digest)
+            && mine != Some(r.digest);
         if !plausible {
             return self.refuse(from, SnapshotRefusal::NotDiverged);
         }
@@ -1559,9 +1638,10 @@ impl Peer {
             return self.refuse(from, SnapshotRefusal::Busy);
         }
         if self.net.host.group.is_none() {
+            let seats = self.router.seats();
             let expected = known
                 .iter()
-                .filter(|(p, d)| *p != self.router.me() && Some(*d) != mine)
+                .filter(|(p, d)| seats.contains(p) && *p != self.router.me() && Some(*d) != mine)
                 .map(|(p, _)| *p)
                 .collect();
             self.net.host.group = Some(Group {
@@ -1639,7 +1719,7 @@ impl Peer {
                 self.router.send_message(Destination::All, &msg).ok();
                 if last {
                     self.net.host.group = None;
-                    self.router.clear_desync();
+                    self.router.clear_desync_at(turn);
                 }
             }
         }
@@ -1778,7 +1858,9 @@ impl Peer {
     /// At a turn boundary, before the turn runs: start the transfers that
     /// are waiting for one. Called with the digests of the boundary known.
     pub(crate) fn net_boundary(&mut self, now: Instant) {
-        if !self.router.is_host() || self.net.host.jobs.iter().all(|j| !matches!(j.phase, Phase::Await)) {
+        if !(self.router.is_host() || self.router.is_spectator())
+            || self.net.host.jobs.iter().all(|j| !matches!(j.phase, Phase::Await))
+        {
             return;
         }
         let tpt = self.ticks_per_turn.max(1);

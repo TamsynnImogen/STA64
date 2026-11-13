@@ -715,3 +715,98 @@ fn condition_monitor_and_text_input_callbacks_get_a_hook_object_like_installed_s
     assert_eq!(g.global::<i64>("seen[1]"), 7);
     assert_eq!(g.global::<String>("seen[2]"), "onDone");
 }
+
+// ---- LUA-13: an end that rests on a gap is blocked, any other stands -------
+
+use crate::runtime::MissionEndState;
+
+/// Ids: 2 hero (p0), 3 wing (p0), 4 foe (p1), 5 far (p1). `Colonize` raises
+/// and is counted unsupported: a gap call that names both handles.
+fn end_state(script: &str) -> MissionEndState {
+    let mut g = game(script);
+    g.run(5);
+    g.rt.mission_end(g.view.tick)
+}
+
+#[test]
+fn an_end_with_no_gap_on_its_path_stands_even_with_unsupported_calls_elsewhere() {
+    // A gap call on foe (4) and far (5), then a real loss decided on the hero
+    // (2) and a count over the hero's team, which has nothing tainted.
+    let s = "pcall(A2.Colonize, 4, 5)\nif A2.IsAlive(2) and A2.CountUnits(A2.GetRealTeam(2), 0) > 0 then A2.FailMission(A2.GetTime(), 0) end";
+    assert_eq!(end_state(s), MissionEndState::Ended { won: false });
+    let s = "pcall(A2.Colonize, 3, 5)\nif A2.IsAlive(2) then A2.SucceedMission(0, 0) end";
+    assert_eq!(end_state(s), MissionEndState::Ended { won: true });
+}
+
+#[test]
+fn an_end_read_off_a_tainted_handle_is_blocked_and_not_a_win_or_a_loss() {
+    let s = "pcall(A2.Colonize, 3, 5)\nif A2.IsAlive(3) then A2.SucceedMission(0, 0) end";
+    match end_state(s) {
+        MissionEndState::Blocked(why) => assert!(why.contains("SucceedMission") && why.contains("IsAlive") && why.contains("object 3"), "{why}"),
+        other => panic!("{other:?}"),
+    }
+    // The same on a handle named by a call that is not bound at all.
+    let s = "A2.NoteGap('CommandAllShips', 2)\nif A2.IsCompromised(2, 99) then A2.FailMission(0, 0) end";
+    assert!(matches!(end_state(s), MissionEndState::Blocked(_)));
+}
+
+#[test]
+fn a_team_count_is_tainted_only_over_a_team_with_a_tainted_object() {
+    // Foe (4) belongs to team B: a count over team B or over any team is read
+    // off a gap; a count over the hero's team is not.
+    let s = "pcall(A2.Colonize, 4, 5)\nif A2.CountUnits(A2.GetRealTeam(4), 0) > 0 then A2.SucceedMission(0, 0) end";
+    assert!(matches!(end_state(s), MissionEndState::Blocked(_)));
+    let s = "pcall(A2.Colonize, 4, 5)\nif A2.CountUnits(-1, 0) > 0 then A2.SucceedMission(0, 0) end";
+    assert!(matches!(end_state(s), MissionEndState::Blocked(_)));
+    let s = "pcall(A2.Colonize, 4, 5)\nif A2.CountUnits(A2.GetRealTeam(2), 0) > 0 then A2.SucceedMission(0, 0) end";
+    assert_eq!(end_state(s), MissionEndState::Ended { won: true });
+}
+
+#[test]
+fn a_handle_that_never_existed_blocks_only_after_a_handle_producing_gap() {
+    let s = "if not A2.IsAlive(0) then A2.FailMission(0, 0) end";
+    assert_eq!(end_state(s), MissionEndState::Ended { won: false });
+    // Some other unsupported call changes nothing for it.
+    let s = "pcall(A2.Colonize, 3, 5)\nif not A2.IsAlive(0) then A2.FailMission(0, 0) end";
+    assert_eq!(end_state(s), MissionEndState::Ended { won: false });
+    let s = "A2.NoteGap('BuildObject', 'x')\nif not A2.IsAlive(0) then A2.FailMission(0, 0) end";
+    assert!(matches!(end_state(s), MissionEndState::Blocked(_)));
+}
+
+#[test]
+fn a_read_after_the_end_call_does_not_block_it_and_the_last_call_wins() {
+    let s = "A2.FailMission(0, 0)\npcall(A2.Colonize, 3, 5)\nlocal _ = A2.IsAlive(3)";
+    assert_eq!(end_state(s), MissionEndState::Ended { won: false });
+    // Reads never clear: a call after a tainted read is blocked, whatever it is.
+    let s = "pcall(A2.Colonize, 3, 5)\nlocal _ = A2.IsAlive(3)\nA2.FailMission(0, 0)\nA2.SucceedMission(0, 0)";
+    match end_state(s) {
+        MissionEndState::Blocked(why) => assert!(why.contains("SucceedMission"), "{why}"),
+        other => panic!("{other:?}"),
+    }
+    // Two clean calls: the last one decides.
+    assert_eq!(end_state("A2.FailMission(0, 0)\nA2.SucceedMission(0, 0)"), MissionEndState::Ended { won: true });
+    assert_eq!(end_state("A2.SucceedMission(0, 0)\nA2.FailMission(0, 0)"), MissionEndState::Ended { won: false });
+}
+
+#[test]
+fn a_raising_read_and_a_non_handle_integer_are_judged_apart() {
+    // IsShipAliveAndOffMap has no data: its answer is a guess, so it is a tainted read.
+    let s = "pcall(A2.IsShipAliveAndOffMap, 3)\nif A2.IsAlive(2) then A2.SucceedMission(0, 0) end";
+    assert!(matches!(end_state(s), MissionEndState::Blocked(_)));
+    // A failed call whose first integer is no object (an objective index) taints nothing.
+    let s = "pcall(A2.Colonize, 900, 901)\nif A2.CountUnits(A2.GetRealTeam(4), 0) > 0 then A2.SucceedMission(0, 0) end";
+    assert_eq!(end_state(s), MissionEndState::Ended { won: true });
+}
+
+#[test]
+fn a_gap_that_changes_who_fights_taints_every_later_read() {
+    // A world-effect gap with no object, then a win decided on a healthy hero.
+    let s = "A2.NoteGap('DisableAllAITeams')\nif A2.IsAlive(2) then A2.SucceedMission(0, 0) end";
+    assert!(matches!(end_state(s), MissionEndState::Blocked(_)));
+}
+
+#[test]
+fn a_gap_that_is_not_a_world_effect_taints_no_unrelated_read() {
+    let s = "A2.NoteGap('CollisionPrevention', 1)\nif A2.IsAlive(2) then A2.SucceedMission(0, 0) end";
+    assert_eq!(end_state(s), MissionEndState::Ended { won: true });
+}
