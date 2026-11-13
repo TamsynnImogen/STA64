@@ -380,6 +380,7 @@ impl LockstepRouter {
             self.seen.remove(&oldest);
         }
         let floor = self.ours.keys().next().copied().unwrap_or(0);
+        self.sections_sent = self.sections_sent.split_off(&floor);
         let waiting = std::mem::take(&mut self.unchecked);
         for (slot, theirs) in waiting {
             if theirs.tick == tick {

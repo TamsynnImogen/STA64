@@ -56,6 +56,8 @@ pub enum DiagnoseError {
         recorded: u64,
         found: u64,
     },
+    /// A replay with no recorded digests: nothing shows it is that peer's game.
+    NoDigests { label: String },
     /// A sidecar is not a desync report.
     Sidecar { label: String, why: String },
 }
@@ -73,6 +75,7 @@ impl std::fmt::Display for DiagnoseError {
                  {recorded:#018x}: this is not the game that peer ran (another sim build or content, or its \
                  state was changed outside its command log)"
             ),
+            DiagnoseError::NoDigests { label } => write!(f, "{label}: the replay records no digests, so it cannot be checked against the peer's game"),
             DiagnoseError::Sidecar { label, why } => write!(f, "{label}: not a desync sidecar: {why}"),
         }
     }
@@ -320,6 +323,11 @@ pub fn diagnose(a: Side, b: Side, opts: &Options) -> Result<Report, DiagnoseErro
             return Err(DiagnoseError::NotAtStart { label: s.label.clone(), tick });
         }
     }
+    for s in [&a, &b] {
+        if s.replay.digests.is_empty() {
+            return Err(DiagnoseError::NoDigests { label: s.label.clone() });
+        }
+    }
     let reported = [a.sidecar.as_deref().map(parse_sidecar), b.sidecar.as_deref().map(parse_sidecar)];
     let tpt = opts.ticks_per_turn.filter(|&t| t > 0).unwrap_or_else(|| infer_ticks_per_turn(&a.replay, &b.replay));
     let setup_differences = setup_differences(&a.replay, &b.replay);
@@ -358,6 +366,11 @@ pub fn diagnose(a: Side, b: Side, opts: &Options) -> Result<Report, DiagnoseErro
         }
         if detected_at == Some(tick) {
             at_detection = Some(da.differing(&db));
+            // The peers' digests differ here: never report "identical", even if
+            // no section shows why (state the full digest covers but no section does).
+            if first.is_none() {
+                first = Some((tick, [da, db], [sim_a.clone(), sim_b.clone()]));
+            }
         }
         // Past the detection turn there is nothing more to learn.
         if tick >= end || (first.is_some() && (detected_at.is_none() || at_detection.is_some())) {
@@ -418,15 +431,17 @@ fn commands(a: &Replay, b: &Replay, at: Tick, tpt: u32, history: u32) -> Command
     };
     let (all_a, all_b) = (before(a), before(b));
     let window = |all: &[CommandRow]| all.iter().filter(|c| c.tick >= from).cloned().collect::<Vec<_>>();
+    // Multiset difference in O(n log n): a long game must not make this quadratic.
     let only = |x: &[CommandRow], y: &[CommandRow]| -> Vec<CommandRow> {
-        let mut left: Vec<&CommandRow> = y.iter().collect();
+        let mut left: BTreeMap<(Tick, u8, u32, &str), usize> = BTreeMap::new();
+        for d in y {
+            *left.entry((d.tick, d.player, d.seq, d.text.as_str())).or_default() += 1;
+        }
         let mut out = Vec::new();
         for c in x {
-            match left.iter().position(|d| *d == c) {
-                Some(i) => {
-                    left.remove(i);
-                }
-                None => out.push(c.clone()),
+            match left.get_mut(&(c.tick, c.player, c.seq, c.text.as_str())) {
+                Some(n) if *n > 0 => *n -= 1,
+                _ => out.push(c.clone()),
             }
         }
         out

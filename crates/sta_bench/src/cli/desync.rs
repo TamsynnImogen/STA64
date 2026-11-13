@@ -105,7 +105,9 @@ pub(crate) fn desync(o: &Opts) -> Outcome {
             println!("{json}");
             return Ok(i32::from(report.diverged()));
         }
-        std::fs::write(path, json + "\n").map_err(|e| Fail::Error(format!("{}: {e}", path.display())))?;
+        if let Err(e) = std::fs::write(path, json + "\n") {
+            return cannot(format!("{}: {e}", path.display()));
+        }
     }
     print!("{}", report.to_markdown());
     Ok(i32::from(report.diverged()))
