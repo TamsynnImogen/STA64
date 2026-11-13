@@ -418,11 +418,6 @@ impl Entities {
         self.list.binary_search_by_key(&id, |e| e.id).ok()
     }
 
-    /// The next id to hand out (in the roster section digest).
-    pub(crate) fn next_id_for_digest(&self) -> u64 {
-        self.next as u64
-    }
-
     pub(crate) fn hash_into(&self, h: &mut Fnv) {
         h.u64(self.next as u64);
         h.u64(self.list.len() as u64);

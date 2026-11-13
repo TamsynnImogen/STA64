@@ -61,6 +61,16 @@ fn _every_entity_field_has_a_section(e: &Entity) {
     let Entity { id: _, kind: _, def: _, owner: _, pos: _, heading: _, speed: _, omega: _, target: _, stats: _, hull: _, shields: _, crew: _, flags: _, progress: _ } = e;
 }
 
+/// Fails to compile when `Sim` gains a field: decide its section (or that it is
+/// not in the digest) here and in `Sim::digest`.
+fn _every_sim_field_is_decided(s: &Sim) {
+    let Sim {
+        tick: _, rng: _, units: _, labels: _, players: _, ai_seats: _, content: _, starts: _, regions: _,
+        bounds: _, confinement: _, perception: _, events: _, weapons: _, movement: _, economy: _,
+        production: _, victory: _, specials: _, nav: _,
+    } = s;
+}
+
 fn start(name: &str) -> Fnv {
     let mut h = Fnv::new();
     h.str(name);
@@ -92,7 +102,7 @@ impl Sim {
             h.u64(p.0 as u64);
             h.u64(t.0 as u64);
         }
-        h.u64(self.units.next_id_for_digest());
+        h.u64(self.units.next_id().0 as u64);
         h.u64(self.units.len() as u64);
         for e in self.units.iter() {
             h.u64(e.id.0 as u64);
@@ -209,13 +219,12 @@ mod tests {
         let mut sim = Sim::new(1);
         let stats = MoveStats::from_f32(140.0, 1.0, 1.0, 1.0, 0.2);
         let a = sim.spawn(0, v(0, 0), (Fixed::ZERO, Fixed::ONE), stats);
-        let b = sim.spawn(1, v(1000, 0), (-Fixed::ONE, Fixed::ZERO), stats);
+        sim.spawn(1, v(1000, 0), (-Fixed::ONE, Fixed::ZERO), stats);
         sim.step(&[Command { player: PlayerId(0), seq: 0, kind: CommandKind::Order(Order::Move { units: vec![a], to: v(500, -300), queue: false }) }]);
         for _ in 0..40 {
             sim.step(&[]);
             sim.rng.next_u64();
         }
-        let _ = b;
         sim
     }
 
