@@ -342,6 +342,8 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
             let node = sta_odf::resolve_layered(&stem(text), loader).ok();
             let slot = node.as_ref().and_then(crate::resources::node_slot).or_else(|| model.slot_of_text(text));
             def.resource = Some(slot.unwrap_or(0) as u8);
+            // SIM-62: the node's `canHaveOrbitalStation` (read from data: A2 `ResourcePlanet.odf` 1; moons, rocks 0).
+            def.can_have_orbital_station = node.as_ref().and_then(|n| n.bool("canHaveOrbitalStation")).unwrap_or(false);
         }
         let file = format!("{s}.odf");
         def.planet_role = crate::planet::resolve(&file, odf, profile, &mut warnings);
@@ -350,6 +352,7 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
         def.planet_colonizable = crate::planet::resolve_colonizable(&file, odf, profile, def.planet_role, &mut warnings);
         def.planet_civilian_population_modifier =
             crate::planet::resolve_civilian_population_modifier(&file, odf, profile, def.planet_role, &mut warnings);
+        def.orbit_time = crate::planet::resolve_orbit_time(&file, odf, &def.class.0, &mut warnings);
         def.build.queue_limit = build_queue_limit(&file, odf, &mut warnings);
         def.is_starbase = station_flag(&file, odf, profile, &mut warnings);
         let mut native = Overrides::default();
