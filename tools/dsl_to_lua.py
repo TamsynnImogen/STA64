@@ -2123,6 +2123,7 @@ local function A(name, ...)
         Mission.missing[name] = (Mission.missing[name] or 0) + 1
         Mission.callFailed = true
         problem(name, 'unbound')
+        if A2 and A2.NoteGap then A2.NoteGap(name, ...) end
         return nil
     end
     local ok, v = pcall(f, ...)
@@ -2180,6 +2181,7 @@ local function FM(obj, cls, name, ...)
         Mission.missing[key] = (Mission.missing[key] or 0) + 1
         Mission.callFailed = true
         problem(key, 'unbound')
+        if A2 and A2.NoteGap then A2.NoteGap(key, ...) end
         return nil
     end
     local ok, v = pcall(f, obj, ...)

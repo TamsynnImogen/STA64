@@ -189,9 +189,9 @@ First hit wins.
    has no `AssetVersion`. It reuses the existing `looks_like_fo` name matcher;
    D6 mounting is unchanged.
 4. **`[FleetOps] Version=` in `Data/packages.ini`.** FO 3.2.7 and Dominion War
-   installs have no `info.ini`, but both carry `Version=3.2.7`. Not needed for
-   v1 (both lineages are excluded by D5); listed so the scheme has a place for
-   them.
+   installs have no `info.ini`, but both carry `Version=3.2.7`. CON-43 only
+   records it; since the 2026-11-12 D5 amendment the lineage is in v1 and
+   CON-44 makes this step select the FO 3.2.7 profile.
 5. **The existing heuristics** (name matcher, A2 layout, ZFS archive signature,
    Native fallback). Unchanged: stock Armada II, Armada I, Native.
 
