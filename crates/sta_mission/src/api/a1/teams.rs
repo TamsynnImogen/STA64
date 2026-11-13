@@ -10,7 +10,8 @@
 //! same); the sim has no relation edit, which `unsupported()` records.
 
 use mlua::{Lua, Table, Value};
-use sta_sim::command::Edit;
+use sta_sim::command::{Edit, TeamOp};
+use sta_sim::team_pool::{crew_pool_after, officer_count_after};
 use sta_sim::view::Relation;
 
 use super::{Env, args_of, def};
@@ -119,27 +120,43 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
         e.gap("SetWormholeTeam", "no wormhole team edit in the sim seam", args_of(a))?;
         Ok(Value::Nil)
     })?)?;
-    table.set("SetOfficers", def(lua, env, "SetOfficers", &["if"], |_, e, _, a| {
-        e.team("SetOfficers", a[0].int())?;
-        e.gap("SetOfficers", "no officer-stock edit in the sim seam", args_of(a))?;
-        Ok(Value::Number(a[1].num()))
-    })?)?;
-    table.set("AddOfficers", def(lua, env, "AddOfficers", &["if"], |_, e, _, a| {
-        e.team("AddOfficers", a[0].int())?;
-        e.gap("AddOfficers", "no officer-stock edit in the sim seam", args_of(a))?;
-        Ok(Value::Number(a[1].num()))
-    })?)?;
-    table.set("SetTeamCrew", def(lua, env, "SetTeamCrew", &["if"], |_, e, _, a| {
-        let team = e.team("SetTeamCrew", a[0].int())?;
-        if !a[1].num().is_finite() { return Err(mlua::Error::runtime("A1.SetTeamCrew requires a finite number")); }
-        e.edit("SetTeamCrew", sta_sim::command::Edit::TeamCrew(team, sta_core::Fixed::from_f64(a[1].num())))?;
-        Ok(Value::Number(a[1].num()))
-    })?)?;
-    table.set("AddCrew", def(lua, env, "AddCrew", &["if"], |_, e, _, a| {
-        e.team("AddCrew", a[0].int())?;
-        e.gap("AddCrew", "no crew-stock edit in the sim seam", args_of(a))?;
-        Ok(Value::Number(a[1].num()))
-    })?)?;
+    // SIM-54: the team calls clamp to the team's maximum (Armada I `Team` calls, read from the
+    // executable, static; nothing measured, A1 has no bench). Crew is the stock, clamped to the
+    // team's crew capacity; officers are the count in use, clamped to the cap. No floor at 0.
+    // The edit lands on the next tick, so the returned number is the rule applied to the view.
+    for (name, op) in [
+        ("SetOfficers", TeamOp::OfficersSetA1),
+        ("AddOfficers", TeamOp::OfficersAddA1),
+        ("SetTeamCrew", TeamOp::CrewSetA1),
+        ("AddCrew", TeamOp::CrewAddA1),
+    ] {
+        table.set(name, def(lua, env, name, &["if"], move |_, e, _, a| {
+            let team = e.team(name, a[0].int())?;
+            if !a[1].num().is_finite() {
+                return Err(mlua::Error::runtime(format!("A1.{name} requires a finite number")));
+            }
+            let x = sta_core::Fixed::from_f64(a[1].num().clamp(-1.0e9, 1.0e9));
+            let (pool, cap, used, officer_cap) = {
+                let c = e.ctx.borrow();
+                let view = c.view.player(team);
+                (
+                    view.and_then(|p| p.crew).unwrap_or(sta_core::Fixed::ZERO),
+                    c.view.attrs.seats.iter().find(|s| s.player == team).and_then(|s| s.crew_capacity),
+                    view.map_or(sta_core::Fixed::ZERO, |p| p.officers[0]),
+                    view.map_or(sta_core::Fixed::ZERO, |p| p.officers[1]),
+                )
+            };
+            let after = match op {
+                TeamOp::OfficersSetA1 | TeamOp::OfficersAddA1 => officer_count_after(op, used, x, officer_cap),
+                _ => cap.and_then(|cap| crew_pool_after(op, pool, x, cap)),
+            };
+            e.edit(name, Edit::TeamPool(team, op, x))?;
+            Ok(Value::Number(f64::from(after.unwrap_or(match op {
+                TeamOp::OfficersSetA1 | TeamOp::OfficersAddA1 => used,
+                _ => pool,
+            }).to_f32())))
+        })?)?;
+    }
     table.set("SetCrew", def(lua, env, "SetCrew", &["hf"], |_, e, _, a| {
         let id = a[0].id();
         e.unit("SetCrew", id)?;

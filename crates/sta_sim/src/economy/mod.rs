@@ -46,6 +46,7 @@ pub const RESOURCES: usize = 4;
 mod passive;
 mod crew;
 mod personnel;
+mod seat;
 
 /// What a fresh node holds.
 pub const RICHNESS: i32 = 1_000_000;
@@ -148,6 +149,13 @@ pub struct Economy {
     /// Ascending player id.
     stock: Vec<(PlayerId, [Fixed; RESOURCES])>,
     personnel: Vec<(PlayerId, Option<Fixed>, Option<Fixed>)>,
+    /// What each seat's race changes about the team (SIM-54); derived from the
+    /// seat race and the content by `Sim::refresh_seat_rules`, so neither
+    /// hashed nor saved. Ascending player id, identity rules left out.
+    seat: Vec<(PlayerId, sta_content::SeatRaceRule)>,
+    /// Script adjustments of the team pool (SIM-54), `(player, crew capacity
+    /// offset, officer count offset)`; saved and hashed once any exists.
+    adjust: Vec<(PlayerId, Fixed, Fixed)>,
     /// What is left in each node that has been mined.
     nodes: Table<Fixed>,
     miners: Table<Miner>,
@@ -164,7 +172,7 @@ pub struct EconomyRec {
 
 impl Economy {
     pub fn is_empty(&self) -> bool {
-        self.stock.is_empty() && self.nodes.is_empty() && self.miners.is_empty() && self.personnel.is_empty()
+        self.stock.is_empty() && self.nodes.is_empty() && self.miners.is_empty() && self.personnel.is_empty() && self.adjust.is_empty()
     }
 
     /// A player's stock per resource id; empty until they have any.
@@ -448,6 +456,7 @@ impl Economy {
             h.u64(m.phase.code() as u64);
         }
         self.hash_personnel(h);
+        self.hash_adjust(h);
     }
 
     /// The state in plain form, for the snapshot.

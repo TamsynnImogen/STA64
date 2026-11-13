@@ -61,6 +61,9 @@ pub mod spawn;
 pub mod start;
 mod start_effects;
 pub mod attrs;
+pub mod team_pool;
+#[cfg(test)]
+mod rerace_tests;
 pub use start_effects::unsupported as unsupported_start_lifecycle;
 pub mod tech;
 pub mod victory;
@@ -444,9 +447,10 @@ impl Sim {
         if let Some(db) = &self.content {
             self.economy.step(&mut self.units, db, &mut self.events);
             self.economy.step_passive(&self.units, db, &self.players, &self.ai_seats, self.tick);
-            self.economy.step_crew(&self.units, db, self.tick);
+            self.economy.step_crew(&self.units, db, &self.attrs, self.tick);
             let from = self.events.len();
             self.production.step(&mut self.units, db, &mut self.economy, &mut self.events, &mut self.confinement);
+            self.inherit_builder_races(from);
             let built: Vec<EntityId> = self.events[from..].iter().filter_map(|e| match e { SimEvent::Spawned { id } => Some(*id), _ => None }).collect();
             for id in built {
                 self.default_autonomy(id);
@@ -463,7 +467,8 @@ impl Sim {
     /// (SIM-26, [`production::officers`]).
     fn officer_census(&self, player: PlayerId) -> Fixed {
         let Some(db) = self.content.as_deref() else { return Fixed::ZERO };
-        self.production.officer_census(&self.units, db, player)
+        let census = self.production.officer_census(&self.units, db, player);
+        Fixed::from_bits(census.to_bits().saturating_add(self.economy.officer_adjust(player).to_bits()))
     }
 
     fn build_view(&self) -> WorldView {
@@ -515,7 +520,7 @@ impl Sim {
             }
         }
         let perceived_owners = self.perception.iter().map(|(id, &owner)| (id, owner)).collect();
-        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners, appearance: self.appearance_view(), attrs: crate::attrs::AttrsView { names: self.switches.names(), ..self.attrs.view() } }
+        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners, appearance: self.appearance_view(), attrs: crate::attrs::AttrsView { names: self.switches.names(), seats: self.seat_views(), ..self.attrs.view() } }
     }
 
     /// FNV-1a over all simulation state, for desync detection. The content

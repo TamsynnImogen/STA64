@@ -39,15 +39,15 @@ fn tick_gain(rate_bits: i128, tick: u64) -> i128 {
 
 impl Economy {
     /// One tick of every initialized player's crew stock.
-    pub(crate) fn step_crew(&mut self, units: &Entities, db: &ContentDb, tick: u64) {
+    pub(crate) fn step_crew(&mut self, units: &Entities, db: &ContentDb, attrs: &crate::attrs::Attrs, tick: u64) {
         let Some(rules) = db.rules().crew() else { return };
         if self.personnel.is_empty() {
             return;
         }
         for i in 0..self.personnel.len() {
             let (player, Some(crew), limit) = self.personnel[i] else { continue };
-            let (rate, gain_cap) = team_numbers(units, db, rules, player);
-            let cap = Fixed::from_int(rules.starting_capacity.unwrap_or(0).clamp(0, 1_000_000_000) as i32).max(gain_cap);
+            let (rate, gain_cap) = team_numbers(units, db, attrs, rules, player);
+            let cap = capacity_of(rules, gain_cap, self.crew_capacity_adjust(player));
             if rate <= 0 || crew >= cap {
                 continue;
             }
@@ -57,8 +57,32 @@ impl Economy {
     }
 }
 
+/// The crew capacity: the larger of the starting and the station and planet
+/// capacity, at most `MAX_CREW` (`AddCrewCapacity` clamps its sum to it), plus
+/// what a script wrote with Roots `Player.maxCrew` (a raw write that later
+/// capacity changes shift by their delta; SIM-54, read from the executable, static).
+fn capacity_of(rules: &sta_content::CrewRules, gain_cap: Fixed, offset: Fixed) -> Fixed {
+    const LIMIT: i64 = 1_000_000_000;
+    let mut cap = Fixed::from_int(rules.starting_capacity.unwrap_or(0).clamp(0, LIMIT) as i32).max(gain_cap);
+    if let Some(max) = rules.max_crew {
+        cap = cap.min(Fixed::from_int(max.clamp(0, LIMIT) as i32));
+    }
+    Fixed::from_bits(cap.to_bits().saturating_add(offset.to_bits()))
+}
+
+impl Economy {
+    /// The capacity of `player`'s crew pool without a script offset (None when
+    /// the content has no crew rules).
+    pub(crate) fn derived_crew_capacity(units: &Entities, db: &ContentDb, attrs: &crate::attrs::Attrs, player: PlayerId) -> Option<Fixed> {
+        let rules = db.rules().crew()?;
+        let (_, gain_cap) = team_numbers(units, db, attrs, rules, player);
+        Some(capacity_of(rules, gain_cap, Fixed::ZERO))
+    }
+}
+
 /// `(accumulation bits per second, capacity from stations and planets)` of one team.
-fn team_numbers(units: &Entities, db: &ContentDb, rules: &sta_content::CrewRules, player: PlayerId) -> (i128, Fixed) {
+/// A starbase's rate is that of its own race, which a script may have changed.
+fn team_numbers(units: &Entities, db: &ContentDb, attrs: &crate::attrs::Attrs, rules: &sta_content::CrewRules, player: PlayerId) -> (i128, Fixed) {
     const LIMIT: i128 = 1_000_000_000;
     let (mut rate, mut capacity) = (0i128, 0i128);
     for u in units.iter() {
@@ -75,7 +99,7 @@ fn team_numbers(units: &Entities, db: &ContentDb, rules: &sta_content::CrewRules
         }
         capacity += i128::from(def.crew_gain.to_bits()) >> 32;
         if def.class.0 == "starbase"
-            && let Some((_, r)) = rules.races.iter().find(|(k, _)| k.eq_ignore_ascii_case(def.race.trim()))
+            && let Some((_, r)) = rules.races.iter().find(|(k, _)| k.eq_ignore_ascii_case(attrs.race(u.id).unwrap_or(def.race.as_str()).trim()))
         {
             rate += i128::from(r.to_bits());
         }
@@ -106,7 +130,7 @@ mod tests {
         base.race = "fx".into();
         base.hull = Fixed::from_int(500);
         base.crew_gain = Fixed::from_f64(gain.split('=').nth(1).and_then(|v| v.trim().parse().ok()).unwrap_or(0.0));
-        let rules = Rules::default().with_crew(CrewRules { starting_capacity: starting, races: vec![("fx".into(), Fixed::from_f64(rate))] });
+        let rules = Rules::default().with_crew(CrewRules { starting_capacity: starting, max_crew: None, races: vec![("fx".into(), Fixed::from_f64(rate))] });
         Arc::new(b.unit(base).build().unwrap().with_rules(rules))
     }
 

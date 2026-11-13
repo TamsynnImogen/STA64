@@ -89,7 +89,8 @@ fn current_suffix_is_mandatory_and_rejects_noncanonical_rows() {
         (vec![valid, valid], "personnel rows out of order/duplicate"),
         (vec![(PlayerId(9), valid.1, valid.2)], "invalid personnel player/value"),
         (vec![(PlayerId(0), None, None)], "invalid personnel player/value"),
-        (vec![(PlayerId(0), Some(-1), None)], "invalid personnel player/value"),
+        // The crew pool has no floor at 0 (SIM-54); the officer limit does.
+        (vec![(PlayerId(0), None, Some(-1))], "invalid personnel player/value"),
     ] {
         let bad = chain::with(&bytes, chain::PERSONNEL, chain::enc(&PersonnelRec { version: 1, rows }));
         assert_eq!(chain::corrupt(&bad, content()), why);
