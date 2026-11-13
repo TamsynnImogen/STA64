@@ -156,7 +156,7 @@ Every message is one frame:
 ```
 offset size  field
 0      4     magic "S64N"
-4      2     protocol version, u16 little-endian (PROTOCOL_VERSION = 1)
+4      2     protocol version, u16 little-endian (PROTOCOL_VERSION = 2)
 6      4     body length, u32 little-endian, <= MAX_FRAME_BYTES - 10
 10     n     body: one `Message` in postcard
 ```
@@ -183,7 +183,7 @@ offset size  field
 `MAX_FRAME_BYTES` is 64 KiB. Every variable-length field has its own bound
 (`proto.rs` constants): player names 32 bytes, chat 256, mission text 4096
 (S2's `MAX_MISSION_TEXT_BYTES`), at most 256 commands and 8 scheduled changes
-per turn record, 16 packs per peer, 256 rule entries per `Rules` part and 64
+per turn record, 16 packs per peer, 16 section digests per `Sections`, 256 rule entries per `Rules` part and 64
 parts. `Message::validate` checks them all; `decode` runs it on every frame
 and `encode` refuses to send anything `decode` would refuse.
 
@@ -338,10 +338,23 @@ joiner                         host
      resume, only leaving. As in Armada II, a desynced game is not repaired;
      unlike Armada II, it does not run on in an undefined state. NET-04
      replaces this step with a resync (NET_DECISIONS N2).
-- Comparing two peers' replays of the same game shows the first digest that
-  differs between machines; finding which subsystem diverged needs a state
-  dump (out of scope; open question 6). Section digests name it instead
-  (NET_DECISIONS N6).
+- **Section digests (NET-06, NET_DECISIONS N6; protocol 2).** Beside each
+  turn's digest a peer keeps `Sim::section_digests()` (roster, movement,
+  combat, economy, rng; `sta_sim::digest`) for the same 64 turns. On a
+  mismatch at turn *T* a peer sends `Sections { tick, digests }` once for *T*
+  (appended message, tag 21: one `u64` per section in `SectionDigests::NAMES`
+  order, at most `MAX_SECTIONS` = 16, ticks on a turn boundary only; a
+  receiver keeps at most 64 turns per seat, oldest out). The sidecar then
+  lists every seat's section digests for the first differing tick and one
+  `first differing sections, seat A against seat B: movement, combat` line
+  per other seat. No state dump travels.
+- **Offline bisect.** The sidecar names a turn and a section; the replays
+  name everything else. `sta-bench desync <a.star> <b.star>` (TESTBENCH.md,
+  "Reproducing a desync") re-simulates both replays, finds the first *tick*
+  whose state differs (before the turn boundary the router noticed it on),
+  prints the entity fields that differ in the differing sections and the
+  commands applied just before, and cross-checks each sidecar. It needs no
+  `sta64` build.
 
 ## 8. Stalls, drops, leaving and rejoining
 
@@ -426,7 +439,7 @@ joiner                         host
   |---|---|
   | Host only | `Welcome`, `Refuse`, `RulesRequest`, `Lobby`, `Start`, `Resume`, `Rejoined`, `Replayed`, `CatchUpDone` |
   | Non-host, to the host only | `Hello`, `Rules`, `SeatChoice`, `Request`, `DropVote`, `Rejoin` |
-  | Any seated peer | `Turn`, `Ping`, `Pong`, `Chat`, `Desync`, `Leave` |
+  | Any seated peer | `Turn`, `Ping`, `Pong`, `Chat`, `Desync`, `Sections`, `Leave` |
 
 - **Directed frames.** The envelope carries a destination mask and the relay
   delivers to it only. Everything in the handshake and rejoin goes only

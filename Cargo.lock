@@ -5554,6 +5554,7 @@ dependencies = [
  "sta_bzn",
  "sta_content",
  "sta_core",
+ "sta_net",
  "sta_sim",
  "sta_vfs",
  "thiserror 2.0.21",

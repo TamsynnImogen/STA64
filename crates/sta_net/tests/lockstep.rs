@@ -782,7 +782,7 @@ fn an_injected_desync_is_detected_in_one_turn_and_written_as_a_replay() {
         let text = std::fs::read_to_string(&f.sidecar).unwrap();
         assert!(text.contains(&format!("first differing tick: {first}")), "{text}");
         assert!(text.contains("lineage \"Test lineage\""), "{text}");
-        assert!(text.contains("protocol version: 1"), "{text}");
+        assert!(text.contains("protocol version: 2"), "{text}");
         assert!(text.contains("digest at that tick, seat 0"), "{text}");
         assert!(text.contains("digest at that tick, seat 1"), "{text}");
     }
@@ -1143,4 +1143,233 @@ fn a_takeover_record_arriving_before_the_seats_own_records_is_accepted() {
     // The seat's own earlier records, with lower seqs, arrive later.
     assert_eq!(r.receive(PlayerId(2), rec(2, 2, vec![stop(2, 5)])), Ok(()));
     assert_eq!(r.receive(PlayerId(2), rec(3, 2, vec![stop(2, 6)])), Ok(()));
+}
+
+// ---------------------------------------------------------------------------
+// NET-06: desync diagnosis. Section digests on the wire, then the offline
+// bisect of the two peers' artefacts.
+// ---------------------------------------------------------------------------
+
+use sta_net::diagnose::{self, diagnose, DiagnoseError, Options, Report, Side};
+use sta_net::proto::{SectionReport, MAX_SECTIONS};
+use sta_sim::digest::SectionDigests;
+use sta_sim::Sim;
+
+/// Writes every peer's report, reads the files back and diagnoses peers `a`
+/// and `b`, as the command line does.
+fn diagnose_peers(r: &Room, dir: &str, a: usize, b: usize) -> (Report, [PathBuf; 2]) {
+    let dir = tmp_dir(dir);
+    let files: Vec<_> = [a, b]
+        .iter()
+        .map(|&i| r.peers[i].write_desync_report(&dir, &format!("seat{i}")).unwrap())
+        .collect();
+    let side = |f: &sta_net::lockstep::DesyncFiles| {
+        let replay = diagnose::read_replay("replay", &std::fs::read(&f.replay).unwrap()).unwrap();
+        let sim = Sim::from_setup(&replay.setup(r.db.clone()).unwrap());
+        Side {
+            label: f.replay.file_name().unwrap().to_string_lossy().into_owned(),
+            replay,
+            sim,
+            sidecar: Some(std::fs::read_to_string(&f.sidecar).unwrap()),
+        }
+    };
+    let report = diagnose(side(&files[0]), side(&files[1]), &Options::default()).unwrap();
+    (report, [files[0].sidecar.clone(), files[1].sidecar.clone()])
+}
+
+#[test]
+fn a_dropped_order_is_localised_to_tick_section_entity_and_command() {
+    let (r, applied) = run_with_dropped_order(2, 1, 0, 0, 7);
+    let unit = r.peers[0]
+        .replay()
+        .commands
+        .iter()
+        .find_map(|l| match &l.command.kind {
+            CommandKind::Order(Order::Move { units, .. }) if l.tick == applied => Some(units[0]),
+            _ => None,
+        })
+        .unwrap();
+    let (report, sidecars) = diagnose_peers(&r, "diag-dropped", 0, 1);
+    let d = report.divergence.as_ref().expect("the peers diverged");
+    // The order applies at `applied`; its first effect is in the state at the next tick;
+    // the routers notice at the next turn boundary.
+    assert_eq!(d.tick, applied + 1);
+    assert_eq!(d.detected_at, Some(applied + 3));
+    assert_eq!(d.sections.iter().map(|s| s.section).collect::<Vec<_>>(), ["movement"]);
+    let rows = &d.sections[0].rows;
+    assert!(rows.iter().all(|x| x.entity == Some(unit)), "{rows:?}");
+    // Peer 0 (a) heads for the order's destination (-400, 300); the victim (b) does not.
+    let row = rows.iter().find(|x| x.field == "target").expect("the target differs");
+    assert!(row.values[0].as_deref().is_some_and(|v| v.starts_with("-400.0000") && v.contains("300.0000 ")), "{row:?}");
+    assert!(row.values[1].is_some(), "{row:?}");
+    // The command that preceded it: only peer 0 applied the Move, in the last turns before.
+    let only = &d.commands.only_in;
+    assert!(only[1].is_empty());
+    assert_eq!(only[0].len(), 1);
+    assert_eq!((only[0][0].tick, only[0][0].player), (applied, 0));
+    assert!(only[0][0].text.contains("Move"), "{:?}", only[0][0]);
+    assert!(d.commands.window[0].iter().any(|c| c.tick == applied));
+    assert!(!d.commands.window[1].iter().any(|c| c.tick == applied && c.player == 0 && c.text.contains("Move")));
+    // Both sidecars named the same section, and the tool agrees with them.
+    for (i, p) in sidecars.iter().enumerate() {
+        let text = std::fs::read_to_string(p).unwrap();
+        assert!(text.contains("section digests at that tick, seat 0: roster=0x"), "{text}");
+        assert!(text.contains("section digests at that tick, seat 1: roster=0x"), "{text}");
+        let other = 1 - i;
+        assert!(text.contains(&format!("first differing sections, seat {i} against seat {other}: movement\n")), "{text}");
+        let rep = report.reported[i].as_ref().unwrap();
+        assert_eq!((rep.tick, rep.sections.as_slice()), (Some(applied + 3), ["movement".to_owned()].as_slice()));
+        assert_eq!(diagnose::sidecar_agrees(rep, d), Some(true));
+    }
+    // Output is stable and carries the answer.
+    let json = report.to_json();
+    assert_eq!(json, report.to_json());
+    assert!(json.contains("\"verdict\":\"diverged\""));
+    assert!(json.contains(&format!("\"first_differing_tick\":{}", applied + 1)));
+    assert!(json.contains(&format!("\"entity\":{},\"field\":\"target\"", unit.0)));
+    let md = report.to_markdown();
+    assert!(md.contains(&format!("Diverged at tick {}", applied + 1)) && md.contains("Section `movement`"), "{md}");
+}
+
+#[test]
+fn the_peers_exchange_section_digests_for_the_mismatching_turn_only() {
+    let (r, applied) = run_with_dropped_order(3, 2, 2, 5, 22);
+    let first = applied + 3;
+    for (i, p) in r.peers.iter().enumerate() {
+        let ours = SectionDigests::NAMES.len();
+        let at = p.router().sections_at(first);
+        // The victim and the host halt on the mismatch and announce their sections;
+        // every peer holds its own, and the ones announced.
+        assert!(at.iter().any(|(s, d)| s.0 as usize == i && d.len() == ours), "peer {i}: {at:?}");
+        assert!(at.len() >= 2, "peer {i} received no section digests: {at:?}");
+        // Quiet turns before the mismatch were not announced.
+        assert!(p.router().sections_at(first - 30).iter().all(|(s, _)| s.0 as usize == i));
+    }
+    // The victim's section digests differ from the others' in movement only.
+    let victim = r.peers[2].router().sections_at(first);
+    let host = r.peers[0].router().sections_at(first);
+    let get = |v: &[(PlayerId, Vec<u64>)], s: u8| v.iter().find(|(p, _)| p.0 == s).map(|(_, d)| d.clone());
+    let (a, b) = (get(&host, 0).unwrap(), get(&victim, 2).unwrap());
+    assert_eq!(get(&victim, 0), Some(a.clone()), "the victim holds the host's digests");
+    let differing: Vec<_> = (0..a.len()).filter(|&i| a[i] != b[i]).map(|i| SectionDigests::NAMES[i]).collect();
+    assert_eq!(differing, ["movement"]);
+}
+
+#[test]
+fn a_local_only_state_edit_is_localised_to_tick_section_and_entity() {
+    let mut r = room(2, cfg(3, 2));
+    r.spawn_forces(2);
+    r.round_robin_to(90, |_, _| {});
+    let unit = r.peers[1].sim().view().units.iter().find(|u| u.owner == PlayerId(1)).unwrap().id;
+    r.peers[1].inject(Fault::Inject(Command {
+        player: PlayerId::SCRIPT,
+        seq: 9_999,
+        kind: CommandKind::Edit(Edit::Damage(unit, Fixed::from_int(7))),
+    }));
+    for _ in 0..60 {
+        r.net.advance(1);
+        for p in &mut r.peers {
+            p.step();
+        }
+    }
+    let applied = applied_tick(&r.peers[1], PlayerId::SCRIPT, 9_999).expect("applied on peer 1");
+    assert_eq!(applied_tick(&r.peers[0], PlayerId::SCRIPT, 9_999), None);
+    let (report, _) = diagnose_peers(&r, "diag-edit", 0, 1);
+    let d = report.divergence.as_ref().expect("diverged");
+    assert_eq!(d.tick, applied + 1);
+    assert_eq!(d.sections.iter().map(|s| s.section).collect::<Vec<_>>(), ["combat"]);
+    let rows = &d.sections[0].rows;
+    assert!(!rows.is_empty() && rows.iter().all(|x| x.entity == Some(unit)), "{rows:?}");
+    assert!(rows.iter().any(|x| x.field == "hull" || x.field == "shields"), "{rows:?}");
+    // Only the edited peer applied the command.
+    assert_eq!(d.commands.only_in[0], []);
+    assert_eq!((d.commands.only_in[1][0].tick, d.commands.only_in[1][0].seq), (applied, 9_999));
+    assert!(d.commands.only_in[1][0].text.contains("Damage"));
+    // Both sidecars agree with the replays about the section at the turn that noticed.
+    assert!(report.reported.iter().flatten().all(|rep| diagnose::sidecar_agrees(rep, d) == Some(true)), "{:?}", report.reported);
+}
+
+#[test]
+fn identical_peers_report_no_divergence() {
+    let mut r = room(2, cfg(3, 2));
+    r.spawn_forces(3);
+    r.run_to(300, true);
+    let (report, _) = diagnose_peers(&r, "diag-same", 0, 1);
+    assert!(!report.diverged() && report.divergence.is_none());
+    assert_eq!(report.compared_through, r.peers[0].replay().end_tick);
+    assert!(report.setup_differences.is_empty());
+    assert!(report.to_json().contains("\"verdict\":\"identical\""));
+    assert!(report.to_markdown().contains("No divergence"));
+    // The same replay twice is identical too, and the tool is repeatable.
+    let again = diagnose_peers(&r, "diag-same", 0, 1).0;
+    assert_eq!(report.to_json(), again.to_json());
+}
+
+#[test]
+fn damaged_artefacts_are_errors_not_panics() {
+    let mut r = room(2, cfg(3, 2));
+    r.spawn_forces(2);
+    r.run_to(60, true);
+    let bytes = r.peers[0].replay().encode();
+    let bad = |b: &[u8]| matches!(diagnose::read_replay("x.star", b), Err(DiagnoseError::Replay { .. }));
+    // Every truncation (sampled), garbage, wrong magic, and trailing bytes.
+    for n in (0..bytes.len()).step_by(bytes.len() / 97 + 1) {
+        assert!(bad(&bytes[..n]), "truncated to {n}");
+    }
+    assert!(bad(&[]) && bad(b"not a replay at all") && bad(&bytes[1..]));
+    let mut trailing = bytes.clone();
+    trailing.push(0);
+    assert!(bad(&trailing));
+    let mut state = 12345u64;
+    for _ in 0..50 {
+        let mut flipped = bytes.clone();
+        for _ in 0..4 {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let at = (state >> 33) as usize % flipped.len();
+            flipped[at] ^= 1 << (state & 7);
+        }
+        // Either rejected or readable: never a panic.
+        let _ = diagnose::read_replay("x.star", &flipped);
+    }
+    let msg = diagnose::read_replay("seat0.star", &bytes[..bytes.len() / 2]).err().unwrap().to_string();
+    assert!(msg.starts_with("seat0.star: not a readable replay"), "{msg}");
+
+    // A replay whose recorded digest is not what its commands give: not the game that peer ran.
+    let mut tampered = Replay::decode(&bytes).unwrap();
+    tampered.digests[2].1 ^= 1;
+    let sim = || Sim::from_setup(&tampered.setup(r.db.clone()).unwrap());
+    let fine = Replay::decode(&bytes).unwrap();
+    let side = |label: &str, replay: &Replay, sim: Sim| Side { label: label.into(), replay: replay.clone(), sim, sidecar: None };
+    let err = diagnose(side("good", &fine, sim()), side("bad", &tampered, sim()), &Options::default()).err().unwrap();
+    match &err {
+        DiagnoseError::NotReproducible { label, tick, .. } => assert_eq!((label.as_str(), *tick), ("bad", tampered.digests[2].0)),
+        other => panic!("{other:?}"),
+    }
+    assert!(err.to_string().contains("not the game that peer ran"), "{err}");
+    // A sim that is not at tick 0.
+    let mut late = sim();
+    late.step(&[]);
+    assert!(matches!(
+        diagnose(side("a", &fine, late), side("b", &fine, sim()), &Options::default()),
+        Err(DiagnoseError::NotAtStart { tick: 1, .. })
+    ));
+}
+
+#[test]
+fn section_reports_from_a_peer_are_bounded() {
+    let mut r = bare_router(0);
+    let report = |tick: Tick, n: usize| Message::Sections(SectionReport { tick, digests: vec![7; n] });
+    // Wrong size, empty, and off a turn boundary (3 ticks per turn) are refused.
+    assert!(matches!(r.receive(PlayerId(1), report(3, MAX_SECTIONS + 1)), Err(RouterError::Proto(_))));
+    assert!(matches!(r.receive(PlayerId(1), report(3, 0)), Err(RouterError::Proto(_))));
+    assert!(matches!(r.receive(PlayerId(1), report(4, 5)), Err(RouterError::Proto(_))));
+    // From a seat that is not at the table: refused.
+    assert!(r.receive(PlayerId(7), report(3, 5)).is_err());
+    // A flood of distinct ticks keeps the newest DIGESTS_KEPT only.
+    for k in 0..1000u64 {
+        r.receive(PlayerId(1), report(3 * k, MAX_SECTIONS)).unwrap();
+    }
+    let kept = (0..1000u64).filter(|&k| !r.sections_at(3 * k).is_empty()).count();
+    assert_eq!(kept, sta_net::lockstep::DIGESTS_KEPT);
+    assert!(!r.sections_at(3 * 999).is_empty() && r.sections_at(0).is_empty());
 }

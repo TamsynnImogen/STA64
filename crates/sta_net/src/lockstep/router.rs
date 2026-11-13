@@ -1,13 +1,13 @@
 //! The lockstep [`CommandRouter`] (docs/NET.md, sections 1, 3, 6, 7, 8).
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use sta_core::{PlayerId, Tick};
 use sta_sim::command::{Command, CommandRouter};
 
 use super::transport::{Destination, Incoming, Transport, TransportError};
 use crate::proto::{
-    MAX_SCHEDULE_PER_TURN, Action, DesyncNotice, DropChoice, Message, Occupant, ProtoError, Scheduled, Start, TickDigest,
+    MAX_SCHEDULE_PER_TURN, Action, DesyncNotice, DropChoice, Message, Occupant, ProtoError, Scheduled, SectionReport, Start, TickDigest,
     TurnCommands, TurnConfig,
 };
 
@@ -153,6 +153,12 @@ pub struct LockstepRouter {
     digest_to_send: Option<TickDigest>,
     desync: Option<DesyncNotice>,
     peer_desync: Option<(PlayerId, DesyncNotice)>,
+    // Section digests (NET_DECISIONS N6): ours for the same turns as `ours`,
+    // those peers sent after a mismatch (at most DIGESTS_KEPT turns per seat),
+    // and the turns we already announced ours for.
+    our_sections: BTreeMap<Tick, Vec<u64>>,
+    their_sections: BTreeMap<PlayerId, BTreeMap<Tick, Vec<u64>>>,
+    sections_sent: BTreeSet<Tick>,
     events: Vec<RouterEvent>,
 }
 
@@ -216,6 +222,9 @@ impl LockstepRouter {
             digest_to_send: None,
             desync: None,
             peer_desync: None,
+            our_sections: BTreeMap::new(),
+            their_sections: BTreeMap::new(),
+            sections_sent: BTreeSet::new(),
             events: Vec::new(),
         })
     }
@@ -294,12 +303,51 @@ impl LockstepRouter {
             .unwrap_or_default()
     }
 
+    /// Every section digest list known for `tick`, ours included, by seat: ours
+    /// from [`LockstepRouter::set_sections`], the others' from the
+    /// [`Message::Sections`] they sent after a mismatch at `tick`. A list holds
+    /// one digest per section, in the sim's section order.
+    pub fn sections_at(&self, tick: Tick) -> Vec<(PlayerId, Vec<u64>)> {
+        let mut all: BTreeMap<PlayerId, Vec<u64>> = BTreeMap::new();
+        for (&seat, m) in &self.their_sections {
+            if let Some(d) = m.get(&tick) {
+                all.insert(seat, d.clone());
+            }
+        }
+        if let Some(d) = self.our_sections.get(&tick) {
+            all.insert(self.me, d.clone());
+        }
+        all.into_iter().collect()
+    }
+
     /// Takes the events noticed since the last call.
     pub fn take_events(&mut self) -> Vec<RouterEvent> {
         std::mem::take(&mut self.events)
     }
 
     // ---- driver input -----------------------------------------------------
+
+    /// This peer's section digests at `tick` (`SectionDigests::values`), kept
+    /// for the same turns as the digest. Call it with the digest, before
+    /// [`LockstepRouter::set_digest`], so a mismatch found there can send them.
+    pub fn set_sections(&mut self, tick: Tick, digests: Vec<u64>) {
+        self.our_sections.insert(tick, digests);
+        while self.our_sections.len() > DIGESTS_KEPT {
+            self.our_sections.pop_first();
+        }
+        let floor = self.our_sections.keys().next().copied().unwrap_or(0);
+        self.sections_sent = self.sections_sent.split_off(&floor);
+    }
+
+    /// Sends our section digests for `tick` to everyone, once.
+    fn announce_sections(&mut self, tick: Tick) {
+        if !self.sections_sent.insert(tick) {
+            return;
+        }
+        if let Some(digests) = self.our_sections.get(&tick).cloned() {
+            self.send(Destination::All, &Message::Sections(SectionReport { tick, digests }));
+        }
+    }
 
     /// This peer's sim digest at `tick`, the first tick of a turn, before its
     /// commands apply. It is compared with every report and rides in the
@@ -489,6 +537,22 @@ impl LockstepRouter {
                 self.peer_desync.get_or_insert((from, notice));
                 Ok(())
             }
+            Message::Sections(report) => {
+                let tpt = Tick::from(self.cfg.ticks_per_turn.max(1));
+                if !report.tick.is_multiple_of(tpt) {
+                    return Err(RouterError::Proto(ProtoError::Invalid(
+                        "section report off a turn boundary",
+                    )));
+                }
+                // A hostile peer cannot grow this: a bounded list per turn,
+                // DIGESTS_KEPT turns per seat, oldest first out.
+                let kept = self.their_sections.entry(from).or_default();
+                kept.insert(report.tick, report.digests);
+                while kept.len() > DIGESTS_KEPT {
+                    kept.pop_first();
+                }
+                Ok(())
+            }
             Message::Resume { .. } => {
                 self.resumes += 1;
                 Ok(())
@@ -600,6 +664,7 @@ impl LockstepRouter {
                     theirs,
                 };
                 let first = self.desync.is_none();
+                self.announce_sections(theirs.tick);
                 if self.desync.is_none_or(|n| theirs.tick < n.theirs.tick) {
                     self.desync = Some(notice);
                 }
