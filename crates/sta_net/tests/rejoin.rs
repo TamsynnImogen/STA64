@@ -886,8 +886,8 @@ fn truncated_and_short_transfers_are_refused() {
 #[test]
 fn an_oversized_or_inconsistent_offer_is_refused_before_buffering() {
     let m = material();
-    // Over the bound: the encoder (and so the decoder) refuses the frame; the
-    // rejoiner never sees it and times out instead of allocating.
+    // Over the bound: the encoder (and so the decoder) refuses the frame, so
+    // it can never reach a rejoiner (proto's tests cover the decoder side).
     let r = run_fake_host(&m, |f| offer_of(f).len = 64 * 1024 * 1024);
     assert!(matches!(r, Err(RejoinError::Overflow)), "{:?}", r.err().map(|e| e.to_string()));
     // Within the bound but claiming more parts than ever come: it waits and
@@ -1037,10 +1037,9 @@ fn unsolicited_snapshot_traffic_is_dropped_not_buffered() {
     for f in &m.frames[2..] {
         host.send(sta_net::lockstep::Destination::Seat(PlayerId(1)), f).unwrap();
     }
-    peer.step();
-    peer.step();
-    assert!(peer.tick() <= 2, "nothing was applied");
-    assert!(peer.router_mut().take_inbound().is_empty());
+    // Look at the router's stash before the peer's own step drains it.
+    peer.router_mut().pump();
+    assert!(peer.router_mut().take_inbound().is_empty(), "unsolicited traffic was buffered");
     assert!(!peer.resyncing());
 }
 

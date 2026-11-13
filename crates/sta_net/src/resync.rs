@@ -603,6 +603,7 @@ pub struct Rejoiner {
     state: RejoinState,
     live: Vec<Incoming>,
     live_bytes: usize,
+    new_token: Option<u64>,
 }
 
 impl Rejoiner {
@@ -647,7 +648,14 @@ impl Rejoiner {
             state: RejoinState::Reply,
             live: Vec::new(),
             live_bytes: 0,
+            new_token: None,
         })
+    }
+
+    /// The token to rejoin with next, once the host has answered: the old one
+    /// is spent at that point, so keep this when an attempt fails after it.
+    pub fn current_token(&self) -> Option<u64> {
+        self.new_token
     }
 
     pub fn poll(&mut self) -> Result<RejoinProgress, RejoinError> {
@@ -721,9 +729,6 @@ impl Rejoiner {
             Message::Turn(_)
                 | Message::Desync(_)
                 | Message::Sections(_)
-                | Message::Chat(_)
-                | Message::Ping { .. }
-                | Message::Pong { .. }
                 | Message::Leave(_)
                 | Message::Resume { .. }
         ) {
@@ -735,7 +740,18 @@ impl Rejoiner {
             self.live.push(Incoming { from, msg });
             return Ok(None);
         }
-        if from != self.host {
+        // Chat and pings are not worth keeping, and a broadcast about
+        // another seat (`Arrived`, `Resynced`) is not this transfer's.
+        if from != self.host
+            || matches!(
+                msg,
+                Message::Chat(_)
+                    | Message::Ping { .. }
+                    | Message::Pong { .. }
+                    | Message::Arrived(_)
+                    | Message::Resynced(_)
+            )
+        {
             return Ok(None);
         }
         match (&mut self.state, msg) {
@@ -744,6 +760,7 @@ impl Rejoiner {
             }
             (_, Message::SnapshotRefused(why)) => Err(RejoinError::CatchUp(CatchUpError::Refused(why))),
             (RejoinState::Reply, Message::Rejoined(r)) => {
+                self.new_token = Some(r.rejoin_token);
                 self.state = RejoinState::Start {
                     token: r.rejoin_token,
                     last_turn: r.last_turn,
@@ -825,7 +842,7 @@ impl Rejoiner {
             .map(|s| s.next_turn);
         // The host's account of our last record must be the seed's.
         if let (Some(l), Some(n)) = (last_turn, own_next)
-            && l + 1 != n
+            && l.checked_add(1) != Some(n)
         {
             return Err(RejoinError::CatchUp(CatchUpError::Protocol(
                 "last record differs from the seed's",
@@ -1005,6 +1022,8 @@ pub(crate) struct NetState {
     /// of (waiting for the host to repair the others).
     waiting_since: Option<Instant>,
     overdue_noted: bool,
+    /// After a transient refusal (`Busy`, `Timeout`): ask again after this.
+    retry_after: Option<Instant>,
 }
 
 impl NetState {
@@ -1222,6 +1241,15 @@ impl Peer {
                 match c.feed(from, m, now) {
                     Ok(None) => {}
                     Ok(Some(d)) => self.apply_resync(d),
+                    Err(CatchUpError::Refused(
+                        SnapshotRefusal::Busy | SnapshotRefusal::Timeout | SnapshotRefusal::RateLimited,
+                    )) => {
+                        // Transient: the host is serving another seat. Ask
+                        // again later; the match stays stopped meanwhile.
+                        self.router.expect_catch_up(false);
+                        self.net.client = None;
+                        self.net.retry_after = Some(now + Duration::from_secs(3));
+                    }
                     Err(e) => self.fail_resync(e),
                 }
             }
@@ -1255,6 +1283,9 @@ impl Peer {
         {
             return self.fail_resync(e);
         }
+        if self.net.retry_after.is_some_and(|t| now < t) {
+            return;
+        }
         if self.net.client.is_some() || self.net.failed || !self.router.halted() {
             if !self.router.halted() {
                 self.net.waiting_since = None;
@@ -1276,7 +1307,11 @@ impl Peer {
                 });
                 let seats: Vec<PlayerId> = self.router.seats();
                 self.router.expect_catch_up(true);
-                if self.send_to(host, &Message::ResyncRequest(req)) {
+                let sent = self.send_to(host, &Message::ResyncRequest(req));
+                if !sent {
+                    self.router.expect_catch_up(false);
+                }
+                if sent {
                     self.net.requested = Some(req);
                     self.net.client = Some(CatchUp::new(
                         Expect {
@@ -1535,6 +1570,11 @@ impl Peer {
                 failed: false,
             });
         }
+        // Counted when accepted, not when acked: a peer that asks and never
+        // acks still uses up its resyncs.
+        if let Some(l) = self.net.host.ledger(from) {
+            l.resyncs += 1;
+        }
         self.net.host.jobs.push(Job {
             seat: from,
             kind: SnapshotKind::Resync,
@@ -1559,7 +1599,9 @@ impl Peer {
                 theirs: a.digest,
                 ours: digest,
             });
-            if let Some(g) = self.net.host.group.as_mut() {
+            if kind == SnapshotKind::Resync
+                && let Some(g) = self.net.host.group.as_mut()
+            {
                 g.failed = true;
             }
             // N4.4: the match ends as NET.md section 7 describes; the host
@@ -1572,10 +1614,7 @@ impl Peer {
                 self.router.send_message(Destination::All, &Message::Arrived(Arrived { slot: from, turn })).ok();
             }
             SnapshotKind::Resync => {
-                let count = self.net.host.ledger(from).map_or(0, |l| {
-                    l.resyncs += 1;
-                    l.resyncs
-                });
+                let count = self.net.host.ledger(from).map_or(0, |l| l.resyncs);
                 let last = {
                     let g = self.net.host.group.as_mut();
                     if let Some(g) = g {
@@ -1607,6 +1646,9 @@ impl Peer {
     }
 
     fn host_timers(&mut self, now: Instant) {
+        if self.net.host.jobs.is_empty() {
+            self.net.host.cache = None;
+        }
         let limits = self.net.host.limits.clone();
         let mut dead: Vec<(PlayerId, &'static str)> = Vec::new();
         for j in &self.net.host.jobs {
@@ -1676,6 +1718,9 @@ impl Peer {
         let mut failed: Vec<PlayerId> = Vec::new();
         let mut finished: Vec<(PlayerId, usize)> = Vec::new();
         let n = self.net.host.jobs.len();
+        // One budget for all transfers: the host's connection is limited.
+        let sending = self.net.host.jobs.iter().filter(|j| matches!(j.phase, Phase::Send(_))).count().max(1);
+        let rate = f64::from(limits.bytes_per_sec) / sending as f64;
         for i in 0..n {
             let seat = self.net.host.jobs[i].seat;
             let Phase::Send(t) = &mut self.net.host.jobs[i].phase else {
@@ -1683,11 +1728,11 @@ impl Peer {
             };
             let dt = now.saturating_duration_since(t.refilled).as_secs_f64();
             t.refilled = now;
-            t.tokens = (t.tokens + dt * f64::from(limits.bytes_per_sec)).min(f64::from(limits.burst_bytes));
+            t.tokens = (t.tokens + dt * rate).min(f64::from(limits.burst_bytes) / sending as f64);
             let mut sent = 0;
             while t.cursor < t.len() && sent < 64 {
                 let (msg, cost) = t.message(t.cursor);
-                if t.tokens < cost as f64 && t.tokens < f64::from(limits.burst_bytes) {
+                if t.tokens < cost as f64 && t.tokens < f64::from(limits.burst_bytes) / sending as f64 {
                     break;
                 }
                 if self

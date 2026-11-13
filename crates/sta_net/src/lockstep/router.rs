@@ -576,7 +576,7 @@ impl LockstepRouter {
 
     // ---- receiving --------------------------------------------------------
 
-    pub(crate) fn pump(&mut self) {
+    pub fn pump(&mut self) {
         loop {
             match self.transport.poll() {
                 Ok(Some(Incoming { from, msg })) => {
@@ -645,7 +645,8 @@ impl LockstepRouter {
             // Rejoin and resync traffic belongs to the layer above (NET-04).
             Message::Rejoin(_) | Message::ResyncRequest(_) | Message::ResyncAck(_) => {
                 if self.is_host() {
-                    self.stash(from, msg, 0);
+                    let size = postcard::to_allocvec(&msg).map_or(crate::proto::MAX_FRAME_BYTES, |b| b.len() + 16);
+                    self.stash(from, msg, size);
                     Ok(())
                 } else {
                     Err(RouterError::Proto(ProtoError::Authority(
