@@ -22,6 +22,7 @@ mod native_camera;
 mod native_presentation;
 mod objectives;
 mod objects;
+mod orders;
 mod queries;
 mod random;
 mod subsystems;
@@ -48,6 +49,8 @@ pub(super) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
     a2.set("paths", lua.create_table()?)?;
     conditions::install(lua, ctx, &a2)?;
     subsystems::install(lua, ctx, &a2)?;
+    // Last: it wraps every function installed above to resolve `BuildObject` handles.
+    orders::install(lua, ctx, &a2)?;
     lua.globals().raw_set("A2", a2)?;
     Ok(())
 }
