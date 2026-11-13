@@ -235,11 +235,6 @@ impl Weapons {
         self.held = ids;
     }
 
-    /// End `unit`'s attack order.
-    pub(crate) fn drop_attack(&mut self, unit: EntityId) {
-        self.attack.remove(unit);
-    }
-
     /// The units whose attack ended in the last step (their target is gone).
     pub(crate) fn take_ended(&mut self) -> Vec<EntityId> {
         std::mem::take(&mut self.ended)
