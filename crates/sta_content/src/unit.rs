@@ -1,6 +1,6 @@
 //! [`UnitDef`] from a unit's resolved ODF (CON-03). See [`crate::odf`].
 //!
-//! Keys read (all optional; absent means zero or empty):
+//! Keys read (all optional; absent means zero or empty unless noted):
 //!
 //! | field | key |
 //! |---|---|
@@ -14,6 +14,7 @@
 //! | `movement` | the physics ODF named by `physicsFile`, see [`movement`] |
 //! | `hardpoints` | `weapon<n>` with `weaponHardPoints<n>` (first node named); `STA64_fireArc<n>` the slot's own arc half-width in radians |
 //! | `build` | `dilithiumCost`, `latinumCost`, `metalCost`, `biomatterCost`, `buildTime` seconds, `officerCost`, `buildItem<n>` |
+//! | `repair` | authored `enginesRepairTime`, `weaponsRepairTime`, `shieldGeneratorRepairTime`, `lifeSupportRepairTime`, `sensorsRepairTime` seconds per system hit point before runtime modifiers; `repairFacility`, `repairHardpoint`, `repairSide`, `canShipyardRepair` (metadata only; no effective defaults) |
 //! | `sounds` | `eventSelect`, `eventAcknowledge`, `eventAttack`, `ambientSound` (event and file names, resolved by the client) |
 //! | `fx` | `fireball` |
 //! | specials, mining | `maxSpecialEnergy`, `specialEnergyRate`, `miner` (`miner = 0` says not a miner even for class `freighter`: [`UnitDef::mines`]), `maxdilithium`, `miningRate`, `dilithiumTransferRate`, `resource` |
@@ -167,6 +168,31 @@ pub(crate) fn unit_def_for_profile(name: &str, odf: &Odf, phys: Option<&Odf>, pr
         life_support_loss: r.fixed("lifeSupportLoss"),
         recrew_rate: r.odf.raw("recrewRate").map(|_| r.fixed("recrewRate")),
     };
+    for (slot, key) in [
+        "enginesRepairTime", "weaponsRepairTime", "shieldGeneratorRepairTime",
+        "lifeSupportRepairTime", "sensorsRepairTime",
+    ].into_iter().enumerate() {
+        d.repair.system_times[slot] = match r.num(key) {
+            Some(seconds) if seconds >= 0.0 => Some(Fixed::from_f64(seconds)),
+            Some(_) => {
+                r.warnings.push(Warning::new(&file, format!("{key} is negative; ignored")));
+                None
+            }
+            None => None,
+        };
+    }
+    d.repair.repair_facility = r.flag("repairFacility");
+    d.repair.repair_hardpoint = r.text("repairHardpoint");
+    // Parse the authored decimal exactly: Reader::num converts through f32
+    // and clamps large values, which would silently change a side number.
+    d.repair.repair_side = odf.raw("repairSide").and_then(|_| match r.text("repairSide").and_then(|s| s.parse::<i32>().ok()) {
+        Some(side) => Some(side),
+        None => {
+            r.warnings.push(Warning::new(&file, "repairSide is not a signed whole number; ignored"));
+            None
+        }
+    });
+    d.repair.can_shipyard_repair = r.flag("canShipyardRepair");
     d.sensor = r.fixed("rangeScan");
     d.attack_power = odf.raw("attackPower").map(|_| r.fixed("attackPower").max(Fixed::ZERO).min(Fixed::from_int(1_000_000)));
 

@@ -449,7 +449,7 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
         sounds: _, fx: _, special_energy_max: _, special_energy_rate: _, miner: _, miner_off: _,
         max_dilithium: _, mining_rate: _, transfer_rate: _, resource: _, features: _,
         confinement: _, nebula_pathing: _, avoid_me: _, hidden: _, invalid_as_target: _, attack_power: _, life: _,
-        crew_gain: _, sane_crew_loss: _, system_hit_points: _, casualty: _, raw: _,
+        crew_gain: _, sane_crew_loss: _, system_hit_points: _, casualty: _, repair: _, raw: _,
     } = u;
     let crate::BuildDef { cost: _, ticks: _, officers: _, list: _, queue_limit: _, flagged_slots: _ } = &u.build;
     let name = |r: &crate::DefRef| quoted(&r.odf.to_ascii_lowercase());
@@ -538,6 +538,20 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
                 .fixed("life_support_loss", k.life_support_loss)
                 .raw("recrew_rate", &opt(k.recrew_rate)),
         ));
+    }
+    let repair = &u.repair;
+    if repair.system_times.iter().any(Option::is_some)
+        || repair.repair_facility.is_some()
+        || repair.repair_hardpoint.is_some()
+        || repair.repair_side.is_some()
+        || repair.can_shipyard_repair.is_some()
+    {
+        c.raw("repair", &group(Canon::new()
+            .list("system_times", repair.system_times.map(|t| t.map_or_else(|| "-".to_owned(), fixed_text)))
+            .raw("facility", &repair.repair_facility.map_or_else(|| "-".to_owned(), |b| u8::from(b).to_string()))
+            .raw("hardpoint", &repair.repair_hardpoint.as_ref().map_or_else(|| "-".to_owned(), |s| quoted(&s.to_ascii_lowercase())))
+            .raw("side", &repair.repair_side.map_or_else(|| "-".to_owned(), |side| side.to_string()))
+            .raw("can_shipyard_repair", &repair.can_shipyard_repair.map_or_else(|| "-".to_owned(), |b| u8::from(b).to_string()))));
     }
     // `warpSpeed` (SIM-36 seam), only when set: the sim reads it from the
     // definition, so it is a sim-visible rule; content without it keeps its text.

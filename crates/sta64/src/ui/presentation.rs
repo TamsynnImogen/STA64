@@ -412,12 +412,7 @@ fn hide_notices_in_cineractive(cine: Res<CineractiveState>, mut roots: Query<&mu
     }
 }
 
-fn run_clock(time: Res<Time<Real>>, mut titles: ResMut<Titles>, mut fade: ResMut<FadeState>, state: Option<Res<State<crate::app::AppState>>>) {
-    // Titles and fades the sim raised while the game was still loading start when it is shown
-    // (the sim runs from the loading screen, and the opening's first fade in must be seen).
-    if state.is_some_and(|s| *s.get() == crate::app::AppState::Loading) {
-        return;
-    }
+fn run_clock(time: Res<Time<Real>>, mut titles: ResMut<Titles>, mut fade: ResMut<FadeState>) {
     let dt = time.delta_secs();
     if !titles.items.is_empty() {
         titles.tick(dt);

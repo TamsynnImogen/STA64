@@ -174,6 +174,22 @@ pub struct ShieldDef {
     pub recharge: Fixed,
 }
 
+/// Authored repair keys from a unit's resolved ODF. No repair timing or
+/// eligibility defaults are inferred here; the simulation decides behavior.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RepairDef {
+    /// Authored seconds per system hit point, before runtime modifiers, for
+    /// engines, weapons, shield generator, life support, sensors.
+    /// `None` means absent; `Some(0)` is an authored zero.
+    pub system_times: [Option<Fixed>; 5],
+    pub repair_facility: Option<bool>,
+    pub repair_hardpoint: Option<String>,
+    /// Exact signed decimal `repairSide`; malformed or out-of-range values
+    /// warn and stay absent. This is metadata, not a native side policy.
+    pub repair_side: Option<i32>,
+    pub can_shipyard_repair: Option<bool>,
+}
+
 /// Where a hardpoint can aim, relative to the unit's heading, without
 /// trigonometry: a target is inside when the dot product of its direction
 /// with `dir` is at least `min_dot` (the cosine of the half-width).
@@ -334,6 +350,8 @@ pub struct UnitDef {
     pub system_hit_points: [Fixed; 5],
     /// The keys of the engine's crew-casualty model (SIM-39).
     pub casualty: CasualtyDef,
+    /// Authored repair metadata only; no profile or runtime policy is implied.
+    pub repair: RepairDef,
     /// Sensor range, units.
     pub sensor: Fixed,
     pub hardpoints: Vec<Hardpoint>,
@@ -447,6 +465,7 @@ impl UnitDef {
             sane_crew_loss: false,
             system_hit_points: [Fixed::ZERO; 5],
             casualty: CasualtyDef::default(),
+            repair: RepairDef::default(),
             sensor: Fixed::ZERO,
             hardpoints: Vec::new(),
             build: BuildDef::default(),

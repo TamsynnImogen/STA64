@@ -162,6 +162,10 @@ stop; changing a decision is a PR to that file approved by Tammy and Cedric.
   files or excerpts beyond a key name and a value, no frames showing game art,
   no re-encoded copies. Tests that need them are install-gated and read the
   install at run time.
+- Stock mission scripts, whether converted from the mission DLLs or ported by
+  hand, count as game content and are never committed or released. Conversion
+  happens on the player's machine from their own install into the user data
+  directory (WORKPLAN LUA-15 and the note under the LUA table).
 
 ## Builds
 

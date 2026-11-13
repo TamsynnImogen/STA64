@@ -133,7 +133,7 @@ impl Plugin for FlowPlugin {
                     remount.run_if(in_state(AppState::FrontEnd)).run_if(resource_exists::<FlowConfig>),
                     drive_load.run_if(in_state(AppState::Loading)),
                     (leave_keys, on_leave).chain().run_if(in_state(AppState::InGame)),
-                    show_match_ui,
+                    show_match_ui.after(crate::ui::presentation::consume),
                     apply_menu_music,
                 )
                     .in_set(GameSet::Ui),

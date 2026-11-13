@@ -175,7 +175,13 @@ fn consume(
                 // An entity (A2 `CenterCamera`, MMM `Camera:center(entity)`) or a place (`Camera:center(Vector)`).
                 let place = args.iter().find_map(|a| match a {
                     Arg::Entity(id) => spot(&Spot::Entity(*id), link.as_deref(), &paths),
-                    Arg::Position(p) => Some(crate::render::units::to_bevy(p.to_f32())),
+                    // A place keeps the camera's current height: a script's `Vector(x, 0, z)` names
+                    // the ground point, not a height (MMM's own handling not measured).
+                    Arg::Position(p) => {
+                        let mut at = crate::render::units::to_bevy(p.to_f32());
+                        at.y = cam.saved.as_ref().filter(|_| cam.locked).or(current.as_ref()).map_or(at.y, |c| c.focus.y);
+                        Some(at)
+                    }
                     _ => None,
                 });
                 match (place, orbit.iter_mut().next()) {
