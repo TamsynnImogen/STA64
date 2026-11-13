@@ -461,6 +461,7 @@ class A1Lifter(dsl.Lifter):
                     mn, ops = parts[0], (parts[1] if len(parts) > 1 else "")
                     self.cur_state = st
                     r = self.step(f, st, stmts, ntmp, a, mn, ops, i, start == b)
+                    self.note_compare(st, mn, ops, r)
                     if r == "ret":
                         break
                     if isinstance(r, tuple) and r[0] == "switch":
@@ -576,6 +577,39 @@ class A1Lifter(dsl.Lifter):
                 return True  # conservative: any positive stack offset
         return False
 
+    def note_compare(self, st, mn, ops, r):
+        """Remember what a `test r,r` / `cmp r,imm` plus `je`/`jne` says about the
+        register on each edge: the compiler reuses a register it has just proved
+        equal to a constant (`test eax,eax; jne L; push eax` passes a null)."""
+        if mn in ("test", "cmp"):
+            st.cfact = None
+            x, _, y = [t.strip() for t in ops.partition(",")]
+            if x not in REG32 or x not in st.r:
+                return
+            if mn == "test" and y == x:
+                imm = 0
+            elif mn == "cmp" and re.fullmatch(r"-?0x[0-9a-f]+|-?[0-9]+", y):
+                imm = int(y, 16) if "0x" in y else int(y)
+                imm = struct.unpack("<i", struct.pack("<I", imm & 0xFFFFFFFF))[0]
+            else:
+                return
+            st.cfact = (x, imm, st.r[x])
+        elif isinstance(r, tuple) and r[0] == "jcc":
+            f = getattr(st, "cfact", None)
+            if f and mn in ("je", "jz", "jne", "jnz") and st.r.get(f[0]) == f[2]:
+                st.edge = (f[0], f[1], mn in ("je", "jz"), r[1])
+
+    @staticmethod
+    def edge_value(pend, reg, b):
+        """Value of `reg` at the end of a predecessor, as seen on its edge into `b`."""
+        e = getattr(pend, "edge", None)
+        if e and e[0] == reg:
+            _, imm, eq_on_taken, tgt = e
+            taken = b == tgt
+            if taken == eq_on_taken:
+                return ("const", imm)
+        return pend.r.get(reg, "unset")
+
     def entry_state(self, b, start, preds, ends):
         st = State()
         st.body = True
@@ -593,7 +627,7 @@ class A1Lifter(dsl.Lifter):
         st.depth = depths.pop()
         st.frame = frames.pop()
         for r in REG32 + ("ebp",):
-            vals = [ends[p].r.get(r, "unset") for p in ps]
+            vals = [self.edge_value(ends[p], r, b) for p in ps]
             if all(v == vals[0] for v in vals) and vals[0] != "unset" and pure(vals[0]):
                 st.r[r] = vals[0]
         for j in range(1, st.depth + 1):
