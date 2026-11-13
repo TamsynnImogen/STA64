@@ -171,9 +171,14 @@ fn consume(
                     (o.focus, o.yaw, o.pitch, o.dist) = (pose.focus, pose.yaw, pose.pitch, pose.dist);
                 }
             }
-            Presentation::Call { name, args } if name == "A2.CenterCamera" => {
-                let entity = args.iter().find_map(|a| if let Arg::Entity(id) = a { Some(*id) } else { None });
-                match (entity.and_then(|id| spot(&Spot::Entity(id), link.as_deref(), &paths)), orbit.iter_mut().next()) {
+            Presentation::Call { name, args } if name == "A2.CenterCamera" || name == "Camera.center" => {
+                // An entity (A2 `CenterCamera`, MMM `Camera:center(entity)`) or a place (`Camera:center(Vector)`).
+                let place = args.iter().find_map(|a| match a {
+                    Arg::Entity(id) => spot(&Spot::Entity(*id), link.as_deref(), &paths),
+                    Arg::Position(p) => Some(crate::render::units::to_bevy(p.to_f32())),
+                    _ => None,
+                });
+                match (place, orbit.iter_mut().next()) {
                     // During a cineractive the strategy camera behind it moves (the original's
                     // RTS camera is not the one the shots drive): it comes back there.
                     (Some(at), Some(_)) if cam.locked => {

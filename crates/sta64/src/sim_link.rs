@@ -239,6 +239,12 @@ pub struct PlaySound {
     pub bus: Bus,
 }
 
+/// A request to cut what plays on one bus (a mission's `Media:stopSounds()`).
+#[derive(Message, Debug, Clone, Copy)]
+pub struct StopSounds {
+    pub bus: Bus,
+}
+
 /// Steps the sim from the animation clock. Does nothing until a [`SimLink`]
 /// resource exists.
 pub struct SimLinkPlugin;
@@ -249,6 +255,7 @@ impl Plugin for SimLinkPlugin {
             .add_message::<OrderIssued>()
             .add_message::<SelectionChanged>()
             .add_message::<PlaySound>()
+            .add_message::<StopSounds>()
             .init_resource::<AnimClock>()
             .init_resource::<CommandQueue>()
             .init_resource::<Selection>()
