@@ -13,6 +13,9 @@ perception, while under construction, or without a live render root. Removing
 a unit cleans up its outline. Leaving a match releases the renderer's shared
 outline mesh and material.
 
+The shader participates in the existing developer-only shader shadowing path
+(D12), including restoration of the embedded source when a shadow is removed.
+
 This is native client presentation (D1, D2). It uses existing world views and
 resolved ODF metadata, without adding rules, simulation state, content digest
 fields or save/network formats (D9, D10). No original executable, hook or DLL
