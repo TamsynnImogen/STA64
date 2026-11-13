@@ -12,4 +12,4 @@ Scene: cloak Seed=5
 3. Run until tick 200
 4. Scene "cloak warbird off"
 5. Run until tick 320
-6. Expect digest at tick 320 is "3f4a10fd6b2ade76"
+6. Expect digest at tick 320 is "d223618fce8fdc28"

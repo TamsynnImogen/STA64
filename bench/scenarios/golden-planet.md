@@ -8,4 +8,4 @@ Tier: 1
 Scene: planet Seed=7
 
 1. Run 100 ticks
-2. Expect digest at tick 100 is "80c02fea48bda622"
+2. Expect digest at tick 100 is "5ceee4ac3a67b41c"

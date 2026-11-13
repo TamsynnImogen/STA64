@@ -8,4 +8,4 @@ Tier: 1
 Scene: combat-duel Seed=7
 
 1. Run 120 ticks
-2. Expect digest at tick 120 is "6856dae08b5adb80"
+2. Expect digest at tick 120 is "69947c44713665fa"

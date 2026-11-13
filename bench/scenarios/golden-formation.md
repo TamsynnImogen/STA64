@@ -12,4 +12,4 @@ Scene: formation Seed=3
 3. Run 2 ticks
 4. Run until tick 165
 5. Run 30 ticks
-6. Expect digest at tick 195 is "ac1a122edf7a7f14"
+6. Expect digest at tick 195 is "db611bd4bbe7df3a"

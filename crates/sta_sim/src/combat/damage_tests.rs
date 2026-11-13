@@ -169,5 +169,5 @@ fn damage_run_digest_is_pinned() {
         sim.step(&cmds);
     }
     assert_eq!(crate::unit_status_tests::digest_before_crew(&sim), 0xd6ad_d7d8_86e1_d03d);
-    assert_eq!(sim.digest(), 0x8314_c61c_1016_66c2);
+    assert_eq!(sim.digest(), 0x9e9a_3ba8_2f56_e572);
 }

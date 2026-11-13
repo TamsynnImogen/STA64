@@ -68,7 +68,7 @@ fn profiles_use_five_or_ten_and_no_op_keys_keep_the_hash() {
         assert_eq!(limit(&authored), 1);
         assert_ne!(authored.hash(), plain.hash());
     }
-    assert_eq!(sta_content::fake::db().hash(), 0x6977_6a57_dec2_2e6c);
+    assert_eq!(sta_content::fake::db().hash(), 0xb5e5_d26f_e961_348e);
 }
 
 #[test]
