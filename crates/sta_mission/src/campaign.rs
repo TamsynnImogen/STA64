@@ -417,7 +417,7 @@ fn parse_mshell(text: &str, layout: ShellLayout) -> (Vec<Vec<String>>, Option<St
         }
         ShellLayout::Armada1 => {
             let slots = layout.slots().len();
-            if !lines.is_empty() && lines.len() % slots == 0 {
+            if !lines.is_empty() && lines.len().is_multiple_of(slots) {
                 let width = lines.len() / slots;
                 let groups = lines
                     .chunks(width)
