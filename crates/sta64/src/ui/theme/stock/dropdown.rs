@@ -13,6 +13,7 @@
 
 use bevy::picking::Pickable;
 use bevy::prelude::*;
+use bevy::ui::{ComputedUiRenderTargetInfo, ComputedUiTargetCamera, UiTargetCamera};
 use bevy::window::PrimaryWindow;
 
 use super::focus::{KitKey, is_within};
@@ -374,7 +375,7 @@ pub fn popup_place(left: f32, field_top: f32, field_bottom: f32, width: f32, pop
     let gap = 2.0 / inverse_scale;
     let above = field_bottom + gap + popup_h > win_h && field_top - gap - popup_h >= 0.0;
     let top = if above { field_top - gap - popup_h } else { field_bottom + gap };
-    // The list's border sits on the field's edge, as the child version's -1 px did.
+    // The list's 1 px border frames the field's width (1 px out on each side).
     (left * inverse_scale - 1.0, top * inverse_scale, width * inverse_scale + 2.0)
 }
 
@@ -385,12 +386,11 @@ pub fn popup_place(left: f32, field_top: f32, field_bottom: f32, width: f32, pop
 pub(super) fn place_popups(
     mut commands: Commands,
     window: Query<&Window, With<PrimaryWindow>>,
-    mut popups: Query<(Entity, &DropdownPopup, &ComputedNode, &mut Node, &mut Visibility)>,
-    fields: Query<(&Dropdown, &ComputedNode, &UiGlobalTransform), Without<DropdownPopup>>,
+    mut popups: Query<(Entity, &DropdownPopup, &ComputedNode, &mut Node, &mut Visibility, Option<&UiTargetCamera>)>,
+    fields: Query<(&Dropdown, &ComputedNode, &UiGlobalTransform, &InheritedVisibility, &ComputedUiTargetCamera, &ComputedUiRenderTargetInfo), Without<DropdownPopup>>,
 ) {
-    let win_h = window.single().map_or(f32::MAX, |w| w.physical_height() as f32);
-    for (e, popup, own, mut node, mut vis) in &mut popups {
-        let Ok((d, field, at)) = fields.get(popup.owner) else {
+    for (e, popup, own, mut node, mut vis, target) in &mut popups {
+        let Ok((d, field, at, shown, camera, info)) = fields.get(popup.owner) else {
             commands.entity(e).despawn();
             continue;
         };
@@ -398,14 +398,25 @@ pub(super) fn place_popups(
             commands.entity(e).despawn();
             continue;
         }
-        // Not laid out yet (first frame, or the field is hidden): stay invisible.
-        if field.size().x <= 0.0 || own.size().y <= 0.0 {
+        // The list draws on the camera its field does (a screen with its own UI camera).
+        if let Some(cam) = camera.get()
+            && target.map(|t| t.0) != Some(cam)
+        {
+            commands.entity(e).insert(UiTargetCamera(cam));
+        }
+        // Not laid out yet (first frame), or the field is not displayed: stay invisible.
+        if field.size().x <= 0.0 || own.size().y <= 0.0 || !shown.get() {
             if *vis != Visibility::Hidden {
                 *vis = Visibility::Hidden;
             }
             continue;
         }
         let size = field.size();
+        // The height of the field's own render target (a window, or an image).
+        let win_h = match info.physical_size().y {
+            0 => window.single().map_or(f32::MAX, |w| w.physical_height() as f32),
+            h => h as f32,
+        };
         let (left, top, width) = popup_place(
             at.translation.x - size.x / 2.0,
             at.translation.y - size.y / 2.0,
