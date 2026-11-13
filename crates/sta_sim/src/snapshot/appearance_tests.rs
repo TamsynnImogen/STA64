@@ -1,4 +1,5 @@
 use super::*;
+use crate::source::WorldSource;
 use crate::setup::{Control, GameSetup, PlayerSetup};
 
 fn fixture() -> (Vec<u8>, Arc<ContentDb>) {
