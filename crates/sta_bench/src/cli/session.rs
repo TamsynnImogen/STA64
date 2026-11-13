@@ -126,6 +126,14 @@ fn start(o: &Opts) -> Outcome {
     let mut cmd = tier2::low_priority(&sta64_path(o), &[]);
     cmd.args(["--headless", "--clock", "bench", "--control", "stdio", "--scene"])
         .arg(&scene_path);
+    if o.render {
+        // `--frame-dir` without `--frames`, under `--control stdio`: a renderer that
+        // draws when a `frame NAME` command asks (sta64/src/bench/frames.rs).
+        cmd.arg("--frame-dir").arg(dir.join("frames"));
+        if let Some(size) = &o.frame_size {
+            cmd.args(["--frame-size", size]);
+        }
+    }
     if let Some(root) = &install_root {
         cmd.arg("--install-root").arg(root);
         if let Some(m) = &o.mod_name {
