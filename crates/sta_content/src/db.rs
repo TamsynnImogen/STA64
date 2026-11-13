@@ -449,7 +449,7 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
         sounds: _, fx: _, special_energy_max: _, special_energy_rate: _, miner: _, miner_off: _,
         max_dilithium: _, mining_rate: _, transfer_rate: _, resource: _, features: _,
         confinement: _, nebula_pathing: _, avoid_me: _, hidden: _, invalid_as_target: _, attack_power: _, life: _,
-        crew_gain: _, sane_crew_loss: _, system_hit_points: _, raw: _,
+        crew_gain: _, sane_crew_loss: _, system_hit_points: _, casualty: _, raw: _,
     } = u;
     let crate::BuildDef { cost: _, ticks: _, officers: _, list: _, queue_limit: _, flagged_slots: _ } = &u.build;
     let name = |r: &crate::DefRef| quoted(&r.odf.to_ascii_lowercase());
@@ -525,6 +525,20 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
     if u.system_hit_points.iter().any(|f| *f != Fixed::ZERO) {
         c.list("system_hit_points", u.system_hit_points.map(fixed_text));
     }
+    if u.casualty != crate::def::CasualtyDef::default() {
+        let k = &u.casualty;
+        let opt = |v: Option<Fixed>| v.map_or_else(|| "-".to_owned(), fixed_text);
+        c.raw("casualty", &group(
+            Canon::new()
+                .raw("shield_protection", &opt(k.shield_protection))
+                .list("system_hit_percent", k.system_hit_percent.map(fixed_text))
+                .fixed("crew_hit_percent", k.crew_hit_percent)
+                .raw("hull_hit_percent", &opt(k.hull_hit_percent))
+                .list("system_crew_loss", k.system_crew_loss.map(fixed_text))
+                .fixed("life_support_loss", k.life_support_loss)
+                .raw("recrew_rate", &opt(k.recrew_rate)),
+        ));
+    }
     // `warpSpeed` (SIM-36 seam), only when set: the sim reads it from the
     // definition, so it is a sim-visible rule; content without it keeps its text.
     if m.warp_speed != Fixed::ZERO {
@@ -570,7 +584,7 @@ fn weapon_text(db: &ContentDb, w: &WeaponDef) -> String {
         key: _, odf: _, class: _, kind: _, range: _, damage: _, refire: _, shot_speed: _,
         duration: _, fire_sound: _, fx: _, effect_ticks: _, energy_drain: _, energy_cost: _,
         disable_weapons: _, decloak_on_hit: _, initial_shot_delay_modifier: _,
-        ignore_shot_delay_effects: _, ordnance_defence: _, activate_on_team_change: _, crew_loss: _, resource: _, replace: _, features: _, raw: _,
+        ignore_shot_delay_effects: _, ordnance_defence: _, activate_on_team_change: _, crew_loss: _, damage_variance: _, resource: _, replace: _, features: _, raw: _,
     } = w;
     let mut c = Canon::new();
     c
@@ -610,6 +624,9 @@ fn weapon_text(db: &ContentDb, w: &WeaponDef) -> String {
     }
     if let Some(l) = w.crew_loss {
         c.raw("crew_loss", &group(Canon::new().fixed("threshold", l.threshold).fixed("shield", l.shield).fixed("hull", l.hull)));
+    }
+    if w.damage_variance != Fixed::ZERO {
+        c.fixed("damage_variance", w.damage_variance);
     }
     c.finish()
 }

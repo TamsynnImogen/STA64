@@ -176,22 +176,31 @@ pub struct CfgRules {
     pub hard_ai_cost_handicap: Option<Fixed>,
     /// `HARD_AI_SPEED_HANDICAP` (float; Classic 0.7, Enhanced 0.6).
     pub hard_ai_speed_handicap: Option<Fixed>,
+    /// `cfgFACING_WEIGHT` (float; 0.2 in every Armada II family header): the
+    /// share of a hit's system-location weight that comes from the distance of
+    /// the hit point to each system's hardpoints (SIM-39). Read and digested;
+    /// the sim does not apply it (no hardpoint positions in the sim).
+    pub facing_weight: Option<Fixed>,
+    /// `cfgFACING_CONSTANT` (int; 3): the distance falloff of that blend. As above.
+    pub facing_constant: Option<i64>,
 }
 
 impl CfgRules {
     /// The keys, in the order of [`texts`](CfgRules::texts).
-    pub const KEYS: [&'static str; 6] = [
+    pub const KEYS: [&'static str; 8] = [
         "BASE_CREW_PER_SEC",
         "HARD_AI_COST_HANDICAP",
         "HARD_AI_SPEED_HANDICAP",
         "REPAIR_SHIP_DISTANCE",
         "SHIELD_DAMAGE_PROTECTION",
         "cfgFREIGHTERS_PER_NEBULA",
+        "cfgFACING_WEIGHT",
+        "cfgFACING_CONSTANT",
     ];
 
     /// Each value as the digest renders it (`unset` when absent), in
     /// [`KEYS`](CfgRules::KEYS) order.
-    fn texts(&self) -> [String; 6] {
+    fn texts(&self) -> [String; 8] {
         let real = |v: Option<Fixed>| v.map_or_else(|| "unset".to_owned(), crate::digest::fixed_text);
         let int = |v: Option<i64>| v.map_or_else(|| "unset".to_owned(), |v| v.to_string());
         [
@@ -201,6 +210,8 @@ impl CfgRules {
             real(self.repair_ship_distance),
             real(self.shield_damage_protection),
             int(self.freighters_per_nebula),
+            real(self.facing_weight),
+            int(self.facing_constant),
         ]
     }
 
@@ -220,6 +231,7 @@ impl CfgRules {
         let base_crew_per_sec = real("BASE_CREW_PER_SEC");
         let hard_ai_cost_handicap = real("HARD_AI_COST_HANDICAP");
         let hard_ai_speed_handicap = real("HARD_AI_SPEED_HANDICAP");
+        let facing_weight = real("cfgFACING_WEIGHT");
         let mut int = |key: &str| {
             cfg.raw(key)?;
             let v = cfg.i64(key).map(|v| v.clamp(-1_000_000_000, 1_000_000_000));
@@ -235,6 +247,8 @@ impl CfgRules {
             freighters_per_nebula: int("cfgFREIGHTERS_PER_NEBULA"),
             hard_ai_cost_handicap,
             hard_ai_speed_handicap,
+            facing_weight,
+            facing_constant: int("cfgFACING_CONSTANT"),
         }
     }
 }
@@ -493,7 +507,11 @@ impl Rules {
                 crate::digest::fixed_text(self.approach().min_move_warp_distance),
             ));
         }
-        for (key, value) in CfgRules::KEYS.iter().zip(self.cfg.texts()) {
+        // The two facing keys (SIM-39) only when set, so content without them keeps its hash.
+        for (i, (key, value)) in CfgRules::KEYS.iter().zip(self.cfg.texts()).enumerate() {
+            if i >= 6 && value == "unset" {
+                continue;
+            }
             out.push(DigestEntry::new(format!("RTS_CFG.h:{key}"), value));
         }
         let crew = self.crew.as_ref();

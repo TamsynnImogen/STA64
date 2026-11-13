@@ -434,7 +434,10 @@ impl Sim {
                 self.approach_warp.end(id);
             }
             let mut lost = Vec::new();
-            for (id, by) in combat::damage::apply(&mut self.units, &db, &mut self.events, from) {
+            let mut casualties = combat::casualty::Ctx { subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches };
+            let killed = combat::damage::apply(&mut self.units, &db, &mut self.events, from, &mut casualties);
+            combat::casualty::step(&mut self.units, &db, &mut casualties);
+            for (id, by) in killed {
                 lost.extend(self.units.get(id).map(|u| u.owner));
                 self.despawn(id, by);
             }

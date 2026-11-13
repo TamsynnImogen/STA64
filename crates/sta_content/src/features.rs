@@ -85,10 +85,14 @@ pub struct Features {
     /// No weapon fires at a unit in the first two seconds of mission time
     /// (SIM-53; measured on stock A2 and Roots + STA2 Classic).
     pub start_fire_hold: bool,
-    /// A shield hit costs the target crew: `(damage - damageThreshold) x
-    /// shieldCrewModifier` of the ordnance, a percent of maximum crew, or crew
-    /// points on a unit with `saneCrewLossMethod` (SIM-39; measured on stock
-    /// A2). Hull hits and system losses are not part of it.
+    /// The engine's crew-casualty model for a hit (SIM-39, `sta_sim::combat::casualty`;
+    /// read from the executable and measured on stock A2): damage variance,
+    /// `shieldProtection` bleed-through, the shield crew law (`damageThreshold`,
+    /// `shieldCrewModifier`, `saneCrewLossMethod`), one location roll per hit
+    /// (system hit points, crew, hull), system-death crew loss, the
+    /// life-support drain and the derelict latch. Off: a hit is shields, then
+    /// hull. Off for Roots and A1: the Roots hook's damage paths and the A1
+    /// executable were not analysed.
     pub crew_loss_on_hit: bool,
     /// An attack approach stops `0.2 W + 5` inside weapon range, or 80 from
     /// 100 up (the Roots engine, SIM-36; read from the executable, measured).

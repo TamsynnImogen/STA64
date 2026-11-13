@@ -18,10 +18,11 @@
 //! - Not implemented, with the reason: planets' own `crewAccumulationRate` (Classic
 //!   Enhanced planets carry the key; not measured); `planetCrewAccumulationModifier`
 //!   (what counts as "close to a planet" is not measured); `crewRetreatRatio`,
-//!   `BASE_CREW_PER_SEC`. Per-unit crew: loss from shield hits is
-//!   `combat/damage.rs` (SIM-39); hull-hit loss, system-loss drains and
-//!   boarding are not implemented (not measured), recovery needs a repair
-//!   ship or yard (`recrewRate`, SIM-41/SIM-40: none without one, measured).
+//!   `BASE_CREW_PER_SEC`. Per-unit crew: loss from hits, system deaths, the
+//!   life-support drain and the derelict latch is `combat/casualty.rs`
+//!   (SIM-39); boarding losses are not implemented (SIM-46), and recovery
+//!   (station RECREW at `recrewRate`, yard recrew 20 per second from the team
+//!   pool) is not either; a ship does not regain crew by itself (measured).
 
 use sta_content::ContentDb;
 use sta_core::{Fixed, PlayerId, TICK_HZ};
