@@ -41,6 +41,21 @@ from options or environment variables, never from built-in paths:
                                             to <dir>/campaign-readiness)
 
 An install with no option and no variable, or whose path is absent, is skipped.
+
+Converted-mission progress (LUA-11), one command:
+
+    python3 tools/campaign_readiness.py --converted [--a2 DIR] [--ticks 9000]
+                                        [--no-standin] [--label NAME] [--only a2_fed01]
+
+converts the stock Armada II missions with `tools/dsl_to_lua.py` into a
+temporary directory (removed afterwards; `--keep-converted DIR` keeps it there),
+runs each headless in the campaign runner (`examples/converted_progress.rs`: no
+window, no audio, the stand-in host answers fade/audio/movie completion
+reports) and prints, per mission, how far it got: rules that held, steps run,
+the first call that was unbound or raised, whether a player objective was
+issued. `--label before|after` names the files in the detail directory
+(`converted-<label>.md/.json`). Progress is how far the converted script runs;
+no mission is playable until a real win is reached.
 """
 
 import argparse
@@ -290,6 +305,111 @@ def with_partners(files):
     return out
 
 
+# ------------------------------------------------------------ converted missions
+
+
+def converted_status(r):
+    """(stage, stopping call) of one `converted_progress` row. Honest labels:
+    `objective` = the first player objective was issued, `ended` = the script
+    ended the mission, otherwise what stopped it."""
+    if not r.get("started"):
+        return "does not start", r.get("start_error") or ""
+    # `A2.<call>: ...` errors are counted rejections of an edit by the sim, not script errors
+    real = [e for e in r.get("errors") or [] if not e.startswith(("A2.", "A1."))]
+    if real:
+        return "runtime error", one_line(real[0])
+    if r.get("ended") is not None:
+        return ("ended: won" if r["ended"] else "ended: lost"), ""
+    first = (r.get("problems") or [None])[0]
+    stop = f"{first[0]} ({first[1]})" if first else ""
+    if r.get("first_objective_tick") is not None:
+        return "objective issued", stop
+    waiting = [s for s in r.get("scripts") or [] if s[2] > 0]
+    if waiting:
+        return "stalled on a script wait", waiting[0][0]
+    if first:
+        return "stalled at a call", stop
+    return "idle: no rule fires", ""
+
+
+def converted_funnel(rows):
+    n = collections.Counter()
+    for r in rows:
+        stage, _ = converted_status(r)
+        n["missions"] += 1
+        n["loaded"] += bool(r.get("started")) and converted_status(r)[0] != "runtime error"
+        n["rules"] += bool(r.get("rules_held"))
+        n["steps"] += r.get("steps_run", 0) > 0
+        n["objective"] += r.get("first_objective_tick") is not None
+        n["ended"] += stage.startswith("ended")
+        n["clean"] += not r.get("problems")
+    return n
+
+
+def render_converted(rows, ticks, standin):
+    n = converted_funnel(rows)
+    out = [f"Converted Armada II missions, {ticks} ticks each, headless, stand-in host {'on' if standin else 'off'}", "",
+           "| missions | load and run | a rule held | a step ran | first objective issued | ended itself | no unbound/raising call |",
+           "|--:|--:|--:|--:|--:|--:|--:|",
+           f"| {n['missions']} | {n['loaded']} | {n['rules']} | {n['steps']} | {n['objective']} | {n['ended']} | {n['clean']} |", "",
+           "| mission | stage | rules held | steps run | last rule | last step | objective tick | first problem call |",
+           "|---|---|--:|--:|---|---|--:|---|"]
+    for r in sorted(rows, key=lambda r: r["bzn"]):
+        stage, stop = converted_status(r)
+        first = (r.get("problems") or [None])[0]
+        call = f"{first[0]} ({first[1]})" if first else "-"
+        out.append(f"| {r['bzn'].rsplit('.', 1)[0]} | {stage} | {len(r['rules_held'])}/{r['rules']} | {r['steps_run']} | "
+                   f"{r.get('last_rule') or '-'} | {r.get('last_step') or '-'} | {r.get('first_objective_tick') or '-'} | {call} |")
+    ranked = collections.Counter()
+    for r in rows:
+        for name, _kind, _t, _w in r.get("problems") or []:
+            ranked[name] += 1
+    out += ["", "Calls that were unbound or raised, by missions affected:", ""]
+    out += [f"- {c}: `{k}`" for k, c in ranked.most_common(40)] or ["- none"]
+    return "\n".join(out) + "\n"
+
+
+def main_converted(args):
+    import shutil
+    import tempfile
+    a2 = args.a2
+    if not a2 or not os.path.isdir(a2):
+        sys.exit("--converted needs the Armada II stock install: pass --a2 or set " + ENV["a2"])
+    if not args.detail_dir:
+        sys.exit(f"no detail directory: pass --detail-dir or set {RESEARCH_ENV}")
+    t0 = time.time()
+    out = args.keep_converted or tempfile.mkdtemp(prefix="sta64-converted-")
+    try:
+        cmd = [sys.executable, "-I", os.path.join(HERE, "dsl_to_lua.py"), "--install", a2, "--out", out]
+        if args.only:
+            cmd += ["--only", args.only]
+        p = subprocess.run(cmd, capture_output=True, text=True)
+        if p.returncode != 0:
+            sys.exit(f"conversion failed ({p.returncode}):\n{p.stderr[-2000:]}")
+        cmd = [os.path.join(HERE, "agent-cargo"), "--light", "run", "-q", "-p", "sta_mission", "--example",
+               "converted_progress", "--", "--install", a2, "--converted", out, "--ticks", str(args.ticks)]
+        if not args.no_standin:
+            cmd.append("--standin")
+        if args.only:
+            cmd += ["--only", args.only]
+        p = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True)
+        if p.returncode != 0:
+            sys.exit(f"run failed ({p.returncode}):\n{p.stderr[-2000:]}")
+        rows = parse_rows(p.stdout)
+    finally:
+        if not args.keep_converted:
+            shutil.rmtree(out, ignore_errors=True)
+    text = render_converted(rows, args.ticks, not args.no_standin)
+    print(text + f"({time.time() - t0:.0f} s)")
+    os.makedirs(args.detail_dir, exist_ok=True)
+    stem = os.path.join(args.detail_dir, f"converted-{args.label}")
+    with open(stem + ".md", "w") as f:
+        f.write(text)
+    with open(stem + ".json", "w") as f:
+        json.dump({"ticks": args.ticks, "standin": not args.no_standin, "missions": rows}, f, indent=1)
+    print(f"detail: {stem}.md, {stem}.json")
+
+
 def run_probe(args, root_args):
     cmd = [os.path.join(HERE, "agent-cargo"), "--light", "run", "-q", "-p", "sta_mission", "--example",
            "campaign_readiness", "--", "--ticks", str(args.ticks)]
@@ -398,7 +518,16 @@ def main(argv=None):
     ap.add_argument("--detail-dir", default=os.path.join(research, "campaign-readiness") if research else None,
                     help=f"where the Markdown/JSON detail goes, outside the repository (default: ${RESEARCH_ENV}/campaign-readiness; required)")
     ap.add_argument("--no-legacy", action="store_true", help="skip the static legacy columns")
+    ap.add_argument("--converted", action="store_true", help="converted-mission progress mode (see the module docs)")
+    ap.add_argument("--no-standin", action="store_true", help="--converted: no stand-in host (waits are never reported)")
+    ap.add_argument("--label", default="latest", help="--converted: detail file label (converted-<label>.md)")
+    ap.add_argument("--only", help="--converted: one mission (a2_fed01)")
+    ap.add_argument("--keep-converted", help="--converted: convert into this directory and keep it")
     args = ap.parse_args(argv)
+    if args.converted:
+        if args.ticks == 300:
+            args.ticks = 9000
+        return main_converted(args)
     if not args.detail_dir:
         sys.exit(f"no detail directory: pass --detail-dir or set {RESEARCH_ENV} (the detail must stay outside the repository)")
     t0 = time.time()

@@ -430,6 +430,40 @@ executables, static. Each column is a subset of the one before:
 A mission that ends itself before N ticks stops early, so it exercises fewer
 calls; "working" is a lower bound on what a real play touches.
 
+## Converted Armada II missions: progress
+
+`tools/dsl_to_lua.py` converts a stock A2 mission into Lua on the user's
+machine; `python3 tools/campaign_readiness.py --converted` converts all of them
+into a temporary directory, runs each headless (no window, no audio) in the
+campaign runner for N ticks (default 9000) and prints how far each got: rules
+that held, steps run, the first call that was unbound or raised, and the tick of
+the first player objective (`sta_mission::progress`, `examples/converted_progress.rs`;
+detail goes to `<--detail-dir>/converted-<--label>.md/.json`). Measured. Progress
+means how far the converted script's rules and steps run; no mission is playable
+until a real win is reached.
+
+Rules the conversion follows (grades: exe = read from the executable, static;
+data = read from the install; not measured):
+
+- **Handles** (exe, data): `GetHandle(label)` is the handle of the first live
+  object whose map label equals the argument byte for byte, else 0, the invalid
+  handle. A handle never set is -1 (ScriptInit), also "no object": a call given it
+  does nothing and returns 0 (exe for the setters read; assumed for the rest; the
+  converted script answers the binding's refusal with 0 and counts it).
+  Exported scalars start at 0. Labels of objects a mission builds later name
+  nothing until then.
+- **Script waits** (exe): a script holding a reference (a blocking call given
+  the script and "don't wait" false) does not run its next step and is not
+  removed; the converted scheduler asks `A2.ScriptWaits(script)`.
+- **Stand-in host** (`standin.rs`, headless only): reports each wait finished
+  after its nominal length: message WAV length (data), movie Bink length (data),
+  1 s for Enter, the next tick for a cineractive start (stand-in values, not
+  measured; fades release themselves). `A2.HostPending()` lists what is open.
+- **Bool arguments**: a `bool` parameter (decorated name `_N`) is passed as a Lua
+  boolean; the pushed word is an int.
+- Calls with no sim seam stay counted and non-raising (`shared_calls.rs`:
+  retained as presentation calls) or raising (`no_data_fn`).
+
 ## Conversion report
 
 `sta64 --mission-report` lists every map whose mission resolves to

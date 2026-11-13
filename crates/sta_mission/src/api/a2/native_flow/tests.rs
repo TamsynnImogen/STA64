@@ -177,3 +177,16 @@ fn invalid_calls_queue_nothing_and_take_no_wait() {
     assert!(rt.errors().is_empty(), "{:?}", rt.errors());
     assert!(rt.unsupported().is_empty(), "{:?}", rt.unsupported());
 }
+
+#[test]
+fn host_pending_lists_what_the_client_must_still_report() {
+    let rt = runtime();
+    rt.eval::<()>("a = A2.AudioMessage(script, 'msg.wav', false); A2.WaitForEnterKey(script); A2.CineractiveStart(script, false)").unwrap();
+    let rows: Vec<String> = rt
+        .eval("local o = {} for i, p in ipairs(A2.HostPending()) do o[i] = p.kind .. ':' .. p.id .. ':' .. p.name end return o")
+        .unwrap();
+    assert_eq!(rows, ["sound:1:msg.wav", "key:1:", "cineractive:0:"]);
+    rt.eval::<()>("A2.AudioMessageDone(1); A2.EnterKeyDone(1); A2.CineractiveStartDone()").unwrap();
+    assert_eq!(rt.eval::<i64>("return #A2.HostPending()").unwrap(), 0);
+    assert_eq!(waits(&rt), 0);
+}

@@ -80,7 +80,9 @@ fn converted_a2_fed01_runs_in_the_campaign_runner() {
     let a = runner.start(&host, "federation", 0, 1).expect("converted mission starts");
     let ended = a.run(TICKS);
     let rt = a.runtime();
-    assert!(rt.errors().is_empty(), "{:?}", rt.errors());
+    // `A2.<call>: simulation rejected ...` entries are counted edits the sim refused, not script errors.
+    let script_errors: Vec<_> = rt.errors().iter().filter(|e| !e.starts_with("A2.")).collect();
+    assert!(script_errors.is_empty(), "{script_errors:?}");
 
     let rules: u32 = rt.eval("return #Mission_.rules").unwrap();
     let fired: Vec<String> = rt.eval("return Mission_.fired").unwrap();
@@ -121,6 +123,35 @@ fn converted_a2_fed01_runs_in_the_campaign_runner() {
     assert!(!fired.is_empty(), "the converted script fires its rules");
     assert!(steps > 0, "the converted script runs its action steps");
     assert!(step_errors.is_empty(), "converted code raised: {step_errors:?}");
+}
+
+/// LUA-11 progress: with the stand-in host answering the client's completion
+/// reports, converted mission 1 plays its intro, passes the audio message the
+/// next rule waits on and issues its first player objective (its main phase).
+/// Measured: the objective appears about 2000 ticks in (stand-in lengths come
+/// from the install's WAV headers); the assertion only needs it within 9000.
+#[test]
+fn converted_a2_fed01_reaches_its_first_objective_headless() {
+    let Ok(install) = std::env::var("STA64_TEST_A2_STOCK_INSTALL") else {
+        eprintln!("skipped: set STA64_TEST_A2_STOCK_INSTALL to a stock Armada II root");
+        return;
+    };
+    let out = convert(&install, Some("a2_fed01"));
+    let mut vfs = Vfs::mount_install(Path::new(&install), None).expect("mount install");
+    vfs.push_dir("converted".into(), out).expect("mount the converted missions");
+    let book = CampaignBook::load_vfs(&vfs);
+    let host = VfsHost::load(Arc::new(vfs)).expect("installed content loads");
+    let probes = sta_mission::progress::probe_book(&host, &book, TICKS, true, Some("a2_fed01"));
+    assert_eq!(probes.len(), 1);
+    let p = &probes[0];
+    eprintln!("[a2_fed01] objective at tick {:?}, rules held {}, problems {:?}", p.first_objective_tick, p.rules_held.len(), p.problems.iter().map(|q| &q.0).collect::<Vec<_>>());
+    assert!(p.started, "{:?}", p.start_error);
+    assert!(p.step_errors.is_empty(), "{:?}", p.step_errors);
+    assert!(p.first_objective_tick.is_some(), "no objective issued; last rule {:?}, blocked {:?}", p.last_rule, p.blocked);
+    assert!(p.reports > 0, "the stand-in host reported nothing");
+    // Labels of objects the mission builds itself (turrets, mines, planets it
+    // places) name nothing until then: the invalid handle, as in the original.
+    assert!(p.handles_resolved > 20, "resolved {}, unresolved labels {:?}", p.handles_resolved, p.unresolved);
 }
 
 /// Every stock mission converts, loads in the runtime and runs 300 ticks on
