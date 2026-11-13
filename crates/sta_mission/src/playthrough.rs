@@ -11,8 +11,9 @@
 //!
 //! The timeline (one [`Event`] per line, with tick and sim seconds) holds:
 //! - `call`: each host call the script makes on `A2` / `A1` (name, arguments,
-//!   result). A call with the same text as one already logged in the last
-//!   [`CALL_REPEAT_TICKS`] is counted, not logged again (conditions poll every tick);
+//!   result, or the error it raised). A call with the same text as one logged less than
+//!   [`CALL_REPEAT_TICKS`] ago is not logged again (conditions poll every tick), so a
+//!   repeat shows at most every 30 s;
 //!   calls made while the script loaded are not traced (their counts are in `load`); the
 //!   same rule thins `step` (a satisfied rule runs its action every tick) and untyped
 //!   `present` calls;
@@ -20,7 +21,9 @@
 //!   cineractive on/off, movie, untyped calls by name), and `camera`: the camera
 //!   pose the cineractive model computes, sampled every second while it moves,
 //!   and `camera-ignored` when a camera request left the model unchanged;
-//! - `rule` / `step` (converted missions): rules becoming satisfied and steps run;
+//! - `rule` / `step` (converted missions): rules becoming satisfied and steps run (the
+//!   script keeps the first 2000 step names; later steps show as the last one run, once
+//!   per [`CALL_REPEAT_TICKS`]; its problem list keeps the first 60 calls);
 //! - `objective`, `briefing`: objectives issued and changing state, the briefing file;
 //! - `unbound`, `raised`, `unsupported`, `error`, `step-error`: what did not work;
 //! - `order`, `plan`, `plan-error`: what the scripted player did and said;
@@ -46,6 +49,9 @@ use crate::standin::StandInHost;
 pub const PLAN_EVERY: u64 = 15;
 /// A call logged again only after this many ticks with no identical call.
 pub const CALL_REPEAT_TICKS: u64 = 900;
+
+/// Thousands of Lua instructions a plan may run between two yields.
+const PLAN_BUDGET: u64 = 10_000;
 
 /// The human seat the plan plays.
 const SEAT: PlayerId = PlayerId(0);
@@ -118,10 +124,14 @@ for _, tn in ipairs({ "A2", "A1" }) do
         local n = select("#", ...)
         local parts = {}
         for i = 1, math.min(n, 10) do parts[i] = fmt((select(i, ...))) end
-        local r = table.pack(f(...))
-        local rs = r.n > 0 and (" -> " .. fmt(r[1])) or ""
-        log[#log + 1] = tn .. "." .. k .. "(" .. table.concat(parts, ", ") .. ")" .. rs
-        return table.unpack(r, 1, r.n)
+        local r = table.pack(pcall(f, ...))
+        local head = tn .. "." .. k .. "(" .. table.concat(parts, ", ") .. ")"
+        if not r[1] then
+          log[#log + 1] = head .. " -> error: " .. tostring(r[2]):match("[^\n]*")
+          error(r[2], 0)
+        end
+        log[#log + 1] = head .. (r.n > 1 and (" -> " .. fmt(r[2])) or "")
+        return table.unpack(r, 2, r.n)
       end)
     end
   end
@@ -137,16 +147,17 @@ return o
 
 /// Rules fired, steps run and problems of a converted script since the given counts.
 const CONVERTED: &str = r#"
-local f, r, p, e = ...
+local f, r, p, e, e2 = ...
 local M = rawget(_G, "Mission_")
 local out = {}
-if type(M) ~= "table" then return out, f, r, p, e end
+if type(M) ~= "table" then return out, f, r, p, e, e2 end
 local fired, ran, prob, errs = M.fired or {}, M.ran or {}, M.problemOrder or {}, M.stepErrors or {}
 for i = f + 1, #fired do out[#out + 1] = "rule\t" .. tostring(fired[i]) end
 for i = r + 1, #ran do out[#out + 1] = "step\t" .. tostring(ran[i]) end
+if #ran == r and (M.stepCount or 0) > e2 and M.lastStep then out[#out + 1] = "step\t" .. tostring(M.lastStep) end
 for i = p + 1, #prob do local q = prob[i] out[#out + 1] = tostring(q[2]) .. "\t" .. tostring(q[1]) .. (q[4] and (": " .. tostring(q[4])) or "") end
 for i = e + 1, #errs do out[#out + 1] = "step-error\t" .. tostring(errs[i]) end
-return out, #fired, #ran, #prob, #errs
+return out, #fired, #ran, #prob, #errs, M.stepCount or 0
 "#;
 
 const PLAN_PRELUDE: &str = r#"
@@ -205,6 +216,8 @@ struct Plan {
     seq: u32,
     /// Orders sent, by sequence number, for the `rejected` entries.
     sent: HashMap<u32, String>,
+    /// Thousands of instructions run since the last resume.
+    budget: std::rc::Rc<std::cell::Cell<u64>>,
 }
 
 fn pos(v: &Vec3) -> String {
@@ -234,7 +247,21 @@ fn f(v: Fixed) -> f64 {
 
 impl Plan {
     fn new(src: &str, paths: &[(String, Vec<[f32; 3]>)]) -> mlua::Result<Plan> {
-        let lua = Lua::new();
+        // Only the pure libraries (no io, os, package or debug), and a budget per resume so a
+        // plan that never yields stops with an error instead of hanging the driver.
+        let lua = Lua::new_with(
+            mlua::StdLib::TABLE | mlua::StdLib::STRING | mlua::StdLib::MATH | mlua::StdLib::COROUTINE | mlua::StdLib::UTF8,
+            mlua::LuaOptions::default(),
+        )?;
+        let budget = std::rc::Rc::new(std::cell::Cell::new(0u64));
+        let b = budget.clone();
+        lua.set_hook(mlua::HookTriggers::new().every_nth_instruction(1000), move |_, _| {
+            b.set(b.get() + 1);
+            if b.get() > PLAN_BUDGET {
+                return Err(mlua::Error::runtime("plan ran too long without yielding"));
+            }
+            Ok(mlua::VmState::Continue)
+        })?;
         lua.load(PLAN_PRELUDE).set_name("plan prelude").exec()?;
         let pt = lua.create_table()?;
         for (name, pts) in paths {
@@ -250,7 +277,7 @@ impl Plan {
         lua.globals().set("paths", pt)?;
         let main: Function = lua.load(src).set_name("plan").into_function()?;
         let thread = lua.create_thread(main)?;
-        Ok(Plan { lua, thread: Some(thread), seq: 0, sent: HashMap::new() })
+        Ok(Plan { lua, thread: Some(thread), seq: 0, sent: HashMap::new(), budget })
     }
 
     fn view(&self, a: &ActiveMission, host: &VfsHost, cine: bool) -> mlua::Result<()> {
@@ -314,6 +341,7 @@ impl Plan {
             self.thread = None;
             return;
         }
+        self.budget.set(0);
         if let Err(e) = th.resume::<()>(()) {
             out.push(Event { tick, kind: "plan-error", what: e.to_string().lines().next().unwrap_or("").to_owned() });
             self.thread = None;
@@ -370,10 +398,12 @@ impl Plan {
     }
 }
 
-/// Is `key` new, or last seen at least [`CALL_REPEAT_TICKS`] ago? Records it as seen now.
+/// Is `key` new, or last logged at least [`CALL_REPEAT_TICKS`] ago? Records it as logged now if so.
 fn fresh_repeat(seen: &mut HashMap<String, u64>, key: &str, tick: u64) -> bool {
     let fresh = seen.get(key).is_none_or(|&t| tick.saturating_sub(t) >= CALL_REPEAT_TICKS);
-    seen.insert(key.to_owned(), tick);
+    if fresh {
+        seen.insert(key.to_owned(), tick);
+    }
     fresh
 }
 
@@ -421,7 +451,7 @@ pub fn play(host: &VfsHost, book: &CampaignBook, campaign: &str, index: usize, c
     };
     let mut standin = StandInHost::new(host.vfs.clone());
     let mut seen: HashMap<String, u64> = HashMap::new();
-    let mut counts = (0i64, 0i64, 0i64, 0i64);
+    let mut counts = (0i64, 0i64, 0i64, 0i64, 0i64);
     let mut errs = 0;
     let mut unsupported: HashMap<String, u32> = HashMap::new();
     let mut objectives: HashMap<u32, String> = HashMap::new();
@@ -445,7 +475,7 @@ pub fn play(host: &VfsHost, book: &CampaignBook, campaign: &str, index: usize, c
         for c in calls {
             // a float result changes every poll; the call is the same call
             let key = match c.rsplit_once(" -> ") {
-                Some((head, r)) if r.contains('.') => head.to_owned(),
+                Some((head, r)) if r.parse::<f64>().is_ok() && r.contains('.') => head.to_owned(),
                 _ => c.clone(),
             };
             if fresh_repeat(&mut seen, &key, tick) {
@@ -453,8 +483,8 @@ pub fn play(host: &VfsHost, book: &CampaignBook, campaign: &str, index: usize, c
             }
         }
         // converted-script progress
-        if let Ok((lines, f, r, p, e)) = a.runtime().eval_with::<(Vec<String>, i64, i64, i64, i64), _>(CONVERTED, counts) {
-            counts = (f, r, p, e);
+        if let Ok((lines, f, r, p, e, n)) = a.runtime().eval_with::<(Vec<String>, i64, i64, i64, i64, i64), _>(CONVERTED, counts) {
+            counts = (f, r, p, e, n);
             for l in lines {
                 if let Some((k, w)) = l.split_once('\t') {
                     let kind = match k {
@@ -473,6 +503,9 @@ pub fn play(host: &VfsHost, book: &CampaignBook, campaign: &str, index: usize, c
             }
         }
         // world and presentation
+        for u in &a.sim().view().units {
+            owners.entry(u.id).or_insert_with(|| format!("p{} {}", u.owner.0, host.content.name(u.def).unwrap_or("?")));
+        }
         let cine = a.runtime().cineractive();
         for e in a.last_events() {
             match e {
@@ -504,9 +537,6 @@ pub fn play(host: &VfsHost, book: &CampaignBook, campaign: &str, index: usize, c
                 SimEvent::PlayerEliminated { player } => ev.push(Event { tick, kind: "eliminated", what: format!("p{}", player.0) }),
                 _ => {}
             }
-        }
-        for u in &a.sim().view().units {
-            owners.entry(u.id).or_insert_with(|| format!("p{} {}", u.owner.0, host.content.name(u.def).unwrap_or("?")));
         }
         if cine.active && tick % u64::from(TICK_HZ) == 0 {
             let v = a.sim().view();

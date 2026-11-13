@@ -29,7 +29,9 @@ Reference file (kept outside the repository, it describes a stock mission):
 `<time>` is seconds from the start (`12.5`), relative to the previous expected
 event (`+3`), `*` (any time, in order) or `~` (any time, in any order: an event
 the player's actions trigger, such as a first-contact message). Events of one
-tick are unordered among themselves. `<kind>` is a timeline kind (`present`, `call`,
+tick are unordered among themselves. Extras of the strict kinds are listed up to
+the last matched expected event: a reference that covers only the opening says
+nothing about what follows it. `<kind>` is a timeline kind (`present`, `call`,
 `objective`, `briefing`, `rule`, `end`, ...); `<text>` must occur in the event's
 `what` (case-sensitive). Expected events are matched in order, each after the
 previous match; the report lists every difference: missing, out of order,
@@ -72,6 +74,8 @@ def parse_reference(text):
             ignore.append(rest.strip())
             continue
         kind, _, what = rest.strip().partition(" ")
+        if not what.strip():
+            raise ValueError(f"reference line {n}: no text to match")
         free = head == "~"
         if head in ("*", "~"):
             t, rel = None, False

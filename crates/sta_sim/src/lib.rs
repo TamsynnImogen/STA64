@@ -402,9 +402,10 @@ impl Sim {
             plans.extend(warps);
             plans.sort_by_key(|p| p.0);
         }
+        // Before routing and avoidance replace targets with detours.
+        let gate_goers = self.wormhole_goers();
         let routed = self.route_orders();
         let held = self.steer_around();
-        let gate_goers = self.wormhole_goers();
         self.step_kinematics(&plans);
         self.restore_targets(held);
         self.restore_targets(routed);

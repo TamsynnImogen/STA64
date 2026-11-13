@@ -9,9 +9,10 @@
 //!   paired gate is destroyed (its partner is then re-paired in the original, not here).
 //!   Armada II pairs only through map data and `LinkWormholes`, neither of which the sim
 //!   carries yet, so gates move nothing outside the Armada I profile (`a1_compat`).
-//! - **Who goes through.** A craft whose move ends on the gate (its last course point
-//!   within [`ON_GATE`] of the centre: a move ordered onto the gate entity) enters it; craft
-//!   merely passing by do not. Any team, any craft.
+//! - **Who goes through.** A craft flying its last leg onto the gate (its target within
+//!   [`ON_GATE`] of the centre and no further legs queued: a move ordered onto the gate
+//!   entity) enters it; craft passing by, or on an earlier leg of a longer course, do not.
+//!   Any team, any craft. Asked before routing and avoidance replace the target with a detour.
 //! - **Transport.** Once it is within its `tooCloseToTurn` plus [`GATE_REACH`] of the
 //!   centre (the original queues it there and flies it along an entry spline into the
 //!   centre; the spline is not modelled), it is moved to its partner, set down
@@ -58,8 +59,8 @@ impl Sim {
         gates.chunks_exact(2).flat_map(|p| [(p[0], p[1]), (p[1], p[0])]).collect()
     }
 
-    /// Craft whose move ends on a paired gate: `(craft, gate, partner)`. Asked before the
-    /// tick's movement, while the arriving craft still has its course.
+    /// Craft flying their last leg onto a paired gate: `(craft, gate, partner)`. Asked before
+    /// the tick's routing and movement, while the target is still the ordered one.
     pub(crate) fn wormhole_goers(&self) -> Vec<(EntityId, EntityId, EntityId)> {
         let pairs = self.gate_pairs();
         if pairs.is_empty() {
@@ -71,8 +72,10 @@ impl Sim {
             if e.kind != crate::world::EntityKind::Craft || e.flags.contains(UnitFlags::DYING) {
                 continue;
             }
-            let last = self.movement.course(e.id).and_then(|c| c.waypoints.last().copied()).or(e.target);
-            let Some(goal) = last else { continue };
+            if self.movement.course(e.id).is_some_and(|c| !c.waypoints.is_empty()) {
+                continue;
+            }
+            let Some(goal) = e.target else { continue };
             for &(gate, partner) in &pairs {
                 if self.units.get(gate).is_some_and(|g| flat_distance(g.pos, goal) <= on_gate) {
                     out.push((e.id, gate, partner));

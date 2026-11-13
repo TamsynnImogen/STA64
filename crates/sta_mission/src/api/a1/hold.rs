@@ -8,8 +8,13 @@
 //! spawn receipt one tick later. As for `A2` (see `a2/dll_objects.rs`), a void
 //! order, setter or camera call named in [`HELD`] that is given a still-pending
 //! token is held and replayed, in call order, by the first `A1` call after the
-//! receipt (at most one tick late); a failed spawn drops it. Queries still raise
-//! until the receipt is in.
+//! receipt; a failed spawn drops it. While anything is held, later calls of that list
+//! (and cineractive start/end/offset) are held behind it, so the order of the script's
+//! calls is kept. Queries still raise until the receipt is in. The replay runs on the
+//! next `A1` call: converted scripts make one every tick (their rule conditions poll), so
+//! in practice it is one tick late; a script that makes no further `A1` call never
+//! releases what is held. Argument errors of a held call show in `unsupported()` when it
+//! is replayed, not at the call site.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -43,6 +48,7 @@ const HELD: &[&str] = &[
     "EnableLight",
     "EnableWormholeTravel",
     "Goto",
+    "LinkWormHoles",
     "Mine",
     "Patrol",
     "PointAt",
@@ -61,6 +67,10 @@ const HELD: &[&str] = &[
     "Special_Attack",
     "Stop",
 ];
+
+/// Calls that keep their place behind held calls: while anything is held, these are held
+/// too, so a later order or the end of a cineractive does not overtake an earlier held call.
+const KEEP_ORDER: &[&str] = &["CineractiveStart", "CineractiveEnd", "CineractiveCameraOffset"];
 
 /// What a raw argument is: a pending token, a failed one, or anything else.
 #[derive(PartialEq)]
@@ -96,7 +106,8 @@ fn replay(env: &Env, held: &Rc<RefCell<Vec<Held>>>) {
     let all = std::mem::take(&mut *held.borrow_mut());
     let mut waiting = Vec::new();
     for h in all {
-        if h.args.iter().any(|v| tok(env, v) == Tok::Pending) {
+        // In call order: once one call still waits, every later one waits behind it.
+        if !waiting.is_empty() || h.args.iter().any(|v| tok(env, v) == Tok::Pending) {
             waiting.push(h);
         } else if !h.args.iter().any(|v| tok(env, v) == Tok::Failed)
             && let Err(e) = h.inner.call::<MultiValue>(MultiValue::from_vec(h.args.clone()))
@@ -128,7 +139,9 @@ pub(super) fn install(lua: &Lua, env: &Env, table: &Table) -> mlua::Result<()> {
             name,
             lua.create_function(move |_, args: MultiValue| {
                 replay(&env, &held);
-                if holds && args.iter().any(|v| tok(&env, v) == Tok::Pending) {
+                let queued = !held.borrow().is_empty();
+                let ordered = holds || KEEP_ORDER.contains(&label.as_str());
+                if ordered && (queued || (holds && args.iter().any(|v| tok(&env, v) == Tok::Pending))) {
                     held.borrow_mut().push(Held { name: label.clone(), inner: inner.clone(), args: args.into_iter().collect() });
                     return Ok(MultiValue::new());
                 }

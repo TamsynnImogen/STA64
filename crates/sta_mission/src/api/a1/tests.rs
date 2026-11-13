@@ -159,6 +159,7 @@ const CASES: &[(&str, &str, Expect)] = &[
     ("RemoveTitle", "A1.RemoveTitle(A1.ShowTitle(1, 2, 3, 4, 'T', true), true)", Fine),
     ("ShowSubtitle", "assert(A1.ShowSubtitle(5, 10, 300, 20, 'S', true) == 1)", Fine),
     ("RemoveSubtitle", "A1.RemoveSubtitle(A1.ShowSubtitle(5, 10, 300, 20, 'S', true), true)", Fine),
+    ("RemoveSubtitle", "A1.RemoveSubtitle(0, true)", Fine),
     ("MinimapMessage", "A1.MinimapMessage(1, 2, 3.0)", Fine),
     ("MinimapMessage", "A1.MinimapMessage('m', 1, 2.0, 3)", Fine),
     // Orders and AI.
@@ -819,4 +820,43 @@ fn immediate_cloak_errors_name_their_own_call() {
     let s = scene();
     let message = fails(&s, "A1.ImmediateCloak(999999)");
     assert!(message.contains("A1.ImmediateCloak") && !message.contains("A1.Cloak"), "{message}");
+}
+
+/// LUA-17: a held call keeps its place: later orders and the end of a cineractive wait
+/// behind it, and all are replayed in call order after the receipt.
+#[test]
+fn held_calls_keep_the_script_order() {
+    use sta_sim::setup::Controller;
+    let s = scene();
+    let mut sim = Sim::from_setup(&game(&s.db));
+    let cfg = MissionConfig { content: Some(s.db.clone()), view: Some((*sim.view()).clone()), ..MissionConfig::default() };
+    let src = format!(
+        "A1.paths.Q = {{ {{x=40,y=0,z=0}} }}; A1.paths.R = {{ {{x=90,y=0,z=0}} }}; \
+         A1.CineractiveStart(); h = A1.BuildObject('fx_cruiser', 1, 'Q', 0); \
+         A1.Attack({a}, h, 1); A1.Goto({a}, 'R', 1); A1.CineractiveEnd()",
+        a = s.ids[0].0
+    );
+    let mut rt = MissionRuntime::from_source_with("order.lua", &src, 3, cfg);
+    assert!(rt.errors().is_empty(), "{:?}", rt.errors());
+    let first = rt.take_commands();
+    assert!(!first.iter().any(|c| matches!(c.kind, CommandKind::Order(_))), "nothing ordered before the receipt: {first:?}");
+    assert!(!presented_any(&first).contains(&Presentation::Cineractive { on: false, skippable: true }), "the end waits too");
+    let out = sim.step(&first);
+    rt.think(&out.view, &out.events, &mut Vec::new());
+    rt.eval::<bool>("return A1.Exists(h)").unwrap();
+    let kinds: Vec<CommandKind> = rt.take_commands().into_iter().map(|c| c.kind).collect();
+    let attack = kinds.iter().position(|k| matches!(k, CommandKind::Order(Order::Attack { .. }))).expect("attack");
+    let goto = kinds.iter().position(|k| matches!(k, CommandKind::Order(Order::Move { .. }))).expect("goto");
+    let end = kinds.iter().position(|k| matches!(k, CommandKind::Edit(Edit::Present(Presentation::Cineractive { on: false, .. })))).expect("end");
+    assert!(attack < goto && goto < end, "{kinds:?}");
+}
+
+fn presented_any(commands: &[Command]) -> Vec<Presentation> {
+    commands
+        .iter()
+        .filter_map(|c| match &c.kind {
+            CommandKind::Edit(Edit::Present(p)) => Some(p.clone()),
+            _ => None,
+        })
+        .collect()
 }

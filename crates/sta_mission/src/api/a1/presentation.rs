@@ -114,6 +114,12 @@ fn title(lua: &Lua, env: &Env, name: &'static str, subtitle: bool) -> mlua::Resu
 fn remove_title(lua: &Lua, env: &Env, name: &'static str) -> mlua::Result<Function> {
     // `RemoveTitle(id, bool)`: the bool is not measured and ignored.
     def(lua, env, name, &["ib"], move |_, e, _, a| {
+        // 0 is the zeroed handle of a title the mission never showed (stock missions remove
+        // their title handles on every path, shown or not: read from data, LUA-17): nothing to
+        // remove.
+        if a[0].int() == 0 {
+            return Ok(Value::Nil);
+        }
         let id = u32::try_from(a[0].int()).ok().filter(|id| *id >= 1 && *id <= e.st.borrow().next_title);
         let Some(id) = id else {
             return Err(mlua::Error::runtime(format!("A1.{name}: {} is not a title id this mission was given", a[0].int())));

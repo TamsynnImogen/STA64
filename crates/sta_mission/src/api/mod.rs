@@ -372,6 +372,10 @@ impl Ctx {
 
     /// Queue the delayed presentations that are due at the current view tick, in request order.
     pub fn flush_delayed(&mut self) {
+        if self.finished {
+            self.delayed.clear();
+            return;
+        }
         let now = self.view.tick;
         let (due, later): (Vec<_>, Vec<_>) = std::mem::take(&mut self.delayed).into_iter().partition(|(t, _)| *t <= now);
         self.delayed = later;

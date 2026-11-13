@@ -703,21 +703,27 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
         })?,
     )?;
 
-    // void DisableShieldGenerator(int, bool): the bool means disabled (the
-    // sim edit takes `on`). The sim rejects the shield subsystem edit until
-    // shields are switchable; reported and counted by the edit feedback.
-    let c = ctx.clone();
-    table.set(
-        "DisableShieldGenerator",
-        lua.create_function(move |_, args: MultiValue| {
-            let name = "DisableShieldGenerator";
-            arity(name, &args, 2)?;
-            let disabled = boolean(name, &args, 1)?;
-            let id = EntityId(integer(name, &args[0])?);
-            live(&c, name, id)?;
-            edit_feedback::queue(&mut c.borrow_mut(), "A2.DisableShieldGenerator", Edit::Subsystem(id, Subsystem::Shields, !disabled))
-        })?,
-    )?;
+    // void DisableShieldGenerator / DisableLifeSupport / DisableSensors(int, bool): the bool
+    // means disabled (the sim edit takes `on`); the sim's subsystem switch (SIM-55) applies
+    // them, and a rejection is reported and counted by the edit feedback. Life support and
+    // sensors use the same switch as the shield generator (LUA-17, part of LUA-05).
+    for (name, label, sub) in [
+        ("DisableShieldGenerator", "A2.DisableShieldGenerator", Subsystem::Shields),
+        ("DisableLifeSupport", "A2.DisableLifeSupport", Subsystem::LifeSupport),
+        ("DisableSensors", "A2.DisableSensors", Subsystem::Sensors),
+    ] {
+        let c = ctx.clone();
+        table.set(
+            name,
+            lua.create_function(move |_, args: MultiValue| {
+                arity(name, &args, 2)?;
+                let disabled = boolean(name, &args, 1)?;
+                let id = EntityId(integer(name, &args[0])?);
+                live(&c, name, id)?;
+                edit_feedback::queue(&mut c.borrow_mut(), label, Edit::Subsystem(id, sub, !disabled))
+            })?,
+        )?;
+    }
 
     // GetLocation(path, index): point `index` of the path (exe: the native
     // call reads the path's point array). The one-argument form stays the
