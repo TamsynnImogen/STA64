@@ -6,8 +6,15 @@
 //! default. Until CON-46 types the `RTS_CFG.h` defaults
 //! (`CRAFT_DEFAULT_MOVEMENT_AUTONOMY`, `CRAFT_DEFAULT_SPECIALWEAPON_AUTONOMY`)
 //! the default is the engine's own for an absent key: movement 1, special
-//! weapon 0 (decompiled; the installs set 1 and 2 on Roots and FO 4.0, 1 and 1
+//! weapon 0 (read from the executable, static; the installs set 1 and 2 on Roots and FO 4.0, 1 and 1
 //! on Classic Enhanced, which this seam does not read yet).
+//!
+//! Invariant: rows are relative to [`ENGINE_DEFAULT`], and an absent row
+//! always means that constant, in the digest, snapshots and replays alike. When
+//! CON-46 reads a profile default from `RTS_CFG.h`, spawning applies it by
+//! writing explicit rows for the crafts that differ from the constant; it never
+//! changes what "no row" means. A row equal to the constant is never stored
+//! (`order` removes it, `from_rec` rejects it), so one behaviour has one digest.
 //!
 //! This module only holds the state and the order. What autonomy changes
 //! (assist, targets of opportunity) is SIM-36's. In the digest and snapshot
@@ -72,7 +79,7 @@ impl Autonomy {
         for &id in ids {
             let ok = units.get(id).is_some_and(|u| {
                 u.kind == crate::world::EntityKind::Craft
-                    && u.hull[1] > sta_core::Fixed::ZERO
+                    && u.hull[0] > sta_core::Fixed::ZERO
                     && (!player.is_player() || u.owner == player)
             });
             if !ok {
@@ -104,9 +111,10 @@ impl Autonomy {
         self.set.iter().map(|(id, l)| (id, *l)).collect()
     }
 
-    /// `None` when rows are unordered or a level is above 2.
+    /// `None` when rows are unordered, a level is above 2 or a row equals
+    /// [`ENGINE_DEFAULT`] (never stored, see the module header).
     pub(crate) fn from_rec(rows: AutonomyRec) -> Option<Autonomy> {
-        if rows.iter().any(|(_, l)| l.iter().any(|v| *v > 2)) {
+        if rows.iter().any(|(_, l)| l.iter().any(|v| *v > 2) || *l == ENGINE_DEFAULT) {
             return None;
         }
         Some(Autonomy { set: Table::from_rows(rows)? })

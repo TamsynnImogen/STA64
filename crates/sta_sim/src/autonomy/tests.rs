@@ -101,3 +101,48 @@ fn snapshot_keeps_autonomy_and_a_despawn_drops_it() {
     assert!(loaded.despawn(ship, None));
     assert!(loaded.autonomy.is_empty());
 }
+
+#[test]
+fn a_row_equal_to_the_engine_default_is_not_canonical() {
+    let (_, _, ship, _) = scene();
+    assert!(super::Autonomy::from_rec(vec![(ship, super::ENGINE_DEFAULT)]).is_none());
+    assert!(super::Autonomy::from_rec(vec![(ship, [2, 0])]).is_some());
+}
+
+#[test]
+fn a_dead_craft_takes_no_autonomy_order() {
+    let (mut sim, _, ship, _) = scene();
+    sim.units.get_mut(ship).unwrap().hull[0] = Fixed::ZERO;
+    sim.step(&[set(1, ship, AutonomyKind::Movement, AutonomyLevel::High)]);
+    assert!(sim.autonomy.is_empty());
+}
+
+#[test]
+fn a_restored_sim_carries_the_definitions_warp_speed_like_a_live_one() {
+    let base = sta_content::fake::db();
+    let mut b = sta_content::ContentDb::builder().profile(base.profile()).features(base.features().clone());
+    for w in base.weapons().cloned() {
+        b = b.weapon(w);
+    }
+    for mut u in base.units().cloned() {
+        if u.odf == "fx_frigate" {
+            u.movement.warp_speed = Fixed::from_int(900);
+        }
+        b = b.unit(u);
+    }
+    let db = Arc::new(b.build().unwrap());
+    let seat = |id| PlayerSetup { id: PlayerId(id), team: TeamId(id), race: "fx".into(), control: Control::Idle };
+    let mut sim = Sim::from_setup(&GameSetup {
+        seed: 5,
+        map: Arc::new(sta_content::MapDef::empty()),
+        content: Arc::clone(&db),
+        players: vec![seat(1), seat(2)],
+        options: GameOptions::default(),
+    });
+    let ship = sim.spawn_def(db.key("fx_frigate").unwrap(), PlayerId(1), at(0), AHEAD).unwrap();
+    let live = sim.units.get(ship).unwrap().stats.warp_speed;
+    assert_eq!(live, Fixed::from_int(900));
+    let loaded = Sim::from_snapshot(&sim.snapshot(), Some(db)).unwrap();
+    assert_eq!(loaded.units.get(ship).unwrap().stats, sim.units.get(ship).unwrap().stats);
+    assert_eq!(loaded.digest(), sim.digest());
+}

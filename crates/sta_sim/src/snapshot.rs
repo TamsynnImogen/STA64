@@ -248,7 +248,8 @@ impl EntityRec {
                 turn_control_angle: s.smooth[4],
                 turn_control_squared: s.smooth[5] != Fixed::ZERO,
                 forward_control_distance: s.smooth[6],
-                // From the definition, not the snapshot (see `MoveStats`).
+                // Not in the snapshot: `Sim::from_snapshot` re-reads it from
+                // the definition once the entities exist.
                 warp_speed: Fixed::ZERO,
             },
             hull: self.hull,
@@ -407,6 +408,17 @@ impl Sim {
             .collect::<Result<Vec<_>, _>>()?;
         let mut units =
             Entities::from_parts(list, b.next_entity).ok_or_else(|| corrupt("entity ids"))?;
+        // `warpSpeed` is a per-definition stat that a spawn copies and the
+        // snapshot does not carry: re-read it so a restored sim equals a live one.
+        if let Some(db) = content.as_deref() {
+            let ids: Vec<EntityId> = units.iter().map(|u| u.id).collect();
+            for id in ids {
+                let Some(unit) = units.get_mut(id) else { continue };
+                if let Some(def) = db.unit(unit.def) {
+                    unit.stats.warp_speed = def.movement.warp_speed;
+                }
+            }
+        }
         if crew_rows.windows(2).any(|pair| pair[0].0 >= pair[1].0) {
             return Err(corrupt("unit crew rows"));
         }

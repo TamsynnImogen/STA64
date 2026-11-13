@@ -80,8 +80,8 @@ pub struct MoveStats {
     pub forward_control_distance: Fixed,
     /// `warpSpeed`, units per second; zero when the ODF has none. Read by the
     /// attack approach (SIM-36) from the unit's definition: it is not part of
-    /// the smooth fields, the digest or the snapshot's stats mirror, so a
-    /// unit's own `stats` after a snapshot load carry zero here.
+    /// the smooth fields, the digest or the snapshot's stats mirror; a
+    /// snapshot load re-reads it from the definition.
     pub warp_speed: Fixed,
 }
 
