@@ -45,6 +45,11 @@
 //! omitted: the weights are the ODF percentages alone. The keys are read and
 //! digested (`CfgRules`).
 //!
+//! The model is on per weapon (`apply`) and per unit (`step`) by the same
+//! feature bit; per-definition overrides that disagree are not supported.
+//! Systems killed in combat stay off until the unit is derelict-and-recrewed
+//! (a bench `Heal` mends the points, not the switches).
+//!
 //! Per tick, while life support is switched off or dead: `lifeSupportLoss x
 //! crew x dt / 100 + dt` crew (percent of current crew per second plus one
 //! per second, S, M); the team upgrade 3 modifier is not modelled (reads 1).
@@ -153,8 +158,9 @@ fn locate(t: &Entity, def: &UnitDef, row: &SubsystemRow, rng: &mut Rng) -> Spot 
     if total - freed <= Fixed::ZERO {
         return Spot::Hull;
     }
-    if freed > Fixed::ZERO && live > Fixed::ZERO {
-        let factor = (live + freed) / live;
+    // Always scaled so the live weights and the hull make 100 (the roll is over 0..100).
+    if live > Fixed::ZERO && live != Fixed::from_int(100) {
+        let factor = Fixed::from_int(100) / live;
         for x in &mut w {
             *x = mul(*x, factor);
         }
@@ -233,6 +239,8 @@ pub(crate) fn hit(t: &mut Entity, def: &UnitDef, w: &WeaponDef, db: &ContentDb, 
             kill_crew(t, ctx, (law + e.min(Fixed::ONE)).min(e));
         }
     }
+    // Re-read: the crew law may have latched the unit derelict and zeroed them.
+    let held = t.shields.now[pool];
     let taken = s_part.min(held);
     t.shields.now[pool] = held - taken;
     h = h + (s_part - taken);
