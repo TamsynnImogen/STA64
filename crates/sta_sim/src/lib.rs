@@ -110,9 +110,11 @@ pub struct Sim {
     pub labels: Table<String>,
     /// Seats from the game setup, ascending id; in the digest.
     players: Vec<(PlayerId, TeamId)>,
-    /// The seats whose setup said `Control::Ai`, ascending (SIM-09: the tech
-    /// gate lets AI seats build the engine's unlisted tail slots). From the
-    /// setup like `players`, so not in the digest.
+    /// The seats whose setup said `Control::Ai` or `Control::RemoteAi`,
+    /// ascending (SIM-09: the tech gate lets AI seats build the engine's
+    /// unlisted tail slots; passive economy and start helpers read it too).
+    /// Session state, identical on every peer; in the digest once any
+    /// exists. Which machine runs the AI is not state and is not kept here.
     ai_seats: Vec<PlayerId>,
     /// What spawns resolve against; `None` for a sim made with [`Sim::new`].
     content: Option<Arc<ContentDb>>,
@@ -486,6 +488,13 @@ impl Sim {
         for &(p, t) in &self.players {
             h.u64(p.0 as u64);
             h.u64(t.0 as u64);
+        }
+        if !self.ai_seats.is_empty() {
+            h.str("ai_seats");
+            h.u64(self.ai_seats.len() as u64);
+            for p in &self.ai_seats {
+                h.u64(p.0 as u64);
+            }
         }
         self.units.hash_into(&mut h);
         self.movement.hash_into(&mut h);

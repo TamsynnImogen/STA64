@@ -107,8 +107,8 @@ pub fn spawn(commands: &mut Commands, screen: Screen, ctx: &Ctx, camera: Option<
         Screen::MapSelect => frame(commands, ctx, screen, camera, &tr("Select map"), 760.0, map_select(ctx)),
         Screen::Settings => frame(commands, ctx, screen, camera, &tr("Options"), 760.0, settings(ctx)),
         Screen::ModSelect => frame(commands, ctx, screen, camera, &tr("Mods"), 900.0, mod_select(ctx)),
-        // Drawn by `frontend::campaign` (UI-25), which has its own system.
-        Screen::Missions | Screen::Briefing | Screen::Debrief => {}
+        // Drawn by `frontend::campaign` (UI-25) and `frontend::lobby` (UI-11), which have their own systems.
+        Screen::Missions | Screen::Briefing | Screen::Debrief | Screen::Multiplayer | Screen::HostGame | Screen::JoinGame | Screen::Lobby => {}
     }
 }
 
@@ -149,8 +149,7 @@ fn main_menu(ctx: &Ctx) -> impl Bundle {
     content(ctx.theme, move |p| {
         p.spawn((button(&t, &tr("Single player"), w), Act::Goto(Screen::SinglePlayer)));
         p.spawn((button(&t, &tr("Instant action"), w), Act::Goto(Screen::Setup)));
-        // The lobby (UI-11) opens this.
-        p.spawn(disabled_button(&t, &tr("Multiplayer"), w));
+        p.spawn((button(&t, &tr("Multiplayer"), w), Act::Goto(Screen::Multiplayer)));
         p.spawn((button(&t, &tr("Mods"), w), Act::PickMod));
         p.spawn((button(&t, &tr("Options"), w), Act::Goto(Screen::Settings)));
         p.spawn((button(&t, &tr("Exit"), w), Act::Exit));

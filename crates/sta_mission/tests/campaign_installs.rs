@@ -44,6 +44,10 @@ impl MissionHost for StandIn<'_> {
     fn seat(&self) -> (sta_core::PlayerId, sta_mission::api::PlayerNumbering) {
         self.0.seat()
     }
+
+    fn aip_library(&self) -> sta_ai::AipLibrary {
+        self.0.aip_library()
+    }
 }
 
 fn report(game: &str, book: &CampaignBook) {

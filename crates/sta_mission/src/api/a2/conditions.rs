@@ -7,7 +7,7 @@
 //! string, or `nil` / `0` for the null pointer the DLLs pass.
 //!
 //! Calls whose data the sim does not carry (cargo contents, trade totals,
-//! capital-ship class, off-map state, the meaning of "compromised") raise a
+//! capital-ship class, off-map state) raise a
 //! Lua error and add `A2.<Name>: <why>` to `unsupported()`; they never return
 //! a guessed value. That list is this package's missing-seam report.
 //!
@@ -17,7 +17,8 @@
 //! seconds) and `HasTimeElapsed` (mission time at or past N) are not measured.
 
 use mlua::{Function, Lua, MultiValue, Table, Value};
-use sta_core::{EntityId, PlayerId, TICK_HZ};
+use sta_core::{EntityId, Fixed, PlayerId, TICK_HZ};
+use sta_sim::world::EntityKind;
 use sta_sim::view::UnitFlags;
 
 use crate::api::search::{Query, near};
@@ -153,6 +154,7 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
     // Searches over live units: `-1` as a team means any; a null ODF any ODF.
     table.set("CountUnits", query(lua, ctx, "CountUnits", 2, |c, a| {
         let owner = team_filter(c, "CountUnits", int("CountUnits", a, 0)?)?;
+        c.note_team_query(owner, "CountUnits");
         let odf = text("CountUnits", a, 1)?;
         let n = c
             .view
@@ -165,7 +167,9 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
     })?)?;
     table.set("CountUnitsNearObject", query(lua, ctx, "CountUnitsNearObject", 4, |c, a| {
         let name = "CountUnitsNearObject";
-        let centre = alive(c, name, handle(name, a, 0)?)?;
+        let id = handle(name, a, 0)?;
+        c.note_query(id, name);
+        let centre = alive(c, name, id)?;
         let odf = text(name, a, 3)?;
         let q = Query {
             center: pos_f64(centre.pos),
@@ -183,10 +187,12 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
         let observer = team(c, name, int(name, a, 0)?)?;
         boolean(name, a, 2)?;
         let odf = text(name, a, 3)?;
+        let owner = team_filter(c, name, int(name, a, 1)?)?;
+        c.note_team_query(owner, name);
         let q = Query {
             center: (0.0, 0.0, 0.0),
             radius: f64::INFINITY,
-            owner: team_filter(c, name, int(name, a, 1)?)?,
+            owner,
             odf: odf.as_deref(),
             exclude: EntityId::NONE,
             seen_by: Some(observer),
@@ -217,6 +223,7 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
         let candidates: Vec<EntityId> = {
             let c = c.borrow();
             let owner = team_filter(&c, "CountStations", int("CountStations", &args, 0)?)?;
+            c.note_team_query(owner, "CountStations");
             c.view.units.iter().filter(|u| c.alive(u.id).is_some() && owner.is_none_or(|o| u.owner == o)).map(|u| u.id).collect()
         };
         let mut n = 0i64;
@@ -262,7 +269,28 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
         let within = (window * TICK_HZ as f64).round() as u64;
         Ok(c.last_hit.get(&id).is_some_and(|t| c.view.tick.saturating_sub(*t) <= within))
     })?)?;
-    table.set("IsCompromised", no_data_fn(lua, ctx, "IsCompromised", "the meaning of compromised (and its data) is not known")?)?;
+    // IsCompromised(object, team): true when the object has been lost to `team`,
+    // i.e. it is gone or dying, is not a craft or station, is a derelict, or
+    // its permanent owner is not `team` (LUA-12). Read from the executable,
+    // static (A2 and A1; nothing measured). The derelict latch is
+    // approximated by a crew of under one with a positive maximum (not
+    // modelled: the `CraftCannotDie` exemption and the latch clearing only
+    // when crew returns to one), and a temporary takeover (mind control) shows
+    // as the new owner here, where the engine keeps the original (SIM-59).
+    table.set("IsCompromised", query(lua, ctx, "IsCompromised", 2, |c, a| {
+        let id = handle("IsCompromised", a, 0)?;
+        c.note_query(id, "IsCompromised");
+        // Any integer is accepted, as the engine's own compare does: a team
+        // number that no seat has just makes every object compromised.
+        let team = int("IsCompromised", a, 1)?;
+        let Some(u) = c.alive(id) else { return Ok(true) };
+        // Craft or station by STA64's class mapping (`EntityKind::of_def`), an
+        // approximation of the engine's class test; no content: a craft.
+        let fixture = c.def(u).is_some_and(|d| !matches!(EntityKind::of_def(d), EntityKind::Craft | EntityKind::Station));
+        let derelict = u.crew.is_some_and(|[now, max]| now < Fixed::ONE && max > Fixed::ZERO);
+        let owner = c.player_numbering.encode(u.owner).map(i64::from);
+        Ok(fixture || derelict || owner != Some(team))
+    })?)?;
     table.set("IsShipAliveAndOffMap", no_data_fn(lua, ctx, "IsShipAliveAndOffMap", "the world view carries no off-map state")?)?;
     table.set("IsCargoShipReadyToLoad", no_data_fn(lua, ctx, "IsCargoShipReadyToLoad", "the world view carries no cargo state")?)?;
     table.set("IsCargoShipFullAndReadyToSend", no_data_fn(lua, ctx, "IsCargoShipFullAndReadyToSend", "the world view carries no cargo state")?)?;

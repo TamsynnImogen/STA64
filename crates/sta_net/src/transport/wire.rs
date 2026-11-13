@@ -565,9 +565,29 @@ impl EnvelopeReader {
                 Ok(Polled::Idle)
             }
             Err(e) if e.kind() == ErrorKind::Interrupted => Ok(Polled::Idle),
+            // Known residual risk: Windows documents the socket state as
+            // indeterminate after a receive timeout, so a pending overlapped
+            // receive could complete into a dropped buffer and lose bytes.
+            // That would show up as a framing or length error and close the
+            // connection (it fails closed), as it could for ordinary timeouts
+            // before this arm existed. The pause keeps a socket that fails
+            // this way at once, every time, from spinning its thread until
+            // the caller's wall-clock deadline.
+            Err(e) if spurious_pending(&e) => {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                Ok(Polled::Idle)
+            }
             Err(e) => Err(ReadError::Io(e)),
         }
     }
+}
+
+/// Windows can fail a read that has a receive timeout with
+/// `ERROR_IO_PENDING` (997, "Overlapped I/O operation is in progress") instead
+/// of a timeout error, with nothing read and the socket intact: the same as a
+/// timeout, never a reason to drop the connection.
+fn spurious_pending(e: &std::io::Error) -> bool {
+    cfg!(windows) && e.raw_os_error() == Some(997)
 }
 
 /// A byte budget refilled at a steady rate: the relay's per-connection rate
@@ -610,6 +630,83 @@ impl TokenBucket {
 mod tests {
     use super::*;
     use crate::proto::{encode, Message};
+
+    /// Yields scripted reads: bytes, or an OS error code.
+    struct Script(std::collections::VecDeque<Result<Vec<u8>, i32>>);
+    impl Read for Script {
+        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+            match self.0.pop_front() {
+                Some(Ok(b)) => {
+                    let n = b.len().min(out.len());
+                    out[..n].copy_from_slice(&b[..n]);
+                    if n < b.len() {
+                        self.0.push_front(Ok(b[n..].to_vec()));
+                    }
+                    Ok(n)
+                }
+                Some(Err(code)) => Err(std::io::Error::from_raw_os_error(code)),
+                None => Err(std::io::ErrorKind::WouldBlock.into()),
+            }
+        }
+    }
+
+    /// Windows' "overlapped I/O in progress" read error (997) is a timeout
+    /// there and keeps the partial envelope; elsewhere the code means
+    /// something else and stays an error. (The Windows arm runs on Windows CI
+    /// only.)
+    #[test]
+    fn a_spurious_pending_read_keeps_the_partial_envelope() {
+        let payload = vec![7u8, 8, 9, 10, 11];
+        let mut whole = (payload.len() as u32).to_le_bytes().to_vec();
+        whole.extend_from_slice(&payload);
+        let mut src = Script(
+            [Ok(whole[..2].to_vec()), Err(997), Ok(whole[2..].to_vec())]
+                .into_iter()
+                .collect(),
+        );
+        let mut r = EnvelopeReader::new();
+        assert!(matches!(r.poll(&mut src), Ok(Polled::Idle)));
+        assert_eq!(r.buffered(), 2);
+        let mid = r.poll(&mut src);
+        if cfg!(windows) {
+            assert!(matches!(mid, Ok(Polled::Idle)));
+            assert_eq!(r.buffered(), 2, "the partial envelope was kept");
+            let mut done = r.poll(&mut src);
+            // The rest may need a second read to complete.
+            for _ in 0..4 {
+                if matches!(done, Ok(Polled::Payload(_))) {
+                    break;
+                }
+                done = r.poll(&mut src);
+            }
+            assert!(matches!(done, Ok(Polled::Payload(ref p)) if *p == payload));
+        } else {
+            assert!(matches!(mid, Err(ReadError::Io(_))));
+        }
+    }
+
+    /// A socket that fails with 997 every time must not spin: the polls are
+    /// paced, so a caller's `Instant` deadline ends the loop after few polls.
+    #[test]
+    fn spurious_pending_forever_is_paced_and_ends_at_the_deadline() {
+        let mut src = Script((0..1_000_000).map(|_| Err(997)).collect());
+        let mut r = EnvelopeReader::new();
+        let end = Instant::now() + std::time::Duration::from_millis(100);
+        let mut polls = 0u32;
+        while Instant::now() < end {
+            match r.poll(&mut src) {
+                Ok(Polled::Idle) => polls += 1,
+                Err(_) => {
+                    if cfg!(windows) {
+                        panic!("997 must stay a timeout on Windows");
+                    }
+                    return;
+                }
+                Ok(Polled::Payload(_)) => unreachable!(),
+            }
+        }
+        assert!(polls < 100, "{polls} polls in 100 ms: spinning");
+    }
 
     fn frame() -> Vec<u8> {
         encode(&Message::Ping { nonce: 7 }).unwrap()

@@ -782,7 +782,7 @@ fn an_injected_desync_is_detected_in_one_turn_and_written_as_a_replay() {
         let text = std::fs::read_to_string(&f.sidecar).unwrap();
         assert!(text.contains(&format!("first differing tick: {first}")), "{text}");
         assert!(text.contains("lineage \"Test lineage\""), "{text}");
-        assert!(text.contains("protocol version: 2"), "{text}");
+        assert!(text.contains(&format!("protocol version: {}", sta_net::proto::PROTOCOL_VERSION)), "{text}");
         assert!(text.contains("digest at that tick, seat 0"), "{text}");
         assert!(text.contains("digest at that tick, seat 1"), "{text}");
     }

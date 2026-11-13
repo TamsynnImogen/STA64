@@ -6,16 +6,16 @@
 //!
 //! | section | state |
 //! |---|---|
-//! | `roster` | tick, content hash, seats and teams, who exists (id, kind, definition, owner), labels, perceived owners, eliminations, pending start-effect rows |
+//! | `roster` | tick, content hash, seats and teams, AI-controlled seats (once any), who exists (id, kind, definition, owner), labels, perceived owners, eliminations, pending start-effect rows |
 //! | `movement` | position, heading, speed, turn rate, target and movement stats of every entity; queued waypoints and formations; map confinement |
 //! | `combat` | hull, shields, status flags, unit crew; weapon mounts, shots and attack orders; point defence; special energy and cloaks; craft autonomy levels; subsystem switches and damage |
 //! | `economy` | stock, nodes, freighters, personnel; yard queues, rig deploys and rallies; build progress |
 //! | `rng` | the sim generator |
 //!
 //! Every part of the state [`Sim::digest`] covers is in exactly one section,
-//! so the full digest differs only if some section does. `Sim::digest` itself,
-//! its value and its pinned test are untouched. A system added to the digest
-//! picks its section here (the exhaustive `Entity` destructuring below breaks
+//! so the full digest differs only if some section does. `Sim::digest` hashes
+//! the AI seats (once any exist) beside the players, as the roster does. A
+//! system added to the digest picks its section here (the exhaustive `Entity` destructuring below breaks
 //! the build when an entity field is added without one).
 //!
 //! A section digest is FNV-1a over its fields in a fixed order, each section
@@ -101,6 +101,15 @@ impl Sim {
         for &(p, t) in &self.players {
             h.u64(p.0 as u64);
             h.u64(t.0 as u64);
+        }
+        // Which seats are AI-controlled is rules state (tech gate, passive
+        // economy, start helpers); only hashed once any exists.
+        if !self.ai_seats.is_empty() {
+            h.str("ai_seats");
+            h.u64(self.ai_seats.len() as u64);
+            for p in &self.ai_seats {
+                h.u64(p.0 as u64);
+            }
         }
         h.u64(self.units.next_id().0 as u64);
         h.u64(self.units.len() as u64);
@@ -268,6 +277,9 @@ impl Sim {
                 row(None, "tick", self.tick.to_string());
                 row(None, "content hash", format!("{:#018x}", self.content.as_ref().map_or(0, |c| c.hash())));
                 row(None, "players", format!("{:?}", self.players.iter().map(|&(p, t)| (p.0, t.0)).collect::<Vec<_>>()));
+                if !self.ai_seats.is_empty() {
+                    row(None, "ai seats", format!("{:?}", self.ai_seats.iter().map(|p| p.0).collect::<Vec<_>>()));
+                }
                 row(None, "next entity id", self.units.next_id().0.to_string());
                 row(None, "entity count", self.units.len().to_string());
                 for e in self.units.iter() {
@@ -425,6 +437,7 @@ mod tests {
             ("stock", Box::new(|s| s.economy.set_stock(PlayerId(0), [Fixed::from_int(9); 4])), "economy"),
             ("rng", Box::new(|s| { s.rng.next_u64(); }), "rng"),
             ("tick", Box::new(|s| s.tick += 1), "roster"),
+            ("ai seats", Box::new(|s| s.ai_seats.push(PlayerId(1))), "roster"),
         ];
         for (name, change, section) in cases {
             let (sections, full) = effect(change);

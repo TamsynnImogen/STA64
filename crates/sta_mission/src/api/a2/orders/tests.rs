@@ -285,14 +285,11 @@ fn calls_with_no_seam_validate_then_raise_and_are_counted() {
         ("A2.Special_Attack(a, 'gquanteffect')", "A2.Special_Attack"),
         ("A2.Special_Attack(a, b, 'gtracbm')", "A2.Special_Attack"),
         ("A2.SetCommandMoveAutonomyLow(a)", "A2.SetCommandMoveAutonomyLow"),
-        ("A2.PointAt(a, 'P')", "A2.PointAt"),
-        ("A2.PointAt(a, b)", "A2.PointAt"),
         ("A2.SetRace(a, 'borg')", "A2.SetRace"),
         ("A2.CraftCanRepair(a, true)", "A2.CraftCanRepair"),
         ("A2.GetMainEnemyBaseLocation(1)", "A2.GetMainEnemyBaseLocation"),
         ("A2.AttackMainEnemyBase(a, true)", "A2.AttackMainEnemyBase"),
         ("A2.GetAllyStationAttacks(3, 1)", "A2.GetAllyStationAttacks"),
-        ("A2.AI_Team_Load_AIP(2, 'x.aip')", "A2.AI_Team_Load_AIP"),
     ] {
         let (rt, err) = fails(&s, script);
         assert!(err.contains("is not available"), "{script}: {err}");
@@ -429,4 +426,93 @@ fn other_a2_calls_still_work_and_keep_their_errors() {
     assert!(err.contains("A2.GetRealTeam") && err.contains("not alive"), "{err}");
     // An integer that is not a pending handle is passed through untouched.
     rt.eval::<()>("assert(not A2.Exists(0x7ffffff0))").unwrap();
+}
+
+fn edits(commands: &[Command]) -> Vec<Edit> {
+    commands
+        .iter()
+        .map(|c| match &c.kind {
+            CommandKind::Edit(e) => {
+                assert_eq!(c.player, PlayerId::SCRIPT);
+                e.clone()
+            }
+            other => panic!("not an edit: {other:?}"),
+        })
+        .collect()
+}
+
+#[test]
+fn placement_and_facing_calls_queue_typed_script_edits() {
+    let s = scene();
+    let a = s.ids[0];
+    let (rt, commands) = run(
+        &s,
+        "A2.SetPosition(a, 'P'); A2.SetPosition(a, 'P', 2); A2.PointAt(a, b); A2.PointAt(a, 'F'); \
+         A2.SetAngularVelocity(a, Vector(0.1, 0.5, 0.2)); A2.SetPosition(0, 'P'); A2.PointAt(0, b); A2.SetAngularVelocity(0, Vector(0, 1, 0))",
+    );
+    assert_eq!(
+        edits(&commands),
+        vec![
+            Edit::Position(a, at(10)),
+            Edit::Position(a, at(30)),
+            // The direction from where the unit now is (30, after its queued SetPosition); the sim normalises it.
+            Edit::Heading(a, (Fixed::from_int(70), Fixed::ZERO)),
+            Edit::Heading(a, (Fixed::from_int(1970), Fixed::ZERO)),
+            // The sim's turn rate is positive from +x toward +z; the engine's yaw is the other way.
+            Edit::AngularVelocity(a, Fixed::from_f64(-0.5)),
+        ],
+        "an absent unit's calls queue nothing"
+    );
+    assert!(rt.unsupported().is_empty(), "{:?}", rt.unsupported());
+}
+
+#[test]
+fn placement_and_facing_calls_reject_bad_input_without_queuing() {
+    let s = scene();
+    for (script, key) in [
+        ("A2.SetPosition(a, 'P', 3)", "A2.SetPosition"),
+        ("A2.SetPosition(a, 'Nope')", "A2.SetPosition"),
+        ("A2.PointAt(a, 'Nope')", "A2.PointAt"),
+    ] {
+        let (rt, err) = fails(&s, script);
+        assert!(err.contains("is not available"), "{script}: {err}");
+        assert!(counted(&rt, key), "{script}");
+    }
+    for script in [
+        "A2.SetPosition(a)", "A2.SetPosition(a, 5)", "A2.SetPosition(a, 'P', 1.5)", "A2.PointAt(a, nil)",
+        "A2.SetAngularVelocity(a, 1)", "A2.SetAngularVelocity(a, Vector(0, 1/0, 0))",
+        "A2.SetAngularVelocity(a, Vector(0, 0/0, 0))",
+    ] {
+        let (_, err) = fails(&s, script);
+        assert!(err.contains("A2."), "{script}: {err}");
+    }
+    // A target at the unit's own place has no direction: counted, nothing queued, no error.
+    let (rt, commands) = run(&s, "A2.PointAt(a, a)");
+    assert!(commands.is_empty());
+    assert!(counted(&rt, "A2.PointAt"));
+}
+
+#[test]
+fn queued_placement_edits_land_in_the_sim() {
+    let mut s = scene();
+    let (a, b) = (s.ids[0], s.ids[1]);
+    let (_, commands) = run(&s, "A2.SetPosition(a, 'F', 1); A2.PointAt(a, 'P')");
+    let out = s.sim.step(&commands);
+    assert!(!out.events.iter().any(|e| matches!(e, sta_sim::SimEvent::Rejected { .. })));
+    let u = s.sim.unit(a).unwrap();
+    assert_eq!(u.pos, at(2500));
+    // From (2500, 0, 0) toward (10, 0, 0): facing -x.
+    assert_eq!(u.heading, (-Fixed::ONE, Fixed::ZERO));
+    assert_eq!(s.sim.unit(b).unwrap().pos, at(100));
+}
+
+#[test]
+fn ai_team_load_aip_queues_the_request_for_the_host() {
+    let s = scene();
+    let (rt, _) = run(&s, "A2.AI_Team_Load_AIP(2, 'x.aip'); A2.AI_Team_Load_AIP(2, 'Y.AIP')");
+    assert_eq!(rt.unsupported(), [("Player.loadAIP".to_owned(), 2)], "counted until a host takes them");
+    let got = rt.take_aip_requests();
+    assert!(rt.unsupported().is_empty());
+    assert_eq!(got.iter().map(|(_, n)| n.as_str()).collect::<Vec<_>>(), ["x.aip", "Y.AIP"]);
+    assert!(rt.take_aip_requests().is_empty(), "taken once");
 }

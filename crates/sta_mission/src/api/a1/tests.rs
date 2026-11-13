@@ -282,7 +282,7 @@ const CASES: &[(&str, &str, Expect)] = &[
     ("GetTime", "assert(A1.GetTime() >= 0)", Fine),
     ("FailMission", "A1.FailMission(1.0, 'lost')", Fine),
     ("SucceedMission", "A1.SucceedMission(1.0, 'won')", Fine),
-    ("IsCompromised", "A1.IsCompromised(a, 1)", Fail),
+    ("IsCompromised", "A1.IsCompromised(a, 1)", Fine),
     ("ObstacleAvoidence", "A1.ObstacleAvoidence(true)", Fine),
     ("PointAt", "A1.PointAt(a, b)", Fine),
     ("PointAt", "A1.PointAt(a, 'P')", Fine),
@@ -595,18 +595,36 @@ fn relations_are_a_script_override() {
 #[test]
 fn seam_gap_writes_are_retained_and_counted_without_other_effect() {
     let s = scene();
-    let (rt, commands) = run(&s, "A1.SetWarpSpeed(a, 30); A1.SetPosition(a, 'P')");
-    assert_eq!(
-        presented(&commands),
-        vec![
-            call("SetWarpSpeed", vec![Arg::Entity(s.ids[0]), Arg::Num(Fixed::from_int(30))]),
-            call("SetPosition", vec![Arg::Entity(s.ids[0]), Arg::Text("P".into())]),
-        ]
-    );
+    let (rt, commands) = run(&s, "A1.SetWarpSpeed(a, 30)");
+    assert_eq!(presented(&commands), vec![call("SetWarpSpeed", vec![Arg::Entity(s.ids[0]), Arg::Num(Fixed::from_int(30))])]);
     let unsupported: BTreeSet<String> = rt.unsupported().into_iter().map(|(k, _)| k).collect();
     assert!(unsupported.iter().any(|k| k.starts_with("A1.SetWarpSpeed")));
     // A dead target is an error, not a silent request.
     fails(&s, "A1.SetShieldPercent(999999, 0.5)");
+}
+
+#[test]
+fn set_position_and_point_at_queue_typed_edits_and_are_not_counted() {
+    let s = scene();
+    let (rt, commands) = run(&s, "A1.SetPosition(a, 'P'); A1.PointAt(a, b); A1.PointAt(a, 'Q')");
+    let edits: Vec<_> = commands.iter().map(|c| (c.player, c.kind.clone())).collect();
+    let edit = |e| (PlayerId::SCRIPT, CommandKind::Edit(e));
+    assert_eq!(
+        edits,
+        vec![
+            edit(Edit::Position(s.ids[0], Vec3::from_f32([10.0, 0.0, 0.0]))),
+            // From where the unit now is (10, after its queued SetPosition).
+            edit(Edit::Heading(s.ids[0], (Fixed::from_int(90), Fixed::ZERO))),
+            edit(Edit::Heading(s.ids[0], (Fixed::from_int(490), Fixed::ZERO))),
+        ]
+    );
+    assert!(rt.unsupported().iter().all(|(k, _)| !k.contains("SetPosition") && !k.contains("PointAt")));
+    // A target at the unit's own place has no direction: counted, nothing queued.
+    let (rt, commands) = run(&s, "A1.PointAt(a, a)");
+    assert!(commands.is_empty());
+    assert!(rt.unsupported().iter().any(|(k, _)| k.starts_with("A1.PointAt")));
+    // A path the host did not fill is an error (host data missing).
+    assert!(fails(&s, "A1.SetPosition(a, 'Nope')").contains("Nope"));
 }
 
 #[test]
@@ -629,12 +647,9 @@ fn seam_gap_queries_name_what_is_missing() {
     let s = scene();
     let message = fails(&s, "A1.InStopMode(a)");
     assert!(message.contains("not available") && message.contains("order state"), "{message}");
-    let (rt, _) = {
-        let rt = runtime(&s);
-        let _ = rt.eval::<()>("A1.IsCompromised(a, 1)");
-        (rt, ())
-    };
-    assert!(rt.unsupported().iter().any(|(k, _)| k.starts_with("A1.IsCompromised")));
+    let rt = runtime(&s);
+    let _ = rt.eval::<()>("A1.IsDerelict(a)");
+    assert!(rt.unsupported().iter().any(|(k, _)| k.starts_with("A1.IsDerelict")));
 }
 
 #[test]

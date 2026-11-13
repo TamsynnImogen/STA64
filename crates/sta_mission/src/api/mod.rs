@@ -27,7 +27,7 @@
 //!   radius}`; results ascend by id;
 //! - `Player(n)` / `Player.get(n)`, `Game.localPlayer`: `number name race
 //!   color isAI slotType maxOfficers maxCrew resources`, `getRelation`,
-//!   `setRelation`, `loadAIP` (recorded, no effect);
+//!   `setRelation`, `loadAIP` (queued for the host's AI seats, AI-06);
 //! - `Objectives.objectives:add(title | {title, description})` returning an
 //!   objective (`state title description id`, `:complete()`, `:fail()`),
 //!   `Objectives.visible`, `Objectives.count`;
@@ -43,7 +43,7 @@
 //! as the fallback for unknown fields of bound objects.
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
@@ -66,6 +66,7 @@ mod race;
 mod search;
 mod condition_monitor;
 mod player;
+mod taint;
 mod timer;
 mod objectives;
 pub(crate) mod objectives_file;
@@ -225,16 +226,39 @@ pub(crate) struct Ctx {
     pub log: Vec<String>,
     /// Orders and names the API accepted but could not carry out, by name.
     pub unsupported: BTreeMap<String, u32>,
+    /// AIP loads the script asked for, in call order; the host takes them
+    /// ([`crate::MissionRuntime::take_aip_requests`]).
     pub loaded_aips: Vec<(PlayerId, String)>,
+    /// The script's pending mission end (`SucceedMission` / `FailMission`).
+    pub mission_end: Option<MissionEnd>,
+    /// Every object id the view has shown, so a handle that never existed can
+    /// be told from one that died.
+    pub seen: BTreeSet<EntityId>,
+    /// Which answers may rest on a gap ([`taint`]).
+    pub taint: taint::Taint,
+    pub aips_taken: usize,
     pub playback: Playback,
     /// The view tick of the last `Hit` each object took (`A2.UnderAttack`).
     pub last_hit: BTreeMap<EntityId, u64>,
+}
+
+/// A requested mission end: `SucceedMission(seconds, text)` /
+/// `FailMission(seconds, text)`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MissionEnd {
+    /// Mission time (seconds) the end waits for; it happens once time is past it.
+    pub time: f64,
+    pub failed: bool,
+    /// Why the end cannot be taken as the mission's own decision.
+    pub blocked: Option<String>,
 }
 
 pub(crate) type Shared = Rc<RefCell<Ctx>>;
 
 impl Ctx {
     pub fn new(cfg: MissionConfig, seed: u64) -> Ctx {
+        let view = cfg.view.unwrap_or_default();
+        let seen = view.units.iter().map(|u| u.id).collect();
         Ctx {
             seat: cfg.seat.unwrap_or(PlayerId(0)),
             player_numbering: cfg.player_numbering,
@@ -242,7 +266,7 @@ impl Ctx {
             content: cfg.content,
             labels: cfg.labels,
             paths: cfg.paths,
-            view: cfg.view.unwrap_or_default(),
+            view,
             events: Vec::new(),
             commands: Vec::new(),
             seq: BTreeMap::new(),
@@ -264,6 +288,10 @@ impl Ctx {
             log: Vec::new(),
             unsupported: BTreeMap::new(),
             loaded_aips: Vec::new(),
+            mission_end: None,
+            seen,
+            taint: taint::Taint::default(),
+            aips_taken: 0,
             playback: Playback::default(),
             last_hit: BTreeMap::new(),
         }
@@ -284,6 +312,20 @@ impl Ctx {
 
     pub fn odf_name(&self, u: &UnitView) -> String {
         self.content.as_ref().and_then(|c| c.name(u.def)).unwrap_or_default().to_owned()
+    }
+
+    /// Where a script sees `id`: the point of its latest queued `SetPosition`
+    /// this tick, else the view's position (the engine moves the object at the
+    /// call, so a `PointAt` right after a `SetPosition` aims from the new place).
+    pub fn placed(&self, id: EntityId, view_pos: Vec3) -> Vec3 {
+        self.commands
+            .iter()
+            .rev()
+            .find_map(|c| match &c.kind {
+                CommandKind::Edit(Edit::Position(who, to)) if *who == id => Some(*to),
+                _ => None,
+            })
+            .unwrap_or(view_pos)
     }
 
     pub fn try_push(&mut self, player: PlayerId, kind: CommandKind) -> Result<u32, &'static str> {

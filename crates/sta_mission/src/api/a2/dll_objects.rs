@@ -396,9 +396,9 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
 
     // int SetSpecialForcesFlag(int, bool). Rule (exe): for a live Craft, store
     // the flag on it and return its handle; anything else returns 0 and does
-    // nothing. Setting it also detaches the craft from its AI team; no AI team
-    // exists in a mission runtime (AI is not run: Player:loadAIP is recorded
-    // only), so the flag's one consumer today is RecruitSpecialForces. A pending
+    // nothing. Setting it also detaches the craft from its AI team; the AI
+    // seats of a mission do not read the flag yet (AI-02 / SIM-58 own that
+    // consumer), so its one consumer today is RecruitSpecialForces. A pending
     // `BuildObject` token is flagged at once and the flag follows its object.
     let (c, s) = (ctx.clone(), st.clone());
     table.set(
@@ -631,7 +631,6 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
 
 /// Calls the current sim seam cannot serve, each with the reason.
 fn seams(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()> {
-    table.set("SetPosition", no_data_fn(lua, ctx, "SetPosition", "the sim command seam has no teleport edit")?)?;
     // Shield and subsystem damage edits (SIM-55): SetShieldPercent takes a
     // fraction of the maximum (as the Roots missions write `shields = 1.0`),
     // SetMaxShields the new maximum, Damage<System> points of damage.
@@ -648,7 +647,6 @@ fn seams(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()> {
     table.set("CraftCanRecrew", no_data_fn(lua, ctx, "CraftCanRecrew", "the sim has no per-craft recrew switch")?)?;
     table.set("SetName", no_data_fn(lua, ctx, "SetName", "the sim and view carry no per-object display name")?)?;
     table.set("SetPlanetCivPop", no_data_fn(lua, ctx, "SetPlanetCivPop", "the sim has no planet population edit")?)?;
-    table.set("SetAngularVelocity", no_data_fn(lua, ctx, "SetAngularVelocity", "the sim command seam has no angular-velocity edit")?)?;
     table.set("StuffIntoWormhole", no_data_fn(lua, ctx, "StuffIntoWormhole", "the sim has no wormhole transport edit")?)?;
     table.set("LinkWormholes", no_data_fn(lua, ctx, "LinkWormholes", "the sim has no wormhole link edit")?)?;
     table.set("SetWormholeDeleteOnTransport", no_data_fn(lua, ctx, "SetWormholeDeleteOnTransport", "the sim has no wormhole transport rules")?)?;

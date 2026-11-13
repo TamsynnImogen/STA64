@@ -70,6 +70,8 @@ use sta_core::{Fixed, TICK_HZ, Vec3};
 
 use crate::{Sim, Unit};
 
+mod placement;
+
 /// The movement model a profile flies by.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Model {
@@ -302,6 +304,7 @@ impl Sim {
         );
         let flows = model.flows_through_waypoints();
         let obstacles = if self.confinement.is_active() { self.obstacles() } else { Vec::new() };
+        self.step_drifting_spin();
         let db = self.content.as_deref();
         for u in self.units.iter_mut().filter(|u| u.mobile()) {
             let queued = match self.movement.course(u.id) {

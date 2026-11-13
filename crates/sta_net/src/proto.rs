@@ -33,7 +33,7 @@ use sta_sim::setup::{Control, GameOptions, PlayerSetup};
 /// First four bytes of every frame.
 pub const MAGIC: [u8; 4] = *b"S64N";
 /// Bumped whenever any message's encoding changes.
-pub const PROTOCOL_VERSION: u16 = 2;
+pub const PROTOCOL_VERSION: u16 = 3;
 /// Magic, version and body length.
 pub const HEADER_LEN: usize = 10;
 /// Largest frame, header included.
@@ -199,6 +199,25 @@ pub enum Message {
     /// Protocol 2: a peer's section digests for one turn, sent once after a
     /// digest mismatch there (NET_DECISIONS N6).
     Sections(SectionReport),
+    /// Protocol 3 (NET-04): the host offers the state of the game at a turn
+    /// boundary, to one peer that asked (a rejoin or a resync). Parts follow.
+    SnapshotOffer(SnapshotOffer),
+    /// Protocol 3: one numbered part of the offered snapshot.
+    SnapshotPart(SnapshotPart),
+    /// Protocol 3: the host will not send a snapshot, and why.
+    SnapshotRefused(SnapshotRefusal),
+    /// Protocol 3: a diverged peer asks the host for the authority's state
+    /// (NET_DECISIONS N2, N3). Not a rejoin: the connection never left.
+    ResyncRequest(ResyncRequest),
+    /// Protocol 3: a peer that loaded a snapshot says which digest it
+    /// stands at, and the host checks it against its own.
+    ResyncAck(ResyncAck),
+    /// Protocol 3: host to all after a resync: which seat, at which turn, how
+    /// often so far. Every player is told (N3); the last one lets the
+    /// peers that were stopped by the desync play on.
+    Resynced(Resynced),
+    /// Protocol 3: host to all after a rejoin: the seat is back at `turn`.
+    Arrived(Arrived),
 }
 
 /// Who may send a message, and to whom (docs/NET.md, section 9).
@@ -435,7 +454,8 @@ pub struct Start {
 impl Start {
     /// The players as the peer in seat `me` sets up its sim: its own seat
     /// is human; computer players run on the host only and arrive like
-    /// remote input everywhere else.
+    /// remote input everywhere else, but every peer keeps them as AI seats
+    /// (`Control::RemoteAi`): which seats are AI is simulation state.
     pub fn player_setups(&self, me: PlayerId) -> Vec<PlayerSetup> {
         self.seats
             .iter()
@@ -447,7 +467,7 @@ impl Start {
                     Occupant::Peer if s.slot == me => Control::Human,
                     Occupant::Peer => Control::Remote,
                     Occupant::Ai(name) if me == self.host => Control::Ai(name.clone()),
-                    Occupant::Ai(_) => Control::Remote,
+                    Occupant::Ai(name) => Control::RemoteAi(name.clone()),
                     Occupant::Idle => Control::Idle,
                 },
             })
@@ -681,6 +701,170 @@ pub struct Rejoined {
     pub rejoin_token: u64,
 }
 
+/// Most bytes of one snapshot a peer will accept (N4.2: bounded). A sim
+/// state past it is refused by the host (`SnapshotRefusal::TooLarge`), not
+/// split further.
+pub const MAX_SNAPSHOT_BYTES: usize = 8 * 1024 * 1024;
+
+/// Most bytes in one [`SnapshotPart`]: half a frame, so a part never
+/// approaches [`MAX_FRAME_BYTES`].
+pub const MAX_SNAPSHOT_PART_BYTES: usize = 32 * 1024;
+
+/// Most parts of one snapshot: `MAX_SNAPSHOT_BYTES / MAX_SNAPSHOT_PART_BYTES`.
+pub const MAX_SNAPSHOT_PARTS: u16 = 256;
+
+/// Most turn records (any seat's) that follow a snapshot: every seat's
+/// router queue is bounded by `MAX_QUEUED_TURNS` (128).
+pub const MAX_CATCH_UP_RECORDS: usize = MAX_SEATS * 128;
+
+/// Most `(sender, player)` pairs of a router's last-seen `seq` table: every
+/// seat as a sender, for every seat and the script as the player.
+pub const MAX_SEQ_SEEN: usize = MAX_SEATS * (MAX_SEATS + 1);
+
+/// Why a snapshot is sent. The two paths share the transfer and nothing else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SnapshotKind {
+    /// A seat whose connection was lost comes back (NET.md section 8).
+    Rejoin,
+    /// A peer that desynced is repaired (NET_DECISIONS N2).
+    Resync,
+}
+
+/// One seat's place in the router the snapshot belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SeatSeed {
+    pub slot: PlayerId,
+    /// The turn this seat's next record must be for.
+    pub next_turn: u32,
+    /// After a drop: the last turn the seat has a record for.
+    pub last_turn: Option<u32>,
+    /// Records of this seat that follow the snapshot as `Replayed` frames,
+    /// for turns `RouterSeed::turn` on.
+    pub queued: u16,
+}
+
+/// The last `seq` the host's router accepted from `sender` for `player`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SeqSeen {
+    pub sender: PlayerId,
+    pub player: PlayerId,
+    pub seq: u32,
+}
+
+/// What a router carries besides the sim: everything that earlier turns
+/// changed in it (delay, takeovers, last `seq`s, pending resumes) so a peer
+/// that starts from a snapshot releases the next turns exactly as the
+/// others do.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RouterSeed {
+    /// The next turn the router releases: the snapshot's turn.
+    pub turn: u32,
+    pub cfg: TurnConfig,
+    pub seats: Vec<SeatSeed>,
+    /// The seats the host speaks for besides the script.
+    pub host_speaks: Vec<PlayerId>,
+    pub seq_seen: Vec<SeqSeen>,
+    /// `Resume` messages received and not yet matched with a pause.
+    pub resumes: u32,
+}
+
+/// The host announces a snapshot of the game at `tick`, a turn boundary,
+/// before the sim runs it. Carries what the receiver verifies a loaded
+/// snapshot against: the sim digest and the section digests (N6), so a bad
+/// snapshot is refused with the differing section named.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SnapshotOffer {
+    pub kind: SnapshotKind,
+    pub tick: Tick,
+    /// `sta_sim::snapshot::FORMAT_VERSION` of the bytes.
+    pub format: u16,
+    /// `ContentDb::hash` the snapshot was taken with.
+    pub content_hash: u64,
+    /// `Sim::digest` at `tick`.
+    pub digest: u64,
+    /// `SectionDigests::values` at `tick`, at most [`MAX_SECTIONS`].
+    pub sections: Vec<u64>,
+    /// Total snapshot bytes, at most [`MAX_SNAPSHOT_BYTES`].
+    pub len: u32,
+    /// Bytes in every part but the last, `1..=MAX_SNAPSHOT_PART_BYTES`.
+    pub chunk: u32,
+    /// `len.div_ceil(chunk)`, at most [`MAX_SNAPSHOT_PARTS`].
+    pub parts: u16,
+    /// FNV-1a 64 of the bytes: catches a damaged transfer (it does not
+    /// authenticate the host; NET.md section 8).
+    pub hash: u64,
+    pub seed: RouterSeed,
+}
+
+/// One part of a snapshot, in order from 0.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SnapshotPart {
+    pub index: u16,
+    pub data: Vec<u8>,
+}
+
+/// Why the host does not send a snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SnapshotRefusal {
+    /// Another transfer is running; try again later.
+    Busy,
+    /// Asked again too soon after the last attempt.
+    RateLimited,
+    /// The seat has used its resyncs or rejoins; it is a stalled seat now
+    /// (NET_DECISIONS N4.5).
+    LimitReached,
+    /// The request does not match a known divergence from the host.
+    NotDiverged,
+    /// The state is over [`MAX_SNAPSHOT_BYTES`].
+    TooLarge,
+    /// The host could not reach a usable turn boundary in time.
+    Timeout,
+    /// This host does not serve snapshots.
+    Unsupported,
+}
+
+/// A diverged peer's request (see [`Message::ResyncRequest`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResyncRequest {
+    /// The first tick at which this peer's digest differed.
+    pub tick: Tick,
+    /// This peer's digest at `tick`.
+    pub digest: u64,
+    /// The next turn this peer's router releases. The host waits until it
+    /// holds every seat's records up to it, so nothing this peer already
+    /// consumed is lost.
+    pub position: u32,
+}
+
+/// A peer's check of a loaded snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResyncAck {
+    pub tick: Tick,
+    /// `Sim::digest` of the loaded sim.
+    pub digest: u64,
+}
+
+/// The host resynced `slot`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Resynced {
+    pub slot: PlayerId,
+    /// The turn the seat resumed at.
+    pub turn: u32,
+    /// How many times this seat has been resynced in this match.
+    pub count: u8,
+    /// No other seat is still being resynced: peers stopped by the desync
+    /// play on.
+    pub last: bool,
+}
+
+/// The host took `slot` back after a rejoin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Arrived {
+    pub slot: PlayerId,
+    /// The turn the seat resumed at.
+    pub turn: u32,
+}
+
 /// Why a peer left.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LeaveReason {
@@ -823,6 +1007,47 @@ fn turn(t: &TurnCommands) -> Result<(), ProtoError> {
     Ok(())
 }
 
+fn snapshot_offer(o: &SnapshotOffer) -> Result<(), ProtoError> {
+    few(&o.sections, MAX_SECTIONS, "too many sections")?;
+    let (len, chunk) = (o.len as usize, o.chunk as usize);
+    if len == 0 || len > MAX_SNAPSHOT_BYTES {
+        return Err(ProtoError::Invalid("snapshot size"));
+    }
+    if chunk == 0 || chunk > MAX_SNAPSHOT_PART_BYTES {
+        return Err(ProtoError::Invalid("snapshot chunk size"));
+    }
+    if o.parts == 0 || o.parts > MAX_SNAPSHOT_PARTS || usize::from(o.parts) != len.div_ceil(chunk) {
+        return Err(ProtoError::Invalid("snapshot part count"));
+    }
+    let seed = &o.seed;
+    seed.cfg.validate()?;
+    few(&seed.seats, MAX_SEATS, "too many seats")?;
+    few(&seed.host_speaks, MAX_SEATS, "too many host seats")?;
+    few(&seed.seq_seen, MAX_SEQ_SEEN, "too many seq entries")?;
+    seats_ascending(seed.seats.iter().map(|s| s.slot))?;
+    let mut records = 0usize;
+    for s in &seed.seats {
+        seat_id(s.slot)?;
+        records += usize::from(s.queued);
+        if usize::from(s.queued) > 128 {
+            return Err(ProtoError::Invalid("too many queued records"));
+        }
+    }
+    if records > MAX_CATCH_UP_RECORDS {
+        return Err(ProtoError::Invalid("too many catch-up records"));
+    }
+    for p in &seed.host_speaks {
+        seat_id(*p)?;
+    }
+    for e in &seed.seq_seen {
+        seat_id(e.sender)?;
+        if e.player != PlayerId::SCRIPT {
+            seat_id(e.player)?;
+        }
+    }
+    Ok(())
+}
+
 fn rules_part(p: &RulesPart) -> Result<(), ProtoError> {
     if p.parts == 0 || p.parts > MAX_RULE_PARTS || p.part >= p.parts {
         return Err(ProtoError::Invalid("rules part out of range"));
@@ -923,6 +1148,21 @@ impl Message {
                 seat_id(r.slot)
             }
             Message::Rejoined(_) => Ok(()),
+            Message::SnapshotOffer(o) => snapshot_offer(o),
+            Message::SnapshotPart(p) => {
+                if p.data.is_empty() || p.data.len() > MAX_SNAPSHOT_PART_BYTES {
+                    return Err(ProtoError::Invalid("snapshot part size"));
+                }
+                if p.index >= MAX_SNAPSHOT_PARTS {
+                    return Err(ProtoError::Invalid("snapshot part index"));
+                }
+                Ok(())
+            }
+            Message::SnapshotRefused(_) | Message::ResyncRequest(_) | Message::ResyncAck(_) => {
+                Ok(())
+            }
+            Message::Resynced(r) => seat_id(r.slot),
+            Message::Arrived(a) => seat_id(a.slot),
         }
     }
 
@@ -938,13 +1178,20 @@ impl Message {
             | Message::Resume { .. }
             | Message::Rejoined(_)
             | Message::Replayed(_)
-            | Message::CatchUpDone => Role::Host,
+            | Message::CatchUpDone
+            | Message::SnapshotOffer(_)
+            | Message::SnapshotPart(_)
+            | Message::SnapshotRefused(_)
+            | Message::Resynced(_)
+            | Message::Arrived(_) => Role::Host,
             Message::Hello(_)
             | Message::Rules(_)
             | Message::SeatChoice(_)
             | Message::Request(_)
             | Message::DropVote(_)
-            | Message::Rejoin(_) => Role::ToHost,
+            | Message::Rejoin(_)
+            | Message::ResyncRequest(_)
+            | Message::ResyncAck(_) => Role::ToHost,
             Message::Turn(_)
             | Message::Ping { .. }
             | Message::Pong { .. }
@@ -1544,6 +1791,98 @@ mod tests {
             }),
             Message::Leave(LeaveReason::Quit),
             Message::Leave(LeaveReason::ToShell),
+            Message::SnapshotOffer(SnapshotOffer {
+                kind: SnapshotKind::Rejoin,
+                tick: 300,
+                format: 16,
+                content_hash: 7,
+                digest: 8,
+                sections: vec![1, 2, 3, 4, 5],
+                len: 70_000,
+                chunk: 32_768,
+                parts: 3,
+                hash: 9,
+                seed: RouterSeed {
+                    turn: 100,
+                    cfg: TurnConfig {
+                        ticks_per_turn: 3,
+                        delay_turns: 2,
+                        speed_percent: 100,
+                    },
+                    seats: vec![
+                        SeatSeed {
+                            slot: PlayerId(0),
+                            next_turn: 103,
+                            last_turn: None,
+                            queued: 3,
+                        },
+                        SeatSeed {
+                            slot: PlayerId(1),
+                            next_turn: 101,
+                            last_turn: Some(100),
+                            queued: 1,
+                        },
+                    ],
+                    host_speaks: vec![PlayerId(1)],
+                    seq_seen: vec![SeqSeen {
+                        sender: PlayerId(0),
+                        player: PlayerId::SCRIPT,
+                        seq: 12,
+                    }],
+                    resumes: 1,
+                },
+            }),
+            Message::SnapshotOffer(SnapshotOffer {
+                kind: SnapshotKind::Resync,
+                tick: 3,
+                format: 16,
+                content_hash: 1,
+                digest: 2,
+                sections: vec![],
+                len: 1,
+                chunk: 1,
+                parts: 1,
+                hash: 3,
+                seed: RouterSeed {
+                    turn: 1,
+                    cfg: TurnConfig {
+                        ticks_per_turn: 3,
+                        delay_turns: 2,
+                        speed_percent: 100,
+                    },
+                    seats: vec![],
+                    host_speaks: vec![],
+                    seq_seen: vec![],
+                    resumes: 0,
+                },
+            }),
+            Message::SnapshotPart(SnapshotPart {
+                index: 2,
+                data: vec![1, 2, 3],
+            }),
+            Message::SnapshotRefused(SnapshotRefusal::Busy),
+            Message::SnapshotRefused(SnapshotRefusal::RateLimited),
+            Message::SnapshotRefused(SnapshotRefusal::LimitReached),
+            Message::SnapshotRefused(SnapshotRefusal::NotDiverged),
+            Message::SnapshotRefused(SnapshotRefusal::TooLarge),
+            Message::SnapshotRefused(SnapshotRefusal::Timeout),
+            Message::SnapshotRefused(SnapshotRefusal::Unsupported),
+            Message::ResyncRequest(ResyncRequest {
+                tick: 90,
+                digest: 5,
+                position: 31,
+            }),
+            Message::ResyncAck(ResyncAck { tick: 93, digest: 6 }),
+            Message::Resynced(Resynced {
+                slot: PlayerId(1),
+                turn: 31,
+                count: 2,
+                last: true,
+            }),
+            Message::Arrived(Arrived {
+                slot: PlayerId(1),
+                turn: 31,
+            }),
         ];
         for r in [
             Refusal::Full,
@@ -1593,7 +1932,7 @@ mod tests {
     #[test]
     fn golden_encoding_is_pinned() {
         let all: Vec<u8> = samples().iter().flat_map(|m| encode(m).unwrap()).collect();
-        assert_eq!(PROTOCOL_VERSION, 2);
+        assert_eq!(PROTOCOL_VERSION, 3);
         assert_eq!(
             fnv1a64(&all),
             GOLDEN,
@@ -1601,14 +1940,81 @@ mod tests {
         );
     }
 
-    const GOLDEN: u64 = 11462243403197721320;
+    const GOLDEN: u64 = 13647101379501485076;
+
+    /// Tags are positional and never move: NET-04 appended 22 to 28 after
+    /// `Sections` (21), the last tag of protocol 2.
+    #[test]
+    fn existing_tags_are_unmoved_and_new_ones_appended() {
+        let tag = |m: &Message| encode(m).unwrap()[HEADER_LEN];
+        let all = samples();
+        let find = |f: fn(&Message) -> bool| all.iter().find(|m| f(m)).unwrap();
+        assert_eq!(tag(find(|m| matches!(m, Message::Hello(_)))), 0);
+        assert_eq!(tag(find(|m| matches!(m, Message::Turn(_)))), 8);
+        assert_eq!(tag(find(|m| matches!(m, Message::Rejoin(_)))), 16);
+        assert_eq!(tag(find(|m| matches!(m, Message::Sections(_)))), 21);
+        assert_eq!(tag(find(|m| matches!(m, Message::SnapshotOffer(_)))), 22);
+        assert_eq!(tag(find(|m| matches!(m, Message::SnapshotPart(_)))), 23);
+        assert_eq!(tag(find(|m| matches!(m, Message::SnapshotRefused(_)))), 24);
+        assert_eq!(tag(find(|m| matches!(m, Message::ResyncRequest(_)))), 25);
+        assert_eq!(tag(find(|m| matches!(m, Message::ResyncAck(_)))), 26);
+        assert_eq!(tag(find(|m| matches!(m, Message::Resynced(_)))), 27);
+        assert_eq!(tag(find(|m| matches!(m, Message::Arrived(_)))), 28);
+    }
+
+    #[test]
+    fn snapshot_messages_refuse_out_of_bound_fields() {
+        let offer = |f: &dyn Fn(&mut SnapshotOffer)| {
+            let Message::SnapshotOffer(mut o) = samples()
+                .into_iter()
+                .find(|m| matches!(m, Message::SnapshotOffer(_)))
+                .unwrap()
+            else {
+                unreachable!()
+            };
+            f(&mut o);
+            Message::SnapshotOffer(o)
+        };
+        assert!(offer(&|_| {}).validate().is_ok());
+        for bad in [
+            offer(&|o| o.len = MAX_SNAPSHOT_BYTES as u32 + 1),
+            offer(&|o| o.len = 0),
+            offer(&|o| o.chunk = 0),
+            offer(&|o| o.chunk = MAX_SNAPSHOT_PART_BYTES as u32 + 1),
+            offer(&|o| o.parts = 2),
+            offer(&|o| o.parts = 0),
+            offer(&|o| o.sections = vec![0; MAX_SECTIONS + 1]),
+            offer(&|o| o.seed.seats[0].queued = 129),
+            offer(&|o| o.seed.seq_seen = vec![o.seed.seq_seen[0]; MAX_SEQ_SEEN + 1]),
+            offer(&|o| o.seed.cfg.ticks_per_turn = 0),
+            Message::SnapshotPart(SnapshotPart { index: 0, data: vec![] }),
+            Message::SnapshotPart(SnapshotPart {
+                index: 0,
+                data: vec![0; MAX_SNAPSHOT_PART_BYTES + 1],
+            }),
+            Message::SnapshotPart(SnapshotPart { index: MAX_SNAPSHOT_PARTS, data: vec![1] }),
+        ] {
+            assert!(bad.validate().is_err(), "{bad:?}");
+            assert!(encode(&bad).is_err());
+        }
+        // Roles: snapshots come from the host only, requests go to it.
+        assert_eq!(
+            Message::SnapshotPart(SnapshotPart { index: 0, data: vec![1] }).role(),
+            Role::Host
+        );
+        assert_eq!(
+            Message::ResyncRequest(ResyncRequest { tick: 0, digest: 0, position: 0 }).role(),
+            Role::ToHost
+        );
+        assert_eq!(Message::ResyncAck(ResyncAck { tick: 0, digest: 0 }).role(), Role::ToHost);
+    }
 
     #[test]
     fn header_is_little_endian_and_frozen() {
         let bytes = encode(&Message::Ping { nonce: 0 }).unwrap();
         // Ping is tag 12, nonce 0: two body bytes.
-        assert_eq!(bytes, [b'S', b'6', b'4', b'N', 2, 0, 2, 0, 0, 0, 12, 0]);
-        assert_eq!(version_notice(), [b'S', b'6', b'4', b'N', 2, 0, 0, 0, 0, 0]);
+        assert_eq!(bytes, [b'S', b'6', b'4', b'N', 3, 0, 2, 0, 0, 0, 12, 0]);
+        assert_eq!(version_notice(), [b'S', b'6', b'4', b'N', 3, 0, 0, 0, 0, 0]);
     }
 
     #[test]
@@ -2042,7 +2448,7 @@ mod tests {
             [
                 Control::Remote,
                 Control::Human,
-                Control::Remote,
+                Control::RemoteAi("normal".into()),
                 Control::Idle
             ]
         );
