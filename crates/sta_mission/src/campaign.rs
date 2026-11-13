@@ -1048,6 +1048,11 @@ impl ActiveMission {
         &self.sim
     }
 
+    /// The events of the last tick (what the script thinks over next).
+    pub fn last_events(&self) -> &[SimEvent] {
+        &self.events
+    }
+
     /// Queue commands (player input) for the next tick.
     pub fn submit(&mut self, commands: impl IntoIterator<Item = Command>) {
         self.pending.extend(commands);

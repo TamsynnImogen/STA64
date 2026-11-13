@@ -248,6 +248,18 @@ pub struct MissionRun {
     pub close_at: Option<u64>,
     /// `LeaveMatch` was written.
     pub leaving: bool,
+    /// Script errors already looked at (see [`is_fault`]).
+    pub errors_seen: usize,
+    /// The names of the unbound and unsupported uses behind a loss, when the mission ended in a
+    /// loss after any: it is blocked, not lost (`sta_mission::blocked`).
+    pub blocked: Option<String>,
+}
+
+/// Whether a script error is a fault that ends the script's callback (so a cineractive it would
+/// have ended may never end): every error but an edit the sim rejected, which is reported and
+/// does not raise.
+pub fn is_fault(error: &str) -> bool {
+    !error.contains("simulation rejected")
 }
 
 /// The answers to the script, from the client, and the audio acknowledgement.
@@ -328,7 +340,7 @@ fn on_start_mission(
     }
     commands.insert_resource(MapSeat(Some(launch.player().0)));
     commands.insert_resource(ActiveMatch { setup: launch.placeholder(data.content.clone()), requested: false, frames: 0 });
-    commands.insert_resource(MissionRun { campaign, mission, began: false, outcome: None, close_at: None, leaving: false });
+    commands.insert_resource(MissionRun { campaign, mission, began: false, outcome: None, close_at: None, leaving: false, errors_seen: 0, blocked: None });
     commands.insert_resource(launch);
     next.set(AppState::Loading);
 }
@@ -350,13 +362,24 @@ fn run_mission(
     handle: Res<MissionHandle>,
     link: Res<SimLink>,
     mut run: ResMut<MissionRun>,
-    mut replies: MessageReader<ScriptReply>,
+    mut replies: ParamSet<(MessageReader<ScriptReply>, MessageWriter<ScriptReply>)>,
     mut view: Option<ResMut<ObjectivesView>>,
     log: Option<Res<MissionMovieLog>>,
     mut leave: MessageWriter<LeaveMatch>,
 ) {
     let tick = link.curr().tick;
-    for r in replies.read() {
+    // A script that faults may have lost the callback that ends its cineractive: give the player
+    // the camera back (the camera, the presentation state and the script hear the same reply).
+    let faults = handle.with(|rt| {
+        let e = rt.errors();
+        (e.len(), e.iter().skip(run.errors_seen).any(|x| is_fault(x)))
+    });
+    run.errors_seen = faults.0;
+    if faults.1 {
+        warn!("mission: the script raised an error; any cineractive it holds is released");
+        replies.p1().write(ScriptReply::CineractiveSkipped);
+    }
+    for r in replies.p0().read() {
         handle.with(|rt| deliver_reply_host_side(rt, r));
     }
     if let Some(v) = view.as_mut() {
@@ -369,6 +392,14 @@ fn run_mission(
     if run.outcome.is_none()
         && let Some(o) = handle.with(|rt| scan_outcome(rt, tick))
     {
+        let gaps = handle.with(sta_mission::blocked::gaps);
+        if sta_mission::blocked::is_blocked(o.won, &gaps) {
+            let why = sta_mission::blocked::summary(&gaps);
+            warn!("mission: {} ended in a loss after unsupported calls ({why}): blocked, not counted", run.campaign);
+            run.blocked = Some(why);
+        }
+        // The mission is over: nothing it holds outlives it.
+        replies.p1().write(ScriptReply::CineractiveSkipped);
         info!("mission: {} {} at tick {tick} (closes after {}s)", run.campaign, if o.won { "won" } else { "lost" }, o.delay);
         run.close_at = Some(tick.saturating_add((o.delay.clamp(0.0, 600.0) * f64::from(TICK_HZ)).ceil() as u64));
         run.outcome = Some(o);
@@ -396,6 +427,7 @@ fn finish_mission(
     fade: Option<ResMut<crate::ui::presentation::FadeState>>,
     cineractive: Option<ResMut<crate::ui::presentation::CineractiveState>>,
     camera: Option<ResMut<crate::input::camera_cinematic::CinematicCamera>>,
+    mut notices: MessageWriter<Notice>,
 ) {
     let Some(run) = run else { return };
     commands.remove_resource::<MissionRun>();
@@ -427,6 +459,11 @@ fn finish_mission(
     }
     let result = match run.outcome {
         Some(o) if o.won => RunResult::Won,
+        // Blocked: STA64 could not do what the script needed, so the player did not lose.
+        Some(_) if run.blocked.is_some() => {
+            notices.write(Notice::new(Severity::Warn, format!("This mission cannot be finished yet: its script reached calls STA64 does not support ({}). It was not counted as a loss.", run.blocked.as_deref().unwrap_or_default())));
+            RunResult::Abandoned
+        }
         Some(_) => RunResult::Lost,
         None => RunResult::Abandoned,
     };
@@ -565,7 +602,14 @@ impl Plugin for MissionHostPlugin {
                 Update,
                 (
                     on_start_mission.run_if(in_state(AppState::FrontEnd)).run_if(resource_exists::<ScreenData>),
-                    run_mission.run_if(in_state(AppState::InGame)).run_if(resource_exists::<MissionHandle>).run_if(resource_exists::<MissionRun>).run_if(resource_exists::<SimLink>),
+                    // Before the presentation systems, so a release it writes is applied in the same
+                    // frame, ahead of anything the sim raises in the next.
+                    run_mission
+                        .run_if(in_state(AppState::InGame))
+                        .run_if(resource_exists::<MissionHandle>)
+                        .run_if(resource_exists::<MissionRun>)
+                        .run_if(resource_exists::<SimLink>)
+                        .before(crate::ui::presentation::consume),
                 )
                     .in_set(GameSet::Ui),
             );
