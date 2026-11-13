@@ -20,7 +20,33 @@ pub(crate) struct SpawnStore {
     next: u64,
     outstanding: BTreeMap<u64, Rc<SpawnHandle>>,
     actions: Vec<QueuedAction>,
+    /// Entities removed by the script since the last tick's receipts: (def, owner, place, label).
+    /// A spawn of the same def for the same owner at the same place takes the label over.
+    removed: Vec<(ContentKey, PlayerId, Vec3, String)>,
+    /// Entities the script removed since the last tick's receipts: gone to `EntityFinder` at once.
+    killed: BTreeSet<EntityId>,
 }
+
+/// Spawns the script has asked for that the sim has not answered yet. `EntityFinder` lists them
+/// after the live units: the original adds an entity at once, and scripts look it up right after
+/// `Entity.add` (a Roots mission does, then sets its crew and shields).
+pub(super) fn pending_spawns(c: &Ctx) -> Vec<Rc<SpawnHandle>> {
+    c.spawns
+        .outstanding
+        .values()
+        .filter(|h| matches!(h.state.get(), SpawnStatus::Queued | SpawnStatus::Submitted(_)))
+        .cloned()
+        .collect()
+}
+
+/// Whether the script removed `id` since the last tick's receipts.
+pub(super) fn is_killed(c: &Ctx, id: EntityId) -> bool {
+    c.spawns.killed.contains(&id)
+}
+
+/// How near (squared, sim units) a spawn must be to a removed entity's place to replace it. The
+/// script's position went through floating point on its way back.
+const REPLACE_RADIUS_SQ: f64 = 1.0;
 
 struct QueuedAction {
     actor: EntityRef,
@@ -91,11 +117,25 @@ pub(super) fn queue_spawn(c: &mut Ctx, odf: ContentKey, owner: PlayerId, pos: Ve
             heading,
         }),
     )?;
+    // MMM scripts replace a unit with `Entity.remove(u) ; Entity.add(u.odf, owner, u.position)` and
+    // go on to find it by its map label. The label belongs to the place the unit held, so the
+    // replacement takes it (rule inferred from a shipped Roots mission, not measured on the original).
+    let near = |a: Vec3, b: Vec3| {
+        let (dx, dz) = (f64::from(a.x.to_f32()) - f64::from(b.x.to_f32()), f64::from(a.z.to_f32()) - f64::from(b.z.to_f32()));
+        dx * dx + dz * dz < REPLACE_RADIUS_SQ
+    };
+    let inherit_label = c
+        .spawns
+        .removed
+        .iter()
+        .position(|(def, who, at, _)| *def == odf && *who == owner && near(*at, pos))
+        .map(|i| c.spawns.removed.remove(i).3);
     let handle = Rc::new(SpawnHandle {
         request,
         seq,
         hint,
         state: Cell::new(SpawnStatus::Queued),
+        inherit_label,
     });
     c.spawns.next = request;
     c.spawns.outstanding.insert(request, handle.clone());
@@ -143,6 +183,8 @@ pub(super) fn queue_action(c: &mut Ctx, actor: EntityRef, action: EntityAction) 
 /// Called after replacing the view/events, before any Lua callbacks. WorldSource
 /// must deliver the complete events of a submitted batch on the next view.
 pub(super) fn process(c: &mut Ctx) {
+    c.spawns.removed.clear();
+    c.spawns.killed.clear();
     let mut receipts: BTreeMap<u64, Vec<EntityId>> = BTreeMap::new();
     let mut ids: BTreeMap<EntityId, usize> = BTreeMap::new();
     let mut rejected = BTreeSet::new();
@@ -190,6 +232,9 @@ pub(super) fn process(c: &mut Ctx) {
                 // Keep the actual ID even if a later command killed it in
                 // this tick. Liveness comes from the view; actions below drop.
                 handle.state.set(SpawnStatus::Resolved(id));
+                if let Some(label) = &handle.inherit_label {
+                    c.labels.insert(id, label.clone());
+                }
             }
             None => {
                 handle.state.set(SpawnStatus::Failed);
@@ -232,7 +277,16 @@ fn edit(c: &mut Ctx, value: Edit) -> bool {
 fn dispatch(c: &mut Ctx, actor: EntityRef, action: EntityAction) -> bool {
     let Some(id) = actor.id() else { return false };
     match action {
-        EntityAction::Remove => edit(c, Edit::Kill(id)),
+        EntityAction::Remove => {
+            c.spawns.killed.insert(id);
+            if let Some(u) = c.alive(id)
+                && let Some(label) = c.labels.get(&id)
+            {
+                let row = (u.def, u.owner, u.pos, label.clone());
+                c.spawns.removed.push(row);
+            }
+            edit(c, Edit::Kill(id))
+        }
         EntityAction::Immortal(on) => edit(c, Edit::Immortal(id, on)),
         EntityAction::ForceOntoMap(enabled) => {
             if c.alive(id).is_none() { return false; }

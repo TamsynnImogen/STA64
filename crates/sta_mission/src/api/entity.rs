@@ -45,6 +45,10 @@ pub(crate) fn is_type(class: &str, t: &str) -> bool {
                 // Parsed ODF craft labels include static sensors and yards.
                 // Producer/Shipyard/Starbase also inherit Craft in the binding metadata.
                 | "sensor" | "shipyard" | "starbase" | "miningstation"
+                // A Roots mission (Politics by Other Means) finds its `research`-class relay station
+                // with `Entity.Type.Craft` and sets its crew, shields and hull (read from data:
+                // the shipped script; the class tree itself not measured).
+                | "research"
         ),
         "producer" => matches!(class.as_str(), "shipyard" | "starbase" | "miningstation"),
         "shipyard" => class == "starbase",
@@ -52,8 +56,8 @@ pub(crate) fn is_type(class: &str, t: &str) -> bool {
     }
 }
 
-fn entity_value(lua: &Lua, ctx: &Shared, id: EntityId) -> mlua::Result<Value> {
-    Ok(Value::UserData(lua.create_userdata(Entity { key: EntityRef::Existing(id), ctx: ctx.clone() })?))
+fn entity_ref_value(lua: &Lua, ctx: &Shared, key: EntityRef) -> mlua::Result<Value> {
+    Ok(Value::UserData(lua.create_userdata(Entity { key, ctx: ctx.clone() })?))
 }
 
 impl UserData for Entity {
@@ -197,6 +201,13 @@ impl UserData for Entity {
             ("movementAutonomy", "a sim autonomy edit"),
             ("specialWeaponAutonomy", "a sim autonomy edit"),
             ("name", "a sim SetName edit"),
+            // Maximum crew, shield and hull as a script sets them (WORKPLAN SIM-54 / SIM-55 rows; a
+            // Roots mission raises its relay station's maxima in its intro): the intro must not
+            // abort at the first such assignment.
+            ("maxCrew", "a sim maximum-crew edit"),
+            ("maxShields", "a sim maximum-shield edit"),
+            ("maxHull", "a sim maximum-hull edit"),
+            ("hullValue", "a sim hull edit"),
         ] {
             f.add_field_method_set(name, move |_, e, _: Value| {
                 e.ctx.borrow_mut().unsupported(&format!("Entity.{name} = x (needs {need})"));
@@ -214,7 +225,12 @@ impl UserData for Entity {
         f.add_field_method_get("class", |_, e| {
             Ok(e.with(|c, u| u.and_then(|u| c.def(u)).map(|d| d.class.0.clone()).unwrap_or_default()))
         });
-        f.add_field_method_get("label", |_, e| Ok(e.key.id().and_then(|id| e.ctx.borrow().labels.get(&id).cloned())));
+        f.add_field_method_get("label", |_, e| {
+            Ok(match &e.key {
+                EntityRef::Spawn(h) if e.key.pending() => h.inherit_label.clone(),
+                key => key.id().and_then(|id| e.ctx.borrow().labels.get(&id).cloned()),
+            })
+        });
         f.add_field_method_get("cloaked", |_, e| {
             Ok(e.with(|_, u| u.is_some_and(|u| u.flags.contains(UnitFlags::CLOAKED))))
         });
@@ -337,7 +353,7 @@ fn validate_owner_filter(ctx: &Shared, value: &Value, owner: Option<sta_core::Pl
     Ok(())
 }
 
-fn find(lua: &Lua, ctx: &Shared, filter: &Value, predicate: Option<&mlua::Function>) -> mlua::Result<Vec<EntityId>> {
+fn find(lua: &Lua, ctx: &Shared, filter: &Value, predicate: Option<&mlua::Function>) -> mlua::Result<Vec<EntityRef>> {
     let ci = |a: &str, b: &str| a.eq_ignore_ascii_case(b);
     let (mut label, mut odf, mut class, mut ty, mut owner) = (None, None, None, None, None);
     let mut any_name: Option<String> = None;
@@ -367,46 +383,53 @@ fn find(lua: &Lua, ctx: &Shared, filter: &Value, predicate: Option<&mlua::Functi
     // Filter fields may execute Lua and queue edits. Borrow the view only
     // after all such lookups finish, as with the predicates below.
     let c = ctx.borrow();
-    let mut out = Vec::new();
-    for u in &c.view.units {
-        if u.flags.contains(UnitFlags::DYING) {
-            continue;
-        }
-        let lab = c.labels.get(&u.id).map(String::as_str);
+    let pass = |u: &UnitView, lab: Option<&str>| -> bool {
         let def = c.def(u);
         let name = c.odf_name(u);
         let cls = def.map(|d| d.class.0.as_str()).unwrap_or("");
         if any_name.as_ref().is_some_and(|a| !(lab.is_some_and(|l| ci(l, a)) || ci(odf_stem(&name), odf_stem(a)) || ci(cls, a))) {
-            continue;
+            return false;
         }
         if label.as_deref().is_some_and(|l| !lab.is_some_and(|x| ci(x, l))) {
-            continue;
+            return false;
         }
         if odf.as_deref().is_some_and(|o| !ci(odf_stem(&name), odf_stem(o))) {
-            continue;
+            return false;
         }
         if class.as_deref().is_some_and(|k| !ci(cls, k)) {
-            continue;
+            return false;
         }
         if ty.as_deref().is_some_and(|t| !is_type(cls, t)) {
-            continue;
+            return false;
         }
         if owner.is_some_and(|o| u.owner != o) {
+            return false;
+        }
+        !circle.is_some_and(|(p, r)| dist(pos_f64(u.pos), p) > r)
+    };
+    let mut out = Vec::new();
+    for u in &c.view.units {
+        if u.flags.contains(UnitFlags::DYING) || spawn::is_killed(&c, u.id) {
             continue;
         }
-        if circle.is_some_and(|(p, r)| dist(pos_f64(u.pos), p) > r) {
-            continue;
+        if pass(u, c.labels.get(&u.id).map(String::as_str)) {
+            out.push(u.id);
         }
-        out.push(u.id);
+    }
+    out.sort();
+    let mut out: Vec<EntityRef> = out.into_iter().map(EntityRef::Existing).collect();
+    for h in spawn::pending_spawns(&c) {
+        if pass(&h.hint, h.inherit_label.as_deref()) {
+            out.push(EntityRef::Spawn(h));
+        }
     }
     drop(c);
-    out.sort();
     if predicate.is_none() && filter.as_function().is_none() { return Ok(out); }
     // Lua predicates may query entities or queue commands. Never retain a
     // context borrow while calling them, and snapshot candidate IDs first.
     let mut matched = Vec::new();
-    for id in out {
-        let entity = entity_value(lua, ctx, id)?;
+    for key in out {
+        let entity = entity_ref_value(lua, ctx, key.clone())?;
         let mut keep = true;
         for predicate in [predicate, filter.as_function()].into_iter().flatten() {
             if !predicate.call::<bool>(entity.clone())? {
@@ -414,7 +437,7 @@ fn find(lua: &Lua, ctx: &Shared, filter: &Value, predicate: Option<&mlua::Functi
                 break;
             }
         }
-        if keep { matched.push(id); }
+        if keep { matched.push(key); }
     }
     Ok(matched)
 }
@@ -435,10 +458,10 @@ fn finder_methods(lua: &Lua, ctx: &Shared, predicate: Option<mlua::Function>) ->
     finder.set(
         "find",
         lua.create_function(move |lua, args: MultiValue| {
-            let ids = find(lua, &c, &filter_arg(&args), pred.as_ref())?;
+            let found = find(lua, &c, &filter_arg(&args), pred.as_ref())?;
             let t = lua.create_table()?;
-            for (i, id) in ids.into_iter().enumerate() {
-                t.set(i + 1, entity_value(lua, &c, id)?)?;
+            for (i, key) in found.into_iter().enumerate() {
+                t.set(i + 1, entity_ref_value(lua, &c, key)?)?;
             }
             Ok(t)
         })?,
@@ -446,8 +469,8 @@ fn finder_methods(lua: &Lua, ctx: &Shared, predicate: Option<mlua::Function>) ->
     let c = ctx.clone();
     finder.set(
         "findOne",
-        lua.create_function(move |lua, args: MultiValue| match find(lua, &c, &filter_arg(&args), predicate.as_ref())?.first() {
-            Some(&id) => entity_value(lua, &c, id),
+        lua.create_function(move |lua, args: MultiValue| match find(lua, &c, &filter_arg(&args), predicate.as_ref())?.into_iter().next() {
+            Some(key) => entity_ref_value(lua, &c, key),
             None => Ok(Value::Nil),
         })?,
     )?;

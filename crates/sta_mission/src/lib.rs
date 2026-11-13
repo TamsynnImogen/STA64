@@ -38,6 +38,7 @@ impl Labels {
 }
 
 pub mod api;
+pub mod blocked;
 pub mod campaign;
 pub mod math;
 pub mod progress;

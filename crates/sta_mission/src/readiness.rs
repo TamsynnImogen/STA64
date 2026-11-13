@@ -32,6 +32,11 @@ pub fn classify(counted: &[(String, u32)]) -> (Counted, Counted) {
 /// entry (calls that raise their counted reason, e.g. an order sent to a
 /// handle that is still being built).
 pub fn is_unsupported_stop(error: &str, unsupported: &[(String, u32)]) -> bool {
+    // An edit the sim rejected is reported as `<call>: simulation rejected <edit>` and does not
+    // raise; the counted entry is `<call>: simulation rejected edit`, which the full text never contains.
+    if error.contains(": simulation rejected ") {
+        return true;
+    }
     if unsupported.iter().any(|(k, _)| !k.starts_with(STUB_PREFIX) && error.contains(k.as_str())) {
         return true;
     }
@@ -279,6 +284,8 @@ mod tests {
         assert!(!is_unsupported_stop("A2.Stop argument 1 must be an unsigned integer handle", &counted));
         assert!(!is_unsupported_stop("attempt to index a nil value (stub global Baz)", &counted));
         assert!(!is_unsupported_stop("thing is not available", &counted));
+        // The sim's rejection of an edit (SIM-54: an officer limit above the rule) is a gap, not an error.
+        assert!(is_unsupported_stop("Player.maxOfficers: simulation rejected SCRIPT seq 3 MaxOfficers(PlayerId(0), Fixed(1))", &[]));
 
         let mut p = MissionProbe { kind: "lua".into(), started: true, errors: vec![gap.into()], unsupported: counted[..1].to_vec(), ..Default::default() };
         assert!(p.runs() && p.bound() && !p.working());
