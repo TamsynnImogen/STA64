@@ -510,9 +510,17 @@ hit tick per object). `IsAudioMessageDone` / `IsMoviePlaying` follow
 
 Bound but raising (counted in `unsupported()` as `A2.<Name>: <why>`, never a
 guessed value): `CountCapitalShips` (no capital-ship class in the content
-data), `IsCompromised`, `IsShipAliveAndOffMap`, `IsCargoShipReadyToLoad`,
-`IsCargoShipFullAndReadyToSend`, `GetLatinumTraded` (no cargo, off-map,
-trade or "compromised" state in the world view).
+data), `IsShipAliveAndOffMap`, `IsCargoShipReadyToLoad`,
+`IsCargoShipFullAndReadyToSend`, `GetLatinumTraded` (no cargo, off-map or
+trade state in the world view).
+
+`IsCompromised(object, team)` (LUA-12) is true when the object has been lost
+to `team`: gone or dying, not a craft or station, a derelict (crew under one
+with a positive maximum), or owned by another team than `team` (numbered like
+`GetRealTeam`). Read from the executable, static; not measured. Approximated:
+the engine's derelict latch (the `CraftCannotDie` exemption, clearing only
+when crew returns to one) and the original owner during a temporary takeover
+(listed on SIM-59; `GetRealTeam` has the same approximation).
 
 Evidence: signatures and argument constants read from the executable and the
 rule DLLs, static. The team / radius / ODF-filter readings follow the `A1`
