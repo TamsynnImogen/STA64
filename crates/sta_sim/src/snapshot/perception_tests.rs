@@ -32,6 +32,7 @@ fn split(bytes: &[u8]) -> (Body, Option<(Vec3, Vec3)>, BoundaryRec, PerceptionRe
     assert!(scripted.rows.is_empty());
     let (switches, rest): (SwitchesRec, _) = postcard::take_from_bytes(rest).unwrap();
     assert!(switches.rows.is_empty());
+    let (_, rest): (crate::attrs::AttrsRec, _) = postcard::take_from_bytes(rest).unwrap();
     assert!(rest.is_empty());
     (body, bounds, boundary, perception)
 }
@@ -58,6 +59,7 @@ fn join(
     out.extend(postcard::to_allocvec(&WatchRec { version: 1, rows: Vec::new() }).unwrap());
     out.extend(postcard::to_allocvec(&ScriptedRec { version: 1, rows: Vec::new() }).unwrap());
     out.extend(postcard::to_allocvec(&SwitchesRec { version: 1, rows: Vec::new() }).unwrap());
+    out.extend(postcard::to_allocvec(&crate::attrs::AttrsRec { version: 1, races: Vec::new(), player_races: Vec::new() }).unwrap());
     out
 }
 

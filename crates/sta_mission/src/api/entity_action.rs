@@ -34,6 +34,82 @@ pub(crate) enum EntityAction {
     Hull(f64),
     ForceOntoMap(bool),
     PerceivedTeam(PlayerId),
+    /// A numeric or text attribute edit (SIM-54/55/57), held for a pending spawn like the others.
+    Attr(AttrEdit),
+}
+
+/// An attribute assignment of the Roots `Entity` binding (and the A2/A1 setters of the same
+/// rules) as a value that waits for a pending spawn's id and then becomes one sim edit.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum AttrEdit {
+    MaxHull(f64),
+    HullValue(f64),
+    MaxCrew(f64),
+    Crew(f64),
+    MaxShields(f64),
+    /// A fraction of the maximum (`Entity.shields =`).
+    Shields(f64),
+    Name(String),
+    Race(String),
+    /// A horizontal direction (x, z), already scaled into range.
+    Heading(f64, f64),
+    Omega(f64),
+}
+
+impl AttrEdit {
+    /// The call's name in counted feedback.
+    pub(crate) fn label(&self) -> &'static str {
+        match self {
+            Self::MaxHull(_) => "Entity.maxHull",
+            Self::HullValue(_) => "Entity.hullValue",
+            Self::MaxCrew(_) => "Entity.maxCrew",
+            Self::Crew(_) => "Entity.crew",
+            Self::MaxShields(_) => "Entity.maxShields",
+            Self::Shields(_) => "Entity.shields",
+            Self::Name(_) => "Entity.name",
+            Self::Race(_) => "Entity.race",
+            Self::Heading(..) => "Entity.forward",
+            Self::Omega(_) => "Entity.omega",
+        }
+    }
+
+    /// What a read of the attribute shows until the sim's view does.
+    /// The value as the sim will hold it (its clamps applied), or `None` when the sim ignores the
+    /// assignment (a negative maximum hull), so a read-back never shows what the sim will not have.
+    pub(super) fn overlay(&self) -> Option<super::spawn::Overlay> {
+        use super::spawn::Overlay::{Num, Text};
+        Some(match self {
+            Self::MaxHull(v) if *v < 0.0 => return None,
+            Self::MaxHull(v) | Self::MaxCrew(v) | Self::MaxShields(v) => Num(v.clamp(0.0, 1e9)),
+            Self::HullValue(v) => Num(v.clamp(0.0, 1e9)),
+            Self::Shields(v) => Num(v.clamp(0.0, 1.0)),
+            Self::Crew(v) => Num(v.clamp(0.0, 1e9)),
+            Self::Omega(v) => Num(*v),
+            Self::Heading(x, _) => Num(*x),
+            // The sim rejects a name over its limit and an empty one clears it.
+            Self::Name(s) if s.len() > sta_sim::switches::MAX_NAME_BYTES => return None,
+            Self::Name(s) => Text(s.clone()),
+            Self::Race(s) => Text(s.clone()),
+        })
+    }
+
+    /// The sim edit for the resolved unit.
+    pub(crate) fn edit(&self, id: sta_core::EntityId) -> sta_sim::command::Edit {
+        use sta_core::Fixed;
+        use sta_sim::command::Edit;
+        match self {
+            Self::MaxHull(v) => Edit::MaxHull(id, Fixed::from_f64(*v)),
+            Self::HullValue(v) => Edit::HullValue(id, Fixed::from_f64(*v)),
+            Self::MaxCrew(v) => Edit::MaxCrew(id, Fixed::from_f64(*v)),
+            Self::Crew(v) => Edit::UnitCrew(id, Fixed::from_f64(*v)),
+            Self::MaxShields(v) => Edit::MaxShieldsKeep(id, Fixed::from_f64(*v)),
+            Self::Shields(v) => Edit::ShieldPercent(id, Fixed::from_f64(*v)),
+            Self::Name(s) => Edit::Name(id, s.clone()),
+            Self::Race(s) => Edit::UnitRace(id, s.clone()),
+            Self::Heading(x, z) => Edit::Heading(id, (Fixed::from_f64(*x), Fixed::from_f64(*z))),
+            Self::Omega(v) => Edit::AngularVelocity(id, Fixed::from_f64(*v)),
+        }
+    }
 }
 
 impl EntityAction {
@@ -52,7 +128,8 @@ impl EntityAction {
             | Self::Cloak(_)
             | Self::Hull(_)
             | Self::ForceOntoMap(_)
-            | Self::PerceivedTeam(_) => Vec::new(),
+            | Self::PerceivedTeam(_)
+            | Self::Attr(_) => Vec::new(),
         }
     }
 }
