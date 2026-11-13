@@ -485,14 +485,18 @@ sta-bench pair move --game a2 --refit-out <earlier>/refit --install ...   # reus
   names; fire bursts merged per shooter and weapon as Refit marks them; one
   `ord.new` per shot; a `state` line per named object every tick), `run.json`,
   and the frames (next bullet).
-- **The map.** The original always loads the map it was launched on, so STA64
-  loads the same: the pair's `Map=` (in `[Pair]`, per game if need be), else the
-  map `Launch=` names (`-nointro a2_borg01` -> `a2_borg01`; `... -mod "X"
-  fulltech.bzn` -> `fulltech`; the value after `-mod` is not a map). The scene
-  STA64 runs gets `Map=<name>` and `MapObjects=keep` in `[Scene]` unless the file
-  sets them itself, so the map's own objects are there as they are on the
-  original (a hand-made scene that wants a clean stage sets `MapObjects=strip`).
-  A pair with no map and no `Launch=` runs on STA64's empty map, as before.
+- **The map.** The original always loads the map it was launched on, so the
+  frames STA64 draws load the same: the pair's `Map=` (in `[Pair]`, per game if
+  need be), else the map `Launch=` names (`-nointro a2_borg01` -> `a2_borg01`;
+  `... -mod "X" fulltech.bzn` -> `fulltech`; the value after `-mod` is not a map).
+  The scene the frame run uses gets `Map=<name>` and `MapObjects=keep` in `[Scene]`
+  unless the file sets them itself (a hand-made scene that wants a clean stage sets
+  `MapObjects=strip`). The map's own objects are therefore in the frames, **including
+  ones the original does not draw** (it draws only objects in the camera's quadrant),
+  so a station or a ring at the edge of a frame is not a bug. The measuring run
+  (`Scene.marks`, `state`) keeps STA64's empty map: the map's own units fight and
+  would change what a scene measures, and the original's marks name only the scene's
+  objects. A pair with no map and no `Launch=` draws on the empty map, as before.
 - **Frames from the install** (`sta64 --headless --scene S --frames T,.. --install-root R
   [--mod M] --install-content`, what `sta-bench pair` starts; `--sta64`/`$STA64_BIN`).
   The bench's sim is built on the install's content with the pair's map, and what

@@ -307,16 +307,18 @@ impl PairDesc {
     /// The scene STA64 runs: this game's keys, then `extra` (`fake` for the
     /// bench's fake content) on top.
     ///
-    /// Unless `extra` has `fake` (the bench's fake content has no such map), a pair
-    /// that names a map (`map`) gets `Map=` and `MapObjects=keep` in `[Scene]`: the
-    /// original always has the launch map's own objects, so STA64 has them too.
-    /// Keys the file sets itself stay.
+    /// With `map` in `extra`, a pair that names a map (`PairDesc::map`) gets `Map=` and
+    /// `MapObjects=keep` in `[Scene]`: the original always has the launch map's own
+    /// objects, so the frames STA64 draws have them too. Keys the file sets itself stay.
+    /// The measuring run (marks, states) leaves `map` out: the map's own units fight and
+    /// would change what a scene measures, and the original's marks name only the scene's
+    /// objects.
     pub fn scene_text(&self, extra: &[&str]) -> String {
         let mut g = vec![self.game.as_str()];
         g.extend_from_slice(extra);
         let text = materialize(&self.text, &g);
         match &self.map {
-            Some(m) if !extra.contains(&"fake") => with_map(&text, m),
+            Some(m) if extra.contains(&"map") => with_map(&text, m),
             _ => text,
         }
     }
@@ -1525,14 +1527,15 @@ mod tests {
         assert_eq!(e.map.as_deref(), Some("a2_other"));
         assert_eq!(PairDesc::parse("p", PAIR, "a2").unwrap().map, None);
         // The scene text gets `Map=` and `MapObjects=keep` after `[Scene]`, once, unless the file says; never on fake content.
-        let s = a.scene_text(&[]);
+        assert!(!a.scene_text(&[]).contains("Map="));
+        let s = a.scene_text(&["map"]);
         assert!(s.contains("[Scene]\nMap=a2_borg01\nMapObjects=keep\n"), "{s}");
         let parsed = SceneFile::parse(&s).unwrap();
         assert_eq!(parsed.scene.map.as_deref(), Some("a2_borg01"));
         assert_eq!(parsed.map_objects(), crate::parse::scene::MapObjects::Keep);
         assert!(!a.scene_text(&["fake"]).contains("Map="));
         let own = text.replace("[Scene]\n", "[Scene]\nMapObjects=strip\n");
-        let s = PairDesc::parse("p", &own, "a2").unwrap().scene_text(&[]);
+        let s = PairDesc::parse("p", &own, "a2").unwrap().scene_text(&["map"]);
         assert!(s.contains("Map=a2_borg01") && s.contains("MapObjects=strip") && !s.contains("MapObjects=keep"), "{s}");
     }
 

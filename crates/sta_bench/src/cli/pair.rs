@@ -89,7 +89,7 @@ fn sta64_frames(o: &Opts, desc: &PairDesc, sched: &[pair::Timed], times: &[f64],
     let none = vec![None; times.len()];
     let ticks: Vec<u64> = times.iter().map(|t| pair::tick_of(*t)).collect();
     let scene = sta_dir.join("Scene.frames.ini");
-    if let Err(e) = fs::write(&scene, desc.scene_text(if install.is_some() { &[] } else { &["fake"] })) {
+    if let Err(e) = fs::write(&scene, desc.scene_text(if install.is_some() { &["map"] } else { &["fake"] })) {
         return (none, e.to_string());
     }
     let fdir = sta_dir.join("frames");

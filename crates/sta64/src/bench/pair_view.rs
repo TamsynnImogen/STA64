@@ -144,3 +144,44 @@ fn place_camera(bench: ResMut<BenchRes>, view: Res<View>, mut main: Query<(&mut 
     let Some(mut best) = main.iter_mut().max_by_key(|(_, c)| c.order) else { return };
     *best.0 = Transform::from_translation(eye).looking_at(look, Vec3::Y);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sta_sim::WorldSource;
+
+    /// With `STA64_TEST_INSTALL` (+ `STA64_TEST_MOD`, `STA64_TEST_MAP`, default the install's
+    /// first map): the map view draws the BZN's objects against the ids of *its own* sim of
+    /// the map (`map::build_sim`), and the bench's views (which replace that sim as the
+    /// link's source) must name the same objects by the same ids, with the same definition,
+    /// owner and place, or the map's ships would be drawn as another unit. Unit by unit.
+    #[test]
+    fn the_bench_sim_of_a_map_has_the_map_views_entity_ids() {
+        let Ok(root) = std::env::var("STA64_TEST_INSTALL") else { return };
+        let mod_name = std::env::var("STA64_TEST_MOD").ok().filter(|m| !m.is_empty());
+        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), mod_name.as_deref()).expect("mount");
+        let map_name = std::env::var("STA64_TEST_MAP").unwrap_or_else(|_| crate::map::browser(&vfs, None, String::new()).maps[0].clone());
+        let mut catalogue = crate::map::Catalogue::default();
+        let c = catalogue.content(&vfs).expect("content");
+        let (db, index) = (c.db.clone(), c.index.clone());
+        let data = vfs.read(&format!("bzn/{map_name}.bzn")).or_else(|| vfs.read(&format!("bzn/{map_name}.sol"))).expect("map file").expect("read");
+        let bzn = sta_bzn::parse(&data).expect("parse");
+        let side = crate::map::build_sim(&bzn, &map_name, &db, &index, &vfs, None, None);
+        let theirs = side.sim.view();
+
+        let cfg = sta_bench::pair::install_config(std::path::Path::new(&root), mod_name.as_deref(), std::slice::from_ref(&map_name)).expect("config");
+        let scene = SceneFile::parse(&format!("[Scene]\nMap={map_name}\nMapObjects=keep\n")).expect("scene");
+        let bench = sta_bench::run::Bench::build(Arc::new(cfg), &scene).expect("bench");
+        let ours = bench.view();
+
+        assert!(!theirs.units.is_empty(), "{map_name} has units");
+        let mut bad = Vec::new();
+        for u in &theirs.units {
+            match ours.unit(u.id) {
+                Some(o) if o.def == u.def && o.owner == u.owner && o.pos == u.pos => {}
+                other => bad.push((u.id, u.def, other.map(|o| o.def))),
+            }
+        }
+        assert!(bad.is_empty(), "{} of {} units of {map_name} differ between the map view's sim and the bench's: {:?}", bad.len(), theirs.units.len(), &bad[..bad.len().min(5)]);
+    }
+}
