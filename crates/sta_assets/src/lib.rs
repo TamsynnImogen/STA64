@@ -79,7 +79,7 @@ const MODEL_DIRS: [&str; 1] = ["sod"];
 /// Only a known file extension is stripped: the sky domes' textures are named
 /// `MbgDom1.3` (the dot is part of the name; `MbgDom1.3.tga` is the file).
 fn stem(name: &str) -> &str {
-    const EXTS: [&str; 15] = ["tga", "bmp", "dds", "png", "jpg", "jpeg", "sod", "m3d", "glb", "gltf", "odf", "spr", "wav", "ogg", "mp3"];
+    const EXTS: [&str; 16] = ["ktx2", "tga", "bmp", "dds", "png", "jpg", "jpeg", "sod", "m3d", "glb", "gltf", "odf", "spr", "wav", "ogg", "mp3"];
     let base = name.rsplit(['/', '\\']).next().unwrap_or(name);
     match base.rfind('.') {
         Some(i) if i > 0 && EXTS.iter().any(|e| base[i + 1..].eq_ignore_ascii_case(e)) => &base[..i],
