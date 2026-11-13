@@ -142,6 +142,8 @@ pub struct Sim {
     specials: specials::Specials,
     /// Craft autonomy levels that were set (SIM-38); in the digest once any exists.
     autonomy: autonomy::Autonomy,
+    /// Crafts in warp on an attack approach (SIM-36); in the digest once any is.
+    approach_warp: movement::approach::Warp,
     /// Pending start-helper lifecycle steps (SIM-28); in the digest once any exist.
     start_effects: start_effects::StartEffects,
     /// Path planner grids and fields (SIM-23): a memo, not in the digest.
@@ -171,6 +173,7 @@ impl Sim {
             victory: Default::default(),
             specials: Default::default(),
             autonomy: Default::default(),
+            approach_warp: Default::default(),
             start_effects: Default::default(),
             nav: Default::default(),
         }
@@ -240,6 +243,9 @@ impl Sim {
                     .filter(|id| !self.production.is_welding(*id)).collect();
                 if unlocked.is_empty() { return false; }
                 if !queue {
+                    // A move replaces an attack (SIM-36: the approach would
+                    // otherwise steer the craft back to its target).
+                    self.weapons.stop_attack(&self.units, c.player, &unlocked);
                     self.economy.cancel(&self.units, c.player, &unlocked);
                     if let Some(db) = self.content.clone() {
                         self.production.cancel(&db, &self.units, &mut self.economy, c.player, &unlocked);
@@ -290,7 +296,14 @@ impl Sim {
             }
             Order::Attack { units, target } => {
                 let Some(db) = self.content.clone() else { return false };
-                self.weapons.order_attack(&db, &self.units, c.player, units, *target)
+                let ok = self.weapons.order_attack(&db, &self.units, c.player, units, *target);
+                // The attack replaces queued legs (SIM-36); the approach sets the course.
+                for &id in units {
+                    if self.weapons.attack_of(id) == Some(*target) {
+                        self.movement.clear_waypoints(id);
+                    }
+                }
+                ok
             }
             Order::Cloak { units, on } => {
                 let Some(db) = self.content.clone() else { return false };
@@ -315,9 +328,10 @@ impl Sim {
         self.step_start_effects();
         self.hold_welding_builders();
         self.constrain_targets();
+        let plans = self.steer_attackers();
         let routed = self.route_orders();
         let held = self.steer_around();
-        self.step_kinematics();
+        self.step_kinematics(&plans);
         self.restore_targets(held);
         self.restore_targets(routed);
         self.separate_units();
@@ -429,6 +443,9 @@ impl Sim {
         }
         self.units.hash_into(&mut h);
         self.movement.hash_into(&mut h);
+        if !self.approach_warp.is_empty() {
+            self.approach_warp.hash_into(&mut h);
+        }
         h.u64(self.labels.len() as u64);
         for (id, label) in self.labels.iter() {
             h.u64(id.0 as u64);

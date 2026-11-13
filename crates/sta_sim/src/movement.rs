@@ -20,6 +20,8 @@
 
 use sta_core::{EntityId, Fixed, PlayerId, Vec3};
 
+pub mod approach;
+
 use crate::command::Order;
 use crate::world::{Fnv, Table};
 use crate::Sim;
@@ -59,6 +61,11 @@ impl Movement {
     /// Detach owner-bound courses and formation on an ownership request.
     pub(crate) fn clear(&mut self, id: EntityId) {
         self.courses.remove(id);
+    }
+
+    /// Drop the queued legs of `id`, keeping its formation.
+    pub(crate) fn clear_waypoints(&mut self, id: EntityId) {
+        self.edit(id, |c| c.waypoints.clear());
     }
 
     /// Courses ascending by id, for snapshots.

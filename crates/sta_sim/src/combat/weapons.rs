@@ -188,6 +188,11 @@ impl Weapons {
         self.attack.get(unit).copied()
     }
 
+    /// Every attack order, `(unit, target)` ascending by unit.
+    pub(crate) fn attacks(&self) -> Vec<(EntityId, EntityId)> {
+        self.attack.iter().map(|(id, t)| (id, *t)).collect()
+    }
+
     /// Make a unit's mounts with their initial reload when any of its weapons
     /// uses `weapon_shot_timing` and it has none yet.
     fn init_mounts(&mut self, tick: u64, db: &ContentDb, id: EntityId, def: &sta_content::UnitDef, rng: &mut Rng) {

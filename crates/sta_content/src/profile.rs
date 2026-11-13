@@ -163,13 +163,25 @@ impl Profile {
                 multi_yard_builds: true,
                 construction_rigs: true,
                 weapon_shot_timing: true,
+                // SIM-36: the Roots engine (also running STA2 Classic, CON-43).
+                attack_opportunity_fire: true,
                 ..off
             },
             // Stock A2: plain rules, turrets, point-defence cycles and the
             // original shot timing. `pd_energy` stays off until a HUD button
             // can toggle point defence (UI-31); then SIM-37's one-line flip:
             // `Sta2Classic` `pd_energy`, `Fo4` `pd_energy` + `pd_debt_timer`.
-            Profile::Sta2Classic => Features { turrets: true, point_defense_cycles: true, weapon_shot_timing: true, ..off },
+            Profile::Sta2Classic => Features {
+                turrets: true,
+                point_defense_cycles: true,
+                weapon_shot_timing: true,
+                // SIM-36: stock A2's attack approach and construction ships.
+                attack_range_buffer: true,
+                attack_warp_out_at_distance: true,
+                attack_combat_speed: true,
+                builder_hold_fire: true,
+                ..off
+            },
             // A1: its own class labels and health model, officers.
             Profile::Sta1Classic => Features { officer_capacity: true, a1_compat: true, ..off },
         }
@@ -424,7 +436,7 @@ fn read_ini_named(root: &Path, name: &str) -> Option<Ini> {
 }
 
 /// Switch names, in `Features` declaration order.
-pub const FEATURE_NAMES: [&str; 25] = [
+pub const FEATURE_NAMES: [&str; 30] = [
     "weapon_damage_controls",
     "point_defense_cycles",
     "fire_arcs",
@@ -450,6 +462,11 @@ pub const FEATURE_NAMES: [&str; 25] = [
     "pd_energy",
     "pd_debt_timer",
     "weapon_shot_timing",
+    "attack_range_buffer",
+    "attack_warp_out_at_distance",
+    "attack_combat_speed",
+    "attack_opportunity_fire",
+    "builder_hold_fire",
 ];
 
 impl Features {
@@ -480,6 +497,11 @@ impl Features {
             "pd_energy" => &mut self.pd_energy,
             "pd_debt_timer" => &mut self.pd_debt_timer,
             "weapon_shot_timing" => &mut self.weapon_shot_timing,
+            "attack_range_buffer" => &mut self.attack_range_buffer,
+            "attack_warp_out_at_distance" => &mut self.attack_warp_out_at_distance,
+            "attack_combat_speed" => &mut self.attack_combat_speed,
+            "attack_opportunity_fire" => &mut self.attack_opportunity_fire,
+            "builder_hold_fire" => &mut self.builder_hold_fire,
             _ => return None,
         })
     }

@@ -208,9 +208,90 @@ pub(crate) fn arrive_distance() -> Fixed {
     Fixed::from_int(4)
 }
 
+/// What an attack approach (SIM-36, [`crate::movement`]) asks of one unit's
+/// step this tick, beyond its target.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct Plan {
+    /// Speed limit in place of `impulseSpeed` (`combatSpeed` on a stock
+    /// approach); never above it.
+    pub cap: Option<Fixed>,
+    /// In warp: fly straight along the heading toward `warpSpeed`.
+    pub warp: bool,
+    /// With no target: turn to face this point while braking.
+    pub face: Option<Vec3>,
+}
+
+/// Speed change per second in and out of warp, as a multiple of `warpSpeed`:
+/// impulse to warp and warp to combat speed each take about 0.3 to 0.5 s
+/// (measured on stock A2 and Roots, `state` marks every 0.25 s; the
+/// executable's warp-out runs 0.1 to 3 s, static). No ODF key sets it.
+fn warp_rate() -> Fixed {
+    Fixed::from_int(2)
+}
+
+/// One tick of `u` under an approach plan: warp, the warp-out down to the
+/// cap, then the model's own step at the capped speed, or turning to face.
+pub(crate) fn step_planned(model: Model, u: &mut Unit, leg: Leg, plan: Plan) {
+    let dt = dt();
+    let warp = u.stats.warp_speed;
+    if plan.warp && warp > u.stats.max_speed {
+        u.speed = approach(u.speed, warp, warp * warp_rate() * dt);
+        u.omega = Fixed::ZERO;
+        advance(u, dt);
+        if let Some(t) = u.target {
+            climb(u, t, dt);
+        }
+        return;
+    }
+    let cap = plan.cap.map_or(u.stats.max_speed, |c| c.min(u.stats.max_speed));
+    if u.speed > u.stats.max_speed {
+        // Dropping out of warp: straight on, down to the cap.
+        u.speed = approach(u.speed, cap, warp.max(u.speed) * warp_rate() * dt);
+        u.omega = Fixed::ZERO;
+        advance(u, dt);
+        return;
+    }
+    if u.target.is_none() {
+        if let Some(p) = plan.face {
+            face(model, u, p, dt);
+            return;
+        }
+    }
+    let impulse = u.stats.max_speed;
+    u.stats.max_speed = cap;
+    step(model, u, leg);
+    u.stats.max_speed = impulse;
+}
+
+/// Brake to rest while turning to face `p` (an attacker in range turns its
+/// nose to the target, SIM-36: read from the executable, static).
+fn face(model: Model, u: &mut Unit, p: Vec3, dt: Fixed) {
+    let (dx, dz) = (p.x - u.pos.x, p.z - u.pos.z);
+    let d = (dx * dx + dz * dz).sqrt();
+    let (cross, dot) = if d == Fixed::ZERO {
+        (Fixed::ZERO, Fixed::ONE)
+    } else {
+        let (tx, tz) = (dx / d, dz / d);
+        (u.heading.0 * tz - u.heading.1 * tx, u.heading.0 * tx + u.heading.1 * tz)
+    };
+    let err = atan2(cross, dot);
+    match model {
+        Model::Smooth => smooth::face(u, err, dt),
+        Model::Native => {
+            let st = u.stats;
+            let accel = st.forward_accel * st.max_speed;
+            u.speed = approach(u.speed, Fixed::ZERO, accel * dt);
+            let want = clamp(err / dt, -st.turn_omega, st.turn_omega);
+            u.omega = approach(u.omega, want, st.turn_alpha * dt);
+            advance(u, dt);
+        }
+    }
+}
+
 impl Sim {
-    /// Step every mobile unit under the content's movement model.
-    pub(crate) fn step_kinematics(&mut self) {
+    /// Step every mobile unit under the content's movement model; units
+    /// with an approach plan (ascending id) step under it.
+    pub(crate) fn step_kinematics(&mut self, plans: &[(sta_core::EntityId, Plan)]) {
         let model = Model::of(
             self.content
                 .as_ref()
@@ -226,7 +307,12 @@ impl Sim {
                 _ => &[],
             };
             let previous = u.pos;
-            step(model, u, Leg { queued });
+            match plans.binary_search_by_key(&u.id, |p| p.0) {
+                Ok(i) => step_planned(model, u, Leg { queued }, plans[i].1),
+                // Out of warp with no attack left: the warp-out still runs.
+                Err(_) if u.speed > u.stats.max_speed => step_planned(model, u, Leg { queued }, Plan::default()),
+                Err(_) => step(model, u, Leg { queued }),
+            }
             if self.confinement.is_active() && u.pos != previous {
                 let radius = db.and_then(|db| db.unit(u.def)).map_or(Fixed::ZERO, |d| d.radius * Fixed::from_int(3) / Fixed::from_int(4));
                 crate::avoid::constrain_position(&mut self.confinement, u, previous, radius, &obstacles);
@@ -556,6 +642,16 @@ mod smooth {
         if dyaw != Fixed::ZERO {
             u.heading = rotate_by(h, dyaw);
         }
+    }
+
+    /// Brake to rest while turning by `err` radians (to face a target).
+    pub(super) fn face(u: &mut Unit, err: Fixed, dt: Fixed) {
+        let lim = limits(u);
+        let (ds, v) = vc(u.speed, Fixed::ZERO, lim.accel, dt);
+        let (dyaw, w) = pc(err, u.omega, lim.alpha, lim.omega, dt);
+        u.speed = v.max(Fixed::ZERO);
+        u.omega = w;
+        apply(u, dyaw, ds);
     }
 
     /// No target: brake to rest and stop turning.

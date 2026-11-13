@@ -103,6 +103,7 @@ fn current_suffix_is_mandatory_and_rejects_noncanonical_rows() {
         bad.extend(postcard::to_allocvec(&UnitCrewRec { version: 1, rows: Vec::new() }).unwrap());
         bad.extend(postcard::to_allocvec(&StartEffectsRec { version: 1, rows: Vec::new() }).unwrap());
         bad.extend(postcard::to_allocvec(&crate::autonomy::AutonomyWire { version: 1, rows: Vec::new() }).unwrap());
+        bad.extend(postcard::to_allocvec(&AttackRec { version: 1, warp: Vec::new() }).unwrap());
         assert!(Sim::from_snapshot(&bad, Some(setup.content.clone())).is_err());
     }
     let mut bad = bytes[..end].to_vec();

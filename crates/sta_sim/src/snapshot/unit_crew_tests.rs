@@ -27,6 +27,7 @@ fn replace_crew(bytes: &[u8], version: u8, rows: Vec<(EntityId, [i64; 2])>) -> V
     out.extend(postcard::to_allocvec(&UnitCrewRec { version, rows }).unwrap());
     out.extend(postcard::to_allocvec(&StartEffectsRec { version: 1, rows: Vec::new() }).unwrap());
     out.extend(postcard::to_allocvec(&crate::autonomy::AutonomyWire { version: 1, rows: Vec::new() }).unwrap());
+    out.extend(postcard::to_allocvec(&AttackRec { version: 1, warp: Vec::new() }).unwrap());
     out
 }
 

@@ -28,11 +28,13 @@ pub struct Rules {
     crew: Option<CrewRules>,
     /// `RTS_CFG.h`'s default craft autonomy, when the header sets either key.
     autonomy: Option<AutonomyRules>,
+    /// `RTS_CFG.h`'s attack warp distance (SIM-36), when the header sets it.
+    approach: Option<ApproachRules>,
     /// The other typed `RTS_CFG.h` keys.
     pub cfg: CfgRules,
 }
 
-const TYPED_LEN: usize = 4 + PathingRules::KEYS.len() + AutonomyRules::KEYS.len() + CfgRules::KEYS.len();
+const TYPED_LEN: usize = 4 + PathingRules::KEYS.len() + AutonomyRules::KEYS.len() + ApproachRules::KEYS.len() + CfgRules::KEYS.len();
 
 /// Every `RTS_CFG.h` key [`Rules`] reads.
 pub const TYPED_CFG_KEYS: [&str; TYPED_LEN] = {
@@ -51,9 +53,14 @@ pub const TYPED_CFG_KEYS: [&str; TYPED_LEN] = {
         out[4 + i + a] = AutonomyRules::KEYS[a];
         a += 1;
     }
+    let mut w = 0;
+    while w < ApproachRules::KEYS.len() {
+        out[4 + i + a + w] = ApproachRules::KEYS[w];
+        w += 1;
+    }
     let mut j = 0;
     while j < CfgRules::KEYS.len() {
-        out[4 + i + a + j] = CfgRules::KEYS[j];
+        out[4 + i + a + w + j] = CfgRules::KEYS[j];
         j += 1;
     }
     out
@@ -113,6 +120,40 @@ impl AutonomyRules {
     }
 }
 
+/// How far an attacker warps toward its target (SIM-36, D9):
+/// `cfg_MIN_MOVE_WARP_DISTANCE`, compared with the surface-to-surface
+/// distance to the target. Above it an attack approach may warp; below it the
+/// approach drops out of warp and closes in. Absent: 1500, the executable's
+/// own default (read from the executable, static). The installs set 1100
+/// (stock Armada II, STA2 Classic and Classic Enhanced) and 999999 (Roots,
+/// Fleet Ops 4.0 and 3.2.7, which never warp on an attack): read from the
+/// data; the stock and Classic values are measured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ApproachRules {
+    pub min_move_warp_distance: Fixed,
+}
+
+impl Default for ApproachRules {
+    fn default() -> Self {
+        ApproachRules { min_move_warp_distance: Fixed::from_int(1500) }
+    }
+}
+
+impl ApproachRules {
+    const KEYS: [&'static str; 1] = ["cfg_MIN_MOVE_WARP_DISTANCE"];
+
+    fn from_cfg(cfg: &CfgH, warnings: &mut Vec<Warning>) -> Option<Self> {
+        cfg.raw(Self::KEYS[0])?;
+        // As the header's `float` reads (f32); clamped so the fixed point holds it.
+        match cfg.f32(Self::KEYS[0]).filter(|v| v.is_finite() && *v >= 0.0) {
+            Some(v) => Some(ApproachRules { min_move_warp_distance: Fixed::from_f64(v.min(1.0e9) as f64) }),
+            None => {
+                warnings.push(Warning::new("RTS_CFG.h", format!("{} is not a distance; the engine default is used", Self::KEYS[0])));
+                None
+            }
+        }
+    }
+}
 
 /// The other `RTS_CFG.h` keys STA2 Classic Enhanced Gameplay changes against
 /// STA2 Classic (six of the eight changed lines CON-34's coverage report
@@ -341,6 +382,7 @@ impl Rules {
             rules.crew = Some(CrewRules { starting_capacity: Some(cap.min(1_000_000_000)), races: Vec::new() });
         }
         rules.autonomy = AutonomyRules::from_cfg(&cfg, &mut warnings);
+        rules.approach = ApproachRules::from_cfg(&cfg, &mut warnings);
         rules.cfg = CfgRules::from_cfg(&cfg, &mut warnings);
         (rules, warnings)
     }
@@ -375,6 +417,17 @@ impl Rules {
     /// Set the default autonomy (tests and content built in code).
     pub fn with_autonomy(mut self, autonomy: AutonomyRules) -> Self {
         self.autonomy = Some(autonomy);
+        self
+    }
+
+    /// The attack warp distance: the header's, else the engine's.
+    pub fn approach(&self) -> ApproachRules {
+        self.approach.unwrap_or_default()
+    }
+
+    /// Set the attack warp distance (tests and content built in code).
+    pub fn with_approach(mut self, approach: ApproachRules) -> Self {
+        self.approach = Some(approach);
         self
     }
 
@@ -431,6 +484,14 @@ impl Rules {
         let a = self.autonomy();
         for (key, value) in AutonomyRules::KEYS.iter().zip([a.movement, a.special_weapon]) {
             out.push(DigestEntry::new(format!("RTS_CFG.h:{key}"), value.to_string()));
+        }
+        // Only when it differs from the engine default, so an absent key and
+        // the default digest alike and content without it keeps its hash.
+        if self.approach() != ApproachRules::default() {
+            out.push(DigestEntry::new(
+                format!("RTS_CFG.h:{}", ApproachRules::KEYS[0]),
+                crate::digest::fixed_text(self.approach().min_move_warp_distance),
+            ));
         }
         for (key, value) in CfgRules::KEYS.iter().zip(self.cfg.texts()) {
             out.push(DigestEntry::new(format!("RTS_CFG.h:{key}"), value));

@@ -79,11 +79,28 @@ pub struct Features {
     /// reloading (SIM-35; special launchers measured, regular weapons only
     /// read from the engine's code).
     pub weapon_shot_timing: bool,
+    /// An attack approach keeps `min(W / 5 + 5, 50) + R_target` inside weapon
+    /// range before it stops (stock A2, SIM-36; measured, rule read from the
+    /// executable). Off: it stops once in range (Roots).
+    pub attack_range_buffer: bool,
+    /// An attack approach drops out of warp as soon as the target is nearer
+    /// than `cfg_MIN_MOVE_WARP_DISTANCE` (stock A2, SIM-36; measured). Off:
+    /// only near its goal (Roots).
+    pub attack_warp_out_at_distance: bool,
+    /// Inside the warp distance an attack approach runs at `combatSpeed` when
+    /// the target is slower (stock A2, SIM-36; measured). Off: `impulseSpeed`.
+    pub attack_combat_speed: bool,
+    /// A craft with an attack order fires at other enemies in range while its
+    /// target cannot be hit (Roots, SIM-36; measured). Off: only at its target.
+    pub attack_opportunity_fire: bool,
+    /// A construction ship holds fire while it flies to a build site and
+    /// builds (stock A2, SIM-36; measured). Off: it fires (Roots).
+    pub builder_hold_fire: bool,
 }
 
 impl Features {
     /// Every switch, in declaration order, for the content hash.
-    pub(crate) fn bits(&self) -> [bool; 25] {
+    pub(crate) fn bits(&self) -> [bool; 30] {
         [
             self.weapon_damage_controls,
             self.point_defense_cycles,
@@ -110,6 +127,11 @@ impl Features {
             self.pd_energy,
             self.pd_debt_timer,
             self.weapon_shot_timing,
+            self.attack_range_buffer,
+            self.attack_warp_out_at_distance,
+            self.attack_combat_speed,
+            self.attack_opportunity_fire,
+            self.builder_hold_fire,
         ]
     }
 }
