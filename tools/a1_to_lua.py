@@ -53,7 +53,11 @@ nothing read from a game file is committed (D2: the DLLs are read, never
 loaded).
 
 usage:
-  a1_to_lua.py --install <A1 root> --out <dir> [--only fed1] [--json r.json]
+  a1_to_lua.py --install <A1 root> --out <dir> [--only fed1] [--json r.json] [--include-unmapped]
+
+`--include-unmapped` also converts the DLL pairs no `.bzn` names (six in the stock
+install: cut campaign content the shell's campaign list `mshell.set` does not reach),
+as `missions/<dll stem>.lua`.
 
 Needs `objdump` (binutils) on PATH.
 """
@@ -1554,9 +1558,12 @@ def mission_report(mission, map_name, funcs, roles, rules, conds, rerr, regcalls
 # ------------------------------------------------------------------ install
 
 
-def find_missions(root):
+def find_missions(root, include_unmapped=False):
     """(map stem, S.dsl, R.drl) for every map whose `.bzn` names an Armada I
-    rule DLL present in `missions/`."""
+    rule DLL present in `missions/`. With `include_unmapped`, the pairs no
+    `.bzn` names follow, keyed by their lower-case DLL stem (`federation4`):
+    the engine reaches a mission only through the DLL names inside its map
+    and the campaign list (`mshell.set`), so these are not campaign missions."""
     mdir = None
     for d in os.listdir(root):
         if d.lower() == "missions" and os.path.isdir(os.path.join(root, d)):
@@ -1583,6 +1590,12 @@ def find_missions(root):
                 if key in pairs:
                     out.append((b[:-4].lower(),) + pairs[key])
                     break
+    if include_unmapped:
+        named = {os.path.realpath(o[2]) for o in out}
+        for key in sorted(pairs):
+            dsl_path, drl_path = pairs[key]
+            if os.path.realpath(drl_path) not in named and key[:-5] not in {o[0] for o in out}:
+                out.append((key[:-5], dsl_path, drl_path))
     return out
 
 
@@ -1592,6 +1605,8 @@ def main(argv=None):
     ap.add_argument("--out", help="output folder (outside the repository and every install)")
     ap.add_argument("--only", action="append", help="map to convert, e.g. fed1 (repeatable)")
     ap.add_argument("--json", help="write the conversion report as JSON")
+    ap.add_argument("--include-unmapped", action="store_true",
+                    help="also convert DLL pairs no .bzn names (unreachable leftovers), as missions/<dll stem>.lua")
     a = ap.parse_args(argv)
     for flag, path in (("--out", a.out), ("--json", a.json)):
         if path:
@@ -1600,7 +1615,7 @@ def main(argv=None):
                 sys.exit(f"{flag} {why}")
     report = {"missions": []}
     failed = 0
-    for map_name, dsl_path, drl_path in find_missions(a.install):
+    for map_name, dsl_path, drl_path in find_missions(a.install, a.include_unmapped):
         if a.only and map_name not in [x.lower() for x in a.only]:
             continue
         try:

@@ -147,6 +147,7 @@ class Dsl:
             if self.pe.section_of(a) == ".text":
                 self.code_names[self.entry(a)] = drl.plain_name(n)
         self._ftol = {}
+        self._vec = {}
         self._kinds = {}
         self._statics = None
         self.static_refs = {}  # unexported data the lifted code touched: address -> class
@@ -195,7 +196,7 @@ class Dsl:
         """A routine of the C runtime or the compiler the mission code calls, recognised
         by what it does (never by address), so it is modelled instead of lifted:
         "sprintf" (formats into a buffer), "strcmp", "vec3" (the Vector3 constructor from
-        three floats) and "report" (the debug assertion reporter: always answers 0)."""
+        three floats) and "report" (the debug assertion reporter: always answers 0) and "atexit"."""
         if addr in self._kinds:
             return self._kinds[addr]
         self._kinds[addr] = None
@@ -225,11 +226,83 @@ class Dsl:
             if loads == {"0x8", "0xc", "0x10"} and sorted(offs) == [0, 4, 8] \
                     and not any(t.startswith(("call", "f")) for t in body):
                 kind = "vec3"
+        if kind is None and len(body) == 12 and body[:2] == ["push   ebp", "mov    ebp,esp"] and \
+                [t for t in body if t.startswith("call")] == [t for t in body if re.fullmatch(r"call\s+0x[0-9a-f]+", t)] and \
+                len([t for t in body if t.startswith("call")]) == 1 and \
+                body[5:10] == ["add    esp,0x4", "neg    eax", "sbb    eax,eax", "neg    eax", "dec    eax"]:
+            kind = "atexit"  # the C runtime's `atexit`: registers a function to run at unload
         if kind is None and any(t.startswith("stos   WORD PTR es:[edi]") for t in self.ins_text(i, 400)):
             sites = self.call_sites(addr)
             if len(sites) >= 10 and all(self.is_assert_site(j) for j in sites):
                 kind = "report"
         self._kinds[addr] = kind
+        return kind
+
+    def vector_kind(self, addr):
+        """A member of MSVC 6's `std::vector<T>` (debug build, 4-byte elements: the layout
+        {allocator, first, last, end}), recognised by the instructions of its body, never by
+        address: "ctor", "dtor", "begin", "end", "size", "index" (`operator[]`), "push_back",
+        "erase" (one iterator), "clear". The wrappers are matched together with the members
+        they call (`operator[]` calls `begin`, `push_back` calls `end`)."""
+        addr = self.thunks.get(addr, addr)
+        if addr in self._vec:
+            return self._vec[addr]
+        self._vec[addr] = None
+        i = self.at.get(addr)
+        if i is None:
+            return None
+        text = [re.sub(r"\s+", " ", t) for t in self.ins_text(i, 120)]
+        try:
+            lo = text.index("mov DWORD PTR [ebp-0x4],ecx") + 1
+            hi = text.index("pop edi", lo)
+        except ValueError:
+            return None
+        core, ret = text[lo:hi], next((t for t in text[hi:] if t.startswith("ret")), "")
+        callees = [self.vector_kind(int(m.group(1), 16)) for t in core for m in [re.fullmatch(r"call 0x([0-9a-f]+)", t)] if m]
+        shape = [re.sub(r"0x[0-9a-f]{8}\b", "A", t) for t in core]
+        this = "mov eax,DWORD PTR [ebp-0x4]"
+        kind = None
+        if shape == [this, "mov eax,DWORD PTR [eax+0x4]"] and ret == "ret":
+            kind = "begin"
+        elif shape == [this, "mov eax,DWORD PTR [eax+0x8]"] and ret == "ret":
+            kind = "end"
+        elif shape == [this, "cmp DWORD PTR [eax+0x4],0x0", "jne A", "mov DWORD PTR [ebp-0x8],0x0", "jmp A",
+                       "mov ecx,DWORD PTR [ebp-0x4]", "mov edx,DWORD PTR [ebp-0x4]", "mov eax,DWORD PTR [ecx+0x8]",
+                       "sub eax,DWORD PTR [edx+0x4]", "sar eax,0x2", "mov DWORD PTR [ebp-0x8],eax",
+                       "mov eax,DWORD PTR [ebp-0x8]"] and ret == "ret":
+            kind = "size"
+        elif shape == ["mov ecx,DWORD PTR [ebp-0x4]", "call A", "mov ecx,DWORD PTR [ebp+0x8]", "lea eax,[eax+ecx*4]"] \
+                and callees == ["begin"] and ret == "ret 0x4":
+            kind = "index"
+        elif shape == ["mov eax,DWORD PTR [ebp+0x8]", "mov cl,BYTE PTR [eax]", "mov edx,DWORD PTR [ebp-0x4]",
+                       "mov BYTE PTR [edx],cl", "mov eax,DWORD PTR [ebp-0x4]", "mov DWORD PTR [eax+0x4],0x0",
+                       "mov ecx,DWORD PTR [ebp-0x4]", "mov DWORD PTR [ecx+0x8],0x0", "mov edx,DWORD PTR [ebp-0x4]",
+                       "mov DWORD PTR [edx+0xc],0x0", "mov eax,DWORD PTR [ebp-0x4]"] and ret == "ret 0x4":
+            kind = "ctor"
+        elif shape == ["mov eax,DWORD PTR [ebp+0x8]", "push eax", "mov ecx,DWORD PTR [ebp-0x4]", "call A", "push eax",
+                       "mov ecx,DWORD PTR [ebp-0x4]", "call A"] and callees[0] == "end" and ret == "ret 0x4":
+            kind = "push_back"  # insert(end(), x)
+        elif shape == ["mov ecx,DWORD PTR [ebp-0x4]", "call A", "push eax", "mov ecx,DWORD PTR [ebp-0x4]", "call A",
+                       "push eax", "mov ecx,DWORD PTR [ebp-0x4]", "call A"] and callees[:2] == ["end", "begin"] and ret == "ret":
+            kind = "clear"  # erase(begin(), end())
+        elif shape == ["mov eax,DWORD PTR [ebp+0x8]", "push eax", "mov ecx,DWORD PTR [ebp-0x4]", "call A", "push eax",
+                       "mov ecx,DWORD PTR [ebp+0x8]", "add ecx,0x4", "push ecx", "call A", "add esp,0xc",
+                       "mov edx,DWORD PTR [ebp-0x4]", "mov eax,DWORD PTR [edx+0x8]", "push eax",
+                       "mov ecx,DWORD PTR [ebp-0x4]", "mov edx,DWORD PTR [ecx+0x8]", "sub edx,0x4", "push edx",
+                       "mov ecx,DWORD PTR [ebp-0x4]", "call A", "mov eax,DWORD PTR [ebp-0x4]",
+                       "mov ecx,DWORD PTR [eax+0x8]", "sub ecx,0x4", "mov edx,DWORD PTR [ebp-0x4]",
+                       "mov DWORD PTR [edx+0x8],ecx", "mov eax,DWORD PTR [ebp+0x8]"] and callees[0] == "end" and ret == "ret 0x4":
+            kind = "erase"  # copy the tail down, destroy the last element, shrink; returns the iterator
+        elif shape == [this, "mov ecx,DWORD PTR [eax+0x8]", "push ecx", "mov edx,DWORD PTR [ebp-0x4]",
+                       "mov eax,DWORD PTR [edx+0x4]", "push eax", "mov ecx,DWORD PTR [ebp-0x4]", "call A",
+                       "mov ecx,DWORD PTR [ebp-0x4]", "mov edx,DWORD PTR [ebp-0x4]", "mov eax,DWORD PTR [ecx+0xc]",
+                       "sub eax,DWORD PTR [edx+0x4]", "sar eax,0x2", "push eax", "mov ecx,DWORD PTR [ebp-0x4]",
+                       "mov edx,DWORD PTR [ecx+0x4]", "push edx", "mov ecx,DWORD PTR [ebp-0x4]", "call A",
+                       "mov eax,DWORD PTR [ebp-0x4]", "mov DWORD PTR [eax+0x4],0x0", "mov ecx,DWORD PTR [ebp-0x4]",
+                       "mov DWORD PTR [ecx+0x8],0x0", "mov edx,DWORD PTR [ebp-0x4]", "mov DWORD PTR [edx+0xc],0x0"] \
+                and ret == "ret":
+            kind = "dtor"
+        self._vec[addr] = kind
         return kind
 
     def ins_text(self, i, n):
@@ -381,6 +454,9 @@ class Lifted:
         self.loops = 0
         self.loctypes = {}
         self.floatlocs = set()
+        self.itype = {}  # tmp -> the std::vector an iterator / element reference points into
+        self.vectors = set()  # std::vectors whose constructor the function ran
+        self.litype = {}  # stack slot offset -> the same, for a slot that holds one
 
 
 class Lifter:
@@ -633,6 +709,13 @@ class Lifter:
             return None
         if mn == "mov" and any(b[0] == a for b in self.byte_index.values()):
             return None  # the byte of a two-level jump table: the switch reads the index itself
+        if mn == "mov" and "fs:0x0" in ops:
+            # the SEH frame chain (`mov eax,fs:0` / `mov fs:0,esp` in a function with a C++
+            # destructor): the link is pushed and restored, nothing reads it
+            dst, src = [x.strip() for x in ops.split(",", 1)]
+            if dst in REG32:
+                r[dst] = ("seh",)
+            return None
         if mn == "mov":
             dst, src = [x.strip() for x in ops.split(",", 1)]
             if dst in ("esi", "edi", "ebx") and src == "esp":
@@ -855,6 +938,11 @@ class Lifter:
                     return self.load(st, ("loc", inner[1] + off), a)
                 if inner[0] == "obj":
                     return self.load(st, self.glob_off(inner, off, a), a)
+            key = self.cur.itype.get(base) if base[0] == "tmp" else self.cur.litype.get(base[1]) if base[0] == "loc" else None
+            if key:
+                if off:
+                    raise DecodeError(f"std::vector element read at offset {off:#x} at {a:#x}")
+                return ("vget", key, base)  # an element of a std::vector, through an iterator
             if base[0] in ("tmp", "loc", "reg", "glob", "obj", "field") and off in (0, 4, 8):
                 # a vector the engine returned by reference
                 return ("field", base, off // 4)
@@ -923,6 +1011,10 @@ class Lifter:
                     del st.mem[x]
         if lv[0] == "loc" and v is not None and v[0] == "objref":
             f.loctypes[lv[1]] = v[2]
+        if lv[0] == "loc" and v is not None and v in f.itype:
+            f.litype[lv[1]] = f.itype[v]
+        elif lv[0] == "loc" and not (v and v[0] == "arith" and ("loc", lv[1]) in v[2:]):
+            f.litype.pop(lv[1], None)  # the slot holds something else now (`++it` keeps it)
         if lv[0] in ("loc", "param", "gvar"):
             st.mem[lv] = v if v is not None and v[0] in ("const", "float", "str", "code", "obj", "addr",
                                                              "varptr", "si", "world", "tmp", "script", "objref") else lv_value(lv)
@@ -1078,6 +1170,9 @@ class Lifter:
             kind = d.helper_kind(body)
             if kind:
                 return self.known_call(st, stmts, ntmp, a, kind, i)
+            vk = d.vector_kind(body)
+            if vk:
+                return self.vector_call(f, st, stmts, ntmp, a, vk)
             if not d.is_ftol(body):
                 # an internal function may write any global, variable or handed-out slot
                 self.snap(st, stmts, lambda e: e[0] in ("obj", "elem", "vfield", "glob", "var", "locidx")
@@ -1263,6 +1358,45 @@ class Lifter:
         v = self.snap(st, stmts, reads_location(lv), v)
         stmts.append(("set", lv, v))
 
+    def vector_call(self, f, st, stmts, ntmp, a, op):
+        """A member of a `std::vector<T>` (see `Dsl.vector_kind`) on a local or a static one.
+        Iterators and element references are byte offsets from `begin()` (the compiler's
+        pointer arithmetic stays valid); reading through one needs the vector, which the
+        lifter follows from the call that produced it (`Lifted.itype` / `litype`)."""
+        this = st.r.get("ecx")
+        if not this or this[0] != "addr" or this[1][0] not in ("loc", "gvar"):
+            raise DecodeError(f"std::vector member on {this and this[0]} at {a:#x}")
+        key = this[1]
+        if key[0] == "gvar":
+            self.d.static_refs.setdefault(key[1], "word")
+        if op == "ctor":
+            f.vectors.add(key)
+        elif key not in f.vectors:
+            raise DecodeError(f"std::vector member {op} on an object never constructed here at {a:#x}")
+        args = []
+        if op in ("ctor", "index", "push_back", "erase"):
+            (x,) = self.take(st, 1, a)
+            if op == "push_back":
+                if not x or x[0] != "addr":
+                    raise DecodeError(f"push_back of {x and x[0]} at {a:#x}")
+                x = self.load(st, x[1], a)  # `const T &`: the element is read now
+            if op == "ctor":
+                x = None  # the allocator argument
+            if x is not None:
+                args.append(self.arg(x, a))
+        if op in ("ctor", "push_back", "clear", "dtor"):
+            stmts.append(("eval", ("vop", op, key, args)))
+            self.clobber(st)
+            st.r["eax"] = this if op == "ctor" else None
+            return None
+        t = self.new_tmp(ntmp)
+        stmts.append(("set", t, ("vop", op, key, args)))
+        self.clobber(st)
+        st.r["eax"] = t
+        if op in ("begin", "end", "index", "erase"):
+            f.itype[t] = key
+        return None
+
     def known_call(self, st, stmts, ntmp, a, kind, i):
         """A call of a C runtime / compiler routine `Dsl.helper_kind` recognised."""
         if kind == "vec3":
@@ -1300,6 +1434,13 @@ class Lifter:
             self.clobber(st)
             st.r["eax"] = ("const", 0)
             return None
+        if kind == "atexit":
+            # `static T x;` registers its destructor to run when the DLL unloads: the mission
+            # script has no unload, nothing to do (the answer is 0: registered)
+            self.clobber(st)
+            st.r["eax"] = ("const", 0)
+            return None
+
         def string_arg(v):
             v = self.arg(v, a)
             return self.by_pointer(st, "PD", v[1], kind, a) if v and v[0] == "addr" and v[1][0] in ("loc", "gvar") else v
@@ -1752,6 +1893,11 @@ def render_expr(e, nm, ctx="num"):
     elif k == "fcall":
         args = ", ".join(render_expr(x, nm, "arg") for x in e[2])
         s = f"M.{nm.fn(e[1])}({args})"
+    elif k == "vop":
+        args = "".join(", " + render_expr(x, nm, "arg") for x in e[3])
+        s = f"V{e[1].upper()}({vkey(e[2])}{args})"
+    elif k == "vget":
+        s = f"VGET({vkey(e[1])}, {render_expr(e[2], nm)})"
     elif k == "arith":
         op = e[1]
         x, y = render_expr(e[2], nm), render_expr(e[3], nm)
@@ -1846,6 +1992,11 @@ def render_expr(e, nm, ctx="num"):
     return s
 
 
+def vkey(key):
+    """The Lua table of a `std::vector` held in a stack slot or a static."""
+    return f"VL(L, {key[1]})" if key[0] == "loc" else f"VG({key[1]:#x})"
+
+
 def render_lv(lv, nm):
     k = lv[0]
     if k == "obj":
@@ -1869,7 +2020,7 @@ def render_lv(lv, nm):
     raise DecodeError(f"cannot assign to {k}")
 
 
-CALLS = ("call", "callout", "fcall", "mcall", "newvar", "varq", "newscript", "enginevar")
+CALLS = ("call", "callout", "fcall", "mcall", "newvar", "varq", "newscript", "enginevar", "vop")
 
 
 def first_effect(e, n):
@@ -2190,6 +2341,21 @@ local function OUTV(cur)
     if o == nil then return cur end
     return o
 end
+
+-- std::vector<int> of the DLL's C++ code (MSVC 6 layout): a table with the element count `n`;
+-- an iterator or element reference is a byte offset from begin(), as the compiled pointer
+-- arithmetic has it. A zeroed static is an empty vector.
+local function VG(k) local v = G[k] if type(v) ~= 'table' then v = { n = 0 } G[k] = v end return v end
+local function VL(L, k) local v = L[k] if type(v) ~= 'table' then v = { n = 0 } L[k] = v end return v end
+local function VCTOR(v) for i = 1, v.n do v[i] = nil end v.n = 0 end
+local VCLEAR, VDTOR = VCTOR, VCTOR
+local function VBEGIN(v) return 0 end
+local function VEND(v) return 4 * v.n end
+local function VSIZE(v) return v.n end
+local function VINDEX(v, i) return 4 * I(i) end
+local function VPUSH_BACK(v, x) v.n = v.n + 1 v[v.n] = x end
+local function VERASE(v, it) local i = I(it) // 4 + 1 if i >= 1 and i <= v.n then for j = i, v.n - 1 do v[j] = v[j + 1] end v[v.n] = nil v.n = v.n - 1 end return it end
+local function VGET(v, off) local x = v[I(off) // 4 + 1] if x == nil then return 0 end return x end
 
 -- Methods of engine objects a ScriptInterface call returned (fleets).
 local function FM(obj, cls, name, ...)

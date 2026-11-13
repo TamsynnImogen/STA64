@@ -21,7 +21,7 @@ const TICKS: u64 = 9000;
 type Coverage = BTreeMap<String, (u32, BTreeMap<String, (u32, u32, u32)>)>;
 
 /// Converts into a directory of the test's own (`tag`): tests run in parallel.
-fn convert(install: &str, only: Option<&str>, tag: &str) -> (PathBuf, Coverage) {
+fn convert(install: &str, only: Option<&str>, tag: &str, unmapped: bool) -> (PathBuf, Coverage) {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("converted_a1_{tag}"));
     let _ = std::fs::remove_dir_all(&out);
@@ -29,6 +29,9 @@ fn convert(install: &str, only: Option<&str>, tag: &str) -> (PathBuf, Coverage) 
     cmd.arg("-I").arg(repo.join("tools/a1_to_lua.py")).args(["--install", install]);
     if let Some(m) = only {
         cmd.args(["--only", m]);
+    }
+    if unmapped {
+        cmd.arg("--include-unmapped");
     }
     let run = cmd.arg("--out").arg(&out).output().expect("run python3 tools/a1_to_lua.py");
     let report = String::from_utf8_lossy(&run.stdout).into_owned();
@@ -64,7 +67,7 @@ fn a1_campaign_decode_coverage_does_not_regress() {
         eprintln!("skipped: set STA64_TEST_A1_INSTALL to an Armada I root");
         return;
     };
-    let (out, cov) = convert(&install, None, "coverage");
+    let (out, cov) = convert(&install, None, "coverage", false);
     assert_eq!(cov.len(), 20, "the 20 campaign maps convert: {:?}", cov.keys().collect::<Vec<_>>());
     let mut sum: BTreeMap<String, (u32, u32, u32)> = BTreeMap::new();
     let mut rules = 0;
@@ -90,13 +93,39 @@ fn a1_campaign_decode_coverage_does_not_regress() {
     }
 }
 
+/// The DLL pairs no `.bzn` names are cut campaign content: neither the maps, nor `mshell.set`
+/// (the campaign list), nor the objective texts reach them (measured, see the LUA-14 follow-up).
+/// `--include-unmapped` converts them anyway under their DLL's name; the default does not.
+#[test]
+fn unmapped_a1_dll_pairs_convert_only_on_request() {
+    let Ok(install) = std::env::var("STA64_TEST_A1_INSTALL") else {
+        eprintln!("skipped: set STA64_TEST_A1_INSTALL to an Armada I root");
+        return;
+    };
+    let (_, default) = convert(&install, None, "mapped", false);
+    let (out, all) = convert(&install, None, "unmapped", true);
+    let extra: Vec<&String> = all.keys().filter(|k| !default.contains_key(*k)).collect();
+    assert_eq!((default.len(), all.len(), extra.len()), (20, 26, 6), "{extra:?}");
+    for map in extra {
+        assert!(out.join(format!("missions/{map}.lua")).is_file(), "{map}");
+        let (rules, roles) = &all[map];
+        assert!(*rules > 0, "{map}: no rules found");
+        // all but at most one step per DLL decode completely
+        for (role, (c, p, t)) in roles {
+            assert!(t - c <= 1 && *p <= 1, "{map} {role}: {c}+{p}/{t}");
+        }
+    }
+    let rules: u32 = all.values().map(|(r, _)| r).sum();
+    assert_eq!(rules, 1130);
+}
+
 #[test]
 fn every_converted_a1_mission_loads_and_runs() {
     let Ok(install) = std::env::var("STA64_TEST_A1_INSTALL") else {
         eprintln!("skipped: set STA64_TEST_A1_INSTALL to an Armada I root");
         return;
     };
-    let (out, _) = convert(&install, None, "load");
+    let (out, _) = convert(&install, None, "load", false);
     let mut files: Vec<PathBuf> = std::fs::read_dir(out.join("missions")).unwrap().map(|e| e.unwrap().path()).collect();
     files.sort();
     for f in files {
@@ -127,7 +156,7 @@ fn converted_a1_fed1_runs_in_the_campaign_runner() {
         eprintln!("skipped: set STA64_TEST_A1_INSTALL to an Armada I root");
         return;
     };
-    let (out, _) = convert(&install, Some("fed1"), "fed1");
+    let (out, _) = convert(&install, Some("fed1"), "fed1", false);
     let mut vfs = Vfs::mount_install(Path::new(&install), None).expect("mount install");
     vfs.push_dir("converted".into(), out).expect("mount the converted missions");
     let book = CampaignBook::load_vfs(&vfs);

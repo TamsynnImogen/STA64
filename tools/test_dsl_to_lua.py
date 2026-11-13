@@ -612,6 +612,114 @@ class PreludeTests(unittest.TestCase):
         self.assertEqual(out.splitlines(), ["true\t42", "nil\t7"])
 
 
+# A made-up copy of the debug compiler's `std::vector<int>` members (MSVC 6 layout), in the shapes
+# the lifter recognises: every address is invented.
+V_CTOR, V_BEGIN, V_END, V_SIZE, V_INDEX, V_PUSH, V_INSERT = 0x10003000, 0x10003040, 0x10003080, 0x100030c0, 0x10003100, 0x10003140, 0x10003180
+V_DTOR, V_ATEXIT, V_ATEXIT_INNER, V_DESTROY = 0x100031c0, 0x10003200, 0x10003240, 0x10003280
+VPRO = ["push   ebp", "mov    ebp,esp", "sub    esp,0x44", "push   ebx", "push   esi", "push   edi", "push   ecx",
+        "lea    edi,[ebp-0x44]", "mov    ecx,0x11", "mov    eax,0xcccccccc", "rep stos DWORD PTR es:[edi],eax",
+        "pop    ecx", "mov    DWORD PTR [ebp-0x4],ecx"]
+VEPI = ["pop    edi", "pop    esi", "pop    ebx", "mov    esp,ebp", "pop    ebp"]
+THIS = "mov    eax,DWORD PTR [ebp-0x4]"
+VECTOR_MEMBERS = {
+    V_CTOR: VPRO + ["mov    eax,DWORD PTR [ebp+0x8]", "mov    cl,BYTE PTR [eax]", "mov    edx,DWORD PTR [ebp-0x4]",
+                    "mov    BYTE PTR [edx],cl", "mov    eax,DWORD PTR [ebp-0x4]", "mov    DWORD PTR [eax+0x4],0x0",
+                    "mov    ecx,DWORD PTR [ebp-0x4]", "mov    DWORD PTR [ecx+0x8],0x0", "mov    edx,DWORD PTR [ebp-0x4]",
+                    "mov    DWORD PTR [edx+0xc],0x0", "mov    eax,DWORD PTR [ebp-0x4]"] + VEPI + ["ret    0x4"],
+    V_BEGIN: VPRO + [THIS, "mov    eax,DWORD PTR [eax+0x4]"] + VEPI + ["ret"],
+    V_END: VPRO + [THIS, "mov    eax,DWORD PTR [eax+0x8]"] + VEPI + ["ret"],
+    V_SIZE: VPRO + [THIS, "cmp    DWORD PTR [eax+0x4],0x0", f"jne    {V_SIZE + 4 * 28:#x}",
+                    "mov    DWORD PTR [ebp-0x8],0x0", f"jmp    {V_SIZE + 4 * 36:#x}", "mov    ecx,DWORD PTR [ebp-0x4]",
+                    "mov    edx,DWORD PTR [ebp-0x4]", "mov    eax,DWORD PTR [ecx+0x8]", "sub    eax,DWORD PTR [edx+0x4]",
+                    "sar    eax,0x2", "mov    DWORD PTR [ebp-0x8],eax", "mov    eax,DWORD PTR [ebp-0x8]"] + VEPI + ["ret"],
+    V_INDEX: VPRO + ["mov    ecx,DWORD PTR [ebp-0x4]", f"call   {V_BEGIN:#x}", "mov    ecx,DWORD PTR [ebp+0x8]",
+                     "lea    eax,[eax+ecx*4]"] + VEPI + ["ret    0x4"],
+    V_PUSH: VPRO + ["mov    eax,DWORD PTR [ebp+0x8]", "push   eax", "mov    ecx,DWORD PTR [ebp-0x4]", f"call   {V_END:#x}",
+                    "push   eax", "mov    ecx,DWORD PTR [ebp-0x4]", f"call   {V_INSERT:#x}"] + VEPI + ["ret    0x4"],
+    V_INSERT: ["push   ebp", "mov    ebp,esp", "ret    0x8"],
+    V_DTOR: VPRO + [THIS, "mov    ecx,DWORD PTR [eax+0x8]", "push   ecx", "mov    edx,DWORD PTR [ebp-0x4]",
+                    "mov    eax,DWORD PTR [edx+0x4]", "push   eax", "mov    ecx,DWORD PTR [ebp-0x4]", f"call   {V_DESTROY:#x}",
+                    "mov    ecx,DWORD PTR [ebp-0x4]", "mov    edx,DWORD PTR [ebp-0x4]", "mov    eax,DWORD PTR [ecx+0xc]",
+                    "sub    eax,DWORD PTR [edx+0x4]", "sar    eax,0x2", "push   eax", "mov    ecx,DWORD PTR [ebp-0x4]",
+                    "mov    edx,DWORD PTR [ecx+0x4]", "push   edx", "mov    ecx,DWORD PTR [ebp-0x4]", f"call   {V_DESTROY:#x}",
+                    "mov    eax,DWORD PTR [ebp-0x4]", "mov    DWORD PTR [eax+0x4],0x0", "mov    ecx,DWORD PTR [ebp-0x4]",
+                    "mov    DWORD PTR [ecx+0x8],0x0", "mov    edx,DWORD PTR [ebp-0x4]",
+                    "mov    DWORD PTR [edx+0xc],0x0"] + VEPI + ["ret"],
+    V_DESTROY: ["push   ebp", "mov    ebp,esp", "ret    0x8"],
+    V_ATEXIT: ["push   ebp", "mov    ebp,esp", "mov    eax,DWORD PTR [ebp+0x8]", "push   eax", f"call   {V_ATEXIT_INNER:#x}",
+               "add    esp,0x4", "neg    eax", "sbb    eax,eax", "neg    eax", "dec    eax", "pop    ebp", "ret"],
+    V_ATEXIT_INNER: ["push   ebp", "mov    ebp,esp", "xor    eax,eax", "pop    ebp", "ret"],
+}
+VEC_STATIC, VEC_GUARD = 0x10050100, 0x10050110
+# `static std::vector<int> v;` and a local one, the SEH frame of a function with a destructor.
+SEH_STEP = [
+    "push   ebp", "mov    ebp,esp", "push   0xffffffff", "push   0x10002f00", "mov    eax,fs:0x0", "push   eax",
+    "mov    DWORD PTR fs:0x0,esp", "sub    esp,0x60", "push   ebx", "push   esi", "push   edi", "lea    edi,[ebp-0x6c]",
+    "mov    ecx,0x1b", "mov    eax,0xcccccccc", "rep stos DWORD PTR es:[edi],eax",
+    # static guard: constructs the static once and registers its destructor
+    "xor    eax,eax", f"mov    al,ds:{VEC_GUARD:#x}", "and    eax,0x1", "test   eax,eax", "jne    GUARDED",
+    f"mov    cl,BYTE PTR ds:{VEC_GUARD:#x}", "or     cl,0x1", f"mov    BYTE PTR ds:{VEC_GUARD:#x},cl",
+    "lea    edx,[ebp-0x40]", "push   edx", f"mov    ecx,{VEC_STATIC:#x}", f"call   {V_CTOR:#x}",
+    f"push   {V_DTOR:#x}", f"call   {V_ATEXIT:#x}", "add    esp,0x4",
+    # GUARDED: local vector, local.push_back(GetHandle("ship_label")), static.push_back(local[0]), n = static.size()
+    "lea    eax,[ebp-0x44]", "push   eax", "lea    ecx,[ebp-0x1c]", f"call   {V_CTOR:#x}",
+    "mov    DWORD PTR [ebp-0x4],0x0",
+    *si_call(1, ["0x10040000"]),
+    "mov    DWORD PTR [ebp-0x30],eax",
+    "lea    eax,[ebp-0x30]", "push   eax", "lea    ecx,[ebp-0x1c]", f"call   {V_PUSH:#x}",
+    "push   0x0", "lea    ecx,[ebp-0x1c]", f"call   {V_INDEX:#x}", "mov    ecx,DWORD PTR [eax]", "mov    DWORD PTR [ebp-0x34],ecx",
+    "lea    edx,[ebp-0x34]", "push   edx", f"mov    ecx,{VEC_STATIC:#x}", f"call   {V_PUSH:#x}",
+    f"mov    ecx,{VEC_STATIC:#x}", f"call   {V_SIZE:#x}", "mov    DWORD PTR [ebp-0x38],eax",
+    "mov    DWORD PTR [ebp-0x4],0xffffffff", "lea    ecx,[ebp-0x1c]", f"call   {V_DTOR:#x}",
+    "mov    eax,DWORD PTR [ebp-0x38]", "mov    ecx,DWORD PTR [ebp-0xc]", "mov    DWORD PTR fs:0x0,ecx",
+    "pop    edi", "pop    esi", "pop    ebx", "add    esp,0x6c", "cmp    ebp,esp", f"call   {CHK:#x}",
+    "mov    esp,ebp", "pop    ebp", "ret",
+]
+
+
+class VectorAndFrameTests(unittest.TestCase):
+    def seh_dsl(self):
+        funcs = {STEP: SEH_STEP, **{a: b + ["int3"] for a, b in VECTOR_MEMBERS.items()}}
+        funcs[STEP] = [t.replace("GUARDED", f"{STEP + 4 * SEH_STEP.index('lea    eax,[ebp-0x44]'):#x}") for t in SEH_STEP]
+        return make(funcs)
+
+    def test_the_vector_members_are_recognised_by_their_bodies(self):
+        d = self.seh_dsl()
+        kinds = {d.vector_kind(a) for a in VECTOR_MEMBERS}
+        self.assertEqual(kinds - {None}, {"ctor", "begin", "end", "size", "index", "push_back", "dtor"})
+        self.assertEqual(d.vector_kind(V_INSERT), None)
+        self.assertEqual(d.helper_kind(V_ATEXIT), "atexit")
+
+    def test_a_seh_frame_and_vectors_lift_to_tables(self):
+        d = self.seh_dsl()
+        f = dsl.Lifter(d).lift(STEP)
+        self.assertIsNone(f.error)
+        src = render(d, f)
+        self.assertIn("VCTOR(VG(0x10050100))", src)
+        self.assertIn("VCTOR(VL(L, -28))", src)
+        self.assertIn("VPUSH_BACK(VL(L, -28), t[2])", src)
+        self.assertIn("L[-52] = VGET(VL(L, -28), VINDEX(VL(L, -28), 0))", src)
+        self.assertIn("VPUSH_BACK(VG(0x10050100), L[-52])", src)
+        self.assertIn("VSIZE(VG(0x10050100))", src)
+        self.assertIn("VDTOR(VL(L, -28))", src)
+        self.assertNotIn("fs:", src)
+        self.assertEqual(f.calls, [])  # the members and `atexit` are modelled, not lifted
+        self.assertTrue(luac_ok(src))
+
+
+class VectorRuntime(PreludeTests):
+    """The `std::vector` runtime helpers, run in the prelude of the converted script."""
+
+    def test_iterators_are_byte_offsets_and_erase_returns_the_next(self):
+        out = self.run_lua(
+            "local v = VG(0x10) VPUSH_BACK(v, 7) VPUSH_BACK(v, 8) VPUSH_BACK(v, 9)\n"
+            "local it = VBEGIN(v) local seen = {}\n"
+            "while it ~= VEND(v) do local x = VGET(v, it) if x == 8 then it = VERASE(v, it) else seen[#seen + 1] = x it = it + 4 end end\n"
+            "print(VSIZE(v), table.concat(seen, ','), VGET(v, VINDEX(v, 1)), VGET(v, VINDEX(v, 5)))\n"
+            "VCLEAR(v) print(VSIZE(VG(0x10)), VEND(v))")
+        self.assertEqual(out.splitlines(), ["2\t7,9\t9\t0", "0\t0"])
+
+
 class InstallDecodeCounts(unittest.TestCase):
     """The stock Armada II install, read at run time (skipped without it): the decode counts
     must not regress, and no by-pointer argument or unnamed global is left in the output."""
@@ -635,16 +743,15 @@ class InstallDecodeCounts(unittest.TestCase):
                     d = total.setdefault(role, [0, 0])
                     d[0] += v["decoded"]
                     d[1] += v["total"]
-            # actions, ScriptExtendInterface and ScriptInit: all; steps: all but the one that uses
-            # a C++ standard container; helpers: all (the C runtime's are modelled)
+            # every action, step, helper, ScriptExtendInterface and ScriptInit (the C runtime's
+            # routines and the `std::vector` members are modelled)
             self.assertEqual(total["action"], [1152, 1152])
             self.assertEqual(total["ScriptInit"], [36, 36])
             self.assertEqual(total["ScriptExtendInterface"], [36, 36])
             self.assertEqual(total["helper"][0], total["helper"][1])
-            self.assertGreaterEqual(total["step"][0], 1696)
-            self.assertLessEqual(total["step"][1] - total["step"][0], 1)
+            self.assertEqual(total["step"], [1697, 1697])
             undecoded = [(m["mission"], e["function"]) for m in missions for e in m["errors"]]
-            self.assertLessEqual(len(undecoded), 1, undecoded)
+            self.assertEqual(undecoded, [])
             files = sorted(p.name for p in (out / "missions").iterdir())
             self.assertEqual(len(files), 36)
             self.assertIn("a2_tutorial_ui.lua", files)  # the UI tutorial's map, which runs a2_Tutorial1
