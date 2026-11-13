@@ -42,7 +42,11 @@ pub fn movement(phys: Option<&Odf>, file: &str, warnings: &mut Vec<Warning>) -> 
         r.num("turnAlpha").unwrap_or(1.0) as f32,
         r.num("turnOmegaFractionAtRest").unwrap_or(0.2) as f32,
     );
-    with_smooth_keys(m, |k| r.num(k))
+    let mut m = with_smooth_keys(m, |k| r.num(k));
+    if let Some(v) = r.num("warpSpeed").filter(|v| *v > 0.0) {
+        m.warp_speed = Fixed::from_f64(v);
+    }
+    m
 }
 
 /// `m` with the smooth-physics keys (SIM-15) a physics ODF sets; keys it

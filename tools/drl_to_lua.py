@@ -1000,13 +1000,17 @@ def expr_arg(v, a):
 
 
 def typed_args(args, params):
-    """A pushed 32-bit constant in a `float` parameter is the float's bits."""
+    """A pushed 32-bit constant in a `float` parameter is the float's bits; a
+    `bool` parameter is a Lua boolean (the pushed word is an int, the engine
+    bindings take strict booleans)."""
     if params is None or len(params) != len(args):
         return args
     out = []
     for v, t in zip(args, params):
         if t == "M" and v[0] == "const":
             v = ("float", struct.unpack("<f", struct.pack("<I", v[1] & 0xFFFFFFFF))[0])
+        elif t == "_N" and v[0] != "boolarg":
+            v = ("boolarg", v)
         out.append(v)
     return out
 
@@ -1114,6 +1118,10 @@ def render(e, ctx="bool"):
         return s if ctx == "bool" else f"N({s})"
     if k == "boolv":
         return render(e[1], ctx)
+    if k == "boolarg":
+        x = e[1]
+        s = ("true" if x[1] else "false") if x[0] == "const" else f"T({render(x, 'arg')})"
+        return s if ctx != "num" else f"N({s})"
     if k == "const":
         return ("true" if e[1] else "false") if ctx == "bool" else lua_num(e[1])
     if k == "float":

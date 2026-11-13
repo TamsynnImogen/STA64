@@ -71,6 +71,27 @@ pub enum Order {
     /// clears it; entity positions are resolved when a unit is produced.
     /// Appended: existing postcard Order tags must keep their values.
     Rally { builders: Vec<EntityId>, at: Target },
+    /// Set the movement or special-weapon autonomy of craft (SIM-38).
+    /// Appended: existing postcard Order tags keep their values (`Rally` is
+    /// 8, this is 9).
+    Autonomy { units: Vec<EntityId>, kind: AutonomyKind, level: AutonomyLevel },
+}
+
+/// Which autonomy an [`Order::Autonomy`] sets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum AutonomyKind {
+    Movement,
+    SpecialWeapon,
+}
+
+/// An autonomy level as the originals have it: 0, 1, 2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum AutonomyLevel {
+    Low,
+    Medium,
+    High,
 }
 
 /// Direct changes to the world: the bench's edits (docs/TESTBENCH.md,

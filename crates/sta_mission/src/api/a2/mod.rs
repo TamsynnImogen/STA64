@@ -18,6 +18,7 @@ mod camera;
 mod conditions;
 mod dll_objects;
 mod controls;
+mod handles;
 mod media;
 mod native_camera;
 mod native_flow;
@@ -28,6 +29,7 @@ mod objects;
 mod orders;
 mod queries;
 mod random;
+mod shared_calls;
 mod subsystems;
 #[cfg(test)]
 mod tests;
@@ -56,6 +58,8 @@ pub(super) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
     subsystems::install(lua, ctx, &a2)?;
     orders::install(lua, ctx, &a2)?;
     dll_objects::install(lua, ctx, &a2)?;
+    handles::install(lua, ctx, &a2)?;
+    shared_calls::install(lua, ctx, &a2)?;
     // Keep last: wraps every function above (pending BuildObject handles).
     dll_objects::finish(lua, &a2)?;
     lua.globals().raw_set("A2", a2)?;

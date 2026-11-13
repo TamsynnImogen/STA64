@@ -8,7 +8,7 @@
 //! |---|---|
 //! | `roster` | tick, content hash, seats and teams, who exists (id, kind, definition, owner), labels, perceived owners, eliminations, pending start-effect rows |
 //! | `movement` | position, heading, speed, turn rate, target and movement stats of every entity; queued waypoints and formations; map confinement |
-//! | `combat` | hull, shields, status flags, unit crew; weapon mounts, shots and attack orders; point defence; special energy and cloaks; subsystem switches and damage |
+//! | `combat` | hull, shields, status flags, unit crew; weapon mounts, shots and attack orders; point defence; special energy and cloaks; craft autonomy levels; subsystem switches and damage |
 //! | `economy` | stock, nodes, freighters, personnel; yard queues, rig deploys and rallies; build progress |
 //! | `rng` | the sim generator |
 //!
@@ -67,7 +67,7 @@ fn _every_sim_field_is_decided(s: &Sim) {
     let Sim {
         tick: _, rng: _, units: _, labels: _, players: _, ai_seats: _, content: _, starts: _, regions: _,
         bounds: _, confinement: _, perception: _, events: _, weapons: _, movement: _, economy: _,
-        production: _, victory: _, specials: _, start_effects: _, nav: _, subsystems: _, team_changes: _,
+        production: _, victory: _, specials: _, autonomy: _, start_effects: _, nav: _, subsystems: _, team_changes: _,
     } = s;
 }
 
@@ -186,6 +186,10 @@ impl Sim {
         if !self.specials.is_empty() {
             self.specials.hash_into(&mut h);
         }
+        // SIM-38: autonomy decides assists and targets of opportunity.
+        if !self.autonomy.is_empty() {
+            self.autonomy.hash_into(&mut h);
+        }
         if !self.subsystems.is_empty() {
             self.subsystems.hash_into(&mut h);
         }
@@ -254,6 +258,16 @@ mod tests {
     /// Measured once on this scenario; a change here is a change of a section's
     /// meaning and goes with a note in the PR, like the pinned full digest.
     const PINNED: [u64; 5] = [0x152b_54c2_e0ee_8e52, 0xab80_c411_9972_840f, 0x7dce_5ffd_36e3_d6b0, 0xb514_87e8_d035_289e, 0xcc8f_d429_d225_a655];
+
+    #[test]
+    fn a_set_autonomy_level_changes_the_combat_section_and_the_full_digest() {
+        let before = sim();
+        let mut after = before.clone();
+        let id = after.units.iter().next().unwrap().id;
+        after.autonomy.set_for_test(id, [2, 0]);
+        assert_eq!(before.section_digests().differing(&after.section_digests()), ["combat"]);
+        assert_ne!(before.digest(), after.digest());
+    }
 
     #[test]
     fn a_moved_unit_changes_the_movement_section_and_no_other() {

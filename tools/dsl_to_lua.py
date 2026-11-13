@@ -1096,7 +1096,10 @@ class Lifter:
                 v = raw[k]
                 if p == "M" and v and v[0] == "const":
                     v = ("float", struct.unpack("<f", struct.pack("<I", v[1] & 0xFFFFFFFF))[0])
-                args.append(self.arg(v, a))
+                v = self.arg(v, a)
+                # a `bool` parameter is a Lua boolean for the engine call (the
+                # stack word is an int; the A2 bindings take strict booleans)
+                args.append(("boolarg", v) if p == "_N" else v)
             elif p.startswith("VVector3"):
                 args.append(("vec", [self.arg(x, a) for x in raw[k:k + 3]]))
             else:
@@ -1500,6 +1503,9 @@ def render_expr(e, nm, ctx="num"):
         s = f"FM({render_expr(e[1], nm, 'arg')}, {lua_str(e[2])}, {lua_str(e[3])}{args})"
     elif k == "objref":
         s = render_expr(e[1], nm, "arg")
+    elif k == "boolarg":
+        x = e[1]
+        s = ("true" if x[1] else "false") if x[0] == "const" else f"T({render_expr(x, nm, 'arg')})"
     elif k == "locidx":
         s = f"L[{e[1]} + 4 * I({render_expr(e[2], nm)})]"
     elif k == "code":
@@ -1745,6 +1751,28 @@ local M = {}
 local V, S, O, G = Mission.vars, Mission.state, Mission.objects, Mission.globals
 
 local ENGINE_WRITES = {}
+-- The calls that did not work, in order of first occurrence (for the report).
+local function problem(name, kind, why)
+    Mission.lastProblem = name
+    if not Mission.problems[name] then
+        Mission.problems[name] = kind
+        if #Mission.problemOrder < 60 then
+            Mission.problemOrder[#Mission.problemOrder + 1] = { name, kind, Mission.time or 0, why }
+        end
+    end
+end
+-- A handle the mission never set is -1: no object. The engine's object guard
+-- (handle to object, null when absent) makes such a call do nothing and return
+-- 0 (read from the executable, static, for the setters read; assumed for the
+-- rest), where an A2 binding insists on an unsigned handle and raises. That
+-- raise is answered 0 here and counted in Mission.invalid, not as a failure.
+local function negative(...)
+    for i = 1, select('#', ...) do
+        local v = select(i, ...)
+        if math.type(v) == 'integer' and v < 0 then return true end
+    end
+    return false
+end
 local function A(name, ...)
     local f = A2 and A2[name]
     Mission.calls[name] = (Mission.calls[name] or 0) + 1
@@ -1752,14 +1780,28 @@ local function A(name, ...)
     if type(f) ~= 'function' then
         Mission.missing[name] = (Mission.missing[name] or 0) + 1
         Mission.callFailed = true
+        problem(name, 'unbound')
         return nil
     end
     local ok, v = pcall(f, ...)
     if not ok then
+        if tostring(v):find('unsigned integer', 1, true) and negative(...) then
+            Mission.invalid[name] = (Mission.invalid[name] or 0) + 1
+            return 0
+        end
         Mission.failed[name] = (Mission.failed[name] or 0) + 1
         Mission.lastError = tostring(v)
         Mission.callFailed = true
+        problem(name, 'raised', tostring(v))
         return nil
+    end
+    if name == 'GetHandle' then
+        if v == 0 then
+            -- a label no object of the map carries: the invalid handle
+            Mission.unresolved[(...)] = true
+        else
+            Mission.resolved = (Mission.resolved or 0) + 1
+        end
     end
     return v
 end
@@ -1772,12 +1814,14 @@ local function FM(obj, cls, name, ...)
     if type(f) ~= 'function' then
         Mission.missing[key] = (Mission.missing[key] or 0) + 1
         Mission.callFailed = true
+        problem(key, 'unbound')
         return nil
     end
     local ok, v = pcall(f, obj, ...)
     if not ok then
         Mission.failed[key] = (Mission.failed[key] or 0) + 1
         Mission.callFailed = true
+        problem(key, 'raised', tostring(v))
         return nil
     end
     return v
@@ -1888,8 +1932,9 @@ end
 -- Scripts: an action queues a named script on the world (same names run side
 -- by side); scripts run after the rules, oldest first, one step per tick each;
 -- a step's return value is not used; a script whose steps have all run is
--- removed. Steps that wait on the engine (fades, cineractives, audio, movies)
--- are not held here.
+-- removed (one pass after its last step, once it holds no reference, as the
+-- engine deletes it). Steps that wait on the engine (fades, cineractives, audio, movies)
+-- are held by `A2.ScriptWaits` (see runScripts).
 local function NewScript(name)
     local s = { name = name, steps = {}, names = {}, at = 1 }
     Mission.scripts[#Mission.scripts + 1] = s
@@ -1913,12 +1958,31 @@ end
 ENGINE = r"""
 -- ---------------------------------------------------------------- engine
 -- One engine tick: timers, affected variables, rules, scripts.
+-- The step reference count of a script (read from the executable, static):
+-- a blocking engine call (FadeIn/FadeOut, CineractiveStart, AudioMessage,
+-- PlayMusic, PlayCinematicMovie, WaitForEnterKey) given the script and
+-- "don't wait" false holds one reference until it finishes; a script with a
+-- reference does not run its next step and is not removed. `A2.ScriptWaits`
+-- reports the count (the client reports completion; see the stand-in host).
+local function held(s)
+    if not (A2 and A2.ScriptWaits) then return 0 end
+    local ok, n = pcall(A2.ScriptWaits, s)
+    return ok and tonumber(n) or 0
+end
+
 function Mission:runScripts()
     local i = 1
     while i <= #self.scripts do
         local s = self.scripts[i]
         local fn = s.steps[s.at]
-        if fn then
+        local waits = held(s)
+        if not fn then
+            -- every step has run: the engine deletes the script once it holds no reference
+            if waits == 0 then table.remove(self.scripts, i) else i = i + 1 end
+        elseif waits > 0 then
+            self.waited = (self.waited or 0) + 1
+            i = i + 1
+        else
             local name = s.names[s.at]
             s.at = s.at + 1
             self.stepCount = self.stepCount + 1
@@ -1926,11 +1990,7 @@ function Mission:runScripts()
             self.lastStep = name
             local ok, err = pcall(fn, s)
             if not ok then self.stepErrors[#self.stepErrors + 1] = name .. ': ' .. tostring(err) end
-        end
-        if s.steps[s.at] then
             i = i + 1
-        else
-            table.remove(self.scripts, i)
         end
     end
 end
@@ -1960,6 +2020,7 @@ function Mission:runRules()
             local ok, holds = pcall(rule.when, S, O)
             local r = (ok and holds == true and not self.callFailed) and 1 or 0
             if not ok then self.conditionErrors[rule.name] = tostring(holds) end
+            if self.callFailed and not self.blocked[rule.name] then self.blocked[rule.name] = self.lastProblem end
             if r ~= rule.last then
                 rule.last = r
                 if r == 1 then
@@ -2051,12 +2112,17 @@ def convert(dsl_path, drl_path, engine):
     w("    rules = {}, affected = {}, satisfied = {}, fired = {}, fireCount = {}, ran = {},")
     w("    calls = {}, missing = {}, failed = {}, notDecoded = {}, stepErrors = {},")
     w("    conditionErrors = {}, engineVars = {}, stepCount = 0, callFailed = false,")
+    w("    problems = {}, problemOrder = {}, blocked = {}, invalid = {}, unresolved = {},")
     w("}")
     w(PRELUDE)
     # handles and arrays
     for a, (n, k, size, _) in sorted(d.data.items()):
         if k in ("intarray", "floatarray", "Vector3"):
             w(f"O.{n} = {{}}")
+        elif k in ("int", "float"):
+            # exported scalars are zero before ScriptInit runs (a rule can read
+            # a handle an earlier script has not yet written)
+            w(f"O.{n} = {'0' if k == 'int' else '0.0'}")
     w("")
     w("-- ---------------------------------------------------------------- functions")
     order = sorted(funcs, key=lambda a: (["ScriptExtendInterface", "ScriptInit", "action", "step", "helper"]

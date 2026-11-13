@@ -637,7 +637,7 @@ mod view_tests {
             hull: [Fixed::from_int(hull), Fixed::from_int(100)],
             shields: [[Fixed::ZERO; 2]; 4],
             crew: None,
-            energy: None,
+            energy: None, autonomy: None,
             flags,
             progress: None,
         }

@@ -524,6 +524,11 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
     if u.system_hit_points.iter().any(|f| *f != Fixed::ZERO) {
         c.list("system_hit_points", u.system_hit_points.map(fixed_text));
     }
+    // `warpSpeed` (SIM-36 seam), only when set: the sim reads it from the
+    // definition, so it is a sim-visible rule; content without it keeps its text.
+    if m.warp_speed != Fixed::ZERO {
+        c.fixed("warp_speed", m.warp_speed);
+    }
     c.finish()
 }
 
