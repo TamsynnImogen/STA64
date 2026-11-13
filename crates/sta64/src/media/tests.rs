@@ -22,17 +22,23 @@ struct Fake {
     frames: u64,
     step: u64,
     audio: bool,
+    /// Sound is delivered for the first this-many frames only.
+    audio_until: u64,
 }
 
 impl Fake {
     fn movie(frames: u64, audio: bool) -> Movie {
+        Self::movie_until(frames, audio, u64::MAX)
+    }
+
+    fn movie_until(frames: u64, audio: bool, audio_until: u64) -> Movie {
         let info = StreamInfo {
             container: Container::Bink,
             video: Some(VideoInfo { width: 4, height: 2, frame_rate: Rational::new(FPS, 1), frame_count: Some(frames), codec: "fake".into(), has_alpha: false }),
             audio: if audio { vec![AudioInfo { sample_rate: RATE, channels: 1, codec: "fake".into(), total_frames: None }] } else { vec![] },
             duration: None,
         };
-        Movie::from_source(Box::new(Fake { info, frames, step: 0, audio }))
+        Movie::from_source(Box::new(Fake { info, frames, step: 0, audio, audio_until }))
     }
 }
 
@@ -59,6 +65,9 @@ impl MediaSource for Fake {
             })));
         }
         self.step += 1;
+        if i >= self.audio_until {
+            return self.next_event();
+        }
         let n = (RATE / FPS) as usize;
         Ok(Some(MediaEvent::Audio(AudioChunk {
             track: 0,
@@ -99,6 +108,8 @@ fn app() -> (App, CallLog) {
             let (n, kind) = name.split_at(name.len() - 1);
             match (n.parse::<u64>(), kind) {
                 (Ok(n), "f") => Ok(Opened { movie: Fake::movie(n, true), path: name.into(), sidecar: None }),
+                (Ok(n), "a") => Ok(Opened { movie: Fake::movie_until(n, true, 20), path: name.into(), sidecar: None }),
+                (Ok(n), "s") => Ok(Opened { movie: Fake::movie(n, false), path: name.into(), sidecar: Some((RATE, vec![[0.0f32; 2]; RATE as usize * 5].into())) }),
                 (Ok(n), "v") => Ok(Opened { movie: Fake::movie(n, false), path: name.into(), sidecar: None }),
                 _ => Err(format!("{name}: no such movie")),
             }
@@ -164,6 +175,10 @@ fn plays_a_movie_into_a_panel_in_step_with_its_sound_and_reports_done() {
     // 60 frames at 30 fps from a sound consumed at the virtual rate: about 60 updates after the start.
     let played = started.unwrap();
     assert!((54..=70).contains(&played), "{played} updates of playback (total {n})");
+    // The panel goes dark when the movie ends; that last sample is not a picture.
+    if seen.last() == Some(&0) {
+        seen.pop();
+    }
     // The picture only moves forward and ends on the last frames.
     assert!(seen.windows(2).all(|w| w[0] <= w[1] || w[0] == 255), "{seen:?}");
     assert!(seen.iter().copied().filter(|r| *r != 255).max().unwrap() >= 57, "{seen:?}");
@@ -264,8 +279,8 @@ fn mission_movie_events_play_and_report_done() {
     use sta_sim::SimEvent;
     use sta_sim::present::Presentation;
     let (mut app, _log) = app();
-    app.update(); // Startup made the panel image.
-    let screen = app.world().resource::<PanelScreen>().0.clone();
+    let screen = panel(&mut app);
+    app.insert_resource(PanelScreen(screen.clone()));
     let ev = |p| crate::sim_link::SimMsg(SimEvent::Present(p));
     app.world_mut().write_message(ev(Presentation::Movie { name: "40f".into(), in_panel: true, skippable: false }));
     app.world_mut().write_message(ev(Presentation::Movie { name: "10f".into(), in_panel: false, skippable: true }));
@@ -391,4 +406,95 @@ fn install_intro_sequence_plays() {
         assert!(matches!(f[i].2, MovieOutcome::Completed | MovieOutcome::Stopped), "{name}: {:?}", f[i].2);
         eprintln!("{name}: {:?} after {shown_after} pictures", f[i].2);
     }
+}
+
+/// A backend that takes no streams, like a missing device.
+struct Deaf;
+
+impl crate::audio::AudioBackend for Deaf {
+    fn name(&self) -> &'static str {
+        "deaf"
+    }
+    fn play(&mut self, _: &crate::audio::Sound, _: Bus, _: Option<[f32; 3]>) {}
+    fn bus_busy(&self, _: Bus) -> bool {
+        false
+    }
+    fn set_bus_volume(&mut self, _: crate::audio::MixBus, _: f32) {}
+    fn stop_all(&mut self) {}
+    fn stop_bus(&mut self, _: Bus) {}
+    fn set_listener(&mut self, _: [f32; 3], _: [f32; 3]) {}
+}
+
+#[test]
+fn a_backend_that_takes_no_stream_does_not_hold_the_movie_back() {
+    let (mut app, _log) = app();
+    app.insert_non_send(Mixer::new(Box::new(Deaf)));
+    let h = panel(&mut app);
+    // Long enough that two seconds of queued sound would have stalled the decoder.
+    play(&mut app, "300f", MovieTarget::Panel(h.clone()), false);
+    run_until(&mut app, "ends on the wall clock", |a| !finished(a).is_empty());
+    assert_eq!(finished(&app)[0].2, MovieOutcome::Completed);
+    assert!(red(&app, &h) >= 250 || red(&app, &h) < 50, "last frame shown or panel blanked");
+}
+
+#[test]
+fn sound_shorter_than_the_picture_lets_the_picture_go_on() {
+    let (mut app, _log) = app();
+    let h = panel(&mut app);
+    // Sound for 20 frames, picture for 200: more than the decoder's frame bound ahead of the sound clock.
+    play(&mut app, "200a", MovieTarget::Panel(h), false);
+    run_until(&mut app, "ends although the sound stopped", |a| !finished(a).is_empty());
+    assert_eq!(finished(&app)[0].2, MovieOutcome::Completed);
+}
+
+#[test]
+fn a_soundtrack_file_beside_a_silent_movie_does_not_starve_the_picture() {
+    let (mut app, log) = app();
+    let h = panel(&mut app);
+    play(&mut app, "60s", MovieTarget::Panel(h.clone()), false);
+    let mut top = 0u8;
+    run_until(&mut app, "ends", |a| {
+        let r = red(a, &h);
+        if r != 255 {
+            top = top.max(r);
+        }
+        !finished(a).is_empty()
+    });
+    assert_eq!(finished(&app)[0].2, MovieOutcome::Completed);
+    assert!(top >= 55, "pictures reached frame {top}");
+    assert!(log.calls().contains(&Call::PlayStream { sample_rate: RATE, bus: MOVIE_BUS }));
+}
+
+#[test]
+fn a_second_movie_for_one_panel_replaces_the_first() {
+    let (mut app, _log) = app();
+    let h = panel(&mut app);
+    let first = play(&mut app, "3000f", MovieTarget::Panel(h.clone()), false);
+    app.update();
+    app.update();
+    let second = play(&mut app, "20f", MovieTarget::Panel(h), false);
+    run_until(&mut app, "both report", |a| finished(a).len() == 2);
+    let f = finished(&app);
+    assert_eq!((f[0].0, &f[0].2), (first, &MovieOutcome::Stopped));
+    assert_eq!((f[1].0, &f[1].2), (second, &MovieOutcome::Completed));
+}
+
+#[test]
+fn input_is_taken_while_an_unskippable_movie_plays_and_the_next_starts_in_the_same_frame() {
+    let (mut app, _log) = app();
+    play(&mut app, "30f", MovieTarget::Fullscreen, false);
+    let second = play(&mut app, "30f", MovieTarget::Fullscreen, false);
+    app.update();
+    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyM);
+    app.update();
+    assert!(!app.world().resource::<ButtonInput<KeyCode>>().just_pressed(KeyCode::KeyM));
+    // Never a frame with no fullscreen movie between the two.
+    let mut gap = false;
+    run_until(&mut app, "both end", |a| {
+        let m = a.world().resource::<Movies>();
+        gap |= finished(a).len() == 1 && m.fullscreen.is_none();
+        finished(a).len() == 2
+    });
+    assert!(!gap, "no frame between the movies");
+    assert_eq!(finished(&app)[1].0, second);
 }

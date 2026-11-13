@@ -133,10 +133,23 @@ impl Drop for Decoder {
 }
 
 fn run(mut movie: Movie, tx: Sender<Msg>, shared: &Shared, audio: Option<PcmStream>, sidecar: Option<(u32, Arc<[[f32; 2]]>)>) {
-    if let (Some(stream), Some((_, frames))) = (&audio, &sidecar) {
-        stream.push(frames);
-    }
-    let sidecar = sidecar.is_some();
+    // A sidecar soundtrack is fed in as the sound plays, like decoded audio, so it neither
+    // holds the throttle shut nor sits in the queue whole.
+    let mut fed = 0usize;
+    let mut feed = |stream: &PcmStream, whole: bool| {
+        if let Some((rate, frames)) = &sidecar {
+            let chunk = (*rate as usize / 4).max(1);
+            while fed < frames.len() && (whole || stream.queued_secs() < 0.5) {
+                let end = (fed + chunk).min(frames.len());
+                stream.push(&frames[fed..end]);
+                fed = end;
+                if !whole {
+                    break;
+                }
+            }
+        }
+    };
+    let sidecar_on = sidecar.is_some();
     let mut last_pts = Duration::ZERO;
     let end = loop {
         // Wait while the player is far enough behind.
@@ -157,6 +170,9 @@ fn run(mut movie: Movie, tx: Sender<Msg>, shared: &Shared, audio: Option<PcmStre
         if shared.cancel.load(Ordering::Acquire) {
             break None;
         }
+        if let Some(a) = &audio {
+            feed(a, false);
+        }
         match movie.next_event() {
             Ok(Some(MediaEvent::Video(f))) => {
                 last_pts = f.pts;
@@ -168,7 +184,7 @@ fn run(mut movie: Movie, tx: Sender<Msg>, shared: &Shared, audio: Option<PcmStre
             }
             Ok(Some(MediaEvent::Audio(c))) => {
                 // Track 0 only; a sidecar file stands in for a movie without sound.
-                if c.track == 0 && !sidecar && let Some(a) = &audio {
+                if c.track == 0 && !sidecar_on && let Some(a) = &audio {
                     a.push_interleaved(&c.samples, c.channels);
                 }
             }
@@ -177,7 +193,10 @@ fn run(mut movie: Movie, tx: Sender<Msg>, shared: &Shared, audio: Option<PcmStre
         }
     };
     match (&audio, end.is_some()) {
-        (Some(a), true) => a.close(),
+        (Some(a), true) => {
+            feed(a, true);
+            a.close()
+        }
         (Some(a), false) => a.cancel(),
         _ => {}
     }

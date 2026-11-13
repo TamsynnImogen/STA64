@@ -68,6 +68,10 @@ const START_AUDIO_SECS: f64 = 0.2;
 const START_TIMEOUT: f64 = 2.0;
 /// Give up on a movie that shows no frame this long after it started.
 const STALL_TIMEOUT: f64 = 10.0;
+/// The picture goes on by the wall clock when the sound has not advanced this long, seconds.
+const AUDIO_STALL: f64 = 0.25;
+/// Enough picture to start: this many frames, or this much time (slow frame rates).
+const START_SPAN: Duration = Duration::from_millis(400);
 
 /// Names one request, chosen by whoever asks (see [`MovieIds`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -138,7 +142,9 @@ pub(crate) struct MovieOpener(pub Box<OpenFn>);
 
 pub(crate) type OpenFn = dyn Fn(&str) -> Result<locate::Opened, String> + Send + Sync;
 
-/// The image a mission's in-panel movie (the bridge viewscreen) is written to.
+/// The image a mission's in-panel movie (the bridge viewscreen) is written to. The display
+/// that shows it (MED-04 / the bridge) inserts this resource; without one, a mission's
+/// in-panel movie plays full screen.
 #[derive(Resource, Clone)]
 pub struct PanelScreen(pub Handle<Image>);
 
@@ -180,6 +186,8 @@ struct Player {
     /// Wall seconds since the video ran out.
     tail: f64,
     tail_budget: f64,
+    last_audio: Duration,
+    audio_stall: f64,
 }
 
 /// Requests waiting and movies playing.
@@ -219,18 +227,11 @@ impl Plugin for MediaPlugin {
             .add_message::<crate::sim_link::SimMsg>()
             .init_resource::<Movies>()
             .init_resource::<MovieIds>()
-            .add_systems(Startup, init_panel)
             .add_systems(PreUpdate, skip_keys.after(InputSystems))
             .add_systems(
                 Update,
                 (mission::bridge, intake, drive, fit_overlays, duck_music).chain().in_set(GameSet::Ui),
             );
-    }
-}
-
-fn init_panel(mut commands: Commands, images: Option<ResMut<Assets<Image>>>) {
-    if let Some(mut images) = images {
-        commands.insert_resource(PanelScreen(images.add(blank(16, 9))));
     }
 }
 
@@ -244,30 +245,34 @@ fn blank(w: u32, h: u32) -> Image {
     )
 }
 
-/// Esc, Space, Enter or a click asks to skip the fullscreen movie, and the press is taken
-/// so the front end underneath does not also act on it.
+/// Esc, Space, Enter or a click skips a skippable fullscreen movie. While any fullscreen movie
+/// is up or queued, every key and click press is taken so the screens under it do not act.
 fn skip_keys(
     keys: Option<ResMut<ButtonInput<KeyCode>>>,
     mouse: Option<ResMut<ButtonInput<MouseButton>>>,
     mut movies: ResMut<Movies>,
 ) {
-    let skippable = movies.fullscreen.as_ref().is_some_and(|p| p.skippable);
-    if !skippable {
+    if !movies.fullscreen_busy() {
         return;
     }
+    let skippable = movies.fullscreen.as_ref().is_some_and(|p| p.skippable);
     if let Some(mut keys) = keys {
-        for k in [KeyCode::Escape, KeyCode::Space, KeyCode::Enter, KeyCode::NumpadEnter] {
-            if keys.just_pressed(k) {
-                keys.clear_just_pressed(k);
+        let pressed: Vec<KeyCode> = keys.get_just_pressed().copied().collect();
+        for k in pressed {
+            keys.clear_just_pressed(k);
+            if skippable && matches!(k, KeyCode::Escape | KeyCode::Space | KeyCode::Enter | KeyCode::NumpadEnter) {
                 movies.skip = true;
             }
         }
     }
-    if let Some(mut mouse) = mouse
-        && mouse.just_pressed(MouseButton::Left)
-    {
-        mouse.clear_just_pressed(MouseButton::Left);
-        movies.skip = true;
+    if let Some(mut mouse) = mouse {
+        let pressed: Vec<MouseButton> = mouse.get_just_pressed().copied().collect();
+        for b in pressed {
+            mouse.clear_just_pressed(b);
+            if skippable && b == MouseButton::Left {
+                movies.skip = true;
+            }
+        }
     }
 }
 
@@ -344,29 +349,7 @@ fn drive(
         return;
     };
 
-    // Start what is waiting: panels at once, fullscreen when the screen is free.
-    let mut waiting = std::mem::take(&mut movies.pending);
-    while let Some(req) = waiting.pop_front() {
-        let fullscreen = matches!(req.target, MovieTarget::Fullscreen);
-        if fullscreen && movies.fullscreen.is_some() {
-            movies.pending.push_back(req);
-            continue;
-        }
-        let opened = match (&opener, &vfs) {
-            (Some(o), _) => (o.0)(&req.name),
-            (None, Some(v)) => locate::open(&v.0, &req.name),
-            (None, None) => Err("no install mounted".to_owned()),
-        };
-        let started = opened.map(|o| start(&req, o, &mut images, &mut commands));
-        match started {
-            Ok(p) if fullscreen => movies.fullscreen = Some(p),
-            Ok(p) => movies.panels.push(p),
-            Err(why) => {
-                warn!("movie {:?}: {why}; skipped", req.name);
-                done.write(MovieFinished { id: req.id, name: req.name, outcome: MovieOutcome::Failed(why) });
-            }
-        }
-    }
+    launch(&mut movies, &vfs, &opener, &mut images, &mut commands, &mut done);
 
     let skip = std::mem::take(&mut movies.skip);
     let mut ended: Vec<(Player, MovieOutcome)> = Vec::new();
@@ -387,8 +370,64 @@ fn drive(
         if let MovieOutcome::Failed(why) = &outcome {
             warn!("movie {:?}: {why}", p.name);
         }
+        let panel = p.overlay.is_none().then(|| (p.image.clone(), p.size));
         let (id, name) = finish(p, &mut commands);
+        if let Some((h, (w, hh))) = panel
+            && let Some(mut img) = images.get_mut(&h)
+        {
+            *img = blank(w, hh); // the panel goes dark rather than keeping the last frame
+        }
         done.write(MovieFinished { id, name, outcome });
+    }
+    // The next queued movie takes the screen in the same frame, so nothing shows between them.
+    launch(&mut movies, &vfs, &opener, &mut images, &mut commands, &mut done);
+}
+
+/// Start what is waiting: panels at once (a second movie for a panel replaces the first),
+/// fullscreen when the screen is free.
+fn launch(
+    movies: &mut Movies,
+    vfs: &Option<Res<Mounted>>,
+    opener: &Option<Res<MovieOpener>>,
+    images: &mut Assets<Image>,
+    commands: &mut Commands,
+    done: &mut MessageWriter<MovieFinished>,
+) {
+    let mut waiting = std::mem::take(&mut movies.pending);
+    while let Some(req) = waiting.pop_front() {
+        let fullscreen = matches!(req.target, MovieTarget::Fullscreen);
+        if fullscreen && movies.fullscreen.is_some() {
+            movies.pending.push_back(req);
+            continue;
+        }
+        let opened = match (opener, vfs) {
+            (Some(o), _) => (o.0)(&req.name),
+            (None, Some(v)) => locate::open(&v.0, &req.name),
+            (None, None) => Err("no install mounted".to_owned()),
+        };
+        let started = opened.map(|o| start(&req, o, images, commands));
+        match started {
+            Ok(p) if fullscreen => movies.fullscreen = Some(p),
+            Ok(p) => {
+                if let MovieTarget::Panel(h) = &req.target {
+                    let mut i = 0;
+                    while i < movies.panels.len() {
+                        if movies.panels[i].image.id() == h.id() {
+                            let old = movies.panels.remove(i);
+                            let (id, name) = finish(old, commands);
+                            done.write(MovieFinished { id, name, outcome: MovieOutcome::Stopped });
+                        } else {
+                            i += 1;
+                        }
+                    }
+                }
+                movies.panels.push(p);
+            }
+            Err(why) => {
+                warn!("movie {:?}: {why}; skipped", req.name);
+                done.write(MovieFinished { id: req.id, name: req.name, outcome: MovieOutcome::Failed(why) });
+            }
+        }
     }
 }
 
@@ -432,6 +471,8 @@ fn start(req: &PlayMovie, opened: locate::Opened, images: &mut Assets<Image>, co
         failure: None,
         tail: 0.0,
         tail_budget: 1.0,
+        last_audio: Duration::ZERO,
+        audio_stall: 0.0,
     }
 }
 
@@ -500,13 +541,19 @@ fn step(p: &mut Player, dt: f64, skip: bool, images: &mut Assets<Image>, mixer: 
     match p.phase {
         Phase::Buffering => {
             let audio_ready = p.stream.as_ref().is_none_or(|s| s.queued_secs() >= START_AUDIO_SECS);
-            let video_ready = !p.has_video || p.frames.len() >= START_FRAMES;
+            let video_ready = !p.has_video || p.frames.len() >= START_FRAMES || p.frames.back().is_some_and(|f| f.pts >= START_SPAN);
             if p.ended || p.waited > START_TIMEOUT || (video_ready && audio_ready) {
                 if p.ended && p.frames.is_empty() && p.shown == 0 && p.failure.is_some() && p.stream.as_ref().is_none_or(|s| s.queued_frames() == 0) {
                     return Some(MovieOutcome::Failed(p.failure.take().unwrap_or_default()));
                 }
-                if let (Some(s), Some(m)) = (&p.stream, mixer) {
-                    m.backend.play_stream(s, MOVIE_BUS);
+                if let Some(s) = &p.stream {
+                    if let Some(m) = mixer {
+                        m.backend.play_stream(s, MOVIE_BUS);
+                    }
+                    if !s.is_attached() {
+                        // Nobody will pull it: stop queueing sound so the decoder is not held back.
+                        s.cancel();
+                    }
                 }
                 p.phase = Phase::Playing;
                 p.waited = 0.0;
@@ -516,7 +563,21 @@ fn step(p: &mut Player, dt: f64, skip: bool, images: &mut Assets<Image>, mixer: 
         Phase::Playing => {
             // The sound's position is the clock while a backend is pulling it; otherwise wall time.
             match &p.stream {
-                Some(s) if s.is_attached() && !s.is_drained() => p.clock = p.clock.max(s.position()),
+                Some(s) if s.is_attached() && !s.is_drained() => {
+                    let pos = s.position();
+                    if pos > p.last_audio {
+                        p.last_audio = pos;
+                        p.audio_stall = 0.0;
+                        p.clock = p.clock.max(pos);
+                    } else {
+                        // The sound is not advancing (starved, shorter than the picture, device
+                        // stopped): after a short grace the picture goes on by itself.
+                        p.audio_stall += dt;
+                        if p.audio_stall > AUDIO_STALL {
+                            p.clock += Duration::from_secs_f64(dt);
+                        }
+                    }
+                }
                 _ => p.clock += Duration::from_secs_f64(dt),
             }
             p.decoder.set_clock(p.clock);
