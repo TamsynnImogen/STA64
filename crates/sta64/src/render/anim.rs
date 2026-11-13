@@ -11,16 +11,55 @@
 //! (against its own key-to-key step) is an *event* track; the rest are *ambient*.
 //!
 //! Ambient tracks keep looping in [`model_scene::animate`]. An event track rests on
-//! its first key (shut) and, when its model's builder starts a build or launches a
-//! ship ([`SimEvent::BuildStarted`], [`SimEvent::Built`]), plays once forward and
-//! back (open, then close) on the sim clock. Docking has no sim event yet; when it
-//! gains one it only needs another arm in [`triggers`].
+//! its first key (shut) and plays once forward and back (open, then close) on the sim
+//! clock when its model's unit does what the unit's own data says it can do (RND-21):
+//!
+//! - a unit that **builds** (`build.list`, the ODF's build items) plays on
+//!   [`SimEvent::BuildStarted`] and [`SimEvent::Built`]: bay doors, build arms;
+//! - a unit that is **armed** and builds nothing (`hardpoints`, the ODF's weapon
+//!   slots) plays on [`SimEvent::Fired`] of its own: turrets, platform weapons, special
+//!   weapons such as hyper artillery;
+//! - a model **without a sim unit** (the model viewer, a map-view ship, an effect
+//!   model) has nothing to wait for and plays on its own, then rests a period
+//!   ([`Trigger::Idle`]; the rest is ours, nothing in the model says it);
+//! - a unit that neither builds nor fires (workers at work, deploy, transwarp) has no
+//!   sim event that says when ([`Trigger::None`]); the track rests. Docking is the
+//!   same: the sim emits no docking event (`UnitFlags::DOCKED` is never set), so it
+//!   waits for one, and only needs another arm in [`triggers`].
+//!
+//! The choice is read from the unit's content, never from a model or track name.
 use crate::clock::AnimClock;
 use crate::render::model_scene::{AnimKeys, NodeAnim};
 use crate::sim_link::{SimEntities, SimMsg};
 use bevy::prelude::*;
 use sta_assets::model::Keys;
 use sta_sim::SimEvent;
+
+/// What starts an event track.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum Trigger {
+    /// The unit builds: [`SimEvent::BuildStarted`] / [`SimEvent::Built`].
+    #[default]
+    Build,
+    /// The unit is armed and builds nothing: its own [`SimEvent::Fired`].
+    Fire,
+    /// No sim unit: plays by itself, once each period of rest.
+    Idle,
+    /// A unit that neither builds nor fires: nothing in the sim says when.
+    None,
+}
+
+/// The trigger of a model's event tracks from what its unit can do (`build.list` and
+/// `hardpoints` of its definition, as `(builds, armed)`); `None` for the unit: no sim
+/// unit.
+pub fn trigger_for(unit: Option<(bool, bool)>) -> Trigger {
+    match unit {
+        None => Trigger::Idle,
+        Some((true, _)) => Trigger::Build,
+        Some((false, true)) => Trigger::Fire,
+        Some((false, false)) => Trigger::None,
+    }
+}
 
 /// How a track plays.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,6 +128,12 @@ pub struct EventAnim {
     held: bool,
     /// Fraction open when a held bay begins closing, including early cancellation.
     closing_from: Option<f32>,
+    /// What starts it.
+    pub trigger: Trigger,
+    /// The trigger has been read from the unit's content.
+    assigned: bool,
+    /// Wall-clock time an idle track may play again.
+    idle_from: f64,
 }
 
 impl EventAnim {
@@ -99,6 +144,9 @@ impl EventAnim {
             started: None,
             held: false,
             closing_from: None,
+            trigger: Trigger::Build,
+            assigned: false,
+            idle_from: 0.0,
         }
     }
 }
@@ -137,14 +185,64 @@ pub fn pose(track: &NodeAnim, elapsed: Option<f32>) -> (Transform, bool) {
     (key_pose(track, k), true)
 }
 
-/// Whether `event` plays the event tracks of the builder it names.
-pub fn triggers(event: &SimEvent) -> Option<sta_sim::EntityId> {
+/// The unit whose event tracks `event` plays, and the trigger kind it is for.
+pub fn triggers(event: &SimEvent) -> Option<(sta_sim::EntityId, Trigger)> {
     match event {
         // Build arms, and the bay opening as the ship starts to come together.
-        SimEvent::BuildStarted { builder, .. } => Some(*builder),
+        SimEvent::BuildStarted { builder, .. } => Some((*builder, Trigger::Build)),
         // The finished ship leaves: bay doors.
-        SimEvent::Built { builder, .. } => Some(*builder),
+        SimEvent::Built { builder, .. } => Some((*builder, Trigger::Build)),
+        // A weapon fires: turrets and the like.
+        SimEvent::Fired { shooter, .. } => Some((*shooter, Trigger::Fire)),
         _ => None,
+    }
+}
+
+/// Gives each new event track its trigger from its unit's content. A track whose root has
+/// no sim entity is idle; one whose unit's definition is not known (no content loaded)
+/// keeps the build trigger it was made with.
+pub fn assign_triggers(
+    link: Res<crate::sim_link::SimLink>,
+    content: Option<Res<crate::sim_link::ContentRes>>,
+    roots: Query<&crate::sim_link::SimEntity>,
+    mut fresh: Query<&mut EventAnim>,
+) {
+    for mut a in &mut fresh {
+        if a.assigned {
+            continue;
+        }
+        let unit = roots.get(a.root).ok().map(|id| id.0);
+        let caps = match (unit, content.as_deref()) {
+            (None, _) => None,
+            (Some(id), Some(c)) => {
+                let def = link.curr().unit(id).and_then(|u| c.0.unit(u.def));
+                match def {
+                    Some(d) => Some((!d.build.list.is_empty(), !d.hardpoints.is_empty())),
+                    None => continue,
+                }
+            }
+            (Some(_), None) => continue,
+        };
+        a.trigger = trigger_for(caps);
+        a.assigned = true;
+    }
+}
+
+/// Tracks of a model with no sim unit (the model viewer has no sim at all) play by
+/// themselves: once forward and back, then a period of rest.
+pub fn play_idle(clock: Res<AnimClock>, mut q: Query<&mut EventAnim>, owners: Query<(), With<crate::sim_link::SimEntity>>) {
+    let wall = clock.wall();
+    for mut a in &mut q {
+        // No `SimEntity` on the root: nothing in the sim to wait for, whatever the
+        // trigger said before content loaded.
+        if owners.get(a.root).is_err() && a.trigger != Trigger::Idle {
+            a.trigger = Trigger::Idle;
+            a.assigned = true;
+        }
+        if a.trigger == Trigger::Idle && a.started.is_none() && wall >= a.idle_from {
+            a.started = Some(wall);
+            a.idle_from = wall + f64::from(3.0 * a.track.period); // two periods playing, one resting
+        }
     }
 }
 
@@ -155,10 +253,12 @@ pub fn start_events(
     clock: Res<AnimClock>,
     mut q: Query<&mut EventAnim>,
 ) {
-    let mut roots = Vec::new();
+    let mut roots = std::collections::HashSet::new();
     for SimMsg(ev) in msgs.read() {
-        if let Some(root) = triggers(ev).and_then(|id| ents.0.get(&id)) {
-            roots.push(*root);
+        if let Some((id, kind)) = triggers(ev)
+            && let Some(root) = ents.0.get(&id)
+        {
+            roots.insert((*root, kind));
         }
     }
     if roots.is_empty() {
@@ -167,7 +267,7 @@ pub fn start_events(
     let now = clock.now();
     for mut a in &mut q {
         // A play in progress is not restarted.
-        if a.started.is_none() && roots.contains(&a.root) {
+        if a.started.is_none() && roots.contains(&(a.root, a.trigger)) {
             a.started = Some(now);
         }
     }
@@ -185,7 +285,8 @@ pub fn play_events(clock: Res<AnimClock>,
             .get(a.root)
             .ok()
             .is_some_and(|id| bays.as_ref().is_some_and(|b| b.open.contains(&id.0)));
-        let (p, going) = construction_pose(&mut a, now, held);
+        let at = if a.trigger == Trigger::Idle { clock.wall() } else { now };
+        let (p, going) = construction_pose(&mut a, at, held);
         if !going && a.started.is_some() {
             a.started = None;
         }
@@ -236,7 +337,7 @@ pub fn add_systems(app: &mut App) {
     use crate::app::GameSet;
     app.add_message::<SimMsg>().add_systems(
         Update,
-        (start_events, play_events)
+        (assign_triggers, play_idle, start_events, play_events)
             .chain()
             .after(crate::render::fx::specials::ConstructionSet)
             .in_set(GameSet::Interpolate)
@@ -391,6 +492,99 @@ mod tests {
         );
     }
 
+    /// The highest the door gets when unit 1 of `def` (with the fake content loaded) has
+    /// `event` (a JSON5 `SimEvent`) happen at tick 30.
+    fn peak_after(def: &str, event: &str) -> f32 {
+        use sta_sim::command::LocalRouter;
+        use sta_sim::fake::ScriptedSource;
+        let db = sta_content::fake::db();
+        let text = format!(
+            "{{ units: [{{ id: 1, def: \"{def}\", owner: 0, hull: 800, rails: [{{ at: 0, pos: {{ x: 0, y: 0, z: 0 }} }}] }}],
+               events: [{{ at: 30, event: {event} }}] }}"
+        );
+        let source = ScriptedSource::from_json5(&text, &db).unwrap();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f64(1.0 / 60.0)))
+            .configure_sets(Update, (crate::app::GameSet::SimLink, crate::app::GameSet::Interpolate).chain())
+            .add_plugins(crate::sim_link::SimLinkPlugin)
+            .init_resource::<SimEntities>()
+            .insert_resource(crate::sim_link::ContentRes(std::sync::Arc::new(db)))
+            .insert_resource(crate::sim_link::SimLink::new(Box::new(source), Box::new(LocalRouter::new()), sta_sim::PlayerId(0)));
+        add_systems(&mut app);
+        app.update();
+        let root = app.world_mut().spawn(crate::sim_link::SimEntity(sta_sim::EntityId(1))).id();
+        app.world_mut().resource_mut::<SimEntities>().0.insert(sta_sim::EntityId(1), root);
+        let node = app.world_mut().spawn((EventAnim::new(door(), root), Transform::IDENTITY)).id();
+        let mut peak = 0.0f32;
+        for _ in 0..600 {
+            app.update();
+            peak = peak.max(app.world().get::<Transform>(node).unwrap().translation.x);
+        }
+        peak
+    }
+
+    #[test]
+    fn what_a_unit_can_do_picks_its_trigger() {
+        assert_eq!(trigger_for(Some((true, true))), Trigger::Build);
+        assert_eq!(trigger_for(Some((true, false))), Trigger::Build);
+        assert_eq!(trigger_for(Some((false, true))), Trigger::Fire);
+        assert_eq!(trigger_for(Some((false, false))), Trigger::None);
+        assert_eq!(trigger_for(None), Trigger::Idle);
+    }
+
+    const FIRED: &str = "{ Fired: { shooter: 1, weapon: 0, hardpoint: 0, target: { Entity: 1 } } }";
+    const BUILT: &str = "{ Built: { builder: 1, id: 2 } }";
+
+    /// An armed unit's event tracks play when it fires, and not when a ship leaves it.
+    #[test]
+    fn an_armed_units_track_plays_on_its_own_shot() {
+        assert!(peak_after("fx_cruiser", FIRED) > 10.0);
+        assert_eq!(peak_after("fx_cruiser", BUILT), 0.0);
+    }
+
+    /// A builder's tracks play on a build or launch, not on its guns.
+    #[test]
+    fn a_builders_track_plays_on_a_launch_and_not_on_a_shot() {
+        assert!(peak_after("fx_yard", BUILT) > 10.0);
+        assert_eq!(peak_after("fx_yard", FIRED), 0.0);
+    }
+
+    /// A unit that neither builds nor fires has no sim event for its track: it rests.
+    #[test]
+    fn a_unit_with_no_event_to_wait_for_rests() {
+        assert_eq!(peak_after("fx_miner", FIRED), 0.0);
+        assert_eq!(peak_after("fx_miner", BUILT), 0.0);
+    }
+
+    /// A model with no sim unit plays by itself, on the wall clock, and rests between.
+    #[test]
+    fn a_model_with_no_sim_unit_plays_on_its_own_and_rests_between() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f64(1.0 / 30.0)))
+            .insert_resource(AnimClock::default())
+            .add_systems(Update, (crate::clock::advance_idle_clock, play_idle, play_events).chain());
+        let root = app.world_mut().spawn_empty().id();
+        let node = app.world_mut().spawn((EventAnim::new(door(), root), Transform::IDENTITY)).id();
+        let (mut peaks, mut shut_after) = (0, false);
+        let mut was_open = false;
+        for _ in 0..600 {
+            app.update();
+            let open = app.world().get::<Transform>(node).unwrap().translation.x > 10.0;
+            if open && !was_open {
+                peaks += 1;
+            }
+            if was_open && !open {
+                shut_after = true;
+            }
+            was_open = open;
+        }
+        // The door is 2 s each way (4 s a play) and rests a period (2 s): 20 s is three plays.
+        assert!((3..=4).contains(&peaks) && shut_after, "plays: {peaks}");
+        assert!(app.world().get::<EventAnim>(node).unwrap().trigger == Trigger::Idle);
+    }
+
     /// With `STA64_TEST_INSTALL` (+ `STA64_TEST_MOD`): every model's tracks, ambient
     /// or event. Stock ships' open-ended tracks are bay doors and arms, so the
     /// listing is printed (run with `--nocapture`) and the check is that such tracks
@@ -406,6 +600,21 @@ mod tests {
         let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), m.as_deref()).unwrap();
         let (mut ambient, mut event) = (0, 0);
         let mut bad = Vec::new();
+        // Each model's unit, from the ODFs: what it builds and whether it is armed.
+        let (index, _) = sta_content::OdfIndex::build(&vfs);
+        let caps: std::collections::BTreeMap<String, (bool, bool)> = match sta_content::ContentDb::load(&vfs, &index) {
+            Ok((db, _)) => {
+                let mut m = std::collections::BTreeMap::new();
+                for u in db.units() {
+                    let e = m.entry(u.model.to_ascii_lowercase()).or_insert((false, false));
+                    e.0 |= !u.build.list.is_empty();
+                    e.1 |= !u.hardpoints.is_empty();
+                }
+                m
+            }
+            Err(e) => panic!("content did not load: {e}"),
+        };
+        let mut by_trigger: std::collections::BTreeMap<String, Vec<String>> = Default::default();
         for name in sta_assets::list_models(&vfs) {
             let Some((path, fmt)) = sta_assets::find_model(&vfs, &name) else {
                 continue;
@@ -414,12 +623,14 @@ mod tests {
                 continue;
             };
             let mut line = Vec::new();
+            let mut events_here = 0;
             for c in model.channels.iter().filter(|c| c.period > 0.0) {
                 let kind = classify(&c.keys);
                 match kind {
                     TrackKind::Ambient => ambient += 1,
                     TrackKind::Event => {
                         event += 1;
+                        events_here += 1;
                         if name.starts_with("map_planet")
                             || name.starts_with("map_nebula")
                             || name.contains("asteroid")
@@ -440,8 +651,20 @@ mod tests {
             if !line.is_empty() {
                 println!("{name}: {}", line.join(" "));
             }
+            if events_here > 0 {
+                // The model's unit decides; a model no unit uses is an effect or a map
+                // object, with no sim unit to wait for.
+                let t = trigger_for(caps.get(&name.to_ascii_lowercase()).copied());
+                by_trigger.entry(format!("{t:?}")).or_default().push(format!("{name}({events_here})"));
+            }
         }
         println!("tracks: {ambient} ambient, {event} event");
+        for (t, models) in &by_trigger {
+            println!("event tracks, trigger {t}: {}", models.join(" "));
+        }
+        assert!(!by_trigger.is_empty(), "no model has an event track: the check is vacuous");
+        // The models resolve to their units: some event tracks belong to builders.
+        assert!(by_trigger.contains_key("Build"), "no model resolved to a builder: {:?}", by_trigger.keys());
         assert!(bad.is_empty(), "scenery tracks classed as events: {bad:?}");
     }
 }

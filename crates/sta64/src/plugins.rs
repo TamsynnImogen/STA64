@@ -69,6 +69,8 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
     if cfg.mode().has_window() {
         // render —
         app.add_plugins(crate::render::hulls::HullPlugin);
+        // RND-15: the Key's shadow map for the nebulae's gas and the hulls
+        app.add_plugins(crate::render::shadows::ShadowPlugin);
         app.add_plugins(crate::render::post::PostFxPlugin::from_cfg(cfg));
         // RND-07 cull distances and marks, RND-22 render profile, RND-28 developer shader shadowing
         app.add_plugins((crate::render::cull::CullPlugin, crate::render::profile::ProfilePlugin, crate::render::shader_shadow::ShaderShadowPlugin));
