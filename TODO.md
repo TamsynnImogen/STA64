@@ -148,6 +148,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 - [?] `STA64_TEST_INSTALL=.. STA64_TEST_MAP=.. cargo test -p sta64 --lib the_bench_sim_of_a_map` passes on Roots + STA2 Classic (`fulltech`): not run. (#527)
 - [?] CON-35 rules digest (D9, D10): `STA64_TEST_INSTALL="<Roots install>" cargo test -p sta_net --test rules_handshake -- --nocapture` prints the refusal between STA2 Classic and STA2 Classic Enhanced (first key `RTS_CFG.h:BASE_CREW_PER_SEC: unset here, 30 there`) and each installed mod's rule count; judge whether the named keys and values read well for the lobby's refusal text (UI-11). Replays (format 4) and saves (format 15) record lineage and pack names; older ones are refused with "from an older STA64". (#465)
 
+- [?] Persistent shields (RND-32, #589): on a build containing this change, set `alwaysShowShields = 1` in an isolated test mod's ship or station ODF. Confirm the continuous blue outline follows the craft, disappears at zero shields, returns on recharge, and remains separate from hit flashes. Check cloak/uncloak, losing sight of an enemy, death and returning to the menu. Default and explicit zero stay off. Bounds/colour are documented approximations; [scope and automated checks](docs/PERSISTENT_SHIELDS.md).
+
 ## Checked earlier (morning list)
 
 - [x] Construction live-feedback fixes accepted (2026-11-11, `construction-a1666d0`): the user confirmed visible beams, later chunk reveal and the constructor staying fixed under normal/queued movement. Automated Stop/cancellation and snapshot checks pass. FPS was not reported; this does not complete broader native/Android checks above.
