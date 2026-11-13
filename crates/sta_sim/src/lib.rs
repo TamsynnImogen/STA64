@@ -22,6 +22,7 @@
 //! today's movement.
 
 pub mod autonomy;
+pub mod appearance;
 pub mod boundary;
 pub mod combat;
 pub mod command;
@@ -163,6 +164,8 @@ pub struct Sim {
     /// engage on the tick's weapon pass. Filled by the tick's commands and
     /// drained by the same tick, so it is empty between ticks and not saved.
     team_changes: Vec<EntityId>,
+    /// Cosmetic owning-seat faction labels, recorded from resolved setup.
+    appearance_factions: Vec<(PlayerId, String)>,
 }
 
 impl Sim {
@@ -195,6 +198,7 @@ impl Sim {
             nav: Default::default(),
             subsystems: Default::default(),
             team_changes: Vec::new(),
+            appearance_factions: Vec::new(),
         }
     }
 
@@ -471,7 +475,7 @@ impl Sim {
             }
         }
         let perceived_owners = self.perception.iter().map(|(id, &owner)| (id, owner)).collect();
-        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners }
+        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners, appearance: self.appearance_view() }
     }
 
     /// FNV-1a over all simulation state, for desync detection. The content

@@ -74,7 +74,7 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
 
     if cfg.mode().has_window() {
         // render —
-        app.add_plugins(crate::render::hulls::HullPlugin);
+        app.add_plugins((crate::render::hulls::HullPlugin, crate::render::appearance::AppearancePlugin, crate::render::decals::DecalsPlugin));
         // RND-15: the Key's shadow map for the nebulae's gas and the hulls
         app.add_plugins(crate::render::shadows::ShadowPlugin);
         app.add_plugins(crate::render::post::PostFxPlugin::from_cfg(cfg));

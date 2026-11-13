@@ -43,8 +43,10 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// (CON-35) added the [`Provenance`] record and the keyed content digest's
 /// hash. Format 17 appends the mission-set subsystem switches and damage
 /// (SIM-55). Format 18 (SIM-36) appends the attack approach record
-/// (crafts in warp). Format 19 appends the stuck-order watch rows last; format 20 adds each row's anchor, start distance and birth tick. Only the current format is read.
-pub const FORMAT_VERSION: u16 = 20;
+/// (crafts in warp). Format 19 appends stuck-order watch rows; format 20
+/// adds their anchor, start distance and birth tick. Format 21 appends cosmetic
+/// seat factions. Only the current format is read.
+pub const FORMAT_VERSION: u16 = 21;
 
 const HEADER: usize = 4 + 2 + 4 + 8;
 
@@ -170,6 +172,13 @@ struct EntityRec {
     shields_directional: bool,
     flags: UnitFlags,
     progress: Option<Fixed>,
+}
+
+/// Format 21: cosmetic owning-seat faction labels. No gameplay rules.
+#[derive(Serialize, Deserialize)]
+struct AppearanceRec {
+    version: u8,
+    factions: Vec<(PlayerId, String)>,
 }
 
 /// Format 19, changed in 20: the stuck-order watch rows (`watchdog`).
@@ -406,6 +415,7 @@ impl Sim {
         out.extend(postcard::to_allocvec(&SubsystemsRec { version: 1, rows: self.subsystems.to_rows() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&AttackRec { version: 1, warp: self.approach_warp.to_rec(), engagement: self.engagement.to_rec() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&WatchRec { version: 1, rows: self.watchdog.to_rec() }).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&AppearanceRec { version: 1, factions: self.appearance_factions.clone() }).expect("snapshot serialises"));
         out
     }
 
@@ -454,6 +464,13 @@ impl Sim {
         let (record, rest): (WatchRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         if record.version != 1 { return Err(SnapshotError::Corrupt("unknown order watch record version".into())); }
         let watch_rows = record.rows;
+        let (record, rest): (AppearanceRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        if record.version != 1 { return Err(SnapshotError::Corrupt("unknown appearance record version".into())); }
+        let appearance_factions = record.factions;
+        if !appearance_factions.windows(2).all(|w| w[0].0 < w[1].0)
+            || appearance_factions.iter().any(|(id, name)| name.is_empty() || name.trim() != name || name.to_ascii_lowercase() != *name || !b.players.iter().any(|p| p.0 == *id)) {
+            return Err(SnapshotError::Corrupt("invalid appearance faction rows".into()));
+        }
         if !rest.is_empty() { return Err(SnapshotError::Corrupt("trailing bytes".into())); }
         if let Some(row) = b.economy.miners.iter().find(|row| row.5 > 4) {
             return Err(SnapshotError::Corrupt(format!("mining phase {} is not supported", row.5)));
@@ -575,6 +592,7 @@ impl Sim {
             nav: Default::default(),
             subsystems,
             team_changes: Vec::new(),
+            appearance_factions,
         })
     }
 }
@@ -582,6 +600,10 @@ impl Sim {
 #[cfg(test)]
 #[path = "snapshot/subsystem_tests.rs"]
 mod subsystem_tests;
+
+#[cfg(test)]
+#[path = "snapshot/appearance_tests.rs"]
+mod appearance_tests;
 
 #[cfg(test)]
 #[path = "snapshot/attack_tests.rs"]

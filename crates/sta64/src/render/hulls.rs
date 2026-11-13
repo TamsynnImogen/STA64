@@ -186,6 +186,9 @@ impl HullSource {
 #[derive(Resource, Default)]
 struct HullMaterials(HashMap<AssetId<StandardMaterial>, Handle<HullMaterial>>);
 
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct HullApply;
+
 pub struct HullPlugin;
 
 impl Plugin for HullPlugin {
@@ -195,7 +198,7 @@ impl Plugin for HullPlugin {
             .init_resource::<HullLighting>()
             .init_resource::<HullView>()
             .init_resource::<HullMaterials>()
-            .add_systems(Update, (toggle, update_view, apply, follow_source).chain());
+            .add_systems(Update, (toggle, update_view, apply.in_set(HullApply), follow_source).chain());
     }
 }
 
@@ -342,14 +345,22 @@ fn apply(
 fn follow_source(
     mut changed: MessageReader<AssetEvent<StandardMaterial>>,
     standard: Res<Assets<StandardMaterial>>,
-    made: Res<HullMaterials>,
+    mut made: ResMut<HullMaterials>,
     mut hulls: ResMut<Assets<HullMaterial>>,
 ) {
     for ev in changed.read() {
+        if let AssetEvent::Removed { id } = ev {
+            if let Some(handle) = made.0.remove(id) {
+                hulls.remove(handle.id());
+            }
+            continue;
+        }
         let AssetEvent::Modified { id } = ev else { continue };
         let (Some(h), Some(std)) = (made.0.get(id), standard.get(*id)) else { continue };
         let Some(mut m) = hulls.get_mut(h) else { continue };
         set_source(&mut m.params, std);
+        m.texture = std.base_color_texture.clone();
+        m.normal = std.normal_map_texture.clone();
     }
 }
 
@@ -816,3 +827,7 @@ mod gpu {
         assert!(errors.is_empty(), "shader/pipeline ERROR events:\n{}", errors.join("\n"));
     }
 }
+
+#[cfg(test)]
+#[path = "hulls/appearance_tests.rs"]
+mod appearance_tests;

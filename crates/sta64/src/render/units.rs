@@ -226,6 +226,7 @@ fn hull_share(u: &sta_sim::UnitView) -> f32 {
 #[derive(Resource, Default)]
 pub struct UnitModels {
     models: std::collections::HashMap<String, Option<(String, Arc<Model>)>>,
+    appearance: std::collections::HashMap<ContentKey, Arc<crate::render::appearance::policy::AppearancePolicy>>,
 }
 
 /// Build the model of every root that [`NeedsModel`], in the owner's team
@@ -338,6 +339,10 @@ fn attach_models(
         } else {
             model_scene::spawn(&mut ctx, &model, e)
         };
+        let policy = models.appearance.entry(need.0).or_insert_with(|| {
+            crate::render::appearance::ModelInstance::new(need.0, model.clone(), model_scale, def).policy
+        }).clone();
+        commands.entity(e).insert(crate::render::appearance::ModelInstance { def: need.0, model: model.clone(), scale: model_scale, policy });
         debug!("unit model attached: id={:?} odf={} model={key} meshes={} triangles={} missing_textures={:?}",
             sim.map(|s| s.0), def.odf, stats.meshes, stats.triangles, stats.missing_textures);
     }
@@ -644,7 +649,7 @@ mod view_tests {
     }
 
     fn view(tick: u64, units: Vec<UnitView>, visibility: Vec<(PlayerId, Vec<EntityId>)>) -> WorldView {
-        WorldView { tick, digest: 0, units, players: Vec::new(), visibility, perceived_owners: Vec::new() }
+        WorldView { tick, digest: 0, units, players: Vec::new(), visibility, perceived_owners: Vec::new(), appearance: Default::default() }
     }
 
     #[test]

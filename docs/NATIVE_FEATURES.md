@@ -37,6 +37,9 @@ hard-coded.
 | Team colours, Borg `_b` textures, animated `_1.._9` | A2X `texture_variants`, `rgb_textures`, Refit | material system | todo |
 | DOT3 bump maps | A2X `amd_dot3_compat` | PBR normal maps | todo |
 | Texture variants and legacy texture paths | A2X `texture_variants`, A1 legacy textures | `sta_tex` | todo |
+| Ownership-aware faction hull textures and faction-named model subtrees | A2X `texture_variants` | RND-33 `render::appearance` ([contract](HULL_CUSTOMIZATION.md)); live owning-seat metadata | wip: implementation in validation; existing Borg policy separate |
+| Authored subsystem destruction and reconstruction visuals | A2X `texture_variants` | RND-33; actual subsystem HP, no new combat damage/repair law | wip: implementation in validation |
+| Surface-projected damage decals, selected-name registry images and optional registry lettering | A2X `nebula_renderer` keys; projection redesign requested by Tammy | RND-33 `render::decals`; authored hardpoint volumes, shared identity row | wip: implementation in validation |
 | Nebula renderer | A2X `nebula_renderer` | volumetric nebula pass | todo |
 | Muzzle flashes, animated hardpoints | A2X | VFX + hardpoint animation | todo |
 | Shell display | A2X `shell_display` | shield-hit VFX | todo |

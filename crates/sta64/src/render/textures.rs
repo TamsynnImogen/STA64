@@ -43,6 +43,42 @@ pub struct Loader<'a> {
 }
 
 impl Loader<'_> {
+    /// A strictly DDS/TGA faction variant; a miss never aliases the base asset.
+    pub fn faction_colour(&mut self, name: &str, suffix: &str) -> Option<Handle<Image>> {
+        let key = format!("f:{name}:{suffix}").to_ascii_lowercase();
+        if let Some(h) = self.cache.map.get(&key) { return h.clone(); }
+        let handle = crate::render::appearance::factions::find_faction_texture(self.vfs, name, suffix)
+            .and_then(|(path, fmt)| self.decode_colour(&path, fmt).ok())
+            .map(|image| self.images.add(image));
+        self.cache.map.insert(key, handle.clone());
+        handle
+    }
+
+    pub fn faction_roughness(&mut self, name: &str, suffix: &str) -> Option<Handle<Image>> {
+        let key = format!("fs:{name}:{suffix}").to_ascii_lowercase();
+        if let Some(h) = self.cache.map.get(&key) { return h.clone(); }
+        let handle = crate::render::appearance::factions::find_faction_texture(self.vfs, name, suffix)
+            .and_then(|(path, fmt)| sta_assets::decode_rgba(self.vfs, &path, fmt).ok())
+            .map(|pixels| self.images.add(upload(&sta_assets::pixels::generate_mips(&sta_assets::pixels::roughness_from_specular(&pixels)), false)));
+        self.cache.map.insert(key, handle.clone());
+        handle
+    }
+
+    /// CPU decode permits a colour key on packed as well as loose logo art.
+    pub fn decal_colour(&mut self, name: &str, colour_key: Option<[u8; 3]>) -> Option<Handle<Image>> {
+        let key = format!("decal:{name}:{colour_key:?}").to_ascii_lowercase();
+        if let Some(h) = self.cache.map.get(&key) { return h.clone(); }
+        let pixels = decal_pixels(self.vfs, name).map(|mut p| {
+            if let Some(key) = colour_key {
+                for px in p.pixels.chunks_exact_mut(4) { if px[..3] == key { px[3] = 0; } }
+            }
+            p
+        });
+        let handle = pixels.map(|p| self.images.add(upload(&sta_assets::pixels::generate_mips(&p), true)));
+        self.cache.map.insert(key, handle.clone());
+        handle
+    }
+
     /// A colour texture, optionally its Borg `_b` variant.
     pub fn colour(&mut self, name: &str, borg: bool) -> Option<Handle<Image>> {
         let key = format!("c:{}:{}", borg as u8, name.to_ascii_lowercase());
@@ -144,6 +180,23 @@ impl Loader<'_> {
             Fmt::Png => gpu("png"),
         }
     }
+}
+
+fn decal_pixels(vfs: &sta_vfs::Vfs, name: &str) -> Option<Rgba> {
+    if let Some((path, fmt)) = sta_assets::find_texture(vfs, name) {
+        if let Ok(px) = sta_assets::decode_rgba(vfs, &path, fmt) { return Some(px); }
+        if let Some(Ok(data)) = vfs.read(&path)
+            && let Ok(img) = image::load_from_memory(&data) {
+            let rgba = img.to_rgba8();
+            return Some(Rgba { width: rgba.width(), height: rgba.height(), pixels: rgba.into_raw(), has_alpha: true });
+        }
+    }
+    // BMP is intentionally not in the hull texture resolver, but is a legacy
+    // registry-art format supported by the common asset decoder.
+    let name = name.replace('\\', "/");
+    let bmp = if name.to_ascii_lowercase().ends_with(".bmp") { name } else { format!("{name}.bmp") };
+    [format!("textures/{bmp}"), format!("textures/rgb/{bmp}")].iter()
+        .find_map(|path| sta_assets::bmp::load(vfs, path).ok())
 }
 
 /// Upload a full mip chain (level 0 first) as RGBA8.
