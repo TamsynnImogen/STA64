@@ -17,6 +17,20 @@
 //! raise) until the next tick delivers the receipt. `finish` must run after
 //! every other module has registered its functions.
 //!
+//! # Same-tick use of a built object
+//!
+//! Rule (exe, static): `BuildObject` creates the object at once (the class's
+//! build function, then the world's add) and returns its handle, so a script
+//! may order the new object in the same call sequence. STA64 builds objects
+//! through the sim's command queue, which delivers the receipt one tick later
+//! (a synchronous spawn would be a sim seam, not made here). A void order or
+//! setter named in `DEFERRED_ON_PENDING` that is given a still-pending handle
+//! is held and replayed, in order, by the first `A2` call after the receipt
+//! resolves (at most one tick later than the original); a failed spawn drops
+//! it (the original's handle is 0 then, a no-op). Anything that needs the
+//! object itself (queries, `Exists`) still raises and is counted until the
+//! receipt is in.
+//!
 //! # Evidence grades
 //!
 //! Each rule below is `exe` = read from the executable, static (the
@@ -45,11 +59,77 @@ const TOKEN_BASE: u32 = 0x4000_0000;
 /// `DestroyCritical` hits with this much damage (exe: the constant it builds).
 const CRITICAL_DAMAGE: f64 = 100_000.0;
 
+/// Void orders and setters of an object (all `void` in the executable's
+/// `ScriptInterface`, first parameter the object's handle) that wait for a
+/// pending `BuildObject` handle. Queries, presentation calls and calls on a
+/// team or a resource are not held.
+const DEFERRED_ON_PENDING: &[&str] = &[
+    "AI_Attack",
+    "AllowAsTarget",
+    "Attack",
+    "ButItCanBeDerelicted",
+    "Cloak",
+    "Colonize",
+    "CraftCanRecrew",
+    "CraftCanRepair",
+    "CraftCannotDie",
+    "DamageEngines",
+    "DamageLifeSupport",
+    "DamageSensors",
+    "DamageShieldGenerator",
+    "DamageWeapons",
+    "Decloak",
+    "DestroyCritical",
+    "DisableEngines",
+    "DisableLifeSupport",
+    "DisableSensors",
+    "DisableShieldGenerator",
+    "DisableWeapons",
+    "ExplodeNow",
+    "Goto",
+    "HideObject",
+    "ImmediateCloak",
+    "Mine",
+    "Patrol",
+    "PointAt",
+    "RemoveObject",
+    "ResetImpulseSpeed",
+    "Scout",
+    "SearchAndDestroy",
+    "SetAngularVelocity",
+    "SetCanBeDecommissioned",
+    "SetCrew",
+    "SetCurrentHealth",
+    "SetForceOntoMap",
+    "SetGreenAlert",
+    "SetImpulseSpeed",
+    "SetMaxShields",
+    "SetPerceivedTeam",
+    "SetPosition",
+    "SetRedAlert",
+    "SetShieldPercent",
+    "SetSpecialEnergy",
+    "SetYellowAlert",
+    "Special_Attack",
+    "Stop",
+    "TransferFlag",
+];
+
+/// A call held until the handles it names are built.
+struct Deferred {
+    name: String,
+    inner: Function,
+    args: Vec<Value>,
+}
+
 #[derive(Default)]
 struct State {
     pending: BTreeMap<u32, Rc<SpawnHandle>>,
     /// Handles flagged as special forces: a real id or a pending token.
     special: BTreeSet<u32>,
+    /// Orders given to handles that were still pending, in call order.
+    deferred: Vec<Deferred>,
+    ctx: Option<Shared>,
 }
 
 type St = Rc<RefCell<State>>;
@@ -59,6 +139,16 @@ enum Token {
     Pending,
     Failed,
     Unknown,
+}
+
+/// A script value that names a `BuildObject` token (an integer, or an integral float).
+fn raw_token(v: &Value) -> Option<u32> {
+    let raw = match v {
+        Value::Integer(n) => u32::try_from(*n).ok(),
+        Value::Number(n) if n.fract() == 0.0 && *n >= 0.0 && *n <= f64::from(u32::MAX) => Some(*n as u32),
+        _ => None,
+    };
+    raw.filter(|r| *r >= TOKEN_BASE)
 }
 
 impl State {
@@ -79,14 +169,20 @@ impl State {
                 .any(|t| *t >= TOKEN_BASE && matches!(self.token(*t), Token::Id(i) if i == id))
     }
 
+    /// Whether `v` is a `BuildObject` token whose object is not built yet.
+    fn is_pending(&self, v: &Value) -> bool {
+        raw_token(v).is_some_and(|r| matches!(self.token(r), Token::Pending))
+    }
+
+    /// Whether `v` is a token whose spawn failed.
+    fn is_failed(&self, v: &Value) -> bool {
+        raw_token(v).is_some_and(|r| matches!(self.token(r), Token::Failed))
+    }
+
     /// A value a script passed in: a resolved token becomes its entity id.
     fn translate(&self, v: Value) -> Value {
-        let raw = match &v {
-            Value::Integer(n) => u32::try_from(*n).ok(),
-            Value::Number(n) if n.fract() == 0.0 && *n >= 0.0 && *n <= f64::from(u32::MAX) => Some(*n as u32),
-            _ => None,
-        };
-        match raw.filter(|r| *r >= TOKEN_BASE).map(|r| self.token(r)) {
+        let raw = raw_token(&v);
+        match raw.map(|r| self.token(r)) {
             Some(Token::Id(id)) => Value::Integer(i64::from(id.0)),
             _ => v,
         }
@@ -324,6 +420,7 @@ fn live_unit(ctx: &Shared, name: &str, args: &MultiValue) -> mlua::Result<Entity
 
 pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()> {
     let st: St = Rc::new(RefCell::new(State::default()));
+    st.borrow_mut().ctx = Some(ctx.clone());
     let _ = lua.set_app_data(st.clone());
 
     // BuildObject(odf, team, path, index) and
@@ -656,6 +753,37 @@ fn seams(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()> {
     Ok(())
 }
 
+/// Run the held calls whose handles are built (in the order they were made); a
+/// call on a failed spawn is dropped, one on a handle still pending stays.
+fn replay(st: &St) {
+    if st.borrow().deferred.is_empty() {
+        return;
+    }
+    let held = std::mem::take(&mut st.borrow_mut().deferred);
+    let mut waiting: Vec<Deferred> = Vec::new();
+    for d in held {
+        let (pending, failed) = {
+            let s = st.borrow();
+            (d.args.iter().any(|v| s.is_pending(v)), d.args.iter().any(|v| s.is_failed(v)))
+        };
+        if pending {
+            waiting.push(d);
+        } else if !failed {
+            let args: MultiValue = d.args.iter().cloned().map(|v| st.borrow().translate(v)).collect();
+            if let Err(e) = d.inner.call::<MultiValue>(args) {
+                let ctx = st.borrow().ctx.clone();
+                if let Some(ctx) = ctx {
+                    ctx.borrow_mut().unsupported(&format!("A2.{}: held until its object was built, then failed: {e}", d.name));
+                }
+            }
+        }
+    }
+    // calls made during the replay that were held again: keep them after the older ones
+    let mut s = st.borrow_mut();
+    waiting.append(&mut s.deferred);
+    s.deferred = waiting;
+}
+
 /// Wrap every function of the `A2` table so a resolved `BuildObject` token
 /// reaches it as the real entity id. Call once, after all modules installed.
 pub(super) fn finish(lua: &Lua, table: &Table) -> mlua::Result<()> {
@@ -670,9 +798,17 @@ pub(super) fn finish(lua: &Lua, table: &Table) -> mlua::Result<()> {
         .collect();
     for (name, inner) in entries {
         let st = st.clone();
+        let defers = DEFERRED_ON_PENDING.contains(&name.as_str());
+        let label = name.clone();
         table.set(
             name,
             lua.create_function(move |_, args: MultiValue| {
+                replay(&st);
+                if defers && args.iter().any(|v| st.borrow().is_pending(v)) {
+                    let args: Vec<Value> = args.into_iter().collect();
+                    st.borrow_mut().deferred.push(Deferred { name: label.clone(), inner: inner.clone(), args });
+                    return Ok(MultiValue::new());
+                }
                 let args: MultiValue = args.into_iter().map(|v| st.borrow().translate(v)).collect();
                 inner.call::<MultiValue>(args)
             })?,

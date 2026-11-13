@@ -369,6 +369,10 @@ pub struct UnitDef {
     pub hidden: bool,
     /// `invalidAsTarget = 1`: automatic target selection skips it.
     pub invalid_as_target: bool,
+    /// `attackPower` (SIM-36): how much enemies want to shoot it; automatic
+    /// target choice prefers the highest `attackPower / current shields`.
+    /// `None` when the ODF has no such key.
+    pub attack_power: Option<Fixed>,
     /// `autoExpireTime` (else `lifeTimer`) in ticks; the object removes itself
     /// that long after it appears (SIM-28).
     pub life: Option<Tick>,
@@ -449,6 +453,7 @@ impl UnitDef {
             avoid_me: false,
             hidden: false,
             invalid_as_target: false,
+            attack_power: None,
             life: None,
             raw: Arc::new(raw),
         }

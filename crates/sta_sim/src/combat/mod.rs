@@ -2,6 +2,7 @@
 
 pub mod damage;
 pub mod pd;
+pub mod targeting;
 pub mod weapons;
 
 #[cfg(test)]
@@ -18,3 +19,5 @@ mod weapons_tests;
 pub(crate) mod engine_timing_tests;
 #[cfg(test)]
 mod first_shot_tests;
+#[cfg(test)]
+mod targeting_tests;
