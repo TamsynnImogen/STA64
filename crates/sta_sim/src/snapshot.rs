@@ -172,6 +172,13 @@ struct EntityRec {
     progress: Option<Fixed>,
 }
 
+/// Format 22: cosmetic owning-seat faction labels. No gameplay rules.
+#[derive(Serialize, Deserialize)]
+struct AppearanceRec {
+    version: u8,
+    factions: Vec<(PlayerId, String)>,
+}
+
 /// Format 19, changed in 20: the stuck-order watch rows (`watchdog`).
 #[derive(Serialize, Deserialize)]
 struct WatchRec {
@@ -620,6 +627,7 @@ impl Sim {
             switches,
             attrs,
             team_changes: Vec::new(),
+            appearance_factions,
         })
     }
 }
