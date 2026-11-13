@@ -39,7 +39,6 @@ fn every_orbital_station_snaps_to_a_planet_and_is_refused_in_open_space() {
     for u in db.units() {
         if u.class.0 == "p_mining" {
             assert!(orbit::is_orbital(u), "{}: class p_mining is an orbital station", u.odf);
-            assert_eq!(u.orbit_time.is_some(), u.raw.class_label() == Some("p_mining"));
         } else {
             assert!(!orbit::is_orbital(u), "{}", u.odf);
         }

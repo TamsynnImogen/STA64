@@ -328,13 +328,17 @@ impl Production {
                 // The same rule the placement ghost shows (see [`site`], [`orbit`]).
                 // An orbital station replaces the site rule with the orbit's:
                 // the sim snaps the cursor point to the planet's slot.
+                let mut outward = None;
                 let at = if db.unit(what).is_some_and(orbit::is_orbital) {
                     let (planets, mut orbiters) = orbit::from_entities(db, units);
                     orbiters.extend(
                         self.deploys.iter().filter(|(_, d)| db.unit(d.def).is_some_and(orbit::is_orbital)).map(|(_, d)| d.at),
                     );
                     match orbit::snap(&planets, &orbiters, at) {
-                        Ok(slot) => slot.at,
+                        Ok(slot) => {
+                            outward = Some(slot.heading);
+                            slot.at
+                        }
                         Err(_) => return false,
                     }
                 } else {
@@ -363,6 +367,11 @@ impl Production {
                 if let Some(r) = units.get_mut(builder) {
                     let (mut dx, mut dz) = (r.pos.x - at.x, r.pos.z - at.z);
                     let mut d = (dx * dx + dz * dz).sqrt();
+                    // An orbital station's rig waits outside the orbit, on the planet's far side
+                    // from the centre, never inside the planet.
+                    if let Some(h) = outward {
+                        (dx, dz, d) = (h.0, h.1, Fixed::ONE);
+                    }
                     if d == Fixed::ZERO {
                         (dx, dz, d) = (-r.heading.0, -r.heading.1, Fixed::ONE);
                     }
@@ -536,7 +545,7 @@ impl Production {
             // An orbital station faces along its planet's outward radial.
             let heading = if orbit::is_orbital(def) {
                 let (planets, _) = orbit::from_entities(db, units);
-                orbit::pick(&planets, d.at).map_or((Fixed::ZERO, Fixed::ONE), |p| orbit::slot(&p, d.at).heading)
+                orbit::owner(&planets, d.at).map_or((Fixed::ZERO, Fixed::ONE), |p| orbit::slot(&p, d.at).heading)
             } else {
                 (Fixed::ZERO, Fixed::ONE)
             };

@@ -83,6 +83,10 @@ pub fn pick(planets: &[Planet], at: Vec3) -> Option<Planet> {
         .iter()
         .filter_map(|p| {
             let (dx, dz) = (p.pos.x - at.x, p.pos.z - at.z);
+            // Far planets are out before squaring (the fixed-point square wraps past ~46000).
+            if dx.abs() >= p.radius + reach || dz.abs() >= p.radius + reach {
+                return None;
+            }
             let d = (dx * dx + dz * dz).sqrt();
             (d < p.radius + reach).then_some((d - p.radius, p.id, *p))
         })
@@ -90,12 +94,33 @@ pub fn pick(planets: &[Planet], at: Vec3) -> Option<Planet> {
         .map(|(_, _, p)| p)
 }
 
+/// The planet an orbital station at `pos` belongs to: the one whose orbit it
+/// lies on (within a few units), else the one [`pick`] gives. Close planets
+/// do not steal each other's stations.
+pub fn owner(planets: &[Planet], pos: Vec3) -> Option<Planet> {
+    let tol = Fixed::from_int(5);
+    let alt = Fixed::from_int(ALTITUDE);
+    planets
+        .iter()
+        .filter_map(|p| {
+            let (dx, dz) = (p.pos.x - pos.x, p.pos.z - pos.z);
+            if dx.abs() > p.radius + alt + tol || dz.abs() > p.radius + alt + tol {
+                return None;
+            }
+            let off = ((dx * dx + dz * dz).sqrt() - (p.radius + alt)).abs();
+            (off <= tol).then_some((off, p.id, *p))
+        })
+        .min_by_key(|(off, id, _)| (*off, *id))
+        .map(|(_, _, p)| p)
+        .or_else(|| pick(planets, pos))
+}
+
 /// The orbit slot for a cursor point `at`. `orbiters` are the positions of
 /// the orbital stations that exist or are about to (deploying rigs); a planet
 /// one of them belongs to is taken.
 pub fn snap(planets: &[Planet], orbiters: &[Vec3], at: Vec3) -> Result<Slot, OrbitError> {
     let p = pick(planets, at).ok_or(OrbitError::NoPlanet)?;
-    if orbiters.iter().any(|o| pick(planets, *o).is_some_and(|q| q.id == p.id)) {
+    if orbiters.iter().any(|o| owner(planets, *o).is_some_and(|q| q.id == p.id)) {
         return Err(OrbitError::Taken);
     }
     Ok(slot(&p, at))

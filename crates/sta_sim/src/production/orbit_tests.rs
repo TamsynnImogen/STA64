@@ -198,3 +198,42 @@ fn the_ghost_snaps_where_the_sim_builds() {
     assert_eq!(orbit::snap_view(&db, &sim.view(), what, cursor), Some(Err(orbit::OrbitError::Taken)));
     assert_eq!(orbit::snap_view(&db, &sim.view(), db.key("fx_station").unwrap(), cursor), None);
 }
+
+#[test]
+fn a_station_belongs_to_the_planet_whose_orbit_it_is_on() {
+    let a = orbit::Planet { id: EntityId(1), pos: v(0, 0), radius: Fixed::from_int(100) };
+    let b = orbit::Planet { id: EntityId(2), pos: v(260, 0), radius: Fixed::from_int(100) };
+    // On A's orbit, but nearer B's surface than A's.
+    let station = v(175, 0);
+    assert_eq!(orbit::pick(&[a, b], station).unwrap().id, EntityId(2));
+    assert_eq!(orbit::owner(&[a, b], station).unwrap().id, EntityId(1));
+    // So B stays free and A is taken.
+    assert!(orbit::snap(&[a, b], &[station], v(300, 0)).is_ok());
+    assert_eq!(orbit::snap(&[a, b], &[station], v(-50, 0)), Err(orbit::OrbitError::Taken));
+}
+
+#[test]
+fn a_planet_far_away_is_never_picked() {
+    // 100000 units: the square would wrap in 32.32 fixed point.
+    let far = orbit::Planet { id: EntityId(1), pos: v(100_000, 0), radius: Fixed::from_int(200) };
+    assert_eq!(orbit::pick(&[far], v(0, 0)), None);
+    let wrap = orbit::Planet { id: EntityId(2), pos: v(65_536, 0), radius: Fixed::from_int(200) };
+    assert_eq!(orbit::pick(&[wrap], v(0, 0)), None);
+}
+
+#[test]
+fn a_rig_on_the_far_side_of_the_planet_still_gets_there() {
+    let mut sim = game();
+    let world = v(1000, 0);
+    spawn(&mut sim, "fx_world", world);
+    // The rig is on the +x side, the cursor on the -x side.
+    let rig = spawn(&mut sim, "fx_rig", v(2000, 0));
+    assert!(build(&mut sim, rig, v(900, 0)));
+    for _ in 0..2400 {
+        sim.step(&[]);
+    }
+    let all = orbitals(&sim);
+    assert_eq!(all.len(), 1, "built");
+    // Its stand point is outside the orbit, so the rig reaches it from either side (planets
+    // do not block movement in the sim, so the path itself is not asserted).
+}

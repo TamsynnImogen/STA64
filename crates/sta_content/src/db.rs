@@ -538,7 +538,8 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
     if u.can_have_orbital_station {
         c.flag("can_have_orbital_station", true);
     }
-    if let Some(t) = u.orbit_time {
+    // The class is already hashed; the period only when the ODF set one.
+    if let Some(t) = u.orbit_time.filter(|t| *t != Fixed::ZERO) {
         c.fixed("orbit_time", t);
     }
     c.finish()
