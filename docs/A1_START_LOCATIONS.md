@@ -128,7 +128,9 @@ offered was not traced.
   holds `=`; the first such line wins; the value is read as `= %d`
   (so `2x` is 2); an LF followed by a space or tab continues the line; the
   file ends at its first NUL. A failed `%d` leaves an uninitialised native
-  field, modelled as eight. `#include` lines are not followed.
+  field, modelled as eight. `#include` lines are not followed. A UTF-8 BOM, leading blanks or CR-only line
+  endings keep the key from matching at line start and give eight (the strict
+  reader accepted them); `%d` overflow is not measured.
 - `player_start_positions_with_fallback`: a team with no `Camera_i` path starts
   at the map's centre XZ and the mean of `SHIP_COMBAT_FLOOR` and
   `SHIP_COMBAT_CEILING` (read from `RTS_CFG.h`; without both keys a missing

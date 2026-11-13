@@ -94,7 +94,9 @@ pub fn player_start_positions_with_fallback(
         .map(|slot| {
             let label = format!("Camera_{slot}");
             let Some(path) = map.paths.iter().find(|path| path.label == label) else {
-                return fallback.ok_or(StartError::MissingCamera(slot));
+                return fallback
+                    .filter(|f| f.iter().all(|v| v.is_finite()))
+                    .ok_or(StartError::MissingCamera(slot));
             };
             let point = *path.points.first().ok_or(StartError::EmptyCamera(slot))?;
             if !point.iter().all(|v| v.is_finite()) {
@@ -117,7 +119,9 @@ pub fn player_start_positions_with_fallback(
 /// contains an `=` supplies the value, read as `= %d` from that first `=`
 /// (whitespace, optional sign, decimal digits). Lines with the prefix but no
 /// `=` are skipped. A failed `%d` leaves an uninitialised native field, which
-/// is modelled as the default eight. `#include` lines are not followed.
+/// is modelled as the default eight. Overflow of `%d` is not measured (eight
+/// here). A BOM, leading blanks or CR-only line endings stop the key matching
+/// at line start, so they give eight too. `#include` lines are not followed.
 pub fn native_mdf_start_count(data: Option<&[u8]>) -> u8 {
     const KEY: &[u8] = b"StartLocations";
     const DEFAULT: u8 = 8;
