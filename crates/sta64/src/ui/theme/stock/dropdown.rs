@@ -1,6 +1,9 @@
 //! Dropdown select (faction, colour, team, map size): a closed field showing the
-//! choice that opens a list over everything below it. The list is a child of the
-//! field, drawn on a global z layer, scrolls past [`Dropdown::max_rows`] rows, opens
+//! choice that opens a list over everything below it. The list is a root UI node that
+//! only points back at its field ([`DropdownPopup::owner`]), so an ancestor of the
+//! field that clips (`Overflow`, a scrolling page) cannot clip it. It is placed from
+//! the field's laid-out rectangle each frame, drawn on a global z layer, scrolls past
+//! [`Dropdown::max_rows`] rows, opens
 //! below the field (above it when it would leave the window), and closes on a choice,
 //! on Escape and on a press outside the field and its list.
 //!
@@ -10,6 +13,7 @@
 
 use bevy::picking::Pickable;
 use bevy::prelude::*;
+use bevy::ui::{ComputedUiRenderTargetInfo, ComputedUiTargetCamera, UiTargetCamera};
 use bevy::window::PrimaryWindow;
 
 use super::focus::{KitKey, is_within};
@@ -48,9 +52,11 @@ pub struct DropdownChanged {
 pub(super) struct DropdownLabel;
 #[derive(Component, Debug, Clone, Copy)]
 pub(super) struct DropdownArrow;
-/// The open list. `count` is how many rows it was built with.
+/// The open list. `owner` is its field (the list is not a child of it); `count` is
+/// how many rows it was built with.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct DropdownPopup {
+    pub owner: Entity,
     pub count: usize,
     /// Hash of the option texts it shows, to rebuild the list when they change.
     pub signature: u64,
@@ -146,7 +152,7 @@ pub fn click(w: &mut World, e: Entity) {
         return;
     }
     if let Some(&DropdownOption(i)) = w.get::<DropdownOption>(e) {
-        let owner = w.get::<ChildOf>(e).and_then(|p| w.get::<ChildOf>(p.parent())).map(|p| p.parent());
+        let owner = w.get::<ChildOf>(e).and_then(|p| w.get::<DropdownPopup>(p.parent())).map(|p| p.owner);
         if let Some(owner) = owner {
             choose(w, owner, i);
         }
@@ -156,12 +162,22 @@ pub fn click(w: &mut World, e: Entity) {
     }
 }
 
+/// The field whose list `e` is in (or is), if it is in one.
+pub fn popup_of(w: &World, mut e: Entity) -> Option<Entity> {
+    loop {
+        if let Some(p) = w.get::<DropdownPopup>(e) {
+            return Some(p.owner);
+        }
+        e = w.get::<ChildOf>(e)?.parent();
+    }
+}
+
 /// A press at `hits` (what is under the pointer): every open dropdown the press is
 /// not inside closes.
 pub fn dismiss_outside(w: &mut World, hits: &[Entity]) {
     let open: Vec<Entity> = w.query::<(Entity, &Dropdown)>().iter(w).filter(|(_, d)| d.open).map(|(e, _)| e).collect();
     for d in open {
-        if !hits.iter().any(|h| is_within(w, *h, d)) {
+        if !hits.iter().any(|h| is_within(w, *h, d) || popup_of(w, *h) == Some(d)) {
             close(w, d);
         }
     }
@@ -222,7 +238,7 @@ pub(super) fn sync(
                 }
             }
         }
-        let popup = kids.iter().find_map(|k| popups.get(k).ok());
+        let popup = popups.iter().find(|(_, pop, _)| pop.owner == e);
         match (d.open, popup) {
             (true, None) => spawn_popup(&mut commands, &theme, e, d),
             (true, Some((p, pop, _))) if pop.count != d.options.len() || pop.signature != signature(&d.options) => {
@@ -248,21 +264,22 @@ fn spawn_popup(commands: &mut Commands, theme: &Theme, owner: Entity, d: &Dropdo
     scroll_to_row(&area, &mut pos, d.highlight);
     let popup = commands
         .spawn((
-            DropdownPopup { count: d.options.len(), signature: signature(&d.options) },
+            DropdownPopup { owner, count: d.options.len(), signature: signature(&d.options) },
+            // Hidden until `place_popups` has the field's rectangle and the list's size.
+            Visibility::Hidden,
             area,
             pos,
             GlobalZIndex(1000),
             Node {
                 position_type: PositionType::Absolute,
-                left: Val::Px(-1.0),
-                top: Val::Percent(100.0),
-                width: Val::Percent(100.0),
+                left: Val::Px(0.0),
+                top: Val::Px(0.0),
+                width: Val::Px(0.0),
                 min_width: Val::Px(0.0),
                 height: Val::Px(h * rows as f32 + 2.0),
                 flex_direction: FlexDirection::Column,
                 overflow: Overflow::scroll_y(),
                 border: UiRect::all(Val::Px(1.0)),
-                margin: UiRect::top(Val::Px(2.0)),
                 ..default()
             },
             BackgroundColor(theme.panel),
@@ -285,21 +302,20 @@ fn spawn_popup(commands: &mut Commands, theme: &Theme, owner: Entity, d: &Dropdo
             children![kit_text(theme, s.clone(), theme.text_size, theme.text)],
         ));
     }
-    commands.entity(popup).insert(ChildOf(owner));
 }
 
 /// The pointer resting on a row highlights it.
 pub(super) fn hover_highlight(
     rows: Query<(&DropdownOption, &WidgetState, &ChildOf), Changed<WidgetState>>,
-    popups: Query<&ChildOf, With<DropdownPopup>>,
+    popups: Query<&DropdownPopup>,
     mut dropdowns: Query<&mut Dropdown>,
 ) {
     for (DropdownOption(i), state, parent) in &rows {
         if *state != WidgetState::Hovered {
             continue;
         }
-        if let Ok(owner) = popups.get(parent.parent())
-            && let Ok(mut d) = dropdowns.get_mut(owner.parent())
+        if let Ok(popup) = popups.get(parent.parent())
+            && let Ok(mut d) = dropdowns.get_mut(popup.owner)
             && d.highlight != *i
         {
             d.highlight = *i;
@@ -315,7 +331,7 @@ pub(super) fn paint(
     mut labels: Query<&mut SpriteText, With<DropdownLabel>>,
     mut arrows: Query<&mut BorderColor, (With<DropdownArrow>, Without<Dropdown>)>,
     mut rows: Query<(&DropdownOption, &WidgetState, &ChildOf, &mut BackgroundColor), Without<Dropdown>>,
-    popups: Query<&ChildOf, With<DropdownPopup>>,
+    popups: Query<&DropdownPopup>,
     owners: Query<&Dropdown>,
 ) {
     for (d, state, kids, mut bg, mut border) in &mut fields {
@@ -343,7 +359,7 @@ pub(super) fn paint(
         }
     }
     for (DropdownOption(i), state, parent, mut bg) in &mut rows {
-        let Some(d) = popups.get(parent.parent()).ok().and_then(|o| owners.get(o.parent()).ok()) else { continue };
+        let Some(d) = popups.get(parent.parent()).ok().and_then(|p| owners.get(p.owner).ok()) else { continue };
         let want = row_colour(&theme, *state, d.highlight == *i, *i);
         if bg.0 != want {
             bg.0 = want;
@@ -351,31 +367,73 @@ pub(super) fn paint(
     }
 }
 
-/// Open lists flip above their field when they would leave the window.
-pub(super) fn flip_popups(
+/// Where a list goes, in logical pixels, from its field's physical rectangle
+/// (`field_top`, `field_bottom`, `left`, `width`), the list's physical height, the
+/// window's physical height and the physical-to-logical factor: below the field, above
+/// it when it would leave the window and fits there. Returns `(left, top, width)`.
+pub fn popup_place(left: f32, field_top: f32, field_bottom: f32, width: f32, popup_h: f32, win_h: f32, inverse_scale: f32) -> (f32, f32, f32) {
+    let gap = 2.0 / inverse_scale;
+    let above = field_bottom + gap + popup_h > win_h && field_top - gap - popup_h >= 0.0;
+    let top = if above { field_top - gap - popup_h } else { field_bottom + gap };
+    // The list's 1 px border frames the field's width (1 px out on each side).
+    (left * inverse_scale - 1.0, top * inverse_scale, width * inverse_scale + 2.0)
+}
+
+/// Keep every open list at its field: remove lists whose field is gone or closed,
+/// and put the others below (or above, near the window's bottom) the field's
+/// laid-out rectangle, as wide as the field.
+#[allow(clippy::type_complexity)]
+pub(super) fn place_popups(
+    mut commands: Commands,
     window: Query<&Window, With<PrimaryWindow>>,
-    mut popups: Query<(&ChildOf, &ComputedNode, &mut Node), With<DropdownPopup>>,
-    fields: Query<(&ComputedNode, &UiGlobalTransform), With<Dropdown>>,
+    mut popups: Query<(Entity, &DropdownPopup, &ComputedNode, &mut Node, &mut Visibility, Option<&UiTargetCamera>)>,
+    fields: Query<(&Dropdown, &ComputedNode, &UiGlobalTransform, &InheritedVisibility, &ComputedUiTargetCamera, &ComputedUiRenderTargetInfo), Without<DropdownPopup>>,
 ) {
-    let Ok(window) = window.single() else { return };
-    let win_h = window.physical_height() as f32;
-    for (parent, popup, mut node) in &mut popups {
-        let Ok((field, at)) = fields.get(parent.parent()) else { continue };
-        if popup.size().y <= 0.0 {
+    for (e, popup, own, mut node, mut vis, target) in &mut popups {
+        let Ok((d, field, at, shown, camera, info)) = fields.get(popup.owner) else {
+            commands.entity(e).despawn();
+            continue;
+        };
+        if !d.open {
+            commands.entity(e).despawn();
             continue;
         }
-        let top = at.translation.y - field.size().y / 2.0;
-        let bottom = at.translation.y + field.size().y / 2.0;
-        let above = bottom + popup.size().y > win_h && top - popup.size().y >= 0.0;
-        let (want_top, want_bottom, margin) = if above {
-            (Val::Auto, Val::Percent(100.0), UiRect::bottom(Val::Px(2.0)))
-        } else {
-            (Val::Percent(100.0), Val::Auto, UiRect::top(Val::Px(2.0)))
+        // The list draws on the camera its field does (a screen with its own UI camera).
+        if let Some(cam) = camera.get()
+            && target.map(|t| t.0) != Some(cam)
+        {
+            commands.entity(e).insert(UiTargetCamera(cam));
+        }
+        // Not laid out yet (first frame), or the field is not displayed: stay invisible.
+        if field.size().x <= 0.0 || own.size().y <= 0.0 || !shown.get() {
+            if *vis != Visibility::Hidden {
+                *vis = Visibility::Hidden;
+            }
+            continue;
+        }
+        let size = field.size();
+        // The height of the field's own render target (a window, or an image).
+        let win_h = match info.physical_size().y {
+            0 => window.single().map_or(f32::MAX, |w| w.physical_height() as f32),
+            h => h as f32,
         };
-        if node.top != want_top || node.bottom != want_bottom {
-            node.top = want_top;
-            node.bottom = want_bottom;
-            node.margin = margin;
+        let (left, top, width) = popup_place(
+            at.translation.x - size.x / 2.0,
+            at.translation.y - size.y / 2.0,
+            at.translation.y + size.y / 2.0,
+            size.x,
+            own.size().y,
+            win_h,
+            field.inverse_scale_factor(),
+        );
+        let (l, t, w) = (Val::Px(left), Val::Px(top), Val::Px(width));
+        if node.left != l || node.top != t || node.width != w {
+            node.left = l;
+            node.top = t;
+            node.width = w;
+        }
+        if *vis != Visibility::Inherited {
+            *vis = Visibility::Inherited;
         }
     }
 }

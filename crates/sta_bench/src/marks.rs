@@ -69,6 +69,15 @@ fn close(key: (u32, u8), burst: Burst, ended: &mut Vec<Mark>) {
     });
 }
 
+/// The name the original's marks give a weapon: its ordnance ODF (`ordName`,
+/// which Refit reads from the ordnance's class), else the weapon ODF's name.
+pub fn ordnance_label(db: &ContentDb, weapon: sta_core::ContentKey) -> String {
+    db.weapon(weapon)
+        .and_then(|w| w.raw.str("ordName").map(str::to_owned))
+        .or_else(|| db.name(weapon).map(str::to_owned))
+        .unwrap_or_else(|| "?".into())
+}
+
 fn to_f64(f: Fixed) -> f64 {
     f.to_bits() as f64 / 4_294_967_296.0
 }

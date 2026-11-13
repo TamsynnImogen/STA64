@@ -63,11 +63,12 @@ mod entity_ref;
 mod camera_intent;
 mod monitor;
 mod race;
+mod search;
 mod condition_monitor;
 mod player;
 mod timer;
 mod objectives;
-mod objectives_file;
+pub(crate) mod objectives_file;
 mod spawn;
 mod text_input;
 #[cfg(test)]
@@ -182,6 +183,14 @@ pub struct ObjectiveBriefing {
     pub notes: String,
 }
 
+/// What the mission started that the client has not yet reported finished
+/// (`A2.IsAudioMessageDone`, `A2.IsMoviePlaying`).
+#[derive(Default)]
+pub(crate) struct Playback {
+    pub sounds: std::collections::BTreeSet<u32>,
+    pub movie: bool,
+}
+
 pub(crate) type MissionReader = Arc<Mutex<dyn Fn(&str) -> Option<Vec<u8>> + Send>>;
 
 /// Script-visible state; see the module docs.
@@ -214,6 +223,9 @@ pub(crate) struct Ctx {
     /// Orders and names the API accepted but could not carry out, by name.
     pub unsupported: BTreeMap<String, u32>,
     pub loaded_aips: Vec<(PlayerId, String)>,
+    pub playback: Playback,
+    /// The view tick of the last `Hit` each object took (`A2.UnderAttack`).
+    pub last_hit: BTreeMap<EntityId, u64>,
 }
 
 pub(crate) type Shared = Rc<RefCell<Ctx>>;
@@ -248,6 +260,8 @@ impl Ctx {
             log: Vec::new(),
             unsupported: BTreeMap::new(),
             loaded_aips: Vec::new(),
+            playback: Playback::default(),
+            last_hit: BTreeMap::new(),
         }
     }
 

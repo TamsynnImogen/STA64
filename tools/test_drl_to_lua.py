@@ -58,6 +58,7 @@ class FakeDrl(drl.Drl):
         self.at = {x: i for i, (x, _) in enumerate(self.ins)}
         self.thunks = {}
         self.chkesp = CHK
+        self.engine_slots = set()
 
 
 def hot(iat):
@@ -149,6 +150,25 @@ call   {CHK:#x}
 and    eax,0xff"""
         got = self.decode(and_chain(hot(0x10041004), hot(0x10041000), call))
         self.assertEqual(got, "T(S.p_ALWAYS_EVALUATE) and T(S.p_ALPHA) and T(A('slot_508', O.ship))")
+
+    def test_engine_calls_are_recorded_by_slot_and_counted_by_arity(self):
+        call = f"""mov    esi,esp
+mov    eax,ds:0x1004100c
+mov    ecx,DWORD PTR [eax]
+push   ecx
+mov    edx,DWORD PTR ds:0x10041008
+mov    ecx,DWORD PTR [edx]
+mov    eax,ds:0x10041008
+mov    edx,DWORD PTR [eax]
+mov    eax,DWORD PTR [edx]
+call   DWORD PTR [eax+0x7f0]
+cmp    esi,esp
+call   {CHK:#x}
+and    eax,0xff"""
+        d = FakeDrl(layout(PROLOGUE + "\n" + and_chain(hot(0x10041004), hot(0x10041000), call) + "\n" + EPILOGUE))
+        e = d.condition(0x10002000)
+        self.assertEqual(d.engine_slots, {0x7F0 // 4})
+        self.assertEqual(list(drl.call_shapes(e)), ["slot_508/1"])
 
     def test_not_and_or_through_materialised_values(self):
         # !alpha, then (always || alpha) via a stored 0/1, as `||` compiles.

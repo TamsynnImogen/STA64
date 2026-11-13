@@ -294,7 +294,7 @@ impl Sim {
             }
             Order::Special { units, slot, .. } => {
                 let Some(db) = self.content.clone() else { return false };
-                self.weapons.order_special(self.tick, &db, &self.units, &mut self.specials, &mut self.rng, c.player, units, *slot)
+                self.weapons.order_special(self.tick, &db, &self.units, &mut self.specials, &mut self.rng, &mut self.events, c.player, units, *slot)
             }
             Order::Rally { builders, at } => {
                 let Some(db) = self.content.as_deref() else { return false };

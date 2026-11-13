@@ -51,7 +51,7 @@ pub use index::{OdfEntry, OdfIndex};
 pub use strings::{LabelMap, StringTable};
 pub use race::{Loadout, RaceCrew, RaceDef, Races, StartingResources, dominant_race};
 pub use resources::ResourceModel;
-pub use rules::{CrewRules, Rules, OfficerLimit, PathingRules};
+pub use rules::{AutonomyRules, CrewRules, Rules, OfficerLimit, PathingRules};
 pub use profile::{resolve_features, DetectStep, Detection, Overrides, ROOTS_ASSET_VERSION, FEATURE_NAMES, ODF_KEY_PREFIX};
 pub use techtree::{Availability, BuildOption, CapacityList, Condition, Owned, Requirement, TechEntry, TechState, TechTree, TtSource, Unmet};
 pub use map::{MapDef, MapObject, Region, RegionKind, RegionShape, Scenery, SceneryLight, SceneryPlanet, StartPos};

@@ -8,6 +8,7 @@
 //! sta-bench drive --session ID "<command>"...
 //! sta-bench diff <report-a> <report-b>
 //! sta-bench parity <refit-out> <ours-out> [--tol time=0.1,pos=1,hull=1] | --names
+//! sta-bench pair <pair> --game a2|roots [--refit-out DIR] [--install DIR] [--fake] [--out DIR]
 //! sta-bench capture list | check <folder|latest> [--install <root> [--mod <name>]] [--fake]
 //! ```
 //!
@@ -15,7 +16,10 @@
 //! they were built with; `src/bin/sta-bench.rs` is a shell around [`main`].
 
 mod capture;
+mod clone;
 mod diff;
+mod jobs;
+mod pair;
 mod parity;
 mod session;
 mod tier2;
@@ -25,7 +29,7 @@ use std::sync::Arc;
 
 use crate::run::{
     self, CaseResult, RunConfig, Status, StepOutcome, default_report_dir, discover, load_scenario,
-    tier, write_report,
+    tier,
 };
 
 pub const USAGE: &str = "\
@@ -37,8 +41,11 @@ Usage: sta-bench <command> [options]
       --frames 0,100               ticks to save frames at (default: 0 and the last tick)
       --frame-size WxH             frame size
       --repeat N                   run the process N times and require identical frames
+      --jobs N                     cases at once (default 2; the report is the same at any N)
+      --gpu-jobs N                 tier-2 sta64 processes at once (default 1; they run at low priority)
   check                            run every tier-1 scenario in-process; exit 1 on a failure
   session start --scene <name> [Key=Value...]   start a headless sta64 and print its ID
+      --install <root> [--mod <name>]  mount a private clone of this install (do not write its large linked files; stop checks the source)
   session list | session stop --session ID
   drive --session ID \"<command>\"...  send bench commands to a session, print the answers
   capture list                     playtest captures, newest first (default: $XDG_DATA_HOME/sta64/captures)
@@ -49,8 +56,18 @@ Usage: sta-bench <command> [options]
   diff <report-a> <report-b>       compare report directories; exit 1 when they differ
   parity <refit-out> <ours-out>    Refit's Scene.marks/Scene.objects.jsonl against our marks/objects.jsonl
                                    (run directories, or their logs/): objects by name, marks in sim seconds
-      --tol time=0.1,pos=1,hull=1  tolerances (seconds, world units, points)
+      --tol time=0.1,pos=1,hull=1,slope=0.5  tolerances (seconds, world units, points, special energy per second)
       --names                      print the Refit-to-ours mark-name table
+  pair <pair> --game a2|roots      one scene description (bench/pairs/<pair>.ini) on the original game
+                                   (Refit's bench, tools/pair/refit_side.py) and on STA64; report.md/.json
+                                   with events, state series and frames side by side, in sim seconds.
+                                   Exit 1 when something is beyond the pair's tolerances
+      --refit-out DIR              reuse an original-side run (refit.json ...) instead of starting one
+      --refit ROOT                 the Refit checkout the driver uses (default $REFIT_ROOT)
+      --install DIR, --mod NAME    STA64's content (default $STA64_TEST_INSTALL; the mod from Mod=)
+      --fake                       STA64 on the bench's fake content instead (tests)
+      --no-frames                  no sta64 --headless frame run
+      --out DIR                    where the pair's report goes (default $XDG_DATA_HOME/sta64/bench/pairs/<pair>-<game>)
 
 Common options:
   --bench-dir <dir>                directory holding scenes/ and scenarios/ (default: the repository's bench/)
@@ -75,10 +92,16 @@ pub(crate) struct Opts {
     pub repeat: u32,
     pub tol: Option<String>,
     pub names: bool,
+    pub game: Option<String>,
+    pub refit_out: Option<PathBuf>,
+    pub refit: Option<PathBuf>,
     pub install: Option<PathBuf>,
     pub mod_name: Option<String>,
     pub fake: bool,
+    pub no_frames: bool,
     pub timeout: u64,
+    pub jobs: Option<usize>,
+    pub gpu_jobs: Option<usize>,
     pub rest: Vec<String>,
 }
 
@@ -106,11 +129,17 @@ fn parse(args: Vec<String>) -> Result<Opts, String> {
             }
             "--tol" => o.tol = Some(val(&a)?),
             "--names" => o.names = true,
+            "--game" => o.game = Some(val(&a)?),
+            "--refit-out" => o.refit_out = Some(val(&a)?.into()),
+            "--refit" => o.refit = Some(val(&a)?.into()),
             "--install" => o.install = Some(val(&a)?.into()),
             "--mod" => o.mod_name = Some(val(&a)?).filter(|m| !m.is_empty()),
             "--fake" => o.fake = true,
+            "--no-frames" => o.no_frames = true,
             "--frame-size" => o.frame_size = Some(val(&a)?),
             "--repeat" => o.repeat = val(&a)?.parse().map_err(|_| "--repeat: a number")?,
+            "--jobs" => o.jobs = Some(val(&a)?.parse().map_err(|_| "--jobs: a number")?),
+            "--gpu-jobs" => o.gpu_jobs = Some(val(&a)?.parse().map_err(|_| "--gpu-jobs: a number")?),
             "--timeout" => o.timeout = val(&a)?.parse().map_err(|_| "--timeout: seconds")?,
             _ if a.starts_with("--") => return Err(format!("unknown option {a}")),
             _ => o.rest.push(a),
@@ -159,6 +188,7 @@ pub fn main(args: Vec<String>) -> i32 {
         "drive" => session::drive(&o),
         "diff" => diff::diff(&o),
         "parity" => parity::parity(&o),
+        "pair" => pair::pair(&o),
         "capture" => capture::capture_cmd(&o),
         other => Err(Fail::Usage(format!("unknown command `{other}`"))),
     };
@@ -257,17 +287,24 @@ fn print_case(c: &CaseResult) {
     }
 }
 
-fn finish(o: &Opts, cases: &[CaseResult], staged: Option<&Path>) -> Outcome {
-    for c in cases {
+fn finish(o: &Opts, done: Vec<(CaseResult, std::time::Duration)>, staged: Option<&Path>, wall: std::time::Duration) -> Outcome {
+    let timing = run::Timing {
+        cases_ms: done.iter().map(|(c, d)| (c.name.clone(), d.as_millis() as u64)).collect(),
+        total_ms: wall.as_millis() as u64,
+        jobs: jobs::jobs(o),
+        gpu_jobs: jobs::gpu_jobs(o),
+    };
+    let cases: Vec<CaseResult> = done.into_iter().map(|(c, _)| c).collect();
+    for c in &cases {
         print_case(c);
     }
     let bad = cases.iter().filter(|c| !c.passed).count();
-    println!("{} cases, {} passed, {} failed", cases.len(), cases.len() - bad, bad);
+    println!("{} cases, {} passed, {} failed; wall {:.1} s, jobs {}", cases.len(), cases.len() - bad, bad, wall.as_secs_f64(), timing.jobs);
     if !o.no_report {
-        match write_report(&report_root(o), cases) {
+        match run::write_report_timed(&report_root(o), &cases, &timing) {
             Ok(dir) => {
                 if let Some(s) = staged {
-                    tier2::adopt_frames(s, &dir, cases);
+                    tier2::adopt_frames(s, &dir, &cases);
                 }
                 println!("report: {}", dir.display());
             }
@@ -286,24 +323,18 @@ fn run_cmd(o: &Opts) -> Outcome {
     }
     let cfg = config(o);
     let staged = report_root(o).join(format!(".staging-{}", std::process::id()));
-    let mut cases = Vec::new();
-    for arg in &o.rest {
-        let path = scenario_path(&cfg, arg);
-        let name = path.file_stem().map_or_else(|| arg.clone(), |s| s.to_string_lossy().into_owned());
-        let sc = match load_scenario(&cfg, &path) {
-            Ok(sc) => sc,
-            Err(e) => {
-                cases.push(failed_case(&name, e));
-                continue;
-            }
-        };
-        let mut case = run::run_scenario(&cfg, &sc, &name);
-        if o.tier == Some(2) || (o.tier.is_none() && tier(&sc) == Some(2)) {
-            tier2::run_case(&cfg, &sc, &mut case, o, &staged);
-        }
-        cases.push(case);
-    }
-    finish(o, &cases, Some(&staged))
+    let list: Vec<jobs::Job> = o
+        .rest
+        .iter()
+        .map(|arg| {
+            let path = scenario_path(&cfg, arg);
+            let name = path.file_stem().map_or_else(|| arg.clone(), |s| s.to_string_lossy().into_owned());
+            jobs::Job { path, name }
+        })
+        .collect();
+    let t0 = std::time::Instant::now();
+    let done = jobs::run_all(&cfg, o, &list, &staged, true);
+    finish(o, done, Some(&staged), t0.elapsed())
 }
 
 fn check(o: &Opts) -> Outcome {
@@ -312,16 +343,20 @@ fn check(o: &Opts) -> Outcome {
     if files.is_empty() {
         return Err(Fail::Error(format!("no scenarios in {}", cfg.scenario_dir.display())));
     }
-    let mut cases = Vec::new();
+    let mut list = Vec::new();
+    let mut early = Vec::new();
     for p in files {
         let name = p.file_stem().map_or_else(String::new, |s| s.to_string_lossy().into_owned());
         match load_scenario(&cfg, &p) {
             Ok(sc) if tier(&sc) == Some(2) => println!("skip  {name} (tier 2: sta-bench run {name})"),
-            Ok(sc) => cases.push(run::run_scenario(&cfg, &sc, &name)),
-            Err(e) => cases.push(failed_case(&name, e)),
+            Ok(_) => list.push(jobs::Job { path: p, name }),
+            Err(e) => early.push((failed_case(&name, e), std::time::Duration::ZERO)),
         }
     }
-    finish(o, &cases, None)
+    let t0 = std::time::Instant::now();
+    let mut done = jobs::run_all(&cfg, o, &list, Path::new(""), false);
+    done.extend(early);
+    finish(o, done, None, t0.elapsed())
 }
 
 /// A step the CLI adds to a case (line 0: not from the scenario file).

@@ -7,59 +7,24 @@
 //! documented in each function's comment and listed in README.md as not
 //! measured.
 
-use std::collections::BTreeSet;
-
 use mlua::{Lua, Table, Value};
-use sta_core::{EntityId, Fixed, PlayerId};
+use sta_core::{EntityId, Fixed};
 use sta_sim::command::{AlertState, Edit, Subsystem};
 use sta_sim::present::Presentation;
 use sta_sim::view::{Relation, UnitView};
 
 use super::{A, Env, Flag, TOKEN_BASE, alias, def};
-use crate::api::{Ctx, dist, pos_f64, vector};
+use crate::api::{dist, pos_f64, vector};
 
-pub(super) fn stem(name: &str) -> &str {
-    match name.get(name.len().saturating_sub(4)..) {
-        Some(suffix) if suffix.eq_ignore_ascii_case(".odf") => &name[..name.len() - 4],
-        _ => name,
+pub(super) use crate::api::search::stem;
+use crate::api::search::{Query, near, odf_ok};
+
+/// The ODF filter of an argument: nil or empty matches every unit.
+fn filter(a: &A) -> Option<&str> {
+    match a {
+        A::Str(s) => Some(s),
+        _ => None,
     }
-}
-
-/// An omitted or empty ODF filter matches every unit.
-fn odf_ok(c: &Ctx, unit: &UnitView, filter: &A) -> bool {
-    match filter {
-        A::Str(s) if !s.is_empty() => stem(&c.odf_name(unit)).eq_ignore_ascii_case(stem(s)),
-        _ => true,
-    }
-}
-
-struct Query<'a> {
-    center: (f64, f64, f64),
-    radius: f64,
-    owner: Option<PlayerId>,
-    odf: &'a A,
-    exclude: EntityId,
-    /// Only units this player can see.
-    seen_by: Option<PlayerId>,
-}
-
-/// Live units inside the query, nearest first, then by id.
-fn near<'c>(c: &'c Ctx, q: &Query) -> Vec<&'c UnitView> {
-    let visible: Option<BTreeSet<EntityId>> =
-        q.seen_by.map(|p| c.view.visible_to(p).iter().map(|u| u.id).collect());
-    let mut found: Vec<(f64, &UnitView)> = c
-        .view
-        .units
-        .iter()
-        .filter(|u| u.id != q.exclude && c.alive(u.id).is_some())
-        .filter(|u| q.owner.is_none_or(|o| u.owner == o))
-        .filter(|u| visible.as_ref().is_none_or(|v| v.contains(&u.id)))
-        .filter(|u| odf_ok(c, u, q.odf))
-        .map(|u| (dist(q.center, pos_f64(u.pos)), u))
-        .filter(|(d, _)| *d <= q.radius)
-        .collect();
-    found.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.id.cmp(&b.1.id)));
-    found.into_iter().map(|(_, u)| u).collect()
 }
 
 /// The A2 station classification; its errors (unclassified class) propagate.
@@ -94,6 +59,7 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
     table.set("DisableEngines", alias(lua, env, a2, "DisableEngines")?)?;
     table.set("SetSpecialEnergy", alias(lua, env, a2, "SetSpecialEnergy")?)?;
     table.set("IsVisibleToTeam", alias(lua, env, a2, "IsVisibleToTeam")?)?;
+    table.set("UnderAttack", alias(lua, env, a2, "UnderAttack")?)?;
 
     table.set("GetHandle", def(lua, env, "GetHandle", &["s"], |_, e, _, a| {
         let c = e.ctx.borrow();
@@ -162,7 +128,7 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
             .view
             .units
             .iter()
-            .filter(|u| c.alive(u.id).is_some() && owner.is_none_or(|o| u.owner == o) && odf_ok(&c, u, &a[1]))
+            .filter(|u| c.alive(u.id).is_some() && owner.is_none_or(|o| u.owner == o) && odf_ok(&c, u, filter(&a[1])))
             .count();
         Ok(Value::Integer(n as i64))
     })?)?;
@@ -174,7 +140,7 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
         let owner = e.team_filter("CountUnitsNearObject", a[2].int())?;
         let centre = e.unit("CountUnitsNearObject", a[0].id())?;
         let c = e.ctx.borrow();
-        let q = Query { center: pos_f64(centre.pos), radius: a[1].num(), owner, odf: &a[3], exclude: centre.id, seen_by: None };
+        let q = Query { center: pos_f64(centre.pos), radius: a[1].num(), owner, odf: filter(&a[3]), exclude: centre.id, seen_by: None };
         Ok(Value::Integer(near(&c, &q).len() as i64))
     })?)?;
 
@@ -184,7 +150,7 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
         let owner = e.team_filter("CountUnitsNearPoint", a[2].int())?;
         let point = e.path_point(lua, "CountUnitsNearPoint", a[0].text(), 0)?;
         let c = e.ctx.borrow();
-        let q = Query { center: pos_f64(point), radius: a[1].num(), owner, odf: &a[3], exclude: EntityId::NONE, seen_by: None };
+        let q = Query { center: pos_f64(point), radius: a[1].num(), owner, odf: filter(&a[3]), exclude: EntityId::NONE, seen_by: None };
         Ok(Value::Integer(near(&c, &q).len() as i64))
     })?)?;
 
@@ -194,7 +160,7 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
         let observer = e.team("CountVisibleUnits", a[0].int())?;
         let owner = e.team_filter("CountVisibleUnits", a[1].int())?;
         let c = e.ctx.borrow();
-        let q = Query { center: (0.0, 0.0, 0.0), radius: f64::INFINITY, owner, odf: &a[3], exclude: EntityId::NONE, seen_by: Some(observer) };
+        let q = Query { center: (0.0, 0.0, 0.0), radius: f64::INFINITY, owner, odf: filter(&a[3]), exclude: EntityId::NONE, seen_by: Some(observer) };
         Ok(Value::Integer(near(&c, &q).len() as i64))
     })?)?;
 
@@ -203,7 +169,7 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
         let owner = e.team_filter("CountVisibleUnitsNearObject", a[2].int())?;
         let centre = e.unit("CountVisibleUnitsNearObject", a[0].id())?;
         let c = e.ctx.borrow();
-        let q = Query { center: pos_f64(centre.pos), radius: a[1].num(), owner, odf: &a[4], exclude: centre.id, seen_by: Some(centre.owner) };
+        let q = Query { center: pos_f64(centre.pos), radius: a[1].num(), owner, odf: filter(&a[4]), exclude: centre.id, seen_by: Some(centre.owner) };
         Ok(Value::Integer(near(&c, &q).len() as i64))
     })?)?;
 
@@ -212,8 +178,7 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
     table.set("GetNearestEnemy", def(lua, env, "GetNearestEnemy", &["hf"], |_, e, _, a| {
         let me = e.unit("GetNearestEnemy", a[0].id())?;
         let c = e.ctx.borrow();
-        let any = A::Nil;
-        let q = Query { center: pos_f64(me.pos), radius: a[1].num(), owner: None, odf: &any, exclude: me.id, seen_by: None };
+        let q = Query { center: pos_f64(me.pos), radius: a[1].num(), owner: None, odf: None, exclude: me.id, seen_by: None };
         let found = near(&c, &q).into_iter().find(|u| c.relation(me.owner, u.owner) == Relation::Enemy);
         Ok(handle_value(found.map(|u| u.id)))
     })?)?;
@@ -228,8 +193,7 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
         let owner = e.team_filter("GetNearestStarbase", a[1].int())?;
         let candidates: Vec<EntityId> = {
             let c = e.ctx.borrow();
-            let any = A::Nil;
-            let q = Query { center: pos_f64(me.pos), radius: f64::INFINITY, owner, odf: &any, exclude: me.id, seen_by: None };
+                let q = Query { center: pos_f64(me.pos), radius: f64::INFINITY, owner, odf: None, exclude: me.id, seen_by: None };
             near(&c, &q).into_iter().map(|u| u.id).collect()
         };
         for id in candidates {
@@ -246,7 +210,7 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
         let owner = e.team_filter("GetNearestObjectNearMe", a[2].int())?;
         let me = e.unit("GetNearestObjectNearMe", a[0].id())?;
         let c = e.ctx.borrow();
-        let q = Query { center: pos_f64(me.pos), radius: a[1].num(), owner, odf: &a[3], exclude: me.id, seen_by: None };
+        let q = Query { center: pos_f64(me.pos), radius: a[1].num(), owner, odf: filter(&a[3]), exclude: me.id, seen_by: None };
         Ok(handle_value(near(&c, &q).first().map(|u| u.id)))
     })?)?;
 
@@ -254,7 +218,7 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
         let owner = e.team_filter("GetNearestObjectNearPosition", a[2].int())?;
         let A::Vec(p) = &a[0] else { unreachable!("spec v") };
         let c = e.ctx.borrow();
-        let q = Query { center: pos_f64(*p), radius: a[1].num(), owner, odf: &a[3], exclude: EntityId::NONE, seen_by: None };
+        let q = Query { center: pos_f64(*p), radius: a[1].num(), owner, odf: filter(&a[3]), exclude: EntityId::NONE, seen_by: None };
         Ok(handle_value(near(&c, &q).first().map(|u| u.id)))
     })?)?;
 

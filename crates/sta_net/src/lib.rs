@@ -5,4 +5,5 @@
 //! (lockstep router, `LoopbackNet`), NET-03 (transport and relay). The
 //! design is docs/NET.md.
 
+pub mod lockstep;
 pub mod proto;
