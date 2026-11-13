@@ -19,7 +19,7 @@ fn v(x: i32, z: i32) -> Vec3 {
     Vec3 { x: n(x), y: Fixed::ZERO, z: n(z) }
 }
 const AHEAD: (Fixed, Fixed) = (Fixed::ZERO, Fixed::ONE);
-const HZ: u32 = TICK_HZ as u32;
+const HZ: u32 = TICK_HZ;
 
 fn game(profile: Profile) -> (Sim, Arc<sta_content::ContentDb>) {
     let sim = approach_tests::sim(approach_tests::db(profile, Some(1100)));

@@ -161,6 +161,7 @@ pub(crate) fn best<'a>(db: &ContentDb, u: &Entity, reach: Fixed, candidates: imp
 
 /// Can `t` be picked automatically by a craft of team `mine`: an enemy (by
 /// perceived owner), alive, not cloaked to it, targetable, and seen.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn candidate(
     db: &ContentDb,
     u: &Entity,
