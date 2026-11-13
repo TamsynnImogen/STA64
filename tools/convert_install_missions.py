@@ -7,14 +7,14 @@ Lua; this wrapper runs it for one install and puts the output where the game
 mounts it, so the campaign menu lists and starts those missions (marked
 experimental):
 
-    python3 tools/convert_install_missions.py --install "<Armada II root>" [--mod "<mod>"]
-    cargo run --release -- --install-root "<Armada II root>" [--mod "<mod>"]
+    python3 tools/convert_install_missions.py --install "<Armada II root>"
+    cargo run --release -- --install-root "<Armada II root>"
 
 Output folder: `$STA64_DATA_DIR/converted/<key>/` or
 `<user data>/sta64/converted/<key>/` (`$XDG_DATA_HOME`, `~/.local/share`,
 `%LOCALAPPDATA%`, `~/Library/Application Support`; the same rule as the game's
 `platform::data_dir`), where `<key>` is the install folder's name (and the mod's),
-lower-cased with other characters as `-`, so each install and mod keeps its own
+lower-cased with other characters as `-`, so each install keeps its own
 conversion (`sta_mission::converted::key`). `--out DIR` overrides the folder (the
 game then does not find it). The output is derived from game files: the tool
 refuses a folder inside the repository or an install. Needs python3 and `objdump`.
@@ -85,7 +85,6 @@ def refuse(out, installs):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--install", required=True, help="the game install root (read-only)")
-    ap.add_argument("--mod", help="the mod folder the game is started with (--mod), kept apart")
     ap.add_argument("--out", help="output folder instead of the data directory's")
     ap.add_argument("--only", action="append", help="one mission, e.g. a2_fed01 (repeatable)")
     a = ap.parse_args(argv)
@@ -93,30 +92,34 @@ def main(argv=None):
     if not os.path.isdir(install):
         sys.exit(f"--install {a.install}: not a folder")
     installs = [install]
-    if a.mod:
-        mod_dir = os.path.join(install, a.mod)
-        if not os.path.isdir(mod_dir):
-            sys.exit(f"--mod {a.mod}: no folder {mod_dir}")
-        installs.append(mod_dir)
+    # Only the base game's own missions folder: never a mod's DLLs under Data/Mods (D6).
+    mdir = next((os.path.join(install, d, "missions") for d in ("", "Data") if os.path.isdir(os.path.join(install, d, "missions"))), None)
+    if not mdir:
+        sys.exit(f"--install {a.install}: no missions folder")
     out = a.out
     if not out:
         base = data_dir()
         if not base:
             sys.exit("no user data folder known: set STA64_DATA_DIR or pass --out")
-        out = os.path.join(base, "converted", key(install, a.mod))
+        out = os.path.join(base, "converted", key(install))
     why = refuse(out, installs)
     if why:
         sys.exit(f"output folder {out} {why}")
-    cmd = [sys.executable, "-I", str(HERE / "dsl_to_lua.py"), "--out", out]
-    for r in installs:
-        cmd += ["--install", r]
+    cmd = [sys.executable, "-I", str(HERE / "dsl_to_lua.py"), "--out", out, "--engine", install, "--install", mdir]
     for m in a.only or []:
         cmd += ["--only", m]
     print(f"converting {install} -> {out}", flush=True)
+    outm = os.path.join(out, "missions")
+    if os.path.isdir(outm):  # a re-run replaces the previous conversion
+        for f in os.listdir(outm):
+            if f.endswith(".lua"):
+                os.remove(os.path.join(outm, f))
     code = subprocess.call(cmd)
-    if code:
+    n = len([f for f in os.listdir(outm) if f.endswith(".lua")]) if os.path.isdir(outm) else 0
+    if code and not n:
         sys.exit(code)
-    n = len([f for f in os.listdir(os.path.join(out, "missions")) if f.endswith(".lua")]) if os.path.isdir(os.path.join(out, "missions")) else 0
+    if code:
+        print(f"warning: some missions failed to convert (see FAIL lines above); the {n} others are usable")
     print(f"{n} mission scripts in {out}")
     print("Start the game as usual; those missions are listed as experimental.")
     return 0

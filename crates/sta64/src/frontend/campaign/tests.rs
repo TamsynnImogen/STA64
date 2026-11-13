@@ -419,7 +419,7 @@ fn a_mission_waiting_for_a_conversion_says_what_to_run_and_a_converted_one_is_ma
         b.reason = "legacy DLL only (syn_kl01R.drl): needs a Lua conversion on LUA-05".into();
     }
     assert!(cs.awaits_conversion());
-    cs.convert_hint = Some(crate::game::mission_host::convert_hint(Path::new("/games/a2"), None));
+    cs.convert_hint = Some(crate::game::mission_host::convert_hint(Path::new("/games/a2")));
     let hint = cs.convert_hint.clone().unwrap();
     assert!(hint.contains("tools/convert_install_missions.py --install \"/games/a2\""), "{hint}");
     let mut app = app_with(cs, None, 1.0);

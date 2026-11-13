@@ -481,7 +481,8 @@ impl MissionHost for ClientHost {
 /// install has no campaign mission (Fleet Ops 4.0 and Dominion War list none) or cannot be mounted
 /// again for the scripts. Progress is read from the platform config directory.
 pub fn load_campaigns(vfs: &sta_vfs::Vfs, install_root: Option<&std::path::Path>, active_mod: Option<&str>) -> Option<(Campaigns, MissionMovies)> {
-    let converted = install_root.and_then(|r| crate::platform::converted_missions_dir(r, active_mod));
+    // The conversion covers the base game only (D6: a mod's chain is not converted).
+    let converted = install_root.filter(|_| active_mod.is_none_or(str::is_empty)).and_then(|r| crate::platform::converted_missions_dir(r, None));
     load_campaigns_with(vfs, install_root, active_mod, converted.as_deref(), ProgressStore::platform)
 }
 
@@ -492,9 +493,8 @@ pub fn load_campaigns_in(vfs: &sta_vfs::Vfs, install_root: Option<&std::path::Pa
 }
 
 /// The command that converts an install's missions (shown by the missions screen).
-pub fn convert_hint(install_root: &std::path::Path, active_mod: Option<&str>) -> String {
-    let m = active_mod.filter(|m| !m.is_empty()).map(|m| format!(" --mod \"{m}\"")).unwrap_or_default();
-    format!("Run once, then restart: python3 tools/convert_install_missions.py --install \"{}\"{m}", install_root.display())
+pub fn convert_hint(install_root: &std::path::Path) -> String {
+    format!("Run once from the STA64 checkout, then restart: python3 tools/convert_install_missions.py --install \"{}\"", install_root.display())
 }
 
 /// [`load_campaigns_in`] with the converted-missions folder `converted` (when it holds
@@ -536,9 +536,10 @@ pub fn load_campaigns_with(
         campaigns.mark_converted(dir, &own);
         info!("campaigns: {} missions run converted scripts from {} (experimental)", campaigns.experimental.len(), dir.display());
     } else if campaigns.awaits_conversion()
+        && active_mod.is_none_or(str::is_empty)
         && let Some(root) = install_root
     {
-        campaigns.convert_hint = Some(convert_hint(root, active_mod));
+        campaigns.convert_hint = Some(convert_hint(root));
         info!("campaigns: missions wait for a Lua conversion; {}", campaigns.convert_hint.as_deref().unwrap_or_default());
     }
     if let Some(w) = &campaigns.load_warning {

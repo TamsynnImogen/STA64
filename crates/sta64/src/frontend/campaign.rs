@@ -176,10 +176,17 @@ impl Campaigns {
     /// [`sta_mission::converted`]) as experimental, except those whose path is in `own` (lower
     /// case; the install's own scripts, which shadow the conversion).
     pub fn mark_converted(&mut self, converted: &Path, own: &std::collections::BTreeSet<String>) {
+        // File names compared in lower case: the mount is case-insensitive, the disk may not be.
+        let held: std::collections::BTreeSet<String> = std::fs::read_dir(converted.join("missions"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| format!("missions/{}", e.file_name().to_string_lossy().to_ascii_lowercase()))
+            .collect();
         for c in &self.book.campaigns {
             for m in &c.missions {
                 if let MissionScript::Lua { path } = &m.script
-                    && converted.join(path).is_file()
+                    && held.contains(&path.to_ascii_lowercase())
                     && !own.contains(&path.to_ascii_lowercase())
                 {
                     self.experimental.insert(m.bzn.to_ascii_lowercase());

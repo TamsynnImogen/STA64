@@ -60,7 +60,7 @@ mod tests {
         for (name, m, want) in [
             ("Star Trek Armada II (Stock)", None, "star-trek-armada-ii-stock"),
             ("Star Trek Armada II", Some("Fleet Ops 4.0"), "star-trek-armada-ii+fleet-ops-4-0"),
-            ("***", None, "install"),
+            ("@@@", None, "install"),
         ] {
             let tmp = std::env::temp_dir().join(format!("sta64-key-{}", std::process::id()));
             let root = tmp.join(name);

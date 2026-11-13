@@ -20,7 +20,7 @@ class KeyAndDir(unittest.TestCase):
             for name, mod, want in [
                 ("Star Trek Armada II (Stock)", None, "star-trek-armada-ii-stock"),
                 ("Star Trek Armada II", "Fleet Ops 4.0", "star-trek-armada-ii+fleet-ops-4-0"),
-                ("***", None, "install"),
+                ("@@@", None, "install"),
             ]:
                 d = os.path.join(t, name)
                 os.makedirs(d)
@@ -36,6 +36,7 @@ class KeyAndDir(unittest.TestCase):
 
     def test_refuses_an_output_inside_the_install(self):
         with tempfile.TemporaryDirectory() as t:
+            os.makedirs(os.path.join(t, "missions"))
             with self.assertRaises(SystemExit) as e:
                 c.main(["--install", t, "--out", os.path.join(t, "out")])
             self.assertIn("inside the install", str(e.exception))
