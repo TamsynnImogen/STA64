@@ -120,7 +120,7 @@ pub enum Slot {
 pub const TABLE_ROWS: usize = 8;
 
 /// Game Setup's table: left of x 450 and above y 260, headings between y 40 and 80,
-/// the player, side and team columns starting at x 41, 200 and 370 (measured). The
+/// the player, side and team columns classified from x 41, 200 and 370 (Refit's bounds; the multiplayer screen's own columns are at x 203 and 375). The
 /// rows run from y 80 on; the stock palette of colours under the table (to y 320)
 /// has no counterpart in a `GameSetup`, so the rows may take its room: arranged.
 pub const TABLE_TOP: f32 = 80.0;
@@ -140,7 +140,7 @@ pub fn region(slot: Slot) -> Region {
         next - COL_X[i] - 10.0
     };
     match slot {
-        // Main menu: the stock buttons' points (centres, measured); the sizes are ours.
+        // Main menu: Refit measured a point inside each stock button; centring on it and the sizes are ours.
         Slot::MainSinglePlayer => centred(141.0, 111.0, 230.0, 140.0, Grade::Arranged),
         Slot::MainInstantAction => centred(641.0, 89.0, 230.0, 140.0, Grade::Arranged),
         Slot::MainMultiplayer => centred(161.0, 478.0, 230.0, 140.0, Grade::Arranged),

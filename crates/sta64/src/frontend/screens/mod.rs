@@ -136,6 +136,8 @@ impl Plugin for ScreensPlugin {
             .init_resource::<Browse>()
             .init_resource::<ListScroll>()
             .init_resource::<stock::StockBox>()
+            .init_resource::<stock::OptionsTab>()
+            .init_resource::<stock::Refocus>()
             .init_resource::<ButtonInput<KeyCode>>()
             .add_message::<MouseWheel>()
             .add_message::<StartGame>()
@@ -150,7 +152,7 @@ impl Plugin for ScreensPlugin {
             )
             .add_systems(
                 Update,
-                (fit_scale, stock::track_box, follow_data, on_keys, on_wheel, track_scroll, on_buttons, on_lists, stock::on_dropdowns, rebuild)
+                (fit_scale, stock::track_box, follow_data, on_keys, on_wheel, track_scroll, on_buttons, on_lists, stock::on_dropdowns, stock::track_tab, rebuild, stock::restore_focus)
                     .chain()
                     .in_set(GameSet::Ui)
                     .after(crate::ui::profile::ProfileSync)
@@ -409,6 +411,7 @@ fn rebuild(
     scroll: Res<ListScroll>,
     config: Res<ScreensConfig>,
     stock_box: Res<stock::StockBox>,
+    options_tab: Res<stock::OptionsTab>,
     strings: Option<Res<crate::ui::i18n::Strings>>,
 ) {
     let Some(draft) = draft else { return };
@@ -418,6 +421,6 @@ fn rebuild(
     for e in &roots {
         commands.entity(e).despawn();
     }
-    let ctx = view::Ctx { theme: &theme, data: &data, strings: strings.as_deref(), draft: &draft, browse: &browse, settings: &settings, selected: &selected, scroll: &scroll, layout: config.layout, stock_box: stock_box.0 };
+    let ctx = view::Ctx { theme: &theme, data: &data, strings: strings.as_deref(), draft: &draft, browse: &browse, settings: &settings, selected: &selected, scroll: &scroll, layout: config.layout, stock_box: stock_box.0, options_tab: options_tab.0 };
     view::spawn(&mut commands, *screen.get(), &ctx, camera.map(|c| c.0));
 }

@@ -75,6 +75,15 @@ fn four_races() -> ScreenData {
     data
 }
 
+/// Slots out of order and a race that is not playable.
+fn mixed_races() -> ScreenData {
+    let mut data = ScreenData::fake();
+    let mut observer = race("observer", 0);
+    observer.slot = None;
+    data.races = Arc::new(Races::from_defs(vec![race("rom", 2), observer, race("fed", 0), race("bor", 3), race("kli", 1)]));
+    data
+}
+
 fn placed(app: &mut App) -> Vec<(Slot, Entity)> {
     app.world_mut().query::<(Entity, &Placed)>().iter(app.world()).map(|(e, p)| (p.0, e)).collect()
 }
@@ -218,11 +227,12 @@ fn the_stock_arrangement_holds_in_a_window() {
     assert!(t.max.x <= at(&app, Slot::MapInfo).min.x);
     assert!(at(&app, Slot::Resources).max.x <= at(&app, Slot::Preview).min.x);
     assert!(at(&app, Slot::Preview).max.y <= at(&app, Slot::Launch).min.y);
+    let b_scale = app.world().resource::<StockBox>().0.y / 1080.0;
     go(&mut app, Screen::Main);
     let sp = at(&app, Slot::MainSinglePlayer);
     let ia = at(&app, Slot::MainInstantAction);
     let mp = at(&app, Slot::MainMultiplayer);
-    assert!(sp.max.x <= ia.min.x && sp.center().y.abs() - ia.center().y.abs() < 40.0);
+    assert!(sp.max.x <= ia.min.x && (sp.center().y - ia.center().y).abs() < 40.0 * b_scale);
     assert!(mp.min.y >= sp.max.y);
     assert!(at(&app, Slot::MainOptions).min.x > mp.max.x);
 }
@@ -244,13 +254,15 @@ fn the_default_layout_is_stock_and_plain_keeps_the_old_screens() {
 
 #[test]
 fn the_faction_dropdown_lists_the_playable_factions_in_skirmish_order() {
-    let mut app = app_with(four_races(), None, 1.0);
+    let mut app = app_with(mixed_races(), None, 1.0);
     go(&mut app, Screen::Setup);
     let field = dropdown_of(&mut app, 0, Col::Race);
     let options = app.world().get::<Dropdown>(field).unwrap().options.clone();
-    assert_eq!(options, ["fed", "kli", "rom", "bor"]);
     let ids = app.world().resource::<ScreenData>().races();
+    assert!(!ids.iter().any(|i| i == "observer"), "a race without a skirmish slot is not offered: {ids:?}");
     assert_eq!(ids.len(), 4);
+    // The dropdown shows the same factions in the same order (these have no display key).
+    assert_eq!(options, ids);
     // Each seat has one, and each shows its own seat's side.
     let two = app.world().resource::<SetupDraft>().seats.clone();
     for (i, seat) in two.iter().enumerate() {
@@ -333,7 +345,7 @@ fn the_preview_shows_the_start_positions_of_the_picked_map() {
     let scroll = *app.world().resource::<crate::frontend::screens::ListScroll>();
     let ctx = crate::frontend::screens::view::Ctx {
         theme: &theme, data: &data, strings: None, draft: &draft, browse: &browse, settings: &settings, selected: &selected, scroll: &scroll,
-        layout: ScreenLayout::Stock, stock_box: Vec2::new(1440.0, 1080.0),
+        layout: ScreenLayout::Stock, stock_box: Vec2::new(1440.0, 1080.0), options_tab: 0,
     };
     let dots = preview_dots(&ctx);
     assert_eq!(dots.len(), data.maps[0].slots());
@@ -393,9 +405,41 @@ fn captions_come_from_the_installs_label_map() {
     app.insert_resource(strings.clone());
     go(&mut app, Screen::Setup);
     let texts: Vec<String> = app.world_mut().query::<&crate::ui::sprite_font::SpriteText>().iter(app.world()).map(|t| t.text.clone()).collect();
+    let mut found = 0;
     for key in ["launch", "select_map", "previous_menu"] {
         if let Some(text) = native(key) {
+            found += 1;
             assert!(texts.iter().any(|t| t.eq_ignore_ascii_case(&text)), "{key}: {text} not on the screen: {texts:?}");
         }
     }
+    assert!(found > 0, "the install's label.map has none of the keys");
+}
+
+#[test]
+fn the_options_tab_survives_a_rebuild() {
+    let mut app = app();
+    go(&mut app, Screen::Settings);
+    let tab2 = app.world_mut().query::<(Entity, &Tab)>().iter(app.world()).find(|(_, t)| t.0 == 2).map(|(e, _)| e).unwrap();
+    kit_click(app.world_mut(), tab2);
+    settle(&mut app);
+    // A box change (window resize) rebuilds the screen.
+    app.world_mut().resource_mut::<StockBox>().0 = Vec2::new(1200.0, 900.0);
+    settle(&mut app);
+    let bar = app.world_mut().query_filtered::<Entity, With<TabBar>>().single(app.world()).unwrap();
+    assert_eq!(app.world().get::<TabBar>(bar).unwrap().selected, 2);
+}
+
+#[test]
+fn a_dropdown_keeps_keyboard_focus_through_the_rebuild_its_choice_causes() {
+    use crate::ui::theme::{KitFocus, KitKey, kit_key};
+    let mut app = app_with(four_races(), None, 1.0);
+    go(&mut app, Screen::Setup);
+    let field = dropdown_of(&mut app, 0, Col::Race);
+    app.world_mut().resource_mut::<KitFocus>().0 = Some(field);
+    kit_key(app.world_mut(), KitKey::code(KeyCode::ArrowDown));
+    settle(&mut app);
+    assert_eq!(app.world().resource::<SetupDraft>().seats[0].race, "kli");
+    let now = dropdown_of(&mut app, 0, Col::Race);
+    assert_ne!(now, field, "the screen was rebuilt");
+    assert_eq!(app.world().resource::<KitFocus>().0, Some(now));
 }

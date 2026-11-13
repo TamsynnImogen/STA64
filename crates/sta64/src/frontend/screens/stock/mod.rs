@@ -54,6 +54,31 @@ impl Default for StockBox {
     }
 }
 
+/// The options screen's selected tab, kept across rebuilds.
+#[derive(Resource, Debug, Clone, Copy, Default)]
+pub struct OptionsTab(pub usize);
+
+/// The seat dropdown that had keyboard focus when a choice rebuilt the screen.
+#[derive(Resource, Debug, Clone, Copy, Default)]
+pub struct Refocus(pub Option<(usize, Col)>);
+
+pub(super) fn track_tab(mut changes: MessageReader<crate::ui::theme::TabChanged>, mut tab: ResMut<OptionsTab>) {
+    for c in changes.read() {
+        if tab.0 != c.index {
+            tab.0 = c.index;
+        }
+    }
+}
+
+/// Give a rebuilt seat dropdown the focus its predecessor had.
+pub(super) fn restore_focus(mut want: ResMut<Refocus>, seats: Query<(Entity, &SeatDrop)>, mut focus: ResMut<crate::ui::theme::KitFocus>) {
+    let Some((row, col)) = want.0 else { return };
+    if let Some((e, _)) = seats.iter().find(|(_, d)| d.row == row && d.col == col) {
+        focus.0 = Some(e);
+        want.0 = None;
+    }
+}
+
 pub(super) fn track_box(window: Query<&Window, With<PrimaryWindow>>, scale: Option<Res<UiScale>>, mut out: ResMut<StockBox>) {
     let Ok(w) = window.single() else { return };
     let s = scale.map_or(1.0, |s| s.0).max(0.01);
@@ -64,10 +89,11 @@ pub(super) fn track_box(window: Query<&Window, With<PrimaryWindow>>, scale: Opti
 }
 
 /// A seat's dropdown changed: the draft follows.
-pub(super) fn on_dropdowns(mut changes: MessageReader<DropdownChanged>, seats: Query<&SeatDrop>, data: Res<ScreenData>, draft: Option<ResMut<SetupDraft>>) {
+pub(super) fn on_dropdowns(mut changes: MessageReader<DropdownChanged>, seats: Query<&SeatDrop>, data: Res<ScreenData>, draft: Option<ResMut<SetupDraft>>, mut refocus: ResMut<Refocus>) {
     let Some(mut draft) = draft else { return };
     for c in changes.read() {
         let Ok(&SeatDrop { row, col }) = seats.get(c.entity) else { continue };
+        refocus.0 = Some((row, col));
         match col {
             Col::Control => set_control(&mut draft, row, [SeatControl::Human, SeatControl::Computer, SeatControl::Idle][c.index.min(2)]),
             Col::Race => {

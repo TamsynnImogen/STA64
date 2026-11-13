@@ -89,6 +89,8 @@ pub struct Ctx<'a> {
     pub layout: super::stock::ScreenLayout,
     /// The box the stock screens are laid out in, logical px.
     pub stock_box: Vec2,
+    /// The options screen's selected tab.
+    pub options_tab: usize,
 }
 
 /// Spawn `screen`; `camera` is the UI camera when the host has one of its own.

@@ -66,7 +66,7 @@ pub fn spawn(commands: &mut Commands, screen: Screen, ctx: &Ctx, camera: Option<
 
 type Box_<'a> = RelatedSpawnerCommands<'a, ChildOf>;
 
-/// `content` in the rectangle `r` (logical px in the box), centred across it.
+/// `content` in the rectangle `r` (logical px in the box), centred vertically in it.
 fn put(p: &mut Box_, slot: Slot, r: Rect, content: impl Bundle) {
     p.spawn((
         Placed(slot),
@@ -236,6 +236,7 @@ fn settings(p: &mut Box_, ctx: &Ctx, b: Vec2) {
     let s = ctx.settings.clone();
     let theme = t.clone();
     let tabs = [tr("Sound"), tr("Game"), tr("Graphics")];
+    let tab = ctx.options_tab.min(2);
     p.spawn((
         Placed(Slot::OptionsBody),
         Node {
@@ -251,7 +252,8 @@ fn settings(p: &mut Box_, ctx: &Ctx, b: Vec2) {
     ))
     .with_children(move |c| {
             let refs: Vec<&str> = tabs.iter().map(String::as_str).collect();
-            let bar = c.spawn(tab_bar(&theme, &refs, 0)).id();
+            let shown = |i: usize| if i == tab { Display::Flex } else { Display::None };
+            let bar = c.spawn(tab_bar(&theme, &refs, tab)).id();
             let slider_row = |c: &mut RelatedSpawnerCommands<ChildOf>, name: &str, key: SettingKey| {
                 let w = body.width() * 0.5;
                 c.spawn(Node { column_gap: Val::Px(theme.gap), align_items: AlignItems::Center, ..default() }).with_children(|r| {
@@ -259,16 +261,16 @@ fn settings(p: &mut Box_, ctx: &Ctx, b: Vec2) {
                     r.spawn((slider_focusable(&theme, w, 0.0, 100.0, s.number(key).unwrap_or(0.0), 5.0), SettingSlider(key)));
                 });
             };
-            c.spawn(tab_panel(bar, 0)).insert(Node { flex_direction: FlexDirection::Column, row_gap: Val::Px(theme.gap), ..default() }).with_children(|c| {
+            c.spawn(tab_panel(bar, 0)).insert(Node { flex_direction: FlexDirection::Column, row_gap: Val::Px(theme.gap), display: shown(0), ..default() }).with_children(|c| {
                 slider_row(c, &tr("Master volume"), SettingKey::MasterVolume);
                 slider_row(c, &tr("Music"), SettingKey::MusicVolume);
                 slider_row(c, &tr("Effects"), SettingKey::EffectsVolume);
                 slider_row(c, &tr("Voices"), SettingKey::VoiceVolume);
             });
-            c.spawn(tab_panel(bar, 1)).insert(Node { flex_direction: FlexDirection::Column, row_gap: Val::Px(theme.gap), display: Display::None, ..default() }).with_children(|c| {
+            c.spawn(tab_panel(bar, 1)).insert(Node { flex_direction: FlexDirection::Column, row_gap: Val::Px(theme.gap), display: shown(1), ..default() }).with_children(|c| {
                 slider_row(c, &tr("Scroll speed"), SettingKey::ScrollSpeed);
             });
-            c.spawn(tab_panel(bar, 2)).insert(Node { flex_direction: FlexDirection::Column, row_gap: Val::Px(theme.gap), display: Display::None, ..default() }).with_children(|c| {
+            c.spawn(tab_panel(bar, 2)).insert(Node { flex_direction: FlexDirection::Column, row_gap: Val::Px(theme.gap), display: shown(2), ..default() }).with_children(|c| {
                 for (name, key, on) in [
                     (tr("Fullscreen"), SettingKey::Fullscreen, s.fullscreen),
                     (tr("Vertical sync"), SettingKey::Vsync, s.vsync),
