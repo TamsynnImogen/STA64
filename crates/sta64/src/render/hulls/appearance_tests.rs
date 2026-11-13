@@ -305,6 +305,8 @@ fn run_capture_test(auxiliary_maps: bool) {
             beta_specular.is_some(),
             "beta capture loads its specular map"
         );
+        assert_eq!(standard.emissive, LinearRgba::WHITE);
+        assert_eq!(standard.perceptual_roughness, 1.0);
         assert_eq!(standard.normal_map_texture.as_ref(), Some(&normal));
         assert!(app.world().get::<HullSource>(part).is_none());
         assert!(

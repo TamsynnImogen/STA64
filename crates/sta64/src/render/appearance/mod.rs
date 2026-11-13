@@ -360,11 +360,13 @@ fn sync(
                     && let Some(texture) = loader.faction_colour(name, suffix)
                 {
                     material.emissive_texture = Some(texture);
+                    material.emissive = LinearRgba::WHITE;
                 }
                 if let Some(name) = &group.maps.specular
                     && let Some(texture) = loader.faction_roughness(name, suffix)
                 {
                     material.metallic_roughness_texture = Some(texture);
+                    material.perceptual_roughness = 1.0;
                 }
             }
             if let Some(private) = private {
