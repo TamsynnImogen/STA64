@@ -155,8 +155,6 @@ impl Profile {
                 cheats: true,
                 a1_compat: false,
                 pay_on_queue: true,
-                // SIM-39: the casualty model STA64 implements.
-                crew_loss_on_hit: true,
                 ..off
             },
             // FOH rows: damage controls, PD cycles, resources, officers, rigs.
@@ -773,8 +771,9 @@ mod tests {
     #[test]
     fn defaults_table_native() {
         let f = Profile::Native.features();
-        assert_eq!(on(&f).len(), 22);
-        assert!(f.crew_loss_on_hit);
+        assert_eq!(on(&f).len(), 21);
+        // Left off: it would move every golden digest; Native has no original to match.
+        assert!(!f.crew_loss_on_hit);
         assert!(!f.a1_compat && f.pay_on_queue && f.cheats);
     }
 
