@@ -321,22 +321,13 @@ fn random_orders_across_a_field_of_obstacles_always_end() {
             }]);
         }
         for order in 0..40 {
-            // Targets anywhere in the open map (not within a field's contact
-            // distance and margin: a destination pushed out to the far side
-            // of a field is an orbit the planner does not yet settle).
-            let to = loop {
-                let to = v(150 + next(6000), 150 + next(6000));
-                let free = regions.iter().all(|r| match r.shape {
-                    RegionShape::Sphere { centre, .. } => gap(centre, to) > 650.0,
-                    _ => true,
-                });
-                if free {
-                    break to;
-                }
-            };
+            // Targets anywhere in the map, inside fields and just past their
+            // edges as well (a destination the craft cannot settle on ends by
+            // the stuck-order watch).
+            let to = v(150 + next(6000), 150 + next(6000));
             go(&mut sim, 1, &[id], to);
             let mut ticks = 0;
-            while sim.unit(id).unwrap().target.is_some() && ticks < 4000 {
+            while sim.unit(id).unwrap().target.is_some() && ticks < 6500 {
                 sim.step(&[]);
                 ticks += 1;
                             }
