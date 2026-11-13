@@ -230,6 +230,111 @@ fn personnel_uses_inherited_cfg_rectangles_colours_and_live_values() {
     assert_eq!(resource_label(&mut app, 0).unwrap().1, "0");
 }
 
+const A1_RESOURCES: &str = "\
+screenWidth = 640
+screenHeight = 480
+officerPanelArea = 559 0 81 16
+officerBackgroundPanel = \"officer_panel\"
+officerBackgroundPanelArea = 0 0 81 16
+officerBackgroundPanelSize = 1
+officerBackgroundPanel_0 = 0 0 81 16
+officerIcon = \"officer_icon\"
+officerIconArea = 2 3 10 10
+officerTextArea = 16 2 63 12
+crewPanelArea = 477 0 81 16
+crewBackgroundPanel = \"crew_panel\"
+crewBackgroundPanelSize = 1
+crewBackgroundPanel_0 = 0 0 81 16
+crewIcon = \"crew_icon\"
+crewIconArea = 5 3 4 10
+crewTextArea = 16 2 63 12
+dilithiumPanelArea = 395 0 81 16
+dilithiumBackgroundPanel = \"dilithium_panel\"
+dilithiumBackgroundPanelSize = 1
+dilithiumBackgroundPanel_0 = 0 0 81 16
+dilithiumIcon = \"dilithium_icon\"
+dilithiumIconArea = 2 3 10 10
+dilithiumTextArea = 16 2 63 12
+";
+
+fn single_file_config(raw: &str) -> HudConfig {
+    let (cfg, _) = GuiCfg::parse("gui_fed.cfg", raw);
+    HudConfig { gui: Some(cfg.layout_auto()), fit_scale: false, ..default() }
+}
+
+fn resource_label_count(app: &mut App) -> usize {
+    app.world_mut().query::<&info::StockText>().iter(app.world()).count()
+}
+
+#[test]
+fn armada1_separate_panels_draw_three_readouts_with_live_values() {
+    let mut app = app_with_content_and_config(content(), single_file_config(A1_RESOURCES), UiProfile::Armada2);
+    assert_eq!(resource_label_count(&mut app), 3);
+    // 640x480 canvas mapped to the 1920x1080 test viewport: x scale 3, y scale 2.25.
+    let (_, dilithium, _, node) = resource_label(&mut app, 2).unwrap();
+    assert_eq!(dilithium, "700");
+    assert_eq!((node.left, node.top), (Val::Px((395.0_f32 + 16.0) * 3.0), Val::Px(5.0)));
+    assert_eq!(resource_label(&mut app, 0).unwrap().1, "");
+    assert_eq!(resource_label(&mut app, 1).unwrap().1, "0/0");
+    set_personnel(&mut app, Some(Fixed::from_int(4000)), [Fixed::from_int(7), Fixed::from_int(100)]);
+    assert_eq!(resource_label(&mut app, 0).unwrap().1, "4000");
+    assert_eq!(resource_label(&mut app, 1).unwrap().1, "7/100");
+    // Three backgrounds and three icons are drawn as pictures.
+    let pictures = app.world_mut().query::<&crate::ui::gui_sprites::GuiImage>().iter(app.world()).count();
+    assert_eq!(pictures, 6);
+}
+
+/// With `STA64_TEST_A1_INSTALL=<Armada I root>`: every race's real GUI cfg draws the three
+/// readouts (crew 0, officers 1, dilithium 2) inside the window at 4:3 and 16:9.
+#[test]
+fn installed_armada1_guis_draw_three_resource_readouts_inside_the_window() {
+    let Some(root) = std::env::var_os("STA64_TEST_A1_INSTALL") else {
+        eprintln!("SKIP: set STA64_TEST_A1_INSTALL to an Armada I root");
+        return;
+    };
+    let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), None).unwrap();
+    for cfg_name in ["gui_fed.cfg", "gui_kli.cfg", "gui_rom.cfg", "gui_bor.cfg"] {
+        let layout = crate::game::gui_layout(&vfs, cfg_name).unwrap_or_else(|| panic!("{cfg_name} missing"));
+        assert!(layout.panels.get("resource").is_none(), "{cfg_name} now has a resource panel");
+        for aspect in [4.0_f32 / 3.0, 16.0 / 9.0] {
+            let config = HudConfig { gui: Some(layout.clone()), aspect, fit_scale: false, ..default() };
+            let mut app = app_with_content_and_config(content(), config, UiProfile::Armada2);
+            assert_eq!(resource_label_count(&mut app), 3, "{cfg_name} at {aspect}");
+            let (w, h) = (1080.0 * aspect, 1080.0);
+            for id in 0..3 {
+                let (_, _, _, node) = resource_label(&mut app, id).unwrap_or_else(|| panic!("{cfg_name} id {id}"));
+                let (Val::Px(x), Val::Px(y), Val::Px(nw), Val::Px(nh)) = (node.left, node.top, node.width, node.height)
+                else {
+                    panic!("{cfg_name} id {id}: not pixel placed");
+                };
+                assert!(nw >= 20.0 && nh >= 8.0, "{cfg_name} id {id}: {nw}x{nh}");
+                assert!(x >= 0.0 && y >= 0.0 && x + nw <= w + 0.5 && y + nh <= h, "{cfg_name} id {id}: {x},{y} {nw}x{nh} in {w}x{h}");
+            }
+        }
+    }
+}
+
+#[test]
+fn armada1_separate_panels_respect_no_flags_and_missing_text_areas() {
+    let raw = format!("{A1_RESOURCES}noCrew = 1\ndilithiumTextArea = 0 0 0 0\n");
+    let mut app = app_with_content_and_config(content(), single_file_config(&raw), UiProfile::Armada2);
+    assert!(resource_label(&mut app, 0).is_none());
+    assert!(resource_label(&mut app, 2).is_none());
+    assert!(resource_label(&mut app, 1).is_some());
+}
+
+#[test]
+fn single_resource_panel_wins_over_separate_panels() {
+    // A2 / FO / Roots sheets author `resourcePanelArea`; stray A1 style keys must not add readouts.
+    let raw = format!("{A1_RESOURCES}resourcePanelArea = 0 0 400 80\nresource_2 = 20 10 80 30\n");
+    let mut mixed = app_with_content_and_config(content(), single_file_config(&raw), UiProfile::Armada2);
+    assert_eq!(resource_label_count(&mut mixed), 1);
+    assert_eq!(resource_label(&mut mixed, 2).unwrap().1, "700");
+    // The shipped A2 test sheet still draws its three authored readouts unchanged.
+    let mut a2 = app();
+    assert_eq!(resource_label_count(&mut a2), 3);
+}
+
 #[test]
 fn personnel_flags_and_zero_rectangles_suppress_only_authored_labels() {
     for extra in ["noCrew = 1\nnoOfficers = 1\n", "resource_0 = 8 8 0 20\nresource_1 = 9 9 40 0\n"] {

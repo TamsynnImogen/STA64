@@ -191,8 +191,44 @@ fn wireframe_layers(commands: &mut Commands, root: Entity, r: R, model: &str) {
     }
 }
 
+/// Armada I's GUI cfgs (read from data: `gui_fed/kli/rom/bor.cfg`) have no `resourcePanelArea`;
+/// each readout is its own panel keyed `<n>PanelArea`, with `<n>BackgroundPanel[Size|_0]`,
+/// `<n>Icon` + `<n>IconArea` and `<n>TextArea` (the last two relative to the panel).
+/// Used only when the single resource panel is absent. The stock texts show crew and
+/// dilithium as plain whole numbers and officers as "in use / available" (the
+/// `GUI_RD_OFFICERS_VTOOLTIP` string says so); the number format itself is assumed.
+const SEPARATE_RESOURCES: [(&str, usize, &str); 3] =
+    [("dilithium", 2, "noDilithium"), ("crew", 0, "noCrew"), ("officer", 1, "noOfficers")];
+
+fn spawn_separate_resources(commands: &mut Commands, root: Entity, layout: &StockLayout, feed: &HudFeed, theme: &Theme) {
+    for (prefix, id, flag) in SEPARATE_RESOURCES {
+        let Some(area) = layout.panel(prefix) else {
+            continue;
+        };
+        // Same convention as the single panel: an authored non-zero flag hides it.
+        if layout.number(flag).is_some_and(|n| n != 0.0) {
+            continue;
+        }
+        let origin = Vec2::new(area.x, area.y);
+        for piece in layout.pieces(&format!("{prefix}BackgroundPanel")) {
+            picture(commands, root, place(origin, piece.rect), &piece.name, piece.frame);
+        }
+        if let Some(name) = layout.name(&format!("{prefix}Icon"))
+            && let Some(r) = layout.at(origin, &format!("{prefix}IconArea"))
+        {
+            picture(commands, root, r, name, 0);
+        }
+        let Some(r) = layout.at(origin, &format!("{prefix}TextArea")) else {
+            continue;
+        };
+        let value = resource_text(feed, id).unwrap_or_default();
+        text(commands, root, r, value, theme.text, theme.small_size, Some(StockText::Resource(id)));
+    }
+}
+
 fn spawn_resource(commands: &mut Commands, root: Entity, layout: &StockLayout, feed: &HudFeed, theme: &Theme) {
     let Some(area) = layout.panel("resource") else {
+        spawn_separate_resources(commands, root, layout, feed, theme);
         return;
     };
     let origin = Vec2::new(area.x, area.y);
