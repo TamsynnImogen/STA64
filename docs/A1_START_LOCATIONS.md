@@ -115,3 +115,37 @@ original BZN/MDF SHA-256 values remained unchanged.
 Workspace all-targets checking, formatting and diff checks passed. An offline
 workspace lock refresh changed zero packages and left `Cargo.lock` unchanged.
 No new APK or device/runtime claim is made for these helpers.
+
+## Native reader and missing-path fallback (CON-42)
+
+Evidence grade: read from the original A1 executable (static); not executed in
+the original game, and the map-list enumeration that decides which maps are
+offered was not traced.
+
+- `native_mdf_start_count` follows the original reader, which never fails:
+  an absent file, missing key, unparsable value or count outside 2..8 give
+  eight. The key matches as a case-insensitive prefix on a line that also
+  holds `=`; the first such line wins; the value is read as `= %d`
+  (so `2x` is 2); an LF followed by a space or tab continues the line; the
+  file ends at its first NUL. A failed `%d` leaves an uninitialised native
+  field, modelled as eight. `#include` lines are not followed. A UTF-8 BOM, leading blanks or CR-only line
+  endings keep the key from matching at line start and give eight (the strict
+  reader accepted them); `%d` overflow is not measured.
+- `player_start_positions_with_fallback`: a team with no `Camera_i` path starts
+  at the map's centre XZ and the mean of `SHIP_COMBAT_FLOOR` and
+  `SHIP_COMBAT_CEILING` (read from `RTS_CFG.h`; without both keys a missing
+  path still rejects the result). A present but empty or non-finite path
+  still rejects the result: native behaviour there is not measured.
+- Content conversion uses the native count only. STA64's own choice (not a
+  measured rule): seats are offered only for the leading run of teams that
+  have a `Camera_i` path, with a warning when that is fewer than the count
+  (fewer than two gives no starts). The native fallback point is not used for
+  seats, because it would stack them on the map centre and what the original
+  setup screen and spawn path do with such seats was not traced. The fallback
+  helper stays available in `sta_bzn`. A map with no companion keeps no starts
+  (not measured; native lists appear to enumerate `.mdf` files). All 28 stock
+  companions give the same 113 starts as before. The done-when item for maps
+  without a companion and for extra seats stays open: not measured.
+- Leading blanks before the key: the native comparison is at line start, so
+  ` StartLocations = 4` gives eight; this follows the static reading and was
+  not run on the original.
