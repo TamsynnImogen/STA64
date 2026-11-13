@@ -5553,6 +5553,7 @@ dependencies = [
  "json5",
  "png",
  "serde",
+ "serde_json",
  "sta_bzn",
  "sta_content",
  "sta_core",
