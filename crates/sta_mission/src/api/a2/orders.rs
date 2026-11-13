@@ -323,12 +323,15 @@ fn goto(lua: &Lua, env: &Env, overload: usize, a: &[P]) -> mlua::Result<Value> {
         Some(p) => vec![p],
         None => env.path(lua, "Goto", a[1].text())?,
     };
-    if a[2].boolean() {
-        return Err(env.gap("Goto", "no warp order in the sim seam (GO_WARP)"));
-    }
+    let warp = a[2].boolean();
     env.owned("Goto", &unit)?;
     for (n, to) in points.into_iter().enumerate() {
-        env.order("Goto", unit.id, |units| Order::Move { units, to, queue: n > 0 })?;
+        // GO_WARP asks for warp on its first leg (SIM-56); the rest are plain legs.
+        if warp && n == 0 {
+            env.order("Goto", unit.id, |units| Order::MoveWarp { units, to, queue: false })?;
+        } else {
+            env.order("Goto", unit.id, |units| Order::Move { units, to, queue: n > 0 })?;
+        }
     }
     nothing()
 }
@@ -471,14 +474,45 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
     table.set("Attack", def(lua, &env, "Attack", &["hhi"], |_, e, _, a| attack(e, "Attack", a[0].id(), a[1].id()))?)?;
     table.set("AI_Attack", def(lua, &env, "AI_Attack", &["hh", "h", "hv"], |_, e, ov, a| match ov {
         0 => attack(e, "AI_Attack", a[0].id(), a[1].id()),
-        // ATTACK without a target, and attack-move to a point: no order in the seam.
-        1 => Err(e.gap("AI_Attack", "no target-less attack (seek) order in the sim seam")),
-        _ => Err(e.gap("AI_Attack", "no attack-move order in the sim seam")),
+        // ATTACK without a target: engage what the sensors show, stop when
+        // nothing is seen (SIM-56 `AttackAny`).
+        1 => {
+            let Some(unit) = e.alive(a[0].id()) else { return nothing() };
+            e.owned("AI_Attack", &unit)?;
+            e.order("AI_Attack", unit.id, |units| Order::AttackAny { units })?;
+            nothing()
+        }
+        // ATTACK at a position: fly to weapon range of the point, firing nothing.
+        _ => {
+            let Some(unit) = e.alive(a[0].id()) else { return nothing() };
+            e.owned("AI_Attack", &unit)?;
+            let (x, y, z) = a[1].vec();
+            e.order("AI_Attack", unit.id, |units| Order::AttackPoint { units, at: to_vec3(x, y, z) })?;
+            nothing()
+        }
     })?)?;
     table.set("Mine", def(lua, &env, "Mine", &["hh"], |_, e, _, a| mine(e, a[0].id(), a[1].id()))?)?;
-    table.set("Patrol", raising(lua, &env, "Patrol", &["hs"], "no patrol (looping path) order in the sim seam")?)?;
-    table.set("SearchAndDestroy", raising(lua, &env, "SearchAndDestroy", &["h"], "no search-and-destroy order in the sim seam")?)?;
-    table.set("Scout", raising(lua, &env, "Scout", &["h"], "no scout order in the sim seam")?)?;
+    // `Patrol(unit, path)` loops the path from its first point (the engine also
+    // marks the shared path as a loop; STA64 keeps the loop in the order).
+    table.set("Patrol", def(lua, &env, "Patrol", &["hs"], |lua, e, _, a| {
+        let Some(unit) = e.alive(a[0].id()) else { return nothing() };
+        let points = e.path(lua, "Patrol", a[1].text())?;
+        e.owned("Patrol", &unit)?;
+        e.order("Patrol", unit.id, |units| Order::Patrol { units, points })?;
+        nothing()
+    })?)?;
+    table.set("SearchAndDestroy", def(lua, &env, "SearchAndDestroy", &["h"], |_, e, _, a| {
+        let Some(unit) = e.alive(a[0].id()) else { return nothing() };
+        e.owned("SearchAndDestroy", &unit)?;
+        e.order("SearchAndDestroy", unit.id, |units| Order::SearchAndDestroy { units })?;
+        nothing()
+    })?)?;
+    table.set("Scout", def(lua, &env, "Scout", &["h"], |_, e, _, a| {
+        let Some(unit) = e.alive(a[0].id()) else { return nothing() };
+        e.owned("Scout", &unit)?;
+        e.order("Scout", unit.id, |units| Order::Scout { units })?;
+        nothing()
+    })?)?;
     table.set("Colonize", raising(lua, &env, "Colonize", &["hh"], "no colonize order in the sim seam")?)?;
     table.set("Special_Attack", raising(lua, &env, "Special_Attack", &["hs", "hhs"], "the sim orders only cloak and point-defence specials, and its special order carries no target")?)?;
     table.set("SetCommandMoveAutonomyLow", raising(lua, &env, "SetCommandMoveAutonomyLow", &["h"], "no per-unit movement autonomy order in the sim seam")?)?;
@@ -593,7 +627,6 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
         nothing()
     })?)?;
     table.set("SetRace", raising(lua, &env, "SetRace", &["hs"], "no mutable-race edit in the sim seam")?)?;
-    table.set("CraftCanRepair", raising(lua, &env, "CraftCanRepair", &["hb"], "no can-repair flag in the sim seam")?)?;
 
     // `SetCommandWhat...VO(who, command, ...)`: SET_COMMAND with a target
     // object (both objects must be live craft, else nothing happens), a

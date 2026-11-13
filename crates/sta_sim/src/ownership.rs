@@ -72,6 +72,10 @@ impl Sim {
         let unit = self.units.get_mut(id).expect("validated live unit");
         unit.target = None;
         unit.owner = to;
+        // `Craft::SetTeam` clears the special-forces flag (SIM-58), and the
+        // craft's scripted order goes with its old owner's.
+        self.scripted.remove(id);
+        self.switches.edit(id, |s| s.special_forces = false);
         if new_team && !self.team_changes.contains(&id) {
             self.team_changes.push(id);
         }
