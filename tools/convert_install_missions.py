@@ -97,6 +97,10 @@ def main(argv=None):
     install = os.path.realpath(a.install)
     if not os.path.isdir(install):
         sys.exit(f"--install {a.install}: not a folder")
+    names = {n.lower() for n in os.listdir(install)}
+    if "armada.exe" not in names and "armada2.exe" not in names:
+        sys.exit(f"--install {a.install}: neither an Armada I root (Armada.exe) nor an Armada II root (Armada2.exe) "
+                 "(point --install at the game's own folder, the one holding the .exe)")
     installs = [install]
     # Only the base game's own missions folder: never a mod's DLLs under Data/Mods (D6).
     mdir = next((os.path.join(install, d, "missions") for d in ("", "Data") if os.path.isdir(os.path.join(install, d, "missions"))), None)
