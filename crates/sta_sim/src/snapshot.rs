@@ -39,9 +39,10 @@ use crate::world::{Entities, Entity, EntityKind, Shields, Table};
 use crate::{Rng, Sim, SimEvent};
 
 pub const MAGIC: [u8; 4] = *b"STAS";
-/// Format 15 (CON-35) adds the [`Provenance`] record and carries the keyed
-/// content digest's hash. Only this format is read.
-pub const FORMAT_VERSION: u16 = 15;
+/// Format 16 (SIM-38) appends craft autonomy after the start-helper rows.
+/// Format 15 (CON-35) added the [`Provenance`] record and the keyed content
+/// digest's hash. Only the current format is read.
+pub const FORMAT_VERSION: u16 = 16;
 
 const HEADER: usize = 4 + 2 + 4 + 8;
 
@@ -295,6 +296,9 @@ impl EntityRec {
                 turn_control_angle: s.smooth[4],
                 turn_control_squared: s.smooth[5] != Fixed::ZERO,
                 forward_control_distance: s.smooth[6],
+                // Not in the snapshot: `from_snapshot` re-reads it from the
+                // definition once the entities exist.
+                warp_speed: Fixed::ZERO,
             },
             hull: self.hull,
             crew: None,
@@ -372,6 +376,7 @@ impl Sim {
             rows: self.units.iter().filter_map(|unit| unit.crew.map(|pool| (unit.id, pool.map(Fixed::to_bits)))).collect(),
         }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&StartEffectsRec { version: 1, rows: self.start_effects.to_rec() }).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&crate::autonomy::AutonomyWire { version: 1, rows: self.autonomy.to_rec() }).expect("snapshot serialises"));
         out
     }
 
@@ -407,6 +412,9 @@ impl Sim {
         let (record, rest): (StartEffectsRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         if record.version != 1 { return Err(SnapshotError::Corrupt("unknown start effects record version".into())); }
         let effect_rows = record.rows;
+        let (record, rest): (crate::autonomy::AutonomyWire, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        if record.version != 1 { return Err(SnapshotError::Corrupt("unknown autonomy record version".into())); }
+        let autonomy_rows = record.rows;
         if !rest.is_empty() { return Err(SnapshotError::Corrupt("trailing bytes".into())); }
         if let Some(row) = b.economy.miners.iter().find(|row| row.5 > 4) {
             return Err(SnapshotError::Corrupt(format!("mining phase {} is not supported", row.5)));
@@ -419,6 +427,18 @@ impl Sim {
             .collect::<Result<Vec<_>, _>>()?;
         let mut units =
             Entities::from_parts(list, b.next_entity).ok_or_else(|| corrupt("entity ids"))?;
+        // `warpSpeed` is a per-definition stat that a spawn copies and the
+        // snapshot does not carry: re-read it (typed `UnitDef` field) so a
+        // restored sim equals a live one.
+        if let Some(db) = content.as_deref() {
+            let ids: Vec<EntityId> = units.iter().map(|u| u.id).collect();
+            for id in ids {
+                let Some(unit) = units.get_mut(id) else { continue };
+                if let Some(def) = db.unit(unit.def) {
+                    unit.stats.warp_speed = def.movement.warp_speed;
+                }
+            }
+        }
         if crew_rows.windows(2).any(|pair| pair[0].0 >= pair[1].0) {
             return Err(corrupt("unit crew rows"));
         }
@@ -454,6 +474,10 @@ impl Sim {
             .collect();
         let movement = Movement::from_rows(courses).ok_or_else(|| corrupt("courses"))?;
         let weapons = Weapons::from_rec(b.weapons).ok_or_else(|| corrupt("weapons"))?;
+        let autonomy = crate::autonomy::Autonomy::from_rec(autonomy_rows).ok_or_else(|| corrupt("autonomy"))?;
+        if autonomy.to_rec().iter().any(|(id, _)| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft)) {
+            return Err(corrupt("autonomy entity"));
+        }
         let specials = crate::specials::Specials::from_rec(b.specials).ok_or_else(|| corrupt("specials"))?;
         let start_effects = crate::start_effects::StartEffects::from_rec(effect_rows, |id| units.contains(id))
             .ok_or_else(|| corrupt("start effect rows"))?;
@@ -479,6 +503,7 @@ impl Sim {
             production: crate::production::Production::from_rec(&b.production).ok_or_else(|| corrupt("rallies"))?,
             victory: crate::victory::Victory::from_rec(&b.victory),
             specials,
+            autonomy,
             start_effects,
             nav: Default::default(),
         })

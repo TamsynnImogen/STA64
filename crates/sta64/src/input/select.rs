@@ -452,7 +452,7 @@ mod tests {
             hull: [Fixed::ONE; 2],
             shields: [[Fixed::ONE; 2]; 4],
             crew: None,
-            energy: None,
+            energy: None, autonomy: None,
             flags: UnitFlags::default(),
             progress: None,
         }
