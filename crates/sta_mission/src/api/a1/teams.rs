@@ -108,8 +108,9 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
         Ok(Value::Nil)
     })?)?;
     table.set("SetRace", def(lua, env, "SetRace", &["hs"], |_, e, _, a| {
-        e.unit("SetRace", a[0].id())?;
-        e.gap("SetRace", "no mutable-race edit in the sim seam", args_of(a))?;
+        let id = a[0].id();
+        e.unit("SetRace", id)?;
+        e.edit("SetRace", sta_sim::command::Edit::UnitRace(id, a[1].text().to_owned()))?;
         Ok(Value::Nil)
     })?)?;
     table.set("SetWormholeTeam", def(lua, env, "SetWormholeTeam", &["hi"], |_, e, _, a| {
@@ -129,8 +130,9 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
         Ok(Value::Number(a[1].num()))
     })?)?;
     table.set("SetTeamCrew", def(lua, env, "SetTeamCrew", &["if"], |_, e, _, a| {
-        e.team("SetTeamCrew", a[0].int())?;
-        e.gap("SetTeamCrew", "no crew-stock edit in the sim seam", args_of(a))?;
+        let team = e.team("SetTeamCrew", a[0].int())?;
+        if !a[1].num().is_finite() { return Err(mlua::Error::runtime("A1.SetTeamCrew requires a finite number")); }
+        e.edit("SetTeamCrew", sta_sim::command::Edit::TeamCrew(team, sta_core::Fixed::from_f64(a[1].num())))?;
         Ok(Value::Number(a[1].num()))
     })?)?;
     table.set("AddCrew", def(lua, env, "AddCrew", &["if"], |_, e, _, a| {

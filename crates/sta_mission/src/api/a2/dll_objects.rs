@@ -104,6 +104,8 @@ const DEFERRED_ON_PENDING: &[&str] = &[
     "SetGreenAlert",
     "SetImpulseSpeed",
     "SetMaxShields",
+    "SetName",
+    "SetRace",
     "SetPerceivedTeam",
     "SetPosition",
     "SetRedAlert",

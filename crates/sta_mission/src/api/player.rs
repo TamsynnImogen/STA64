@@ -82,6 +82,9 @@ impl UserData for Player {
         f.add_field_method_get("race", |_, p| {
             // The race of the player's first unit that has one.
             let c = p.ctx.borrow();
+            if let Ok(i) = c.view.attrs.player_races.binary_search_by_key(&p.id, |r| r.0) {
+                return Ok(c.view.attrs.player_races[i].1.clone());
+            }
             Ok(c.view.units.iter().filter(|u| u.owner == p.id).find_map(|u| {
                 c.def(u).map(|d| d.race.clone()).filter(|r| !r.is_empty())
             }).unwrap_or_default())
@@ -89,7 +92,6 @@ impl UserData for Player {
         // Cosmetic or rule-level player settings with no sim state: accepted and
         // recorded (a seat's race and display data come from the game setup).
         for (name, need) in [
-            ("race", "a sim race edit"),
             ("color", "a player-colour setting in the game setup"),
             ("name", "a player-name setting in the game setup"),
         ] {
@@ -98,6 +100,17 @@ impl UserData for Player {
                 Ok(())
             });
         }
+        // `Player.race = Race.find(...)` (SIM-54): the seat's race, kept and shown by the sim; the sim
+        // refuses a name no unit carries. Rules that read a seat's race (build interface, forced
+        // setup race of the local seat) are not modelled: not measured beyond the executable, static.
+        f.add_field_method_set("race", |_, p, value: Value| {
+            let mut c = p.ctx.borrow_mut();
+            match super::race::race_name(&value) {
+                Some(name) => super::edit_feedback::queue(&mut c, "Player.race", Edit::PlayerRace(p.id, name))?,
+                None => c.unsupported("Player.race = non-race"),
+            }
+            Ok(())
+        });
         f.add_field_method_get("isAI", |_, _| Ok(false));
         f.add_field_method_get("slotType", |_, p| {
             Ok(if p.ctx.borrow().seat == p.id { "Human" } else { "None" })

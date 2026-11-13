@@ -98,6 +98,11 @@ impl SwitchTable {
         self.rows.get(id).is_some_and(|s| s.no_repair)
     }
 
+    /// The display names scripts gave (`Edit::Name`), ascending id.
+    pub(crate) fn names(&self) -> Vec<(EntityId, String)> {
+        self.rows.iter().filter_map(|(id, s)| s.name.clone().map(|n| (id, n))).collect()
+    }
+
     pub(crate) fn to_rows(&self) -> Vec<(EntityId, Switches)> {
         self.rows.iter().map(|(id, s)| (id, s.clone())).collect()
     }

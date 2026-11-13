@@ -627,7 +627,9 @@ fn personnel_assignment_edge_cases_are_recorded_not_aborting() {
     }
     assert!(g.global::<bool>("DONE"), "the callback was not aborted: {:?}", g.rt.errors());
     let names: Vec<String> = g.rt.unsupported().into_iter().map(|(n, _)| n).collect();
-    for want in ["Entity.crew = non-number", "Entity.crew = non-finite", "Player.maxOfficers: simulation rejected"] {
+    // A seat with no officer limit takes the script's (SIM-54: a raw write in the original).
+    assert!(!names.iter().any(|n| n.contains("Player.maxOfficers")), "{names:?}");
+    for want in ["Entity.crew = non-number", "Entity.crew = non-finite"] {
         assert!(names.iter().any(|n| n.contains(want)), "{want} in {names:?}");
     }
     let mut g = game("MMM.register(function() Player(0).maxOfficers = 0/0 end)");
@@ -650,6 +652,76 @@ fn entity_shields_is_a_fraction_of_the_maximum_applied_by_the_sim() {
     assert!(g.rt.unsupported().iter().all(|(n, _)| !n.contains("Entity.shields")));
     let hero = g.sim.units.get(HERO).unwrap();
     assert!(hero.shields.now[0] < hero.shields.max, "{:?}", hero.shields);
+}
+
+// ---- SIM-54: attribute assignments, read back at once and applied by the sim ----
+
+#[test]
+fn max_hull_is_a_per_unit_clock_that_reads_back_at_once_and_reaches_the_sim() {
+    // The Roots idiom: a unit's maxHull as a counter, `x.maxHull = x.maxHull + 1.0`, several times
+    // in one hook; the other cruiser-class unit is untouched.
+    let mut g = game(
+        "MMM.register(function()
+            if DONE == true then return end
+            local e = EntityFinder():find()[2]
+            e.maxHull = 1
+            for i = 1, 3 do e.maxHull = e.maxHull + 1.0 end
+            SEEN = e.maxHull
+            e.hullValue = 7000
+            HULL = e.hullValue
+            e.name = 'Relay Station'
+            NAME = e.name
+            e.race = Race.find('fx')
+            RACE = e.race
+            DONE = true
+        end)",
+    );
+    g.run(3);
+    assert!(g.global::<bool>("DONE"));
+    assert_eq!(g.global::<f64>("SEEN"), 4.0);
+    assert_eq!(g.global::<f64>("HULL"), 7000.0);
+    assert_eq!(g.global::<String>("NAME"), "Relay Station");
+    assert_eq!(g.global::<String>("RACE"), "fx");
+    let hero = g.sim.units.get(HERO).unwrap();
+    assert_eq!(hero.hull, [Fixed::from_int(7000), Fixed::from_int(4)]);
+    assert_eq!(g.sim.units.get(EntityId(3)).unwrap().hull[1], g.sim.content().unwrap().unit(g.sim.units.get(EntityId(3)).unwrap().def).unwrap().hull);
+    assert_eq!(g.view.attrs.names, vec![(HERO, "Relay Station".to_string())]);
+    let unsupported = g.rt.unsupported();
+    assert!(unsupported.iter().all(|(n, _)| !n.contains("maxHull") && !n.contains("hullValue") && !n.contains("Entity.name")), "{unsupported:?}");
+}
+
+#[test]
+fn assignments_on_a_unit_added_this_tick_are_held_and_read_back_until_it_lands() {
+    let mut g = game(
+        "MMM.register(function()
+            if DONE == true then return end
+            local n = Entity.add('fx_frigate', Player(0), Vector(500, 0, 500))
+            n.maxCrew = 20
+            n.crew = 12
+            n.maxHull = 99
+            n.maxShields = 360
+            n.shields = 0.5
+            n.name = 'Reinforcement'
+            n.forward = Vector(1, 0, 0)
+            READ = n.maxHull
+            NAME = n.name
+            DONE = true
+        end)",
+    );
+    g.run(4);
+    assert!(g.global::<bool>("DONE"));
+    assert_eq!(g.global::<f64>("READ"), 99.0);
+    assert_eq!(g.global::<String>("NAME"), "Reinforcement");
+    let id = g.sim.units.iter().map(|u| u.id).max().unwrap();
+    let u = g.sim.units.get(id).unwrap();
+    assert_eq!(u.crew, Some([Fixed::from_int(12), Fixed::from_int(20)]));
+    assert_eq!(u.hull[1], Fixed::from_int(99));
+    assert_eq!(u.shields.max, Fixed::from_int(360));
+    assert!(u.shields.now[0] >= Fixed::from_int(180) && u.shields.now[0] < Fixed::from_int(190), "{:?}", u.shields);
+    assert_eq!(u.heading, (Fixed::ONE, Fixed::ZERO));
+    assert_eq!(g.view.attrs.names, vec![(id, "Reinforcement".to_string())]);
+    let unsupported = g.rt.unsupported();
+    assert!(unsupported.iter().all(|(n, _)| !n.contains("pending")), "{unsupported:?}");
 }
 
 #[test]
@@ -685,21 +757,20 @@ fn recorded_assignments_keep_the_callback_running_and_name_each_gap() {
         "MMM.register(function()
             local p = Player(0)
             p.race = Race.find('fx'); p.color = Color(1, 0, 0); p.name = 'x'
-            local e = EntityFinder():find()[1]
-            e.race = Race.find('fx'); e.movementAutonomy = 1
-            e.specialWeaponAutonomy = 1; e.name = 'n'
+            local e = EntityFinder():find()[2]
+            e.movementAutonomy = 1
+            e.specialWeaponAutonomy = 1
             DONE = true
         end)",
     );
     g.run(2);
     assert!(g.global::<bool>("DONE"));
     let names: Vec<String> = g.rt.unsupported().into_iter().map(|(n, _)| n).collect();
-    for want in [
-        "Player.race", "Player.color", "Player.name", "Entity.race",
-        "Entity.movementAutonomy", "Entity.specialWeaponAutonomy", "Entity.name",
-    ] {
+    for want in ["Player.color", "Player.name", "Entity.movementAutonomy", "Entity.specialWeaponAutonomy"] {
         assert!(names.iter().any(|n| n.starts_with(want)), "{want} in {names:?}");
     }
+    // SIM-54: race and name are applied, not counted, and read back.
+    assert!(!names.iter().any(|n| n.contains("race") || n.contains("Entity.name")), "{names:?}");
 }
 
 #[test]
