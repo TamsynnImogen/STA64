@@ -11,6 +11,7 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -135,6 +136,11 @@ struct Room {
     last_order: Vec<Option<Tick>>,
     last_think: Option<Tick>,
     events: Vec<SimEvent>,
+    /// Over a real relay the seats are paced: none runs more than this many
+    /// ticks past the referee (see `RELAY_LEAD`). `None`: free-running.
+    lead: Option<Tick>,
+    /// Why the referee ended, once it has.
+    referee_end: Option<EndReason>,
     // Keeps a relay alive for the room's life.
     _relay: Option<Relay>,
 }
@@ -201,6 +207,8 @@ impl Room {
             ai,
             last_think: None,
             events: Vec::new(),
+            lead: None,
+            referee_end: None,
             _relay: relay,
         };
         room.spawn_forces(players);
@@ -237,6 +245,11 @@ impl Room {
     /// computer player) would give.
     fn step_peer(&mut self, i: usize) -> StepOutcome {
         let me = PlayerId(i as u8);
+        if let Some(lead) = self.lead
+            && self.peers[i].tick() >= self.referee.peer().tick() + lead
+        {
+            return StepOutcome::Stalled { waiting: Vec::new() };
+        }
         let p = &mut self.peers[i];
         if i == 0
             && let Some(ai) = self.ai.as_mut()
@@ -283,7 +296,11 @@ impl Room {
         for i in 0..self.peers.len() {
             progressed |= matches!(self.step_peer(i), StepOutcome::Ran { .. });
         }
-        progressed |= matches!(self.referee.step(), RefereeStep::Ran(_));
+        let step = self.referee.step();
+        if let RefereeStep::Ended(why) = step {
+            self.referee_end.get_or_insert(why);
+        }
+        progressed |= matches!(step, RefereeStep::Ran(_));
         if !progressed {
             if let Some(n) = &self.net {
                 n.advance(1);
@@ -298,6 +315,11 @@ impl Room {
         let end = Instant::now() + WAIT;
         while !done(self) {
             self.round();
+            // A paced room never outruns the referee, so its ending is a bug,
+            // not a slow wait.
+            if self.lead.is_some() && self.referee_end.is_some() {
+                panic!("the referee ended while waiting for {what}: {}", self.status());
+            }
             if Instant::now() >= end {
                 let mut extra = String::new();
                 for p in self.peers.iter_mut() {
@@ -325,9 +347,10 @@ impl Room {
             })
             .collect();
         s.push(format!(
-            "referee: tick {} seated {} findings {:?}",
+            "referee: tick {} seated {} ended {:?} findings {:?}",
             self.referee.peer().tick(),
             self.referee.peer().router().seated(),
+            self.referee_end,
             self.referee.findings()
         ));
         s.join("; ")
@@ -1026,12 +1049,95 @@ fn over_relay(players: u8, policy: RefereePolicy) -> Room {
     let transports: Vec<(PlayerId, Box<dyn Transport>)> =
         ts.into_iter().map(|t| (t.seat(), Box::new(t) as Box<dyn Transport>)).collect();
     let db = Arc::new(sta_content::fake::db());
-    Room::assemble(players, false, policy, db, transports, None, Some(relay), &mut |_, t| t)
+    let mut room = Room::assemble(players, false, policy, db, transports, None, Some(relay), &mut |_, t| t);
+    room.lead = Some(RELAY_LEAD);
+    room
 }
+
+/// How far ahead of the referee a seat may run over the real relay, in ticks
+/// (50 turns of the 128 a referee holds, `MAX_QUEUED_TURNS`). The seats of
+/// these tests step as fast as the CPU lets them, which a game never does (it
+/// runs 10 turns a second); unpaced, how far they get ahead of the referee
+/// depends on how the OS schedules the relay threads, and on a slow Windows
+/// runner they outran it by more than it holds and it ended `Behind` (CI,
+/// PR 579: seats at tick 73203, referee at 393).
+const RELAY_LEAD: Tick = 150;
 
 #[test]
 fn over_the_relay_a_clean_match_is_verified() {
     let mut r = over_relay(2, RefereePolicy::default());
+    r.run_until("tick 600", |r| r.all_at(600));
+    assert!(r.referee.findings().is_empty() && !r.any_halted());
+    r.assert_referee_agrees_with_all_seats();
+}
+
+/// A referee's connection that delivers nothing while `closed`: a referee
+/// whose machine does not get to run it (a loaded CI runner, a stalled
+/// thread), with the room carrying on.
+struct Gated {
+    inner: Box<dyn Transport>,
+    closed: Arc<AtomicBool>,
+}
+
+impl Transport for Gated {
+    fn send(&mut self, to: Destination, msg: &Message) -> Result<(), TransportError> {
+        self.inner.send(to, msg)
+    }
+
+    fn poll(&mut self) -> Result<Option<Incoming>, TransportError> {
+        if self.closed.load(Ordering::Relaxed) {
+            return Ok(None);
+        }
+        self.inner.poll()
+    }
+}
+
+/// Gates the referee's slot (`rslot`) on `closed`.
+fn gate(rslot: PlayerId, closed: &Arc<AtomicBool>) -> impl FnMut(PlayerId, Box<dyn Transport>) -> Box<dyn Transport> {
+    let closed = closed.clone();
+    move |seat, t| if seat == rslot { Box::new(Gated { inner: t, closed: closed.clone() }) } else { t }
+}
+
+/// The bound a referee keeps (`MAX_QUEUED_TURNS`, NET-03: a seat must not
+/// grow its queue without limit): a room that runs 128 turns ahead of it ends
+/// it with `Behind`, however fast it then drains what it holds. This is what
+/// the unpaced relay test hit on Windows (PR 579).
+#[test]
+fn a_referee_that_the_room_outruns_by_more_than_it_holds_ends_behind() {
+    let closed = Arc::new(AtomicBool::new(true));
+    let mut r = Room::build(2, false, RefereePolicy::default(), &mut gate(PlayerId(2), &closed));
+    let end = Instant::now() + WAIT;
+    while r.peers.iter().any(|p| p.tick() < 3 * 200) {
+        r.round();
+        assert!(Instant::now() < end, "{}", r.status());
+    }
+    assert_eq!(r.referee.peer().tick(), 0, "the gate holds the referee back");
+    closed.store(false, Ordering::Relaxed);
+    while r.referee_end.is_none() {
+        r.round();
+        assert!(Instant::now() < end, "{}", r.status());
+    }
+    assert_eq!(r.referee_end, Some(EndReason::Behind), "{}", r.status());
+}
+
+/// The same stall, with the seats paced (`Room::lead`): they wait for the
+/// referee, so however long it is held back it catches up and verifies the
+/// match, and no timing decides the outcome.
+#[test]
+fn a_paced_room_waits_for_a_referee_that_was_held_back() {
+    let closed = Arc::new(AtomicBool::new(true));
+    let mut r = Room::build(2, false, RefereePolicy::default(), &mut gate(PlayerId(2), &closed));
+    r.lead = Some(RELAY_LEAD);
+    // Held back, the referee cannot run and the seats stop at the lead.
+    let end = Instant::now() + WAIT;
+    let mut idle = 0;
+    while idle < 50 {
+        idle = if r.round() { 0 } else { idle + 1 };
+        assert!(Instant::now() < end, "{}", r.status());
+    }
+    assert_eq!(r.referee.peer().tick(), 0);
+    assert!(r.peers.iter().all(|p| p.tick() <= RELAY_LEAD + 3), "{}", r.status());
+    closed.store(false, Ordering::Relaxed);
     r.run_until("tick 600", |r| r.all_at(600));
     assert!(r.referee.findings().is_empty() && !r.any_halted());
     r.assert_referee_agrees_with_all_seats();
