@@ -84,7 +84,7 @@ pub fn facing(heading: (Fixed, Fixed), at: Vec3, from: Vec3) -> u8 {
 /// freighter and a construction ship neither vote nor take part in an attack
 /// order (the engine's own "can attack" test was not read).
 pub fn attacks_units(w: &sta_content::WeaponDef) -> bool {
-    let tool = w.class.0 == "minebm" || w.raw.str("classLabel").is_some_and(|c| c.eq_ignore_ascii_case("toggleweapon"));
+    let tool = w.class.0 == "minebm" || w.toggle;
     w.kind != WeaponKind::PointDefence && !crate::specials::is_special(w) && !tool
 }
 

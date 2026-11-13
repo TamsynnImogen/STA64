@@ -216,6 +216,34 @@ pub struct BuildDef {
     /// STA64_queueLimit: total station jobs, including the active head.
     /// None selects the profile default; Some(0) disables new admissions.
     pub queue_limit: Option<u32>,
+    /// Items (lower-case ODF stems) whose `builditem#` slot carries a
+    /// `builditem#availability` or `builditem#provided` line; `None` when no
+    /// slot of this builder carries one (a menu builder). Read by
+    /// `TechTree::availability_for_builder` for items the tree does not list.
+    pub flagged_slots: Option<Vec<String>>,
+}
+
+impl BuildDef {
+    /// [`flagged_slots`](BuildDef::flagged_slots) as a builder's ODF gives them.
+    pub fn flagged_slots_of(odf: &sta_odf::Odf) -> Option<Vec<String>> {
+        let mut any = false;
+        let mut items = Vec::new();
+        for k in odf.keys() {
+            let l = k.to_ascii_lowercase();
+            let Some(rest) = l.strip_prefix("builditem") else { continue };
+            let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+            if digits == 0 || !matches!(&rest[digits..], "availability" | "provided") {
+                continue;
+            }
+            any = true;
+            if let Some(v) = odf.raw(&format!("builditem{}", &rest[..digits])) {
+                items.push(crate::techtree::stem(v.trim().trim_matches('"')));
+            }
+        }
+        items.sort();
+        items.dedup();
+        any.then_some(items)
+    }
 }
 
 /// Sound names a unit uses; the client resolves them (CON-10, AUD-02/03).
@@ -320,6 +348,9 @@ pub struct UnitDef {
     /// Path-planner rules of a `nebula_obj` (SIM-23); `None` for every other
     /// class, and for content that predates them.
     pub nebula_pathing: Option<NebulaPathing>,
+    /// `avoidMe = 1`: other units steer around and keep out of this one
+    /// (moons and balls in Fleet Operations, SIM-21).
+    pub avoid_me: bool,
     /// `hidden = 1`: the player never sees or picks it (start helpers).
     pub hidden: bool,
     /// `invalidAsTarget = 1`: automatic target selection skips it.
@@ -327,8 +358,9 @@ pub struct UnitDef {
     /// `autoExpireTime` (else `lifeTimer`) in ticks; the object removes itself
     /// that long after it appears (SIM-28).
     pub life: Option<Tick>,
-    /// The resolved ODF, so keys no field reads yet stay reachable. Empty for
-    /// definitions not made from an ODF.
+    /// The resolved ODF, so loaders and tools can reach keys no field reads.
+    /// The simulation never reads it (D9): what it needs is a typed field.
+    /// Empty for definitions not made from an ODF.
     pub raw: Arc<sta_odf::Odf>,
 }
 
@@ -350,10 +382,9 @@ impl UnitDef {
         !self.miner_off && (self.miner || self.class.0 == "freighter")
     }
 
-    /// `avoidMe = 1`: other units steer around and keep out of this one
-    /// (moons and balls in Fleet Operations, SIM-21).
+    /// [`avoid_me`](UnitDef::avoid_me) (the field).
     pub fn avoid_me(&self) -> bool {
-        self.raw.bool("avoidMe").unwrap_or(false)
+        self.avoid_me
     }
 
     /// A definition with everything zero or empty, to fill field by field.
@@ -399,6 +430,7 @@ impl UnitDef {
             features: None,
             confinement: crate::ConfinementOverrides::default(),
             nebula_pathing: None,
+            avoid_me: false,
             hidden: false,
             invalid_as_target: false,
             life: None,
@@ -458,6 +490,9 @@ pub struct WeaponDef {
     /// The weapon's own class is `ordnancedefenseweapon` (FO's point-defence
     /// class, as opposed to `pointdefenselaser`).
     pub ordnance_defence: bool,
+    /// The weapon's own class is `toggleweapon` (a tractor beam): a tool, it
+    /// takes no part in attack orders (SIM-53 / the right-click vote).
+    pub toggle: bool,
     /// Feature switches resolved for this weapon, as [`UnitDef::features`];
     /// `None`: the database-wide set. Read through
     /// `ContentDb::weapon_features`.
@@ -512,6 +547,7 @@ impl WeaponDef {
             initial_shot_delay_modifier: None,
             ignore_shot_delay_effects: false,
             ordnance_defence: false,
+            toggle: false,
             features: None,
             resource: None,
             replace: None,

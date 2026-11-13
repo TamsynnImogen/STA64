@@ -1,8 +1,10 @@
 //! Special abilities and special energy (SIM-14), with Cloak the first.
 //!
-//! What content gives us (`UnitDef`/`WeaponDef` have no special fields yet, so
-//! everything is read from the resolved ODFs in `raw`; gaps listed below):
-//! - Unit: `maxSpecialEnergy` and `specialEnergyRate` (per second). A unit
+//! What content gives us (typed `UnitDef`/`WeaponDef` fields, read from the
+//! ODF keys named here by the content loader; the sim reads no raw ODF, D9;
+//! gaps listed below):
+//! - Unit: `maxSpecialEnergy` and `specialEnergyRate` (per second;
+//!   `special_energy_max`, `special_energy_rate`). A unit
 //!   with `maxSpecialEnergy > 0` has an energy pool, full at its first tick
 //!   unless set by `Edit::SetEnergy`, refilled at the rate within 0..max.
 //!   Mission/bench energy edits apply before that tick's refill/cloak drain.
@@ -38,7 +40,7 @@
 
 use serde::{Deserialize, Serialize};
 use sta_content::{ContentDb, UnitDef, WeaponDef};
-use sta_core::{EntityId, Fixed, PlayerId, TICK_HZ, Tick, seconds_to_ticks};
+use sta_core::{EntityId, Fixed, PlayerId, TICK_HZ, Tick};
 
 use crate::event::SimEvent;
 use crate::view::UnitFlags;
@@ -79,16 +81,14 @@ pub struct EnergyDef {
 }
 
 pub fn energy_def(u: &UnitDef) -> Option<EnergyDef> {
-    let max = u.raw.f32("maxSpecialEnergy").filter(|m| *m > 0.0)?;
-    let rate = u.raw.f32("specialEnergyRate").unwrap_or(0.0);
-    Some(EnergyDef {
-        max: Fixed::from_f64(max as f64),
-        rate: per_tick(rate),
+    (u.special_energy_max > Fixed::ZERO).then(|| EnergyDef {
+        max: u.special_energy_max,
+        rate: per_tick(u.special_energy_rate),
     })
 }
 
-fn per_tick(per_second: f32) -> Fixed {
-    Fixed::from_f64(per_second as f64) / Fixed::from_int(TICK_HZ as i32)
+fn per_tick(per_second: Fixed) -> Fixed {
+    per_second / Fixed::from_int(TICK_HZ as i32)
 }
 
 /// A unit's cloak, from its cloaking device's ODF.
@@ -135,13 +135,12 @@ pub fn point_defence_slot(db: &ContentDb, u: &UnitDef) -> Option<u8> {
 
 pub fn cloak_def(db: &ContentDb, u: &UnitDef) -> Option<CloakDef> {
     let (_, w) = specials_of(db, u).find(|s| s.0 == SpecialKind::Cloak)?;
-    let flag = |k: &str, d: bool| w.raw.bool(k).unwrap_or(d);
     Some(CloakDef {
-        ticks: seconds_to_ticks(w.raw.f32("effectTimer").unwrap_or(0.0) as f64),
-        drain: per_tick(w.raw.f32("energyDrainRate").unwrap_or(0.0)),
-        cost: Fixed::from_f64(w.raw.f32("specialEnergyCost").unwrap_or(0.0) as f64),
-        disable_weapons: flag("disableWeapons", true),
-        decloak_on_hit: flag("decloakOnHit", false),
+        ticks: w.effect_ticks,
+        drain: per_tick(w.energy_drain),
+        cost: w.energy_cost,
+        disable_weapons: w.disable_weapons,
+        decloak_on_hit: w.decloak_on_hit,
     })
 }
 

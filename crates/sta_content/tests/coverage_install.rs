@@ -1,7 +1,8 @@
 //! Install-gated checks of the coverage report (CON-34, D7). With
 //! `STA64_TEST_INSTALL` set to an install root (Data/Mods/...), every
-//! installed mod is reported, and STA2 Classic Enhanced lists its 8 changed
-//! cfg lines as ignored.
+//! installed mod is reported, and STA2 Classic Enhanced's 8 changed cfg
+//! lines are the typed rules of CON-35, compared between peers but still
+//! reported as ignored until a system applies them.
 
 use std::path::Path;
 
@@ -28,26 +29,25 @@ fn every_installed_mod_reports() {
 }
 
 #[test]
-fn classic_enhanced_lists_its_six_unread_cfg_lines_as_ignored() {
+fn classic_enhanced_changes_eight_cfg_lines_and_six_are_not_yet_applied() {
     let Some(root) = root() else { return };
     let vfs = match Vfs::mount_install(Path::new(&root), Some("STA2 Classic Mod Enhanced Gameplay")) {
         Ok(v) => v,
         Err(_) => return, // not installed here
     };
     let r = coverage::check(&vfs);
+    let mut changed: Vec<&str> = r.cfg.iter().map(|c| c.key.as_str()).collect();
+    changed.sort();
+    // CON-35 typed exactly the keys the installed headers differ in (D9:
+    // first the keys Classic Enhanced changes): the two autonomy defaults
+    // (applied since CON-46) and six more that peers compare but no system
+    // applies yet, so those six are still reported as ignored.
+    let mut typed: Vec<&str> = sta_content::CfgRules::KEYS.iter().chain(&["CRAFT_DEFAULT_MOVEMENT_AUTONOMY", "CRAFT_DEFAULT_SPECIALWEAPON_AUTONOMY"]).copied().collect();
+    typed.sort();
+    assert_eq!(changed, typed);
     let mut ignored: Vec<&str> = r.cfg.iter().filter(|c| !c.read).map(|c| c.key.as_str()).collect();
     ignored.sort();
-    assert_eq!(
-        ignored,
-        [
-            "BASE_CREW_PER_SEC",
-            "HARD_AI_COST_HANDICAP",
-            "HARD_AI_SPEED_HANDICAP",
-            "REPAIR_SHIP_DISTANCE",
-            "SHIELD_DAMAGE_PROTECTION",
-            "cfgFREIGHTERS_PER_NEBULA",
-        ]
-    );
+    assert_eq!(ignored, sta_content::CfgRules::KEYS);
     // `why` names the layer and line for the file and for a key.
     let hits = coverage::why_file(&vfs, "RTS_CFG.h");
     assert_eq!(hits[0].layer, "STA2 Classic Mod Enhanced Gameplay");

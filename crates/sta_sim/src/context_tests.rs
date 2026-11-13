@@ -111,8 +111,7 @@ fn mining_and_tractor_beams_do_not_vote_attack() {
     let mut mine = WeaponDef::new("fx_minebeam", "minebm", WeaponKind::Projectile);
     mine.damage = Fixed::from_int(15);
     let mut tractor = WeaponDef::new("fx_tractor", "tractor_bm", WeaponKind::Beam);
-    let text = "classLabel = \"toggleweapon\"\n";
-    tractor.raw = Arc::new(sta_odf::resolve("fx_tractor", &mut |_| Some(text.to_owned())).unwrap());
+    tractor.toggle = true;
     let hp = |w: &str| Hardpoint { weapon: DefRef::new(w), node: "hp01".into(), arc: None };
     let mut miner = fake.unit(fake.key("fx_miner").unwrap()).unwrap().clone();
     miner.odf = "fx_armed_miner".into();

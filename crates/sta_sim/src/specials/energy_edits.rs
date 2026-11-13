@@ -113,18 +113,12 @@ fn low_energy_edit_cannot_pay_cloak_cost_but_still_regenerates() {
 fn extreme_refill_caps_without_wrap_and_negative_rate_floors_at_zero() {
     let fake = sta_content::fake::db();
     let (mut units, weapons) = fixture::defs();
-    units[0].raw = std::sync::Arc::new(
-        sta_odf::resolve("fx_cloaker", &mut |_| {
-            Some("maxSpecialEnergy = 2147483648\nspecialEnergyRate = 2147483648\n".into())
-        })
-        .unwrap(),
-    );
-    units[1].raw = std::sync::Arc::new(
-        sta_odf::resolve("fx_cloaker_frail", &mut |_| {
-            Some("maxSpecialEnergy = 100\nspecialEnergyRate = -3000\n".into())
-        })
-        .unwrap(),
-    );
+    // Past the 32.32 range (saturates), and a negative rate the ODF loader
+    // would clamp but content built in code may carry.
+    units[0].special_energy_max = Fixed::from_f64(2147483648.0);
+    units[0].special_energy_rate = Fixed::from_f64(2147483648.0);
+    units[1].special_energy_max = Fixed::from_int(100);
+    units[1].special_energy_rate = Fixed::from_int(-3000);
     let mut builder = sta_content::ContentDb::builder()
         .profile(fake.profile())
         .features(fake.features().clone());

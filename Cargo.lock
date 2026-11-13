@@ -5573,6 +5573,7 @@ dependencies = [
  "a2fmt",
  "json5",
  "serde",
+ "sha2",
  "sta_assets",
  "sta_bzn",
  "sta_core",
@@ -5639,6 +5640,7 @@ dependencies = [
  "sta_content",
  "sta_core",
  "sta_sim",
+ "sta_vfs",
 ]
 
 [[package]]

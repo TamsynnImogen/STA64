@@ -11,7 +11,7 @@ use sta_net::lockstep::{
     RouterEvent, StepOutcome,
 };
 use sta_net::proto::{
-    Action, ContentHashRules, DropChoice, EngineId, Hello, MapRef, Message, Occupant, PackInfo,
+    Action, DropChoice, EngineId, Hello, MapRef, Message, Occupant, PackInfo,
     ProtoError, Refusal, RuleEntry, RulesDigest, RulesIdentity, Scheduled, Seat, Start, TickDigest,
     TurnCommands, TurnConfig,
 };
@@ -1082,12 +1082,13 @@ fn another_build_and_unlisted_differences_are_refused() {
         admit(&engine(), &rules, &h, &hidden),
         Err(HandshakeError::Refused(Refusal::RulesUnlisted))
     );
-    // The stand-in rules of NET-01 work end to end.
-    let a = ContentHashRules(1);
-    let b = ContentHashRules(2);
-    let h = hello(&b, "x", vec![]);
-    match admit(&engine(), &a, &h, &b).unwrap_err() {
-        HandshakeError::Refused(Refusal::RulesDiffer(d)) => assert_eq!(d.key, "content.hash"),
+    // The content databases' keyed digests (CON-35) work end to end.
+    let a = sta_content::fake::db();
+    let rules = sta_content::Rules::default().with_autonomy(sta_content::AutonomyRules { movement: 2, special_weapon: 2 });
+    let b = sta_content::fake::db().with_rules(rules);
+    let h = hello(b.digest(), "x", vec![]);
+    match admit(&engine(), a.digest(), &h, b.digest()).unwrap_err() {
+        HandshakeError::Refused(Refusal::RulesDiffer(d)) => assert_eq!(d.key, "RTS_CFG.h:CRAFT_DEFAULT_MOVEMENT_AUTONOMY"),
         other => panic!("{other:?}"),
     }
 }
