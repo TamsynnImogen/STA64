@@ -215,6 +215,18 @@ mod tests {
     }
 
     #[test]
+    fn a_fresh_start_runs_one_tick_on_the_first_frame_whatever_dt_that_frame_had() {
+        let mut c = AnimClock::new(ClockMode::Wall, 1);
+        c.start_fresh();
+        assert_eq!(c.begin_frame(5.0), 1, "a load's long frame is not time owed");
+        c.ticked();
+        c.end_frame();
+        assert_eq!(c.wall(), 0.0);
+        // The next frame is an ordinary one: 0.1 s is three ticks, not a catch-up burst.
+        assert_eq!(c.begin_frame(0.1), 3);
+    }
+
+    #[test]
     fn pause_holds_anim_time_but_not_wall() {
         let mut c = AnimClock::new(ClockMode::Wall, 1);
         frames(&mut c, 0.05, 10);
