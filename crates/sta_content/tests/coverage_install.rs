@@ -28,7 +28,7 @@ fn every_installed_mod_reports() {
 }
 
 #[test]
-fn classic_enhanced_lists_its_eight_changed_cfg_lines_as_ignored() {
+fn classic_enhanced_lists_its_six_unread_cfg_lines_as_ignored() {
     let Some(root) = root() else { return };
     let vfs = match Vfs::mount_install(Path::new(&root), Some("STA2 Classic Mod Enhanced Gameplay")) {
         Ok(v) => v,
@@ -41,8 +41,6 @@ fn classic_enhanced_lists_its_eight_changed_cfg_lines_as_ignored() {
         ignored,
         [
             "BASE_CREW_PER_SEC",
-            "CRAFT_DEFAULT_MOVEMENT_AUTONOMY",
-            "CRAFT_DEFAULT_SPECIALWEAPON_AUTONOMY",
             "HARD_AI_COST_HANDICAP",
             "HARD_AI_SPEED_HANDICAP",
             "REPAIR_SHIP_DISTANCE",

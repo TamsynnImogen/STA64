@@ -628,6 +628,14 @@ fn hash_inner(db: &ContentDb, include_starting_rules: bool) -> u64 {
         h.str("sta64.starting-personnel-rules.v1");
         for value in rules { h.u64(value); }
     }
+    // CON-46: only when `RTS_CFG.h` sets a default autonomy key, so content
+    // without them keeps its hash.
+    let autonomy = db.rules.autonomy_hash_values();
+    if include_starting_rules && !autonomy.is_empty() {
+        h.byte(0xee);
+        h.str("sta64.autonomy-rules.v1");
+        for value in autonomy { h.u64(value); }
+    }
     // SIM-23: only when `RTS_CFG.h` has the PATHING keys, so content without
     // them keeps its hash; excluded with the other rules from the historical
     // identity snapshots compare against.
