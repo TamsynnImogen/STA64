@@ -15,8 +15,8 @@ fn malformed_relation_records_are_rejected_for_the_right_reason() {
     let ok = chain::with(&bytes, chain::RELATIONS, rec(1, vec![(0, 1, 1)]));
     assert!(Sim::from_snapshot(&ok, Some(db.clone())).is_ok());
     assert_eq!(load(rec(2, vec![])), "unknown relations record version");
-    assert_eq!(load(rec(1, vec![(0, 1, 3)])), "relation rows out of order");
-    assert_eq!(load(rec(1, vec![(0, 0, 1)])), "relation rows out of order");
-    assert_eq!(load(rec(1, vec![(0, 9, 1)])), "relation rows out of order");
-    assert_eq!(load(rec(1, vec![(0, 1, 0)])), "relation rows out of order");
+    assert_eq!(load(rec(1, vec![(0, 1, 3)])), "relation code unknown");
+    assert_eq!(load(rec(1, vec![(0, 0, 1)])), "relation between seats that do not exist or a seat and itself");
+    assert_eq!(load(rec(1, vec![(0, 9, 1)])), "relation between seats that do not exist or a seat and itself");
+    assert_eq!(load(rec(1, vec![(0, 1, 0)])), "relation row equals the default");
 }

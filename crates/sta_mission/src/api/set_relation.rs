@@ -19,8 +19,9 @@ pub(crate) fn from_code(n: i64) -> Option<Relation> {
 }
 
 pub(crate) fn queue(ctx: &mut Ctx, label: &'static str, from: PlayerId, to: PlayerId, relation: Relation) -> mlua::Result<()> {
+    edit_feedback::queue(ctx, label, Edit::SetRelation { from, to, relation })?;
     ctx.relations.insert((from, to), relation);
-    edit_feedback::queue(ctx, label, Edit::SetRelation { from, to, relation })
+    Ok(())
 }
 
 #[cfg(test)]

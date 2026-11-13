@@ -24,9 +24,13 @@ struct Fx {
 }
 
 fn fixture() -> Fx {
+    fixture_with_teams([1, 2, 3])
+}
+
+fn fixture_with_teams(teams: [u8; 3]) -> Fx {
     let db = sta_content::fake::db();
     let (cruiser, frigate) = (db.key("fx_cruiser").unwrap(), db.key("fx_frigate").unwrap());
-    let seat = |id| PlayerSetup { id: PlayerId(id), team: TeamId(id), race: "fx".into(), control: Control::Idle };
+    let seat = |id: u8| PlayerSetup { id: PlayerId(id), team: TeamId(teams[usize::from(id) - 1]), race: "fx".into(), control: Control::Idle };
     let setup = GameSetup {
         seed: 7,
         map: Arc::new(sta_content::MapDef::empty()),
@@ -122,6 +126,7 @@ fn explicit_attack_is_allowed_on_a_neutral_and_dropped_when_the_view_changes() {
     assert_eq!(f.sim.weapons.attack_of(f.a), Some(f.b));
     f.sim.step(&[rel(1, 2, Relation::Ally)]);
     assert_eq!(f.sim.weapons.attack_of(f.a), None, "the view of the target changed");
+    assert!(f.sim.units.get(f.a).unwrap().target.is_none(), "the approach goal ends with the order");
     assert!(!shooters(&mut f.sim, 40, &[]).contains(&f.a));
 }
 
@@ -171,8 +176,27 @@ fn snapshot_round_trip_continues_identically_and_replays_deterministically() {
 fn corrupt_relation_rows_are_refused() {
     use crate::relations::Relations;
     let players = [(PlayerId(1), TeamId(1)), (PlayerId(2), TeamId(2))];
-    assert!(Relations::from_rows(&[(1, 2, 1)], &players).is_some());
+    assert!(Relations::from_rows(&[(1, 2, 1)], &players).is_ok());
     for bad in [vec![(1, 2, 3)], vec![(1, 1, 1)], vec![(1, 5, 1)], vec![(1, 2, 0)], vec![(2, 1, 1), (1, 2, 1)], vec![(1, 2, 1), (1, 2, 2)]] {
-        assert!(Relations::from_rows(&bad, &players).is_none(), "{bad:?}");
+        assert!(Relations::from_rows(&bad, &players).is_err(), "{bad:?}");
     }
+}
+
+#[test]
+fn seats_of_one_team_can_be_set_against_each_other() {
+    let mut f = fixture_with_teams([1, 1, 3]);
+    assert!(shooters(&mut f.sim, 40, &[]).is_empty(), "teammates do not fight");
+    let fired = shooters(&mut f.sim, 60, &[rel(1, 2, Relation::Enemy)]);
+    assert!(fired.contains(&f.a) && !fired.contains(&f.b), "only the seat whose view changed engages");
+}
+
+#[test]
+fn owners_that_are_not_seats_are_on_one_side() {
+    use crate::relations::{Diplomacy, Relations};
+    let rel = Relations::new();
+    let none: [(PlayerId, TeamId); 0] = [];
+    assert!(Diplomacy::new(&none, &rel).confirmed_ally(PlayerId(3), PlayerId(4)), "seatless sims keep the old cloak rule");
+    let seats = [(PlayerId(1), TeamId(1))];
+    let d = Diplomacy::new(&seats, &rel);
+    assert!(!d.confirmed_ally(PlayerId(1), PlayerId(4)) && d.confirmed_ally(PlayerId(4), PlayerId(5)));
 }

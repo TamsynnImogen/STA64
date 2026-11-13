@@ -56,7 +56,7 @@
 //!   hardpoint; other rows are unchanged, so old snapshots load.
 
 use sta_content::{ContentDb, WeaponKind};
-use sta_core::{EntityId, Fixed, PlayerId, TICK_HZ, TeamId};
+use sta_core::{EntityId, Fixed, TICK_HZ};
 
 use super::weapons::{Shot, draw, flat};
 use crate::Rng;
@@ -207,7 +207,7 @@ impl Pd {
         tick: u64,
         units: &Entities,
         db: &ContentDb,
-        teams: &[(PlayerId, TeamId)],
+        teams: crate::relations::Diplomacy<'_>,
         shots: &mut Vec<Shot>,
         specials: &mut Specials,
         rng: &mut Rng,
@@ -222,7 +222,6 @@ impl Pd {
         for id in gone {
             self.ready.remove(id);
         }
-        let team = |p: PlayerId| teams.iter().find(|x| x.0 == p).map(|x| x.1);
         for u in units.iter() {
             if u.hull[1] <= Fixed::ZERO || u.flags.contains(crate::view::UnitFlags::WEAPONS_OFF) {
                 continue;
@@ -255,8 +254,7 @@ impl Pd {
                     }
                     let friendly = units
                         .get(s.shooter)
-                        .and_then(|sh| team(sh.owner))
-                        .is_some_and(|t| Some(t) == team(u.owner));
+                        .is_some_and(|sh| teams.is_seat(sh.owner) && teams.confirmed_ally(sh.owner, u.owner));
                     let d = flat(u.pos, s.pos).1;
                     if friendly || d > w.range || best.is_some_and(|(bd, _)| d >= bd) {
                         continue;
@@ -287,10 +285,9 @@ impl Pd {
         u: &crate::world::Entity,
         w: &sta_content::WeaponDef,
         units: &Entities,
-        teams: &[(PlayerId, TeamId)],
+        teams: crate::relations::Diplomacy<'_>,
         shots: &[Shot],
     ) -> Option<usize> {
-        let team = |p: PlayerId| teams.iter().find(|x| x.0 == p).map(|x| x.1);
         let mut best: Option<(Fixed, usize)> = None;
         for (k, s) in shots.iter().enumerate() {
             if s.target != u.id {
@@ -298,8 +295,7 @@ impl Pd {
             }
             let friendly = units
                 .get(s.shooter)
-                .and_then(|sh| team(sh.owner))
-                .is_some_and(|t| Some(t) == team(u.owner));
+                .is_some_and(|sh| teams.is_seat(sh.owner) && teams.confirmed_ally(sh.owner, u.owner));
             let d = flat(u.pos, s.pos).1;
             if friendly || d > w.range || best.is_some_and(|(bd, _)| d >= bd) {
                 continue;
@@ -321,7 +317,7 @@ impl Pd {
         debt: bool,
         u: &crate::world::Entity,
         units: &Entities,
-        teams: &[(PlayerId, TeamId)],
+        teams: crate::relations::Diplomacy<'_>,
         shots: &mut Vec<Shot>,
         specials: &mut Specials,
         rng: &mut Rng,

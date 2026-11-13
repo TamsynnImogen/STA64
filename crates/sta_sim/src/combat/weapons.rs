@@ -375,7 +375,7 @@ impl Weapons {
         }
 
         self.pd
-            .step(tick, units, db, teams.players, &mut self.shots, specials, rng, events);
+            .step(tick, units, db, teams, &mut self.shots, specials, rng, events);
 
         // Shots in flight home on the target's current position.
         let mut flying = Vec::with_capacity(self.shots.len());

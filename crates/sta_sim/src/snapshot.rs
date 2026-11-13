@@ -595,7 +595,7 @@ impl Sim {
         if scripted.to_rows().iter().any(|(id, j)| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft) || matches!(j, crate::orders::Job::Patrol { points, leg } if points.len() < 2 || *leg >= points.len())) {
             return Err(SnapshotError::Corrupt("scripted order entity is not a craft or a patrol has no loop".into()));
         }
-        let relations = crate::relations::Relations::from_rows(&relation_rows, &b.players).ok_or_else(|| corrupt("relation rows"))?;
+        let relations = crate::relations::Relations::from_rows(&relation_rows, &b.players).map_err(|why| SnapshotError::Corrupt(why.into()))?;
         let switches = crate::switches::SwitchTable::from_rows(switch_rows).ok_or_else(|| corrupt("switch rows"))?;
         if switches.to_rows().iter().any(|(id, _)| units.get(*id).is_none()) {
             return Err(SnapshotError::Corrupt("switches of an unknown entity".into()));

@@ -196,6 +196,12 @@ impl Sim {
                         .map(|(shooter, _)| shooter)
                         .collect();
                     self.weapons.stop_attack(&self.units, PlayerId::SCRIPT, &dropped);
+                    for id in dropped {
+                        if let Some(u) = self.units.get_mut(id).filter(|u| u.kind == crate::world::EntityKind::Craft) {
+                            u.target = None;
+                        }
+                        self.approach_warp.end(id);
+                    }
                 }
                 true
             }

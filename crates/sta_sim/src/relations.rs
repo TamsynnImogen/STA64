@@ -28,8 +28,9 @@ use sta_core::{PlayerId, TeamId};
 use crate::view::Relation;
 use crate::world::Fnv;
 
-/// Wire / snapshot code of a relation: 0 Enemy, 1 Neutral, 2 Ally (the
-/// executable's numbering, which `SetRelation` passes unchanged).
+/// Snapshot code of a relation: 0 Enemy, 1 Neutral, 2 Ally (the executable's
+/// numbering, which `SetRelation` passes unchanged). The wire edit uses the
+/// `Relation` variant index instead (Ally 0, Neutral 1, Enemy 2).
 pub fn code(r: Relation) -> u8 {
     match r {
         Relation::Enemy => 0,
@@ -101,26 +102,29 @@ impl Relations {
         self.rows.iter().map(|((a, b), r)| (a.0, b.0, code(*r))).collect()
     }
 
-    /// Rebuild from snapshot rows; `None` unless the rows ascend strictly,
+    /// Rebuild from snapshot rows; an error naming the reason unless the rows ascend strictly,
     /// carry a known code and name two distinct seats of `players`, and none
     /// equals the default.
-    pub fn from_rows(rows: &[(u8, u8, u8)], players: &[(PlayerId, TeamId)]) -> Option<Self> {
+    pub fn from_rows(rows: &[(u8, u8, u8)], players: &[(PlayerId, TeamId)]) -> Result<Self, &'static str> {
         let mut out = Relations::new();
         let mut last = None;
         for &(a, b, c) in rows {
             let key = (PlayerId(a), PlayerId(b));
-            let rel = from_code(c)?;
+            let rel = from_code(c).ok_or("relation code unknown")?;
             let seat = |p: PlayerId| players.iter().any(|s| s.0 == p);
-            if a == b || !seat(key.0) || !seat(key.1) || last.is_some_and(|l| l >= key) {
-                return None;
+            if a == b || !seat(key.0) || !seat(key.1) {
+                return Err("relation between seats that do not exist or a seat and itself");
+            }
+            if last.is_some_and(|l| l >= key) {
+                return Err("relation rows out of order");
             }
             if rel == default_view(players, key.0, key.1) {
-                return None;
+                return Err("relation row equals the default");
             }
             last = Some(key);
             out.rows.push((key, rel));
         }
-        Some(out)
+        Ok(out)
     }
 }
 
@@ -187,8 +191,10 @@ impl<'a> Diplomacy<'a> {
     }
 
     /// Mutual allies, which share sight and count as friends in victory.
+    /// Two owners that are not seats (the neutral owner, or every owner of a
+    /// seatless sim) are on one side, as team equality of "no team" was before.
     pub fn confirmed_ally(&self, a: PlayerId, b: PlayerId) -> bool {
-        a == b || self.confirmed(a, b) == Relation::Ally
+        a == b || (!self.is_seat(a) && !self.is_seat(b)) || self.confirmed(a, b) == Relation::Ally
     }
 }
 

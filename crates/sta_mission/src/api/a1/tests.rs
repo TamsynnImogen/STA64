@@ -646,7 +646,7 @@ fn set_relation_sends_a_one_directional_edit_with_the_engines_codes() {
             _ => None,
         })
         .collect();
-    // Default numbering: team n is seat n-1 (0 ally... the engine's 2 is Ally, 1 Neutral, 0 Enemy).
+    // Codes are the engine's: 2 Ally, 1 Neutral, 0 Enemy.
     assert_eq!(edits.len(), 3, "{commands:?}");
     assert_eq!((edits[0].2, edits[1].2, edits[2].2), (Relation::Ally, Relation::Neutral, Relation::Enemy));
     assert_eq!((edits[0].0, edits[0].1), (edits[2].0, edits[2].1));
