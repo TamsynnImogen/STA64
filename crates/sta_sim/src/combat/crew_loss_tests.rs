@@ -71,6 +71,7 @@ fn damage_under_the_threshold_costs_nothing_and_crew_stops_at_zero() {
     hit(&mut s, &d, plain, Fixed::from_int(25));
     assert_eq!(crew(&s, plain), Fixed::from_int(250));
     for _ in 0..20 {
+        s.units.get_mut(plain).unwrap().shields.now[0] = Fixed::from_int(500);
         hit(&mut s, &d, plain, Fixed::from_int(400));
     }
     assert_eq!(crew(&s, plain), Fixed::ZERO);
