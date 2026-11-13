@@ -59,6 +59,9 @@ impl Params {
     pub fn from_aip(aip: &Aip) -> Params {
         let mut p = Params::default();
         p.overlay(aip);
+        // An AIP's `max_attack_force 1` beside a larger minimum is a typo
+        // the game tolerates; so do we.
+        p.max_attack = p.max_attack.max(p.min_attack);
         p
     }
 
@@ -80,9 +83,6 @@ impl Params {
         if let Some(v) = count("max_attack_force", 1, 64) {
             self.max_attack = v;
         }
-        // An AIP's `max_attack_force 1` beside a larger minimum is a typo
-        // the game tolerates; so do we.
-        self.max_attack = self.max_attack.max(self.min_attack);
         if let Some(list) = aip.build_list("the_build_list") {
             self.build_list = list;
         }
@@ -121,5 +121,12 @@ mod tests {
         let (second, _) = Aip::parse("b.aip", "int min_attack_force = 9;\n");
         p.overlay(&second);
         assert_eq!((p.miners, p.min_attack), (5, 9));
+        // The stored maximum is the file's, not a clamp of an earlier minimum.
+        let (a, _) = Aip::parse("a.aip", "int min_attack_force = 20;\n");
+        let (b, _) = Aip::parse("b.aip", "int min_attack_force = 4;\n");
+        let mut p = Params::default();
+        p.overlay(&a);
+        p.overlay(&b);
+        assert_eq!((p.min_attack, p.max_attack), (4, DEFAULT_MAX_ATTACK));
     }
 }

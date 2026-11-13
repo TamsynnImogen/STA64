@@ -435,8 +435,9 @@ fn other_a2_calls_still_work_and_keep_their_errors() {
 fn ai_team_load_aip_queues_the_request_for_the_host() {
     let s = scene();
     let (rt, _) = run(&s, "A2.AI_Team_Load_AIP(2, 'x.aip'); A2.AI_Team_Load_AIP(2, 'Y.AIP')");
-    assert!(rt.unsupported().is_empty());
+    assert_eq!(rt.unsupported(), [("Player.loadAIP".to_owned(), 2)], "counted until a host takes them");
     let got = rt.take_aip_requests();
+    assert!(rt.unsupported().is_empty());
     assert_eq!(got.iter().map(|(_, n)| n.as_str()).collect::<Vec<_>>(), ["x.aip", "Y.AIP"]);
     assert!(rt.take_aip_requests().is_empty(), "taken once");
 }

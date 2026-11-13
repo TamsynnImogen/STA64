@@ -330,11 +330,18 @@ impl SkirmishController {
 
     /// Replace the tuning while the controller keeps its state (AI-06: a mission
     /// loading an AIP). The wave ceiling is kept inside the new range.
-    pub fn set_params(&mut self, params: Params) {
+    pub fn set_params(&mut self, mut params: Params) {
+        params.max_attack = params.max_attack.max(params.min_attack);
         self.cfg.params = params;
         let (lo, hi) = (self.cfg.params.min_attack.max(1), self.cfg.params.max_attack.max(1));
         self.wave_size = self.wave_size.clamp(lo, hi);
         self.next_wave = self.next_wave.clamp(lo, self.wave_size);
+    }
+
+    /// Number this controller's commands from `base` (clear of another sender
+    /// for the same player).
+    pub fn set_seq_base(&mut self, base: u32) {
+        self.seq = base;
     }
 
     /// The tuning in force.

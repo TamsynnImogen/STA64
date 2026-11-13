@@ -111,6 +111,7 @@ fn a_loaded_file_overlays_and_a_list_replaces_only_when_present() {
         loaded: false,
     };
     let view = world(&s).view();
+    lock(&hub.shared).seats.push(P0);
     hub.submit([(P0, "build.aip".into()), (P0, "aggressive.aip".into())]);
     seat.think(&view, &[], &mut Vec::new());
     let p = seat.params().clone();
@@ -125,7 +126,7 @@ fn a_loaded_file_overlays_and_a_list_replaces_only_when_present() {
 }
 
 #[test]
-fn requests_for_other_seats_wait_for_them() {
+fn requests_for_seats_without_ai_are_reported_not_applied() {
     let s = setup();
     let hub = MissionAiHub::new(library());
     let mut ai = hub.controller(&s, P0);
@@ -133,7 +134,7 @@ fn requests_for_other_seats_wait_for_them() {
     let mut out = Vec::new();
     ai.think(&world(&s).view(), &[], &mut out);
     assert!(out.is_empty());
-    assert!(hub.unresolved().is_empty());
+    assert_eq!(hub.unresolved(), [(PlayerId(1), "build.aip".to_owned())]);
 }
 
 #[test]
@@ -143,4 +144,48 @@ fn same_requests_give_the_same_game() {
     assert!(!a.0.is_empty());
     assert_eq!(a.1, b.1);
     assert_eq!(format!("{:?}", a.0), format!("{:?}", b.0));
+}
+
+#[test]
+fn seats_without_ai_are_reported_and_never_queue() {
+    let s = setup();
+    let hub = MissionAiHub::new(library());
+    let _ai = hub.controller(&s, P0);
+    hub.submit([(PlayerId(1), "build.aip".to_owned()), (PlayerId(9), "build.aip".to_owned())]);
+    assert_eq!(hub.unresolved().len(), 2, "no AI controller was made for seat 1 or 9");
+}
+
+#[test]
+fn includes_resolve_by_name_in_the_including_folder_first() {
+    let files = [
+        ("AI/AIPs/base.aip", "int min_attack_force = 5;\n"),
+        ("AI/AIPs/sub/base.aip", "int min_attack_force = 8;\n"),
+        ("AI/AIPs/child.aip", "#include \"base.aip\"\nint min_resource_force = 3;\n"),
+        ("AI/AIPs/sub/child2.aip", "#include \"base.aip\"\n"),
+    ];
+    let names: Vec<String> = files.iter().map(|(n, _)| (*n).to_owned()).collect();
+    let lib = AipLibrary::load(&names, &mut |n| files.iter().find(|(f, _)| *f == n).map(|(_, t)| (*t).to_owned()));
+    assert_eq!(lib.get("child.aip").unwrap().int("min_attack_force"), Some(5));
+    assert_eq!(lib.get("child2.aip").unwrap().int("min_attack_force"), Some(8));
+}
+
+#[test]
+fn a_max_below_the_min_does_not_panic_and_seq_stays_clear() {
+    let s = setup();
+    let mut c = SkirmishController::new(SkirmishConfig::from_setup(&s, P0).unwrap());
+    c.set_params(Params { min_attack: 5, max_attack: 2, ..Params::default() });
+    assert_eq!(c.params().max_attack, 5);
+    let hub = MissionAiHub::new(library());
+    let mut ai = hub.controller(&s, P0);
+    hub.submit([(P0, "build.aip".to_owned())]);
+    let (mut sim, mut out) = (world(&s), Vec::new());
+    for _ in 0..60 {
+        out.clear();
+        ai.think(&sim.view(), &[], &mut out);
+        sim.step(&out);
+        if !out.is_empty() {
+            break;
+        }
+    }
+    assert!(!out.is_empty() && out.iter().all(|c| c.seq >= AI_SEQ_BASE));
 }

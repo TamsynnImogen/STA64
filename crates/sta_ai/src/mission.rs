@@ -11,7 +11,8 @@
 //! - A loaded file is an overlay: keys it sets replace the seat's values,
 //!   keys it leaves out keep them, and the build list is replaced only by a
 //!   file that has `the_build_list` ([`Params::overlay`]).
-//! - It takes effect at once, keeps the seat's units, queues and waves, and
+//! - It takes effect on the seat's next think (the AI plans every half
+//!   second, so its behaviour changes at its next plan), keeps the seat's units, queues and waves, and
 //!   has no effect on a seat that is not AI-controlled (no controller here).
 //!
 //! Not measured: the engine's default for a value no file set (the skirmish
@@ -22,8 +23,11 @@
 //! The plan reaches the seat through a shared [`MissionAiHub`], not through
 //! the command stream; the commands the AI issues are recorded as usual, but
 //! the plan is not in a snapshot (WORKPLAN SIM-61 lists it). The script must
-//! run before the seats in a tick for a load to apply in the same tick; after
-//! them it applies on the next. Both are deterministic.
+//! run before the seats in a tick for a load to reach the seat in the same
+//! tick; after them it reaches it on the next. Both are deterministic. A seat
+//! with no plan yet sees no events, so it starts with no memory of the past.
+//! Files are found by name only: two files of one name in different folders
+//! collapse to the later one in listing order.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -36,6 +40,9 @@ use sta_sim::setup::{Controller, GameSetup};
 use sta_sim::view::WorldView;
 
 use crate::skirmish::{Params, SkirmishConfig, SkirmishController};
+
+/// First sequence number of a seat's AI commands.
+const AI_SEQ_BASE: u32 = 0x4000_0000;
 
 /// Every AIP of the install, by upper-cased file name.
 #[derive(Debug, Clone, Default)]
@@ -61,10 +68,22 @@ impl AipLibrary {
     /// skipped.
     pub fn load(names: &[String], read: &mut dyn FnMut(&str) -> Option<String>) -> AipLibrary {
         let mut lib = AipLibrary::new();
+        let dir = |n: &str| n.rfind(['/', '\\']).map_or(0, |i| i + 1);
         for n in names.iter().filter(|n| n.to_ascii_lowercase().ends_with(".aip")) {
             if let Some(text) = read(n) {
                 let mut first = Some(text);
-                let (aip, _) = Aip::load(n, &mut |inc| if inc == n.as_str() { first.take() } else { read(inc) });
+                let mut load = |inc: &str| {
+                    if inc == n.as_str() {
+                        return first.take();
+                    }
+                    // Includes are named by file name: the including file's
+                    // folder first, then any file of that name.
+                    let want = key(inc);
+                    let same = names.iter().find(|c| key(c) == want && c[..dir(c)] == n[..dir(n)]);
+                    let path = same.or_else(|| names.iter().find(|c| key(c) == want))?;
+                    read(path)
+                };
+                let (aip, _) = Aip::load(n, &mut load);
                 lib.insert(n, aip);
             }
         }
@@ -87,8 +106,15 @@ impl AipLibrary {
 #[derive(Debug, Default)]
 struct Shared {
     queue: Vec<(PlayerId, String)>,
-    /// Requests no seat took, or whose file is not in the library.
+    /// Requests that changed nothing: no AI seat of that id, or a file that is
+    /// not in the library. In the order they were found.
     unresolved: Vec<(PlayerId, String)>,
+    /// Seats that have an AI controller.
+    seats: Vec<PlayerId>,
+}
+
+fn lock(s: &Mutex<Shared>) -> std::sync::MutexGuard<'_, Shared> {
+    s.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// The library and the queue between a mission script and the seats' AI.
@@ -105,21 +131,38 @@ impl MissionAiHub {
 
     /// Queue plan loads in call order (what the script asked for).
     pub fn submit(&self, requests: impl IntoIterator<Item = (PlayerId, String)>) {
-        if let Ok(mut s) = self.shared.lock() {
-            s.queue.extend(requests);
+        let mut s = lock(&self.shared);
+        for (p, name) in requests {
+            if s.seats.contains(&p) {
+                s.queue.push((p, name));
+            } else {
+                s.unresolved.push((p, name));
+            }
         }
     }
 
-    /// Requests that changed nothing (unknown file), oldest first.
+    /// Requests that changed nothing: a seat without AI (the human's,
+    /// neutral, unknown) or a file not in the library.
     pub fn unresolved(&self) -> Vec<(PlayerId, String)> {
-        self.shared.lock().map(|s| s.unresolved.clone()).unwrap_or_default()
+        lock(&self.shared).unresolved.clone()
     }
 
     /// The AI of `seat`: passive until its first plan arrives. A seat not in
     /// the setup gets nothing to run (an idle controller).
     pub fn controller(&self, setup: &GameSetup, seat: PlayerId) -> Box<dyn Controller> {
         match SkirmishConfig::from_setup(setup, seat) {
-            Some(cfg) => Box::new(ScriptedAi { seat, hub: self.clone(), params: cfg.params.clone(), ai: SkirmishController::new(cfg), loaded: false }),
+            Some(cfg) => {
+                let mut s = lock(&self.shared);
+                if !s.seats.contains(&seat) {
+                    s.seats.push(seat);
+                }
+                let mut ai = SkirmishController::new(cfg.clone());
+                // Its sequence numbers stay clear of the script's, which counts
+                // up from 1 for the same player, so a rejection is never
+                // credited to the wrong sender.
+                ai.set_seq_base(AI_SEQ_BASE);
+                Box::new(ScriptedAi { seat, hub: self.clone(), params: cfg.params, ai, loaded: false })
+            }
             None => Box::new(crate::IdleController),
         }
     }
@@ -147,7 +190,7 @@ impl ScriptedAi {
     }
 
     fn take_requests(&mut self) {
-        let Ok(mut s) = self.hub.shared.lock() else { return };
+        let mut s = lock(&self.hub.shared);
         let mut keep = Vec::new();
         for (p, name) in std::mem::take(&mut s.queue) {
             if p != self.seat {

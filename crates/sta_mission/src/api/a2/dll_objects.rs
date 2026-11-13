@@ -381,8 +381,9 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
 
     // int SetSpecialForcesFlag(int, bool). Rule (exe): for a live Craft, store
     // the flag on it and return its handle; anything else returns 0 and does
-    // nothing. Setting it also detaches the craft from its AI team; no AI team
-    // exists in a mission runtime (an AI plan load is queued for the host's AI seats), so the flag's one consumer today is RecruitSpecialForces. A pending
+    // nothing. Setting it also detaches the craft from its AI team; the AI
+    // seats of a mission do not read the flag yet (AI-02 / SIM-58 own that
+    // consumer), so its one consumer today is RecruitSpecialForces. A pending
     // `BuildObject` token is flagged at once and the flag follows its object.
     let (c, s) = (ctx.clone(), st.clone());
     table.set(
