@@ -14,7 +14,8 @@
 //! | a message box ([`MessageBox`]) | the same panel with an OK button | the original's message display reuses the objectives keys |
 //! | `Movie`, `StopMovie` | MED-03 | |
 //! | `Sound`, `StopSound` | `PlaySound` on the UI bus (no admission limit) / `StopSounds` (the audio lane resolves the name) | |
-//! | `Music`, `StopMusic`, `Effect`, `WaitForKey`, other `Call`s | **not shown** (audio and effects lanes); each kind is listed once in [`Unhandled`] | |
+//! | `Music`, `StopMusic` | `PlaySound` / `StopSounds` on the music bus (no looping yet) | |
+//! | `Effect`, `WaitForKey`, other `Call`s | **not shown** (audio and effects lanes); each kind is listed once in [`Unhandled`] | |
 //!
 //! While a cineractive is on, the HUD and the notices are hidden and the fog layers are not drawn (the cinematic view's render list holds no HUD panel and the terrain pass draws fog and shroud only in the RTS view: Refit, read from the executable, static), and its end clears the fade.
 //!
@@ -384,11 +385,13 @@ pub(crate) fn consume(
             Presentation::StopSound { .. } => {
                 stop.write(StopSounds { bus: Bus::Ui });
             }
-            Presentation::Music { .. } => {
-                unhandled.note("Music");
+            // A script's music is a request to the audio layer on the music bus (it does not
+            // loop yet: the backend has no loop flag, so `looped` is not carried).
+            Presentation::Music { name, .. } => {
+                play.write(PlaySound { name: name.clone(), at: None, bus: Bus::Music });
             }
             Presentation::StopMusic => {
-                unhandled.note("StopMusic");
+                stop.write(StopSounds { bus: Bus::Music });
             }
             Presentation::Effect { kind, .. } => {
                 unhandled.note(&format!("Effect {kind}"));
@@ -412,12 +415,7 @@ fn hide_notices_in_cineractive(cine: Res<CineractiveState>, mut roots: Query<&mu
     }
 }
 
-fn run_clock(time: Res<Time<Real>>, mut titles: ResMut<Titles>, mut fade: ResMut<FadeState>, state: Option<Res<State<crate::app::AppState>>>) {
-    // Titles and fades the sim raised while the game was still loading start when it is shown
-    // (the sim runs from the loading screen, and the opening's first fade in must be seen).
-    if state.is_some_and(|s| *s.get() == crate::app::AppState::Loading) {
-        return;
-    }
+fn run_clock(time: Res<Time<Real>>, mut titles: ResMut<Titles>, mut fade: ResMut<FadeState>) {
     let dt = time.delta_secs();
     if !titles.items.is_empty() {
         titles.tick(dt);
@@ -953,7 +951,7 @@ mod tests {
         send(&mut app, Presentation::Music { name: "m".into(), looped: true });
         send(&mut app, Presentation::Music { name: "n".into(), looped: true });
         send(&mut app, Presentation::Call { name: "A1.StartCredits".into(), args: vec![] });
-        assert_eq!(app.world().resource::<Unhandled>().list(), [("A1.StartCredits", 1), ("Music", 2)]);
+        assert_eq!(app.world().resource::<Unhandled>().list(), [("A1.StartCredits", 1)]);
     }
 
     #[test]

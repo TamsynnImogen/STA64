@@ -354,7 +354,20 @@ fn on_start_mission(
     // `InGame` begins. With no paths yet that shot was dropped and the camera never took it.
     commands.insert_resource(crate::input::camera_cinematic::ScenePaths(launch.paths.clone()));
     commands.insert_resource(launch);
+    commands.insert_resource(crate::sim_link::SimHeld);
     next.set(AppState::Loading);
+}
+
+/// The sim of a launched mission starts stepping (or, back at the front end, is not held for ever).
+fn release_sim(mut commands: Commands) {
+    commands.remove_resource::<crate::sim_link::SimHeld>();
+}
+
+/// A mission's first frame shown is its tick 0: the load's long frame is not time the sim owes.
+fn start_clock(held: Option<Res<crate::sim_link::SimHeld>>, clock: Option<ResMut<crate::clock::AnimClock>>) {
+    if let (Some(_), Some(mut clock)) = (held, clock) {
+        clock.start_fresh();
+    }
 }
 
 /// The match is up: the mission begins (its movies are tracked from here, the objectives panel opens).
@@ -627,7 +640,8 @@ impl Plugin for MissionHostPlugin {
             .add_message::<ScriptReply>()
             .add_message::<SimMsg>()
             .add_message::<Notice>()
-            .add_systems(OnEnter(AppState::InGame), begin_mission)
+            .add_systems(OnEnter(AppState::InGame), (start_clock, begin_mission, release_sim).chain())
+            .add_systems(OnEnter(AppState::FrontEnd), release_sim)
             .add_systems(OnEnter(AppState::FrontEnd), finish_mission.after(crate::frontend::screens::enter_front_end))
             .add_systems(
                 Update,
