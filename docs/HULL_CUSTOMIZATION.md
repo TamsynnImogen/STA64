@@ -16,8 +16,9 @@ stays unknown; hull health never substitutes for a subsystem's health.
 Seat faction metadata comes from the resolved `GameSetup`, follows real
 ownership on capture, survives snapshots, and remains cosmetic: no gameplay
 rule or digest changes. A missing faction uses base materials and hides faction-specific subtrees; ordinary nodes are retained.
-SIM-54's mission race edits remain a separate capability; this package must
-not infer a seat's race from the craft's class or most numerous surviving unit.
+SIM-54's mission race overrides remain in `WorldView::attrs`; this renderer's
+faction selection uses the owning seat's setup label. It does not yet apply
+mission race overrides or infer a seat's race from a craft's class.
 Snapshots append a versioned metadata record; view/log changes bump the seam
 revision and reject prior encodings before decoding. Existing subsystem state
 is already saved and hashed; projecting it adds no damage or repair law.

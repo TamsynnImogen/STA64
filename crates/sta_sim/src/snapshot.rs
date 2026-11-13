@@ -45,9 +45,10 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// (SIM-55). Format 18 (SIM-36) appends the attack approach record
 /// (crafts in warp). Format 19 appends stuck-order watch rows; format 20
 /// adds their anchor, start distance and birth tick. Format 21 appends scripted
-/// orders (SIM-56) and per-craft switches (SIM-58). Format 22 appends cosmetic
-/// seat factions. Only the current format is read.
-pub const FORMAT_VERSION: u16 = 22;
+/// orders (SIM-56) and per-craft switches (SIM-58). Format 22 appends mission
+/// attributes (SIM-54). Format 23 appends cosmetic seat factions.
+/// Only the current format is read.
+pub const FORMAT_VERSION: u16 = 23;
 
 const HEADER: usize = 4 + 2 + 4 + 8;
 
@@ -175,7 +176,7 @@ struct EntityRec {
     progress: Option<Fixed>,
 }
 
-/// Format 22: cosmetic owning-seat faction labels. No gameplay rules.
+/// Format 23: cosmetic owning-seat faction labels. No gameplay rules.
 #[derive(Serialize, Deserialize)]
 struct AppearanceRec {
     version: u8,
@@ -432,6 +433,7 @@ impl Sim {
         out.extend(postcard::to_allocvec(&WatchRec { version: 1, rows: self.watchdog.to_rec() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&ScriptedRec { version: 1, rows: self.scripted.to_rows() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&SwitchesRec { version: 1, rows: self.switches.to_rows() }).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&self.attrs.to_rec()).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&AppearanceRec { version: 1, factions: self.appearance_factions.clone() }).expect("snapshot serialises"));
         out
     }
@@ -487,6 +489,8 @@ impl Sim {
         let (record, rest): (SwitchesRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         if record.version != 1 { return Err(SnapshotError::Corrupt("unknown switches record version".into())); }
         let switch_rows = record.rows;
+        let (record, rest): (crate::attrs::AttrsRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        let attrs = crate::attrs::Attrs::from_rec(record).map_err(|why| SnapshotError::Corrupt(why.into()))?;
         let (record, rest): (AppearanceRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         if record.version != 1 { return Err(SnapshotError::Corrupt("unknown appearance record version".into())); }
         let appearance_factions = record.factions;
@@ -552,6 +556,15 @@ impl Sim {
             })
             .collect();
         let movement = Movement::from_rows(courses).ok_or_else(|| corrupt("courses"))?;
+        {
+            let v = attrs.view();
+            if v.races.iter().any(|(id, _)| !units.get(*id).is_some_and(|u| matches!(u.kind, EntityKind::Craft | EntityKind::Station))) {
+                return Err(SnapshotError::Corrupt("attribute entity is not a craft or station".into()));
+            }
+            if v.player_races.iter().any(|(p, _)| !b.players.iter().any(|(id, _)| id == p)) {
+                return Err(SnapshotError::Corrupt("attribute seat does not exist".into()));
+            }
+        }
         let weapons = Weapons::from_rec(b.weapons).ok_or_else(|| corrupt("weapons"))?;
         let autonomy = crate::autonomy::Autonomy::from_rec(autonomy_rows).ok_or_else(|| corrupt("autonomy"))?;
         if autonomy.to_rec().iter().any(|(id, _)| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft)) {
@@ -624,6 +637,7 @@ impl Sim {
             subsystems,
             scripted,
             switches,
+            attrs,
             team_changes: Vec::new(),
             appearance_factions,
         })
@@ -633,6 +647,10 @@ impl Sim {
 #[cfg(test)]
 #[path = "snapshot/subsystem_tests.rs"]
 mod subsystem_tests;
+
+#[cfg(test)]
+#[path = "snapshot/attrs_tests.rs"]
+mod attrs_tests;
 
 #[cfg(test)]
 #[path = "snapshot/appearance_tests.rs"]

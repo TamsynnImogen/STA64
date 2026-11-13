@@ -71,9 +71,22 @@ fn appearance_record_refuses_unknown_versions_missing_data_and_noncanonical_rows
 }
 
 #[test]
+fn mission_attributes_and_setup_factions_survive_the_same_snapshot() {
+    let (bytes, content) = fixture();
+    let mut sim = Sim::from_snapshot(&bytes, Some(content.clone())).unwrap();
+    sim.attrs.set_player_race(PlayerId(0), "klingon");
+    let bytes = sim.snapshot();
+    let restored = Sim::from_snapshot(&bytes, Some(content)).unwrap();
+    assert_eq!(sim.view().attrs, restored.view().attrs);
+    assert_eq!(sim.view().appearance, restored.view().appearance);
+    assert_eq!(sim.digest(), restored.digest());
+    assert_eq!(bytes, restored.snapshot());
+}
+
+#[test]
 fn previous_snapshot_and_view_seams_are_refused_before_new_data_is_read() {
     let (mut bytes, content) = fixture();
-    for previous in [20_u16, 21] {
+    for previous in [20_u16, 21, 22] {
         bytes[4..6].copy_from_slice(&previous.to_le_bytes());
         assert!(matches!(
             Sim::from_snapshot(&bytes, Some(content.clone())),

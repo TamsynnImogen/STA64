@@ -60,6 +60,7 @@ pub mod spatial;
 pub mod spawn;
 pub mod start;
 mod start_effects;
+pub mod attrs;
 pub use start_effects::unsupported as unsupported_start_lifecycle;
 pub mod tech;
 pub mod victory;
@@ -165,6 +166,8 @@ pub struct Sim {
     /// Subsystem switches and damage set by missions (SIM-55); in the digest
     /// once any exists.
     subsystems: combat::damage::Subsystems,
+    /// Mission-set unit names and races and seat races (SIM-54); in the digest once any exists.
+    attrs: attrs::Attrs,
     /// Scripted orders (SIM-56); in the digest once any exists.
     scripted: orders::Scripted,
     /// Per-craft switches set by missions (SIM-58); in the digest once any exists.
@@ -206,6 +209,7 @@ impl Sim {
             watchdog: Default::default(),
             nav: Default::default(),
             subsystems: Default::default(),
+            attrs: Default::default(),
             scripted: Default::default(),
             switches: Default::default(),
             team_changes: Vec::new(),
@@ -507,7 +511,7 @@ impl Sim {
             }
         }
         let perceived_owners = self.perception.iter().map(|(id, &owner)| (id, owner)).collect();
-        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners, appearance: self.appearance_view() }
+        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners, appearance: self.appearance_view(), attrs: crate::attrs::AttrsView { names: self.switches.names(), ..self.attrs.view() } }
     }
 
     /// FNV-1a over all simulation state, for desync detection. The content
@@ -588,6 +592,9 @@ impl Sim {
         }
         if !self.switches.is_empty() {
             self.switches.hash_into(&mut h);
+        }
+        if !self.attrs.is_empty() {
+            self.attrs.hash_into(&mut h);
         }
         let crew_count = self.units.iter().filter(|unit| unit.crew.is_some()).count();
         if crew_count != 0 {

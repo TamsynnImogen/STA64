@@ -653,7 +653,7 @@ mod tests {
     use std::path::Path;
 
     fn view(tick: u64) -> WorldView {
-        WorldView { tick, digest: 0, units: Vec::new(), players: Vec::new(), visibility: Vec::new(), perceived_owners: Vec::new(), appearance: Default::default() }
+        WorldView { tick, digest: 0, units: Vec::new(), players: Vec::new(), visibility: Vec::new(), perceived_owners: Vec::new(), appearance: Default::default(), attrs: Default::default() }
     }
 
     fn run(rt: &mut MissionRuntime, ticks: u64) {

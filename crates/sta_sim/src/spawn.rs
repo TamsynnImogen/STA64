@@ -137,6 +137,7 @@ impl Sim {
         self.production.remove_weld_site(id);
         self.start_effects.remove(id);
         self.subsystems.remove(id);
+        self.attrs.remove(id);
         self.scripted.remove(id);
         self.switches.remove(id);
         if let Some(by) = destroyed_by {
@@ -248,19 +249,24 @@ impl Sim {
             Edit::SubsystemDamage(id, sub, points) => self.edit_subsystem_damage(id, sub, points),
             Edit::ShieldPercent(id, fraction) => self.edit_shield_percent(id, fraction),
             Edit::MaxShields(id, max) => self.edit_max_shields(id, max),
-            Edit::MaxOfficers(player, value) => self.economy.edit_officer_limit(player, value),
-            Edit::TeamCrew(player, value) => self.economy.edit_team_crew(player, value),
+            Edit::MaxOfficers(player, value) => self.players.iter().any(|(id, _)| *id == player) && self.economy.edit_officer_limit(player, value),
+            Edit::TeamCrew(player, value) => self.players.iter().any(|(id, _)| *id == player) && self.economy.edit_team_crew(player, value),
             Edit::UnitCrew(id, value) => {
                 let Some(u) = self.units.get_mut(id).filter(|u| u.hull[0] > Fixed::ZERO && matches!(u.kind, crate::world::EntityKind::Craft | crate::world::EntityKind::Station)) else {
                     return false;
                 };
                 let Some([now, max]) = u.crew else { return false };
-                // Cap: the maximum crew, but never below what the unit already
-                // holds (starting crew may exceed it). Whether the original clamps
-                // `SetCrew` at the maximum is NOT measured.
-                u.crew = Some([value.max(Fixed::ZERO).min(max.max(now)), max]);
+                // Cap: the current maximum crew (read from the executable, static).
+                let _ = now;
+                u.crew = Some([value.max(Fixed::ZERO).min(max), max]);
                 true
             }
+            Edit::MaxHull(id, v) => self.edit_max_hull(id, v),
+            Edit::MaxCrew(id, v) => self.edit_max_crew(id, v),
+            Edit::HullValue(id, v) => self.edit_hull_value(id, v),
+            Edit::MaxShieldsKeep(id, v) => self.edit_max_shields_keep(id, v),
+            Edit::UnitRace(id, ref race) => self.edit_unit_race(id, race),
+            Edit::PlayerRace(p, ref race) => self.edit_player_race(p, race),
             Edit::Position(id, to) => self.edit_position(id, to),
             Edit::Heading(id, dir) => self.edit_heading(id, dir),
             Edit::AngularVelocity(id, omega) => self.edit_angular_velocity(id, omega),

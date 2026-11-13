@@ -105,7 +105,9 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
                     id.0
                 )));
             };
-            Ok(def.race.eq_ignore_ascii_case(race.as_ref()))
+            // `SetRace` (SIM-54) changes this unit's race; the definition's is the default.
+            let set = c.view.attrs.races.binary_search_by_key(&id, |r| r.0).ok().map(|i| &c.view.attrs.races[i].1);
+            Ok(set.unwrap_or(&def.race).eq_ignore_ascii_case(race.as_ref()))
         })?,
     )?;
     let c = ctx.clone();
