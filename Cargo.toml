@@ -8,6 +8,7 @@ members = [
     "crates/sta_assets",
     "crates/sta_bzn",
     "crates/sta_mission",
+    "crates/sta_mission_convert",
     "crates/sta_surface",
     "crates/sta_core",
     "crates/sta_content",
@@ -38,6 +39,7 @@ sta_odf = { path = "crates/sta_odf" }
 sta_assets = { path = "crates/sta_assets" }
 sta_bzn = { path = "crates/sta_bzn" }
 sta_mission = { path = "crates/sta_mission" }
+sta_mission_convert = { path = "crates/sta_mission_convert" }
 sta_surface = { path = "crates/sta_surface" }
 sta_sim = { path = "crates/sta_sim" }
 sta_core = { path = "crates/sta_core" }
