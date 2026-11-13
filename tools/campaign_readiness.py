@@ -1,0 +1,404 @@
+#!/usr/bin/env python3
+"""Campaign readiness table: how many campaign missions STA64 can run (LUA-05).
+
+One command:
+
+    python3 tools/campaign_readiness.py [--a1 DIR] [--a2 DIR] [--roots DIR]
+                                        [--ticks 300] [--detail-dir DIR]
+
+Runs `tools/agent-cargo --light run -p sta_mission --example campaign_readiness`
+(the probe in crates/sta_mission/src/readiness.rs: each mission started the way
+the campaign runner starts it, on its own map, N ticks, no player input) and
+adds a static read of the legacy-DLL missions. Columns, each a subset of the
+one before it (a funnel):
+
+  Lua        (a) the mission resolves to a Lua script STA64 can load
+  runs       (b) it loads and runs N ticks with no runtime error
+  bound      (c) and the run touched no unbound name (no `stub global/field`)
+  working    (d) and nothing it called is bound-but-unsupported (counted)
+
+The "legacy" columns are not runnable results. For a mission with only DLL
+rules they count the engine calls its `.dsl` / `.drl` conditions make (read by
+tools/mission_dll_inventory.py and tools/drl_to_lua.py) and say whether every
+one is bound / bound and working on STA64's `A2` / `A1` table, i.e. the state
+the mission would reach if converted. Calls that are only DLL plumbing
+(variables, timers, rule machinery) are left out; a legacy count is not an
+evidence of a working conversion. Only names and counts are printed: no game
+text, address or code. Detail (Markdown and JSON) goes to `--detail-dir`,
+outside the repository.
+
+Needs `objdump` and `llvm-undname` for the legacy columns (skipped with a note
+when missing) and the installs; an absent install is skipped.
+"""
+
+import argparse
+import collections
+import json
+import os
+import subprocess
+import sys
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(HERE)
+HEROIC = "/home/cedric/Games/Heroic"
+DEFAULTS = {
+    "a1": f"{HEROIC}/Star Trek Armada",
+    "a2": f"{HEROIC}/Star Trek Armada II (Stock)",
+    "roots": f"{HEROIC}/Star Trek Armada II Fleet Operations Roots",
+}
+DEFAULT_DETAIL = "/home/cedric/Projects/STA64-research/campaign-readiness"
+
+LABELS = {
+    "a1": "Armada I",
+    "a2": "Armada II (stock)",
+    "roots/base": "FO Roots (base)",
+    "roots/STA2 Classic Mod": "STA2 Classic (Roots mod)",
+    "roots/STA2 Classic Mod Enhanced Gameplay": "STA2 Classic Enhanced Gameplay (Roots mod)",
+}
+
+
+def label(install):
+    return LABELS.get(install, install.replace("roots/", "Roots mod ") if install.startswith("roots/") else install)
+
+
+# ------------------------------------------------------------ pure parts
+
+
+def parse_rows(text):
+    """JSON lines of the example -> list of dicts (blank lines skipped)."""
+    return [json.loads(l) for l in text.splitlines() if l.strip()]
+
+
+def funnel(rows):
+    """Counts of one install's mission rows: total, a, b, c, d (each a subset of the last)."""
+    n = {"missions": 0, "lua": 0, "runs": 0, "bound": 0, "working": 0}
+    for r in rows:
+        n["missions"] += 1
+        lua = r.get("kind") == "lua"
+        runs = lua and r.get("started") and not r.get("errors")
+        bound = runs and not r.get("unbound")
+        working = bound and not r.get("unsupported")
+        n["lua"] += lua
+        n["runs"] += bool(runs)
+        n["bound"] += bool(bound)
+        n["working"] += bool(working)
+    return n
+
+
+def top_names(rows, field, limit=15):
+    """Names in `field` ('unbound' / 'unsupported') by the number of missions they appear in."""
+    c = collections.Counter()
+    for r in rows:
+        for name in {k for k, _ in r.get(field, [])}:
+            c[name] += 1
+    return c.most_common(limit)
+
+
+def legacy_status(calls):
+    """calls: [(name, kind)] with kind working / raises / missing.
+
+    Returns (n_calls, n_bound, n_working, all_bound, all_working)."""
+    n = len(calls)
+    bound = sum(1 for _, k in calls if k != "missing")
+    working = sum(1 for _, k in calls if k == "working")
+    return n, bound, working, bound == n, working == n
+
+
+def legacy_counts(legacy_rows):
+    """legacy_rows: [{'calls': [(name, kind)], ...}] -> (missions, all bound, all bound and working)."""
+    b = w = 0
+    for r in legacy_rows:
+        _, _, _, ab, aw = legacy_status(r["calls"])
+        b += ab
+        w += aw
+    return len(legacy_rows), b, w
+
+
+def render_table(groups):
+    """groups: [(label, funnel dict, (legacy missions, bound, working) or None)] -> Markdown."""
+    head = ("| install | missions | (a) Lua | (b) runs | (c) bound | (d) working "
+            "| legacy missions | legacy: calls bound if converted | legacy: bound and working if converted |")
+    out = [head, "|---|--:|--:|--:|--:|--:|--:|--:|--:|"]
+    tot = collections.Counter()
+    lt = [0, 0, 0]
+    for name, f, leg in groups:
+        lm, lb, lw = leg if leg else (None, None, None)
+        out.append(f"| {name} | {f['missions']} | {f['lua']} | {f['runs']} | {f['bound']} | {f['working']} | "
+                   + (f"{lm} | {lb} | {lw} |" if leg else "- | - | - |"))
+        tot.update(f)
+        if leg:
+            lt = [lt[0] + lm, lt[1] + lb, lt[2] + lw]
+    out.append(f"| **all** | {tot['missions']} | {tot['lua']} | {tot['runs']} | {tot['bound']} | {tot['working']} | "
+               f"{lt[0]} | {lt[1]} | {lt[2]} |")
+    return "\n".join(out)
+
+
+def mission_status(r):
+    if r.get("kind") != "lua":
+        return {"legacy": "legacy DLL only", "none": "no script"}.get(r.get("kind"), r.get("kind"))
+    if not r.get("started"):
+        return "does not start"
+    if r.get("errors"):
+        return "runtime error"
+    if r.get("unbound"):
+        return "unbound names"
+    if r.get("unsupported"):
+        return "unsupported calls"
+    return "working"
+
+
+def one_line(s, n=160):
+    s = " ".join(str(s).split())
+    return s if len(s) <= n else s[: n - 3] + "..."
+
+
+def render_detail(by_install, legacy_by_install, ticks):
+    """Per-mission Markdown."""
+    out = ["# Campaign readiness, per mission", "",
+           f"Horizon {ticks} ticks, no player input. Statuses: working, unsupported calls, unbound names, "
+           "runtime error, does not start; legacy missions show the static counterpart.", ""]
+    for install, rows in by_install.items():
+        out += [f"## {label(install)}", ""]
+        lua = [r for r in rows if r.get("kind") == "lua"]
+        if lua:
+            out += ["| campaign | # | map | status | unbound | unsupported | error |", "|---|--:|---|---|--:|--:|---|"]
+            for r in lua:
+                err = r["errors"][0] if r.get("errors") else (r.get("start_error") or "")
+                out.append(f"| {r['campaign']} | {r['index'] + 1} | {r['bzn']} | {mission_status(r)} | "
+                           f"{len(r['unbound'])} | {len(r['unsupported'])} | {one_line(err).replace('|', '/')} |")
+            out.append("")
+            for field, title in (("unbound", "Unbound names"), ("unsupported", "Unsupported calls")):
+                top = top_names(lua, field, 100)
+                if top:
+                    out += [f"### {title} by missions affected", ""] + [f"- {n} missions: `{k}`" for k, n in top] + [""]
+        leg = legacy_by_install.get(install)
+        if leg:
+            out += ["| campaign | # | map | files | calls | bound | working | not bound | bound, raises/no effect |",
+                    "|---|--:|---|---|--:|--:|--:|---|---|"]
+            for r in leg:
+                n, b, w, _, _ = legacy_status(r["calls"])
+                miss = ", ".join(sorted(c for c, k in r["calls"] if k == "missing"))
+                raises = ", ".join(sorted(c for c, k in r["calls"] if k == "raises"))
+                files = "+".join(r["files"])
+                note = f" ({r['note']})" if r.get("note") else ""
+                out.append(f"| {r['campaign']} | {r['index'] + 1} | {r['bzn']} | {files}{note} | {n} | {b} | {w} | {miss} | {raises} |")
+            out.append("")
+        none = [r for r in rows if r.get("kind") == "none"]
+        if none:
+            out += ["No script: " + ", ".join(r["bzn"] for r in none), ""]
+    return "\n".join(out) + "\n"
+
+
+# ------------------------------------------------------------ install access
+
+
+def listdir_ci(path, name):
+    """Entry of `path` equal to `name` ignoring case, or None."""
+    try:
+        for e in os.listdir(path):
+            if e.lower() == name.lower():
+                return os.path.join(path, e)
+    except OSError:
+        pass
+    return None
+
+
+def locate_mission_file(dirs, name):
+    """`missions/<name>` under the first of `dirs` that has it (mods first)."""
+    for d in dirs:
+        m = listdir_ci(d, "missions")
+        f = listdir_ci(m, name) if m else None
+        if f:
+            return f
+    return None
+
+
+def mod_chain_dirs(roots_dir, mod):
+    """Directories of `mod` and its `ParentMod` chain (info.ini), nearest first."""
+    out, seen = [], set()
+    data = listdir_ci(roots_dir, "Data") or roots_dir
+    mods = listdir_ci(data, "Mods") or os.path.join(data, "Mods")
+    while mod and mod.lower() not in seen:
+        seen.add(mod.lower())
+        d = listdir_ci(mods, mod)
+        if not d:
+            break
+        out.append(d)
+        mod = None
+        ini = listdir_ci(d, "info.ini")
+        if ini:
+            for line in open(ini, encoding="latin1"):
+                k, _, v = line.partition("=")
+                if k.strip().lower() == "parentmod":
+                    mod = v.strip().strip('"')
+    return out
+
+
+def with_partners(files):
+    """A2 mission files: a `<x>R.drl` rule DLL goes with its `<x>S.dsl` script."""
+    out = list(files)
+    for f in files:
+        if f.lower().endswith("r.drl"):
+            partner = f[:-5] + ("S.dsl" if f[-5] == "R" else "s.dsl")
+            if partner.lower() not in (x.lower() for x in out):
+                out.append(partner)
+    return out
+
+
+def run_probe(args, root_args):
+    cmd = [os.path.join(HERE, "agent-cargo"), "--light", "run", "-q", "-p", "sta_mission", "--example",
+           "campaign_readiness", "--", "--ticks", str(args.ticks)]
+    for k, v in root_args.items():
+        cmd += [f"--{k}", v]
+    p = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True)
+    if p.returncode != 0:
+        sys.exit(f"probe failed ({p.returncode}):\n{p.stderr[-2000:]}")
+    return parse_rows(p.stdout)
+
+
+# ------------------------------------------------------------ static legacy part
+
+
+def legacy_calls(inv, drl, rows_by_install, roots, a2_root):
+    """Per install, the static call kinds of every legacy mission.
+
+    Returns {install: [{'campaign','index','bzn','files','calls':[(name, kind)],'note'}]}."""
+    import shutil
+    if not (shutil.which("objdump") and shutil.which("llvm-undname")):
+        print("legacy columns skipped: objdump and llvm-undname are needed", file=sys.stderr)
+        return {}
+    raising = inv.a2_raising(REPO)
+    a1_kinds = inv.a1_kinds(REPO)
+    slots = engine = None
+    if a2_root:
+        exe, mapf = inv.find(a2_root, "Armada2.exe"), inv.find(a2_root, "armada2.map")
+        if exe and mapf:
+            slots = inv.a2_slots(exe[0], mapf[0])
+            engine = drl.engine_vtables(a2_root)
+    cache = {}
+
+    def plumbing(sig):
+        return inv.area(inv.normalized_signature(sig)) == "Script state and save/load"
+
+    def a2_file(path):
+        if path in cache:
+            return cache[path]
+        sigs = set()
+        if path.lower().endswith(".dsl"):
+            use, _, _ = inv.a2_usage(slots, [path])
+            sigs = {s for i, s in slots if use.get(i)}
+        else:
+            r = drl.decode(path, engine)
+            mangled = sorted(r["call_signatures"])
+            sigs = set(inv.demangle(mangled)) if mangled else set()
+        out = {}
+        for s in sigs:
+            if "(" not in s or plumbing(s):
+                continue
+            out[(inv.method_name(s), s)] = inv.a2_condition_kind(s, REPO, raising)
+        cache[path] = out
+        return out
+
+    def a1_file(path):
+        if path not in cache:
+            out = {}
+            for s, _ in inv.a1_usage([path]):
+                if "(" in s and not plumbing(s):
+                    out[(inv.method_name(s), s)] = inv.a1_condition_kind(s, REPO, a1_kinds)
+            cache[path] = out
+        return cache[path]
+
+    result = {}
+    for install, rows in rows_by_install.items():
+        legacy = [r for r in rows if r.get("kind") == "legacy"]
+        if not legacy:
+            continue
+        if install == "a1":
+            dirs, per_file = [roots["a1"]], a1_file
+        else:
+            if slots is None:
+                print(f"legacy columns for {label(install)} skipped: need the A2 install's Armada2.exe and armada2.map", file=sys.stderr)
+                continue
+            dirs = [roots["a2"]]
+            if install.startswith("roots/"):
+                dirs = mod_chain_dirs(roots["roots"], install[len("roots/"):]) + [roots["roots"]]
+            per_file = a2_file
+        out = []
+        for r in legacy:
+            calls, note = {}, []
+            for f in (r["files"] if install == "a1" else with_partners(r["files"])):
+                path = locate_mission_file(dirs, f)
+                if not path:
+                    note.append(f"{f} not found")
+                    continue
+                try:
+                    calls.update(per_file(path))
+                except Exception as e:  # decoder refusals: report, do not guess
+                    note.append(f"{f}: {type(e).__name__}")
+            out.append({"campaign": r["campaign"], "index": r["index"], "bzn": r["bzn"], "files": r["files"],
+                        "calls": sorted((n, k) for (n, _), k in calls.items()), "note": "; ".join(note)})
+        result[install] = out
+    return result
+
+
+# ------------------------------------------------------------ main
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    for k in DEFAULTS:
+        ap.add_argument(f"--{k}", default=DEFAULTS[k], help=f"install root (default {DEFAULTS[k]!r}; skipped when absent)")
+    ap.add_argument("--ticks", type=int, default=300)
+    ap.add_argument("--detail-dir", default=DEFAULT_DETAIL)
+    ap.add_argument("--no-legacy", action="store_true", help="skip the static legacy columns")
+    args = ap.parse_args(argv)
+    t0 = time.time()
+
+    roots = {k: getattr(args, k) for k in DEFAULTS}
+    present = {k: v for k, v in roots.items() if os.path.isdir(v)}
+    for k in sorted(set(roots) - set(present)):
+        print(f"skipping {k}: {roots[k]} is absent", file=sys.stderr)
+    if not present:
+        sys.exit("no install found")
+    rows = run_probe(args, present)
+    errors = [r for r in rows if "error" in r]
+    for r in errors:
+        print(f"{r['install']}: {r['error']}", file=sys.stderr)
+    rows = [r for r in rows if "error" not in r]
+    by_install = collections.OrderedDict()
+    for r in rows:
+        by_install.setdefault(r["install"], []).append(r)
+
+    legacy = {}
+    if not args.no_legacy:
+        sys.path.insert(0, HERE)
+        import mission_dll_inventory as inv
+        import drl_to_lua as drl
+        legacy = legacy_calls(inv, drl, by_install, roots, roots.get("a2"))
+
+    groups = [(label(i), funnel(rs), legacy_counts(legacy[i]) if i in legacy else None) for i, rs in by_install.items()]
+    table = render_table(groups)
+    lua_rows = [r for r in rows if r.get("kind") == "lua"]
+    tops = []
+    for field, title in (("unbound", "Unbound names"), ("unsupported", "Unsupported calls")):
+        tops += [f"{title} (missions affected), all Lua missions:", ""]
+        tops += [f"- {n}: `{k}`" for k, n in top_names(lua_rows, field)] or ["- none"]
+        tops.append("")
+    secs = time.time() - t0
+    head = f"Campaign readiness, {args.ticks} ticks per mission (probe + static read: {secs:.0f} s)\n"
+    print(head + "\n" + table + "\n\n" + "\n".join(tops))
+
+    if args.detail_dir:
+        os.makedirs(args.detail_dir, exist_ok=True)
+        with open(os.path.join(args.detail_dir, "latest.md"), "w") as f:
+            f.write("# " + head + "\n" + table + "\n\n" + "\n".join(tops) + "\n")
+        with open(os.path.join(args.detail_dir, "detail.md"), "w") as f:
+            f.write(render_detail(by_install, legacy, args.ticks))
+        with open(os.path.join(args.detail_dir, "detail.json"), "w") as f:
+            json.dump({"ticks": args.ticks, "missions": rows, "legacy": legacy}, f, indent=1)
+        print(f"detail: {args.detail_dir}/{{latest.md,detail.md,detail.json}}")
+
+
+if __name__ == "__main__":
+    main()
