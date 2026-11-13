@@ -462,6 +462,40 @@ fn a_delayed_fade_is_presented_when_it_starts() {
     assert!(!at(base + 1, &mut rt).contains(&fade));
 }
 
+/// An authored opening shaped like Armada I Federation 1's: a voice line followed by a delayed
+/// `FadeOut`, then the cineractive ends when the line is done. The line is not done until the host
+/// reports it; a delayed fade is dropped with the cineractive, so it cannot black out the game
+/// after the hand-over.
+#[test]
+fn a_delayed_fade_does_not_outlive_its_cineractive_and_the_end_waits_for_the_voice_line() {
+    use sta_sim::setup::Controller;
+    let s = scene();
+    let (mut rt, commands) = run(
+        &s,
+        "A1.CineractiveStart(); A1.FadeIn(7, 0, 0); log = A1.AudioMessage('log.wav'); A1.FadeOut(2, 25, 0); \
+         function done() return A1.IsAudioMessageDone(log) end",
+    );
+    let first = presented(&commands);
+    assert!(first.contains(&Presentation::Sound { id: 1, name: "log.wav".into(), at: None }), "{first:?}");
+    assert!(!rt.eval::<bool>("return done()").unwrap(), "the line is playing until the host says it is done");
+    let mut view = s.view.clone();
+    let tick0 = view.tick;
+    let mut at = |secs: u64, rt: &mut MissionRuntime| {
+        view.tick = tick0 + secs * 30;
+        let mut out = Vec::new();
+        rt.think(&view, &[], &mut out);
+        presented(&out)
+    };
+    assert!(at(20, &mut rt).is_empty() && !rt.eval::<bool>("return done()").unwrap());
+    // The host reports the clip's end; the script's condition turns true and it ends the opening.
+    rt.eval::<()>("A1.AudioMessageDone(1)").unwrap();
+    assert!(rt.eval::<bool>("return done()").unwrap());
+    rt.eval::<()>("A1.CineractiveEnd()").unwrap();
+    // The fade scheduled for 25 s is gone: nothing darkens the game at 25 s or later.
+    assert!(at(26, &mut rt).iter().all(|p| !matches!(p, Presentation::Fade { .. })));
+    assert!(at(60, &mut rt).iter().all(|p| !matches!(p, Presentation::Fade { .. })));
+}
+
 #[test]
 fn titles_keep_their_rectangle_and_ids_are_per_mission() {
     let s = scene();

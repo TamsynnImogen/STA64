@@ -205,7 +205,13 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
         cineractive(lua, true)?;
         Ok(Value::Nil)
     })?)?;
-    table.set("CineractiveEnd", def(lua, env, "CineractiveEnd", &[""], |lua, _, _, _| {
+    table.set("CineractiveEnd", def(lua, env, "CineractiveEnd", &[""], |lua, e, _, _| {
+        // The fade belongs to the cinematic view (`ScreenFade` is in that view's render list
+        // only: read from the executable, static): one still waiting out its delay has no view
+        // to darken once the cineractive is over, so it is dropped (Federation 1's
+        // `FadeOut(2, 25, 0)` scheduled at 22 s must not black out the game at 47 s after a
+        // skip or an early end).
+        e.ctx.borrow_mut().delayed.clear();
         cineractive(lua, false)?;
         Ok(Value::Nil)
     })?)?;
