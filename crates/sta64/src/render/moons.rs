@@ -12,10 +12,11 @@
 //!
 //! The renderer does the same swap: [`moon_for`] reads the replace weapon and
 //! returns the moon definition to draw in the marker's place, picking among the
-//! variants by the entity's id (stable across runs and peers, which the game's
-//! random pick is not needed for: the moons carry no gameplay). The sim keeps
-//! the marker as the resource node. Nothing here is named after a resource, so
-//! mods with other triggers or more variants work unchanged.
+//! variants by the object's id. The sim makes the same pick when it places the
+//! map (`sta_content::map::moon_variants`): the node it mines from is the moon
+//! itself, a `scrap`-class resource, not the marker. Nothing here is named
+//! after a resource, so mods with other triggers or more variants work
+//! unchanged.
 
 use std::collections::HashMap;
 
