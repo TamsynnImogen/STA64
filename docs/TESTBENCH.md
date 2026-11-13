@@ -353,9 +353,13 @@ to match run "<scenario>"`, `Expect mark "fire.start obj=shooter" by tick 90`,
 - **Saved starts.** `Save snapshot as "F"` and `Save replay as "F"` write under
   `RunConfig::data_dir`; a scenario with `Start=snapshot:F` / `Start=replay:F`
   reads it back, and `Expect digest at tick N to match run "<saver>"` compares
-  the two runs. `tests/scenes.rs` clears a private data directory and runs
-  scenarios in name order, so the saver is named to sort first
-  (`snapshot-save` < `snapshot-start`, `replay-save` < `replay-start`). A
+  the two runs. `RunConfig::fake()` gives each config its own data directory
+  (no two runs share files) and `sta-bench check|run` removes it at the end. The
+  parallel runner reads the dependency from the files themselves: a case whose
+  scene starts from F runs after the case that saves F, at any `--jobs`, so
+  names need not sort saver first (`tests/scenes.rs` runs in name order and
+  still names them that way). A `to match run` re-run saves into its own
+  subdirectory. A
   replay records every command that reached the sim, and scene and `spawn`
   placements (made with `Sim::spawn_def`) as `Edit::Spawn` on their tick;
   `Save replay as` plays the file back from tick 0 and fails on a digest
@@ -470,9 +474,9 @@ sta-bench pair move --game a2 --refit-out <earlier>/refit --install ...   # reus
   format (`[Scene]`, `[Marks]`, `[Object.*]`) plus a `[Pair]` section
   Refit's `Scene.asi` never reads: `Games=a2,roots`, `Duration=` (sim seconds
   after the scene is built), `Frames=3,8` (sim seconds), `Size=WxH`,
-  `Tol=time=0.25,pos=5,hull=1[,frame=8]`, `At=<s> <command>` (repeatable, the
-  timeline, in the command vocabulary; `a; b` gives several at one time), and per game `Launch=`, `Race=`,
-  `Mod=`. Any key may be prefixed by a game, in any section (`roots.Odf=`,
+  `Tol=time=0.25,pos=5,hull=1[,frame=8][,lowfreq=..]` (frame metrics: "Frame
+  metrics" below), `At=<s> <command>` (repeatable, the timeline, in the command
+  vocabulary; `a; b` gives several at one time), and per game `Launch=`, `Race=`, `Mod=`, `Map=` (see below). Any key may be prefixed by a game, in any section (`roots.Odf=`,
   `roots.Size=1280x960`, `fake.Odf=fx_cruiser`): for that game it replaces
   the plain key; other games' prefixed keys are dropped. **Armada I is not
   supported** (Refit's bench has no A1 profile, PLAN-ARMADA1); A1 keeps
@@ -507,10 +511,41 @@ sta-bench pair move --game a2 --refit-out <earlier>/refit --install ...   # reus
   projectile firing from its shot until its hit as Refit follows ordnance,
   with `[Marks] Ordnance=1`; one
   `ord.new` per shot; a `state` line per named object every tick), `run.json`,
-  and frames from `sta64 --headless` (`--sta64`/`$STA64_BIN`). Those frames are
-  still the bench's stand-in shapes on fake content (TOOL-04), so the visual
-  pairs show where things are, not how they look, until the stock renderers
-  (RND-23..26) can draw without an install there.
+  and the frames (next bullet).
+- **The map.** The original always loads the map it was launched on, so the
+  frames STA64 draws load the same: the pair's `Map=` (in `[Pair]`, per game if
+  need be), else the map `Launch=` names (`-nointro a2_borg01` -> `a2_borg01`;
+  `... -mod "X" fulltech.bzn` -> `fulltech`; the value after `-mod` is not a map).
+  The scene the frame run uses gets `Map=<name>` and `MapObjects=keep` in `[Scene]`
+  unless the file sets them itself (a hand-made scene that wants a clean stage sets
+  `MapObjects=strip`). The map's own objects are therefore in the frames, **including
+  ones the original does not draw** (it draws only objects in the camera's quadrant),
+  so a station or a ring at the edge of a frame is not a bug. The measuring run
+  (`Scene.marks`, `state`) keeps STA64's empty map: the map's own units fight and
+  would change what a scene measures, and the original's marks name only the scene's
+  objects. A pair with no map and no `Launch=` draws on the empty map, as before.
+- **Frames from the install** (`sta64 --headless --scene S --frames T,.. --install-root R
+  [--mod M] --install-content`, what `sta-bench pair` starts; `--sta64`/`$STA64_BIN`).
+  The bench's sim is built on the install's content with the pair's map, and what
+  is drawn is what the client draws for that map and that world, by the client's own
+  systems (`sta64/src/bench/pair_view.rs` adds the map view's plugin, the unit, effect
+  and hull renderers, shadows and the render profile; there is no second loader):
+  the map's sky, starfield, nebulae, planets and rock fields and its lights, every
+  unit of the bench's world (the map's own and the scene's) with its real hull,
+  textures and team colour, weapon, impact and special effects from the bench's events,
+  the hull damage state. The camera is the scene's `Camera=`/`orbit`/`camera` pose (the
+  same one the stand-in frames use; commands in the `At=` timeline that move it apply).
+  **Headless means headless**: a windowless Bevy app with an offscreen render target
+  (wgpu on the GPU, no display server: `WAYLAND_DISPLAY` and `DISPLAY` are removed
+  from the child's environment), Bevy's audio plugin disabled and no sound system
+  added, nothing captured from a screen. The bench holds the sim still while a frame
+  settles, so a frame is exactly its tick. `STA64_RENDER_PROFILE=stock|refit` selects
+  the look (default stock; RND-22). Without an install (`--fake`) the frames are the
+  bench's stand-in shapes as before. **Not yet drawn the way the original draws it**
+  is what RND-23..26 and UI-19 are for: a pair now shows exactly how far the
+  client's look is from the original's. The camera uses Bevy's default vertical field
+  of view (45 degrees); the original's field of view and near plane are measured per game
+  by the package that matches them, and a pair whose framing differs sets that first.
 - **The report** (`report.md` for people, `report.json` for tools) is computed
   from the two side directories alone, so it is reproducible: commands (asked,
   landed on each side); events paired by kind, object and weapon (`fire.start`,
@@ -518,9 +553,11 @@ sta-bench pair move --game a2 --refit-out <earlier>/refit --install ...   # reus
   and weapon; each object's `state` series sampled at the original's sample
   times (position distance, hull, shields, special energy: max, mean, first
   time over) and motion figures (start, top speed, arrival); frames side by
-  side (`frames/f<i>.png`: original | STA64 | difference x4) with mean, max and
-  share of differing pixels. Frames are judged only when the pair sets
-  `frame=`. Exit 1 when anything is beyond the tolerances.
+  side (`frames/f<i>.png`: original | STA64 | difference x4 | blurred difference x4)
+  with mean, max and share of differing pixels and the frame metrics below. Frames
+  are judged only when the pair sets a frame tolerance. Exit 1 when anything is
+  beyond the tolerances (the count in the report is of breached limits: one frame
+  over three limits counts three).
 - **Where it goes**: `$XDG_DATA_HOME/sta64/bench/pairs/<pair>-<game>/`
   (`refit/`, `sta64/`, `report.*`, `frames/`). Both tools refuse a path inside
   a checkout: the frames are the game's art.
@@ -534,6 +571,81 @@ sta-bench pair move --game a2 --refit-out <earlier>/refit --install ...   # reus
 - **Rules for agents**: the lock above, reniced (the driver renices itself); compare in sim seconds only; a scene-script
   `attack` does not move ships on Roots (a player's right-click does), so
   write movement as `goto`. STA64's `Scene.marks` keeps `t=` beside the tick.
+
+#### Writing a visual pair
+
+A visual pair is a pair file whose point is its frames. Start from
+`bench/pairs/firing.ini` (a Galaxy class firing at a Borg cube, side on):
+
+1. Put what is on screen in `[Object.*]` sections (real ODF names; per-game
+   `a2.Odf=` / `roots.Odf=` where the games name things differently) and the
+   camera in `[Scene]` (`Camera=orbit <object|x y z> <yaw> <pitch> <distance>`,
+   or `camera <ex> <ey> <ez> <object|x y z>`). Yaw 0 looks from +z, 90 from +x.
+   `Anchor=world`, so coordinates are map coordinates on both sides.
+2. Name the map: `a2.Launch=-nointro a2_borg01`, or `Map=` in `[Pair]`. Both
+   engines then show that map's sky, nebulae and lights behind the scene.
+3. Ask for frames in sim seconds: `Frames=1,3,8`. Choose them for what is in
+   them: before anything fires (hull, map and lights only), while it fires
+   (effects), after. The original takes each frame when its sim clock reaches
+   the time (it lands late, `refit.json` says when); STA64 draws the tick
+   nearest to that, not the asked time. A paused scene with a still camera is
+   the least noisy.
+4. `Size=1280x720` (Roots: `roots.Size=1280x960`, the size its bench session
+   runs at; the sizes of the two frames are compared and reported).
+5. Run it: `sta-bench pair <name> --game a2 --install "$A2" [--mod NAME]`.
+   While iterating on the STA64 side, reuse the original's output:
+   `--refit-out <earlier>/refit` (no game session). Read `report.md`, then the
+   `frames/f<i>.png` strips (original | STA64 | difference | blurred
+   difference): the strips are for your eyes, the metrics for scripts.
+
+#### Frame metrics
+
+Per frame, `report.json` (`frames[i].metrics`) and `report.md` carry, beside the
+per-pixel `mean`, `max`, `share` (pixels that differ at all) and `share16`
+(by more than 16 in some channel), figures that stay small when the two frames
+are the same picture a pixel apart and large when they are not:
+
+| Metric (tolerance key) | What it is | Reads as |
+|---|---|---|
+| `rms` | root-mean-square difference over all channels (0..255) | the plain figure the blurred ones are compared with |
+| `midfreq`, `lowfreq` | the same after a box blur of radius `w/320` and `w/80` pixels (4 and 16 at 1280) | a one-pixel shift of an edge is a thin pulse of difference and a blur spreads it (energy falls by about `1/sqrt(2r+1)`); a wrong colour or a missing object over an area stays whole. Not the mean *absolute* difference: blurring conserves that |
+| `shift` | the smallest mean absolute luminance difference over every whole-pixel offset up to `w/320`, and the offset (STA64 sampled at x+dx, y+dy) | what is left when a fixed misalignment is taken out; the offset says by how much the camera or field of view is off |
+| `lum` | whole-frame mean luminance, STA64 minus original (absolute) | overall brightness: ambient and key light, nebula strength |
+| `colour` | largest channel difference of the whole-frame mean colour | a colour cast |
+| `bg`, `fg` | the luminance difference of the mean over the pixels the original shows dark (`bg`, luminance <= 48) or bright (`fg`) | `bg` is the sky, nebulae and stars the map draws; `fg` the objects, effects and bright gas |
+| `tile` | the largest luminance difference of the mean over a 4 x 4 grid | something missing or misplaced in one part of the frame |
+| `bright` | difference of the share of bright pixels | an object or a nebula that is not there (a 0..1 share, unlike the other figures; the blur radii and the shift reach have minimums of 1, 2 and 1 pixels) |
+
+Luminance is `0.299 R + 0.587 G + 0.114 B` over the 8-bit sRGB values. Regions are cut from
+the **original's** frame and applied to both frames, so a region compares what is
+drawn in the same place; the report lists mean colour and luminance of each side
+per region (whole frame, `bg`, `fg`, `centre` (the middle half of both axes),
+`border`). All of it is a function of the two PNGs: the same two frames give the same
+numbers (`sta-bench pair --refit-out` re-computes a report without a game).
+
+#### From a visual pair to a regression test
+
+A pair is reported, not judged, until `Tol=` says what counts as a match
+(`frame=` is the plain mean difference; the metric keys above are
+`midfreq, lowfreq, shift, lum, colour, bg, fg, tile, bright`, each opt-in):
+
+```ini
+[Pair]
+Tol=time=0.25,pos=5,hull=5,lowfreq=12,bg=6,fg=15,tile=10
+```
+
+Work the way a renderer package does: run the pair, change the renderer, run
+again with `--refit-out` until `lowfreq`, `bg` and `fg` stop falling; then set
+each limit a little above the value you reached (so a one-pixel change does not
+trip it, and a lost nebula or hull does) and commit the pair file. From then on
+`sta-bench pair` exits 1 and the report lists `breaches` (`lowfreq 14.20 > 12`)
+when a frame leaves its limits. A frame that is not judged by any limit never
+fails the pair. A regression needs the original's frames: either run the original
+side each time (a game session, minutes, takes the bench lock) or keep the
+original's `refit/` directory for `--refit-out`; those frames are the game's art
+and stay outside the repository, so the check is a local or install-gated one, never
+a CI job that reads a checked-in image. The pair file, with its limits, is what
+goes in the repository.
 
 What it is for: cull and LOD distances, weapon timing (burst length, gap,
 first shot after an order, from `fire.start`/`fire.end`), ODF behaviour

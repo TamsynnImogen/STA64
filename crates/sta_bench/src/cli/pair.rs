@@ -73,15 +73,23 @@ fn spawn(cmd: &mut Command, stdin: &str, secs: u64) -> Result<(Option<i32>, Stri
     Ok((status.code(), to.join().unwrap_or_default(), te.join().unwrap_or_default()))
 }
 
-/// STA64's frames: a `sta64 --headless` run of the scene on the bench's fake
-/// content (stand-in shapes until the renderers run without an install), the
-/// same commands at the same ticks. Returns the frame files (relative to
-/// `sta_dir`) and a note.
-fn sta64_frames(o: &Opts, desc: &PairDesc, sched: &[pair::Timed], times: &[f64], end: u64, sta_dir: &Path) -> (Vec<Option<String>>, String) {
+/// The install `sta64` draws a pair's frames from: its root and the mod.
+struct Install<'a> {
+    root: &'a Path,
+    mod_name: Option<&'a str>,
+}
+
+/// STA64's frames: a `sta64 --headless` run of the scene, the same commands at
+/// the same ticks. On an install (`install`): `--install-content`, the install's
+/// content drawn by the client's own renderers (the map's sky, nebulae and
+/// planets, the real hulls, the effects), offscreen, no window, no audio. Without
+/// one (`--fake`): the bench's stand-in shapes. Returns the frame files
+/// (relative to `sta_dir`) and a note.
+fn sta64_frames(o: &Opts, desc: &PairDesc, sched: &[pair::Timed], times: &[f64], end: u64, sta_dir: &Path, install: Option<&Install>) -> (Vec<Option<String>>, String) {
     let none = vec![None; times.len()];
     let ticks: Vec<u64> = times.iter().map(|t| pair::tick_of(*t)).collect();
     let scene = sta_dir.join("Scene.frames.ini");
-    if let Err(e) = fs::write(&scene, desc.scene_text(&["fake"])) {
+    if let Err(e) = fs::write(&scene, desc.scene_text(if install.is_some() { &["map"] } else { &["fake"] })) {
         return (none, e.to_string());
     }
     let fdir = sta_dir.join("frames");
@@ -100,6 +108,15 @@ fn sta64_frames(o: &Opts, desc: &PairDesc, sched: &[pair::Timed], times: &[f64],
         .args(["--frames", &list, "--frame-dir"])
         .arg(&fdir)
         .args(["--frame-size", &format!("{}x{}", desc.size.0, desc.size.1)]);
+    if let Some(i) = install {
+        cmd.arg("--install-root").arg(i.root);
+        if let Some(m) = i.mod_name {
+            cmd.args(["--mod", m]);
+        }
+        cmd.arg("--install-content");
+    }
+    // Headless means headless: no display server of the user's session, no sound device.
+    cmd.env_remove("WAYLAND_DISPLAY").env_remove("DISPLAY");
     match spawn(&mut cmd, &script, o.timeout.max(120)) {
         Err(e) => (none, format!("sta64 ({}): {e}", bin.display())),
         Ok((Some(NO_ADAPTER), _, err)) => (none, format!("no GPU adapter: {}", err.trim())),
@@ -114,7 +131,8 @@ fn sta64_frames(o: &Opts, desc: &PairDesc, sched: &[pair::Timed], times: &[f64],
                 .collect();
             let missing = files.iter().filter(|f| f.is_none()).count();
             let note = format!(
-                "sta64 --headless on the bench's fake content (stand-in shapes){}",
+                "sta64 --headless {}{}",
+                if install.is_some() { "--install-content: the install's map, hulls and effects drawn by the client's renderers" } else { "on the bench's fake content (stand-in shapes)" },
                 if missing > 0 { format!("; {missing} frames missing") } else { String::new() }
             );
             (files, note)
@@ -176,6 +194,7 @@ pub(crate) fn pair(o: &Opts) -> Outcome {
     }
 
     // STA64.
+    let mut install_dir: Option<(PathBuf, Option<String>)> = None;
     let (cfg, content) = if o.fake {
         (RunConfig::fake(), "fake content (sta_bench RunConfig::fake)".to_owned())
     } else {
@@ -183,8 +202,16 @@ pub(crate) fn pair(o: &Opts) -> Outcome {
             Fail::Usage("STA64's side needs the game's install: --install DIR (or STA64_TEST_INSTALL), or --fake".into())
         })?;
         let m = o.mod_name.clone().or(desc.mod_name.clone());
-        let cfg = pair::install_config(&root, m.as_deref()).map_err(Fail::Error)?;
-        let what = format!("install {} mod {} profile {:?}", root.display(), m.as_deref().unwrap_or("-"), cfg.content.profile());
+        let maps: Vec<String> = desc.map.iter().cloned().collect();
+        let cfg = pair::install_config(&root, m.as_deref(), &maps).map_err(Fail::Error)?;
+        let what = format!(
+            "install {} mod {} profile {:?} map {}",
+            root.display(),
+            m.as_deref().unwrap_or("-"),
+            cfg.content.profile(),
+            desc.map.as_deref().unwrap_or("(empty)")
+        );
+        install_dir = Some((root, m));
         (cfg, what)
     };
     let sched = pair::schedule(&desc, Some(&meta));
@@ -200,7 +227,8 @@ pub(crate) fn pair(o: &Opts) -> Outcome {
     } else if o.no_frames {
         (vec![None; times.len()], "skipped (--no-frames)".to_owned())
     } else {
-        sta64_frames(o, &desc, &sched, &times, run.ticks, &sta_dir)
+        let install = install_dir.as_ref().map(|(root, m)| Install { root, mod_name: m.as_deref() });
+        sta64_frames(o, &desc, &sched, &times, run.ticks, &sta_dir, install.as_ref())
     };
     let frames: Vec<(f64, u64, Option<String>)> = times.iter().zip(files).map(|(t, f)| (*t, pair::tick_of(*t), f)).collect();
     fs::write(sta_dir.join("run.json"), pair::sta64_run_json(&content, &run, &frames, &note)).map_err(|e| Fail::Error(e.to_string()))?;

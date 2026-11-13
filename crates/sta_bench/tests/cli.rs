@@ -158,3 +158,36 @@ fn a_failing_case_fails_the_run_at_any_jobs() {
     assert_eq!(o.status.code(), Some(1), "{}", text(&o));
     assert!(std::fs::read_to_string(run_dir(&out).join("report.md")).unwrap().contains("**FAIL**"));
 }
+
+/// A bench directory where the scenario that starts from a saved snapshot
+/// sorts (and so is queued) before the one that saves it, and the saver is
+/// slow: with workers that took jobs in name order the reader started first
+/// and found no file. `--jobs 4` must run the saver first.
+#[test]
+fn a_reader_runs_after_the_scenario_that_saves_its_file_at_any_jobs() {
+    let dir = tmp("deps");
+    std::fs::create_dir_all(dir.join("scenarios")).unwrap();
+    std::fs::create_dir_all(dir.join("scenes")).unwrap();
+    std::fs::copy(bench_dir().join("scenes/planet.ini"), dir.join("scenes/planet.ini")).unwrap();
+    std::fs::write(dir.join("scenes/resume.ini"), "[Scene]\nStart=snapshot:dep.snap\n").unwrap();
+    std::fs::write(
+        dir.join("scenarios/a-reader.md"),
+        "# a-reader\n\nScene: resume\n\n1. Run 5 ticks\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("scenarios/b-other.md"),
+        "# b-other\n\nScene: planet\n\n1. Run 5 ticks\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("scenarios/c-saver.md"),
+        "# c-saver\n\nScene: planet\n\n1. Run until tick 1500\n2. Save snapshot as \"dep.snap\"\n",
+    )
+    .unwrap();
+    for jobs in ["1", "2", "4"] {
+        let o = run(&["check", "--jobs", jobs, "--bench-dir", dir.to_str().unwrap(), "--no-report"]);
+        assert!(o.status.success(), "--jobs {jobs}: {}", text(&o));
+        assert!(text(&o).contains("3 passed, 0 failed"), "--jobs {jobs}: {}", text(&o));
+    }
+}
