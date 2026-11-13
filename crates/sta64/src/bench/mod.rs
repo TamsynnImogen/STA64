@@ -107,7 +107,13 @@ struct TickBudget(Tick);
 
 /// Whether the headless app draws (frames or a performance run) or is the sim alone.
 fn renders(cfg: &LaunchConfig) -> bool {
-    !cfg.frames.is_empty() || cfg.perf.is_some()
+    wants_frames(cfg) || cfg.perf.is_some()
+}
+
+/// Frames at ticks (`--frames`), or on request in a session (`--control stdio
+/// --frame-dir D` with no `--frames`: the `frame NAME` command).
+fn wants_frames(cfg: &LaunchConfig) -> bool {
+    !cfg.frames.is_empty() || (cfg.perf.is_none() && cfg.frame_dir.is_some() && matches!(cfg.control, Some(Control::Stdio)))
 }
 
 /// `--headless`: a Bevy app without a window; returns the process exit code.
@@ -198,7 +204,7 @@ fn run_headless_inner(cfg: &LaunchConfig) -> i32 {
     } else if cfg.perf.is_some() {
         eprintln!("--perf needs --install-content (and --install-root): it measures the install's map view");
         return 2;
-    } else if !cfg.frames.is_empty() {
+    } else if wants_frames(cfg) {
         frames::add(&mut app, cfg, scene_camera);
         // The effects read the sim through a link; this one is fed the bench's views
         // and events as they happen (`bench_frame`).
@@ -313,8 +319,25 @@ fn bench_frame(
     if let Some(ch) = channel.as_mut() {
         open = true;
         loop {
+            // A `frame NAME` being drawn is answered before the next command is read.
+            if capture.as_ref().is_some_and(|c| c.pending()) {
+                break;
+            }
             match ch.0.get().try_recv() {
                 Ok(line) => {
+                    if let Ok(Some(c)) = parse_command(&line)
+                        && let BenchCommand::Frame(name) = &c.command
+                    {
+                        let answer = match capture.as_mut() {
+                            Some(cap) if cap.on_demand() && c.at.is_none() => cap.request(name).err(),
+                            Some(cap) if cap.on_demand() => Some("! frame: `at` is not supported, send it at the tick".into()),
+                            _ => Some("! unsupported: frame (no renderer in this session; start it with --render)".into()),
+                        };
+                        if let Some(a) = answer {
+                            println!("{}", if a.starts_with('!') { a } else { format!("! {a}") });
+                        }
+                        continue;
+                    }
                     if let Some(v) = view.as_mut() {
                         v.observe(&line);
                     }
@@ -338,7 +361,10 @@ fn bench_frame(
             frames::Gate::Hold => held = true,
         }
     }
-    if held {
+    // A paused session draws nothing new either: its frames must not depend on how long
+    // it sat waiting for the next command (`frame NAME` equals the `--frames` frame).
+    if held || (open && capture.is_some() && bench.paused()) {
+        clock.hold();
         return;
     }
     clock.set_paused(bench.paused());

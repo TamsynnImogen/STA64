@@ -149,7 +149,11 @@ pub(crate) fn run_case(cfg: &RunConfig, sc: &Scenario, case: &mut CaseResult, o:
     let _ = fs::write(&scene_path, scene);
 
     let ticks = case.ticks;
-    let frames = o.frames.clone().unwrap_or_else(|| if ticks == 0 { vec![0] } else { vec![0, ticks] });
+    let mut frames = o.frames.clone().unwrap_or_else(|| if ticks == 0 { vec![0] } else { vec![0, ticks] });
+    // The scenario's own `Take a screenshot` ticks are always drawn.
+    frames.extend(case.shots.iter().map(|s| s.tick));
+    frames.sort_unstable();
+    frames.dedup();
     let list = frames.iter().map(u64::to_string).collect::<Vec<_>>().join(",");
     let bin = sta64_path(o);
     let want = case.digests.last().map(|(_, d)| format!("digest {d:016x}"));
@@ -213,6 +217,9 @@ pub(crate) fn run_case(cfg: &RunConfig, sc: &Scenario, case: &mut CaseResult, o:
                 case.steps.push(step(Status::Fail, &text, format!("differ: {:?} vs {:?}", hashes[0], hashes[run as usize])));
             }
         }
+    }
+    if !case.shots.is_empty() {
+        crate::run::shots::judge(case, &case_dir.join("frames"));
     }
     if let Some(h) = hashes.first() {
         case.artifacts.insert("frames.txt".into(), h.join("\n") + "\n");
