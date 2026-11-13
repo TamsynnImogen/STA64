@@ -151,6 +151,10 @@ pub struct Dropped {
     pub last_turn: u32,
 }
 
+/// How long a stopped peer that runs on to the differing tick may take before it writes its
+/// desync report anyway (its records are ones every seat already sent: normally a few frames).
+const RUN_ON_WAIT: Duration = Duration::from_secs(10);
+
 /// What the layers over the peer record about the match, for the overlay and the tests.
 pub struct NetShared {
     peer: Peer,
@@ -170,6 +174,8 @@ pub struct NetShared {
     pub dropped: BTreeMap<PlayerId, Dropped>,
     pub stall: Option<(Instant, Vec<PlayerId>)>,
     pub desync: Option<DesyncInfo>,
+    /// When this peer was first seen stopped while it ran on to the differing tick.
+    running_on_since: Option<Instant>,
     pub ending: Option<Ending>,
     /// Every line said to the player, oldest first (the overlay shows the newest).
     pub said: VecDeque<String>,
@@ -408,6 +414,7 @@ pub fn link(mut nm: NetMatch, setup: &GameSetup, sim: Sim, races: &Races, contro
         dropped: BTreeMap::new(),
         stall: None,
         desync: None,
+        running_on_since: None,
         ending: None,
         said: VecDeque::new(),
         fresh: Vec::new(),
@@ -656,6 +663,11 @@ impl NetShared {
             return;
         }
         let Some(tick) = r.desync().map(|n| n.theirs.tick).or_else(|| r.peer_desync().map(|(_, n)| n.ours.tick)) else { return };
+        // A peer stopped before it reached the differing tick runs on to it first: its report
+        // then holds that tick. One that cannot get there in time writes what it has.
+        if r.runs_on_to().is_some() && Instant::now().saturating_duration_since(*self.running_on_since.get_or_insert_with(Instant::now)) < RUN_ON_WAIT {
+            return;
+        }
         let dir = self.opts.dir();
         let stem = report_stem(self, tick);
         let written = std::fs::create_dir_all(&dir).and_then(|()| self.peer.write_desync_report(&dir, &stem));

@@ -1258,6 +1258,12 @@ impl Peer {
                     count: r.count,
                     last: r.last,
                 });
+                // What the repaired seat reported before its repair is gone
+                // with the state it described (a count of 0 loaded nothing).
+                if r.count > 0 {
+                    let tpt = Tick::from(self.ticks_per_turn.max(1));
+                    self.router.forget_reports_of(r.slot, Tick::from(r.turn) * tpt);
+                }
                 if r.last && self.net.client.is_none() && self.diverged_from_host().is_none() {
                     // A release with nothing resynced (count 0) loaded no
                     // state: nothing is stale.
