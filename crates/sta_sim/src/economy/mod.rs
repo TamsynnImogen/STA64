@@ -299,8 +299,9 @@ impl Economy {
     }
 
     /// The stations a freighter is unloading at right now (RND-21): the station each
-    /// `Unloading` freighter hands its hold to, as [`Self::step`] chose it (the nearest
-    /// finished station of its owner; the freighter has not moved since it docked).
+    /// `Unloading` freighter hands its hold to, as [`Self::step`] chooses it (the nearest
+    /// finished station of its owner, recomputed from the freighter's position, which does not
+    /// change while it unloads).
     /// Derived from the miner table, so it is the same after a load; not state of its own.
     pub(crate) fn docked_stations(&self, units: &Entities) -> std::collections::BTreeSet<EntityId> {
         self.miners

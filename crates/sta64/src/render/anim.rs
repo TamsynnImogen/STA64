@@ -23,7 +23,7 @@
 //!   model) has nothing to wait for and plays on its own, then rests a period
 //!   ([`Trigger::Idle`]; the rest is ours, nothing in the model says it);
 //! - a unit that neither builds nor fires and takes deposits (class `mining`,
-//!   `p_mining`, or `is_starbase`) plays while a freighter is docked at it
+//!   `p_mining`, `starbase`, or an ODF `dockingHardpoint`) plays while a freighter is docked at it
 //!   ([`Trigger::Dock`], the view's `UnitFlags::DOCKED`): looped while docked, at rest
 //!   otherwise;
 //! - any other unit that neither builds nor fires has no event that says when
@@ -105,8 +105,12 @@ pub struct Caps {
     pub builds: bool,
     /// Has a weapon whose shots animate its owner (see [`owner_animates`]).
     pub armed: bool,
-    /// Takes deposits from freighters: class `mining` / `p_mining`, or `is_starbase`.
+    /// Takes deposits from freighters: class `mining` / `p_mining` / `starbase`, or an ODF
+    /// `dockingHardpoint`. (Not the `is_starbase` flag: pods and sensors carry it too.)
     pub drop_off: bool,
+    /// A transfer station by its own data: class `mining` / `p_mining`, or an ODF
+    /// `dockingHardpoint`. Only these have their cycle tracks held back until docked.
+    pub transfer: bool,
     pub mode: AnimMode,
 }
 
@@ -123,7 +127,8 @@ impl Caps {
         Caps {
             builds: !def.build.list.is_empty(),
             armed: def.hardpoints.iter().any(|h| db.weapon(h.weapon.key).is_some_and(owner_animates)),
-            drop_off: def.is_starbase || matches!(def.class.0.as_str(), "mining" | "p_mining" | "starbase"),
+            drop_off: matches!(def.class.0.as_str(), "mining" | "p_mining" | "starbase") || def.raw.str("dockingHardpoint").is_some(),
+            transfer: matches!(def.class.0.as_str(), "mining" | "p_mining") || def.raw.str("dockingHardpoint").is_some(),
             mode: AnimMode::of(def),
         }
     }
@@ -443,8 +448,8 @@ pub struct GateChecked;
 /// a drop-off whose key is off rests until docked, any unit with key 1 plays once. Key 2
 /// keeps looping; the same for units with key off that are not drop-offs (the engine rests
 /// them too, not applied here).
-pub fn ambient_gate(mode: AnimMode, drop_off: bool) -> Option<AmbientGate> {
-    match (mode, drop_off) {
+pub fn ambient_gate(mode: AnimMode, transfer: bool) -> Option<AmbientGate> {
+    match (mode, transfer) {
         (AnimMode::Once, _) => Some(AmbientGate::Once(None)),
         (AnimMode::Off, true) => Some(AmbientGate::Docked(None)),
         _ => None,
@@ -473,7 +478,7 @@ pub fn assign_gates(
         let caps = Caps::of(def, &c.0);
         let mut ec = commands.entity(e);
         ec.insert(GateChecked);
-        if let Some(g) = ambient_gate(caps.mode, caps.drop_off) {
+        if let Some(g) = ambient_gate(caps.mode, caps.transfer) {
             ec.insert(g);
         }
     }
@@ -778,7 +783,7 @@ mod tests {
 
     #[test]
     fn what_a_unit_can_do_picks_its_trigger() {
-        let c = |builds, armed, drop_off| Some(Caps { builds, armed, drop_off, mode: AnimMode::Off });
+        let c = |builds, armed, drop_off| Some(Caps { builds, armed, drop_off, transfer: false, mode: AnimMode::Off });
         assert_eq!(trigger_for(c(true, true, false)), Trigger::Build);
         assert_eq!(trigger_for(c(true, false, true)), Trigger::Build);
         assert_eq!(trigger_for(c(false, true, false)), Trigger::Fire);
@@ -788,10 +793,10 @@ mod tests {
         assert_eq!(trigger_for(c(false, false, false)), Trigger::None);
         assert_eq!(trigger_for(None), Trigger::Idle);
         // The unit's `animation` key outranks everything but a bay.
-        let m = |mode, armed| Some(Caps { builds: false, armed, drop_off: true, mode });
+        let m = |mode, armed| Some(Caps { builds: false, armed, drop_off: true, transfer: false, mode });
         assert_eq!(trigger_for(m(AnimMode::Loop, true)), Trigger::Loop);
         assert_eq!(trigger_for(m(AnimMode::Once, false)), Trigger::Once);
-        let yard = Some(Caps { builds: true, armed: false, drop_off: false, mode: AnimMode::Loop });
+        let yard = Some(Caps { builds: true, armed: false, drop_off: false, transfer: false, mode: AnimMode::Loop });
         assert_eq!(trigger_for(yard), Trigger::Build);
     }
 
@@ -811,8 +816,12 @@ mod tests {
     fn caps_are_read_from_the_class_and_the_starbase_flag() {
         let db = sta_content::fake::db();
         let of = |class: &str, starbase: bool| Caps::of(&unit(class, starbase, ""), &db).drop_off;
-        assert!(of("mining", false) && of("p_mining", false) && of("starbase", false) && of("shipyard", true));
-        assert!(!of("shipyard", false) && !of("pod", false) && !of("sensor", false) && !of("freighter", false));
+        assert!(of("mining", false) && of("p_mining", false) && of("starbase", false));
+        assert!(!of("sensor", true), "the is_starbase flag does not make a drop-off");
+        let transfer = |class: &str, odf: &str| Caps::of(&unit(class, false, odf), &db).transfer;
+        assert!(transfer("mining", "") && transfer("starbase", "dockingHardpoint = \"hp31\""));
+        assert!(!transfer("starbase", "") && !transfer("shipyard", ""));
+        assert!(!of("shipyard", true) && !of("pod", true) && !of("sensor", false) && !of("freighter", false));
     }
 
     /// `animation`: absent and 0 and 3 off, 1 once, 2 loop (executable, static; the ODF
@@ -1048,6 +1057,7 @@ mod tests {
                     e.builds |= c.builds;
                     e.armed |= c.armed;
                     e.drop_off |= c.drop_off;
+                    e.transfer |= c.transfer;
                     if e.mode == AnimMode::Off {
                         e.mode = c.mode;
                     }
@@ -1108,5 +1118,39 @@ mod tests {
         // The models resolve to their units: some event tracks belong to builders.
         assert!(by_trigger.contains_key("Build"), "no model resolved to a builder: {:?}", by_trigger.keys());
         assert!(bad.is_empty(), "scenery tracks classed as events: {bad:?}");
+    }
+
+    /// With `STA64_TEST_INSTALL` (+ `STA64_TEST_MOD`): which units' ambient tracks the `animation`
+    /// key and class hold back, listed per gate (run with `--nocapture`). On Armada and Armada II
+    /// stock the mining stations are among them: their cycle tracks rest until a freighter docks.
+    #[test]
+    fn install_lists_gated_ambient_tracks() {
+        let Ok(root) = std::env::var("STA64_TEST_INSTALL") else {
+            return;
+        };
+        let m = std::env::var("STA64_TEST_MOD").ok().filter(|m| !m.is_empty());
+        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), m.as_deref()).unwrap();
+        let (index, _) = sta_content::OdfIndex::build(&vfs);
+        let (db, _) = sta_content::ContentDb::load(&vfs, &index).expect("content loads");
+        let mut by_gate: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+        for u in db.units() {
+            let Some((path, fmt)) = sta_assets::find_model(&vfs, &u.model) else { continue };
+            let Ok(model) = sta_assets::load_model(&vfs, &path, fmt) else { continue };
+            let ambient = model
+                .channels
+                .iter()
+                .filter(|c| c.period > 0.0 && classify(&c.keys) == TrackKind::Ambient)
+                .count();
+            if ambient == 0 {
+                continue;
+            }
+            let caps = Caps::of(u, &db);
+            let g = ambient_gate(caps.mode, caps.transfer);
+            by_gate.entry(format!("{g:?}")).or_default().push(format!("{}({ambient})", u.odf));
+        }
+        for (g, units) in &by_gate {
+            println!("ambient tracks, gate {g}: {} units: {}", units.len(), units.join(" "));
+        }
+        assert!(!by_gate.is_empty(), "no unit has ambient tracks: the check is vacuous");
     }
 }
