@@ -81,7 +81,7 @@ fn converted_a2_fed01_runs_in_the_campaign_runner() {
     let ended = a.run(TICKS);
     let rt = a.runtime();
     // `A2.<call>: simulation rejected ...` entries are counted edits the sim refused, not script errors.
-    let script_errors: Vec<_> = rt.errors().iter().filter(|e| !e.starts_with("A2.")).collect();
+    let script_errors: Vec<_> = rt.errors().iter().filter(|e| !e.contains(": simulation rejected")).collect();
     assert!(script_errors.is_empty(), "{script_errors:?}");
 
     let rules: u32 = rt.eval("return #Mission_.rules").unwrap();

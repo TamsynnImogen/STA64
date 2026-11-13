@@ -89,11 +89,11 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
         "StopMovie",
         lua.create_function(move |_, args: MultiValue| {
             arity("StopMovie", &args, 0)?;
-            c.borrow_mut().playback.movie = false;
             c.borrow_mut()
                 .try_push(sta_core::PlayerId::SCRIPT, sta_sim::command::CommandKind::Edit(sta_sim::command::Edit::Present(sta_sim::present::Presentation::StopMovie)))
-                .map(|_| ())
-                .map_err(|reason| mlua::Error::runtime(format!("A2.StopMovie: {reason}")))
+                .map_err(|reason| mlua::Error::runtime(format!("A2.StopMovie: {reason}")))?;
+            c.borrow_mut().playback.movie = false;
+            Ok(())
         })?,
     )?;
     // The end of a cineractive: the same singleton `Cineractive.active` drives.

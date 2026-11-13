@@ -39,9 +39,9 @@ pub struct ProgressProbe {
     pub problems: Vec<(String, String, f64, String)>,
     pub missing: Vec<(String, u32)>,
     pub failed: Vec<(String, u32)>,
-    /// Calls answered 0 because a handle was -1 (no object).
+    /// Calls answered 0 because a handle was negative (no object).
     pub invalid: Vec<(String, u32)>,
-    /// `GetHandle` labels that named no object (answered 0), and how many resolved.
+    /// `GetHandle` labels that named no object (answered 0), and how many `GetHandle` calls resolved.
     pub unresolved: Vec<String>,
     pub handles_resolved: u32,
     /// Rules whose condition could not be evaluated: (rule, first call that failed in it).
@@ -156,8 +156,7 @@ fn read(rt: &crate::runtime::MissionRuntime, p: &mut ProgressProbe) {
     p.unresolved = rt
         .eval::<Vec<String>>("local o = {} for k in pairs(Mission_.unresolved or {}) do o[#o + 1] = k end table.sort(o) return o")
         .unwrap_or_default();
-    let asked: u32 = rt.eval("return Mission_.calls.GetHandle or 0").unwrap_or(0);
-    p.handles_resolved = asked.saturating_sub(p.unresolved.len() as u32);
+    p.handles_resolved = rt.eval("return Mission_.resolved or 0").unwrap_or(0);
     p.blocked = rt
         .eval::<Vec<String>>("local o = {} for r, c in pairs(Mission_.blocked or {}) do o[#o + 1] = r .. '\\t' .. tostring(c) end table.sort(o) return o")
         .unwrap_or_default()

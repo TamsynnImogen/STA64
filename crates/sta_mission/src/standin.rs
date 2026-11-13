@@ -6,7 +6,7 @@
 //!
 //! - a voice or music message: the length of its WAV file in the VFS (data
 //!   size over byte rate), searched by file name under `sounds/`; 3 s if the
-//!   file is not found or not a PCM WAV;
+//!   file is not found or not a RIFF WAV with a byte rate;
 //! - a movie: frames over frame rate from the Bink header of
 //!   `animations/<name>`; 5 s if not found;
 //! - a wait for Enter: 1 s (what the shell releases it on is not measured);
@@ -29,6 +29,8 @@ use crate::campaign::ActiveMission;
 pub const DEFAULT_SOUND_SECONDS: f64 = 3.0;
 pub const DEFAULT_MOVIE_SECONDS: f64 = 5.0;
 pub const ENTER_KEY_SECONDS: f64 = 1.0;
+/// Longest nominal length taken from a file header (a malformed header cannot stall a run).
+pub const MAX_SECONDS: f64 = 3600.0;
 
 /// Seconds of PCM audio in a RIFF/WAVE file: `data` bytes over the byte rate.
 pub fn wav_seconds(bytes: &[u8]) -> Option<f64> {
@@ -42,7 +44,7 @@ pub fn wav_seconds(bytes: &[u8]) -> Option<f64> {
             b"fmt " if size >= 12 && at + 8 + 12 <= bytes.len() => {
                 rate = u32::from_le_bytes(bytes[at + 16..at + 20].try_into().ok()?);
             }
-            b"data" if rate > 0 => return Some(size as f64 / f64::from(rate)),
+            b"data" if rate > 0 => return Some((size as f64 / f64::from(rate)).min(MAX_SECONDS)),
             _ => {}
         }
         at = at.checked_add(8)?.checked_add(size)?.checked_add(size & 1)?;
@@ -57,13 +59,13 @@ pub fn bink_seconds(bytes: &[u8]) -> Option<f64> {
     }
     let word = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
     let (frames, dividend, divisor) = (word(8), word(28), word(32));
-    (dividend > 0).then(|| f64::from(frames) * f64::from(divisor) / f64::from(dividend))
+    (dividend > 0).then(|| (f64::from(frames) * f64::from(divisor) / f64::from(dividend)).min(MAX_SECONDS))
 }
 
 pub struct StandInHost {
     vfs: Arc<Vfs>,
-    /// (kind, id) of what is outstanding -> tick it is reported.
-    due: BTreeMap<(String, i64), u64>,
+    /// (kind, id, start tick) of what is outstanding -> tick it is reported.
+    due: BTreeMap<(String, i64, u64), u64>,
     /// Every report made, in order: (tick, kind, id).
     pub reports: Vec<(u64, String, i64)>,
 }
@@ -106,13 +108,16 @@ impl StandInHost {
                     .collect()
             })
             .unwrap_or_default();
+        // A stopped movie or sound leaves the pending list: forget its schedule.
+        let live: Vec<(String, i64, u64)> = pending.iter().map(|(k, i, _, t)| (k.clone(), *i, *t)).collect();
+        self.due.retain(|k, _| live.contains(k));
         for (kind, id, name, started) in pending {
-            let due = started + (self.seconds(&kind, &name) * f64::from(TICK_HZ)).ceil() as u64 + 1;
-            self.due.entry((kind, id)).or_insert(due);
+            let due = started.saturating_add((self.seconds(&kind, &name) * f64::from(TICK_HZ)).ceil() as u64).saturating_add(1);
+            self.due.entry((kind, id, started)).or_insert(due);
         }
-        let ready: Vec<(String, i64)> = self.due.iter().filter(|(_, d)| **d <= now).map(|(k, _)| k.clone()).collect();
-        for (kind, id) in ready {
-            self.due.remove(&(kind.clone(), id));
+        let ready: Vec<(String, i64, u64)> = self.due.iter().filter(|(_, d)| **d <= now).map(|(k, _)| k.clone()).collect();
+        for (kind, id, started) in ready {
+            self.due.remove(&(kind.clone(), id, started));
             let call = match kind.as_str() {
                 "sound" | "music" => format!("A2.AudioMessageDone({id})"),
                 "movie" => "A2.MovieDone()".to_owned(),
@@ -160,5 +165,20 @@ mod tests {
         assert_eq!(bink_seconds(&b), Some(10.0));
         b[0] = b'X';
         assert_eq!(bink_seconds(&b), None);
+    }
+}
+
+#[cfg(test)]
+mod schedule_tests {
+    use super::*;
+
+    #[test]
+    fn extreme_headers_are_clamped() {
+        let mut b = vec![0u8; 40];
+        b[..4].copy_from_slice(b"BIKi");
+        b[8..12].copy_from_slice(&u32::MAX.to_le_bytes());
+        b[28..32].copy_from_slice(&1u32.to_le_bytes());
+        b[32..36].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert_eq!(bink_seconds(&b), Some(MAX_SECONDS));
     }
 }

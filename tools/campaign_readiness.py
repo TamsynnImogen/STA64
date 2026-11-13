@@ -50,7 +50,7 @@ Converted-mission progress (LUA-11), one command:
 converts the stock Armada II missions with `tools/dsl_to_lua.py` into a
 temporary directory (removed afterwards; `--keep-converted DIR` keeps it there),
 runs each headless in the campaign runner (`examples/converted_progress.rs`: no
-window, no audio, the stand-in host answers fade/audio/movie completion
+window, no audio, the stand-in host answers audio/movie/Enter/cineractive completion
 reports) and prints, per mission, how far it got: rules that held, steps run,
 the first call that was unbound or raised, whether a player objective was
 issued. `--label before|after` names the files in the detail directory
@@ -315,7 +315,7 @@ def converted_status(r):
     if not r.get("started"):
         return "does not start", r.get("start_error") or ""
     # `A2.<call>: ...` errors are counted rejections of an edit by the sim, not script errors
-    real = [e for e in r.get("errors") or [] if not e.startswith(("A2.", "A1."))]
+    real = [e for e in r.get("errors") or [] if ": simulation rejected" not in e]
     if real:
         return "runtime error", one_line(real[0])
     if r.get("ended") is not None:
@@ -359,7 +359,7 @@ def render_converted(rows, ticks, standin):
         first = (r.get("problems") or [None])[0]
         call = f"{first[0]} ({first[1]})" if first else "-"
         out.append(f"| {r['bzn'].rsplit('.', 1)[0]} | {stage} | {len(r['rules_held'])}/{r['rules']} | {r['steps_run']} | "
-                   f"{r.get('last_rule') or '-'} | {r.get('last_step') or '-'} | {r.get('first_objective_tick') or '-'} | {call} |")
+                   f"{r.get('last_rule') or '-'} | {r.get('last_step') or '-'} | {'-' if r.get('first_objective_tick') is None else r['first_objective_tick']} | {call} |")
     ranked = collections.Counter()
     for r in rows:
         for name, _kind, _t, _w in r.get("problems") or []:
@@ -513,7 +513,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     for k in DEFAULTS:
         ap.add_argument(f"--{k}", default=DEFAULTS[k], help=f"install root (default: ${ENV[k]}; skipped when unset or absent)")
-    ap.add_argument("--ticks", type=int, default=300)
+    ap.add_argument("--ticks", type=int, default=None, help="ticks per mission (default 300; 9000 with --converted)")
     research = os.environ.get(RESEARCH_ENV)
     ap.add_argument("--detail-dir", default=os.path.join(research, "campaign-readiness") if research else None,
                     help=f"where the Markdown/JSON detail goes, outside the repository (default: ${RESEARCH_ENV}/campaign-readiness; required)")
@@ -525,9 +525,9 @@ def main(argv=None):
     ap.add_argument("--keep-converted", help="--converted: convert into this directory and keep it")
     args = ap.parse_args(argv)
     if args.converted:
-        if args.ticks == 300:
-            args.ticks = 9000
+        args.ticks = args.ticks or 9000
         return main_converted(args)
+    args.ticks = args.ticks or 300
     if not args.detail_dir:
         sys.exit(f"no detail directory: pass --detail-dir or set {RESEARCH_ENV} (the detail must stay outside the repository)")
     t0 = time.time()

@@ -1795,9 +1795,13 @@ local function A(name, ...)
         problem(name, 'raised', tostring(v))
         return nil
     end
-    if name == 'GetHandle' and v == 0 then
-        -- a label no object of the map carries: the invalid handle
-        Mission.unresolved[(...)] = true
+    if name == 'GetHandle' then
+        if v == 0 then
+            -- a label no object of the map carries: the invalid handle
+            Mission.unresolved[(...)] = true
+        else
+            Mission.resolved = (Mission.resolved or 0) + 1
+        end
     end
     return v
 end
@@ -1928,7 +1932,8 @@ end
 -- Scripts: an action queues a named script on the world (same names run side
 -- by side); scripts run after the rules, oldest first, one step per tick each;
 -- a step's return value is not used; a script whose steps have all run is
--- removed. Steps that wait on the engine (fades, cineractives, audio, movies)
+-- removed (one pass after its last step, once it holds no reference, as the
+-- engine deletes it). Steps that wait on the engine (fades, cineractives, audio, movies)
 -- are held by `A2.ScriptWaits` (see runScripts).
 local function NewScript(name)
     local s = { name = name, steps = {}, names = {}, at = 1 }
