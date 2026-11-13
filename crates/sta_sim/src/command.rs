@@ -152,6 +152,19 @@ pub enum Edit {
     /// for a unit whose ODF has no hit points for it. SCRIPT/BENCH only.
     /// Appended tag 24.
     SubsystemDamage(EntityId, Subsystem, Fixed),
+    /// Mission `Player.maxOfficers` (SIM-54): the player's officer limit,
+    /// floored at 0 and capped at 1e9. Rejected for a seat with no initialized
+    /// officer limit. SCRIPT/BENCH only. Appended tag 25.
+    MaxOfficers(PlayerId, Fixed),
+    /// Mission `SetCrew` / `Entity.crew` (SIM-54): a craft's or station's
+    /// current crew, clamped to 0..its maximum crew. Rejected for a unit with
+    /// no crew pool. SCRIPT/BENCH only. Appended tag 26.
+    UnitCrew(EntityId, Fixed),
+    /// Mission `resources.crew` (SIM-54): the player's crew stock, floored at 0
+    /// and capped at 1e9 (not clamped to the team capacity, which a stock may
+    /// exceed). Rejected for a seat with no initialized stock. SCRIPT/BENCH
+    /// only. Appended tag 27.
+    TeamCrew(PlayerId, Fixed),
 }
 
 /// A unit system a mission can switch on or off.
@@ -285,12 +298,15 @@ mod tests {
     }
 
     #[test]
-    fn shield_and_subsystem_edits_append_tags_22_to_24() {
+    fn shield_subsystem_and_personnel_edits_append_tags_22_to_27() {
         let id = EntityId(1);
         let edits = [
             (22, Edit::ShieldPercent(id, Fixed::ONE)),
             (23, Edit::MaxShields(id, Fixed::ONE)),
             (24, Edit::SubsystemDamage(id, Subsystem::Sensors, Fixed::ONE)),
+            (25, Edit::MaxOfficers(PlayerId(0), Fixed::ONE)),
+            (26, Edit::UnitCrew(id, Fixed::ONE)),
+            (27, Edit::TeamCrew(PlayerId(0), Fixed::ONE)),
         ];
         for (tag, edit) in edits {
             let bytes = postcard::to_allocvec(&edit).unwrap();

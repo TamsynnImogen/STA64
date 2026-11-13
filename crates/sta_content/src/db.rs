@@ -510,9 +510,6 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
         .flag("invalid_as_target", u.invalid_as_target)
         .raw("life", &u.life.map_or_else(|| "-".into(), |t| t.to_string()))
         .fixed("crew_gain", u.crew_gain)
-        // SIM-39, SIM-55.
-        .flag("sane_crew_loss", u.sane_crew_loss)
-        .list("system_hit_points", u.system_hit_points.map(fixed_text))
         .raw("features", &features_text(db.unit_features(u)))
         // A disabled or unsupported map rule confines nothing, whatever its
         // other fields say; the construction rule applies only under it.
@@ -520,6 +517,13 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
             None => "-".to_owned(),
             Some(r) => format!("{{map={};construction={}}}", confinement_text(Some(r)), confinement_text(db.construction_confinement(u.key))),
         });
+    // SIM-39, SIM-55: only when set, so content without the keys keeps its digest.
+    if u.sane_crew_loss {
+        c.flag("sane_crew_loss", true);
+    }
+    if u.system_hit_points.iter().any(|f| *f != Fixed::ZERO) {
+        c.list("system_hit_points", u.system_hit_points.map(fixed_text));
+    }
     c.finish()
 }
 
@@ -550,7 +554,8 @@ fn weapon_text(db: &ContentDb, w: &WeaponDef) -> String {
         disable_weapons: _, decloak_on_hit: _, initial_shot_delay_modifier: _,
         ignore_shot_delay_effects: _, ordnance_defence: _, activate_on_team_change: _, crew_loss: _, resource: _, replace: _, features: _, raw: _,
     } = w;
-    Canon::new()
+    let mut c = Canon::new();
+    c
         .text("class", &w.class.0)
         .raw("kind", match w.kind {
             crate::WeaponKind::Beam => "beam",
@@ -571,11 +576,6 @@ fn weapon_text(db: &ContentDb, w: &WeaponDef) -> String {
         .opt_fixed("initial_shot_delay_modifier", w.initial_shot_delay_modifier)
         .flag("ignore_shot_delay_effects", w.ignore_shot_delay_effects)
         .flag("ordnance_defence", w.ordnance_defence)
-        // SIM-29, SIM-39.
-        .flag("activate_on_team_change", w.activate_on_team_change)
-        .raw("crew_loss", &w.crew_loss.map_or_else(|| "-".into(), |c| group(
-            Canon::new().fixed("threshold", c.threshold).fixed("shield", c.shield).fixed("hull", c.hull),
-        )))
         .raw("resource", &w.resource.map_or_else(|| "-".into(), |r| group(
             Canon::new()
                 .list("add", r.add.map(fixed_text))
@@ -585,8 +585,15 @@ fn weapon_text(db: &ContentDb, w: &WeaponDef) -> String {
                 .flag("always_ai", r.always_ai),
         )))
         .raw("replace", &w.replace.as_ref().map_or_else(|| "-".into(), replace_text))
-        .raw("features", &features_text(db.weapon_features(w)))
-        .finish()
+        .raw("features", &features_text(db.weapon_features(w)));
+    // SIM-29, SIM-39: only when set, so content without the keys keeps its digest.
+    if w.activate_on_team_change {
+        c.flag("activate_on_team_change", true);
+    }
+    if let Some(l) = w.crew_loss {
+        c.raw("crew_loss", &group(Canon::new().fixed("threshold", l.threshold).fixed("shield", l.shield).fixed("hull", l.hull)));
+    }
+    c.finish()
 }
 
 /// A unit's collision geometry as the sim uses it: today the bounding

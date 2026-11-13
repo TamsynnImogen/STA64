@@ -114,15 +114,20 @@ impl UserData for Entity {
         f.add_field_method_get("race", |_, e| {
             Ok(e.with(|c, u| u.and_then(|u| c.def(u)).map(|d| d.race.clone()).unwrap_or_default()))
         });
-        // Mutable race and crew are not sim state (SetRace and SetCrew need a
-        // sim edit); the assignment is accepted and recorded as unsupported so
+        // Mutable race is not sim state (SetRace needs a sim edit); the assignment is accepted and recorded as unsupported so
         // the rest of the callback still runs.
         f.add_field_method_set("race", |_, e, _: Value| {
             e.ctx.borrow_mut().unsupported("Entity.race = x (needs a sim SetRace edit)");
             Ok(())
         });
-        f.add_field_method_set("crew", |_, e, _: Value| {
-            e.ctx.borrow_mut().unsupported("Entity.crew = x (needs a sim mutable-crew edit)");
+        // SIM-54: current crew, clamped by the sim to 0..the maximum crew.
+        f.add_field_method_set("crew", |_, e, to: f64| {
+            if !to.is_finite() { return Err(mlua::Error::runtime("Entity.crew requires a finite number")); }
+            let mut c = e.ctx.borrow_mut();
+            match e.key.id() {
+                Some(id) => super::edit_feedback::queue(&mut c, "Entity.crew", Edit::UnitCrew(id, sta_core::Fixed::from_f64(to)))?,
+                None => c.unsupported("entity.crew: pending or failed spawn"),
+            }
             Ok(())
         });
         // `Entity.shields = 1.0`: a fraction of the maximum (SIM-55).

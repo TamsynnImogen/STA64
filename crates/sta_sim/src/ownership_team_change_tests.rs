@@ -14,8 +14,9 @@ fn db(activate: bool, feature: bool, cloak_cost: &str) -> Arc<ContentDb> {
     for w in &mut weapons {
         if w.odf == "fx_cloak" {
             w.activate_on_team_change = activate;
-            let text = format!("effectTimer = 0.1\nenergyDrainRate = 1.0\nspecialEnergyCost = {cloak_cost}\n");
-            w.raw = Arc::new(sta_odf::resolve("fx_cloak", &mut |_| Some(text.clone())).unwrap());
+            w.effect_ticks = 3;
+            w.energy_drain = Fixed::ONE;
+            w.energy_cost = Fixed::from_int(cloak_cost.parse().unwrap());
         }
     }
     let mut features = fake.features().clone();

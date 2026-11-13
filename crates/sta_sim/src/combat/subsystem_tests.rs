@@ -18,6 +18,7 @@ fn db() -> Arc<ContentDb> {
     ship.hull = Fixed::from_int(500);
     ship.shields.max = Fixed::from_int(400);
     ship.shields.recharge = fx(0.5);
+    ship.crew = Fixed::from_int(250);
     ship.system_hit_points = [Fixed::from_int(120), Fixed::from_int(80), Fixed::from_int(60), Fixed::from_int(100), Fixed::ZERO];
     b = b.unit(ship);
     Arc::new(b.build().unwrap())
@@ -192,4 +193,42 @@ fn damage_above_the_hit_points_in_a_snapshot_is_corrupt() {
     let mut bad = sim.clone();
     bad.subsystems = crate::combat::damage::Subsystems::from_rows(vec![(id, SubsystemRow { off: 0, damage: [0, Fixed::from_int(81).to_bits(), 0, 0, 0] })]).unwrap();
     assert!(Sim::from_snapshot(&bad.snapshot(), Some(d)).is_err());
+}
+
+// SIM-54: personnel edits.
+
+#[test]
+fn unit_crew_clamps_to_the_pool_and_rejects_without_one() {
+    let (mut sim, id, _) = world();
+    assert!(script(&mut sim, Edit::UnitCrew(id, Fixed::from_int(40))));
+    assert_eq!(sim.units.get(id).unwrap().crew.unwrap()[0], Fixed::from_int(40));
+    assert!(script(&mut sim, Edit::UnitCrew(id, Fixed::from_int(9999))));
+    assert_eq!(sim.units.get(id).unwrap().crew.unwrap(), [Fixed::from_int(250); 2], "clamped to the maximum crew");
+    assert!(script(&mut sim, Edit::UnitCrew(id, Fixed::from_int(-3))));
+    assert_eq!(sim.units.get(id).unwrap().crew.unwrap()[0], Fixed::ZERO);
+    assert!(!edit(&mut sim, PlayerId(1), Edit::UnitCrew(id, Fixed::ONE)), "players cannot");
+    sim.units.get_mut(id).unwrap().crew = None;
+    assert!(!script(&mut sim, Edit::UnitCrew(id, Fixed::ONE)));
+}
+
+#[test]
+fn team_crew_and_max_officers_need_an_initialized_seat_and_are_floored_and_capped() {
+    let (mut sim, _, _) = world();
+    let p = PlayerId(0);
+    assert!(!script(&mut sim, Edit::TeamCrew(p, Fixed::ONE)), "no stock yet");
+    assert!(!script(&mut sim, Edit::MaxOfficers(p, Fixed::ONE)), "no limit yet");
+    sim.economy.set_personnel(p, Some(Fixed::from_int(100)), Some(Fixed::from_int(30)));
+    assert!(script(&mut sim, Edit::TeamCrew(p, Fixed::from_int(5000))));
+    assert_eq!(sim.economy.crew_of(p), Some(Fixed::from_int(5000)), "above the capacity is allowed");
+    assert!(script(&mut sim, Edit::TeamCrew(p, Fixed::from_int(-4))));
+    assert_eq!(sim.economy.crew_of(p), Some(Fixed::ZERO));
+    assert!(script(&mut sim, Edit::MaxOfficers(p, Fixed::from_int(199_999))));
+    assert_eq!(sim.economy.officer_limit(p), Some(Fixed::from_int(199_999)));
+    assert!(script(&mut sim, Edit::MaxOfficers(p, Fixed::from_bits(i64::MAX))));
+    assert_eq!(sim.economy.officer_limit(p), Some(Fixed::from_int(1_000_000_000)));
+    let mut copy = Sim::from_snapshot(&sim.snapshot(), Some(sim.content().unwrap().clone())).unwrap();
+    assert_eq!(copy.digest(), sim.digest());
+    sim.step(&[]);
+    copy.step(&[]);
+    assert_eq!(copy.digest(), sim.digest());
 }

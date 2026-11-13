@@ -602,15 +602,16 @@ fn finder_predicates_are_isolated_and_errors_remain_visible() {
 }
 
 #[test]
-fn officer_limit_assignment_is_a_noop_at_the_limit_in_force_and_recorded_otherwise() {
-    let mut g = game("MMM.register(function() local cur = Player(0).maxOfficers; Player(0).maxOfficers = cur; Player(0).maxOfficers = cur + 1; Player(0).maxCrew = cur end)");
-    g.run(2);
+fn officers_and_crew_assignments_queue_the_typed_edits_and_are_not_counted() {
+    let mut g = game("MMM.register(function() Player(0).maxOfficers = 777; Player(0).resources.crew = 321; EntityFinder():find()[2].crew = 5 end)");
+    let mut out = Vec::new();
+    g.rt.think(&g.view, &g.events, &mut out);
+    let edits: Vec<_> = out.iter().filter_map(|c| match &c.kind { CommandKind::Edit(e) => Some(e.clone()), _ => None }).collect();
+    assert!(edits.contains(&Edit::MaxOfficers(PlayerId(0), Fixed::from_int(777))), "{edits:?}");
+    assert!(edits.contains(&Edit::TeamCrew(PlayerId(0), Fixed::from_int(321))), "{edits:?}");
+    assert!(edits.contains(&Edit::UnitCrew(HERO, Fixed::from_int(5))), "{edits:?}");
     let unsupported = g.rt.unsupported();
-    let officers: Vec<_> = unsupported.iter().filter(|(n, _)| n.starts_with("Player.maxOfficers")).collect();
-    // Two callbacks (two ticks) each assign cur + 1 once; the equal assignments are not recorded.
-    assert_eq!(officers.len(), 1, "{unsupported:?}");
-    assert_eq!(officers[0].1, 2, "{unsupported:?}");
-    assert!(!unsupported.iter().any(|(n, _)| n.starts_with("Player.maxCrew")), "{unsupported:?}");
+    assert!(unsupported.iter().all(|(n, _)| !n.contains("maxOfficers") && !n.contains("resources.crew") && !n.contains("Entity.crew")), "{unsupported:?}");
 }
 
 #[test]
@@ -636,7 +637,7 @@ fn recorded_assignments_keep_the_callback_running_and_name_each_gap() {
             local p = Player(0)
             p.race = Race.find('fx'); p.color = Color(1, 0, 0); p.name = 'x'
             local e = EntityFinder():find()[1]
-            e.race = Race.find('fx'); e.crew = 5; e.movementAutonomy = 1
+            e.race = Race.find('fx'); e.movementAutonomy = 1
             e.specialWeaponAutonomy = 1; e.forward = Vector(1, 0, 0); e.omega = Vector(0, 1, 0); e.name = 'n'
             DONE = true
         end)",
@@ -645,7 +646,7 @@ fn recorded_assignments_keep_the_callback_running_and_name_each_gap() {
     assert!(g.global::<bool>("DONE"));
     let names: Vec<String> = g.rt.unsupported().into_iter().map(|(n, _)| n).collect();
     for want in [
-        "Player.race", "Player.color", "Player.name", "Entity.race", "Entity.crew",
+        "Player.race", "Player.color", "Player.name", "Entity.race",
         "Entity.movementAutonomy", "Entity.specialWeaponAutonomy", "Entity.forward", "Entity.omega", "Entity.name",
     ] {
         assert!(names.iter().any(|n| n.starts_with(want)), "{want} in {names:?}");

@@ -225,6 +225,16 @@ impl Sim {
             Edit::SubsystemDamage(id, sub, points) => self.edit_subsystem_damage(id, sub, points),
             Edit::ShieldPercent(id, fraction) => self.edit_shield_percent(id, fraction),
             Edit::MaxShields(id, max) => self.edit_max_shields(id, max),
+            Edit::MaxOfficers(player, value) => self.economy.edit_officer_limit(player, value),
+            Edit::TeamCrew(player, value) => self.economy.edit_team_crew(player, value),
+            Edit::UnitCrew(id, value) => {
+                let Some(u) = self.units.get_mut(id).filter(|u| u.hull[0] > Fixed::ZERO && matches!(u.kind, crate::world::EntityKind::Craft | crate::world::EntityKind::Station)) else {
+                    return false;
+                };
+                let Some([_, max]) = u.crew else { return false };
+                u.crew = Some([value.max(Fixed::ZERO).min(max), max]);
+                true
+            }
             // The rest land with the package that owns what they change.
             _ => false,
         }
