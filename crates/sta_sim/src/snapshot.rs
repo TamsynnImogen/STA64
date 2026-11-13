@@ -46,9 +46,10 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// (crafts in warp). Format 19 appends stuck-order watch rows; format 20
 /// adds their anchor, start distance and birth tick. Format 21 appends scripted
 /// orders (SIM-56) and per-craft switches (SIM-58). Format 22 appends mission
-/// attributes (SIM-54). Format 23 appends cosmetic seat factions.
+/// attributes (SIM-54). Format 23 appends cosmetic seat factions. Format 24 (SIM-30) appends
+/// the planet population rows and colony ship orders (renumbered at push time).
 /// Only the current format is read.
-pub const FORMAT_VERSION: u16 = 23;
+pub const FORMAT_VERSION: u16 = 24;
 
 const HEADER: usize = 4 + 2 + 4 + 8;
 
@@ -435,6 +436,7 @@ impl Sim {
         out.extend(postcard::to_allocvec(&SwitchesRec { version: 1, rows: self.switches.to_rows() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&self.attrs.to_rec()).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&AppearanceRec { version: 1, factions: self.appearance_factions.clone() }).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&self.colonies.to_rec()).expect("snapshot serialises"));
         out
     }
 
@@ -498,6 +500,7 @@ impl Sim {
             || appearance_factions.iter().any(|(id, name)| name.is_empty() || name.trim() != name || name.to_ascii_lowercase() != *name || !b.players.iter().any(|p| p.0 == *id)) {
             return Err(SnapshotError::Corrupt("invalid appearance faction rows".into()));
         }
+        let (colony_rec, rest): (crate::colony::ColoniesRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         if !rest.is_empty() { return Err(SnapshotError::Corrupt("trailing bytes".into())); }
         if let Some(row) = b.economy.miners.iter().find(|row| row.5 > 4) {
             return Err(SnapshotError::Corrupt(format!("mining phase {} is not supported", row.5)));
@@ -606,6 +609,7 @@ impl Sim {
                 }
             }
         }
+        let colonies = crate::colony::Colonies::from_rec(colony_rec, |id| units.contains(id)).ok_or_else(|| corrupt("colony rows"))?;
         let mut economy = crate::economy::Economy::from_rec(&b.economy);
         economy.restore_personnel(personnel_rows, &b.players).map_err(|why| SnapshotError::Corrupt(why.into()))?;
         Ok(Sim {
@@ -640,6 +644,7 @@ impl Sim {
             attrs,
             team_changes: Vec::new(),
             appearance_factions,
+            colonies,
         })
     }
 }

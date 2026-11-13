@@ -138,6 +138,7 @@ impl Sim {
         self.start_effects.remove(id);
         self.subsystems.remove(id);
         self.attrs.remove(id);
+        self.colonies.remove_entity(id);
         self.scripted.remove(id);
         self.switches.remove(id);
         if let Some(by) = destroyed_by {
@@ -270,6 +271,7 @@ impl Sim {
             Edit::Position(id, to) => self.edit_position(id, to),
             Edit::Heading(id, dir) => self.edit_heading(id, dir),
             Edit::AngularVelocity(id, omega) => self.edit_angular_velocity(id, omega),
+            Edit::PlanetPopulation(id, people) => self.edit_planet_population(id, people),
             // The rest land with the package that owns what they change.
             _ => false,
         }

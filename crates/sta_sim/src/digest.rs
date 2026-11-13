@@ -67,7 +67,7 @@ fn _every_sim_field_is_decided(s: &Sim) {
     let Sim {
         tick: _, rng: _, units: _, labels: _, players: _, ai_seats: _, content: _, starts: _, regions: _,
         bounds: _, confinement: _, perception: _, events: _, weapons: _, movement: _, economy: _,
-        production: _, victory: _, specials: _, autonomy: _, start_effects: _, nav: _, subsystems: _, attrs: _, scripted: _, switches: _, team_changes: _, appearance_factions: _, approach_warp: _, engagement: _, watchdog: _,
+        production: _, victory: _, specials: _, autonomy: _, start_effects: _, nav: _, subsystems: _, attrs: _, scripted: _, switches: _, team_changes: _, appearance_factions: _, approach_warp: _, engagement: _, watchdog: _, colonies: _,
     } = s;
 }
 
@@ -239,6 +239,10 @@ impl Sim {
         if !self.production.is_empty() {
             self.production.hash_into(&mut h);
         }
+        // SIM-30: population and crew income feed the economy.
+        if !self.colonies.is_empty() {
+            self.colonies.hash_into(&mut h);
+        }
         h.0
     }
 }
@@ -377,6 +381,9 @@ impl Sim {
                 }
                 if !self.production.is_empty() {
                     row(None, "yards, rigs, rallies (hash)", block("production", &|h| self.production.hash_into(h)));
+                }
+                if !self.colonies.is_empty() {
+                    row(None, "planet population, colony orders (hash)", block("colonies", &|h| self.colonies.hash_into(h)));
                 }
             }
             "rng" => row(None, "generator state", format!("{:#018x}", self.rng.0)),

@@ -25,6 +25,7 @@ pub mod autonomy;
 pub mod appearance;
 pub mod boundary;
 pub mod combat;
+pub mod colony;
 pub mod command;
 pub mod context;
 pub mod digest;
@@ -179,6 +180,8 @@ pub struct Sim {
     team_changes: Vec<EntityId>,
     /// Cosmetic owning-seat faction labels, recorded from resolved setup.
     appearance_factions: Vec<(PlayerId, String)>,
+    /// Planet population and colony ship orders (SIM-30); in the digest once any exists.
+    colonies: colony::Colonies,
 }
 
 impl Sim {
@@ -215,6 +218,7 @@ impl Sim {
             switches: Default::default(),
             team_changes: Vec::new(),
             appearance_factions: Vec::new(),
+            colonies: Default::default(),
         }
     }
 
@@ -249,6 +253,14 @@ impl Sim {
     /// and the spawn and kill edits exist; everything else is rejected until
     /// its package lands.
     fn apply(&mut self, c: &command::Command) -> bool {
+        let ok = self.apply_command(c);
+        if ok && let command::CommandKind::Order(o) = &c.kind {
+            self.colonies_after_order(c.player, o);
+        }
+        ok
+    }
+
+    fn apply_command(&mut self, c: &command::Command) -> bool {
         use command::{CommandKind, Order};
         if self.victory.is_eliminated(c.player) {
             return false;
@@ -382,6 +394,7 @@ impl Sim {
             | Order::AttackAny { .. }
             | Order::AttackPoint { .. }
             | Order::MoveWarp { .. } => self.apply_scripted(c.player, order),
+            Order::Colonize { units, planet } => self.apply_colonize(c.player, units, *planet),
             Order::Rally { builders, at } => {
                 let Some(db) = self.content.as_deref() else { return false };
                 self.production.order_rally(db, &self.units, c.player, builders, *at)
@@ -434,17 +447,20 @@ impl Sim {
                 self.approach_warp.end(id);
             }
             let mut lost = Vec::new();
-            for (id, by) in combat::damage::apply(&mut self.units, &db, &mut self.events, from) {
+            let killed = self.with_planet_population_loss(from, |sim| combat::damage::apply(&mut sim.units, &db, &mut sim.events, from));
+            for (id, by) in killed {
                 lost.extend(self.units.get(id).map(|u| u.owner));
                 self.despawn(id, by);
             }
             self.specials.react(&mut self.units, &db, &mut self.events, from);
             self.victory.step(&self.units, &mut lost, &mut self.events);
         }
+        self.step_colonies();
+        let colony_crew = self.content.as_deref().map(|db| self.colony_crew_income(db)).unwrap_or_default();
         if let Some(db) = &self.content {
             self.economy.step(&mut self.units, db, &mut self.events);
             self.economy.step_passive(&self.units, db, &self.players, &self.ai_seats, self.tick);
-            self.economy.step_crew(&self.units, db, self.tick);
+            self.economy.step_crew(&self.units, db, self.tick, &colony_crew);
             let from = self.events.len();
             self.production.step(&mut self.units, db, &mut self.economy, &mut self.events, &mut self.confinement);
             let built: Vec<EntityId> = self.events[from..].iter().filter_map(|e| match e { SimEvent::Spawned { id } => Some(*id), _ => None }).collect();
@@ -515,7 +531,7 @@ impl Sim {
             }
         }
         let perceived_owners = self.perception.iter().map(|(id, &owner)| (id, owner)).collect();
-        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners, appearance: self.appearance_view(), attrs: crate::attrs::AttrsView { names: self.switches.names(), ..self.attrs.view() } }
+        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners, appearance: self.appearance_view(), colonies: self.colony_views(), attrs: crate::attrs::AttrsView { names: self.switches.names(), ..self.attrs.view() } }
     }
 
     /// FNV-1a over all simulation state, for desync detection. The content

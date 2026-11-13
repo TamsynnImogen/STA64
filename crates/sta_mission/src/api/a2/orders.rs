@@ -42,7 +42,7 @@ use std::rc::Rc;
 
 use mlua::{Function, Lua, MultiValue, Table, Value};
 use sta_core::{EntityId, Fixed, PlayerId, Vec3};
-use sta_sim::command::{AlertState, Edit, Order};
+use sta_sim::command::{AlertState, CommandKind, Edit, Order};
 use sta_sim::view::{Relation, UnitView};
 
 use super::dll_objects;
@@ -220,6 +220,14 @@ impl Env {
                 "A2.{name}: object {} has no player owner or the order could not be queued",
                 id.0
             )))
+        }
+    }
+
+    /// Queue `order` as the script seat (the sim then applies the mission-only gates).
+    fn script_order(&self, name: &str, order: Order) -> mlua::Result<()> {
+        match self.ctx.borrow_mut().try_push(PlayerId::SCRIPT, CommandKind::Order(order)) {
+            Ok(_) => Ok(()),
+            Err(why) => Err(mlua::Error::runtime(format!("A2.{name}: {why}"))),
         }
     }
 
@@ -513,7 +521,17 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
         e.order("Scout", unit.id, |units| Order::Scout { units })?;
         nothing()
     })?)?;
-    table.set("Colonize", raising(lua, &env, "Colonize", &["hh"], "no colonize order in the sim seam")?)?;
+    // `Colonize(ship, planet)` (SIM-30): sent as the script, so the sim applies the
+    // original's special-forces gate (read from the executable, static); the sim
+    // drops an order the original drops (not a pod colony ship, planet not
+    // colonizable, owned by another team, already being colonised).
+    table.set("Colonize", def(lua, &env, "Colonize", &["hh"], |_, e, _, a| {
+        let Some(unit) = e.alive(a[0].id()) else { return nothing() };
+        let Some(planet) = e.alive(a[1].id()) else { return nothing() };
+        e.owned("Colonize", &unit)?;
+        e.script_order("Colonize", Order::Colonize { units: vec![unit.id], planet: planet.id })?;
+        nothing()
+    })?)?;
     table.set("Special_Attack", raising(lua, &env, "Special_Attack", &["hs", "hhs"], "the sim orders only cloak and point-defence specials, and its special order carries no target")?)?;
     table.set("SetCommandMoveAutonomyLow", raising(lua, &env, "SetCommandMoveAutonomyLow", &["h"], "no per-unit movement autonomy order in the sim seam")?)?;
     // Placement and facing (SIM-57). Rules, from the executable and the paired

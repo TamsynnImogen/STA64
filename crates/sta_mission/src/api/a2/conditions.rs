@@ -254,6 +254,17 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
             }
         })?
     })?;
+    // `GetPlanetCivPop(planet)` (SIM-30): the population truncated to an integer, -1
+    // for a handle that is gone (read from the executable, static). A unit with no
+    // colony row reads 0.
+    table.set("GetPlanetCivPop", query(lua, ctx, "GetPlanetCivPop", 1, |c, a| {
+        let id = handle("GetPlanetCivPop", a, 0)?;
+        if c.alive(id).is_none() {
+            return Ok(-1.0);
+        }
+        let pop = c.view.colonies.iter().find(|r| r.id == id).map_or(0.0, |r| f64::from(r.population.to_f32()).trunc());
+        Ok(pop)
+    })?)?;
     // An object gone from the view is not exploding.
     table.set("IsExploding", query(lua, ctx, "IsExploding", 1, |c, a| {
         Ok(c.unit(handle("IsExploding", a, 0)?).is_some_and(|u| u.flags.contains(UnitFlags::DYING)))

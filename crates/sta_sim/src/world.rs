@@ -92,10 +92,11 @@ impl EntityKind {
     /// Unlisted classes that can move count as craft, the rest as props.
     pub fn of(class: &ClassLabel, movement: &MoveStats) -> EntityKind {
         match class.0.as_str() {
+            // SIM-30: `colony` is the colony ship, a craft in the original (RTTI `Colony` is a `Craft`).
             "craft" | "freighter" | "constructionrig" | "wingman" | "repairship" | "cargo_ship"
-            | "evolver" | "scavenger" | "fighter" => EntityKind::Craft,
+            | "evolver" | "scavenger" | "fighter" | "colony" => EntityKind::Craft,
             "starbase" | "shipyard" | "buildyard" | "research" | "mining" | "p_mining"
-            | "sensor" | "colony" | "trading_station" => EntityKind::Station,
+            | "sensor" | "trading_station" => EntityKind::Station,
             "planet" | "planet_obj" | "moon" | "latinum" | "asteroid" => EntityKind::Resource,
             _ if movement.max_speed > Fixed::ZERO => EntityKind::Craft,
             _ => EntityKind::Prop,

@@ -39,14 +39,18 @@ fn tick_gain(rate_bits: i128, tick: u64) -> i128 {
 
 impl Economy {
     /// One tick of every initialized player's crew stock.
-    pub(crate) fn step_crew(&mut self, units: &Entities, db: &ContentDb, tick: u64) {
+    ///
+    /// `colony_income`: crew per second of each owned finished planet with
+    /// people (SIM-30, `crate::colony`), by owner.
+    pub(crate) fn step_crew(&mut self, units: &Entities, db: &ContentDb, tick: u64, colony_income: &[(PlayerId, Fixed)]) {
         let Some(rules) = db.rules().crew() else { return };
         if self.personnel.is_empty() {
             return;
         }
         for i in 0..self.personnel.len() {
             let (player, Some(crew), limit) = self.personnel[i] else { continue };
-            let (rate, gain_cap) = team_numbers(units, db, rules, player);
+            let (mut rate, gain_cap) = team_numbers(units, db, rules, player);
+            rate += colony_income.iter().filter(|(p, _)| *p == player).map(|(_, r)| i128::from(r.to_bits())).sum::<i128>();
             let cap = Fixed::from_int(rules.starting_capacity.unwrap_or(0).clamp(0, 1_000_000_000) as i32).max(gain_cap);
             if rate <= 0 || crew >= cap {
                 continue;
