@@ -369,6 +369,13 @@ impl SkirmishController {
         for e in events {
             self.note_attack(tick, e);
             match e {
+                // The sim ended or held a move order it could not serve (walled
+                // in, or no nearer for a long while): forget it, so the next
+                // plan sends the order again instead of treating it as live.
+                // Only this seat's craft have a memo.
+                SimEvent::OrderBlocked { id } => {
+                    self.orders.remove(id);
+                }
                 SimEvent::Rejected { player, seq } if *player == me => {
                     if let Some(s) = self.sent.remove(seq) {
                         for u in &s.units {
