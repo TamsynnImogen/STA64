@@ -125,6 +125,51 @@ fn colocated_freighter_earns_450_a_minute() {
     assert_eq!(stock(&sim, 1, 0), Fixed::ZERO);
 }
 
+/// The renderer animates the mining cycle from these (RND-29): each phase change is
+/// announced once, in order, with the resource the miner works.
+#[test]
+fn a_miner_announces_each_phase_of_its_cycle() {
+    use crate::event::MinerPhase;
+    let mut sim = game();
+    let moon = spawn(&mut sim, "fx_moon", NEUTRAL, v(0, 0));
+    spawn(&mut sim, "fx_station", PlayerId(0), v(0, 0));
+    let m = spawn(&mut sim, "fx_miner", PlayerId(0), v(0, 0));
+    assert!(mine(&mut sim, 0, m, moon));
+    let mut seen = Vec::new();
+    for _ in 0..1250 {
+        for e in sim.step(&[]).events {
+            if let SimEvent::MinerPhase { id, phase, node, dock } = e {
+                assert_eq!(dock.is_some(), phase == MinerPhase::Unloading, "{phase:?} {dock:?}");
+                assert_eq!((id, node), (m, moon));
+                seen.push(phase);
+            }
+        }
+    }
+    use MinerPhase::*;
+    // The order tick itself already mined (see above), so the first phase heard of is the next one.
+    assert_eq!(seen[..7], [ToDock, Unloading, ToNode, Mining, ToDock, Unloading, ToNode], "{seen:?}");
+    // Never twice in a row: a phase is announced when it changes.
+    assert!(seen.windows(2).all(|w| w[0] != w[1]));
+}
+
+/// A mined-out node with nothing carried ends the cycle: the miner is announced idle.
+#[test]
+fn a_miner_whose_node_is_gone_is_announced_idle() {
+    use crate::event::MinerPhase;
+    let mut sim = game();
+    let moon = spawn(&mut sim, "fx_moon", NEUTRAL, v(0, 0));
+    spawn(&mut sim, "fx_station", PlayerId(0), v(0, 0));
+    let m = spawn(&mut sim, "fx_miner", PlayerId(0), v(0, 5000));
+    assert!(mine(&mut sim, 0, m, moon));
+    sim.step(&[]);
+    sim.despawn(moon, None);
+    let mut idle = false;
+    for _ in 0..5 {
+        idle |= sim.step(&[]).events.iter().any(|e| matches!(e, SimEvent::MinerPhase { phase: MinerPhase::Idle, .. }));
+    }
+    assert!(idle);
+}
+
 #[test]
 fn delivered_events_carry_the_trip() {
     let mut sim = game();

@@ -61,7 +61,7 @@ pub use sta_core::{ContentKey, EntityId, Fixed, PlayerId, SEAM_REV, TICK_HZ, Tea
 /// Movement limits now live with the rest of a unit's definition.
 pub use sta_content::MoveStats;
 
-pub use event::SimEvent;
+pub use event::{MinerPhase, SimEvent};
 pub use source::WorldSource;
 pub use view::{TickOutput, UnitView, WorldView};
 
