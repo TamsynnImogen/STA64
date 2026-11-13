@@ -19,7 +19,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::io::Write;
 use std::net::{IpAddr, Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
@@ -54,6 +54,11 @@ pub struct RelayConfig {
     pub bytes_per_sec: u32,
     /// Bytes a connection may save up; at least one frame.
     pub burst_bytes: u32,
+    /// Frames per second a connection may send, and its burst (lockstep
+    /// needs about 10 a second): bounds how fast one member can fill the
+    /// others' queues.
+    pub frames_per_sec: u32,
+    pub burst_frames: u32,
     /// Failed joins from one address within `failed_join_window` before
     /// further joins from it are refused (room codes cannot be guessed at
     /// speed).
@@ -62,6 +67,12 @@ pub struct RelayConfig {
     /// Frames waiting to be written to one connection before it is judged
     /// too slow and closed.
     pub outgoing_queue: usize,
+    /// Bytes waiting to be written to one connection before it is judged too
+    /// slow and closed (a trickle reader must not pin 64 MiB).
+    pub outgoing_bytes: usize,
+    /// How long a connection over its byte rate is throttled (not read) before
+    /// it is cut off.
+    pub throttle_limit: Duration,
 }
 
 impl Default for RelayConfig {
@@ -76,9 +87,13 @@ impl Default for RelayConfig {
             frame_timeout: Duration::from_secs(10),
             bytes_per_sec: 128 * 1024,
             burst_bytes: 256 * 1024,
+            frames_per_sec: 200,
+            burst_frames: 400,
             failed_joins: 10,
             failed_join_window: Duration::from_secs(60),
             outgoing_queue: 1024,
+            outgoing_bytes: 1024 * 1024,
+            throttle_limit: Duration::from_secs(5),
         }
     }
 }
@@ -99,6 +114,8 @@ struct Member {
     conn: ConnId,
     tx: SyncSender<Out>,
     sock: TcpStream,
+    /// Bytes queued for this member's writer, not yet written.
+    queued: Arc<AtomicUsize>,
 }
 
 struct Room {
@@ -198,8 +215,29 @@ impl Drop for Relay {
     }
 }
 
+/// Forgets addresses with nothing live and no failure inside the window, so
+/// the table cannot grow with the number of addresses that ever connected.
+fn prune(st: &mut State, cfg: &RelayConfig) {
+    let now = Instant::now();
+    st.ips.retain(|_, ip| {
+        while ip
+            .failed
+            .front()
+            .is_some_and(|t| now.duration_since(*t) > cfg.failed_join_window)
+        {
+            ip.failed.pop_front();
+        }
+        ip.connections > 0 || ip.rooms > 0 || !ip.failed.is_empty()
+    });
+}
+
 fn accept_loop(listener: &TcpListener, shared: &Arc<Shared>) {
+    let mut last_prune = Instant::now();
     while !shared.stop.load(Ordering::SeqCst) {
+        if last_prune.elapsed() > Duration::from_secs(5) {
+            last_prune = Instant::now();
+            prune(&mut lock(&shared.state), &shared.cfg);
+        }
         match listener.accept() {
             Ok((stream, peer)) => {
                 let s = shared.clone();
@@ -223,6 +261,25 @@ fn send_to(tx: &SyncSender<Out>, msg: &ServerMsg) -> bool {
     }
 }
 
+/// Queues `bytes` for a member unless its frame or byte budget is spent.
+fn push(m: &Member, bytes: &Arc<Vec<u8>>, max_bytes: usize) -> bool {
+    if m.queued.load(Ordering::SeqCst) + bytes.len() > max_bytes {
+        return false;
+    }
+    m.queued.fetch_add(bytes.len(), Ordering::SeqCst);
+    match m.tx.try_send(Out::Bytes(bytes.clone())) {
+        Ok(()) => true,
+        Err(TrySendError::Full(_)) => {
+            m.queued.fetch_sub(bytes.len(), Ordering::SeqCst);
+            false
+        }
+        Err(TrySendError::Disconnected(_)) => {
+            m.queued.fetch_sub(bytes.len(), Ordering::SeqCst);
+            true
+        }
+    }
+}
+
 impl Room {
     fn occupied(&self) -> u8 {
         let mut m = 0;
@@ -238,7 +295,7 @@ impl Room {
 /// Removes `seat` of `code` (if `conn` still holds it), tells the others,
 /// and closes its socket. Members whose queue overflows while being told are
 /// removed in turn. Called with the state locked.
-fn depart(st: &mut State, code: RoomCode, seat: usize, conn: ConnId) {
+fn depart(st: &mut State, cfg: &RelayConfig, code: RoomCode, seat: usize, conn: ConnId) {
     let mut work = vec![(code, seat, conn)];
     while let Some((code, seat, conn)) = work.pop() {
         let Some(room) = st.rooms.get_mut(&code) else {
@@ -260,10 +317,10 @@ fn depart(st: &mut State, code: RoomCode, seat: usize, conn: ConnId) {
         } else {
             room.vacated |= 1 << seat;
         }
-        let marker = ServerMsg::Departed(seat as u8);
+        let marker = Arc::new(ServerMsg::Departed(seat as u8).encode().unwrap_or_default());
         for (i, m) in room.members.iter().enumerate() {
             if let Some(m) = m
-                && !send_to(&m.tx, &marker)
+                && !push(m, &marker, cfg.outgoing_bytes + 64)
             {
                 work.push((code, i, m.conn));
             }
@@ -273,6 +330,9 @@ fn depart(st: &mut State, code: RoomCode, seat: usize, conn: ConnId) {
             st.rooms.remove(&code);
             if let Some(ip) = st.ips.get_mut(&owner) {
                 ip.rooms = ip.rooms.saturating_sub(1);
+                if ip.connections == 0 && ip.rooms == 0 && ip.failed.is_empty() {
+                    st.ips.remove(&owner);
+                }
             }
         }
     }
@@ -280,7 +340,7 @@ fn depart(st: &mut State, code: RoomCode, seat: usize, conn: ConnId) {
 
 /// Forwards one frame from `seat`. Recipients that cannot keep up are
 /// disconnected.
-fn forward(st: &mut State, code: RoomCode, seat: usize, conn: ConnId, mask: u8, frame: Vec<u8>) {
+fn forward(st: &mut State, cfg: &RelayConfig, code: RoomCode, seat: usize, conn: ConnId, mask: u8, frame: Vec<u8>) {
     let Some(room) = st.rooms.get(&code) else {
         return;
     };
@@ -302,13 +362,13 @@ fn forward(st: &mut State, code: RoomCode, seat: usize, conn: ConnId, mask: u8, 
             continue;
         }
         if let Some(m) = m
-            && matches!(m.tx.try_send(Out::Bytes(bytes.clone())), Err(TrySendError::Full(_)))
+            && !push(m, &bytes, cfg.outgoing_bytes)
         {
             slow.push((i, m.conn));
         }
     }
     for (i, c) in slow {
-        depart(st, code, i, c);
+        depart(st, cfg, code, i, c);
     }
 }
 
@@ -328,6 +388,7 @@ fn open_room(
     ip: IpAddr,
     conn: ConnId,
     tx: &SyncSender<Out>,
+    queued: &Arc<AtomicUsize>,
     sock: &TcpStream,
     password: Vec<u8>,
 ) -> Joined {
@@ -357,6 +418,7 @@ fn open_room(
         conn,
         tx: tx.clone(),
         sock,
+        queued: queued.clone(),
     });
     st.rooms.insert(
         code,
@@ -380,6 +442,7 @@ fn join_room(
     ip: IpAddr,
     conn: ConnId,
     tx: &SyncSender<Out>,
+    queued: &Arc<AtomicUsize>,
     sock: &TcpStream,
     code: RoomCode,
     reclaim: Option<u8>,
@@ -439,11 +502,12 @@ fn join_room(
         conn,
         tx: tx.clone(),
         sock,
+        queued: queued.clone(),
     });
     Joined::Yes { code, seat }
 }
 
-fn writer(mut sock: TcpStream, rx: &Receiver<Out>, keepalive: Duration) {
+fn writer(mut sock: TcpStream, rx: &Receiver<Out>, keepalive: Duration, queued: &AtomicUsize) {
     let ka = ServerMsg::Keepalive.encode().unwrap_or_default();
     loop {
         let bytes = match rx.recv_timeout(keepalive) {
@@ -451,6 +515,17 @@ fn writer(mut sock: TcpStream, rx: &Receiver<Out>, keepalive: Duration) {
             Ok(Out::Close) | Err(RecvTimeoutError::Disconnected) => break,
             Err(RecvTimeoutError::Timeout) => Arc::new(ka.clone()),
         };
+        let n = bytes.len();
+        // Saturating: replies sent outside `push` are not counted.
+        let mut cur = queued.load(Ordering::SeqCst);
+        while let Err(now) = queued.compare_exchange(
+            cur,
+            cur.saturating_sub(n),
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        ) {
+            cur = now;
+        }
         if sock.write_all(&bytes).is_err() {
             break;
         }
@@ -490,7 +565,21 @@ fn read_msg(
     }
 }
 
+/// The limit key: an IPv6 address stands for its /64 (one subscriber can
+/// hold billions of addresses), an IPv4 address for itself.
+fn limit_key(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V6(v6) => {
+            let mut o = v6.octets();
+            o[8..].fill(0);
+            IpAddr::V6(o.into())
+        }
+        v4 => v4,
+    }
+}
+
 fn serve(stream: TcpStream, ip: IpAddr, shared: &Arc<Shared>) {
+    let ip = limit_key(ip);
     let cfg = &shared.cfg;
     let _ = stream.set_nodelay(true);
     if stream.set_read_timeout(Some(POLL)).is_err()
@@ -513,15 +602,15 @@ fn serve(stream: TcpStream, ip: IpAddr, shared: &Arc<Shared>) {
     };
     let result = serve_admitted(stream, ip, conn, shared);
     let mut st = lock(&shared.state);
+    if let Some((code, seat)) = result {
+        depart(&mut st, cfg, code, seat, conn);
+    }
     st.connections = st.connections.saturating_sub(1);
     if let Some(ipst) = st.ips.get_mut(&ip) {
         ipst.connections = ipst.connections.saturating_sub(1);
         if ipst.connections == 0 && ipst.rooms == 0 && ipst.failed.is_empty() {
             st.ips.remove(&ip);
         }
-    }
-    if let Some((code, seat)) = result {
-        depart(&mut st, code, seat, conn);
     }
 }
 
@@ -537,14 +626,21 @@ fn serve_admitted(
     let (tx, rx) = sync_channel::<Out>(cfg.outgoing_queue.max(8));
     let wsock = stream.try_clone().ok()?;
     let keepalive = (cfg.idle_timeout / 3).max(Duration::from_millis(50));
+    let queued = Arc::new(AtomicUsize::new(0));
+    let q = queued.clone();
     let wthread = thread::Builder::new()
         .name("relay-write".into())
-        .spawn(move || writer(wsock, &rx, keepalive))
+        .spawn(move || writer(wsock, &rx, keepalive, &q))
         .ok()?;
-    let held = serve_loop(&mut sock, &stream, ip, conn, shared, &tx);
-    // Whatever ended the loop, the writer must end too; the departure (if
-    // any) is made by the caller under the lock.
+    let held = serve_loop(&mut sock, &stream, ip, conn, shared, &tx, &queued);
+    // Whatever ended the loop, the writer must end too, and at once: nothing
+    // is flushed to a departing seat, so a slow reader cannot delay its own
+    // departure marker. The departure (if any) is made by the caller under
+    // the lock.
     let _ = tx.try_send(Out::Close);
+    if held.is_some() {
+        let _ = stream.shutdown(Shutdown::Both);
+    }
     let _ = wthread.join();
     held
 }
@@ -556,6 +652,7 @@ fn serve_loop(
     conn: ConnId,
     shared: &Arc<Shared>,
     tx: &SyncSender<Out>,
+    queued: &Arc<AtomicUsize>,
 ) -> Option<(RoomCode, usize)> {
     let cfg = &shared.cfg;
     let mut reader = EnvelopeReader::new();
@@ -578,7 +675,7 @@ fn serve_loop(
     let (code, seat) = match first {
         Ok(Some(ClientMsg::Create { password })) => {
             let mut st = lock(&shared.state);
-            match open_room(&mut st, cfg, ip, conn, tx, stream, password) {
+            match open_room(&mut st, cfg, ip, conn, tx, queued, stream, password) {
                 Joined::Yes { code, seat } => {
                     drop(st);
                     let _ = send_to(
@@ -602,7 +699,7 @@ fn serve_loop(
             password,
         })) => {
             let mut st = lock(&shared.state);
-            match join_room(&mut st, cfg, ip, conn, tx, stream, code, reclaim, &password) {
+            match join_room(&mut st, cfg, ip, conn, tx, queued, stream, code, reclaim, &password) {
                 Joined::Yes { code, seat } => {
                     let members = st.rooms.get(&code).map_or(0, Room::occupied);
                     // Under the lock, so the Joined reply precedes any
@@ -629,6 +726,7 @@ fn serve_loop(
     };
 
     let mut bucket = TokenBucket::new(cfg.bytes_per_sec, cfg.burst_bytes.max(70_000));
+    let mut frames = TokenBucket::new(cfg.frames_per_sec, cfg.burst_frames.max(1));
     loop {
         let msg = match read_msg(sock, &mut reader, cfg, shared, None, &mut last_rx) {
             Ok(Some(m)) => m,
@@ -638,13 +736,20 @@ fn serve_loop(
             ClientMsg::Data { frame, .. } => frame.len() + 8,
             _ => 8,
         };
-        if !bucket.take(size) {
-            return Some((code, seat));
+        // Over the byte rate: stop reading (TCP throttles the sender) until
+        // the budget refills; cut off only if that goes on too long.
+        let throttled = Instant::now();
+        while !(bucket.take(size) && frames.take(1)) {
+            if throttled.elapsed() > cfg.throttle_limit || shared.stop.load(Ordering::SeqCst) {
+                return Some((code, seat));
+            }
+            thread::sleep(Duration::from_millis(10));
         }
+        last_rx = Instant::now();
         match msg {
             ClientMsg::Data { mask, frame } => {
                 let mut st = lock(&shared.state);
-                forward(&mut st, code, seat, conn, mask, frame);
+                forward(&mut st, cfg, code, seat, conn, mask, frame);
                 // Still a member? A kick removed us under the same lock.
                 if st
                     .rooms
@@ -666,7 +771,7 @@ fn serve_loop(
                         .and_then(|r| r.members[target].as_ref())
                         .map(|m| m.conn)
                 {
-                    depart(&mut st, code, target, c);
+                    depart(&mut st, cfg, code, target, c);
                 }
             }
             ClientMsg::SetOpen(open) if seat == 0 => {

@@ -58,7 +58,11 @@ fn opts() -> ClientOptions {
 }
 
 fn open_room(addr: SocketAddr) -> (NetTransport, RoomCode) {
-    let t = NetTransport::create(addr, "", &opts()).expect("create a room");
+    open_room_with(addr, &opts())
+}
+
+fn open_room_with(addr: SocketAddr, o: &ClientOptions) -> (NetTransport, RoomCode) {
+    let t = NetTransport::create(addr, "", o).expect("create a room");
     let code = t.control().room_code();
     (t, code)
 }
@@ -775,10 +779,18 @@ fn raw_join(addr: SocketAddr, code: RoomCode) -> TcpStream {
     s
 }
 
+fn quick_opts() -> ClientOptions {
+    ClientOptions {
+        idle_timeout: Duration::from_millis(2000),
+        ..opts()
+    }
+}
+
 fn fast_cfg() -> RelayConfig {
     RelayConfig {
+        throttle_limit: Duration::from_millis(500),
         handshake_timeout: Duration::from_millis(600),
-        idle_timeout: Duration::from_millis(900),
+        idle_timeout: Duration::from_millis(2000),
         frame_timeout: Duration::from_millis(600),
         ..RelayConfig::default()
     }
@@ -847,7 +859,7 @@ fn malformed_first_messages_are_refused_without_panic_or_allocation() {
 #[test]
 fn bad_frames_inside_data_envelopes_close_the_sender() {
     let r = relay_with(fast_cfg());
-    let (mut host, code) = open_room(r.local_addr());
+    let (mut host, code) = open_room_with(r.local_addr(), &quick_opts());
     let ok = encode(&ping(1)).unwrap();
     let mut long = ok.clone();
     long.push(0);
@@ -875,7 +887,7 @@ fn a_frame_with_a_good_header_and_a_bad_body_is_the_receivers_to_refuse() {
     // The relay reads headers only, so it forwards this; the receiving
     // transport refuses it as a frame error and goes on.
     let r = relay();
-    let (mut host, code) = open_room(r.local_addr());
+    let (mut host, code) = open_room_with(r.local_addr(), &quick_opts());
     let mut s = raw_join(r.local_addr(), code);
     let mut frame = junk_frame_header(b"S64N", 1, 6);
     frame.extend_from_slice(&[0xFF; 6]);
@@ -909,7 +921,7 @@ fn slow_silent_and_flooding_clients_are_cut_off() {
     });
     // The host's own keepalives must beat the relay's short idle limit.
     let quick = ClientOptions {
-        idle_timeout: Duration::from_millis(900),
+        idle_timeout: Duration::from_millis(2000),
         ..opts()
     };
     let mut host = NetTransport::create(r.local_addr(), "", &quick).unwrap();
@@ -950,24 +962,33 @@ fn slow_silent_and_flooding_clients_are_cut_off() {
     }
     assert!(got_keepalive_free_close, "idle connection kept open");
 
-    // A flood beyond the byte rate: cut off, and the host sees only what got
-    // through before.
+    // A flood beyond the byte rate is throttled (not read faster than the
+    // budget refills), so the host sees a fraction of it.
     let mut s = raw_join(r.local_addr(), code);
     let frame = encode(&Message::Ping { nonce: 1 }).unwrap();
     let data = ClientMsg::Data { mask: 1, frame }.encode().unwrap();
-    let mut cut = false;
+    let began = Instant::now();
     for _ in 0..20_000 {
         if s.write_all(&data).is_err() {
-            cut = true;
             break;
         }
     }
-    assert!(cut || closed_by_peer(&mut s, SHORT), "flood was not cut off");
-    while matches!(host.poll(), Ok(Some(_))) {}
+    thread::sleep(Duration::from_millis(1500));
+    let mut got = 0u64;
+    while matches!(host.poll(), Ok(Some(_))) {
+        got += 1;
+    }
+    // Budget: the byte burst (80 kB) plus 20 kB/s at about 30 bytes a frame,
+    // or the frame budget (400 plus 200 a second), whichever is tighter.
+    let secs = began.elapsed().as_secs_f64();
+    let allowed = (((80_000.0 + 20_000.0 * secs) / 30.0) as u64).min((400.0 + 200.0 * secs) as u64);
+    assert!(got > 0 && got <= allowed + 200, "{got} frames got through, budget {allowed}");
+    assert!(got < 20_000);
+    drop(s);
 
     // A keepalive-sending client is not idle.
     let t = NetTransport::join(r.local_addr(), code, "", &ClientOptions {
-        idle_timeout: Duration::from_millis(900),
+        idle_timeout: Duration::from_millis(2000),
         ..opts()
     })
     .unwrap();
@@ -985,14 +1006,14 @@ fn limits_per_address_hold() {
         ..fast_cfg()
     });
     // Rooms per address.
-    let a = NetTransport::create(r.local_addr(), "", &opts()).unwrap();
-    let b = NetTransport::create(r.local_addr(), "", &opts()).unwrap();
-    let c = NetTransport::create(r.local_addr(), "", &opts());
+    let a = NetTransport::create(r.local_addr(), "", &quick_opts()).unwrap();
+    let b = NetTransport::create(r.local_addr(), "", &quick_opts()).unwrap();
+    let c = NetTransport::create(r.local_addr(), "", &quick_opts());
     assert!(matches!(c, Err(ConnectError::Refused(RefuseReason::Busy))), "a third room");
     // Connections per address: two are open; a third works, a fourth is
     // dropped before it can say anything.
     let code = a.control().room_code();
-    let third = NetTransport::join(r.local_addr(), code, "", &opts());
+    let third = NetTransport::join(r.local_addr(), code, "", &quick_opts());
     assert!(third.is_ok());
     let mut s = TcpStream::connect(r.local_addr()).unwrap();
     s.set_read_timeout(Some(Duration::from_millis(200))).unwrap();
@@ -1004,12 +1025,12 @@ fn limits_per_address_hold() {
     let bad = RoomCode::parse("ZZZZZZ").unwrap();
     for _ in 0..3 {
         assert!(matches!(
-            NetTransport::join(r.local_addr(), bad, "", &opts()),
+            NetTransport::join(r.local_addr(), bad, "", &quick_opts()),
             Err(ConnectError::Refused(RefuseReason::NoRoom))
         ));
     }
     assert!(matches!(
-        NetTransport::join(r.local_addr(), code, "", &opts()),
+        NetTransport::join(r.local_addr(), code, "", &quick_opts()),
         Err(ConnectError::Refused(RefuseReason::RateLimited))
     ));
 }

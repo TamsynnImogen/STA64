@@ -115,7 +115,8 @@ enum Item {
 struct Inbox {
     queue: VecDeque<Item>,
     bytes: usize,
-    departures: VecDeque<PlayerId>,
+    /// A bit per seat whose marker was reached and not yet taken.
+    departures: u8,
     closed: Option<CloseReason>,
 }
 
@@ -219,7 +220,8 @@ impl NetControl {
     /// when [`Transport::poll`] has returned every frame the seat sent
     /// before it, so a seat listed here has no frame still to come.
     pub fn take_departures(&self) -> Vec<PlayerId> {
-        self.shared.inbox().departures.drain(..).collect()
+        let mask = std::mem::take(&mut self.shared.inbox().departures);
+        (0..MAX_SEATS as u8).filter(|s| mask & (1 << s) != 0).map(PlayerId).collect()
     }
 
     /// Why the connection ended, once it has.
@@ -502,9 +504,7 @@ impl Transport for NetTransport {
             match inbox.queue.pop_front() {
                 Some(Item::Departed(seat)) => {
                     inbox.bytes = inbox.bytes.saturating_sub(16);
-                    if inbox.departures.len() < MAX_SEATS * 4 {
-                        inbox.departures.push_back(seat);
-                    }
+                    inbox.departures |= 1u8.checked_shl(u32::from(seat.0)).unwrap_or(0);
                 }
                 Some(Item::Data { from, frame }) => {
                     inbox.bytes = inbox.bytes.saturating_sub(frame.len() + 16);

@@ -7,7 +7,6 @@ use sta_sim::command::{Command, CommandRouter};
 
 use super::transport::{Destination, Incoming, Transport, TransportError};
 use crate::proto::{
-    MAX_SEATS,
     MAX_SCHEDULE_PER_TURN, Action, DesyncNotice, DropChoice, Message, Occupant, ProtoError, Scheduled, Start, TickDigest,
     TurnCommands, TurnConfig,
 };
@@ -372,6 +371,9 @@ impl LockstepRouter {
         }
     }
 
+    /// Call it once per drop: every call leads one more turn, and a seat
+    /// more than `MAX_QUEUED_TURNS` ahead is faulted by its receivers.
+    ///
     /// Sends the next record now, a turn beyond the usual lead (a sender's
     /// lead may be any size, docs/NET.md, 3.2). A host stalled on a missing
     /// seat uses it to put an `Action::Drop` where its peers can read it
@@ -400,7 +402,14 @@ impl LockstepRouter {
     /// Records an event, up to [`MAX_EVENTS`] unread ones: a hostile peer
     /// that provokes errors cannot grow the list without bound.
     fn note(&mut self, e: RouterEvent) {
-        if self.events.len() < MAX_EVENTS {
+        // Only error noise is capped; state changes (drops, schedules,
+        // desyncs) are never lost to a flood of junk.
+        let noise = matches!(e, RouterEvent::Protocol { .. }
+                | RouterEvent::Transport(_)
+                | RouterEvent::PeerDesync { .. }
+                | RouterEvent::LocalRejected { .. }
+        );
+        if !noise || self.events.len() < MAX_EVENTS {
             self.events.push(e);
         }
     }
@@ -643,8 +652,12 @@ impl LockstepRouter {
                 let newest = self.ours.keys().next_back().copied();
                 if newest.is_none_or(|n| theirs.tick > n) {
                     // Bounded: at most a window of ticks for every seat.
-                    if self.unchecked.len() >= DIGESTS_KEPT * MAX_SEATS {
-                        self.unchecked.remove(0);
+                    // and per seat, so one flooder evicts only its own.
+                    let mine = self.unchecked.iter().filter(|(s, _)| *s == slot).count();
+                    if mine >= DIGESTS_KEPT {
+                        if let Some(i) = self.unchecked.iter().position(|(s, _)| *s == slot) {
+                            self.unchecked.remove(i);
+                        }
                     }
                     self.unchecked.push((slot, theirs));
                 }
