@@ -38,10 +38,16 @@ use crate::kinematics::Plan;
 use crate::world::{EntityKind, Fnv, Table};
 use crate::Sim;
 
-/// Which crafts are in warp on an attack approach, ascending id.
+/// Phase of a craft in [`Warp`].
+pub(crate) const IN_WARP: u8 = 1;
+/// Dropping out: speed falls straight to the approach's limit.
+pub(crate) const WARP_OUT: u8 = 2;
+
+/// Which crafts are in warp, or dropping out of it, on an attack approach,
+/// ascending id.
 #[derive(Debug, Clone, Default)]
 pub struct Warp {
-    on: Table<()>,
+    on: Table<u8>,
 }
 
 impl Warp {
@@ -49,8 +55,13 @@ impl Warp {
         self.on.is_empty()
     }
 
+    /// In warp (not dropping out).
     pub fn contains(&self, id: EntityId) -> bool {
-        self.on.get(id).is_some()
+        self.on.get(id) == Some(&IN_WARP)
+    }
+
+    fn phase(&self, id: EntityId) -> Option<u8> {
+        self.on.get(id).copied()
     }
 
     pub(crate) fn remove(&mut self, id: EntityId) {
@@ -60,18 +71,22 @@ impl Warp {
     pub(crate) fn hash_into(&self, h: &mut Fnv) {
         h.str("attack-warp-v1");
         h.u64(self.on.len() as u64);
-        for (id, _) in self.on.iter() {
+        for (id, phase) in self.on.iter() {
             h.u64(id.0 as u64);
+            h.u64(*phase as u64);
         }
     }
 
-    pub(crate) fn to_rec(&self) -> Vec<EntityId> {
-        self.on.iter().map(|(id, _)| id).collect()
+    pub(crate) fn to_rec(&self) -> Vec<(EntityId, u8)> {
+        self.on.iter().map(|(id, p)| (id, *p)).collect()
     }
 
-    /// `None` when the ids do not ascend.
-    pub(crate) fn from_rec(ids: Vec<EntityId>) -> Option<Warp> {
-        Some(Warp { on: Table::from_rows(ids.into_iter().map(|id| (id, ())).collect())? })
+    /// `None` when the ids do not ascend or a phase is unknown.
+    pub(crate) fn from_rec(rows: Vec<(EntityId, u8)>) -> Option<Warp> {
+        if rows.iter().any(|(_, p)| *p != IN_WARP && *p != WARP_OUT) {
+            return None;
+        }
+        Some(Warp { on: Table::from_rows(rows)? })
     }
 }
 
@@ -137,7 +152,8 @@ impl Sim {
             };
             let (vi, vw, combat) = (u.stats.max_speed, u.stats.warp_speed, u.stats.combat_speed);
             let far = d >= min_warp;
-            let mut warp = self.approach_warp.contains(id);
+            let phase = self.approach_warp.phase(id);
+            let mut warp = phase == Some(IN_WARP);
             if let Some(g) = goal {
                 let (gx, gz) = (g.x - u.pos.x, g.z - u.pos.z);
                 let to_goal = (gx * gx + gz * gz).sqrt();
@@ -155,8 +171,13 @@ impl Sim {
                 warp = false;
             }
             plan.warp = warp;
+            let limit = plan.cap.unwrap_or(vi);
             if warp {
-                self.approach_warp.on.insert(id, ());
+                self.approach_warp.on.insert(id, IN_WARP);
+            } else if phase.is_some() && u.speed > limit {
+                // Out of warp: straight down to the limit (combat speed on stock).
+                plan.warp_out = true;
+                self.approach_warp.on.insert(id, WARP_OUT);
             } else {
                 self.approach_warp.remove(id);
             }

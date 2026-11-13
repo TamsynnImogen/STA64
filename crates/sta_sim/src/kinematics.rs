@@ -217,6 +217,8 @@ pub(crate) struct Plan {
     pub cap: Option<Fixed>,
     /// In warp: fly straight along the heading toward `warpSpeed`.
     pub warp: bool,
+    /// Dropping out of warp: straight on, down to the cap.
+    pub warp_out: bool,
     /// With no target: turn to face this point while braking.
     pub face: Option<Vec3>,
 }
@@ -244,7 +246,7 @@ pub(crate) fn step_planned(model: Model, u: &mut Unit, leg: Leg, plan: Plan) {
         return;
     }
     let cap = plan.cap.map_or(u.stats.max_speed, |c| c.min(u.stats.max_speed));
-    if u.speed > u.stats.max_speed {
+    if u.speed > u.stats.max_speed || (plan.warp_out && u.speed > cap) {
         // Dropping out of warp: straight on, down to the cap.
         u.speed = approach(u.speed, cap, warp.max(u.speed) * warp_rate() * dt);
         u.omega = Fixed::ZERO;

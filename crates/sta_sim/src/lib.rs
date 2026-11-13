@@ -292,7 +292,13 @@ impl Sim {
                 if !tech::build_allowed(&db, &self.units, &self.players, &self.ai_seats, *builder, *what) {
                     return false;
                 }
-                self.production.order_build(&db, &mut self.units, &mut self.economy, c.player, *builder, *what, *at, self.bounds.as_ref())
+                let ok = self.production.order_build(&db, &mut self.units, &mut self.economy, c.player, *builder, *what, *at, self.bounds.as_ref());
+                if ok && self.production.is_deploying(*builder) {
+                    // A craft sent to build drops its attack (SIM-36: the
+                    // approach would otherwise steer it off its site).
+                    self.weapons.stop_attack(&self.units, c.player, &[*builder]);
+                }
+                ok
             }
             Order::Attack { units, target } => {
                 let Some(db) = self.content.clone() else { return false };
@@ -340,6 +346,8 @@ impl Sim {
             combat::damage::recharge(&mut self.units, &db);
             self.specials.step(&mut self.units, &db, &mut self.events);
             let from = self.events.len();
+            let held = if db.features().builder_hold_fire { self.production.builders_at_work() } else { Vec::new() };
+            self.weapons.hold_fire(held);
             self.weapons.step_with_perception(self.tick, &self.units, &db, &self.players, &self.perception, &mut self.specials, &mut self.rng, &mut self.events);
             let mut lost = Vec::new();
             for (id, by) in combat::damage::apply(&mut self.units, &mut self.events, from) {

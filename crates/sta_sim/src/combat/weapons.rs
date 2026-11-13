@@ -11,7 +11,8 @@
 //!   projectile flies at `shot_speed` toward its target's current position and
 //!   hits on the tick it arrives; its first move is the tick after it fired.
 //! - Targets: an `Attack` order, else the nearest enemy in the weapon's range
-//!   (ties to the lowest id). Point-defence weapons do not shoot at units (`pd.rs` runs them).
+//!   (ties to the lowest id). Under `attack_opportunity_fire` (Roots) a weapon
+//!   whose ordered target is out of reach takes the nearest enemy instead. Point-defence weapons do not shoot at units (`pd.rs` runs them).
 //! - `Hit` carries the weapon's damage as `hull` and zero `shield`: applying
 //!   it (shields, hull, destruction) is `damage.rs`, which rewrites the split.
 //!
@@ -144,6 +145,10 @@ pub struct Weapons {
     shots: Vec<Shot>,
     next_shot: u32,
     pd: Pd,
+    /// Crafts that hold fire this tick (SIM-36 `builder_hold_fire`: a
+    /// construction ship flying to its site or building). Set by the sim
+    /// before each step from production state; not state of its own.
+    held: Vec<EntityId>,
 }
 
 /// [`Weapons`] as the snapshot stores it (SIM-10).
@@ -176,6 +181,7 @@ impl Weapons {
             shots: r.shots,
             next_shot: r.next_shot,
             pd: Pd::from_rec(r.pd)?,
+            held: Vec::new(),
         })
     }
 
@@ -186,6 +192,13 @@ impl Weapons {
 
     pub fn attack_of(&self, unit: EntityId) -> Option<EntityId> {
         self.attack.get(unit).copied()
+    }
+
+    /// The crafts that hold fire on the next step (ascending, deduplicated).
+    pub(crate) fn hold_fire(&mut self, mut ids: Vec<EntityId>) {
+        ids.sort();
+        ids.dedup();
+        self.held = ids;
     }
 
     /// Every attack order, `(unit, target)` ascending by unit.
@@ -361,7 +374,7 @@ impl Weapons {
             // first tick it is seen, the creation tick for all practical
             // purposes; ascending id keeps the draws stable.
             self.init_mounts(tick, db, u.id, def, rng);
-            if u.flags.contains(UnitFlags::WEAPONS_OFF) {
+            if u.flags.contains(UnitFlags::WEAPONS_OFF) || self.held.binary_search(&u.id).is_ok() {
                 continue;
             }
             for (i, hp) in def.hardpoints.iter().enumerate() {
@@ -551,7 +564,11 @@ impl Weapons {
                 && in_arc(u.heading, arc, u.pos, t.pos)
         };
         if let Some(t) = self.attack.get(u.id).and_then(|&t| units.get(t)) {
-            return hittable(t).then_some(t);
+            // SIM-36: on Roots a weapon that cannot reach the ordered target
+            // fires at another enemy in range (measured; stock does not).
+            if hittable(t) || !db.features().attack_opportunity_fire {
+                return hittable(t).then_some(t);
+            }
         }
         let mine = team(u.owner)?;
         let mut best: Option<(Fixed, &Entity)> = None;

@@ -21,6 +21,9 @@
 use sta_core::{EntityId, Fixed, PlayerId, Vec3};
 
 pub mod approach;
+#[cfg(test)]
+#[path = "movement/approach_tests.rs"]
+pub(crate) mod approach_tests;
 
 use crate::command::Order;
 use crate::world::{Fnv, Table};

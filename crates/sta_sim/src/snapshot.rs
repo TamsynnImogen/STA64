@@ -131,11 +131,12 @@ impl std::fmt::Display for SnapshotError {
 
 impl std::error::Error for SnapshotError {}
 
-/// SIM-36's attack approach state: the crafts in warp, ascending id.
+/// SIM-36's attack approach state: the crafts in warp (phase 1) or dropping
+/// out of it (2), ascending id.
 #[derive(Serialize, Deserialize)]
 struct AttackRec {
     version: u8,
-    warp: Vec<EntityId>,
+    warp: Vec<(EntityId, u8)>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -492,7 +493,7 @@ impl Sim {
             return Err(corrupt("autonomy entity"));
         }
         let approach_warp = crate::movement::approach::Warp::from_rec(warp_rows).ok_or_else(|| corrupt("attack warp"))?;
-        if approach_warp.to_rec().iter().any(|id| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft)) {
+        if approach_warp.to_rec().iter().any(|(id, _)| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft)) {
             return Err(corrupt("attack warp entity"));
         }
         let specials = crate::specials::Specials::from_rec(b.specials).ok_or_else(|| corrupt("specials"))?;
