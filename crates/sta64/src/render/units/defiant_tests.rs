@@ -150,7 +150,10 @@ fn installed_defiant_unit_attaches_visible_hull() {
 /// holds. Regression of a playtest report: a dilithium moon on STA2 Classic could not be selected.
 #[test]
 fn install_visible_resource_nodes_are_pickable_and_minable() {
-    let Ok(root) = std::env::var("STA64_TEST_INSTALL") else { return };
+    let Ok(root) = std::env::var("STA64_TEST_INSTALL") else {
+        eprintln!("SKIP: set STA64_TEST_INSTALL (and STA64_TEST_MOD)");
+        return;
+    };
     let m = std::env::var("STA64_TEST_MOD").unwrap_or_default();
     let map_name = std::env::var("STA64_TEST_MAP").unwrap_or_else(|_| "4alliance".into());
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(m.as_str()).filter(|m| !m.is_empty())).unwrap();
@@ -158,7 +161,10 @@ fn install_visible_resource_nodes_are_pickable_and_minable() {
     let (db, _) = sta_content::ContentDb::load(&vfs, &index).unwrap();
     let (races, _) = sta_content::Races::load(&vfs, &index);
     let db = Arc::new(db);
-    let Some(Ok(data)) = vfs.read(&format!("bzn/{map_name}.bzn")) else { return };
+    let Some(Ok(data)) = vfs.read(&format!("bzn/{map_name}.bzn")) else {
+        eprintln!("SKIP: no map {map_name} in this install");
+        return;
+    };
     let bzn = sta_bzn::parse(&data).unwrap();
     let cfg = crate::game::SkirmishCfg { seat: 0, opponent: crate::app::Opponent::Skirmish, race: Some("federation".into()), opponent_race: None };
     let side = crate::map::build_sim(&bzn, &map_name, &db, &index, &vfs, Some(0), Some((&cfg, &races)));

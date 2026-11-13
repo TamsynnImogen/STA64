@@ -170,11 +170,11 @@ impl Placed {
 }
 
 /// The click radius of a sim object the map draws some other way (a planet, a resource node
-/// without a mesh of its own): its definition's `radius`, for a selectable thing a player
-/// can mine, colonise or inspect. `None` for scenery.
+/// without a mesh of its own): its definition's `radius`, for a thing a player can mine or colonise (a resource node, a
+/// producer planet). `None` for scenery, background planets included.
 pub(crate) fn ghost_pick_radius(def: &sta_content::UnitDef) -> Option<f32> {
     let r = def.radius.to_f32();
-    ((def.resource.is_some() || def.planet_role.is_some()) && r > 0.0).then_some(r.max(5.0))
+    ((def.resource.is_some() || matches!(def.planet_role, Some(sta_content::PlanetRole::Producer))) && r > 0.0).then_some(r.max(5.0))
 }
 
 /// What the sim is made from: the BZN converted to a `MapDef` (CON-07), a `GameSetup`
@@ -1386,6 +1386,8 @@ mod tests {
         planet.radius = Fixed::from_int(130);
         planet.planet_role = Some(sta_content::PlanetRole::Producer);
         assert_eq!(ghost_pick_radius(&planet), Some(130.0));
+        planet.planet_role = Some(sta_content::PlanetRole::Background);
+        assert_eq!(ghost_pick_radius(&planet), None, "a backdrop planet is scenery");
     }
 
     /// A match's start units (owned by a seat, made by the sim) are not ghosts: the units
