@@ -159,9 +159,10 @@ impl UiSounds {
     }
 }
 
-/// Whether the VFS has the sound file `name` (with its extension) under `sounds/effects/`.
+/// Whether the resolver can play `name`: the same lookup `BankResolver` uses (file stem in any
+/// sound folder, OGG before WAV before MP3, whatever extension the name carries).
 pub fn sound_exists(vfs: &Vfs, name: &str) -> bool {
-    vfs.resolve(&format!("sounds/effects/{name}")).is_some()
+    sta_assets::audio::find_sound(vfs, name).is_some()
 }
 
 /// Adds the UI sound table, the theme listeners and the [`UiSound`] to [`PlaySound`] mapping.
@@ -300,6 +301,7 @@ mod tests {
         assert_eq!(sounds.unresolved(|n| sound_exists(&vfs, n)), Vec::<String>::new());
         // Lookup is case-insensitive, as the engine's is.
         assert!(sound_exists(&vfs, "beep1.OGG"));
+        assert!(sound_exists(&vfs, "beep1.wav"), "any extension: the lookup goes by stem");
         assert_eq!(sounds.unresolved(|n| n != "klaxon.wav"), ["klaxon.wav"], "a missing name is reported");
         std::fs::remove_dir_all(dir).ok();
     }
@@ -321,10 +323,24 @@ mod tests {
         let exists = |n: &str| sound_exists(&vfs, n);
         let sounds = asked.existing(exists);
         eprintln!("ui sounds asked: {:?}, absent {:?}; kept: {:?}", asked.all_names(), asked.unresolved(exists), sounds);
-        assert!(sounds.unresolved(exists).is_empty());
+        // Every kept name plays through the same bank the game's resolver uses.
+        let bank = sta_assets::audio::SoundBank::load(&vfs);
+        for n in sounds.all_names() {
+            assert!(bank.resolve(&vfs, n, None, 0).is_some(), "{n} does not resolve");
+        }
         for (what, n) in [("hud click", &sounds.hud_click), ("hud hover", &sounds.hud_hover), ("shell click", &sounds.shell_click), ("shell hover", &sounds.shell_hover)] {
             assert!(!n.is_empty(), "{what} has no sound in this install");
         }
+    }
+
+    #[test]
+    fn empty_names_play_nothing() {
+        let (mut app, log) = app();
+        app.insert_resource(UiSounds { chat_send: String::new(), ..UiSounds::default() });
+        app.world_mut().write_message(UiSound::ChatSend);
+        app.world_mut().write_message(UiSound::Click);
+        app.update();
+        assert_eq!(plays(&log), [(HUD_CLICK.to_owned(), Bus::Ui)]);
     }
 
     #[test]
@@ -336,7 +352,7 @@ mod tests {
         assert!(a1.error.is_empty() && a1.chat_send.is_empty() && a1.chat_receive.is_empty());
         // Everything present: unchanged.
         assert_eq!(UiSounds::default().existing(|_| true), UiSounds::default());
-        // Nothing present: all silent, and silent names make no PlaySound.
+        // Nothing present: all silent (an empty name makes no PlaySound: see `empty_names_play_nothing`).
         let none = UiSounds::default().existing(|_| false);
         assert!([&none.hud_click, &none.hud_hover, &none.shell_click, &none.shell_hover, &none.error, &none.chat_send, &none.chat_receive].iter().all(|n| n.is_empty()));
     }
