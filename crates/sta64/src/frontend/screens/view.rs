@@ -91,6 +91,8 @@ pub struct Ctx<'a> {
     pub stock_box: Vec2,
     /// The options screen's selected tab.
     pub options_tab: usize,
+    /// The installed campaigns (UI-25), for Single Player's cards.
+    pub campaigns: Option<&'a crate::frontend::campaign::Campaigns>,
 }
 
 /// Spawn `screen`; `camera` is the UI camera when the host has one of its own.
@@ -105,6 +107,8 @@ pub fn spawn(commands: &mut Commands, screen: Screen, ctx: &Ctx, camera: Option<
         Screen::MapSelect => frame(commands, ctx, screen, camera, &tr("Select map"), 760.0, map_select(ctx)),
         Screen::Settings => frame(commands, ctx, screen, camera, &tr("Options"), 760.0, settings(ctx)),
         Screen::ModSelect => frame(commands, ctx, screen, camera, &tr("Mods"), 900.0, mod_select(ctx)),
+        // Drawn by `frontend::campaign` (UI-25), which has its own system.
+        Screen::Missions | Screen::Briefing | Screen::Debrief => {}
     }
 }
 
@@ -155,12 +159,23 @@ fn main_menu(ctx: &Ctx) -> impl Bundle {
 
 fn single_player(ctx: &Ctx) -> impl Bundle {
     let t = ctx.theme.clone();
+    let cards: Vec<Option<(String, bool)>> = (0..4).map(|i| crate::frontend::campaign::card(ctx.campaigns, i)).collect();
     let w = 520.0;
     content(ctx.theme, move |p| {
-        // The campaigns need the mission scripts (LUA lane); the cards stand
-        // where Refit's `single_player.rs` has them.
-        for name in ["Tutorials", "Federation campaign", "Klingon campaign", "Borg campaign"] {
-            p.spawn(disabled_button(&t, &tr(name), w));
+        // The cards stand where Refit's `single_player.rs` has them; with the installed
+        // campaigns (UI-25) each opens its mission list, else they stay off.
+        for (i, name) in ["Tutorials", "Federation campaign", "Klingon campaign", "Borg campaign"].into_iter().enumerate() {
+            match cards[i].clone() {
+                Some((text, true)) => {
+                    p.spawn((button(&t, &text, w), crate::frontend::campaign::CampaignAct::Card(i)));
+                }
+                Some((text, false)) => {
+                    p.spawn(disabled_button(&t, &text, w));
+                }
+                None => {
+                    p.spawn(disabled_button(&t, &tr(name), w));
+                }
+            }
         }
         p.spawn(disabled_button(&t, &tr("Load game"), w));
         p.spawn((button(&t, &tr("Previous menu"), w), Act::Goto(Screen::Main)));

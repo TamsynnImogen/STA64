@@ -121,11 +121,6 @@ mod tests {
         game_with(tree, teams, |_| {})
     }
 
-    /// An ODF of `text`, as a loaded unit's `raw` is.
-    fn raw(name: &str, text: &str) -> Arc<sta_odf::Odf> {
-        Arc::new(sta_odf::resolve(name, &mut |_| Some(text.to_owned())).unwrap())
-    }
-
     /// [`game`] with every unit passed through `patch` first, and an
     /// `edit_page` unit (a map-editor page) added.
     fn game_with(tree: Option<&str>, teams: [u8; 2], patch: impl Fn(&mut UnitDef)) -> Sim {
@@ -215,9 +210,10 @@ mod tests {
     fn yard_game(tree: &str, flagged: bool, menu: bool) -> Sim {
         game_with(Some(tree), [0, 1], |u| {
             if u.odf == "fx_yard" {
-                let slot1 = if flagged { "builditem1availability = 0\n" } else { "" };
-                let other = if menu { "" } else { "builditem3provided = 1\n" };
-                u.raw = raw("fx_yard", &format!("builditem1 = \"fx_cruiser\"\n{slot1}builditem2 = \"edit_page\"\n{other}"));
+                // As the loader types `builditem1availability` (slot 1, the
+                // cruiser) and a `builditem3provided` on an empty slot 3.
+                let slot1: Vec<String> = if flagged { vec!["fx_cruiser".into()] } else { Vec::new() };
+                u.build.flagged_slots = (flagged || !menu).then_some(slot1);
                 u.build.list.push(sta_content::DefRef::new("edit_page"));
             }
         })

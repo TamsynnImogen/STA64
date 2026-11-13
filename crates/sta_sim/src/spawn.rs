@@ -115,6 +115,7 @@ impl Sim {
         self.labels.remove(id);
         self.confinement.remove(id);
         self.perception.remove(id);
+        self.autonomy.remove(id);
         self.production.remove_rally_entity(id);
         self.production.remove_weld_site(id);
         self.start_effects.remove(id);
@@ -504,7 +505,7 @@ mod tests {
                 .any(|(_, e)| matches!(e, SimEvent::Rejected { .. })),
             "{log:?}"
         );
-        assert_eq!(digest, 0x9b60_78a5_12a7_c3c0);
+        assert_eq!(digest, 0x9620_de0c_9c45_52e4);
     }
 
     #[test]
@@ -823,7 +824,8 @@ mod tests {
         for t in 0..30 * 30 {
             let out = WorldSource::step(&mut sim, &[]);
             assert_eq!(
-                out.view.units,
+                // Autonomy joins the view in the sim, not on the entity.
+                out.view.units.iter().cloned().map(|mut u| { u.autonomy = None; u }).collect::<Vec<_>>(),
                 sim.units.iter().map(Entity::view).collect::<Vec<_>>()
             );
             let c = out.view.unit(EntityId(2)).unwrap();

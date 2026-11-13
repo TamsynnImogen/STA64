@@ -592,7 +592,7 @@ mod tests {
             hull: [f(hull), f(100.0)],
             shields: shield,
             crew: None,
-            energy: None,
+            energy: None, autonomy: None,
             flags: UnitFlags::SELECTABLE,
             progress: progress.map(f),
         }

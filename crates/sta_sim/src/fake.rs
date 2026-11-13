@@ -190,6 +190,7 @@ impl Rail {
             shields: [[Fixed::ZERO; 2]; 4],
             crew: self.crew,
             energy: self.energy,
+            autonomy: None,
             flags: UnitFlags::SELECTABLE,
             progress: None,
         })

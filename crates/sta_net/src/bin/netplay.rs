@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use sta_core::{Fixed, PlayerId, TeamId, Vec3};
 use sta_net::lockstep::{admit, Destination, Peer, StepOutcome, Transport};
 use sta_net::proto::{
-    ContentHashRules, EngineId, Hello, MapRef, Message, Occupant, PackInfo, Refusal, RulesIdentity,
+    EngineId, Hello, MapRef, Message, Occupant, PackInfo, Refusal, RulesIdentity,
     Seat, Start, TurnConfig, Welcome,
 };
 use sta_net::transport::{ClientOptions, NetTransport, RoomCode};
@@ -75,7 +75,8 @@ fn main() {
     }
     let db = Arc::new(sta_content::fake::db());
     let map = Arc::new(sta_content::fake::two_bases());
-    let rules = ContentHashRules(db.hash());
+    // The content database's keyed rules digest (CON-35, D10).
+    let rules: &dyn RulesIdentity = db.digest();
     let opts = ClientOptions::default();
     let wait = Duration::from_secs(120);
 
@@ -87,7 +88,7 @@ fn main() {
         while joined < peers {
             let (from, msg) = wait_msg(&mut t, wait);
             let Message::Hello(hello) = msg else { continue };
-            let reply = match admit(&engine(), &rules, &hello, &rules) {
+            let reply = match admit(&engine(), rules, &hello, rules) {
                 Ok(()) => Message::Welcome(Welcome {
                     slot: from,
                     host: PlayerId(0),

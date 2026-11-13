@@ -345,7 +345,7 @@ fn the_preview_shows_the_start_positions_of_the_picked_map() {
     let scroll = *app.world().resource::<crate::frontend::screens::ListScroll>();
     let ctx = crate::frontend::screens::view::Ctx {
         theme: &theme, data: &data, strings: None, draft: &draft, browse: &browse, settings: &settings, selected: &selected, scroll: &scroll,
-        layout: ScreenLayout::Stock, stock_box: Vec2::new(1440.0, 1080.0), options_tab: 0,
+        layout: ScreenLayout::Stock, stock_box: Vec2::new(1440.0, 1080.0), options_tab: 0, campaigns: None,
     };
     let dots = preview_dots(&ctx);
     assert_eq!(dots.len(), data.maps[0].slots());

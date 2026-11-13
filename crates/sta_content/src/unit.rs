@@ -42,7 +42,11 @@ pub fn movement(phys: Option<&Odf>, file: &str, warnings: &mut Vec<Warning>) -> 
         r.num("turnAlpha").unwrap_or(1.0) as f32,
         r.num("turnOmegaFractionAtRest").unwrap_or(0.2) as f32,
     );
-    with_smooth_keys(m, |k| r.num(k))
+    let mut m = with_smooth_keys(m, |k| r.num(k));
+    if let Some(v) = r.num("warpSpeed").filter(|v| *v > 0.0) {
+        m.warp_speed = Fixed::from_f64(v);
+    }
+    m
 }
 
 /// `m` with the smooth-physics keys (SIM-15) a physics ODF sets; keys it
@@ -175,6 +179,8 @@ pub(crate) fn unit_def_for_profile(name: &str, odf: &Odf, phys: Option<&Odf>, pr
             d.build.list.push(DefRef::new(item));
         }
     }
+    d.build.flagged_slots = crate::BuildDef::flagged_slots_of(odf);
+    d.avoid_me = odf.bool("avoidMe").unwrap_or(false);
 
     d.sounds.select = r.text("eventSelect").into_iter().collect();
     d.sounds.ack_move = r.text("eventAcknowledge").into_iter().collect();

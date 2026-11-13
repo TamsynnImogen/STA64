@@ -40,10 +40,12 @@ impl Labels {
 pub mod api;
 pub mod campaign;
 pub mod math;
+pub mod progress;
 pub mod readiness;
 pub mod runtime;
 pub mod sandbox;
 pub mod script;
+pub mod standin;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MatchedBy {
