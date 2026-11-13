@@ -134,7 +134,7 @@ impl Economy {
     pub(crate) fn restore_adjust(&mut self, rows: Vec<(PlayerId, i64, i64)>, players: &[(PlayerId, sta_core::TeamId)]) -> Result<(), &'static str> {
         let limit = LIMIT << 32;
         if rows.windows(2).any(|w| w[0].0 >= w[1].0)
-            || rows.iter().any(|&(p, c, o)| !players.iter().any(|q| q.0 == p) || (c == 0 && o == 0) || c.abs() > limit || o.abs() > limit)
+            || rows.iter().any(|&(p, c, o)| !players.iter().any(|q| q.0 == p) || (c == 0 && o == 0) || c.unsigned_abs() > limit as u64 || o.unsigned_abs() > limit as u64)
         {
             return Err("invalid team adjustment rows");
         }

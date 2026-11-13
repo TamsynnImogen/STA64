@@ -182,6 +182,8 @@ pub struct Sim {
     team_changes: Vec<EntityId>,
     /// Cosmetic owning-seat faction labels, recorded from resolved setup.
     appearance_factions: Vec<(PlayerId, String)>,
+    // (Also the setup race of each seat: the base of `Sim::seat_race`, which picks the officer cap
+    // and latinum rules; fixed by the setup, so peers agree.)
 }
 
 impl Sim {

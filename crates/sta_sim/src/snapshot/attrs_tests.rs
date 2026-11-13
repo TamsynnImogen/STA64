@@ -39,4 +39,5 @@ fn malformed_team_adjustment_records_are_rejected_for_the_right_reason() {
     assert_eq!(load(vec![(PlayerId(1), one, 0), (PlayerId(0), one, 0)], 1), "invalid team adjustment rows");
     assert_eq!(load(vec![(PlayerId(0), 0, 0)], 1), "invalid team adjustment rows");
     assert_eq!(load(vec![(PlayerId(9), one, 0)], 1), "invalid team adjustment rows");
+    assert_eq!(load(vec![(PlayerId(0), i64::MIN, 0)], 1), "invalid team adjustment rows");
 }

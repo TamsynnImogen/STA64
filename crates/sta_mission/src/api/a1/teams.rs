@@ -136,7 +136,7 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
                 return Err(mlua::Error::runtime(format!("A1.{name} requires a finite number")));
             }
             let x = sta_core::Fixed::from_f64(a[1].num().clamp(-1.0e9, 1.0e9));
-            let (pool, cap, used, officer_cap) = {
+            let (pool, cap, used, officer_cap, has_limit) = {
                 let c = e.ctx.borrow();
                 let view = c.view.player(team);
                 (
@@ -144,10 +144,14 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
                     c.view.attrs.seats.iter().find(|s| s.player == team).and_then(|s| s.crew_capacity),
                     view.map_or(sta_core::Fixed::ZERO, |p| p.officers[0]),
                     view.map_or(sta_core::Fixed::ZERO, |p| p.officers[1]),
+                    c.view.attrs.seats.iter().any(|s| s.player == team && s.officer_limit.is_some()),
                 )
             };
             let after = match op {
-                TeamOp::OfficersSetA1 | TeamOp::OfficersAddA1 => officer_count_after(op, used, x, officer_cap),
+                // The sim refuses an officer edit for a seat with no limit: the count is unchanged.
+                TeamOp::OfficersSetA1 | TeamOp::OfficersAddA1 => {
+                    has_limit.then(|| officer_count_after(op, used, x, officer_cap)).flatten()
+                }
                 _ => cap.and_then(|cap| crew_pool_after(op, pool, x, cap)),
             };
             e.edit(name, Edit::TeamPool(team, op, x))?;

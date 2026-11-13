@@ -105,6 +105,7 @@ impl Economy {
                 || (crew.is_none() && limit.is_none())
                 // The team pool has no floor at 0 (SIM-54), the limit does.
                 || limit.is_some_and(|v| v < 0)
+                || crew.is_some_and(|v| v < -(1_000_000_000i64 << 32))
         }) {
             return Err("invalid personnel player/value");
         }
