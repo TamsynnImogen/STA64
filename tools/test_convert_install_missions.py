@@ -37,6 +37,7 @@ class KeyAndDir(unittest.TestCase):
     def test_refuses_an_output_inside_the_install(self):
         with tempfile.TemporaryDirectory() as t:
             os.makedirs(os.path.join(t, "missions"))
+            open(os.path.join(t, "Armada2.exe"), "w").close()
             with self.assertRaises(SystemExit) as e:
                 c.main(["--install", t, "--out", os.path.join(t, "out")])
             self.assertIn("inside the install", str(e.exception))
