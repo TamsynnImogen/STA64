@@ -819,7 +819,9 @@ fn judge_believes_the_referee_unless_the_seats_agree_against_it() {
     assert_eq!(judge(&[5, 6], 7), Verdict::ReferenceStands);
     // Every seat agrees and the referee alone differs.
     assert_eq!(judge(&[5, 5, 5], 7), Verdict::RefereeOutvoted);
-    assert_eq!(judge(&[5], 7), Verdict::RefereeOutvoted);
+    // One seat left: nobody outvotes the referee.
+    assert_eq!(judge(&[5], 7), Verdict::ReferenceStands);
+    assert_eq!(judge(&[5, 5], 7), Verdict::RefereeOutvoted);
     assert_eq!(judge(&[], 7), Verdict::ReferenceStands);
 }
 
@@ -1221,4 +1223,35 @@ mod processes {
         let _ = std::fs::remove_dir_all(&out);
         drop(relay);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Review findings: a hostile authority, a departing referee
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_resynced_for_a_far_future_turn_does_not_blind_the_comparison() {
+    let mut r = Room::new(2, false);
+    r.run_until("tick 60", |r| r.all_at(60));
+    let rslot = PlayerId(2);
+    let huge = Message::Resynced(sta_net::proto::Resynced { slot: PlayerId(1), turn: u32::MAX, count: 1, last: true });
+    r.peers[1].router_mut().receive(rslot, huge).unwrap();
+    // Desync detection still works afterwards.
+    r.run_until("tick 90", |r| r.all_at(90));
+    let at = r.damage(1);
+    r.run_until("the divergence to be seen", |r| r.referee.findings().iter().any(|f| f.seat == PlayerId(1)));
+    assert_eq!(r.referee.first_finding().unwrap().tick, first_visible(at));
+}
+
+#[test]
+fn the_host_unseats_a_referee_whose_connection_ended() {
+    let mut r = Room::new(2, false);
+    r.run_until("tick 30", |r| r.all_at(30));
+    assert_eq!(r.peers[1].router().referee(), Some(PlayerId(2)));
+    r.peers[0].note_departed(PlayerId(2));
+    r.run_until("peers to drop the referee", |r| r.peers[1].router().referee().is_none());
+    assert_eq!(r.peers[1].router().authority(), PlayerId(0));
+    // A reclaimed slot's digests are not believed.
+    let lie = Message::Reference(TickDigest { tick: 3, digest: 1 });
+    assert!(r.peers[1].router_mut().receive(PlayerId(2), lie).is_err());
 }

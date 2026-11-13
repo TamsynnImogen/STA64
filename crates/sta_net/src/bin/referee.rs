@@ -60,11 +60,11 @@ fn main() {
             "--code" => code = v(),
             "--password" => password = v(),
             "--out" => out = PathBuf::from(v()),
-            "--host-seat" => host_seat = num(&a, v()) as u8,
+            "--host-seat" => host_seat = u8::try_from(num(&a, v())).unwrap_or_else(|_| die("--host-seat: 0 to 7")),
             "--wait-seconds" => wait = num(&a, v()),
             "--idle-seconds" => limits.idle = Duration::from_secs(num(&a, v())),
             "--max-ticks" => limits.max_ticks = num(&a, v()),
-            "--max-commands" => limits.max_logged_commands = num(&a, v()) as usize,
+            "--max-commands" => limits.max_logged_commands = usize::try_from(num(&a, v())).unwrap_or(usize::MAX),
             "--resync-host" => policy.resync_host = true,
             "--engine-name" => engine.name = v(),
             "--engine-version" => engine.version = v(),
@@ -109,7 +109,7 @@ fn main() {
     let control = t.control();
     let mut referee = Referee::new(&start, me, db.clone(), map, Box::new(t) as Box<dyn Transport>, policy, limits)
         .unwrap_or_else(|e| die(&e.to_string()));
-    let mut announced = 0usize;
+    let mut printed: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut seated = false;
     let end = loop {
         let now = Instant::now();
@@ -122,11 +122,11 @@ fn main() {
             seated = true;
             println!("SEATED");
         }
-        let findings = referee.findings();
-        for f in findings.iter().skip(announced) {
-            println!("VERDICT {}", f.line());
+        for f in referee.findings() {
+            if printed.insert(f.line()) {
+                println!("VERDICT {}", f.line());
+            }
         }
-        announced = findings.len();
         if referee.report_due(now) {
             write_report(&mut referee, &out);
         }
@@ -135,8 +135,10 @@ fn main() {
     if !findings.is_empty() {
         write_report(&mut referee, &out);
     }
-    for f in findings.iter().skip(announced) {
-        println!("VERDICT {}", f.line());
+    for f in &findings {
+        if printed.insert(f.line()) {
+            println!("VERDICT {}", f.line());
+        }
     }
     let diverged: Vec<String> = findings.iter().map(|f| f.seat.0.to_string()).collect();
     println!(
@@ -148,6 +150,7 @@ fn main() {
             EndReason::Idle => "idle",
             EndReason::TooLong => "too-long",
             EndReason::LogFull => "log-full",
+            EndReason::Behind => "behind",
         },
         diverged.join(",")
     );

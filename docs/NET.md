@@ -650,6 +650,15 @@ NET_DECISIONS N5):
   `MAX_QUEUED_TURNS` records per seat, the NET-04 inbound bounds. What grows with
   the match is the referee's replay: `RefereeLimits` ends it (reports written) at
   a command count, a tick count, or after no progress.
+- **Known limits.** A referee that sends different digests to different seats,
+  or a host and referee that collude, can keep a seat-against-seat desync from
+  being repaired (peers see no seat differ from the referee and resume); only
+  `judge` and the digests every peer compares among themselves limit it. A seat
+  that sends records without digests keeps the referee's verdicts for those
+  ticks to what is known. A referee more than `MAX_QUEUED_TURNS` turns behind the
+  room ends (`EndReason::Behind`); nothing slows the room to its pace. The host
+  unseats a referee whose connection ended (`note_departed`), so whoever reclaims
+  its relay slot is not believed.
 - **Not built.** A referee that joins a running game: the relay closes the room at
   `Start` (section 9) and the host keeps no log, so it would need a room that stays
   open to `RefereeHello` and a `SnapshotKind` for it; a referee that crashes cannot

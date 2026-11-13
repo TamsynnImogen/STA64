@@ -36,7 +36,9 @@
 //!   the digest the claim gives as the claimer's own is not the one the
 //!   claimer sent in its records, the claim is counted against that seat
 //!   ([`Referee::false_claims`]).
-//! - The referee is not believed either: a peer that finds every seat agreeing
+//! - The referee is not believed blindly either (limits: a referee that tells
+//!   each seat a different digest, or the host and referee colluding, are not
+//!   caught; the open M5/M6 notes are in NET.md): a peer that finds every seat agreeing
 //!   with it and the referee alone different ignores the referee from then on
 //!   ([`judge`]), so one faulty or hostile referee cannot stop a match or
 //!   hand out a state that no player holds.
@@ -79,8 +81,9 @@ use crate::proto::{DesyncNotice, EngineId, Hello, Message, ProtoError, Refusal, 
 ///
 /// - [`Verdict::ReferenceStands`]: the referee is the truth; a seat that
 ///   differs from it is resynced from it.
-/// - [`Verdict::RefereeOutvoted`]: every seat reports one and the same digest
-///   and the referee another. All players already play the same game, so
+/// - [`Verdict::RefereeOutvoted`]: at least two seats report one and the same
+///   digest and the referee another (with one seat left there is no one to
+///   outvote it: the referee stands). All players already play the same game, so
 ///   resyncing all of them to one outlier makes no sense: the referee is the
 ///   one that is wrong (a faulty or hostile referee, or a bug in its build),
 ///   and peers stop believing it.
@@ -90,7 +93,7 @@ use crate::proto::{DesyncNotice, EngineId, Hello, Message, ProtoError, Refusal, 
 /// themselves.
 pub fn judge(seats: &[u64], reference: u64) -> Verdict {
     match seats.split_first() {
-        Some((first, rest)) if *first != reference && rest.iter().all(|d| d == first) => {
+        Some((first, rest)) if !rest.is_empty() && *first != reference && rest.iter().all(|d| d == first) => {
             Verdict::RefereeOutvoted
         }
         _ => Verdict::ReferenceStands,
@@ -315,6 +318,9 @@ pub enum EndReason {
     TooLong,
     /// [`RefereeLimits::max_logged_commands`].
     LogFull,
+    /// The room ran more than `MAX_QUEUED_TURNS` turns ahead of the referee: it
+    /// cannot verify it any more.
+    Behind,
 }
 
 /// What one [`Referee::step`] did.
@@ -339,6 +345,7 @@ pub struct Referee {
     false_claims: BTreeMap<PlayerId, u32>,
     last_progress: Instant,
     last_release: Option<Instant>,
+    released: std::collections::BTreeSet<Tick>,
     first_found: Option<Instant>,
     report_written: bool,
     protocol_errors: u64,
@@ -369,6 +376,7 @@ impl Referee {
             false_claims: BTreeMap::new(),
             last_progress: Instant::now(),
             last_release: None,
+            released: std::collections::BTreeSet::new(),
             first_found: None,
             report_written: false,
             protocol_errors: 0,
@@ -433,6 +441,9 @@ impl Referee {
         self.review(now);
         if self.closed {
             return RefereeStep::Ended(EndReason::Closed);
+        }
+        if self.peer.router().overrun() {
+            return RefereeStep::Ended(EndReason::Behind);
         }
         if self.peer.tick() >= self.limits.max_ticks {
             return RefereeStep::Ended(EndReason::TooLong);
@@ -528,9 +539,11 @@ impl Referee {
     /// (see the module docs, "Trust").
     fn review_claims(&mut self, now: Instant) {
         for (from, n) in self.peer.router_mut().take_claims() {
+            // A repeat claim does not restart the clock of the one it replaces.
+            let first = self.claims.iter().find(|(s, _, _)| *s == from).map_or(now, |(_, _, at)| *at);
             self.claims.retain(|(s, _, _)| *s != from);
             if self.claims.len() < 16 {
-                self.claims.push((from, n, now));
+                self.claims.push((from, n, first));
             }
         }
         let pending = std::mem::take(&mut self.claims);
@@ -561,11 +574,22 @@ impl Referee {
                 }
                 // Nothing came to settle it and nobody is known to differ:
                 // the stop is for nothing.
-                if !self.peer.router().divergences().is_empty() {
+                if self.peer.router().divergences().iter().any(|d| d.theirs.tick == tick) {
                     continue;
                 }
             } else if any_differs && !malformed {
                 // A real divergence: the normal path (the seat asks).
+                continue;
+            }
+            let blame = |me: &mut Referee| {
+                if lied {
+                    let count = me.false_claims.entry(from).or_default();
+                    *count = count.saturating_add(1);
+                }
+            };
+            if self.released.contains(&tick) {
+                // Already released for this tick: nobody is stopped by it.
+                blame(self);
                 continue;
             }
             if self
@@ -577,11 +601,15 @@ impl Referee {
                 continue;
             }
             self.last_release = Some(now);
-            if lied {
-                let count = self.false_claims.entry(from).or_default();
-                *count = count.saturating_add(1);
+            blame(self);
+            // The release names the claimed tick's turn: only reports about
+            // that tick are dropped, never the room's frontier.
+            let tpt = u64::from(self.peer.router().config().ticks_per_turn.max(1));
+            let turn = u32::try_from(tick / tpt).unwrap_or(0);
+            self.released.insert(tick);
+            if self.released.len() > 64 {
+                self.released.pop_first();
             }
-            let turn = self.peer.router().next_turn();
             let msg = Message::Resynced(Resynced {
                 slot: from,
                 turn,

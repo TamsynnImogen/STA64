@@ -238,6 +238,12 @@ pub struct LockstepRouter {
     referee_pending: BTreeMap<Tick, u64>,
     /// The referee was found to be the odd one out: its digests are ignored.
     referee_ignored: bool,
+    /// The slot that was found to be the odd one out: re-seating it does not
+    /// restore belief.
+    ignored_slot: Option<PlayerId>,
+    /// Referee: the records of a seat overran the queue (the referee fell
+    /// behind the room).
+    overrun: bool,
     /// Referee: the first mismatch per seat, and the desync claims peers sent.
     divergences: BTreeMap<PlayerId, Divergence>,
     claims: Vec<(PlayerId, DesyncNotice)>,
@@ -246,6 +252,9 @@ pub struct LockstepRouter {
     /// resync loaded the state at it, and what a diverged seat sent before
     /// may still be in flight.
     stale_before: Tick,
+    /// Ticks the referee judged clean after a claim stopped the match for
+    /// nothing: later reports about them are dropped (at most 64).
+    ignored_ticks: BTreeSet<Tick>,
 }
 
 impl LockstepRouter {
@@ -345,10 +354,13 @@ impl LockstepRouter {
             spectator,
             referee_pending: BTreeMap::new(),
             referee_ignored: false,
+            ignored_slot: None,
+            overrun: false,
             divergences: BTreeMap::new(),
             claims: Vec::new(),
             seated: false,
             stale_before: 0,
+            ignored_ticks: BTreeSet::new(),
         })
     }
 
@@ -417,7 +429,7 @@ impl LockstepRouter {
             return Ok(());
         }
         if slot != self.referee {
-            self.referee_ignored = false;
+            self.referee_ignored = slot.is_some() && slot == self.ignored_slot;
             self.referee_pending.clear();
             self.unchecked.retain(|(p, _)| Some(*p) != self.referee);
         }
@@ -437,6 +449,12 @@ impl LockstepRouter {
     /// [`MAX_REFEREE_FINDINGS`] are kept between calls, the newest.
     pub fn take_claims(&mut self) -> Vec<(PlayerId, DesyncNotice)> {
         std::mem::take(&mut self.claims)
+    }
+
+    /// Referee: whether the room ran more than [`MAX_QUEUED_TURNS`] turns
+    /// ahead of it.
+    pub fn overrun(&self) -> bool {
+        self.overrun
     }
 
     /// Referee: whether the host has seated this referee (`RefereeSeated`).
@@ -790,13 +808,6 @@ impl LockstepRouter {
             SenderKind::Host
         } else if Some(from) == self.referee && from != self.me {
             SenderKind::Referee
-        } else if from == self.host
-            && self.spectator
-            && matches!(msg, Message::ResyncRequest(_) | Message::ResyncAck(_))
-        {
-            // The host asks the referee like any seat when it is the one
-            // that differs.
-            SenderKind::Peer
         } else {
             SenderKind::Peer
         };
@@ -814,7 +825,13 @@ impl LockstepRouter {
                 Ok(())
             }
             Message::Turn(rec) => self.receive_turn(from, rec),
-            Message::Desync(notice) if notice.ours.tick.max(notice.theirs.tick) <= self.stale_before => Ok(()),
+            Message::Desync(notice)
+                if notice.ours.tick.max(notice.theirs.tick) <= self.stale_before
+                    || self.ignored_ticks.contains(&notice.ours.tick)
+                    || self.ignored_ticks.contains(&notice.theirs.tick) =>
+            {
+                Ok(())
+            }
             Message::Desync(notice) if self.spectator => {
                 // A referee does not stop: it keeps the claim, to be checked
                 // against the digests it holds. The digest the claim gives as
@@ -978,6 +995,11 @@ impl LockstepRouter {
             return Err(RouterError::SeatClosed(from));
         }
         if seat.queue.len() >= MAX_QUEUED_TURNS {
+            if self.spectator {
+                // A referee that fell this far behind the room cannot verify
+                // it any more: it says so (`overrun`) and ends.
+                self.overrun = true;
+            }
             return Err(RouterError::TooFarAhead(from));
         }
         if rec.turn != seat.next_turn {
@@ -1083,12 +1105,29 @@ impl LockstepRouter {
         self.peer_desync = None;
     }
 
+    /// Ends the stop of a claim the referee judged false at `turn`'s first
+    /// tick: reports about that one tick are dropped from now on.
+    pub fn release_tick(&mut self, turn: u32) {
+        self.clear_desync();
+        if self.ignored_ticks.len() >= 64 {
+            self.ignored_ticks.pop_first();
+        }
+        let tick = Tick::from(turn) * Tick::from(self.cfg.ticks_per_turn.max(1));
+        self.ignored_ticks.insert(tick);
+        self.unchecked.retain(|(_, d)| d.tick != tick);
+    }
+
     /// [`LockstepRouter::clear_desync`] for a resync that left every seat at
     /// the state of `turn`'s first tick: what any seat reported for a tick up
     /// to it (a digest, a desync notice) described the state that was
     /// replaced, and is dropped, including what is still in flight.
     pub fn clear_desync_at(&mut self, turn: u32) {
         self.clear_desync();
+        // A turn far beyond this router's own is nonsense (a hostile
+        // authority must not blind the comparison by naming one).
+        if u64::from(turn) > u64::from(self.next_turn) + MAX_QUEUED_TURNS as u64 {
+            return;
+        }
         let tick = Tick::from(turn) * Tick::from(self.cfg.ticks_per_turn.max(1));
         self.stale_before = self.stale_before.max(tick);
         let floor = self.stale_before;
@@ -1269,7 +1308,7 @@ impl LockstepRouter {
     // ---- digests ----------------------------------------------------------
 
     fn compare(&mut self, slot: PlayerId, theirs: TickDigest) {
-        if theirs.tick <= self.stale_before {
+        if theirs.tick <= self.stale_before || self.ignored_ticks.contains(&theirs.tick) {
             return;
         }
         // Only ticks this peer has digests for are kept, so a hostile peer
@@ -1300,9 +1339,10 @@ impl LockstepRouter {
             Some(&d) if d != theirs.digest && Some(slot) == self.referee => {
                 // The referee's digest is not ours: who is odd is judged once
                 // every seat's digest for the tick is known.
-                if self.referee_pending.len() < DIGESTS_KEPT {
-                    self.referee_pending.insert(theirs.tick, theirs.digest);
+                if self.referee_pending.len() >= DIGESTS_KEPT {
+                    self.referee_pending.pop_first();
                 }
+                self.referee_pending.insert(theirs.tick, theirs.digest);
             }
             Some(&d) if d != theirs.digest => {
                 let notice = DesyncNotice {
@@ -1364,17 +1404,29 @@ impl LockstepRouter {
     /// and is no longer believed).
     fn settle_referee(&mut self) {
         let Some(referee) = self.referee else { return };
+        let floor = self.ours.keys().next().copied().unwrap_or(0);
         let ticks: Vec<Tick> = self.referee_pending.keys().copied().collect();
         for tick in ticks {
             let (have, missing) = self.digest_coverage(tick);
-            if !missing.is_empty() {
+            // A tick that left the window is judged with what is known: a seat
+            // that never reported its digest does not agree with anyone.
+            if !missing.is_empty() && tick >= floor {
                 continue;
             }
             let Some(reference) = self.referee_pending.remove(&tick) else { continue };
+            if !self.ours.contains_key(&tick) {
+                continue;
+            }
             let seats: Vec<u64> = have.iter().map(|(_, d)| *d).collect();
-            match crate::referee::judge(&seats, reference) {
+            let verdict = if missing.is_empty() {
+                crate::referee::judge(&seats, reference)
+            } else {
+                crate::referee::Verdict::ReferenceStands
+            };
+            match verdict {
                 crate::referee::Verdict::RefereeOutvoted => {
                     self.referee_ignored = true;
+                    self.ignored_slot = Some(referee);
                     self.referee_pending.clear();
                     self.unchecked.retain(|(p, _)| *p != referee);
                     self.note(RouterEvent::RefereeOutvoted { tick });

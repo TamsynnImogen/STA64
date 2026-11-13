@@ -1105,6 +1105,11 @@ impl Peer {
     /// (`NetControl::take_departures`): it may rejoin. Ends a transfer in
     /// progress to it.
     pub fn note_departed(&mut self, slot: PlayerId) {
+        // The referee's connection ended: the host unseats it, so whoever
+        // reclaims the relay slot is not believed (NET-05).
+        if self.router.is_host() && self.router.referee() == Some(slot) {
+            let _ = self.router.seat_referee(None);
+        }
         self.net.host.vacated.insert(slot);
         self.net.host.jobs.retain(|j| j.seat != slot);
     }
@@ -1254,7 +1259,13 @@ impl Peer {
                     last: r.last,
                 });
                 if r.last && self.net.client.is_none() && self.diverged_from_host().is_none() {
-                    self.router.clear_desync_at(r.turn);
+                    // A release with nothing resynced (count 0) loaded no
+                    // state: nothing is stale.
+                    if r.count == 0 {
+                        self.router.release_tick(r.turn);
+                    } else {
+                        self.router.clear_desync_at(r.turn);
+                    }
                     self.net.waiting_since = None;
                 }
             }
@@ -1618,7 +1629,7 @@ impl Peer {
             // A seat that stopped at the mismatch sent no record with its
             // digest: what it says it holds counts when it is not the
             // authority's own.
-            && theirs.is_none_or(|t| t == r.digest)
+            && theirs.map_or(self.router.is_spectator(), |t| t == r.digest)
             && mine != Some(r.digest);
         if !plausible {
             return self.refuse(from, SnapshotRefusal::NotDiverged);
@@ -1777,8 +1788,7 @@ impl Peer {
                 last: true,
             });
             self.router.send_message(Destination::All, &msg).ok();
-            let next = self.router.next_turn();
-            self.router.clear_desync_at(next);
+            self.router.clear_desync();
         }
     }
 
