@@ -44,7 +44,7 @@ pub mod weapon;
 pub use aip::{Aip, AipList, AipValue, AipVar, BuildItem};
 pub use confinement::{ConfinementInitial, ConfinementOverrides, ConfinementRules, ConfinementSpatial};
 pub use db::{ContentBuilder, ContentDb, DEFAULT_TECH_TREE};
-pub use def::{BuildDef, ClassLabel, ColonizePodDef, DefRef, FireArc, FxRefs, Hardpoint, LaunchPoint, MoveStats, NebulaPathing, OrdnanceCrewLoss, ResourceWeaponDef, ShieldDef, SoundRefs, UnitDef, WeaponDef, WeaponKind};
+pub use def::{BuildDef, ClassLabel, ColonizePodDef, DefRef, FireArc, FxRefs, Hardpoint, LaunchPoint, MoveStats, NebulaPathing, OrdnanceCrewLoss, RepairDef, ResourceWeaponDef, ShieldDef, SoundRefs, UnitDef, WeaponDef, WeaponKind};
 pub use features::{Features, Profile};
 pub use planet::PlanetRole;
 pub use gui_cfg::{Colour, GuiCfg, GuiLayout, GuiValue, Panel, Rect};

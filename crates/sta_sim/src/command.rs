@@ -94,8 +94,14 @@ pub enum Order {
     /// Mission `Goto(.., warp = true)` (SIM-56): a move that asks for warp when
     /// the goal is far. `queue` as [`Order::Move`]. Tag 15.
     MoveWarp { units: Vec<EntityId>, to: Vec3, queue: bool },
+    /// Request yard repair (SIM-40). `Some(yard)` names a facility selected
+    /// by the caller; `None` asks the repair runtime to choose a facility.
+    /// The runtime owns eligibility, selection and repeat-order policy.
+    /// Rejected without changing orders until that runtime is integrated.
+    /// Appended tag 16 preserves every preceding Order tag and payload.
+    Repair { units: Vec<EntityId>, yard: Option<EntityId> },
     /// Colonize a planet with pod colony ships (SIM-30; mission `Colonize`
-    /// needs the ship's special-forces flag): see [`crate::colony`]. Tag 16.
+    /// needs the ship's special-forces flag): see [`crate::colony`]. Tag 17.
     Colonize { units: Vec<EntityId>, planet: EntityId },
 }
 
@@ -507,7 +513,7 @@ mod tests {
             (13, Order::AttackAny { units: u.clone() }),
             (14, Order::AttackPoint { units: u.clone(), at }),
             (15, Order::MoveWarp { units: u.clone(), to: at, queue: true }),
-            (16, Order::Colonize { units: u, planet: id }),
+            (17, Order::Colonize { units: u, planet: id }),
         ];
         for (tag, o) in orders {
             let bytes = postcard::to_allocvec(&o).unwrap();
