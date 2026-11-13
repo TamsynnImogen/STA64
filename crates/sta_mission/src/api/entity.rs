@@ -176,21 +176,22 @@ impl UserData for Entity {
                     return Ok(());
                 };
                 let edit = if name == "forward" {
-                    let len = x.hypot(z);
-                    if len < 1e-9 {
+                    // Scaled to unit size here only to keep the Fixed conversion in range.
+                    let m = x.abs().max(z.abs());
+                    if m < 1e-9 {
                         c.unsupported("Entity.forward = a Vector with no horizontal direction");
                         return Ok(());
                     }
-                    Edit::Heading(id, (sta_core::Fixed::from_f64(x / len), sta_core::Fixed::from_f64(z / len)))
+                    Edit::Heading(id, (sta_core::Fixed::from_f64(x / m), sta_core::Fixed::from_f64(z / m)))
                 } else {
-                    Edit::AngularVelocity(id, sta_core::Fixed::from_f64(-y.clamp(-1000.0, 1000.0)))
+                    Edit::AngularVelocity(id, sta_core::Fixed::from_f64(-y.clamp(-(sta_sim::command::MAX_SCRIPT_OMEGA as f64), sta_sim::command::MAX_SCRIPT_OMEGA as f64)))
                 };
                 super::edit_feedback::queue(&mut c, label, edit)?;
                 Ok(())
             });
         }
         // Other installed-mission assignments with no sim edit behind them yet
-        // (autonomy, facing, angular velocity): accepted and
+        // (autonomy, names): accepted and
         // recorded so the callback keeps running; the report names each.
         for (name, need) in [
             ("movementAutonomy", "a sim autonomy edit"),

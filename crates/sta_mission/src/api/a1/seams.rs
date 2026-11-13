@@ -58,14 +58,13 @@ pub(super) fn install(lua: &Lua, env: &Env, table: &Table) -> mlua::Result<()> {
     table.set("PointAt", def(lua, env, "PointAt", &["hh", "hs"], |lua, e, ov, a| {
         let unit = e.unit("PointAt", a[0].id())?;
         let to = if ov == 0 { let t = e.unit("PointAt", a[1].id())?; e.ctx.borrow().placed(t.id, t.pos) } else { e.path_point(lua, "PointAt", a[1].text(), 0)? };
-        let (from, to) = { let c = e.ctx.borrow(); (c.placed(unit.id, unit.pos), to) };
-        let (dx, dz) = (f64::from(to.x.to_f32()) - f64::from(from.x.to_f32()), f64::from(to.z.to_f32()) - f64::from(from.z.to_f32()));
-        let len = dx.hypot(dz);
-        if len < 1e-6 {
+        let from = e.ctx.borrow().placed(unit.id, unit.pos);
+        let dir = (to.x - from.x, to.z - from.z);
+        if dir == (sta_core::Fixed::ZERO, sta_core::Fixed::ZERO) {
             e.ctx.borrow_mut().unsupported("A1.PointAt: the unit is at the target (no direction to face)");
             return Ok(Value::Nil);
         }
-        let heading = (sta_core::Fixed::from_f64(dx / len), sta_core::Fixed::from_f64(dz / len));
+        let heading = dir;
         e.edit("PointAt", sta_sim::command::Edit::Heading(unit.id, heading))?;
         Ok(Value::Nil)
     })?)?;

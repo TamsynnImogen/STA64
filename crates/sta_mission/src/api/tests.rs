@@ -670,6 +670,8 @@ fn entity_forward_and_omega_queue_sim_edits_and_bad_input_is_recorded() {
     let hero = g.sim.units.get(HERO).unwrap();
     // y is ignored for the facing; (0, -4) normalised is -z.
     assert_eq!(hero.heading, (sta_core::Fixed::ZERO, -sta_core::Fixed::ONE));
+    // The omega edit reached the sim and was accepted; the unit's engines are on, so it changed nothing.
+    assert_eq!(hero.omega, sta_core::Fixed::ZERO);
     let names: Vec<String> = g.rt.unsupported().into_iter().map(|(n, _)| n).collect();
     assert!(names.iter().any(|n| n.contains("no horizontal direction")), "{names:?}");
     assert!(names.iter().any(|n| n.contains("Entity.forward = a Vector without finite")), "{names:?}");

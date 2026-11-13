@@ -187,20 +187,26 @@ pub enum Edit {
     /// exceed). Rejected for a seat with no initialized stock. SCRIPT/BENCH
     /// only. Appended tag 27.
     TeamCrew(PlayerId, Fixed),
-    /// Mission `SetPosition` / Roots `Entity.position =` (SIM-57): move a live
-    /// unit to this point at once, then run the map-confinement update the
-    /// ordinary position path runs. Rejected for a unit that is dying.
-    /// SCRIPT/BENCH only. Appended tag 28.
+    /// Mission `SetPosition` (SIM-57): move a unit to this point at once with
+    /// its speed zeroed; heading, turn rate, target and queued waypoints are
+    /// kept. A unit whose ForceOntoMap flag is set is then confined by the map
+    /// rule (the position update of `boundary`); there is no solid-contact
+    /// recovery, as in the original. Rejected for a dying unit and for one under
+    /// construction (STA64 policy, not measured). SCRIPT/BENCH only. Appended
+    /// tag 28.
     Position(EntityId, Vec3),
     /// Mission `PointAt` / Roots `Entity.forward =` (SIM-57): face this
     /// direction at once (x, z of a horizontal direction; the sim normalises
-    /// it; a zero direction is rejected). SCRIPT/BENCH only. Appended tag 29.
+    /// it; a zero direction or a dying unit is rejected). Speed, turn rate and
+    /// orders are kept. SCRIPT/BENCH only. Appended tag 29.
     Heading(EntityId, (Fixed, Fixed)),
     /// Mission `SetAngularVelocity` / Roots `Entity.omega =` (SIM-57): the
-    /// unit's current turn rate about the vertical axis, radians per second,
-    /// positive from +X toward +Z, clamped to +-[`MAX_SCRIPT_OMEGA`]. The
-    /// steering model then acts on it as on any turn rate. SCRIPT/BENCH only.
-    /// Appended tag 30.
+    /// yaw turn rate in radians per second, positive from +X toward +Z,
+    /// clamped to +-[`MAX_SCRIPT_OMEGA`]. Stored only for a craft with its
+    /// engines off, which then turns without decay; for any other live unit
+    /// the edit is accepted and changes nothing (a craft under its own
+    /// steering has the value overwritten within a tick in the original).
+    /// A dying unit is rejected. SCRIPT/BENCH only. Appended tag 30.
     AngularVelocity(EntityId, Fixed),
 }
 

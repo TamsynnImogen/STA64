@@ -51,6 +51,8 @@ use crate::api::search::stem;
 use crate::api::{Shared, edit_feedback, pos_f64, spawn, to_vec3, vector};
 
 /// `AiCommand` values (read from the executable) the `SetCommand*VO` calls use.
+/// The sim's cap on a script's turn rate, in radians per second.
+const MAX_OMEGA: f64 = sta_sim::command::MAX_SCRIPT_OMEGA as f64;
 const CMD_STOP: i64 = 3;
 const CMD_GO: i64 = 4;
 const CMD_ATTACK: i64 = 6;
@@ -506,23 +508,22 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
             let Some(target) = e.alive(a[1].id()) else { return nothing() };
             e.ctx.borrow().placed(target.id, target.pos)
         };
-        let (from, to) = { let c = e.ctx.borrow(); (c.placed(unit.id, unit.pos), to) };
-        let (dx, dz) = (f64::from(to.x.to_f32()) - f64::from(from.x.to_f32()), f64::from(to.z.to_f32()) - f64::from(from.z.to_f32()));
-        let len = dx.hypot(dz);
-        if len < 1e-6 {
+        let from = e.ctx.borrow().placed(unit.id, unit.pos);
+        let dir = (to.x - from.x, to.z - from.z);
+        if dir == (Fixed::ZERO, Fixed::ZERO) {
             // The engine builds a facing from a zero-length direction (not finite);
             // STA64 keeps the facing and counts the call.
             e.ctx.borrow_mut().unsupported("A2.PointAt: the unit is at the target (the engine's facing is not finite there)");
             return nothing();
         }
-        let heading = (Fixed::from_f64(dx / len), Fixed::from_f64(dz / len));
+        let heading = dir;
         edit_feedback::queue(&mut e.ctx.borrow_mut(), "A2.PointAt", Edit::Heading(unit.id, heading))?;
         nothing()
     })?)?;
     table.set("SetAngularVelocity", def(lua, &env, "SetAngularVelocity", &["hv"], |_, e, _, a| {
         let Some(unit) = e.alive(a[0].id()) else { return nothing() };
         let (_, y, _) = a[1].vec();
-        edit_feedback::queue(&mut e.ctx.borrow_mut(), "A2.SetAngularVelocity", Edit::AngularVelocity(unit.id, Fixed::from_f64(-y.clamp(-1000.0, 1000.0))))?;
+        edit_feedback::queue(&mut e.ctx.borrow_mut(), "A2.SetAngularVelocity", Edit::AngularVelocity(unit.id, Fixed::from_f64(-y.clamp(-MAX_OMEGA, MAX_OMEGA))))?;
         nothing()
     })?)?;
 

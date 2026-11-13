@@ -613,8 +613,9 @@ fn set_position_and_point_at_queue_typed_edits_and_are_not_counted() {
         edits,
         vec![
             edit(Edit::Position(s.ids[0], Vec3::from_f32([10.0, 0.0, 0.0]))),
-            edit(Edit::Heading(s.ids[0], (Fixed::ONE, Fixed::ZERO))),
-            edit(Edit::Heading(s.ids[0], (Fixed::ONE, Fixed::ZERO))),
+            // From where the unit now is (10, after its queued SetPosition).
+            edit(Edit::Heading(s.ids[0], (Fixed::from_int(90), Fixed::ZERO))),
+            edit(Edit::Heading(s.ids[0], (Fixed::from_int(490), Fixed::ZERO))),
         ]
     );
     assert!(rt.unsupported().iter().all(|(k, _)| !k.contains("SetPosition") && !k.contains("PointAt")));

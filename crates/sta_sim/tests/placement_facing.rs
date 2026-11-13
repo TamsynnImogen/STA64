@@ -75,11 +75,13 @@ fn teleport_is_instant_zeroes_speed_and_keeps_heading_and_order() {
     assert!(after.speed < before.speed / n(4), "speed was zeroed: {:?} vs {:?}", after.speed, before.speed);
     assert!(near(after.pos.x, -300.0, 1.0) && near(after.pos.z, 100.0, 1.0), "{:?}", after.pos);
     assert_eq!(after.target, before.target, "the order is kept");
-    assert!(after.heading.1 > Fixed::ZERO, "the heading is kept (it only steers toward the target)");
+    // One tick of steering toward the new bearing (0.77, 0.64) moves it ~0.13; an instant turn to it would move it 0.77.
+    let (bh, ah) = (before.heading, after.heading);
+    assert!(near(ah.0, f64::from(bh.0.to_f32()), 0.3) && near(ah.1, f64::from(bh.1.to_f32()), 0.3), "{bh:?} -> {ah:?}");
 }
 
 #[test]
-fn teleport_clamps_only_a_unit_whose_force_onto_map_flag_is_set() {
+fn a_teleported_unit_ends_the_tick_inside_the_bounds_only_with_its_force_onto_map_flag() {
     let mut sim = Sim::from_setup(&setup());
     let id = spawn(&mut sim, at(0, 0, 0), (Fixed::ZERO, Fixed::ONE));
     assert_eq!(sim.force_onto_map(id), Some(true));
@@ -98,7 +100,7 @@ fn teleport_clamps_only_a_unit_whose_force_onto_map_flag_is_set() {
 }
 
 #[test]
-fn placement_edits_are_for_scripts_and_the_bench_and_need_a_live_unit() {
+fn placement_edits_are_for_scripts_and_the_bench_and_need_an_existing_unit() {
     let mut sim = Sim::from_setup(&setup());
     let id = spawn(&mut sim, at(0, 0, 0), (Fixed::ZERO, Fixed::ONE));
     let edits = [

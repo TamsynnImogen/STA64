@@ -456,8 +456,9 @@ fn placement_and_facing_calls_queue_typed_script_edits() {
         vec![
             Edit::Position(a, at(10)),
             Edit::Position(a, at(30)),
-            Edit::Heading(a, (Fixed::ONE, Fixed::ZERO)),
-            Edit::Heading(a, (Fixed::ONE, Fixed::ZERO)),
+            // The direction from where the unit now is (30, after its queued SetPosition); the sim normalises it.
+            Edit::Heading(a, (Fixed::from_int(70), Fixed::ZERO)),
+            Edit::Heading(a, (Fixed::from_int(1970), Fixed::ZERO)),
             // The sim's turn rate is positive from +x toward +z; the engine's yaw is the other way.
             Edit::AngularVelocity(a, Fixed::from_f64(-0.5)),
         ],
