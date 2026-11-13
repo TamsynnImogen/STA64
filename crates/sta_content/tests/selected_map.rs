@@ -180,7 +180,7 @@ fn selected_nested_name_controls_companion_and_precise_starts_without_source_mut
 }
 
 #[test]
-fn missing_bad_unreadable_and_unresolved_mdf_never_publish_partial_starts() {
+fn missing_bad_unreadable_and_short_mdf_offer_seats_only_for_existing_paths() {
     let root = TempRoot::new();
     let (vfs, index) = root.mount(None);
     let source = source_map();
@@ -190,16 +190,16 @@ fn missing_bad_unreadable_and_unresolved_mdf_never_publish_partial_starts() {
     assert!(missing.warnings.is_empty());
 
     for bytes in [
-        &b"StartLocations = 2x\n"[..],
-        &b"StartLocations = 9\n"[..],
-        &b"StartLocations = 2\nStartLocations = 2\n"[..],
+        &b"StartLocations = x2\n"[..], // unparsable: eight
+        &b"StartLocations = 9\n"[..], // out of range: the native reader falls back to eight, Camera_6 is absent
         &b"StartLocations = 6\n"[..], // Camera_6 is absent after five valid slots
+        &b"nothing here\n"[..],       // no count: eight again
     ] {
         root.write("Data/bzn/custom/renamed.mdf", bytes);
         let (vfs, index) = root.mount(None);
         let result = convert(&source, "custom/renamed", &vfs, &index);
         assert_source_scene(&result, &source);
-        assert!(result.map.starts.is_empty(), "{bytes:?}");
+        assert_eq!(result.map.starts.len(), 5, "{bytes:?}: seats only for the five existing paths");
         assert!(
             result.warnings.iter().any(|w| w.file == "bzn/custom/renamed.mdf"),
             "{:?}",
@@ -244,9 +244,10 @@ fn packed_loose_mod_and_whiteout_companions_follow_vfs_precedence() {
     root.write("Data/Mods/Child/bzn/custom/renamed.mdf", b"StartLocations = 9\n");
     let (vfs, index) = root.mount(Some("Child"));
     let bad_child = convert(&source, "custom/renamed", &vfs, &index);
-    assert!(
-        bad_child.map.starts.is_empty(),
-        "invalid child must not fall back to the valid parent"
+    assert_eq!(
+        bad_child.map.starts.len(),
+        5,
+        "a bad child count means eight (five paths), not the valid parent's four"
     );
     assert!(bad_child.warnings.iter().any(|w| w.file == mdf));
 
@@ -400,4 +401,30 @@ fn installed_a2_format_named_conversion_preserves_existing_map_results() {
     }
     assert!(maps > 0, "control contains no maps");
     eprintln!("A2-format control: {maps} maps, {starts} starts; selected conversion preserves every map result");
+}
+
+/// CON-42: a repeated key takes the first; a count above the usable paths
+/// offers seats only for the existing `Camera_i` paths, never a stacked fallback.
+#[test]
+fn native_count_offers_seats_only_for_existing_paths() {
+    let root = TempRoot::new();
+    let source = source_map();
+    root.write("Data/bzn/custom/renamed.mdf", b"startlocations=2\nStartLocations = 5\n");
+    let (vfs, index) = root.mount(None);
+    assert_eq!(convert(&source, "custom/renamed", &vfs, &index).map.starts.len(), 2);
+    // RTS_CFG.h with both keys, or only one, must not change that.
+    for cfg in [
+        &b"float SHIP_COMBAT_FLOOR = 10.0;\nfloat SHIP_COMBAT_CEILING = 67.0;\n"[..],
+        &b"float SHIP_COMBAT_FLOOR = 10.0;\n"[..],
+    ] {
+        root.write("Data/RTS_CFG.h", cfg);
+        root.write("Data/bzn/custom/renamed.mdf", b"StartLocations = banana\n");
+        let (vfs, index) = root.mount(None);
+        let result = convert(&source, "custom/renamed", &vfs, &index);
+        assert_eq!(result.map.starts.len(), 5, "eight announced, five paths");
+        assert!(result.warnings.iter().any(|w| w.message.contains("only 5")), "{:?}", result.warnings);
+        let first = result.map.starts[0].pos;
+        assert_eq!((first.x, first.y, first.z), (Fixed::from_int(50), Fixed::from_f64(12.5), Fixed::from_int(-10)));
+        assert!(result.map.starts.iter().all(|s| s.pos.x != Fixed::from_int(50) || s.pos.z != Fixed::from_int(50)));
+    }
 }

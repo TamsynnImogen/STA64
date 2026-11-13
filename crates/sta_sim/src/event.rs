@@ -44,4 +44,8 @@ pub enum SimEvent {
     /// a chat-display instruction or a keyboard event. See `MissionText` in
     /// [`crate::command::CommandKind`]. Appended after spawn receipts.
     MissionText { player: PlayerId, seq: u32, text: String },
+    /// A point-defence weapon switched on or off (SIM-37), by an order or by
+    /// running out of special energy. Only with `Features::pd_energy`.
+    /// Appended to preserve every existing postcard event tag.
+    PointDefenceChanged { id: EntityId, on: bool },
 }
