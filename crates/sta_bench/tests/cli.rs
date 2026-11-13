@@ -99,3 +99,62 @@ fn run_scenarios_and_diff_reports() {
     assert!(t.contains("same  firing"), "{t}");
     assert_eq!(run(&["diff", ra.to_str().unwrap(), "/nonexistent"]).status.code(), Some(1));
 }
+
+/// Every file of a report except the run id, wall times and the index page.
+fn report_files(dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+    fn rec(root: &Path, d: &Path, out: &mut std::collections::BTreeMap<String, Vec<u8>>) {
+        for e in std::fs::read_dir(d).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                rec(root, &p, out);
+            } else {
+                let rel = p.strip_prefix(root).unwrap().to_string_lossy().into_owned();
+                if rel == "timing.json" || rel == "index.html" {
+                    continue;
+                }
+                let mut body = std::fs::read(&p).unwrap();
+                if rel == "results.json" {
+                    // Drop the run id: `{"run":"<stamp>-<pid>",...`.
+                    let t = String::from_utf8(body).unwrap();
+                    let at = t.find(",\"passed\"").unwrap();
+                    body = t[at..].as_bytes().to_vec();
+                }
+                out.insert(rel, body);
+            }
+        }
+    }
+    let mut out = Default::default();
+    rec(dir, dir, &mut out);
+    out
+}
+
+#[test]
+fn jobs_do_not_change_the_report_and_it_has_an_index() {
+    let (one, two) = (tmp("jobs1"), tmp("jobs2"));
+    let a = run(&["check", "--jobs", "1", "--out", one.to_str().unwrap()]);
+    let b = run(&["check", "--jobs", "2", "--out", two.to_str().unwrap()]);
+    assert!(a.status.success() && b.status.success(), "{}{}", text(&a), text(&b));
+    let (da, db) = (run_dir(&one), run_dir(&two));
+    assert_eq!(report_files(&da), report_files(&db), "reports differ between --jobs 1 and 2");
+    let index = std::fs::read_to_string(da.join("index.html")).unwrap();
+    assert!(index.contains("<table>") && index.contains("planet/log.txt"), "{index}");
+    let js = std::fs::read_to_string(da.join("results.json")).unwrap();
+    assert!(js.contains("\"failed\":0") && js.contains("\"final_digest\""), "{js}");
+    assert!(std::fs::read_to_string(da.join("timing.json")).unwrap().contains("\"jobs\":1"));
+    assert!(std::fs::read_to_string(da.join("report.md")).unwrap().contains("**PASS**"));
+    assert!(text(&b).contains("wall "), "{}", text(&b));
+    assert_eq!(run(&["check", "--jobs", "x"]).status.code(), Some(2));
+}
+
+#[test]
+fn a_failing_case_fails_the_run_at_any_jobs() {
+    let dir = tmp("jobs-bad");
+    std::fs::create_dir_all(dir.join("scenarios")).unwrap();
+    std::fs::create_dir_all(dir.join("scenes")).unwrap();
+    std::fs::copy(bench_dir().join("scenes/planet.ini"), dir.join("scenes/planet.ini")).unwrap();
+    std::fs::write(dir.join("scenarios/bad.md"), "# bad\n\nScene: planet\n\n1. Run 5 ticks\n2. Expect \"ship\" speed is 99\n").unwrap();
+    let out = tmp("jobs-bad-out");
+    let o = run(&["check", "--jobs", "3", "--bench-dir", dir.to_str().unwrap(), "--out", out.to_str().unwrap()]);
+    assert_eq!(o.status.code(), Some(1), "{}", text(&o));
+    assert!(std::fs::read_to_string(run_dir(&out).join("report.md")).unwrap().contains("**FAIL**"));
+}

@@ -27,7 +27,7 @@ use sta_content::{ContentDb, MapDef};
 use sta_core::{Fixed, TICK_HZ, Tick};
 
 pub use bench::Bench;
-pub use report::{default_report_dir, write_report};
+pub use report::{Timing, default_report_dir, write_report, write_report_timed};
 
 use crate::parse::scenario::{Scenario, StepKind};
 use crate::parse::scene::{MapObjects, Start};

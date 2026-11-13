@@ -199,8 +199,16 @@ Refit's names (`fire.end obj=shooter`, `cloak.done obj=warbird`).
     behind a named pipe (Unix), state in `<results parent>/sessions/<id>/`.
   - `diff A B`: two report directories, per case: digests (first differing
     tick), marks, objects by name, frames byte for byte; exit 1 on a difference.
-  - Not yet: isolated install clones per session, `--jobs`, `index.html`,
-    frames from a session, `Take a screenshot`/`Expect shots` steps.
+  - `run` and `check` take `--jobs N` (default 2): cases run on a worker pool
+    and the report is the same at any N (cases sorted by name, wall times only
+    in `timing.json` and `index.html`). Tier-2 `sta64` children run at most
+    `--gpu-jobs` at a time (default 1) at the lowest priority, and a second
+    `session start` is refused while `--gpu-jobs` sessions run.
+  - `session start --install <root> [--mod <name>]` mounts a private clone of
+    the install (reflinks where the file system has them, small files copied,
+    large ones symlinked), so sessions never see each other's files; `session
+    stop` exits 1 if the source install changed meanwhile.
+  - Not yet: frames from a session, `Take a screenshot`/`Expect shots` steps.
 - **Frames** (`sta64 --headless --frames 0,100 --frame-dir D --frame-size WxH`,
   `crates/sta64/src/bench/frames.rs`): a windowless render app draws into an
   offscreen image and a `Screenshot` of it is written as PNG at each tick; the
@@ -215,8 +223,9 @@ Refit's names (`fire.end obj=shooter`, `cloak.done obj=warbird`).
 **tier 1**: `sta_bench` + `sta_sim` in-process, milliseconds per case, run by
 `cargo test`. Only rendering checks (frames, visibility, culling,
 interpolation) are **tier 2**: a `sta64 --headless` process per case,
-scheduled by `sta-bench run --jobs N`. Parallelism is processes and test
-threads; there are no slots to manage.
+scheduled by `sta-bench run --jobs N --gpu-jobs M`. Parallelism is processes
+and test threads; there are no slots to manage, but only `--gpu-jobs`
+(default 1) GPU processes run at once.
 
 ## Scenarios
 
@@ -536,7 +545,7 @@ a command acts on"):
   default when more than one runs, and an ended ID is an error. An agent
   passes its ID on every call and stops only sessions it started.
 - Each run writes `$XDG_DATA_HOME/sta64/bench/results/<run>/` with `latest`
-  pointing at it: `index.html`, `report.md`, `results.json`, and per case
+  pointing at it: `index.html`, `report.md`, `results.json`, `timing.json`, and per case
   `log.txt`, `bench.log`, `objects.jsonl`, `marks`, `frames/`.
 - CI uploads `report.md`, `results.json` and the `digests` files, never frames.
 

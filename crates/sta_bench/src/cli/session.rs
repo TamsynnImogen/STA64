@@ -13,7 +13,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use super::tier2::{materialize_scene, sta64_path};
+use super::clone;
+use super::tier2::{self, materialize_scene, sta64_path};
 use super::{Fail, Opts, Outcome, config, report_root};
 use crate::parse::parse_command;
 
@@ -74,11 +75,32 @@ fn start(o: &Opts) -> Outcome {
     let name = o.scene.clone().ok_or_else(|| Fail::Usage("session start: --scene <name>".into()))?;
     let overrides: Vec<(String, String)> =
         o.rest[1..].iter().filter_map(|w| w.split_once('=')).map(|(k, v)| (k.to_owned(), v.to_owned())).collect();
+    // One headless sta64 at a time unless the caller says otherwise: a second
+    // GPU process is what freezes a shared machine.
+    let running = running_sessions(o);
+    let allowed = super::jobs::gpu_jobs(o);
+    if running >= allowed {
+        return Err(Fail::Error(format!(
+            "{running} session(s) already running (limit {allowed}): stop one, or pass --gpu-jobs {}",
+            running + 1
+        )));
+    }
     let cfg = config(o);
     let scene = materialize_scene(&cfg.scene_dir, &name, &overrides).map_err(Fail::Error)?;
     let id = new_id();
     let dir = root(o).join(&id);
     fs::create_dir_all(&dir).map_err(|e| Fail::Error(format!("{}: {e}", dir.display())))?;
+    // A private clone of the install, when one is asked for.
+    let mut install_root = None;
+    if let Some(src) = &o.install {
+        let dst = dir.join("install");
+        let stats = clone::clone_install(src, &dst)
+            .map_err(|e| Fail::Error(format!("cloning {}: {e}", src.display())))?;
+        fs::write(dir.join("source"), src.display().to_string()).map_err(|e| Fail::Error(e.to_string()))?;
+        fs::write(dir.join("source.manifest"), clone::manifest_text(src)).map_err(|e| Fail::Error(e.to_string()))?;
+        println!("  install cloned: {} reflinked, {} copied, {} linked", stats.reflinked, stats.copied, stats.linked);
+        install_root = Some(dst);
+    }
     let (scene_path, fifo) = (dir.join("scene.ini"), dir.join("in"));
     fs::write(&scene_path, scene).map_err(|e| Fail::Error(e.to_string()))?;
     let made = Command::new("mkfifo").arg(&fifo).status();
@@ -97,10 +119,16 @@ fn start(o: &Opts) -> Outcome {
         .spawn()
         .map_err(err)?;
     let input = File::open(&fifo).map_err(err)?;
-    let mut cmd = Command::new(sta64_path(o));
+    let mut cmd = tier2::low_priority(&sta64_path(o), &[]);
     cmd.args(["--headless", "--clock", "bench", "--control", "stdio", "--scene"])
-        .arg(&scene_path)
-        .stdin(Stdio::from(input))
+        .arg(&scene_path);
+    if let Some(root) = &install_root {
+        cmd.arg("--install-root").arg(root);
+        if let Some(m) = &o.mod_name {
+            cmd.args(["--mod", m]);
+        }
+    }
+    cmd.stdin(Stdio::from(input))
         .stdout(File::create(dir.join("out.log")).map_err(err)?)
         .stderr(File::create(dir.join("err.log")).map_err(err)?);
     #[cfg(unix)]
@@ -153,9 +181,22 @@ fn stop(o: &Opts) -> Outcome {
             kill(p);
         }
     }
+    // The source install must be as it was when the session started.
+    let mut code = 0;
+    if let Ok(src) = fs::read_to_string(dir.join("source")) {
+        let was = fs::read_to_string(dir.join("source.manifest")).unwrap_or_default();
+        if clone::manifest_text(Path::new(src.trim())) != was {
+            eprintln!("sta-bench: the source install {} changed while the session ran", src.trim());
+            code = 1;
+        }
+    }
     let _ = fs::remove_dir_all(&dir);
     println!("stopped {id}");
-    Ok(0)
+    Ok(code)
+}
+
+fn running_sessions(o: &Opts) -> usize {
+    fs::read_dir(root(o)).into_iter().flatten().flatten().filter(|e| read_pid(&e.path(), "pid").is_some_and(pid_alive)).count()
 }
 
 fn list(o: &Opts) -> Outcome {
