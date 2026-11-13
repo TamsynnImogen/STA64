@@ -476,6 +476,9 @@ fn audio_messages_are_done_when_stopped_or_reported() {
     assert_eq!(rt.eval::<Vec<String>>(pending).unwrap(), vec!["movie:0:m.bik".to_owned()]);
     rt.eval::<()>("A1.MovieDone()").unwrap();
     assert!(rt.eval::<Vec<String>>(pending).unwrap().is_empty());
+    // a handle still at its -1 start value: the engine finds no such sound
+    let (_, commands) = run(&s, "A1.StopAudioMessage(-1)");
+    assert!(commands.is_empty(), "{commands:?}");
 }
 
 #[test]

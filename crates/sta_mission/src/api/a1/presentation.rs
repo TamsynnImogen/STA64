@@ -234,7 +234,10 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
         Ok(Value::Integer(i64::from(id)))
     })?)?;
     table.set("StopAudioMessage", def(lua, env, "StopAudioMessage", &["i"], |_, e, _, a| {
-        let id = u32::try_from(a[0].int()).map_err(|_| mlua::Error::runtime("A1.StopAudioMessage requires a sound id"))?;
+        // The engine looks the id up in its playing sounds and does nothing when
+        // it is absent (read from Armada.exe, static): the missions stop handles
+        // still holding their -1 start value.
+        let Ok(id) = u32::try_from(a[0].int()) else { return Ok(Value::Nil) };
         e.st.borrow_mut().sounds_active.remove(&id);
         e.present("StopAudioMessage", Presentation::StopSound { id })?;
         Ok(Value::Nil)

@@ -153,6 +153,6 @@ fn converted_a1_fed1_runs_in_the_campaign_runner() {
     assert!(p.errors.is_empty(), "{:?}", p.errors);
     assert!(p.step_errors.is_empty(), "{:?}", p.step_errors);
     assert_eq!(p.rules, 34);
-    assert!(p.rules_held.len() >= 4, "{:?}", p.rules_held);
+    assert!(p.rules_held.len() >= 5, "{:?}", p.rules_held);
     assert!(p.handles_resolved >= 10, "resolved {}, unresolved {:?}", p.handles_resolved, p.unresolved);
 }
