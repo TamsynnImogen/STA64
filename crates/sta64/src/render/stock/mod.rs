@@ -2,6 +2,7 @@
 //! as the original games draw them. The Refit look of the same things (volumetric
 //! nebulae) stays in `render/nebula.rs` and is chosen by `RenderProfile::Refit`.
 
+pub mod hulls;
 pub mod nebula;
 
 use super::profile::{Effect, ProfileEffects};

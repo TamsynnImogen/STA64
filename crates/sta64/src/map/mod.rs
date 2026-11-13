@@ -331,6 +331,11 @@ struct FpsText;
 #[derive(Component)]
 struct MapLight(usize);
 
+/// Whether the map's own `dlight` aimed this light (the Stock hull look uses only those;
+/// an unaimed one is the viewer's default).
+#[derive(Component, Default)]
+pub struct MapLightSource(pub bool);
+
 /// Constant rotation about a local axis (asteroid fields orbit, rocks tumble).
 #[derive(Component)]
 struct Spin {
@@ -376,7 +381,7 @@ type MapState<'w> = (
 type Lighting<'w, 's> = (
     ResMut<'w, crate::render::strategic::Silhouettes>,
     ResMut<'w, GlobalAmbientLight>,
-    Query<'w, 's, (&'static MapLight, &'static mut Transform, &'static mut DirectionalLight), Without<Orbit>>,
+    Query<'w, 's, (&'static MapLight, &'static mut MapLightSource, &'static mut Transform, &'static mut DirectionalLight), Without<Orbit>>,
 );
 
 pub struct MapPlugin;
@@ -489,6 +494,7 @@ fn setup(mut commands: Commands) {
     commands.spawn((
         MatchEntity,
         MapLight(0),
+        MapLightSource(false),
         RenderLayers::from_layers(&[0, BACKGROUND_LAYER]),
         DirectionalLight {
             illuminance: 6000.0,
@@ -499,6 +505,7 @@ fn setup(mut commands: Commands) {
     commands.spawn((
         MatchEntity,
         MapLight(1),
+        MapLightSource(false),
         RenderLayers::from_layers(&[0, BACKGROUND_LAYER]),
         DirectionalLight {
             illuminance: 1500.0,
@@ -1136,7 +1143,8 @@ fn rebuild(
     }
 
     // Lights: the map's dlights if it has them, else the defaults.
-    for (ml, mut tf, mut light) in &mut lights {
+    for (ml, mut source, mut tf, mut light) in &mut lights {
+        source.0 = map_lights.get(ml.0).is_some();
         match map_lights.get(ml.0) {
             Some((dir, colour)) => {
                 *tf = Transform::IDENTITY.looking_to(*dir, if dir.y.abs() > 0.99 { Vec3::Z } else { Vec3::Y });
