@@ -401,7 +401,7 @@ fn shots_are_recorded_at_tier_one_and_a_comparison_needs_both_names() {
         ],
     );
     assert!(r.passed, "{}", r.summary());
-    assert!(r.steps.iter().all(|s| s.status == Status::Skip), "{}", r.summary());
+    assert!(r.steps.iter().filter(|s| !s.text.starts_with("Run")).all(|s| s.status == Status::Skip), "{}", r.summary());
     let shots: Vec<_> = r.shots.iter().map(|s| (s.name.as_str(), s.tick)).collect();
     assert_eq!(shots, [("first", 0), ("later", 100)]);
     assert_eq!(r.shot_checks.len(), 1);

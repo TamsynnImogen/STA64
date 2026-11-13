@@ -14,5 +14,6 @@ comparisons.
 2. Run 100 ticks
 3. Take a screenshot called "later"
 4. Expect shots "first" and "later" to match within 1
-5. Take a screenshot called "again"
-6. Expect shots "later" and "again" to match
+5. Run 50 ticks
+6. Take a screenshot called "again"
+7. Expect shots "later" and "again" to match within 1

@@ -688,7 +688,7 @@ pub fn is_shot_name(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 64
         && !s.starts_with('.')
-        && !s.starts_with("tick-")
+        && !s.to_ascii_lowercase().starts_with("tick-")
         && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
 }
 

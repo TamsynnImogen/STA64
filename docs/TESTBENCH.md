@@ -232,8 +232,9 @@ Refit's names (`fire.end obj=shooter`, `cloak.done obj=warbird`).
   offscreen target, so at tick T it is byte for byte the `--frames T` frame of
   the same scene and camera (`session_frames_equal_the_frames_option`, a GPU
   test). Both are drawn after the same 5 warm-up and 8 settle frames; a session
-  that has run ticks since its start cannot differ, because held frames do not
-  advance the animation clock.
+  that ran its ticks in the same frames matches (planet scenes byte for byte,
+  scenes with beams within the usual 1-3 levels); held frames do not advance the
+  animation clock. Two shots taken at the same tick are the same file.
 
   **Screenshot steps** (tier 2, `sta-bench run NAME --tier 2`):
 

@@ -418,7 +418,7 @@ fn parse_words(w: &[&str], text: &str) -> Result<BenchCommand, String> {
             arity(a, 1, 1, "center <name>")?;
             BenchCommand::Center(a[0].to_owned())
         }
-"frame" => {
+        "frame" => {
             arity(a, 1, 1, "frame <name>")?;
             if !crate::parse::scenario::is_shot_name(a[0]) {
                 return Err(format!("frame name `{}`: letters, digits, `-`, `_` and `.` only (at most 64)", a[0]));
