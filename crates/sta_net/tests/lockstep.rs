@@ -1098,3 +1098,49 @@ fn tick_digest_type_is_what_the_records_carry() {
     let t = TickDigest { tick: 3, digest: 4 };
     assert_eq!((t.tick, t.digest), (3, 4));
 }
+
+// ---------------------------------------------------------------------------
+// Review findings
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_flood_of_requests_cannot_stall_the_game() {
+    let mut r = room(3, cfg(3, 2));
+    r.spawn_forces(2);
+    r.run_to(30, true);
+    for _ in 0..30 {
+        r.peers[1].router_mut().request(Action::SetSpeed(100));
+        r.peers[0].router_mut().schedule(Action::SetSpeed(100));
+    }
+    r.run_to(400, true);
+    for i in 0..3 {
+        assert!(!r.events(i).iter().any(|e| matches!(
+            e,
+            RouterEvent::Protocol { .. } | RouterEvent::Transport(_)
+        )));
+    }
+    assert_in_sync(&r);
+}
+
+#[test]
+fn a_takeover_record_arriving_before_the_seats_own_records_is_accepted() {
+    let mut r = bare_router(1);
+    let drop = Message::Turn(TurnCommands {
+        turn: 2,
+        slot: PlayerId(0),
+        commands: vec![stop(2, 100)],
+        schedule: vec![Scheduled {
+            by: PlayerId(0),
+            action: Action::Drop {
+                slot: PlayerId(2),
+                last_turn: 3,
+                then: DropChoice::AiTakeover("x".into()),
+            },
+        }],
+        digest: None,
+    });
+    assert_eq!(r.receive(PlayerId(0), drop), Ok(()));
+    // The seat's own earlier records, with lower seqs, arrive later.
+    assert_eq!(r.receive(PlayerId(2), rec(2, 2, vec![stop(2, 5)])), Ok(()));
+    assert_eq!(r.receive(PlayerId(2), rec(3, 2, vec![stop(2, 6)])), Ok(()));
+}

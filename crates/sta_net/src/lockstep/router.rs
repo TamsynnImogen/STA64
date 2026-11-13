@@ -7,7 +7,7 @@ use sta_sim::command::{Command, CommandRouter};
 
 use super::transport::{Destination, Incoming, Transport, TransportError};
 use crate::proto::{
-    Action, DesyncNotice, DropChoice, Message, Occupant, ProtoError, Scheduled, Start, TickDigest,
+    MAX_SCHEDULE_PER_TURN, Action, DesyncNotice, DropChoice, Message, Occupant, ProtoError, Scheduled, Start, TickDigest,
     TurnCommands, TurnConfig,
 };
 
@@ -138,8 +138,10 @@ pub struct LockstepRouter {
     /// The next turn `take_ready` will release.
     next_turn: u32,
     delivered: Option<(u32, Vec<Command>)>,
-    /// Remote: last `seq` accepted per player.
-    seq_seen: BTreeMap<PlayerId, u32>,
+    /// Remote: last `seq` accepted per (sender, player). Per sender, because
+    /// different senders' frames may arrive in any order (after an AI
+    /// takeover two senders speak for one player).
+    seq_seen: BTreeMap<(PlayerId, PlayerId), u32>,
     // Pause: the turn whose record paused us, and Resumes not yet matched.
     paused_at: Option<u32>,
     resumed_for: Option<u32>,
@@ -374,7 +376,7 @@ impl LockstepRouter {
 
     /// Host: resumes a paused game, effective on receipt.
     pub fn resume(&mut self) {
-        if self.is_host() {
+        if self.is_host() && self.paused_at.is_some() {
             self.resumes += 1;
             self.send(Destination::All, &Message::Resume { by: self.me });
         }
@@ -413,8 +415,11 @@ impl LockstepRouter {
             let t = self.next_send;
             self.next_send += 1;
             let last = t == target;
+            // At most MAX_SCHEDULE_PER_TURN go in one record (the wire bound);
+            // the rest wait for the next one.
             let schedule = if last {
-                std::mem::take(&mut self.schedule)
+                let n = self.schedule.len().min(MAX_SCHEDULE_PER_TURN);
+                self.schedule.drain(..n).collect()
             } else {
                 Vec::new()
             };
@@ -490,7 +495,10 @@ impl LockstepRouter {
             }
             Message::Request(action) => {
                 if self.is_host() {
-                    self.schedule.push(Scheduled { by: from, action });
+                    // A peer cannot grow the queue without bound.
+                    if self.schedule.len() < 4 * MAX_SCHEDULE_PER_TURN {
+                        self.schedule.push(Scheduled { by: from, action });
+                    }
                     Ok(())
                 } else {
                     Err(RouterError::Proto(ProtoError::Authority(
@@ -516,7 +524,7 @@ impl LockstepRouter {
                     self.note_drops(&rec);
                 }
                 for c in &rec.commands {
-                    self.seq_seen.insert(c.player, c.seq);
+                    self.seq_seen.insert((from, c.player), c.seq);
                 }
                 if let Some(d) = rec.digest {
                     self.compare(from, d);
@@ -561,7 +569,7 @@ impl LockstepRouter {
         rec.authorize(from, from == self.host, speaks)
             .map_err(RouterError::Proto)?;
         for c in &rec.commands {
-            if let Some(&last) = self.seq_seen.get(&c.player)
+            if let Some(&last) = self.seq_seen.get(&(from, c.player))
                 && c.seq <= last
             {
                 return Err(RouterError::SeqNotIncreasing {
@@ -625,6 +633,9 @@ impl LockstepRouter {
                 then,
             } = &s.action
             {
+                if *slot == self.host {
+                    continue;
+                }
                 if let DropChoice::AiTakeover(_) = then
                     && !self.host_speaks.contains(slot)
                 {
@@ -661,10 +672,21 @@ impl CommandRouter for LockstepRouter {
         if Message::Turn(probe).validate().is_err() {
             return self.reject(&cmd, "invalid command");
         }
+        // Also past anything seen from the seat's own peer (an AI takeover
+        // continues the seat's seq, docs/NET.md section 6).
+        let seen = self
+            .seq_seen
+            .iter()
+            .filter(|((_, p), _)| *p == cmd.player)
+            .map(|(_, &q)| q)
+            .max();
         if self
             .last_submitted
             .get(&cmd.player)
-            .is_some_and(|&last| cmd.seq <= last)
+            .copied()
+            .into_iter()
+            .chain(seen)
+            .any(|last| cmd.seq <= last)
         {
             return self.reject(&cmd, "seq does not increase");
         }
