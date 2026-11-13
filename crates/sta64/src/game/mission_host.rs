@@ -225,8 +225,9 @@ impl Controller for Shared {
         }
         rt.think(view, events, out);
         // The script ran first, so a plan it loads this tick reaches its seat this tick.
-        let mut seats = self.seats.lock().unwrap_or_else(PoisonError::into_inner);
         let loads = rt.take_aip_requests();
+        drop(rt);
+        let mut seats = self.seats.lock().unwrap_or_else(PoisonError::into_inner);
         seats.hub.submit(loads);
         for ai in &mut seats.ai {
             ai.think(view, events, out);

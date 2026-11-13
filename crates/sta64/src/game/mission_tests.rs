@@ -342,6 +342,11 @@ impl sta_mission::campaign::MissionHost for AiHost {
         self.0.script(c, m)
     }
 
+    fn seat(&self) -> (PlayerId, sta_mission::api::PlayerNumbering) {
+        // As the client's host: script number 2 is slot 1.
+        (PlayerId(0), sta_mission::api::PlayerNumbering::ArmadaTeams)
+    }
+
     fn aip_library(&self) -> sta_ai::AipLibrary {
         let text = "int min_resource_force = 2;\nint min_attack_force = 3;\nBuild_List_Element the_build_list[MAX_ELEMENTS] =\n{\n\"fx_miner\", 2,\n};\n";
         let names = vec!["AI/AIPs/Build.aip".to_owned()];
@@ -388,7 +393,7 @@ fn ai_game(script: &str) -> (MissionHandle, Sim, sta_sim::setup::GameSetup) {
 }
 
 /// Load `build.aip` for seat 1 at 2 seconds of game time (tick 60).
-const LOAD_AT_TWO_SECONDS: &str = "local done = false\nMMM.register(function(t) if t >= 2 and not done then done = true Player(1):loadAIP('BUILD.AIP') end end)\n";
+const LOAD_AT_TWO_SECONDS: &str = "local done = false\nMMM.register(function(t) if t >= 2 and not done then done = true Player(2):loadAIP('BUILD.AIP') end end)\n";
 
 /// The commands of the AI seat (those the script did not number) per tick.
 fn ai_commands(script: &str, ticks: u64) -> (Vec<(u64, sta_sim::command::Command)>, MissionHandle) {
@@ -423,7 +428,7 @@ fn an_ai_seat_is_passive_until_the_script_loads_a_plan_then_builds() {
 #[test]
 fn a_load_that_changes_nothing_is_listed_not_counted_as_unsupported() {
     // Seat 0 is the human's (no AI), and `none.aip` is not in the library.
-    let script = "local done = false\nMMM.register(function(t) if not done then done = true Player(0):loadAIP('build.aip') Player(1):loadAIP('none.aip') end end)\n";
+    let script = "local done = false\nMMM.register(function(t) if not done then done = true Player(1):loadAIP('build.aip') Player(2):loadAIP('none.aip') end end)\n";
     let (sent, h) = ai_commands(script, 60);
     assert!(sent.is_empty());
     assert_eq!(h.unresolved_aips(), [(PlayerId(0), "build.aip".to_owned()), (PlayerId(1), "none.aip".to_owned())]);
@@ -510,9 +515,9 @@ fn install_gated_roots_first_mission_starts_from_the_screens_and_runs() {
     eprintln!("roots: {title}: objectives {:?} / {:?}; {} script errors {:?}; unsupported {:?}", view.title, view.items, errors.len(), errors.iter().take(3).collect::<Vec<_>>(), unsupported.iter().take(8).collect::<Vec<_>>());
     // Not asserted: this mission's script puts no objective into the runtime within 300 ticks
     // (measured on this install); the synthetic test asserts the delivery path.
-    // The sim of this branch rejects the script's `MaxOfficers` edits (not this change's business, and
+    // The sim rejects the script's `MaxOfficers` edits (not this change's business, and
     // not asserted here); anything else the script reports is an error.
-    let other: Vec<_> = errors.iter().filter(|e| !e.contains("simulation rejected")).collect();
+    let other: Vec<_> = errors.iter().filter(|e| !e.contains("Player.maxOfficers: simulation rejected")).collect();
     assert!(other.is_empty(), "script errors: {errors:?}");
     assert!(!unsupported.iter().any(|(k, _)| k == "Player.loadAIP"), "plan loads reach the seats: {unsupported:?}");
     std::fs::remove_dir_all(dir).unwrap();
