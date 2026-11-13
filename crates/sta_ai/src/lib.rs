@@ -5,11 +5,13 @@
 //! registry by name), AI-02 (skirmish AI), AI-03 (soak tests).
 
 mod idle;
+pub mod mission;
 pub mod skirmish;
 
 use std::collections::BTreeMap;
 
 pub use idle::IdleController;
+pub use mission::{AipLibrary, MissionAiHub, ScriptedAi};
 use sta_core::PlayerId;
 pub use skirmish::{SKIRMISH, SkirmishConfig, SkirmishController};
 use sta_sim::setup::{Controller, GameSetup};

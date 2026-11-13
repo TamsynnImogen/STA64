@@ -110,7 +110,7 @@ GetAllyShipAttacks GetAllyStationAttacks GetDilithiumOnFreighter
 IsDerelict IsThereARomulanSpyOnShip GetTranswarpExitWormhole
 GetNearestTranswarpGate`.
 
-`AI_Team_Load_AIP` records the file like `Player:loadAIP` (no AI runs).
+`AI_Team_Load_AIP` queues the file like `Player:loadAIP` for the host's AI seats (AI-06).
 `CineractiveStart/End` set the shared `Cineractive.active` singleton.
 Special flags (`CreateSpecialFlag` ...) are tracked in the runtime only.
 
