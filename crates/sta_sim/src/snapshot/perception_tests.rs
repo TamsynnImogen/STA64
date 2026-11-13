@@ -28,6 +28,7 @@ fn split(bytes: &[u8]) -> (Body, Option<(Vec3, Vec3)>, BoundaryRec, PerceptionRe
     assert!(attack.warp.is_empty());
     let (watch, rest): (WatchRec, _) = postcard::take_from_bytes(rest).unwrap();
     assert!(watch.rows.is_empty());
+    let (_, rest): (crate::attrs::AttrsRec, _) = postcard::take_from_bytes(rest).unwrap();
     assert!(rest.is_empty());
     (body, bounds, boundary, perception)
 }

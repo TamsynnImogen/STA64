@@ -43,8 +43,8 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// (CON-35) added the [`Provenance`] record and the keyed content digest's
 /// hash. Format 17 appends the mission-set subsystem switches and damage
 /// (SIM-55). Format 18 (SIM-36) appends the attack approach record
-/// (crafts in warp). Format 19 appends the stuck-order watch rows last; format 20 adds each row's anchor, start distance and birth tick. Only the current format is read.
-pub const FORMAT_VERSION: u16 = 20;
+/// (crafts in warp). Format 19 appends the stuck-order watch rows last; format 20 adds each row's anchor, start distance and birth tick; format 21 appends the mission-set names and races (SIM-54). Only the current format is read.
+pub const FORMAT_VERSION: u16 = 21;
 
 const HEADER: usize = 4 + 2 + 4 + 8;
 
@@ -406,6 +406,7 @@ impl Sim {
         out.extend(postcard::to_allocvec(&SubsystemsRec { version: 1, rows: self.subsystems.to_rows() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&AttackRec { version: 1, warp: self.approach_warp.to_rec(), engagement: self.engagement.to_rec() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&WatchRec { version: 1, rows: self.watchdog.to_rec() }).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&self.attrs.to_rec()).expect("snapshot serialises"));
         out
     }
 
@@ -454,6 +455,8 @@ impl Sim {
         let (record, rest): (WatchRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         if record.version != 1 { return Err(SnapshotError::Corrupt("unknown order watch record version".into())); }
         let watch_rows = record.rows;
+        let (record, rest): (crate::attrs::AttrsRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        let attrs = crate::attrs::Attrs::from_rec(record).ok_or_else(|| corrupt("attribute rows"))?;
         if !rest.is_empty() { return Err(SnapshotError::Corrupt("trailing bytes".into())); }
         if let Some(row) = b.economy.miners.iter().find(|row| row.5 > 4) {
             return Err(SnapshotError::Corrupt(format!("mining phase {} is not supported", row.5)));
@@ -512,6 +515,12 @@ impl Sim {
             })
             .collect();
         let movement = Movement::from_rows(courses).ok_or_else(|| corrupt("courses"))?;
+        {
+            let v = attrs.view();
+            if v.names.iter().chain(&v.races).any(|(id, _)| units.get(*id).is_none()) {
+                return Err(SnapshotError::Corrupt("attribute entity does not exist".into()));
+            }
+        }
         let weapons = Weapons::from_rec(b.weapons).ok_or_else(|| corrupt("weapons"))?;
         let autonomy = crate::autonomy::Autonomy::from_rec(autonomy_rows).ok_or_else(|| corrupt("autonomy"))?;
         if autonomy.to_rec().iter().any(|(id, _)| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft)) {
@@ -574,6 +583,7 @@ impl Sim {
             start_effects,
             nav: Default::default(),
             subsystems,
+            attrs,
             team_changes: Vec::new(),
         })
     }
@@ -583,6 +593,9 @@ impl Sim {
 #[path = "snapshot/subsystem_tests.rs"]
 mod subsystem_tests;
 
+#[cfg(test)]
+#[path = "snapshot/attrs_tests.rs"]
+mod attrs_tests;
 #[cfg(test)]
 #[path = "snapshot/attack_tests.rs"]
 mod attack_tests;

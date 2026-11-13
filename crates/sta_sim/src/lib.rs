@@ -54,6 +54,7 @@ pub mod spatial;
 pub mod spawn;
 pub mod start;
 mod start_effects;
+pub mod attrs;
 pub use start_effects::unsupported as unsupported_start_lifecycle;
 pub mod tech;
 pub mod victory;
@@ -159,6 +160,8 @@ pub struct Sim {
     /// Subsystem switches and damage set by missions (SIM-55); in the digest
     /// once any exists.
     subsystems: combat::damage::Subsystems,
+    /// Mission-set unit names and races and seat races (SIM-54); in the digest once any exists.
+    attrs: attrs::Attrs,
     /// Units whose team just changed (SIM-29): `activateOnTeamChange` weapons
     /// engage on the tick's weapon pass. Filled by the tick's commands and
     /// drained by the same tick, so it is empty between ticks and not saved.
@@ -194,6 +197,7 @@ impl Sim {
             watchdog: Default::default(),
             nav: Default::default(),
             subsystems: Default::default(),
+            attrs: Default::default(),
             team_changes: Vec::new(),
         }
     }
@@ -471,7 +475,7 @@ impl Sim {
             }
         }
         let perceived_owners = self.perception.iter().map(|(id, &owner)| (id, owner)).collect();
-        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners }
+        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners, attrs: self.attrs.view() }
     }
 
     /// FNV-1a over all simulation state, for desync detection. The content
@@ -546,6 +550,9 @@ impl Sim {
         }
         if !self.subsystems.is_empty() {
             self.subsystems.hash_into(&mut h);
+        }
+        if !self.attrs.is_empty() {
+            self.attrs.hash_into(&mut h);
         }
         let crew_count = self.units.iter().filter(|unit| unit.crew.is_some()).count();
         if crew_count != 0 {

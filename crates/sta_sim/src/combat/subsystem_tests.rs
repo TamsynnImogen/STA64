@@ -19,6 +19,7 @@ fn db() -> Arc<ContentDb> {
     ship.shields.max = Fixed::from_int(400);
     ship.shields.recharge = fx(0.5);
     ship.crew = Fixed::from_int(250);
+    ship.race = "fx".into();
     ship.system_hit_points = [Fixed::from_int(120), Fixed::from_int(80), Fixed::from_int(60), Fixed::from_int(100), Fixed::ZERO];
     b = b.unit(ship);
     Arc::new(b.build().unwrap())
@@ -219,8 +220,13 @@ fn unit_crew_clamps_to_the_pool_and_rejects_without_one() {
 fn team_crew_and_max_officers_need_an_initialized_seat_and_are_floored_and_capped() {
     let (mut sim, _, _) = world();
     let p = PlayerId(0);
-    assert!(!script(&mut sim, Edit::TeamCrew(p, Fixed::ONE)), "no stock yet");
-    assert!(!script(&mut sim, Edit::MaxOfficers(p, Fixed::ONE)), "no limit yet");
+    assert!(!script(&mut sim, Edit::TeamCrew(PlayerId(9), Fixed::ONE)), "no such seat");
+    assert!(!script(&mut sim, Edit::MaxOfficers(PlayerId(9), Fixed::ONE)), "no such seat");
+    // A seat with no stock or limit yet takes the script's value (a raw write in the original).
+    assert!(script(&mut sim, Edit::MaxOfficers(p, Fixed::ONE)));
+    assert_eq!(sim.economy.officer_limit(p), Some(Fixed::ONE));
+    assert!(script(&mut sim, Edit::TeamCrew(p, Fixed::from_int(2))));
+    assert_eq!(sim.economy.crew_of(p), Some(Fixed::from_int(2)));
     sim.economy.set_personnel(p, Some(Fixed::from_int(100)), Some(Fixed::from_int(30)));
     assert!(script(&mut sim, Edit::TeamCrew(p, Fixed::from_int(5000))));
     assert_eq!(sim.economy.crew_of(p), Some(Fixed::from_int(5000)), "above the capacity is allowed");
@@ -312,4 +318,93 @@ fn section_rows_itemise_the_subsystem_state() {
     assert!(script(&mut sim, Edit::SubsystemDamage(id, Subsystem::Weapons, Fixed::from_int(30))));
     let rows = sim.section_rows("combat").unwrap();
     assert!(rows.iter().any(|r| r.entity == Some(id) && r.field.starts_with("subsystems")), "{rows:?}");
+}
+
+// SIM-54: per-unit attribute edits (max hull, hull value, max crew, max shields, name, race).
+
+fn hull(sim: &Sim, id: EntityId) -> [Fixed; 2] {
+    sim.units.get(id).unwrap().hull
+}
+
+#[test]
+fn max_hull_is_per_unit_keeps_the_current_hull_and_ignores_a_negative_value() {
+    let (mut sim, id, d) = world();
+    let other = sim.spawn_def(d.key("ship").unwrap(), PlayerId(1), Vec3::ZERO, (Fixed::ZERO, Fixed::ONE)).unwrap();
+    assert!(script(&mut sim, Edit::MaxHull(id, Fixed::from_int(1))));
+    assert_eq!(hull(&sim, id), [Fixed::from_int(500), Fixed::ONE], "current hull not clamped");
+    assert_eq!(hull(&sim, other), [Fixed::from_int(500); 2], "only this unit");
+    // The relay clock: read back, add one, write.
+    for n in 2..=1800 {
+        assert!(script(&mut sim, Edit::MaxHull(id, Fixed::from_int(n))));
+    }
+    assert_eq!(hull(&sim, id)[1], Fixed::from_int(1800));
+    assert!(script(&mut sim, Edit::MaxHull(id, Fixed::from_int(-5))), "accepted");
+    assert_eq!(hull(&sim, id)[1], Fixed::from_int(1800), "and ignored");
+    assert!(script(&mut sim, Edit::MaxHull(id, Fixed::from_int(0))));
+    assert_eq!(hull(&sim, id)[1], Fixed::ZERO);
+    assert!(!edit(&mut sim, PlayerId(1), Edit::MaxHull(id, Fixed::ONE)), "players cannot");
+    assert!(!script(&mut sim, Edit::MaxHull(EntityId(999), Fixed::ONE)));
+    // Heal restores to the unit's own maximum.
+    assert!(script(&mut sim, Edit::MaxHull(id, Fixed::from_int(900))));
+    assert!(script(&mut sim, Edit::Heal(id)));
+    assert_eq!(hull(&sim, id), [Fixed::from_int(900); 2]);
+}
+
+#[test]
+fn hull_value_is_the_current_hull_without_an_upper_clamp_and_never_kills() {
+    let (mut sim, id, _) = world();
+    assert!(script(&mut sim, Edit::HullValue(id, Fixed::from_int(20_000))));
+    assert_eq!(hull(&sim, id), [Fixed::from_int(20_000), Fixed::from_int(500)]);
+    assert!(script(&mut sim, Edit::HullValue(id, Fixed::ZERO)));
+    assert!(sim.units.get(id).is_some(), "zero does not destroy");
+    assert!(hull(&sim, id)[0] > Fixed::ZERO);
+    assert!(script(&mut sim, Edit::Immortal(id, true)));
+    assert!(script(&mut sim, Edit::HullValue(id, Fixed::from_int(300))));
+    assert!(script(&mut sim, Edit::HullValue(id, Fixed::from_int(100))));
+    assert_eq!(hull(&sim, id)[0], Fixed::from_int(300), "an immortal unit ignores a lower value");
+}
+
+#[test]
+fn max_crew_clamps_the_crew_down_only_and_max_shields_keeps_the_pools() {
+    let (mut sim, id, _) = world();
+    assert!(script(&mut sim, Edit::MaxCrew(id, Fixed::from_int(20))));
+    assert_eq!(sim.units.get(id).unwrap().crew, Some([Fixed::from_int(20); 2]));
+    assert!(script(&mut sim, Edit::MaxCrew(id, Fixed::from_int(400))));
+    assert_eq!(sim.units.get(id).unwrap().crew, Some([Fixed::from_int(20), Fixed::from_int(400)]), "never raised");
+    assert!(script(&mut sim, Edit::UnitCrew(id, Fixed::from_int(999))));
+    assert_eq!(sim.units.get(id).unwrap().crew.unwrap()[0], Fixed::from_int(400), "SetCrew clamps to the current maximum");
+    assert!(script(&mut sim, Edit::MaxShieldsKeep(id, Fixed::from_int(360))));
+    let u = sim.units.get(id).unwrap();
+    assert_eq!((u.shields.max, u.shields.now[0]), (Fixed::from_int(360), Fixed::from_int(400)));
+    assert!(script(&mut sim, Edit::MaxShields(id, Fixed::from_int(100))));
+    assert_eq!(sim.units.get(id).unwrap().shields.now[0], Fixed::from_int(100), "A2 SetMaxShields sets both");
+}
+
+#[test]
+fn names_and_races_are_per_unit_validated_viewed_and_survive_snapshot_and_death() {
+    let (mut sim, id, d) = world();
+    let before = sim.digest();
+    assert!(script(&mut sim, Edit::Name(id, "Relay Station".into())));
+    assert!(!script(&mut sim, Edit::UnitRace(id, "nobody".into())), "unknown race refused");
+    assert!(!script(&mut sim, Edit::UnitRace(id, "FX".into())), "case-sensitive");
+    assert!(script(&mut sim, Edit::UnitRace(id, "fx".into())));
+    assert!(script(&mut sim, Edit::PlayerRace(PlayerId(1), "fx".into())));
+    assert!(!script(&mut sim, Edit::PlayerRace(PlayerId(5), "fx".into())), "no such seat");
+    let v = sim.view();
+    assert_eq!(v.attrs.names, vec![(id, "Relay Station".to_string())]);
+    assert_eq!(v.attrs.races, vec![(id, "fx".to_string())]);
+    assert_eq!(v.attrs.player_races, vec![(PlayerId(1), "fx".to_string())]);
+    assert_ne!(sim.digest(), before);
+    let mut copy = Sim::from_snapshot(&sim.snapshot(), Some(Arc::clone(&d))).unwrap();
+    assert_eq!(copy.digest(), sim.digest());
+    assert_eq!(copy.view().attrs, v.attrs);
+    copy.step(&[]);
+    sim.step(&[]);
+    assert_eq!(copy.digest(), sim.digest());
+    assert!(script(&mut sim, Edit::Kill(id)));
+    assert!(sim.view().attrs.names.is_empty() && sim.view().attrs.races.is_empty(), "rows go with the unit");
+    let long = "é".repeat(200);
+    let (mut sim, id, _) = world();
+    assert!(script(&mut sim, Edit::Name(id, long)));
+    assert_eq!(sim.view().attrs.names[0].1.len(), 126, "cut at a character boundary");
 }

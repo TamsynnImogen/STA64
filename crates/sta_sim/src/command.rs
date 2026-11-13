@@ -208,6 +208,43 @@ pub enum Edit {
     /// steering has the value overwritten within a tick in the original).
     /// A dying unit is rejected. SCRIPT/BENCH only. Appended tag 30.
     AngularVelocity(EntityId, Fixed),
+    /// Roots `Entity.maxHull =` (SIM-54): this unit's maximum hull. A negative
+    /// value is accepted and ignored (the original keeps the old maximum);
+    /// zero and large values are accepted, capped at 1e9. The
+    /// current hull is not rescaled or clamped, so it may exceed the maximum
+    /// (read from the executable, static). Dying units and non-units are
+    /// rejected. SCRIPT/BENCH only. Appended tag 31.
+    MaxHull(EntityId, Fixed),
+    /// Roots `Entity.maxCrew =` (SIM-54): this unit's maximum crew, floored at
+    /// 0 and capped at 1e9; the current crew is clamped down to it and never
+    /// raised. Rejected for a unit with no crew pool. SCRIPT/BENCH only.
+    /// Appended tag 32.
+    MaxCrew(EntityId, Fixed),
+    /// Roots `Entity.hullValue =` / A2 `SetCurrentHealth` (SIM-54): the unit's
+    /// current hull in points, with no upper clamp (it may exceed the maximum).
+    /// An immortal unit ignores a lower value; zero or less leaves the least
+    /// positive hull (the original does not destroy at 0, the next hit does).
+    /// Rejected for a dying unit. SCRIPT/BENCH only. Appended tag 33.
+    HullValue(EntityId, Fixed),
+    /// Roots `Entity.maxShields =` (SIM-54): only the maximum, floored at 0 and
+    /// capped at 1e9; the current shield pools are not touched (Roots writes
+    /// the field raw; A2 `SetMaxShields` is [`Edit::MaxShields`], which sets
+    /// both). SCRIPT/BENCH only. Appended tag 34.
+    MaxShieldsKeep(EntityId, Fixed),
+    /// `Entity.name =` / A2 `SetName` (SIM-54): this unit's display name, cut
+    /// at 127 bytes. A live craft or station only. SCRIPT/BENCH only.
+    /// Appended tag 35.
+    Name(EntityId, String),
+    /// A2 `SetRace` / Roots `Entity.race =` (SIM-54): this unit's race (the
+    /// unit only; team, tech tree and AI are unchanged). The name must be a
+    /// race some unit definition carries, matched case-sensitively; anything
+    /// else is rejected. SCRIPT/BENCH only. Appended tag 36.
+    UnitRace(EntityId, String),
+    /// Roots `Player.race =` (SIM-54): the seat's race, with the same name
+    /// rule as [`Edit::UnitRace`]; rejected for a seat the sim does not have.
+    /// The sim keeps and shows it; no rule reads it yet. SCRIPT/BENCH only.
+    /// Appended tag 37.
+    PlayerRace(PlayerId, String),
 }
 
 /// The largest turn rate (radians per second) a script may set.
@@ -362,12 +399,19 @@ mod tests {
     }
 
     #[test]
-    fn placement_and_facing_edits_append_tags_28_to_30() {
+    fn placement_facing_and_attribute_edits_append_tags_28_to_37() {
         let id = EntityId(1);
         let edits = [
             (28, Edit::Position(id, Vec3::from_f32([1.0, 2.0, -3.0]))),
             (29, Edit::Heading(id, (Fixed::ONE, Fixed::ZERO))),
             (30, Edit::AngularVelocity(id, Fixed::ONE)),
+            (31, Edit::MaxHull(id, Fixed::ONE)),
+            (32, Edit::MaxCrew(id, Fixed::ONE)),
+            (33, Edit::HullValue(id, Fixed::ONE)),
+            (34, Edit::MaxShieldsKeep(id, Fixed::ONE)),
+            (35, Edit::Name(id, "x".into())),
+            (36, Edit::UnitRace(id, "x".into())),
+            (37, Edit::PlayerRace(PlayerId(0), "x".into())),
         ];
         for (tag, edit) in edits {
             let bytes = postcard::to_allocvec(&edit).unwrap();
