@@ -365,7 +365,7 @@ impl Weapons {
                 let Some(w) = db.weapon(hp.weapon.key) else {
                     continue;
                 };
-                if w.kind == WeaponKind::PointDefence || crate::specials::is_special(w) {
+                if w.kind == WeaponKind::PointDefence || crate::specials::is_special(w) || w.resource.is_some() {
                     continue;
                 }
                 let arc = if db.features().fire_arcs {

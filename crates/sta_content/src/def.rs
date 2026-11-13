@@ -437,7 +437,27 @@ pub struct WeaponDef {
     /// `None`: the database-wide set. Read through
     /// `ContentDb::weapon_features`.
     pub features: Option<Features>,
+    /// `resourceweapon` class only (SIM-24): what the weapon adds to its
+    /// owner's stock and who it works for. `None` for every other class.
+    pub resource: Option<ResourceWeaponDef>,
     pub raw: Arc<sta_odf::Odf>,
+}
+
+/// The keys of a `resourceweapon` (Fleet Operations 3.x and later; stock
+/// Armada I and II have none), read by [`crate::weapon::weapon_def`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResourceWeaponDef {
+    /// Signed amount per resource slot (dilithium, latinum, metal,
+    /// biomatter): `addDilithium`, `addLatinum`, `addMetal`, `addBiomatter`.
+    pub add: [Fixed; 4],
+    /// Signed crew per second (`addCrew`), onto the team's crew stock.
+    pub crew: Fixed,
+    /// `oneTimeMode`: a lump sum, not a rate. Default off.
+    pub one_time: bool,
+    /// `alwaysActivePlayer`: works for a human seat without being triggered.
+    pub always_player: bool,
+    /// `alwaysActiveAI`: the same for an AI seat.
+    pub always_ai: bool,
 }
 
 impl WeaponDef {
@@ -466,6 +486,7 @@ impl WeaponDef {
             ignore_shot_delay_effects: false,
             ordnance_defence: false,
             features: None,
+            resource: None,
             raw: Arc::new(raw),
         }
     }

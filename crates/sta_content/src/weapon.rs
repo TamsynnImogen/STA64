@@ -16,12 +16,13 @@
 //! | `fire_sound`, `fx` | `fireSound`; ordnance `shotGeometry` (else `sprite`) |
 //! | specials | `effectTimer`, `energyDrainRate`, `specialEnergyCost`, `disableWeapons` (default on), `decloakOnHit` |
 //! | shot timing | `initialShotDelayModifier` (signed; absent stays `None`), `ignoreShotDelayEffects`; `ordnance_defence` is the weapon's own class `ordnancedefenseweapon` |
+//! | `resource` (class `resourceweapon`) | `addDilithium`, `addLatinum`, `addMetal`, `addBiomatter`, `addCrew` (signed), `oneTimeMode`, `alwaysActivePlayer`, `alwaysActiveAI` |
 //! | hardpoint arc | `restrictFireArc = 1` with `fireArc` as the half-width in radians (our reading) |
 
 use sta_core::Fixed;
 use sta_odf::Odf;
 
-use crate::def::{ClassLabel, FireArc, WeaponDef, WeaponKind};
+use crate::def::{ClassLabel, FireArc, ResourceWeaponDef, WeaponDef, WeaponKind};
 use crate::odf::{numbered, stem, Reader};
 use crate::Warning;
 
@@ -81,6 +82,23 @@ pub fn weapon_def(name: &str, odf: &Odf, ordnance: Option<&Odf>, warnings: &mut 
     d.initial_shot_delay_modifier = r.num("initialShotDelayModifier").map(Fixed::from_f64);
     d.ignore_shot_delay_effects = r.flag("ignoreShotDelayEffects").unwrap_or(false);
     d.ordnance_defence = own == "ordnancedefenseweapon";
+
+    if own == "resourceweapon" {
+        let mut add = [Fixed::ZERO; crate::resources::SLOTS];
+        for (slot, key) in crate::resources::KEYS.iter().enumerate() {
+            // Signed: the Roots Tal Shiar weapons take (`addDilithium = -100`).
+            if let Some(v) = r.num(&format!("add{key}")) {
+                add[slot] = Fixed::from_f64(v);
+            }
+        }
+        d.resource = Some(ResourceWeaponDef {
+            add,
+            crew: r.num("addCrew").map_or(Fixed::ZERO, Fixed::from_f64),
+            one_time: r.flag("oneTimeMode").unwrap_or(false),
+            always_player: r.flag("alwaysActivePlayer").unwrap_or(false),
+            always_ai: r.flag("alwaysActiveAI").unwrap_or(false),
+        });
+    }
 
     let arc = if r.flag("restrictFireArc") == Some(true) {
         r.num("fireArc").filter(|a| *a > 0.0).map(fire_arc)
