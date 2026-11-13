@@ -266,13 +266,22 @@ pub fn is_fault(error: &str) -> bool {
 ///
 /// **The one place a script is answered outside the command stream** (see the module docs and
 /// SIM-61): a replay does not carry these calls. `A1.` / `A2.MovieDone()` and
-/// `AudioMessageDone(id)` are the report calls of the Armada bindings; a cineractive skip sets
-/// the A2 `Cineractive.active` flag off.
+/// `AudioMessageDone(id)` are the report calls of the Armada bindings; a cineractive skip is the
+/// runtime's cancel (`MissionRuntime::skip_cineractive`), a release also sets `Cineractive.active` off.
 pub fn deliver_reply_host_side(rt: &MissionRuntime, reply: &ScriptReply) {
     let result = match reply {
         ScriptReply::MovieDone { .. } => rt.eval::<()>(REPORT_MOVIE),
         ScriptReply::MessageDismissed { id } => rt.eval_with::<(), _>(REPORT_AUDIO, *id),
-        ScriptReply::CineractiveSkipped => rt.eval::<()>(REPORT_CINERACTIVE),
+        // The skip key: the script reads `isCineractiveCancel` and ends the cineractive (UI-36).
+        ScriptReply::CineractiveSkipped => {
+            rt.skip_cineractive();
+            Ok(())
+        }
+        // A forced end: the cancel the script may wait on, and the mode off whatever it does.
+        ScriptReply::CineractiveReleased => {
+            rt.release_cineractive();
+            Ok(())
+        }
         // The enum is non-exhaustive outside this crate; a kind added later gets its arm here.
     };
     if let Err(e) = result {
@@ -287,7 +296,6 @@ fn acknowledge_audio(rt: &MissionRuntime, id: u32) {
 
 const REPORT_MOVIE: &str = "for _, n in ipairs({'A1', 'A2'}) do local t = rawget(_G, n) if type(t) == 'table' then local f = rawget(t, 'MovieDone') if f then pcall(f) end end end";
 const REPORT_AUDIO: &str = "local id = ... for _, n in ipairs({'A1', 'A2'}) do local t = rawget(_G, n) if type(t) == 'table' then local f = rawget(t, 'AudioMessageDone') if f then pcall(f, id) end end end";
-const REPORT_CINERACTIVE: &str = "local c = rawget(_G, 'Cineractive') if c ~= nil then pcall(function() c.active = false end) end";
 
 // ---------------------------------------------------------------------------
 // Systems
@@ -346,9 +354,13 @@ fn on_start_mission(
 }
 
 /// The match is up: the mission begins (its movies are tracked from here, the objectives panel opens).
-fn begin_mission(run: Option<ResMut<MissionRun>>, launch: Option<Res<MissionLaunch>>, mut began: MessageWriter<MissionBegan>, view: Option<ResMut<ObjectivesView>>) {
+fn begin_mission(run: Option<ResMut<MissionRun>>, launch: Option<Res<MissionLaunch>>, mut began: MessageWriter<MissionBegan>, view: Option<ResMut<ObjectivesView>>, paths: Option<ResMut<crate::input::camera_cinematic::ScenePaths>>) {
     let (Some(mut run), Some(launch)) = (run, launch) else { return };
     run.began = true;
+    // The cineractive camera plays the same map paths the script's shots name (UI-36).
+    if let Some(mut p) = paths {
+        p.0 = launch.paths.clone();
+    }
     began.write(MissionBegan { map: launch.bzn.clone() });
     if let Some(mut v) = view {
         // The stock mission opens on its objectives; Alt+O toggles them.
@@ -377,7 +389,7 @@ fn run_mission(
     run.errors_seen = faults.0;
     if faults.1 {
         warn!("mission: the script raised an error; any cineractive it holds is released");
-        replies.p1().write(ScriptReply::CineractiveSkipped);
+        replies.p1().write(ScriptReply::CineractiveReleased);
     }
     for r in replies.p0().read() {
         handle.with(|rt| deliver_reply_host_side(rt, r));
@@ -399,7 +411,7 @@ fn run_mission(
             run.blocked = Some(why);
         }
         // The mission is over: nothing it holds outlives it.
-        replies.p1().write(ScriptReply::CineractiveSkipped);
+        replies.p1().write(ScriptReply::CineractiveReleased);
         info!("mission: {} {} at tick {tick} (closes after {}s)", run.campaign, if o.won { "won" } else { "lost" }, o.delay);
         run.close_at = Some(tick.saturating_add((o.delay.clamp(0.0, 600.0) * f64::from(TICK_HZ)).ceil() as u64));
         run.outcome = Some(o);

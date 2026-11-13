@@ -422,7 +422,8 @@ fn cineractive_calls_drive_the_shared_mode_and_retain_shots() {
     let s = scene();
     let (rt, commands) = run(&s, "A1.CineractiveStart(); A1.CineractiveShot('P', 0.5, b); A1.FadeOut(2, 0.5, 0); A1.CineractiveEnd()");
     let events = presented(&commands);
-    assert_eq!(events[0], Presentation::Cineractive { on: true, skippable: false });
+    // The skip key always works on an A1 cineractive (static): a start is skippable.
+    assert_eq!(events[0], Presentation::Cineractive { on: true, skippable: true });
     assert_eq!(
         events[1],
         call("CineractiveShot", vec![Arg::Text("P".into()), Arg::Num(Fixed::from_f64(0.5)), Arg::Entity(s.ids[1])])
@@ -432,7 +433,7 @@ fn cineractive_calls_drive_the_shared_mode_and_retain_shots() {
         call("FadeOut", vec![Arg::Num(Fixed::from_int(2)), Arg::Num(Fixed::from_f64(0.5)), Arg::Num(Fixed::ZERO)])
     );
     assert_eq!(events[3], Presentation::Fade { out: true, seconds: Fixed::from_int(2), rgb: [0, 0, 0] });
-    assert_eq!(events[4], Presentation::Cineractive { on: false, skippable: false });
+    assert_eq!(events[4], Presentation::Cineractive { on: false, skippable: true });
     assert!(rt.unsupported().is_empty());
 }
 

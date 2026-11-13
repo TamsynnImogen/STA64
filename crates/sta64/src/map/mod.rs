@@ -284,6 +284,57 @@ pub struct CameraLimits {
     max_dist: f32,
     /// Pixels from the window edge that scroll the view (`SCROLL_BORDER_WIDTH`).
     border: f32,
+    /// The mission start camera (UI-36): `OVERVIEW_INIT_HEIGHT`, `OVERVIEW_PARABOLA_FOCUS`,
+    /// `OVERVIEW_INIT_ROTATION` and the look point's height, the middle of
+    /// `SHIP_COMBAT_FLOOR` / `SHIP_COMBAT_CEILING`.
+    pub start: StartCamera,
+}
+
+/// The original's strategy camera at a mission's start (A1 `Armada.exe` and A2 `Armada2.exe`,
+/// static; values read from `RTS_CFG.h`): it looks at point 0 of the map path
+/// `Camera_<team>`, the eye at height `init_height` (absolute), `sqrt(height * focus)` back
+/// along the rotation (rotation 0 looks toward +z). A1: 450 / 200 -> 509 units away, 53.9 deg
+/// down; A2 stock 1000 / 200; Roots 2000 / 200. The original then applies the height the
+/// player's profile saved (not read: a new profile's start is used).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StartCamera {
+    pub height: f32,
+    pub focus: f32,
+    pub rotation: f32,
+    pub look_y: f32,
+}
+
+impl Default for StartCamera {
+    fn default() -> Self {
+        // The executables' compiled defaults (A2, static) and a floor at 0.
+        StartCamera { height: 150.0, focus: 100.0, rotation: 0.0, look_y: 0.0 }
+    }
+}
+
+impl StartCamera {
+    pub fn from_cfg(cfg: Option<&sta_assets::cfg_h::CfgH>) -> StartCamera {
+        let d = StartCamera::default();
+        let get = |k: &str| cfg.and_then(|c| c.f32(k)).filter(|v| v.is_finite());
+        let look_y = match (get("SHIP_COMBAT_FLOOR"), get("SHIP_COMBAT_CEILING")) {
+            (Some(a), Some(b)) => (a + b) * 0.5,
+            _ => d.look_y,
+        };
+        StartCamera {
+            height: get("OVERVIEW_INIT_HEIGHT").filter(|h| *h > 0.0).unwrap_or(d.height),
+            focus: get("OVERVIEW_PARABOLA_FOCUS").filter(|f| *f > 0.0).unwrap_or(d.focus),
+            rotation: get("OVERVIEW_INIT_ROTATION").unwrap_or(d.rotation),
+            look_y,
+        }
+    }
+
+    /// The orbit pose over `look` (game space x, z): focus, yaw, pitch and distance in Bevy space.
+    pub fn pose(&self, look_x: f32, look_z: f32) -> crate::input::camera_cinematic::Pose {
+        let back = (self.height * self.focus).sqrt();
+        let look = [look_x, self.look_y, look_z];
+        // The eye is above the look point even where the height is under the combat plane.
+        let eye = [look_x - self.rotation.sin() * back, self.height.max(self.look_y + 1.0), look_z - self.rotation.cos() * back];
+        crate::input::camera_cinematic::pose_looking(crate::render::units::to_bevy(eye), crate::render::units::to_bevy(look))
+    }
 }
 
 impl CameraLimits {
@@ -293,6 +344,7 @@ impl CameraLimits {
             hi: Vec3::splat(1e9),
             max_dist: 1e9,
             border: cfg.and_then(|c| c.f32("SCROLL_BORDER_WIDTH")).unwrap_or(8.0),
+            start: StartCamera::from_cfg(cfg),
         }
     }
 }
@@ -1192,10 +1244,25 @@ fn rebuild(
             Vec3::new(c.x, 0.0, -c.y)
         }
     };
+    // A campaign mission opens as the original does (UI-36): over point 0 of `Camera_<team>`
+    // (the local seat's team, 1-based), else over the seat's units, at the start height of
+    // `RTS_CFG.h` (`StartCamera`). Skirmish keeps its own opening.
+    let start_pose = is_mission.then(|| {
+        let team = seat_player.map_or(1, |p| u32::from(p.0) + 1);
+        let label = format!("Camera_{team}");
+        let point = map.paths.iter().find(|p| p.label == label).and_then(|p| p.points.first().copied())
+            .or_else(|| map.a1.as_ref().and_then(|a| a.paths.iter().find(|p| p.label == label)).and_then(|p| p.points.first().copied()));
+        match point {
+            Some(p) => limits.start.pose(p[0], p[2]),
+            None => limits.start.pose(focus.x, -focus.z),
+        }
+    });
     for mut o in &mut orbit {
-        o.focus = focus;
-        o.dist = dist;
-        o.home = (focus, dist);
+        match start_pose {
+            Some(p) => (o.focus, o.yaw, o.pitch, o.dist) = (p.focus, p.yaw, p.pitch, p.dist),
+            None => (o.focus, o.dist) = (focus, dist),
+        }
+        o.home = (o.focus, o.dist);
     }
     // Keep the focus over the map (with a margin) and the zoom within its size.
     let margin = size.x.max(size.z) * 0.25;
@@ -1364,6 +1431,23 @@ mod a1_start_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_mission_start_camera_follows_the_cfg_parabola() {
+        // An authored cfg with A1's values: height 450, focus 200, combat plane 10..67.
+        let cfg = sta_assets::cfg_h::CfgH::parse("float OVERVIEW_INIT_HEIGHT = 450.0;\nfloat OVERVIEW_PARABOLA_FOCUS = 200.0;\nfloat OVERVIEW_INIT_ROTATION = 0.0;\nfloat SHIP_COMBAT_FLOOR = 10.0;\nfloat SHIP_COMBAT_CEILING = 67.0;\n");
+        let s = StartCamera::from_cfg(Some(&cfg));
+        assert_eq!(s, StartCamera { height: 450.0, focus: 200.0, rotation: 0.0, look_y: 38.5 });
+        let p = s.pose(1000.0, 2000.0);
+        // Looks at (1000, 38.5, 2000) from 300 units back in -z (game), i.e. +z in Bevy.
+        assert!(p.focus.distance(Vec3::new(1000.0, 38.5, -2000.0)) < 1e-3, "{:?}", p.focus);
+        let eye = crate::input::camera_cinematic::camera_translation(&p);
+        assert!(eye.distance(Vec3::new(1000.0, 450.0, -1700.0)) < 1e-2, "{eye:?}");
+        assert!((p.dist - 509.4).abs() < 0.5, "{}", p.dist);
+        assert!((p.pitch.to_degrees() - 53.9).abs() < 0.1, "{}", p.pitch.to_degrees());
+        // No cfg: the executables' compiled defaults.
+        assert_eq!(StartCamera::from_cfg(None), StartCamera::default());
+    }
 
     #[test]
     fn the_info_panel_names_the_played_race() {
