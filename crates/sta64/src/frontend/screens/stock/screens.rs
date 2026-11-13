@@ -108,12 +108,21 @@ fn main_menu(p: &mut Box_, ctx: &Ctx, b: Vec2) {
 }
 
 fn single_player(p: &mut Box_, ctx: &Ctx, b: Vec2) {
-    // The campaigns need the mission scripts (LUA-08, UI-25); the cards stand where the
-    // stock panels do, in the stock order of the label keys.
+    // The cards stand where the stock panels do, in the stock order of the label keys. With the
+    // installed campaigns (UI-25) each is the shell's slot: it opens its mission list, or stays off
+    // with the locked text while the campaign before it is not complete.
     let cards = [("tutorials", "Tutorials"), ("federation_campaign", "Federation campaign"), ("klingon_campaign", "Klingon campaign"), ("borg_campaign", "Borg campaign")];
-    for (i, (key, fallback)) in cards.into_iter().enumerate() {
-        let r = region(Slot::Card(i)).px(b);
-        put(p, Slot::Card(i), r, disabled_button(ctx.theme, &cap(ctx, key, fallback), r.width()));
+    let n = ctx.campaigns.map_or(cards.len(), |c| c.book.campaigns.len().max(1));
+    for i in 0..n {
+        let r = crate::frontend::campaign::layout::card_region(i, n).px(b);
+        match crate::frontend::campaign::card(ctx.campaigns, i) {
+            Some((text, true)) => put(p, Slot::Card(i), r, (kit_button(ctx.theme, &text, r.width()), crate::frontend::campaign::CampaignAct::Card(i))),
+            Some((text, false)) => put(p, Slot::Card(i), r, disabled_button(ctx.theme, &text, r.width())),
+            None => {
+                let (key, fallback) = cards[i.min(cards.len() - 1)];
+                put(p, Slot::Card(i), r, disabled_button(ctx.theme, &cap(ctx, key, fallback), r.width()));
+            }
+        }
     }
     off_button(p, ctx, b, Slot::SpLoad, &cap(ctx, "load_game", "Load game"));
     act_button(p, ctx, b, Slot::SpBack, &cap(ctx, "previous_menu", "Previous menu"), Act::Goto(Screen::Main));

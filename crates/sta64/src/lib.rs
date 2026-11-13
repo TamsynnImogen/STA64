@@ -160,6 +160,10 @@ pub fn run(cfg: LaunchConfig) {
                     .insert_resource(game::flow::MenuSceneSource(d.scene.clone()))
                     .insert_resource(d.scene)
                     .insert_resource(game::flow::MenuMusic(d.menu_music));
+                // UI-25 / INT-M6: the install's campaigns, for Single Player's cards.
+                if let Some((campaigns, movies)) = game::mission_host::load_campaigns(&vfs, cfg.install_root.as_deref(), cfg.active_mod.as_deref()) {
+                    app.insert_resource(campaigns).insert_resource(movies);
+                }
                 maps
             }
             Err(e) => {

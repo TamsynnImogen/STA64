@@ -373,7 +373,9 @@ fn blocked_reason(layout: ShellLayout, m: &CampaignMission) -> Option<String> {
         ShellLayout::Armada2 => "LUA-05 (Armada II calls)",
     };
     match &m.script {
-        MissionScript::Lua { .. } if m.end_calls.iter().any(|c| c.starts_with("Mission")) => None,
+        // A Lua script has a win event when it names `Mission:finish` or `SucceedMission`
+        // (a converted Armada II mission, LUA-11); `FailMission` alone is a loss only.
+        MissionScript::Lua { .. } if m.end_calls.iter().any(|c| c.starts_with("Mission") || c == "SucceedMission") => None,
         MissionScript::Lua { path } => Some(format!("{path} calls no Mission:finish; no win event")),
         MissionScript::LegacyDll { files } => {
             let calls = if m.end_calls.is_empty() { String::new() } else { format!("; it ends through {}", m.end_calls.join(", ")) };
@@ -948,6 +950,60 @@ for _, t in ipairs({ _G, rawget(_G, "A2"), rawget(_G, "A1") }) do
 end
 "#;
 
+/// The outcome a runtime that carries [`launch_runtime`]'s hook has reached, if
+/// any, as of `tick`. A host that owns the sim itself (the client's link) asks
+/// this each tick instead of using [`ActiveMission`].
+pub fn scan_outcome(runtime: &MissionRuntime, tick: u64) -> Option<MissionOutcome> {
+    let got: mlua::Result<(Option<bool>, Option<f64>)> =
+        runtime.eval("local o = rawget(_G, '__sta64_outcome') if o then return o.won, o.delay end");
+    if let Ok((Some(won), delay)) = got {
+        Some(MissionOutcome { won, delay: delay.unwrap_or(0.0), tick })
+    } else if runtime.finished() {
+        // The script reached the real finish without passing the hook
+        // (it kept a reference from before the hook was installed):
+        // the result is unknown, so it never advances progress.
+        Some(MissionOutcome { won: false, delay: 0.0, tick })
+    } else {
+        None
+    }
+}
+
+/// Load a mission script over a game that is already built: the runtime of
+/// `path` (read through `reader`) for `seat`, with the sim's labels, the map's
+/// named `paths` ([`read_map_paths`]) and first view, and [`scan_outcome`]'s hook installed. [`CampaignRunner::start`] uses
+/// it; so does a host that owns its own sim (the client, INT-M6).
+pub fn launch_runtime(
+    path: &str,
+    reader: ScriptReader,
+    seed: u64,
+    seat: (PlayerId, PlayerNumbering),
+    setup: &GameSetup,
+    sim: &Sim,
+    paths: Vec<(String, Vec<[f32; 3]>)>,
+) -> Result<MissionRuntime, StartError> {
+    let cfg = MissionConfig {
+        seat: Some(seat.0),
+        player_numbering: seat.1,
+        content: Some(setup.content.clone()),
+        labels: sim.labels.iter().map(|(id, l)| (id, l.clone())).collect(),
+        paths,
+        view: Some((*sim.view()).clone()),
+    };
+    let runtime = MissionRuntime::load_with(path, seed, cfg, move |p| reader(p));
+    if let Some(e) = runtime.errors().first() {
+        return Err(StartError::Blocked(format!("{path} did not load: {e}")));
+    }
+    runtime.eval::<()>(OUTCOME_HOOK).map_err(|e| StartError::Blocked(format!("outcome hook: {e}")))?;
+    Ok(runtime)
+}
+
+/// The named paths of the map `bzn` (`a2_fed03.bzn`) in `vfs`, in file order,
+/// for `A2.paths`; empty when the map cannot be read or holds none.
+pub fn read_map_paths(vfs: &Vfs, bzn: &str) -> Vec<(String, Vec<[f32; 3]>)> {
+    let Some(Ok(bytes)) = vfs.read(&format!("bzn/{bzn}")) else { return Vec::new() };
+    sta_bzn::parse(&bytes).map(|m| m.paths.into_iter().map(|p| (p.label, p.points)).collect()).unwrap_or_default()
+}
+
 impl ActiveMission {
     /// The mission's script runtime (objectives, briefing, errors, `eval`).
     pub fn runtime(&self) -> &MissionRuntime {
@@ -991,16 +1047,7 @@ impl ActiveMission {
     /// Look for an ended mission now (also after a host `eval`).
     pub fn check_outcome(&mut self, tick: u64) -> Option<MissionOutcome> {
         if self.outcome.is_none() {
-            let got: mlua::Result<(Option<bool>, Option<f64>)> =
-                self.runtime.eval("local o = rawget(_G, '__sta64_outcome') if o then return o.won, o.delay end");
-            if let Ok((Some(won), delay)) = got {
-                self.outcome = Some(MissionOutcome { won, delay: delay.unwrap_or(0.0), tick });
-            } else if self.runtime.finished() {
-                // The script reached the real finish without passing the hook
-                // (it kept a reference from before the hook was installed):
-                // the result is unknown, so it never advances progress.
-                self.outcome = Some(MissionOutcome { won: false, delay: 0.0, tick });
-            }
+            self.outcome = scan_outcome(&self.runtime, tick);
         }
         self.outcome
     }
@@ -1061,20 +1108,7 @@ impl CampaignRunner {
         let (path, reader) = host.script(c, m).map_err(StartError::Blocked)?;
         let setup = host.game_setup(c, m, seed).map_err(StartError::Blocked)?;
         let sim = Sim::from_setup(&setup);
-        let (seat, numbering) = host.seat();
-        let cfg = MissionConfig {
-            seat: Some(seat),
-            player_numbering: numbering,
-            content: Some(setup.content.clone()),
-            labels: sim.labels.iter().map(|(id, l)| (id, l.clone())).collect(),
-            paths: host.map_paths(c, m),
-            view: Some((*sim.view()).clone()),
-        };
-        let runtime = MissionRuntime::load_with(&path, seed, cfg, move |p| reader(p));
-        if let Some(e) = runtime.errors().first() {
-            return Err(StartError::Blocked(format!("{path} did not load: {e}")));
-        }
-        runtime.eval::<()>(OUTCOME_HOOK).map_err(|e| StartError::Blocked(format!("outcome hook: {e}")))?;
+        let runtime = launch_runtime(&path, reader, seed, host.seat(), &setup, &sim, host.map_paths(c, m))?;
         self.active = Some(ActiveMission {
             campaign: campaign.to_owned(),
             mission,
@@ -1188,8 +1222,7 @@ impl MissionHost for VfsHost {
     }
 
     fn map_paths(&self, _campaign: &Campaign, mission: &CampaignMission) -> Vec<(String, Vec<[f32; 3]>)> {
-        let Some(Ok(bytes)) = self.vfs.read(&format!("bzn/{}", mission.bzn)) else { return Vec::new() };
-        sta_bzn::parse(&bytes).map(|m| m.paths.into_iter().map(|p| (p.label, p.points)).collect()).unwrap_or_default()
+        read_map_paths(&self.vfs, &mission.bzn)
     }
 
     fn seat(&self) -> (PlayerId, PlayerNumbering) {

@@ -517,6 +517,11 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
             None => "-".to_owned(),
             Some(r) => format!("{{map={};construction={}}}", confinement_text(Some(r)), confinement_text(db.construction_confinement(u.key))),
         });
+    // `warpSpeed` (SIM-36 seam), only when set: the sim reads it from the
+    // definition, so it is a sim-visible rule; content without it keeps its text.
+    if m.warp_speed != Fixed::ZERO {
+        c.fixed("warp_speed", m.warp_speed);
+    }
     c.finish()
 }
 
