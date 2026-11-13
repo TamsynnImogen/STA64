@@ -46,8 +46,9 @@ impl Plugin for StockHullsPlugin {
     }
 }
 
-/// Writes the stock look into a hull material's parameters (the part has no lighting
-/// material of its own, e.g. a glTF or an M3D: the engine's default white one).
+/// Writes the stock look into a hull material's parameters (a part with no lighting
+/// material, e.g. a glTF, takes the engine's default white one; an M3D's material carries
+/// no ambient colour, so only the lights reach it).
 pub fn apply_material(p: &mut crate::render::hulls::HullParams, _m: &StandardMaterial, part: &crate::render::hulls::HullPart) {
     let l = part.stock.unwrap_or(StockLight { ambient: [0.0; 3], diffuse: [1.0; 3], specular: [0.0; 3], power: 1.0, model: 2 });
     p.mamb = Vec3::from(l.ambient).extend(1.0);

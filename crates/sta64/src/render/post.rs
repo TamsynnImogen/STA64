@@ -161,7 +161,7 @@ pub fn apply(
 ) {
     // Stock (RND-24): the original draws with no tonemapper unless one is asked for.
     let stock = matches!((profile.as_deref(), effects.as_deref()), (Some(p), Some(e)) if e.implementation(*p, crate::render::profile::Effect::Post) == crate::render::profile::RenderProfile::Stock);
-    let stock_changed = profile.as_ref().is_some_and(|p| p.is_changed());
+    let stock_changed = profile.as_ref().is_some_and(|p| p.is_changed()) || effects.as_ref().is_some_and(|e| e.is_changed());
     if !fx.is_changed() && added.is_empty() && !stock_changed {
         return;
     }

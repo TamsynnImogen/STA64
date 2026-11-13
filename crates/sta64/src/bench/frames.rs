@@ -187,7 +187,7 @@ impl View {
 
     /// Whether the scene (or a command) has put the camera somewhere.
     pub(super) fn is_set(&self) -> bool {
-        self.orbit.is_some() || self.eye.is_some()
+        self.orbit.is_some() || self.eye.is_some() || !self.timed.is_empty()
     }
 
     /// Where the scene's camera is: `(eye, look-at)` in render space (the sim's Z
@@ -233,6 +233,9 @@ impl View {
                 Some(at) if matches!(c.command, BenchCommand::Orbit { .. } | BenchCommand::Camera { .. }) => {
                     self.timed.push((at.ticks(sta_core::TICK_HZ), c.command));
                 }
+                // A plain line is due at once, before the timed ones (a plain line after a
+                // timed one that is already due does not override it; pairs use timed lines).
+                _ if matches!(c.command, BenchCommand::Orbit { .. } | BenchCommand::Camera { .. }) => self.timed.push((0, c.command)),
                 _ => self.apply(&c.command),
             }
         }
