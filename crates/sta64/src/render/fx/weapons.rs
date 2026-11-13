@@ -88,6 +88,14 @@ pub struct WeaponFx {
     target_lost: bool,
 }
 
+impl WeaponFx {
+    /// Where the effect starts now (render space).
+    #[cfg(test)]
+    pub fn origin(&self) -> Vec3 {
+        self.from
+    }
+}
+
 /// Opacity 0..1, applied to the material when there is one.
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
 pub struct FxAlpha(pub f32);
@@ -98,6 +106,8 @@ impl Plugin for WeaponFxPlugin {
     fn build(&self, app: &mut App) {
         // RND-28: the recipes a mod's mounted files lay over Refit's, read as the files
         // are mounted (`ordnance/ordnance.ini`, D12).
+        // RND-29: a freighter's mining beam is drawn as a shot of its mining weapon, from where it orbits.
+        app.add_plugins(super::super::mining::MiningPlugin);
         app.init_resource::<OrdnanceRecipes>().add_systems(
             Update,
             load_recipes.run_if(resource_exists_and_changed::<crate::viewer::Mounted>).before(spawn_fx),
@@ -133,7 +143,9 @@ fn name_colour(class: &str, fx: Option<&str>) -> Option<Vec3> {
 /// the weapon's colour (class and effect name, else the ODF's `lightColor`: three
 /// numbers, 0..1 or 0..255).
 fn recipe_for(def: &sta_content::WeaponDef, recipes: &OrdnanceRecipes) -> Recipe {
-    if let Some(r) = recipes.0.get(&def.odf.to_ascii_lowercase()) {
+    // By the weapon's ODF name, else by its ordnance class (`minebm`, `tracbm`: one recipe
+    // for every weapon of the class).
+    if let Some(r) = recipes.0.get(&def.odf.to_ascii_lowercase()).or_else(|| recipes.0.get(&def.class.0)) {
         return r.clone();
     }
     let shape = if def.kind == WeaponKind::Beam { Shape::Beam } else { Shape::Bolt };
@@ -154,9 +166,14 @@ fn point(link: &SimLink, id: EntityId, alpha: f32) -> Option<Vec3> {
     link.interpolate(id, alpha).map(|(p, _)| to_bevy(p))
 }
 
-fn target_point(link: &SimLink, t: &Target, alpha: f32) -> Option<Vec3> {
+/// How far a unit is drawn from its sim place ([`super::super::mining`]).
+fn shifted(offsets: &Option<Res<super::super::mining::VisualOffsets>>, id: EntityId) -> Vec3 {
+    offsets.as_ref().and_then(|o| o.0.get(&id)).copied().unwrap_or(Vec3::ZERO)
+}
+
+fn target_point(link: &SimLink, offsets: &Option<Res<super::super::mining::VisualOffsets>>, t: &Target, alpha: f32) -> Option<Vec3> {
     match t {
-        Target::Entity(id) => point(link, *id, alpha),
+        Target::Entity(id) => point(link, *id, alpha).map(|p| p + shifted(offsets, *id)),
         Target::Point(p) => Some(to_bevy(p.to_f32())),
         _ => None,
     }
@@ -176,9 +193,12 @@ fn load_recipes(vfs: Res<crate::viewer::Mounted>, mut recipes: ResMut<OrdnanceRe
     *recipes = OrdnanceRecipes::from_vfs(&vfs.0);
 }
 
-fn spawn_fx(
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn spawn_fx(
     mut cmds: Commands,
+    offsets: Option<Res<super::super::mining::VisualOffsets>>,
     mut msgs: MessageReader<SimMsg>,
+    mut mining: MessageReader<super::super::mining::MiningShot>,
     recipes: Res<OrdnanceRecipes>,
     clock: Res<AnimClock>,
     link: Res<SimLink>,
@@ -186,14 +206,20 @@ fn spawn_fx(
     live: Query<(Entity, &WeaponFx)>,
 ) {
     let alpha = clock.alpha();
-    for SimMsg(ev) in msgs.read() {
+    // A freighter's mining beam is drawn as a shot but is not one for anyone else.
+    let mined: Vec<SimEvent> = mining
+        .read()
+        .map(|s| SimEvent::Fired { shooter: s.shooter, weapon: s.weapon, hardpoint: 0, target: Target::Entity(s.node) })
+        .collect();
+    for ev in msgs.read().map(|m| &m.0).chain(mined.iter()) {
         match ev {
             SimEvent::Fired { shooter, weapon, target, .. } => {
                 let Some(def) = content.0.weapon(*weapon) else { continue };
-                let Some(from) = point(&link, *shooter, alpha) else { continue };
+                // A shooter drawn off its sim place (an orbiting miner) shoots from where it is drawn.
+                let Some(from) = point(&link, *shooter, alpha).map(|p| p + shifted(&offsets, *shooter)) else { continue };
                 // A target the shot has just killed is gone from this tick's view: its last place
                 // is in the one before, so the killing beam still reaches it.
-                let to = target_point(&link, target, alpha)
+                let to = target_point(&link, &offsets, target, alpha)
                     .or_else(|| match target {
                         Target::Entity(id) => link.prev().unit(*id).map(|u| to_bevy(u.pos.to_f32())),
                         _ => None,
@@ -261,6 +287,7 @@ fn envelope(age: f32, life: f32, fade_in: f32) -> f32 {
 #[allow(clippy::type_complexity)]
 fn update_fx(
     mut cmds: Commands,
+    offsets: Option<Res<super::super::mining::VisualOffsets>>,
     clock: Res<AnimClock>,
     link: Res<SimLink>,
     camera: Query<&GlobalTransform, crate::map::MainCamera>,
@@ -295,9 +322,9 @@ fn update_fx(
         }
         let k = (age / fx.life).clamp(0.0, 1.0);
         if let Some(p) = shooter_at {
-            fx.from = p;
+            fx.from = p + shifted(&offsets, fx.shooter);
         }
-        if let Some(p) = target_point(&link, &fx.target, alpha) {
+        if let Some(p) = target_point(&link, &offsets, &fx.target, alpha) {
             fx.to = p;
         }
         let r = fx.recipe.clone();

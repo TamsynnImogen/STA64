@@ -81,8 +81,9 @@ impl EntityKind {
     /// (`trigger_derelictcreation`). Such an object exists in the world
     /// (scripts, weapons and the tech tree see it) but is not the player's to
     /// pick, so the view leaves it out of every visible set
-    /// ([`crate::Sim`]'s view; docs/START_HELPERS.md). Some `hidden = 1`
-    /// effects do have models (FO's `effect_mstorm`); none reach the sim yet.
+    /// ([`crate::Sim`]'s view). Their lifecycle (expiry, replacement) is
+    /// `start_effects.rs`. Some `hidden = 1` effects do have models (FO's
+    /// `effect_mstorm`); none reach the sim yet.
     pub fn hidden(def: &sta_content::UnitDef) -> bool {
         def.hidden
     }

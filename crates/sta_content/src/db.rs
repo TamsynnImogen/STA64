@@ -447,7 +447,8 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
         crew: _, maximum_crew: _, sensor: _, hardpoints: _, build: _, launch: _, radius: _,
         sounds: _, fx: _, special_energy_max: _, special_energy_rate: _, miner: _, miner_off: _,
         max_dilithium: _, mining_rate: _, transfer_rate: _, resource: _, features: _,
-        confinement: _, nebula_pathing: _, avoid_me: _, hidden: _, raw: _,
+        confinement: _, nebula_pathing: _, avoid_me: _, hidden: _, invalid_as_target: _, life: _,
+        crew_gain: _, raw: _,
     } = u;
     let crate::BuildDef { cost: _, ticks: _, officers: _, list: _, queue_limit: _, flagged_slots: _ } = &u.build;
     let name = |r: &crate::DefRef| quoted(&r.odf.to_ascii_lowercase());
@@ -506,6 +507,9 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
         }))
         .flag("avoid_me", u.avoid_me)
         .flag("hidden", u.hidden)
+        .flag("invalid_as_target", u.invalid_as_target)
+        .raw("life", &u.life.map_or_else(|| "-".into(), |t| t.to_string()))
+        .fixed("crew_gain", u.crew_gain)
         .raw("features", &features_text(db.unit_features(u)))
         // A disabled or unsupported map rule confines nothing, whatever its
         // other fields say; the construction rule applies only under it.
@@ -516,13 +520,32 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
     c.finish()
 }
 
+/// A start helper's replacement rule (SIM-28).
+fn replace_text(r: &crate::lifecycle::ReplaceDef) -> String {
+    let crate::lifecycle::ReplaceDef { instant, delay, mode, required_officers, entries } = r;
+    let entries = entries.iter().map(|e| {
+        let classes = e.classes.iter().map(|c| {
+            group(Canon::new().text("odf", &c.odf.to_ascii_lowercase()).int("weight", c.weight).list("offset", c.offset.map(fixed_text)))
+        });
+        group(Canon::new().raw("condition", &e.condition.as_deref().map_or_else(|| "-".into(), quoted)).list("classes", classes))
+    });
+    group(
+        Canon::new()
+            .list("instant", instant.map(|b| u8::from(b).to_string()))
+            .int("delay", *delay)
+            .int("mode", *mode)
+            .raw("required_officers", &required_officers.map_or_else(|| "-".into(), |n| n.to_string()))
+            .list("entries", entries),
+    )
+}
+
 fn weapon_text(db: &ContentDb, w: &WeaponDef) -> String {
     // Every field, as in `unit_text`.
     let WeaponDef {
         key: _, odf: _, class: _, kind: _, range: _, damage: _, refire: _, shot_speed: _,
         duration: _, fire_sound: _, fx: _, effect_ticks: _, energy_drain: _, energy_cost: _,
         disable_weapons: _, decloak_on_hit: _, initial_shot_delay_modifier: _,
-        ignore_shot_delay_effects: _, ordnance_defence: _, features: _, raw: _,
+        ignore_shot_delay_effects: _, ordnance_defence: _, resource: _, replace: _, features: _, raw: _,
     } = w;
     Canon::new()
         .text("class", &w.class.0)
@@ -545,6 +568,15 @@ fn weapon_text(db: &ContentDb, w: &WeaponDef) -> String {
         .opt_fixed("initial_shot_delay_modifier", w.initial_shot_delay_modifier)
         .flag("ignore_shot_delay_effects", w.ignore_shot_delay_effects)
         .flag("ordnance_defence", w.ordnance_defence)
+        .raw("resource", &w.resource.map_or_else(|| "-".into(), |r| group(
+            Canon::new()
+                .list("add", r.add.map(fixed_text))
+                .fixed("crew", r.crew)
+                .flag("one_time", r.one_time)
+                .flag("always_player", r.always_player)
+                .flag("always_ai", r.always_ai),
+        )))
+        .raw("replace", &w.replace.as_ref().map_or_else(|| "-".into(), replace_text))
         .raw("features", &features_text(db.weapon_features(w)))
         .finish()
 }

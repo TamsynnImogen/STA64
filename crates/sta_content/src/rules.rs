@@ -24,13 +24,15 @@ pub struct Rules {
     starts: Vec<StartRule>,
     /// `RTS_CFG.h`'s path-planner block, when the header has any of its keys.
     pathing: Option<PathingRules>,
+    /// Team crew accumulation (SIM-25), when the header or a race has a key.
+    crew: Option<CrewRules>,
     /// `RTS_CFG.h`'s default craft autonomy, when the header sets either key.
     autonomy: Option<AutonomyRules>,
     /// The other typed `RTS_CFG.h` keys.
     pub cfg: CfgRules,
 }
 
-const TYPED_LEN: usize = 3 + PathingRules::KEYS.len() + AutonomyRules::KEYS.len() + CfgRules::KEYS.len();
+const TYPED_LEN: usize = 4 + PathingRules::KEYS.len() + AutonomyRules::KEYS.len() + CfgRules::KEYS.len();
 
 /// Every `RTS_CFG.h` key [`Rules`] reads.
 pub const TYPED_CFG_KEYS: [&str; TYPED_LEN] = {
@@ -38,23 +40,34 @@ pub const TYPED_CFG_KEYS: [&str; TYPED_LEN] = {
     out[0] = "MP_OFFICER_LIMIT";
     out[1] = "MP_OFFICER_LIST_SIZE";
     out[2] = "SINGLE_PLAYER_OFFICER_LIMIT";
+    out[3] = "STARTING_CREW_CAPACITY";
     let mut i = 0;
     while i < PathingRules::KEYS.len() {
-        out[3 + i] = PathingRules::KEYS[i];
+        out[4 + i] = PathingRules::KEYS[i];
         i += 1;
     }
     let mut a = 0;
     while a < AutonomyRules::KEYS.len() {
-        out[3 + i + a] = AutonomyRules::KEYS[a];
+        out[4 + i + a] = AutonomyRules::KEYS[a];
         a += 1;
     }
     let mut j = 0;
     while j < CfgRules::KEYS.len() {
-        out[3 + i + a + j] = CfgRules::KEYS[j];
+        out[4 + i + a + j] = CfgRules::KEYS[j];
         j += 1;
     }
     out
 };
+
+/// Team crew rules: `STARTING_CREW_CAPACITY` from `RTS_CFG.h` and each race's
+/// `crewAccumulationRate` (crew per second per starbase).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CrewRules {
+    /// What a team can hold with no starbase or planet (`STARTING_CREW_CAPACITY`).
+    pub starting_capacity: Option<i64>,
+    /// Race key (lower case, sorted) and its accumulation rate per second.
+    pub races: Vec<(String, Fixed)>,
+}
 
 /// The autonomy a new craft starts with (CON-46, D9), from `RTS_CFG.h`:
 /// `CRAFT_DEFAULT_MOVEMENT_AUTONOMY` and `CRAFT_DEFAULT_SPECIALWEAPON_AUTONOMY`,
@@ -324,6 +337,9 @@ impl Rules {
             }
         }
         rules.pathing = PathingRules::from_cfg(&cfg, &mut warnings);
+        if let Some(cap) = cfg.i64("STARTING_CREW_CAPACITY").filter(|c| *c >= 0) {
+            rules.crew = Some(CrewRules { starting_capacity: Some(cap.min(1_000_000_000)), races: Vec::new() });
+        }
         rules.autonomy = AutonomyRules::from_cfg(&cfg, &mut warnings);
         rules.cfg = CfgRules::from_cfg(&cfg, &mut warnings);
         (rules, warnings)
@@ -337,6 +353,17 @@ impl Rules {
     /// Set the path planner's rules (tests and content built in code).
     pub fn with_pathing(mut self, pathing: PathingRules) -> Self {
         self.pathing = Some(pathing);
+        self
+    }
+
+    /// The team crew rules, when the content has any.
+    pub fn crew(&self) -> Option<&CrewRules> {
+        self.crew.as_ref()
+    }
+
+    /// Set the crew rules (tests and content built in code).
+    pub fn with_crew(mut self, crew: CrewRules) -> Self {
+        self.crew = Some(crew);
         self
     }
 
@@ -374,6 +401,12 @@ impl Rules {
         // Stems are ODF names, unique per install; lookups go stem first.
         rules.starts.sort_by(|a, b| a.stem.cmp(&b.stem));
         rules.starts.dedup_by(|a, b| a.stem == b.stem);
+        let mut rates: Vec<(String, Fixed)> = races.crew_rates().map(|(k, c)| (k.to_owned(), c.accumulation_rate)).collect();
+        if !rates.is_empty() {
+            rates.sort_by(|a, b| a.0.cmp(&b.0));
+            rates.dedup_by(|a, b| a.0 == b.0);
+            rules.crew.get_or_insert_with(CrewRules::default).races = rates;
+        }
         Ok((rules, warnings))
     }
 
@@ -402,6 +435,13 @@ impl Rules {
         for (key, value) in CfgRules::KEYS.iter().zip(self.cfg.texts()) {
             out.push(DigestEntry::new(format!("RTS_CFG.h:{key}"), value));
         }
+        let crew = self.crew.as_ref();
+        out.push(DigestEntry::new(
+            "RTS_CFG.h:STARTING_CREW_CAPACITY",
+            crew.and_then(|c| c.starting_capacity).map_or_else(|| "unset".to_owned(), |c| c.to_string()),
+        ));
+        let rates = crew.map(|c| c.races.iter().map(|(k, r)| format!("{}:{}", quoted(k), crate::digest::fixed_text(*r))).collect::<Vec<_>>()).unwrap_or_default();
+        out.push(DigestEntry::new("crew:accumulation", format!("[{}]", rates.join(","))));
         for s in &self.starts {
             let opt = |v: Option<i64>| v.map_or_else(|| "-".to_owned(), |v| v.to_string());
             let nums = |v: [i64; 4]| format!("[{}]", v.map(|n| n.to_string()).join(","));
@@ -598,5 +638,38 @@ mod cfg_tests {
         for k in TYPED_CFG_KEYS.iter().filter(|k| !matches!(**k, "MP_OFFICER_LIST_SIZE" | "SINGLE_PLAYER_OFFICER_LIMIT")) {
             assert!(d.get(&format!("RTS_CFG.h:{k}")).is_some(), "{k}");
         }
+    }
+}
+
+#[cfg(test)]
+mod crew_tests {
+    use super::*;
+    use crate::digest::ContentDigest;
+
+    fn digest(text: &str) -> ContentDigest {
+        ContentDigest::from_entries(Rules::from_header(text).0.digest_entries())
+    }
+
+    #[test]
+    fn starting_crew_capacity_is_read_and_digested() {
+        let (rules, _) = Rules::from_header("int STARTING_CREW_CAPACITY = 250;\n");
+        assert_eq!(rules.crew().unwrap().starting_capacity, Some(250));
+        let d = digest("int STARTING_CREW_CAPACITY = 250;\n");
+        assert_eq!(d.get("RTS_CFG.h:STARTING_CREW_CAPACITY"), Some("250"));
+        assert_ne!(d, digest("int STARTING_CREW_CAPACITY = 251;\n"));
+        let (none, _) = Rules::from_header("int SOMETHING_ELSE = 1;\n");
+        assert!(none.crew().is_none());
+        assert_eq!(digest("int SOMETHING_ELSE = 1;\n").get("RTS_CFG.h:STARTING_CREW_CAPACITY"), Some("unset"));
+    }
+
+    #[test]
+    fn race_accumulation_rates_are_digested() {
+        let rates = |r: Vec<(String, Fixed)>| ContentDigest::from_entries(
+            Rules::default().with_crew(CrewRules { starting_capacity: None, races: r }).digest_entries(),
+        );
+        let a = rates(vec![("fed".into(), Fixed::from_int(2))]);
+        let b = rates(vec![("fed".into(), Fixed::from_int(3))]);
+        assert_eq!(a.first_difference(&b).unwrap().key, "crew:accumulation");
+        assert_eq!(a.get("crew:accumulation"), Some("[\"fed\":2]"));
     }
 }

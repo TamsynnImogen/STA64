@@ -5,7 +5,8 @@
 //! then gives every seat that has a start position its race's [`Loadout`]
 //! (`sta_content::Races`): the units on the start's spawn grid
 //! ([`START_SPACING`] apart, the first authored entry nearest the start) and
-//! the starting stock. A seat with no start position on the
+//! the starting stock; hidden helper pods and effects then run their
+//! lifecycle (`start_effects.rs`, SIM-28). A seat with no start position on the
 //! map gets nothing, as before. Both the game and the map corpus test build
 //! their skirmishes through this one function.
 //!
@@ -37,7 +38,11 @@ impl Sim {
             let Some(start) = s.map.start_for(p.id.0) else { continue };
             if let Some(race) = races.get_playable(&p.race).or_else(|| races.get(&p.race)) {
                 for (index, odf) in race.standard_units.iter().enumerate() {
-                    if s.content.key(odf).is_some_and(|key| s.content.unit(key).is_some()) {
+                    if let Some(key) = s.content.key(odf).filter(|&key| s.content.unit(key).is_some()) {
+                        // Placed; whatever of its lifecycle the sim does not run is listed once.
+                        if warned.insert((race.stem.clone(), index)) {
+                            warnings.extend(crate::start_effects::warnings(&s.content, &format!("{}.odf", race.stem), &race.name, odf, key));
+                        }
                         continue;
                     }
                     if warned.insert((race.stem.clone(), index)) {
@@ -68,6 +73,46 @@ impl Sim {
         self.economy.set_stock(player, loadout.stock);
         self.economy.set_personnel(player, loadout.crew, None);
     }
+}
+
+/// A portable hash of what [`Sim::from_setup_with_starts`] would give each
+/// seat of `s` from `races`: per seat that has a start on the map, the seat
+/// id, the resolved units (by content name, in spawn order), the stock and the
+/// crew. A replay stores it so that a replay rebuilt on other race data is
+/// refused instead of desyncing; the rules themselves stay in the race ODFs.
+/// FNV-1a over fixed-width little-endian fields, equal on every platform.
+pub fn loadouts_hash(s: &GameSetup, races: &Races) -> u64 {
+    fn eat(h: &mut u64, bytes: &[u8]) {
+        for &b in bytes {
+            *h ^= u64::from(b);
+            *h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    let mut h = 0xcbf2_9ce4_8422_2325u64;
+    for p in &s.players {
+        if s.map.start_for(p.id.0).is_none() {
+            continue;
+        }
+        let loadout = races.loadout_with_mode(&s.content, &p.race, s.options.starting_resources);
+        eat(&mut h, &[p.id.0]);
+        eat(&mut h, &(loadout.units.len() as u32).to_le_bytes());
+        for &key in &loadout.units {
+            let name = s.content.name(key).unwrap_or("");
+            eat(&mut h, &(name.len() as u32).to_le_bytes());
+            eat(&mut h, name.as_bytes());
+        }
+        for v in loadout.stock {
+            eat(&mut h, &v.to_bits().to_le_bytes());
+        }
+        match loadout.crew {
+            Some(c) => {
+                eat(&mut h, &[1]);
+                eat(&mut h, &c.to_bits().to_le_bytes());
+            }
+            None => eat(&mut h, &[0]),
+        }
+    }
+    h
 }
 
 #[cfg(test)]

@@ -48,4 +48,27 @@ pub enum SimEvent {
     /// running out of special energy. Only with `Features::pd_energy`.
     /// Appended to preserve every existing postcard event tag.
     PointDefenceChanged { id: EntityId, on: bool },
+    /// A freighter changed what it is doing in its mining cycle (RND-29): the renderer
+    /// animates the mining phase (the orbit and the beam at the node, the berth at the
+    /// station) from it. Not hashed with the state; a miner is announced when its phase
+    /// changes (the phase it was ordered into is not announced, nor is one a loaded save
+    /// resumes in until the next change).
+    /// Appended to preserve every existing postcard event tag.
+    /// `dock`: the station it unloads at, when `phase` is `Unloading`.
+    MinerPhase { id: EntityId, phase: MinerPhase, node: EntityId, dock: Option<Vec3> },
+}
+
+/// Where a freighter is in `ToNode -> Mining -> ToDock -> Unloading` ([`SimEvent::MinerPhase`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MinerPhase {
+    /// On its way to the resource.
+    ToNode,
+    /// At the resource, filling its hold.
+    Mining,
+    /// Carrying the load to the station.
+    ToDock,
+    /// At the station, unloading.
+    Unloading,
+    /// Mining ended (a new order, or nothing left to mine).
+    Idle,
 }

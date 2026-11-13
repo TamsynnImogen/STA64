@@ -322,3 +322,38 @@ fn launched_projectiles_survive_lost_sight_and_snapshot_resume() {
     }
     assert!(hit,"already launched projectile should still arrive");
 }
+
+#[test]
+fn invalid_as_target_units_are_not_picked_automatically() {
+    use sta_content::{ContentDb, DefRef, Hardpoint, UnitDef, WeaponDef, WeaponKind};
+    for invalid in [false, true] {
+        let mut weapon = WeaponDef::new("gun", "phaser", WeaponKind::Beam);
+        weapon.range = Fixed::from_int(600);
+        weapon.damage = Fixed::ONE;
+        weapon.refire = 1;
+        let mut gun = UnitDef::new("shooter", "craft");
+        gun.hull = Fixed::from_int(100);
+        gun.sensor = Fixed::from_int(300);
+        gun.hardpoints.push(Hardpoint { weapon: DefRef::new("gun"), node: "hp01".into(), arc: None });
+        let mut dummy = UnitDef::new("dummy", "craft");
+        dummy.hull = Fixed::from_int(100);
+        dummy.invalid_as_target = invalid;
+        let db = ContentDb::builder().weapon(weapon).unit(gun).unit(dummy).build().unwrap();
+        let setup = GameSetup {
+            seed: 1, map: Arc::new(sta_content::MapDef::empty()), content: Arc::new(db),
+            players: [(1, 1), (2, 2)].into_iter().map(|(id, team)| PlayerSetup {
+                id: PlayerId(id), team: TeamId(team), race: "test".into(), control: Control::Idle,
+            }).collect(), options: GameOptions::default(),
+        };
+        let mut sim = Sim::from_setup(&setup);
+        let key = |n| sim.content.as_ref().unwrap().key(n).unwrap();
+        let (gun, dummy) = (key("shooter"), key("dummy"));
+        let s = sim.spawn_def(gun, PlayerId(1), v(2000, 0, 2000), AHEAD).unwrap();
+        let t = sim.spawn_def(dummy, PlayerId(2), v(2000, 0, 2100), AHEAD).unwrap();
+        // Automatic fire.
+        assert_eq!(fired_by(&sim.step(&[]).events, s), !invalid, "auto, invalid={invalid}");
+        // An explicit order is accepted either way.
+        let out = sim.step(&[attack(1, s, t)]);
+        assert!(!out.events.iter().any(|e| matches!(e, SimEvent::Rejected { .. })), "order, invalid={invalid}");
+    }
+}

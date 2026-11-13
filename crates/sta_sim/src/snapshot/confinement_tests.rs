@@ -60,6 +60,8 @@ fn split(bytes: &[u8]) -> (Body, Option<(Vec3, Vec3)>, BoundaryRec, PerceptionRe
     let (personnel, rest): (PersonnelRec, _) = postcard::take_from_bytes(rest).unwrap();
     assert!(personnel.rows.is_empty());
     let (_, rest): (UnitCrewRec, _) = postcard::take_from_bytes(rest).unwrap();
+    let (effects, rest): (StartEffectsRec, _) = postcard::take_from_bytes(rest).unwrap();
+    assert!(effects.rows.is_empty());
     assert!(rest.is_empty());
     (body, bounds, record, perception)
 }
@@ -73,6 +75,7 @@ fn join(header: &[u8], body: &Body, bounds: Option<(Vec3, Vec3)>, record: &Bound
     bytes.extend(postcard::to_allocvec(perception).unwrap());
     bytes.extend(postcard::to_allocvec(&PersonnelRec { version: 1, rows: Vec::new() }).unwrap());
     bytes.extend(postcard::to_allocvec(&UnitCrewRec { version: 1, rows: Vec::new() }).unwrap());
+    bytes.extend(postcard::to_allocvec(&StartEffectsRec { version: 1, rows: Vec::new() }).unwrap());
     bytes
 }
 
@@ -195,7 +198,7 @@ fn header_downgrades_and_forged_old_content_hashes_cannot_hide_state() {
 
 #[test]
 fn genuine_old_snapshots_are_refused_with_a_clear_error() {
-    // Formats 8 to 13 were read by narrow compatibility paths until CON-35;
+    // Formats 8 to 14 were read by narrow compatibility paths until CON-35;
     // their content hash is of the old kind, so they are refused by version.
     let db = Arc::new(sta_content::fake::db());
     for (bytes, version) in [

@@ -2,11 +2,18 @@
 //!
 //! Names follow the engine's config. `RTS_CFG.h` gives `cfgSOUND_BUTTON_SAMPLE`
 //! (the HUD's click), `cfgSOUND_SHELL_BUTTON_HOVER` / `_CLICK` (the menus) and the
-//! chat pair; [`UiSounds::from_cfg`] reads them and falls back to the Fleet
-//! Operations values. The HUD's rollover is not in the config header (stock reads it
-//! from the GUI config's button section), so it defaults to the Federation file.
-//! Refit's engine layer uses `cornron.wav` / `cornrclk.wav` for a shell button
-//! that has no sound of its own; those are the `SHELL_*_FALLBACK` names.
+//! chat pair; [`UiSounds::from_cfg`] reads them. The HUD's rollover is not in the
+//! config header (stock reads it from the GUI config's button section), so it defaults
+//! to the Federation file.
+//!
+//! Which keys exist depends on the install (read from data, AUD-06): the Fleet
+//! Operations family (FO 3.2.7, Roots, FO 4.0, STA2 Classic, Dominion War) sets the
+//! shell and chat keys and ships `Beep1/2.ogg` and `Chatsend/Chatreceive.ogg`. Armada II
+//! stock and Armada I name only `cfgSOUND_BUTTON_SAMPLE` (and their executables only
+//! `cornron.wav` / `cornrclk.wav`), ship no Beep or Chat file, and have no chat sound. So a
+//! missing shell key means the engine's own `cornron.wav` / `cornrclk.wav` (the
+//! `SHELL_*_FALLBACK` names), and a missing chat key means no chat sound (an empty name,
+//! which plays nothing).
 //!
 //! The LCARS theme (UI-03) names no sounds itself: [`UiSoundPlugin`] listens to its
 //! messages (`ButtonClicked`, `ToggleChanged`, `ListSelected`) and to pointer
@@ -85,17 +92,36 @@ impl Default for UiSounds {
 }
 
 impl UiSounds {
-    /// The names `RTS_CFG.h` gives; what it leaves out keeps the default.
+    /// The names `RTS_CFG.h` gives. A missing shell key is the engine's shell
+    /// button sound, a missing chat key is silence; the rest keep the default.
     pub fn from_cfg(cfg: &CfgH) -> Self {
         let d = Self::default();
-        let get = |key: &str, default: String| cfg.raw(key).map(str::trim).filter(|s| !s.is_empty()).map_or(default, str::to_owned);
+        let get = |key: &str, default: &str| cfg.raw(key).map(str::trim).filter(|s| !s.is_empty()).map_or_else(|| default.to_owned(), str::to_owned);
         Self {
-            hud_click: get("cfgSOUND_BUTTON_SAMPLE", d.hud_click),
-            shell_hover: get("cfgSOUND_SHELL_BUTTON_HOVER", d.shell_hover),
-            shell_click: get("cfgSOUND_SHELL_BUTTON_CLICK", d.shell_click),
-            chat_send: get("cfgSOUND_INGAME_CHAT_SEND", d.chat_send),
-            chat_receive: get("cfgSOUND_INGAME_CHAT_RECEIVE", d.chat_receive),
+            hud_click: get("cfgSOUND_BUTTON_SAMPLE", HUD_CLICK),
+            shell_hover: get("cfgSOUND_SHELL_BUTTON_HOVER", SHELL_HOVER_FALLBACK),
+            shell_click: get("cfgSOUND_SHELL_BUTTON_CLICK", SHELL_CLICK_FALLBACK),
+            chat_send: get("cfgSOUND_INGAME_CHAT_SEND", ""),
+            chat_receive: get("cfgSOUND_INGAME_CHAT_RECEIVE", ""),
             ..d
+        }
+    }
+
+    /// What this install can actually play: each name that is not a file of the install
+    /// (`exists`) is replaced by the engine's own `cornron.wav` / `cornrclk.wav` where there is
+    /// a button sound to fall back on (HUD and shell hover and click), and dropped (empty,
+    /// silent) otherwise (error, chat). Armada I ships neither `federation_*` nor
+    /// `klaxon.wav`, and STA2 Classic's header names Beep and Chat files it does not ship.
+    pub fn existing(&self, exists: impl Fn(&str) -> bool) -> Self {
+        let pick = |names: &[&str]| names.iter().find(|n| !n.is_empty() && exists(n)).map_or_else(String::new, |n| (*n).to_owned());
+        Self {
+            hud_click: pick(&[self.hud_click.as_str(), SHELL_CLICK_FALLBACK]),
+            hud_hover: pick(&[self.hud_hover.as_str(), SHELL_HOVER_FALLBACK]),
+            shell_click: pick(&[self.shell_click.as_str(), SHELL_CLICK_FALLBACK]),
+            shell_hover: pick(&[self.shell_hover.as_str(), SHELL_HOVER_FALLBACK]),
+            error: pick(&[self.error.as_str()]),
+            chat_send: pick(&[self.chat_send.as_str()]),
+            chat_receive: pick(&[self.chat_receive.as_str()]),
         }
     }
 
@@ -121,6 +147,7 @@ impl UiSounds {
             }
         }
         out.extend([SHELL_HOVER_FALLBACK, SHELL_CLICK_FALLBACK]);
+        out.retain(|n| !n.is_empty());
         let mut seen = std::collections::HashSet::new();
         out.retain(|n| seen.insert(n.to_ascii_lowercase()));
         out
@@ -132,9 +159,10 @@ impl UiSounds {
     }
 }
 
-/// Whether the VFS has the sound file `name` (with its extension) under `sounds/effects/`.
+/// Whether the resolver can play `name`: the same lookup `BankResolver` uses (file stem in any
+/// sound folder, OGG before WAV before MP3, whatever extension the name carries).
 pub fn sound_exists(vfs: &Vfs, name: &str) -> bool {
-    vfs.resolve(&format!("sounds/effects/{name}")).is_some()
+    sta_assets::audio::find_sound(vfs, name).is_some()
 }
 
 /// Adds the UI sound table, the theme listeners and the [`UiSound`] to [`PlaySound`] mapping.
@@ -206,7 +234,11 @@ fn play_ui_sounds(
     for &s in requests.read() {
         if !seen.contains(&s) {
             seen.push(s);
-            out.write(PlaySound { name: sounds.name(s, *ctx).to_owned(), at: None, bus: Bus::Ui });
+            let name = sounds.name(s, *ctx);
+            // An empty name is a sound the install does not have (no chat sound in stock).
+            if !name.is_empty() {
+                out.write(PlaySound { name: name.to_owned(), at: None, bus: Bus::Ui });
+            }
         }
     }
 }
@@ -251,6 +283,16 @@ mod tests {
     }
 
     #[test]
+    fn stock_headers_fall_back_to_the_engine_shell_sounds_and_no_chat() {
+        let stock = UiSounds::from_cfg(&CfgH::parse("#define cfgSOUND_BUTTON_SAMPLE \"federation_click.wav\"\n"));
+        assert_eq!((stock.shell_hover.as_str(), stock.shell_click.as_str()), (SHELL_HOVER_FALLBACK, SHELL_CLICK_FALLBACK));
+        assert!(stock.chat_send.is_empty() && stock.chat_receive.is_empty());
+        assert!(stock.all_names().iter().all(|n| !n.is_empty() && !n.starts_with("Beep") && !n.starts_with("Chat")));
+        // A header naming nothing (an install without RTS_CFG.h keys) behaves the same.
+        assert_eq!(UiSounds::from_cfg(&CfgH::parse("")).hud_click, HUD_CLICK);
+    }
+
+    #[test]
     fn theme_sound_names_resolve_against_the_fixture_list() {
         let dir = std::env::temp_dir().join(format!("sta64-aud05-{}", std::process::id()));
         let vfs = fixture_vfs(&dir);
@@ -259,24 +301,60 @@ mod tests {
         assert_eq!(sounds.unresolved(|n| sound_exists(&vfs, n)), Vec::<String>::new());
         // Lookup is case-insensitive, as the engine's is.
         assert!(sound_exists(&vfs, "beep1.OGG"));
+        assert!(sound_exists(&vfs, "beep1.wav"), "any extension: the lookup goes by stem");
         assert_eq!(sounds.unresolved(|n| n != "klaxon.wav"), ["klaxon.wav"], "a missing name is reported");
         std::fs::remove_dir_all(dir).ok();
     }
 
-    /// With `STA64_TEST_INSTALL` (+ optional `STA64_TEST_MOD`): the install's own
-    /// `RTS_CFG.h` and sound files satisfy every UI name.
+    /// With `STA64_TEST_INSTALL` (+ optional `STA64_TEST_MOD`): follow the install's own data.
+    /// Which names the header gives and which files exist differ per install (Armada I and
+    /// Armada II stock have no Beep or Chat files, the STA2 Classic mod names some it lacks), so
+    /// the check is on what [`UiSounds::existing`] makes of it: every name it keeps is a file,
+    /// and all four button sounds are present everywhere (`cornron` / `cornrclk` are in every install).
     #[test]
     fn real_install_if_available() {
         let Ok(root) = std::env::var("STA64_TEST_INSTALL") else { return };
-        let m = std::env::var("STA64_TEST_MOD").ok();
+        let m = std::env::var("STA64_TEST_MOD").ok().filter(|m| !m.is_empty());
         let vfs = Vfs::mount_install(Path::new(&root), m.as_deref()).unwrap();
-        let sounds = match sta_content::layered::cfg_h(&vfs, "RTS_CFG.h") {
+        let asked = match sta_content::layered::cfg_h(&vfs, "RTS_CFG.h") {
             Some(c) => UiSounds::from_cfg(&c),
-            _ => UiSounds::default(),
+            _ => UiSounds::from_cfg(&CfgH::parse("")),
         };
-        let missing = sounds.unresolved(|n| sound_exists(&vfs, n));
-        eprintln!("ui sounds: {:?}, missing {missing:?}", sounds.all_names());
-        assert!(missing.is_empty(), "unresolved UI sounds: {missing:?}");
+        let exists = |n: &str| sound_exists(&vfs, n);
+        let sounds = asked.existing(exists);
+        eprintln!("ui sounds asked: {:?}, absent {:?}; kept: {:?}", asked.all_names(), asked.unresolved(exists), sounds);
+        // Every kept name plays through the same bank the game's resolver uses.
+        let bank = sta_assets::audio::SoundBank::load(&vfs);
+        for n in sounds.all_names() {
+            assert!(bank.resolve(&vfs, n, None, 0).is_some(), "{n} does not resolve");
+        }
+        for (what, n) in [("hud click", &sounds.hud_click), ("hud hover", &sounds.hud_hover), ("shell click", &sounds.shell_click), ("shell hover", &sounds.shell_hover)] {
+            assert!(!n.is_empty(), "{what} has no sound in this install");
+        }
+    }
+
+    #[test]
+    fn empty_names_play_nothing() {
+        let (mut app, log) = app();
+        app.insert_resource(UiSounds { chat_send: String::new(), ..UiSounds::default() });
+        app.world_mut().write_message(UiSound::ChatSend);
+        app.world_mut().write_message(UiSound::Click);
+        app.update();
+        assert_eq!(plays(&log), [(HUD_CLICK.to_owned(), Bus::Ui)]);
+    }
+
+    #[test]
+    fn missing_files_fall_back_to_the_engine_button_sounds_or_silence() {
+        // Armada I: only the engine's own button sounds exist.
+        let a1 = UiSounds::default().existing(|n| n == SHELL_HOVER_FALLBACK || n == SHELL_CLICK_FALLBACK);
+        assert_eq!((a1.hud_click.as_str(), a1.hud_hover.as_str()), (SHELL_CLICK_FALLBACK, SHELL_HOVER_FALLBACK));
+        assert_eq!((a1.shell_click.as_str(), a1.shell_hover.as_str()), (SHELL_CLICK_FALLBACK, SHELL_HOVER_FALLBACK));
+        assert!(a1.error.is_empty() && a1.chat_send.is_empty() && a1.chat_receive.is_empty());
+        // Everything present: unchanged.
+        assert_eq!(UiSounds::default().existing(|_| true), UiSounds::default());
+        // Nothing present: all silent (an empty name makes no PlaySound: see `empty_names_play_nothing`).
+        let none = UiSounds::default().existing(|_| false);
+        assert!([&none.hud_click, &none.hud_hover, &none.shell_click, &none.shell_hover, &none.error, &none.chat_send, &none.chat_receive].iter().all(|n| n.is_empty()));
     }
 
     /// Accepts any name and decodes it to silence.

@@ -25,6 +25,7 @@ fn crew_offset(bytes: &[u8]) -> usize {
 fn replace_crew(bytes: &[u8], version: u8, rows: Vec<(EntityId, [i64; 2])>) -> Vec<u8> {
     let mut out = bytes[..crew_offset(bytes)].to_vec();
     out.extend(postcard::to_allocvec(&UnitCrewRec { version, rows }).unwrap());
+    out.extend(postcard::to_allocvec(&StartEffectsRec { version: 1, rows: Vec::new() }).unwrap());
     out
 }
 

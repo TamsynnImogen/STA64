@@ -17,9 +17,10 @@
 //! Adding a subsystem's state (weapons from SIM-04, say) is one field on
 //! [`Body`], filled in [`Sim::snapshot`] and read back in
 //! [`Sim::from_snapshot`], plus a [`FORMAT_VERSION`] bump. Old layouts are
-//! refused, not migrated. Format 14 (CON-35) is the first with provenance and
-//! with the keyed content digest's hash; formats 8 to 13, which an earlier
-//! build read with narrow compatibility paths, carry a content hash of the old
+//! refused, not migrated. Format 14 (SIM-28) appended the pending start-helper
+//! lifecycle rows; format 15 (CON-35) is the first with provenance and with
+//! the keyed content digest's hash. Formats 8 to 14, which earlier builds
+//! read with narrow compatibility paths, carry a content hash of the old
 //! kind that matches no current database, so they are refused by version.
 //!
 //! The state types of other crates (`MoveStats`) have no serde, so the body
@@ -38,9 +39,9 @@ use crate::world::{Entities, Entity, EntityKind, Shields, Table};
 use crate::{Rng, Sim, SimEvent};
 
 pub const MAGIC: [u8; 4] = *b"STAS";
-/// Format 14 (CON-35) adds the [`Provenance`] record and carries the keyed
+/// Format 15 (CON-35) adds the [`Provenance`] record and carries the keyed
 /// content digest's hash. Only this format is read.
-pub const FORMAT_VERSION: u16 = 14;
+pub const FORMAT_VERSION: u16 = 15;
 
 const HEADER: usize = 4 + 2 + 4 + 8;
 
@@ -220,6 +221,13 @@ struct UnitCrewRec {
     rows: Vec<(EntityId, [i64; 2])>,
 }
 
+/// Mandatory suffix since v14: pending start-helper lifecycle rows (SIM-28).
+#[derive(Serialize, Deserialize)]
+struct StartEffectsRec {
+    version: u8,
+    rows: crate::start_effects::Rows,
+}
+
 fn kind_from(b: u8) -> Option<EntityKind> {
     Some(match b {
         0 => EntityKind::Craft,
@@ -363,6 +371,7 @@ impl Sim {
             version: 1,
             rows: self.units.iter().filter_map(|unit| unit.crew.map(|pool| (unit.id, pool.map(Fixed::to_bits)))).collect(),
         }).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&StartEffectsRec { version: 1, rows: self.start_effects.to_rec() }).expect("snapshot serialises"));
         out
     }
 
@@ -395,6 +404,9 @@ impl Sim {
         let (record, rest): (UnitCrewRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         if record.version != 1 { return Err(SnapshotError::Corrupt("unknown unit crew record version".into())); }
         let crew_rows = record.rows;
+        let (record, rest): (StartEffectsRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        if record.version != 1 { return Err(SnapshotError::Corrupt("unknown start effects record version".into())); }
+        let effect_rows = record.rows;
         if !rest.is_empty() { return Err(SnapshotError::Corrupt("trailing bytes".into())); }
         if let Some(row) = b.economy.miners.iter().find(|row| row.5 > 4) {
             return Err(SnapshotError::Corrupt(format!("mining phase {} is not supported", row.5)));
@@ -443,6 +455,8 @@ impl Sim {
         let movement = Movement::from_rows(courses).ok_or_else(|| corrupt("courses"))?;
         let weapons = Weapons::from_rec(b.weapons).ok_or_else(|| corrupt("weapons"))?;
         let specials = crate::specials::Specials::from_rec(b.specials).ok_or_else(|| corrupt("specials"))?;
+        let start_effects = crate::start_effects::StartEffects::from_rec(effect_rows, |id| units.contains(id))
+            .ok_or_else(|| corrupt("start effect rows"))?;
         let mut economy = crate::economy::Economy::from_rec(&b.economy);
         economy.restore_personnel(personnel_rows, &b.players).map_err(|why| SnapshotError::Corrupt(why.into()))?;
         Ok(Sim {
@@ -465,6 +479,7 @@ impl Sim {
             production: crate::production::Production::from_rec(&b.production).ok_or_else(|| corrupt("rallies"))?,
             victory: crate::victory::Victory::from_rec(&b.victory),
             specials,
+            start_effects,
             nav: Default::default(),
         })
     }

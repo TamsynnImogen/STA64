@@ -20,3 +20,7 @@ postcard.workspace = true
 
 [dev-dependencies]
 sta_vfs.workspace = true
+sta_bzn.workspace = true
+# Tests build ODFs for the content loader (`weapon_def`); the sim itself
+# reads no raw ODF (tests/no_raw_odf.rs).
+sta_odf.workspace = true
