@@ -56,6 +56,11 @@ the first call that was unbound or raised, whether a player objective was
 issued. `--label before|after` names the files in the detail directory
 (`converted-<label>.md/.json`). Progress is how far the converted script runs;
 no mission is playable until a real win is reached.
+
+`--converted a1` does the same for Armada I (`--a1 DIR`): the missions are
+converted with `tools/a1_to_lua.py` (LUA-14) and the table adds the first
+call that was not decoded (`undecoded`) and the bound calls that have no seam
+(`unsupported`, counted by the runtime).
 """
 
 import argparse
@@ -346,7 +351,15 @@ def converted_funnel(rows):
     return n
 
 
-def render_converted(rows, ticks, standin):
+def first_unsupported(r):
+    """The first bound-but-unsupported call of a row (`A1.Name: why` -> `A1.Name`), alphabetical."""
+    names = sorted({k.split(":", 1)[0] for k, _ in r.get("unsupported") or []})
+    return names[0] if names else None
+
+
+def render_converted(rows, ticks, standin, game="a2"):
+    if game == "a1":
+        return render_converted_a1(rows, ticks, standin)
     n = converted_funnel(rows)
     out = [f"Converted Armada II missions, {ticks} ticks each, headless, stand-in host {'on' if standin else 'off'}", "",
            "| missions | load and run | a rule held | a step ran | first objective issued | ended itself | no unbound/raising call |",
@@ -369,18 +382,55 @@ def render_converted(rows, ticks, standin):
     return "\n".join(out) + "\n"
 
 
+def render_converted_a1(rows, ticks, standin):
+    n = converted_funnel(rows)
+    out = [f"Converted Armada I missions, {ticks} ticks each, headless, stand-in host {'on' if standin else 'off'}", "",
+           "| missions | load and run | a rule held | a step ran | first objective issued | ended itself | no unbound/raising/undecoded call |",
+           "|--:|--:|--:|--:|--:|--:|--:|",
+           f"| {n['missions']} | {n['loaded']} | {n['rules']} | {n['steps']} | {n['objective']} | {n['ended']} | {n['clean']} |", "",
+           "| mission | stage | ticks | rules held | steps run | last rule | objective tick | first problem call | first undecoded | unsupported (distinct) | first unsupported |",
+           "|---|---|--:|--:|--:|---|--:|---|---|--:|---|"]
+    for r in rows:
+        stage, _ = converted_status(r)
+        first = (r.get("problems") or [None])[0]
+        call = f"{first[0]} ({first[1]})" if first else "-"
+        und = next((p[0] for p in r.get("problems") or [] if p[1] in ("undecoded", "not decoded")), "-")
+        uns = {k.split(":", 1)[0] for k, _ in r.get("unsupported") or []}
+        out.append(f"| {r['bzn'].rsplit('.', 1)[0]} | {stage} | {r.get('ticks', 0)} | {len(r['rules_held'])}/{r['rules']} | "
+                   f"{r['steps_run']} | {r.get('last_rule') or '-'} | "
+                   f"{'-' if r.get('first_objective_tick') is None else r['first_objective_tick']} | {call} | {und} | "
+                   f"{len(uns)} | {first_unsupported(r) or '-'} |")
+    ranked, unsup = collections.Counter(), collections.Counter()
+    for r in rows:
+        for name, kind, _t, _w in r.get("problems") or []:
+            ranked[f"{name} ({kind})"] += 1
+        for k in {k.split(":", 1)[0] for k, _ in r.get("unsupported") or []}:
+            unsup[k] += 1
+    out += ["", "Calls that were unbound, raised or not decoded, by missions affected:", ""]
+    out += [f"- {c}: `{k}`" for k, c in ranked.most_common(40)] or ["- none"]
+    out += ["", "Bound calls with no seam (counted, no effect), by missions affected:", ""]
+    out += [f"- {c}: `{k}`" for k, c in unsup.most_common(40)] or ["- none"]
+    return "\n".join(out) + "\n"
+
+
 def main_converted(args):
     import shutil
     import tempfile
-    a2 = args.a2
+    game = args.converted
+    if game not in ("a1", "a2"):
+        sys.exit("--converted takes a1 or a2")
+    a2 = args.a2 if game == "a2" else args.a1
     if not a2 or not os.path.isdir(a2):
+        if game == "a1":
+            sys.exit("--converted a1 needs the Armada I install: pass --a1 or set " + ENV["a1"])
         sys.exit("--converted needs the Armada II stock install: pass --a2 or set " + ENV["a2"])
     if not args.detail_dir:
         sys.exit(f"no detail directory: pass --detail-dir or set {RESEARCH_ENV}")
     t0 = time.time()
     out = args.keep_converted or tempfile.mkdtemp(prefix="sta64-converted-")
     try:
-        cmd = [sys.executable, "-I", os.path.join(HERE, "dsl_to_lua.py"), "--install", a2, "--out", out]
+        cmd = [sys.executable, "-I", os.path.join(HERE, "dsl_to_lua.py" if game == "a2" else "a1_to_lua.py"),
+               "--install", a2, "--out", out]
         if args.only:
             cmd += ["--only", args.only]
         p = subprocess.run(cmd, capture_output=True, text=True)
@@ -399,10 +449,10 @@ def main_converted(args):
     finally:
         if not args.keep_converted:
             shutil.rmtree(out, ignore_errors=True)
-    text = render_converted(rows, args.ticks, not args.no_standin)
+    text = render_converted(rows, args.ticks, not args.no_standin, game)
     print(text + f"({time.time() - t0:.0f} s)")
     os.makedirs(args.detail_dir, exist_ok=True)
-    stem = os.path.join(args.detail_dir, f"converted-{args.label}")
+    stem = os.path.join(args.detail_dir, f"converted-{args.label}" if game == "a2" else f"converted-a1-{args.label}")
     with open(stem + ".md", "w") as f:
         f.write(text)
     with open(stem + ".json", "w") as f:
@@ -518,10 +568,11 @@ def main(argv=None):
     ap.add_argument("--detail-dir", default=os.path.join(research, "campaign-readiness") if research else None,
                     help=f"where the Markdown/JSON detail goes, outside the repository (default: ${RESEARCH_ENV}/campaign-readiness; required)")
     ap.add_argument("--no-legacy", action="store_true", help="skip the static legacy columns")
-    ap.add_argument("--converted", action="store_true", help="converted-mission progress mode (see the module docs)")
+    ap.add_argument("--converted", nargs="?", const="a2", default=None, choices=("a1", "a2"),
+                    help="converted-mission progress mode, Armada II (default) or a1 (see the module docs)")
     ap.add_argument("--no-standin", action="store_true", help="--converted: no stand-in host (waits are never reported)")
     ap.add_argument("--label", default="latest", help="--converted: detail file label (converted-<label>.md)")
-    ap.add_argument("--only", help="--converted: one mission (a2_fed01)")
+    ap.add_argument("--only", help="--converted: one mission (a2_fed01; fed1 for a1)")
     ap.add_argument("--keep-converted", help="--converted: convert into this directory and keep it")
     args = ap.parse_args(argv)
     if args.converted:

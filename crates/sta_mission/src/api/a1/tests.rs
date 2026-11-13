@@ -334,7 +334,7 @@ fn the_table_and_the_cases_name_the_same_functions() {
         .unwrap()
         .into_iter()
         // Host-side completion reports, tested below, are not DLL calls.
-        .filter(|k| k != "MovieDone" && k != "AudioMessageDone")
+        .filter(|k| k != "MovieDone" && k != "AudioMessageDone" && k != "HostPending")
         .collect();
     let cased: BTreeSet<String> = CASES.iter().map(|c| c.0.to_owned()).collect();
     assert_eq!(bound, cased);
@@ -467,8 +467,15 @@ fn audio_messages_are_done_when_stopped_or_reported() {
     );
     assert!(!rt.eval::<bool>("return A1.IsAudioMessageDone(m)").unwrap());
     assert!(rt.eval::<bool>("return A1.IsAudioMessageDone(n)").unwrap());
+    let pending = "local o = {} for i, p in ipairs(A1.HostPending()) do o[i] = p.kind .. ':' .. p.id .. ':' .. p.name end return o";
+    assert_eq!(rt.eval::<Vec<String>>(pending).unwrap(), vec!["sound:1:briefing.wav".to_owned()]);
     rt.eval::<()>("A1.AudioMessageDone(m)").unwrap();
     assert!(rt.eval::<bool>("return A1.IsAudioMessageDone(m)").unwrap());
+    assert!(rt.eval::<Vec<String>>(pending).unwrap().is_empty());
+    rt.eval::<()>("A1.PlayBridgeMovie('m.bik', 0)").unwrap();
+    assert_eq!(rt.eval::<Vec<String>>(pending).unwrap(), vec!["movie:0:m.bik".to_owned()]);
+    rt.eval::<()>("A1.MovieDone()").unwrap();
+    assert!(rt.eval::<Vec<String>>(pending).unwrap().is_empty());
 }
 
 #[test]
@@ -582,6 +589,17 @@ fn path_seam_is_a_documented_error_when_unfilled() {
     let s = scene();
     let message = fails(&s, "A1.paths.P = nil; A1.Goto(a, 'P', 1)");
     assert!(message.contains("A1.paths"), "{message}");
+}
+
+#[test]
+fn paths_are_the_maps_and_match_ignoring_case() {
+    let s = scene();
+    let (rt, _) = run(&s, "");
+    assert!(rt.eval::<bool>("return rawequal(A1.paths, A2.paths)").unwrap());
+    let (_, commands) = run(&s, "A1.Goto(a, 'q', 1)");
+    assert_eq!(commands.len(), 1, "{commands:?}");
+    let message = fails(&s, "A1.paths.Ab = { {x=1,y=0,z=0} }; A1.paths.aB = A1.paths.Ab; A1.Goto(a, 'AB', 1)");
+    assert!(message.contains("ambiguous"), "{message}");
 }
 
 #[test]
