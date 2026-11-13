@@ -451,7 +451,7 @@ fn finish_mission(
         *v = ObjectivesView::default();
     }
     if let Some(mut t) = titles {
-        *t = default();
+        t.clear();
     }
     if let Some(mut f) = fade {
         *f = default();
