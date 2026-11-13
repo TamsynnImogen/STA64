@@ -522,6 +522,32 @@ impl Rules {
 }
 
 #[cfg(test)]
+mod approach_tests {
+    use super::*;
+
+    #[test]
+    fn the_warp_distance_is_typed_and_digested_only_off_the_engine_default() {
+        let (none, _) = Rules::from_header("int SOMETHING_ELSE = 3;\n");
+        assert_eq!(none.approach().min_move_warp_distance, Fixed::from_int(1500));
+        let (stock, w) = Rules::from_header("float cfg_MIN_MOVE_WARP_DISTANCE = 1100.0;\n");
+        assert!(w.is_empty());
+        assert_eq!(stock.approach().min_move_warp_distance, Fixed::from_int(1100));
+        let (fo, _) = Rules::from_header("float cfg_MIN_MOVE_WARP_DISTANCE = 999999.0;\n");
+        assert_eq!(fo.approach().min_move_warp_distance, Fixed::from_int(999_999));
+        let (bad, w) = Rules::from_header("float cfg_MIN_MOVE_WARP_DISTANCE = far;\n");
+        assert_eq!(w.len(), 1);
+        assert_eq!(bad.approach(), ApproachRules::default());
+        let key = "RTS_CFG.h:cfg_MIN_MOVE_WARP_DISTANCE";
+        let (explicit, _) = Rules::from_header("float cfg_MIN_MOVE_WARP_DISTANCE = 1500.0;\n");
+        let digest = |r: &Rules| crate::digest::ContentDigest::from_entries(r.digest_entries());
+        assert!(digest(&none).get(key).is_none());
+        assert_eq!(digest(&none), digest(&explicit), "absent and the default digest alike");
+        assert_eq!(digest(&stock).get(key), Some("1100"));
+        assert_ne!(digest(&stock), digest(&fo));
+    }
+}
+
+#[cfg(test)]
 mod autonomy_tests {
     use super::*;
 
@@ -694,8 +720,9 @@ mod cfg_tests {
         assert_eq!(keys.len(), TYPED_CFG_KEYS.len());
         assert!(TYPED_CFG_KEYS.iter().all(|k| !k.is_empty()));
         // The digest has one entry per typed key but the two officer keys
-        // that resolve into MP_OFFICER_LIMIT.
-        let d = ContentDigest::from_entries(Rules::default().digest_entries());
+        // that resolve into MP_OFFICER_LIMIT, and the attack warp distance,
+        // which is digested only when it differs from the engine default.
+        let d = ContentDigest::from_entries(Rules::default().with_approach(ApproachRules { min_move_warp_distance: Fixed::from_int(1100) }).digest_entries());
         for k in TYPED_CFG_KEYS.iter().filter(|k| !matches!(**k, "MP_OFFICER_LIST_SIZE" | "SINGLE_PLAYER_OFFICER_LIMIT")) {
             assert!(d.get(&format!("RTS_CFG.h:{k}")).is_some(), "{k}");
         }

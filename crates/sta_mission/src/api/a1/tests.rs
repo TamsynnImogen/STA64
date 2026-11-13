@@ -595,20 +595,33 @@ fn relations_are_a_script_override() {
 #[test]
 fn seam_gap_writes_are_retained_and_counted_without_other_effect() {
     let s = scene();
-    let (rt, commands) = run(&s, "A1.SetShieldPercent(a, 0.5); A1.SetWarpSpeed(a, 30); A1.SetPosition(a, 'P')");
+    let (rt, commands) = run(&s, "A1.SetWarpSpeed(a, 30); A1.SetPosition(a, 'P')");
     assert_eq!(
         presented(&commands),
         vec![
-            call("SetShieldPercent", vec![Arg::Entity(s.ids[0]), Arg::Num(Fixed::from_f64(0.5))]),
             call("SetWarpSpeed", vec![Arg::Entity(s.ids[0]), Arg::Num(Fixed::from_int(30))]),
             call("SetPosition", vec![Arg::Entity(s.ids[0]), Arg::Text("P".into())]),
         ]
     );
     let unsupported: BTreeSet<String> = rt.unsupported().into_iter().map(|(k, _)| k).collect();
-    assert!(unsupported.iter().any(|k| k.starts_with("A1.SetShieldPercent")));
     assert!(unsupported.iter().any(|k| k.starts_with("A1.SetWarpSpeed")));
     // A dead target is an error, not a silent request.
     fails(&s, "A1.SetShieldPercent(999999, 0.5)");
+}
+
+#[test]
+fn shield_writes_queue_typed_edits_and_are_not_counted() {
+    let s = scene();
+    let (rt, commands) = run(&s, "A1.SetShieldPercent(a, 0.5); A1.SetMaxShields(a, 900)");
+    let edits: Vec<_> = commands.iter().map(|c| c.kind.clone()).collect();
+    assert_eq!(
+        edits,
+        vec![
+            CommandKind::Edit(Edit::ShieldPercent(s.ids[0], Fixed::from_f64(0.5))),
+            CommandKind::Edit(Edit::MaxShields(s.ids[0], Fixed::from_int(900))),
+        ]
+    );
+    assert!(rt.unsupported().iter().all(|(k, _)| !k.contains("Shield")));
 }
 
 #[test]

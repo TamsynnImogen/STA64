@@ -79,6 +79,14 @@ pub struct Features {
     /// reloading (SIM-35; special launchers measured, regular weapons only
     /// read from the engine's code).
     pub weapon_shot_timing: bool,
+    /// No weapon fires at a unit in the first two seconds of mission time
+    /// (SIM-53; measured on stock A2 and Roots + STA2 Classic).
+    pub start_fire_hold: bool,
+    /// A shield hit costs the target crew: `(damage - damageThreshold) x
+    /// shieldCrewModifier` of the ordnance, a percent of maximum crew, or crew
+    /// points on a unit with `saneCrewLossMethod` (SIM-39; measured on stock
+    /// A2). Hull hits and system losses are not part of it.
+    pub crew_loss_on_hit: bool,
     /// An attack approach keeps `min(W / 5 + 5, 50) + R_target` inside weapon
     /// range before it stops (stock A2, SIM-36; measured, rule read from the
     /// executable). Off: it stops once in range (Roots).
@@ -100,7 +108,7 @@ pub struct Features {
 
 impl Features {
     /// Every switch, in declaration order, for the content hash.
-    pub(crate) fn bits(&self) -> [bool; 30] {
+    pub(crate) fn bits(&self) -> [bool; 32] {
         [
             self.weapon_damage_controls,
             self.point_defense_cycles,
@@ -127,6 +135,8 @@ impl Features {
             self.pd_energy,
             self.pd_debt_timer,
             self.weapon_shot_timing,
+            self.start_fire_hold,
+            self.crew_loss_on_hit,
             self.attack_range_buffer,
             self.attack_warp_out_at_distance,
             self.attack_combat_speed,

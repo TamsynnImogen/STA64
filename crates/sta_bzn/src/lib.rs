@@ -23,7 +23,10 @@
 
 use std::collections::HashMap;
 
+pub use paths::MapPath;
+
 pub mod a1;
+pub mod paths;
 pub mod sol;
 pub mod write;
 
@@ -101,6 +104,8 @@ pub struct Map {
     /// the entry-0 position (the map's centre).
     pub start_locs: Vec<StartLoc>,
     pub objects: Vec<MapObject>,
+    /// Named paths (`AiPaths`) of Armada II / Fleet Operations maps, in file order (CON-47).
+    pub paths: Vec<MapPath>,
     /// Retained A1-specific source data; absent for existing A2 binary/text maps.
     pub a1: Option<a1::MapData>,
 }
@@ -287,6 +292,7 @@ fn parse_binary(recs: &[Rec]) -> Map {
         m.objects.push(o);
         i += 4;
     }
+    m.paths = paths::from_records(&recs[objects_from.min(recs.len())..]);
     m
 }
 
@@ -380,7 +386,7 @@ fn fields(text: &str) -> Vec<Field> {
         } else {
             // `name = value`: hex when a length field just announced it.
             let value = match last_len {
-                Some(n) if n > 0 && is_hex(rhs) && rhs.len() / 2 == n => decode_hex(rhs),
+                Some(n) if n > 0 && is_hex(rhs) && rhs.len() / 2 == n && !matches!(lhs, "pathType" | "old_ptr") => decode_hex(rhs),
                 _ => rhs.to_owned(),
             };
             last_len = None;
@@ -515,6 +521,7 @@ fn parse_text(text: &str) -> Map {
             },
         });
     }
+    m.paths = paths::from_fields(&fs);
     m
 }
 

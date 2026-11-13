@@ -19,6 +19,26 @@ impl Economy {
             .and_then(|i| self.personnel[i].2)
     }
 
+    /// `Edit::MaxOfficers`: only a seat whose officer limit is initialized.
+    pub(crate) fn edit_officer_limit(&mut self, player: PlayerId, value: Fixed) -> bool {
+        let Ok(i) = self.personnel.binary_search_by_key(&player, |r| r.0) else { return false };
+        if self.personnel[i].2.is_none() {
+            return false;
+        }
+        self.personnel[i].2 = Some(value.max(Fixed::ZERO).min(Fixed::from_int(1_000_000_000)));
+        true
+    }
+
+    /// `Edit::TeamCrew`: only a seat whose crew stock is initialized.
+    pub(crate) fn edit_team_crew(&mut self, player: PlayerId, value: Fixed) -> bool {
+        let Ok(i) = self.personnel.binary_search_by_key(&player, |r| r.0) else { return false };
+        if self.personnel[i].1.is_none() {
+            return false;
+        }
+        self.personnel[i].1 = Some(value.max(Fixed::ZERO).min(Fixed::from_int(1_000_000_000)));
+        true
+    }
+
     pub(crate) fn set_personnel(&mut self, player: PlayerId, crew: Option<Fixed>, limit: Option<Fixed>) {
         if crew.is_none() && limit.is_none() {
             return;

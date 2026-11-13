@@ -96,7 +96,7 @@ Writes are retained as `Call A1.<Name>` and counted in `unsupported()` (also `Lo
 mission-local override (provisional 0/1/2 mapping) and is counted too:
 `SetPosition SetWarpSpeed ResetWarpSpeed Patrol SearchAndDestroy PointAt
 Special_Attack Attack(unit, Vector) SetSpecialWeaponAttackInterval AI_Attack
-AttackMainEnemyBase SetShieldPercent SetMaxShields DestroyCritical Destroy*
+AttackMainEnemyBase DestroyCritical Destroy*
 AllowMultipleSpecialWeaponFire SetSpecialForcesFlag TransferFlag LinkWormHoles
 EnableWormholeTravel ObstacleAvoidence PauseSimulation UnpauseSimulation
 EnableLight ReplaceObject RecruitSpecialForces SetRace SetWormholeTeam

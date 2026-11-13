@@ -12,23 +12,8 @@ fn live() -> (Sim, EntityId, EntityId) {
     (sim, first, second)
 }
 
-fn crew_offset(bytes: &[u8]) -> usize {
-    let (_, rest): (Provenance, _) = postcard::take_from_bytes(&bytes[HEADER..]).unwrap();
-    let (_, rest): (Body, _) = postcard::take_from_bytes(rest).unwrap();
-    let (_, rest): (Option<(Vec3, Vec3)>, _) = postcard::take_from_bytes(rest).unwrap();
-    let (_, rest): (BoundaryRec, _) = postcard::take_from_bytes(rest).unwrap();
-    let (_, rest): (PerceptionRec, _) = postcard::take_from_bytes(rest).unwrap();
-    let (_, rest): (PersonnelRec, _) = postcard::take_from_bytes(rest).unwrap();
-    bytes.len() - rest.len()
-}
-
 fn replace_crew(bytes: &[u8], version: u8, rows: Vec<(EntityId, [i64; 2])>) -> Vec<u8> {
-    let mut out = bytes[..crew_offset(bytes)].to_vec();
-    out.extend(postcard::to_allocvec(&UnitCrewRec { version, rows }).unwrap());
-    out.extend(postcard::to_allocvec(&StartEffectsRec { version: 1, rows: Vec::new() }).unwrap());
-    out.extend(postcard::to_allocvec(&crate::autonomy::AutonomyWire { version: 1, rows: Vec::new() }).unwrap());
-    out.extend(postcard::to_allocvec(&AttackRec { version: 1, warp: Vec::new() }).unwrap());
-    out
+    chain::with(bytes, chain::CREW, chain::enc(&UnitCrewRec { version, rows }))
 }
 
 #[test]
@@ -52,21 +37,23 @@ fn mandatory_crew_suffix_rejects_bad_version_order_ids_bounds_and_trailing_bytes
     let bytes = sim.snapshot();
     let f = Fixed::ONE.to_bits();
     let valid = (first, [f, 2 * f]);
-    assert!(Sim::from_snapshot(&bytes[..crew_offset(&bytes)], None).is_err());
+    // The unmodified chain loads, so each rejection below is the edited record's.
+    assert!(Sim::from_snapshot(&replace_crew(&bytes, 1, vec![valid]), None).is_ok());
+    assert!(Sim::from_snapshot(&chain::before(&bytes, chain::CREW), None).is_err());
     assert!(Sim::from_snapshot(&bytes[..bytes.len() - 1], None).is_err());
-    for rows in [
-        vec![valid, valid],
-        vec![(second, [0, 0]), valid],
-        vec![(EntityId(99), [0, f])],
-        vec![(first, [-1, f])],
-        vec![(first, [0, -1])],
+    for (rows, why) in [
+        (vec![valid, valid], "unit crew rows out of order"),
+        (vec![(second, [0, 0]), valid], "unit crew rows out of order"),
+        (vec![(EntityId(99), [0, f])], "unknown unit crew entity"),
+        (vec![(first, [-1, f])], "invalid unit crew pool"),
+        (vec![(first, [0, -1])], "invalid unit crew pool"),
     ] {
-        assert!(matches!(Sim::from_snapshot(&replace_crew(&bytes, 1, rows), None), Err(SnapshotError::Corrupt(_))));
+        assert_eq!(chain::corrupt(&replace_crew(&bytes, 1, rows), None), why);
     }
-    assert!(matches!(Sim::from_snapshot(&replace_crew(&bytes, 2, vec![valid]), None), Err(SnapshotError::Corrupt(why)) if why.contains("unit crew record version")));
+    assert_eq!(chain::corrupt(&replace_crew(&bytes, 2, vec![valid]), None), "unknown unit crew record version");
     let mut trailing = bytes;
     trailing.push(0);
-    assert!(Sim::from_snapshot(&trailing, None).is_err());
+    assert_eq!(chain::corrupt(&trailing, None), "trailing bytes");
 }
 
 #[test]
@@ -74,17 +61,17 @@ fn removed_or_noncraft_entities_cannot_receive_saved_crew_rows() {
     let (mut sim, first, _) = live();
     let row = (first, [0, Fixed::ONE.to_bits()]);
     sim.despawn(first, None);
-    assert!(Sim::from_snapshot(&replace_crew(&sim.snapshot(), 1, vec![row]), None).is_err());
+    assert_eq!(chain::corrupt(&replace_crew(&sim.snapshot(), 1, vec![row]), None), "unknown unit crew entity");
     let (mut sim, first, _) = live();
     sim.units.get_mut(first).unwrap().kind = EntityKind::Prop;
-    assert!(Sim::from_snapshot(&sim.snapshot(), None).is_err());
+    assert_eq!(chain::corrupt(&sim.snapshot(), None), "unit crew entity is not a craft or station");
 }
 
 #[test]
 fn the_v12_layout_is_refused_by_version() {
     let (sim, _, _) = live();
     let bytes = sim.snapshot();
-    let mut old = bytes[..crew_offset(&bytes)].to_vec();
+    let mut old = chain::before(&bytes, chain::CREW);
     old[4..6].copy_from_slice(&12u16.to_le_bytes());
     old[6..10].copy_from_slice(&3u32.to_le_bytes());
     assert_eq!(Sim::from_snapshot(&old, None).err(), Some(SnapshotError::FormatVersion { found: 12 }));

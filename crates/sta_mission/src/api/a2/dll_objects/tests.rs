@@ -321,7 +321,8 @@ fn edits_the_sim_rejects_are_reported_and_counted() {
         advance(&mut rt, &mut sim);
     }
     assert_eq!(unsupported(&rt, "SetCanBeDecommissioned: simulation rejected"), 1);
-    assert_eq!(unsupported(&rt, "DisableShieldGenerator: simulation rejected"), 1);
+    // SIM-55: the sim applies the shield generator switch now.
+    assert_eq!(unsupported(&rt, "DisableShieldGenerator: simulation rejected"), 0);
 }
 
 #[test]
@@ -329,8 +330,7 @@ fn seam_gaps_raise_with_a_reason_and_are_counted() {
     let s = scene();
     let mut rt = runtime(&s);
     let names = [
-        "SetPosition", "SetShieldPercent", "SetMaxShields", "AllowAsTarget", "DamageEngines", "DamageSensors",
-        "DamageLifeSupport", "DamageShieldGenerator", "DamageWeapons", "HideObject", "ButItCanBeDerelicted",
+        "SetPosition", "AllowAsTarget", "HideObject", "ButItCanBeDerelicted",
         "CraftCanRecrew", "SetName", "SetPlanetCivPop", "SetAngularVelocity", "StuffIntoWormhole",
         "LinkWormholes", "SetWormholeDeleteOnTransport", "LoadCargoShip", "GetNearestShipyard", "CreateNewSiegeFleet",
     ];

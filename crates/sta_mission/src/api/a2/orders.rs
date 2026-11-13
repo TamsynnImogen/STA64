@@ -535,7 +535,17 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
     })?)?;
 
     // Unit state with no edit in the seam.
-    table.set("SetCrew", raising(lua, &env, "SetCrew", &["hf"], "no crew edit in the sim seam")?)?;
+    // SIM-54: the unit's crew, clamped by the sim to 0..its maximum crew.
+    table.set("SetCrew", def(lua, &env, "SetCrew", &["hf"], |_, e, _, a| {
+        let to = a[1].num();
+        if !to.is_finite() {
+            return Err(mlua::Error::runtime("A2.SetCrew requires a finite number"));
+        }
+        if e.alive(a[0].id()).is_some() {
+            edit_feedback::queue(&mut e.ctx.borrow_mut(), "A2.SetCrew", Edit::UnitCrew(a[0].id(), Fixed::from_f64(to)))?;
+        }
+        nothing()
+    })?)?;
     table.set("SetRace", raising(lua, &env, "SetRace", &["hs"], "no mutable-race edit in the sim seam")?)?;
     table.set("CraftCanRepair", raising(lua, &env, "CraftCanRepair", &["hb"], "no can-repair flag in the sim seam")?)?;
 

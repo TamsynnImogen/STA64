@@ -25,6 +25,7 @@ pub mod autonomy;
 pub mod boundary;
 pub mod combat;
 pub mod command;
+pub mod context;
 pub mod digest;
 pub mod economy;
 pub mod event;
@@ -148,6 +149,13 @@ pub struct Sim {
     start_effects: start_effects::StartEffects,
     /// Path planner grids and fields (SIM-23): a memo, not in the digest.
     nav: nav::Cache,
+    /// Subsystem switches and damage set by missions (SIM-55); in the digest
+    /// once any exists.
+    subsystems: combat::damage::Subsystems,
+    /// Units whose team just changed (SIM-29): `activateOnTeamChange` weapons
+    /// engage on the tick's weapon pass. Filled by the tick's commands and
+    /// drained by the same tick, so it is empty between ticks and not saved.
+    team_changes: Vec<EntityId>,
 }
 
 impl Sim {
@@ -176,6 +184,8 @@ impl Sim {
             approach_warp: Default::default(),
             start_effects: Default::default(),
             nav: Default::default(),
+            subsystems: Default::default(),
+            team_changes: Vec::new(),
         }
     }
 
@@ -331,6 +341,9 @@ impl Sim {
 
     /// Move every unit one tick and close the tick with its view.
     fn advance(&mut self) -> TickOutput {
+        if self.content.is_none() {
+            self.team_changes.clear();
+        }
         self.step_start_effects();
         self.hold_welding_builders();
         self.constrain_targets();
@@ -344,13 +357,14 @@ impl Sim {
         self.push_out_of_fields();
         if let Some(db) = self.content.clone() {
             combat::damage::recharge(&mut self.units, &db);
+            self.activate_team_change_weapons(&db);
             self.specials.step(&mut self.units, &db, &mut self.events);
             let from = self.events.len();
             let held = if db.features().builder_hold_fire { self.production.builders_at_work() } else { Vec::new() };
             self.weapons.hold_fire(held);
             self.weapons.step_with_perception(self.tick, &self.units, &db, &self.players, &self.perception, &mut self.specials, &mut self.rng, &mut self.events);
             let mut lost = Vec::new();
-            for (id, by) in combat::damage::apply(&mut self.units, &mut self.events, from) {
+            for (id, by) in combat::damage::apply(&mut self.units, &db, &mut self.events, from) {
                 lost.extend(self.units.get(id).map(|u| u.owner));
                 self.despawn(id, by);
             }
@@ -493,6 +507,9 @@ impl Sim {
         }
         if !self.start_effects.is_empty() {
             self.start_effects.hash_into(&mut h);
+        }
+        if !self.subsystems.is_empty() {
+            self.subsystems.hash_into(&mut h);
         }
         let crew_count = self.units.iter().filter(|unit| unit.crew.is_some()).count();
         if crew_count != 0 {

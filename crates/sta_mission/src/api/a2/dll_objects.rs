@@ -181,6 +181,21 @@ fn no_data_fn(lua: &Lua, ctx: &Shared, name: &'static str, why: &'static str) ->
     })
 }
 
+/// `name(id, number)` queued as the typed edit `make` builds.
+fn float_edit(lua: &Lua, ctx: &Shared, name: &'static str, label: &'static str, make: fn(EntityId, Fixed) -> Edit) -> mlua::Result<Function> {
+    let c = ctx.clone();
+    lua.create_function(move |_, args: MultiValue| {
+        arity(name, &args, 2)?;
+        let value = number(name, &args, 1)?;
+        if !value.is_finite() {
+            return Err(bad(name, 1, "a finite number"));
+        }
+        let id = EntityId(integer(name, &args[0])?);
+        live(&c, name, id)?;
+        edit_feedback::queue(&mut c.borrow_mut(), label, make(id, Fixed::from_f64(value)))
+    })
+}
+
 fn path_error(c: &Shared, name: &str, why: String) -> mlua::Error {
     let why = format!("A2.{name}: {why}");
     c.borrow_mut().unsupported(&why);
@@ -617,14 +632,17 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
 /// Calls the current sim seam cannot serve, each with the reason.
 fn seams(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()> {
     table.set("SetPosition", no_data_fn(lua, ctx, "SetPosition", "the sim command seam has no teleport edit")?)?;
-    table.set("SetShieldPercent", no_data_fn(lua, ctx, "SetShieldPercent", "the sim command seam has no shield edit")?)?;
-    table.set("SetMaxShields", no_data_fn(lua, ctx, "SetMaxShields", "the sim command seam has no shield edit")?)?;
+    // Shield and subsystem damage edits (SIM-55): SetShieldPercent takes a
+    // fraction of the maximum (as the Roots missions write `shields = 1.0`),
+    // SetMaxShields the new maximum, Damage<System> points of damage.
+    table.set("SetShieldPercent", float_edit(lua, ctx, "SetShieldPercent", "A2.SetShieldPercent", Edit::ShieldPercent)?)?;
+    table.set("SetMaxShields", float_edit(lua, ctx, "SetMaxShields", "A2.SetMaxShields", Edit::MaxShields)?)?;
     table.set("AllowAsTarget", no_data_fn(lua, ctx, "AllowAsTarget", "the native flag is a per-team mask; Edit::Targetable has no team and the sim rejects it")?)?;
-    table.set("DamageEngines", no_data_fn(lua, ctx, "DamageEngines", "the sim has no per-subsystem damage")?)?;
-    table.set("DamageSensors", no_data_fn(lua, ctx, "DamageSensors", "the sim has no per-subsystem damage")?)?;
-    table.set("DamageLifeSupport", no_data_fn(lua, ctx, "DamageLifeSupport", "the sim has no per-subsystem damage")?)?;
-    table.set("DamageShieldGenerator", no_data_fn(lua, ctx, "DamageShieldGenerator", "the sim has no per-subsystem damage")?)?;
-    table.set("DamageWeapons", no_data_fn(lua, ctx, "DamageWeapons", "the sim has no per-subsystem damage")?)?;
+    table.set("DamageEngines", float_edit(lua, ctx, "DamageEngines", "A2.DamageEngines", |id, v| Edit::SubsystemDamage(id, Subsystem::Engines, v))?)?;
+    table.set("DamageSensors", float_edit(lua, ctx, "DamageSensors", "A2.DamageSensors", |id, v| Edit::SubsystemDamage(id, Subsystem::Sensors, v))?)?;
+    table.set("DamageLifeSupport", float_edit(lua, ctx, "DamageLifeSupport", "A2.DamageLifeSupport", |id, v| Edit::SubsystemDamage(id, Subsystem::LifeSupport, v))?)?;
+    table.set("DamageShieldGenerator", float_edit(lua, ctx, "DamageShieldGenerator", "A2.DamageShieldGenerator", |id, v| Edit::SubsystemDamage(id, Subsystem::Shields, v))?)?;
+    table.set("DamageWeapons", float_edit(lua, ctx, "DamageWeapons", "A2.DamageWeapons", |id, v| Edit::SubsystemDamage(id, Subsystem::Weapons, v))?)?;
     table.set("HideObject", no_data_fn(lua, ctx, "HideObject", "the world view and sim have no hidden-object state")?)?;
     table.set("ButItCanBeDerelicted", no_data_fn(lua, ctx, "ButItCanBeDerelicted", "the sim has no derelict state")?)?;
     table.set("CraftCanRecrew", no_data_fn(lua, ctx, "CraftCanRecrew", "the sim has no per-craft recrew switch")?)?;

@@ -8,7 +8,7 @@
 //! |---|---|
 //! | `roster` | tick, content hash, seats and teams, who exists (id, kind, definition, owner), labels, perceived owners, eliminations, pending start-effect rows |
 //! | `movement` | position, heading, speed, turn rate, target and movement stats of every entity; queued waypoints and formations; map confinement |
-//! | `combat` | hull, shields, status flags, unit crew; weapon mounts, shots and attack orders; point defence; special energy and cloaks; craft autonomy levels |
+//! | `combat` | hull, shields, status flags, unit crew; weapon mounts, shots and attack orders; point defence; special energy and cloaks; craft autonomy levels; subsystem switches and damage |
 //! | `economy` | stock, nodes, freighters, personnel; yard queues, rig deploys and rallies; build progress |
 //! | `rng` | the sim generator |
 //!
@@ -23,7 +23,7 @@
 //! Platform-independent like the full digest (fixed point, integers only).
 
 use crate::world::{Entity, Fnv};
-use crate::Sim;
+use crate::{EntityId, Fixed, Sim, Vec3};
 
 /// One digest per section of a [`Sim`]'s state (module docs: the list).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -67,7 +67,7 @@ fn _every_sim_field_is_decided(s: &Sim) {
     let Sim {
         tick: _, rng: _, units: _, labels: _, players: _, ai_seats: _, content: _, starts: _, regions: _,
         bounds: _, confinement: _, perception: _, events: _, weapons: _, movement: _, economy: _,
-        production: _, victory: _, specials: _, autonomy: _, approach_warp: _, start_effects: _, nav: _,
+        production: _, victory: _, specials: _, autonomy: _, start_effects: _, nav: _, subsystems: _, team_changes: _, approach_warp: _,
     } = s;
 }
 
@@ -194,6 +194,9 @@ impl Sim {
         if !self.autonomy.is_empty() {
             self.autonomy.hash_into(&mut h);
         }
+        if !self.subsystems.is_empty() {
+            self.subsystems.hash_into(&mut h);
+        }
         h.0
     }
 
@@ -215,6 +218,132 @@ impl Sim {
             self.production.hash_into(&mut h);
         }
         h.0
+    }
+}
+
+/// One itemised value of a section's state (NET-06): what a developer reads
+/// to see which entity and field two diverged sims disagree on.
+///
+/// Rows come in a fixed order (entity id, then field order of the section), so
+/// two sims' rows can be merged by key. State without an entity (the sim
+/// generator, per-player stock, queued waypoints, shots, yards ...) that this
+/// package does not itemise appears as one row per subsystem whose value is
+/// that subsystem's own hash, with `entity: None`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StateRow {
+    pub entity: Option<EntityId>,
+    pub field: String,
+    pub value: String,
+}
+
+fn fx(f: Fixed) -> String {
+    format!("{:.4} (raw {})", f.to_f32(), f.to_bits())
+}
+
+fn v3(v: Vec3) -> [Fixed; 3] {
+    [v.x, v.y, v.z]
+}
+
+impl Sim {
+    /// The itemised state of one section (a name in [`SectionDigests::NAMES`]);
+    /// `None` for any other name. Two sims whose section digests are equal
+    /// have equal rows, and two whose digests differ have rows that differ in
+    /// at least one value (up to hash collisions).
+    pub fn section_rows(&self, section: &str) -> Option<Vec<StateRow>> {
+        let mut rows = Vec::new();
+        let mut row = |entity: Option<EntityId>, field: &str, value: String| {
+            rows.push(StateRow { entity, field: field.to_owned(), value });
+        };
+        let block = |name: &str, f: &dyn Fn(&mut Fnv)| {
+            let mut h = start(name);
+            f(&mut h);
+            format!("{:#018x}", h.0)
+        };
+        match section {
+            "roster" => {
+                row(None, "tick", self.tick.to_string());
+                row(None, "content hash", format!("{:#018x}", self.content.as_ref().map_or(0, |c| c.hash())));
+                row(None, "players", format!("{:?}", self.players.iter().map(|&(p, t)| (p.0, t.0)).collect::<Vec<_>>()));
+                row(None, "next entity id", self.units.next_id().0.to_string());
+                row(None, "entity count", self.units.len().to_string());
+                for e in self.units.iter() {
+                    row(Some(e.id), "kind", format!("{:?}", e.kind));
+                    row(Some(e.id), "def", e.def.0.to_string());
+                    row(Some(e.id), "owner", e.owner.0.to_string());
+                }
+                for (id, label) in self.labels.iter() {
+                    row(Some(id), "label", format!("{label:?}"));
+                }
+                for (id, owner) in self.perception.iter() {
+                    row(Some(id), "perceived owner", owner.0.to_string());
+                }
+                if !self.victory.is_empty() {
+                    row(None, "victory (hash)", block("victory", &|h| self.victory.hash_into(h)));
+                }
+                if !self.start_effects.is_empty() {
+                    row(None, "start effects (hash)", block("start_effects", &|h| self.start_effects.hash_into(h)));
+                }
+            }
+            "movement" => {
+                for e in self.units.iter() {
+                    let id = Some(e.id);
+                    row(id, "pos", v3(e.pos).map(fx).join(", "));
+                    row(id, "heading", format!("{}, {}", fx(e.heading.0), fx(e.heading.1)));
+                    row(id, "speed", fx(e.speed));
+                    row(id, "omega", fx(e.omega));
+                    row(id, "target", e.target.map_or("none".into(), |t| v3(t).map(fx).join(", ")));
+                    let s = &e.stats;
+                    let stats = [s.max_speed, s.forward_accel, s.turn_omega, s.turn_alpha, s.turn_at_rest];
+                    row(id, "stats", stats.map(fx).join(", "));
+                    if s.has_smooth_keys() {
+                        row(id, "smooth stats", s.smooth_fields().into_iter().map(fx).collect::<Vec<_>>().join(", "));
+                    }
+                }
+                for (id, course) in self.movement.rows() {
+                    row(Some(id), "formation", course.formation.to_string());
+                    row(Some(id), "waypoints", course.waypoints.iter().map(|w| v3(*w).map(fx).join(", ")).collect::<Vec<_>>().join("; "));
+                }
+                row(None, "map confinement (hash)", block("confinement", &|h| self.confinement.hash_into(h)));
+            }
+            "combat" => {
+                for e in self.units.iter() {
+                    let id = Some(e.id);
+                    row(id, "hull", format!("{} / {}", fx(e.hull[0]), fx(e.hull[1])));
+                    row(id, "shields", e.shields.now.map(fx).join(", "));
+                    row(id, "shields max", fx(e.shields.max));
+                    row(id, "shields directional", e.shields.directional.to_string());
+                    row(id, "flags", format!("{:#04x}", e.flags.0));
+                    row(id, "crew", e.crew.map_or("none".into(), |[n, m]| format!("{} / {}", fx(n), fx(m))));
+                }
+                if !self.weapons.is_empty() {
+                    row(None, "weapons, shots, point defence (hash)", block("weapons", &|h| self.weapons.hash_into(h)));
+                }
+                if !self.specials.is_empty() {
+                    row(None, "specials and cloaks (hash)", block("specials", &|h| self.specials.hash_into(h)));
+                }
+                if !self.autonomy.is_empty() {
+                    row(None, "autonomy levels (hash)", block("autonomy", &|h| self.autonomy.hash_into(h)));
+                }
+                // SIM-55: itemised, one row per unit with a switched-off or damaged system.
+                for (id, r) in self.subsystems.to_rows() {
+                    row(Some(id), "subsystems (off bits, damage)", format!("{:#04x}, {:?}", r.off, r.damage.map(|d| fx(Fixed::from_bits(d)))));
+                }
+            }
+            "economy" => {
+                for e in self.units.iter() {
+                    row(Some(e.id), "build progress", e.progress.map_or("none".into(), fx));
+                }
+                if !self.economy.is_empty() {
+                    row(None, "stock, nodes, freighters, personnel (hash)", block("economy", &|h| self.economy.hash_into(h)));
+                }
+                if !self.production.is_empty() {
+                    row(None, "yards, rigs, rallies (hash)", block("production", &|h| self.production.hash_into(h)));
+                }
+            }
+            "rng" => row(None, "generator state", format!("{:#018x}", self.rng.0)),
+            _ => return None,
+        }
+        Some(rows)
     }
 }
 
@@ -285,6 +414,7 @@ mod tests {
             ("shields", Box::new(|s| s.units.iter_mut().next().unwrap().shields.max = Fixed::from_int(5)), "combat"),
             ("flags", Box::new(|s| s.units.iter_mut().next().unwrap().flags = crate::view::UnitFlags::default()), "combat"),
             ("crew", Box::new(|s| s.units.iter_mut().next().unwrap().crew = Some([Fixed::ONE; 2])), "combat"),
+            ("subsystems", Box::new(|s| { let id = s.units.iter().next().unwrap().id; s.subsystems.set_off_for_test(id); }), "combat"),
             ("owner", Box::new(|s| s.units.iter_mut().next().unwrap().owner = PlayerId(1)), "roster"),
             ("label", Box::new(|s| { let id = s.units.iter().next().unwrap().id; s.labels.insert(id, "x".into()); }), "roster"),
             ("progress", Box::new(|s| s.units.iter_mut().next().unwrap().progress = Some(Fixed::from_int(1))), "economy"),
@@ -297,6 +427,30 @@ mod tests {
             assert_eq!(sections, [section], "{name}");
             assert!(full, "{name}: the full digest must differ too");
         }
+    }
+
+    #[test]
+    fn section_rows_name_the_entity_and_field_that_changed() {
+        let before = sim();
+        let first = before.units.iter().next().unwrap().id;
+        let mut after = before.clone();
+        after.units.iter_mut().next().unwrap().pos.x = Fixed::from_int(77);
+        after.units.iter_mut().next().unwrap().hull[0] = Fixed::from_int(5);
+        let mut changed = Vec::new();
+        for name in SectionDigests::NAMES {
+            let (a, b) = (before.section_rows(name).unwrap(), after.section_rows(name).unwrap());
+            assert_eq!(a.len(), b.len(), "{name}");
+            for (x, y) in a.iter().zip(&b) {
+                assert_eq!((x.entity, &x.field), (y.entity, &y.field));
+                if x.value != y.value {
+                    changed.push((name, x.entity, x.field.clone()));
+                }
+            }
+            // Rows differ exactly where the section digest does.
+            assert_eq!(a != b, before.section_digests().differing(&after.section_digests()).contains(&name), "{name}");
+        }
+        assert_eq!(changed, [("movement", Some(first), "pos".to_owned()), ("combat", Some(first), "hull".to_owned())]);
+        assert!(before.section_rows("nope").is_none());
     }
 
     #[test]

@@ -180,6 +180,33 @@ pub(crate) struct SimSide {
     pub(crate) controllers: Vec<Box<dyn sta_sim::setup::Controller>>,
     /// A skirmish's local race, or why the skirmish could not be set up.
     pub(crate) skirmish: Option<Result<crate::game::Seats, String>>,
+    /// A campaign mission's script and race, or why its script could not load (INT-M6).
+    pub(crate) mission: Option<Result<MissionSide, String>>,
+}
+
+/// What a campaign mission adds to the sim: its script and the seat's race.
+pub(crate) struct MissionSide {
+    pub(crate) handle: crate::game::mission_host::MissionHandle,
+    pub(crate) local: Option<crate::game::LocalRace>,
+}
+
+/// The sim of a campaign mission (INT-M6): the campaign's seats over the converted map, the
+/// mission's script attached as the link's controller.
+pub(crate) fn build_mission_sim(
+    map: &sta_bzn::Map,
+    name: &str,
+    content: &Arc<ContentDb>,
+    index: &OdfIndex,
+    vfs: &sta_vfs::Vfs,
+    races: &sta_content::Races,
+    launch: &crate::game::mission_host::MissionLaunch,
+) -> SimSide {
+    let converted = MapDef::convert_bzn_named_in(map, name, content, vfs, index);
+    let setup = launch.setup(converted.map, content.clone());
+    let (sim, spawn_warnings) = Sim::from_setup_with_warnings(&setup);
+    let mission = launch.attach(&setup, &sim).map(|handle| MissionSide { local: launch.local_race(&setup, races), handle });
+    let controllers = mission.as_ref().map(|m| vec![m.handle.controller()]).unwrap_or_default();
+    SimSide { warnings: converted.warnings.len() + spawn_warnings.len(), setup, sim, controllers, skirmish: None, mission: Some(mission) }
 }
 
 /// The sim of a map: the map view's (`skirmish: None`: one idle seat per owner or
@@ -222,7 +249,7 @@ pub(crate) fn build_sim(
     for w in converted.warnings.iter().chain(&spawn_warnings).take(20) {
         debug!("{}: {}", w.file, w.message);
     }
-    SimSide { warnings: converted.warnings.len() + spawn_warnings.len(), setup, sim, controllers, skirmish: plan }
+    SimSide { warnings: converted.warnings.len() + spawn_warnings.len(), setup, sim, controllers, skirmish: plan, mission: None }
 }
 
 /// The seats of a map: every owner and start slot, and the one the client plays.
@@ -331,6 +358,9 @@ type MapState<'w> = (
     Res<'w, crate::render::nebula::NoiseVolume>,
     Res<'w, MapSeat>,
     Option<Res<'w, crate::game::SkirmishCfg>>,
+    Option<Res<'w, crate::game::mission_host::MissionLaunch>>,
+    Option<Res<'w, crate::render::profile::RenderProfile>>,
+    Option<Res<'w, crate::render::profile::ProfileEffects>>,
 );
 
 /// The ambient light and the two map lights, as one system parameter.
@@ -363,6 +393,7 @@ impl Plugin for MapPlugin {
             .add_plugins(crate::render::planet::PlanetPlugin)
             .add_plugins(crate::render::rock::RockPlugin)
             .add_plugins(crate::render::nebula::NebulaPlugin)
+            .add_plugins(crate::render::stock::StockBackgroundsPlugin)
             .add_plugins(crate::render::strategic::StrategicPlugin)
             .init_resource::<crate::render::strategic::Silhouettes>()
             .add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default())
@@ -634,7 +665,8 @@ fn rebuild(
     lighting: Lighting,
 ) {
     let (mut silhouettes, mut ambient, mut lights) = lighting;
-    let (mut particles, mut selection, mut queue, mut clock, mut limits, mut planet_materials, mut nebula_materials, noise, seat, skirmish_cfg) = state;
+    let (mut particles, mut selection, mut queue, mut clock, mut limits, mut planet_materials, mut nebula_materials, noise, seat, skirmish_cfg, mission_launch, profile, profile_effects) = state;
+    let gas_volumes = crate::render::stock::nebula::volumetric(profile.as_deref(), profile_effects.as_deref());
     if !browser.dirty {
         return;
     }
@@ -673,11 +705,31 @@ fn rebuild(
             return;
         }
     };
-    let SimSide { setup, sim, warnings: sim_warnings, controllers, skirmish } =
-        build_sim(&map, &name, &content, &index, &vfs.0, seat.0, skirmish_cfg.as_deref().map(|c| (c, &*races)));
+    let SimSide { setup, sim, warnings: sim_warnings, controllers, skirmish, mission } = match mission_launch.as_deref() {
+        Some(launch) => build_mission_sim(&map, &name, &content, &index, &vfs.0, &races, launch),
+        None => build_sim(&map, &name, &content, &index, &vfs.0, seat.0, skirmish_cfg.as_deref().map(|c| (c, &*races))),
+    };
     let mut skirmish_note = None;
     let mut played_race = None;
     let is_match = matches!(skirmish, Some(Ok(_)));
+    // A campaign mission is played like a match (the camera opens over the seat's units, the units
+    // view draws what the sim makes) but is built by `Sim::from_setup`, so a replay starts it plain.
+    let is_mission = mission_launch.is_some();
+    match mission {
+        Some(Ok(m)) => {
+            if let Some(local) = m.local {
+                played_race = Some(local.name.clone());
+                commands.insert_resource(local);
+            }
+            commands.insert_resource(m.handle);
+        }
+        Some(Err(e)) => {
+            warn!("mission script: {e}");
+            browser.info = format!("{header}\nmission script: {e}");
+            return;
+        }
+        None => {}
+    }
     match skirmish {
         Some(Ok(s)) => {
             info!("{}", s.summary);
@@ -786,7 +838,7 @@ fn rebuild(
                 let radius = if latinum { 100.0 } else { odf.f32("effectRadius").filter(|r| *r > 10.0 && *r < 5000.0).unwrap_or(300.0) };
                 (r.unwrap_or_else(|| sta_surface::nebula::NebulaRecipe::parse("")), radius, Vec::new())
             });
-            if crate::render::nebula::recipe(&vfs.0, &key).is_some() {
+            if gas_volumes && crate::render::nebula::recipe(&vfs.0, &key).is_some() {
                 entry.2.push([o.transform[9], o.transform[10], -o.transform[11]]);
                 nebulae += 1;
                 drawn += 1;
@@ -1076,7 +1128,7 @@ fn rebuild(
     // is only where the grid begins), near enough to see the base; R returns there.
     let focus = {
         use sta_sim::WorldSource;
-        let mine: Vec<Vec2> = match seat_player.filter(|_| is_match) {
+        let mine: Vec<Vec2> = match seat_player.filter(|_| is_match || is_mission) {
             Some(p) => sim.view().units.iter().filter(|u| u.owner == p).map(|u| Vec2::new(u.pos.x.to_f32(), u.pos.z.to_f32())).collect(),
             None => Vec::new(),
         };
@@ -1105,7 +1157,7 @@ fn rebuild(
     // second time.
     // A match's start units (a seat's outpost, builders) are made by the sim, not by a BZN
     // object, so nothing took them: they are left to the units view, which draws them.
-    let unlinked = placed.rest_where(|owner| !is_match || owner == sta_sim::world::NEUTRAL);
+    let unlinked = placed.rest_where(|owner| !(is_match || is_mission) || owner == sta_sim::world::NEUTRAL);
     let ghosts = unlinked.len();
     for id in unlinked {
         commands.spawn((SimEntity(id), Transform::IDENTITY, Visibility::default(), ChildOf(root)));

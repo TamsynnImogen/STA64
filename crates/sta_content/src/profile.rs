@@ -163,6 +163,7 @@ impl Profile {
                 multi_yard_builds: true,
                 construction_rigs: true,
                 weapon_shot_timing: true,
+                start_fire_hold: true,
                 // SIM-36: the Roots engine (also running STA2 Classic, CON-43).
                 attack_opportunity_fire: true,
                 ..off
@@ -175,6 +176,8 @@ impl Profile {
                 turrets: true,
                 point_defense_cycles: true,
                 weapon_shot_timing: true,
+                start_fire_hold: true,
+                crew_loss_on_hit: true,
                 // SIM-36: stock A2's attack approach and construction ships.
                 attack_range_buffer: true,
                 attack_warp_out_at_distance: true,
@@ -436,7 +439,7 @@ fn read_ini_named(root: &Path, name: &str) -> Option<Ini> {
 }
 
 /// Switch names, in `Features` declaration order.
-pub const FEATURE_NAMES: [&str; 30] = [
+pub const FEATURE_NAMES: [&str; 32] = [
     "weapon_damage_controls",
     "point_defense_cycles",
     "fire_arcs",
@@ -462,6 +465,8 @@ pub const FEATURE_NAMES: [&str; 30] = [
     "pd_energy",
     "pd_debt_timer",
     "weapon_shot_timing",
+    "start_fire_hold",
+    "crew_loss_on_hit",
     "attack_range_buffer",
     "attack_warp_out_at_distance",
     "attack_combat_speed",
@@ -497,6 +502,8 @@ impl Features {
             "pd_energy" => &mut self.pd_energy,
             "pd_debt_timer" => &mut self.pd_debt_timer,
             "weapon_shot_timing" => &mut self.weapon_shot_timing,
+            "start_fire_hold" => &mut self.start_fire_hold,
+            "crew_loss_on_hit" => &mut self.crew_loss_on_hit,
             "attack_range_buffer" => &mut self.attack_range_buffer,
             "attack_warp_out_at_distance" => &mut self.attack_warp_out_at_distance,
             "attack_combat_speed" => &mut self.attack_combat_speed,
@@ -708,7 +715,9 @@ mod tests {
                 "officer_capacity",
                 "multi_yard_builds",
                 "construction_rigs",
-                "weapon_shot_timing"
+                "weapon_shot_timing",
+                "start_fire_hold",
+                "attack_opportunity_fire"
             ]
         );
         assert!(!Profile::Fo4.features().pay_on_queue);
@@ -716,7 +725,17 @@ mod tests {
 
     #[test]
     fn defaults_table_sta2_classic() {
-        assert_eq!(on(&Profile::Sta2Classic.features()), ["point_defense_cycles", "turrets", "weapon_shot_timing"]);
+        assert_eq!(on(&Profile::Sta2Classic.features()), [
+            "point_defense_cycles",
+            "turrets",
+            "weapon_shot_timing",
+            "start_fire_hold",
+            "crew_loss_on_hit",
+            "attack_range_buffer",
+            "attack_warp_out_at_distance",
+            "attack_combat_speed",
+            "builder_hold_fire"
+        ]);
     }
 
     #[test]

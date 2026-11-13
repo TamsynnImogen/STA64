@@ -476,7 +476,7 @@ sta-bench pair move --game a2 --refit-out <earlier>/refit --install ...   # reus
   after the scene is built), `Frames=3,8` (sim seconds), `Size=WxH`,
   `Tol=time=0.25,pos=5,hull=1[,frame=8][,lowfreq=..]` (frame metrics: "Frame
   metrics" below), `At=<s> <command>` (repeatable, the timeline, in the command
-  vocabulary), and per game `Launch=`, `Race=`, `Mod=`, `Map=` (see below). Any key may be prefixed by a game, in any section (`roots.Odf=`,
+  vocabulary; `a; b` gives several at one time), and per game `Launch=`, `Race=`, `Mod=`, `Map=` (see below). Any key may be prefixed by a game, in any section (`roots.Odf=`,
   `roots.Size=1280x960`, `fake.Odf=fx_cruiser`): for that game it replaces
   the plain key; other games' prefixed keys are dropped. **Armada I is not
   supported** (Refit's bench has no A1 profile, PLAN-ARMADA1); A1 keeps
@@ -493,11 +493,23 @@ sta-bench pair move --game a2 --refit-out <earlier>/refit --install ...   # reus
   `bench/measure-marks` branch (`--refit` or `$REFIT_ROOT` names that
   checkout). Commands land late (one `drive` round trip, and the sim may run
   faster than the wall clock), so nothing is compared on the asked time.
+  `rclick <object>` is a player's right-click with the current `select`ion:
+  `camera on` the object, the bench's pointer to the middle of the view
+  (`UiCenter=X,Y` when the object is drawn elsewhere) and the right button; it
+  has no `cmd` mark, so it lands at the sim time the marks' `epoch` lines put
+  the button press at. A simulation that stops advancing for 45 s of wall time
+  (a mission map's briefing pauses it) fails the run.
 - **The STA64 side** runs the same text in-process on the install's content
   (`--install`, `--mod`, or `--fake` for tests), each command on the tick
   nearest to when it **landed on the original**, frames at the original's
-  frame times. It writes the original's file formats: `Scene.marks` (Refit's
-  names; fire bursts merged per shooter and weapon as Refit marks them; one
+  frame times; `rclick` gives the order `sta_sim::context` picks for the
+  selection (the client's right-click rule), else a move to the object's place.
+  Its scene is built at the original's `ready` time (the mission runs empty
+  until then), so rules on mission time, such as no fire in the first 2 s
+  (SIM-53), line up; `sta64 --headless` frames still start the scene at 0. It writes the original's file formats: `Scene.marks` (Refit's
+  names; fire bursts merged per shooter and weapon as Refit marks them, a
+  projectile firing from its shot until its hit as Refit follows ordnance,
+  with `[Marks] Ordnance=1`; one
   `ord.new` per shot; a `state` line per named object every tick), `run.json`,
   and the frames (next bullet).
 - **The map.** The original always loads the map it was launched on, so the
@@ -736,6 +748,43 @@ the capture tick only.
    see "Starting points"; the runner does not read them yet.)
 5. Put the capture's tick, digest and the folder name in the issue, not the
    folder itself.
+
+## Reproducing a desync (`sta-bench desync`, NET-06)
+
+Two peers of a lockstep game disagree. Each wrote `<stem>.star` (a replay of
+the commands its sim was given, a digest every turn) and `<stem>.star.desync.txt`
+(the first differing turn, every seat's digest and section digests, builds
+and packs). `sta-bench desync` takes both replays and answers: which tick,
+which section of the state, which entity and field, and which command came
+before.
+
+1. Collect `seatA.star` and `seatB.star` (the sidecars next to them are read
+   when present). Never commit them: they carry the map converted from the
+   install.
+2. `sta-bench desync seatA.star seatB.star --install "<install root>" [--mod "<mod folder>"] --json report.json`
+   (`--fake` for replays of the bench's fake content). Use the content both
+   peers ran on (the sidecar's lineage, pack and engine lines say which). Exit 0: the replays never differ (look at the transport, or
+   one peer's state was edited outside its command log: its replay then
+   fails to reproduce and the tool says so, exit 3). Exit 1: diverged. Exit
+   3: an input is unreadable, truncated, another sim build or other content.
+3. Read the Markdown: *Diverged at tick N* is the first tick whose state
+   differs; "a router sees it at tick M" is the turn boundary the sidecar
+   names (M is at most one turn later). The table per section lists entity,
+   field and both values. `Only a applied` / `Only b applied` is the first
+   command one peer ran and the other did not: a dropped or misordered
+   command is the usual cause, and its tick is the tick it was applied on
+   (its effect shows at N = tick + 1). No such command and a differing
+   section: a sim determinism bug in that section (look at the field, at
+   what runs on that entity at tick N - 1, and run the same replay on both
+   machines' builds).
+4. `report.json` is the same content for tools: `first_differing_tick`,
+   `detected_at_tick`, `sections[].rows[]` (`entity`, `field`, `a`, `b`),
+   `commands.only_in_a/b`, and `sidecars[].agrees` (whether the sidecar's
+   sections are the ones the replays show at that turn). Ordering is stable,
+   so two runs diff clean.
+5. Turn it into a test: build the same two-peer room with `Fault::DropCommand`
+   or `Fault::Inject` (`crates/sta_net/tests/lockstep.rs`, "NET-06") around
+   the command and entity the report names, and fix the sim.
 
 ## Sessions and reports
 
