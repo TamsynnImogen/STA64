@@ -105,8 +105,19 @@ The owned A2FOExtensions A2FOTeamChangeWeapons module observes completed native
 swaps. Its opt-in weapon ODF activateOnTeamChange defaults to zero and included
 child zero overrides remain valid. Requests run on the next weapon pass for
 the final owner, retain native weapon restrictions and existing targets, and
-exclude same-team/alliance-only/race-only changes. It is useful evidence for
-future hooks, not an implemented STA64 weapon feature or full live-game proof.
+exclude same-team/alliance-only/race-only changes. STA64 implements it
+(SIM-29, `Features::team_change_weapons`, Fo4 profile): after an accepted
+`Edit::Team` that changes the unit's team (same-team handovers and neutral
+owners excluded; alliance-only and race-only changes have no counterpart here),
+each special whose weapon ODF says `activateOnTeamChange = 1` is engaged for the
+new owner on that tick's weapon pass, under the special's own rules (a cloak is
+engaged, never toggled off; a point-defence weapon is switched on; energy cost
+and reload refuse as for an order, and a refusal is dropped). Grade: rule read
+from the owned module's description above, not measured on a live game: no
+installed ODF carries the key. Existing targets are not retained (a transfer
+clears them).
+Still unsupported, not measured: capture of an unfinished child (weld record,
+rig deploy) and the research attachments of a research station.
 
 ## Current shared-state dependencies
 

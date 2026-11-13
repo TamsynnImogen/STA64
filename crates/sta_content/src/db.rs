@@ -632,6 +632,10 @@ fn hash_inner(db: &ContentDb, include_starting_rules: bool) -> u64 {
                     h.fixed(w.initial_shot_delay_modifier.unwrap_or(Fixed::ZERO));
                     h.byte(w.ignore_shot_delay_effects as u8);
                 }
+                // SIM-29: only when set.
+                if w.activate_on_team_change {
+                    h.byte(0xf3);
+                }
                 // SIM-39: only for ordnance with a crew-loss key.
                 if let Some(c) = &w.crew_loss {
                     h.byte(0xf2);

@@ -143,6 +143,10 @@ pub struct Sim {
     start_effects: start_effects::StartEffects,
     /// Path planner grids and fields (SIM-23): a memo, not in the digest.
     nav: nav::Cache,
+    /// Units whose team just changed (SIM-29): `activateOnTeamChange` weapons
+    /// engage on the tick's weapon pass. Filled by the tick's commands and
+    /// drained by the same tick, so it is empty between ticks and not saved.
+    team_changes: Vec<EntityId>,
 }
 
 impl Sim {
@@ -169,6 +173,7 @@ impl Sim {
             specials: Default::default(),
             start_effects: Default::default(),
             nav: Default::default(),
+            team_changes: Vec::new(),
         }
     }
 
@@ -317,6 +322,7 @@ impl Sim {
         self.push_out_of_fields();
         if let Some(db) = self.content.clone() {
             combat::damage::recharge(&mut self.units, &db);
+            self.activate_team_change_weapons(&db);
             self.specials.step(&mut self.units, &db, &mut self.events);
             let from = self.events.len();
             self.weapons.step_with_perception(self.tick, &self.units, &db, &self.players, &self.perception, &mut self.specials, &mut self.rng, &mut self.events);

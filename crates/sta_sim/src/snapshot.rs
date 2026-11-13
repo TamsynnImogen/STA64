@@ -479,6 +479,7 @@ impl Sim {
             specials,
             start_effects,
             nav: Default::default(),
+            team_changes: Vec::new(),
         })
     }
 }

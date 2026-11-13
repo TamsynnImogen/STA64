@@ -462,6 +462,9 @@ pub struct WeaponDef {
     /// The weapon's own class is `ordnancedefenseweapon` (FO's point-defence
     /// class, as opposed to `pointdefenselaser`).
     pub ordnance_defence: bool,
+    /// `activateOnTeamChange` (an FO mod key, default 0): the weapon's special
+    /// is engaged for its new owner after a completed team change (SIM-29).
+    pub activate_on_team_change: bool,
     /// The ordnance's crew-loss keys (SIM-39); `None` when it has none of them.
     pub crew_loss: Option<OrdnanceCrewLoss>,
     /// Feature switches resolved for this weapon, as [`UnitDef::features`];
@@ -531,6 +534,7 @@ impl WeaponDef {
             initial_shot_delay_modifier: None,
             ignore_shot_delay_effects: false,
             ordnance_defence: false,
+            activate_on_team_change: false,
             crew_loss: None,
             features: None,
             resource: None,
