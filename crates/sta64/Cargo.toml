@@ -26,6 +26,8 @@ kira = { version = "=0.12.6", default-features = false, features = ["cpal"] }
 [features]
 # Faster incremental linking during development: `cargo run --features dev`.
 dev = ["bevy/dynamic_linking"]
+# Per-system CPU times for `--perf-systems` (docs/TESTBENCH.md, "Performance runs"): Bevy's tracing spans.
+perf-trace = ["bevy/trace", "bevy/debug"]
 
 [build-dependencies]
 winresource = "0.1.34"

@@ -94,9 +94,31 @@ pub struct RockPart {
     pub inv_extent: Vec3,
 }
 
-/// The part's own rock material (per instance: it carries the instance's axes).
+/// The part's rock material, shared by every part of the same mesh and recipe (the
+/// instance's axes and centre come from its own transform in `rock.wesl`, so a tumbling rock
+/// rewrites nothing and the rocks of a mesh draw together).
 #[derive(Component)]
-struct RockMat(Handle<RockMaterial>);
+struct RockMat;
+
+/// The rock materials made so far, by recipe and the mesh's centre and extents.
+#[derive(Resource, Default)]
+struct RockMaterials(std::collections::HashMap<MaterialKey, Handle<RockMaterial>>);
+
+type MaterialKey = (String, [u32; 3], [u32; 3]);
+
+/// The shared materials go with the match: once no part uses a rock material, they are dropped
+/// (a later map or mod makes its own).
+fn forget(mut shared: ResMut<RockMaterials>, parts: Query<(), With<RockMat>>) {
+    if !shared.0.is_empty() && parts.is_empty() {
+        shared.0.clear();
+    }
+}
+
+/// What a part's material depends on: parts with the same key share one (the per-instance
+/// axes and centre are not part of it, they come from the instance's transform).
+fn material_key(part: &RockPart) -> MaterialKey {
+    (part.recipe.to_ascii_lowercase(), part.centre.to_array().map(f32::to_bits), part.inv_extent.to_array().map(f32::to_bits))
+}
 
 pub struct RockPlugin;
 
@@ -104,7 +126,8 @@ impl Plugin for RockPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "rock.wesl");
         app.add_plugins(MaterialPlugin::<RockMaterial>::default())
-            .add_systems(Update, apply.after(crate::render::surfaces::poll))
+            .init_resource::<RockMaterials>()
+            .add_systems(Update, (apply.after(crate::render::surfaces::poll), forget))
             .add_systems(PostUpdate, update.after(TransformSystems::Propagate));
     }
 }
@@ -116,13 +139,20 @@ fn apply(
     mut surfaces: ResMut<crate::render::surfaces::Surfaces>,
     parts: Query<(Entity, &RockPart), Without<RockMat>>,
     mut materials: ResMut<Assets<RockMaterial>>,
+    mut shared: ResMut<RockMaterials>,
 ) {
     for (e, part) in &parts {
         let Some(b) = surfaces.request(&vfs.0, &part.recipe, crate::render::surfaces::ROCK_FACE) else { continue };
+        let key = material_key(part);
+        if let Some(m) = shared.0.get(&key) {
+            commands.entity(e).insert((RockMat, MeshMaterial3d(m.clone()))).remove::<MeshMaterial3d<StandardMaterial>>();
+            continue;
+        }
         let r = &b.recipe;
         let cut = r.cut > 0.0;
         let params = RockParams {
             amb: Vec3::from(AMBIENT).extend(1.0),
+            ctr: part.centre.extend(1.0),
             shine: Vec4::new(SPEC, SPEC_POW, RIM_POW, SUN),
             rim: Vec3::from(RIM).extend(0.0),
             glow: Vec4::new(r.glow[0], r.glow[1], r.glow[2], 0.0),
@@ -138,22 +168,28 @@ fn apply(
             albedo: Some(b.albedo.clone()),
             relief: Some(b.relief.clone()),
         });
-        commands.entity(e).insert((RockMat(m.clone()), MeshMaterial3d(m))).remove::<MeshMaterial3d<StandardMaterial>>();
+        shared.0.insert(key, m.clone());
+        commands.entity(e).insert((RockMat, MeshMaterial3d(m))).remove::<MeshMaterial3d<StandardMaterial>>();
     }
 }
 
-/// Each frame: the instance's axes and centre, the camera and the lights.
+/// What the shared materials were last written with: the eye, the lights, how many materials.
+type LastWrite = Option<(Vec3, Vec<[f32; 7]>, usize)>;
+
+/// Each frame: the camera and the lights, into the shared materials, when they changed (a
+/// write re-uploads a material: there are a few dozen, not one per rock).
 fn update(
     camera: Query<&GlobalTransform, crate::map::MainCamera>,
     lights: Query<(&GlobalTransform, &DirectionalLight)>,
-    parts: Query<(Ref<GlobalTransform>, &RockPart, Ref<RockMat>)>,
+    shared: Res<RockMaterials>,
     mut materials: ResMut<Assets<RockMaterial>>,
-    mut last_eye: Local<Vec3>,
+    mut last: Local<LastWrite>,
+    switches: Option<Res<crate::render::quality::PerfSwitches>>,
 ) {
+    if switches.is_some_and(|s| s.freeze_rock_materials) {
+        return;
+    }
     let Ok(cam) = camera.single() else { return };
-    // Write a material only when its rock or the camera moved: a write re-uploads it.
-    let eye_moved = cam.translation().distance(*last_eye) > 0.01;
-    *last_eye = cam.translation();
     let mut ls: Vec<(Vec3, Vec3, f32)> = lights
         .iter()
         .map(|(t, l)| {
@@ -162,20 +198,22 @@ fn update(
         })
         .collect();
     ls.sort_by(|a, b| b.2.total_cmp(&a.2));
+    let sig: Vec<[f32; 7]> = ls.iter().map(|l| [l.0.x, l.0.y, l.0.z, l.1.x, l.1.y, l.1.z, l.2]).collect();
+    let eye = cam.translation();
+    let moved = match &*last {
+        Some((e, s, n)) => e.distance(eye) > 0.01 || *s != sig || *n != shared.0.len(),
+        None => true,
+    };
+    if !moved {
+        return;
+    }
+    *last = Some((eye, sig, shared.0.len()));
     let key = ls.first().copied().unwrap_or((Vec3::NEG_Y, Vec3::ONE, 1.0));
     let fill = ls.get(1).map(|f| (f.0, f.1 * (f.2 / key.2.max(1e-3)))).unwrap_or((Vec3::Y, Vec3::ZERO));
-    for (gt, part, mat) in &parts {
-        if !(eye_moved || gt.is_changed() || mat.is_added()) {
-            continue;
-        }
-        let Some(mut m) = materials.get_mut(&mat.0) else { continue };
-        let a = gt.affine();
+    for h in shared.0.values() {
+        let Some(mut m) = materials.get_mut(h) else { continue };
         let p = &mut m.params;
-        p.row0 = Vec3::from(a.matrix3.x_axis).extend(0.0);
-        p.row1 = Vec3::from(a.matrix3.y_axis).extend(0.0);
-        p.row2 = Vec3::from(a.matrix3.z_axis).extend(0.0);
-        p.ctr = gt.transform_point(part.centre).extend(1.0);
-        p.eye = cam.translation().extend(1.0);
+        p.eye = eye.extend(1.0);
         p.ddir0 = key.0.extend(1.0);
         p.dcol0 = key.1.extend(0.0);
         p.ddir1 = fill.0.extend(0.0);
@@ -185,9 +223,26 @@ fn update(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// Regression guard (counts, not speed): the rocks of one mesh share one material, so
+    /// an asteroid field is a few draws, not one per rock, and a tumbling rock rewrites
+    /// nothing. Instances of a mesh differ in transform only, which is not in the key.
+    #[test]
+    fn rocks_of_one_mesh_share_a_material_and_other_meshes_do_not() {
+        let part = |recipe: &str, c: f32| RockPart { recipe: recipe.into(), centre: Vec3::new(c, 0.0, 1.0), inv_extent: Vec3::splat(0.5) };
+        let keys: std::collections::HashSet<_> = (0..600).map(|_| material_key(&part("masterrock", 3.0))).collect();
+        assert_eq!(keys.len(), 1, "600 instances of one mesh: one material");
+        assert_ne!(material_key(&part("masterrock", 3.0)), material_key(&part("masterrock", 4.0)));
+        assert_ne!(material_key(&part("masterrock", 3.0)), material_key(&part("mdmoon", 3.0)));
+    }
+
     #[test]
     fn rock_shader_validates() {
-        let src = include_str!("rock.wesl").replace("constants::MATERIAL_BIND_GROUP", "3");
+        // The mesh transform comes from Bevy's own shader library: a stub stands in for it.
+        let src = include_str!("rock.wesl")
+            .replace("constants::MATERIAL_BIND_GROUP", "3")
+            .replace("import bevy_pbr::render::mesh_functions::get_world_from_local;", "fn get_world_from_local(i: u32) -> mat4x4<f32> { return mat4x4<f32>(); }");
         let module = naga::front::wgsl::parse_str(&src).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&src)));
         naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
             .validate(&module)

@@ -29,7 +29,7 @@ fn fixture() -> (Vec<u8>, Arc<ContentDb>) {
 #[test]
 fn appearance_record_refuses_unknown_versions_missing_data_and_noncanonical_rows() {
     let (bytes, content) = fixture();
-    let record = 13;
+    let record = chain::APPEARANCE;
     for factions in [
         vec![(PlayerId(0), "".into())],
         vec![(PlayerId(0), "Federation".into())],
@@ -73,11 +73,13 @@ fn appearance_record_refuses_unknown_versions_missing_data_and_noncanonical_rows
 #[test]
 fn previous_snapshot_and_view_seams_are_refused_before_new_data_is_read() {
     let (mut bytes, content) = fixture();
-    bytes[4..6].copy_from_slice(&20_u16.to_le_bytes());
-    assert!(matches!(
-        Sim::from_snapshot(&bytes, Some(content.clone())),
-        Err(SnapshotError::FormatVersion { found: 20 })
-    ));
+    for previous in [20_u16, 21] {
+        bytes[4..6].copy_from_slice(&previous.to_le_bytes());
+        assert!(matches!(
+            Sim::from_snapshot(&bytes, Some(content.clone())),
+            Err(SnapshotError::FormatVersion { found }) if found == previous
+        ));
+    }
     bytes[4..6].copy_from_slice(&FORMAT_VERSION.to_le_bytes());
     bytes[6..10].copy_from_slice(&4_u32.to_le_bytes());
     assert!(matches!(

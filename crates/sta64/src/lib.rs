@@ -11,6 +11,7 @@ pub mod app;
 pub mod bench;
 pub mod clock;
 pub mod game;
+pub mod placement;
 pub mod plugins;
 pub mod sim_link;
 

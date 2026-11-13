@@ -137,6 +137,8 @@ impl Sim {
         self.production.remove_weld_site(id);
         self.start_effects.remove(id);
         self.subsystems.remove(id);
+        self.scripted.remove(id);
+        self.switches.remove(id);
         if let Some(by) = destroyed_by {
             self.events.push(SimEvent::Destroyed { id, by });
         }
@@ -148,6 +150,9 @@ impl Sim {
     pub(crate) fn apply_edit(&mut self, from: PlayerId, e: &Edit) -> bool {
         if from != PlayerId::SCRIPT && from != PlayerId::BENCH {
             return false;
+        }
+        if let Some(ok) = self.apply_switch_edit(e) {
+            return ok;
         }
         match *e {
             Edit::Spawn {

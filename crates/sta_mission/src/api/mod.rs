@@ -109,6 +109,18 @@ pub(crate) fn cineractive_active(lua: &Lua) -> mlua::Result<bool> {
     a2::cineractive_active(lua)
 }
 
+/// Whether the script left the running cineractive skippable.
+pub(crate) fn cineractive_skippable(lua: &Lua) -> mlua::Result<bool> {
+    use mlua::ObjectLike;
+    lua.globals().raw_get::<mlua::AnyUserData>("Cineractive")?.get("skippable")
+}
+
+/// Set `Cineractive.active` as a script would (raising the presentation request).
+pub(crate) fn set_cineractive_active(lua: &Lua, on: bool) -> mlua::Result<()> {
+    use mlua::ObjectLike;
+    lua.globals().raw_get::<mlua::AnyUserData>("Cineractive")?.set("active", on)
+}
+
 /// Explicit conversion between Lua player numbers and core player slots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PlayerNumbering {
@@ -242,6 +254,8 @@ pub(crate) struct Ctx {
     pub playback: Playback,
     /// The view tick of the last `Hit` each object took (`A2.UnderAttack`).
     pub last_hit: BTreeMap<EntityId, u64>,
+    /// The cineractive shots the script placed (UI-36), fed from every presentation request.
+    pub cine: crate::cineractive::Cineractive,
 }
 
 /// A requested mission end: `SucceedMission(seconds, text)` /
@@ -297,6 +311,7 @@ impl Ctx {
             aips_taken: 0,
             playback: Playback::default(),
             last_hit: BTreeMap::new(),
+            cine: crate::cineractive::Cineractive::default(),
         }
     }
 
@@ -335,6 +350,9 @@ impl Ctx {
         let seq = self.seq.get(&player).copied().unwrap_or(0)
             .checked_add(1).ok_or("command sequence exhausted")?;
         self.seq.insert(player, seq);
+        if let CommandKind::Edit(Edit::Present(p)) = &kind {
+            self.cine.observe(p, self.view.tick, &self.paths);
+        }
         self.commands.push(Command { player, seq, kind });
         Ok(seq)
     }

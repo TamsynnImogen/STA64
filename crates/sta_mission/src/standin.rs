@@ -10,7 +10,10 @@
 //! - a movie: frames over frame rate from the Bink header of
 //!   `animations/<name>`; 5 s if not found;
 //! - a wait for Enter: 1 s (what the shell releases it on is not measured);
-//! - a cineractive start: the next tick (no camera model in the host).
+//! - a cineractive start: not reported here; the runtime releases it when its shots are
+//!   done (the shot model of `crate::cineractive`, on sim ticks, UI-36), as the client does;
+//!   a cineractive still on after `cineractive::MAX_HOLD_SECS` of game time is released, as
+//!   the client's cap does.
 //!
 //! Evidence grade: lengths are read from data (file headers); every default
 //! above is a stand-in value and says nothing about the original's timing
@@ -122,6 +125,13 @@ impl StandInHost {
             let due = started.saturating_add((self.seconds(&kind, &name) * f64::from(TICK_HZ)).ceil() as u64).saturating_add(1);
             self.due.entry((kind, id, started)).or_insert(due);
         }
+        // A cineractive that never ends (a path of speed 0, a script that misses its end) is
+        // released after the client's cap, in game time (UI-36).
+        let cine = active.runtime().cineractive();
+        if cine.active && now >= cine.started.saturating_add(u64::from(crate::cineractive::MAX_HOLD_SECS * TICK_HZ)) {
+            active.runtime().release_cineractive();
+            self.reports.push((now, "cineractive".to_owned(), 0));
+        }
         let ready: Vec<(String, i64, u64)> = self.due.iter().filter(|(_, d)| **d <= now).map(|(k, _)| k.clone()).collect();
         for (kind, id, started) in ready {
             self.due.remove(&(kind.clone(), id, started));
@@ -129,7 +139,6 @@ impl StandInHost {
                 "sound" | "music" => format!("A2.AudioMessageDone({id})"),
                 "movie" => "A2.MovieDone()".to_owned(),
                 "key" => format!("A2.EnterKeyDone({id})"),
-                "cineractive" => "A2.CineractiveStartDone()".to_owned(),
                 "a1.sound" => format!("A1.AudioMessageDone({id})"),
                 "a1.movie" => "A1.MovieDone()".to_owned(),
                 _ => continue,

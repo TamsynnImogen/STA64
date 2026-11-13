@@ -44,9 +44,10 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// hash. Format 17 appends the mission-set subsystem switches and damage
 /// (SIM-55). Format 18 (SIM-36) appends the attack approach record
 /// (crafts in warp). Format 19 appends stuck-order watch rows; format 20
-/// adds their anchor, start distance and birth tick. Format 21 appends cosmetic
+/// adds their anchor, start distance and birth tick. Format 21 appends scripted
+/// orders (SIM-56) and per-craft switches (SIM-58). Format 22 appends cosmetic
 /// seat factions. Only the current format is read.
-pub const FORMAT_VERSION: u16 = 21;
+pub const FORMAT_VERSION: u16 = 22;
 
 const HEADER: usize = 4 + 2 + 4 + 8;
 
@@ -174,7 +175,7 @@ struct EntityRec {
     progress: Option<Fixed>,
 }
 
-/// Format 21: cosmetic owning-seat faction labels. No gameplay rules.
+/// Format 22: cosmetic owning-seat faction labels. No gameplay rules.
 #[derive(Serialize, Deserialize)]
 struct AppearanceRec {
     version: u8,
@@ -262,6 +263,20 @@ struct StartEffectsRec {
 struct SubsystemsRec {
     version: u8,
     rows: Vec<(EntityId, crate::combat::damage::SubsystemRow)>,
+}
+
+/// Format 21: scripted orders (SIM-56).
+#[derive(Serialize, Deserialize)]
+struct ScriptedRec {
+    version: u8,
+    rows: Vec<(EntityId, crate::orders::Job)>,
+}
+
+/// Format 21: per-craft switches (SIM-58).
+#[derive(Serialize, Deserialize)]
+struct SwitchesRec {
+    version: u8,
+    rows: Vec<(EntityId, crate::switches::Switches)>,
 }
 
 fn kind_from(b: u8) -> Option<EntityKind> {
@@ -415,6 +430,8 @@ impl Sim {
         out.extend(postcard::to_allocvec(&SubsystemsRec { version: 1, rows: self.subsystems.to_rows() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&AttackRec { version: 1, warp: self.approach_warp.to_rec(), engagement: self.engagement.to_rec() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&WatchRec { version: 1, rows: self.watchdog.to_rec() }).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&ScriptedRec { version: 1, rows: self.scripted.to_rows() }).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&SwitchesRec { version: 1, rows: self.switches.to_rows() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&AppearanceRec { version: 1, factions: self.appearance_factions.clone() }).expect("snapshot serialises"));
         out
     }
@@ -464,6 +481,12 @@ impl Sim {
         let (record, rest): (WatchRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         if record.version != 1 { return Err(SnapshotError::Corrupt("unknown order watch record version".into())); }
         let watch_rows = record.rows;
+        let (record, rest): (ScriptedRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        if record.version != 1 { return Err(SnapshotError::Corrupt("unknown scripted orders record version".into())); }
+        let scripted_rows = record.rows;
+        let (record, rest): (SwitchesRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        if record.version != 1 { return Err(SnapshotError::Corrupt("unknown switches record version".into())); }
+        let switch_rows = record.rows;
         let (record, rest): (AppearanceRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         if record.version != 1 { return Err(SnapshotError::Corrupt("unknown appearance record version".into())); }
         let appearance_factions = record.factions;
@@ -541,6 +564,14 @@ impl Sim {
         if watchdog.to_rec().iter().any(|(id, _)| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft)) {
             return Err(SnapshotError::Corrupt("order watch entity is not a craft".into()));
         }
+        let scripted = crate::orders::Scripted::from_rows(scripted_rows).ok_or_else(|| corrupt("scripted order rows"))?;
+        if scripted.to_rows().iter().any(|(id, j)| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft) || matches!(j, crate::orders::Job::Patrol { points, leg } if points.len() < 2 || *leg >= points.len())) {
+            return Err(SnapshotError::Corrupt("scripted order entity is not a craft or a patrol has no loop".into()));
+        }
+        let switches = crate::switches::SwitchTable::from_rows(switch_rows).ok_or_else(|| corrupt("switch rows"))?;
+        if switches.to_rows().iter().any(|(id, _)| units.get(*id).is_none()) {
+            return Err(SnapshotError::Corrupt("switches of an unknown entity".into()));
+        }
         let approach_warp = crate::movement::approach::Warp::from_rec(warp_rows).ok_or_else(|| SnapshotError::Corrupt("attack warp rows out of order or of an unknown phase".into()))?;
         if approach_warp.to_rec().iter().any(|(id, _)| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft)) {
             return Err(SnapshotError::Corrupt("attack warp entity is not a craft".into()));
@@ -591,6 +622,8 @@ impl Sim {
             start_effects,
             nav: Default::default(),
             subsystems,
+            scripted,
+            switches,
             team_changes: Vec::new(),
             appearance_factions,
         })
@@ -611,6 +644,9 @@ mod attack_tests;
 #[cfg(test)]
 #[path = "snapshot/watch_tests.rs"]
 mod watch_tests;
+#[cfg(test)]
+#[path = "snapshot/scripted_tests.rs"]
+mod scripted_tests;
 
 #[cfg(test)]
 #[path = "snapshot/chain.rs"]

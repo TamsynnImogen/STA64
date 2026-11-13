@@ -75,6 +75,25 @@ pub enum Order {
     /// Appended: existing postcard Order tags keep their values (`Rally` is
     /// 8, this is 9).
     Autonomy { units: Vec<EntityId>, kind: AutonomyKind, level: AutonomyLevel },
+    /// Mission `Patrol(unit, path)` (SIM-56): fly the points in order, from the
+    /// first, and from the last back to the first, until another order. Fewer
+    /// than two points is a plain move. Appended tag 10.
+    Patrol { units: Vec<EntityId>, points: Vec<Vec3> },
+    /// Mission `SearchAndDestroy` (SIM-56): fight the best enemy the craft's
+    /// sensors show, roam the map when there is none; never ends. Tag 11.
+    SearchAndDestroy { units: Vec<EntityId> },
+    /// Mission `Scout` (SIM-56): wander near the starting point to unexplored
+    /// ground without firing; never ends. Tag 12.
+    Scout { units: Vec<EntityId> },
+    /// Mission `AI_Attack(unit)` (SIM-56): attack what the sensors show and
+    /// stop when nothing is left. Tag 13.
+    AttackAny { units: Vec<EntityId> },
+    /// Mission `AI_Attack(unit, point)` (SIM-56): fly to weapon range of the
+    /// point firing nothing on the way, then stop. Tag 14.
+    AttackPoint { units: Vec<EntityId>, at: Vec3 },
+    /// Mission `Goto(.., warp = true)` (SIM-56): a move that asks for warp when
+    /// the goal is far. `queue` as [`Order::Move`]. Tag 15.
+    MoveWarp { units: Vec<EntityId>, to: Vec3, queue: bool },
 }
 
 /// Which autonomy an [`Order::Autonomy`] sets.
@@ -208,6 +227,29 @@ pub enum Edit {
     /// steering has the value overwritten within a tick in the original).
     /// A dying unit is rejected. SCRIPT/BENCH only. Appended tag 30.
     AngularVelocity(EntityId, Fixed),
+    /// Mission `AllowAsTarget(object, team, allowed)` (SIM-58): seat `player`'s
+    /// craft may (not) pick the unit on their own; explicit attack orders are
+    /// unaffected. Beside [`Edit::Targetable`], which stays. SCRIPT/BENCH only.
+    /// Appended tag 31.
+    AllowAsTarget { id: EntityId, player: PlayerId, allowed: bool },
+    /// Mission `CraftCanRepair` (SIM-58): false stops shield regeneration.
+    /// Craft only. Appended tag 32.
+    CraftCanRepair(EntityId, bool),
+    /// Mission `ButItCanBeDerelicted` (SIM-58): stored, no derelict state yet.
+    /// Craft only. Appended tag 33.
+    DerelictAllowed(EntityId, bool),
+    /// Mission `CraftCanRecrew` (SIM-58): stored, no per-craft recrew yet.
+    /// Craft only. Appended tag 34.
+    CanRecrew(EntityId, bool),
+    /// Mission `HideObject` (SIM-58): the hidden flag (drawing only in the
+    /// original). Appended tag 35.
+    Hidden(EntityId, bool),
+    /// Mission `SetName` (SIM-58): a craft's display name, at most
+    /// [`crate::switches::MAX_NAME_BYTES`] bytes; empty clears. Appended tag 36.
+    Name(EntityId, String),
+    /// Mission `SetSpecialForcesFlag` (SIM-58): the flag the original's script
+    /// order gate, assist and AI planner read. Craft only. Appended tag 37.
+    SpecialForces(EntityId, bool),
 }
 
 /// The largest turn rate (radians per second) a script may set.
@@ -373,6 +415,40 @@ mod tests {
             let bytes = postcard::to_allocvec(&edit).unwrap();
             assert_eq!(bytes[0], tag, "{edit:?}");
             assert_eq!(postcard::from_bytes::<Edit>(&bytes).unwrap(), edit);
+        }
+    }
+
+    #[test]
+    fn switch_edits_and_scripted_orders_append_tags() {
+        let id = EntityId(1);
+        let edits = [
+            (31, Edit::AllowAsTarget { id, player: PlayerId(1), allowed: false }),
+            (32, Edit::CraftCanRepair(id, false)),
+            (33, Edit::DerelictAllowed(id, true)),
+            (34, Edit::CanRecrew(id, true)),
+            (35, Edit::Hidden(id, true)),
+            (36, Edit::Name(id, "Voyager".into())),
+            (37, Edit::SpecialForces(id, true)),
+        ];
+        for (tag, edit) in edits {
+            let bytes = postcard::to_allocvec(&edit).unwrap();
+            assert_eq!(bytes[0], tag, "{edit:?}");
+            assert_eq!(postcard::from_bytes::<Edit>(&bytes).unwrap(), edit);
+        }
+        let u = vec![id];
+        let at = Vec3::from_f32([1.0, 0.0, 2.0]);
+        let orders = [
+            (10, Order::Patrol { units: u.clone(), points: vec![at] }),
+            (11, Order::SearchAndDestroy { units: u.clone() }),
+            (12, Order::Scout { units: u.clone() }),
+            (13, Order::AttackAny { units: u.clone() }),
+            (14, Order::AttackPoint { units: u.clone(), at }),
+            (15, Order::MoveWarp { units: u, to: at, queue: true }),
+        ];
+        for (tag, o) in orders {
+            let bytes = postcard::to_allocvec(&o).unwrap();
+            assert_eq!(bytes[0], tag, "{o:?}");
+            assert_eq!(postcard::from_bytes::<Order>(&bytes).unwrap(), o);
         }
     }
 

@@ -102,7 +102,7 @@ struct Target(Handle<Image>);
 
 /// Camera already pointed at the frame's image.
 #[derive(Component)]
-struct Retargeted;
+pub(super) struct Retargeted;
 
 #[allow(clippy::type_complexity)]
 /// The map view's window cameras draw into the frame's image, not a window.
@@ -158,7 +158,7 @@ fn aim_orbit(bench: ResMut<BenchRes>, view: Res<View>, mut orbit: Query<&mut cra
 /// The scene's camera, on the map view's main camera, after its own orbit
 /// controls have run (they stay on the map's default view when the scene sets
 /// none).
-fn place_camera(bench: ResMut<BenchRes>, view: Res<View>, mut main: Query<(&mut Transform, &Camera), With<Retargeted>>) {
+pub(super) fn place_camera(bench: ResMut<BenchRes>, view: Res<View>, mut main: Query<(&mut Transform, &Camera), With<Retargeted>>) {
     let mut bench = bench;
     let bench = bench.0.get();
     let Some((eye, look)) = view.pose(bench) else { return };

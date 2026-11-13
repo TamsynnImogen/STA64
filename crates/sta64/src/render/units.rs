@@ -255,6 +255,12 @@ fn attach_models(
         commands.entity(e).remove::<NeedsModel>();
         let Some(def) = content.0.unit(need.0) else { continue;
         };
+        // A planet's body is the map view's (`map/mod.rs` builds it from the map's object); a sim
+        // planet with no map object (a bench scene's) has none, and its SOD sphere would be an
+        // untextured dark ball hiding the map's planet drawn at the same place.
+        if def.class.0.eq_ignore_ascii_case("planet") {
+            continue;
+        }
         // A resource moon's marker is drawn as the moon the game swaps it for (RND-16).
         let def = moons.moon_for(&vfs.0, &content.0, def, sim.map_or(0, |s| s.0.0 as u64)).unwrap_or(def);
         let key = def.model.to_ascii_lowercase().trim_end_matches(".sod").to_owned();

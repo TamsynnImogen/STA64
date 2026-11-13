@@ -33,7 +33,7 @@ use sta_sim::setup::{Control, GameOptions, PlayerSetup};
 /// First four bytes of every frame.
 pub const MAGIC: [u8; 4] = *b"S64N";
 /// Bumped whenever any message's encoding changes.
-pub const PROTOCOL_VERSION: u16 = 4;
+pub const PROTOCOL_VERSION: u16 = 5;
 /// Magic, version and body length.
 pub const HEADER_LEN: usize = 10;
 /// Largest frame, header included.
@@ -2009,7 +2009,7 @@ mod tests {
     #[test]
     fn golden_encoding_is_pinned() {
         let all: Vec<u8> = samples().iter().flat_map(|m| encode(m).unwrap()).collect();
-        assert_eq!(PROTOCOL_VERSION, 4);
+        assert_eq!(PROTOCOL_VERSION, 5);
         assert_eq!(
             fnv1a64(&all),
             GOLDEN,
@@ -2017,7 +2017,7 @@ mod tests {
         );
     }
 
-    const GOLDEN: u64 = 13020689507166429555;
+    const GOLDEN: u64 = 8549157114671075894;
 
     /// Tags are positional and never move: NET-04 appended 22 to 28 after
     /// `Sections` (21), the last tag of protocol 2.
@@ -2093,8 +2093,8 @@ mod tests {
     fn header_is_little_endian_and_frozen() {
         let bytes = encode(&Message::Ping { nonce: 0 }).unwrap();
         // Ping is tag 12, nonce 0: two body bytes.
-        assert_eq!(bytes, [b'S', b'6', b'4', b'N', 4, 0, 2, 0, 0, 0, 12, 0]);
-        assert_eq!(version_notice(), [b'S', b'6', b'4', b'N', 4, 0, 0, 0, 0, 0]);
+        assert_eq!(bytes, [b'S', b'6', b'4', b'N', 5, 0, 2, 0, 0, 0, 12, 0]);
+        assert_eq!(version_notice(), [b'S', b'6', b'4', b'N', 5, 0, 0, 0, 0, 0]);
     }
 
     #[test]

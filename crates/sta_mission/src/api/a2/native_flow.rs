@@ -20,15 +20,16 @@
 //! it finished (`A2.AudioMessageDone(id)`, as for `IsAudioMessageDone`) or the
 //! mission stops it, a movie on `A2.MovieDone()` or when the mission stops it,
 //! an Enter wait on `A2.EnterKeyDone(id)` with the id of the queued
-//! `WaitForKey` event, and a cineractive start on `A2.CineractiveStartDone()`.
+//! `WaitForKey` event, and a cineractive start once its shots are done or the player
+//! skipped (the runtime calls `A2.CineractiveStartDone()` then, UI-36; static: the
+//! engine's cineractive update releases it, not `CineractiveEnd`).
 //! The three host reports are not DLL calls; no client consumer exists yet, so
 //! until a host reports them those waits stay outstanding.
 //!
 //! Evidence grade: argument roles, the "don't wait" inversion (flag true means
 //! no reference is taken), the fade fields (duration, delay, white-or-black),
 //! the shared sound-id counter starting at 1, and the "mission over" early
-//! return are read from the executable, static. Whether `CineractiveStart`
-//! releases its wait on cineractive end or when the camera arrives, whether a
+//! return are read from the executable, static. Whether a
 //! stopped sound releases its wait, and the movie `int` (always 1 in the stock
 //! scripts, unused by the video start) are not measured.
 
@@ -257,8 +258,10 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
             let dont_wait = flag("CineractiveStart", &args[1])?;
             // The same singleton `Cineractive.active = true` drives.
             let singleton: mlua::AnyUserData = lua.globals().raw_get("Cineractive")?;
+            // A start while one runs creates nothing and holds no reference (static).
+            let running = super::cineractive_active(lua)?;
             singleton.set("active", true)?;
-            if !dont_wait {
+            if !dont_wait && !running {
                 log_start(lua, &c, "cineractive", 0, "");
                 add_wait(lua, script, Kind::Cineractive);
             }

@@ -9,7 +9,7 @@
 //! |---|---|---|
 //! | `Title`, `RemoveTitle`, A1 `ShowTitle` / `ShowSubtitle` placement, A2 `UI.addTitle` / `addSubtitle` with x, y, seconds | text at a canvas position, until its seconds run out or it is removed | A2 canvas 1600x1200 and the default places (50,50) / (50,1000) from Fleet Ops Roots' Lua, A1 640x480 rect from the A1 mission DLLs; stock A2 title colour and font **not measured** |
 //! | `Fade` | a full-screen black rectangle, alpha ramped over `seconds` | `ScreenFade` is a black rectangle in the original; the A1 argument meanings beyond seconds **not measured** |
-//! | `Cineractive { skippable }` | state in [`CineractiveState`]; Space skips a skippable one ([`ScriptReply::CineractiveSkipped`]); the camera is `camera_cinematic` | `cineractiveCancel` is Space in `Input.map`; no letterbox exists in the original's data, so none is drawn |
+//! | `Cineractive { skippable }` | state in [`CineractiveState`]; Space skips a skippable one ([`ScriptReply::CineractiveSkipped`]: the script's cancel), caps release it ([`ScriptReply::CineractiveReleased`]); the camera is `camera_cinematic` (UI-36 shot model) | `cineractiveCancel` (A2) / `switch_camera_shot` (A1) is Space in `Input.map`; no letterbox exists in the original's data or executables, so none is drawn |
 //! | objectives and briefing (host state, not a `Presentation`) | the modal panel of [`ObjectivesView`], toggled with Alt+O | rectangles of `objectivesPanelArea` and the text areas in A2 stock `gui_glob16x12.cfg`, the A1 `gui_glob.cfg` panel; the completed-line tick **not measured** |
 //! | a message box ([`MessageBox`]) | the same panel with an OK button | the original's message display reuses the objectives keys |
 //! | `Movie`, `StopMovie` | MED-03 | |
@@ -85,8 +85,13 @@ pub enum ScriptReply {
     MovieDone { id: MovieId, name: String },
     /// The player closed message `id` of a [`MessageBox`].
     MessageDismissed { id: u32 },
-    /// The player skipped the cineractive.
+    /// The player skipped the cineractive (the skip key): the script hears
+    /// `isCineractiveCancel` and ends it itself; MMM ends a skippable one with
+    /// `cineractiveFinish(true)`.
     CineractiveSkipped,
+    /// The cineractive is ended for the script (a cap of [`skip_cineractive`], a script fault,
+    /// the mission's end): the camera is the player's again whatever the script does.
+    CineractiveReleased,
 }
 
 /// A message for the player, with an OK button: the host sends it.
@@ -101,9 +106,13 @@ pub struct MessageBox {
 /// Space or Esc may end it anyway. A skippable one ends at once.
 pub const SKIP_GRACE_SECS: f32 = 10.0;
 /// The longest a cineractive may hold the player (real seconds): then it ends by itself, so a
-/// script that never ends it (a lost reply, an aborted callback) cannot leave the player without
-/// camera and input for good. The longest cineractive of the Roots missions read runs well under a minute.
-pub const MAX_HOLD_SECS: f32 = 180.0;
+/// script that never ends it (a lost reply, an aborted callback, a path of speed 0) cannot leave
+/// the player without camera and input for good. The longest stock intro read is A2 fed10's
+/// first shot, 184 s to its end (shot model, static); Roots intros run under a minute.
+pub const MAX_HOLD_SECS: f32 = sta_mission::cineractive::MAX_HOLD_SECS as f32;
+/// After a skip, how long (real seconds) the script has to end the cineractive itself (A1 fed1
+/// plays a 5 s zoom-out first) before it is released for it.
+pub const AFTER_SKIP_SECS: f32 = 30.0;
 
 /// How long the current cineractive has held the player.
 #[derive(Resource, Default, Debug, Clone, Copy, PartialEq)]
@@ -113,6 +122,8 @@ pub struct CineractiveClock {
     pub held: f32,
     /// How long no cineractive has been on.
     off_for: f32,
+    /// Real seconds since the player skipped this cineractive, if they did.
+    pub skipped_for: Option<f32>,
 }
 
 /// A cineractive that has been off this long (real seconds) counts as over: the next one starts a new hold.
@@ -274,6 +285,7 @@ pub(crate) fn consume(
     mut titles: ResMut<Titles>,
     mut fade: ResMut<FadeState>,
     mut cineractive: ResMut<CineractiveState>,
+    mut clock: ResMut<CineractiveClock>,
     mut unhandled: ResMut<Unhandled>,
 ) {
     for SimMsg(e) in events.read() {
@@ -288,7 +300,13 @@ pub(crate) fn consume(
             }),
             Presentation::RemoveTitle { id } => titles.remove(*id),
             Presentation::Fade { out, seconds, rgb } => fade.start(*out, seconds.to_f32(), *rgb),
-            Presentation::Cineractive { on, skippable } => *cineractive = CineractiveState { on: *on, skippable: *on && *skippable },
+            Presentation::Cineractive { on, skippable } => {
+                // A new cineractive (even one started in the frame the last one ended) can be skipped anew.
+                if !(*on && cineractive.on) {
+                    clock.skipped_for = None;
+                }
+                *cineractive = CineractiveState { on: *on, skippable: *on && *skippable };
+            }
             // A2 `UI.addTitle(text, x, y, seconds, flag)`: the placement the typed form lacks.
             Presentation::Call { name, args } if name == "UI.addTitle" || name == "UI.addSubtitle" => {
                 let subtitle = name == "UI.addSubtitle";
@@ -367,33 +385,46 @@ fn movie_replies(mut requested: MessageReader<Requested>, mut finished: MessageR
 /// The rules by which a cineractive ends besides the script ending it (the script's own end is
 /// `Presentation::Cineractive { on: false }`, handled in `consume`):
 ///
-/// - Space or Esc ends a skippable one at once (`cineractiveCancel` is Space in `Input.map`);
-/// - a non-skippable one yields to Space or Esc after [`SKIP_GRACE_SECS`];
-/// - any one ends by itself after [`MAX_HOLD_SECS`];
-/// - the host ends it with `ScriptReply::CineractiveSkipped` when the script faults or the mission ends.
+/// - Space or Esc on a skippable one is the player's skip ([`ScriptReply::CineractiveSkipped`]):
+///   `cineractiveCancel` / A1 `switch_camera_shot` is Space in `Input.map`, and the original only
+///   sets `isCineractiveCancel` for the script, which ends the cineractive itself; if it has not
+///   after [`AFTER_SKIP_SECS`], it is released;
+/// - a non-skippable one (MMM `skippable = false`) is released by Space or Esc after [`SKIP_GRACE_SECS`];
+/// - any one is released after [`MAX_HOLD_SECS`];
+/// - the host releases it when the script faults or the mission ends.
 ///
-/// Every end is a `ScriptReply::CineractiveSkipped`, which the camera and the script hear.
+/// A release is a [`ScriptReply::CineractiveReleased`], which the camera and the script hear.
 fn skip_cineractive(keys: Res<ButtonInput<KeyCode>>, time: Res<Time<Real>>, mut state: ResMut<CineractiveState>, mut clock: ResMut<CineractiveClock>, mut out: MessageWriter<ScriptReply>) {
     if !state.on {
+        clock.skipped_for = None;
         clock.off_for += time.delta_secs();
         if clock.off_for >= NEW_HOLD_AFTER_SECS {
             clock.held = 0.0;
         }
         return;
     }
+    let dt = time.delta_secs();
     clock.off_for = 0.0;
-    clock.held += time.delta_secs();
+    clock.held += dt;
+    if let Some(s) = clock.skipped_for.as_mut() {
+        *s += dt;
+    }
     let pressed = keys.just_pressed(KeyCode::Space) || keys.just_pressed(KeyCode::Escape);
-    if (pressed && (state.skippable || clock.held >= SKIP_GRACE_SECS)) || clock.held >= MAX_HOLD_SECS {
+    let release = (pressed && !state.skippable && clock.held >= SKIP_GRACE_SECS) || clock.held >= MAX_HOLD_SECS || clock.skipped_for.is_some_and(|s| s >= AFTER_SKIP_SECS);
+    if release {
         // `held` stays: a cineractive raised again at once is released again at once.
         *state = CineractiveState::default();
+        clock.skipped_for = None;
+        out.write(ScriptReply::CineractiveReleased);
+    } else if pressed && state.skippable && clock.skipped_for.is_none() {
+        clock.skipped_for = Some(0.0);
         out.write(ScriptReply::CineractiveSkipped);
     }
 }
 
 /// An end that came from outside (the host's fault or mission-end release) clears the state too.
 pub(crate) fn apply_replies(mut replies: MessageReader<ScriptReply>, mut state: ResMut<CineractiveState>) {
-    if replies.read().any(|r| *r == ScriptReply::CineractiveSkipped) {
+    if replies.read().any(|r| *r == ScriptReply::CineractiveReleased) {
         *state = CineractiveState::default();
     }
 }
@@ -690,33 +721,36 @@ mod tests {
         assert!(replies(&mut app).is_empty(), "inside the grace Esc does nothing");
         app.world_mut().resource_mut::<CineractiveClock>().held = SKIP_GRACE_SECS;
         press(&mut app, KeyCode::Escape);
-        assert_eq!(replies(&mut app), [ScriptReply::CineractiveSkipped]);
+        assert_eq!(replies(&mut app), [ScriptReply::CineractiveReleased]);
         assert!(!app.world().resource::<CineractiveState>().on);
         // Nothing is pressed: the hold ends at the cap.
         send(&mut app, Presentation::Cineractive { on: true, skippable: false });
         app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
         app.world_mut().resource_mut::<CineractiveClock>().held = MAX_HOLD_SECS;
         app.update();
-        assert_eq!(replies(&mut app), [ScriptReply::CineractiveSkipped]);
+        assert_eq!(replies(&mut app), [ScriptReply::CineractiveReleased]);
         assert!(!app.world().resource::<CineractiveState>().on);
         // A script that raises it again at once earns no new grace: it is released again at once.
         send(&mut app, Presentation::Cineractive { on: true, skippable: false });
         app.update();
-        assert_eq!(replies(&mut app), [ScriptReply::CineractiveSkipped]);
+        assert_eq!(replies(&mut app), [ScriptReply::CineractiveReleased]);
         assert!(!app.world().resource::<CineractiveState>().on);
     }
 
     #[test]
-    fn a_release_from_the_host_clears_the_state() {
+    fn a_release_from_the_host_clears_the_state_and_a_skip_does_not() {
         let mut app = app();
-        send(&mut app, Presentation::Cineractive { on: true, skippable: false });
+        send(&mut app, Presentation::Cineractive { on: true, skippable: true });
         app.world_mut().write_message(ScriptReply::CineractiveSkipped);
+        app.update();
+        assert!(app.world().resource::<CineractiveState>().on, "a skip leaves the end to the script");
+        app.world_mut().write_message(ScriptReply::CineractiveReleased);
         app.update();
         assert!(!app.world().resource::<CineractiveState>().on);
     }
 
     #[test]
-    fn space_skips_a_skippable_cineractive_only() {
+    fn space_skips_a_skippable_cineractive_once_and_the_script_gets_time_to_end_it() {
         let mut app = app();
         send(&mut app, Presentation::Cineractive { on: true, skippable: false });
         app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Space);
@@ -729,7 +763,41 @@ mod tests {
         app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Space);
         app.update();
         assert_eq!(replies(&mut app), [ScriptReply::CineractiveSkipped]);
+        assert!(app.world().resource::<CineractiveState>().on, "the script ends it");
+        // A second press is not a second skip.
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(KeyCode::Space);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Space);
+        app.update();
+        assert!(replies(&mut app).is_empty());
+        // The script ends it: off.
+        send(&mut app, Presentation::Cineractive { on: false, skippable: true });
         assert!(!app.world().resource::<CineractiveState>().on);
+        // A script that does not end it after a skip is released for it.
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(KeyCode::Space);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+        send(&mut app, Presentation::Cineractive { on: true, skippable: true });
+        app.world_mut().resource_mut::<CineractiveClock>().skipped_for = Some(AFTER_SKIP_SECS);
+        app.update();
+        assert_eq!(replies(&mut app), [ScriptReply::CineractiveReleased]);
+    }
+
+    #[test]
+    fn a_cineractive_started_in_the_frame_the_skipped_one_ended_can_be_skipped_again() {
+        let mut app = app();
+        send(&mut app, Presentation::Cineractive { on: true, skippable: true });
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Space);
+        app.update();
+        assert_eq!(replies(&mut app), [ScriptReply::CineractiveSkipped]);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(KeyCode::Space);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+        // End and start in one frame.
+        app.world_mut().write_message(SimMsg(SimEvent::Present(Presentation::Cineractive { on: false, skippable: true })));
+        send(&mut app, Presentation::Cineractive { on: true, skippable: true });
+        assert_eq!(app.world().resource::<CineractiveClock>().skipped_for, None);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Space);
+        app.update();
+        assert_eq!(replies(&mut app), [ScriptReply::CineractiveSkipped]);
     }
 
     #[test]

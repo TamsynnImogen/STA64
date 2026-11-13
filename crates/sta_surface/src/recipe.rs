@@ -51,7 +51,8 @@ pub struct Recipe {
     pub clouds: bool,
     /// Face size asked for (0: the caller's default).
     pub face: u32,
-    /// Cloud drift, radians per second.
+    /// Cloud drift, radians per second. The recipe's `CloudDrift` is degrees per second
+    /// (Refit's `surfaces.rs` turns the clouds by `CloudDrift * time` degrees).
     pub drift: f32,
     /// rgb: glow colour; a: how much shows by day.
     pub glow: [f32; 4],
@@ -167,7 +168,7 @@ impl Recipe {
             k,
             clouds,
             face: if face <= 0 { 0 } else { face.clamp(64, 4096) as u32 },
-            drift: one("CloudDrift", 0.4),
+            drift: one("CloudDrift", 0.4).to_radians(),
             glow,
             cloud_colour,
             cloud_shadow: [shadow[0], shadow[1]],
@@ -193,5 +194,17 @@ mod tests {
         assert_eq!(r.k.alt, r.k.ramp, "no Alt ramp: the first one");
         assert!(r.clouds && r.face == 1024);
         assert_eq!(r.k.sea[0], -99.0, "no sea by default");
+    }
+
+    /// `CloudDrift` is degrees per second (Refit's recipe unit): 0.35 turns the clouds
+    /// once in about 17 minutes, not once in 18 seconds.
+    #[test]
+    fn cloud_drift_is_degrees_per_second() {
+        let r = Recipe::parse("[Surface]\nKind=rock\nClouds=3 1 1 0.5\nCloudDrift=0.36\n");
+        assert!((r.drift - 0.36f32.to_radians()).abs() < 1e-9);
+        let turn_s = std::f32::consts::TAU / r.drift;
+        assert!((turn_s - 1000.0).abs() < 0.5, "{turn_s}");
+        let d = Recipe::parse("[Surface]\nKind=rock\n");
+        assert!((d.drift - 0.4f32.to_radians()).abs() < 1e-9, "default 0.4 degrees a second");
     }
 }

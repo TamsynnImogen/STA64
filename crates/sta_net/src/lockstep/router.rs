@@ -534,6 +534,32 @@ impl LockstepRouter {
         self.desync.is_some() || self.peer_desync.is_some()
     }
 
+    /// Stopped by another peer's notice for a tick this peer has not reached:
+    /// it still runs the turns up to that tick (every seat's records for them
+    /// were sent, since the reporter ran them) and stops there, so that it has
+    /// its own digest for the tick and says it. Without that, a host behind
+    /// the reporter never has the authority's digest for the differing tick,
+    /// the diverged seat cannot ask to be repaired (it does not know it is the
+    /// one), and the match stays stopped for good.
+    /// The tick this peer runs on to while stopped (see `running_on`), from
+    /// the turn it releases next; `None` when it is not running on.
+    pub fn runs_on_to(&self) -> Option<Tick> {
+        let tpt = Tick::from(self.cfg.ticks_per_turn.max(1));
+        let at = self.peer_desync.as_ref()?.1.ours.tick;
+        self.running_on(Tick::from(self.next_turn) * tpt).then_some(at)
+    }
+
+    fn running_on(&self, tick: Tick) -> bool {
+        if self.desync.is_some() || self.spectator {
+            return false;
+        }
+        let Some((_, notice)) = &self.peer_desync else {
+            return false;
+        };
+        let at = notice.ours.tick;
+        tick < at && !self.ours.contains_key(&at)
+    }
+
     /// Whether a scheduled pause holds the next turn.
     pub fn paused(&self) -> bool {
         self.paused_at.is_some()
@@ -826,6 +852,18 @@ impl LockstepRouter {
             }
             Message::Turn(rec) => self.receive_turn(from, rec),
             Message::Desync(notice)
+                if notice.ours.tick != notice.theirs.tick
+                    || !notice
+                        .ours
+                        .tick
+                        .is_multiple_of(Tick::from(self.cfg.ticks_per_turn.max(1))) =>
+            {
+                // Digests are taken at a turn's first tick, both of one tick.
+                Err(RouterError::Proto(ProtoError::Invalid(
+                    "desync notice off a turn boundary",
+                )))
+            }
+            Message::Desync(notice)
                 if notice.ours.tick.max(notice.theirs.tick) <= self.stale_before
                     || self.ignored_ticks.contains(&notice.ours.tick)
                     || self.ignored_ticks.contains(&notice.theirs.tick) =>
@@ -857,6 +895,11 @@ impl LockstepRouter {
                         .entry(notice.slot)
                         .or_insert(notice.theirs.digest);
                 }
+                // A peer that has not reached the tick runs on to it
+                // (`running_on`). The seat the notice names reached it too and
+                // says its own digest there (in its record, or in a notice of
+                // its own when the notice stops it first), so this peer's
+                // digest differs from one it holds and it says its own.
                 self.note(RouterEvent::PeerDesync { from, notice });
                 self.peer_desync.get_or_insert((from, notice));
                 Ok(())
@@ -884,6 +927,13 @@ impl LockstepRouter {
             // Rejoin and resync traffic belongs to the layer above (NET-04).
             Message::Rejoin(_) | Message::ResyncRequest(_) | Message::ResyncAck(_) => {
                 if self.is_host() || self.spectator {
+                    // The seat loaded the state at the ack's tick: what it
+                    // reported for that tick and later before this ack (read
+                    // in order with its records, so none after it) described
+                    // the state it replaced.
+                    if let Message::ResyncAck(a) = &msg {
+                        self.forget_reports_of(from, a.tick);
+                    }
                     let size = postcard::to_allocvec(&msg).map_or(crate::proto::MAX_FRAME_BYTES, |b| b.len() + 16);
                     self.stash(from, msg, size);
                     Ok(())
@@ -1133,6 +1183,25 @@ impl LockstepRouter {
         let floor = self.stale_before;
         self.unchecked.retain(|(_, d)| d.tick > floor);
         self.referee_pending.retain(|t, _| *t > floor);
+    }
+
+    /// A seat loaded the state at `tick` (a repair or a rejoin): what it
+    /// reported for that tick and later ones before (a seat runs up to the
+    /// turn delay ahead of the one that repairs it) described the state that
+    /// was replaced, and is dropped. The serving host calls it as it reads the
+    /// seat's ack, in order with the seat's records, so it drops exactly the
+    /// earlier ones. Other peers call it on `Resynced`, which reaches them by
+    /// another path than the seat's records: a report the seat made after its
+    /// repair may already be here and is dropped too, so those first turns
+    /// are not checked by them (the host checks them).
+    pub fn forget_reports_of(&mut self, slot: PlayerId, tick: Tick) {
+        if slot == self.me {
+            return;
+        }
+        self.unchecked.retain(|(s, d)| *s != slot || d.tick < tick);
+        for (_, by_seat) in self.seen.range_mut(tick..) {
+            by_seat.remove(&slot);
+        }
     }
 
     /// This router's state at a turn boundary, for a snapshot taken there
@@ -1535,7 +1604,8 @@ impl CommandRouter for LockstepRouter {
 
     fn take_ready(&mut self, tick: Tick) -> Option<Vec<Command>> {
         self.pump();
-        if self.halted() {
+        let running_on = self.halted() && self.running_on(tick);
+        if self.halted() && !running_on {
             return None;
         }
         let tpt = Tick::from(self.cfg.ticks_per_turn);
@@ -1555,7 +1625,9 @@ impl CommandRouter for LockstepRouter {
             });
             return None;
         }
-        if !self.spectator {
+        // A stopped peer that runs on sends no new record: the turns it runs
+        // are ones the reporter already ran, so every record for them is out.
+        if !self.spectator && !running_on {
             self.flush(turn);
         }
 
