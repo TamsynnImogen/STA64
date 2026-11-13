@@ -300,6 +300,7 @@ fn attach_models(
         // A resource (a moon) is neutral and never moves, but is clicked for its info and
         // as a mining target, so it gets a click radius too: of the moon the marker was swapped for.
         if mobile || owned || def.resource.is_some() {
+            let radius = if def.resource.is_some() { crate::map::resource_pick_radius(radius) } else { radius };
             commands.entity(e).insert(SelectRadius(radius.max(5.0)));
         }
         let class = def.class.0.as_str();

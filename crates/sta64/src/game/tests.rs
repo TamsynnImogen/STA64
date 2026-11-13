@@ -345,7 +345,8 @@ fn install_skirmish_freighter_mines_a_moon() {
         let (_, moon_id, moon_pos) = moons.iter().find(|m| m.0 == kind).cloned().unwrap();
         // The start gives an outpost; its freighter (the Federation's `fminer`) is built there.
         // Put one beside the moon, on the side of the map's centre, as if built.
-        let key = db.key("fminer").expect("the Federation miner");
+        // (`fminer` in stock A2 and FO, `ffreight` in Classic.)
+        let key = ["fminer", "ffreight"].iter().filter_map(|n| db.key(n)).find(|&k| db.unit(k).is_some_and(|d| d.mines())).expect("the Federation miner");
         assert!(db.unit(key).is_some_and(|d| d.mines()));
         let (dx, dz) = (centre[0] - moon_pos.x.to_f32(), centre[1] - moon_pos.z.to_f32());
         let len = (dx * dx + dz * dz).sqrt().max(1.0);
@@ -629,6 +630,45 @@ fn install_preplaced_miners_mine_the_moons_the_seat_sees() {
             }
             let alive = link.curr().unit(*miner).is_some();
             println!("MINE {miner_odf} {miner:?} -> {moon_odf} {moon:?}: order {} mixed {} rejected {rejected} delivered {delivered} alive {alive}", order.is_some(), mixed.map_or("move".to_owned(), |o| format!("{o:?}").chars().take(40).collect()));
+        }
+    }
+}
+
+/// With `STA64_TEST_INSTALL` (+ `STA64_TEST_MOD`, `STA64_TEST_MAP`): every resource object of a real
+/// map (moons, latinum nebulae, producer planets) has the pick body the map view gives it and is
+/// picked by a top-down ray through its centre and through a point inside its edge.
+#[test]
+fn install_map_resource_objects_are_pickable_top_down() {
+    use bevy::ecs::system::RunSystemOnce;
+    use bevy::prelude::*;
+    let Ok(root) = std::env::var("STA64_TEST_INSTALL") else { return };
+    let m = std::env::var("STA64_TEST_MOD").unwrap_or_default();
+    let map_name = std::env::var("STA64_TEST_MAP").unwrap_or_else(|_| "Adapt".into());
+    let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(m.as_str()).filter(|m| !m.is_empty())).unwrap();
+    let (index, _) = sta_content::OdfIndex::build(&vfs);
+    let (db, _) = ContentDb::load(&vfs, &index).unwrap();
+    let (races, _) = Races::load(&vfs, &index);
+    let db = Arc::new(db);
+    let bzn = sta_bzn::parse(&vfs.read(&format!("bzn/{map_name}.bzn")).expect("map exists").unwrap()).unwrap();
+    let cfg = SkirmishCfg { seat: 0, opponent: Opponent::Skirmish, race: Some("federation".into()), opponent_race: None };
+    let side = crate::map::build_sim(&bzn, &map_name, &db, &index, &vfs, Some(0), Some((&cfg, &races)));
+    let view = sta_sim::WorldSource::view(&side.sim);
+    let mut app = App::new();
+    let mut nodes = Vec::new();
+    for u in &view.units {
+        let Some(def) = db.unit(u.def).filter(|d| d.resource.is_some()) else { continue };
+        let r = crate::map::ghost_pick_radius(def).unwrap_or_else(|| panic!("{} has no pick body", def.odf));
+        let p = crate::render::units::to_bevy(u.pos.to_f32());
+        app.world_mut().spawn((crate::sim_link::SimEntity(u.id), crate::render::units::SelectRadius(r), GlobalTransform::from(Transform::from_translation(p))));
+        nodes.push((u.id, def.odf.clone(), p, r));
+    }
+    assert!(!nodes.is_empty(), "the map has resource objects");
+    for (id, odf, p, r) in nodes {
+        for off in [Vec3::ZERO, Vec3::X * r * 0.5] {
+            let ray = Ray3d::new(p + off + Vec3::Y * 3000.0, Dir3::NEG_Y);
+            let hit = app.world_mut().run_system_once(move |units: crate::input::select::Targetable| crate::input::select::unit_under(Vec2::ZERO, ray, &units)).unwrap();
+            // A neighbouring node may share the ray; the one picked is a resource object.
+            assert!(hit.is_some(), "{odf} {id:?}: a top-down ray at offset {off:?} (radius {r}) picks nothing");
         }
     }
 }
