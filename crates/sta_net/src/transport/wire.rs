@@ -639,6 +639,9 @@ mod tests {
                 Some(Ok(b)) => {
                     let n = b.len().min(out.len());
                     out[..n].copy_from_slice(&b[..n]);
+                    if n < b.len() {
+                        self.0.push_front(Ok(b[n..].to_vec()));
+                    }
                     Ok(n)
                 }
                 Some(Err(code)) => Err(std::io::Error::from_raw_os_error(code)),
