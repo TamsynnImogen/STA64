@@ -11,7 +11,12 @@
 //!   `planet_crew_gain` (capped at 1e9). A stock above the capacity
 //!   (capacity shrank) is left as it is, never clamped down.
 //! - Fractions use the same exact scheme as [`super::passive`]: no state.
-//! - Not implemented, with the reason: `planetCrewAccumulationModifier`
+//! - Station `maxCrewGain` is read non-negative (`Reader::fixed`) and floored to whole
+//!   crew. Capacity as the larger of the two terms (not their sum) fits the one
+//!   measurement taken (cap below 3005 with a 3000 starbase and 250 base capacity);
+//!   the exact cap is not measured.
+//! - Not implemented, with the reason: planets' own `crewAccumulationRate` (Classic
+//!   Enhanced planets carry the key; not measured); `planetCrewAccumulationModifier`
 //!   (what counts as "close to a planet" is not measured); per-unit crew loss
 //!   from hits (`hullCrewModifier`, `shieldCrewModifier`, `saneCrewLossMethod`:
 //!   the law measured on the original is not a single formula); per-unit crew
@@ -194,6 +199,30 @@ mod tests {
         run(&mut sim, 30 * 10);
         assert_eq!(crew(&sim, 0), Fixed::from_int(750), "an enemy starbase feeds its own owner only");
         assert!(crew(&sim, 1) > Fixed::from_int(750));
+    }
+
+    #[test]
+    fn crew_rules_reach_the_content_hash() {
+        let base = db(4.0, Some(250), "maxCrewGain = 3000\n").hash();
+        assert_ne!(base, db(5.0, Some(250), "maxCrewGain = 3000\n").hash(), "race rate");
+        assert_ne!(base, db(4.0, Some(251), "maxCrewGain = 3000\n").hash(), "starting capacity");
+    }
+
+    #[test]
+    fn an_unfinished_starbase_adds_no_crew() {
+        let mut sim = game(db(4.0, Some(250), "maxCrewGain = 3000\n"), 750);
+        let key = sim.content().unwrap().key("fx_starbase").unwrap();
+        let (cmd, at) = (
+            Edit::Spawn { odf: key, player: PlayerId(0), pos: Vec3 { x: Fixed::ZERO, y: Fixed::ZERO, z: Fixed::ZERO }, heading: (Fixed::ZERO, Fixed::ONE) },
+            (),
+        );
+        let _ = at;
+        sim.step(&[Command { player: PlayerId::BENCH, seq: 0, kind: CommandKind::Edit(cmd) }]);
+        let id = sim.units.iter().next().unwrap().id;
+        sim.units.get_mut(id).unwrap().progress = Some(Fixed::from_f64(0.5));
+        let before = crew(&sim, 0);
+        run(&mut sim, 30 * 5);
+        assert_eq!(crew(&sim, 0), before, "unfinished starbase");
     }
 
     #[test]

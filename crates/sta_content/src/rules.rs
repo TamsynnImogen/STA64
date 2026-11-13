@@ -302,3 +302,19 @@ mod pathing_tests {
         assert_eq!(warnings.len(), 1);
     }
 }
+
+#[cfg(test)]
+mod crew_tests {
+    use super::*;
+
+    #[test]
+    fn starting_crew_capacity_is_read_and_reaches_the_hash_only_when_present() {
+        let (rules, _) = Rules::from_header("int STARTING_CREW_CAPACITY = 250;\n");
+        assert_eq!(rules.crew().unwrap().starting_capacity, Some(250));
+        assert!(!rules.crew_hash_values().is_empty());
+        let (other, _) = Rules::from_header("int STARTING_CREW_CAPACITY = 251;\n");
+        assert_ne!(rules.crew_hash_values(), other.crew_hash_values());
+        let (none, _) = Rules::from_header("int SOMETHING_ELSE = 1;\n");
+        assert!(none.crew().is_none() && none.crew_hash_values().is_empty());
+    }
+}
