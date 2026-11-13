@@ -715,7 +715,7 @@ mod cfg_tests {
         // Every changed line is a differing digest key.
         let (dc, de) = (ContentDigest::from_entries(c.digest_entries()), ContentDigest::from_entries(e.digest_entries()));
         let keys: Vec<String> = dc.differences(&de).into_iter().map(|d| d.key).collect();
-        let mut want: Vec<String> = CfgRules::KEYS.iter().chain(&["CRAFT_DEFAULT_SPECIALWEAPON_AUTONOMY"]).map(|k| format!("RTS_CFG.h:{k}")).collect();
+        let mut want: Vec<String> = CfgRules::KEYS[..6].iter().chain(&["CRAFT_DEFAULT_SPECIALWEAPON_AUTONOMY"]).map(|k| format!("RTS_CFG.h:{k}")).collect();
         want.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
         // Movement autonomy: Enhanced sets 1, the engine default.
         assert_eq!(keys, want);
@@ -740,7 +740,11 @@ mod cfg_tests {
         // The digest has one entry per typed key but the two officer keys
         // that resolve into MP_OFFICER_LIMIT, and the attack warp distance,
         // which is digested only when it differs from the engine default.
-        let d = ContentDigest::from_entries(Rules::default().with_approach(ApproachRules { min_move_warp_distance: Fixed::from_int(1100) }).digest_entries());
+        // The two facing keys are digested only when set (SIM-39).
+        let mut set = Rules::default().with_approach(ApproachRules { min_move_warp_distance: Fixed::from_int(1100) });
+        set.cfg.facing_weight = Some(Fixed::ONE);
+        set.cfg.facing_constant = Some(3);
+        let d = ContentDigest::from_entries(set.digest_entries());
         for k in TYPED_CFG_KEYS.iter().filter(|k| !matches!(**k, "MP_OFFICER_LIST_SIZE" | "SINGLE_PLAYER_OFFICER_LIMIT")) {
             assert!(d.get(&format!("RTS_CFG.h:{k}")).is_some(), "{k}");
         }
