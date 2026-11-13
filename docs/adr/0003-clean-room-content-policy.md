@@ -11,7 +11,7 @@ The README states: "STA64 is a clean-room engine. It ships **no original game co
 
 The "Legal boundary" section of ARCHITECTURE.md was part of the first commit of that file (2026-11-07).
 
-#469 (2026-11-13) removed decompilation findings and original-game measurements (`docs/research/`, `docs/data/collision/`, `tools/research/`) from the repository; they now live in a separate local research directory. Kept docs and two code comments were trimmed to the rule, the data keys and an evidence grade, and AGENTS.md gained the section on research and game assets: no research write-ups, no game assets in any form.
+#469 (2026-11-13) added the AGENTS.md section on research and game assets: no research write-ups, no game assets in any form.
 
 #636 (2026-11-13) recorded that stock missions are converted on the player's machine and that no mission content is in the repository. A follow-up commit in the same PR records Tammy's answer: she agreed to conversion on the player's machine provided it converts the missions at a sensible rate, and considers distributing Lua mission scripts acceptable as the fallback.
 
