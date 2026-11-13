@@ -88,7 +88,7 @@ pub const REFIT_EFFECTS: &[(Effect, &str, &[&str])] = &[
     (Effect::Impacts, "RND-10", &["fx/shield.wesl", "fx/fire.wesl"]),
     (Effect::Specials, "RND-11", &[]),
     (Effect::Post, "RND-14", &[]),
-    (Effect::Shadows, "RND-15", &[]),
+    (Effect::Shadows, "RND-15", &["shadows.wesl"]),
 ];
 
 /// Which effects have a stock implementation registered.

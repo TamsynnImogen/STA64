@@ -25,6 +25,8 @@ use sta_content::{ContentDb, FireArc, WeaponKind};
 use sta_core::{ContentKey, EntityId, Fixed, PlayerId, TICK_HZ, TeamId, Vec3};
 
 use super::pd::{Pd, PdRec};
+use crate::Rng;
+use crate::specials::{self, Specials};
 use crate::event::{SimEvent, Target};
 use crate::view::UnitFlags;
 use crate::world::{Entities, Entity, Fnv, Table};
@@ -68,6 +70,49 @@ pub fn facing(heading: (Fixed, Fixed), at: Vec3, from: Vec3) -> u8 {
         3
     } else {
         2
+    }
+}
+
+/// A draw from the sim's RNG in [0, 1).
+pub(super) fn draw(rng: &mut Rng) -> Fixed {
+    Fixed::from_bits((rng.next_u64() >> 32) as i64)
+}
+
+/// Whole ticks of `refire` ticks scaled by `factor`.
+fn scaled(refire: u64, factor: Fixed) -> u64 {
+    let t = Fixed::from_int(refire.min(i32::MAX as u64) as i32) * factor;
+    (t.to_bits() >> 32).max(0) as u64
+}
+
+/// Ticks of initial reload (SIM-35). `initialShotDelayModifier` m: absent
+/// reads as -1 (the engine's default; stock has no such key), 0 -> none,
+/// m > 0 -> `shotDelay` x m, m < 0 -> U[0, -m) x `shotDelay`. Evidence: a
+/// special launcher measured on stock and Roots; for regular weapons the
+/// rule is read from the engine's code only (not measured).
+fn initial_reload(w: &sta_content::WeaponDef, rng: &mut Rng) -> u64 {
+    if w.refire == 0 {
+        return 0;
+    }
+    let m = w.initial_shot_delay_modifier.unwrap_or(-Fixed::ONE);
+    if m == Fixed::ZERO {
+        0
+    } else if m > Fixed::ZERO {
+        scaled(w.refire, m)
+    } else {
+        scaled(w.refire, draw(rng) * -m)
+    }
+}
+
+/// Ticks until the weapon may shoot again: `shotDelay` and, under
+/// `weapon_shot_timing`, 0 to 5 % jitter from the sim's RNG unless the
+/// weapon sets `ignoreShotDelayEffects`. Team modifier and crew penalty are
+/// not modelled. At least one tick.
+fn shot_reload(timing: bool, w: &sta_content::WeaponDef, rng: &mut Rng) -> u64 {
+    if timing && w.refire > 0 && !w.ignore_shot_delay_effects {
+        let jitter = draw(rng) * Fixed::from_int(5) / Fixed::from_int(100);
+        scaled(w.refire, Fixed::ONE + jitter).max(1)
+    } else {
+        w.refire.max(1)
     }
 }
 
@@ -143,6 +188,38 @@ impl Weapons {
         self.attack.get(unit).copied()
     }
 
+    /// Make a unit's mounts with their initial reload when any of its weapons
+    /// uses `weapon_shot_timing` and it has none yet.
+    fn init_mounts(&mut self, tick: u64, db: &ContentDb, id: EntityId, def: &sta_content::UnitDef, rng: &mut Rng) {
+        if self.mounts.get(id).is_some() {
+            return;
+        }
+        let timed = |hp: &sta_content::Hardpoint| {
+            db.weapon(hp.weapon.key)
+                .filter(|w| w.kind != WeaponKind::PointDefence && db.weapon_features(w).weapon_shot_timing)
+        };
+        if !def.hardpoints.iter().any(|hp| timed(hp).is_some()) {
+            return;
+        }
+        let ready = def
+            .hardpoints
+            .iter()
+            .map(|hp| Mount { ready: tick + timed(hp).map_or(0, |w| initial_reload(w, rng)) })
+            .collect();
+        self.mounts.insert(id, ready);
+    }
+
+    /// Is the PD weapon at hardpoint `i` of `unit` switched on (energy model)?
+    pub fn pd_on(&self, unit: EntityId, i: usize) -> bool {
+        self.pd.is_on(unit, i)
+    }
+
+    /// The point-defence rows, as the snapshot stores them.
+    #[cfg(test)]
+    pub(crate) fn pd_rec(&self) -> PdRec {
+        self.pd.to_rec()
+    }
+
     /// Projectiles in flight.
     pub fn shots_in_flight(&self) -> usize {
         self.shots.len()
@@ -187,6 +264,11 @@ impl Weapons {
     }
 
     /// One tick of weapons at tick `tick` (the tick being computed).
+    ///
+    /// Standalone form: it has no special-energy pools and draws from a
+    /// throwaway RNG, so it is only right for content without
+    /// `pd_energy` and `weapon_shot_timing`; the sim uses
+    /// [`Weapons::step_with_perception`].
     pub fn step(
         &mut self,
         tick: u64,
@@ -195,9 +277,11 @@ impl Weapons {
         teams: &[(PlayerId, TeamId)],
         events: &mut Vec<SimEvent>,
     ) {
-        self.step_with_perception(tick, units, db, teams, &Table::new(), events);
+        let (mut specials, mut rng) = (Specials::default(), Rng::new(1));
+        self.step_with_perception(tick, units, db, teams, &Table::new(), &mut specials, &mut rng, events);
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn step_with_perception(
         &mut self,
         tick: u64,
@@ -205,6 +289,8 @@ impl Weapons {
         db: &ContentDb,
         teams: &[(PlayerId, TeamId)],
         perception: &Table<PlayerId>,
+        specials: &mut Specials,
+        rng: &mut Rng,
         events: &mut Vec<SimEvent>,
     ) {
         let alive = |id: EntityId| units.get(id).filter(|u| u.hull[1] > Fixed::ZERO);
@@ -228,7 +314,7 @@ impl Weapons {
         }
 
         self.pd
-            .step(tick, units, db, teams, &mut self.shots, events);
+            .step(tick, units, db, teams, &mut self.shots, specials, rng, events);
 
         // Shots in flight home on the target's current position.
         let mut flying = Vec::with_capacity(self.shots.len());
@@ -260,11 +346,16 @@ impl Weapons {
         // explored fog.
         let visibility = crate::sensors::compute(units, Some(db), teams);
         for u in units.iter() {
-            if u.flags.contains(UnitFlags::WEAPONS_OFF) {
-                continue;
-            }
             let Some(def) = db.unit(u.def) else { continue };
             if def.hardpoints.is_empty() {
+                continue;
+            }
+            // SIM-35: a weapon is created with an initial reload, also when
+            // its unit starts with weapons off. A unit's mounts are made the
+            // first tick it is seen, the creation tick for all practical
+            // purposes; ascending id keeps the draws stable.
+            self.init_mounts(tick, db, u.id, def, rng);
+            if u.flags.contains(UnitFlags::WEAPONS_OFF) {
                 continue;
             }
             for (i, hp) in def.hardpoints.iter().enumerate() {
@@ -295,7 +386,7 @@ impl Weapons {
                         .insert(u.id, vec![Mount { ready: 0 }; def.hardpoints.len()]);
                 }
                 if let Some(m) = self.mounts.get_mut(u.id) {
-                    m[i].ready = tick + w.refire.max(1);
+                    m[i].ready = tick + shot_reload(db.weapon_features(w).weapon_shot_timing, w, rng);
                 }
                 events.push(SimEvent::Fired {
                     shooter: u.id,
@@ -329,6 +420,57 @@ impl Weapons {
                 }
             }
         }
+    }
+
+    /// An `Order::Special` (SIM-34, SIM-35): `slot` counts the unit's
+    /// specials in hardpoint order. A point-defence slot is toggled here; any
+    /// other goes to `specials`. Under `weapon_shot_timing` an order that
+    /// arrives while the special's weapon is reloading is refused, not
+    /// queued; an accepted one starts the reload. True when one unit took it.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn order_special(
+        &mut self,
+        tick: u64,
+        db: &ContentDb,
+        units: &Entities,
+        specials: &mut Specials,
+        rng: &mut Rng,
+        player: PlayerId,
+        ids: &[EntityId],
+        slot: u8,
+    ) -> bool {
+        let mut any = false;
+        for &id in ids {
+            let Some(u) = units.get(id).filter(|u| (!player.is_player() || u.owner == player) && u.hull[0] > Fixed::ZERO) else {
+                continue;
+            };
+            let Some(def) = db.unit(u.def) else { continue };
+            let Some((i, kind, w)) = specials::specials_indexed(db, def).nth(slot as usize) else { continue };
+            self.init_mounts(tick, db, id, def, rng);
+            let timing = db.weapon_features(w).weapon_shot_timing;
+            if timing && self.mounts.get(id).is_some_and(|m| m[i].ready > tick) {
+                continue;
+            }
+            let ok = match kind {
+                specials::SpecialKind::PointDefence => {
+                    specials.ensure_pool(id, def);
+                    self.pd.toggle(db, specials, id, def, i)
+                }
+                _ => specials.order_special(db, units, player, &[id], slot),
+            };
+            if ok {
+                any = true;
+                if timing && kind != specials::SpecialKind::PointDefence {
+                    if self.mounts.get(id).is_none() {
+                        self.mounts.insert(id, vec![Mount { ready: 0 }; def.hardpoints.len()]);
+                    }
+                    if let Some(m) = self.mounts.get_mut(id) {
+                        m[i].ready = tick + shot_reload(true, w, rng);
+                    }
+                }
+            }
+        }
+        any
     }
 
     /// Drop the attack orders of the listed units that `player` may order.
