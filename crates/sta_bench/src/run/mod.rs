@@ -38,6 +38,20 @@ pub(crate) fn to_f64(f: Fixed) -> f64 {
     f.to_bits() as f64 / 4_294_967_296.0
 }
 
+/// A data directory no other `RunConfig` (in this process or another) shares:
+/// a saver and its reader only meet through the files in one config's
+/// directory, so concurrent runs cannot see or clobber each other's files.
+/// Nothing creates it until a scenario saves; `remove_data_dir` deletes it.
+fn fresh_data_dir() -> PathBuf {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static N: AtomicUsize = AtomicUsize::new(0);
+    std::env::temp_dir().join(format!(
+        "sta64-bench-data-{}-{}",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    ))
+}
+
 /// What a runner needs besides the scenario.
 pub struct RunConfig {
     pub content: Arc<ContentDb>,
@@ -84,7 +98,7 @@ impl RunConfig {
             maps,
             scene_dir: bench.join("scenes"),
             scenario_dir: bench.join("scenarios"),
-            data_dir: std::env::temp_dir().join("sta64-bench-data"),
+            data_dir: fresh_data_dir(),
         }
     }
 
@@ -94,6 +108,11 @@ impl RunConfig {
             .get(&odf.to_ascii_lowercase())
             .map_or(odf, String::as_str);
         self.content.key(name)
+    }
+
+    /// Delete the data directory and what scenarios saved into it.
+    pub fn remove_data_dir(&self) {
+        let _ = std::fs::remove_dir_all(&self.data_dir);
     }
 
     pub fn data_path(&self, file: &str) -> PathBuf {
@@ -217,6 +236,28 @@ fn run_file(cfg: &Arc<RunConfig>, path: &Path, depth: u8) -> Result<CaseResult, 
 /// Run a parsed scenario.
 pub fn run_scenario(cfg: &Arc<RunConfig>, sc: &Scenario, name: &str) -> CaseResult {
     run(cfg, sc, name, 0)
+}
+
+/// The data-directory files a scenario touches: `(saves, reads)`. A scenario
+/// saves with `Save snapshot as` / `Save replay as` and reads with its
+/// scene's `Start=snapshot:` / `Start=replay:`. The parallel runner uses
+/// this to run a reader after the scenario that saves its file.
+pub(crate) fn data_files(cfg: &RunConfig, sc: &Scenario) -> (Vec<PathBuf>, Option<PathBuf>) {
+    let saves = sc
+        .steps
+        .iter()
+        .filter_map(|st| match check::parse(&st.text) {
+            Ok(Some(check::Extra::SaveSnapshot(f) | check::Extra::SaveReplay(f))) => {
+                Some(cfg.data_path(&f))
+            }
+            _ => None,
+        })
+        .collect();
+    let reads = scene_for(cfg, sc).ok().and_then(|s| match s.scene.start {
+        Some(Start::Snapshot(f) | Start::Replay(f)) => Some(cfg.data_path(&f)),
+        None => None,
+    });
+    (saves, reads)
 }
 
 fn scene_for(cfg: &RunConfig, sc: &Scenario) -> Result<SceneFile, String> {
@@ -485,8 +526,19 @@ fn run_step(
             if depth >= 1 {
                 return fail("`to match run` nests too deep");
             }
+            // The other run saves its own files (a replay it records, say) into
+            // a directory of its own, so it cannot overwrite what this case or
+            // a concurrent one reads from the shared one.
+            let nested = Arc::new(RunConfig {
+                data_dir: cfg.data_dir.join(".nested").join(scenario),
+                content: cfg.content.clone(),
+                aliases: cfg.aliases.clone(),
+                maps: cfg.maps.clone(),
+                scene_dir: cfg.scene_dir.clone(),
+                scenario_dir: cfg.scenario_dir.clone(),
+            });
             let other = match run_file(
-                cfg,
+                &nested,
                 &cfg.scenario_dir.join(format!("{scenario}.md")),
                 depth + 1,
             ) {

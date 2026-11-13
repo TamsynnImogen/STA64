@@ -15,16 +15,16 @@ user's own executables each time, and none are recorded here.
 | engine API size | 371 `ScriptInterface` methods | (imports only) |
 | distinct calls used | 138 | 213 |
 | call sites | 11692 | — |
-| DLL-shaped callable (`A2` / `A1` table) | 50 | 172 |
-| missing callable signatures (missing A1 calls) | 82 | 0 |
+| DLL-shaped callable (`A2` / `A1` table) | 130 | 172 |
+| missing callable signatures (missing A1 calls) | 2 | 0 |
 | &nbsp;&nbsp;of the A1 callable: working (sim- or view-backed) | — | 73 |
 | &nbsp;&nbsp;of the A1 callable: presentation event only, no consumer yet | — | 35 |
 | &nbsp;&nbsp;of the A1 callable: request retained and counted, no effect | — | 48 |
 | &nbsp;&nbsp;of the A1 callable: always raises (no data in the world view) | — | 16 |
 | MMM job-equivalent, not A2-shaped | 0 | — |
 | bound in STA64's Lua today | — | 6 |
-| in MMM's API, not yet bound | 20 | 0 |
-| no Lua equivalent (STA64 extension needed) | 62 | 0 |
+| in MMM's API, not yet bound | 2 | 0 |
+| no Lua equivalent (STA64 extension needed) | 0 | 0 |
 | script-state plumbing (n/a in Lua) | 6 | 41 |
 
 - **bound**: an existing `sta_mission` binding does the same job.
@@ -63,16 +63,16 @@ user's own executables each time, and none are recorded here.
 
 | call | scripts | call sites | status | Lua name |
 |---|---:|---:|:-:|---|
-| `void PlayCinematicMovie(script *, char *, int, bool)` | 24 | 93 | new |  |
+| `void PlayCinematicMovie(script *, char *, int, bool)` | 24 | 93 | A2 DLL-shaped | `A2.PlayCinematicMovie` |
 
 ### Cineractives and camera (11)
 
 | call | scripts | call sites | status | Lua name |
 |---|---:|---:|:-:|---|
 | `void CineractiveShot(char *, float, int)` | 36 | 163 | A2 DLL-shaped | `A2.CineractiveShot` |
-| `void CineractiveStart(script *, bool)` | 36 | 201 | new |  |
-| `void FadeIn(script *, float, float, float, bool)` | 36 | 125 | MMM | `_Cineractive.fadeIn` |
-| `void FadeOut(script *, float, float, float, bool)` | 32 | 155 | MMM | `_Cineractive.fadeOut` |
+| `void CineractiveStart(script *, bool)` | 36 | 201 | A2 DLL-shaped | `A2.CineractiveStart` |
+| `void FadeIn(script *, float, float, float, bool)` | 36 | 125 | A2 DLL-shaped | `A2.FadeIn` |
+| `void FadeOut(script *, float, float, float, bool)` | 32 | 155 | A2 DLL-shaped | `A2.FadeOut` |
 | `void CineractiveCameraOffset(char *, float, bool)` | 29 | 78 | A2 DLL-shaped | `A2.CineractiveCameraOffset` |
 | `void CineractiveShot(int, int)` | 29 | 81 | A2 DLL-shaped | `A2.CineractiveShot` |
 | `void CenterCamera(int)` | 10 | 65 | A2 DLL-shaped | `A2.CenterCamera` |
@@ -85,17 +85,17 @@ user's own executables each time, and none are recorded here.
 
 | call | scripts | call sites | status | Lua name |
 |---|---:|---:|:-:|---|
-| `int AudioMessage(script *, char const *, bool)` | 36 | 364 | MMM | `_Media.playSound` |
-| `void RemoveTitle(int, bool)` | 36 | 197 | new |  |
-| `void StopAudioMessage(int)` | 36 | 190 | MMM | `_Media.stopSounds` |
+| `int AudioMessage(script *, char const *, bool)` | 36 | 364 | A2 DLL-shaped | `A2.AudioMessage` |
+| `void RemoveTitle(int, bool)` | 36 | 197 | A2 DLL-shaped | `A2.RemoveTitle` |
+| `void StopAudioMessage(int)` | 36 | 190 | A2 DLL-shaped | `A2.StopAudioMessage` |
 | `void MinimapMessage(int, int, float)` | 13 | 51 | A2 DLL-shaped | `A2.MinimapMessage` |
-| `void RemoveSubtitle(int, bool)` | 11 | 39 | new |  |
+| `void RemoveSubtitle(int, bool)` | 11 | 39 | A2 DLL-shaped | `A2.RemoveSubtitle` |
 | `void RemoveFromAdLog(int)` | 8 | 115 | A2 DLL-shaped | `A2.RemoveFromAdLog` |
 | `bool IsAudioMessageDone(int)` | 2 | 9 | A2 DLL-shaped | `A2.IsAudioMessageDone` |
 | `void MinimapMessage(char *, int, float, int)` | 2 | 4 | A2 DLL-shaped | `A2.MinimapMessage` |
 | `void ObjectivesDisplay_Set_Text_From_File(char *, bool)` | 2 | 6 | A2 DLL-shaped | `A2.ObjectivesDisplay_Set_Text_From_File` |
-| `int ShowSubtitle(int, int, char const *, bool)` | 1 | 2 | new |  |
-| `int ShowTitle(int, int, char const *, bool)` | 1 | 1 | new |  |
+| `int ShowSubtitle(int, int, char const *, bool)` | 1 | 2 | A2 DLL-shaped | `A2.ShowSubtitle` |
+| `int ShowTitle(int, int, char const *, bool)` | 1 | 1 | A2 DLL-shaped | `A2.ShowTitle` |
 | `void ObjectivesDisplaySetObjectiveComplete(int, bool)` | 1 | 4 | A2 DLL-shaped | `A2.ObjectivesDisplaySetObjectiveComplete` |
 | `void ObjectivesDisplay_Set_Visibility(bool)` | 1 | 1 | A2 DLL-shaped | `A2.ObjectivesDisplay_Set_Visibility` |
 
@@ -103,45 +103,45 @@ user's own executables each time, and none are recorded here.
 
 | call | scripts | call sites | status | Lua name |
 |---|---:|---:|:-:|---|
-| `int PlayMusic(script *, char const *, bool)` | 35 | 135 | MMM | `_Media.playMusic` |
-| `void SetCommandWhatWhoVO(int, AiCommand, int, bool)` | 3 | 15 | new |  |
-| `void SetCommandWhatWhoParamVO(int, AiCommand, int, long, bool)` | 2 | 9 | new |  |
-| `void SetCommandWhatWhoWhereVO(int, AiCommand, char *, Vector3, bool)` | 1 | 1 | new |  |
+| `int PlayMusic(script *, char const *, bool)` | 35 | 135 | A2 DLL-shaped | `A2.PlayMusic` |
+| `void SetCommandWhatWhoVO(int, AiCommand, int, bool)` | 3 | 15 | A2 DLL-shaped | `A2.SetCommandWhatWhoVO` |
+| `void SetCommandWhatWhoParamVO(int, AiCommand, int, long, bool)` | 2 | 9 | A2 DLL-shaped | `A2.SetCommandWhatWhoParamVO` |
+| `void SetCommandWhatWhoWhereVO(int, AiCommand, char *, Vector3, bool)` | 1 | 1 | A2 DLL-shaped | `A2.SetCommandWhatWhoWhereVO` |
 
 ### Orders and AI (24)
 
 | call | scripts | call sites | status | Lua name |
 |---|---:|---:|:-:|---|
-| `void Goto(int, char *, bool, int)` | 25 | 484 | MMM | `missionGotoPath` |
-| `void Patrol(int, char *)` | 17 | 151 | MMM | `missionPatrolPath` |
-| `void SetImpulseSpeed(int, float)` | 17 | 328 | new |  |
-| `void AI_Attack(int, int)` | 10 | 82 | new |  |
-| `void Goto(int, int, bool, int)` | 9 | 40 | MMM | `missionGotoPath` |
-| `int BuildObject(char *, int, char *, int)` | 8 | 77 | new |  |
-| `void Attack(int, int, int)` | 8 | 33 | MMM | `Order.Attack` |
-| `void Stop(int, int)` | 8 | 81 | MMM | `Order.Stop` |
-| `void AI_Attack(int)` | 5 | 59 | new |  |
-| `void Colonize(int, int)` | 5 | 7 | MMM | `Order.Colonize` |
-| `void CraftCanRepair(int, bool)` | 5 | 11 | new |  |
+| `void Goto(int, char *, bool, int)` | 25 | 484 | A2 DLL-shaped | `A2.Goto` |
+| `void Patrol(int, char *)` | 17 | 151 | A2 DLL-shaped | `A2.Patrol` |
+| `void SetImpulseSpeed(int, float)` | 17 | 328 | A2 DLL-shaped | `A2.SetImpulseSpeed` |
+| `void AI_Attack(int, int)` | 10 | 82 | A2 DLL-shaped | `A2.AI_Attack` |
+| `void Goto(int, int, bool, int)` | 9 | 40 | A2 DLL-shaped | `A2.Goto` |
+| `int BuildObject(char *, int, char *, int)` | 8 | 77 | A2 DLL-shaped | `A2.BuildObject` |
+| `void Attack(int, int, int)` | 8 | 33 | A2 DLL-shaped | `A2.Attack` |
+| `void Stop(int, int)` | 8 | 81 | A2 DLL-shaped | `A2.Stop` |
+| `void AI_Attack(int)` | 5 | 59 | A2 DLL-shaped | `A2.AI_Attack` |
+| `void Colonize(int, int)` | 5 | 7 | A2 DLL-shaped | `A2.Colonize` |
+| `void CraftCanRepair(int, bool)` | 5 | 11 | A2 DLL-shaped | `A2.CraftCanRepair` |
 | `bool UnderAttack(int, float)` | 4 | 17 | A2 DLL-shaped | `A2.UnderAttack` |
-| `void Mine(int, int)` | 3 | 4 | MMM | `Type.Mine` |
-| `void ResetImpulseSpeed(int)` | 3 | 7 | new |  |
-| `void Special_Attack(int, int, char const *)` | 3 | 3 | new |  |
-| `void AI_Attack(int, Vector3)` | 2 | 27 | new |  |
-| `void AttackMainEnemyBase(int, bool)` | 2 | 20 | new |  |
-| `void Special_Attack(int, char const *)` | 2 | 10 | new |  |
-| `Vector3 GetAttackLocation(int, int)` | 1 | 4 | new |  |
-| `float GetImpulseSpeed(int)` | 1 | 1 | new |  |
-| `int BuildObject(char *, int, int, float, float, float)` | 1 | 1 | new |  |
-| `int GetAllyStationAttacks(int, int)` | 1 | 1 | new |  |
-| `void AI_Team_Load_AIP(int, char *)` | 1 | 1 | new |  |
-| `void SetCommandMoveAutonomyLow(int)` | 1 | 5 | new |  |
+| `void Mine(int, int)` | 3 | 4 | A2 DLL-shaped | `A2.Mine` |
+| `void ResetImpulseSpeed(int)` | 3 | 7 | A2 DLL-shaped | `A2.ResetImpulseSpeed` |
+| `void Special_Attack(int, int, char const *)` | 3 | 3 | A2 DLL-shaped | `A2.Special_Attack` |
+| `void AI_Attack(int, Vector3)` | 2 | 27 | A2 DLL-shaped | `A2.AI_Attack` |
+| `void AttackMainEnemyBase(int, bool)` | 2 | 20 | A2 DLL-shaped | `A2.AttackMainEnemyBase` |
+| `void Special_Attack(int, char const *)` | 2 | 10 | A2 DLL-shaped | `A2.Special_Attack` |
+| `Vector3 GetAttackLocation(int, int)` | 1 | 4 | A2 DLL-shaped | `A2.GetAttackLocation` |
+| `float GetImpulseSpeed(int)` | 1 | 1 | A2 DLL-shaped | `A2.GetImpulseSpeed` |
+| `int BuildObject(char *, int, int, float, float, float)` | 1 | 1 | A2 DLL-shaped | `A2.BuildObject` |
+| `int GetAllyStationAttacks(int, int)` | 1 | 1 | A2 DLL-shaped | `A2.GetAllyStationAttacks` |
+| `void AI_Team_Load_AIP(int, char *)` | 1 | 1 | A2 DLL-shaped | `A2.AI_Team_Load_AIP` |
+| `void SetCommandMoveAutonomyLow(int)` | 1 | 5 | A2 DLL-shaped | `A2.SetCommandMoveAutonomyLow` |
 
 ### Resources and crew (2)
 
 | call | scripts | call sites | status | Lua name |
 |---|---:|---:|:-:|---|
-| `void SetCrew(int, float)` | 9 | 27 | new |  |
+| `void SetCrew(int, float)` | 9 | 27 | A2 DLL-shaped | `A2.SetCrew` |
 | `float GetCrew(int)` | 1 | 4 | A2 DLL-shaped | `A2.GetCrew` |
 
 ### Teams, players and relations (9)
@@ -151,89 +151,89 @@ user's own executables each time, and none are recorded here.
 | `void SetRealTeam(int, int)` | 13 | 76 | A2 DLL-shaped | `A2.SetRealTeam` |
 | `void SetPerceivedTeam(int, int)` | 12 | 73 | A2 DLL-shaped | `A2.SetPerceivedTeam` |
 | `int GetRealTeam(int)` | 5 | 9 | A2 DLL-shaped | `A2.GetRealTeam` |
-| `void SetRace(int, char const *)` | 2 | 2 | new |  |
-| `Vector3 GetMainEnemyBaseLocation(int)` | 1 | 2 | new |  |
+| `void SetRace(int, char const *)` | 2 | 2 | A2 DLL-shaped | `A2.SetRace` |
+| `Vector3 GetMainEnemyBaseLocation(int)` | 1 | 2 | A2 DLL-shaped | `A2.GetMainEnemyBaseLocation` |
 | `bool IsRace(int, char *const)` | 1 | 1 | A2 DLL-shaped | `A2.IsRace` |
 | `bool IsVisibleToTeam(int, int)` | 1 | 9 | A2 DLL-shaped | `A2.IsVisibleToTeam` |
 | `char const * GetOriginalRace(int)` | 1 | 1 | A2 DLL-shaped | `A2.GetOriginalRace` |
-| `int GetNearestEnemy(int, float)` | 1 | 4 | new |  |
+| `int GetNearestEnemy(int, float)` | 1 | 4 | A2 DLL-shaped | `A2.GetNearestEnemy` |
 
 ### Objects: create, find, query, change (37)
 
 | call | scripts | call sites | status | Lua name |
 |---|---:|---:|:-:|---|
-| `int SetSpecialForcesFlag(int, bool)` | 34 | 1800 | new |  |
+| `int SetSpecialForcesFlag(int, bool)` | 34 | 1800 | A2 DLL-shaped | `A2.SetSpecialForcesFlag` |
 | `void RemoveObject(int)` | 22 | 435 | A2 DLL-shaped | `A2.RemoveObject` |
 | `void CraftCannotDie(int, bool)` | 21 | 141 | A2 DLL-shaped | `A2.CraftCannotDie` |
 | `Vector3 const & GetLocation(int)` | 19 | 163 | A2 DLL-shaped | `A2.GetLocation` |
-| `int GetNearestObjectNearPosition(Vector3 const &, float, int, char *, int, bool, int)` | 12 | 115 | new |  |
-| `void AllowAsTarget(int, int, bool)` | 10 | 74 | new |  |
-| `void SetPosition(int, char *)` | 10 | 85 | new |  |
+| `int GetNearestObjectNearPosition(Vector3 const &, float, int, char *, int, bool, int)` | 12 | 115 | A2 DLL-shaped | `A2.GetNearestObjectNearPosition` |
+| `void AllowAsTarget(int, int, bool)` | 10 | 74 | A2 DLL-shaped | `A2.AllowAsTarget` |
+| `void SetPosition(int, char *)` | 10 | 85 | A2 DLL-shaped | `A2.SetPosition` |
 | `void DisableWeapons(int, bool)` | 9 | 77 | A2 DLL-shaped | `A2.DisableWeapons` |
-| `void SearchAndDestroy(int)` | 9 | 62 | MMM | `Order.SearchAndDestroy` |
-| `int GetNearestObjectNearMe(int, float, int, char *, int, bool)` | 7 | 10 | new |  |
-| `void DestroyCritical(int)` | 7 | 12 | new |  |
+| `void SearchAndDestroy(int)` | 9 | 62 | A2 DLL-shaped | `A2.SearchAndDestroy` |
+| `int GetNearestObjectNearMe(int, float, int, char *, int, bool)` | 7 | 10 | A2 DLL-shaped | `A2.GetNearestObjectNearMe` |
+| `void DestroyCritical(int)` | 7 | 12 | A2 DLL-shaped | `A2.DestroyCritical` |
 | `void SetCurrentHealth(int, float)` | 7 | 9 | A2 DLL-shaped | `A2.SetCurrentHealth` |
 | `void Cloak(int)` | 6 | 41 | A2 DLL-shaped | `A2.Cloak` |
-| `void SetShieldPercent(int, float)` | 6 | 20 | new |  |
-| `bool RecruitSpecialForces(char *, int, int &)` | 4 | 17 | new |  |
+| `void SetShieldPercent(int, float)` | 6 | 20 | A2 DLL-shaped | `A2.SetShieldPercent` |
+| `bool RecruitSpecialForces(char *, int, int &)` | 4 | 17 | A2 DLL-shaped | `A2.RecruitSpecialForces` |
 | `float GetMaxHealth(int)` | 4 | 4 | A2 DLL-shaped | `A2.GetMaxHealth` |
-| `void DisableShieldGenerator(int, bool)` | 4 | 18 | new |  |
-| `void SetPosition(int, char *, int)` | 4 | 63 | new |  |
-| `void DamageSensors(int, float)` | 3 | 3 | new |  |
+| `void DisableShieldGenerator(int, bool)` | 4 | 18 | A2 DLL-shaped | `A2.DisableShieldGenerator` |
+| `void SetPosition(int, char *, int)` | 4 | 63 | A2 DLL-shaped | `A2.SetPosition` |
+| `void DamageSensors(int, float)` | 3 | 3 | A2 DLL-shaped | `A2.DamageSensors` |
 | `void SetSpecialEnergy(int, float)` | 3 | 22 | A2 DLL-shaped | `A2.SetSpecialEnergy` |
-| `SiegeFleet * CreateNewSiegeFleet(void)` | 2 | 4 | new |  |
+| `SiegeFleet * CreateNewSiegeFleet(void)` | 2 | 4 | A2 DLL-shaped | `A2.CreateNewSiegeFleet` |
 | `bool Exists(int)` | 2 | 26 | A2 DLL-shaped | `A2.Exists` |
 | `bool IsAlive(int)` | 2 | 15 | A2 DLL-shaped | `A2.IsAlive` |
 | `float GetDistance(int &, int &)` | 2 | 8 | A2 DLL-shaped | `A2.GetDistance` |
 | `int CountUnitsNearObject(int, float, int, char *)` | 2 | 14 | A2 DLL-shaped | `A2.CountUnitsNearObject` |
 | `int CountVisibleUnitsNearObject(int, float, int, bool, char *)` | 2 | 10 | A2 DLL-shaped | `A2.CountVisibleUnitsNearObject` |
-| `int GetNearestShipyard(int, int, bool)` | 2 | 9 | new |  |
-| `void DamageLifeSupport(int, float)` | 2 | 2 | new |  |
-| `void DamageShieldGenerator(int, float)` | 2 | 2 | new |  |
-| `void DamageWeapons(int, float)` | 2 | 2 | new |  |
-| `Vector3 const & GetLocation(char *, int)` | 1 | 18 | new |  |
+| `int GetNearestShipyard(int, int, bool)` | 2 | 9 | A2 DLL-shaped | `A2.GetNearestShipyard` |
+| `void DamageLifeSupport(int, float)` | 2 | 2 | A2 DLL-shaped | `A2.DamageLifeSupport` |
+| `void DamageShieldGenerator(int, float)` | 2 | 2 | A2 DLL-shaped | `A2.DamageShieldGenerator` |
+| `void DamageWeapons(int, float)` | 2 | 2 | A2 DLL-shaped | `A2.DamageWeapons` |
+| `Vector3 const & GetLocation(char *, int)` | 1 | 18 | A2 DLL-shaped | `A2.GetLocation` |
 | `float GetCurrentHealth(int)` | 1 | 1 | A2 DLL-shaped | `A2.GetCurrentHealth` |
-| `void DamageEngines(int, float)` | 1 | 2 | new |  |
+| `void DamageEngines(int, float)` | 1 | 2 | A2 DLL-shaped | `A2.DamageEngines` |
 | `void GridVisible(bool)` | 1 | 1 | A2 DLL-shaped | `A2.GridVisible` |
-| `void HideObject(int, bool)` | 1 | 2 | new |  |
+| `void HideObject(int, bool)` | 1 | 2 | A2 DLL-shaped | `A2.HideObject` |
 | `void RemoveBillboardEffect(int)` | 1 | 1 | A2 DLL-shaped | `A2.RemoveBillboardEffect` |
-| `void SetMaxShields(int, float)` | 1 | 6 | new |  |
+| `void SetMaxShields(int, float)` | 1 | 6 | A2 DLL-shaped | `A2.SetMaxShields` |
 
 ### Other (31)
 
 | call | scripts | call sites | status | Lua name |
 |---|---:|---:|:-:|---|
-| `void SetCanBeDecommissioned(int, bool)` | 28 | 48 | new |  |
+| `void SetCanBeDecommissioned(int, bool)` | 28 | 48 | A2 DLL-shaped | `A2.SetCanBeDecommissioned` |
 | `void DisableEngines(int, bool)` | 9 | 34 | A2 DLL-shaped | `A2.DisableEngines` |
-| `void SetGreenAlert(int)` | 9 | 51 | MMM | `Order.GreenAlert` |
-| `void PointAt(int, char *)` | 8 | 64 | MMM | `pointAt` |
-| `void Scout(int)` | 7 | 17 | MMM | `Order.Scout` |
-| `void ExplodeNow(int)` | 6 | 36 | new |  |
-| `void SetRedAlert(int)` | 6 | 35 | MMM | `Order.RedAlert` |
-| `void WaitForEnterKey(script *)` | 6 | 85 | new |  |
-| `void ButItCanBeDerelicted(int, bool)` | 5 | 5 | new |  |
-| `void SetAngularVelocity(int, Vector3 const &)` | 5 | 12 | new |  |
+| `void SetGreenAlert(int)` | 9 | 51 | A2 DLL-shaped | `A2.SetGreenAlert` |
+| `void PointAt(int, char *)` | 8 | 64 | A2 DLL-shaped | `A2.PointAt` |
+| `void Scout(int)` | 7 | 17 | A2 DLL-shaped | `A2.Scout` |
+| `void ExplodeNow(int)` | 6 | 36 | A2 DLL-shaped | `A2.ExplodeNow` |
+| `void SetRedAlert(int)` | 6 | 35 | A2 DLL-shaped | `A2.SetRedAlert` |
+| `void WaitForEnterKey(script *)` | 6 | 85 | A2 DLL-shaped | `A2.WaitForEnterKey` |
+| `void ButItCanBeDerelicted(int, bool)` | 5 | 5 | A2 DLL-shaped | `A2.ButItCanBeDerelicted` |
+| `void SetAngularVelocity(int, Vector3 const &)` | 5 | 12 | A2 DLL-shaped | `A2.SetAngularVelocity` |
 | `void Decloak(int)` | 4 | 23 | A2 DLL-shaped | `A2.Decloak` |
 | `void DisableLifeSupport(int, bool)` | 4 | 17 | MMM | `DamageFlags.DisableLifesupport` |
 | `void DisableSensors(int, bool)` | 4 | 18 | MMM | `DamageFlags.DisableSensors` |
-| `void StuffIntoWormhole(int, int)` | 4 | 6 | new |  |
+| `void StuffIntoWormhole(int, int)` | 4 | 6 | A2 DLL-shaped | `A2.StuffIntoWormhole` |
 | `bool IsExploding(int)` | 3 | 4 | A2 DLL-shaped | `A2.IsExploding` |
 | `bool IsOdf(int, char *)` | 3 | 7 | A2 DLL-shaped | `A2.IsOdf` |
 | `unsigned int RandomGetUnsigned(unsigned int)` | 3 | 28 | A2 DLL-shaped | `A2.RandomGetUnsigned` |
 | `void AddTransporterEffect(int)` | 3 | 5 | A2 DLL-shaped | `A2.AddTransporterEffect` |
-| `void CraftCanRecrew(int, bool)` | 3 | 4 | new |  |
-| `void PointAt(int, int)` | 3 | 13 | MMM | `pointAt` |
+| `void CraftCanRecrew(int, bool)` | 3 | 4 | A2 DLL-shaped | `A2.CraftCanRecrew` |
+| `void PointAt(int, int)` | 3 | 13 | A2 DLL-shaped | `A2.PointAt` |
 | `void SetForceOntoMap(int, bool)` | 3 | 91 | A2 DLL-shaped | `A2.SetForceOntoMap` |
-| `void SetPlanetCivPop(int, int)` | 3 | 3 | new |  |
+| `void SetPlanetCivPop(int, int)` | 3 | 3 | A2 DLL-shaped | `A2.SetPlanetCivPop` |
 | `bool IsCompromised(int, int)` | 2 | 14 | A2 DLL-shaped | `A2.IsCompromised` |
-| `void LinkWormholes(int, int)` | 2 | 3 | new |  |
+| `void LinkWormholes(int, int)` | 2 | 3 | A2 DLL-shaped | `A2.LinkWormholes` |
 | `bool DoesNotExist(int)` | 1 | 1 | A2 DLL-shaped | `A2.DoesNotExist` |
 | `bool IsStation(int)` | 1 | 1 | A2 DLL-shaped | `A2.IsStation` |
-| `int GetFirstCraft(void)` | 1 | 1 | new |  |
-| `void LoadCargoShip(int, int)` | 1 | 2 | new |  |
-| `void SetName(int, char const *)` | 1 | 3 | new |  |
-| `void SetWormholeDeleteOnTransport(int, bool)` | 1 | 2 | new |  |
+| `int GetFirstCraft(void)` | 1 | 1 | A2 DLL-shaped | `A2.GetFirstCraft` |
+| `void LoadCargoShip(int, int)` | 1 | 2 | A2 DLL-shaped | `A2.LoadCargoShip` |
+| `void SetName(int, char const *)` | 1 | 3 | A2 DLL-shaped | `A2.SetName` |
+| `void SetWormholeDeleteOnTransport(int, bool)` | 1 | 2 | A2 DLL-shaped | `A2.SetWormholeDeleteOnTransport` |
 | `void Starfield_Load_New_Background_Geometry(char *, char *)` | 1 | 1 | A2 DLL-shaped | `A2.Starfield_Load_New_Background_Geometry` |
 
 ## Armada I: engine functions the mission DLLs import
@@ -517,12 +517,10 @@ import no engine call.
 
 | install | rule DLLs | rules | conditions decoded | distinct calls | pairs | pairs working | pairs raising | pairs missing | sites | sites working |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| Star Trek Armada II | 36 | 1168 | 1168 | 28 | 182 | 144 | 38 | 0 | 895 | 647 |
 | Star Trek Armada II (Stock) | 36 | 1168 | 1168 | 28 | 182 | 144 | 38 | 0 | 895 | 647 |
-| STA2 Classic Mod | 36 | 1167 | 1167 | 28 | 182 | 144 | 38 | 0 | 894 | 646 |
 | Star Trek Armada (A1 missions) | 26 | — | — | 38 | 175 | 132 | 43 | 0 | — | — |
 
-### Armada II: conditions of `Star Trek Armada II`
+### Armada II: conditions of `Star Trek Armada II (Stock)`
 
 | call | rule DLLs | sites | status | Lua name |
 |---|---:|---:|:-:|---|
@@ -555,8 +553,6 @@ import no engine call.
 | `bool HasTimeElapsed(float)` | 1 | 1 | working | `A2.HasTimeElapsed` |
 | `int CountVisibleUnitsNearObject(int,float,int,bool,char*)` | 1 | 1 | working | `A2.CountVisibleUnitsNearObject` |
 
-`Star Trek Armada II (Stock)` has the same calls, DLL counts and sites.
-`STA2 Classic Mod` has a different rule set (see the summary row).
 
 ### Armada I: conditions of the mission rule DLLs
 

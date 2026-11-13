@@ -30,7 +30,9 @@ mod transport;
 
 pub use handshake::{admit, HandshakeError};
 pub use peer::{DesyncFiles, Fault, Peer, StepOutcome};
-pub use router::{LockstepRouter, RouterError, RouterEvent, DIGESTS_KEPT};
+pub use router::{
+    LockstepRouter, RouterError, RouterEvent, DIGESTS_KEPT, MAX_EVENTS, MAX_QUEUED_TURNS,
+};
 pub use transport::{
     Destination, Incoming, LinkFault, LoopbackLink, LoopbackNet, Transport, TransportError,
 };

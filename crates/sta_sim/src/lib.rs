@@ -65,7 +65,7 @@ pub use sta_core::{ContentKey, EntityId, Fixed, PlayerId, SEAM_REV, TICK_HZ, Tea
 /// Movement limits now live with the rest of a unit's definition.
 pub use sta_content::MoveStats;
 
-pub use event::SimEvent;
+pub use event::{MinerPhase, SimEvent};
 pub use source::WorldSource;
 pub use view::{TickOutput, UnitView, WorldView};
 
@@ -411,10 +411,17 @@ impl Sim {
     /// hash goes in first, so tick 0's digest already tells peers with
     /// different content apart (S5), and every later one carries it.
     pub fn digest(&self) -> u64 {
+        self.digest_with_content_hash(self.content.as_ref().map_or(0, |c| c.hash()))
+    }
+
+    /// [`Sim::digest`] with `content_hash` in place of the content's: lets
+    /// tests compare state against goldens recorded under an older content
+    /// hash scheme (CON-35 changed every content hash, not the state).
+    pub(crate) fn digest_with_content_hash(&self, content_hash: u64) -> u64 {
         let mut h = Fnv::new();
         h.u64(self.tick);
         h.u64(self.rng.0);
-        h.u64(self.content.as_ref().map_or(0, |c| c.hash()));
+        h.u64(content_hash);
         h.u64(self.players.len() as u64);
         for &(p, t) in &self.players {
             h.u64(p.0 as u64);

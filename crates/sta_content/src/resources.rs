@@ -105,6 +105,13 @@ impl ResourceModel {
         m
     }
 
+    /// The aliases as the content digest renders them, `["tritanium":2,...]`
+    /// in their own order. The slot names are display text and not part of it.
+    pub fn aliases_text(&self) -> String {
+        let items: Vec<String> = self.aliases.iter().map(|(w, s)| format!("{}:{s}", crate::digest::quoted(w))).collect();
+        format!("[{}]", items.join(","))
+    }
+
     /// The word the game shows for `slot`; `"?"` past the last.
     pub fn name(&self, slot: usize) -> &str {
         self.names.get(slot).map_or("?", String::as_str)

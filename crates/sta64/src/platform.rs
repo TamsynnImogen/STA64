@@ -42,6 +42,57 @@ pub fn surface_cache_dir() -> Option<PathBuf> {
     Some(base.join("sta64").join("surfaces"))
 }
 
+/// Which platform's conventions [`config_dir_in`] follows (a parameter so every
+/// platform's path is tested on any host).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigOs {
+    Linux,
+    Windows,
+    MacOs,
+}
+
+impl ConfigOs {
+    pub const HOST: ConfigOs = if cfg!(target_os = "windows") {
+        ConfigOs::Windows
+    } else if cfg!(target_os = "macos") {
+        ConfigOs::MacOs
+    } else {
+        ConfigOs::Linux
+    };
+}
+
+/// The folder of STA64's own settings file, from the environment `var` reads:
+/// `$STA64_CONFIG_DIR` (the folder itself), else `$XDG_CONFIG_HOME/sta64`, then
+/// `%APPDATA%\sta64` on Windows, `~/Library/Application Support/sta64` on macOS and
+/// `~/.config/sta64` elsewhere (the capture folder's convention in `sta_bench`,
+/// with the config rather than the data base). `None` when no base is known: the
+/// caller then does not persist, rather than writing into the working directory.
+pub fn config_dir_in(os: ConfigOs, var: impl Fn(&str) -> Option<PathBuf>) -> Option<PathBuf> {
+    let var = |k: &str| var(k).filter(|v| !v.as_os_str().is_empty());
+    if let Some(dir) = var("STA64_CONFIG_DIR") {
+        return Some(dir);
+    }
+    let home = || var("HOME").or_else(|| var("USERPROFILE"));
+    let base = var("XDG_CONFIG_HOME")
+        .or_else(|| if os == ConfigOs::Windows { var("APPDATA") } else { None })
+        .or_else(|| {
+            home().map(|h| match os {
+                ConfigOs::MacOs => h.join("Library/Application Support"),
+                ConfigOs::Windows => h.join("AppData/Roaming"),
+                ConfigOs::Linux => h.join(".config"),
+            })
+        })?;
+    Some(base.join("sta64"))
+}
+
+/// [`config_dir_in`] for this host and environment (the app's private files on Android).
+pub fn config_dir() -> Option<PathBuf> {
+    #[cfg(target_os = "android")]
+    return private_data_dir().map(|dir| dir.join("config"));
+    #[cfg(not(target_os = "android"))]
+    config_dir_in(ConfigOs::HOST, |k| std::env::var_os(k).map(PathBuf::from))
+}
+
 /// Absent on desktop, so ordinary desktop scheduling is unchanged.
 #[derive(Resource)]
 pub struct LifecycleGate {

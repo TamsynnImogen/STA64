@@ -13,3 +13,10 @@ sta_content.workspace = true
 sta_sim.workspace = true
 serde.workspace = true
 postcard.workspace = true
+# Room codes (the relay) from OS randomness; already in the lock file for
+# sta_vfs.
+getrandom.workspace = true
+
+[dev-dependencies]
+# In-process peers mount synthetic and installed layers (CON-35 tests).
+sta_vfs.workspace = true

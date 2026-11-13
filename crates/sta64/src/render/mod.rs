@@ -9,6 +9,7 @@ pub mod fx;
 pub mod hulls;
 pub mod lod_switch;
 pub mod materials;
+pub mod mining;
 pub mod model_scene;
 pub mod moons;
 pub mod nebula;

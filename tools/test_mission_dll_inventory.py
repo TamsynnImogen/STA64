@@ -62,8 +62,14 @@ class MissionDllInventoryTests(unittest.TestCase):
             ),
             "A2.GetLocation",
         )
+        # The (path, index) overload is bound by dll_objects.rs; a signature
+        # that matches no known overload stays unmapped.
         self.assertEqual(
-            inventory.a2_exact_for("Vector3 const & GetLocation(char *, int)", self.repo), ""
+            inventory.a2_exact_for("Vector3 const & GetLocation(char *, int)", self.repo),
+            "A2.GetLocation",
+        )
+        self.assertEqual(
+            inventory.a2_exact_for("Vector3 const & GetLocation(char *, float)", self.repo), ""
         )
         self.assertEqual(inventory.a2_exact_for("void SetRealTeam(int, int)", self.repo), "")
         self.assertEqual(inventory.a2_exact_for("void Cloak(int)", self.repo), "")
@@ -211,7 +217,9 @@ class MissionDllInventoryTests(unittest.TestCase):
             encoding="utf-8",
         )
         raising = inventory.a2_raising(self.repo)
-        self.assertEqual(raising, {"IsCompromised"})
+        # Bindings found in the source, plus the explicit always-raising `def` calls.
+        self.assertEqual(raising, {"IsCompromised"} | inventory.A2_RAISING_THROUGH_DEF)
+        self.assertTrue({"AI_Team_Load_AIP", "GetAttackLocation"} <= raising)
         kind = lambda sig: inventory.a2_condition_kind(sig, self.repo, raising)
         self.assertEqual(kind("int CountUnits(int,char*)"), "working")
         self.assertEqual(kind("bool IsCompromised(int,int)"), "raises")

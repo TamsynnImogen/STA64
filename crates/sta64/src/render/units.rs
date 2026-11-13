@@ -392,7 +392,7 @@ pub fn to_bevy(p: [f32; 3]) -> Vec3 {
 }
 
 /// Place each unit between its last two ticks.
-fn place(link: Res<SimLink>, clock: Res<AnimClock>, mut q: Query<(&SimEntity, &mut Transform)>) {
+pub(crate) fn place(link: Res<SimLink>, clock: Res<AnimClock>, mut q: Query<(&SimEntity, &mut Transform)>) {
     let alpha = clock.alpha().clamp(0.0, 1.0);
     for (u, mut tf) in &mut q {
         let Some((pos, h)) = link.interpolate(u.0, alpha) else { continue };

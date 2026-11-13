@@ -1,6 +1,6 @@
 use super::*;
 use crate::WorldSource;
-use crate::command::{Command, CommandKind, Edit, Order};
+use crate::command::{Command, CommandKind, Edit};
 use crate::setup::{Control, GameOptions, GameSetup, PlayerSetup};
 use sta_content::{MapDef, Profile, UnitDef};
 
@@ -52,7 +52,8 @@ fn simulation() -> (Sim, Arc<ContentDb>) {
 }
 
 fn split(bytes: &[u8]) -> (Body, Option<(Vec3, Vec3)>, BoundaryRec, PerceptionRec) {
-    let (body, rest) = postcard::take_from_bytes(&bytes[HEADER..]).unwrap();
+    let (_, rest): (Provenance, _) = postcard::take_from_bytes(&bytes[HEADER..]).unwrap();
+    let (body, rest) = postcard::take_from_bytes(rest).unwrap();
     let (bounds, rest) = postcard::take_from_bytes(rest).unwrap();
     let (record, rest) = postcard::take_from_bytes(rest).unwrap();
     let (perception, rest) = postcard::take_from_bytes(rest).unwrap();
@@ -69,22 +70,15 @@ fn split(bytes: &[u8]) -> (Body, Option<(Vec3, Vec3)>, BoundaryRec, PerceptionRe
 
 fn join(header: &[u8], body: &Body, bounds: Option<(Vec3, Vec3)>, record: &BoundaryRec, perception: &PerceptionRec) -> Vec<u8> {
     let mut bytes = header[..HEADER].to_vec();
+    bytes.extend(postcard::to_allocvec(&Provenance::default()).unwrap());
     bytes.extend(postcard::to_allocvec(body).unwrap());
     bytes.extend(postcard::to_allocvec(&bounds).unwrap());
     bytes.extend(postcard::to_allocvec(record).unwrap());
     bytes.extend(postcard::to_allocvec(perception).unwrap());
-    if u16::from_le_bytes(bytes[4..6].try_into().unwrap()) >= PERSONNEL_FORMAT {
-        bytes.extend(postcard::to_allocvec(&PersonnelRec { version: 1, rows: Vec::new() }).unwrap());
-    }
-    if u16::from_le_bytes(bytes[4..6].try_into().unwrap()) >= CREW_FORMAT {
-        bytes.extend(postcard::to_allocvec(&UnitCrewRec { version: 1, rows: Vec::new() }).unwrap());
-    }
-    if u16::from_le_bytes(bytes[4..6].try_into().unwrap()) >= START_EFFECTS_FORMAT {
-        bytes.extend(postcard::to_allocvec(&StartEffectsRec { version: 1, rows: Vec::new() }).unwrap());
-    }
-    if u16::from_le_bytes(bytes[4..6].try_into().unwrap()) == FORMAT_VERSION {
-        bytes.extend(postcard::to_allocvec(&crate::autonomy::AutonomyWire { version: 1, rows: Vec::new() }).unwrap());
-    }
+    bytes.extend(postcard::to_allocvec(&PersonnelRec { version: 1, rows: Vec::new() }).unwrap());
+    bytes.extend(postcard::to_allocvec(&UnitCrewRec { version: 1, rows: Vec::new() }).unwrap());
+    bytes.extend(postcard::to_allocvec(&StartEffectsRec { version: 1, rows: Vec::new() }).unwrap());
+    bytes.extend(postcard::to_allocvec(&crate::autonomy::AutonomyWire { version: 1, rows: Vec::new() }).unwrap());
     bytes
 }
 
@@ -131,6 +125,7 @@ fn mandatory_suffix_rejects_bad_rows_versions_trailing_and_unusable_bounds() {
         assert!(Sim::from_snapshot(&join(&bytes, &body, invalid, &rec, &perception), Some(db.clone())).is_err());
     }
     let mut body_only = bytes[..HEADER].to_vec();
+    body_only.extend(postcard::to_allocvec(&Provenance::default()).unwrap());
     body_only.extend(postcard::to_allocvec(&body).unwrap());
     assert!(Sim::from_snapshot(&body_only, Some(db.clone())).is_err());
     body_only.extend(postcard::to_allocvec(&bounds).unwrap());
@@ -185,66 +180,41 @@ fn true_outside_flag_is_preserved_without_reinitializing_or_projecting() {
 fn header_downgrades_and_forged_old_content_hashes_cannot_hide_state() {
     for sim in [Sim::new(22), simulation().0] {
         let bytes = sim.snapshot();
-        for version in [8_u16, 9, 10] {
+        for version in 8_u16..FORMAT_VERSION {
             let mut bad = bytes.clone();
             bad[4..6].copy_from_slice(&version.to_le_bytes());
-            assert!(Sim::from_snapshot(&bad, sim.content.clone()).is_err());
+            assert_eq!(Sim::from_snapshot(&bad, sim.content.clone()).err(), Some(SnapshotError::FormatVersion { found: version }));
         }
     }
-    // These remain genuine old writer outputs except for the deliberately forged
-    // hash in this negative test. Matching a new content hash cannot supply flags.
+    // Genuine old writer outputs, one with a deliberately forged current
+    // content hash: refused by format before anything else is read.
     let (_, enabled) = simulation();
-    for original in [
-        include_bytes!("../../tests/fixtures/mining-v8.stas").as_slice(),
-        include_bytes!("../../tests/fixtures/native-control-v9.stas").as_slice(),
+    for (original, version) in [
+        (include_bytes!("../../tests/fixtures/mining-v8.stas").as_slice(), 8),
+        (include_bytes!("../../tests/fixtures/native-control-v9.stas").as_slice(), 9),
     ] {
         let mut bad = original.to_vec();
         bad[10..18].copy_from_slice(&enabled.hash().to_le_bytes());
-        assert!(Sim::from_snapshot(&bad, Some(enabled.clone())).is_err());
+        assert_eq!(Sim::from_snapshot(&bad, Some(enabled.clone())).err(), Some(SnapshotError::FormatVersion { found: version }));
     }
 }
 
 #[test]
-fn genuine_native_v9_controls_continue_with_the_old_digests() {
+fn genuine_old_snapshots_are_refused_with_a_clear_error() {
+    // Formats 8 to 14 were read by narrow compatibility paths until CON-35;
+    // their content hash is of the old kind, so they are refused by version.
     let db = Arc::new(sta_content::fake::db());
-    assert_eq!(db.hash(), 0xc0d4_3c3a_94f1_650e);
-    let mut control = Sim::from_snapshot(
-        include_bytes!("../../tests/fixtures/native-control-v9.stas"),
-        Some(db.clone()),
-    )
-    .unwrap();
-    assert_eq!(control.tick, 300);
-    assert_eq!(control.digest(), 0xace6_bda2_8dd6_531f);
-    assert_eq!(control.force_onto_map(EntityId(1)), None);
-    for tick in 300..900 {
-        let commands = if tick == 500 {
-            vec![Command {
-                player: PlayerId(0),
-                seq: 2,
-                kind: CommandKind::Order(Order::Stop {
-                    units: vec![EntityId(1)],
-                }),
-            }]
-        } else {
-            vec![]
-        };
-        control.step(&commands);
-        if control.tick == 600 {
-            assert_eq!(control.digest(), 0xe551_eb38_7ec7_a1ee);
-        }
+    for (bytes, version) in [
+        (include_bytes!("../../tests/fixtures/native-control-v9.stas").as_slice(), 9),
+        (include_bytes!("../../tests/fixtures/mining-idle-v9.stas").as_slice(), 9),
+        (include_bytes!("../../tests/fixtures/unit-status-v12.stas").as_slice(), 12),
+    ] {
+        assert_eq!(u64::from_le_bytes(bytes[10..18].try_into().unwrap()), crate::unit_status_tests::LEGACY_FAKE_CONTENT_HASH);
+        let err = Sim::from_snapshot(bytes, Some(db.clone())).err().unwrap();
+        assert_eq!(err, SnapshotError::FormatVersion { found: version });
+        assert!(err.to_string().contains("older STA64"), "{err}");
+        assert_eq!(snapshot_info(bytes).err(), Some(SnapshotError::FormatVersion { found: version }));
     }
-    assert_eq!(control.digest(), 0x2b96_65c4_c00e_0f3b);
-    let mut idle = Sim::from_snapshot(
-        include_bytes!("../../tests/fixtures/mining-idle-v9.stas"),
-        Some(db),
-    )
-    .unwrap();
-    assert_eq!(idle.tick, 101);
-    assert_eq!(idle.digest(), 0x6493_8e8c_1b12_f06c);
-    for _ in 0..800 {
-        idle.step(&[]);
-    }
-    assert_eq!(idle.digest(), 0x2077_c2e5_597d_d8e5);
 }
 
 #[test]

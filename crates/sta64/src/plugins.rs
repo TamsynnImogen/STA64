@@ -55,6 +55,11 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
         app.add_plugins(InputPlugin);
     }
 
+    // UI-30: scripted camera shots from mission presentation requests
+    if map_view {
+        app.add_plugins(crate::input::camera_cinematic::CinematicCameraPlugin);
+    }
+
     // bench —
     // TOOL-14 playtest capture (Ctrl+F12 in a match)
     if map_view {
@@ -80,6 +85,8 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
         app.insert_resource(crate::ui::profile::UiPreference { lcars: cfg.lcars_ui })
             .add_plugins(crate::ui::profile::UiProfilePlugin);
         app.add_plugins(crate::ui::notices::NoticePlugin);
+        // UI-30: titles, fades, the objectives panel and the replies for mission presentation.
+        app.add_plugins(crate::ui::presentation::PresentationPlugin);
         if front_end {
             // INT-M4: the front end's screens over the menu scene, the loading screen.
             app.add_plugins(crate::frontend::scene::MenuScenePlugin);
@@ -97,6 +104,7 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
         app.add_plugins(crate::audio::AudioPlugin { mode: cfg.mode() });
         // CON-10: real sounds in place of the stub resolver.
         if let Some(r) = cfg.install_root.as_deref().and_then(|root| crate::audio::BankResolver::mount(root, cfg.active_mod.as_deref())) {
+            app.insert_resource(r.ui_sounds());
             app.insert_resource(crate::audio::Resolver(Box::new(r)));
         }
         // MED-03 movie playback; MED-05 the intro movies before the front end.
@@ -104,6 +112,8 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
         if front_end {
             app.insert_resource(crate::media::IntroSettings { enabled: !cfg.nointro }).add_plugins(crate::media::IntroPlugin);
         }
+        // UI-29: the player's saved settings, over the resources above (after them).
+        app.add_plugins(crate::ui::settings::SettingsPlugin::from_cfg(cfg));
         if cfg.skirmish {
             // A match: calm and battle music of the local race (set by `game::apply_race`),
             // not the viewer's silence.

@@ -6,7 +6,7 @@ use mlua::{Function, Lua, MultiValue};
 use crate::api::Shared;
 use crate::api::a2::objects::handle;
 
-fn craft_family(class: &str) -> Option<bool> {
+pub(in crate::api::a2) fn craft_family(class: &str) -> Option<bool> {
     match class.to_ascii_lowercase().as_str() {
         "cargo_ship" | "colony" | "constructionrig" | "craft" | "evolver" | "freighter"
         | "hover" | "minearray" | "mining" | "p_mining" | "planet" | "pod" | "producer"

@@ -179,6 +179,8 @@ pub(crate) fn unit_def_for_profile(name: &str, odf: &Odf, phys: Option<&Odf>, pr
             d.build.list.push(DefRef::new(item));
         }
     }
+    d.build.flagged_slots = crate::BuildDef::flagged_slots_of(odf);
+    d.avoid_me = odf.bool("avoidMe").unwrap_or(false);
 
     d.sounds.select = r.text("eventSelect").into_iter().collect();
     d.sounds.ack_move = r.text("eventAcknowledge").into_iter().collect();

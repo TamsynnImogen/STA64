@@ -17,6 +17,8 @@ sta_bzn.workspace = true
 serde.workspace = true
 json5.workspace = true
 thiserror.workspace = true
+# The content digest (CON-35, D10): SHA-256 over the keyed rule entries.
+sha2.workspace = true
 
 [dev-dependencies]
 # The install tests resolve models the way the renderer does (`sta_assets::find_model`).
