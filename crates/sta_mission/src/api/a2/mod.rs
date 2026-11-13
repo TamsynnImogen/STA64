@@ -20,7 +20,9 @@ mod dll_objects;
 mod controls;
 mod media;
 mod native_camera;
+mod native_flow;
 mod native_presentation;
+mod native_text;
 mod objectives;
 mod objects;
 mod orders;
@@ -42,6 +44,8 @@ pub(super) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
     let a2 = lua.create_table()?;
     native_camera::install(lua, ctx, &a2)?;
     native_presentation::install(lua, ctx, &a2)?;
+    native_flow::install(lua, ctx, &a2)?;
+    native_text::install(lua, ctx, &a2)?;
     controls::install(lua, ctx, &a2)?;
     objectives::install(lua, ctx, &a2)?;
     objects::install(lua, ctx, &a2)?;

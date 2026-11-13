@@ -598,3 +598,48 @@ from the stock scripts' constants; not measured otherwise.
 - Calls with no sim seam (position, shields, per-team targeting, subsystem
   damage, hidden/derelict/name/population/wormhole/cargo/fleet state) raise
   and are counted; see `seams()` for each reason.
+
+
+## Script-taking presentation and title calls (LUA-05)
+
+`native_flow.rs` binds `FadeIn`, `FadeOut`, `CineractiveStart`, `AudioMessage`,
+`PlayMusic`, `StopAudioMessage`, `PlayCinematicMovie` and `WaitForEnterKey`;
+`native_text.rs` binds `ShowTitle`, `ShowSubtitle`, `RemoveTitle` and
+`RemoveSubtitle`. All queue SCRIPT `Edit::Present` events; there is no client
+consumer yet, so nothing is played or shown.
+
+The DLL's leading `script *` is the first Lua argument: any table that stands
+for the calling script. In the engine the trailing bool is "don't wait": false
+adds one reference to the script's current step, released when the fade ends,
+the sound or movie finishes, or Enter is pressed. The binding records the same
+count; `A2.ScriptWaits(script)` returns it so a converted step machine can
+advance at zero. Nothing blocks the Lua call. Releases: a fade after
+`delay + duration` mission seconds, a sound by `A2.AudioMessageDone(id)` or
+`A2.StopAudioMessage(id)`, a movie by `A2.MovieDone()`, plus three host reports
+that are not DLL calls: `A2.EnterKeyDone(id)` (id of the queued `WaitForKey`),
+`A2.CineractiveStartDone()`. Until a host reports them those waits stay open.
+
+- `FadeIn/FadeOut(script, duration, delay, white, dontWait)`: typed `Fade` when
+  the delay is 0 (black, or white when the third float is non-zero), otherwise
+  `Call A2.FadeIn|FadeOut [duration, delay, white]` since `Fade` has no delay.
+- `AudioMessage` / `PlayMusic(script, name, dontWait)` return the overlay id
+  (one counter from 1 for both); with a wait they return -1, playing nothing,
+  once `Mission.finish` has run. Voice is `Sound { id }`, music is `Call
+  A2.PlayMusic [id, name]` (the typed `Music` has no id); `StopAudioMessage(id)`
+  queues `StopSound` only for an id still playing.
+- `CineractiveStart` sets the shared `Cineractive.active`; `PlayCinematicMovie`
+  queues a full-screen skippable `Movie` (skippability not measured) and
+  `IsMoviePlaying` follows; `WaitForEnterKey` queues `WaitForKey { id }`.
+- Titles: ids count from 0 for titles and subtitles together. A show queues the
+  typed `Title` (label key as text) and `Call A2.ShowTitle|ShowSubtitle [id, x,
+  y, fadeIn]`; negative x means centred (client). `RemoveTitle|RemoveSubtitle
+  (id, fade)` queue `RemoveTitle` and a `Call [id, fade]`, only for an id on
+  screen, as the engine ignores others.
+- `SetCommandWhatWhoVO`, `SetCommandWhatWhoParamVO`, `SetCommandWhatWhoWhereVO`
+  are bound but raise and are counted: they write a unit command record the sim
+  does not have.
+
+Evidence: argument roles, the don't-wait inversion, the fade fields, id
+counters and the mission-over rule read from the executable, static. Not
+measured: release of a stopped sound's wait, the cineractive wait's release,
+counter reset on mission load, movie `int` (1 in every stock call).
