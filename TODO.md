@@ -273,6 +273,9 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [ ] `python3 tools/campaign_readiness.py --converted --a2 <stock> --ticks 9000`: no first-problem call is a converter defect (SetAngularVelocity, GetNearestObjectNearPosition, G[...] operands gone); `engine_reads` non-empty for AIP missions. (#586)
 - [ ] A host binds `A2.EngineVariable(name)` for team strength / moons / warp tries. (#586)
 - [ ] SIM seam: synchronous spawn so queries (GetMaxHealth) work on a BuildObject handle in the same tick (tutorial4). (#586)
+- [ ] LUA-14 follow-up: model `isCineractiveDone` (camera-shot completion) so A1 openings end (fed1, fed2, finale5) (#591)
+- [ ] LUA-14 follow-up: A1 `BuildObject` "neutral ownership requires a resource definition" (team mapping) (#591)
+- [ ] LUA-14 follow-up: engine behaviour of A1 calls on an invalid or dead handle (read from Armada.exe), as A2's object guard (#591)
 
 ## Done recently
 
