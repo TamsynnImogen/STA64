@@ -76,6 +76,8 @@ CHARACTER_NEW_SCRIPT = 1  # character::new_script(char *) -> script *
 SCRIPT_ADD_STEP = 0  # script::add_step(int (*)(script *))
 IIIE_TRASH_RULE = (2, 3)  # IIIE::trash_rule(char *) / (rule *)
 OBJECT_CLASSES = ("SiegeFleet", "MoveFleet", "AttackFleet")
+# ScriptInterface methods whose last `int &` parameter is an out parameter (A2 returns `ok, value`)
+OUT_INT_PARAMS = ("RecruitSpecialForces",)
 # ScriptInterface methods the converted script implements itself.
 INTERNAL = re.compile(r"ScriptCreate_|ScriptGet_|ScriptDestroy_|(Add|Remove)(To|From)(Load|Save)$")
 VAR_SLOTS = {4: "is_dirty", 5: "set_clean", 6: "mark_dirty", 7: "set", 8: "get",
@@ -145,6 +147,116 @@ class Dsl:
             if self.pe.section_of(a) == ".text":
                 self.code_names[self.entry(a)] = drl.plain_name(n)
         self._ftol = {}
+        self._kinds = {}
+        self._statics = None
+        self.static_refs = {}  # unexported data the lifted code touched: address -> class
+
+    def dword(self, addr):
+        """The 32-bit word the file image holds at addr (None outside it)."""
+        o = self.pe.off(addr - self.pe.base)
+        if o is None or o + 4 > len(self.pe.data):
+            return None
+        return struct.unpack_from("<I", self.pe.data, o)[0]
+
+    def static_class(self, addr):
+        """How an unexported global is resolved (the lifter never leaves one unnamed):
+        "rodata"  in a read-only section: the image's word is the value;
+        "const"   in .data/.bss and never written or address-taken by the DLL's code:
+                  the image's initial word is the value;
+        "mutable" written (or its address handed out): a slot of the script's `G` table,
+                  started from the image's initial word."""
+        if self._statics is None:
+            written, taken = set(), set()
+            for _, t in self.ins:
+                mn, _, ops = t.partition(" ")
+                ops = ops.strip()
+                if not ops or mn in ("call", "jmp") or mn.startswith("j"):
+                    continue
+                first, _, rest = ops.partition(",")
+                for m in re.finditer(r"0x1[0-9a-f]{7}\b", ops):
+                    n = int(m.group(0), 16)
+                    in_first = m.start() < len(first)
+                    memory = "ds:" in ops[max(0, m.start() - 3):m.start()] or "[" in ops[:m.start()].rsplit(",", 1)[-1]
+                    if memory and in_first and mn not in ("cmp", "test", "push", "fld", "fild", "fcom", "fcomp", "fadd",
+                                                            "fsub", "fmul", "fdiv", "fsubr", "fdivr", "fcmp"):
+                        written.add(n)
+                    elif not memory:
+                        taken.add(n)
+            self._statics = (written, taken)
+        written, taken = self._statics
+        sec = self.pe.section_of(addr)
+        if sec == ".rdata":
+            return "rodata"
+        if addr in written or addr in taken:
+            return "mutable"
+        return "const"
+
+    def helper_kind(self, addr):
+        """A routine of the C runtime or the compiler the mission code calls, recognised
+        by what it does (never by address), so it is modelled instead of lifted:
+        "sprintf" (formats into a buffer), "strcmp", "vec3" (the Vector3 constructor from
+        three floats) and "report" (the debug assertion reporter: always answers 0)."""
+        if addr in self._kinds:
+            return self._kinds[addr]
+        self._kinds[addr] = None
+        i = self.at.get(addr)
+        if i is None:
+            return None
+        body = []
+        for _, t in self.ins[i:i + 400]:
+            body.append(t)
+            if t.startswith("ret"):
+                break
+        head = body[:70]
+        kind = None
+        if any(re.fullmatch(r"mov\s+DWORD PTR \[e\w\w\+0xc\],0x42", t) for t in head) and \
+                any(re.fullmatch(r"mov\s+DWORD PTR \[e\w\w\+0x4\],0x7fffffff", t) for t in head):
+            kind = "sprintf"
+        elif len(body) > 3 and body[0].startswith("mov    edx,DWORD PTR [esp+0x4]") and \
+                body[1].startswith("mov    ecx,DWORD PTR [esp+0x8]") and "cmp    al,BYTE PTR [ecx]" in body:
+            kind = "strcmp"
+        elif body and body[-1] == "ret    0xc":
+            loads = {m.group(1) for t in body for m in [re.search(r"DWORD PTR \[ebp\+(0x8|0xc|0x10)\]", t)] if m}
+            offs = []
+            for t in body:
+                m = re.fullmatch(r"mov\s+DWORD PTR \[(?!ebp)e\w\w(?:\+(0x[0-9a-f]+))?\],e\w\w", t)
+                if m:
+                    offs.append(int(m.group(1), 16) if m.group(1) else 0)
+            if loads == {"0x8", "0xc", "0x10"} and sorted(offs) == [0, 4, 8] \
+                    and not any(t.startswith(("call", "f")) for t in body):
+                kind = "vec3"
+        if kind is None and any(t.startswith("stos   WORD PTR es:[edi]") for t in self.ins_text(i, 400)):
+            sites = self.call_sites(addr)
+            if len(sites) >= 10 and all(self.is_assert_site(j) for j in sites):
+                kind = "report"
+        self._kinds[addr] = kind
+        return kind
+
+    def ins_text(self, i, n):
+        """The instructions of the function at index i (up to n): to its `int3` padding."""
+        out, seen_ret = [], False
+        for _, t in self.ins[i:i + n]:
+            if t == "int3" and seen_ret:
+                break
+            seen_ret = seen_ret or t.startswith("ret")
+            out.append(t)
+        return out
+
+    def call_sites(self, addr):
+        if not hasattr(self, "_sites"):
+            self._sites = {}
+            for j, (_, t) in enumerate(self.ins):
+                m = re.fullmatch(r"call\s+0x([0-9a-f]+)", t)
+                if m:
+                    self._sites.setdefault(self.thunks.get(int(m.group(1), 16), int(m.group(1), 16)), []).append(j)
+        return self._sites.get(addr, [])
+
+    def is_assert_site(self, j):
+        """`push ...; push type; call f; add esp,N`: the C runtime's debug report (assert,
+        error, warning: report type 0..2, a variable number of arguments)."""
+        prev = self.ins[j - 1][1] if j else ""
+        nxt = self.ins[j + 1][1] if j + 1 < len(self.ins) else ""
+        return prev in ("push   0x0", "push   0x1", "push   0x2") and nxt.startswith("add    esp,")
 
     def entry(self, addr):
         addr = self.thunks.get(addr, addr)
@@ -274,6 +386,7 @@ class Lifted:
 class Lifter:
     def __init__(self, dsl):
         self.d = dsl
+        self.byte_index = {}  # jmp address -> (the byte load's address, the index register)
 
     # ------------------------------------------------------------ CFG
 
@@ -294,13 +407,26 @@ class Lifter:
         if n is None or n > 256:
             raise DecodeError(f"jump table without a bound at {a:#x}")
         base = int(m.group(2), 16)
-        out = []
-        for k in range(n + 1):
+
+        def word(k):
             o = d.pe.off(base + 4 * k - d.pe.base)
             if o is None:
                 raise DecodeError(f"jump table outside the file at {a:#x}")
-            out.append(struct.unpack_from("<I", d.pe.data, o)[0])
-        return out
+            return struct.unpack_from("<I", d.pe.data, o)[0]
+
+        # Two-level table (`xor r,r; mov rl,BYTE PTR [idx+bytes]; jmp [r*4+targets]`): the
+        # bytes map the bounded index to an entry of the target table.
+        if i >= 2 and d.ins[i - 2][1].startswith("xor"):
+            mb = re.fullmatch(r"mov\s+([abcd]l),BYTE PTR \[(e\w\w)\+(0x[0-9a-f]+)\]", d.ins[i - 1][1])
+            if mb:
+                bytes_at = int(mb.group(3), 16)
+                o = d.pe.off(bytes_at - d.pe.base)
+                if o is None:
+                    raise DecodeError(f"jump table outside the file at {a:#x}")
+                idx = list(d.pe.data[o:o + n + 1])
+                self.byte_index[a] = (d.ins[i - 1][0], mb.group(2))
+                return [word(k) for k in idx]
+        return [word(k) for k in range(n + 1)]
 
     def blocks(self, start):
         d = self.d
@@ -505,6 +631,8 @@ class Lifter:
                 st.args.extend([("stackslot",)] * (n // 4))
                 st.sub_esp = True
             return None
+        if mn == "mov" and any(b[0] == a for b in self.byte_index.values()):
+            return None  # the byte of a two-level jump table: the switch reads the index itself
         if mn == "mov":
             dst, src = [x.strip() for x in ops.split(",", 1)]
             if dst in ("esi", "edi", "ebx") and src == "esp":
@@ -557,6 +685,8 @@ class Lifter:
         if mn == "jmp":
             if a in self.switches:
                 m = re.fullmatch(r"DWORD PTR \[(e\w\w)\*4\+0x[0-9a-f]+\]", ops)
+                if a in self.byte_index:
+                    return ("switch", self.read(st, self.byte_index[a][1], a), self.switches[a])
                 return ("switch", self.read(st, m.group(1), a), self.switches[a])
             return ("jmp", int(ops, 16), None)
         if mn in SETCC:
@@ -672,6 +802,7 @@ class Lifter:
             return ("obj", name) if off == 0 else ("elem", name, ("const", off // 4))
         sec = d.pe.section_of(addr)
         if sec in (".data", ".rdata", ".bss", ".idata") or sec is None:
+            d.static_refs.setdefault(addr, "word")
             return ("gvar", addr)
         raise DecodeError(f"global in {sec} at {addr:#x} ({a:#x})")
 
@@ -699,7 +830,9 @@ class Lifter:
                 return st.mem[lv]
             if k == "gvar" and lv in st.mem:
                 return st.mem[lv]
-            return lv if k != "gvar" else ("glob", lv[1])
+            if k == "gvar":
+                return self.static_value(lv[1])
+            return lv
         if k == "loc":
             if lv in st.mem:
                 return st.mem[lv]
@@ -727,6 +860,19 @@ class Lifter:
                 return ("field", base, off // 4)
             raise DecodeError(f"load [{base[0]}+{off:#x}] at {a:#x}")
         raise DecodeError(f"load of {k} at {a:#x}")
+
+    def static_value(self, addr):
+        """The value of a global the DLL does not export (never a silent nil): the word the
+        image holds when the code only reads it (constants, never-written statics), else a
+        slot of the script's `G` table that the image's word starts."""
+        d = self.d
+        w = d.dword(addr)
+        if w is not None and d.static_class(addr) in ("rodata", "const"):
+            d.static_refs[addr] = d.static_class(addr)
+            return d_immediate(d, w) if d.pe.section_of(w) in (".rdata", ".data", ".bss", ".text") \
+                else ("const", w - (1 << 32) if w >= 1 << 31 else w)
+        d.static_refs[addr] = "word"
+        return ("glob", addr)
 
     def glob_off(self, lv, off, a):
         name = lv[1]
@@ -929,6 +1075,9 @@ class Lifter:
             if d.is_chkstk(body):
                 st.body = False  # `mov eax,N; call _chkstk`: a large frame's prologue
                 return None
+            kind = d.helper_kind(body)
+            if kind:
+                return self.known_call(st, stmts, ntmp, a, kind, i)
             if not d.is_ftol(body):
                 # an internal function may write any global, variable or handed-out slot
                 self.snap(st, stmts, lambda e: e[0] in ("obj", "elem", "vfield", "glob", "var", "locidx")
@@ -980,9 +1129,24 @@ class Lifter:
                 slot_out, raw = raw[0], raw[1:]
                 if not (slot_out and slot_out[0] == "addr" and slot_out[1][0] == "loc"):
                     raise DecodeError(f"{plain}: struct return into {slot_out} at {a:#x}")
-            args = self.typed(raw, params, plain, a)
+            outlv = None
+            if plain in OUT_INT_PARAMS and params and params[-1] == "AH" and raw[-1] and raw[-1][0] == "addr":
+                outlv = raw[-1][1]  # `int &out`: the engine writes the handle through it
+                raw = raw[:-1] + [self.load(st, outlv, a)]  # the binding echoes it back when nothing was recruited
+            args = self.typed(raw, params, plain, a, st)
             f.engine_calls[plain] = f.engine_calls.get(plain, 0) + 1
             call = ("call", plain, args)
+            if outlv is not None:
+                call = ("callout", plain, args)
+                t = self.new_tmp(ntmp)
+                stmts.append(("set", t, call))
+                self.snap(st, stmts, reads_location(outlv))
+                stmts.append(("set", outlv, ("outval", outlv)))
+                if outlv in st.mem:
+                    del st.mem[outlv]
+                self.clobber(st)
+                st.r["eax"] = t
+                return None
             special = self.special(plain, args, a, ret)
             if ret == "X":
                 stmts.append(special or ("eval", call))
@@ -1056,7 +1220,7 @@ class Lifter:
                 raise DecodeError(f"cannot read the signature of {cls}::{plain} at {a:#x}")
             n = sum(push_count(p) for p in params)
             raw = self.take(st, n, a)
-            args = self.typed(raw, params, f"{cls}::{plain}", a)
+            args = self.typed(raw, params, f"{cls}::{plain}", a, st)
             key = f"{cls}.{plain}"
             f.engine_calls[key] = f.engine_calls.get(key, 0) + 1
             call = ("mcall", obj[1], cls, plain, args)
@@ -1086,7 +1250,89 @@ class Lifter:
             return None
         raise DecodeError(f"call on {obj[0]} slot {slot} at {a:#x}")
 
-    def typed(self, raw, params, what, a):
+    def set_lv(self, st, stmts, lv, v, a):
+        """A store the lifter makes itself (not decoded from a `mov`)."""
+        if lv[0] not in ("loc", "gvar", "locidx"):
+            raise DecodeError(f"store to {lv[0]} at {a:#x}")
+        if lv[0] == "locidx":
+            for x in list(st.mem):
+                if x[0] == "loc":
+                    del st.mem[x]
+        else:
+            st.mem[lv] = v if v[0] in ("const", "float", "str", "tmp") else lv_value(lv)
+        v = self.snap(st, stmts, reads_location(lv), v)
+        stmts.append(("set", lv, v))
+
+    def known_call(self, st, stmts, ntmp, a, kind, i):
+        """A call of a C runtime / compiler routine `Dsl.helper_kind` recognised."""
+        if kind == "vec3":
+            # Vector3::Vector3(float x, float y, float z), `this` in ecx, the callee pops 3 words
+            this = st.r.get("ecx")
+            if not this or this[0] != "addr":
+                raise DecodeError(f"Vector3 constructor on {this and this[0]} at {a:#x}")
+            lv = this[1]
+            vals = []
+            for v in self.take(st, 3, a):
+                v = self.arg(v, a)
+                if v[0] == "const":
+                    v = ("float", struct.unpack("<f", struct.pack("<I", v[1] & 0xFFFFFFFF))[0])
+                vals.append(v)
+            self.clobber(st)  # (the constructor writes only the three words below)
+            for k, v in enumerate(vals):
+                if lv[0] == "loc":
+                    self.set_lv(st, stmts, ("loc", lv[1] + 4 * k), v, a)
+                elif lv[0] == "obj" and next(x for x in self.d.data.values() if x[0] == lv[1])[1] == "Vector3":
+                    stmts.append(("set", ("vfield", lv[1], k), v))
+                else:
+                    raise DecodeError(f"Vector3 constructor on {lv[0]} at {a:#x}")
+            st.r["eax"] = this
+            return None
+        nxt = self.d.ins[i + 1][1] if i + 1 < len(self.d.ins) else ""
+        mm = re.fullmatch(r"add\s+esp,(0x[0-9a-f]+)", nxt)
+        if not mm:
+            raise DecodeError(f"call of a {kind} routine without `add esp` at {a:#x}")
+        n = int(mm.group(1), 16) // 4
+        if n > len(st.args):
+            raise DecodeError(f"{kind} call with {n} arguments, {len(st.args)} pushed at {a:#x}")
+        raw = list(reversed(st.args[len(st.args) - n:]))
+        if kind == "report":
+            # the debug reporter: no debugger is attached, it answers 0 (ignore)
+            self.clobber(st)
+            st.r["eax"] = ("const", 0)
+            return None
+        def string_arg(v):
+            v = self.arg(v, a)
+            return self.by_pointer(st, "PD", v[1], kind, a) if v and v[0] == "addr" and v[1][0] in ("loc", "gvar") else v
+
+        args = [string_arg(x) if (kind == "strcmp" or k == 1 or k > 1) else self.arg(x, a) for k, x in enumerate(raw)]
+        if kind == "strcmp":
+            if len(args) != 2:
+                raise DecodeError(f"strcmp with {len(args)} arguments at {a:#x}")
+            t = self.new_tmp(ntmp)
+            stmts.append(("set", t, ("strcmp", args[0], args[1])))
+            self.clobber(st)
+            st.r["eax"] = t
+            return None
+        # sprintf(buffer, format, ...)
+        buf = self.arg(raw[0], a) if raw else None
+        if len(args) < 2 or not buf or buf[0] != "addr":
+            raise DecodeError(f"sprintf into {buf and buf[0]} at {a:#x}")
+        lv = buf[1]
+        if lv[0] == "gvar":
+            self.d.static_refs[lv[1]] = "str"
+        fmt = args[1]
+        if fmt[0] == "str" and re.search(r"%[-+ #0-9.]*[fgeEG]", fmt[1]):
+            raise DecodeError(f"sprintf with a floating point conversion at {a:#x}")
+        t = self.new_tmp(ntmp)
+        stmts.append(("set", t, ("sprintf", fmt, args[2:])))
+        self.set_lv(st, stmts, lv, t, a)
+        self.clobber(st)
+        n2 = self.new_tmp(ntmp)
+        stmts.append(("set", n2, ("slen", t)))
+        st.r["eax"] = n2
+        return None
+
+    def typed(self, raw, params, what, a, st=None):
         """Call arguments by the method's parameter types: a pushed constant in
         a `float` is the float's bits; a `Vector3` by value is three slots."""
         args, k = [], 0
@@ -1094,6 +1340,8 @@ class Lifter:
             c = push_count(p)
             if c == 1:
                 v = raw[k]
+                if st is not None and v and v[0] == "addr" and p in ("AVVector3@@", "AH", "PD"):
+                    v = self.by_pointer(st, p, v[1], what, a)
                 if p == "M" and v and v[0] == "const":
                     v = ("float", struct.unpack("<f", struct.pack("<I", v[1] & 0xFFFFFFFF))[0])
                 v = self.arg(v, a)
@@ -1106,6 +1354,45 @@ class Lifter:
                 raise DecodeError(f"{what}: parameter type {p} at {a:#x}")
             k += c
         return args
+
+    def by_pointer(self, st, p, lv, what, a):
+        """An argument the compiler passed by address (`Vector3 &`, `int &`, `char *`) as the
+        value the callee reads: a stack temporary (or a global) the code filled just before
+        the call becomes a Vector, a handle or a string in the script. Never a Ref table."""
+        d = self.d
+        if p == "AVVector3@@":
+            comps = []
+            if lv[0] == "loc":
+                for k in range(3):
+                    slot = ("loc", lv[1] + 4 * k)
+                    v = st.mem.get(slot)
+                    if v is None or v == slot:
+                        v = ("fbits", slot)  # filled in an earlier block: the slot holds float bits or a float
+                    elif v[0] == "const":
+                        v = ("float", struct.unpack("<f", struct.pack("<I", v[1] & 0xFFFFFFFF))[0])
+                    comps.append(v)
+                return ("vec", comps)
+            if lv[0] == "obj" and next(x for x in d.data.values() if x[0] == lv[1])[1] == "Vector3":
+                return ("vec", [("vfield", lv[1], k) for k in range(3)])
+            if lv[0] == "vfield" and lv[2] == 0:
+                return ("vec", [("vfield", lv[1], k) for k in range(3)])
+            raise DecodeError(f"{what}: Vector3 passed by address of {lv[0]} at {a:#x}")
+        if p == "AH":
+            if lv[0] == "obj" and next(x for x in d.data.values() if x[0] == lv[1])[1] == "intarray":
+                lv = ("elem", lv[1], ("const", 0))  # the address of an array is its first element
+            return self.load(st, lv, a)
+        # a `char *`: a buffer the code formatted, or a string of the image
+        if lv[0] == "gvar":
+            if lv in st.mem:
+                return st.mem[lv]
+            if d.static_class(lv[1]) in ("rodata", "const"):
+                try:
+                    return ("str", d.pe.cstr(lv[1]))
+                except DecodeError:
+                    pass
+            d.static_refs[lv[1]] = "str"
+            return ("glob", lv[1])
+        return self.load(st, lv, a)
 
     def special(self, plain, args, a, ret=None):
         """Engine calls the converted script implements itself."""
@@ -1143,6 +1430,8 @@ class Lifter:
         if m:
             addr = int(m.group(2), 16)
             g = d.global_at(addr)
+            if m.group(1) == "QWORD" and not g and d.static_class(addr) in ("rodata", "const") and not integer:
+                return ("float", d.pe.f64(addr))  # a double nothing writes: its image value
             if g or d.pe.section_of(addr) in (".data", ".bss"):
                 return self.read(st, op, a)
             if integer:
@@ -1446,6 +1735,20 @@ def render_expr(e, nm, ctx="num"):
     elif k == "call":
         args = "".join(", " + render_expr(x, nm, "arg") for x in e[2])
         s = f"A({lua_str(e[1])}{args})"
+    elif k == "callout":
+        args = "".join(", " + render_expr(x, nm, "arg") for x in e[2])
+        s = f"AO({lua_str(e[1])}{args})"
+    elif k == "outval":
+        s = f"OUTV({render_lv(e[1], nm)})"
+    elif k == "sprintf":
+        args = "".join(", " + render_expr(x, nm, "arg") for x in e[2])
+        s = f"SPRINTF({render_expr(e[1], nm, 'arg')}{args})"
+    elif k == "strcmp":
+        s = f"STRCMP({render_expr(e[1], nm, 'arg')}, {render_expr(e[2], nm, 'arg')})"
+    elif k == "slen":
+        s = f"#({render_expr(e[1], nm, 'arg')})"
+    elif k == "fbits":
+        s = f"FB({render_lv(e[1], nm)})"
     elif k == "fcall":
         args = ", ".join(render_expr(x, nm, "arg") for x in e[2])
         s = f"M.{nm.fn(e[1])}({args})"
@@ -1511,8 +1814,8 @@ def render_expr(e, nm, ctx="num"):
     elif k == "code":
         s = f"M.{nm.fn(nm.d.entry(e[1]))}"
     elif k == "addr":
-        lv = e[1]
-        s = f"Ref({lua_str(render_lv(lv, nm))})"
+        # an address reaches Lua only as the value the callee reads (Lifter.by_pointer)
+        raise DecodeError(f"the address of {e[1][0]} is passed on as a value")
     elif k == "varptr":
         s = f"V.{e[1]}"
     elif k == "script":
@@ -1537,7 +1840,7 @@ def render_expr(e, nm, ctx="num"):
         raise DecodeError(f"cannot render {k}")
     if ctx == "bool":
         return f"T({s})"
-    if ctx == "num" and k in ("call", "tmp", "var", "obj", "reg", "loc", "glob", "param", "elem", "fcall", "field",
+    if ctx == "num" and k in ("call", "callout", "strcmp", "slen", "fbits", "tmp", "var", "obj", "reg", "loc", "glob", "param", "elem", "fcall", "field",
                               "vfield", "locidx", "mcall", "objref"):
         return f"N({s})"
     return s
@@ -1566,7 +1869,7 @@ def render_lv(lv, nm):
     raise DecodeError(f"cannot assign to {k}")
 
 
-CALLS = ("call", "fcall", "mcall", "newvar", "varq", "newscript", "enginevar")
+CALLS = ("call", "callout", "fcall", "mcall", "newvar", "varq", "newscript", "enginevar")
 
 
 def first_effect(e, n):
@@ -1653,7 +1956,7 @@ def inline_temps(blocks):
                 if not (prev[0] == "set" and prev[1][0] == "tmp" and uses.get(prev[1][1]) == 1):
                     break
                 n = prev[1][1]
-                if prev[2][0] in ("newscript",):
+                if prev[2][0] in ("newscript", "callout"):
                     break
                 if first_effect(stmt_exprs(cur), n) != "tmp":
                     break  # another call would run first: keep the compiler's order
@@ -1742,7 +2045,50 @@ local function SAR(x, n) x = I(x) n = I(n) if x >= 0 then return x >> n end retu
 local function IDIV(x, y) x, y = I(x), I(y) if y == 0 then return 0 end local q = x // y if q < 0 and q * y ~= x then q = q + 1 end return q end
 local function IMOD(x, y) x, y = I(x), I(y) if y == 0 then return 0 end return x - IDIV(x, y) * y end
 local function VEC(v, k) if type(v) ~= 'table' and type(v) ~= 'userdata' then return 0 end local ok, r = pcall(function() return ({v.x, v.y, v.z})[k] end) return ok and r or 0 end
-local function Ref(name) return { ref = name } end
+-- A stack slot read as a float: a constant the compiler stored as raw float bits is an
+-- integer here, anything the code computed is already a float.
+local function FB(v)
+    if math.type(v) == 'integer' then return (string.unpack('<f', string.pack('<I4', v & 0xffffffff))) end
+    return N(v)
+end
+local function STRCMP(a, b)
+    a, b = tostring(a or ''), tostring(b or '')
+    if a == b then return 0 end
+    return a < b and -1 or 1
+end
+-- sprintf into a buffer (the buffer becomes the formatted string); `%i` and `%u` are `%d`.
+local function SPRINTF(fmt, ...)
+    -- a byte scan, not a pattern: the mission sandbox limits pattern size and quantifiers
+    local args, n, out, i = { ... }, 0, {}, 1
+    fmt = tostring(fmt or '')
+    while i <= #fmt do
+        local c = fmt:sub(i, i)
+        if c ~= '%' then
+            out[#out + 1] = c
+            i = i + 1
+        else
+            local j = i + 1
+            while j <= #fmt and ('-+ 0123456789.'):find(fmt:sub(j, j), 1, true) do j = j + 1 end
+            local flags = fmt:sub(i + 1, j - 1)
+            while j <= #fmt and ('hlLIw#'):find(fmt:sub(j, j), 1, true) do j = j + 1 end  -- length modifiers
+            local conv = fmt:sub(j, j)
+            if conv == '' then break end
+            i = j + 1
+            if conv == '%' then
+                out[#out + 1] = '%'
+            else
+                n = n + 1
+                local v = args[n]
+                if conv == 's' then out[#out + 1] = string.format('%' .. flags .. 's', tostring(v or ''))
+                elseif conv == 'c' then out[#out + 1] = string.char(I(v) & 0xff)
+                elseif conv == 'u' then out[#out + 1] = string.format('%' .. flags .. 'd', I(v) & 0xffffffff)
+                elseif conv == 'i' or conv == 'd' then out[#out + 1] = string.format('%' .. flags .. 'd', I(v))
+                else out[#out + 1] = string.format('%' .. flags .. conv, I(v) & 0xffffffff) end
+            end
+        end
+    end
+    return table.concat(out)
+end
 local function U(x) return I(x) & 0xffffffff end
 local function ULT(x, y) return math.ult(I(x) & 0xffffffff, I(y) & 0xffffffff) end
 
@@ -1751,6 +2097,21 @@ local M = {}
 local V, S, O, G = Mission.vars, Mission.state, Mission.objects, Mission.globals
 
 local ENGINE_WRITES = {}
+-- Variables the engine writes (team strength, moons, warp attempts, the cineractive flags):
+-- the script only reads them. A read goes through `S`'s __index, is counted in
+-- Mission.engineReads[name], and asks the host (`A2.EngineVariable(name)`, bound later) for the
+-- value; with no host answer it reads the engine's start value.
+setmetatable(S, { __index = function(_, p)
+    local var = Mission.engineWritten[p]
+    if not var then return nil end
+    Mission.engineReads[var.name] = (Mission.engineReads[var.name] or 0) + 1
+    local f = A2 and A2.EngineVariable
+    if type(f) == 'function' then
+        local ok, v = pcall(f, var.name)
+        if ok and type(v) == 'number' then Mission.setEngineValue(var, v) end
+    end
+    return var.value
+end })
 -- The calls that did not work, in order of first occurrence (for the report).
 local function problem(name, kind, why)
     Mission.lastProblem = name
@@ -1781,6 +2142,7 @@ local function A(name, ...)
         Mission.missing[name] = (Mission.missing[name] or 0) + 1
         Mission.callFailed = true
         problem(name, 'unbound')
+        if A2 and A2.NoteGap then A2.NoteGap(name, ...) end
         return nil
     end
     local ok, v = pcall(f, ...)
@@ -1806,6 +2168,29 @@ local function A(name, ...)
     return v
 end
 
+-- A call with an `int &` out parameter (RecruitSpecialForces): the binding returns `ok, value`;
+-- the value is written to the slot the script passed (OUTV), the slot keeps its value when
+-- the call did not run.
+local function AO(name, ...)
+    Mission.out = nil
+    local f = A2 and A2[name]
+    if type(f) == 'function' then
+        local ok, v, o = pcall(f, ...)
+        if ok then
+            Mission.calls[name] = (Mission.calls[name] or 0) + 1
+            Mission.out = o
+            return v
+        end
+    end
+    return A(name, ...)
+end
+local function OUTV(cur)
+    local o = Mission.out
+    Mission.out = nil
+    if o == nil then return cur end
+    return o
+end
+
 -- Methods of engine objects a ScriptInterface call returned (fleets).
 local function FM(obj, cls, name, ...)
     local key = cls .. '.' .. name
@@ -1815,6 +2200,7 @@ local function FM(obj, cls, name, ...)
         Mission.missing[key] = (Mission.missing[key] or 0) + 1
         Mission.callFailed = true
         problem(key, 'unbound')
+        if A2 and A2.NoteGap then A2.NoteGap(key, ...) end
         return nil
     end
     local ok, v = pcall(f, obj, ...)
@@ -1857,14 +2243,25 @@ end
 -- engine's own writes to them (cineractive cancel, team strength) are not
 -- reproduced here.
 local function EngineVar(name, kind)
-    Mission.engineVars[name] = Mission.engineVars[name] or NewVar(kind or 'hot_int', name)
-    return Mission.engineVars[name]
+    local var = Mission.engineVars[name]
+    if not var then
+        var = NewVar(kind or 'hot_int', name)
+        var.engine = true
+        Mission.engineVars[name] = var
+    end
+    return var
 end
 local function BindVar(p, kind, var)
     if type(var) ~= 'table' then var = NewVar(kind, p) end
     var.p = p
     V[p] = var
-    S[p] = var.value
+    if var.engine and p ~= 'p_ALWAYS_EVALUATE' then
+        -- engine-written: read through the counted __index of S, never a stored copy
+        Mission.engineWritten[p] = var
+        rawset(S, p, nil)
+    else
+        S[p] = var.value
+    end
 end
 local function varOf(p)
     local var = V[p]
@@ -1874,13 +2271,14 @@ end
 local function setValue(var, value)
     if var.value ~= value then
         var.value = value
-        S[var.p] = value
+        if not Mission.engineWritten[var.p] then S[var.p] = value end
         if not var.dirty then
             var.dirty = true
             addAffected(var)
         end
     end
 end
+function Mission.setEngineValue(var, v) setValue(var, v) end
 local function stopTimer(var)
     if var.remaining > 0 then
         for i, x in ipairs(Mission.timers) do
@@ -2007,7 +2405,7 @@ function Mission:runRules()
         end
         if var.kind == 'timer_int' then
             if var.value == 1 then var.value = 2 elseif var.value ~= 0 then var.value = 0 else var.dirty = false end
-            S[var.p] = var.value
+            if not Mission.engineWritten[var.p] then S[var.p] = var.value end
         elseif var.kind ~= 'dirty_int' then
             var.dirty = false
         end
@@ -2111,7 +2509,7 @@ def convert(dsl_path, drl_path, engine):
     w("    vars = {}, state = {}, objects = {}, globals = {}, timers = {}, scripts = {},")
     w("    rules = {}, affected = {}, satisfied = {}, fired = {}, fireCount = {}, ran = {},")
     w("    calls = {}, missing = {}, failed = {}, notDecoded = {}, stepErrors = {},")
-    w("    conditionErrors = {}, engineVars = {}, stepCount = 0, callFailed = false,")
+    w("    conditionErrors = {}, engineVars = {}, engineWritten = {}, engineReads = {}, stepCount = 0, callFailed = false,")
     w("    problems = {}, problemOrder = {}, blocked = {}, invalid = {}, unresolved = {},")
     w("}")
     w(PRELUDE)
@@ -2124,6 +2522,21 @@ def convert(dsl_path, drl_path, engine):
             # a handle an earlier script has not yet written)
             w(f"O.{n} = {'0' if k == 'int' else '0.0'}")
     w("")
+    statics = [(a, k) for a, k in sorted(d.static_refs.items()) if k in ("word", "str")]
+    if statics:
+        w("-- Globals of the DLL that it does not export and that the code writes (or hands out the")
+        w("-- address of): slots of G, started from the DLL image's words; read-only ones are inlined.")
+        for a, k in statics:
+            if k == "str":
+                try:
+                    v = lua_str(d.pe.cstr(a))
+                except DecodeError:
+                    v = "''"
+            else:
+                x = d.dword(a) or 0
+                v = str(x - (1 << 32) if x >= 1 << 31 else x)
+            w(f"G[{a:#x}] = {v}")
+        w("")
     w("-- ---------------------------------------------------------------- functions")
     order = sorted(funcs, key=lambda a: (["ScriptExtendInterface", "ScriptInit", "action", "step", "helper"]
                                          .index(roles.get(a, "helper")) if roles.get(a) in
@@ -2154,17 +2567,21 @@ def convert(dsl_path, drl_path, engine):
             w("}")
         w("")
         # the rule conditions use drl_to_lua's guard name
-    report = mission_report(mission, funcs, roles, nm, rules)
+    report = mission_report(mission, funcs, roles, nm, rules, {"const": sum(1 for k in d.static_refs.values() if k in ("rodata", "const")), "slots": len([1 for k in d.static_refs.values() if k in ("word", "str")])})
     names = sorted(n for n in set(report["engine_calls"]) | set(rules["calls"] if rules else [])
                    if not INTERNAL.match(n))
     w("-- Engine calls the converted code makes (bodies and rule conditions).")
     w("Mission.engineNames = { " + ", ".join(lua_str(n) for n in names) + " }")
+    # Functions the converter could not decode (each is a stub that records it ran): listed so
+    # nothing is dropped silently; `Mission.notDecoded` counts the ones that ran.
+    und = sorted((nm.fn(a), f.error) for a, f in funcs.items() if f.error)
+    w("Mission.undecoded = { " + ", ".join(f"[{lua_str(n)}] = {lua_str(e)}" for n, e in und) + " }")
     w(ENGINE)
     src = "\n".join(L) + "\n"
     return mission, src, report
 
 
-def mission_report(mission, funcs, roles, nm, rules):
+def mission_report(mission, funcs, roles, nm, rules, statics=None):
     by_role = {}
     errors = []
     engine = {}
@@ -2185,6 +2602,7 @@ def mission_report(mission, funcs, roles, nm, rules):
         "loops": sum(1 for f in funcs.values() if f.loops),
         "engine_calls": dict(sorted(engine.items())),
         "rules": len(rules["rules"]) if rules else 0,
+        "statics": statics,
         "rule_conditions_decoded": sum(1 for r in rules["rules"] if r.get("condition_lua") is not None) if rules else 0,
     }
 
@@ -2199,6 +2617,32 @@ def find_missions(root):
                 drlf = low.get((stem + "r.drl").lower())
                 out.append((os.path.join(d, f), os.path.join(d, drlf) if drlf else None))
     return sorted(out)
+
+
+def map_stems(roots):
+    """{mission (lower case): [BZN stems]} from the maps of the installs: a map names the
+    mission DLL it runs (`<mission>S.dsl`) in its script section, and the mission resolver
+    looks a script up by the map's stem, which is not always the DLL's name (the UI
+    tutorial's map `a2_tutorial_UI` runs `a2_Tutorial1`)."""
+    out = {}
+    for root in roots:
+        for d, dirs, files in os.walk(root):
+            if os.path.basename(d).lower() != "bzn":
+                continue
+            dirs[:] = []
+            for f in sorted(files):
+                if not f.lower().endswith(".bzn"):
+                    continue
+                try:
+                    data = open(os.path.join(d, f), "rb").read()
+                except OSError:
+                    continue
+                stem = f[:-4].lower()
+                for m in re.finditer(rb"([A-Za-z0-9_]+)[sS]\.[dD][sS][lL]", data):
+                    stems = out.setdefault(m.group(1).decode("latin1").lower(), [])
+                    if stem not in stems:
+                        stems.append(stem)
+    return out
 
 
 def main(argv=None):
@@ -2229,6 +2673,7 @@ def main(argv=None):
                 sys.exit(f"{flag} {why}")
     report = {"missions": []}
     failed = 0
+    stems = map_stems(a.install)
     for root in a.install:
         for dsl_path, drl_path in find_missions(root):
             mission = re.sub(r"[sS]\.dsl$", "", os.path.basename(dsl_path))
@@ -2251,8 +2696,11 @@ def main(argv=None):
             if a.out:
                 out = os.path.join(os.path.realpath(a.out), "missions")
                 os.makedirs(out, exist_ok=True)
-                with open(os.path.join(out, mission.lower() + ".lua"), "w", encoding="utf-8", newline="\n") as fh:
-                    fh.write(src)
+                # one script per map that runs the mission (the resolver finds it by the map's
+                # stem); a mission no map names keeps its own name
+                for stem in stems.get(mission.lower()) or [mission.lower()]:
+                    with open(os.path.join(out, stem + ".lua"), "w", encoding="utf-8", newline="\n") as fh:
+                        fh.write(src)
     if a.json:
         with open(a.json, "w", encoding="utf-8") as fh:
             json.dump(report, fh, indent=1)
