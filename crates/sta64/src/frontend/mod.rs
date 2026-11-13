@@ -4,5 +4,6 @@
 
 pub mod campaign;
 pub mod loading;
+pub mod lobby;
 pub mod scene;
 pub mod screens;
