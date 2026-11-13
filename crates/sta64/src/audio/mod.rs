@@ -433,7 +433,10 @@ mod tests {
         let Ok(root) = std::env::var("STA64_TEST_INSTALL") else { return };
         let modname = std::env::var("STA64_TEST_MOD").ok().filter(|m| !m.is_empty()).unwrap_or_else(|| "STA2 Classic Mod".into());
         let root = std::path::PathBuf::from(root);
-        let Ok(mod_vfs) = sta_vfs::Vfs::mount_install(&root, Some(&modname)) else { return };
+        let Ok(mod_vfs) = sta_vfs::Vfs::mount_install(&root, Some(&modname)) else {
+            eprintln!("SKIP: mod {modname:?} does not mount under {}", root.display());
+            return;
+        };
         let (index, _) = sta_content::OdfIndex::build(&mod_vfs);
         let (db, _) = sta_content::ContentDb::load(&mod_vfs, &index).unwrap();
         let (races, _) = sta_content::Races::load(&mod_vfs, &index);
