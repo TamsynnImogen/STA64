@@ -1015,10 +1015,17 @@ pub fn launch_runtime(
 }
 
 /// The named paths of the map `bzn` (`a2_fed03.bzn`) in `vfs`, in file order,
-/// for `A2.paths`; empty when the map cannot be read or holds none.
+/// for `A2.paths` / `A1.paths`; empty when the map cannot be read or holds
+/// none. An Armada I map keeps its paths in its own section (`Map::a1`).
 pub fn read_map_paths(vfs: &Vfs, bzn: &str) -> Vec<(String, Vec<[f32; 3]>)> {
     let Some(Ok(bytes)) = vfs.read(&format!("bzn/{bzn}")) else { return Vec::new() };
-    sta_bzn::parse(&bytes).map(|m| m.paths.into_iter().map(|p| (p.label, p.points)).collect()).unwrap_or_default()
+    let Ok(m) = sta_bzn::parse(&bytes) else { return Vec::new() };
+    if m.paths.is_empty()
+        && let Some(a1) = m.a1
+    {
+        return a1.paths.into_iter().map(|p| (p.label, p.points)).collect();
+    }
+    m.paths.into_iter().map(|p| (p.label, p.points)).collect()
 }
 
 impl ActiveMission {
