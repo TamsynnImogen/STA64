@@ -38,6 +38,7 @@ impl Labels {
 }
 
 pub mod api;
+pub mod campaign;
 pub mod math;
 pub mod runtime;
 pub mod sandbox;
@@ -70,15 +71,22 @@ fn is_loader(name: &str) -> bool {
 pub fn resolve(vfs: &Vfs, labels: &Labels, bzn: &str, map: &sta_bzn::Map) -> Resolution {
     let stem = bzn.rsplit(['/', '\\']).next().unwrap_or(bzn);
     let stem = stem.strip_suffix(".bzn").or_else(|| stem.strip_suffix(".BZN")).unwrap_or(stem);
-    let file = format!("{stem}.bzn");
-    let mut candidates: Vec<(String, MatchedBy)> = labels.get(&file).iter().map(|t| (t.clone(), MatchedBy::Label)).collect();
+    resolve_with(&|p| vfs.resolve(p).is_some(), labels.get(&format!("{stem}.bzn")), bzn, map)
+}
+
+/// [`resolve`] over any file store: `exists` answers for VFS-style paths and
+/// `titles` are the map's `label.map` titles (used by `campaign`).
+pub fn resolve_with(exists: &dyn Fn(&str) -> bool, titles: &[String], bzn: &str, map: &sta_bzn::Map) -> Resolution {
+    let stem = bzn.rsplit(['/', '\\']).next().unwrap_or(bzn);
+    let stem = stem.strip_suffix(".bzn").or_else(|| stem.strip_suffix(".BZN")).unwrap_or(stem);
+    let mut candidates: Vec<(String, MatchedBy)> = titles.iter().map(|t| (t.clone(), MatchedBy::Label)).collect();
     candidates.push((stem.to_owned(), MatchedBy::FileName));
     if !map.description.is_empty() {
         candidates.push((map.description.clone(), MatchedBy::Description));
     }
     for (name, by) in candidates {
         let path = format!("missions/{}.lua", name.trim());
-        if vfs.resolve(&path).is_some() {
+        if exists(&path) {
             return Resolution::Lua { path, matched_by: by };
         }
     }
@@ -86,7 +94,7 @@ pub fn resolve(vfs: &Vfs, labels: &Labels, bzn: &str, map: &sta_bzn::Map) -> Res
         .scripts
         .iter()
         .filter(|s| !is_loader(s))
-        .filter(|s| vfs.resolve(&format!("missions/{s}")).is_some() || vfs.resolve(s).is_some())
+        .filter(|s| exists(&format!("missions/{s}")) || exists(s))
         .cloned()
         .collect();
     if legacy.is_empty() { Resolution::None } else { Resolution::LegacyDll { files: legacy } }

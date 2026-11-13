@@ -21,6 +21,7 @@ mod capture;
 mod frontend;
 mod input;
 mod map;
+mod media;
 mod render;
 mod ui;
 mod viewer;
