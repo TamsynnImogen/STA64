@@ -341,13 +341,14 @@ impl Weapons {
         self.shots = flying;
 
         // Compute after this tick's movement, using the same shared-vision rule
-        // as WorldView (which then also leaves out `hidden = 1` units; the sim
-        // does not read `invalidAsTarget` yet). Do not use last tick's view or
-        // explored fog.
+        // as WorldView (which then also leaves out `hidden = 1` units).
+        // `invalidAsTarget = 1` units are never picked automatically (SIM-28); an explicit order is not refused (unmeasured).
+        // Do not use last tick's view or explored fog.
         let visibility = crate::sensors::compute(units, Some(db), teams);
         for u in units.iter() {
             let Some(def) = db.unit(u.def) else { continue };
-            if def.hardpoints.is_empty() {
+            // Effect objects (`u_ball_obj`) carry effect spawners, not guns (SIM-28).
+            if def.hardpoints.is_empty() || def.class.0 == "u_ball_obj" {
                 continue;
             }
             // SIM-35: a weapon is created with an initial reload, also when
@@ -365,7 +366,7 @@ impl Weapons {
                 let Some(w) = db.weapon(hp.weapon.key) else {
                     continue;
                 };
-                if w.kind == WeaponKind::PointDefence || crate::specials::is_special(w) {
+                if w.kind == WeaponKind::PointDefence || crate::specials::is_special(w) || w.resource.is_some() {
                     continue;
                 }
                 let arc = if db.features().fire_arcs {
@@ -378,7 +379,7 @@ impl Weapons {
                 let seen = (!teams.is_empty()).then(|| visibility.iter()
                     .find(|(player, _)| *player == u.owner)
                     .map_or(&[][..], |(_, ids)| ids.as_slice()));
-                let Some(t) = self.pick(u, w.range, arc, units, teams, perception, seen) else {
+                let Some(t) = self.pick(db, u, w.range, arc, units, teams, perception, seen) else {
                     continue;
                 };
                 if self.mounts.get(u.id).is_none() {
@@ -524,6 +525,7 @@ impl Weapons {
     #[allow(clippy::too_many_arguments)]
     fn pick<'a>(
         &self,
+        db: &ContentDb,
         u: &Entity,
         range: Fixed,
         arc: Option<FireArc>,
@@ -550,7 +552,7 @@ impl Weapons {
         let mut best: Option<(Fixed, &Entity)> = None;
         for t in units.iter() {
             let perceived = perception.get(t.id).copied().unwrap_or(t.owner);
-            if team(perceived).is_none_or(|x| x == mine) || !hittable(t) {
+            if team(perceived).is_none_or(|x| x == mine) || !hittable(t) || db.unit(t.def).is_some_and(|d| d.invalid_as_target) {
                 continue;
             }
             let d = flat(u.pos, t.pos).1;

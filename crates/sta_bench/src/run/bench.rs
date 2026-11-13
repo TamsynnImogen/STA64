@@ -126,6 +126,11 @@ impl Bench {
                     .map_err(|e| format!("Start=replay:{file}: {e}"))?;
                 let r =
                     Replay::decode(&bytes).map_err(|e| format!("Start=replay:{file}: {e:?}"))?;
+                // The bench builds bare maps only; a race-start recording would
+                // otherwise fail as a tick-0 desync.
+                if r.starts != sta_sim::replay::StartRec::Bare {
+                    return Err(format!("Start=replay:{file}: {}", sta_sim::replay::ReplayError::StartsNeedRaces));
+                }
                 let setup = r
                     .setup(content.clone())
                     .map_err(|e| format!("Start=replay:{file}: {e:?}"))?;
@@ -994,6 +999,7 @@ impl Bench {
                 })
                 .collect(),
             options: r.setup.options.clone(),
+            starts: sta_sim::replay::StartRec::Bare,
             commands: r.commands.clone(),
             digests,
             end_tick: end,

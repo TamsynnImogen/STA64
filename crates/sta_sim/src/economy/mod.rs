@@ -24,6 +24,7 @@
 //! - Within 150 units of node or station counts as there; the freighter
 //!   stops and works that same tick, so a trip with no travel takes exactly
 //!   `capacity / rate + capacity / unload` ticks.
+//! - Passive income from `resourceweapon` hardpoints is in [`passive`] (SIM-24).
 //! - Not yet: mining stations (`mining` class) producing by themselves,
 //!   trade, `miningratemodifier`, `trickleMiningRateFraction`, per-resource
 //!   transfer rates (all resources use `dilithiumTransferRate`).
@@ -42,6 +43,8 @@ use crate::world::{Entities, EntityKind, Fnv, Table};
 /// Resource ids: dilithium, latinum, metal, biomatter.
 pub const RESOURCES: usize = 4;
 
+mod passive;
+mod crew;
 mod personnel;
 
 /// What a fresh node holds.

@@ -31,7 +31,7 @@ fn replace_crew(bytes: &[u8], version: u8, rows: Vec<(EntityId, [i64; 2])>) -> V
 fn current_crew_roundtrips_known_zero_and_live_values_without_capacity_refill() {
     let (mut sim, first, second) = live();
     let bytes = sim.snapshot();
-    assert_eq!(u16::from_le_bytes(bytes[4..6].try_into().unwrap()), 13);
+    assert_eq!(u16::from_le_bytes(bytes[4..6].try_into().unwrap()), crate::snapshot::FORMAT_VERSION);
     let mut restored = Sim::from_snapshot(&bytes, None).unwrap();
     assert_eq!(restored.snapshot(), bytes);
     assert_eq!(restored.view(), sim.view());

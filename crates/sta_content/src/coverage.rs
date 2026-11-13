@@ -33,7 +33,7 @@ use crate::layered;
 /// by rendering and audio helpers through wrappers may be missing, which
 /// shows as "not understood" rather than hiding a gap.
 pub const READ_ODF_KEYS: &[&str] = &[
-    "addon", "atmospheretexturename", "avoidme", "buildhardpoint", "canattack", "classlabel",
+    "addon", "adddilithium", "addlatinum", "addmetal", "addbiomatter", "addcrew", "alwaysactiveplayer", "alwaysactiveai", "onetimemode", "atmospheretexturename", "avoidme", "buildhardpoint", "canattack", "classlabel",
     "constructionchunks", "curhealth", "dont_load_sod", "effectradius", "effecttimer",
     "energydrainrate", "fieldradius", "firearc", "fire_arcs", "forwardaccel", "groundtexturename",
     "impulsespeed", "is_starbase", "lightcolor", "maxasteroids", "maxcrewgain", "maxhealth",

@@ -5655,6 +5655,7 @@ dependencies = [
  "json5",
  "postcard",
  "serde",
+ "sta_bzn",
  "sta_content",
  "sta_core",
  "sta_odf",
