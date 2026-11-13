@@ -136,15 +136,57 @@ issue and PR (`Implements D7`). Do not add a feature the "Not in v1" list
 excludes. If a decision is wrong or blocks you, comment on your issue and
 stop; changing a decision is a PR to that file approved by Tammy and Cedric.
 
+## Research and game files
+
+- Decompilation findings and measurements of the original games are not
+  committed unless STA64 needs them to work (a data table the code reads, a
+  test fixture you authored yourself). Keep them outside the repository, in a
+  separate research directory on your machine. Code comments, WORKPLAN rows and
+  PR bodies state the rule STA64 follows, the data keys it reads and the
+  evidence grade (measured / read from data / read from the executable, static / not measured), in a line or two:
+  no `docs/research/` write-ups, no measurement or bench run tables, no
+  pseudo-code, addresses or disassembly, no bench run logs.
+- Never commit game assets or anything copied or converted from them, in any
+  form: no textures, models, sounds, movies, maps, ODF/cfg/sprite/tech-tree
+  files or excerpts beyond a key name and a value, no frames showing game art,
+  no re-encoded copies. Tests that need them are install-gated and read the
+  install at run time.
+
 ## Builds
 
 The repository is built on people's own machines, often by several sessions
 at once. Bevy makes `sta64` heavy.
 
-- Every cargo command runs at low priority with two jobs:
+- Run cargo through the wrapper, which encodes the machine-wide policy (low
+  priority, a lock per build class so heavy builds queue instead of piling up,
+  `--jobs 2`, `CARGO_INCREMENTAL=0`, `CARGO_PROFILE_DEV_DEBUG=0`, and sccache
+  when it is installed):
+
+  ```sh
+  tools/agent-cargo check -p sta_sim          # light crate
+  tools/agent-cargo check -p sta64            # heavy (Bevy), inferred
+  tools/agent-cargo check --workspace --all-targets   # shared check target dir
+  tools/agent-cargo --dry-run test -p sta_sim # print lock, env, command; run nothing
+  ```
+
+  Heavy builds have two slots (`heavy.lock`, `heavy2.lock`): the second is
+  allowed only while no original-game bench session runs. Whoever runs one
+  holds `bench.lock` for its duration through the same tool
+  (`tools/agent-cargo --bench ./a2test run hud`; shared, so several bench
+  games may hold it); a heavy build that finds `heavy.lock` busy then waits
+  on it instead of taking the second slot.
+
+  `LOCK-BUSY` (exit 75) means another agent holds the lock for longer than
+  `STA64_LOCK_WAIT` seconds (default 540, under an agent tool call's
+  10-minute limit): wait and run it again. Other knobs: `STA64_LOCK_DIR`,
+  `STA64_SCCACHE=0`, `SCCACHE_DIR`, and the opt-in `STA64_MOLD=1`; see the
+  header of `tools/agent-cargo`. Its self-test is
+  `tools/agent-cargo-selftest.sh` (no build). CI does not use the wrapper.
+  Fallback without the wrapper (or where `flock` is missing):
   `renice -n 19 -p $$ >/dev/null && cargo test -p sta_sim --jobs 2`.
   (`nice`/`ionice` prefixes are refused by Claude Code's worktree guard;
-  `renice` on the shell is not.)
+  `renice` on the shell is not.) The workspace check shares one target
+  directory, `<main checkout>/.claude/target-check`, across worktrees.
 - One cargo command at a time per agent, in the foreground; no background
   builds, no `pkill`.
 - Scope to the packages you changed (`-p`). Prefer `cargo check` while

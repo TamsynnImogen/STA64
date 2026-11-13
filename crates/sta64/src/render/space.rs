@@ -201,7 +201,8 @@ pub fn star_quads(entries: &[(String, u32, f32)], sizing: &StarSizing, seed: u64
 }
 
 /// Spawn the starfield under `parent` at `radius`. `entries` are the starfield
-/// ODF's `(sprite, count, scale)`. Returns the number of stars.
+/// ODF's `(sprite, count, scale)`. Returns the number of stars drawn (a sprite whose texture
+/// cannot be loaded is skipped with a warning).
 ///
 /// Stock builds its stars as world-space quads about the map
 /// (`Starfield::mCreateStarSprite`); here each is a quad on a sphere of `radius`
@@ -235,7 +236,6 @@ pub fn starfield(
             Some((n.clone(), *count, scale * tile_gain(sprite.rect[2])))
         })
         .collect();
-    let mut total = 0;
     for q in star_quads(&drawn, sizing, 0x5741_3634) {
         let Some(sprite) = table.sprite(&drawn[q.entry].0) else { continue };
         let uv = sta_assets::spr_anim::sprite_uv(table, sprite, 0.0);
@@ -255,10 +255,16 @@ pub fn starfield(
             b.uv.push(t);
         }
         b.idx.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
-        total += 1;
     }
+    let mut drawn_stars = 0;
     for (texture, b) in batches {
-        let tex = loader.colour(&texture, false);
+        // A texture that cannot be found or decoded is not drawn: the additive material of an
+        // untextured quad is an opaque white square, never a star.
+        let Some(tex) = loader.colour(&texture, false) else {
+            warn!("starfield: texture {texture:?} not found or not readable; its {} stars are not drawn", b.pos.len() / 4);
+            continue;
+        };
+        drawn_stars += b.pos.len() / 4;
         let n = b.pos.len();
         let mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
             .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, b.pos)
@@ -267,13 +273,13 @@ pub fn starfield(
             .with_inserted_indices(Indices::U32(b.idx));
         commands.spawn((
             Mesh3d(meshes.add(mesh)),
-            MeshMaterial3d(materials.add(unlit(tex, AlphaMode::Add))),
+            MeshMaterial3d(materials.add(unlit(Some(tex), AlphaMode::Add))),
             Transform::IDENTITY,
             ChildOf(parent),
             bevy::camera::visibility::NoFrustumCulling,
         ));
     }
-    total
+    drawn_stars
 }
 
 /// Sphere share as one `GroundMesh` holds it: `count` quarter turns of longitude
@@ -333,6 +339,29 @@ mod tests {
         [("bstar.0", 36, 250.0), ("bstar.9", 23, 250.0), ("bstar.6", 27, 8.0), ("bstar.7", 41, 4.0)]
             .map(|(n, c, s)| (n.to_owned(), c, s))
             .to_vec()
+    }
+
+    /// A star sprite whose texture is nowhere in the mount draws nothing (no white quads).
+    #[test]
+    fn stars_without_a_texture_are_not_drawn() {
+        use bevy::image::CompressedImageFormats;
+        let table = SpriteTable::load("sprites.spr", |_| Some(b"sprite_table\n@tmaterial=additive\n@reference=128\nbstar.0 no_such_texture 0 0 16 16\n".to_vec()));
+        assert!(table.sprite("bstar.0").is_some());
+        assert_eq!(star_quads(&[("bstar.0".to_owned(), 50, 1.0)], &StarSizing::default(), 1).len(), 50, "stars are generated; only the texture is missing");
+        let mut world = World::new();
+        let (mut meshes, mut materials, mut images) = (Assets::<Mesh>::default(), Assets::<StandardMaterial>::default(), Assets::<Image>::default());
+        let mut cache = crate::render::textures::TextureCache::default();
+        let vfs = sta_vfs::Vfs::default();
+        let parent = world.spawn_empty().id();
+        let n = {
+            let mut commands = world.commands();
+            let mut loader = Loader { vfs: &vfs, cache: &mut cache, images: &mut images, formats: CompressedImageFormats::NONE };
+            starfield(&mut commands, &mut meshes, &mut materials, &mut loader, &table, &[("bstar.0".to_owned(), 50, 1.0)], &StarSizing::default(), 1000.0, parent)
+        };
+        world.flush();
+        assert_eq!(n, 0, "no star is counted as drawn");
+        assert_eq!(world.query::<&Mesh3d>().iter(&world).count(), 0, "no untextured quad is spawned");
+        assert!(materials.is_empty());
     }
 
     #[test]

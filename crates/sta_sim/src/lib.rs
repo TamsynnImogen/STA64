@@ -479,6 +479,10 @@ impl WorldSource for Sim {
     fn view(&self) -> Arc<WorldView> {
         Arc::new(self.build_view())
     }
+
+    fn snapshot(&self) -> Option<Vec<u8>> {
+        Some(Sim::snapshot(self))
+    }
 }
 
 #[cfg(test)]

@@ -63,38 +63,26 @@ loader defaults the beam sprite to `phaser` and reads other fields from its
 class template; this does not prove an A2 executable default. A2's mounted ODFs
 explicitly author `weldbeam`.
 
-The local A2FOExtensions **Armada 1** pseudocode (`_inferred/WorkerBee.cpp`, update
-at 0x00518250) shows home/exit, travel, timed welding, return and closure states,
-and movement at 80 world units per second. `modules/A2FOAnimations/module.cpp`
-defers the production-end animation until every bee has returned; this does not
-extend logical station construction time. These are static source findings,
-not native runtime acceptance or proof of identical A2/FO behavior.
+Armada 1 construction bees (read from recovered code, static; the pseudocode
+and addresses are kept outside the repository) show home/exit, travel, timed
+welding, return and closure states, with movement at 80 world units per second.
+The A2FOExtensions animation module defers the production-end animation until
+every bee has returned; this does not extend logical station construction time.
+These are static source findings, not native runtime acceptance or proof of
+identical A2/FO behavior.
 
-The generated corpus is pinned to SHA256
-`1c37ee8e4a24380c950a91ce5a7f9f96c4fcf3d8ffc0cc7e58faec3835350be6`,
-which matches the local GOG A1 `Armada.exe`. It does **not** match either local
-A2 `Armada2.exe` (`8d3ba6ec826198daf3e0c7b3435e9ce8195293e56da7c87e0af2634eaa4693b3`
-and `e1a51cc6d8482744c195d4602f5a45b3e926f59249c5547983fd6a7bb58415bb`).
-The initial document called this stock A2; that attribution was incorrect.
-Offsets from it must not be applied to A2. A PE-section-mapped static read of
-the matching A1 image confirms `DAT_005d2b00` is float 15.0 (file offset
-0x001d2b00, bytes `00 00 70 41`). No original game executable was run. The user
-requested the movement lock; the inspected binaries have not established A2
-movement admission or cancellation refund behavior.
-
-The requested `A2FOHookExtensions/reverse_engineering/Armada2` clean recovery
-pins the first A2 hash above. Its current named CraftProcess recovery covers
-persistence, not constructor locomotion. The sibling FleetOpsHook recovery's
-`producer_process_callbacks32::CancelBuild` adjusts a pending-item counter and
+The recovered corpus matches the A1 executable and does not match either local
+A2 executable, so its offsets must not be applied to A2. No original game
+executable was run. The user requested the movement lock; the inspected
+binaries have not established A2 movement admission or cancellation refund
+behavior. The FleetOpsHook cancel-build path adjusts a pending-item counter and
 forwards cancellation to native code; this does not establish the forwarded
-refund rule. Those two trees remain the references for further A2/FO checks;
-the bounded construction search did not establish bee hover or weld movement
-rules there. Historical patched-host notes are not clean A2 evidence.
+refund rule, and the bounded construction search did not establish bee hover or
+weld movement rules. Historical patched-host notes are not clean A2 evidence.
 
-`_unattributed/110000.cpp` at 0x00519010 copies class fields +0x570,
-+0x578 and +0x574 into the bee's takeoff, welding and closure timers. Recovered
-`Game Feature/BuildingEffect.cpp` at 0x0050d2f0 selects a mesh triangle corner
-through an ordinal and transforms its position; it does not establish the
+A recovered class initialiser copies three class fields into the bee's takeoff,
+welding and closure timers, and the building effect selects a mesh triangle
+corner through an ordinal and transforms its position; neither establishes the
 boundary policy above. Stock `Sprites/weapon.spr` defines `weldbeam` with
 `tex1x4` animation and `xspark`/`xspark01` with `tex4x4` animation. The new path
 must use the mounted mod's sprite table, not replace those authored textures.

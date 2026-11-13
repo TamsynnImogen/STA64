@@ -17,6 +17,7 @@ pub mod sim_link;
 mod platform;
 
 mod audio;
+mod capture;
 mod frontend;
 mod input;
 mod map;

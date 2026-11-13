@@ -38,11 +38,13 @@ pub enum Action {
     Stop,
     /// Set the selection's formation: one of the `movement::FORM_*` kinds.
     Formation(u8),
+    /// Held with `GroupModifier` (Ctrl): write a playtest capture folder (TOOL-14).
+    Capture,
 }
 
 #[allow(dead_code)] // settings file API, until the settings package wires it
 impl Action {
-    pub const ALL: [Action; 17] = [
+    pub const ALL: [Action; 18] = [
         Action::AddModifier,
         Action::GroupModifier,
         Action::CentreModifier,
@@ -60,6 +62,7 @@ impl Action {
         Action::Formation(FORM_LINE),
         Action::Formation(FORM_COLUMN),
         Action::Formation(FORM_WEDGE),
+        Action::Capture,
     ];
 
     pub fn name(self) -> String {
@@ -73,6 +76,7 @@ impl Action {
             Action::Formation(FORM_LINE) => "formation_line".into(),
             Action::Formation(FORM_COLUMN) => "formation_column".into(),
             Action::Formation(_) => "formation_wedge".into(),
+            Action::Capture => "capture".into(),
         }
     }
 
@@ -108,6 +112,7 @@ impl Default for KeyBindings {
         m.insert(Action::Formation(FORM_LINE), vec![KeyCode::F1]);
         m.insert(Action::Formation(FORM_COLUMN), vec![KeyCode::F2]);
         m.insert(Action::Formation(FORM_WEDGE), vec![KeyCode::F3]);
+        m.insert(Action::Capture, vec![KeyCode::F12]);
         for (n, k) in DIGITS.into_iter().enumerate() {
             m.insert(Action::Group(n as u8), vec![k]);
         }

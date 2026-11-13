@@ -136,6 +136,55 @@ pub struct Replay {
 }
 
 impl Replay {
+    /// The header of a game started from `setup`: no commands yet, no digests
+    /// and `end_tick` 0. A recorder fills in the rest ([`Recorder`], or a
+    /// client that steps its own sim and logs with [`Replay::log_step`]).
+    pub fn new(setup: &GameSetup) -> Replay {
+        Replay {
+            seam_rev: SEAM_REV,
+            content_hash: setup.content.hash(),
+            seed: setup.seed,
+            map: (*setup.map).clone(),
+            players: setup
+                .players
+                .iter()
+                .map(|p| SeatRec {
+                    id: p.id,
+                    team: p.team,
+                    race: p.race.clone(),
+                    control: match &p.control {
+                        Control::Human => ControlRec::Human,
+                        Control::Remote => ControlRec::Remote,
+                        Control::Ai(n) => ControlRec::Ai(n.clone()),
+                        // Idle, and any seat kind added later: nothing sends for them.
+                        _ => ControlRec::Idle,
+                    },
+                })
+                .collect(),
+            options: setup.options.clone(),
+            commands: Vec::new(),
+            digests: Vec::new(),
+            end_tick: 0,
+        }
+    }
+
+    /// Logs one step of a game: `commands` were applied at tick `before` and
+    /// the sim then stood at tick `after` with `digest`. Commands go in
+    /// `(player, seq)` order as the sim applies them, `end_tick` follows, and
+    /// a digest is kept when `after` is a multiple of `every`.
+    pub fn log_step(&mut self, before: Tick, commands: &[Command], after: Tick, digest: u64, every: Tick) {
+        let mut sorted: Vec<&Command> = commands.iter().collect();
+        sorted.sort_by_key(|c| c.sort_key());
+        self.commands.extend(sorted.into_iter().map(|c| Logged {
+            tick: before,
+            command: c.clone(),
+        }));
+        self.end_tick = after;
+        if after.is_multiple_of(every.max(1)) {
+            self.digests.push((after, digest));
+        }
+    }
+
     /// The file's bytes.
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(64);
@@ -210,7 +259,15 @@ impl Replay {
     /// Re-runs the game from tick 0 to [`Replay::end_tick`], checking each
     /// recorded digest. Returns the final sim.
     pub fn play(&self, content: Arc<ContentDb>) -> Result<Sim, ReplayError> {
-        let mut sim = Sim::from_setup(&self.setup(content)?);
+        let sim = Sim::from_setup(&self.setup(content)?);
+        self.play_from(sim, self.end_tick)
+    }
+
+    /// As [`Replay::play`], from `sim`, which must be the game's sim at tick
+    /// 0 (a client that places starting forces builds it that way), and up to
+    /// tick `until` (a capture stops before the log ends). Recorded digests
+    /// at or before `until` are checked, tick 0's included.
+    pub fn play_from(&self, mut sim: Sim, until: Tick) -> Result<Sim, ReplayError> {
         let mut next_digest = 0;
         let mut next_cmd = 0;
         loop {
@@ -229,7 +286,7 @@ impl Replay {
                     });
                 }
             }
-            if tick >= self.end_tick {
+            if tick >= until {
                 return Ok(sim);
             }
             let mut batch = Vec::new();
@@ -258,32 +315,8 @@ impl Recorder {
     /// As [`Recorder::new`], digesting every `every` ticks (at least 1).
     pub fn with_interval(setup: &GameSetup, every: Tick) -> Recorder {
         let sim = Sim::from_setup(setup);
-        let replay = Replay {
-            seam_rev: SEAM_REV,
-            content_hash: setup.content.hash(),
-            seed: setup.seed,
-            map: (*setup.map).clone(),
-            players: setup
-                .players
-                .iter()
-                .map(|p| SeatRec {
-                    id: p.id,
-                    team: p.team,
-                    race: p.race.clone(),
-                    control: match &p.control {
-                        Control::Human => ControlRec::Human,
-                        Control::Remote => ControlRec::Remote,
-                        Control::Ai(n) => ControlRec::Ai(n.clone()),
-                        // Idle, and any seat kind added later: nothing sends for them.
-                        _ => ControlRec::Idle,
-                    },
-                })
-                .collect(),
-            options: setup.options.clone(),
-            commands: Vec::new(),
-            digests: vec![(0, sim.digest())],
-            end_tick: 0,
-        };
+        let mut replay = Replay::new(setup);
+        replay.digests.push((0, sim.digest()));
         Recorder {
             sim,
             replay,
@@ -299,20 +332,9 @@ impl Recorder {
     /// Logs `commands` against the current tick and steps the sim.
     pub fn step(&mut self, commands: &[Command]) -> crate::TickOutput {
         let tick = self.sim.view().tick;
-        let mut sorted: Vec<&Command> = commands.iter().collect();
-        sorted.sort_by_key(|c| c.sort_key());
-        self.replay
-            .commands
-            .extend(sorted.into_iter().map(|c| Logged {
-                tick,
-                command: c.clone(),
-            }));
         let out = self.sim.step(commands);
-        let now = out.view.tick;
-        self.replay.end_tick = now;
-        if now.is_multiple_of(self.every) {
-            self.replay.digests.push((now, out.view.digest));
-        }
+        self.replay
+            .log_step(tick, commands, out.view.tick, out.view.digest, self.every);
         out
     }
 
