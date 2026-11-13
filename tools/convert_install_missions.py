@@ -66,6 +66,12 @@ def data_dir(env=None, system=None):
     return os.path.join(base, "sta64") if base else None
 
 
+def is_armada1(install):
+    """An Armada I root: Armada.exe and no Armada2.exe (`tools/a1_to_lua.py` converts it)."""
+    names = {n.lower() for n in os.listdir(install)}
+    return "armada.exe" in names and "armada2.exe" not in names
+
+
 def inside(path, root):
     path, root = os.path.realpath(path), os.path.realpath(root)
     return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
@@ -105,7 +111,14 @@ def main(argv=None):
     why = refuse(out, installs)
     if why:
         sys.exit(f"output folder {out} {why}")
-    cmd = [sys.executable, "-I", str(HERE / "dsl_to_lua.py"), "--out", out, "--engine", install, "--install", mdir]
+    if is_armada1(install):
+        cmd = [sys.executable, "-I", str(HERE / "a1_to_lua.py"), "--out", out, "--install", install]
+    else:
+        cmd = [sys.executable, "-I", str(HERE / "dsl_to_lua.py"), "--out", out, "--engine", install, "--install", mdir]
+        # The base game's maps name the mission DLLs: each map gets the script under its own stem.
+        bdir = os.path.join(os.path.dirname(mdir), "bzn")
+        if os.path.isdir(bdir):
+            cmd += ["--install", bdir]
     for m in a.only or []:
         cmd += ["--only", m]
     print(f"converting {install} -> {out}", flush=True)

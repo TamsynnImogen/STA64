@@ -635,8 +635,8 @@ fn install_gated_stock_a2_campaign_is_startable_after_conversion() {
     let total: usize = cs.book.campaigns.iter().map(|c| c.missions.len()).sum();
     let blocked = cs.book.blocked();
     eprintln!("stock A2: {total} missions, {} blocked, {} experimental", blocked.len(), cs.experimental.len());
-    assert!(cs.experimental.len() >= 30, "the conversion supplies the stock missions");
-    assert!(blocked.len() * 2 < total, "most missions can start: {blocked:?}");
+    assert!(cs.experimental.len() == total, "the conversion supplies the stock missions");
+    assert!(blocked.is_empty(), "every stock mission can start: {blocked:?}");
     let cards: Vec<usize> = (0..cs.book.campaigns.len()).filter(|i| cs.state(&cs.book.campaigns[*i].id, 0) == crate::frontend::campaign::MissionState::Ready).collect();
     assert!(!cards.is_empty(), "a campaign whose first mission starts");
     for card in cards {
