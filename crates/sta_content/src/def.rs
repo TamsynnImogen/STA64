@@ -83,8 +83,9 @@ pub struct MoveStats {
     /// the smooth fields, the digest or the snapshot's stats mirror; a
     /// snapshot load re-reads it from the definition.
     pub warp_speed: Fixed,
-    /// `tooCloseForWarp` (Armada I physics ODFs), units: a move or attack
-    /// whose goal is farther than this goes to warp (SIM-64). Zero when the
+    /// `tooCloseForWarp` (Armada I physics ODFs), units: a plain move
+    /// whose goal is farther than this goes to warp (SIM-64; the attack approach
+    /// does not read it). Zero when the
     /// ODF has none (Armada II and later: warp on a plain move is opt-in).
     /// Like `warp_speed` the sim reads it from the definition.
     pub too_close_for_warp: Fixed,

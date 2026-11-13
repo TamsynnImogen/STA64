@@ -43,8 +43,9 @@
 //! - **Plain move on Armada I (SIM-64).** A physics ODF with `tooCloseForWarp`
 //!   (and `headingCloseEnoughForWarp`, degrees) makes every plain move a warp
 //!   move: warp while the goal is farther than `tooCloseForWarp` and the craft
-//!   faces it within the heading band, impulse otherwise; no speed gate, no
-//!   player modifier. Read from the executable (Armada.exe 1.2), static; the
+//!   faces it (STA64 keeps the tight 0.99 heading gate; the band is read but
+//!   not used, since its warp does not steer), impulse otherwise; no speed gate,
+//!   no player modifier. Read from the executable (Armada.exe 1.2), static; the
 //!   drop-out uses the lead above (the engine stops at `tooCloseToTurn` and
 //!   coasts: not measured). A unit without the key never warps on a plain move.
 //!
@@ -295,6 +296,9 @@ impl Sim {
         for &id in ids {
             let Some(u) = self.units.get(id) else { continue };
             if (player.is_player() && u.owner != player)
+                || !u.orderable()
+                || self.economy.is_mining(id)
+                || self.production.is_deploying(id)
                 || u.kind != EntityKind::Craft
                 || u.stats.too_close_for_warp <= Fixed::ZERO
                 || u.stats.warp_speed <= u.stats.max_speed
@@ -453,12 +457,10 @@ impl Sim {
             // Armada I's physics ODFs set the distance and the heading band
             // (SIM-64); a unit without `tooCloseForWarp` takes Armada II's.
             let keyed = u.stats.too_close_for_warp > Fixed::ZERO;
-            let aligned = if keyed && u.stats.heading_close_for_warp > Fixed::ZERO {
-                let band = u.stats.heading_close_for_warp * crate::kinematics::pi() / Fixed::from_int(180);
-                to_goal > Fixed::ZERO && crate::kinematics::atan2(u.heading.0 * gz - u.heading.1 * gx, u.heading.0 * gx + u.heading.1 * gz).abs() < band
-            } else {
-                to_goal > Fixed::ZERO && (u.heading.0 * gx + u.heading.1 * gz) / to_goal > Fixed::from_f64(0.99)
-            };
+            // The engine steers while it warps and so may start inside the
+            // `headingCloseEnoughForWarp` band; STA64's warp flies straight, so the
+            // tight gate stays for keyed units too (the band is read, not used).
+            let aligned = to_goal > Fixed::ZERO && (u.heading.0 * gx + u.heading.1 * gz) / to_goal > Fixed::from_f64(0.99);
             let too_close = if keyed { u.stats.too_close_for_warp } else { too_close_to_warp() };
             let can = vw > vi && aligned && to_goal >= approach::warp_lead(vw, vi, db_radius(self, u));
             // Armada II gates the start on 0.9 of impulse speed; Armada I's

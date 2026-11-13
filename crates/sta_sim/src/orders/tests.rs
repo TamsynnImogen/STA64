@@ -400,6 +400,17 @@ mod auto_warp {
     }
 
     #[test]
+    fn a_goal_off_the_bow_is_reached_not_missed() {
+        let (mut sim, s) = scout_game(true);
+        let to = v(1500, 3000); // about 27 degrees off the bow
+        for i in 0..80 * HZ {
+            WorldSource::step(&mut sim, &if i == 0 { vec![order(1, 0, Order::Move { units: vec![s], to, queue: false })] } else { vec![] });
+        }
+        assert!(flat(pos(&sim, s), to) < n(80), "{:?}", flat(pos(&sim, s), to));
+        assert!(sim.scripted.job(s).is_none(), "warp job outlives the move");
+    }
+
+    #[test]
     fn a_new_order_ends_the_warp_and_a_snapshot_keeps_it() {
         let (mut sim, s) = scout_game(true);
         let cmd = order(1, 0, Order::Move { units: vec![s], to: v(0, 3000), queue: false });
