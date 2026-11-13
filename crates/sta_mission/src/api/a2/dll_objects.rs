@@ -104,6 +104,8 @@ const DEFERRED_ON_PENDING: &[&str] = &[
     "SetGreenAlert",
     "SetImpulseSpeed",
     "SetMaxShields",
+    "SetName",
+    "SetRace",
     "SetPerceivedTeam",
     "SetPosition",
     "SetRedAlert",
@@ -289,6 +291,18 @@ fn float_edit(lua: &Lua, ctx: &Shared, name: &'static str, label: &'static str, 
         let id = EntityId(integer(name, &args[0])?);
         live(&c, name, id)?;
         edit_feedback::queue(&mut c.borrow_mut(), label, make(id, Fixed::from_f64(value)))
+    })
+}
+
+/// `name(id, string)` queued as the typed edit `make` builds. A null string is refused.
+fn string_edit(lua: &Lua, ctx: &Shared, name: &'static str, label: &'static str, make: fn(EntityId, String) -> Edit) -> mlua::Result<Function> {
+    let c = ctx.clone();
+    lua.create_function(move |_, args: MultiValue| {
+        arity(name, &args, 2)?;
+        let Some(value) = text(name, &args, 1)? else { return Err(bad(name, 1, "a string")) };
+        let id = EntityId(integer(name, &args[0])?);
+        live(&c, name, id)?;
+        edit_feedback::queue(&mut c.borrow_mut(), label, make(id, value))
     })
 }
 
@@ -742,7 +756,9 @@ fn seams(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()> {
     table.set("HideObject", no_data_fn(lua, ctx, "HideObject", "the world view and sim have no hidden-object state")?)?;
     table.set("ButItCanBeDerelicted", no_data_fn(lua, ctx, "ButItCanBeDerelicted", "the sim has no derelict state")?)?;
     table.set("CraftCanRecrew", no_data_fn(lua, ctx, "CraftCanRecrew", "the sim has no per-craft recrew switch")?)?;
-    table.set("SetName", no_data_fn(lua, ctx, "SetName", "the sim and view carry no per-object display name")?)?;
+    // `SetName(object, name)` is `Craft::SetCraftName` (read from the executable, static): this
+    // unit's display name; SIM-54.
+    table.set("SetName", string_edit(lua, ctx, "SetName", "A2.SetName", Edit::Name)?)?;
     table.set("SetPlanetCivPop", no_data_fn(lua, ctx, "SetPlanetCivPop", "the sim has no planet population edit")?)?;
     table.set("StuffIntoWormhole", no_data_fn(lua, ctx, "StuffIntoWormhole", "the sim has no wormhole transport edit")?)?;
     table.set("LinkWormholes", no_data_fn(lua, ctx, "LinkWormholes", "the sim has no wormhole link edit")?)?;

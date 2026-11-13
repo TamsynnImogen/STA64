@@ -592,7 +592,14 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
         }
         nothing()
     })?)?;
-    table.set("SetRace", raising(lua, &env, "SetRace", &["hs"], "no mutable-race edit in the sim seam")?)?;
+    // `SetRace(object, race)` changes the object's race only (read from the executable, static);
+    // the sim refuses a name no unit carries (the original stores a null race).
+    table.set("SetRace", def(lua, &env, "SetRace", &["hs"], |_, e, _, a| {
+        if e.alive(a[0].id()).is_some() {
+            edit_feedback::queue(&mut e.ctx.borrow_mut(), "A2.SetRace", Edit::UnitRace(a[0].id(), a[1].text().to_owned()))?;
+        }
+        nothing()
+    })?)?;
     table.set("CraftCanRepair", raising(lua, &env, "CraftCanRepair", &["hb"], "no can-repair flag in the sim seam")?)?;
 
     // `SetCommandWhat...VO(who, command, ...)`: SET_COMMAND with a target

@@ -8,7 +8,7 @@ use sta_sim::command::Edit;
 use sta_sim::view::{UnitFlags, UnitView};
 
 use super::player::{player_of, Player};
-use super::entity_action::{parse_order, EntityAction};
+use super::entity_action::{parse_order, AttrEdit, EntityAction};
 use super::entity_ref::EntityRef;
 use super::spawn;
 use super::{dist, point_of, pos_f64, stub, to_vec3, vector, Ctx, Shared};
@@ -23,6 +23,16 @@ pub(crate) struct Entity {
 impl Entity {
     fn remove(&self) {
         spawn::queue_action(&mut self.ctx.borrow_mut(), self.key.clone(), EntityAction::Remove);
+    }
+
+    /// A numeric attribute: what the script just assigned, else `view` of the unit (0 for none).
+    fn num(&self, attr: &'static str, view: impl FnOnce(&UnitView) -> f64) -> f64 {
+        let c = self.ctx.borrow();
+        if let Some(v) = spawn::overlay_num(&c, &self.key, attr) {
+            return v;
+        }
+        let u = self.key.id().and_then(|id| c.alive(id)).or_else(|| self.key.hint());
+        u.map_or(0.0, view)
     }
 
     fn with<R>(&self, f: impl FnOnce(&Ctx, Option<&UnitView>) -> R) -> R {
@@ -84,18 +94,28 @@ impl UserData for Entity {
             vector(lua, v.unwrap_or_default())
         });
         f.add_field_method_get("hull", |_, e| Ok(e.with(|_, u| u.map_or(0.0, |u| u.hull[0].to_f32() as f64))));
-        f.add_field_method_get("maxHull", |_, e| Ok(e.with(|_, u| u.map_or(0.0, |u| u.hull[1].to_f32() as f64))));
+        // The attributes below read back what the script just assigned (`overlay_*`), else the view.
+        f.add_field_method_get("hullValue", |_, e| Ok(e.num("Entity.hullValue", |u| u.hull[0].to_f32() as f64)));
+        f.add_field_method_get("maxHull", |_, e| Ok(e.num("Entity.maxHull", |u| u.hull[1].to_f32() as f64)));
+        // A fraction of the maximum, 0 for a maximum under 0.01 (read from the executable, static).
         f.add_field_method_get("shields", |_, e| {
-            Ok(e.with(|_, u| u.map_or(0.0, |u| u.shields.iter().map(|s| s[0].to_f32() as f64).sum::<f64>() / 4.0)))
+            Ok(e.num("Entity.shields", |u| {
+                let max = u.shields.iter().map(|s| s[1].to_f32() as f64).sum::<f64>() / 4.0;
+                if max < 0.01 { 0.0 } else { u.shields.iter().map(|s| s[0].to_f32() as f64).sum::<f64>() / 4.0 / max }
+            }))
         });
         f.add_field_method_get("maxShields", |_, e| {
-            Ok(e.with(|_, u| u.map_or(0.0, |u| u.shields.iter().map(|s| s[1].to_f32() as f64).sum::<f64>() / 4.0)))
+            Ok(e.num("Entity.maxShields", |u| u.shields.iter().map(|s| s[1].to_f32() as f64).sum::<f64>() / 4.0))
         });
-        for name in ["crew", "maxCrew"] {
-            f.add_field_method_get(name, |_, e| {
-                Ok(e.with(|c, u| u.and_then(|u| c.def(u)).map_or(0.0, |d| d.crew.to_f32() as f64)))
-            });
-        }
+        f.add_field_method_get("crew", |_, e| Ok(e.num("Entity.crew", |u| u.crew.map_or(0.0, |c| c[0].to_f32() as f64))));
+        f.add_field_method_get("maxCrew", |_, e| Ok(e.num("Entity.maxCrew", |u| u.crew.map_or(0.0, |c| c[1].to_f32() as f64))));
+        f.add_field_method_get("name", |_, e| {
+            let c = e.ctx.borrow();
+            if let Some(spawn::Overlay::Text(t)) = spawn::overlay_get(&c, &e.key, "Entity.name") {
+                return Ok(t);
+            }
+            Ok(e.key.id().and_then(|id| c.view.attrs.names.binary_search_by_key(&id, |r| r.0).ok().map(|i| c.view.attrs.names[i].1.clone())).unwrap_or_default())
+        });
         for name in ["player", "owner"] {
             f.add_field_method_get(name, |lua, e| {
                 let owner = e.with(|_, u| u.map(|u| u.owner));
@@ -116,42 +136,67 @@ impl UserData for Entity {
             }
         });
         f.add_field_method_get("race", |_, e| {
-            Ok(e.with(|c, u| u.and_then(|u| c.def(u)).map(|d| d.race.clone()).unwrap_or_default()))
+            let c = e.ctx.borrow();
+            if let Some(spawn::Overlay::Text(t)) = spawn::overlay_get(&c, &e.key, "Entity.race") {
+                return Ok(t);
+            }
+            let set = e.key.id().and_then(|id| c.view.attrs.races.binary_search_by_key(&id, |r| r.0).ok().map(|i| c.view.attrs.races[i].1.clone()));
+            Ok(set.unwrap_or_else(|| {
+                let u = e.key.id().and_then(|id| c.alive(id)).or_else(|| e.key.hint());
+                u.and_then(|u| c.def(u)).map(|d| d.race.clone()).unwrap_or_default()
+            }))
         });
-        // Mutable race is not sim state (SetRace needs a sim edit); the assignment is accepted and recorded as unsupported so
-        // the rest of the callback still runs.
-        f.add_field_method_set("race", |_, e, _: Value| {
-            e.ctx.borrow_mut().unsupported("Entity.race = x (needs a sim SetRace edit)");
+        // `Entity.race = Race.find(...)`: this unit's race only; the sim refuses a name no unit carries.
+        f.add_field_method_set("race", |_, e, value: Value| {
+            let mut c = e.ctx.borrow_mut();
+            match super::race::race_name(&value) {
+                Some(name) => {
+                    spawn::assign(&mut c, &e.key, AttrEdit::Race(name));
+                }
+                None => c.unsupported("Entity.race = non-race"),
+            }
             Ok(())
         });
-        // SIM-54: current crew, clamped by the sim to 0..the maximum crew.
-        f.add_field_method_set("crew", |_, e, value: Value| {
-            let mut c = e.ctx.borrow_mut();
-            let to = match value {
-                Value::Number(n) => n,
-                Value::Integer(n) => n as f64,
-                _ => {
-                    c.unsupported("Entity.crew = non-number");
+        // Assignments of numbers (SIM-54/55): held for a pending spawn, else one sim edit each.
+        // A non-number or non-finite value is counted, never raised.
+        for (name, make) in [
+            ("crew", AttrEdit::Crew as fn(f64) -> AttrEdit),
+            ("maxCrew", AttrEdit::MaxCrew),
+            ("maxShields", AttrEdit::MaxShields),
+            ("maxHull", AttrEdit::MaxHull),
+            ("hullValue", AttrEdit::HullValue),
+        ] {
+            f.add_field_method_set(name, move |_, e, value: Value| {
+                let mut c = e.ctx.borrow_mut();
+                let to = match value {
+                    Value::Number(n) => n,
+                    Value::Integer(n) => n as f64,
+                    _ => {
+                        c.unsupported(&format!("Entity.{name} = non-number"));
+                        return Ok(());
+                    }
+                };
+                if !to.is_finite() {
+                    c.unsupported(&format!("Entity.{name} = non-finite number"));
                     return Ok(());
                 }
-            };
-            if !to.is_finite() {
-                c.unsupported("Entity.crew = non-finite number");
-                return Ok(());
-            }
-            match e.key.id() {
-                Some(id) => super::edit_feedback::queue(&mut c, "Entity.crew", Edit::UnitCrew(id, sta_core::Fixed::from_f64(to)))?,
-                None => c.unsupported("entity.crew: pending or failed spawn"),
-            }
-            Ok(())
-        });
+                spawn::assign(&mut c, &e.key, make(to));
+                Ok(())
+            });
+        }
         // `Entity.shields = 1.0`: a fraction of the maximum (SIM-55).
         f.add_field_method_set("shields", |_, e, to: f64| {
             if !to.is_finite() { return Err(mlua::Error::runtime("Entity.shields requires a finite number")); }
+            spawn::assign(&mut e.ctx.borrow_mut(), &e.key, AttrEdit::Shields(to));
+            Ok(())
+        });
+        f.add_field_method_set("name", |_, e, value: Value| {
             let mut c = e.ctx.borrow_mut();
-            match e.key.id() {
-                Some(id) => super::edit_feedback::queue(&mut c, "Entity.shields", Edit::ShieldPercent(id, sta_core::Fixed::from_f64(to)))?,
-                None => c.unsupported("entity.shields: pending or failed spawn"),
+            match value {
+                Value::String(s) => {
+                    spawn::assign(&mut c, &e.key, AttrEdit::Name(s.to_string_lossy().to_string()));
+                }
+                _ => c.unsupported("Entity.name = non-string"),
             }
             Ok(())
         });
@@ -175,10 +220,6 @@ impl UserData for Entity {
                     c.unsupported(&format!("{label} = a Vector without finite x, y and z"));
                     return Ok(());
                 };
-                let Some(id) = e.key.id() else {
-                    c.unsupported(&format!("{label}: pending or failed spawn"));
-                    return Ok(());
-                };
                 let edit = if name == "forward" {
                     // Scaled to unit size here only to keep the Fixed conversion in range.
                     let m = x.abs().max(z.abs());
@@ -186,11 +227,12 @@ impl UserData for Entity {
                         c.unsupported("Entity.forward = a Vector with no horizontal direction");
                         return Ok(());
                     }
-                    Edit::Heading(id, (sta_core::Fixed::from_f64(x / m), sta_core::Fixed::from_f64(z / m)))
+                    AttrEdit::Heading(x / m, z / m)
                 } else {
-                    Edit::AngularVelocity(id, sta_core::Fixed::from_f64(-y.clamp(-(sta_sim::command::MAX_SCRIPT_OMEGA as f64), sta_sim::command::MAX_SCRIPT_OMEGA as f64)))
+                    AttrEdit::Omega(-y.clamp(-(sta_sim::command::MAX_SCRIPT_OMEGA as f64), sta_sim::command::MAX_SCRIPT_OMEGA as f64))
                 };
-                super::edit_feedback::queue(&mut c, label, edit)?;
+                let _ = label;
+                spawn::assign(&mut c, &e.key, edit);
                 Ok(())
             });
         }
@@ -200,14 +242,6 @@ impl UserData for Entity {
         for (name, need) in [
             ("movementAutonomy", "a sim autonomy edit"),
             ("specialWeaponAutonomy", "a sim autonomy edit"),
-            ("name", "a sim SetName edit"),
-            // Maximum crew, shield and hull as a script sets them (WORKPLAN SIM-54 / SIM-55 rows; a
-            // Roots mission raises its relay station's maxima in its intro): the intro must not
-            // abort at the first such assignment.
-            ("maxCrew", "a sim maximum-crew edit"),
-            ("maxShields", "a sim maximum-shield edit"),
-            ("maxHull", "a sim maximum-hull edit"),
-            ("hullValue", "a sim hull edit"),
         ] {
             f.add_field_method_set(name, move |_, e, _: Value| {
                 e.ctx.borrow_mut().unsupported(&format!("Entity.{name} = x (needs {need})"));

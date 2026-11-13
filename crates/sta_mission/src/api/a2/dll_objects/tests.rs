@@ -330,7 +330,7 @@ fn seam_gaps_raise_with_a_reason_and_are_counted() {
     let mut rt = runtime(&s);
     let names = [
         "AllowAsTarget", "HideObject", "ButItCanBeDerelicted",
-        "CraftCanRecrew", "SetName", "SetPlanetCivPop", "StuffIntoWormhole",
+        "CraftCanRecrew", "SetPlanetCivPop", "StuffIntoWormhole",
         "LinkWormholes", "SetWormholeDeleteOnTransport", "LoadCargoShip", "GetNearestShipyard", "CreateNewSiegeFleet",
     ];
     for name in names {
@@ -453,4 +453,16 @@ fn path_lookup_prefers_exact_then_a_unique_case_insensitive_match() {
     assert!(err.contains("ambiguous"), "{err}");
     let err = rt.eval::<()>("A2.Goto(a, 'AB', false, 0)").expect_err("ambiguous").to_string();
     assert!(err.contains("ambiguous"), "{err}");
+}
+
+/// SIM-54: `SetName` and `SetRace` are per-unit sim edits.
+#[test]
+fn set_name_and_set_race_queue_typed_edits() {
+    let s = scene();
+    let mut rt = runtime(&s);
+    rt.eval::<()>("A2.SetName(a, 'Relay Station'); A2.SetRace(a, 'fx')").unwrap();
+    let edits: Vec<_> = rt.take_commands().into_iter().filter_map(|c| match c.kind { CommandKind::Edit(e) => Some(e), _ => None }).collect();
+    assert_eq!(edits, [Edit::Name(s.ids[0], "Relay Station".into()), Edit::UnitRace(s.ids[0], "fx".into())]);
+    assert!(rt.eval::<()>("A2.SetName(a, nil)").is_err(), "a null name is refused");
+    assert_eq!(unsupported(&rt, "SetName"), 0);
 }

@@ -285,7 +285,6 @@ fn calls_with_no_seam_validate_then_raise_and_are_counted() {
         ("A2.Special_Attack(a, 'gquanteffect')", "A2.Special_Attack"),
         ("A2.Special_Attack(a, b, 'gtracbm')", "A2.Special_Attack"),
         ("A2.SetCommandMoveAutonomyLow(a)", "A2.SetCommandMoveAutonomyLow"),
-        ("A2.SetRace(a, 'borg')", "A2.SetRace"),
         ("A2.CraftCanRepair(a, true)", "A2.CraftCanRepair"),
         ("A2.GetMainEnemyBaseLocation(1)", "A2.GetMainEnemyBaseLocation"),
         ("A2.AttackMainEnemyBase(a, true)", "A2.AttackMainEnemyBase"),
