@@ -81,7 +81,7 @@ fn lose_crew(t: &mut crate::world::Entity, db: &ContentDb, weapon: sta_core::Con
     let Some([now, max]) = t.crew else { return };
     let over = (shield_damage - c.threshold).max(Fixed::ZERO);
     // Saturating: absurd ordnance values must not wrap the product.
-    let sat = |a: Fixed, b: Fixed| Fixed::from_bits((i128::from(a.to_bits()) * i128::from(b.to_bits()) >> 32).clamp(0, i128::from(i64::MAX)) as i64);
+    let sat = |a: Fixed, b: Fixed| Fixed::from_bits(((i128::from(a.to_bits()) * i128::from(b.to_bits())) >> 32).clamp(0, i128::from(i64::MAX)) as i64);
     let mut points = sat(over, c.shield);
     if !def.sane_crew_loss {
         points = Fixed::from_bits(sat(max, points).to_bits() / 100);

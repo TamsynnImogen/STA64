@@ -72,10 +72,8 @@ impl Sim {
         let unit = self.units.get_mut(id).expect("validated live unit");
         unit.target = None;
         unit.owner = to;
-        if new_team {
-            if !self.team_changes.contains(&id) {
-                self.team_changes.push(id);
-            }
+        if new_team && !self.team_changes.contains(&id) {
+            self.team_changes.push(id);
         }
         true
     }
