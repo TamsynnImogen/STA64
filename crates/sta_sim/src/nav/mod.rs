@@ -431,10 +431,19 @@ impl Sim {
                     outside: off_map,
                 })
             };
-            let lead = if queued {
-                u.stats.path_lead
+            // An aim point within the smooth model's arrival radius
+            // (`tooCloseToTurn`) of a craft at rest would count as reached:
+            // the craft halts, the real target is put back, and it halts
+            // again every tick. Aim points are kept beyond it.
+            let arrive = if flows {
+                u.stats.too_close_to_turn.max(crate::kinematics::arrive_distance())
             } else {
                 Fixed::ZERO
+            };
+            let lead = if queued {
+                u.stats.path_lead.max(arrive)
+            } else {
+                arrive
             };
             let mut spec = Spec {
                 origin: (0, 0),
@@ -564,6 +573,7 @@ fn plan(cache: &mut Cache, spec: Spec, p: Vec3, t: Vec3, reach: Fixed, lead: Fix
     let slack = grid::ORTHOGONAL * grid.spec.default_cost as u64;
     let mut k = start;
     let mut first = None;
+    let mut beyond = None;
     let mut aim = None;
     for _ in 0..LOOK {
         let Some(n) = grid.descend(&field, k) else {
@@ -572,6 +582,9 @@ fn plan(cache: &mut Cache, spec: Spec, p: Vec3, t: Vec3, reach: Fixed, lead: Fix
         k = n;
         let c = grid.centre(k, t.y);
         first.get_or_insert(c);
+        if !within(p, c, near) {
+            beyond.get_or_insert(c);
+        }
         let path = base.saturating_sub(field.dist(k));
         if grid
             .line_cost(p, c)
@@ -584,7 +597,11 @@ fn plan(cache: &mut Cache, spec: Spec, p: Vec3, t: Vec3, reach: Fixed, lead: Fix
             break;
         }
     }
-    match aim.or(first) {
+    // No cell is both clear in a straight line and beyond the arrival
+    // radius: fly to the first path cell that is beyond it (SIM-21 steers
+    // round what grazes the leg), never to one a craft at rest would count
+    // as reached.
+    match aim.or(beyond).or(first) {
         Some(a) => Plan::Aim(a),
         None => Plan::Keep,
     }

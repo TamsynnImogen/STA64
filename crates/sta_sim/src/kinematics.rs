@@ -149,7 +149,7 @@ pub(crate) fn rotate(h: (Fixed, Fixed), a: Fixed) -> (Fixed, Fixed) {
 }
 
 /// [`rotate`] for any angle, in steps of at most a quarter radian.
-fn rotate_by(mut h: (Fixed, Fixed), a: Fixed) -> (Fixed, Fixed) {
+pub(crate) fn rotate_by(mut h: (Fixed, Fixed), a: Fixed) -> (Fixed, Fixed) {
     let quarter = Fixed::ONE / Fixed::from_int(4);
     let mut left = a;
     while left.abs() > quarter {
