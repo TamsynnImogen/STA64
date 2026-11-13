@@ -24,6 +24,7 @@ fn crew_offset(bytes: &[u8]) -> usize {
 fn replace_crew(bytes: &[u8], version: u8, rows: Vec<(EntityId, [i64; 2])>) -> Vec<u8> {
     let mut out = bytes[..crew_offset(bytes)].to_vec();
     out.extend(postcard::to_allocvec(&UnitCrewRec { version, rows }).unwrap());
+    out.extend(postcard::to_allocvec(&StartEffectsRec { version: 1, rows: Vec::new() }).unwrap());
     out.extend(postcard::to_allocvec(&crate::autonomy::AutonomyWire { version: 1, rows: Vec::new() }).unwrap());
     out
 }
@@ -32,7 +33,7 @@ fn replace_crew(bytes: &[u8], version: u8, rows: Vec<(EntityId, [i64; 2])>) -> V
 fn current_crew_roundtrips_known_zero_and_live_values_without_capacity_refill() {
     let (mut sim, first, second) = live();
     let bytes = sim.snapshot();
-    assert_eq!(u16::from_le_bytes(bytes[4..6].try_into().unwrap()), 14);
+    assert_eq!(u16::from_le_bytes(bytes[4..6].try_into().unwrap()), crate::snapshot::FORMAT_VERSION);
     let mut restored = Sim::from_snapshot(&bytes, None).unwrap();
     assert_eq!(restored.snapshot(), bytes);
     assert_eq!(restored.view(), sim.view());

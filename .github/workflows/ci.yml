@@ -9,14 +9,66 @@ on:
     paths-ignore: ['docs/**']
   workflow_dispatch:
 
+# Pull requests: one group per PR, a new push cancels the old run.
+# Everything else (pushes to main, manual runs): one group per ref that never
+# cancels. GitHub keeps one running and at most one pending run per group and
+# replaces the pending one with the newest, so main's run always finishes and
+# later pushes collapse into one follow-up run.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number) || format('ci-ref-{0}', github.ref) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: 0
 
 jobs:
+  # Decides whether the sta64 job is needed and which OSes it runs on.
+  # Pushes to main and manual runs: everything, 4 OSes. Pull requests:
+  # 4 OSes with the `full-ci` label, otherwise ubuntu-latest, and only if the
+  # PR touches sta64, its assets, the bench scenes, the workspace manifests,
+  # the toolchain pin or this workflow. Uses the GitHub API for the file list
+  # (no checkout, no third-party action); if that fails it runs sta64.
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      game: ${{ steps.decide.outputs.game }}
+      os: ${{ steps.decide.outputs.os }}
+    steps:
+      - id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          FULL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          all='["ubuntu-latest","ubuntu-24.04-arm","windows-latest","macos-latest"]'
+          if [ "$EVENT" != pull_request ]; then
+            echo "game=true" >> "$GITHUB_OUTPUT"; echo "os=$all" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if [ "$FULL" = true ]; then os=$all; else os='["ubuntu-latest"]'; fi
+          echo "os=$os" >> "$GITHUB_OUTPUT"
+          if [ "$FULL" = true ]; then echo "game=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          if ! files=$(gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[].filename'); then
+            echo "file list unavailable, running sta64"; echo "game=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "$files"
+          if echo "$files" | grep -Eq '^(crates/sta64/|assets/|bench/|Cargo\.toml$|Cargo\.lock$|rust-toolchain\.toml$|\.github/workflows/ci\.yml$)'; then
+            echo "game=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "game=false" >> "$GITHUB_OUTPUT"
+          fi
+
   # Full 4-OS matrix on main and on PRs labelled `full-ci`; Linux only otherwise.
   core:
     name: core crates (${{ matrix.os }})
@@ -25,33 +77,81 @@ jobs:
       matrix:
         os: ${{ fromJSON((github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-ci')) && '["ubuntu-latest","ubuntu-24.04-arm","windows-latest","macos-latest"]' || '["ubuntu-latest"]') }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - run: rustup show active-toolchain
+      # PRs restore the cache main saved (same key) and never save one, so
+      # many open PRs cannot push main's cache out of the 10 GB budget.
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace --exclude sta64
-      - run: cargo clippy --workspace --exclude sta64 --all-targets -- -D warnings
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo test --locked --workspace --exclude sta64
+      - run: cargo clippy --locked --workspace --exclude sta64 --all-targets -- -D warnings
+      # TOOL-06: the bench report, with its per-tick digests, so a platform that
+      # drifts can be compared with `sta-bench diff`. `cargo test` above already
+      # ran every tier-1 scenario, including the `golden-*` ones that pin a
+      # digest; this reuses the build and keeps the report (never frames).
+      - name: sta-bench check (report)
+        if: success() || failure()
+        run: cargo run --locked -p sta_bench --bin sta-bench -- check --out bench-report
+      - name: Upload bench report
+        if: success() || failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-report-${{ matrix.os }}
+          path: |
+            bench-report/**/report.md
+            bench-report/**/results.json
+            bench-report/**/digests
+            !bench-report/latest/**
+          if-no-files-found: warn
+          overwrite: true
+          retention-days: 14
 
   game:
     name: sta64 (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.game == 'true'
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON((github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-ci')) && '["ubuntu-latest","ubuntu-24.04-arm","windows-latest","macos-latest"]' || '["ubuntu-latest"]') }}
+        os: ${{ fromJSON(needs.changes.outputs.os) }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - name: Linux deps
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build (main)
         if: github.event_name != 'pull_request'
-        run: cargo build -p sta64 --release
+        run: cargo build --locked -p sta64 --release
       - name: Check (PR)
         if: github.event_name == 'pull_request'
-        run: cargo check -p sta64 --all-targets
-      - run: cargo clippy -p sta64 -- -D warnings
+        run: cargo check --locked -p sta64 --all-targets
+      - run: cargo clippy --locked -p sta64 -- -D warnings
       - name: Bench smoke (sim-only)
-        run: cargo run -p sta64 --release -- --sim-only --scene bench/scenes/synthetic.ini --ticks 300
-      - run: cargo test -p sta64 --release
+        run: cargo run --locked -p sta64 --release -- --sim-only --scene bench/scenes/synthetic.ini --ticks 300
+      - run: cargo test --locked -p sta64 --release
+
+  # One stable name for branch protection: green when every job that was
+  # needed passed, and a skipped sta64 job (PR touched nothing it depends on)
+  # counts as green.
+  result:
+    name: CI result
+    needs: [changes, core, game]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: |
+          echo "changes: ${{ needs.changes.result }}, core: ${{ needs.core.result }}, game: ${{ needs.game.result }}"
+          # game may be skipped only when changes succeeded (PR touched nothing sta64 uses)
+          [ "${{ needs.changes.result }}" = success ] || exit 1
+          case "${{ needs.core.result }} ${{ needs.game.result }}" in
+            *failure*|*cancelled*) exit 1 ;;
+          esac

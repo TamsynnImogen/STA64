@@ -46,6 +46,19 @@ pub fn recipe(vfs: &sta_vfs::Vfs, odf: &str) -> Option<NebulaRecipe> {
     BUNDLED.iter().find(|(n, _)| *n == key).map(|(_, t)| NebulaRecipe::parse(t))
 }
 
+/// The Key's shadow map as `shadows.rs` fitted it, into the march's parameters (none: no shadow).
+pub fn apply_shadow(p: &mut NebulaParams, shadow: Option<&crate::render::shadows::KeyShadow>) {
+    match shadow {
+        Some(s) => {
+            p.sh0 = s.rows[0];
+            p.sh1 = s.rows[1];
+            p.sh2 = s.rows[2];
+            p.shp = s.params;
+        }
+        None => p.shp = Vec4::ZERO,
+    }
+}
+
 #[derive(Clone, Copy, Default, ShaderType, Debug)]
 pub struct NebulaParams {
     pub eye: Vec4,
@@ -83,6 +96,12 @@ pub struct NebulaParams {
     pub flash2: Vec4,
     pub flash3: Vec4,
     pub flash_c: Vec4,
+    /// The Key's shadow map (`shadows.rs`): world to u, v, depth along the Key, and
+    /// x 1 with a map, y the depth bias, z the penumbra, w a texel.
+    pub sh0: Vec4,
+    pub sh1: Vec4,
+    pub sh2: Vec4,
+    pub shp: Vec4,
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Clone, Debug)]
@@ -95,6 +114,9 @@ pub struct NebulaMaterial {
     #[texture(3)]
     #[sampler(4)]
     pub envelope: Option<Handle<Image>>,
+    /// The Key's shadow map, read when `params.shp.x` says there is one.
+    #[texture(5)]
+    pub shadow: Option<Handle<Image>>,
 }
 
 impl Material for NebulaMaterial {
@@ -156,7 +178,7 @@ impl Plugin for NebulaPlugin {
         app.add_plugins(MaterialPlugin::<NebulaMaterial>::default())
             .init_resource::<NoiseVolume>()
             .add_systems(Update, (poll_noise, fade_boards))
-            .add_systems(PostUpdate, update.after(TransformSystems::Propagate));
+            .add_systems(PostUpdate, update.after(TransformSystems::Propagate).after(crate::render::shadows::ShadowSet));
     }
 }
 
@@ -368,11 +390,16 @@ pub fn spawn_field(
         flash2: Vec4::ZERO,
         flash3: Vec4::ZERO,
         flash_c: Vec3::from(r.lightning_colour).extend(1.0 / (r.lightning_size * reach).powi(2).max(1e-6)),
+        sh0: Vec4::ZERO,
+        sh1: Vec4::ZERO,
+        sh2: Vec4::ZERO,
+        shp: Vec4::ZERO,
     };
     let material = materials.add(NebulaMaterial {
         params,
         noise: noise.image.clone(),
         envelope: Some(images.add(env_img)),
+        shadow: None,
     });
     let centre = (lo + hi) * 0.5;
     let size = hi - lo;
@@ -399,6 +426,7 @@ pub fn spawn_field(
 fn update(
     camera: Query<(&GlobalTransform, &Projection), crate::map::MainCamera>,
     lights: Query<(&GlobalTransform, &DirectionalLight)>,
+    shadow: Option<Res<crate::render::shadows::KeyShadow>>,
     mut fields: Query<&mut NebulaField>,
     mut materials: ResMut<Assets<NebulaMaterial>>,
     clock: Res<crate::clock::AnimClock>,
@@ -418,6 +446,11 @@ fn update(
     for mut f in &mut fields {
         let f = &mut *f;
         let Some(mut m) = materials.get_mut(&f.material) else { continue };
+        if let Some(s) = shadow.as_deref()
+            && m.shadow.as_ref() != Some(&s.image)
+        {
+            m.shadow = Some(s.image.clone());
+        }
         let r = &f.recipe;
         let p = &mut m.params;
         p.eye = cam.translation().extend(r.near_fade);
@@ -426,6 +459,8 @@ fn update(
         let share = if r.key_share >= 0.0 { r.key_share } else { KEY_SHARE };
         let g = if r.scatter >= 0.0 { r.scatter } else { SCATTER };
         p.key = key.extend(share);
+        // Ships' shadows through the gas (RND-15).
+        apply_shadow(p, shadow.as_deref());
         p.scat = Vec4::new(1.0 + g * g, 2.0 * g, 0.0, 0.0);
         p.flow.x = (t * r.flow_speed) % 100.0;
         // Edge-on dimming: a long path through a thin field adds up; dim it unless

@@ -17,7 +17,10 @@ fn split(bytes: &[u8]) -> (Body, Option<(Vec3, Vec3)>, BoundaryRec, PerceptionRe
     let (personnel, rest): (PersonnelRec, _) = postcard::take_from_bytes(rest).unwrap();
     assert!(personnel.rows.is_empty());
     let (_, rest): (UnitCrewRec, _) = postcard::take_from_bytes(rest).unwrap();
-    let (_, rest): (crate::autonomy::AutonomyWire, _) = postcard::take_from_bytes(rest).unwrap();
+    let (effects, rest): (StartEffectsRec, _) = postcard::take_from_bytes(rest).unwrap();
+    assert!(effects.rows.is_empty());
+    let (autonomy, rest): (crate::autonomy::AutonomyWire, _) = postcard::take_from_bytes(rest).unwrap();
+    assert!(autonomy.rows.is_empty());
     assert!(rest.is_empty());
     (body, bounds, boundary, perception)
 }
@@ -37,8 +40,13 @@ fn join(
     if u16::from_le_bytes(out[4..6].try_into().unwrap()) >= PERSONNEL_FORMAT {
         out.extend(postcard::to_allocvec(&PersonnelRec { version: 1, rows: Vec::new() }).unwrap());
     }
-    if u16::from_le_bytes(out[4..6].try_into().unwrap()) == FORMAT_VERSION {
+    if u16::from_le_bytes(out[4..6].try_into().unwrap()) >= CREW_FORMAT {
         out.extend(postcard::to_allocvec(&UnitCrewRec { version: 1, rows: Vec::new() }).unwrap());
+    }
+    if u16::from_le_bytes(out[4..6].try_into().unwrap()) >= START_EFFECTS_FORMAT {
+        out.extend(postcard::to_allocvec(&StartEffectsRec { version: 1, rows: Vec::new() }).unwrap());
+    }
+    if u16::from_le_bytes(out[4..6].try_into().unwrap()) == FORMAT_VERSION {
         out.extend(postcard::to_allocvec(&crate::autonomy::AutonomyWire { version: 1, rows: Vec::new() }).unwrap());
     }
     out

@@ -31,10 +31,13 @@ pub fn parse(name: &str) -> Option<Screen> {
 
 /// Add the screens to a frame run: a 2D camera into the capture image
 /// `target`, the UI scaled to the 1080-unit screen, the front end entered.
-pub fn add_overlay(app: &mut App, screen: Screen, target: Handle<Image>, frame_height: u32) {
-    app.insert_resource(UiScale(frame_height as f32 / 1080.0))
+pub fn add_overlay(app: &mut App, screen: Screen, target: Handle<Image>, frame_size: (u32, u32)) {
+    let (frame_width, frame_height) = frame_size;
+    let scale = frame_height as f32 / 1080.0;
+    app.insert_resource(UiScale(scale))
+        .insert_resource(super::stock::StockBox(super::stock::layout::fit_box(Vec2::new(frame_width as f32 / scale, frame_height as f32 / scale))))
         .insert_resource(ScreenData::fake())
-        .insert_resource(ScreensConfig { own_camera: false, fit_scale: false, start: screen })
+        .insert_resource(ScreensConfig { own_camera: false, fit_scale: false, start: screen, ..default() })
         .insert_state(AppState::FrontEnd)
         .add_plugins(ScreensPlugin)
         .add_systems(Startup, move |mut commands: Commands| {

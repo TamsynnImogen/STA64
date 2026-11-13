@@ -12,7 +12,7 @@ use super::data::{Browse, ScreenData, SelectedMod, SettingKey, SetupDraft, Setti
 use super::{Col, ListScroll, Screen};
 use crate::app::AppState;
 use crate::ui::i18n::{tr, trf};
-use crate::ui::theme::{Theme, button, disabled_button, label, list, panel, slider, toggle};
+use crate::ui::theme::{Theme, button, disabled_button, kit_panel, label, list, slider, toggle};
 
 /// A screen's root node: everything of the screen hangs under it.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,10 +86,18 @@ pub struct Ctx<'a> {
     pub settings: &'a Settings,
     pub selected: &'a SelectedMod,
     pub scroll: &'a ListScroll,
+    pub layout: super::stock::ScreenLayout,
+    /// The box the stock screens are laid out in, logical px.
+    pub stock_box: Vec2,
+    /// The options screen's selected tab.
+    pub options_tab: usize,
 }
 
 /// Spawn `screen`; `camera` is the UI camera when the host has one of its own.
 pub fn spawn(commands: &mut Commands, screen: Screen, ctx: &Ctx, camera: Option<Entity>) {
+    if ctx.layout == super::stock::ScreenLayout::Stock && super::stock::covers(screen) {
+        return super::stock::spawn(commands, screen, ctx, camera);
+    }
     match screen {
         Screen::Main => frame(commands, ctx, screen, camera, &tr("Star Trek Armada"), 520.0, main_menu(ctx)),
         Screen::SinglePlayer => frame(commands, ctx, screen, camera, &tr("Single player"), 620.0, single_player(ctx)),
@@ -106,7 +114,7 @@ fn frame(commands: &mut Commands, ctx: &Ctx, screen: Screen, camera: Option<Enti
         DespawnOnExit(AppState::FrontEnd),
         // Clear: the menu scene (UI-06) shows through.
         Node { width: Val::Percent(100.0), height: Val::Percent(100.0), align_items: AlignItems::Center, justify_content: JustifyContent::Center, ..default() },
-        children![(Node { width: Val::Px(width), flex_direction: FlexDirection::Column, ..default() }, children![panel(ctx.theme, title, content)])],
+        children![(Node { width: Val::Px(width), flex_direction: FlexDirection::Column, ..default() }, children![kit_panel(ctx.theme, title, content)])],
     ));
     if let Some(c) = camera {
         root.insert(UiTargetCamera(c));

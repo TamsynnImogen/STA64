@@ -19,6 +19,7 @@ pub mod post;
 pub mod profile;
 pub mod rock;
 pub mod shader_shadow;
+pub mod shadows;
 pub mod space;
 pub mod sprites;
 pub mod strategic;
@@ -30,3 +31,5 @@ pub mod units;
 mod clock_guard;
 #[cfg(test)]
 mod gpu_shaders;
+#[cfg(test)]
+mod shadows_gpu;

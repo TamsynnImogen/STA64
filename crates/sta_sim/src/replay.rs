@@ -13,14 +13,21 @@
 //!   rejects a file whose magic, format or seam revision it does not know,
 //!   or whose body leaves trailing bytes.
 //!   Content is checked when a game is built from the replay.
-//! - [`GameOptions`] is recorded explicitly in format 2. When it gains
+//! - [`GameOptions`] is recorded explicitly (since format 2). When it gains
 //!   fields, add them here with a format bump.
+//! - Format 3 adds [`StartRec`]: whether the game was started with each seat's
+//!   race start forces (`Sim::from_setup_with_starts`, Instant Action) and a
+//!   hash of the loadouts that produced. The loadouts themselves are not in
+//!   the file: they come from the race ODFs, which the player of the replay
+//!   supplies ([`Replay::play_with_starts`]). Formats 1 and 2 are rejected.
 
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use sta_content::{ContentDb, MapDef};
 use sta_core::{PlayerId, TeamId, Tick};
+
+use sta_content::Races;
 
 use crate::command::Command;
 use crate::setup::{Control, GameOptions, GameSetup, PlayerSetup};
@@ -30,7 +37,7 @@ use crate::{SEAM_REV, Sim};
 /// First four bytes of every replay file.
 pub const MAGIC: [u8; 4] = *b"STAR";
 /// Bumped when the layout of [`Replay`] changes.
-pub const FORMAT_VERSION: u16 = 2;
+pub const FORMAT_VERSION: u16 = 3;
 /// Digest every this many ticks unless the recorder is told otherwise.
 pub const DEFAULT_DIGEST_EVERY: Tick = 30;
 
@@ -49,6 +56,11 @@ pub enum ReplayError {
     Unordered,
     /// The supplied content is not the content the game was recorded with.
     ContentMismatch { expected: u64, found: u64 },
+    /// The replay was recorded with race start forces and was played without
+    /// race data ([`Replay::play`]).
+    StartsNeedRaces,
+    /// The race data supplied resolves other start forces than the recording's.
+    StartsMismatch { expected: u64, found: u64 },
     /// The re-run's digest differs from the recorded one.
     Desync {
         tick: Tick,
@@ -73,6 +85,15 @@ impl std::fmt::Display for ReplayError {
                 write!(
                     f,
                     "content hash {found:#018x}, replay was recorded with {expected:#018x}"
+                )
+            }
+            ReplayError::StartsNeedRaces => {
+                write!(f, "replay was recorded with race start forces; play it with race data")
+            }
+            ReplayError::StartsMismatch { expected, found } => {
+                write!(
+                    f,
+                    "race start forces hash {found:#018x}, replay was recorded with {expected:#018x}"
                 )
             }
             ReplayError::Desync {
@@ -109,6 +130,16 @@ pub enum ControlRec {
     Idle,
 }
 
+/// How a recorded game's seats got their starting forces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StartRec {
+    /// `Sim::from_setup`: the map's own objects only.
+    Bare,
+    /// `Sim::from_setup_with_starts`; `loadouts` is [`crate::start::loadouts_hash`]
+    /// of the recording's race data.
+    Races { loadouts: u64 },
+}
+
 /// A command and the tick it was applied on (the tick the sim was at when
 /// it was passed to `step`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -127,6 +158,7 @@ pub struct Replay {
     pub map: MapDef,
     pub players: Vec<SeatRec>,
     pub options: GameOptions,
+    pub starts: StartRec,
     /// Ascending tick, then `(player, seq)`.
     pub commands: Vec<Logged>,
     /// `(tick, digest)`, ascending; starts with tick 0.
@@ -136,6 +168,56 @@ pub struct Replay {
 }
 
 impl Replay {
+    /// The header of a game started from `setup`: no commands yet, no digests
+    /// and `end_tick` 0. A recorder fills in the rest ([`Recorder`], or a
+    /// client that steps its own sim and logs with [`Replay::log_step`]).
+    pub fn new(setup: &GameSetup) -> Replay {
+        Replay {
+            seam_rev: SEAM_REV,
+            content_hash: setup.content.hash(),
+            seed: setup.seed,
+            map: (*setup.map).clone(),
+            players: setup
+                .players
+                .iter()
+                .map(|p| SeatRec {
+                    id: p.id,
+                    team: p.team,
+                    race: p.race.clone(),
+                    control: match &p.control {
+                        Control::Human => ControlRec::Human,
+                        Control::Remote => ControlRec::Remote,
+                        Control::Ai(n) => ControlRec::Ai(n.clone()),
+                        // Idle, and any seat kind added later: nothing sends for them.
+                        _ => ControlRec::Idle,
+                    },
+                })
+                .collect(),
+            options: setup.options.clone(),
+            starts: StartRec::Bare,
+            commands: Vec::new(),
+            digests: Vec::new(),
+            end_tick: 0,
+        }
+    }
+
+    /// Logs one step of a game: `commands` were applied at tick `before` and
+    /// the sim then stood at tick `after` with `digest`. Commands go in
+    /// `(player, seq)` order as the sim applies them, `end_tick` follows, and
+    /// a digest is kept when `after` is a multiple of `every`.
+    pub fn log_step(&mut self, before: Tick, commands: &[Command], after: Tick, digest: u64, every: Tick) {
+        let mut sorted: Vec<&Command> = commands.iter().collect();
+        sorted.sort_by_key(|c| c.sort_key());
+        self.commands.extend(sorted.into_iter().map(|c| Logged {
+            tick: before,
+            command: c.clone(),
+        }));
+        self.end_tick = after;
+        if after.is_multiple_of(every.max(1)) {
+            self.digests.push((after, digest));
+        }
+    }
+
     /// The file's bytes.
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(64);
@@ -209,8 +291,39 @@ impl Replay {
 
     /// Re-runs the game from tick 0 to [`Replay::end_tick`], checking each
     /// recorded digest. Returns the final sim.
+    ///
+    /// A replay recorded with race starts needs [`Replay::play_with_starts`].
     pub fn play(&self, content: Arc<ContentDb>) -> Result<Sim, ReplayError> {
-        let mut sim = Sim::from_setup(&self.setup(content)?);
+        if self.starts != StartRec::Bare {
+            return Err(ReplayError::StartsNeedRaces);
+        }
+        let sim = Sim::from_setup(&self.setup(content)?);
+        self.play_from(sim, self.end_tick)
+    }
+
+    /// As [`Replay::play`], rebuilding the starting forces from `races` when
+    /// the game was recorded with them. `races` must resolve the same
+    /// loadouts as at recording time, else [`ReplayError::StartsMismatch`].
+    pub fn play_with_starts(&self, content: Arc<ContentDb>, races: &Races) -> Result<Sim, ReplayError> {
+        let setup = self.setup(content)?;
+        let sim = match self.starts {
+            StartRec::Bare => Sim::from_setup(&setup),
+            StartRec::Races { loadouts } => {
+                let found = crate::start::loadouts_hash(&setup, races);
+                if found != loadouts {
+                    return Err(ReplayError::StartsMismatch { expected: loadouts, found });
+                }
+                Sim::from_setup_with_starts(&setup, races).0
+            }
+        };
+        self.play_from(sim, self.end_tick)
+    }
+
+    /// As [`Replay::play`], from `sim`, which must be the game's sim at tick
+    /// 0 (a client that places starting forces builds it that way), and up to
+    /// tick `until` (a capture stops before the log ends). Recorded digests
+    /// at or before `until` are checked, tick 0's included.
+    pub fn play_from(&self, mut sim: Sim, until: Tick) -> Result<Sim, ReplayError> {
         let mut next_digest = 0;
         let mut next_cmd = 0;
         loop {
@@ -229,7 +342,7 @@ impl Replay {
                     });
                 }
             }
-            if tick >= self.end_tick {
+            if tick >= until {
                 return Ok(sim);
             }
             let mut batch = Vec::new();
@@ -257,33 +370,27 @@ impl Recorder {
 
     /// As [`Recorder::new`], digesting every `every` ticks (at least 1).
     pub fn with_interval(setup: &GameSetup, every: Tick) -> Recorder {
-        let sim = Sim::from_setup(setup);
-        let replay = Replay {
-            seam_rev: SEAM_REV,
-            content_hash: setup.content.hash(),
-            seed: setup.seed,
-            map: (*setup.map).clone(),
-            players: setup
-                .players
-                .iter()
-                .map(|p| SeatRec {
-                    id: p.id,
-                    team: p.team,
-                    race: p.race.clone(),
-                    control: match &p.control {
-                        Control::Human => ControlRec::Human,
-                        Control::Remote => ControlRec::Remote,
-                        Control::Ai(n) => ControlRec::Ai(n.clone()),
-                        // Idle, and any seat kind added later: nothing sends for them.
-                        _ => ControlRec::Idle,
-                    },
-                })
-                .collect(),
-            options: setup.options.clone(),
-            commands: Vec::new(),
-            digests: vec![(0, sim.digest())],
-            end_tick: 0,
-        };
+        Recorder::build(setup, Sim::from_setup(setup), StartRec::Bare, every)
+    }
+
+    /// As [`Recorder::new`], starting each seat with its race's start forces
+    /// (`Sim::from_setup_with_starts`) and recording what is needed to rebuild
+    /// them. Play the result with [`Replay::play_with_starts`].
+    pub fn new_with_starts(setup: &GameSetup, races: &Races) -> Recorder {
+        Recorder::with_starts(setup, races, DEFAULT_DIGEST_EVERY)
+    }
+
+    /// As [`Recorder::new_with_starts`], digesting every `every` ticks.
+    pub fn with_starts(setup: &GameSetup, races: &Races, every: Tick) -> Recorder {
+        let sim = Sim::from_setup_with_starts(setup, races).0;
+        let starts = StartRec::Races { loadouts: crate::start::loadouts_hash(setup, races) };
+        Recorder::build(setup, sim, starts, every)
+    }
+
+    fn build(setup: &GameSetup, sim: Sim, starts: StartRec, every: Tick) -> Recorder {
+        let mut replay = Replay::new(setup);
+        replay.starts = starts;
+        replay.digests.push((0, sim.digest()));
         Recorder {
             sim,
             replay,
@@ -299,20 +406,9 @@ impl Recorder {
     /// Logs `commands` against the current tick and steps the sim.
     pub fn step(&mut self, commands: &[Command]) -> crate::TickOutput {
         let tick = self.sim.view().tick;
-        let mut sorted: Vec<&Command> = commands.iter().collect();
-        sorted.sort_by_key(|c| c.sort_key());
-        self.replay
-            .commands
-            .extend(sorted.into_iter().map(|c| Logged {
-                tick,
-                command: c.clone(),
-            }));
         let out = self.sim.step(commands);
-        let now = out.view.tick;
-        self.replay.end_tick = now;
-        if now.is_multiple_of(self.every) {
-            self.replay.digests.push((now, out.view.digest));
-        }
+        self.replay
+            .log_step(tick, commands, out.view.tick, out.view.digest, self.every);
         out
     }
 
@@ -495,7 +591,7 @@ mod tests {
         let (old, rest): (LegacyReplay, _) = postcard::take_from_bytes(&NATIVE_V1[6..]).unwrap();
         let mut replay = Replay { seam_rev: old.seam_rev, content_hash: old.content_hash,
             seed: old.seed, map: old.map, players: old.players, commands: old.commands,
-            digests: old.digests, end_tick: old.end_tick, options: GameOptions::default() };
+            digests: old.digests, end_tick: old.end_tick, options: GameOptions::default(), starts: StartRec::Bare };
         assert!(rest.is_empty());
         assert_eq!(replay.seam_rev, 1);
         replay.seam_rev = SEAM_REV;
@@ -520,6 +616,67 @@ mod tests {
             sim.step(&[]);
         }
         assert_eq!(crate::unit_status_tests::digest_before_crew(&sim), 0x2b96_65c4_c00e_0f3b);
+    }
+
+    fn record_with_starts(races: &Races, n: Tick) -> (Replay, u64) {
+        let mut rec = Recorder::with_starts(&setup(), races, 10);
+        for t in 0..n {
+            let mine: Vec<EntityId> = rec.sim().view().units.iter().filter(|u| u.owner == PlayerId(0)).map(|u| u.id).collect();
+            let cmds = if t % 20 == 0 && !mine.is_empty() {
+                vec![Command {
+                    player: PlayerId(0),
+                    seq: t as u32,
+                    kind: CommandKind::Order(Order::Move { units: mine, to: Vec3::from_f32([t as f32, 0.0, 40.0]), queue: false }),
+                }]
+            } else {
+                vec![]
+            };
+            rec.step(&cmds);
+        }
+        let digest = rec.sim().digest();
+        (rec.finish(), digest)
+    }
+
+    #[test]
+    fn race_starts_record_and_replay_to_equal_digests() {
+        let races = Races::default();
+        let (replay, digest) = record_with_starts(&races, 120);
+        assert!(matches!(replay.starts, StartRec::Races { .. }));
+        assert!(!replay.commands.is_empty());
+        // The starting forces are in the first digest: it is not the bare map's.
+        assert_ne!(replay.digests[0].1, Sim::from_setup(&setup()).digest());
+        let decoded = Replay::decode(&replay.encode()).unwrap();
+        assert_eq!(decoded, replay);
+        let sim = decoded.play_with_starts(Arc::new(sta_content::fake::db()), &races).unwrap();
+        assert_eq!(sim.digest(), digest);
+        assert!(sim.view().units.iter().any(|u| u.owner == PlayerId(1)));
+    }
+
+    #[test]
+    fn race_start_replay_needs_matching_race_data() {
+        let races = Races::default();
+        let (replay, _) = record_with_starts(&races, 20);
+        let db = Arc::new(sta_content::fake::db());
+        assert_eq!(replay.play(db.clone()).unwrap_err(), ReplayError::StartsNeedRaces);
+        let other = Races::from_defs(vec![sta_content::RaceDef {
+            stem: "fx".into(), name: "fx".into(), display_key: None, slot: Some(0),
+            interface: None, interface_sprites: None,
+            single_player_music: None, multiplayer_music: None,
+            standard_units: vec!["fx_cruiser".into()],
+            minimal_units: vec![], stock: [9, 0, 0, 0],
+            lots_stock: [0; 4], normal_crew: None, lots_crew: None,
+        }]);
+        assert!(matches!(replay.play_with_starts(db.clone(), &other), Err(ReplayError::StartsMismatch { .. })));
+        // A bare recording plays either way.
+        let (bare, digest) = record(20);
+        assert_eq!(bare.play_with_starts(db, &other).unwrap().digest(), digest);
+    }
+
+    #[test]
+    fn rejects_replay_format_two_explicitly() {
+        let mut bytes = record(10).0.encode();
+        bytes[4..6].copy_from_slice(&2u16.to_le_bytes());
+        assert_eq!(Replay::decode(&bytes).unwrap_err(), ReplayError::FormatVersion { found: 2 });
     }
 
     #[test]

@@ -97,6 +97,9 @@ pub(crate) fn unit_def_for_profile(name: &str, odf: &Odf, phys: Option<&Odf>, pr
     let mut d = UnitDef::new(name.trim().trim_end_matches(".odf"), class);
     d.class = ClassLabel::new(class.trim());
     d.raw = std::sync::Arc::new(odf.clone());
+    d.hidden = crate::lifecycle::hidden(odf);
+    d.invalid_as_target = crate::lifecycle::invalid_as_target(odf);
+    d.life = crate::lifecycle::life_ticks(odf);
     d.confinement = crate::confinement::from_odf(odf, &file, warnings);
     let mut r = Reader { odf, file: &file, warnings };
 
@@ -130,6 +133,10 @@ pub(crate) fn unit_def_for_profile(name: &str, odf: &Odf, phys: Option<&Odf>, pr
     }
     d.crew = r.fixed("crewCost");
     d.maximum_crew = odf.raw("maximumCrew").map(|_| r.fixed("maximumCrew"));
+    // Planets carry their own typed `planet_crew_gain` and ignore this key here.
+    if !matches!(d.class.0.as_str(), "planet" | "planet_obj" | "moon") {
+        d.crew_gain = r.fixed("maxCrewGain").min(Fixed::from_int(1_000_000_000));
+    }
     d.sensor = r.fixed("rangeScan");
 
     for (n, raw) in numbered(odf, "weapon") {

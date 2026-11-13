@@ -49,6 +49,9 @@ use crate::world::{Entities, Fnv, Table};
 #[non_exhaustive]
 pub enum SpecialKind {
     Cloak,
+    /// A point-defence weapon, toggled like a special when
+    /// `Features::pd_energy` is on (SIM-34; `combat/pd.rs` runs it).
+    PointDefence,
 }
 
 impl SpecialKind {
@@ -56,6 +59,7 @@ impl SpecialKind {
     pub fn of(w: &WeaponDef) -> Option<SpecialKind> {
         match w.class.0.as_str() {
             "cloakingdevice" | "cloakingdeviceimp" => Some(SpecialKind::Cloak),
+            _ if w.kind == sta_content::WeaponKind::PointDefence => Some(SpecialKind::PointDefence),
             _ => None,
         }
     }
@@ -104,10 +108,29 @@ pub fn specials_of<'a>(
     db: &'a ContentDb,
     u: &'a UnitDef,
 ) -> impl Iterator<Item = (SpecialKind, &'a WeaponDef)> {
-    u.hardpoints.iter().filter_map(|h| {
+    specials_indexed(db, u).map(|(_, k, w)| (k, w))
+}
+
+/// The unit's specials with their hardpoint index, in hardpoint order.
+pub fn specials_indexed<'a>(
+    db: &'a ContentDb,
+    u: &'a UnitDef,
+) -> impl Iterator<Item = (usize, SpecialKind, &'a WeaponDef)> {
+    u.hardpoints.iter().enumerate().filter_map(|(i, h)| {
         let w = db.weapon(h.weapon.key)?;
-        Some((SpecialKind::of(w)?, w))
+        let kind = SpecialKind::of(w)?;
+        // A PD weapon is a special (and takes a slot) only under `pd_energy` with
+        // `point_defense_cycles`, the bits its toggle needs,
+        // so slot numbers of other content do not shift.
+        (kind != SpecialKind::PointDefence || { let f = db.weapon_features(w); f.pd_energy && f.point_defense_cycles }).then_some((i, kind, w))
     })
+}
+
+/// The `Order::Special` slot of the unit's point-defence weapon, when point
+/// defence is a toggled special for it (`Features::pd_energy`). A HUD button
+/// or a controller sends `Order::Special { slot, .. }` with it (SIM-37).
+pub fn point_defence_slot(db: &ContentDb, u: &UnitDef) -> Option<u8> {
+    specials_indexed(db, u).position(|(_, k, _)| k == SpecialKind::PointDefence).map(|n| n as u8)
 }
 
 pub fn cloak_def(db: &ContentDb, u: &UnitDef) -> Option<CloakDef> {
@@ -170,6 +193,21 @@ impl Specials {
         };
         self.energy.insert(id, to.max(Fixed::ZERO).min(def.max));
         true
+    }
+
+    /// The unit's special-energy pool, for the point-defence drain.
+    pub(crate) fn energy_mut(&mut self, id: EntityId) -> Option<&mut Fixed> {
+        self.energy.get_mut(id)
+    }
+
+    /// Make the unit's pool now if it has one and it has not been made yet
+    /// (pools start full at the first step; an order may come first).
+    pub(crate) fn ensure_pool(&mut self, id: EntityId, def: &UnitDef) {
+        if self.energy.get(id).is_none()
+            && let Some(e) = energy_def(def)
+        {
+            self.energy.insert(id, e.max);
+        }
     }
 
     pub fn cloak_state(&self, id: EntityId) -> Option<CloakState> {
@@ -251,7 +289,8 @@ impl Specials {
                 .map(|s| s.0);
             any |= match kind {
                 Some(SpecialKind::Cloak) => self.cloak_one(db, units, player, id, None),
-                None => false,
+                // Toggled by `Weapons::order_special`, which routes it.
+                Some(SpecialKind::PointDefence) | None => false,
             };
         }
         any

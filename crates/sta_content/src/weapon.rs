@@ -15,12 +15,14 @@
 //! | `duration` | ordnance `lifespan` seconds, beams only; `STA64_duration` seconds on the weapon ODF overrides it (point defence has no lifespan) |
 //! | `fire_sound`, `fx` | `fireSound`; ordnance `shotGeometry` (else `sprite`) |
 //! | specials | `effectTimer`, `energyDrainRate`, `specialEnergyCost`, `disableWeapons` (default on), `decloakOnHit` |
+//! | shot timing | `initialShotDelayModifier` (signed; absent stays `None`), `ignoreShotDelayEffects`; `ordnance_defence` is the weapon's own class `ordnancedefenseweapon` |
+//! | `resource` (class `resourceweapon`) | `addDilithium`, `addLatinum`, `addMetal`, `addBiomatter`, `addCrew` (signed), `oneTimeMode`, `alwaysActivePlayer`, `alwaysActiveAI` |
 //! | hardpoint arc | `restrictFireArc = 1` with `fireArc` as the half-width in radians (our reading) |
 
 use sta_core::Fixed;
 use sta_odf::Odf;
 
-use crate::def::{ClassLabel, FireArc, WeaponDef, WeaponKind};
+use crate::def::{ClassLabel, FireArc, ResourceWeaponDef, WeaponDef, WeaponKind};
 use crate::odf::{numbered, stem, Reader};
 use crate::Warning;
 
@@ -57,6 +59,7 @@ pub fn weapon_def(name: &str, odf: &Odf, ordnance: Option<&Odf>, warnings: &mut 
     let mut d = WeaponDef::new(name.trim().trim_end_matches(".odf"), &class, kind);
     d.class = ClassLabel::new(&class);
     d.raw = std::sync::Arc::new(odf.clone());
+    d.replace = crate::lifecycle::replace_def(odf);
 
     let mut r = Reader { odf, file: &file, warnings };
     d.range = r.fixed("range");
@@ -77,6 +80,26 @@ pub fn weapon_def(name: &str, odf: &Odf, ordnance: Option<&Odf>, warnings: &mut 
     let own_duration = r.num("STA64_duration").filter(|s| *s >= 0.0).map(sta_core::seconds_to_ticks);
     d.disable_weapons = r.flag("disableWeapons").unwrap_or(true);
     d.decloak_on_hit = r.flag("decloakOnHit").unwrap_or(false);
+    d.initial_shot_delay_modifier = r.num("initialShotDelayModifier").map(Fixed::from_f64);
+    d.ignore_shot_delay_effects = r.flag("ignoreShotDelayEffects").unwrap_or(false);
+    d.ordnance_defence = own == "ordnancedefenseweapon";
+
+    if own == "resourceweapon" {
+        let mut add = [Fixed::ZERO; crate::resources::SLOTS];
+        for (slot, key) in crate::resources::KEYS.iter().enumerate() {
+            // Signed: the Roots Tal Shiar weapons take (`addDilithium = -100`).
+            if let Some(v) = r.num(&format!("add{key}")) {
+                add[slot] = Fixed::from_f64(v);
+            }
+        }
+        d.resource = Some(ResourceWeaponDef {
+            add,
+            crew: r.num("addCrew").map_or(Fixed::ZERO, Fixed::from_f64),
+            one_time: r.flag("oneTimeMode").unwrap_or(false),
+            always_player: r.flag("alwaysActivePlayer").unwrap_or(false),
+            always_ai: r.flag("alwaysActiveAI").unwrap_or(false),
+        });
+    }
 
     let arc = if r.flag("restrictFireArc") == Some(true) {
         r.num("fireArc").filter(|a| *a > 0.0).map(fire_arc)
@@ -100,4 +123,30 @@ pub fn weapon_def(name: &str, odf: &Odf, ordnance: Option<&Odf>, warnings: &mut 
         d.duration = ticks;
     }
     (d, arc)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(text: &str) -> WeaponDef {
+        let odf = sta_odf::resolve("w", &mut |_| Some(text.to_owned())).unwrap();
+        weapon_def("w", &odf, None, &mut Vec::new()).0
+    }
+
+    #[test]
+    fn shot_timing_keys() {
+        let w = parse("[WeaponClass]\nclassLabel = \"cannon\"\nshotDelay = 2.0\n");
+        assert_eq!(w.initial_shot_delay_modifier, None);
+        assert!(!w.ignore_shot_delay_effects && !w.ordnance_defence);
+        let w = parse("[WeaponClass]\nclassLabel = \"cannon\"\ninitialShotDelayModifier = 0.0\nignoreShotDelayEffects = 1\n");
+        assert_eq!(w.initial_shot_delay_modifier, Some(Fixed::ZERO));
+        assert!(w.ignore_shot_delay_effects);
+        let w = parse("[WeaponClass]\nclassLabel = \"cannon\"\ninitialShotDelayModifier = -0.5\n");
+        assert_eq!(w.initial_shot_delay_modifier, Some(Fixed::from_f64(-0.5)));
+        let w = parse("[WeaponClass]\nclassLabel = \"ordnancedefenseweapon\"\n");
+        assert!(w.ordnance_defence && w.kind == WeaponKind::PointDefence);
+        let w = parse("[WeaponClass]\nclassLabel = \"pointdefenselaser\"\n");
+        assert!(!w.ordnance_defence);
+    }
 }

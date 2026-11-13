@@ -44,7 +44,7 @@ use bevy::prelude::*;
 
 pub use buttons::{KitLabel, kit_button, kit_toggle};
 pub use checkbox::{Checkbox, CheckboxChanged, checkbox};
-pub use dropdown::{Dropdown, DropdownChanged, DropdownOption, DropdownPopup, MAX_ROWS, dropdown};
+pub use dropdown::{Dropdown, DropdownChanged, DropdownOption, DropdownPopup, MAX_ROWS, dropdown, popup_of, popup_place};
 pub use focus::{FocusScope, Focusable, KitCapture, KitFocus, KitKey, focus_order, focusable, is_displayed, kit_key, move_focus, press};
 pub use scroll::{ScrollArea, SliderStep, scroll_list, scroll_to_row, slider_focusable};
 pub use tabs::{Tab, TabBar, TabChanged, TabPanel, tab_bar, tab_panel};
@@ -72,6 +72,11 @@ pub fn font_role(theme: &Theme, size: f32) -> FontRole {
 /// Text in the theme's font for its size (UI-16).
 pub fn kit_text(theme: &Theme, s: impl Into<String>, size: f32, color: Color) -> impl Bundle {
     sprite_text_styled(s, size, color, SpriteTextStyle::role(font_role(theme, size)))
+}
+
+/// [`panel`](super::panel) with its title in the theme's sprite font (menus).
+pub fn kit_panel(theme: &Theme, title: &str, content: impl Bundle) -> impl Bundle {
+    super::panel_with(theme, kit_text(theme, theme.caps(title, theme.caps_titles), theme.title_size, theme.title), content)
 }
 
 /// What a click on `e` does for the widgets of this module (the LCARS kit's `click`
@@ -132,7 +137,7 @@ impl Plugin for KitPlugin {
                     dropdown::hover_highlight,
                     dropdown::sync,
                     text_field::sync,
-                    (checkbox::paint, buttons::paint, dropdown::paint, tabs::sync, dropdown::flip_popups, focus::paint_focus),
+                    (checkbox::paint, buttons::paint, dropdown::paint, tabs::sync, dropdown::place_popups, focus::paint_focus),
                 )
                     .chain()
                     .in_set(KitSet)

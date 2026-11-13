@@ -66,11 +66,24 @@ pub struct Features {
     pub a1_compat: bool,
     /// Resources are paid when a build is queued, not when it starts (Refit).
     pub pay_on_queue: bool,
+    /// Point defence is a toggled special: off until switched on, it drains
+    /// `specialEnergyCost` per second and switches itself off at zero energy
+    /// (SIM-34; measured on stock A2 and Roots).
+    pub pd_energy: bool,
+    /// Point defence fires through one per-weapon timer that may go into debt
+    /// (the Roots engine, SIM-34; measured). Off: no rate limit once
+    /// `pd_energy` is on.
+    pub pd_debt_timer: bool,
+    /// Weapons start with a random initial reload and every shot reloads
+    /// `shotDelay` plus 0 to 5 % jitter; special orders are refused while
+    /// reloading (SIM-35; special launchers measured, regular weapons only
+    /// read from the engine's code).
+    pub weapon_shot_timing: bool,
 }
 
 impl Features {
     /// Every switch, in declaration order, for the content hash.
-    pub(crate) fn bits(&self) -> [bool; 22] {
+    pub(crate) fn bits(&self) -> [bool; 25] {
         [
             self.weapon_damage_controls,
             self.point_defense_cycles,
@@ -94,6 +107,9 @@ impl Features {
             self.cheats,
             self.a1_compat,
             self.pay_on_queue,
+            self.pd_energy,
+            self.pd_debt_timer,
+            self.weapon_shot_timing,
         ]
     }
 }

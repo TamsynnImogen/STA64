@@ -57,6 +57,11 @@ impl Autonomy {
         self.set.get(id).copied().unwrap_or(ENGINE_DEFAULT)
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_for_test(&mut self, id: EntityId, levels: [u8; 2]) {
+        self.set.insert(id, levels);
+    }
+
     pub(crate) fn remove(&mut self, id: EntityId) {
         self.set.remove(id);
     }
