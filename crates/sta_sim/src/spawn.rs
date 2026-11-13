@@ -90,7 +90,15 @@ impl Sim {
         self.confinement.initialize(self.units.get_mut(id).expect("spawned"));
         self.events.push(SimEvent::Spawned { id });
         self.register_lifecycle(id);
+        self.default_autonomy(id);
         Some(id)
+    }
+
+    /// Give a new craft the content's default autonomy (SIM-36, D9).
+    pub(crate) fn default_autonomy(&mut self, id: EntityId) {
+        let Some(db) = self.content.as_deref() else { return };
+        let a = db.rules().autonomy();
+        self.autonomy.spawned(&self.units, id, [a.movement, a.special_weapon]);
     }
 
     /// Take an entity out of the world, with everything kept about it.

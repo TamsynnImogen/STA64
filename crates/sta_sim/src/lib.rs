@@ -361,7 +361,12 @@ impl Sim {
             self.economy.step(&mut self.units, db, &mut self.events);
             self.economy.step_passive(&self.units, db, &self.players, &self.ai_seats, self.tick);
             self.economy.step_crew(&self.units, db, self.tick);
+            let from = self.events.len();
             self.production.step(&mut self.units, db, &mut self.economy, &mut self.events, &mut self.confinement);
+            let built: Vec<EntityId> = self.events[from..].iter().filter_map(|e| match e { SimEvent::Spawned { id } => Some(*id), _ => None }).collect();
+            for id in built {
+                self.default_autonomy(id);
+            }
         }
         self.hold_welding_builders();
         self.advance_courses();
