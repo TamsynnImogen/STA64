@@ -172,9 +172,9 @@ fn every_converted_a2_mission_loads_and_runs() {
     for f in files {
         let name = format!("missions/{}", f.file_name().unwrap().to_string_lossy());
         let source = std::fs::read_to_string(&f).unwrap();
-        // no address is handed to Lua as a table, and at most the one std-container step is undecoded
+        // no address is handed to Lua as a table, and every function decodes (the std::vector members are modelled)
         assert!(!source.contains("Ref("), "{name}: a by-address argument was left as a table");
-        assert!(source.matches("(not decoded:").count() <= 1, "{name}: more undecoded functions than before");
+        assert_eq!(source.matches("(not decoded:").count(), 0, "{name}: an undecoded function");
         let mut rt = sta_mission::runtime::MissionRuntime::from_source(&name, &source, 7);
         assert!(rt.errors().is_empty(), "{name}: {:?}", rt.errors());
         for at in 0..300 {

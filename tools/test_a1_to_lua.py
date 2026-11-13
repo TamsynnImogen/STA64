@@ -425,5 +425,24 @@ class Missions(unittest.TestCase):
         self.assertTrue(luac_ok(src), "converted mission does not parse")
 
 
+class FindMissions(unittest.TestCase):
+    """Which DLL pairs convert: those a map names, and on request the ones no map names."""
+
+    def test_unmapped_pairs_follow_only_on_request(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = pathlib.Path(t)
+            (root / "missions").mkdir()
+            (root / "bzn").mkdir()
+            for stem in ("One", "Two"):
+                (root / "missions" / f"{stem}R.drl").write_bytes(b"x")
+                (root / "missions" / f"{stem}S.dsl").write_bytes(b"x")
+            (root / "bzn" / "map_a.bzn").write_bytes(b"\0onER.drl\0OneR.drl\0OneS.dsl\0")
+            mapped = a1.find_missions(str(root))
+            self.assertEqual([m[0] for m in mapped], ["map_a"])
+            every = a1.find_missions(str(root), include_unmapped=True)
+            self.assertEqual([m[0] for m in every], ["map_a", "two"])
+            self.assertTrue(every[1][2].endswith("TwoR.drl"))
+
+
 if __name__ == "__main__":
     unittest.main()

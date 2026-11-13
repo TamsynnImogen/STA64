@@ -473,7 +473,10 @@ data = read from the install; not measured):
   `int &` of `RecruitSpecialForces` is an out parameter (the script's slot gets
   the handle the binding returns as its second result); a `char *` is the string
   the code formatted (the C runtime's `sprintf` is modelled, as are `strcmp`,
-  `Vector3(x, y, z)` and the debug report) or the image's text. No address is
+  `Vector3(x, y, z)` and the debug report) or the image's text. The DLL's `std::vector`
+  members (a local or a function-static vector, with its SEH frame and `atexit`) are
+  recognised by their compiled bodies and modelled as Lua tables; an iterator is a byte
+  offset from `begin()`. No address is
   ever passed on as a table: an address left over makes that one function
   undecoded.
 - **Globals the DLL does not export** (data): a read-only constant or a static
