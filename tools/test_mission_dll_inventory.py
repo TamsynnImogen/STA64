@@ -62,8 +62,14 @@ class MissionDllInventoryTests(unittest.TestCase):
             ),
             "A2.GetLocation",
         )
+        # The (path, index) overload is bound by dll_objects.rs; a signature
+        # that matches no known overload stays unmapped.
         self.assertEqual(
-            inventory.a2_exact_for("Vector3 const & GetLocation(char *, int)", self.repo), ""
+            inventory.a2_exact_for("Vector3 const & GetLocation(char *, int)", self.repo),
+            "A2.GetLocation",
+        )
+        self.assertEqual(
+            inventory.a2_exact_for("Vector3 const & GetLocation(char *, float)", self.repo), ""
         )
         self.assertEqual(inventory.a2_exact_for("void SetRealTeam(int, int)", self.repo), "")
         self.assertEqual(inventory.a2_exact_for("void Cloak(int)", self.repo), "")
@@ -186,10 +192,73 @@ class MissionDllInventoryTests(unittest.TestCase):
         for signature in [
             "int GetDistance(int&, int&)",
             "float GetDistance(int, int)",
-            "float GetDistance(int&, char*, int)",
             "float GetDistance(int&, int&, int)",
+            "float GetDistance(int&, char const*, int)",
         ]:
             self.assertEqual(inventory.a2_exact_for(signature, self.repo), "", signature)
+        # The path overload is its own exact signature, served by the same name.
+        self.assertEqual(
+            inventory.a2_exact_for("float GetDistance(int&, char*, int)", self.repo), "A2.GetDistance"
+        )
+
+    def test_param_count_reads_void_and_comma_lists(self):
+        self.assertEqual(inventory.param_count("float GetTime(void)"), 0)
+        self.assertEqual(inventory.param_count("float GetTime()"), 0)
+        self.assertEqual(inventory.param_count("bool IsAlive(int)"), 1)
+        self.assertEqual(inventory.param_count("int CountVisibleUnits(int,int,bool,char*)"), 4)
+
+    def test_rule_condition_calls_are_working_raising_or_missing(self):
+        self.register_a2(
+            'table.set("CountUnits", f);\ntable.set("IsCompromised", no_data_fn(lua, ctx, "IsCompromised", "why")?)?;\n'
+        )
+        (self.a2 / "conditions.rs").write_text(
+            '// no_data_fn(lua, ctx, "Commented", "x")\n'
+            'table.set("IsCompromised", no_data_fn(lua, ctx, "IsCompromised", "why")?)?;\n',
+            encoding="utf-8",
+        )
+        raising = inventory.a2_raising(self.repo)
+        # Bindings found in the source, plus the explicit always-raising `def` calls.
+        self.assertEqual(raising, {"IsCompromised"} | inventory.A2_RAISING_THROUGH_DEF)
+        self.assertTrue({"AI_Team_Load_AIP", "GetAttackLocation"} <= raising)
+        kind = lambda sig: inventory.a2_condition_kind(sig, self.repo, raising)
+        self.assertEqual(kind("int CountUnits(int,char*)"), "working")
+        self.assertEqual(kind("bool IsCompromised(int,int)"), "raises")
+        self.assertEqual(kind("bool UnderAttack(int,float)"), "missing")
+
+    def test_a1_condition_kind_treats_error_bindings_as_raising(self):
+        kinds = {"IsCompromised": "error", "CountUnits": "working", "GetTime": "presentation"}
+        self.register_a1_names(["IsCompromised", "CountUnits"])
+        self.assertEqual(inventory.a1_condition_kind("bool IsCompromised(int, int)", self.repo, kinds), "raises")
+        self.assertEqual(inventory.a1_condition_kind("int CountUnits(int, char *)", self.repo, kinds), "working")
+        self.assertEqual(inventory.a1_condition_kind("float GetTime(void)", self.repo, kinds), "missing")
+
+    def test_rule_section_counts_pairs_and_sites_per_kind(self):
+        self.register_a2('table.set("CountUnits", f);\ntable.set("IsCompromised", f);\n')
+        (self.a2 / "conditions.rs").write_text(
+            'table.set("IsCompromised", no_data_fn(lua, ctx, "IsCompromised", "why")?)?;\n', encoding="utf-8"
+        )
+        rules = [{
+            "label": "Fake A2", "drls": 2, "rules": 5, "decoded": 5, "failed": 0,
+            "calls": {
+                "int CountUnits(int,char*)": ({"a.drl", "b.drl"}, 4),
+                "bool IsCompromised(int,int)": ({"a.drl"}, 3),
+                "bool UnderAttack(int,float)": ({"b.drl"}, 2),
+            },
+        }]
+        text = "\n".join(inventory.rule_section(rules, 0, [], self.repo, {}))
+        self.assertIn("| Fake A2 | 2 | 5 | 5 | 3 | 4 | 2 | 1 | 1 | 9 | 4 |", text)
+        self.assertIn("| `int CountUnits(int,char*)` | 2 | 4 | working | `A2.CountUnits` |", text)
+        self.assertIn("| `bool UnderAttack(int,float)` | 1 | 2 | missing |  |", text)
+        self.assertNotIn("make no calls", text)
+
+    def register_a1_names(self, names):
+        a1 = self.api / "a1"
+        a1.mkdir(exist_ok=True)
+        (a1 / "mod.rs").write_text(
+            'objects::install(lua, &env, &a2, &table)?; table.raw_set("A1", table)?;'.replace("table.raw_set", "lua.globals().raw_set").replace('"A1", table)', '"A1", table)'),
+            encoding="utf-8",
+        )
+        (a1 / "objects.rs").write_text("".join(f'table.set("{n}", f)?;\n' for n in names), encoding="utf-8")
 
     def test_race_coverage_keeps_pointer_qualifiers_distinct(self):
         self.register_a2(

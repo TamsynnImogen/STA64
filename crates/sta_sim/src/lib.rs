@@ -25,6 +25,7 @@ pub mod boundary;
 pub mod combat;
 pub mod command;
 pub mod context;
+pub mod digest;
 pub mod economy;
 pub mod event;
 pub mod fake;
@@ -50,6 +51,8 @@ pub mod specials;
 pub mod spatial;
 pub mod spawn;
 pub mod start;
+mod start_effects;
+pub use start_effects::unsupported as unsupported_start_lifecycle;
 pub mod tech;
 pub mod victory;
 pub mod view;
@@ -62,7 +65,7 @@ pub use sta_core::{ContentKey, EntityId, Fixed, PlayerId, SEAM_REV, TICK_HZ, Tea
 /// Movement limits now live with the rest of a unit's definition.
 pub use sta_content::MoveStats;
 
-pub use event::SimEvent;
+pub use event::{MinerPhase, SimEvent};
 pub use source::WorldSource;
 pub use view::{TickOutput, UnitView, WorldView};
 
@@ -137,6 +140,8 @@ pub struct Sim {
     victory: victory::Victory,
     /// Special energy and cloaks (SIM-14); in the digest once any exists.
     specials: specials::Specials,
+    /// Pending start-helper lifecycle steps (SIM-28); in the digest once any exist.
+    start_effects: start_effects::StartEffects,
     /// Path planner grids and fields (SIM-23): a memo, not in the digest.
     nav: nav::Cache,
 }
@@ -163,6 +168,7 @@ impl Sim {
             production: Default::default(),
             victory: Default::default(),
             specials: Default::default(),
+            start_effects: Default::default(),
             nav: Default::default(),
         }
     }
@@ -289,7 +295,7 @@ impl Sim {
             }
             Order::Special { units, slot, .. } => {
                 let Some(db) = self.content.clone() else { return false };
-                self.weapons.order_special(self.tick, &db, &self.units, &mut self.specials, &mut self.rng, c.player, units, *slot)
+                self.weapons.order_special(self.tick, &db, &self.units, &mut self.specials, &mut self.rng, &mut self.events, c.player, units, *slot)
             }
             Order::Rally { builders, at } => {
                 let Some(db) = self.content.as_deref() else { return false };
@@ -300,6 +306,7 @@ impl Sim {
 
     /// Move every unit one tick and close the tick with its view.
     fn advance(&mut self) -> TickOutput {
+        self.step_start_effects();
         self.hold_welding_builders();
         self.constrain_targets();
         let routed = self.route_orders();
@@ -324,6 +331,8 @@ impl Sim {
         }
         if let Some(db) = &self.content {
             self.economy.step(&mut self.units, db, &mut self.events);
+            self.economy.step_passive(&self.units, db, &self.players, &self.ai_seats, self.tick);
+            self.economy.step_crew(&self.units, db, self.tick);
             self.production.step(&mut self.units, db, &mut self.economy, &mut self.events, &mut self.confinement);
         }
         self.hold_welding_builders();
@@ -333,13 +342,11 @@ impl Sim {
         TickOutput { view: Arc::new(self.build_view()), events: std::mem::take(&mut self.events) }
     }
 
-    /// Live actors only; queued reservations/admission are not implemented.
+    /// Live actors plus the officers reserved by admitted, unfinished builds
+    /// (SIM-26, [`production::officers`]).
     fn officer_census(&self, player: PlayerId) -> Fixed {
         let Some(db) = self.content.as_deref() else { return Fixed::ZERO };
-        self.units.iter().filter(|u| u.owner == player && !u.flags.contains(view::UnitFlags::DYING))
-            .filter_map(|u| db.unit(u.def)).fold(Fixed::ZERO, |sum, def| {
-                Fixed::from_bits(sum.to_bits().saturating_add(def.build.officers.max(Fixed::ZERO).to_bits()))
-            })
+        self.production.officer_census(&self.units, db, player)
     }
 
     fn build_view(&self) -> WorldView {
@@ -434,6 +441,9 @@ impl Sim {
                 h.u64(id.0 as u64);
                 h.u64(owner.0 as u64);
             }
+        }
+        if !self.start_effects.is_empty() {
+            self.start_effects.hash_into(&mut h);
         }
         let crew_count = self.units.iter().filter(|unit| unit.crew.is_some()).count();
         if crew_count != 0 {

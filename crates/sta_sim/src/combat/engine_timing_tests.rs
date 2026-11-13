@@ -483,3 +483,35 @@ fn a_unit_that_starts_with_weapons_off_or_is_ordered_first_still_gets_its_initia
     )]);
     assert!(sim.specials.cloak_state(c).is_none(), "refused on the spawn tick");
 }
+
+#[test]
+fn pd_changes_raise_events_and_the_slot_helper_finds_the_weapon() {
+    let (mut sim, _, st) = pd_scene(pd_db(false, false), 0);
+    let db = Arc::clone(sim.content().unwrap());
+    let def = db.unit(sim.unit(st).unwrap().def).unwrap();
+    assert_eq!(crate::specials::point_defence_slot(&db, def), Some(0));
+    let changes = |sim: &mut Sim, cmds: &[Command]| -> Vec<bool> {
+        sim.step(cmds)
+            .events
+            .iter()
+            .filter_map(|e| match e {
+                SimEvent::PointDefenceChanged { id, on } if *id == st => Some(*on),
+                _ => None,
+            })
+            .collect()
+    };
+    sim.step(&[]);
+    assert_eq!(changes(&mut sim, &[toggle_pd(st)]), [true]);
+    assert_eq!(changes(&mut sim, &[toggle_pd(st)]), [false]);
+    // Switched on again, it announces its own auto-off at 0 energy.
+    assert_eq!(changes(&mut sim, &[toggle_pd(st)]), [true]);
+    let mut off = vec![];
+    for _ in 0..700 {
+        off.extend(changes(&mut sim, &[]));
+    }
+    assert_eq!(off, [false]);
+    // Without pd_energy the PD weapon is no special and has no slot.
+    let plain = sta_content::fake::db();
+    let def = plain.unit(plain.key("fx_station").unwrap()).unwrap();
+    assert_eq!(crate::specials::point_defence_slot(&plain, def), None);
+}

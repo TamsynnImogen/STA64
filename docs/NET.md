@@ -320,6 +320,11 @@ joiner                         host
   divergence at *T* is seen about one turn plus one network trip after both
   peers have run *T*. NET-02's acceptance ("detected within 1 turn") is its
   own to measure against this.
+  *NET-02 as built:* the record a peer sends at the start of turn *T* (for
+  turn *T + delay*) carries its digest of the state at *T*'s first tick,
+  taken before *T* runs. A peer that finds a mismatch halts before sending
+  that record, so its `Desync` notice carries both digests and receivers
+  compare it like a record.
 - On a mismatch the peer:
   1. sends `Desync { slot, ours, theirs }` to everyone;
   2. writes its **replay** (`sta_sim::replay`, the same `Recorder` log it has
@@ -357,6 +362,13 @@ joiner                         host
   last record before it, and puts `Action::Drop { slot, last_turn, then }` in
   its record. Every peer counts that seat's records up to `last_turn` and has
   no others.
+  *NET-02 amendment.* The host is itself stalled on that seat, so its next
+  record cannot wait for the next turn boundary, and a peer stalled on the
+  seat cannot read the record that releases it by running turns. So the host
+  sends the record carrying the `Drop` at once, a turn beyond its usual lead
+  (`LockstepRouter::extend_lead`; a sender's lead may be any size, 3.2), and a
+  receiver takes a `Drop` into account when the host's record arrives, not
+  when its turn is reached. `last_turn` is final, so this is safe.
 - **What a drop does to the sim** must be in the command log, or the replay
   will not reproduce it. AI takeover is: the host's AI sends that seat's
   commands from `last_turn + 1`. Elimination is not yet: no `Command`
@@ -431,6 +443,52 @@ joiner                         host
   limit on rooms and on join-code lookups.
 - Direct peer-to-peer paths (hole punching) are an optimisation the protocol
   does not depend on; v1 relays everything (section 11).
+
+*NET-03 as built* (`crates/sta_net/src/transport/`, `bin/relay.rs`):
+
+- **Transport: TCP, standard library only.** One connection per peer to the
+  relay; a reader and a writer thread per connection. Reliable and ordered per
+  sender, which is all the router needs, so loss and reorder do not occur at
+  this layer; slowness does, and is the router's stall. A QUIC or WebSocket
+  transport would be another implementation of `lockstep::Transport`.
+- **Envelope** between client and relay (`transport::wire`): `u32` length,
+  kind byte, fields; its own version (`RELAY_VERSION`), independent of
+  `PROTOCOL_VERSION`. Client to relay: `Create`, `Join` (optionally reclaiming a
+  vacated seat), `Data { mask, frame }`, `Keepalive`, `Kick`, `SetOpen`, `Leave`.
+  Relay to client: `Created`, `Joined`, `Refused`, `Data { from, from_host, frame }`,
+  `Departed`, `Keepalive`. The relay checks only the frame header (`peek_header`,
+  any version) and that the frame fills the envelope exactly.
+- **Seat = relay slot = `PlayerId`.** The host is seat 0 and joiners take the
+  lowest free seat, so the relay's stamp is the game's seat. A lobby that wants
+  computer players in particular seats must give them seats no joiner holds.
+- **Room codes** are six characters from a 31-character alphabet without
+  look-alikes (`K7M-Q2X`), from OS randomness; an optional password of at most
+  32 bytes (sent in the clear, like everything; section 10).
+- **Departure markers.** Forwarding and departures happen under one lock, so
+  for every receiver a seat's frames precede its marker. `NetControl::
+  take_departures` yields a marker only after `poll` has returned everything
+  before it. `Kick` (host only) removes a seat's connection under the same lock,
+  so frames still in flight from it are discarded and the marker is the last
+  word. After the host's connection ends the room accepts nobody new.
+- **Closed rooms and rejoin.** `SetOpen(false)` (the host sends it at `Start`)
+  stops new joiners; a seat that vacates in a closed room is reserved, and only a
+  `Join` that names it (`NetTransport::rejoin`) may take it. The relay cannot
+  tell whose seat it was; the host does, by the `Rejoin` token, and may kick an
+  impostor.
+- **Limits** (`RelayConfig`): 15 s idle (keepalives every 5 s), 5 s for the
+  handshake, 10 s to finish a half-sent envelope, 128 KiB/s per connection,
+  16 connections and 4 rooms per address, 512 connections and 128 rooms in
+  all, 10 failed joins per address per minute, and a bounded outgoing queue per
+  connection (a client that cannot keep up is disconnected, not buffered).
+  The client bounds its inbox (4 MiB) and send queue the same way and checks
+  the relay's messages as strictly as a peer's.
+- **Router bounds** (NET-03 hardening of NET-02): a seat more than
+  `MAX_QUEUED_TURNS` (128) records ahead is faulted; digest bookkeeping keeps
+  only ticks the peer itself has digests for; unread events are capped
+  (`MAX_EVENTS`).
+- **Not built:** ping-based delay adaptation and the stall timer (they need the
+  game's clock; INT/UI), the `Rejoin`/`Replayed` catch-up exchange (NET-04, over
+  `rejoin`), encryption and accounts (section 11).
 
 ## 10. Security
 

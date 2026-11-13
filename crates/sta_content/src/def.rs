@@ -254,6 +254,15 @@ pub struct UnitDef {
     /// Effective signed `maxCrewGain` contribution for a Producer planet.
     /// Zero for other roles; this is not a crew stock or population count.
     pub planet_crew_gain: i32,
+    /// Effective `crewModifier` of a Background planet (CON-37). `None` for
+    /// other roles and where neither the ODF nor a measured profile fallback
+    /// (Armada I: 1.2) supplies one. An authored zero is `Some(0)`.
+    pub planet_crew_modifier: Option<Fixed>,
+    /// Effective `isColonizable` of a Producer planet (CON-37); false for other roles.
+    pub planet_colonizable: bool,
+    /// Effective `civilianPopulationModifier` of a Producer planet (CON-37);
+    /// zero for other roles.
+    pub planet_civilian_population_modifier: Fixed,
     pub race: String,
     pub model: String,
     pub scale: Fixed,
@@ -269,6 +278,8 @@ pub struct UnitDef {
     pub crew: Fixed,
     /// `maximumCrew`; absent means the starting crew amount.
     pub maximum_crew: Option<Fixed>,
+    /// `maxCrewGain` of a station (SIM-25): what it adds to its team's crew capacity.
+    pub crew_gain: Fixed,
     /// Sensor range, units.
     pub sensor: Fixed,
     pub hardpoints: Vec<Hardpoint>,
@@ -309,6 +320,13 @@ pub struct UnitDef {
     /// Path-planner rules of a `nebula_obj` (SIM-23); `None` for every other
     /// class, and for content that predates them.
     pub nebula_pathing: Option<NebulaPathing>,
+    /// `hidden = 1`: the player never sees or picks it (start helpers).
+    pub hidden: bool,
+    /// `invalidAsTarget = 1`: automatic target selection skips it.
+    pub invalid_as_target: bool,
+    /// `autoExpireTime` (else `lifeTimer`) in ticks; the object removes itself
+    /// that long after it appears (SIM-28).
+    pub life: Option<Tick>,
     /// The resolved ODF, so keys no field reads yet stay reachable. Empty for
     /// definitions not made from an ODF.
     pub raw: Arc<sta_odf::Odf>,
@@ -349,6 +367,9 @@ impl UnitDef {
             is_starbase: false,
             planet_role: None,
             planet_crew_gain: 0,
+            planet_crew_modifier: None,
+            planet_colonizable: false,
+            planet_civilian_population_modifier: Fixed::ZERO,
             race: String::new(),
             model: String::new(),
             scale: Fixed::ONE,
@@ -359,6 +380,7 @@ impl UnitDef {
             initial_shields: None,
             crew: Fixed::ZERO,
             maximum_crew: None,
+            crew_gain: Fixed::ZERO,
             sensor: Fixed::ZERO,
             hardpoints: Vec::new(),
             build: BuildDef::default(),
@@ -377,6 +399,9 @@ impl UnitDef {
             features: None,
             confinement: crate::ConfinementOverrides::default(),
             nebula_pathing: None,
+            hidden: false,
+            invalid_as_target: false,
+            life: None,
             raw: Arc::new(raw),
         }
     }
@@ -437,7 +462,29 @@ pub struct WeaponDef {
     /// `None`: the database-wide set. Read through
     /// `ContentDb::weapon_features`.
     pub features: Option<Features>,
+    /// `resourceweapon` class only (SIM-24): what the weapon adds to its
+    /// owner's stock and who it works for. `None` for every other class.
+    pub resource: Option<ResourceWeaponDef>,
+    /// An instant `replaceweapon` (SIM-28); `None` for every other weapon.
+    pub replace: Option<crate::lifecycle::ReplaceDef>,
     pub raw: Arc<sta_odf::Odf>,
+}
+
+/// The keys of a `resourceweapon` (Fleet Operations 3.x and later; stock
+/// Armada I and II have none), read by [`crate::weapon::weapon_def`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResourceWeaponDef {
+    /// Signed amount per resource slot (dilithium, latinum, metal,
+    /// biomatter): `addDilithium`, `addLatinum`, `addMetal`, `addBiomatter`.
+    pub add: [Fixed; 4],
+    /// Signed crew per second (`addCrew`), onto the team's crew stock.
+    pub crew: Fixed,
+    /// `oneTimeMode`: a lump sum, not a rate. Default off.
+    pub one_time: bool,
+    /// `alwaysActivePlayer`: works for a human seat without being triggered.
+    pub always_player: bool,
+    /// `alwaysActiveAI`: the same for an AI seat.
+    pub always_ai: bool,
 }
 
 impl WeaponDef {
@@ -466,6 +513,8 @@ impl WeaponDef {
             ignore_shot_delay_effects: false,
             ordnance_defence: false,
             features: None,
+            resource: None,
+            replace: None,
             raw: Arc::new(raw),
         }
     }

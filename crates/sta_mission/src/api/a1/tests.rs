@@ -188,7 +188,7 @@ const CASES: &[(&str, &str, Expect)] = &[
     ("Mine", "A1.Mine(a, b)", Fine),
     ("GetAttackLocation", "A1.GetAttackLocation(a, b)", Fail),
     ("InAttackMode", "A1.InAttackMode(a)", Fail),
-    ("UnderAttack", "A1.UnderAttack(a, 5.0)", Fail),
+    ("UnderAttack", "assert(A1.UnderAttack(a, 5.0) == false)", Fine),
     ("GetAllyShipAttacks", "A1.GetAllyShipAttacks(4, 1)", Fail),
     ("GetAllyStationAttacks", "A1.GetAllyStationAttacks(4, 1)", Fail),
     ("AttackMainEnemyBase", "A1.AttackMainEnemyBase(1, true)", Fine),

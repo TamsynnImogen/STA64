@@ -62,15 +62,32 @@ pub(crate) fn sta64_path(o: &Opts) -> PathBuf {
     exe.into()
 }
 
-struct Ran {
+pub(crate) struct Ran {
     code: Option<i32>,
     stdout: String,
     stderr: String,
 }
 
-fn spawn(bin: &Path, args: &[String], secs: u64) -> Result<Ran, String> {
-    let mut child = Command::new(bin)
-        .args(args)
+/// `sta64` as a child at the lowest priority: on Unix through `sh`, which
+/// renices itself and then becomes the binary (same pid, so a timeout kill
+/// still reaches it).
+pub(crate) fn low_priority(bin: &Path, args: &[String]) -> Command {
+    if cfg!(unix) {
+        let mut c = Command::new("sh");
+        c.args(["-c", "renice -n 19 -p $$ >/dev/null 2>&1; exec \"$0\" \"$@\""]).arg(bin).args(args);
+        c
+    } else {
+        let mut c = Command::new(bin);
+        c.args(args);
+        c
+    }
+}
+
+pub(crate) fn spawn(bin: &Path, args: &[String], secs: u64) -> Result<Ran, String> {
+    if bin.components().count() > 1 && !bin.exists() {
+        return Err(format!("{}: No such file or directory", bin.display()));
+    }
+    let mut child = low_priority(bin, args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

@@ -30,6 +30,31 @@ not fabricate these states, and `isColonizable` remains raw metadata rather than
 a hidden Team gate. See [OWNERSHIP_TRANSFER.md](OWNERSHIP_TRANSFER.md) for the
 transaction, persistence and explicitly unsupported capabilities.
 
+## Typed planet numerics (CON-37)
+
+`UnitDef` carries three effective values beside the role and `maxCrewGain`
+(raw keys stay reachable). Each is read only for the role that uses it; other
+roles neither read nor diagnose the key. An authored value, including zero and
+including one inherited through an include, always wins over the fallback.
+
+| Field | Role | Key | Absent key | Evidence |
+|---|---|---|---|---|
+| `planet_crew_modifier: Option<Fixed>` | Background | `crewModifier` | Armada I 1.2; `None` on other profiles | A1: read from the executable, static. Other profiles: not measured |
+| `planet_colonizable: bool` | Producer | `isColonizable` | true on Sta2Classic/Fo4, false elsewhere | A2/FO: read from the executable, static |
+| `planet_civilian_population_modifier: Fixed` | Producer | `civilianPopulationModifier` | 1 on Sta2Classic/Fo4, 0 elsewhere | A2/FO: read from the executable, static |
+
+Installed data (read from data): the keys above exist in stock A1 and A2 planet
+ODFs; the per-install inventory is in the PR body.
+The "None / zero / false elsewhere" fallbacks for explicit cross-profile opt-ins are
+conservative STA64 choices, not native measurements. Flags use strict
+spelling (`0/1/true/false/yes/no`) and numbers must be finite; malformed
+values warn and use the fallback. Numbers pass through their shortest decimal
+text, so `1.2` equals the literal fallback.
+
+Hash: effective `crewModifier` (marker `0xf4`, `sta64.planet-crew-modifier.v1`)
+and the Producer pair (`0xf5`, `sta64.planet-colony.v1`); the Native fake hash
+is unchanged. No consumer reads these yet (SIM-30 will).
+
 ## Original audit and broader proposal
 
 Historical status: native/data audit and proposed integration sequence under SIM-19,

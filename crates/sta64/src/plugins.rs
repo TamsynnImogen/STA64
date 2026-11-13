@@ -97,6 +97,7 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
         app.add_plugins(crate::audio::AudioPlugin { mode: cfg.mode() });
         // CON-10: real sounds in place of the stub resolver.
         if let Some(r) = cfg.install_root.as_deref().and_then(|root| crate::audio::BankResolver::mount(root, cfg.active_mod.as_deref())) {
+            app.insert_resource(r.ui_sounds());
             app.insert_resource(crate::audio::Resolver(Box::new(r)));
         }
         // MED-03 movie playback; MED-05 the intro movies before the front end.

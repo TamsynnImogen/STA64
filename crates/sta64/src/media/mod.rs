@@ -35,6 +35,7 @@
 #![allow(dead_code)]
 
 mod decoder;
+pub mod campaign;
 pub mod intro;
 pub mod locate;
 pub mod mission;
@@ -225,6 +226,7 @@ impl Plugin for MediaPlugin {
             .add_message::<MovieFinished>()
             .add_message::<mission::Requested>()
             .add_message::<crate::sim_link::SimMsg>()
+            .add_plugins(campaign::CampaignMoviesPlugin)
             .init_resource::<Movies>()
             .init_resource::<MovieIds>()
             .add_systems(PreUpdate, skip_keys.after(InputSystems))

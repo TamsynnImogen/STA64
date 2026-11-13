@@ -50,6 +50,7 @@ impl UserData for Media {
                 .ok_or_else(|| mlua::Error::RuntimeError("Media sound IDs exhausted".into()))?;
             state.next_sound = id;
             state.sounds.push(id);
+            media.ctx.borrow_mut().playback.sounds.insert(id);
             media
                 .ctx
                 .borrow_mut()
@@ -60,6 +61,7 @@ impl UserData for Media {
             no_args("stopSounds", &args)?;
             // Arrival order is stable and matches the order of playSound calls.
             for id in media.state.borrow_mut().sounds.drain(..) {
+                media.ctx.borrow_mut().playback.sounds.remove(&id);
                 media
                     .ctx
                     .borrow_mut()
@@ -87,6 +89,7 @@ impl UserData for Media {
         m.add_method("playMovie", |_, media, args: MultiValue| {
             let name = one_name("playMovie", &args)?;
             // The one-argument bridge form is a skippable full-screen movie.
+            media.ctx.borrow_mut().playback.movie = true;
             media
                 .ctx
                 .borrow_mut()
@@ -99,6 +102,7 @@ impl UserData for Media {
         });
         m.add_method("stopMovie", |_, media, args: MultiValue| {
             no_args("stopMovie", &args)?;
+            media.ctx.borrow_mut().playback.movie = false;
             media
                 .ctx
                 .borrow_mut()

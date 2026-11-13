@@ -24,6 +24,7 @@
 //! - Within 150 units of node or station counts as there; the freighter
 //!   stops and works that same tick, so a trip with no travel takes exactly
 //!   `capacity / rate + capacity / unload` ticks.
+//! - Passive income from `resourceweapon` hardpoints is in [`passive`] (SIM-24).
 //! - Not yet: mining stations (`mining` class) producing by themselves,
 //!   trade, `miningratemodifier`, `trickleMiningRateFraction`, per-resource
 //!   transfer rates (all resources use `dilithiumTransferRate`).
@@ -42,6 +43,8 @@ use crate::world::{Entities, EntityKind, Fnv, Table};
 /// Resource ids: dilithium, latinum, metal, biomatter.
 pub const RESOURCES: usize = 4;
 
+mod passive;
+mod crew;
 mod personnel;
 
 /// What a fresh node holds.
@@ -66,6 +69,16 @@ enum Phase {
 impl Phase {
     fn code(self) -> u8 {
         self as u8
+    }
+    fn announced(self) -> crate::event::MinerPhase {
+        use crate::event::MinerPhase;
+        match self {
+            Phase::ToNode => MinerPhase::ToNode,
+            Phase::Mining => MinerPhase::Mining,
+            Phase::ToDock => MinerPhase::ToDock,
+            Phase::Unloading => MinerPhase::Unloading,
+            Phase::Idle => MinerPhase::Idle,
+        }
     }
     #[allow(dead_code)] // used by from_rec, which the snapshot calls
     fn from_code(c: u8) -> Phase {
@@ -297,6 +310,8 @@ impl Economy {
             let Some(mut m) = self.miners.get(id).copied() else {
                 continue;
             };
+            let was = m.phase;
+            let mut dock = None;
             let Some((def, owner)) = units.get(id).map(|u| (u.def, u.owner)) else {
                 self.miners.remove(id);
                 continue;
@@ -311,6 +326,7 @@ impl Economy {
                 if m.cargo == Fixed::ZERO {
                     set_target(units, id, None);
                     self.miners.remove(id);
+                    events.push(SimEvent::MinerPhase { id, phase: crate::event::MinerPhase::Idle, node: m.node, dock: None });
                     continue;
                 }
                 m.phase = Phase::ToDock;
@@ -356,6 +372,7 @@ impl Economy {
                         };
                         if dist(pos, at) <= reach() {
                             set_target(units, id, None);
+                            dock = Some(at);
                             m.phase = Phase::Unloading;
                         } else {
                             steer(units, id, at);
@@ -386,6 +403,9 @@ impl Economy {
                         break;
                     }
                 }
+            }
+            if m.phase != was {
+                events.push(SimEvent::MinerPhase { id, phase: m.phase.announced(), node: m.node, dock });
             }
             if m.phase == Phase::Idle && m.cargo == Fixed::ZERO {
                 self.miners.remove(id);

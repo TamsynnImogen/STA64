@@ -221,7 +221,7 @@ pub struct CampaignMission {
     pub objective_files: Vec<String>,
     /// The first of them that reads and parses.
     pub briefing: Option<Briefing>,
-    /// `.bik` movies the script names, in order (MED-04 picks intros from these).
+    /// `.bik` movies the script names, in string order (not play order; MED-04 lists them, the script plays them on its story events).
     pub movies: Vec<String>,
     /// Engine calls the script uses to end the mission (`Mission:finish`,
     /// `SucceedMission`, `FailMission`), found by a scan of its text.

@@ -167,8 +167,9 @@ impl Profile {
                 ..off
             },
             // Stock A2: plain rules, turrets, point-defence cycles and the
-            // original shot timing. `pd_energy` stays off until the HUD and
-            // the AI can toggle point defence (SIM-34 follow-up).
+            // original shot timing. `pd_energy` stays off until a HUD button
+            // can toggle point defence (UI-31); then SIM-37's one-line flip:
+            // `Sta2Classic` `pd_energy`, `Fo4` `pd_energy` + `pd_debt_timer`.
             Profile::Sta2Classic => Features { turrets: true, point_defense_cycles: true, weapon_shot_timing: true, start_fire_hold: true, ..off },
             // A1: its own class labels and health model, officers.
             Profile::Sta1Classic => Features { officer_capacity: true, a1_compat: true, ..off },

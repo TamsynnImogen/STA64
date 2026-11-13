@@ -388,6 +388,48 @@ supports the chosen argument order; native fog, coalition and invalid-object
 defaults remain unverified. The number-to-seat interpretation is the explicit
 STA64 bridge policy, not a new simulation team rule.
 
+## Campaign readiness
+
+How many campaign missions STA64 can run is one command (installs read at
+run time, absent ones skipped; the table and per-mission detail go to a
+directory outside the repository, `--detail-dir`). No path is built in: the
+installs come from `--a1/--a2/--roots` or `STA64_TEST_A1_INSTALL`,
+`STA64_TEST_A2_STOCK_INSTALL`, `STA64_TEST_ROOTS_INSTALL` (an unset one is
+skipped), the detail directory from `--detail-dir` or
+`STA64_RESEARCH_DIR/campaign-readiness` (required):
+
+```sh
+python3 tools/campaign_readiness.py [--a1 DIR] [--a2 DIR] [--roots DIR] [--ticks 300] [--detail-dir DIR]
+```
+
+It runs `crates/sta_mission/examples/campaign_readiness.rs` (the probe in
+`readiness.rs`, started the way `CampaignRunner` starts a mission, on the
+mission's own map, no player input) and, for legacy-DLL missions, a static
+read with `tools/mission_dll_inventory.py` and `tools/drl_to_lua.py`.
+Evidence grade: measured on the runtime; the legacy columns are read from the
+executables, static. Each column is a subset of the one before:
+
+- **(a) Lua**: the mission resolves to a Lua script STA64 can load.
+- **(b) runs**: it loads and runs N ticks with no runtime error other than a
+  stop at an unsupported call. A bound call with no seam or data raises by
+  design (`A2.<Name> is not available: ...`, or a counted reason such as an
+  order sent to a handle that is still being built); an error whose text
+  carries such a call is an *unsupported-call stop*, not a runtime error
+  (`is_unsupported_stop` in `readiness.rs`, mirrored in the Python tool).
+- **(c) bound**: and the run touched no unbound name (a `stub global` /
+  `stub field` fallback hit, see "Permissive fallback diagnostics").
+- **(d) working**: and nothing it called is bound-but-unsupported (the
+  runtime's counted `unsupported()` entries) and no unsupported call stopped it.
+- **legacy: calls bound if converted** / **bound and working if converted**:
+  for missions with only DLL rules, how many make only calls that are bound
+  on the `A2` / `A1` table, and only bound calls that really work (A1: not
+  retained, always-raising; A2: not `no_data_fn` or `raising`, nor one of the few `def` calls the
+  inventory lists as always raising). Plumbing (script
+  variables, timers, rule machinery) is left out. Not a runnable result.
+
+A mission that ends itself before N ticks stops early, so it exercises fewer
+calls; "working" is a lower bound on what a real play touches.
+
 ## Conversion report
 
 `sta64 --mission-report` lists every map whose mission resolves to

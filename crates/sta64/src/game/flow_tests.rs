@@ -42,7 +42,8 @@ fn app() -> (App, CallLog) {
         .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f32(0.1)))
         .init_resource::<ButtonInput<MouseButton>>()
         .init_resource::<ButtonInput<KeyCode>>()
-        .insert_non_send(Mixer::new(Box::new(null)));
+        .insert_non_send(Mixer::new(Box::new(null)))
+        .insert_resource(crate::audio::AudioTestTones(true));
     configure_sets(&mut app);
     let data = ScreenData::fake();
     let scene = MenuSceneConfig::new(data.content.clone(), MenuMap::builtin(), sta_content::fake::two_bases());

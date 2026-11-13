@@ -14,6 +14,11 @@ Stock missions are compiled 32-bit DLLs (docs/MISSIONS.md):
 - Armada I: `missions/*.dsl|.drl` and `AI/*.dsl|.drl` import engine
   functions by name from `Armada.exe`; their import tables are the API.
 
+Rule DLLs (`R.drl`) are not call-free: their conditions call the engine too. They
+import `g_pSI` instead of exporting it, so they are decoded with
+tools/drl_to_lua.py and reported in their own section (`--rules-install` adds
+further Armada II-family roots, such as a mod that ships `.drl` files).
+
 Writes a Markdown report: every engine call, grouped by area, with how many
 scripts use it (and, for A2, how many call sites), and the STA64 Lua
 binding that covers it today, if any. Only names and counts are recorded:
@@ -122,7 +127,7 @@ def a2_usage(slots, dlls):
             if name.startswith("?g_pSI@@"):
                 rva = eat.get(int(ordinal) - 1)
         if rva is None:
-            continue  # rules (.drl): no engine calls
+            continue  # rules (.drl) import g_pSI: read by a2_rule_conditions
         scripts += 1
         target = f"{base + rva:#x}"
         state = {}
@@ -268,6 +273,42 @@ A2_SIGNATURES = {
     "char const* GetOriginalRace(int)": "A2.GetOriginalRace",
     "void ObjectivesDisplay_Set_Visibility(bool)": "A2.ObjectivesDisplay_Set_Visibility",
     "void ObjectivesDisplaySetObjectiveComplete(int, bool)": "A2.ObjectivesDisplaySetObjectiveComplete",
+    # Rule-condition queries (conditions.rs): `A2.paths` serves the path overload.
+    "bool HasTimeElapsed(float)": "A2.HasTimeElapsed",
+    "bool IsAudioMessageDone(int)": "A2.IsAudioMessageDone",
+    "bool IsCargoShipFullAndReadyToSend(int)": "A2.IsCargoShipFullAndReadyToSend",
+    "bool IsCargoShipReadyToLoad(int)": "A2.IsCargoShipReadyToLoad",
+    "bool IsCompromised(int, int)": "A2.IsCompromised",
+    "bool IsExploding(int)": "A2.IsExploding",
+    "bool IsMoviePlaying(void)": "A2.IsMoviePlaying",
+    "bool IsShipAliveAndOffMap(int)": "A2.IsShipAliveAndOffMap",
+    "bool UnderAttack(int, float)": "A2.UnderAttack",
+    "float GetCrew(int)": "A2.GetCrew",
+    "float GetDistance(int&, char*, int)": "A2.GetDistance",
+    "float GetLatinumTraded(int, int)": "A2.GetLatinumTraded",
+    "float GetTime(void)": "A2.GetTime",
+    "int CountCapitalShips(int)": "A2.CountCapitalShips",
+    "int CountStations(int)": "A2.CountStations",
+    "int CountUnits(int, char*)": "A2.CountUnits",
+    "int CountUnitsNearObject(int, float, int, char*)": "A2.CountUnitsNearObject",
+    "int CountVisibleUnits(int, int, bool, char*)": "A2.CountVisibleUnits",
+    "int CountVisibleUnitsNearObject(int, float, int, bool, char*)": "A2.CountVisibleUnitsNearObject",
+    "int GetDilithium(int)": "A2.GetDilithium",
+    "int GetLatinum(int)": "A2.GetLatinum",
+    "int GetMetal(int)": "A2.GetMetal",
+    # Script-taking presentation calls (native_flow.rs) and titles (native_text.rs).
+    "void FadeIn(script *, float, float, float, bool)": "A2.FadeIn",
+    "void FadeOut(script *, float, float, float, bool)": "A2.FadeOut",
+    "void CineractiveStart(script *, bool)": "A2.CineractiveStart",
+    "int AudioMessage(script *, char const *, bool)": "A2.AudioMessage",
+    "int PlayMusic(script *, char const *, bool)": "A2.PlayMusic",
+    "void StopAudioMessage(int)": "A2.StopAudioMessage",
+    "void PlayCinematicMovie(script *, char *, int, bool)": "A2.PlayCinematicMovie",
+    "void WaitForEnterKey(script *)": "A2.WaitForEnterKey",
+    "int ShowTitle(int, int, char const *, bool)": "A2.ShowTitle",
+    "int ShowSubtitle(int, int, char const *, bool)": "A2.ShowSubtitle",
+    "void RemoveTitle(int, bool)": "A2.RemoveTitle",
+    "void RemoveSubtitle(int, bool)": "A2.RemoveSubtitle",
     "void SetForceOntoMap(int, bool)": "A2.SetForceOntoMap",
     "void SetRealTeam(int, int)": "A2.SetRealTeam",
     "void SetPerceivedTeam(int, int)": "A2.SetPerceivedTeam",
@@ -290,7 +331,83 @@ A2_SIGNATURES = {
     "void Starfield_Load_New_Background_Geometry(char*, char*)": "A2.Starfield_Load_New_Background_Geometry",
     "void MinimapMessage(int, int, float)": "A2.MinimapMessage",
     "void MinimapMessage(char*, int, float, int)": "A2.MinimapMessage",
+    # Object creation, searches and flags (dll_objects.rs). Calls the sim seam
+    # cannot serve are bound there as raising-and-counted (`no_data_fn`).
+    "int BuildObject(char*, int, char*, int)": "A2.BuildObject",
+    "int BuildObject(char*, int, int, float, float, float)": "A2.BuildObject",
+    "int SetSpecialForcesFlag(int, bool)": "A2.SetSpecialForcesFlag",
+    "bool RecruitSpecialForces(char*, int, int&)": "A2.RecruitSpecialForces",
+    "int GetNearestObjectNearPosition(Vector3 const&, float, int, char*, int, bool, int)": "A2.GetNearestObjectNearPosition",
+    "int GetNearestObjectNearMe(int, float, int, char*, int, bool)": "A2.GetNearestObjectNearMe",
+    "int GetFirstCraft(void)": "A2.GetFirstCraft",
+    "Vector3 const& GetLocation(char*, int)": "A2.GetLocation",
+    "void DestroyCritical(int)": "A2.DestroyCritical",
+    "void ExplodeNow(int)": "A2.ExplodeNow",
+    "void SetCanBeDecommissioned(int, bool)": "A2.SetCanBeDecommissioned",
+    "void DisableShieldGenerator(int, bool)": "A2.DisableShieldGenerator",
+    "void SetPosition(int, char*)": "A2.SetPosition",
+    "void SetPosition(int, char*, int)": "A2.SetPosition",
+    "void SetShieldPercent(int, float)": "A2.SetShieldPercent",
+    "void SetMaxShields(int, float)": "A2.SetMaxShields",
+    "void AllowAsTarget(int, int, bool)": "A2.AllowAsTarget",
+    "void DamageEngines(int, float)": "A2.DamageEngines",
+    "void DamageSensors(int, float)": "A2.DamageSensors",
+    "void DamageLifeSupport(int, float)": "A2.DamageLifeSupport",
+    "void DamageShieldGenerator(int, float)": "A2.DamageShieldGenerator",
+    "void DamageWeapons(int, float)": "A2.DamageWeapons",
+    "void HideObject(int, bool)": "A2.HideObject",
+    "void ButItCanBeDerelicted(int, bool)": "A2.ButItCanBeDerelicted",
+    "void CraftCanRepair(int, bool)": "A2.CraftCanRepair",
+    "void CraftCanRecrew(int, bool)": "A2.CraftCanRecrew",
+    "void SetName(int, char const*)": "A2.SetName",
+    "void SetPlanetCivPop(int, int)": "A2.SetPlanetCivPop",
+    "void SetAngularVelocity(int, Vector3 const&)": "A2.SetAngularVelocity",
+    "void StuffIntoWormhole(int, int)": "A2.StuffIntoWormhole",
+    "void LinkWormholes(int, int)": "A2.LinkWormholes",
+    "void SetWormholeDeleteOnTransport(int, bool)": "A2.SetWormholeDeleteOnTransport",
+    "void LoadCargoShip(int, int)": "A2.LoadCargoShip",
+    "int GetNearestShipyard(int, int, bool)": "A2.GetNearestShipyard",
+    "SiegeFleet* CreateNewSiegeFleet(void)": "A2.CreateNewSiegeFleet",
 }
+
+# Order, AI, crew and team calls (api/a2/orders.rs). Mixed names (an overload that
+# works beside one that raises) are counted as bound, like `A1_PARTIAL`.
+A2_ORDER_SIGNATURES = {
+    "void Goto(int, char *, bool, int)": "A2.Goto",
+    "void Goto(int, int, bool, int)": "A2.Goto",
+    "void Patrol(int, char *)": "A2.Patrol",
+    "void SetImpulseSpeed(int, float)": "A2.SetImpulseSpeed",
+    "void ResetImpulseSpeed(int)": "A2.ResetImpulseSpeed",
+    "float GetImpulseSpeed(int)": "A2.GetImpulseSpeed",
+    "void AI_Attack(int, int)": "A2.AI_Attack",
+    "void AI_Attack(int)": "A2.AI_Attack",
+    "void AI_Attack(int, Vector3)": "A2.AI_Attack",
+    "void Attack(int, int, int)": "A2.Attack",
+    "void Stop(int, int)": "A2.Stop",
+    "void Colonize(int, int)": "A2.Colonize",
+    "void Mine(int, int)": "A2.Mine",
+    "void Special_Attack(int, int, char const *)": "A2.Special_Attack",
+    "void Special_Attack(int, char const *)": "A2.Special_Attack",
+    "void AttackMainEnemyBase(int, bool)": "A2.AttackMainEnemyBase",
+    "Vector3 GetAttackLocation(int, int)": "A2.GetAttackLocation",
+    "int GetAllyStationAttacks(int, int)": "A2.GetAllyStationAttacks",
+    "void AI_Team_Load_AIP(int, char *)": "A2.AI_Team_Load_AIP",
+    "void SetCommandMoveAutonomyLow(int)": "A2.SetCommandMoveAutonomyLow",
+    "void SetCommandWhatWhoVO(int, AiCommand, int, bool)": "A2.SetCommandWhatWhoVO",
+    "void SetCommandWhatWhoParamVO(int, AiCommand, int, long, bool)": "A2.SetCommandWhatWhoParamVO",
+    "void SetCommandWhatWhoWhereVO(int, AiCommand, char *, Vector3, bool)": "A2.SetCommandWhatWhoWhereVO",
+    "void SetCrew(int, float)": "A2.SetCrew",
+    "void SetRace(int, char const *)": "A2.SetRace",
+    "Vector3 GetMainEnemyBaseLocation(int)": "A2.GetMainEnemyBaseLocation",
+    "int GetNearestEnemy(int, float)": "A2.GetNearestEnemy",
+    "void SearchAndDestroy(int)": "A2.SearchAndDestroy",
+    "void Scout(int)": "A2.Scout",
+    "void SetRedAlert(int)": "A2.SetRedAlert",
+    "void SetGreenAlert(int)": "A2.SetGreenAlert",
+    "void PointAt(int, char *)": "A2.PointAt",
+    "void PointAt(int, int)": "A2.PointAt",
+}
+A2_SIGNATURES.update(A2_ORDER_SIGNATURES)
 
 
 # Exact Armada I import signatures implemented by the DLL-named `A1` table
@@ -594,6 +711,105 @@ def a1_kinds(repo):
 A1_PARTIAL = {"Attack", "GetCrew"}
 
 
+# Calls bound through `def` (argument-validating) in orders.rs whose body
+# always raises-and-counts for a live unit, or for the content the stock
+# scripts use; the source scan below cannot see them. Keep in step with
+# api/a2/orders.rs: AI_Team_Load_AIP (no AIP runs), SetCommandWhatWhoParamVO
+# (a parameter has no order), GetAttackLocation (the unit radius is not in the
+# content, SIM-21 `radius` is zero).
+A2_RAISING_THROUGH_DEF = {"AI_Team_Load_AIP", "SetCommandWhatWhoParamVO", "GetAttackLocation"}
+
+
+def a2_raising(repo):
+    """Names of A2 calls bound only to raise-and-count (no data behind them)."""
+    base = os.path.join(repo, "crates/sta_mission/src/api/a2")
+    names = set(A2_RAISING_THROUGH_DEF)
+    try:
+        files = sorted(f for f in os.listdir(base) if f.endswith(".rs") and f != "tests.rs")
+    except OSError:
+        return names
+    for name in files:
+        try:
+            with open(os.path.join(base, name), encoding="utf-8") as f:
+                src = "\n".join(l for l in f.read().splitlines() if not l.lstrip().startswith("//"))
+        except OSError:
+            continue
+        names |= set(re.findall(r'no_data_fn\(\s*lua,\s*ctx,\s*"(\w+)"', src))
+        names |= set(re.findall(r'\braising\(\s*lua,\s*&?env,\s*"(\w+)"', src))
+    return names
+
+
+def param_count(sig):
+    """Number of parameters in a normalized signature (`(void)` is none)."""
+    inner = sig[sig.index("(") + 1 : sig.rindex(")")]
+    return 0 if inner in ("", "void") else inner.count(",") + 1
+
+
+# How a bound rule-condition call behaves, in report order.
+KINDS = ("working", "raises", "missing")
+
+
+def a2_condition_kind(sig, repo, raising):
+    lua = a2_exact_for(sig, repo)
+    if not lua:
+        return "missing"
+    return "raises" if lua.split(".", 1)[1] in raising else "working"
+
+
+def a1_condition_kind(sig, repo, kinds):
+    lua = a1_exact_for(sig, repo)
+    if not lua:
+        return "missing"
+    return "working" if kinds.get(lua.split(".", 1)[1], "working") in ("working", "presentation") else "raises"
+
+
+def a2_rule_conditions(roots, engine_root):
+    """Per A2-family install: the engine calls its rule DLLs make from conditions.
+
+    Decodes every `R.drl` with tools/drl_to_lua.py (conditions only: actions are one
+    `.dsl` function each). Returns [{label, drls, rules, decoded, failed, calls}] with
+    `calls = {normalized signature: (set of DLL names, condition sites)}`."""
+    import drl_to_lua as drl
+
+    engine = drl.engine_vtables(engine_root)
+    if not engine:
+        sys.exit("rule conditions need Armada2.exe and armada2.map in the A2 install")
+    out = []
+    for root in roots:
+        files = drl.find_drls(root)
+        info = {"label": os.path.basename(os.path.normpath(root)), "drls": len(files), "rules": 0,
+                "decoded": 0, "failed": 0, "calls": {}}
+        per_file = []
+        for f in files:
+            try:
+                r = drl.decode(f, engine)
+            except drl.DecodeError:
+                info["failed"] += 1
+                continue
+            per_file.append((os.path.basename(f), r))
+        mangled = sorted({sig for _, r in per_file for sig in r["call_signatures"]})
+        norm = dict(zip(mangled, (normalized_signature(x) for x in demangle(mangled)))) if mangled else {}
+        for name, r in per_file:
+            info["rules"] += len(r["rules"])
+            info["decoded"] += sum(1 for x in r["rules"] if x.get("condition_lua") is not None)
+            for sig in r["call_signatures"]:
+                n = norm[sig]
+                key = f"{method_name(n)}/{param_count(n)}"
+                files_, sites = info["calls"].get(n, (set(), 0))
+                files_.add(name)
+                info["calls"][n] = (files_, sites + r["call_sites"].get(key, 0))
+        out.append(info)
+    return out
+
+
+def a1_rule_conditions(a1_root):
+    """The engine calls Armada I's mission rule DLLs import (their conditions: the
+    actions live in the `.dsl`). Rule-engine plumbing is left out. AI rule DLLs
+    (`AI/*.drl`) import none and are not counted."""
+    files = find(a1_root, "missions/*.drl")
+    return len(files), [(sig, fs) for sig, fs in a1_usage(files) if area(sig) != "Script state and save/load"]
+
+
 def a1_exact_for(sig, repo):
     """Return the A1 Lua name only for an exact import signature and source binding."""
     key = normalized_signature(sig)
@@ -678,10 +894,65 @@ def method_name(sig):
     return m.group(1) if m else sig
 
 
+def rule_section(a2_rules, a1_files, a1_calls, repo, kinds):
+    """The report section on calls made from rule conditions (`.drl`)."""
+    raising = a2_raising(repo)
+    L = ["## Rule DLLs (`.drl`): calls made from rule conditions", "",
+         "A rule DLL is a set of conditions over the script's variables; each rule runs one",
+         "action of the matching `.dsl`. The conditions call the engine: they are not",
+         "call-free. A **pair** is one rule DLL calling one distinct engine call; a **site** is",
+         "one call written in a decoded condition (Armada II only: Armada I's release-build",
+         "rule DLLs are read from their imports, which carry no sites). A call **resolves**",
+         "when its exact signature is bound on the `A2` / `A1` table, and is **working** when",
+         "the binding returns a value from the world view or the mission's own state; **raises**",
+         "means it is bound but raises and is counted in `unsupported()` for lack of data in the",
+         "sim seam (a missing seam, never a guessed value). Armada I's AI rule DLLs (`AI/*.drl`)",
+         "import no engine call.", "",
+         "| install | rule DLLs | rules | conditions decoded | distinct calls | pairs | pairs working | pairs raising | pairs missing | sites | sites working |",
+         "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
+    for inst in a2_rules:
+        pairs = collections.Counter()
+        sites = collections.Counter()
+        for sig, (fs, n) in inst["calls"].items():
+            k = a2_condition_kind(sig, repo, raising)
+            pairs[k] += len(fs)
+            sites[k] += n
+        L.append(f"| {inst['label']} | {inst['drls']} | {inst['rules']} | {inst['decoded']} | {len(inst['calls'])} | "
+                 f"{sum(pairs.values())} | {pairs['working']} | {pairs['raises']} | {pairs['missing']} | "
+                 f"{sum(sites.values())} | {sites['working']} |")
+    pairs = collections.Counter()
+    for sig, fs in a1_calls:
+        pairs[a1_condition_kind(sig, repo, kinds)] += len(fs)
+    L.append(f"| Star Trek Armada (A1 missions) | {a1_files} | — | — | {len(a1_calls)} | {sum(pairs.values())} | {pairs['working']} | "
+             f"{pairs['raises']} | {pairs['missing']} | — | — |")
+    L.append("")
+    if a2_rules:
+        first = a2_rules[0]
+        L += [f"### Armada II: conditions of `{first['label']}`", "",
+              "| call | rule DLLs | sites | status | Lua name |", "|---|---:|---:|:-:|---|"]
+        for sig, (fs, n) in sorted(first["calls"].items(), key=lambda kv: (-kv[1][1], kv[0])):
+            lua = a2_exact_for(sig, repo)
+            L.append(f"| `{short(sig)}` | {len(fs)} | {n} | {a2_condition_kind(sig, repo, raising)} | {'`' + lua + '`' if lua else ''} |")
+        L.append("")
+        for other in a2_rules[1:]:
+            same = {k: (sorted(v[0]), v[1]) for k, v in other["calls"].items()} == {k: (sorted(v[0]), v[1]) for k, v in first["calls"].items()}
+            L.append(f"`{other['label']}` has {'the same calls, DLL counts and sites' if same else 'a different rule set (see the summary row)'}.")
+        L.append("")
+    L += ["### Armada I: conditions of the mission rule DLLs", "",
+          "| call | rule DLLs | status | Lua name |", "|---|---:|:-:|---|"]
+    for sig, fs in sorted(a1_calls, key=lambda r: (-len(r[1]), r[0])):
+        lua = a1_exact_for(sig, repo)
+        L.append(f"| `{short(sig).replace('|', chr(92) + '|')}` | {len(fs)} | {a1_condition_kind(sig, repo, kinds)} | {'`' + lua + '`' if lua else ''} |")
+    L.append("")
+    return L
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--a2", required=True)
     ap.add_argument("--a1", required=True)
+    ap.add_argument("--rules-install", action="append", default=[],
+                    help="further Armada II-family root whose R.drl rule DLLs are read (repeatable)")
     ap.add_argument("--repo", default=".")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
@@ -696,6 +967,9 @@ def main():
     a1_dlls = find(a.a1, "missions/*.dsl") + find(a.a1, "missions/*.drl") + find(a.a1, "AI/*.dsl") + find(a.a1, "AI/*.drl")
     a1 = a1_usage(a1_dlls)
     mmm = mmm_names(a.repo)
+    a2_roots = [a.a2] + [r for r in a.rules_install if os.path.realpath(r) != os.path.realpath(a.a2)]
+    a2_rules = a2_rule_conditions(a2_roots, a.a2)
+    a1_rule_files, a1_rule_calls = a1_rule_conditions(a.a1)
 
     def mmm_for(name):
         if name in MMM_ALIAS:
@@ -754,7 +1028,7 @@ def main():
     L += ["## Summary", "",
           "| | Armada II | Armada I |", "|---|---:|---:|",
           f"| mission DLLs read | {len(a2_dlls)} | {len(a1_dlls)} |",
-          f"| scripts calling the engine | {a2_scripts} (`.dsl`; `.drl` rules make no calls) | {len({f for _, fs in a1 for f in fs})} |",
+          f"| scripts calling the engine | {a2_scripts} (`.dsl`; the `.drl` rule conditions are counted in their own section) | {len({f for _, fs in a1 for f in fs})} |",
           f"| engine API size | {len(slots)} `ScriptInterface` methods | (imports only) |",
           f"| distinct calls used | {len(a2_used)} | {len(a1)} |",
           f"| call sites | {sum(use.values())} | — |",
@@ -824,9 +1098,13 @@ def main():
     L += ["## Armada II methods no stock mission calls", "",
           f"{len(unused)} of the interface's {len(slots)} methods. Mods and community missions may still use them.", "",
           ", ".join(f"`{u.split('(')[0]}`" for u in sorted(set(unused))), ""]
+    L += rule_section(a2_rules, a1_rule_files, a1_rule_calls, a.repo, kinds)
     L += ["## Regenerate", "", "```sh",
-          "python3 tools/mission_dll_inventory.py --a2 \"$A2\" --a1 \"$A1\" --repo . --out docs/MISSION_DLL_API.md",
-          "```"]
+          "python3 tools/mission_dll_inventory.py --a2 \"$A2\" --a1 \"$A1\" --repo . --out docs/MISSION_DLL_API.md \\",
+          "  [--rules-install \"$A2_STOCK\" --rules-install \"$MOD_WITH_DRL\"]",
+          "```", "",
+          "Each `--rules-install` adds one Armada II-family root whose `R.drl` files are decoded",
+          "with `tools/drl_to_lua.py`; the engine slot names come from `$A2`."]
     open(a.out, "w").write("\n".join(L) + "\n")
     print(f"A2: {len(a2_dlls)} DLLs, {a2_scripts} scripts, {len(a2_used)}/{len(slots)} methods used, {sum(use.values())} calls; "
           f"A2 callable {a2_cov}, missing {a2_missing}; A1: {len(a1_dlls)} DLLs, {len(a1)} imports, "

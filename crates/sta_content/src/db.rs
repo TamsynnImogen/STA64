@@ -462,6 +462,18 @@ fn hash_inner(db: &ContentDb, include_starting_rules: bool) -> u64 {
                     h.str("sta64.planet-crew-gain.v1");
                     h.u64(u.planet_crew_gain as i64 as u64);
                 }
+                // CON-37: effective values only; content without a planet role or crewModifier keeps its hash.
+                if let Some(m) = u.planet_crew_modifier {
+                    h.byte(0xf4);
+                    h.str("sta64.planet-crew-modifier.v1");
+                    h.fixed(m);
+                }
+                if u.planet_role == Some(crate::PlanetRole::Producer) {
+                    h.byte(0xf5);
+                    h.str("sta64.planet-colony.v1");
+                    h.byte(u8::from(u.planet_colonizable));
+                    h.fixed(u.planet_civilian_population_modifier);
+                }
                 // SIM-23: only nebulae carry it, so other hashes stay.
                 if let Some(n) = u.nebula_pathing {
                     h.byte(0xee);
@@ -553,6 +565,24 @@ fn hash_inner(db: &ContentDb, include_starting_rules: bool) -> u64 {
                         h.fixed(f);
                     }
                 }
+                // SIM-25: a starbase's race picks its crew accumulation rate.
+                if u.class.0 == "starbase" && db.rules.crew().is_some_and(|c| !c.races.is_empty()) {
+                    h.byte(0xf3);
+                    h.str(&u.race.trim().to_ascii_lowercase());
+                }
+                // SIM-25: only for stations that add crew capacity.
+                if u.crew_gain != Fixed::ZERO {
+                    h.byte(0xf2);
+                    h.fixed(u.crew_gain);
+                }
+                // SIM-28: only when set, so content without them keeps its hash.
+                if u.hidden || u.invalid_as_target || u.life.is_some() {
+                    h.byte(0xef);
+                    h.str("sta64.lifecycle.v1");
+                    h.byte(u.hidden as u8);
+                    h.byte(u.invalid_as_target as u8);
+                    h.u64(u.life.unwrap_or(0));
+                }
                 feature_bits(&mut h, u.features.as_ref(), &db.features);
                 // No new bytes for disabled/unsupported rules: old Native
                 // databases and genuine replay/save controls retain their hash.
@@ -598,6 +628,42 @@ fn hash_inner(db: &ContentDb, include_starting_rules: bool) -> u64 {
                     h.fixed(w.initial_shot_delay_modifier.unwrap_or(Fixed::ZERO));
                     h.byte(w.ignore_shot_delay_effects as u8);
                 }
+                // SIM-24: only for resource weapons, so other content keeps its hash.
+                if let Some(r) = &w.resource {
+                    h.byte(0xef);
+                    for f in r.add {
+                        h.fixed(f);
+                    }
+                    if r.crew != Fixed::ZERO {
+                        h.byte(0xf1);
+                        h.fixed(r.crew);
+                    }
+                    h.byte(r.one_time as u8);
+                    h.byte(r.always_player as u8);
+                    h.byte(r.always_ai as u8);
+                }
+                if let Some(r) = &w.replace {
+                    h.byte(0xf0);
+                    h.str("sta64.replace.v1");
+                    for on in r.instant {
+                        h.byte(on as u8);
+                    }
+                    h.u64(r.delay);
+                    h.u64(r.mode as u64);
+                    h.u64(r.required_officers.map_or(0, |n| n as u64 + 1));
+                    h.u64(r.entries.len() as u64);
+                    for e in &r.entries {
+                        h.str(e.condition.as_deref().unwrap_or(""));
+                        h.u64(e.classes.len() as u64);
+                        for c in &e.classes {
+                            h.str(&c.odf);
+                            h.u64(u64::from(c.weight));
+                            for f in c.offset {
+                                h.fixed(f);
+                            }
+                        }
+                    }
+                }
                 feature_bits(&mut h, w.features.as_ref(), &db.features);
             }
         }
@@ -616,6 +682,14 @@ fn hash_inner(db: &ContentDb, include_starting_rules: bool) -> u64 {
         h.str("sta64.starting-personnel-rules.v1");
         for value in rules { h.u64(value); }
     }
+    // CON-46: only when `RTS_CFG.h` sets a default autonomy key, so content
+    // without them keeps its hash.
+    let autonomy = db.rules.autonomy_hash_values();
+    if include_starting_rules && !autonomy.is_empty() {
+        h.byte(0xee);
+        h.str("sta64.autonomy-rules.v1");
+        for value in autonomy { h.u64(value); }
+    }
     // SIM-23: only when `RTS_CFG.h` has the PATHING keys, so content without
     // them keeps its hash; excluded with the other rules from the historical
     // identity snapshots compare against.
@@ -624,6 +698,13 @@ fn hash_inner(db: &ContentDb, include_starting_rules: bool) -> u64 {
         h.byte(0xed);
         h.str("sta64.pathing-rules.v1");
         for value in pathing { h.u64(value); }
+    }
+    // SIM-25: only when the header or a race has crew keys.
+    let crew = db.rules.crew_hash_values();
+    if include_starting_rules && !crew.is_empty() {
+        h.byte(0xf0);
+        h.str("sta64.crew-rules.v1");
+        for value in crew { h.u64(value); }
     }
     h.0
 }
