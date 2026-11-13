@@ -280,3 +280,25 @@ fn remounting_between_campaign_and_campaign_less_content_keeps_the_resources_sys
     apply(&mut app, None);
     assert!(app.world().contains_resource::<MissionMovies>());
 }
+
+/// A remount drops what was cached by name from the previous mount: the texture cache keeps misses
+/// (`None`), so a texture only the new mod has (`PA_ECFR0` of STA2 Classic) stayed "not found".
+#[test]
+fn a_remount_invalidates_the_name_caches() {
+    use crate::render::textures::TextureCache;
+    use crate::render::units::UnitModels;
+    use crate::viewer::Mounted;
+    let (mut app, _) = app();
+    app.insert_resource(Mounted(sta_vfs::Vfs::default()))
+        .init_resource::<TextureCache>()
+        .init_resource::<UnitModels>()
+        .insert_resource(crate::render::sprites::SpriteTables(std::sync::Arc::new(sta_assets::load_sprite_table(&sta_vfs::Vfs::default()))));
+    settle(&mut app, 3);
+    app.world_mut().resource_mut::<TextureCache>().map.insert("pa_ecfr0".into(), None);
+    settle(&mut app, 2);
+    assert!(app.world().resource::<TextureCache>().map.contains_key("pa_ecfr0"), "an unchanged mount keeps its cache");
+    // What `remount` does last.
+    app.world_mut().resource_mut::<Mounted>().0 = sta_vfs::Vfs::default();
+    settle(&mut app, 2);
+    assert!(app.world().resource::<TextureCache>().map.is_empty(), "the old mount's misses do not survive");
+}

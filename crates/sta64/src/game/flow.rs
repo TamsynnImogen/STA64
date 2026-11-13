@@ -26,6 +26,7 @@
 //! runs in a bare `App` (`flow_tests`).
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use bevy::prelude::*;
 use sta_content::MapDef;
 use sta_sim::setup::{Control, GameSetup};
@@ -122,6 +123,8 @@ impl Plugin for FlowPlugin {
             .add_systems(Startup, |mut next: ResMut<NextState<AppState>>| next.set(AppState::FrontEnd))
             .add_systems(OnEnter(AppState::FrontEnd), (clear_match, open_scene).chain())
             .add_systems(OnEnter(AppState::Loading), close_scene)
+            // A remount keeps no lookup of the previous mount: before anything reads the new one.
+            .add_systems(Update, invalidate_mount_caches.before(GameSet::Input).run_if(resource_exists_and_changed::<Mounted>).run_if(not(resource_added::<Mounted>)))
             .add_systems(
                 Update,
                 (
@@ -134,6 +137,37 @@ impl Plugin for FlowPlugin {
                 )
                     .in_set(GameSet::Ui),
             );
+    }
+}
+
+/// Everything cached by name from the mounted files (decoded textures with their misses, parts,
+/// unit models, moon variants, silhouettes, surface recipes) and the sprite tables are rebuilt
+/// from the new mount; systems that already follow `Mounted`'s change (fonts, fog art, i18n,
+/// HUD sprites, cull and weapon tables, radar colours) need nothing here.
+#[allow(clippy::too_many_arguments)]
+fn invalidate_mount_caches(
+    vfs: Res<Mounted>,
+    textures: Option<ResMut<crate::render::textures::TextureCache>>,
+    parts: Option<ResMut<crate::render::model_scene::PartCache>>,
+    models: Option<ResMut<crate::render::units::UnitModels>>,
+    moons: Option<ResMut<crate::render::moons::MoonVariants>>,
+    silhouettes: Option<ResMut<crate::render::strategic::Silhouettes>>,
+    surfaces: Option<ResMut<crate::render::surfaces::Surfaces>>,
+    tables: Option<ResMut<crate::render::sprites::SpriteTables>>,
+) {
+    fn reset<T: Resource<Mutability = bevy::ecs::component::Mutable> + Default>(r: Option<ResMut<T>>) {
+        if let Some(mut r) = r {
+            *r = T::default();
+        }
+    }
+    reset(textures);
+    reset(parts);
+    reset(models);
+    reset(moons);
+    reset(silhouettes);
+    reset(surfaces);
+    if let Some(mut t) = tables {
+        t.0 = Arc::new(sta_assets::load_sprite_table(&vfs.0));
     }
 }
 
@@ -376,6 +410,7 @@ fn remount(
     match front_end_data(&vfs, &mut catalogue, Some(root)) {
         Ok(d) => {
             info!("mounted {}", vfs.layers().iter().map(|l| l.name()).collect::<Vec<_>>().join(" -> "));
+            browser.mount_summary = crate::mount_summary(root, &vfs);
             browser.maps = d.screens.maps.iter().map(|m| m.def.name.clone()).collect();
             commands.insert_resource(SetupDraft::new(&d.screens));
             commands.insert_resource(d.screens);
