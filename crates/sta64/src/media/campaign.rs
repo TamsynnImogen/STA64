@@ -18,17 +18,22 @@
 //!   screen can wait for the bridge scene to be over ([`MissionMovieLog::busy`]) before it
 //!   shows the briefing or the debrief.
 //! * [`MissionBegan`] / [`MissionEnded`]: the two messages the campaign flow (UI-25, INT-M6)
-//!   writes. Ending a mission stops any of its movies still running, so a skipped or lost
-//!   mission never leaves a bridge scene over the debrief.
+//!   writes. Ending a mission stops the movies it requested that are still running (by id), so a
+//!   skipped or lost mission leaves no bridge scene over the debrief.
 //!
 //! Skipping is [`super::skip_keys`]'s: Esc, Space, Enter or a click ends a fullscreen movie,
 //! and a script-requested movie always reports [`MovieFinished`], so the script (and the
 //! flow) goes on. Not in this module, by decision of the plan: the campaign screens (UI-25)
 //! and the script-side reply (UI-30).
 //!
-//! Evidence grade: the mission-to-movie association and the call that plays each are read
-//! from the scripts' strings and imports (static, executable-level; Armada I and II); the
-//! story events that trigger them are the scripts' own and are not modelled here.
+//! Evidence grade: read from the executable, static: the mission-to-movie association is the
+//! `.bik` strings of each mission script and the call that plays each is its import
+//! (`PlayBridgeMovie` seen in Armada I's scripts, `PlayCinematicMovie` in Armada II's per
+//! `docs/MISSION_DLL_API.md`); the story events that trigger them are the scripts' own and
+//! are not modelled here. Not wired yet: nothing builds [`MissionMovies`] or writes
+//! [`MissionBegan`] / [`MissionEnded`] in the app; INT-M6 / UI-25 do, where they load the
+//! campaign book (`MissionMovies::from_book`). A movie requested with no mission announced
+//! still plays and is not logged.
 
 use bevy::prelude::*;
 use sta_mission::campaign::{CampaignBook, CampaignMission};
@@ -67,7 +72,10 @@ pub struct MissionMovies {
 /// A map name (`fed1.bzn`, `bzn/Fed1.bzn`, `FED1`) as the stem the catalogue keys on.
 pub fn stem_of(map: &str) -> String {
     let f = map.rsplit(['/', '\\']).next().unwrap_or(map);
-    let f = if f.len() > 4 && f[f.len() - 4..].eq_ignore_ascii_case(".bzn") { &f[..f.len() - 4] } else { f };
+    let f = match f.len().checked_sub(4).and_then(|n| f.get(n..).map(|ext| (n, ext))) {
+        Some((n, ext)) if n > 0 && ext.eq_ignore_ascii_case(".bzn") => &f[..n],
+        _ => f,
+    };
     f.to_ascii_lowercase()
 }
 
@@ -170,7 +178,8 @@ impl Plugin for CampaignMoviesPlugin {
             .add_message::<MissionEnded>()
             .init_resource::<MissionMovieLog>()
             .init_resource::<MissionMovies>()
-            // After `drive`, so a request and its end in one frame are both seen in order.
+            // After `mission::bridge` (requests) and `drive` (ends), so a request and its end
+            // in one frame are both seen in order.
             .add_systems(Update, track.after(super::drive).in_set(GameSet::Ui));
     }
 }
@@ -184,6 +193,16 @@ fn track(
     mut log: ResMut<MissionMovieLog>,
     mut stop: MessageWriter<StopMovie>,
 ) {
+    // A mission that ends is dealt with before one that begins in the same frame, so the
+    // old mission's movies are stopped (by id: other movies, such as the intro, are not
+    // ours) and the new mission starts with a clean log.
+    if ended.read().count() > 0 {
+        for m in log.movies.iter_mut().filter(|m| m.outcome.is_none()) {
+            stop.write(StopMovie(Some(m.id)));
+            m.outcome = Some(MovieOutcome::Stopped);
+        }
+        log.mission = None;
+    }
     for b in began.read() {
         let stem = stem_of(&b.map);
         let list = catalogue.for_map(&b.map);
@@ -191,6 +210,7 @@ fn track(
         info!("media: mission {stem} names {} movie(s){}", list.len(), if absent.is_empty() { String::new() } else { format!(", not installed: {absent:?}") });
         *log = MissionMovieLog { mission: Some(stem), movies: Vec::new() };
     }
+    // Requests with no mission announced are played (the script asked) but not logged.
     for r in requested.read() {
         if log.mission.is_none() {
             continue;
@@ -199,15 +219,9 @@ fn track(
         log.movies.push(LoggedMovie { id: r.id, name: r.name.clone(), listed, outcome: None });
     }
     for f in finished.read() {
-        if let Some(m) = log.movies.iter_mut().find(|m| m.id == f.id) {
+        if let Some(m) = log.movies.iter_mut().find(|m| m.id == f.id && m.outcome.is_none()) {
             m.outcome = Some(f.outcome.clone());
         }
-    }
-    if ended.read().count() > 0 {
-        if log.busy() {
-            stop.write(StopMovie(None));
-        }
-        log.mission = None;
     }
 }
 
@@ -338,8 +352,31 @@ mod tests {
         app.update();
         app.world_mut().write_message(MissionEnded);
         app.update();
+        assert_eq!(app.world_mut().resource_mut::<Messages<StopMovie>>().drain().map(|s| s.0).collect::<Vec<_>>(), [Some(MovieId(1))]);
+        let log = app.world().resource::<MissionMovieLog>();
+        assert_eq!(log.mission, None);
+        assert!(!log.busy(), "the log does not wait for the stop to be answered");
+    }
+
+    #[test]
+    fn an_end_and_the_next_start_in_one_frame_stop_the_old_movies_only() {
+        let mut app = app();
+        app.world_mut().write_message(MissionBegan { map: "fed1.bzn".into() });
+        app.world_mut().write_message(Requested { id: MovieId(1), name: "F1DEM1.bik".into() });
+        app.update();
+        app.world_mut().write_message(MissionEnded);
+        app.world_mut().write_message(MissionBegan { map: "fed2.bzn".into() });
+        app.update();
         assert_eq!(stops(&mut app), 1);
-        assert_eq!(app.world().resource::<MissionMovieLog>().mission, None);
+        let log = app.world().resource::<MissionMovieLog>();
+        assert_eq!(log.mission.as_deref(), Some("fed2"));
+        assert!(log.movies.is_empty() && !log.busy());
+    }
+
+    #[test]
+    fn non_ascii_map_names_do_not_panic() {
+        assert_eq!(stem_of("bzn/\u{e9}\u{e9}\u{e9}.bzn"), "\u{e9}\u{e9}\u{e9}");
+        assert_eq!(stem_of("\u{e9}"), "\u{e9}");
     }
 
     /// With `STA64_TEST_INSTALL` (+ `STA64_TEST_MOD`): the movies each campaign mission's script names,
@@ -352,7 +389,10 @@ mod tests {
         let book = CampaignBook::load_vfs(&vfs);
         let cat = MissionMovies::from_book(&book, &vfs);
         let total: usize = cat.missions.iter().map(|e| e.movies.len()).sum();
+        // Reported, not asserted: a mod's scripts may name movies it does not ship.
         eprintln!("{root}: {} missions, {total} script movies, missing {:?}", cat.missions.len(), cat.missing());
-        assert!(cat.missing().is_empty(), "scripts name movies the install lacks: {:?}", cat.missing());
+        for e in &cat.missions {
+            assert!(e.movies.iter().all(|m| !m.name.is_empty()));
+        }
     }
 }
