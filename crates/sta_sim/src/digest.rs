@@ -1,4 +1,4 @@
-//! Section digests (SIM-62, NET_DECISIONS N6): one digest per section of the
+//! Section digests (SIM-31, NET_DECISIONS N6): one digest per section of the
 //! sim's state, beside [`Sim::digest`], so peers that disagree can say where
 //! the states first differ instead of exchanging a state dump.
 //!
