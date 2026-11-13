@@ -17,7 +17,7 @@ use super::layout::{GRID_COLS, GRID_ROWS, InfoHeight};
 use super::commands;
 
 #[path = "craft_names.rs"]
-mod craft_names;
+pub(crate) mod craft_names;
 
 /// Everything the HUD reads: the view, whose HUD it is, the selection and the
 /// content. Filled from the sim link, the selection and the content resource

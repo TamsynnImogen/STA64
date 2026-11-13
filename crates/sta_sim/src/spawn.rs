@@ -30,6 +30,12 @@ impl Sim {
         players.sort();
         players.dedup_by_key(|p| p.0);
         sim.players = players;
+        sim.appearance_factions = s.players.iter().filter_map(|p| {
+            let name = p.race.trim().to_ascii_lowercase();
+            (!name.is_empty()).then_some((p.id, name))
+        }).collect();
+        sim.appearance_factions.sort_by_key(|p| p.0);
+        sim.appearance_factions.dedup_by_key(|p| p.0);
         sim.ai_seats = s
             .players
             .iter()

@@ -349,6 +349,10 @@ fn on_start_mission(
     commands.insert_resource(MapSeat(Some(launch.player().0)));
     commands.insert_resource(ActiveMatch { setup: launch.placeholder(data.content.clone()), requested: false, frames: 0 });
     commands.insert_resource(MissionRun { campaign, mission, began: false, outcome: None, close_at: None, leaving: false, errors_seen: 0, blocked: None });
+    // The camera's paths are there before the sim's first tick: the sim runs from the loading
+    // screen, and the script's first shot (`lookFrom(Path)` at tick 1) is consumed long before
+    // `InGame` begins. With no paths yet that shot was dropped and the camera never took it.
+    commands.insert_resource(crate::input::camera_cinematic::ScenePaths(launch.paths.clone()));
     commands.insert_resource(launch);
     next.set(AppState::Loading);
 }
@@ -363,8 +367,10 @@ fn begin_mission(run: Option<ResMut<MissionRun>>, launch: Option<Res<MissionLaun
     }
     began.write(MissionBegan { map: launch.bzn.clone() });
     if let Some(mut v) = view {
-        // The stock mission opens on its objectives; Alt+O toggles them.
-        v.visible = true;
+        // The briefing panel opens when the mission has something to put in it (see
+        // `run_mission`), not empty at the start and not over an opening cinematic: in the
+        // original the objectives window comes up after the cutscene (Refit notes, static).
+        v.visible = false;
     }
 }
 
@@ -378,6 +384,8 @@ fn run_mission(
     mut view: Option<ResMut<ObjectivesView>>,
     log: Option<Res<MissionMovieLog>>,
     mut leave: MessageWriter<LeaveMatch>,
+    cine: Option<Res<crate::ui::presentation::CineractiveState>>,
+    mut opened: Local<(Option<(String, usize)>, u64)>,
 ) {
     let tick = link.curr().tick;
     // A script that faults may have lost the callback that ends its cineractive: give the player
@@ -397,6 +405,17 @@ fn run_mission(
     if let Some(v) = view.as_mut() {
         let mut want = (**v).clone();
         handle.with(|rt| want.fill(&rt.objectives(), rt.objective_briefing().as_ref()));
+        // The panel opens once for a mission, when it has text or objectives and no cineractive is on.
+        let key = (run.campaign.clone(), run.mission);
+        // The sim's clock running backwards is a restart of the mission: it opens its panel again.
+        if tick < opened.1 {
+            opened.0 = None;
+        }
+        opened.1 = tick;
+        if opened.0 != Some(key.clone()) && (!want.items.is_empty() || !want.briefing.is_empty()) && !cine.as_deref().is_some_and(|c| c.on) {
+            want.visible = true;
+            opened.0 = Some(key);
+        }
         if want != **v {
             **v = want;
         }

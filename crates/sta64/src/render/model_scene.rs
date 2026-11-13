@@ -239,6 +239,7 @@ fn spawn_impl(
         base.translation *= ctx.scale;
         let mut e = ctx.commands.spawn((Name::new(node.name.clone()), base, Visibility::default(), ChildOf(parent),
         ));
+        e.insert(crate::render::appearance::ModelNode { root, index: i });
         if !legacy { e.insert(NativeNode); }
 
         let key_count = anims.get(&node.name.to_ascii_lowercase()).map_or(0, |c| match &c.keys {
@@ -440,7 +441,7 @@ fn spawn_mesh(
         let reveal = construction
             .map(|(plan, _, _)| plan.part_source(model, node_index, group_index, mesh, ctx.scale));
         if let Some(part) = ctx.parts.as_ref().and_then(|c| c.map.get(&cache_key)).cloned() {
-            spawn_part(ctx, &part, parent, flipbook,
+            spawn_part(ctx, &part, parent, (node_index, group_index), flipbook,
                 construction.map(|(_, root, stage)| (root, reveal.clone().unwrap(), stage)),
                 stats,
             );
@@ -631,7 +632,7 @@ fn spawn_mesh(
         if let Some(cache) = ctx.parts.as_mut() {
             cache.map.insert(cache_key, part.clone());
         }
-        spawn_part(ctx, &part, parent, flipbook,
+        spawn_part(ctx, &part, parent, (node_index, group_index), flipbook,
             construction.map(|(_, root, stage)| (root, reveal.unwrap(), stage)),
             stats,
         );
@@ -641,7 +642,7 @@ fn spawn_mesh(
     }
 }
 
-fn spawn_part(ctx: &mut SpawnCtx, part: &CachedPart, parent: Entity, flipbook: Option<&(String, f32)>,
+fn spawn_part(ctx: &mut SpawnCtx, part: &CachedPart, parent: Entity, surface: (usize, usize), flipbook: Option<&(String, f32)>,
     construction: Option<(
         Entity,
         std::sync::Arc<crate::render::construction::ConstructionSource>,
@@ -675,6 +676,7 @@ fn spawn_part(ctx: &mut SpawnCtx, part: &CachedPart, parent: Entity, flipbook: O
     let mut e = ctx.commands.spawn((
         Mesh3d(mesh),
         MeshMaterial3d(part.material.clone()),
+        crate::render::appearance::ModelPart { node: surface.0, group: surface.1, base: part.material.clone() },
         Transform::IDENTITY,
         ChildOf(parent),
     ));

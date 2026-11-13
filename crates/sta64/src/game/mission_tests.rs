@@ -4,6 +4,9 @@
 //! the same path over real missions. The map view's part is a stand-in that builds the game with
 //! the same function the map view calls (`map::build_mission_sim`).
 
+#[path = "mission_intro_tests.rs"]
+mod intro;
+
 use std::path::Path;
 use std::time::Duration;
 
@@ -153,9 +156,9 @@ fn a_synthetic_campaign_plays_from_the_screens_and_progress_survives_a_restart()
     assert!(app.world().contains_resource::<MissionHandle>() && app.world().contains_resource::<MissionRun>());
     assert!(app.world().resource::<crate::map::MapBrowser>().maps.iter().any(|m| m == "syn_fed01"), "the mission's map is built by name");
     assert_eq!(app.world().resource::<Seen>().began, ["syn_fed01.bzn"], "MissionBegan names the map");
-    assert!(app.world().resource::<ObjectivesView>().visible, "the objectives open with the mission");
     // The script runs with the sim: its objective reaches the view, then it is completed and the mission ends.
     until(&mut app, 100, |a| !a.world().resource::<ObjectivesView>().items.is_empty());
+    assert!(app.world().resource::<ObjectivesView>().visible, "the objectives open once the mission has some");
     let view = app.world().resource::<ObjectivesView>().clone();
     assert_eq!(view.items.len(), 3, "{view:?}");
     assert!(view.items[2].text.contains("Hold the line"), "{view:?}");
