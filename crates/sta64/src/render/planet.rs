@@ -530,7 +530,6 @@ mod tests {
     /// keeps its linear colours, key x1.2 and fill x0.315.
     #[test]
     fn stock_lights_planets_with_both_map_lights_at_full_weight() {
-        use bevy::prelude::*;
         let stock = run_update(super::RenderProfile::Stock);
         assert_eq!(stock.mode.y, 1.0);
         let (k, f) = (stock.dcol0.truncate(), stock.dcol1.truncate());
@@ -548,10 +547,12 @@ mod tests {
     /// The planet takes the lights the hulls take: with the map's own lights present a stray directional
     /// light does not light planets, and the direction is the hull shader's (`GlobalTransform::back`).
     #[test]
-    fn stock_planet_light_set_is_the_hulls() {
+    fn stock_planet_ignores_non_map_lights_refit_keeps_all() {
         let p = run_update_with(super::RenderProfile::Stock, Vec3::new(0.0, 0.0, 10.0), true);
         assert!(p.dvec0.truncate().abs_diff_eq(Vec3::Y, 1e-5) && p.dvec1.truncate().abs_diff_eq(Vec3::NEG_Y, 1e-5), "{:?} {:?}", p.dvec0, p.dvec1);
         assert!(p.dcol0.truncate().abs_diff_eq(Vec3::new(1.0, 0.5, 0.25), 1e-5), "the stray 9000 lux light must not be the key");
+        let r = run_update_with(super::RenderProfile::Refit, Vec3::new(0.0, 0.0, 10.0), true);
+        assert!(r.dvec0.truncate().abs_diff_eq(Vec3::X, 1e-5), "Refit keeps every light: the 9000 lux one is the key");
     }
 
     /// Stock shading reads no camera: moving the camera changes only `eye`.

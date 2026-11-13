@@ -258,7 +258,7 @@ fn lights(lights: impl Iterator<Item = (Vec3, Vec3, f32, Vec3)>) -> ([Vec4; DIRS
 
 /// The directional lights a Stock-look surface (hull or planet) is lit by: when the map aimed its own
 /// lights (`MapLightSource`), only those, else every directional light. Hulls and planets share this, so
-/// a light that is not the map's (a viewer or menu light) can never light one and not the other.
+/// a light that is not the map's (a viewer or menu light) cannot light one and not the other while both are Stock.
 pub fn stock_light_set<'a>(lights: impl Iterator<Item = (&'a GlobalTransform, &'a DirectionalLight, Option<&'a crate::map::MapLightSource>)> + Clone) -> Vec<(Vec3, &'a DirectionalLight)> {
     let own = lights.clone().any(|(_, _, s)| s.is_some_and(|s| s.0));
     lights.filter(|(_, _, s)| !own || s.is_some_and(|s| s.0)).map(|(t, l, _)| (t.back().as_vec3(), l)).collect()
