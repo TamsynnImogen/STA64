@@ -105,6 +105,7 @@ fn build_match(mut commands: Commands, active: Res<ActiveMatch>, mut browser: Re
             commands.insert_resource(link);
             commands.insert_resource(game);
             commands.insert_resource(local);
+            commands.insert_resource(crate::sim_link::ContentRes(data.content.clone()));
         }
         Err(why) => {
             browser.info = why.clone();
@@ -189,7 +190,10 @@ fn until(apps: &mut [App], what: &str, cond: impl Fn(&[App]) -> bool) {
         if cond(apps) {
             return;
         }
-        assert!(Instant::now() < end, "timed out waiting for: {what}");
+        if Instant::now() >= end {
+            let said: Vec<_> = apps.iter().map(|a| a.world().get_resource::<NetGame>().map(|g| (g.tick(), g.read(|s| s.said.clone())))).collect();
+            panic!("timed out waiting for: {what}; peers: {said:#?}");
+        }
         std::thread::yield_now();
     }
 }
@@ -213,11 +217,9 @@ fn launch(relay: &Relay, n_guests: usize, map: usize, computers: &[usize], o: &N
     }
     let code = session_of(&apps[0]).code().to_string();
     for i in 1..=n_guests {
-        let (head, tail) = apps.split_at_mut(i);
-        join_through_screens(&mut tail[0], relay, names[i], &code, "");
+        join_through_screens(&mut apps[i], relay, names[i], &code, "");
         let seats = i + 1;
         pump_apps(&mut refs(&mut apps), "the guest is seated", move |a| in_screen(a[i], Screen::Lobby) && session_of(a[0]).view().seats.iter().filter(|s| s.kind == crate::frontend::lobby::Kind::Human).count() == seats);
-        let _ = head;
     }
     for i in 1..=n_guests {
         press(&mut apps[i], MpAct::ToggleReady);
@@ -370,7 +372,7 @@ fn a_client_that_stalls_is_waited_for_in_words_and_resumes() {
         for a in apps.iter_mut() {
             a.update();
         }
-        if apps.iter().all(|a| game(a).read(|s| s.stall.as_ref().is_some_and(|(_, w)| w.contains(&PlayerId(2))))) && apps[0].world().resource::<NetStatus>().0.iter().any(|l| l.contains("Waiting for Data")) {
+        if apps.iter().all(|a| game(a).read(|s| s.stall.as_ref().is_some_and(|(_, w)| w.contains(&PlayerId(2))))) && apps.iter().all(|a| a.world().resource::<NetStatus>().0.iter().any(|l| l.contains("Waiting for Data"))) {
             break;
         }
         assert!(Instant::now() < end, "never showed the wait");
@@ -483,7 +485,13 @@ fn a_protocol_violation_is_a_kick() {
 // ---------------------------------------------------------------------------
 
 fn spoil() -> Fault {
-    Fault::Inject(Command { player: PlayerId::SCRIPT, seq: 9_000_000, kind: CommandKind::Edit(Edit::Damage(EntityId(1), sta_core::Fixed::from_int(1))) })
+    // A ship that only this peer's sim has.
+    let odf = net_data().content.key("fx_frigate").unwrap();
+    Fault::Inject(Command {
+        player: PlayerId::SCRIPT,
+        seq: 9_000_000,
+        kind: CommandKind::Edit(Edit::Spawn { odf, player: PlayerId(1), pos: Vec3::from_f32([100.0, 0.0, 100.0]), heading: (sta_core::Fixed::ZERO, sta_core::Fixed::ONE) }),
+    })
 }
 
 fn reports(dir: &Path) -> Vec<PathBuf> {
@@ -562,7 +570,8 @@ fn an_injected_desync_halts_every_peer_and_writes_reports_the_diagnosis_localise
 #[test]
 fn a_repairable_desync_is_repaired_and_the_reports_are_still_written() {
     let (r, dir) = (fast_relay(), tmp("repair"));
-    let mut apps = launch(&r, 1, 0, &[], &opts(&dir));
+    let o = NetOptions { limits: Some(ResyncLimits { min_attempt_interval: Duration::from_millis(1), bytes_per_sec: 100_000_000, burst_bytes: 100_000_000, ..ResyncLimits::default() }), ..opts(&dir) };
+    let mut apps = launch(&r, 1, 0, &[], &o);
     run_to(&mut apps, 300);
     game(&apps[1]).inject(spoil());
     until(&mut apps, "the guest is repaired", |a| game(&a[1]).read(|s| s.desync.as_ref().is_some_and(|d| d.stage == DesyncStage::Repaired)) && game(&a[0]).tick() > 400);

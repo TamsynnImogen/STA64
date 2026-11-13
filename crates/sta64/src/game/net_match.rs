@@ -238,6 +238,11 @@ impl NetGame {
         f(&mut self.lock().peer)
     }
 
+    /// The connection's handle (tests cut or kick through it).
+    pub fn control(&self) -> NetControl {
+        self.lock().control.clone()
+    }
+
     pub fn inject(&self, fault: Fault) {
         self.with_peer(|p| p.inject(fault));
     }
@@ -290,7 +295,11 @@ impl CommandRouter for PeerRouter {
                 s.stall = Some((since, waiting));
                 None
             }
-            StepOutcome::Halted => None,
+            StepOutcome::Halted => {
+                // The first halt writes the report, before any repair changes the sim.
+                s.note_desync();
+                None
+            }
         }
     }
 }
@@ -711,6 +720,7 @@ impl NetShared {
                 self.end(why);
             }
         }
+        self.note_desync();
         for e in self.peer.router_mut().take_events() {
             self.on_router_event(e);
         }

@@ -132,7 +132,8 @@ impl SessionCfg {
             engine: engine_id(),
             content: data.content.clone(),
             name: clean_name(name, ""),
-            lineage: data.base_name.clone().unwrap_or_default(),
+            // The content's own lineage, which a snapshot's provenance is checked against (NET-04).
+            lineage: data.content.lineage().to_owned(),
             races: data.races(),
             maps: data.maps.iter().map(MapInfo::of).collect(),
             seed: None,
@@ -1267,7 +1268,7 @@ impl Session {
                             },
                             name: v.name.clone(),
                             lineage: if i == 0 { self.cfg.lineage.clone() } else { g.map_or_else(String::new, |g| g.lineage.clone()) },
-                            packs: g.map_or_else(Vec::new, |g| g.packs.clone()),
+                            packs: if i == 0 { self.cfg.content.packs().iter().map(|n| PackInfo { name: n.clone(), version: String::new() }).collect() } else { g.map_or_else(Vec::new, |g| g.packs.clone()) },
                         },
                         ready: v.ready,
                     }
@@ -1321,7 +1322,7 @@ impl Session {
                     },
                     name: if p.kind == Kind::Open { String::new() } else { v.name.clone() },
                     lineage: if i == 0 { self.cfg.lineage.clone() } else { g.map_or_else(String::new, |g| g.lineage.clone()) },
-                    packs: g.map_or_else(Vec::new, |g| g.packs.clone()),
+                    packs: if i == 0 { self.cfg.content.packs().iter().map(|n| PackInfo { name: n.clone(), version: String::new() }).collect() } else { g.map_or_else(Vec::new, |g| g.packs.clone()) },
                 }
             })
             .collect();
