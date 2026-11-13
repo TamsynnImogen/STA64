@@ -5633,6 +5633,7 @@ dependencies = [
 name = "sta_net"
 version = "0.1.0"
 dependencies = [
+ "getrandom 0.4.3",
  "postcard",
  "serde",
  "sta_content",
