@@ -9,4 +9,5 @@ pub mod notices;
 pub mod theme;
 pub mod radar;
 pub mod radar_fog;
+pub mod settings;
 pub mod sprite_font;
