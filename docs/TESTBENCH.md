@@ -202,12 +202,12 @@ Refit's names (`fire.end obj=shooter`, `cloak.done obj=warbird`).
   - `run` and `check` take `--jobs N` (default 2): cases run on a worker pool
     and the report is the same at any N (cases sorted by name, wall times only
     in `timing.json` and `index.html`). Tier-2 `sta64` children run at most
-    `--gpu-jobs` at a time (default 1) at the lowest priority, and a second
+    `--gpu-jobs` at a time (default 1) reniced, and a second
     `session start` is refused while `--gpu-jobs` sessions run.
   - `session start --install <root> [--mod <name>]` mounts a private clone of
     the install (reflinks where the file system has them, small files copied,
-    large ones symlinked), so sessions never see each other's files; `session
-    stop` exits 1 if the source install changed meanwhile.
+    large ones symlinked, so those must not be written), so sessions do not see
+    each other's files; `session stop` exits 1 if the source install changed.
   - Not yet: frames from a session, `Take a screenshot`/`Expect shots` steps.
 - **Frames** (`sta64 --headless --frames 0,100 --frame-dir D --frame-size WxH`,
   `crates/sta64/src/bench/frames.rs`): a windowless render app draws into an
@@ -224,8 +224,9 @@ Refit's names (`fire.end obj=shooter`, `cloak.done obj=warbird`).
 `cargo test`. Only rendering checks (frames, visibility, culling,
 interpolation) are **tier 2**: a `sta64 --headless` process per case,
 scheduled by `sta-bench run --jobs N --gpu-jobs M`. Parallelism is processes
-and test threads; there are no slots to manage, but only `--gpu-jobs`
-(default 1) GPU processes run at once.
+and test threads; there are no slots to manage beyond one cap: at most
+`--gpu-jobs` (default 1) GPU processes run at once. Children are reniced (Unix);
+that lowers CPU priority only, the cap is what limits GPU load.
 
 ## Scenarios
 

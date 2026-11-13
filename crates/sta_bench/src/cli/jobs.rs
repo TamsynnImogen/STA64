@@ -48,6 +48,15 @@ impl Gate {
     }
 }
 
+/// Releases the gate on drop, so a panic in a case cannot hang the run.
+struct Slot<'a>(&'a Gate);
+
+impl Drop for Slot<'_> {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
+
 /// What to run for one scenario file.
 pub(crate) struct Job {
     pub path: PathBuf,
@@ -91,8 +100,8 @@ fn one(cfg: &Arc<RunConfig>, o: &Opts, job: &Job, staged: &Path, allow_tier2: bo
     let mut case = run::run_scenario(cfg, &sc, &job.name);
     if allow_tier2 && (o.tier == Some(2) || (o.tier.is_none() && tier(&sc) == Some(2))) {
         gate.acquire();
+        let _slot = Slot(gate);
         tier2::run_case(cfg, &sc, &mut case, o, staged);
-        gate.release();
     }
     case
 }

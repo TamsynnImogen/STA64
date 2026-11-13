@@ -43,7 +43,7 @@ Usage: sta-bench <command> [options]
       --gpu-jobs N                 tier-2 sta64 processes at once (default 1; they run at low priority)
   check                            run every tier-1 scenario in-process; exit 1 on a failure
   session start --scene <name> [Key=Value...]   start a headless sta64 and print its ID
-      --install <root> [--mod <name>]  mount a private clone of this install; the source is never written
+      --install <root> [--mod <name>]  mount a private clone of this install (do not write its large linked files; stop checks the source)
   session list | session stop --session ID
   drive --session ID \"<command>\"...  send bench commands to a session, print the answers
   capture list                     playtest captures, newest first (default: $XDG_DATA_HOME/sta64/captures)

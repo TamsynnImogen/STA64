@@ -10,7 +10,8 @@
 //! in the clone cannot reach the source), a plain copy when it is small
 //! (writable data: config, ODF, saves), and otherwise a symlink to the source,
 //! so a multi-gigabyte install does not fill the disk. Symlinked files are
-//! the large read-only assets; `session stop` checks that the source is
+//! large assets that `sta64` only reads, but nothing enforces it: a write
+//! through one reaches the source. `session stop` detects that, after the fact: it checks that the source is
 //! unchanged against the manifest taken at the start and says so when it is
 //! not.
 
@@ -63,6 +64,7 @@ fn clone_with(src: &Path, dst: &Path, max: u64) -> io::Result<CloneStats> {
                 stats.reflinked += 1;
                 return Ok(());
             }
+            let _ = fs::remove_file(to);
             try_reflink = false;
         }
         if len <= max || !cfg!(unix) {

@@ -90,12 +90,16 @@ fn start(o: &Opts) -> Outcome {
     let id = new_id();
     let dir = root(o).join(&id);
     fs::create_dir_all(&dir).map_err(|e| Fail::Error(format!("{}: {e}", dir.display())))?;
+    // Count as running while the clone is made: the pid is this process's, replaced by sta64's.
+    let _ = fs::write(dir.join("pid"), std::process::id().to_string());
     // A private clone of the install, when one is asked for.
     let mut install_root = None;
     if let Some(src) = &o.install {
         let dst = dir.join("install");
-        let stats = clone::clone_install(src, &dst)
-            .map_err(|e| Fail::Error(format!("cloning {}: {e}", src.display())))?;
+        let stats = clone::clone_install(src, &dst).map_err(|e| {
+            let _ = fs::remove_dir_all(&dir);
+            Fail::Error(format!("cloning {}: {e}", src.display()))
+        })?;
         fs::write(dir.join("source"), src.display().to_string()).map_err(|e| Fail::Error(e.to_string()))?;
         fs::write(dir.join("source.manifest"), clone::manifest_text(src)).map_err(|e| Fail::Error(e.to_string()))?;
         println!("  install cloned: {} reflinked, {} copied, {} linked", stats.reflinked, stats.copied, stats.linked);
