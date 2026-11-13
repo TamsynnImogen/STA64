@@ -17,10 +17,10 @@ user's own executables each time, and none are recorded here.
 | call sites | 11692 | — |
 | DLL-shaped callable (`A2` / `A1` table) | 130 | 172 |
 | missing callable signatures (missing A1 calls) | 2 | 0 |
-| &nbsp;&nbsp;of the A1 callable: working (sim- or view-backed) | — | 73 |
+| &nbsp;&nbsp;of the A1 callable: working (sim- or view-backed) | — | 80 |
 | &nbsp;&nbsp;of the A1 callable: presentation event only, no consumer yet | — | 35 |
-| &nbsp;&nbsp;of the A1 callable: request retained and counted, no effect | — | 48 |
-| &nbsp;&nbsp;of the A1 callable: always raises (no data in the world view) | — | 16 |
+| &nbsp;&nbsp;of the A1 callable: request retained and counted, no effect | — | 42 |
+| &nbsp;&nbsp;of the A1 callable: always raises (no data in the world view) | — | 15 |
 | MMM job-equivalent, not A2-shaped | 0 | — |
 | bound in STA64's Lua today | — | 6 |
 | in MMM's API, not yet bound | 2 | 0 |
@@ -517,15 +517,15 @@ import no engine call.
 
 | install | rule DLLs | rules | conditions decoded | distinct calls | pairs | pairs working | pairs raising | pairs missing | sites | sites working |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| Star Trek Armada II (Stock) | 36 | 1168 | 1168 | 28 | 182 | 144 | 38 | 0 | 895 | 647 |
-| Star Trek Armada (A1 missions) | 26 | — | — | 38 | 175 | 132 | 43 | 0 | — | — |
+| Star Trek Armada II (Stock) | 36 | 1168 | 1168 | 28 | 182 | 171 | 11 | 0 | 895 | 823 |
+| Star Trek Armada (A1 missions) | 26 | — | — | 38 | 175 | 152 | 23 | 0 | — | — |
 
 ### Armada II: conditions of `Star Trek Armada II (Stock)`
 
 | call | rule DLLs | sites | status | Lua name |
 |---|---:|---:|:-:|---|
 | `bool UnderAttack(int,float)` | 13 | 227 | working | `A2.UnderAttack` |
-| `bool IsCompromised(int,int)` | 27 | 176 | raises | `A2.IsCompromised` |
+| `bool IsCompromised(int,int)` | 27 | 176 | working | `A2.IsCompromised` |
 | `bool IsAudioMessageDone(int)` | 32 | 107 | working | `A2.IsAudioMessageDone` |
 | `bool IsAlive(int)` | 12 | 101 | working | `A2.IsAlive` |
 | `int CountUnits(int,char*)` | 19 | 46 | working | `A2.CountUnits` |
@@ -558,7 +558,7 @@ import no engine call.
 
 | call | rule DLLs | status | Lua name |
 |---|---:|:-:|---|
-| `bool IsCompromised(int, int)` | 20 | raises | `A1.IsCompromised` |
+| `bool IsCompromised(int, int)` | 20 | working | `A1.IsCompromised` |
 | `int CountUnits(int, char *)` | 17 | working | `A1.CountUnits` |
 | `bool IsAudioMessageDone(int)` | 16 | working | `A1.IsAudioMessageDone` |
 | `float GetDistance(int &, char *, int)` | 13 | working | `A1.GetDistance` |

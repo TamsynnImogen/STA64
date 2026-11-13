@@ -33,7 +33,7 @@ use sta_sim::setup::{Control, GameOptions, PlayerSetup};
 /// First four bytes of every frame.
 pub const MAGIC: [u8; 4] = *b"S64N";
 /// Bumped whenever any message's encoding changes.
-pub const PROTOCOL_VERSION: u16 = 3;
+pub const PROTOCOL_VERSION: u16 = 4;
 /// Magic, version and body length.
 pub const HEADER_LEN: usize = 10;
 /// Largest frame, header included.
@@ -218,6 +218,19 @@ pub enum Message {
     Resynced(Resynced),
     /// Protocol 3: host to all after a rejoin: the seat is back at `turn`.
     Arrived(Arrived),
+    /// Protocol 4 (NET-05, NET_DECISIONS N5): a referee asking the host to
+    /// let it into the room, with the same identity a joiner shows. The
+    /// host answers `Welcome` (the slot is the connection's, not a player's)
+    /// or `Refuse`, exactly as for a `Hello`.
+    RefereeHello(Hello),
+    /// Protocol 4: host to all: the connection in `slot` is the room's
+    /// referee, or `None`: there is none (any more). A referee is never a
+    /// player's seat. Peers believe a `Reference` only from the slot the
+    /// host named here.
+    RefereeSeated { slot: Option<PlayerId> },
+    /// Protocol 4: referee to all: its sim digest for one turn boundary, sent
+    /// for every turn. Peers compare it as they compare a seat's.
+    Reference(TickDigest),
 }
 
 /// Who may send a message, and to whom (docs/NET.md, section 9).
@@ -229,6 +242,17 @@ pub enum Role {
     ToHost,
     /// Any seated peer, to the recipients it names.
     Any,
+    /// Only the room's referee sends it (protocol 4).
+    Referee,
+}
+
+/// Who sent a message, as the receiver knows it: the relay's host flag, and
+/// the slot the host named as the referee (`RefereeSeated`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SenderKind {
+    Host,
+    Peer,
+    Referee,
 }
 
 /// The build a peer runs. Peers must match exactly (docs/NET.md,
@@ -821,6 +845,10 @@ pub enum SnapshotRefusal {
     Timeout,
     /// This host does not serve snapshots.
     Unsupported,
+    /// Protocol 4: the referee will not resync the host: a host that differs
+    /// from the referee ends the match with reports (NET-05; the policy is
+    /// `referee::RefereePolicy::resync_host`).
+    HostEndsMatch,
 }
 
 /// A diverged peer's request (see [`Message::ResyncRequest`]).
@@ -1163,6 +1191,9 @@ impl Message {
             }
             Message::Resynced(r) => seat_id(r.slot),
             Message::Arrived(a) => seat_id(a.slot),
+            Message::RefereeHello(h) => hello(h),
+            Message::RefereeSeated { slot } => slot.map_or(Ok(()), seat_id),
+            Message::Reference(_) => Ok(()),
         }
     }
 
@@ -1183,8 +1214,11 @@ impl Message {
             | Message::SnapshotPart(_)
             | Message::SnapshotRefused(_)
             | Message::Resynced(_)
-            | Message::Arrived(_) => Role::Host,
+            | Message::Arrived(_)
+            | Message::RefereeSeated { .. } => Role::Host,
+            Message::Reference(_) => Role::Referee,
             Message::Hello(_)
+            | Message::RefereeHello(_)
             | Message::Rules(_)
             | Message::SeatChoice(_)
             | Message::Request(_)
@@ -1206,11 +1240,49 @@ impl Message {
     /// `sender`, received by a peer that knows the host's seat. A joiner
     /// before `Welcome` passes `sender_is_host` from the room's host flag.
     pub fn check_sender(&self, sender_is_host: bool) -> Result<(), ProtoError> {
-        match (self.role(), sender_is_host) {
-            (Role::Host, false) => Err(ProtoError::Authority("host message from a non-host")),
-            (Role::ToHost, true) => Err(ProtoError::Authority("joiner message from the host")),
+        self.check_sender_kind(if sender_is_host {
+            SenderKind::Host
+        } else {
+            SenderKind::Peer
+        })
+    }
+
+    /// [`Message::check_sender`] with the referee told apart (protocol 4).
+    /// A referee sends its own digests and section digests, and, when it
+    /// serves a resync (N5), the host's snapshot messages and `Resynced`; it
+    /// sends no turn record, no lobby message and no host message besides
+    /// those.
+    pub fn check_sender_kind(&self, kind: SenderKind) -> Result<(), ProtoError> {
+        match (self.role(), kind) {
+            (Role::Host, SenderKind::Peer) => Err(ProtoError::Authority("host message from a non-host")),
+            (Role::ToHost, SenderKind::Host) => Err(ProtoError::Authority("joiner message from the host")),
+            (Role::Referee, SenderKind::Host | SenderKind::Peer) => {
+                Err(ProtoError::Authority("referee message from a seat"))
+            }
+            (_, SenderKind::Referee) if !self.referee_may_send() => {
+                Err(ProtoError::Authority("message a referee does not send"))
+            }
             _ => Ok(()),
         }
+    }
+
+    /// What a referee connection may send (see [`Message::check_sender_kind`]).
+    fn referee_may_send(&self) -> bool {
+        matches!(
+            self,
+            Message::Reference(_)
+                | Message::Sections(_)
+                | Message::RefereeHello(_)
+                | Message::Ping { .. }
+                | Message::Pong { .. }
+                | Message::Leave(_)
+                | Message::SnapshotOffer(_)
+                | Message::SnapshotPart(_)
+                | Message::SnapshotRefused(_)
+                | Message::Replayed(_)
+                | Message::CatchUpDone
+                | Message::Resynced(_)
+        )
     }
 }
 
@@ -1867,6 +1939,7 @@ mod tests {
             Message::SnapshotRefused(SnapshotRefusal::TooLarge),
             Message::SnapshotRefused(SnapshotRefusal::Timeout),
             Message::SnapshotRefused(SnapshotRefusal::Unsupported),
+            Message::SnapshotRefused(SnapshotRefusal::HostEndsMatch),
             Message::ResyncRequest(ResyncRequest {
                 tick: 90,
                 digest: 5,
@@ -1883,6 +1956,10 @@ mod tests {
                 slot: PlayerId(1),
                 turn: 31,
             }),
+            Message::RefereeHello(hello_fixture()),
+            Message::RefereeSeated { slot: Some(PlayerId(4)) },
+            Message::RefereeSeated { slot: None },
+            Message::Reference(TickDigest { tick: 93, digest: 7 }),
         ];
         for r in [
             Refusal::Full,
@@ -1932,7 +2009,7 @@ mod tests {
     #[test]
     fn golden_encoding_is_pinned() {
         let all: Vec<u8> = samples().iter().flat_map(|m| encode(m).unwrap()).collect();
-        assert_eq!(PROTOCOL_VERSION, 3);
+        assert_eq!(PROTOCOL_VERSION, 4);
         assert_eq!(
             fnv1a64(&all),
             GOLDEN,
@@ -1940,7 +2017,7 @@ mod tests {
         );
     }
 
-    const GOLDEN: u64 = 13647101379501485076;
+    const GOLDEN: u64 = 13020689507166429555;
 
     /// Tags are positional and never move: NET-04 appended 22 to 28 after
     /// `Sections` (21), the last tag of protocol 2.
@@ -1960,6 +2037,9 @@ mod tests {
         assert_eq!(tag(find(|m| matches!(m, Message::ResyncAck(_)))), 26);
         assert_eq!(tag(find(|m| matches!(m, Message::Resynced(_)))), 27);
         assert_eq!(tag(find(|m| matches!(m, Message::Arrived(_)))), 28);
+        assert_eq!(tag(find(|m| matches!(m, Message::RefereeHello(_)))), 29);
+        assert_eq!(tag(find(|m| matches!(m, Message::RefereeSeated { .. }))), 30);
+        assert_eq!(tag(find(|m| matches!(m, Message::Reference(_)))), 31);
     }
 
     #[test]
@@ -2013,8 +2093,8 @@ mod tests {
     fn header_is_little_endian_and_frozen() {
         let bytes = encode(&Message::Ping { nonce: 0 }).unwrap();
         // Ping is tag 12, nonce 0: two body bytes.
-        assert_eq!(bytes, [b'S', b'6', b'4', b'N', 3, 0, 2, 0, 0, 0, 12, 0]);
-        assert_eq!(version_notice(), [b'S', b'6', b'4', b'N', 3, 0, 0, 0, 0, 0]);
+        assert_eq!(bytes, [b'S', b'6', b'4', b'N', 4, 0, 2, 0, 0, 0, 12, 0]);
+        assert_eq!(version_notice(), [b'S', b'6', b'4', b'N', 4, 0, 0, 0, 0, 0]);
     }
 
     #[test]
@@ -2339,6 +2419,7 @@ mod tests {
                 Role::Host => assert!(host.is_ok() && other.is_err(), "{m:?}"),
                 Role::ToHost => assert!(host.is_err() && other.is_ok(), "{m:?}"),
                 Role::Any => assert!(host.is_ok() && other.is_ok(), "{m:?}"),
+                Role::Referee => assert!(host.is_err() && other.is_err(), "{m:?}"),
             }
         }
         assert_eq!(Message::Start(start()).role(), Role::Host);

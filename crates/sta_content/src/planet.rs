@@ -24,8 +24,8 @@ const ROLE_KEY: &str = "STA64_planetRole";
 
 fn default_role(profile: Profile, class: &str) -> Option<PlanetRole> {
     match (profile, class) {
-        (Profile::Sta1Classic | Profile::Sta2Classic | Profile::Fo4, "planet_obj") => Some(PlanetRole::Background),
-        (Profile::Sta2Classic | Profile::Fo4, "planet") => Some(PlanetRole::Producer),
+        (Profile::Sta1Classic | Profile::Sta2Classic | Profile::Fo4 | Profile::Fo3, "planet_obj") => Some(PlanetRole::Background),
+        (Profile::Sta2Classic | Profile::Fo4 | Profile::Fo3, "planet") => Some(PlanetRole::Producer),
         _ => None,
     }
 }
@@ -68,7 +68,7 @@ pub(crate) fn resolve_crew_gain(
     if role != Some(PlanetRole::Producer) {
         return 0;
     }
-    let fallback = if matches!(profile, Profile::Sta2Classic | Profile::Fo4) { 10_000 } else { 0 };
+    let fallback = if matches!(profile, Profile::Sta2Classic | Profile::Fo4 | Profile::Fo3) { 10_000 } else { 0 };
     let Some(raw) = odf.str("maxCrewGain") else { return fallback };
     match raw.trim().parse::<i32>() {
         Ok(value) => value,
@@ -144,7 +144,7 @@ pub(crate) fn resolve_colonizable(
 }
 
 fn is_a2_family(profile: Profile) -> bool {
-    matches!(profile, Profile::Sta2Classic | Profile::Fo4)
+    matches!(profile, Profile::Sta2Classic | Profile::Fo4 | Profile::Fo3)
 }
 
 /// A finite decimal number (stock files use a trailing `f`), clamped so the
