@@ -15,6 +15,7 @@
 pub mod frames;
 pub mod marks;
 mod pair_view;
+pub mod perf;
 
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
@@ -104,9 +105,14 @@ struct Channel(SyncCell<Receiver<String>>);
 #[derive(Resource)]
 struct TickBudget(Tick);
 
+/// Whether the headless app draws (frames or a performance run) or is the sim alone.
+fn renders(cfg: &LaunchConfig) -> bool {
+    !cfg.frames.is_empty() || cfg.perf.is_some()
+}
+
 /// `--headless`: a Bevy app without a window; returns the process exit code.
 pub fn run_headless(cfg: &LaunchConfig) -> i32 {
-    if cfg.frames.is_empty() {
+    if !renders(cfg) {
         return run_headless_inner(cfg);
     }
     // No adapter panics inside plugin setup: report it as a skippable
@@ -143,8 +149,9 @@ fn run_headless_inner(cfg: &LaunchConfig) -> i32 {
     let first_view = bench.view().clone();
     let fog = scene_fog(cfg, &bench);
     let mut app = App::new();
-    let runner = ScheduleRunnerPlugin::run_loop(Duration::from_millis(1));
-    if cfg.frames.is_empty() {
+    // A performance run is not paced: no wait between frames.
+    let runner = ScheduleRunnerPlugin::run_loop(if cfg.perf.is_some() { Duration::ZERO } else { Duration::from_millis(1) });
+    if !renders(cfg) {
         app.add_plugins(MinimalPlugins.set(runner));
     } else {
         // The audio device is never opened: a bench frame has no sound (bevy_audio is not compiled in).
@@ -152,7 +159,7 @@ fn run_headless_inner(cfg: &LaunchConfig) -> i32 {
         use bevy::render::RenderPlugin;
         use bevy::window::ExitCondition;
         app.add_plugins(
-            DefaultPlugins
+            perf::log_plugin(cfg, DefaultPlugins)
                 .set(WindowPlugin { primary_window: None, exit_condition: ExitCondition::DontExit, ..default() })
                 .set(RenderPlugin { synchronous_pipeline_compilation: true, ..default() })
                 .set(ImagePlugin::default_linear())
@@ -170,17 +177,27 @@ fn run_headless_inner(cfg: &LaunchConfig) -> i32 {
     app.insert_resource(AnimClock::new(cfg.clock_mode(), 0))
         .add_plugins(SimLinkPlugin)
         .insert_resource(BenchRes(SyncCell::new(bench)))
-        .insert_resource(TickBudget(cfg.ticks.unwrap_or(0).max(cfg.frames.iter().copied().max().unwrap_or(0))))
+        .insert_resource(TickBudget(if cfg.perf.is_some() { Tick::MAX } else { cfg.ticks.unwrap_or(0).max(cfg.frames.iter().copied().max().unwrap_or(0)) }))
         .add_systems(Update, bench_frame.in_set(GameSet::Bench));
     if matches!(cfg.control, Some(Control::Stdio)) {
         app.insert_resource(Channel(SyncCell::new(spawn_stdin())));
     }
-    if cfg.install_content && !cfg.frames.is_empty() {
+    if cfg.install_content && renders(cfg) {
         // TOOL-17: the install's content, drawn by the client's own renderers.
         if let Err(e) = pair_view::add(&mut app, cfg, scene_camera) {
             eprintln!("{e}");
             return 2;
         }
+        if let Some(opts) = &cfg.perf {
+            // TOOL-18: a seat's fog (`Fog=1`), the run's driver and its measurements.
+            if let Some((player, bounds)) = fog {
+                app.insert_resource(crate::render::units::LocalPlayer(Some(player))).insert_resource(bounds);
+            }
+            perf::add(&mut app, opts, cfg);
+        }
+    } else if cfg.perf.is_some() {
+        eprintln!("--perf needs --install-content (and --install-root): it measures the install's map view");
+        return 2;
     } else if !cfg.frames.is_empty() {
         frames::add(&mut app, cfg, scene_camera);
         // The effects read the sim through a link; this one is fed the bench's views

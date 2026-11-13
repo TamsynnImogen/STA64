@@ -198,6 +198,7 @@ impl Plugin for ShadowPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "shadows.wesl");
         app.add_plugins(MaterialPlugin::<ShadowCasterMaterial>::default())
+            .init_resource::<crate::render::quality::RenderQuality>()
             .add_systems(Startup, setup)
             .add_systems(Update, add_proxies)
             .add_systems(
@@ -298,6 +299,7 @@ fn can_shade(frustum: &Frustum, c: Vec3, r: f32, to_key: Vec3) -> bool {
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn update(
     profile: Option<Res<RenderProfile>>,
+    quality: Res<crate::render::quality::RenderQuality>,
     main: Query<&Frustum, MainCamera>,
     lights: Query<(&GlobalTransform, &DirectionalLight), Without<ShadowCamera>>,
     proxies: Query<(&GlobalTransform, &bevy::camera::primitives::Aabb, &InheritedVisibility), (With<ShadowProxy>, Without<ShadowCamera>)>,
@@ -308,7 +310,7 @@ fn update(
 ) {
     let Ok((mut cam, mut tf, mut gt, mut proj)) = camera.single_mut() else { return };
     // Stock parity: only the Refit profile draws ship shadows in gas and on hulls (RND-22).
-    let drawing = profile.is_some_and(|p| *p == RenderProfile::Refit);
+    let drawing = quality.shadows && profile.is_some_and(|p| *p == RenderProfile::Refit);
     let to_key = key_direction(lights.iter().map(|(t, l)| (t.back().as_vec3(), l.illuminance)));
     let fitted = (|| {
         if !drawing {
@@ -370,6 +372,48 @@ fn update(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Whether the shadow camera is active after one frame of `update` on a scene with the
+    /// Key, a camera, and (or not) one hull proxy in view.
+    fn pass_runs(shadows: bool, profile: RenderProfile, caster: bool) -> bool {
+        let mut app = App::new();
+        app.insert_resource(profile)
+            .insert_resource(crate::render::quality::RenderQuality { shadows, ..default() })
+            .insert_resource(KeyShadow::off(Handle::default()))
+            .add_systems(Update, update);
+        let cam = app
+            .world_mut()
+            .spawn((
+                ShadowCamera,
+                Camera { is_active: false, ..default() },
+                Transform::default(),
+                GlobalTransform::default(),
+                Projection::Orthographic(OrthographicProjection::default_3d()),
+            ))
+            .id();
+        app.world_mut().spawn((Camera3d::default(), Frustum::default()));
+        app.world_mut().spawn((GlobalTransform::default(), DirectionalLight::default()));
+        if caster {
+            app.world_mut().spawn((
+                ShadowProxy,
+                GlobalTransform::default(),
+                bevy::camera::primitives::Aabb::from_min_max(-Vec3::ONE, Vec3::ONE),
+                InheritedVisibility::VISIBLE,
+            ));
+        }
+        app.update();
+        app.world().get::<Camera>(cam).expect("camera").is_active
+    }
+
+    /// Regression guard (a pass is skipped when nothing needs it, whatever the machine's speed):
+    /// the shadow pass runs only under the Refit profile, with the setting on and a hull to cast.
+    #[test]
+    fn the_shadow_pass_is_skipped_when_nothing_needs_it() {
+        assert!(pass_runs(true, RenderProfile::Refit, true));
+        assert!(!pass_runs(true, RenderProfile::Refit, false), "no hull in view");
+        assert!(!pass_runs(false, RenderProfile::Refit, true), "setting off");
+        assert!(!pass_runs(true, RenderProfile::Stock, true), "stock draws no ship shadows");
+    }
 
     #[test]
     fn residual_split_round_trips_to_better_than_a_half_float() {

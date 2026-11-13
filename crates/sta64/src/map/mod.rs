@@ -383,6 +383,10 @@ struct FpsText;
 #[derive(Component)]
 struct MapLight(usize);
 
+/// An asteroid field's root (its rocks are its descendants); the performance run hides it.
+#[derive(Component)]
+pub(crate) struct AsteroidField;
+
 /// Whether the map's own `dlight` aimed this light (the Stock hull look uses only those;
 /// an unaimed one is the viewer's default).
 #[derive(Component, Default)]
@@ -457,6 +461,7 @@ impl Plugin for MapPlugin {
                 pan: None,
             })
             .add_plugins(crate::render::planet::PlanetPlugin)
+            .add_plugins(crate::render::quality::QualityPlugin)
             .add_plugins(crate::render::rock::RockPlugin)
             .add_plugins(crate::render::nebula::NebulaPlugin)
             .add_plugins(crate::render::stock::StockBackgroundsPlugin)
@@ -965,6 +970,7 @@ fn rebuild(
                     to_bevy(&Matrix34 { m: o.transform }),
                     Visibility::default(),
                     ChildOf(root),
+                    AsteroidField,
                     Spin { axis: Vec3::Y, speed: orbit },
                 ))
                 .id();

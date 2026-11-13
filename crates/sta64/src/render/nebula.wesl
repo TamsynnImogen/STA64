@@ -32,7 +32,7 @@ struct NebulaParams {
     core: vec4<f32>,      // x core, y its sharpness
     opac: vec4<f32>,      // x optical depth per unit of the densest gas; y the heights' spread
     key: vec4<f32>,       // xyz toward the key light; w its share of the gas's light
-    scat: vec4<f32>,      // x 1 + g^2, y 2g (Henyey-Greenstein)
+    scat: vec4<f32>,      // x 1 + g^2, y 2g (Henyey-Greenstein); z the march's steps (0: 16)
     box_lo: vec4<f32>,    // the field's box, low corner; w the camera's near plane
     box_hi: vec4<f32>,
     cam_fwd: vec4<f32>,   // the camera's forward axis
@@ -293,7 +293,6 @@ fn march_step(p: vec3<f32>, dist: f32, thick: f32, ph: f32, u: vec2<f32>, kk: f3
     return vec4<f32>(c * (k.gas_a.w * near * thick * k.vert.w), dn * near * thick * k.opac.x);
 }
 
-const STEPS: i32 = 16;
 
 @fragment
 fn fragment(i: FragIn) -> @location(0) vec4<f32> {
@@ -322,17 +321,19 @@ fn fragment(i: FragIn) -> @location(0) vec4<f32> {
         discard;
     }
     // Steps growing geometrically with distance, each jittered within its span.
-    let q = exp2(log2(s1 / s0) / f32(STEPS));
+    // The march's steps: a setting (`RenderQuality::nebula_steps`), 16 by default.
+    let steps = select(16, i32(k.scat.z), k.scat.z >= 1.0);
+    let q = exp2(log2(s1 / s0) / f32(steps));
     let ph = key_phase(dot(k.key.xyz, d));
     let jit = fract(sin(dot(i.position.xy, vec2<f32>(12.9898, 78.233))) * 43758.5453);
     let u = vec2<f32>(jit, fract(sin(dot(i.position.xy, vec2<f32>(39.3468, 11.135))) * 43758.5453));
     var acc = vec4<f32>(0.0);
     var a = s0;
-    for (var n = 0; n < STEPS; n++) {
+    for (var n = 0; n < steps; n++) {
         let th = a * (q - 1.0);
         let j = fract(jit + f32(n) * 0.6180340);
         let s = a + j * th;
-        acc += march_step(eye + d * s, s, th, ph, u, f32(n) / f32(STEPS));
+        acc += march_step(eye + d * s, s, th, ph, u, f32(n) / f32(steps));
         a += th;
     }
     // Premultiplied: the gas's light added, what lies behind dimmed by its optical depth.
