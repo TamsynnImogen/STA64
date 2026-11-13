@@ -528,7 +528,7 @@ mod tests {
         let m = frame_metrics(&a, &a);
         let j = metrics_json(&m);
         let v = crate::pair::parse_json(&j).expect("json");
-        assert_eq!(v.get("regions").get("bg").get("share").num().is_some(), true);
+        assert!(v.get("regions").get("bg").get("share").num().is_some());
         assert!(metrics_md(&[("f0".into(), &m)]).contains("| f0 |"));
     }
 }
