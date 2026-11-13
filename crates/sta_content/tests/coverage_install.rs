@@ -29,7 +29,7 @@ fn every_installed_mod_reports() {
 }
 
 #[test]
-fn classic_enhanced_changes_eight_cfg_lines_typed_but_not_yet_applied() {
+fn classic_enhanced_changes_eight_cfg_lines_and_six_are_not_yet_applied() {
     let Some(root) = root() else { return };
     let vfs = match Vfs::mount_install(Path::new(&root), Some("STA2 Classic Mod Enhanced Gameplay")) {
         Ok(v) => v,
@@ -39,10 +39,15 @@ fn classic_enhanced_changes_eight_cfg_lines_typed_but_not_yet_applied() {
     let mut changed: Vec<&str> = r.cfg.iter().map(|c| c.key.as_str()).collect();
     changed.sort();
     // CON-35 typed exactly the keys the installed headers differ in (D9:
-    // first the keys Classic Enhanced changes). Peers compare them, but no
-    // system applies them yet, so they are still reported as ignored.
-    assert_eq!(changed, sta_content::CfgRules::KEYS);
-    assert!(r.cfg.iter().all(|c| !c.read), "{:?}", r.cfg);
+    // first the keys Classic Enhanced changes): the two autonomy defaults
+    // (applied since CON-46) and six more that peers compare but no system
+    // applies yet, so those six are still reported as ignored.
+    let mut typed: Vec<&str> = sta_content::CfgRules::KEYS.iter().chain(&["CRAFT_DEFAULT_MOVEMENT_AUTONOMY", "CRAFT_DEFAULT_SPECIALWEAPON_AUTONOMY"]).copied().collect();
+    typed.sort();
+    assert_eq!(changed, typed);
+    let mut ignored: Vec<&str> = r.cfg.iter().filter(|c| !c.read).map(|c| c.key.as_str()).collect();
+    ignored.sort();
+    assert_eq!(ignored, sta_content::CfgRules::KEYS);
     // `why` names the layer and line for the file and for a key.
     let hits = coverage::why_file(&vfs, "RTS_CFG.h");
     assert_eq!(hits[0].layer, "STA2 Classic Mod Enhanced Gameplay");

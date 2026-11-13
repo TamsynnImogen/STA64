@@ -24,11 +24,13 @@ pub struct Rules {
     starts: Vec<StartRule>,
     /// `RTS_CFG.h`'s path-planner block, when the header has any of its keys.
     pathing: Option<PathingRules>,
+    /// `RTS_CFG.h`'s default craft autonomy, when the header sets either key.
+    autonomy: Option<AutonomyRules>,
     /// The other typed `RTS_CFG.h` keys.
     pub cfg: CfgRules,
 }
 
-const TYPED_LEN: usize = 3 + PathingRules::KEYS.len() + CfgRules::KEYS.len();
+const TYPED_LEN: usize = 3 + PathingRules::KEYS.len() + AutonomyRules::KEYS.len() + CfgRules::KEYS.len();
 
 /// Every `RTS_CFG.h` key [`Rules`] reads.
 pub const TYPED_CFG_KEYS: [&str; TYPED_LEN] = {
@@ -41,17 +43,68 @@ pub const TYPED_CFG_KEYS: [&str; TYPED_LEN] = {
         out[3 + i] = PathingRules::KEYS[i];
         i += 1;
     }
+    let mut a = 0;
+    while a < AutonomyRules::KEYS.len() {
+        out[3 + i + a] = AutonomyRules::KEYS[a];
+        a += 1;
+    }
     let mut j = 0;
     while j < CfgRules::KEYS.len() {
-        out[3 + i + j] = CfgRules::KEYS[j];
+        out[3 + i + a + j] = CfgRules::KEYS[j];
         j += 1;
     }
     out
 };
 
-/// The `RTS_CFG.h` keys STA2 Classic Enhanced Gameplay changes against STA2
-/// Classic (the eight changed lines CON-34's coverage report finds in the
-/// installed headers), typed so the digest names them. `None`: the header
+/// The autonomy a new craft starts with (CON-46, D9), from `RTS_CFG.h`:
+/// `CRAFT_DEFAULT_MOVEMENT_AUTONOMY` and `CRAFT_DEFAULT_SPECIALWEAPON_AUTONOMY`,
+/// 0 low, 1 medium, 2 high. An absent key reads as the engine's own default,
+/// movement 1 and special weapon 0 (read from the executable, static). The
+/// installs set 1 and 2 (Roots, Fleet Ops 4.0), 1 and 1 (Classic Enhanced)
+/// and nothing (plain Classic): read from the data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AutonomyRules {
+    pub movement: u8,
+    pub special_weapon: u8,
+}
+
+impl Default for AutonomyRules {
+    fn default() -> Self {
+        AutonomyRules { movement: 1, special_weapon: 0 }
+    }
+}
+
+impl AutonomyRules {
+    const KEYS: [&'static str; 2] = ["CRAFT_DEFAULT_MOVEMENT_AUTONOMY", "CRAFT_DEFAULT_SPECIALWEAPON_AUTONOMY"];
+
+    fn from_cfg(cfg: &CfgH, warnings: &mut Vec<Warning>) -> Option<Self> {
+        if !Self::KEYS.iter().any(|k| cfg.raw(k).is_some()) {
+            return None;
+        }
+        let stock = Self::default();
+        let mut level = |key: &str, default: u8| match cfg.raw(key) {
+            None => default,
+            // Whole numbers only, but `2.0` counts as 2 as for the path rules.
+            Some(_) => match cfg.i64(key).or_else(|| cfg.f32(key).filter(|v| v.is_finite() && v.fract() == 0.0).map(|v| v as i64)).filter(|v| (0..=2).contains(v)) {
+                Some(v) => v as u8,
+                None => {
+                    warnings.push(Warning::new("RTS_CFG.h", format!("{key} is not 0, 1 or 2; the engine default is used")));
+                    default
+                }
+            },
+        };
+        Some(AutonomyRules {
+            movement: level(Self::KEYS[0], stock.movement),
+            special_weapon: level(Self::KEYS[1], stock.special_weapon),
+        })
+    }
+}
+
+
+/// The other `RTS_CFG.h` keys STA2 Classic Enhanced Gameplay changes against
+/// STA2 Classic (six of the eight changed lines CON-34's coverage report
+/// finds in the installed headers; the other two are [`AutonomyRules`]),
+/// typed so the digest names them. `None`: the header
 /// does not set the key; no default is invented where the original engine's
 /// own default is not known. No sim system consumes them yet; they are
 /// rules, so peers must agree on them.
@@ -69,18 +122,12 @@ pub struct CfgRules {
     pub hard_ai_cost_handicap: Option<Fixed>,
     /// `HARD_AI_SPEED_HANDICAP` (float; Classic 0.7, Enhanced 0.6).
     pub hard_ai_speed_handicap: Option<Fixed>,
-    /// `CRAFT_DEFAULT_MOVEMENT_AUTONOMY` (int; Enhanced only, 1).
-    pub craft_default_movement_autonomy: Option<i64>,
-    /// `CRAFT_DEFAULT_SPECIALWEAPON_AUTONOMY` (int; Enhanced only, 1).
-    pub craft_default_specialweapon_autonomy: Option<i64>,
 }
 
 impl CfgRules {
     /// The keys, in the order of [`texts`](CfgRules::texts).
-    pub const KEYS: [&'static str; 8] = [
+    pub const KEYS: [&'static str; 6] = [
         "BASE_CREW_PER_SEC",
-        "CRAFT_DEFAULT_MOVEMENT_AUTONOMY",
-        "CRAFT_DEFAULT_SPECIALWEAPON_AUTONOMY",
         "HARD_AI_COST_HANDICAP",
         "HARD_AI_SPEED_HANDICAP",
         "REPAIR_SHIP_DISTANCE",
@@ -90,13 +137,11 @@ impl CfgRules {
 
     /// Each value as the digest renders it (`unset` when absent), in
     /// [`KEYS`](CfgRules::KEYS) order.
-    fn texts(&self) -> [String; 8] {
+    fn texts(&self) -> [String; 6] {
         let real = |v: Option<Fixed>| v.map_or_else(|| "unset".to_owned(), crate::digest::fixed_text);
         let int = |v: Option<i64>| v.map_or_else(|| "unset".to_owned(), |v| v.to_string());
         [
             real(self.base_crew_per_sec),
-            int(self.craft_default_movement_autonomy),
-            int(self.craft_default_specialweapon_autonomy),
             real(self.hard_ai_cost_handicap),
             real(self.hard_ai_speed_handicap),
             real(self.repair_ship_distance),
@@ -136,8 +181,6 @@ impl CfgRules {
             freighters_per_nebula: int("cfgFREIGHTERS_PER_NEBULA"),
             hard_ai_cost_handicap,
             hard_ai_speed_handicap,
-            craft_default_movement_autonomy: int("CRAFT_DEFAULT_MOVEMENT_AUTONOMY"),
-            craft_default_specialweapon_autonomy: int("CRAFT_DEFAULT_SPECIALWEAPON_AUTONOMY"),
         }
     }
 }
@@ -281,6 +324,7 @@ impl Rules {
             }
         }
         rules.pathing = PathingRules::from_cfg(&cfg, &mut warnings);
+        rules.autonomy = AutonomyRules::from_cfg(&cfg, &mut warnings);
         rules.cfg = CfgRules::from_cfg(&cfg, &mut warnings);
         (rules, warnings)
     }
@@ -293,6 +337,17 @@ impl Rules {
     /// Set the path planner's rules (tests and content built in code).
     pub fn with_pathing(mut self, pathing: PathingRules) -> Self {
         self.pathing = Some(pathing);
+        self
+    }
+
+    /// The default craft autonomy: the header's, else the engine's.
+    pub fn autonomy(&self) -> AutonomyRules {
+        self.autonomy.unwrap_or_default()
+    }
+
+    /// Set the default autonomy (tests and content built in code).
+    pub fn with_autonomy(mut self, autonomy: AutonomyRules) -> Self {
+        self.autonomy = Some(autonomy);
         self
     }
 
@@ -339,6 +394,11 @@ impl Rules {
         for (key, value) in PathingRules::KEYS.iter().zip(self.pathing().texts()) {
             out.push(DigestEntry::new(format!("RTS_CFG.h:{key}"), value));
         }
+        // Resolved values: an absent key and the engine default digest alike.
+        let a = self.autonomy();
+        for (key, value) in AutonomyRules::KEYS.iter().zip([a.movement, a.special_weapon]) {
+            out.push(DigestEntry::new(format!("RTS_CFG.h:{key}"), value.to_string()));
+        }
         for (key, value) in CfgRules::KEYS.iter().zip(self.cfg.texts()) {
             out.push(DigestEntry::new(format!("RTS_CFG.h:{key}"), value));
         }
@@ -357,6 +417,81 @@ impl Rules {
             out.push(DigestEntry::new(crate::digest::key("race:", &s.stem), value));
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod autonomy_tests {
+    use super::*;
+
+    #[test]
+    fn absent_keys_read_as_the_engine_defaults() {
+        let (rules, warnings) = Rules::from_header("int SOMETHING_ELSE = 3;\n");
+        assert!(warnings.is_empty());
+        assert_eq!(rules.autonomy(), AutonomyRules { movement: 1, special_weapon: 0 });
+    }
+
+    #[test]
+    fn the_installed_headers_values_are_read() {
+        for (text, want) in [
+            ("int CRAFT_DEFAULT_MOVEMENT_AUTONOMY = 1;\nint CRAFT_DEFAULT_SPECIALWEAPON_AUTONOMY = 2;\n", (1, 2)),
+            ("int CRAFT_DEFAULT_MOVEMENT_AUTONOMY = 1;\nint CRAFT_DEFAULT_SPECIALWEAPON_AUTONOMY = 1;\n", (1, 1)),
+            // One key only: the other keeps the engine default.
+            ("int CRAFT_DEFAULT_MOVEMENT_AUTONOMY = 2;\n", (2, 0)),
+        ] {
+            let (rules, warnings) = Rules::from_header(text);
+            assert!(warnings.is_empty(), "{warnings:?}");
+            let a = rules.autonomy();
+            assert_eq!((a.movement, a.special_weapon), want, "{text}");
+            let d = crate::digest::ContentDigest::from_entries(rules.digest_entries());
+            assert_eq!(d.get("RTS_CFG.h:CRAFT_DEFAULT_SPECIALWEAPON_AUTONOMY"), Some(want.1.to_string().as_str()));
+        }
+    }
+
+    #[test]
+    fn one_valid_and_one_invalid_key_keep_the_valid_one() {
+        let (rules, warnings) = Rules::from_header("int CRAFT_DEFAULT_MOVEMENT_AUTONOMY = 2;\nint CRAFT_DEFAULT_SPECIALWEAPON_AUTONOMY = 9;\n");
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(rules.autonomy(), AutonomyRules { movement: 2, special_weapon: 0 });
+        let (rules, _) = Rules::from_header("int CRAFT_DEFAULT_SPECIALWEAPON_AUTONOMY = 2;\n");
+        assert_eq!(rules.autonomy(), AutonomyRules { movement: 1, special_weapon: 2 });
+    }
+
+    #[test]
+    fn expressions_and_whole_floats_are_read() {
+        let (rules, warnings) = Rules::from_header("int BASE = 1;\nint CRAFT_DEFAULT_MOVEMENT_AUTONOMY = BASE + 1;\nfloat CRAFT_DEFAULT_SPECIALWEAPON_AUTONOMY = 2.0;\n");
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(rules.autonomy(), AutonomyRules { movement: 2, special_weapon: 2 });
+    }
+
+    #[test]
+    fn the_content_hash_sees_values_not_presence() {
+        // An absent key and the engine default are the same rule (D10).
+        let plain = sta_content_fake_hash(Rules::default());
+        assert_eq!(plain, sta_content_fake_hash(Rules::default().with_autonomy(AutonomyRules::default())));
+        assert_ne!(
+            sta_content_fake_hash(Rules::default().with_autonomy(AutonomyRules { movement: 1, special_weapon: 1 })),
+            sta_content_fake_hash(Rules::default().with_autonomy(AutonomyRules { movement: 1, special_weapon: 2 })),
+        );
+    }
+
+    fn sta_content_fake_hash(rules: Rules) -> u64 {
+        let fake = crate::fake::db();
+        let mut b = crate::ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
+        for w in fake.weapons() {
+            b = b.weapon(w.clone());
+        }
+        for u in fake.units() {
+            b = b.unit(u.clone());
+        }
+        b.build().unwrap().with_rules(rules).hash()
+    }
+
+    #[test]
+    fn a_bad_level_warns_and_keeps_the_default() {
+        let (rules, warnings) = Rules::from_header("int CRAFT_DEFAULT_MOVEMENT_AUTONOMY = 7;\nint CRAFT_DEFAULT_SPECIALWEAPON_AUTONOMY = high;\n");
+        assert_eq!(warnings.len(), 2);
+        assert_eq!(rules.autonomy(), AutonomyRules::default());
     }
 }
 
@@ -431,11 +566,14 @@ mod cfg_tests {
         assert_eq!(e.cfg.repair_ship_distance, Some(Fixed::from_int(230)));
         assert_eq!(c.cfg.base_crew_per_sec, None);
         assert_eq!(e.cfg.base_crew_per_sec, Some(Fixed::from_int(30)));
-        assert_eq!(e.cfg.craft_default_specialweapon_autonomy, Some(1));
+        assert_eq!(e.autonomy(), AutonomyRules { movement: 1, special_weapon: 1 });
         // Every changed line is a differing digest key.
         let (dc, de) = (ContentDigest::from_entries(c.digest_entries()), ContentDigest::from_entries(e.digest_entries()));
         let keys: Vec<String> = dc.differences(&de).into_iter().map(|d| d.key).collect();
-        assert_eq!(keys, CfgRules::KEYS.map(|k| format!("RTS_CFG.h:{k}")));
+        let mut want: Vec<String> = CfgRules::KEYS.iter().chain(&["CRAFT_DEFAULT_SPECIALWEAPON_AUTONOMY"]).map(|k| format!("RTS_CFG.h:{k}")).collect();
+        want.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
+        // Movement autonomy: Enhanced sets 1, the engine default.
+        assert_eq!(keys, want);
         let first = dc.first_difference(&de).unwrap();
         assert_eq!((first.key.as_str(), first.ours.as_deref(), first.theirs.as_deref()), ("RTS_CFG.h:BASE_CREW_PER_SEC", Some("unset"), Some("30")));
     }

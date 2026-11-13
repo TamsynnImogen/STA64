@@ -319,6 +319,8 @@ class Drl:
                 break
             self.thunks[a] = int(m.group(1), 16)
         self.chkesp = self._chkesp()
+        # Engine methods (mangled names) the conditions call, by vtable slot.
+        self.engine_slots = set()
         self.dlls = sorted({d for d, _ in self.pe.imports.values()})
 
     # ---------------------------------------------------------- helpers
@@ -630,6 +632,7 @@ class Drl:
                         raise DecodeError(f"{k} slot {slot} in a condition at {a:#x}")
                     v = ("var", plain_name(obj[1]), k)
                 elif k == "ScriptInterface":
+                    self.engine_slots.add(slot)
                     v = ("call", self.slot_name("ScriptInterfaceImp", slot),
                          typed_args([expr_arg(x, a) for x in args], self.slot_params(slot)))
                 else:
@@ -1329,6 +1332,13 @@ def decode(path, engine=None):
     base = os.path.basename(path)
     mission = re.sub(r"[rR]\.drl$", "", base)
     calls = sorted({c for r in rules if r.get("condition") for c in calls_in(r["condition"])})
+    # Engine calls written in the decoded conditions, keyed `Name/<argument count>`
+    # (overloads differ in arity); an expression the decoder folded counts once.
+    call_sites = {}
+    for r in rules:
+        if r.get("condition"):
+            for k in call_shapes(r["condition"]):
+                call_sites[k] = call_sites.get(k, 0) + 1
     used = {x for r in rules for x in r["deps"]} | {v for r in rules if r.get("condition") for v in vars_in(r["condition"])}
     variables.sort(key=lambda v: v["name"])
     objects.sort()
@@ -1341,6 +1351,11 @@ def decode(path, engine=None):
         "actions": actions,
         "rules": rules,
         "calls": calls,
+        "call_sites": call_sites,
+        "call_signatures": sorted(
+            (d.engine.get("ScriptInterfaceImp") or [])[s] for s in d.engine_slots
+            if s < len(d.engine.get("ScriptInterfaceImp") or [])
+        ),
         "unused_variables": sorted(v["name"] for v in variables if v["name"] not in used),
         "errors": errors,
     }
@@ -1382,6 +1397,19 @@ def calls_in(e):
         elif isinstance(x, list):
             for y in x:
                 yield from calls_in(y)
+
+
+def call_shapes(e):
+    if not isinstance(e, tuple):
+        return
+    if e[0] == "call":
+        yield f"{e[1]}/{len(e[2])}"
+    for x in e[1:]:
+        if isinstance(x, tuple):
+            yield from call_shapes(x)
+        elif isinstance(x, list):
+            for y in x:
+                yield from call_shapes(y)
 
 
 def vars_in(e):

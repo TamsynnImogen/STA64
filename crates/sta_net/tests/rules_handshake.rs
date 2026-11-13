@@ -270,7 +270,12 @@ fn installed_classic_and_enhanced_refuse_and_name_the_differing_key() {
     assert_eq!((diff.host.as_deref(), diff.joiner.as_deref()), (Some("unset"), Some("30")));
     let all = classic.digest().differences(enhanced.digest());
     let cfg: Vec<&str> = all.iter().map(|d| d.key.as_str()).filter(|k| k.starts_with("RTS_CFG.h:")).collect();
-    assert_eq!(cfg, sta_content::CfgRules::KEYS.map(|k| format!("RTS_CFG.h:{k}")));
+    // The six header keys, and the special-weapon autonomy default (Classic
+    // leaves it to the engine, 0; Enhanced sets 1). Its movement autonomy is
+    // 1, the engine default, so that key agrees.
+    let mut want: Vec<String> = sta_content::CfgRules::KEYS.iter().chain(&["CRAFT_DEFAULT_SPECIALWEAPON_AUTONOMY"]).map(|k| format!("RTS_CFG.h:{k}")).collect();
+    want.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
+    assert_eq!(cfg, want);
     eprintln!("{} differing keys in all; the first ten:", all.len());
     for d in all.iter().take(10) {
         eprintln!("  {d}");

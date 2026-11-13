@@ -441,7 +441,8 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
     // Every field, so a new one fails to compile here until someone decides
     // whether the sim reads it (then it is digested below) or not.
     let UnitDef {
-        key: _, odf: _, class: _, is_starbase: _, planet_role: _, planet_crew_gain: _, race: _,
+        key: _, odf: _, class: _, is_starbase: _, planet_role: _, planet_crew_gain: _, planet_crew_modifier: _,
+        planet_colonizable: _, planet_civilian_population_modifier: _, race: _,
         model: _, scale: _, movement: _, hull: _, shields: _, initial_hull: _, initial_shields: _,
         crew: _, maximum_crew: _, sensor: _, hardpoints: _, build: _, launch: _, radius: _,
         sounds: _, fx: _, special_energy_max: _, special_energy_rate: _, miner: _, miner_off: _,
@@ -462,6 +463,10 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
         })
         // Read only for a producer planet.
         .int("planet_crew_gain", if u.planet_role == Some(crate::PlanetRole::Producer) { u.planet_crew_gain } else { 0 })
+        .opt_fixed("planet_crew_modifier", u.planet_crew_modifier)
+        // CON-37: effective for a producer planet, false/zero otherwise.
+        .flag("planet_colonizable", u.planet_colonizable)
+        .fixed("planet_civilian_population_modifier", u.planet_civilian_population_modifier)
         .list("movement", [m.max_speed, m.forward_accel, m.turn_omega, m.turn_alpha, m.turn_at_rest].into_iter().chain(m.smooth_fields()).map(fixed_text))
         .fixed("hull", u.hull)
         .fixed("shields", u.shields.max)

@@ -24,6 +24,7 @@ use sta_sim::setup::GameSetup;
 
 mod data;
 pub mod frame;
+pub mod stock;
 #[cfg(test)]
 mod tests;
 mod view;
@@ -93,6 +94,8 @@ pub struct ModChosen(pub Option<String>);
 /// How the plugin sits in the host.
 #[derive(Resource, Debug, Clone)]
 pub struct ScreensConfig {
+    /// Stock arrangement (UI-22, default) or UI-07's plain layouts.
+    pub layout: stock::ScreenLayout,
     /// Spawn a 2D camera while in the front end.
     pub own_camera: bool,
     /// Scale the UI to the primary window (`UiScale` = height / 1080).
@@ -103,7 +106,7 @@ pub struct ScreensConfig {
 
 impl Default for ScreensConfig {
     fn default() -> Self {
-        ScreensConfig { own_camera: true, fit_scale: true, start: Screen::Main }
+        ScreensConfig { layout: stock::ScreenLayout::Stock, own_camera: true, fit_scale: true, start: Screen::Main }
     }
 }
 
@@ -132,6 +135,9 @@ impl Plugin for ScreensPlugin {
             .init_resource::<SelectedMod>()
             .init_resource::<Browse>()
             .init_resource::<ListScroll>()
+            .init_resource::<stock::StockBox>()
+            .init_resource::<stock::OptionsTab>()
+            .init_resource::<stock::Refocus>()
             .init_resource::<ButtonInput<KeyCode>>()
             .add_message::<MouseWheel>()
             .add_message::<StartGame>()
@@ -146,7 +152,7 @@ impl Plugin for ScreensPlugin {
             )
             .add_systems(
                 Update,
-                (fit_scale, follow_data, on_keys, on_wheel, track_scroll, on_buttons, on_lists, rebuild)
+                (fit_scale, stock::track_box, follow_data, on_keys, on_wheel, track_scroll, on_buttons, on_lists, stock::on_dropdowns, stock::track_tab, rebuild, stock::restore_focus)
                     .chain()
                     .in_set(GameSet::Ui)
                     .after(crate::ui::profile::ProfileSync)
@@ -403,15 +409,18 @@ fn rebuild(
     selected: Res<SelectedMod>,
     camera: Option<Res<ScreensCamera>>,
     scroll: Res<ListScroll>,
+    config: Res<ScreensConfig>,
+    stock_box: Res<stock::StockBox>,
+    options_tab: Res<stock::OptionsTab>,
     strings: Option<Res<crate::ui::i18n::Strings>>,
 ) {
     let Some(draft) = draft else { return };
-    if !(screen.is_changed() || draft.is_changed() || browse.is_changed() || selected.is_changed() || data.is_changed() || theme.is_changed() || strings.as_ref().is_some_and(|s| s.is_changed())) {
+    if !(screen.is_changed() || draft.is_changed() || browse.is_changed() || selected.is_changed() || data.is_changed() || theme.is_changed() || stock_box.is_changed() || config.is_changed() || strings.as_ref().is_some_and(|s| s.is_changed())) {
         return;
     }
     for e in &roots {
         commands.entity(e).despawn();
     }
-    let ctx = view::Ctx { theme: &theme, data: &data, strings: strings.as_deref(), draft: &draft, browse: &browse, settings: &settings, selected: &selected, scroll: &scroll };
+    let ctx = view::Ctx { theme: &theme, data: &data, strings: strings.as_deref(), draft: &draft, browse: &browse, settings: &settings, selected: &selected, scroll: &scroll, layout: config.layout, stock_box: stock_box.0, options_tab: options_tab.0 };
     view::spawn(&mut commands, *screen.get(), &ctx, camera.map(|c| c.0));
 }

@@ -56,9 +56,10 @@ fn dropdown_opens_selects_and_closes() {
     let rows = popup_rows(&mut app);
     assert_eq!(rows.len(), 3);
     assert!(app.world().get::<Dropdown>(d).unwrap().open);
-    // The list is a child of the field, drawn above everything.
+    // The list belongs to the field but is a root node, drawn above everything.
     let popup = app.world_mut().query_filtered::<Entity, With<DropdownPopup>>().single(app.world()).unwrap();
-    assert_eq!(app.world().get::<ChildOf>(popup).unwrap().parent(), d);
+    assert_eq!(app.world().get::<DropdownPopup>(popup).unwrap().owner, d);
+    assert!(app.world().get::<ChildOf>(popup).is_none());
     assert!(app.world().get::<GlobalZIndex>(popup).is_some());
 
     kit_click(app.world_mut(), rows[2].1);
@@ -654,4 +655,110 @@ fn label_colours_split_between_the_hud_and_the_kit() {
     assert_eq!(colour(&app, hud), theme.text_on);
     assert_eq!(colour(&app, kit), theme.kit_text_on);
     assert_eq!(colour(&app, lit), theme.text_on);
+}
+
+/// A dropdown whose field sits inside a scrolling, clipping container (a settings
+/// page): returns (container, field).
+fn dropdown_in_scrolling_page(app: &mut App, options: &[&str]) -> (Entity, Entity) {
+    let theme = app.world().resource::<Theme>().clone();
+    let page = app
+        .world_mut()
+        .spawn(Node { width: Val::Px(300.0), height: Val::Px(60.0), overflow: Overflow::scroll_y(), flex_direction: FlexDirection::Column, ..default() })
+        .id();
+    let d = app.world_mut().spawn((dropdown(&theme, options, 0, 200.0), ChildOf(page))).id();
+    app.update();
+    (page, d)
+}
+
+#[test]
+fn an_open_list_is_not_inside_a_clipping_ancestor() {
+    let mut app = app();
+    let (page, d) = dropdown_in_scrolling_page(&mut app, &["A", "B", "C"]);
+    kit_click(app.world_mut(), d);
+    app.update();
+    let popup = app.world_mut().query_filtered::<Entity, With<DropdownPopup>>().single(app.world()).unwrap();
+    // No parent at all, so nothing above it can clip it; the field's page does clip.
+    assert!(app.world().get::<ChildOf>(popup).is_none());
+    assert_ne!(app.world().get::<Node>(page).unwrap().overflow, Overflow::visible());
+    assert_eq!(app.world().get::<DropdownPopup>(popup).unwrap().owner, d);
+    // Its rows are still its own, so a press on one is "inside" the field.
+    let row = popup_rows(&mut app)[1].1;
+    assert_eq!(popup_of(app.world(), row), Some(d));
+    // Closing removes it with the rows.
+    kit_click(app.world_mut(), d);
+    app.update();
+    assert!(app.world_mut().query_filtered::<Entity, With<DropdownPopup>>().iter(app.world()).next().is_none());
+    // A field removed while open takes its list with it.
+    kit_click(app.world_mut(), d);
+    app.update();
+    app.world_mut().entity_mut(d).despawn();
+    app.update();
+    assert!(app.world_mut().query_filtered::<Entity, With<DropdownPopup>>().iter(app.world()).next().is_none());
+}
+
+#[test]
+fn outside_press_closes_a_list_of_a_field_in_a_scrolling_page() {
+    let mut app = app();
+    let theme = app.world().resource::<Theme>().clone();
+    let other = app.world_mut().spawn(label(&theme, "elsewhere")).id();
+    let (page, d) = dropdown_in_scrolling_page(&mut app, &["A", "B"]);
+    kit_click(app.world_mut(), d);
+    app.update();
+    let row = popup_rows(&mut app)[0].1;
+    press(app.world_mut(), &[row]);
+    assert!(app.world().get::<Dropdown>(d).unwrap().open, "a press on a row is inside");
+    assert_eq!(app.world().resource::<KitFocus>().0, Some(d), "a press on a row keeps the field focused");
+    press(app.world_mut(), &[page]);
+    app.update();
+    assert!(!app.world().get::<Dropdown>(d).unwrap().open, "a press on the page (not the field) is outside");
+    kit_click(app.world_mut(), d);
+    app.update();
+    press(app.world_mut(), &[other]);
+    app.update();
+    assert!(!app.world().get::<Dropdown>(d).unwrap().open);
+    assert!(popup_rows(&mut app).is_empty());
+}
+
+#[test]
+fn a_row_click_selects_exactly_once_for_a_field_in_a_scrolling_page() {
+    use bevy::picking::events::PointerClick;
+    use bevy::picking::pointer::{Location, PointerButton};
+    let mut app = app();
+    let (_page, d) = dropdown_in_scrolling_page(&mut app, &["A", "B", "C"]);
+    kit_click(app.world_mut(), d);
+    app.update();
+    let row = popup_rows(&mut app)[2].1;
+    let camera = app.world_mut().spawn_empty().id();
+    app.world_mut().trigger(PointerClick {
+        entity: row,
+        pointer: bevy::picking::events::Pointer::new(
+            PointerId::Mouse,
+            Location { target: bevy::camera::NormalizedRenderTarget::None { width: 1, height: 1 }, position: Vec2::ZERO },
+        ),
+        button: PointerButton::Primary,
+        hit: HitData::new(camera, 0.0, None, None),
+        duration: std::time::Duration::ZERO,
+        count: 1,
+    });
+    app.update();
+    let dd = app.world().get::<Dropdown>(d).unwrap();
+    assert_eq!((dd.selected, dd.open), (2, false));
+    assert_eq!(msgs::<DropdownChanged>(&app), 1, "one change, no reopen");
+    assert!(popup_rows(&mut app).is_empty());
+}
+
+#[test]
+fn list_placement_follows_the_field_at_every_scale_and_flips_near_the_bottom() {
+    // Field 100..140 physical px tall, list 160 px, window 1440 px high.
+    for inv in [1.0, 1.0 / 1.25, 1.0 / 1.333, 0.5] {
+        let (l, t, w) = popup_place(40.0, 100.0, 140.0, 200.0, 160.0, 1440.0, inv);
+        assert!((l - (40.0 * inv - 1.0)).abs() < 1e-3 && (w - (200.0 * inv + 2.0)).abs() < 1e-3);
+        assert!(t > 140.0 * inv, "below the field at inverse scale {inv}");
+        // Near the bottom it goes above, ending before the field starts.
+        let (_, t, _) = popup_place(40.0, 1350.0, 1390.0, 200.0, 160.0, 1440.0, inv);
+        assert!(t + 160.0 * inv < 1350.0 * inv, "above the field at inverse scale {inv}");
+        // With no room either way it stays below.
+        let (_, t, _) = popup_place(40.0, 20.0, 60.0, 200.0, 1500.0, 1440.0, inv);
+        assert!(t > 60.0 * inv);
+    }
 }

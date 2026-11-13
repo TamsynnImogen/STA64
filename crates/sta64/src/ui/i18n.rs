@@ -364,6 +364,8 @@ mod tests {
         "tab_bar",
         "text_field",
         "kit_text",
+        "act_button",
+        "off_button",
         "sprite_text_styled",
     ];
 
