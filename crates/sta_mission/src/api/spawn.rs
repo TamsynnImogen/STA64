@@ -81,7 +81,9 @@ pub(super) fn assign(c: &mut Ctx, actor: &EntityRef, edit: AttrEdit) -> bool {
     if !queue_action(c, actor.clone(), EntityAction::Attr(edit)) {
         return false;
     }
-    overlay_set(c, actor, attr, value);
+    if let Some(value) = value {
+        overlay_set(c, actor, attr, value);
+    }
     true
 }
 
@@ -390,11 +392,16 @@ fn dispatch(c: &mut Ctx, actor: EntityRef, action: EntityAction) -> bool {
         }
         EntityAction::Attr(attr) => {
             if c.alive(id).is_none() {
+                c.unsupported(&format!("{}: entity not alive", attr.label()));
                 return false;
             }
             let queued = super::edit_feedback::queue(c, attr.label(), attr.edit(id)).is_ok();
-            if queued {
-                overlay_set(c, &EntityRef::Existing(id), attr.label(), attr.overlay());
+            if !queued {
+                c.unsupported(&format!("{}: command could not be queued", attr.label()));
+            } else {
+                if let Some(value) = attr.overlay() {
+                    overlay_set(c, &EntityRef::Existing(id), attr.label(), value);
+                }
             }
             queued
         }

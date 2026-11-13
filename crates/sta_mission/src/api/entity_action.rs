@@ -74,13 +74,27 @@ impl AttrEdit {
     }
 
     /// What a read of the attribute shows until the sim's view does.
-    pub(super) fn overlay(&self) -> super::spawn::Overlay {
+    /// The value as the sim will hold it (its clamps applied), or `None` when the sim ignores the
+    /// assignment (a negative maximum hull), so a read-back never shows what the sim will not have.
+    pub(super) fn overlay(&self) -> Option<super::spawn::Overlay> {
         use super::spawn::Overlay::{Num, Text};
-        match self {
-            Self::MaxHull(v) | Self::HullValue(v) | Self::MaxCrew(v) | Self::Crew(v) | Self::MaxShields(v) | Self::Shields(v) | Self::Omega(v) => Num(*v),
+        Some(match self {
+            Self::MaxHull(v) if *v < 0.0 => return None,
+            Self::MaxHull(v) | Self::MaxCrew(v) | Self::MaxShields(v) => Num(v.clamp(0.0, 1e9)),
+            Self::HullValue(v) => Num(v.clamp(0.0, 1e9)),
+            Self::Shields(v) => Num(v.clamp(0.0, 1.0)),
+            Self::Crew(v) => Num(v.clamp(0.0, 1e9)),
+            Self::Omega(v) => Num(*v),
             Self::Heading(x, _) => Num(*x),
-            Self::Name(s) | Self::Race(s) => Text(s.clone()),
-        }
+            Self::Name(s) => {
+                let mut end = s.len().min(sta_sim::attrs::MAX_NAME_BYTES);
+                while !s.is_char_boundary(end) {
+                    end -= 1;
+                }
+                Text(s[..end].to_owned())
+            }
+            Self::Race(s) => Text(s.clone()),
+        })
     }
 
     /// The sim edit for the resolved unit.

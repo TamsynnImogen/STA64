@@ -210,7 +210,7 @@ pub enum Edit {
     AngularVelocity(EntityId, Fixed),
     /// Roots `Entity.maxHull =` (SIM-54): this unit's maximum hull. A negative
     /// value is accepted and ignored (the original keeps the old maximum);
-    /// zero and large values are accepted, capped at 1e9. The
+    /// zero (kept as the least positive maximum, so the unit stays hittable) and large values are accepted, capped at 1e9. The
     /// current hull is not rescaled or clamped, so it may exceed the maximum
     /// (read from the executable, static). Dying units and non-units are
     /// rejected. SCRIPT/BENCH only. Appended tag 31.
@@ -220,7 +220,8 @@ pub enum Edit {
     /// raised. Rejected for a unit with no crew pool. SCRIPT/BENCH only.
     /// Appended tag 32.
     MaxCrew(EntityId, Fixed),
-    /// Roots `Entity.hullValue =` / A2 `SetCurrentHealth` (SIM-54): the unit's
+    /// Roots `Entity.hullValue =` (SIM-54; A2 `SetCurrentHealth` and Roots `Entity.hull =` still send
+    /// [`Edit::Hull`], which clamps): the unit's
     /// current hull in points, with no upper clamp (it may exceed the maximum).
     /// An immortal unit ignores a lower value; zero or less leaves the least
     /// positive hull (the original does not destroy at 0, the next hit does).
@@ -237,7 +238,7 @@ pub enum Edit {
     Name(EntityId, String),
     /// A2 `SetRace` / Roots `Entity.race =` (SIM-54): this unit's race (the
     /// unit only; team, tech tree and AI are unchanged). The name must be a
-    /// race some unit definition carries, matched case-sensitively; anything
+    /// race some unit definition carries, matched case-insensitively and stored as the content spells it; anything
     /// else is rejected. SCRIPT/BENCH only. Appended tag 36.
     UnitRace(EntityId, String),
     /// Roots `Player.race =` (SIM-54): the seat's race, with the same name

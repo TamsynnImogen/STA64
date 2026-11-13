@@ -456,7 +456,7 @@ impl Sim {
         if record.version != 1 { return Err(SnapshotError::Corrupt("unknown order watch record version".into())); }
         let watch_rows = record.rows;
         let (record, rest): (crate::attrs::AttrsRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
-        let attrs = crate::attrs::Attrs::from_rec(record).ok_or_else(|| corrupt("attribute rows"))?;
+        let attrs = crate::attrs::Attrs::from_rec(record).map_err(|why| SnapshotError::Corrupt(why.into()))?;
         if !rest.is_empty() { return Err(SnapshotError::Corrupt("trailing bytes".into())); }
         if let Some(row) = b.economy.miners.iter().find(|row| row.5 > 4) {
             return Err(SnapshotError::Corrupt(format!("mining phase {} is not supported", row.5)));
@@ -517,8 +517,11 @@ impl Sim {
         let movement = Movement::from_rows(courses).ok_or_else(|| corrupt("courses"))?;
         {
             let v = attrs.view();
-            if v.names.iter().chain(&v.races).any(|(id, _)| units.get(*id).is_none()) {
-                return Err(SnapshotError::Corrupt("attribute entity does not exist".into()));
+            if v.names.iter().chain(&v.races).any(|(id, _)| !units.get(*id).is_some_and(|u| matches!(u.kind, EntityKind::Craft | EntityKind::Station))) {
+                return Err(SnapshotError::Corrupt("attribute entity is not a craft or station".into()));
+            }
+            if v.player_races.iter().any(|(p, _)| !b.players.iter().any(|(id, _)| id == p)) {
+                return Err(SnapshotError::Corrupt("attribute seat does not exist".into()));
             }
         }
         let weapons = Weapons::from_rec(b.weapons).ok_or_else(|| corrupt("weapons"))?;

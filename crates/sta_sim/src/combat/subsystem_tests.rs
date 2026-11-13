@@ -341,7 +341,7 @@ fn max_hull_is_per_unit_keeps_the_current_hull_and_ignores_a_negative_value() {
     assert!(script(&mut sim, Edit::MaxHull(id, Fixed::from_int(-5))), "accepted");
     assert_eq!(hull(&sim, id)[1], Fixed::from_int(1800), "and ignored");
     assert!(script(&mut sim, Edit::MaxHull(id, Fixed::from_int(0))));
-    assert_eq!(hull(&sim, id)[1], Fixed::ZERO);
+    assert_eq!(hull(&sim, id)[1], Fixed::from_bits(1), "least positive maximum: the unit stays hittable");
     assert!(!edit(&mut sim, PlayerId(1), Edit::MaxHull(id, Fixed::ONE)), "players cannot");
     assert!(!script(&mut sim, Edit::MaxHull(EntityId(999), Fixed::ONE)));
     // Heal restores to the unit's own maximum.
@@ -386,8 +386,8 @@ fn names_and_races_are_per_unit_validated_viewed_and_survive_snapshot_and_death(
     let before = sim.digest();
     assert!(script(&mut sim, Edit::Name(id, "Relay Station".into())));
     assert!(!script(&mut sim, Edit::UnitRace(id, "nobody".into())), "unknown race refused");
-    assert!(!script(&mut sim, Edit::UnitRace(id, "FX".into())), "case-sensitive");
-    assert!(script(&mut sim, Edit::UnitRace(id, "fx".into())));
+    assert!(!script(&mut sim, Edit::UnitRace(id, String::new())), "empty refused");
+    assert!(script(&mut sim, Edit::UnitRace(id, "FX".into())), "case-insensitive, stored as the content spells it");
     assert!(script(&mut sim, Edit::PlayerRace(PlayerId(1), "fx".into())));
     assert!(!script(&mut sim, Edit::PlayerRace(PlayerId(5), "fx".into())), "no such seat");
     let v = sim.view();

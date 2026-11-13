@@ -93,7 +93,7 @@ impl UserData for Entity {
             });
             vector(lua, v.unwrap_or_default())
         });
-        f.add_field_method_get("hull", |_, e| Ok(e.with(|_, u| u.map_or(0.0, |u| u.hull[0].to_f32() as f64))));
+        f.add_field_method_get("hull", |_, e| Ok(e.num("Entity.hullValue", |u| u.hull[0].to_f32() as f64)));
         // The attributes below read back what the script just assigned (`overlay_*`), else the view.
         f.add_field_method_get("hullValue", |_, e| Ok(e.num("Entity.hullValue", |u| u.hull[0].to_f32() as f64)));
         f.add_field_method_get("maxHull", |_, e| Ok(e.num("Entity.maxHull", |u| u.hull[1].to_f32() as f64)));

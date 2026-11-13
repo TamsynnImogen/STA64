@@ -100,17 +100,21 @@ impl Attrs {
         AttrsRec { version: 1, names: v.names, races: v.races, player_races: v.player_races }
     }
 
-    /// `None` for rows out of order or empty names/races.
-    pub(crate) fn from_rec(r: AttrsRec) -> Option<Attrs> {
+    /// Why a record is refused: an unknown version, rows out of order, an empty or over-long text.
+    pub(crate) fn from_rec(r: AttrsRec) -> Result<Attrs, &'static str> {
         if r.version != 1 {
-            return None;
+            return Err("unknown attribute record version");
         }
         if !r.player_races.windows(2).all(|w| w[0].0 < w[1].0) {
-            return None;
+            return Err("attribute rows out of order");
         }
-        Some(Attrs {
-            names: Table::from_rows(r.names)?,
-            races: Table::from_rows(r.races)?,
+        let texts_ok = r.names.iter().chain(&r.races).map(|(_, s)| s).chain(r.player_races.iter().map(|(_, s)| s));
+        if texts_ok.clone().any(|s| s.is_empty() || s.len() > MAX_NAME_BYTES) {
+            return Err("attribute text empty or too long");
+        }
+        Ok(Attrs {
+            names: Table::from_rows(r.names).ok_or("attribute rows out of order")?,
+            races: Table::from_rows(r.races).ok_or("attribute rows out of order")?,
             player_races: r.player_races,
         })
     }
@@ -148,7 +152,9 @@ impl crate::Sim {
             return false;
         }
         if max >= Fixed::ZERO {
-            self.units.get_mut(id).expect("live").hull[1] = max.min(Fixed::from_int(CAP as i32));
+            // The sim reads a positive maximum as "this unit can be hit", so zero keeps the
+            // least positive maximum (the original accepts 0).
+            self.units.get_mut(id).expect("live").hull[1] = max.max(Fixed::from_bits(1)).min(Fixed::from_int(CAP as i32));
         }
         true
     }
@@ -195,23 +201,24 @@ impl crate::Sim {
         true
     }
 
-    fn known_race(&self, race: &str) -> bool {
-        self.content.as_deref().is_some_and(|db| db.units().any(|d| d.race == race))
+    /// The content's spelling of a race some definition carries (matched case-insensitively
+    /// like the tech tree and `IsRace`); empty names match nothing.
+    fn known_race(&self, race: &str) -> Option<String> {
+        if race.is_empty() {
+            return None;
+        }
+        self.content.as_deref()?.units().find(|d| d.race.eq_ignore_ascii_case(race)).map(|d| d.race.clone())
     }
 
     pub(crate) fn edit_unit_race(&mut self, id: EntityId, race: &str) -> bool {
-        if self.script_unit(id).is_none() || !self.known_race(race) {
-            return false;
-        }
-        self.attrs.set_race(id, race);
+        let Some(race) = self.known_race(race).filter(|_| self.script_unit(id).is_some()) else { return false };
+        self.attrs.set_race(id, &race);
         true
     }
 
     pub(crate) fn edit_player_race(&mut self, p: PlayerId, race: &str) -> bool {
-        if !self.players.iter().any(|(id, _)| *id == p) || !self.known_race(race) {
-            return false;
-        }
-        self.attrs.set_player_race(p, race);
+        let Some(race) = self.known_race(race).filter(|_| self.players.iter().any(|(id, _)| *id == p)) else { return false };
+        self.attrs.set_player_race(p, &race);
         true
     }
 }
