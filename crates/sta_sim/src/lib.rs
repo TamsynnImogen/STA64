@@ -49,6 +49,8 @@ pub mod specials;
 pub mod spatial;
 pub mod spawn;
 pub mod start;
+mod start_effects;
+pub use start_effects::unsupported as unsupported_start_lifecycle;
 pub mod tech;
 pub mod victory;
 pub mod view;
@@ -136,6 +138,8 @@ pub struct Sim {
     victory: victory::Victory,
     /// Special energy and cloaks (SIM-14); in the digest once any exists.
     specials: specials::Specials,
+    /// Pending start-helper lifecycle steps (SIM-28); in the digest once any exist.
+    start_effects: start_effects::StartEffects,
     /// Path planner grids and fields (SIM-23): a memo, not in the digest.
     nav: nav::Cache,
 }
@@ -162,6 +166,7 @@ impl Sim {
             production: Default::default(),
             victory: Default::default(),
             specials: Default::default(),
+            start_effects: Default::default(),
             nav: Default::default(),
         }
     }
@@ -299,6 +304,7 @@ impl Sim {
 
     /// Move every unit one tick and close the tick with its view.
     fn advance(&mut self) -> TickOutput {
+        self.step_start_effects();
         self.hold_welding_builders();
         self.constrain_targets();
         let routed = self.route_orders();
@@ -433,6 +439,9 @@ impl Sim {
                 h.u64(id.0 as u64);
                 h.u64(owner.0 as u64);
             }
+        }
+        if !self.start_effects.is_empty() {
+            self.start_effects.hash_into(&mut h);
         }
         let crew_count = self.units.iter().filter(|unit| unit.crew.is_some()).count();
         if crew_count != 0 {

@@ -93,6 +93,9 @@ pub(crate) fn unit_def_for_profile(name: &str, odf: &Odf, phys: Option<&Odf>, pr
     let mut d = UnitDef::new(name.trim().trim_end_matches(".odf"), class);
     d.class = ClassLabel::new(class.trim());
     d.raw = std::sync::Arc::new(odf.clone());
+    d.hidden = crate::lifecycle::hidden(odf);
+    d.invalid_as_target = crate::lifecycle::invalid_as_target(odf);
+    d.life = crate::lifecycle::life_ticks(odf);
     d.confinement = crate::confinement::from_odf(odf, &file, warnings);
     let mut r = Reader { odf, file: &file, warnings };
 

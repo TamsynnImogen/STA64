@@ -563,6 +563,14 @@ fn hash_inner(db: &ContentDb, include_starting_rules: bool) -> u64 {
                     h.byte(0xf2);
                     h.fixed(u.crew_gain);
                 }
+                // SIM-28: only when set, so content without them keeps its hash.
+                if u.hidden || u.invalid_as_target || u.life.is_some() {
+                    h.byte(0xef);
+                    h.str("sta64.lifecycle.v1");
+                    h.byte(u.hidden as u8);
+                    h.byte(u.invalid_as_target as u8);
+                    h.u64(u.life.unwrap_or(0));
+                }
                 feature_bits(&mut h, u.features.as_ref(), &db.features);
                 // No new bytes for disabled/unsupported rules: old Native
                 // databases and genuine replay/save controls retain their hash.
@@ -621,6 +629,28 @@ fn hash_inner(db: &ContentDb, include_starting_rules: bool) -> u64 {
                     h.byte(r.one_time as u8);
                     h.byte(r.always_player as u8);
                     h.byte(r.always_ai as u8);
+                }
+                if let Some(r) = &w.replace {
+                    h.byte(0xf0);
+                    h.str("sta64.replace.v1");
+                    for on in r.instant {
+                        h.byte(on as u8);
+                    }
+                    h.u64(r.delay);
+                    h.u64(r.mode as u64);
+                    h.u64(r.required_officers.map_or(0, |n| n as u64 + 1));
+                    h.u64(r.entries.len() as u64);
+                    for e in &r.entries {
+                        h.str(e.condition.as_deref().unwrap_or(""));
+                        h.u64(e.classes.len() as u64);
+                        for c in &e.classes {
+                            h.str(&c.odf);
+                            h.u64(u64::from(c.weight));
+                            for f in c.offset {
+                                h.fixed(f);
+                            }
+                        }
+                    }
                 }
                 feature_bits(&mut h, w.features.as_ref(), &db.features);
             }

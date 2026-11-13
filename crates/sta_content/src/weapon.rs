@@ -59,6 +59,7 @@ pub fn weapon_def(name: &str, odf: &Odf, ordnance: Option<&Odf>, warnings: &mut 
     let mut d = WeaponDef::new(name.trim().trim_end_matches(".odf"), &class, kind);
     d.class = ClassLabel::new(&class);
     d.raw = std::sync::Arc::new(odf.clone());
+    d.replace = crate::lifecycle::replace_def(odf);
 
     let mut r = Reader { odf, file: &file, warnings };
     d.range = r.fixed("range");
