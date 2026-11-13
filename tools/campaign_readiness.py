@@ -320,6 +320,8 @@ def converted_status(r):
         return "runtime error", one_line(real[0])
     if r.get("ended") is not None:
         return ("ended: won" if r["ended"] else "ended: lost"), ""
+    if r.get("end_blocked"):
+        return "end blocked", r["end_blocked"]
     first = (r.get("problems") or [None])[0]
     stop = f"{first[0]} ({first[1]})" if first else ""
     if r.get("first_objective_tick") is not None:
@@ -342,6 +344,10 @@ def converted_funnel(rows):
         n["steps"] += r.get("steps_run", 0) > 0
         n["objective"] += r.get("first_objective_tick") is not None
         n["ended"] += stage.startswith("ended")
+        n["blocked_end"] += stage == "end blocked"
+        # A playable candidate ends by its own rules with no unbound or
+        # raising call on the way (LUA-13).
+        n["candidate"] += stage.startswith("ended") and not r.get("problems")
         n["clean"] += not r.get("problems")
     return n
 
@@ -349,17 +355,17 @@ def converted_funnel(rows):
 def render_converted(rows, ticks, standin):
     n = converted_funnel(rows)
     out = [f"Converted Armada II missions, {ticks} ticks each, headless, stand-in host {'on' if standin else 'off'}", "",
-           "| missions | load and run | a rule held | a step ran | first objective issued | ended itself | no unbound/raising call |",
-           "|--:|--:|--:|--:|--:|--:|--:|",
-           f"| {n['missions']} | {n['loaded']} | {n['rules']} | {n['steps']} | {n['objective']} | {n['ended']} | {n['clean']} |", "",
-           "| mission | stage | rules held | steps run | last rule | last step | objective tick | first problem call |",
-           "|---|---|--:|--:|---|---|--:|---|"]
+           "| missions | load and run | a rule held | a step ran | first objective issued | ended itself | end blocked by a gap | no unbound/raising call | playable candidates |",
+           "|--:|--:|--:|--:|--:|--:|--:|--:|--:|",
+           f"| {n['missions']} | {n['loaded']} | {n['rules']} | {n['steps']} | {n['objective']} | {n['ended']} | {n['blocked_end']} | {n['clean']} | {n['candidate']} |", "",
+           "| mission | stage | rules held | steps run | last rule | last step | objective tick | first problem call | end |",
+           "|---|---|--:|--:|---|---|--:|---|---|"]
     for r in sorted(rows, key=lambda r: r["bzn"]):
         stage, stop = converted_status(r)
         first = (r.get("problems") or [None])[0]
         call = f"{first[0]} ({first[1]})" if first else "-"
         out.append(f"| {r['bzn'].rsplit('.', 1)[0]} | {stage} | {len(r['rules_held'])}/{r['rules']} | {r['steps_run']} | "
-                   f"{r.get('last_rule') or '-'} | {r.get('last_step') or '-'} | {'-' if r.get('first_objective_tick') is None else r['first_objective_tick']} | {call} |")
+                   f"{r.get('last_rule') or '-'} | {r.get('last_step') or '-'} | {'-' if r.get('first_objective_tick') is None else r['first_objective_tick']} | {call} | {stop if stage == 'end blocked' else stage if stage.startswith('ended') else '-'} |")
     ranked = collections.Counter()
     for r in rows:
         for name, _kind, _t, _w in r.get("problems") or []:

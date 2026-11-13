@@ -20,6 +20,7 @@ mod dll_objects;
 mod controls;
 mod handles;
 mod media;
+mod mission_end;
 mod native_camera;
 mod native_flow;
 mod native_presentation;
@@ -71,6 +72,7 @@ pub(super) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
     }
     a2.set("paths", paths)?;
     conditions::install(lua, ctx, &a2)?;
+    mission_end::install(lua, ctx, &a2)?;
     subsystems::install(lua, ctx, &a2)?;
     orders::install(lua, ctx, &a2)?;
     dll_objects::install(lua, ctx, &a2)?;

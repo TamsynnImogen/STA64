@@ -322,3 +322,56 @@ fn outcome_follows_lua_truthiness_and_unhooked_finish_is_no_win() {
     // A reference kept before the hook: the runtime's finished flag still ends it, as no win.
     assert!(!play("local finish = Mission.finish\nMMM.register(function() finish(Mission, true) end)\n").won);
 }
+
+fn run_end(script: &str, ticks: u64) -> (Option<MissionOutcome>, MissionEndState) {
+    let src = Arc::new(source().with("missions/syn_fed01.lua", script));
+    let book = CampaignBook::load(&*src, ShellLayout::Armada2);
+    let host = FakeHost(src);
+    let mut r = CampaignRunner::new(book);
+    let a = r.start(&host, "federation", 0, 1).unwrap();
+    let out = a.run(ticks);
+    let state = a.runtime().mission_end(a.sim().view().tick);
+    (out, state)
+}
+
+#[test]
+fn a2_end_calls_end_the_mission_once_time_is_past_their_time() {
+    let (won, _) = run_end("MMM.register(function(t) if t >= 1 then A2.SucceedMission(2.0, 0) end end)\n", 300);
+    let won = won.expect("ends");
+    assert!(won.won);
+    assert_eq!(won.delay, 0.0);
+    assert_eq!(won.tick, 61, "the first tick with mission time past 2.0 s");
+    let (lost, _) = run_end("MMM.register(function(t) if t >= 1 then A2.FailMission(1.0, nil) end end)\n", 300);
+    let lost = lost.expect("ends");
+    assert!(!lost.won);
+    assert_eq!(lost.tick, 31);
+}
+
+#[test]
+fn the_last_end_call_wins_until_the_mission_has_ended() {
+    let s = "A2.SucceedMission(1.0, 0)\nMMM.register(function(t) if t >= 0.5 then A2.FailMission(1.0, 'x') end end)\n";
+    let (o, _) = run_end(s, 300);
+    assert!(!o.unwrap().won);
+}
+
+#[test]
+fn an_end_decided_by_an_object_that_never_existed_is_blocked_not_a_loss() {
+    // Asking whether handle 0 is alive and failing the mission on the answer.
+    let s = "local done\nMMM.register(function(t) if t >= 1 and not done and not A2.IsAlive(0) then done = true; A2.FailMission(A2.GetTime(), 0) end end)\n";
+    let (o, state) = run_end(s, 300);
+    assert!(o.is_none(), "no outcome");
+    match state {
+        MissionEndState::Blocked(why) => assert!(why.contains("IsAlive") && why.contains("never existed"), "{why}"),
+        other => panic!("{other:?}"),
+    }
+    // The same end on a unit that existed and died is the mission's own.
+    let s = "local done\nMMM.register(function(t) if t >= 1 and not done then done = true; A2.FailMission(A2.GetTime(), 0) end end)\n";
+    assert!(!run_end(s, 300).0.unwrap().won);
+}
+
+#[test]
+fn a_script_with_a2_end_calls_has_a_win_event() {
+    let src = Arc::new(source().with("missions/syn_fed01.lua", "A2.SucceedMission(1, 0)\nA2.FailMission(1, 0)\n"));
+    let book = CampaignBook::load(&*src, ShellLayout::Armada2);
+    assert!(book.blocked().iter().all(|b| b.campaign != "federation" || b.index != 0), "{:?}", book.blocked());
+}

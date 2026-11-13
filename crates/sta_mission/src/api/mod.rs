@@ -42,8 +42,8 @@
 //! otherwise. Unbound names fall back to the runtime's permissive stubs, also
 //! as the fallback for unknown fields of bound objects.
 
-use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::cell::{Cell, RefCell};
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
@@ -226,15 +226,37 @@ pub(crate) struct Ctx {
     /// Orders and names the API accepted but could not carry out, by name.
     pub unsupported: BTreeMap<String, u32>,
     pub loaded_aips: Vec<(PlayerId, String)>,
+    /// The script's pending mission end (`SucceedMission` / `FailMission`).
+    pub mission_end: Option<MissionEnd>,
+    /// Every object id the view has shown, so a handle that never existed can
+    /// be told from one that died.
+    pub seen: BTreeSet<EntityId>,
+    /// The last condition query on an object that never existed: view tick
+    /// and call name (`SucceedMission` and `FailMission` are blocked when they
+    /// follow it closely).
+    pub never_existed: Cell<Option<(u64, &'static str)>>,
     pub playback: Playback,
     /// The view tick of the last `Hit` each object took (`A2.UnderAttack`).
     pub last_hit: BTreeMap<EntityId, u64>,
+}
+
+/// A requested mission end: `SucceedMission(seconds, text)` /
+/// `FailMission(seconds, text)`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MissionEnd {
+    /// Mission time (seconds) the end waits for; it happens once time is past it.
+    pub time: f64,
+    pub failed: bool,
+    /// Why the end cannot be taken as the mission's own decision.
+    pub blocked: Option<String>,
 }
 
 pub(crate) type Shared = Rc<RefCell<Ctx>>;
 
 impl Ctx {
     pub fn new(cfg: MissionConfig, seed: u64) -> Ctx {
+        let view = cfg.view.unwrap_or_default();
+        let seen = view.units.iter().map(|u| u.id).collect();
         Ctx {
             seat: cfg.seat.unwrap_or(PlayerId(0)),
             player_numbering: cfg.player_numbering,
@@ -242,7 +264,7 @@ impl Ctx {
             content: cfg.content,
             labels: cfg.labels,
             paths: cfg.paths,
-            view: cfg.view.unwrap_or_default(),
+            view,
             events: Vec::new(),
             commands: Vec::new(),
             seq: BTreeMap::new(),
@@ -264,8 +286,20 @@ impl Ctx {
             log: Vec::new(),
             unsupported: BTreeMap::new(),
             loaded_aips: Vec::new(),
+            mission_end: None,
+            seen,
+            never_existed: Cell::new(None),
             playback: Playback::default(),
             last_hit: BTreeMap::new(),
+        }
+    }
+
+    /// A condition query was asked about `id`: remember when it names an
+    /// object that never existed (0, never in a view), whose answer is then
+    /// a gap in the sim or the script, not something the mission decided.
+    pub fn note_query(&self, id: EntityId, call: &'static str) {
+        if self.unit(id).is_none() && !self.seen.contains(&id) {
+            self.never_existed.set(Some((self.view.tick, call)));
         }
     }
 
