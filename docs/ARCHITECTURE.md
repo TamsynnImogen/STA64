@@ -2,6 +2,8 @@
 
 ## Engine choice
 
+Recorded as [ADR 0001](adr/0001-engine-choice.md).
+
 **Bevy** for the client. Its renderer (wgpu) covers Vulkan, DirectX 12 and
 Metal from one codebase, which gives Linux, Windows, Apple Silicon and ARM64
 without per-platform renderers. The ECS fits an RTS with thousands of
@@ -52,6 +54,8 @@ traits. The seams between these crates are specified in
 [WORKPLAN.md](WORKPLAN.md), "Seams".
 
 ## Simulation rules
+
+Recorded as [ADR 0002](adr/0002-deterministic-simulation.md).
 
 - Fixed-point (`Fixed`, 32.32) for all sim state. No `f32`/`f64` in state.
 - Fixed tick rate (`TICK_HZ`); the renderer interpolates between ticks.
@@ -112,6 +116,8 @@ beside an M3D in the same mod wins.
 and provides the SOD, TGA, sprite-table and ODF readers.
 
 ## Legal boundary
+
+Recorded as [ADR 0003](adr/0003-clean-room-content-policy.md).
 
 - No original game binaries, art, audio, data or decompiled code in this
   repository.
