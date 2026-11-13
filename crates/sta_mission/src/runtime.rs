@@ -489,6 +489,12 @@ impl Controller for MissionRuntime {
             let mut c = self.inner.ctx.borrow_mut();
             c.view = view.clone();
             c.events = events.to_vec();
+            let tick = view.tick;
+            for e in events {
+                if let SimEvent::Hit { target, .. } = e {
+                    c.last_hit.insert(*target, tick);
+                }
+            }
             failures = api::process_edit_feedback(&mut c);
             api::process_spawns(&mut c);
         }

@@ -106,11 +106,6 @@ pub(super) fn install(lua: &Lua, env: &Env, table: &Table) -> mlua::Result<()> {
     table.set("GetAttackLocation", def(lua, env, "GetAttackLocation", &["hh"], |_, e, _, _| {
         Err(e.no_data("GetAttackLocation", "the world view carries no order target"))
     })?)?;
-    // Hull below maximum is not "attacked in the last seconds", so it is not offered.
-    table.set("UnderAttack", def(lua, env, "UnderAttack", &["hf"], |_, e, _, a| {
-        e.unit("UnderAttack", a[0].id())?;
-        Err(e.no_data("UnderAttack", "no recent-damage record in the world view"))
-    })?)?;
     table.set("GetAllyShipAttacks", def(lua, env, "GetAllyShipAttacks", &["ii"], |_, e, _, _| {
         Err(e.no_data("GetAllyShipAttacks", "AI attack statistics are not in the world view"))
     })?)?;
