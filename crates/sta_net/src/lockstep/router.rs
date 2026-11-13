@@ -7,12 +7,22 @@ use sta_sim::command::{Command, CommandRouter};
 
 use super::transport::{Destination, Incoming, Transport, TransportError};
 use crate::proto::{
+    MAX_SEATS,
     MAX_SCHEDULE_PER_TURN, Action, DesyncNotice, DropChoice, Message, Occupant, ProtoError, Scheduled, Start, TickDigest,
     TurnCommands, TurnConfig,
 };
 
 /// Turns of digests a router keeps for comparison (docs/NET.md, 3.1).
 pub const DIGESTS_KEPT: usize = 64;
+
+/// Records one seat may have queued ahead of the turn this peer will run
+/// next. An honest peer leads by at most its delay (30) plus ours (30) plus
+/// the extended lead of a drop; a seat past this is flooding (NET-03: a
+/// hostile peer must not grow the queue without bound).
+pub const MAX_QUEUED_TURNS: usize = 128;
+
+/// Unread events kept; later ones are dropped.
+pub const MAX_EVENTS: usize = 1024;
 
 /// Why a received message was not applied. The message's sender is faulted:
 /// a real transport disconnects it, and the sim stalls on its seat until the
@@ -39,6 +49,8 @@ pub enum RouterError {
     /// A record after the seat's `last_turn` (it was dropped), or from a
     /// seat already faulted.
     SeatClosed(PlayerId),
+    /// The seat is more than [`MAX_QUEUED_TURNS`] records ahead of this peer.
+    TooFarAhead(PlayerId),
 }
 
 impl std::fmt::Display for RouterError {
@@ -55,6 +67,9 @@ impl std::fmt::Display for RouterError {
                 write!(f, "player {}: seq {seq} after {last}", player.0)
             }
             RouterError::SeatClosed(s) => write!(f, "seat {} is closed", s.0),
+            RouterError::TooFarAhead(s) => {
+                write!(f, "seat {} is too many turns ahead", s.0)
+            }
         }
     }
 }
@@ -382,11 +397,19 @@ impl LockstepRouter {
         }
     }
 
+    /// Records an event, up to [`MAX_EVENTS`] unread ones: a hostile peer
+    /// that provokes errors cannot grow the list without bound.
+    fn note(&mut self, e: RouterEvent) {
+        if self.events.len() < MAX_EVENTS {
+            self.events.push(e);
+        }
+    }
+
     // ---- sending ----------------------------------------------------------
 
     fn send(&mut self, to: Destination, msg: &Message) {
         if let Err(e) = self.transport.send(to, msg) {
-            self.events.push(RouterEvent::Transport(e));
+            self.note(RouterEvent::Transport(e));
         }
     }
 
@@ -395,7 +418,7 @@ impl LockstepRouter {
     }
 
     fn reject(&mut self, c: &Command, why: &'static str) {
-        self.events.push(RouterEvent::LocalRejected {
+        self.note(RouterEvent::LocalRejected {
             player: c.player,
             seq: c.seq,
             why,
@@ -448,15 +471,15 @@ impl LockstepRouter {
             match self.transport.poll() {
                 Ok(Some(Incoming { from, msg })) => {
                     if let Err(error) = self.receive(from, msg) {
-                        self.events.push(RouterEvent::Protocol { from, error });
+                        self.note(RouterEvent::Protocol { from, error });
                     }
                 }
                 Ok(None) => break,
                 Err(TransportError::Closed) => {
-                    self.events.push(RouterEvent::Transport(TransportError::Closed));
+                    self.note(RouterEvent::Transport(TransportError::Closed));
                     break;
                 }
-                Err(e) => self.events.push(RouterEvent::Transport(e)),
+                Err(e) => self.note(RouterEvent::Transport(e)),
             }
         }
     }
@@ -478,14 +501,14 @@ impl LockstepRouter {
                 // for that turn; the notice carries both. Compare it as if
                 // it had arrived in a record, and keep both for the sidecar.
                 self.compare(from, notice.ours);
-                if notice.slot != self.me {
+                if notice.slot != self.me && self.ours.contains_key(&notice.theirs.tick) {
                     self.seen
                         .entry(notice.theirs.tick)
                         .or_default()
                         .entry(notice.slot)
                         .or_insert(notice.theirs.digest);
                 }
-                self.events.push(RouterEvent::PeerDesync { from, notice });
+                self.note(RouterEvent::PeerDesync { from, notice });
                 self.peer_desync.get_or_insert((from, notice));
                 Ok(())
             }
@@ -545,6 +568,9 @@ impl LockstepRouter {
         if seat.faulted || seat.last_turn.is_some_and(|l| rec.turn > l) {
             return Err(RouterError::SeatClosed(from));
         }
+        if seat.queue.len() >= MAX_QUEUED_TURNS {
+            return Err(RouterError::TooFarAhead(from));
+        }
         if rec.turn != seat.next_turn {
             return Err(RouterError::OutOfOrder {
                 slot: from,
@@ -585,10 +611,14 @@ impl LockstepRouter {
     // ---- digests ----------------------------------------------------------
 
     fn compare(&mut self, slot: PlayerId, theirs: TickDigest) {
-        self.seen
-            .entry(theirs.tick)
-            .or_default()
-            .insert(slot, theirs.digest);
+        // Only ticks this peer has digests for are kept, so a hostile peer
+        // cannot grow the map by naming ticks.
+        if self.ours.contains_key(&theirs.tick) {
+            self.seen
+                .entry(theirs.tick)
+                .or_default()
+                .insert(slot, theirs.digest);
+        }
         match self.ours.get(&theirs.tick) {
             Some(&d) if d != theirs.digest => {
                 let notice = DesyncNotice {
@@ -604,7 +634,7 @@ impl LockstepRouter {
                     self.desync = Some(notice);
                 }
                 if first {
-                    self.events.push(RouterEvent::Desync(notice));
+                    self.note(RouterEvent::Desync(notice));
                     self.send(Destination::All, &Message::Desync(notice));
                 }
             }
@@ -612,6 +642,10 @@ impl LockstepRouter {
             None => {
                 let newest = self.ours.keys().next_back().copied();
                 if newest.is_none_or(|n| theirs.tick > n) {
+                    // Bounded: at most a window of ticks for every seat.
+                    if self.unchecked.len() >= DIGESTS_KEPT * MAX_SEATS {
+                        self.unchecked.remove(0);
+                    }
                     self.unchecked.push((slot, theirs));
                 }
             }
@@ -710,7 +744,7 @@ impl CommandRouter for LockstepRouter {
             return Some(cmds.clone());
         }
         if turn != self.next_turn {
-            self.events.push(RouterEvent::OutOfSequence {
+            self.note(RouterEvent::OutOfSequence {
                 asked: turn,
                 expected: self.next_turn,
             });
@@ -776,13 +810,13 @@ impl LockstepRouter {
                 slot,
                 last_turn,
                 then,
-            } => self.events.push(RouterEvent::SeatDropped {
+            } => self.note(RouterEvent::SeatDropped {
                 slot: *slot,
                 last_turn: *last_turn,
                 then: then.clone(),
             }),
         }
-        self.events.push(RouterEvent::Scheduled {
+        self.note(RouterEvent::Scheduled {
             turn,
             change: s.clone(),
         });
