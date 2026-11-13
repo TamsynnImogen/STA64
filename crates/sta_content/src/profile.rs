@@ -164,13 +164,32 @@ impl Profile {
                 construction_rigs: true,
                 weapon_shot_timing: true,
                 start_fire_hold: true,
+                // SIM-36: the Roots engine (also running STA2 Classic, CON-43).
+                attack_buffer_roots: true,
+                attack_opportunity_fire: true,
+                target_score: true,
+                idle_assist: true,
+                assist_high_autonomy_only: true,
                 ..off
             },
             // Stock A2: plain rules, turrets, point-defence cycles and the
             // original shot timing. `pd_energy` stays off until a HUD button
             // can toggle point defence (UI-31); then SIM-37's one-line flip:
             // `Sta2Classic` `pd_energy`, `Fo4` `pd_energy` + `pd_debt_timer`.
-            Profile::Sta2Classic => Features { turrets: true, point_defense_cycles: true, weapon_shot_timing: true, start_fire_hold: true, crew_loss_on_hit: true, ..off },
+            Profile::Sta2Classic => Features {
+                turrets: true,
+                point_defense_cycles: true,
+                weapon_shot_timing: true,
+                start_fire_hold: true,
+                crew_loss_on_hit: true,
+                // SIM-36: stock A2's attack approach and construction ships.
+                attack_combat_speed: true,
+                builder_hold_fire: true,
+                target_score: true,
+                idle_assist: true,
+                assist_on_ally_fire: true,
+                ..off
+            },
             // A1: its own class labels and health model, officers.
             Profile::Sta1Classic => Features { officer_capacity: true, a1_compat: true, ..off },
         }
@@ -425,7 +444,7 @@ fn read_ini_named(root: &Path, name: &str) -> Option<Ini> {
 }
 
 /// Switch names, in `Features` declaration order.
-pub const FEATURE_NAMES: [&str; 27] = [
+pub const FEATURE_NAMES: [&str; 35] = [
     "weapon_damage_controls",
     "point_defense_cycles",
     "fire_arcs",
@@ -453,6 +472,14 @@ pub const FEATURE_NAMES: [&str; 27] = [
     "weapon_shot_timing",
     "start_fire_hold",
     "crew_loss_on_hit",
+    "attack_buffer_roots",
+    "attack_combat_speed",
+    "attack_opportunity_fire",
+    "builder_hold_fire",
+    "target_score",
+    "idle_assist",
+    "assist_high_autonomy_only",
+    "assist_on_ally_fire",
 ];
 
 impl Features {
@@ -485,6 +512,14 @@ impl Features {
             "weapon_shot_timing" => &mut self.weapon_shot_timing,
             "start_fire_hold" => &mut self.start_fire_hold,
             "crew_loss_on_hit" => &mut self.crew_loss_on_hit,
+            "attack_buffer_roots" => &mut self.attack_buffer_roots,
+            "attack_combat_speed" => &mut self.attack_combat_speed,
+            "attack_opportunity_fire" => &mut self.attack_opportunity_fire,
+            "builder_hold_fire" => &mut self.builder_hold_fire,
+            "target_score" => &mut self.target_score,
+            "idle_assist" => &mut self.idle_assist,
+            "assist_high_autonomy_only" => &mut self.assist_high_autonomy_only,
+            "assist_on_ally_fire" => &mut self.assist_on_ally_fire,
             _ => return None,
         })
     }
@@ -692,7 +727,12 @@ mod tests {
                 "multi_yard_builds",
                 "construction_rigs",
                 "weapon_shot_timing",
-                "start_fire_hold"
+                "start_fire_hold",
+                "attack_buffer_roots",
+                "attack_opportunity_fire",
+                "target_score",
+                "idle_assist",
+                "assist_high_autonomy_only"
             ]
         );
         assert!(!Profile::Fo4.features().pay_on_queue);
@@ -700,7 +740,18 @@ mod tests {
 
     #[test]
     fn defaults_table_sta2_classic() {
-        assert_eq!(on(&Profile::Sta2Classic.features()), ["point_defense_cycles", "turrets", "weapon_shot_timing", "start_fire_hold", "crew_loss_on_hit"]);
+        assert_eq!(on(&Profile::Sta2Classic.features()), [
+            "point_defense_cycles",
+            "turrets",
+            "weapon_shot_timing",
+            "start_fire_hold",
+            "crew_loss_on_hit",
+            "attack_combat_speed",
+            "builder_hold_fire",
+            "target_score",
+            "idle_assist",
+            "assist_on_ally_fire"
+        ]);
     }
 
     #[test]
