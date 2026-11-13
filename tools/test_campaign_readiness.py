@@ -30,6 +30,24 @@ class ReadinessTests(unittest.TestCase):
         f = cr.funnel(rows)
         self.assertEqual(f, {"missions": 7, "lua": 5, "runs": 3, "bound": 2, "working": 1})
 
+    def test_unsupported_call_stops_are_not_runtime_errors(self):
+        gap = "runtime error: A2.SetCrew is not available: no seam\nstack traceback"
+        pend = "A2.Stop: handle is still being built; use it after the next tick (handle 7)"
+        rows = [
+            row(errors=[gap], unsupported=["A2.SetCrew: no seam"]),                 # runs, bound, not working
+            row(errors=[pend], unsupported=["A2.Stop: handle is still being built; use it after the next tick"]),
+            row(errors=["A1.Foo is not available: x"]),                              # shape alone is enough
+            row(errors=[gap, "attempt to call a nil value"], unsupported=["A2.SetCrew: no seam"]),  # real error too
+            row(errors=["A2.Stop argument 1 must be an integer"], unsupported=["A2.Stop: handle is still being built; use it after the next tick"]),
+        ]
+        self.assertEqual(cr.funnel(rows), {"missions": 5, "lua": 5, "runs": 3, "bound": 3, "working": 0})
+        self.assertEqual(cr.mission_status(rows[0]), "stopped at an unsupported call")
+        self.assertEqual(cr.mission_status(rows[3]), "runtime error")
+
+    def test_defaults_come_from_environment_only(self):
+        self.assertEqual(set(cr.DEFAULTS), set(cr.ENV))
+        self.assertNotIn("/home/", pathlib.Path(cr.__file__).read_text())
+
     def test_parse_rows_skips_blank_lines(self):
         self.assertEqual(len(cr.parse_rows('{"a":1}\n\n{"a":2}\n')), 2)
 

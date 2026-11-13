@@ -26,6 +26,46 @@ pub fn classify(counted: &[(String, u32)]) -> (Counted, Counted) {
     counted.iter().cloned().partition(|(k, _)| k.starts_with(STUB_PREFIX))
 }
 
+/// Whether a runtime error is a stop at an unsupported call: the call raised
+/// `A1.<Name>|A2.<Name> is not available: ...` (bound call with no seam or
+/// data), or the error text carries the full text of a counted `unsupported()`
+/// entry (calls that raise their counted reason, e.g. an order sent to a
+/// handle that is still being built).
+pub fn is_unsupported_stop(error: &str, unsupported: &[(String, u32)]) -> bool {
+    if unsupported.iter().any(|(k, _)| !k.starts_with(STUB_PREFIX) && error.contains(k.as_str())) {
+        return true;
+    }
+    let mut rest = error;
+    while let Some(at) = rest.find(" is not available") {
+        let head = &rest[..at];
+        let start = head.rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '.')).map_or(0, |i| i + 1);
+        let name = &head[start..];
+        if name.starts_with("A1.") || name.starts_with("A2.") {
+            return true;
+        }
+        rest = &rest[at + 1..];
+    }
+    false
+}
+
+/// `v` as a JSON string literal (quotes, backslash and control characters escaped).
+pub fn json_string(v: &str) -> String {
+    let mut o = String::from("\"");
+    for c in v.chars() {
+        match c {
+            '"' => o.push_str("\\\""),
+            '\\' => o.push_str("\\\\"),
+            '\n' => o.push_str("\\n"),
+            '\r' => o.push_str("\\r"),
+            '\t' => o.push_str("\\t"),
+            c if (c as u32) < 0x20 => o.push_str(&format!("\\u{:04x}", c as u32)),
+            c => o.push(c),
+        }
+    }
+    o.push('"');
+    o
+}
+
 /// What one mission did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MissionProbe {
@@ -44,6 +84,7 @@ pub struct MissionProbe {
     pub ticks: u64,
     /// `Some(won)` when the script ended the mission within the horizon.
     pub ended: Option<bool>,
+    /// Every runtime error, including the ones that are unsupported-call stops.
     pub errors: Vec<String>,
     pub unbound: Vec<(String, u32)>,
     pub unsupported: Vec<(String, u32)>,
@@ -54,56 +95,50 @@ impl MissionProbe {
     pub fn resolves(&self) -> bool {
         self.kind == "lua"
     }
-    /// (b) loaded and ran the horizon (or ended itself) without an error.
+    /// Errors that are not unsupported-call stops (see [`is_unsupported_stop`]).
+    pub fn real_errors(&self) -> Vec<&String> {
+        self.errors.iter().filter(|e| !is_unsupported_stop(e, &self.unsupported)).collect()
+    }
+    /// Errors raised by a call that is bound but unsupported.
+    pub fn unsupported_stops(&self) -> Vec<&String> {
+        self.errors.iter().filter(|e| is_unsupported_stop(e, &self.unsupported)).collect()
+    }
+    /// (b) loaded and ran the horizon (or ended itself) with no error other
+    /// than a stop at an unsupported call (those raise by design).
     pub fn runs(&self) -> bool {
-        self.resolves() && self.started && self.errors.is_empty()
+        self.resolves() && self.started && self.real_errors().is_empty()
     }
     /// (c) runs and touched no unbound name.
     pub fn bound(&self) -> bool {
         self.runs() && self.unbound.is_empty()
     }
-    /// (d) bound and nothing it called is unsupported.
+    /// (d) bound, nothing it called is unsupported, and no unsupported call
+    /// stopped it.
     pub fn working(&self) -> bool {
-        self.bound() && self.unsupported.is_empty()
+        self.bound() && self.unsupported.is_empty() && self.unsupported_stops().is_empty()
     }
 
     /// One JSON object on one line (no serde dependency).
     pub fn to_json(&self) -> String {
-        fn s(v: &str) -> String {
-            let mut o = String::from("\"");
-            for c in v.chars() {
-                match c {
-                    '"' => o.push_str("\\\""),
-                    '\\' => o.push_str("\\\\"),
-                    '\n' => o.push_str("\\n"),
-                    '\r' => o.push_str("\\r"),
-                    '\t' => o.push_str("\\t"),
-                    c if (c as u32) < 0x20 => o.push_str(&format!("\\u{:04x}", c as u32)),
-                    c => o.push(c),
-                }
-            }
-            o.push('"');
-            o
-        }
         fn list(v: &[String]) -> String {
-            format!("[{}]", v.iter().map(|x| s(x)).collect::<Vec<_>>().join(","))
+            format!("[{}]", v.iter().map(|x| json_string(x)).collect::<Vec<_>>().join(","))
         }
         fn counted(v: &[(String, u32)]) -> String {
-            format!("[{}]", v.iter().map(|(k, n)| format!("[{},{}]", s(k), n)).collect::<Vec<_>>().join(","))
+            format!("[{}]", v.iter().map(|(k, n)| format!("[{},{}]", json_string(k), n)).collect::<Vec<_>>().join(","))
         }
         let ended = match self.ended {
             Some(true) => "true",
             Some(false) => "false",
             None => "null",
         };
-        let start_error = self.start_error.as_deref().map(s).unwrap_or_else(|| "null".into());
+        let start_error = self.start_error.as_deref().map(json_string).unwrap_or_else(|| "null".into());
         format!(
             "{{\"campaign\":{},\"index\":{},\"bzn\":{},\"kind\":{},\"script\":{},\"files\":{},\"started\":{},\"start_error\":{},\"ticks\":{},\"ended\":{},\"errors\":{},\"unbound\":{},\"unsupported\":{}}}",
-            s(&self.campaign),
+            json_string(&self.campaign),
             self.index,
-            s(&self.bzn),
-            s(&self.kind),
-            s(&self.script),
+            json_string(&self.bzn),
+            json_string(&self.kind),
+            json_string(&self.script),
             list(&self.files),
             self.started,
             start_error,
@@ -142,9 +177,13 @@ pub fn probe_mission(host: &VfsHost, book: &CampaignBook, campaign: &str, index:
     let mut progress = CampaignProgress::new(&open);
     progress.apply_give_all(&open);
     let mut runner = CampaignRunner::with_progress(open, progress);
+    // `started` is set as soon as the runner has started the mission, so a
+    // panic while running it is a started mission with a panic error.
+    let started = std::cell::Cell::new(false);
     let run = catch_unwind(AssertUnwindSafe(|| match runner.start(host, campaign, index, 1) {
         Err(e) => Err(e.to_string()),
         Ok(a) => {
+            started.set(true);
             let ended = a.run(ticks);
             let rt = a.runtime();
             Ok((a.sim().tick, ended.map(|o| o.won), rt.errors().to_vec(), rt.unsupported()))
@@ -152,7 +191,12 @@ pub fn probe_mission(host: &VfsHost, book: &CampaignBook, campaign: &str, index:
     }));
     match run {
         Err(_) => {
-            p.start_error = Some("panic while running".into());
+            p.started = started.get();
+            if p.started {
+                p.errors.push("panic while running".into());
+            } else {
+                p.start_error = Some("panic while starting".into());
+            }
         }
         Ok(Err(e)) => p.start_error = Some(e),
         Ok(Ok((tick, ended, errors, counted))) => {
@@ -219,7 +263,34 @@ mod tests {
     }
 
     #[test]
+    fn unsupported_call_stops_are_not_runtime_errors() {
+        let counted = vec![
+            ("A2.SetCrew: no crew edit in the sim seam".to_owned(), 1),
+            ("A2.Stop: handle is still being built; use it after the next tick".to_owned(), 1),
+            ("stub global Baz".to_owned(), 1),
+        ];
+        let gap = "runtime error: A2.SetCrew is not available: no crew edit in the sim seam\nstack traceback: ...";
+        let pending = "A2.Stop: handle is still being built; use it after the next tick (handle 1073741824)";
+        assert!(is_unsupported_stop(gap, &counted));
+        assert!(is_unsupported_stop(pending, &counted));
+        // Not counted, but the not-available shape names an A1/A2 call.
+        assert!(is_unsupported_stop("A1.Whatever is not available: x", &[]));
+        // Argument errors, plain Lua errors and stub names are real errors.
+        assert!(!is_unsupported_stop("A2.Stop argument 1 must be an unsigned integer handle", &counted));
+        assert!(!is_unsupported_stop("attempt to index a nil value (stub global Baz)", &counted));
+        assert!(!is_unsupported_stop("thing is not available", &counted));
+
+        let mut p = MissionProbe { kind: "lua".into(), started: true, errors: vec![gap.into()], unsupported: counted[..1].to_vec(), ..Default::default() };
+        assert!(p.runs() && p.bound() && !p.working());
+        p.unsupported.clear();
+        assert!(p.runs() && p.bound() && !p.working(), "the stop alone keeps it from working");
+        p.errors.push("attempt to call a nil value".into());
+        assert!(!p.runs());
+    }
+
+    #[test]
     fn json_escapes_and_nulls() {
+        assert_eq!(json_string("a\"\\b\u{1}"), "\"a\\\"\\\\b\\u0001\"");
         let p = MissionProbe { campaign: "c\"x".into(), kind: "none".into(), errors: vec!["a\nb".into()], ..Default::default() };
         let j = p.to_json();
         assert!(j.contains("\"campaign\":\"c\\\"x\""));

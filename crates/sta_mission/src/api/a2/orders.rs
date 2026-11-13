@@ -5,7 +5,10 @@
 //! the executable, static) unless marked otherwise:
 //!
 //! - A call whose unit handle is absent or dying does nothing (the engine
-//!   looks the handle up and returns). Here too: no command, no error. An
+//!   looks the handle up and returns). Here too: no command, no error. The
+//!   exception is a `BuildObject` handle that is still pending or whose spawn
+//!   failed (the engine would have a real object, or 0): that raises and is
+//!   counted, so a script that orders a unit in the tick it built it is seen. An
 //!   argument of the wrong shape is a Lua error before anything is queued.
 //! - `Goto` is the engine's GO command (GO_WARP when the bool is true) with a
 //!   path or an object; the trailing `int` is never read. `Stop`, `Attack`,
@@ -42,6 +45,7 @@ use sta_core::{EntityId, Fixed, PlayerId, Vec3};
 use sta_sim::command::{AlertState, Edit, Order};
 use sta_sim::view::{Relation, UnitView};
 
+use super::dll_objects;
 use crate::api::entity_ref::EntityRef;
 use crate::api::search::stem;
 use crate::api::{Shared, edit_feedback, pos_f64, spawn, to_vec3, vector};
@@ -241,8 +245,10 @@ impl Env {
         let Value::Table(paths) = a2.raw_get::<Value>("paths")? else {
             return Err(missing("A2.paths is missing".into()));
         };
-        let Value::Table(points) = paths.raw_get::<Value>(path)? else {
-            return Err(missing(format!("path '{path}' is not in A2.paths (the host fills it from the map)")));
+        let points = match dll_objects::lookup_path(&paths, path)? {
+            Ok(Some(t)) => t,
+            Ok(None) => return Err(missing(format!("path '{path}' is not in A2.paths (the host fills it from the map)"))),
+            Err(why) => return Err(missing(why)),
         };
         let mut out = Vec::new();
         for entry in points.sequence_values::<Table>() {
@@ -271,6 +277,17 @@ fn def(
     let env = env.clone();
     lua.create_function(move |lua, args: MultiValue| {
         let (overload, values) = parse(name, specs, &args)?;
+        // A `BuildObject` token that is still pending or whose spawn failed
+        // names no live object yet, unlike an absent real handle (a silent
+        // no-op): the script has to wait a tick, so raise and count.
+        for v in &values {
+            if let P::Handle(id) = v
+                && let Some(why) = dll_objects::token_problem(lua, id.0)
+            {
+                env.ctx.borrow_mut().unsupported(&format!("A2.{name}: {why}"));
+                return Err(mlua::Error::runtime(format!("A2.{name}: {why} (handle {})", id.0)));
+            }
+        }
         f(lua, &env, overload, &values)
     })
 }
@@ -409,7 +426,7 @@ fn nearest_enemy(env: &Env, a: &[P]) -> mlua::Result<Value> {
         if !seen {
             continue;
         }
-        let d = (p.0 - at.0).powi(2) + (p.2 - at.2).powi(2);
+        let d = (p.0 - at.0) * (p.0 - at.0) + (p.2 - at.2) * (p.2 - at.2);
         if best.is_none_or(|(b, id)| d < b || (d == b && u.id < id)) {
             best = Some((d, u.id));
         }

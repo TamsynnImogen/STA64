@@ -9,15 +9,17 @@
 
 use std::path::Path;
 
+use sta_mission::readiness::json_string;
+
 fn emit(label: &str, probes: Result<Vec<sta_mission::readiness::MissionProbe>, String>) {
     match probes {
         Ok(v) => {
             for p in v {
                 let j = p.to_json();
-                println!("{{\"install\":\"{label}\",{}", &j[1..]);
+                println!("{{\"install\":{},{}", json_string(label), &j[1..]);
             }
         }
-        Err(e) => println!("{{\"install\":\"{label}\",\"error\":{:?}}}", e),
+        Err(e) => println!("{{\"install\":{},\"error\":{}}}", json_string(label), json_string(&e)),
     }
 }
 

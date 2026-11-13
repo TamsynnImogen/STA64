@@ -1,6 +1,5 @@
 //! Exact A2 title calls: `ShowTitle`, `ShowSubtitle`, `RemoveTitle`,
-//! `RemoveSubtitle`; and the three `SetCommandWhat*VO` calls, which are bound
-//! but raise (see below).
+//! `RemoveSubtitle`. (The `SetCommandWhat*VO` calls live in `orders.rs`.)
 //!
 //! `ShowTitle(x, y, label, fadeIn)` and `ShowSubtitle(...)` return a message id
 //! (an `int`); the scripts keep it and pass it to `RemoveTitle(id, fadeOut)` /

@@ -93,6 +93,20 @@ impl State {
     }
 }
 
+/// Why a handle that is a `BuildObject` token cannot be used yet: still
+/// pending, or its spawn failed. `None` for resolved, unknown and real handles.
+pub(super) fn token_problem(lua: &Lua, raw: u32) -> Option<&'static str> {
+    if raw < TOKEN_BASE {
+        return None;
+    }
+    let st = lua.app_data_ref::<St>()?;
+    match st.borrow().token(raw) {
+        Token::Pending => Some("handle is still being built; use it after the next tick"),
+        Token::Failed => Some("handle names no object: spawn failed"),
+        Token::Id(_) | Token::Unknown => None,
+    }
+}
+
 fn arity(name: &str, args: &MultiValue, n: usize) -> mlua::Result<()> {
     if args.len() == n {
         Ok(())
@@ -173,6 +187,33 @@ fn path_error(c: &Shared, name: &str, why: String) -> mlua::Error {
     mlua::Error::runtime(why)
 }
 
+/// The table of `A2.paths[path]`: an exact name first, else the one key that
+/// matches ignoring ASCII case. `Ok(Err(why))` when several keys match
+/// case-insensitively (no deterministic winner), `Ok(Ok(None))` when none does.
+pub(super) fn lookup_path(paths: &Table, path: &str) -> mlua::Result<Result<Option<Table>, String>> {
+    if let Value::Table(t) = paths.raw_get::<Value>(path)? {
+        return Ok(Ok(Some(t)));
+    }
+    let mut found: Vec<(String, Table)> = Vec::new();
+    for pair in paths.pairs::<Value, Value>() {
+        if let (Value::String(k), Value::Table(t)) = pair?
+            && let Ok(k) = k.to_str()
+            && k.eq_ignore_ascii_case(path)
+        {
+            found.push((k.to_string(), t));
+        }
+    }
+    match found.len() {
+        0 => Ok(Ok(None)),
+        1 => Ok(Ok(found.pop().map(|(_, t)| t))),
+        _ => {
+            let mut names: Vec<String> = found.into_iter().map(|(k, _)| k).collect();
+            names.sort();
+            Ok(Err(format!("path '{path}' is ambiguous: A2.paths has {}", names.join(", "))))
+        }
+    }
+}
+
 /// Point `index` (0-based) of `A2.paths[path]`, a table the host fills from
 /// the map. `Ok(None)` when the path exists but has no such point.
 fn path_point(lua: &Lua, ctx: &Shared, name: &str, path: &str, index: i64) -> mlua::Result<Option<(f64, f64, f64)>> {
@@ -180,17 +221,11 @@ fn path_point(lua: &Lua, ctx: &Shared, name: &str, path: &str, index: i64) -> ml
     let Value::Table(paths) = a2.raw_get::<Value>("paths")? else {
         return Err(path_error(ctx, name, "A2.paths is missing".into()));
     };
-    let mut points = paths.raw_get::<Value>(path)?;
-    if !matches!(points, Value::Table(_)) {
-        for pair in paths.pairs::<Value, Value>() {
-            if let (Value::String(k), v @ Value::Table(_)) = pair?
-                && k.to_str().is_ok_and(|k| k.eq_ignore_ascii_case(path))
-            {
-                points = v;
-                break;
-            }
-        }
-    }
+    let points = match lookup_path(&paths, path)? {
+        Ok(Some(t)) => Value::Table(t),
+        Ok(None) => Value::Nil,
+        Err(why) => return Err(path_error(ctx, name, why)),
+    };
     let Value::Table(points) = points else {
         return Err(path_error(ctx, name, format!("path '{path}' is not in A2.paths (the host fills it from the map)")));
     };
@@ -249,7 +284,10 @@ fn nearest(c: &Ctx, q: &Search) -> Option<EntityId> {
             continue;
         }
         let p = pos_f64(u.pos);
-        let d = (q.center.0 - p.0).powi(2) + (q.center.2 - p.2).powi(2);
+        let d = {
+            let (dx, dz) = (q.center.0 - p.0, q.center.2 - p.2);
+            dx * dx + dz * dz
+        };
         if d <= best {
             best = d;
             found = Some(u.id);
@@ -277,7 +315,9 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
     // BuildObject(odf, team, object, dx, dy, dz): queue a SCRIPT spawn and
     // return a pending handle. Rules (exe): the path form places the object at
     // point `index` of the path with identity orientation and returns 0 when
-    // the path or the point does not exist; the object form places it at the
+    // the point does not exist. A path missing from `A2.paths` raises here and
+    // is counted (host data is missing); what the engine does for a missing
+    // path is not measured. The object form places it at the
     // object's frame offset by (dx, dy, dz). A failed creation returns 0.
     // Not measured: the object form's rotation convention, so a non-zero
     // offset raises (the stock call passes zeros). Heading is the spawn
@@ -587,7 +627,6 @@ fn seams(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()> {
     table.set("DamageWeapons", no_data_fn(lua, ctx, "DamageWeapons", "the sim has no per-subsystem damage")?)?;
     table.set("HideObject", no_data_fn(lua, ctx, "HideObject", "the world view and sim have no hidden-object state")?)?;
     table.set("ButItCanBeDerelicted", no_data_fn(lua, ctx, "ButItCanBeDerelicted", "the sim has no derelict state")?)?;
-    table.set("CraftCanRepair", no_data_fn(lua, ctx, "CraftCanRepair", "the sim has no per-craft repair switch")?)?;
     table.set("CraftCanRecrew", no_data_fn(lua, ctx, "CraftCanRecrew", "the sim has no per-craft recrew switch")?)?;
     table.set("SetName", no_data_fn(lua, ctx, "SetName", "the sim and view carry no per-object display name")?)?;
     table.set("SetPlanetCivPop", no_data_fn(lua, ctx, "SetPlanetCivPop", "the sim has no planet population edit")?)?;

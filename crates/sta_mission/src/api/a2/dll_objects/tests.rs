@@ -331,7 +331,7 @@ fn seam_gaps_raise_with_a_reason_and_are_counted() {
     let names = [
         "SetPosition", "SetShieldPercent", "SetMaxShields", "AllowAsTarget", "DamageEngines", "DamageSensors",
         "DamageLifeSupport", "DamageShieldGenerator", "DamageWeapons", "HideObject", "ButItCanBeDerelicted",
-        "CraftCanRepair", "CraftCanRecrew", "SetName", "SetPlanetCivPop", "SetAngularVelocity", "StuffIntoWormhole",
+        "CraftCanRecrew", "SetName", "SetPlanetCivPop", "SetAngularVelocity", "StuffIntoWormhole",
         "LinkWormholes", "SetWormholeDeleteOnTransport", "LoadCargoShip", "GetNearestShipyard", "CreateNewSiegeFleet",
     ];
     for name in names {
@@ -353,4 +353,57 @@ fn unresolved_and_failed_tokens_name_no_object() {
     assert!(rt.eval::<bool>("return A2.DoesNotExist(h)").unwrap());
     assert_eq!(rt.eval::<i64>("return A2.SetSpecialForcesFlag(h, true)").unwrap(), 0);
     assert!(rt.eval::<()>("A2.RemoveObject(h)").is_err());
+}
+
+#[test]
+fn orders_to_a_pending_or_failed_token_raise_and_are_counted() {
+    let s = scene();
+    // Pending: the spawn is queued but no tick delivered the receipt.
+    let sim = Sim::from_setup(&game(&s.db));
+    let cfg = MissionConfig { content: Some(s.db.clone()), view: Some((*sim.view()).clone()), ..MissionConfig::default() };
+    let rt = MissionRuntime::from_source_with(
+        "pending.lua",
+        "A2.paths.Q = { {x=1,y=0,z=0} }; h = A2.BuildObject('fx_cruiser', 0, 'Q', 0)",
+        3,
+        cfg,
+    );
+    for call in ["A2.Goto(h, 'Q', false, 0)", "A2.Stop(h, 0)", "A2.SetRedAlert(h)", "A2.GetImpulseSpeed(h)", "A2.SetImpulseSpeed(h, 1.0)"] {
+        let err = rt.eval::<()>(call).expect_err(call).to_string();
+        assert!(err.contains("still being built"), "{call}: {err}");
+    }
+    assert!(unsupported(&rt, "still being built") >= 4);
+    // A real but absent handle stays a silent no-op.
+    rt.eval::<()>("A2.Stop(123456, 0); A2.SetRedAlert(123456)").unwrap();
+
+    // Failed: the sim has no content, so it rejects the request.
+    let mut sim = Sim::new(3);
+    let cfg = MissionConfig { content: Some(s.db.clone()), view: Some((*sim.view()).clone()), ..MissionConfig::default() };
+    let mut rt = MissionRuntime::from_source_with(
+        "fail.lua",
+        "A2.paths.Q = { {x=1,y=0,z=0} }; h = A2.BuildObject('fx_cruiser', 0, 'Q', 0)",
+        3,
+        cfg,
+    );
+    let _ = advance(&mut rt, &mut sim);
+    let err = rt.eval::<()>("A2.Stop(h, 0)").expect_err("failed token").to_string();
+    assert!(err.contains("spawn failed"), "{err}");
+    assert_eq!(unsupported(&rt, "A2.Stop: handle names no object: spawn failed"), 1);
+}
+
+#[test]
+fn path_lookup_prefers_exact_then_a_unique_case_insensitive_match() {
+    let s = scene();
+    let rt = runtime(&s);
+    rt.eval::<()>("A2.paths.Ab = { {x=1,y=0,z=0} }; A2.paths.aB = { {x=2,y=0,z=0} }; A2.paths.Solo = { {x=3,y=0,z=0} }").unwrap();
+    // Exact name wins even when another key differs only by case.
+    assert_eq!(rt.eval::<f64>("return A2.GetLocation('Ab', 0).x").unwrap(), 1.0);
+    assert_eq!(rt.eval::<f64>("return A2.GetLocation('aB', 0).x").unwrap(), 2.0);
+    // One case-insensitive match is used, in both the order and object calls.
+    assert_eq!(rt.eval::<f64>("return A2.GetLocation('solo', 0).x").unwrap(), 3.0);
+    rt.eval::<()>("A2.Goto(a, 'solo', false, 0)").unwrap();
+    // Two case-insensitive matches and no exact one: an error, deterministically.
+    let err = rt.eval::<()>("A2.GetLocation('AB', 0)").expect_err("ambiguous").to_string();
+    assert!(err.contains("ambiguous"), "{err}");
+    let err = rt.eval::<()>("A2.Goto(a, 'AB', false, 0)").expect_err("ambiguous").to_string();
+    assert!(err.contains("ambiguous"), "{err}");
 }

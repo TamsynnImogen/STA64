@@ -392,10 +392,14 @@ STA64 bridge policy, not a new simulation team rule.
 
 How many campaign missions STA64 can run is one command (installs read at
 run time, absent ones skipped; the table and per-mission detail go to a
-directory outside the repository, `--detail-dir`):
+directory outside the repository, `--detail-dir`). No path is built in: the
+installs come from `--a1/--a2/--roots` or `STA64_TEST_A1_INSTALL`,
+`STA64_TEST_A2_STOCK_INSTALL`, `STA64_TEST_ROOTS_INSTALL` (an unset one is
+skipped), the detail directory from `--detail-dir` or
+`STA64_RESEARCH_DIR/campaign-readiness` (required):
 
 ```sh
-python3 tools/campaign_readiness.py [--a1 DIR] [--a2 DIR] [--roots DIR] [--ticks 300]
+python3 tools/campaign_readiness.py [--a1 DIR] [--a2 DIR] [--roots DIR] [--ticks 300] [--detail-dir DIR]
 ```
 
 It runs `crates/sta_mission/examples/campaign_readiness.rs` (the probe in
@@ -406,15 +410,21 @@ Evidence grade: measured on the runtime; the legacy columns are read from the
 executables, static. Each column is a subset of the one before:
 
 - **(a) Lua**: the mission resolves to a Lua script STA64 can load.
-- **(b) runs**: it loads and runs N ticks with no runtime error.
+- **(b) runs**: it loads and runs N ticks with no runtime error other than a
+  stop at an unsupported call. A bound call with no seam or data raises by
+  design (`A2.<Name> is not available: ...`, or a counted reason such as an
+  order sent to a handle that is still being built); an error whose text
+  carries such a call is an *unsupported-call stop*, not a runtime error
+  (`is_unsupported_stop` in `readiness.rs`, mirrored in the Python tool).
 - **(c) bound**: and the run touched no unbound name (a `stub global` /
   `stub field` fallback hit, see "Permissive fallback diagnostics").
 - **(d) working**: and nothing it called is bound-but-unsupported (the
-  runtime's counted `unsupported()` entries).
+  runtime's counted `unsupported()` entries) and no unsupported call stopped it.
 - **legacy: calls bound if converted** / **bound and working if converted**:
   for missions with only DLL rules, how many make only calls that are bound
   on the `A2` / `A1` table, and only bound calls that really work (A1: not
-  retained, always-raising; A2: not `no_data_fn`). Plumbing (script
+  retained, always-raising; A2: not `no_data_fn` or `raising`, nor one of the few `def` calls the
+  inventory lists as always raising). Plumbing (script
   variables, timers, rule machinery) is left out. Not a runnable result.
 
 A mission that ends itself before N ticks stops early, so it exercises fewer

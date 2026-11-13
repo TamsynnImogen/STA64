@@ -13,9 +13,12 @@ adds a static read of the legacy-DLL missions. Columns, each a subset of the
 one before it (a funnel):
 
   Lua        (a) the mission resolves to a Lua script STA64 can load
-  runs       (b) it loads and runs N ticks with no runtime error
+  runs       (b) it loads and runs N ticks with no runtime error other than
+             a stop at an unsupported call (a bound call with no seam or data
+             raises by design; see `is_unsupported_stop`)
   bound      (c) and the run touched no unbound name (no `stub global/field`)
-  working    (d) and nothing it called is bound-but-unsupported (counted)
+  working    (d) and nothing it called is bound-but-unsupported (counted) and
+             no unsupported call stopped it
 
 The "legacy" columns are not runnable results. For a mission with only DLL
 rules they count the engine calls its `.dsl` / `.drl` conditions make (read by
@@ -28,26 +31,36 @@ text, address or code. Detail (Markdown and JSON) goes to `--detail-dir`,
 outside the repository.
 
 Needs `objdump` and `llvm-undname` for the legacy columns (skipped with a note
-when missing) and the installs; an absent install is skipped.
+when missing) and the installs. Install roots and the detail directory come
+from options or environment variables, never from built-in paths:
+
+  --a1 / STA64_TEST_A1_INSTALL              Armada I install
+  --a2 / STA64_TEST_A2_STOCK_INSTALL        Armada II stock install
+  --roots / STA64_TEST_ROOTS_INSTALL        Fleet Operations Roots install
+  --detail-dir / STA64_RESEARCH_DIR         research directory (the report goes
+                                            to <dir>/campaign-readiness)
+
+An install with no option and no variable, or whose path is absent, is skipped.
 """
 
 import argparse
 import collections
 import json
 import os
+import re
 import subprocess
 import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-HEROIC = "/home/cedric/Games/Heroic"
-DEFAULTS = {
-    "a1": f"{HEROIC}/Star Trek Armada",
-    "a2": f"{HEROIC}/Star Trek Armada II (Stock)",
-    "roots": f"{HEROIC}/Star Trek Armada II Fleet Operations Roots",
+ENV = {
+    "a1": "STA64_TEST_A1_INSTALL",
+    "a2": "STA64_TEST_A2_STOCK_INSTALL",
+    "roots": "STA64_TEST_ROOTS_INSTALL",
 }
-DEFAULT_DETAIL = "/home/cedric/Projects/STA64-research/campaign-readiness"
+RESEARCH_ENV = "STA64_RESEARCH_DIR"
+DEFAULTS = {k: os.environ.get(v) for k, v in ENV.items()}
 
 LABELS = {
     "a1": "Armada I",
@@ -70,15 +83,42 @@ def parse_rows(text):
     return [json.loads(l) for l in text.splitlines() if l.strip()]
 
 
+STUB_PREFIX = "stub "
+
+
+def is_unsupported_stop(error, unsupported):
+    """Mirror of `sta_mission::readiness::is_unsupported_stop`: the error is a
+    stop at a bound-but-unsupported call (`A1.X`/`A2.X is not available`, or
+    the text of a counted `unsupported` entry), not a runtime error."""
+    for k, _ in unsupported:
+        if not k.startswith(STUB_PREFIX) and k in error:
+            return True
+    for m in re.finditer(r" is not available", error):
+        head = error[:m.start()]
+        name = re.search(r"[A-Za-z0-9_.]*$", head).group(0)
+        if name.startswith(("A1.", "A2.")):
+            return True
+    return False
+
+
+def split_errors(r):
+    """(real runtime errors, unsupported-call stops) of one mission row."""
+    real, stops = [], []
+    for e in r.get("errors") or []:
+        (stops if is_unsupported_stop(e, r.get("unsupported") or []) else real).append(e)
+    return real, stops
+
+
 def funnel(rows):
     """Counts of one install's mission rows: total, a, b, c, d (each a subset of the last)."""
     n = {"missions": 0, "lua": 0, "runs": 0, "bound": 0, "working": 0}
     for r in rows:
         n["missions"] += 1
         lua = r.get("kind") == "lua"
-        runs = lua and r.get("started") and not r.get("errors")
+        real, stops = split_errors(r)
+        runs = lua and r.get("started") and not real
         bound = runs and not r.get("unbound")
-        working = bound and not r.get("unsupported")
+        working = bound and not r.get("unsupported") and not stops
         n["lua"] += lua
         n["runs"] += bool(runs)
         n["bound"] += bool(bound)
@@ -139,10 +179,13 @@ def mission_status(r):
         return {"legacy": "legacy DLL only", "none": "no script"}.get(r.get("kind"), r.get("kind"))
     if not r.get("started"):
         return "does not start"
-    if r.get("errors"):
+    real, stops = split_errors(r)
+    if real:
         return "runtime error"
     if r.get("unbound"):
         return "unbound names"
+    if stops:
+        return "stopped at an unsupported call"
     if r.get("unsupported"):
         return "unsupported calls"
     return "working"
@@ -156,7 +199,7 @@ def one_line(s, n=160):
 def render_detail(by_install, legacy_by_install, ticks):
     """Per-mission Markdown."""
     out = ["# Campaign readiness, per mission", "",
-           f"Horizon {ticks} ticks, no player input. Statuses: working, unsupported calls, unbound names, "
+           f"Horizon {ticks} ticks, no player input. Statuses: working, unsupported calls, stopped at an unsupported call, unbound names, "
            "runtime error, does not start; legacy missions show the static counterpart.", ""]
     for install, rows in by_install.items():
         out += [f"## {label(install)}", ""]
@@ -164,7 +207,8 @@ def render_detail(by_install, legacy_by_install, ticks):
         if lua:
             out += ["| campaign | # | map | status | unbound | unsupported | error |", "|---|--:|---|---|--:|--:|---|"]
             for r in lua:
-                err = r["errors"][0] if r.get("errors") else (r.get("start_error") or "")
+                real, stops = split_errors(r)
+                err = (real or stops or [None])[0] or (r.get("start_error") or "")
                 out.append(f"| {r['campaign']} | {r['index'] + 1} | {r['bzn']} | {mission_status(r)} | "
                            f"{len(r['unbound'])} | {len(r['unsupported'])} | {one_line(err).replace('|', '/')} |")
             out.append("")
@@ -348,17 +392,22 @@ def legacy_calls(inv, drl, rows_by_install, roots, a2_root):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     for k in DEFAULTS:
-        ap.add_argument(f"--{k}", default=DEFAULTS[k], help=f"install root (default {DEFAULTS[k]!r}; skipped when absent)")
+        ap.add_argument(f"--{k}", default=DEFAULTS[k], help=f"install root (default: ${ENV[k]}; skipped when unset or absent)")
     ap.add_argument("--ticks", type=int, default=300)
-    ap.add_argument("--detail-dir", default=DEFAULT_DETAIL)
+    research = os.environ.get(RESEARCH_ENV)
+    ap.add_argument("--detail-dir", default=os.path.join(research, "campaign-readiness") if research else None,
+                    help=f"where the Markdown/JSON detail goes, outside the repository (default: ${RESEARCH_ENV}/campaign-readiness; required)")
     ap.add_argument("--no-legacy", action="store_true", help="skip the static legacy columns")
     args = ap.parse_args(argv)
+    if not args.detail_dir:
+        sys.exit(f"no detail directory: pass --detail-dir or set {RESEARCH_ENV} (the detail must stay outside the repository)")
     t0 = time.time()
 
     roots = {k: getattr(args, k) for k in DEFAULTS}
-    present = {k: v for k, v in roots.items() if os.path.isdir(v)}
+    present = {k: v for k, v in roots.items() if v and os.path.isdir(v)}
     for k in sorted(set(roots) - set(present)):
-        print(f"skipping {k}: {roots[k]} is absent", file=sys.stderr)
+        why = f"{roots[k]} is absent" if roots[k] else f"no --{k} and ${ENV[k]} is not set"
+        print(f"skipping {k}: {why}", file=sys.stderr)
     if not present:
         sys.exit("no install found")
     rows = run_probe(args, present)

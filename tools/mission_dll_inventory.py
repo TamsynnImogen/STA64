@@ -382,12 +382,9 @@ A2_ORDER_SIGNATURES = {
     "void AI_Attack(int, int)": "A2.AI_Attack",
     "void AI_Attack(int)": "A2.AI_Attack",
     "void AI_Attack(int, Vector3)": "A2.AI_Attack",
-    "int BuildObject(char *, int, char *, int)": "A2.BuildObject",
-    "int BuildObject(char *, int, int, float, float, float)": "A2.BuildObject",
     "void Attack(int, int, int)": "A2.Attack",
     "void Stop(int, int)": "A2.Stop",
     "void Colonize(int, int)": "A2.Colonize",
-    "void CraftCanRepair(int, bool)": "A2.CraftCanRepair",
     "void Mine(int, int)": "A2.Mine",
     "void Special_Attack(int, int, char const *)": "A2.Special_Attack",
     "void Special_Attack(int, char const *)": "A2.Special_Attack",
@@ -714,10 +711,19 @@ def a1_kinds(repo):
 A1_PARTIAL = {"Attack", "GetCrew"}
 
 
+# Calls bound through `def` (argument-validating) in orders.rs whose body
+# always raises-and-counts for a live unit, or for the content the stock
+# scripts use; the source scan below cannot see them. Keep in step with
+# api/a2/orders.rs: AI_Team_Load_AIP (no AIP runs), SetCommandWhatWhoParamVO
+# (a parameter has no order), GetAttackLocation (the unit radius is not in the
+# content, SIM-21 `radius` is zero).
+A2_RAISING_THROUGH_DEF = {"AI_Team_Load_AIP", "SetCommandWhatWhoParamVO", "GetAttackLocation"}
+
+
 def a2_raising(repo):
     """Names of A2 calls bound only to raise-and-count (no data behind them)."""
     base = os.path.join(repo, "crates/sta_mission/src/api/a2")
-    names = set()
+    names = set(A2_RAISING_THROUGH_DEF)
     try:
         files = sorted(f for f in os.listdir(base) if f.endswith(".rs") and f != "tests.rs")
     except OSError:

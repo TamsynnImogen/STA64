@@ -522,7 +522,7 @@ are not measured.
 ## Orders, AI, crew and team calls (`orders.rs`)
 
 DLL-named `A2.Goto Stop Attack AI_Attack Mine SetImpulseSpeed ResetImpulseSpeed
-GetImpulseSpeed SetRedAlert SetGreenAlert BuildObject GetNearestEnemy
+GetImpulseSpeed SetRedAlert SetGreenAlert GetNearestEnemy
 GetAttackLocation` and the `SetCommandWhat{Who,WhoParam,WhoWhere}VO` family.
 Every call uses the exact argument shapes of the DLL (overloads by argument
 type), strict validation, and the rules below, read from the executable's
@@ -546,20 +546,25 @@ constants. Orders are sent as the unit's owner; edits are SCRIPT edits.
   the rejection is counted as `A2.<Name>: simulation rejected edit`, so a
   mission sees the call succeed while the world does not change. `GetImpulseSpeed`
   returns the value this runtime last set, else the class `impulseSpeed`.
-- `BuildObject(odf, team, path, index)` and `(odf, team, reference, x, y, z)`
-  queue a spawn at the path's 0-based point (0 past the end) or the reference
-  unit's position (a non-zero local offset needs the reference's orientation
-  and raises, counted). It returns `0x40000000 + request`; `orders::install`
-  is installed last and wraps every `A2` function so that such a handle means
-  the built unit once the spawn receipt is in (existence queries say "no"
-  until then, other calls say why).
+- `BuildObject` lives in `dll_objects.rs` (next section). Its handle is a
+  token (`0x40000000 + request`); `dll_objects::finish`, installed last, wraps
+  every `A2` function so the token means the built unit once the spawn receipt
+  is in. An order of this file sent to a token that is still pending, or whose
+  spawn failed, raises and is counted (`A2.<Name>: handle is still being
+  built; use it after the next tick` / `handle names no object: spawn
+  failed`); an absent or dead real handle stays a silent no-op as in the
+  engine.
+- Path names are looked up exactly first, else by the one key that matches
+  ignoring case; two such keys are an error (`dll_objects::lookup_path`).
 - `GetNearestEnemy(unit, r)`: nearest enemy by XZ distance inside the square
   of half side `r` that can see the unit; 0 if none. `GetAttackLocation(a, b)`:
   the point of `a`'s bounding sphere (`UnitDef::radius`) toward `b`, or one
   radius along +x without `b`; raises when the radius is not in the content.
-- `SetCommandWhat...VO`: ATTACK, GO and MINE toward an object, and BUILD at a
-  position, map to orders; both objects must be live or nothing happens. The
-  voice flag is not measured and not applied. Other commands raise, counted.
+- `SetCommandWhat...VO` (bound here, not in `native_text.rs`): `WhatWhoVO` maps
+  GO, ATTACK and MINE toward an object to orders; `WhatWhoWhereVO` maps BUILD at
+  a position; both objects must be live or nothing happens. `WhatWhoParamVO`
+  raises (a parameter has no order); other commands raise, counted. The voice
+  flag is not measured and not applied.
 
 Raising and counted (no seam): `Patrol SearchAndDestroy Scout Colonize
 Special_Attack SetCommandMoveAutonomyLow PointAt SetCrew SetRace CraftCanRepair
@@ -584,8 +589,11 @@ from the stock scripts' constants; not measured otherwise.
 - `A2.BuildObject` (path form and object form) queues a SCRIPT spawn and
   returns a pending handle (`0x4000_0000 + request`, as `A1`). `finish` wraps
   every `A2` function so a token with a spawn receipt reaches it as the real
-  id; before the receipt it names no object. Path index out of range or an
-  unknown ODF returns 0 (exe; the ODF case is counted). The object form
+  id; before the receipt it names no object (existence queries say no; the
+  order calls of `orders.rs` raise and count). Path index out of range or an
+  unknown ODF returns 0 (exe for the index; the ODF case is counted); a path
+  missing from `A2.paths` raises and is counted (the engine's behaviour for a
+  missing path is not measured). The object form
   accepts only a zero offset (rotation convention not measured).
 - `A2.GetNearestObjectNearPosition` / `NearMe`: exe filters (radius < 0
   unlimited, team < 0 any, perceived flag, exclude handle); squared XZ
@@ -635,9 +643,7 @@ that are not DLL calls: `A2.EnterKeyDone(id)` (id of the queued `WaitForKey`),
   y, fadeIn]`; negative x means centred (client). `RemoveTitle|RemoveSubtitle
   (id, fade)` queue `RemoveTitle` and a `Call [id, fade]`, only for an id on
   screen, as the engine ignores others.
-- `SetCommandWhatWhoVO`, `SetCommandWhatWhoParamVO`, `SetCommandWhatWhoWhereVO`
-  are bound but raise and are counted: they write a unit command record the sim
-  does not have.
+- The `SetCommandWhat...VO` calls are in `orders.rs` (see above).
 
 Evidence: argument roles, the don't-wait inversion, the fade fields, id
 counters and the mission-over rule read from the executable, static. Not
