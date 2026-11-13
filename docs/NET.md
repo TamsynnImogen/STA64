@@ -320,6 +320,11 @@ joiner                         host
   divergence at *T* is seen about one turn plus one network trip after both
   peers have run *T*. NET-02's acceptance ("detected within 1 turn") is its
   own to measure against this.
+  *NET-02 as built:* the record a peer sends at the start of turn *T* (for
+  turn *T + delay*) carries its digest of the state at *T*'s first tick,
+  taken before *T* runs. A peer that finds a mismatch halts before sending
+  that record, so its `Desync` notice carries both digests and receivers
+  compare it like a record.
 - On a mismatch the peer:
   1. sends `Desync { slot, ours, theirs }` to everyone;
   2. writes its **replay** (`sta_sim::replay`, the same `Recorder` log it has
@@ -357,6 +362,13 @@ joiner                         host
   last record before it, and puts `Action::Drop { slot, last_turn, then }` in
   its record. Every peer counts that seat's records up to `last_turn` and has
   no others.
+  *NET-02 amendment.* The host is itself stalled on that seat, so its next
+  record cannot wait for the next turn boundary, and a peer stalled on the
+  seat cannot read the record that releases it by running turns. So the host
+  sends the record carrying the `Drop` at once, a turn beyond its usual lead
+  (`LockstepRouter::extend_lead`; a sender's lead may be any size, 3.2), and a
+  receiver takes a `Drop` into account when the host's record arrives, not
+  when its turn is reached. `last_turn` is final, so this is safe.
 - **What a drop does to the sim** must be in the command log, or the replay
   will not reproduce it. AI takeover is: the host's AI sends that seat's
   commands from `last_turn + 1`. Elimination is not yet: no `Command`

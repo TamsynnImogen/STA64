@@ -18,6 +18,52 @@ pub struct Rules {
     starts: Vec<StartRule>,
     /// `RTS_CFG.h`'s path-planner block, when the header has any of its keys.
     pathing: Option<PathingRules>,
+    /// `RTS_CFG.h`'s default craft autonomy, when the header sets either key.
+    autonomy: Option<AutonomyRules>,
+}
+
+/// The autonomy a new craft starts with (CON-46, D9), from `RTS_CFG.h`:
+/// `CRAFT_DEFAULT_MOVEMENT_AUTONOMY` and `CRAFT_DEFAULT_SPECIALWEAPON_AUTONOMY`,
+/// 0 low, 1 medium, 2 high. An absent key reads as the engine's own default,
+/// movement 1 and special weapon 0 (read from the executable, static). The
+/// installs set 1 and 2 (Roots, Fleet Ops 4.0), 1 and 1 (Classic Enhanced)
+/// and nothing (plain Classic): read from the data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AutonomyRules {
+    pub movement: u8,
+    pub special_weapon: u8,
+}
+
+impl Default for AutonomyRules {
+    fn default() -> Self {
+        AutonomyRules { movement: 1, special_weapon: 0 }
+    }
+}
+
+impl AutonomyRules {
+    const KEYS: [&'static str; 2] = ["CRAFT_DEFAULT_MOVEMENT_AUTONOMY", "CRAFT_DEFAULT_SPECIALWEAPON_AUTONOMY"];
+
+    fn from_cfg(cfg: &CfgH, warnings: &mut Vec<Warning>) -> Option<Self> {
+        if !Self::KEYS.iter().any(|k| cfg.raw(k).is_some()) {
+            return None;
+        }
+        let stock = Self::default();
+        let mut level = |key: &str, default: u8| match cfg.raw(key) {
+            None => default,
+            // Whole numbers only, but `2.0` counts as 2 as for the path rules.
+            Some(_) => match cfg.i64(key).or_else(|| cfg.f32(key).filter(|v| v.is_finite() && v.fract() == 0.0).map(|v| v as i64)).filter(|v| (0..=2).contains(v)) {
+                Some(v) => v as u8,
+                None => {
+                    warnings.push(Warning::new("RTS_CFG.h", format!("{key} is not 0, 1 or 2; the engine default is used")));
+                    default
+                }
+            },
+        };
+        Some(AutonomyRules {
+            movement: level(Self::KEYS[0], stock.movement),
+            special_weapon: level(Self::KEYS[1], stock.special_weapon),
+        })
+    }
 }
 
 /// The path planner's terrain costs (SIM-23), from `RTS_CFG.h`'s PATHING
@@ -149,6 +195,7 @@ impl Rules {
             }
         }
         rules.pathing = PathingRules::from_cfg(&cfg, &mut warnings);
+        rules.autonomy = AutonomyRules::from_cfg(&cfg, &mut warnings);
         (rules, warnings)
     }
 
@@ -161,6 +208,23 @@ impl Rules {
     pub fn with_pathing(mut self, pathing: PathingRules) -> Self {
         self.pathing = Some(pathing);
         self
+    }
+
+    /// The default craft autonomy: the header's, else the engine's.
+    pub fn autonomy(&self) -> AutonomyRules {
+        self.autonomy.unwrap_or_default()
+    }
+
+    /// Set the default autonomy (tests and content built in code).
+    pub fn with_autonomy(mut self, autonomy: AutonomyRules) -> Self {
+        self.autonomy = Some(autonomy);
+        self
+    }
+
+    /// The autonomy defaults for the content hash; empty when the header
+    /// sets neither, so content without them keeps its hash.
+    pub(crate) fn autonomy_hash_values(&self) -> Vec<u64> {
+        self.autonomy.map(|a| vec![u64::from(a.movement), u64::from(a.special_weapon)]).unwrap_or_default()
     }
 
     /// The path planner's values for the content hash; empty when the
@@ -214,6 +278,82 @@ impl Rules {
             }
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod autonomy_tests {
+    use super::*;
+
+    #[test]
+    fn absent_keys_read_as_the_engine_defaults_and_keep_the_hash() {
+        let (rules, warnings) = Rules::from_header("int SOMETHING_ELSE = 3;\n");
+        assert!(warnings.is_empty());
+        assert_eq!(rules.autonomy(), AutonomyRules { movement: 1, special_weapon: 0 });
+        assert!(rules.autonomy_hash_values().is_empty());
+    }
+
+    #[test]
+    fn the_installed_headers_values_are_read() {
+        for (text, want) in [
+            ("int CRAFT_DEFAULT_MOVEMENT_AUTONOMY = 1;\nint CRAFT_DEFAULT_SPECIALWEAPON_AUTONOMY = 2;\n", (1, 2)),
+            ("int CRAFT_DEFAULT_MOVEMENT_AUTONOMY = 1;\nint CRAFT_DEFAULT_SPECIALWEAPON_AUTONOMY = 1;\n", (1, 1)),
+            // One key only: the other keeps the engine default.
+            ("int CRAFT_DEFAULT_MOVEMENT_AUTONOMY = 2;\n", (2, 0)),
+        ] {
+            let (rules, warnings) = Rules::from_header(text);
+            assert!(warnings.is_empty(), "{warnings:?}");
+            let a = rules.autonomy();
+            assert_eq!((a.movement, a.special_weapon), want, "{text}");
+            assert_eq!(rules.autonomy_hash_values(), [u64::from(want.0), u64::from(want.1)]);
+        }
+    }
+
+    #[test]
+    fn one_valid_and_one_invalid_key_keep_the_valid_one() {
+        let (rules, warnings) = Rules::from_header("int CRAFT_DEFAULT_MOVEMENT_AUTONOMY = 2;\nint CRAFT_DEFAULT_SPECIALWEAPON_AUTONOMY = 9;\n");
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(rules.autonomy(), AutonomyRules { movement: 2, special_weapon: 0 });
+        // The keys being present is what the digest sees, even for a fallback.
+        assert_eq!(rules.autonomy_hash_values(), [2, 0]);
+        let (rules, _) = Rules::from_header("int CRAFT_DEFAULT_SPECIALWEAPON_AUTONOMY = 2;\n");
+        assert_eq!(rules.autonomy(), AutonomyRules { movement: 1, special_weapon: 2 });
+    }
+
+    #[test]
+    fn expressions_and_whole_floats_are_read() {
+        let (rules, warnings) = Rules::from_header("int BASE = 1;\nint CRAFT_DEFAULT_MOVEMENT_AUTONOMY = BASE + 1;\nfloat CRAFT_DEFAULT_SPECIALWEAPON_AUTONOMY = 2.0;\n");
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(rules.autonomy(), AutonomyRules { movement: 2, special_weapon: 2 });
+    }
+
+    #[test]
+    fn the_content_hash_sees_the_defaults_only_when_set() {
+        let plain = sta_content_fake_hash(Rules::default());
+        assert_ne!(plain, sta_content_fake_hash(Rules::default().with_autonomy(AutonomyRules::default())));
+        assert_ne!(
+            sta_content_fake_hash(Rules::default().with_autonomy(AutonomyRules { movement: 1, special_weapon: 1 })),
+            sta_content_fake_hash(Rules::default().with_autonomy(AutonomyRules { movement: 1, special_weapon: 2 })),
+        );
+    }
+
+    fn sta_content_fake_hash(rules: Rules) -> u64 {
+        let fake = crate::fake::db();
+        let mut b = crate::ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
+        for w in fake.weapons() {
+            b = b.weapon(w.clone());
+        }
+        for u in fake.units() {
+            b = b.unit(u.clone());
+        }
+        b.build().unwrap().with_rules(rules).hash()
+    }
+
+    #[test]
+    fn a_bad_level_warns_and_keeps_the_default() {
+        let (rules, warnings) = Rules::from_header("int CRAFT_DEFAULT_MOVEMENT_AUTONOMY = 7;\nint CRAFT_DEFAULT_SPECIALWEAPON_AUTONOMY = high;\n");
+        assert_eq!(warnings.len(), 2);
+        assert_eq!(rules.autonomy(), AutonomyRules::default());
     }
 }
 

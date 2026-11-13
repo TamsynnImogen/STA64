@@ -491,3 +491,30 @@ formatting/diff checks pass. The library check is not an APK or device result;
 the separate SIM-22 APK does not contain this independent branch's adapter.
 No new in-game eye-check applies to this host-state-only addition. The parent
 LUA-05 package and complete mission playback remain unfinished.
+
+
+## Rule-condition queries (LUA-10)
+
+The stock Armada II rule DLLs (`R.drl`) call the engine from their rule
+conditions (28 distinct signatures; `docs/MISSION_DLL_API.md` lists them with
+rule-DLL counts and condition sites). `conditions.rs` binds all of them on
+`A2`. Counts (`CountUnits`, `CountUnitsNearObject`, `CountVisibleUnits*`,
+`CountStations`), `GetCrew`, `GetDilithium`/`GetLatinum`/`GetMetal`,
+`GetTime`, `HasTimeElapsed`, `IsExploding` and `GetDistance(object, path,
+point)` read the latest view (paths come from `A2.paths`, which the host
+fills; a missing path raises and is counted). `UnderAttack(object, seconds)`
+is a `Hit` on the object within that mission time (the runtime keeps the last
+hit tick per object). `IsAudioMessageDone` / `IsMoviePlaying` follow
+`Media:playSound` / `playMovie` and the client's reports
+(`A2.AudioMessageDone(id)`, `A2.MovieDone()`).
+
+Bound but raising (counted in `unsupported()` as `A2.<Name>: <why>`, never a
+guessed value): `CountCapitalShips` (no capital-ship class in the content
+data), `IsCompromised`, `IsShipAliveAndOffMap`, `IsCargoShipReadyToLoad`,
+`IsCargoShipFullAndReadyToSend`, `GetLatinumTraded` (no cargo, off-map,
+trade or "compromised" state in the world view).
+
+Evidence: signatures and argument constants read from the executable and the
+rule DLLs, static. The team / radius / ODF-filter readings follow the `A1`
+bindings and are not measured; the `UnderAttack` and `HasTimeElapsed` meanings
+are not measured.
