@@ -96,6 +96,7 @@ impl Game {
     /// through the router as the AI seat's. Joiners run nothing.
     fn run_to(&mut self, target: u64) {
         let mut idle = 0;
+        let mut last_thought = None;
         while self.peers.iter().any(|p| p.tick() < target) {
             self.net.advance(1);
             let mut progress = false;
@@ -103,7 +104,8 @@ impl Game {
                 if self.peers[i].tick() >= target {
                     continue;
                 }
-                if i == 0 {
+                if i == 0 && last_thought != Some(self.peers[0].tick()) {
+                    last_thought = Some(self.peers[0].tick());
                     let view = self.peers[0].sim().view();
                     let mut out = Vec::new();
                     self.ai.think(&view, &self.events, &mut out);
