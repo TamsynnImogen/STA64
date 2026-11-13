@@ -14,6 +14,7 @@ sta_mission.workspace = true
 sta_surface.workspace = true
 sta_odf.workspace = true
 sta_sim.workspace = true
+sta_net.workspace = true
 sta_content.workspace = true
 sta_core.workspace = true
 sta_ai.workspace = true
