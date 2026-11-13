@@ -169,6 +169,14 @@ impl Placed {
     }
 }
 
+/// The click radius of a sim object the map draws some other way (a planet, a resource node
+/// without a mesh of its own): its definition's `radius`, for a selectable thing a player
+/// can mine, colonise or inspect. `None` for scenery.
+pub(crate) fn ghost_pick_radius(def: &sta_content::UnitDef) -> Option<f32> {
+    let r = def.radius.to_f32();
+    ((def.resource.is_some() || def.planet_role.is_some()) && r > 0.0).then_some(r.max(5.0))
+}
+
 /// What the sim is made from: the BZN converted to a `MapDef` (CON-07), a `GameSetup`
 /// over it and the mount's content, and the sim from that (`Sim::from_setup`).
 pub(crate) struct SimSide {
@@ -1182,8 +1190,16 @@ fn rebuild(
     // object, so nothing took them: they are left to the units view, which draws them.
     let unlinked = placed.rest_where(|owner| !(is_match || is_mission) || owner == sta_sim::world::NEUTRAL);
     let ghosts = unlinked.len();
+    let ghost_view = sta_sim::WorldSource::view(&sim);
     for id in unlinked {
-        commands.spawn((SimEntity(id), Transform::IDENTITY, Visibility::default(), ChildOf(root)));
+        let mut ghost = commands.spawn((SimEntity(id), Transform::IDENTITY, Visibility::default(), ChildOf(root)));
+        // A planet or a resource node the renderer draws some other way is still clicked for its
+        // info and as a mining target: its pick body comes from the data, not from a mesh.
+        if let Some(u) = ghost_view.unit(id)
+            && let Some(r) = content.unit(u.def).and_then(ghost_pick_radius)
+        {
+            ghost.insert((Transform::from_translation(crate::render::units::to_bevy(u.pos.to_f32())), SelectRadius(r)));
+        }
     }
 
     // The sim, stepped by the sim link. Without a seat the view orders any team's ships,
@@ -1345,6 +1361,31 @@ mod tests {
             let notice_left = crate::ui::notices::notice_span(w).0;
             assert!(info_right <= notice_left, "{w}: info ends at {info_right}, notices start at {notice_left}");
         }
+    }
+
+    /// A planet or resource node the map draws without a mesh of its own gets a pick body from
+    /// its definition; scenery does not.
+    #[test]
+    fn ghosts_of_planets_and_resources_get_a_pick_radius() {
+        let db = sta_content::fake::db();
+        let get = |n: &str| db.unit(db.key(n).unwrap()).unwrap().clone();
+        let mut moon = get("fx_moon");
+        moon.resource = Some(0);
+        moon.radius = Fixed::from_int(260);
+        assert_eq!(ghost_pick_radius(&moon), Some(260.0));
+        moon.radius = Fixed::from_int(2);
+        assert_eq!(ghost_pick_radius(&moon), Some(5.0));
+        moon.radius = Fixed::ZERO;
+        assert_eq!(ghost_pick_radius(&moon), None);
+        let mut node = get("fx_station");
+        node.radius = Fixed::from_int(30);
+        assert_eq!(ghost_pick_radius(&node), None, "an ordinary unit is no ghost to pick");
+        node.resource = Some(0);
+        assert_eq!(ghost_pick_radius(&node), Some(30.0));
+        let mut planet = get("fx_station");
+        planet.radius = Fixed::from_int(130);
+        planet.planet_role = Some(sta_content::PlanetRole::Producer);
+        assert_eq!(ghost_pick_radius(&planet), Some(130.0));
     }
 
     /// A match's start units (owned by a seat, made by the sim) are not ghosts: the units

@@ -114,6 +114,11 @@ pub struct Looking {
     pub hovered: Option<EntityId>,
     pub cursor_world: Option<[f32; 3]>,
     pub camera: Option<CameraPose>,
+    /// What the click picking returns for the cursor ray.
+    pub pick: Option<EntityId>,
+    pub pointer_over_hud: Option<bool>,
+    pub click_pending: Option<bool>,
+    pub window: Option<[f32; 2]>,
 }
 
 /// The capture of the match as it stands: reads the link, never steps it.
@@ -127,6 +132,10 @@ pub fn take(link: &mut SimLink, meta: &MatchMeta, content: &ContentDb, looking: 
     index.selection = looking.selection.iter().filter_map(|&id| unit_info(link, content, &replay, id)).collect();
     index.hovered = looking.hovered.and_then(|id| unit_info(link, content, &replay, id));
     index.cursor_world = looking.cursor_world;
+    index.pick = looking.pick.and_then(|id| unit_info(link, content, &replay, id));
+    index.pointer_over_hud = looking.pointer_over_hud;
+    index.click_pending = looking.click_pending;
+    index.window = looking.window;
     index.camera = looking.camera.clone();
     let snapshot = link.snapshot();
     index.has_snapshot = snapshot.is_some();
@@ -157,6 +166,10 @@ fn capture_hotkey(
     hovered: Option<Res<HoveredUnit>>,
     aim: Option<Res<Aim>>,
     cameras: Query<(&GlobalTransform, Option<&Orbit>), MainCamera>,
+    units: crate::input::select::Targetable,
+    pointer: Option<Res<crate::ui::hud::HudPointer>>,
+    hud: Option<Res<crate::ui::hud::HudState>>,
+    window: Option<Single<&Window, With<bevy::window::PrimaryWindow>>>,
     mut notices: MessageWriter<Notice>,
 ) {
     let defaults;
@@ -173,7 +186,11 @@ fn capture_hotkey(
     let looking = Looking {
         selection: selection.0.clone(),
         hovered: hovered.and_then(|h| h.0),
-        cursor_world: aim.and_then(|a| a.0).and_then(|a| ground_point(a.ray)),
+        cursor_world: aim.as_deref().and_then(|a| a.0).and_then(|a| ground_point(a.ray)),
+        pick: aim.as_deref().and_then(|a| a.0).and_then(|a| crate::input::select::unit_under(a.cursor, a.ray, &units)),
+        pointer_over_hud: pointer.map(|p| p.0),
+        click_pending: hud.map(|h| h.placing.is_some() || h.targeting.is_some()),
+        window: window.map(|w| [w.width(), w.height()]),
         camera: cameras.single().ok().map(|(t, orbit)| {
             let (translation, rotation) = (t.translation(), t.to_scale_rotation_translation().1);
             CameraPose {
