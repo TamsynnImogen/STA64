@@ -320,6 +320,48 @@ A2_SIGNATURES = {
     "void MinimapMessage(char*, int, float, int)": "A2.MinimapMessage",
 }
 
+# Order, AI, crew and team calls (api/a2/orders.rs). Mixed names (an overload that
+# works beside one that raises) are counted as bound, like `A1_PARTIAL`.
+A2_ORDER_SIGNATURES = {
+    "void Goto(int, char *, bool, int)": "A2.Goto",
+    "void Goto(int, int, bool, int)": "A2.Goto",
+    "void Patrol(int, char *)": "A2.Patrol",
+    "void SetImpulseSpeed(int, float)": "A2.SetImpulseSpeed",
+    "void ResetImpulseSpeed(int)": "A2.ResetImpulseSpeed",
+    "float GetImpulseSpeed(int)": "A2.GetImpulseSpeed",
+    "void AI_Attack(int, int)": "A2.AI_Attack",
+    "void AI_Attack(int)": "A2.AI_Attack",
+    "void AI_Attack(int, Vector3)": "A2.AI_Attack",
+    "int BuildObject(char *, int, char *, int)": "A2.BuildObject",
+    "int BuildObject(char *, int, int, float, float, float)": "A2.BuildObject",
+    "void Attack(int, int, int)": "A2.Attack",
+    "void Stop(int, int)": "A2.Stop",
+    "void Colonize(int, int)": "A2.Colonize",
+    "void CraftCanRepair(int, bool)": "A2.CraftCanRepair",
+    "void Mine(int, int)": "A2.Mine",
+    "void Special_Attack(int, int, char const *)": "A2.Special_Attack",
+    "void Special_Attack(int, char const *)": "A2.Special_Attack",
+    "void AttackMainEnemyBase(int, bool)": "A2.AttackMainEnemyBase",
+    "Vector3 GetAttackLocation(int, int)": "A2.GetAttackLocation",
+    "int GetAllyStationAttacks(int, int)": "A2.GetAllyStationAttacks",
+    "void AI_Team_Load_AIP(int, char *)": "A2.AI_Team_Load_AIP",
+    "void SetCommandMoveAutonomyLow(int)": "A2.SetCommandMoveAutonomyLow",
+    "void SetCommandWhatWhoVO(int, AiCommand, int, bool)": "A2.SetCommandWhatWhoVO",
+    "void SetCommandWhatWhoParamVO(int, AiCommand, int, long, bool)": "A2.SetCommandWhatWhoParamVO",
+    "void SetCommandWhatWhoWhereVO(int, AiCommand, char *, Vector3, bool)": "A2.SetCommandWhatWhoWhereVO",
+    "void SetCrew(int, float)": "A2.SetCrew",
+    "void SetRace(int, char const *)": "A2.SetRace",
+    "Vector3 GetMainEnemyBaseLocation(int)": "A2.GetMainEnemyBaseLocation",
+    "int GetNearestEnemy(int, float)": "A2.GetNearestEnemy",
+    "void SearchAndDestroy(int)": "A2.SearchAndDestroy",
+    "void Scout(int)": "A2.Scout",
+    "void SetRedAlert(int)": "A2.SetRedAlert",
+    "void SetGreenAlert(int)": "A2.SetGreenAlert",
+    "void PointAt(int, char *)": "A2.PointAt",
+    "void PointAt(int, int)": "A2.PointAt",
+}
+A2_SIGNATURES.update(A2_ORDER_SIGNATURES)
+
 
 # Exact Armada I import signatures implemented by the DLL-named `A1` table
 # (crates/sta_mission/src/api/a1/). The key is the demangled signature the
@@ -624,12 +666,18 @@ A1_PARTIAL = {"Attack", "GetCrew"}
 
 def a2_raising(repo):
     """Names of A2 calls bound only to raise-and-count (no data behind them)."""
-    try:
-        with open(os.path.join(repo, "crates/sta_mission/src/api/a2/conditions.rs"), encoding="utf-8") as f:
-            src = "\n".join(l for l in f.read().splitlines() if not l.lstrip().startswith("//"))
-    except OSError:
-        return set()
-    return set(re.findall(r'no_data_fn\(\s*lua,\s*ctx,\s*"(\w+)"', src))
+    names = set()
+    for module, pattern in (
+        ("conditions", r'no_data_fn\(\s*lua,\s*ctx,\s*"(\w+)"'),
+        ("orders", r'\braising\(\s*lua,\s*&?env,\s*"(\w+)"'),
+    ):
+        try:
+            with open(os.path.join(repo, f"crates/sta_mission/src/api/a2/{module}.rs"), encoding="utf-8") as f:
+                src = "\n".join(l for l in f.read().splitlines() if not l.lstrip().startswith("//"))
+        except OSError:
+            continue
+        names |= set(re.findall(pattern, src))
+    return names
 
 
 def param_count(sig):

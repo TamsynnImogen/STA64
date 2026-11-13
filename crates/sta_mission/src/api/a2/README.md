@@ -518,3 +518,52 @@ Evidence: signatures and argument constants read from the executable and the
 rule DLLs, static. The team / radius / ODF-filter readings follow the `A1`
 bindings and are not measured; the `UnderAttack` and `HasTimeElapsed` meanings
 are not measured.
+
+## Orders, AI, crew and team calls (`orders.rs`)
+
+DLL-named `A2.Goto Stop Attack AI_Attack Mine SetImpulseSpeed ResetImpulseSpeed
+GetImpulseSpeed SetRedAlert SetGreenAlert BuildObject GetNearestEnemy
+GetAttackLocation` and the `SetCommandWhat{Who,WhoParam,WhoWhere}VO` family.
+Every call uses the exact argument shapes of the DLL (overloads by argument
+type), strict validation, and the rules below, read from the executable's
+`ScriptInterfaceImp` bodies (static) and from the stock scripts' argument
+constants. Orders are sent as the unit's owner; edits are SCRIPT edits.
+
+- An absent or dying unit (or target) is left alone: no command, no error, as
+  the engine does. A wrong argument shape is a Lua error and queues nothing.
+- `Goto(unit, path|object, warp, int)` is GO (GO_WARP when `warp`); the `int`
+  is never read. A path is `A2.paths[name]` (host-filled, as for
+  `GetDistance`): `Order::Move` to its first point, the rest queued. An object
+  is a snapshot of its position (whether the engine tracks it: not measured).
+  `warp = true` has no order in the seam and raises, counted.
+- `Stop`, `Attack(unit, object, int)` and `AI_Attack(unit, object)` map to
+  `Order::Stop` / `Order::Attack`; the extra `int` is never read. `Mine` maps
+  to `Order::Mine`; an absent node means "mine without a target" (the nearest
+  node in the view, as the omitted-target Mine helper chooses).
+- `SetImpulseSpeed` / `ResetImpulseSpeed` / `SetRedAlert` / `SetGreenAlert`
+  queue `Edit::MaxSpeed` / `Edit::Alert` through the edit-feedback tracker. The
+  sim rejects both edits today (no movement or alert package applies them):
+  the rejection is counted as `A2.<Name>: simulation rejected edit`, so a
+  mission sees the call succeed while the world does not change. `GetImpulseSpeed`
+  returns the value this runtime last set, else the class `impulseSpeed`.
+- `BuildObject(odf, team, path, index)` and `(odf, team, reference, x, y, z)`
+  queue a spawn at the path's 0-based point (0 past the end) or the reference
+  unit's position (a non-zero local offset needs the reference's orientation
+  and raises, counted). It returns `0x40000000 + request`; `orders::install`
+  is installed last and wraps every `A2` function so that such a handle means
+  the built unit once the spawn receipt is in (existence queries say "no"
+  until then, other calls say why).
+- `GetNearestEnemy(unit, r)`: nearest enemy by XZ distance inside the square
+  of half side `r` that can see the unit; 0 if none. `GetAttackLocation(a, b)`:
+  the point of `a`'s bounding sphere (`UnitDef::radius`) toward `b`, or one
+  radius along +x without `b`; raises when the radius is not in the content.
+- `SetCommandWhat...VO`: ATTACK, GO and MINE toward an object, and BUILD at a
+  position, map to orders; both objects must be live or nothing happens. The
+  voice flag is not measured and not applied. Other commands raise, counted.
+
+Raising and counted (no seam): `Patrol SearchAndDestroy Scout Colonize
+Special_Attack SetCommandMoveAutonomyLow PointAt SetCrew SetRace CraftCanRepair
+GetMainEnemyBaseLocation AttackMainEnemyBase GetAllyStationAttacks
+AI_Team_Load_AIP`, `AI_Attack` without a target or toward a point, and the
+warp form of `Goto`. `AI_Team_Load_AIP` also records the file like
+`Player:loadAIP`. Each reason is in `unsupported()` as `A2.<Name>: <why>`.
