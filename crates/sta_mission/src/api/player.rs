@@ -82,7 +82,7 @@ impl UserData for Player {
         f.add_field_method_get("race", |_, p| {
             // The race of the player's first unit that has one.
             let c = p.ctx.borrow();
-            if let Some(i) = c.view.attrs.player_races.binary_search_by_key(&p.id, |r| r.0).ok() {
+            if let Ok(i) = c.view.attrs.player_races.binary_search_by_key(&p.id, |r| r.0) {
                 return Ok(c.view.attrs.player_races[i].1.clone());
             }
             Ok(c.view.units.iter().filter(|u| u.owner == p.id).find_map(|u| {
