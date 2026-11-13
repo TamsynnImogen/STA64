@@ -156,7 +156,7 @@ Every message is one frame:
 ```
 offset size  field
 0      4     magic "S64N"
-4      2     protocol version, u16 little-endian (PROTOCOL_VERSION = 2)
+4      2     protocol version, u16 little-endian (PROTOCOL_VERSION = 3)
 6      4     body length, u32 little-endian, <= MAX_FRAME_BYTES - 10
 10     n     body: one `Message` in postcard
 ```
@@ -337,7 +337,8 @@ joiner                         host
   4. stops the match. The host puts a final pause in its record; there is no
      resume, only leaving. As in Armada II, a desynced game is not repaired;
      unlike Armada II, it does not run on in an undefined state. NET-04
-     replaces this step with a resync (NET_DECISIONS N2).
+     replaces this step with a resync (NET_DECISIONS N2): see "NET-04 as
+     built" in section 9.
 - **Section digests (NET-06, NET_DECISIONS N6; protocol 2).** Beside each
   turn's digest a peer keeps `Sim::section_digests()` (roster, movement,
   combat, economy, rng; `sta_sim::digest`) for the same 64 turns. On a
@@ -415,10 +416,11 @@ joiner                         host
   - The host can do this because it keeps the whole turn log, which it needs
     for its replay anyway: a 30-minute game is 18,000 turns per seat, mostly
     empty, well under a megabyte.
-  - Snapshot-based resync (sending state instead of history) is deferred: it
-    needs a proof that a snapshot loaded on another machine continues with
-    the same digests, and it is the only way to rejoin a long game quickly
-    (open question 4). Decided: NET_DECISIONS N4, built by NET-04.
+  - *NET-04 as built* rejoins from a snapshot in every case (a restarted
+    client has no sim, and a client that kept its sim is brought to the same
+    turn by the same path, since the host keeps no log): `next_turn` is
+    informational, and the whole-log catch-up described above is not built.
+    Section 9, "NET-04 as built", has the flow.
 
 ## 9. Relay model (for NET-03)
 
@@ -437,8 +439,8 @@ joiner                         host
 
   | Role | Messages |
   |---|---|
-  | Host only | `Welcome`, `Refuse`, `RulesRequest`, `Lobby`, `Start`, `Resume`, `Rejoined`, `Replayed`, `CatchUpDone` |
-  | Non-host, to the host only | `Hello`, `Rules`, `SeatChoice`, `Request`, `DropVote`, `Rejoin` |
+  | Host only | `Welcome`, `Refuse`, `RulesRequest`, `Lobby`, `Start`, `Resume`, `Rejoined`, `Replayed`, `CatchUpDone`, `SnapshotOffer`, `SnapshotPart`, `SnapshotRefused`, `Resynced`, `Arrived` |
+  | Non-host, to the host only | `Hello`, `Rules`, `SeatChoice`, `Request`, `DropVote`, `Rejoin`, `ResyncRequest`, `ResyncAck` |
   | Any seated peer | `Turn`, `Ping`, `Pong`, `Chat`, `Desync`, `Sections`, `Leave` |
 
 - **Directed frames.** The envelope carries a destination mask and the relay
@@ -500,8 +502,97 @@ joiner                         host
   only ticks the peer itself has digests for; unread events are capped
   (`MAX_EVENTS`).
 - **Not built:** ping-based delay adaptation and the stall timer (they need the
-  game's clock; INT/UI), the `Rejoin`/`Replayed` catch-up exchange (NET-04, over
-  `rejoin`), encryption and accounts (section 11).
+  game's clock; INT/UI), encryption and accounts (section 11). The
+  `Rejoin` catch-up exchange over `rejoin` is NET-04's (below).
+
+*NET-04 as built* (`crates/sta_net/src/resync.rs`, protocol version 3):
+
+- **Two paths, one transfer.** A *rejoin* (a seat whose connection was lost
+  comes back, section 8) and a *resync* (a peer that desynced is repaired,
+  NET_DECISIONS N2 to N4) share the transfer: `[Start]`, `SnapshotOffer`,
+  numbered `SnapshotPart`s, the records every seat has queued as `Replayed`,
+  `CatchUpDone`, all directed host to peer. They share nothing else. The
+  rejoiner has no sim or router and is a `Rejoiner` that ends in a `Peer`; the
+  resyncing peer is a stopped `Peer` that asks (`ResyncRequest`), loads and
+  continues. Neither ever replays the log from turn 0: the host keeps no log
+  beyond the router's queues, so the whole-log rejoin of the original design
+  (and N4's "fallback") is not built.
+- **Wire (appended, tags 22 to 28; existing tags unmoved).** `SnapshotOffer`
+  (kind, tick, snapshot format, content hash, full digest, section digests,
+  size, chunk, part count, FNV-1a hash, and the host's `RouterSeed`: next turn,
+  current `TurnConfig`, each seat's next turn and drop, the seats the host
+  speaks for, last `seq` seen per sender and player, pending resumes),
+  `SnapshotPart`, `SnapshotRefused`, `ResyncRequest`, `ResyncAck`, `Resynced`
+  (every player is told, N3), `Arrived` (a rejoin completed, the signal NET-03
+  noted was missing). Bounds: a snapshot is at most 8 MiB in at most 256 parts
+  of at most 32 KiB; at most 1024 catch-up records (8 MiB of wire bytes); an
+  offer's counts must agree before a byte is buffered, and what a receiver
+  holds grows with what has arrived, not with what the offer claims.
+- **Turn boundary.** The snapshot is the sim at a turn's first tick, before its
+  commands apply, taken by the host's `Peer::step` when it reaches the
+  boundary (the same state the per-turn digest covers), with the router's queue
+  at that moment. A rejoiner (or resyncer) adopts the seed, then releases the
+  queued turns through its ordinary `step`, so a host that is ahead of the
+  stalled seat costs the rejoiner a fast-forward, not the others a wait.
+- **Rejoin flow.** The client reclaims its seat at the relay
+  (`NetTransport::rejoin`), sends `Rejoin` (the `Hello` of a joiner, its
+  token); the host checks it is that seat (the relay's stamp), that the seat
+  is vacated (the departure marker was read), the token, the build and rules,
+  and its limits, answers `Rejoined` (the new token, the old one spent) and
+  serves `Start`, the offer, the parts, the records and `CatchUpDone`; the
+  rejoiner loads, verifies the digest and every section digest (a mismatch
+  names the sections), builds its `Peer`, replays its live stash, and sends
+  `ResyncAck`; the host tells everyone `Arrived`. The others stall on the seat
+  until then (the stall dialog and the drop vote are the lobby's; the host must
+  not drop a seat for which `Peer::rejoin_in_progress` is true).
+- **Resync flow.** The peers that find a mismatch stop (NET.md section 7,
+  steps 1 to 3 as before). A stopped peer whose digest at the first differing
+  tick differs from the host's sends `ResyncRequest` (that tick, its digest,
+  its next turn); the host checks that this is a divergence it knows of,
+  runs on to its next turn boundary, waits until it holds the records every
+  seat sent up to the requester's position, and serves. The requester loads,
+  verifies, adopts the router state (keeping any live record the host's copy
+  does not cover, and requiring those it does cover to be identical), clears
+  its stop and acks with its digest. The host compares the ack with the
+  snapshot's digest and tells everyone `Resynced` (the last one releases the
+  peers that were stopped but not diverged, the host included). A wrong ack, a
+  failed load or a refusal leaves the match stopped for that peer, as
+  section 7 says (N4.4). The host, even when its state is the odd one out,
+  wins (N3): the others request.
+- **Limits.** Per seat, a fixed ledger (rejoins 8, resyncs 3 per match, five
+  bad rejoin attempts, a request interval of 2 s; requests inside it are not
+  answered); a seat over its limit is refused `LimitReached` and the host
+  raises `ResyncEvent::LimitReached`, which the stall dialog reads (N4.5); a
+  seat with too many bad attempts raises `SeatAbuse`, which the lobby may
+  answer with a kick. At most 2 transfers at a time; a transfer is paced at
+  96 KiB/s (the relay's limit is 128 KiB/s per connection), and has a send
+  deadline, an ack deadline and, on the receiver, offer, idle and total
+  deadlines.
+- **Trust model.** The host's state is accepted (N3, until a referee exists,
+  N5): at the moment of loading no second source exists, since the other peers
+  are stopped or have sent nothing the host did not also see. A receiver
+  checks that it asked; the sender; format; content hash; the snapshot's own
+  provenance against the host seat in `Start`; sizes and order; the FNV hash
+  (damage only); the header; that the snapshot loads; the full and section
+  digests; the authority of every catch-up record. Afterwards every live
+  record that repeats one the host carried must be identical to it, and every
+  digest in later records is compared with the loaded sim as always, so a
+  host that lies about the state is found by the first peer that disagrees and
+  the match stops. What the host can still do is choose the state the game
+  continues from; that is what N3 accepts.
+- **Replay.** A resynced peer's replay keeps the commands it applied before the
+  snapshot's tick and goes on from it; its sidecar says where it was resynced
+  and that its earlier digests may differ from the authority's. The
+  authority's replay is the replay of record. A rejoined peer's replay holds no
+  commands before its snapshot and says so. No replay format change was
+  needed.
+- **Known gap.** `Sim::ai_seats` is set from `Control::Ai`, which only the host
+  has (`Start::player_setups` gives every other peer `Remote`), and it is
+  not in the digest. A snapshot loaded from the host therefore carries the
+  host's `ai_seats` into the peer, which differs from the other peers'.
+  Games with computer players should not go live before this is settled
+  (NET-02/SIM): either all peers set the same `ai_seats`, or it joins the
+  digest.
 
 ## 10. Security
 
@@ -538,8 +629,8 @@ Every peer is untrusted, and so is anything relayed.
 - Observers / spectators (Fleet Operations has them). The seat model leaves
   room: an observer would be a connection with no seat that receives turns
   and sends none.
-- Multiplayer save and load (Armada II 1.1's Ctrl+S), and snapshot resync
-  (the latter until NET-04; NET_DECISIONS N2, N4).
+- Multiplayer save and load (Armada II 1.1's Ctrl+S). (Snapshot resync is
+  built by NET-04.)
 - Map download; peers need the same map file.
 - Playing on after a desync, by majority or otherwise (until NET-04, and
   then by resync from the host or a referee, never by majority;
