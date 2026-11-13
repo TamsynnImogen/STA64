@@ -13,3 +13,6 @@ sta_content.workspace = true
 sta_sim.workspace = true
 serde.workspace = true
 postcard.workspace = true
+# Room codes (the relay) from OS randomness; already in the lock file for
+# sta_vfs.
+getrandom.workspace = true

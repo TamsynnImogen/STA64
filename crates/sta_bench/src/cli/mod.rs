@@ -354,6 +354,7 @@ fn run_cmd(o: &Opts) -> Outcome {
         .collect();
     let t0 = std::time::Instant::now();
     let done = jobs::run_all(&cfg, o, &list, &staged, true);
+    cfg.remove_data_dir();
     finish(o, done, Some(&staged), t0.elapsed())
 }
 
@@ -375,6 +376,7 @@ fn check(o: &Opts) -> Outcome {
     }
     let t0 = std::time::Instant::now();
     let mut done = jobs::run_all(&cfg, o, &list, Path::new(""), false);
+    cfg.remove_data_dir();
     done.extend(early);
     finish(o, done, None, t0.elapsed())
 }
