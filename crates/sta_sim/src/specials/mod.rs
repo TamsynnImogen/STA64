@@ -125,6 +125,13 @@ pub fn specials_indexed<'a>(
     })
 }
 
+/// The `Order::Special` slot of the unit's point-defence weapon, when point
+/// defence is a toggled special for it (`Features::pd_energy`). A HUD button
+/// or a controller sends `Order::Special { slot, .. }` with it (SIM-37).
+pub fn point_defence_slot(db: &ContentDb, u: &UnitDef) -> Option<u8> {
+    specials_indexed(db, u).position(|(_, k, _)| k == SpecialKind::PointDefence).map(|n| n as u8)
+}
+
 pub fn cloak_def(db: &ContentDb, u: &UnitDef) -> Option<CloakDef> {
     let (_, w) = specials_of(db, u).find(|s| s.0 == SpecialKind::Cloak)?;
     let flag = |k: &str, d: bool| w.raw.bool(k).unwrap_or(d);

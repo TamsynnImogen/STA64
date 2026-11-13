@@ -162,13 +162,15 @@ impl Profile {
                 officer_capacity: true,
                 multi_yard_builds: true,
                 construction_rigs: true,
+                pd_energy: true,
+                pd_debt_timer: true,
                 weapon_shot_timing: true,
                 ..off
             },
             // Stock A2: plain rules, turrets, point-defence cycles and the
-            // original shot timing. `pd_energy` stays off until the HUD and
-            // the AI can toggle point defence (SIM-34 follow-up).
-            Profile::Sta2Classic => Features { turrets: true, point_defense_cycles: true, weapon_shot_timing: true, ..off },
+            // original shot timing. Point defence is a toggled special with no
+            // rate limit (SIM-37; measured on stock A2).
+            Profile::Sta2Classic => Features { turrets: true, point_defense_cycles: true, pd_energy: true, weapon_shot_timing: true, ..off },
             // A1: its own class labels and health model, officers.
             Profile::Sta1Classic => Features { officer_capacity: true, a1_compat: true, ..off },
         }
@@ -685,6 +687,8 @@ mod tests {
                 "officer_capacity",
                 "multi_yard_builds",
                 "construction_rigs",
+                "pd_energy",
+                "pd_debt_timer",
                 "weapon_shot_timing"
             ]
         );
@@ -693,7 +697,7 @@ mod tests {
 
     #[test]
     fn defaults_table_sta2_classic() {
-        assert_eq!(on(&Profile::Sta2Classic.features()), ["point_defense_cycles", "turrets", "weapon_shot_timing"]);
+        assert_eq!(on(&Profile::Sta2Classic.features()), ["point_defense_cycles", "turrets", "pd_energy", "weapon_shot_timing"]);
     }
 
     #[test]

@@ -52,6 +52,7 @@
 //! [`SkirmishConfig::with_aip`] instead.
 
 mod params;
+mod pd;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -295,6 +296,10 @@ pub struct SkirmishController {
     /// Size of the wave that goes next: drawn from the seeded generator
     /// between the AIP's minimum and the current ceiling.
     next_wave: usize,
+    /// Last tick an enemy fired at or hit each unit (AI-04).
+    pd_attacked: BTreeMap<EntityId, Tick>,
+    /// Units whose point defence is on, from `PointDefenceChanged`.
+    pd_on: BTreeSet<EntityId>,
 }
 
 impl SkirmishController {
@@ -318,6 +323,8 @@ impl SkirmishController {
             waves: Vec::new(),
             wave_size,
             next_wave: wave_size,
+            pd_attacked: BTreeMap::new(),
+            pd_on: BTreeSet::new(),
         }
     }
 
@@ -339,6 +346,7 @@ impl SkirmishController {
     fn absorb(&mut self, tick: Tick, events: &[SimEvent]) {
         let me = self.cfg.player;
         for e in events {
+            self.note_attack(tick, e);
             match e {
                 SimEvent::Rejected { player, seq } if *player == me => {
                     if let Some(s) = self.sent.remove(seq) {
@@ -752,6 +760,7 @@ impl Controller for SkirmishController {
             return;
         }
         self.plan(view, me, out);
+        self.point_defence(view, out);
     }
 }
 

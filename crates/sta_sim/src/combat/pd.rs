@@ -42,8 +42,13 @@
 //! - A unit whose weapons are muted (`WEAPONS_OFF`) neither drains nor fires,
 //!   and a PD weapon that is on stays on and its timer stands still. Not
 //!   measured; chosen so a mute is not an energy sink.
-//! - Nothing in the HUD or the AI toggles PD yet, so no profile turns
-//!   `pd_energy` on by default; content opts in with `Feature_pd_energy`.
+//! - The toggle is `Order::Special` on the weapon's slot
+//!   ([`crate::specials::point_defence_slot`]); every change, including the
+//!   auto-off, raises `SimEvent::PointDefenceChanged`. `Fo4` and `Sta2Classic`
+//!   turn `pd_energy` on (SIM-37): the original's PD weapon is a `toggle = 1`
+//!   special (read from the data of Classic and FO 4.0), the executable
+//!   handles a toggle request by flipping the switch (read from the
+//!   executable, static), and PD stands off until switched on (measured).
 //! - Snapshot: the rows stay `Vec<u64>`. Rows of units with energy-model
 //!   state start with `u64::MAX` and carry `[ready, on, timer bits]` per
 //!   hardpoint; other rows are unchanged, so old snapshots load.
@@ -363,6 +368,7 @@ impl Pd {
         }
         if empty {
             m.on = false;
+            events.push(SimEvent::PointDefenceChanged { id, on: false });
         }
         let _ = def;
         if let Some(r) = self.ready.get_mut(id) {
