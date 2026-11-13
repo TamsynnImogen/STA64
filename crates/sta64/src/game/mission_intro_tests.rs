@@ -10,6 +10,8 @@ use crate::input::camera_cinematic::{CinematicCamera, CinematicCameraPlugin};
 use crate::sim_link::PlaySound;
 use crate::ui::presentation::{CineractiveState, FadeState, PresentationLog};
 use sta_sim::present::Presentation;
+use bevy::time::TimeUpdateStrategy;
+use std::time::Duration;
 
 #[derive(Resource, Default)]
 struct Heard(Vec<(u64, String)>);
@@ -34,11 +36,14 @@ struct Run {
     frames: Vec<Frame>,
     log: Vec<(u64, Presentation)>,
     heard: Vec<(u64, String)>,
+    /// The mission sim's tick on the first in-game frame.
+    ticks_at_ingame: u64,
     vfs: sta_vfs::Vfs,
     app: App,
 }
 
-fn drive(skip_at_tick: Option<u64>) -> Option<Run> {
+/// `load_secs`: the real time each frame of the loading screen takes (a long load is a big one).
+fn drive(skip_at_tick: Option<u64>, load_secs: f32) -> Option<Run> {
     let Ok(root) = std::env::var("STA64_TEST_ROOTS_INSTALL") else {
         eprintln!("SKIP: set STA64_TEST_ROOTS_INSTALL to Fleet Operations Roots for the intro run");
         return None;
@@ -65,8 +70,11 @@ fn drive(skip_at_tick: Option<u64>) -> Option<Run> {
     let notices = app.world_mut().spawn((crate::ui::notices::NoticeRoot, Visibility::Inherited)).id();
     settle(&mut app, 4);
     app.world_mut().write_message(crate::frontend::campaign::StartMission { campaign, mission });
+    app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f32(load_secs)));
     settle(&mut app, 3);
     until(&mut app, 600, |a| state(a) == AppState::InGame);
+    app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f32(0.1)));
+    let ticks_at_ingame = app.world().get_resource::<SimLink>().map_or(0, |l| l.curr().tick);
     let mut frames = Vec::new();
     let mut skipped = false;
     for _ in 0..3000 {
@@ -97,7 +105,7 @@ fn drive(skip_at_tick: Option<u64>) -> Option<Run> {
     let log = app.world().resource::<PresentationLog>().0.clone();
     let heard = app.world().resource::<Heard>().0.clone();
     std::fs::remove_dir_all(dir).ok();
-    Some(Run { frames, log, heard, vfs, app })
+    Some(Run { frames, log, heard, ticks_at_ingame, vfs, app })
 }
 
 fn kind(p: &Presentation) -> String {
@@ -139,7 +147,7 @@ fn assert_opening_requests(run: &Run) {
         at += names[at..].iter().position(|n| *n == w).unwrap_or_else(|| panic!("step {w:?} missing or out of order in {names:?}")) + 1;
     }
     let tick_of = |k: &str| steps.iter().find(|(_, n)| n == k).unwrap().0;
-    let near = |what: &str, got: u64, want: u64| assert!(got.abs_diff(want) <= 8, "{what}: tick {got}, the script's timer says {want}");
+    let near = |what: &str, got: u64, want: u64| assert!(got.abs_diff(want) <= 3, "{what}: tick {got}, the script's timer says {want}");
     near("intro sound (3 s)", tick_of("sound PbOM_Intro.mp3"), 91);
     near("second shot (26 s)", tick_of("lookFrom Some(Text(\"path_2\"))"), 781);
     near("fade out (35 s)", tick_of("fade out"), 1051);
@@ -159,7 +167,7 @@ fn assert_handed_over(run: &mut Run) {
 
 #[test]
 fn install_gated_politics_opening_runs_in_order_and_hands_the_game_over() {
-    let Some(mut run) = drive(None) else { return };
+    let Some(mut run) = drive(None, 0.1) else { return };
     assert_opening_requests(&run);
     // Camera: the first shot is taken in the first frames, held through both shots, never the player's meanwhile.
     let begin = run.frames.iter().position(|f| f.cine).expect("cineractive on");
@@ -185,8 +193,24 @@ fn install_gated_politics_opening_runs_in_order_and_hands_the_game_over() {
 
 #[test]
 fn install_gated_politics_opening_skipped_with_space_ends_in_the_same_playable_state() {
-    let Some(mut run) = drive(Some(300)) else { return };
+    let Some(mut run) = drive(Some(300), 0.1) else { return };
     let end = run.frames.iter().rposition(|f| f.cine).expect("the intro ran");
     assert!(run.frames[end].tick < 600, "the skip ended the intro early: tick {}", run.frames[end].tick);
     assert_handed_over(&mut run);
+}
+
+#[test]
+fn install_gated_politics_sim_starts_with_the_game_whatever_the_load_took() {
+    let (Some(short), Some(long)) = (drive(None, 0.1), drive(None, 3.0)) else { return };
+    // The mission's tick 0 is the first in-game frame: nothing ran behind the loading screen.
+    assert_eq!(short.ticks_at_ingame, 1, "no mission tick before InGame; the first frame shown runs the first (short load)");
+    assert_eq!(long.ticks_at_ingame, 1, "no mission tick before InGame; the first frame shown runs the first (a long load, 3 s a frame)");
+    // Each request is carried out on the tick the script issued it, load or no load.
+    let ticks = |r: &Run| r.log.iter().map(|(t, p)| (*t, kind(p))).collect::<Vec<_>>();
+    assert_eq!(ticks(&short), ticks(&long), "the opening's timeline does not depend on the load");
+    assert_opening_requests(&short);
+    assert_opening_requests(&long);
+    // The camera's paths were there for the first tick: the first shot is taken on the first frames.
+    let first = |r: &Run| r.frames.iter().find(|f| f.shot_placed).map(|f| f.tick);
+    assert!(first(&long).is_some_and(|t| t <= 6), "{:?}", first(&long));
 }

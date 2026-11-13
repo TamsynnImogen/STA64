@@ -390,6 +390,9 @@ impl Sim {
                 let Some(db) = self.content.as_deref() else { return false };
                 self.production.order_rally(db, &self.units, c.player, builders, *at)
             }
+            // S2 transport is available before the SIM-40 yard runtime.
+            // Refuse the whole request, preserving existing orders/state.
+            Order::Repair { .. } => false,
         }
     }
 

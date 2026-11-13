@@ -42,6 +42,8 @@ pub struct AnimClock {
     wall: f64,
     /// Seconds the last frame added to `wall`.
     frame_dt: f64,
+    /// The next frame adds no time (the sim starts with the first frame shown).
+    skip_dt: bool,
 }
 
 impl Default for AnimClock {
@@ -58,7 +60,7 @@ impl AnimClock {
     pub const MAX_TICKS_PER_FRAME: u32 = 8;
 
     pub fn new(mode: ClockMode, seed: u64) -> AnimClock {
-        AnimClock { mode, tick: 0, debt: 0.0, alpha: 0.0, paused: false, seed, wall: 0.0, frame_dt: 0.0 }
+        AnimClock { mode, tick: 0, debt: 0.0, alpha: 0.0, paused: false, seed, wall: 0.0, frame_dt: 0.0, skip_dt: false }
     }
 
     pub fn mode(&self) -> ClockMode {
@@ -115,6 +117,13 @@ impl AnimClock {
     /// mode) and say how many ticks are due. Run them, calling
     /// [`ticked`](Self::ticked) after each, then [`end_frame`](Self::end_frame).
     pub fn begin_frame(&mut self, real_dt: f64) -> u32 {
+        let skip = std::mem::take(&mut self.skip_dt);
+        if skip && !self.paused {
+            // The first frame shown runs the sim's first tick and no more, so the script's
+            // opening requests are on screen with it.
+            self.frame_dt = 0.0;
+            return 1;
+        }
         let dt = match self.mode {
             ClockMode::Wall => real_dt.max(0.0),
             ClockMode::Bench { step } => step,
@@ -126,6 +135,13 @@ impl AnimClock {
         }
         self.debt += dt;
         ((self.debt * TICK_HZ as f64) as u32).min(Self::MAX_TICKS_PER_FRAME)
+    }
+
+    /// The sim is about to start (a mission shown after its load): drop the time owed and
+    /// let the next frame, the first one shown, run one tick and add no time.
+    pub fn start_fresh(&mut self) {
+        self.debt = 0.0;
+        self.skip_dt = true;
     }
 
     /// A frame with no sim to step (the model viewer, a map before its sim is
@@ -196,6 +212,18 @@ mod tests {
         assert!((c.now() - 2.0).abs() < 1.0 / 30.0, "{}", c.now());
         assert!((0.0..=1.0).contains(&c.alpha()));
         assert!((c.wall() - 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_fresh_start_runs_one_tick_on_the_first_frame_whatever_dt_that_frame_had() {
+        let mut c = AnimClock::new(ClockMode::Wall, 1);
+        c.start_fresh();
+        assert_eq!(c.begin_frame(5.0), 1, "a load's long frame is not time owed");
+        c.ticked();
+        c.end_frame();
+        assert_eq!(c.wall(), 0.0);
+        // The next frame is an ordinary one: 0.1 s is three ticks, not a catch-up burst.
+        assert_eq!(c.begin_frame(0.1), 3);
     }
 
     #[test]

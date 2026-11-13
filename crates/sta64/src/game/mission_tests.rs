@@ -165,7 +165,8 @@ fn a_synthetic_campaign_plays_from_the_screens_and_progress_survives_a_restart()
     assert!(view.items[0].text.contains("Survive one second"), "{view:?}");
     let _ = ObjectiveState::Active;
     assert_eq!(view.title.to_lowercase(), "first light", "the briefing file's heading");
-    assert!(app.world().resource::<SimLink>().curr().tick > 0);
+    settle(&mut app, 3);
+    assert!(app.world().resource::<SimLink>().curr().tick > 0, "the sim runs once the game is shown");
     until(&mut app, 200, |a| state(a) == AppState::FrontEnd);
     settle(&mut app, 4);
 
