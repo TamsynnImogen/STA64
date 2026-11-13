@@ -70,6 +70,46 @@ impl Sim {
     }
 }
 
+/// A portable hash of what [`Sim::from_setup_with_starts`] would give each
+/// seat of `s` from `races`: per seat that has a start on the map, the seat
+/// id, the resolved units (by content name, in spawn order), the stock and the
+/// crew. A replay stores it so that a replay rebuilt on other race data is
+/// refused instead of desyncing; the rules themselves stay in the race ODFs.
+/// FNV-1a over fixed-width little-endian fields, equal on every platform.
+pub fn loadouts_hash(s: &GameSetup, races: &Races) -> u64 {
+    fn eat(h: &mut u64, bytes: &[u8]) {
+        for &b in bytes {
+            *h ^= u64::from(b);
+            *h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    let mut h = 0xcbf2_9ce4_8422_2325u64;
+    for p in &s.players {
+        if s.map.start_for(p.id.0).is_none() {
+            continue;
+        }
+        let loadout = races.loadout_with_mode(&s.content, &p.race, s.options.starting_resources);
+        eat(&mut h, &[p.id.0]);
+        eat(&mut h, &(loadout.units.len() as u32).to_le_bytes());
+        for &key in &loadout.units {
+            let name = s.content.name(key).unwrap_or("");
+            eat(&mut h, &(name.len() as u32).to_le_bytes());
+            eat(&mut h, name.as_bytes());
+        }
+        for v in loadout.stock {
+            eat(&mut h, &v.to_bits().to_le_bytes());
+        }
+        match loadout.crew {
+            Some(c) => {
+                eat(&mut h, &[1]);
+                eat(&mut h, &c.to_bits().to_le_bytes());
+            }
+            None => eat(&mut h, &[0]),
+        }
+    }
+    h
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;

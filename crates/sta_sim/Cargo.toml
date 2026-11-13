@@ -18,3 +18,4 @@ postcard.workspace = true
 
 [dev-dependencies]
 sta_vfs.workspace = true
+sta_bzn.workspace = true
