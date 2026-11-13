@@ -546,3 +546,16 @@ fn a_fleet_member_built_this_tick_is_ordered_after_its_receipt() {
     let kinds: Vec<_> = rt.take_commands().into_iter().map(|c| c.kind).collect();
     assert!(matches!(&kinds[..], [CommandKind::Order(Order::AttackPoint { units, .. })] if units == &vec![id]), "{kinds:?}");
 }
+
+#[test]
+fn a_fleet_member_whose_spawn_failed_is_skipped_without_raising() {
+    let s = scene();
+    let mut sim = Sim::new(3); // no content: the spawn is rejected
+    let cfg = MissionConfig { content: Some(s.db.clone()), view: Some((*sim.view()).clone()), ..MissionConfig::default() };
+    let src = "A2.paths.Q = { {x=40,y=0,z=0} }; f = A2.CreateNewSiegeFleet(); f:AddShip(A2.BuildObject('fx_cruiser', 1, 'Q', 0))";
+    let mut rt = MissionRuntime::from_source_with("failfleet.lua", src, 3, cfg);
+    let out = sim.step(&rt.take_commands());
+    rt.think(&out.view, &out.events, &mut Vec::new());
+    rt.eval::<()>("f:SetFleetDestination(Vector(5, 0, 0)); f:AddShip(f.ships[1])").unwrap();
+    assert!(rt.take_commands().is_empty());
+}

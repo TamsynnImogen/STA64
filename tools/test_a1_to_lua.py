@@ -274,7 +274,7 @@ class Steps(unittest.TestCase):
         lua = render(d, f)
         self.assertIn("A('Bar', 7)", lua)
 
-    def test_the_taken_edge_of_jne_proves_nothing(self):
+    def test_the_taken_edge_of_je_proves_the_value(self):
         d, _, f = lift({STEP: [
             f"mov    eax,DWORD PTR ds:{SHIP:#x}",
             "test   eax,eax",

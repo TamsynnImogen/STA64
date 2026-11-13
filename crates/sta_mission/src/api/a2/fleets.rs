@@ -16,8 +16,7 @@
 //!   `Goto` / `AI_Attack` use (`Order::Move`, `Order::MoveWarp`, `Order::AttackPoint`):
 //!   a move fleet moves to the destination (GO_WARP, as `TryToWarp` defaults to true;
 //!   `TryToWarp(false)` gives a plain GO), a siege or attack fleet flies to weapon range
-//!   of it (the end state of the siege stages: the engine rallies 1400 short, breaches
-//!   enemy starbases within 1800, then attacks and never retreats). A ship added after the destination
+//!   of it (the end state of the siege stages: rally, breach and attack stages are not modelled). A ship added after the destination
 //!   was set gets the order at once.
 //! - Pending `BuildObject` handles ride through `A2.FleetOrder`, which waits for
 //!   the spawn like every other order.
@@ -28,6 +27,7 @@
 use mlua::{Lua, MultiValue, Table, Value};
 use sta_sim::command::Order;
 
+use super::dll_objects;
 use super::orders::{Env, def, nothing};
 use crate::api::to_vec3;
 
@@ -69,6 +69,13 @@ fn fleet_error(kind: Kind, method: &str, why: &str) -> mlua::Error {
 fn send(lua: &Lua, kind: Kind, fleet: &Table, ship: Value) -> mlua::Result<()> {
     let dest: Value = fleet.raw_get("dest")?;
     if matches!(dest, Value::Nil) {
+        return Ok(());
+    }
+    // A member whose spawn failed is handle 0 in the engine: a no-op.
+    if let Value::Integer(n) = &ship
+        && let Ok(raw) = u32::try_from(*n)
+        && dll_objects::token_problem(lua, raw).is_some_and(|why| why.contains("spawn failed"))
+    {
         return Ok(());
     }
     let warp: bool = fleet.raw_get("warp").unwrap_or(false);
@@ -118,7 +125,12 @@ fn new_fleet(lua: &Lua, kind: Kind) -> mlua::Result<Table> {
         let Value::Table(v) = &args[1] else {
             return Err(fleet_error(kind, "SetFleetDestination", "requires a Vector"));
         };
-        me.raw_set("dest", v.clone())?;
+        // A copy: the script may reuse its Vector before a pending member is built.
+        let copy = lua.create_table()?;
+        for k in ["x", "y", "z"] {
+            copy.raw_set(k, v.raw_get::<Value>(k)?)?;
+        }
+        me.raw_set("dest", copy)?;
         let ships: Table = me.raw_get("ships")?;
         for ship in ships.sequence_values::<Value>() {
             send(lua, kind, &me, ship?)?;

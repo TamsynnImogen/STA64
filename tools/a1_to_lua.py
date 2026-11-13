@@ -461,7 +461,7 @@ class A1Lifter(dsl.Lifter):
                     mn, ops = parts[0], (parts[1] if len(parts) > 1 else "")
                     self.cur_state = st
                     r = self.step(f, st, stmts, ntmp, a, mn, ops, i, start == b)
-                    self.note_compare(st, mn, ops, r)
+                    self.note_compare(st, mn, ops, r, d.ins[i + 1][0] if i + 1 < len(d.ins) else None)
                     if r == "ret":
                         break
                     if isinstance(r, tuple) and r[0] == "switch":
@@ -577,7 +577,7 @@ class A1Lifter(dsl.Lifter):
                 return True  # conservative: any positive stack offset
         return False
 
-    def note_compare(self, st, mn, ops, r):
+    def note_compare(self, st, mn, ops, r, nxt=None):
         """Remember what a `test r,r` / `cmp r,imm` plus `je`/`jne` says about the
         register on each edge: the compiler reuses a register it has just proved
         equal to a constant (`test eax,eax; jne L; push eax` passes a null)."""
@@ -590,13 +590,13 @@ class A1Lifter(dsl.Lifter):
                 imm = 0
             elif mn == "cmp" and re.fullmatch(r"-?0x[0-9a-f]+|-?[0-9]+", y):
                 imm = int(y, 16) if "0x" in y else int(y)
-                imm = struct.unpack("<i", struct.pack("<I", imm & 0xFFFFFFFF))[0]
+                imm &= 0xFFFFFFFF  # unsigned, as `mov r,imm` reads
             else:
                 return
-            st.cfact = (x, imm, st.r[x])
+            st.cfact = (x, imm, st.r[x], st.flags)
         elif isinstance(r, tuple) and r[0] == "jcc":
             f = getattr(st, "cfact", None)
-            if f and mn in ("je", "jz", "jne", "jnz") and st.r.get(f[0]) == f[2]:
+            if f and mn in ("je", "jz", "jne", "jnz") and st.r.get(f[0]) == f[2] and st.flags is f[3] and r[1] != nxt:
                 st.edge = (f[0], f[1], mn in ("je", "jz"), r[1])
 
     @staticmethod
