@@ -6,7 +6,7 @@
 //!   at most once per [`Policy::log_gap`] seconds, with a count (never a line per error);
 //! - an error the stream does not survive (or [`Policy::benign_limit`] glitches) tears the
 //!   device down at once (a stream stuck on `POLLERR` otherwise spins), and the output is
-//!   reopened after 0.5 s, 1 s, 2 s ... up to [`Policy::backoff_cap`];
+//!   reopened after 1 s, 2 s, 4 s ... up to [`Policy::backoff_cap`];
 //! - after [`Policy::max_attempts`] failed opens it falls back to null audio with one log
 //!   line and tries again every [`Policy::fallback_retry`] seconds;
 //! - bus volumes, the listener and the current music track (from its start) are restored on
@@ -39,11 +39,14 @@ pub struct Policy {
     pub fallback_retry: f64,
     /// Survivable glitches since the last open that still force a reopen.
     pub benign_limit: u64,
+    /// Seconds a reopened device must stay quiet before its failures stop counting toward
+    /// `max_attempts` (a device that opens and fails again at once must not reopen forever).
+    pub stable_after: f64,
 }
 
 impl Default for Policy {
     fn default() -> Self {
-        Self { max_poll: 64, log_gap: 5.0, backoff_first: 0.5, backoff_cap: 8.0, max_attempts: 5, fallback_retry: 60.0, benign_limit: 200 }
+        Self { max_poll: 64, log_gap: 5.0, backoff_first: 1.0, backoff_cap: 8.0, max_attempts: 5, fallback_retry: 60.0, benign_limit: 200, stable_after: 30.0 }
     }
 }
 
@@ -99,6 +102,12 @@ pub struct Resilient {
     clock: f64,
     log: ErrorLog,
     glitches: u64,
+    glitch_window_at: f64,
+    /// Reopens since the device last stayed quiet for `stable_after`.
+    streak: u32,
+    live_since: f64,
+    music_restored: bool,
+    streams: Vec<(PcmStream, Bus)>,
     volumes: [Option<f32>; 5],
     listener: Option<([f32; 3], [f32; 3])>,
     music: Option<(Sound, f64)>,
@@ -135,6 +144,11 @@ impl Resilient {
             clock: 0.0,
             log: ErrorLog::default(),
             glitches: 0,
+            glitch_window_at: 0.0,
+            streak: 0,
+            live_since: 0.0,
+            music_restored: false,
+            streams: Vec::new(),
             volumes: [None; 5],
             listener: None,
             music: None,
@@ -166,6 +180,11 @@ impl Resilient {
         let (n, log) = NullAudio::new();
         self.inner = Box::new(n);
         self.placeholder_log = Some(log);
+        // A movie's audio keeps its clock on null audio instead of freezing the decoder.
+        self.streams.retain(|(s, _)| !s.is_cancelled() && !s.is_drained());
+        for (s, bus) in &self.streams {
+            self.inner.play_stream(s, *bus);
+        }
     }
 
     fn restore(&mut self) {
@@ -181,9 +200,19 @@ impl Resilient {
             if (self.clock - started) * (s.sample_rate as f64) < s.frames.len() as f64 {
                 let s = s.clone();
                 self.inner.play(&s, Bus::Music, None);
+                self.music_restored = true;
             } else {
                 self.music = None;
             }
+        }
+    }
+
+    fn after_open(&mut self) {
+        self.live_since = self.clock;
+        self.restore();
+        self.streams.retain(|(s, _)| !s.is_cancelled() && !s.is_drained());
+        for (s, bus) in &self.streams {
+            self.inner.play_stream(s, *bus);
         }
     }
 
@@ -194,7 +223,7 @@ impl Resilient {
         self.glitches = 0;
         self.state = State::Live;
         self.reopens += 1;
-        self.restore();
+        self.after_open();
         Ok(())
     }
 
@@ -225,6 +254,13 @@ impl Resilient {
         if self.state != State::Live {
             return;
         }
+        if self.streak > 0 && self.clock - self.live_since >= self.policy.stable_after {
+            self.streak = 0;
+        }
+        if self.clock - self.glitch_window_at >= 60.0 {
+            self.glitch_window_at = self.clock;
+            self.glitches = 0; // slow xruns are normal; only a burst forces a reopen
+        }
         self.faults.clear();
         let dropped = self.inner.poll_errors(self.policy.max_poll, &mut self.faults);
         if self.faults.is_empty() && dropped == 0 {
@@ -243,7 +279,14 @@ impl Resilient {
         self.glitches += dropped;
         if fatal || self.glitches >= self.policy.benign_limit {
             self.tear_down();
-            self.state = State::Retry { attempt: 0, at: self.clock + self.backoff(0) };
+            let attempt = self.streak;
+            self.streak += 1;
+            if attempt >= self.policy.max_attempts {
+                self.state = State::Fallback { at: self.clock + self.policy.fallback_retry };
+                self.say(format!("audio: the output failed again {attempt} times in a row; sound is off, retrying every {:.0} s", self.policy.fallback_retry), true);
+            } else {
+                self.state = State::Retry { attempt, at: self.clock + self.backoff(attempt) };
+            }
         }
     }
 }
@@ -256,6 +299,9 @@ impl AudioBackend for Resilient {
     fn play(&mut self, sound: &Sound, bus: Bus, at: Option<[f32; 3]>) {
         if bus == Bus::Music {
             self.music = Some((sound.clone(), self.clock));
+            if std::mem::take(&mut self.music_restored) {
+                self.inner.stop_bus(Bus::Music); // the restored track must not overlap the next
+            }
         }
         self.inner.play(sound, bus, at);
     }
@@ -281,6 +327,7 @@ impl AudioBackend for Resilient {
 
     fn play_stream(&mut self, stream: &PcmStream, bus: Bus) {
         self.inner.play_stream(stream, bus);
+        self.streams.push((stream.clone(), bus));
     }
 
     fn set_bus_volume(&mut self, bus: MixBus, volume: f32) {
@@ -290,12 +337,14 @@ impl AudioBackend for Resilient {
 
     fn stop_all(&mut self) {
         self.music = None;
+        self.music_restored = false;
         self.inner.stop_all();
     }
 
     fn stop_bus(&mut self, bus: Bus) {
         if bus == Bus::Music {
             self.music = None;
+            self.music_restored = false;
         }
         self.inner.stop_bus(bus);
     }
@@ -409,7 +458,7 @@ mod tests {
         assert_eq!(r.lines_logged, 1);
         assert!(matches!(r.state(), State::Retry { attempt: 0, .. }));
         assert_eq!(w.borrow().dropped_devices, 1, "the failing stream is torn down at once");
-        run(&mut r, 1.0, 0.016);
+        run(&mut r, 1.5, 0.016);
         assert_eq!(r.state(), State::Live);
         assert_eq!(r.reopens, 1);
         assert_eq!(w.borrow().opened, 2);
@@ -420,9 +469,7 @@ mod tests {
         let w = Rc::new(RefCell::new(World::default()));
         let mut r = make(&w);
         // Glitches the stream survives, then a steady flood for a minute of frames.
-        let mut p = Policy::default();
-        p.benign_limit = u64::MAX;
-        r.policy = p;
+        r.policy = Policy { benign_limit: u64::MAX, ..Policy::default() };
         w.borrow_mut().faults.extend((0..10_000).map(|_| fault("xrun", true)));
         let before = r.lines_logged;
         run(&mut r, 60.0, 0.016);
@@ -516,6 +563,44 @@ mod tests {
         run(&mut r, 2.0, 0.1);
         assert_eq!(r.state(), State::Live);
         assert!(!w.borrow().plays.iter().any(|p| p.0 == 2));
+    }
+
+    #[test]
+    fn a_device_that_fails_right_after_opening_ends_on_null_audio() {
+        let w = Rc::new(RefCell::new(World::default()));
+        let mut r = make(&w);
+        // Every device opens fine and faults on its first poll.
+        for _ in 0..100 {
+            w.borrow_mut().faults.push_back(fault("POLLERR", false));
+            r.advance(0.5);
+        }
+        assert!(matches!(r.state(), State::Fallback { .. }), "{:?}", r.state());
+        assert_eq!(r.name(), "null");
+        assert!(r.reopens <= u64::from(Policy::default().max_attempts), "{} reopens", r.reopens);
+        assert!(r.lines_logged <= 25, "{} lines", r.lines_logged);
+    }
+
+    #[test]
+    fn a_device_quiet_for_a_while_gets_its_attempts_back() {
+        let w = Rc::new(RefCell::new(World::default()));
+        let mut r = make(&w);
+        w.borrow_mut().faults.push_back(fault("x", false));
+        run(&mut r, 3.0, 0.1);
+        assert_eq!(r.streak, 1);
+        run(&mut r, 40.0, 0.5);
+        assert_eq!(r.streak, 0);
+    }
+
+    #[test]
+    fn a_second_track_after_a_restore_stops_the_restored_one() {
+        let w = Rc::new(RefCell::new(World::default()));
+        let mut r = make(&w);
+        r.play(&snd("a", 60), Bus::Music, None);
+        w.borrow_mut().faults.push_back(fault("x", false));
+        run(&mut r, 3.0, 0.1);
+        assert!(r.music_restored);
+        r.play(&snd("b", 60), Bus::Music, None);
+        assert!(!r.music_restored);
     }
 
     #[test]
