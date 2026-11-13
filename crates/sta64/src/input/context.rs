@@ -26,7 +26,7 @@ fn is_resource(db: &ContentDb, view: &WorldView, id: EntityId) -> bool {
 }
 
 fn is_miner(db: &ContentDb, view: &WorldView, id: EntityId) -> bool {
-    view.unit(id).and_then(|u| db.unit(u.def)).is_some_and(|d| d.class.0 == "freighter" || d.miner)
+    view.unit(id).and_then(|u| db.unit(u.def)).is_some_and(|d| d.mines())
 }
 
 fn is_enemy(view: &WorldView, me: sta_sim::PlayerId, owner: sta_sim::PlayerId) -> bool {

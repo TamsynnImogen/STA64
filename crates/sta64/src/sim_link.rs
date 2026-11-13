@@ -22,6 +22,7 @@ use bevy::prelude::*;
 use bevy::time::Real;
 use sta_content::ContentDb;
 use sta_sim::command::{Command, CommandKind, CommandRouter, Order};
+use sta_sim::replay::{DEFAULT_DIGEST_EVERY, Replay};
 use sta_sim::setup::Controller;
 use sta_sim::{EntityId, PlayerId, SimEvent, Vec3 as SimVec3, WorldSource, WorldView};
 
@@ -43,12 +44,34 @@ pub struct SimLink {
     controllers: SyncCell<Vec<Box<dyn Controller>>>,
     /// Commands the controllers have sent, for the log.
     controller_commands: u64,
+    /// The game so far as a replay, when something asked for one (the playtest
+    /// capture, TOOL-14): what each tick was given, never read by the sim.
+    log: Option<Replay>,
 }
 
 impl SimLink {
     pub fn new(source: Box<dyn WorldSource>, router: Box<dyn CommandRouter>, player: PlayerId) -> SimLink {
         let view = source.view();
-        SimLink { source: SyncCell::new(source), router: SyncCell::new(router), prev: view.clone(), curr: view, player, seq: 0, controllers: SyncCell::new(Vec::new()), controller_commands: 0 }
+        SimLink { source: SyncCell::new(source), router: SyncCell::new(router), prev: view.clone(), curr: view, player, seq: 0, controllers: SyncCell::new(Vec::new()), controller_commands: 0, log: None }
+    }
+
+    /// Log every tick into `replay` (a [`Replay::new`] header of the game's
+    /// setup; the link adds tick 0's digest and the rest as it steps).
+    pub fn with_replay(mut self, mut replay: Replay) -> SimLink {
+        replay.digests.push((self.curr.tick, self.curr.digest));
+        replay.end_tick = self.curr.tick;
+        self.log = Some(replay);
+        self
+    }
+
+    /// The replay of the game so far, if the link is logging one.
+    pub fn replay(&self) -> Option<&Replay> {
+        self.log.as_ref()
+    }
+
+    /// The source's snapshot at the current tick, if it can make one.
+    pub fn snapshot(&mut self) -> Option<Vec<u8>> {
+        self.source.get().snapshot()
     }
 
     /// Seat computer players: each reads the new view and the tick's events
@@ -105,7 +128,11 @@ impl SimLink {
     /// Run one tick if the router has its commands; `None` on a stall.
     pub(crate) fn tick(&mut self) -> Option<Vec<SimEvent>> {
         let batch = self.router.get().take_ready(self.curr.tick + 1)?;
+        let before = self.curr.tick;
         let out = self.source.get().step(&batch);
+        if let Some(log) = &mut self.log {
+            log.log_step(before, &batch, out.view.tick, out.view.digest, DEFAULT_DIGEST_EVERY);
+        }
         self.prev = std::mem::replace(&mut self.curr, out.view);
         let mut cmds = Vec::new();
         for c in self.controllers.get().iter_mut() {

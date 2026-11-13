@@ -4,8 +4,8 @@
 //! - Resource ids are the content ones: 0 dilithium, 1 latinum, 2 metal,
 //!   3 biomatter ([`RESOURCES`]). A player's stock is per id, in the view
 //!   ([`PlayerView::resources`](crate::view::PlayerView)).
-//! - `Order::Mine { units, node }` sends freighters (class `freighter`, or an
-//!   ODF with `miner 1`) to a [`EntityKind::Resource`] entity. A freighter
+//! - `Order::Mine { units, node }` sends freighters (`UnitDef::mines`: class `freighter` or an
+//!   ODF with `miner 1`, unless it says `miner 0`) to a [`EntityKind::Resource`] entity. A freighter
 //!   cycles `ToNode -> Mining -> ToDock -> Unloading`: it fills its hold at
 //!   `mining rate` per second (ODF `miningRate`, default 15), carries it to
 //!   the nearest finished station of its owner and unloads at the transfer
@@ -104,8 +104,7 @@ fn per_tick(per_second: Fixed) -> Fixed {
 
 fn cfg_of(db: &ContentDb, def: ContentKey) -> Option<Cfg> {
     let d = db.unit(def)?;
-    let miner = d.class.0 == "freighter" || d.miner;
-    if !miner {
+    if !d.mines() {
         return None;
     }
     // Zero means the definition does not say: the defaults apply.

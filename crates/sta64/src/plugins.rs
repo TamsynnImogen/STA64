@@ -56,6 +56,10 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
     }
 
     // bench —
+    // TOOL-14 playtest capture (Ctrl+F12 in a match)
+    if map_view {
+        app.add_plugins(crate::capture::CapturePlugin);
+    }
 
     // game — the match flow (INT-M3)
     if cfg.skirmish || front_end {
