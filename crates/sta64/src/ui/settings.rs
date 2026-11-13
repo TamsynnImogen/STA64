@@ -15,8 +15,8 @@
 //! **Loading** happens once, when the plugin is built: the file's values replace the
 //! resources' defaults. A missing file, a file from an older version (keys it lacks
 //! keep their defaults) and a file with lines this version does not know never fail:
-//! what cannot be read is skipped with a `warn!`. A file that is not text is moved to
-//! `settings.cfg.bad` and the defaults are used. Command-line flags win over the file
+//! what cannot be read is skipped with a `warn!`. Bytes that are not UTF-8 are ignored
+//! (the lines that are text still read). Command-line flags win over the file
 //! (`--lcars-ui`, `--nointro`) and are not written back unless the player changes that
 //! setting too. With no file, `RefitPlayer.ini` of the install (`[QOL.QOL]`
 //! `MaxSelection`, the choice the Refit screen wrote) seeds the selection cap; the
@@ -141,6 +141,9 @@ impl Stored {
                     Ok(v) if v.is_finite() => {
                         let key = number_key(n);
                         s.settings.set_number(key, v);
+                        if s.settings.number(key) != Some(v) {
+                            warnings.push(format!("line {at}: {n} {v} is outside 0..=100, clamped"));
+                        }
                         true
                     }
                     _ => false,
@@ -202,19 +205,16 @@ fn flag_key(name: &str) -> crate::frontend::screens::SettingKey {
 /// file was there at all. A missing file is not a warning; an unreadable one is.
 pub fn load(path: &Path) -> (Stored, Vec<String>, bool) {
     match std::fs::read(path) {
-        Ok(bytes) => match String::from_utf8(bytes) {
-            Ok(text) => {
-                let (s, w) = Stored::parse(&text);
-                (s, w, true)
+        Ok(bytes) => {
+            // Not-UTF-8 bytes (a Latin-1 comment, say) become U+FFFD: the lines that are
+            // text still read, the others warn. A leading byte order mark is dropped.
+            let text = String::from_utf8_lossy(&bytes);
+            let (s, mut w) = Stored::parse(text.strip_prefix('\u{feff}').unwrap_or(&text));
+            if matches!(text, std::borrow::Cow::Owned(_)) {
+                w.insert(0, format!("{} is not valid UTF-8; unreadable bytes ignored", path.display()));
             }
-            Err(_) => {
-                let mut bad = path.as_os_str().to_owned();
-                bad.push(".bad");
-                let kept = std::fs::rename(path, &bad).is_ok();
-                let note = if kept { "kept as settings.cfg.bad" } else { "left in place" };
-                (Stored::default(), vec![format!("{} is not text ({note}); using defaults", path.display())], true)
-            }
-        },
+            (s, w, true)
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => (Stored::default(), Vec::new(), false),
         Err(e) => (Stored::default(), vec![format!("cannot read {}: {e}; using defaults", path.display())], true),
     }
@@ -297,8 +297,12 @@ pub struct SettingsStore {
     stored: Stored,
     lcars: Pinned,
     intro: Pinned,
-    /// Seconds the current change has waited.
+    /// Seconds the current change has waited since it last changed.
     waiting: Option<f32>,
+    /// The text of the last change seen while waiting, to restart the wait on a newer one.
+    pending: String,
+    /// The text a write failed on.
+    failed: Option<String>,
     /// Seconds to wait; tests set it to 0.
     pub delay: f32,
 }
@@ -378,6 +382,8 @@ impl Plugin for SettingsPlugin {
             lcars: Pinned::new(self.lcars_forced, file_values.lcars, applied.lcars),
             intro: Pinned::new(self.intro_forced, file_values.intro, applied.intro),
             waiting: None,
+            pending: String::new(),
+            failed: None,
             delay: SAVE_DELAY,
         });
         app.add_systems(Last, (save_on_change, save_on_exit).chain());
@@ -417,14 +423,15 @@ fn flush(store: &mut SettingsStore, now: &Stored) {
     }
     match write_atomic(&path, &text) {
         Ok(()) => {
+            store.failed = None;
             store.on_disk = text;
             store.stored = now.clone();
             store.waiting = None;
         }
         Err(e) => {
             warn!("settings: cannot write {}: {e}", path.display());
-            // Counted as saved: the next change tries again, not every frame.
-            store.on_disk = text;
+            // Not retried every frame: the next change tries again, and so does exit.
+            store.failed = Some(text);
             store.waiting = None;
         }
     }
@@ -435,14 +442,20 @@ fn save_on_change(world: &mut World) {
     if store.path.is_some() {
         let dt = world.get_resource::<Time<Real>>().map_or(0.0, |t| t.delta_secs());
         let now = current(&mut store, world);
-        if now.to_text() != store.on_disk {
+        let text = now.to_text();
+        if text == store.on_disk {
+            store.waiting = None;
+        } else if store.failed.as_deref() != Some(text.as_str()) {
+            // The wait runs from the last change: a drag is one write, when it stops.
+            if text != store.pending {
+                store.pending = text;
+                store.waiting = Some(0.0);
+            }
             let waited = store.waiting.unwrap_or(0.0) + dt;
             store.waiting = Some(waited);
             if waited >= store.delay {
                 flush(&mut store, &now);
             }
-        } else {
-            store.waiting = None;
         }
     }
     world.insert_resource(store);
@@ -545,12 +558,17 @@ mod tests {
         // Out of range is clamped, with a warning.
         let (s, w) = Stored::parse("max_selection = 9999\nmaster = 400\n");
         assert_eq!((s.max_selection.get(), s.settings.master), (120, 100.0));
-        assert_eq!(w.len(), 1);
-        // Not text at all: defaults, the file is set aside, the app starts.
+        assert_eq!(w.len(), 2, "{w:?}");
+        // Not text at all: defaults, the app starts, the file is left alone.
         std::fs::write(&file, [0xff, 0xfe, 0x00, 0x9f]).unwrap();
         let a = app(&file, false, false);
         assert_eq!(*a.world().resource::<KeyBindings>(), KeyBindings::default());
-        assert!(!file.exists() && dir.join("settings.cfg.bad").is_file());
+        assert!(file.is_file());
+        // A Latin-1 byte in a comment and a byte order mark lose nothing.
+        std::fs::write(&file, b"\xef\xbb\xbfmax_selection = 90\n# caf\xe9\nmusic = 11\n").unwrap();
+        let (s, w, _) = load(&file);
+        assert_eq!((s.max_selection.get(), s.settings.music), (90, 11.0));
+        assert_eq!(w.len(), 1, "{w:?}");
         // A directory where the file should be: unreadable, defaults, no panic.
         let blocked = dir.join("blocked.cfg");
         std::fs::create_dir(&blocked).unwrap();
@@ -571,6 +589,11 @@ mod tests {
         a.update();
         a.update();
         assert!(!file.exists());
+        // The folder becomes writable: exit tries again and the change is saved.
+        std::fs::remove_file(dir.join("config")).unwrap();
+        a.world_mut().write_message(AppExit::Success);
+        a.update();
+        assert_eq!(load(&file).0.max_selection.get(), 90);
         let _ = std::fs::remove_dir_all(dir);
     }
 
