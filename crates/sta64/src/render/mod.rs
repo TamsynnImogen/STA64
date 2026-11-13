@@ -13,6 +13,7 @@ pub mod mining;
 pub mod model_scene;
 pub mod moons;
 pub mod nebula;
+pub mod nebula_lowres;
 pub mod overlays;
 pub mod particles;
 pub mod planet;

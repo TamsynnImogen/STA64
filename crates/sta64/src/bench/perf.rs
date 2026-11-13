@@ -48,7 +48,10 @@ pub const TOGGLES: &[(&str, &str)] = &[
     ("msaa-off", "no multisampling on the map's cameras"),
     ("msaa-2", "2x multisampling"),
     ("no-prepass", "the map camera's depth prepass off (the nebula march reads it)"),
-    ("neb-steps8", "nebula march with 8 steps instead of 16"),
+    ("neb-steps8", "nebula march with 8 steps instead of the default"),
+    ("neb-full", "nebula march at the view's size (one ray per pixel, the box path)"),
+    ("neb-half", "nebula march at half size per axis (`nebula_lowres.rs`)"),
+    ("neb-quarter", "nebula march at a quarter size per axis"),
     ("freeze-rocks", "rock materials not rewritten when the camera moves (lighting goes stale: measurement only)"),
     ("freeze-hulls", "hull materials not rewritten when the camera moves (measurement only)"),
 ];
@@ -384,11 +387,13 @@ fn apply_variant(
     }
     if let Some(mut q) = quality {
         let d = crate::render::quality::RenderQuality::default();
+        let scale = if on("neb-full") { 1 } else if on("neb-half") { 2 } else if on("neb-quarter") { 4 } else { d.nebula_scale };
         let want = crate::render::quality::RenderQuality {
             shadows: !on("no-shadows"),
             msaa: if on("msaa-off") { 1 } else if on("msaa-2") { 2 } else { d.msaa },
             depth_prepass: !on("no-prepass"),
-            nebula_steps: if on("neb-steps8") { 8 } else { d.nebula_steps },
+            nebula_steps: if on("neb-steps8") { 8 } else { crate::render::quality::default_nebula_steps(scale) },
+            nebula_scale: scale,
         };
         if *q != want {
             *q = want;

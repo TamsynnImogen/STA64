@@ -15,19 +15,33 @@ pub struct RenderQuality {
     /// The map camera's depth prepass (every opaque mesh drawn once more; the nebulae's march
     /// reads it).
     pub depth_prepass: bool,
-    /// The nebula march's steps along a ray (the look is tuned for 16).
+    /// The nebula march's steps along a ray (the look is tuned for 16 at full size).
     pub nebula_steps: u32,
+    /// The nebula march's resolution: 1 (the view's own, one ray per pixel), 2 (half, per
+    /// axis) or 4 (a quarter), drawn into a smaller target and laid over the view with a
+    /// depth-aware upsample (`nebula_lowres.rs`).
+    pub nebula_scale: u32,
 }
+
+/// The march's steps when the setting does not say: the look is tuned for 16 rays of the
+/// full-size march; a march at a smaller size jitters each ray over a wider spread of
+/// pixels, so it keeps all 16.
+pub fn default_nebula_steps(_scale: u32) -> u32 {
+    16
+}
+
+/// The nebula march's default resolution divisor.
+pub const DEFAULT_NEBULA_SCALE: u32 = 1;
 
 impl Default for RenderQuality {
     fn default() -> Self {
-        RenderQuality { shadows: true, msaa: 4, depth_prepass: true, nebula_steps: 16 }
+        RenderQuality { shadows: true, msaa: 4, depth_prepass: true, nebula_steps: default_nebula_steps(DEFAULT_NEBULA_SCALE), nebula_scale: DEFAULT_NEBULA_SCALE }
     }
 }
 
 impl RenderQuality {
     /// The defaults, with what the environment says (until the options screen has a graphics
-    /// section): `STA64_SHADOWS=0`, `STA64_MSAA=1|2|4`, `STA64_NEBULA_STEPS=4..32`.
+    /// section): `STA64_SHADOWS=0`, `STA64_MSAA=1|2|4`, `STA64_NEBULA_SCALE=1|2|4`, `STA64_NEBULA_STEPS=4..32`.
     pub fn from_env() -> RenderQuality {
         let mut q = RenderQuality::default();
         let var = |n: &str| std::env::var(n).ok();
@@ -36,6 +50,10 @@ impl RenderQuality {
         }
         if let Some(m) = var("STA64_MSAA").and_then(|v| v.trim().parse::<u8>().ok()).filter(|m| matches!(m, 1 | 2 | 4)) {
             q.msaa = m;
+        }
+        if let Some(s) = var("STA64_NEBULA_SCALE").and_then(|v| v.trim().parse::<u32>().ok()).filter(|s| matches!(s, 1 | 2 | 4)) {
+            q.nebula_scale = s;
+            q.nebula_steps = default_nebula_steps(s);
         }
         if let Some(n) = var("STA64_NEBULA_STEPS").and_then(|v| v.trim().parse::<u32>().ok()).filter(|n| (4..=32).contains(n)) {
             q.nebula_steps = n;
@@ -106,6 +124,6 @@ mod tests {
 
     #[test]
     fn the_defaults_are_the_look_before_the_settings_existed() {
-        assert_eq!(RenderQuality::default(), RenderQuality { shadows: true, msaa: 4, depth_prepass: true, nebula_steps: 16 });
+        assert_eq!(RenderQuality::default(), RenderQuality { shadows: true, msaa: 4, depth_prepass: true, nebula_steps: 16, nebula_scale: 1 });
     }
 }

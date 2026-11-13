@@ -16,6 +16,8 @@ use bevy::render::render_resource::{
     TextureDimension, TextureFormat,
 };
 use bevy::shader::ShaderRef;
+use crate::render::nebula_lowres::NebulaLowRes;
+use bevy::camera::visibility::RenderLayers;
 use sta_surface::nebula::{envelope, noise_volume, volume_mips, Lightning, NebulaRecipe};
 use std::sync::{Arc, Mutex};
 
@@ -156,7 +158,7 @@ pub struct NoiseVolume {
 /// A class's field on this map.
 #[derive(Component)]
 pub struct NebulaField {
-    material: Handle<NebulaMaterial>,
+    pub(super) material: Handle<NebulaMaterial>,
     recipe: NebulaRecipe,
     reach: f32,
     /// The envelope's extent, for the edge-on dimming's path limit.
@@ -170,12 +172,16 @@ pub struct NebulaField {
     last: f32,
 }
 
+/// A field whose box the low-resolution path stands in for (`nebula_lowres.rs`).
+#[derive(Component)]
+struct LowResGas;
+
 pub struct NebulaPlugin;
 
 impl Plugin for NebulaPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "nebula.wesl");
-        app.add_plugins(MaterialPlugin::<NebulaMaterial>::default())
+        app.add_plugins((MaterialPlugin::<NebulaMaterial>::default(), crate::render::nebula_lowres::NebulaLowResPlugin))
             .init_resource::<NoiseVolume>()
             .add_systems(Update, (poll_noise, fade_boards))
             .add_systems(PostUpdate, update.after(TransformSystems::Propagate).after(crate::render::shadows::ShadowSet));
@@ -423,16 +429,27 @@ pub fn spawn_field(
 }
 
 /// Each frame: the camera, the key light, the flow's drift and the edge-on dimming.
+#[allow(clippy::too_many_arguments)]
 fn update(
-    camera: Query<(&GlobalTransform, &Projection), crate::map::MainCamera>,
+    mut commands: Commands,
+    camera: Query<(Entity, &GlobalTransform, &Projection, Has<NebulaLowRes>), crate::map::MainCamera>,
     lights: Query<(&GlobalTransform, &DirectionalLight)>,
     shadow: Option<Res<crate::render::shadows::KeyShadow>>,
     quality: Option<Res<crate::render::quality::RenderQuality>>,
-    mut fields: Query<&mut NebulaField>,
+    mut fields: Query<(Entity, &mut NebulaField, Has<LowResGas>)>,
     mut materials: ResMut<Assets<NebulaMaterial>>,
     clock: Res<crate::clock::AnimClock>,
 ) {
-    let Ok((cam, proj)) = camera.single() else { return };
+    let Ok((cam_entity, cam, proj, has_low)) = camera.single() else { return };
+    // The march at a fraction of the view's size needs the depth prepass to stop at the
+    // scene and a perspective view to find its rays.
+    let divisor = quality.as_deref().map_or(1, |q| q.nebula_scale);
+    let low = divisor > 1 && quality.as_deref().is_none_or(|q| q.depth_prepass) && matches!(proj, Projection::Perspective(_)) && !fields.is_empty();
+    if low {
+        commands.entity(cam_entity).insert(NebulaLowRes { divisor });
+    } else if has_low {
+        commands.entity(cam_entity).remove::<NebulaLowRes>();
+    }
     let near = match proj {
         Projection::Perspective(p) => p.near,
         _ => 1.0,
@@ -444,7 +461,13 @@ fn update(
         .unwrap_or(Vec3::Y);
     let fwd = cam.forward().as_vec3();
     let t = clock.wall() as f32;
-    for mut f in &mut fields {
+    for (entity, mut f, has) in &mut fields {
+        // While the low-resolution path draws the gas, the box is on no camera's layers.
+        if low && !has {
+            commands.entity(entity).insert((LowResGas, RenderLayers::none()));
+        } else if !low && has {
+            commands.entity(entity).remove::<(LowResGas, RenderLayers)>();
+        }
         let f = &mut *f;
         let Some(mut m) = materials.get_mut(&f.material) else { continue };
         if let Some(s) = shadow.as_deref()
@@ -531,7 +554,11 @@ mod tests {
     /// `@if(cond)` keeps or drops the declaration, statement or `{ }` block after it,
     /// and `constants::MATERIAL_BIND_GROUP` is filled in.
     fn variant(defs: &[&str]) -> String {
-        let src = include_str!("nebula.wesl").replace("constants::MATERIAL_BIND_GROUP", "3");
+        variant_of(include_str!("nebula.wesl"), defs)
+    }
+
+    fn variant_of(src: &str, defs: &[&str]) -> String {
+        let src = src.replace("constants::MATERIAL_BIND_GROUP", "3");
         let lines: Vec<&str> = src.lines().collect();
         let indent_of = |l: &str| l.len() - l.trim_start().len();
         let mut out = String::new();
@@ -567,6 +594,17 @@ mod tests {
     fn nebula_shader_validates_in_every_variant() {
         for defs in [&[][..], &["DEPTH_PREPASS"], &["DEPTH_PREPASS", "MULTISAMPLED"]] {
             let src = variant(defs);
+            let module = naga::front::wgsl::parse_str(&src).unwrap_or_else(|e| panic!("{defs:?}: {}", e.emit_to_string(&src)));
+            naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
+                .validate(&module)
+                .unwrap_or_else(|e| panic!("{defs:?}: {e:?}"));
+        }
+    }
+
+    #[test]
+    fn low_resolution_shader_validates_in_every_variant() {
+        for defs in [&[][..], &["MULTISAMPLED"]] {
+            let src = variant_of(include_str!("nebula_lowres.wesl"), defs);
             let module = naga::front::wgsl::parse_str(&src).unwrap_or_else(|e| panic!("{defs:?}: {}", e.emit_to_string(&src)));
             naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
                 .validate(&module)
