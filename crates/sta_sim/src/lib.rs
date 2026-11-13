@@ -35,6 +35,7 @@ pub mod kinematics;
 pub mod movement;
 mod ownership;
 mod perception;
+pub mod relations;
 #[cfg(test)]
 mod perception_tests;
 #[cfg(test)]
@@ -82,7 +83,7 @@ pub use view::{TickOutput, UnitView, WorldView};
 use std::sync::Arc;
 
 use sta_content::{ContentDb, Region, StartPos};
-use view::{PlayerView, Relation};
+use view::PlayerView;
 use world::{Entities, Entity, EntityKind, Fnv, Table};
 
 pub(crate) use kinematics::{MIN_ALIGN, arrive_distance};
@@ -173,6 +174,8 @@ pub struct Sim {
     scripted: orders::Scripted,
     /// Per-craft switches set by missions (SIM-58); in the digest once any exists.
     switches: switches::SwitchTable,
+    /// Mission-set relations between seats (SIM-63); in the digest once any exists.
+    relations: relations::Relations,
     /// Units whose team just changed (SIM-29): `activateOnTeamChange` weapons
     /// engage on the tick's weapon pass. Filled by the tick's commands and
     /// drained by the same tick, so it is empty between ticks and not saved.
@@ -213,6 +216,7 @@ impl Sim {
             attrs: Default::default(),
             scripted: Default::default(),
             switches: Default::default(),
+            relations: Default::default(),
             team_changes: Vec::new(),
             appearance_factions: Vec::new(),
         }
@@ -424,7 +428,7 @@ impl Sim {
             let mut held = if db.features().builder_hold_fire { self.production.builders_at_work() } else { Vec::new() };
             held.extend(self.scripted.holding_fire());
             self.weapons.hold_fire(held);
-            self.weapons.step_with_perception(self.tick, &self.units, &db, &self.players, &self.perception, &mut self.specials, &mut self.rng, &self.switches, &mut self.events);
+            self.weapons.step_with_perception(self.tick, &self.units, &db, relations::Diplomacy::new(&self.players, &self.relations), &self.perception, &mut self.specials, &mut self.rng, &self.switches, &mut self.events);
             self.record_engagement(from);
             // An attack whose target is gone leaves no course behind (SIM-36).
             for id in self.weapons.take_ended() {
@@ -503,11 +507,11 @@ impl Sim {
                     .players
                     .iter()
                     .filter(|o| o.0 != id)
-                    .map(|&(o, t)| (o, if t == team { Relation::Ally } else { Relation::Enemy }))
+                    .map(|&(o, _)| (o, relations::Diplomacy::new(&self.players, &self.relations).view(id, o)))
                     .collect(),
             })
             .collect();
-        let mut visibility = sensors::compute(&self.units, self.content.as_deref(), &self.players);
+        let mut visibility = sensors::compute(&self.units, self.content.as_deref(), relations::Diplomacy::new(&self.players, &self.relations));
         if !hidden.is_empty() {
             // Both lists ascend by id.
             for (_, seen) in &mut visibility {
@@ -596,6 +600,9 @@ impl Sim {
         }
         if !self.switches.is_empty() {
             self.switches.hash_into(&mut h);
+        }
+        if !self.relations.is_empty() {
+            self.relations.hash_into(&mut h);
         }
         if !self.attrs.is_empty() {
             self.attrs.hash_into(&mut h);

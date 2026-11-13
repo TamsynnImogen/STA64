@@ -299,10 +299,10 @@ impl Sim {
             return;
         }
         let Some(db) = self.content.clone() else { return };
-        let players = self.players.clone();
-        let team = move |p: PlayerId| players.iter().find(|x| x.0 == p).map(|x| x.1);
+        let (players, rel) = (self.players.clone(), self.relations.clone());
+        let dip = crate::relations::Diplomacy::new(&players, &rel);
         let seats = !self.players.is_empty();
-        let visibility = if seats { crate::sensors::compute(&self.units, Some(&db), &self.players) } else { Vec::new() };
+        let visibility = if seats { crate::sensors::compute(&self.units, Some(&db), dip) } else { Vec::new() };
         let ids: Vec<EntityId> = self.scripted.rows.iter().map(|(id, _)| id).collect();
         for id in ids {
             let Some(u) = self.units.get(id) else {
@@ -344,9 +344,11 @@ impl Sim {
                 Job::SearchAndDestroy | Job::AttackAny => {
                     let Some(def) = db.unit(u.def) else { continue };
                     let reach = def.sensor.max(approach::attack_range(&db, def).unwrap_or(Fixed::ZERO));
-                    let Some(mine) = team(owner) else { continue };
+                    if !dip.is_seat(owner) {
+                        continue;
+                    }
                     let seen = seats.then(|| visibility.iter().find(|(p, _)| *p == owner).map_or(&[][..], |(_, ids)| ids.as_slice()));
-                    let ok = |t: &Entity| targeting::candidate(&db, u, t, mine, &team, &self.perception, seen, Some(&self.switches));
+                    let ok = |t: &Entity| targeting::candidate(&db, u, t, dip, &self.perception, seen, Some(&self.switches));
                     let current = self.weapons.attack_of(id).and_then(|t| self.units.get(t)).filter(|t| ok(t) && flat(pos, t.pos) <= reach).map(|t| t.id);
                     let pick = current.or_else(|| targeting::best(&db, u, reach, self.units.iter().filter(|t| ok(t))).map(|t| t.id));
                     match pick {

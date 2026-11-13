@@ -46,9 +46,10 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// (crafts in warp). Format 19 appends stuck-order watch rows; format 20
 /// adds their anchor, start distance and birth tick. Format 21 appends scripted
 /// orders (SIM-56) and per-craft switches (SIM-58). Format 22 appends mission
-/// attributes (SIM-54). Format 23 appends cosmetic seat factions.
+/// attributes (SIM-54). Format 23 appends cosmetic seat factions. Format 24 appends mission-set
+/// relations between seats (SIM-63).
 /// Only the current format is read.
-pub const FORMAT_VERSION: u16 = 23;
+pub const FORMAT_VERSION: u16 = 24;
 
 const HEADER: usize = 4 + 2 + 4 + 8;
 
@@ -181,6 +182,15 @@ struct EntityRec {
 struct AppearanceRec {
     version: u8,
     factions: Vec<(PlayerId, String)>,
+}
+
+/// Format 24: mission-set relations between seats (SIM-63): `(from, to, code)`
+/// with code 0 Enemy, 1 Neutral, 2 Ally, only pairs that differ from the
+/// team default.
+#[derive(Serialize, Deserialize)]
+struct RelationsRec {
+    version: u8,
+    rows: crate::relations::RelationRows,
 }
 
 /// Format 19, changed in 20: the stuck-order watch rows (`watchdog`).
@@ -435,6 +445,7 @@ impl Sim {
         out.extend(postcard::to_allocvec(&SwitchesRec { version: 1, rows: self.switches.to_rows() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&self.attrs.to_rec()).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&AppearanceRec { version: 1, factions: self.appearance_factions.clone() }).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&RelationsRec { version: 1, rows: self.relations.to_rows() }).expect("snapshot serialises"));
         out
     }
 
@@ -494,6 +505,9 @@ impl Sim {
         let (record, rest): (AppearanceRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         if record.version != 1 { return Err(SnapshotError::Corrupt("unknown appearance record version".into())); }
         let appearance_factions = record.factions;
+        let (record, rest): (RelationsRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        if record.version != 1 { return Err(SnapshotError::Corrupt("unknown relations record version".into())); }
+        let relation_rows = record.rows;
         if !appearance_factions.windows(2).all(|w| w[0].0 < w[1].0)
             || appearance_factions.iter().any(|(id, name)| name.is_empty() || name.trim() != name || name.to_ascii_lowercase() != *name || !b.players.iter().any(|p| p.0 == *id)) {
             return Err(SnapshotError::Corrupt("invalid appearance faction rows".into()));
@@ -581,6 +595,7 @@ impl Sim {
         if scripted.to_rows().iter().any(|(id, j)| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft) || matches!(j, crate::orders::Job::Patrol { points, leg } if points.len() < 2 || *leg >= points.len())) {
             return Err(SnapshotError::Corrupt("scripted order entity is not a craft or a patrol has no loop".into()));
         }
+        let relations = crate::relations::Relations::from_rows(&relation_rows, &b.players).ok_or_else(|| corrupt("relation rows"))?;
         let switches = crate::switches::SwitchTable::from_rows(switch_rows).ok_or_else(|| corrupt("switch rows"))?;
         if switches.to_rows().iter().any(|(id, _)| units.get(*id).is_none()) {
             return Err(SnapshotError::Corrupt("switches of an unknown entity".into()));
@@ -637,6 +652,7 @@ impl Sim {
             subsystems,
             scripted,
             switches,
+            relations,
             attrs,
             team_changes: Vec::new(),
             appearance_factions,
@@ -651,6 +667,9 @@ mod subsystem_tests;
 #[cfg(test)]
 #[path = "snapshot/attrs_tests.rs"]
 mod attrs_tests;
+#[cfg(test)]
+#[path = "snapshot/relations_tests.rs"]
+mod relations_tests;
 
 #[cfg(test)]
 #[path = "snapshot/appearance_tests.rs"]

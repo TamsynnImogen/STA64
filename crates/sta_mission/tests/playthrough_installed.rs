@@ -96,3 +96,21 @@ fn a1_federation_1_is_lost_when_the_enterprise_is_destroyed() {
     let log = dump(&p);
     assert!(p.outcome.is_some_and(|o| !o.won), "not lost:\n{log}");
 }
+
+/// Armada II, Federation 1 "Invasion": the intro props belong to team 8 and the script sets
+/// `SetRelation(1, 8, 2)` and `SetRelation(8, 1, 2)` for the opening (SIM-63). With the relation
+/// honoured, nothing of the player's seat is destroyed in the opening (before the fix a team-8
+/// starbase and freighter destroyed five ships and the Enterprise inside the intro).
+#[test]
+fn a2_federation_1_opening_destroys_none_of_the_players_ships() {
+    let Ok(install) = std::env::var("STA64_TEST_A2_STOCK_INSTALL") else {
+        eprintln!("skipped: set STA64_TEST_A2_STOCK_INSTALL to an Armada II (stock) root");
+        return;
+    };
+    let out = convert("dsl_to_lua.py", &install, "a2_fed01");
+    let p = play_mission(&install, &out, "a2_fed01", "idle.lua", 30 * 70);
+    let log = dump(&p);
+    let lost: Vec<_> = p.of("destroyed").filter(|e| e.what.starts_with("p0 ")).map(|e| e.what.clone()).collect();
+    assert!(lost.is_empty(), "the player's ships were destroyed in the opening: {lost:?}\n{log}");
+    assert!(p.outcome.is_none(), "the opening ended the mission:\n{log}");
+}

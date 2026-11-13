@@ -19,7 +19,8 @@
 use crate::event::SimEvent;
 use crate::world::{Entities, EntityKind, Fnv};
 use serde::{Deserialize, Serialize};
-use sta_core::{PlayerId, TeamId};
+use crate::relations::Diplomacy;
+use sta_core::PlayerId;
 
 /// The eliminated seats, ascending id. In the digest once non-empty.
 #[derive(Debug, Clone, Default)]
@@ -74,27 +75,18 @@ impl Victory {
     }
 
     /// The seats of the one team left, once the game is over.
-    pub fn winners(&self, players: &[(PlayerId, TeamId)]) -> Option<Vec<PlayerId>> {
+    pub fn winners(&self, dip: Diplomacy<'_>) -> Option<Vec<PlayerId>> {
+        let players = dip.players;
         if self.eliminated.is_empty() {
             return None;
         }
-        let mut teams: Vec<TeamId> = players
-            .iter()
-            .filter(|(p, _)| !self.is_eliminated(*p))
-            .map(|&(_, t)| t)
-            .collect();
-        teams.sort();
-        teams.dedup();
-        if teams.len() > 1 {
+        // Over when every pair of survivors are mutual allies (confirmed Ally,
+        // read from the executable); without mission relations that is one team.
+        let alive: Vec<PlayerId> = players.iter().filter(|(p, _)| !self.is_eliminated(*p)).map(|&(p, _)| p).collect();
+        if alive.iter().any(|&a| alive.iter().any(|&b| !dip.confirmed_ally(a, b))) {
             return None;
         }
-        Some(
-            players
-                .iter()
-                .filter(|(p, t)| !self.is_eliminated(*p) && teams.contains(t))
-                .map(|&(p, _)| p)
-                .collect(),
-        )
+        Some(alive)
     }
 
     pub(crate) fn hash_into(&self, h: &mut Fnv) {
@@ -126,7 +118,7 @@ impl crate::Sim {
 
     /// The winning seats once only one team is left, else `None`.
     pub fn winners(&self) -> Option<Vec<PlayerId>> {
-        self.victory.winners(&self.players)
+        self.victory.winners(Diplomacy::new(&self.players, &self.relations))
     }
 }
 

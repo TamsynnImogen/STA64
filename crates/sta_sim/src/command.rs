@@ -284,6 +284,16 @@ pub enum Edit {
     /// The sim keeps and shows it; no rule reads it yet. SCRIPT/BENCH only.
     /// Appended tag 43.
     PlayerRace(PlayerId, String),
+    /// Mission `SetRelation(a, b, r)` / Roots `Player:setRelation` (SIM-63):
+    /// seat `from`'s own view of seat `to` becomes `relation` (directional:
+    /// the reverse view is untouched). Both must be configured, distinct
+    /// seats; anything else is rejected. Takes effect on the next tick: units
+    /// stop or start engaging, shared vision follows mutual Ally. Setting the
+    /// default (same team Ally, other team Enemy) removes the override. Wire
+    /// bounds: seats are bytes and `Relation` has three variants (Ally,
+    /// Neutral, Enemy); a variant index above 2 fails to decode. SCRIPT/BENCH
+    /// only. Appended tag 44.
+    SetRelation { from: PlayerId, to: PlayerId, relation: crate::view::Relation },
 }
 
 /// The largest turn rate (radians per second) a script may set.
@@ -450,6 +460,17 @@ mod tests {
             assert_eq!(bytes[0], tag, "{edit:?}");
             assert_eq!(postcard::from_bytes::<Edit>(&bytes).unwrap(), edit);
         }
+    }
+
+    #[test]
+    fn set_relation_appends_tag_44_and_bounds_the_relation() {
+        let e = Edit::SetRelation { from: PlayerId(1), to: PlayerId(2), relation: crate::view::Relation::Ally };
+        let bytes = postcard::to_allocvec(&e).unwrap();
+        assert_eq!(bytes, [44, 1, 2, 0]);
+        assert_eq!(postcard::from_bytes::<Edit>(&bytes).unwrap(), e);
+        // Neutral and Enemy are 1 and 2; nothing above decodes.
+        assert!(postcard::from_bytes::<Edit>(&[44, 1, 2, 3]).is_err());
+        assert!(postcard::from_bytes::<Edit>(&[44, 1, 2]).is_err());
     }
 
     #[test]

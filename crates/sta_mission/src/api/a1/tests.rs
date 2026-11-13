@@ -635,11 +635,23 @@ fn paths_are_the_maps_and_match_ignoring_case() {
 }
 
 #[test]
-fn relations_are_a_script_override() {
+fn set_relation_sends_a_one_directional_edit_with_the_engines_codes() {
+    use sta_sim::command::{CommandKind, Edit};
     let s = scene();
-    let (rt, _) = run(&s, "A1.SetRelation(0, 1, 1); A1.SetRelation(1, 0, 0)");
-    assert_eq!(rt.relation(PlayerId(0), PlayerId(1)), Relation::Ally);
-    assert_eq!(rt.relation(PlayerId(1), PlayerId(0)), Relation::Enemy);
+    let (rt, commands) = run(&s, "A1.SetRelation(1, 2, 2); A1.SetRelation(2, 1, 1); A1.SetRelation(1, 2, 0)");
+    let edits: Vec<_> = commands
+        .iter()
+        .filter_map(|c| match &c.kind {
+            CommandKind::Edit(Edit::SetRelation { from, to, relation }) => Some((from.0, to.0, *relation)),
+            _ => None,
+        })
+        .collect();
+    // Default numbering: team n is seat n-1 (0 ally... the engine's 2 is Ally, 1 Neutral, 0 Enemy).
+    assert_eq!(edits.len(), 3, "{commands:?}");
+    assert_eq!((edits[0].2, edits[1].2, edits[2].2), (Relation::Ally, Relation::Neutral, Relation::Enemy));
+    assert_eq!((edits[0].0, edits[0].1), (edits[2].0, edits[2].1));
+    assert_eq!((edits[1].0, edits[1].1), (edits[0].1, edits[0].0), "the reverse call is its own edit");
+    assert_eq!(rt.relation(PlayerId(edits[1].0), PlayerId(edits[1].1)), Relation::Neutral);
 }
 
 #[test]

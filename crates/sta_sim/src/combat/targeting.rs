@@ -36,7 +36,7 @@
 //! The memory of who was hit by whom and who fired is kept for one second.
 
 use sta_content::ContentDb;
-use sta_core::{EntityId, Fixed, PlayerId, TeamId, TICK_HZ};
+use sta_core::{EntityId, Fixed, PlayerId, TICK_HZ};
 
 use crate::event::SimEvent;
 use crate::view::UnitFlags;
@@ -159,15 +159,14 @@ pub(crate) fn best<'a>(db: &ContentDb, u: &Entity, reach: Fixed, candidates: imp
     out.map(|o| o.2)
 }
 
-/// Can `t` be picked automatically by a craft of team `mine`: an enemy (by
-/// perceived owner), alive, not cloaked to it, targetable, and seen.
+/// Can `t` be picked automatically by craft `u`: an enemy in its owner's own
+/// view of the target's perceived owner (SIM-63), alive, not cloaked to it, targetable, and seen.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn candidate(
     db: &ContentDb,
     u: &Entity,
     t: &Entity,
-    mine: TeamId,
-    team: &dyn Fn(PlayerId) -> Option<TeamId>,
+    dip: crate::relations::Diplomacy<'_>,
     perception: &Table<PlayerId>,
     seen: Option<&[EntityId]>,
     // `Some` for an automatic pick: units the mission disallowed as a target
@@ -177,9 +176,9 @@ pub(crate) fn candidate(
 ) -> bool {
     let perceived = perception.get(t.id).copied().unwrap_or(t.owner);
     t.id != u.id
-        && team(perceived).is_some_and(|x| x != mine)
+        && dip.is_enemy(u.owner, perceived)
         && t.hull[1] > Fixed::ZERO
-        && !(t.flags.contains(UnitFlags::CLOAKED) && team(t.owner) != Some(mine))
+        && !(t.flags.contains(UnitFlags::CLOAKED) && !dip.confirmed_ally(t.owner, u.owner))
         && seen.is_none_or(|ids| ids.binary_search(&t.id).is_ok())
         && !db.unit(t.def).is_some_and(|d| d.invalid_as_target)
         && !switches.is_some_and(|s| s.blocked_for(t.id, u.owner))
@@ -194,9 +193,8 @@ impl Sim {
         if !f.idle_assist || self.engagement.is_empty() {
             return;
         }
-        let players = self.players.clone();
-        let team = move |p: PlayerId| players.iter().find(|x| x.0 == p).map(|x| x.1);
-        let visibility = crate::sensors::compute(&self.units, Some(&db), &self.players);
+        let dip = crate::relations::Diplomacy::new(&self.players, &self.relations);
+        let visibility = crate::sensors::compute(&self.units, Some(&db), dip);
         let mut orders: Vec<(EntityId, EntityId)> = Vec::new();
         for u in self.units.iter() {
             let Some(def) = db.unit(u.def) else { continue };
@@ -214,7 +212,9 @@ impl Sim {
             if !idle || (f.assist_high_autonomy_only && self.autonomy.levels(u.id)[0] < 2) {
                 continue;
             }
-            let Some(mine) = team(u.owner) else { continue };
+            if !dip.is_seat(u.owner) {
+                continue;
+            }
             let near = |a: &Entity| {
                 let (dx, dz) = (a.pos.x - u.pos.x, a.pos.z - u.pos.z);
                 (dx * dx + dz * dz).sqrt() <= def.sensor
@@ -222,18 +222,18 @@ impl Sim {
             let seen = visibility.iter().find(|(p, _)| *p == u.owner).map(|(_, ids)| ids.as_slice());
             let mut pick = None;
             for a in self.units.iter() {
-                if !(a.id == u.id || (team(a.owner) == Some(mine) && a.hull[1] > Fixed::ZERO && near(a))) {
+                if !(a.id == u.id || (dip.is_seat(a.owner) && dip.view(u.owner, a.owner) == crate::view::Relation::Ally && a.hull[1] > Fixed::ZERO && near(a))) {
                     continue;
                 }
                 if let Some((_, by)) = self.engagement.hit.get(a.id)
-                    && let Some(t) = self.units.get(*by).filter(|t| candidate(&db, u, t, mine, &team, &self.perception, seen, None))
+                    && let Some(t) = self.units.get(*by).filter(|t| candidate(&db, u, t, dip, &self.perception, seen, None))
                 {
                     pick = Some(t.id);
                     break;
                 }
                 if f.assist_on_ally_fire && self.engagement.fired.get(a.id).is_some() {
                     let reach = def.sensor.max(range);
-                    pick = best(&db, u, reach, self.units.iter().filter(|t| candidate(&db, u, t, mine, &team, &self.perception, seen, Some(&self.switches)))).map(|t| t.id);
+                    pick = best(&db, u, reach, self.units.iter().filter(|t| candidate(&db, u, t, dip, &self.perception, seen, Some(&self.switches)))).map(|t| t.id);
                     if pick.is_some() {
                         break;
                     }

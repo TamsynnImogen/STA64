@@ -59,6 +59,33 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
 
     let c = ctx.clone();
     table.set(
+        "SetRelation",
+        lua.create_function(move |_, args: MultiValue| {
+            if args.len() != 3 {
+                return Err(mlua::Error::runtime("A2.SetRelation requires 3 arguments"));
+            }
+            let team = |v: &Value| {
+                let n = integer("SetRelation", v)?;
+                u8::try_from(n)
+                    .ok()
+                    .and_then(|n| c.borrow().player_numbering.decode(n))
+                    .ok_or_else(|| mlua::Error::runtime("A2.SetRelation requires valid team numbers"))
+            };
+            let (from, to) = (team(&args[0])?, team(&args[1])?);
+            let code = match &args[2] {
+                Value::Integer(n) => Some(*n),
+                Value::Number(n) if n.fract() == 0.0 => Some(*n as i64),
+                _ => None,
+            };
+            let relation = code
+                .and_then(crate::api::set_relation::from_code)
+                .ok_or_else(|| mlua::Error::runtime("A2.SetRelation requires a relation value 0, 1 or 2"))?;
+            crate::api::set_relation::queue(&mut c.borrow_mut(), "A2.SetRelation", from, to, relation)
+        })?,
+    )?;
+
+    let c = ctx.clone();
+    table.set(
         "GetPerceivedTeam",
         lua.create_function(move |_, args: MultiValue| {
             let id = handle("GetPerceivedTeam", &args, 1)?;

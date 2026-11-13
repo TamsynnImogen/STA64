@@ -57,7 +57,6 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
     }
     call(lua, ctx, table, "DisableAllAITeams", "", Some("no AI enable seam in the sim"))?;
     call(lua, ctx, table, "EnableAllAITeams", "", Some("no AI enable seam in the sim"))?;
-    call(lua, ctx, table, "SetRelation", "iii", Some("no relation edit in the sim seam"))?;
     for name in ["SetDilithium", "AddDilithium", "SetMetal", "AddMetal"] {
         call(lua, ctx, table, name, "ii", Some("no resource edit for A2 team numbering in the mission API yet"))?;
     }
@@ -122,7 +121,8 @@ mod tests {
         }
         assert_eq!(rt.take_commands().len(), 5, "every valid call retains its request (the cineractive end is the typed event)");
         let counted: Vec<String> = rt.unsupported().into_iter().map(|(k, _)| k).collect();
-        assert!(counted.iter().any(|k| k.contains("A2.SetRelation")) && counted.iter().any(|k| k.contains("A2.ObstacleAvoidance")));
+        assert!(counted.iter().any(|k| k.contains("A2.ObstacleAvoidance")));
+        assert!(!counted.iter().any(|k| k.contains("SetRelation")), "SetRelation is a sim edit now");
         assert!(!counted.iter().any(|k| k.contains("MuteSounds")), "a presentation hint is not a gap");
     }
 }
