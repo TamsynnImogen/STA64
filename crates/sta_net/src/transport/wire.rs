@@ -564,10 +564,20 @@ impl EnvelopeReader {
             Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
                 Ok(Polled::Idle)
             }
-            Err(e) if e.kind() == ErrorKind::Interrupted => Ok(Polled::Idle),
+            Err(e) if e.kind() == ErrorKind::Interrupted || spurious_pending(&e) => {
+                Ok(Polled::Idle)
+            }
             Err(e) => Err(ReadError::Io(e)),
         }
     }
+}
+
+/// Windows can fail a read that has a receive timeout with
+/// `ERROR_IO_PENDING` (997, "Overlapped I/O operation is in progress") instead
+/// of a timeout error, with nothing read and the socket intact: the same as a
+/// timeout, never a reason to drop the connection.
+fn spurious_pending(e: &std::io::Error) -> bool {
+    cfg!(windows) && e.raw_os_error() == Some(997)
 }
 
 /// A byte budget refilled at a steady rate: the relay's per-connection rate
