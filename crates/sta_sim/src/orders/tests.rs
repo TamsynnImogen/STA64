@@ -317,3 +317,21 @@ fn craft_can_repair_false_stops_shield_regeneration() {
     assert!(shields(true) > Fixed::ZERO);
     assert_eq!(shields(false), Fixed::ZERO);
 }
+
+#[test]
+fn another_players_order_cannot_cancel_a_scripted_order_and_assist_skips_scripted_crafts() {
+    let (mut sim, db) = game_on(3000);
+    let s = sim.spawn_def(db.key("st_seer").unwrap(), PlayerId(1), v(0, 0), AHEAD).unwrap();
+    run(&mut sim, vec![order(1, 0, Order::Scout { units: vec![s] })], 2);
+    // Seat 2 orders seat 1's craft: refused, the scout keeps its order.
+    run(&mut sim, vec![order(2, 0, Order::Stop { units: vec![s] }), order(2, 1, Order::Move { units: vec![s], to: v(5, 5), queue: false })], 2);
+    assert!(matches!(sim.scripted.job(s), Some(crate::orders::Job::Scout { .. })));
+    // A queued move replaces a patrol.
+    run(&mut sim, vec![order(1, 1, Order::Patrol { units: vec![s], points: vec![v(0, 300), v(300, 0)] })], 2);
+    run(&mut sim, vec![order(1, 2, Order::Move { units: vec![s], to: v(5, 5), queue: true })], 1);
+    assert!(sim.scripted.job(s).is_none());
+    // An empty path changes nothing.
+    run(&mut sim, vec![order(1, 3, Order::Scout { units: vec![s] })], 1);
+    run(&mut sim, vec![order(1, 4, Order::Patrol { units: vec![s], points: vec![] })], 1);
+    assert!(matches!(sim.scripted.job(s), Some(crate::orders::Job::Scout { .. })));
+}

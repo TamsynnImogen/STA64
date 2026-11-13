@@ -102,6 +102,17 @@ impl Scripted {
         self.rows.iter().map(|(id, j)| (id, j.clone())).collect()
     }
     pub(crate) fn from_rows(rows: Vec<(EntityId, Job)>) -> Option<Scripted> {
+        // A scout's explored cells ascend and its radius is a sane size (a
+        // forged huge one would stall the destination search).
+        let sane = |j: &Job| match j {
+            Job::Scout { radius, explored, .. } => {
+                *radius > Fixed::ZERO && *radius <= Fixed::from_int(1_000_000) && explored.windows(2).all(|w| w[0] < w[1])
+            }
+            _ => true,
+        };
+        if !rows.iter().all(|(_, j)| sane(j)) {
+            return None;
+        }
         Some(Scripted { rows: Table::from_rows(rows)? })
     }
     pub(crate) fn hash_into(&self, h: &mut Fnv) {
@@ -158,13 +169,18 @@ fn flat(a: Vec3, b: Vec3) -> Fixed {
 
 impl Sim {
     /// Drop the scripted orders of `ids` (a new ordinary order replaces them).
-    pub(crate) fn clear_scripted(&mut self, ids: &[EntityId]) {
+    /// Only crafts `player` may order lose theirs (any, for scripts and the bench).
+    pub(crate) fn clear_scripted(&mut self, player: PlayerId, ids: &[EntityId]) {
         if self.scripted.is_empty() {
             return;
         }
         for &id in ids {
-            self.scripted.remove(id);
-            self.approach_warp.remove(id);
+            if !self.units.get(id).is_some_and(|u| !player.is_player() || u.owner == player) {
+                continue;
+            }
+            if matches!(self.scripted.rows.remove(id), Some(Job::Warp)) {
+                self.approach_warp.remove(id);
+            }
         }
     }
 
@@ -195,7 +211,7 @@ impl Sim {
             _ => return false,
         };
         let ids = self.scripted_takers(player, units);
-        if ids.is_empty() {
+        if ids.is_empty() || matches!(order, Order::Patrol { points, .. } if points.is_empty()) {
             return false;
         }
         // Like every order that replaces what a craft is doing.
@@ -204,7 +220,7 @@ impl Sim {
         if let Some(db) = self.content.clone() {
             self.production.cancel(&db, &self.units, &mut self.economy, player, &ids);
         }
-        self.clear_scripted(&ids);
+        self.clear_scripted(player, &ids);
         for &id in &ids {
             self.watchdog.remove(id);
             self.movement.clear_waypoints(id);
@@ -254,7 +270,7 @@ impl Sim {
             Order::MoveWarp { to, queue, .. } => {
                 for &id in &ids {
                     self.set_target(id, Some(*to));
-                    let _ = queue;
+                    let _ = queue; // a queued warp move replaces the course, as the plain one does
                     self.scripted.rows.insert(id, Job::Warp);
                 }
             }
@@ -312,7 +328,8 @@ impl Sim {
                     }
                 }
                 Job::Warp => {
-                    if !has_target {
+                    // Over when no leg is left (queued legs keep the warp move going).
+                    if !has_target && idle_course {
                         self.scripted.remove(id);
                         self.approach_warp.remove(id);
                     }
@@ -349,7 +366,8 @@ impl Sim {
                     if !cloaked && let Some(db) = self.content.clone() {
                         let _ = self.specials.order_cloak(&db, &self.units, owner, &[id], true);
                     }
-                    let cell = |p: Vec3| ((p.x.to_f32() / CELL as f32).floor() as i32, (p.z.to_f32() / CELL as f32).floor() as i32);
+                    let size = i64::from(CELL) << 32;
+                    let cell = |p: Vec3| (p.x.to_bits().div_euclid(size) as i32, p.z.to_bits().div_euclid(size) as i32);
                     let arrived = dest.is_some_and(|d| flat(pos, d) <= Fixed::from_int(100)) || (dest.is_some() && !has_target);
                     let mut dest = dest;
                     if arrived {

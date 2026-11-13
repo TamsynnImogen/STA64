@@ -202,6 +202,7 @@ impl Sim {
             let Some(def) = db.unit(u.def) else { continue };
             let Some(range) = crate::movement::approach::attack_range(&db, def) else { continue };
             let idle = u.kind == EntityKind::Craft
+                && self.scripted.job(u.id).is_none()
                 && u.target.is_none()
                 && self.weapons.attack_of(u.id).is_none()
                 && self.movement.course(u.id).is_none_or(|c| c.waypoints.is_empty())

@@ -272,8 +272,11 @@ impl Sim {
                 let unlocked: Vec<_> = units.iter().copied()
                     .filter(|id| !self.production.is_welding(*id)).collect();
                 if unlocked.is_empty() { return false; }
+                // A queued leg does not extend a patrol (it never ends): it replaces it.
+                let patrols: Vec<_> = unlocked.iter().copied().filter(|id| matches!(self.scripted.job(*id), Some(orders::Job::Patrol { .. }))).collect();
+                self.clear_scripted(c.player, &patrols);
                 if !queue {
-                    self.clear_scripted(&unlocked);
+                    self.clear_scripted(c.player, &unlocked);
                     // A move replaces an attack (SIM-36: the approach would
                     // otherwise steer the craft back to its target).
                     self.weapons.stop_attack(&self.units, c.player, &unlocked);
@@ -289,7 +292,7 @@ impl Sim {
                 let Some(db) = self.content.clone() else { return false };
                 let unlocked: Vec<_> = units.iter().copied()
                     .filter(|id| !self.production.is_welding(*id)).collect();
-                self.clear_scripted(&unlocked);
+                self.clear_scripted(c.player, &unlocked);
                 self.economy.order_mine(&db, &self.units, c.player, &unlocked, *node)
             }
             Order::Stop { units } => {
@@ -306,7 +309,7 @@ impl Sim {
                 eligible.sort();
                 eligible.dedup();
                 if eligible.is_empty() { return false; }
-                self.clear_scripted(&eligible);
+                self.clear_scripted(c.player, &eligible);
                 self.weapons.stop_attack(&self.units, c.player, &eligible);
                 self.economy.cancel(&self.units, c.player, &eligible);
                 if let Some(db) = self.content.clone() {
@@ -325,7 +328,7 @@ impl Sim {
                 if !tech::build_allowed(&db, &self.units, &self.players, &self.ai_seats, *builder, *what) {
                     return false;
                 }
-                self.clear_scripted(&[*builder]);
+                self.clear_scripted(c.player, &[*builder]);
                 let ok = self.production.order_build(&db, &mut self.units, &mut self.economy, c.player, *builder, *what, *at, self.bounds.as_ref());
                 if ok && self.production.is_deploying(*builder) {
                     // A craft sent to build drops its attack (SIM-36: the
@@ -336,7 +339,7 @@ impl Sim {
             }
             Order::Attack { units, target } => {
                 let Some(db) = self.content.clone() else { return false };
-                self.clear_scripted(units);
+                self.clear_scripted(c.player, units);
                 let ok = self.weapons.order_attack(&db, &self.units, c.player, units, *target);
                 // The attack replaces queued legs, mining and a pending build
                 // site of the crafts that took it (SIM-36); the approach sets

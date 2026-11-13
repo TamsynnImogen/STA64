@@ -763,7 +763,7 @@ fn seams(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()> {
             let allowed = boolean(name, &args, 2)?;
             let player = {
                 let c = c.borrow();
-                u8::try_from(team).ok().and_then(|n| c.player_numbering.decode(n)).filter(|p| p.is_player() || *p == sta_sim::world::NEUTRAL).ok_or_else(|| bad(name, 1, "a valid team number"))?
+                u8::try_from(team).ok().and_then(|n| c.player_numbering.decode(n)).filter(|p| p.is_player()).ok_or_else(|| bad(name, 1, "a player team number"))?
             };
             if c.borrow().alive(id).is_some() {
                 edit_feedback::queue(&mut c.borrow_mut(), "A2.AllowAsTarget", Edit::AllowAsTarget { id, player, allowed })?;
@@ -782,7 +782,11 @@ fn seams(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()> {
             let name = "SetName";
             arity(name, &args, 2)?;
             let id = EntityId(integer(name, &args[0])?);
-            let text = text(name, &args, 1)?.unwrap_or_default();
+            let mut text = text(name, &args, 1)?.unwrap_or_default();
+            // The sim keeps names to MAX_NAME_BYTES: cut at a character boundary.
+            while text.len() > sta_sim::switches::MAX_NAME_BYTES {
+                text.pop();
+            }
             if c.borrow().alive(id).is_some() {
                 edit_feedback::queue(&mut c.borrow_mut(), "A2.SetName", Edit::Name(id, text))?;
             }

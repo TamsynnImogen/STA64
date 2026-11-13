@@ -74,7 +74,7 @@ impl Sim {
         unit.owner = to;
         // `Craft::SetTeam` clears the special-forces flag (SIM-58), and the
         // craft's scripted order goes with its old owner's.
-        self.scripted.remove(id);
+        self.clear_scripted(PlayerId::SCRIPT, &[id]);
         self.switches.edit(id, |s| s.special_forces = false);
         if new_team && !self.team_changes.contains(&id) {
             self.team_changes.push(id);
