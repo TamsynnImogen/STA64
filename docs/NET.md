@@ -156,7 +156,7 @@ Every message is one frame:
 ```
 offset size  field
 0      4     magic "S64N"
-4      2     protocol version, u16 little-endian (PROTOCOL_VERSION = 4)
+4      2     protocol version, u16 little-endian (PROTOCOL_VERSION = 5)
 6      4     body length, u32 little-endian, <= MAX_FRAME_BYTES - 10
 10     n     body: one `Message` in postcard
 ```
