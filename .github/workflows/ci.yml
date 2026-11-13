@@ -123,13 +123,15 @@ jobs:
   # counts as green.
   result:
     name: CI result
-    needs: [core, game]
+    needs: [changes, core, game]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - run: |
-          echo "core: ${{ needs.core.result }}, game: ${{ needs.game.result }}"
+          echo "changes: ${{ needs.changes.result }}, core: ${{ needs.core.result }}, game: ${{ needs.game.result }}"
+          # game may be skipped only when changes succeeded (PR touched nothing sta64 uses)
+          [ "${{ needs.changes.result }}" = success ] || exit 1
           case "${{ needs.core.result }} ${{ needs.game.result }}" in
             *failure*|*cancelled*) exit 1 ;;
           esac

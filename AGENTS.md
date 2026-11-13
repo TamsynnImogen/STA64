@@ -106,11 +106,11 @@ paths fall under an open freeze wait; ones elsewhere carry on.
   `ubuntu-latest` only when the PR touches `crates/sta64/`, `assets/`,
   `bench/`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml` or the CI
   workflow. The full 4-OS matrix (Linux x86-64 and ARM, macOS, Windows) runs on
-  every push to `main`, one run at a time (later pushes collapse into one
+  every non-docs-only push to `main`, one run at a time (later pushes collapse into one
   pending run). Add the `full-ci` label to a PR that touches file paths or
   line endings, platform code, determinism (digests, RNG, float or hash
   ordering, goldens) or file formats (saves, snapshots, network protocol,
-  content formats), so all four OSes run before the merge.
+  content formats), so all four OSes run (including `sta64`) before the merge.
 - Because a PR that does not touch `sta64` no longer builds it, run
   `cargo check --workspace --all-targets` and the tests of every crate you
   changed locally before pushing (see "Builds"), whatever CI will run.
