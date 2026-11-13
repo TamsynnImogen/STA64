@@ -127,7 +127,8 @@ impl UiProfiles {
 impl UiProfile {
     pub fn from_game(game: GameProfile) -> Self {
         match game {
-            GameProfile::Sta2Classic => Self::Armada2,
+            // FO 3.x detected as `Sta2Classic` before CON-44 and keeps its UI profile (its own look is not measured).
+            GameProfile::Sta2Classic | GameProfile::Fo3 => Self::Armada2,
             GameProfile::Fo4 => Self::FleetOps,
             GameProfile::Native | GameProfile::Sta1Classic => Self::Lcars,
         }

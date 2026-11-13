@@ -280,3 +280,61 @@ fn fully_occluded_space_holds_and_snapshot_keeps_logical_target() {
     assert_eq!(loaded.digest(), sim.digest());
     assert_eq!(loaded.unit(id).unwrap().target, Some(p(300, 0)));
 }
+
+fn walled_in() -> (Sim, EntityId, Arc<ContentDb>) {
+    let wall = Region {
+        kind: RegionKind::AsteroidField,
+        odf: "synthetic_wall".into(),
+        shape: RegionShape::Box {
+            min: p(-400, -400),
+            max: p(400, 400),
+        },
+    };
+    let db = content(false);
+    let mut sim = Sim::from_setup(&setup(db.clone(), vec![wall], vec![]));
+    let id = spawn(&mut sim, 0, p(-400, 0));
+    (sim, id, db)
+}
+
+fn blocked(events: &[SimEvent]) -> usize {
+    events.iter().filter(|e| matches!(e, SimEvent::OrderBlocked { .. })).count()
+}
+
+#[test]
+fn an_order_into_a_wall_is_reported_at_once_even_from_rest_and_ends_after_two_minutes() {
+    let (mut sim, id, _) = walled_in();
+    let out = sim.step(&[mv(0, 1, &[id], p(300, 0), false)]);
+    accepted(&out.events);
+    let mut reports = blocked(&out.events);
+    for _ in 0..90 {
+        reports += blocked(&sim.step(&[]).events);
+    }
+    assert_eq!(reports, 1, "reported once, the first tick the craft cannot go");
+    assert_eq!(sim.unit(id).unwrap().target, Some(p(300, 0)), "SIM-22 keeps the order while it holds");
+    // Two minutes (30 Hz) after the order with no progress the watch ends it.
+    for _ in 0..3700 {
+        reports += blocked(&sim.step(&[]).events);
+    }
+    assert_eq!(reports, 1, "no second report for the same order");
+    assert_eq!(sim.unit(id).unwrap().target, None, "the stuck order ended");
+    // A new order starts afresh.
+    sim.step(&[mv(0, 2, &[id], p(-300, 300), false)]);
+    assert!(sim.unit(id).unwrap().target.is_some());
+}
+
+#[test]
+fn a_restored_snapshot_times_a_stuck_order_out_on_the_same_tick() {
+    let (mut sim, id, db) = walled_in();
+    sim.step(&[mv(0, 1, &[id], p(300, 0), false)]);
+    for _ in 0..1000 {
+        sim.step(&[]);
+    }
+    let mut loaded = Sim::from_snapshot(&sim.snapshot(), Some(db)).unwrap();
+    for tick in 0..2700 {
+        let a = sim.step(&[]);
+        let b = loaded.step(&[]);
+        assert_eq!(sim.unit(id).unwrap().target, loaded.unit(id).unwrap().target, "tick {tick}");
+        assert_eq!(a.events, b.events, "tick {tick}");
+    }
+    assert_eq!(sim.unit(id).unwrap().target, None);
+}

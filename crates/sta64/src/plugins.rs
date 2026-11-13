@@ -44,6 +44,7 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
         app.add_plugins(crate::render::fx::impacts::ImpactFxPlugin);
         // Inert until a `FogBounds` and a `LocalPlayer` exist.
         app.add_plugins(crate::render::fog::FogPlugin);
+        app.add_plugins(crate::render::fx::persistent_shields::PersistentShieldsPlugin);
     } else if cfg.ui_gallery {
         app.add_plugins(crate::ui::theme::GalleryPlugin);
     } else {
@@ -98,6 +99,8 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
             // INT-M3: the HUD (with the radar) for the local seat's race (`game::apply_race`
             // sets its layout), and the match's result.
             app.add_plugins(crate::ui::hud::HudPlugin);
+            // UI-34: Esc opens the in-game menu over the match (Resume, Options, Exit, Quit).
+            app.add_plugins(crate::ui::ingame_menu::InGameMenuPlugin);
         }
 
         // audio —

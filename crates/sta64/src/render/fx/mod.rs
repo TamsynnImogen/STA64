@@ -5,6 +5,7 @@
 pub mod bees;
 pub mod fire;
 pub mod impacts;
+pub mod persistent_shields;
 pub mod quad;
 pub mod recipe;
 pub mod shield;

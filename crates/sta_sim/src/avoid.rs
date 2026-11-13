@@ -146,13 +146,23 @@ impl Sim {
         }
         let radii: Vec<Fixed> = self.units.iter().map(|u| self.body_radius(u.def)).collect();
         let margin = Fixed::from_int(MARGIN);
+        let flows = crate::kinematics::Model::of(
+            self.content.as_ref().map(|c| c.profile()).unwrap_or_default(),
+        )
+        .flows_through_waypoints();
         let mut held = Vec::new();
+        let mut blocked = Vec::new();
         for (u, &ur) in self.units.iter_mut().zip(&radii) {
             if !u.mobile() || u.kind != EntityKind::Craft {
                 continue;
             }
             let Some(real) = u.target else { continue };
             let mut t = real;
+            let far = if flows {
+                u.stats.too_close_to_turn.max(crate::kinematics::arrive_distance())
+            } else {
+                Fixed::ZERO
+            };
             let owner = u.owner;
             let mine = || obstacles.iter().filter(move |o| o.friend != Some(owner));
             let volume = self.confinement.active_volume(u);
@@ -175,7 +185,7 @@ impl Sim {
                     Some(((distance(point, real), distance(point, p), index), point))
                 }).min_by_key(|(key, _)| *key).map(|(_, point)| point);
                 let Some(candidate) = candidate else {
-                    hold(u, real, &mut held);
+                    hold(u, real, &mut held, &mut blocked);
                     continue;
                 };
                 t = candidate;
@@ -211,6 +221,13 @@ impl Sim {
                     continue;
                 }
                 let (cx, cz) = (c.x - p.x, c.z - p.z);
+                // A round solid not ahead of the craft (behind it or abeam, e.g.
+                // one it rests against while leaving) is not on the leg (a
+                // box is steered round as its bounding circle, which a craft
+                // inside it may still head into).
+                if matches!(o.solid, Solid::Sphere { .. }) && cx * ux + cz * uz <= Fixed::ZERO {
+                    continue;
+                }
                 let s = (cx * ux + cz * uz).max(Fixed::ZERO).min(len);
                 let (qx, qz) = (cx - ux * s, cz - uz * s);
                 if (qx * qx + qz * qz).sqrt() < reach && hit.is_none_or(|h| s < h.0) {
@@ -218,21 +235,60 @@ impl Sim {
                 }
             }
             let Some((_, c, ring, solid)) = hit else { continue };
-            let preferred = detour(p, (ux, uz), c, ring, t.y);
+            let preferred = detour(p, (ux, uz), c, ring, t.y, far);
             let target = if let Some(volume) = volume {
                 use crate::boundary::contact::{contact, legal_target};
-                let alternate = detours(p, (ux, uz), c, ring, t.y)[1];
-                [preferred, alternate].into_iter().find(|&point| legal_target(&volume, p, point, ur, &solids))
+                let [a, b] = detours(p, (ux, uz), c, ring, t.y, far);
+                [a, b].into_iter().find(|&point| legal_target(&volume, p, point, ur, &solids))
                     .or_else(|| contact(&volume, p, t, &solid, ur, margin, &solids))
+                    // No legal detour: fly the leg itself when it is legal, or
+                    // when it leads away from the blocker to a clear point (a
+                    // craft resting against the field: its chord to a point
+                    // on the ring dips a hair inside the contact distance).
+                    // Separation keeps it out of the solid.
+                    .or_else(|| {
+                        // The leg only skims the blocker: its closest approach
+                        // to the centre stays within a couple of units of the
+                        // contact distance (never through it to the far side).
+                        let away = {
+                            let (cx, cz) = (c.x - p.x, c.z - p.z);
+                            let s = (cx * ux + cz * uz).max(Fixed::ZERO).min(len);
+                            let (qx, qz) = (cx - ux * s, cz - uz * s);
+                            (qx * qx + qz * qz).sqrt() + Fixed::from_int(2) >= ring - margin
+                        };
+                        (legal_target(&volume, p, t, ur, &solids)
+                            || (away && legal_target(&volume, t, t, ur, &solids)))
+                            .then_some(t)
+                    })
             } else { Some(preferred) };
+            // Otherwise no checked route serves the order: the craft holds
+            // (SIM-22's occluded-space rule) and says so once.
             let Some(target) = target else {
-                // `t != real` has already saved this order for restoration.
-                hold(u, real, &mut held);
+                hold(u, real, &mut held, &mut blocked);
                 continue;
+            };
+            // An aim point nearer than the arrival radius would be "reached"
+            // by a craft at rest: push it out along the same bearing.
+            let target = if target == real {
+                target
+            } else {
+                let pushed = away_from(p, target, far);
+                // The pushed point must be as legal as the one it replaces.
+                match volume {
+                    Some(v) if pushed != target && !crate::boundary::contact::legal_target(&v, p, pushed, ur, &solids) => target,
+                    _ => pushed,
+                }
             };
             u.target = Some(target);
             if t == real {
                 held.push((u.id, real));
+            }
+        }
+        for id in blocked {
+            // Once per order, however long the craft waits (the stuck-order
+            // watch ends the order if it never gets out).
+            if self.watchdog.report(id) {
+                self.events.push(crate::SimEvent::OrderBlocked { id });
             }
         }
         held
@@ -311,7 +367,26 @@ impl Sim {
     }
 }
 
-fn hold(unit: &mut crate::Unit, real: Vec3, held: &mut Vec<(EntityId, Vec3)>) {
+/// `a`, or the point on the same bearing from `p` at `far` if it is nearer.
+fn away_from(p: Vec3, a: Vec3, far: Fixed) -> Vec3 {
+    let (dx, dz) = (a.x - p.x, a.z - p.z);
+    if far == Fixed::ZERO || dx.abs() >= far || dz.abs() >= far {
+        return a;
+    }
+    let d = (dx * dx + dz * dz).sqrt();
+    if d == Fixed::ZERO || d >= far {
+        return a;
+    }
+    let k = (far + Fixed::ONE) / d;
+    Vec3 { x: p.x + dx * k, y: a.y, z: p.z + dz * k }
+}
+
+/// Hold a craft still with its order kept for now: no checked route serves it
+/// (a craft walled in by solids and the map volume, SIM-22). `blocked` gets
+/// the craft each tick it holds; the stuck-order watch ends the order if it
+/// never gets out.
+fn hold(unit: &mut crate::Unit, real: Vec3, held: &mut Vec<(EntityId, Vec3)>, blocked: &mut Vec<EntityId>) {
+    blocked.push(unit.id);
     unit.target = None;
     unit.speed = Fixed::ZERO;
     unit.omega = Fixed::ZERO;
@@ -347,12 +422,12 @@ pub(crate) fn constrain_position(
 /// The point to fly to from `p` heading `dir` to get round the circle
 /// (`c`, `ring`): its tangent point on the side the centre is not, advanced
 /// round the circle by a fixed angle so it is never reached.
-fn detour(p: Vec3, dir: (Fixed, Fixed), c: Vec3, ring: Fixed, y: Fixed) -> Vec3 {
-    detours(p, dir, c, ring, y)[0]
+fn detour(p: Vec3, dir: (Fixed, Fixed), c: Vec3, ring: Fixed, y: Fixed, far: Fixed) -> Vec3 {
+    detours(p, dir, c, ring, y, far)[0]
 }
 
 /// Keep the old preferred side first; confinement alone may select the other.
-fn detours(p: Vec3, dir: (Fixed, Fixed), c: Vec3, ring: Fixed, y: Fixed) -> [Vec3; 2] {
+fn detours(p: Vec3, dir: (Fixed, Fixed), c: Vec3, ring: Fixed, y: Fixed, far: Fixed) -> [Vec3; 2] {
     let (vx, vz) = (p.x - c.x, p.z - c.z);
     let d = (vx * vx + vz * vz).sqrt();
     let (nx, nz) = if d == Fixed::ZERO {
@@ -367,9 +442,28 @@ fn detours(p: Vec3, dir: (Fixed, Fixed), c: Vec3, ring: Fixed, y: Fixed) -> [Vec
     } else {
         (Fixed::ONE, Fixed::ZERO)
     };
-    // Plus a fixed look-ahead of 0.3 rad.
-    let (cl, sl) = (Fixed::from_f64(0.955336), Fixed::from_f64(0.29552));
-    let (cos, sin) = (ca * cl - sa * sl, sa * cl + ca * sl);
+    // Plus a fixed look-ahead of 0.3 rad; further when the point would lie
+    // within `far` of the craft (the smooth model's arrival radius), which a
+    // craft at rest would count as reached: it would halt on it every tick.
+    let mut look = Fixed::from_f64(0.3);
+    let (mut cl, mut sl) = (Fixed::from_f64(0.955336), Fixed::from_f64(0.29552));
+    let mut cos = ca * cl - sa * sl;
+    let mut sin = sa * cl + ca * sl;
+    let step = Fixed::from_f64(0.15);
+    for _ in 0..8 {
+        let dxp = c.x + (nx * cos - nz * sin) * ring - p.x;
+        let dzp = c.z + (nx * sin + nz * cos) * ring - p.z;
+        let dxq = c.x + (nx * cos + nz * sin) * ring - p.x;
+        let dzq = c.z + (-nx * sin + nz * cos) * ring - p.z;
+        let near = |dx: Fixed, dz: Fixed| dx.abs() < far && dz.abs() < far && (dx * dx + dz * dz).sqrt() < far;
+        if !(near(dxp, dzp) || near(dxq, dzq)) {
+            break;
+        }
+        look = look + step;
+        (cl, sl) = crate::kinematics::rotate_by((Fixed::ONE, Fixed::ZERO), look);
+        cos = ca * cl - sa * sl;
+        sin = sa * cl + ca * sl;
+    }
     let cand = |sgn: Fixed| (nx * cos - sgn * nz * sin, sgn * nx * sin + nz * cos);
     let side = dir.0 * (c.z - p.z) - dir.1 * (c.x - p.x);
     let pick = |(rx, rz): (Fixed, Fixed)| dir.0 * rz - dir.1 * rx;

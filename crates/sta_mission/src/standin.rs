@@ -15,7 +15,10 @@
 //! Evidence grade: lengths are read from data (file headers); every default
 //! above is a stand-in value and says nothing about the original's timing
 //! (not measured). Fades need no report: the mission releases them itself.
-//! The host reads only the runtime's own `A2.HostPending()` list.
+//! The host reads only the runtime's own `A2.HostPending()` list, and
+//! `A1.HostPending()` for converted Armada I missions (sounds and movies;
+//! Armada I steps do not wait, its rules poll `IsAudioMessageDone` /
+//! `IsMoviePlaying`, which the reports answer; LUA-14).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -84,7 +87,7 @@ impl StandInHost {
     }
 
     fn seconds(&self, kind: &str, name: &str) -> f64 {
-        match kind {
+        match kind.strip_prefix("a1.").unwrap_or(kind) {
             "sound" | "music" => self.find("sounds", name).and_then(|b| wav_seconds(&b)).unwrap_or(DEFAULT_SOUND_SECONDS),
             "movie" => self.find("animations", name).and_then(|b| bink_seconds(&b)).unwrap_or(DEFAULT_MOVIE_SECONDS),
             "key" => ENTER_KEY_SECONDS,
@@ -98,7 +101,11 @@ impl StandInHost {
         let now = active.sim().tick;
         let pending: Vec<(String, i64, String, u64)> = active
             .runtime()
-            .eval("local out = {} for i, p in ipairs(A2.HostPending and A2.HostPending() or {}) do out[i] = p.kind .. '\\t' .. p.id .. '\\t' .. p.name .. '\\t' .. p.tick end return out")
+            .eval(
+                "local out = {} for _, g in ipairs({ { A2, '' }, { A1, 'a1.' } }) do \
+                 if g[1] and g[1].HostPending then for _, p in ipairs(g[1].HostPending()) do \
+                 out[#out + 1] = g[2] .. p.kind .. '\\t' .. p.id .. '\\t' .. p.name .. '\\t' .. p.tick end end end return out",
+            )
             .map(|l: Vec<String>| {
                 l.into_iter()
                     .filter_map(|s| {
@@ -123,6 +130,8 @@ impl StandInHost {
                 "movie" => "A2.MovieDone()".to_owned(),
                 "key" => format!("A2.EnterKeyDone({id})"),
                 "cineractive" => "A2.CineractiveStartDone()".to_owned(),
+                "a1.sound" => format!("A1.AudioMessageDone({id})"),
+                "a1.movie" => "A1.MovieDone()".to_owned(),
                 _ => continue,
             };
             let _ = active.runtime().eval::<()>(&call);

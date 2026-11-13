@@ -3,7 +3,7 @@
 # resolution through --dry-run, plus a real lock-contention check that runs
 # no cargo (a fake `cargo` on PATH). Usage: tools/agent-cargo-selftest.sh
 set -u
-unset STA64_MOLD STA64_LOCK_WAIT STA64_LOCK_DIR RUSTFLAGS CARGO_ENCODED_RUSTFLAGS RUSTC_WRAPPER CARGO_BUILD_JOBS
+unset STA64_QUEUE STA64_QUEUE_KEY STA64_QUEUE_ACTIVE STA64_QUEUE_STALE STA64_MOLD STA64_LOCK_WAIT STA64_LOCK_DIR RUSTFLAGS CARGO_ENCODED_RUSTFLAGS RUSTC_WRAPPER CARGO_BUILD_JOBS
 here=$(cd "$(dirname "$0")" && pwd)
 w=$here/agent-cargo
 fails=0
@@ -40,7 +40,10 @@ o=$(STA64_LOCK_WAIT=5 STA64_LOCK_DIR="$tmp/x" STA64_SCCACHE=0 "$w" --dry-run tes
 expect lock-dir-override "$o" "$tmp/x/light.lock"; expect lock-wait "$o" "wait 5s"
 o=$(STA64_SCCACHE=0 "$w" --dry-run check -p sta_sim 2>&1); refute sccache-off "$o" "RUSTC_WRAPPER"
 
-o=$(dry --heavy check -p sta_sim);  expect heavy2-dry "$o" "heavy2.lock"; expect heavy2-bench-dry "$o" "bench.lock"
+o=$(dry --heavy check -p sta_sim);  expect queue-dry "$o" "queue:  $tmp/locks/queue/heavy"; expect heavy2-dry "$o" "heavy2.lock"; expect heavy2-bench-dry "$o" "bench.lock"
+o=$(STA64_QUEUE=0 dry --heavy check -p x); expect queue-off "$o" "queue:  off"
+o=$(dry --no-queue --heavy check -p x); expect no-queue-flag "$o" "queue:  off"
+o=$(STA64_QUEUE=0 dry --queue --heavy check -p x); expect queue-flag "$o" "queue:  $tmp/locks/queue/heavy"
 o=$(dry --bench ./a2test run hud);   expect bench-class "$o" "class:  bench"; expect bench-lock "$o" "bench.lock (shared)"
 expect bench-cmd "$o" "cmd:    ./a2test run hud"; refute bench-no-cargo "$o" "CARGO_INCREMENTAL"
 
@@ -84,6 +87,81 @@ if command -v flock >/dev/null 2>&1; then
   o=$(PATH="$tmp/bin:$PATH" STA64_SCCACHE=0 STA64_LOCK_WAIT=1 STA64_LOCK_DIR="$tmp/locks" "$w" --heavy check -p sta_sim 2>&1); rc=$?
   expect no-heavy2-during-bench "$o" "LOCK-BUSY"; [ "$rc" = 75 ] || { echo "FAIL no-heavy2-during-bench: exit $rc"; fails=$((fails+1)); }
   wait "$bench" 2>/dev/null; wait "$holder" 2>/dev/null
+
+  # ---- FIFO queue. Each waiter is a "worktree" (STA64_QUEUE_KEY); the fake
+  # cargo logs "<key> start|end <ns>" and sleeps FAKE_SLEEP seconds.
+  mkdir -p "$tmp/fifobin"
+  cat > "$tmp/fifobin/cargo" <<'EOS'
+#!/bin/sh
+echo "$STA64_QUEUE_KEY start $(date +%s%N)" >> "$FIFO_LOG"
+sleep "${FAKE_SLEEP:-1}"
+echo "$STA64_QUEUE_KEY end $(date +%s%N)" >> "$FIFO_LOG"
+EOS
+  chmod +x "$tmp/fifobin/cargo"
+  # fq <key> <log> <extra env...> -- <flags>: run a queued fake build
+  fq() { local key=$1 log=$2; shift 2
+    env PATH="$tmp/fifobin:$PATH" STA64_SCCACHE=0 STA64_LOCK_DIR="$tmp/fl" STA64_QUEUE_KEY="$key" FIFO_LOG="$log" "$@" ; }
+  order() { awk '$2=="start"{printf "%s ", $1}' "$1"; }
+  maxconc() { awk '{ if ($2=="start") c++; else c--; if (c>m) m=c } END { print m+0 }' "$1"; }
+  fresh() { rm -rf "$tmp/fl"; mkdir -p "$tmp/fl"; : > "$1"; }
+
+  # 1. FIFO among waiters behind a holder (check.lock: one slot).
+  L=$tmp/log1; fresh "$L"
+  fq h "$L" FAKE_SLEEP=3 "$w" --check check -p x >/dev/null 2>&1 & p0=$!
+  sleep 0.5
+  for k in a b c; do fq $k "$L" FAKE_SLEEP=1 STA64_LOCK_WAIT=60 "$w" --check check -p x >/dev/null 2>&1 & sleep 1; done
+  wait
+  o=$(order "$L"); [ "$o" = "h a b c " ] || { echo "FAIL fifo-order: '$o'"; fails=$((fails+1)); }
+  [ -z "$(ls -A "$tmp/fl/queue/check" 2>/dev/null)" ] || { echo "FAIL tickets-removed: $(ls "$tmp/fl/queue/check")"; fails=$((fails+1)); }
+
+  # 2. A waiter that got LOCK-BUSY and retries keeps its place over a later arrival.
+  L=$tmp/log2; fresh "$L"
+  fq h "$L" FAKE_SLEEP=6 "$w" --check check -p x >/dev/null 2>&1 & sleep 0.5
+  o=$(fq w1 "$L" STA64_LOCK_WAIT=2 "$w" --check check -p x 2>&1); rc=$?
+  [ "$rc" = 75 ] || { echo "FAIL retry-first-busy: exit $rc"; fails=$((fails+1)); }
+  fq w2 "$L" FAKE_SLEEP=1 STA64_LOCK_WAIT=60 "$w" --check check -p x >/dev/null 2>&1 & sleep 1
+  fq w1 "$L" FAKE_SLEEP=1 STA64_LOCK_WAIT=60 "$w" --check check -p x >/dev/null 2>&1 &
+  wait
+  o=$(order "$L"); [ "$o" = "h w1 w2 " ] || { echo "FAIL retry-keeps-place: '$o'"; fails=$((fails+1)); }
+
+  # 3. A dead head ticket (idle past STA64_QUEUE_ACTIVE) does not block; a
+  #    long-stale one is deleted.
+  L=$tmp/log3; fresh "$L"; mkdir -p "$tmp/fl/queue/check"
+  : > "$tmp/fl/queue/check/0000000000000000001-dead"; touch -d '60 seconds ago' "$tmp/fl/queue/check/0000000000000000001-dead"
+  : > "$tmp/fl/queue/check/0000000000000000002-ghost"; touch -d '3 hours ago' "$tmp/fl/queue/check/0000000000000000002-ghost"
+  : > "$tmp/fl/queue/check/0000000000000000003-live"; touch -d '3 seconds ago' "$tmp/fl/queue/check/0000000000000000003-live"
+  o=$(fq a "$L" FAKE_SLEEP=0 STA64_LOCK_WAIT=3 "$w" --check check -p x 2>&1); rc=$?
+  [ "$rc" = 75 ] || { echo "FAIL live-head-blocks: exit $rc ($o)"; fails=$((fails+1)); }   # an active older ticket does hold us back
+  [ ! -e "$tmp/fl/queue/check/0000000000000000002-ghost" ] || { echo "FAIL stale-deleted"; fails=$((fails+1)); }
+  rm -f "$tmp/fl/queue/check/0000000000000000003-live"
+  o=$(fq a "$L" FAKE_SLEEP=0 STA64_LOCK_WAIT=3 "$w" --check check -p x 2>&1); rc=$?
+  [ "$rc" = 0 ] && [ "$(order "$L")" = "a " ] || { echo "FAIL dead-head-blocks: exit $rc, '$(order "$L")'"; fails=$((fails+1)); }
+
+  # 4. Two heavy slots serve the two oldest; the third waits for one to finish.
+  L=$tmp/log4; fresh "$L"
+  for k in a b c; do fq $k "$L" FAKE_SLEEP=3 STA64_LOCK_WAIT=60 "$w" --heavy check -p x >/dev/null 2>&1 & sleep 1; done
+  wait
+  o=$(order "$L"); [ "$o" = "a b c " ] || { echo "FAIL heavy2-order: '$o'"; fails=$((fails+1)); }
+  m=$(maxconc "$L"); [ "$m" = 2 ] || { echo "FAIL heavy2-concurrency: $m, want 2"; fails=$((fails+1)); }
+  # 5. bench.lock held: one heavy slot only, still in order.
+  L=$tmp/log5; fresh "$L"
+  PATH="$tmp/fifobin:$PATH" STA64_LOCK_DIR="$tmp/fl" "$w" --bench sleep 8 & bench=$!; sleep 0.5
+  for k in a b; do fq $k "$L" FAKE_SLEEP=2 STA64_LOCK_WAIT=60 "$w" --heavy check -p x >/dev/null 2>&1 & sleep 1; done
+  wait "$bench"; wait
+  o=$(order "$L"); [ "$o" = "a b " ] || { echo "FAIL bench-order: '$o'"; fails=$((fails+1)); }
+  m=$(maxconc "$L"); [ "$m" = 1 ] || { echo "FAIL bench-one-slot: $m, want 1"; fails=$((fails+1)); }
+  # 5b. Two slots, both held; heavy2 frees first: the oldest waiter (a) must get it, not b.
+  L=$tmp/log7; fresh "$L"
+  ( exec 8>"$tmp/fl/heavy.lock"; flock -n 8 && sleep 7 ) & h1=$!
+  ( exec 8>"$tmp/fl/heavy2.lock"; flock -n 8 && sleep 3 ) & h2=$!
+  sleep 0.5
+  for k in a b; do fq $k "$L" FAKE_SLEEP=2 STA64_LOCK_WAIT=60 "$w" --heavy check -p x >/dev/null 2>&1 & sleep 0.7; done
+  wait
+  o=$(order "$L"); [ "$o" = "a b " ] || { echo "FAIL heavy-free-slot-to-oldest: '$o'"; fails=$((fails+1)); }
+  # 6. STA64_QUEUE=0 leaves no tickets.
+  L=$tmp/log6; fresh "$L"
+  fq a "$L" FAKE_SLEEP=0 STA64_QUEUE=0 "$w" --check check -p x >/dev/null 2>&1
+  [ ! -e "$tmp/fl/queue" ] || { echo "FAIL queue-off-no-dir"; fails=$((fails+1)); }
 else
   echo "skip: flock not installed, lock contention checks not run"
 fi

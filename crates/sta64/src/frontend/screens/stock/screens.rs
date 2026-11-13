@@ -240,13 +240,22 @@ fn settings(p: &mut Box_, ctx: &Ctx, b: Vec2) {
     let t = ctx.theme;
     let title = region(Slot::OptionsTitle).px(b);
     put(p, Slot::OptionsTitle, title, kit_text(t, t.caps(&cap(ctx, "options", "Options"), t.caps_titles), t.title_size, t.title));
-    let body = region(Slot::OptionsBody).px(b);
-    let s = ctx.settings.clone();
+    options_body(p, t, ctx.settings, ctx.options_tab, region(Slot::OptionsBody).px(b), Placed(Slot::OptionsBody));
+    act_button(p, ctx, b, Slot::OptionsBack, &cap(ctx, "previous_menu", "Previous menu"), Act::Goto(Screen::Main));
+}
+
+/// The options panel: the tabs and their sliders and toggles in the rectangle `body` (logical
+/// px in its parent), for the options screen and for the in-game menu (UI-34), which shows the
+/// same panel over a running match. The sliders and toggles carry `SettingSlider` and
+/// `SettingToggle`; `on_settings` writes them to the `Settings` resource, which the settings
+/// store (UI-29) saves. `tab` is the selected tab; `mark` tags the panel's node.
+pub fn options_body(p: &mut Box_, t: &crate::ui::theme::Theme, settings: &crate::frontend::screens::Settings, tab: usize, body: Rect, mark: impl Bundle) {
+    let s = settings.clone();
     let theme = t.clone();
     let tabs = [tr("Sound"), tr("Game"), tr("Graphics")];
-    let tab = ctx.options_tab.min(2);
+    let tab = tab.min(2);
     p.spawn((
-        Placed(Slot::OptionsBody),
+        mark,
         Node {
             position_type: PositionType::Absolute,
             left: Val::Px(body.min.x),
@@ -290,5 +299,4 @@ fn settings(p: &mut Box_, ctx: &Ctx, b: Vec2) {
                 c.spawn(label(&theme, &tr("Off uses the game/mod default.")));
             });
     });
-    act_button(p, ctx, b, Slot::OptionsBack, &cap(ctx, "previous_menu", "Previous menu"), Act::Goto(Screen::Main));
 }

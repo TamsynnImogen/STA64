@@ -670,7 +670,7 @@ one `<UTC stamp>-t<tick>/` folder per capture. Never inside a game install.
 
 | File | What |
 |---|---|
-| `capture.json` | the index (`CaptureIndex`): tick, digest, map, seed, content hash, profile, seats (race, control), the mount (install root, active mod, layers in priority order), build (version, git commit, OS), selected units (id, definition, owner, race, position, hull, flags), the unit under the cursor, the cursor on the ground (map space), the camera pose |
+| `capture.json` | the index (`CaptureIndex`): tick, digest, map, seed, content hash, profile, seats (race, control), the mount (install root, active mod, layers in priority order), build (version, git commit, OS), selected units (id, definition, owner, race, position, hull, flags), the unit under the cursor, the cursor on the ground (map space), the camera pose, what the click picking returned for the cursor ray (`pick`), whether the pointer was over a HUD panel (`pointer_over_hud`), whether a placement or targeting click was pending (`click_pending`) and the window size. Strict JSON (`jq` reads it); older captures with bare keys still load |
 | `capture.md` | the same for people |
 | `replay.star` | a `sta_sim::replay::Replay`: the start configuration (the whole `MapDef` is in it), every command the sim was given, digests every 30 ticks |
 | `snapshot.sta` | `Sim::snapshot` at the capture tick |
@@ -785,6 +785,28 @@ before.
 5. Turn it into a test: build the same two-peer room with `Fault::DropCommand`
    or `Fault::Inject` (`crates/sta_net/tests/lockstep.rs`, "NET-06") around
    the command and entity the report names, and fix the sim.
+
+## Install digest goldens (`sta-bench golden`, TOOL-12)
+
+```sh
+sta-bench golden --install "<root>" [--mod "<mod folder>"] [map...] [--ticks 300] [--seed S] \
+    [--json <file|->] [--record <file>] [--against <file>]
+```
+
+Mounts the install, loads its content (`ContentDb::load`), converts every readable map
+(or the named ones), starts each as a skirmish (`Sim::from_setup_with_starts`: one idle seat
+per start position, at least two, the content's playable races in turn) and steps it twice.
+The report is strict JSON: the profile, the content hash and, per map, the seat and unit
+counts and the digests at tick 0 and the last tick. Exit 0; 1 when a map panics, the two runs
+end on different digests, or `--against` finds a difference (profile, content hash, ticks,
+seed, a map's digests, a map missing or new); 2 for usage. Used for the FO 3.2.7 and Dominion
+War installs (`fo3` profile, D5); any install works.
+
+`--record` writes a golden. It derives from the install and the code, so it is **not**
+committed (see "CI"): keep it beside the install notes and run `--against` after a change
+to content loading or the sim. The install-gated test `sta_bench/tests/golden_install.rs`
+(`STA64_TEST_FO327_INSTALL`, `STA64_TEST_DW_INSTALL`, or `STA64_TEST_FO3`) checks the
+machinery without pinning a value.
 
 ## Sessions and reports
 

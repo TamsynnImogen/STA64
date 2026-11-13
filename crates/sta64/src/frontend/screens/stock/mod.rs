@@ -23,7 +23,7 @@ mod screens;
 mod tests;
 
 pub use layout::{Grade, Region, Slot};
-pub use screens::{Placed, SeatDrop, StockBoxNode, cap, preview_dots, race_ids, spawn};
+pub use screens::{Placed, SeatDrop, StockBoxNode, cap, options_body, preview_dots, race_ids, spawn};
 
 use super::{Col, Screen, ScreenData, SeatControl, SetupDraft};
 use crate::ui::theme::DropdownChanged;
@@ -62,7 +62,7 @@ pub struct OptionsTab(pub usize);
 #[derive(Resource, Debug, Clone, Copy, Default)]
 pub struct Refocus(pub Option<(usize, Col)>);
 
-pub(super) fn track_tab(mut changes: MessageReader<crate::ui::theme::TabChanged>, mut tab: ResMut<OptionsTab>) {
+pub(crate) fn track_tab(mut changes: MessageReader<crate::ui::theme::TabChanged>, mut tab: ResMut<OptionsTab>) {
     for c in changes.read() {
         if tab.0 != c.index {
             tab.0 = c.index;
@@ -79,7 +79,7 @@ pub(super) fn restore_focus(mut want: ResMut<Refocus>, seats: Query<(Entity, &Se
     }
 }
 
-pub(super) fn track_box(window: Query<&Window, With<PrimaryWindow>>, scale: Option<Res<UiScale>>, mut out: ResMut<StockBox>) {
+pub(crate) fn track_box(window: Query<&Window, With<PrimaryWindow>>, scale: Option<Res<UiScale>>, mut out: ResMut<StockBox>) {
     let Ok(w) = window.single() else { return };
     let s = scale.map_or(1.0, |s| s.0).max(0.01);
     let want = layout::fit_box(Vec2::new(w.width() / s, w.height() / s));

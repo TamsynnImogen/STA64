@@ -518,3 +518,79 @@ fn a_cold_cache_every_tick_runs_the_same_digests() {
         assert_eq!(warm.digest(), cold.digest(), "tick {}", warm.tick);
     }
 }
+
+/// The smooth model's craft at rest next to an impassable nebula: the path's
+/// first cells lie within the model's arrival radius, so the aim point is the
+/// first cell beyond it, which a straight line may reach across the nebula's
+/// corner. The craft must still keep out of the nebula itself.
+/// Fleet Operations rules (the smooth model) with a cruiser that has a capital
+/// ship's turn limits and `speed` units per second, and an impassable nebula.
+fn fo4_content(speed: i32) -> Arc<ContentDb> {
+    let fake = sta_content::fake::db();
+    let mut b = ContentDb::builder().profile(sta_content::Profile::Fo4);
+    for w in fake.weapons() {
+        b = b.weapon(w.clone());
+    }
+    for u in fake.units() {
+        let mut u = u.clone();
+        if u.odf == "fx_cruiser" {
+            u.radius = Fixed::from_int(100);
+            u.movement.max_speed = Fixed::from_int(speed);
+            u.movement.combat_speed = Fixed::from_int(speed);
+            u.movement.turn_at_rest = Fixed::ONE;
+            u.movement.turn_alpha_at_rest = Fixed::ONE;
+            u.movement.forward_accel = Fixed::from_f64(0.45);
+            u.movement.turn_omega = Fixed::from_f64(0.105);
+            u.movement.turn_alpha = Fixed::from_f64(0.25);
+            u.movement.too_close_to_turn = Fixed::from_int(120);
+            u.movement.path_lead = Fixed::from_int(300);
+        }
+        b = b.unit(u);
+    }
+    let b = b.unit(nebula("fx_wall", "effectRadius = 400\npathing_cost = -1\n"));
+    Arc::new(b.build().unwrap())
+}
+
+#[test]
+fn a_craft_at_rest_beside_an_impassable_nebula_does_not_cut_its_corner() {
+    let db = fo4_content(135);
+    let mut sim = sim_with(vec![sphere(RegionKind::Nebula, "fx_wall", 0, 650, 400)], db);
+    let ship = put(&mut sim, "fx_cruiser", v(0, 0));
+    go(&mut sim, ship, v(0, 3000));
+    let mut closest = f64::MAX;
+    for _ in 0..3500 {
+        sim.step(&[]);
+        closest = closest.min(gap(sim.unit(ship).unwrap().pos, v(0, 650)));
+    }
+    assert!(closest > 400.0, "entered the nebula: {closest} from its centre");
+    assert!(
+        gap(sim.unit(ship).unwrap().pos, v(0, 3000)) < 150.0,
+        "ended at {:?}",
+        sim.unit(ship).unwrap().pos
+    );
+}
+
+/// A slow craft's way round a long wall of blocking fields takes longer than
+/// the stuck-order watch's two minutes standing still, and never gets nearer
+/// the goal on the way: it keeps flying, and the order ends by arrival, not by
+/// the watch (real maps have walls of up to 36 000 units).
+#[test]
+fn a_slow_craft_flying_round_a_long_wall_is_not_cut_off() {
+    let wall: Vec<Region> = (-10..=10)
+        .map(|i| sphere(RegionKind::AsteroidField, "trigger_blocking", i * 400, 500, 400))
+        .collect();
+    let mut sim = sim_with(wall, fo4_content(30));
+    let ship = put(&mut sim, "fx_cruiser", v(0, 0));
+    go(&mut sim, ship, v(0, 1500));
+    let mut blocked = 0;
+    let mut ticks = 0;
+    while sim.unit(ship).unwrap().target.is_some() && ticks < 20_000 {
+        let out = sim.step(&[]);
+        blocked += out.events.iter().filter(|e| matches!(e, crate::SimEvent::OrderBlocked { .. })).count();
+        ticks += 1;
+    }
+    let end = sim.unit(ship).unwrap().pos;
+    assert_eq!(blocked, 0, "the order was ended as blocked after {ticks} ticks at {end:?}");
+    assert!(gap(end, v(0, 1500)) < 150.0, "ended at {end:?} after {ticks} ticks");
+    assert!(ticks > 3600, "the detour should outlast two minutes ({ticks} ticks)");
+}

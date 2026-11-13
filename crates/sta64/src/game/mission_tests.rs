@@ -246,6 +246,39 @@ fn leaving_a_mission_abandons_it_and_changes_nothing() {
     assert_eq!(app.world().resource::<Seen>().ended, 1);
 }
 
+/// UI-34: Esc, Exit to main menu and Yes end a mission as F10 does: an abandon, progress unchanged, the
+/// same debrief; and the menu is closed and the sim runs again for the next one.
+#[test]
+fn leaving_a_mission_through_the_in_game_menu_abandons_it_as_f10_does() {
+    use crate::ui::ingame_menu::{InGameMenu, InGameMenuPlugin, MenuAct, MenuPage};
+    let mut app = app(fixture(false, None));
+    app.add_plugins(InGameMenuPlugin);
+    start_from_screens(&mut app, 1);
+    settle(&mut app, 3);
+    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Escape);
+    settle(&mut app, 1);
+    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(KeyCode::Escape);
+    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+    assert!(app.world().resource::<InGameMenu>().open);
+    assert!(app.world().resource::<crate::clock::AnimClock>().paused(), "single player pauses");
+    let ask = app.world_mut().query::<(Entity, &MenuAct)>().iter(app.world()).find(|(_, a)| **a == MenuAct::AskExit).unwrap().0;
+    click(app.world_mut(), ask);
+    settle(&mut app, 3);
+    assert_eq!(app.world().resource::<InGameMenu>().page, MenuPage::ConfirmExit);
+    assert_eq!(campaigns(&app).progress.state("federation").reached, 0);
+    let yes = app.world_mut().query::<(Entity, &MenuAct)>().iter(app.world()).find(|(_, a)| **a == MenuAct::Confirm).unwrap().0;
+    click(app.world_mut(), yes);
+    settle(&mut app, 5);
+    assert_eq!(state(&app), AppState::FrontEnd);
+    assert_eq!(screen(&app), Screen::Debrief);
+    assert_eq!(campaigns(&app).debrief.as_ref().unwrap().result, RunResult::Abandoned);
+    assert_eq!(campaigns(&app).progress.state("federation").reached, 0);
+    assert_eq!(app.world().resource::<Seen>().ended, 1);
+    assert!(!app.world().resource::<InGameMenu>().open);
+    assert!(!app.world().resource::<crate::clock::AnimClock>().paused());
+    assert_eq!(app.world_mut().query::<&crate::ui::ingame_menu::MenuRoot>().iter(app.world()).count(), 0);
+}
+
 #[test]
 fn a_blocked_mission_does_not_start() {
     let mut cs = fixture(false, None);
@@ -554,4 +587,97 @@ fn install_gated_a2_converted_mission_starts_from_the_screens_and_runs() {
     eprintln!("a2: {title}: objectives {:?} / {:?}; {} script errors {:?}; unsupported {:?}", view.title, view.items.len(), errors.len(), errors.iter().take(3).collect::<Vec<_>>(), unsupported.iter().take(8).collect::<Vec<_>>());
     assert!(!unsupported.iter().any(|(k, _)| k == "Player.loadAIP"), "plan loads reach the seats: {unsupported:?}");
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Synthetic (no game files): a mounted conversion makes the missions the install has no
+/// script for startable and marks them experimental; the install's own Lua is not marked
+/// (it wins); without the folder those missions stay blocked and nothing is marked.
+#[test]
+fn a_converted_folder_makes_scriptless_missions_startable_and_experimental() {
+    let tmp = temp_dir("convmount");
+    let (install, conv) = (tmp.join("install"), tmp.join("converted"));
+    // The install root holds a `Data` folder; the files below live in it.
+    let root = install.clone();
+    let install = install.join("Data");
+    for d in ["bzn", "missions"] {
+        std::fs::create_dir_all(install.join(d)).unwrap();
+        std::fs::create_dir_all(conv.join(d)).unwrap();
+    }
+    std::fs::write(install.join("mshell.set"), crate::frontend::campaign::tests::MSHELL).unwrap();
+    std::fs::write(install.join("label.map"), "single_player {\n\t+ federation_campaign {First Fleet}\n}\nmission_select {\n\t+ syn_fed01.bzn {First Light}\n\t+ syn_fed02.bzn {Second Wind}\n}\n").unwrap();
+    std::fs::write(install.join("ART_CFG.h"), "int GIVE_ALL_MISSIONS = 0;\r\n").unwrap();
+    for b in ["syn_tut1", "syn_fed01", "syn_fed02", "syn_kl01"] {
+        std::fs::write(install.join(format!("bzn/{b}.bzn")), "not parsed").unwrap();
+    }
+    // The install ships one script itself; the conversion holds both.
+    std::fs::write(install.join("missions/syn_fed01.lua"), crate::frontend::campaign::tests::WIN_AT_ONE_SECOND).unwrap();
+    for n in ["syn_fed01", "syn_fed02"] {
+        std::fs::write(conv.join(format!("missions/{n}.lua")), "MMM.register(function(t) if t >= 0.5 then Mission:finish(true, 0) end end)\n").unwrap();
+    }
+    let store = |dir: &Path| {
+        let dir = dir.to_path_buf();
+        move |b: &sta_mission::campaign::CampaignBook| crate::frontend::campaign::ProgressStore::in_dir(&dir, b)
+    };
+    let vfs = sta_vfs::Vfs::mount_install(&root, None).expect("mounts");
+    let state = |cs: &Campaigns, i| cs.state("federation", i);
+    use crate::frontend::campaign::MissionState;
+
+    let (without, _) = load_campaigns_with(&vfs, Some(&root), None, None, store(&tmp)).expect("campaigns");
+    assert_eq!(state(&without, 0), MissionState::Ready);
+    assert!(without.book.blocked().iter().any(|b| b.bzn == "syn_fed02.bzn"), "no script of its own: blocked");
+    assert!(without.experimental.is_empty());
+
+    let (with, _) = load_campaigns_with(&vfs, Some(&root), None, Some(&conv), store(&tmp)).expect("campaigns");
+    assert_eq!(state(&with, 0), MissionState::Ready);
+    // fed01 has the install's own script, which wins and is not marked; fed02 only has the conversion.
+    assert_eq!(with.experimental.iter().collect::<Vec<_>>(), ["syn_fed02.bzn"]);
+    assert!(!with.book.blocked().iter().any(|b| b.bzn == "syn_fed02.bzn"), "the conversion unblocks it");
+    let (c, m) = with.mission("federation", 0).unwrap();
+    let (_, reader) = with.host.script(c, m).unwrap();
+    assert!(String::from_utf8_lossy(&reader("missions/syn_fed01.lua").unwrap()).contains("Hold the line"));
+    // An absent folder is ignored, like none.
+    let (absent, _) = load_campaigns_with(&vfs, Some(&root), None, Some(&tmp.join("nope")), store(&tmp)).expect("campaigns");
+    assert!(absent.experimental.is_empty());
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// With `STA64_TEST_A2_STOCK_INSTALL` (needs `python3` and `objdump`): the stock Armada II
+/// campaign lists as startable after `tools/convert_install_missions.py`, loaded the way the
+/// game does (`load_campaigns_with` over the user data layout), and the first mission of each
+/// campaign starts from the screen flow and runs 300 ticks.
+#[test]
+fn install_gated_stock_a2_campaign_is_startable_after_conversion() {
+    let Ok(root) = std::env::var("STA64_TEST_A2_STOCK_INSTALL") else {
+        eprintln!("SKIP: set STA64_TEST_A2_STOCK_INSTALL to a stock Armada II root");
+        return;
+    };
+    let root = Path::new(&root);
+    let data = temp_dir("stockdata");
+    let tool = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/convert_install_missions.py");
+    let run = std::process::Command::new("python3").arg("-I").arg(tool).arg("--install").arg(root).env("STA64_DATA_DIR", &data).output().expect("run the converter");
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    let conv = sta_mission::converted::dir_in(&data, root, None);
+
+    let dir = temp_dir("stockmenu");
+    let load = || {
+        let vfs = sta_vfs::Vfs::mount_install(root, None).expect("mounts");
+        let (cs, _) = load_campaigns_with(&vfs, Some(root), None, Some(&conv), |b| crate::frontend::campaign::ProgressStore::in_dir(&dir, b)).expect("stock campaigns");
+        (vfs, cs)
+    };
+    let (_, cs) = load();
+    let total: usize = cs.book.campaigns.iter().map(|c| c.missions.len()).sum();
+    let blocked = cs.book.blocked();
+    eprintln!("stock A2: {total} missions, {} blocked, {} experimental", blocked.len(), cs.experimental.len());
+    assert!(cs.experimental.len() == total, "the conversion supplies the stock missions");
+    assert!(blocked.is_empty(), "every stock mission can start: {blocked:?}");
+    let cards: Vec<usize> = (0..cs.book.campaigns.len()).filter(|i| cs.state(&cs.book.campaigns[*i].id, 0) == crate::frontend::campaign::MissionState::Ready).collect();
+    assert!(!cards.is_empty(), "a campaign whose first mission starts");
+    for card in cards {
+        let (vfs, cs) = load();
+        let id = cs.book.campaigns[card].id.clone();
+        let (view, errors, unsupported, title) = play_install(vfs, cs, card, 300);
+        eprintln!("stock A2: {id}: {title}: {} objectives; {} script errors {:?}; unsupported {:?}", view.items.len(), errors.len(), errors.iter().take(3).collect::<Vec<_>>(), unsupported.iter().take(6).collect::<Vec<_>>());
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&data);
 }
