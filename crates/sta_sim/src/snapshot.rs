@@ -137,6 +137,8 @@ impl std::error::Error for SnapshotError {}
 struct AttackRec {
     version: u8,
     warp: Vec<(EntityId, u8)>,
+    /// Recent hits `(tick, attacker)` and shots, for assists.
+    engagement: crate::combat::targeting::EngagementRec,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -395,7 +397,7 @@ impl Sim {
         out.extend(postcard::to_allocvec(&StartEffectsRec { version: 1, rows: self.start_effects.to_rec() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&crate::autonomy::AutonomyWire { version: 1, rows: self.autonomy.to_rec() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&SubsystemsRec { version: 1, rows: self.subsystems.to_rows() }).expect("snapshot serialises"));
-        out.extend(postcard::to_allocvec(&AttackRec { version: 1, warp: self.approach_warp.to_rec() }).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&AttackRec { version: 1, warp: self.approach_warp.to_rec(), engagement: self.engagement.to_rec() }).expect("snapshot serialises"));
         out
     }
 
@@ -440,6 +442,7 @@ impl Sim {
         let (record, rest): (AttackRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         if record.version != 1 { return Err(SnapshotError::Corrupt("unknown attack approach record version".into())); }
         let warp_rows = record.warp;
+        let engagement_rows = record.engagement;
         if !rest.is_empty() { return Err(SnapshotError::Corrupt("trailing bytes".into())); }
         if let Some(row) = b.economy.miners.iter().find(|row| row.5 > 4) {
             return Err(SnapshotError::Corrupt(format!("mining phase {} is not supported", row.5)));
@@ -503,10 +506,11 @@ impl Sim {
         if autonomy.to_rec().iter().any(|(id, _)| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft)) {
             return Err(corrupt("autonomy entity"));
         }
-        let approach_warp = crate::movement::approach::Warp::from_rec(warp_rows).ok_or_else(|| corrupt("attack warp"))?;
+        let approach_warp = crate::movement::approach::Warp::from_rec(warp_rows).ok_or_else(|| SnapshotError::Corrupt("attack warp rows out of order or of an unknown phase".into()))?;
         if approach_warp.to_rec().iter().any(|(id, _)| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft)) {
-            return Err(corrupt("attack warp entity"));
+            return Err(SnapshotError::Corrupt("attack warp entity is not a craft".into()));
         }
+        let engagement = crate::combat::targeting::Engagement::from_rec(engagement_rows).ok_or_else(|| corrupt("engagement"))?;
         let specials = crate::specials::Specials::from_rec(b.specials).ok_or_else(|| corrupt("specials"))?;
         let start_effects = crate::start_effects::StartEffects::from_rec(effect_rows, |id| units.contains(id))
             .ok_or_else(|| corrupt("start effect rows"))?;
@@ -546,6 +550,7 @@ impl Sim {
             specials,
             autonomy,
             approach_warp,
+            engagement,
             start_effects,
             nav: Default::default(),
             subsystems,
@@ -557,6 +562,10 @@ impl Sim {
 #[cfg(test)]
 #[path = "snapshot/subsystem_tests.rs"]
 mod subsystem_tests;
+
+#[cfg(test)]
+#[path = "snapshot/attack_tests.rs"]
+mod attack_tests;
 
 #[cfg(test)]
 #[path = "snapshot/chain.rs"]

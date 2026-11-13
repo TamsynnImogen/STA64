@@ -165,7 +165,11 @@ impl Profile {
                 weapon_shot_timing: true,
                 start_fire_hold: true,
                 // SIM-36: the Roots engine (also running STA2 Classic, CON-43).
+                attack_buffer_roots: true,
                 attack_opportunity_fire: true,
+                target_score: true,
+                idle_assist: true,
+                assist_high_autonomy_only: true,
                 ..off
             },
             // Stock A2: plain rules, turrets, point-defence cycles and the
@@ -179,10 +183,11 @@ impl Profile {
                 start_fire_hold: true,
                 crew_loss_on_hit: true,
                 // SIM-36: stock A2's attack approach and construction ships.
-                attack_range_buffer: true,
-                attack_warp_out_at_distance: true,
                 attack_combat_speed: true,
                 builder_hold_fire: true,
+                target_score: true,
+                idle_assist: true,
+                assist_on_ally_fire: true,
                 ..off
             },
             // A1: its own class labels and health model, officers.
@@ -439,7 +444,7 @@ fn read_ini_named(root: &Path, name: &str) -> Option<Ini> {
 }
 
 /// Switch names, in `Features` declaration order.
-pub const FEATURE_NAMES: [&str; 32] = [
+pub const FEATURE_NAMES: [&str; 35] = [
     "weapon_damage_controls",
     "point_defense_cycles",
     "fire_arcs",
@@ -467,11 +472,14 @@ pub const FEATURE_NAMES: [&str; 32] = [
     "weapon_shot_timing",
     "start_fire_hold",
     "crew_loss_on_hit",
-    "attack_range_buffer",
-    "attack_warp_out_at_distance",
+    "attack_buffer_roots",
     "attack_combat_speed",
     "attack_opportunity_fire",
     "builder_hold_fire",
+    "target_score",
+    "idle_assist",
+    "assist_high_autonomy_only",
+    "assist_on_ally_fire",
 ];
 
 impl Features {
@@ -504,11 +512,14 @@ impl Features {
             "weapon_shot_timing" => &mut self.weapon_shot_timing,
             "start_fire_hold" => &mut self.start_fire_hold,
             "crew_loss_on_hit" => &mut self.crew_loss_on_hit,
-            "attack_range_buffer" => &mut self.attack_range_buffer,
-            "attack_warp_out_at_distance" => &mut self.attack_warp_out_at_distance,
+            "attack_buffer_roots" => &mut self.attack_buffer_roots,
             "attack_combat_speed" => &mut self.attack_combat_speed,
             "attack_opportunity_fire" => &mut self.attack_opportunity_fire,
             "builder_hold_fire" => &mut self.builder_hold_fire,
+            "target_score" => &mut self.target_score,
+            "idle_assist" => &mut self.idle_assist,
+            "assist_high_autonomy_only" => &mut self.assist_high_autonomy_only,
+            "assist_on_ally_fire" => &mut self.assist_on_ally_fire,
             _ => return None,
         })
     }
@@ -717,7 +728,11 @@ mod tests {
                 "construction_rigs",
                 "weapon_shot_timing",
                 "start_fire_hold",
-                "attack_opportunity_fire"
+                "attack_buffer_roots",
+                "attack_opportunity_fire",
+                "target_score",
+                "idle_assist",
+                "assist_high_autonomy_only"
             ]
         );
         assert!(!Profile::Fo4.features().pay_on_queue);
@@ -731,10 +746,11 @@ mod tests {
             "weapon_shot_timing",
             "start_fire_hold",
             "crew_loss_on_hit",
-            "attack_range_buffer",
-            "attack_warp_out_at_distance",
             "attack_combat_speed",
-            "builder_hold_fire"
+            "builder_hold_fire",
+            "target_score",
+            "idle_assist",
+            "assist_on_ally_fire"
         ]);
     }
 

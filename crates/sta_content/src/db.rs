@@ -447,7 +447,7 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
         crew: _, maximum_crew: _, sensor: _, hardpoints: _, build: _, launch: _, radius: _,
         sounds: _, fx: _, special_energy_max: _, special_energy_rate: _, miner: _, miner_off: _,
         max_dilithium: _, mining_rate: _, transfer_rate: _, resource: _, features: _,
-        confinement: _, nebula_pathing: _, avoid_me: _, hidden: _, invalid_as_target: _, life: _,
+        confinement: _, nebula_pathing: _, avoid_me: _, hidden: _, invalid_as_target: _, attack_power: _, life: _,
         crew_gain: _, sane_crew_loss: _, system_hit_points: _, raw: _,
     } = u;
     let crate::BuildDef { cost: _, ticks: _, officers: _, list: _, queue_limit: _, flagged_slots: _ } = &u.build;
@@ -528,6 +528,10 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
     // definition, so it is a sim-visible rule; content without it keeps its text.
     if m.warp_speed != Fixed::ZERO {
         c.fixed("warp_speed", m.warp_speed);
+    }
+    // `attackPower` (SIM-36), only when set, for the same reason.
+    if let Some(p) = u.attack_power {
+        c.fixed("attack_power", p);
     }
     c.finish()
 }

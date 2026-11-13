@@ -84,7 +84,7 @@ fn join(header: &[u8], body: &Body, bounds: Option<(Vec3, Vec3)>, record: &Bound
     bytes.extend(postcard::to_allocvec(&StartEffectsRec { version: 1, rows: Vec::new() }).unwrap());
     bytes.extend(postcard::to_allocvec(&crate::autonomy::AutonomyWire { version: 1, rows: Vec::new() }).unwrap());
     bytes.extend(postcard::to_allocvec(&SubsystemsRec { version: 1, rows: Vec::new() }).unwrap());
-    bytes.extend(postcard::to_allocvec(&AttackRec { version: 1, warp: Vec::new() }).unwrap());
+    bytes.extend(postcard::to_allocvec(&AttackRec { version: 1, warp: Vec::new(), engagement: Default::default() }).unwrap());
     bytes
 }
 

@@ -609,6 +609,17 @@ impl Weapons {
             }
         }
         let mine = team(u.owner)?;
+        // SIM-36 `target_score`: one target per craft, the best-scoring enemy
+        // within its longest regular weapon range; this weapon fires at it
+        // when it can (see `targeting`).
+        if db.unit(u.def).is_some_and(|d| db.unit_features(d).target_score) {
+            let reach = db.unit(u.def).and_then(|d| crate::movement::approach::attack_range(db, d)).unwrap_or(range);
+            let candidates = units.iter().filter(|t| {
+                let visible = seen.is_none_or(|ids| ids.binary_search(&t.id).is_ok());
+                visible && super::targeting::candidate(db, u, t, mine, &team, perception, seen)
+            });
+            return super::targeting::best(db, u, reach, candidates).filter(|t| hittable(t));
+        }
         let mut best: Option<(Fixed, &Entity)> = None;
         for t in units.iter() {
             let perceived = perception.get(t.id).copied().unwrap_or(t.owner);

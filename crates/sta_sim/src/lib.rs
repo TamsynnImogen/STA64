@@ -145,6 +145,8 @@ pub struct Sim {
     autonomy: autonomy::Autonomy,
     /// Crafts in warp on an attack approach (SIM-36); in the digest once any is.
     approach_warp: movement::approach::Warp,
+    /// Recent hits and shots for assists (SIM-36); in the digest once any is.
+    engagement: combat::targeting::Engagement,
     /// Pending start-helper lifecycle steps (SIM-28); in the digest once any exist.
     start_effects: start_effects::StartEffects,
     /// Path planner grids and fields (SIM-23): a memo, not in the digest.
@@ -182,6 +184,7 @@ impl Sim {
             specials: Default::default(),
             autonomy: Default::default(),
             approach_warp: Default::default(),
+            engagement: Default::default(),
             start_effects: Default::default(),
             nav: Default::default(),
             subsystems: Default::default(),
@@ -347,6 +350,7 @@ impl Sim {
         self.step_start_effects();
         self.hold_welding_builders();
         self.constrain_targets();
+        self.assist_idle();
         let plans = self.steer_attackers();
         let routed = self.route_orders();
         let held = self.steer_around();
@@ -363,6 +367,7 @@ impl Sim {
             let held = if db.features().builder_hold_fire { self.production.builders_at_work() } else { Vec::new() };
             self.weapons.hold_fire(held);
             self.weapons.step_with_perception(self.tick, &self.units, &db, &self.players, &self.perception, &mut self.specials, &mut self.rng, &mut self.events);
+            self.record_engagement(from);
             let mut lost = Vec::new();
             for (id, by) in combat::damage::apply(&mut self.units, &db, &mut self.events, from) {
                 lost.extend(self.units.get(id).map(|u| u.owner));
@@ -472,6 +477,9 @@ impl Sim {
         self.movement.hash_into(&mut h);
         if !self.approach_warp.is_empty() {
             self.approach_warp.hash_into(&mut h);
+        }
+        if !self.engagement.is_empty() {
+            self.engagement.hash_into(&mut h);
         }
         h.u64(self.labels.len() as u64);
         for (id, label) in self.labels.iter() {

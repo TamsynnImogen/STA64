@@ -55,7 +55,7 @@ pub const READ_ODF_KEYS: &[&str] = &[
     "interfaceconfiguration", "interfacesprites", "maxdilithium", "multiplayermusic",
     "singleplayermusic", "miningrate", "dilithiumtransferrate", "timeuntilclosure",
     "timeuntiltakeoff", "timewelding", "weldingbeamwidth", "workerbeename", "instantactionslot",
-    "commandnames",
+    "commandnames", "warpspeed", "attackpower",
 ];
 
 /// Prefixes of numbered ODF keys (`weapon1`, `buildItem3`, ...) that are read.

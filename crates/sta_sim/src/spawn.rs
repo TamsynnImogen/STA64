@@ -125,6 +125,7 @@ impl Sim {
         self.perception.remove(id);
         self.autonomy.remove(id);
         self.approach_warp.remove(id);
+        self.engagement.remove(id);
         self.production.remove_rally_entity(id);
         self.production.remove_weld_site(id);
         self.start_effects.remove(id);

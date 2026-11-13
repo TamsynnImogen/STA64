@@ -2,6 +2,7 @@
 
 pub mod damage;
 pub mod pd;
+pub mod targeting;
 pub mod weapons;
 
 #[cfg(test)]

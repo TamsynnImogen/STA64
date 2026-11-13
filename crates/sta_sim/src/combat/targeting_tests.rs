@@ -128,9 +128,126 @@ fn stock_construction_ships_hold_fire_while_going_to_build_and_building_roots_fi
 #[test]
 fn the_profiles_switch_the_attack_rules_as_measured() {
     let stock = Profile::Sta2Classic.features();
-    assert!(stock.attack_range_buffer && stock.attack_warp_out_at_distance && stock.attack_combat_speed && stock.builder_hold_fire);
+    assert!(!stock.attack_buffer_roots && stock.attack_combat_speed && stock.assist_on_ally_fire && stock.builder_hold_fire);
     assert!(!stock.attack_opportunity_fire);
     let roots = Profile::Fo4.features();
     assert!(roots.attack_opportunity_fire);
-    assert!(!(roots.attack_range_buffer || roots.attack_warp_out_at_distance || roots.attack_combat_speed || roots.builder_hold_fire));
+    assert!(roots.attack_buffer_roots && roots.target_score && roots.assist_high_autonomy_only);
+    assert!(!(roots.assist_on_ally_fire || roots.attack_combat_speed || roots.builder_hold_fire));
+}
+
+fn order_autonomy(sim: &mut Sim, id: EntityId, level: crate::command::AutonomyLevel) {
+    let c = Command {
+        player: PlayerId::BENCH,
+        seq: 9,
+        kind: CommandKind::Order(Order::Autonomy { units: vec![id], kind: crate::command::AutonomyKind::Movement, level }),
+    };
+    WorldSource::step(sim, &[c]);
+}
+
+/// The measured assist scene (`s1`): helper `d` before an unarmed ally that
+/// an armed enemy attacks from 300 beyond it. Whether the helper attacks the
+/// enemy, and its top speed, within 20 s.
+fn assist(profile: Profile, d: i32, level: Option<crate::command::AutonomyLevel>) -> (bool, Fixed) {
+    let mut sim = approach_tests::sim(approach_tests::db(profile, Some(1100)));
+    let db = Arc::clone(sim.content.as_ref().unwrap());
+    let (ship, plain) = (db.key("st_destroy").unwrap(), db.key("st_target").unwrap());
+    let h = sim.spawn_def(ship, PlayerId(1), v(0, 0), AHEAD).unwrap();
+    sim.spawn_def(plain, PlayerId(1), v(0, d), AHEAD).unwrap();
+    let e = sim.spawn_def(ship, PlayerId(2), v(0, d + 300), (Fixed::ZERO, -Fixed::ONE)).unwrap();
+    let ee = sim.units.get_mut(e).unwrap();
+    ee.flags = ee.flags.with(crate::view::UnitFlags::ENGINES_OFF, true);
+    if let Some(l) = level {
+        order_autonomy(&mut sim, h, l);
+    }
+    let mut top = Fixed::ZERO;
+    let mut engaged = false;
+    for _ in 0..30 * 20 {
+        WorldSource::step(&mut sim, &[]);
+        top = top.max(sim.unit(h).unwrap().speed);
+        engaged |= sim.weapons.attack_of(h) == Some(e);
+    }
+    (engaged, top)
+}
+
+#[test]
+fn stock_idle_ships_assist_an_attacked_ally_in_sensor_range_at_any_autonomy_at_combat_speed() {
+    use crate::command::AutonomyLevel::*;
+    for level in [Some(Low), None, Some(High)] {
+        let (engaged, top) = assist(Profile::Sta2Classic, 600, level);
+        assert!(engaged, "{level:?}");
+        assert!(top > Fixed::from_int(60) && top <= Fixed::from_int(71), "{level:?} {top:?}");
+    }
+    // Out of sensor range (1200): no assist.
+    assert_eq!(assist(Profile::Sta2Classic, 1500, None), (false, Fixed::ZERO));
+}
+
+#[test]
+fn roots_idle_ships_assist_only_at_high_autonomy_at_impulse() {
+    use crate::command::AutonomyLevel::*;
+    assert!(!assist(Profile::Fo4, 600, Some(Low)).0);
+    assert!(!assist(Profile::Fo4, 600, None).0);
+    let (engaged, top) = assist(Profile::Fo4, 600, Some(High));
+    assert!(engaged);
+    assert!(top > Fixed::from_int(130), "{top:?}");
+}
+
+#[test]
+fn the_best_target_has_the_highest_attack_power_per_shield_point_then_is_nearer() {
+    let mut sim = approach_tests::sim(approach_tests::db(Profile::Sta2Classic, Some(1100)));
+    let db = Arc::clone(sim.content.as_ref().unwrap());
+    let (ship, plain) = (db.key("st_destroy").unwrap(), db.key("st_target").unwrap());
+    let s = sim.spawn_def(ship, PlayerId(1), v(0, 0), AHEAD).unwrap();
+    let strong = sim.spawn_def(plain, PlayerId(2), v(-100, 250), AHEAD).unwrap();
+    let weak = sim.spawn_def(plain, PlayerId(2), v(100, 350), AHEAD).unwrap();
+    sim.units.get_mut(strong).unwrap().shields.now[0] = Fixed::from_int(400);
+    sim.units.get_mut(weak).unwrap().shields.now[0] = Fixed::from_int(100);
+    let first = targets_of_shooter(&mut sim, Vec::new(), 30 * 3);
+    assert_eq!(first[0], weak, "lower shields score higher, though farther");
+    assert_eq!(first.len(), 1, "one target for all weapons");
+    let _ = s;
+
+    // Equal scores: the nearer.
+    let mut sim = approach_tests::sim(approach_tests::db(Profile::Sta2Classic, Some(1100)));
+    sim.spawn_def(ship, PlayerId(1), v(0, 0), AHEAD).unwrap();
+    let far = sim.spawn_def(plain, PlayerId(2), v(-100, 350), AHEAD).unwrap();
+    let near = sim.spawn_def(plain, PlayerId(2), v(100, 250), AHEAD).unwrap();
+    let _ = far;
+    assert_eq!(targets_of_shooter(&mut sim, Vec::new(), 30 * 3)[0], near);
+}
+
+#[test]
+fn engagement_memory_is_digested_snapshotted_and_forgotten_after_a_second() {
+    let mut sim = approach_tests::sim(approach_tests::db(Profile::Sta2Classic, Some(1100)));
+    let db = Arc::clone(sim.content.as_ref().unwrap());
+    let ship = db.key("st_destroy").unwrap();
+    let a = sim.spawn_def(ship, PlayerId(1), v(0, 0), AHEAD).unwrap();
+    let b = sim.spawn_def(ship, PlayerId(2), v(0, 300), (Fixed::ZERO, -Fixed::ONE)).unwrap();
+    for id in [a, b] {
+        let u = sim.units.get_mut(id).unwrap();
+        u.flags = u.flags.with(crate::view::UnitFlags::ENGINES_OFF, true);
+    }
+    // Past the start-of-mission fire hold, to the first exchange.
+    for _ in 0..30 * 5 {
+        WorldSource::step(&mut sim, &[]);
+        if !sim.engagement.is_empty() {
+            break;
+        }
+    }
+    assert!(!sim.engagement.is_empty());
+    let mut copy = sim.clone();
+    copy.engagement = Default::default();
+    assert_ne!(copy.digest(), sim.digest());
+    assert_eq!(copy.section_digests().differing(&sim.section_digests()), ["combat"]);
+    let back = Sim::from_snapshot(&sim.snapshot(), sim.content.clone()).unwrap();
+    assert_eq!(back.digest(), sim.digest());
+    // Weapons off: after a second nothing is remembered.
+    for id in [a, b] {
+        let u = sim.units.get_mut(id).unwrap();
+        u.flags = u.flags.with(crate::view::UnitFlags::WEAPONS_OFF, true);
+    }
+    for _ in 0..31 {
+        WorldSource::step(&mut sim, &[]);
+    }
+    assert!(sim.engagement.is_empty());
 }

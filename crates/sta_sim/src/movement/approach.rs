@@ -8,25 +8,29 @@
 //! range), plus the target's radius when the target is a craft.
 //!
 //! - **Closing in.** The attacker flies toward a point `R_target + R_own + 50`
-//!   short of the target, on its own side, while `D > W - buffer`, with
-//!   `buffer = min(W / 5 + 5, 50) + R_target` (stock, `attack_range_buffer`);
-//!   without the buffer it closes until `D < W` (Roots). Then it brakes where
-//!   it is and turns to face the target. The test runs every tick, so a target
-//!   that moves away restarts the approach. Read from the executable, static;
-//!   the stop distances (fdestroy 348 stock, 312 Roots; Galaxy 612 stock, 581
-//!   Roots, centre to centre) measured.
-//! - **Warp.** While `D >= cfg_MIN_MOVE_WARP_DISTANCE` (`RTS_CFG.h`, typed in
-//!   `Rules::approach`) a craft whose `warpSpeed` exceeds its `impulseSpeed`
-//!   goes to warp once it faces the goal (cosine above 0.99) at more than 0.9
-//!   of impulse speed. It drops out near the goal (the engine's lead rule
-//!   below) and, under `attack_warp_out_at_distance` (stock), as soon as `D`
-//!   falls under the warp distance. Stock (1100) and STA2 Classic on Roots
-//!   (1100) warp; Roots and Fleet Ops (999999) never do. Measured on stock
-//!   and on Roots + Classic (distances 700 to 3800); the entry conditions and
-//!   the lead rule read from the executable, static.
-//! - **Speed below the warp distance.** Under `attack_combat_speed` (stock)
-//!   the approach runs at `combatSpeed` when the target is slower than that;
-//!   otherwise at `impulseSpeed` (Roots). Measured.
+//!   short of the target, on its own side, while `D > W - buffer - R_target`,
+//!   with `buffer = min(0.2 W + 5, 50)` (stock) or, under `attack_buffer_roots`,
+//!   `0.2 W + 5` below 100 and 80 from there (the Roots engine). Then it brakes
+//!   where it is and turns to face the target. The test runs every tick, so a
+//!   target that moves away restarts the approach. Read from the executable
+//!   (both engines), static; the stop distances (fdestroy 348 stock, 312 Roots;
+//!   Galaxy 612 stock, 581 Roots, centre to centre) measured. STA64's weapons
+//!   measure range centre to centre, so the approach also closes until the
+//!   target is within the attack range by that measure.
+//! - **Speed.** When the target is slower than `combatSpeed` and nearer than
+//!   `cfg_MIN_MOVE_WARP_DISTANCE` (`RTS_CFG.h`, typed in `Rules::approach`),
+//!   the approach is capped at `combatSpeed`: at once under
+//!   `attack_combat_speed` (stock), only once in weapon range otherwise (the
+//!   Roots engine, which closes at `impulseSpeed`). Read from the executable,
+//!   measured.
+//! - **Warp.** From the warp distance out, a craft whose `warpSpeed` exceeds
+//!   its `impulseSpeed` goes to warp once it faces the goal (cosine above 0.99)
+//!   at more than 0.9 of impulse speed. The combat-speed cap ends it (stock:
+//!   at the warp distance), else the engine's lead rule near the goal (Roots:
+//!   about 450 to 500 from the target). Stock (1100) and STA2 Classic on Roots
+//!   (1100) warp; Roots and Fleet Ops (999999) never do. Measured on stock and
+//!   on Roots + Classic (distances 700 to 3800); the entry conditions and the
+//!   lead rule read from the executable, static.
 //! - Not modelled: the engine's AI fleets (a fleet member at low or medium
 //!   movement autonomy may not close in or warp; STA64 has no AI fleets yet),
 //!   dewarp zones of planets and black holes, the engine's 10 Hz AI tick.
@@ -135,13 +139,14 @@ impl Sim {
             let centre = (dx * dx + dz * dz).sqrt();
             let d = (centre - r_own - r_t).max(Fixed::ZERO);
             let w = range + if t.kind == EntityKind::Craft { r_t } else { Fixed::ZERO };
-            let buffer = if f.attack_range_buffer {
-                (w / Fixed::from_int(5) + Fixed::from_int(5)).min(goal_gap()) + r_t
+            let base = w / Fixed::from_int(5) + Fixed::from_int(5);
+            let buffer = if f.attack_buffer_roots {
+                if base >= Fixed::from_int(100) { Fixed::from_int(80) } else { base }
             } else {
-                Fixed::ZERO
+                base.min(goal_gap())
             };
             let mut plan = Plan::default();
-            let closer = d > w - buffer;
+            let closer = d > w - buffer - r_t || centre > range;
             let goal = if closer {
                 let off = r_t + r_own + goal_gap();
                 let (ux, uz) = if centre == Fixed::ZERO { (Fixed::ZERO, Fixed::ZERO) } else { (dx / centre, dz / centre) };
@@ -158,15 +163,11 @@ impl Sim {
                 let (gx, gz) = (g.x - u.pos.x, g.z - u.pos.z);
                 let to_goal = (gx * gx + gz * gz).sqrt();
                 let aligned = to_goal > Fixed::ZERO && (u.heading.0 * gx + u.heading.1 * gz) / to_goal > Fixed::from_f64(0.99);
-                let can = vw > vi && aligned && to_goal >= warp_lead(vw, vi, r_own);
-                warp = if warp {
-                    can && !(f.attack_warp_out_at_distance && !far)
-                } else {
-                    can && far && u.speed > Fixed::from_f64(0.9) * vi
-                };
-                if !warp && !far && f.attack_combat_speed && t.speed < combat {
+                if !far && t.speed < combat && (f.attack_combat_speed || d < w) {
                     plan.cap = Some(combat);
                 }
+                let can = vw > vi && plan.cap.is_none() && aligned && to_goal >= warp_lead(vw, vi, r_own);
+                warp = if warp { can } else { can && far && u.speed > Fixed::from_f64(0.9) * vi };
             } else {
                 warp = false;
             }

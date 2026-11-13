@@ -87,16 +87,14 @@ pub struct Features {
     /// points on a unit with `saneCrewLossMethod` (SIM-39; measured on stock
     /// A2). Hull hits and system losses are not part of it.
     pub crew_loss_on_hit: bool,
-    /// An attack approach keeps `min(W / 5 + 5, 50) + R_target` inside weapon
-    /// range before it stops (stock A2, SIM-36; measured, rule read from the
-    /// executable). Off: it stops once in range (Roots).
-    pub attack_range_buffer: bool,
-    /// An attack approach drops out of warp as soon as the target is nearer
-    /// than `cfg_MIN_MOVE_WARP_DISTANCE` (stock A2, SIM-36; measured). Off:
-    /// only near its goal (Roots).
-    pub attack_warp_out_at_distance: bool,
-    /// Inside the warp distance an attack approach runs at `combatSpeed` when
-    /// the target is slower (stock A2, SIM-36; measured). Off: `impulseSpeed`.
+    /// An attack approach stops `0.2 W + 5` inside weapon range, or 80 from
+    /// 100 up (the Roots engine, SIM-36; read from the executable, measured).
+    /// Off: `min(0.2 W + 5, 50)` (stock).
+    pub attack_buffer_roots: bool,
+    /// Inside `cfg_MIN_MOVE_WARP_DISTANCE` an attack approach slows to
+    /// `combatSpeed` (and so leaves warp) when the target is slower (stock A2,
+    /// SIM-36; read from the executable, measured). Off: only once in weapon
+    /// range (Roots).
     pub attack_combat_speed: bool,
     /// A craft with an attack order fires at other enemies in range while its
     /// target cannot be hit (Roots, SIM-36; measured). Off: only at its target.
@@ -104,11 +102,25 @@ pub struct Features {
     /// A construction ship holds fire while it flies to a build site and
     /// builds (stock A2, SIM-36; measured). Off: it fires (Roots).
     pub builder_hold_fire: bool,
+    /// A craft picks one target for all its weapons: the enemy in range with
+    /// the highest `attackPower / current shields` (stock A2, SIM-36; read
+    /// from the executable, measured). Off: each weapon takes the nearest.
+    pub target_score: bool,
+    /// An idle craft attacks whoever hit it or an ally in its sensor range in
+    /// the last second, or joins an ally that fired (SIM-36; stock read from
+    /// the executable and measured, Roots measured).
+    pub idle_assist: bool,
+    /// Only crafts at high movement autonomy assist (Roots, SIM-36; measured).
+    pub assist_high_autonomy_only: bool,
+    /// An ally that fired in the last second (not only one that was hit)
+    /// draws an idle craft in (stock A2, SIM-36; read from the executable).
+    /// Off: hits only (Roots).
+    pub assist_on_ally_fire: bool,
 }
 
 impl Features {
     /// Every switch, in declaration order, for the content hash.
-    pub(crate) fn bits(&self) -> [bool; 32] {
+    pub(crate) fn bits(&self) -> [bool; 35] {
         [
             self.weapon_damage_controls,
             self.point_defense_cycles,
@@ -137,11 +149,14 @@ impl Features {
             self.weapon_shot_timing,
             self.start_fire_hold,
             self.crew_loss_on_hit,
-            self.attack_range_buffer,
-            self.attack_warp_out_at_distance,
+            self.attack_buffer_roots,
             self.attack_combat_speed,
             self.attack_opportunity_fire,
             self.builder_hold_fire,
+            self.target_score,
+            self.idle_assist,
+            self.assist_high_autonomy_only,
+            self.assist_on_ally_fire,
         ]
     }
 }
