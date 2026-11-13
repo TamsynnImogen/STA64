@@ -74,8 +74,9 @@ The third argument of `Goto`/`Stop` (the trailing `int`), the flag of
 `CountVisible*` searches and of `RemoveAllCraft`, whether the third
 argument of the `...Near...` searches is a team or a relation filter (read as a
 team, -1 any), the meaning of bridge type 0, the `TeamRelation` values, the
-restriction masks of `RestrictSpecialFlag`, what `IsCompromised`
-and `GetLocationOfFlag` return, and the delay of `FailMission` /
+restriction masks of `RestrictSpecialFlag`, what `GetLocationOfFlag`
+returns, and everything `IsCompromised` reads (the A2 rule, shared; the A1
+executable inlines the same test, static), and the delay of `FailMission` /
 `SucceedMission` (retained, not applied).
 
 ## Seams the host fills
@@ -106,7 +107,7 @@ EnableAllAITeams DisableTeam EnableTeam SetIsAITeam`.
 Queries raise an error naming the missing data (also `strength_team_1`, `strength_team_2`, `hot_float_value`): `InStopMode InAttackMode
 OutOfSpecialAttackMode InQueue GetAttackLocation UnderAttack
 GetAllyShipAttacks GetAllyStationAttacks GetDilithiumOnFreighter
-IsCompromised IsDerelict IsThereARomulanSpyOnShip GetTranswarpExitWormhole
+IsDerelict IsThereARomulanSpyOnShip GetTranswarpExitWormhole
 GetNearestTranswarpGate`.
 
 `AI_Team_Load_AIP` records the file like `Player:loadAIP` (no AI runs).

@@ -17,7 +17,8 @@
 //! seconds) and `HasTimeElapsed` (mission time at or past N) are not measured.
 
 use mlua::{Function, Lua, MultiValue, Table, Value};
-use sta_core::{EntityId, PlayerId, TICK_HZ};
+use sta_core::{EntityId, Fixed, PlayerId, TICK_HZ};
+use sta_sim::world::EntityKind;
 use sta_sim::view::UnitFlags;
 
 use crate::api::search::{Query, near};
@@ -262,7 +263,23 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
         let within = (window * TICK_HZ as f64).round() as u64;
         Ok(c.last_hit.get(&id).is_some_and(|t| c.view.tick.saturating_sub(*t) <= within))
     })?)?;
-    table.set("IsCompromised", no_data_fn(lua, ctx, "IsCompromised", "the meaning of compromised (and its data) is not known")?)?;
+    // IsCompromised(object, team): true when the object has been lost to `team`,
+    // i.e. it is gone or dying, is not a craft or station, is a derelict, or
+    // its permanent owner is not `team` (LUA-12). Read from the executable,
+    // static (A2 and A1; nothing measured). The derelict latch is
+    // approximated by a crew of under one with a positive maximum (not
+    // modelled: the `CraftCannotDie` exemption and the latch clearing only
+    // when crew returns to one), and a temporary takeover (mind control) shows
+    // as the new owner here, where the engine keeps the original (SIM-59).
+    table.set("IsCompromised", query(lua, ctx, "IsCompromised", 2, |c, a| {
+        let id = handle("IsCompromised", a, 0)?;
+        let team = int("IsCompromised", a, 1)?;
+        let Some(u) = c.alive(id) else { return Ok(true) };
+        let fixture = c.def(u).is_some_and(|d| !matches!(EntityKind::of_def(d), EntityKind::Craft | EntityKind::Station));
+        let derelict = u.crew.is_some_and(|[now, max]| now < Fixed::ONE && max > Fixed::ZERO);
+        let owner = c.player_numbering.encode(u.owner).map(i64::from);
+        Ok(fixture || derelict || owner != Some(team))
+    })?)?;
     table.set("IsShipAliveAndOffMap", no_data_fn(lua, ctx, "IsShipAliveAndOffMap", "the world view carries no off-map state")?)?;
     table.set("IsCargoShipReadyToLoad", no_data_fn(lua, ctx, "IsCargoShipReadyToLoad", "the world view carries no cargo state")?)?;
     table.set("IsCargoShipFullAndReadyToSend", no_data_fn(lua, ctx, "IsCargoShipFullAndReadyToSend", "the world view carries no cargo state")?)?;

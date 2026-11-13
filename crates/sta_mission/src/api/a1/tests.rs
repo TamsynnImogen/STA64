@@ -282,7 +282,7 @@ const CASES: &[(&str, &str, Expect)] = &[
     ("GetTime", "assert(A1.GetTime() >= 0)", Fine),
     ("FailMission", "A1.FailMission(1.0, 'lost')", Fine),
     ("SucceedMission", "A1.SucceedMission(1.0, 'won')", Fine),
-    ("IsCompromised", "A1.IsCompromised(a, 1)", Fail),
+    ("IsCompromised", "A1.IsCompromised(a, 1)", Fine),
     ("ObstacleAvoidence", "A1.ObstacleAvoidence(true)", Fine),
     ("PointAt", "A1.PointAt(a, b)", Fine),
     ("PointAt", "A1.PointAt(a, 'P')", Fine),
@@ -629,12 +629,9 @@ fn seam_gap_queries_name_what_is_missing() {
     let s = scene();
     let message = fails(&s, "A1.InStopMode(a)");
     assert!(message.contains("not available") && message.contains("order state"), "{message}");
-    let (rt, _) = {
-        let rt = runtime(&s);
-        let _ = rt.eval::<()>("A1.IsCompromised(a, 1)");
-        (rt, ())
-    };
-    assert!(rt.unsupported().iter().any(|(k, _)| k.starts_with("A1.IsCompromised")));
+    let rt = runtime(&s);
+    let _ = rt.eval::<()>("A1.IsDerelict(a)");
+    assert!(rt.unsupported().iter().any(|(k, _)| k.starts_with("A1.IsDerelict")));
 }
 
 #[test]
