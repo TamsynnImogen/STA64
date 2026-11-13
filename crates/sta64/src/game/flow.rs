@@ -114,7 +114,7 @@ impl Plugin for FlowPlugin {
         if !app.world().contains_resource::<State<AppState>>() {
             app.init_state::<AppState>();
         }
-        app.add_plugins(super::mission_host::MissionHostPlugin).insert_resource(Flow)
+        app.add_plugins((super::mission_host::MissionHostPlugin, super::net_match::NetMatchPlugin, super::net_overlay::NetOverlayPlugin)).insert_resource(Flow)
             .add_message::<Notice>()
             .add_message::<StartGame>()
             .add_message::<ModChosen>()

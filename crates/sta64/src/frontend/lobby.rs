@@ -456,6 +456,11 @@ pub struct NetMatch {
     pub control: NetControl,
     /// The seats' builds (from their `Hello`s) for the desync sidecar; the host's only.
     pub engines: Vec<(PlayerId, EngineId)>,
+    /// The `rejoin_token` each guest got in its `Welcome` (the host's only), for
+    /// `Peer::serve_rejoins`.
+    pub tokens: Vec<(PlayerId, u64)>,
+    /// This seat's own `rejoin_token` from the host's `Welcome` (a guest's only).
+    pub my_token: Option<u64>,
     /// `GameSetup` from [`Start::player_setups`] for this seat.
     pub setup: GameSetup,
     transport: Option<SyncCell<Box<dyn Transport>>>,
@@ -534,6 +539,7 @@ pub struct Session {
     kicks: Vec<(PlayerId, Instant)>,
     // Joiner.
     welcomed: bool,
+    my_token: Option<u64>,
     lobby: Option<LobbyState>,
     asked: Instant,
     my_choice: Option<SeatChoice>,
@@ -572,6 +578,7 @@ impl Session {
             host_team: 0,
             kicks: Vec::new(),
             welcomed: false,
+            my_token: None,
             lobby: None,
             asked: Instant::now(),
             my_choice: None,
@@ -1359,7 +1366,8 @@ impl Session {
         };
         let inner = self.transport.take().ok_or("The connection is closed.")?;
         let transport: Box<dyn Transport> = Box::new(Early { first: std::mem::take(&mut self.early), inner });
-        self.started = Some(NetMatch { start, me: self.me, control: self.control.clone(), engines, setup, transport: Some(SyncCell::new(transport)) });
+        let tokens = (1..MAX_SEATS).filter_map(|i| self.guests[i].as_ref().map(|g| (PlayerId(i as u8), g.token))).collect();
+        self.started = Some(NetMatch { start, me: self.me, control: self.control.clone(), engines, tokens, my_token: self.my_token, setup, transport: Some(SyncCell::new(transport)) });
         self.phase = Phase::Launched;
         self.changed = true;
         Ok(())
@@ -1371,6 +1379,7 @@ impl Session {
         match msg {
             Message::Welcome(w) if from == PlayerId(0) && w.slot == self.me => {
                 self.welcomed = true;
+                self.my_token = Some(w.rejoin_token);
                 self.phase = Phase::Open;
                 self.changed = true;
             }

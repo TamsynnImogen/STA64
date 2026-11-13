@@ -30,7 +30,7 @@ use crate::frontend::screens::stock::layout::fit_box;
 use crate::frontend::screens::{Screen, ScreensConfig, ScreensPlugin};
 use crate::ui::theme::{DropdownOption, KitFocus, KitKey, Theme, click, kit_click, kit_key};
 
-const DEADLINE: Duration = Duration::from_secs(20);
+pub(crate) const DEADLINE: Duration = Duration::from_secs(20);
 
 fn race(name: &str, slot: i64) -> RaceDef {
     RaceDef {
@@ -48,7 +48,7 @@ fn data() -> ScreenData {
     d
 }
 
-fn relay() -> Relay {
+pub(crate) fn relay() -> Relay {
     Relay::bind("127.0.0.1:0", RelayConfig::default()).expect("a relay on an OS-chosen port")
 }
 
@@ -71,7 +71,7 @@ fn join_on(r: &Relay, code: RoomCode, password: &str, c: SessionCfg) -> Result<S
 }
 
 /// Update every session until `cond` holds, or fail at the deadline.
-fn pump(sessions: &mut [&mut Session], what: &str, cond: impl Fn(&[&mut Session]) -> bool) {
+pub(crate) fn pump(sessions: &mut [&mut Session], what: &str, cond: impl Fn(&[&mut Session]) -> bool) {
     let end = Instant::now() + DEADLINE;
     loop {
         for s in sessions.iter_mut() {
@@ -555,35 +555,35 @@ fn app() -> App {
     app_with(data(), None, 1.0)
 }
 
-fn settle(app: &mut App) {
+pub(crate) fn settle(app: &mut App) {
     for _ in 0..4 {
         app.update();
     }
 }
 
-fn go(app: &mut App, s: Screen) {
+pub(crate) fn go(app: &mut App, s: Screen) {
     app.world_mut().resource_mut::<NextState<Screen>>().set(s);
     settle(app);
 }
 
-fn screen_of(app: &App) -> Screen {
+pub(crate) fn screen_of(app: &App) -> Screen {
     *app.world().resource::<State<Screen>>().get()
 }
 
-fn texts(app: &mut App) -> Vec<String> {
+pub(crate) fn texts(app: &mut App) -> Vec<String> {
     app.world_mut().query::<&crate::ui::sprite_font::SpriteText>().iter(app.world()).map(|t| t.text.clone()).collect()
 }
 
-fn has_text(app: &mut App, want: &str) -> bool {
+pub(crate) fn has_text(app: &mut App, want: &str) -> bool {
     let want = want.to_lowercase();
     texts(app).iter().any(|t| t.to_lowercase().contains(&want))
 }
 
-fn act_entity(app: &mut App, want: MpAct) -> Option<Entity> {
+pub(crate) fn act_entity(app: &mut App, want: MpAct) -> Option<Entity> {
     app.world_mut().query::<(Entity, &MpAct)>().iter(app.world()).find(|(_, a)| **a == want).map(|(e, _)| e)
 }
 
-fn press(app: &mut App, want: MpAct) {
+pub(crate) fn press(app: &mut App, want: MpAct) {
     let e = act_entity(app, want).unwrap_or_else(|| panic!("no enabled {want:?} on {:?}", screen_of(app)));
     click(app.world_mut(), e);
     settle(app);
@@ -594,7 +594,7 @@ fn field_entity(app: &mut App, which: LobbyField) -> Entity {
 }
 
 /// Type into a field the way a player does: focus it, then keys.
-fn type_into(app: &mut App, which: LobbyField, text: &str) {
+pub(crate) fn type_into(app: &mut App, which: LobbyField, text: &str) {
     let e = field_entity(app, which);
     if let Some(mut f) = app.world_mut().get_mut::<crate::ui::theme::TextField>(e) {
         f.text.clear();
@@ -607,12 +607,12 @@ fn type_into(app: &mut App, which: LobbyField, text: &str) {
     settle(app);
 }
 
-fn session_of(app: &App) -> &Session {
+pub(crate) fn session_of(app: &App) -> &Session {
     app.world().resource::<Multiplayer>().session.as_ref().expect("a session")
 }
 
 /// Update the apps until `cond`, or fail at the deadline.
-fn pump_apps(apps: &mut [&mut App], what: &str, cond: impl Fn(&mut [&mut App]) -> bool) {
+pub(crate) fn pump_apps(apps: &mut [&mut App], what: &str, cond: impl Fn(&mut [&mut App]) -> bool) {
     let end = Instant::now() + DEADLINE;
     loop {
         for a in apps.iter_mut() {
@@ -626,12 +626,12 @@ fn pump_apps(apps: &mut [&mut App], what: &str, cond: impl Fn(&mut [&mut App]) -
     }
 }
 
-fn in_screen(a: &App, s: Screen) -> bool {
+pub(crate) fn in_screen(a: &App, s: Screen) -> bool {
     screen_of(a) == s
 }
 
 /// Host through the screens: Multiplayer, name and relay typed, Host a game, Create room.
-fn host_through_screens(app: &mut App, relay: &Relay, name: &str, password: &str) {
+pub(crate) fn host_through_screens(app: &mut App, relay: &Relay, name: &str, password: &str) {
     go(app, Screen::Main);
     let mp_button = app.world_mut().query::<(Entity, &crate::frontend::screens::Act)>().iter(app.world()).find(|(_, a)| **a == crate::frontend::screens::Act::Goto(Screen::Multiplayer)).map(|(e, _)| e).expect("the Multiplayer entry");
     click(app.world_mut(), mp_button);
@@ -648,7 +648,7 @@ fn host_through_screens(app: &mut App, relay: &Relay, name: &str, password: &str
 }
 
 /// Join through the screens, the name and relay typed on the first and the code on the second.
-fn join_through_screens(app: &mut App, relay: &Relay, name: &str, code: &str, password: &str) {
+pub(crate) fn join_through_screens(app: &mut App, relay: &Relay, name: &str, code: &str, password: &str) {
     go(app, Screen::Multiplayer);
     type_into(app, LobbyField::Name, name);
     type_into(app, LobbyField::Relay, &relay.local_addr().to_string());
@@ -660,7 +660,7 @@ fn join_through_screens(app: &mut App, relay: &Relay, name: &str, code: &str, pa
     press(app, MpAct::StartJoin);
 }
 
-fn pick(app: &mut App, drop: Entity, index: usize) {
+pub(crate) fn pick(app: &mut App, drop: Entity, index: usize) {
     kit_click(app.world_mut(), drop);
     settle(app);
     let row = app.world_mut().query::<(Entity, &DropdownOption)>().iter(app.world()).find(|(_, o)| o.0 == index).map(|(e, _)| e).unwrap();
@@ -668,7 +668,7 @@ fn pick(app: &mut App, drop: Entity, index: usize) {
     settle(app);
 }
 
-fn drop_of(app: &mut App, slot: usize, col: DropCol) -> Entity {
+pub(crate) fn drop_of(app: &mut App, slot: usize, col: DropCol) -> Entity {
     app.world_mut().query::<(Entity, &LobbyDrop)>().iter(app.world()).find(|(_, d)| d.slot == slot && d.col == col).map(|(e, _)| e).unwrap_or_else(|| panic!("no dropdown {slot} {col:?}"))
 }
 
