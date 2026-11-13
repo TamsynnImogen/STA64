@@ -462,6 +462,18 @@ fn hash_inner(db: &ContentDb, include_starting_rules: bool) -> u64 {
                     h.str("sta64.planet-crew-gain.v1");
                     h.u64(u.planet_crew_gain as i64 as u64);
                 }
+                // CON-37: only effective values, so defaults-free content keeps its hash.
+                if let Some(m) = u.planet_crew_modifier {
+                    h.byte(0xf4);
+                    h.str("sta64.planet-crew-modifier.v1");
+                    h.fixed(m);
+                }
+                if u.planet_role == Some(crate::PlanetRole::Producer) {
+                    h.byte(0xf5);
+                    h.str("sta64.planet-colony.v1");
+                    h.byte(u8::from(u.planet_colonizable));
+                    h.fixed(u.planet_civilian_population_modifier);
+                }
                 // SIM-23: only nebulae carry it, so other hashes stay.
                 if let Some(n) = u.nebula_pathing {
                     h.byte(0xee);

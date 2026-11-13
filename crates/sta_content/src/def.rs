@@ -254,6 +254,15 @@ pub struct UnitDef {
     /// Effective signed `maxCrewGain` contribution for a Producer planet.
     /// Zero for other roles; this is not a crew stock or population count.
     pub planet_crew_gain: i32,
+    /// Effective `crewModifier` of a Background planet (CON-37). `None` for
+    /// other roles and where neither the ODF nor a measured profile fallback
+    /// (Armada I: 1.2) supplies one. An authored zero is `Some(0)`.
+    pub planet_crew_modifier: Option<Fixed>,
+    /// Effective `isColonizable` of a Producer planet (CON-37); false for other roles.
+    pub planet_colonizable: bool,
+    /// Effective `civilianPopulationModifier` of a Producer planet (CON-37);
+    /// zero for other roles.
+    pub planet_civilian_population_modifier: Fixed,
     pub race: String,
     pub model: String,
     pub scale: Fixed,
@@ -349,6 +358,9 @@ impl UnitDef {
             is_starbase: false,
             planet_role: None,
             planet_crew_gain: 0,
+            planet_crew_modifier: None,
+            planet_colonizable: false,
+            planet_civilian_population_modifier: Fixed::ZERO,
             race: String::new(),
             model: String::new(),
             scale: Fixed::ONE,

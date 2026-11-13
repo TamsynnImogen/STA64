@@ -344,6 +344,10 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
         let file = format!("{s}.odf");
         def.planet_role = crate::planet::resolve(&file, odf, profile, &mut warnings);
         def.planet_crew_gain = crate::planet::resolve_crew_gain(&file, odf, profile, def.planet_role, &mut warnings);
+        def.planet_crew_modifier = crate::planet::resolve_crew_modifier(&file, odf, profile, def.planet_role, &mut warnings);
+        def.planet_colonizable = crate::planet::resolve_colonizable(&file, odf, profile, def.planet_role, &mut warnings);
+        def.planet_civilian_population_modifier =
+            crate::planet::resolve_civilian_population_modifier(&file, odf, profile, def.planet_role, &mut warnings);
         def.build.queue_limit = build_queue_limit(&file, odf, &mut warnings);
         def.is_starbase = station_flag(&file, odf, profile, &mut warnings);
         let mut native = Overrides::default();
