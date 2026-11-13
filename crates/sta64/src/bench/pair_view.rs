@@ -104,6 +104,7 @@ struct Target(Handle<Image>);
 #[derive(Component)]
 struct Retargeted;
 
+#[allow(clippy::type_complexity)]
 /// The map view's window cameras draw into the frame's image, not a window.
 fn retarget(mut commands: Commands, target: Res<Target>, mut cameras: Query<(Entity, &mut RenderTarget), (With<Camera3d>, Without<Retargeted>)>) {
     for (e, mut rt) in &mut cameras {
