@@ -13,31 +13,10 @@ use sta_mission::campaign::*;
 use sta_mission::runtime::MissionRuntime;
 use sta_vfs::Vfs;
 
-/// A ZFS v1 archive with key 0 (the `objtxt.zfs` layout), one block.
+/// A ZFS v1 archive with key 0 (the `objtxt.zfs` layout).
 fn zfs(files: &[(&str, &[u8])]) -> Vec<u8> {
-    const PER_BLOCK: usize = 100;
-    const SLOT: usize = 16 + 20;
-    let table = 28 + 4 + PER_BLOCK * SLOT;
-    let mut out = b"ZFSF".to_vec();
-    for v in [1u32, 16, PER_BLOCK as u32, files.len() as u32, 0, 28] {
-        out.extend_from_slice(&v.to_le_bytes());
-    }
-    out.extend_from_slice(&0u32.to_le_bytes());
-    let (mut at, mut data) = (table, Vec::new());
-    for i in 0..PER_BLOCK {
-        let mut rec = [0u8; SLOT];
-        if let Some((name, bytes)) = files.get(i) {
-            rec[..name.len()].copy_from_slice(name.as_bytes());
-            for (j, v) in [at as u32, i as u32, bytes.len() as u32, 0, 0].iter().enumerate() {
-                rec[16 + j * 4..20 + j * 4].copy_from_slice(&v.to_le_bytes());
-            }
-            data.extend_from_slice(bytes);
-            at += bytes.len();
-        }
-        out.extend_from_slice(&rec);
-    }
-    out.extend(data);
-    out
+    let files: Vec<_> = files.iter().map(|(n, d)| sta_vfs::zfs::ZfsFile { name: (*n).into(), data: d.to_vec(), time: 0 }).collect();
+    sta_vfs::zfs::write(&files, 0).unwrap()
 }
 
 fn runtime(vfs: Arc<Vfs>) -> MissionRuntime {
@@ -55,7 +34,7 @@ fn objtxt_archive_feeds_the_objective_state_for_a1_calls() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let text = b"   TEST MISSION\r\n\r\nOBJECTIVES:\r\n\r\n* Hold the line\r\n\r\n* Keep the ship alive\r\nHINT: be quick\r\n";
-    std::fs::write(dir.join("objtxt.zfs"), zfs(&[("T1OB1.txt", text), ("t1ob2.txt", b"Only a story\r\n"), ("t1tm1.txt", b"1 MINUTE REMAINING")])).unwrap();
+    std::fs::write(dir.join("objtxt.zfs"), zfs(&[("T1OB1.txt", text), ("t1ob2.txt", b"Story title\r\nStory body.\r\n")])).unwrap();
     let mut vfs = Vfs::default();
     vfs.push_dir("root".into(), dir).unwrap();
     let rt = runtime(Arc::new(vfs));
@@ -71,12 +50,12 @@ fn objtxt_archive_feeds_the_objective_state_for_a1_calls() {
     // A file without goals still sets the text; a later file replaces the state.
     rt.eval::<()>("A1.ObjectivesDisplay_Set_Text_From_File('T1OB2.txt')").unwrap();
     assert!(rt.objectives().is_empty());
-    assert_eq!(rt.objective_briefing().unwrap().title, "Only a story");
+    assert_eq!(rt.objective_briefing().unwrap().title, "Story title");
 
     // A name the archive lacks leaves the state alone and is counted.
     rt.eval::<()>("A1.ObjectivesDisplay_Set_Text_From_File('nope.txt')").unwrap();
-    assert_eq!(rt.objective_briefing().unwrap().title, "Only a story");
-    assert_eq!(rt.unsupported().iter().filter(|(k, _)| k == "Objectives.load").count(), 1);
+    assert_eq!(rt.objective_briefing().unwrap().title, "Story title");
+    assert_eq!(rt.unsupported().iter().find(|(k, _)| k == "Objectives.load").map(|(_, n)| *n), Some(1));
     assert!(rt.errors().is_empty(), "{:?}", rt.errors());
 }
 
@@ -122,7 +101,7 @@ fn every_objective_text_a_converted_a1_mission_issues_resolves() {
     // Static: every file name any converted mission passes loads to a
     // non-empty text (a goal list, or a story for the goal-less files).
     let names = referenced(&out);
-    assert!(names.len() >= 60, "{}", names.len());
+    assert_eq!(names.len(), 67, "distinct text names the converted missions pass");
     let (mut with_goals, mut story_only, mut goals) = (0, 0, 0);
     for name in &names {
         let rt = runtime(vfs.clone());
@@ -162,6 +141,8 @@ fn every_objective_text_a_converted_a1_mission_issues_resolves() {
                     break;
                 }
             }
+            let failed: Vec<String> = a.runtime().eval("local o = {} for k in pairs(Mission_.failed or {}) do o[#o + 1] = k end return o").unwrap_or_default();
+            assert!(!failed.iter().any(|k| k.contains("Objectives")), "{}: objective call raised", m.bzn);
             let missing: u32 = a.runtime().unsupported().iter().filter(|(k, _)| k == "Objectives.load").map(|(_, n)| *n).sum();
             unresolved += missing;
             issuing += usize::from(!seen.is_empty() || missing > 0);
@@ -170,5 +151,6 @@ fn every_objective_text_a_converted_a1_mission_issues_resolves() {
         }
     }
     eprintln!("first {TICKS} ticks: {issuing} missions issue objectives, {} distinct texts resolved, {unresolved} unresolved", resolved.len());
+    assert!(issuing > 0 && !resolved.is_empty(), "no mission issued an objective text in {TICKS} ticks");
     assert_eq!(unresolved, 0);
 }
