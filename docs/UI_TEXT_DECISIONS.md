@@ -36,7 +36,9 @@ A line of text is a list of spans: text in a font with a colour, an inline
 picture, a tab or a line break. Measuring, wrapping, aligning and drawing are
 written once, on spans. Sprite fonts and the SDF font are two glyph sources
 behind it. This is what keeps "two fonts" from becoming every widget
-implemented twice.
+implemented twice. The glyph source is an interface, not a pair of cases: a
+font a mod supplies as TTF/OTF (see "Planned after v1") is a third source
+behind the same model, with no change to layout or widgets.
 
 **T3. Legacy strings parse into spans through the mod's glyph table.**
 A byte the font draws as a letter becomes text; a byte it draws as a picture
@@ -114,20 +116,35 @@ resolves to neither is drawn as the word.
 Markup in legacy string tables or in mod tooltips (see T5); a STA64-only
 strings file for mods (string-table overlays stay excluded by
 MODDING_DECISIONS); Markdown; tags for font size, links or images by path;
-loading SVG at run time; fonts supplied by a mod as TTF/OTF; vectorising or
-redrawing the games' icons and emblems; converting a mod's sprite fonts or icons to another
-format.
+loading SVG at run time; vectorising or redrawing the games' icons and
+emblems; converting a mod's sprite fonts or icons to another format. Items
+that are postponed, not rejected, are under "Planned after v1".
+
+## Planned after v1
+
+Giving mods modern formats beside the legacy ones is a goal of the project,
+not an exception to it. These are left out of v1 for order of work only, and
+v1 must not be built in a way that blocks them:
+
+- **Fonts supplied by a mod as TTF/OTF.** A mod names a font file in a
+  STA64-only key that the original engines ignore (D3) and keeps its sprite
+  fonts for them. STA64 bakes the face into an SDF atlas on the player's
+  machine and uses it as the glyph source for that mod's text (T2), with
+  the mod's picture glyphs still drawn from its sprite font (T3). What v1
+  owes this: the glyph source interface of T2, and `sta_fontbake` usable as a
+  library, not only as a build tool.
+- **Markup in mod strings**, once a STA64-only strings file exists (open
+  question 2).
+- **Vector icons supplied by a mod**, baked the same way as a mod's font.
 
 ## Open questions for sign-off
 
-1. **Mod-supplied TTF.** Tammy raised shipping a real font. T1 gives STA64's
-   own screens one; a mod bringing its own face needs baking on the player's
-   machine and a key in a STA64-only file. Proposed: not in v1.
-2. **Sprite fonts at large UI scales.** How the originals scale their fonts
+1. **Sprite fonts at large UI scales.** How the originals scale their fonts
    with resolution is not measured. Until it is, sprite text is scaled as the
    stock HUD is (UI-18) and nothing is promised about sharpness at 4K.
-3. **Lifting the string-table overlay exclusion.** If markup in mod tooltips
-   is wanted for the first release, that is a change to MODDING_DECISIONS'
+2. **Lifting the string-table overlay exclusion.** Markup in mod strings
+   needs a STA64-only strings file beside the legacy one. If that is wanted
+   for the first release, that is a change to MODDING_DECISIONS'
    "Not in v1" list and goes through its own PR.
 
 ## Work packages
