@@ -634,3 +634,24 @@ fn hud_visible_tokens_and_painter_output_are_unchanged() {
     assert_eq!(app.world().get::<TextColor>(on).unwrap().0, theme.text_on);
     assert_eq!(app.world().get::<TextColor>(off).unwrap().0, theme.text_off);
 }
+
+/// HUD labels that are plain sprite text keep `text_on`; the kit's styled labels read on the
+/// skin's pills; a toggle that is on keeps the dark label.
+#[test]
+fn label_colours_split_between_the_hud_and_the_kit() {
+    use crate::ui::sprite_font::{SpriteTextStyle, sprite_text};
+    let mut app = app();
+    app.insert_resource(UiProfile::Armada2.theme());
+    let theme = app.world().resource::<Theme>().clone();
+    let tile = app.world_mut().spawn((WidgetState::Normal, BackgroundColor(Color::NONE), Node::default())).id();
+    let hud = app.world_mut().spawn((crate::ui::theme::ButtonText, sprite_text("A", 12.0, Color::WHITE), ChildOf(tile))).id();
+    let pill = app.world_mut().spawn((WidgetState::Normal, BackgroundColor(Color::NONE), Node::default())).id();
+    let kit = app.world_mut().spawn((crate::ui::theme::ButtonText, sprite_text("B", 12.0, Color::WHITE), SpriteTextStyle::default(), ChildOf(pill))).id();
+    let on = app.world_mut().spawn((WidgetState::Normal, crate::ui::theme::Toggle { on: true }, BackgroundColor(Color::NONE), Node::default())).id();
+    let lit = app.world_mut().spawn((crate::ui::theme::ButtonText, sprite_text("C", 12.0, Color::WHITE), SpriteTextStyle::default(), ChildOf(on))).id();
+    app.update();
+    let colour = |app: &App, e: Entity| app.world().get::<SpriteText>(e).unwrap().color;
+    assert_eq!(colour(&app, hud), theme.text_on);
+    assert_eq!(colour(&app, kit), theme.kit_text_on);
+    assert_eq!(colour(&app, lit), theme.text_on);
+}
