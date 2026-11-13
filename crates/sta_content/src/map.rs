@@ -270,25 +270,30 @@ impl MapDef {
                     return converted;
                 }
             };
-            // CON-42: the original reader never fails (bad count -> eight) and a
-            // team without a `Camera_i` path starts at the map centre XZ, mid
-            // `SHIP_COMBAT_FLOOR`/`CEILING` Y (RTS_CFG.h; no fallback without both keys).
+            // CON-42: the original reader never fails (bad count -> eight). STA64's
+            // own choice, not a measured rule: a seat is offered only for a team
+            // that has a `Camera_i` path, so only the leading run of existing
+            // paths becomes seats (a team's native fallback point would stack
+            // seats on the map centre; what the original does there is not measured).
             let (lo, size) = (m.min_extent, m.size);
             let centre = [(lo[0] + (lo[0] + size[0])) * 0.5, (lo[2] + (lo[2] + size[2])) * 0.5];
-            let combat_y = crate::layered::cfg_h(vfs, "RTS_CFG.h")
-                .and_then(|c| Some((c.f32("SHIP_COMBAT_FLOOR")? + c.f32("SHIP_COMBAT_CEILING")?) * 0.5))
-                .filter(|y| y.is_finite());
-            let fallback = combat_y.filter(|_| centre.iter().all(|v| v.is_finite()) && size[0] > 0.0 && size[2] > 0.0).map(|y| [centre[0], y, centre[1]]);
             let count = sta_bzn::a1::native_mdf_start_count(Some(&bytes));
-            match sta_bzn::a1::player_start_positions_with_fallback(a1, count, fallback) {
-                Ok(points) => {
+            let found = (2..=count).rev().find_map(|k| sta_bzn::a1::player_start_positions(a1, k).ok());
+            match found {
+                Some(points) => {
+                    if points.len() < usize::from(count) {
+                        converted.warnings.push(Warning::new(
+                            &companion,
+                            format!("A1 start count {count}: only {} Camera_i paths usable; no seats for the rest", points.len()),
+                        ));
+                    }
                     converted.map.starts = points.into_iter().enumerate().map(|(i, pos)| StartPos {
                         slot: i as u8,
                         pos: vec3(pos),
                         heading: unit_xz(centre[0] - pos[0], centre[1] - pos[2]),
                     }).collect();
                 }
-                Err(error) => converted.warnings.push(Warning::new(&companion, format!("A1 starts unavailable: {error}"))),
+                None => converted.warnings.push(Warning::new(&companion, format!("A1 starts unavailable: fewer than two usable Camera_i paths for count {count}"))),
             }
         }
         converted

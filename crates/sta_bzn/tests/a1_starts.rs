@@ -246,6 +246,13 @@ fn native_reader_never_fails_and_defaults_to_eight() {
         (Some(b"StartLocations = 3\0StartLocations = 5"), 3),
         (Some(b"\0StartLocations = 5"), 8),               // C string ends at the first NUL
         (Some(b"Start Locations = 5\n"), 8),
+        (Some(b"StartLocations = x\nStartLocations = 5\n"), 8), // the first matching line decides; no fall-through
+        (Some(b"StartLocations =\n\t4\n"), 4),          // tab continuation
+        (Some(b"StartLocations =\r\n 4\n"), 4),         // CR is whitespace; the LF before a blank continues the line
+        (Some(b" StartLocations = 4\n"), 8),             // leading blank: key not at line start
+        (Some(b"StartLocations = +4\n"), 4),
+        (Some(b"StartLocations = + 4\n"), 8),            // sign then blank: %d fails
+        (Some(b"StartLocations = - 4\n"), 8),
     ];
     for (source, expected) in cases {
         assert_eq!(native_mdf_start_count(*source), *expected, "{source:?}");

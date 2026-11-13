@@ -82,7 +82,9 @@ pub fn player_start_positions(map: &MapData, count: u8) -> Result<Vec<[f32; 3]>,
 /// `Camera_i` path does not exist starts at `fallback` (map centre XZ, mean of
 /// `SHIP_COMBAT_FLOOR` and `SHIP_COMBAT_CEILING` as Y; the caller supplies it
 /// from the map bounds and `RTS_CFG.h`). With `None` a missing path rejects the
-/// whole result, as before. A path that exists but is empty or not finite still
+/// whole result, as before. Content conversion does not use the fallback: it
+/// offers seats only for existing paths (STA64's choice, see
+/// `docs/A1_START_LOCATIONS.md`). A path that exists but is empty or not finite still
 /// rejects the result (native behaviour there is not measured).
 pub fn player_start_positions_with_fallback(
     map: &MapData,
@@ -119,8 +121,8 @@ pub fn player_start_positions_with_fallback(
 /// contains an `=` supplies the value, read as `= %d` from that first `=`
 /// (whitespace, optional sign, decimal digits). Lines with the prefix but no
 /// `=` are skipped. A failed `%d` leaves an uninitialised native field, which
-/// is modelled as the default eight. Overflow of `%d` is not measured (eight
-/// here). A BOM, leading blanks or CR-only line endings stop the key matching
+/// is modelled as the default eight. Overflow of `%d` is not measured: saturating to eight is a modelling choice
+/// (a C `%d` may wrap modulo 2^32 instead). A BOM, leading blanks or CR-only line endings stop the key matching
 /// at line start, so they give eight too. `#include` lines are not followed.
 pub fn native_mdf_start_count(data: Option<&[u8]>) -> u8 {
     const KEY: &[u8] = b"StartLocations";

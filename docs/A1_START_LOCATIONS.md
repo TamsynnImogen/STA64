@@ -136,6 +136,16 @@ offered was not traced.
   `SHIP_COMBAT_CEILING` (read from `RTS_CFG.h`; without both keys a missing
   path still rejects the result). A present but empty or non-finite path
   still rejects the result: native behaviour there is not measured.
-- Content conversion uses both when a companion exists. A map with no
-  companion keeps no starts (not measured; native lists appear to enumerate
-  `.mdf` files). All 28 stock companions give the same 113 starts as before.
+- Content conversion uses the native count only. STA64's own choice (not a
+  measured rule): seats are offered only for the leading run of teams that
+  have a `Camera_i` path, with a warning when that is fewer than the count
+  (fewer than two gives no starts). The native fallback point is not used for
+  seats, because it would stack them on the map centre and what the original
+  setup screen and spawn path do with such seats was not traced. The fallback
+  helper stays available in `sta_bzn`. A map with no companion keeps no starts
+  (not measured; native lists appear to enumerate `.mdf` files). All 28 stock
+  companions give the same 113 starts as before. The done-when item for maps
+  without a companion and for extra seats stays open: not measured.
+- Leading blanks before the key: the native comparison is at line start, so
+  ` StartLocations = 4` gives eight; this follows the static reading and was
+  not run on the original.
