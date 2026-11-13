@@ -6,7 +6,7 @@
 //!
 //! | section | state |
 //! |---|---|
-//! | `roster` | tick, content hash, seats and teams, who exists (id, kind, definition, owner), labels, perceived owners, eliminations |
+//! | `roster` | tick, content hash, seats and teams, who exists (id, kind, definition, owner), labels, perceived owners, eliminations, pending start-effect rows |
 //! | `movement` | position, heading, speed, turn rate, target and movement stats of every entity; queued waypoints and formations; map confinement |
 //! | `combat` | hull, shields, status flags, unit crew; weapon mounts, shots and attack orders; point defence; special energy and cloaks |
 //! | `economy` | stock, nodes, freighters, personnel; yard queues, rig deploys and rallies; build progress |
@@ -67,7 +67,7 @@ fn _every_sim_field_is_decided(s: &Sim) {
     let Sim {
         tick: _, rng: _, units: _, labels: _, players: _, ai_seats: _, content: _, starts: _, regions: _,
         bounds: _, confinement: _, perception: _, events: _, weapons: _, movement: _, economy: _,
-        production: _, victory: _, specials: _, nav: _,
+        production: _, victory: _, specials: _, start_effects: _, nav: _,
     } = s;
 }
 
@@ -122,6 +122,11 @@ impl Sim {
         }
         if !self.victory.is_empty() {
             self.victory.hash_into(&mut h);
+        }
+        // SIM-28: pending expiry and replacement of start helpers decide who
+        // will exist, so they belong with the roster.
+        if !self.start_effects.is_empty() {
+            self.start_effects.hash_into(&mut h);
         }
         h.0
     }
