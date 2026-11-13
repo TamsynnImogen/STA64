@@ -4,8 +4,10 @@
 //! pair with an instantaneous typed shot. Other calls stay generic, including
 //! paths and their extra parameters. No meaning is assigned to the observed
 //! `lookFrom(Path(name), number)` parameter yet.
-//! One-argument fades use black. Single-vector offsets use `relative=false`;
-//! these are bridge defaults, not a claim about unobserved native overloads.
+//! One-argument fades use black. A single-vector offset is relative to the eye
+//! track (`relative=true`), as MMM's `setCameraOffset` calls
+//! `CineractiveCameraOffset(x, y, z, true)` (read from `mmm_loader.dll`, static).
+//! `active = true` makes the cineractive skippable again (same source).
 
 use mlua::{Lua, MetaMethod, UserData, UserDataFields, UserDataMethods, Value, Variadic};
 use sta_core::{Fixed, Vec3};
@@ -148,6 +150,12 @@ impl UserData for Cineractive {
         f.add_field_method_get("active", |_, c| Ok(c.active));
         f.add_field_method_get("skippable", |_, c| Ok(c.skippable));
         f.add_field_method_set("active", |_, c, on: bool| {
+            // Starting one makes it skippable (MMM resets the flag on `active = true`, and
+            // the A1/A2 skip key always works there: read from the executables, static);
+            // a script that wants it otherwise sets `skippable` afterwards.
+            if on && !c.active {
+                c.skippable = true;
+            }
             c.active = on;
             if !on {
                 camera_intent::clear(&mut c.ctx.borrow_mut());
@@ -181,9 +189,10 @@ impl UserData for Cineractive {
                     "setCameraOffset expects one Vector; other overloads are not implemented",
                 ));
             };
+            // `CineractiveCameraOffset(x, y, z, true)`: in the eye track's frame (static).
             c.emit(Presentation::CameraOffset {
                 offset: position(t)?,
-                relative: false,
+                relative: true,
             });
             Ok(())
         });
@@ -286,7 +295,7 @@ mod tests {
             p[0],
             Presentation::Cineractive {
                 on: true,
-                skippable: false
+                skippable: true
             }
         );
         assert_eq!(
@@ -308,7 +317,7 @@ mod tests {
             p[4],
             Presentation::CameraOffset {
                 offset: Vec3::from_f32([-10., 20., -30.]),
-                relative: false
+                relative: true
             }
         );
         assert_eq!(

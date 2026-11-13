@@ -302,7 +302,11 @@ fn the_replies_reach_the_script_through_the_one_host_side_function() {
     deliver_reply_host_side(&rt, &ScriptReply::MessageDismissed { id: 1 });
     assert_eq!(waits(&rt), 0);
     assert!(rt.eval::<bool>("return Cineractive.active").unwrap());
+    // A skip is the script's cancel; it leaves the mode to the script.
     deliver_reply_host_side(&rt, &ScriptReply::CineractiveSkipped);
+    assert!(rt.cineractive().cancel);
+    assert!(rt.eval::<bool>("return Cineractive.active").unwrap());
+    deliver_reply_host_side(&rt, &ScriptReply::CineractiveReleased);
     assert!(!rt.eval::<bool>("return Cineractive.active").unwrap());
 }
 
@@ -769,6 +773,61 @@ fn install_gated_stock_a2_campaign_is_startable_after_conversion() {
         let (view, errors, unsupported, title) = play_install(vfs, cs, card, 300);
         eprintln!("stock A2: {id}: {title}: {} objectives; {} script errors {:?}; unsupported {:?}", view.items.len(), errors.len(), errors.iter().take(3).collect::<Vec<_>>(), unsupported.iter().take(6).collect::<Vec<_>>());
     }
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&data);
+}
+
+/// With `STA64_TEST_A1_INSTALL` (needs `python3` and `objdump`): Armada I mission 1 (`fed1`),
+/// converted the way the game's converter does it, starts from the screens; its opening
+/// cineractive takes the camera, plays its shots and ends by the script's own rule once
+/// `isCineractiveDone` reads 1 (UI-36), and the camera is the player's again.
+#[test]
+fn install_gated_a1_fed1_leaves_its_opening_cineractive_and_gives_the_camera_back() {
+    let Ok(root) = std::env::var("STA64_TEST_A1_INSTALL") else {
+        eprintln!("SKIP: set STA64_TEST_A1_INSTALL to an Armada I root");
+        return;
+    };
+    let root = Path::new(&root);
+    let data = temp_dir("a1data");
+    let tool = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/convert_install_missions.py");
+    let run = std::process::Command::new("python3").arg("-I").arg(tool).arg("--install").arg(root).env("STA64_DATA_DIR", &data).output().expect("run the converter");
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    let conv = sta_mission::converted::dir_in(&data, root, None);
+    let dir = temp_dir("a1menu");
+    let vfs = sta_vfs::Vfs::mount_install(root, None).expect("mounts");
+    let (cs, _) = load_campaigns_with(&vfs, Some(root), None, Some(&conv), |b| crate::frontend::campaign::ProgressStore::in_dir(&dir, b)).expect("A1 campaigns");
+    let card = cs.book.campaigns.iter().position(|c| c.missions.first().is_some_and(|m| m.bzn.eq_ignore_ascii_case("fed1.bzn"))).expect("fed1 opens a campaign");
+    let mut app = base(cs);
+    app.insert_resource(crate::viewer::Mounted(vfs))
+        .init_resource::<crate::map::Catalogue>()
+        .add_plugins(crate::input::camera_cinematic::CinematicCameraPlugin)
+        .add_systems(Update, build_install.run_if(resource_exists::<ActiveMatch>).run_if(resource_exists::<MissionLaunch>));
+    app.world_mut().spawn((crate::viewer::Orbit { focus: Vec3::ZERO, yaw: 0.0, pitch: 0.7, dist: 400.0, home: (Vec3::ZERO, 1.0) }, Transform::default()));
+    start_from_screens(&mut app, card);
+    let on_at = std::cell::Cell::new(None);
+    let shots = std::cell::Cell::new(0);
+    until(&mut app, 40_000, |a| {
+        let tick = a.world().resource::<SimLink>().curr().tick;
+        let cam = a.world().resource::<crate::input::camera_cinematic::CinematicCamera>();
+        if cam.locked && on_at.get().is_none() {
+            on_at.set(Some(tick));
+        }
+        shots.set(cam.shots);
+        (on_at.get().is_some() && !cam.locked) || tick >= 6000 || state(a) != AppState::InGame
+    });
+    let tick = app.world().resource::<SimLink>().curr().tick;
+    let handle = app.world().resource::<MissionHandle>().clone();
+    let fired: Vec<String> = handle.with(|rt| rt.eval("return Mission_.fired").unwrap());
+    eprintln!("a1 fed1: cineractive on at {:?}, off by {tick}, {} shots, {} rules fired: {:?}", on_at.get(), shots.get(), fired.len(), fired);
+    assert!(on_at.get().is_some(), "the opening cineractive took the camera");
+    assert!(shots.get() >= 3, "the opening's shots were played");
+    assert!(fired.iter().any(|r| r == "end_opening_cin"), "the script saw isCineractiveDone: {fired:?}");
+    let cam = app.world().resource::<crate::input::camera_cinematic::CinematicCamera>();
+    assert!(!cam.locked, "the camera is given back");
+    // The player's input moves it again.
+    app.world_mut().query::<&mut crate::viewer::Orbit>().single_mut(app.world_mut()).unwrap().dist = 123.0;
+    app.update();
+    assert_eq!(app.world_mut().query::<&crate::viewer::Orbit>().single(app.world()).unwrap().dist, 123.0);
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&data);
 }

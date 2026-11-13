@@ -186,4 +186,9 @@ fn converted_a1_fed1_runs_in_the_campaign_runner() {
     assert_eq!(p.rules, 34);
     assert!(p.rules_held.len() >= 5, "{:?}", p.rules_held);
     assert!(p.handles_resolved >= 10, "resolved {}, unresolved {:?}", p.handles_resolved, p.unresolved);
+    // UI-36: the opening cineractive finishes (its zoom-out path ends, `isCineractiveDone` reads
+    // 1) and the rule that ends it fires; before the shot model the run sat at 5 rules.
+    assert!(p.rules_held.iter().any(|r| r == "end_opening_cin"), "{:?}", p.rules_held);
+    assert!(p.engine_reads.iter().any(|(n, c)| n == "isCineractiveDone" && *c > 0), "{:?}", p.engine_reads);
+    assert!(p.rules_held.len() > 5, "{:?}", p.rules_held);
 }

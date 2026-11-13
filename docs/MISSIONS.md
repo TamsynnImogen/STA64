@@ -201,7 +201,9 @@ Registered mission objects may also define `cineractiveUpdate(self)` and
 rules and selects these optional method handles before each normal update.
 It then runs the cinematic update while the actual `Cineractive.active`
 singleton is true. When an observed active level ends, it calls finish once
-with `forced=false`, consuming that notification before calling Lua. A finish
+with `forced=false`, consuming that notification before calling Lua. A skip
+of a skippable cineractive (Space, `MissionRuntime::skip_cineractive`) ends it
+and calls finish once with `forced=true`, as MMM does (UI-36). A finish
 error is recorded without repeating the same finish on the next tick. These
 phases share the existing five-error budget for their object. A failed phase
 aborts its remaining phases for that poll; pending finish detection requires
@@ -462,8 +464,17 @@ data = read from the install; not measured):
   removed; the converted scheduler asks `A2.ScriptWaits(script)`.
 - **Stand-in host** (`standin.rs`, headless only): reports each wait finished
   after its nominal length: message WAV length (data), movie Bink length (data),
-  1 s for Enter, the next tick for a cineractive start (stand-in values, not
-  measured; fades release themselves). `A2.HostPending()` lists what is open.
+  1 s for Enter (stand-in values, not measured; fades release themselves).
+  `A2.HostPending()` lists what is open. A cineractive start is released by the
+  runtime itself when its shots are done or the player skipped (UI-36, below).
+- **Cineractive flags** (UI-36, `sta_mission::cineractive`; A1 and A2 executables,
+  static): while a cineractive runs the runtime writes `isCineractiveDone` (every
+  shot track finished: a path of `n` points at `s` segments per second of game time
+  takes `(n - 1) / s` seconds, points and objects at once, speed 0 never; 0 on the
+  tick of a `CineractiveShot`) and `isCineractiveCancel` (the player skipped) into
+  `Mission_.engineVars` through `Mission_.setEngineValue` each tick, before and
+  after the mission's update, on sim ticks; the client camera plays the same shots
+  from the same state.
 - **Bool arguments**: a `bool` parameter (decorated name `_N`) is passed as a Lua
   boolean; the pushed word is an int.
 - **Arguments passed by address** (exe, from the decorated signatures): a
@@ -485,7 +496,8 @@ data = read from the install; not measured):
   variables the engine writes (team strength, moons, warp tries, the cineractive
   flags) are read through a counted access (`Mission_.engineReads[name]`); a host
   that binds `A2.EngineVariable(name)` supplies the value, else the engine's
-  start value is read (the engine's own writes are not reproduced).
+  start value is read. The cineractive flags are written by the runtime (above);
+  the other engine writes are not reproduced.
 - **Script names**: the converted script is written under the stem of every map
   that names the mission DLL in its script section (the UI tutorial's map
   `a2_tutorial_UI` runs `a2_Tutorial1`), as the mission resolver looks a script up by

@@ -1,42 +1,36 @@
-//! Scripted camera shots from mission presentation requests (UI-30).
+//! Scripted camera shots from mission presentation requests (UI-30, UI-36).
 //!
 //! What a mission asks of the camera arrives as `SimEvent::Present` (see
-//! `sta_sim::present`). This module consumes
+//! `sta_sim::present`). Every request goes through the same shot model the mission
+//! runtime keeps ([`sta_mission::cineractive::Cineractive`]): the A1/A2 `CineractiveShot`
+//! and `CineractiveCameraOffset` calls, A2 `CineractiveConstantSpeed`, the MMM
+//! `Cineractive:lookFrom` / `lookAt` / `setCameraOffset` requests. So the camera plays
+//! the shot the script's `isCineractiveDone` waits on, on the same sim ticks: eye and
+//! target follow their path (segments per second of game time, Hermite curve), object
+//! or point, the offset is applied in the eye's frame, and a new shot cuts.
 //!
-//! - `Presentation::Cineractive { on, .. }`: on takes the camera from the player
-//!   (the map's own input systems still run, but their result is replaced every
-//!   frame by the shot's pose) and remembers where it was; off gives it back there;
-//! - `Presentation::Shot { from, at, seconds }` (A2 `Cineractive.lookFrom` / `lookAt`;
-//!   A1's `CineractiveShot` arrives as a `Call` and is listed below): the camera looks from `from` at `at`. `seconds` 0 puts it
-//!   there on the tick the request applies; more glides to it over that many seconds
-//!   of real time (the glide is display only: the pose it ends in is the request's);
-//! - `Call { name: "A2.CenterCamera", [Entity] }`: the camera's focus moves to the
-//!   entity, distance and angles kept (it is not a shot and leaves the player in
-//!   control). A1's `CenterCamera` takes a path name and point index, not an entity,
-//!   and is listed below. An entity's place is read when the request is read, not
-//!   followed afterwards.
+//! - `Presentation::Cineractive { on }`: on takes the camera from the player (the map's
+//!   own input systems still run, but their result is replaced every frame by the shot's
+//!   pose) and remembers where it was; off gives it back there: the original's
+//!   `CineractiveEnd` pops its view, so the strategy camera returns exactly as it was
+//!   (A1 and A2 executables, static). Before the script places its first shot, the camera
+//!   holds where it was.
+//! - [`ScriptReply::CineractiveReleased`] (the host's forced end: the caps of
+//!   `ui::presentation`, a script fault, the mission's end) gives it back too. A player's
+//!   skip ([`ScriptReply::CineractiveSkipped`]) does not: it sets `isCineractiveCancel`
+//!   and the script ends the cineractive (fed1 plays its zoom-out first).
+//! - A `Presentation::Shot` outside a cineractive moves the camera once (at most once a
+//!   second) and holds nothing; `A2.CenterCamera(entity)` moves the focus there.
 //!
-//! A pose is the map camera's own `Orbit` (focus, yaw, pitch, distance), which any
-//! "look from here at there" is, up to `Orbit`'s pitch limit (a near-vertical shot is
-//! clamped); nothing here moves the camera any other way. A skip of the cineractive
-//! (`ScriptReply::CineractiveSkipped`) gives the camera back too; that reply is how every end
-//! that is not the script's own reaches here (Space or Esc, the grace and the cap of
-//! `ui::presentation`, the host's release when the script faults, see `game::mission_host`).
-//! Only a cineractive holds the camera: a shot outside one moves it once.
+//! The paths are the map's AiPaths in game space ([`ScenePaths`], filled by the mission
+//! host from the launch). A shot is timed from the tick the script raised it (one tick
+//! before the view that carries its event) and placed at the interpolated sim time.
 //!
-//! **Not consumed, and listed once in [`Unhandled`]**: `CameraOffset` and the calls
-//! `SetCameraZoom`, `CineractiveConstantSpeed`, `CineractiveCameraOffset` and
-//! `CineractiveShot`: the LUA-05 notes (docs/LUA05_CAMERA_REQUESTS.md) keep their
-//! numbers raw because what the offset's flag, the zoom's unit or a path float
-//! mean was not established (not measured), and a guess here would put wrong
-//! shots into every replay. A `Spot::Path` (a whole path travelled over the shot) is
-//! the same. A `Spot::PathPoint` needs the map's paths: the host fills
-//! [`ScenePaths`] (the map loader does not yet), and without the point the shot
-//! is listed as unhandled.
-
-use std::collections::BTreeMap;
+//! **Not consumed, listed once in [`Unhandled`]**: `SetCameraZoom` (A2 `SetZoomLevel`,
+//! not wired to the orbit camera), offsets outside a cineractive.
 
 use bevy::prelude::*;
+use sta_mission::cineractive::{Cineractive, V3};
 use sta_sim::SimEvent;
 use sta_sim::present::{Arg, Presentation, Spot};
 
@@ -44,9 +38,9 @@ use crate::sim_link::{SimLink, SimMsg};
 use crate::ui::presentation::{ScriptReply, Unhandled};
 use crate::viewer::Orbit;
 
-/// Map paths by name: points in Bevy space (the host fills it from the map).
+/// The map's named paths in game space, file order (the mission's `A2.paths` / `A1` paths).
 #[derive(Resource, Default, Debug, Clone)]
-pub struct ScenePaths(pub BTreeMap<String, Vec<Vec3>>);
+pub struct ScenePaths(pub Vec<(String, Vec<[f32; 3]>)>);
 
 /// A camera pose, as the map's `Orbit` holds it.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -81,31 +75,25 @@ pub struct CinematicCamera {
     pub locked: bool,
     /// The pose to give back when it ends.
     saved: Option<Pose>,
-    /// The pose the camera is held at.
+    /// The pose the camera is held at (the last one the shots gave).
     pub target: Option<Pose>,
-    /// A glide to `target`: from, and seconds left of `total`.
-    glide: Option<(Pose, f32, f32)>,
-    /// Shots that came before a pose could be computed, for tests and the bench.
+    /// Shots placed (cuts and moves), for tests and the bench.
     pub shots: u32,
     /// When (real seconds) the last shot outside a cineractive moved the camera.
     loose_at: Option<f32>,
+    /// The shot model, fed the same requests as the mission's.
+    pub model: Cineractive,
 }
 
 /// A shot outside a cineractive moves the camera at most this often (real seconds): a script that
 /// issues one every tick would otherwise pin the camera with nothing the player could skip.
 const LOOSE_SHOT_EVERY_SECS: f32 = 1.0;
 
-fn lerp_pose(a: &Pose, b: &Pose, t: f32) -> Pose {
-    let mut dyaw = (b.yaw - a.yaw) % std::f32::consts::TAU;
-    if dyaw > std::f32::consts::PI {
-        dyaw -= std::f32::consts::TAU;
-    } else if dyaw < -std::f32::consts::PI {
-        dyaw += std::f32::consts::TAU;
-    }
-    Pose { focus: a.focus.lerp(b.focus, t), yaw: a.yaw + dyaw * t, pitch: a.pitch + (b.pitch - a.pitch) * t, dist: a.dist + (b.dist - a.dist) * t }
+fn bevy(p: V3) -> Vec3 {
+    crate::render::units::to_bevy([p[0] as f32, p[1] as f32, p[2] as f32])
 }
 
-/// A place in Bevy space, if it can be told.
+/// A place in Bevy space, if it can be told (shots outside a cineractive).
 fn spot(s: &Spot, link: Option<&SimLink>, paths: &ScenePaths) -> Option<Vec3> {
     match s {
         Spot::Entity(id) => {
@@ -113,9 +101,16 @@ fn spot(s: &Spot, link: Option<&SimLink>, paths: &ScenePaths) -> Option<Vec3> {
             Some(crate::render::units::to_bevy(u.pos.to_f32()))
         }
         Spot::Position(p) => Some(crate::render::units::to_bevy(p.to_f32())),
-        Spot::PathPoint { path, index } => paths.0.get(path)?.get(*index as usize).copied(),
-        Spot::Path(_) => None,
+        Spot::PathPoint { path, index } => paths.0.iter().find(|(n, _)| n == path)?.1.get(*index as usize).map(|p| crate::render::units::to_bevy(*p)),
         _ => None,
+    }
+}
+
+fn release(cam: &mut CinematicCamera, orbit: &mut Query<&mut Orbit>) {
+    cam.locked = false;
+    cam.target = None;
+    if let (Some(saved), Some(mut o)) = (cam.saved.take(), orbit.iter_mut().next()) {
+        (o.focus, o.yaw, o.pitch, o.dist) = (saved.focus, saved.yaw, saved.pitch, saved.dist);
     }
 }
 
@@ -130,17 +125,20 @@ fn consume(
     mut replies: MessageReader<ScriptReply>,
     time: Res<Time<Real>>,
 ) {
-    // The player skipped the cineractive: the camera is theirs again.
-    if replies.read().any(|r| *r == ScriptReply::CineractiveSkipped) && cam.locked {
-        cam.locked = false;
-        cam.target = None;
-        cam.glide = None;
-        if let (Some(saved), Some(mut o)) = (cam.saved.take(), orbit.iter_mut().next()) {
-            (o.focus, o.yaw, o.pitch, o.dist) = (saved.focus, saved.yaw, saved.pitch, saved.dist);
-        }
+    // The host ended the cineractive (cap, fault, mission end): the camera is the player's again.
+    if replies.read().any(|r| *r == ScriptReply::CineractiveReleased) && cam.locked {
+        release(&mut cam, &mut orbit);
+        cam.model.observe(&Presentation::Cineractive { on: false, skippable: false }, 0, &[]);
     }
+    // The script raised these on the tick before the view that carries them.
+    let tick = link.as_deref().map_or(0, |l| l.curr().tick.saturating_sub(1));
     for SimMsg(e) in events.read() {
         let SimEvent::Present(p) = e else { continue };
+        let placed = cam.model.shot_placed.then(|| cam.model.shot.clone());
+        cam.model.observe(p, tick, &paths.0);
+        if cam.model.shot_placed && placed != Some(cam.model.shot.clone()) {
+            cam.shots += 1;
+        }
         let current = orbit.iter().next().map(of);
         match p {
             Presentation::Cineractive { on, .. } => {
@@ -149,39 +147,27 @@ fn consume(
                     cam.saved = current;
                     cam.target = current;
                 } else if !*on && cam.locked {
-                    cam.locked = false;
-                    cam.target = None;
-                    cam.glide = None;
-                    if let (Some(saved), Some(mut o)) = (cam.saved.take(), orbit.iter_mut().next()) {
-                        (o.focus, o.yaw, o.pitch, o.dist) = (saved.focus, saved.yaw, saved.pitch, saved.dist);
-                    }
+                    release(&mut cam, &mut orbit);
                 }
             }
-            Presentation::Shot { from, at, seconds } => {
+            // A shot outside cineractive mode is one move of the camera, not a hold: the
+            // scripts bracket shots in cineractive mode, and a hold nothing brackets would have
+            // no end the player could count on.
+            Presentation::Shot { from, at, .. } if !cam.locked => {
                 let (Some(f), Some(a)) = (spot(from, link.as_deref(), &paths), spot(at, link.as_deref(), &paths)) else {
                     unhandled.note("Shot with a path spot or a vanished entity");
                     continue;
                 };
-                let pose = pose_looking(f, a);
-                cam.shots += 1;
-                let secs = seconds.to_f32();
-                // A shot outside cineractive mode is one move of the camera, not a hold: the
-                // A2 scripts bracket shots in cineractive mode, and a hold nothing brackets
-                // would have no end the player could count on.
-                if !cam.locked {
-                    let now = time.elapsed_secs();
-                    if cam.loose_at.is_some_and(|at| now - at < LOOSE_SHOT_EVERY_SECS) {
-                        unhandled.note("Shot outside a cineractive, more than once a second");
-                        continue;
-                    }
-                    cam.loose_at = Some(now);
-                    if let Some(mut o) = orbit.iter_mut().next() {
-                        (o.focus, o.yaw, o.pitch, o.dist) = (pose.focus, pose.yaw, pose.pitch, pose.dist);
-                    }
+                let now = time.elapsed_secs();
+                if cam.loose_at.is_some_and(|at| now - at < LOOSE_SHOT_EVERY_SECS) {
+                    unhandled.note("Shot outside a cineractive, more than once a second");
                     continue;
                 }
-                cam.glide = (secs > 0.0).then(|| (current.or(cam.target).unwrap_or(pose), secs, secs));
-                cam.target = Some(pose);
+                cam.loose_at = Some(now);
+                let pose = pose_looking(f, a);
+                if let Some(mut o) = orbit.iter_mut().next() {
+                    (o.focus, o.yaw, o.pitch, o.dist) = (pose.focus, pose.yaw, pose.pitch, pose.dist);
+                }
             }
             Presentation::Call { name, args } if name == "A2.CenterCamera" => {
                 let entity = args.iter().find_map(|a| if let Arg::Entity(id) = a { Some(*id) } else { None });
@@ -192,10 +178,10 @@ fn consume(
                     }
                 }
             }
-            Presentation::CameraOffset { .. } => {
-                unhandled.note("CameraOffset");
+            Presentation::CameraOffset { .. } if !cam.locked => {
+                unhandled.note("CameraOffset outside a cineractive");
             }
-            Presentation::Call { name, .. } if is_camera_call(name) => {
+            Presentation::Call { name, .. } if name.ends_with(".SetCameraZoom") || (name.ends_with(".CenterCamera") && name != "A2.CenterCamera") => {
                 unhandled.note(name);
             }
             _ => {}
@@ -203,28 +189,22 @@ fn consume(
     }
 }
 
-/// Camera calls this module knows it does not act on (see the module docs).
-fn is_camera_call(name: &str) -> bool {
-    matches!(
-        name.split_once('.').map_or(name, |x| x.1),
-        "SetCameraZoom" | "CineractiveConstantSpeed" | "CineractiveCameraOffset" | "CineractiveShot" | "CenterCamera"
-    )
-}
-
-/// While a shot holds the camera, put it at the shot's pose, over what input just did.
-fn hold(time: Res<Time<Real>>, mut cam: ResMut<CinematicCamera>, mut q: Query<(&mut Orbit, &mut Transform)>) {
+/// While a cineractive holds the camera, put it at the shot's pose, over what input just did.
+fn hold(link: Option<Res<SimLink>>, clock: Option<Res<crate::clock::AnimClock>>, mut cam: ResMut<CinematicCamera>, mut q: Query<(&mut Orbit, &mut Transform)>) {
     if !cam.locked {
         return;
     }
-    let Some(target) = cam.target else { return };
-    let pose = match cam.glide {
-        Some((from, left, total)) => {
-            let left = (left - time.delta_secs()).max(0.0);
-            cam.glide = (left > 0.0).then_some((from, left, total));
-            lerp_pose(&from, &target, 1.0 - left / total)
-        }
-        None => target,
+    let alpha = clock.map_or(1.0, |c| c.alpha().clamp(0.0, 1.0));
+    // The interpolated sim time, in ticks: units are drawn between the last two views.
+    let now = link.as_deref().map_or(0.0, |l| l.curr().tick as f64 - 1.0 + f64::from(alpha));
+    let locate = |id| {
+        let (p, h) = link.as_deref()?.interpolate(id, alpha)?;
+        Some(([f64::from(p[0]), f64::from(p[1]), f64::from(p[2])], [f64::from(h[0]), 0.0, f64::from(h[1])]))
     };
+    if let Some((eye, look)) = cam.model.pose(now, &locate) {
+        cam.target = Some(pose_looking(bevy(eye), bevy(look)));
+    }
+    let Some(pose) = cam.target else { return };
     for (mut o, mut tf) in &mut q {
         (o.focus, o.yaw, o.pitch, o.dist) = (pose.focus, pose.yaw, pose.pitch, pose.dist);
         tf.translation = camera_translation(&pose);
@@ -317,13 +297,13 @@ mod tests {
     }
 
     #[test]
-    fn skipping_the_cineractive_gives_the_camera_back() {
+    fn releasing_the_cineractive_gives_the_camera_back() {
         let mut app = app();
         let before = orbit(&mut app);
         send(&mut app, Presentation::Cineractive { on: true, skippable: true });
         send(&mut app, Presentation::Shot { from: Spot::Position(sv(5, 5, 5)), at: Spot::Position(sta_core::Vec3::ZERO), seconds: Fixed::ZERO });
         assert_ne!(orbit(&mut app), before);
-        app.world_mut().write_message(ScriptReply::CineractiveSkipped);
+        app.world_mut().write_message(ScriptReply::CineractiveReleased);
         app.update();
         assert_eq!(orbit(&mut app), before);
         assert!(!app.world().resource::<CinematicCamera>().locked);
@@ -355,10 +335,48 @@ mod tests {
     #[test]
     fn a_path_point_shot_uses_the_hosts_paths() {
         let mut app = app();
-        app.world_mut().resource_mut::<ScenePaths>().0.insert("cam".into(), vec![Vec3::new(0.0, 0.0, 50.0), Vec3::new(10.0, 10.0, 10.0)]);
+        // Game space: the Bevy camera lands at z mirrored.
+        app.world_mut().resource_mut::<ScenePaths>().0.push(("cam".into(), vec![[0.0, 0.0, 50.0], [10.0, 10.0, 10.0]]));
         send(&mut app, Presentation::Cineractive { on: true, skippable: true });
         send(&mut app, Presentation::Shot { from: Spot::PathPoint { path: "cam".into(), index: 1 }, at: Spot::PathPoint { path: "cam".into(), index: 0 }, seconds: Fixed::ZERO });
         let tf = *app.world_mut().query::<&Transform>().single(app.world()).unwrap();
-        assert!(tf.translation.distance(Vec3::new(10.0, 10.0, 10.0)) < 1e-2);
+        assert!(tf.translation.distance(Vec3::new(10.0, 10.0, -10.0)) < 1e-2, "{:?}", tf.translation);
+    }
+
+    #[test]
+    fn an_a1_path_shot_is_played_from_the_shot_model() {
+        let mut app = app();
+        app.world_mut().resource_mut::<ScenePaths>().0.push(("ZOOM".into(), vec![[0.0, 50.0, 0.0], [100.0, 50.0, 0.0], [200.0, 50.0, 0.0]]));
+        app.world_mut().resource_mut::<ScenePaths>().0.push(("Camera_1".into(), vec![[100.0, 0.0, 500.0]]));
+        send(&mut app, Presentation::Cineractive { on: true, skippable: true });
+        // `CineractiveShot('ZOOM', 0.8, 'Camera_1', 0)`: no sim link here, so sim time stays at the
+        // shot's own tick and the eye is at the path's first point.
+        let shot = Presentation::Call { name: "A1.CineractiveShot".into(), args: vec![Arg::Text("ZOOM".into()), Arg::Num(Fixed::from_f64(0.8)), Arg::Text("Camera_1".into()), Arg::Int(0)] };
+        send(&mut app, shot);
+        let cam = app.world().resource::<CinematicCamera>();
+        assert!(cam.locked);
+        assert_eq!(cam.shots, 1);
+        let tf = *app.world_mut().query::<&Transform>().single(app.world()).unwrap();
+        assert!(tf.translation.distance(Vec3::new(0.0, 50.0, 0.0)) < 1e-2, "{:?}", tf.translation);
+        // It looks at Camera_1's point (Bevy z mirrored).
+        let ahead = tf.forward().as_vec3();
+        let want = (Vec3::new(100.0, 0.0, -500.0) - tf.translation).normalize();
+        assert!(ahead.dot(want) > 0.999, "{ahead:?} {want:?}");
+    }
+
+    #[test]
+    fn a_skip_leaves_the_camera_to_the_script_and_a_release_gives_it_back() {
+        let mut app = app();
+        let before = orbit(&mut app);
+        send(&mut app, Presentation::Cineractive { on: true, skippable: true });
+        send(&mut app, Presentation::Shot { from: Spot::Position(sv(5, 5, 5)), at: Spot::Position(sta_core::Vec3::ZERO), seconds: Fixed::ZERO });
+        app.world_mut().write_message(ScriptReply::CineractiveSkipped);
+        app.update();
+        assert!(app.world().resource::<CinematicCamera>().locked, "the script ends it after a skip");
+        app.world_mut().write_message(ScriptReply::CineractiveReleased);
+        app.update();
+        assert_eq!(orbit(&mut app), before);
+        assert!(!app.world().resource::<CinematicCamera>().locked);
+        assert!(!app.world().resource::<CinematicCamera>().model.active);
     }
 }

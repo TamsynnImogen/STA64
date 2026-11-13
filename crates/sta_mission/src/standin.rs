@@ -10,7 +10,8 @@
 //! - a movie: frames over frame rate from the Bink header of
 //!   `animations/<name>`; 5 s if not found;
 //! - a wait for Enter: 1 s (what the shell releases it on is not measured);
-//! - a cineractive start: the next tick (no camera model in the host).
+//! - a cineractive start: not reported here; the runtime releases it when its shots are
+//!   done (the shot model of `crate::cineractive`, on sim ticks, UI-36), as the client does.
 //!
 //! Evidence grade: lengths are read from data (file headers); every default
 //! above is a stand-in value and says nothing about the original's timing
@@ -129,7 +130,6 @@ impl StandInHost {
                 "sound" | "music" => format!("A2.AudioMessageDone({id})"),
                 "movie" => "A2.MovieDone()".to_owned(),
                 "key" => format!("A2.EnterKeyDone({id})"),
-                "cineractive" => "A2.CineractiveStartDone()".to_owned(),
                 "a1.sound" => format!("A1.AudioMessageDone({id})"),
                 "a1.movie" => "A1.MovieDone()".to_owned(),
                 _ => continue,

@@ -179,7 +179,7 @@ pub use inspection::{EvalArgs, EvalResult};
 /// cinematic update while active, then a single normal-finish notification.
 /// Phase errors abort the remaining phases of that poll and use the existing
 /// per-object budget; later phases require successful preceding phases.
-fn object_callback(lua: &Lua, object: Table) -> mlua::Result<Function> {
+fn object_callback(lua: &Lua, object: Table, ctx: ApiShared) -> mlua::Result<Function> {
     let mut any = false;
     for name in ["setup", "update"] {
         match object.get::<Value>(name)? {
@@ -210,12 +210,27 @@ fn object_callback(lua: &Lua, object: Table) -> mlua::Result<Function> {
         let cinematic_update = object.get::<Option<Function>>("cineractiveUpdate")?;
         let cinematic_finish = object.get::<Option<Function>>("cineractiveFinish")?;
         let cinematic_hooks = cinematic_update.is_some() || cinematic_finish.is_some();
+        // The cineractive update of the engine (UI-36): the variables the converted rules wait on.
+        cineractive_engine_update(lua, &object, &ctx)?;
         if cinematic_hooks {
+            // MMM's skip: Space while active and skippable ends the cineractive and calls
+            // `cineractiveFinish(true)` (`mmm_loader.dll`, static).
+            let skip = std::mem::take(&mut ctx.borrow_mut().cine.skip_pending);
+            if skip && api::cineractive_active(lua)? && api::cineractive_skippable(lua)? {
+                api::set_cineractive_active(lua, false)?;
+                was_active = false;
+                if let Some(finish) = &cinematic_finish {
+                    finish.call::<MultiValue>((object.clone(), true))?;
+                }
+            }
             was_active |= api::cineractive_active(lua)?;
         }
         if let Some(update) = object.get::<Option<Function>>("update")? {
             update.call::<MultiValue>((object.clone(), time))?;
         }
+        // A shot placed by this update reads Done = 0 before the next rule pass, as the engine's
+        // shot call writes it.
+        cineractive_engine_update(lua, &object, &ctx)?;
         if cinematic_hooks {
             if api::cineractive_active(lua)? {
                 was_active = true;
@@ -239,7 +254,47 @@ fn object_callback(lua: &Lua, object: Table) -> mlua::Result<Function> {
     })
 }
 
+/// While a cineractive runs, write `isCineractiveDone` / `isCineractiveCancel` into the
+/// converted mission's engine variables (`Mission.engineVars`, `Mission.setEngineValue`, the
+/// prelude of `tools/dsl_to_lua.py` / `a1_to_lua.py`), which wakes the rules that depend on
+/// them, and release an A2 step held by `CineractiveStart(script, false)` once either reads
+/// nonzero (`Cineractive::Update`, static). Objects without those fields are left alone.
+fn cineractive_engine_update(lua: &Lua, object: &Table, ctx: &ApiShared) -> mlua::Result<()> {
+    let values = {
+        let c = ctx.borrow();
+        c.cine.engine_values(c.view.tick)
+    };
+    let Some((done, cancel)) = values else { return Ok(()) };
+    if (done != 0 || cancel != 0)
+        && let Value::Table(a2) = lua.globals().raw_get::<Value>("A2")?
+        && let Value::Function(release) = a2.raw_get::<Value>("CineractiveStartDone")?
+    {
+        release.call::<()>(())?;
+    }
+    let (Value::Table(vars), Value::Function(set)) = (object.raw_get::<Value>("engineVars")?, object.raw_get::<Value>("setEngineValue")?) else {
+        return Ok(());
+    };
+    for (name, value) in [("isCineractiveDone", done), ("isCineractiveCancel", cancel)] {
+        if let Value::Table(var) = vars.raw_get::<Value>(name)? {
+            set.call::<()>((var, value))?;
+        }
+    }
+    Ok(())
+}
+
 impl MissionRuntime {
+    /// The player skipped the running cineractive (the skip key, Space): `isCineractiveCancel`
+    /// reads 1 from the next tick, and an MMM mission that made it skippable has it ended with
+    /// `cineractiveFinish(true)`. Host-side, outside the command stream (SIM-61).
+    pub fn skip_cineractive(&self) {
+        self.inner.ctx.borrow_mut().cine.skip();
+    }
+
+    /// The cineractive state the script's requests built (for hosts and tests).
+    pub fn cineractive(&self) -> crate::cineractive::Cineractive {
+        self.inner.ctx.borrow().cine.clone()
+    }
+
     /// Load `path` (a VFS path such as `missions/Eviction.lua`) from `vfs`.
     pub fn from_vfs(vfs: Arc<Vfs>, path: &str, seed: u64) -> MissionRuntime {
         MissionRuntime::from_vfs_with(vfs, path, seed, MissionConfig::default())
@@ -292,12 +347,13 @@ impl MissionRuntime {
 
         let mmm = lua.create_table()?;
         let sh = shared.clone();
+        let c = ctx.clone();
         mmm.set(
             "register",
             lua.create_function(move |lua, value: Value| {
                 let f = match value {
                     Value::Function(f) => f,
-                    Value::Table(t) => object_callback(lua, t)?,
+                    Value::Table(t) => object_callback(lua, t, c.clone())?,
                     _ => return Err(mlua::Error::runtime("MMM.register expects a function or mission object")),
                 };
                 let mut s = sh.borrow_mut();
