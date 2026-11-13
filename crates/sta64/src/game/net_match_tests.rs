@@ -41,8 +41,54 @@ use crate::frontend::screens::{Screen, ScreenData, ScreensConfig, ScreensPlugin}
 use crate::map::{MapBrowser, MapSeat};
 use crate::sim_link::{CommandQueue, SimLink, SimLinkPlugin};
 
-/// Waits for `cond`, updating every app, or fails at the deadline.
-const LONG: Duration = Duration::from_secs(120);
+/// How long a wait may go without any peer making progress (a tick run, a line said or shown)
+/// before it fails. The deadline follows the work: a slow machine that keeps stepping is never
+/// failed for being slow, only a match that stopped moving is.
+const STALLED: Duration = Duration::from_secs(60);
+
+/// The lobby-driven matches run one at a time: each spins several apps, a relay and its
+/// threads flat out, and eleven at once on a four-core runner (beside the rest of the suite)
+/// starved each other into the timeouts of #619.
+static ONE_MATCH_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn one_at_a_time() -> std::sync::MutexGuard<'static, ()> {
+    // A test that failed holding it does not fail the others.
+    ONE_MATCH_AT_A_TIME.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// What moves while a match is alive: every peer's tick, what it said and what its overlay shows.
+fn progress(apps: &[App]) -> Vec<(u64, usize, Vec<String>)> {
+    apps.iter()
+        .map(|a| {
+            let (tick, said) = a.world().get_resource::<NetGame>().map_or((0, 0), |g| (g.tick(), g.read(|s| s.said.len())));
+            (tick, said, a.world().get_resource::<NetStatus>().map(|s| s.0.clone()).unwrap_or_default())
+        })
+        .collect()
+}
+
+/// A deadline that moves on while the apps make progress, under a cap so that a line that
+/// changes forever (a stall's seconds) cannot keep a broken wait alive for good.
+struct Watch {
+    seen: Vec<(u64, usize, Vec<String>)>,
+    end: Instant,
+    cap: Instant,
+}
+
+impl Watch {
+    fn new(apps: &[App]) -> Watch {
+        Watch { seen: progress(apps), end: Instant::now() + STALLED, cap: Instant::now() + 15 * STALLED }
+    }
+
+    /// Whether the apps went `STALLED` without progress.
+    fn stalled(&mut self, apps: &[App]) -> bool {
+        let now = progress(apps);
+        if now != self.seen {
+            self.seen = now;
+            self.end = Instant::now() + STALLED;
+        }
+        Instant::now() >= self.end || Instant::now() >= self.cap
+    }
+}
 
 fn race(name: &str, slot: i64) -> RaceDef {
     RaceDef {
@@ -193,7 +239,7 @@ fn playing(a: &App) -> bool {
 
 /// Updates every app until `cond`, failing at the deadline.
 fn until(apps: &mut [App], what: &str, cond: impl Fn(&[App]) -> bool) {
-    let end = Instant::now() + LONG;
+    let mut watch = Watch::new(apps);
     loop {
         for a in apps.iter_mut() {
             a.update();
@@ -201,9 +247,9 @@ fn until(apps: &mut [App], what: &str, cond: impl Fn(&[App]) -> bool) {
         if cond(apps) {
             return;
         }
-        if Instant::now() >= end {
+        if watch.stalled(apps) {
             let said: Vec<_> = apps.iter().map(|a| a.world().get_resource::<NetGame>().map(|g| (g.tick(), g.read(|s| s.said.clone()), dump(g)))).collect();
-            panic!("timed out waiting for: {what}; peers: {said:#?}");
+            panic!("no progress for {STALLED:?} waiting for: {what}; peers: {said:#?}");
         }
         std::thread::yield_now();
     }
@@ -316,6 +362,7 @@ fn sleep_ms(ms: u64) {
 
 #[test]
 fn two_clients_play_three_thousand_ticks_in_step_with_scripted_orders() {
+    let _one = one_at_a_time();
     let (r, dir) = (fast_relay(), tmp("two"));
     let mut apps = launch(&r, 1, 0, &[], &opts(&dir));
     // The match is the host's `Start` on each machine: same seats, own seat human, MapSeat set.
@@ -352,6 +399,7 @@ fn two_clients_play_three_thousand_ticks_in_step_with_scripted_orders() {
 
 #[test]
 fn three_clients_play_in_step() {
+    let _one = one_at_a_time();
     let (r, dir) = (fast_relay(), tmp("three"));
     let mut apps = launch(&r, 2, 1, &[], &opts(&dir));
     run_to(&mut apps, 3000);
@@ -364,6 +412,7 @@ fn three_clients_play_in_step() {
 
 #[test]
 fn the_host_runs_the_computer_seat_and_every_peer_agrees_to_the_snapshot() {
+    let _one = one_at_a_time();
     let (r, dir) = (fast_relay(), tmp("ai"));
     let mut apps = launch(&r, 1, 1, &[2], &opts(&dir));
     for a in &apps {
@@ -401,12 +450,13 @@ fn the_host_runs_the_computer_seat_and_every_peer_agrees_to_the_snapshot() {
 
 #[test]
 fn a_client_that_stalls_is_waited_for_in_words_and_resumes() {
+    let _one = one_at_a_time();
     let (r, dir) = (fast_relay(), tmp("stall"));
     let mut apps = launch(&r, 2, 1, &[], &opts(&dir));
     run_to(&mut apps, 300);
     // Seat 2 stops updating (a frozen window); the other two play until they cannot.
     let mut rest = apps.split_off(2);
-    let end = Instant::now() + LONG;
+    let mut watch = Watch::new(&apps);
     loop {
         for a in apps.iter_mut() {
             a.update();
@@ -414,7 +464,7 @@ fn a_client_that_stalls_is_waited_for_in_words_and_resumes() {
         if apps.iter().all(|a| game(a).read(|s| s.stall.as_ref().is_some_and(|(_, w)| w.contains(&PlayerId(2))))) && apps.iter().all(|a| a.world().resource::<NetStatus>().0.iter().any(|l| l.contains("Waiting for Data"))) {
             break;
         }
-        assert!(Instant::now() < end, "never showed the wait");
+        assert!(!watch.stalled(&apps), "never showed the wait");
         sleep_ms(2);
     }
     let line = apps[0].world().resource::<NetStatus>().0.iter().find(|l| l.contains("Waiting for")).cloned().unwrap();
@@ -437,6 +487,7 @@ fn a_client_that_stalls_is_waited_for_in_words_and_resumes() {
 
 #[test]
 fn a_client_that_drops_is_marked_and_the_others_play_on() {
+    let _one = one_at_a_time();
     let (r, dir) = (fast_relay(), tmp("drop"));
     let mut apps = launch(&r, 2, 1, &[], &opts(&dir));
     run_to(&mut apps, 300);
@@ -464,6 +515,7 @@ fn a_client_that_drops_is_marked_and_the_others_play_on() {
 
 #[test]
 fn the_host_leaving_ends_the_match_for_the_others_with_a_message() {
+    let _one = one_at_a_time();
     let (r, dir) = (fast_relay(), tmp("hostleft"));
     let mut apps = launch(&r, 1, 0, &[], &opts(&dir));
     run_to(&mut apps, 300);
@@ -483,6 +535,7 @@ fn the_host_leaving_ends_the_match_for_the_others_with_a_message() {
 
 #[test]
 fn a_removed_client_is_back_at_the_multiplayer_screen_with_the_reason() {
+    let _one = one_at_a_time();
     let (r, dir) = (fast_relay(), tmp("removed"));
     let mut apps = launch(&r, 2, 1, &[], &opts(&dir));
     run_to(&mut apps, 300);
@@ -501,6 +554,7 @@ fn a_removed_client_is_back_at_the_multiplayer_screen_with_the_reason() {
 
 #[test]
 fn a_protocol_violation_is_a_kick() {
+    let _one = one_at_a_time();
     let (r, dir) = (fast_relay(), tmp("violation"));
     let mut apps = launch(&r, 2, 1, &[], &opts(&dir));
     run_to(&mut apps, 300);
@@ -552,6 +606,7 @@ fn side_of(path: &Path, data: &ScreenData) -> sta_net::diagnose::Side {
 
 #[test]
 fn an_injected_desync_halts_every_peer_and_writes_reports_the_diagnosis_localises() {
+    let _one = one_at_a_time();
     let (r, dir) = (fast_relay(), tmp("desync"));
     // The host will not repair anyone (a seat with no resyncs left): the match stays stopped.
     let o = NetOptions { limits: Some(ResyncLimits { resyncs_per_seat: 0, min_attempt_interval: Duration::from_millis(1), repair_wait: Duration::from_secs(3), ..ResyncLimits::default() }), ..opts(&dir) };
@@ -559,19 +614,16 @@ fn an_injected_desync_halts_every_peer_and_writes_reports_the_diagnosis_localise
     run_to(&mut apps, 300);
     // Damage on seat 1's sim only, applied on its next step.
     game(&apps[1]).inject(spoil());
-    let end = Instant::now() + LONG;
-    loop {
-        for a in apps.iter_mut() {
-            a.update();
-        }
-        let halted = apps.iter().all(|a| game(a).read(|s| s.peer().router().halted()));
-        let written = apps.iter().all(|a| game(a).read(|s| s.desync.as_ref().is_some_and(|d| d.report.is_some())));
-        if halted && written {
-            break;
-        }
-        assert!(Instant::now() < end, "the peers never all halted with a report");
-        std::thread::yield_now();
-    }
+    // Halted, the report written, and at the tick that differs: a peer that the others stopped
+    // before it got there runs on to it and stops there.
+    until(&mut apps, "every peer halted with a report at the differing tick", |a| {
+        a.iter().all(|x| {
+            game(x).read(|s| {
+                let r = s.peer().router();
+                r.halted() && s.desync.as_ref().is_some_and(|d| d.report.is_some() && r.own_digest(d.tick).is_some())
+            })
+        })
+    });
     // They stay halted: the match does not run on.
     let at: Vec<_> = apps.iter().map(|a| game(a).tick()).collect();
     for _ in 0..20 {
@@ -607,6 +659,7 @@ fn an_injected_desync_halts_every_peer_and_writes_reports_the_diagnosis_localise
 
 #[test]
 fn a_repairable_desync_is_repaired_and_the_reports_are_still_written() {
+    let _one = one_at_a_time();
     let (r, dir) = (fast_relay(), tmp("repair"));
     let o = NetOptions { limits: Some(ResyncLimits { min_attempt_interval: Duration::from_millis(1), bytes_per_sec: 100_000_000, burst_bytes: 100_000_000, ..ResyncLimits::default() }), ..opts(&dir) };
     let mut apps = launch(&r, 1, 0, &[], &o);
@@ -629,6 +682,7 @@ fn a_repairable_desync_is_repaired_and_the_reports_are_still_written() {
 
 #[test]
 fn a_peer_with_another_map_refuses_the_start_naming_it() {
+    let _one = one_at_a_time();
     let (r, dir) = (fast_relay(), tmp("map"));
     let o = opts(&dir);
     let data = net_data();

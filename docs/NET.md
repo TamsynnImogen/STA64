@@ -560,6 +560,15 @@ joiner                         host
   failed load or a refusal leaves the match stopped for that peer, as
   section 7 says (N4.4). The host, even when its state is the odd one out,
   wins (N3): the others request.
+  A peer stopped by another's `Desync` notice for a tick it has not reached
+  yet (a host up to the turn delay behind the guests) still runs the turns up
+  to that tick, sending no record, and stops there: it then has its own digest
+  for the tick, which differs from one of the notice's two, and says it in a
+  `Desync` of its own. Without that, nobody would learn the host's digest for
+  the differing tick and the match would stay stopped with nobody asking.
+  When a seat's repair is confirmed (the host on its ack, the others on
+  `Resynced`), what that seat reported for the snapshot's tick and later
+  before its repair is dropped: it ran ahead on the state that was replaced.
 - **Limits.** Per seat, a fixed ledger (rejoins 8, resyncs 3 per match, five
   bad rejoin attempts, a request interval of 2 s; requests inside it are not
   answered); a seat over its limit is refused `LimitReached` and the host

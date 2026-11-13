@@ -1136,6 +1136,89 @@ fn only_the_diverged_peer_is_resynced_three_peers_and_the_host_wins_when_it_diff
     g.assert_in_sync();
 }
 
+/// Steps the peers in `who` round-robin, `rounds` times at most, until `done`;
+/// whether it got there. A count of rounds, not a clock: the loopback has no
+/// latency, so the outcome does not depend on how fast the machine is.
+fn rounds_until(g: &mut Game, who: &[usize], rounds: usize, done: impl Fn(&Game) -> bool) -> bool {
+    for _ in 0..rounds {
+        if done(g) {
+            return true;
+        }
+        for &i in who {
+            g.step(i);
+        }
+        g.net.as_ref().unwrap().advance(1);
+    }
+    done(g)
+}
+
+fn halted(g: &Game, i: usize) -> bool {
+    g.peers[i].as_ref().unwrap().router().halted()
+}
+
+fn tick_of(g: &Game, i: usize) -> Tick {
+    g.peers[i].as_ref().unwrap().tick()
+}
+
+/// Repaired, nobody stopped, and the match plays on in step for `ticks` more.
+fn repaired_and_plays_on(g: &mut Game, resynced: usize, ticks: Tick) {
+    let all = g.present();
+    let fixed = rounds_until(g, &all, 3_000, |g| {
+        !g.peers[resynced].as_ref().unwrap().resyncs().is_empty() && all.iter().all(|&i| !halted(g, i))
+    });
+    assert!(fixed, "never repaired: {}", g.status());
+    // Each peer to exactly `to`, then they compare equal.
+    let to = all.iter().map(|&i| tick_of(g, i)).max().unwrap() + ticks;
+    for _ in 0..20_000 {
+        let behind: Vec<usize> = all.iter().copied().filter(|&i| tick_of(g, i) < to).collect();
+        if behind.is_empty() {
+            break;
+        }
+        for i in behind {
+            g.step(i);
+        }
+        g.net.as_ref().unwrap().advance(1);
+    }
+    assert!(all.iter().all(|&i| tick_of(g, i) == to && !halted(g, i)), "stopped again after the repair: {}", g.status());
+    g.assert_in_sync();
+}
+
+#[test]
+fn a_host_behind_the_differing_tick_runs_on_to_it_and_the_diverged_seat_is_repaired() {
+    // Three peers. The two guests play ahead of the host (as far as the host's
+    // records let them); seat 1 diverges, and seat 2 finds it and stops the
+    // match before the host has reached the tick that differs. The host must
+    // still get there, or nobody ever has the authority's digest for it, the
+    // diverged seat cannot ask to be repaired, and the match never resumes.
+    let mut g = Game::loopback(3);
+    g.run_to(90);
+    desync_by_local_damage(&mut g, 1);
+    let stopped = rounds_until(&mut g, &[1, 2], 200, |g| halted(g, 1) && halted(g, 2));
+    assert!(stopped, "the guests did not stop: {}", g.status());
+    let first = g.peers[2].as_ref().unwrap().router().desync().map(|n| n.theirs.tick);
+    assert!(first.is_some_and(|t| t > tick_of(&g, 0)), "the host is not behind the differing tick: {first:?}, {}", g.status());
+    repaired_and_plays_on(&mut g, 1, 600);
+    assert!(g.peers[0].as_ref().unwrap().resyncs().is_empty());
+    assert!(g.peers[2].as_ref().unwrap().resyncs().is_empty());
+}
+
+#[test]
+fn what_a_seat_reported_before_its_repair_does_not_stop_the_match_again() {
+    // Two peers; the guest runs ahead of the host and diverges, and reports
+    // the digests of its damaged state for the turns it ran ahead. The host
+    // repairs it from an earlier turn: the guest's reports for the turns after
+    // that one described the state that was replaced and must not be compared
+    // with the host's when it gets there.
+    let mut g = Game::loopback(2);
+    g.run_to(90);
+    desync_by_local_damage(&mut g, 1);
+    // As far as the host's records let it: two turns of delay.
+    rounds_until(&mut g, &[1], 100, |_| false);
+    assert!(tick_of(&g, 1) >= tick_of(&g, 0) + 6, "the guest did not run ahead: {}", g.status());
+    repaired_and_plays_on(&mut g, 1, 600);
+    assert_eq!(g.peers[1].as_ref().unwrap().resyncs().len(), 1, "one repair, not a second one");
+}
+
 #[test]
 fn a_seat_over_its_resync_limit_goes_to_the_stall_dialog() {
     let mut g = Game::loopback(2);

@@ -534,6 +534,24 @@ impl LockstepRouter {
         self.desync.is_some() || self.peer_desync.is_some()
     }
 
+    /// Stopped by another peer's notice for a tick this peer has not reached:
+    /// it still runs the turns up to that tick (every seat's records for them
+    /// were sent, since the reporter ran them) and stops there, so that it has
+    /// its own digest for the tick and says it. Without that, a host behind
+    /// the reporter never has the authority's digest for the differing tick,
+    /// the diverged seat cannot ask to be repaired (it does not know it is the
+    /// one), and the match stays stopped for good.
+    fn running_on(&self, tick: Tick) -> bool {
+        if self.desync.is_some() || self.spectator {
+            return false;
+        }
+        let Some((_, notice)) = &self.peer_desync else {
+            return false;
+        };
+        let at = notice.ours.tick;
+        tick < at && !self.ours.contains_key(&at)
+    }
+
     /// Whether a scheduled pause holds the next turn.
     pub fn paused(&self) -> bool {
         self.paused_at.is_some()
@@ -856,6 +874,12 @@ impl LockstepRouter {
                         .or_default()
                         .entry(notice.slot)
                         .or_insert(notice.theirs.digest);
+                } else if notice.slot != self.me {
+                    // Not there yet: kept until this peer runs on to the tick
+                    // (`running_on`). The two digests of a notice differ, so
+                    // ours differs from one of them there and this peer says
+                    // its own digest in a notice of its own.
+                    self.compare(notice.slot, notice.theirs);
                 }
                 self.note(RouterEvent::PeerDesync { from, notice });
                 self.peer_desync.get_or_insert((from, notice));
@@ -1133,6 +1157,23 @@ impl LockstepRouter {
         let floor = self.stale_before;
         self.unchecked.retain(|(_, d)| d.tick > floor);
         self.referee_pending.retain(|t, _| *t > floor);
+    }
+
+    /// A seat was repaired from the state of `turn`'s first tick: what it
+    /// reported for that tick and later ones before its repair (a seat runs up
+    /// to the turn delay ahead of the one that repairs it) described the state
+    /// that was replaced, and is dropped. Call it when the repair is known
+    /// (the host on the seat's ack, a peer on `Resynced`): the seat's reports
+    /// sent before its ack are here by then, and the ones after it are new.
+    pub fn forget_reports_of(&mut self, slot: PlayerId, turn: u32) {
+        if slot == self.me {
+            return;
+        }
+        let tick = Tick::from(turn) * Tick::from(self.cfg.ticks_per_turn.max(1));
+        self.unchecked.retain(|(s, d)| *s != slot || d.tick < tick);
+        for (_, by_seat) in self.seen.range_mut(tick..) {
+            by_seat.remove(&slot);
+        }
     }
 
     /// This router's state at a turn boundary, for a snapshot taken there
@@ -1535,7 +1576,8 @@ impl CommandRouter for LockstepRouter {
 
     fn take_ready(&mut self, tick: Tick) -> Option<Vec<Command>> {
         self.pump();
-        if self.halted() {
+        let running_on = self.halted() && self.running_on(tick);
+        if self.halted() && !running_on {
             return None;
         }
         let tpt = Tick::from(self.cfg.ticks_per_turn);
@@ -1555,7 +1597,9 @@ impl CommandRouter for LockstepRouter {
             });
             return None;
         }
-        if !self.spectator {
+        // A stopped peer that runs on sends no new record: the turns it runs
+        // are ones the reporter already ran, so every record for them is out.
+        if !self.spectator && !running_on {
             self.flush(turn);
         }
 
