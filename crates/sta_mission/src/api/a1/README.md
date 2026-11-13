@@ -95,7 +95,7 @@ executables), and the delay of `FailMission` /
 Writes are retained as `Call A1.<Name>` and counted in `unsupported()` (also `Load_Rules` and
 `Load_Action_Scripts`, which load nothing and return 0). `SetRelation` sets only the
 mission-local override (provisional 0/1/2 mapping) and is counted too:
-`SetPosition SetWarpSpeed ResetWarpSpeed Patrol SearchAndDestroy PointAt
+`SetPosition SetWarpSpeed ResetWarpSpeed PointAt
 Special_Attack Attack(unit, Vector) SetSpecialWeaponAttackInterval AI_Attack
 AttackMainEnemyBase DestroyCritical Destroy*
 AllowMultipleSpecialWeaponFire SetSpecialForcesFlag TransferFlag LinkWormHoles

@@ -34,6 +34,15 @@ impl UserData for Race {
     }
 }
 
+/// The race name of a `Race` value or a plain string.
+pub(crate) fn race_name(v: &Value) -> Option<String> {
+    match v {
+        Value::UserData(u) => u.borrow::<Race>().ok().map(|r| r.0.clone()),
+        Value::String(s) => s.to_str().ok().map(|s| s.to_string()),
+        _ => None,
+    }
+}
+
 /// The distinct races of the content, sorted for a stable order.
 fn races(ctx: &Shared) -> Vec<String> {
     let c = ctx.borrow();

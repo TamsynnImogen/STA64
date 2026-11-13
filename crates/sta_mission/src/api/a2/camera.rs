@@ -218,7 +218,53 @@ impl UserData for Cineractive {
     }
 }
 
+/// MMM's `Camera` singleton: `Camera:center(Vector | entity)` moves the strategy camera there
+/// (55 + 5 uses in 18 Roots scripts, mostly at a mission's start and after a cineractive);
+/// `Camera.target` is the place it was last centred on, or nil before any (the game's own
+/// camera place is not known to the script host: the client restores its own after a cineractive).
+struct Camera {
+    ctx: Shared,
+    last: std::cell::Cell<Option<[f64; 3]>>,
+}
+
+impl UserData for Camera {
+    fn add_fields<F: UserDataFields<Self>>(f: &mut F) {
+        f.add_field_method_get("target", |lua, c| {
+            let Some([x, y, z]) = c.last.get() else { return Ok(Value::Nil) };
+            Ok(Value::Table(crate::api::vector(lua, (x, y, z))?))
+        });
+    }
+
+    fn add_methods<M: UserDataMethods<Self>>(m: &mut M) {
+        m.add_meta_method(MetaMethod::Index, |lua, c, name: String| {
+            c.ctx.borrow_mut().unsupported(&format!("Camera.{name}"));
+            crate::api::stub(lua)
+        });
+        m.add_method("center", |_, c, args: Variadic<Value>| {
+            // A place or an entity; anything else (a `Camera.target` read before any centring)
+            // leaves the camera where it is.
+            let [first] = args.as_slice() else {
+                return Err(mlua::Error::runtime("Camera:center takes one Vector or entity"));
+            };
+            let arg = match first {
+                Value::Table(t) => {
+                    let p = position(t)?;
+                    c.last.set(Some([f64::from(p.x.to_f32()), f64::from(p.y.to_f32()), f64::from(p.z.to_f32())]));
+                    ArgRef::Ready(Arg::Position(p))
+                }
+                Value::UserData(u) if u.is::<Entity>() => ArgRef::Spot(spot(first)?),
+                _ => {
+                    c.ctx.borrow_mut().unsupported("Camera:center(nil)");
+                    return Ok(());
+                }
+            };
+            camera_intent::submit(&mut c.ctx.borrow_mut(), Intent::Call { name: "Camera.center", args: vec![arg] }).map_err(mlua::Error::runtime)
+        });
+    }
+}
+
 pub(super) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
+    lua.globals().raw_set("Camera", lua.create_userdata(Camera { ctx: ctx.clone(), last: Default::default() })?)?;
     lua.globals().raw_set(
         "Cineractive",
         lua.create_userdata(Cineractive {
@@ -418,6 +464,27 @@ mod tests {
         );
         assert!(rt.errors().is_empty(), "{:?}", rt.errors());
         assert!(matches!(presentations(&mut rt).as_slice(), [Presentation::Call { .. }]));
+    }
+
+    #[test]
+    fn camera_center_moves_the_strategy_camera_and_target_reads_back() {
+        let mut rt = MissionRuntime::from_source(
+            "T.lua",
+            r#"
+            assert(Camera.target == nil)
+            Camera:center(Vector(10, 0, 20))
+            local t = Camera.target
+            assert(t.x == 10 and t.z == 20)
+            Camera:center(Camera.target)
+            Camera:center(nil)
+        "#,
+            1,
+        );
+        assert!(rt.errors().is_empty(), "{:?}", rt.errors());
+        let p = presentations(&mut rt);
+        assert_eq!(p.len(), 2);
+        assert!(matches!(&p[0], Presentation::Call { name, args } if name == "Camera.center" && matches!(args[..], [Arg::Position(_)])));
+        assert_eq!(rt.unsupported(), [("Camera:center(nil)".into(), 1)]);
     }
 
     #[test]

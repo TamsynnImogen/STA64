@@ -19,6 +19,9 @@ use crate::event::SimEvent;
 /// The world after a tick.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct WorldView {
+    /// Native presentation metadata, never a substitute for gameplay state.
+    #[serde(default)]
+    pub appearance: crate::appearance::AppearanceView,
     pub tick: Tick,
     /// `Sim::digest` of the state this view shows.
     pub digest: u64,
@@ -34,6 +37,9 @@ pub struct WorldView {
     /// real owner; this never grants command authority or sensor sharing.
     #[serde(default)]
     pub perceived_owners: Vec<(EntityId, PlayerId)>,
+    /// Mission-set names and races (SIM-54); empty when nothing was set.
+    #[serde(default)]
+    pub attrs: crate::attrs::AttrsView,
 }
 
 impl WorldView {

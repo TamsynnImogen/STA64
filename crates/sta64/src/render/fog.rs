@@ -432,6 +432,7 @@ fn update_fog(
     bounds: Res<FogBounds>,
     content: Option<Res<ContentRes>>,
     settings: Res<FogSettings>,
+    cine: Option<Res<crate::ui::presentation::CineractiveState>>,
     patterns: Option<Res<FogPatterns>>,
     state: Option<ResMut<FogState>>,
     mut images: ResMut<Assets<Image>>,
@@ -494,6 +495,8 @@ fn update_fog(
             Layer::Fog => settings.fog,
             Layer::Shroud => settings.shroud,
         };
+        // Not in a cineractive: the cinematic view draws no fog or shroud (Refit, static).
+        let on = on && !cine.as_deref().is_some_and(|c| c.on);
         let want = if on { Visibility::Inherited } else { Visibility::Hidden };
         if *v != want {
             *v = want;

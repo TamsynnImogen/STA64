@@ -4,6 +4,9 @@
 //! the same path over real missions. The map view's part is a stand-in that builds the game with
 //! the same function the map view calls (`map::build_mission_sim`).
 
+#[path = "mission_intro_tests.rs"]
+mod intro;
+
 use std::path::Path;
 use std::time::Duration;
 
@@ -153,9 +156,9 @@ fn a_synthetic_campaign_plays_from_the_screens_and_progress_survives_a_restart()
     assert!(app.world().contains_resource::<MissionHandle>() && app.world().contains_resource::<MissionRun>());
     assert!(app.world().resource::<crate::map::MapBrowser>().maps.iter().any(|m| m == "syn_fed01"), "the mission's map is built by name");
     assert_eq!(app.world().resource::<Seen>().began, ["syn_fed01.bzn"], "MissionBegan names the map");
-    assert!(app.world().resource::<ObjectivesView>().visible, "the objectives open with the mission");
     // The script runs with the sim: its objective reaches the view, then it is completed and the mission ends.
     until(&mut app, 100, |a| !a.world().resource::<ObjectivesView>().items.is_empty());
+    assert!(app.world().resource::<ObjectivesView>().visible, "the objectives open once the mission has some");
     let view = app.world().resource::<ObjectivesView>().clone();
     assert_eq!(view.items.len(), 3, "{view:?}");
     assert!(view.items[2].text.contains("Hold the line"), "{view:?}");
@@ -620,9 +623,8 @@ fn install_gated_roots_first_mission_starts_from_the_screens_and_runs() {
     eprintln!("roots: {title}: objectives {:?} / {:?}; {} script errors {:?}; unsupported {:?}", view.title, view.items, errors.len(), errors.iter().take(3).collect::<Vec<_>>(), unsupported.iter().take(8).collect::<Vec<_>>());
     // Not asserted: this mission's script puts no objective into the runtime within 300 ticks
     // (measured on this install); the synthetic test asserts the delivery path.
-    // The sim rejects the script's `MaxOfficers` edits (not this change's business, and
-    // not asserted here); anything else the script reports is an error.
-    let other: Vec<_> = errors.iter().filter(|e| !e.contains("Player.maxOfficers: simulation rejected")).collect();
+    // The sim takes the script's `MaxOfficers` edits (SIM-54); anything the script reports is an error.
+    let other: Vec<_> = errors.iter().collect();
     assert!(other.is_empty(), "script errors: {errors:?}");
     assert!(!unsupported.iter().any(|(k, _)| k == "Player.loadAIP"), "plan loads reach the seats: {unsupported:?}");
     std::fs::remove_dir_all(dir).unwrap();
@@ -674,12 +676,20 @@ fn install_gated_roots_politics_by_other_means_plays_its_intro_and_never_holds_t
     assert!(!app.world().resource::<crate::ui::presentation::CineractiveState>().on, "the intro ended");
     assert!(!app.world().resource::<crate::input::camera_cinematic::CinematicCamera>().locked, "no hold outlives the intro");
     assert!(app.world().resource::<MissionRun>().outcome.is_none());
+    // SIM-54: the script keeps its 30-minute clock in a relay platform's `maxHull` (set to 1, then
+    // plus one a second): the sim applies the edit, so the clock hook raises nothing and the counter
+    // climbs by about one per second.
+    let counters = |a: &App| -> Vec<(sta_sim::EntityId, f64)> {
+        a.world().resource::<SimLink>().curr().units.iter().map(|u| (u.id, u.hull[1].to_f32() as f64)).filter(|(_, m)| *m >= 1.0 && *m < 2400.0).collect()
+    };
+    let start = counters(&app);
+    let t0 = app.world().resource::<SimLink>().curr().tick;
+    until(&mut app, 20_000, |a| a.world().resource::<SimLink>().curr().tick >= t0 + 10 * u64::from(sta_sim::TICK_HZ) || state(a) != AppState::InGame);
+    let end = counters(&app);
+    let climbed: Vec<_> = end.iter().filter_map(|(id, m)| start.iter().find(|(i, _)| i == id).map(|(_, m0)| m - m0)).filter(|d| (7.0..=13.0).contains(d)).collect();
+    assert!(!climbed.is_empty(), "a unit's maxHull counts seconds: {start:?} then {end:?}");
     let errors = app.world().resource::<MissionHandle>().with(|rt| rt.errors().to_vec());
-    // The one fault left is the 30-minute timer hook: the script keeps its clock in the relay
-    // platform's `maxHull`, which STA64 cannot set yet (a sim max-hull edit, WORKPLAN SIM-54/55),
-    // so the interval it computes is negative. It comes after the intro and is not one of the
-    // causes fixed here.
-    let others: Vec<_> = errors.iter().filter(|e| is_fault(e) && !e.contains("Timer: interval")).collect();
+    let others: Vec<_> = errors.iter().filter(|e| is_fault(e)).collect();
     assert!(others.is_empty(), "script faults: {errors:?}");
     std::fs::remove_dir_all(dir).unwrap();
 }

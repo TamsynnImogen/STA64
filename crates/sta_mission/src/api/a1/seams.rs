@@ -53,8 +53,30 @@ pub(super) fn install(lua: &Lua, env: &Env, table: &Table) -> mlua::Result<()> {
     })?)?;
     table.set("SetWarpSpeed", gap_write(lua, env, "SetWarpSpeed", &["hf"], "no warp-speed seam in the sim")?)?;
     table.set("ResetWarpSpeed", gap_write(lua, env, "ResetWarpSpeed", &["h"], "no warp-speed seam in the sim")?)?;
-    table.set("Patrol", gap_write(lua, env, "Patrol", &["hs"], "no patrol order in the sim seam")?)?;
-    table.set("SearchAndDestroy", gap_write(lua, env, "SearchAndDestroy", &["h"], "no search-and-destroy order in the sim seam")?)?;
+    // Patrol and SearchAndDestroy (SIM-56): the Armada II rules; the Armada I
+    // executable's script `Patrol` also sets the path's loop type and issues
+    // GO (read, static); its command handlers are not read.
+    table.set("Patrol", def(lua, env, "Patrol", &["hs"], |lua, e, _, a| {
+        let id = a[0].id();
+        if !e.unit("Patrol", id)?.owner.is_player() {
+            return Err(mlua::Error::runtime("A1.Patrol: object has no player owner"));
+        }
+        let points = e.path(lua, "Patrol", a[1].text())?;
+        if !e.ctx.borrow_mut().order(id, |units| sta_sim::command::Order::Patrol { units, points }) {
+            return Err(mlua::Error::runtime("A1.Patrol: the order could not be queued"));
+        }
+        Ok(Value::Nil)
+    })?)?;
+    table.set("SearchAndDestroy", def(lua, env, "SearchAndDestroy", &["h"], |_, e, _, a| {
+        let id = a[0].id();
+        if !e.unit("SearchAndDestroy", id)?.owner.is_player() {
+            return Err(mlua::Error::runtime("A1.SearchAndDestroy: object has no player owner"));
+        }
+        if !e.ctx.borrow_mut().order(id, |units| sta_sim::command::Order::SearchAndDestroy { units }) {
+            return Err(mlua::Error::runtime("A1.SearchAndDestroy: the order could not be queued"));
+        }
+        Ok(Value::Nil)
+    })?)?;
     table.set("PointAt", def(lua, env, "PointAt", &["hh", "hs"], |lua, e, ov, a| {
         let unit = e.unit("PointAt", a[0].id())?;
         let to = if ov == 0 { let t = e.unit("PointAt", a[1].id())?; e.ctx.borrow().placed(t.id, t.pos) } else { e.path_point(lua, "PointAt", a[1].text(), 0)? };

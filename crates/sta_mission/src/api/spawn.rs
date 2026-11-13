@@ -12,7 +12,7 @@ use sta_sim::world::{EntityKind, NEUTRAL};
 use sta_sim::command::{Command, CommandKind, Edit, Order, Target};
 
 use super::Ctx;
-use super::entity_action::{EntityAction, OrderIntent, TargetRef};
+use super::entity_action::{AttrEdit, EntityAction, OrderIntent, TargetRef};
 use super::entity_ref::{EntityRef, SpawnHandle, SpawnStatus};
 
 #[derive(Default)]
@@ -25,6 +25,66 @@ pub(crate) struct SpawnStore {
     removed: Vec<(EntityId, ContentKey, PlayerId, Vec3, String)>,
     /// Entities the script removed since the last tick's receipts: gone to `EntityFinder` at once.
     killed: BTreeSet<EntityId>,
+    /// What the script has just assigned, read back at once: the sim applies an edit on the next
+    /// tick, the original's setters are synchronous (read from the executable, static). Keyed by
+    /// the unit (or the pending request) and the attribute; a row of a resolved unit is valid in the
+    /// view tick it was set in only.
+    overlay: BTreeMap<(OverlayKey, &'static str), (u64, Overlay)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum OverlayKey {
+    Id(EntityId),
+    Request(u64),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum Overlay {
+    Num(f64),
+    Text(String),
+}
+
+fn overlay_key(actor: &EntityRef) -> Option<OverlayKey> {
+    match (actor.id(), actor) {
+        (Some(id), _) => Some(OverlayKey::Id(id)),
+        (None, EntityRef::Spawn(h)) if actor.pending() => Some(OverlayKey::Request(h.request)),
+        _ => None,
+    }
+}
+
+/// Remember an assignment for read-back until the sim's view shows it.
+pub(super) fn overlay_set(c: &mut Ctx, actor: &EntityRef, attr: &'static str, value: Overlay) {
+    if let Some(key) = overlay_key(actor) {
+        let tick = c.view.tick;
+        c.spawns.overlay.insert((key, attr), (tick, value));
+    }
+}
+
+pub(super) fn overlay_get(c: &Ctx, actor: &EntityRef, attr: &'static str) -> Option<Overlay> {
+    let key = overlay_key(actor)?;
+    let (tick, value) = c.spawns.overlay.get(&(key, attr))?;
+    (matches!(key, OverlayKey::Request(_)) || *tick == c.view.tick).then(|| value.clone())
+}
+
+/// The numeric overlay of an attribute, if any.
+pub(super) fn overlay_num(c: &Ctx, actor: &EntityRef, attr: &'static str) -> Option<f64> {
+    match overlay_get(c, actor, attr)? {
+        Overlay::Num(v) => Some(v),
+        Overlay::Text(_) => None,
+    }
+}
+
+/// Assign an attribute: held for a pending spawn, else queued as its sim edit now.
+pub(super) fn assign(c: &mut Ctx, actor: &EntityRef, edit: AttrEdit) -> bool {
+    let attr = edit.label();
+    let value = edit.overlay();
+    if !queue_action(c, actor.clone(), EntityAction::Attr(edit)) {
+        return false;
+    }
+    if let Some(value) = value {
+        overlay_set(c, actor, attr, value);
+    }
+    true
 }
 
 /// Spawns the script has asked for that the sim has not answered yet. `EntityFinder` lists them
@@ -188,6 +248,11 @@ pub(super) fn queue_action(c: &mut Ctx, actor: EntityRef, action: EntityAction) 
 pub(super) fn process(c: &mut Ctx) {
     c.spawns.removed.clear();
     c.spawns.killed.clear();
+    let tick = c.view.tick;
+    c.spawns.overlay.retain(|(key, _), (set, _)| match key {
+        OverlayKey::Id(_) => *set >= tick,
+        OverlayKey::Request(_) => true,
+    });
     let mut receipts: BTreeMap<u64, Vec<EntityId>> = BTreeMap::new();
     let mut ids: BTreeMap<EntityId, usize> = BTreeMap::new();
     let mut rejected = BTreeSet::new();
@@ -250,6 +315,7 @@ pub(super) fn process(c: &mut Ctx) {
             }
         }
         c.spawns.outstanding.remove(&handle.request);
+        c.spawns.overlay.retain(|(k, _), _| *k != OverlayKey::Request(handle.request));
     }
     for queued in std::mem::take(&mut c.spawns.actions) {
         let mut references = queued.action.dependencies();
@@ -323,6 +389,21 @@ fn dispatch(c: &mut Ctx, actor: EntityRef, action: EntityAction) -> bool {
             // Absolute input is applied in command order. A cached snapshot
             // cannot supply a correct damage delta for multiple assignments.
             edit(c, Edit::Hull(id, Fixed::from_f64(to)))
+        }
+        EntityAction::Attr(attr) => {
+            if c.alive(id).is_none() {
+                c.unsupported(&format!("{}: entity not alive", attr.label()));
+                return false;
+            }
+            let queued = super::edit_feedback::queue(c, attr.label(), attr.edit(id)).is_ok();
+            if !queued {
+                c.unsupported(&format!("{}: command could not be queued", attr.label()));
+            } else {
+                if let Some(value) = attr.overlay() {
+                    overlay_set(c, &EntityRef::Existing(id), attr.label(), value);
+                }
+            }
+            queued
         }
         EntityAction::Order(intent) => match intent {
             OrderIntent::Move { to, queue } => c.order(id, |units| Order::Move { units, to, queue }),

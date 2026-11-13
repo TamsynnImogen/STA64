@@ -15,13 +15,14 @@ pub(super) fn instance(def: &UnitDef, id: EntityId) -> String {
     identity(def, id).name
 }
 
-pub(super) struct Identity {
+pub(crate) struct Identity {
     pub name: String,
     pub captain: Option<String>,
     pub registry: Option<String>,
+    pub logo: Option<String>,
 }
 
-pub(super) fn identity(def: &UnitDef, id: EntityId) -> Identity {
+pub(crate) fn identity(def: &UnitDef, id: EntityId) -> Identity {
     // Keep source row indices even though blank craft names are not selectable.
     let names = rows(def.raw.raw("possibleCraftNames").unwrap_or_default());
     let selected = names
@@ -35,12 +36,14 @@ pub(super) fn identity(def: &UnitDef, id: EntityId) -> Identity {
             name: unit_name(def).unwrap_or(&def.odf).to_owned(),
             captain: None,
             registry: None,
+            logo: None,
         };
     };
     Identity {
         name: name.to_owned(),
         captain: companion(def, "possibleCaptainNames", row),
         registry: companion(def, "possibleCraftRegistry", row),
+        logo: companion(def, "logoFileNames", row),
     }
 }
 
