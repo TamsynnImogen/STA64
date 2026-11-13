@@ -1,4 +1,4 @@
-# ADR 0001: UI text, markup and icon formats
+# ADR 0007: UI text, markup and icon formats
 
 - **Status:** proposed
 - **Date:** 2026-11-13
