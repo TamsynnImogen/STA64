@@ -265,7 +265,11 @@ fn update_view(
     mut view: ResMut<HullView>,
     made: Res<HullMaterials>,
     mut materials: ResMut<Assets<HullMaterial>>,
+    switches: Option<Res<crate::render::quality::PerfSwitches>>,
 ) {
+    if switches.is_some_and(|s| s.freeze_hull_materials) {
+        return;
+    }
     let Ok(cam) = camera.single() else { return };
     let (dvec, dcol, _) = lights(sun.iter().map(|(t, l, _)| {
         let c = l.color.to_linear();

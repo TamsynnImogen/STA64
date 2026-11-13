@@ -7,6 +7,8 @@
 // The moons' cracks show the light inside them, at the bottom of a ravine: the view's
 // ray is marched down into it (parallax), so its walls hide the light at an angle.
 
+import bevy_pbr::render::mesh_functions::get_world_from_local;
+
 struct RockParams {
     amb: vec4<f32>,       // ambient rgb
     shine: vec4<f32>,     // x specular strength, y its exponent, z rim exponent, w the key's strength
@@ -16,10 +18,10 @@ struct RockParams {
     dcol0: vec4<f32>,
     ddir1: vec4<f32>,     // the fill
     dcol1: vec4<f32>,
-    row0: vec4<f32>,      // the mesh's object axes in world space (with scale)
+    row0: vec4<f32>,      // (unused: the instance's axes come from its transform, see `fragment`)
     row1: vec4<f32>,
     row2: vec4<f32>,
-    ctr: vec4<f32>,       // the mesh's centre, world
+    ctr: vec4<f32>,       // the mesh's centre, in the mesh's own space
     glow: vec4<f32>,      // rgb: the glow's colour
     misc: vec4<f32>,      // x relief strength, z 1 when the albedo's alpha cuts, w 1 for triplanar
     ext: vec4<f32>,       // xyz 1 / the mesh's extent per object axis; w the highlight's strength
@@ -37,7 +39,16 @@ struct FragIn {
     @builtin(position) position: vec4<f32>,
     @location(0) world_position: vec4<f32>,
     @location(1) world_normal: vec3<f32>,
+    @location(6) @interpolate(flat) instance_index: u32,
 };
+
+// The instance's object axes in world space (with scale), and its mesh's centre in world
+// space: from the mesh's own transform, so every rock of a mesh shares one material (and
+// one draw) and nothing is rewritten when a rock tumbles.
+var<private> row0: vec3<f32>;
+var<private> row1: vec3<f32>;
+var<private> row2: vec3<f32>;
+var<private> ctr: vec3<f32>;
 
 // The cubes hold the files' left-handed object space; Bevy's is mirrored on Z.
 fn mirror(v: vec3<f32>) -> vec3<f32> {
@@ -45,7 +56,7 @@ fn mirror(v: vec3<f32>) -> vec3<f32> {
 }
 
 fn to_obj(v: vec3<f32>) -> vec3<f32> {
-    return vec3<f32>(dot(v, k.row0.xyz), dot(v, k.row1.xyz), dot(v, k.row2.xyz));
+    return vec3<f32>(dot(v, row0), dot(v, row1), dot(v, row2));
 }
 
 fn glint(n: vec3<f32>, l: vec3<f32>, v: vec3<f32>) -> f32 {
@@ -75,9 +86,14 @@ fn shade(n: vec3<f32>, wp: vec3<f32>, t: vec4<f32>, gk: f32) -> vec3<f32> {
 @fragment
 fn fragment(i: FragIn) -> @location(0) vec4<f32> {
     let wp = i.world_position.xyz;
-    let s2 = max(dot(k.row0.xyz, k.row0.xyz), 1e-12);
+    let m = get_world_from_local(i.instance_index);
+    row0 = m[0].xyz;
+    row1 = m[1].xyz;
+    row2 = m[2].xyz;
+    ctr = (m * vec4<f32>(k.ctr.xyz, 1.0)).xyz;
+    let s2 = max(dot(row0, row0), 1e-12);
     // Object space over the extents: each axis -1..1 across the mesh (file space).
-    let q = mirror(to_obj(wp - k.ctr.xyz) / s2) * k.ext.xyz;
+    let q = mirror(to_obj(wp - ctr) / s2) * k.ext.xyz;
     let no = mirror(to_obj(normalize(i.world_normal)));
     let cq = clamp(q, vec3<f32>(-1.0), vec3<f32>(1.0));
     let sd = select(vec3<f32>(-1.0), vec3<f32>(1.0), no >= vec3<f32>(0.0));
@@ -129,7 +145,7 @@ fn fragment(i: FragIn) -> @location(0) vec4<f32> {
     p *= k.misc.x;
     // To world space without the object's scale.
     let pf = mirror(p);
-    let pw = (pf.x * k.row0.xyz + pf.y * k.row1.xyz + pf.z * k.row2.xyz) * inverseSqrt(s2);
+    let pw = (pf.x * row0 + pf.y * row1 + pf.z * row2) * inverseSqrt(s2);
     let n = normalize(normalize(i.world_normal) + pw);
     var c = shade(n, wp, a, k.ext.w);
     c += k.glow.rgb * b.a * k.spill.x;
