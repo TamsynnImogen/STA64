@@ -44,6 +44,7 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
         app.add_plugins(crate::render::fx::impacts::ImpactFxPlugin);
         // Inert until a `FogBounds` and a `LocalPlayer` exist.
         app.add_plugins(crate::render::fog::FogPlugin);
+        app.add_plugins(crate::render::fx::persistent_shields::PersistentShieldsPlugin);
     } else if cfg.ui_gallery {
         app.add_plugins(crate::ui::theme::GalleryPlugin);
     } else {
