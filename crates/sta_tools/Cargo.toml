@@ -1,0 +1,16 @@
+[package]
+name = "sta_tools"
+description = "Modder tools: shared command-line plumbing and the odf_fmt formatter (EDT-01, EDT-06)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Light on purpose: no Bevy, no egui. The windowed tool shell of EDT-01 is
+# not here yet; when it comes it goes behind its own feature or crate so the
+# command-line tools stay quick to build.
+
+[dependencies]
+sta_odf.workspace = true
+
+[dev-dependencies]
+sta_vfs.workspace = true
