@@ -47,6 +47,7 @@ use sta_sim::present::{Arg, Presentation};
 use super::entity_ref::{SpawnHandle, SpawnStatus};
 use super::{Shared, to_vec3};
 
+mod hold;
 mod objects;
 mod orders;
 mod presentation;
@@ -394,7 +395,7 @@ pub(super) fn def(
 
 /// The `A2` function of the same operation, under the `A1` name: pending
 /// handles are resolved first and errors name `A1`.
-fn alias(lua: &Lua, env: &Env, a2: &Table, name: &'static str) -> mlua::Result<Function> {
+pub(super) fn alias(lua: &Lua, env: &Env, a2: &Table, name: &'static str) -> mlua::Result<Function> {
     alias_as(lua, env, a2, name, name)
 }
 
@@ -455,7 +456,8 @@ pub(super) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
     orders::install(lua, &env, &table)?;
     teams::install(lua, &env, &a2, &table)?;
     presentation::install(lua, &env, &a2, &table)?;
-    seams::install(lua, &env, &table)?;
+    seams::install(lua, &env, &a2, &table)?;
+    hold::install(lua, &env, &table)?;
     lua.globals().raw_set("A1", table)?;
     Ok(())
 }

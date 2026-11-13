@@ -325,6 +325,42 @@ fn edits_the_sim_rejects_are_reported_and_counted() {
 }
 
 #[test]
+fn life_support_and_sensor_switches_queue_subsystem_edits_the_sim_applies() {
+    let s = scene();
+    let mut sim = Sim::from_setup(&game(&s.db));
+    let first = sim.step(&[Command {
+        player: PlayerId::SCRIPT,
+        seq: 1,
+        kind: CommandKind::Edit(Edit::Spawn {
+            odf: s.db.key("fx_cruiser").unwrap(),
+            player: PlayerId(0),
+            pos: Vec3::ZERO,
+            heading: (Fixed::ZERO, Fixed::ONE),
+        }),
+    }]);
+    let id = first.view.units[0].id;
+    let cfg = MissionConfig { content: Some(s.db.clone()), view: Some((*first.view).clone()), ..MissionConfig::default() };
+    let mut rt = MissionRuntime::from_source_with("ls.lua", "", 3, cfg);
+    rt.eval::<()>(&format!("A2.DisableLifeSupport({0}, true); A2.DisableSensors({0}, false)", id.0)).unwrap();
+    let kinds: Vec<CommandKind> = rt.take_commands().into_iter().map(|c| c.kind).collect();
+    assert_eq!(
+        kinds,
+        vec![
+            CommandKind::Edit(Edit::Subsystem(id, Subsystem::LifeSupport, false)),
+            CommandKind::Edit(Edit::Subsystem(id, Subsystem::Sensors, true)),
+        ]
+    );
+    rt.eval::<()>(&format!("A2.DisableLifeSupport({0}, true); A2.DisableSensors({0}, true)", id.0)).unwrap();
+    for _ in 0..3 {
+        advance(&mut rt, &mut sim);
+    }
+    assert_eq!(unsupported(&rt, "simulation rejected"), 0, "the sim applies both switches");
+    for bad in ["A2.DisableLifeSupport(1)", "A2.DisableSensors(1, 0)"] {
+        assert!(rt.eval::<()>(bad).is_err(), "{bad}");
+    }
+}
+
+#[test]
 fn sim58_switch_calls_queue_typed_edits_and_ignore_dead_handles() {
     let s = scene();
     let mut rt = runtime(&s);
