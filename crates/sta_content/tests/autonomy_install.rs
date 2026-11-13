@@ -11,16 +11,22 @@ use sta_vfs::Vfs;
 #[test]
 fn installed_headers_give_the_documented_defaults() {
     let Ok(root) = std::env::var("STA64_TEST_INSTALL") else { return };
+    // Roots itself (no mod) and Fleet Ops 4.0 set 1 and 2.
+    let mut checked = 0;
     for (m, want) in [
-        ("Fleet Ops 4.0", (1, 2)),
-        ("STA2 Classic Mod Enhanced Gameplay", (1, 1)),
-        ("STA2 Classic Mod", (1, 0)),
+        (None, (1, 2)),
+        (Some("Fleet Ops 4.0"), (1, 2)),
+        (Some("STA2 Classic Mod Enhanced Gameplay"), (1, 1)),
+        (Some("STA2 Classic Mod"), (1, 0)),
     ] {
-        let Ok(vfs) = Vfs::mount_install(Path::new(&root), Some(m)) else { continue };
+        let Ok(vfs) = Vfs::mount_install(Path::new(&root), m) else { continue };
+        checked += 1;
+        let m = m.unwrap_or("Roots");
         let (index, _) = OdfIndex::build(&vfs);
         let (db, _) = ContentDb::load(&vfs, &index).unwrap();
         let a = db.rules().autonomy();
         eprintln!("{m}: movement {} special weapon {}", a.movement, a.special_weapon);
         assert_eq!((a.movement, a.special_weapon), want, "{m}");
     }
+    assert!(checked > 0, "no mod of the install could be mounted");
 }
