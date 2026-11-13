@@ -342,10 +342,6 @@ fn spawn_sprite_node(ctx: &mut SpawnCtx, id: &str, parent: Entity, quad: &Handle
     stats: &mut SpawnStats,
 ) {
     let table = ctx.sprites;
-    // The moons' round nimbus: their cracks carry the light instead (RND-05).
-    if id.eq_ignore_ascii_case("oreglow") && !crate::render::rock::MOON_NIMBUS {
-        return;
-    }
     let Some(def) = table.sprite_node(id) else {
         stats.unknown_sprite_nodes.push(id.to_owned());
         return;
@@ -389,6 +385,11 @@ fn spawn_sprite_node(ctx: &mut SpawnCtx, id: &str, parent: Entity, quad: &Handle
     ));
     if billboard {
         e.insert(Billboard);
+    }
+    // The moons' round nimbus is spawned dark; `rock::moon_nimbus` lights it under the Stock look
+    // and leaves it dark under Refit's (whose cracks carry the light instead, RND-05).
+    if crate::render::rock::is_moon_nimbus(id) {
+        e.insert((crate::render::rock::MoonNimbus, crate::render::sprites::SpriteFade(0.0)));
     }
     if let Some(owner) = construction_owner {
         e.insert((

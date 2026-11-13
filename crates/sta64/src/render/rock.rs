@@ -12,6 +12,9 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, ShaderType};
 use bevy::shader::ShaderRef;
 
+use crate::render::profile::{Effect, ProfileEffects, RenderProfile};
+use crate::render::sprites::SpriteFade;
+
 const AMBIENT: [f32; 3] = [0.05, 0.05, 0.07];
 const SPEC: f32 = 0.7;
 const SPEC_POW: f32 = 24.0;
@@ -24,9 +27,37 @@ const CRACK_CORE: f32 = 1.0;
 /// the exponent of the light's fade up their walls (`MoonCrackFalloff`).
 const CRACK_DEPTH: f32 = 0.02;
 const CRACK_FALLOFF: f32 = 3.0;
-/// Whether the round nimbus (`oreglow`) is drawn behind a moon (Refit's `MoonNimbus`,
-/// off: the light shows in the cracks instead).
-pub const MOON_NIMBUS: bool = false;
+/// Whether a sprite node is a moon's round nimbus (`lights.spr`: the `moonpulse` blue halo behind a
+/// dilithium moon, 80 units across; the infinite moons' purple `dmooninf` is drawn under both looks).
+pub fn is_moon_nimbus(sprite_node: &str) -> bool {
+    sprite_node.eq_ignore_ascii_case("oreglow")
+}
+
+/// A moon's round nimbus. The original draws it (an additive billboard in the colour its animation
+/// gives), so the Stock look does; Refit's look does not (`MoonNimbus=0`: the light shows in the
+/// cracks instead), and [`moon_nimbus`] dims it there.
+#[derive(Component)]
+pub struct MoonNimbus;
+
+/// Whether the nimbus is drawn: under the Stock look only. Apps without the profile resources (the front
+/// end's frame app) draw the Refit look.
+pub fn nimbus_drawn(profile: Option<&RenderProfile>, effects: Option<&ProfileEffects>) -> bool {
+    matches!((profile, effects), (Some(p), Some(e)) if e.implementation(*p, Effect::Scenery) == RenderProfile::Stock)
+}
+
+/// Light or dim every moon nimbus by the render profile (a toggle takes effect at once).
+fn moon_nimbus(
+    profile: Option<Res<RenderProfile>>,
+    effects: Option<Res<ProfileEffects>>,
+    mut nimbus: Query<&mut SpriteFade, With<MoonNimbus>>,
+) {
+    let want = if nimbus_drawn(profile.as_deref(), effects.as_deref()) { 1.0 } else { 0.0 };
+    for mut f in &mut nimbus {
+        if f.0 != want {
+            f.0 = want;
+        }
+    }
+}
 
 /// The material name of a dilithium moon's glow shell.
 pub fn is_moon_shell(material: &str) -> bool {
@@ -127,7 +158,7 @@ impl Plugin for RockPlugin {
         embedded_asset!(app, "rock.wesl");
         app.add_plugins(MaterialPlugin::<RockMaterial>::default())
             .init_resource::<RockMaterials>()
-            .add_systems(Update, (apply.after(crate::render::surfaces::poll), forget))
+            .add_systems(Update, (apply.after(crate::render::surfaces::poll), forget, moon_nimbus))
             .add_systems(PostUpdate, update.after(TransformSystems::Propagate));
     }
 }
@@ -235,6 +266,63 @@ mod tests {
         assert_eq!(keys.len(), 1, "600 instances of one mesh: one material");
         assert_ne!(material_key(&part("masterrock", 3.0)), material_key(&part("masterrock", 4.0)));
         assert_ne!(material_key(&part("masterrock", 3.0)), material_key(&part("mdmoon", 3.0)));
+    }
+
+    fn nimbus_fade(profile: Option<RenderProfile>) -> f32 {
+        let mut app = App::new();
+        let mut effects = ProfileEffects::default();
+        effects.register_stock(Effect::Scenery);
+        if let Some(p) = profile {
+            app.insert_resource(p).insert_resource(effects);
+        }
+        app.add_systems(Update, moon_nimbus);
+        let nimbus = app.world_mut().spawn((MoonNimbus, SpriteFade(0.0))).id();
+        // Another sprite node (a nebula puff) is not the nimbus: left alone.
+        let puff = app.world_mut().spawn(SpriteFade(0.5)).id();
+        app.update();
+        assert_eq!(app.world().get::<SpriteFade>(puff).unwrap().0, 0.5);
+        app.world().get::<SpriteFade>(nimbus).unwrap().0
+    }
+
+    /// The original draws the moon's blue nimbus (`oreglow`, `lights.spr`); the Stock look does, Refit's
+    /// look (and an app without the profile resources) leaves it dark, as Refit's `MoonNimbus=0`.
+    #[test]
+    fn moon_nimbus_is_lit_under_the_stock_look_only() {
+        assert_eq!(nimbus_fade(Some(RenderProfile::Stock)), 1.0);
+        assert_eq!(nimbus_fade(Some(RenderProfile::Refit)), 0.0);
+        assert_eq!(nimbus_fade(None), 0.0);
+        assert!(is_moon_nimbus("oreglow") && is_moon_nimbus("OreGlow") && !is_moon_nimbus("dmooninf"));
+    }
+
+    /// The cause of the moons' missing glow under the Stock look: surface bakes were only uploaded while
+    /// the Refit planets drew, so under Stock a moon's recipe surface (the lit cracks) never arrived and
+    /// the cut-out rock showed the dark shell. The bake is uploaded under both looks.
+    #[test]
+    fn surface_bakes_are_uploaded_under_the_stock_look() {
+        use crate::render::surfaces::Surfaces;
+        let mut app = App::new();
+        let mut effects = ProfileEffects::default();
+        effects.register_stock(Effect::Scenery);
+        app.insert_resource(effects)
+            .insert_resource(RenderProfile::Stock)
+            .insert_resource(crate::viewer::Mounted(sta_vfs::Vfs::default()))
+            .init_resource::<Surfaces>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<Assets<crate::render::planet::PlanetMaterial>>()
+            .add_systems(Update, crate::render::planet::add_surface_systems());
+        let vfs = sta_vfs::Vfs::default();
+        // `mdmoon` is bundled: a small face keeps the bake quick.
+        assert!(app.world_mut().resource_mut::<Surfaces>().request(&vfs, "mdmoon", 8).is_none());
+        let mut ready = false;
+        for _ in 0..600 {
+            app.update();
+            if app.world_mut().resource_mut::<Surfaces>().request(&vfs, "mdmoon", 8).is_some() {
+                ready = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(ready, "the moon's recipe surface was never uploaded under the Stock look");
     }
 
     #[test]
