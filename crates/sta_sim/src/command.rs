@@ -75,6 +75,25 @@ pub enum Order {
     /// Appended: existing postcard Order tags keep their values (`Rally` is
     /// 8, this is 9).
     Autonomy { units: Vec<EntityId>, kind: AutonomyKind, level: AutonomyLevel },
+    /// Mission `Patrol(unit, path)` (SIM-56): fly the points in order, from the
+    /// first, and from the last back to the first, until another order. Fewer
+    /// than two points is a plain move. Appended tag 10.
+    Patrol { units: Vec<EntityId>, points: Vec<Vec3> },
+    /// Mission `SearchAndDestroy` (SIM-56): fight the best enemy the craft's
+    /// sensors show, roam the map when there is none; never ends. Tag 11.
+    SearchAndDestroy { units: Vec<EntityId> },
+    /// Mission `Scout` (SIM-56): wander near the starting point to unexplored
+    /// ground without firing; never ends. Tag 12.
+    Scout { units: Vec<EntityId> },
+    /// Mission `AI_Attack(unit)` (SIM-56): attack what the sensors show and
+    /// stop when nothing is left. Tag 13.
+    AttackAny { units: Vec<EntityId> },
+    /// Mission `AI_Attack(unit, point)` (SIM-56): fly to weapon range of the
+    /// point firing nothing on the way, then stop. Tag 14.
+    AttackPoint { units: Vec<EntityId>, at: Vec3 },
+    /// Mission `Goto(.., warp = true)` (SIM-56): a move that asks for warp when
+    /// the goal is far. `queue` as [`Order::Move`]. Tag 15.
+    MoveWarp { units: Vec<EntityId>, to: Vec3, queue: bool },
 }
 
 /// Which autonomy an [`Order::Autonomy`] sets.
@@ -208,6 +227,63 @@ pub enum Edit {
     /// steering has the value overwritten within a tick in the original).
     /// A dying unit is rejected. SCRIPT/BENCH only. Appended tag 30.
     AngularVelocity(EntityId, Fixed),
+    /// Mission `AllowAsTarget(object, team, allowed)` (SIM-58): seat `player`'s
+    /// craft may (not) pick the unit on their own; explicit attack orders are
+    /// unaffected. Beside [`Edit::Targetable`], which stays. SCRIPT/BENCH only.
+    /// Appended tag 31.
+    AllowAsTarget { id: EntityId, player: PlayerId, allowed: bool },
+    /// Mission `CraftCanRepair` (SIM-58): false stops shield regeneration.
+    /// Craft only. Appended tag 32.
+    CraftCanRepair(EntityId, bool),
+    /// Mission `ButItCanBeDerelicted` (SIM-58): stored, no derelict state yet.
+    /// Craft only. Appended tag 33.
+    DerelictAllowed(EntityId, bool),
+    /// Mission `CraftCanRecrew` (SIM-58): stored, no per-craft recrew yet.
+    /// Craft only. Appended tag 34.
+    CanRecrew(EntityId, bool),
+    /// Mission `HideObject` (SIM-58): the hidden flag (drawing only in the
+    /// original). Appended tag 35.
+    Hidden(EntityId, bool),
+    /// Mission `SetName` (SIM-58): a craft's display name, at most
+    /// [`crate::switches::MAX_NAME_BYTES`] bytes; empty clears. Appended tag 36.
+    Name(EntityId, String),
+    /// Mission `SetSpecialForcesFlag` (SIM-58): the flag the original's script
+    /// order gate, assist and AI planner read. Craft only. Appended tag 37.
+    SpecialForces(EntityId, bool),
+    /// Roots `Entity.maxHull =` (SIM-54): this unit's maximum hull. A negative
+    /// value is accepted and ignored (the original keeps the old maximum);
+    /// zero (kept as the least positive maximum, so the unit stays hittable) and large values are accepted, capped at 1e9. The
+    /// current hull is not rescaled or clamped, so it may exceed the maximum
+    /// (read from the executable, static). Dying units and non-units are
+    /// rejected. SCRIPT/BENCH only. Appended tag 38.
+    MaxHull(EntityId, Fixed),
+    /// Roots `Entity.maxCrew =` (SIM-54): this unit's maximum crew, floored at
+    /// 0 and capped at 1e9; the current crew is clamped down to it and never
+    /// raised. Rejected for a unit with no crew pool. SCRIPT/BENCH only.
+    /// Appended tag 39.
+    MaxCrew(EntityId, Fixed),
+    /// Roots `Entity.hullValue =` (SIM-54; A2 `SetCurrentHealth` and Roots `Entity.hull =` still send
+    /// [`Edit::Hull`], which clamps): the unit's
+    /// current hull in points, with no upper clamp (it may exceed the maximum).
+    /// An immortal unit ignores a lower value; zero or less leaves the least
+    /// positive hull (the original does not destroy at 0, the next hit does).
+    /// Rejected for a dying unit. SCRIPT/BENCH only. Appended tag 40.
+    HullValue(EntityId, Fixed),
+    /// Roots `Entity.maxShields =` (SIM-54): only the maximum, floored at 0 and
+    /// capped at 1e9; the current shield pools are not touched (Roots writes
+    /// the field raw; A2 `SetMaxShields` is [`Edit::MaxShields`], which sets
+    /// both). SCRIPT/BENCH only. Appended tag 41.
+    MaxShieldsKeep(EntityId, Fixed),
+    /// A2 `SetRace` / Roots `Entity.race =` (SIM-54): this unit's race (the
+    /// unit only; team, tech tree and AI are unchanged). The name must be a
+    /// race some unit definition carries, matched case-insensitively and stored as the content spells it; anything
+    /// else is rejected. SCRIPT/BENCH only. Appended tag 42.
+    UnitRace(EntityId, String),
+    /// Roots `Player.race =` (SIM-54): the seat's race, with the same name
+    /// rule as [`Edit::UnitRace`]; rejected for a seat the sim does not have.
+    /// The sim keeps and shows it; no rule reads it yet. SCRIPT/BENCH only.
+    /// Appended tag 43.
+    PlayerRace(PlayerId, String),
 }
 
 /// The largest turn rate (radians per second) a script may set.
@@ -373,6 +449,58 @@ mod tests {
             let bytes = postcard::to_allocvec(&edit).unwrap();
             assert_eq!(bytes[0], tag, "{edit:?}");
             assert_eq!(postcard::from_bytes::<Edit>(&bytes).unwrap(), edit);
+        }
+    }
+
+    #[test]
+    fn attribute_edits_append_tags_38_to_43() {
+        let id = EntityId(1);
+        let edits = [
+            (38, Edit::MaxHull(id, Fixed::ONE)),
+            (39, Edit::MaxCrew(id, Fixed::ONE)),
+            (40, Edit::HullValue(id, Fixed::ONE)),
+            (41, Edit::MaxShieldsKeep(id, Fixed::ONE)),
+            (42, Edit::UnitRace(id, "x".into())),
+            (43, Edit::PlayerRace(PlayerId(0), "x".into())),
+        ];
+        for (tag, edit) in edits {
+            let bytes = postcard::to_allocvec(&edit).unwrap();
+            assert_eq!(bytes[0], tag, "{edit:?}");
+            assert_eq!(postcard::from_bytes::<Edit>(&bytes).unwrap(), edit);
+        }
+    }
+
+    #[test]
+    fn switch_edits_and_scripted_orders_append_tags() {
+        let id = EntityId(1);
+        let edits = [
+            (31, Edit::AllowAsTarget { id, player: PlayerId(1), allowed: false }),
+            (32, Edit::CraftCanRepair(id, false)),
+            (33, Edit::DerelictAllowed(id, true)),
+            (34, Edit::CanRecrew(id, true)),
+            (35, Edit::Hidden(id, true)),
+            (36, Edit::Name(id, "Voyager".into())),
+            (37, Edit::SpecialForces(id, true)),
+        ];
+        for (tag, edit) in edits {
+            let bytes = postcard::to_allocvec(&edit).unwrap();
+            assert_eq!(bytes[0], tag, "{edit:?}");
+            assert_eq!(postcard::from_bytes::<Edit>(&bytes).unwrap(), edit);
+        }
+        let u = vec![id];
+        let at = Vec3::from_f32([1.0, 0.0, 2.0]);
+        let orders = [
+            (10, Order::Patrol { units: u.clone(), points: vec![at] }),
+            (11, Order::SearchAndDestroy { units: u.clone() }),
+            (12, Order::Scout { units: u.clone() }),
+            (13, Order::AttackAny { units: u.clone() }),
+            (14, Order::AttackPoint { units: u.clone(), at }),
+            (15, Order::MoveWarp { units: u, to: at, queue: true }),
+        ];
+        for (tag, o) in orders {
+            let bytes = postcard::to_allocvec(&o).unwrap();
+            assert_eq!(bytes[0], tag, "{o:?}");
+            assert_eq!(postcard::from_bytes::<Order>(&bytes).unwrap(), o);
         }
     }
 

@@ -71,6 +71,11 @@ impl Movement {
         self.edit(id, |c| c.waypoints.clear());
     }
 
+    /// Replace the legs after the current target (a patrol's lap).
+    pub(crate) fn set_waypoints(&mut self, id: EntityId, legs: Vec<Vec3>) {
+        self.edit(id, |c| c.waypoints = legs);
+    }
+
     /// Courses ascending by id, for snapshots.
     pub(crate) fn rows(&self) -> Vec<(EntityId, Course)> {
         self.courses.iter().map(|(id, c)| (id, c.clone())).collect()

@@ -64,7 +64,11 @@ impl Warp {
         self.on.get(id) == Some(&IN_WARP)
     }
 
-    fn phase(&self, id: EntityId) -> Option<u8> {
+    pub(crate) fn set_phase(&mut self, id: EntityId, phase: u8) {
+        self.on.insert(id, phase);
+    }
+
+    pub(crate) fn phase(&self, id: EntityId) -> Option<u8> {
         self.on.get(id).copied()
     }
 
@@ -118,7 +122,7 @@ fn goal_gap() -> Fixed {
 /// The engine's warp lead: drop out of warp when the goal is nearer than
 /// `(vw + vi) / 2 + 2 (k - 1) vi / (vw - vi) R` with
 /// `k = clamp(0.6 vw / (vi + 0.1), 1.5, 6)` (read from the executable, static).
-fn warp_lead(vw: Fixed, vi: Fixed, r: Fixed) -> Fixed {
+pub(crate) fn warp_lead(vw: Fixed, vi: Fixed, r: Fixed) -> Fixed {
     let k = (Fixed::from_f64(0.6) * vw / (vi + Fixed::from_f64(0.1))).max(Fixed::from_f64(1.5)).min(Fixed::from_int(6));
     (vw + vi) / Fixed::from_int(2) + Fixed::from_int(2) * (k - Fixed::ONE) * vi / (vw - vi) * r
 }
@@ -219,7 +223,7 @@ impl Sim {
             plans.push((id, plan));
         }
         // Crafts whose attack ended leave warp.
-        let stale: Vec<EntityId> = self.approach_warp.on.iter().map(|(id, _)| id).filter(|id| plans.binary_search_by_key(id, |p| p.0).is_err()).collect();
+        let stale: Vec<EntityId> = self.approach_warp.on.iter().map(|(id, _)| id).filter(|id| plans.binary_search_by_key(id, |p| p.0).is_err() && !self.scripted.is_warp(*id)).collect();
         for id in stale {
             self.approach_warp.remove(id);
         }

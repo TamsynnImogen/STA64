@@ -149,13 +149,19 @@ fn goto_an_object_moves_to_its_position_and_ignores_the_trailing_int() {
 }
 
 #[test]
-fn goto_with_the_warp_flag_is_unsupported_and_queues_nothing() {
+fn goto_with_the_warp_flag_is_a_warp_move_on_the_first_leg() {
     let s = scene();
-    let (rt, err) = fails(&s, "A2.Goto(a, 'P', true, 1)");
-    assert!(err.contains("warp"), "{err}");
-    assert!(counted(&rt, "A2.Goto: no warp"));
-    let (rt, _) = fails(&s, "A2.Goto(a, b, true, 1)");
-    assert!(counted(&rt, "A2.Goto: no warp"));
+    let a = s.ids[0];
+    let (_, commands) = run(&s, "A2.Goto(a, 'P', true, 1); A2.Goto(a, b, true, 1)");
+    assert_eq!(
+        orders(&commands),
+        vec![
+            (PlayerId(0), Order::MoveWarp { units: vec![a], to: at(10), queue: false }),
+            (PlayerId(0), Order::Move { units: vec![a], to: at(20), queue: true }),
+            (PlayerId(0), Order::Move { units: vec![a], to: at(30), queue: true }),
+            (PlayerId(0), Order::MoveWarp { units: vec![a], to: at(100), queue: false }),
+        ]
+    );
 }
 
 #[test]
@@ -225,12 +231,24 @@ fn stop_attack_and_ai_attack_are_owner_orders_and_ignore_the_extra_int() {
 }
 
 #[test]
-fn ai_attack_without_a_target_or_toward_a_point_is_unsupported() {
+fn ai_attack_without_a_target_or_toward_a_point_and_the_scripted_orders_are_orders() {
     let s = scene();
-    let (rt, _) = fails(&s, "A2.AI_Attack(a)");
-    assert!(counted(&rt, "A2.AI_Attack: no target-less"));
-    let (rt, _) = fails(&s, "A2.AI_Attack(a, {x=1,y=2,z=3})");
-    assert!(counted(&rt, "A2.AI_Attack: no attack-move"));
+    let a = s.ids[0];
+    let (rt, commands) = run(&s, "A2.AI_Attack(a); A2.AI_Attack(a, {x=1,y=2,z=3}); A2.Patrol(a, 'P'); A2.SearchAndDestroy(a); A2.Scout(a)");
+    assert_eq!(
+        orders(&commands),
+        vec![
+            (PlayerId(0), Order::AttackAny { units: vec![a] }),
+            (PlayerId(0), Order::AttackPoint { units: vec![a], at: Vec3::from_f32([1.0, 2.0, 3.0]) }),
+            (PlayerId(0), Order::Patrol { units: vec![a], points: vec![at(10), at(20), at(30)] }),
+            (PlayerId(0), Order::SearchAndDestroy { units: vec![a] }),
+            (PlayerId(0), Order::Scout { units: vec![a] }),
+        ]
+    );
+    assert!(rt.unsupported().is_empty());
+    // A dead or absent unit does nothing, no error.
+    let (rt, commands) = run(&s, "A2.Patrol(9999, 'P'); A2.Scout(9999); A2.SearchAndDestroy(0)");
+    assert!(commands.is_empty() && rt.unsupported().is_empty());
 }
 
 #[test]
@@ -278,15 +296,10 @@ fn the_sim_rejecting_an_impulse_or_alert_edit_is_reported_and_counted() {
 fn calls_with_no_seam_validate_then_raise_and_are_counted() {
     let s = scene();
     for (script, key) in [
-        ("A2.Patrol(a, 'P')", "A2.Patrol"),
-        ("A2.SearchAndDestroy(a)", "A2.SearchAndDestroy"),
-        ("A2.Scout(a)", "A2.Scout"),
         ("A2.Colonize(a, s)", "A2.Colonize"),
         ("A2.Special_Attack(a, 'gquanteffect')", "A2.Special_Attack"),
         ("A2.Special_Attack(a, b, 'gtracbm')", "A2.Special_Attack"),
         ("A2.SetCommandMoveAutonomyLow(a)", "A2.SetCommandMoveAutonomyLow"),
-        ("A2.SetRace(a, 'borg')", "A2.SetRace"),
-        ("A2.CraftCanRepair(a, true)", "A2.CraftCanRepair"),
         ("A2.GetMainEnemyBaseLocation(1)", "A2.GetMainEnemyBaseLocation"),
         ("A2.AttackMainEnemyBase(a, true)", "A2.AttackMainEnemyBase"),
         ("A2.GetAllyStationAttacks(3, 1)", "A2.GetAllyStationAttacks"),
@@ -297,6 +310,7 @@ fn calls_with_no_seam_validate_then_raise_and_are_counted() {
     }
     // A malformed call is an argument error, not a gap.
     let (rt, err) = fails(&s, "A2.Scout()");
+    let _ = &rt;
     assert!(err.contains("exactly 1"), "{err}");
     assert!(rt.unsupported().is_empty());
 }
