@@ -11,8 +11,9 @@
 //!   ordnance `lifeSpan` (1.25 s in the installs, so the beam is on about five sixths of the
 //!   time, as in the original). It is a message of its own, not a `SimEvent::Fired`, so combat
 //!   music and weapon animations do not take it for a fight.
-//! - **Dock.** While unloading the freighter glides to the station's position (the station the
-//!   sim named in the event). The original docks at the station's `dockingHardpoint` node
+//! - **Dock.** The sim flies the freighter in to within a short stretch of the station; while
+//!   unloading it glides the rest (at most 80 units, at its top speed) to the station's position
+//!   (the station the sim named in the event). The original docks at the station's `dockingHardpoint` node
 //!   (default SOD node `dock`); that node is not read yet, the fallback is the station origin.
 //!
 //! Evidence grade: the orbit, the pulse and the dock node were read from the executable and the
@@ -30,6 +31,9 @@ use crate::clock::AnimClock;
 use crate::render::units::to_bevy;
 use crate::sim_link::{ContentRes, SimEntities, SimLink, SimMsg};
 
+/// The berth glide covers only the last short stretch: a freighter further from the station than
+/// this is drawn where the sim has it (the sim flies it in; nothing is drawn faster than the ship).
+const GLIDE_MAX: f32 = 80.0;
 /// Seconds a visual offset takes to blend in (into the orbit, onto the berth) or out: a
 /// choice, the files say nothing.
 const BLEND: f64 = 1.0;
@@ -78,6 +82,8 @@ struct Work {
     /// Anim-clock time the phase began.
     since: f64,
     weapon: Option<MiningWeapon>,
+    /// Top speed (`maxSpeed`): the berth glide takes `distance / speed`.
+    speed: f32,
     /// The offset the model had when the phase began.
     from_offset: Vec3,
     next_shot: f64,
@@ -136,6 +142,7 @@ fn track(
                 dock: dock.map(|d| to_bevy(d.to_f32())),
                 since: now,
                 weapon,
+                speed: unit.map_or(0.0, |u| u.movement.max_speed.to_f32()),
                 from_offset,
                 next_shot: now,
             },
@@ -167,7 +174,9 @@ fn animate(
             w.since = now;
         }
         let t = now - w.since;
-        let blend = smooth(t / BLEND);
+        let gap = w.dock.map_or(0.0, |d| Vec2::new(d.x - sim.x, d.z - sim.z).length());
+        let glide = if gap <= GLIDE_MAX { (gap as f64 / w.speed.max(1.0) as f64).max(0.4) } else { BLEND };
+        let blend = if w.phase == MinerPhase::Unloading { (t / glide).clamp(0.0, 1.0) as f32 } else { smooth(t / BLEND) };
         if let (MinerPhase::Mining, Some(wp)) = (w.phase, w.weapon.as_ref())
             && now >= w.next_shot
         {
@@ -175,7 +184,7 @@ fn animate(
             w.next_shot = now + wp.refire.max(1) as f64 / TICK_HZ as f64;
         }
         let offset = match (w.phase, w.dock) {
-            (MinerPhase::Unloading, Some(dock)) => (dock - sim) * blend + w.from_offset * (1.0 - blend),
+            (MinerPhase::Unloading, Some(dock)) if gap <= GLIDE_MAX => (dock - sim) * blend + w.from_offset * (1.0 - blend),
             _ => w.from_offset * (1.0 - blend),
         };
         // Mining holds no offset; unloading holds the berth; the rest fade and go.
@@ -323,9 +332,10 @@ mod tests {
     /// is drawn where the sim has it while it mines.
     #[test]
     fn the_beam_is_up_while_the_sim_says_mining_and_gone_otherwise() {
-        let (mut app, e) = cycle("{ at: 0, pos: { x: 150, y: 0, z: 0 } }");
+        let (mut app, e) = cycle("{ at: 0, pos: { x: 0, y: 0, z: 570 } }");
         let (mut frames_with_beam, mut shots_seen, mut was) = (0, 0, false);
         let mut from_model = 0;
+        let mut prev: Option<Vec2> = None;
         for frame in 0..420 {
             app.update();
             let mut q = app.world_mut().query::<&WeaponFx>();
@@ -337,8 +347,13 @@ mod tests {
                 shots_seen += usize::from(!beams.is_empty() && !was);
                 from_model += beams.iter().filter(|f| f.origin().distance(Vec3::new(p.x, 0.0, p.y)) < 1.0).count();
                 // The sim keeps the miner; nothing is drawn off it while it mines.
-                assert!((p.length() - 150.0).abs() < 1.0, "drawn at {p:?}");
+                assert!((p.length() - 570.0).abs() < 1.0, "drawn at {p:?}");
             }
+            // The glide to the berth never outruns the ship (60 units a second: 2 a frame).
+            if let Some(q) = prev {
+                assert!(p.distance(q) < 2.5, "frame {frame}: jumped {} to {p:?}", p.distance(q));
+            }
+            prev = Some(p);
             was = !beams.is_empty();
             if frame == 300 {
                 assert!(beams.is_empty(), "beam after the mining ended");
@@ -351,6 +366,6 @@ mod tests {
         assert!(shots_seen >= 3, "{shots_seen} separate shots");
         assert!(from_model > 0);
         let p = xz(&app, e);
-        assert!((p.length() - 150.0).abs() < 1.0, "back at {p:?}");
+        assert!((p.length() - 570.0).abs() < 1.0, "back at {p:?}");
     }
 }

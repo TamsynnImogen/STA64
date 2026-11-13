@@ -155,6 +155,12 @@ const K_MOON: Fixed = Fixed::from_bits(3_579_139_413);
 const K_NEBULA: Fixed = Fixed::from_bits(2_147_483_648);
 /// How far inside the weapon range a freighter starts working (the original's `approachRange - 15`).
 const APPROACH_SLACK: i32 = 15;
+/// Distance from a station's origin at which a beam-armed freighter starts to unload: the last
+/// short stretch is the dock approach. The dock node itself (`dockingHardpoint`) is not read yet;
+/// a fallback, not measured.
+const DOCK_ARRIVE: i32 = 40;
+/// A loaded freighter on a moon keeps circling while it is within this many ranges of the node.
+const ORBIT_BAND: Fixed = Fixed::from_bits(6_442_450_944); // 1.5
 
 /// Range of the freighter's mining weapon: the first hardpoint whose ordnance is a mining beam.
 pub fn mining_range(db: &ContentDb, def: ContentKey) -> Option<Fixed> {
@@ -448,7 +454,19 @@ impl Economy {
                         let Some(at) = nearest_station(units, owner, pos) else {
                             break;
                         };
-                        if dist(pos, at) <= reach() {
+                        // Off a moon the freighter keeps circling until the station lies on its
+                        // outer side, then peels off (read from the executable, static; the
+                        // latinum nebula and planets leave at once).
+                        if let (Some(range), Some(np)) = (mining_range(db, def), node_pos)
+                            && db.unit(node_def).is_none_or(|d| d.class.0 != "latinum")
+                            && dist(pos, np) <= range * ORBIT_BAND
+                            && (at.x - pos.x) * (pos.x - np.x) + (at.z - pos.z) * (pos.z - np.z) <= Fixed::ZERO
+                        {
+                            set_target(units, id, orbit_point(db, id, pos, node_def, np, range));
+                            break;
+                        }
+                        let arrive = if mining_range(db, def).is_some() { Fixed::from_int(DOCK_ARRIVE) } else { reach() };
+                        if dist(pos, at) <= arrive {
                             set_target(units, id, None);
                             dock = Some(at);
                             m.phase = Phase::Unloading;
