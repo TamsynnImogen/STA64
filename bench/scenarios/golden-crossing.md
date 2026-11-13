@@ -19,4 +19,4 @@ Scene: crossing Seed=3
 10. Run until tick 1169
 11. Run until tick 1184
 12. Run 60 ticks
-13. Expect digest at tick 1244 is "ea097eac591453b4"
+13. Expect digest at tick 1244 is "c710af69a13cf833"

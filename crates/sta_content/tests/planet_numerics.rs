@@ -138,7 +138,7 @@ fn hash_tracks_effective_values_and_keeps_native_fake_identity() {
     assert_ne!(h(Profile::Sta1Classic, BACKGROUND), h(Profile::Sta1Classic, &format!("{BACKGROUND}crewModifier = 0\n")));
     // Keys that are not effective (Native, no role) do not move the hash.
     assert_eq!(h(Profile::Native, PLANET), h(Profile::Native, &format!("{PLANET}isColonizable = 0\ncrewModifier = 3\n")));
-    assert_eq!(sta_content::fake::db().hash(), 0xb5e5_d26f_e961_348e);
+    assert_eq!(sta_content::fake::db().hash(), 0x9ef5_3881_3050_10f8);
 }
 
 #[test]

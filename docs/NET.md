@@ -289,7 +289,7 @@ joiner                         host
   randomness), map, `GameOptions`, the seats (slot, team, race, occupant,
   name, and each peer's lineage and packs), the host's seat, the
   `TurnConfig`, and the rules digest everyone matched. The replay header
-  takes the digest, lineages and packs from here (replay format 3, CON-35:
+  takes the digest, lineages and packs from here (replay format 4, CON-35:
   `Replay::lineage`, `packs`, and `peers` through `Recorder::record_peers`). `Start::player_setups(me)` maps seats to the sim's `Control` as
   seen from seat `me`: own seat `Human`, other people `Remote`, computer
   players `Ai` on the host and `Remote` elsewhere.
@@ -504,7 +504,7 @@ Every peer is untrusted, and so is anything relayed.
   relay rooms with codes and passwords, rejoin transport and limits.
 - **CON-35** (done) implements `RulesIdentity` with the keyed content digest
   (keys at most 96 bytes, every covered value listed; section 5) and adds
-  lineages and packs to the replay (format 3) and snapshot (format 14).
+  lineages and packs to the replay (format 4) and snapshot (format 15).
 - **UI-11** shows the lobby, the refusal with the named key, the stall
   dialog, and the High Latency box. It will find that `GameOptions` (S7) does
   not yet express all of Armada II's multiplayer setup data: `RTS_CFG.h` has

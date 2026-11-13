@@ -242,7 +242,7 @@ mod tests {
     #[test]
     fn db_hash_is_stable() {
         assert_eq!(db().hash(), db().hash());
-        assert_eq!(db().hash(), 0xb5e5_d26f_e961_348e);
+        assert_eq!(db().hash(), 0x9ef5_3881_3050_10f8);
     }
 
     #[test]
