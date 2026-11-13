@@ -73,6 +73,7 @@ fn boolean(name: &str, args: &MultiValue, i: usize) -> mlua::Result<bool> {
 fn text(name: &str, args: &MultiValue, i: usize) -> mlua::Result<Option<String>> {
     match &args[i] {
         Value::Nil | Value::Integer(0) => Ok(None),
+        Value::Number(n) if *n == 0.0 => Ok(None),
         Value::String(s) => {
             let s = s.to_str().map_err(|_| bad(name, i, "a UTF-8 string"))?;
             if s.contains('\0') {
@@ -136,8 +137,13 @@ fn resource(lua: &Lua, ctx: &Shared, name: &'static str, slot: usize) -> mlua::R
         if !p.is_player() {
             return Err(mlua::Error::runtime(format!("A2.{name} requires a player team")));
         }
-        let stock = c.view.player(p).and_then(|v| v.resources.get(slot)).copied().unwrap_or_default();
-        Ok((stock.to_f32() as f64).round() as i64)
+        // A listed player with no entry for the resource holds none.
+        let view = c
+            .view
+            .player(p)
+            .ok_or_else(|| mlua::Error::runtime(format!("A2.{name}: the view has no such team")))?;
+        let stock = view.resources.get(slot).copied().unwrap_or_default();
+        Ok((f64::from(stock.to_f32())).round() as i64)
     })
 }
 
@@ -325,7 +331,7 @@ pub(super) fn path_distance(c: &mut Ctx, lua: &Lua, args: &MultiValue) -> mlua::
     let get = |k: &str| p.raw_get::<f64>(k).ok().filter(|v| v.is_finite());
     match (get("x"), get("y"), get("z")) {
         (Some(x), Some(y), Some(z)) => Ok(dist(from, (x, y, z))),
-        _ => Err(mlua::Error::runtime(format!("A2.{name}: path '{path}' has a malformed point"))),
+        _ => Err(missing(c, format!("path '{path}' has a malformed point"))),
     }
 }
 
