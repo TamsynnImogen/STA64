@@ -9,7 +9,8 @@
 // 1. A bump-mapped hull takes its normal from a map in a tangent frame worked out per
 // pixel from how the position and the texture coordinate change across the screen.
 //
-// Not ported (see TODO.md): the Key's shadow map, planet shadows, the clustered point
+// RND-15 adds the Key's shadow map (`map_shadow`).
+// Not ported (see TODO.md): planet shadows, the clustered point
 // lights, the wave light, near/far fade, cloaks, holograms, the build ghost and the
 // sprite pass; the vertex stage is Bevy's own.
 
@@ -23,6 +24,8 @@ struct HullParams {
     uv: vec4<f32>,    // xy: the flipbook's UV offset
     dvec: array<vec4<f32>, 4>,  // towards each directional light
     dcol: array<vec4<f32>, 4>,  // its colour; a: 1 for the Key
+    sh: array<vec4<f32>, 3>,    // the Key's shadow map (shadows.rs): world -> u, v, depth along the Key
+    shp: vec4<f32>,             // x 1: there is a map (0: none); y one texel (u, v); z the depth bias; w how much of the Key a shadow takes
 };
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> k: HullParams;
@@ -30,6 +33,8 @@ struct HullParams {
 @group(constants::MATERIAL_BIND_GROUP) @binding(2) var tex_sampler: sampler;
 @group(constants::MATERIAL_BIND_GROUP) @binding(3) var nmap: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(4) var nmap_sampler: sampler;
+// The Key's shadow map: r + g / 2048 the depth of the nearest hull along the Key, 1 where none.
+@group(constants::MATERIAL_BIND_GROUP) @binding(5) var smap: texture_2d<f32>;
 
 struct FragIn {
     @builtin(position) position: vec4<f32>,
@@ -62,14 +67,54 @@ fn shoulder(x: vec3<f32>, knee: f32) -> vec3<f32> {
     return mix(max(x, vec3<f32>(0.0)), y, step(vec3<f32>(knee), x));
 }
 
+fn map_depth(px: vec2<i32>) -> f32 {
+    let dim = vec2<i32>(textureDimensions(smap));
+    let t = textureLoad(smap, clamp(px, vec2<i32>(0), dim - vec2<i32>(1)), 0);
+    return t.r + t.g / 2048.0;
+}
+
+// How much of the Key reaches a point: 3x3 texels weighted by where it falls (16 taps),
+// the point pushed off the surface along its normal (a texel, more at a grazing angle)
+// so a hull does not shadow itself.
+fn map_shadow(wp: vec3<f32>, n: vec3<f32>) -> f32 {
+    if k.shp.x <= 0.0 {
+        return 1.0;
+    }
+    let to_key = -normalize(vec3<f32>(k.sh[2].x, k.sh[2].y, k.sh[2].z));
+    let ndl = dot(n, to_key);
+    let texel_w = k.shp.y / max(length(vec3<f32>(k.sh[0].x, k.sh[0].y, k.sh[0].z)), 1e-9);
+    let off = texel_w * (0.5 + 1.5 * sqrt(saturate(1.0 - ndl * ndl)));
+    let q = vec4<f32>(wp + n * off, 1.0);
+    let sc = vec3<f32>(dot(q, k.sh[0]), dot(q, k.sh[1]), dot(q, k.sh[2]));
+    if sc.x <= 0.0 || sc.x >= 1.0 || sc.y <= 0.0 || sc.y >= 1.0 {
+        return 1.0;
+    }
+    let size = vec2<f32>(textureDimensions(smap));
+    let tt = sc.xy * size - 0.5;
+    let f = fract(tt);
+    let b = vec2<i32>(floor(tt));
+    let d = sc.z - k.shp.z;
+    var lit = 0.0;
+    for (var y = -1; y <= 2; y++) {
+        let wy = select(select(1.0, f.y, y == 2), 1.0 - f.y, y == -1);
+        for (var x = -1; x <= 2; x++) {
+            let wx = select(select(1.0, f.x, x == 2), 1.0 - f.x, x == -1);
+            let z = map_depth(b + vec2<i32>(x, y));
+            lit += select(0.0, 1.0, d <= z) * wx * wy;
+        }
+    }
+    return lit / 9.0;
+}
+
 // Everything after the normal: the lights, the texture, the night lights.
 fn shade(n: vec3<f32>, wp: vec3<f32>, t: vec4<f32>) -> vec4<f32> {
     let v = normalize(k.eye.xyz - wp);
     var sum = k.amb.rgb;
     var spec = vec3<f32>(0.0);
+    let key = mix(1.0, map_shadow(wp, n), k.shp.w);
     for (var j = 0; j < 4; j++) {
         let l = k.dvec[j].xyz;
-        let c = k.dcol[j].rgb * mix(1.0, k.misc.w, k.dcol[j].a);
+        let c = k.dcol[j].rgb * mix(1.0, k.misc.w * key, k.dcol[j].a);
         sum += c * max(0.0, dot(n, l));
         spec += c * glint(n, l, v);
     }
