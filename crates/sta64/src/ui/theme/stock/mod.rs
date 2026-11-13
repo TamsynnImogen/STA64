@@ -44,7 +44,7 @@ use bevy::prelude::*;
 
 pub use buttons::{KitLabel, kit_button, kit_toggle};
 pub use checkbox::{Checkbox, CheckboxChanged, checkbox};
-pub use dropdown::{Dropdown, DropdownChanged, DropdownOption, DropdownPopup, MAX_ROWS, dropdown};
+pub use dropdown::{Dropdown, DropdownChanged, DropdownOption, DropdownPopup, MAX_ROWS, dropdown, popup_of, popup_place};
 pub use focus::{FocusScope, Focusable, KitCapture, KitFocus, KitKey, focus_order, focusable, is_displayed, kit_key, move_focus, press};
 pub use scroll::{ScrollArea, SliderStep, scroll_list, scroll_to_row, slider_focusable};
 pub use tabs::{Tab, TabBar, TabChanged, TabPanel, tab_bar, tab_panel};
@@ -137,7 +137,7 @@ impl Plugin for KitPlugin {
                     dropdown::hover_highlight,
                     dropdown::sync,
                     text_field::sync,
-                    (checkbox::paint, buttons::paint, dropdown::paint, tabs::sync, dropdown::flip_popups, focus::paint_focus),
+                    (checkbox::paint, buttons::paint, dropdown::paint, tabs::sync, dropdown::place_popups, focus::paint_focus),
                 )
                     .chain()
                     .in_set(KitSet)
