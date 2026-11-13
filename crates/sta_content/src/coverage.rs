@@ -55,7 +55,7 @@ pub const READ_ODF_KEYS: &[&str] = &[
     "interfaceconfiguration", "interfacesprites", "maxdilithium", "multiplayermusic",
     "singleplayermusic", "miningrate", "dilithiumtransferrate", "timeuntilclosure",
     "timeuntiltakeoff", "timewelding", "weldingbeamwidth", "workerbeename", "instantactionslot",
-    "commandnames",
+    "commandnames", "warpspeed", "attackpower",
 ];
 
 /// Prefixes of numbered ODF keys (`weapon1`, `buildItem3`, ...) that are read.
@@ -130,6 +130,18 @@ pub struct CfgChange {
     pub read: bool,
 }
 
+/// An entry of the layer's own `RTS_CFG.h` / `ART_CFG.h` that no STA64 code
+/// reads (CON-45): on an install whose `Data` is the top layer there is no
+/// hidden file to compare against, so this is the install's unread surface.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CfgUnread {
+    pub file: String,
+    pub key: String,
+    pub value: String,
+    pub layer: String,
+    pub line: usize,
+}
+
 /// A map reference nothing provides.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MapRef {
@@ -145,6 +157,8 @@ pub struct Report {
     pub layers: Vec<String>,
     pub odf: OdfCoverage,
     pub cfg: Vec<CfgChange>,
+    /// Entries of the top layer's own cfg files that STA64 does not read.
+    pub cfg_unread: Vec<CfgUnread>,
     pub maps: Vec<MapRef>,
     pub maps_checked: usize,
     /// Maps that did not parse.
@@ -161,6 +175,7 @@ pub fn check(vfs: &Vfs) -> Report {
     odf_coverage(vfs, &index, &mut report);
     for file in CFG_FILES {
         report.cfg.extend(cfg_changes(vfs, file));
+        report.cfg_unread.extend(cfg_unread(vfs, file));
     }
     map_refs(vfs, &index, &mut report);
     report
@@ -212,6 +227,20 @@ pub fn cfg_changes(vfs: &Vfs, name: &str) -> Vec<CfgChange> {
         }
         out.push(CfgChange { file: e.file.clone(), key: key.clone(), was, now: e.value.clone(), layer: e.layer.clone(), line: e.line, read: cfg_key_read(key) });
     }
+    out.sort_by_key(|c| c.line);
+    out
+}
+
+/// Entries of `name` that the top layer's own file supplies and no STA64 code
+/// reads, in line order.
+pub fn cfg_unread(vfs: &Vfs, name: &str) -> Vec<CfgUnread> {
+    let Some(top) = layered::resolve_header(vfs, name, 0) else { return Vec::new() };
+    let mut out: Vec<CfgUnread> = top
+        .entries
+        .iter()
+        .filter(|(key, e)| e.version == 0 && !cfg_key_read(key))
+        .map(|(key, e)| CfgUnread { file: e.file.clone(), key: key.clone(), value: e.value.clone(), layer: e.layer.clone(), line: e.line })
+        .collect();
     out.sort_by_key(|c| c.line);
     out
 }
@@ -269,6 +298,7 @@ impl std::fmt::Display for Report {
             let was = c.was.as_deref().map_or("new".to_owned(), |w| format!("was {w}"));
             writeln!(f, "  {} {}: {} = {} ({was}; {}:{})", if c.read { "read   " } else { "IGNORED" }, c.file, c.key, c.now, c.layer, c.line)?;
         }
+        writeln!(f, "cfg: {} entries of the layer's own headers not read by STA64 (`check_pack <root> [<mod>] --cfg-unread` lists them)", self.cfg_unread.len())?;
         writeln!(f, "maps: {} checked, {} unresolved references", self.maps_checked, self.maps.len())?;
         for m in self.maps.iter().take(30) {
             writeln!(f, "  {}: {} {}", m.map, m.kind, m.name)?;
@@ -457,6 +487,21 @@ mod tests {
         assert_eq!((r.odf.uses, r.odf.understood), (5, 3));
         assert_eq!(r.odf.unknown, [("mystery".to_owned(), 1), ("odd".to_owned(), 1)]);
         assert!(r.to_string().contains("IGNORED"));
+    }
+
+    #[test]
+    fn unread_cfg_entries_of_the_top_layers_own_file_are_listed_with_their_lines() {
+        let (_t, vfs) = install("unread");
+        // The child's own header: SCROLL_BORDER_WIDTH is read, the others are not.
+        let r = check(&vfs);
+        let keys: Vec<(&str, &str, usize)> = r.cfg_unread.iter().map(|c| (c.key.as_str(), c.value.as_str(), c.line)).collect();
+        assert_eq!(keys, [("SHIELD_DAMAGE_PROTECTION", "0.9", 1), ("cfgFREIGHTERS_PER_NEBULA", "1", 3), ("NEW_KEY", "5", 4)]);
+        // With no mod, Data is the top layer and has nothing hidden: changes are empty, unread is not.
+        let vfs = Vfs::mount_install(&_t.0, None).unwrap();
+        let r = check(&vfs);
+        assert!(r.cfg.is_empty());
+        assert_eq!(r.cfg_unread.len(), 2);
+        assert!(r.to_string().contains("2 entries of the layer's own headers"));
     }
 
     #[test]

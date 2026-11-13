@@ -62,6 +62,16 @@ impl Autonomy {
         self.set.insert(id, levels);
     }
 
+    /// A new craft takes the content's default levels (`RTS_CFG.h`
+    /// `CRAFT_DEFAULT_*_AUTONOMY`, CON-46), written as an explicit row when
+    /// they differ from [`ENGINE_DEFAULT`] (SIM-36). Not for other kinds.
+    pub(crate) fn spawned(&mut self, units: &Entities, id: EntityId, default: [u8; 2]) {
+        let craft = units.get(id).is_some_and(|u| u.kind == crate::world::EntityKind::Craft);
+        if craft && default != ENGINE_DEFAULT && default.iter().all(|v| *v <= 2) {
+            self.set.insert(id, default);
+        }
+    }
+
     pub(crate) fn remove(&mut self, id: EntityId) {
         self.set.remove(id);
     }

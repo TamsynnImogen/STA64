@@ -19,6 +19,8 @@
 
 pub mod flow;
 pub mod mission_host;
+pub mod net_match;
+pub mod net_overlay;
 
 use std::sync::Arc;
 
@@ -107,13 +109,7 @@ pub fn seats(map: &MapDef, cfg: &SkirmishCfg, races: &Races, db: &ContentDb) -> 
     let mut players = vec![player(cfg.seat, &mine, Control::Human), player(opponent_slot, &theirs, ai)];
     players.sort_by_key(|p| p.id);
 
-    let def = races.get_playable(&mine).or_else(|| races.get(&mine));
-    let local = LocalRace {
-        name: mine.clone(),
-        interface: def.and_then(|r| r.interface.clone()),
-        interface_sprites: def.and_then(|r| r.interface_sprites.clone()),
-        music: def.and_then(|r| r.multiplayer_music.clone().or_else(|| r.single_player_music.clone())),
-    };
+    let local = local_race(races, &mine);
     let summary = format!(
         "skirmish: you are seat {} ({mine}, {}), opponent seat {opponent_slot} ({theirs}, {})",
         cfg.seat,
@@ -124,6 +120,17 @@ pub fn seats(map: &MapDef, cfg: &SkirmishCfg, races: &Races, db: &ContentDb) -> 
         }
     );
     Ok(Seats { players, local, summary })
+}
+
+/// What the HUD and the music take from the race the local seat plays.
+pub fn local_race(races: &Races, name: &str) -> LocalRace {
+    let def = races.get_playable(name).or_else(|| races.get(name));
+    LocalRace {
+        name: name.to_owned(),
+        interface: def.and_then(|r| r.interface.clone()),
+        interface_sprites: def.and_then(|r| r.interface_sprites.clone()),
+        music: def.and_then(|r| r.multiplayer_music.clone().or_else(|| r.single_player_music.clone())),
+    }
 }
 
 /// The controllers of the setup's AI seats, by the registry's names.
@@ -424,5 +431,7 @@ mod gui_selection_tests {
 mod flow_tests;
 #[cfg(test)]
 mod mission_tests;
+#[cfg(test)]
+mod net_match_tests;
 #[cfg(test)]
 mod tests;

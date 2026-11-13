@@ -99,8 +99,9 @@ pub fn skirmish_of(setup: &GameSetup) -> Result<SkirmishCfg, String> {
     }
     Ok(SkirmishCfg {
         seat: me.id.0,
+        // A seat the host runs (`RemoteAi` on a peer that is not the host) is an AI seat all the same.
         opponent: match them.control {
-            Control::Ai(_) => Opponent::Skirmish,
+            Control::Ai(_) | Control::RemoteAi(_) => Opponent::Skirmish,
             _ => Opponent::Idle,
         },
         race: Some(me.race.clone()),
@@ -115,7 +116,7 @@ impl Plugin for FlowPlugin {
         if !app.world().contains_resource::<State<AppState>>() {
             app.init_state::<AppState>();
         }
-        app.add_plugins(super::mission_host::MissionHostPlugin).insert_resource(Flow)
+        app.add_plugins((super::mission_host::MissionHostPlugin, super::net_match::NetMatchPlugin, super::net_overlay::NetOverlayPlugin)).insert_resource(Flow)
             .add_message::<Notice>()
             .add_message::<StartGame>()
             .add_message::<ModChosen>()

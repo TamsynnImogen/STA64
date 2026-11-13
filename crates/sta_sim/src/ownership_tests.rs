@@ -141,6 +141,18 @@ fn team_edit_stops_actor_activity_and_new_owner_controls_later_ticks() {
     let enemy = spawn(&mut sim, "fx_frigate", PlayerId(1), pos(10000));
     let own_yard = spawn(&mut sim, "fx_yard", PlayerId(0), pos(2000));
     let other_yard = spawn(&mut sim, "fx_yard", PlayerId(0), pos(3000));
+    // SIM-36: a non-queued move replaces an attack and an attack replaces
+    // queued legs, so the attack comes first and the moves are queued.
+    accepted(
+        &mut sim,
+        &[order(
+            0,
+            Order::Attack {
+                units: vec![craft],
+                target: enemy,
+            },
+        )],
+    );
     accepted(
         &mut sim,
         &[order(
@@ -148,7 +160,7 @@ fn team_edit_stops_actor_activity_and_new_owner_controls_later_ticks() {
             Order::Move {
                 units: vec![craft],
                 to: pos(500),
-                queue: false,
+                queue: true,
             },
         )],
     );
@@ -160,16 +172,6 @@ fn team_edit_stops_actor_activity_and_new_owner_controls_later_ticks() {
                 units: vec![craft],
                 to: pos(800),
                 queue: true,
-            },
-        )],
-    );
-    accepted(
-        &mut sim,
-        &[order(
-            0,
-            Order::Attack {
-                units: vec![craft],
-                target: enemy,
             },
         )],
     );
@@ -440,6 +442,8 @@ fn owner_change_preserves_physical_state() {
     assert!(cloak.is_some());
     assert!(sim.apply_edit(PlayerId::SCRIPT, &Edit::Team(id, PlayerId(1))));
     expected.owner = PlayerId(1);
+    // The attack approach's course (SIM-36) is activity and goes with it.
+    expected.target = None;
     assert_eq!(sim.unit(id).unwrap(), &expected);
     assert_eq!(sim.labels.get(id), label.as_ref());
     assert_eq!(sim.specials.energy_of(id), energy);

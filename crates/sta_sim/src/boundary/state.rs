@@ -132,7 +132,7 @@ impl Confinement {
         let callbacks = match self.profile {
             Profile::Sta1Classic => 2,
             Profile::Native => 1,
-            Profile::Sta2Classic | Profile::Fo4 => 0,
+            Profile::Sta2Classic | Profile::Fo4 | Profile::Fo3 => 0,
         };
         for _ in 0..callbacks {
             self.position_updated(entity);

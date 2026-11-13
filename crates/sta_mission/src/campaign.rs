@@ -50,7 +50,7 @@ use sta_sim::{Sim, SimEvent, WorldSource};
 use sta_vfs::Vfs;
 
 use crate::api::{MissionConfig, PlayerNumbering};
-use crate::runtime::MissionRuntime;
+use crate::runtime::{MissionEndState, MissionRuntime};
 use crate::Resolution;
 
 // ---------------------------------------------------------------------------
@@ -954,7 +954,9 @@ local function wrap(t, name, fixed)
   end)
 end
 wrap(rawget(_G, "Mission"), "finish", nil)
-for _, t in ipairs({ _G, rawget(_G, "A2"), rawget(_G, "A1") }) do
+-- A2's end calls carry their own time and are resolved by `scan_outcome`
+-- (`MissionRuntime::mission_end`), not recorded here.
+for _, t in ipairs({ _G, rawget(_G, "A1") }) do
   wrap(t, "SucceedMission", true)
   wrap(t, "FailMission", false)
 end
@@ -964,6 +966,11 @@ end
 /// any, as of `tick`. A host that owns the sim itself (the client's link) asks
 /// this each tick instead of using [`ActiveMission`].
 pub fn scan_outcome(runtime: &MissionRuntime, tick: u64) -> Option<MissionOutcome> {
+    // Armada II's `SucceedMission` / `FailMission`: the mission ends once its
+    // time is past the call's (LUA-13). A blocked end is no outcome at all.
+    if let MissionEndState::Ended { won } = runtime.mission_end(tick) {
+        return Some(MissionOutcome { won, delay: 0.0, tick });
+    }
     let got: mlua::Result<(Option<bool>, Option<f64>)> =
         runtime.eval("local o = rawget(_G, '__sta64_outcome') if o then return o.won, o.delay end");
     if let Ok((Some(won), delay)) = got {
@@ -1008,10 +1015,17 @@ pub fn launch_runtime(
 }
 
 /// The named paths of the map `bzn` (`a2_fed03.bzn`) in `vfs`, in file order,
-/// for `A2.paths`; empty when the map cannot be read or holds none.
+/// for `A2.paths` / `A1.paths`; empty when the map cannot be read or holds
+/// none. An Armada I map keeps its paths in its own section (`Map::a1`).
 pub fn read_map_paths(vfs: &Vfs, bzn: &str) -> Vec<(String, Vec<[f32; 3]>)> {
     let Some(Ok(bytes)) = vfs.read(&format!("bzn/{bzn}")) else { return Vec::new() };
-    sta_bzn::parse(&bytes).map(|m| m.paths.into_iter().map(|p| (p.label, p.points)).collect()).unwrap_or_default()
+    let Ok(m) = sta_bzn::parse(&bytes) else { return Vec::new() };
+    if m.paths.is_empty()
+        && let Some(a1) = m.a1
+    {
+        return a1.paths.into_iter().map(|p| (p.label, p.points)).collect();
+    }
+    m.paths.into_iter().map(|p| (p.label, p.points)).collect()
 }
 
 impl ActiveMission {

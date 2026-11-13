@@ -27,6 +27,9 @@ pub struct ProgressProbe {
     pub start_error: Option<String>,
     pub ticks: u64,
     pub ended: Option<bool>,
+    /// The script asked for an end that depends on an object that never
+    /// existed (LUA-13): neither a win nor a loss, and why.
+    pub end_blocked: Option<String>,
     pub errors: Vec<String>,
     pub rules: u32,
     /// Distinct rules that became satisfied, in order of first time.
@@ -53,6 +56,9 @@ pub struct ProgressProbe {
     pub first_objective_tick: Option<u64>,
     pub reports: usize,
     pub unsupported: Vec<(String, u32)>,
+    /// Reads of variables the engine writes (team strength, moons, warp tries): the script's
+    /// counted `engineReads`, for a host to bind (`A2.EngineVariable`) later.
+    pub engine_reads: Vec<(String, u32)>,
 }
 
 fn counted(v: &[(String, u32)]) -> String {
@@ -75,7 +81,7 @@ impl ProgressProbe {
         let scripts: Vec<String> =
             self.scripts.iter().map(|(n, left, w)| format!("[{},{},{}]", json_string(n), left, w)).collect();
         format!(
-            "{{\"campaign\":{},\"index\":{},\"bzn\":{},\"started\":{},\"start_error\":{},\"ticks\":{},\"ended\":{},\"errors\":{},\"rules\":{},\"rules_held\":{},\"last_rule\":{},\"last_step\":{},\"steps_run\":{},\"distinct_steps\":{},\"problems\":[{}],\"missing\":{},\"failed\":{},\"invalid\":{},\"unresolved\":{},\"handles_resolved\":{},\"blocked\":[{}],\"scripts\":[{}],\"step_errors\":{},\"objectives\":{},\"first_objective_tick\":{},\"reports\":{},\"unsupported\":{}}}",
+            "{{\"campaign\":{},\"index\":{},\"bzn\":{},\"started\":{},\"start_error\":{},\"ticks\":{},\"ended\":{},\"end_blocked\":{},\"errors\":{},\"rules\":{},\"rules_held\":{},\"last_rule\":{},\"last_step\":{},\"steps_run\":{},\"distinct_steps\":{},\"problems\":[{}],\"missing\":{},\"failed\":{},\"invalid\":{},\"unresolved\":{},\"handles_resolved\":{},\"blocked\":[{}],\"scripts\":[{}],\"step_errors\":{},\"objectives\":{},\"first_objective_tick\":{},\"reports\":{},\"unsupported\":{},\"engine_reads\":{}}}",
             json_string(&self.campaign),
             self.index,
             json_string(&self.bzn),
@@ -87,6 +93,7 @@ impl ProgressProbe {
                 Some(false) => "false",
                 None => "null",
             },
+            opt(&self.end_blocked),
             list(&self.errors),
             self.rules,
             list(&self.rules_held),
@@ -107,6 +114,7 @@ impl ProgressProbe {
             self.first_objective_tick.map_or("null".into(), |t| t.to_string()),
             self.reports,
             counted(&self.unsupported),
+            counted(&self.engine_reads),
         )
     }
 }
@@ -178,6 +186,7 @@ fn read(rt: &crate::runtime::MissionRuntime, p: &mut ProgressProbe) {
         .collect();
     p.step_errors = rt.eval("return Mission_.stepErrors").unwrap_or_default();
     p.unsupported = rt.unsupported();
+    p.engine_reads = counts(rt, "engineReads");
 }
 
 /// Run one mission up to `ticks` ticks and describe how far it got. `standin`
@@ -215,6 +224,9 @@ pub fn probe_mission(host: &VfsHost, book: &CampaignBook, campaign: &str, index:
             p.objectives = a.runtime().objectives().len();
             p.first_objective_tick = first_objective;
             p.reports = hosted.map_or(0, |h| h.reports.len());
+            if let crate::runtime::MissionEndState::Blocked(why) = a.runtime().mission_end(a.sim().tick) {
+                p.end_blocked = Some(why);
+            }
             Ok((a.sim().tick, ended.map(|o| o.won)))
         }
     }));

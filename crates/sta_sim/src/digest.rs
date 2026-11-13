@@ -67,7 +67,7 @@ fn _every_sim_field_is_decided(s: &Sim) {
     let Sim {
         tick: _, rng: _, units: _, labels: _, players: _, ai_seats: _, content: _, starts: _, regions: _,
         bounds: _, confinement: _, perception: _, events: _, weapons: _, movement: _, economy: _,
-        production: _, victory: _, specials: _, autonomy: _, start_effects: _, nav: _, subsystems: _, team_changes: _,
+        production: _, victory: _, specials: _, autonomy: _, start_effects: _, nav: _, subsystems: _, team_changes: _, approach_warp: _, engagement: _,
     } = s;
 }
 
@@ -167,6 +167,10 @@ impl Sim {
             }
         }
         self.movement.hash_into(&mut h);
+        // SIM-36: crafts in warp on an attack approach.
+        if !self.approach_warp.is_empty() {
+            self.approach_warp.hash_into(&mut h);
+        }
         self.confinement.hash_into(&mut h);
         h.0
     }
@@ -194,6 +198,10 @@ impl Sim {
         }
         if !self.specials.is_empty() {
             self.specials.hash_into(&mut h);
+        }
+        // SIM-36: recent hits and shots decide assists.
+        if !self.engagement.is_empty() {
+            self.engagement.hash_into(&mut h);
         }
         // SIM-38: autonomy decides assists and targets of opportunity.
         if !self.autonomy.is_empty() {

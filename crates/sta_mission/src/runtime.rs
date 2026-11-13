@@ -132,6 +132,20 @@ struct Inner {
     lua: Lua,
 }
 
+/// Where a script's `SucceedMission` / `FailMission` stands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MissionEndState {
+    /// Not asked for.
+    None,
+    /// Asked for; mission time has not passed its end time.
+    Pending,
+    /// The mission has ended by its own rules.
+    Ended { won: bool },
+    /// Asked for, but on the strength of a query about an object that never
+    /// existed: neither a win nor a loss. The reason names what is missing.
+    Blocked(String),
+}
+
 /// A mission script running as a [`Controller`].
 ///
 /// The host owns one runtime for its SCRIPT command stream and supplies the
@@ -421,6 +435,26 @@ impl MissionRuntime {
         self.inner.ctx.borrow().log.clone()
     }
 
+    /// The state of the mission end the script asked for with `SucceedMission`
+    /// / `FailMission` (A2), as of `tick` (LUA-13).
+    pub fn mission_end(&self, tick: u64) -> MissionEndState {
+        let mut c = self.inner.ctx.borrow_mut();
+        // Once ended, the mission stays ended with the same outcome.
+        if let Some(won) = c.ended {
+            return MissionEndState::Ended { won };
+        }
+        let state = match &c.mission_end {
+            None => MissionEndState::None,
+            Some(e) if e.blocked.is_some() => MissionEndState::Blocked(e.blocked.clone().unwrap_or_default()),
+            Some(e) if tick as f64 / sta_core::TICK_HZ as f64 > e.time => MissionEndState::Ended { won: !e.failed },
+            Some(_) => MissionEndState::Pending,
+        };
+        if let MissionEndState::Ended { won } = state {
+            c.ended = Some(won);
+        }
+        state
+    }
+
     /// AIP loads (`AI_Team_Load_AIP`, `Player:loadAIP`) asked for since the
     /// last call, in call order, with the seat they name (AI-06).
     pub fn take_aip_requests(&self) -> Vec<(sta_core::PlayerId, String)> {
@@ -509,6 +543,8 @@ impl Controller for MissionRuntime {
             c.view = view.clone();
             c.events = events.to_vec();
             let tick = view.tick;
+            let ids: Vec<_> = view.units.iter().map(|u| u.id).collect();
+            c.seen.extend(ids);
             for e in events {
                 if let SimEvent::Hit { target, .. } = e {
                     c.last_hit.insert(*target, tick);

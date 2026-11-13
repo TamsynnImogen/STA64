@@ -42,8 +42,9 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// Format 16 (SIM-38) appended craft autonomy after the start-helper rows; 15
 /// (CON-35) added the [`Provenance`] record and the keyed content digest's
 /// hash. Format 17 appends the mission-set subsystem switches and damage
-/// (SIM-55) last. Only the current format is read.
-pub const FORMAT_VERSION: u16 = 17;
+/// (SIM-55). Format 18 (SIM-36) appends the attack approach record
+/// (crafts in warp) last. Only the current format is read.
+pub const FORMAT_VERSION: u16 = 18;
 
 const HEADER: usize = 4 + 2 + 4 + 8;
 
@@ -129,6 +130,16 @@ impl std::fmt::Display for SnapshotError {
 }
 
 impl std::error::Error for SnapshotError {}
+
+/// SIM-36's attack approach state: the crafts in warp (phase 1) or dropping
+/// out of it (2), ascending id.
+#[derive(Serialize, Deserialize)]
+struct AttackRec {
+    version: u8,
+    warp: Vec<(EntityId, u8)>,
+    /// Recent hits `(tick, attacker)` and shots, for assists.
+    engagement: crate::combat::targeting::EngagementRec,
+}
 
 #[derive(Serialize, Deserialize)]
 struct StatsRec {
@@ -386,6 +397,7 @@ impl Sim {
         out.extend(postcard::to_allocvec(&StartEffectsRec { version: 1, rows: self.start_effects.to_rec() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&crate::autonomy::AutonomyWire { version: 1, rows: self.autonomy.to_rec() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&SubsystemsRec { version: 1, rows: self.subsystems.to_rows() }).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&AttackRec { version: 1, warp: self.approach_warp.to_rec(), engagement: self.engagement.to_rec() }).expect("snapshot serialises"));
         out
     }
 
@@ -427,6 +439,10 @@ impl Sim {
         let (record, rest): (SubsystemsRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         if record.version != 1 { return Err(SnapshotError::Corrupt("unknown subsystems record version".into())); }
         let subsystem_rows = record.rows;
+        let (record, rest): (AttackRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        if record.version != 1 { return Err(SnapshotError::Corrupt("unknown attack approach record version".into())); }
+        let warp_rows = record.warp;
+        let engagement_rows = record.engagement;
         if !rest.is_empty() { return Err(SnapshotError::Corrupt("trailing bytes".into())); }
         if let Some(row) = b.economy.miners.iter().find(|row| row.5 > 4) {
             return Err(SnapshotError::Corrupt(format!("mining phase {} is not supported", row.5)));
@@ -490,6 +506,12 @@ impl Sim {
         if autonomy.to_rec().iter().any(|(id, _)| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft)) {
             return Err(corrupt("autonomy entity"));
         }
+        let approach_warp = crate::movement::approach::Warp::from_rec(warp_rows).ok_or_else(|| SnapshotError::Corrupt("attack warp rows out of order or of an unknown phase".into()))?;
+        if approach_warp.to_rec().iter().any(|(id, _)| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft)) {
+            return Err(SnapshotError::Corrupt("attack warp entity is not a craft".into()));
+        }
+        let engagement = crate::combat::targeting::Engagement::from_rec(engagement_rows, b.tick, |id| units.contains(id))
+            .ok_or_else(|| SnapshotError::Corrupt("engagement rows out of order, from the future or of an unknown entity".into()))?;
         let specials = crate::specials::Specials::from_rec(b.specials).ok_or_else(|| corrupt("specials"))?;
         let start_effects = crate::start_effects::StartEffects::from_rec(effect_rows, |id| units.contains(id))
             .ok_or_else(|| corrupt("start effect rows"))?;
@@ -528,6 +550,8 @@ impl Sim {
             victory: crate::victory::Victory::from_rec(&b.victory),
             specials,
             autonomy,
+            approach_warp,
+            engagement,
             start_effects,
             nav: Default::default(),
             subsystems,
@@ -539,6 +563,10 @@ impl Sim {
 #[cfg(test)]
 #[path = "snapshot/subsystem_tests.rs"]
 mod subsystem_tests;
+
+#[cfg(test)]
+#[path = "snapshot/attack_tests.rs"]
+mod attack_tests;
 
 #[cfg(test)]
 #[path = "snapshot/chain.rs"]

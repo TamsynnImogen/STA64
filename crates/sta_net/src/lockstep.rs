@@ -31,7 +31,8 @@ mod transport;
 pub use handshake::{admit, HandshakeError};
 pub use peer::{DesyncFiles, Fault, Peer, StepOutcome};
 pub use router::{
-    LockstepRouter, RouterError, RouterEvent, DIGESTS_KEPT, MAX_EVENTS, MAX_QUEUED_TURNS,
+    Divergence, LockstepRouter, RouterError, RouterEvent, DIGESTS_KEPT, MAX_EVENTS, MAX_QUEUED_TURNS,
+    MAX_INBOUND, MAX_REFEREE_FINDINGS,
 };
 pub use transport::{
     Destination, Incoming, LinkFault, LoopbackLink, LoopbackNet, Transport, TransportError,

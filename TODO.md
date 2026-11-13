@@ -135,6 +135,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] UI-18 crew/officers (#371): use the new personnel HUD build in Classic/Federation. Normal should show crew1200 and officers16/600 at the fresh start; Lots should show crew30000, and Restricted/More/Max should use the configured300/800/999 maxima. Check resource text stays in CFG slots/colours after resizing; noCrew/noOfficers and zero-area slots must stay hidden. Confirm FPS. Crew spending/regeneration and officer queue admission are separate work; this checks starting values and live-actor census.
 
+- [?] Captain/registry companions (UI-35, #599): in an isolated test mod with `possibleCraftNames`, `possibleCaptainNames` and `possibleCraftRegistry`, select a ship and a producer. Check the row-aligned values and authored medium/tall CFG areas/colours, including a blank companion and a disabled rectangle. No/group selection and the mouseover strip should show none. [Keys and scope](docs/CRAFT_IDENTITY_COMPANIONS.md).
+
 - [?] Movie decoding (MED-01/MED-02, `sta_media`): nothing plays in game until MED-03. To check the decoders, run `STA64_TEST_MOVIE_DIRS="<A1>:<A2>:<FO Roots>" cargo test -p sta_media --release --test bink_install -- --nocapture` (every installed `.bik` decodes to its stated frames and audio; 7 golden hashes), and dump a movie with `cargo run -p sta_media --release --example media_dump -- <movie> --yuv out.yuv --pcm out` to view `out.yuv` (`ffplay -f rawvideo -pixel_format yuv420p -video_size WxH out.yuv`) and listen to `out.0.s16le`. MP4 decodes H.264 + AAC-LC; the installed Armada II `Intro.mp4` is AV1 and is reported as unsupported.
 - [?] Movie playback (MED-03): `cargo run -p sta64 -- --install-root "<Armada II>"` shows the logo reels (Activision, Paramount, MadDoc) and the title movie full screen, picture fitted to the window with black bars, sound in step with the picture (watch lips against voice in the title movie; the sound is on the Voice bus), music silent while a movie plays and back after. Esc, Space, Enter or a click skips one movie and the next starts. A movie that cannot play (Armada II's `animations/Intro.mp4` is AV1; remove `Intro.bik` to see it) is skipped with a `movie ...` log line and the front end comes up. Check the window stays responsive (drag it) and CPU use is one core.
 - [?] Intro cutscenes (MED-05): `--nointro` (also `-nointro`) goes straight to the front end with no movie. The sequence is `cfgINTRO_MOVIE_NAME` from `RTS_CFG.h` after the logo reels the install has (`intro:` log line lists them); Armada I plays `STIntro.bik`. The setting has no settings-screen toggle yet: `IntroSettings` is the resource a toggle will drive. Mission movies (`Media:playMovie`, in-panel on `PanelScreen`) are covered by tests only until UI-30 and the bridge display exist.
@@ -145,6 +147,10 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 - [?] Mod recipe and developer shader shadowing (RND-28, #393): a mod folder with `ordnance/ordnance.ini` holding `[Ordnance.<weapon odf>]` changes how that weapon's beam/bolt draws in a skirmish (nothing else needs to change). With `STA64_DEV_SHADER_SHADOW=1`, a mod's `shaders/render/<path>.wesl` (for example `shaders/render/fx/quad.wesl`) replaces the embedded shader; developer-only and unstable. `STA64_GPU_TESTS=1 cargo test -p sta64 --test recipe_override_frame` checks both in headless frames.
 - [?] Beams end with their shooter and target (fix/render-beams-outlive-shooter): in a skirmish with phasers, destroy an enemy ship while it is being fired on. The beams to it should fade out within about a quarter second and no beam or glowing impact dot should stay hanging in empty space. Destroy the firing ship: its beams should vanish at once. Cedric to confirm in game (reported 2026-11-12: beams stayed after the ships were destroyed). (#483)
 - [?] Mining ships (RND-29, #345): in a skirmish order a freighter to mine a moon next to a mining station. While mining it should circle the moon at about 180 units, firing a blue mining beam at it; when full it should leave, glide onto the station while unloading, then go back. Orbit radius and beam come from the mining weapon's ODF; the berth is the station centre (no game file names a dock point). `STA64_TEST_INSTALL=<root> cargo test -p sta64 --lib render::mining -- --nocapture` lists each miner. (#524)
+- [?] `STA64_TEST_INSTALL=.. STA64_TEST_MAP=.. cargo test -p sta64 --lib the_bench_sim_of_a_map` passes on Roots + STA2 Classic (`fulltech`): not run. (#527)
+- [?] CON-35 rules digest (D9, D10): `STA64_TEST_INSTALL="<Roots install>" cargo test -p sta_net --test rules_handshake -- --nocapture` prints the refusal between STA2 Classic and STA2 Classic Enhanced (first key `RTS_CFG.h:BASE_CREW_PER_SEC: unset here, 30 there`) and each installed mod's rule count; judge whether the named keys and values read well for the lobby's refusal text (UI-11). Replays (format 4) and saves (format 15) record lineage and pack names; older ones are refused with "from an older STA64". (#465)
+
+- [?] Persistent shields (RND-32, #589): on a build containing this change, set `alwaysShowShields = 1` in an isolated test mod's ship or station ODF. Confirm the continuous blue outline follows the craft, disappears at zero shields, returns on recharge, and remains separate from hit flashes. Check cloak/uncloak, losing sight of an enemy, death and returning to the menu. Default and explicit zero stay off. Bounds/colour are documented approximations; [scope and automated checks](docs/PERSISTENT_SHIELDS.md).
 
 ## Checked earlier (morning list)
 
@@ -216,6 +222,64 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [ ] In-match text (UI-15): start a skirmish as a non-default race and kill a ship; the notice appears top centre, clear of the info text at the top left, and the info panel's race field names the race you play, not the map's default ([notices.rs](crates/sta64/src/ui/notices.rs), [map/mod.rs](crates/sta64/src/map/mod.rs))
 - [ ] Engine measurements, not measured yet: where stock and Roots choose impulse vs combat speed for an attack order (only the effect is measured; SIM-36)
 - [ ] Engine measurements, not measured yet: M1, M2 and M4 on Roots + FO 4.0 (only M3 measured; FO `ordnancedefenseweapon` decompiled only; SIM-34)
+- [ ] LUA-11: bind `GetHandle`, `AudioMessage`, `PlayMusic`, `CineractiveStart/End`, `ShowTitle`/`RemoveTitle`, `SetPosition`, `BuildObject`, `Stop`, `Goto` on `A2` so converted a2_fed01 passes its intro (LUA-05) (#534)
+- [ ] LUA-11: script waits (FadeIn/FadeOut/Cineractive/AudioMessage/PlayMusic/WaitForEnterKey hold the calling script) in the converted runtime once the bindings report completion (#534)
+- [ ] LUA-11: engine-owned variables strength/moons/tried_warp_team_N written from the sim (AIP switching rules) (#534)
+- [ ] LUA-11: A1 front end for the lifter (stack-depth argument tracking, DllMain registration/init), 20 campaign missions (#534)
+- [ ] RND-23: map sky dome blend names (`mbgdom1.N`) draw opaque grey on `fulltech`; stock nebula strength on `a2_borg01`. (#527)
+- [ ] UI-29: with no `settings.cfg`, a Refit install's `RefitPlayer.ini` `MaxSelection` seeds the cap (install-gated check on a Refit install) (#526)
+- [ ] UI-29: Windows and macOS: the file appears under `%APPDATA%\sta64` / `~/Library/Application Support/sta64` after a rebind (needs a windowed run on each OS) (#526)
+- [ ] UI-30: a converted A2 mission hosted in the client shows its opening camera and titles in a headless frame (needs the mission host) (#533)
+- [ ] UI-30: `ScriptReply` becomes a command in the shared stream (seam) so movie/message/skip answers replay (#533)
+- [ ] UI-30: `SetCameraZoom`, `CineractiveCameraOffset`, `CineractiveShot` meanings measured on the bench, then consumed (#533)
+- [ ] UI-30: map loader fills `ScenePaths` so path-point shots resolve (#533)
+- [ ] LUA-11: read the A2 BZN path list (sta_bzn) and fill `A2.paths`, then `Goto`/`BuildObject`/`GetDistance` by path run (19-22 missions) (#550)
+- [ ] LUA-11: engine-owned team variables (strength/moons/tried_warp) written from the sim for the AIP switching rules; fleet objects (`CreateNew*Fleet`) (#550)
+- [ ] LUA-11: measure what releases a cineractive start and Enter waits in the original (stand-in values today) (#550)
+- [ ] LUA-11: `IsCompromised` meaning (27 missions) and `AI_Team_Load_AIP` (30) once SIM rows land (#550)
+- [ ] INT-M6 campaign: from a running client, Single player -> a campaign card -> mission -> Start plays the mission with its script (a human checks the first minute of FO Roots mission 1 on a real GPU). (#551)
+- [ ] UI-25: a human checks the mission list, briefing and debrief regions on the user's monitor at 21:9. (#551)
+- [ ] SIM-61: presentation-done command (the host-side reply function goes). (#551)
+- [ ] `sta-bench desync` on two real peers' desync replays from an A2/FO install game (install-gated, not measured here) (#549)
+- [ ] NET-03 transport carries `Sections` end to end (relay forwards tag 21) (#549)
+- [ ] RND-23: stock nebula puffs are sharper and more saturated than the original's smooth haze (lowfreq 40..62); test the occlusion-cull and gamma-space additive hypotheses. (#557)
+- [ ] RND-23: planet in view (`pb_clss*`): original draws none at a2_borg01 1527 292 1748; find why before matching. (#557)
+- [ ] RND-23: switching the profile at run time does not rebuild nebulae (next map build). (#557)
+- [ ] CON-47: measure what the original does for a path name the map lacks (10 names in 8 stock missions) (#554)
+- [ ] CON-47: meaning of `pathType` 2 (patrol-like in fed03 `pat_1`, `pat_2`) once SIM-56 patrol lands (#554)
+- [ ] LUA-11: a2_tutorial6 `Run_Tutorial` holds on a wait the stand-in host does not report; find which (#554)
+- [ ] SIM-39 hull-hit crew law, low-hull life-support drain and boarding losses measured on stock A2 (paired scene), then implemented (#548)
+- [ ] SIM-29 unfinished-child capture and research attachments measured per profile (#548)
+- [ ] SIM-54 Player/Entity race and crew clamps (MAX_CREW, officer cap) measured on stock A2 and Roots, then applied (#548)
+- [ ] SIM-55 effect of a disabled/damaged shield generator, life support and sensors measured on stock A2 (#548)
+- [ ] `cargo test -p sta_net --test rejoin` stays green 5 times in a row on a loaded machine (socket tests wait on conditions, never on sleeps). (#564)
+- [ ] After SIM changes to movement or the roster: `STA64_BLESS_NET_FIXTURE=1 cargo test -p sta_net --test snapshot_fixture` and say so in the PR. (#564)
+- [ ] Lobby (UI-11/INT) must: store the `rejoin_token` from `Welcome` and the new one from every rejoin; call `Peer::serve_rejoins` and `set_departure_source` on the host; show `ResyncEvent`s; not drop a seat while `rejoin_in_progress`; kick on `SeatAbuse`; fill `Start` seat lineage and pack names from the host's `ContentDb` (the snapshot's provenance is checked against them). (#564)
+- [ ] LUA-12: bind A2 `FailMission` / `SucceedMission` (unbound; missions cannot end). (#567)
+- [ ] SIM-59: derelict latch and original owner as view fields; then `IsCompromised` is exact. (#567)
+- [ ] AI-06 / INT-M6: the client's mission host takes `take_aip_requests` and seats `MissionAiHub` controllers. (#565)
+- [ ] AI-06: watch a Roots mission AI (build list then priorities file) build and attack on a real run. (#565)
+- [ ] UI-11: INT-M5 starts the map view from `NetLaunch` (`NetMatch::into_peer`), and turns `RouterEvent::Protocol` into a kick. (#566)
+- [ ] UI-11: rejoin (enable the button): `NetTransport::rejoin` + `Rejoiner`, host `Peer::serve_rejoins`, `set_departure_source`, resync messages, `SeatAbuse` kick, `last_seq`. (#566)
+- [ ] UI-11: decide kick policy (`Session::after_kick`) and AI seating (`place_computers_around_humans`). (#566)
+- [ ] UI-11: measure Armada I's and Fleet Operations' multiplayer Game Setup columns. (#566)
+- [ ] SIM-57: measure `SetPosition`/`PointAt` by path name on a bench set-up that loads the map's named paths (a2_borg01 `BORG_CRASH_PATH`), and the y clamp limits. (#570)
+- [ ] SIM-57: bench-check what a zero-length `PointAt` does on the original (borg01). (#570)
+- [ ] SIM-57: measure `PointAt` on Armada I and `SetAngularVelocity` on Roots. (#570)
+- [ ] LUA-11: converter passes `Vector3 const&` slots as `Ref` tables (`SetAngularVelocity`); unresolved `G[0x...]` operands to `PointAt`. (#570)
+- [ ] Check `Start.map.digest` against each peer's `map_digest` at start (NET). (#569)
+- [ ] sta64 networked start: `Control::RemoteAi` must stay an AI seat (flow.rs). (#569)
+- [ ] INT-M6/AI-06: a mission whose script loads an AIP at tick N has its AI seat act only from N (headless `game::mission_tests`); install-gated Roots and converted-A2 starts show no `Player.loadAIP` in `unsupported()`. (#575)
+- [ ] SIM-61: a save after a scripted AIP load keeps the plan (the plan is outside the snapshot today). (#575)
+- [ ] LUA-13: with a stock install, `tools/campaign_readiness.py --converted --ticks 9000` shows 0 wins, 0 losses that rest on a gap, and the blocked reasons fall as gaps close. (#577)
+- [ ] LUA-13: `A2.FailMission` / `SucceedMission` in a converted mission end the campaign mission once and a blocked end keeps the mission running. (#577)
+- [ ] LUA-13: a converted mission that reads a handle a failed call named never reports a loss; `readiness` lists it as blocked with the reason. (#585)
+- [ ] `python3 tools/campaign_readiness.py --converted --a2 <stock> --ticks 9000`: no first-problem call is a converter defect (SetAngularVelocity, GetNearestObjectNearPosition, G[...] operands gone); `engine_reads` non-empty for AIP missions. (#586)
+- [ ] A host binds `A2.EngineVariable(name)` for team strength / moons / warp tries. (#586)
+- [ ] SIM seam: synchronous spawn so queries (GetMaxHealth) work on a BuildObject handle in the same tick (tutorial4). (#586)
+- [ ] LUA-14 follow-up: model `isCineractiveDone` (camera-shot completion) so A1 openings end (fed1, fed2, finale5) (#591)
+- [ ] LUA-14 follow-up: A1 `BuildObject` "neutral ownership requires a resource definition" (team mapping) (#591)
+- [ ] LUA-14 follow-up: engine behaviour of A1 calls on an invalid or dead handle (read from Armada.exe), as A2's object guard (#591)
 
 ## Done recently
 
