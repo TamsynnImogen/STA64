@@ -5510,6 +5510,7 @@ dependencies = [
  "sta_core",
  "sta_media",
  "sta_mission",
+ "sta_net",
  "sta_odf",
  "sta_sim",
  "sta_surface",

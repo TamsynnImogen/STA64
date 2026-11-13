@@ -239,6 +239,9 @@ impl Sim {
                 u.crew = Some([value.max(Fixed::ZERO).min(max.max(now)), max]);
                 true
             }
+            Edit::Position(id, to) => self.edit_position(id, to),
+            Edit::Heading(id, dir) => self.edit_heading(id, dir),
+            Edit::AngularVelocity(id, omega) => self.edit_angular_velocity(id, omega),
             // The rest land with the package that owns what they change.
             _ => false,
         }

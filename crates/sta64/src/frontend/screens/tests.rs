@@ -134,10 +134,10 @@ fn entering_the_front_end_shows_the_main_screen() {
     for s in ["Star Trek Armada", "Single player", "Instant action", "Multiplayer", "Mods", "Options", "Exit"] {
         assert!(has_text(&mut app, s), "{s}");
     }
-    // Six entries; the lobby's Multiplayer is not there to click yet.
+    // Six entries, all working: Multiplayer opens the lobby's connection screen (UI-11).
     assert_eq!(count::<UiButton>(&mut app), 6);
     let off = app.world_mut().query::<&WidgetState>().iter(app.world()).filter(|s| **s == WidgetState::Disabled).count();
-    assert_eq!(off, 1);
+    assert_eq!(off, 0);
 }
 
 #[test]
@@ -595,6 +595,8 @@ fn installed_mods_come_from_the_data_folder() {
 #[test]
 fn disabled_entries_do_not_click() {
     let mut app = app();
+    // Single player's Load game is off.
+    go(&mut app, Screen::SinglePlayer);
     let off = app.world_mut().query::<(Entity, &WidgetState)>().iter(app.world()).find(|(_, s)| **s == WidgetState::Disabled).unwrap().0;
     click(app.world_mut(), off);
     assert_eq!(app.world().resource::<Messages<ButtonClicked>>().len(), 0);
