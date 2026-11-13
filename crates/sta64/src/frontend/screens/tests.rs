@@ -38,7 +38,7 @@ fn app_with_data(data: ScreenData) -> App {
     configure_sets(&mut app);
     app.add_plugins(crate::ui::profile::UiProfilePlugin);
     app.insert_resource(data)
-        .insert_resource(ScreensConfig { own_camera: false, fit_scale: false, start: Screen::Main })
+        .insert_resource(ScreensConfig { layout: stock::ScreenLayout::Plain, own_camera: false, fit_scale: false, start: Screen::Main })
         .init_resource::<Seen>()
         .add_systems(Last, record)
         .add_plugins(ScreensPlugin);
@@ -463,7 +463,7 @@ fn no_maps_means_nothing_to_launch() {
     let mut app = App::new();
     app.add_plugins((MinimalPlugins, StatesPlugin));
     configure_sets(&mut app);
-    app.insert_resource(ScreensConfig { own_camera: false, fit_scale: false, start: Screen::Setup })
+    app.insert_resource(ScreensConfig { layout: stock::ScreenLayout::Plain, own_camera: false, fit_scale: false, start: Screen::Setup })
         .init_resource::<Seen>()
         .add_systems(Last, record)
         .add_plugins(ScreensPlugin);
@@ -617,7 +617,7 @@ fn many_maps_app(n: usize) -> App {
     app.add_plugins((MinimalPlugins, StatesPlugin));
     configure_sets(&mut app);
     app.insert_resource(data)
-        .insert_resource(ScreensConfig { own_camera: false, fit_scale: false, start: Screen::Setup })
+        .insert_resource(ScreensConfig { layout: stock::ScreenLayout::Plain, own_camera: false, fit_scale: false, start: Screen::Setup })
         .init_resource::<Seen>()
         .add_systems(Last, record)
         .add_plugins(ScreensPlugin);
