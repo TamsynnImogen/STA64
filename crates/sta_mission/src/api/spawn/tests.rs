@@ -734,3 +734,83 @@ fn pending_edits_use_allocated_ids_and_keep_no_actions_after_their_first_dispatc
     assert!(later.is_empty());
     assert!(!rt.eval::<bool>("return removed.valid or removed.pending").unwrap());
 }
+
+#[test]
+fn a_unit_replaced_by_remove_and_add_keeps_its_map_label() {
+    let (mut sim, db) = setup();
+    let mut first = runtime(&sim, db.clone(), "Entity.add('fx_cruiser', 0, Vector(1000, 0, 0))");
+    let out = sim.step(&first.take_commands());
+    let old = out.events.iter().find_map(|e| if let SimEvent::ScriptSpawned { id, .. } = e { Some(*id) } else { None }).expect("spawned");
+
+    let cfg = MissionConfig {
+        content: Some(db),
+        view: Some((*out.view).clone()),
+        labels: [(old, "Flagship".to_owned())].into_iter().collect(),
+        ..MissionConfig::default()
+    };
+    let mut rt = MissionRuntime::from_source_with(
+        "replace.lua",
+        r#"
+        done = false
+        MMM.register(function()
+            if done then return end
+            done = true
+            local f = EntityFinder():findOne({ label = 'Flagship' })
+            local odf, owner, pos = f.odf, f.player.number, f.position
+            Entity.remove(f)
+            Entity.add(odf, owner, pos)
+            -- another def at the same place does not take the label
+            Entity.add('fx_frigate', owner, pos)
+        end)
+        "#,
+        17,
+        cfg,
+    );
+    assert!(rt.errors().is_empty(), "{:?}", rt.errors());
+    let mut commands = Vec::new();
+    rt.think(&out.view, &out.events, &mut commands);
+    let out = sim.step(&commands);
+    let new: Vec<EntityId> = out.events.iter().filter_map(|e| if let SimEvent::ScriptSpawned { id, .. } = e { Some(*id) } else { None }).collect();
+    assert_eq!(new.len(), 2, "{:?}", out.events);
+    rt.think(&out.view, &out.events, &mut Vec::new());
+    let found: Option<u32> = rt.eval("local f = EntityFinder():findOne({ label = 'Flagship' }) return f and f.id").unwrap();
+    assert_eq!(found, Some(new[0].0), "the cruiser that replaced it carries the label");
+    let other: Option<String> = rt.eval("local e = EntityFinder():findOne({ odf = 'fx_frigate' }) return e and e.label").unwrap();
+    assert_eq!(other, None);
+}
+
+#[test]
+fn the_finder_sees_a_spawn_at_once_and_no_longer_sees_a_removed_unit() {
+    let (mut sim, db) = setup();
+    let mut first = runtime(&sim, db.clone(), "Entity.add('fx_cruiser', 0, Vector(1000, 0, 0))");
+    let out = sim.step(&first.take_commands());
+    let old = out.events.iter().find_map(|e| if let SimEvent::ScriptSpawned { id, .. } = e { Some(*id) } else { None }).expect("spawned");
+    let cfg = MissionConfig { content: Some(db), view: Some((*out.view).clone()), labels: [(old, "Flagship".to_owned())].into_iter().collect(), ..MissionConfig::default() };
+    let mut rt = MissionRuntime::from_source_with(
+        "finder.lua",
+        r#"
+        done = false
+        MMM.register(function()
+            if done then return end
+            done = true
+            local before = EntityFinder():find({ odf = 'fx_cruiser' })
+            local f = before[1]
+            Entity.remove(f)
+            Entity.add('fx_cruiser', 0, f.position)
+            Entity.add('fx_frigate', 1, Vector(5, 0, 5))
+            local after = EntityFinder():find({ odf = 'fx_cruiser' })
+            local fr = EntityFinder(function(e) return e:isType(Entity.Type.Craft) and e.player.number == 1 end):findOne()
+            seen = { #before, #after, after[1].pending, after[1].label, fr ~= nil and fr.pending }
+            -- an edit on the pending handle waits for its receipt, it does not raise
+            fr.hull = 50
+        end)
+        "#,
+        17,
+        cfg,
+    );
+    let mut commands = Vec::new();
+    rt.think(&out.view, &out.events, &mut commands);
+    assert!(rt.errors().is_empty(), "{:?}", rt.errors());
+    let seen: (u32, u32, bool, String, bool) = rt.eval("return seen[1], seen[2], seen[3], seen[4], seen[5]").unwrap();
+    assert_eq!(seen, (1, 1, true, "Flagship".to_owned(), true), "the old one is gone to the finder, its replacement is found");
+}

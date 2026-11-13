@@ -27,6 +27,9 @@ pub(crate) struct SpawnHandle {
     pub hint: UnitView,
     /// Updated only by the host's command/receipt lifecycle, never by Lua.
     pub state: Cell<SpawnStatus>,
+    /// The removed entity this spawn replaces (the remove-then-add idiom) and its map label, carried
+    /// over to the new entity when its receipt arrives; the old id gives it up then.
+    pub inherit_label: Option<(EntityId, String)>,
 }
 
 impl EntityRef {

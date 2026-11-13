@@ -369,6 +369,13 @@ impl SkirmishController {
         for e in events {
             self.note_attack(tick, e);
             match e {
+                // The sim ended a move order it could not serve (the stuck-order
+                // watch: no nearer for a long while): forget it, so the next plan
+                // sends the order again. `OrderBlocked` alone is a hold that keeps
+                // the order, so it is not this. Only this seat's craft have a memo.
+                SimEvent::OrderAbandoned { id } => {
+                    self.orders.remove(id);
+                }
                 SimEvent::Rejected { player, seq } if *player == me => {
                     if let Some(s) = self.sent.remove(seq) {
                         for u in &s.units {
@@ -491,13 +498,14 @@ impl SkirmishController {
             Vec3 { x: sum.x / n, y: sum.y / n, z: sum.z / n }
         };
 
-        self.economy(view.tick, me, &own, out);
+        self.economy(view, me, &own, out);
         self.mine(view.tick, me, &own, home, out);
         self.military(view.tick, &own, &foes, &stations, home, out);
     }
 
     /// Orders for the builders: yards queue units, rigs deploy stations.
-    fn economy(&mut self, tick: Tick, me: &PlayerView, own: &[Own], out: &mut Vec<Command>) {
+    fn economy(&mut self, view: &WorldView, me: &PlayerView, own: &[Own], out: &mut Vec<Command>) {
+        let tick = view.tick;
         let db = Arc::clone(&self.cfg.content);
         let rows = self.cfg.params.build_list.clone();
         let mut total: BTreeMap<ContentKey, usize> = BTreeMap::new();
@@ -636,19 +644,40 @@ impl SkirmishController {
             .iter()
             .filter(|o| o.role == Role::Rig && o.finished && !o.welding && !self.rig_jobs.contains_key(&o.id))
             .collect();
+        // Orbit slots of planets, nearest to a rig first; each is used once.
+        let (planets, mut taken) = sta_sim::production::orbit::from_view(&db, view);
+        let orbit_site = |taken: &[Vec3], from: Vec3| -> Option<Vec3> {
+            let mut order: Vec<_> = planets.iter().collect();
+            order.sort_by_key(|p| {
+                let (dx, dz) = (p.pos.x - from.x, p.pos.z - from.z);
+                (dx.abs() + dz.abs(), p.id)
+            });
+            order.into_iter().find_map(|p| sta_sim::production::orbit::snap(&planets, taken, p.pos).ok()).map(|slot| slot.at)
+        };
         for r in idle_rigs {
             let opts = buildable(r.def);
             let want = rows
                 .iter()
                 .filter_map(|row| db.key(&sta_content::techtree::stem(&row.unit)))
                 .find(|&k| {
-                    opts.contains(&k) && is_station(&db, k) && list_limit(k).is_some_and(|lim| total.get(&k).copied().unwrap_or(0) < lim)
+                    opts.contains(&k)
+                        && is_station(&db, k)
+                        && list_limit(k).is_some_and(|lim| total.get(&k).copied().unwrap_or(0) < lim)
+                        // An orbital station needs a free planet orbit (SIM-62).
+                        && (!db.unit(k).is_some_and(sta_sim::production::orbit::is_orbital) || orbit_site(&taken, r.pos).is_some())
                 });
             let Some(what) = want.filter(|&k| affordable(k, &reserve)) else { continue };
             spend(what, &mut reserve);
             *total.entry(what).or_default() += 1;
-            let at = self.site(self.sites_used);
-            self.sites_used += 1;
+            let at = if db.unit(what).is_some_and(sta_sim::production::orbit::is_orbital) {
+                let at = orbit_site(&taken, r.pos).expect("checked above");
+                taken.push(at);
+                at
+            } else {
+                let at = self.site(self.sites_used);
+                self.sites_used += 1;
+                at
+            };
             self.issue(tick, out, vec![r.id], Order::Build { builder: r.id, what, at: Some(at) }, None, Some(r.id));
             self.rig_jobs.insert(r.id, (what, tick));
         }

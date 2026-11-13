@@ -135,24 +135,55 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
             return Err(mlua::Error::runtime("A1.PlayBridgeMovie requires a movie name"));
         }
         e.present("PlayBridgeMovie", Presentation::Movie { name: name.to_owned(), in_panel: true, skippable: true })?;
-        e.st.borrow_mut().movie_playing = true;
+        let tick = e.ctx.borrow().view.tick;
+        let mut st = e.st.borrow_mut();
+        st.movie_playing = true;
+        st.started.retain(|s| s.0 != "movie");
+        st.started.push(("movie", 0, name.to_owned(), tick));
         Ok(Value::Nil)
     })?)?;
     table.set("StopMovie", def(lua, env, "StopMovie", &[""], |_, e, _, _| {
         e.present("StopMovie", Presentation::StopMovie)?;
-        e.st.borrow_mut().movie_playing = false;
+        let mut st = e.st.borrow_mut();
+        st.movie_playing = false;
+        st.started.retain(|s| s.0 != "movie");
         Ok(Value::Nil)
     })?)?;
     table.set("IsMoviePlaying", def(lua, env, "IsMoviePlaying", &[""], |_, e, _, _| {
         Ok(Value::Boolean(e.st.borrow().movie_playing))
     })?)?;
-    // Host-side completion reports (not DLL calls).
+    // Host-side completion reports (not DLL calls). `HostPending()` lists what a
+    // host must still report, `{kind, id, name, tick}` oldest first: sounds not
+    // yet done or stopped and a movie still playing (as `A2.HostPending`).
+    table.set("HostPending", def(lua, env, "HostPending", &[""], |lua, e, _, _| {
+        let mut st = e.st.borrow_mut();
+        let (sounds, movie) = (st.sounds_active.clone(), st.movie_playing);
+        st.started.retain(|s| match s.0 {
+            "sound" => u32::try_from(s.1).is_ok_and(|id| sounds.contains(&id)),
+            _ => movie,
+        });
+        let out = lua.create_table()?;
+        for (i, (kind, id, name, tick)) in st.started.iter().enumerate() {
+            let row = lua.create_table()?;
+            row.set("kind", *kind)?;
+            row.set("id", *id)?;
+            row.set("name", name.as_str())?;
+            row.set("tick", *tick)?;
+            out.set(i + 1, row)?;
+        }
+        Ok(Value::Table(out))
+    })?)?;
     table.set("MovieDone", def(lua, env, "MovieDone", &[""], |_, e, _, _| {
-        e.st.borrow_mut().movie_playing = false;
+        let mut st = e.st.borrow_mut();
+        st.movie_playing = false;
+        st.started.retain(|s| s.0 != "movie");
         Ok(Value::Nil)
     })?)?;
     table.set("AudioMessageDone", def(lua, env, "AudioMessageDone", &["i"], |_, e, _, a| {
-        e.st.borrow_mut().sounds_active.remove(&(a[0].int() as u32));
+        let mut st = e.st.borrow_mut();
+        st.sounds_active.remove(&(a[0].int() as u32));
+        let active = st.sounds_active.clone();
+        st.started.retain(|s| s.0 != "sound" || u32::try_from(s.1).is_ok_and(|id| active.contains(&id)));
         Ok(Value::Nil)
     })?)?;
 
@@ -205,11 +236,18 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
             id
         };
         e.present("AudioMessage", Presentation::Sound { id, name: a[0].text().to_owned(), at: None })?;
+        let tick = e.ctx.borrow().view.tick;
+        e.st.borrow_mut().started.push(("sound", i64::from(id), a[0].text().to_owned(), tick));
         Ok(Value::Integer(i64::from(id)))
     })?)?;
     table.set("StopAudioMessage", def(lua, env, "StopAudioMessage", &["i"], |_, e, _, a| {
-        let id = u32::try_from(a[0].int()).map_err(|_| mlua::Error::runtime("A1.StopAudioMessage requires a sound id"))?;
-        e.st.borrow_mut().sounds_active.remove(&id);
+        // The engine looks the id up in its playing sounds and does nothing when
+        // it is absent (read from Armada.exe, static): the missions stop handles
+        // still holding their -1 start value.
+        let Ok(id) = u32::try_from(a[0].int()) else { return Ok(Value::Nil) };
+        if !e.st.borrow_mut().sounds_active.remove(&id) {
+            return Ok(Value::Nil);
+        }
         e.present("StopAudioMessage", Presentation::StopSound { id })?;
         Ok(Value::Nil)
     })?)?;

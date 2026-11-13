@@ -1374,3 +1374,15 @@ fn section_reports_from_a_peer_are_bounded() {
     assert_eq!(kept, sta_net::lockstep::DIGESTS_KEPT);
     assert!(!r.sections_at(3 * 999).is_empty() && r.sections_at(0).is_empty());
 }
+
+#[test]
+fn a_peer_records_how_its_seats_got_their_starting_forces() {
+    use sta_sim::replay::StartRec;
+    let mut r = room(2, cfg(3, 2));
+    assert_eq!(r.peers[0].replay().starts, StartRec::Bare);
+    r.peers[0].set_starts(StartRec::Races { loadouts: 0xfeed });
+    assert_eq!(r.peers[0].replay().starts, StartRec::Races { loadouts: 0xfeed });
+    // It survives the replay's own encoding, which is what a desync report is.
+    let back = Replay::decode(&r.peers[0].replay().encode()).expect("a replay");
+    assert_eq!(back.starts, StartRec::Races { loadouts: 0xfeed });
+}

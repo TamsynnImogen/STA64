@@ -1,3 +1,9 @@
+//! Under the Stock profile (RND-23) a planet is drawn as the engine draws it: the same ground
+//! hemispheres and cloud shell, each texel times the sum of the map's lights (every directional
+//! light of the two the map view places, at its colour, equal weight, plus [`STOCK_AMBIENT`]) added in display (sRGB) space as
+//! Direct3D 8's fixed pipeline does; no recipe surface, haze, glint or halo (`planet.wesl`, `stock`).
+//! The rest of this header is the Refit look.
+//!
 //! Planet bodies with Armada II Refit's planet look (see `planet.wesl`): the engine's
 //! two ground hemispheres and cloud shell (`space::sphere`), shaded by a material of
 //! our own that lights them with the map's key and fill lights, plus the air past
@@ -8,6 +14,7 @@
 //! in half the ground's own hue and half sky blue, glint 0.3^40, halo 1.0 reaching
 //! 4% of the radius above the ground, x2 brighter looking toward the sun.
 
+use crate::render::profile::{Effect, ProfileEffects, RenderProfile};
 use crate::render::space;
 use crate::render::textures::Loader;
 use bevy::asset::{embedded_asset, AssetPath};
@@ -32,6 +39,9 @@ const GLOW: f32 = 1.5;
 const GLOW_RANGE: f32 = 6.0;
 /// The map's key light (lux), which the glows are calibrated against.
 pub const KEY_LUX: f32 = 6000.0;
+/// Stock look: the constant term the lights are added to (the maps' own ambient is 0 on every
+/// map read; not measured on the engine, tuned against the original's frames).
+pub const STOCK_AMBIENT: f32 = 0.0;
 
 /// A planet's glow light: kept on the planet's day side.
 #[derive(Component)]
@@ -87,6 +97,14 @@ impl Material for PlanetMaterial {
     fn alpha_mode(&self) -> AlphaMode {
         self.alpha
     }
+    // No prepass: under the map camera's `DepthPrepass` the opaque ground wrote its depth in the prepass but
+    // drew nothing in the main pass (the planet was an empty disc with only the shell's rim around it).
+    fn enable_prepass() -> bool {
+        false
+    }
+    fn enable_shadows() -> bool {
+        false
+    }
 }
 
 /// A planet's materials, updated each frame with the camera and the lights.
@@ -102,6 +120,16 @@ pub struct PlanetBody {
     applied: Option<(bool, bool, f32)>,
 }
 
+/// Whether the Stock look is the one drawing planets. Apps without the profile resources (the front end's
+/// own frame app) draw the Refit look, as `profile::ProfileEffects::implementation` falls back.
+fn stock_scenery(profile: Option<&RenderProfile>, effects: Option<&ProfileEffects>) -> bool {
+    matches!((profile, effects), (Some(p), Some(e)) if e.implementation(*p, Effect::Scenery) == RenderProfile::Stock)
+}
+
+fn refit_scenery(profile: Option<Res<RenderProfile>>, effects: Option<Res<ProfileEffects>>) -> bool {
+    !stock_scenery(profile.as_deref(), effects.as_deref())
+}
+
 pub struct PlanetPlugin;
 
 impl Plugin for PlanetPlugin {
@@ -109,7 +137,7 @@ impl Plugin for PlanetPlugin {
         embedded_asset!(app, "planet.wesl");
         app.add_plugins(MaterialPlugin::<PlanetMaterial>::default())
             .init_resource::<crate::render::surfaces::Surfaces>()
-            .add_systems(Update, ((crate::render::surfaces::poll, apply_surfaces).chain(), place_glows))
+            .add_systems(Update, ((crate::render::surfaces::poll, apply_surfaces).chain().run_if(refit_scenery), place_glows))
             .add_systems(PostUpdate, update.after(TransformSystems::Propagate));
     }
 }
@@ -204,12 +232,14 @@ pub fn spawn(
     }
     if !atmosphere.is_empty() {
         let tex = loader.colour(atmosphere, false);
-        if tex.is_none() {
+        let tex_missing = tex.is_none();
+        if tex_missing {
             missing.push(atmosphere.to_owned());
         }
         let shell_r = if ground.is_empty() { radius } else { radius * 1.01 };
         let m = materials.add(PlanetMaterial {
-            params: PlanetParams { mode: Vec4::new(1.0, 0.0, 0.0, 0.0), ..params },
+            // mode.w: 1 when the shell's texture was not found (the Stock look then draws no shell).
+            params: PlanetParams { mode: Vec4::new(1.0, 0.0, 1.0, if tex_missing { 1.0 } else { 0.0 }), ..params },
             texture: tex,
             albedo: None,
             relief: None,
@@ -229,7 +259,7 @@ pub fn spawn(
             let top = radius * (1.0 + HALO_HEIGHT);
             let m = materials.add(PlanetMaterial {
                 params: PlanetParams {
-                    mode: Vec4::new(2.0, 0.0, 0.0, 0.0),
+                    mode: Vec4::new(2.0, 0.0, 2.0, 0.0),
                     halo: Vec4::new(radius, top, HALO, HALO_FORWARD),
                     ..params
                 },
@@ -301,7 +331,7 @@ fn apply_surfaces(
         }
         let set_surface = |m: &mut PlanetMaterial, b: &crate::render::surfaces::Baked| {
             let r = &b.recipe;
-            m.params.mode = Vec4::new(3.0, 0.0, 0.0, 0.0);
+            m.params.mode.x = 3.0;
             m.params.surf_glow = Vec4::from(r.glow);
             m.params.surf_cloud = Vec4::from(r.cloud_colour);
             m.params.surf_drift = Vec4::new(1.0, 0.0, r.cloud_shadow[0], r.cloud_shadow[1]);
@@ -360,14 +390,25 @@ fn update(
     planets: Query<(&GlobalTransform, &PlanetBody)>,
     mut materials: ResMut<Assets<PlanetMaterial>>,
     clock: Res<crate::clock::AnimClock>,
+    profile: Option<Res<RenderProfile>>,
+    effects: Option<Res<ProfileEffects>>,
 ) {
+    let stock = stock_scenery(profile.as_deref(), effects.as_deref());
     let Ok(cam) = camera.single() else { return };
     // Brightest light first: the key.
     let mut ls: Vec<(Vec3, Vec3, f32)> = lights
         .iter()
         .map(|(t, l)| {
-            let c = l.color.to_linear();
-            (t.back().as_vec3(), Vec3::new(c.red, c.green, c.blue), l.illuminance)
+            // Stock multiplies display-space values (as the engine's fixed pipeline does), so its light
+            // colour is the map's own sRGB value; Refit's shader works in linear.
+            let c = if stock {
+                let c = l.color.to_srgba();
+                Vec3::new(c.red, c.green, c.blue)
+            } else {
+                let c = l.color.to_linear();
+                Vec3::new(c.red, c.green, c.blue)
+            };
+            (t.back().as_vec3(), c, l.illuminance)
         })
         .collect();
     ls.sort_by(|a, b| b.2.total_cmp(&a.2));
@@ -380,9 +421,12 @@ fn update(
             let p = &mut m.params;
             p.centre = centre.extend(1.0);
             p.eye = cam.translation().extend(1.0);
-            p.dcol0 = (key.1 * SUN).extend(SUN);
+            p.mode.y = stock as u32 as f32;
+            let (k, f) = if stock { (1.0, 1.0) } else { (SUN, FILL) };
+            p.dcol0 = (key.1 * k).extend(k);
             p.dvec0 = key.0.extend(0.0);
-            p.dcol1 = (fill.1 * FILL).extend(0.0);
+            p.dcol1 = (fill.1 * f).extend(0.0);
+            p.base.w = STOCK_AMBIENT;
             p.dvec1 = fill.0.extend(0.0);
             if let Some((_, _, drift)) = body.applied {
                 // The clouds drift about the pole on the clock.
@@ -412,5 +456,72 @@ mod tests {
         naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
             .validate(&module)
             .unwrap_or_else(|e| panic!("{e:?}"));
+    }
+
+    /// The cause of the "huge rings": under the map camera's `DepthPrepass` the opaque ground wrote
+    /// depth in the prepass and drew nothing in the main pass. Planets take no prepass.
+    #[test]
+    fn planet_material_takes_no_prepass() {
+        assert!(!<super::PlanetMaterial as bevy::pbr::Material>::enable_prepass());
+    }
+
+    /// `AlphaMode::Add` is Bevy's premultiplied blend (src + dst * (1 - alpha)): a halo that returns
+    /// alpha 1 replaces what is behind it with black instead of adding to it.
+    #[test]
+    fn halo_adds_with_alpha_zero() {
+        let src = include_str!("planet.wesl");
+        let halo = src.split("fn halo_light").nth(1).unwrap().split("\n}\n").next().unwrap();
+        assert!(halo.contains("p.shine.w, 0.0)"), "{halo}");
+    }
+
+    fn run_update(profile: super::RenderProfile) -> super::PlanetParams {
+        use super::*;
+        let mut app = App::new();
+        let mut effects = ProfileEffects::default();
+        effects.register_stock(Effect::Scenery);
+        app.insert_resource(effects)
+            .insert_resource(profile)
+            .insert_resource(crate::clock::AnimClock::new(crate::clock::ClockMode::Wall, 1))
+            .init_resource::<Assets<PlanetMaterial>>()
+            .add_systems(Update, update);
+        let handle = app.world_mut().resource_mut::<Assets<PlanetMaterial>>().add(PlanetMaterial {
+            params: base_params(),
+            texture: None,
+            albedo: None,
+            relief: None,
+            clouds: None,
+            alpha: AlphaMode::Opaque,
+        });
+        app.world_mut().spawn((Camera3d::default(), GlobalTransform::from(Transform::from_xyz(0.0, 0.0, 10.0))));
+        let light = |lux: f32, colour: Color, from: Vec3| {
+            (DirectionalLight { illuminance: lux, color: colour, ..default() }, GlobalTransform::from(Transform::IDENTITY.looking_to(-from, Vec3::Y)))
+        };
+        app.world_mut().spawn(light(6000.0, Color::srgb(1.0, 0.5, 0.25), Vec3::Y));
+        app.world_mut().spawn(light(1500.0, Color::srgb(0.2, 0.4, 1.0), Vec3::NEG_Y));
+        app.world_mut().spawn((
+            GlobalTransform::IDENTITY,
+            PlanetBody { materials: vec![handle.clone()], ground: vec![], shell: None, ground_name: String::new(), atmo_name: String::new(), applied: None },
+        ));
+        app.update();
+        app.world().resource::<Assets<PlanetMaterial>>().get(&handle).unwrap().params
+    }
+
+    /// Stock: every map light at its own (sRGB) colour and full weight (the engine's fixed pipeline). Refit
+    /// keeps its linear colours, key x1.2 and fill x0.315.
+    #[test]
+    fn stock_lights_planets_with_both_map_lights_at_full_weight() {
+        use bevy::prelude::*;
+        let stock = run_update(super::RenderProfile::Stock);
+        assert_eq!(stock.mode.y, 1.0);
+        let (k, f) = (stock.dcol0.truncate(), stock.dcol1.truncate());
+        let c = |c: Color| { let l = c.to_srgba(); Vec3::new(l.red, l.green, l.blue) };
+        assert!(k.abs_diff_eq(c(Color::srgb(1.0, 0.5, 0.25)), 1e-5), "{k:?}");
+        assert!(f.abs_diff_eq(c(Color::srgb(0.2, 0.4, 1.0)), 1e-5), "{f:?}");
+        assert!(stock.dvec0.truncate().abs_diff_eq(Vec3::Y, 1e-5) && stock.dvec1.truncate().abs_diff_eq(Vec3::NEG_Y, 1e-5));
+        let refit = run_update(super::RenderProfile::Refit);
+        assert_eq!(refit.mode.y, 0.0);
+        assert!((refit.dcol0.w - super::SUN).abs() < 1e-6);
+        let lin = Color::srgb(0.2, 0.4, 1.0).to_linear();
+        assert!((refit.dcol1.x - lin.red * super::FILL).abs() < 1e-5, "Refit keeps linear light colours");
     }
 }

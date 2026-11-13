@@ -13,6 +13,12 @@ use crate::ui::notices::Tooltip;
 use crate::ui::sprite_font::{ScalableText, SpriteText, sprite_text};
 use crate::ui::theme::{Theme, UiButton, WidgetState};
 
+#[path = "identity.rs"]
+mod identity;
+
+#[cfg(test)]
+pub(in crate::ui::hud) use identity::{IdentityField, IdentityText};
+
 #[derive(Component, Clone, Copy)]
 pub(in crate::ui::hud) enum StockText {
     Resource(usize),
@@ -47,7 +53,7 @@ fn picture(commands: &mut Commands, root: Entity, r: R, name: &str, frame: usize
         .with_child((node(r), Pickable::IGNORE, GuiImage::new(name).with_frame(frame)));
 }
 
-fn text(commands: &mut Commands, root: Entity, r: R, value: String, color: Color, size: f32, kind: Option<StockText>) {
+fn text(commands: &mut Commands, root: Entity, r: R, value: String, color: Color, size: f32, kind: Option<StockText>) -> Entity {
     // SpriteFontPlugin replaces the SpriteText entity's Node while resolving glyphs.
     // Keep authored placement on a separate parent that it never rewrites.
     let wrapper = commands.spawn((node(r), Pickable::IGNORE)).id();
@@ -58,6 +64,7 @@ fn text(commands: &mut Commands, root: Entity, r: R, value: String, color: Color
     let child = e.id();
     commands.entity(wrapper).add_child(child);
     commands.entity(root).add_child(wrapper);
+    child
 }
 
 fn bar(commands: &mut Commands, root: Entity, r: R, value: f32, color: Color, kind: StockBar) {
@@ -274,6 +281,7 @@ fn spawn_single(
             None,
         );
     }
+    identity::spawn(commands, root, layout, theme, origin, single);
     if let Some(r) = wireframe_rect(layout, origin, single.builder)
         && let Some(unit) = feed.view.unit(single.id)
         && let Some(def) = feed.content.as_deref().and_then(|db| db.unit(unit.def))

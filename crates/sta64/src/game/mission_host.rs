@@ -248,6 +248,18 @@ pub struct MissionRun {
     pub close_at: Option<u64>,
     /// `LeaveMatch` was written.
     pub leaving: bool,
+    /// Script errors already looked at (see [`is_fault`]).
+    pub errors_seen: usize,
+    /// The names of the unbound and unsupported uses behind a loss, when the mission ended in a
+    /// loss after any: it is blocked, not lost (`sta_mission::blocked`).
+    pub blocked: Option<String>,
+}
+
+/// Whether a script error is a fault that ends the script's callback (so a cineractive it would
+/// have ended may never end): every error but an edit the sim rejected, which is reported and
+/// does not raise.
+pub fn is_fault(error: &str) -> bool {
+    !error.contains("simulation rejected")
 }
 
 /// The answers to the script, from the client, and the audio acknowledgement.
@@ -328,7 +340,7 @@ fn on_start_mission(
     }
     commands.insert_resource(MapSeat(Some(launch.player().0)));
     commands.insert_resource(ActiveMatch { setup: launch.placeholder(data.content.clone()), requested: false, frames: 0 });
-    commands.insert_resource(MissionRun { campaign, mission, began: false, outcome: None, close_at: None, leaving: false });
+    commands.insert_resource(MissionRun { campaign, mission, began: false, outcome: None, close_at: None, leaving: false, errors_seen: 0, blocked: None });
     commands.insert_resource(launch);
     next.set(AppState::Loading);
 }
@@ -350,13 +362,24 @@ fn run_mission(
     handle: Res<MissionHandle>,
     link: Res<SimLink>,
     mut run: ResMut<MissionRun>,
-    mut replies: MessageReader<ScriptReply>,
+    mut replies: ParamSet<(MessageReader<ScriptReply>, MessageWriter<ScriptReply>)>,
     mut view: Option<ResMut<ObjectivesView>>,
     log: Option<Res<MissionMovieLog>>,
     mut leave: MessageWriter<LeaveMatch>,
 ) {
     let tick = link.curr().tick;
-    for r in replies.read() {
+    // A script that faults may have lost the callback that ends its cineractive: give the player
+    // the camera back (the camera, the presentation state and the script hear the same reply).
+    let faults = handle.with(|rt| {
+        let e = rt.errors();
+        (e.len(), e.iter().skip(run.errors_seen).any(|x| is_fault(x)))
+    });
+    run.errors_seen = faults.0;
+    if faults.1 {
+        warn!("mission: the script raised an error; any cineractive it holds is released");
+        replies.p1().write(ScriptReply::CineractiveSkipped);
+    }
+    for r in replies.p0().read() {
         handle.with(|rt| deliver_reply_host_side(rt, r));
     }
     if let Some(v) = view.as_mut() {
@@ -369,6 +392,14 @@ fn run_mission(
     if run.outcome.is_none()
         && let Some(o) = handle.with(|rt| scan_outcome(rt, tick))
     {
+        let gaps = handle.with(sta_mission::blocked::gaps);
+        if sta_mission::blocked::is_blocked(o.won, &gaps) {
+            let why = sta_mission::blocked::summary(&gaps);
+            warn!("mission: {} ended in a loss after unsupported calls ({why}): blocked, not counted", run.campaign);
+            run.blocked = Some(why);
+        }
+        // The mission is over: nothing it holds outlives it.
+        replies.p1().write(ScriptReply::CineractiveSkipped);
         info!("mission: {} {} at tick {tick} (closes after {}s)", run.campaign, if o.won { "won" } else { "lost" }, o.delay);
         run.close_at = Some(tick.saturating_add((o.delay.clamp(0.0, 600.0) * f64::from(TICK_HZ)).ceil() as u64));
         run.outcome = Some(o);
@@ -396,6 +427,7 @@ fn finish_mission(
     fade: Option<ResMut<crate::ui::presentation::FadeState>>,
     cineractive: Option<ResMut<crate::ui::presentation::CineractiveState>>,
     camera: Option<ResMut<crate::input::camera_cinematic::CinematicCamera>>,
+    mut notices: MessageWriter<Notice>,
 ) {
     let Some(run) = run else { return };
     commands.remove_resource::<MissionRun>();
@@ -406,7 +438,7 @@ fn finish_mission(
         *v = ObjectivesView::default();
     }
     if let Some(mut t) = titles {
-        *t = default();
+        t.clear();
     }
     if let Some(mut f) = fade {
         *f = default();
@@ -427,6 +459,11 @@ fn finish_mission(
     }
     let result = match run.outcome {
         Some(o) if o.won => RunResult::Won,
+        // Blocked: STA64 could not do what the script needed, so the player did not lose.
+        Some(_) if run.blocked.is_some() => {
+            notices.write(Notice::new(Severity::Warn, format!("This mission cannot be finished yet: its script reached calls STA64 does not support ({}). It was not counted as a loss.", run.blocked.as_deref().unwrap_or_default())));
+            RunResult::Abandoned
+        }
         Some(_) => RunResult::Lost,
         None => RunResult::Abandoned,
     };
@@ -481,13 +518,46 @@ impl MissionHost for ClientHost {
 /// install has no campaign mission (Fleet Ops 4.0 and Dominion War list none) or cannot be mounted
 /// again for the scripts. Progress is read from the platform config directory.
 pub fn load_campaigns(vfs: &sta_vfs::Vfs, install_root: Option<&std::path::Path>, active_mod: Option<&str>) -> Option<(Campaigns, MissionMovies)> {
-    load_campaigns_in(vfs, install_root, active_mod, ProgressStore::platform)
+    // The conversion covers the base game only (D6: a mod's chain is not converted).
+    let converted = install_root.filter(|_| active_mod.is_none_or(str::is_empty)).and_then(|r| crate::platform::converted_missions_dir(r, None));
+    load_campaigns_with(vfs, install_root, active_mod, converted.as_deref(), ProgressStore::platform)
 }
 
-/// [`load_campaigns`] with the progress store given (tests keep the player's file out of it).
+/// [`load_campaigns`] without the user's converted missions, and with the progress store
+/// given (tests keep the player's files out of it).
 pub fn load_campaigns_in(vfs: &sta_vfs::Vfs, install_root: Option<&std::path::Path>, active_mod: Option<&str>, store: impl FnOnce(&CampaignBook) -> ProgressStore) -> Option<(Campaigns, MissionMovies)> {
+    load_campaigns_with(vfs, install_root, active_mod, None, store)
+}
+
+/// The command that converts an install's missions (shown by the missions screen).
+pub fn convert_hint(install_root: &std::path::Path) -> String {
+    format!("Run once from the STA64 checkout, then restart: python3 tools/convert_install_missions.py --install \"{}\"", install_root.display())
+}
+
+/// [`load_campaigns_in`] with the converted-missions folder `converted` (when it holds
+/// scripts) mounted below the install: maps with no Lua of their own run the converted one,
+/// marked experimental (D6: the layer follows the install and mod it was made for; the
+/// install's own scripts win). Without it, missions that wait for a conversion carry the
+/// command to run.
+pub fn load_campaigns_with(
+    vfs: &sta_vfs::Vfs,
+    install_root: Option<&std::path::Path>,
+    active_mod: Option<&str>,
+    converted: Option<&std::path::Path>,
+    store: impl FnOnce(&CampaignBook) -> ProgressStore,
+) -> Option<(Campaigns, MissionMovies)> {
     let t0 = std::time::Instant::now();
-    let book = CampaignBook::load_vfs(vfs);
+    let mut host_vfs = match sta_vfs::Vfs::mount_install(install_root?, active_mod) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!("campaigns: cannot mount the install for the mission scripts: {e}");
+            return None;
+        }
+    };
+    let own: std::collections::BTreeSet<String> = host_vfs.list("missions").into_iter().map(|p| p.to_ascii_lowercase()).collect();
+    let mounted = converted.filter(|d| sta_mission::converted::mount(&mut host_vfs, d));
+    // The book reads the same layers the scripts will be read from.
+    let book = CampaignBook::load_vfs(&host_vfs);
     for w in &book.warnings {
         warn!("campaigns: {w}");
     }
@@ -496,16 +566,19 @@ pub fn load_campaigns_in(vfs: &sta_vfs::Vfs, install_root: Option<&std::path::Pa
         info!("campaigns: none in this install");
         return None;
     }
-    let host_vfs = match sta_vfs::Vfs::mount_install(install_root?, active_mod) {
-        Ok(v) => v,
-        Err(e) => {
-            warn!("campaigns: cannot mount the install for the mission scripts: {e}");
-            return None;
-        }
-    };
     let movies = MissionMovies::from_book(&book, vfs);
     let store = store(&book);
-    let campaigns = Campaigns::new(book, Arc::new(ClientHost::new(Arc::new(host_vfs))), store);
+    let mut campaigns = Campaigns::new(book, Arc::new(ClientHost::new(Arc::new(host_vfs))), store);
+    if let Some(dir) = mounted {
+        campaigns.mark_converted(dir, &own);
+        info!("campaigns: {} missions run converted scripts from {} (experimental)", campaigns.experimental.len(), dir.display());
+    } else if campaigns.awaits_conversion()
+        && active_mod.is_none_or(str::is_empty)
+        && let Some(root) = install_root
+    {
+        campaigns.convert_hint = Some(convert_hint(root));
+        info!("campaigns: missions wait for a Lua conversion; {}", campaigns.convert_hint.as_deref().unwrap_or_default());
+    }
     if let Some(w) = &campaigns.load_warning {
         warn!("campaigns: saved progress not used: {w}");
     }
@@ -529,7 +602,14 @@ impl Plugin for MissionHostPlugin {
                 Update,
                 (
                     on_start_mission.run_if(in_state(AppState::FrontEnd)).run_if(resource_exists::<ScreenData>),
-                    run_mission.run_if(in_state(AppState::InGame)).run_if(resource_exists::<MissionHandle>).run_if(resource_exists::<MissionRun>).run_if(resource_exists::<SimLink>),
+                    // Before the presentation systems, so a release it writes is applied in the same
+                    // frame, ahead of anything the sim raises in the next.
+                    run_mission
+                        .run_if(in_state(AppState::InGame))
+                        .run_if(resource_exists::<MissionHandle>)
+                        .run_if(resource_exists::<MissionRun>)
+                        .run_if(resource_exists::<SimLink>)
+                        .before(crate::ui::presentation::consume),
                 )
                     .in_set(GameSet::Ui),
             );

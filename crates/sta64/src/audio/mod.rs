@@ -15,6 +15,7 @@
 mod mixer;
 mod music;
 mod null;
+mod resilient;
 mod sfx;
 mod ui;
 mod voices;
@@ -25,7 +26,8 @@ use std::sync::Arc;
 use bevy::prelude::*;
 use bevy::time::Real;
 
-pub use mixer::{AudioBackend, KiraAudio, MixBus, Mixer, Sound, Volumes};
+pub use mixer::{AudioBackend, KiraAudio, MixBus, Mixer, Sound, StreamFault, Volumes};
+pub use resilient::{Policy, Resilient};
 pub use music::{Context as MusicContext, MusicConfig, MusicPlugin};
 pub use null::{Call, CallLog, NullAudio};
 pub use sfx::{SfxConfig, SfxNames, SfxPlugin, VoiceLimiter};
@@ -43,6 +45,11 @@ pub trait SoundResolver: Send + Sync {
     /// any. [`VoicePlugin`] sets it from the local player's units. Resolvers that do not
     /// know races ignore it.
     fn set_race(&mut self, _race: Option<&str>) {}
+
+    /// The race last given to [`SoundResolver::set_race`].
+    fn race(&self) -> Option<String> {
+        None
+    }
 }
 
 /// Resolves nothing and says so once: without an install there is no sound data (AUD-06).
@@ -111,6 +118,10 @@ impl SoundResolver for BankResolver {
         self.race = race.map(str::to_owned);
     }
 
+    fn race(&self) -> Option<String> {
+        self.race.clone()
+    }
+
     fn resolve(&mut self, name: &str) -> Option<Sound> {
         self.variant = self.variant.wrapping_add(1);
         match self.bank.audio(&self.vfs, name, self.race.as_deref(), self.variant) {
@@ -154,13 +165,8 @@ pub fn choose_backend(mode: Mode) -> Box<dyn AudioBackend> {
     if !mode.has_window() {
         return Box::new(NullAudio::new().0);
     }
-    match KiraAudio::new() {
-        Ok(k) => Box::new(k),
-        Err(e) => {
-            warn!("audio: no output device ({e}); sound is off");
-            Box::new(NullAudio::new().0)
-        }
-    }
+    // Opens now; a missing device or a later stream error leaves null audio and retries.
+    Box::new(Resilient::new(Box::new(|| KiraAudio::new().map(|k| Box::new(k) as Box<dyn AudioBackend>)), Policy::default()))
 }
 
 /// Adds the mixer (unless one is already inserted), volumes and the playback systems.
@@ -185,12 +191,27 @@ impl Plugin for AudioPlugin {
             .add_message::<PlaySound>()
             .init_resource::<Volumes>()
             .insert_resource(Resolver(Box::new(StubResolver::default())))
+            .add_message::<crate::frontend::screens::ModChosen>()
+            .add_systems(Update, remount_sound.in_set(GameSet::Audio).before(play_sounds))
             .add_systems(Update, (sync_volumes, sync_listener, play_sounds, audio_test_key).chain().in_set(GameSet::Audio));
         // Manual check: `sta64 --audio-test` plays a tone on each bus at startup, F9 repeats it.
         if tones {
             app.add_systems(Startup, test_tones);
         }
     }
+}
+
+/// The front end's "use mod" remounts the install (`game::flow`); the sound tables follow. The
+/// resolver owns its own mount, so without this it keeps the events and files of the mount the
+/// game started with and every event name the new mod's ODFs give misses (the Classic mod's
+/// units went silent on a Roots start). The race the voices set is kept.
+fn remount_sound(mut chosen: MessageReader<crate::frontend::screens::ModChosen>, flow: Option<Res<crate::game::flow::FlowConfig>>, mut resolver: ResMut<Resolver>, mut commands: Commands) {
+    let Some(crate::frontend::screens::ModChosen(folder)) = chosen.read().last().cloned() else { return };
+    let Some(root) = flow.and_then(|f| f.install_root.clone()) else { return };
+    let Some(mut fresh) = BankResolver::mount(&root, folder.as_deref()) else { return };
+    fresh.race = resolver.0.race();
+    commands.insert_resource(fresh.ui_sounds());
+    resolver.0 = Box::new(fresh);
 }
 
 fn sync_volumes(volumes: Res<Volumes>, mut mixer: NonSendMut<Mixer>, mut sent: Local<Option<Volumes>>) {
@@ -348,6 +369,112 @@ mod tests {
         }
     }
 
+    /// A mono 8 kHz 8-bit wav of `n` samples (authored here, not a game file).
+    fn wav(n: usize) -> Vec<u8> {
+        let mut w = format!("RIFF\0\0\0\0WAVEfmt ").into_bytes();
+        w.extend([16, 0, 0, 0, 1, 0, 1, 0, 0x40, 0x1f, 0, 0, 0x40, 0x1f, 0, 0, 1, 0, 8, 0]);
+        w.extend(b"data");
+        w.extend((n as u32).to_le_bytes());
+        w.extend(std::iter::repeat_n(200u8, n));
+        w
+    }
+
+    /// The front end's mod switch (`ModChosen`) moves the resolver to the new mount and back:
+    /// a Classic-style mod whose event names the base game lacks must not stay silent.
+    #[test]
+    fn a_mod_switch_remounts_the_sound_tables() {
+        use crate::frontend::screens::ModChosen;
+        let dir = std::env::temp_dir().join(format!("sta64-voices-remount-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let data = dir.join("Data");
+        let modd = data.join("Mods/Plain Mod");
+        for d in [data.join("sounds/voiceover/ingame"), modd.join("sounds/voiceover/ingame")] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(data.join("sounds/voiceover/ingame/basehail.wav"), wav(3)).unwrap();
+        std::fs::write(modd.join("sounds/voiceover/ingame/modhail.wav"), wav(5)).unwrap();
+        std::fs::write(data.join("events.dat"), "BaseHail{\nTable\n\tSound <unitedfederation> \"basehail.wav\"\n}\n").unwrap();
+        std::fs::write(modd.join("events.dat"), "ModHail{\nTable\n\tSound <federation> \"modhail.wav\"\n}\n").unwrap();
+        std::fs::write(modd.join("info.ini"), "[Mod]\nstandalone = 1\n").unwrap();
+
+        let (null, _log) = NullAudio::new();
+        let mut app = App::new();
+        app.insert_non_send(Mixer::new(Box::new(null)));
+        app.add_plugins(AudioPlugin::default());
+        app.insert_resource(crate::game::flow::FlowConfig { install_root: Some(dir.clone()) });
+        let mut base = BankResolver::mount(&dir, None).unwrap();
+        base.set_race(Some("federation"));
+        app.insert_resource(Resolver(Box::new(base)));
+        app.update();
+        let frames = |app: &mut App, name: &str| app.world_mut().resource_mut::<Resolver>().0.resolve(name).map(|s| s.frames.len());
+        assert_eq!((frames(&mut app, "BaseHail"), frames(&mut app, "ModHail")), (Some(3), None));
+
+        app.world_mut().write_message(ModChosen(Some("Plain Mod".into())));
+        app.update();
+        assert_eq!((frames(&mut app, "BaseHail"), frames(&mut app, "ModHail")), (None, Some(5)), "the mod's tables after the switch");
+        assert_eq!(app.world().resource::<Resolver>().0.race().as_deref(), Some("federation"), "the race the voices set survives");
+
+        app.world_mut().write_message(ModChosen(None));
+        app.update();
+        assert_eq!((frames(&mut app, "BaseHail"), frames(&mut app, "ModHail")), (Some(3), None), "and back to the base game");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// Install-gated (`STA64_TEST_INSTALL`, a Roots install with the STA2 Classic mod; override the
+    /// folder with `STA64_TEST_MOD`): base mount, switch to the mod, switch back. For every race
+    /// of the Instant Action list, the select and acknowledge events of its units resolve through
+    /// the live resolver as they do on a fresh mount of the same layers. Prints the table.
+    #[test]
+    fn real_install_voices_follow_the_front_end_mod_switch() {
+        use crate::frontend::screens::ModChosen;
+        let Ok(root) = std::env::var("STA64_TEST_INSTALL") else { return };
+        let modname = std::env::var("STA64_TEST_MOD").ok().filter(|m| !m.is_empty()).unwrap_or_else(|| "STA2 Classic Mod".into());
+        let root = std::path::PathBuf::from(root);
+        let Ok(mod_vfs) = sta_vfs::Vfs::mount_install(&root, Some(&modname)) else {
+            eprintln!("SKIP: mod {modname:?} does not mount under {}", root.display());
+            return;
+        };
+        let (index, _) = sta_content::OdfIndex::build(&mod_vfs);
+        let (db, _) = sta_content::ContentDb::load(&mod_vfs, &index).unwrap();
+        let (races, _) = sta_content::Races::load(&mod_vfs, &index);
+        let names = |d: &sta_content::UnitDef| d.sounds.select.iter().chain(&d.sounds.ack_move).chain(&d.sounds.ack_attack).cloned().collect::<Vec<_>>();
+        // How many of a race's voice references play through `r`.
+        let count = |r: &mut dyn SoundResolver, race: &str| {
+            r.set_race(Some(race));
+            let norm = |s: &str| s.to_ascii_lowercase().trim_start_matches("united").trim_end_matches("empire").to_owned();
+            let all: Vec<String> = db.units().filter(|d| norm(&d.race) == norm(race)).flat_map(names).collect();
+            (all.iter().filter(|n| r.resolve(n).is_some()).count(), all.len())
+        };
+        let fresh = |m: Option<&str>| BankResolver::mount(&root, m).expect("mount");
+        let (null, _log) = NullAudio::new();
+        let mut app = App::new();
+        app.insert_non_send(Mixer::new(Box::new(null)));
+        app.add_plugins(AudioPlugin::default());
+        app.insert_resource(crate::game::flow::FlowConfig { install_root: Some(root.clone()) });
+        app.insert_resource(Resolver(Box::new(fresh(None))));
+        app.update();
+        let race_list = sta_content::race::skirmish_races(&races, &db);
+        assert!(!race_list.is_empty());
+        let live = |app: &mut App, race: &str| count(&mut *app.world_mut().resource_mut::<Resolver>().0, race);
+        let before: Vec<_> = race_list.iter().map(|r| live(&mut app, r)).collect();
+        app.world_mut().write_message(ModChosen(Some(modname.clone())));
+        app.update();
+        let after: Vec<_> = race_list.iter().map(|r| live(&mut app, r)).collect();
+        app.world_mut().write_message(ModChosen(None));
+        app.update();
+        let back: Vec<_> = race_list.iter().map(|r| live(&mut app, r)).collect();
+        for (i, race) in race_list.iter().enumerate() {
+            let expected = count(&mut fresh(Some(&modname)), race);
+            eprintln!("| {modname} | {race} | on base mount: {}/{} | after the switch: {}/{} | fresh mount: {}/{} | switched back: {}/{} |", before[i].0, before[i].1, after[i].0, after[i].1, expected.0, expected.1, back[i].0, back[i].1);
+            assert!(expected.0 > 0, "{race} has no voice that resolves on the {modname} mount");
+            assert_eq!(after[i].0, expected.0, "{race}: after the switch the live resolver reads the mod's tables");
+        }
+        // Switching back restores the base game's tables.
+        for (i, race) in race_list.iter().enumerate() {
+            assert_eq!(back[i], count(&mut fresh(None), race), "{race}: after switching back");
+        }
+    }
+
     #[test]
     fn bank_resolver_finds_files_and_events_and_plays_them() {
         let dir = std::env::temp_dir().join(format!("sta64-con10-hook-{}", std::process::id()));
@@ -436,9 +563,5 @@ mod tests {
         assert_eq!(choose_backend(Mode::Bench { headless: false, sim_only: true }).name(), "null");
     }
 
-    #[test]
-    fn windowed_never_panics_without_a_device() {
-        let name = choose_backend(Mode::Viewer).name();
-        assert!(name == "kira" || name == "null");
-    }
+    // No test opens a real output device here: the open/recover logic is in `resilient`'s tests.
 }

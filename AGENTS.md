@@ -187,6 +187,13 @@ at once. Bevy makes `sta64` heavy.
   games may hold it); a heavy build that finds `heavy.lock` busy then waits
   on it instead of taking the second slot.
 
+  Waiting is first come, first served, also across `LOCK-BUSY` retries: the
+  wrapper keeps one ticket per worktree in `<locks>/queue/<class>/` and only
+  the oldest ones (one per free slot) may try the lock. A retry from the same
+  worktree keeps its place; a ticket whose worktree has not polled for 20 s
+  (`STA64_QUEUE_ACTIVE`) no longer holds back a free slot, and one idle for
+  30 minutes is deleted. `STA64_QUEUE=0` (or `--no-queue`) turns the queue off.
+
   `LOCK-BUSY` (exit 75) means another agent holds the lock for longer than
   `STA64_LOCK_WAIT` seconds (default 540, under an agent tool call's
   10-minute limit): wait and run it again. Other knobs: `STA64_LOCK_DIR`,

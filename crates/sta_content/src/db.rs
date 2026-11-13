@@ -86,6 +86,7 @@ impl ContentDb {
         match self.profile {
             Profile::Native => "native",
             Profile::Fo4 => "fo4",
+            Profile::Fo3 => "fo3",
             Profile::Sta2Classic => "sta2classic",
             Profile::Sta1Classic => "sta1classic",
         }
@@ -442,12 +443,12 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
     // whether the sim reads it (then it is digested below) or not.
     let UnitDef {
         key: _, odf: _, class: _, is_starbase: _, planet_role: _, planet_crew_gain: _, planet_crew_modifier: _,
-        planet_colonizable: _, planet_civilian_population_modifier: _, race: _,
+        planet_colonizable: _, planet_civilian_population_modifier: _, can_have_orbital_station: _, orbit_time: _, race: _,
         model: _, scale: _, movement: _, hull: _, shields: _, initial_hull: _, initial_shields: _,
         crew: _, maximum_crew: _, sensor: _, hardpoints: _, build: _, launch: _, radius: _,
         sounds: _, fx: _, special_energy_max: _, special_energy_rate: _, miner: _, miner_off: _,
         max_dilithium: _, mining_rate: _, transfer_rate: _, resource: _, features: _,
-        confinement: _, nebula_pathing: _, avoid_me: _, hidden: _, invalid_as_target: _, life: _,
+        confinement: _, nebula_pathing: _, avoid_me: _, hidden: _, invalid_as_target: _, attack_power: _, life: _,
         crew_gain: _, sane_crew_loss: _, system_hit_points: _, raw: _,
     } = u;
     let crate::BuildDef { cost: _, ticks: _, officers: _, list: _, queue_limit: _, flagged_slots: _ } = &u.build;
@@ -528,6 +529,18 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
     // definition, so it is a sim-visible rule; content without it keeps its text.
     if m.warp_speed != Fixed::ZERO {
         c.fixed("warp_speed", m.warp_speed);
+    }
+    // `attackPower` (SIM-36), only when set, for the same reason.
+    if let Some(p) = u.attack_power {
+        c.fixed("attack_power", p);
+    }
+    // SIM-62: orbital placement reads both, so they are sim-visible rules; only when set.
+    if u.can_have_orbital_station {
+        c.flag("can_have_orbital_station", true);
+    }
+    // The class is already hashed; the period only when the ODF set one.
+    if let Some(t) = u.orbit_time.filter(|t| *t != Fixed::ZERO) {
+        c.fixed("orbit_time", t);
     }
     c.finish()
 }

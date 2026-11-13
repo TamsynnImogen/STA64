@@ -239,7 +239,7 @@ pub(crate) fn construction(
         initial: own.initial.unwrap_or(match profile {
             Profile::Native => ConfinementInitial::Disabled,
             Profile::Sta1Classic => ConfinementInitial::PaddedXz,
-            Profile::Sta2Classic | Profile::Fo4 => ConfinementInitial::RawXz,
+            Profile::Sta2Classic | Profile::Fo4 | Profile::Fo3 => ConfinementInitial::RawXz,
         }),
         rearm: own.rearm.unwrap_or(profile == Profile::Sta1Classic),
         ..finished

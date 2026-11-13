@@ -11,6 +11,7 @@
 //! sta-bench perf <map|scene.ini> --install <root> [--mod <name>] [--profile refit,stock] [--sizes WxH,..]
 //! sta-bench pair <pair> --game a2|roots [--refit-out DIR] [--install DIR] [--fake] [--out DIR]
 //! sta-bench capture list | check <folder|latest> [--install <root> [--mod <name>]] [--fake]
+//! sta-bench golden --install <root> [--mod <name>] [map...] [--ticks N] [--seed S] [--json <file|->] [--record <file>] [--against <file>]
 //! sta-bench desync <a.star> <b.star> [--install <root> [--mod <name>]] [--fake] [--json <file|->]
 //! ```
 //!
@@ -21,6 +22,7 @@ mod capture;
 mod clone;
 mod desync;
 mod diff;
+pub mod golden;
 mod jobs;
 mod pair;
 mod parity;
@@ -75,6 +77,13 @@ Usage: sta-bench <command> [options]
       --variants base,no-rocks,a+b  what to compare (default the attribution set; names in docs/TESTBENCH.md)
       --perf-camera still|sweep    a fixed camera, or one swinging about its target; --systems per-system CPU times
       --label NAME                 results in $XDG_DATA_HOME/sta64/bench/perf/<label>/ (or --out DIR)
+  golden --install <root> [map...]  an install's content identity and sim digests per skirmish start, as JSON (D5):
+                                   each map stepped twice; exit 1 on a panic, a non-repeatable digest or --against differences
+      --mod <name>                 the mod to mount over the install's Data
+      --ticks N, --seed S          ticks per run (default 300), setup seed
+      --json <file|->              write the report (`-`: only JSON, to stdout)
+      --record <file>              write the report as a golden (keep it outside the repository: it derives from the install)
+      --against <file>             compare with a recorded golden; exit 1 on any difference
   diff <report-a> <report-b>       compare report directories; exit 1 when they differ
   parity <refit-out> <ours-out>    Refit's Scene.marks/Scene.objects.jsonl against our marks/objects.jsonl
                                    (run directories, or their logs/): objects by name, marks in sim seconds
@@ -138,6 +147,10 @@ pub(crate) struct Opts {
     pub perf_camera: Option<String>,
     pub systems: bool,
     pub label: Option<String>,
+    pub ticks: Option<u64>,
+    pub seed: Option<u64>,
+    pub record: Option<PathBuf>,
+    pub against: Option<PathBuf>,
     pub rest: Vec<String>,
 }
 
@@ -190,6 +203,10 @@ fn parse(args: Vec<String>) -> Result<Opts, String> {
             "--perf-camera" => o.perf_camera = Some(val(&a)?),
             "--systems" => o.systems = true,
             "--label" => o.label = Some(val(&a)?),
+            "--ticks" => o.ticks = Some(val(&a)?.parse().map_err(|_| "--ticks: a number")?),
+            "--seed" => o.seed = Some(val(&a)?.parse().map_err(|_| "--seed: a number")?),
+            "--record" => o.record = Some(val(&a)?.into()),
+            "--against" => o.against = Some(val(&a)?.into()),
             "--timeout" => o.timeout = val(&a)?.parse().map_err(|_| "--timeout: seconds")?,
             _ if a.starts_with("--") => return Err(format!("unknown option {a}")),
             _ => o.rest.push(a),
@@ -242,6 +259,7 @@ pub fn main(args: Vec<String>) -> i32 {
         "perf" => perf::perf(&o),
         "capture" => capture::capture_cmd(&o),
         "desync" => desync::desync(&o),
+        "golden" => golden::golden(&o),
         other => Err(Fail::Usage(format!("unknown command `{other}`"))),
     };
     match result {

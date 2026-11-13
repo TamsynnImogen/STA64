@@ -231,6 +231,8 @@ pub(crate) struct Ctx {
     pub loaded_aips: Vec<(PlayerId, String)>,
     /// The script's pending mission end (`SucceedMission` / `FailMission`).
     pub mission_end: Option<MissionEnd>,
+    /// Latched once the end has happened.
+    pub ended: Option<bool>,
     /// Every object id the view has shown, so a handle that never existed can
     /// be told from one that died.
     pub seen: BTreeSet<EntityId>,
@@ -289,6 +291,7 @@ impl Ctx {
             unsupported: BTreeMap::new(),
             loaded_aips: Vec::new(),
             mission_end: None,
+            ended: None,
             seen,
             taint: taint::Taint::default(),
             aips_taken: 0,

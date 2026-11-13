@@ -438,13 +438,21 @@ impl MissionRuntime {
     /// The state of the mission end the script asked for with `SucceedMission`
     /// / `FailMission` (A2), as of `tick` (LUA-13).
     pub fn mission_end(&self, tick: u64) -> MissionEndState {
-        let c = self.inner.ctx.borrow();
-        match &c.mission_end {
+        let mut c = self.inner.ctx.borrow_mut();
+        // Once ended, the mission stays ended with the same outcome.
+        if let Some(won) = c.ended {
+            return MissionEndState::Ended { won };
+        }
+        let state = match &c.mission_end {
             None => MissionEndState::None,
             Some(e) if e.blocked.is_some() => MissionEndState::Blocked(e.blocked.clone().unwrap_or_default()),
             Some(e) if tick as f64 / sta_core::TICK_HZ as f64 > e.time => MissionEndState::Ended { won: !e.failed },
             Some(_) => MissionEndState::Pending,
+        };
+        if let MissionEndState::Ended { won } = state {
+            c.ended = Some(won);
         }
+        state
     }
 
     /// AIP loads (`AI_Team_Load_AIP`, `Player:loadAIP`) asked for since the

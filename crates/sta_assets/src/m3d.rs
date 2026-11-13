@@ -1156,9 +1156,11 @@ pub fn load(input: &[u8]) -> Result<crate::model::Model, String> {
             .iter()
             .map(|m| LightingMaterial {
                 name: text(&m.name),
+                ambient: [0.0; 3],
                 diffuse: m.diffuse,
                 specular: m.specular,
                 power: finite(m.shininess),
+                model: 2,
                 self_illuminating: m.flags2 != 0,
             })
             .collect(),

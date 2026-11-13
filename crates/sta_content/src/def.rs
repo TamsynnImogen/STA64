@@ -297,6 +297,15 @@ pub struct UnitDef {
     /// Effective `civilianPopulationModifier` of a Producer planet (CON-37);
     /// zero for other roles.
     pub planet_civilian_population_modifier: Fixed,
+    /// `canHaveOrbitalStation` of the resource node a planet names (`resource =`,
+    /// e.g. `ResourcePlanet.odf`): an orbital station may be built in its orbit
+    /// (SIM-62). False for moons, rocks and everything without the key.
+    pub can_have_orbital_station: bool,
+    /// Seconds one orbit takes (`orbitTime`) for a station of class `p_mining`,
+    /// the class of the orbital mining and processing facilities: `Some` marks a
+    /// station that can only be built in a planet's orbit (SIM-62); zero when the
+    /// ODF has no `orbitTime`. `None` for every other class.
+    pub orbit_time: Option<Fixed>,
     pub race: String,
     pub model: String,
     pub scale: Fixed,
@@ -369,6 +378,10 @@ pub struct UnitDef {
     pub hidden: bool,
     /// `invalidAsTarget = 1`: automatic target selection skips it.
     pub invalid_as_target: bool,
+    /// `attackPower` (SIM-36): how much enemies want to shoot it; automatic
+    /// target choice prefers the highest `attackPower / current shields`.
+    /// `None` when the ODF has no such key.
+    pub attack_power: Option<Fixed>,
     /// `autoExpireTime` (else `lifeTimer`) in ticks; the object removes itself
     /// that long after it appears (SIM-28).
     pub life: Option<Tick>,
@@ -415,6 +428,8 @@ impl UnitDef {
             planet_crew_modifier: None,
             planet_colonizable: false,
             planet_civilian_population_modifier: Fixed::ZERO,
+            can_have_orbital_station: false,
+            orbit_time: None,
             race: String::new(),
             model: String::new(),
             scale: Fixed::ONE,
@@ -449,6 +464,7 @@ impl UnitDef {
             avoid_me: false,
             hidden: false,
             invalid_as_target: false,
+            attack_power: None,
             life: None,
             raw: Arc::new(raw),
         }

@@ -56,6 +56,18 @@ pub enum SimEvent {
     /// Appended to preserve every existing postcard event tag.
     /// `dock`: the station it unloads at, when `phase` is `Unloading`.
     MinerPhase { id: EntityId, phase: MinerPhase, node: EntityId, dock: Option<Vec3> },
+    /// A craft's move order cannot be served: it is held walled in (SIM-22,
+    /// order kept for now) or the stuck-order watch ended it after two minutes
+    /// without getting nearer. Raised once per order, the tick the hold
+    /// starts or, failing that, when the watch ends it. Not hashed.
+    /// Appended to preserve every existing postcard event tag.
+    OrderBlocked { id: EntityId },
+    /// The sim ended a craft's move order itself (the stuck-order watch): its
+    /// target and queued legs are cleared. A controller that remembers the
+    /// order should forget it; `OrderBlocked` alone does not mean that (the
+    /// SIM-22 hold keeps the order). Not hashed. Appended to preserve every
+    /// existing postcard event tag.
+    OrderAbandoned { id: EntityId },
 }
 
 /// Where a freighter is in `ToNode -> Mining -> ToDock -> Unloading` ([`SimEvent::MinerPhase`]).

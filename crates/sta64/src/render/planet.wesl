@@ -145,7 +145,9 @@ fn halo_light(i: FragIn) -> vec4<f32> {
         l += col * mix(p.dusk.rgb, vec3<f32>(1.0), saturate(ndl * 3.0 + 0.3)) * lam
             * (1.0 + p.halo.w * pow(saturate(dot(d, dir)), 6.0));
     }
-    return vec4<f32>(p.haze.rgb * l * dens * p.halo.z * p.shine.w, 1.0);
+    // Alpha 0: AlphaMode::Add is Bevy's premultiplied blend (src + dst * (1 - alpha)), so any alpha above 0
+    // would replace what is behind the halo (a black disc over the planet) instead of adding to it.
+    return vec4<f32>(p.haze.rgb * l * dens * p.halo.z * p.shine.w, 0.0);
 }
 
 // The baked cubes are in the files' left-handed space; the world is mirrored on Z.
@@ -179,8 +181,29 @@ fn surface(i: FragIn) -> vec4<f32> {
     return vec4<f32>(max(c, vec3<f32>(0.0)) * p.shine.w, 1.0);
 }
 
+// The Stock look: the engine's fixed pipeline. The texel times the sum of the lights (each at
+// its colour, equal weight, plus the constant term), both in display space, clamped to 1.
+// mode.z says which mesh this is: 0 ground, 1 cloud shell, 2 halo (nothing drawn).
+fn stock(i: FragIn) -> vec4<f32> {
+    if p.mode.z > 1.5 {
+        return vec4<f32>(0.0);
+    }
+    if p.mode.z > 0.5 && p.mode.w > 0.5 {
+        // A cloud shell whose texture is missing would be a white wall: no shell.
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+    let n = normalize(i.world_position.xyz - p.centre.xyz);
+    let l = min(vec3<f32>(p.base.w) + p.dcol0.rgb * max(dot(n, p.dvec0.xyz), 0.0) + p.dcol1.rgb * max(dot(n, p.dvec1.xyz), 0.0), vec3<f32>(1.0));
+    let t = textureSample(tex, tex_sampler, i.uv);
+    let shown = pow(max(t.rgb, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2)) * l;
+    return vec4<f32>(pow(shown, vec3<f32>(2.2)), t.a);
+}
+
 @fragment
 fn fragment(i: FragIn) -> @location(0) vec4<f32> {
+    if p.mode.y > 0.5 {
+        return stock(i);
+    }
     if p.mode.x > 2.5 {
         return surface(i);
     }

@@ -286,8 +286,8 @@ impl Plugin for StrategicPlugin {
             .init_resource::<CullStats>()
             .init_resource::<SwitchParams>()
             .add_systems(Startup, make_masks)
-            .add_systems(Update, (toggle, ensure_icons, attach).chain())
-            .add_systems(PostUpdate, draw.run_if(resource_exists::<bevy::gizmos::config::GizmoConfigStore>).after(update))
+            .add_systems(Update, (toggle, ensure_icons, attach).chain().run_if(in_match))
+            .add_systems(PostUpdate, draw.run_if(resource_exists::<bevy::gizmos::config::GizmoConfigStore>).run_if(in_match).after(update))
             // The handoff precedes both model visibility propagation and UI layout.
             .add_systems(
                 PostUpdate,
@@ -297,6 +297,13 @@ impl Plugin for StrategicPlugin {
                     .before(bevy::ui::UiSystems::Prepare),
             );
     }
+}
+
+/// The map grid and the symbols belong to the match's map view. The front end's menu scene draws
+/// its ships as models from a camera that also satisfies [`crate::map::MainCamera`], so the
+/// systems that make or draw symbols skip it, and `update` clears the handoff while it is open.
+fn in_match(menu: Option<Res<crate::frontend::scene::MenuScene>>) -> bool {
+    menu.is_none()
 }
 
 const MASK: u32 = 64;
@@ -387,7 +394,7 @@ fn toggle(keys: Res<ButtonInput<KeyCode>>, mut mode: ResMut<Mode>) {
 
 /// Units drawn from the view get an icon too (an arrow in the owner's colour).
 #[allow(clippy::type_complexity)]
-fn ensure_icons(
+pub(crate) fn ensure_icons(
     mut commands: Commands,
     units: Query<(Entity, Option<&TeamColour>, Option<&SelectRadius>), (With<FromView>, With<SimEntity>, Without<Strategic>, Without<NeedsModel>)>,
 ) {
@@ -484,8 +491,14 @@ fn update(
     cull: Res<CullParams>,
     switch: Res<SwitchParams>,
     mut stats: ResMut<CullStats>,
+    menu: Option<Res<crate::frontend::scene::MenuScene>>,
 ) {
     *stats = CullStats::default();
+    // The menu scene is a model view: nothing is a symbol, and what a match left is undone.
+    if menu.is_some() {
+        clear_unprojected(&mut objects, &mut icons, &mut sv);
+        return;
+    }
     let Ok((camera_e, cam, cam_tf, proj)) = camera.single() else {
         clear_unprojected(&mut objects, &mut icons, &mut sv);
         return;
@@ -973,6 +986,45 @@ mod view_tests {
         let seen: Vec<EntityId> = mine.world().resource::<SimLink>().curr().visible_to(PlayerId(1)).iter().map(|u| u.id).collect();
         assert!(drawn.iter().all(|id| seen.contains(id)));
         assert_eq!(drawn, vec![EntityId(1), EntityId(3)]);
+    }
+
+    /// The front end's menu scene is a model view: no grid, no symbols, no handoff, however far
+    /// out its camera is; the match's map view (no `MenuScene`) has them again.
+    #[test]
+    fn the_menu_scene_has_no_grid_symbols_or_handoff() {
+        use crate::frontend::scene::{MenuMap, MenuSceneConfig, MenuSceneCorePlugin};
+        let mut app = rig(&world(&[unit(1, 1, 0.0, 0.0, 0.0)]), None, 6000.0);
+        app.update();
+        app.update();
+        assert!(view(&app).active, "the match view shows its grid this far out");
+        let icons = |app: &mut App| app.world_mut().query::<&Icon>().iter(app.world()).count();
+        assert!(icons(&mut app) > 0);
+        // Open the menu scene: its sim replaces the match's, and the old icons go with the units.
+        app.insert_resource(crate::clock::AnimClock::new(crate::clock::ClockMode::Wall, 0))
+            .add_plugins(MenuSceneCorePlugin)
+            .insert_resource(MenuSceneConfig::new(std::sync::Arc::new(sta_content::fake::db()), MenuMap::builtin(), sta_content::fake::two_bases()));
+        for _ in 0..4 {
+            app.update();
+        }
+        assert!(app.world().contains_resource::<crate::frontend::scene::MenuScene>());
+        assert!(!view(&app).active, "no grid behind the menu");
+        assert_eq!(view(&app).grid_lines, 0);
+        assert!(view(&app).icons.is_empty() && view(&app).bars.is_empty());
+        // Icons that existed before the scene opened are the match's; the scene adds none.
+        let before = icons(&mut app);
+        for _ in 0..3 {
+            app.update();
+        }
+        assert_eq!(icons(&mut app), before, "the scene's ships get no symbols");
+        let mut hidden = app.world_mut().query_filtered::<&Visibility, With<SimEntity>>();
+        assert!(hidden.iter(app.world()).all(|v| *v != Visibility::Hidden), "no ship is swapped for a symbol");
+        // Back to a match.
+        app.world_mut().remove_resource::<MenuSceneConfig>();
+        for _ in 0..3 {
+            app.update();
+        }
+        assert!(!app.world().contains_resource::<crate::frontend::scene::MenuScene>());
+        assert!(view(&app).active, "the match view has its grid again");
     }
 }
 
