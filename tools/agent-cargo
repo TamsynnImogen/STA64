@@ -48,7 +48,7 @@
 # a LOCK-BUSY retry starts from scratch, so a long build used to let newcomers
 # overtake waiters for hours. Waiters now take a ticket in
 # <lock dir>/queue/<class>/<first-seen ns>-<key>, key = this worktree. Only the
-# oldest tickets (as many as the class has free slots: 1, 2 for light, 2 for
+# oldest tickets (as many as the class has FREE slots; classes have 1, 2 for light, 2 for
 # heavy while bench.lock is not held) may try the lock; the rest poll once a
 # second. The ticket is kept when the call ends with LOCK-BUSY, so the retry
 # keeps its first-seen place, and is removed when the lock is taken. Every poll
@@ -221,14 +221,11 @@ q_find() { # sets ticket to the oldest ticket of this key
   done
   return 1
 }
-q_ensure() { # my ticket exists (created atomically, first-seen kept) and is fresh
-  local tmp new f
+q_ensure() { # my ticket exists (created with noclobber, first-seen kept) and is fresh
+  local new f
   if q_find; then touch "$ticket" 2>/dev/null; return 0; fi
-  tmp="$qdir/.new.$$.$RANDOM"
   new="$qdir/$(q_stamp)-$qkey"
-  printf '%s\n' "$here" > "$tmp" || return 1
-  ln "$tmp" "$new" 2>/dev/null   # fails if one exists: never replaces a ticket
-  rm -f "$tmp"
+  ( set -C; printf '%s\n' "$here" > "$new" ) 2>/dev/null   # exclusive create: never replaces a ticket
   q_find || return 1
   for f in "$qdir"/[0-9]*-"$qkey"; do   # two runs of one worktree raced: keep the oldest
     [ -f "$f" ] && [ "$f" != "$ticket" ] && rm -f "$f"
@@ -248,12 +245,18 @@ q_ahead() { # ahead = tickets older than mine that are actively waiting; stale o
   done
 }
 bench_free() { ( exec 8>"$lock_dir/bench.lock" && flock -n 8 ); }
-q_slots() {
+slot_free() { ( exec 7>"$1" && flock -n 7 ); }
+q_free() { # free = usable slots whose lock is free right now; bfree = bench.lock is free
+  local f
+  free=0; bfree=0
   case "$class" in
-    light) echo 2 ;;
-    heavy) if bench_free; then echo 2; else echo 1; fi ;;
-    *) echo 1 ;;
+    light) set -- "$lock_dir/light.lock" "$lock_dir/light2.lock" ;;
+    heavy) bench_free && bfree=1
+           if [ "$bfree" = 1 ]; then set -- "$lock_dir/heavy.lock" "$lock_dir/heavy2.lock"
+           else set -- "$lock_dir/heavy.lock"; fi ;;
+    *) set -- "$lock_dir/$class.lock" ;;
   esac
+  for f in "$@"; do slot_free "$f" && free=$((free + 1)); done
 }
 q_try_file() { exec 9>"$1" || return 2; flock -n 9 && return 0; exec 9>&-; return 1; }
 q_try() { # one non-blocking pass over the class's slots; 0 = lock held on fd 9
@@ -264,7 +267,7 @@ q_try() { # one non-blocking pass over the class's slots; 0 = lock held on fd 9
       [ "$r" = 1 ] && { q_try_file "$lock_dir/light2.lock"; r=$?; } ;;
     heavy)
       q_try_file "$lock_dir/heavy.lock"; r=$?
-      [ "$r" = 1 ] && bench_free && { q_try_file "$lock_dir/heavy2.lock"; r=$?; } ;;
+      [ "$r" = 1 ] && [ "$bfree" = 1 ] && { q_try_file "$lock_dir/heavy2.lock"; r=$?; } ;;
     *) q_try_file "$lock_dir/$class.lock"; r=$? ;;
   esac
   [ "$r" = 2 ] && { echo "agent-cargo: cannot open lock in $lock_dir" >&2; exit 2; }
@@ -281,9 +284,14 @@ if [ "$queued" = 1 ]; then
   ticket=""; ahead=0
   deadline=$(( $(date +%s) + wait_s ))
   while :; do
-    q_ensure || { echo "agent-cargo: cannot write ticket in $qdir" >&2; exit 2; }
-    q_ahead
-    if [ "$ahead" -lt "$(q_slots)" ] && q_try; then rm -f "$ticket"; break; fi
+    if ! q_ensure; then   # cannot keep tickets here: plain flock polling
+      echo "agent-cargo: cannot write ticket in $qdir; no queue" >&2
+      ticket=/dev/null; ahead=0; qnoq=1
+    fi
+    [ "${qnoq:-0}" = 1 ] || q_ahead
+    q_free
+    # Only as many of the oldest waiters as there are free slots may try.
+    if [ "$ahead" -lt "$free" ] && q_try; then [ "${qnoq:-0}" = 1 ] || rm -f "$ticket"; break; fi
     # LOCK-BUSY leaves the ticket: the retry keeps its place.
     [ "$(date +%s)" -ge "$deadline" ] && { echo LOCK-BUSY; exit 75; }
     sleep 1

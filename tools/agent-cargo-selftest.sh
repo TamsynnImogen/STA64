@@ -109,7 +109,7 @@ EOS
   L=$tmp/log1; fresh "$L"
   fq h "$L" FAKE_SLEEP=3 "$w" --check check -p x >/dev/null 2>&1 & p0=$!
   sleep 0.5
-  for k in a b c; do fq $k "$L" FAKE_SLEEP=1 STA64_LOCK_WAIT=60 "$w" --check check -p x >/dev/null 2>&1 & sleep 0.4; done
+  for k in a b c; do fq $k "$L" FAKE_SLEEP=1 STA64_LOCK_WAIT=60 "$w" --check check -p x >/dev/null 2>&1 & sleep 1; done
   wait
   o=$(order "$L"); [ "$o" = "h a b c " ] || { echo "FAIL fifo-order: '$o'"; fails=$((fails+1)); }
   [ -z "$(ls -A "$tmp/fl/queue/check" 2>/dev/null)" ] || { echo "FAIL tickets-removed: $(ls "$tmp/fl/queue/check")"; fails=$((fails+1)); }
@@ -119,7 +119,7 @@ EOS
   fq h "$L" FAKE_SLEEP=6 "$w" --check check -p x >/dev/null 2>&1 & sleep 0.5
   o=$(fq w1 "$L" STA64_LOCK_WAIT=2 "$w" --check check -p x 2>&1); rc=$?
   [ "$rc" = 75 ] || { echo "FAIL retry-first-busy: exit $rc"; fails=$((fails+1)); }
-  fq w2 "$L" FAKE_SLEEP=1 STA64_LOCK_WAIT=60 "$w" --check check -p x >/dev/null 2>&1 & sleep 0.4
+  fq w2 "$L" FAKE_SLEEP=1 STA64_LOCK_WAIT=60 "$w" --check check -p x >/dev/null 2>&1 & sleep 1
   fq w1 "$L" FAKE_SLEEP=1 STA64_LOCK_WAIT=60 "$w" --check check -p x >/dev/null 2>&1 &
   wait
   o=$(order "$L"); [ "$o" = "h w1 w2 " ] || { echo "FAIL retry-keeps-place: '$o'"; fails=$((fails+1)); }
@@ -139,17 +139,25 @@ EOS
 
   # 4. Two heavy slots serve the two oldest; the third waits for one to finish.
   L=$tmp/log4; fresh "$L"
-  for k in a b c; do fq $k "$L" FAKE_SLEEP=3 STA64_LOCK_WAIT=60 "$w" --heavy check -p x >/dev/null 2>&1 & sleep 0.4; done
+  for k in a b c; do fq $k "$L" FAKE_SLEEP=3 STA64_LOCK_WAIT=60 "$w" --heavy check -p x >/dev/null 2>&1 & sleep 1; done
   wait
   o=$(order "$L"); [ "$o" = "a b c " ] || { echo "FAIL heavy2-order: '$o'"; fails=$((fails+1)); }
   m=$(maxconc "$L"); [ "$m" = 2 ] || { echo "FAIL heavy2-concurrency: $m, want 2"; fails=$((fails+1)); }
   # 5. bench.lock held: one heavy slot only, still in order.
   L=$tmp/log5; fresh "$L"
   PATH="$tmp/fifobin:$PATH" STA64_LOCK_DIR="$tmp/fl" "$w" --bench sleep 8 & bench=$!; sleep 0.5
-  for k in a b; do fq $k "$L" FAKE_SLEEP=2 STA64_LOCK_WAIT=60 "$w" --heavy check -p x >/dev/null 2>&1 & sleep 0.4; done
+  for k in a b; do fq $k "$L" FAKE_SLEEP=2 STA64_LOCK_WAIT=60 "$w" --heavy check -p x >/dev/null 2>&1 & sleep 1; done
   wait "$bench"; wait
   o=$(order "$L"); [ "$o" = "a b " ] || { echo "FAIL bench-order: '$o'"; fails=$((fails+1)); }
   m=$(maxconc "$L"); [ "$m" = 1 ] || { echo "FAIL bench-one-slot: $m, want 1"; fails=$((fails+1)); }
+  # 5b. Two slots, both held; heavy2 frees first: the oldest waiter (a) must get it, not b.
+  L=$tmp/log7; fresh "$L"
+  ( exec 8>"$tmp/fl/heavy.lock"; flock -n 8 && sleep 7 ) & h1=$!
+  ( exec 8>"$tmp/fl/heavy2.lock"; flock -n 8 && sleep 3 ) & h2=$!
+  sleep 0.5
+  for k in a b; do fq $k "$L" FAKE_SLEEP=2 STA64_LOCK_WAIT=60 "$w" --heavy check -p x >/dev/null 2>&1 & sleep 0.7; done
+  wait
+  o=$(order "$L"); [ "$o" = "a b " ] || { echo "FAIL heavy-free-slot-to-oldest: '$o'"; fails=$((fails+1)); }
   # 6. STA64_QUEUE=0 leaves no tickets.
   L=$tmp/log6; fresh "$L"
   fq a "$L" FAKE_SLEEP=0 STA64_QUEUE=0 "$w" --check check -p x >/dev/null 2>&1
