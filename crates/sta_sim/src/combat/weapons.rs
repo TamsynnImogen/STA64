@@ -435,6 +435,7 @@ impl Weapons {
         units: &Entities,
         specials: &mut Specials,
         rng: &mut Rng,
+        events: &mut Vec<SimEvent>,
         player: PlayerId,
         ids: &[EntityId],
         slot: u8,
@@ -454,7 +455,11 @@ impl Weapons {
             let ok = match kind {
                 specials::SpecialKind::PointDefence => {
                     specials.ensure_pool(id, def);
-                    self.pd.toggle(db, specials, id, def, i)
+                    let took = self.pd.toggle(db, specials, id, def, i);
+                    if took {
+                        events.push(SimEvent::PointDefenceChanged { id, on: self.pd.is_on(id, i) });
+                    }
+                    took
                 }
                 _ => specials.order_special(db, units, player, &[id], slot),
             };

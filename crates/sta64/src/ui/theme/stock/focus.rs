@@ -70,6 +70,11 @@ pub fn focusable_ancestor(w: &World, mut e: Entity) -> Option<Entity> {
         if w.get::<Focusable>(e).is_some() {
             return Some(e);
         }
+        // An open dropdown list is a root node: it belongs to its field.
+        if let Some(p) = w.get::<super::DropdownPopup>(e) {
+            e = p.owner;
+            continue;
+        }
         e = w.get::<ChildOf>(e)?.parent();
     }
 }
