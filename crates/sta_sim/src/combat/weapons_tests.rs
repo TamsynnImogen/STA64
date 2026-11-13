@@ -324,7 +324,7 @@ fn launched_projectiles_survive_lost_sight_and_snapshot_resume() {
 }
 
 #[test]
-fn invalid_as_target_units_are_neither_picked_nor_ordered_against() {
+fn invalid_as_target_units_are_not_picked_automatically() {
     use sta_content::{ContentDb, DefRef, Hardpoint, UnitDef, WeaponDef, WeaponKind};
     for invalid in [false, true] {
         let mut weapon = WeaponDef::new("gun", "phaser", WeaponKind::Beam);
@@ -352,9 +352,8 @@ fn invalid_as_target_units_are_neither_picked_nor_ordered_against() {
         let t = sim.spawn_def(dummy, PlayerId(2), v(2000, 0, 2100), AHEAD).unwrap();
         // Automatic fire.
         assert_eq!(fired_by(&sim.step(&[]).events, s), !invalid, "auto, invalid={invalid}");
-        // An explicit order.
+        // An explicit order is accepted either way.
         let out = sim.step(&[attack(1, s, t)]);
-        let rejected = out.events.iter().any(|e| matches!(e, SimEvent::Rejected { .. }));
-        assert_eq!(rejected, invalid, "order, invalid={invalid}");
+        assert!(!out.events.iter().any(|e| matches!(e, SimEvent::Rejected { .. })), "order, invalid={invalid}");
     }
 }

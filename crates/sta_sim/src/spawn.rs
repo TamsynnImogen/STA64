@@ -98,6 +98,17 @@ impl Sim {
     ///
     /// Packages that keep a `Table` of their own drop its row here.
     pub fn despawn(&mut self, id: EntityId, by: Option<EntityId>) -> bool {
+        self.remove_entity(id, Some(by))
+    }
+
+    /// [`Sim::despawn`] without the [`SimEvent::Destroyed`]: a start helper
+    /// that ends its lifecycle (expiry, replacement) did not die, so notices,
+    /// music and effects must not react (SIM-28).
+    pub(crate) fn retire(&mut self, id: EntityId) -> bool {
+        self.remove_entity(id, None)
+    }
+
+    fn remove_entity(&mut self, id: EntityId, destroyed_by: Option<Option<EntityId>>) -> bool {
         if self.units.remove(id).is_none() {
             return false;
         }
@@ -107,7 +118,9 @@ impl Sim {
         self.production.remove_rally_entity(id);
         self.production.remove_weld_site(id);
         self.start_effects.remove(id);
-        self.events.push(SimEvent::Destroyed { id, by });
+        if let Some(by) = destroyed_by {
+            self.events.push(SimEvent::Destroyed { id, by });
+        }
         true
     }
 

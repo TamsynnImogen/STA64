@@ -311,7 +311,7 @@ pub struct UnitDef {
     pub nebula_pathing: Option<NebulaPathing>,
     /// `hidden = 1`: the player never sees or picks it (start helpers).
     pub hidden: bool,
-    /// `invalidAsTarget = 1`: nothing auto-targets it.
+    /// `invalidAsTarget = 1`: automatic target selection skips it.
     pub invalid_as_target: bool,
     /// `autoExpireTime` (else `lifeTimer`) in ticks; the object removes itself
     /// that long after it appears (SIM-28).

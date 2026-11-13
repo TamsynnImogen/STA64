@@ -130,8 +130,8 @@ pub fn invalid_as_target(odf: &sta_odf::Odf) -> bool {
 
 /// Lifetime in ticks: `autoExpireTime`, else `lifeTimer`; `None` when absent or not positive.
 pub fn life_ticks(odf: &sta_odf::Odf) -> Option<Tick> {
-    let secs = ["autoExpireTime", "lifeTimer"].iter().find_map(|k| odf.f32(k).filter(|v| v.is_finite()))?;
-    (secs > 0.0).then(|| sta_core::seconds_to_ticks(secs as f64).max(1))
+    let secs = ["autoExpireTime", "lifeTimer"].iter().filter_map(|k| odf.f32(k).filter(|v| v.is_finite() && *v > 0.0)).next()?;
+    Some(sta_core::seconds_to_ticks(secs as f64).max(1))
 }
 
 #[cfg(test)]
@@ -167,6 +167,7 @@ mod tests {
         assert_eq!(life_ticks(&odf("autoExpireTime = 0.5\nlifeTimer = 9\n")), Some(15));
         assert_eq!(life_ticks(&odf("lifeTimer = 1\n")), Some(30));
         assert_eq!(life_ticks(&odf("lifeTimer = 0\n")), None);
+        assert_eq!(life_ticks(&odf("autoExpireTime = 0\nlifeTimer = 1\n")), Some(30));
         assert_eq!(life_ticks(&odf("maxHealth = 1\n")), None);
     }
 }

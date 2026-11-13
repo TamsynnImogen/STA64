@@ -256,7 +256,7 @@ impl Weapons {
 
         // Compute after this tick's movement, using the same shared-vision rule
         // as WorldView (which then also leaves out `hidden = 1` units).
-        // `invalidAsTarget = 1` units are never picked, ordered or not (SIM-28).
+        // `invalidAsTarget = 1` units are never picked automatically (SIM-28); an explicit order is not refused (unmeasured).
         // Do not use last tick's view or explored fog.
         let visibility = crate::sensors::compute(units, Some(db), teams);
         for u in units.iter() {
@@ -355,7 +355,7 @@ impl Weapons {
         ids: &[EntityId],
         target: EntityId,
     ) -> bool {
-        if !units.get(target).is_some_and(|t| t.hull[1] > Fixed::ZERO && !db.unit(t.def).is_some_and(|d| d.invalid_as_target)) {
+        if !units.get(target).is_some_and(|t| t.hull[1] > Fixed::ZERO) {
             return false;
         }
         let mut any = false;
@@ -395,7 +395,6 @@ impl Weapons {
                 && seen.is_none_or(|ids| ids.binary_search(&t.id).is_ok())
                 && !unseen(t)
                 && t.hull[1] > Fixed::ZERO
-                && !db.unit(t.def).is_some_and(|d| d.invalid_as_target)
                 && flat(u.pos, t.pos).1 <= range
                 && in_arc(u.heading, arc, u.pos, t.pos)
         };
@@ -406,7 +405,7 @@ impl Weapons {
         let mut best: Option<(Fixed, &Entity)> = None;
         for t in units.iter() {
             let perceived = perception.get(t.id).copied().unwrap_or(t.owner);
-            if team(perceived).is_none_or(|x| x == mine) || !hittable(t) {
+            if team(perceived).is_none_or(|x| x == mine) || !hittable(t) || db.unit(t.def).is_some_and(|d| d.invalid_as_target) {
                 continue;
             }
             let d = flat(u.pos, t.pos).1;

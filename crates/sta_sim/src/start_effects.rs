@@ -24,6 +24,8 @@
 //!   unit-cap pods) are **not run**: removing `<race>_effectsS` would drop a
 //!   tech-tree requirement of the race's starbase, and what the original does
 //!   is not measured; they are listed as unsupported.
+//! - Ending a lifecycle (expiry, replacement) is not a death: no
+//!   `SimEvent::Destroyed`.
 //! - An owner is a *player* (human, remote, idle seat), *AI* (`Control::Ai`) or
 //!   *derelict* (no owner).
 //!
@@ -157,7 +159,7 @@ impl Sim {
         for row in self.start_effects.take_due(self.tick) {
             match row.act {
                 Act::Expire => {
-                    self.despawn(row.id, None);
+                    self.retire(row.id);
                 }
                 Act::Replace(hp) => self.fire_replacement(&db, row.id, hp),
             }
@@ -178,7 +180,7 @@ impl Sim {
             spawned |= self.spawn_def(key, owner, at, heading).is_some();
         }
         if spawned {
-            self.despawn(id, None);
+            self.retire(id);
         }
     }
 
@@ -231,7 +233,7 @@ pub fn unsupported(db: &ContentDb, key: sta_core::ContentKey) -> Vec<String> {
                     if let Some(n) = r.required_officers {
                         out.push(format!("{}: requiredOfficers {n} (unit-cap replacement) is not simulated", w.odf));
                     }
-                    for class in r.entries.iter().flat_map(|e| &e.classes) {
+                    for class in r.entries.iter().flat_map(|e| &e.classes).filter(|_| r.required_officers.is_none()) {
                         match db.key(&class.odf).filter(|&c| db.unit(c).is_some()) {
                             Some(c) if !seen.contains(&c) => {
                                 seen.push(c);
@@ -359,8 +361,9 @@ mod tests {
             sim.step(&[]);
         }
         assert_eq!(names(&sim, &db), ["fleeting", "plain"]);
-        sim.step(&[]);
+        let out = sim.step(&[]);
         assert_eq!(names(&sim, &db), ["plain"]);
+        assert!(!out.events.iter().any(|e| matches!(e, crate::SimEvent::Destroyed { .. })), "expiry is not a death");
     }
 
     #[test]
@@ -426,8 +429,10 @@ mod tests {
         let (mut sim, db) = game(&[(0, Control::Human), (1, Control::Ai("x".into()))]);
         put(&mut sim, &db, "src", PlayerId(0));
         put(&mut sim, &db, "fleeting", PlayerId(1));
-        let empty = Sim::new(1).digest();
-        assert_ne!(sim.digest(), empty);
+        assert!(!sim.start_effects.is_empty());
+        let mut without = sim.clone();
+        without.start_effects = Default::default();
+        assert_ne!(sim.digest(), without.digest(), "pending rows are in the digest");
         for _ in 0..4 {
             sim.step(&[]);
         }
