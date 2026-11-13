@@ -34,7 +34,7 @@ use bevy::ecs::relationship::RelatedSpawnerCommands;
 use bevy::math::{Rect, Vec2};
 use bevy::prelude::*;
 use bevy::ui::UiTargetCamera;
-use sta_mission::campaign::{Blocked, Campaign, CampaignBook, CampaignMission, CampaignProgress, CampaignRunner, MissionHost, Transition};
+use sta_mission::campaign::{Blocked, Campaign, CampaignBook, CampaignMission, CampaignProgress, CampaignRunner, MissionHost, MissionScript, Transition};
 
 use crate::app::AppState;
 use crate::frontend::screens::stock::{StockBox, StockBoxNode};
@@ -156,6 +156,12 @@ pub struct Campaigns {
     pub debrief: Option<Debrief>,
     /// Why saved progress was not used (shown once in the log).
     pub load_warning: Option<String>,
+    /// Missions whose script is a converted Armada II DLL mission (lower-case `.bzn`
+    /// names): experimental, marked as such on the screens.
+    pub experimental: std::collections::BTreeSet<String>,
+    /// What to tell the player when missions wait for a conversion that has not run
+    /// (the command to run); `None` when nothing is waiting or the conversion is mounted.
+    pub convert_hint: Option<String>,
 }
 
 impl Campaigns {
@@ -163,7 +169,33 @@ impl Campaigns {
     pub fn new(book: CampaignBook, host: Arc<dyn MissionHost + Send + Sync>, store: ProgressStore) -> Campaigns {
         let (progress, load_warning) = store.load(&book);
         let blocked = book.blocked();
-        Campaigns { book, progress, store, host, blocked, campaign: None, mission: 0, debrief: None, load_warning }
+        Campaigns { book, progress, store, host, blocked, campaign: None, mission: 0, debrief: None, load_warning, experimental: Default::default(), convert_hint: None }
+    }
+
+    /// Mark the missions whose script file exists under `converted` (a mounted conversion,
+    /// [`sta_mission::converted`]) as experimental, except those whose path is in `own` (lower
+    /// case; the install's own scripts, which shadow the conversion).
+    pub fn mark_converted(&mut self, converted: &Path, own: &std::collections::BTreeSet<String>) {
+        for c in &self.book.campaigns {
+            for m in &c.missions {
+                if let MissionScript::Lua { path } = &m.script
+                    && converted.join(path).is_file()
+                    && !own.contains(&path.to_ascii_lowercase())
+                {
+                    self.experimental.insert(m.bzn.to_ascii_lowercase());
+                }
+            }
+        }
+    }
+
+    /// Whether the mission runs a converted (experimental) script.
+    pub fn is_experimental(&self, m: &CampaignMission) -> bool {
+        self.experimental.contains(&m.bzn.to_ascii_lowercase())
+    }
+
+    /// Whether some mission is blocked only for want of a Lua conversion.
+    pub fn awaits_conversion(&self) -> bool {
+        self.blocked.iter().any(|b| b.reason.starts_with("legacy DLL only"))
     }
 
     /// The campaign shown on card `i` of Single Player: the book's `i`-th (the shell's slot order).
@@ -481,7 +513,9 @@ fn missions(p: &mut Box_, ctx: &Ctx) {
             let mark = match cs.state(&c.id, m.index) {
                 MissionState::Locked => tr(" (locked)"),
                 MissionState::Blocked(_) => tr(" (cannot run yet)"),
+                MissionState::Ready if cs.is_won(&c.id, m.index) && cs.is_experimental(m) => tr(" (won, experimental)"),
                 MissionState::Ready if cs.is_won(&c.id, m.index) => tr(" (won)"),
+                MissionState::Ready if cs.is_experimental(m) => tr(" (experimental)"),
                 MissionState::Ready => String::new(),
             };
             format!("{}. {}{mark}", m.index + 1, mission_name(m))
@@ -508,8 +542,14 @@ fn missions(p: &mut Box_, ctx: &Ctx) {
             MissionState::Blocked(reason) => {
                 d.spawn(para(t, tr("This mission cannot be started yet."), t.text_size, t.bad));
                 d.spawn(para(t, reason.clone(), t.small_size, t.text_dim));
+                if let (Some(hint), true) = (&cs.convert_hint, reason.starts_with("legacy DLL only")) {
+                    d.spawn(para(t, hint.clone(), t.small_size, t.warn));
+                }
             }
             MissionState::Ready => {
+                if cs.is_experimental(m) {
+                    d.spawn(para(t, tr("Experimental: converted from the original mission file. It may stop early or misbehave."), t.small_size, t.warn));
+                }
                 if let Some(b) = &m.briefing {
                     d.spawn(para(t, first_paragraph(&b.text), t.text_size, t.text));
                 }
