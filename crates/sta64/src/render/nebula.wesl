@@ -294,18 +294,51 @@ fn march_step(p: vec3<f32>, dist: f32, thick: f32, ph: f32, u: vec2<f32>, kk: f3
 }
 
 
-@fragment
-fn fragment(i: FragIn) -> @location(0) vec4<f32> {
-    let eye = k.eye.xyz;
-    let d = normalize(i.world_position.xyz - eye);
-    // The ray through the field's box.
+// The ray's span through the field's box: x where it enters, y where it leaves (the
+// camera's near plane clips the start).
+fn box_span(eye: vec3<f32>, d: vec3<f32>) -> vec2<f32> {
     let dz = select(d, vec3<f32>(1e-6), abs(d) < vec3<f32>(1e-6));
     let ta = (k.box_lo.xyz - eye) / dz;
     let tb = (k.box_hi.xyz - eye) / dz;
     let t0 = min(ta, tb);
     let t1 = max(ta, tb);
     let s0 = max(max(t0.x, t0.y), max(t0.z, k.box_lo.w));
-    var s1 = min(min(t1.x, t1.y), t1.z);
+    let s1 = min(min(t1.x, t1.y), t1.z);
+    return vec2<f32>(s0, s1);
+}
+
+// The march from s0 to s1 along d: rgb the light the gas adds, a the alpha it takes.
+// `pos` is the pixel's place in the target the march draws into (its jitter).
+fn march(eye: vec3<f32>, d: vec3<f32>, s0: f32, s1: f32, pos: vec2<f32>) -> vec4<f32> {
+    // Steps growing geometrically with distance, each jittered within its span.
+    // The march's steps: a setting (`RenderQuality::nebula_steps`), 16 by default.
+    let steps = select(16, i32(k.scat.z), k.scat.z >= 1.0);
+    let q = exp2(log2(s1 / s0) / f32(steps));
+    let ph = key_phase(dot(k.key.xyz, d));
+    let jit = fract(sin(dot(pos, vec2<f32>(12.9898, 78.233))) * 43758.5453);
+    let u = vec2<f32>(jit, fract(sin(dot(pos, vec2<f32>(39.3468, 11.135))) * 43758.5453));
+    var acc = vec4<f32>(0.0);
+    var a = s0;
+    for (var n = 0; n < steps; n++) {
+        let th = a * (q - 1.0);
+        let j = fract(jit + f32(n) * 0.6180340);
+        let s = a + j * th;
+        acc += march_step(eye + d * s, s, th, ph, u, f32(n) / f32(steps));
+        a += th;
+    }
+    // Premultiplied: the gas's light added, what lies behind dimmed by its optical depth.
+    let alpha = 1.0 - exp(-acc.a);
+    return vec4<f32>(acc.rgb, alpha);
+}
+
+@fragment
+fn fragment(i: FragIn) -> @location(0) vec4<f32> {
+    let eye = k.eye.xyz;
+    let d = normalize(i.world_position.xyz - eye);
+    // The ray through the field's box.
+    let span = box_span(eye, d);
+    let s0 = span.x;
+    var s1 = span.y;
     // Stop at what the scene shows: reverse-Z depth is near / view depth. (Sample 0
     // serves the single- and the multisampled prepass texture alike.)
     @if(DEPTH_PREPASS)
@@ -320,23 +353,45 @@ fn fragment(i: FragIn) -> @location(0) vec4<f32> {
     if s1 <= s0 {
         discard;
     }
-    // Steps growing geometrically with distance, each jittered within its span.
-    // The march's steps: a setting (`RenderQuality::nebula_steps`), 16 by default.
-    let steps = select(16, i32(k.scat.z), k.scat.z >= 1.0);
-    let q = exp2(log2(s1 / s0) / f32(steps));
-    let ph = key_phase(dot(k.key.xyz, d));
-    let jit = fract(sin(dot(i.position.xy, vec2<f32>(12.9898, 78.233))) * 43758.5453);
-    let u = vec2<f32>(jit, fract(sin(dot(i.position.xy, vec2<f32>(39.3468, 11.135))) * 43758.5453));
-    var acc = vec4<f32>(0.0);
-    var a = s0;
-    for (var n = 0; n < steps; n++) {
-        let th = a * (q - 1.0);
-        let j = fract(jit + f32(n) * 0.6180340);
-        let s = a + j * th;
-        acc += march_step(eye + d * s, s, th, ph, u, f32(n) / f32(steps));
-        a += th;
+    return march(eye, d, s0, s1, i.position.xy);
+}
+
+// The reduced-resolution march (RND-34): the same gas, drawn by `nebula_lowres.rs` into a
+// target 1/n the size of the view's, one fullscreen triangle per field, over the scene's
+// depth as `nebula_lowres.wesl` reduced it (the farthest depth of each n x n block, as
+// reverse-Z: 0 where any pixel of the block shows no geometry).
+struct LowView {
+    world_from_clip: mat4x4<f32>,
+    size: vec4<f32>,       // the target's width and height, n, the camera's near plane
+    flags: vec4<f32>,      // x 1: 8-bit colour, clip the light at 1; y, z the view's size
+};
+@group(0) @binding(30) var low_depth: texture_2d<f32>;
+@group(0) @binding(31) var<uniform> lv: LowView;
+
+struct LowIn {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@fragment
+fn fragment_low(i: LowIn) -> @location(0) vec4<f32> {
+    let eye = k.eye.xyz;
+    // The texel's centre in the view's pixels (the last texel may reach past the view).
+    let vp = i.position.xy * lv.size.z;
+    let ndc = vec2<f32>(vp.x / lv.flags.y * 2.0 - 1.0, 1.0 - vp.y / lv.flags.z * 2.0);
+    let p = lv.world_from_clip * vec4<f32>(ndc, 1.0, 1.0);
+    let d = normalize(p.xyz / p.w - eye);
+    let span = box_span(eye, d);
+    let s0 = span.x;
+    var s1 = span.y;
+    let z = textureLoad(low_depth, vec2<i32>(i.position.xy), 0).r;
+    if z > 0.0 {
+        let view_depth = lv.size.w / z;
+        s1 = min(s1, view_depth / max(dot(d, k.cam_fwd.xyz), 1e-4));
     }
-    // Premultiplied: the gas's light added, what lies behind dimmed by its optical depth.
-    let alpha = 1.0 - exp(-acc.a);
-    return vec4<f32>(acc.rgb, alpha);
+    if s1 <= s0 {
+        return vec4<f32>(0.0);
+    }
+    let m = march(eye, d, s0, s1, i.position.xy);
+    return vec4<f32>(select(m.rgb, min(m.rgb, vec3<f32>(1.0)), lv.flags.x > 0.5), m.a);
 }

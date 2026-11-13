@@ -40,7 +40,7 @@ fn no_data(lua: &Lua, env: &Env, name: &'static str, spec: &'static [&'static st
     })
 }
 
-pub(super) fn install(lua: &Lua, env: &Env, table: &Table) -> mlua::Result<()> {
+pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::Result<()> {
     // Movement and position.
     // SetPosition and PointAt (SIM-57): the Armada II rules (instant, speed
     // zeroed, orders kept; yaw only), read from the Armada II executable and
@@ -93,7 +93,10 @@ pub(super) fn install(lua: &Lua, env: &Env, table: &Table) -> mlua::Result<()> {
     table.set("Special_Attack", gap_write(lua, env, "Special_Attack", &["hvs", "hhs", "hs"], "special weapons are named; the order takes a slot index")?)?;
     table.set("SetSpecialWeaponAttackInterval", gap_write(lua, env, "SetSpecialWeaponAttackInterval", &["if"], "no special-weapon interval seam in the sim")?)?;
     // AI team orders.
-    table.set("AI_Attack", gap_write(lua, env, "AI_Attack", &["ii", "iv", "i"], "no AI team attack seam in the sim")?)?;
+    // `AI_Attack(unit, target | point)` / `AI_Attack(unit)`: the A2 order of the same name (SIM-56).
+    // The first argument is a unit handle, not a team: the stock missions pass one (Federation 1:
+    // `AI_Attack(Dom2, GetNearestEnemy(Dom2, 450))`; read from data, LUA-17).
+    table.set("AI_Attack", super::alias(lua, env, a2, "AI_Attack")?)?;
     table.set("AttackMainEnemyBase", gap_write(lua, env, "AttackMainEnemyBase", &["ib"], "no AI team attack seam in the sim")?)?;
     // Damage and shields.
     // SIM-55: a fraction of the maximum, and the new maximum.
@@ -187,13 +190,15 @@ pub(super) fn install(lua: &Lua, env: &Env, table: &Table) -> mlua::Result<()> {
 
     // Mission flow. `FailMission(seconds, text)` and `SucceedMission(seconds,
     // text)` retain the delay and text for the host's outcome screen and mark
-    // the mission finished at once; the delay is not applied here.
-    table.set("FailMission", def(lua, env, "FailMission", &["fs"], |_, e, _, a| {
+    // the mission finished at once; the delay is not applied here. The stock missions
+    // pass the current mission time and a null text (`FailMission(GetTime(), NULL)`,
+    // read from data, LUA-17), so the text may be nil.
+    table.set("FailMission", def(lua, env, "FailMission", &["fS"], |_, e, _, a| {
         e.call("FailMission", args_of(a))?;
         e.ctx.borrow_mut().finished = true;
         Ok(Value::Nil)
     })?)?;
-    table.set("SucceedMission", def(lua, env, "SucceedMission", &["fs"], |_, e, _, a| {
+    table.set("SucceedMission", def(lua, env, "SucceedMission", &["fS"], |_, e, _, a| {
         e.call("SucceedMission", args_of(a))?;
         e.ctx.borrow_mut().finished = true;
         Ok(Value::Nil)

@@ -66,6 +66,7 @@ pub mod tech;
 pub mod victory;
 pub mod view;
 pub mod world;
+mod wormholes;
 
 /// The fixed-point type and its module, now in `sta_core`; re-exported so
 /// `sta_sim::Fixed` and `sta_sim::fixed::Fixed` keep working.
@@ -405,11 +406,14 @@ impl Sim {
             plans.extend(warps);
             plans.sort_by_key(|p| p.0);
         }
+        // Before routing and avoidance replace targets with detours.
+        let gate_goers = self.wormhole_goers();
         let routed = self.route_orders();
         let held = self.steer_around();
         self.step_kinematics(&plans);
         self.restore_targets(held);
         self.restore_targets(routed);
+        self.step_wormholes(&gate_goers);
         self.separate_units();
         self.push_out_of_fields();
         if let Some(db) = self.content.clone() {

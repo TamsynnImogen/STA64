@@ -856,10 +856,10 @@ Cost is attributed **by difference**: `--variants base,no-rocks,no-nebula+no-roc
 while it runs touches every variant alike; the table gives each variant's median of round means, the
 spread (min-max) to read it against, and the difference from `base`. Toggles: `no-rocks`,
 `no-planets`, `no-nebula`, `no-sky`, `no-shadows`, `no-fog`, `std-hulls` (Bevy's PBR instead of the
-hull shader), `msaa-off`, `msaa-2`, `no-prepass`, `neb-steps8`, and the measurement-only
+hull shader), `msaa-off`, `msaa-2`, `no-prepass`, `neb-steps8`, `neb-steps12`, `neb-full` / `neb-half` / `neb-quarter` (the nebula march's resolution, RND-34), and the measurement-only
 `freeze-rocks` / `freeze-hulls` (materials not rewritten when the camera or a rock moves, which
 shows what those writes cost). The quality settings are `render/quality.rs`' `RenderQuality`
-(`STA64_SHADOWS=0`, `STA64_MSAA=1|2|4`, `STA64_NEBULA_STEPS=4..32`). Record the machine with every number:
+(`STA64_SHADOWS=0`, `STA64_MSAA=1|2|4`, `STA64_NEBULA_SCALE=1|2|4`, `STA64_NEBULA_STEPS=4..32`). Record the machine with every number:
 the report carries the load average at the start and end and the competing processes (other `sta64`
 runs, compilers); on a loaded machine trust the differences, not the absolutes, and run again when
 the spread is wide. Two sizes (1920x1080 against 3440x1440) separate fill-rate from CPU cost: a

@@ -73,13 +73,20 @@ fn cineractive(lua: &Lua, on: bool) -> mlua::Result<()> {
 }
 
 fn fade(lua: &Lua, env: &Env, name: &'static str, out: bool) -> mlua::Result<Function> {
-    // `FadeIn/FadeOut(f, f, f)`: the first is read as the fade time in seconds
-    // (as MMM's fadeIn/fadeOut); the other two are retained, meaning not measured.
+    // `FadeIn/FadeOut(seconds, delay, f)`: the fade time and the delay before it starts, in
+    // seconds, as A2's (`FadeOut(2, 25, 0)` at 22 s is black at 49 s in Federation 1: read from
+    // the executable, static; LUA-17); the third is retained, meaning not measured. A delayed
+    // fade is presented when it starts.
     def(lua, env, name, &["fff"], move |_, e, _, a| {
         e.call(name, args_of(a))?;
-        let seconds = a[0].num();
+        let (seconds, delay) = (a[0].num(), a[1].num());
         if seconds >= 0.0 {
-            e.present(name, Presentation::Fade { out, seconds: sta_core::Fixed::from_f64(seconds), rgb: [0, 0, 0] })?;
+            let fade = Presentation::Fade { out, seconds: sta_core::Fixed::from_f64(seconds), rgb: [0, 0, 0] };
+            if delay > 0.0 {
+                e.ctx.borrow_mut().present_later(delay, fade);
+            } else {
+                e.present(name, fade)?;
+            }
         }
         Ok(Value::Nil)
     })
@@ -107,6 +114,12 @@ fn title(lua: &Lua, env: &Env, name: &'static str, subtitle: bool) -> mlua::Resu
 fn remove_title(lua: &Lua, env: &Env, name: &'static str) -> mlua::Result<Function> {
     // `RemoveTitle(id, bool)`: the bool is not measured and ignored.
     def(lua, env, name, &["ib"], move |_, e, _, a| {
+        // 0 is the zeroed handle of a title the mission never showed (stock missions remove
+        // their title handles on every path, shown or not: read from data, LUA-17): nothing to
+        // remove.
+        if a[0].int() == 0 {
+            return Ok(Value::Nil);
+        }
         let id = u32::try_from(a[0].int()).ok().filter(|id| *id >= 1 && *id <= e.st.borrow().next_title);
         let Some(id) = id else {
             return Err(mlua::Error::runtime(format!("A1.{name}: {} is not a title id this mission was given", a[0].int())));
