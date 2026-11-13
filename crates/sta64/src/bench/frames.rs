@@ -157,11 +157,14 @@ fn fnv(bytes: &[u8]) -> u64 {
 pub struct View {
     orbit: Option<(Target, f32, f32, f32)>,
     eye: Option<(Vec3, Target)>,
+    /// `at <time> orbit|camera ...` lines: the camera they set from that tick on (the
+    /// lines arrive together, the bench runs each when its tick comes).
+    timed: Vec<(u64, BenchCommand)>,
 }
 
 impl View {
     pub fn new(scene_camera: Option<&BenchCommand>) -> View {
-        let mut v = View { orbit: None, eye: None };
+        let mut v = View { orbit: None, eye: None, timed: Vec::new() };
         if let Some(c) = scene_camera {
             v.apply(c);
         }
@@ -192,6 +195,16 @@ impl View {
     /// its target is not an object of the bench (yet). The same pose for the stand-in
     /// frames and for the install's (`pair_view`).
     pub(super) fn pose(&self, bench: &sta_bench::run::Bench) -> Option<(Vec3, Vec3)> {
+        if !self.timed.is_empty() {
+            // The camera as the timed lines due by now left it.
+            let mut now = View { orbit: self.orbit.clone(), eye: self.eye.clone(), timed: Vec::new() };
+            let mut due: Vec<&(u64, BenchCommand)> = self.timed.iter().filter(|(t, _)| *t <= bench.tick()).collect();
+            due.sort_by_key(|(t, _)| *t);
+            for (_, c) in due {
+                now.apply(c);
+            }
+            return now.pose(bench);
+        }
         let resolve = |t: &Target| match t {
             Target::Point(p) => Some(Vec3::new(p[0] as f32, p[1] as f32, -p[2] as f32)),
             Target::Object(n) => {
@@ -216,7 +229,12 @@ impl View {
     /// "ok (no renderer at tier 1)" for these).
     pub fn observe(&mut self, line: &str) {
         if let Ok(Some(c)) = parse_command(line) {
-            self.apply(&c.command);
+            match c.at {
+                Some(at) if matches!(c.command, BenchCommand::Orbit { .. } | BenchCommand::Camera { .. }) => {
+                    self.timed.push((at.ticks(sta_core::TICK_HZ), c.command));
+                }
+                _ => self.apply(&c.command),
+            }
         }
     }
 }
