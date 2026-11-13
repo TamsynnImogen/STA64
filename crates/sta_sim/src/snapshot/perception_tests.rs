@@ -28,6 +28,10 @@ fn split(bytes: &[u8]) -> (Body, Option<(Vec3, Vec3)>, BoundaryRec, PerceptionRe
     assert!(attack.warp.is_empty());
     let (watch, rest): (WatchRec, _) = postcard::take_from_bytes(rest).unwrap();
     assert!(watch.rows.is_empty());
+    let (scripted, rest): (ScriptedRec, _) = postcard::take_from_bytes(rest).unwrap();
+    assert!(scripted.rows.is_empty());
+    let (switches, rest): (SwitchesRec, _) = postcard::take_from_bytes(rest).unwrap();
+    assert!(switches.rows.is_empty());
     assert!(rest.is_empty());
     (body, bounds, boundary, perception)
 }
@@ -52,6 +56,8 @@ fn join(
     out.extend(postcard::to_allocvec(&SubsystemsRec { version: 1, rows: Vec::new() }).unwrap());
     out.extend(postcard::to_allocvec(&AttackRec { version: 1, warp: Vec::new(), engagement: Default::default() }).unwrap());
     out.extend(postcard::to_allocvec(&WatchRec { version: 1, rows: Vec::new() }).unwrap());
+    out.extend(postcard::to_allocvec(&ScriptedRec { version: 1, rows: Vec::new() }).unwrap());
+    out.extend(postcard::to_allocvec(&SwitchesRec { version: 1, rows: Vec::new() }).unwrap());
     out
 }
 

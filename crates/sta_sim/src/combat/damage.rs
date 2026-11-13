@@ -41,9 +41,10 @@ use crate::world::{Entities, EntityKind, Fnv, Table};
 use crate::Sim;
 
 /// Recharge every unit's shields by its definition's rate.
-pub(crate) fn recharge(units: &mut Entities, db: &ContentDb) {
+pub(crate) fn recharge(units: &mut Entities, db: &ContentDb, switches: &crate::switches::SwitchTable) {
     for u in units.iter_mut() {
-        if u.hull[0] <= Fixed::ZERO {
+        // `CraftCanRepair(false)` (SIM-58) stops the shields coming back too.
+        if u.hull[0] <= Fixed::ZERO || switches.no_repair(u.id) {
             continue;
         }
         let Some(def) = db.unit(u.def) else { continue };

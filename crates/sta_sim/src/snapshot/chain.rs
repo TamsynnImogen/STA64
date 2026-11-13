@@ -9,8 +9,10 @@ pub(super) const CREW: usize = 7;
 pub(super) const SUBSYSTEMS: usize = 10;
 pub(super) const ATTACK: usize = 11;
 pub(super) const WATCH: usize = 12;
-/// Number of segments [`split`] returns (header plus twelve records).
-pub(super) const LEN: usize = 13;
+pub(super) const SCRIPTED: usize = 13;
+pub(super) const SWITCHES: usize = 14;
+/// Number of segments [`split`] returns (header plus fourteen records).
+pub(super) const LEN: usize = 15;
 
 fn cut<T: serde::de::DeserializeOwned>(rest: &mut &[u8], out: &mut Vec<Vec<u8>>) {
     let (_, tail): (T, _) = postcard::take_from_bytes(rest).expect("record parses");
@@ -34,6 +36,8 @@ pub(super) fn split(bytes: &[u8]) -> Vec<Vec<u8>> {
     cut::<SubsystemsRec>(&mut rest, &mut out);
     cut::<AttackRec>(&mut rest, &mut out);
     cut::<WatchRec>(&mut rest, &mut out);
+    cut::<ScriptedRec>(&mut rest, &mut out);
+    cut::<SwitchesRec>(&mut rest, &mut out);
     assert!(rest.is_empty(), "the chain covers the whole snapshot");
     assert_eq!(out.len(), LEN);
     out

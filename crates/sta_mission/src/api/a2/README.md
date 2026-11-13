@@ -543,7 +543,15 @@ constants. Orders are sent as the unit's owner; edits are SCRIPT edits.
   is never read. A path is `A2.paths[name]` (host-filled, as for
   `GetDistance`): `Order::Move` to its first point, the rest queued. An object
   is a snapshot of its position (whether the engine tracks it: not measured).
-  `warp = true` has no order in the seam and raises, counted.
+  `warp = true` is `Order::MoveWarp` on the first leg (SIM-56; the sim warps like
+  an attack approach when the goal is over 800 away).
+- `Patrol(unit, path)`, `SearchAndDestroy`, `Scout`, `AI_Attack(unit)` (attack
+  what the sensors show) and `AI_Attack(unit, Vector)` (fly to weapon range of
+  the point, firing nothing) are `Order::Patrol` / `SearchAndDestroy` / `Scout` /
+  `AttackAny` / `AttackPoint` (SIM-56, rules in `sta_sim::orders`).
+- `AllowAsTarget(object, team, bool)`, `CraftCanRepair`, `ButItCanBeDerelicted`,
+  `CraftCanRecrew`, `HideObject`, `SetName` are typed edits (SIM-58, rules in
+  `sta_sim::switches`).
 - `Stop`, `Attack(unit, object, int)` and `AI_Attack(unit, object)` map to
   `Order::Stop` / `Order::Attack`; the extra `int` is never read. `Mine` maps
   to `Order::Mine`; an absent node means "mine without a target" (the nearest
@@ -574,10 +582,9 @@ constants. Orders are sent as the unit's owner; edits are SCRIPT edits.
   raises (a parameter has no order); other commands raise, counted. The voice
   flag is not measured and not applied.
 
-Raising and counted (no seam): `Patrol SearchAndDestroy Scout Colonize
-Special_Attack SetCommandMoveAutonomyLow PointAt SetCrew SetRace CraftCanRepair
-GetMainEnemyBaseLocation AttackMainEnemyBase GetAllyStationAttacks`,
-`AI_Attack` without a target or toward a point, and the warp form of `Goto`.
+Raising and counted (no seam): `Colonize
+Special_Attack SetCommandMoveAutonomyLow PointAt SetCrew SetRace
+GetMainEnemyBaseLocation AttackMainEnemyBase GetAllyStationAttacks`.
 `AI_Team_Load_AIP` is accepted like `Player:loadAIP`: the request is queued
 and the host gives it to the seat's AI (`MissionRuntime::take_aip_requests`,
 `sta_ai::MissionAiHub`; AI-06). Each reason is in `unsupported()` as `A2.<Name>: <why>`.
