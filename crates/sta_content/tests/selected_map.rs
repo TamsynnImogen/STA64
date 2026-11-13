@@ -190,10 +190,10 @@ fn missing_bad_unreadable_and_unresolved_mdf_never_publish_partial_starts() {
     assert!(missing.warnings.is_empty());
 
     for bytes in [
-        &b"StartLocations = 2x\n"[..],
-        &b"StartLocations = 9\n"[..],
-        &b"StartLocations = 2\nStartLocations = 2\n"[..],
+        &b"StartLocations = x2\n"[..], // unparsable: eight
+        &b"StartLocations = 9\n"[..], // out of range: the native reader falls back to eight, Camera_6 is absent
         &b"StartLocations = 6\n"[..], // Camera_6 is absent after five valid slots
+        &b"nothing here\n"[..],       // no count: eight again
     ] {
         root.write("Data/bzn/custom/renamed.mdf", bytes);
         let (vfs, index) = root.mount(None);
@@ -400,4 +400,27 @@ fn installed_a2_format_named_conversion_preserves_existing_map_results() {
     }
     assert!(maps > 0, "control contains no maps");
     eprintln!("A2-format control: {maps} maps, {starts} starts; selected conversion preserves every map result");
+}
+
+/// CON-42: the native reader's malformed-file and default-eight rules, and the
+/// configuration-backed fallback for a team without a `Camera_i` path.
+#[test]
+fn native_count_rules_and_missing_path_fallback() {
+    let root = TempRoot::new();
+    let source = source_map();
+    // A repeated key takes the first; a bad value takes eight.
+    root.write("Data/bzn/custom/renamed.mdf", b"startlocations=2\nStartLocations = 5\n");
+    let (vfs, index) = root.mount(None);
+    assert_eq!(convert(&source, "custom/renamed", &vfs, &index).map.starts.len(), 2);
+    // With RTS_CFG.h, the three teams beyond the five paths start at the centre XZ, mid-combat-height Y.
+    root.write("Data/RTS_CFG.h", b"float SHIP_COMBAT_FLOOR = 10.0;\nfloat SHIP_COMBAT_CEILING = 67.0;\n");
+    root.write("Data/bzn/custom/renamed.mdf", b"StartLocations = banana\n");
+    let (vfs, index) = root.mount(None);
+    let result = convert(&source, "custom/renamed", &vfs, &index);
+    assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+    assert_eq!(result.map.starts.len(), 8);
+    for start in &result.map.starts[5..] {
+        assert_eq!((start.pos.x, start.pos.y, start.pos.z), (Fixed::from_int(50), Fixed::from_f64(38.5), Fixed::from_int(50)));
+    }
+    assert_eq!(result.map.starts[0].pos.y, Fixed::from_f64(12.5)); // a real path keeps its own point
 }

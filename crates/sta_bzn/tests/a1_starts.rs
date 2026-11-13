@@ -2,7 +2,7 @@ use std::collections::{HashMap, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
-use sta_bzn::a1::{AiPath, Header, MapData, StartError, mdf_start_count, player_start_positions};
+use sta_bzn::a1::{AiPath, Header, MapData, StartError, mdf_start_count, native_mdf_start_count, player_start_positions, player_start_positions_with_fallback};
 
 // Exact binary32 payload of 2blue's first Camera_1 point, not MDF preview pixels.
 const BLUE_START: [f32; 3] = [f32::from_bits(0x45b9_e866), 38.5, f32::from_bits(0x43c8_a600)];
@@ -200,6 +200,8 @@ fn installed_a1_corpus_resolves_every_announced_camera_without_mutating_inputs()
         if let Some(mdf) = mdfs.get(stem) {
             let count =
                 mdf_start_count(&std::fs::read(mdf).unwrap()).unwrap_or_else(|e| panic!("{}: {e}", mdf.display()));
+            // The native reader agrees with the strict one on every original companion.
+            assert_eq!(native_mdf_start_count(Some(&std::fs::read(mdf).unwrap())), count, "{}", mdf.display());
             let starts = player_start_positions(a1, count).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
             assert_eq!(starts.len(), usize::from(count), "{}", path.display());
             total_starts += starts.len();
@@ -219,4 +221,43 @@ fn installed_a1_corpus_resolves_every_announced_camera_without_mutating_inputs()
         bzns.len(),
         mdfs.len()
     );
+}
+
+#[test]
+fn native_reader_never_fails_and_defaults_to_eight() {
+    let cases: &[(Option<&[u8]>, u8)] = &[
+        (None, 8),
+        (Some(b""), 8),
+        (Some(b"StartLocations = 4\n"), 4),
+        (Some(b"startlocations=3"), 3),                    // case-insensitive, no spaces
+        (Some(b"Start1 = 1 2\r\nStartLocations = 5\r\n"), 5),
+        (Some(b"StartLocations = 1\n"), 8),               // below range
+        (Some(b"StartLocations = 9\n"), 8),               // above range
+        (Some(b"StartLocations = -3\n"), 8),
+        (Some(b"StartLocations = 99999999999999999999\n"), 8),
+        (Some(b"StartLocations = 2x\n"), 2),              // sscanf stops at the first non-digit
+        (Some(b"StartLocations = x\n"), 8),               // sscanf fails: default
+        (Some(b"StartLocations\nStartLocations = 6\n"), 6), // no '=': line skipped
+        (Some(b"StartLocationsX = 7\n"), 7),              // prefix match
+        (Some(b"StartLocations = 2\nStartLocations = 6\n"), 2), // first wins
+        (Some(b"StartLocations =\n 4\n"), 4),            // LF before a blank continues the line
+        (Some(b"StartLocations =\n4\n"), 8),             // no continuation: value is on the next line
+        (Some(b"StartLocations = 3 trailing\n"), 3),
+        (Some(b"StartLocations = 3\0StartLocations = 5"), 3),
+        (Some(b"\0StartLocations = 5"), 8),               // C string ends at the first NUL
+        (Some(b"Start Locations = 5\n"), 8),
+    ];
+    for (source, expected) in cases {
+        assert_eq!(native_mdf_start_count(*source), *expected, "{source:?}");
+    }
+}
+
+#[test]
+fn missing_camera_uses_the_fallback_but_invalid_paths_still_reject() {
+    let path = |label: &str, p: [f32; 3]| AiPath { reference: 0, label: label.into(), points: vec![p], path_type: 0, asteroid_belt_speed: 0.0 };
+    let map = map(vec![path("Camera_1", [1.0, 2.0, 3.0]), path("Camera_3", [f32::NAN, 0.0, 0.0])]);
+    let fb = Some([5.0, 38.5, 5.0]);
+    assert_eq!(player_start_positions_with_fallback(&map, 2, fb).unwrap(), vec![[1.0, 2.0, 3.0], [5.0, 38.5, 5.0]]);
+    assert_eq!(player_start_positions_with_fallback(&map, 2, None), Err(StartError::MissingCamera(2)));
+    assert_eq!(player_start_positions_with_fallback(&map, 3, fb), Err(StartError::NonfiniteCamera(3)));
 }

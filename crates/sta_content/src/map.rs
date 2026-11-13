@@ -270,10 +270,18 @@ impl MapDef {
                     return converted;
                 }
             };
-            match sta_bzn::a1::mdf_start_count(&bytes).and_then(|count| sta_bzn::a1::player_start_positions(a1, count)) {
+            // CON-42: the original reader never fails (bad count -> eight) and a
+            // team without a `Camera_i` path starts at the map centre XZ, mid
+            // `SHIP_COMBAT_FLOOR`/`CEILING` Y (RTS_CFG.h; no fallback without both keys).
+            let (lo, size) = (m.min_extent, m.size);
+            let centre = [(lo[0] + (lo[0] + size[0])) * 0.5, (lo[2] + (lo[2] + size[2])) * 0.5];
+            let combat_y = crate::layered::cfg_h(vfs, "RTS_CFG.h")
+                .and_then(|c| Some((c.f32("SHIP_COMBAT_FLOOR")? + c.f32("SHIP_COMBAT_CEILING")?) * 0.5))
+                .filter(|y| y.is_finite());
+            let fallback = combat_y.filter(|_| centre.iter().all(|v| v.is_finite())).map(|y| [centre[0], y, centre[1]]);
+            let count = sta_bzn::a1::native_mdf_start_count(Some(&bytes));
+            match sta_bzn::a1::player_start_positions_with_fallback(a1, count, fallback) {
                 Ok(points) => {
-                    let (lo, size) = (m.min_extent, m.size);
-                    let centre = [(lo[0] + (lo[0] + size[0])) * 0.5, (lo[2] + (lo[2] + size[2])) * 0.5];
                     converted.map.starts = points.into_iter().enumerate().map(|(i, pos)| StartPos {
                         slot: i as u8,
                         pos: vec3(pos),
