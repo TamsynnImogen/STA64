@@ -143,6 +143,15 @@ pub(crate) fn resolve_colonizable(
     })
 }
 
+/// `orbitTime` of a class `p_mining` station (SIM-62): seconds per orbit; zero when
+/// the key is absent or not a number. `None` for any other class.
+pub(crate) fn resolve_orbit_time(file: &str, odf: &Odf, class: &str, warnings: &mut Vec<Warning>) -> Option<Fixed> {
+    if class != "p_mining" {
+        return None;
+    }
+    Some(read_fixed(file, odf, "orbitTime", warnings).map_or(Fixed::ZERO, |t| t.max(Fixed::ZERO)))
+}
+
 fn is_a2_family(profile: Profile) -> bool {
     matches!(profile, Profile::Sta2Classic | Profile::Fo4 | Profile::Fo3)
 }
