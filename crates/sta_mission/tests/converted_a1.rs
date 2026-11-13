@@ -20,9 +20,10 @@ const TICKS: u64 = 9000;
 /// Per mission: (rules, then for each role "complete+partial/total").
 type Coverage = BTreeMap<String, (u32, BTreeMap<String, (u32, u32, u32)>)>;
 
-fn convert(install: &str, only: Option<&str>) -> (PathBuf, Coverage) {
+/// Converts into a directory of the test's own (`tag`): tests run in parallel.
+fn convert(install: &str, only: Option<&str>, tag: &str) -> (PathBuf, Coverage) {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("converted_a1_{}", only.unwrap_or("all")));
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("converted_a1_{tag}"));
     let _ = std::fs::remove_dir_all(&out);
     let mut cmd = std::process::Command::new("python3");
     cmd.arg("-I").arg(repo.join("tools/a1_to_lua.py")).args(["--install", install]);
@@ -33,6 +34,7 @@ fn convert(install: &str, only: Option<&str>) -> (PathBuf, Coverage) {
     let report = String::from_utf8_lossy(&run.stdout).into_owned();
     eprintln!("{report}");
     assert!(run.status.success(), "{report}\n{}", String::from_utf8_lossy(&run.stderr));
+    assert!(!report.contains("registration:"), "rule set-up code not converted: {report}");
     (out, coverage(&report))
 }
 
@@ -62,7 +64,7 @@ fn a1_campaign_decode_coverage_does_not_regress() {
         eprintln!("skipped: set STA64_TEST_A1_INSTALL to an Armada I root");
         return;
     };
-    let (out, cov) = convert(&install, None);
+    let (out, cov) = convert(&install, None, "coverage");
     assert_eq!(cov.len(), 20, "the 20 campaign maps convert: {:?}", cov.keys().collect::<Vec<_>>());
     let mut sum: BTreeMap<String, (u32, u32, u32)> = BTreeMap::new();
     let mut rules = 0;
@@ -78,7 +80,7 @@ fn a1_campaign_decode_coverage_does_not_regress() {
         }
     }
     eprintln!("rules {rules}; by role (complete, partial, total): {sum:?}");
-    // Measured on the GOG Armada I install (LUA-14): every rule, condition,
+    // Measured on the user's Armada I install (LUA-14): every rule, condition,
     // action, step and init function decodes completely.
     assert_eq!(rules, 1050);
     for (role, total) in [("condition", 1050), ("action", 1005), ("step", 1005), ("init", 20)] {
@@ -94,7 +96,7 @@ fn every_converted_a1_mission_loads_and_runs() {
         eprintln!("skipped: set STA64_TEST_A1_INSTALL to an Armada I root");
         return;
     };
-    let (out, _) = convert(&install, None);
+    let (out, _) = convert(&install, None, "load");
     let mut files: Vec<PathBuf> = std::fs::read_dir(out.join("missions")).unwrap().map(|e| e.unwrap().path()).collect();
     files.sort();
     for f in files {
@@ -125,7 +127,7 @@ fn converted_a1_fed1_runs_in_the_campaign_runner() {
         eprintln!("skipped: set STA64_TEST_A1_INSTALL to an Armada I root");
         return;
     };
-    let (out, _) = convert(&install, Some("fed1"));
+    let (out, _) = convert(&install, Some("fed1"), "fed1");
     let mut vfs = Vfs::mount_install(Path::new(&install), None).expect("mount install");
     vfs.push_dir("converted".into(), out).expect("mount the converted missions");
     let book = CampaignBook::load_vfs(&vfs);

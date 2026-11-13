@@ -476,8 +476,8 @@ fn audio_messages_are_done_when_stopped_or_reported() {
     assert_eq!(rt.eval::<Vec<String>>(pending).unwrap(), vec!["movie:0:m.bik".to_owned()]);
     rt.eval::<()>("A1.MovieDone()").unwrap();
     assert!(rt.eval::<Vec<String>>(pending).unwrap().is_empty());
-    // a handle still at its -1 start value: the engine finds no such sound
-    let (_, commands) = run(&s, "A1.StopAudioMessage(-1)");
+    // a handle still at its -1 start value, or an id not playing: the engine finds no such sound
+    let (_, commands) = run(&s, "A1.StopAudioMessage(-1); A1.StopAudioMessage(77)");
     assert!(commands.is_empty(), "{commands:?}");
 }
 
@@ -603,6 +603,9 @@ fn paths_are_the_maps_and_match_ignoring_case() {
     assert_eq!(commands.len(), 1, "{commands:?}");
     let message = fails(&s, "A1.paths.Ab = { {x=1,y=0,z=0} }; A1.paths.aB = A1.paths.Ab; A1.Goto(a, 'AB', 1)");
     assert!(message.contains("ambiguous"), "{message}");
+    // an exact name wins over its case variants
+    let (_, commands) = run(&s, "A1.paths.Ab = { {x=1,y=0,z=0} }; A1.paths.aB = A1.paths.Ab; A1.Goto(a, 'Ab', 1)");
+    assert_eq!(commands.len(), 1, "{commands:?}");
 }
 
 #[test]

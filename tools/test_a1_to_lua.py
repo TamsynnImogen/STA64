@@ -163,6 +163,8 @@ class Signatures(unittest.TestCase):
         self.assertEqual((conv, cls, ret, len(params)), ("thiscall", "IIIE", "PAVrule@@", 3))
         self.assertEqual(a1.signature("?GetAttackLocation@@YA?AVVector3@@HH@Z")[3], "?AVVector3@@")
         self.assertIsNone(a1.signature("?ship@@3HA"))
+        # back-references count parameter types only, not the return type
+        self.assertEqual(a1.signature("?f@@YAPAVa@@PAVb@@0@Z")[4], ["PAVb@@", "PAVb@@"])
 
     def test_struct_results_take_a_hidden_slot_and_vectors_three(self):
         self.assertEqual(a1.slots_of(["H", "H"], "?AVVector3@@"), 3)
@@ -217,6 +219,34 @@ class Steps(unittest.TestCase):
         self.assertIn("L[-4] = 0", lua)
         self.assertIn("A('Bar', L[-4])", lua)
         self.assertTrue(luac_ok(lua), lua)
+
+    def test_a_value_passes_through_a_block_that_does_not_read_it(self):
+        # eax = 1 or 2 on two paths, a join that branches on something else,
+        # then a block that pushes eax
+        d, _, f = lift({STEP: [
+            f"mov    ecx,DWORD PTR ds:{SHIP:#x}",
+            "test   ecx,ecx",
+            f"je     {STEP + 20:#x}",
+            "mov    eax,0x1",
+            f"jmp    {STEP + 24:#x}",
+            "mov    eax,0x2",
+            "cmp    ecx,0x5",
+            f"je     {STEP + 44:#x}",
+            "push   eax",
+            f"call   {iat('Bar')}",
+            "add    esp,0x4",
+            "ret",
+        ]}, STEP)
+        self.assertIsNone(f.error, f.error)
+        lua = render(d, f)
+        self.assertIn("R.eax = 1", lua.replace("R.ecx, R.eax = ", "").replace("R.eax, R.ecx = ", ""), lua)
+        self.assertIn("A('Bar', R.eax)", lua)
+        self.assertTrue(luac_ok(lua), lua)
+
+    def test_a_loop_is_not_decoded_but_its_calls_are_listed(self):
+        d, _, f = lift({STEP: [f"call   {iat('Bar')}", f"jmp    {STEP:#x}"]}, STEP)
+        self.assertIn("loop", f.error)
+        self.assertEqual(f.imports_called, ["Bar"])
 
     def test_an_unbalanced_return_is_not_decoded_and_lists_its_calls(self):
         d, _, f = lift({STEP: ["push   0x1", f"call   {iat('Bar')}", "ret"]}, STEP)

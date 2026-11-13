@@ -144,7 +144,9 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
     })?)?;
     table.set("StopMovie", def(lua, env, "StopMovie", &[""], |_, e, _, _| {
         e.present("StopMovie", Presentation::StopMovie)?;
-        e.st.borrow_mut().movie_playing = false;
+        let mut st = e.st.borrow_mut();
+        st.movie_playing = false;
+        st.started.retain(|s| s.0 != "movie");
         Ok(Value::Nil)
     })?)?;
     table.set("IsMoviePlaying", def(lua, env, "IsMoviePlaying", &[""], |_, e, _, _| {
@@ -172,11 +174,16 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
         Ok(Value::Table(out))
     })?)?;
     table.set("MovieDone", def(lua, env, "MovieDone", &[""], |_, e, _, _| {
-        e.st.borrow_mut().movie_playing = false;
+        let mut st = e.st.borrow_mut();
+        st.movie_playing = false;
+        st.started.retain(|s| s.0 != "movie");
         Ok(Value::Nil)
     })?)?;
     table.set("AudioMessageDone", def(lua, env, "AudioMessageDone", &["i"], |_, e, _, a| {
-        e.st.borrow_mut().sounds_active.remove(&(a[0].int() as u32));
+        let mut st = e.st.borrow_mut();
+        st.sounds_active.remove(&(a[0].int() as u32));
+        let active = st.sounds_active.clone();
+        st.started.retain(|s| s.0 != "sound" || u32::try_from(s.1).is_ok_and(|id| active.contains(&id)));
         Ok(Value::Nil)
     })?)?;
 
@@ -238,7 +245,9 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
         // it is absent (read from Armada.exe, static): the missions stop handles
         // still holding their -1 start value.
         let Ok(id) = u32::try_from(a[0].int()) else { return Ok(Value::Nil) };
-        e.st.borrow_mut().sounds_active.remove(&id);
+        if !e.st.borrow_mut().sounds_active.remove(&id) {
+            return Ok(Value::Nil);
+        }
         e.present("StopAudioMessage", Presentation::StopSound { id })?;
         Ok(Value::Nil)
     })?)?;

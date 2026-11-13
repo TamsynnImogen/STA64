@@ -80,6 +80,9 @@ SAVED = ("ebx", "esi", "edi", "ebp")
 VAR_METHODS = {"op4": "set", "opB": "get", "start": "start", "stop": "stop", "update": "update",
                "mark_dirty": "mark_dirty", "set_clean": "set_clean", "is_dirty": "is_dirty", "time": "time"}
 VAR_CLASSES = drl.VAR_KINDS + ("hot_type",)
+# `WORLD`'s rule engine (`IIIE`) is the member at this offset; rules are
+# created and trashed on it (read from the DLLs and Armada.exe, static).
+WORLD_IIIE = 0x38
 MEM = ("mem",)  # a stack slot whose value is in the function's slot table
 UNINIT = ("stackslot",)  # reserved by `sub esp` / `push reg`, not yet written
 
@@ -102,10 +105,9 @@ def signature(sym):
             if not m:
                 return None
             name, cls, conv, rest = m.group(1), None, m.group(2), m.group(3)
-            conv = {"A": "A", "G": "G", "I": "I"}[conv]
     convention = {"E": "thiscall", "A": "cdecl", "G": "stdcall", "I": "fastcall"}[conv]
-    if cls is None and convention == "thiscall":
-        return None
+    if (cls is None and convention == "thiscall") or convention == "fastcall":
+        return None  # fastcall passes arguments in registers: not modelled
     try:
         types = parse_types(rest)
     except (ValueError, IndexError):
@@ -155,8 +157,8 @@ def parse_types(s):
 
     while pos[0] < len(s) and s[pos[0]] not in "@Z":
         t = one()
-        if len(t) > 1 and not t.startswith("?A"):
-            seen.append(t)
+        if out and len(t) > 1 and not t.startswith("?A"):
+            seen.append(t)  # only parameter types are remembered for back-references
         out.append(t)
         if len(out) == 2 and t == "X":
             break
@@ -231,10 +233,6 @@ class A1Dll(dsl.Dsl):
                 pushes = 0
         return found[0] if found and all(f == found[0] for f in found) else None
 
-    def global_at(self, addr):
-        # exported scalars and objects are whole (the A2 helper splits arrays only)
-        return super().global_at(addr)
-
 
 # ------------------------------------------------------------------ lifting
 
@@ -283,7 +281,6 @@ class Lifted(dsl.Lifted):
         self.undecoded = []  # (call, why) written as UD(...)
         self.rules = []  # [name, condition addr, action target, deps]
         self.imports_called = []  # every import the function calls, in address order
-        self.other_calls = collections.Counter()  # engine calls in registration code
 
 
 class State(dsl.State):
@@ -321,8 +318,9 @@ def pure(v):
 
 
 class A1Lifter(dsl.Lifter):
-    def __init__(self, dll, role_of_import=None):
+    def __init__(self, dll):
         super().__init__(dll)
+        self.no_params = set()
         self.rule_globals = {}  # rule-pointer global -> rule index (registration)
         self.rules = []
 
@@ -441,6 +439,7 @@ class A1Lifter(dsl.Lifter):
             visit(start)
             order.reverse()
             f.imports_called = imports_in(d, seen)
+            self.check_helpers(start, seen)
             ntmp = [0]
             self.ntmp = ntmp
             ends, blocks = {}, {}
@@ -475,14 +474,24 @@ class A1Lifter(dsl.Lifter):
                     raise DecodeError(f"x87 value live across a block end at {a:#x}")
                 ends[b] = st
                 blocks[b] = stmts
-            # values the successors read from registers or the slot table
+            # values a later block reads from registers or the slot table, also
+            # through blocks that pass them on untouched (backward liveness)
+            live_r, live_s = {}, {}
+            for b in reversed(order):
+                st = ends[b]
+                out_r, out_s = set(), set()
+                for s in succs[b]:
+                    out_r |= live_r[s]
+                    out_s |= live_s[s]
+                st.out_r, st.out_s = out_r, out_s
+                live_r[b] = st.reg_in | {r for r in out_r if st.r.get(r, "unset") == "unset"}
+                live_s[b] = st.loc_in | {j for j in out_s if st.slots.get(j, MEM) == MEM and j in st.entry_mem}
+            if live_r[start] - {"ebx", "esi", "edi", "ebp"}:
+                raise DecodeError(f"register {sorted(live_r[start])} read before it is set")
             for b in order:
                 st, stmts = ends[b], blocks[b]
                 pairs = []
-                need_r, need_s = set(), set()
-                for s in succs[b]:
-                    need_r |= ends[s].reg_in
-                    need_s |= ends[s].loc_in
+                need_r, need_s = st.out_r, st.out_s
                 for r in sorted(need_r):
                     v = st.r.get(r)
                     if v is None or v == ("reg", r):
@@ -515,7 +524,53 @@ class A1Lifter(dsl.Lifter):
             f.blocks = [[b, blocks[b]] for b in order]
         except DecodeError as e:
             f.error = str(e)
+            if not f.imports_called:
+                f.imports_called = imports_in(d, self.linear(start))
         return f
+
+    def linear(self, start):
+        """Addresses from `start` in address order up to the function's end, for
+        listing the calls of a function the lifter could not follow."""
+        d, out = self.d, set()
+        i = d.at.get(start)
+        while i is not None and i < len(d.ins) and len(out) < 4000:
+            a, t = d.ins[i]
+            if out and a in d.entries:
+                break
+            out.add(a)
+            if t.startswith("int3") and len(out) > 1:
+                break
+            i += 1
+        return out
+
+    def check_helpers(self, start, seen):
+        """Internal calls and tail jumps pass no arguments the lifter could miss:
+        the callee must read none (the missions' helpers take none)."""
+        d = self.d
+        for x in seen:
+            m = re.fullmatch(r"(?:call|jmp)\s+0x([0-9a-f]+)", d.ins[d.at[x]][1])
+            if not m:
+                continue
+            tgt = int(m.group(1), 16)
+            if d.ins[d.at[x]][1].startswith("jmp") and not self.is_tail(start, tgt):
+                continue
+            try:
+                kind, body = d.resolve(tgt)
+            except DecodeError:
+                continue
+            if kind != "fn" or body == start or d.is_ftol(body) or body in self.no_params:
+                continue
+            if self.reads_params(body):
+                raise DecodeError(f"call at {x:#x} to a helper that takes arguments")
+            self.no_params.add(body)
+
+    def reads_params(self, body):
+        d = self.d
+        for a in self.linear(body):
+            t = d.ins[d.at[a]][1]
+            if re.search(r"\[(esp|ebp)\+0x[0-9a-f]+\]", t):
+                return True  # conservative: any positive stack offset
+        return False
 
     def entry_state(self, b, start, preds, ends):
         st = State()
@@ -708,8 +763,6 @@ class A1Lifter(dsl.Lifter):
         if lv[0] == "loc":
             if lv[1] % 4:
                 raise DecodeError(f"unaligned stack store at {a:#x}")
-            if v is not None and v[0] == "const" and self.float_slot_next(a):
-                v = ("float", struct.unpack("<f", struct.pack("<I", v[1] & 0xFFFFFFFF))[0])
             self.slot_write(st, stmts, -lv[1] // 4, v)
             return
         if v is not None and v[0] == "rule" and lv[0] == "gvar":
@@ -720,10 +773,7 @@ class A1Lifter(dsl.Lifter):
             st.mem[lv] = v
             stmts.append(("set", lv, v))
             return
-        dsl.Lifter.store(self, f, st, stmts, dst if lv[0] != "obj" else dst, v, a)
-
-    def float_slot_next(self, a):
-        return False
+        dsl.Lifter.store(self, f, st, stmts, dst, v, a)
 
     def snap(self, st, stmts, test, value=None):
         cache = {}
@@ -764,6 +814,9 @@ class A1Lifter(dsl.Lifter):
             stmts.append(("return", self.read(st, "eax", a) if v == "unset" else v))
             return "ret"
         if mn == "push":
+            if entry and ops.strip() in ("eax", "ecx", "edx") and ops.strip() not in st.r:
+                self.push(st, UNINIT)  # `push ecx` reserving a slot: the value is never used
+                return None
             self.push(st, self.read(st, ops, a))
             return None
         if mn == "pop":
@@ -1037,11 +1090,11 @@ class A1Lifter(dsl.Lifter):
                 self.undecoded(f, st, stmts, ntmp, f"{cls}.{name}", ret, f"variable method on {this and this[0]}")
                 return True
             vname, kind = var
-            args = [self.arg(x, a) for x in raw]
-            if op in ("start", "update") and args and args[0][0] == "const":
-                args[0] = ("float", struct.unpack("<f", struct.pack("<I", args[0][1] & 0xFFFFFFFF))[0])
-            if kind == "hot_float" and op == "set" and args and args[0][0] == "const":
-                args[0] = ("float", struct.unpack("<f", struct.pack("<I", args[0][1] & 0xFFFFFFFF))[0])
+            try:
+                args = self.typed(raw, params, f"{cls}.{name}", a)
+            except DecodeError as e:
+                self.undecoded(f, st, stmts, ntmp, f"{cls}.{name}", ret, str(e).split(" at 0x")[0])
+                return True
             if op == "get":
                 v = ("var", vname, kind)
                 self.clobber(st)
@@ -1076,7 +1129,7 @@ class A1Lifter(dsl.Lifter):
             self.clobber(st)
             return True
         if cls == "IIIE" and name == "create_rule":
-            if this != ("worldoff", 0x38):
+            if this != ("worldoff", WORLD_IIIE):
                 raise DecodeError(f"create_rule on {this} at {a:#x}")
             cond, act, nm = raw
             if not (cond and cond[0] == "code" and act and act[0] == "code" and nm and nm[0] == "str"):
@@ -1089,7 +1142,7 @@ class A1Lifter(dsl.Lifter):
             return True
         if cls == "IIIE" and name == "trash_rule":
             (x,) = raw
-            if this != ("worldoff", 0x38):
+            if this != ("worldoff", WORLD_IIIE):
                 raise DecodeError(f"trash_rule on {this} at {a:#x}")
             if x and x[0] == "str":
                 stmts.append(("trashrule", x))
@@ -1370,8 +1423,8 @@ def emit_function(L, f, nm, name, role):
             L.extend(dsl.render_function(f, nm, name))
             w("")
             return
-        except (DecodeError, TypeError) as e:
-            f.error = f"render: {e}"
+        except Exception as e:  # noqa: BLE001 - any renderer failure is that function's stub
+            f.error = f"render: {type(e).__name__}: {e}"
     L.extend(render_failed(name, f.error, sorted(set(c for c in f.imports_called if c))))
     w("")
 
@@ -1552,14 +1605,18 @@ def main(argv=None):
             continue
         try:
             mission, src, rep = convert(dsl_path, drl_path, map_name)
-        except DecodeError as e:
+        except Exception as e:  # noqa: BLE001 - one mission's failure must not stop the others
             failed += 1
-            print(f"  FAIL {map_name}: {e}")
+            print(f"  FAIL {map_name}: {type(e).__name__}: {e}")
             report["missions"].append({"map": map_name, "error": str(e)})
             continue
         fr = rep["functions"]
         print(f"  {map_name} ({mission}): rules {rep['rules']}, "
               + ", ".join(f"{k} {v['complete']}+{v['partial']}p/{v['total']}" for k, v in sorted(fr.items())))
+        for k, v in sorted(rep["registration_calls"].items()):
+            print(f"    registration: {k} x{v} in the rule DLL's set-up code is not converted")
+        for e in rep["registration_errors"]:
+            print(f"    registration: {e}")
         report["missions"].append(rep)
         if a.out:
             out = os.path.join(os.path.realpath(a.out), "missions")
