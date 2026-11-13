@@ -59,6 +59,27 @@ impl MissionHost for FakeHost {
         let src = self.0.clone();
         resolved_script(m, Arc::new(move |p| src.read(p)))
     }
+
+    fn aip_library(&self) -> sta_ai::AipLibrary {
+        let mut lib = sta_ai::AipLibrary::new();
+        lib.insert("main.aip", sta_content::Aip::parse("main.aip", "int min_attack_force = 4;\n").0);
+        lib
+    }
+}
+
+#[test]
+fn a_script_loading_aips_reaches_the_hosts_library() {
+    let src = Arc::new(source().with(
+        "missions/syn_fed01.lua",
+        "Player(1):loadAIP('MAIN.AIP')\nPlayer(1):loadAIP('nothing.aip')\nMMM.register(function(t) if t >= 1 then Mission:finish(true, 0) end end)\n",
+    ));
+    let book = CampaignBook::load(&*src, ShellLayout::Armada2);
+    let host = FakeHost(src);
+    let mut r = CampaignRunner::new(book);
+    let a = r.start(&host, "federation", 0, 1).unwrap();
+    a.run(10 * TICK_HZ_U64).expect("ends");
+    assert_eq!(a.unresolved_aips(), [(PlayerId(1), "nothing.aip".to_owned())]);
+    assert!(a.runtime().unsupported().is_empty());
 }
 
 #[test]

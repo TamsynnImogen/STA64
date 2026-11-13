@@ -292,7 +292,6 @@ fn calls_with_no_seam_validate_then_raise_and_are_counted() {
         ("A2.GetMainEnemyBaseLocation(1)", "A2.GetMainEnemyBaseLocation"),
         ("A2.AttackMainEnemyBase(a, true)", "A2.AttackMainEnemyBase"),
         ("A2.GetAllyStationAttacks(3, 1)", "A2.GetAllyStationAttacks"),
-        ("A2.AI_Team_Load_AIP(2, 'x.aip')", "A2.AI_Team_Load_AIP"),
     ] {
         let (rt, err) = fails(&s, script);
         assert!(err.contains("is not available"), "{script}: {err}");
@@ -429,4 +428,15 @@ fn other_a2_calls_still_work_and_keep_their_errors() {
     assert!(err.contains("A2.GetRealTeam") && err.contains("not alive"), "{err}");
     // An integer that is not a pending handle is passed through untouched.
     rt.eval::<()>("assert(not A2.Exists(0x7ffffff0))").unwrap();
+}
+
+#[test]
+fn ai_team_load_aip_queues_the_request_for_the_host() {
+    let s = scene();
+    let (rt, _) = run(&s, "A2.AI_Team_Load_AIP(2, 'x.aip'); A2.AI_Team_Load_AIP(2, 'Y.AIP')");
+    assert_eq!(rt.unsupported(), [("Player.loadAIP".to_owned(), 2)], "counted until a host takes them");
+    let got = rt.take_aip_requests();
+    assert!(rt.unsupported().is_empty());
+    assert_eq!(got.iter().map(|(_, n)| n.as_str()).collect::<Vec<_>>(), ["x.aip", "Y.AIP"]);
+    assert!(rt.take_aip_requests().is_empty(), "taken once");
 }

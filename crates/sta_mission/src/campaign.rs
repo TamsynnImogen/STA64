@@ -874,6 +874,12 @@ pub trait MissionHost {
     fn seat(&self) -> (PlayerId, PlayerNumbering) {
         (PlayerId(0), PlayerNumbering::Slots)
     }
+
+    /// The AIPs scripts may load (`AI/AIPs/*.aip`); none by default, so a
+    /// host without them leaves the mission's AI seats passive.
+    fn aip_library(&self) -> sta_ai::AipLibrary {
+        sta_ai::AipLibrary::new()
+    }
 }
 
 /// Reads a mission script and its `include()`s by VFS-style path.
@@ -917,6 +923,10 @@ pub struct ActiveMission {
     outcome: Option<MissionOutcome>,
     /// Commands the runner submitted each tick besides the script's (host input).
     pending: Vec<Command>,
+    /// The AI of every seat but the human's: passive until the script loads
+    /// an AIP for it (AI-06).
+    ai_hub: sta_ai::MissionAiHub,
+    ai_seats: Vec<Box<dyn sta_sim::setup::Controller>>,
 }
 
 /// Wraps the mission-ending calls so the runner sees the outcome. Runs once
@@ -1021,6 +1031,12 @@ impl ActiveMission {
         &mut self.runtime
     }
 
+    /// AIP loads the script asked for that named no file of the host's AIP
+    /// library, so changed nothing (AI-06).
+    pub fn unresolved_aips(&self) -> Vec<(PlayerId, String)> {
+        self.ai_hub.unresolved()
+    }
+
     pub fn sim(&self) -> &Sim {
         &self.sim
     }
@@ -1044,6 +1060,11 @@ impl ActiveMission {
         let view = self.sim.view();
         let mut commands = std::mem::take(&mut self.pending);
         self.runtime.think(&view, &self.events, &mut commands);
+        // The script runs first, so a plan it loads this tick applies this tick.
+        self.ai_hub.submit(self.runtime.take_aip_requests());
+        for ai in &mut self.ai_seats {
+            ai.think(&view, &self.events, &mut commands);
+        }
         commands.sort_by_key(|c| (c.player, c.seq));
         self.check_outcome(view.tick);
         let out = self.sim.step(&commands);
@@ -1116,6 +1137,7 @@ impl CampaignRunner {
         let setup = host.game_setup(c, m, seed).map_err(StartError::Blocked)?;
         let sim = Sim::from_setup(&setup);
         let runtime = launch_runtime(&path, reader, seed, host.seat(), &setup, &sim, host.map_paths(c, m))?;
+        let ai_hub = sta_ai::MissionAiHub::new(host.aip_library());
         self.active = Some(ActiveMission {
             campaign: campaign.to_owned(),
             mission,
@@ -1124,6 +1146,13 @@ impl CampaignRunner {
             events: Vec::new(),
             outcome: None,
             pending: Vec::new(),
+            ai_seats: setup
+                .players
+                .iter()
+                .filter(|p| !matches!(p.control, Control::Human))
+                .map(|p| ai_hub.controller(&setup, p.id))
+                .collect(),
+            ai_hub,
         });
         Ok(self.active.as_mut().expect("just set"))
     }
@@ -1234,6 +1263,14 @@ impl MissionHost for VfsHost {
 
     fn seat(&self) -> (PlayerId, PlayerNumbering) {
         (PlayerId(0), PlayerNumbering::ArmadaTeams)
+    }
+
+    fn aip_library(&self) -> sta_ai::AipLibrary {
+        let names = self.vfs.list("AI/AIPs");
+        sta_ai::AipLibrary::load(&names, &mut |n| {
+            let bytes = self.vfs.read(n)?.ok()?;
+            Some(String::from_utf8_lossy(&bytes).into_owned())
+        })
     }
 }
 
