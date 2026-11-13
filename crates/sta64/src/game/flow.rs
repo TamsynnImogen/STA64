@@ -98,8 +98,9 @@ pub fn skirmish_of(setup: &GameSetup) -> Result<SkirmishCfg, String> {
     }
     Ok(SkirmishCfg {
         seat: me.id.0,
+        // A seat the host runs (`RemoteAi` on a peer that is not the host) is an AI seat all the same.
         opponent: match them.control {
-            Control::Ai(_) => Opponent::Skirmish,
+            Control::Ai(_) | Control::RemoteAi(_) => Opponent::Skirmish,
             _ => Opponent::Idle,
         },
         race: Some(me.race.clone()),
