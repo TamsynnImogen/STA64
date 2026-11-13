@@ -592,7 +592,12 @@ fn serve(stream: TcpStream, ip: IpAddr, shared: &Arc<Shared>) {
     let ip = limit_key(ip);
     let cfg = &shared.cfg;
     let _ = stream.set_nodelay(true);
-    if stream.set_read_timeout(Some(POLL)).is_err()
+    // The listener is non-blocking (so `accept` can poll the stop flag); a
+    // stream accepted from it inherits that on Windows and the BSDs, where
+    // the read timeout below would then be ignored and every connection's
+    // reader would spin instead of sleeping in the kernel.
+    if stream.set_nonblocking(false).is_err()
+        || stream.set_read_timeout(Some(POLL)).is_err()
         || stream.set_write_timeout(Some(WRITE_TIMEOUT)).is_err()
     {
         return;

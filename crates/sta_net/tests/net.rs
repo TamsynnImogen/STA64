@@ -78,7 +78,7 @@ fn recv(t: &mut NetTransport) -> sta_net::lockstep::Incoming {
         match t.poll() {
             Ok(Some(m)) => return m,
             Ok(None) => {}
-            Err(e) => panic!("transport failed: {e}"),
+            Err(e) => panic!("transport failed: {e} ({:?})", t.control().close_reason()),
         }
         assert!(Instant::now() < end, "no message arrived");
         thread::sleep(Duration::from_millis(1));
@@ -416,19 +416,31 @@ fn injected_latency_stalls_but_never_diverges() {
 }
 
 #[test]
-#[ignore = "timing-flaky on CI; fixed by fix/net-transport-test-flakes"]
 fn a_held_connection_stalls_the_others_and_play_resumes_in_sync() {
     let r = relay();
     let proxy = Proxy::new(r.local_addr(), 0);
     let mut g = game(r.local_addr(), &start(3, 3, 2), &[None, None, Some(proxy.addr)]);
     g.spawn_forces(2);
     g.run_to(300, &[], true);
+    // Settle before holding: seat 2 sends nothing while it is not stepped, so
+    // once peers 0 and 1 hold every record it sent, no byte of seat 2 is in
+    // flight and the hold below is exact (not a race with the proxy's pump).
+    let sent = g.peers[2].router().last_record(PlayerId(2));
+    let end = Instant::now() + WAIT;
+    while (0..2).any(|i| g.peers[i].router().last_record(PlayerId(2)) != sent) {
+        for i in 0..2 {
+            g.peers[i].step();
+        }
+        assert!(Instant::now() < end, "seat 2's records never all arrived");
+        thread::sleep(Duration::from_millis(1));
+    }
     proxy.hold.store(true, Ordering::SeqCst);
-    // Peers 0 and 1 run until they wait on seat 2; the digest is untouched
-    // while they wait.
+    // Everyone keeps playing: seat 2 sends more, all of it held; peers 0 and
+    // 1 run until they wait on seat 2, and the digest is untouched while they
+    // wait.
     let end = Instant::now() + WAIT;
     loop {
-        for i in 0..2 {
+        for i in 0..3 {
             g.peers[i].step();
         }
         if g.peers[0].router().waiting_on() == vec![PlayerId(2)]
@@ -441,11 +453,18 @@ fn a_held_connection_stalls_the_others_and_play_resumes_in_sync() {
     }
     // Both finish the turn they are in and stop at the boundary.
     for i in 0..2 {
-        while !matches!(g.peers[i].step(), StepOutcome::Stalled { .. }) {}
+        let end = Instant::now() + WAIT;
+        while !matches!(g.peers[i].step(), StepOutcome::Stalled { .. }) {
+            assert!(Instant::now() < end, "peer {i} never reached the turn boundary");
+        }
     }
     let frozen = (g.peers[0].tick(), g.peers[0].sim().digest());
-    thread::sleep(Duration::from_millis(150));
-    assert!(matches!(g.peers[0].step(), StepOutcome::Stalled { .. }));
+    // Nothing of seat 2 can arrive now, however long the others look.
+    for _ in 0..75 {
+        assert!(matches!(g.peers[0].step(), StepOutcome::Stalled { .. }));
+        assert!(matches!(g.peers[1].step(), StepOutcome::Stalled { .. }));
+        thread::sleep(Duration::from_millis(2));
+    }
     assert_eq!((g.peers[0].tick(), g.peers[0].sim().digest()), frozen);
     assert!(g.peers[0].router().desync().is_none());
     // Release: everyone plays on and agrees.
@@ -465,12 +484,17 @@ fn a_disconnected_peer_is_dropped_by_the_host_and_the_rest_play_on() {
     let end = Instant::now() + WAIT;
     // The host and seat 1 run until they stall on it, and the host reads the
     // departure marker (after every frame the seat sent).
-    let mut departed = false;
-    while !(departed && g.peers[0].router().waiting_on() == vec![PlayerId(2)]) {
-        for i in 0..2 {
+    // Seat 1 must have read it too: until then a record of seat 2 may still
+    // be on its way to it, and "waiting on seat 2" could be a passing state.
+    let mut departed = [false; 2];
+    while !(departed == [true; 2]
+        && g.peers[0].router().waiting_on() == vec![PlayerId(2)]
+        && g.peers[1].router().waiting_on() == vec![PlayerId(2)])
+    {
+        for (i, seen) in departed.iter_mut().enumerate() {
             g.peers[i].step();
+            *seen |= g.controls[i].take_departures().contains(&PlayerId(2));
         }
-        departed |= g.controls[0].take_departures().contains(&PlayerId(2));
         assert!(Instant::now() < end, "the departure was never seen");
         thread::sleep(Duration::from_millis(1));
     }
@@ -637,16 +661,22 @@ fn rooms_check_codes_passwords_capacity_and_the_open_flag() {
 }
 
 #[test]
-#[ignore = "timing-flaky on CI; fixed by fix/net-transport-test-flakes"]
 fn a_lost_seat_can_be_taken_back_only_while_it_is_vacated() {
     let r = relay();
     let (mut host, code) = open_room(r.local_addr());
-    let a = NetTransport::join(r.local_addr(), code, "", &opts()).unwrap();
+    let mut a = NetTransport::join(r.local_addr(), code, "", &opts()).unwrap();
     let hc = host.control();
     // Not vacated yet, and not closed: refused.
     let busy = NetTransport::rejoin(r.local_addr(), code, "", PlayerId(1), &opts());
     assert!(matches!(busy, Err(ConnectError::Refused(RefuseReason::BadReclaim))));
     hc.set_open(false).unwrap();
+    // The close and the abort travel on different connections, which the
+    // relay serves independently: if seat 1 vanished before the relay had
+    // read the close, the seat would be freed (the room was open), not held
+    // for a rejoin. The relay reads the host's messages in order, so a frame
+    // from the host that has reached seat 1 proves the close was applied.
+    host.send(Destination::Seat(PlayerId(1)), &ping(8)).unwrap();
+    assert_eq!(recv(&mut a).msg, ping(8));
     a.control().abort();
     drop(a);
     wait_until(SHORT, "the departure", || {
@@ -799,9 +829,13 @@ fn fast_cfg() -> RelayConfig {
 }
 
 /// After any abuse the relay still serves a healthy room.
+///
+/// Its clients must keepalive faster than the fast relay's idle limit (the
+/// default client sends one every 5 s, the fast relay cuts at 2 s), or a
+/// slow runner that stalls the test for two seconds loses the host.
 fn assert_relay_healthy(addr: SocketAddr) {
-    let (mut host, code) = open_room(addr);
-    let mut a = NetTransport::join(addr, code, "", &opts()).unwrap();
+    let (mut host, code) = open_room_with(addr, &quick_opts());
+    let mut a = NetTransport::join(addr, code, "", &quick_opts()).unwrap();
     a.send(Destination::All, &ping(5)).unwrap();
     assert_eq!(recv(&mut host).msg, ping(5));
 }
@@ -820,7 +854,6 @@ fn envelope(payload: &[u8]) -> Vec<u8> {
 }
 
 #[test]
-#[ignore = "timing-flaky on CI; fixed by fix/net-transport-test-flakes"]
 fn malformed_first_messages_are_refused_without_panic_or_allocation() {
     let r = relay_with(fast_cfg());
     let big = (MAX_ENVELOPE_BYTES as u32 + 1).to_le_bytes();
@@ -890,7 +923,7 @@ fn a_frame_with_a_good_header_and_a_bad_body_is_the_receivers_to_refuse() {
     // The relay reads headers only, so it forwards this; the receiving
     // transport refuses it as a frame error and goes on.
     let r = relay();
-    let (mut host, code) = open_room_with(r.local_addr(), &quick_opts());
+    let (mut host, code) = open_room(r.local_addr());
     let mut s = raw_join(r.local_addr(), code);
     let mut frame = junk_frame_header(b"S64N", 1, 6);
     frame.extend_from_slice(&[0xFF; 6]);
@@ -916,7 +949,6 @@ fn a_frame_with_a_good_header_and_a_bad_body_is_the_receivers_to_refuse() {
 }
 
 #[test]
-#[ignore = "timing-flaky on CI; fixed by fix/net-transport-test-flakes"]
 fn slow_silent_and_flooding_clients_are_cut_off() {
     let r = relay_with(RelayConfig {
         bytes_per_sec: 20_000,
@@ -1002,7 +1034,6 @@ fn slow_silent_and_flooding_clients_are_cut_off() {
 }
 
 #[test]
-#[ignore = "timing-flaky on CI; fixed by fix/net-transport-test-flakes"]
 fn limits_per_address_hold() {
     let r = relay_with(RelayConfig {
         max_connections_per_ip: 3,
@@ -1018,6 +1049,9 @@ fn limits_per_address_hold() {
     // Connections per address: two are open; a third works, a fourth is
     // dropped before it can say anything.
     let code = a.control().room_code();
+    // The refused third room's connection is released a moment after its
+    // refusal is written; admission of the next one counts it until then.
+    wait_until(SHORT, "the refused connection to be released", || r.connections() <= 2);
     let third = NetTransport::join(r.local_addr(), code, "", &quick_opts());
     assert!(third.is_ok());
     let mut s = TcpStream::connect(r.local_addr()).unwrap();
@@ -1029,11 +1063,13 @@ fn limits_per_address_hold() {
     // for a correct code.
     let bad = RoomCode::parse("ZZZZZZ").unwrap();
     for _ in 0..3 {
+        wait_until(SHORT, "the refused connection to be released", || r.connections() <= 1);
         assert!(matches!(
             NetTransport::join(r.local_addr(), bad, "", &quick_opts()),
             Err(ConnectError::Refused(RefuseReason::NoRoom))
         ));
     }
+    wait_until(SHORT, "the refused connection to be released", || r.connections() <= 1);
     assert!(matches!(
         NetTransport::join(r.local_addr(), code, "", &quick_opts()),
         Err(ConnectError::Refused(RefuseReason::RateLimited))
@@ -1068,9 +1104,11 @@ fn created() -> Vec<u8> {
     .unwrap()
 }
 
+/// Gives up on a silent relay after 600 ms; the handshake deadline is long so
+/// a slow runner cannot trip it before the fake relay has answered.
 fn short_client() -> ClientOptions {
     ClientOptions {
-        handshake_timeout: Duration::from_millis(600),
+        handshake_timeout: Duration::from_secs(5),
         idle_timeout: Duration::from_millis(600),
         frame_timeout: Duration::from_millis(600),
         ..opts()
@@ -1081,7 +1119,10 @@ fn short_client() -> ClientOptions {
 fn the_client_gives_up_on_a_relay_that_never_answers() {
     let addr = fake_relay(|_| thread::sleep(Duration::from_secs(3)));
     let started = Instant::now();
-    let res = NetTransport::create(addr, "", &short_client());
+    let res = NetTransport::create(addr, "", &ClientOptions {
+        handshake_timeout: Duration::from_millis(600),
+        ..short_client()
+    });
     assert!(matches!(res, Err(ConnectError::Timeout)));
     assert!(started.elapsed() < Duration::from_secs(5));
     // Nothing listening at all.
@@ -1126,7 +1167,12 @@ fn the_client_refuses_garbage_from_the_relay() {
                 thread::sleep(Duration::from_secs(3));
             }
         });
-        let mut t = NetTransport::create(addr, "", &short_client()).unwrap();
+        // A long idle limit: the garbage must be what ends the connection.
+        let patient = ClientOptions {
+            idle_timeout: Duration::from_secs(30),
+            ..short_client()
+        };
+        let mut t = NetTransport::create(addr, "", &patient).unwrap();
         wait_until(SHORT, name, || t.control().close_reason().is_some());
         assert!(
             matches!(t.control().close_reason(), Some(CloseReason::Protocol(_))),
