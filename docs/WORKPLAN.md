@@ -845,6 +845,7 @@ and fixes seams through seam PRs.
 | INT-M5 | Multiplayer with AI and missions | NET-02, NET-03, UI-11, AI-02, LUA-04, SIM-15 | Two-process match with an AI and a Lua mission, no desync over 30 min | M | Sonnet |
 | INT-M6 | Campaigns playable per game: front end → campaign → mission sequence → back, with intros, for each campaign the installs hold (A1, A2, FO as each has them) | LUA-08, UI-25, MED-04, MED-05, UI-22, INT-M4 | Scenario plays the first mission of one campaign per game to its win condition and lands on the next briefing; progress survives a restart | M | Sonnet |
 | INT-M7 | Stock parity pass: stock HUD, menus, effects, nebulae and cloak as defaults on each game; Refit and LCARS reachable as options | UI-18..UI-22, RND-22..RND-27, SIM-23, INT-M3, TOOL-15 | Per game, bench frames of HUD, menu, nebula, hull, beam and cloak scenes match the stock reference within the stated tolerance; options switch to Refit/LCARS and back | M | Sonnet |
+| INT-M8 | Stock Armada II campaign missions startable from the menu: `tools/convert_install_missions.py` converts the user's own mission DLLs into the user data dir (`converted/<install>[+<mod>]`), the game mounts it below the install, the menu marks those missions experimental or says what to run | LUA-11, INT-M6 | Install-gated test: the stock campaigns list as startable after the one-command conversion and the first mission of each starts from the screens | S | Sonnet |
 
 Counts: CON 45, SIM 32, RND 30, UI 28, AUD 6, MED 5, TOOL 12, LUA 9, AI 3, NET 6, EDT 12, INT 6 (194), plus 3 in round 0.
 
