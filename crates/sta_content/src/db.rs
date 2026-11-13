@@ -462,7 +462,7 @@ fn hash_inner(db: &ContentDb, include_starting_rules: bool) -> u64 {
                     h.str("sta64.planet-crew-gain.v1");
                     h.u64(u.planet_crew_gain as i64 as u64);
                 }
-                // CON-37: only effective values, so defaults-free content keeps its hash.
+                // CON-37: effective values only; content without a planet role or crewModifier keeps its hash.
                 if let Some(m) = u.planet_crew_modifier {
                     h.byte(0xf4);
                     h.str("sta64.planet-crew-modifier.v1");

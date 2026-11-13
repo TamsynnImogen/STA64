@@ -140,3 +140,19 @@ fn hash_tracks_effective_values_and_keeps_native_fake_identity() {
     assert_eq!(h(Profile::Native, PLANET), h(Profile::Native, &format!("{PLANET}isColonizable = 0\ncrewModifier = 3\n")));
     assert_eq!(sta_content::fake::db().hash(), 0xc0d4_3c3a_94f1_650e);
 }
+
+#[test]
+fn explicit_opt_in_roles_use_the_conservative_fallbacks_on_every_profile() {
+    for profile in [Profile::Sta1Classic, Profile::Sta2Classic, Profile::Fo4, Profile::Native] {
+        let (db, w) = load(profile, &format!("{PLANET}STA64_planetRole = \"producer\"\n"), None);
+        assert!(w.is_empty(), "{profile:?}: {w:?}");
+        let a2 = matches!(profile, Profile::Sta2Classic | Profile::Fo4);
+        assert_eq!(def(&db).planet_colonizable, a2, "{profile:?}");
+        assert_eq!(def(&db).planet_civilian_population_modifier, if a2 { Fixed::ONE } else { Fixed::ZERO });
+        let (db, _) = load(profile, &format!("{PLANET}STA64_planetRole = \"producer\"\nisColonizable = 1\ncivilianPopulationModifier = 2\n"), None);
+        assert!(def(&db).planet_colonizable, "{profile:?}");
+        assert_eq!(def(&db).planet_civilian_population_modifier, fx(2.0));
+        let (db, _) = load(profile, &format!("{BACKGROUND}STA64_planetRole = \"background\"\n"), None);
+        assert_eq!(def(&db).planet_crew_modifier, (profile == Profile::Sta1Classic).then(|| fx(1.2)), "{profile:?}");
+    }
+}

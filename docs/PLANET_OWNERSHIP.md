@@ -43,13 +43,9 @@ including one inherited through an include, always wins over the fallback.
 | `planet_colonizable: bool` | Producer | `isColonizable` | true on Sta2Classic/Fo4, false elsewhere | A2/FO: read from the executable, static |
 | `planet_civilian_population_modifier: Fixed` | Producer | `civilianPopulationModifier` | 1 on Sta2Classic/Fo4, 0 elsewhere | A2/FO: read from the executable, static |
 
-Installed data (read from data): all 15 stock A1 planet ODFs carry
-`crewModifier` (1.0 or 1.2) and no producer key; stock A2 and the STA2 Classic
-mod layer over Roots hold one background planet (`crewModifier` 1.2) and seven
-producer planets (`isColonizable` 0 or 1, absent on the base `planet`;
-`civilianPopulationModifier` 0.5 to 1.5 on four). The FO 3.2.7, Dominion War,
-Roots base and FO 4.0 layers hold no planet-class ODF. The "not Armada I
-1.2 / zero elsewhere" fallbacks for explicit cross-profile opt-ins are
+Installed data (read from data): the keys above exist in stock A1 and A2 planet
+ODFs; the per-install inventory is in the PR body.
+The "None / zero / false elsewhere" fallbacks for explicit cross-profile opt-ins are
 conservative STA64 choices, not native measurements. Flags use strict
 spelling (`0/1/true/false/yes/no`) and numbers must be finite; malformed
 values warn and use the fallback. Numbers pass through their shortest decimal

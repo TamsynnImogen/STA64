@@ -159,7 +159,7 @@ fn read_fixed(file: &str, odf: &Odf, key: &str, warnings: &mut Vec<Warning>) -> 
             Some(Fixed::from_f64(exact.clamp(-1.0e9, 1.0e9)))
         }
         _ => {
-            warnings.push(Warning::new(file, format!("{key} = {raw} is not a finite number; using the default")));
+            warnings.push(Warning::new(file, format!("{key} = {raw} is not a finite number; using the profile fallback (if any)")));
             None
         }
     }
