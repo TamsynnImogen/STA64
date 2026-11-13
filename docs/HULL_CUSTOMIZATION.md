@@ -87,7 +87,9 @@ ColourKey and FlipU controls retain their image meaning. Direct registry text
 from `possibleCraftRegistry` uses the same row and projection path, explicitly
 selected by `logoDecalNText = "registry"`. `logoDecalNFont` names an installed
 sprite font (default `FontSmall`); optional `logoDecalNColor` is an RGB or RGBA
-byte tuple. This does not replace other placements using authored image rows.
+byte tuple. Lettering reads from the receiving side by default, while authored
+images keep their legacy U convention; `FlipU` reverses either. This does not
+replace other placements using authored image rows.
 
 All projected parts obey the receiving subtree, construction, cloak, fog and
 match lifetime. Per-instance meshes/material handles are released on refresh,

@@ -43,7 +43,13 @@ impl Install {
         let root = std::env::temp_dir().join(format!(
             "sta64_hull_appearance_{}_{}",
             std::process::id(),
-            std::thread::current().name().unwrap_or("test")
+            std::thread::current()
+                .name()
+                .unwrap_or("test")
+                .bytes()
+                .fold(0_u64, |hash, byte| hash
+                    .wrapping_mul(131)
+                    .wrapping_add(u64::from(byte)))
         ));
         let write = |name: &str, data: &[u8]| {
             let path = root.join("Data").join(name);
@@ -230,10 +236,11 @@ fn private_faction_material_converts_before_hull_apply_and_follows_capture() {
         .expect("same-frame hull conversion");
     assert_eq!(source.source, private);
     let hull_handle = source.hull.clone();
-    assert!(app
-        .world()
-        .get::<MeshMaterial3d<HullMaterial>>(part)
-        .is_some());
+    assert!(
+        app.world()
+            .get::<MeshMaterial3d<HullMaterial>>(part)
+            .is_some()
+    );
     let first = app
         .world()
         .resource::<Assets<HullMaterial>>()

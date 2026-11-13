@@ -31,7 +31,13 @@ impl Install {
         let path = std::env::temp_dir().join(format!(
             "sta64_decal_runtime_{}_{}",
             std::process::id(),
-            std::thread::current().name().unwrap_or("test")
+            std::thread::current()
+                .name()
+                .unwrap_or("test")
+                .bytes()
+                .fold(0_u64, |hash, byte| hash
+                    .wrapping_mul(131)
+                    .wrapping_add(u64::from(byte)))
         ));
         std::fs::create_dir_all(path.join("Data/Textures/RGB")).unwrap();
         // One opaque top-down blue pixel in an uncompressed 24-bit TGA.
@@ -354,4 +360,64 @@ fn refreshed_projection_has_receiver_world_transform_on_its_first_frame() {
             .to_matrix()
             .abs_diff_eq(expected, 1e-6)
     );
+}
+
+#[test]
+fn registry_images_and_text_follow_original_rows_with_explicit_orientation_control() {
+    let install = Install::new();
+    std::fs::create_dir_all(install.0.join("Data/Sprites")).unwrap();
+    std::fs::write(install.0.join("Data/Sprites/FontSmall.spr"),
+        "@animation f_uv\n@keyframes\n0 0\n0 0\n\n@animation f_w\n@keyframes\n0\n1\n\npagea\tscorch\t1\t@anim=f_uv\t@anim=f_w\n").unwrap();
+    let mounted = install.mount();
+    let mut images = Assets::<Image>::default();
+    let mut cache = super::super::textures::TextureCache::default();
+    let mut materials = Assets::<StandardMaterial>::default();
+    let mut loader = super::super::textures::Loader {
+        vfs: &mounted.0,
+        images: &mut images,
+        cache: &mut cache,
+        formats: bevy::image::CompressedImageFormats::BC,
+    };
+    let mut seen = [false; 2];
+    for flip in [false, true] {
+        let raw = format!(
+            "possibleCraftNames = \"First\" \"\" \"Second\"\npossibleCraftRegistry = \"!\" \"unselected\" \"!!\"\nlogoFileNames = \"scorch\" \"wrong\" \"\"\nlogoDecal1Hardpoint = \"anchor\"\nlogoDecal2Hardpoint = \"anchor\"\nlogoDecal2Text = \"registry\"\nlogoDecal2FlipU = {}\n",
+            u8::from(flip)
+        );
+        let mut def = UnitDef::new("synthetic", "craft");
+        def.raw = sta_odf::resolve("synthetic", &mut |_| Some(raw.clone()))
+            .unwrap()
+            .into();
+        let instance = ModelInstance::new(sta_core::ContentKey::NONE, model(), 1.0, &def);
+        for id in 1..=16 {
+            let identity = crate::ui::hud::model::craft_names::identity(&def, EntityId(id));
+            let first = identity.name == "First";
+            seen[usize::from(!first)] = true;
+            let output = sources(&instance, EntityId(id), &def, &mut loader, &mut materials);
+            assert_eq!(
+                output.len(),
+                if first { 2 } else { 1 },
+                "blank image rows stay blank"
+            );
+            if first {
+                assert!(!output[0].flip_u, "image U convention is preserved");
+            }
+            let text = output.last().unwrap();
+            assert_eq!(
+                text.flip_u, !flip,
+                "generated text reads from the receiving side; FlipU reverses it"
+            );
+            let material = materials.get(&text.material).unwrap();
+            let image = loader
+                .images
+                .get(material.base_color_texture.as_ref().unwrap())
+                .unwrap();
+            assert_eq!(
+                image.texture_descriptor.size.width,
+                if first { 1 } else { 2 },
+                "text raster must follow the same original name row"
+            );
+        }
+    }
+    assert_eq!(seen, [true, true]);
 }

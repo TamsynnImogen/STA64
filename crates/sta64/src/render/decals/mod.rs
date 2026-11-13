@@ -124,6 +124,9 @@ fn sources(
     let identity = crate::ui::hud::model::craft_names::identity(def, id);
     for logo in &instance.policy.logos {
         let stem = format!("logoDecal{}", logo.index);
+        // Legacy image planes keep their authored U convention. New lettering
+        // reads from the projector's receiving side (-Z); FlipU still reverses it.
+        let registry_text = def.raw.str(&format!("{stem}Text")).is_some();
         let texture = if let Some(mode) = def.raw.str(&format!("{stem}Text")) {
             if !mode.eq_ignore_ascii_case("registry") {
                 warn!("{}: {stem}Text must be registry", def.odf);
@@ -168,7 +171,7 @@ fn sources(
         if let Some(texture) = texture {
             result.push(Source {
                 placement: logo.projection.clone(),
-                flip_u: logo.flip_u,
+                flip_u: logo.flip_u ^ registry_text,
                 damage: None,
                 material: materials.add(decal_material(texture)),
             });

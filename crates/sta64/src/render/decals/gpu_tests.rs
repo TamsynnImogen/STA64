@@ -129,11 +129,11 @@ fn projected_image_and_registry_text_draw_on_curved_hulls_and_hide_with_receiver
     let surface = projection::ProjectedMesh {
         positions: triangles
             .iter()
-            .flat_map(|t| t.positions.map(|v|v.to_array()))
+            .flat_map(|t| t.positions.map(|v| v.to_array()))
             .collect(),
         normals: triangles
             .iter()
-            .flat_map(|t| t.normals.map(|v|v.to_array()))
+            .flat_map(|t| t.normals.map(|v| v.to_array()))
             .collect(),
         // Deliberately unusable source UVs: projector must provide its own.
         uvs: vec![[9.0, -4.0]; 12],
@@ -164,6 +164,23 @@ fn projected_image_and_registry_text_draw_on_curved_hulls_and_hide_with_receiver
         .world_mut()
         .resource_mut::<Assets<Mesh>>()
         .add(projected_mesh(projected));
+    let lettering = project_surface(
+        &triangles,
+        &Projector {
+            receiver_to_projector: Mat4::IDENTITY,
+            width: 10.0,
+            height: 4.0,
+            depth: 4.0,
+            facing_threshold: 0.15,
+            normal_bias: 0.003,
+            flip_u: true,
+        },
+    )
+    .unwrap();
+    let lettering_mesh = app
+        .world_mut()
+        .resource_mut::<Assets<Mesh>>()
+        .add(projected_mesh(lettering));
     let mut art = sta_assets::Rgba {
         width: 16,
         height: 8,
@@ -224,7 +241,11 @@ fn projected_image_and_registry_text_draw_on_curved_hulls_and_hide_with_receiver
         decals.push(
             app.world_mut()
                 .spawn((
-                    Mesh3d(decal_mesh.clone()),
+                    Mesh3d(if index == 0 {
+                        decal_mesh.clone()
+                    } else {
+                        lettering_mesh.clone()
+                    }),
                     MeshMaterial3d(material),
                     Transform::IDENTITY,
                     Visibility::Hidden,

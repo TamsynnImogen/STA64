@@ -30,7 +30,13 @@ impl Install {
         let path = std::env::temp_dir().join(format!(
             "sta64_appearance_{}_{}",
             std::process::id(),
-            std::thread::current().name().unwrap_or("test")
+            std::thread::current()
+                .name()
+                .unwrap_or("test")
+                .bytes()
+                .fold(0_u64, |hash, byte| hash
+                    .wrapping_mul(131)
+                    .wrapping_add(u64::from(byte)))
         ));
         std::fs::create_dir_all(&path).unwrap();
         let write = |name: &str, data: &str| {
