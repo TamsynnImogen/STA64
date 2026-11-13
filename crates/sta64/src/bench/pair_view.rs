@@ -90,7 +90,7 @@ pub(super) fn add(app: &mut App, cfg: &LaunchConfig, scene_camera: Option<BenchC
         .add_plugins(crate::render::post::PostFxPlugin::from_cfg(cfg))
         .add_plugins((crate::render::cull::CullPlugin, crate::render::profile::ProfilePlugin, crate::render::shader_shadow::ShaderShadowPlugin));
 
-    app.add_systems(Update, adopt_views.in_set(GameSet::Bench).after(bench_frame))
+    app.add_systems(Update, (adopt_views, aim_orbit).chain().in_set(GameSet::Bench).after(bench_frame))
         .add_systems(Update, (retarget, hide_text))
         .add_systems(PostUpdate, place_camera.before(TransformSystems::Propagate));
     Ok(())
@@ -104,9 +104,13 @@ struct Target(Handle<Image>);
 #[derive(Component)]
 struct Retargeted;
 
-/// The map view's cameras draw into the frame's image, not a window.
+/// The map view's window cameras draw into the frame's image, not a window.
 fn retarget(mut commands: Commands, target: Res<Target>, mut cameras: Query<(Entity, &mut RenderTarget), (With<Camera3d>, Without<Retargeted>)>) {
     for (e, mut rt) in &mut cameras {
+        // Only the cameras that draw to a window: the shadow pass has its own image target.
+        if !matches!(*rt, RenderTarget::Window(_)) {
+            continue;
+        }
         *rt = RenderTarget::from(target.0.clone());
         commands.entity(e).insert(Retargeted);
     }
@@ -129,6 +133,24 @@ fn adopt_views(bench: ResMut<BenchRes>, link: Option<ResMut<SimLink>>) {
     let view = bench.0.get().view();
     if !Arc::ptr_eq(link.curr(), view) {
         link.feed(view.clone());
+    }
+}
+
+/// The scene's camera as the map view's own orbit (focus, yaw, pitch, distance in render
+/// space), so its camera system and the sky that follows the camera both use it.
+fn aim_orbit(bench: ResMut<BenchRes>, view: Res<View>, mut orbit: Query<&mut crate::viewer::Orbit>) {
+    let mut bench = bench;
+    let Some((eye, look)) = view.pose(bench.0.get()) else { return };
+    let d = eye - look;
+    let dist = d.length();
+    if dist < 1e-3 {
+        return;
+    }
+    for mut o in &mut orbit {
+        o.focus = look;
+        o.dist = dist;
+        o.pitch = (d.y / dist).clamp(-1.0, 1.0).asin();
+        o.yaw = d.x.atan2(d.z);
     }
 }
 

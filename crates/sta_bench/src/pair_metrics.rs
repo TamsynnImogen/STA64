@@ -196,9 +196,9 @@ fn lum(p: &[u8]) -> f64 {
 /// image (so the edge averages what is there).
 fn blur_plane(src: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
     let mut tmp = vec![0f32; w * h];
+    let mut pre = vec![0f64; w + 1];
     for y in 0..h {
         let row = &src[y * w..(y + 1) * w];
-        let mut pre = vec![0f64; w + 1];
         for x in 0..w {
             pre[x + 1] = pre[x] + f64::from(row[x]);
         }
@@ -208,7 +208,7 @@ fn blur_plane(src: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
         }
     }
     let mut out = vec![0f32; w * h];
-    let mut pre = vec![0f64; h + 1];
+    pre = vec![0f64; h + 1];
     for x in 0..w {
         for y in 0..h {
             pre[y + 1] = pre[y] + f64::from(tmp[y * w + x]);
@@ -258,6 +258,7 @@ pub fn best_shift(a: &Image, b: &Image, max: i32) -> ((i32, i32), f64) {
     let la: Vec<f32> = a.rgb.chunks_exact(3).map(|p| lum(p) as f32).collect();
     let lb: Vec<f32> = b.rgb.chunks_exact(3).map(|p| lum(p) as f32).collect();
     let mut best: ((i32, i32), f64) = ((0, 0), f64::MAX);
+    let any_overlap = a.w as i32 > max && a.h as i32 > max;
     for dy in -max..=max {
         for dx in -max..=max {
             let (x0, x1) = ((-dx).max(0), (w - dx.max(0)).max(0));
@@ -281,7 +282,7 @@ pub fn best_shift(a: &Image, b: &Image, max: i32) -> ((i32, i32), f64) {
             }
         }
     }
-    best
+    if !any_overlap || best.1 == f64::MAX { ((0, 0), 0.0) } else { best }
 }
 
 struct Acc {

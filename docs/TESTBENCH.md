@@ -540,7 +540,8 @@ sta-bench pair move --game a2 --refit-out <earlier>/refit --install ...   # reus
   side (`frames/f<i>.png`: original | STA64 | difference x4 | blurred difference x4)
   with mean, max and share of differing pixels and the frame metrics below. Frames
   are judged only when the pair sets a frame tolerance. Exit 1 when anything is
-  beyond the tolerances.
+  beyond the tolerances (the count in the report is of breached limits: one frame
+  over three limits counts three).
 - **Where it goes**: `$XDG_DATA_HOME/sta64/bench/pairs/<pair>-<game>/`
   (`refit/`, `sta64/`, `report.*`, `frames/`). Both tools refuse a path inside
   a checkout: the frames are the game's art.
@@ -597,7 +598,7 @@ are the same picture a pixel apart and large when they are not:
 | `colour` | largest channel difference of the whole-frame mean colour | a colour cast |
 | `bg`, `fg` | the luminance difference of the mean over the pixels the original shows dark (`bg`, luminance <= 48) or bright (`fg`) | `bg` is the sky, nebulae and stars the map draws; `fg` the objects, effects and bright gas |
 | `tile` | the largest luminance difference of the mean over a 4 x 4 grid | something missing or misplaced in one part of the frame |
-| `bright` | difference of the share of bright pixels | an object or a nebula that is not there |
+| `bright` | difference of the share of bright pixels | an object or a nebula that is not there (a 0..1 share, unlike the other figures; the blur radii and the shift reach have minimums of 1, 2 and 1 pixels) |
 
 Luminance is `0.299 R + 0.587 G + 0.114 B` over the 8-bit sRGB values. Regions are cut from
 the **original's** frame and applied to both frames, so a region compares what is

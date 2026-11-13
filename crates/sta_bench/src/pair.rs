@@ -359,7 +359,8 @@ pub fn launch_map(launch: &str) -> Option<String> {
     while let Some(a) = it.next() {
         if matches!(a.to_ascii_lowercase().as_str(), "-mod" | "--mod") {
             it.next();
-        } else if !a.starts_with('-') && !a.is_empty() {
+        } else if !a.is_empty() && !a.starts_with('-') && !a.chars().all(|c| c.is_ascii_digit()) {
+            // A bare number is a flag's value (`-res 1280`), not a map.
             map = Some(map_stem(&a));
         }
     }
@@ -1517,6 +1518,7 @@ mod tests {
         assert_eq!(launch_map("-nointro a2_borg01").as_deref(), Some("a2_borg01"));
         assert_eq!(launch_map("-nointro -mod \"STA2 Classic Mod\" FullTech.bzn").as_deref(), Some("fulltech"));
         assert_eq!(launch_map("-nointro"), None);
+        assert_eq!(launch_map("-nointro a2_x -res 1280").as_deref(), Some("a2_x"));
         assert_eq!(launch_map("-mod \"x y\""), None);
         let text = PAIR.replace("roots.Mod=STA2 Classic Mod", "roots.Mod=STA2 Classic Mod\na2.Launch=-nointro a2_borg01\nroots.Launch=-nointro -mod \"STA2 Classic Mod\" fulltech.bzn");
         let a = PairDesc::parse("p", &text, "a2").unwrap();
