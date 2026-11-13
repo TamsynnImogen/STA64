@@ -86,10 +86,16 @@ pub struct Ctx<'a> {
     pub settings: &'a Settings,
     pub selected: &'a SelectedMod,
     pub scroll: &'a ListScroll,
+    pub layout: super::stock::ScreenLayout,
+    /// The box the stock screens are laid out in, logical px.
+    pub stock_box: Vec2,
 }
 
 /// Spawn `screen`; `camera` is the UI camera when the host has one of its own.
 pub fn spawn(commands: &mut Commands, screen: Screen, ctx: &Ctx, camera: Option<Entity>) {
+    if ctx.layout == super::stock::ScreenLayout::Stock && super::stock::covers(screen) {
+        return super::stock::spawn(commands, screen, ctx, camera);
+    }
     match screen {
         Screen::Main => frame(commands, ctx, screen, camera, &tr("Star Trek Armada"), 520.0, main_menu(ctx)),
         Screen::SinglePlayer => frame(commands, ctx, screen, camera, &tr("Single player"), 620.0, single_player(ctx)),

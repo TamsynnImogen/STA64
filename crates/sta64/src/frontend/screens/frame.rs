@@ -34,7 +34,7 @@ pub fn parse(name: &str) -> Option<Screen> {
 pub fn add_overlay(app: &mut App, screen: Screen, target: Handle<Image>, frame_height: u32) {
     app.insert_resource(UiScale(frame_height as f32 / 1080.0))
         .insert_resource(ScreenData::fake())
-        .insert_resource(ScreensConfig { own_camera: false, fit_scale: false, start: screen })
+        .insert_resource(ScreensConfig { own_camera: false, fit_scale: false, start: screen, ..default() })
         .insert_state(AppState::FrontEnd)
         .add_plugins(ScreensPlugin)
         .add_systems(Startup, move |mut commands: Commands| {
