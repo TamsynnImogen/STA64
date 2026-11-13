@@ -129,6 +129,12 @@ pub struct Titles {
 }
 
 impl Titles {
+    /// Take every title down (the layer redraws).
+    pub fn clear(&mut self) {
+        self.items.clear();
+        self.dirty = true;
+    }
+
     fn add(&mut self, item: TitleItem) {
         self.items.retain(|t| t.id != item.id);
         self.items.push(item);
@@ -510,6 +516,26 @@ fn ok_pressed(
 
 pub struct PresentationPlugin;
 
+/// Back at the front end (UI-34): titles, fades, queued message boxes, pending movie replies and the
+/// objectives panel of the match are gone, whatever ended it (a mission's debrief, F10, the in-game menu).
+fn reset_presentation(
+    mut titles: ResMut<Titles>,
+    mut fade: ResMut<FadeState>,
+    mut cine: ResMut<CineractiveState>,
+    mut movies: ResMut<PendingMovies>,
+    mut view: ResMut<ObjectivesView>,
+    mut queue: ResMut<MessageQueue>,
+) {
+    titles.items.clear();
+    // `Titles::default()` is not dirty, so the layer would keep what it drew.
+    titles.dirty = true;
+    *fade = default();
+    *cine = default();
+    movies.0.clear();
+    *view = default();
+    queue.0.clear();
+}
+
 impl Plugin for PresentationPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Titles>()
@@ -519,6 +545,7 @@ impl Plugin for PresentationPlugin {
             .init_resource::<PendingMovies>()
             .init_resource::<ObjectivesView>()
             .init_resource::<MessageQueue>()
+            .add_systems(OnEnter(crate::app::AppState::FrontEnd), reset_presentation)
             .add_message::<ScriptReply>()
             .add_message::<MessageBox>()
             .add_message::<crate::media::mission::Requested>()

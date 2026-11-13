@@ -274,7 +274,7 @@ fn seats(map: &MapDef, me: Option<u8>, race: &str) -> Vec<PlayerSetup> {
 }
 
 #[derive(Component)]
-struct MapRoot;
+pub(crate) struct MapRoot;
 
 /// Camera limits for the current map (Bevy space) and settings from RTS_CFG.h.
 #[derive(Resource)]
@@ -312,7 +312,7 @@ pub type MainCamera = (With<Camera3d>, Without<BackgroundCamera>);
 
 #[derive(Component)]
 #[require(Propagate<RenderLayers> = Propagate(RenderLayers::layer(BACKGROUND_LAYER)))]
-struct Sky;
+pub(crate) struct Sky;
 
 /// A `background_obj` (suns, background planets, wrecks, gates) at its place in the
 /// map, drawn before the scene.
@@ -357,7 +357,7 @@ impl Lcg {
     }
 }
 
-type MapEntities = Or<(With<MapRoot>, With<Sky>)>;
+pub(crate) type MapEntities = Or<(With<MapRoot>, With<Sky>)>;
 
 /// The rest of the map's state, as one system parameter.
 type MapState<'w> = (
@@ -426,9 +426,10 @@ impl Plugin for MapPlugin {
                     crate::clock::advance_idle_clock.run_if(not(resource_exists::<crate::sim_link::SimLink>)),
                     input,
                     rebuild,
-                    radar_click,
-                    pan_keys,
-                    crate::viewer::orbit_camera,
+                    radar_click.run_if(crate::ui::ingame_menu::menu_closed),
+                    // Under the in-game menu (UI-34) the camera stands still.
+                    pan_keys.run_if(crate::ui::ingame_menu::menu_closed),
+                    crate::viewer::orbit_camera.run_if(crate::ui::ingame_menu::menu_closed),
                     radar_camera,
                     spin,
                     sky_follows_camera,
@@ -454,9 +455,21 @@ impl Plugin for MapPlugin {
 #[derive(Component)]
 pub(crate) struct MatchEntity;
 
-/// Back at the front end: the map, its sky and the match's cameras go.
-fn clear_match(mut commands: Commands, q: Query<Entity, Or<(MapEntities, With<MatchEntity>)>>, mut particles: ResMut<crate::render::particles::Particles>) {
+/// Back at the front end: the map, its sky, the match's cameras and the match's unit and effect
+/// entities go, with what maps them (UI-34: nothing of the match may outlive it).
+#[allow(clippy::type_complexity)]
+pub(crate) fn clear_match(
+    mut commands: Commands,
+    q: Query<Entity, Or<(MapEntities, With<MatchEntity>, With<crate::render::units::FromView>)>>,
+    mut particles: ResMut<crate::render::particles::Particles>,
+    mut entities: ResMut<crate::sim_link::SimEntities>,
+) {
     particles.clear();
+    // The sim ids the match's entities answered to; the menu scene's units are made again from its view.
+    entities.0.clear();
+    commands.remove_resource::<crate::render::fog::FogState>();
+    // The playtest capture's record of how the match began (a networked match does not write one).
+    commands.remove_resource::<crate::capture::MatchMeta>();
     for e in &q {
         commands.entity(e).despawn();
     }

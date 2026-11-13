@@ -17,6 +17,7 @@
 // The screens are for INT-M4 to start; the binary does not yet.
 #![allow(dead_code, unused_imports)]
 
+use bevy::ecs::schedule::SystemCondition;
 use bevy::prelude::*;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::window::PrimaryWindow;
@@ -27,7 +28,7 @@ pub mod frame;
 pub mod stock;
 #[cfg(test)]
 mod tests;
-mod view;
+pub(crate) mod view;
 
 pub use crate::frontend::lobby::{LobbyPlugin, MpFields, Multiplayer, NetGameReady, NetLaunch};
 pub use data::{Browse, MAX_SEATS, MapEntry, ModEntry, SKIRMISH_AI, ScreenData, Seat, SeatControl, SelectedMod, SettingKey, Settings, SetupDraft};
@@ -177,7 +178,8 @@ impl Plugin for ScreensPlugin {
             .add_systems(OnEnter(Screen::ModSelect), open_list)
             .add_systems(
                 Update,
-                on_settings.in_set(GameSet::Ui).before(crate::ui::profile::ProfileSync).run_if(in_state(AppState::FrontEnd)),
+                // Also in a match: the in-game menu (UI-34) shows this panel over it.
+                on_settings.in_set(GameSet::Ui).before(crate::ui::profile::ProfileSync).run_if(in_state(AppState::FrontEnd).xor(in_state(AppState::InGame))),
             )
             .add_systems(
                 Update,

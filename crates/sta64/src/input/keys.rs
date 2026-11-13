@@ -38,10 +38,12 @@ pub enum Action {
     Formation(u8),
     /// Held with `GroupModifier` (Ctrl): write a playtest capture folder (TOOL-14).
     Capture,
+    /// Open the in-game menu (UI-34). The stock games bind `mainMenu` to Esc.
+    GameMenu,
 }
 
 impl Action {
-    pub const ALL: [Action; 18] = [
+    pub const ALL: [Action; 19] = [
         Action::AddModifier,
         Action::GroupModifier,
         Action::CentreModifier,
@@ -60,6 +62,7 @@ impl Action {
         Action::Formation(FORM_COLUMN),
         Action::Formation(FORM_WEDGE),
         Action::Capture,
+        Action::GameMenu,
     ];
 
     pub fn name(self) -> String {
@@ -74,6 +77,7 @@ impl Action {
             Action::Formation(FORM_COLUMN) => "formation_column".into(),
             Action::Formation(_) => "formation_wedge".into(),
             Action::Capture => "capture".into(),
+            Action::GameMenu => "game_menu".into(),
         }
     }
 
@@ -110,6 +114,7 @@ impl Default for KeyBindings {
         m.insert(Action::Formation(FORM_COLUMN), vec![KeyCode::F2]);
         m.insert(Action::Formation(FORM_WEDGE), vec![KeyCode::F3]);
         m.insert(Action::Capture, vec![KeyCode::F12]);
+        m.insert(Action::GameMenu, vec![KeyCode::Escape]);
         for (n, k) in DIGITS.into_iter().enumerate() {
             m.insert(Action::Group(n as u8), vec![k]);
         }
@@ -193,7 +198,7 @@ fn parse_key(s: &str) -> Option<KeyCode> {
         KeyS, KeyT, KeyU, KeyV, KeyW, KeyX, KeyY, KeyZ, Digit0, Digit1, Digit2, Digit3, Digit4, Digit5, Digit6,
         Digit7, Digit8, Digit9, F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12, ShiftLeft, ShiftRight,
         ControlLeft, ControlRight, AltLeft, AltRight, Space, Tab, Backquote, Home, End, Numpad0, Numpad1, Numpad2,
-        Numpad3, Numpad4, Numpad5, Numpad6, Numpad7, Numpad8, Numpad9,
+        Numpad3, Numpad4, Numpad5, Numpad6, Numpad7, Numpad8, Numpad9, Escape, Pause,
     ];
     CANDIDATES.iter().copied().find(|k| format!("{k:?}") == s)
 }
@@ -210,5 +215,17 @@ mod tests {
         let partial = KeyBindings::from_text("select_type = KeyZ\nbogus = KeyA\n");
         assert_eq!(partial.keys(Action::SelectType), [KeyCode::KeyZ]);
         assert_eq!(partial.keys(Action::Group(0)), [KeyCode::Digit1]);
+    }
+
+    /// UI-34: the in-game menu opens on Esc (the stock `mainMenu` binding) and the binding
+    /// survives the settings file, which an older file without the line leaves at the default.
+    #[test]
+    fn the_game_menu_is_bound_to_escape_and_rebindable() {
+        let mut b = KeyBindings::default();
+        assert_eq!(b.keys(Action::GameMenu), [KeyCode::Escape]);
+        assert_eq!(KeyBindings::from_text(&b.to_text()).keys(Action::GameMenu), [KeyCode::Escape]);
+        assert_eq!(KeyBindings::from_text("stop = KeyS\n").keys(Action::GameMenu), [KeyCode::Escape]);
+        b.rebind(Action::GameMenu, KeyCode::F9);
+        assert_eq!(KeyBindings::from_text(&b.to_text()).keys(Action::GameMenu), [KeyCode::F9]);
     }
 }
