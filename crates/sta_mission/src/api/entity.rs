@@ -227,7 +227,7 @@ impl UserData for Entity {
         });
         f.add_field_method_get("label", |_, e| {
             Ok(match &e.key {
-                EntityRef::Spawn(h) if e.key.pending() => h.inherit_label.clone(),
+                EntityRef::Spawn(h) if e.key.pending() => h.inherit_label.as_ref().map(|(_, l)| l.clone()),
                 key => key.id().and_then(|id| e.ctx.borrow().labels.get(&id).cloned()),
             })
         });
@@ -419,7 +419,7 @@ fn find(lua: &Lua, ctx: &Shared, filter: &Value, predicate: Option<&mlua::Functi
     out.sort();
     let mut out: Vec<EntityRef> = out.into_iter().map(EntityRef::Existing).collect();
     for h in spawn::pending_spawns(&c) {
-        if pass(&h.hint, h.inherit_label.as_deref()) {
+        if pass(&h.hint, h.inherit_label.as_ref().map(|(_, l)| l.as_str())) {
             out.push(EntityRef::Spawn(h));
         }
     }

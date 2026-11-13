@@ -87,7 +87,13 @@ pub struct CinematicCamera {
     glide: Option<(Pose, f32, f32)>,
     /// Shots that came before a pose could be computed, for tests and the bench.
     pub shots: u32,
+    /// When (real seconds) the last shot outside a cineractive moved the camera.
+    loose_at: Option<f32>,
 }
+
+/// A shot outside a cineractive moves the camera at most this often (real seconds): a script that
+/// issues one every tick would otherwise pin the camera with nothing the player could skip.
+const LOOSE_SHOT_EVERY_SECS: f32 = 1.0;
 
 fn lerp_pose(a: &Pose, b: &Pose, t: f32) -> Pose {
     let mut dyaw = (b.yaw - a.yaw) % std::f32::consts::TAU;
@@ -122,6 +128,7 @@ fn consume(
     mut unhandled: ResMut<Unhandled>,
     mut orbit: Query<&mut Orbit>,
     mut replies: MessageReader<ScriptReply>,
+    time: Res<Time<Real>>,
 ) {
     // The player skipped the cineractive: the camera is theirs again.
     if replies.read().any(|r| *r == ScriptReply::CineractiveSkipped) && cam.locked {
@@ -162,6 +169,12 @@ fn consume(
                 // A2 scripts bracket shots in cineractive mode, and a hold nothing brackets
                 // would have no end the player could count on.
                 if !cam.locked {
+                    let now = time.elapsed_secs();
+                    if cam.loose_at.is_some_and(|at| now - at < LOOSE_SHOT_EVERY_SECS) {
+                        unhandled.note("Shot outside a cineractive, more than once a second");
+                        continue;
+                    }
+                    cam.loose_at = Some(now);
                     if let Some(mut o) = orbit.iter_mut().next() {
                         (o.focus, o.yaw, o.pitch, o.dist) = (pose.focus, pose.yaw, pose.pitch, pose.dist);
                     }
@@ -296,10 +309,11 @@ mod tests {
         send(&mut app, Presentation::Shot { from: Spot::Position(sv(100, 20, 30)), at: Spot::Position(sta_core::Vec3::ZERO), seconds: Fixed::ZERO });
         assert_ne!(orbit(&mut app), before);
         assert!(!app.world().resource::<CinematicCamera>().locked);
-        // The player can move it away at once.
+        // The player can move it away at once, and a second shot at once does not pin it back.
         app.world_mut().query::<&mut Orbit>().single_mut(app.world_mut()).unwrap().dist = 5.0;
-        app.update();
+        send(&mut app, Presentation::Shot { from: Spot::Position(sv(7, 7, 7)), at: Spot::Position(sta_core::Vec3::ZERO), seconds: Fixed::ZERO });
         assert_eq!(orbit(&mut app).dist, 5.0);
+        assert_eq!(app.world().resource::<Unhandled>().count("Shot outside a cineractive, more than once a second"), 1);
     }
 
     #[test]

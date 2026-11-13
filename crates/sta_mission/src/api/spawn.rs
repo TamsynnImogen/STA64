@@ -22,7 +22,7 @@ pub(crate) struct SpawnStore {
     actions: Vec<QueuedAction>,
     /// Entities removed by the script since the last tick's receipts: (def, owner, place, label).
     /// A spawn of the same def for the same owner at the same place takes the label over.
-    removed: Vec<(ContentKey, PlayerId, Vec3, String)>,
+    removed: Vec<(EntityId, ContentKey, PlayerId, Vec3, String)>,
     /// Entities the script removed since the last tick's receipts: gone to `EntityFinder` at once.
     killed: BTreeSet<EntityId>,
 }
@@ -128,8 +128,11 @@ pub(super) fn queue_spawn(c: &mut Ctx, odf: ContentKey, owner: PlayerId, pos: Ve
         .spawns
         .removed
         .iter()
-        .position(|(def, who, at, _)| *def == odf && *who == owner && near(*at, pos))
-        .map(|i| c.spawns.removed.remove(i).3);
+        .position(|(_, def, who, at, _)| *def == odf && *who == owner && near(*at, pos))
+        .map(|i| {
+            let (old, _, _, _, label) = c.spawns.removed.remove(i);
+            (old, label)
+        });
     let handle = Rc::new(SpawnHandle {
         request,
         seq,
@@ -232,7 +235,8 @@ pub(super) fn process(c: &mut Ctx) {
                 // Keep the actual ID even if a later command killed it in
                 // this tick. Liveness comes from the view; actions below drop.
                 handle.state.set(SpawnStatus::Resolved(id));
-                if let Some(label) = &handle.inherit_label {
+                if let Some((old, label)) = &handle.inherit_label {
+                    c.labels.remove(old);
                     c.labels.insert(id, label.clone());
                 }
             }
@@ -278,14 +282,13 @@ fn dispatch(c: &mut Ctx, actor: EntityRef, action: EntityAction) -> bool {
     let Some(id) = actor.id() else { return false };
     match action {
         EntityAction::Remove => {
-            c.spawns.killed.insert(id);
-            if let Some(u) = c.alive(id)
-                && let Some(label) = c.labels.get(&id)
-            {
-                let row = (u.def, u.owner, u.pos, label.clone());
-                c.spawns.removed.push(row);
+            let row = c.alive(id).and_then(|u| c.labels.get(&id).map(|l| (id, u.def, u.owner, u.pos, l.clone())));
+            let queued = edit(c, Edit::Kill(id));
+            if queued {
+                c.spawns.killed.insert(id);
+                c.spawns.removed.extend(row);
             }
-            edit(c, Edit::Kill(id))
+            queued
         }
         EntityAction::Immortal(on) => edit(c, Edit::Immortal(id, on)),
         EntityAction::ForceOntoMap(enabled) => {

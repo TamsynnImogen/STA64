@@ -108,8 +108,15 @@ pub const MAX_HOLD_SECS: f32 = 180.0;
 /// How long the current cineractive has held the player.
 #[derive(Resource, Default, Debug, Clone, Copy, PartialEq)]
 pub struct CineractiveClock {
+    /// Real seconds a cineractive has held the player; kept across a brief gap, so a script that
+    /// raises it again as soon as it ends does not earn a fresh grace and cap each time.
     pub held: f32,
+    /// How long no cineractive has been on.
+    off_for: f32,
 }
+
+/// A cineractive that has been off this long (real seconds) counts as over: the next one starts a new hold.
+pub const NEW_HOLD_AFTER_SECS: f32 = 5.0;
 
 /// Cineractive mode as the script set it.
 #[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
@@ -255,7 +262,7 @@ fn num(a: &Arg) -> Option<f32> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn consume(
+pub(crate) fn consume(
     mut events: MessageReader<SimMsg>,
     strings: Option<Res<Strings>>,
     mut titles: ResMut<Titles>,
@@ -362,20 +369,24 @@ fn movie_replies(mut requested: MessageReader<Requested>, mut finished: MessageR
 /// Every end is a `ScriptReply::CineractiveSkipped`, which the camera and the script hear.
 fn skip_cineractive(keys: Res<ButtonInput<KeyCode>>, time: Res<Time<Real>>, mut state: ResMut<CineractiveState>, mut clock: ResMut<CineractiveClock>, mut out: MessageWriter<ScriptReply>) {
     if !state.on {
-        clock.held = 0.0;
+        clock.off_for += time.delta_secs();
+        if clock.off_for >= NEW_HOLD_AFTER_SECS {
+            clock.held = 0.0;
+        }
         return;
     }
+    clock.off_for = 0.0;
     clock.held += time.delta_secs();
     let pressed = keys.just_pressed(KeyCode::Space) || keys.just_pressed(KeyCode::Escape);
     if (pressed && (state.skippable || clock.held >= SKIP_GRACE_SECS)) || clock.held >= MAX_HOLD_SECS {
+        // `held` stays: a cineractive raised again at once is released again at once.
         *state = CineractiveState::default();
-        clock.held = 0.0;
         out.write(ScriptReply::CineractiveSkipped);
     }
 }
 
 /// An end that came from outside (the host's fault or mission-end release) clears the state too.
-fn apply_replies(mut replies: MessageReader<ScriptReply>, mut state: ResMut<CineractiveState>) {
+pub(crate) fn apply_replies(mut replies: MessageReader<ScriptReply>, mut state: ResMut<CineractiveState>) {
     if replies.read().any(|r| *r == ScriptReply::CineractiveSkipped) {
         *state = CineractiveState::default();
     }
@@ -658,6 +669,11 @@ mod tests {
         send(&mut app, Presentation::Cineractive { on: true, skippable: false });
         app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
         app.world_mut().resource_mut::<CineractiveClock>().held = MAX_HOLD_SECS;
+        app.update();
+        assert_eq!(replies(&mut app), [ScriptReply::CineractiveSkipped]);
+        assert!(!app.world().resource::<CineractiveState>().on);
+        // A script that raises it again at once earns no new grace: it is released again at once.
+        send(&mut app, Presentation::Cineractive { on: true, skippable: false });
         app.update();
         assert_eq!(replies(&mut app), [ScriptReply::CineractiveSkipped]);
         assert!(!app.world().resource::<CineractiveState>().on);

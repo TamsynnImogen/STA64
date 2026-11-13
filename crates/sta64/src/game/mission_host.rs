@@ -602,7 +602,14 @@ impl Plugin for MissionHostPlugin {
                 Update,
                 (
                     on_start_mission.run_if(in_state(AppState::FrontEnd)).run_if(resource_exists::<ScreenData>),
-                    run_mission.run_if(in_state(AppState::InGame)).run_if(resource_exists::<MissionHandle>).run_if(resource_exists::<MissionRun>).run_if(resource_exists::<SimLink>),
+                    // Before the presentation systems, so a release it writes is applied in the same
+                    // frame, ahead of anything the sim raises in the next.
+                    run_mission
+                        .run_if(in_state(AppState::InGame))
+                        .run_if(resource_exists::<MissionHandle>)
+                        .run_if(resource_exists::<MissionRun>)
+                        .run_if(resource_exists::<SimLink>)
+                        .before(crate::ui::presentation::consume),
                 )
                     .in_set(GameSet::Ui),
             );

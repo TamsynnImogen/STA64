@@ -19,8 +19,29 @@ use crate::runtime::MissionRuntime;
 pub const MAX_NAMES: usize = 6;
 
 /// The unbound and unsupported names the script has used so far, most used first.
+///
+/// Also: a script error (a call that raised: a binding STA64 lacks, an overload it does not
+/// implement, content it does not have) and an end STA64 could not observe, since neither says
+/// anything about the player either.
 pub fn gaps(runtime: &MissionRuntime) -> Vec<String> {
-    gaps_of(&runtime.unsupported())
+    let mut v = gaps_of(&runtime.unsupported());
+    let mut errors: Vec<String> = Vec::new();
+    for e in runtime.errors() {
+        let line = e.lines().next().unwrap_or("");
+        // The edits the sim rejected are counted above.
+        if line.contains("simulation rejected") {
+            continue;
+        }
+        let line = format!("script error: {}", line.chars().take(90).collect::<String>());
+        if !errors.contains(&line) {
+            errors.push(line);
+        }
+    }
+    v.extend(errors);
+    if runtime.finished() && runtime.eval::<bool>("return rawget(_G, '__sta64_outcome') == nil").unwrap_or(false) {
+        v.push("end reached through a reference the host could not observe".to_owned());
+    }
+    v
 }
 
 /// [`gaps`] over a counted list.
@@ -53,6 +74,16 @@ mod tests {
         assert!(is_blocked(false, &g));
         assert!(!is_blocked(true, &g), "a win is a win");
         assert!(!is_blocked(false, &[]), "a loss with nothing unsupported is a real loss");
+    }
+
+    #[test]
+    fn a_script_error_and_an_unobserved_end_are_gaps_too() {
+        let rt = crate::runtime::MissionRuntime::from_source("e.lua", "MMM.register(function() error('boom') end)", 1);
+        let mut rt = rt;
+        rt.step(1);
+        let g = gaps(&rt);
+        assert!(g.iter().any(|x| x.starts_with("script error: ") && x.contains("boom")), "{g:?}");
+        assert!(is_blocked(false, &g));
     }
 
     #[test]
