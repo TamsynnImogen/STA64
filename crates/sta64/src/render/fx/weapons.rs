@@ -86,6 +86,7 @@ pub struct WeaponFx {
 
 impl WeaponFx {
     /// Where the effect starts now (render space).
+    #[cfg(test)]
     pub fn origin(&self) -> Vec3 {
         self.from
     }
@@ -101,7 +102,7 @@ impl Plugin for WeaponFxPlugin {
     fn build(&self, app: &mut App) {
         // RND-28: the recipes a mod's mounted files lay over Refit's, read as the files
         // are mounted (`ordnance/ordnance.ini`, D12).
-        // RND-29: a freighter's mining beam is a shot of its mining weapon, from where it orbits.
+        // RND-29: a freighter's mining beam is drawn as a shot of its mining weapon, from where it orbits.
         app.add_plugins(super::super::mining::MiningPlugin);
         app.init_resource::<OrdnanceRecipes>().add_systems(
             Update,
@@ -166,9 +167,9 @@ fn shifted(offsets: &Option<Res<super::super::mining::VisualOffsets>>, id: Entit
     offsets.as_ref().and_then(|o| o.0.get(&id)).copied().unwrap_or(Vec3::ZERO)
 }
 
-fn target_point(link: &SimLink, t: &Target, alpha: f32) -> Option<Vec3> {
+fn target_point(link: &SimLink, offsets: &Option<Res<super::super::mining::VisualOffsets>>, t: &Target, alpha: f32) -> Option<Vec3> {
     match t {
-        Target::Entity(id) => point(link, *id, alpha),
+        Target::Entity(id) => point(link, *id, alpha).map(|p| p + shifted(offsets, *id)),
         Target::Point(p) => Some(to_bevy(p.to_f32())),
         _ => None,
     }
@@ -188,10 +189,12 @@ fn load_recipes(vfs: Res<crate::viewer::Mounted>, mut recipes: ResMut<OrdnanceRe
     *recipes = OrdnanceRecipes::from_vfs(&vfs.0);
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_fx(
     mut cmds: Commands,
     offsets: Option<Res<super::super::mining::VisualOffsets>>,
     mut msgs: MessageReader<SimMsg>,
+    mut mining: MessageReader<super::super::mining::MiningShot>,
     recipes: Res<OrdnanceRecipes>,
     clock: Res<AnimClock>,
     link: Res<SimLink>,
@@ -199,13 +202,18 @@ pub(crate) fn spawn_fx(
     live: Query<(Entity, &WeaponFx)>,
 ) {
     let alpha = clock.alpha();
-    for SimMsg(ev) in msgs.read() {
+    // A freighter's mining beam is drawn as a shot but is not one for anyone else.
+    let mined: Vec<SimEvent> = mining
+        .read()
+        .map(|s| SimEvent::Fired { shooter: s.shooter, weapon: s.weapon, hardpoint: 0, target: Target::Entity(s.node) })
+        .collect();
+    for ev in msgs.read().map(|m| &m.0).chain(mined.iter()) {
         match ev {
             SimEvent::Fired { shooter, weapon, target, .. } => {
                 let Some(def) = content.0.weapon(*weapon) else { continue };
                 // A shooter drawn off its sim place (an orbiting miner) shoots from where it is drawn.
                 let Some(from) = point(&link, *shooter, alpha).map(|p| p + shifted(&offsets, *shooter)) else { continue };
-                let to = target_point(&link, target, alpha).unwrap_or(from);
+                let to = target_point(&link, &offsets, target, alpha).unwrap_or(from);
                 let recipe = recipe_for(def, &recipes);
                 let seed = shot_seed(*shooter, *weapon, clock.tick());
                 let mk = |kind, life: f32, look: Look| WeaponFx {
@@ -286,7 +294,7 @@ fn update_fx(
         if let Some(p) = point(&link, fx.shooter, alpha) {
             fx.from = p + shifted(&offsets, fx.shooter);
         }
-        if let Some(p) = target_point(&link, &fx.target, alpha) {
+        if let Some(p) = target_point(&link, &offsets, &fx.target, alpha) {
             fx.to = p;
         }
         let r = fx.recipe.clone();

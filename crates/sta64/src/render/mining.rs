@@ -12,9 +12,12 @@
 //!   the shipped files the dilithium and tritanium beams have the same range and delay. The sim position is not touched: the circle is a
 //!   visual offset on the model ([`VisualOffsets`]), faded out when mining ends.
 //! - **Beam.** The same weapon fires at the resource every `shotDelay` (its `refire`)
-//!   while mining: a synthetic [`SimEvent::Fired`] for [`weapons`](super::fx::weapons),
-//!   which draws it from the ordnance's own `lifespan` and recipe, and that the sound and
-//!   animation systems hear like any shot. The beam leaves the orbiting model.
+//!   while mining: a [`MiningShot`] for [`weapons`](super::fx::weapons), which draws it
+//!   with the weapon's recipe (by ordnance class) for the shot's flight time at
+//!   `shotSpeed`: the ordnance `lifespan` is only kept for beam-class ordnance, and the mining
+//!   ordnance is not one. It is a message of its own, not a `SimEvent::Fired`, so combat
+//!   music, sounds and weapon animations (which listen for real shots) do not take it for a
+//!   fight. The beam leaves the orbiting model.
 //! - **Dock.** While unloading the freighter glides to the station's position (the
 //!   station that the sim named in the event). The files name no berth: no ODF key and no
 //!   SOD hardpoint of the Armada, Armada II or Fleet Operations stations names a dock
@@ -26,13 +29,13 @@
 //! orbits at the weapon's range is not measured.
 //!
 //! A phase the sim announced before the link existed (a loaded save mid-cycle) shows
-//! from the next change.
+//! from the next change. A miner the sim moves off the spot it started working at (a stop,
+//! a move or a new order do not announce themselves) stops being drawn at its work.
 
 use std::collections::BTreeMap;
 
 use bevy::prelude::*;
 use sta_content::{ContentDb, UnitDef};
-use sta_sim::command::Target;
 use sta_sim::{ContentKey, EntityId, MinerPhase, SimEvent, TICK_HZ, Tick};
 
 use crate::app::GameSet;
@@ -40,8 +43,19 @@ use crate::clock::AnimClock;
 use crate::render::units::to_bevy;
 use crate::sim_link::{ContentRes, SimEntities, SimLink, SimMsg};
 
-/// Seconds a visual offset takes to blend in (into the orbit, onto the berth) or out.
+/// Seconds a visual offset takes to blend in (into the orbit, onto the berth) or out: a
+/// choice, the files say nothing.
 const BLEND: f64 = 1.0;
+/// How far the sim may move a miner from where its work began before the work is over.
+const MOVED: f32 = 5.0;
+
+/// A mining shot to draw: a freighter's mining weapon fires at its resource.
+#[derive(Message, Debug, Clone, Copy)]
+pub struct MiningShot {
+    pub shooter: EntityId,
+    pub weapon: ContentKey,
+    pub node: EntityId,
+}
 
 /// How the renderer sees one freighter's mining weapon, from data.
 #[derive(Debug, Clone, PartialEq)]
@@ -76,6 +90,8 @@ struct Work {
     node: EntityId,
     /// The station's place, render space, when unloading.
     dock: Option<Vec3>,
+    /// Where the sim had the miner when the phase began: it does not move while it works.
+    sim0: Vec3,
     /// Anim-clock time the phase began.
     since: f64,
     weapon: Option<MiningWeapon>,
@@ -95,7 +111,7 @@ pub struct MiningPlugin;
 
 impl Plugin for MiningPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Miners>().init_resource::<VisualOffsets>().add_message::<SimMsg>().add_systems(
+        app.init_resource::<Miners>().init_resource::<VisualOffsets>().add_message::<SimMsg>().add_message::<MiningShot>().add_systems(
             Update,
             (track, animate)
                 .chain()
@@ -146,6 +162,7 @@ fn track(
                 phase: *phase,
                 node: *node,
                 dock: dock.map(|d| to_bevy(d.to_f32())),
+                sim0: here.unwrap_or(Vec3::ZERO),
                 since: now,
                 weapon,
                 speed,
@@ -166,31 +183,42 @@ fn animate(
     link: Res<SimLink>,
     ents: Res<SimEntities>,
     clock: Res<AnimClock>,
-    mut q: Query<&mut Transform>,
-    mut shots: MessageWriter<SimMsg>,
+    mut q: Query<&mut Transform, With<crate::sim_link::SimEntity>>,
+    mut shots: MessageWriter<MiningShot>,
 ) {
     let now = clock.now();
     let alpha = clock.alpha();
-    offsets.0.clear();
+    let offsets_prev = std::mem::take(&mut offsets.0);
     miners.0.retain(|id, w| {
         let Some(sim) = point(&link, *id, alpha) else { return false };
+        // The sim does not move a miner while it works, nor lets the resource go and the
+        // miner stay: either way the work is over (a stop, a move, a new order, a mined-out
+        // node), and the model fades back to where the sim has it.
+        let node_at = point(&link, w.node, alpha);
+        let working = matches!(w.phase, MinerPhase::Mining | MinerPhase::Unloading);
+        if working && (sim.distance(w.sim0) > MOVED || (w.phase == MinerPhase::Mining && node_at.is_none())) {
+            w.phase = MinerPhase::Idle;
+            w.from_offset = offsets_prev.get(id).copied().unwrap_or(Vec3::ZERO);
+            w.since = now;
+        }
         let t = now - w.since;
         let blend = smooth(t / BLEND);
         let mut face = None;
-        let offset = match (w.phase, point(&link, w.node, alpha), w.weapon.as_ref()) {
+        let offset = match (w.phase, node_at, w.weapon.as_ref()) {
             (MinerPhase::Mining, Some(node), Some(wp)) if wp.range > 1.0 && w.speed > 0.0 => {
                 let radius = w.radius0 + (wp.range - w.radius0) * blend;
                 let angle = w.angle0 + (w.speed / wp.range) * t as f32;
                 let at = Vec3::new(node.x + radius * angle.cos(), sim.y, node.z + radius * angle.sin());
-                // Counter-clockwise, nose along the circle.
+                // Round in the render space's +angle direction (the z mirror makes that the
+                // clockwise one in the game's); a choice, the files do not say. Nose along the circle.
                 face = Some(Vec3::new(-angle.sin(), 0.0, angle.cos()));
                 if now >= w.next_shot {
-                    shots.write(SimMsg(SimEvent::Fired { shooter: *id, weapon: wp.key, hardpoint: wp.hardpoint, target: Target::Entity(w.node) }));
+                    shots.write(MiningShot { shooter: *id, weapon: wp.key, node: w.node });
                     w.next_shot = now + wp.refire.max(1) as f64 / TICK_HZ as f64;
                 }
-                (at - sim) * 1.0
+                (at - sim) * blend + w.from_offset * (1.0 - blend)
             }
-            (MinerPhase::Unloading, _, _) if w.dock.is_some() => (w.dock.unwrap() - sim) * blend + w.from_offset * (1.0 - blend),
+            (MinerPhase::Unloading, _, _) if w.dock.is_some() => (w.dock.unwrap_or(sim) - sim) * blend + w.from_offset * (1.0 - blend),
             _ => w.from_offset * (1.0 - blend),
         };
         // Mining and unloading hold their offset; the rest fade and go.
@@ -298,13 +326,12 @@ mod tests {
 
     /// Scripted cycle: mining from tick 10, the load carried off at tick 200, unloading at
     /// the station from tick 230.
-    fn cycle() -> (App, Entity) {
+    fn cycle(miner_rails: &str) -> (App, Entity) {
         let db = db();
-        let (moon, miner, station) = (db.key("m_moon").unwrap().0, db.key("m_miner").unwrap().0, db.key("m_station").unwrap().0);
         let text = format!(
             "{{ units: [
                 {{ id: 1, def: \"m_moon\", owner: 0, hull: 1, rails: [{{ at: 0, pos: {{ x: 0, y: 0, z: 0 }} }}] }},
-                {{ id: 2, def: \"m_miner\", owner: 0, hull: 1, rails: [{{ at: 0, pos: {{ x: 150, y: 0, z: 0 }} }}] }},
+                {{ id: 2, def: \"m_miner\", owner: 0, hull: 1, rails: [{miner_rails}] }},
                 {{ id: 3, def: \"m_station\", owner: 0, hull: 1, rails: [{{ at: 0, pos: {{ x: 0, y: 0, z: 600 }} }}] }},
             ], events: [
                 {{ at: 10, event: {{ MinerPhase: {{ id: 2, phase: \"Mining\", node: 1, dock: null }} }} }},
@@ -313,7 +340,6 @@ mod tests {
                 {{ at: 300, event: {{ MinerPhase: {{ id: 2, phase: \"ToNode\", node: 1, dock: null }} }} }},
             ] }}"
         );
-        let _ = (moon, miner, station);
         let src = ScriptedSource::from_json5(&text, &db).unwrap();
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
@@ -338,9 +364,31 @@ mod tests {
         Vec2::new(t.x, t.z)
     }
 
+    /// A move, a stop or a new order end mining without announcing it: the sim takes the miner
+    /// off its spot, and the model goes with it instead of circling the old resource.
+    #[test]
+    fn a_miner_the_sim_moves_away_stops_orbiting() {
+        // Still until tick 100, then 250 units away at tick 101; mining announced at tick 10.
+        let (mut app, e) = cycle("{ at: 0, pos: { x: 150, y: 0, z: 0 } }, { at: 100, pos: { x: 150, y: 0, z: 0 } }, { at: 101, pos: { x: 400, y: 0, z: 0 } }");
+        let mut orbited = false;
+        for frame in 0..160 {
+            app.update();
+            if frame == 90 {
+                orbited = (xz(&app, e).length() - RANGE).abs() < 1.5;
+            }
+        }
+        assert!(orbited, "it was orbiting before the move");
+        // Faded back (a second) to the sim's place, x = 400, not still on the old circle.
+        let p = xz(&app, e);
+        assert!(p.distance(Vec2::new(400.0, 0.0)) < 3.0, "at {p:?}");
+        let mut q = app.world_mut().query::<&WeaponFx>();
+        let late: Vec<_> = q.iter(app.world()).filter(|f| f.kind == FxKind::Beam).collect();
+        assert!(late.is_empty(), "{} beams still at the old resource", late.len());
+    }
+
     #[test]
     fn a_miner_orbits_at_its_weapons_range_beams_the_resource_and_berths_at_the_station() {
-        let (mut app, e) = cycle();
+        let (mut app, e) = cycle("{ at: 0, pos: { x: 150, y: 0, z: 0 } }");
         let mut radii = Vec::new();
         let mut angles = Vec::new();
         let mut beam_from_model = 0;
