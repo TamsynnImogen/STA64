@@ -72,7 +72,7 @@ hashed). A colony ship is class `colony` whose first weapon's ordnance class is
 ordnance (`WeaponDef::colonize`), the interval is the launcher's `shotDelay`.
 The race's `crewAccumulationRate` is the existing crew rule.
 
-Rules: `Order::Colonize` (tag 16) is taken for a pod ship, a live
+Rules: `Order::Colonize` (tag 17) is taken for a pod ship, a live
 `isColonizable` Producer planet with no colonizer, unowned or the ship's own.
 The ship carries `cfgPOP_SPARSE` colonists per order (not the ODF `colonists`),
 travels with no distance limit until its centre distance is at most
@@ -90,7 +90,7 @@ Each owned planet adds `P / cfgPOP_HEAVY x rate x 4` crew per second to its
 owner. An owned planet with 0 people goes neutral next tick, people kept.
 Weapon damage that reaches a populated planet's hull costs `0.1 x damage`
 people and leaves the hull alone (shield absorption comes first, not measured).
-`Edit::PlanetPopulation` (tag 44, mission `SetPlanetCivPop`) sets the people
+`Edit::PlanetPopulation` (tag 45, mission `SetPlanetCivPop`) sets the people
 raw; STA64 restricts it to Producer planets.
 
 Not implemented: the Borg colonizing beam and its enemy-planet cleansing
