@@ -382,16 +382,24 @@ fn same(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-fn open_room(
-    st: &mut State,
-    cfg: &RelayConfig,
+/// What the relay knows of the connection that opens or joins a room.
+#[derive(Clone, Copy)]
+struct Conn<'a> {
     ip: IpAddr,
-    conn: ConnId,
-    tx: &SyncSender<Out>,
-    queued: &Arc<AtomicUsize>,
-    sock: &TcpStream,
-    password: Vec<u8>,
-) -> Joined {
+    id: ConnId,
+    tx: &'a SyncSender<Out>,
+    queued: &'a Arc<AtomicUsize>,
+    sock: &'a TcpStream,
+}
+
+fn open_room(st: &mut State, cfg: &RelayConfig, c: Conn<'_>, password: Vec<u8>) -> Joined {
+    let Conn {
+        ip,
+        id: conn,
+        tx,
+        queued,
+        sock,
+    } = c;
     let rooms_of_ip = st.ips.get(&ip).map_or(0, |s| s.rooms);
     if st.rooms.len() >= cfg.max_rooms || rooms_of_ip >= cfg.max_rooms_per_ip {
         return Joined::No(RefuseReason::Busy);
@@ -435,19 +443,21 @@ fn open_room(
     Joined::Yes { code, seat: 0 }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn join_room(
     st: &mut State,
     cfg: &RelayConfig,
-    ip: IpAddr,
-    conn: ConnId,
-    tx: &SyncSender<Out>,
-    queued: &Arc<AtomicUsize>,
-    sock: &TcpStream,
+    c: Conn<'_>,
     code: RoomCode,
     reclaim: Option<u8>,
     password: &[u8],
 ) -> Joined {
+    let Conn {
+        ip,
+        id: conn,
+        tx,
+        queued,
+        sock,
+    } = c;
     let now = Instant::now();
     let ipst = st.ips.entry(ip).or_default();
     while ipst
@@ -655,6 +665,13 @@ fn serve_loop(
     queued: &Arc<AtomicUsize>,
 ) -> Option<(RoomCode, usize)> {
     let cfg = &shared.cfg;
+    let c = Conn {
+        ip,
+        id: conn,
+        tx,
+        queued,
+        sock: stream,
+    };
     let mut reader = EnvelopeReader::new();
     let mut last_rx = Instant::now();
     // The writer delivers the refusal before it sees the close that follows.
@@ -675,7 +692,7 @@ fn serve_loop(
     let (code, seat) = match first {
         Ok(Some(ClientMsg::Create { password })) => {
             let mut st = lock(&shared.state);
-            match open_room(&mut st, cfg, ip, conn, tx, queued, stream, password) {
+            match open_room(&mut st, cfg, c, password) {
                 Joined::Yes { code, seat } => {
                     drop(st);
                     let _ = send_to(
@@ -699,7 +716,7 @@ fn serve_loop(
             password,
         })) => {
             let mut st = lock(&shared.state);
-            match join_room(&mut st, cfg, ip, conn, tx, queued, stream, code, reclaim, &password) {
+            match join_room(&mut st, cfg, c, code, reclaim, &password) {
                 Joined::Yes { code, seat } => {
                     let members = st.rooms.get(&code).map_or(0, Room::occupied);
                     // Under the lock, so the Joined reply precedes any

@@ -225,7 +225,7 @@ fn main() {
                             0.0,
                             ((k * 91) % 500) as f32 - 250.0,
                         ]),
-                        queue: k % 3 == 0,
+                        queue: k.is_multiple_of(3),
                     }),
                 });
                 my_seq += 1;

@@ -296,7 +296,7 @@ impl Game {
             kind: CommandKind::Order(Order::Move {
                 units: vec![units[k % units.len()]],
                 to: Vec3::from_f32([((k * 37) % 500) as f32 - 250.0, 0.0, ((k * 91) % 500) as f32 - 250.0]),
-                queue: k % 3 == 0,
+                queue: k.is_multiple_of(3),
             }),
         });
     }
@@ -1240,7 +1240,7 @@ fn a_flooding_peer_cannot_grow_the_routers_state_without_bound() {
     assert_eq!(refused, 1);
     // The seat is faulted from then on.
     assert!(router.receive(PlayerId(1), record(3, 1, None)).is_err());
-    assert!(MAX_QUEUED_TURNS < 1000);
+    const { assert!(MAX_QUEUED_TURNS < 1000) };
 
     // Digests for ticks nobody has reached: nothing is kept or reported.
     let mut router = LockstepRouter::new(&st, PlayerId(0), Box::new(Mute)).unwrap();
@@ -1277,7 +1277,7 @@ fn a_flooding_peer_cannot_grow_the_routers_state_without_bound() {
 #[test]
 fn frame_size_constants_agree_with_the_envelope() {
     assert_eq!(MAX_ENVELOPE_BYTES, MAX_FRAME_BYTES + 8);
-    assert!(HEADER_LEN < MAX_FRAME_BYTES);
+    const { assert!(HEADER_LEN < MAX_FRAME_BYTES) };
     let _ = Action::Pause;
     let _ = Fixed::ONE;
     let _ = Duration::ZERO;

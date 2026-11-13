@@ -654,10 +654,10 @@ impl LockstepRouter {
                     // Bounded: at most a window of ticks for every seat.
                     // and per seat, so one flooder evicts only its own.
                     let mine = self.unchecked.iter().filter(|(s, _)| *s == slot).count();
-                    if mine >= DIGESTS_KEPT {
-                        if let Some(i) = self.unchecked.iter().position(|(s, _)| *s == slot) {
-                            self.unchecked.remove(i);
-                        }
+                    if mine >= DIGESTS_KEPT
+                        && let Some(i) = self.unchecked.iter().position(|(s, _)| *s == slot)
+                    {
+                        self.unchecked.remove(i);
                     }
                     self.unchecked.push((slot, theirs));
                 }
