@@ -8,8 +8,11 @@ pub enum Profile {
     /// STA64's own rules; new features start here.
     #[default]
     Native,
-    /// Fleet Operations 4.
+    /// Fleet Operations 4 and the rest of the Roots lineage (STA2 Classic).
     Fo4,
+    /// Fleet Operations 3.x (3.2.7) and its mods (Dominion War): the A2
+    /// engine under the 3.x `FleetOpsHook.dll` (CON-44, D5).
+    Fo3,
     /// Stock Armada II.
     Sta2Classic,
     /// Armada I.

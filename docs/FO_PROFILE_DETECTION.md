@@ -263,9 +263,20 @@ its own decision.
   `Data` as the mounted `Data` layer or, for a mod folder under `Data/Mods`,
   that mod's grandparent (which must be named `Data`). It reads `info.ini` and
   `packages.ini` there and nothing else; D6 mounting is not touched.
-- Step 4 records `[FleetOps] Version=` (3.2.7 on the FO 3.x and Dominion War
-  installs; the Roots install's own file says 4.0.0). It selects nothing and
-  there is no profile variant for the 3.x engine.
+- Step 4 reads `[FleetOps] Version=` of the host `Data/packages.ini` (3.2.7 on
+  the FO 3.x and Dominion War installs; the Roots install's own file says
+  4.0.0), records it in `Detection`, and a major number of 3 selects
+  `Profile::Fo3` (CON-44, D5, `DetectStep::PackagesIni`). It runs after the
+  `AssetVersion` and host-`info.ini` steps and before the name heuristics, so
+  a Roots mod under any host and an explicit `Profile=` still win. Other
+  majors select nothing. FO 3.2.7 and Dominion War had detected as
+  `Sta2Classic` until CON-44; their content digest changes (the profile name
+  is part of it) and no other install's does.
+- The `Fo3` feature row is decided bit by bit from the 3.2.7 and Dominion War
+  data in the comment above `Profile::Fo3` in `profile.rs`, each bit with its
+  evidence grade (read from data / read from the executable, static / not
+  measured). No Roots rule (`pd_energy`, `pd_debt_timer`) and no damage-control
+  rule is assumed for 3.2.7: the 3.x `FleetOpsHook.dll` is not analysed.
 - The warning: when the detected profile is the Roots lineage (for instance an
   add-on over a Roots `Data`), every layer
   whose `AssetVersion` is below 50000 gets one ("older than the Roots
@@ -290,8 +301,8 @@ Synthetic tests:
   Fleet Operations detects as Roots, with the base not mounted.
 - An explicit `Profile=` (manifest or `info.ini`) still wins over every step.
 - A `.zfs` archive still wins over the new steps.
-- A `packages.ini` with `[FleetOps] Version=3.2.7` is read (and, for v1,
-  selects nothing new), and a missing or unparsable file is ignored.
+- A `packages.ini` with `[FleetOps] Version=3.2.7` selects `Fo3` (CON-44), any
+  other major selects nothing, and a missing or unparsable file is ignored.
 - An older-than-lineage `AssetVersion` produces a warning and no failure.
 - Detection results are unchanged for the existing `tests/base_profile.rs`
   cases.
