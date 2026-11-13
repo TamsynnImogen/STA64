@@ -18,6 +18,7 @@
 //! - [`flow`] is the front end around it (INT-M4): launch, loading, the match, back.
 
 pub mod flow;
+pub mod mission_host;
 
 use std::sync::Arc;
 
@@ -419,5 +420,7 @@ mod gui_selection_tests {
 
 #[cfg(test)]
 mod flow_tests;
+#[cfg(test)]
+mod mission_tests;
 #[cfg(test)]
 mod tests;
