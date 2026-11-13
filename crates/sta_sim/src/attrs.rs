@@ -1,10 +1,10 @@
 //! Mission-set per-unit and per-player attributes that the world otherwise
-//! derives from the definition (SIM-54): a unit's display name, a unit's race
-//! and a player's race. A unit or player with none set has no row.
+//! derives from the definition (SIM-54): a unit's race and a player's race.
+//! A unit's display name is the SIM-58 `switches` row (`Edit::Name`); the view
+//! shows it in [`AttrsView::names`]. A unit or player with none set has no row.
 //!
 //! Rules (read from the executables, static; nothing measured in game):
-//! every edit is per unit, never per class; `Entity.name` / `SetName` replace
-//! the unit's name (case-insensitive class name list not modelled); `SetRace`
+//! every edit is per unit, never per class; `SetRace`
 //! changes the unit's race only (A2) and `Player.race` the seat's race (Roots);
 //! an unknown race name is refused here (the original stores a null race).
 //! Max hull, hull value, max crew and max shields need no state of their own:
@@ -16,12 +16,11 @@ use sta_core::{EntityId, Fixed, PlayerId};
 use crate::world::Fnv;
 use crate::world::Table;
 
-/// Names longest accepted (bytes); longer ones are cut at a character boundary.
-pub const MAX_NAME_BYTES: usize = 127;
+/// Longest race name accepted on the wire and in a snapshot (bytes).
+pub const MAX_RACE_BYTES: usize = 64;
 
 #[derive(Debug, Clone, Default)]
 pub struct Attrs {
-    names: Table<String>,
     races: Table<String>,
     player_races: Vec<(PlayerId, String)>,
 }
@@ -29,7 +28,7 @@ pub struct Attrs {
 /// What the view shows of [`Attrs`].
 #[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 pub struct AttrsView {
-    /// Script-set unit names, ascending id.
+    /// Script-set unit names (the `switches` rows), ascending id.
     pub names: Vec<(EntityId, String)>,
     /// Script-set unit races (the definition's race otherwise), ascending id.
     pub races: Vec<(EntityId, String)>,
@@ -37,22 +36,17 @@ pub struct AttrsView {
     pub player_races: Vec<(PlayerId, String)>,
 }
 
-/// The wire form of [`Attrs`] (snapshot suffix, format 21).
+/// The wire form of [`Attrs`] (snapshot suffix, format 22).
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct AttrsRec {
     pub version: u8,
-    pub names: Vec<(EntityId, String)>,
     pub races: Vec<(EntityId, String)>,
     pub player_races: Vec<(PlayerId, String)>,
 }
 
 impl Attrs {
     pub fn is_empty(&self) -> bool {
-        self.names.is_empty() && self.races.is_empty() && self.player_races.is_empty()
-    }
-
-    pub fn name(&self, id: EntityId) -> Option<&str> {
-        self.names.get(id).map(String::as_str)
+        self.races.is_empty() && self.player_races.is_empty()
     }
 
     pub fn race(&self, id: EntityId) -> Option<&str> {
@@ -61,14 +55,6 @@ impl Attrs {
 
     pub fn player_race(&self, p: PlayerId) -> Option<&str> {
         self.player_races.binary_search_by_key(&p, |r| r.0).ok().map(|i| self.player_races[i].1.as_str())
-    }
-
-    pub(crate) fn set_name(&mut self, id: EntityId, name: &str) {
-        let mut end = name.len().min(MAX_NAME_BYTES);
-        while !name.is_char_boundary(end) {
-            end -= 1;
-        }
-        self.names.insert(id, name[..end].to_owned());
     }
 
     pub(crate) fn set_race(&mut self, id: EntityId, race: &str) {
@@ -83,13 +69,13 @@ impl Attrs {
     }
 
     pub(crate) fn remove(&mut self, id: EntityId) {
-        self.names.remove(id);
         self.races.remove(id);
     }
 
+    /// The view of the races; `names` is filled by the caller from the switch rows.
     pub fn view(&self) -> AttrsView {
         AttrsView {
-            names: self.names.iter().map(|(i, s)| (i, s.clone())).collect(),
+            names: Vec::new(),
             races: self.races.iter().map(|(i, s)| (i, s.clone())).collect(),
             player_races: self.player_races.clone(),
         }
@@ -97,7 +83,7 @@ impl Attrs {
 
     pub(crate) fn to_rec(&self) -> AttrsRec {
         let v = self.view();
-        AttrsRec { version: 1, names: v.names, races: v.races, player_races: v.player_races }
+        AttrsRec { version: 1, races: v.races, player_races: v.player_races }
     }
 
     /// Why a record is refused: an unknown version, rows out of order, an empty or over-long text.
@@ -108,12 +94,11 @@ impl Attrs {
         if !r.player_races.windows(2).all(|w| w[0].0 < w[1].0) {
             return Err("attribute rows out of order");
         }
-        let texts_ok = r.names.iter().chain(&r.races).map(|(_, s)| s).chain(r.player_races.iter().map(|(_, s)| s));
-        if texts_ok.clone().any(|s| s.is_empty() || s.len() > MAX_NAME_BYTES) {
+        let texts_ok = r.races.iter().map(|(_, s)| s).chain(r.player_races.iter().map(|(_, s)| s));
+        if texts_ok.clone().any(|s| s.is_empty() || s.len() > MAX_RACE_BYTES) {
             return Err("attribute text empty or too long");
         }
         Ok(Attrs {
-            names: Table::from_rows(r.names).ok_or("attribute rows out of order")?,
             races: Table::from_rows(r.races).ok_or("attribute rows out of order")?,
             player_races: r.player_races,
         })
@@ -121,13 +106,10 @@ impl Attrs {
 
     pub(crate) fn hash_into(&self, h: &mut Fnv) {
         h.str("attrs-v1");
-        for (tag, rows) in [("n", &self.names), ("r", &self.races)] {
-            h.str(tag);
-            h.u64(rows.len() as u64);
-            for (id, s) in rows.iter() {
-                h.u64(id.0 as u64);
-                h.str(s);
-            }
+        h.u64(self.races.len() as u64);
+        for (id, s) in self.races.iter() {
+            h.u64(id.0 as u64);
+            h.str(s);
         }
         h.u64(self.player_races.len() as u64);
         for (p, s) in &self.player_races {
@@ -190,14 +172,6 @@ impl crate::Sim {
             return false;
         }
         self.units.get_mut(id).expect("live").shields.max = max.max(Fixed::ZERO).min(Fixed::from_int(CAP as i32));
-        true
-    }
-
-    pub(crate) fn edit_name(&mut self, id: EntityId, name: &str) -> bool {
-        if self.script_unit(id).is_none() {
-            return false;
-        }
-        self.attrs.set_name(id, name);
         true
     }
 

@@ -43,8 +43,8 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// (CON-35) added the [`Provenance`] record and the keyed content digest's
 /// hash. Format 17 appends the mission-set subsystem switches and damage
 /// (SIM-55). Format 18 (SIM-36) appends the attack approach record
-/// (crafts in warp). Format 19 appends the stuck-order watch rows last; format 20 adds each row's anchor, start distance and birth tick; format 21 appends the mission-set names and races (SIM-54). Only the current format is read.
-pub const FORMAT_VERSION: u16 = 21;
+/// (crafts in warp). Format 19 appends the stuck-order watch rows last; format 20 adds each row's anchor, start distance and birth tick; format 21 appends the scripted orders (SIM-56) and the per-craft switches (SIM-58); format 22 appends the mission-set unit and seat races (SIM-54). Only the current format is read.
+pub const FORMAT_VERSION: u16 = 22;
 
 const HEADER: usize = 4 + 2 + 4 + 8;
 
@@ -255,6 +255,20 @@ struct SubsystemsRec {
     rows: Vec<(EntityId, crate::combat::damage::SubsystemRow)>,
 }
 
+/// Format 21: scripted orders (SIM-56).
+#[derive(Serialize, Deserialize)]
+struct ScriptedRec {
+    version: u8,
+    rows: Vec<(EntityId, crate::orders::Job)>,
+}
+
+/// Format 21: per-craft switches (SIM-58).
+#[derive(Serialize, Deserialize)]
+struct SwitchesRec {
+    version: u8,
+    rows: Vec<(EntityId, crate::switches::Switches)>,
+}
+
 fn kind_from(b: u8) -> Option<EntityKind> {
     Some(match b {
         0 => EntityKind::Craft,
@@ -406,6 +420,8 @@ impl Sim {
         out.extend(postcard::to_allocvec(&SubsystemsRec { version: 1, rows: self.subsystems.to_rows() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&AttackRec { version: 1, warp: self.approach_warp.to_rec(), engagement: self.engagement.to_rec() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&WatchRec { version: 1, rows: self.watchdog.to_rec() }).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&ScriptedRec { version: 1, rows: self.scripted.to_rows() }).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&SwitchesRec { version: 1, rows: self.switches.to_rows() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&self.attrs.to_rec()).expect("snapshot serialises"));
         out
     }
@@ -455,6 +471,12 @@ impl Sim {
         let (record, rest): (WatchRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         if record.version != 1 { return Err(SnapshotError::Corrupt("unknown order watch record version".into())); }
         let watch_rows = record.rows;
+        let (record, rest): (ScriptedRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        if record.version != 1 { return Err(SnapshotError::Corrupt("unknown scripted orders record version".into())); }
+        let scripted_rows = record.rows;
+        let (record, rest): (SwitchesRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        if record.version != 1 { return Err(SnapshotError::Corrupt("unknown switches record version".into())); }
+        let switch_rows = record.rows;
         let (record, rest): (crate::attrs::AttrsRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         let attrs = crate::attrs::Attrs::from_rec(record).map_err(|why| SnapshotError::Corrupt(why.into()))?;
         if !rest.is_empty() { return Err(SnapshotError::Corrupt("trailing bytes".into())); }
@@ -517,7 +539,7 @@ impl Sim {
         let movement = Movement::from_rows(courses).ok_or_else(|| corrupt("courses"))?;
         {
             let v = attrs.view();
-            if v.names.iter().chain(&v.races).any(|(id, _)| !units.get(*id).is_some_and(|u| matches!(u.kind, EntityKind::Craft | EntityKind::Station))) {
+            if v.races.iter().any(|(id, _)| !units.get(*id).is_some_and(|u| matches!(u.kind, EntityKind::Craft | EntityKind::Station))) {
                 return Err(SnapshotError::Corrupt("attribute entity is not a craft or station".into()));
             }
             if v.player_races.iter().any(|(p, _)| !b.players.iter().any(|(id, _)| id == p)) {
@@ -535,6 +557,14 @@ impl Sim {
         let watchdog = crate::watchdog::Watchdog::from_rec(watch_rows).ok_or_else(|| corrupt("order watch rows"))?;
         if watchdog.to_rec().iter().any(|(id, _)| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft)) {
             return Err(SnapshotError::Corrupt("order watch entity is not a craft".into()));
+        }
+        let scripted = crate::orders::Scripted::from_rows(scripted_rows).ok_or_else(|| corrupt("scripted order rows"))?;
+        if scripted.to_rows().iter().any(|(id, j)| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft) || matches!(j, crate::orders::Job::Patrol { points, leg } if points.len() < 2 || *leg >= points.len())) {
+            return Err(SnapshotError::Corrupt("scripted order entity is not a craft or a patrol has no loop".into()));
+        }
+        let switches = crate::switches::SwitchTable::from_rows(switch_rows).ok_or_else(|| corrupt("switch rows"))?;
+        if switches.to_rows().iter().any(|(id, _)| units.get(*id).is_none()) {
+            return Err(SnapshotError::Corrupt("switches of an unknown entity".into()));
         }
         let approach_warp = crate::movement::approach::Warp::from_rec(warp_rows).ok_or_else(|| SnapshotError::Corrupt("attack warp rows out of order or of an unknown phase".into()))?;
         if approach_warp.to_rec().iter().any(|(id, _)| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft)) {
@@ -586,6 +616,8 @@ impl Sim {
             start_effects,
             nav: Default::default(),
             subsystems,
+            scripted,
+            switches,
             attrs,
             team_changes: Vec::new(),
         })
@@ -605,6 +637,9 @@ mod attack_tests;
 #[cfg(test)]
 #[path = "snapshot/watch_tests.rs"]
 mod watch_tests;
+#[cfg(test)]
+#[path = "snapshot/scripted_tests.rs"]
+mod scripted_tests;
 
 #[cfg(test)]
 #[path = "snapshot/chain.rs"]

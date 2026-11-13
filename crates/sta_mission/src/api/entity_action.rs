@@ -86,13 +86,9 @@ impl AttrEdit {
             Self::Crew(v) => Num(v.clamp(0.0, 1e9)),
             Self::Omega(v) => Num(*v),
             Self::Heading(x, _) => Num(*x),
-            Self::Name(s) => {
-                let mut end = s.len().min(sta_sim::attrs::MAX_NAME_BYTES);
-                while !s.is_char_boundary(end) {
-                    end -= 1;
-                }
-                Text(s[..end].to_owned())
-            }
+            // The sim rejects a name over its limit and an empty one clears it.
+            Self::Name(s) if s.len() > sta_sim::switches::MAX_NAME_BYTES => return None,
+            Self::Name(s) => Text(s.clone()),
             Self::Race(s) => Text(s.clone()),
         })
     }

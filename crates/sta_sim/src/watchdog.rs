@@ -152,6 +152,12 @@ impl Sim {
         for (id, reported) in ended {
             self.watchdog.remove(id);
             self.movement.clear_waypoints(id);
+            // A patrol or warp move whose leg cannot be flown ends (the other
+            // scripted orders pick a new destination).
+            if matches!(self.scripted.job(id), Some(crate::orders::Job::Patrol { .. } | crate::orders::Job::Warp)) {
+                self.scripted.remove(id);
+                self.approach_warp.remove(id);
+            }
             if let Some(u) = self.units.get_mut(id) {
                 u.target = None;
             }

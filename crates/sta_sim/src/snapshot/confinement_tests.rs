@@ -70,8 +70,12 @@ fn split(bytes: &[u8]) -> (Body, Option<(Vec3, Vec3)>, BoundaryRec, PerceptionRe
     assert!(attack.warp.is_empty());
     let (watch, rest): (WatchRec, _) = postcard::take_from_bytes(rest).unwrap();
     assert!(watch.rows.is_empty());
+    let (scripted, rest): (ScriptedRec, _) = postcard::take_from_bytes(rest).unwrap();
+    assert!(scripted.rows.is_empty());
+    let (switches, rest): (SwitchesRec, _) = postcard::take_from_bytes(rest).unwrap();
+    assert!(switches.rows.is_empty());
     let (attrs, rest): (crate::attrs::AttrsRec, _) = postcard::take_from_bytes(rest).unwrap();
-    assert!(attrs.names.is_empty() && attrs.races.is_empty() && attrs.player_races.is_empty());
+    assert!(attrs.races.is_empty() && attrs.player_races.is_empty());
     assert!(rest.is_empty());
     (body, bounds, record, perception)
 }
@@ -90,7 +94,9 @@ fn join(header: &[u8], body: &Body, bounds: Option<(Vec3, Vec3)>, record: &Bound
     bytes.extend(postcard::to_allocvec(&SubsystemsRec { version: 1, rows: Vec::new() }).unwrap());
     bytes.extend(postcard::to_allocvec(&AttackRec { version: 1, warp: Vec::new(), engagement: Default::default() }).unwrap());
     bytes.extend(postcard::to_allocvec(&WatchRec { version: 1, rows: Vec::new() }).unwrap());
-    bytes.extend(postcard::to_allocvec(&crate::attrs::AttrsRec { version: 1, names: Vec::new(), races: Vec::new(), player_races: Vec::new() }).unwrap());
+    bytes.extend(postcard::to_allocvec(&ScriptedRec { version: 1, rows: Vec::new() }).unwrap());
+    bytes.extend(postcard::to_allocvec(&SwitchesRec { version: 1, rows: Vec::new() }).unwrap());
+    bytes.extend(postcard::to_allocvec(&crate::attrs::AttrsRec { version: 1, races: Vec::new(), player_races: Vec::new() }).unwrap());
     bytes
 }
 

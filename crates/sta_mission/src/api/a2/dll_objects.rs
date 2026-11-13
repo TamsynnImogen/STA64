@@ -294,15 +294,18 @@ fn float_edit(lua: &Lua, ctx: &Shared, name: &'static str, label: &'static str, 
     })
 }
 
-/// `name(id, string)` queued as the typed edit `make` builds. A null string is refused.
-fn string_edit(lua: &Lua, ctx: &Shared, name: &'static str, label: &'static str, make: fn(EntityId, String) -> Edit) -> mlua::Result<Function> {
+/// `name(id, bool)` queued as the typed edit `make` builds; nothing for a handle
+/// that is absent or dying.
+fn bool_edit(lua: &Lua, ctx: &Shared, name: &'static str, label: &'static str, make: fn(EntityId, bool) -> Edit) -> mlua::Result<Function> {
     let c = ctx.clone();
     lua.create_function(move |_, args: MultiValue| {
         arity(name, &args, 2)?;
-        let Some(value) = text(name, &args, 1)? else { return Err(bad(name, 1, "a string")) };
+        let on = boolean(name, &args, 1)?;
         let id = EntityId(integer(name, &args[0])?);
-        live(&c, name, id)?;
-        edit_feedback::queue(&mut c.borrow_mut(), label, make(id, value))
+        if c.borrow().alive(id).is_some() {
+            edit_feedback::queue(&mut c.borrow_mut(), label, make(id, on))?;
+        }
+        Ok(Value::Nil)
     })
 }
 
@@ -747,18 +750,56 @@ fn seams(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()> {
     // SetMaxShields the new maximum, Damage<System> points of damage.
     table.set("SetShieldPercent", float_edit(lua, ctx, "SetShieldPercent", "A2.SetShieldPercent", Edit::ShieldPercent)?)?;
     table.set("SetMaxShields", float_edit(lua, ctx, "SetMaxShields", "A2.SetMaxShields", Edit::MaxShields)?)?;
-    table.set("AllowAsTarget", no_data_fn(lua, ctx, "AllowAsTarget", "the native flag is a per-team mask; Edit::Targetable has no team and the sim rejects it")?)?;
+    // SIM-58 switches. Each writes one flag in the sim (`Edit::AllowAsTarget` ..
+    // `Edit::SpecialForces`); a handle that is absent or dying does nothing, as
+    // in the engine. `AllowAsTarget(object, team, allowed)`: the team's craft do
+    // not pick the object automatically (explicit attack orders still do).
+    let c = ctx.clone();
+    table.set(
+        "AllowAsTarget",
+        lua.create_function(move |_, args: MultiValue| {
+            let name = "AllowAsTarget";
+            arity(name, &args, 3)?;
+            let id = EntityId(integer(name, &args[0])?);
+            let team = signed(name, &args, 1)?;
+            let allowed = boolean(name, &args, 2)?;
+            let player = {
+                let c = c.borrow();
+                u8::try_from(team).ok().and_then(|n| c.player_numbering.decode(n)).filter(|p| p.is_player()).ok_or_else(|| bad(name, 1, "a player team number"))?
+            };
+            if c.borrow().alive(id).is_some() {
+                edit_feedback::queue(&mut c.borrow_mut(), "A2.AllowAsTarget", Edit::AllowAsTarget { id, player, allowed })?;
+            }
+            Ok(Value::Nil)
+        })?,
+    )?;
+    table.set("CraftCanRepair", bool_edit(lua, ctx, "CraftCanRepair", "A2.CraftCanRepair", Edit::CraftCanRepair)?)?;
+    table.set("ButItCanBeDerelicted", bool_edit(lua, ctx, "ButItCanBeDerelicted", "A2.ButItCanBeDerelicted", Edit::DerelictAllowed)?)?;
+    table.set("CraftCanRecrew", bool_edit(lua, ctx, "CraftCanRecrew", "A2.CraftCanRecrew", Edit::CanRecrew)?)?;
+    table.set("HideObject", bool_edit(lua, ctx, "HideObject", "A2.HideObject", Edit::Hidden)?)?;
+    let c = ctx.clone();
+    table.set(
+        "SetName",
+        lua.create_function(move |_, args: MultiValue| {
+            let name = "SetName";
+            arity(name, &args, 2)?;
+            let id = EntityId(integer(name, &args[0])?);
+            let mut text = text(name, &args, 1)?.unwrap_or_default();
+            // The sim keeps names to MAX_NAME_BYTES: cut at a character boundary.
+            while text.len() > sta_sim::switches::MAX_NAME_BYTES {
+                text.pop();
+            }
+            if c.borrow().alive(id).is_some() {
+                edit_feedback::queue(&mut c.borrow_mut(), "A2.SetName", Edit::Name(id, text))?;
+            }
+            Ok(Value::Nil)
+        })?,
+    )?;
     table.set("DamageEngines", float_edit(lua, ctx, "DamageEngines", "A2.DamageEngines", |id, v| Edit::SubsystemDamage(id, Subsystem::Engines, v))?)?;
     table.set("DamageSensors", float_edit(lua, ctx, "DamageSensors", "A2.DamageSensors", |id, v| Edit::SubsystemDamage(id, Subsystem::Sensors, v))?)?;
     table.set("DamageLifeSupport", float_edit(lua, ctx, "DamageLifeSupport", "A2.DamageLifeSupport", |id, v| Edit::SubsystemDamage(id, Subsystem::LifeSupport, v))?)?;
     table.set("DamageShieldGenerator", float_edit(lua, ctx, "DamageShieldGenerator", "A2.DamageShieldGenerator", |id, v| Edit::SubsystemDamage(id, Subsystem::Shields, v))?)?;
     table.set("DamageWeapons", float_edit(lua, ctx, "DamageWeapons", "A2.DamageWeapons", |id, v| Edit::SubsystemDamage(id, Subsystem::Weapons, v))?)?;
-    table.set("HideObject", no_data_fn(lua, ctx, "HideObject", "the world view and sim have no hidden-object state")?)?;
-    table.set("ButItCanBeDerelicted", no_data_fn(lua, ctx, "ButItCanBeDerelicted", "the sim has no derelict state")?)?;
-    table.set("CraftCanRecrew", no_data_fn(lua, ctx, "CraftCanRecrew", "the sim has no per-craft recrew switch")?)?;
-    // `SetName(object, name)` is `Craft::SetCraftName` (read from the executable, static): this
-    // unit's display name; SIM-54.
-    table.set("SetName", string_edit(lua, ctx, "SetName", "A2.SetName", Edit::Name)?)?;
     table.set("SetPlanetCivPop", no_data_fn(lua, ctx, "SetPlanetCivPop", "the sim has no planet population edit")?)?;
     table.set("StuffIntoWormhole", no_data_fn(lua, ctx, "StuffIntoWormhole", "the sim has no wormhole transport edit")?)?;
     table.set("LinkWormholes", no_data_fn(lua, ctx, "LinkWormholes", "the sim has no wormhole link edit")?)?;

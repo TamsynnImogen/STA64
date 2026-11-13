@@ -384,7 +384,7 @@ fn max_crew_clamps_the_crew_down_only_and_max_shields_keeps_the_pools() {
 fn names_and_races_are_per_unit_validated_viewed_and_survive_snapshot_and_death() {
     let (mut sim, id, d) = world();
     let before = sim.digest();
-    assert!(script(&mut sim, Edit::Name(id, "Relay Station".into())));
+    assert!(script(&mut sim, Edit::Name(id, "Relay Station".into())), "SIM-58's name edit, shown in the view");
     assert!(!script(&mut sim, Edit::UnitRace(id, "nobody".into())), "unknown race refused");
     assert!(!script(&mut sim, Edit::UnitRace(id, String::new())), "empty refused");
     assert!(script(&mut sim, Edit::UnitRace(id, "FX".into())), "case-insensitive, stored as the content spells it");
@@ -403,8 +403,4 @@ fn names_and_races_are_per_unit_validated_viewed_and_survive_snapshot_and_death(
     assert_eq!(copy.digest(), sim.digest());
     assert!(script(&mut sim, Edit::Kill(id)));
     assert!(sim.view().attrs.names.is_empty() && sim.view().attrs.races.is_empty(), "rows go with the unit");
-    let long = "é".repeat(200);
-    let (mut sim, id, _) = world();
-    assert!(script(&mut sim, Edit::Name(id, long)));
-    assert_eq!(sim.view().attrs.names[0].1.len(), 126, "cut at a character boundary");
 }

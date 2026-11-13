@@ -161,6 +161,7 @@ pub(crate) fn best<'a>(db: &ContentDb, u: &Entity, reach: Fixed, candidates: imp
 
 /// Can `t` be picked automatically by a craft of team `mine`: an enemy (by
 /// perceived owner), alive, not cloaked to it, targetable, and seen.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn candidate(
     db: &ContentDb,
     u: &Entity,
@@ -169,6 +170,10 @@ pub(crate) fn candidate(
     team: &dyn Fn(PlayerId) -> Option<TeamId>,
     perception: &Table<PlayerId>,
     seen: Option<&[EntityId]>,
+    // `Some` for an automatic pick: units the mission disallowed as a target
+    // for this seat (SIM-58 `AllowAsTarget`) are not candidates. `None` for
+    // answering an attacker, which the engine does not filter.
+    switches: Option<&crate::switches::SwitchTable>,
 ) -> bool {
     let perceived = perception.get(t.id).copied().unwrap_or(t.owner);
     t.id != u.id
@@ -177,6 +182,7 @@ pub(crate) fn candidate(
         && !(t.flags.contains(UnitFlags::CLOAKED) && team(t.owner) != Some(mine))
         && seen.is_none_or(|ids| ids.binary_search(&t.id).is_ok())
         && !db.unit(t.def).is_some_and(|d| d.invalid_as_target)
+        && !switches.is_some_and(|s| s.blocked_for(t.id, u.owner))
 }
 
 impl Sim {
@@ -196,6 +202,7 @@ impl Sim {
             let Some(def) = db.unit(u.def) else { continue };
             let Some(range) = crate::movement::approach::attack_range(&db, def) else { continue };
             let idle = u.kind == EntityKind::Craft
+                && self.scripted.job(u.id).is_none()
                 && u.target.is_none()
                 && self.weapons.attack_of(u.id).is_none()
                 && self.movement.course(u.id).is_none_or(|c| c.waypoints.is_empty())
@@ -219,14 +226,14 @@ impl Sim {
                     continue;
                 }
                 if let Some((_, by)) = self.engagement.hit.get(a.id)
-                    && let Some(t) = self.units.get(*by).filter(|t| candidate(&db, u, t, mine, &team, &self.perception, seen))
+                    && let Some(t) = self.units.get(*by).filter(|t| candidate(&db, u, t, mine, &team, &self.perception, seen, None))
                 {
                     pick = Some(t.id);
                     break;
                 }
                 if f.assist_on_ally_fire && self.engagement.fired.get(a.id).is_some() {
                     let reach = def.sensor.max(range);
-                    pick = best(&db, u, reach, self.units.iter().filter(|t| candidate(&db, u, t, mine, &team, &self.perception, seen))).map(|t| t.id);
+                    pick = best(&db, u, reach, self.units.iter().filter(|t| candidate(&db, u, t, mine, &team, &self.perception, seen, Some(&self.switches)))).map(|t| t.id);
                     if pick.is_some() {
                         break;
                     }

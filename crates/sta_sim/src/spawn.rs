@@ -132,6 +132,8 @@ impl Sim {
         self.start_effects.remove(id);
         self.subsystems.remove(id);
         self.attrs.remove(id);
+        self.scripted.remove(id);
+        self.switches.remove(id);
         if let Some(by) = destroyed_by {
             self.events.push(SimEvent::Destroyed { id, by });
         }
@@ -143,6 +145,9 @@ impl Sim {
     pub(crate) fn apply_edit(&mut self, from: PlayerId, e: &Edit) -> bool {
         if from != PlayerId::SCRIPT && from != PlayerId::BENCH {
             return false;
+        }
+        if let Some(ok) = self.apply_switch_edit(e) {
+            return ok;
         }
         match *e {
             Edit::Spawn {
@@ -254,7 +259,6 @@ impl Sim {
             Edit::MaxCrew(id, v) => self.edit_max_crew(id, v),
             Edit::HullValue(id, v) => self.edit_hull_value(id, v),
             Edit::MaxShieldsKeep(id, v) => self.edit_max_shields_keep(id, v),
-            Edit::Name(id, ref name) => self.edit_name(id, name),
             Edit::UnitRace(id, ref race) => self.edit_unit_race(id, race),
             Edit::PlayerRace(p, ref race) => self.edit_player_race(p, race),
             Edit::Position(id, to) => self.edit_position(id, to),

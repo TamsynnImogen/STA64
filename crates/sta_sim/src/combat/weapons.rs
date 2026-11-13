@@ -335,7 +335,7 @@ impl Weapons {
         events: &mut Vec<SimEvent>,
     ) {
         let (mut specials, mut rng) = (Specials::default(), Rng::new(1));
-        self.step_with_perception(tick, units, db, teams, &Table::new(), &mut specials, &mut rng, events);
+        self.step_with_perception(tick, units, db, teams, &Table::new(), &mut specials, &mut rng, &Default::default(), events);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -348,6 +348,7 @@ impl Weapons {
         perception: &Table<PlayerId>,
         specials: &mut Specials,
         rng: &mut Rng,
+        switches: &crate::switches::SwitchTable,
         events: &mut Vec<SimEvent>,
     ) {
         let alive = |id: EntityId| units.get(id).filter(|u| u.hull[1] > Fixed::ZERO);
@@ -442,7 +443,7 @@ impl Weapons {
                 let seen = (!teams.is_empty()).then(|| visibility.iter()
                     .find(|(player, _)| *player == u.owner)
                     .map_or(&[][..], |(_, ids)| ids.as_slice()));
-                let Some(t) = self.pick(db, u, w.range, arc, units, teams, perception, seen) else {
+                let Some(t) = self.pick(db, u, w.range, arc, units, teams, perception, seen, switches) else {
                     continue;
                 };
                 if self.mounts.get(u.id).is_none() {
@@ -602,6 +603,7 @@ impl Weapons {
         teams: &[(PlayerId, TeamId)],
         perception: &Table<PlayerId>,
         seen: Option<&[EntityId]>,
+        switches: &crate::switches::SwitchTable,
     ) -> Option<&'a Entity> {
         let team = |p: PlayerId| teams.iter().find(|x| x.0 == p).map(|x| x.1);
         // A cloaked unit is only a target for its own team.
@@ -628,13 +630,13 @@ impl Weapons {
         // when it can (see `targeting`).
         if db.unit(u.def).is_some_and(|d| db.unit_features(d).target_score) {
             let reach = db.unit(u.def).and_then(|d| crate::movement::approach::attack_range(db, d)).unwrap_or(range);
-            let candidates = units.iter().filter(|t| Some(t.id) != ordered && super::targeting::candidate(db, u, t, mine, &team, perception, seen));
+            let candidates = units.iter().filter(|t| Some(t.id) != ordered && super::targeting::candidate(db, u, t, mine, &team, perception, seen, Some(switches)));
             return super::targeting::best(db, u, reach, candidates).filter(|t| hittable(t));
         }
         let mut best: Option<(Fixed, &Entity)> = None;
         for t in units.iter() {
             let perceived = perception.get(t.id).copied().unwrap_or(t.owner);
-            if team(perceived).is_none_or(|x| x == mine) || !hittable(t) || db.unit(t.def).is_some_and(|d| d.invalid_as_target) {
+            if team(perceived).is_none_or(|x| x == mine) || !hittable(t) || db.unit(t.def).is_some_and(|d| d.invalid_as_target) || switches.blocked_for(t.id, u.owner) {
                 continue;
             }
             let d = flat(u.pos, t.pos).1;
