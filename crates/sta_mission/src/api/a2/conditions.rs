@@ -7,7 +7,7 @@
 //! string, or `nil` / `0` for the null pointer the DLLs pass.
 //!
 //! Calls whose data the sim does not carry (cargo contents, trade totals,
-//! capital-ship class, off-map state, the meaning of "compromised") raise a
+//! capital-ship class, off-map state) raise a
 //! Lua error and add `A2.<Name>: <why>` to `unsupported()`; they never return
 //! a guessed value. That list is this package's missing-seam report.
 //!
@@ -273,8 +273,12 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
     // as the new owner here, where the engine keeps the original (SIM-59).
     table.set("IsCompromised", query(lua, ctx, "IsCompromised", 2, |c, a| {
         let id = handle("IsCompromised", a, 0)?;
+        // Any integer is accepted, as the engine's own compare does: a team
+        // number that no seat has just makes every object compromised.
         let team = int("IsCompromised", a, 1)?;
         let Some(u) = c.alive(id) else { return Ok(true) };
+        // Craft or station by STA64's class mapping (`EntityKind::of_def`), an
+        // approximation of the engine's class test; no content: a craft.
         let fixture = c.def(u).is_some_and(|d| !matches!(EntityKind::of_def(d), EntityKind::Craft | EntityKind::Station));
         let derelict = u.crew.is_some_and(|[now, max]| now < Fixed::ONE && max > Fixed::ZERO);
         let owner = c.player_numbering.encode(u.owner).map(i64::from);

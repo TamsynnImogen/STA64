@@ -18,7 +18,7 @@ error). Reads see the last world snapshot, as for `A2`.
 ## What each call does
 
 - **Same operation as A2, reused** (the `A2` binding is called, errors say
-  `A1.`): `RemoveObject CraftCannotDie IsAlive Exists DoesNotExist Cloak
+  `A1.`): `RemoveObject CraftCannotDie IsAlive IsCompromised Exists DoesNotExist Cloak
   Decloak ImmediateCloak DisableWeapons DisableEngines SetSpecialEnergy
   IsVisibleToTeam GetRealTeam SetRealTeam SetPerceivedTeam
   ObjectivesDisplay_Set_Visibility`, and `GetNearestStarbase` uses
@@ -75,8 +75,8 @@ The third argument of `Goto`/`Stop` (the trailing `int`), the flag of
 argument of the `...Near...` searches is a team or a relation filter (read as a
 team, -1 any), the meaning of bridge type 0, the `TeamRelation` values, the
 restriction masks of `RestrictSpecialFlag`, what `GetLocationOfFlag`
-returns, and everything `IsCompromised` reads (the A2 rule, shared; the A1
-executable inlines the same test, static), and the delay of `FailMission` /
+returns, the `IsCompromised` rule (A2's, shared; read statically from both
+executables), and the delay of `FailMission` /
 `SucceedMission` (retained, not applied).
 
 ## Seams the host fills

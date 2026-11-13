@@ -520,7 +520,7 @@ with a positive maximum), or owned by another team than `team` (numbered like
 `GetRealTeam`). Read from the executable, static; not measured. Approximated:
 the engine's derelict latch (the `CraftCannotDie` exemption, clearing only
 when crew returns to one) and the original owner during a temporary takeover
-(listed on SIM-59).
+(listed on SIM-59; `GetRealTeam` has the same approximation).
 
 Evidence: signatures and argument constants read from the executable and the
 rule DLLs, static. The team / radius / ODF-filter readings follow the `A1`
