@@ -158,7 +158,6 @@ pub(super) fn install(lua: &Lua, env: &Env, table: &Table) -> mlua::Result<()> {
     table.set("hot_float_value", no_data(lua, env, "hot_float_value", &[""], "no team strength metric in the world view")?)?;
 
     // Queries with no data behind them.
-    table.set("IsCompromised", no_data(lua, env, "IsCompromised", &["hi"], "the meaning of compromised (and its data) is not known")?)?;
     table.set("IsDerelict", no_data(lua, env, "IsDerelict", &["h"], "the world view carries no derelict state")?)?;
     table.set("IsThereARomulanSpyOnShip", no_data(lua, env, "IsThereARomulanSpyOnShip", &["h"], "the world view carries no boarding or spy state")?)?;
     table.set("GetTranswarpExitWormhole", no_data(lua, env, "GetTranswarpExitWormhole", &["h"], "the world view carries no transwarp links")?)?;

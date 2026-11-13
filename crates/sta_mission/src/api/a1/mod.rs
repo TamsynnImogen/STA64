@@ -378,7 +378,7 @@ fn alias(lua: &Lua, env: &Env, a2: &Table, name: &'static str) -> mlua::Result<F
 /// [`alias`] under another A1 name (errors are reported under it).
 fn alias_as(lua: &Lua, env: &Env, a2: &Table, name: &'static str, a2_name: &'static str) -> mlua::Result<Function> {
     // Existence queries treat a pending or failed spawn as "no such object".
-    let lenient = matches!(name, "Exists" | "DoesNotExist" | "IsAlive");
+    let lenient = matches!(name, "Exists" | "DoesNotExist" | "IsAlive" | "IsCompromised");
     let f: Function = a2.get(a2_name)?;
     let env = env.clone();
     lua.create_function(move |_, args: MultiValue| {

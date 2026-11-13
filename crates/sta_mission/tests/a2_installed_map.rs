@@ -201,7 +201,8 @@ fn into_the_breach_installed_map_reaches_first_borg_wave() {
         attacks
     );
     assert!(rt.errors().is_empty(), "mission Lua errors: {:?}", rt.errors());
-    assert_eq!(rt.unsupported(), [("Player.loadAIP".to_owned(), 1)], "unexpected unsupported mission call");
+    assert_eq!(rt.take_aip_requests().len(), 1, "the intro loads one AIP");
+    assert!(rt.unsupported().is_empty(), "unexpected unsupported mission call: {:?}", rt.unsupported());
     assert_eq!(rt.eval::<String>("return __port_instance.phase").unwrap(), "gameplay");
     assert!(rejected.is_empty(), "mission commands rejected by sim: {rejected:?}");
     assert_eq!(requests.len(), 4, "first Borg wave should request four craft");

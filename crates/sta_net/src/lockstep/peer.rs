@@ -5,6 +5,7 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 
 use sta_content::{ContentDb, MapDef};
 use sta_core::{PlayerId, Tick};
@@ -15,6 +16,7 @@ use sta_sim::setup::GameSetup;
 use sta_sim::{SimEvent, WorldSource};
 
 use super::router::LockstepRouter;
+use crate::resync::NetState;
 use super::transport::Transport;
 use crate::proto::{EngineId, Occupant, ProtoError, Start, PROTOCOL_VERSION};
 use sta_sim::Sim;
@@ -52,15 +54,22 @@ pub struct DesyncFiles {
 
 /// A sim, its router and its replay log.
 pub struct Peer {
-    sim: Sim,
-    router: LockstepRouter,
-    replay: Replay,
-    start: Start,
+    pub(crate) sim: Sim,
+    pub(crate) router: LockstepRouter,
+    pub(crate) replay: Replay,
+    pub(crate) start: Start,
     engines: Vec<(PlayerId, EngineId)>,
-    tick: Tick,
-    ticks_per_turn: Tick,
-    digested: Option<Tick>,
+    pub(crate) tick: Tick,
+    pub(crate) ticks_per_turn: Tick,
+    pub(crate) digested: Option<Tick>,
     faults: Vec<Fault>,
+    /// This peer's own content (a snapshot is checked against it).
+    pub(crate) content: Arc<ContentDb>,
+    /// NET-04: rejoin and resync state.
+    pub(crate) net: NetState,
+    /// The tick the replay starts at: 0, or the snapshot's after a rejoin
+    /// (a replay with no commands before it cannot be rerun from tick 0).
+    pub(crate) replay_from: Tick,
 }
 
 impl Peer {
@@ -107,6 +116,9 @@ impl Peer {
             ticks_per_turn: Tick::from(start.turn.ticks_per_turn.max(1)),
             digested: None,
             faults: Vec::new(),
+            content: Arc::clone(&setup.content),
+            net: NetState::default(),
+            replay_from: 0,
         })
     }
 
@@ -145,11 +157,24 @@ impl Peer {
 
     /// Runs one tick if the router releases it.
     pub fn step(&mut self) -> StepOutcome {
+        self.step_at(Instant::now())
+    }
+
+    /// [`Peer::step`] at a given time: the clock of rejoin and resync
+    /// deadlines and rate limits (tests).
+    pub fn step_at(&mut self, now: Instant) -> StepOutcome {
+        self.router.pump();
+        if let Some(out) = self.net_pre(now) {
+            return out;
+        }
         if self.tick.is_multiple_of(self.ticks_per_turn) && self.digested != Some(self.tick) {
             self.digested = Some(self.tick);
             let sections = self.sim.section_digests();
             self.router.set_sections(self.tick, sections.values().to_vec());
             self.router.set_digest(self.tick, self.sim.digest());
+        }
+        if self.tick.is_multiple_of(self.ticks_per_turn) {
+            self.net_boundary(now);
         }
         let Some(mut cmds) = self.router.take_ready(self.tick) else {
             return if self.router.halted() {
@@ -207,6 +232,16 @@ impl Peer {
         let _ = writeln!(s, "protocol version: {PROTOCOL_VERSION}");
         let _ = writeln!(s, "this seat: {}", self.router.me().0);
         let _ = writeln!(s, "replay ends at tick: {}", self.replay.end_tick);
+        for line in self.net.sidecar_lines() {
+            let _ = writeln!(s, "{line}");
+        }
+        if self.replay_from > 0 {
+            let _ = writeln!(
+                s,
+                "replay starts at tick {} (joined by snapshot): it holds no commands before it",
+                self.replay_from
+            );
+        }
         let cfg = self.router.config();
         let _ = writeln!(
             s,

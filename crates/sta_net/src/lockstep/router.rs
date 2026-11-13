@@ -7,7 +7,7 @@ use sta_sim::command::{Command, CommandRouter};
 
 use super::transport::{Destination, Incoming, Transport, TransportError};
 use crate::proto::{
-    MAX_SCHEDULE_PER_TURN, Action, DesyncNotice, DropChoice, Message, Occupant, ProtoError, Scheduled, SectionReport, Start, TickDigest,
+    MAX_SCHEDULE_PER_TURN, Action, DesyncNotice, DropChoice, Message, Occupant, ProtoError, RouterSeed, Scheduled, SeatSeed, SectionReport, SeqSeen, Start, TickDigest,
     TurnCommands, TurnConfig,
 };
 
@@ -22,6 +22,20 @@ pub const MAX_QUEUED_TURNS: usize = 128;
 
 /// Unread events kept; later ones are dropped.
 pub const MAX_EVENTS: usize = 1024;
+
+/// Messages the router does not act on that it holds for the layer above
+/// (rejoin and resync traffic, NET-04): room for one catch-up (parts and
+/// every seat's records) and a few requests. Later ones are dropped.
+pub const MAX_INBOUND: usize =
+    crate::proto::MAX_SNAPSHOT_PARTS as usize + crate::proto::MAX_CATCH_UP_RECORDS + 64;
+
+/// Bytes of snapshot parts and catch-up records held for the layer above:
+/// one full snapshot and its records, and no more.
+pub const MAX_INBOUND_BYTES: usize = crate::proto::MAX_SNAPSHOT_BYTES + 4 * 1024 * 1024;
+
+/// Duplicate records one seat may re-send after a catch-up (each is dropped
+/// or compared with the copy the host sent).
+const MAX_DUPLICATES: u32 = 2 * MAX_QUEUED_TURNS as u32;
 
 /// Why a received message was not applied. The message's sender is faulted:
 /// a real transport disconnects it, and the sim stalls on its seat until the
@@ -50,6 +64,11 @@ pub enum RouterError {
     SeatClosed(PlayerId),
     /// The seat is more than [`MAX_QUEUED_TURNS`] records ahead of this peer.
     TooFarAhead(PlayerId),
+    /// A record a seat sent differs from the copy the host sent for the same
+    /// turn after a catch-up: one of them is not telling the truth.
+    Contradiction { slot: PlayerId, turn: u32 },
+    /// A catch-up that does not fit this router (seats, order, gaps).
+    BadSeed(&'static str),
 }
 
 impl std::fmt::Display for RouterError {
@@ -69,6 +88,12 @@ impl std::fmt::Display for RouterError {
             RouterError::TooFarAhead(s) => {
                 write!(f, "seat {} is too many turns ahead", s.0)
             }
+            RouterError::Contradiction { slot, turn } => write!(
+                f,
+                "seat {}'s record for turn {turn} differs from the host's copy",
+                slot.0
+            ),
+            RouterError::BadSeed(why) => write!(f, "catch-up does not fit: {why}"),
         }
     }
 }
@@ -174,6 +199,12 @@ pub struct LockstepRouter {
     their_sections: BTreeMap<PlayerId, BTreeMap<Tick, Vec<u64>>>,
     sections_sent: BTreeSet<Tick>,
     events: Vec<RouterEvent>,
+    // NET-04: messages for the layer above, whether a catch-up is expected,
+    // and the seats whose live records may repeat what the host sent.
+    inbound: VecDeque<Incoming>,
+    inbound_bytes: usize,
+    expect_catch_up: bool,
+    tolerant: BTreeMap<PlayerId, u32>,
 }
 
 impl LockstepRouter {
@@ -240,6 +271,10 @@ impl LockstepRouter {
             their_sections: BTreeMap::new(),
             sections_sent: BTreeSet::new(),
             events: Vec::new(),
+            inbound: VecDeque::new(),
+            inbound_bytes: 0,
+            expect_catch_up: false,
+            tolerant: BTreeMap::new(),
         })
     }
 
@@ -471,6 +506,23 @@ impl LockstepRouter {
         }
     }
 
+    /// Sends `msg` through this router's transport (the layer above sends
+    /// its snapshot traffic this way); a failure is also noted as an event.
+    pub fn send_message(&mut self, to: Destination, msg: &Message) -> Result<(), TransportError> {
+        match self.transport.send(to, msg) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                self.note(RouterEvent::Transport(e.clone()));
+                Err(e)
+            }
+        }
+    }
+
+    /// Records that a message from `from` broke a rule.
+    pub fn note_protocol(&mut self, from: PlayerId, error: RouterError) {
+        self.note(RouterEvent::Protocol { from, error });
+    }
+
     fn host_speaks_for(&self, p: PlayerId) -> bool {
         p == PlayerId::SCRIPT || self.host_speaks.contains(&p)
     }
@@ -524,7 +576,7 @@ impl LockstepRouter {
 
     // ---- receiving --------------------------------------------------------
 
-    fn pump(&mut self) {
+    pub fn pump(&mut self) {
         loop {
             match self.transport.poll() {
                 Ok(Some(Incoming { from, msg })) => {
@@ -590,6 +642,39 @@ impl LockstepRouter {
                 self.resumes += 1;
                 Ok(())
             }
+            // Rejoin and resync traffic belongs to the layer above (NET-04).
+            Message::Rejoin(_) | Message::ResyncRequest(_) | Message::ResyncAck(_) => {
+                if self.is_host() {
+                    let size = postcard::to_allocvec(&msg).map_or(crate::proto::MAX_FRAME_BYTES, |b| b.len() + 16);
+                    self.stash(from, msg, size);
+                    Ok(())
+                } else {
+                    Err(RouterError::Proto(ProtoError::Authority(
+                        "request sent to a non-host",
+                    )))
+                }
+            }
+            Message::Resynced(_) | Message::Arrived(_) | Message::SnapshotRefused(_) => {
+                self.stash(from, msg, 0);
+                Ok(())
+            }
+            Message::SnapshotOffer(_)
+            | Message::SnapshotPart(_)
+            | Message::Replayed(_)
+            | Message::CatchUpDone => {
+                // Only when this peer asked for a snapshot: an unsolicited
+                // transfer is dropped, never buffered.
+                if self.expect_catch_up {
+                    // Counted at what the frame weighs, so a flood of large
+                    // records is bounded by bytes and not by count.
+                    let size = match &msg {
+                        Message::SnapshotPart(p) => p.data.len() + 16,
+                        m => postcard::to_allocvec(m).map_or(crate::proto::MAX_FRAME_BYTES, |b| b.len() + 16),
+                    };
+                    self.stash(from, msg, size);
+                }
+                Ok(())
+            }
             Message::Request(action) => {
                 if self.is_host() {
                     // A peer cannot grow the queue without bound.
@@ -608,6 +693,34 @@ impl LockstepRouter {
     }
 
     fn receive_turn(&mut self, from: PlayerId, rec: TurnCommands) -> Result<(), RouterError> {
+        if let Some(seen) = self.tolerant.get_mut(&from) {
+            let next = self.seats.get(&from).map_or(0, |s| s.next_turn);
+            if rec.turn < next {
+                // A live record the catch-up already carried: it must say
+                // what the host's copy says, and is otherwise dropped.
+                *seen += 1;
+                if *seen > MAX_DUPLICATES {
+                    return Err(RouterError::SeatClosed(from));
+                }
+                let copy = self
+                    .seats
+                    .get(&from)
+                    .and_then(|s| s.queue.iter().find(|r| r.turn == rec.turn));
+                return match copy {
+                    Some(c) if c != &rec => {
+                        if let Some(s) = self.seats.get_mut(&from) {
+                            s.faulted = true;
+                        }
+                        Err(RouterError::Contradiction {
+                            slot: from,
+                            turn: rec.turn,
+                        })
+                    }
+                    _ => Ok(()),
+                };
+            }
+            self.tolerant.remove(&from);
+        }
         let result = self.check_turn(from, &rec);
         match result {
             Ok(()) => {
@@ -678,6 +791,237 @@ impl LockstepRouter {
                     last,
                 });
             }
+        }
+        Ok(())
+    }
+
+    // ---- catch-up (NET-04) ------------------------------------------------
+
+    /// Keeps `msg` for [`LockstepRouter::take_inbound`], within the bounds.
+    fn stash(&mut self, from: PlayerId, msg: Message, bytes: usize) {
+        if self.inbound.len() >= MAX_INBOUND || self.inbound_bytes + bytes > MAX_INBOUND_BYTES {
+            return;
+        }
+        self.inbound_bytes += bytes;
+        self.inbound.push_back(Incoming { from, msg });
+    }
+
+    /// Takes what arrived that is not the lockstep stream's: `Rejoin`,
+    /// `ResyncRequest` and `ResyncAck` (host only), `Resynced`, `Arrived`,
+    /// `SnapshotRefused`, and, while [`LockstepRouter::expect_catch_up`] is
+    /// set, the snapshot offer, parts and catch-up records.
+    pub fn take_inbound(&mut self) -> Vec<Incoming> {
+        self.inbound_bytes = 0;
+        self.inbound.drain(..).collect()
+    }
+
+    /// Whether snapshot traffic from the host is kept (this peer asked for
+    /// it) or dropped.
+    pub fn expect_catch_up(&mut self, on: bool) {
+        self.expect_catch_up = on;
+    }
+
+    /// The host's seat.
+    pub fn host_seat(&self) -> PlayerId {
+        self.host
+    }
+
+    /// The next record this router expects from `slot`: how many of its turns
+    /// have arrived (or been sent, for this seat).
+    pub fn seat_next(&self, slot: PlayerId) -> Option<u32> {
+        self.seats.get(&slot).map(|s| s.next_turn)
+    }
+
+    /// Seats that send turn records, with whether the next turn still waits
+    /// on them (not dropped).
+    pub fn seats(&self) -> Vec<PlayerId> {
+        self.seats.keys().copied().collect()
+    }
+
+    /// Whether `slot` still sends records (it was not dropped).
+    pub fn sends(&self, slot: PlayerId) -> bool {
+        self.seats.get(&slot).is_some_and(|s| s.last_turn.is_none())
+    }
+
+    /// The highest `seq` seen for `player` from any sender (or submitted
+    /// here): where a restarted peer's command numbering must continue.
+    pub fn last_seq(&self, player: PlayerId) -> Option<u32> {
+        self.seq_seen
+            .iter()
+            .filter(|((_, p), _)| *p == player)
+            .map(|(_, &q)| q)
+            .chain(self.last_submitted.get(&player).copied())
+            .max()
+    }
+
+    /// Ends the stop of a desync that was repaired (NET_DECISIONS N2): the
+    /// host resynced the diverged seats and said so.
+    pub fn clear_desync(&mut self) {
+        self.desync = None;
+        self.peer_desync = None;
+    }
+
+    /// This router's state at a turn boundary, for a snapshot taken there
+    /// (the sim at the first tick of `next_turn`, before its commands apply),
+    /// and the records every seat has queued from that turn on, seat by seat
+    /// in turn order. `None` when the state does not fit the wire bounds.
+    pub fn seed(&self) -> Option<(RouterSeed, Vec<TurnCommands>)> {
+        let mut seats = Vec::new();
+        let mut records = Vec::new();
+        for (&slot, s) in &self.seats {
+            if s.queue.len() > MAX_QUEUED_TURNS || s.queue.iter().any(|r| r.turn < self.next_turn) {
+                return None;
+            }
+            seats.push(SeatSeed {
+                slot,
+                next_turn: s.next_turn,
+                last_turn: s.last_turn,
+                queued: u16::try_from(s.queue.len()).ok()?,
+            });
+            records.extend(s.queue.iter().cloned());
+        }
+        let mut host_speaks = self.host_speaks.clone();
+        host_speaks.sort();
+        host_speaks.dedup();
+        let seq_seen = self
+            .seq_seen
+            .iter()
+            .map(|(&(sender, player), &seq)| SeqSeen {
+                sender,
+                player,
+                seq,
+            })
+            .collect();
+        Some((
+            RouterSeed {
+                turn: self.next_turn,
+                cfg: self.cfg,
+                seats,
+                host_speaks,
+                seq_seen,
+                resumes: self.resumes,
+            },
+            records,
+        ))
+    }
+
+    /// Takes over the state a snapshot belongs to: this router continues at
+    /// `seed.turn` as the host's does. `records` are the host's queued
+    /// records (checked by the caller against the seed); any record this
+    /// router received itself that the host's copy does not cover is kept
+    /// behind it, and one the host's copy does cover must be the same.
+    ///
+    /// Digests, the stop of a desync and unchecked reports are cleared: they
+    /// described a state that is gone.
+    pub fn adopt(
+        &mut self,
+        seed: &RouterSeed,
+        records: Vec<TurnCommands>,
+    ) -> Result<(), RouterError> {
+        let bad = RouterError::BadSeed;
+        if seed.seats.len() != self.seats.len()
+            || seed.seats.iter().any(|s| !self.seats.contains_key(&s.slot))
+        {
+            return Err(bad("seats differ from the game's"));
+        }
+        let mut by_seat: BTreeMap<PlayerId, VecDeque<TurnCommands>> = BTreeMap::new();
+        for r in records {
+            by_seat.entry(r.slot).or_default().push_back(r);
+        }
+        // Check everything before changing anything.
+        let mut merged: BTreeMap<PlayerId, (VecDeque<TurnCommands>, u32)> = BTreeMap::new();
+        for s in &seed.seats {
+            let mut queue = by_seat.remove(&s.slot).unwrap_or_default();
+            if queue.len() != usize::from(s.queued) {
+                return Err(bad("record count differs from the seed's"));
+            }
+            if let Some(first) = queue.front() {
+                if first.turn < seed.turn || first.turn > seed.turn.max(self.start_delay) {
+                    return Err(bad("records do not start at the seed's turn"));
+                }
+                let mut expect = first.turn;
+                for r in &queue {
+                    if r.turn != expect || r.slot != s.slot {
+                        return Err(bad("records not contiguous"));
+                    }
+                    expect += 1;
+                }
+                if expect != s.next_turn {
+                    return Err(bad("seat's next turn does not follow its records"));
+                }
+            } else if s.last_turn.is_none() && s.next_turn < seed.turn {
+                return Err(bad("seat's next turn is behind the seed's"));
+            }
+            let mine = self.seats.get(&s.slot).expect("checked above");
+            let mut next = s.next_turn;
+            for r in &mine.queue {
+                if r.turn < next {
+                    match queue.iter().find(|q| q.turn == r.turn) {
+                        Some(q) if q != r => {
+                            return Err(RouterError::Contradiction {
+                                slot: s.slot,
+                                turn: r.turn,
+                            })
+                        }
+                        _ => {}
+                    }
+                } else if r.turn == next && s.last_turn.is_none_or(|l| r.turn <= l) {
+                    queue.push_back(r.clone());
+                    next += 1;
+                } else {
+                    return Err(bad("this peer's records leave a gap after the host's"));
+                }
+            }
+            merged.insert(s.slot, (queue, next));
+        }
+        if !by_seat.is_empty() {
+            return Err(bad("record from a seat not in the seed"));
+        }
+        for s in &seed.seats {
+            let (queue, next) = merged.remove(&s.slot).expect("built above");
+            let seat = self.seats.get_mut(&s.slot).expect("checked above");
+            seat.queue = queue;
+            seat.next_turn = next;
+            seat.last_turn = s.last_turn;
+        }
+        self.cfg = seed.cfg;
+        self.host_speaks = seed.host_speaks.clone();
+        for e in &seed.seq_seen {
+            let k = (e.sender, e.player);
+            let v = self.seq_seen.entry(k).or_insert(e.seq);
+            *v = (*v).max(e.seq);
+        }
+        self.resumes = seed.resumes;
+        self.paused_at = None;
+        self.resumed_for = None;
+        self.next_turn = seed.turn;
+        self.delivered = None;
+        // Our own record numbering continues after what the host holds.
+        let own = self.seats.get(&self.me).map_or(0, |s| s.next_turn);
+        self.next_send = self.next_send.max(own);
+        // The state those described is gone.
+        self.ours.clear();
+        self.seen.clear();
+        self.unchecked.clear();
+        self.our_sections.clear();
+        self.their_sections.clear();
+        self.sections_sent.clear();
+        self.digest_to_send = None;
+        self.desync = None;
+        self.peer_desync = None;
+        self.tolerant = self
+            .seats
+            .keys()
+            .filter(|&&p| p != self.me)
+            .map(|&p| (p, 0))
+            .collect();
+        let digests: Vec<(PlayerId, TickDigest)> = self
+            .seats
+            .iter()
+            .flat_map(|(&p, s)| s.queue.iter().filter_map(move |r| r.digest.map(|d| (p, d))))
+            .collect();
+        for (p, d) in digests {
+            self.compare(p, d);
         }
         Ok(())
     }

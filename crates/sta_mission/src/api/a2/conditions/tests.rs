@@ -190,7 +190,6 @@ fn calls_without_data_raise_and_are_counted_never_guessed() {
     let rt = runtime(&s);
     for (call, name) in [
         ("A2.CountCapitalShips(0)", "CountCapitalShips"),
-        ("A2.IsCompromised(a, 1)", "IsCompromised"),
         ("A2.IsShipAliveAndOffMap(a)", "IsShipAliveAndOffMap"),
         ("A2.IsCargoShipReadyToLoad(a)", "IsCargoShipReadyToLoad"),
         ("A2.IsCargoShipFullAndReadyToSend(a)", "IsCargoShipFullAndReadyToSend"),
@@ -200,6 +199,58 @@ fn calls_without_data_raise_and_are_counted_never_guessed() {
         assert!(e.contains(&format!("A2.{name}")), "{e}");
     }
     let counted = rt.unsupported();
-    assert_eq!(counted.len(), 6, "{counted:?}");
+    assert_eq!(counted.len(), 5, "{counted:?}");
     assert!(counted.iter().all(|(_, n)| *n == 1));
+}
+
+#[test]
+fn is_compromised_is_lost_to_the_expected_team() {
+    let mut s = scene();
+    let rt = runtime(&s);
+    // The object belongs to the team named: not compromised. Any other
+    // team, or an object that is gone: compromised (LUA-12).
+    assert!(!eval::<bool>(&rt, "return A2.IsCompromised(a, 0)"));
+    assert!(eval::<bool>(&rt, "return A2.IsCompromised(a, 1)"));
+    assert!(!eval::<bool>(&rt, "return A2.IsCompromised(b, 1)"));
+    assert!(!eval::<bool>(&rt, "return A2.IsCompromised(s, 0)"), "a station counts as a craft");
+    assert!(eval::<bool>(&rt, "return A2.IsCompromised(123456, 0)"));
+    assert!(rt.eval::<bool>("return A2.IsCompromised(a)").is_err());
+    assert!(rt.unsupported().is_empty());
+    // Crew under one with a positive maximum is the derelict state.
+    let id = s.ids[0];
+    s.view.units.iter_mut().find(|u| u.id == id).unwrap().crew = Some([Fixed::ZERO, Fixed::from_int(10)]);
+    let rt = runtime(&s);
+    assert!(eval::<bool>(&rt, "return A2.IsCompromised(a, 0)"));
+    s.view.units.iter_mut().find(|u| u.id == id).unwrap().crew = Some([Fixed::from_int(3), Fixed::from_int(10)]);
+    assert!(!eval::<bool>(&runtime(&s), "return A2.IsCompromised(a, 0)"));
+}
+
+#[test]
+fn is_compromised_under_armada_teams_dying_crew_none_and_fixtures() {
+    let mut s = scene();
+    let mk = |s: &Scene| {
+        let cfg = MissionConfig {
+            content: Some(s.db.clone()),
+            view: Some(s.view.clone()),
+            player_numbering: crate::api::PlayerNumbering::ArmadaTeams,
+            ..MissionConfig::default()
+        };
+        let rt = MissionRuntime::from_source_with("cond.lua", "", 3, cfg);
+        rt.eval::<()>(&format!("a, b = {}, {}", s.ids[0].0, s.ids[1].0)).unwrap();
+        rt
+    };
+    // Slot 0 is team 1 for converted missions.
+    let rt = mk(&s);
+    assert!(!eval::<bool>(&rt, "return A2.IsCompromised(a, 1)"));
+    assert!(eval::<bool>(&rt, "return A2.IsCompromised(a, 0)"));
+    assert!(!eval::<bool>(&rt, "return A2.IsCompromised(b, 2)"));
+    // Crew unknown, or a zero maximum, is not a derelict; a dying unit is lost.
+    let id = s.ids[0];
+    s.view.units.iter_mut().find(|u| u.id == id).unwrap().crew = None;
+    assert!(!eval::<bool>(&mk(&s), "return A2.IsCompromised(a, 1)"));
+    s.view.units.iter_mut().find(|u| u.id == id).unwrap().crew = Some([Fixed::ZERO, Fixed::ZERO]);
+    assert!(!eval::<bool>(&mk(&s), "return A2.IsCompromised(a, 1)"));
+    let u = s.view.units.iter_mut().find(|u| u.id == id).unwrap();
+    u.flags = u.flags.with(sta_sim::view::UnitFlags::DYING, true);
+    assert!(eval::<bool>(&mk(&s), "return A2.IsCompromised(a, 1)"));
 }
