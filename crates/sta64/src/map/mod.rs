@@ -480,7 +480,7 @@ impl Plugin for MapPlugin {
         app.add_systems(
                 Update,
                 (
-                    crate::clock::advance_idle_clock.run_if(not(resource_exists::<crate::sim_link::SimLink>)),
+                    crate::clock::advance_idle_clock.run_if(not(resource_exists::<crate::sim_link::SimLink>).or_else(resource_exists::<crate::sim_link::SimHeld>)),
                     input,
                     rebuild,
                     radar_click.run_if(crate::ui::ingame_menu::menu_closed),
