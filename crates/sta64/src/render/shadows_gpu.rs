@@ -23,6 +23,7 @@ use bevy::window::ExitCondition;
 
 use super::hulls::{HullPart, HullPlugin};
 use super::nebula::{apply_shadow, NebulaMaterial, NebulaParams, NebulaPlugin};
+use super::profile::RenderProfile;
 use super::shadows::{KeyShadow, ShadowPlugin, ShadowSet};
 
 static ERRORS: Mutex<Vec<String>> = Mutex::new(Vec::new());
@@ -128,6 +129,7 @@ fn a_ship_inside_a_nebula_darkens_the_gas_behind_it() {
             .set(LogPlugin { level: bevy::log::Level::WARN, custom_layer: error_layer, ..default() })
             .disable::<bevy::winit::WinitPlugin>(),
     );
+    app.insert_resource(RenderProfile::Refit);
     app.add_plugins((HullPlugin, NebulaPlugin, ShadowPlugin));
     // The test's gas is one material, not a `NebulaField`: it takes the map the way a field does.
     app.add_systems(
@@ -236,6 +238,7 @@ fn a_hull_in_a_ships_shadow_is_darker_and_does_not_shadow_itself() {
             .set(LogPlugin { level: bevy::log::Level::WARN, custom_layer: error_layer, ..default() })
             .disable::<bevy::winit::WinitPlugin>(),
     );
+    app.insert_resource(RenderProfile::Refit);
     app.add_plugins((HullPlugin, ShadowPlugin));
     app.insert_resource(ClearColor(Color::BLACK));
     let mut img = Image::new_target_texture(W, H, TextureFormat::Rgba8UnormSrgb, None);

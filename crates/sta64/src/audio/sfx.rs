@@ -126,7 +126,7 @@ impl Plugin for SfxPlugin {
 }
 
 /// Map-space position of the camera (the renderer mirrors Z).
-fn camera_map_pos(cam: &Query<&GlobalTransform, (With<Camera3d>, Without<crate::render::shadows::ShadowCamera>)>) -> Option<Vec3> {
+fn camera_map_pos(cam: &Query<&GlobalTransform, crate::map::MainCamera>) -> Option<Vec3> {
     cam.iter().next().map(|t| {
         let p = t.translation();
         Vec3::new(p.x, p.y, -p.z)
@@ -140,7 +140,7 @@ fn run_sfx(
     content: Option<Res<ContentRes>>,
     local: Option<Res<LocalPlayer>>,
     cfg: Res<SfxConfig>,
-    cam: Query<&GlobalTransform, (With<Camera3d>, Without<crate::render::shadows::ShadowCamera>)>,
+    cam: Query<&GlobalTransform, crate::map::MainCamera>,
     mut msgs: MessageReader<SimMsg>,
     mut st: ResMut<SfxState>,
     mut out: MessageWriter<PlaySound>,

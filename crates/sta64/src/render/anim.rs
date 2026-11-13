@@ -20,8 +20,8 @@
 //!   slots) plays on [`SimEvent::Fired`] of its own: turrets, platform weapons, special
 //!   weapons such as hyper artillery;
 //! - a model **without a sim unit** (the model viewer, a map-view ship, an effect
-//!   model) has nothing to wait for and plays on its own, once each period of rest
-//!   ([`Trigger::Idle`]);
+//!   model) has nothing to wait for and plays on its own, then rests a period
+//!   ([`Trigger::Idle`]; the rest is ours, nothing in the model says it);
 //! - a unit that neither builds nor fires (workers at work, deploy, transwarp) has no
 //!   sim event that says when ([`Trigger::None`]); the track rests. Docking is the
 //!   same: the sim emits no docking event (`UnitFlags::DOCKED` is never set), so it
@@ -36,7 +36,7 @@ use sta_assets::model::Keys;
 use sta_sim::SimEvent;
 
 /// What starts an event track.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Trigger {
     /// The unit builds: [`SimEvent::BuildStarted`] / [`SimEvent::Built`].
     #[default]
@@ -130,6 +130,8 @@ pub struct EventAnim {
     closing_from: Option<f32>,
     /// What starts it.
     pub trigger: Trigger,
+    /// The trigger has been read from the unit's content.
+    assigned: bool,
     /// Wall-clock time an idle track may play again.
     idle_from: f64,
 }
@@ -143,6 +145,7 @@ impl EventAnim {
             held: false,
             closing_from: None,
             trigger: Trigger::Build,
+            assigned: false,
             idle_from: 0.0,
         }
     }
@@ -202,9 +205,12 @@ pub fn assign_triggers(
     link: Res<crate::sim_link::SimLink>,
     content: Option<Res<crate::sim_link::ContentRes>>,
     roots: Query<&crate::sim_link::SimEntity>,
-    mut fresh: Query<&mut EventAnim, Added<EventAnim>>,
+    mut fresh: Query<&mut EventAnim>,
 ) {
     for mut a in &mut fresh {
+        if a.assigned {
+            continue;
+        }
         let unit = roots.get(a.root).ok().map(|id| id.0);
         let caps = match (unit, content.as_deref()) {
             (None, _) => None,
@@ -218,22 +224,24 @@ pub fn assign_triggers(
             (Some(_), None) => continue,
         };
         a.trigger = trigger_for(caps);
+        a.assigned = true;
     }
 }
 
 /// Tracks of a model with no sim unit (the model viewer has no sim at all) play by
-/// themselves: once forward and back, then three periods of rest.
+/// themselves: once forward and back, then a period of rest.
 pub fn play_idle(clock: Res<AnimClock>, mut q: Query<&mut EventAnim>, owners: Query<(), With<crate::sim_link::SimEntity>>) {
     let wall = clock.wall();
     for mut a in &mut q {
         // No `SimEntity` on the root: nothing in the sim to wait for, whatever the
         // trigger said before content loaded.
-        if owners.get(a.root).is_err() {
+        if owners.get(a.root).is_err() && a.trigger != Trigger::Idle {
             a.trigger = Trigger::Idle;
+            a.assigned = true;
         }
         if a.trigger == Trigger::Idle && a.started.is_none() && wall >= a.idle_from {
             a.started = Some(wall);
-            a.idle_from = wall + f64::from(3.0 * a.track.period);
+            a.idle_from = wall + f64::from(3.0 * a.track.period); // two periods playing, one resting
         }
     }
 }
@@ -245,12 +253,12 @@ pub fn start_events(
     clock: Res<AnimClock>,
     mut q: Query<&mut EventAnim>,
 ) {
-    let mut roots = Vec::new();
+    let mut roots = std::collections::HashSet::new();
     for SimMsg(ev) in msgs.read() {
         if let Some((id, kind)) = triggers(ev)
             && let Some(root) = ents.0.get(&id)
         {
-            roots.push((*root, kind));
+            roots.insert((*root, kind));
         }
     }
     if roots.is_empty() {
@@ -572,8 +580,8 @@ mod tests {
             }
             was_open = open;
         }
-        // The door is 2 s each way (4 s a play) and rests 3 periods (6 s): 20 s is two plays.
-        assert!(peaks >= 2 && shut_after, "plays: {peaks}");
+        // The door is 2 s each way (4 s a play) and rests a period (2 s): 20 s is three plays.
+        assert!((3..=4).contains(&peaks) && shut_after, "plays: {peaks}");
         assert!(app.world().get::<EventAnim>(node).unwrap().trigger == Trigger::Idle);
     }
 
@@ -655,6 +663,8 @@ mod tests {
             println!("event tracks, trigger {t}: {}", models.join(" "));
         }
         assert!(!by_trigger.is_empty(), "no model has an event track: the check is vacuous");
+        // The models resolve to their units: some event tracks belong to builders.
+        assert!(by_trigger.contains_key("Build"), "no model resolved to a builder: {:?}", by_trigger.keys());
         assert!(bad.is_empty(), "scenery tracks classed as events: {bad:?}");
     }
 }

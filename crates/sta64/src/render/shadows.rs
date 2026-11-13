@@ -159,8 +159,11 @@ pub fn fit(casters: &[(Vec3, f32)], to_key: Vec3, size: u32) -> Option<Fit> {
     let texel = width / size as f32;
     let cu = ((lo.x + hi.x) * 0.5 / texel).floor() * texel;
     let cv = ((lo.y + hi.y) * 0.5 / texel).floor() * texel;
-    let (z0, z1) = (lo.z - 1.0, hi.z + 1.0);
-    let range = (z1 - z0).max(1.0);
+    // The depth range on a coarse grid (an eighth of the width), so it changes as seldom as
+    // the width does: every consumer's parameters change with it.
+    let q = width / 8.0;
+    let (z0, z1) = (((lo.z - 1.0) / q).floor() * q, ((hi.z + 1.0) / q).ceil() * q);
+    let range = (z1 - z0).max(q);
     let rows = [
         (right / width).extend(0.5 - cu / width),
         (-up / width).extend(0.5 + cv / width),
@@ -202,6 +205,7 @@ impl Plugin for ShadowPlugin {
                 update
                     .in_set(ShadowSet)
                     .after(TransformSystems::Propagate)
+                    .before(bevy::camera::CameraUpdateSystems)
                     .before(VisibilitySystems::UpdateFrusta),
             );
     }
@@ -243,7 +247,8 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>, mut material
     ));
 }
 
-/// Gives each hull mesh its proxy, and keeps the proxy's mesh the mesh's.
+/// Gives each hull mesh its proxy, and keeps the proxy's mesh the mesh's. A proxy whose mesh
+/// was despawned the frame it was made has no parent (the hierarchy drops it): it goes.
 #[allow(clippy::type_complexity)]
 fn add_proxies(
     mut commands: Commands,
@@ -251,7 +256,11 @@ fn add_proxies(
     fresh: Query<(Entity, &Mesh3d), (With<HullPart>, Without<Proxied>, Without<ShadowProxy>)>,
     changed: Query<(&Mesh3d, &Proxied), Changed<Mesh3d>>,
     mut proxies: Query<&mut Mesh3d, (With<ShadowProxy>, Without<Proxied>)>,
+    orphans: Query<Entity, (With<ShadowProxy>, Without<ChildOf>)>,
 ) {
+    for e in &orphans {
+        commands.entity(e).try_despawn();
+    }
     for (e, mesh) in &fresh {
         let proxy = commands
             .spawn((ShadowProxy, Mesh3d(mesh.0.clone()), MeshMaterial3d(caster.0.clone()), RenderLayers::layer(SHADOW_LAYER), Transform::IDENTITY, ChildOf(e)))
@@ -299,7 +308,7 @@ fn update(
 ) {
     let Ok((mut cam, mut tf, mut gt, mut proj)) = camera.single_mut() else { return };
     // Stock parity: only the Refit profile draws ship shadows in gas and on hulls (RND-22).
-    let drawing = profile.is_none_or(|p| *p == RenderProfile::Refit);
+    let drawing = profile.is_some_and(|p| *p == RenderProfile::Refit);
     let to_key = key_direction(lights.iter().map(|(t, l)| (t.back().as_vec3(), l.illuminance)));
     let fitted = (|| {
         if !drawing {
