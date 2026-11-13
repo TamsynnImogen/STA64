@@ -152,6 +152,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] Persistent shields (RND-32, #589): on a build containing this change, set `alwaysShowShields = 1` in an isolated test mod's ship or station ODF. Confirm the continuous blue outline follows the craft, disappears at zero shields, returns on recharge, and remains separate from hit flashes. Check cloak/uncloak, losing sight of an enemy, death and returning to the menu. Default and explicit zero stay off. Bounds/colour are documented approximations; [scope and automated checks](docs/PERSISTENT_SHIELDS.md).
 
+- [?] Mission-driven faction appearance (RND-35): change a ship's race and its owner's race separately, capture it with and without a unit override, and save/reload. Check textures and faction subtrees under Stock/Refit, unknown/missing variants, and two instances sharing one model. Unit override wins, then current owner's override, then setup faction; team colour and ownership follow the existing simulation.
+
 ## Checked earlier (morning list)
 
 - [x] Construction live-feedback fixes accepted (2026-11-11, `construction-a1666d0`): the user confirmed visible beams, later chunk reveal and the constructor staying fixed under normal/queued movement. Automated Stop/cancellation and snapshot checks pass. FPS was not reported; this does not complete broader native/Android checks above.
