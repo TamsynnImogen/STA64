@@ -33,7 +33,7 @@ impl Sim {
         sim.ai_seats = s
             .players
             .iter()
-            .filter(|p| matches!(p.control, crate::setup::Control::Ai(_)))
+            .filter(|p| matches!(p.control, crate::setup::Control::Ai(_) | crate::setup::Control::RemoteAi(_)))
             .map(|p| p.id)
             .collect();
         sim.ai_seats.sort();

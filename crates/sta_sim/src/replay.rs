@@ -138,6 +138,8 @@ pub enum ControlRec {
     Remote,
     Ai(String),
     Idle,
+    /// A computer player run by the host, recorded by a non-host peer.
+    RemoteAi(String),
 }
 
 /// How a recorded game's seats got their starting forces.
@@ -221,6 +223,7 @@ impl Replay {
                         Control::Human => ControlRec::Human,
                         Control::Remote => ControlRec::Remote,
                         Control::Ai(n) => ControlRec::Ai(n.clone()),
+                        Control::RemoteAi(n) => ControlRec::RemoteAi(n.clone()),
                         // Idle, and any seat kind added later: nothing sends for them.
                         _ => ControlRec::Idle,
                     },
@@ -314,6 +317,7 @@ impl Replay {
                         ControlRec::Human => Control::Human,
                         ControlRec::Remote => Control::Remote,
                         ControlRec::Ai(n) => Control::Ai(n.clone()),
+                        ControlRec::RemoteAi(n) => Control::RemoteAi(n.clone()),
                         ControlRec::Idle => Control::Idle,
                     },
                 })

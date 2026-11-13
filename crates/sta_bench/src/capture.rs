@@ -217,7 +217,7 @@ impl CaptureIndex {
                     control: match &p.control {
                         ControlRec::Human => "human".into(),
                         ControlRec::Remote => "remote".into(),
-                        ControlRec::Ai(n) => format!("ai:{n}"),
+                        ControlRec::Ai(n) | ControlRec::RemoteAi(n) => format!("ai:{n}"),
                         ControlRec::Idle => "idle".into(),
                     },
                 })
