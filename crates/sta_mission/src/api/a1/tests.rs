@@ -282,7 +282,7 @@ const CASES: &[(&str, &str, Expect)] = &[
     ("GetTime", "assert(A1.GetTime() >= 0)", Fine),
     ("FailMission", "A1.FailMission(1.0, 'lost')", Fine),
     ("SucceedMission", "A1.SucceedMission(1.0, 'won')", Fine),
-    ("IsCompromised", "A1.IsCompromised(a, 1)", Fail),
+    ("IsCompromised", "A1.IsCompromised(a, 1)", Fine),
     ("ObstacleAvoidence", "A1.ObstacleAvoidence(true)", Fine),
     ("PointAt", "A1.PointAt(a, b)", Fine),
     ("PointAt", "A1.PointAt(a, 'P')", Fine),
@@ -334,7 +334,7 @@ fn the_table_and_the_cases_name_the_same_functions() {
         .unwrap()
         .into_iter()
         // Host-side completion reports, tested below, are not DLL calls.
-        .filter(|k| k != "MovieDone" && k != "AudioMessageDone")
+        .filter(|k| k != "MovieDone" && k != "AudioMessageDone" && k != "HostPending")
         .collect();
     let cased: BTreeSet<String> = CASES.iter().map(|c| c.0.to_owned()).collect();
     assert_eq!(bound, cased);
@@ -467,8 +467,18 @@ fn audio_messages_are_done_when_stopped_or_reported() {
     );
     assert!(!rt.eval::<bool>("return A1.IsAudioMessageDone(m)").unwrap());
     assert!(rt.eval::<bool>("return A1.IsAudioMessageDone(n)").unwrap());
+    let pending = "local o = {} for i, p in ipairs(A1.HostPending()) do o[i] = p.kind .. ':' .. p.id .. ':' .. p.name end return o";
+    assert_eq!(rt.eval::<Vec<String>>(pending).unwrap(), vec!["sound:1:briefing.wav".to_owned()]);
     rt.eval::<()>("A1.AudioMessageDone(m)").unwrap();
     assert!(rt.eval::<bool>("return A1.IsAudioMessageDone(m)").unwrap());
+    assert!(rt.eval::<Vec<String>>(pending).unwrap().is_empty());
+    rt.eval::<()>("A1.PlayBridgeMovie('m.bik', 0)").unwrap();
+    assert_eq!(rt.eval::<Vec<String>>(pending).unwrap(), vec!["movie:0:m.bik".to_owned()]);
+    rt.eval::<()>("A1.MovieDone()").unwrap();
+    assert!(rt.eval::<Vec<String>>(pending).unwrap().is_empty());
+    // a handle still at its -1 start value, or an id not playing: the engine finds no such sound
+    let (_, commands) = run(&s, "A1.StopAudioMessage(-1); A1.StopAudioMessage(77)");
+    assert!(commands.is_empty(), "{commands:?}");
 }
 
 #[test]
@@ -585,6 +595,20 @@ fn path_seam_is_a_documented_error_when_unfilled() {
 }
 
 #[test]
+fn paths_are_the_maps_and_match_ignoring_case() {
+    let s = scene();
+    let (rt, _) = run(&s, "");
+    assert!(rt.eval::<bool>("return rawequal(A1.paths, A2.paths)").unwrap());
+    let (_, commands) = run(&s, "A1.Goto(a, 'q', 1)");
+    assert_eq!(commands.len(), 1, "{commands:?}");
+    let message = fails(&s, "A1.paths.Ab = { {x=1,y=0,z=0} }; A1.paths.aB = A1.paths.Ab; A1.Goto(a, 'AB', 1)");
+    assert!(message.contains("ambiguous"), "{message}");
+    // an exact name wins over its case variants
+    let (_, commands) = run(&s, "A1.paths.Ab = { {x=1,y=0,z=0} }; A1.paths.aB = A1.paths.Ab; A1.Goto(a, 'Ab', 1)");
+    assert_eq!(commands.len(), 1, "{commands:?}");
+}
+
+#[test]
 fn relations_are_a_script_override() {
     let s = scene();
     let (rt, _) = run(&s, "A1.SetRelation(0, 1, 1); A1.SetRelation(1, 0, 0)");
@@ -595,20 +619,51 @@ fn relations_are_a_script_override() {
 #[test]
 fn seam_gap_writes_are_retained_and_counted_without_other_effect() {
     let s = scene();
-    let (rt, commands) = run(&s, "A1.SetShieldPercent(a, 0.5); A1.SetWarpSpeed(a, 30); A1.SetPosition(a, 'P')");
-    assert_eq!(
-        presented(&commands),
-        vec![
-            call("SetShieldPercent", vec![Arg::Entity(s.ids[0]), Arg::Num(Fixed::from_f64(0.5))]),
-            call("SetWarpSpeed", vec![Arg::Entity(s.ids[0]), Arg::Num(Fixed::from_int(30))]),
-            call("SetPosition", vec![Arg::Entity(s.ids[0]), Arg::Text("P".into())]),
-        ]
-    );
+    let (rt, commands) = run(&s, "A1.SetWarpSpeed(a, 30)");
+    assert_eq!(presented(&commands), vec![call("SetWarpSpeed", vec![Arg::Entity(s.ids[0]), Arg::Num(Fixed::from_int(30))])]);
     let unsupported: BTreeSet<String> = rt.unsupported().into_iter().map(|(k, _)| k).collect();
-    assert!(unsupported.iter().any(|k| k.starts_with("A1.SetShieldPercent")));
     assert!(unsupported.iter().any(|k| k.starts_with("A1.SetWarpSpeed")));
     // A dead target is an error, not a silent request.
     fails(&s, "A1.SetShieldPercent(999999, 0.5)");
+}
+
+#[test]
+fn set_position_and_point_at_queue_typed_edits_and_are_not_counted() {
+    let s = scene();
+    let (rt, commands) = run(&s, "A1.SetPosition(a, 'P'); A1.PointAt(a, b); A1.PointAt(a, 'Q')");
+    let edits: Vec<_> = commands.iter().map(|c| (c.player, c.kind.clone())).collect();
+    let edit = |e| (PlayerId::SCRIPT, CommandKind::Edit(e));
+    assert_eq!(
+        edits,
+        vec![
+            edit(Edit::Position(s.ids[0], Vec3::from_f32([10.0, 0.0, 0.0]))),
+            // From where the unit now is (10, after its queued SetPosition).
+            edit(Edit::Heading(s.ids[0], (Fixed::from_int(90), Fixed::ZERO))),
+            edit(Edit::Heading(s.ids[0], (Fixed::from_int(490), Fixed::ZERO))),
+        ]
+    );
+    assert!(rt.unsupported().iter().all(|(k, _)| !k.contains("SetPosition") && !k.contains("PointAt")));
+    // A target at the unit's own place has no direction: counted, nothing queued.
+    let (rt, commands) = run(&s, "A1.PointAt(a, a)");
+    assert!(commands.is_empty());
+    assert!(rt.unsupported().iter().any(|(k, _)| k.starts_with("A1.PointAt")));
+    // A path the host did not fill is an error (host data missing).
+    assert!(fails(&s, "A1.SetPosition(a, 'Nope')").contains("Nope"));
+}
+
+#[test]
+fn shield_writes_queue_typed_edits_and_are_not_counted() {
+    let s = scene();
+    let (rt, commands) = run(&s, "A1.SetShieldPercent(a, 0.5); A1.SetMaxShields(a, 900)");
+    let edits: Vec<_> = commands.iter().map(|c| c.kind.clone()).collect();
+    assert_eq!(
+        edits,
+        vec![
+            CommandKind::Edit(Edit::ShieldPercent(s.ids[0], Fixed::from_f64(0.5))),
+            CommandKind::Edit(Edit::MaxShields(s.ids[0], Fixed::from_int(900))),
+        ]
+    );
+    assert!(rt.unsupported().iter().all(|(k, _)| !k.contains("Shield")));
 }
 
 #[test]
@@ -616,12 +671,9 @@ fn seam_gap_queries_name_what_is_missing() {
     let s = scene();
     let message = fails(&s, "A1.InStopMode(a)");
     assert!(message.contains("not available") && message.contains("order state"), "{message}");
-    let (rt, _) = {
-        let rt = runtime(&s);
-        let _ = rt.eval::<()>("A1.IsCompromised(a, 1)");
-        (rt, ())
-    };
-    assert!(rt.unsupported().iter().any(|(k, _)| k.starts_with("A1.IsCompromised")));
+    let rt = runtime(&s);
+    let _ = rt.eval::<()>("A1.IsDerelict(a)");
+    assert!(rt.unsupported().iter().any(|(k, _)| k.starts_with("A1.IsDerelict")));
 }
 
 #[test]

@@ -33,7 +33,7 @@ impl Sim {
         sim.ai_seats = s
             .players
             .iter()
-            .filter(|p| matches!(p.control, crate::setup::Control::Ai(_)))
+            .filter(|p| matches!(p.control, crate::setup::Control::Ai(_) | crate::setup::Control::RemoteAi(_)))
             .map(|p| p.id)
             .collect();
         sim.ai_seats.sort();
@@ -90,7 +90,15 @@ impl Sim {
         self.confinement.initialize(self.units.get_mut(id).expect("spawned"));
         self.events.push(SimEvent::Spawned { id });
         self.register_lifecycle(id);
+        self.default_autonomy(id);
         Some(id)
+    }
+
+    /// Give a new craft the content's default autonomy (SIM-36, D9).
+    pub(crate) fn default_autonomy(&mut self, id: EntityId) {
+        let Some(db) = self.content.as_deref() else { return };
+        let a = db.rules().autonomy();
+        self.autonomy.spawned(&self.units, id, [a.movement, a.special_weapon]);
     }
 
     /// Take an entity out of the world, with everything kept about it.
@@ -116,9 +124,13 @@ impl Sim {
         self.confinement.remove(id);
         self.perception.remove(id);
         self.autonomy.remove(id);
+        self.approach_warp.remove(id);
+        self.watchdog.remove(id);
+        self.engagement.remove(id);
         self.production.remove_rally_entity(id);
         self.production.remove_weld_site(id);
         self.start_effects.remove(id);
+        self.subsystems.remove(id);
         if let Some(by) = destroyed_by {
             self.events.push(SimEvent::Destroyed { id, by });
         }
@@ -187,6 +199,7 @@ impl Sim {
                 };
                 u.hull[0] = u.hull[1];
                 u.shields = crate::world::Shields::full(u.shields.max, u.shields.directional);
+                self.subsystems.repair(id);
                 true
             }
             Edit::Immortal(id, on) => self.set_flag(id, UnitFlags::IMMORTAL, on),
@@ -220,6 +233,26 @@ impl Sim {
             Edit::Subsystem(id, Subsystem::Weapons, on) => {
                 self.apply_edit(from, &Edit::Weapons(id, on))
             }
+            Edit::Subsystem(id, sub, on) => self.edit_subsystem_switch(id, sub, on),
+            Edit::SubsystemDamage(id, sub, points) => self.edit_subsystem_damage(id, sub, points),
+            Edit::ShieldPercent(id, fraction) => self.edit_shield_percent(id, fraction),
+            Edit::MaxShields(id, max) => self.edit_max_shields(id, max),
+            Edit::MaxOfficers(player, value) => self.economy.edit_officer_limit(player, value),
+            Edit::TeamCrew(player, value) => self.economy.edit_team_crew(player, value),
+            Edit::UnitCrew(id, value) => {
+                let Some(u) = self.units.get_mut(id).filter(|u| u.hull[0] > Fixed::ZERO && matches!(u.kind, crate::world::EntityKind::Craft | crate::world::EntityKind::Station)) else {
+                    return false;
+                };
+                let Some([now, max]) = u.crew else { return false };
+                // Cap: the maximum crew, but never below what the unit already
+                // holds (starting crew may exceed it). Whether the original clamps
+                // `SetCrew` at the maximum is NOT measured.
+                u.crew = Some([value.max(Fixed::ZERO).min(max.max(now)), max]);
+                true
+            }
+            Edit::Position(id, to) => self.edit_position(id, to),
+            Edit::Heading(id, dir) => self.edit_heading(id, dir),
+            Edit::AngularVelocity(id, omega) => self.edit_angular_velocity(id, omega),
             // The rest land with the package that owns what they change.
             _ => false,
         }

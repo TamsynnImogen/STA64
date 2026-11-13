@@ -19,8 +19,12 @@
 //!   else; see `seams.rs` for the list;
 //! - a **seam gap** query raises a Lua error naming what is missing.
 //!
-//! `A1.paths` is the path seam: a table `name -> { {x=,y=,z=}, ... }` the
-//! converting host fills from the map (the mission API holds no map data).
+//! `A1.paths` is the path seam: a table `name -> { {x=,y=,z=}, ... }`. It is
+//! the same table as `A2.paths`, which the runtime fills from the map's named
+//! paths (CON-47); a host may replace it. A path is looked up by exact name,
+//! else by the one name that matches ignoring ASCII case, as for `A2`
+//! (LUA-14; the paths are read from data, the case rule is A2's, not
+//! measured on Armada I).
 //! `A1.GetHandle` reads the existing label map. `BuildObject` returns a
 //! pending handle (`TOKEN_BASE + request`) that every `A1` call (and each
 //! aliased `A2` call) resolves to the real entity once the spawn receipt is in.
@@ -69,6 +73,8 @@ pub(super) struct State {
     /// Sounds started and not yet reported done or stopped.
     pub sounds_active: BTreeSet<u32>,
     pub movie_playing: bool,
+    /// Sounds and movies started, for `A1.HostPending`: (kind, id, name, tick).
+    pub started: Vec<(&'static str, i64, String, u64)>,
     /// Dilithium a team was last set to this tick, so several writes in one
     /// tick build on each other instead of on the stale view.
     pub dilithium: BTreeMap<PlayerId, (u64, Fixed)>,
@@ -329,7 +335,24 @@ impl Env {
         };
         let a1: Table = lua.globals().raw_get("A1")?;
         let Value::Table(paths) = a1.raw_get::<Value>("paths")? else { return Err(missing()) };
-        let Value::Table(points) = paths.raw_get::<Value>(path)? else { return Err(missing()) };
+        let points = match paths.raw_get::<Value>(path)? {
+            Value::Table(t) => t,
+            _ => {
+                let mut found = Vec::new();
+                for pair in paths.pairs::<Value, Value>() {
+                    if let (Value::String(k), Value::Table(t)) = pair?
+                        && k.to_str().is_ok_and(|k| k.eq_ignore_ascii_case(path))
+                    {
+                        found.push(t);
+                    }
+                }
+                match found.len() {
+                    1 => found.remove(0),
+                    0 => return Err(missing()),
+                    _ => return Err(self.no_data(name, &format!("path '{path}' is ambiguous in A1.paths"))),
+                }
+            }
+        };
         let mut out = Vec::new();
         for entry in points.sequence_values::<Table>() {
             let p = entry?;
@@ -378,7 +401,7 @@ fn alias(lua: &Lua, env: &Env, a2: &Table, name: &'static str) -> mlua::Result<F
 /// [`alias`] under another A1 name (errors are reported under it).
 fn alias_as(lua: &Lua, env: &Env, a2: &Table, name: &'static str, a2_name: &'static str) -> mlua::Result<Function> {
     // Existence queries treat a pending or failed spawn as "no such object".
-    let lenient = matches!(name, "Exists" | "DoesNotExist" | "IsAlive");
+    let lenient = matches!(name, "Exists" | "DoesNotExist" | "IsAlive" | "IsCompromised");
     let f: Function = a2.get(a2_name)?;
     let env = env.clone();
     lua.create_function(move |_, args: MultiValue| {
@@ -422,7 +445,12 @@ pub(super) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
     let env = Env { ctx: ctx.clone(), st: Rc::new(RefCell::new(State::default())) };
     let a2: Table = lua.globals().raw_get("A2")?;
     let table = lua.create_table()?;
-    table.set("paths", lua.create_table()?)?;
+    // The map's named paths, shared with `A2.paths` (filled from the map, CON-47).
+    let paths = match a2.raw_get::<Value>("paths")? {
+        Value::Table(t) => t,
+        _ => lua.create_table()?,
+    };
+    table.set("paths", paths)?;
     objects::install(lua, &env, &a2, &table)?;
     orders::install(lua, &env, &table)?;
     teams::install(lua, &env, &a2, &table)?;

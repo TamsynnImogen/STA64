@@ -83,6 +83,7 @@ pub fn weapon_def(name: &str, odf: &Odf, ordnance: Option<&Odf>, warnings: &mut 
     d.initial_shot_delay_modifier = r.num("initialShotDelayModifier").map(Fixed::from_f64);
     d.ignore_shot_delay_effects = r.flag("ignoreShotDelayEffects").unwrap_or(false);
     d.ordnance_defence = own == "ordnancedefenseweapon";
+    d.activate_on_team_change = r.flag("activateOnTeamChange").unwrap_or(false);
 
     if own == "resourceweapon" {
         let mut add = [Fixed::ZERO; crate::resources::SLOTS];
@@ -110,6 +111,12 @@ pub fn weapon_def(name: &str, odf: &Odf, ordnance: Option<&Odf>, warnings: &mut 
     if let Some(ord) = ordnance {
         let mut o = Reader { odf: ord, file: &file, warnings };
         d.damage = o.fixed("damageBase");
+        let loss = crate::def::OrdnanceCrewLoss {
+            threshold: o.fixed("damageThreshold"),
+            shield: o.fixed("shieldCrewModifier"),
+            hull: o.fixed("hullCrewModifier"),
+        };
+        d.crew_loss = (loss != crate::def::OrdnanceCrewLoss::default()).then_some(loss);
         d.fx = o.text("shotGeometry").or_else(|| o.text("sprite"));
         match kind {
             WeaponKind::Beam => d.duration = o.ticks("lifespan"),

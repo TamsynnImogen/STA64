@@ -43,6 +43,7 @@ pub mod production;
 mod avoid;
 mod nav;
 mod regions;
+mod watchdog;
 pub mod replay;
 pub mod setup;
 pub mod snapshot;
@@ -110,9 +111,11 @@ pub struct Sim {
     pub labels: Table<String>,
     /// Seats from the game setup, ascending id; in the digest.
     players: Vec<(PlayerId, TeamId)>,
-    /// The seats whose setup said `Control::Ai`, ascending (SIM-09: the tech
-    /// gate lets AI seats build the engine's unlisted tail slots). From the
-    /// setup like `players`, so not in the digest.
+    /// The seats whose setup said `Control::Ai` or `Control::RemoteAi`,
+    /// ascending (SIM-09: the tech gate lets AI seats build the engine's
+    /// unlisted tail slots; passive economy and start helpers read it too).
+    /// Session state, identical on every peer; in the digest once any
+    /// exists. Which machine runs the AI is not state and is not kept here.
     ai_seats: Vec<PlayerId>,
     /// What spawns resolve against; `None` for a sim made with [`Sim::new`].
     content: Option<Arc<ContentDb>>,
@@ -143,10 +146,23 @@ pub struct Sim {
     specials: specials::Specials,
     /// Craft autonomy levels that were set (SIM-38); in the digest once any exists.
     autonomy: autonomy::Autonomy,
+    /// Crafts in warp on an attack approach (SIM-36); in the digest once any is.
+    approach_warp: movement::approach::Warp,
+    /// Recent hits and shots for assists (SIM-36); in the digest once any is.
+    engagement: combat::targeting::Engagement,
     /// Pending start-helper lifecycle steps (SIM-28); in the digest once any exist.
     start_effects: start_effects::StartEffects,
+    /// Move orders that make no progress (stuck detector): in snapshots, not in the digest.
+    watchdog: watchdog::Watchdog,
     /// Path planner grids and fields (SIM-23): a memo, not in the digest.
     nav: nav::Cache,
+    /// Subsystem switches and damage set by missions (SIM-55); in the digest
+    /// once any exists.
+    subsystems: combat::damage::Subsystems,
+    /// Units whose team just changed (SIM-29): `activateOnTeamChange` weapons
+    /// engage on the tick's weapon pass. Filled by the tick's commands and
+    /// drained by the same tick, so it is empty between ticks and not saved.
+    team_changes: Vec<EntityId>,
 }
 
 impl Sim {
@@ -172,8 +188,13 @@ impl Sim {
             victory: Default::default(),
             specials: Default::default(),
             autonomy: Default::default(),
+            approach_warp: Default::default(),
+            engagement: Default::default(),
             start_effects: Default::default(),
+            watchdog: Default::default(),
             nav: Default::default(),
+            subsystems: Default::default(),
+            team_changes: Vec::new(),
         }
     }
 
@@ -241,6 +262,9 @@ impl Sim {
                     .filter(|id| !self.production.is_welding(*id)).collect();
                 if unlocked.is_empty() { return false; }
                 if !queue {
+                    // A move replaces an attack (SIM-36: the approach would
+                    // otherwise steer the craft back to its target).
+                    self.weapons.stop_attack(&self.units, c.player, &unlocked);
                     self.economy.cancel(&self.units, c.player, &unlocked);
                     if let Some(db) = self.content.clone() {
                         self.production.cancel(&db, &self.units, &mut self.economy, c.player, &unlocked);
@@ -287,11 +311,31 @@ impl Sim {
                 if !tech::build_allowed(&db, &self.units, &self.players, &self.ai_seats, *builder, *what) {
                     return false;
                 }
-                self.production.order_build(&db, &mut self.units, &mut self.economy, c.player, *builder, *what, *at, self.bounds.as_ref())
+                let ok = self.production.order_build(&db, &mut self.units, &mut self.economy, c.player, *builder, *what, *at, self.bounds.as_ref());
+                if ok && self.production.is_deploying(*builder) {
+                    // A craft sent to build drops its attack (SIM-36: the
+                    // approach would otherwise steer it off its site).
+                    self.weapons.stop_attack(&self.units, c.player, &[*builder]);
+                }
+                ok
             }
             Order::Attack { units, target } => {
                 let Some(db) = self.content.clone() else { return false };
-                self.weapons.order_attack(&db, &self.units, c.player, units, *target)
+                let ok = self.weapons.order_attack(&db, &self.units, c.player, units, *target);
+                // The attack replaces queued legs, mining and a pending build
+                // site of the crafts that took it (SIM-36); the approach sets
+                // the course.
+                let took: Vec<EntityId> = units.iter().copied()
+                    .filter(|&id| self.weapons.attack_of(id) == Some(*target) && self.unit(id).is_some_and(|u| u.orderable()))
+                    .collect();
+                for &id in &took {
+                    self.movement.clear_waypoints(id);
+                }
+                if !took.is_empty() {
+                    self.economy.cancel(&self.units, c.player, &took);
+                    self.production.cancel(&db, &self.units, &mut self.economy, c.player, &took);
+                }
+                ok
             }
             Order::Cloak { units, on } => {
                 let Some(db) = self.content.clone() else { return false };
@@ -313,23 +357,40 @@ impl Sim {
 
     /// Move every unit one tick and close the tick with its view.
     fn advance(&mut self) -> TickOutput {
+        if self.content.is_none() {
+            self.team_changes.clear();
+        }
         self.step_start_effects();
         self.hold_welding_builders();
         self.constrain_targets();
+        self.watch_orders();
+        self.assist_idle();
+        let plans = self.steer_attackers();
         let routed = self.route_orders();
         let held = self.steer_around();
-        self.step_kinematics();
+        self.step_kinematics(&plans);
         self.restore_targets(held);
         self.restore_targets(routed);
         self.separate_units();
         self.push_out_of_fields();
         if let Some(db) = self.content.clone() {
             combat::damage::recharge(&mut self.units, &db);
+            self.activate_team_change_weapons(&db);
             self.specials.step(&mut self.units, &db, &mut self.events);
             let from = self.events.len();
+            let held = if db.features().builder_hold_fire { self.production.builders_at_work() } else { Vec::new() };
+            self.weapons.hold_fire(held);
             self.weapons.step_with_perception(self.tick, &self.units, &db, &self.players, &self.perception, &mut self.specials, &mut self.rng, &mut self.events);
+            self.record_engagement(from);
+            // An attack whose target is gone leaves no course behind (SIM-36).
+            for id in self.weapons.take_ended() {
+                if let Some(u) = self.units.get_mut(id).filter(|u| u.kind == EntityKind::Craft) {
+                    u.target = None;
+                }
+                self.approach_warp.end(id);
+            }
             let mut lost = Vec::new();
-            for (id, by) in combat::damage::apply(&mut self.units, &mut self.events, from) {
+            for (id, by) in combat::damage::apply(&mut self.units, &db, &mut self.events, from) {
                 lost.extend(self.units.get(id).map(|u| u.owner));
                 self.despawn(id, by);
             }
@@ -340,7 +401,12 @@ impl Sim {
             self.economy.step(&mut self.units, db, &mut self.events);
             self.economy.step_passive(&self.units, db, &self.players, &self.ai_seats, self.tick);
             self.economy.step_crew(&self.units, db, self.tick);
+            let from = self.events.len();
             self.production.step(&mut self.units, db, &mut self.economy, &mut self.events, &mut self.confinement);
+            let built: Vec<EntityId> = self.events[from..].iter().filter_map(|e| match e { SimEvent::Spawned { id } => Some(*id), _ => None }).collect();
+            for id in built {
+                self.default_autonomy(id);
+            }
         }
         self.hold_welding_builders();
         self.advance_courses();
@@ -428,8 +494,21 @@ impl Sim {
             h.u64(p.0 as u64);
             h.u64(t.0 as u64);
         }
+        if !self.ai_seats.is_empty() {
+            h.str("ai_seats");
+            h.u64(self.ai_seats.len() as u64);
+            for p in &self.ai_seats {
+                h.u64(p.0 as u64);
+            }
+        }
         self.units.hash_into(&mut h);
         self.movement.hash_into(&mut h);
+        if !self.approach_warp.is_empty() {
+            self.approach_warp.hash_into(&mut h);
+        }
+        if !self.engagement.is_empty() {
+            self.engagement.hash_into(&mut h);
+        }
         h.u64(self.labels.len() as u64);
         for (id, label) in self.labels.iter() {
             h.u64(id.0 as u64);
@@ -464,6 +543,9 @@ impl Sim {
         }
         if !self.start_effects.is_empty() {
             self.start_effects.hash_into(&mut h);
+        }
+        if !self.subsystems.is_empty() {
+            self.subsystems.hash_into(&mut h);
         }
         let crew_count = self.units.iter().filter(|unit| unit.crew.is_some()).count();
         if crew_count != 0 {

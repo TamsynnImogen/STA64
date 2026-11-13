@@ -12,7 +12,7 @@
 //!    below). First the `profile` key of any layer's `manifest.toml` (loose
 //!    or in a root `.sta`), then a `Profile = <name>` key in the `[Mod]`
 //!    section of any layer's `info.ini`; top-most layer first. Names: `native`/`sta64`,
-//!    `fo4`/`fo`, `sta2`/`sta2classic`, `sta1`/`sta1classic` (see
+//!    `fo4`/`fo`, `fo3`/`fo327`/`fleetops3`, `sta2`/`sta2classic`, `sta1`/`sta1classic` (see
 //!    [`Profile::from_name`]).
 //! 2. **Armada I layout.** Any layer holds a `.zfs` archive. (An `addon/`
 //!    directory is not a signature: Armada II and FO ship one too, and a
@@ -28,11 +28,11 @@
 //!    `AssetVersion` (a stated older value skips this step): the install's base `Data/info.ini` is read, for its
 //!    `[Mod] Name` only (the matcher of step 6), even when D6 does not mount
 //!    `Data` under a `standalone` mod. It is never mounted or merged.
-//! 5. **`Data/packages.ini`.** `[FleetOps] Version=` is recorded in
-//!    [`Detection::fleetops_version`] and decides nothing: it identifies the
-//!    Fleet Operations engine version (3.2.7 for FO 3.x and Dominion War,
-//!    whose lineage is not in v1 (D5) and has no profile variant, so such
-//!    installs detect as before; the Roots install's own file says 4.0.0).
+//! 5. **`Data/packages.ini`.** `[FleetOps] Version=` of the host `Data`
+//!    is recorded in [`Detection::fleetops_version`]. A major number of 3
+//!    (3.2.7 on Fleet Operations 3.x and Dominion War, which have no
+//!    `info.ini`) selects [`Profile::Fo3`] (CON-44, D5); the Roots install's
+//!    own file says 4.0.0 and decides nothing (the steps above found it).
 //! 6. **Fleet Operations heuristics.** Any layer whose `info.ini` `Name`
 //!    contains `fleet op`/`fleetop`/`fo4`/`fo 4`, including `Data`; a non-Data
 //!    layer's folder name with that signature; or the existing
@@ -78,11 +78,14 @@ use crate::Warning;
 use crate::features::{Features, Profile};
 
 /// Profile names as written in `info.ini` (`Profile=`) and `.sta` manifests.
-const PROFILE_NAMES: [(&str, Profile); 8] = [
+const PROFILE_NAMES: [(&str, Profile); 11] = [
     ("native", Profile::Native),
     ("sta64", Profile::Native),
     ("fo4", Profile::Fo4),
     ("fo", Profile::Fo4),
+    ("fo3", Profile::Fo3),
+    ("fo327", Profile::Fo3),
+    ("fleetops3", Profile::Fo3),
     ("sta2", Profile::Sta2Classic),
     ("sta2classic", Profile::Sta2Classic),
     ("sta1", Profile::Sta1Classic),
@@ -91,13 +94,14 @@ const PROFILE_NAMES: [(&str, Profile); 8] = [
 
 impl Profile {
     /// Every profile, for tables and tests.
-    pub const ALL: [Profile; 4] = [Profile::Native, Profile::Fo4, Profile::Sta2Classic, Profile::Sta1Classic];
+    pub const ALL: [Profile; 5] = [Profile::Native, Profile::Fo4, Profile::Fo3, Profile::Sta2Classic, Profile::Sta1Classic];
 
     /// Canonical lower-case name.
     pub fn name(self) -> &'static str {
         match self {
             Profile::Native => "native",
             Profile::Fo4 => "fo4",
+            Profile::Fo3 => "fo3",
             Profile::Sta2Classic => "sta2classic",
             Profile::Sta1Classic => "sta1classic",
         }
@@ -116,7 +120,7 @@ impl Profile {
     pub fn build_queue_limit(self) -> u32 {
         match self {
             Profile::Native | Profile::Sta1Classic => 5,
-            Profile::Fo4 | Profile::Sta2Classic => 10,
+            Profile::Fo4 | Profile::Fo3 | Profile::Sta2Classic => 10,
         }
     }
 
@@ -164,13 +168,71 @@ impl Profile {
                 construction_rigs: true,
                 weapon_shot_timing: true,
                 start_fire_hold: true,
+                // SIM-36: the Roots engine (also running STA2 Classic, CON-43).
+                attack_buffer_roots: true,
+                attack_opportunity_fire: true,
+                target_score: true,
+                idle_assist: true,
+                assist_high_autonomy_only: true,
+                ..off
+            },
+            // FO 3.2.7 (CON-44, D5). Each bit from the 3.2.7 and Dominion War
+            // installs, with its evidence grade:
+            // - Engine rules measured on stock A2 (`turrets`, `weapon_shot_timing`,
+            //   `start_fire_hold`, `crew_loss_on_hit`, and SIM-36's
+            //   `attack_combat_speed`, `builder_hold_fire`, `target_score`,
+            //   `idle_assist`, `assist_on_ally_fire`) keep the stock value: the
+            //   engine the 3.x launcher loads (`Data/Armada2.ldl`) is the stock
+            //   executable with small differences (read from the executable,
+            //   static). Not measured on 3.2.7: what the 3.x `FleetOpsHook.dll`
+            //   patches in it was not analysed, so no Roots rule (`pd_energy`,
+            //   `pd_debt_timer`, the Roots attack and assist bits) is assumed.
+            // - `point_defense_cycles` on: the 3.2.7 PD weapons are FO's own
+            //   `ordnancedefenseweapon` class (read from data); their timing is
+            //   not measured on 3.2.7.
+            // - `extra_resources` on: ODFs of both installs charge latinum, metal
+            //   and biomatter slots in thousands of units, stock in tens (read
+            //   from data). `multi_yard_builds` on: `buildyard` class ODFs and
+            //   `builditem*` availability keys, which stock lacks (read from data).
+            // - `officer_capacity`, `construction_rigs` stay at the stock value
+            //   (off): the keys the data offers (`MP_OFFICER_LIMIT`, the
+            //   `constructionrig` class) are stock A2's too, so they do not tell
+            //   3.2.7 apart; not measured.
+            // - `weapon_damage_controls`: no key of the 3.2.7 data names it; not
+            //   measured, off. `pay_on_queue`: its ODF key is absent, off.
+            Profile::Fo3 => Features {
+                turrets: true,
+                point_defense_cycles: true,
+                weapon_shot_timing: true,
+                start_fire_hold: true,
+                crew_loss_on_hit: true,
+                extra_resources: true,
+                multi_yard_builds: true,
+                attack_combat_speed: true,
+                builder_hold_fire: true,
+                target_score: true,
+                idle_assist: true,
+                assist_on_ally_fire: true,
                 ..off
             },
             // Stock A2: plain rules, turrets, point-defence cycles and the
             // original shot timing. `pd_energy` stays off until a HUD button
             // can toggle point defence (UI-31); then SIM-37's one-line flip:
             // `Sta2Classic` `pd_energy`, `Fo4` `pd_energy` + `pd_debt_timer`.
-            Profile::Sta2Classic => Features { turrets: true, point_defense_cycles: true, weapon_shot_timing: true, start_fire_hold: true, ..off },
+            Profile::Sta2Classic => Features {
+                turrets: true,
+                point_defense_cycles: true,
+                weapon_shot_timing: true,
+                start_fire_hold: true,
+                crew_loss_on_hit: true,
+                // SIM-36: stock A2's attack approach and construction ships.
+                attack_combat_speed: true,
+                builder_hold_fire: true,
+                target_score: true,
+                idle_assist: true,
+                assist_on_ally_fire: true,
+                ..off
+            },
             // A1: its own class labels and health model, officers.
             Profile::Sta1Classic => Features { officer_capacity: true, a1_compat: true, ..off },
         }
@@ -279,6 +341,14 @@ impl Profile {
         {
             return (Profile::Fo4, DetectStep::HostBaseInfo, Some(p), format!("host base [mod] Name = {name}"));
         }
+        // 5. `Data/packages.ini` `[FleetOps] Version=3.x`: the FO 3.x engine
+        // (CON-44). The Roots host says 4.x and decides nothing here.
+        if let Some(data) = host_data
+            && let Some(v) = read_fleetops_version(data).filter(|v| fleetops_major(v) == Some(3))
+            && let Some(p) = find_ci(data, "packages.ini")
+        {
+            return (Profile::Fo3, DetectStep::PackagesIni, Some(p), format!("[FleetOps] Version = {v}"));
+        }
         // 6. Fleet Operations heuristics, then 7. / 8.
         let mut has_data = false;
         for (l, ini) in layers.iter().zip(infos) {
@@ -326,6 +396,8 @@ pub enum DetectStep {
     AssetVersion,
     /// The host install's base `Data/info.ini` name, not mounted (step 4).
     HostBaseInfo,
+    /// `[FleetOps] Version=3.x` in the host `Data/packages.ini` (step 5).
+    PackagesIni,
     /// The existing layout, name and folder heuristics, and the fallbacks.
     Heuristic,
 }
@@ -340,8 +412,7 @@ pub struct Detection {
     /// What was read there, e.g. `AssetVersion = 50000`.
     pub detail: String,
     /// `[FleetOps] Version=` of the host `Data/packages.ini` (3.2.7 on the
-    /// FO 3.x and Dominion War installs, not a v1 lineage): recorded, never
-    /// acted on.
+    /// FO 3.x and Dominion War installs); a 3.x value selects `Fo3`.
     pub fleetops_version: Option<String>,
     /// Load warnings: malformed `AssetVersion`, older-than-lineage mods.
     pub warnings: Vec<Warning>,
@@ -354,7 +425,7 @@ impl std::fmt::Display for Detection {
             write!(f, "; {}", p.display())?;
         }
         if let Some(v) = &self.fleetops_version {
-            write!(f, "; packages.ini [FleetOps] Version={v} (recorded only)")?;
+            write!(f, "; packages.ini [FleetOps] Version={v}")?;
         }
         write!(f, ")")
     }
@@ -365,6 +436,11 @@ impl std::fmt::Display for Detection {
 fn read_fleetops_version(data: &Path) -> Option<String> {
     let ini = read_ini_named(data, "packages.ini")?;
     ini.get("fleetops", "version").filter(|v| v.starts_with(|c: char| c.is_ascii_digit())).map(str::to_owned)
+}
+
+/// The major number of a `[FleetOps] Version=` text (`3.2.7` gives 3).
+fn fleetops_major(v: &str) -> Option<u32> {
+    v.split('.').next()?.trim().parse().ok()
 }
 
 fn find_ci(dir: &Path, name: &str) -> Option<PathBuf> {
@@ -425,7 +501,7 @@ fn read_ini_named(root: &Path, name: &str) -> Option<Ini> {
 }
 
 /// Switch names, in `Features` declaration order.
-pub const FEATURE_NAMES: [&str; 26] = [
+pub const FEATURE_NAMES: [&str; 35] = [
     "weapon_damage_controls",
     "point_defense_cycles",
     "fire_arcs",
@@ -452,6 +528,15 @@ pub const FEATURE_NAMES: [&str; 26] = [
     "pd_debt_timer",
     "weapon_shot_timing",
     "start_fire_hold",
+    "crew_loss_on_hit",
+    "attack_buffer_roots",
+    "attack_combat_speed",
+    "attack_opportunity_fire",
+    "builder_hold_fire",
+    "target_score",
+    "idle_assist",
+    "assist_high_autonomy_only",
+    "assist_on_ally_fire",
 ];
 
 impl Features {
@@ -483,6 +568,15 @@ impl Features {
             "pd_debt_timer" => &mut self.pd_debt_timer,
             "weapon_shot_timing" => &mut self.weapon_shot_timing,
             "start_fire_hold" => &mut self.start_fire_hold,
+            "crew_loss_on_hit" => &mut self.crew_loss_on_hit,
+            "attack_buffer_roots" => &mut self.attack_buffer_roots,
+            "attack_combat_speed" => &mut self.attack_combat_speed,
+            "attack_opportunity_fire" => &mut self.attack_opportunity_fire,
+            "builder_hold_fire" => &mut self.builder_hold_fire,
+            "target_score" => &mut self.target_score,
+            "idle_assist" => &mut self.idle_assist,
+            "assist_high_autonomy_only" => &mut self.assist_high_autonomy_only,
+            "assist_on_ally_fire" => &mut self.assist_on_ally_fire,
             _ => return None,
         })
     }
@@ -690,15 +784,56 @@ mod tests {
                 "multi_yard_builds",
                 "construction_rigs",
                 "weapon_shot_timing",
-                "start_fire_hold"
+                "start_fire_hold",
+                "attack_buffer_roots",
+                "attack_opportunity_fire",
+                "target_score",
+                "idle_assist",
+                "assist_high_autonomy_only"
             ]
         );
         assert!(!Profile::Fo4.features().pay_on_queue);
     }
 
     #[test]
+    fn defaults_table_fo3() {
+        assert_eq!(
+            on(&Profile::Fo3.features()),
+            [
+                "point_defense_cycles",
+                "turrets",
+                "extra_resources",
+                "multi_yard_builds",
+                "weapon_shot_timing",
+                "start_fire_hold",
+                "crew_loss_on_hit",
+                "attack_combat_speed",
+                "builder_hold_fire",
+                "target_score",
+                "idle_assist",
+                "assist_on_ally_fire"
+            ]
+        );
+        let f = Profile::Fo3.features();
+        assert!(!f.weapon_damage_controls && !f.pd_energy && !f.pd_debt_timer && !f.pay_on_queue, "no Roots rule is assumed for 3.2.7");
+        assert_eq!(Profile::from_name("FO 3.2.7"), None, "only the listed names parse");
+        assert_eq!([Profile::from_name("fo3"), Profile::from_name("FO327"), Profile::from_name("fleetops-3")], [Some(Profile::Fo3); 3]);
+    }
+
+    #[test]
     fn defaults_table_sta2_classic() {
-        assert_eq!(on(&Profile::Sta2Classic.features()), ["point_defense_cycles", "turrets", "weapon_shot_timing", "start_fire_hold"]);
+        assert_eq!(on(&Profile::Sta2Classic.features()), [
+            "point_defense_cycles",
+            "turrets",
+            "weapon_shot_timing",
+            "start_fire_hold",
+            "crew_loss_on_hit",
+            "attack_combat_speed",
+            "builder_hold_fire",
+            "target_score",
+            "idle_assist",
+            "assist_on_ally_fire"
+        ]);
     }
 
     #[test]

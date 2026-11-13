@@ -93,6 +93,41 @@ pub fn config_dir() -> Option<PathBuf> {
     config_dir_in(ConfigOs::HOST, |k| std::env::var_os(k).map(PathBuf::from))
 }
 
+/// The folder of STA64's own user data (derived content such as converted missions):
+/// `$STA64_DATA_DIR` (the folder itself), else `$XDG_DATA_HOME/sta64`, `%LOCALAPPDATA%\sta64`,
+/// `~/Library/Application Support/sta64` or `~/.local/share/sta64` (the capture folder's
+/// convention in `sta_bench`). `None` when no base is known. Never inside an install.
+pub fn data_dir_in(os: ConfigOs, var: impl Fn(&str) -> Option<PathBuf>) -> Option<PathBuf> {
+    let var = |k: &str| var(k).filter(|v| !v.as_os_str().is_empty());
+    if let Some(dir) = var("STA64_DATA_DIR") {
+        return Some(dir);
+    }
+    let base = var("XDG_DATA_HOME")
+        .or_else(|| if os == ConfigOs::Windows { var("LOCALAPPDATA") } else { None })
+        .or_else(|| {
+            var("HOME").or_else(|| var("USERPROFILE")).map(|h| match os {
+                ConfigOs::MacOs => h.join("Library/Application Support"),
+                ConfigOs::Windows => h.join("AppData/Local"),
+                ConfigOs::Linux => h.join(".local/share"),
+            })
+        })?;
+    Some(base.join("sta64"))
+}
+
+/// [`data_dir_in`] for this host and environment (none on Android: no converter runs there).
+pub fn data_dir() -> Option<PathBuf> {
+    #[cfg(target_os = "android")]
+    return None;
+    #[cfg(not(target_os = "android"))]
+    data_dir_in(ConfigOs::HOST, |k| std::env::var_os(k).map(PathBuf::from))
+}
+
+/// The folder the user's converted missions for this install and mod live in
+/// (`sta_mission::converted`), whether or not it exists yet.
+pub fn converted_missions_dir(install_root: &std::path::Path, active_mod: Option<&str>) -> Option<PathBuf> {
+    data_dir().map(|d| sta_mission::converted::dir_in(&d, install_root, active_mod))
+}
+
 /// Absent on desktop, so ordinary desktop scheduling is unchanged.
 #[derive(Resource)]
 pub struct LifecycleGate {

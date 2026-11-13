@@ -17,6 +17,20 @@
 //! raise) until the next tick delivers the receipt. `finish` must run after
 //! every other module has registered its functions.
 //!
+//! # Same-tick use of a built object
+//!
+//! Rule (exe, static): `BuildObject` creates the object at once (the class's
+//! build function, then the world's add) and returns its handle, so a script
+//! may order the new object in the same call sequence. STA64 builds objects
+//! through the sim's command queue, which delivers the receipt one tick later
+//! (a synchronous spawn would be a sim seam, not made here). A void order or
+//! setter named in `DEFERRED_ON_PENDING` that is given a still-pending handle
+//! is held and replayed, in order, by the first `A2` call after the receipt
+//! resolves (at most one tick later than the original); a failed spawn drops
+//! it (the original's handle is 0 then, a no-op). Anything that needs the
+//! object itself (queries, `Exists`) still raises and is counted until the
+//! receipt is in.
+//!
 //! # Evidence grades
 //!
 //! Each rule below is `exe` = read from the executable, static (the
@@ -45,11 +59,77 @@ const TOKEN_BASE: u32 = 0x4000_0000;
 /// `DestroyCritical` hits with this much damage (exe: the constant it builds).
 const CRITICAL_DAMAGE: f64 = 100_000.0;
 
+/// Void orders and setters of an object (all `void` in the executable's
+/// `ScriptInterface`, first parameter the object's handle) that wait for a
+/// pending `BuildObject` handle. Queries, presentation calls and calls on a
+/// team or a resource are not held.
+const DEFERRED_ON_PENDING: &[&str] = &[
+    "AI_Attack",
+    "AllowAsTarget",
+    "Attack",
+    "ButItCanBeDerelicted",
+    "Cloak",
+    "Colonize",
+    "CraftCanRecrew",
+    "CraftCanRepair",
+    "CraftCannotDie",
+    "DamageEngines",
+    "DamageLifeSupport",
+    "DamageSensors",
+    "DamageShieldGenerator",
+    "DamageWeapons",
+    "Decloak",
+    "DestroyCritical",
+    "DisableEngines",
+    "DisableLifeSupport",
+    "DisableSensors",
+    "DisableShieldGenerator",
+    "DisableWeapons",
+    "ExplodeNow",
+    "Goto",
+    "HideObject",
+    "ImmediateCloak",
+    "Mine",
+    "Patrol",
+    "PointAt",
+    "RemoveObject",
+    "ResetImpulseSpeed",
+    "Scout",
+    "SearchAndDestroy",
+    "SetAngularVelocity",
+    "SetCanBeDecommissioned",
+    "SetCrew",
+    "SetCurrentHealth",
+    "SetForceOntoMap",
+    "SetGreenAlert",
+    "SetImpulseSpeed",
+    "SetMaxShields",
+    "SetPerceivedTeam",
+    "SetPosition",
+    "SetRedAlert",
+    "SetShieldPercent",
+    "SetSpecialEnergy",
+    "SetYellowAlert",
+    "Special_Attack",
+    "Stop",
+    "TransferFlag",
+];
+
+/// A call held until the handles it names are built.
+struct Deferred {
+    name: String,
+    inner: Function,
+    args: Vec<Value>,
+}
+
 #[derive(Default)]
 struct State {
     pending: BTreeMap<u32, Rc<SpawnHandle>>,
     /// Handles flagged as special forces: a real id or a pending token.
     special: BTreeSet<u32>,
+    /// Orders given to handles that were still pending, in call order.
+    deferred: Vec<Deferred>,
+    ctx: Option<Shared>,
 }
 
 type St = Rc<RefCell<State>>;
@@ -59,6 +139,16 @@ enum Token {
     Pending,
     Failed,
     Unknown,
+}
+
+/// A script value that names a `BuildObject` token (an integer, or an integral float).
+fn raw_token(v: &Value) -> Option<u32> {
+    let raw = match v {
+        Value::Integer(n) => u32::try_from(*n).ok(),
+        Value::Number(n) if n.fract() == 0.0 && *n >= 0.0 && *n <= f64::from(u32::MAX) => Some(*n as u32),
+        _ => None,
+    };
+    raw.filter(|r| *r >= TOKEN_BASE)
 }
 
 impl State {
@@ -79,14 +169,20 @@ impl State {
                 .any(|t| *t >= TOKEN_BASE && matches!(self.token(*t), Token::Id(i) if i == id))
     }
 
+    /// Whether `v` is a `BuildObject` token whose object is not built yet.
+    fn is_pending(&self, v: &Value) -> bool {
+        raw_token(v).is_some_and(|r| matches!(self.token(r), Token::Pending))
+    }
+
+    /// Whether `v` is a token whose spawn failed.
+    fn is_failed(&self, v: &Value) -> bool {
+        raw_token(v).is_some_and(|r| matches!(self.token(r), Token::Failed))
+    }
+
     /// A value a script passed in: a resolved token becomes its entity id.
     fn translate(&self, v: Value) -> Value {
-        let raw = match &v {
-            Value::Integer(n) => u32::try_from(*n).ok(),
-            Value::Number(n) if n.fract() == 0.0 && *n >= 0.0 && *n <= f64::from(u32::MAX) => Some(*n as u32),
-            _ => None,
-        };
-        match raw.filter(|r| *r >= TOKEN_BASE).map(|r| self.token(r)) {
+        let raw = raw_token(&v);
+        match raw.map(|r| self.token(r)) {
             Some(Token::Id(id)) => Value::Integer(i64::from(id.0)),
             _ => v,
         }
@@ -178,6 +274,21 @@ fn no_data_fn(lua: &Lua, ctx: &Shared, name: &'static str, why: &'static str) ->
     lua.create_function(move |_, _: MultiValue| -> mlua::Result<Value> {
         c.borrow_mut().unsupported(&format!("A2.{name}: {why}"));
         Err(mlua::Error::runtime(format!("A2.{name} is not available: {why}")))
+    })
+}
+
+/// `name(id, number)` queued as the typed edit `make` builds.
+fn float_edit(lua: &Lua, ctx: &Shared, name: &'static str, label: &'static str, make: fn(EntityId, Fixed) -> Edit) -> mlua::Result<Function> {
+    let c = ctx.clone();
+    lua.create_function(move |_, args: MultiValue| {
+        arity(name, &args, 2)?;
+        let value = number(name, &args, 1)?;
+        if !value.is_finite() {
+            return Err(bad(name, 1, "a finite number"));
+        }
+        let id = EntityId(integer(name, &args[0])?);
+        live(&c, name, id)?;
+        edit_feedback::queue(&mut c.borrow_mut(), label, make(id, Fixed::from_f64(value)))
     })
 }
 
@@ -309,6 +420,7 @@ fn live_unit(ctx: &Shared, name: &str, args: &MultiValue) -> mlua::Result<Entity
 
 pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()> {
     let st: St = Rc::new(RefCell::new(State::default()));
+    st.borrow_mut().ctx = Some(ctx.clone());
     let _ = lua.set_app_data(st.clone());
 
     // BuildObject(odf, team, path, index) and
@@ -381,9 +493,9 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
 
     // int SetSpecialForcesFlag(int, bool). Rule (exe): for a live Craft, store
     // the flag on it and return its handle; anything else returns 0 and does
-    // nothing. Setting it also detaches the craft from its AI team; no AI team
-    // exists in a mission runtime (AI is not run: Player:loadAIP is recorded
-    // only), so the flag's one consumer today is RecruitSpecialForces. A pending
+    // nothing. Setting it also detaches the craft from its AI team; the AI
+    // seats of a mission do not read the flag yet (AI-02 / SIM-58 own that
+    // consumer), so its one consumer today is RecruitSpecialForces. A pending
     // `BuildObject` token is flagged at once and the flag follows its object.
     let (c, s) = (ctx.clone(), st.clone());
     table.set(
@@ -616,21 +728,22 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
 
 /// Calls the current sim seam cannot serve, each with the reason.
 fn seams(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()> {
-    table.set("SetPosition", no_data_fn(lua, ctx, "SetPosition", "the sim command seam has no teleport edit")?)?;
-    table.set("SetShieldPercent", no_data_fn(lua, ctx, "SetShieldPercent", "the sim command seam has no shield edit")?)?;
-    table.set("SetMaxShields", no_data_fn(lua, ctx, "SetMaxShields", "the sim command seam has no shield edit")?)?;
+    // Shield and subsystem damage edits (SIM-55): SetShieldPercent takes a
+    // fraction of the maximum (as the Roots missions write `shields = 1.0`),
+    // SetMaxShields the new maximum, Damage<System> points of damage.
+    table.set("SetShieldPercent", float_edit(lua, ctx, "SetShieldPercent", "A2.SetShieldPercent", Edit::ShieldPercent)?)?;
+    table.set("SetMaxShields", float_edit(lua, ctx, "SetMaxShields", "A2.SetMaxShields", Edit::MaxShields)?)?;
     table.set("AllowAsTarget", no_data_fn(lua, ctx, "AllowAsTarget", "the native flag is a per-team mask; Edit::Targetable has no team and the sim rejects it")?)?;
-    table.set("DamageEngines", no_data_fn(lua, ctx, "DamageEngines", "the sim has no per-subsystem damage")?)?;
-    table.set("DamageSensors", no_data_fn(lua, ctx, "DamageSensors", "the sim has no per-subsystem damage")?)?;
-    table.set("DamageLifeSupport", no_data_fn(lua, ctx, "DamageLifeSupport", "the sim has no per-subsystem damage")?)?;
-    table.set("DamageShieldGenerator", no_data_fn(lua, ctx, "DamageShieldGenerator", "the sim has no per-subsystem damage")?)?;
-    table.set("DamageWeapons", no_data_fn(lua, ctx, "DamageWeapons", "the sim has no per-subsystem damage")?)?;
+    table.set("DamageEngines", float_edit(lua, ctx, "DamageEngines", "A2.DamageEngines", |id, v| Edit::SubsystemDamage(id, Subsystem::Engines, v))?)?;
+    table.set("DamageSensors", float_edit(lua, ctx, "DamageSensors", "A2.DamageSensors", |id, v| Edit::SubsystemDamage(id, Subsystem::Sensors, v))?)?;
+    table.set("DamageLifeSupport", float_edit(lua, ctx, "DamageLifeSupport", "A2.DamageLifeSupport", |id, v| Edit::SubsystemDamage(id, Subsystem::LifeSupport, v))?)?;
+    table.set("DamageShieldGenerator", float_edit(lua, ctx, "DamageShieldGenerator", "A2.DamageShieldGenerator", |id, v| Edit::SubsystemDamage(id, Subsystem::Shields, v))?)?;
+    table.set("DamageWeapons", float_edit(lua, ctx, "DamageWeapons", "A2.DamageWeapons", |id, v| Edit::SubsystemDamage(id, Subsystem::Weapons, v))?)?;
     table.set("HideObject", no_data_fn(lua, ctx, "HideObject", "the world view and sim have no hidden-object state")?)?;
     table.set("ButItCanBeDerelicted", no_data_fn(lua, ctx, "ButItCanBeDerelicted", "the sim has no derelict state")?)?;
     table.set("CraftCanRecrew", no_data_fn(lua, ctx, "CraftCanRecrew", "the sim has no per-craft recrew switch")?)?;
     table.set("SetName", no_data_fn(lua, ctx, "SetName", "the sim and view carry no per-object display name")?)?;
     table.set("SetPlanetCivPop", no_data_fn(lua, ctx, "SetPlanetCivPop", "the sim has no planet population edit")?)?;
-    table.set("SetAngularVelocity", no_data_fn(lua, ctx, "SetAngularVelocity", "the sim command seam has no angular-velocity edit")?)?;
     table.set("StuffIntoWormhole", no_data_fn(lua, ctx, "StuffIntoWormhole", "the sim has no wormhole transport edit")?)?;
     table.set("LinkWormholes", no_data_fn(lua, ctx, "LinkWormholes", "the sim has no wormhole link edit")?)?;
     table.set("SetWormholeDeleteOnTransport", no_data_fn(lua, ctx, "SetWormholeDeleteOnTransport", "the sim has no wormhole transport rules")?)?;
@@ -638,6 +751,37 @@ fn seams(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()> {
     table.set("GetNearestShipyard", no_data_fn(lua, ctx, "GetNearestShipyard", "the search's team-bit test and shipyard list are not measured")?)?;
     table.set("CreateNewSiegeFleet", no_data_fn(lua, ctx, "CreateNewSiegeFleet", "no fleet objects exist in the mission API")?)?;
     Ok(())
+}
+
+/// Run the held calls whose handles are built (in the order they were made); a
+/// call on a failed spawn is dropped, one on a handle still pending stays.
+fn replay(st: &St) {
+    if st.borrow().deferred.is_empty() {
+        return;
+    }
+    let held = std::mem::take(&mut st.borrow_mut().deferred);
+    let mut waiting: Vec<Deferred> = Vec::new();
+    for d in held {
+        let (pending, failed) = {
+            let s = st.borrow();
+            (d.args.iter().any(|v| s.is_pending(v)), d.args.iter().any(|v| s.is_failed(v)))
+        };
+        if pending {
+            waiting.push(d);
+        } else if !failed {
+            let args: MultiValue = d.args.iter().cloned().map(|v| st.borrow().translate(v)).collect();
+            if let Err(e) = d.inner.call::<MultiValue>(args) {
+                let ctx = st.borrow().ctx.clone();
+                if let Some(ctx) = ctx {
+                    ctx.borrow_mut().unsupported(&format!("A2.{}: held until its object was built, then failed: {e}", d.name));
+                }
+            }
+        }
+    }
+    // calls made during the replay that were held again: keep them after the older ones
+    let mut s = st.borrow_mut();
+    waiting.append(&mut s.deferred);
+    s.deferred = waiting;
 }
 
 /// Wrap every function of the `A2` table so a resolved `BuildObject` token
@@ -654,9 +798,17 @@ pub(super) fn finish(lua: &Lua, table: &Table) -> mlua::Result<()> {
         .collect();
     for (name, inner) in entries {
         let st = st.clone();
+        let defers = DEFERRED_ON_PENDING.contains(&name.as_str());
+        let label = name.clone();
         table.set(
             name,
             lua.create_function(move |_, args: MultiValue| {
+                replay(&st);
+                if defers && args.iter().any(|v| st.borrow().is_pending(v)) {
+                    let args: Vec<Value> = args.into_iter().collect();
+                    st.borrow_mut().deferred.push(Deferred { name: label.clone(), inner: inner.clone(), args });
+                    return Ok(MultiValue::new());
+                }
                 let args: MultiValue = args.into_iter().map(|v| st.borrow().translate(v)).collect();
                 inner.call::<MultiValue>(args)
             })?,

@@ -782,7 +782,7 @@ fn an_injected_desync_is_detected_in_one_turn_and_written_as_a_replay() {
         let text = std::fs::read_to_string(&f.sidecar).unwrap();
         assert!(text.contains(&format!("first differing tick: {first}")), "{text}");
         assert!(text.contains("lineage \"Test lineage\""), "{text}");
-        assert!(text.contains("protocol version: 2"), "{text}");
+        assert!(text.contains(&format!("protocol version: {}", sta_net::proto::PROTOCOL_VERSION)), "{text}");
         assert!(text.contains("digest at that tick, seat 0"), "{text}");
         assert!(text.contains("digest at that tick, seat 1"), "{text}");
     }
@@ -1373,4 +1373,16 @@ fn section_reports_from_a_peer_are_bounded() {
     let kept = (0..1000u64).filter(|&k| !r.sections_at(3 * k).is_empty()).count();
     assert_eq!(kept, sta_net::lockstep::DIGESTS_KEPT);
     assert!(!r.sections_at(3 * 999).is_empty() && r.sections_at(0).is_empty());
+}
+
+#[test]
+fn a_peer_records_how_its_seats_got_their_starting_forces() {
+    use sta_sim::replay::StartRec;
+    let mut r = room(2, cfg(3, 2));
+    assert_eq!(r.peers[0].replay().starts, StartRec::Bare);
+    r.peers[0].set_starts(StartRec::Races { loadouts: 0xfeed });
+    assert_eq!(r.peers[0].replay().starts, StartRec::Races { loadouts: 0xfeed });
+    // It survives the replay's own encoding, which is what a desync report is.
+    let back = Replay::decode(&r.peers[0].replay().encode()).expect("a replay");
+    assert_eq!(back.starts, StartRec::Races { loadouts: 0xfeed });
 }

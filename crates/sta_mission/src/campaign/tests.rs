@@ -59,6 +59,27 @@ impl MissionHost for FakeHost {
         let src = self.0.clone();
         resolved_script(m, Arc::new(move |p| src.read(p)))
     }
+
+    fn aip_library(&self) -> sta_ai::AipLibrary {
+        let mut lib = sta_ai::AipLibrary::new();
+        lib.insert("main.aip", sta_content::Aip::parse("main.aip", "int min_attack_force = 4;\n").0);
+        lib
+    }
+}
+
+#[test]
+fn a_script_loading_aips_reaches_the_hosts_library() {
+    let src = Arc::new(source().with(
+        "missions/syn_fed01.lua",
+        "Player(1):loadAIP('MAIN.AIP')\nPlayer(1):loadAIP('nothing.aip')\nMMM.register(function(t) if t >= 1 then Mission:finish(true, 0) end end)\n",
+    ));
+    let book = CampaignBook::load(&*src, ShellLayout::Armada2);
+    let host = FakeHost(src);
+    let mut r = CampaignRunner::new(book);
+    let a = r.start(&host, "federation", 0, 1).unwrap();
+    a.run(10 * TICK_HZ_U64).expect("ends");
+    assert_eq!(a.unresolved_aips(), [(PlayerId(1), "nothing.aip".to_owned())]);
+    assert!(a.runtime().unsupported().is_empty());
 }
 
 #[test]
@@ -321,4 +342,61 @@ fn outcome_follows_lua_truthiness_and_unhooked_finish_is_no_win() {
     assert!(!play("MMM.register(function() Mission:finish(nil) end)\n").won);
     // A reference kept before the hook: the runtime's finished flag still ends it, as no win.
     assert!(!play("local finish = Mission.finish\nMMM.register(function() finish(Mission, true) end)\n").won);
+}
+
+fn run_end(script: &str, ticks: u64) -> (Option<MissionOutcome>, MissionEndState) {
+    let src = Arc::new(source().with("missions/syn_fed01.lua", script));
+    let book = CampaignBook::load(&*src, ShellLayout::Armada2);
+    let host = FakeHost(src);
+    let mut r = CampaignRunner::new(book);
+    let a = r.start(&host, "federation", 0, 1).unwrap();
+    let out = a.run(ticks);
+    let state = a.runtime().mission_end(a.sim().view().tick);
+    (out, state)
+}
+
+#[test]
+fn a2_end_calls_end_the_mission_once_time_is_past_their_time() {
+    let (won, _) = run_end("MMM.register(function(t) if t >= 1 then A2.SucceedMission(2.0, 0) end end)\n", 300);
+    let won = won.expect("ends");
+    assert!(won.won);
+    assert_eq!(won.delay, 0.0);
+    assert_eq!(won.tick, 61, "the first tick with mission time past 2.0 s");
+    let (lost, _) = run_end("MMM.register(function(t) if t >= 1 then A2.FailMission(1.0, nil) end end)\n", 300);
+    let lost = lost.expect("ends");
+    assert!(!lost.won);
+    assert_eq!(lost.tick, 31);
+}
+
+#[test]
+fn the_last_end_call_wins_until_the_mission_has_ended() {
+    let s = "A2.SucceedMission(1.0, 0)\nMMM.register(function(t) if t >= 0.5 then A2.FailMission(1.0, 'x') end end)\n";
+    let (o, _) = run_end(s, 300);
+    assert!(!o.unwrap().won);
+}
+
+#[test]
+fn an_end_resting_on_a_gap_is_blocked_not_a_loss() {
+    // A handle-producing call that was a gap, then a loss decided on the
+    // handle it should have given: undecidable.
+    let s = "A2.NoteGap('BuildObject', 'x')\nlocal done\nMMM.register(function(t) if t >= 1 and not done and not A2.IsAlive(0) then done = true; A2.FailMission(A2.GetTime(), 0) end end)\n";
+    let (o, state) = run_end(s, 300);
+    assert!(o.is_none(), "no outcome");
+    match state {
+        MissionEndState::Blocked(why) => assert!(why.contains("IsAlive") && why.contains("never existed"), "{why}"),
+        other => panic!("{other:?}"),
+    }
+    // The same query with no gap stands as the mission's own.
+    let s = "local done\nMMM.register(function(t) if t >= 1 and not done and not A2.IsAlive(0) then done = true; A2.FailMission(A2.GetTime(), 0) end end)\n";
+    assert!(!run_end(s, 300).0.unwrap().won);
+    // And an end with no query at all.
+    let s = "local done\nMMM.register(function(t) if t >= 1 and not done then done = true; A2.FailMission(A2.GetTime(), 0) end end)\n";
+    assert!(!run_end(s, 300).0.unwrap().won);
+}
+
+#[test]
+fn a_script_with_a2_end_calls_has_a_win_event() {
+    let src = Arc::new(source().with("missions/syn_fed01.lua", "A2.SucceedMission(1, 0)\nA2.FailMission(1, 0)\n"));
+    let book = CampaignBook::load(&*src, ShellLayout::Armada2);
+    assert!(book.blocked().iter().all(|b| b.campaign != "federation" || b.index != 0), "{:?}", book.blocked());
 }

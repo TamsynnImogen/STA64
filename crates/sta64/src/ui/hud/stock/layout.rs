@@ -455,6 +455,8 @@ mod tests {
         let single = Single {
             id: EntityId(1),
             name: String::new(),
+            captain: None,
+            registry: None,
             class: String::new(),
             own: true,
             hull: 1.0,

@@ -304,3 +304,16 @@ fn suspend_clears_transient_input_and_widgets_but_keeps_committed_commands() {
     assert!(app.world().get::<Toggle>(toggle).unwrap().on);
     assert_eq!(app.world().resource::<Messages<ToggleChanged>>().len(), 1);
 }
+
+#[test]
+fn data_dir_follows_the_override_then_xdg_then_home() {
+    use crate::platform::{ConfigOs, data_dir_in};
+    use std::path::PathBuf;
+    let env = |pairs: &'static [(&'static str, &'static str)]| move |k: &str| pairs.iter().find(|(n, _)| *n == k).map(|(_, v)| PathBuf::from(v));
+    assert_eq!(data_dir_in(ConfigOs::Linux, env(&[("STA64_DATA_DIR", "/d"), ("HOME", "/h")])), Some(PathBuf::from("/d")));
+    assert_eq!(data_dir_in(ConfigOs::Linux, env(&[("XDG_DATA_HOME", "/x"), ("HOME", "/h")])), Some(PathBuf::from("/x/sta64")));
+    assert_eq!(data_dir_in(ConfigOs::Linux, env(&[("HOME", "/h")])), Some(PathBuf::from("/h/.local/share/sta64")));
+    assert_eq!(data_dir_in(ConfigOs::Windows, env(&[("LOCALAPPDATA", "/l")])), Some(PathBuf::from("/l/sta64")));
+    assert_eq!(data_dir_in(ConfigOs::MacOs, env(&[("HOME", "/h")])), Some(PathBuf::from("/h/Library/Application Support/sta64")));
+    assert_eq!(data_dir_in(ConfigOs::Linux, env(&[])), None);
+}

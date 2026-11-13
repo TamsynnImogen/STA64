@@ -86,6 +86,7 @@ impl ContentDb {
         match self.profile {
             Profile::Native => "native",
             Profile::Fo4 => "fo4",
+            Profile::Fo3 => "fo3",
             Profile::Sta2Classic => "sta2classic",
             Profile::Sta1Classic => "sta1classic",
         }
@@ -447,8 +448,8 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
         crew: _, maximum_crew: _, sensor: _, hardpoints: _, build: _, launch: _, radius: _,
         sounds: _, fx: _, special_energy_max: _, special_energy_rate: _, miner: _, miner_off: _,
         max_dilithium: _, mining_rate: _, transfer_rate: _, resource: _, features: _,
-        confinement: _, nebula_pathing: _, avoid_me: _, hidden: _, invalid_as_target: _, life: _,
-        crew_gain: _, raw: _,
+        confinement: _, nebula_pathing: _, avoid_me: _, hidden: _, invalid_as_target: _, attack_power: _, life: _,
+        crew_gain: _, sane_crew_loss: _, system_hit_points: _, raw: _,
     } = u;
     let crate::BuildDef { cost: _, ticks: _, officers: _, list: _, queue_limit: _, flagged_slots: _ } = &u.build;
     let name = |r: &crate::DefRef| quoted(&r.odf.to_ascii_lowercase());
@@ -517,10 +518,21 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
             None => "-".to_owned(),
             Some(r) => format!("{{map={};construction={}}}", confinement_text(Some(r)), confinement_text(db.construction_confinement(u.key))),
         });
+    // SIM-39, SIM-55: only when set, so content without the keys keeps its digest.
+    if u.sane_crew_loss {
+        c.flag("sane_crew_loss", true);
+    }
+    if u.system_hit_points.iter().any(|f| *f != Fixed::ZERO) {
+        c.list("system_hit_points", u.system_hit_points.map(fixed_text));
+    }
     // `warpSpeed` (SIM-36 seam), only when set: the sim reads it from the
     // definition, so it is a sim-visible rule; content without it keeps its text.
     if m.warp_speed != Fixed::ZERO {
         c.fixed("warp_speed", m.warp_speed);
+    }
+    // `attackPower` (SIM-36), only when set, for the same reason.
+    if let Some(p) = u.attack_power {
+        c.fixed("attack_power", p);
     }
     c.finish()
 }
@@ -550,9 +562,10 @@ fn weapon_text(db: &ContentDb, w: &WeaponDef) -> String {
         key: _, odf: _, class: _, kind: _, range: _, damage: _, refire: _, shot_speed: _,
         duration: _, fire_sound: _, fx: _, effect_ticks: _, energy_drain: _, energy_cost: _,
         disable_weapons: _, decloak_on_hit: _, initial_shot_delay_modifier: _,
-        ignore_shot_delay_effects: _, ordnance_defence: _, resource: _, replace: _, features: _, raw: _,
+        ignore_shot_delay_effects: _, ordnance_defence: _, activate_on_team_change: _, crew_loss: _, resource: _, replace: _, features: _, raw: _,
     } = w;
-    Canon::new()
+    let mut c = Canon::new();
+    c
         .text("class", &w.class.0)
         .raw("kind", match w.kind {
             crate::WeaponKind::Beam => "beam",
@@ -582,8 +595,15 @@ fn weapon_text(db: &ContentDb, w: &WeaponDef) -> String {
                 .flag("always_ai", r.always_ai),
         )))
         .raw("replace", &w.replace.as_ref().map_or_else(|| "-".into(), replace_text))
-        .raw("features", &features_text(db.weapon_features(w)))
-        .finish()
+        .raw("features", &features_text(db.weapon_features(w)));
+    // SIM-29, SIM-39: only when set, so content without the keys keeps its digest.
+    if w.activate_on_team_change {
+        c.flag("activate_on_team_change", true);
+    }
+    if let Some(l) = w.crew_loss {
+        c.raw("crew_loss", &group(Canon::new().fixed("threshold", l.threshold).fixed("shield", l.shield).fixed("hull", l.hull)));
+    }
+    c.finish()
 }
 
 /// A unit's collision geometry as the sim uses it: today the bounding

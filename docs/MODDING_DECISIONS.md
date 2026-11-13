@@ -33,10 +33,14 @@ ini" for adapting a mod.
 - `engine` keeps its existing meaning: the STA64 version a mod requires.
 - A mod's data chain comes from `kind` and `ParentMod`.
 
-**D5. v1 lineages: stock Armada II, stock Armada I and Roots.**
+**D5. v1 lineages: stock Armada II, stock Armada I, Fleet Operations 3.2.7 and Roots.**
 FO 4.0, STA2 Classic and STA2 Classic Enhanced run on the Roots engine and are
 covered through it. Stock Armada I runs as its own lineage (the `Sta1Classic`
-profile); mods of Armada I are not covered in v1. FO 3.2.7 and Dominion War are not covered in v1.
+profile); mods of Armada I are not covered in v1. Fleet Operations 3.2.7 is its
+own lineage (the Fleet Operations 3.x engine: no `info.ini`, `[FleetOps]
+Version=3.2.7` in `Data/packages.ini`, `AssetVersion` scheme 30207, below the
+Roots threshold of 50000) and Dominion War, a mod built on it, is the test mod
+for that lineage and in scope with it.
 
 *Amended 2026-11-12: Armada I moved into v1 (Cedric; approved by
 Tammy). It read "stock Armada II and Roots only" and listed Armada I with
@@ -45,6 +49,22 @@ FO 3.2.7 and Dominion War as not covered. Already on main for it: the
 and CON-27), A1 BZN headers, binary bodies and MDF start locations (`sta_bzn`,
 CON-25, CON-26 and CON-28) and the A1 queue-capacity rule (SIM-20). What is
 still missing is CON-38..42 in WORKPLAN.*
+
+*Amended 2026-11-12 (second amendment): FO 3.2.7 and Dominion War moved into
+v1 (Cedric confirmed that FO 3.2.7 is in scope; Tammy agreed to the general
+idea of including everything from the start: "might aswell get what we can as
+soon as possible so we dont have to rebuild or make janky additions later").
+The sentence read "FO 3.2.7 and Dominion War are not covered in v1", and the
+title read "stock Armada II, stock Armada I and Roots". Dominion War is an FO
+3.2.7 mod installed on this machine; it is named here as the lineage's test
+mod and in scope as a consequence (the author's reading, to be confirmed by
+Cedric and Tammy). Armada I mods stay out (Cedric: "armada 1 stock only for
+now, a1 mods later"). What was already on main for it: detection records
+`[FleetOps] Version=` (CON-43, #447), such installs currently detect as
+`Sta2Classic`, and `sta_fpq` reads the FPQ v1 archives they ship. What is
+missing is CON-44 and CON-45 (and TOOL-12) in WORKPLAN. D2 applies unchanged:
+`FleetOpsHook.dll` is never loaded and what 3.2.7 data needs from it becomes
+native rules.*
 
 **D6. Mounting must follow the mod's own rules.**
 `standalone` and `ignoreParentMaps` are honoured. Today FO 4.0 mounts over base
@@ -115,7 +135,8 @@ of the rest of the plan.
 ## Not in v1
 
 Executable fingerprinting; mods of Armada I (the stock Armada I lineage is in
-v1, see D5); FO 3.2.7 and Dominion War lineages;
+v1, see D5; FO 3.2.7 and Dominion War are in v1 too, see D5); mods of FO 3.2.7
+other than Dominion War, beyond what the coverage report (D7) shows they need;
 emulating engine bugs as toggles; the TOML ODF patch format; trigger and
 timeline scripting for menu scenes; Lua in third-party packs; WASM; shader
 contracts and shims; pack manager UI and load-order editor; dependency
@@ -136,6 +157,9 @@ Added to `docs/WORKPLAN.md` (PR #352). Done-when is in WORKPLAN.
 | RND-28 | Recipe overrides, shader shadowing | D12 |
 | LUA-09 | Lua restriction | D13 |
 | CON-38..42 | Armada I map writer, text bodies, saved state, light colours, MDF parity (added 2026-11-12 with the D5 amendment, approved by Tammy) | D5 |
+| CON-44 | `Fo3` profile for the FO 3.2.7 lineage: variant, detection, defaults (second D5 amendment, 2026-11-12) | D4, D5 |
+| CON-45 | FO 3.2.7 and Dominion War content coverage and install-gated golden tests (second D5 amendment) | D5, D7 |
+| TOOL-12 | Bench skirmish scenario and digest golden on the FO 3.2.7 and Dominion War installs (second D5 amendment) | D5 |
 
 v1 is done when: Classic Enhanced loads over its parent; FO 4.0 loads with no
 base Roots leaking in; the report prints coverage for every installed mod;
@@ -143,7 +167,9 @@ peers on Classic and Classic Enhanced refuse to start and name the differing
 key while peers differing only by a texture or recipe folder are accepted and a
 model whose collision geometry differs is refused with the unit named; a
 replay names its packs; a recipe ini dropped in a mod folder changes a headless
-frame; every stock Armada I map reads, writes and reads back equal (CON-38).
+frame; every stock Armada I map reads, writes and reads back equal (CON-38); the FO
+3.2.7 install and Dominion War detect as the FO 3.2.7 lineage, load, and the
+report prints their coverage (CON-44, CON-45).
 
 ## Changing these decisions
 

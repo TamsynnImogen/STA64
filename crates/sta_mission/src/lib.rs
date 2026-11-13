@@ -39,6 +39,7 @@ impl Labels {
 
 pub mod api;
 pub mod campaign;
+pub mod converted;
 pub mod math;
 pub mod progress;
 pub mod readiness;

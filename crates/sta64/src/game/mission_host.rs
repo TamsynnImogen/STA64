@@ -29,6 +29,23 @@
 //! on them. The same function acknowledges audio messages at once (no audio lane plays
 //! `Presentation::Sound` yet), so a script that waits for its message does not stall.
 //!
+//! # AI seats and the plans scripts load (AI-06)
+//!
+//! The non-human seats of the mission get a [`sta_ai::MissionAiHub`] controller: passive (no
+//! building, no waves) until the script loads a plan with `Player:loadAIP` / `AI_Team_Load_AIP`.
+//! [`MissionHandle`]'s controller runs the script, hands the loads it took
+//! (`MissionRuntime::take_aip_requests`) to the hub, then thinks the seats, in seat order, over
+//! the same view and events; their commands join the script's in the same `out` vector and reach
+//! the router like a player's, numbered from `0x4000_0000` so they never collide with the
+//! script's. A load therefore applies on the tick the script asks for it. The files are the
+//! install's `AI/AIPs/*.aip` ([`MissionHost::aip_library`]); a request that names none, or a seat
+//! with no AI, changes nothing and is listed by [`MissionHandle::unresolved_aips`].
+//!
+//! **Not replay-safe: the plan.** It reaches the seat through the hub, outside the command
+//! stream, and is not in a snapshot: a save taken after a load loses the plan (SIM-61's row), and
+//! a replay never runs the AI at all (D3), only the commands it recorded. The seats' commands are
+//! deterministic for a given game: same view, same events, same order each run.
+//!
 //! # The mission's end
 //!
 //! The script ends a mission with `Mission:finish(won, delay)` (or `SucceedMission` /
@@ -84,6 +101,8 @@ pub struct MissionLaunch {
     seat: (PlayerId, PlayerNumbering),
     /// The map's named paths for `A2.paths`.
     paths: Vec<(String, Vec<[f32; 3]>)>,
+    /// The AIPs the script may load (AI-06).
+    aips: sta_ai::AipLibrary,
 }
 
 impl std::fmt::Debug for MissionLaunch {
@@ -114,6 +133,7 @@ impl MissionLaunch {
             reader,
             seat: campaigns.host.seat(),
             paths: campaigns.host.map_paths(c, m),
+            aips: campaigns.host.aip_library(),
         })
     }
 
@@ -139,7 +159,9 @@ impl MissionLaunch {
     /// Load the script over the built game and share it between the link and the host.
     pub fn attach(&self, setup: &GameSetup, sim: &Sim) -> Result<MissionHandle, String> {
         let runtime = launch_runtime(&self.script, self.reader.clone(), self.seed, self.seat, setup, sim, self.paths.clone()).map_err(|e| e.to_string())?;
-        Ok(MissionHandle(Arc::new(Mutex::new(runtime))))
+        let hub = sta_ai::MissionAiHub::new(self.aips.clone());
+        let ai = setup.players.iter().filter(|p| !matches!(p.control, Control::Human)).map(|p| hub.controller(setup, p.id)).collect();
+        Ok(MissionHandle { runtime: Arc::new(Mutex::new(runtime)), seats: Arc::new(Mutex::new(Seats { hub, ai })) })
     }
 
     /// The seat's race for the HUD, music and cfg (`None`: the install does not list it).
@@ -158,25 +180,42 @@ impl MissionLaunch {
 /// The mission's script runtime, shared by the [`SimLink`] (which thinks it after every tick as
 /// a controller) and this module (objectives, outcome, answers). Never locked across a frame.
 #[derive(Resource, Clone)]
-pub struct MissionHandle(Arc<Mutex<MissionRuntime>>);
+pub struct MissionHandle {
+    runtime: Arc<Mutex<MissionRuntime>>,
+    seats: Arc<Mutex<Seats>>,
+}
+
+/// The mission's AI seats and the queue of plan loads between the script and them.
+struct Seats {
+    hub: sta_ai::MissionAiHub,
+    ai: Vec<Box<dyn Controller>>,
+}
 
 impl MissionHandle {
-    /// The controller for [`SimLink::with_controllers`].
+    /// The controller for [`SimLink::with_controllers`]: the script, then the AI seats.
     pub fn controller(&self) -> Box<dyn Controller> {
-        Box::new(Shared(self.0.clone()))
+        Box::new(Shared { rt: self.runtime.clone(), seats: self.seats.clone() })
     }
 
     /// Run `f` on the runtime.
     pub fn with<R>(&self, f: impl FnOnce(&MissionRuntime) -> R) -> R {
-        f(&self.0.lock().unwrap_or_else(PoisonError::into_inner))
+        f(&self.runtime.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+
+    /// Plan loads that changed nothing: a seat with no AI or a file the install does not have.
+    pub fn unresolved_aips(&self) -> Vec<(PlayerId, String)> {
+        self.seats.lock().unwrap_or_else(PoisonError::into_inner).hub.unresolved()
     }
 }
 
-struct Shared(Arc<Mutex<MissionRuntime>>);
+struct Shared {
+    rt: Arc<Mutex<MissionRuntime>>,
+    seats: Arc<Mutex<Seats>>,
+}
 
 impl Controller for Shared {
     fn think(&mut self, view: &WorldView, events: &[SimEvent], out: &mut Vec<Command>) {
-        let mut rt = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut rt = self.rt.lock().unwrap_or_else(PoisonError::into_inner);
         // No audio lane plays `Presentation::Sound` yet: acknowledge each message on the tick it
         // was raised (tick-exact, not frame-rate dependent), through the host-side reply function.
         for e in events {
@@ -185,6 +224,14 @@ impl Controller for Shared {
             }
         }
         rt.think(view, events, out);
+        // The script ran first, so a plan it loads this tick reaches its seat this tick.
+        let loads = rt.take_aip_requests();
+        drop(rt);
+        let mut seats = self.seats.lock().unwrap_or_else(PoisonError::into_inner);
+        seats.hub.submit(loads);
+        for ai in &mut seats.ai {
+            ai.think(view, events, out);
+        }
     }
 }
 
@@ -420,19 +467,60 @@ impl MissionHost for ClientHost {
     fn seat(&self) -> (PlayerId, PlayerNumbering) {
         (PlayerId(0), PlayerNumbering::ArmadaTeams)
     }
+
+    fn aip_library(&self) -> sta_ai::AipLibrary {
+        let names = self.vfs.list("AI/AIPs");
+        sta_ai::AipLibrary::load(&names, &mut |n| {
+            let bytes = self.vfs.read(n)?.ok()?;
+            Some(String::from_utf8_lossy(&bytes).into_owned())
+        })
+    }
 }
 
 /// The installed campaigns for the front end, and the movies their scripts name: `None` when the
 /// install has no campaign mission (Fleet Ops 4.0 and Dominion War list none) or cannot be mounted
 /// again for the scripts. Progress is read from the platform config directory.
 pub fn load_campaigns(vfs: &sta_vfs::Vfs, install_root: Option<&std::path::Path>, active_mod: Option<&str>) -> Option<(Campaigns, MissionMovies)> {
-    load_campaigns_in(vfs, install_root, active_mod, ProgressStore::platform)
+    // The conversion covers the base game only (D6: a mod's chain is not converted).
+    let converted = install_root.filter(|_| active_mod.is_none_or(str::is_empty)).and_then(|r| crate::platform::converted_missions_dir(r, None));
+    load_campaigns_with(vfs, install_root, active_mod, converted.as_deref(), ProgressStore::platform)
 }
 
-/// [`load_campaigns`] with the progress store given (tests keep the player's file out of it).
+/// [`load_campaigns`] without the user's converted missions, and with the progress store
+/// given (tests keep the player's files out of it).
 pub fn load_campaigns_in(vfs: &sta_vfs::Vfs, install_root: Option<&std::path::Path>, active_mod: Option<&str>, store: impl FnOnce(&CampaignBook) -> ProgressStore) -> Option<(Campaigns, MissionMovies)> {
+    load_campaigns_with(vfs, install_root, active_mod, None, store)
+}
+
+/// The command that converts an install's missions (shown by the missions screen).
+pub fn convert_hint(install_root: &std::path::Path) -> String {
+    format!("Run once from the STA64 checkout, then restart: python3 tools/convert_install_missions.py --install \"{}\"", install_root.display())
+}
+
+/// [`load_campaigns_in`] with the converted-missions folder `converted` (when it holds
+/// scripts) mounted below the install: maps with no Lua of their own run the converted one,
+/// marked experimental (D6: the layer follows the install and mod it was made for; the
+/// install's own scripts win). Without it, missions that wait for a conversion carry the
+/// command to run.
+pub fn load_campaigns_with(
+    vfs: &sta_vfs::Vfs,
+    install_root: Option<&std::path::Path>,
+    active_mod: Option<&str>,
+    converted: Option<&std::path::Path>,
+    store: impl FnOnce(&CampaignBook) -> ProgressStore,
+) -> Option<(Campaigns, MissionMovies)> {
     let t0 = std::time::Instant::now();
-    let book = CampaignBook::load_vfs(vfs);
+    let mut host_vfs = match sta_vfs::Vfs::mount_install(install_root?, active_mod) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!("campaigns: cannot mount the install for the mission scripts: {e}");
+            return None;
+        }
+    };
+    let own: std::collections::BTreeSet<String> = host_vfs.list("missions").into_iter().map(|p| p.to_ascii_lowercase()).collect();
+    let mounted = converted.filter(|d| sta_mission::converted::mount(&mut host_vfs, d));
+    // The book reads the same layers the scripts will be read from.
+    let book = CampaignBook::load_vfs(&host_vfs);
     for w in &book.warnings {
         warn!("campaigns: {w}");
     }
@@ -441,16 +529,19 @@ pub fn load_campaigns_in(vfs: &sta_vfs::Vfs, install_root: Option<&std::path::Pa
         info!("campaigns: none in this install");
         return None;
     }
-    let host_vfs = match sta_vfs::Vfs::mount_install(install_root?, active_mod) {
-        Ok(v) => v,
-        Err(e) => {
-            warn!("campaigns: cannot mount the install for the mission scripts: {e}");
-            return None;
-        }
-    };
     let movies = MissionMovies::from_book(&book, vfs);
     let store = store(&book);
-    let campaigns = Campaigns::new(book, Arc::new(ClientHost::new(Arc::new(host_vfs))), store);
+    let mut campaigns = Campaigns::new(book, Arc::new(ClientHost::new(Arc::new(host_vfs))), store);
+    if let Some(dir) = mounted {
+        campaigns.mark_converted(dir, &own);
+        info!("campaigns: {} missions run converted scripts from {} (experimental)", campaigns.experimental.len(), dir.display());
+    } else if campaigns.awaits_conversion()
+        && active_mod.is_none_or(str::is_empty)
+        && let Some(root) = install_root
+    {
+        campaigns.convert_hint = Some(convert_hint(root));
+        info!("campaigns: missions wait for a Lua conversion; {}", campaigns.convert_hint.as_deref().unwrap_or_default());
+    }
     if let Some(w) = &campaigns.load_warning {
         warn!("campaigns: saved progress not used: {w}");
     }

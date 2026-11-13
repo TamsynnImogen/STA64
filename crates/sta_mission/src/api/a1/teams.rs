@@ -73,7 +73,6 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
         let player = e.team("AI_Team_Load_AIP", a[0].int())?;
         let mut c = e.ctx.borrow_mut();
         c.loaded_aips.push((player, a[1].text().to_owned()));
-        c.unsupported("Player.loadAIP");
         Ok(Value::Nil)
     })?)?;
 
@@ -140,8 +139,10 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
         Ok(Value::Number(a[1].num()))
     })?)?;
     table.set("SetCrew", def(lua, env, "SetCrew", &["hf"], |_, e, _, a| {
-        e.unit("SetCrew", a[0].id())?;
-        e.gap("SetCrew", "no unit-crew edit in the sim seam", args_of(a))?;
+        let id = a[0].id();
+        e.unit("SetCrew", id)?;
+        if !a[1].num().is_finite() { return Err(mlua::Error::runtime("A1.SetCrew requires a finite number")); }
+        e.edit("SetCrew", sta_sim::command::Edit::UnitCrew(id, sta_core::Fixed::from_f64(a[1].num())))?;
         Ok(Value::Nil)
     })?)?;
     table.set("GetDilithiumOnFreighter", def(lua, env, "GetDilithiumOnFreighter", &["h"], |_, e, _, a| {

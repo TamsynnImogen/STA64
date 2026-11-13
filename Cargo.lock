@@ -5510,6 +5510,7 @@ dependencies = [
  "sta_core",
  "sta_media",
  "sta_mission",
+ "sta_net",
  "sta_odf",
  "sta_sim",
  "sta_surface",
@@ -5523,6 +5524,7 @@ version = "0.1.0"
 dependencies = [
  "sta_content",
  "sta_core",
+ "sta_net",
  "sta_sim",
  "thiserror 2.0.21",
 ]
@@ -5624,6 +5626,7 @@ version = "0.1.0"
 dependencies = [
  "libm",
  "mlua",
+ "sta_ai",
  "sta_bzn",
  "sta_content",
  "sta_core",

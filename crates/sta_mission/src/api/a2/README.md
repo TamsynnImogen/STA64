@@ -88,7 +88,7 @@ are also accepted. Reloading replaces the list with fresh IDs, so handles
 from an earlier file cannot accidentally modify a new goal. The runtime's
 objective list and briefing remain host-only state; client display,
 replication and objective presentation are still pending. `Player:loadAIP`
-records the requested file and an unsupported diagnostic; it does not run AI.
+queues the requested file for the host (AI-06); a host without AI seats ignores it.
 
 The ignored `tests/a2_port_intro.rs` probes accept `STA64_A2_PORTS` pointing
 to the external ports' `a2/missions` folder and `STA64_A2_OBJECTIVES`
@@ -510,9 +510,17 @@ hit tick per object). `IsAudioMessageDone` / `IsMoviePlaying` follow
 
 Bound but raising (counted in `unsupported()` as `A2.<Name>: <why>`, never a
 guessed value): `CountCapitalShips` (no capital-ship class in the content
-data), `IsCompromised`, `IsShipAliveAndOffMap`, `IsCargoShipReadyToLoad`,
-`IsCargoShipFullAndReadyToSend`, `GetLatinumTraded` (no cargo, off-map,
-trade or "compromised" state in the world view).
+data), `IsShipAliveAndOffMap`, `IsCargoShipReadyToLoad`,
+`IsCargoShipFullAndReadyToSend`, `GetLatinumTraded` (no cargo, off-map or
+trade state in the world view).
+
+`IsCompromised(object, team)` (LUA-12) is true when the object has been lost
+to `team`: gone or dying, not a craft or station, a derelict (crew under one
+with a positive maximum), or owned by another team than `team` (numbered like
+`GetRealTeam`). Read from the executable, static; not measured. Approximated:
+the engine's derelict latch (the `CraftCannotDie` exemption, clearing only
+when crew returns to one) and the original owner during a temporary takeover
+(listed on SIM-59; `GetRealTeam` has the same approximation).
 
 Evidence: signatures and argument constants read from the executable and the
 rule DLLs, static. The team / radius / ODF-filter readings follow the `A1`
@@ -568,10 +576,11 @@ constants. Orders are sent as the unit's owner; edits are SCRIPT edits.
 
 Raising and counted (no seam): `Patrol SearchAndDestroy Scout Colonize
 Special_Attack SetCommandMoveAutonomyLow PointAt SetCrew SetRace CraftCanRepair
-GetMainEnemyBaseLocation AttackMainEnemyBase GetAllyStationAttacks
-AI_Team_Load_AIP`, `AI_Attack` without a target or toward a point, and the
-warp form of `Goto`. `AI_Team_Load_AIP` also records the file like
-`Player:loadAIP`. Each reason is in `unsupported()` as `A2.<Name>: <why>`.
+GetMainEnemyBaseLocation AttackMainEnemyBase GetAllyStationAttacks`,
+`AI_Attack` without a target or toward a point, and the warp form of `Goto`.
+`AI_Team_Load_AIP` is accepted like `Player:loadAIP`: the request is queued
+and the host gives it to the seat's AI (`MissionRuntime::take_aip_requests`,
+`sta_ai::MissionAiHub`; AI-06). Each reason is in `unsupported()` as `A2.<Name>: <why>`.
 
 
 ## Object creation, searches and flags (step 2)
@@ -601,10 +610,10 @@ from the stock scripts' constants; not measured otherwise.
   derelict crafts are not skipped (no derelict state in the view).
 - `A2.GetFirstCraft`, `A2.GetLocation(path, index)` (0-based, `A2.paths`).
 - `DestroyCritical` queues a lethal `Damage`, `ExplodeNow` a `Kill`,
-  `SetCanBeDecommissioned` / `DisableShieldGenerator` the typed edits the sim
-  rejects today (reported and counted by the edit feedback).
-- Calls with no sim seam (position, shields, per-team targeting, subsystem
-  damage, hidden/derelict/name/population/wormhole/cargo/fleet state) raise
+  `SetCanBeDecommissioned` the typed edit the sim rejects today (reported and
+  counted by the edit feedback); `DisableShieldGenerator`, `SetShieldPercent`,
+  `SetMaxShields` and `Damage<System>` are applied by the sim (SIM-55).
+- Calls with no sim seam (position, per-team targeting, hidden/derelict/name/population/wormhole/cargo/fleet state) raise
   and are counted; see `seams()` for each reason.
 
 

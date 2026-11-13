@@ -97,8 +97,7 @@ fn off_button(p: &mut Box_, ctx: &Ctx, b: Vec2, slot: Slot, text: &str) {
 fn main_menu(p: &mut Box_, ctx: &Ctx, b: Vec2) {
     act_button(p, ctx, b, Slot::MainSinglePlayer, &cap(ctx, "single_player", "Single player"), Act::Goto(Screen::SinglePlayer));
     act_button(p, ctx, b, Slot::MainInstantAction, &cap(ctx, "instant_action", "Instant action"), Act::Goto(Screen::Setup));
-    // The lobby (UI-11) opens this.
-    off_button(p, ctx, b, Slot::MainMultiplayer, &cap(ctx, "multiplayer", "Multiplayer"));
+    act_button(p, ctx, b, Slot::MainMultiplayer, &cap(ctx, "multiplayer", "Multiplayer"), Act::Goto(Screen::Multiplayer));
     act_button(p, ctx, b, Slot::MainOptions, &cap(ctx, "options", "Options"), Act::Goto(Screen::Settings));
     // The intro (MED-05) and the credits have no screen yet.
     off_button(p, ctx, b, Slot::MainReplayIntro, &cap(ctx, "replay_intro", "Replay intro"));

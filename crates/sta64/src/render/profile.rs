@@ -91,6 +91,10 @@ pub const REFIT_EFFECTS: &[(Effect, &str, &[&str])] = &[
     (Effect::Shadows, "RND-15", &["shadows.wesl"]),
 ];
 
+/// Original, profile-independent presentation shaders. These are available
+/// under both looks and are not part of the preserved Refit-derived effects.
+pub const SHARED_SHADERS: &[&str] = &["fx/persistent_shields.wesl"];
+
 /// Which effects have a stock implementation registered.
 #[derive(Resource, Default, Debug)]
 pub struct ProfileEffects {
@@ -232,7 +236,10 @@ mod tests {
             }
         }
         // And each file of the embedded list is some effect's (nothing orphaned).
-        let named: Vec<&str> = REFIT_EFFECTS.iter().flat_map(|(_, _, s)| s.iter().copied()).collect();
+        for shader in SHARED_SHADERS {
+            assert!(render.join(shader).is_file(), "shared shader render/{shader} is gone");
+        }
+        let named: Vec<&str> = REFIT_EFFECTS.iter().flat_map(|(_, _, s)| s.iter().copied()).chain(SHARED_SHADERS.iter().copied()).collect();
         for e in crate::render::shader_shadow::EMBEDDED {
             let rel = e.trim_start_matches("render/");
             if rel != "fog.wesl" {

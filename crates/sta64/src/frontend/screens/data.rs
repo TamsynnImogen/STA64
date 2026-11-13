@@ -365,11 +365,15 @@ pub struct Settings {
     pub show_fps: bool,
     /// Explicit LCARS presentation override; false leaves the game/mod default in control.
     pub lcars_ui: bool,
+    /// The multiplayer player name last used (UI-11).
+    pub player_name: String,
+    /// The relay address last used (UI-11); empty until one is entered.
+    pub relay: String,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { master: 80.0, music: 60.0, effects: 80.0, voice: 80.0, scroll_speed: 50.0, fullscreen: false, vsync: true, show_fps: false, lcars_ui: false }
+        Settings { master: 80.0, music: 60.0, effects: 80.0, voice: 80.0, scroll_speed: 50.0, fullscreen: false, vsync: true, show_fps: false, lcars_ui: false, player_name: String::new(), relay: String::new() }
     }
 }
 

@@ -6,16 +6,16 @@
 //!
 //! | section | state |
 //! |---|---|
-//! | `roster` | tick, content hash, seats and teams, who exists (id, kind, definition, owner), labels, perceived owners, eliminations, pending start-effect rows |
+//! | `roster` | tick, content hash, seats and teams, AI-controlled seats (once any), who exists (id, kind, definition, owner), labels, perceived owners, eliminations, pending start-effect rows |
 //! | `movement` | position, heading, speed, turn rate, target and movement stats of every entity; queued waypoints and formations; map confinement |
-//! | `combat` | hull, shields, status flags, unit crew; weapon mounts, shots and attack orders; point defence; special energy and cloaks; craft autonomy levels |
+//! | `combat` | hull, shields, status flags, unit crew; weapon mounts, shots and attack orders; point defence; special energy and cloaks; craft autonomy levels; subsystem switches and damage |
 //! | `economy` | stock, nodes, freighters, personnel; yard queues, rig deploys and rallies; build progress |
 //! | `rng` | the sim generator |
 //!
 //! Every part of the state [`Sim::digest`] covers is in exactly one section,
-//! so the full digest differs only if some section does. `Sim::digest` itself,
-//! its value and its pinned test are untouched. A system added to the digest
-//! picks its section here (the exhaustive `Entity` destructuring below breaks
+//! so the full digest differs only if some section does. `Sim::digest` hashes
+//! the AI seats (once any exist) beside the players, as the roster does. A
+//! system added to the digest picks its section here (the exhaustive `Entity` destructuring below breaks
 //! the build when an entity field is added without one).
 //!
 //! A section digest is FNV-1a over its fields in a fixed order, each section
@@ -67,7 +67,7 @@ fn _every_sim_field_is_decided(s: &Sim) {
     let Sim {
         tick: _, rng: _, units: _, labels: _, players: _, ai_seats: _, content: _, starts: _, regions: _,
         bounds: _, confinement: _, perception: _, events: _, weapons: _, movement: _, economy: _,
-        production: _, victory: _, specials: _, autonomy: _, start_effects: _, nav: _,
+        production: _, victory: _, specials: _, autonomy: _, start_effects: _, nav: _, subsystems: _, team_changes: _, approach_warp: _, engagement: _, watchdog: _,
     } = s;
 }
 
@@ -101,6 +101,15 @@ impl Sim {
         for &(p, t) in &self.players {
             h.u64(p.0 as u64);
             h.u64(t.0 as u64);
+        }
+        // Which seats are AI-controlled is rules state (tech gate, passive
+        // economy, start helpers); only hashed once any exists.
+        if !self.ai_seats.is_empty() {
+            h.str("ai_seats");
+            h.u64(self.ai_seats.len() as u64);
+            for p in &self.ai_seats {
+                h.u64(p.0 as u64);
+            }
         }
         h.u64(self.units.next_id().0 as u64);
         h.u64(self.units.len() as u64);
@@ -158,6 +167,10 @@ impl Sim {
             }
         }
         self.movement.hash_into(&mut h);
+        // SIM-36: crafts in warp on an attack approach.
+        if !self.approach_warp.is_empty() {
+            self.approach_warp.hash_into(&mut h);
+        }
         self.confinement.hash_into(&mut h);
         h.0
     }
@@ -186,9 +199,16 @@ impl Sim {
         if !self.specials.is_empty() {
             self.specials.hash_into(&mut h);
         }
+        // SIM-36: recent hits and shots decide assists.
+        if !self.engagement.is_empty() {
+            self.engagement.hash_into(&mut h);
+        }
         // SIM-38: autonomy decides assists and targets of opportunity.
         if !self.autonomy.is_empty() {
             self.autonomy.hash_into(&mut h);
+        }
+        if !self.subsystems.is_empty() {
+            self.subsystems.hash_into(&mut h);
         }
         h.0
     }
@@ -257,6 +277,9 @@ impl Sim {
                 row(None, "tick", self.tick.to_string());
                 row(None, "content hash", format!("{:#018x}", self.content.as_ref().map_or(0, |c| c.hash())));
                 row(None, "players", format!("{:?}", self.players.iter().map(|&(p, t)| (p.0, t.0)).collect::<Vec<_>>()));
+                if !self.ai_seats.is_empty() {
+                    row(None, "ai seats", format!("{:?}", self.ai_seats.iter().map(|p| p.0).collect::<Vec<_>>()));
+                }
                 row(None, "next entity id", self.units.next_id().0.to_string());
                 row(None, "entity count", self.units.len().to_string());
                 for e in self.units.iter() {
@@ -313,6 +336,13 @@ impl Sim {
                 }
                 if !self.specials.is_empty() {
                     row(None, "specials and cloaks (hash)", block("specials", &|h| self.specials.hash_into(h)));
+                }
+                if !self.autonomy.is_empty() {
+                    row(None, "autonomy levels (hash)", block("autonomy", &|h| self.autonomy.hash_into(h)));
+                }
+                // SIM-55: itemised, one row per unit with a switched-off or damaged system.
+                for (id, r) in self.subsystems.to_rows() {
+                    row(Some(id), "subsystems (off bits, damage)", format!("{:#04x}, {:?}", r.off, r.damage.map(|d| fx(Fixed::from_bits(d)))));
                 }
             }
             "economy" => {
@@ -400,12 +430,14 @@ mod tests {
             ("shields", Box::new(|s| s.units.iter_mut().next().unwrap().shields.max = Fixed::from_int(5)), "combat"),
             ("flags", Box::new(|s| s.units.iter_mut().next().unwrap().flags = crate::view::UnitFlags::default()), "combat"),
             ("crew", Box::new(|s| s.units.iter_mut().next().unwrap().crew = Some([Fixed::ONE; 2])), "combat"),
+            ("subsystems", Box::new(|s| { let id = s.units.iter().next().unwrap().id; s.subsystems.set_off_for_test(id); }), "combat"),
             ("owner", Box::new(|s| s.units.iter_mut().next().unwrap().owner = PlayerId(1)), "roster"),
             ("label", Box::new(|s| { let id = s.units.iter().next().unwrap().id; s.labels.insert(id, "x".into()); }), "roster"),
             ("progress", Box::new(|s| s.units.iter_mut().next().unwrap().progress = Some(Fixed::from_int(1))), "economy"),
             ("stock", Box::new(|s| s.economy.set_stock(PlayerId(0), [Fixed::from_int(9); 4])), "economy"),
             ("rng", Box::new(|s| { s.rng.next_u64(); }), "rng"),
             ("tick", Box::new(|s| s.tick += 1), "roster"),
+            ("ai seats", Box::new(|s| s.ai_seats.push(PlayerId(1))), "roster"),
         ];
         for (name, change, section) in cases {
             let (sections, full) = effect(change);

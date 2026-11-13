@@ -42,20 +42,53 @@ fn no_data(lua: &Lua, env: &Env, name: &'static str, spec: &'static [&'static st
 
 pub(super) fn install(lua: &Lua, env: &Env, table: &Table) -> mlua::Result<()> {
     // Movement and position.
-    table.set("SetPosition", gap_write(lua, env, "SetPosition", &["hs"], "no teleport edit in the sim seam")?)?;
+    // SetPosition and PointAt (SIM-57): the Armada II rules (instant, speed
+    // zeroed, orders kept; yaw only), read from the Armada II executable and
+    // measured there; the Armada I executable is not measured.
+    table.set("SetPosition", def(lua, env, "SetPosition", &["hs"], |lua, e, _, a| {
+        let unit = e.unit("SetPosition", a[0].id())?;
+        let to = e.path_point(lua, "SetPosition", a[1].text(), 0)?;
+        e.edit("SetPosition", sta_sim::command::Edit::Position(unit.id, to))?;
+        Ok(Value::Nil)
+    })?)?;
     table.set("SetWarpSpeed", gap_write(lua, env, "SetWarpSpeed", &["hf"], "no warp-speed seam in the sim")?)?;
     table.set("ResetWarpSpeed", gap_write(lua, env, "ResetWarpSpeed", &["h"], "no warp-speed seam in the sim")?)?;
     table.set("Patrol", gap_write(lua, env, "Patrol", &["hs"], "no patrol order in the sim seam")?)?;
     table.set("SearchAndDestroy", gap_write(lua, env, "SearchAndDestroy", &["h"], "no search-and-destroy order in the sim seam")?)?;
-    table.set("PointAt", gap_write(lua, env, "PointAt", &["hh", "hs"], "no facing order in the sim seam")?)?;
+    table.set("PointAt", def(lua, env, "PointAt", &["hh", "hs"], |lua, e, ov, a| {
+        let unit = e.unit("PointAt", a[0].id())?;
+        let to = if ov == 0 { let t = e.unit("PointAt", a[1].id())?; e.ctx.borrow().placed(t.id, t.pos) } else { e.path_point(lua, "PointAt", a[1].text(), 0)? };
+        let from = e.ctx.borrow().placed(unit.id, unit.pos);
+        let dir = (to.x - from.x, to.z - from.z);
+        if dir == (sta_core::Fixed::ZERO, sta_core::Fixed::ZERO) {
+            e.ctx.borrow_mut().unsupported("A1.PointAt: the unit is at the target (no direction to face)");
+            return Ok(Value::Nil);
+        }
+        let heading = dir;
+        e.edit("PointAt", sta_sim::command::Edit::Heading(unit.id, heading))?;
+        Ok(Value::Nil)
+    })?)?;
     table.set("Special_Attack", gap_write(lua, env, "Special_Attack", &["hvs", "hhs", "hs"], "special weapons are named; the order takes a slot index")?)?;
     table.set("SetSpecialWeaponAttackInterval", gap_write(lua, env, "SetSpecialWeaponAttackInterval", &["if"], "no special-weapon interval seam in the sim")?)?;
     // AI team orders.
     table.set("AI_Attack", gap_write(lua, env, "AI_Attack", &["ii", "iv", "i"], "no AI team attack seam in the sim")?)?;
     table.set("AttackMainEnemyBase", gap_write(lua, env, "AttackMainEnemyBase", &["ib"], "no AI team attack seam in the sim")?)?;
     // Damage and shields.
-    table.set("SetShieldPercent", gap_write(lua, env, "SetShieldPercent", &["hf"], "no shield edit in the sim seam")?)?;
-    table.set("SetMaxShields", gap_write(lua, env, "SetMaxShields", &["hf"], "no maximum-shield edit in the sim seam")?)?;
+    // SIM-55: a fraction of the maximum, and the new maximum.
+    table.set("SetShieldPercent", def(lua, env, "SetShieldPercent", &["hf"], |_, e, _, a| {
+        let id = a[0].id();
+        e.unit("SetShieldPercent", id)?;
+        if !a[1].num().is_finite() { return Err(mlua::Error::runtime("A1.SetShieldPercent requires a finite number")); }
+        e.edit("SetShieldPercent", sta_sim::command::Edit::ShieldPercent(id, sta_core::Fixed::from_f64(a[1].num())))?;
+        Ok(Value::Nil)
+    })?)?;
+    table.set("SetMaxShields", def(lua, env, "SetMaxShields", &["hf"], |_, e, _, a| {
+        let id = a[0].id();
+        e.unit("SetMaxShields", id)?;
+        if !a[1].num().is_finite() { return Err(mlua::Error::runtime("A1.SetMaxShields requires a finite number")); }
+        e.edit("SetMaxShields", sta_sim::command::Edit::MaxShields(id, sta_core::Fixed::from_f64(a[1].num())))?;
+        Ok(Value::Nil)
+    })?)?;
     table.set("DestroyCritical", gap_write(lua, env, "DestroyCritical", &["h"], "no critical-system damage in the sim seam")?)?;
     table.set("DestroyShieldGenerator", gap_write(lua, env, "DestroyShieldGenerator", &["h"], "no subsystem destruction in the sim seam")?)?;
     table.set("DestroyLifeSupport", gap_write(lua, env, "DestroyLifeSupport", &["h"], "no subsystem destruction in the sim seam")?)?;
@@ -125,7 +158,6 @@ pub(super) fn install(lua: &Lua, env: &Env, table: &Table) -> mlua::Result<()> {
     table.set("hot_float_value", no_data(lua, env, "hot_float_value", &[""], "no team strength metric in the world view")?)?;
 
     // Queries with no data behind them.
-    table.set("IsCompromised", no_data(lua, env, "IsCompromised", &["hi"], "the meaning of compromised (and its data) is not known")?)?;
     table.set("IsDerelict", no_data(lua, env, "IsDerelict", &["h"], "the world view carries no derelict state")?)?;
     table.set("IsThereARomulanSpyOnShip", no_data(lua, env, "IsThereARomulanSpyOnShip", &["h"], "the world view carries no boarding or spy state")?)?;
     table.set("GetTranswarpExitWormhole", no_data(lua, env, "GetTranswarpExitWormhole", &["h"], "the world view carries no transwarp links")?)?;

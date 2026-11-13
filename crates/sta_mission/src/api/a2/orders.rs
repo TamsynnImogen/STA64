@@ -51,6 +51,8 @@ use crate::api::search::stem;
 use crate::api::{Shared, edit_feedback, pos_f64, spawn, to_vec3, vector};
 
 /// `AiCommand` values (read from the executable) the `SetCommand*VO` calls use.
+/// The sim's cap on a script's turn rate, in radians per second.
+const MAX_OMEGA: f64 = sta_sim::command::MAX_SCRIPT_OMEGA as f64;
 const CMD_STOP: i64 = 3;
 const CMD_GO: i64 = 4;
 const CMD_ATTACK: i64 = 6;
@@ -480,7 +482,50 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
     table.set("Colonize", raising(lua, &env, "Colonize", &["hh"], "no colonize order in the sim seam")?)?;
     table.set("Special_Attack", raising(lua, &env, "Special_Attack", &["hs", "hhs"], "the sim orders only cloak and point-defence specials, and its special order carries no target")?)?;
     table.set("SetCommandMoveAutonomyLow", raising(lua, &env, "SetCommandMoveAutonomyLow", &["h"], "no per-unit movement autonomy order in the sim seam")?)?;
-    table.set("PointAt", raising(lua, &env, "PointAt", &["hs", "hh"], "no facing (orientation) edit in the sim seam")?)?;
+    // Placement and facing (SIM-57). Rules, from the executable and the paired
+    // measurements on stock Armada II (grades in `sta_sim::kinematics::placement`):
+    // `SetPosition(unit, path[, i])` moves the unit to point `i` (0 when absent) of
+    // the path at once, speed zeroed, orders kept; `PointAt(unit, path|object)`
+    // faces point 0 / the object's position at once (yaw only here); both do
+    // nothing for an absent or dying unit. `SetAngularVelocity(unit, Vector)`
+    // sets the turn rate, where only the yaw (y component, positive turning +z
+    // toward +x) is modelled; the sim ignores it for a craft with its engines on.
+    table.set("SetPosition", def(lua, &env, "SetPosition", &["hs", "hsi"], |lua, e, ov, a| {
+        let Some(unit) = e.alive(a[0].id()) else { return nothing() };
+        let index = if ov == 0 { 0 } else { a[2].int() };
+        let points = e.path(lua, "SetPosition", a[1].text())?;
+        let Some(to) = usize::try_from(index).ok().and_then(|i| points.get(i).copied()) else {
+            return Err(e.gap("SetPosition", &format!("path '{}' has no point {index}", a[1].text())));
+        };
+        edit_feedback::queue(&mut e.ctx.borrow_mut(), "A2.SetPosition", Edit::Position(unit.id, to))?;
+        nothing()
+    })?)?;
+    table.set("PointAt", def(lua, &env, "PointAt", &["hs", "hh"], |lua, e, ov, a| {
+        let Some(unit) = e.alive(a[0].id()) else { return nothing() };
+        let to = if ov == 0 {
+            e.path(lua, "PointAt", a[1].text())?[0]
+        } else {
+            let Some(target) = e.alive(a[1].id()) else { return nothing() };
+            e.ctx.borrow().placed(target.id, target.pos)
+        };
+        let from = e.ctx.borrow().placed(unit.id, unit.pos);
+        let dir = (to.x - from.x, to.z - from.z);
+        if dir == (Fixed::ZERO, Fixed::ZERO) {
+            // The engine builds a facing from a zero-length direction (not finite);
+            // STA64 keeps the facing and counts the call.
+            e.ctx.borrow_mut().unsupported("A2.PointAt: the unit is at the target (the engine's facing is not finite there)");
+            return nothing();
+        }
+        let heading = dir;
+        edit_feedback::queue(&mut e.ctx.borrow_mut(), "A2.PointAt", Edit::Heading(unit.id, heading))?;
+        nothing()
+    })?)?;
+    table.set("SetAngularVelocity", def(lua, &env, "SetAngularVelocity", &["hv"], |_, e, _, a| {
+        let Some(unit) = e.alive(a[0].id()) else { return nothing() };
+        let (_, y, _) = a[1].vec();
+        edit_feedback::queue(&mut e.ctx.borrow_mut(), "A2.SetAngularVelocity", Edit::AngularVelocity(unit.id, Fixed::from_f64(-y.clamp(-MAX_OMEGA, MAX_OMEGA))))?;
+        nothing()
+    })?)?;
 
     // Speed and alert status: typed edits.
     table.set("SetImpulseSpeed", def(lua, &env, "SetImpulseSpeed", &["hf"], |_, e, _, a| {
@@ -527,15 +572,26 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
     table.set("AttackMainEnemyBase", raising(lua, &env, "AttackMainEnemyBase", &["hb"], "the AI team's strategic map (its main enemy base) is not in the world view")?)?;
     table.set("GetAllyStationAttacks", raising(lua, &env, "GetAllyStationAttacks", &["ii"], "the AI team's attack statistics are not in the world view")?)?;
 
-    // AI scripts: the request is kept for the host, nothing runs it.
+    // AI plan: the request is queued for the host, which gives it to the
+    // seat's AI (`MissionRuntime::take_aip_requests`, `sta_ai::MissionAiHub`).
     table.set("AI_Team_Load_AIP", def(lua, &env, "AI_Team_Load_AIP", &["is"], |_, e, _, a| {
         let team = e.team("AI_Team_Load_AIP", a[0].int())?;
         e.ctx.borrow_mut().loaded_aips.push((team, a[1].text().to_owned()));
-        Err(e.gap("AI_Team_Load_AIP", "no AI script (AIP) runs in the simulation"))
+        nothing()
     })?)?;
 
     // Unit state with no edit in the seam.
-    table.set("SetCrew", raising(lua, &env, "SetCrew", &["hf"], "no crew edit in the sim seam")?)?;
+    // SIM-54: the unit's crew, clamped by the sim to 0..its maximum crew.
+    table.set("SetCrew", def(lua, &env, "SetCrew", &["hf"], |_, e, _, a| {
+        let to = a[1].num();
+        if !to.is_finite() {
+            return Err(mlua::Error::runtime("A2.SetCrew requires a finite number"));
+        }
+        if e.alive(a[0].id()).is_some() {
+            edit_feedback::queue(&mut e.ctx.borrow_mut(), "A2.SetCrew", Edit::UnitCrew(a[0].id(), Fixed::from_f64(to)))?;
+        }
+        nothing()
+    })?)?;
     table.set("SetRace", raising(lua, &env, "SetRace", &["hs"], "no mutable-race edit in the sim seam")?)?;
     table.set("CraftCanRepair", raising(lua, &env, "CraftCanRepair", &["hb"], "no can-repair flag in the sim seam")?)?;
 

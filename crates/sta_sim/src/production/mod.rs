@@ -242,6 +242,16 @@ impl Production {
         ids
     }
 
+    /// Builders flying to a build site or building there, ascending
+    /// (SIM-36: stock construction ships hold fire meanwhile).
+    pub(crate) fn builders_at_work(&self) -> Vec<EntityId> {
+        let mut ids = self.welding_builders();
+        ids.extend(self.deploys.iter().map(|(id, _)| id));
+        ids.sort();
+        ids.dedup();
+        ids
+    }
+
     /// Explicit Stop preserves the existing non-refundable active-weld rule.
     /// The caller removes these unfinished actors through ordinary despawn.
     pub(crate) fn cancel_welds(&mut self, ids: &[EntityId]) -> Vec<EntityId> {

@@ -603,15 +603,80 @@ fn finder_predicates_are_isolated_and_errors_remain_visible() {
 }
 
 #[test]
-fn officer_limit_assignment_is_a_noop_at_the_limit_in_force_and_recorded_otherwise() {
-    let mut g = game("MMM.register(function() local cur = Player(0).maxOfficers; Player(0).maxOfficers = cur; Player(0).maxOfficers = cur + 1; Player(0).maxCrew = cur end)");
-    g.run(2);
+fn officers_and_crew_assignments_queue_the_typed_edits_and_are_not_counted() {
+    let mut g = game("MMM.register(function() Player(0).maxOfficers = 777; Player(0).resources.crew = 321; EntityFinder():find()[2].crew = 5 end)");
+    let mut out = Vec::new();
+    g.rt.think(&g.view, &g.events, &mut out);
+    let edits: Vec<_> = out.iter().filter_map(|c| match &c.kind { CommandKind::Edit(e) => Some(e.clone()), _ => None }).collect();
+    assert!(edits.contains(&Edit::MaxOfficers(PlayerId(0), Fixed::from_int(777))), "{edits:?}");
+    assert!(edits.contains(&Edit::TeamCrew(PlayerId(0), Fixed::from_int(321))), "{edits:?}");
+    assert!(edits.contains(&Edit::UnitCrew(HERO, Fixed::from_int(5))), "{edits:?}");
     let unsupported = g.rt.unsupported();
-    let officers: Vec<_> = unsupported.iter().filter(|(n, _)| n.starts_with("Player.maxOfficers")).collect();
-    // Two callbacks (two ticks) each assign cur + 1 once; the equal assignments are not recorded.
-    assert_eq!(officers.len(), 1, "{unsupported:?}");
-    assert_eq!(officers[0].1, 2, "{unsupported:?}");
-    assert!(!unsupported.iter().any(|(n, _)| n.starts_with("Player.maxCrew")), "{unsupported:?}");
+    assert!(unsupported.iter().all(|(n, _)| !n.contains("maxOfficers") && !n.contains("resources.crew") && !n.contains("Entity.crew")), "{unsupported:?}");
+}
+
+#[test]
+fn personnel_assignment_edge_cases_are_recorded_not_aborting() {
+    let mut g = game("MMM.register(function() local e = EntityFinder():find()[2]; e.crew = nil; e.crew = 0/0; Player(0).maxOfficers = 5; DONE = true end)");
+    for _ in 0..3 {
+        let mut out = Vec::new();
+        g.rt.think(&g.view, &g.events, &mut out);
+        let o = g.sim.step(&out);
+        g.view = o.view;
+        g.events = o.events;
+    }
+    assert!(g.global::<bool>("DONE"), "the callback was not aborted: {:?}", g.rt.errors());
+    let names: Vec<String> = g.rt.unsupported().into_iter().map(|(n, _)| n).collect();
+    for want in ["Entity.crew = non-number", "Entity.crew = non-finite", "Player.maxOfficers: simulation rejected"] {
+        assert!(names.iter().any(|n| n.contains(want)), "{want} in {names:?}");
+    }
+    let mut g = game("MMM.register(function() Player(0).maxOfficers = 0/0 end)");
+    let mut out = Vec::new();
+    g.rt.think(&g.view, &g.events, &mut out);
+    assert!(g.rt.errors().iter().any(|e| e.contains("requires a finite number")), "{:?}", g.rt.errors());
+}
+
+#[test]
+fn entity_shields_is_a_fraction_of_the_maximum_applied_by_the_sim() {
+    let mut g = game(
+        "MMM.register(function()
+            local e = EntityFinder():find()[2]
+            e.shields = 0.0
+            DONE = true
+        end)",
+    );
+    g.run(3);
+    assert!(g.global::<bool>("DONE"));
+    assert!(g.rt.unsupported().iter().all(|(n, _)| !n.contains("Entity.shields")));
+    let hero = g.sim.units.get(HERO).unwrap();
+    assert!(hero.shields.now[0] < hero.shields.max, "{:?}", hero.shields);
+}
+
+#[test]
+fn entity_forward_and_omega_queue_sim_edits_and_bad_input_is_recorded() {
+    let mut g = game(
+        "MMM.register(function()
+            local e = EntityFinder():find()[2]
+            e.forward = Vector(0, 3, -4)
+            e.omega = Vector(0, 0.5, 0)
+            e.forward = Vector(0, 5, 0)
+            e.forward = Vector(0/0, 0, 1)
+            e.omega = 5
+            DONE = true
+        end)",
+    );
+    g.run(3);
+    assert!(g.global::<bool>("DONE"), "bad input must not abort the callback");
+    let hero = g.sim.units.get(HERO).unwrap();
+    // y is ignored for the facing; (0, -4) normalised is -z.
+    assert_eq!(hero.heading, (sta_core::Fixed::ZERO, -sta_core::Fixed::ONE));
+    // The omega edit reached the sim and was accepted; the unit's engines are on, so it changed nothing.
+    assert_eq!(hero.omega, sta_core::Fixed::ZERO);
+    let names: Vec<String> = g.rt.unsupported().into_iter().map(|(n, _)| n).collect();
+    assert!(names.iter().any(|n| n.contains("no horizontal direction")), "{names:?}");
+    assert!(names.iter().any(|n| n.contains("Entity.forward = a Vector without finite")), "{names:?}");
+    assert!(names.iter().any(|n| n.contains("Entity.omega = non-Vector")), "{names:?}");
+    assert!(!names.iter().any(|n| n.contains("simulation rejected")), "{names:?}");
 }
 
 #[test]
@@ -621,8 +686,8 @@ fn recorded_assignments_keep_the_callback_running_and_name_each_gap() {
             local p = Player(0)
             p.race = Race.find('fx'); p.color = Color(1, 0, 0); p.name = 'x'
             local e = EntityFinder():find()[1]
-            e.race = Race.find('fx'); e.crew = 5; e.shields = 1.0; e.movementAutonomy = 1
-            e.specialWeaponAutonomy = 1; e.forward = Vector(1, 0, 0); e.omega = Vector(0, 1, 0); e.name = 'n'
+            e.race = Race.find('fx'); e.movementAutonomy = 1
+            e.specialWeaponAutonomy = 1; e.name = 'n'
             DONE = true
         end)",
     );
@@ -630,8 +695,8 @@ fn recorded_assignments_keep_the_callback_running_and_name_each_gap() {
     assert!(g.global::<bool>("DONE"));
     let names: Vec<String> = g.rt.unsupported().into_iter().map(|(n, _)| n).collect();
     for want in [
-        "Player.race", "Player.color", "Player.name", "Entity.race", "Entity.crew", "Entity.shields",
-        "Entity.movementAutonomy", "Entity.specialWeaponAutonomy", "Entity.forward", "Entity.omega", "Entity.name",
+        "Player.race", "Player.color", "Player.name", "Entity.race",
+        "Entity.movementAutonomy", "Entity.specialWeaponAutonomy", "Entity.name",
     ] {
         assert!(names.iter().any(|n| n.starts_with(want)), "{want} in {names:?}");
     }
@@ -649,4 +714,99 @@ fn condition_monitor_and_text_input_callbacks_get_a_hook_object_like_installed_s
     g.run(2);
     assert_eq!(g.global::<i64>("seen[1]"), 7);
     assert_eq!(g.global::<String>("seen[2]"), "onDone");
+}
+
+// ---- LUA-13: an end that rests on a gap is blocked, any other stands -------
+
+use crate::runtime::MissionEndState;
+
+/// Ids: 2 hero (p0), 3 wing (p0), 4 foe (p1), 5 far (p1). `Colonize` raises
+/// and is counted unsupported: a gap call that names both handles.
+fn end_state(script: &str) -> MissionEndState {
+    let mut g = game(script);
+    g.run(5);
+    g.rt.mission_end(g.view.tick)
+}
+
+#[test]
+fn an_end_with_no_gap_on_its_path_stands_even_with_unsupported_calls_elsewhere() {
+    // A gap call on foe (4) and far (5), then a real loss decided on the hero
+    // (2) and a count over the hero's team, which has nothing tainted.
+    let s = "pcall(A2.Colonize, 4, 5)\nif A2.IsAlive(2) and A2.CountUnits(A2.GetRealTeam(2), 0) > 0 then A2.FailMission(A2.GetTime(), 0) end";
+    assert_eq!(end_state(s), MissionEndState::Ended { won: false });
+    let s = "pcall(A2.Colonize, 3, 5)\nif A2.IsAlive(2) then A2.SucceedMission(0, 0) end";
+    assert_eq!(end_state(s), MissionEndState::Ended { won: true });
+}
+
+#[test]
+fn an_end_read_off_a_tainted_handle_is_blocked_and_not_a_win_or_a_loss() {
+    let s = "pcall(A2.Colonize, 3, 5)\nif A2.IsAlive(3) then A2.SucceedMission(0, 0) end";
+    match end_state(s) {
+        MissionEndState::Blocked(why) => assert!(why.contains("SucceedMission") && why.contains("IsAlive") && why.contains("object 3"), "{why}"),
+        other => panic!("{other:?}"),
+    }
+    // The same on a handle named by a call that is not bound at all.
+    let s = "A2.NoteGap('CommandAllShips', 2)\nif A2.IsCompromised(2, 99) then A2.FailMission(0, 0) end";
+    assert!(matches!(end_state(s), MissionEndState::Blocked(_)));
+}
+
+#[test]
+fn a_team_count_is_tainted_only_over_a_team_with_a_tainted_object() {
+    // Foe (4) belongs to team B: a count over team B or over any team is read
+    // off a gap; a count over the hero's team is not.
+    let s = "pcall(A2.Colonize, 4, 5)\nif A2.CountUnits(A2.GetRealTeam(4), 0) > 0 then A2.SucceedMission(0, 0) end";
+    assert!(matches!(end_state(s), MissionEndState::Blocked(_)));
+    let s = "pcall(A2.Colonize, 4, 5)\nif A2.CountUnits(-1, 0) > 0 then A2.SucceedMission(0, 0) end";
+    assert!(matches!(end_state(s), MissionEndState::Blocked(_)));
+    let s = "pcall(A2.Colonize, 4, 5)\nif A2.CountUnits(A2.GetRealTeam(2), 0) > 0 then A2.SucceedMission(0, 0) end";
+    assert_eq!(end_state(s), MissionEndState::Ended { won: true });
+}
+
+#[test]
+fn a_handle_that_never_existed_blocks_only_after_a_handle_producing_gap() {
+    let s = "if not A2.IsAlive(0) then A2.FailMission(0, 0) end";
+    assert_eq!(end_state(s), MissionEndState::Ended { won: false });
+    // Some other unsupported call changes nothing for it.
+    let s = "pcall(A2.Colonize, 3, 5)\nif not A2.IsAlive(0) then A2.FailMission(0, 0) end";
+    assert_eq!(end_state(s), MissionEndState::Ended { won: false });
+    let s = "A2.NoteGap('BuildObject', 'x')\nif not A2.IsAlive(0) then A2.FailMission(0, 0) end";
+    assert!(matches!(end_state(s), MissionEndState::Blocked(_)));
+}
+
+#[test]
+fn a_read_after_the_end_call_does_not_block_it_and_the_last_call_wins() {
+    let s = "A2.FailMission(0, 0)\npcall(A2.Colonize, 3, 5)\nlocal _ = A2.IsAlive(3)";
+    assert_eq!(end_state(s), MissionEndState::Ended { won: false });
+    // Reads never clear: a call after a tainted read is blocked, whatever it is.
+    let s = "pcall(A2.Colonize, 3, 5)\nlocal _ = A2.IsAlive(3)\nA2.FailMission(0, 0)\nA2.SucceedMission(0, 0)";
+    match end_state(s) {
+        MissionEndState::Blocked(why) => assert!(why.contains("SucceedMission"), "{why}"),
+        other => panic!("{other:?}"),
+    }
+    // Two clean calls: the last one decides.
+    assert_eq!(end_state("A2.FailMission(0, 0)\nA2.SucceedMission(0, 0)"), MissionEndState::Ended { won: true });
+    assert_eq!(end_state("A2.SucceedMission(0, 0)\nA2.FailMission(0, 0)"), MissionEndState::Ended { won: false });
+}
+
+#[test]
+fn a_raising_read_and_a_non_handle_integer_are_judged_apart() {
+    // IsShipAliveAndOffMap has no data: its answer is a guess, so it is a tainted read.
+    let s = "pcall(A2.IsShipAliveAndOffMap, 3)\nif A2.IsAlive(2) then A2.SucceedMission(0, 0) end";
+    assert!(matches!(end_state(s), MissionEndState::Blocked(_)));
+    // A failed call whose first integer is no object (an objective index) taints nothing.
+    let s = "pcall(A2.Colonize, 900, 901)\nif A2.CountUnits(A2.GetRealTeam(4), 0) > 0 then A2.SucceedMission(0, 0) end";
+    assert_eq!(end_state(s), MissionEndState::Ended { won: true });
+}
+
+#[test]
+fn a_gap_that_changes_who_fights_taints_every_later_read() {
+    // A world-effect gap with no object, then a win decided on a healthy hero.
+    let s = "A2.NoteGap('DisableAllAITeams')\nif A2.IsAlive(2) then A2.SucceedMission(0, 0) end";
+    assert!(matches!(end_state(s), MissionEndState::Blocked(_)));
+}
+
+#[test]
+fn a_gap_that_is_not_a_world_effect_taints_no_unrelated_read() {
+    let s = "A2.NoteGap('CollisionPrevention', 1)\nif A2.IsAlive(2) then A2.SucceedMission(0, 0) end";
+    assert_eq!(end_state(s), MissionEndState::Ended { won: true });
 }

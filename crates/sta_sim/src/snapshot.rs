@@ -39,10 +39,12 @@ use crate::world::{Entities, Entity, EntityKind, Shields, Table};
 use crate::{Rng, Sim, SimEvent};
 
 pub const MAGIC: [u8; 4] = *b"STAS";
-/// Format 16 (SIM-38) appends craft autonomy after the start-helper rows.
-/// Format 15 (CON-35) added the [`Provenance`] record and the keyed content
-/// digest's hash. Only the current format is read.
-pub const FORMAT_VERSION: u16 = 16;
+/// Format 16 (SIM-38) appended craft autonomy after the start-helper rows; 15
+/// (CON-35) added the [`Provenance`] record and the keyed content digest's
+/// hash. Format 17 appends the mission-set subsystem switches and damage
+/// (SIM-55). Format 18 (SIM-36) appends the attack approach record
+/// (crafts in warp). Format 19 appends the stuck-order watch rows last. Only the current format is read.
+pub const FORMAT_VERSION: u16 = 19;
 
 const HEADER: usize = 4 + 2 + 4 + 8;
 
@@ -129,6 +131,16 @@ impl std::fmt::Display for SnapshotError {
 
 impl std::error::Error for SnapshotError {}
 
+/// SIM-36's attack approach state: the crafts in warp (phase 1) or dropping
+/// out of it (2), ascending id.
+#[derive(Serialize, Deserialize)]
+struct AttackRec {
+    version: u8,
+    warp: Vec<(EntityId, u8)>,
+    /// Recent hits `(tick, attacker)` and shots, for assists.
+    engagement: crate::combat::targeting::EngagementRec,
+}
+
 #[derive(Serialize, Deserialize)]
 struct StatsRec {
     max_speed: Fixed,
@@ -158,6 +170,13 @@ struct EntityRec {
     shields_directional: bool,
     flags: UnitFlags,
     progress: Option<Fixed>,
+}
+
+/// Format 19: the stuck-order watch rows (`watchdog`).
+#[derive(Serialize, Deserialize)]
+struct WatchRec {
+    version: u8,
+    rows: Vec<(EntityId, crate::watchdog::Row)>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -227,6 +246,13 @@ struct UnitCrewRec {
 struct StartEffectsRec {
     version: u8,
     rows: crate::start_effects::Rows,
+}
+
+/// Mandatory suffix since v17: switched-off and damaged subsystems (SIM-55).
+#[derive(Serialize, Deserialize)]
+struct SubsystemsRec {
+    version: u8,
+    rows: Vec<(EntityId, crate::combat::damage::SubsystemRow)>,
 }
 
 fn kind_from(b: u8) -> Option<EntityKind> {
@@ -377,6 +403,9 @@ impl Sim {
         }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&StartEffectsRec { version: 1, rows: self.start_effects.to_rec() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&crate::autonomy::AutonomyWire { version: 1, rows: self.autonomy.to_rec() }).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&SubsystemsRec { version: 1, rows: self.subsystems.to_rows() }).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&AttackRec { version: 1, warp: self.approach_warp.to_rec(), engagement: self.engagement.to_rec() }).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&WatchRec { version: 1, rows: self.watchdog.to_rec() }).expect("snapshot serialises"));
         out
     }
 
@@ -415,6 +444,16 @@ impl Sim {
         let (record, rest): (crate::autonomy::AutonomyWire, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         if record.version != 1 { return Err(SnapshotError::Corrupt("unknown autonomy record version".into())); }
         let autonomy_rows = record.rows;
+        let (record, rest): (SubsystemsRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        if record.version != 1 { return Err(SnapshotError::Corrupt("unknown subsystems record version".into())); }
+        let subsystem_rows = record.rows;
+        let (record, rest): (AttackRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        if record.version != 1 { return Err(SnapshotError::Corrupt("unknown attack approach record version".into())); }
+        let warp_rows = record.warp;
+        let engagement_rows = record.engagement;
+        let (record, rest): (WatchRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        if record.version != 1 { return Err(SnapshotError::Corrupt("unknown order watch record version".into())); }
+        let watch_rows = record.rows;
         if !rest.is_empty() { return Err(SnapshotError::Corrupt("trailing bytes".into())); }
         if let Some(row) = b.economy.miners.iter().find(|row| row.5 > 4) {
             return Err(SnapshotError::Corrupt(format!("mining phase {} is not supported", row.5)));
@@ -478,9 +517,31 @@ impl Sim {
         if autonomy.to_rec().iter().any(|(id, _)| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft)) {
             return Err(corrupt("autonomy entity"));
         }
+        let watchdog = crate::watchdog::Watchdog::from_rec(watch_rows).ok_or_else(|| corrupt("order watch rows"))?;
+        if watchdog.to_rec().iter().any(|(id, _)| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft)) {
+            return Err(SnapshotError::Corrupt("order watch entity is not a craft".into()));
+        }
+        let approach_warp = crate::movement::approach::Warp::from_rec(warp_rows).ok_or_else(|| SnapshotError::Corrupt("attack warp rows out of order or of an unknown phase".into()))?;
+        if approach_warp.to_rec().iter().any(|(id, _)| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft)) {
+            return Err(SnapshotError::Corrupt("attack warp entity is not a craft".into()));
+        }
+        let engagement = crate::combat::targeting::Engagement::from_rec(engagement_rows, b.tick, |id| units.contains(id))
+            .ok_or_else(|| SnapshotError::Corrupt("engagement rows out of order, from the future or of an unknown entity".into()))?;
         let specials = crate::specials::Specials::from_rec(b.specials).ok_or_else(|| corrupt("specials"))?;
         let start_effects = crate::start_effects::StartEffects::from_rec(effect_rows, |id| units.contains(id))
             .ok_or_else(|| corrupt("start effect rows"))?;
+        let subsystems = crate::combat::damage::Subsystems::from_rows(subsystem_rows).ok_or_else(|| SnapshotError::Corrupt("invalid subsystem rows".into()))?;
+        if subsystems.to_rows().iter().any(|(id, _)| !units.get(*id).is_some_and(|u| matches!(u.kind, EntityKind::Craft | EntityKind::Station))) {
+            return Err(SnapshotError::Corrupt("subsystem entity is not a craft or station".into()));
+        }
+        if let Some(db) = content.as_deref() {
+            for (id, row) in subsystems.to_rows() {
+                let hp = units.get(id).and_then(|u| db.unit(u.def)).map(|d| d.system_hit_points);
+                if hp.is_some_and(|hp| row.damage.iter().zip(hp).any(|(d, hp)| *d > hp.to_bits())) {
+                    return Err(SnapshotError::Corrupt("subsystem damage above hit points".into()));
+                }
+            }
+        }
         let mut economy = crate::economy::Economy::from_rec(&b.economy);
         economy.restore_personnel(personnel_rows, &b.players).map_err(|why| SnapshotError::Corrupt(why.into()))?;
         Ok(Sim {
@@ -504,11 +565,31 @@ impl Sim {
             victory: crate::victory::Victory::from_rec(&b.victory),
             specials,
             autonomy,
+            approach_warp,
+            watchdog,
+            engagement,
             start_effects,
             nav: Default::default(),
+            subsystems,
+            team_changes: Vec::new(),
         })
     }
 }
+
+#[cfg(test)]
+#[path = "snapshot/subsystem_tests.rs"]
+mod subsystem_tests;
+
+#[cfg(test)]
+#[path = "snapshot/attack_tests.rs"]
+mod attack_tests;
+#[cfg(test)]
+#[path = "snapshot/watch_tests.rs"]
+mod watch_tests;
+
+#[cfg(test)]
+#[path = "snapshot/chain.rs"]
+mod chain;
 
 #[cfg(test)]
 #[path = "snapshot/confinement_tests.rs"]

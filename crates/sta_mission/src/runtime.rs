@@ -132,6 +132,20 @@ struct Inner {
     lua: Lua,
 }
 
+/// Where a script's `SucceedMission` / `FailMission` stands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MissionEndState {
+    /// Not asked for.
+    None,
+    /// Asked for; mission time has not passed its end time.
+    Pending,
+    /// The mission has ended by its own rules.
+    Ended { won: bool },
+    /// Asked for, but on the strength of a query about an object that never
+    /// existed: neither a win nor a loss. The reason names what is missing.
+    Blocked(String),
+}
+
 /// A mission script running as a [`Controller`].
 ///
 /// The host owns one runtime for its SCRIPT command stream and supplies the
@@ -421,13 +435,52 @@ impl MissionRuntime {
         self.inner.ctx.borrow().log.clone()
     }
 
+    /// The state of the mission end the script asked for with `SucceedMission`
+    /// / `FailMission` (A2), as of `tick` (LUA-13).
+    pub fn mission_end(&self, tick: u64) -> MissionEndState {
+        let mut c = self.inner.ctx.borrow_mut();
+        // Once ended, the mission stays ended with the same outcome.
+        if let Some(won) = c.ended {
+            return MissionEndState::Ended { won };
+        }
+        let state = match &c.mission_end {
+            None => MissionEndState::None,
+            Some(e) if e.blocked.is_some() => MissionEndState::Blocked(e.blocked.clone().unwrap_or_default()),
+            Some(e) if tick as f64 / sta_core::TICK_HZ as f64 > e.time => MissionEndState::Ended { won: !e.failed },
+            Some(_) => MissionEndState::Pending,
+        };
+        if let MissionEndState::Ended { won } = state {
+            c.ended = Some(won);
+        }
+        state
+    }
+
+    /// AIP loads (`AI_Team_Load_AIP`, `Player:loadAIP`) asked for since the
+    /// last call, in call order, with the seat they name (AI-06).
+    pub fn take_aip_requests(&self) -> Vec<(sta_core::PlayerId, String)> {
+        let mut c = self.inner.ctx.borrow_mut();
+        let out = c.loaded_aips[c.aips_taken..].to_vec();
+        c.aips_taken = c.loaded_aips.len();
+        out
+    }
+
     /// Unsupported API encounters, with counts ascending by name. Includes
     /// accepted operations with no effect and permissive fallback lookups
     /// (`stub global <name>` / `stub field <path>`). Lookup counts are not
     /// function-call counts. Lookup keys may be dynamically computed strings;
     /// function arguments are not inspected.
+    ///
+    /// AIP loads no host has taken ([`MissionRuntime::take_aip_requests`]) are
+    /// listed as `Player.loadAIP`: nothing has applied them.
     pub fn unsupported(&self) -> Vec<(String, u32)> {
-        self.inner.ctx.borrow().unsupported.iter().map(|(k, v)| (k.clone(), *v)).collect()
+        let c = self.inner.ctx.borrow();
+        let mut out: Vec<(String, u32)> = c.unsupported.iter().map(|(k, v)| (k.clone(), *v)).collect();
+        let pending = c.loaded_aips.len() - c.aips_taken;
+        if pending > 0 {
+            let at = out.partition_point(|(k, _)| k.as_str() < "Player.loadAIP");
+            out.insert(at, ("Player.loadAIP".to_owned(), u32::try_from(pending).unwrap_or(u32::MAX)));
+        }
+        out
     }
 
     /// How `from` stands toward `to`, with the script's overrides applied
@@ -490,6 +543,8 @@ impl Controller for MissionRuntime {
             c.view = view.clone();
             c.events = events.to_vec();
             let tick = view.tick;
+            let ids: Vec<_> = view.units.iter().map(|u| u.id).collect();
+            c.seen.extend(ids);
             for e in events {
                 if let SimEvent::Hit { target, .. } = e {
                     c.last_hit.insert(*target, tick);

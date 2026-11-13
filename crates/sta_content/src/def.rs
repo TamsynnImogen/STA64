@@ -314,6 +314,14 @@ pub struct UnitDef {
     pub maximum_crew: Option<Fixed>,
     /// `maxCrewGain` of a station (SIM-25): what it adds to its team's crew capacity.
     pub crew_gain: Fixed,
+    /// `saneCrewLossMethod` (SIM-39): a hit's crew loss is in absolute crew
+    /// points; without it the loss is a percent of the unit's maximum crew.
+    pub sane_crew_loss: bool,
+    /// Hit points of the unit's systems (SIM-55), in the order engines,
+    /// weapons, shield generator, life support, sensors: `enginesHitPoints`,
+    /// `weaponsHitPoints`, `shieldGeneratorHitPoints`, `lifeSupportHitPoints`,
+    /// `sensorsHitPoints`. 0 when the key is absent.
+    pub system_hit_points: [Fixed; 5],
     /// Sensor range, units.
     pub sensor: Fixed,
     pub hardpoints: Vec<Hardpoint>,
@@ -361,6 +369,10 @@ pub struct UnitDef {
     pub hidden: bool,
     /// `invalidAsTarget = 1`: automatic target selection skips it.
     pub invalid_as_target: bool,
+    /// `attackPower` (SIM-36): how much enemies want to shoot it; automatic
+    /// target choice prefers the highest `attackPower / current shields`.
+    /// `None` when the ODF has no such key.
+    pub attack_power: Option<Fixed>,
     /// `autoExpireTime` (else `lifeTimer`) in ticks; the object removes itself
     /// that long after it appears (SIM-28).
     pub life: Option<Tick>,
@@ -418,6 +430,8 @@ impl UnitDef {
             crew: Fixed::ZERO,
             maximum_crew: None,
             crew_gain: Fixed::ZERO,
+            sane_crew_loss: false,
+            system_hit_points: [Fixed::ZERO; 5],
             sensor: Fixed::ZERO,
             hardpoints: Vec::new(),
             build: BuildDef::default(),
@@ -439,6 +453,7 @@ impl UnitDef {
             avoid_me: false,
             hidden: false,
             invalid_as_target: false,
+            attack_power: None,
             life: None,
             raw: Arc::new(raw),
         }
@@ -496,6 +511,11 @@ pub struct WeaponDef {
     /// The weapon's own class is `ordnancedefenseweapon` (FO's point-defence
     /// class, as opposed to `pointdefenselaser`).
     pub ordnance_defence: bool,
+    /// `activateOnTeamChange` (an FO mod key, default 0): the weapon's special
+    /// is engaged for its new owner after a completed team change (SIM-29).
+    pub activate_on_team_change: bool,
+    /// The ordnance's crew-loss keys (SIM-39); `None` when it has none of them.
+    pub crew_loss: Option<OrdnanceCrewLoss>,
     /// Feature switches resolved for this weapon, as [`UnitDef::features`];
     /// `None`: the database-wide set. Read through
     /// `ContentDb::weapon_features`.
@@ -506,6 +526,19 @@ pub struct WeaponDef {
     /// An instant `replaceweapon` (SIM-28); `None` for every other weapon.
     pub replace: Option<crate::lifecycle::ReplaceDef>,
     pub raw: Arc<sta_odf::Odf>,
+}
+
+/// What a hit of this ordnance does to the target's crew (SIM-39): its
+/// `damageThreshold`, `shieldCrewModifier` and `hullCrewModifier`. Absent keys
+/// read as 0 (no loss).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct OrdnanceCrewLoss {
+    /// `damageThreshold`: damage below it costs no crew.
+    pub threshold: Fixed,
+    /// `shieldCrewModifier`: crew lost per point of shield damage over the threshold.
+    pub shield: Fixed,
+    /// `hullCrewModifier`: the same for hull damage (read, not applied: not measured).
+    pub hull: Fixed,
 }
 
 /// The keys of a `resourceweapon` (Fleet Operations 3.x and later; stock
@@ -550,6 +583,8 @@ impl WeaponDef {
             initial_shot_delay_modifier: None,
             ignore_shot_delay_effects: false,
             ordnance_defence: false,
+            activate_on_team_change: false,
+            crew_loss: None,
             features: None,
             resource: None,
             replace: None,

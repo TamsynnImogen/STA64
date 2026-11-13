@@ -5,16 +5,18 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 
 use sta_content::{ContentDb, MapDef};
 use sta_core::{PlayerId, Tick};
 use sta_sim::command::{Command, CommandRouter};
-use sta_sim::replay::Replay;
+use sta_sim::replay::{Replay, StartRec};
 use sta_sim::digest::SectionDigests;
 use sta_sim::setup::GameSetup;
 use sta_sim::{SimEvent, WorldSource};
 
 use super::router::LockstepRouter;
+use crate::resync::NetState;
 use super::transport::Transport;
 use crate::proto::{EngineId, Occupant, ProtoError, Start, PROTOCOL_VERSION};
 use sta_sim::Sim;
@@ -52,15 +54,22 @@ pub struct DesyncFiles {
 
 /// A sim, its router and its replay log.
 pub struct Peer {
-    sim: Sim,
-    router: LockstepRouter,
-    replay: Replay,
-    start: Start,
+    pub(crate) sim: Sim,
+    pub(crate) router: LockstepRouter,
+    pub(crate) replay: Replay,
+    pub(crate) start: Start,
     engines: Vec<(PlayerId, EngineId)>,
-    tick: Tick,
-    ticks_per_turn: Tick,
-    digested: Option<Tick>,
+    pub(crate) tick: Tick,
+    pub(crate) ticks_per_turn: Tick,
+    pub(crate) digested: Option<Tick>,
     faults: Vec<Fault>,
+    /// This peer's own content (a snapshot is checked against it).
+    pub(crate) content: Arc<ContentDb>,
+    /// NET-04: rejoin and resync state.
+    pub(crate) net: NetState,
+    /// The tick the replay starts at: 0, or the snapshot's after a rejoin
+    /// (a replay with no commands before it cannot be rerun from tick 0).
+    pub(crate) replay_from: Tick,
 }
 
 impl Peer {
@@ -95,6 +104,39 @@ impl Peer {
         transport: Box<dyn Transport>,
     ) -> Result<Peer, ProtoError> {
         let router = LockstepRouter::new(start, me, transport)?;
+        Peer::with_router(start, setup, sim, router)
+    }
+
+    /// A referee's peer (NET-05, NET_DECISIONS N5) on the connection in slot
+    /// `me`, which is no seat of `start`: it runs the whole game from `Start`
+    /// and the others' turn records on its own content, sends no record, and
+    /// never stops for a desync (see `LockstepRouter::spectator`). Wrap it in
+    /// a [`Referee`](crate::referee::Referee) for the verdicts and reports.
+    pub fn spectator(
+        start: &Start,
+        me: PlayerId,
+        content: Arc<ContentDb>,
+        map: Arc<MapDef>,
+        transport: Box<dyn Transport>,
+    ) -> Result<Peer, ProtoError> {
+        let setup = GameSetup {
+            seed: start.seed,
+            map,
+            content,
+            players: start.player_setups(me),
+            options: start.options.clone(),
+        };
+        let sim = Sim::from_setup(&setup);
+        let router = LockstepRouter::spectator(start, me, transport)?;
+        Peer::with_router(start, &setup, sim, router)
+    }
+
+    fn with_router(
+        start: &Start,
+        setup: &GameSetup,
+        sim: Sim,
+        router: LockstepRouter,
+    ) -> Result<Peer, ProtoError> {
         let mut replay = Replay::new(setup);
         replay.digests.push((0, sim.digest()));
         Ok(Peer {
@@ -107,7 +149,18 @@ impl Peer {
             ticks_per_turn: Tick::from(start.turn.ticks_per_turn.max(1)),
             digested: None,
             faults: Vec::new(),
+            content: Arc::clone(&setup.content),
+            net: NetState::default(),
+            replay_from: 0,
         })
+    }
+
+    /// Records how the sim's seats got their starting forces in the replay
+    /// (`StartRec::Races` after `Sim::from_setup_with_starts`), so a desync
+    /// report is rebuilt the way the game was (INT-M5). The default is
+    /// `StartRec::Bare`, which is what [`Peer::start`] builds.
+    pub fn set_starts(&mut self, starts: StartRec) {
+        self.replay.starts = starts;
     }
 
     /// Records each seat's build identity (from its `Hello`) for the desync
@@ -145,11 +198,24 @@ impl Peer {
 
     /// Runs one tick if the router releases it.
     pub fn step(&mut self) -> StepOutcome {
+        self.step_at(Instant::now())
+    }
+
+    /// [`Peer::step`] at a given time: the clock of rejoin and resync
+    /// deadlines and rate limits (tests).
+    pub fn step_at(&mut self, now: Instant) -> StepOutcome {
+        self.router.pump();
+        if let Some(out) = self.net_pre(now) {
+            return out;
+        }
         if self.tick.is_multiple_of(self.ticks_per_turn) && self.digested != Some(self.tick) {
             self.digested = Some(self.tick);
             let sections = self.sim.section_digests();
             self.router.set_sections(self.tick, sections.values().to_vec());
             self.router.set_digest(self.tick, self.sim.digest());
+        }
+        if self.tick.is_multiple_of(self.ticks_per_turn) {
+            self.net_boundary(now);
         }
         let Some(mut cmds) = self.router.take_ready(self.tick) else {
             return if self.router.halted() {
@@ -207,6 +273,16 @@ impl Peer {
         let _ = writeln!(s, "protocol version: {PROTOCOL_VERSION}");
         let _ = writeln!(s, "this seat: {}", self.router.me().0);
         let _ = writeln!(s, "replay ends at tick: {}", self.replay.end_tick);
+        for line in self.net.sidecar_lines() {
+            let _ = writeln!(s, "{line}");
+        }
+        if self.replay_from > 0 {
+            let _ = writeln!(
+                s,
+                "replay starts at tick {} (joined by snapshot): it holds no commands before it",
+                self.replay_from
+            );
+        }
         let cfg = self.router.config();
         let _ = writeln!(
             s,
@@ -217,7 +293,8 @@ impl Peer {
             .router
             .desync()
             .map(|n| n.theirs.tick)
-            .or_else(|| self.router.peer_desync().map(|(_, n)| n.ours.tick));
+            .or_else(|| self.router.peer_desync().map(|(_, n)| n.ours.tick))
+            .or_else(|| self.router.divergences().iter().map(|d| d.theirs.tick).min());
         if let Some(tick) = tick {
             let _ = writeln!(s, "first differing tick: {tick}");
             for (seat, d) in self.router.digests_at(tick) {
@@ -239,6 +316,13 @@ impl Peer {
                 s,
                 "reported by seat {}: tick {}, its {:#018x}, against seat {} {:#018x}",
                 from.0, n.ours.tick, n.ours.digest, n.slot.0, n.theirs.digest
+            );
+        }
+        for d in self.router.divergences() {
+            let _ = writeln!(
+                s,
+                "referee: seat {} reported {:#018x} at tick {}, the referee's is {:#018x}",
+                d.seat.0, d.theirs.digest, d.theirs.tick, d.reference
             );
         }
         for seat in &self.start.seats {

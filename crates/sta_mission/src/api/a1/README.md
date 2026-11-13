@@ -18,7 +18,7 @@ error). Reads see the last world snapshot, as for `A2`.
 ## What each call does
 
 - **Same operation as A2, reused** (the `A2` binding is called, errors say
-  `A1.`): `RemoveObject CraftCannotDie IsAlive Exists DoesNotExist Cloak
+  `A1.`): `RemoveObject CraftCannotDie IsAlive IsCompromised Exists DoesNotExist Cloak
   Decloak ImmediateCloak DisableWeapons DisableEngines SetSpecialEnergy
   IsVisibleToTeam GetRealTeam SetRealTeam SetPerceivedTeam
   ObjectivesDisplay_Set_Visibility`, and `GetNearestStarbase` uses
@@ -74,8 +74,9 @@ The third argument of `Goto`/`Stop` (the trailing `int`), the flag of
 `CountVisible*` searches and of `RemoveAllCraft`, whether the third
 argument of the `...Near...` searches is a team or a relation filter (read as a
 team, -1 any), the meaning of bridge type 0, the `TeamRelation` values, the
-restriction masks of `RestrictSpecialFlag`, what `IsCompromised`
-and `GetLocationOfFlag` return, and the delay of `FailMission` /
+restriction masks of `RestrictSpecialFlag`, what `GetLocationOfFlag`
+returns, the `IsCompromised` rule (A2's, shared; read statically from both
+executables), and the delay of `FailMission` /
 `SucceedMission` (retained, not applied).
 
 ## Seams the host fills
@@ -96,7 +97,7 @@ Writes are retained as `Call A1.<Name>` and counted in `unsupported()` (also `Lo
 mission-local override (provisional 0/1/2 mapping) and is counted too:
 `SetPosition SetWarpSpeed ResetWarpSpeed Patrol SearchAndDestroy PointAt
 Special_Attack Attack(unit, Vector) SetSpecialWeaponAttackInterval AI_Attack
-AttackMainEnemyBase SetShieldPercent SetMaxShields DestroyCritical Destroy*
+AttackMainEnemyBase DestroyCritical Destroy*
 AllowMultipleSpecialWeaponFire SetSpecialForcesFlag TransferFlag LinkWormHoles
 EnableWormholeTravel ObstacleAvoidence PauseSimulation UnpauseSimulation
 EnableLight ReplaceObject RecruitSpecialForces SetRace SetWormholeTeam
@@ -106,10 +107,10 @@ EnableAllAITeams DisableTeam EnableTeam SetIsAITeam`.
 Queries raise an error naming the missing data (also `strength_team_1`, `strength_team_2`, `hot_float_value`): `InStopMode InAttackMode
 OutOfSpecialAttackMode InQueue GetAttackLocation UnderAttack
 GetAllyShipAttacks GetAllyStationAttacks GetDilithiumOnFreighter
-IsCompromised IsDerelict IsThereARomulanSpyOnShip GetTranswarpExitWormhole
+IsDerelict IsThereARomulanSpyOnShip GetTranswarpExitWormhole
 GetNearestTranswarpGate`.
 
-`AI_Team_Load_AIP` records the file like `Player:loadAIP` (no AI runs).
+`AI_Team_Load_AIP` queues the file like `Player:loadAIP` for the host's AI seats (AI-06).
 `CineractiveStart/End` set the shared `Cineractive.active` singleton.
 Special flags (`CreateSpecialFlag` ...) are tracked in the runtime only.
 

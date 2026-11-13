@@ -9,6 +9,7 @@
 //! - `ui_profile = lcars | stock` ([`UiPreference`]);
 //! - the options screen's volumes (`master`, `music`, `effects`, `voice`, `0..=100`),
 //!   `scroll_speed`, `fullscreen`, `vsync`, `show_fps` ([`Settings`]);
+//! - `player_name` and `relay`, the multiplayer name and relay address last used (UI-11);
 //! - `intro = true | false` ([`IntroSettings`]);
 //! - `version = 1`.
 //!
@@ -137,6 +138,14 @@ impl Stored {
                     _ => false,
                 },
                 "intro" => parse_bool(value).map(|b| s.intro = b).is_some(),
+                "player_name" => {
+                    s.settings.player_name = value.chars().filter(|c| !c.is_control()).take(24).collect();
+                    true
+                }
+                "relay" => {
+                    s.settings.relay = value.chars().filter(|c| !c.is_control()).take(80).collect();
+                    true
+                }
                 n if NUMBERS.contains(&n) => match value.parse::<f32>() {
                     Ok(v) if v.is_finite() => {
                         let key = number_key(n);
@@ -175,6 +184,12 @@ impl Stored {
         }
         for (name, v) in [("fullscreen", st.fullscreen), ("vsync", st.vsync), ("show_fps", st.show_fps)] {
             let _ = writeln!(t, "{name} = {v}");
+        }
+        if !st.player_name.is_empty() {
+            let _ = writeln!(t, "player_name = {}", st.player_name);
+        }
+        if !st.relay.is_empty() {
+            let _ = writeln!(t, "relay = {}", st.relay);
         }
         t += &self.bindings.to_text();
         t

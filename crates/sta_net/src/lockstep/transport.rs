@@ -93,6 +93,9 @@ struct Hub {
     swap: BTreeSet<PlayerId>,
     /// Frames held back by `Hold`, per sender, oldest first.
     held_frames: BTreeMap<PlayerId, Vec<(PlayerId, Vec<u8>)>>,
+    /// Seats whose connection ended (NET-04): nothing is delivered to them
+    /// until [`LoopbackNet::reconnect`].
+    vacated: BTreeSet<PlayerId>,
     sent: u64,
 }
 
@@ -143,6 +146,7 @@ impl Hub {
 #[derive(Debug, Clone)]
 pub struct LoopbackNet {
     hub: Arc<Mutex<Hub>>,
+    seats: Arc<[PlayerId]>,
 }
 
 impl LoopbackNet {
@@ -167,6 +171,7 @@ impl LoopbackNet {
         };
         let net = LoopbackNet {
             hub: Arc::new(Mutex::new(hub)),
+            seats: seats.into(),
         };
         let links = seats
             .iter()
@@ -211,6 +216,31 @@ impl LoopbackNet {
         }
     }
 
+    /// Ends `seat`'s connection as a lost one: what was queued for it is
+    /// gone, nothing more is delivered to it, and what it sent earlier stays
+    /// delivered to the others, in order. The layer that reads the relay's
+    /// departure marker tells its peer (`Peer::note_departed`).
+    pub fn vacate(&self, seat: PlayerId) {
+        let mut hub = self.hub();
+        hub.vacated.insert(seat);
+        hub.inbox.remove(&seat);
+        hub.held.remove(&seat);
+        hub.held_frames.remove(&seat);
+    }
+
+    /// A new connection for a vacated `seat` (the relay's rejoin): nothing
+    /// that was sent while it was gone is delivered to it.
+    pub fn reconnect(&self, seat: PlayerId) -> Option<LoopbackLink> {
+        if !self.hub().vacated.remove(&seat) || !self.seats.contains(&seat) {
+            return None;
+        }
+        Some(LoopbackLink {
+            me: seat,
+            seats: self.seats.to_vec(),
+            hub: self.hub.clone(),
+        })
+    }
+
     /// Ends a [`LinkFault::Hold`]: what the seat sent meanwhile is delivered
     /// now, in order.
     pub fn release(&self, seat: PlayerId) {
@@ -241,12 +271,18 @@ impl Transport for LoopbackLink {
     fn send(&mut self, to: Destination, msg: &Message) -> Result<(), TransportError> {
         let bytes = proto::encode(msg).map_err(TransportError::Frame)?;
         let mut hub = self.hub.lock().unwrap_or_else(PoisonError::into_inner);
+        if hub.vacated.contains(&self.me) {
+            return Err(TransportError::Closed);
+        }
         let targets: Vec<PlayerId> = match to {
             Destination::All => self.seats.iter().copied().filter(|&s| s != self.me).collect(),
             Destination::Seat(s) if self.seats.contains(&s) && s != self.me => vec![s],
             Destination::Seat(_) => return Err(TransportError::Closed),
         };
         for t in targets {
+            if hub.vacated.contains(&t) {
+                continue;
+            }
             hub.sent += 1;
             if hub.held.contains(&self.me) {
                 hub.held_frames
@@ -262,6 +298,9 @@ impl Transport for LoopbackLink {
 
     fn poll(&mut self) -> Result<Option<Incoming>, TransportError> {
         let mut hub = self.hub.lock().unwrap_or_else(PoisonError::into_inner);
+        if hub.vacated.contains(&self.me) {
+            return Err(TransportError::Closed);
+        }
         let now = hub.now;
         let Some(q) = hub.inbox.get_mut(&self.me) else {
             return Ok(None);

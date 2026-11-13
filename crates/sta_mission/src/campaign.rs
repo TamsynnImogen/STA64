@@ -50,7 +50,7 @@ use sta_sim::{Sim, SimEvent, WorldSource};
 use sta_vfs::Vfs;
 
 use crate::api::{MissionConfig, PlayerNumbering};
-use crate::runtime::MissionRuntime;
+use crate::runtime::{MissionEndState, MissionRuntime};
 use crate::Resolution;
 
 // ---------------------------------------------------------------------------
@@ -874,6 +874,12 @@ pub trait MissionHost {
     fn seat(&self) -> (PlayerId, PlayerNumbering) {
         (PlayerId(0), PlayerNumbering::Slots)
     }
+
+    /// The AIPs scripts may load (`AI/AIPs/*.aip`); none by default, so a
+    /// host without them leaves the mission's AI seats passive.
+    fn aip_library(&self) -> sta_ai::AipLibrary {
+        sta_ai::AipLibrary::new()
+    }
 }
 
 /// Reads a mission script and its `include()`s by VFS-style path.
@@ -917,6 +923,10 @@ pub struct ActiveMission {
     outcome: Option<MissionOutcome>,
     /// Commands the runner submitted each tick besides the script's (host input).
     pending: Vec<Command>,
+    /// The AI of every seat but the human's: passive until the script loads
+    /// an AIP for it (AI-06).
+    ai_hub: sta_ai::MissionAiHub,
+    ai_seats: Vec<Box<dyn sta_sim::setup::Controller>>,
 }
 
 /// Wraps the mission-ending calls so the runner sees the outcome. Runs once
@@ -944,7 +954,9 @@ local function wrap(t, name, fixed)
   end)
 end
 wrap(rawget(_G, "Mission"), "finish", nil)
-for _, t in ipairs({ _G, rawget(_G, "A2"), rawget(_G, "A1") }) do
+-- A2's end calls carry their own time and are resolved by `scan_outcome`
+-- (`MissionRuntime::mission_end`), not recorded here.
+for _, t in ipairs({ _G, rawget(_G, "A1") }) do
   wrap(t, "SucceedMission", true)
   wrap(t, "FailMission", false)
 end
@@ -954,6 +966,11 @@ end
 /// any, as of `tick`. A host that owns the sim itself (the client's link) asks
 /// this each tick instead of using [`ActiveMission`].
 pub fn scan_outcome(runtime: &MissionRuntime, tick: u64) -> Option<MissionOutcome> {
+    // Armada II's `SucceedMission` / `FailMission`: the mission ends once its
+    // time is past the call's (LUA-13). A blocked end is no outcome at all.
+    if let MissionEndState::Ended { won } = runtime.mission_end(tick) {
+        return Some(MissionOutcome { won, delay: 0.0, tick });
+    }
     let got: mlua::Result<(Option<bool>, Option<f64>)> =
         runtime.eval("local o = rawget(_G, '__sta64_outcome') if o then return o.won, o.delay end");
     if let Ok((Some(won), delay)) = got {
@@ -998,10 +1015,17 @@ pub fn launch_runtime(
 }
 
 /// The named paths of the map `bzn` (`a2_fed03.bzn`) in `vfs`, in file order,
-/// for `A2.paths`; empty when the map cannot be read or holds none.
+/// for `A2.paths` / `A1.paths`; empty when the map cannot be read or holds
+/// none. An Armada I map keeps its paths in its own section (`Map::a1`).
 pub fn read_map_paths(vfs: &Vfs, bzn: &str) -> Vec<(String, Vec<[f32; 3]>)> {
     let Some(Ok(bytes)) = vfs.read(&format!("bzn/{bzn}")) else { return Vec::new() };
-    sta_bzn::parse(&bytes).map(|m| m.paths.into_iter().map(|p| (p.label, p.points)).collect()).unwrap_or_default()
+    let Ok(m) = sta_bzn::parse(&bytes) else { return Vec::new() };
+    if m.paths.is_empty()
+        && let Some(a1) = m.a1
+    {
+        return a1.paths.into_iter().map(|p| (p.label, p.points)).collect();
+    }
+    m.paths.into_iter().map(|p| (p.label, p.points)).collect()
 }
 
 impl ActiveMission {
@@ -1012,6 +1036,12 @@ impl ActiveMission {
 
     pub fn runtime_mut(&mut self) -> &mut MissionRuntime {
         &mut self.runtime
+    }
+
+    /// AIP loads the script asked for that named no file of the host's AIP
+    /// library, so changed nothing (AI-06).
+    pub fn unresolved_aips(&self) -> Vec<(PlayerId, String)> {
+        self.ai_hub.unresolved()
     }
 
     pub fn sim(&self) -> &Sim {
@@ -1037,6 +1067,11 @@ impl ActiveMission {
         let view = self.sim.view();
         let mut commands = std::mem::take(&mut self.pending);
         self.runtime.think(&view, &self.events, &mut commands);
+        // The script runs first, so a plan it loads this tick applies this tick.
+        self.ai_hub.submit(self.runtime.take_aip_requests());
+        for ai in &mut self.ai_seats {
+            ai.think(&view, &self.events, &mut commands);
+        }
         commands.sort_by_key(|c| (c.player, c.seq));
         self.check_outcome(view.tick);
         let out = self.sim.step(&commands);
@@ -1109,6 +1144,7 @@ impl CampaignRunner {
         let setup = host.game_setup(c, m, seed).map_err(StartError::Blocked)?;
         let sim = Sim::from_setup(&setup);
         let runtime = launch_runtime(&path, reader, seed, host.seat(), &setup, &sim, host.map_paths(c, m))?;
+        let ai_hub = sta_ai::MissionAiHub::new(host.aip_library());
         self.active = Some(ActiveMission {
             campaign: campaign.to_owned(),
             mission,
@@ -1117,6 +1153,13 @@ impl CampaignRunner {
             events: Vec::new(),
             outcome: None,
             pending: Vec::new(),
+            ai_seats: setup
+                .players
+                .iter()
+                .filter(|p| !matches!(p.control, Control::Human))
+                .map(|p| ai_hub.controller(&setup, p.id))
+                .collect(),
+            ai_hub,
         });
         Ok(self.active.as_mut().expect("just set"))
     }
@@ -1227,6 +1270,14 @@ impl MissionHost for VfsHost {
 
     fn seat(&self) -> (PlayerId, PlayerNumbering) {
         (PlayerId(0), PlayerNumbering::ArmadaTeams)
+    }
+
+    fn aip_library(&self) -> sta_ai::AipLibrary {
+        let names = self.vfs.list("AI/AIPs");
+        sta_ai::AipLibrary::load(&names, &mut |n| {
+            let bytes = self.vfs.read(n)?.ok()?;
+            Some(String::from_utf8_lossy(&bytes).into_owned())
+        })
     }
 }
 

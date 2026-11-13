@@ -2,7 +2,7 @@
 # agent-cargo: run cargo under the build policy that agent sessions share on
 # one machine (AGENTS.md, "Builds"). Not used by CI.
 #
-#   tools/agent-cargo [--heavy|--light|--check] [--dry-run] <cargo args...>
+#   tools/agent-cargo [--heavy|--light|--check] [--queue|--no-queue] [--dry-run] <cargo args...>
 #   tools/agent-cargo --bench [--dry-run] <command...>   (not cargo; see below)
 #
 # Policy: low priority (renice 19), one build per lock class at a time (flock),
@@ -29,12 +29,36 @@
 #   STA64_LOCK_WAIT   seconds to wait for a lock (default 540: agent tool
 #                     calls time out at 10 minutes). On timeout: prints
 #                     LOCK-BUSY, exits 75; wait and retry.
+#   STA64_QUEUE=0     no FIFO queue (same as --no-queue; --queue forces it on):
+#                     plain flock, whoever polls first wins (see "Queue")
+#   STA64_QUEUE_ACTIVE seconds a ticket counts as "actively waiting" after its
+#                     last heartbeat (default 20)
+#   STA64_QUEUE_STALE seconds without a heartbeat after which a ticket is
+#                     deleted (default 1800)
+#   STA64_QUEUE_KEY   ticket identity (default: hash of the git top level, so
+#                     one worktree is one waiter)
 #   STA64_SCCACHE=0   do not use sccache even if it is on PATH
 #   SCCACHE_DIR       default ~/.cache/sta64-sccache
 #   SCCACHE_CACHE_SIZE default 20G
 #   SCCACHE_SERVER_PORT default 4229 (not sccache's 4226, so a server someone
 #                     else runs with other settings is never reused)
 #   STA64_MOLD=1      link with mold (opt-in, never default; needs mold on PATH)
+#
+# Queue (--heavy, --light, --check): flock is not first come, first served, and
+# a LOCK-BUSY retry starts from scratch, so a long build used to let newcomers
+# overtake waiters for hours. Waiters now take a ticket in
+# <lock dir>/queue/<class>/<first-seen ns>-<key>, key = this worktree. Only the
+# oldest tickets (as many as the class has FREE slots; classes have 1, 2 for light, 2 for
+# heavy while bench.lock is not held) may try the lock; the rest poll once a
+# second. The ticket is kept when the call ends with LOCK-BUSY, so the retry
+# keeps its first-seen place, and is removed when the lock is taken. Every poll
+# refreshes the ticket's mtime (heartbeat). A ticket idle for more than
+# STA64_QUEUE_ACTIVE seconds (its agent is between retries, or gone) does not
+# hold anyone back: if a slot is free the next waiter takes it; one idle for
+# more than STA64_QUEUE_STALE seconds is deleted. The queue only orders
+# wrappers that have it; the mutual exclusion is still the same flock files,
+# so an older wrapper that flocks directly still works (it just jumps the line).
+# --bench is not queued.
 #
 # Without flock or renice (macOS, Windows shells, minimal containers) those
 # steps are skipped and cargo still runs with the env and jobs settings.
@@ -44,6 +68,7 @@ set -u
 
 dry=0
 class=""
+qflag=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --heavy) class=heavy ;;
@@ -51,6 +76,8 @@ while [ $# -gt 0 ]; do
     --check) class=check ;;
     --bench) class=bench ;;
     --dry-run) dry=1 ;;
+    --queue) qflag=1 ;;
+    --no-queue) qflag=0 ;;
     --help|-h) sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) break ;;
   esac
@@ -69,6 +96,9 @@ fi
 lock_dir=${STA64_LOCK_DIR:-$main_root/.claude/locks}
 wait_s=${STA64_LOCK_WAIT:-540}
 case "$wait_s" in ''|*[!0-9]*) echo "agent-cargo: STA64_LOCK_WAIT must be whole seconds" >&2; exit 2 ;; esac
+q_active=${STA64_QUEUE_ACTIVE:-20}
+q_stale=${STA64_QUEUE_STALE:-1800}
+case "$q_active$q_stale" in ''|*[!0-9]*) echo "agent-cargo: STA64_QUEUE_ACTIVE and STA64_QUEUE_STALE must be whole seconds" >&2; exit 2 ;; esac
 
 # Parse the cargo arguments (only before a literal `--`).
 sub=""; workspace=0; has_jobs=0; no_pkg=1; heavy_pkg=0
@@ -114,6 +144,19 @@ fi
 
 args=("$@")
 
+# Queue identity: the worktree (stable across LOCK-BUSY retries).
+queue_on=1
+[ "${STA64_QUEUE:-1}" = 0 ] && queue_on=0
+[ -n "$qflag" ] && queue_on=$qflag
+[ "$class" = bench ] && queue_on=0
+qkey=${STA64_QUEUE_KEY:-}
+if [ -z "$qkey" ]; then
+  if command -v md5sum >/dev/null 2>&1; then qkey=$(printf %s "$here" | md5sum | cut -c1-16)
+  else qkey=$(printf %s "$here" | cksum | cut -d' ' -f1); fi
+fi
+qkey=$(printf %s "$qkey" | tr -c 'A-Za-z0-9_.' '_')
+qdir=$lock_dir/queue/$class
+
 # Environment for this invocation only.
 # CARGO_BUILD_JOBS is `--jobs 2` without touching the arguments (after `--`
 # they would reach the test binary); an explicit -j/--jobs wins.
@@ -151,6 +194,9 @@ if [ "$dry" = 1 ]; then
     elif [ "$class" = bench ]; then echo "lock:   $lock_dir/bench.lock (shared), wait ${wait_s}s"
     else echo "lock:   $lock_dir/$class.lock, wait ${wait_s}s"; fi
   else echo "lock:   none (flock not found)"; fi
+  if [ "$have_flock" = 1 ] && [ "$queue_on" = 1 ]; then
+    echo "queue:  $qdir, ticket <first-seen>-$qkey (kept across LOCK-BUSY retries), active ${q_active}s, stale ${q_stale}s"
+  else echo "queue:  off"; fi
   [ "$have_renice" = 1 ] && echo "nice:   renice -n 19" || echo "nice:   none (renice not found)"
   echo "sccache: $([ "$sccache_on" = 1 ] && echo on || echo off)"
   for e in "${envs[@]}"; do echo "env:    $e"; done
@@ -161,7 +207,96 @@ fi
 
 [ "$have_renice" = 1 ] && [ "$class" != bench ] && renice -n 19 -p $$ >/dev/null 2>&1
 
-if [ "$have_flock" = 1 ]; then
+# ---- FIFO queue (see header) ----
+q_stamp() {
+  local s; s=$(date +%s%N 2>/dev/null)
+  case "$s" in ''|*[!0-9]*) s=$(date +%s)000000000 ;; esac
+  printf '%s' "$s"
+}
+q_mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null; }
+q_find() { # sets ticket to the oldest ticket of this key
+  local f
+  for f in "$qdir"/[0-9]*-"$qkey"; do
+    [ -f "$f" ] && { ticket=$f; return 0; }
+  done
+  return 1
+}
+q_ensure() { # my ticket exists (created with noclobber, first-seen kept) and is fresh
+  local new f
+  if q_find; then touch "$ticket" 2>/dev/null; return 0; fi
+  new="$qdir/$(q_stamp)-$qkey"
+  ( set -C; printf '%s\n' "$here" > "$new" ) 2>/dev/null   # exclusive create: never replaces a ticket
+  q_find || return 1
+  for f in "$qdir"/[0-9]*-"$qkey"; do   # two runs of one worktree raced: keep the oldest
+    [ -f "$f" ] && [ "$f" != "$ticket" ] && rm -f "$f"
+  done
+  return 0
+}
+q_ahead() { # ahead = tickets older than mine that are actively waiting; stale ones are deleted
+  local f m now
+  ahead=0; now=$(date +%s)
+  for f in "$qdir"/[0-9]*-*; do
+    [ -f "$f" ] || continue
+    [ "$f" = "$ticket" ] && break
+    m=$(q_mtime "$f") || continue
+    [ -n "$m" ] || continue
+    if [ $((now - m)) -gt "$q_stale" ]; then rm -f "$f"
+    elif [ $((now - m)) -le "$q_active" ]; then ahead=$((ahead + 1)); fi
+  done
+}
+bench_free() { ( exec 8>"$lock_dir/bench.lock" && flock -n 8 ); }
+slot_free() { ( exec 7>"$1" && flock -n 7 ); }
+q_free() { # free = usable slots whose lock is free right now; bfree = bench.lock is free
+  local f
+  free=0; bfree=0
+  case "$class" in
+    light) set -- "$lock_dir/light.lock" "$lock_dir/light2.lock" ;;
+    heavy) bench_free && bfree=1
+           if [ "$bfree" = 1 ]; then set -- "$lock_dir/heavy.lock" "$lock_dir/heavy2.lock"
+           else set -- "$lock_dir/heavy.lock"; fi ;;
+    *) set -- "$lock_dir/$class.lock" ;;
+  esac
+  for f in "$@"; do slot_free "$f" && free=$((free + 1)); done
+}
+q_try_file() { exec 9>"$1" || return 2; flock -n 9 && return 0; exec 9>&-; return 1; }
+q_try() { # one non-blocking pass over the class's slots; 0 = lock held on fd 9
+  local r
+  case "$class" in
+    light)
+      q_try_file "$lock_dir/light.lock"; r=$?
+      [ "$r" = 1 ] && { q_try_file "$lock_dir/light2.lock"; r=$?; } ;;
+    heavy)
+      q_try_file "$lock_dir/heavy.lock"; r=$?
+      [ "$r" = 1 ] && [ "$bfree" = 1 ] && { q_try_file "$lock_dir/heavy2.lock"; r=$?; } ;;
+    *) q_try_file "$lock_dir/$class.lock"; r=$? ;;
+  esac
+  [ "$r" = 2 ] && { echo "agent-cargo: cannot open lock in $lock_dir" >&2; exit 2; }
+  return "$r"
+}
+
+queued=0
+if [ "$have_flock" = 1 ] && [ "$queue_on" = 1 ]; then
+  if mkdir -p "$qdir" 2>/dev/null; then queued=1
+  else echo "agent-cargo: cannot create $qdir; no queue" >&2; fi
+fi
+
+if [ "$queued" = 1 ]; then
+  ticket=""; ahead=0
+  deadline=$(( $(date +%s) + wait_s ))
+  while :; do
+    if ! q_ensure; then   # cannot keep tickets here: plain flock polling
+      echo "agent-cargo: cannot write ticket in $qdir; no queue" >&2
+      ticket=/dev/null; ahead=0; qnoq=1
+    fi
+    [ "${qnoq:-0}" = 1 ] || q_ahead
+    q_free
+    # Only as many of the oldest waiters as there are free slots may try.
+    if [ "$ahead" -lt "$free" ] && q_try; then [ "${qnoq:-0}" = 1 ] || rm -f "$ticket"; break; fi
+    # LOCK-BUSY leaves the ticket: the retry keeps its place.
+    [ "$(date +%s)" -ge "$deadline" ] && { echo LOCK-BUSY; exit 75; }
+    sleep 1
+  done
+elif [ "$have_flock" = 1 ]; then
   mkdir -p "$lock_dir" || { echo "agent-cargo: cannot create $lock_dir" >&2; exit 2; }
   if [ "$class" = light ]; then
     exec 9>"$lock_dir/light.lock" || { echo "agent-cargo: cannot open lock in $lock_dir" >&2; exit 2; }

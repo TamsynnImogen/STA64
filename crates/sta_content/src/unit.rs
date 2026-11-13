@@ -10,6 +10,7 @@
 //! | `shields`, `initial_shields` | `maxShield`/`maxShields`, `curShield`/`curShields`, `shieldRate` per second; A2/FO absent strength inherits health |
 //! | `crew`, `maximum_crew` | `crewCost` (starting/build amount), optional `maximumCrew` (otherwise `crewCost`) |
 //! | `sensor` | `rangeScan` |
+//! | `attack_power` | `attackPower` (absent: `None`) |
 //! | `movement` | the physics ODF named by `physicsFile`, see [`movement`] |
 //! | `hardpoints` | `weapon<n>` with `weaponHardPoints<n>` (first node named); `STA64_fireArc<n>` the slot's own arc half-width in radians |
 //! | `build` | `dilithiumCost`, `latinumCost`, `metalCost`, `biomatterCost`, `buildTime` seconds, `officerCost`, `buildItem<n>` |
@@ -125,7 +126,7 @@ pub(crate) fn unit_def_for_profile(name: &str, odf: &Odf, phys: Option<&Odf>, pr
         None => d.initial_shields.unwrap_or_default(),
     };
     d.shields = ShieldDef { max: max_shields, recharge: r.fixed("shieldRate") / Fixed::from_int(TICK_HZ as i32) };
-    if matches!(profile, crate::Profile::Sta2Classic | crate::Profile::Fo4)
+    if matches!(profile, crate::Profile::Sta2Classic | crate::Profile::Fo4 | crate::Profile::Fo3)
         && max_key.is_none() && current_key.is_none()
     {
         d.shields.max = d.hull;
@@ -137,7 +138,16 @@ pub(crate) fn unit_def_for_profile(name: &str, odf: &Odf, phys: Option<&Odf>, pr
     if !matches!(d.class.0.as_str(), "planet" | "planet_obj" | "moon") {
         d.crew_gain = r.fixed("maxCrewGain").min(Fixed::from_int(1_000_000_000));
     }
+    d.sane_crew_loss = r.flag("saneCrewLossMethod").unwrap_or(false);
+    d.system_hit_points = [
+        r.fixed("enginesHitPoints"),
+        r.fixed("weaponsHitPoints"),
+        r.fixed("shieldGeneratorHitPoints"),
+        r.fixed("lifeSupportHitPoints"),
+        r.fixed("sensorsHitPoints"),
+    ];
     d.sensor = r.fixed("rangeScan");
+    d.attack_power = odf.raw("attackPower").map(|_| r.fixed("attackPower").max(Fixed::ZERO).min(Fixed::from_int(1_000_000)));
 
     for (n, raw) in numbered(odf, "weapon") {
         let weapon = raw.trim().trim_matches('"').trim();
