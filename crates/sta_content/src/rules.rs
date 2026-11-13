@@ -18,6 +18,18 @@ pub struct Rules {
     starts: Vec<StartRule>,
     /// `RTS_CFG.h`'s path-planner block, when the header has any of its keys.
     pathing: Option<PathingRules>,
+    /// Team crew accumulation (SIM-25), when the header or a race has a key.
+    crew: Option<CrewRules>,
+}
+
+/// Team crew rules: `STARTING_CREW_CAPACITY` from `RTS_CFG.h` and each race's
+/// `crewAccumulationRate` (crew per second per starbase).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CrewRules {
+    /// What a team can hold with no starbase or planet (`STARTING_CREW_CAPACITY`).
+    pub starting_capacity: Option<i64>,
+    /// Race key (lower case, sorted) and its accumulation rate per second.
+    pub races: Vec<(String, Fixed)>,
 }
 
 /// The path planner's terrain costs (SIM-23), from `RTS_CFG.h`'s PATHING
@@ -149,6 +161,9 @@ impl Rules {
             }
         }
         rules.pathing = PathingRules::from_cfg(&cfg, &mut warnings);
+        if let Some(cap) = cfg.i64("STARTING_CREW_CAPACITY").filter(|c| *c >= 0) {
+            rules.crew = Some(CrewRules { starting_capacity: Some(cap.min(1_000_000_000)), races: Vec::new() });
+        }
         (rules, warnings)
     }
 
@@ -161,6 +176,30 @@ impl Rules {
     pub fn with_pathing(mut self, pathing: PathingRules) -> Self {
         self.pathing = Some(pathing);
         self
+    }
+
+    /// The team crew rules, when the content has any.
+    pub fn crew(&self) -> Option<&CrewRules> {
+        self.crew.as_ref()
+    }
+
+    /// Set the crew rules (tests and content built in code).
+    pub fn with_crew(mut self, crew: CrewRules) -> Self {
+        self.crew = Some(crew);
+        self
+    }
+
+    /// The crew rules for the content hash; empty without any, so content
+    /// without them keeps its hash.
+    pub(crate) fn crew_hash_values(&self) -> Vec<u64> {
+        let Some(c) = &self.crew else { return Vec::new() };
+        let mut out = vec![u64::from(c.starting_capacity.is_some()), c.starting_capacity.unwrap_or(0) as u64, c.races.len() as u64];
+        for (race, rate) in &c.races {
+            out.push(race.len() as u64);
+            out.extend(race.bytes().map(u64::from));
+            out.push(rate.to_bits() as u64);
+        }
+        out
     }
 
     /// The path planner's values for the content hash; empty when the
@@ -187,6 +226,12 @@ impl Rules {
             })
             .collect();
         rules.starts.sort_by(|a, b| a.race.cmp(&b.race));
+        let mut rates: Vec<(String, Fixed)> = races.crew_rates().map(|(k, c)| (k.to_owned(), c.accumulation_rate)).collect();
+        if !rates.is_empty() {
+            rates.sort_by(|a, b| a.0.cmp(&b.0));
+            rates.dedup_by(|a, b| a.0 == b.0);
+            rules.crew.get_or_insert_with(CrewRules::default).races = rates;
+        }
         Ok((rules, warnings))
     }
 
@@ -255,5 +300,21 @@ mod pathing_tests {
         let (bad, warnings) = Rules::from_header("float NEBULAE_PATHING_SAFETY_COEFFICIENT = wide;\n");
         assert_eq!(bad.pathing().nebula_safety, PathingRules::default().nebula_safety);
         assert_eq!(warnings.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod crew_tests {
+    use super::*;
+
+    #[test]
+    fn starting_crew_capacity_is_read_and_reaches_the_hash_only_when_present() {
+        let (rules, _) = Rules::from_header("int STARTING_CREW_CAPACITY = 250;\n");
+        assert_eq!(rules.crew().unwrap().starting_capacity, Some(250));
+        assert!(!rules.crew_hash_values().is_empty());
+        let (other, _) = Rules::from_header("int STARTING_CREW_CAPACITY = 251;\n");
+        assert_ne!(rules.crew_hash_values(), other.crew_hash_values());
+        let (none, _) = Rules::from_header("int SOMETHING_ELSE = 1;\n");
+        assert!(none.crew().is_none() && none.crew_hash_values().is_empty());
     }
 }

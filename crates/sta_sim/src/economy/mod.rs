@@ -44,6 +44,7 @@ use crate::world::{Entities, EntityKind, Fnv, Table};
 pub const RESOURCES: usize = 4;
 
 mod passive;
+mod crew;
 mod personnel;
 
 /// What a fresh node holds.

@@ -324,6 +324,7 @@ impl Sim {
         if let Some(db) = &self.content {
             self.economy.step(&mut self.units, db, &mut self.events);
             self.economy.step_passive(&self.units, db, &self.players, &self.ai_seats, self.tick);
+            self.economy.step_crew(&self.units, db, self.tick);
             self.production.step(&mut self.units, db, &mut self.economy, &mut self.events, &mut self.confinement);
         }
         self.hold_welding_builders();

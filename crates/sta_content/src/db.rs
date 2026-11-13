@@ -553,6 +553,16 @@ fn hash_inner(db: &ContentDb, include_starting_rules: bool) -> u64 {
                         h.fixed(f);
                     }
                 }
+                // SIM-25: a starbase's race picks its crew accumulation rate.
+                if u.class.0 == "starbase" && db.rules.crew().is_some_and(|c| !c.races.is_empty()) {
+                    h.byte(0xf3);
+                    h.str(&u.race.trim().to_ascii_lowercase());
+                }
+                // SIM-25: only for stations that add crew capacity.
+                if u.crew_gain != Fixed::ZERO {
+                    h.byte(0xf2);
+                    h.fixed(u.crew_gain);
+                }
                 feature_bits(&mut h, u.features.as_ref(), &db.features);
                 // No new bytes for disabled/unsupported rules: old Native
                 // databases and genuine replay/save controls retain their hash.
@@ -638,6 +648,13 @@ fn hash_inner(db: &ContentDb, include_starting_rules: bool) -> u64 {
         h.byte(0xed);
         h.str("sta64.pathing-rules.v1");
         for value in pathing { h.u64(value); }
+    }
+    // SIM-25: only when the header or a race has crew keys.
+    let crew = db.rules.crew_hash_values();
+    if include_starting_rules && !crew.is_empty() {
+        h.byte(0xf0);
+        h.str("sta64.crew-rules.v1");
+        for value in crew { h.u64(value); }
     }
     h.0
 }

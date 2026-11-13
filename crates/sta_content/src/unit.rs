@@ -126,6 +126,10 @@ pub(crate) fn unit_def_for_profile(name: &str, odf: &Odf, phys: Option<&Odf>, pr
     }
     d.crew = r.fixed("crewCost");
     d.maximum_crew = odf.raw("maximumCrew").map(|_| r.fixed("maximumCrew"));
+    // Planets carry their own typed `planet_crew_gain` and ignore this key here.
+    if !matches!(d.class.0.as_str(), "planet" | "planet_obj" | "moon") {
+        d.crew_gain = r.fixed("maxCrewGain").min(Fixed::from_int(1_000_000_000));
+    }
     d.sensor = r.fixed("rangeScan");
 
     for (n, raw) in numbered(odf, "weapon") {
