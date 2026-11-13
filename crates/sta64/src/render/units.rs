@@ -293,7 +293,7 @@ fn attach_models(
         if let Some((lo, hi)) = bounds {
             commands.entity(e).insert(crate::render::overlays::ModelBounds::from_legacy(lo, hi, model_scale));
         }
-        let radius = bounds.map(|(lo, hi)| (Vec3::from(hi) - Vec3::from(lo)).length() * 0.5).unwrap_or(20.0) * model_scale;
+        let radius = bounds.map(|(lo, hi)| (Vec3::from(hi) - Vec3::from(lo)).length() * 0.5).unwrap_or(if def.resource.is_some() { 0.0 } else { 20.0 }) * model_scale;
         let centre = bounds.map(|(lo, hi)| crate::render::strategic::centre_for_bounds(lo, hi, model_scale)).unwrap_or_default();
         let mobile = def.movement.max_speed > sta_sim::Fixed::ZERO;
         let owned = owner.is_some_and(|o| o.0 != sta_sim::world::NEUTRAL);

@@ -184,11 +184,11 @@ pub(crate) fn ghost_pick_radius(def: &sta_content::UnitDef) -> Option<f32> {
 /// click radius of a resource node whose model has no extent of its own.
 pub(crate) const FIELD_RADIUS: f32 = 100.0;
 
-/// Click radius of a resource node from its model's bounding radius `r`: a node with
-/// no usable model extent (the latinum nebula's SOD has none) is a volume, picked by
-/// the field it is drawn as.
+/// Click radius of a resource node from its model's bounding radius `r` (zero when the
+/// model has no extent): a node with none (the latinum nebula's SOD has none) is a
+/// volume, picked by the field it is drawn as.
 pub(crate) fn resource_pick_radius(r: f32) -> f32 {
-    if r > 5.0 { r } else { FIELD_RADIUS }
+    if r > 0.0 { r.max(5.0) } else { FIELD_RADIUS }
 }
 
 /// What the sim is made from: the BZN converted to a `MapDef` (CON-07), a `GameSetup`
@@ -1093,7 +1093,7 @@ fn rebuild(
                 let radius = model
                     .bounds()
                     .map(|(lo, hi)| (Vec3::from(hi) - Vec3::from(lo)).length() * 0.5)
-                    .unwrap_or(20.0)
+                    .unwrap_or(if def.resource.is_some() { 0.0 } else { 20.0 })
                     * scale;
                 let radius = if def.resource.is_some() { resource_pick_radius(radius) } else { radius };
                 commands.entity(entity).insert(SelectRadius(radius.max(5.0)));
@@ -1499,6 +1499,8 @@ mod tests {
         moon.resource = Some(0);
         moon.radius = Fixed::from_int(260);
         assert_eq!(ghost_pick_radius(&moon), Some(260.0));
+        moon.radius = Fixed::from_int(2);
+        assert_eq!(ghost_pick_radius(&moon), Some(5.0));
         moon.radius = Fixed::ZERO;
         assert_eq!(ghost_pick_radius(&moon), Some(FIELD_RADIUS), "a volume without model extent is picked by its field");
         let mut node = get("fx_station");
@@ -1547,6 +1549,26 @@ mod tests {
                 assert_eq!(pick(&mut app, centre + across * r * 0.9), Some(EntityId(7)), "near edge, pitch {pitch}");
                 assert_eq!(pick(&mut app, centre + across * r * 1.3), None, "just outside, pitch {pitch}");
             }
+        }
+    }
+
+    /// A freighter mining inside a nebula's field is still the thing clicked, on either side of
+    /// the field's centre.
+    #[test]
+    fn a_ship_inside_a_resource_volume_is_picked_over_it() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut app = App::new();
+        let nebula = Vec3::new(0.0, 0.0, 0.0);
+        app.world_mut().spawn((crate::sim_link::SimEntity(EntityId(1)), SelectRadius(FIELD_RADIUS), GlobalTransform::from(Transform::from_translation(nebula))));
+        for (i, z) in [-40.0f32, 40.0].into_iter().enumerate() {
+            app.world_mut().spawn((crate::sim_link::SimEntity(EntityId(2 + i as u32)), SelectRadius(12.0), GlobalTransform::from(Transform::from_xyz(0.0, 0.0, z))));
+        }
+        let eye = Vec3::new(0.0, 866.0, 500.0);
+        for (i, z) in [-40.0f32, 40.0].into_iter().enumerate() {
+            let target = Vec3::new(0.0, 0.0, z);
+            let ray = Ray3d::new(eye, Dir3::new((target - eye).normalize()).unwrap());
+            let hit = app.world_mut().run_system_once(move |units: crate::input::select::Targetable| crate::input::select::unit_under(Vec2::ZERO, ray, &units)).unwrap();
+            assert_eq!(hit, Some(EntityId(2 + i as u32)));
         }
     }
 

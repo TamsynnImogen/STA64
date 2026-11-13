@@ -663,12 +663,17 @@ fn install_map_resource_objects_are_pickable_top_down() {
         nodes.push((u.id, def.odf.clone(), p, r));
     }
     assert!(!nodes.is_empty(), "the map has resource objects");
+    // Nodes whose spheres hold another node's centre may legitimately lose the centre ray.
+    let overlapped: Vec<_> = nodes.iter().filter(|a| nodes.iter().any(|b| b.0 != a.0 && b.2.distance(a.2) < a.3.max(b.3))).map(|a| a.0).collect();
     for (id, odf, p, r) in nodes {
         for off in [Vec3::ZERO, Vec3::X * r * 0.5] {
             let ray = Ray3d::new(p + off + Vec3::Y * 3000.0, Dir3::NEG_Y);
             let hit = app.world_mut().run_system_once(move |units: crate::input::select::Targetable| crate::input::select::unit_under(Vec2::ZERO, ray, &units)).unwrap();
             // A neighbouring node may share the ray; the one picked is a resource object.
             assert!(hit.is_some(), "{odf} {id:?}: a top-down ray at offset {off:?} (radius {r}) picks nothing");
+            if off == Vec3::ZERO && !overlapped.contains(&id) {
+                assert_eq!(hit, Some(id), "{odf}: the centre ray picks the node itself");
+            }
         }
     }
 }
