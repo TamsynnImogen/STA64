@@ -327,7 +327,7 @@ fn close_text(r: &CloseReason) -> Ended {
 /// Rejoining a running game after a lost connection is NET-04's (`Rejoin`/`Replayed`
 /// catch-up); the lobby offers the entry point and says why it is off.
 pub fn rejoin_unavailable() -> &'static str {
-    "Rejoining a running game is not built yet (NET-04). Ask the host to start a new game."
+    "Rejoining a running game is not available in the client yet: the host side and the snapshot transfer exist (NET-04), the client side is a follow-up of INT-M5. Ask the host to start a new game."
 }
 
 // ---------------------------------------------------------------------------

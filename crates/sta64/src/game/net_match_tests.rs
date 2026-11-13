@@ -404,7 +404,6 @@ fn a_client_that_drops_is_marked_and_the_others_play_on() {
     // Seat 2's connection dies without a word.
     game(&apps[2]).control().abort();
     let gone = apps.pop().unwrap();
-    let mut gone = gone;
     let before = game(&apps[0]).tick();
     until(&mut apps, "the host drops the seat", |a| a.iter().all(|x| game(x).read(|s| s.dropped.contains_key(&PlayerId(2)))));
     run_to(&mut apps, before + 600);

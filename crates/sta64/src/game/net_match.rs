@@ -728,12 +728,11 @@ impl NetShared {
             self.on_resync_event(e);
         }
         self.note_desync();
-        if self.peer.resync_failed() {
-            if let Some(d) = self.desync.as_mut() {
-                if !matches!(d.stage, DesyncStage::Stopped(_)) {
-                    d.stage = DesyncStage::Stopped("the host's state could not be loaded".into());
-                }
-            }
+        if self.peer.resync_failed()
+            && let Some(d) = self.desync.as_mut()
+            && !matches!(d.stage, DesyncStage::Stopped(_))
+        {
+            d.stage = DesyncStage::Stopped("the host's state could not be loaded".into());
         }
         if let Some(d) = self.desync.as_mut()
             && d.stage == DesyncStage::Repairing
@@ -770,10 +769,10 @@ pub fn clear_net(mut commands: Commands, game: Option<Res<NetGame>>, start: Opti
         s.control.leave();
     }
     commands.remove_resource::<NetGame>();
-    if let Some(mut s) = start {
-        if let Some(nm) = s.0.take() {
-            nm.control.leave();
-        }
+    if let Some(mut s) = start
+        && let Some(nm) = s.0.take()
+    {
+        nm.control.leave();
     }
 }
 
