@@ -29,20 +29,20 @@ mod viewer;
 use app::LaunchConfig;
 use bevy::prelude::*;
 
+/// The info overlay's two mount lines: the install and the layers mounted over it.
+pub(crate) fn mount_summary(root: &std::path::Path, vfs: &sta_vfs::Vfs) -> String {
+    let chain: Vec<_> = vfs.layers().iter().map(|l| l.name()).collect();
+    let archives = vfs.layers().iter().map(|l| l.archives.len()).sum::<usize>();
+    format!("Install: {}\nMounted: {}  ({} FPQ archives)", root.display(), chain.join(" -> "), archives)
+}
+
 fn mount(cfg: &LaunchConfig) -> (sta_vfs::Vfs, String) {
     let Some(root) = &cfg.install_root else {
         return (sta_vfs::Vfs::default(), "No install root".into());
     };
     match sta_vfs::Vfs::mount_install(root, cfg.active_mod.as_deref()) {
         Ok(vfs) => {
-            let chain: Vec<_> = vfs.layers().iter().map(|l| l.name()).collect();
-            let archives = vfs.layers().iter().map(|l| l.archives.len()).sum::<usize>();
-            let summary = format!(
-                "Install: {}\nMounted: {}  ({} FPQ archives)",
-                root.display(),
-                chain.join(" -> "),
-                archives
-            );
+            let summary = mount_summary(root, &vfs);
             (vfs, summary)
         }
         Err(e) => (
