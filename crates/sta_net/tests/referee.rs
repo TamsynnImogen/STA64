@@ -1055,7 +1055,8 @@ fn over_relay(players: u8, policy: RefereePolicy) -> Room {
 }
 
 /// How far ahead of the referee a seat may run over the real relay, in ticks
-/// (50 turns of the 128 a referee holds, `MAX_QUEUED_TURNS`). The seats of
+/// (50 turns: under the 128 a referee queues, `MAX_QUEUED_TURNS`, and the 64
+/// digests a router keeps, `DIGESTS_KEPT`, which is the tighter limit). The seats of
 /// these tests step as fast as the CPU lets them, which a game never does (it
 /// runs 10 turns a second); unpaced, how far they get ahead of the referee
 /// depends on how the OS schedules the relay threads, and on a slow Windows
@@ -1136,7 +1137,7 @@ fn a_paced_room_waits_for_a_referee_that_was_held_back() {
         assert!(Instant::now() < end, "{}", r.status());
     }
     assert_eq!(r.referee.peer().tick(), 0);
-    assert!(r.peers.iter().all(|p| p.tick() <= RELAY_LEAD + 3), "{}", r.status());
+    assert!(r.peers.iter().all(|p| (RELAY_LEAD..=RELAY_LEAD + 3).contains(&p.tick())), "{}", r.status());
     closed.store(false, Ordering::Relaxed);
     r.run_until("tick 600", |r| r.all_at(600));
     assert!(r.referee.findings().is_empty() && !r.any_halted());
@@ -1303,11 +1304,11 @@ mod processes {
         let wait = Duration::from_secs(90);
         let mut host = Proc::spawn(
             netplay,
-            &["host", "--relay", &addr, "--peers", "2", "--referee", "--ticks", "1500", "--hz", "0"],
+            &["host", "--relay", &addr, "--peers", "2", "--referee", "--ticks", "1500", "--hz", "150"],
         );
         let room = host.wait_for("ROOM ", wait);
         let code = room.trim_start_matches("ROOM ").trim().to_owned();
-        let join = Proc::spawn(netplay, &["join", "--relay", &addr, "--code", &code, "--ticks", "1500", "--hz", "0"]);
+        let join = Proc::spawn(netplay, &["join", "--relay", &addr, "--code", &code, "--ticks", "1500", "--hz", "150"]);
         host.wait_for("JOINED seat 1", wait);
         let out = std::env::temp_dir().join(format!("sta-referee-{}", std::process::id()));
         let mut referee = Proc::spawn(
@@ -1325,6 +1326,8 @@ mod processes {
         let rdone = done(&rout);
         assert_eq!(rcode, 0, "{rout:?}");
         assert!(rdone.contains("diverged=[]"), "{rdone}");
+        // Seats paced at 150 Hz (5x a game), not free-running: a referee that gave up (Behind) is no verdict.
+        assert_ne!(field(&rdone, "ended"), "behind", "{rdone}");
         assert!(field(&rdone, "tick").parse::<u64>().unwrap() > 100, "{rdone}");
         let _ = std::fs::remove_dir_all(&out);
         drop(relay);
