@@ -132,7 +132,8 @@ impl SessionCfg {
             engine: engine_id(),
             content: data.content.clone(),
             name: clean_name(name, ""),
-            lineage: data.base_name.clone().unwrap_or_default(),
+            // The content's own lineage, which a snapshot's provenance is checked against (NET-04).
+            lineage: data.content.lineage().to_owned(),
             races: data.races(),
             maps: data.maps.iter().map(MapInfo::of).collect(),
             seed: None,
@@ -326,7 +327,7 @@ fn close_text(r: &CloseReason) -> Ended {
 /// Rejoining a running game after a lost connection is NET-04's (`Rejoin`/`Replayed`
 /// catch-up); the lobby offers the entry point and says why it is off.
 pub fn rejoin_unavailable() -> &'static str {
-    "Rejoining a running game is not built yet (NET-04). Ask the host to start a new game."
+    "Rejoining a running game is not available in the client yet (the snapshot transfer exists, the client side is not wired). Ask the host to start a new game. (NET-04)"
 }
 
 // ---------------------------------------------------------------------------
@@ -456,6 +457,11 @@ pub struct NetMatch {
     pub control: NetControl,
     /// The seats' builds (from their `Hello`s) for the desync sidecar; the host's only.
     pub engines: Vec<(PlayerId, EngineId)>,
+    /// The `rejoin_token` each guest got in its `Welcome` (the host's only), for
+    /// `Peer::serve_rejoins`.
+    pub tokens: Vec<(PlayerId, u64)>,
+    /// This seat's own `rejoin_token` from the host's `Welcome` (a guest's only).
+    pub my_token: Option<u64>,
     /// `GameSetup` from [`Start::player_setups`] for this seat.
     pub setup: GameSetup,
     transport: Option<SyncCell<Box<dyn Transport>>>,
@@ -534,6 +540,7 @@ pub struct Session {
     kicks: Vec<(PlayerId, Instant)>,
     // Joiner.
     welcomed: bool,
+    my_token: Option<u64>,
     lobby: Option<LobbyState>,
     asked: Instant,
     my_choice: Option<SeatChoice>,
@@ -572,6 +579,7 @@ impl Session {
             host_team: 0,
             kicks: Vec::new(),
             welcomed: false,
+            my_token: None,
             lobby: None,
             asked: Instant::now(),
             my_choice: None,
@@ -1260,7 +1268,7 @@ impl Session {
                             },
                             name: v.name.clone(),
                             lineage: if i == 0 { self.cfg.lineage.clone() } else { g.map_or_else(String::new, |g| g.lineage.clone()) },
-                            packs: g.map_or_else(Vec::new, |g| g.packs.clone()),
+                            packs: if i == 0 { self.cfg.content.packs().iter().map(|n| PackInfo { name: n.clone(), version: String::new() }).collect() } else { g.map_or_else(Vec::new, |g| g.packs.clone()) },
                         },
                         ready: v.ready,
                     }
@@ -1314,7 +1322,7 @@ impl Session {
                     },
                     name: if p.kind == Kind::Open { String::new() } else { v.name.clone() },
                     lineage: if i == 0 { self.cfg.lineage.clone() } else { g.map_or_else(String::new, |g| g.lineage.clone()) },
-                    packs: g.map_or_else(Vec::new, |g| g.packs.clone()),
+                    packs: if i == 0 { self.cfg.content.packs().iter().map(|n| PackInfo { name: n.clone(), version: String::new() }).collect() } else { g.map_or_else(Vec::new, |g| g.packs.clone()) },
                 }
             })
             .collect();
@@ -1359,7 +1367,8 @@ impl Session {
         };
         let inner = self.transport.take().ok_or("The connection is closed.")?;
         let transport: Box<dyn Transport> = Box::new(Early { first: std::mem::take(&mut self.early), inner });
-        self.started = Some(NetMatch { start, me: self.me, control: self.control.clone(), engines, setup, transport: Some(SyncCell::new(transport)) });
+        let tokens = (1..MAX_SEATS).filter_map(|i| self.guests[i].as_ref().map(|g| (PlayerId(i as u8), g.token))).collect();
+        self.started = Some(NetMatch { start, me: self.me, control: self.control.clone(), engines, tokens, my_token: self.my_token, setup, transport: Some(SyncCell::new(transport)) });
         self.phase = Phase::Launched;
         self.changed = true;
         Ok(())
@@ -1371,6 +1380,7 @@ impl Session {
         match msg {
             Message::Welcome(w) if from == PlayerId(0) && w.slot == self.me => {
                 self.welcomed = true;
+                self.my_token = Some(w.rejoin_token);
                 self.phase = Phase::Open;
                 self.changed = true;
             }

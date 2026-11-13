@@ -10,7 +10,7 @@ use std::time::Instant;
 use sta_content::{ContentDb, MapDef};
 use sta_core::{PlayerId, Tick};
 use sta_sim::command::{Command, CommandRouter};
-use sta_sim::replay::Replay;
+use sta_sim::replay::{Replay, StartRec};
 use sta_sim::digest::SectionDigests;
 use sta_sim::setup::GameSetup;
 use sta_sim::{SimEvent, WorldSource};
@@ -153,6 +153,14 @@ impl Peer {
             net: NetState::default(),
             replay_from: 0,
         })
+    }
+
+    /// Records how the sim's seats got their starting forces in the replay
+    /// (`StartRec::Races` after `Sim::from_setup_with_starts`), so a desync
+    /// report is rebuilt the way the game was (INT-M5). The default is
+    /// `StartRec::Bare`, which is what [`Peer::start`] builds.
+    pub fn set_starts(&mut self, starts: StartRec) {
+        self.replay.starts = starts;
     }
 
     /// Records each seat's build identity (from its `Hello`) for the desync
