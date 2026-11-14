@@ -438,9 +438,8 @@ impl Economy {
                             break;
                         }
                         // Round the resource, for as long as the beam works.
-                        match (mining_range(db, def), node_pos) {
-                            (Some(range), Some(np)) => set_target(units, id, orbit_point(db, id, pos, node_def, np, range)),
-                            _ => set_target(units, id, None),
+                        if let (Some(range), Some(np)) = (mining_range(db, def), node_pos) {
+                            set_target(units, id, orbit_point(db, id, pos, node_def, np, range));
                         }
                         let take = cfg.rate.min(cfg.capacity - m.cargo).min(left);
                         m.cargo = m.cargo + take;
@@ -452,8 +451,11 @@ impl Economy {
                     }
                     Phase::ToDock => {
                         let Some(at) = nearest_station(units, owner, pos) else {
-                            // No station: the orbit point must not outlive the work.
-                            set_target(units, id, None);
+                            // No station: the orbit point of a beam-armed freighter must not outlive the
+                            // work. A freighter without a beam keeps its target (as on main; no rule measured).
+                            if mining_range(db, def).is_some() {
+                                set_target(units, id, None);
+                            }
                             break;
                         };
                         // Off a moon the freighter keeps circling until the station lies on its

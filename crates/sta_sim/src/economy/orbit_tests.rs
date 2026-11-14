@@ -327,3 +327,21 @@ fn several_freighters_unload_at_one_station_on_the_smooth_model() {
     }
     assert!(delivered >= 8, "{delivered} deliveries: some freighter never unloaded");
 }
+/// A freighter without a mining beam whose station is destroyed on the way back keeps its target
+/// (as on main: no rule measured); only beam-armed miners drop theirs with the work.
+#[test]
+fn a_beamless_freighter_keeps_its_target_when_the_station_is_destroyed_on_the_way_back() {
+    let mut sim = orbit_game();
+    let moon = spawn(&mut sim, "fx_moon", NEUTRAL, v(0, 0));
+    let st = spawn(&mut sim, "fx_station", PlayerId(0), v(3000, 0));
+    let m = spawn(&mut sim, "fx_miner", PlayerId(0), v(100, 0));
+    assert!(mine(&mut sim, 0, m, moon));
+    until(&mut sim, m, MinerPhase::ToDock, 3000);
+    for _ in 0..3 { sim.step(&[]); }
+    assert_eq!(sim.unit(m).unwrap().target, Some(v(3000, 0)));
+    sim.despawn(st, None);
+    for _ in 0..5 {
+        sim.step(&[]);
+        assert_eq!(sim.unit(m).unwrap().target, Some(v(3000, 0)), "the target was cleared");
+    }
+}
