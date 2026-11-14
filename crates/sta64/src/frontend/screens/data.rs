@@ -327,6 +327,10 @@ impl SetupDraft {
 #[derive(Resource, Debug, Clone, Default, PartialEq, Eq)]
 pub struct SelectedMod(pub Option<String>);
 
+/// The mod whose content is mounted, updated by the host only after a successful mount.
+#[derive(Resource, Debug, Clone, Default, PartialEq, Eq)]
+pub struct ActiveMod(pub Option<String>);
+
 /// Which row a list screen has picked, before the player confirms.
 #[derive(Resource, Debug, Clone, Default, PartialEq, Eq)]
 pub struct Browse {

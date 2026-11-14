@@ -11,10 +11,10 @@ use bevy::window::ExitCondition;
 
 use super::{StockBox, layout};
 use crate::app::{AppState, configure_sets};
-use crate::frontend::screens::{Screen, ScreenData, ScreensCamera, ScreensConfig, ScreensPlugin};
+use crate::frontend::screens::{ActiveMod, Screen, ScreenData, ScreensCamera, ScreensConfig, ScreensPlugin};
 use crate::ui::profile::{UiProfile, UiProfilePlugin};
 
-fn capture(size: UVec2, name: &str, mounted: Option<sta_vfs::Vfs>) {
+fn capture(size: UVec2, name: &str, mod_title: Option<&str>, mounted: Option<sta_vfs::Vfs>) {
     let mut app = App::new();
     app.add_plugins(DefaultPlugins
         .set(WindowPlugin { primary_window: None, exit_condition: ExitCondition::DontExit, ..default() })
@@ -24,10 +24,15 @@ fn capture(size: UVec2, name: &str, mounted: Option<sta_vfs::Vfs>) {
         .disable::<bevy::log::LogPlugin>());
     configure_sets(&mut app);
     let scale = size.y as f32 / 1080.0;
+    let mut data = ScreenData::fake();
+    if let Some(title) = mod_title {
+        data.mods[0].name = title.into();
+    }
     app.insert_resource(UiProfile::Armada2)
         .insert_resource(UiScale(scale))
         .insert_resource(StockBox(layout::fit_box(Vec2::new(size.x as f32, size.y as f32) / scale)))
-        .insert_resource(ScreenData::fake())
+        .insert_resource(data)
+        .insert_resource(ActiveMod(mod_title.map(|_| "fx_balance".into())))
         .insert_resource(ScreensConfig { own_camera: false, fit_scale: false, start: Screen::Main, ..default() })
         .insert_state(AppState::FrontEnd)
         .add_plugins(UiProfilePlugin);
@@ -63,8 +68,17 @@ fn capture(size: UVec2, name: &str, mounted: Option<sta_vfs::Vfs>) {
     let lit = rgba.pixels().filter(|p| p[0] > 30 || p[1] > 30 || p[2] > 30).count();
     let gold = rgba.pixels().filter(|p| p[0] > 150 && p[1] > 80 && p[2] < 120).count();
     assert!(lit > 2500, "{name}: missing menu text ({lit} visible pixels)");
-    assert!(gold > 2000, "{name}: missing title/divider ({gold} gold pixels)");
+    // A short active-mod name has fewer gold glyph pixels than the old fixed title.
+    assert!(gold > 800, "{name}: missing title/divider ({gold} gold pixels)");
     if size == UVec2::new(1920, 1080) {
+        let title_ink = rgba.enumerate_pixels().filter(|(x, y, p)|
+            (150..1780).contains(x) && (150..334).contains(y)
+                && p[0] > 150 && p[1] > 80 && p[2] < 120).count();
+        assert!(title_ink > 500, "{name}: missing active-mod title ({title_ink} gold pixels)");
+        assert!(!rgba.enumerate_pixels().any(|(x, y, p)|
+            (1784..1920).contains(&x) && (150..342).contains(&y)
+                && p[0] > 150 && p[1] > 80 && p[2] < 120),
+            "{name}: title ink extends past the title region");
         // Check the visible ink, not only its parent rectangle: the reference
         // puts the first caption near y=376, below a clear title/divider gap.
         let first_ink = rgba.enumerate_pixels().filter(|(x, y, p)|
@@ -73,7 +87,7 @@ fn capture(size: UVec2, name: &str, mounted: Option<sta_vfs::Vfs>) {
             .map(|(_, y, _)| y).min().expect("first main-menu caption");
         assert!((370..=385).contains(&first_ink), "{name}: first caption ink starts at {first_ink}");
         assert!(!rgba.enumerate_pixels().any(|(x, y, p)|
-            (150..600).contains(&x) && (334..342).contains(&y)
+            (150..1780).contains(&x) && (334..342).contains(&y)
                 && p[0] > 150 && p[1] > 80 && p[2] < 120),
             "{name}: title ink reaches the divider gap");
     }
@@ -94,12 +108,14 @@ fn main_menu_renders_without_a_window() {
         (UVec2::new(1280, 960), "4x3"),
         (UVec2::new(3440, 1440), "ultrawide"),
     ] {
-        capture(size, name, None);
+        capture(size, name, None, None);
     }
+    capture(UVec2::new(1920, 1080), "short-mod", Some("Roots"), None);
+    capture(UVec2::new(1920, 1080), "long-mod", Some("Expanded Fleet Operations and Starship Construction Project"), None);
     if let Ok(install) = std::env::var("STA64_TEST_INSTALL") {
         let active_mod = std::env::var("STA64_TEST_MOD").ok().filter(|name| !name.is_empty());
         let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod.as_deref())
             .expect("main-menu capture install mount");
-        capture(UVec2::new(1920, 1080), "mounted", Some(vfs));
+        capture(UVec2::new(1920, 1080), "mounted", None, Some(vfs));
     }
 }

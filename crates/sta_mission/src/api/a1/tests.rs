@@ -305,7 +305,7 @@ const CASES: &[(&str, &str, Expect)] = &[
     ("TransferFlag", "A1.TransferFlag(1, 2)", Fine),
     ("DoesNotExist", "assert(A1.DoesNotExist(0))", Fine),
     ("SetYellowAlert", "A1.SetYellowAlert(a)", Fine),
-    ("IsDerelict", "A1.IsDerelict(a)", Fail),
+    ("IsDerelict", "assert(A1.IsDerelict(a) == false and A1.IsDerelict(0) == true)", Fine),
     ("IsThereARomulanSpyOnShip", "A1.IsThereARomulanSpyOnShip(a)", Fail),
     ("GetTranswarpExitWormhole", "A1.GetTranswarpExitWormhole(a)", Fail),
     ("AddTransporterEffect", "A1.AddTransporterEffect(a)", Fine),
@@ -778,8 +778,8 @@ fn seam_gap_queries_name_what_is_missing() {
     let message = fails(&s, "A1.InStopMode(a)");
     assert!(message.contains("not available") && message.contains("order state"), "{message}");
     let rt = runtime(&s);
-    let _ = rt.eval::<()>("A1.IsDerelict(a)");
-    assert!(rt.unsupported().iter().any(|(k, _)| k.starts_with("A1.IsDerelict")));
+    let _ = rt.eval::<()>("A1.IsThereARomulanSpyOnShip(a)");
+    assert!(rt.unsupported().iter().any(|(k, _)| k.starts_with("A1.IsThereARomulanSpyOnShip")));
 }
 
 #[test]

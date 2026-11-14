@@ -518,10 +518,17 @@ trade state in the world view).
 `IsCompromised(object, team)` (LUA-12) is true when the object has been lost
 to `team`: gone or dying, not a craft or station, a derelict (crew under one
 with a positive maximum), or owned by another team than `team` (numbered like
-`GetRealTeam`). Read from the executable, static; not measured. Approximated:
-the engine's derelict latch (the `CraftCannotDie` exemption, clearing only
-when crew returns to one) and the original owner during a temporary takeover
-(listed on SIM-59; `GetRealTeam` has the same approximation).
+`GetRealTeam`). Read from the executable, static; not measured. The derelict
+test is shared with `IsDerelict` (LUA-26): the view's crew pair, which equals
+the sim's latch (including the `CraftCannotDie` top-up and the clear when crew
+returns to one) where the casualty model runs; divergences are listed in
+`conditions/derelict.rs`. Approximated: the original owner during a temporary
+takeover (listed on SIM-59; `GetRealTeam` has the same approximation).
+
+`IsDerelict(object)` (LUA-26): true for a missing, dying or non-craft handle,
+else that derelict test. A pending, failed or unknown `BuildObject` token raises
+(tainted) via `dead_handle`, as the other dead-handle answers do; the A1 alias answers
+true for a failed or unknown token and raises only for a pending one. Read from the executable, static; not measured.
 
 Evidence: signatures and argument constants read from the executable and the
 rule DLLs, static. The team / radius / ODF-filter readings follow the `A1`
@@ -629,7 +636,7 @@ from the stock scripts' constants; not measured otherwise.
   `SetCanBeDecommissioned` the typed edit the sim rejects today (reported and
   counted by the edit feedback); `DisableShieldGenerator`, `SetShieldPercent`,
   `SetMaxShields` and `Damage<System>` are applied by the sim (SIM-55).
-- Calls with no sim seam (position, per-team targeting, hidden/derelict/name/population/wormhole/cargo/fleet state) raise
+- Calls with no sim seam (position, per-team targeting, hidden/name/population/wormhole/cargo/fleet state) raise
   and are counted; see `seams()` for each reason.
 
 
