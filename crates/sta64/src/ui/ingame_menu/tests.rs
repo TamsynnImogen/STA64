@@ -423,3 +423,34 @@ fn every_page_fits_every_window_shape_and_ui_scale() {
         }
     }
 }
+
+
+#[cfg(not(target_os = "android"))]
+#[test]
+fn direct_match_graphics_options_apply_without_frontend_screens() {
+    use crate::frontend::screens::{WindowSize, view::{SettingToggle, WindowSizeSelect}};
+    use crate::ui::theme::{DropdownChanged, ToggleChanged};
+    let mut app = App::new();
+    app.add_plugins((MinimalPlugins, StatesPlugin));
+    configure_sets(&mut app);
+    app.insert_state(AppState::InGame)
+        .add_plugins((InGameMenuPlugin, crate::ui::display::DisplayPlugin));
+    let window = app.world_mut().spawn((Window {
+        resolution: WindowResolution::new(1200, 800), ..default()
+    }, PrimaryWindow)).id();
+    *app.world_mut().resource_mut::<InGameMenu>() = InGameMenu { open: true, page: MenuPage::Options };
+    app.world_mut().resource_mut::<OptionsTab>().0 = 2;
+    for _ in 0..3 { app.update(); }
+    assert!(!app.is_plugin_added::<ScreensPlugin>());
+    let dropdown = app.world_mut().query_filtered::<Entity, With<WindowSizeSelect>>().single(app.world()).unwrap();
+    app.world_mut().write_message(DropdownChanged { entity: dropdown, index: 3 });
+    for _ in 0..2 { app.update(); }
+    assert_eq!(app.world().resource::<Settings>().window_size, WindowSize::R1600x900);
+    let w = app.world().get::<Window>(window).unwrap();
+    assert_eq!((w.resolution.physical_width(), w.resolution.physical_height()), (1600, 900));
+    let toggle = app.world_mut().query::<(Entity, &SettingToggle)>().iter(app.world())
+        .find(|(_, key)| key.0 == SettingKey::ShowFps).unwrap().0;
+    app.world_mut().write_message(ToggleChanged { entity: toggle, on: true });
+    app.update();
+    assert!(app.world().resource::<Settings>().show_fps);
+}

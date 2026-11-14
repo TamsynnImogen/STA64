@@ -304,7 +304,7 @@ const CASES: &[(&str, &str, Expect)] = &[
     ("TransferFlag", "A1.TransferFlag(1, 2)", Fine),
     ("DoesNotExist", "assert(A1.DoesNotExist(0))", Fine),
     ("SetYellowAlert", "A1.SetYellowAlert(a)", Fine),
-    ("IsDerelict", "A1.IsDerelict(a)", Fail),
+    ("IsDerelict", "assert(A1.IsDerelict(a) == false and A1.IsDerelict(0) == true)", Fine),
     ("IsThereARomulanSpyOnShip", "A1.IsThereARomulanSpyOnShip(a)", Fail),
     ("GetTranswarpExitWormhole", "A1.GetTranswarpExitWormhole(a)", Fail),
     ("AddTransporterEffect", "A1.AddTransporterEffect(a)", Fine),
@@ -583,6 +583,20 @@ fn switches_alerts_speed_and_resources_become_edits() {
 }
 
 #[test]
+fn a1_impulse_speed_on_an_absent_handle_does_nothing() {
+    let s = scene();
+    let (_, commands) = run(&s, "A1.SetImpulseSpeed(123456, 20)");
+    assert!(commands.is_empty(), "{commands:?}");
+}
+
+#[test]
+fn a1_impulse_speed_on_a_station_does_nothing() {
+    let s = scene();
+    let (_, commands) = run(&s, "A1.SetImpulseSpeed(s, 20)");
+    assert!(commands.is_empty(), "{commands:?}");
+}
+
+#[test]
 fn orders_are_sent_as_the_owner() {
     let s = scene();
     let [a, b, st, _] = s.ids;
@@ -777,8 +791,8 @@ fn seam_gap_queries_name_what_is_missing() {
     let message = fails(&s, "A1.InStopMode(a)");
     assert!(message.contains("not available") && message.contains("order state"), "{message}");
     let rt = runtime(&s);
-    let _ = rt.eval::<()>("A1.IsDerelict(a)");
-    assert!(rt.unsupported().iter().any(|(k, _)| k.starts_with("A1.IsDerelict")));
+    let _ = rt.eval::<()>("A1.IsThereARomulanSpyOnShip(a)");
+    assert!(rt.unsupported().iter().any(|(k, _)| k.starts_with("A1.IsThereARomulanSpyOnShip")));
 }
 
 #[test]

@@ -35,7 +35,7 @@ use super::{LocalRace, SkirmishCfg, verdict};
 use crate::app::{AppState, GameSet, Opponent};
 use crate::frontend::loading::{LoadInfo, LoadProgress, LoadReport, LoadStage};
 use crate::frontend::scene::{MenuMap, MenuSceneConfig};
-use crate::frontend::screens::{MapEntry, ModChosen, ScreenData, SetupDraft, StartGame};
+use crate::frontend::screens::{ActiveMod, MapEntry, ModChosen, ScreenData, SetupDraft, StartGame};
 use crate::map::{Catalogue, MapBrowser, MapSeat};
 use crate::sim_link::{CommandQueue, Selection, SimLink};
 use crate::ui::notices::{Notice, Severity};
@@ -117,6 +117,7 @@ impl Plugin for FlowPlugin {
             app.init_state::<AppState>();
         }
         app.add_plugins((super::mission_host::MissionHostPlugin, super::net_match::NetMatchPlugin, super::net_overlay::NetOverlayPlugin)).insert_resource(Flow)
+            .init_resource::<ActiveMod>()
             .add_message::<Notice>()
             .add_message::<StartGame>()
             .add_message::<ModChosen>()
@@ -468,6 +469,7 @@ fn remount(
         }
     }
     mounted.0 = vfs;
+    commands.insert_resource(ActiveMod(folder));
 }
 
 /// Make the campaign resources match the mount: the book when the install has campaigns, none

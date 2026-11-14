@@ -327,6 +327,10 @@ impl SetupDraft {
 #[derive(Resource, Debug, Clone, Default, PartialEq, Eq)]
 pub struct SelectedMod(pub Option<String>);
 
+/// The mod whose content is mounted, updated by the host only after a successful mount.
+#[derive(Resource, Debug, Clone, Default, PartialEq, Eq)]
+pub struct ActiveMod(pub Option<String>);
+
 /// Which row a list screen has picked, before the player confirms.
 #[derive(Resource, Debug, Clone, Default, PartialEq, Eq)]
 pub struct Browse {
@@ -350,6 +354,59 @@ pub enum SettingKey {
     LcarsUi,
 }
 
+/// Window size to request while windowed. Automatic leaves the current size alone.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum WindowSize {
+    #[default]
+    Automatic,
+    R1024x768,
+    R1280x720,
+    R1600x900,
+    R1920x1080,
+    R2560x1440,
+}
+
+impl WindowSize {
+    pub const ALL: [Self; 6] = [Self::Automatic, Self::R1024x768, Self::R1280x720, Self::R1600x900, Self::R1920x1080, Self::R2560x1440];
+
+    pub const fn dimensions(self) -> Option<(u32, u32)> {
+        match self {
+            Self::Automatic => None,
+            Self::R1024x768 => Some((1024, 768)),
+            Self::R1280x720 => Some((1280, 720)),
+            Self::R1600x900 => Some((1600, 900)),
+            Self::R1920x1080 => Some((1920, 1080)),
+            Self::R2560x1440 => Some((2560, 1440)),
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Automatic => "Automatic",
+            Self::R1024x768 => "1024 x 768",
+            Self::R1280x720 => "1280 x 720",
+            Self::R1600x900 => "1600 x 900",
+            Self::R1920x1080 => "1920 x 1080",
+            Self::R2560x1440 => "2560 x 1440",
+        }
+    }
+
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Automatic => "auto",
+            Self::R1024x768 => "1024x768",
+            Self::R1280x720 => "1280x720",
+            Self::R1600x900 => "1600x900",
+            Self::R1920x1080 => "1920x1080",
+            Self::R2560x1440 => "2560x1440",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|size| size.key() == key)
+    }
+}
+
 /// The player's settings. The screen edits them; what reads them (audio, the
 /// window, the camera) is each lane's to wire, by watching this resource.
 #[derive(Resource, Debug, Clone, PartialEq)]
@@ -360,6 +417,7 @@ pub struct Settings {
     pub effects: f32,
     pub voice: f32,
     pub scroll_speed: f32,
+    pub window_size: WindowSize,
     pub fullscreen: bool,
     pub vsync: bool,
     pub show_fps: bool,
@@ -373,7 +431,7 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { master: 80.0, music: 60.0, effects: 80.0, voice: 80.0, scroll_speed: 50.0, fullscreen: false, vsync: true, show_fps: false, lcars_ui: false, player_name: String::new(), relay: String::new() }
+        Settings { master: 80.0, music: 60.0, effects: 80.0, voice: 80.0, scroll_speed: 50.0, window_size: WindowSize::Automatic, fullscreen: false, vsync: true, show_fps: false, lcars_ui: false, player_name: String::new(), relay: String::new() }
     }
 }
 

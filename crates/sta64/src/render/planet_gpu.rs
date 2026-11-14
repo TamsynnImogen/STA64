@@ -253,9 +253,8 @@ fn colony_lights_frames_on_a_stock_map() {
             app.world_mut().resource_mut::<Scenario>().ticks = 0;
             let drawn = app.world_mut().query::<&PlanetCities>().iter(app.world()).map(|c| c.drawn.pop).fold(f32::NAN, f32::max);
             eprintln!("{name} {pname}: drawn population {drawn}");
-            // As the planet meshes are drawn (`CITY_RADIUS`) the camera sees the far wall of the sphere: from the key
-            // light's side it sees the hemisphere that faces away from the key light.
-            for (side, sname) in [(-1.0, "lit"), (1.0, "dark")] {
+            // The camera on the key light's side sees the lit hemisphere, on the far side the dark one.
+            for (side, sname) in [(1.0, "lit"), (-1.0, "dark")] {
                 app.world_mut().resource_mut::<Scenario>().side = side;
                 shoot(&mut app, format!("{name}-{pname}-{sname}{suffix}"));
             }

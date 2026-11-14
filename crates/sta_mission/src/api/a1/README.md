@@ -124,7 +124,7 @@ Armada I.
 Queries raise an error naming the missing data (also `strength_team_1`, `strength_team_2`, `hot_float_value`): `InStopMode InAttackMode
 OutOfSpecialAttackMode InQueue GetAttackLocation UnderAttack
 GetAllyShipAttacks GetAllyStationAttacks GetDilithiumOnFreighter
-IsDerelict IsThereARomulanSpyOnShip GetTranswarpExitWormhole
+IsThereARomulanSpyOnShip GetTranswarpExitWormhole
 GetNearestTranswarpGate`.
 
 `AI_Team_Load_AIP` queues the file like `Player:loadAIP` for the host's AI seats (AI-06).
@@ -145,3 +145,8 @@ as before. In the path form `GetDistance(h, path, i)` an absent handle answers 1
 live handle an unknown path still raises (LUA-18's rule owns it; the exe answers 1e30). Pending `BuildObject` tokens
 still raise. A handle that was never alive because of a gap, or that an earlier failed call named, is noted as a
 tainted read (LUA-13); one that was alive and is destroyed answers cleanly.
+
+`IsDerelict(object)` (LUA-26) is the A2 binding under the A1 name: true for a gone, dying or non-craft
+handle, else the derelict test on the view's crew pair (see `a2/conditions/derelict.rs`: the whole A1 profile
+has no casualty model, so a crew edit never latches or tops up there). A pending `BuildObject` handle
+raises ("still being built"), a failed or unknown one answers true. Read from the executable, static.
