@@ -109,23 +109,27 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
     // `GetDistance(a, b)` and `GetDistance(object, path, point)`.
     table.set("GetDistance", def(lua, env, "GetDistance", &["hh", "hsi"], |lua, e, ov, a| {
         // An object naming nothing live, on either side: the engine answers 1e30 (LUA-21).
+        // Both handles are judged, first then second, before answering: a pending token or a
+        // tainted handle in either slot is raised on or noted.
         let from = e.ctx.borrow().alive(a[0].id()).map(|u| pos_f64(u.pos));
-        let Some(from) = from else {
-            e.ctx.borrow().dead_handle("A1", "GetDistance", a[0].id())?;
-            return Ok(Value::Number(ABSENT_DISTANCE));
-        };
         let to = if ov == 0 {
+            let to = e.ctx.borrow().alive(a[1].id()).map(|u| pos_f64(u.pos));
             let c = e.ctx.borrow();
-            match c.alive(a[1].id()) {
-                Some(u) => pos_f64(u.pos),
-                None => {
-                    c.dead_handle("A1", "GetDistance", a[1].id())?;
-                    return Ok(Value::Number(ABSENT_DISTANCE));
-                }
+            if from.is_none() {
+                c.dead_handle("A1", "GetDistance", a[0].id())?;
             }
+            if to.is_none() {
+                c.dead_handle("A1", "GetDistance", a[1].id())?;
+            }
+            to
         } else {
-            pos_f64(e.path_point(lua, "GetDistance", a[1].text(), a[2].int())?)
+            if from.is_none() {
+                e.ctx.borrow().dead_handle("A1", "GetDistance", a[0].id())?;
+                return Ok(Value::Number(ABSENT_DISTANCE));
+            }
+            Some(pos_f64(e.path_point(lua, "GetDistance", a[1].text(), a[2].int())?))
         };
+        let (Some(from), Some(to)) = (from, to) else { return Ok(Value::Number(ABSENT_DISTANCE)) };
         Ok(Value::Number(dist(from, to)))
     })?)?;
 

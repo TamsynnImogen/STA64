@@ -981,7 +981,7 @@ fn dead_handles_get_the_graded_answers_and_live_ones_are_unchanged() {
 
     // A pending `BuildObject` token is no dead handle (the original's handle is usable at once): it raises.
     rt.eval::<()>("t = A1.BuildObject('fx_cruiser', 0, 'Q', 0)").unwrap();
-    for call in ["GetDistance(a, t)", "GetDistance(t, a)", "GetRealShieldPercent(t)", "GetCrew(t)", "GetLocation(t)"] {
+    for call in ["GetDistance(a, t)", "GetDistance(t, a)", "GetDistance(0, t)", "GetDistance(99999, t)", "GetRealShieldPercent(t)", "GetCrew(t)", "GetLocation(t)"] {
         assert!(rt.eval::<()>(&format!("local _ = A1.{call}")).is_err(), "{call}");
     }
 }

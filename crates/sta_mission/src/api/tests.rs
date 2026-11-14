@@ -881,6 +881,18 @@ fn a_dead_handle_answer_on_a_handle_a_failed_call_named_blocks_a_later_end() {
 }
 
 #[test]
+fn get_distance_judges_the_second_handle_when_the_first_is_absent() {
+    // (absent, tainted): the second handle was named by a failed call and is gone.
+    let after = "if A2.GetDistance(77, 4) > 1e29 then A2.FailMission(0, 0) end";
+    match end_state_after_removal("pcall(A2.Special_Attack, 4, 5, 'gtracbm')", after) {
+        MissionEndState::Blocked(why) => assert!(why.contains("object 4"), "{why}"),
+        other => panic!("{other:?}"),
+    }
+    // (absent, formerly live and clean): the end stands.
+    assert_eq!(end_state_after_removal("", after), MissionEndState::Ended { won: false });
+}
+
+#[test]
 fn a_dead_handle_answer_on_a_formerly_live_object_is_clean_and_the_end_stands() {
     for cond in DEAD_ANSWERS {
         // No gap at all, and a gap on other objects: the destroyed object answers as the original does.

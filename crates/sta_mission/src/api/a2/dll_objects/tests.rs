@@ -135,7 +135,7 @@ fn a_pending_build_token_keeps_raising_in_the_dead_handle_calls_and_blocks_an_en
     let src = "A2.paths.Q = { {x=40,y=0,z=0}, {x=50,y=0,z=0} }; h = A2.BuildObject('fx_cruiser.odf', 1, 'Q', 1)";
     let rt = MissionRuntime::from_source_with("pending.lua", src, 3, cfg);
     assert!(rt.errors().is_empty(), "{:?}", rt.errors());
-    for call in ["GetDistance(h, h)", "GetDistance(0, h)", "GetCrew(h)", "GetCurrentHealth(h)", "GetMaxHealth(h)", "GetLocation(h)"] {
+    for call in ["GetDistance(h, h)", "GetDistance(0, h)", "GetDistance(99999, h)", "GetCrew(h)", "GetCurrentHealth(h)", "GetMaxHealth(h)", "GetLocation(h)"] {
         let err = rt.eval::<()>(&format!("local _ = A2.{call}")).unwrap_err();
         assert!(err.to_string().contains("not alive"), "{call}: {err}");
     }
