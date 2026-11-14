@@ -1,5 +1,5 @@
-//! Opt-in windowless main-menu captures. Only authored UI and synthetic content
-//! are rendered; the menu scene and installed game art are not needed.
+//! Opt-in windowless main-menu captures on synthetic content, with an optional
+//! mount for the installed fonts. The background scene is not rendered here.
 
 use std::sync::{Arc, Mutex};
 
@@ -14,11 +14,12 @@ use crate::app::{AppState, configure_sets};
 use crate::frontend::screens::{Screen, ScreenData, ScreensCamera, ScreensConfig, ScreensPlugin};
 use crate::ui::profile::{UiProfile, UiProfilePlugin};
 
-fn capture(size: UVec2, name: &str) {
+fn capture(size: UVec2, name: &str, mounted: Option<sta_vfs::Vfs>) {
     let mut app = App::new();
     app.add_plugins(DefaultPlugins
         .set(WindowPlugin { primary_window: None, exit_condition: ExitCondition::DontExit, ..default() })
         .set(RenderPlugin { synchronous_pipeline_compilation: true, ..default() })
+        .disable::<bevy::gilrs::GilrsPlugin>()
         .disable::<bevy::winit::WinitPlugin>()
         .disable::<bevy::log::LogPlugin>());
     configure_sets(&mut app);
@@ -30,6 +31,9 @@ fn capture(size: UVec2, name: &str) {
         .insert_resource(ScreensConfig { own_camera: false, fit_scale: false, start: Screen::Main, ..default() })
         .insert_state(AppState::FrontEnd)
         .add_plugins(UiProfilePlugin);
+    if let Some(vfs) = mounted {
+        app.insert_resource(crate::viewer::Mounted(vfs));
+    }
     let mut image = Image::new_target_texture(size.x, size.y, bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb, None);
     image.asset_usage = RenderAssetUsages::RENDER_WORLD;
     let target = app.world_mut().resource_mut::<Assets<Image>>().add(image);
@@ -77,6 +81,12 @@ fn main_menu_renders_without_a_window() {
         (UVec2::new(1280, 960), "4x3"),
         (UVec2::new(3440, 1440), "ultrawide"),
     ] {
-        capture(size, name);
+        capture(size, name, None);
+    }
+    if let Ok(install) = std::env::var("STA64_TEST_INSTALL") {
+        let active_mod = std::env::var("STA64_TEST_MOD").ok().filter(|name| !name.is_empty());
+        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod.as_deref())
+            .expect("main-menu capture install mount");
+        capture(UVec2::new(1920, 1080), "mounted", Some(vfs));
     }
 }

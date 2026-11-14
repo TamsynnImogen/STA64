@@ -15,7 +15,8 @@
 //! **Fit.** The screen is a box of the design's shape, as large as the window allows,
 //! with its aspect clamped to 4:3 .. 16:9 and centred, so a 21:9 window gets a 16:9
 //! box with the scene showing at the sides instead of stretched tables. Regions are
-//! fractions of the box; text and control heights stay the theme's own logical sizes.
+//! fractions of the box. The main menu's typography scales with the box height;
+//! the other screens keep the theme's own logical text and control sizes.
 
 use bevy::math::{Rect, Vec2};
 

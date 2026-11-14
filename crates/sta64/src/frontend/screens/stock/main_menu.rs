@@ -12,8 +12,8 @@ use crate::frontend::screens::{Act, Screen};
 use crate::ui::sprite_font::{FontRole, ScalableText, SpriteText, SpriteTextStyle, sprite_text_styled};
 use crate::ui::theme::{Focusable, KitFocus, UiButton, WidgetState};
 
-const WHITE: Color = Color::srgb(0.91, 0.91, 0.89);
-const GOLD: Color = Color::srgb(0.91, 0.69, 0.33);
+const WHITE: Color = Color::srgb(231.0 / 255.0, 236.0 / 255.0, 242.0 / 255.0);
+const GOLD: Color = Color::srgb(244.0 / 255.0, 185.0 / 255.0, 67.0 / 255.0);
 const DIM: Color = Color::srgb(0.47, 0.47, 0.46);
 
 #[derive(Component, Debug, Clone, Copy)]
