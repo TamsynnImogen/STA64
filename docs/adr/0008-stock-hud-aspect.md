@@ -37,16 +37,27 @@
 
 The forces:
 
-- The stock layout exists to look like the game or mod being played.
+- The stock layout exists to look like the game or mod being played; see
+  "Position" below for whose opinion a layout is.
 - Players use 21:9 and 32:9 windows, and the 3D view should use the whole
   window.
 - A mod author must be able to state a wide layout, and an adapted mod must
   still run on its original engine (D3).
 - Mods that ship nothing new must keep working (D1).
 
+## Position
+
+What follows for legacy content (the original games and mods made for their
+engines) is quality of life with the best compatibility we can keep. It
+encodes one opinion of ours: the original authors cannot have wanted their
+HUD to look as it does stretched across a window they never drew it for.
+Beyond that, STA64 holds no opinion on a HUD's layout. A mod made for STA64
+states its author's opinion by declaring a layout. Where content states
+nothing and more than one reading is defensible, the player chooses.
+
 ## Decision
 
-### Default behaviour
+### Legacy content: default behaviour
 
 **H1. The stock HUD's appearance is not changed.**
 STA64 scales a stock HUD by one factor for both axes. It never stretches one
@@ -68,7 +79,11 @@ pointer input; the margins beside the HUD area select, order and scroll as
 the open view does. The minimap and every other consumer of HUD rects use the
 one mapping of H2.
 
-### What a mod can state (proposed, not in the first package)
+### Mods made for STA64 (proposed, not in the first package)
+
+A mod made for STA64 always declares its layout, by H4, H5 or both. A mod
+that declares none is treated as legacy content (H2, H7) and `check-pack`
+reports it as such (D7); it still loads (D1).
 
 **H4. A mod may ship a sheet for a wider aspect.**
 A sheet named as the Fleet Operations sheets are (`gui_21x9.cfg`,
@@ -132,18 +147,20 @@ back to H2.
 
 ### Player setting
 
-**H7. The player picks the stock HUD layout.**
-A setting with three values, stored with the other settings (UI-29):
+**H7. Where the content states no layout, the player picks one.**
+A setting with three values, stored with the other settings (UI-29). It
+applies to legacy content only:
 
 - **Centred** (default): H2.
-- **Anchored**: the layout file of H5, the mod's or one STA64 ships for the
-  profile. Offered only when such a file exists for the running profile;
-  STA64 still invents no anchors of its own (H6).
+- **Anchored**: a layout file in H5's format that STA64 ships for a stock
+  profile. Offered only where such a file exists. It is a reading of ours,
+  which is why it is never the default.
 - **Stretched**: width and height scaled separately, as the original engines
   do. The one value that departs from H1, and only at the player's choice.
 
-A mod's layout file may state which of centred and anchored it prefers as
-the default; the player's setting wins.
+A mod that declares a layout is drawn as declared, at every window width its
+layout covers, and the setting is not offered for it. Where its layout does
+not cover the window (H5's row does not fit, no sheet is close), H2 applies.
 
 Done when (H1 to H3): layout tests pin, per profile, that every stock HUD
 rect keeps its sheet aspect at 4:3, 16:10, 16:9, 21:9 and 32:9, that the HUD
