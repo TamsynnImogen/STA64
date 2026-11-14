@@ -411,6 +411,23 @@ fn a_crew_edit_to_zero_latches_derelict_like_a_casualty() {
     let (mut other, _) = sim(&d, 1);
     edit_other(&mut other, id);
     assert_ne!(other.digest(), s.digest());
+    // A later edit above 0 clears the latch by the next tick.
+    edit(&mut s, 5.0);
+    s.step(&[]);
+    assert!(s.subsystems.get(id).is_none_or(|r| !r.derelict));
+    assert!(!s.units.get(id).unwrap().flags.contains(UnitFlags::ENGINES_OFF));
+}
+
+#[test]
+fn a_crew_edit_to_zero_does_not_latch_without_the_casualty_feature() {
+    use crate::command::{Command, CommandKind, Edit};
+    let d = db(&Cfg { on: false, protection: Some(1.0), crew: 100.0, ..Cfg::default() });
+    let (mut s, id) = sim(&d, 1);
+    let out = s.step(&[Command { player: PlayerId::SCRIPT, seq: 0, kind: CommandKind::Edit(Edit::UnitCrew(id, fx(0.0))) }]);
+    assert!(!out.events.iter().any(|e| matches!(e, SimEvent::Rejected { .. })));
+    assert_eq!(crew(&s, id), 0.0);
+    assert!(s.subsystems.get(id).is_none_or(|r| !r.derelict));
+    assert!(!s.units.get(id).unwrap().flags.contains(UnitFlags::ENGINES_OFF));
 }
 
 fn edit_other(s: &mut Sim, id: EntityId) {

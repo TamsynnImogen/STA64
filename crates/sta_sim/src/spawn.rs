@@ -260,9 +260,13 @@ impl Sim {
                 // Cap: the current maximum crew (read from the executable, static).
                 let _ = now;
                 u.crew = Some([value.max(Fixed::ZERO).min(max), max]);
-                // Then the derelict check, as for a casualty (SIM-39).
-                let mut ctx = crate::combat::casualty::Ctx { subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches };
-                crate::combat::casualty::check_derelict(u, &mut ctx);
+                // Then the derelict check, only where the casualty model runs
+                // (`crew_loss_on_hit`): `casualty::step` is what clears the latch.
+                let casualty = self.content.as_deref().is_some_and(|db| db.unit(u.def).is_some_and(|d| db.unit_features(d).crew_loss_on_hit));
+                if casualty {
+                    let mut ctx = crate::combat::casualty::Ctx { subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches };
+                    crate::combat::casualty::check_derelict(u, &mut ctx);
+                }
                 true
             }
             Edit::MaxHull(id, v) => self.edit_max_hull(id, v),

@@ -205,8 +205,11 @@ pub enum Edit {
     /// Mission `SetCrew` / `Entity.crew` (SIM-54): a craft's or station's
     /// current crew, negative read as 0 and clamped to the unit's own current
     /// maximum crew (`Craft::SetCrew`, read from the executable, static; it is
-    /// not clamped to the global `MAX_CREW`). The derelict check that follows
-    /// is the subsystem latch (SIM-39). Rejected for a unit with no crew pool.
+    /// not clamped to the global `MAX_CREW`). Where the casualty model runs
+    /// (the unit's features have `crew_loss_on_hit`) the derelict check of
+    /// SIM-39 follows: crew under 1 latches the unit derelict and a later edit
+    /// to 1 or more clears it by the next tick. Without that feature the edit
+    /// never latches. Rejected for a unit with no crew pool.
     /// SCRIPT/BENCH only. Appended tag 26.
     UnitCrew(EntityId, Fixed),
     /// Mission `resources.crew` (SIM-54): the player's crew stock, floored at 0
