@@ -482,22 +482,39 @@ fn settings_sliders_and_toggles_write_the_settings() {
     let mut app = app();
     go(&mut app, Screen::Settings);
     assert_eq!(count::<Slider>(&mut app), 5);
-    assert_eq!(count::<Toggle>(&mut app), 4);
+    assert_eq!(count::<Toggle>(&mut app), if cfg!(target_os = "android") { 3 } else { 4 });
     let music = app.world_mut().query::<(Entity, &SettingSlider)>().iter(app.world()).find(|(_, k)| k.0 == SettingKey::MusicVolume).unwrap().0;
     app.world_mut().get_mut::<Slider>(music).unwrap().value = 25.0;
     app.world_mut().write_message(SliderChanged { entity: music, value: 25.0 });
-    let fs = app.world_mut().query::<(Entity, &SettingToggle)>().iter(app.world()).find(|(_, k)| k.0 == SettingKey::Fullscreen).unwrap().0;
-    click(app.world_mut(), fs);
+    let toggle_key = if cfg!(target_os = "android") { SettingKey::Vsync } else { SettingKey::Fullscreen };
+    let control = app.world_mut().query::<(Entity, &SettingToggle)>().iter(app.world()).find(|(_, k)| k.0 == toggle_key).unwrap().0;
+    click(app.world_mut(), control);
     settle(&mut app);
     let s = app.world().resource::<Settings>();
-    assert_eq!((s.music, s.fullscreen, s.master), (25.0, true, 80.0));
+    assert_eq!((s.music, s.flag(toggle_key), s.master), (25.0, Some(!cfg!(target_os = "android")), 80.0));
     // Leaving and coming back shows what was set.
     go(&mut app, Screen::Main);
     go(&mut app, Screen::Settings);
     let music = app.world_mut().query::<(&Slider, &SettingSlider)>().iter(app.world()).find(|(_, k)| k.0 == SettingKey::MusicVolume).unwrap().0.value;
     assert_eq!(music, 25.0);
-    let on = app.world_mut().query::<(&Toggle, &SettingToggle)>().iter(app.world()).find(|(_, k)| k.0 == SettingKey::Fullscreen).unwrap().0.on;
-    assert!(on);
+    let on = app.world_mut().query::<(&Toggle, &SettingToggle)>().iter(app.world()).find(|(_, k)| k.0 == toggle_key).unwrap().0.on;
+    assert_eq!(on, !cfg!(target_os = "android"));
+}
+
+#[test]
+fn window_size_choices_have_bounded_dimensions_and_keys() {
+    use crate::frontend::screens::WindowSize;
+
+    assert_eq!(WindowSize::default(), WindowSize::Automatic);
+    assert_eq!(WindowSize::Automatic.dimensions(), None);
+    assert_eq!(WindowSize::from_key("1024x768"), Some(WindowSize::R1024x768));
+    assert_eq!(WindowSize::from_key("9999x9999"), None);
+    assert_eq!(WindowSize::from_key("AUTO"), None);
+    for size in WindowSize::ALL {
+        assert_eq!(WindowSize::from_key(size.key()), Some(size));
+        assert!(!size.label().is_empty());
+    }
+    assert_eq!(WindowSize::R2560x1440.dimensions(), Some((2560, 1440)));
 }
 
 #[test]

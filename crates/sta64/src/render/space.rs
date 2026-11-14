@@ -317,8 +317,9 @@ pub fn sphere(start: usize, count: usize, n: usize, radius: f32) -> Mesh {
             for i in 0..NT as u32 {
                 let a = base + j * row + i;
                 let b = base + (j + 1) * row + i;
-                // Clockwise from outside in Direct3D: front-facing after the mirror.
-                idx.extend_from_slice(&[a, b, a + 1, b, b + 1, a + 1]);
+                // Counter-clockwise seen from outside, Bevy's front: the mirror of z turns the engine's
+                // clockwise order round, so the engine's (a, b, a + 1) is drawn as (a, a + 1, b).
+                idx.extend_from_slice(&[a, a + 1, b, b, a + 1, b + 1]);
             }
         }
     }

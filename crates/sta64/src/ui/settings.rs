@@ -8,7 +8,7 @@
 //! - `max_selection`, Refit's `MaxSelection` with its range ([`MaxSelection`], 17..=120);
 //! - `ui_profile = lcars | stock` ([`UiPreference`]);
 //! - the options screen's volumes (`master`, `music`, `effects`, `voice`, `0..=100`),
-//!   `scroll_speed`, `fullscreen`, `vsync`, `show_fps` ([`Settings`]);
+//!   `scroll_speed`, `window_size`, `fullscreen`, `vsync`, `show_fps` ([`Settings`]);
 //! - `player_name` and `relay`, the multiplayer name and relay address last used (UI-11);
 //! - `intro = true | false` ([`IntroSettings`]);
 //! - `version = 1`.
@@ -146,6 +146,8 @@ impl Stored {
                     s.settings.relay = value.chars().filter(|c| !c.is_control()).take(80).collect();
                     true
                 }
+                "window_size" => crate::frontend::screens::WindowSize::from_key(value)
+                    .map(|size| s.settings.window_size = size).is_some(),
                 n if NUMBERS.contains(&n) => match value.parse::<f32>() {
                     Ok(v) if v.is_finite() => {
                         let key = number_key(n);
@@ -185,6 +187,7 @@ impl Stored {
         for (name, v) in [("fullscreen", st.fullscreen), ("vsync", st.vsync), ("show_fps", st.show_fps)] {
             let _ = writeln!(t, "{name} = {v}");
         }
+        let _ = writeln!(t, "window_size = {}", st.window_size.key());
         if !st.player_name.is_empty() {
             let _ = writeln!(t, "player_name = {}", st.player_name);
         }
@@ -490,7 +493,7 @@ fn save_on_exit(world: &mut World) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::frontend::screens::{SettingKey, Settings};
+    use crate::frontend::screens::{SettingKey, Settings, WindowSize};
     use crate::platform::{ConfigOs, config_dir_in};
     use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -525,6 +528,7 @@ mod tests {
         *a.world_mut().resource_mut::<MaxSelection>() = MaxSelection::new(75);
         a.world_mut().resource_mut::<UiPreference>().lcars = true;
         a.world_mut().resource_mut::<Settings>().set_number(SettingKey::MusicVolume, 33.0);
+        a.world_mut().resource_mut::<Settings>().window_size = WindowSize::R1280x720;
         a.update();
         assert!(file.is_file(), "written after a change, folder created");
         drop(a);
@@ -536,6 +540,7 @@ mod tests {
         assert!(b.world().resource::<UiPreference>().lcars);
         assert!(b.world().resource::<Settings>().lcars_ui);
         assert_eq!(b.world().resource::<Settings>().music, 33.0);
+        assert_eq!(b.world().resource::<Settings>().window_size, WindowSize::R1280x720);
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -694,12 +699,30 @@ mod tests {
         s.max_selection = MaxSelection::new(120);
         s.lcars = true;
         s.settings.fullscreen = true;
+        s.settings.window_size = WindowSize::R1920x1080;
         s.settings.master = 12.5;
         s.settings.lcars_ui = true;
         s.intro = false;
         let (back, w) = Stored::parse(&s.to_text());
         assert!(w.is_empty(), "{w:?}");
         assert_eq!(back, s);
+    }
+
+    #[test]
+    fn window_size_defaults_and_rejects_unknown_keys() {
+        let (old, warnings) = Stored::parse("fullscreen = true\n");
+        assert!(warnings.is_empty());
+        assert_eq!(old.settings.window_size, WindowSize::Automatic);
+        let (invalid, warnings) = Stored::parse("window_size = 9999x9999\n");
+        assert_eq!(invalid.settings.window_size, WindowSize::Automatic);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("bad value"));
+        for size in WindowSize::ALL {
+            assert_eq!(WindowSize::from_key(size.key()), Some(size));
+            let (stored, warnings) = Stored::parse(&format!("window_size = {}\n", size.key()));
+            assert!(warnings.is_empty(), "{warnings:?}");
+            assert_eq!(stored.settings.window_size, size);
+        }
     }
 
     #[test]

@@ -13,7 +13,11 @@ use super::layout::{self, Slot, region};
 use crate::app::AppState;
 use crate::frontend::screens::data::SeatControl;
 use crate::frontend::screens::view::{Ctx, ScreenRoot, SettingSlider, SettingToggle};
+#[cfg(not(target_os = "android"))]
+use crate::frontend::screens::view::WindowSizeSelect;
 use crate::frontend::screens::{Act, Col, Screen, SettingKey};
+#[cfg(not(target_os = "android"))]
+use crate::frontend::screens::WindowSize;
 use crate::ui::i18n::{tr, trf};
 use crate::ui::theme::{disabled_button, dropdown, kit_button, kit_text, kit_toggle, label, slider_focusable, tab_bar, tab_panel};
 
@@ -276,12 +280,25 @@ pub fn options_body(p: &mut Box_, t: &crate::ui::theme::Theme, settings: &crate:
                 slider_row(c, &tr("Scroll speed"), SettingKey::ScrollSpeed);
             });
             c.spawn(tab_panel(bar, 2)).insert(Node { flex_direction: FlexDirection::Column, row_gap: Val::Px(theme.gap), display: shown(2), ..default() }).with_children(|c| {
+                #[cfg(not(target_os = "android"))]
+                {
+                    let sizes = WindowSize::ALL.map(WindowSize::label);
+                    let picked = WindowSize::ALL.iter().position(|&size| size == s.window_size).unwrap_or(0);
+                    c.spawn(Node { column_gap: Val::Px(theme.gap), align_items: AlignItems::Center, ..default() }).with_children(|r| {
+                        r.spawn((Node { width: Val::Px(body.width() * 0.35), ..default() }, children![label(&theme, &tr("Windowed size"))]));
+                        r.spawn((dropdown(&theme, &sizes, picked, body.width() * 0.5), WindowSizeSelect));
+                    });
+                    c.spawn(label(&theme, &tr("Fullscreen uses the monitor resolution.")));
+                }
                 for (name, key, on) in [
                     (tr("Fullscreen"), SettingKey::Fullscreen, s.fullscreen),
                     (tr("Vertical sync"), SettingKey::Vsync, s.vsync),
                     (tr("Show FPS"), SettingKey::ShowFps, s.show_fps),
                     (tr("LCARS interface"), SettingKey::LcarsUi, s.lcars_ui),
                 ] {
+                    if cfg!(target_os = "android") && key == SettingKey::Fullscreen {
+                        continue;
+                    }
                     c.spawn((kit_toggle(&theme, &name, on, 320.0), SettingToggle(key)));
                 }
                 c.spawn(label(&theme, &tr("Off uses the game/mod default.")));

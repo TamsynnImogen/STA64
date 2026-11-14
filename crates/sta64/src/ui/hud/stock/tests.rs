@@ -930,6 +930,48 @@ fn metadata_groups_only_available_actions() {
 }
 
 #[test]
+fn native_formation_choices_keep_odf_identity_and_cannot_queue_orders() {
+    let db = content();
+    let feed = feed(&db);
+    let fallback = buttons(&feed, Page::Formations, &NativeCommands::default());
+    assert!(fallback.iter().any(|b| b.act == Act::Formation(sta_sim::movement::FORM_LINE)));
+
+    let mut native = NativeCommands::default();
+    for (odf, tip, preferred) in [("zeta", "ZETA_TIP", [1, 1]), ("alpha", "ALPHA_TIP", [0, 0])] {
+        native.commands.insert(odf.into(), NativeCommand {
+            odf: format!("{odf}.odf"),
+            command: "SET_FORMATION".into(),
+            button: "same_unrelated_button".into(),
+            preferred: Some(preferred),
+            menu: None,
+            tooltip: Some(tip.into()),
+            verbose: Some(format!("{tip}_VERBOSE")),
+            normal: None,
+            hovered: None,
+            pressed: None,
+            disabled: Some(Color::srgb(0.2, 0.3, 0.4)),
+            active: None,
+        });
+    }
+    let shown = buttons(&feed, Page::Formations, &native);
+    let choices: Vec<_> = shown.iter().filter(|b| matches!(b.act, Act::NativeFormation(_))).collect();
+    assert_eq!(choices.len(), 2);
+    assert_eq!(choices[0].act, Act::NativeFormation("alpha".into()));
+    assert_eq!(choices[0].label, "ALPHA");
+    assert_eq!(choices[0].tip, "ALPHA_TIP");
+    assert_eq!(choices[0].verbose.as_deref(), Some("ALPHA_TIP_VERBOSE"));
+    assert_eq!(choices[0].sprite_names, ["b_alpha"]);
+    assert_eq!(choices[1].act, Act::NativeFormation("zeta".into()));
+    assert_eq!(choices[1].sprite_names, ["b_zeta"]);
+    assert!(choices.iter().all(|b| b.look == Look::Locked && !b.keep_label));
+    assert!(choices.iter().all(|b| model::command(&feed, &b.act).is_none()));
+    assert_eq!(metadata(&native, &choices[0].act).unwrap().disabled, Some(Color::srgb(0.2, 0.3, 0.4)));
+    assert!(shown.iter().any(|b| b.act == Act::Back));
+    assert!(!shown.iter().any(|b| matches!(b.act, Act::Formation(_))));
+    assert!(buttons(&feed, Page::Top, &native).iter().any(|b| b.act == Act::Stop));
+}
+
+#[test]
 fn palette_cells_and_input_regions_use_cfg_geometry() {
     let app = app();
     let state = app.world().resource::<StockState>();
