@@ -844,6 +844,75 @@ fn a_handle_that_never_existed_blocks_only_after_a_handle_producing_gap() {
     assert!(matches!(end_state(s), MissionEndState::Blocked(_)));
 }
 
+/// LUA-21: run `before` for two ticks, then show a view in which FOE is gone, run `after` and
+/// give the end state. FOE (4) was alive in the first ticks, so it is a formerly live object.
+fn end_state_after_removal(before: &str, after: &str) -> MissionEndState {
+    let mut g = game(before);
+    g.run(2);
+    let mut v = (*g.view).clone();
+    v.units.retain(|u| u.id != FOE);
+    let v = Arc::new(v);
+    g.rt.think(&v, &[], &mut Vec::new());
+    g.rt.eval::<()>(after).unwrap();
+    g.rt.mission_end(v.tick)
+}
+
+const DEAD_ANSWERS: [&str; 5] = [
+    "A2.GetDistance(2, {h}) > 1e29",
+    "A2.GetCrew({h}) < 0",
+    "A2.GetCurrentHealth({h}) < 0",
+    "A2.GetMaxHealth({h}) < 0",
+    "A2.GetLocation({h}).x == 0",
+];
+
+fn lose_if(cond: &str, h: u32) -> String {
+    format!("if {} then A2.FailMission(0, 0) end", cond.replace("{h}", &h.to_string()))
+}
+
+#[test]
+fn a_dead_handle_answer_on_a_handle_a_failed_call_named_blocks_a_later_end() {
+    for cond in DEAD_ANSWERS {
+        let (before, after) = ("pcall(A2.Special_Attack, 4, 5, 'gtracbm')", lose_if(cond, 4));
+        match end_state_after_removal(before, &after) {
+            MissionEndState::Blocked(why) => assert!(why.contains("object 4") && why.contains("failed call"), "{cond}: {why}"),
+            other => panic!("{cond}: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn get_distance_judges_the_second_handle_when_the_first_is_absent() {
+    // (absent, tainted): the second handle was named by a failed call and is gone.
+    let after = "if A2.GetDistance(77, 4) > 1e29 then A2.FailMission(0, 0) end";
+    match end_state_after_removal("pcall(A2.Special_Attack, 4, 5, 'gtracbm')", after) {
+        MissionEndState::Blocked(why) => assert!(why.contains("object 4"), "{why}"),
+        other => panic!("{other:?}"),
+    }
+    // (absent, formerly live and clean): the end stands.
+    assert_eq!(end_state_after_removal("", after), MissionEndState::Ended { won: false });
+}
+
+#[test]
+fn a_dead_handle_answer_on_a_formerly_live_object_is_clean_and_the_end_stands() {
+    for cond in DEAD_ANSWERS {
+        // No gap at all, and a gap on other objects: the destroyed object answers as the original does.
+        for before in ["", "pcall(A2.Special_Attack, 3, 5, 'gtracbm')"] {
+            let after = lose_if(cond, 4);
+            assert_eq!(end_state_after_removal(before, &after), MissionEndState::Ended { won: false }, "{cond} / {before}");
+        }
+    }
+}
+
+#[test]
+fn a_dead_handle_answer_on_a_handle_missing_because_of_a_gap_blocks_only_after_a_handle_producing_gap() {
+    for cond in DEAD_ANSWERS {
+        let after = lose_if(cond, 77);
+        assert_eq!(end_state(&after), MissionEndState::Ended { won: false }, "{cond}");
+        let gap = format!("A2.NoteGap('BuildObject', 'x')\n{after}");
+        assert!(matches!(end_state(&gap), MissionEndState::Blocked(_)), "{cond}");
+    }
+}
+
 #[test]
 fn a_read_after_the_end_call_does_not_block_it_and_the_last_call_wins() {
     let s = "A2.FailMission(0, 0)\npcall(A2.Special_Attack, 3, 5, 'gtracbm')\nlocal _ = A2.IsAlive(3)";

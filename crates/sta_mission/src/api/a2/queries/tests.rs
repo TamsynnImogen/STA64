@@ -87,11 +87,9 @@ fn health_tracks_fresh_snapshot_and_is_odf_matches_only_the_definition_name() {
         kind: CommandKind::Edit(Edit::Kill(id)),
     }]);
     rt.think(&out.view, &out.events, &mut commands);
-    assert!(
-        rt.eval::<f64>(&format!("return A2.GetCurrentHealth({})", id.0))
-            .is_err()
-    );
-    assert!(rt.eval::<f64>(&format!("return A2.GetMaxHealth({})", id.0)).is_err());
+    // A dead handle answers -1 (LUA-21) and no longer raises.
+    assert_eq!(rt.eval::<f64>(&format!("return A2.GetCurrentHealth({})", id.0)).unwrap(), -1.0);
+    assert_eq!(rt.eval::<f64>(&format!("return A2.GetMaxHealth({})", id.0)).unwrap(), -1.0);
     assert!(
         !rt.eval::<bool>(&format!("return A2.IsOdf({},'fx_cruiser')", id.0))
             .unwrap()
@@ -245,7 +243,6 @@ fn malformed_inputs_are_rejected_without_commands() {
         "A2.GetOriginalRace(4294967296)",
         "A2.GetOriginalRace(99999)",
         "A2.GetMaxHealth(0/0)",
-        "A2.GetCurrentHealth(99999)",
         "A2.IsOdf(1)",
         "A2.IsOdf(1,'fx_cruiser',true)",
         "A2.IsOdf(-1,'fx_cruiser')",
@@ -278,11 +275,9 @@ fn malformed_inputs_are_rejected_without_commands() {
         ..MissionConfig::default()
     };
     let mut rt = MissionRuntime::from_source_with("dying.lua", "", 19, cfg);
-    assert!(
-        rt.eval::<f64>(&format!("return A2.GetCurrentHealth({})", id.0))
-            .is_err()
-    );
-    assert!(rt.eval::<f64>(&format!("return A2.GetMaxHealth({})", id.0)).is_err());
+    // A dead handle answers -1 (LUA-21) and no longer raises.
+    assert_eq!(rt.eval::<f64>(&format!("return A2.GetCurrentHealth({})", id.0)).unwrap(), -1.0);
+    assert_eq!(rt.eval::<f64>(&format!("return A2.GetMaxHealth({})", id.0)).unwrap(), -1.0);
     assert!(rt.eval::<String>(&format!("return A2.GetOriginalRace({})", id.0)).is_err());
     assert!(
         !rt.eval::<bool>(&format!("return A2.IsOdf({},'fx_cruiser')", id.0))
@@ -372,8 +367,6 @@ fn get_distance_rejects_invalid_handles_and_dying_objects_on_either_side() {
         "A2.GetDistance()".to_owned(),
         format!("A2.GetDistance({})", first.0),
         format!("A2.GetDistance({},{},0)", first.0, second.0),
-        format!("A2.GetDistance(99999,{})", first.0),
-        format!("A2.GetDistance({},99999)", first.0),
     ] {
         assert!(rt.eval::<()>(&script).is_err(), "{script}");
     }
@@ -406,9 +399,10 @@ fn get_distance_rejects_invalid_handles_and_dying_objects_on_either_side() {
             ..MissionConfig::default()
         };
         let mut rt = MissionRuntime::from_source_with("dying-distance.lua", "", 19, cfg);
-        assert!(
-            rt.eval::<f64>(&format!("return A2.GetDistance({},{})", first.0, second.0))
-                .is_err()
+        // A dying object on either side answers 1e30 (LUA-21), no longer raises.
+        assert_eq!(
+            rt.eval::<f64>(&format!("return A2.GetDistance({},{})", first.0, second.0)).unwrap(),
+            crate::api::ABSENT_DISTANCE
         );
         assert!(rt.take_commands().is_empty() && rt.unsupported().is_empty());
     }
@@ -529,4 +523,45 @@ fn is_visible_to_team_missing_or_dying_is_false_and_empty_visibility_is_omniscie
     );
     assert!(!rt.eval::<bool>("return A2.IsVisibleToTeam(99999,0)").unwrap());
     assert!(commands.is_empty() && rt.take_commands().is_empty() && rt.unsupported().is_empty());
+}
+
+/// LUA-21: a handle that names nothing live (0, never existed, dying, removed)
+/// gets the executable's constant, Armada II; a live handle is unchanged; a call
+/// with no established answer still raises "not alive" (the converted prelude
+/// answers it 0 as before).
+#[test]
+fn dead_handles_get_the_graded_answers_and_live_ones_are_unchanged() {
+    use crate::api::{ABSENT_AMOUNT, ABSENT_DISTANCE};
+    let (sim, db, first, second) = distance_scene();
+    let mut dying_view = (*sim.view()).clone();
+    dying_view.units.iter_mut().find(|u| u.id == second).unwrap().flags = UnitFlags::DYING;
+    let cfg = MissionConfig { content: Some(db.clone()), view: Some(dying_view), ..MissionConfig::default() };
+    let mut rt = MissionRuntime::from_source_with("dead.lua", "", 19, cfg);
+    for dead in ["0".to_owned(), "99999".to_owned(), second.0.to_string()] {
+        let (first, dead_s) = (first.0, dead.as_str());
+        let d1: f64 = rt.eval(&format!("return A2.GetDistance({first},{dead_s})")).unwrap();
+        let d2: f64 = rt.eval(&format!("return A2.GetDistance({dead_s},{first})")).unwrap();
+        assert_eq!((d1, d2), (ABSENT_DISTANCE, ABSENT_DISTANCE), "{dead}");
+        assert_eq!(ABSENT_DISTANCE as f32, f32::from_bits(0x7149_f2ca));
+        let amounts: (f64, f64, f64) = rt
+            .eval(&format!("return A2.GetCrew({dead_s}), A2.GetCurrentHealth({dead_s}), A2.GetMaxHealth({dead_s})"))
+            .unwrap();
+        assert_eq!(amounts, (ABSENT_AMOUNT, -1.0, -1.0), "{dead}");
+        let p: (f64, f64, f64) = rt.eval(&format!("local p = A2.GetLocation({dead_s}); return p.x, p.y, p.z")).unwrap();
+        assert_eq!(p, (0.0, 0.0, 0.0), "{dead}");
+        // A rule "closer than N" no longer holds on a dead handle.
+        assert!(!rt.eval::<bool>(&format!("return A2.GetDistance({first},{dead_s}) < 1000")).unwrap());
+    }
+    // Live handles answer as before.
+    assert_eq!(rt.eval::<f64>(&format!("return A2.GetDistance({},{})", first.0, first.0)).unwrap(), 0.0);
+    assert!(rt.eval::<f64>(&format!("return A2.GetMaxHealth({})", first.0)).unwrap() > 0.0);
+    let live: (f64, f64) = rt.eval(&format!("local p = A2.GetLocation({}); return p.x, p.z", first.0)).unwrap();
+    assert_eq!(live, (-0.5, -2.0));
+    // No established answer: still raises (the prelude's swallow answers 0).
+    for call in ["A2.GetRealTeam(99999)", "A2.GetOriginalRace(99999)", "A2.GetDistance(99999,'P',0)"] {
+        assert!(rt.eval::<()>(call).is_err(), "{call}");
+    }
+    // A malformed handle is not a dead one.
+    assert!(rt.eval::<f64>("return A2.GetDistance(-1,1)").is_err());
+    assert!(rt.take_commands().is_empty() && rt.unsupported().is_empty());
 }
