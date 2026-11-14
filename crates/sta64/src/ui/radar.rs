@@ -36,7 +36,8 @@ use sta_content::ContentDb;
 use sta_sim::view::{Relation, UnitFlags};
 use sta_sim::{EntityId, PlayerId, WorldView};
 
-use super::theme::{Theme, ThemePlugin, mix, panel};
+use super::sprite_font::sprite_text;
+use super::theme::{Theme, ThemePlugin, mix, panel_with};
 use super::gui_sprites::GuiImage;
 use crate::app::GameSet;
 use crate::sim_link::{ContentRes, Selection, SimLink};
@@ -348,13 +349,10 @@ pub struct FilterName {
 #[derive(Resource, Default)]
 pub struct BlipEntities(BTreeMap<EntityId, Entity>);
 
+/// A caption of the Refit-layout radar: the mod's sprite font where it has one, the TTF
+/// otherwise (ADR 0007 T1; same path as the other Refit HUD labels in `hud/panels.rs`).
 fn text(s: impl Into<String>, size: f32, color: Color) -> impl Bundle {
-    (
-        Text::new(s.into()),
-        TextFont { font_size: bevy::text::FontSize::Px(size), ..default() },
-        TextColor(color),
-        Pickable::IGNORE,
-    )
+    sprite_text(s, size, color)
 }
 
 fn strip(theme: &Theme, station: bool) -> impl Bundle {
@@ -451,20 +449,16 @@ fn spawn_stock(commands: &mut Commands, root: Entity, theme: &Theme, cfg: &HudCo
         let Some(rect) = layout.rect(key) else { continue };
         let picture_key = if station { "minimapStationFilterButton" } else { "minimapShipFilterButton" };
         let picture = layout.name(picture_key).unwrap_or(fallback);
-        let filter = commands.spawn((
+        commands.spawn((
             FilterName { station },
             crate::ui::notices::Tooltip::new(crate::ui::i18n::tooltip_key(if station { "Stations" } else { "Ships" })),
             stock_rect(rect),
             GuiImage::new(picture),
             ChildOf(chrome),
-        )).id();
-        // Tiny authored filter icons (FO) have no room for an extra caption;
-        // their tooltip retains the label without overlapping the neighbouring icon.
-        if rect.h >= 18.0 {
-            commands.entity(filter).with_child(text(
-                tr(if station { "Stations" } else { "Ships" }), theme.micro_size.max(18.0), theme.text,
-            ));
-        }
+        ));
+        // No caption in the stock look: the gui cfg gives the filter areas a picture and no
+        // text key, and a caption drew over the authored button art at every size. The
+        // tooltip carries the name (read from data; the original draws none).
     }
 }
 
@@ -513,7 +507,10 @@ pub fn spawn_radar(
             ),
         ],
     );
-    commands.entity(root).with_child((RadarChrome, panel(t, &tr("Radar"), content)));
+    commands.entity(root).with_child((
+        RadarChrome,
+        panel_with(t, text(t.caps(&tr("Radar"), t.caps_titles), t.title_size, t.title), content),
+    ));
 }
 
 // ---- systems ---------------------------------------------------------------
@@ -1090,6 +1087,9 @@ minimapStationFilterButton = \"station_art\"
         assert_eq!(count::<super::super::theme::Panel>(&mut app), 0);
         assert_eq!(count::<FilterDot>(&mut app), 0);
         assert_eq!(count::<FilterName>(&mut app), 2);
+        // No caption over the authored button art in the stock look.
+        assert_eq!(count::<crate::ui::sprite_font::SpriteText>(&mut app), 0);
+        assert_eq!(count::<Text>(&mut app), 0);
         assert_eq!(count::<GuiImage>(&mut app), 5);
         assert_eq!(count::<RadarFog>(&mut app), 1);
         let outline = app.world_mut().query::<(&RadarCamera, &Node)>().iter(app.world())
@@ -1112,6 +1112,8 @@ minimapStationFilterButton = \"station_art\"
         assert_ne!(app.world_mut().query_filtered::<Entity, With<RadarSquare>>().single(app.world()).unwrap(), square);
         assert_eq!(app.world().get::<UiTargetCamera>(root).unwrap().0, target);
         assert_eq!(count::<super::super::theme::Panel>(&mut app), 1);
+        // Refit layout: the panel title and both strip names are sprite text (ADR 0007 T1), not hand-spawned Bevy text.
+        assert_eq!(count::<crate::ui::sprite_font::SpriteText>(&mut app), 3);
         assert_eq!(count::<GuiImage>(&mut app), 0);
         assert_eq!(app.world().resource::<RadarState>().ships, Filter::Enemies);
         assert_eq!(app.world().resource::<RadarState>().map, Some(map));
