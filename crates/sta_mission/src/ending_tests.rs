@@ -290,7 +290,7 @@ fn a_mission_that_ends_by_itself_before_the_test_point_is_reported() {
 #[test]
 fn a_natural_end_is_not_credited_to_an_entry() {
     // The lead-in sets a flag the win rule does not read; the mission wins by itself a little later.
-    let dead = good().replace("VarOp('p_WIN', 'set', 1)", "VarOp('p_WIN', 'set', 2)") + "\nMMM.register(function(t) if t >= 0.7 then A2.SucceedMission(0.0, nil) end end)\n";
+    let dead = good().replace("VarOp('p_WIN', 'set', 1)", "VarOp('p_WIN', 'set', 2)") + "\nMMM.register(function(t) if t >= 0.4 then A2.SucceedMission(0.0, nil) end end)\n";
     let (book, host) = book_and_host([dead, good(), good()]);
     let p = probe_mission(&host, None, &book, "federation", 0, &opts());
     let w = &p.win_seq[0];
@@ -316,7 +316,7 @@ fn the_fired_rule_survives_reads_of_trashed_before_the_engine_fires_it() {
 fn an_action_the_script_does_not_define_is_a_gap() {
     let (book, host) = book_and_host([good(), good(), good()]);
     let e = Entry { action: "nope".into(), kind: EntryKind::Terminal, rules: vec![] };
-    let t = sequence_trial(&book, &host, None, "federation", 0, &opts(), &e, true);
+    let t = sequence_trial(&book, &host, None, "federation", 0, &opts(), &e, true, None);
     assert!(!t.ok);
     assert_eq!(t.gaps, ["nope (not decoded)"]);
 }
@@ -339,4 +339,102 @@ fn a_column_needs_every_entry_run() {
     assert!(!p.win_seq_ok());
     p.plan.truncated = (0, 2);
     assert_eq!(p.lose_seq_ok(), Some(false));
+}
+
+#[test]
+fn natural_end_is_decided_by_the_baseline() {
+    // No baseline end: credited. Same result by the entry's tick: not. Later, or the other result: credited.
+    assert!(!natural_end(None, true, 5));
+    assert!(natural_end(Some((true, 5)), true, 5));
+    assert!(natural_end(Some((true, 2)), true, 5));
+    assert!(!natural_end(Some((true, 9)), true, 5));
+    assert!(!natural_end(Some((false, 2)), true, 5));
+}
+
+#[test]
+fn a_mission_that_ends_by_itself_has_a_baseline_and_an_unrelated_entry_is_not_credited() {
+    // The terminal entry's own step is slow, the mission wins by itself sooner.
+    let slow = good().replace("-- action: finish_win\nfunction M.finish_win(...)\n    local t = NewScript('w')", "-- action: finish_win\nfunction M.finish_win(...)\n    local t = NewScript('w')\n    AddStep(t, M.finish_lose_step, 'pad1')\n    AddStep(t, M.finish_lose_step, 'pad2')");
+    let slow = slow.replace("A('FailMission', A('GetTime'), 0)", "local _ = 0") + "\nMMM.register(function(t) if t >= 0.4 then A2.SucceedMission(0.0, nil) end end)\n";
+    let (book, host) = book_and_host([slow, good(), good()]);
+    let p = probe_mission(&host, None, &book, "federation", 0, &EndingOptions { forced_only: false, ..opts() });
+    assert_eq!(p.baseline.map(|b| b.0), Some(true), "{:?} {:?}", p.baseline, p.start_error);
+    let t = p.win_seq.iter().find(|t| t.kind == "terminal" || t.kind == "lead-in").expect("an entry");
+    assert!(!t.ok, "{t:?}");
+    assert!(t.note.contains("not credited"), "{}", t.note);
+}
+
+// ---- the converter's own engine -----------------------------------------------------------
+
+const CONVERTER: &str = include_str!("../../../tools/dsl_to_lua.py");
+
+/// The text of the Python raw string `NAME = r"""..."""` in the converter.
+fn converter_block(name: &str) -> &'static str {
+    let start = CONVERTER.find(&format!("{name} = r\"\"\"")).expect("block") + name.len() + 7;
+    let end = CONVERTER[start..].find("\"\"\"").expect("end of block");
+    &CONVERTER[start..start + end]
+}
+
+/// A tiny mission in the converter's shape around its real prelude and engine text.
+fn converted_script() -> String {
+    format!(
+        r#"Mission_ = {{
+    name = 'tiny',
+    vars = {{}}, state = {{}}, objects = {{}}, globals = {{}}, timers = {{}}, scripts = {{}},
+    rules = {{}}, affected = {{}}, satisfied = {{}}, fired = {{}}, fireCount = {{}}, ran = {{}},
+    calls = {{}}, missing = {{}}, failed = {{}}, notDecoded = {{}}, stepErrors = {{}},
+    conditionErrors = {{}}, engineVars = {{}}, engineWritten = {{}}, engineReads = {{}}, stepCount = 0, callFailed = false,
+    problems = {{}}, problemOrder = {{}}, blocked = {{}}, invalid = {{}}, unresolved = {{}},
+}}
+{prelude}
+function M.ScriptExtendInterface(...)
+    BindVar('p_ALWAYS_EVALUATE', 'dirty_int', NewVar('dirty_int', 'ALWAYS_EVALUATE'))
+    do return 51 end
+end
+function M.ScriptInit(...)
+    VarOp('p_ALWAYS_EVALUATE', 'set', 1)
+    do return 0 end
+end
+-- action: mark
+function M.mark(...)
+    Mission.marks = (Mission.marks or 0) + 1
+end
+-- action: trasher
+function M.trasher(...)
+    TrashRule('NoSuchRule')
+end
+Mission.rules[#Mission.rules + 1] = {{
+    name = 'TrasherRule',
+    action = 'trasher',
+    deps = {{ 'p_ALWAYS_EVALUATE' }},
+    when = function(S, O) return T(S.p_ALWAYS_EVALUATE) end,
+}}
+Objectives.objectives:add('Goal')
+{engine}
+"#,
+        prelude = converter_block("PRELUDE"),
+        engine = converter_block("ENGINE")
+    )
+}
+
+#[test]
+fn the_injected_action_fires_exactly_once_in_the_converters_engine() {
+    let (book, host) = book_and_host([converted_script(), good(), good()]);
+    let r = at_test_point(&book, &host, None, "federation", 0, &opts(), |runner, mut mid| {
+        let a = runner.active_mut().unwrap();
+        let rt_errors = a.runtime().errors().to_vec();
+        inject(a, "mark").unwrap();
+        for _ in 0..5 {
+            step(a, &mut mid.standin);
+        }
+        let marks: Option<i64> = a.runtime().eval("return Mission_.marks").unwrap();
+        let fired: Option<i64> = a.runtime().eval("return Mission_.fireCount['__ending_check']").unwrap();
+        let trash: Option<i64> = a.runtime().eval("return Mission_.fireCount['TrasherRule']").unwrap();
+        (rt_errors, marks, fired, trash, a.runtime().errors().len())
+    });
+    let (errs, marks, fired, trash, errs_after) = r.expect("starts");
+    assert!(errs.is_empty(), "{errs:?}");
+    assert_eq!(errs_after, 0);
+    assert_eq!((marks, fired), (Some(1), Some(1)), "once over five updates, with a TrashRule in the same tick");
+    assert!(trash.unwrap_or(0) >= 3, "the other satisfied rule fired every tick: {trash:?}");
 }

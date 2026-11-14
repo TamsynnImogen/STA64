@@ -14,9 +14,16 @@
 //!    own win condition is reachable; the forced end skips the script's win and lose steps.
 //! 2. **Win sequence** and 3. **lose sequence**: run the script's own steps that lead to
 //!    `SucceedMission` / `FailMission` from that mid-mission state and let the scripted end
-//!    complete; pass when it ends with the right result within [`EndingOptions::cap`] ticks and
-//!    nothing new is unbound, raises, is unsupported or stops a rule or step. It does not prove
-//!    the state the steps expect exists in a real game and can reach the end by a path no player can.
+//!    complete; pass when it ends with the right result within [`EndingOptions::cap`] ticks,
+//!    nothing new is unbound, raises, is unsupported or stops a rule or step, and the end is not
+//!    one the mission reaches by itself: one **uninjected baseline** run per mission from the same
+//!    test point (deterministic) gives `(result, ticks)`, and an entry is not credited when the
+//!    baseline ends the same way at or before the entry's own end tick. That is a baseline
+//!    differential: an entry that ends the mission earlier or differently than nothing would is
+//!    credited, whether or not the entry's steps are what reached `SucceedMission` / `FailMission`
+//!    (a rule satisfied by something else in the same ticks cannot be told apart). It does not
+//!    prove the state the steps expect exists in a real game and can reach the end by a path no
+//!    player can.
 //!
 //! **Selection of the end steps** (read from the converted script's own text; [`plan`]): the
 //! converter output knows which rule calls which action (`action = ` of the rule table), which
@@ -332,7 +339,10 @@ pub struct EndingProbe {
     pub first_objective_tick: Option<u64>,
     pub plan: Plan,
     pub forced_win: Option<EndTrial>,
-        pub forced_lose: Option<EndTrial>,
+    /// `None` when the mission did not start.
+    pub forced_lose: Option<EndTrial>,
+    /// How the mission ends with nothing injected, run from the same test point: `(won, ticks)`.
+    pub baseline: Option<(bool, u64)>,
     pub win_seq: Vec<EndTrial>,
     pub lose_seq: Vec<EndTrial>,
     pub notes: Vec<String>,
@@ -389,7 +399,7 @@ impl EndingProbe {
         }
         let num = |o: Option<u64>| o.map_or("null".into(), |v| v.to_string());
         format!(
-            "{{\"campaign\":{},\"index\":{},\"bzn\":{},\"started\":{},\"start_error\":{},\"test_tick\":{},\"first_objective_tick\":{},\"win_entries\":{},\"lose_entries\":{},\"truncated\":[{},{}],\"calls_fail\":{},\"forced_win\":{},\"forced_lose\":{},\"win_seq\":{},\"lose_seq\":{},\"notes\":[{}]}}",
+            "{{\"campaign\":{},\"index\":{},\"bzn\":{},\"started\":{},\"start_error\":{},\"test_tick\":{},\"first_objective_tick\":{},\"win_entries\":{},\"lose_entries\":{},\"truncated\":[{},{}],\"calls_fail\":{},\"forced_win\":{},\"forced_lose\":{},\"baseline\":{},\"win_seq\":{},\"lose_seq\":{},\"notes\":[{}]}}",
             json_string(&self.campaign),
             self.index,
             json_string(&self.bzn),
@@ -404,6 +414,7 @@ impl EndingProbe {
             self.plan.calls_fail,
             opt(&self.forced_win),
             opt(&self.forced_lose),
+            self.baseline.map_or("null".into(), |(w, k)| format!("[{w},{k}]")),
             many(&self.win_seq),
             many(&self.lose_seq),
             self.notes.iter().map(|n| json_string(n)).collect::<Vec<_>>().join(","),
@@ -519,10 +530,22 @@ fn inject(a: &ActiveMission, action: &str) -> Result<(), String> {
     a.runtime().eval::<()>(&chunk).map_err(|e| format!("cannot fire {action}: {e}"))
 }
 
-/// Times the named rules have fired so far.
-fn fires(rt: &crate::runtime::MissionRuntime, rules: &[String]) -> u64 {
-    let list = rules.iter().map(|r| format!("'{}'", r.replace(['\\', '\''], ""))).collect::<Vec<_>>().join(",");
-    rt.eval::<u64>(&format!("local n = 0 for _, r in ipairs({{{list}}}) do n = n + (Mission_.fireCount[r] or 0) end return n")).unwrap_or(0)
+/// Whether an entry's end is no evidence of the entry: the uninjected mission ends the same way
+/// by the same tick.
+fn natural_end(baseline: Option<(bool, u64)>, won: bool, ticks: u64) -> bool {
+    baseline.is_some_and(|(w, k)| w == won && k <= ticks)
+}
+
+/// The mission run from the test point with nothing injected, for `cap` ticks (the sim and the
+/// stand-in host are deterministic, so this is what every entry's trial would do without it).
+fn baseline_trial(book: &CampaignBook, host: &dyn MissionHost, vfs: Option<&Arc<sta_vfs::Vfs>>, campaign: &str, index: usize, opts: &EndingOptions) -> Option<(bool, u64)> {
+    at_test_point(book, host, vfs, campaign, index, opts, |runner, mut mid| {
+        let a = runner.active_mut().expect("started");
+        let at = a.sim().tick;
+        (0..opts.cap).find_map(|_| step(a, &mut mid.standin)).map(|o| (o.won, o.tick.saturating_sub(at)))
+    })
+    .ok()
+    .flatten()
 }
 
 type Probed<R> = Result<R, String>;
@@ -600,7 +623,7 @@ fn forced_trial(book: &CampaignBook, host: &dyn MissionHost, vfs: Option<&Arc<st
 }
 
 #[allow(clippy::too_many_arguments)]
-fn sequence_trial(book: &CampaignBook, host: &dyn MissionHost, vfs: Option<&Arc<sta_vfs::Vfs>>, campaign: &str, index: usize, opts: &EndingOptions, entry: &Entry, won: bool) -> EndTrial {
+fn sequence_trial(book: &CampaignBook, host: &dyn MissionHost, vfs: Option<&Arc<sta_vfs::Vfs>>, campaign: &str, index: usize, opts: &EndingOptions, entry: &Entry, won: bool, baseline: Option<(bool, u64)>) -> EndTrial {
     let mut t = EndTrial {
         action: entry.action.clone(),
         kind: if entry.kind == EntryKind::LeadIn { "lead-in" } else { "terminal" }.into(),
@@ -610,7 +633,6 @@ fn sequence_trial(book: &CampaignBook, host: &dyn MissionHost, vfs: Option<&Arc<
         let a = runner.active_mut().expect("started");
         let at = a.sim().tick;
         let before = gaps_now(a.runtime());
-        let fired_before = fires(a.runtime(), &entry.rules);
         inject(a, &entry.action)?;
         let mut outcome = None;
         for _ in 0..opts.cap {
@@ -625,19 +647,18 @@ fn sequence_trial(book: &CampaignBook, host: &dyn MissionHost, vfs: Option<&Arc<
             _ => None,
         };
         let last = a.runtime().eval::<Option<String>>("return Mission_.lastStep").ok().flatten();
-        // A lead-in is credited with the end only if the mission's own terminal rule fired after it.
-        let caused = entry.kind == EntryKind::Terminal || fires(a.runtime(), &entry.rules) > fired_before;
-        Ok((outcome.map(|o| (o.won, o.tick.saturating_sub(at))), gaps, blocked, last, caused))
+        Ok((outcome.map(|o| (o.won, o.tick.saturating_sub(at))), gaps, blocked, last))
     });
     match res {
         Err(e) | Ok(Err(e)) => t.note = e,
-        Ok(Ok((out, gaps, blocked, last, caused))) => {
+        Ok(Ok((out, gaps, blocked, last))) => {
+            let natural = out.is_some_and(|(w, k)| natural_end(baseline, w, k));
             t.result = out.map(|(w, _)| w);
             t.ticks = out.map_or(opts.cap, |(_, k)| k);
-            t.ok = out.is_some_and(|(w, _)| w == won) && gaps.is_empty() && caused;
+            t.ok = out.is_some_and(|(w, _)| w == won) && gaps.is_empty() && !natural;
             t.note = match (out, blocked) {
                 (Some((w, _)), _) if w != won => format!("ended {} instead", if w { "won" } else { "lost" }),
-                (Some(_), _) if !caused => "ended, but the mission's own terminal rule did not fire after the entry (a natural end, not credited)".to_owned(),
+                (Some(_), _) if natural => "the mission ends the same way by itself, as soon, without the entry (a natural end, not credited)".to_owned(),
                 (None, Some(why)) => format!("end blocked by a gap: {why}"),
                 (None, None) => format!("did not end within {} ticks (last step {})", opts.cap, last.as_deref().unwrap_or("none")),
                 _ => String::new(),
@@ -687,9 +708,10 @@ pub fn probe_mission(host: &dyn MissionHost, vfs: Option<&Arc<sta_vfs::Vfs>>, bo
     // Armada II's loss cheat works in every mission; Armada I's loss is the test-only extension.
     p.forced_lose = Some(forced_trial(book, host, vfs, campaign, index, opts, false));
     if !opts.forced_only {
+        p.baseline = baseline_trial(book, host, vfs, campaign, index, opts);
         let (win, lose) = (p.plan.win.clone(), p.plan.lose.clone());
-        p.win_seq = win.iter().map(|e| sequence_trial(book, host, vfs, campaign, index, opts, e, true)).collect();
-        p.lose_seq = lose.iter().map(|e| sequence_trial(book, host, vfs, campaign, index, opts, e, false)).collect();
+        p.win_seq = win.iter().map(|e| sequence_trial(book, host, vfs, campaign, index, opts, e, true, p.baseline)).collect();
+        p.lose_seq = lose.iter().map(|e| sequence_trial(book, host, vfs, campaign, index, opts, e, false, p.baseline)).collect();
     }
     if p.plan.truncated != (0, 0) {
         p.notes.push(format!("entries beyond {MAX_ENTRIES} not run: {} win, {} lose", p.plan.truncated.0, p.plan.truncated.1));

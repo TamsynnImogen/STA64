@@ -563,11 +563,14 @@ impl MissionRuntime {
     /// a pending scripted end (also a blocked one) and skips whatever the script would have run
     /// before calling its own end. No sim state, no command. Returns false, and changes nothing,
     /// once the mission has ended or the outcome scan would already return one (an A1 end call,
-    /// `Mission.finish`). Test and host entry only: nothing in `api/`, `sta64` or the network
-    /// calls it.
-    #[doc(hidden)]
-    pub fn force_mission_end(&self, tick: u64, won: bool) -> bool {
+    /// `Mission.finish`), or an A2 scripted end is already due (its end time has passed). `tick`
+    /// only stamps the record; the result takes effect at the next outcome scan. Crate-internal:
+    /// the chat hook and the harness reach it through `cheat` and `ending`.
+    pub(crate) fn force_mission_end(&self, tick: u64, won: bool) -> bool {
         if self.inner.ctx.borrow().ended.is_some() || self.finished() {
+            return false;
+        }
+        if matches!(self.mission_end(tick), MissionEndState::Ended { .. }) {
             return false;
         }
         if self.eval::<bool>("return rawget(_G, '__sta64_outcome') ~= nil").unwrap_or(false) {

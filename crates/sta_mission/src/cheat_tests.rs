@@ -111,3 +111,14 @@ fn a_mission_that_ended_by_itself_cannot_be_forced() {
     assert!(!force_end(&r, 5, false));
     assert_eq!(r.mission_end(6), MissionEndState::Ended { won: true });
 }
+
+#[test]
+fn an_a2_end_that_is_already_due_cannot_be_overridden() {
+    // The end time has passed and nothing has scanned yet.
+    let r = MissionRuntime::from_source("cheat", "A2.SucceedMission(0.0, nil)\n", 1);
+    assert!(!force_end(&r, 100, false));
+    assert_eq!(scan_outcome(&r, 101).map(|o| o.won), Some(true));
+    // One still pending can be overridden.
+    let r = MissionRuntime::from_source("cheat", "A2.SucceedMission(1000.0, nil)\n", 1);
+    assert!(force_end(&r, 100, false));
+}

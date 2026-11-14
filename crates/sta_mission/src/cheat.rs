@@ -112,8 +112,7 @@ pub fn session_accepts(session: CheatSession) -> Result<(), Refusal> {
 /// session check: this is the test-only entry (an Armada I loss is reachable only here) and the
 /// last step of [`try_chat_cheat`]. False when the mission has already ended (including an Armada I
 /// end call or `Mission.finish` the outcome scan would already report).
-#[doc(hidden)]
-pub fn force_end(runtime: &MissionRuntime, tick: u64, won: bool) -> bool {
+pub(crate) fn force_end(runtime: &MissionRuntime, tick: u64, won: bool) -> bool {
     runtime.force_mission_end(tick, won)
 }
 
