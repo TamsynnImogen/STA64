@@ -323,7 +323,7 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [ ] Exit to main menu from Instant Action, then Instant Action again, a campaign mission, and a mod switch: no leftover ships, fog, particles or titles.
 - [ ] Multiplayer (after INT-M5 merges): the menu does not pause; Exit leaves the session cleanly.
 - [ ] Armada I, Fleet Operations, Roots: Esc menu captions come from the install's `label.map` (`return`, `options`).
-- [ ] Roots "Politics by Other Means": with `STA64_TEST_ROOTS_INSTALL`, `install_gated_roots_politics_by_other_means_plays_its_intro_and_never_holds_the_camera` passes; once SIM-54/55 `maxHull` lands, drop its `Timer: interval` allowance.
+- [ ] Roots "Politics by Other Means": with `STA64_TEST_ROOTS_INSTALL`, `install_gated_roots_politics_by_other_means_plays_its_intro_and_never_holds_the_camera` passes.
 - [ ] Cineractive hold: Space/Esc skips a skippable one, a non-skippable one after 10 s, any after 180 s; verify in a real client on a Roots intro.
 - [ ] A loss after an unsupported call shows "cannot be finished yet" and changes no progress (debrief "Mission abandoned").
 - [ ] Unify the Roots (this PR) and A2 (LUA-13 #577) blocked-end paths in one outcome type.
@@ -343,7 +343,7 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [ ] check: a stock A2 mission with `Patrol` on a real path loops it from the first point (needs the A2 path reader).
 - [ ] check: `AllowAsTarget` blocks automatic fire at a unit but not an explicit attack, on the bench (static only today).
 - [ ] check: measure scout and search-and-destroy on stock A2 (Refit `measure/sim57-cmds` has `setpos`/`paths`).
-- [ ] Roots "Politics by Other Means": with `STA64_TEST_ROOTS_INSTALL` the test passes and the relay clock counts seconds; confirm in a real client that the "N Minutes Remaining" subtitle shows a countdown that drops once a minute. Read from the script (no build): `cExpired` runs on a repeating 1.0 s timer and adds that subtitle with a 1 s duration every second by design, a continuous display whose number is `ceil((1800 - maxHull)/60)`; it is a bug only if the number stays fixed (the old symptom, with `maxHull` unset) or the subtitles stack because the client keeps each longer than 1 s (not checked).
+- [ ] Roots "Politics by Other Means": with `STA64_TEST_ROOTS_INSTALL` the test passes; confirm in a real client that the "N Minutes Remaining" subtitle shows a countdown that drops once a minute.
 - [ ] A mission that renames a unit with `Entity.name` shows it in the HUD (the view carries `attrs.names`; the HUD does not read it yet).
 - [ ] Politics by Other Means (Roots, tutorials 4): the mission opens black and fades in on the Federation fleet (camera on a path, no HUD, no shroud), a voice line plays at 3 s, cuts to the Dominion relay at 26 s, fades out and the game appears with HUD and the objectives panel (never black, never an empty panel)
 - [ ] A1 converter: resolve string arguments held in registers (`CountUnits(team, R.eax)` in rom5/finale4, `CountUnitsNearPoint` in borg3/borg5/rom3)
@@ -378,12 +378,9 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [ ] Stock look: asteroids look exactly as before (stock texture).
 - [ ] A1 fed1 opening: title 'PREMONITIONS' fades out at 10 s over 1 s; voice line plays out before the zoom-out; control returns after the 5 s zoom-out (playtest with sound).
 - [ ] A1 title font (title.spr) and size: measure on the original-game bench.
-- [ ] Research notes: STA64-research/first-missions/a1-showtitle.md and a1-fed1-opening-presentation.md.
 - [ ] Shipyard repair-dock animation (`repairAnimation`, flags 2/4 at `SetRepairDock`) once the sim has a repair dock.
 - [ ] A windowless GPU frame of a stock mining station docked and undocked.
 - [ ] Units with `animation` off that are not transfer stations: the engine rests their ambient tracks; decide after a visual check.
-- [ ] check: planet takes the new team's race on SetTeam once SIM-30 colony state exists (Planet::SetTeam, S)
-- [ ] check: derelict check after Entity.crew / maxCrew edits calls #652's `check_derelict` once merged
 - [ ] check: repair time, mining rate modifier, recycle fractions and crew-status thresholds read the unit's effective race (`Sim::unit_race`) when those systems land
 - [ ] check: `latinumCostModifier` documented as an STA64 race ODF key in the modding docs
 - [ ] check: research pod attachments (design on #539)
@@ -419,10 +416,11 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [ ] UI-38: `OrderKind::Colonize` and the colony ship's `eventAcknowledge` voice for the HUD order.
 - [ ] UI-38: COLONIZE for the Borg beam colony ship once the simulation models the beam (stock shows the button).
 - [ ] UI-38: bench check of the original's COLONIZE availability for mixed selections and of which planets the cursor accepts.
-- [ ] Player check: converted A1 rom3 no longer fires the four wormhole-switch rules every tick; A1 fed5's opening survives Worf once wormhole objects and the AI-disable seam exist (currently ends lost at ~45 s in the stand-in run).
+- [ ] Player check: converted A1 rom3 no longer fires the four wormhole-switch rules every tick once wormhole objects exist; A1 fed5's opening survives Worf (currently ends lost at ~45 s in the stand-in run).
+- [ ] `GetDistance` is 2D (x, z) in the original; the binding is 3D.
 - [ ] RND-12: a bench verb for planet population, then a pair of a colonized planet against the original (Stock look, both hemispheres).
 - [ ] RND-12: whether the original keeps drawing a planet's old cities when its owner becomes neutral (not established; they stay drawn here).
-- [ ] RND-12 (outside this PR): the planet hemisphere meshes face inward, so a planet draws the far wall of its sphere (see Review); check the cloud shell and halo against the original.
+- [ ] RND-12 (see #545): the planet hemisphere meshes face inward, so a planet draws the far wall of its sphere; check the cloud shell and halo against the original.
 - [ ] RND-12: measure the 16x16 alloc picture's filtering, the drawn population at map load and the pass's night-side lighting on the original.
 - [ ] LUA-20: a2_borg01 / a2_borg10 end near a `DisableAllAITeams`; check in the original whether a disabled team's distress responses and running waves change what `IsCompromised`/`CountStations` see there (not measured).
 - [ ] LUA-20: player check in game: a mission with `DisableAllAITeams` in a cineractive (borg01) and its AI waves afterwards.
