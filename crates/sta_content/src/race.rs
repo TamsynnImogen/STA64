@@ -83,6 +83,23 @@ pub struct RaceCrew {
     pub planet_modifier: Fixed,
 }
 
+/// Authored race repair metadata from a resolved race ODF (SIM-40).
+/// Absence differs from an explicitly authored zero; no runtime defaults are inferred.
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RaceRepair {
+    pub strength: Option<Fixed>,
+    pub yellow: Option<Fixed>,
+    pub red: Option<Fixed>,
+    pub crew_yellow_status: Option<Fixed>,
+    pub crew_red_status: Option<Fixed>,
+}
+
+impl RaceRepair {
+    fn is_empty(self) -> bool {
+        self == Self::default()
+    }
+}
+
 /// What a team's race changes about the team itself (SIM-54), read from the
 /// race ODF when it differs from the identity:
 ///
@@ -117,6 +134,8 @@ pub struct Races {
     crew: Vec<(String, RaceCrew)>,
     /// The races whose [`SeatRaceRule`] is not the identity, by key, in race order.
     seat: Vec<(String, SeatRaceRule)>,
+    /// Authored repair values keyed by race ODF stem, not unit race key.
+    repair: Vec<(String, RaceRepair)>,
     /// Legacy profiles and loaded catalogues are authoritative. Only a bare
     /// native/fake database may infer its choices from unit definitions.
     authoritative: bool,
@@ -174,13 +193,13 @@ impl Races {
             Ok(o) => o,
             Err(e) => {
                 warnings.push(Warning::new("races.odf", e.to_string()));
-                return (Races { races: Vec::new(), crew: Vec::new(), seat: Vec::new(), authoritative }, warnings);
+                return (Races { races: Vec::new(), crew: Vec::new(), seat: Vec::new(), repair: Vec::new(), authoritative }, warnings);
             }
         };
         let declared = nonnegative_integer(&list, "numberofraces");
         if list.raw("numberofraces").is_some() && declared.is_none() {
             warnings.push(Warning::new("races.odf", "numberOfRaces must be a nonnegative integer"));
-            return (Races { races: Vec::new(), crew: Vec::new(), seat: Vec::new(), authoritative }, warnings);
+            return (Races { races: Vec::new(), crew: Vec::new(), seat: Vec::new(), repair: Vec::new(), authoritative }, warnings);
         }
         // Walk authored keys rather than an arbitrary fixed cap or a potentially
         // enormous declared count. Inherited trailing keys are inactive when a
@@ -196,6 +215,7 @@ impl Races {
         let mut interfaces = Vec::new();
         let mut crew_rates: Vec<(String, RaceCrew)> = Vec::new();
         let mut seat_rules: Vec<(String, SeatRaceRule)> = Vec::new();
+        let mut repair_rules: Vec<(String, RaceRepair)> = Vec::new();
         for i in entries {
             let Some(file) = list.str(&format!("race{i}")) else {
                 continue;
@@ -255,6 +275,28 @@ impl Races {
                     if rule != SeatRaceRule::default() {
                         seat_rules.push((name.clone(), rule));
                     }
+                    // ODF::f32 applies the stock numeric suffix convention. Check the
+                    // signed 32.32 range before converting: Fixed::from_f64 saturates.
+                    let mut repair_value = |key: &str| {
+                        o.raw(key)?;
+                        match o.f32(key).map(f64::from).filter(|v| v.is_finite() && *v >= -2147483648.0 && *v < 2147483648.0) {
+                            Some(v) => Some(Fixed::from_f64(v)),
+                            None => {
+                                warnings.push(Warning::new(format!("{s}.odf"), format!("{key} must be a finite representable number")));
+                                None
+                            }
+                        }
+                    };
+                    let repair = RaceRepair {
+                        strength: repair_value("repairstrength"),
+                        yellow: repair_value("repairyellow"),
+                        red: repair_value("repairred"),
+                        crew_yellow_status: repair_value("crewyellowstatus"),
+                        crew_red_status: repair_value("crewredstatus"),
+                    };
+                    if !repair.is_empty() {
+                        repair_rules.push((s.clone(), repair));
+                    }
                     races.push(RaceDef {
                         stem: s,
                         name,
@@ -303,11 +345,13 @@ impl Races {
                 }
             }
         }
-        (Races { races, crew: crew_rates, seat: seat_rules, authoritative }, warnings)
+        repair_rules.sort_by(|a, b| a.0.cmp(&b.0));
+        repair_rules.dedup_by(|a, b| a.0 == b.0);
+        (Races { races, crew: crew_rates, seat: seat_rules, repair: repair_rules, authoritative }, warnings)
     }
 
     pub fn from_defs(races: Vec<RaceDef>) -> Races {
-        Races { races, crew: Vec::new(), seat: Vec::new(), authoritative: true }
+        Races { races, crew: Vec::new(), seat: Vec::new(), repair: Vec::new(), authoritative: true }
     }
 
     /// The crew keys of a race by its key (`unitedfederation`), any case.
@@ -319,6 +363,11 @@ impl Races {
     /// The [`SeatRaceRule`]s that are not the identity, in race order.
     pub fn seat_rules(&self) -> impl Iterator<Item = (&str, SeatRaceRule)> {
         self.seat.iter().map(|(k, r)| (k.as_str(), *r))
+    }
+
+    /// Authored repair metadata by race ODF stem, in canonical stem order.
+    pub fn repair_rules(&self) -> impl Iterator<Item = (&str, RaceRepair)> {
+        self.repair.iter().map(|(stem, repair)| (stem.as_str(), *repair))
     }
 
     /// Every race's crew keys, in race order.
