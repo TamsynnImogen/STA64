@@ -25,10 +25,12 @@ fn the_null_handle_is_a_no_op_for_either_flag() {
         "A2.CraftCannotDie(nil, true)",
         "A2.CraftCannotDie(0, true)",
         "A2.CraftCannotDie(0, false)",
+        "A2.CraftCannotDie(0.0, true)",
         "local arr = {}; A2.CraftCannotDie(arr[0], true)",
     ] {
         rt.eval::<()>(script).unwrap_or_else(|e| panic!("{script}: {e}"));
         assert!(rt.take_commands().is_empty(), "{script} queued a command");
+        assert!(rt.unsupported().is_empty(), "{script} recorded a gap: {:?}", rt.unsupported());
     }
 }
 
@@ -43,13 +45,24 @@ fn a_live_handle_still_queues_the_flag() {
 
 #[test]
 fn the_flag_and_other_handles_stay_strict() {
-    let (mut rt, a) = runtime();
+    // A unit that was in the world and is gone from the view.
+    let mut sim = Sim::new(8);
+    let stats = MoveStats::from_f32(20.0, 1.0, 1.0, 1.0, 0.2);
+    let kept = sim.spawn(0, Vec3::from_f32([1.0, 0.0, 0.0]), (Fixed::ZERO, Fixed::ONE), stats);
+    let gone = sim.spawn(0, Vec3::from_f32([2.0, 0.0, 0.0]), (Fixed::ZERO, Fixed::ONE), stats);
+    let mut view = (*sim.view()).clone();
+    view.units.retain(|u| u.id == kept);
+    let cfg = MissionConfig { view: Some(view), ..MissionConfig::default() };
+    let mut rt = MissionRuntime::from_source_with("ccd.lua", "", 8, cfg);
+    rt.eval::<()>(&format!("gone = {}", gone.0)).unwrap();
+    let a = kept;
     for script in [
         "A2.CraftCannotDie(nil, 1)",
         "A2.CraftCannotDie(nil, nil)",
         "A2.CraftCannotDie('x', true)",
         "A2.CraftCannotDie(-1, true)",
         "A2.CraftCannotDie(99999, true)",
+        "A2.CraftCannotDie(gone, true)",
         "A2.CraftCannotDie(nil)",
     ] {
         assert!(rt.eval::<()>(script).is_err(), "{script}");

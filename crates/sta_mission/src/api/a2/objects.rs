@@ -170,7 +170,7 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
             // The null handle (0, or the nil of an array slot the script never set) names
             // no object: the engine's guard makes the call a silent no-op (read from the
             // executable, static, A1 and A2). The flag stays a strict boolean.
-            let null = args.len() == 2 && (matches!(args[0], Value::Nil) || matches!(args[0], Value::Integer(0)));
+            let null = args.len() == 2 && (matches!(args[0], Value::Nil) || integer("CraftCannotDie", &args[0]).is_ok_and(|n| n == 0));
             let id = if null { EntityId(0) } else { handle("CraftCannotDie", &args, 2)? };
             let Value::Boolean(on) = &args[1] else {
                 return Err(mlua::Error::runtime("A2.CraftCannotDie requires a boolean"));

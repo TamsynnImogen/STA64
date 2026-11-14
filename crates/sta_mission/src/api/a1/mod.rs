@@ -159,6 +159,18 @@ fn whole(v: &Value) -> Option<i64> {
     }
 }
 
+/// Whether the Lua type of `v` is the one `kind` takes, whatever its value (a value that
+/// is out of range or unusable then keeps its own error in a call with several overloads).
+fn lua_type_fits(kind: char, v: &Value) -> bool {
+    match kind {
+        'h' | 'H' | 'i' | 'f' | 'n' => matches!(v, Value::Integer(_) | Value::Number(_)),
+        'b' => matches!(v, Value::Boolean(_)),
+        's' => matches!(v, Value::String(_)),
+        'S' => matches!(v, Value::String(_) | Value::Nil),
+        _ => matches!(v, Value::Table(_)),
+    }
+}
+
 /// What an argument kind accepts, for the error of a call with several overloads.
 fn kind_name(kind: char) -> &'static str {
     match kind {
@@ -280,7 +292,7 @@ impl Env {
                 match self.parse_one(name, i, k, v) {
                     Ok(a) => values.push(a),
                     Err(e) => {
-                        let type_fits = matches!(k, 'h') && whole(v).and_then(|n| u32::try_from(n).ok()).is_some();
+                        let type_fits = lua_type_fits(k, v);
                         failure = Some(((i, type_fits), e));
                         break;
                     }
