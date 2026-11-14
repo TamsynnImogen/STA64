@@ -240,8 +240,19 @@ impl Env {
             .ok_or_else(|| mlua::Error::runtime(format!("A2.{name} requires a valid team number")))
     }
 
-    /// The points of `A2.paths[path]`; a missing path is a host gap.
+    /// The points of `A2.paths[path]`; an absent name is a host gap.
     fn path(&self, lua: &Lua, name: &str, path: &str) -> mlua::Result<Vec<Vec3>> {
+        match self.find_path(lua, name, path)? {
+            Some(points) => Ok(points),
+            None => Err(self.gap(name, &format!("path '{path}' is not in A2.paths (the host fills it from the map)"))),
+        }
+    }
+
+    /// The points of `A2.paths[path]`; `None` when the map has no path of that
+    /// name (LUA-18). The engine's lookup returns null and `Goto`, `Patrol` and
+    /// `PointAt` do nothing; stock scripts name such paths. A path of no points
+    /// is still a gap.
+    fn find_path(&self, lua: &Lua, name: &str, path: &str) -> mlua::Result<Option<Vec<Vec3>>> {
         let missing = |why: String| self.gap(name, &why);
         let a2: Table = lua.globals().raw_get("A2")?;
         let Value::Table(paths) = a2.raw_get::<Value>("paths")? else {
@@ -249,7 +260,7 @@ impl Env {
         };
         let points = match dll_objects::lookup_path(&paths, path)? {
             Ok(Some(t)) => t,
-            Ok(None) => return Err(missing(format!("path '{path}' is not in A2.paths (the host fills it from the map)"))),
+            Ok(None) => return Ok(None),
             Err(why) => return Err(missing(why)),
         };
         let mut out = Vec::new();
@@ -264,7 +275,7 @@ impl Env {
         if out.is_empty() {
             return Err(missing(format!("path '{path}' has no points")));
         }
-        Ok(out)
+        Ok(Some(out))
     }
 }
 
@@ -321,7 +332,11 @@ fn goto(lua: &Lua, env: &Env, overload: usize, a: &[P]) -> mlua::Result<Value> {
     };
     let points = match dest {
         Some(p) => vec![p],
-        None => env.path(lua, "Goto", a[1].text())?,
+        // An absent path name: the engine's lookup is null and nothing happens.
+        None => match env.find_path(lua, "Goto", a[1].text())? {
+            Some(points) => points,
+            None => return nothing(),
+        },
     };
     let warp = a[2].boolean();
     env.owned("Goto", &unit)?;
@@ -498,7 +513,8 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
     // marks the shared path as a loop; STA64 keeps the loop in the order).
     table.set("Patrol", def(lua, &env, "Patrol", &["hs"], |lua, e, _, a| {
         let Some(unit) = e.alive(a[0].id()) else { return nothing() };
-        let points = e.path(lua, "Patrol", a[1].text())?;
+        // An absent path name sets neither the path type nor the order.
+        let Some(points) = e.find_path(lua, "Patrol", a[1].text())? else { return nothing() };
         e.owned("Patrol", &unit)?;
         e.order("Patrol", unit.id, |units| Order::Patrol { units, points })?;
         nothing()
@@ -539,7 +555,8 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
     table.set("PointAt", def(lua, &env, "PointAt", &["hs", "hh"], |lua, e, ov, a| {
         let Some(unit) = e.alive(a[0].id()) else { return nothing() };
         let to = if ov == 0 {
-            e.path(lua, "PointAt", a[1].text())?[0]
+            let Some(points) = e.find_path(lua, "PointAt", a[1].text())? else { return nothing() };
+            points[0]
         } else {
             let Some(target) = e.alive(a[1].id()) else { return nothing() };
             e.ctx.borrow().placed(target.id, target.pos)

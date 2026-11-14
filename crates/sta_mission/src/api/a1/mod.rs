@@ -329,8 +329,19 @@ impl Env {
         mlua::Error::runtime(format!("A1.{name} is not available: {why}"))
     }
 
-    /// The points of `A1.paths[path]`.
+    /// The points of `A1.paths[path]`; an absent name is a host gap.
     pub fn path(&self, lua: &Lua, name: &str, path: &str) -> mlua::Result<Vec<Vec3>> {
+        match self.find_path(lua, name, path)? {
+            Some(points) => Ok(points),
+            None => Err(self.no_data(name, &format!("path '{path}' is not in A1.paths (the host fills it from the map)"))),
+        }
+    }
+
+    /// The points of `A1.paths[path]`; `None` when the map has no path of that
+    /// name (LUA-18). The engine's lookup then returns null and the calls that
+    /// look a path up do nothing; the stock scripts name such paths (a path of
+    /// another map). A path of no points is still a gap.
+    pub fn find_path(&self, lua: &Lua, name: &str, path: &str) -> mlua::Result<Option<Vec<Vec3>>> {
         let missing = || {
             self.no_data(name, &format!("path '{path}' is not in A1.paths (the host fills it from the map)"))
         };
@@ -349,7 +360,7 @@ impl Env {
                 }
                 match found.len() {
                     1 => found.remove(0),
-                    0 => return Err(missing()),
+                    0 => return Ok(None),
                     _ => return Err(self.no_data(name, &format!("path '{path}' is ambiguous in A1.paths"))),
                 }
             }
@@ -366,7 +377,7 @@ impl Env {
         if out.is_empty() {
             return Err(missing());
         }
-        Ok(out)
+        Ok(Some(out))
     }
 
     pub fn path_point(&self, lua: &Lua, name: &str, path: &str, index: i64) -> mlua::Result<Vec3> {
@@ -375,6 +386,13 @@ impl Env {
             .ok()
             .and_then(|i| points.get(i).copied())
             .ok_or_else(|| mlua::Error::runtime(format!("A1.{name}: path '{path}' has no point {index}")))
+    }
+
+    /// Point `index` (0-based) of the path, or `None` when the map has no such
+    /// path or the path has no such point (`GetLocation`, LUA-18).
+    pub fn find_path_point(&self, lua: &Lua, name: &str, path: &str, index: i64) -> mlua::Result<Option<Vec3>> {
+        let Some(points) = self.find_path(lua, name, path)? else { return Ok(None) };
+        Ok(usize::try_from(index).ok().and_then(|i| points.get(i).copied()))
     }
 }
 

@@ -165,11 +165,16 @@ fn goto_with_the_warp_flag_is_a_warp_move_on_the_first_leg() {
 }
 
 #[test]
-fn goto_a_path_the_host_did_not_fill_is_counted() {
+fn a_path_the_map_does_not_have_does_nothing_like_the_engines_null_lookup() {
+    // LUA-18: AiPath::Find is null; Goto, Patrol and PointAt do nothing, uncounted.
     let s = scene();
-    let (rt, err) = fails(&s, "A2.Goto(a, 'NOPE', false, 1)");
+    let (rt, commands) = run(&s, "A2.Goto(a, 'NOPE', false, 1); A2.Patrol(a, 'NOPE'); A2.PointAt(a, 'NOPE')");
+    assert!(commands.is_empty(), "{commands:?}");
+    assert!(rt.unsupported().is_empty(), "{:?}", rt.unsupported());
+    // a missing path table is still a host gap
+    let (rt, err) = fails(&s, "A2.paths = nil; A2.Goto(a, 'P', false, 1)");
     assert!(err.contains("A2.paths"), "{err}");
-    assert!(counted(&rt, "A2.Goto: path 'NOPE'"));
+    assert!(counted(&rt, "A2.Goto"));
 }
 
 #[test]
@@ -486,7 +491,6 @@ fn placement_and_facing_calls_reject_bad_input_without_queuing() {
     for (script, key) in [
         ("A2.SetPosition(a, 'P', 3)", "A2.SetPosition"),
         ("A2.SetPosition(a, 'Nope')", "A2.SetPosition"),
-        ("A2.PointAt(a, 'Nope')", "A2.PointAt"),
     ] {
         let (rt, err) = fails(&s, script);
         assert!(err.contains("is not available"), "{script}: {err}");

@@ -426,6 +426,11 @@ impl Ctx {
     }
 }
 
+/// `GetLocation(path, index)` on a path the map does not have, or a point it
+/// does not have: the engine returns a fixed default vector (LUA-18). Its value
+/// was not read from the executable (not measured); the zero vector is used.
+pub(crate) const ABSENT_PATH_LOCATION: (f64, f64, f64) = (0.0, 0.0, 0.0);
+
 pub(crate) fn pos_f64(v: Vec3) -> (f64, f64, f64) {
     (v.x.to_f32() as f64, v.y.to_f32() as f64, v.z.to_f32() as f64)
 }

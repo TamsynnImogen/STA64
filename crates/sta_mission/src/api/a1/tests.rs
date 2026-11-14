@@ -360,7 +360,6 @@ fn malformed_calls_are_errors_that_queue_nothing() {
         "A1.RemoveObject(-1)",
         "A1.SetImpulseSpeed(a, 0/0)",
         "A1.SetImpulseSpeed(a, -1)",
-        "A1.Goto(a, 'Missing', 1)",
         "A1.Goto(a, 0, 1)",
         "A1.ShowTitle(0, 0, 200, 70, 'T')",
         "A1.RemoveTitle(9, true)",
@@ -370,7 +369,6 @@ fn malformed_calls_are_errors_that_queue_nothing() {
         "A1.BuildObject('fx_cruiser', 0, 'Missing', 0)",
         "A1.CineractiveShot(a, 0)",
         "A1.FadeIn(1, 0)",
-        "A1.GetLocation('P', 9)",
         "A1.SetPosition(0, 'P')",
     ] {
         fails(&s, script);
@@ -653,8 +651,27 @@ fn queries_read_the_view() {
 #[test]
 fn path_seam_is_a_documented_error_when_unfilled() {
     let s = scene();
-    let message = fails(&s, "A1.paths.P = nil; A1.Goto(a, 'P', 1)");
+    let message = fails(&s, "A1.paths = nil; A1.Goto(a, 'P', 1)");
     assert!(message.contains("A1.paths"), "{message}");
+}
+
+#[test]
+fn absent_path_names_do_nothing_like_the_engines_null_lookup() {
+    // LUA-18: Goto, Patrol and PointAt on a path the map does not have queue
+    // nothing and are not counted; GetLocation answers a default vector.
+    let s = scene();
+    let (rt, commands) = run(&s, "A1.Goto(a, 'NOPE', 1); A1.Patrol(a, 'NOPE'); A1.PointAt(a, 'NOPE')");
+    assert!(commands.is_empty(), "{commands:?}");
+    assert!(rt.unsupported().is_empty(), "{:?}", rt.unsupported());
+    let (rt, _) = run(&s, "");
+    let v: (f64, f64, f64) = rt.eval("local p = A1.GetLocation('NOPE', 0); return p.x, p.y, p.z").unwrap();
+    assert_eq!(v, (0.0, 0.0, 0.0));
+    // a point beyond the path is the same default
+    let v: f64 = rt.eval("return A1.GetLocation('P', 9).x").unwrap();
+    assert_eq!(v, 0.0);
+    let v: f64 = rt.eval("return A1.GetLocation('P', 1).x").unwrap();
+    assert_eq!(v, 20.0);
+    assert!(rt.unsupported().is_empty(), "{:?}", rt.unsupported());
 }
 
 #[test]
