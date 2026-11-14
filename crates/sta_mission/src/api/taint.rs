@@ -61,7 +61,7 @@ pub(crate) struct Taint {
 
 /// Calls whose result is an object handle.
 fn yields_handle(name: &str) -> bool {
-    matches!(name, "BuildObject" | "GetHandle" | "GetFirstCraft" | "GetPlayerHandle")
+    matches!(name, "BuildObject" | "GetHandle" | "GetFirstCraft" | "GetNextCraft" | "GetPlayerHandle")
         || name.starts_with("GetNearest")
         || name.starts_with("Spawn")
 }
@@ -77,12 +77,13 @@ fn world_effect(name: &str) -> bool {
 
 /// Calls that ask the world something (`Is...`, `Count...`, `Get...`, `Does...`).
 fn reads_state(name: &str) -> bool {
-    ["Is", "Count", "Get", "Does", "Exists", "UnderAttack"].iter().any(|p| name.starts_with(p))
+    ["Is", "Count", "Get", "Does", "Exists", "UnderAttack", "AllStations"].iter().any(|p| name.starts_with(p))
 }
 
 /// Calls whose first argument is a team number, not a handle.
 fn team_first(name: &str) -> bool {
     name.starts_with("Count")
+        || name.starts_with("AllStations")
         || name.starts_with("AI_")
         || matches!(
             name,
