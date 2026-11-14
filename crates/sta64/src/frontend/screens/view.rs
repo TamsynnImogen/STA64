@@ -9,10 +9,15 @@ use bevy::ui::UiTargetCamera;
 use sta_content::StartingResources;
 
 use super::data::{ActiveMod, Browse, ScreenData, SelectedMod, SettingKey, SetupDraft, Settings};
+#[cfg(not(target_os = "android"))]
+use super::data::WindowSize;
 use super::{Col, ListScroll, Screen};
 use crate::app::AppState;
 use crate::ui::i18n::{tr, trf};
 use crate::ui::theme::{Theme, button, disabled_button, kit_panel, label, list, slider, toggle};
+
+#[cfg(not(target_os = "android"))]
+use crate::ui::theme::dropdown;
 
 /// A screen's root node: everything of the screen hangs under it.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,6 +49,10 @@ pub struct SettingSlider(pub SettingKey);
 /// The toggle of a setting.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct SettingToggle(pub SettingKey);
+
+/// The Graphics tab's windowed size dropdown.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct WindowSizeSelect;
 
 /// Map select's list.
 #[derive(Component, Debug, Clone, Copy)]
@@ -283,14 +292,19 @@ fn settings(ctx: &Ctx) -> impl Bundle {
         p.spawn(label(&t, &tr("Game")));
         p.spawn((row(t.gap), children![cell(&t, 240.0, &tr("Scroll speed")), (slider(&t, 360.0, 0.0, 100.0, s.scroll_speed), SettingSlider(SettingKey::ScrollSpeed))]));
         p.spawn(label(&t, &tr("Graphics")));
-        p.spawn((
-            row(t.gap),
-            children![
-                (toggle(&t, &tr("Fullscreen"), s.fullscreen, 220.0), SettingToggle(SettingKey::Fullscreen)),
-                (toggle(&t, &tr("Vertical sync"), s.vsync, 220.0), SettingToggle(SettingKey::Vsync)),
-                (toggle(&t, &tr("Show FPS"), s.show_fps, 220.0), SettingToggle(SettingKey::ShowFps)),
-            ],
-        ));
+        #[cfg(not(target_os = "android"))]
+        {
+            let sizes = WindowSize::ALL.map(WindowSize::label);
+            let picked = WindowSize::ALL.iter().position(|&size| size == s.window_size).unwrap_or(0);
+            p.spawn((row(t.gap), children![cell(&t, 240.0, &tr("Windowed size")), (dropdown(&t, &sizes, picked, 320.0), WindowSizeSelect)]));
+            p.spawn(label(&t, &tr("Fullscreen uses the monitor resolution.")));
+        }
+        p.spawn(row(t.gap)).with_children(|r| {
+            #[cfg(not(target_os = "android"))]
+            r.spawn((toggle(&t, &tr("Fullscreen"), s.fullscreen, 220.0), SettingToggle(SettingKey::Fullscreen)));
+            r.spawn((toggle(&t, &tr("Vertical sync"), s.vsync, 220.0), SettingToggle(SettingKey::Vsync)));
+            r.spawn((toggle(&t, &tr("Show FPS"), s.show_fps, 220.0), SettingToggle(SettingKey::ShowFps)));
+        });
         p.spawn((row(t.gap), children![cell(&t, 240.0, &tr("LCARS interface")), (toggle(&t, &tr("On"), s.lcars_ui, 220.0), SettingToggle(SettingKey::LcarsUi))]));
         p.spawn(label(&t, &tr("Off uses the game/mod default.")));
         p.spawn((button(&t, &tr("Previous menu"), 220.0), Act::Goto(Screen::Main)));

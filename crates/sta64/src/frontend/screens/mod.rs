@@ -31,11 +31,11 @@ mod tests;
 pub(crate) mod view;
 
 pub use crate::frontend::lobby::{LobbyPlugin, MpFields, Multiplayer, NetGameReady, NetLaunch};
-pub use data::{ActiveMod, Browse, MAX_SEATS, MapEntry, ModEntry, SKIRMISH_AI, ScreenData, Seat, SeatControl, SelectedMod, SettingKey, Settings, SetupDraft};
+pub use data::{ActiveMod, Browse, MAX_SEATS, MapEntry, ModEntry, SKIRMISH_AI, ScreenData, Seat, SeatControl, SelectedMod, SettingKey, Settings, SetupDraft, WindowSize};
 pub use view::{Act, ScreenRoot};
 
 use crate::app::{AppState, GameSet};
-use crate::ui::theme::{ButtonClicked, ListSelected, SliderChanged, ThemePlugin, ToggleChanged};
+use crate::ui::theme::{ButtonClicked, DropdownChanged, ListSelected, SliderChanged, ThemePlugin, ToggleChanged};
 use view::{MapList, ModList, ScrollBox, SettingSlider, SettingToggle};
 
 /// The screen shown in `AppState::FrontEnd`.
@@ -143,6 +143,19 @@ pub struct ScreensCamera(pub Entity);
 
 pub struct ScreensPlugin;
 
+/// Shared by the front end and a directly launched match's Options panel.
+pub(crate) struct SettingsControlsPlugin;
+
+impl Plugin for SettingsControlsPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<Settings>()
+            .init_resource::<crate::ui::profile::UiPreference>()
+            .add_systems(Update, on_settings.in_set(GameSet::Ui)
+                .before(crate::ui::profile::ProfileSync)
+                .run_if(in_state(AppState::FrontEnd).xor(in_state(AppState::InGame))));
+    }
+}
+
 impl Plugin for ScreensPlugin {
     fn build(&self, app: &mut App) {
         if !app.is_plugin_added::<ThemePlugin>() {
@@ -154,6 +167,9 @@ impl Plugin for ScreensPlugin {
         }
         if !app.world().contains_resource::<State<AppState>>() {
             app.init_state::<AppState>();
+        }
+        if !app.is_plugin_added::<SettingsControlsPlugin>() {
+            app.add_plugins(SettingsControlsPlugin);
         }
         app.init_state::<Screen>()
             .init_resource::<ScreensConfig>()
@@ -177,11 +193,6 @@ impl Plugin for ScreensPlugin {
             .add_systems(OnEnter(AppState::FrontEnd), enter_front_end)
             .add_systems(OnEnter(Screen::MapSelect), open_list)
             .add_systems(OnEnter(Screen::ModSelect), open_list)
-            .add_systems(
-                Update,
-                // Also in a match: the in-game menu (UI-34) shows this panel over it.
-                on_settings.in_set(GameSet::Ui).before(crate::ui::profile::ProfileSync).run_if(in_state(AppState::FrontEnd).xor(in_state(AppState::InGame))),
-            )
             .add_systems(
                 Update,
                 (fit_scale, stock::track_box, follow_data, on_keys, on_wheel, track_scroll, on_buttons, on_lists, crate::frontend::campaign::on_buttons, stock::on_dropdowns, stock::track_tab, rebuild, crate::frontend::campaign::rebuild, stock::restore_focus, (crate::frontend::lobby::drive, crate::frontend::lobby::on_buttons, crate::frontend::lobby::on_dropdowns, crate::frontend::lobby::on_text, crate::frontend::lobby::sync_map, crate::frontend::lobby::rebuild, crate::frontend::lobby::restore_focus).chain())
@@ -417,11 +428,14 @@ fn on_lists(mut picks: MessageReader<ListSelected>, maps: Query<(), With<MapList
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn on_settings(
     mut sliders: MessageReader<SliderChanged>,
     mut toggles: MessageReader<ToggleChanged>,
+    mut dropdowns: MessageReader<DropdownChanged>,
     slider_keys: Query<&SettingSlider>,
     toggle_keys: Query<&SettingToggle>,
+    window_size_fields: Query<(), With<view::WindowSizeSelect>>,
     mut settings: ResMut<Settings>,
     mut ui_preference: ResMut<crate::ui::profile::UiPreference>,
 ) {
@@ -436,6 +450,13 @@ fn on_settings(
             if k.0 == SettingKey::LcarsUi {
                 ui_preference.lcars = c.on;
             }
+        }
+    }
+    for c in dropdowns.read() {
+        if window_size_fields.get(c.entity).is_ok()
+            && let Some(&size) = WindowSize::ALL.get(c.index)
+        {
+            settings.window_size = size;
         }
     }
 }

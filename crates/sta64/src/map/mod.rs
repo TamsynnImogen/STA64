@@ -609,6 +609,7 @@ fn setup(mut commands: Commands) {
         MatchEntity,
         FpsText,
         Text::new(""),
+        Visibility::Hidden,
         TextFont {
             font_size: bevy::text::FontSize::Px(15.0),
             ..default()
@@ -1415,12 +1416,24 @@ fn race_field(map_race: &str, played: Option<&str>) -> String {
 /// them; the text wraps inside it.
 pub(crate) const HUD_TEXT_WIDTH_PCT: f32 = 33.0;
 
-fn fps(diag: Res<bevy::diagnostic::DiagnosticsStore>, mut q: Query<&mut Text, With<FpsText>>) {
+fn fps(
+    diag: Res<bevy::diagnostic::DiagnosticsStore>,
+    settings: Option<Res<crate::frontend::screens::Settings>>,
+    mut q: Query<(&mut Text, &mut Visibility), With<FpsText>>,
+) {
+    let visible = settings.as_deref().is_some_and(|settings| settings.show_fps);
+    if !visible {
+        for (_, mut visibility) in &mut q {
+            *visibility = Visibility::Hidden;
+        }
+        return;
+    }
     let fps = diag
         .get(&bevy::diagnostic::FrameTimeDiagnosticsPlugin::FPS)
         .and_then(|d| d.smoothed())
         .unwrap_or(0.0);
-    for mut t in &mut q {
+    for (mut t, mut visibility) in &mut q {
+        *visibility = Visibility::Inherited;
         t.0 = format!("{fps:.0} fps");
     }
 }
@@ -1467,6 +1480,28 @@ mod a1_start_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fps_text_follows_saved_visibility_and_defaults_hidden() {
+        let mut app = App::new();
+        app.init_resource::<bevy::diagnostic::DiagnosticsStore>()
+            .add_systems(Update, fps);
+        let entity = app.world_mut().spawn((FpsText, Text::new("pending"), Visibility::Inherited)).id();
+        app.update();
+        assert_eq!(*app.world().get::<Visibility>(entity).unwrap(), Visibility::Hidden);
+        assert_eq!(app.world().get::<Text>(entity).unwrap().0, "pending");
+
+        let mut settings = crate::frontend::screens::Settings::default();
+        settings.show_fps = true;
+        app.insert_resource(settings);
+        app.update();
+        assert_eq!(*app.world().get::<Visibility>(entity).unwrap(), Visibility::Inherited);
+        assert_eq!(app.world().get::<Text>(entity).unwrap().0, "0 fps");
+
+        app.world_mut().resource_mut::<crate::frontend::screens::Settings>().show_fps = false;
+        app.update();
+        assert_eq!(*app.world().get::<Visibility>(entity).unwrap(), Visibility::Hidden);
+    }
 
     #[test]
     fn the_mission_start_camera_follows_the_cfg_parabola() {
