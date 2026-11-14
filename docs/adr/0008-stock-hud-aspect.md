@@ -77,22 +77,58 @@ and is resolved through the mod chain (D6, D11). The author places every
 panel and may supply art made for that width. This is the way to change the
 HUD's look on wide windows: it is the author's statement, not STA64's.
 
-**H5. A mod may ship a hints file instead.**
-`misc/gui_anchors.cfg`, in the `key = value` syntax of the gui sheets, names
-panel-level keys and says where each goes when the window is wider or taller
-than the chosen sheet: an edge or the centre per axis, or `attach <key>` to
-keep a panel with another one. Panels attached to each other move as one
-group. No original cfg includes this file. An optional
-`misc/gui_<race>_anchors.cfg` overrides per race. Keys inside the existing
-gui sheets are not used for this, because whether the original engines
-ignore unknown keys there is not measured.
+**H5. A mod may ship a layout file that anchors and flows its panels.**
+`misc/gui_layout.toml` (STA64 only; no original cfg includes it) states how
+the panels of the chosen sheet are placed when the window has another aspect
+than that sheet. One file serves every window width. It never changes a
+panel's size or art (H1), only where whole groups sit.
+
+- **Groups.** A group lists panel-level keys of the sheet
+  (`minimapPanelArea`, `infoPanelArea_1`, a palette). Its panels keep their
+  positions relative to each other exactly as the sheet has them. A panel in
+  no group stays in the default area of H2.
+- **Anchor and offset.** A group names one of nine anchor points of the
+  window (corners, edge centres, centre) and an optional offset in canvas
+  units from it: placement by coordinates that hold at any width.
+- **Flow.** Instead of an anchor, groups may be listed in a row along an
+  edge. The row places them in order with a stated gap and justification
+  (start, centre, end, or spread to both ends), as words on a line. When the
+  row does not fit the window, it falls back to the default area of H2; it
+  does not wrap or shrink panels.
+- **Per race.** `misc/gui_<race>_layout.toml` overrides the common file.
+
+```toml
+[group.map]
+panels = ["minimapPanelArea"]
+[group.selection]
+panels = ["infoPanelArea_0", "infoPanelArea_1", "infoPanelArea_2", "popupPaletteA"]
+[group.video]
+panels = ["cinematicPanelArea"]
+
+[row.bottom]
+edge = "bottom"
+groups = ["map", "selection", "video"]
+justify = "spread"
+
+[group.buttons]
+panels = ["buttonPanelArea"]
+anchor = "top right"
+offset = [-11, 8]
+```
+
+Keys inside the existing gui sheets are not used for this, because whether
+the original engines ignore unknown keys there is not measured. The file is
+TOML, not the gui sheets' syntax, because no original engine reads it and it
+needs lists and tables.
 
 **H6. Order.**
 The sheet is chosen by H2 among all candidates, H4's included. If the window
-still differs from the chosen sheet's aspect and a hints file exists, panels
-are placed by it across the whole window. Otherwise H2's centred area
-applies. STA64 does not derive anchors from differences between a mod's
-sheets or from where rects lie.
+still differs from the chosen sheet's aspect and a layout file exists, its
+groups are placed by it across the whole window. Otherwise H2's centred area
+applies. STA64 does not derive anchors or groups from differences between a
+mod's sheets or from where rects lie. A layout file that overlaps two groups
+or names an unknown key is reported (D7) and ignored as a whole, falling
+back to H2.
 
 Done when (H1 to H3): layout tests pin, per profile, that every stock HUD
 rect keeps its sheet aspect at 4:3, 16:10, 16:9, 21:9 and 32:9, that the HUD
@@ -108,12 +144,15 @@ gives today; a pointer test pins that the margins reach the world.
   Uses the whole width, but separates art that is authored as one piece
   (Armada I's bottom row, the Fleet Operations minimap and selection panel)
   and so changes the look (against H1). Kept only as something a mod or
-  profile states (H5).
+  profile states, with its groups named by the author (H5).
 - **Fill the gaps by repeating slices of panel art.** No data says which
   slices tile, and it draws art the author did not make. Rejected.
 - **Derive anchors from the differences between a mod's aspect sheets.** It
   reproduces the Fleet Operations sheets, but extrapolates an author's intent
   past the widest layout they made. Rejected in favour of H4 and H5.
+- **Flow that wraps onto a second row, or panels that resize to fit.**
+  Both produce arrangements no author drew. Rejected; a row that does not
+  fit falls back to H2.
 - **Anchor keys inside the gui sheets.** Simplest for authors; depends on
   unmeasured behaviour of the original engines (D3). Rejected unless
   measured safe.
@@ -142,17 +181,19 @@ gives today; a pointer test pins that the margins reach the world.
 **Work**
 
 A UI-lane package for H1 to H3, added to WORKPLAN by its own PR. H4 costs
-only the candidate list. H5 is a later package, after open question 3.
+only the candidate list. H5 is a later package, after open question 3; its file format belongs to
+the CON lane (`sta_content`), its placement to the UI lane.
 
 ## Open questions
 
 1. **Roll-out.** Whether the centred layout becomes the default at once and
    whether "stretched, as the original" stays as a setting.
-2. **A wide layout for stock Armada II.** Cedric considers this defensible:
-   minimap in the bottom-left corner, selection panel with the command bar
-   in the bottom centre, video frame in the bottom-right corner. Whether
-   STA64 offers it as an opt-in (a setting, or a hints file of key names
-   shipped for the profile) is not decided.
+2. **Wide layouts for the stock games.** Cedric considers this defensible
+   for Armada II: minimap in the bottom-left corner, selection panel with the
+   command bar in the bottom centre, video frame in the bottom-right corner
+   (the example under H5). STA64 can ship such a layout file per stock
+   profile, since it holds key names only. Whether it does, and whether it is
+   on by default or a setting, is not decided.
 3. **Do the originals ignore the new files?** That Fleet Operations 3.2.7
    and Roots ignore a sheet they do not name, and that every lineage ignores
    an extra file in `misc/`, is expected but not measured. H4 and H5 are not
