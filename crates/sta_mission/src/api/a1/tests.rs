@@ -247,6 +247,7 @@ const CASES: &[(&str, &str, Expect)] = &[
     ("GetDistance", "assert(A1.GetDistance(a, b) == 100)", Fine),
     ("GetDistance", "assert(A1.GetDistance(a, 'P', 1) == 20)", Fine),
     ("CraftCannotDie", "A1.CraftCannotDie(a, true)", Fine),
+    ("CraftCannotDie", "A1.CraftCannotDie(nil, true)", Fine),
     ("SetShieldPercent", "A1.SetShieldPercent(a, 0.5)", Fine),
     ("GetShieldPercent", "A1.GetShieldPercent(a)", Fine),
     ("CountUnitsNearPoint", "assert(A1.CountUnitsNearPoint('P', 50, 0, nil, 0) == 1)", Fine),
