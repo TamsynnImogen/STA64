@@ -51,6 +51,7 @@ pub mod orders;
 mod orders_tests;
 pub mod switches;
 pub mod replay;
+pub mod repair;
 pub mod setup;
 pub mod snapshot;
 pub mod sensors;
