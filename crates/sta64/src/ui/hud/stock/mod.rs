@@ -14,7 +14,7 @@ use crate::ui::{
     gui_sprites::{GuiActive, GuiButton, GuiButtonColors, GuiButtonLabel},
     notices::Tooltip,
     profile::UiProfile,
-    sprite_font::{SpriteTextStyle, sprite_text_styled},
+    sprite_font::{SpriteTextStyle, sprite_text, sprite_text_styled},
     theme::{ButtonClicked, Theme, UiButton, WidgetState},
 };
 use crate::viewer::Mounted;
@@ -242,7 +242,7 @@ fn spawn_button(
                 b.label.clone(),
                 (rect.h * 0.22).clamp(18.0, 22.0),
                 theme.text,
-                SpriteTextStyle::default().centered().wrapped(rect.w),
+                SpriteTextStyle::default().centered().wrapped(rect.w).at_least_size(),
             ),
         )],
     ));
@@ -451,12 +451,8 @@ pub(super) fn refresh(
                         BackgroundColor(theme.button),
                         ChildOf(parent),
                         children![(
-                            sprite_text_styled(
-                                label,
-                                18.0,
-                                theme.text,
-                                SpriteTextStyle::default().centered().wrapped(cells[index].w),
-                            ),
+                            // Where the TTF label sat before: top left, unwrapped.
+                            sprite_text(label, 18.0, theme.text),
                         )],
                     ));
                 }

@@ -650,8 +650,21 @@ fn label_colours_split_between_the_hud_and_the_kit() {
     let kit = app.world_mut().spawn((crate::ui::theme::ButtonText, sprite_text("B", 12.0, Color::WHITE), SpriteTextStyle::default(), ChildOf(pill))).id();
     let on = app.world_mut().spawn((WidgetState::Normal, crate::ui::theme::Toggle { on: true }, BackgroundColor(Color::NONE), Node::default())).id();
     let lit = app.world_mut().spawn((crate::ui::theme::ButtonText, sprite_text("C", 12.0, Color::WHITE), SpriteTextStyle::default(), ChildOf(on))).id();
+    // A HUD grid caption is styled (centred, wrapped) but stays `text_on`, like the tiles.
+    let cell = app.world_mut().spawn((WidgetState::Normal, BackgroundColor(Color::NONE), Node::default())).id();
+    let caption = app
+        .world_mut()
+        .spawn((
+            crate::ui::theme::ButtonText,
+            crate::ui::gui_sprites::GuiButtonLabel,
+            sprite_text("D", 12.0, Color::WHITE),
+            SpriteTextStyle::default().centered().wrapped(52.0),
+            ChildOf(cell),
+        ))
+        .id();
     app.update();
     let colour = |app: &App, e: Entity| app.world().get::<SpriteText>(e).unwrap().color;
+    assert_eq!(colour(&app, caption), theme.text_on);
     assert_eq!(colour(&app, hud), theme.text_on);
     assert_eq!(colour(&app, kit), theme.kit_text_on);
     assert_eq!(colour(&app, lit), theme.text_on);

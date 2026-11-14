@@ -876,7 +876,7 @@ mod identity_tests;
 #[test]
 fn stock_hud_labels_are_sprite_text_and_never_scalable() {
     use crate::ui::gui_sprites::GuiButtonLabel;
-    use crate::ui::sprite_font::{ScalableText, SpriteTextStyle};
+    use crate::ui::sprite_font::ScalableText;
 
     let mut app = app_with_content(content_with_build_count(24));
     app.world_mut().resource_mut::<HudState>().page = Page::Build;
@@ -884,13 +884,12 @@ fn stock_hud_labels_are_sprite_text_and_never_scalable() {
     app.update();
     let world = app.world_mut();
     assert!(world.query::<&ScalableText>().iter(world).next().is_none());
-    assert!(world.query::<&StockNav>().iter(world).count() == 2, "paged palette has PREV and NEXT");
+    assert_eq!(world.query::<&StockNav>().iter(world).count(), 2, "paged palette has PREV and NEXT");
     for nav in world.query_filtered::<Entity, With<StockNav>>().iter(world).collect::<Vec<_>>() {
         let kids = world.get::<Children>(nav).expect("nav label").to_vec();
         assert_eq!(kids.len(), 1);
         assert!(world.get::<SpriteText>(kids[0]).is_some());
         assert!(world.get::<Text>(kids[0]).is_none());
-        assert!(world.get::<SpriteTextStyle>(kids[0]).is_some());
     }
     let labels: Vec<Entity> = world.query_filtered::<Entity, With<GuiButtonLabel>>().iter(world).collect();
     assert!(!labels.is_empty());
