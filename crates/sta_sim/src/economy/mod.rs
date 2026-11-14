@@ -21,7 +21,12 @@
 //!   the game's word for the slot in the text, else dilithium. Nodes hold [`RICHNESS`] and run dry.
 //!   Typed Background planets reject mining; typed Producer planets need an
 //!   explicit resource slot. This does not implement orbital/multi-resource mining.
-//! - Within 150 units of node or station counts as there; the freighter
+//! - A freighter whose ODF has a mining beam (ordnance class `minebm`) works once the surface gap
+//!   to the node is under the beam's `range - 15`, then circles the node while it mines: it steers
+//!   at the point 30 degrees ahead on the circle of radius `range` (the original's
+//!   `ANCHOR_PURSUIT_POINT_ANGLE`, read from the executable, static), on its own height layer
+//!   (`id & 15`); the harvest numbers are unchanged. Any other freighter, and a station, count as
+//!   there within 150 units of the centre; the freighter
 //!   stops and works that same tick, so a trip with no travel takes exactly
 //!   `capacity / rate + capacity / unload` ticks.
 //! - Passive income from `resourceweapon` hardpoints is in [`passive`] (SIM-24).
@@ -137,6 +142,67 @@ fn node_resource(db: &ContentDb, def: ContentKey) -> u8 {
     d.resource.unwrap_or(0)
 }
 
+/// Ordnance class of a mining beam (`classLabel = "minebm"`).
+const MINING_BEAM_CLASS: &str = "minebm";
+/// RTS_CFG `ANCHOR_PURSUIT_POINT_ANGLE` (pi/6 in every install): the pursuit point on the orbit is
+/// this far ahead of the freighter. cos and sin of it.
+const PURSUIT_COS: Fixed = Fixed::from_bits(3_719_550_787);
+const PURSUIT_SIN: Fixed = Fixed::from_bits(2_147_483_648);
+/// Height layer constants: 7.5, 2/15, k 5/6 (moons, planets) and 1/2 (latinum nebula).
+const LAYER_MID: Fixed = Fixed::from_bits(32_212_254_720);
+const LAYER_STEP: Fixed = Fixed::from_bits(572_662_306);
+const K_MOON: Fixed = Fixed::from_bits(3_579_139_413);
+const K_NEBULA: Fixed = Fixed::from_bits(2_147_483_648);
+/// How far inside the weapon range a freighter starts working (the original's `approachRange - 15`).
+const APPROACH_SLACK: i32 = 15;
+/// Distance from a station's origin at which a beam-armed freighter starts to unload: the last
+/// short stretch is the dock approach. The dock node itself (`dockingHardpoint`) is not read yet;
+/// a fallback, not measured.
+const DOCK_ARRIVE: i32 = 40;
+/// A loaded freighter on a moon keeps circling while it is within this many ranges of the node.
+const ORBIT_BAND: Fixed = Fixed::from_bits(6_442_450_944); // 1.5
+
+/// Range of the freighter's mining weapon: the first hardpoint whose ordnance is a mining beam.
+pub fn mining_range(db: &ContentDb, def: ContentKey) -> Option<Fixed> {
+    db.unit(def)?.hardpoints.iter().find_map(|hp| {
+        let w = db.weapon(hp.weapon.key)?;
+        (w.class.0 == MINING_BEAM_CLASS && w.range > Fixed::ZERO).then_some(w.range)
+    })
+}
+
+/// Distance from the node's centre at which a freighter starts to work: the surface gap under
+/// `range - 15` when it has a mining beam, else 150 from the centre.
+fn work_distance(db: &ContentDb, miner: ContentKey, node: ContentKey) -> Fixed {
+    match mining_range(db, miner) {
+        Some(r) => {
+            let radii = db.unit(miner).map_or(Fixed::ZERO, |d| d.radius) + db.unit(node).map_or(Fixed::ZERO, |d| d.radius);
+            (r - Fixed::from_int(APPROACH_SLACK) + radii).max(Fixed::ONE)
+        }
+        None => reach(),
+    }
+}
+
+/// Where a mining freighter heads while it works: a point on the circle of the weapon's range
+/// round the resource, `ANCHOR_PURSUIT_POINT_ANGLE` ahead of it (clockwise seen from above), on the
+/// freighter's own height layer (`handle & 15`; `k` 5/6, a latinum nebula 1/2). Read from the
+/// executable, static; the on-screen direction and speed are not measured.
+fn orbit_point(db: &ContentDb, id: EntityId, pos: Vec3, node_def: ContentKey, node: Vec3, range: Fixed) -> Option<Vec3> {
+    let (dx, dz) = (pos.x - node.x, pos.z - node.z);
+    let len = (dx * dx + dz * dz).sqrt();
+    if len < Fixed::ONE {
+        return None;
+    }
+    let (c, s) = (PURSUIT_COS, PURSUIT_SIN);
+    let (rx, rz) = (dx * c + dz * s, dz * c - dx * s);
+    let k = range / len;
+    let nd = db.unit(node_def);
+    let radius = nd.map_or(Fixed::ZERO, |d| d.radius);
+    let kk = if nd.is_some_and(|d| d.class.0 == "latinum") { K_NEBULA } else { K_MOON };
+    let layer = Fixed::from_int((id.0 & 15) as i32) - LAYER_MID;
+    let y = node.y + layer * LAYER_STEP * radius * kk;
+    Some(Vec3 { x: node.x + rx * k, y, z: node.z + rz * k })
+}
+
 fn dist(a: Vec3, b: Vec3) -> Fixed {
     let (dx, dz) = (a.x - b.x, a.z - b.z);
     (dx * dx + dz * dz).sqrt()
@@ -151,6 +217,9 @@ pub struct Economy {
     /// What is left in each node that has been mined.
     nodes: Table<Fixed>,
     miners: Table<Miner>,
+    /// Miners whose work was ended or redirected by an order since the last step: announced
+    /// there. Empty between steps, not part of the state.
+    announce: Vec<EntityId>,
 }
 
 /// Plain form of [`Economy`] for snapshots (bits of every [`Fixed`]).
@@ -265,6 +334,9 @@ impl Economy {
             } else {
                 Phase::ToNode
             };
+            if old.is_some_and(|m| m.phase != phase) {
+                self.announce.push(id);
+            }
             self.miners.insert(
                 id,
                 Miner {
@@ -287,6 +359,7 @@ impl Economy {
                 .is_some_and(|u| !player.is_player() || u.owner == player)
                 && let Some(mut m) = self.miners.get(id).copied()
             {
+                self.announce.push(id);
                 if m.cargo > Fixed::ZERO {
                     m.phase = Phase::Idle;
                     m.unloaded = Fixed::ZERO;
@@ -305,6 +378,11 @@ impl Economy {
         db: &ContentDb,
         events: &mut Vec<SimEvent>,
     ) {
+        // Orders that took a freighter off its work (a stop, a move, a new order) say so.
+        for id in std::mem::take(&mut self.announce) {
+            let (phase, node) = self.miners.get(id).map_or((Phase::Idle, id), |m| (m.phase, m.node));
+            events.push(SimEvent::MinerPhase { id, phase: phase.announced(), node, dock: None });
+        }
         let ids: Vec<EntityId> = self.miners.iter().map(|(id, _)| id).collect();
         for id in ids {
             let Some(mut m) = self.miners.get(id).copied() else {
@@ -320,6 +398,7 @@ impl Economy {
                 self.miners.remove(id);
                 continue;
             };
+            let node_def = units.get(m.node).map_or(def, |n| n.def);
             let node_pos = units.get(m.node).filter(|n| n.kind == EntityKind::Resource
                 && db.unit(n.def).is_none_or(EntityKind::mineable_def)).map(|n| n.pos);
             if matches!(m.phase, Phase::ToNode | Phase::Mining) && node_pos.is_none() {
@@ -339,7 +418,7 @@ impl Economy {
                 match m.phase {
                     Phase::Idle => break,
                     Phase::ToNode => {
-                        if dist(pos, node_pos.unwrap()) <= reach() {
+                        if dist(pos, node_pos.unwrap()) <= work_distance(db, def, node_def) {
                             set_target(units, id, None);
                             m.phase = Phase::Mining;
                         } else {
@@ -358,6 +437,10 @@ impl Economy {
                             m.phase = Phase::ToDock;
                             break;
                         }
+                        // Round the resource, for as long as the beam works.
+                        if let (Some(range), Some(np)) = (mining_range(db, def), node_pos) {
+                            set_target(units, id, orbit_point(db, id, pos, node_def, np, range));
+                        }
                         let take = cfg.rate.min(cfg.capacity - m.cargo).min(left);
                         m.cargo = m.cargo + take;
                         self.nodes.insert(m.node, left - take);
@@ -368,9 +451,35 @@ impl Economy {
                     }
                     Phase::ToDock => {
                         let Some(at) = nearest_station(units, owner, pos) else {
+                            // No station: the orbit point of a beam-armed freighter must not outlive the
+                            // work. A freighter without a beam keeps its target (as on main; no rule measured).
+                            if mining_range(db, def).is_some() {
+                                set_target(units, id, None);
+                            }
                             break;
                         };
-                        if dist(pos, at) <= reach() {
+                        // Off a moon the freighter keeps circling until the station lies on its
+                        // outer side, then peels off (read from the executable, static; the
+                        // latinum nebula and planets leave at once).
+                        // (Not when the station lies inside the orbit band, or the freighter sits on the
+                        // node's centre: there is no outer side to wait for.)
+                        if let (Some(range), Some(np)) = (mining_range(db, def), node_pos)
+                            && db.unit(node_def).is_none_or(|d| d.class.0 != "latinum")
+                            && dist(pos, np) <= range * ORBIT_BAND
+                            && dist(at, np) > range * ORBIT_BAND
+                            && (at.x - pos.x) * (pos.x - np.x) + (at.z - pos.z) * (pos.z - np.z) <= Fixed::ZERO
+                            && let Some(p) = orbit_point(db, id, pos, node_def, np, range)
+                        {
+                            set_target(units, id, Some(p));
+                            break;
+                        }
+                        // Arrival must lie beyond the smooth model's own "too close to turn" stop.
+                        let arrive = if mining_range(db, def).is_some() {
+                            Fixed::from_int(DOCK_ARRIVE).max(db.unit(def).map_or(Fixed::ZERO, |d| d.movement.too_close_to_turn) + Fixed::from_int(10))
+                        } else {
+                            reach()
+                        };
+                        if dist(pos, at) <= arrive {
                             set_target(units, id, None);
                             dock = Some(at);
                             m.phase = Phase::Unloading;
@@ -532,3 +641,6 @@ fn nearest_station(units: &Entities, owner: PlayerId, from: Vec3) -> Option<Vec3
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+#[cfg(test)]
+mod orbit_tests;
