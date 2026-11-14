@@ -44,10 +44,8 @@ impl Sim {
     /// Back to the definition's impulse (team change, cineractive end); a unit
     /// without a definition keeps its value.
     pub(crate) fn reset_impulse(&mut self, id: EntityId) {
-        if let Some(v) = self.class_impulse(id) {
-            if let Some(u) = self.units.get_mut(id).filter(|u| u.kind == EntityKind::Craft) {
-                u.stats.max_speed = v;
-            }
+        if let (Some(v), Some(u)) = (self.class_impulse(id), self.units.get_mut(id).filter(|u| u.kind == EntityKind::Craft)) {
+            u.stats.max_speed = v;
         }
     }
 

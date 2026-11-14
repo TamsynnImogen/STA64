@@ -36,9 +36,7 @@
 //! `not measured`. Argument constants of the stock scripts: measured with the
 //! inventory's call decoder; findings are kept outside the repository.
 
-use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::rc::Rc;
 
 use mlua::{Function, Lua, MultiValue, Table, Value};
 use sta_core::{EntityId, Fixed, PlayerId, Vec3};
@@ -61,14 +59,9 @@ const CMD_BUILD: i64 = 25;
 /// Highest `AiCommand` value.
 const CMD_LAST: i64 = 56;
 
-#[derive(Default)]
-struct State {
-}
-
 #[derive(Clone)]
 pub(super) struct Env {
     pub(super) ctx: Shared,
-    st: Rc<RefCell<State>>,
 }
 
 /// One validated argument.
@@ -500,7 +493,7 @@ fn command_arg(name: &str, what: &P) -> mlua::Result<i64> {
 }
 
 pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()> {
-    let env = Env { ctx: ctx.clone(), st: Rc::new(RefCell::new(State::default())) };
+    let env = Env { ctx: ctx.clone() };
 
     super::fleets::install(lua, &env, table)?;
 
