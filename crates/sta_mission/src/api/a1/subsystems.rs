@@ -1,11 +1,13 @@
 //! `DestroyCritical` and the five `Destroy<System>` calls (LUA-30).
 //!
-//! Rule (read from the Armada I executable, static; the effect of the hit on a
-//! unit in play is not measured): each call, for a live Craft, applies one hit of
+//! Rule (read from data: a stock script destroys shipyards with `DestroyCritical` and
+//! waits for them to die; the executable's object flag test is read, which objects
+//! carry it is inferred from that use. The effect of the hit in play is not
+//! measured): each call, for a live Craft or Station, applies one hit of
 //! 100000 damage typed by the system (engines, life support, weapons, shield
 //! generator, sensors; `DestroyCritical` the hull type). A handle that names
-//! nothing live, a dying object or a non-Craft does nothing (no error; whether
-//! the original's Craft flag also covers stations is not read). It is the same
+//! nothing live, a dying object or anything but a Craft or Station does nothing
+//! (no error). It is the same
 //! hit as Armada II's `DestroyCritical`: a lethal SCRIPT hull `Damage`.
 //! For a system, the sim's `SubsystemDamage` only fills the damage points
 //! (clamped to the system's hit points) and does not switch the system off, so
@@ -60,7 +62,7 @@ pub(super) fn install(lua: &Lua, env: &Env, table: &Table) -> mlua::Result<()> {
                 let mut c = e.ctx.borrow_mut();
                 let Some(unit) = c.alive(id).cloned() else { return Ok(Value::Nil) };
                 let Some(def) = c.def(&unit) else { return Ok(Value::Nil) };
-                if EntityKind::of_def(def) != EntityKind::Craft {
+                if !matches!(EntityKind::of_def(def), EntityKind::Craft | EntityKind::Station) {
                     return Ok(Value::Nil);
                 }
                 let has_hit_points = system.is_none_or(|sub| {

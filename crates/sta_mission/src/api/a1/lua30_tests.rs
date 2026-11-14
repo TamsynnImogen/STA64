@@ -31,7 +31,12 @@ fn db() -> Arc<ContentDb> {
     station.race = "fx".into();
     station.model = "t_station".into();
     station.hull = Fixed::from_int(100);
-    Arc::new(ContentDb::builder().unit(ship("t_ship", HP)).unit(ship("t_other", 0)).unit(station).build().expect("content"))
+    station.system_hit_points = [Fixed::from_int(HP); 5];
+    let mut moon = UnitDef::new("t_moon", "asteroid");
+    moon.model = "t_moon".into();
+    moon.hull = Fixed::from_int(100);
+    moon.system_hit_points = [Fixed::from_int(HP); 5];
+    Arc::new(ContentDb::builder().unit(ship("t_ship", HP)).unit(ship("t_other", 0)).unit(station).unit(moon).build().expect("content"))
 }
 
 struct Scene {
@@ -174,8 +179,8 @@ fn a_system_without_hit_points_is_left_alone() {
 fn destroy_calls_only_touch_live_craft() {
     for name in ["DestroyCritical", "DestroyEngines", "DestroyLifeSupport", "DestroyWeapons", "DestroyShieldGenerator", "DestroySensors"] {
         let mut s = scene();
-        // Nothing, nothing live, and a station (not a Craft): no edit, no error.
-        s.rt.eval::<()>(&format!("A1.{name}(0); A1.{name}(9999); A1.{name}(s)")).unwrap();
+        // Nothing, nothing live: no edit, no error.
+        s.rt.eval::<()>(&format!("A1.{name}(0); A1.{name}(9999)")).unwrap();
         assert!(s.rt.take_commands().is_empty(), "{name}");
         assert!(s.rt.eval::<()>(&format!("A1.{name}()")).is_err());
         assert!(s.rt.eval::<()>(&format!("A1.{name}(a, 1)")).is_err());
@@ -260,4 +265,43 @@ fn attack_location_is_the_armada_ii_geometry() {
     assert_eq!(alone, (10.0, 0.0, 0.0));
     let a2: (f64, f64, f64) = s.rt.eval("local v = A2.GetAttackLocation(a, b); return v.x, v.y, v.z").unwrap();
     assert_eq!(a2, toward);
+}
+
+#[test]
+fn a_station_is_hit_like_a_craft_and_a_prop_is_left_alone() {
+    let hit = Fixed::from_f64(100_000.0);
+    // A shipyard (borg5's planitia): the lethal hit, once, and the stock step's loop ends.
+    let mut s = scene();
+    s.rt.eval::<()>("for i = 1, 5 do A1.DestroyCritical(s) end").unwrap();
+    let commands = s.rt.take_commands();
+    assert_eq!(edits(&commands), vec![Edit::Damage(s.ids[2], hit)]);
+    let out = s.sim.step(&commands);
+    let gone = out.view.units.iter().find(|u| u.id == s.ids[2]).is_none_or(|u| u.flags.contains(UnitFlags::DYING));
+    assert!(gone, "the shipyard dies: {:?}", out.events);
+    // A system call on a station that has hit points for it queues both edits.
+    let mut s = scene();
+    s.rt.eval::<()>("A1.DestroySensors(s)").unwrap();
+    assert_eq!(
+        edits(&s.rt.take_commands()),
+        vec![Edit::SubsystemDamage(s.ids[2], Subsystem::Sensors, hit), Edit::Subsystem(s.ids[2], Subsystem::Sensors, false)]
+    );
+    // A resource node with hull is neither Craft nor Station: nothing, for all six calls.
+    let spawn = Command {
+        player: PlayerId::SCRIPT,
+        seq: 9,
+        kind: CommandKind::Edit(Edit::Spawn {
+            odf: s.db.key("t_moon").unwrap(),
+            player: NEUTRAL,
+            pos: Vec3::from_f32([700.0, 0.0, 0.0]),
+            heading: (Fixed::ZERO, Fixed::ONE),
+        }),
+    };
+    let out = s.sim.step(&[spawn]);
+    let moon = out.view.units.iter().find(|u| u.pos == Vec3::from_f32([700.0, 0.0, 0.0])).expect("moon").id;
+    let mut later = Vec::new();
+    s.rt.think(&out.view, &out.events, &mut later);
+    for name in ["DestroyCritical", "DestroyEngines", "DestroyLifeSupport", "DestroyWeapons", "DestroyShieldGenerator", "DestroySensors"] {
+        s.rt.eval::<()>(&format!("A1.{name}({})", moon.0)).unwrap();
+    }
+    assert!(s.rt.take_commands().is_empty());
 }
