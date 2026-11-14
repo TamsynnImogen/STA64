@@ -46,8 +46,10 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// (crafts in warp). Format 19 appends stuck-order watch rows; format 20
 /// adds their anchor, start distance and birth tick. Format 21 appends scripted
 /// orders (SIM-56) and per-craft switches (SIM-58). Format 22 appends mission
-/// attributes (SIM-54). Format 23 appends cosmetic seat factions. Format 26 appends mission-set
-/// relations between seats (SIM-63).
+/// attributes (SIM-54). Format 23 appends cosmetic seat factions. Format 24
+/// adds crew casualties and the derelict latch to the subsystem rows (#652).
+/// Format 25 appends the team-pool adjustments of scripts (SIM-54). Format 26
+/// appends mission-set relations between seats (SIM-63).
 /// Only the current format is read.
 pub const FORMAT_VERSION: u16 = 26;
 
@@ -177,7 +179,18 @@ struct EntityRec {
     progress: Option<Fixed>,
 }
 
-/// Format 23: cosmetic owning-seat faction labels. No gameplay rules.
+/// Format 25: script adjustments of the team pool (SIM-54): `(player, crew
+/// capacity offset bits, officer count offset bits)`.
+#[derive(Serialize, Deserialize)]
+struct AdjustRec {
+    version: u8,
+    rows: Vec<(PlayerId, i64, i64)>,
+}
+
+/// Format 23: owning-seat faction labels. They select the seat's officer cap
+/// and latinum rules (SIM-54), so they are gameplay input; they are fixed at
+/// set-up and snapshotted. `digest.rs` does not hash them for that reason: they
+/// cannot change after set-up.
 #[derive(Serialize, Deserialize)]
 struct AppearanceRec {
     version: u8,
@@ -360,6 +373,8 @@ impl EntityRec {
                 // Not in the snapshot: `from_snapshot` re-reads it from the
                 // definition once the entities exist.
                 warp_speed: Fixed::ZERO,
+                too_close_for_warp: Fixed::ZERO,
+                heading_close_for_warp: Fixed::ZERO,
             },
             hull: self.hull,
             crew: None,
@@ -445,6 +460,7 @@ impl Sim {
         out.extend(postcard::to_allocvec(&SwitchesRec { version: 1, rows: self.switches.to_rows() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&self.attrs.to_rec()).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&AppearanceRec { version: 1, factions: self.appearance_factions.clone() }).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&AdjustRec { version: 1, rows: self.economy.adjust_rec() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&RelationsRec { version: 1, rows: self.relations.to_rows() }).expect("snapshot serialises"));
         out
     }
@@ -505,13 +521,16 @@ impl Sim {
         let (record, rest): (AppearanceRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         if record.version != 1 { return Err(SnapshotError::Corrupt("unknown appearance record version".into())); }
         let appearance_factions = record.factions;
-        let (record, rest): (RelationsRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
-        if record.version != 1 { return Err(SnapshotError::Corrupt("unknown relations record version".into())); }
-        let relation_rows = record.rows;
         if !appearance_factions.windows(2).all(|w| w[0].0 < w[1].0)
             || appearance_factions.iter().any(|(id, name)| name.is_empty() || name.trim() != name || name.to_ascii_lowercase() != *name || !b.players.iter().any(|p| p.0 == *id)) {
             return Err(SnapshotError::Corrupt("invalid appearance faction rows".into()));
         }
+        let (record, rest): (AdjustRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        if record.version != 1 { return Err(SnapshotError::Corrupt("unknown team adjustment record version".into())); }
+        let adjust_rows = record.rows;
+        let (record, rest): (RelationsRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        if record.version != 1 { return Err(SnapshotError::Corrupt("unknown relations record version".into())); }
+        let relation_rows = record.rows;
         if !rest.is_empty() { return Err(SnapshotError::Corrupt("trailing bytes".into())); }
         if let Some(row) = b.economy.miners.iter().find(|row| row.5 > 4) {
             return Err(SnapshotError::Corrupt(format!("mining phase {} is not supported", row.5)));
@@ -533,6 +552,8 @@ impl Sim {
                 let Some(unit) = units.get_mut(id) else { continue };
                 if let Some(def) = db.unit(unit.def) {
                     unit.stats.warp_speed = def.movement.warp_speed;
+                    unit.stats.too_close_for_warp = def.movement.too_close_for_warp;
+                    unit.stats.heading_close_for_warp = def.movement.heading_close_for_warp;
                 }
             }
         }
@@ -623,7 +644,8 @@ impl Sim {
         }
         let mut economy = crate::economy::Economy::from_rec(&b.economy);
         economy.restore_personnel(personnel_rows, &b.players).map_err(|why| SnapshotError::Corrupt(why.into()))?;
-        Ok(Sim {
+        economy.restore_adjust(adjust_rows, &b.players).map_err(|why| SnapshotError::Corrupt(why.into()))?;
+        let mut sim = Sim {
             tick: b.tick,
             rng: Rng(b.rng),
             units,
@@ -656,7 +678,9 @@ impl Sim {
             attrs,
             team_changes: Vec::new(),
             appearance_factions,
-        })
+        };
+        sim.refresh_seat_rules();
+        Ok(sim)
     }
 }
 

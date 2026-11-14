@@ -28,6 +28,7 @@
     cheats: false,
     a1_compat: false,
     pay_on_queue: false,
+    crew_loss_on_hit: false,
   },
 
   odf: {

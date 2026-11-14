@@ -130,6 +130,13 @@ fn refit_scenery(profile: Option<Res<RenderProfile>>, effects: Option<Res<Profil
     !stock_scenery(profile.as_deref(), effects.as_deref())
 }
 
+/// Uploads finished surface bakes under both looks (the dilithium moons take their recipe surface under the
+/// Stock look too, see `rock::RockPart::moon`; gating it on the Refit planets left them waiting forever) and
+/// gives the Refit planets theirs.
+pub(crate) fn add_surface_systems() -> impl bevy::ecs::schedule::IntoScheduleConfigs<bevy::ecs::system::ScheduleSystem, ()> {
+    (crate::render::surfaces::poll, apply_surfaces.run_if(refit_scenery)).chain()
+}
+
 pub struct PlanetPlugin;
 
 impl Plugin for PlanetPlugin {
@@ -137,7 +144,7 @@ impl Plugin for PlanetPlugin {
         embedded_asset!(app, "planet.wesl");
         app.add_plugins(MaterialPlugin::<PlanetMaterial>::default())
             .init_resource::<crate::render::surfaces::Surfaces>()
-            .add_systems(Update, ((crate::render::surfaces::poll, apply_surfaces).chain().run_if(refit_scenery), place_glows))
+            .add_systems(Update, (add_surface_systems(), place_glows))
             .add_systems(PostUpdate, update.after(TransformSystems::Propagate));
     }
 }

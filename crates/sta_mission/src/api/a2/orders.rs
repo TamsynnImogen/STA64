@@ -68,13 +68,13 @@ struct State {
 }
 
 #[derive(Clone)]
-struct Env {
-    ctx: Shared,
+pub(super) struct Env {
+    pub(super) ctx: Shared,
     st: Rc<RefCell<State>>,
 }
 
 /// One validated argument.
-enum P {
+pub(super) enum P {
     Handle(EntityId),
     Int(i64),
     Num(f64),
@@ -84,13 +84,13 @@ enum P {
 }
 
 impl P {
-    fn id(&self) -> EntityId {
+    pub(super) fn id(&self) -> EntityId {
         match self {
             P::Handle(id) => *id,
             _ => EntityId::NONE,
         }
     }
-    fn int(&self) -> i64 {
+    pub(super) fn int(&self) -> i64 {
         match self {
             P::Int(n) => *n,
             _ => 0,
@@ -103,7 +103,7 @@ impl P {
             _ => 0.0,
         }
     }
-    fn boolean(&self) -> bool {
+    pub(super) fn boolean(&self) -> bool {
         matches!(self, P::Bool(true))
     }
     fn text(&self) -> &str {
@@ -112,7 +112,7 @@ impl P {
             _ => "",
         }
     }
-    fn vec(&self) -> (f64, f64, f64) {
+    pub(super) fn vec(&self) -> (f64, f64, f64) {
         match self {
             P::Vec(v) => *v,
             _ => (0.0, 0.0, 0.0),
@@ -207,12 +207,12 @@ impl Env {
     }
 
     /// The live unit, or `None` when the handle is absent or dying.
-    fn alive(&self, id: EntityId) -> Option<UnitView> {
+    pub(super) fn alive(&self, id: EntityId) -> Option<UnitView> {
         self.ctx.borrow().alive(id).cloned()
     }
 
     /// Send an order as the unit's owner.
-    fn order(&self, name: &str, id: EntityId, make: impl FnOnce(Vec<EntityId>) -> Order) -> mlua::Result<()> {
+    pub(super) fn order(&self, name: &str, id: EntityId, make: impl FnOnce(Vec<EntityId>) -> Order) -> mlua::Result<()> {
         if self.ctx.borrow_mut().order(id, make) {
             Ok(())
         } else {
@@ -223,7 +223,7 @@ impl Env {
         }
     }
 
-    fn owned(&self, name: &str, unit: &UnitView) -> mlua::Result<()> {
+    pub(super) fn owned(&self, name: &str, unit: &UnitView) -> mlua::Result<()> {
         if unit.owner.is_player() {
             Ok(())
         } else {
@@ -269,7 +269,7 @@ impl Env {
 }
 
 /// Bind one DLL-named function.
-fn def(
+pub(super) fn def(
     lua: &Lua,
     env: &Env,
     name: &'static str,
@@ -305,7 +305,7 @@ fn raising(
     def(lua, env, name, specs, move |_, e, _, _| Err(e.gap(name, why)))
 }
 
-fn nothing() -> mlua::Result<Value> {
+pub(super) fn nothing() -> mlua::Result<Value> {
     Ok(Value::Nil)
 }
 
@@ -462,6 +462,8 @@ fn command_arg(name: &str, what: &P) -> mlua::Result<i64> {
 
 pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()> {
     let env = Env { ctx: ctx.clone(), st: Rc::new(RefCell::new(State::default())) };
+
+    super::fleets::install(lua, &env, table)?;
 
     // Movement and attack orders.
     table.set("Goto", def(lua, &env, "Goto", &["hsbi", "hhbi"], goto)?)?;

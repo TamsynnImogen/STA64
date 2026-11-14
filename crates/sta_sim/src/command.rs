@@ -203,9 +203,14 @@ pub enum Edit {
     /// officer limit. SCRIPT/BENCH only. Appended tag 25.
     MaxOfficers(PlayerId, Fixed),
     /// Mission `SetCrew` / `Entity.crew` (SIM-54): a craft's or station's
-    /// current crew, floored at 0 and capped at its maximum crew or what it
-    /// already holds, whichever is higher (the clamp is not measured). Rejected
-    /// for a unit with no crew pool. SCRIPT/BENCH only. Appended tag 26.
+    /// current crew, negative read as 0 and clamped to the unit's own current
+    /// maximum crew (`Craft::SetCrew`, read from the executable, static; it is
+    /// not clamped to the global `MAX_CREW`). Where the casualty model runs
+    /// (the unit's features have `crew_loss_on_hit`) the derelict check of
+    /// SIM-39 follows: crew under 1 latches the unit derelict and a later edit
+    /// to 1 or more clears it by the next tick. Without that feature the edit
+    /// never latches. Rejected for a unit with no crew pool.
+    /// SCRIPT/BENCH only. Appended tag 26.
     UnitCrew(EntityId, Fixed),
     /// Mission `resources.crew` (SIM-54): the player's crew stock, floored at 0
     /// and capped at 1e9 (not clamped to the team capacity, which a stock may
@@ -290,12 +295,15 @@ pub enum Edit {
     /// The sim keeps and shows it; no rule reads it yet. SCRIPT/BENCH only.
     /// Appended tag 43.
     PlayerRace(PlayerId, String),
-    /// Tag 44 is #659's (SIM-54 crew and officer stock edit), which merges first.
-    /// This placeholder keeps the positional tags of this branch aligned with
-    /// main after that merge; replace it with #659's variant when it lands.
-    /// Always rejected.
-    #[doc(hidden)]
-    Reserved44,
+    /// A scripted edit of a team's pool (SIM-54), with the rule of the call that
+    /// sent it: crew stock add or set (`AddCrew` / `SetTeamCrew` of A2 and A1,
+    /// clamped to the team's crew capacity, no floor), the raw capacity write
+    /// of Roots `Player.maxCrew`, and A1 `AddOfficers` / `SetOfficers`
+    /// (clamped to the officer cap). Rejected for a seat the sim does not
+    /// have, for a capacity-clamped edit when the content has no crew rules,
+    /// and for an officer edit on a seat with no officer limit. SCRIPT/BENCH
+    /// only. Appended tag 44.
+    TeamPool(PlayerId, TeamOp, Fixed),
     /// Mission `SetRelation(a, b, r)` / Roots `Player:setRelation` (SIM-63):
     /// seat `from`'s own view of seat `to` becomes `relation` (directional:
     /// the reverse view is untouched). Both must be configured, distinct
@@ -306,6 +314,27 @@ pub enum Edit {
     /// Neutral, Enemy); a variant index above 2 fails to decode. SCRIPT/BENCH
     /// only. Appended tag 45.
     SetRelation { from: PlayerId, to: PlayerId, relation: crate::view::Relation },
+}
+
+/// Which team-pool rule an [`Edit::TeamPool`] applies (appended variants only).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TeamOp {
+    /// A2 `AddCrew(team, x)`: over capacity a positive add is dropped and a
+    /// negative one applied, otherwise the sum clamped to capacity.
+    CrewAddA2,
+    /// A2 `SetTeamCrew(team, v)`: `AddCrew(v - pool)`.
+    CrewSetA2,
+    /// A1 `AddCrew`: `min(pool + x, capacity)`.
+    CrewAddA1,
+    /// A1 `SetTeamCrew`: `min(v, capacity)`.
+    CrewSetA1,
+    /// Roots `Player.maxCrew = v`: the capacity becomes `v` (raw, unclamped);
+    /// later capacity changes shift it by their delta.
+    CapacityRaw,
+    /// A1 `AddOfficers`: the officer count becomes `min(count + trunc(x), cap)`.
+    OfficersAddA1,
+    /// A1 `SetOfficers`: the officer count becomes `min(trunc(v), cap)`.
+    OfficersSetA1,
 }
 
 /// The largest turn rate (radians per second) a script may set.
@@ -470,6 +499,16 @@ mod tests {
         for (tag, edit) in edits {
             let bytes = postcard::to_allocvec(&edit).unwrap();
             assert_eq!(bytes[0], tag, "{edit:?}");
+            assert_eq!(postcard::from_bytes::<Edit>(&bytes).unwrap(), edit);
+        }
+    }
+
+    #[test]
+    fn team_pool_edit_appends_tag_44() {
+        for op in [TeamOp::CrewAddA2, TeamOp::CrewSetA2, TeamOp::CrewAddA1, TeamOp::CrewSetA1, TeamOp::CapacityRaw, TeamOp::OfficersAddA1, TeamOp::OfficersSetA1] {
+            let edit = Edit::TeamPool(PlayerId(1), op, Fixed::ONE);
+            let bytes = postcard::to_allocvec(&edit).unwrap();
+            assert_eq!(bytes[0], 44, "{edit:?}");
             assert_eq!(postcard::from_bytes::<Edit>(&bytes).unwrap(), edit);
         }
     }

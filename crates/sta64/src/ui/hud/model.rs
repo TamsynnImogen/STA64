@@ -837,8 +837,9 @@ mod tests {
         );
         assert_eq!(grid(&f, Page::Top).iter().find(|b| b.act == Act::Target(TargetMode::Mine)).unwrap().sprite_names, ["b_harvest"]);
         f.selected = vec![EntityId(3), EntityId(4)];
+        // Mine shows when any selected unit can mine; the order goes to the miners only.
         assert!(
-            !grid(&f, Page::Top)
+            grid(&f, Page::Top)
                 .iter()
                 .any(|b| b.act == Act::Target(TargetMode::Mine))
         );

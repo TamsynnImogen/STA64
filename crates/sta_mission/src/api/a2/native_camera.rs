@@ -85,8 +85,12 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
     table.set(
         "CenterCamera",
         lua.create_function(move |_, args: MultiValue| {
-            arity("CenterCamera", &args, 1)?;
-            let arguments = vec![entity(&c, "CenterCamera", &args[0])?];
+            // Two overloads (decorated names, static): an object, or a path name and its point.
+            let arguments = match args.len() {
+                1 => vec![entity(&c, "CenterCamera", &args[0])?],
+                2 => vec![text("CenterCamera", &args[0])?, point_index("CenterCamera", &args[1])?],
+                _ => return Err(mlua::Error::runtime("A2.CenterCamera requires exactly 1 or 2 argument(s)")),
+            };
             submit(&c, "CenterCamera", arguments)
         })?,
     )?;

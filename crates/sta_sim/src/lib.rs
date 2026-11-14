@@ -52,6 +52,7 @@ pub mod orders;
 mod orders_tests;
 pub mod switches;
 pub mod replay;
+pub mod repair;
 pub mod setup;
 pub mod snapshot;
 pub mod sensors;
@@ -62,6 +63,9 @@ pub mod spawn;
 pub mod start;
 mod start_effects;
 pub mod attrs;
+pub mod team_pool;
+#[cfg(test)]
+mod rerace_tests;
 pub use start_effects::unsupported as unsupported_start_lifecycle;
 pub mod tech;
 pub mod victory;
@@ -182,6 +186,8 @@ pub struct Sim {
     team_changes: Vec<EntityId>,
     /// Cosmetic owning-seat faction labels, recorded from resolved setup.
     appearance_factions: Vec<(PlayerId, String)>,
+    // (Also the setup race of each seat: the base of `Sim::seat_race`, which picks the officer cap
+    // and latinum rules; fixed by the setup, so peers agree.)
 }
 
 impl Sim {
@@ -298,7 +304,11 @@ impl Sim {
                         self.production.cancel(&db, &self.units, &mut self.economy, c.player, &unlocked);
                     }
                 }
-                self.apply_movement(c.player, &Order::Move { units: unlocked, to: *to, queue: *queue })
+                let taken = self.apply_movement(c.player, &Order::Move { units: unlocked.clone(), to: *to, queue: *queue });
+                if taken {
+                    self.auto_warp_moves(c.player, &unlocked);
+                }
+                taken
             }
             Order::Formation { .. } => self.apply_movement(c.player, order),
             Order::Mine { units, node } => {
@@ -424,7 +434,7 @@ impl Sim {
         self.separate_units();
         self.push_out_of_fields();
         if let Some(db) = self.content.clone() {
-            combat::damage::recharge(&mut self.units, &db, &self.switches);
+            combat::damage::recharge(&mut self.units, &db, &self.switches, &self.subsystems);
             self.activate_team_change_weapons(&db);
             self.specials.step(&mut self.units, &db, &mut self.events);
             let from = self.events.len();
@@ -441,7 +451,10 @@ impl Sim {
                 self.approach_warp.end(id);
             }
             let mut lost = Vec::new();
-            for (id, by) in combat::damage::apply(&mut self.units, &db, &mut self.events, from) {
+            let mut casualties = combat::casualty::Ctx { subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches };
+            let killed = combat::damage::apply(&mut self.units, &db, &mut self.events, from, &mut casualties);
+            combat::casualty::step(&mut self.units, &db, &mut casualties);
+            for (id, by) in killed {
                 lost.extend(self.units.get(id).map(|u| u.owner));
                 self.despawn(id, by);
             }
@@ -451,9 +464,10 @@ impl Sim {
         if let Some(db) = &self.content {
             self.economy.step(&mut self.units, db, &mut self.events);
             self.economy.step_passive(&self.units, db, &self.players, &self.ai_seats, self.tick);
-            self.economy.step_crew(&self.units, db, self.tick);
+            self.economy.step_crew(&self.units, db, &self.attrs, self.tick);
             let from = self.events.len();
             self.production.step(&mut self.units, db, &mut self.economy, &mut self.events, &mut self.confinement);
+            self.inherit_builder_races(from);
             let built: Vec<EntityId> = self.events[from..].iter().filter_map(|e| match e { SimEvent::Spawned { id } => Some(*id), _ => None }).collect();
             for id in built {
                 self.default_autonomy(id);
@@ -470,7 +484,8 @@ impl Sim {
     /// (SIM-26, [`production::officers`]).
     fn officer_census(&self, player: PlayerId) -> Fixed {
         let Some(db) = self.content.as_deref() else { return Fixed::ZERO };
-        self.production.officer_census(&self.units, db, player)
+        let census = self.production.officer_census(&self.units, db, player);
+        Fixed::from_bits(census.to_bits().saturating_add(self.economy.officer_adjust(player).to_bits()))
     }
 
     fn build_view(&self) -> WorldView {
@@ -478,6 +493,7 @@ impl Sim {
         // `units` for scripts, but no player sees or picks them (`EntityKind::hidden`).
         // Only the view changes: state and digest do not.
         let mut hidden: Vec<EntityId> = Vec::new();
+        let docked = self.economy.docked_stations(&self.units);
         let units = self.units.iter().map(|entity| {
             let mut view = entity.view();
             if self.content.as_deref().and_then(|db| db.unit(entity.def)).is_some_and(EntityKind::hidden) {
@@ -485,6 +501,7 @@ impl Sim {
                 view.flags = view.flags.with(view::UnitFlags::SELECTABLE, false);
             }
             view.flags = view.flags.with(view::UnitFlags::BUILDING, self.production.is_welding(entity.id));
+            view.flags = view.flags.with(view::UnitFlags::DOCKED, docked.contains(&entity.id));
             if matches!(entity.kind, EntityKind::Craft) {
                 view.autonomy = Some(self.autonomy.levels(entity.id));
             }
@@ -522,7 +539,7 @@ impl Sim {
             }
         }
         let perceived_owners = self.perception.iter().map(|(id, &owner)| (id, owner)).collect();
-        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners, appearance: self.appearance_view(), attrs: crate::attrs::AttrsView { names: self.switches.names(), ..self.attrs.view() } }
+        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners, appearance: self.appearance_view(), attrs: crate::attrs::AttrsView { names: self.switches.names(), seats: self.seat_views(), ..self.attrs.view() } }
     }
 
     /// FNV-1a over all simulation state, for desync detection. The content

@@ -169,7 +169,7 @@ fn state_is_in_both_digests_and_survives_a_snapshot() {
 #[test]
 fn corrupt_subsystem_rows_are_rejected() {
     use crate::combat::damage::{SubsystemRow, Subsystems};
-    let row = |off, damage| (EntityId(1), SubsystemRow { off, damage });
+    let row = |off, damage| (EntityId(1), SubsystemRow { off, derelict: false, damage });
     assert!(Subsystems::from_rows(vec![row(0b100, [0; 5])]).is_some());
     assert!(Subsystems::from_rows(vec![row(0b1, [0; 5])]).is_none(), "engines are a flag, not a row bit");
     assert!(Subsystems::from_rows(vec![row(0, [0, -1, 0, 0, 0])]).is_none());
@@ -196,7 +196,7 @@ fn damage_above_the_hit_points_in_a_snapshot_is_corrupt() {
     let ok = sim.snapshot();
     assert!(Sim::from_snapshot(&ok, Some(Arc::clone(&d))).is_ok());
     let mut bad = sim.clone();
-    bad.subsystems = crate::combat::damage::Subsystems::from_rows(vec![(id, SubsystemRow { off: 0, damage: [0, Fixed::from_int(81).to_bits(), 0, 0, 0] })]).unwrap();
+    bad.subsystems = crate::combat::damage::Subsystems::from_rows(vec![(id, SubsystemRow { off: 0, derelict: false, damage: [0, Fixed::from_int(81).to_bits(), 0, 0, 0] })]).unwrap();
     assert!(Sim::from_snapshot(&bad.snapshot(), Some(d)).is_err());
 }
 
