@@ -281,6 +281,27 @@ fn remounting_between_campaign_and_campaign_less_content_keeps_the_resources_sys
     assert!(app.world().contains_resource::<MissionMovies>());
 }
 
+#[test]
+fn a_failed_remount_keeps_the_active_mod_identity() {
+    use crate::frontend::screens::{ActiveMod, ModChosen, SelectedMod};
+    let (mut app, _) = app();
+    let root = std::env::temp_dir().join(format!("sta64_absent_mod_install_{}", std::process::id()));
+    assert!(!root.exists());
+    let vfs = sta_vfs::Vfs::default();
+    let browser = crate::map::browser(&vfs, None, String::new());
+    app.insert_resource(crate::viewer::Mounted(vfs))
+        .insert_resource(crate::map::Catalogue::default())
+        .insert_resource(browser)
+        .insert_resource(FlowConfig { install_root: Some(root) })
+        .insert_resource(ActiveMod(Some("fx_balance".into())))
+        .insert_resource(SelectedMod(Some("missing".into())));
+    settle(&mut app, 3);
+    app.world_mut().write_message(ModChosen(Some("missing".into())));
+    settle(&mut app, 3);
+    assert_eq!(app.world().resource::<ActiveMod>().0.as_deref(), Some("fx_balance"));
+    assert_eq!(app.world().resource::<SelectedMod>().0.as_deref(), Some("missing"));
+}
+
 /// A remount drops what was cached by name from the previous mount: the texture cache keeps misses
 /// (`None`), so a texture only the new mod has (`PA_ECFR0` of STA2 Classic) stayed "not found".
 #[test]
