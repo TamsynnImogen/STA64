@@ -66,6 +66,10 @@ mod tests {
     }
 
     fn world() -> (Sim, Arc<ContentDb>, EntityId) {
+        world_with(&[1000])
+    }
+
+    fn world_with(planets: &[i32]) -> (Sim, Arc<ContentDb>, EntityId) {
         let fake = sta_content::fake::db();
         let mut rig = UnitDef::new("fx_rig", "constructionrig");
         rig.race = "fx".into();
@@ -98,7 +102,9 @@ mod tests {
             sim.step(&[Command { player: PlayerId::BENCH, seq: 0, kind: CommandKind::Edit(e) }]);
             id
         };
-        spawn("fx_world", v(1000, 0));
+        for &x in planets {
+            spawn("fx_world", v(x, 0));
+        }
         let rig = spawn("fx_rig", v(0, 0));
         (sim, db, rig)
     }
@@ -135,6 +141,36 @@ mod tests {
         assert_eq!(built[0].0, g.at);
         assert!((built[0].1.0 - g.heading.0).abs() < Fixed::from_f64(1e-6) && (built[0].1.1 - g.heading.1).abs() < Fixed::from_f64(1e-6));
         assert_eq!(ghost_site(&db, None, &sim.view(), what, rig, cursor).status, Err(SiteError::Blocked), "the planet is taken now");
+    }
+
+    /// The click's order carries the raw cursor point: with two planets in reach the sim builds where the
+    /// ghost showed, not where a second snap of the snapped point lands (the click used to order the snapped one).
+    #[test]
+    fn the_click_order_builds_where_the_ghost_is_with_two_planets() {
+        use crate::ui::hud::{Armed, ghost::{build_order, site_status}, model::HudFeed};
+        use sta_sim::command::Order;
+        let (mut sim, db, rig) = world_with(&[1000, 1520]);
+        let what = db.key("fx_orbital").unwrap();
+        let cursor = v(1230, 0);
+        let g = ghost_site(&db, None, &sim.view(), what, rig, cursor);
+        assert_eq!((g.status, g.at), (Ok(()), v(1275, 0)));
+        assert_ne!(ghost_site(&db, None, &sim.view(), what, rig, g.at).at, g.at, "a second snap moves it: the scenario");
+        let feed = HudFeed { view: sim.view(), player: PlayerId(0), selected: vec![rig], content: Some(db.clone()) };
+        let armed = Armed { builder: rig, what, odf: "fx_orbital".into() };
+        assert_eq!(site_status(&feed, None, &armed, cursor), (g.at, Ok(())));
+        let (site_at, order) = build_order(&feed, None, &armed, cursor).unwrap();
+        assert_eq!(site_at, g.at);
+        assert_eq!(order, Order::Build { builder: rig, what, at: Some(cursor) });
+        let e = Edit::Cargo(PlayerId(0), 0, Fixed::from_int(9999));
+        sim.step(&[Command { player: PlayerId::BENCH, seq: 1, kind: CommandKind::Edit(e) }]);
+        sim.step(&[Command { player: PlayerId(0), seq: 2, kind: CommandKind::Order(order) }]);
+        for _ in 0..1500 {
+            sim.step(&[]);
+        }
+        let built: Vec<_> = sim.view().units.iter().filter(|u| u.def == what).map(|u| u.pos).collect();
+        assert_eq!(built, [g.at]);
+        // Open space is refused by the same call.
+        assert_eq!(build_order(&feed, None, &armed, v(3000, 3000)), Err(SiteError::Blocked));
     }
 
     #[test]
