@@ -399,6 +399,33 @@ fn main_menu_has_nine_text_rows_with_existing_routes() {
 }
 
 #[test]
+fn main_menu_focus_skips_unavailable_rows_and_keeps_buttons_transparent() {
+    use crate::ui::sprite_font::SpriteText;
+    use crate::ui::theme::{KitFocus, focus_order, move_focus};
+
+    let mut app = app();
+    let order = focus_order(app.world_mut());
+    let slots: Vec<_> = order.iter().map(|e| app.world().get::<Placed>(*e).unwrap().0).collect();
+    assert_eq!(slots, [Slot::MainSinglePlayer, Slot::MainInstantAction, Slot::MainMultiplayer, Slot::MainMods, Slot::MainOptions, Slot::MainExit]);
+    let first = order[0];
+    let label = app.world().get::<Children>(first).unwrap()[0];
+    let normal = app.world().get::<SpriteText>(label).unwrap().color;
+    move_focus(app.world_mut(), false);
+    settle(&mut app);
+    assert_eq!(app.world().resource::<KitFocus>().0, Some(first));
+    assert_ne!(app.world().get::<SpriteText>(label).unwrap().color, normal);
+    assert_eq!(app.world().get::<BackgroundColor>(first).unwrap().0, Color::NONE);
+    for _ in 0..order.len() {
+        move_focus(app.world_mut(), false);
+    }
+    assert_eq!(app.world().resource::<KitFocus>().0, Some(first));
+    let disabled = placed(&mut app).into_iter().find(|(s, _)| *s == Slot::MainMapEditor).unwrap().1;
+    crate::ui::theme::click(app.world_mut(), disabled);
+    settle(&mut app);
+    assert_eq!(*app.world().resource::<State<Screen>>().get(), Screen::Main);
+}
+
+#[test]
 fn options_tabs_switch_and_settings_follow() {
     use crate::frontend::screens::{SettingKey, view::{SettingSlider, SettingToggle}};
     use crate::ui::theme::{SliderChanged, ToggleChanged};

@@ -12,8 +12,8 @@ use crate::frontend::screens::{Act, Screen};
 use crate::ui::sprite_font::{FontRole, ScalableText, SpriteText, SpriteTextStyle, sprite_text_styled};
 use crate::ui::theme::{Focusable, KitFocus, UiButton, WidgetState};
 
-const WHITE: Color = Color::srgb(0.91, 0.91, 0.89);
-const GOLD: Color = Color::srgb(0.91, 0.69, 0.33);
+const WHITE: Color = Color::srgb(231.0 / 255.0, 236.0 / 255.0, 242.0 / 255.0);
+const GOLD: Color = Color::srgb(244.0 / 255.0, 185.0 / 255.0, 67.0 / 255.0);
 const DIM: Color = Color::srgb(0.47, 0.47, 0.46);
 
 #[derive(Component, Debug, Clone, Copy)]
@@ -98,7 +98,7 @@ pub(super) fn spawn(p: &mut Box_<'_>, ctx: &Ctx, b: Vec2) {
     button(p, b, Slot::MainOptions, cap(ctx, "options", "Options").to_uppercase(), Some(Act::Goto(Screen::Settings)));
     button(p, b, Slot::MainReplayIntro, cap(ctx, "replay_intro", "Replay intro").to_uppercase(), None);
     button(p, b, Slot::MainCredits, cap(ctx, "credits", "Credits").to_uppercase(), None);
-    button(p, b, Slot::MainExit, cap(ctx, "quit", "Exit").to_uppercase(), Some(Act::Exit));
+    button(p, b, Slot::MainExit, cap(ctx, "exit", "Exit").to_uppercase(), Some(Act::Exit));
 }
 
 /// Keep the menu text-only after the kit's general button painter runs.
@@ -119,10 +119,10 @@ pub(crate) fn paint(
             WidgetState::Normal => WHITE,
         };
         for child in children.iter() {
-            if let Ok(mut label) = labels.get_mut(child) {
-                if label.color != ink {
-                    label.color = ink;
-                }
+            if let Ok(mut label) = labels.get_mut(child)
+                && label.color != ink
+            {
+                label.color = ink;
             }
         }
     }

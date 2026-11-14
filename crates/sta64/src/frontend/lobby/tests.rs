@@ -676,9 +676,19 @@ pub(crate) fn drop_of(app: &mut App, slot: usize, col: DropCol) -> Entity {
 fn the_main_menu_opens_the_multiplayer_screen() {
     let mut app = app();
     assert_eq!(screen_of(&app), Screen::Main);
-    let off = app.world_mut().query::<&crate::ui::theme::WidgetState>().iter(app.world()).filter(|s| **s == crate::ui::theme::WidgetState::Disabled).count();
-    assert_eq!(off, 2, "only Replay intro and Credits are off; Multiplayer works");
-    go(&mut app, Screen::Multiplayer);
+    use crate::frontend::screens::{Act, stock::{Placed, Slot}};
+    let off: Vec<_> = app.world_mut().query::<(&Placed, &crate::ui::theme::WidgetState)>()
+        .iter(app.world()).filter(|(_, state)| **state == crate::ui::theme::WidgetState::Disabled)
+        .map(|(placed, _)| placed.0).collect();
+    assert_eq!(off.len(), 3);
+    for slot in [Slot::MainMapEditor, Slot::MainReplayIntro, Slot::MainCredits] {
+        assert!(off.contains(&slot), "{slot:?} is unavailable");
+    }
+    let multiplayer = app.world_mut().query::<(Entity, &Act)>().iter(app.world())
+        .find(|(_, act)| **act == Act::Goto(Screen::Multiplayer)).unwrap().0;
+    crate::ui::theme::click(app.world_mut(), multiplayer);
+    settle(&mut app);
+    assert_eq!(screen_of(&app), Screen::Multiplayer);
     for want in ["Your name", "Relay address", "Host a game", "Join a game", "Previous menu"] {
         assert!(has_text(&mut app, want), "{want}: {:?}", texts(&mut app));
     }

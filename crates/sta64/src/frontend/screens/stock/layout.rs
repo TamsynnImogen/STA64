@@ -15,7 +15,8 @@
 //! **Fit.** The screen is a box of the design's shape, as large as the window allows,
 //! with its aspect clamped to 4:3 .. 16:9 and centred, so a 21:9 window gets a 16:9
 //! box with the scene showing at the sides instead of stretched tables. Regions are
-//! fractions of the box; text and control heights stay the theme's own logical sizes.
+//! fractions of the box. The main menu's typography scales with the box height;
+//! the other screens keep the theme's own logical text and control sizes.
 
 use bevy::math::{Rect, Vec2};
 
@@ -148,7 +149,7 @@ pub fn region(slot: Slot) -> Region {
         // the arrangement, but these design-space regions are not stock measurements.
         Slot::MainKicker => a(64.0, 128.0, 250.0, 23.0),
         Slot::MainTitle => a(63.0, 153.0, 330.0, 37.0),
-        Slot::MainDivider => a(64.0, 190.5, 122.0, 2.0),
+        Slot::MainDivider => a(64.0, 190.5, 122.0, 1.0),
         Slot::MainSinglePlayer => main_row(0),
         Slot::MainInstantAction => main_row(1),
         Slot::MainMultiplayer => main_row(2),
@@ -192,7 +193,7 @@ pub fn region(slot: Slot) -> Region {
 }
 
 fn main_row(index: usize) -> Region {
-    a(72.0, 208.0 + index as f32 * (110.0 / 3.0), 285.0, 32.0)
+    a(72.0, 199.0 + index as f32 * (110.0 / 3.0), 285.0, 32.0)
 }
 
 fn row(col: usize, i: usize) -> Region {
