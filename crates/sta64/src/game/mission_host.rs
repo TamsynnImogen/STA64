@@ -37,18 +37,26 @@
 //!
 //! The non-human seats of the mission get a [`sta_ai::MissionAiHub`] controller: passive (no
 //! building, no waves) until the script loads a plan with `Player:loadAIP` / `AI_Team_Load_AIP`.
-//! [`MissionHandle`]'s controller runs the script, hands the loads it took
-//! (`MissionRuntime::take_ai_requests`, which now also carries the AI enable/disable switches, LUA-20) to the hub, then thinks the seats, in seat order, over
+//! [`MissionHandle`]'s controller runs the script, hands the requests it took
+//! (`MissionRuntime::take_ai_requests`: the plan loads and, since LUA-20, the AI switches
+//! `DisableAllAITeams`, `EnableAllAITeams`, `EnableTeam`, `DisableTeam`, `SetIsAITeam`,
+//! `ResetStrategyCycle`) to the hub, then thinks the seats, in seat order, over
 //! the same view and events; their commands join the script's in the same `out` vector and reach
 //! the router like a player's, numbered from `0x4000_0000` so they never collide with the
-//! script's. A load therefore applies on the tick the script asks for it. The files are the
-//! install's `AI/AIPs/*.aip` ([`MissionHost::aip_library`]); a request that names none, or a seat
-//! with no AI, changes nothing and is listed by [`MissionHandle::unresolved_aips`].
+//! script's. A load or a switch therefore applies on the tick the script asks for it. The files are the
+//! install's `AI/AIPs/*.aip` ([`MissionHost::aip_library`]); a plan load that names none, or
+//! names a seat with no AI, changes nothing and is listed by [`MissionHandle::unresolved_aips`]. A
+//! switch never is: on a seat with no AI (the human's) it is the original's no-op, and a number
+//! that names no seat is dropped by the Armada II binding (the Armada I binding raises).
 //!
-//! **Not replay-safe: the plan.** It reaches the seat through the hub, outside the command
-//! stream, and is not in a snapshot: a save taken after a load loses the plan (SIM-61's row), and
-//! a replay never runs the AI at all (D3), only the commands it recorded. The seats' commands are
-//! deterministic for a given game: same view, same events, same order each run.
+//! **Not replay-safe: the plan and the flags.** The plan and the per-seat `ai` / `enabled` flags
+//! (LUA-20) reach the seat through the hub, outside the command stream, and are not in a snapshot:
+//! a save taken after a load or a switch loses them (SIM-61's row). A replay never runs the AI at
+//! all (D3), only the commands it recorded. The seats' commands are deterministic for a given game
+//! (same view, same events, same order each run) except for requests the host raises outside the
+//! script's own think (`deliver_reply_host_side`): they wait for the next tick, are applied before
+//! that tick's own requests, and which tick that is depends on the frame the player's answer was
+//! handled in.
 //!
 //! # The mission's end
 //!

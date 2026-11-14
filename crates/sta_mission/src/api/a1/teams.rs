@@ -73,24 +73,30 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
     })?)?;
 
     // The AI switches (LUA-20): requests for the host's AI hub, in call order (`api::ai_switch`).
+    // Each also retains `Presentation::Call("A1.<name>")` as before (and as A2 does), so a recorded
+    // command stream does not change; none is counted as unsupported any more.
     // `ResetStrategyCycle` is not exported by Armada I.
-    table.set("DisableAllAITeams", def(lua, env, "DisableAllAITeams", &[""], |_, e, _, _| {
+    table.set("DisableAllAITeams", def(lua, env, "DisableAllAITeams", &[""], |_, e, _, a| {
+        e.call("DisableAllAITeams", args_of(a))?;
         ai_switch::enable_all(&mut e.ctx.borrow_mut(), false);
         Ok(Value::Nil)
     })?)?;
-    table.set("EnableAllAITeams", def(lua, env, "EnableAllAITeams", &[""], |_, e, _, _| {
+    table.set("EnableAllAITeams", def(lua, env, "EnableAllAITeams", &[""], |_, e, _, a| {
+        e.call("EnableAllAITeams", args_of(a))?;
         ai_switch::enable_all(&mut e.ctx.borrow_mut(), true);
         Ok(Value::Nil)
     })?)?;
     for (name, on) in [("DisableTeam", false), ("EnableTeam", true)] {
         table.set(name, def(lua, env, name, &["i"], move |_, e, _, a| {
             let team = e.team(name, a[0].int())?;
+            e.call(name, args_of(a))?;
             ai_switch::enable(&mut e.ctx.borrow_mut(), Some(team), on);
             Ok(Value::Nil)
         })?)?;
     }
     table.set("SetIsAITeam", def(lua, env, "SetIsAITeam", &["ib"], |_, e, _, a| {
         let team = e.team("SetIsAITeam", a[0].int())?;
+        e.call("SetIsAITeam", args_of(a))?;
         ai_switch::set_is_ai(&mut e.ctx.borrow_mut(), "A1.SetIsAITeam", Some(team), a[1].boolean());
         Ok(Value::Nil)
     })?)?;

@@ -41,8 +41,19 @@
 //!   by class flag only. The calls now reach the host's AI hub (`api::ai_switch`) and
 //!   change only what orders the AI gives afterwards, which is not a query answer; they are
 //!   no gap, so they taint nothing. (`EnableTeam`, `DisableTeam` and `SetIsAITeam` were never
-//!   on the list.) A host that takes no AI requests still counts them as unsupported
-//!   (`Player.loadAIP`), as it does plan loads.
+//!   on the list; they take a team first, so a team number is no handle.) A host that takes no
+//!   AI requests still counts them as unsupported under their own names (`AI.<call>`; plan
+//!   loads stay `Player.loadAIP`), which is not a gap either.
+//!
+//!   The end-blocks this clears (a2_borg01, a2_borg10, a2_fed05 on the readiness runs) rest on
+//!   a known deviation not mattering for the end rule: a seat disabled here also drops the
+//!   distress responses and the formed waves that the original's disabled team keeps
+//!   (`sta_ai::mission` docs). a2_borg01 and a2_borg10 disable the AI near their ends, so
+//!   their end no longer waits on it; whether the original's remaining AI would have changed
+//!   what a query sees there is not measured. When a switch call itself raises (wrong
+//!   arity or type, a failed submit) the A2 wrapper below still treats it as a gap call:
+//!   that taints the handle-looking arguments it names, and no later end is blocked by the
+//!   name, since none of the switches is a world effect.
 //!
 //! Limits: any other influence that never passes through an argument (the
 //! other global switches, an AI that is not seated) taints nothing; and the
@@ -76,12 +87,12 @@ fn yields_handle(name: &str) -> bool {
         || name.starts_with("Spawn")
 }
 
-/// Calls that change who fights whom or whether the AI acts, with no object
-/// to name: when one is a gap every later read is tainted.
+/// Calls that change who fights whom, with no object to name: when one is a gap every later
+/// read is tainted. The AI switches are not here (LUA-20, module docs).
 fn world_effect(name: &str) -> bool {
     matches!(
         name,
-        "SetRelation" | "DisableAllAITeams" | "EnableAllAITeams" | "ResetStrategyCycle" | "SetPerceivedTeam" | "CommandAllShips"
+        "SetRelation" | "SetPerceivedTeam" | "CommandAllShips"
     )
 }
 
@@ -97,7 +108,7 @@ fn team_first(name: &str) -> bool {
         || name.starts_with("AI_")
         || matches!(
             name,
-            "SetRelation" | "AddMetal" | "SetMetal" | "AddDilithium" | "SetDilithium" | "AddLatinum" | "SetLatinum"
+            "SetRelation" | "SetIsAITeam" | "EnableTeam" | "DisableTeam" | "AddMetal" | "SetMetal" | "AddDilithium" | "SetDilithium" | "AddLatinum" | "SetLatinum"
                 | "GetMetal" | "GetDilithium" | "GetLatinum" | "CreateNewSiegeFleet" | "CreateNewMoveFleet"
         )
 }

@@ -1062,6 +1062,16 @@ impl ActiveMission {
         self.outcome
     }
 
+    /// Whether the seat is a computer seat of the mission's AI hub (read only).
+    pub fn ai_is_ai(&self, seat: PlayerId) -> bool {
+        self.ai_hub.is_ai(seat)
+    }
+
+    /// Whether the seat's AI is enabled right now (read only).
+    pub fn ai_is_enabled(&self, seat: PlayerId) -> bool {
+        self.ai_hub.is_enabled(seat)
+    }
+
     /// One tick: the script thinks over the last view and events, then the
     /// sim steps its commands. Returns the outcome once the script has ended
     /// the mission.

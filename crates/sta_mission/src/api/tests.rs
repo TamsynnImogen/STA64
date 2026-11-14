@@ -884,6 +884,42 @@ fn a_raised_command_all_ships_is_a_world_effect_gap() {
 }
 
 #[test]
+fn the_ai_switches_are_no_world_gap_and_block_no_end() {
+    // LUA-20: bound, they are no gap; the queries behind an end read nothing from the AI.
+    for call in ["DisableAllAITeams()", "EnableAllAITeams()", "ResetStrategyCycle()", "EnableTeam(1)", "DisableTeam(1)", "SetIsAITeam(1, true)"] {
+        let s = format!("A2.{call}\nif A2.IsAlive(2) then A2.SucceedMission(0, 0) end");
+        assert_eq!(end_state(&s), MissionEndState::Ended { won: true }, "{call}");
+        let s = format!("A2.{call}\nif not A2.IsAlive(2) then A2.SucceedMission(0, 0) else A2.FailMission(0, 0) end");
+        assert_eq!(end_state(&s), MissionEndState::Ended { won: false }, "{call}");
+    }
+    // The end queries the stock missions use answer as they do without the call, so the end is the
+    // same exact state, not merely "not blocked".
+    for query in ["A2.IsCompromised(2, 3)", "A2.CountUnits(A2.GetRealTeam(4), 0) > 0", "A2.CountStations(1) == 0"] {
+        let body = format!("if {query} then A2.FailMission(0, 0) else A2.SucceedMission(0, 0) end");
+        let plain = end_state(&body);
+        assert!(matches!(plain, MissionEndState::Ended { .. }), "{query}: {plain:?}");
+        for call in ["DisableAllAITeams()", "EnableAllAITeams()", "ResetStrategyCycle()"] {
+            assert_eq!(end_state(&format!("A2.{call}\n{body}")), plain, "{query} after {call}");
+        }
+    }
+}
+
+#[test]
+fn a_raised_ai_switch_is_a_gap_call_but_blocks_no_end_by_its_name() {
+    // The wrapper treats a call that raises (wrong arity, wrong type) as a gap call. None of the
+    // switches is a world effect, so no later read is tainted; and a team number taints no handle
+    // (these three take a team first).
+    for call in ["pcall(A2.DisableAllAITeams, 1)", "pcall(A2.EnableTeam, 'x')", "pcall(A2.DisableTeam, 3, 3)", "pcall(A2.SetIsAITeam, 3, 1)", "pcall(A2.ResetStrategyCycle, true)"] {
+        // The call must really raise: the script ends only through the `not ok` branch, and a
+        // call that returned normally leaves the mission running.
+        let raised = format!("local ok, err = {call}\nif not ok and string.find(tostring(err), 'requires', 1, true) and A2.IsAlive(3) then A2.SucceedMission(0, 0) end");
+        assert_eq!(end_state(&raised), MissionEndState::Ended { won: true }, "{call} raises, and a raise blocks no end");
+        let s = format!("{call}\nif A2.IsAlive(3) then A2.SucceedMission(0, 0) end");
+        assert_eq!(end_state(&s), MissionEndState::Ended { won: true }, "{call}");
+    }
+}
+
+#[test]
 fn a_gap_that_is_not_a_world_effect_taints_no_unrelated_read() {
     let s = "A2.NoteGap('CollisionPrevention', 1)\nif A2.IsAlive(2) then A2.SucceedMission(0, 0) end";
     assert_eq!(end_state(s), MissionEndState::Ended { won: true });
