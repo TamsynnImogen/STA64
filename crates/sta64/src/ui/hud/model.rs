@@ -232,7 +232,7 @@ pub struct Button {
     pub verbose: Option<String>,
     /// Sprite IDs in priority order; an empty list leaves the text label visible.
     pub sprite_names: Vec<String>,
-    /// Keep the text alongside a resolved icon (formations need distinct labels).
+    /// Keep the text alongside a resolved icon when explicitly requested.
     pub keep_label: bool,
 }
 
@@ -337,7 +337,7 @@ fn button(cell: usize, label: &str, act: Act, tip: &str) -> Button {
         Act::Target(TargetMode::Mine) => (vec!["b_harvest".into()], false),
         Act::Target(TargetMode::Colonize) => (vec!["b_colonize".into()], false),
         Act::Cancel(_) => (vec!["b_cancel".into()], false),
-        Act::Formation(_) => (vec!["b_form".into()], true),
+        Act::Formation(_) => (vec!["b_form".into()], false),
         // No verified native ID for these actions; use the existing label.
         Act::Special(_) | Act::Build { .. } | Act::OpenNativeMenu(_) => (Vec::new(), false),
     };
@@ -761,7 +761,7 @@ mod tests {
             .find(|b| b.act == Act::Formation(FORM_WEDGE))
             .unwrap();
         assert_eq!(wedge.sprite_names, ["b_form"]);
-        assert!(wedge.keep_label);
+        assert!(!wedge.keep_label);
         assert!(matches!(
             command(&f, &wedge.act),
             Some((
