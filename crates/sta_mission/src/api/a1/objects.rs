@@ -50,6 +50,7 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
     table.set("CraftCannotDie", alias(lua, env, a2, "CraftCannotDie")?)?;
     table.set("IsAlive", alias(lua, env, a2, "IsAlive")?)?;
     table.set("IsCompromised", alias(lua, env, a2, "IsCompromised")?)?;
+    table.set("IsDerelict", alias(lua, env, a2, "IsDerelict")?)?;
     table.set("Exists", alias(lua, env, a2, "Exists")?)?;
     table.set("DoesNotExist", alias(lua, env, a2, "DoesNotExist")?)?;
     table.set("Cloak", alias(lua, env, a2, "Cloak")?)?;

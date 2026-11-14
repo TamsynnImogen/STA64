@@ -60,6 +60,9 @@ mod tests;
 /// number is `handle - TOKEN_BASE`. Real entity ids stay far below it.
 pub(super) const TOKEN_BASE: u32 = 0x4000_0000;
 
+/// Why a pending `BuildObject` handle cannot be used yet (shared with the lenient alias check).
+const STILL_BEING_BUILT: &str = "is still being built; use it after the next tick";
+
 /// A special-forces flag (`CreateSpecialFlag`): a named hero tied to a unit.
 pub(super) struct Flag {
     pub unit: EntityId,
@@ -177,7 +180,7 @@ impl Env {
                 st.pending.remove(&raw);
                 Err("could not be built (the spawn failed)")
             }
-            SpawnStatus::Queued | SpawnStatus::Submitted(_) => Err("is still being built; use it after the next tick"),
+            SpawnStatus::Queued | SpawnStatus::Submitted(_) => Err(STILL_BEING_BUILT),
         })
     }
 
@@ -433,7 +436,7 @@ pub(super) fn alias(lua: &Lua, env: &Env, a2: &Table, name: &'static str) -> mlu
 /// [`alias`] under another A1 name (errors are reported under it).
 fn alias_as(lua: &Lua, env: &Env, a2: &Table, name: &'static str, a2_name: &'static str) -> mlua::Result<Function> {
     // Existence queries treat a pending or failed spawn as "no such object".
-    let lenient = matches!(name, "Exists" | "DoesNotExist" | "IsAlive" | "IsCompromised");
+    let lenient = matches!(name, "Exists" | "DoesNotExist" | "IsAlive" | "IsCompromised" | "IsDerelict");
     let f: Function = a2.get(a2_name)?;
     let env = env.clone();
     lua.create_function(move |_, args: MultiValue| {
@@ -446,7 +449,8 @@ fn alias_as(lua: &Lua, env: &Env, a2: &Table, name: &'static str, a2_name: &'sta
             };
             mapped.push(match resolved {
                 Some(Ok(id)) => Value::Integer(i64::from(id.0)),
-                Some(Err(_)) if lenient => Value::Integer(0),
+                // A pending spawn has an object in the engine (crewed, so not derelict): no constant.
+                Some(Err(why)) if lenient && !(name == "IsDerelict" && why == STILL_BEING_BUILT) => Value::Integer(0),
                 Some(Err(why)) => {
                     return Err(mlua::Error::runtime(format!("A1.{name}: object {why}")));
                 }

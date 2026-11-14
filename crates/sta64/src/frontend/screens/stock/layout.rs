@@ -148,7 +148,7 @@ pub fn region(slot: Slot) -> Region {
         // Main menu: our own left-aligned list. The 1920x1080 reference informs
         // the arrangement, but these design-space regions are not stock measurements.
         Slot::MainKicker => a(64.0, 128.0, 250.0, 23.0),
-        Slot::MainTitle => a(63.0, 153.0, 330.0, 37.0),
+        Slot::MainTitle => a(63.0, 85.0, 680.0, 105.0),
         Slot::MainDivider => a(64.0, 190.5, 122.0, 1.0),
         Slot::MainSinglePlayer => main_row(0),
         Slot::MainInstantAction => main_row(1),

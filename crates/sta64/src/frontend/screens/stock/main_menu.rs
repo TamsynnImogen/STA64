@@ -45,6 +45,21 @@ fn caption(text: impl Into<String>, size: f32, color: Color, role: FontRole) -> 
     sprite_text_styled(text, size, color, SpriteTextStyle::role(role))
 }
 
+fn title<'a>(ctx: &'a Ctx<'_>) -> &'a str {
+    ctx.active_mod.0.as_deref()
+        .and_then(|folder| ctx.data.mods.iter().find(|m| m.folder.eq_ignore_ascii_case(folder)))
+        .map(|m| m.name.trim())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("STA64")
+}
+
+fn title_size(name: &str, scale: f32) -> f32 {
+    // Reserve roughly two lines for long mod names inside the title's wide region.
+    // Wrapping handles word boundaries; the size also keeps long single words legible.
+    let chars = name.chars().count().max(1) as f32;
+    (68.0_f32.min(680.0 * 2.0 / (chars * 0.6)).max(24.0)) * scale
+}
+
 fn button(p: &mut Box_<'_>, b: Vec2, slot: Slot, text: String, act: Option<Act>) {
     let r = region(slot).px(b);
     let size = 26.0 * b.y / 1080.0;
@@ -71,20 +86,17 @@ fn button(p: &mut Box_<'_>, b: Vec2, slot: Slot, text: String, act: Option<Act>)
 /// Build only the front page. Other stock screens keep their existing widgets.
 pub(super) fn spawn(p: &mut Box_<'_>, ctx: &Ctx, b: Vec2) {
     let scale = b.y / 1080.0;
-    at(p, Slot::MainKicker, b, (ScalableText, caption("STAR TREK", 28.0 * scale, WHITE, FontRole::Medium)));
+    let name = title(ctx);
     at(
         p,
         Slot::MainTitle,
         b,
         (
-            Node { align_items: AlignItems::FlexStart, ..default() },
-            children![
-                (ScalableText, caption("ARMADA", 68.0 * scale, GOLD, FontRole::VeryLarge)),
-                (
-                    Node { margin: UiRect::left(Val::Px(5.0 * scale)), ..default() },
-                    children![(ScalableText, caption("64", 34.0 * scale, GOLD, FontRole::Large))]
-                )
-            ],
+            ScalableText,
+            sprite_text_styled(
+                name.to_owned(), title_size(name, scale), GOLD,
+                SpriteTextStyle::role(FontRole::VeryLarge).wrapped(region(Slot::MainTitle).px(b).width()),
+            ),
         ),
     );
     let r = region(Slot::MainDivider).px(b);
