@@ -72,7 +72,7 @@ fn resolved_pieces(app: &mut App, pieces: &[super::layout::Piece]) -> usize {
 }
 
 #[derive(Clone, Copy)]
-enum HoverCapture { Selected, Low, Other, ColonyShip }
+enum HoverCapture { Selected, Low, Other, BuildPage, ColonyShip }
 
 /// Independent installed-data expectation: current crew is compared with its
 /// actual live capacity, not crewCost. Resolve authored palette/thresholds.
@@ -506,12 +506,13 @@ fn installed_stock_hud_renders_on_gpu() {
     for (size, ratio) in [
         (UVec2::new(1024, 768), "4x3"),
         (UVec2::new(1280, 720), "16x9"),
+        (UVec2::new(1920, 1080), "16x9-1080"),
         (UVec2::new(2560, 1080), "21x9"),
         (UVec2::new(3840, 1080), "32x9"),
     ] {
         let cfg = match (profile, ratio) {
             (UiProfile::Armada2, _) => "gui_fed.cfg",
-            (UiProfile::FleetOps, "16x9" | "21x9" | "32x9") => "gui_federation16x9.cfg",
+            (UiProfile::FleetOps, "16x9" | "16x9-1080" | "21x9" | "32x9") => "gui_federation16x9.cfg",
             (UiProfile::FleetOps, _) => "gui_federation.cfg",
             _ => unreachable!(),
         };
