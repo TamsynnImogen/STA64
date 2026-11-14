@@ -1167,7 +1167,7 @@ minimapDisplayArea = 16 19 320 320
             (Vec2::new(5.0 * CELL, -40.0 * CELL), Vec2::new(35.0 * CELL, 80.0 * CELL)),
         ];
         let colours = FogColours::default();
-        for aspect in [4.0 / 3.0, 16.0 / 9.0, 21.0 / 9.0] {
+        for aspect in [4.0 / 3.0, 16.0 / 9.0, 21.0 / 9.0, 32.0 / 9.0] {
             let config = HudConfig { gui: Some(fo_sheet()), aspect, ..default() };
             for (lo, hi) in maps {
                 let mut app = App::new();

@@ -395,14 +395,15 @@ mod tests {
         cfg.numbers.insert("popupPaletteYA".into(), 940.0);
         let base = StockLayout::new(&cfg, Vec2::new(2134.0, 1200.0));
         assert_eq!(base.hud, R::new(0.0, 0.0, 2134.0, 1200.0));
+        let rel = base.palette().unwrap().origin - Vec2::new(base.panel("minimap").unwrap().x, base.panel("minimap").unwrap().y);
         for screen in [Vec2::new(3440.0, 1440.0), Vec2::new(2560.0, 1080.0), Vec2::new(5120.0, 1440.0)] {
             let l = StockLayout::new(&cfg, screen);
             let (map, p) = (l.panel("minimap").unwrap(), l.palette().unwrap());
-            let (m0, p0) = (base.panel("minimap").unwrap(), base.palette().unwrap());
+            // Scaled by one factor, the palette keeps its place relative to the minimap panel.
             let k = screen.y / 1200.0;
-            assert_eq!(p.origin.x - map.x, (264.0 * k).round() - (-k + 0.5).floor(), "{screen:?}");
-            assert_eq!(p.origin.y - map.y, (940.0 * k).round() - (818.0 * k + 0.5).floor(), "{screen:?}");
-            assert!(p.origin.x >= l.hud.x && p0.origin.x >= m0.x);
+            let got = p.origin - Vec2::new(map.x, map.y);
+            assert!((got - rel * k).abs().max_element() <= 1.0, "{screen:?}: {got:?} vs {:?}", rel * k);
+            assert!(p.origin.x >= l.hud.x, "{screen:?}");
         }
     }
 
@@ -485,6 +486,29 @@ mod tests {
             assert_eq!(l.panel("minimap"), Some(old(cfg.rects["minimapPanelArea"])), "{canvas:?}");
             assert_eq!(l.palette().unwrap().origin, Vec2::new((400.0 * sx).round(), (900.0 * sy).round()), "{canvas:?}");
         }
+    }
+
+    /// A 2134x1200 sheet on a 1920x1080 window differs from 16:9 by 0.03 percent: every key
+    /// lands within one unit of the old per-axis mapping and the HUD keeps zero vertical margin.
+    #[test]
+    fn a_near_same_aspect_window_stays_within_one_unit_of_the_per_axis_layout() {
+        let canvas = (2134, 1200);
+        let screen = Vec2::new(1920.0, 1080.0);
+        let mut cfg = sheet(canvas);
+        cfg.rects.insert("hull".into(), rect(13, 77, 123, 31));
+        let l = StockLayout::new(&cfg, screen);
+        assert_eq!(l.hud.y, 0.0);
+        let (sx, sy) = (screen.x / canvas.0 as f32, screen.y / canvas.1 as f32);
+        let old = |r: Rect| R::new(r.x as f32 * sx, r.y as f32 * sy, r.w as f32 * sx, r.h as f32 * sy);
+        let close = |a: R, b: R| (a.x - b.x).abs() <= 1.0 && (a.y - b.y).abs() <= 1.0 && (a.w - b.w).abs() <= 1.0 && (a.h - b.h).abs() <= 1.0;
+        for key in ["hull", "minimapDisplayArea", "paletteSingleButtonArea"] {
+            let (got, want) = (l.rect(key).unwrap(), old(cfg.rects[key]));
+            assert!(close(got, want), "{key}: {got:?} vs {want:?}");
+        }
+        let (got, want) = (l.panel("minimap").unwrap(), old(cfg.rects["minimapPanelArea"]));
+        assert!(close(got, want), "minimap: {got:?} vs {want:?}");
+        let o = l.palette().unwrap().origin;
+        assert!((o.x - 400.0 * sx).abs() <= 1.0 && (o.y - 900.0 * sy).abs() <= 1.0, "{o:?}");
     }
 
     #[test]

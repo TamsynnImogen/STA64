@@ -77,7 +77,7 @@ fn assert_rect(app: &App, node: &Node, x: f32, y: f32, w: f32, h: f32) {
 }
 
 #[test]
-fn medium_and_tall_rows_keep_selected_name_row_and_independent_cfg() {
+fn medium_and_tall_rows_keep_selected_name_row_and_their_own_cfg() {
     let cfg = inherited_config(
         "infoBuildCaptainTextArea = 20 120 310 25\ninfoBuildCaptainTextColor = 0 0 1 1\n",
         "infoSingleCaptainTextArea = 10 20 300 20\ninfoSingleRegistryTextArea = 10 50 300 20\ninfoSingleCaptainTextColor = 1 0 0 1\ninfoSingleRegistryTextColor = 0 1 0 1\nshipNameColor = 1 0 1 1\n",

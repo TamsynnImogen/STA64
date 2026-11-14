@@ -444,7 +444,7 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
     }
     // A2's first two resource atlas pieces meet at canvas x=256. On a wide
     // viewport Auto letterboxes both pieces and leaves a black gap here; native
-    // independent-axis drawing must fill this authored join.
+    // drawing (one factor, the sheet centred) must fill this authored join.
     if profile == UiProfile::Armada2 && size.x as f32 / size.y as f32 > 1.5 {
         let k = size.y as f32 / 1080.0;
         let x = ((stock.hud.x + 256.0 * stock.scale) * k).round() as u32;

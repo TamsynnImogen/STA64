@@ -662,7 +662,7 @@ fn no_selection_hover_uses_low_offset_and_missing_or_hidden_targets_clear_stats(
 }
 
 #[test]
-fn middle_info_bar_and_zero_area_fields_follow_independent_cfg_axes() {
+fn middle_info_bar_and_zero_area_fields_follow_the_cfg() {
     use infobar::InfoBarField::{Crew,Energy};
     let mut app = populated_info_bar(false, "icon_energy_amt = 0 0 0 0\ncrew_amt = 0 0 0 0\n");
     assert!(info_bar_label(&mut app, Crew).is_none());
@@ -987,7 +987,8 @@ mod identity_tests;
 fn armada1_resource_readouts_are_solid_for_the_pointer() {
     let app = app_with_content_and_config(content(), single_file_config(A1_RESOURCES), UiProfile::Armada2);
     let state = app.world().resource::<StockState>();
-    // Canvas 640x480 on the 1920x1080 test viewport (factor 2.25, x + 240): dilithium panel (300,2) 80x14 -> x 915..1095.
+    // Canvas 640x480 on the 1920x1080 test viewport (factor 2.25, x + 240): the dilithium, crew and
+    // officer panels (80 wide, at 300, 400 and 500) cover x 915..1095, 1140..1320 and 1365..1545.
     for x in [920.0, 1150.0, 1370.0] {
         assert!(state.solid.iter().any(|r| r.contains(Vec2::new(x, 10.0))), "x {x}");
     }
@@ -1030,6 +1031,26 @@ fn margins_beside_the_centred_hud_are_not_solid() {
         assert!(state.solid.iter().any(|r| r.contains(Vec2::new(map.x + 5.0, map.y + 5.0))), "{aspect}");
         let cell = layout.palette().unwrap().cell_rect(0, 0);
         assert!(state.solid.iter().any(|r| r.contains(Vec2::new(cell.x + 5.0, cell.y + 5.0))), "{aspect}");
+        // FO authors its minimap panel at x = -1: the placed art starts one unit left of the
+        // HUD, but the pointer-solid part stops at the HUD's edge.
+        {
+            let mut fo = config();
+            fo.aspect = aspect;
+            fo.gui.as_mut().unwrap().rects.insert("minimapPanelArea".into(), sta_content::Rect { x: -1, y: 800, w: 400, h: 400 });
+            let app = app_with_content_and_config(content(), fo, UiProfile::Armada2);
+            let state = app.world().resource::<StockState>();
+            let hud = state.layout.as_ref().unwrap().hud;
+            assert_eq!(state.layout.as_ref().unwrap().panel("minimap").unwrap().x, hud.x - 1.0, "{aspect}");
+            assert!(state.solid.iter().all(|r| r.x >= hud.x), "{aspect}: solid reaches into the margin");
+            assert!(!state.solid.iter().any(|r| r.contains(Vec2::new(hud.x - 0.5, 1000.0))), "{aspect}");
+            assert!(state.solid.iter().any(|r| r.contains(Vec2::new(hud.x + 5.0, 1000.0))), "{aspect}");
+        }
+        let app = {
+            let mut cfg = config();
+            cfg.aspect = aspect;
+            app_with_content_and_config(content(), cfg, UiProfile::Armada2)
+        };
+        let state = app.world().resource::<StockState>();
         // The same condition input uses: a pointer in a margin leaves the map free.
         let in_margin = crate::ui::hud::HudPointer(state.solid.iter().any(|r| r.contains(Vec2::new(5.0, 900.0))));
         assert_eq!(in_margin, crate::ui::hud::HudPointer(false));

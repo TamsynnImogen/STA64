@@ -322,7 +322,7 @@ pub(super) fn refresh(
         || state
             .layout
             .as_ref()
-            .is_none_or(|l| (l.screen.x - 1080.0 * config.aspect).abs() > 0.1)
+            .is_none_or(|l| (l.screen.x - super::layout::SCREEN_H * config.aspect).abs() > 0.1)
         || theme.is_changed()
         || mount_changed;
     let replaced = changed || bodies.is_empty();
@@ -480,6 +480,15 @@ pub(super) fn refresh(
             }
         }
     }
+    // A sheet rectangle may start left of the canvas (FO's minimap panel at x = -1): the
+    // pointer-solid part never reaches into the margin, which belongs to the world. The art
+    // is not clipped.
+    let hud_rect = layout.hud;
+    for r in &mut state.solid {
+        let (left, right) = (r.x.max(hud_rect.x), r.right().min(hud_rect.right()));
+        *r = R::new(left, r.y, (right - left).max(0.0), r.h);
+    }
+    state.solid.retain(|r| r.w > 0.0);
     state.grid = next;
     state.page = hud.page;
     state.layout = Some(layout);
