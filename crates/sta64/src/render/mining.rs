@@ -12,7 +12,8 @@
 //!   time, as in the original). It is a message of its own, not a `SimEvent::Fired`, so combat
 //!   music and weapon animations do not take it for a fight.
 //! - **Dock.** The sim flies the freighter in to within a short stretch of the station; while
-//!   unloading it glides the rest (at most 80 units, at its top speed) to the station's position
+//!   unloading it glides the rest (at most 80 units, at its top speed, decided once at the start of unloading) to the station's position
+//!   (a freighter without a beam keeps the old one-second glide from the sim's 150-unit unload distance)
 //!   (the station the sim named in the event). The original docks at the station's `dockingHardpoint` node
 //!   (default SOD node `dock`); that node is not read yet, the fallback is the station origin.
 //!
@@ -82,8 +83,9 @@ struct Work {
     /// Anim-clock time the phase began.
     since: f64,
     weapon: Option<MiningWeapon>,
-    /// Top speed (`maxSpeed`): the berth glide takes `distance / speed`.
-    speed: f32,
+    /// Seconds the berth glide takes, decided once when the phase began (`None`: no glide, the ship
+    /// is drawn where the sim has it).
+    glide: Option<f64>,
     /// The offset the model had when the phase began.
     from_offset: Vec3,
     next_shot: f64,
@@ -134,15 +136,29 @@ fn track(
         let unit = link.curr().unit(*id).and_then(|u| db.unit(u.def));
         let weapon = unit.and_then(|u| mining_weapon(db, u));
         let from_offset = offsets.0.get(id).copied().unwrap_or(Vec3::ZERO);
+        let speed = unit.map_or(0.0, |u| u.movement.max_speed.to_f32());
+        let dock = dock.map(|d| to_bevy(d.to_f32()));
+        // Decided once, from where the ship is now. An armed freighter is flown in by the sim to the
+        // station, so it glides only the last stretch (at its top speed). A freighter without a beam
+        // unloads at the sim's old 150-unit distance and keeps the old one-second glide to the berth.
+        let glide = match (phase, dock, weapon.is_some()) {
+            (MinerPhase::Unloading, Some(d), true) => {
+                let here = point(&link, *id, 1.0).unwrap_or(d);
+                let gap = Vec2::new(d.x - here.x, d.z - here.z).length();
+                (gap <= GLIDE_MAX).then(|| (gap as f64 / speed.max(1.0) as f64).max(0.4))
+            }
+            (MinerPhase::Unloading, Some(_), false) => Some(BLEND),
+            _ => None,
+        };
         miners.0.insert(
             *id,
             Work {
                 phase: *phase,
                 node: *node,
-                dock: dock.map(|d| to_bevy(d.to_f32())),
+                dock,
                 since: now,
                 weapon,
-                speed: unit.map_or(0.0, |u| u.movement.max_speed.to_f32()),
+                glide,
                 from_offset,
                 next_shot: now,
             },
@@ -174,9 +190,11 @@ fn animate(
             w.since = now;
         }
         let t = now - w.since;
-        let gap = w.dock.map_or(0.0, |d| Vec2::new(d.x - sim.x, d.z - sim.z).length());
-        let glide = if gap <= GLIDE_MAX { (gap as f64 / w.speed.max(1.0) as f64).max(0.4) } else { BLEND };
-        let blend = if w.phase == MinerPhase::Unloading { (t / glide).clamp(0.0, 1.0) as f32 } else { smooth(t / BLEND) };
+        let blend = match (w.phase, w.glide) {
+            (MinerPhase::Unloading, Some(g)) => (t / g).clamp(0.0, 1.0) as f32,
+            (MinerPhase::Unloading, None) => 1.0,
+            _ => smooth(t / BLEND),
+        };
         if let (MinerPhase::Mining, Some(wp)) = (w.phase, w.weapon.as_ref())
             && now >= w.next_shot
         {
@@ -184,7 +202,7 @@ fn animate(
             w.next_shot = now + wp.refire.max(1) as f64 / TICK_HZ as f64;
         }
         let offset = match (w.phase, w.dock) {
-            (MinerPhase::Unloading, Some(dock)) if gap <= GLIDE_MAX => (dock - sim) * blend + w.from_offset * (1.0 - blend),
+            (MinerPhase::Unloading, Some(dock)) if w.glide.is_some() => (dock - sim) * blend + w.from_offset * (1.0 - blend),
             _ => w.from_offset * (1.0 - blend),
         };
         // Mining holds no offset; unloading holds the berth; the rest fade and go.
