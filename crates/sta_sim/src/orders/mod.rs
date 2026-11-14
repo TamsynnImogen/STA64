@@ -465,12 +465,20 @@ impl Sim {
             // tight gate stays for keyed units too (the band is read, not used).
             let aligned = to_goal > Fixed::ZERO && (u.heading.0 * gx + u.heading.1 * gz) / to_goal > Fixed::from_f64(0.99);
             let too_close = if keyed { u.stats.too_close_for_warp } else { too_close_to_warp() };
-            let can = vw > vi && vi > crate::speed_override::HELD_SPEED && aligned && to_goal >= approach::warp_lead(vw, vi, db_radius(self, u));
+            // A craft already in warp keeps it while the goal stays inside the
+            // ODF band (it steers meanwhile): a single hard gate dropped it out
+            // and back in again each time the heading error crossed it.
+            let in_band = keyed && was && u.stats.heading_close_for_warp > Fixed::ZERO && to_goal > Fixed::ZERO && {
+                let cos = (u.heading.0 * gx + u.heading.1 * gz) / to_goal;
+                let band = crate::kinematics::rotate((Fixed::ONE, Fixed::ZERO), u.stats.heading_close_for_warp.min(Fixed::from_int(90)) * crate::kinematics::pi() / Fixed::from_int(180)).0;
+                cos > band
+            };
+            let can = vw > vi && vi > crate::speed_override::HELD_SPEED && (aligned || in_band) && to_goal >= approach::warp_lead(vw, vi, db_radius(self, u));
             // Armada II gates the start on 0.9 of impulse speed; Armada I's
             // throttle factor applies at once.
             let up_to_speed = keyed || u.speed > Fixed::from_f64(0.9) * vi;
             let warp = if was { can } else { can && to_goal > too_close && up_to_speed };
-            let mut plan = Plan { warp, ..Plan::default() };
+            let mut plan = Plan { warp, steer: keyed, ..Plan::default() };
             if warp {
                 self.approach_warp.set_phase(id, approach::IN_WARP);
             } else if phase.is_some() && u.speed > vi {

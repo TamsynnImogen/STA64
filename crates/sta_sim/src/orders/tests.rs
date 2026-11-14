@@ -399,6 +399,52 @@ mod auto_warp {
         assert!(top <= n(21), "{top:?}");
     }
 
+    /// The A1 intro playtest: a goal about 8 to 13 degrees off the bow used to flip the
+    /// craft in and out of warp as the heading error crossed the tight start gate, so its
+    /// speed rose and fell between impulse and warp. Once at warp it now holds it (turning
+    /// toward the goal) until the drop-out lead, then only slows down.
+    #[test]
+    fn a_goal_slightly_off_the_bow_warps_without_speed_oscillation() {
+        let (mut sim, s) = scout_game(true);
+        let to = v(180, 800);
+        let mut top = Fixed::ZERO;
+        let mut dips = 0;
+        let mut was = Fixed::ZERO;
+        let mut braking = false;
+        for i in 0..60 * HZ {
+            WorldSource::step(&mut sim, &if i == 0 { vec![order(1, 0, Order::Move { units: vec![s], to, queue: false })] } else { vec![] });
+            let speed = sim.unit(s).unwrap().speed;
+            top = top.max(speed);
+            // After the top is reached, speed may fall (the drop-out) but never rise again
+            // by more than rounding while the order lives.
+            if speed < top - n(1) {
+                braking = true;
+            }
+            if braking && speed > was + n(1) && flat(pos(&sim, s), to) > n(60) {
+                dips += 1;
+            }
+            was = speed;
+        }
+        assert!(top > n(90), "no warp {top:?}");
+        assert_eq!(dips, 0, "speed rose again after the drop-out");
+        assert!(flat(pos(&sim, s), to) < n(80), "{:?}", flat(pos(&sim, s), to));
+    }
+
+    /// Golden: whole-state digest of a keyed craft that warps a goal slightly off its bow
+    /// (the A1 intro case), 30 s in. Pinned so a change to the warp gate or its steering shows.
+    #[test]
+    fn warping_keyed_craft_digest_golden() {
+        let run = || {
+            let (mut sim, s) = scout_game(true);
+            for i in 0..30 * HZ {
+                WorldSource::step(&mut sim, &if i == 0 { vec![order(1, 0, Order::Move { units: vec![s], to: v(180, 800), queue: false })] } else { vec![] });
+            }
+            sim.digest()
+        };
+        assert_eq!(run(), run());
+        assert_eq!(run(), 0xa7044ba01c31a21c);
+    }
+
     #[test]
     fn a_goal_off_the_bow_is_reached_not_missed() {
         let (mut sim, s) = scout_game(true);

@@ -221,6 +221,9 @@ pub(crate) struct Plan {
     pub warp: bool,
     /// Dropping out of warp: straight on, down to the cap.
     pub warp_out: bool,
+    /// Keep turning toward the target while warping (Armada I physics: the
+    /// engine steers while it warps).
+    pub steer: bool,
     /// With no target: turn to face this point while braking.
     pub face: Option<Vec3>,
 }
@@ -240,7 +243,10 @@ pub(crate) fn step_planned(model: Model, u: &mut Unit, leg: Leg, plan: Plan) {
     let warp = u.stats.warp_speed;
     if plan.warp && warp > u.stats.max_speed {
         u.speed = approach(u.speed, warp, warp * warp_rate() * dt);
-        u.omega = Fixed::ZERO;
+        match u.target.filter(|_| plan.steer) {
+            Some(t) => warp_turn(u, t, dt),
+            None => u.omega = Fixed::ZERO,
+        }
         advance(u, dt);
         if let Some(t) = u.target {
             climb(u, t, dt);
@@ -265,6 +271,23 @@ pub(crate) fn step_planned(model: Model, u: &mut Unit, leg: Leg, plan: Plan) {
     u.stats.max_speed = cap;
     step(model, u, leg);
     u.stats.max_speed = impulse;
+}
+
+/// Turn toward `t` while warping: one radian per second per radian of error,
+/// within the craft's turn rate and turn acceleration, so the heading closes
+/// without weaving (STA64's, not read from the executable).
+fn warp_turn(u: &mut Unit, t: Vec3, dt: Fixed) {
+    let (dx, dz) = (t.x - u.pos.x, t.z - u.pos.z);
+    let d = (dx * dx + dz * dz).sqrt();
+    if d == Fixed::ZERO {
+        u.omega = Fixed::ZERO;
+        return;
+    }
+    let (tx, tz) = (dx / d, dz / d);
+    let err = atan2(u.heading.0 * tz - u.heading.1 * tx, u.heading.0 * tx + u.heading.1 * tz);
+    let st = u.stats;
+    let want = clamp(err, -st.turn_omega, st.turn_omega);
+    u.omega = approach(u.omega, want, st.turn_alpha * dt);
 }
 
 /// Brake to rest while turning to face `p` (an attacker in range turns its
