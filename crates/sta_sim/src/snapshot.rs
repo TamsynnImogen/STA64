@@ -645,7 +645,11 @@ impl Sim {
                 }
             }
         }
-        let colonies = crate::colony::Colonies::from_rec(colony_rec, |id| units.contains(id)).ok_or_else(|| corrupt("colony rows"))?;
+        let colonies = crate::colony::Colonies::from_rec(
+            colony_rec,
+            |id| units.contains(id),
+            |id| content.as_deref().zip(units.get(id)).and_then(|(db, u)| db.unit(u.def)).is_some_and(|d| d.planet_role == Some(sta_content::PlanetRole::Producer)),
+        ).ok_or_else(|| corrupt("colony rows"))?;
         let mut economy = crate::economy::Economy::from_rec(&b.economy);
         economy.restore_personnel(personnel_rows, &b.players).map_err(|why| SnapshotError::Corrupt(why.into()))?;
         economy.restore_adjust(adjust_rows, &b.players).map_err(|why| SnapshotError::Corrupt(why.into()))?;

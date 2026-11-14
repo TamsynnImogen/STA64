@@ -46,7 +46,7 @@
 //! per second to its owner (`economy::crew`). A planet with no row has
 //! population 0 and is not neutralised (the map-load path is not measured).
 //!
-//! State is in snapshots (format 27 on this branch) and in the digest once any row exists.
+//! State is in snapshots (format 27) and in the digest once any row exists.
 
 use std::collections::BTreeMap;
 
@@ -58,6 +58,11 @@ use crate::command::Order;
 use crate::view::UnitFlags;
 use crate::world::{Entity, Fnv, NEUTRAL};
 use crate::Sim;
+
+/// The 0.2 of the growth rule and the 0.1 of the damage rule, as exact 32.32 values
+/// (the bits `from_f64` gives; a test pins that, so no digest moves).
+const GROWTH_FACTOR: Fixed = Fixed::from_bits(858_993_459);
+const HIT_PEOPLE_FRACTION: Fixed = Fixed::from_bits(429_496_730);
 
 /// Largest population a script may store (the original does not clamp).
 const SCRIPT_LIMIT: i32 = 1_000_000_000;
@@ -85,6 +90,9 @@ pub struct ShipProc {
     pub population_at_start: Fixed,
     /// The tick the next pod leaves.
     pub next_launch: Tick,
+    /// This order created the planet's population row (the planet had none when
+    /// the ship started), so an order that ends with nobody landed removes it again.
+    pub made_row: bool,
 }
 
 /// What a pod colony ship launches, from its definition.
@@ -126,14 +134,17 @@ pub struct ColonyView {
     pub colonizer: Option<EntityId>,
 }
 
-/// The snapshot form of [`Colonies`] (format 27 on this branch).
+/// One ship order as a snapshot row (see [`ColoniesRec::ships`]).
+pub type ShipRow = (EntityId, EntityId, bool, i64, i64, i64, Tick, bool);
+
+/// The snapshot form of [`Colonies`] (format 27).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ColoniesRec {
     pub version: u8,
     /// `(planet, population bits, colonizer)`, ascending planet.
     pub planets: Vec<(EntityId, i64, Option<EntityId>)>,
-    /// `(ship, planet, active, left bits, at start bits, population at start bits, next launch)`, ascending ship.
-    pub ships: Vec<(EntityId, EntityId, bool, i64, i64, i64, Tick)>,
+    /// `(ship, planet, active, left bits, at start bits, population at start bits, next launch, made row)`, ascending ship.
+    pub ships: Vec<ShipRow>,
 }
 
 // ---- small rules, each tested ----
@@ -191,7 +202,7 @@ pub(crate) fn growth_per_second(pop: Fixed, cap: Fixed, race_rate: Fixed, civili
     // The population is clamped to the cap first and divided before multiplying, so
     // a script-set value cannot wrap the 32.32 product.
     let pop = pop.max(Fixed::ZERO).min(cap);
-    (Fixed::from_int(4) * (pop / cap) + Fixed::ONE) * race_rate * civilian_modifier * cfg_modifier * Fixed::from_f64(0.2)
+    (Fixed::from_int(4) * (pop / cap) + Fixed::ONE) * race_rate * civilian_modifier * cfg_modifier * GROWTH_FACTOR
 }
 
 /// Crew per second a planet of `pop` people gives its owner.
@@ -228,6 +239,12 @@ impl Colonies {
         row.colonizer = None;
         if cancel {
             row.population = cancelled_population(p.population_at_start, row.population, p.colonists_at_start - p.colonists_left);
+        }
+        // An order that made the row and ends with nobody landed leaves no row behind:
+        // a row would keep the planet's hull from ever being damaged (the damage path
+        // keys on the row) and would neutralise an owned planet that had none.
+        if p.made_row && self.planets.get(&p.planet).is_some_and(|r| r.population <= Fixed::ZERO && r.colonizer.is_none()) {
+            self.planets.remove(&p.planet);
         }
     }
 
@@ -269,7 +286,7 @@ impl Colonies {
     /// (read from the executable, static), never below zero.
     pub(crate) fn lose_population(&mut self, planet: EntityId, damage: Fixed) {
         if let Some(row) = self.planets.get_mut(&planet) {
-            row.population = (row.population - Fixed::from_f64(0.1) * damage).max(Fixed::ZERO);
+            row.population = (row.population - HIT_PEOPLE_FRACTION * damage).max(Fixed::ZERO);
         }
     }
 
@@ -280,14 +297,14 @@ impl Colonies {
             ships: self
                 .ships
                 .iter()
-                .map(|(id, p)| (*id, p.planet, p.active, p.colonists_left.to_bits(), p.colonists_at_start.to_bits(), p.population_at_start.to_bits(), p.next_launch))
+                .map(|(id, p)| (*id, p.planet, p.active, p.colonists_left.to_bits(), p.colonists_at_start.to_bits(), p.population_at_start.to_bits(), p.next_launch, p.made_row))
                 .collect(),
         }
     }
 
-    /// Rebuild from a snapshot record: ascending ids, entities that exist,
-    /// and a colonizer link that agrees with its ship's order.
-    pub(crate) fn from_rec(rec: ColoniesRec, exists: impl Fn(EntityId) -> bool) -> Option<Colonies> {
+    /// Rebuild from a snapshot record: ascending ids, entities that exist, planets
+    /// that are Producer planets (the only ones the sim gives a row), and a colonizer link that agrees with its ship's order.
+    pub(crate) fn from_rec(rec: ColoniesRec, exists: impl Fn(EntityId) -> bool, producer: impl Fn(EntityId) -> bool) -> Option<Colonies> {
         if rec.version != 1
             || !rec.planets.windows(2).all(|w| w[0].0 < w[1].0)
             || !rec.ships.windows(2).all(|w| w[0].0 < w[1].0)
@@ -309,7 +326,7 @@ impl Colonies {
         let ships: BTreeMap<_, _> = rec
             .ships
             .into_iter()
-            .map(|(id, planet, active, left, start, pop0, next_launch)| {
+            .map(|(id, planet, active, left, start, pop0, next_launch, made_row)| {
                 (id, ShipProc {
                     planet,
                     active,
@@ -317,14 +334,15 @@ impl Colonies {
                     colonists_at_start: Fixed::from_bits(start),
                     population_at_start: Fixed::from_bits(pop0),
                     next_launch,
+                    made_row,
                 })
             })
             .collect();
         let linked = |ship: EntityId, planet: EntityId| ships.get(&ship).is_some_and(|p| p.active && p.planet == planet);
-        let ok = planets.keys().all(|&id| exists(id))
+        let ok = planets.keys().all(|&id| exists(id) && producer(id))
             && planets.iter().all(|(&id, r)| r.colonizer.is_none_or(|s| linked(s, id)))
             && ships.iter().all(|(&id, p)| {
-                exists(id) && exists(p.planet) && (!p.active || planets.get(&p.planet).is_some_and(|r| r.colonizer == Some(id)))
+                exists(id) && exists(p.planet) && producer(p.planet) && (!p.active || planets.get(&p.planet).is_some_and(|r| r.colonizer == Some(id)))
             });
         ok.then_some(Colonies { planets, ships })
     }
@@ -346,6 +364,7 @@ impl Colonies {
             h.fixed(p.colonists_at_start);
             h.fixed(p.population_at_start);
             h.u64(p.next_launch);
+            h.u64(u64::from(p.made_row));
         }
     }
 }
@@ -419,7 +438,7 @@ impl Sim {
             let colonists = rules.cap(1);
             self.colonies.ships.insert(
                 id,
-                ShipProc { planet, active: false, colonists_left: colonists, colonists_at_start: colonists, population_at_start: pop0, next_launch: 0 },
+                ShipProc { planet, active: false, colonists_left: colonists, colonists_at_start: colonists, population_at_start: pop0, next_launch: 0, made_row: false },
             );
         }
         true
@@ -516,8 +535,10 @@ impl Sim {
                     continue;
                 }
                 (false, _) => {
+                    let made_row = !self.colonies.planets.contains_key(&proc.planet);
                     self.colonies.planets.entry(proc.planet).or_insert(PlanetRow { population: Fixed::ZERO, colonizer: None }).colonizer = Some(id);
                     if let Some(p) = self.colonies.ships.get_mut(&id) {
+                        p.made_row = made_row;
                         p.active = true;
                         p.next_launch = self.tick;
                     }

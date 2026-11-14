@@ -523,8 +523,83 @@ fn many_hits_in_one_tick_each_cost_people_in_full_and_never_kill_the_planet() {
     }
     apply_hits(&mut sim, 0);
     close(pop(&sim, planet), 1900.0, 0.05);
-    let hits = sim.events.iter().filter(|e| matches!(e, SimEvent::Hit { hull, .. } if *hull == n(20))).count();
-    assert_eq!(hits, 50, "every hit reports the hull damage it dealt");
+    let hits = sim.events.iter().filter(|e| matches!(e, SimEvent::Hit { hull, .. } if *hull == Fixed::ZERO)).count();
+    assert_eq!(hits, 50, "every hit reports what the hull took: nothing");
+}
+
+fn round_trips(sim: &Sim, db: &Arc<ContentDb>) {
+    let copy = Sim::from_snapshot(&sim.snapshot(), Some(Arc::clone(db))).unwrap();
+    assert_eq!(copy.digest(), sim.digest());
+    assert_eq!(copy.colonies(), sim.colonies());
+}
+
+/// Format review: a colonization stopped before anyone stays leaves no 0-people
+/// row, so the planet takes hull damage as before; the snapshot round-trips at
+/// every step.
+#[test]
+fn a_stopped_colonization_that_made_the_row_removes_it_and_the_hull_can_be_damaged() {
+    let db = content(true);
+    let mut sim = game(Arc::clone(&db));
+    let planet = spawn(&mut sim, "fx_pl_h", NEUTRAL, at(0, 0));
+    let s = spawn(&mut sim, "fx_colony", PlayerId(0), at(300, 0));
+    assert!(colonize(&mut sim, 0, s, planet));
+    assert!(sim.colonies().process(s).unwrap().made_row);
+    round_trips(&sim, &db);
+    assert!(run_cmd(&mut sim, PlayerId(0), CommandKind::Order(Order::Stop { units: vec![s] })));
+    assert!(sim.colonies().row(planet).is_none(), "the order's own 0-people row is gone");
+    assert!(sim.colonies().is_empty());
+    round_trips(&sim, &db);
+    run(&mut sim, 40);
+    round_trips(&sim, &db);
+    sim.events.push(SimEvent::Hit { target: planet, by: EntityId(999), weapon: sta_core::ContentKey(0), facing: 0, shield: Fixed::ZERO, hull: n(200), at: Vec3::ZERO });
+    apply_hits(&mut sim, 0);
+    assert_eq!(sim.unit(planet).unwrap().hull[0], n(9_800), "hull damage as without colonies");
+}
+
+/// A planet the map owns (no row) is not neutralised by a stopped colonization,
+/// and a row that existed before the order stays.
+#[test]
+fn a_stopped_colonization_neither_neutralises_a_map_planet_nor_drops_an_older_row() {
+    let db = content(true);
+    let mut sim = game(Arc::clone(&db));
+    let owned = spawn(&mut sim, "fx_pl_h", PlayerId(0), at(0, 0));
+    let s = spawn(&mut sim, "fx_colony", PlayerId(0), at(300, 0));
+    assert!(colonize(&mut sim, 0, s, owned));
+    assert!(run_cmd(&mut sim, PlayerId(0), CommandKind::Order(Order::Stop { units: vec![s] })));
+    run(&mut sim, 5);
+    assert_eq!(owner(&sim, owned), PlayerId(0));
+    assert!(sim.colonies().row(owned).is_none());
+    let old = spawn(&mut sim, "fx_pl_h", NEUTRAL, at(4000, 0));
+    set_pop(&mut sim, old, 0);
+    let s2 = spawn(&mut sim, "fx_colony", PlayerId(0), at(4300, 0));
+    assert!(colonize(&mut sim, 0, s2, old));
+    assert!(!sim.colonies().process(s2).unwrap().made_row);
+    assert!(run_cmd(&mut sim, PlayerId(0), CommandKind::Order(Order::Stop { units: vec![s2] })));
+    assert!(sim.colonies().row(old).is_some(), "a script-set row stays");
+    round_trips(&sim, &db);
+}
+
+/// A killed ship leaves the colonists that landed (a row with people), which the
+/// damage rule then applies to.
+#[test]
+fn a_killed_colony_ship_keeps_the_landed_people() {
+    let db = content(true);
+    let mut sim = game(Arc::clone(&db));
+    let planet = spawn(&mut sim, "fx_pl_h", NEUTRAL, at(0, 0));
+    let s = spawn(&mut sim, "fx_colony", PlayerId(0), at(300, 0));
+    assert!(colonize(&mut sim, 0, s, planet));
+    run(&mut sim, 150);
+    assert!(bench(&mut sim, CommandKind::Edit(Edit::Kill(s))));
+    run(&mut sim, 5);
+    assert_eq!(sim.colonies().row(planet).unwrap().colonizer, None);
+    assert!(pop(&sim, planet) > Fixed::ZERO);
+    round_trips(&sim, &db);
+}
+
+#[test]
+fn the_exact_constants_equal_the_values_from_f64_gave() {
+    assert_eq!(GROWTH_FACTOR, Fixed::from_f64(0.2));
+    assert_eq!(HIT_PEOPLE_FRACTION, Fixed::from_f64(0.1));
 }
 
 // ---- persistence ----

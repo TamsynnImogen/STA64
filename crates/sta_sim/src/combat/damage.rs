@@ -119,8 +119,9 @@ pub(crate) fn apply(
                 // SIM-30, a planet with a population row: damage that reaches the
                 // hull costs `0.1 x damage` people and the hull stays, so every hit
                 // of the tick counts in full (read from the executable, static).
-                hull = wanted.max(Fixed::ZERO);
-                ctx.colonies.lose_population(target, hull);
+                // The event reports what the hull took: nothing; the people lost are the row's.
+                ctx.colonies.lose_population(target, wanted.max(Fixed::ZERO));
+                hull = Fixed::ZERO;
             } else {
                 hull = wanted.min((t.hull[0] - floor).max(Fixed::ZERO));
                 t.hull[0] = t.hull[0] - hull;
