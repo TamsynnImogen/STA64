@@ -57,7 +57,7 @@ fn scene_owned(db: Arc<ContentDb>, odfs: [&str; 4], at: [[f32; 3]; 4], players: 
     let out = sim.step(&cmds);
     let find = |p: [f32; 3]| out.view.units.iter().find(|u| u.pos == Vec3::from_f32(p)).expect("scene unit").id;
     let ids = [find(at[0]), find(at[1]), find(at[2]), find(at[3])];
-    Scene { sim, view: (*out.view).clone(), db, ids }
+    Scene { sim, view: crate::api::special_forces::flagged_view(&out.view, &db), db, ids }
 }
 
 fn scene() -> Scene {

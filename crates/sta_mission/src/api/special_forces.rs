@@ -141,6 +141,40 @@ pub(crate) fn gate(
     })
 }
 
+/// Test helper: flag every craft of `sim` (bench edits), so a scene whose scripts order its
+/// craft meets an open gate. Returns the view after the step.
+#[cfg(test)]
+pub(crate) fn flag_all(sim: &mut sta_sim::Sim, db: &sta_content::ContentDb) -> std::sync::Arc<sta_sim::view::WorldView> {
+    use sta_sim::WorldSource;
+    let view = sim.view();
+    let edits: Vec<sta_sim::command::Command> = view
+        .units
+        .iter()
+        .filter(|u| db.unit(u.def).is_some_and(|d| EntityKind::of_def(d) == EntityKind::Craft))
+        .zip(1u32..)
+        .map(|(u, seq)| sta_sim::command::Command {
+            player: sta_core::PlayerId::BENCH,
+            seq,
+            kind: CommandKind::Edit(Edit::SpecialForces(u.id, true)),
+        })
+        .collect();
+    sim.step(&edits).view
+}
+
+/// Test helper: a copy of `view` that lists every craft of `db` as flagged (for scenes that
+/// hand the mission one fixed view).
+#[cfg(test)]
+pub(crate) fn flagged_view(view: &sta_sim::view::WorldView, db: &sta_content::ContentDb) -> sta_sim::view::WorldView {
+    let mut view = view.clone();
+    view.attrs.special_forces = view
+        .units
+        .iter()
+        .filter(|u| db.unit(u.def).is_some_and(|d| EntityKind::of_def(d) == EntityKind::Craft))
+        .map(|u| u.id)
+        .collect();
+    view
+}
+
 #[cfg(test)]
 #[path = "special_forces/tests.rs"]
 mod tests;
