@@ -153,6 +153,13 @@ impl SimLink {
 #[derive(Resource)]
 pub struct BenchDriven;
 
+/// A launched mission's sim waits for the game to be shown: its tick 0 and the script's first
+/// tick are the first in-game frame, whatever the load took. Inserted when the mission is
+/// started, removed on entering `InGame` (or back at the front end). Menu scene, skirmish and
+/// multiplayer links never get it.
+#[derive(Resource)]
+pub struct SimHeld;
+
 /// Links a render-side entity to the sim entity it shows.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SimEntity(pub EntityId);
@@ -260,7 +267,7 @@ impl Plugin for SimLinkPlugin {
             .init_resource::<CommandQueue>()
             .init_resource::<Selection>()
             .init_resource::<SimEntities>()
-            .add_systems(Update, step_sim.in_set(GameSet::SimLink).run_if(resource_exists::<SimLink>).run_if(not(resource_exists::<BenchDriven>)));
+            .add_systems(Update, step_sim.in_set(GameSet::SimLink).run_if(resource_exists::<SimLink>).run_if(not(resource_exists::<BenchDriven>)).run_if(not(resource_exists::<SimHeld>)));
     }
 }
 

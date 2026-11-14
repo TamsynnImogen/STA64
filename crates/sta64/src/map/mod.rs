@@ -174,7 +174,21 @@ impl Placed {
 /// producer planet). `None` for scenery, background planets included.
 pub(crate) fn ghost_pick_radius(def: &sta_content::UnitDef) -> Option<f32> {
     let r = def.radius.to_f32();
-    ((def.resource.is_some() || matches!(def.planet_role, Some(sta_content::PlanetRole::Producer))) && r > 0.0).then_some(r.max(5.0))
+    if def.resource.is_some() {
+        return Some(resource_pick_radius(r));
+    }
+    (matches!(def.planet_role, Some(sta_content::PlanetRole::Producer)) && r > 0.0).then_some(r.max(5.0))
+}
+
+/// The radius a latinum nebula (a resource volume) is drawn as gas at, and so the
+/// click radius of a resource node whose model has no extent of its own.
+pub(crate) const FIELD_RADIUS: f32 = 100.0;
+
+/// Click radius of a resource node from its model's bounding radius `r` (zero when the
+/// model has no extent): a node with none (the latinum nebula's SOD has none) is a
+/// volume, picked by the field it is drawn as.
+pub(crate) fn resource_pick_radius(r: f32) -> f32 {
+    if r > 0.0 { r.max(5.0) } else { FIELD_RADIUS }
 }
 
 /// What the sim is made from: the BZN converted to a `MapDef` (CON-07), a `GameSetup`
@@ -480,7 +494,7 @@ impl Plugin for MapPlugin {
         app.add_systems(
                 Update,
                 (
-                    crate::clock::advance_idle_clock.run_if(not(resource_exists::<crate::sim_link::SimLink>)),
+                    crate::clock::advance_idle_clock.run_if(not(resource_exists::<crate::sim_link::SimLink>).or_else(resource_exists::<crate::sim_link::SimHeld>)),
                     input,
                     rebuild,
                     radar_click.run_if(crate::ui::ingame_menu::menu_closed),
@@ -943,7 +957,7 @@ fn rebuild(
             let entry = gas.entry(key.clone()).or_insert_with(|| {
                 let r = crate::render::nebula::recipe(&vfs.0, &key);
                 let latinum = odf.class_label().is_some_and(|c| c.eq_ignore_ascii_case("latinum"));
-                let radius = if latinum { 100.0 } else { odf.f32("effectRadius").filter(|r| *r > 10.0 && *r < 5000.0).unwrap_or(300.0) };
+                let radius = if latinum { FIELD_RADIUS } else { odf.f32("effectRadius").filter(|r| *r > 10.0 && *r < 5000.0).unwrap_or(300.0) };
                 (r.unwrap_or_else(|| sta_surface::nebula::NebulaRecipe::parse("")), radius, Vec::new())
             });
             if gas_volumes && crate::render::nebula::recipe(&vfs.0, &key).is_some() {
@@ -1079,8 +1093,9 @@ fn rebuild(
                 let radius = model
                     .bounds()
                     .map(|(lo, hi)| (Vec3::from(hi) - Vec3::from(lo)).length() * 0.5)
-                    .unwrap_or(20.0)
+                    .unwrap_or(if def.resource.is_some() { 0.0 } else { 20.0 })
                     * scale;
+                let radius = if def.resource.is_some() { resource_pick_radius(radius) } else { radius };
                 commands.entity(entity).insert(SelectRadius(radius.max(5.0)));
             }
             if def.movement.max_speed > Fixed::ZERO {
@@ -1487,7 +1502,7 @@ mod tests {
         moon.radius = Fixed::from_int(2);
         assert_eq!(ghost_pick_radius(&moon), Some(5.0));
         moon.radius = Fixed::ZERO;
-        assert_eq!(ghost_pick_radius(&moon), None);
+        assert_eq!(ghost_pick_radius(&moon), Some(FIELD_RADIUS), "a volume without model extent is picked by its field");
         let mut node = get("fx_station");
         node.radius = Fixed::from_int(30);
         assert_eq!(ghost_pick_radius(&node), None, "an ordinary unit is no ghost to pick");
@@ -1499,6 +1514,62 @@ mod tests {
         assert_eq!(ghost_pick_radius(&planet), Some(130.0));
         planet.planet_role = Some(sta_content::PlanetRole::Background);
         assert_eq!(ghost_pick_radius(&planet), None, "a backdrop planet is scenery");
+    }
+
+    /// A latinum nebula (no model extent) and a dilithium moon, seen from tilted cameras (the pick is a ray test, so the
+    /// window shape cannot matter; the HUD's hit area is ruled out by the capture): a ray through the centre and inside the edge picks the node, one just outside
+    /// does not.
+    #[test]
+    fn resource_nodes_are_picked_inside_their_footprint_at_any_window_shape() {
+        use bevy::ecs::system::RunSystemOnce;
+        let db = sta_content::fake::db();
+        let get = |n: &str| db.unit(db.key(n).unwrap()).unwrap().clone();
+        let mut nebula = get("fx_moon");
+        nebula.resource = Some(1);
+        nebula.radius = Fixed::ZERO;
+        let mut moon = get("fx_moon");
+        moon.resource = Some(0);
+        moon.radius = Fixed::from_int(36);
+        for def in [&nebula, &moon] {
+            let r = ghost_pick_radius(def).expect("a resource node has a pick body");
+            let mut app = App::new();
+            let centre = Vec3::new(500.0, 0.0, -300.0);
+            app.world_mut().spawn((crate::sim_link::SimEntity(EntityId(7)), SelectRadius(r), GlobalTransform::from(Transform::from_translation(centre))));
+            for pitch in [35.0f32, 60.0, 85.0] {
+                let p = pitch.to_radians();
+                let eye = centre + Vec3::new(0.0, p.sin(), p.cos()) * 1500.0;
+                let cam = Transform::from_translation(eye).looking_at(centre, Vec3::Y);
+                let ray_to = |target: Vec3| Ray3d::new(eye, Dir3::new((target - eye).normalize()).unwrap());
+                let pick = |app: &mut App, target: Vec3| {
+                    let ray = ray_to(target);
+                    app.world_mut().run_system_once(move |units: crate::input::select::Targetable| crate::input::select::unit_under(Vec2::ZERO, ray, &units)).unwrap()
+                };
+                let across = cam.rotation * Vec3::X;
+                assert_eq!(pick(&mut app, centre), Some(EntityId(7)), "centre, pitch {pitch}");
+                assert_eq!(pick(&mut app, centre + across * r * 0.9), Some(EntityId(7)), "near edge, pitch {pitch}");
+                assert_eq!(pick(&mut app, centre + across * r * 1.3), None, "just outside, pitch {pitch}");
+            }
+        }
+    }
+
+    /// A freighter mining inside a nebula's field is still the thing clicked, on either side of
+    /// the field's centre.
+    #[test]
+    fn a_ship_inside_a_resource_volume_is_picked_over_it() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut app = App::new();
+        let nebula = Vec3::new(0.0, 0.0, 0.0);
+        app.world_mut().spawn((crate::sim_link::SimEntity(EntityId(1)), SelectRadius(FIELD_RADIUS), GlobalTransform::from(Transform::from_translation(nebula))));
+        for (i, z) in [-40.0f32, 40.0].into_iter().enumerate() {
+            app.world_mut().spawn((crate::sim_link::SimEntity(EntityId(2 + i as u32)), SelectRadius(12.0), GlobalTransform::from(Transform::from_xyz(0.0, 0.0, z))));
+        }
+        let eye = Vec3::new(0.0, 866.0, 500.0);
+        for (i, z) in [-40.0f32, 40.0].into_iter().enumerate() {
+            let target = Vec3::new(0.0, 0.0, z);
+            let ray = Ray3d::new(eye, Dir3::new((target - eye).normalize()).unwrap());
+            let hit = app.world_mut().run_system_once(move |units: crate::input::select::Targetable| crate::input::select::unit_under(Vec2::ZERO, ray, &units)).unwrap();
+            assert_eq!(hit, Some(EntityId(2 + i as u32)));
+        }
     }
 
     /// A match's start units (owned by a seat, made by the sim) are not ghosts: the units

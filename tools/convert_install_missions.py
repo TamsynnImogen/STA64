@@ -18,7 +18,7 @@ lower-cased with other characters as `-`, so each install keeps its own
 conversion (`sta_mission::converted::key`). `--out DIR` overrides the folder (the
 game then does not find it). The output is derived from game files: the tool
 refuses a folder inside the repository or an install. Needs python3 and `objdump`.
-It is a separate step: the game never runs Python.
+It is a separate interim step (the release target is LUA-15, the same conversion in Rust inside the game); the game never runs Python.
 """
 
 import argparse

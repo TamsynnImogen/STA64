@@ -18,6 +18,7 @@ pub(crate) mod json;
 mod nav;
 pub mod marks;
 mod report;
+pub mod shots;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -157,6 +158,10 @@ pub struct CaseResult {
     pub ticks: Tick,
     /// `objects.jsonl`, `marks`.
     pub artifacts: BTreeMap<String, String>,
+    /// The scenario's `Take a screenshot` steps, for the tier-2 run ([`shots`]).
+    pub shots: Vec<shots::Shot>,
+    /// Its `Expect shots` steps.
+    pub shot_checks: Vec<shots::ShotCheck>,
 }
 
 impl CaseResult {
@@ -327,6 +332,8 @@ fn run(cfg: &Arc<RunConfig>, sc: &Scenario, name: &str, depth: u8) -> CaseResult
         digests: Vec::new(),
         ticks: 0,
         artifacts: BTreeMap::new(),
+        shots: Vec::new(),
+        shot_checks: Vec::new(),
     };
     let built = scene_for(cfg, sc).and_then(|scene| Bench::build(cfg.clone(), &scene));
     let mut b = match built {
@@ -341,7 +348,13 @@ fn run(cfg: &Arc<RunConfig>, sc: &Scenario, name: &str, depth: u8) -> CaseResult
         .timeout_secs
         .map_or(120 * u64::from(TICK_HZ), |s| s * u64::from(TICK_HZ));
     for step in &sc.steps {
-        let (status, detail) = run_step(cfg, &mut b, &step.kind, &step.text, cap, depth);
+        let (status, detail) = match &step.kind {
+            StepKind::Screenshot(name) => shots::record(&mut res.shots, name, step.line, b.tick()),
+            StepKind::ShotsMatch { a, b: other, within } => {
+                shots::expect(&res.shots, &mut res.shot_checks, (a, other, *within), step.line)
+            }
+            kind => run_step(cfg, &mut b, kind, &step.text, cap, depth),
+        };
         res.steps.push(StepOutcome {
             line: step.line,
             text: step.text.clone(),

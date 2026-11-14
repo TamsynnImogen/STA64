@@ -13,12 +13,11 @@
 //! trailing `//` comment and collapses runs of blank lines. Keys, values,
 //! comment text, line order, line endings and lines that are not valid UTF-8
 //! are untouched, so the formatted file resolves to the same values as the
-//! input (checked against `install` ODFs in `tests/cst_install.rs`). The
-//! "grouped layout after the FO Guide templates" of the WORKPLAN row is not
-//! done here: `format_odfs.py` and the templates are not in the repository,
-//! and reordering keys can change what a layered resolve returns when a key
-//! is written twice (the last wins) and changes [`crate::Odf::keys`] order.
-//! It belongs in an opt-in mode over this tree.
+//! input (checked against installed ODFs in `tests/cst_install.rs` and `sta_tools/tests/install_round_trip.rs`). The
+//! grouped layout of the WORKPLAN row is the opt-in [`Cst::format_grouped`]
+//! (see `layout.rs`): it reorders entries by a key-group table and only in
+//! files where no key repeats, because reordering a repeated key would change
+//! which one wins and [`crate::Odf::keys`] follows the file's order.
 //!
 //! Dropping repeated blank lines shifts the line numbers the reader reports
 //! (`Entry::line`, duplicate diagnostics) for a formatted file.
@@ -27,6 +26,9 @@
 //! decodes lossily), but [`Cst::format`] copies them verbatim.
 
 use std::ops::Range;
+
+mod layout;
+pub use layout::GroupTable;
 
 /// What a line is. Mirrors the branches of [`crate::parse`], in its order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

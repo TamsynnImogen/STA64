@@ -3,6 +3,7 @@
 pub mod effects;
 pub mod factions;
 pub mod policy;
+mod selection;
 pub mod subsystems;
 
 use super::{
@@ -182,9 +183,7 @@ fn sync(
         let Some(unit) = view.unit(sim.0) else {
             continue;
         };
-        let selected_faction = view
-            .appearance
-            .faction(unit.owner)
+        let selected_faction = selection::faction_identifier(view, unit)
             .and_then(|f| catalogue.get(f));
         let faction_name = selected_faction.map(|f| f.name.as_str());
         let suffix = selected_faction.and_then(|f| f.suffix.as_deref());

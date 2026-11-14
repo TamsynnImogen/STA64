@@ -13,9 +13,11 @@ including Windows. So STA64 never loads `.drl`, `.dsl`, `.dll` or
 `mmm_loader.dll`.
 
 Legacy compiled scripts (A2 and A1 mission DLLs) reach the player by conversion
-to Lua on their own machine from their own install, never shipped; the
-interim route is the Python converter, the release target a Rust port run by
-the game (WORKPLAN LUA-15 and the note under the LUA table).
+to Lua on their own machine from their own install, never committed or
+shipped (STA64 ships no mission content); the interim route is the Python
+converter, the release target a Rust port run by the game (WORKPLAN LUA-15 and
+the note under the LUA table). Hand-written ports are a separate download kept
+outside the repository and the release.
 
 ## How MMM picks a script (from its source)
 
@@ -550,7 +552,7 @@ missions) a checklist straight from the installed content.
 ## Lua sandbox
 
 Every mission Lua state is built by `sta_mission::sandbox::new_lua`
-(LUA-09, [MODDING_DECISIONS.md](MODDING_DECISIONS.md) D13); no other code
+(LUA-09, [ADR 0004](adr/0004-modding-v1.md) D13); no other code
 calls `Lua::new()`. Scripts get an explicit set of standard libraries and
 limits:
 

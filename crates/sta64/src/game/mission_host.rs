@@ -354,7 +354,20 @@ fn on_start_mission(
     // `InGame` begins. With no paths yet that shot was dropped and the camera never took it.
     commands.insert_resource(crate::input::camera_cinematic::ScenePaths(launch.paths.clone()));
     commands.insert_resource(launch);
+    commands.insert_resource(crate::sim_link::SimHeld);
     next.set(AppState::Loading);
+}
+
+/// The sim of a launched mission starts stepping (or, back at the front end, is not held for ever).
+fn release_sim(mut commands: Commands) {
+    commands.remove_resource::<crate::sim_link::SimHeld>();
+}
+
+/// A mission's first frame shown is its tick 0: the load's long frame is not time the sim owes.
+fn start_clock(held: Option<Res<crate::sim_link::SimHeld>>, clock: Option<ResMut<crate::clock::AnimClock>>) {
+    if let (Some(_), Some(mut clock)) = (held, clock) {
+        clock.start_fresh();
+    }
 }
 
 /// The match is up: the mission begins (its movies are tracked from here, the objectives panel opens).
@@ -374,6 +387,28 @@ fn begin_mission(run: Option<ResMut<MissionRun>>, launch: Option<Res<MissionLaun
     }
 }
 
+/// The panel opens once for a mission, when it has text or objectives and no cineractive is on.
+/// After the presentation consumer, so a cineractive the script's first tick began is seen.
+fn open_objectives_panel(
+    run: Res<MissionRun>,
+    link: Res<SimLink>,
+    cine: Res<crate::ui::presentation::CineractiveState>,
+    mut view: ResMut<ObjectivesView>,
+    mut opened: Local<(Option<(String, usize)>, u64)>,
+) {
+    let tick = link.curr().tick;
+    let key = (run.campaign.clone(), run.mission);
+    // The sim's clock running backwards is a restart of the mission: it opens its panel again.
+    if tick < opened.1 {
+        opened.0 = None;
+    }
+    opened.1 = tick;
+    if opened.0 != Some(key.clone()) && (!view.items.is_empty() || !view.briefing.is_empty()) && !cine.on {
+        view.visible = true;
+        opened.0 = Some(key);
+    }
+}
+
 /// Each frame of the mission: the objectives panel, the answers to the script, the script's end.
 #[allow(clippy::too_many_arguments)]
 fn run_mission(
@@ -384,8 +419,6 @@ fn run_mission(
     mut view: Option<ResMut<ObjectivesView>>,
     log: Option<Res<MissionMovieLog>>,
     mut leave: MessageWriter<LeaveMatch>,
-    cine: Option<Res<crate::ui::presentation::CineractiveState>>,
-    mut opened: Local<(Option<(String, usize)>, u64)>,
 ) {
     let tick = link.curr().tick;
     // A script that faults may have lost the callback that ends its cineractive: give the player
@@ -405,17 +438,6 @@ fn run_mission(
     if let Some(v) = view.as_mut() {
         let mut want = (**v).clone();
         handle.with(|rt| want.fill(&rt.objectives(), rt.objective_briefing().as_ref()));
-        // The panel opens once for a mission, when it has text or objectives and no cineractive is on.
-        let key = (run.campaign.clone(), run.mission);
-        // The sim's clock running backwards is a restart of the mission: it opens its panel again.
-        if tick < opened.1 {
-            opened.0 = None;
-        }
-        opened.1 = tick;
-        if opened.0 != Some(key.clone()) && (!want.items.is_empty() || !want.briefing.is_empty()) && !cine.as_deref().is_some_and(|c| c.on) {
-            want.visible = true;
-            opened.0 = Some(key);
-        }
         if want != **v {
             **v = want;
         }
@@ -627,7 +649,8 @@ impl Plugin for MissionHostPlugin {
             .add_message::<ScriptReply>()
             .add_message::<SimMsg>()
             .add_message::<Notice>()
-            .add_systems(OnEnter(AppState::InGame), begin_mission)
+            .add_systems(OnEnter(AppState::InGame), (start_clock, begin_mission, release_sim).chain())
+            .add_systems(OnEnter(AppState::FrontEnd), release_sim)
             .add_systems(OnEnter(AppState::FrontEnd), finish_mission.after(crate::frontend::screens::enter_front_end))
             .add_systems(
                 Update,
@@ -641,6 +664,13 @@ impl Plugin for MissionHostPlugin {
                         .run_if(resource_exists::<MissionRun>)
                         .run_if(resource_exists::<SimLink>)
                         .before(crate::ui::presentation::consume),
+                    open_objectives_panel
+                        .run_if(in_state(AppState::InGame))
+                        .run_if(resource_exists::<MissionRun>)
+                        .run_if(resource_exists::<SimLink>)
+                        .run_if(resource_exists::<ObjectivesView>)
+                        .run_if(resource_exists::<crate::ui::presentation::CineractiveState>)
+                        .after(crate::ui::presentation::consume),
                 )
                     .in_set(GameSet::Ui),
             );

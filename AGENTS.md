@@ -139,7 +139,8 @@ until it merges.
 
 ## Modding decisions
 
-[docs/MODDING_DECISIONS.md](docs/MODDING_DECISIONS.md) is accepted and binding.
+[ADR 0004](docs/adr/0004-modding-v1.md) (modding v1, D1 to D13; formerly
+`docs/MODDING_DECISIONS.md`) is accepted and binding.
 Read it before touching mod loading, the VFS mount (`sta_vfs`), profile
 detection, `RTS_CFG.h`/ODF rule handling, the content digest, render recipes
 or mission Lua, and cite the decision numbers your change relies on in the
@@ -148,6 +149,8 @@ excludes. If a decision is wrong or blocks you, comment on your issue and
 stop; changing a decision is a PR to that file approved by Tammy and Cedric.
 
 ## Research and game files
+
+Recorded as [ADR 0003](docs/adr/0003-clean-room-content-policy.md); the rules below are the operative wording.
 
 - Decompilation findings and measurements of the original games are not
   committed unless STA64 needs them to work (a data table the code reads, a
@@ -162,6 +165,10 @@ stop; changing a decision is a PR to that file approved by Tammy and Cedric.
   files or excerpts beyond a key name and a value, no frames showing game art,
   no re-encoded copies. Tests that need them are install-gated and read the
   install at run time.
+- Stock mission scripts, whether converted from the mission DLLs or ported by
+  hand, count as game content and are never committed or released. Conversion
+  happens on the player's machine from their own install into the user data
+  directory (WORKPLAN LUA-15 and the note under the LUA table).
 
 ## Builds
 
