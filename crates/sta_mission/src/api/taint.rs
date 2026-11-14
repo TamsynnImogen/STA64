@@ -71,7 +71,7 @@ pub(crate) struct Taint {
 
 /// Calls whose result is an object handle.
 fn yields_handle(name: &str) -> bool {
-    matches!(name, "BuildObject" | "GetHandle" | "GetFirstCraft" | "GetPlayerHandle")
+    matches!(name, "BuildObject" | "GetHandle" | "GetFirstCraft" | "GetNextCraft" | "GetPlayerHandle")
         || name.starts_with("GetNearest")
         || name.starts_with("Spawn")
 }
@@ -81,18 +81,19 @@ fn yields_handle(name: &str) -> bool {
 fn world_effect(name: &str) -> bool {
     matches!(
         name,
-        "SetRelation" | "SetPerceivedTeam"
+        "SetRelation" | "DisableAllAITeams" | "EnableAllAITeams" | "ResetStrategyCycle" | "SetPerceivedTeam" | "CommandAllShips"
     )
 }
 
 /// Calls that ask the world something (`Is...`, `Count...`, `Get...`, `Does...`).
 fn reads_state(name: &str) -> bool {
-    ["Is", "Count", "Get", "Does", "Exists", "UnderAttack"].iter().any(|p| name.starts_with(p))
+    ["Is", "Count", "Get", "Does", "Exists", "UnderAttack", "AllStations"].iter().any(|p| name.starts_with(p))
 }
 
 /// Calls whose first argument is a team number, not a handle.
 fn team_first(name: &str) -> bool {
     name.starts_with("Count")
+        || name.starts_with("AllStations")
         || name.starts_with("AI_")
         || matches!(
             name,
@@ -113,7 +114,7 @@ impl Ctx {
     pub fn gap(&mut self, name: &str, args: &[Value]) {
         for (i, v) in args.iter().enumerate() {
             let Value::Integer(n) = v else { continue };
-            if *n <= 0 || ((i > 0 || team_first(name)) && *n <= 8) {
+            if *n <= 0 || ((i > 0 || team_first(name)) && *n <= 8) || (i == 0 && name == "CommandAllShips") {
                 continue;
             }
             let Ok(n) = u32::try_from(*n) else { continue };

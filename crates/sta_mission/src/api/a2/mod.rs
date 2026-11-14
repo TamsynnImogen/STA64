@@ -32,6 +32,7 @@ mod orders;
 mod queries;
 mod random;
 mod shared_calls;
+mod stock_bindings;
 mod subsystems;
 mod team_pool;
 #[cfg(test)]
@@ -78,6 +79,8 @@ pub(super) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
     subsystems::install(lua, ctx, &a2)?;
     orders::install(lua, ctx, &a2)?;
     dll_objects::install(lua, ctx, &a2)?;
+    // After `conditions` (CountStations, IsStation) and `dll_objects` (GetFirstCraft).
+    stock_bindings::install(lua, ctx, &a2)?;
     handles::install(lua, ctx, &a2)?;
     shared_calls::install(lua, ctx, &a2)?;
     team_pool::install(lua, ctx, &a2)?;
