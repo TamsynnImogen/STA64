@@ -113,7 +113,7 @@ fn team_first(name: &str) -> bool {
         )
 }
 
-/// The eight A2 resource writes: argument 2 is an amount, never a handle (LUA-22).
+/// The A2 resource writes (and A1's Add/SetDilithium, same shape): argument 2 is an amount, never a handle (LUA-22).
 fn resource_write(name: &str) -> bool {
     ["AddMetal", "SetMetal", "AddDilithium", "SetDilithium", "AddLatinum", "SetLatinum", "AddBiomatter", "SetBiomatter"].contains(&name)
 }
