@@ -7,7 +7,7 @@
   Tammy handed it off on 2026-11-13). H4 to H6 add mod-facing files and need
   both Tammy and Cedric. Accepted when both approve the PR that merges this
   file; not binding before.
-- **Relates to:** [ADR 0004](0004-modding-v1.md) D1, D3, D6, D7, D11; [ADR 0007](0007-ui-text-and-icons.md) open
+- **Relates to:** [ADR 0004](0004-modding-v1.md) D1, D3, D6, D11; [ADR 0007](0007-ui-text-and-icons.md) open
   question 1; WORKPLAN UI-18, UI-29, UI-33
 
 ## Context
@@ -47,17 +47,17 @@ The forces:
 
 ## Position
 
-What follows for legacy content (the original games and mods made for their
-engines) is quality of life with the best compatibility we can keep. It
+The default behaviour below, for the original games and for mods that state
+no layout, is quality of life with the best compatibility we can keep. It
 encodes one opinion of ours: the original authors cannot have wanted their
 HUD to look as it does stretched across a window they never drew it for.
-Beyond that, STA64 holds no opinion on a HUD's layout. A mod made for STA64
-states its author's opinion by declaring a layout. Where content states
-nothing and more than one reading is defensible, the player chooses.
+Beyond that, STA64 holds no opinion on a HUD's layout. An author who has
+one can state it by declaring a layout (H4, H5); nobody has to. Where content
+states nothing and more than one reading is defensible, the player chooses.
 
 ## Decision
 
-### Legacy content: default behaviour
+### Default behaviour
 
 **H1. The stock HUD's appearance is not changed.**
 STA64 scales a stock HUD by one factor for both axes. It never stretches one
@@ -79,11 +79,12 @@ pointer input; the margins beside the HUD area select, order and scroll as
 the open view does. The minimap and every other consumer of HUD rects use the
 one mapping of H2.
 
-### Mods made for STA64 (proposed, not in the first package)
+### What a mod can state, if its author wants to (proposed, not in the first package)
 
-A mod made for STA64 always declares its layout, by H4, H5 or both. A mod
-that declares none is treated as legacy content (H2, H7) and `check-pack`
-reports it as such (D7); it still loads (D1).
+Both are optional, like every extended modding tool STA64 offers: a way for
+an author to state how their HUD should sit on a wide window, not a
+requirement. A mod that uses neither is handled by H2 and H7 and is in no way
+a lesser mod.
 
 **H4. A mod may ship a sheet for a wider aspect.**
 A sheet named as the Fleet Operations sheets are (`gui_21x9.cfg`,
@@ -142,14 +143,14 @@ still differs from the chosen sheet's aspect and a layout file exists, its
 groups are placed by it across the whole window. Otherwise H2's centred area
 applies. STA64 does not derive anchors or groups from differences between a
 mod's sheets or from where rects lie. A layout file that overlaps two groups
-or names an unknown key is reported (D7) and ignored as a whole, falling
-back to H2.
+or names an unknown key is ignored as a whole with a line in the log, and H2
+applies.
 
 ### Player setting
 
 **H7. Where the content states no layout, the player picks one.**
 A setting with three values, stored with the other settings (UI-29). It
-applies to legacy content only:
+applies to any game or mod that declares no layout:
 
 - **Centred** (default): H2.
 - **Anchored**: a layout file in H5's format that STA64 ships for a stock
@@ -207,8 +208,6 @@ gives today; a pointer test pins that the margins reach the world.
   over half the width.
 - Wide layouts for the stock games exist only if someone authors them (open
   question 2).
-- H4 and H5 need `check-pack` to list the new files and flag unknown keys
-  (D7), which is CON-lane work.
 
 **Work**
 
