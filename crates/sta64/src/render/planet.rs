@@ -1425,6 +1425,7 @@ mod tests {
         use bevy::mesh::{Indices, VertexAttributeValues};
         let mesh = crate::render::space::sphere(0, 2, 2, 1.0);
         let Some(VertexAttributeValues::Float32x3(pos)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else { panic!("positions") };
+        let Some(VertexAttributeValues::Float32x3(nrm)) = mesh.attribute(Mesh::ATTRIBUTE_NORMAL) else { panic!("normals") };
         let Some(Indices::U32(idx)) = mesh.indices() else { panic!("indices") };
         let mut inward = 0;
         let mut outward = 0;
@@ -1441,7 +1442,6 @@ mod tests {
                 outward += 1;
             }
             // The stored vertex normals agree with the front.
-            let Some(VertexAttributeValues::Float32x3(nrm)) = mesh.attribute(Mesh::ATTRIBUTE_NORMAL) else { panic!("normals") };
             assert!(n.dot(Vec3::from(nrm[t[0] as usize])) > 0.0, "normal against the winding");
         }
         assert!(outward > 0 && inward == 0, "inward {inward}, outward {outward}");
