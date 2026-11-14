@@ -209,7 +209,6 @@ fn invalid_arguments_and_stale_handles_never_queue_commands() {
         "A2.IsAlive(4294967296)",
         "A2.IsAlive('1')",
         "A2.GetLocation(1, 2)",
-        "A2.GetLocation(0)",
         "A2.GetRealTeam(99999)",
         "A2.CraftCannotDie(1, 1)",
         "A2.CraftCannotDie(99999, true)",

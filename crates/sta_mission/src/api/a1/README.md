@@ -115,7 +115,10 @@ SetOfficers AddOfficers SetTeamCrew AddCrew SetCrew`.
 
 The AI switches `DisableAllAITeams EnableAllAITeams DisableTeam EnableTeam SetIsAITeam` are not
 gaps (LUA-20): each queues one request for the host's AI hub (`MissionRuntime::take_ai_requests`,
-`api/ai_switch.rs`; rules and grades in `sta_ai::mission`). `ResetStrategyCycle` is not exported by
+`api/ai_switch.rs`; rules and grades in `sta_ai::mission`), and retains `Presentation::Call("A1.<name>")`
+as the A2 calls do. An invalid team number raises, as everywhere in A1 (A2 treats it as the original's no-op);
+`NEUTRAL` is a valid team and queues a request the hub drops. A host that takes no requests lists untaken
+switches in `unsupported()` as `AI.<call>`. `ResetStrategyCycle` is not exported by
 Armada I.
 
 Queries raise an error naming the missing data (also `strength_team_1`, `strength_team_2`, `hot_float_value`): `InStopMode InAttackMode
@@ -132,3 +135,13 @@ No stock mission was run through this table; the tests use fake content.
 
 `GroupNew`, `GroupDelete` and `Add_Team_To_Group` are runtime bookkeeping only.
 `AddDilithium`/`SetDilithium` chain within a tick (writes are absolute; the view is a snapshot).
+
+## Dead-handle answers (LUA-21)
+
+`GetDistance` (both forms), `GetRealShieldPercent`, `GetCrew` and `GetLocation(handle)` answer the
+executable's constants for a handle that names nothing live (1e30, -33.0, -1.0, the zero vector),
+instead of raising. Read from the executable, static; not measured. A live object of any kind answers
+as before. In the path form `GetDistance(h, path, i)` an absent handle answers 1e30 before the path is looked up; for a
+live handle an unknown path still raises (LUA-18's rule owns it; the exe answers 1e30). Pending `BuildObject` tokens
+still raise. A handle that was never alive because of a gap, or that an earlier failed call named, is noted as a
+tainted read (LUA-13); one that was alive and is destroyed answers cleanly.
