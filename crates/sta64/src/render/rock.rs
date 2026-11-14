@@ -13,7 +13,6 @@ use bevy::render::render_resource::{AsBindGroup, ShaderType};
 use bevy::shader::ShaderRef;
 
 use crate::render::profile::{Effect, ProfileEffects, RenderProfile};
-use crate::render::sprites::SpriteFade;
 
 const AMBIENT: [f32; 3] = [0.05, 0.05, 0.07];
 const SPEC: f32 = 0.7;
@@ -34,10 +33,12 @@ pub fn is_moon_nimbus(sprite_node: &str) -> bool {
 }
 
 /// A moon's round nimbus. The original draws it (an additive billboard in the colour its animation
-/// gives), so the Stock look does; Refit's look does not (`MoonNimbus=0`: the light shows in the
-/// cracks instead), and [`moon_nimbus`] dims it there.
-#[derive(Component)]
-pub struct MoonNimbus;
+/// gives; read from data), so the Stock look does; Refit's look does not (`MoonNimbus=0`: the light shows
+/// in the cracks instead). [`moon_nimbus`] sets `on`; `sprites::animate` hides the node while it is off.
+#[derive(Component, Default)]
+pub struct MoonNimbus {
+    pub on: bool,
+}
 
 /// Whether the nimbus is drawn: under the Stock look only. Apps without the profile resources (the front
 /// end's frame app) draw the Refit look.
@@ -45,16 +46,12 @@ pub fn nimbus_drawn(profile: Option<&RenderProfile>, effects: Option<&ProfileEff
     matches!((profile, effects), (Some(p), Some(e)) if e.implementation(*p, Effect::Scenery) == RenderProfile::Stock)
 }
 
-/// Light or dim every moon nimbus by the render profile (a toggle takes effect at once).
-fn moon_nimbus(
-    profile: Option<Res<RenderProfile>>,
-    effects: Option<Res<ProfileEffects>>,
-    mut nimbus: Query<&mut SpriteFade, With<MoonNimbus>>,
-) {
-    let want = if nimbus_drawn(profile.as_deref(), effects.as_deref()) { 1.0 } else { 0.0 };
-    for mut f in &mut nimbus {
-        if f.0 != want {
-            f.0 = want;
+/// Show or hide every moon nimbus by the render profile (a toggle takes effect at once).
+fn moon_nimbus(profile: Option<Res<RenderProfile>>, effects: Option<Res<ProfileEffects>>, mut nimbus: Query<&mut MoonNimbus>) {
+    let want = nimbus_drawn(profile.as_deref(), effects.as_deref());
+    for mut n in &mut nimbus {
+        if n.on != want {
+            n.on = want;
         }
     }
 }
@@ -123,6 +120,9 @@ pub struct RockPart {
     pub recipe: String,
     pub centre: Vec3,
     pub inv_extent: Vec3,
+    /// Part of a dilithium moon (its model has the `glowdmoon` shell). Under the Stock look only these take the
+    /// recipe surface (the lit cracks stand in for the shell's glow); other rocks keep their texture.
+    pub moon: bool,
 }
 
 /// The part's rock material, shared by every part of the same mesh and recipe (the
@@ -164,6 +164,7 @@ impl Plugin for RockPlugin {
 }
 
 /// Swap waiting parts to their rock material when the surface is ready.
+#[allow(clippy::too_many_arguments)]
 fn apply(
     mut commands: Commands,
     vfs: Res<crate::viewer::Mounted>,
@@ -171,8 +172,14 @@ fn apply(
     parts: Query<(Entity, &RockPart), Without<RockMat>>,
     mut materials: ResMut<Assets<RockMaterial>>,
     mut shared: ResMut<RockMaterials>,
+    profile: Option<Res<RenderProfile>>,
+    effects: Option<Res<ProfileEffects>>,
 ) {
+    let stock = nimbus_drawn(profile.as_deref(), effects.as_deref());
     for (e, part) in &parts {
+        if stock && !part.moon {
+            continue;
+        }
         let Some(b) = surfaces.request(&vfs.0, &part.recipe, crate::render::surfaces::ROCK_FACE) else { continue };
         let key = material_key(part);
         if let Some(m) = shared.0.get(&key) {
@@ -261,14 +268,14 @@ mod tests {
     /// nothing. Instances of a mesh differ in transform only, which is not in the key.
     #[test]
     fn rocks_of_one_mesh_share_a_material_and_other_meshes_do_not() {
-        let part = |recipe: &str, c: f32| RockPart { recipe: recipe.into(), centre: Vec3::new(c, 0.0, 1.0), inv_extent: Vec3::splat(0.5) };
+        let part = |recipe: &str, c: f32| RockPart { recipe: recipe.into(), centre: Vec3::new(c, 0.0, 1.0), inv_extent: Vec3::splat(0.5), moon: false };
         let keys: std::collections::HashSet<_> = (0..600).map(|_| material_key(&part("masterrock", 3.0))).collect();
         assert_eq!(keys.len(), 1, "600 instances of one mesh: one material");
         assert_ne!(material_key(&part("masterrock", 3.0)), material_key(&part("masterrock", 4.0)));
         assert_ne!(material_key(&part("masterrock", 3.0)), material_key(&part("mdmoon", 3.0)));
     }
 
-    fn nimbus_fade(profile: Option<RenderProfile>) -> f32 {
+    fn nimbus_on(profile: Option<RenderProfile>) -> bool {
         let mut app = App::new();
         let mut effects = ProfileEffects::default();
         effects.register_stock(Effect::Scenery);
@@ -276,29 +283,27 @@ mod tests {
             app.insert_resource(p).insert_resource(effects);
         }
         app.add_systems(Update, moon_nimbus);
-        let nimbus = app.world_mut().spawn((MoonNimbus, SpriteFade(0.0))).id();
-        // Another sprite node (a nebula puff) is not the nimbus: left alone.
-        let puff = app.world_mut().spawn(SpriteFade(0.5)).id();
+        let nimbus = app.world_mut().spawn(MoonNimbus::default()).id();
         app.update();
-        assert_eq!(app.world().get::<SpriteFade>(puff).unwrap().0, 0.5);
-        app.world().get::<SpriteFade>(nimbus).unwrap().0
+        app.world().get::<MoonNimbus>(nimbus).unwrap().on
     }
 
-    /// The original draws the moon's blue nimbus (`oreglow`, `lights.spr`); the Stock look does, Refit's
-    /// look (and an app without the profile resources) leaves it dark, as Refit's `MoonNimbus=0`.
+    /// The original draws the moon's blue nimbus (`oreglow`, `lights.spr`; read from data); the Stock look
+    /// does, Refit's look (and an app without the profile resources) hides it, as Refit's `MoonNimbus=0`.
     #[test]
-    fn moon_nimbus_is_lit_under_the_stock_look_only() {
-        assert_eq!(nimbus_fade(Some(RenderProfile::Stock)), 1.0);
-        assert_eq!(nimbus_fade(Some(RenderProfile::Refit)), 0.0);
-        assert_eq!(nimbus_fade(None), 0.0);
+    fn moon_nimbus_is_shown_under_the_stock_look_only() {
+        assert!(nimbus_on(Some(RenderProfile::Stock)));
+        assert!(!nimbus_on(Some(RenderProfile::Refit)));
+        assert!(!nimbus_on(None));
         assert!(is_moon_nimbus("oreglow") && is_moon_nimbus("OreGlow") && !is_moon_nimbus("dmooninf"));
     }
 
     /// The cause of the moons' missing glow under the Stock look: surface bakes were only uploaded while
-    /// the Refit planets drew, so under Stock a moon's recipe surface (the lit cracks) never arrived and
-    /// the cut-out rock showed the dark shell. The bake is uploaded under both looks.
+    /// the Refit planets drew, so a moon's recipe surface (the lit cracks) never arrived and the cut-out rock
+    /// showed the dark shell. Under Stock a moon takes it; an asteroid (same recipe system) keeps its stock
+    /// material, as the Stock look never changes how asteroids look.
     #[test]
-    fn surface_bakes_are_uploaded_under_the_stock_look() {
+    fn stock_look_gives_moons_their_surface_and_leaves_asteroids_alone() {
         use crate::render::surfaces::Surfaces;
         let mut app = App::new();
         let mut effects = ProfileEffects::default();
@@ -307,22 +312,26 @@ mod tests {
             .insert_resource(RenderProfile::Stock)
             .insert_resource(crate::viewer::Mounted(sta_vfs::Vfs::default()))
             .init_resource::<Surfaces>()
+            .init_resource::<RockMaterials>()
             .init_resource::<Assets<Image>>()
+            .init_resource::<Assets<RockMaterial>>()
             .init_resource::<Assets<crate::render::planet::PlanetMaterial>>()
-            .add_systems(Update, crate::render::planet::add_surface_systems());
-        let vfs = sta_vfs::Vfs::default();
-        // `mdmoon` is bundled: a small face keeps the bake quick.
-        assert!(app.world_mut().resource_mut::<Surfaces>().request(&vfs, "mdmoon", 8).is_none());
+            .add_systems(Update, (crate::render::planet::add_surface_systems(), apply).chain());
+        // `mdmoon` is a bundled recipe; the same recipe on a non-moon part stands for an asteroid.
+        let part = |moon| RockPart { recipe: "mdmoon".into(), centre: Vec3::ZERO, inv_extent: Vec3::ONE, moon };
+        let moon = app.world_mut().spawn(part(true)).id();
+        let asteroid = app.world_mut().spawn(part(false)).id();
         let mut ready = false;
         for _ in 0..600 {
             app.update();
-            if app.world_mut().resource_mut::<Surfaces>().request(&vfs, "mdmoon", 8).is_some() {
+            if app.world().get::<RockMat>(moon).is_some() {
                 ready = true;
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         assert!(ready, "the moon's recipe surface was never uploaded under the Stock look");
+        assert!(app.world().get::<RockMat>(asteroid).is_none(), "an asteroid kept its stock material under Stock");
     }
 
     #[test]

@@ -386,10 +386,10 @@ fn spawn_sprite_node(ctx: &mut SpawnCtx, id: &str, parent: Entity, quad: &Handle
     if billboard {
         e.insert(Billboard);
     }
-    // The moons' round nimbus is spawned dark; `rock::moon_nimbus` lights it under the Stock look
-    // and leaves it dark under Refit's (whose cracks carry the light instead, RND-05).
+    // The moons' round nimbus is spawned hidden; `rock::moon_nimbus` shows it under the Stock look
+    // (as the original draws it: read from data) and leaves it hidden under Refit's (cracks carry the light, RND-05).
     if crate::render::rock::is_moon_nimbus(id) {
-        e.insert((crate::render::rock::MoonNimbus, crate::render::sprites::SpriteFade(0.0)));
+        e.insert(crate::render::rock::MoonNimbus::default());
     }
     if let Some(owner) = construction_owner {
         e.insert((
@@ -611,6 +611,8 @@ fn spawn_mesh(
                 recipe: n.to_owned(),
                 centre: Vec3::from(mirror(c)) * ctx.scale,
                 inv_extent: Vec3::from(ext.map(|e| 1.0 / e)),
+                // A dilithium moon: its model has a `glowdmoon` shell (a mesh node of its own).
+                moon: model.nodes.iter().any(|n| matches!(&n.kind, NodeKind::Mesh(m) if m.groups.iter().any(|g| crate::render::rock::is_moon_shell(&g.material)))),
             }
         });
         // A `default` mesh's texture alpha is a cut-out where its group is not
