@@ -63,7 +63,20 @@ fn capture(size: UVec2, name: &str, mounted: Option<sta_vfs::Vfs>) {
     let lit = rgba.pixels().filter(|p| p[0] > 30 || p[1] > 30 || p[2] > 30).count();
     let gold = rgba.pixels().filter(|p| p[0] > 150 && p[1] > 80 && p[2] < 120).count();
     assert!(lit > 2500, "{name}: missing menu text ({lit} visible pixels)");
-    assert!(gold > 300, "{name}: missing title/divider ({gold} gold pixels)");
+    assert!(gold > 2000, "{name}: missing title/divider ({gold} gold pixels)");
+    if size == UVec2::new(1920, 1080) {
+        // Check the visible ink, not only its parent rectangle: the reference
+        // puts the first caption near y=376, below a clear title/divider gap.
+        let first_ink = rgba.enumerate_pixels().filter(|(x, y, p)|
+            (165..700).contains(x) && (360..430).contains(y)
+                && p[0] > 140 && p[1] > 140 && p[2] > 140)
+            .map(|(_, y, _)| y).min().expect("first main-menu caption");
+        assert!((370..=385).contains(&first_ink), "{name}: first caption ink starts at {first_ink}");
+        assert!(!rgba.enumerate_pixels().any(|(x, y, p)|
+            (150..600).contains(&x) && (334..342).contains(&y)
+                && p[0] > 150 && p[1] > 80 && p[2] < 120),
+            "{name}: title ink reaches the divider gap");
+    }
     if let Ok(dir) = std::env::var("STA64_UI_CAPTURE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         dynamic.save(std::path::Path::new(&dir).join(format!("main-menu-{name}.png"))).unwrap();
