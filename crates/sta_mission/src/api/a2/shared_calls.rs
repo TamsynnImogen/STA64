@@ -155,7 +155,8 @@ mod tests {
         for bad in ["A2.MuteSounds()", "A2.ObstacleAvoidance(0)", "A2.SetRelation(1, 2)", "A2.Starfield_Load_Background_Geometry(3)"] {
             assert!(rt.eval::<()>(bad).is_err(), "{bad}");
         }
-        assert_eq!(rt.take_commands().len(), 5, "every valid call retains its request (the cineractive end is the typed event)");
+        // The cineractive end is the typed event, sent only when one was running (LUA-27: it resets speeds).
+        assert_eq!(rt.take_commands().len(), 4, "every valid call retains its request");
         let counted: Vec<String> = rt.unsupported().into_iter().map(|(k, _)| k).collect();
         assert!(counted.iter().any(|k| k.contains("A2.ObstacleAvoidance")));
         assert!(!counted.iter().any(|k| k.contains("SetRelation")), "SetRelation is a sim edit now");

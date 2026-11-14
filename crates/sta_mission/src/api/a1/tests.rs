@@ -583,6 +583,20 @@ fn switches_alerts_speed_and_resources_become_edits() {
 }
 
 #[test]
+fn a1_impulse_speed_on_an_absent_handle_does_nothing() {
+    let s = scene();
+    let (_, commands) = run(&s, "A1.SetImpulseSpeed(123456, 20)");
+    assert!(commands.is_empty(), "{commands:?}");
+}
+
+#[test]
+fn a1_impulse_speed_on_a_station_does_nothing() {
+    let s = scene();
+    let (_, commands) = run(&s, "A1.SetImpulseSpeed(s, 20)");
+    assert!(commands.is_empty(), "{commands:?}");
+}
+
+#[test]
 fn orders_are_sent_as_the_owner() {
     let s = scene();
     let [a, b, st, _] = s.ids;

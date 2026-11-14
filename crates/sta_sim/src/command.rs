@@ -148,7 +148,9 @@ pub enum Edit {
     Team(EntityId, PlayerId),
     /// Reseed the sim's random sequence.
     Seed(u64),
-    /// Something to show or play that changes nothing in the world: the sim
+    /// Something to show or play that changes nothing in the world, except that
+    /// the end of a cineractive (`Cineractive { on: false, .. }`) resets every
+    /// craft's impulse speed to its definition (LUA-27): the sim
     /// raises [`SimEvent::Present`](crate::event::SimEvent::Present) with it
     /// that tick (see [`crate::present`]).
     Present(crate::present::Presentation),
@@ -160,8 +162,9 @@ pub enum Edit {
     /// Alert state (mission `SetRedAlert` and friends). Rejected until a
     /// package models alert states.
     Alert(EntityId, AlertState),
-    /// Cap a unit's speed (`SetImpulseSpeed`), `None` to lift the cap.
-    /// Rejected until movement applies it.
+    /// Set a craft's impulse speed (`SetImpulseSpeed`), `None` restores the
+    /// definition's (`ResetImpulseSpeed`); see `speed_override`. Rejected for
+    /// anything but a live craft.
     MaxSpeed(EntityId, Option<Fixed>),
     /// Whether other units may target it (`AllowAsTarget`). Rejected until
     /// targeting applies it.
