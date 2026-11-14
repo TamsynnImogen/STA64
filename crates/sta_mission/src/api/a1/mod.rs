@@ -53,6 +53,7 @@ mod orders;
 mod presentation;
 mod seams;
 mod teams;
+mod warp;
 #[cfg(test)]
 mod tests;
 
@@ -492,6 +493,7 @@ pub(super) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
     teams::install(lua, &env, &a2, &table)?;
     presentation::install(lua, &env, &a2, &table)?;
     seams::install(lua, &env, &a2, &table)?;
+    warp::install(lua, &env, &a2, &table)?;
     hold::install(lua, &env, &table)?;
     lua.globals().raw_set("A1", table)?;
     Ok(())
