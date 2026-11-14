@@ -289,11 +289,10 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
     // IsCompromised(object, team): true when the object has been lost to `team`,
     // i.e. it is gone or dying, is not a craft or station, is a derelict, or
     // its permanent owner is not `team` (LUA-12). Read from the executable,
-    // static (A2 and A1; nothing measured). The derelict latch is
-    // approximated by a crew of under one with a positive maximum (not
-    // modelled: the `CraftCannotDie` exemption and the latch clearing only
-    // when crew returns to one), and a temporary takeover (mind control) shows
-    // as the new owner here, where the engine keeps the original (SIM-59).
+    // static (A2 and A1; nothing measured). The derelict test is the view's crew pair
+    // (`derelict::latched`, its divergences are documented there), and a temporary
+    // takeover (mind control) shows as the new owner here, where the engine keeps the
+    // original (SIM-59).
     table.set("IsCompromised", query(lua, ctx, "IsCompromised", 2, |c, a| {
         let id = handle("IsCompromised", a, 0)?;
         c.note_query(id, "IsCompromised");

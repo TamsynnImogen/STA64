@@ -8,12 +8,23 @@
 //! cleared when crew is back at 1 or more.
 //!
 //! The sim keeps that latch in `SubsystemRow::derelict`, which the mission view does not
-//! carry. Where the casualty model runs, a latched unit has its crew set to 0 and a cleared
-//! one has crew of 1 or more, so the view's crew pair is the same test. It differs only for
-//! a unit whose features have no casualty model (a crew edit never latches there, the
-//! engine would) and for one tick after the crew is restored (the latch is cleared in the
-//! tick's upkeep). Reading the latch itself needs a view field (a `UnitView` field or a
-//! `UnitFlags` bit: the byte is full), which is left to the package that adds them.
+//! carry (`UnitFlags` is a full byte; a view field is left to the package that adds them), so
+//! the binding reads the view's crew pair, the same test the engine's check makes. Where the
+//! casualty model runs (`Features::crew_loss_on_hit`) a latched unit has crew 0 and an
+//! unlatched one has crew of 1 or more, and `Sim::step` clears the latch before it builds the
+//! view, so the two agree in the same tick. Divergences, all pinned or documented here:
+//!
+//! - The whole Armada I profile (`Profile::Sta1Classic`) has no casualty model: the sim never
+//!   calls the check, so combat never latches and `SetCrew(h, 0)` on a `CraftCannotDie` craft
+//!   is not topped up. The crew pair then reads derelict where the engine's rule says not.
+//! - A `maxCrew` edit never runs the check: `maxCrew 0` on a latched unit reads not derelict
+//!   while the sim keeps the latch, and a maximum just under 1 reads derelict with no latch.
+//! - A unit spawned with crew under 1 and a positive maximum is not checked at spawn and keeps
+//!   working in the sim, but reads derelict. No Armada II stock ODF (1102 scanned) has such a
+//!   definition; the Armada I archive was not readable by that scan (not measured).
+//!
+//! A pending `BuildObject` token (not yet an object) raises like the other conditions do, so
+//! the gap is tainted: the engine's object exists at once and is crewed, so no constant is right.
 
 use mlua::{Lua, Table};
 use sta_core::Fixed;
@@ -45,6 +56,11 @@ pub(crate) fn is_derelict(c: &Ctx, id: sta_core::EntityId) -> bool {
 pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()> {
     table.set("IsDerelict", query(lua, ctx, "IsDerelict", 1, |c, a| {
         let id = handle("IsDerelict", a, 0)?;
+        if c.alive(id).is_none() {
+            // Missing or dying: true; a pending token raises so the gap is tainted.
+            c.dead_handle("A2", "IsDerelict", id)?;
+            return Ok(true);
+        }
         c.note_query(id, "IsDerelict");
         Ok(is_derelict(c, id))
     })?)?;

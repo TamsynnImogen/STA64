@@ -446,7 +446,8 @@ fn alias_as(lua: &Lua, env: &Env, a2: &Table, name: &'static str, a2_name: &'sta
             };
             mapped.push(match resolved {
                 Some(Ok(id)) => Value::Integer(i64::from(id.0)),
-                Some(Err(_)) if lenient => Value::Integer(0),
+                // A pending spawn has an object in the engine (crewed, so not derelict): no constant.
+                Some(Err(why)) if lenient && !(name == "IsDerelict" && why.starts_with("is still being built")) => Value::Integer(0),
                 Some(Err(why)) => {
                     return Err(mlua::Error::runtime(format!("A1.{name}: object {why}")));
                 }

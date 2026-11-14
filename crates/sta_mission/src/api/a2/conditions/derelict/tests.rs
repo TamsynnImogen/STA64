@@ -22,13 +22,16 @@ struct Scene {
 }
 
 fn scene() -> Scene {
-    let mut features = Profile::Sta2Classic.features();
-    features.crew_loss_on_hit = true;
+    scene_with(Profile::Sta2Classic)
+}
+
+fn scene_with(profile: Profile) -> Scene {
+    let features = profile.features();
     let mut unit = UnitDef::new("ship", "craft");
     unit.hull = Fixed::from_int(1000);
     unit.crew = Fixed::from_int(50);
     unit.maximum_crew = Some(Fixed::from_int(50));
-    let db = Arc::new(ContentDb::builder().profile(Profile::Sta2Classic).features(features).unit(unit).build().unwrap());
+    let db = Arc::new(ContentDb::builder().profile(profile).features(features).unit(unit).build().unwrap());
     let seat = |n| PlayerSetup { id: PlayerId(n), team: TeamId(n), race: "fx".into(), control: Control::Idle };
     let mut sim = Sim::from_setup(&GameSetup {
         seed: 5,
@@ -98,7 +101,6 @@ fn a_crewed_craft_is_not_derelict_and_the_engines_latch_makes_it_so() {
     assert!(!truth(&rt, "A2.IsDerelict(b)"), "the other craft keeps its crew");
     // Crew back to one or more: the latch clears and so does the answer.
     s.edit(&[Edit::UnitCrew(s.ids[0], Fixed::from_int(5))]);
-    s.edit(&[]);
     assert!(!s.latched(0));
     assert!(!truth(&s.runtime(), "A2.IsDerelict(a)"));
 }
@@ -137,4 +139,71 @@ fn is_compromised_reads_the_same_latch() {
     assert!(truth(&rt, "A2.IsCompromised(123456, 0)"), "a dead handle stays compromised");
     s.edit(&[Edit::Immortal(s.ids[1], true), Edit::UnitCrew(s.ids[1], Fixed::ZERO)]);
     assert!(!truth(&s.runtime(), "A2.IsCompromised(b, 0)"), "the top-up case is not derelict");
+}
+
+#[test]
+fn a_dying_unit_is_derelict() {
+    let mut s = scene();
+    for u in s.view.units.iter_mut().filter(|u| u.id == s.ids[0]) {
+        u.flags = u.flags.with(sta_sim::view::UnitFlags::DYING, true);
+    }
+    let rt = s.runtime();
+    assert!(truth(&rt, "A2.IsDerelict(a)"));
+    assert!(truth(&rt, "A1.IsDerelict(a)"));
+    assert!(!truth(&rt, "A2.IsDerelict(b)"));
+}
+
+#[test]
+fn a_non_craft_definition_is_derelict() {
+    let mut s = scene();
+    // The same unit viewed as an asteroid-class definition: not a craft or station.
+    let mut rock = UnitDef::new("rock", "asteroid");
+    rock.hull = Fixed::from_int(10);
+    let mut features = Profile::Sta2Classic.features();
+    features.crew_loss_on_hit = true;
+    let mut ship = UnitDef::new("ship", "craft");
+    ship.hull = Fixed::from_int(1000);
+    s.db = Arc::new(ContentDb::builder().profile(Profile::Sta2Classic).features(features).unit(ship).unit(rock).build().unwrap());
+    // Point the first unit's view at the asteroid definition.
+    let key = s.db.key("rock").unwrap();
+    let ship = s.db.key("ship").unwrap();
+    for u in &mut s.view.units {
+        u.def = if u.id == s.ids[0] { key } else { ship };
+    }
+    let rt = s.runtime();
+    assert!(truth(&rt, "A2.IsDerelict(a)"));
+    assert!(truth(&rt, "A1.IsDerelict(a)"));
+    assert!(!truth(&rt, "A2.IsDerelict(b)"));
+}
+
+#[test]
+fn a_pending_build_token_raises_and_taints_in_both_bindings() {
+    let s = scene();
+    let rt = s.runtime();
+    rt.eval::<()>("tok = A1.BuildObject('ship', 0, 0, 1.0, 2.0, 3.0)").unwrap();
+    let e = rt.eval::<bool>("return A1.IsDerelict(tok)").expect_err("pending").to_string();
+    assert!(e.contains("A1.IsDerelict") && e.contains("still being built"), "{e}");
+    // A2: a raw token no object answers to raises as the other dead-handle answers do.
+    assert!(rt.eval::<bool>("return A2.IsDerelict(0x40000001)").is_err());
+    // A failed or unknown A1 token stays the lenient "no such object": derelict.
+    assert!(truth(&rt, "A1.IsDerelict(0x40000063)"));
+}
+
+#[test]
+fn a1_arguments_are_checked() {
+    let s = scene();
+    let rt = s.runtime();
+    assert!(rt.eval::<bool>("return A1.IsDerelict()").is_err());
+    assert!(rt.eval::<bool>("return A1.IsDerelict(a, b)").is_err());
+    assert!(rt.eval::<bool>("return A1.IsDerelict('x')").is_err());
+}
+
+#[test]
+fn the_armada_one_profile_has_no_casualty_model_and_the_crew_pair_reads_derelict() {
+    // Pins the divergence documented in derelict.rs: Sta1Classic never latches, so a
+    // CraftCannotDie craft whose crew is set to 0 is not topped up and reads derelict.
+    let mut s = scene_with(Profile::Sta1Classic);
+    s.edit(&[Edit::Immortal(s.ids[0], true), Edit::UnitCrew(s.ids[0], Fixed::ZERO)]);
+    assert!(!s.latched(0), "the sim has no latch under the Armada I profile");
+    assert!(truth(&s.runtime(), "A1.IsDerelict(a)"), "the crew pair still reads derelict (known divergence)");
 }
