@@ -476,22 +476,25 @@ fn update(
 
 // ---- Cities (RND-12) ----
 //
-// Rule (read from the Armada II executable, static, and from the install's data; research notes outside the
-// repository): a colonized planet gets a second pass on each ground hemisphere, the owner's race's development
-// texture `PD_<cityTextureName><1|2>` times an alloc picture built from `PD_<cityTextureName>alloc<1|2>` (16x16,
-// value = (R+G+B)/765) as alpha = 0.4 x clamp((P - value) k), P = population / cfgPOP_HEAVY + 1 / k, k = the race's
-// `numCities`, blended over the ground and lit as the ground is. The population drawn is not the sim's: it eases
-// toward it at 200 a second and falls to 0 before a new owner's race is drawn (`Planet::Simulate`). Armada I and
-// the Fleet Ops line have no `cityTextureName`, so no layer. Stock shows exactly that; the Refit look adds its own
-// night-side lights over the same layer (the original has none).
+// Rule (evidence: read from the Armada II executable, static, and from the install's data; research notes live
+// outside the repository): a colonized planet gets a second pass on each ground hemisphere, the owner's race's
+// development texture `PD_<cityTextureName><1|2>` times an alloc picture built from `PD_<cityTextureName>alloc<1|2>`
+// (16x16, value = (R+G+B)/765) as alpha = 0.4 x clamp((P - value) k), P = population / cfgPOP_HEAVY + 1 / k, k = the
+// race's `numCities`, blended over the ground and lit as the ground is. The population drawn is not the sim's: it
+// eases toward it at 200 a second of simulation time and falls to 0 before a new owner's race is drawn (read from the
+// executable, static). Armada I and the Fleet Ops line have no `cityTextureName`, so no layer. Stock shows exactly
+// that; the Refit look adds its own night-side lights over the same layer (the original has none).
 
-/// The people per second the drawn population moves by: `cfgPLANET_POP_MORPH_RATE`, which no `RTS_CFG.h` sets
-/// (read from the executable's data, static).
+/// The people per second the drawn population moves by: `cfgPLANET_POP_MORPH_RATE`, a key no `RTS_CFG.h` sets, so the
+/// executable's own 200 (read from the executable's data, static).
 pub const POP_MORPH_RATE: f32 = 200.0;
 /// `numCities` when a race ODF lacks the key (the executable's default).
 const DEFAULT_CITY_COUNT: f32 = 10.0;
-/// Where the layer sits: just over the ground, under the cloud shell (1.01).
-const CITY_RADIUS: f32 = 1.0015;
+/// Where the layer sits, as a share of the ground's radius. The hemisphere meshes (`space::sphere`) are front-facing
+/// from inside, so under Bevy's back-face culling a planet shows the far wall of its sphere (seen in the RND-12 frame
+/// test: a layer outside the ground is hidden behind the ground's far wall except as a ring at the limb). A layer that
+/// must draw over the ground therefore sits just inside it, nearer the camera on that far wall and mapped like it.
+const CITY_RADIUS: f32 = 0.9985;
 /// Refit's `CityLights` and `CityLightColour`.
 const CITY_NIGHT: f32 = 0.8;
 const CITY_COLOUR: [f32; 3] = [1.0, 0.72, 0.38];
@@ -505,24 +508,42 @@ pub struct CityRace {
     pub count: f32,
 }
 
-/// The races with cities, by race key (`name`, lower case), read once per mount.
+/// The races with cities, by race key (`name`, lower case) and by ODF stem, read once per mount.
 #[derive(Resource, Debug, Default, Clone)]
-pub struct CityRaces(std::collections::BTreeMap<String, CityRace>);
+pub struct CityRaces {
+    by_key: std::collections::BTreeMap<String, CityRace>,
+    by_stem: std::collections::BTreeMap<String, CityRace>,
+}
 
 impl CityRaces {
-    /// From the race ODFs through a layered loader (as `Races::load` reads them).
+    /// From the race ODFs through a layered loader (as `Races::load` reads them). Lookup follows `Races::get`: the
+    /// ODF's stem first, then the playable race of that key, then any, so two definitions that share a key (an observer
+    /// and the race it observes) give the playable one's answer, whatever their order in the file.
     pub fn from_loader(races: &sta_content::Races, load: &mut dyn FnMut(&str, usize) -> Option<String>) -> Self {
-        let mut map = std::collections::BTreeMap::new();
+        let mut by_key: std::collections::BTreeMap<String, (bool, Option<CityRace>)> = std::collections::BTreeMap::new();
+        let mut by_stem = std::collections::BTreeMap::new();
         for race in races.iter() {
-            let Ok(odf) = sta_odf::resolve_layered(&race.stem, load) else { continue };
-            let texture = odf.str("citytexturename").map(str::trim).unwrap_or("");
-            if texture.is_empty() {
-                continue;
+            let city = sta_odf::resolve_layered(&race.stem, load).ok().and_then(|odf| {
+                let texture = odf.str("citytexturename").map(str::trim).unwrap_or("");
+                if texture.is_empty() {
+                    return None;
+                }
+                let count = odf.f32("numcities").filter(|c| c.is_finite() && *c > 0.0).unwrap_or(DEFAULT_CITY_COUNT);
+                Some(CityRace { texture: texture.to_owned(), count })
+            });
+            let playable = race.slot.is_some_and(|slot| slot >= 0);
+            if let Some(city) = &city {
+                by_stem.insert(race.stem.to_ascii_lowercase(), city.clone());
             }
-            let count = odf.f32("numcities").filter(|c| c.is_finite() && *c > 0.0).unwrap_or(DEFAULT_CITY_COUNT);
-            map.entry(race.name.to_ascii_lowercase()).or_insert(CityRace { texture: texture.to_owned(), count });
+            let key = race.name.to_ascii_lowercase();
+            match by_key.get(&key) {
+                Some((had_playable, _)) if *had_playable || !playable => {}
+                _ => {
+                    by_key.insert(key, (playable, city));
+                }
+            }
         }
-        CityRaces(map)
+        CityRaces { by_key: by_key.into_iter().filter_map(|(k, (_, c))| c.map(|c| (k, c))).collect(), by_stem }
     }
 
     pub fn load(vfs: &sta_vfs::Vfs, index: &sta_content::OdfIndex, races: &sta_content::Races) -> Self {
@@ -530,7 +551,8 @@ impl CityRaces {
     }
 
     pub fn get(&self, race: &str) -> Option<&CityRace> {
-        self.0.get(&race.to_ascii_lowercase())
+        let n = race.trim().to_ascii_lowercase();
+        self.by_stem.get(&n).or_else(|| self.by_key.get(&n))
     }
 }
 
@@ -543,7 +565,7 @@ pub struct AllocArray {
 }
 
 impl AllocArray {
-    /// From decoded RGBA texels: `CityAllocArray`'s value is (R + G + B) / 765.
+    /// From decoded RGBA texels: the value is (R + G + B) / 765.
     pub fn from_rgba(width: u32, height: u32, pixels: &[u8]) -> Option<AllocArray> {
         let n = (width as usize).checked_mul(height as usize)?;
         if n == 0 || n > 1 << 20 || pixels.len() < n * 4 {
@@ -559,14 +581,15 @@ impl AllocArray {
     }
 }
 
-/// A texel's alpha byte: 0.4 x clamp((P - value) k) with P = pop / heavy + 1 / k, k = `count` (`mSetupHemisphere`).
+/// A texel's alpha byte: 0.4 x clamp((P - value) k) with P = pop / heavy + 1 / k, k = `count` (read from the executable, static).
 pub fn city_alpha(value: f32, pop: f32, heavy: f32, count: f32) -> u8 {
     let p = pop / heavy.max(1.0) + if count != 0.0 { 1.0 / count } else { 0.0 };
     let c = ((p - value) * count).clamp(0.0, 1.0);
     (0.4 * c * 255.9) as u8
 }
 
-/// The race and population a planet's cities are drawn at, which follow the sim's by `Planet::Simulate`'s rule.
+/// The race and population a planet's cities are drawn at, which follow the sim's by the original's rule (read from the
+/// executable, static).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Drawn {
     pub race: Option<String>,
@@ -574,8 +597,20 @@ pub struct Drawn {
 }
 
 impl Drawn {
-    /// One step of `dt` seconds toward the owner's race `team` (None: no owner, nothing moves, as the engine's
-    /// `team == 0` skips it) and the population `actual`.
+    /// The first sight of a colony: draw what is there at once (decision of the project coordinator, 2026-11-14: how the
+    /// original starts a map or a loaded game is not established, and a loaded save or a joined game must not show every
+    /// colony filling in over about 25 s). A planet with no owner draws nothing yet, so a colony founded later still
+    /// fills in.
+    pub fn snap(&mut self, team: Option<&str>, actual: f32) {
+        if let Some(team) = team {
+            self.race = Some(team.to_owned());
+            self.pop = actual;
+        }
+    }
+
+    /// One step of `dt` seconds of simulation time toward the owner's race `team` and the population `actual`. With no
+    /// owner (neutral, or an owner with no race) nothing moves and cities already drawn stay: the original skips the
+    /// planet then, per the static reading, but whether that leaves the old cities on screen is not established.
     pub fn step(&mut self, team: Option<&str>, actual: f32, dt: f32) {
         let Some(team) = team else { return };
         if self.race.is_none() {
@@ -597,6 +632,14 @@ impl Drawn {
             }
         }
     }
+}
+
+/// Seconds of simulation time since the last call, from the clock's tick counter: nothing while the sim is paused or
+/// held (a cutscene), double at double speed, 0 on the first call and when the counter went back (a new map).
+fn sim_dt(last: &mut Option<sta_sim::Tick>, now: sta_sim::Tick) -> f32 {
+    let dt = last.map_or(0.0, |l| now.saturating_sub(l) as f32 / sta_sim::TICK_HZ as f32);
+    *last = Some(now);
+    dt
 }
 
 /// What the view says of planet `id`: its owner's race (None for a neutral planet or an owner with no race) and its
@@ -625,6 +668,8 @@ struct CityLayer {
     material: Handle<PlanetMaterial>,
     entity: Entity,
     alloc: Option<Handle<Image>>,
+    /// What this layer's picture was last painted as: the race and the texels, so an unchanged repaint uploads nothing.
+    shown: Option<(String, Vec<u8>)>,
 }
 
 /// The city layers of a [`PlanetColony`] planet and what they are drawn at.
@@ -632,11 +677,13 @@ struct CityLayer {
 pub struct PlanetCities {
     layers: Vec<CityLayer>,
     drawn: Drawn,
+    /// The colony state has been seen once (the first sight snaps, see [`Drawn::snap`]).
+    seen: bool,
     /// What the layers show now: race and the population's bits.
     painted: Option<(String, u32)>,
 }
 
-/// Alloc arrays by texture name (`PD_ECFRalloc1`), `None` for a miss.
+/// Alloc arrays by texture name (`PD_ECFRalloc1`), `None` for a miss. Cleared when the mount changes.
 #[derive(Default)]
 struct AllocCache(std::collections::HashMap<String, Option<AllocArray>>);
 
@@ -653,6 +700,8 @@ impl AllocCache {
     }
 }
 
+/// The alloc picture's sampler: the original's filtering of it is not established; linear is used (the frame test of
+/// RND-12 compares it with nearest).
 fn alloc_image(a: &AllocArray, data: Vec<u8>) -> Image {
     use bevy::asset::RenderAssetUsages;
     use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
@@ -667,9 +716,17 @@ fn alloc_image(a: &AllocArray, data: Vec<u8>) -> Image {
     img.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
         address_mode_u: ImageAddressMode::ClampToEdge,
         address_mode_v: ImageAddressMode::ClampToEdge,
-        ..ImageSamplerDescriptor::linear()
+        ..alloc_filter()
     });
     img
+}
+
+fn alloc_filter() -> bevy::image::ImageSamplerDescriptor {
+    #[cfg(test)]
+    if gpu::NEAREST.load(std::sync::atomic::Ordering::Relaxed) {
+        return bevy::image::ImageSamplerDescriptor::nearest();
+    }
+    bevy::image::ImageSamplerDescriptor::linear()
 }
 
 /// Each frame: give a tagged planet its two city layers, step what is drawn toward the colony and paint the layers.
@@ -689,18 +746,27 @@ fn update_cities(
     mut planets: Query<(Entity, &PlanetColony, &mut PlanetBody, Option<&mut PlanetCities>)>,
     mut layers: Query<&mut Visibility>,
     mut allocs: Local<AllocCache>,
+    mut last_tick: Local<Option<sta_sim::Tick>>,
 ) {
     let Some(vfs) = vfs else { return };
+    // The easing runs on simulation time (the sim's ticks run since the last frame), not wall time: it stands while
+    // the game is paused or a cutscene holds the sim and follows the game speed.
+    let dt = sim_dt(&mut last_tick, clock.tick());
+    // A new content mount: the cached alloc pictures and what the layers show are stale.
+    let remounted = vfs.is_changed();
+    if remounted {
+        allocs.0.clear();
+    }
     let view = link.curr().clone();
     let heavy = content.as_ref().and_then(|c| c.0.rules().population()).map_or(5000.0, |p| p.levels[3].to_f32());
     let formats = device
         .map(|d| bevy::image::CompressedImageFormats::from_features(d.features()))
         .unwrap_or(bevy::image::CompressedImageFormats::BC);
     for (parent, colony, mut body, cities) in &mut planets {
-        let Some((team, actual)) = colony_state(&view, colony.0) else { continue };
+        let state = colony_state(&view, colony.0);
         let Some(mut cities) = cities else {
-            if body.ground.len() == 2 && body.radius > 0.0 {
-                let mut state = PlanetCities { layers: Vec::new(), drawn: Drawn::default(), painted: None };
+            if state.is_some() && body.ground.len() == 2 && body.radius > 0.0 {
+                let mut state = PlanetCities { layers: Vec::new(), drawn: Drawn::default(), seen: false, painted: None };
                 for h in 0..2 {
                     let params = PlanetParams {
                         mode: Vec4::new(0.0, 0.0, 3.0, 0.0),
@@ -727,13 +793,38 @@ fn update_cities(
                             ChildOf(parent),
                         ))
                         .id();
-                    state.layers.push(CityLayer { material, entity, alloc: None });
+                    state.layers.push(CityLayer { material, entity, alloc: None, shown: None });
                 }
                 commands.entity(parent).insert(state);
             }
             continue;
         };
-        cities.drawn.step(team.as_deref(), actual, clock.frame_dt());
+        // The view no longer has the planet (it left the view, or lost its row): hide the layers and forget what was
+        // drawn, so a later first sight snaps again.
+        let Some((team, actual)) = state else {
+            for layer in &mut cities.layers {
+                if let Ok(mut v) = layers.get_mut(layer.entity) {
+                    *v = Visibility::Hidden;
+                }
+                layer.shown = None;
+            }
+            cities.drawn = Drawn::default();
+            cities.seen = false;
+            cities.painted = None;
+            continue;
+        };
+        if remounted {
+            cities.painted = None;
+            for layer in &mut cities.layers {
+                layer.shown = None;
+            }
+        }
+        if !cities.seen {
+            cities.seen = true;
+            cities.drawn.snap(team.as_deref(), actual);
+        } else {
+            cities.drawn.step(team.as_deref(), actual, dt);
+        }
         let want = cities.drawn.race.as_deref().and_then(|r| races.get(r).map(|c| (r.to_owned(), c.clone())));
         let shown = want.filter(|_| cities.drawn.pop > 0.0);
         let key = shown.as_ref().map(|(r, _)| (r.clone(), cities.drawn.pop.to_bits()));
@@ -744,30 +835,37 @@ fn update_cities(
         let mut loader = crate::render::textures::Loader { vfs: &vfs.0, cache: &mut cache, images: &mut images, formats };
         for h in 0..cities.layers.len() {
             let mut ready = false;
-            if let Some((_, race)) = &shown {
+            if let Some((race_key, race)) = &shown {
                 let pd = loader.colour(&format!("PD_{}{}", race.texture, h + 1), false);
                 let alloc = allocs.get(&vfs.0, &format!("PD_{}alloc{}", race.texture, h + 1)).cloned();
                 if let (Some(pd), Some(alloc)) = (pd, alloc) {
                     let data = alloc.paint(cities.drawn.pop, heavy, race.count);
-                    let handle = match cities.layers[h].alloc.clone() {
-                        Some(handle) => {
-                            if let Some(mut img) = loader.images.get_mut(&handle) {
-                                img.data = Some(data);
+                    let unchanged = cities.layers[h].alloc.is_some() && cities.layers[h].shown.as_ref().is_some_and(|(r, d)| r == race_key && *d == data);
+                    if !unchanged {
+                        let handle = match cities.layers[h].alloc.clone() {
+                            Some(handle) => {
+                                if let Some(mut img) = loader.images.get_mut(&handle) {
+                                    img.data = Some(data.clone());
+                                }
+                                handle
                             }
-                            handle
+                            None => {
+                                let handle = loader.images.add(alloc_image(&alloc, data.clone()));
+                                cities.layers[h].alloc = Some(handle.clone());
+                                handle
+                            }
+                        };
+                        if let Some(mut m) = materials.get_mut(&cities.layers[h].material) {
+                            m.texture = Some(pd);
+                            m.city = Some(handle);
                         }
-                        None => {
-                            let handle = loader.images.add(alloc_image(&alloc, data));
-                            cities.layers[h].alloc = Some(handle.clone());
-                            handle
-                        }
-                    };
-                    if let Some(mut m) = materials.get_mut(&cities.layers[h].material) {
-                        m.texture = Some(pd);
-                        m.city = Some(handle);
+                        cities.layers[h].shown = Some((race_key.clone(), data));
                     }
                     ready = true;
                 }
+            }
+            if !ready {
+                cities.layers[h].shown = None;
             }
             if let Ok(mut v) = layers.get_mut(cities.layers[h].entity) {
                 *v = if ready { Visibility::Inherited } else { Visibility::Hidden };
@@ -775,6 +873,10 @@ fn update_cities(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "planet_gpu.rs"]
+mod gpu;
 
 #[cfg(test)]
 mod tests {
@@ -903,7 +1005,7 @@ mod tests {
 
     // ---- Cities (RND-12) ----
 
-    /// `mSetupHemisphere`: alpha 0.4 x clamp((P - value) k), P = pop / heavy + 1 / k. An empty planet shows nothing
+    /// The pass's alpha (read from the executable, static): 0.4 x clamp((P - value) k), P = pop / heavy + 1 / k. An empty planet shows nothing
     /// for the stock alloc values (the smallest is 1/34, above 1/k for k = 35), a full one 0x66 everywhere.
     #[test]
     fn city_alpha_follows_the_engines_formula() {
@@ -931,7 +1033,7 @@ mod tests {
         assert_eq!(px[3], 0x66, "a full colony shows its town of value 1");
     }
 
-    /// `Planet::Simulate`: drawn population rises 200 a second, snaps down, and a new owner's race waits for the
+    /// The drawn population (read from the executable, static) rises 200 a second, snaps down, and a new owner's race waits for the
     /// old one to fade out.
     #[test]
     fn drawn_population_eases_as_the_engine_does() {
@@ -1046,5 +1148,303 @@ mod tests {
             alpha: AlphaMode::Blend,
         };
         assert!(<super::PlanetMaterial as bevy::pbr::Material>::depth_bias(&m) < 0.0);
+    }
+
+    // ---- The city layers in a running app (RND-12) ----
+
+    /// An uncompressed top-left 32-bit TGA of our own, for the test mount.
+    fn tga(w: u16, h: u16, rgba: &[u8]) -> Vec<u8> {
+        let mut out = vec![0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        out.extend([w as u8, (w >> 8) as u8, h as u8, (h >> 8) as u8, 32, 0x28]);
+        for px in rgba.chunks_exact(4) {
+            out.extend([px[2], px[1], px[0], px[3]]);
+        }
+        out
+    }
+
+    /// A mount holding race `TEST`'s textures: a white development picture and a 2x2 alloc picture whose texels have the
+    /// values 1.0, 140/255, 0.8 and 0.0.
+    fn city_mount(tag: &str) -> sta_vfs::Vfs {
+        let dir = std::env::temp_dir().join(format!("sta64-rnd12-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("textures")).unwrap();
+        let white = [255u8; 16];
+        let alloc: Vec<u8> = [255u8, 140, 204, 0].iter().flat_map(|&v| [v, v, v, 255]).collect();
+        for h in 1..=2 {
+            std::fs::write(dir.join(format!("textures/PD_TEST{h}.tga")), tga(2, 2, &white)).unwrap();
+            std::fs::write(dir.join(format!("textures/PD_TESTalloc{h}.tga")), tga(2, 2, &alloc)).unwrap();
+        }
+        let mut vfs = sta_vfs::Vfs::default();
+        vfs.push_dir("test".into(), dir).unwrap();
+        vfs
+    }
+
+    fn test_races() -> super::CityRaces {
+        let (races, _) = sta_content::Races::load_with(&mut |name, version| match (name.trim_end_matches(".odf"), version) {
+            ("races", 0) => Some("numberofraces=1\nrace0=a".into()),
+            ("a", 0) => Some("name=fx\ncityTextureName=\"TEST\"\nnumCities=10.0".into()),
+            _ => None,
+        });
+        super::CityRaces::from_loader(&races, &mut |name, version| match (name.trim_end_matches(".odf"), version) {
+            ("a", 0) => Some("name=fx\ncityTextureName=\"TEST\"\nnumCities=10.0".into()),
+            _ => None,
+        })
+    }
+
+    struct Held(std::sync::Arc<sta_sim::WorldView>);
+
+    impl sta_sim::WorldSource for Held {
+        fn view(&self) -> std::sync::Arc<sta_sim::WorldView> {
+            self.0.clone()
+        }
+        fn step(&mut self, _: &[sta_sim::command::Command]) -> sta_sim::TickOutput {
+            sta_sim::TickOutput { view: self.0.clone(), events: Vec::new() }
+        }
+    }
+
+    fn city_app(tag: &str, first: sta_sim::WorldView) -> App {
+        use super::*;
+        let mut app = App::new();
+        app.add_plugins(bevy::asset::AssetPlugin::default())
+            .init_asset::<Image>()
+            .init_asset::<Mesh>()
+            .init_asset::<PlanetMaterial>()
+            .init_resource::<crate::render::textures::TextureCache>()
+            .insert_resource(test_races())
+            .insert_resource(crate::viewer::Mounted(city_mount(tag)))
+            .insert_resource(crate::clock::AnimClock::new(crate::clock::ClockMode::Wall, 1))
+            .insert_resource(crate::sim_link::SimLink::new(Box::new(Held(std::sync::Arc::new(first))), Box::new(sta_sim::command::LocalRouter::new()), sta_sim::PlayerId(0)))
+            .add_systems(Update, update_cities);
+        let mut materials = app.world_mut().resource_mut::<Assets<PlanetMaterial>>();
+        let ground: Vec<_> = (0..2)
+            .map(|_| {
+                materials.add(PlanetMaterial { params: base_params(), texture: None, albedo: None, relief: None, clouds: None, city: None, alpha: AlphaMode::Opaque })
+            })
+            .collect();
+        app.world_mut().spawn((
+            PlanetColony(sta_sim::EntityId(5)),
+            PlanetBody { materials: ground.clone(), ground, shell: None, ground_name: String::new(), atmo_name: String::new(), applied: None, radius: 1.0 },
+        ));
+        app.update();
+        app
+    }
+
+    fn feed(app: &mut App, view: sta_sim::WorldView) {
+        app.world_mut().resource_mut::<crate::sim_link::SimLink>().feed(std::sync::Arc::new(view));
+    }
+
+    /// One frame in which the sim ran `ticks` ticks.
+    fn frame(app: &mut App, ticks: u32) {
+        let mut clock = app.world_mut().resource_mut::<crate::clock::AnimClock>();
+        clock.advance_idle(1.0 / 30.0 * ticks.max(1) as f64);
+        for _ in 0..ticks {
+            clock.ticked();
+        }
+        app.update();
+    }
+
+    fn drawn(app: &mut App) -> super::Drawn {
+        app.world_mut().query::<&super::PlanetCities>().single(app.world()).unwrap().drawn.clone()
+    }
+
+    fn layer_entities(app: &mut App) -> Vec<Entity> {
+        app.world_mut().query::<&super::PlanetCities>().single(app.world()).unwrap().layers.iter().map(|l| l.entity).collect()
+    }
+
+    fn layer_image(app: &mut App, h: usize) -> Option<Handle<Image>> {
+        app.world_mut().query::<&super::PlanetCities>().single(app.world()).unwrap().layers[h].alloc.clone()
+    }
+
+    fn visible(app: &App, e: Entity) -> bool {
+        *app.world().get::<Visibility>(e).unwrap() == Visibility::Inherited
+    }
+
+    fn fx(pop: i32) -> sta_sim::WorldView {
+        view_with(sta_sim::PlayerId(1), Some(pop), Some("fx"))
+    }
+
+    /// The first sight of a colony draws it as it is (the coordinator's decision: a loaded save or a joined game does
+    /// not fill in); the layers are made, hidden until painted, and painted with the alloc picture's texels for that
+    /// population.
+    #[test]
+    fn a_colony_seen_for_the_first_time_is_drawn_as_it_is() {
+        let mut app = city_app("first", fx(2500));
+        let layers = layer_entities(&mut app);
+        assert_eq!(layers.len(), 2);
+        assert!(layers.iter().all(|&e| !visible(&app, e)), "hidden until painted");
+        frame(&mut app, 0);
+        assert_eq!(drawn(&mut app), super::Drawn { race: Some("fx".into()), pop: 2500.0 }, "no fill-in at first sight");
+        assert!(layers.iter().all(|&e| visible(&app, e)));
+        // P = 2500 / 5000 + 1 / 10 = 0.6: value 1.0 and 0.8 are off, 140/255 is mid-ramp, 0 is fully on (0x66).
+        for h in 0..2 {
+            let handle = layer_image(&mut app, h).unwrap();
+            let img = app.world().resource::<Assets<Image>>().get(&handle).unwrap();
+            let data = img.data.clone().unwrap();
+            assert_eq!(data, vec![255, 255, 255, 0, 255, 255, 255, 52, 255, 255, 255, 0, 255, 255, 255, 0x66]);
+            let layer = app.world_mut().query::<&super::PlanetCities>().single(app.world()).unwrap().layers[h].material.clone();
+            let m = app.world().resource::<Assets<super::PlanetMaterial>>();
+            assert!(m.get(&layer).unwrap().texture.is_some() && m.get(&layer).unwrap().city.is_some());
+        }
+    }
+
+    /// A colony founded while the planet is watched fills in at 200 a second of simulation time.
+    #[test]
+    fn a_colony_founded_while_watched_fills_in_gradually() {
+        let mut app = city_app("founded", fx(0));
+        frame(&mut app, 0);
+        assert_eq!(drawn(&mut app).pop, 0.0);
+        let layers = layer_entities(&mut app);
+        assert!(layers.iter().all(|&e| !visible(&app, e)), "nothing to show at population 0");
+        feed(&mut app, fx(1000));
+        frame(&mut app, 30);
+        assert_eq!(drawn(&mut app).pop, 200.0);
+        assert!(layers.iter().all(|&e| visible(&app, e)));
+        frame(&mut app, 30);
+        assert_eq!(drawn(&mut app).pop, 400.0);
+    }
+
+    /// An unowned planet seen first, colonized later: still no snap, it fills in.
+    #[test]
+    fn a_neutral_planet_colonized_later_fills_in() {
+        let mut app = city_app("neutral", view_with(sta_sim::world::NEUTRAL, None, None));
+        frame(&mut app, 0);
+        assert_eq!(drawn(&mut app), super::Drawn::default());
+        feed(&mut app, fx(3000));
+        frame(&mut app, 30);
+        assert_eq!(drawn(&mut app).pop, 200.0, "no snap: it rises by one step");
+        frame(&mut app, 30);
+        assert_eq!(drawn(&mut app).pop, 400.0);
+    }
+
+    /// Simulation time, not wall time: no rise while the sim is paused (wall time runs on), double speed rises twice
+    /// as fast per wall second.
+    #[test]
+    fn the_drawn_population_follows_simulation_time() {
+        let mut app = city_app("simtime", fx(0));
+        frame(&mut app, 0);
+        feed(&mut app, fx(4000));
+        for _ in 0..5 {
+            frame(&mut app, 0);
+        }
+        assert_eq!(drawn(&mut app).pop, 0.0, "paused: five wall frames of one tick's length each, no rise");
+        // A wall second at normal speed (30 ticks) and at double speed (60 ticks).
+        frame(&mut app, 30);
+        assert_eq!(drawn(&mut app).pop, 200.0);
+        frame(&mut app, 60);
+        assert_eq!(drawn(&mut app).pop, 600.0, "double speed rises twice as fast");
+    }
+
+    /// A planet that is gone from the view loses its lights, and its next first sight snaps again.
+    #[test]
+    fn a_planet_that_leaves_the_view_hides_its_cities() {
+        let mut app = city_app("gone", fx(2500));
+        frame(&mut app, 0);
+        let layers = layer_entities(&mut app);
+        assert!(layers.iter().all(|&e| visible(&app, e)));
+        feed(&mut app, sta_sim::WorldView::default());
+        frame(&mut app, 0);
+        assert!(layers.iter().all(|&e| !visible(&app, e)));
+        assert_eq!(drawn(&mut app), super::Drawn::default());
+        feed(&mut app, fx(4000));
+        frame(&mut app, 0);
+        assert_eq!(drawn(&mut app).pop, 4000.0, "snaps again");
+        assert!(layers.iter().all(|&e| visible(&app, e)));
+    }
+
+    /// A repaint whose texels are the same uploads nothing; a different one does.
+    #[test]
+    fn an_unchanged_picture_is_not_uploaded_again() {
+        let mut app = city_app("upload", fx(2500));
+        frame(&mut app, 0);
+        let handle = layer_image(&mut app, 0).unwrap();
+        let sentinel = vec![7u8; 16];
+        app.world_mut().resource_mut::<Assets<Image>>().get_mut(&handle).unwrap().data = Some(sentinel.clone());
+        feed(&mut app, fx(2501));
+        frame(&mut app, 1);
+        assert_eq!(drawn(&mut app).pop, 2501.0);
+        assert_eq!(app.world().resource::<Assets<Image>>().get(&handle).unwrap().data, Some(sentinel), "same texels: skipped");
+        feed(&mut app, fx(1000));
+        frame(&mut app, 1);
+        assert_ne!(app.world().resource::<Assets<Image>>().get(&handle).unwrap().data.as_deref(), Some(&[7u8; 16][..]), "other texels: uploaded");
+    }
+
+    /// The remount drops the cached alloc pictures.
+    #[test]
+    fn a_new_mount_repaints_from_the_new_pictures() {
+        let mut app = city_app("remount", fx(2500));
+        frame(&mut app, 0);
+        let handle = layer_image(&mut app, 0).unwrap();
+        let sentinel = vec![7u8; 16];
+        app.world_mut().resource_mut::<Assets<Image>>().get_mut(&handle).unwrap().data = Some(sentinel);
+        app.world_mut().resource_mut::<crate::viewer::Mounted>().set_changed();
+        frame(&mut app, 0);
+        assert_ne!(app.world().resource::<Assets<Image>>().get(&handle).unwrap().data.as_deref(), Some(&[7u8; 16][..]));
+    }
+
+    /// Races sharing a key answer as `Races::get` does: the playable one, whatever the file order.
+    #[test]
+    fn a_shared_race_key_prefers_the_playable_definition() {
+        let load = |name: &str, version: usize| -> Option<String> {
+            if version != 0 {
+                return None;
+            }
+            match name.trim_end_matches(".odf") {
+                "races" => Some("numberofraces=2\nrace0=observer\nrace1=federation".into()),
+                "observer" => Some("name=federation\ncityTextureName=\"OBS\"".into()),
+                "federation" => Some("name=federation\ninstantActionSlot=2\ncityTextureName=\"ECFR\"\nnumCities=35.0".into()),
+                _ => None,
+            }
+        };
+        let (races, _) = sta_content::Races::load_with(&mut |n, v| load(n, v));
+        let cities = super::CityRaces::from_loader(&races, &mut |n, v| load(n, v));
+        assert_eq!(cities.get("federation").map(|c| c.texture.as_str()), Some("ECFR"));
+        assert_eq!(cities.get("observer").map(|c| c.texture.as_str()), Some("OBS"), "the stem first");
+    }
+
+    #[test]
+    fn the_first_sight_snaps_only_an_owned_planet() {
+        let mut d = super::Drawn::default();
+        d.snap(None, 900.0);
+        assert_eq!(d, super::Drawn::default());
+        d.snap(Some("fx"), 900.0);
+        assert_eq!((d.race.as_deref(), d.pop), (Some("fx"), 900.0));
+    }
+
+    #[test]
+    fn simulation_time_is_the_ticks_since_the_last_frame() {
+        let mut last = None;
+        assert_eq!(super::sim_dt(&mut last, 100), 0.0);
+        assert_eq!(super::sim_dt(&mut last, 100), 0.0, "paused");
+        assert!((super::sim_dt(&mut last, 130) - 1.0).abs() < 1e-6);
+        assert_eq!(super::sim_dt(&mut last, 5), 0.0, "a new map starts the counter again");
+        assert!((super::sim_dt(&mut last, 35) - 1.0).abs() < 1e-6);
+    }
+
+    /// The hemisphere meshes are front-facing from inside (Bevy culls back faces, so a planet draws the far wall of its
+    /// sphere), which is why the city layer sits just inside the ground (`CITY_RADIUS`). If the winding is ever fixed,
+    /// this test fails: move the layer outside the ground then.
+    #[test]
+    fn hemisphere_meshes_face_inward_and_the_city_layer_sits_inside_the_ground() {
+        use bevy::mesh::{Indices, VertexAttributeValues};
+        let mesh = crate::render::space::sphere(0, 2, 2, 1.0);
+        let Some(VertexAttributeValues::Float32x3(pos)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else { panic!("positions") };
+        let Some(Indices::U32(idx)) = mesh.indices() else { panic!("indices") };
+        let mut inward = 0;
+        let mut outward = 0;
+        for t in idx.chunks_exact(3) {
+            let [a, b, c] = [t[0], t[1], t[2]].map(|i| Vec3::from(pos[i as usize]));
+            let n = (b - a).cross(c - a);
+            if n.length() < 1e-9 {
+                continue;
+            }
+            // Counter-clockwise is front in Bevy: the front's normal is `n`.
+            if n.dot(a + b + c) < 0.0 {
+                inward += 1;
+            } else {
+                outward += 1;
+            }
+        }
+        assert!(inward > 0 && outward == 0, "inward {inward}, outward {outward}");
+        const { assert!(super::CITY_RADIUS < 1.0) };
     }
 }

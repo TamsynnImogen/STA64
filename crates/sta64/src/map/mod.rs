@@ -1600,6 +1600,25 @@ mod tests {
         assert_eq!(Placed(m.clone()).rest_where(keep_neutral), vec![EntityId(2)]);
         assert_eq!(Placed(m).rest(), vec![EntityId(1), EntityId(2)]);
     }
+    /// The planet's tag is the entity `take` would take, left in place: by definition, place and owner, a neutral
+    /// entity standing in for an owned object, and nothing for another place (RND-12).
+    #[test]
+    fn peek_finds_the_entity_take_would_take_and_leaves_it() {
+        let key = ContentKey::NONE;
+        let at = |x: f32| sta_bzn::MapObject { team: 0, transform: { let mut t = [0.0; 12]; t[9] = x; t }, ..Default::default() };
+        let place = [SimVec3::from_f32([3.0, 0.0, 0.0]).x, Fixed::ZERO, Fixed::ZERO];
+        let mut m = HashMap::new();
+        m.insert((key, place, sta_sim::world::NEUTRAL), std::collections::VecDeque::from([EntityId(7), EntityId(8)]));
+        let mut placed = Placed(m);
+        assert_eq!(placed.peek(key, &at(3.0)), Some(EntityId(7)));
+        assert_eq!(placed.peek(key, &at(3.0)), Some(EntityId(7)), "peeking takes nothing");
+        assert_eq!(placed.peek(key, &at(4.0)), None);
+        let owned = sta_bzn::MapObject { team: 2, ..at(3.0) };
+        assert_eq!(placed.peek(key, &owned), Some(EntityId(7)), "the neutral entity stands in for an owned object");
+        assert_eq!(placed.take(key, &at(3.0)), Some(EntityId(7)));
+        assert_eq!(placed.peek(key, &at(3.0)), Some(EntityId(8)), "after take the next one");
+    }
+
     use sta_sim::command::{Command, CommandKind, Edit, Order};
     use sta_sim::WorldSource;
 
