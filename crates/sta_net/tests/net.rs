@@ -101,6 +101,10 @@ fn expect_quiet(t: &mut NetTransport, for_: Duration) {
 struct Proxy {
     addr: SocketAddr,
     hold: Arc<AtomicBool>,
+    /// Bytes read from a side / written to the other side, over all
+    /// connections and both directions (stall diagnostics only).
+    read: Arc<AtomicU64>,
+    written: Arc<AtomicU64>,
 }
 
 impl Proxy {
@@ -110,6 +114,9 @@ impl Proxy {
         let latency = Arc::new(AtomicU64::new(latency_ms));
         let hold = Arc::new(AtomicBool::new(false));
         let (l, h) = (latency.clone(), hold.clone());
+        let read = Arc::new(AtomicU64::new(0));
+        let written = Arc::new(AtomicU64::new(0));
+        let (r2, w2) = (read.clone(), written.clone());
         thread::spawn(move || {
             while let Ok((client, _)) = listener.accept() {
                 let Ok(server) = TcpStream::connect(target) else {
@@ -120,17 +127,29 @@ impl Proxy {
                     (server, client),
                 ] {
                     let (l, h) = (l.clone(), h.clone());
-                    pump(from, to, l, h);
+                    pump(from, to, l, h, r2.clone(), w2.clone());
                 }
             }
         });
-        Proxy { addr, hold }
+        Proxy {
+            addr,
+            hold,
+            read,
+            written,
+        }
     }
 }
 
 /// One direction: bytes are written no earlier than `latency` after they were
 /// read, in order, and not at all while `hold` is set.
-fn pump(mut from: TcpStream, mut to: TcpStream, latency: Arc<AtomicU64>, hold: Arc<AtomicBool>) {
+fn pump(
+    mut from: TcpStream,
+    mut to: TcpStream,
+    latency: Arc<AtomicU64>,
+    hold: Arc<AtomicBool>,
+    read: Arc<AtomicU64>,
+    written: Arc<AtomicU64>,
+) {
     let (tx, rx) = mpsc::channel::<(Instant, Vec<u8>)>();
     thread::spawn(move || {
         let mut buf = [0u8; 8192];
@@ -138,6 +157,7 @@ fn pump(mut from: TcpStream, mut to: TcpStream, latency: Arc<AtomicU64>, hold: A
             if n == 0 {
                 break;
             }
+            read.fetch_add(n as u64, Ordering::SeqCst);
             let due = Instant::now() + Duration::from_millis(latency.load(Ordering::SeqCst));
             if tx.send((due, buf[..n].to_vec())).is_err() {
                 break;
@@ -152,6 +172,7 @@ fn pump(mut from: TcpStream, mut to: TcpStream, latency: Arc<AtomicU64>, hold: A
             if to.write_all(&bytes).is_err() {
                 break;
             }
+            written.fetch_add(bytes.len() as u64, Ordering::SeqCst);
         }
         let _ = to.shutdown(std::net::Shutdown::Both);
     });
@@ -202,6 +223,11 @@ struct Game {
     seq: [u32; 256],
     stalls: u64,
     issued: Vec<Option<Tick>>,
+    /// Per peer: what its last `step` returned, and how many ticks it ran.
+    last_step: Vec<String>,
+    ticks_run: Vec<u64>,
+    /// Proxies whose byte counters the stall message reports: (label, read, written).
+    watched: Vec<(String, Arc<AtomicU64>, Arc<AtomicU64>)>,
 }
 
 /// `proxies[i]` (if any) is the address peer `i` uses instead of the relay's.
@@ -236,6 +262,9 @@ fn game(relay: SocketAddr, st: &Start, proxies: &[Option<SocketAddr>]) -> Game {
         seq: [0; 256],
         stalls: 0,
         issued: vec![None; n],
+        last_step: vec!["never stepped".to_owned(); n],
+        ticks_run: vec![0; n],
+        watched: Vec::new(),
     }
 }
 
@@ -301,6 +330,43 @@ impl Game {
         });
     }
 
+    /// Has the stall message report `proxy`'s forwarded byte counters.
+    fn watch(&mut self, label: &str, proxy: &Proxy) {
+        self.watched.push((label.to_owned(), proxy.read.clone(), proxy.written.clone()));
+    }
+
+    /// Per peer: tick, the last step outcome, router state and connection
+    /// state; per watched proxy: bytes read and written. For the panic message
+    /// of a stalled run, so a transport stall can be told from a router one.
+    fn stall_report(&self, target: Tick, live: &[usize]) -> String {
+        let mut out = format!("target tick {target}\n");
+        for &i in live {
+            let peer = &self.peers[i];
+            let router = peer.router();
+            let seats: Vec<String> = (0..self.peers.len() as u8)
+                .map(|s| format!("{s}:{:?}", router.last_record(PlayerId(s))))
+                .collect();
+            out.push_str(&format!(
+                "peer {i}: tick {} ({} run here), last step: {}, next turn {}, waiting on {:?}, last record per seat [{}], connection closed: {:?}\n",
+                peer.tick(),
+                self.ticks_run[i],
+                self.last_step[i],
+                router.next_turn(),
+                router.waiting_on(),
+                seats.join(" "),
+                self.controls[i].close_reason(),
+            ));
+        }
+        for (label, read, written) in &self.watched {
+            out.push_str(&format!(
+                "proxy {label}: {} bytes read, {} bytes written\n",
+                read.load(Ordering::SeqCst),
+                written.load(Ordering::SeqCst)
+            ));
+        }
+        out
+    }
+
     /// Steps `live` peers (all when empty) to `target`, sleeping a little when
     /// none can move so the sockets get a turn.
     fn run_to(&mut self, target: Tick, live: &[usize], orders: bool) {
@@ -321,9 +387,14 @@ impl Game {
                         self.order(i);
                     }
                     match self.peers[i].step() {
-                        StepOutcome::Ran { .. } => progress = true,
-                        StepOutcome::Stalled { .. } => {
+                        StepOutcome::Ran { tick, .. } => {
+                            progress = true;
+                            self.ticks_run[i] += 1;
+                            self.last_step[i] = format!("Ran to tick {tick}");
+                        }
+                        StepOutcome::Stalled { waiting } => {
                             self.stalls += 1;
+                            self.last_step[i] = format!("Stalled, waiting {waiting:?}");
                             break;
                         }
                         StepOutcome::Halted => panic!("peer {i} halted: a desync"),
@@ -331,7 +402,11 @@ impl Game {
                 }
             }
             if !progress {
-                assert!(Instant::now() < end, "no progress within {WAIT:?}");
+                assert!(
+                    Instant::now() < end,
+                    "no progress within {WAIT:?}\n{}",
+                    self.stall_report(target, &live)
+                );
                 thread::sleep(Duration::from_millis(1));
             }
         }
@@ -404,6 +479,8 @@ fn injected_latency_stalls_but_never_diverges() {
         &start(3, 3, 2),
         &[None, Some(p1.addr), Some(p2.addr)],
     );
+    g.watch("peer 1 (60 ms)", &p1);
+    g.watch("peer 2 (25 ms)", &p2);
     g.spawn_forces(2);
     g.run_to(1_200, &[], true);
     g.assert_in_sync(&[0, 1, 2]);
