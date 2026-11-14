@@ -17,7 +17,9 @@ fn db(a1: bool) -> Arc<ContentDb> {
     for u in fake.units().cloned() {
         b = b.unit(u);
     }
-    b = b.unit(UnitDef::new("fx_gate", "wormhole_obj"));
+    let mut gate = UnitDef::new("fx_gate", "wormhole_obj");
+    gate.hull = Fixed::from_int(500);
+    b = b.unit(gate);
     Arc::new(b.build().unwrap())
 }
 
@@ -98,39 +100,48 @@ fn the_same_run_gives_the_same_digest() {
 fn map_with_gates() -> sta_content::MapDef {
     let mut map = sta_content::MapDef::empty();
     let h = (Fixed::ONE, Fixed::ZERO);
-    for (i, (x, z)) in [(1000, 0), (5000, 5000)].into_iter().enumerate() {
+    for (i, (x, z)) in [(1000, 0), (5000, 5000), (-3000, 0), (-3000, 4000)].into_iter().enumerate() {
         map.objects.push(sta_content::MapObject { odf: "fx_gate".into(), owner: None, pos: v(x, z), heading: h, label: Some(format!("Gate{i}")) });
     }
     map
 }
 
-#[test]
-fn map_gates_are_neutral_props_found_by_label_and_never_damaged() {
-    let d = db(true);
+fn gate_world(d: &Arc<ContentDb>) -> (Sim, Vec<EntityId>) {
     let seat = PlayerSetup { id: PlayerId(1), team: TeamId(1), race: "fx".into(), control: Control::Idle };
-    let mut sim = Sim::from_setup(&GameSetup { seed: 3, map: Arc::new(map_with_gates()), content: Arc::clone(&d), players: vec![seat], options: GameOptions::default() });
-    let ids: Vec<EntityId> = (0..2).map(|i| sim.labels.iter().find(|(_, l)| l.as_str() == format!("Gate{i}")).map(|(id, _)| id).expect("label resolves")).collect();
+    let sim = Sim::from_setup(&GameSetup { seed: 3, map: Arc::new(map_with_gates()), content: Arc::clone(d), players: vec![seat], options: GameOptions::default() });
+    let ids = (0..4).map(|i| sim.labels.iter().find(|(_, l)| l.as_str() == format!("Gate{i}")).map(|(id, _)| id).expect("label resolves")).collect();
+    (sim, ids)
+}
+
+#[test]
+fn map_gates_are_neutral_props_found_by_label() {
+    let d = db(true);
+    let (sim, ids) = gate_world(&d);
     for &id in &ids {
         let u = sim.units.get(id).unwrap();
         assert_eq!((u.kind, u.owner), (crate::world::EntityKind::Prop, crate::world::NEUTRAL));
     }
-    let before: Vec<_> = ids.iter().map(|&id| sim.units.get(id).unwrap().hull).collect();
-    // A cruiser of seat 1 beside the gate, left to fight whatever is near: nothing hurts a gate.
-    let cruiser = d.key("fx_cruiser").unwrap();
-    sim.spawn_def(cruiser, PlayerId(1), v(1100, 0), (Fixed::ONE, Fixed::ZERO)).unwrap();
-    for _ in 0..30 * 20 {
-        sim.step(&[]);
-    }
-    let after: Vec<_> = ids.iter().map(|&id| sim.units.get(id).map(|u| u.hull)).collect();
-    assert_eq!(after, before.into_iter().map(Some).collect::<Vec<_>>());
 }
 
 #[test]
-fn map_gates_pair_in_map_order_like_any_gates() {
+fn an_explicit_attack_does_not_hurt_a_gate_with_hull() {
     let d = db(true);
-    let seat = PlayerSetup { id: PlayerId(1), team: TeamId(1), race: "fx".into(), control: Control::Idle };
-    let sim = Sim::from_setup(&GameSetup { seed: 3, map: Arc::new(map_with_gates()), content: Arc::clone(&d), players: vec![seat], options: GameOptions::default() });
-    let pairs = sim.gate_pairs();
-    assert_eq!(pairs.len(), 2);
-    assert_eq!((pairs[0].0, pairs[0].1), (pairs[1].1, pairs[1].0));
+    let (mut sim, ids) = gate_world(&d);
+    let cruiser = d.key("fx_cruiser").unwrap();
+    let c = sim.spawn_def(cruiser, PlayerId(1), v(1100, 0), (Fixed::ONE, Fixed::ZERO)).unwrap();
+    let hull = sim.units.get(ids[0]).unwrap().hull;
+    assert!(hull[0] > Fixed::ZERO);
+    let attack = Command { player: PlayerId(1), seq: 1, kind: CommandKind::Order(Order::Attack { units: vec![c], target: ids[0] }) };
+    sim.step(&[attack]);
+    for _ in 0..30 * 20 {
+        sim.step(&[]);
+    }
+    assert_eq!(sim.units.get(ids[0]).map(|u| u.hull), Some(hull));
+}
+
+#[test]
+fn map_gates_pair_in_map_order() {
+    let d = db(true);
+    let (sim, g) = gate_world(&d);
+    assert_eq!(sim.gate_pairs(), [(g[0], g[1]), (g[1], g[0]), (g[2], g[3]), (g[3], g[2])]);
 }
