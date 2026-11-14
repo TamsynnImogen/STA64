@@ -366,6 +366,18 @@ def first_unsupported(r):
     return names[0] if names else None
 
 
+def absent_path_notes(rows):
+    """Uncounted notes (LUA-18): path names a call looked up that the map does not have, or
+    points out of range. The engine does nothing there, so they are not `unsupported`; a
+    typo or a partial map fill shows up here."""
+    notes = collections.Counter()
+    for r in rows:
+        for k, _ in r.get("absent_paths") or []:
+            notes[f"{r['bzn'].rsplit('.', 1)[0]}: {k}"] += 1
+    return ["", "Path lookups that found nothing (engine does nothing; not counted as unsupported):", ""] + \
+        [f"- {k}" for k in sorted(notes)] if notes else ["", "Path lookups that found nothing: none"]
+
+
 def render_converted(rows, ticks, standin, game="a2"):
     if game == "a1":
         return render_converted_a1(rows, ticks, standin)
@@ -388,6 +400,7 @@ def render_converted(rows, ticks, standin, game="a2"):
             ranked[name] += 1
     out += ["", "Calls that were unbound or raised, by missions affected:", ""]
     out += [f"- {c}: `{k}`" for k, c in ranked.most_common(40)] or ["- none"]
+    out += absent_path_notes(rows)
     return "\n".join(out) + "\n"
 
 
@@ -419,6 +432,7 @@ def render_converted_a1(rows, ticks, standin):
     out += [f"- {c}: `{k}`" for k, c in ranked.most_common(40)] or ["- none"]
     out += ["", "Bound calls with no seam (counted, no effect), by missions affected:", ""]
     out += [f"- {c}: `{k}`" for k, c in unsup.most_common(40)] or ["- none"]
+    out += absent_path_notes(rows)
     return "\n".join(out) + "\n"
 
 

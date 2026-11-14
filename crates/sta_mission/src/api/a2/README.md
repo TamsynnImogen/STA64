@@ -572,6 +572,12 @@ constants. Orders are sent as the unit's owner; edits are SCRIPT edits.
   engine.
 - Path names are looked up exactly first, else by the one key that matches
   ignoring case; two such keys are an error (`dll_objects::lookup_path`).
+  A name the map does not have (stock scripts name paths of other maps; read
+  from data) is the engine's null lookup (read from the executable, static):
+  `Goto`, `Patrol` and `PointAt` do nothing, `BuildObject` returns 0 and
+  `GetLocation(path, i)` returns the default vector (also for a point out of
+  range; the vector's value is not measured, `ABSENT_PATH_LOCATION`, zero). None
+  of these is counted. Other path calls keep raising and counting (LUA-18).
 - `GetNearestEnemy(unit, r)`: nearest enemy by XZ distance inside the square
   of half side `r` that can see the unit; 0 if none. `GetAttackLocation(a, b)`:
   the point of `a`'s bounding sphere (`UnitDef::radius`) toward `b`, or one

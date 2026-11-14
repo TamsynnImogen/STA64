@@ -551,6 +551,12 @@ impl MissionRuntime {
         out
     }
 
+    /// Path lookups that found no such path or point (LUA-18), with counts ascending by
+    /// name. The engine does nothing there, so they are not [`MissionRuntime::unsupported`].
+    pub fn absent_paths(&self) -> Vec<(String, u32)> {
+        self.inner.ctx.borrow().absent_paths.iter().map(|(k, v)| (k.clone(), *v)).collect()
+    }
+
     /// Unsupported API encounters, with counts ascending by name. Includes
     /// accepted operations with no effect and permissive fallback lookups
     /// (`stub global <name>` / `stub field <path>`). Lookup counts are not

@@ -89,7 +89,11 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
         let p = if ov == 0 {
             e.unit("GetLocation", a[0].id())?.pos
         } else {
-            e.path_point(lua, "GetLocation", a[0].text(), a[1].int())?
+            // An absent path or point: the engine returns a fixed default vector.
+            match e.find_path_point(lua, "GetLocation", a[0].text(), a[1].int())? {
+                Some(p) => p,
+                None => return Ok(Value::Table(vector(lua, crate::api::ABSENT_PATH_LOCATION)?)),
+            }
         };
         Ok(Value::Table(vector(lua, pos_f64(p))?))
     })?)?;
