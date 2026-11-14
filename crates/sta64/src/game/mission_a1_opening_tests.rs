@@ -147,7 +147,7 @@ fn install_gated_a1_fed1_opening_runs_in_the_original_order_and_hands_over_after
     assert!(secs(fade_in) < 0.5, "{}", secs(fade_in));
     near("music Mfed25", secs(sound("Mfed25.wav").expect("the music is requested")), 0.0);
     // The voice line starts after the first shot, and the audio layer found the clip lengths.
-    let log_at = secs(sound("F1PIC1.wav").expect("Picard's log is requested"));
+    let log_at = secs(sound("F1PIC1.wav").expect("the voice line is requested"));
     assert!(log_at > 5.0, "the voice line comes after the first shot: {log_at}");
     let (music_len, log_len) = (f64::from(length("Mfed25.wav")), f64::from(length("F1PIC1.wav")));
     assert!(music_len > 1.0 && log_len > 1.0, "clip lengths {music_len} / {log_len}");
@@ -186,7 +186,7 @@ fn install_gated_a1_fed1_opening_runs_in_the_original_order_and_hands_over_after
 #[test]
 fn install_gated_a1_fed1_opening_skipped_with_space_ends_without_a_late_black_screen() {
     let Some(mut run) = drive(0.0) else { return };
-    // Space at 30 s, in the middle of the voice line .
+    // Space at 30 s, in the middle of the voice line.
     while secs(run.frames.last().unwrap().tick) < 30.0 {
         run.app.update();
         let tick = run.app.world().resource::<SimLink>().curr().tick;

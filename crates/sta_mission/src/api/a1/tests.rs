@@ -471,7 +471,7 @@ fn a_delayed_fade_does_not_outlive_its_cineractive() {
     let s = scene();
     let (mut rt, commands) = run(
         &s,
-        "A1.CineractiveStart(); A1.FadeIn(7, 0, 0); log = A1.AudioMessage('log.wav'); A1.FadeOut(2, 25, 0); \
+        "A1.CineractiveStart(); A1.FadeIn(3, 0, 0); log = A1.AudioMessage('log.wav'); A1.FadeOut(4, 40, 0); \
          function done() return A1.IsAudioMessageDone(log) end",
     );
     let first = presented(&commands);
@@ -490,8 +490,8 @@ fn a_delayed_fade_does_not_outlive_its_cineractive() {
     rt.eval::<()>("A1.AudioMessageDone(1)").unwrap();
     assert!(rt.eval::<bool>("return done()").unwrap());
     rt.eval::<()>("A1.CineractiveEnd()").unwrap();
-    // The fade scheduled for 25 s is gone: nothing darkens the game at 25 s or later.
-    assert!(at(26, &mut rt).iter().all(|p| !matches!(p, Presentation::Fade { .. })));
+    // The fade scheduled for 40 s is gone: nothing darkens the game at 40 s or later.
+    assert!(at(41, &mut rt).iter().all(|p| !matches!(p, Presentation::Fade { .. })));
     assert!(at(60, &mut rt).iter().all(|p| !matches!(p, Presentation::Fade { .. })));
 }
 

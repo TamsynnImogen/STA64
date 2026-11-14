@@ -215,7 +215,7 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
         // The fade belongs to the cinematic view (`ScreenFade` is in that view's render list
         // only: read from the executable, static): one still waiting out its delay has no view
         // to darken once the cineractive is over, so it is dropped (it must not black out
-        // the game after a skip or an early end). Other delayed presentations stay.
+        // the game after a skip or an early end).
         e.ctx.borrow_mut().delayed.retain(|(_, p)| !matches!(p, Presentation::Fade { .. }));
         cineractive(lua, false)?;
         Ok(Value::Nil)

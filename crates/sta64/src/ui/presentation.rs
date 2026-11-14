@@ -1132,11 +1132,11 @@ mod tests {
     }
 
     fn a1_title(app: &mut App) {
-        send(app, Presentation::Title { id: 1, text: "'PREMONITIONS'".into(), subtitle: false, seconds: None });
+        send(app, Presentation::Title { id: 1, text: "'TITLE TEXT'".into(), subtitle: false, seconds: None });
         send(app, Presentation::Call { name: "A1.ShowTitle".into(), args: vec![Arg::Int(1), Arg::Int(0), Arg::Int(0), Arg::Int(200), Arg::Int(70), Arg::Bool(true)] });
     }
 
-    /// Federation 1's `ShowTitle(0, 0, 200, 70, "'PREMONITIONS'", true)`: blue, top-left, placed in
+    /// An A1 `ShowTitle(0, 0, 200, 70, text, true)`: blue, top-left, placed in
     /// fractions of the window's height (so a 21:9 window has the same margins in proportion to its
     /// height, no 4:3 box and no bars), fading in over a second.
     #[test]
@@ -1146,8 +1146,9 @@ mod tests {
         app.update();
         frozen(&mut app);
         a1_title(&mut app);
-        let at = a1_title_at([0.0, 0.0, 200.0, 70.0], "'PREMONITIONS'");
-        assert!((at.x - 63.0).abs() < 4.0 && (at.y - 29.5).abs() < 1.0, "{at:?}");
+        let at = a1_title_at([0.0, 0.0, 200.0, 70.0], "'TITLE TEXT'");
+        // Measured by the default font: 62 units wide, 10 high, centred in 200 x 70.
+        assert_eq!((at.x, at.y), (68.5, 29.5));
         let node = |app: &mut App| {
             let (n, c) = app.world_mut().query_filtered::<(&Node, &Children), Without<TitleLayer>>().iter(app.world()).find(|(n, _)| matches!(n.left, Val::Vh(_))).map(|(n, c)| (n.clone(), c.to_vec())).expect("the title node");
             (n, c)

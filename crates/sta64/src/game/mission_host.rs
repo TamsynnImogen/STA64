@@ -28,7 +28,10 @@
 //! answer, and the script it drives does not run again at all (D3), so only a *live* game depends
 //! on them. The same function reports an audio message finished when the audio layer has played
 //! its clip to the end ([`ScriptReply::SoundDone`]; at once when nothing plays it), so a script
-//! that waits for its message (A1 `IsAudioMessageDone`, A2 `ScriptWaits`) waits for the voice line. Evidence grade: A1 only (the opening ended during its voice line without it, measured headless); the same wait now applies to A2 and Fleet Ops messages, where it is *not measured* against the original.
+//! that waits for its message (A1 `IsAudioMessageDone`, A2 `ScriptWaits`) waits for the voice line.
+//! Grade: STA64 behaviour for the A1 opening, checked headless (without the wait the opening
+//! ended during its voice line). The same wait applies to A2 and Fleet Ops messages, which is
+//! *not measured* against the original games.
 //!
 //! # AI seats and the plans scripts load (AI-06)
 //!
