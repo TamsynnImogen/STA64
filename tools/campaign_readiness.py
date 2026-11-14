@@ -57,6 +57,14 @@ issued. `--label before|after` names the files in the detail directory
 (`converted-<label>.md/.json`). Progress is how far the converted script runs;
 no mission is playable until a real win is reached.
 
+`--converted a1|a2 --ending` (LUA-29) runs the ending check instead
+(`examples/ending_check.rs`, `sta_mission::ending`): three columns per mission, from a mid-mission
+state: (1) a forced win and a forced loss through the host-side mission end record (the cheat
+codes' rule, `sta_mission::cheat`) resolve to the right result with no new unbound or raising
+call and the campaign transition applies; (2) the script's own win steps and (3) its lose steps
+run to the scripted end. Files: `converted-<label>-<game>.md/.json`. See the module docs of
+`sta_mission::ending` for what each column does and does not prove.
+
 `--converted a1` does the same for Armada I (`--a1 DIR`): the missions are
 converted with `tools/a1_to_lua.py` (LUA-14) and the table adds the first
 call that was not decoded (`undecoded`) and the bound calls that have no seam
@@ -436,6 +444,111 @@ def render_converted_a1(rows, ticks, standin):
     return "\n".join(out) + "\n"
 
 
+
+# ------------------------------------------------------------ ending check (LUA-29)
+
+
+def ending_columns(r):
+    """(forced, win sequence, lose sequence) of one `ending_check` row: True / False / None (n/a)."""
+    if not r.get("started"):
+        return False, False, (False if r.get("calls_fail") else None)
+    fw, fl = r.get("forced_win"), r.get("forced_lose")
+    forced = bool(fw and fw["ok"]) and (fl is None or fl["ok"])
+    trunc = r.get("truncated") or [0, 0]
+    win = bool(r.get("win_seq")) and not trunc[0] and all(t["ok"] for t in r["win_seq"])
+    if not r.get("calls_fail") and not r.get("lose_entries"):
+        lose = None
+    else:
+        lose = bool(r.get("lose_seq")) and not trunc[1] and all(t["ok"] for t in r["lose_seq"])
+    return forced, win, lose
+
+
+def ending_funnel(rows):
+    n = collections.Counter()
+    for r in rows:
+        forced, win, lose = ending_columns(r)
+        n["missions"] += 1
+        n["started"] += bool(r.get("started"))
+        n["forced"] += forced
+        n["win"] += win
+        n["lose"] += lose is True
+        n["lose_na"] += lose is None
+        n["all"] += forced and win and lose is not False
+    return n
+
+
+def mark(v):
+    return "n/a" if v is None else "pass" if v else "FAIL"
+
+
+def trial_ticks(ts):
+    t = [x["ticks"] for x in ts if x["result"] is not None]
+    return "-" if not t else (str(t[0]) if min(t) == max(t) else f"{min(t)}-{max(t)}")
+
+
+def trial_problem(ts):
+    for t in ts:
+        if not t["ok"]:
+            g = ", ".join(t["gaps"][:2])
+            who = f"{t['action']}: " if t.get("action") else ""
+            return one_line(who + (g or t["note"] or "failed"), 110).replace("|", "/")
+    return ""
+
+
+def render_ending(rows, game, opts_note=""):
+    n = ending_funnel(rows)
+    name = "Armada I" if game == "a1" else "Armada II"
+    out = [f"Ending check, converted {name} missions, forced-end tick after the first objective{opts_note}", "",
+           "| missions | started | 1 forced result | 2 win sequence | 3 lose sequence | (no loss to run) | all columns |",
+           "|--:|--:|--:|--:|--:|--:|--:|",
+           f"| {n['missions']} | {n['started']} | {n['forced']} | {n['win']} | {n['lose']} | {n['lose_na']} | {n['all']} |", "",
+           "| mission | test tick | 1 forced win | 1 forced loss | 2 win seq | entries | ticks | 3 lose seq | entries | ticks | first problem |",
+           "|---|--:|---|---|---|--:|--:|---|--:|--:|---|"]
+    for r in sorted(rows, key=lambda r: r["bzn"]):
+        forced, win, lose = ending_columns(r)
+        fw, fl = r.get("forced_win"), r.get("forced_lose")
+        prob = ""
+        if not r.get("started"):
+            prob = one_line(r.get("start_error") or "does not start", 110).replace("|", "/")
+        else:
+            for label_, ts in (("forced win", [fw] if fw else []), ("forced loss", [fl] if fl else []),
+                               ("win", r.get("win_seq") or []), ("lose", r.get("lose_seq") or [])):
+                p = trial_problem(ts)
+                if p:
+                    prob = f"{label_}: {p}"
+                    break
+            if not prob and not r.get("win_seq"):
+                prob = "no win entry found"
+        out.append(f"| {r['bzn'].rsplit('.', 1)[0]} | {'-' if r.get('test_tick') is None else r['test_tick']} | "
+                   f"{mark(bool(fw and fw['ok'])) if fw else '-'} | {mark(bool(fl and fl['ok'])) if fl else 'n/a'} | "
+                   f"{mark(win)} | {len(r.get('win_seq') or [])} | {trial_ticks(r.get('win_seq') or [])} | "
+                   f"{mark(lose)} | {len(r.get('lose_seq') or [])} | {trial_ticks(r.get('lose_seq') or [])} | {prob} |")
+    gaps = collections.Counter()
+    for r in rows:
+        for ts in ([r.get("forced_win"), r.get("forced_lose")], r.get("win_seq") or [], r.get("lose_seq") or []):
+            for name_ in {g for t in ts if t for g in t["gaps"]}:
+                gaps[name_] += 1
+    out += ["", "Calls that were new gaps during an ending (unbound, raised or unsupported), by missions affected:", ""]
+    out += [f"- {c}: `{k}`" for k, c in gaps.most_common(40)] or ["- none"]
+    notes = [f"- {r['bzn'].rsplit('.', 1)[0]}: {x}" for r in rows for x in r.get("notes") or []]
+    if notes:
+        out += ["", "Notes:", ""] + notes
+    return "\n".join(out) + "\n"
+
+
+def main_ending(args, game, install, converted_dir):
+    cmd = [os.path.join(HERE, "agent-cargo"), "--light", "run", "-q", "-p", "sta_mission", "--example",
+           "ending_check", "--", "--install", install, "--converted", converted_dir, "--game", game]
+    if args.only:
+        cmd += ["--only", args.only]
+    if args.forced_only:
+        cmd.append("--forced-only")
+    p = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True)
+    if p.returncode != 0:
+        sys.exit(f"run failed ({p.returncode}):\n{p.stderr[-2000:]}")
+    return parse_rows(p.stdout)
+
+
 def main_converted(args):
     import shutil
     import tempfile
@@ -459,6 +572,18 @@ def main_converted(args):
         p = subprocess.run(cmd, capture_output=True, text=True)
         if p.returncode != 0:
             sys.exit(f"conversion failed ({p.returncode}):\n{p.stderr[-2000:]}")
+        if args.ending:
+            rows = main_ending(args, game, a2, out)
+            text = render_ending(rows, game, ", forced-only" if args.forced_only else "")
+            print(text + f"({time.time() - t0:.0f} s)")
+            os.makedirs(args.detail_dir, exist_ok=True)
+            stem = os.path.join(args.detail_dir, f"converted-{args.label}-{game}")
+            with open(stem + ".md", "w") as f:
+                f.write(text)
+            with open(stem + ".json", "w") as f:
+                json.dump({"game": game, "missions": rows}, f, indent=1)
+            print(f"detail: {stem}.md, {stem}.json")
+            return
         cmd = [os.path.join(HERE, "agent-cargo"), "--light", "run", "-q", "-p", "sta_mission", "--example",
                "converted_progress", "--", "--install", a2, "--converted", out, "--ticks", str(args.ticks)]
         if not args.no_standin:
@@ -596,6 +721,8 @@ def main(argv=None):
     ap.add_argument("--no-standin", action="store_true", help="--converted: no stand-in host (waits are never reported)")
     ap.add_argument("--label", default="latest", help="--converted: detail file label (converted-<label>.md)")
     ap.add_argument("--only", help="--converted: one mission (a2_fed01; fed1 for a1)")
+    ap.add_argument("--ending", action="store_true", help="--converted: the ending check (LUA-29) instead of the progress run; files converted-<label>-<game>.*")
+    ap.add_argument("--forced-only", action="store_true", help="--ending: only the forced results (column 1)")
     ap.add_argument("--keep-converted", help="--converted: convert into this directory and keep it")
     args = ap.parse_args(argv)
     if args.converted:

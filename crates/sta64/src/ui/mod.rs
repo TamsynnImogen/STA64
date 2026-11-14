@@ -13,4 +13,5 @@ pub mod radar;
 pub mod radar_fog;
 pub mod settings;
 pub mod display;
+pub mod graphics;
 pub mod sprite_font;
