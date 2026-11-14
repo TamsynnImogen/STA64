@@ -15,6 +15,7 @@ use crate::frontend::screens::{ActiveMod, Screen, ScreenData, ScreensCamera, Scr
 use crate::ui::profile::{UiProfile, UiProfilePlugin};
 
 fn capture(size: UVec2, name: &str, mod_title: Option<&str>, mounted: Option<sta_vfs::Vfs>, screen: Screen) {
+    let ingame = name.starts_with("ingame");
     let mut app = App::new();
     app.add_plugins(DefaultPlugins
         .set(WindowPlugin { primary_window: None, exit_condition: ExitCondition::DontExit, ..default() })
@@ -23,7 +24,7 @@ fn capture(size: UVec2, name: &str, mod_title: Option<&str>, mounted: Option<sta
         .disable::<bevy::winit::WinitPlugin>()
         .disable::<bevy::log::LogPlugin>());
     configure_sets(&mut app);
-    let scale = size.y as f32 / 1080.0;
+    let scale = if name.contains("compact") { 1.0 } else { size.y as f32 / 1080.0 };
     let mut data = ScreenData::fake();
     if let Some(title) = mod_title {
         data.mods[0].name = title.into();
@@ -35,7 +36,7 @@ fn capture(size: UVec2, name: &str, mod_title: Option<&str>, mounted: Option<sta
         .insert_resource(ActiveMod(mod_title.map(|_| "fx_balance".into())))
         .insert_resource(OptionsTab(if screen == Screen::Settings { 2 } else { 0 }))
         .insert_resource(ScreensConfig { own_camera: false, fit_scale: false, start: screen, ..default() })
-        .insert_state(AppState::FrontEnd)
+        .insert_state(if ingame { AppState::InGame } else { AppState::FrontEnd })
         .add_plugins(UiProfilePlugin);
     if let Some(vfs) = mounted {
         app.insert_resource(crate::viewer::Mounted(vfs));
@@ -43,10 +44,14 @@ fn capture(size: UVec2, name: &str, mod_title: Option<&str>, mounted: Option<sta
     let mut image = Image::new_target_texture(size.x, size.y, bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb, None);
     image.asset_usage = RenderAssetUsages::RENDER_WORLD;
     let target = app.world_mut().resource_mut::<Assets<Image>>().add(image);
-    let camera = app.world_mut().spawn((Camera2d,
+    let camera = app.world_mut().spawn((Camera2d, bevy::ui::IsDefaultUiCamera,
         Camera { clear_color: ClearColorConfig::Custom(Color::BLACK), ..default() },
         RenderTarget::from(target.clone()), Msaa::Off)).id();
     app.insert_resource(ScreensCamera(camera)).add_plugins(ScreensPlugin);
+    if ingame {
+        app.add_plugins(crate::ui::ingame_menu::InGameMenuPlugin)
+            .insert_resource(crate::ui::ingame_menu::InGameMenu { open: true, page: crate::ui::ingame_menu::MenuPage::Options });
+    }
     app.finish();
     app.cleanup();
     for _ in 0..24 {
@@ -97,7 +102,18 @@ fn capture(size: UVec2, name: &str, mod_title: Option<&str>, mounted: Option<sta
         assert_eq!(app.world().resource::<OptionsTab>().0, 2);
         let controls = app.world_mut().query::<&crate::frontend::screens::view::SettingToggle>()
             .iter(app.world()).count();
-        assert_eq!(controls, if cfg!(target_os = "android") { 3 } else { 4 });
+        assert_eq!(controls, 5);
+        let mut areas = app.world_mut().query::<(&super::GraphicsPart, &ComputedNode, &bevy::ui::UiGlobalTransform)>();
+        let rects: Vec<_> = areas.iter(app.world()).map(|(p, node, transform)| (*p, Rect::from_center_size(transform.translation, node.size()))).collect();
+        let bounds = |part| rects.iter().find(|(p, _)| *p == part).expect("graphics region").1;
+        let toggles = bounds(super::GraphicsPart::Toggles);
+        let detail = bounds(super::GraphicsPart::Detail);
+        let footer = bounds(super::GraphicsPart::Footer);
+        assert!(toggles.max.y <= detail.min.y + 1.0, "{name}: options overlap detail controls");
+        assert!(detail.max.y <= footer.min.y + 1.0, "{name}: detail controls overlap footer");
+        let bottom = if ingame { 532.0 } else { 560.0 } / 600.0 * size.y as f32;
+        assert!(footer.max.y < bottom, "{name}: graphics controls extend into Previous Menu ({footer:?}, {bottom})");
+
         let body = layout::region(layout::Slot::OptionsBody).px(app.world().resource::<StockBox>().0);
         let inset = (Vec2::new(size.x as f32, size.y as f32) / scale - app.world().resource::<StockBox>().0) * 0.5;
         let start = (body.min + inset) * scale;
@@ -146,6 +162,9 @@ fn graphics_options_render_without_a_window() {
     }
     for (size, name) in [
         (UVec2::new(1920, 1080), "16x9"),
+        (UVec2::new(800, 600), "compact"),
+        (UVec2::new(800, 600), "ingame-compact"),
+        (UVec2::new(1920, 1080), "ingame"),
         (UVec2::new(1280, 960), "4x3"),
         (UVec2::new(3440, 1440), "ultrawide"),
     ] {
