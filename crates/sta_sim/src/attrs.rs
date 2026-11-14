@@ -38,6 +38,10 @@ pub struct AttrsView {
     /// player (SIM-54).
     #[serde(default)]
     pub seats: Vec<SeatView>,
+    /// Craft whose impulse speed differs from their definition's (LUA-27 scripted
+    /// override), ascending id; absence means the definition's value.
+    #[serde(default)]
+    pub impulse: Vec<(EntityId, Fixed)>,
 }
 
 /// One seat's derived team numbers.
@@ -96,6 +100,7 @@ impl Attrs {
             races: self.races.iter().map(|(i, s)| (i, s.clone())).collect(),
             player_races: self.player_races.clone(),
             seats: Vec::new(),
+            impulse: Vec::new(),
         }
     }
 

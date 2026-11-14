@@ -313,17 +313,49 @@ fn impulse_speed_is_a_typed_edit_and_the_getter_follows_it() {
 }
 
 #[test]
-fn the_sim_rejecting_an_impulse_or_alert_edit_is_reported_and_counted() {
+fn the_sim_rejecting_an_alert_edit_is_reported_and_counted() {
     let mut s = scene();
     let mut rt = runtime(&s);
-    rt.eval::<()>("A2.SetImpulseSpeed(a, 28); A2.SetRedAlert(a); A2.SetGreenAlert(b)").unwrap();
+    rt.eval::<()>("A2.SetRedAlert(a); A2.SetGreenAlert(b)").unwrap();
     // The host submits them, the sim answers; the runtime reports on a later view.
     driven(&mut s, &mut rt, 5);
     let counted_edits: Vec<_> = rt.unsupported().into_iter().map(|(k, _)| k).collect();
-    for label in ["A2.SetImpulseSpeed", "A2.SetRedAlert", "A2.SetGreenAlert"] {
+    for label in ["A2.SetRedAlert", "A2.SetGreenAlert"] {
         let wanted = format!("{label}: simulation rejected edit");
         assert!(counted_edits.contains(&wanted), "{wanted} in {counted_edits:?}");
     }
+}
+
+#[test]
+fn impulse_speed_is_applied_by_the_sim_and_read_back_from_the_view() {
+    let mut s = scene();
+    let a = s.ids[0];
+    let class = s.db.unit(s.db.key("fx_cruiser").unwrap()).unwrap().movement.max_speed.to_f32();
+    let mut rt = runtime(&s);
+    rt.eval::<()>("A2.SetImpulseSpeed(a, 28)").unwrap();
+    driven(&mut s, &mut rt, 3);
+    assert_eq!(s.sim.unit(a).unwrap().stats.max_speed, Fixed::from_int(28));
+    assert!(!rt.unsupported().iter().any(|(k, _)| k.contains("SetImpulseSpeed")), "{:?}", rt.unsupported());
+    let got: f64 = rt.eval("return A2.GetImpulseSpeed(a)").unwrap();
+    assert_eq!(got, 28.0);
+    // The end of a cineractive resets every craft (the sim's rule); the getter follows the view.
+    let end = Command { player: PlayerId::SCRIPT, seq: 0, kind: CommandKind::Edit(Edit::Present(sta_sim::present::Presentation::Cineractive { on: false, skippable: false })) };
+    s.view = (*s.sim.step(&[end]).view).clone();
+    driven(&mut s, &mut rt, 2);
+    let got: f64 = rt.eval("return A2.GetImpulseSpeed(a)").unwrap();
+    assert_eq!(got, f64::from(class));
+    // Set then Reset in one tick: the queued reset wins.
+    rt.eval::<()>("A2.SetImpulseSpeed(a, 50); A2.ResetImpulseSpeed(a)").unwrap();
+    let got: f64 = rt.eval("return A2.GetImpulseSpeed(a)").unwrap();
+    assert_eq!(got, f64::from(class));
+}
+
+#[test]
+fn impulse_speed_calls_on_a_station_or_an_absent_unit_do_nothing() {
+    let s = scene();
+    let (rt, commands) = run(&s, "A2.SetImpulseSpeed(s, 28); A2.ResetImpulseSpeed(s); A2.SetImpulseSpeed(123456, 28); assert(A2.GetImpulseSpeed(s) == 0.0); assert(A2.GetImpulseSpeed(123456) == 0.0)");
+    assert!(commands.is_empty(), "{commands:?}");
+    assert!(rt.unsupported().is_empty(), "{:?}", rt.unsupported());
 }
 
 #[test]

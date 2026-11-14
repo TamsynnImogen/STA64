@@ -266,9 +266,14 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
 
     table.set("SetImpulseSpeed", def(lua, env, "SetImpulseSpeed", &["hf"], |_, e, _, a| {
         let id = a[0].id();
-        e.unit("SetImpulseSpeed", id)?;
+        let unit = e.unit("SetImpulseSpeed", id)?;
         if a[1].num() < 0.0 {
             return Err(mlua::Error::runtime("A1.SetImpulseSpeed requires a non-negative speed"));
+        }
+        // LUA-27: a craft only (the engine's ship-bit guard); anything else does nothing.
+        let craft = e.ctx.borrow().def(&unit).is_some_and(|d| sta_sim::world::EntityKind::of_def(d) == sta_sim::world::EntityKind::Craft);
+        if !craft {
+            return Ok(Value::Nil);
         }
         e.edit("SetImpulseSpeed", Edit::MaxSpeed(id, Some(Fixed::from_f64(a[1].num()))))?;
         Ok(Value::Nil)

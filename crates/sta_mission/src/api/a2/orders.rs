@@ -63,8 +63,6 @@ const CMD_LAST: i64 = 56;
 
 #[derive(Default)]
 struct State {
-    /// The impulse speed this runtime last set per unit.
-    speed: BTreeMap<EntityId, Fixed>,
 }
 
 #[derive(Clone)]
@@ -209,6 +207,14 @@ impl Env {
     /// The live unit, or `None` when the handle is absent or dying.
     pub(super) fn alive(&self, id: EntityId) -> Option<UnitView> {
         self.ctx.borrow().alive(id).cloned()
+    }
+
+    /// [`Self::alive`] for a craft only (the engine's ship-bit guard).
+    fn alive_craft(&self, id: EntityId) -> Option<UnitView> {
+        let c = self.ctx.borrow();
+        let unit = c.alive(id)?;
+        let craft = c.def(unit).is_some_and(|d| sta_sim::world::EntityKind::of_def(d) == sta_sim::world::EntityKind::Craft);
+        craft.then(|| unit.clone())
     }
 
     /// Send an order as the unit's owner.
@@ -614,40 +620,45 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
         nothing()
     })?)?;
 
-    // Speed and alert status: typed edits.
+    // Speed and alert status: typed edits. Impulse speed (LUA-27): a craft only (the engine's
+    // ship-bit guard; anything else does nothing), the unit's own impulse field in the sim,
+    // reset there by a team change and by the end of a cineractive.
     table.set("SetImpulseSpeed", def(lua, &env, "SetImpulseSpeed", &["hf"], |_, e, _, a| {
         if a[1].num() < 0.0 {
             return Err(mlua::Error::runtime("A2.SetImpulseSpeed requires a non-negative speed"));
         }
         let id = a[0].id();
-        if e.alive(id).is_some() {
+        if e.alive_craft(id).is_some() {
             let speed = Fixed::from_f64(a[1].num());
             edit_feedback::queue(&mut e.ctx.borrow_mut(), name_label("SetImpulseSpeed"), Edit::MaxSpeed(id, Some(speed)))?;
-            e.st.borrow_mut().speed.insert(id, speed);
         }
         nothing()
     })?)?;
     table.set("ResetImpulseSpeed", def(lua, &env, "ResetImpulseSpeed", &["h"], |_, e, _, a| {
         let id = a[0].id();
-        if e.alive(id).is_some() {
+        if e.alive_craft(id).is_some() {
             edit_feedback::queue(&mut e.ctx.borrow_mut(), name_label("ResetImpulseSpeed"), Edit::MaxSpeed(id, None))?;
-            e.st.borrow_mut().speed.remove(&id);
         }
         nothing()
     })?)?;
-    // The value this runtime last set, else the class impulse speed; 0 for an
-    // absent unit, as the engine does. Not measured: the engine's class value
-    // is looked up by an `int` (read as the unit's upgrade level).
+    // The unit's current impulse speed: what a call queued this tick set (or a team change or
+    // cineractive end queued after it reset), else the view's override, else the class value;
+    // 0 when the unit is not a live craft, as the engine answers.
     table.set("GetImpulseSpeed", def(lua, &env, "GetImpulseSpeed", &["h"], |_, e, _, a| {
-        let Some(unit) = e.alive(a[0].id()) else { return Ok(Value::Number(0.0)) };
-        if let Some(speed) = e.st.borrow().speed.get(&unit.id) {
-            return Ok(Value::Number(f64::from(speed.to_f32())));
-        }
+        let Some(unit) = e.alive_craft(a[0].id()) else { return Ok(Value::Number(0.0)) };
         let c = e.ctx.borrow();
-        match c.def(&unit) {
-            Some(d) => Ok(Value::Number(f64::from(d.movement.max_speed.to_f32()))),
-            None => Err(e.gap("GetImpulseSpeed", "the unit has no content definition")),
-        }
+        let Some(class) = c.def(&unit).map(|d| d.movement.max_speed) else {
+            return Err(e.gap("GetImpulseSpeed", "the unit has no content definition"));
+        };
+        let queued = c.commands.iter().rev().find_map(|cmd| match &cmd.kind {
+            CommandKind::Edit(Edit::MaxSpeed(who, to)) if *who == unit.id => Some(to.map_or(class, |v| v.max(Fixed::ZERO))),
+            CommandKind::Edit(Edit::Team(who, _)) if *who == unit.id => Some(class),
+            CommandKind::Edit(Edit::Present(sta_sim::present::Presentation::Cineractive { on: false, .. })) => Some(class),
+            _ => None,
+        });
+        let viewed = || c.view.attrs.impulse.binary_search_by_key(&unit.id, |r| r.0).ok().map(|i| c.view.attrs.impulse[i].1);
+        let speed = queued.or_else(viewed).unwrap_or(class);
+        Ok(Value::Number(f64::from(speed.to_f32())))
     })?)?;
     table.set("SetRedAlert", alert(lua, &env, "SetRedAlert", AlertState::Red)?)?;
     table.set("SetGreenAlert", alert(lua, &env, "SetGreenAlert", AlertState::Green)?)?;
