@@ -77,7 +77,9 @@ impl Sim {
         self.clear_scripted(PlayerId::SCRIPT, &[id]);
         self.colonies_craft_transferred(id);
         self.switches.edit(id, |s| s.special_forces = false);
-        self.reset_impulse(id);
+        if previous_owner != to {
+            self.reset_impulse(id);
+        }
         if new_team && !self.team_changes.contains(&id) {
             self.team_changes.push(id);
         }

@@ -156,7 +156,7 @@ impl UserData for Cineractive {
             if on {
                 c.skippable = true;
             }
-            c.active = on;
+            let was = std::mem::replace(&mut c.active, on);
             if !on {
                 camera_intent::clear(&mut c.ctx.borrow_mut());
                 // A subsequent lookAt must not resurrect a canceled pending source.
@@ -166,12 +166,19 @@ impl UserData for Cineractive {
                     c.from_typed = false;
                 }
             }
-            c.mode();
+            // The end of a cineractive resets every craft's impulse speed in the sim, so the
+            // off request is sent only when one was running (LUA-27).
+            if on || was {
+                c.mode();
+            }
             Ok(())
         });
         f.add_field_method_set("skippable", |_, c, on: bool| {
             c.skippable = on;
-            c.mode();
+            // While none runs this would be an off request (see `active`).
+            if c.active {
+                c.mode();
+            }
             Ok(())
         });
     }

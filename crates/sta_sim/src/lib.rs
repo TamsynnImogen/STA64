@@ -35,7 +35,7 @@ pub mod fake;
 pub mod kinematics;
 pub mod movement;
 mod ownership;
-mod speed_override;
+pub mod speed_override;
 #[cfg(test)]
 mod speed_override_tests;
 mod perception;

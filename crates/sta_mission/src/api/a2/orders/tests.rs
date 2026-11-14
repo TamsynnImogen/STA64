@@ -350,6 +350,43 @@ fn impulse_speed_is_applied_by_the_sim_and_read_back_from_the_view() {
     assert_eq!(got, f64::from(class));
 }
 
+fn presents(commands: &[Command]) -> usize {
+    commands.iter().filter(|c| matches!(c.kind, CommandKind::Edit(Edit::Present(sta_sim::present::Presentation::Cineractive { .. })))).count()
+}
+
+#[test]
+fn only_a_running_cineractive_sends_the_end_request_that_resets_speeds() {
+    let s = scene();
+    // No cineractive runs: neither setter nor the release asks the sim to end one.
+    let (mut rt, commands) = run(&s, "Cineractive.active = false; Cineractive.skippable = true; Cineractive.skippable = false");
+    assert_eq!(presents(&commands), 0, "{commands:?}");
+    rt.release_cineractive();
+    assert_eq!(presents(&rt.take_commands()), 0);
+    // One runs: the skippable setter reports, the end is sent once, a second end is not.
+    let (_rt, commands) = run(&s, "Cineractive.active = true; Cineractive.skippable = false; Cineractive.active = false; Cineractive.active = false");
+    let kinds: Vec<_> = commands.iter().filter_map(|c| match &c.kind {
+        CommandKind::Edit(Edit::Present(sta_sim::present::Presentation::Cineractive { on, .. })) => Some(*on),
+        _ => None,
+    }).collect();
+    assert_eq!(kinds, vec![true, true, false], "{commands:?}");
+    // A fault or the mission's end releases a running one (the end is sent), not an idle one.
+    let (mut rt2, _) = run(&s, "Cineractive.active = true");
+    rt2.release_cineractive();
+    assert_eq!(presents(&rt2.take_commands()), 1);
+}
+
+#[test]
+fn the_getter_sees_an_edit_the_host_took_before_the_sim_answered() {
+    let mut s = scene();
+    let a = s.ids[0];
+    let mut rt = runtime(&s);
+    rt.eval::<()>("A2.SetImpulseSpeed(a, 28)").unwrap();
+    driven(&mut s, &mut rt, 1);
+    assert_eq!(s.sim.unit(a).unwrap().stats.max_speed, Fixed::from_int(28));
+    let got: f64 = rt.eval("return A2.GetImpulseSpeed(a)").unwrap();
+    assert_eq!(got, 28.0);
+}
+
 #[test]
 fn impulse_speed_calls_on_a_station_or_an_absent_unit_do_nothing() {
     let s = scene();

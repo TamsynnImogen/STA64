@@ -10,15 +10,30 @@
 //! of owner, and by the end of any cineractive for every craft. STA64 has no
 //! engine-upgrade research, slowing effect or speed boost; those resets of
 //! the executable have nothing to attach to. Warp speed is left alone.
+//!
+//! Deviations (STA64's, not read from the executable): the value is kept
+//! between [`HELD_SPEED`] and [`MAX_OVERRIDE`]. A script that sets 0 holds a
+//! ship; a literal 0 would make the unit unorderable and unsteppable (`orderable`
+//! and `mobile` test `max_speed > 0`), so 0 is stored as the tiny held speed: the
+//! craft brakes to a crawl, still takes orders, and a reset frees it. The
+//! ceiling keeps the fixed-point squares of the movement code from wrapping
+//! (about 46,000 units/s); stock values are 35 to 150. An override above the
+//! definition's warp speed disables warp for that craft (movement compares the
+//! two); not checked against the original.
 
 use sta_core::{EntityId, Fixed};
+
+/// What a script asking for speed 0 gets: a crawl (1/64 unit per second).
+pub const HELD_SPEED: Fixed = Fixed::from_bits(1 << 26);
+/// The highest override (units per second).
+pub const MAX_OVERRIDE: Fixed = Fixed::from_int(10_000);
 
 use crate::Sim;
 use crate::view::UnitFlags;
 use crate::world::EntityKind;
 
 impl Sim {
-    /// `Edit::MaxSpeed`: a live craft only. `Some(v)` writes `max(v, 0)`,
+    /// `Edit::MaxSpeed`: a live craft only. `Some(v)` writes `v` kept between [`HELD_SPEED`] and [`MAX_OVERRIDE`],
     /// `None` the definition's impulse (rejected when the unit has none).
     pub(crate) fn edit_max_speed(&mut self, id: EntityId, to: Option<Fixed>) -> bool {
         let class = self.class_impulse(id);
@@ -27,7 +42,7 @@ impl Sim {
         }) else {
             return false;
         };
-        match to.map(|v| v.max(Fixed::ZERO)).or(class) {
+        match to.map(|v| v.max(HELD_SPEED).min(MAX_OVERRIDE)).or(class) {
             Some(v) => {
                 u.stats.max_speed = v;
                 true

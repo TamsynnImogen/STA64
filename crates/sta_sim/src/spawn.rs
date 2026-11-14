@@ -273,7 +273,7 @@ impl Sim {
                 if matches!(p, crate::present::Presentation::Cineractive { on: false, .. }) {
                     self.reset_all_impulse();
                 }
-                // Changes nothing; every client and replay sees the event.
+                // Changes nothing but the impulse reset above; every client and replay sees the event.
                 self.events.push(SimEvent::Present(p.clone()));
                 true
             }

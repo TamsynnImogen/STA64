@@ -644,13 +644,16 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
             return Err(e.gap("GetImpulseSpeed", "the unit has no content definition"));
         };
         let queued = c.commands.iter().rev().find_map(|cmd| match &cmd.kind {
-            CommandKind::Edit(Edit::MaxSpeed(who, to)) if *who == unit.id => Some(to.map_or(class, |v| v.max(Fixed::ZERO))),
-            CommandKind::Edit(Edit::Team(who, _)) if *who == unit.id => Some(class),
+            CommandKind::Edit(Edit::MaxSpeed(who, to)) if *who == unit.id => Some(to.map_or(class, |v| v.min(sta_sim::speed_override::MAX_OVERRIDE))),
+            CommandKind::Edit(Edit::Team(who, to)) if *who == unit.id && *to != unit.owner => Some(class),
             CommandKind::Edit(Edit::Present(sta_sim::present::Presentation::Cineractive { on: false, .. })) => Some(class),
             _ => None,
         });
         let viewed = || c.view.attrs.impulse.binary_search_by_key(&unit.id, |r| r.0).ok().map(|i| c.view.attrs.impulse[i].1);
-        let speed = queued.or_else(viewed).unwrap_or(class);
+        let taken = || c.edit_feedback.pending_impulse(unit.id).map(|to| to.map_or(class, |v| v.min(sta_sim::speed_override::MAX_OVERRIDE)));
+        let speed = queued.or_else(taken).or_else(viewed).unwrap_or(class);
+        // A script's 0 is held at a crawl in the sim; it reads back as 0.
+        let speed = if speed <= sta_sim::speed_override::HELD_SPEED { Fixed::ZERO } else { speed };
         Ok(Value::Number(f64::from(speed.to_f32())))
     })?)?;
     table.set("SetRedAlert", alert(lua, &env, "SetRedAlert", AlertState::Red)?)?;

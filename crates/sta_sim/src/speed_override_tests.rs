@@ -152,6 +152,50 @@ fn only_live_craft_are_accepted() {
     assert!(sim.step(&[c]).events.iter().any(|e| matches!(e, SimEvent::Rejected { .. })));
 }
 
+#[test]
+fn a_same_owner_team_edit_keeps_the_override() {
+    let mut sim = game();
+    let a = spawn(&mut sim, "fx_cruiser", 0, 0);
+    assert!(edit(&mut sim, Edit::MaxSpeed(a, Some(Fixed::from_int(30)))));
+    assert!(edit(&mut sim, Edit::Team(a, PlayerId(0))));
+    assert_eq!(speed(&sim, a), Fixed::from_int(30));
+}
+
+#[test]
+fn speed_zero_holds_a_craft_that_still_takes_orders_and_a_reset_frees_it() {
+    let mut sim = game();
+    let a = spawn(&mut sim, "fx_cruiser", 0, 0);
+    let def = class(&sim, a);
+    order(&mut sim, 0, Order::Move { units: vec![a], to: at(40000), queue: false });
+    assert!(peak(&mut sim, a, 120) > Fixed::from_int(50));
+    assert!(edit(&mut sim, Edit::MaxSpeed(a, Some(Fixed::ZERO))));
+    assert_eq!(speed(&sim, a), crate::speed_override::HELD_SPEED);
+    peak(&mut sim, a, 240);
+    assert!(sim.unit(a).unwrap().speed <= crate::speed_override::HELD_SPEED, "{:?}", sim.unit(a).unwrap().speed);
+    let held_at = sim.unit(a).unwrap().pos;
+    // Held: it crawls, and an order is still accepted.
+    order(&mut sim, 0, Order::Move { units: vec![a], to: at(-40000), queue: false });
+    assert!(sim.unit(a).unwrap().target.is_some());
+    peak(&mut sim, a, 60);
+    assert!((sim.unit(a).unwrap().pos.x - held_at.x).abs() < Fixed::from_int(5));
+    assert!(edit(&mut sim, Edit::MaxSpeed(a, None)));
+    assert_eq!(speed(&sim, a), def);
+    assert!(peak(&mut sim, a, 240) > Fixed::from_int(50));
+}
+
+#[test]
+fn a_huge_value_is_kept_below_the_ceiling() {
+    let mut sim = game();
+    let a = spawn(&mut sim, "fx_cruiser", 0, 0);
+    assert!(edit(&mut sim, Edit::MaxSpeed(a, Some(Fixed::from_int(1_000_000)))));
+    assert_eq!(speed(&sim, a), crate::speed_override::MAX_OVERRIDE);
+    order(&mut sim, 0, Order::Move { units: vec![a], to: at(100000), queue: false });
+    for _ in 0..600 {
+        sim.step(&[]);
+        assert!(sim.unit(a).unwrap().pos.x >= Fixed::ZERO && sim.unit(a).unwrap().speed <= crate::speed_override::MAX_OVERRIDE);
+    }
+}
+
 /// The pinned whole-state digest of a run holding an overridden unit; it moves
 /// only when the override's effect on the sim or the digest changes.
 #[test]
