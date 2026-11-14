@@ -146,6 +146,30 @@ impl SpriteFont {
         None
     }
 
+    /// Whether the font cannot draw `ch`: it is not a Windows-1252 character, or the
+    /// table has no drawable glyph for its byte, so `layout` would show `?` (ADR 0007 T4).
+    /// A real `?`, `\n` and control characters are not "lacking".
+    pub fn lacks(&self, ch: char) -> bool {
+        if ch == '?' || (ch as u32) < 0x20 {
+            return false;
+        }
+        let code = windows_1252(ch);
+        code == b'?' || self.glyph(code).is_none_or(|(_, g)| g.w <= 0.0)
+    }
+
+    /// `line` cut into runs the font draws (`false`) and runs it lacks (`true`).
+    pub fn runs(&self, line: &str) -> Vec<(bool, String)> {
+        let mut out: Vec<(bool, String)> = Vec::new();
+        for ch in line.chars() {
+            let lacking = self.lacks(ch);
+            match out.last_mut() {
+                Some((l, s)) if *l == lacking => s.push(ch),
+                _ => out.push((lacking, ch.to_string())),
+            }
+        }
+        out
+    }
+
     /// How many codes the table covers (from 0x20).
     #[cfg(test)]
     pub fn len(&self) -> usize {
@@ -596,6 +620,26 @@ impl SpriteFonts {
             .map(|(f, k, _)| (f, k))
     }
 
+    /// Like [`crisp`](Self::crisp) but never smaller than `desired` (less 0.5 px): when the
+    /// choice falls short, the font that reaches it with the smallest height, at the fewest
+    /// whole multiples. A font a size up at 1x beats doubling the one just below (A2 stock
+    /// at 1024x768: 15 px wanted 16, doubling gave 30; the 19 px font is the answer).
+    pub fn crisp_at_least(&self, role: Option<FontRole>, desired: f32) -> Option<(&LoadedFont, u32)> {
+        let (f, k) = self.crisp(role, desired)?;
+        if f.font.height() * k as f32 >= desired - 0.5 {
+            return Some((f, k));
+        }
+        self.fonts
+            .values()
+            .filter(|f| f.font.height() > 0.0)
+            .map(|f| {
+                let k = ((desired - 0.5) / f.font.height()).ceil().max(1.0) as u32;
+                (f, k, f.font.height() * k as f32)
+            })
+            .min_by(|a, b| a.2.total_cmp(&b.2).then(a.1.cmp(&b.1)))
+            .map(|(f, k, _)| (f, k))
+    }
+
     /// The font whose glyph height is nearest `size` px.
     pub fn pick(&self, size: f32) -> Option<&LoadedFont> {
         self.fonts.values().min_by(|a, b| {
@@ -793,6 +837,8 @@ pub struct SpriteLaid {
     size: f32,
     /// Per glyph quad: drawn untinted.
     untinted: Vec<bool>,
+    /// Laid out as rows of sprite and TTF runs (T4): a recolour lays it out again.
+    mixed: bool,
 }
 
 /// A [`sprite_text`] bundle with a style (and the `Node` a UI entity needs).
@@ -823,6 +869,129 @@ fn load_glyph_words(vfs: Option<Res<Mounted>>, mut words: ResMut<GlyphWords>) {
             .then(|| GlyphWords::parse(include_str!("../../assets/ui/glyphs-fleetops.ini")))
     };
     *words = found.or_else(builtin).unwrap_or_default();
+}
+
+/// One glyph quad as a UI image child.
+fn glyph_node(f: &LoadedFont, q: &GlyphQuad, inv: f32, crisp: bool, colour: Color) -> Option<impl Bundle> {
+    let (image, tex) = f.pages.get(q.page)?;
+    let rect = texel_rect(f.font.reference, *tex, q.src);
+    Some((
+        ImageNode { image: image.clone(), rect: Some(rect), color: colour, ..default() },
+        // Crisp glyph offsets and sizes are whole physical pixels already; taffy's
+        // per-node rounding of `cum + w` could move an edge by one at odd scales.
+        bevy::ui::LayoutConfig { use_rounding: !crisp },
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(q.rect[0] * inv),
+            top: Val::Px(q.rect[1] * inv),
+            width: Val::Px(q.rect[2] * inv),
+            height: Val::Px(q.rect[3] * inv),
+            ..default()
+        },
+        Pickable::IGNORE,
+    ))
+}
+
+/// Text holding characters the font lacks (ADR 0007 T4): rows of runs, the font's runs as
+/// sprite glyphs and the others as TTF text of the label's size (the SDF face is not drawn
+/// yet; the baked TTF is the same face). `unit` is the layout scale (the whole multiple for
+/// crisp text), `inv` turns its units into logical px. Wrapping measures a lacking
+/// character as the font's `?`, so a wrapped line can run a little over its box.
+#[allow(clippy::too_many_arguments)]
+fn spawn_mixed(
+    commands: &mut Commands,
+    e: Entity,
+    f: &LoadedFont,
+    t: &SpriteText,
+    style: &SpriteTextStyle,
+    unit: f32,
+    inv: f32,
+    crisp: bool,
+    styled: bool,
+) {
+    let wrap = style.wrap.map(|w| w / inv);
+    let lines: Vec<String> = match wrap {
+        Some(w) => wrap_lines(&t.text, w, &|s| f.font.measure(s, unit)),
+        None => t.text.split('\n').map(str::to_owned).collect(),
+    };
+    let line_h = f.font.height() * unit;
+    let to_align = |a: Align| match a {
+        Align::Left => (AlignItems::FlexStart, JustifyContent::FlexStart),
+        Align::Center => (AlignItems::Center, JustifyContent::Center),
+        Align::Right => (AlignItems::FlexEnd, JustifyContent::FlexEnd),
+    };
+    let (items, justify) = to_align(style.align);
+    let boxed = style.align != Align::Left && wrap.is_some();
+    commands.entity(e).insert(Node {
+        flex_direction: FlexDirection::Column,
+        align_items: items,
+        width: match (wrap, boxed) {
+            (Some(w), true) => Val::Px(w * inv),
+            _ => Val::Auto,
+        },
+        max_width: wrap.map_or(Val::Auto, |w| Val::Px(w * inv)),
+        top: Val::Px(if crisp && style.min_size { -t.size * STOCK_LIFT } else { 0.0 }),
+        flex_shrink: 0.0,
+        ..default()
+    });
+    commands.entity(e).despawn_related::<Children>();
+    let mut untinted = Vec::new();
+    commands.entity(e).with_children(|p| {
+        for line in &lines {
+            p.spawn((
+                Node {
+                    flex_direction: FlexDirection::Row,
+                    align_items: AlignItems::Center,
+                    justify_content: justify,
+                    height: Val::Px(line_h * inv),
+                    width: if boxed { Val::Percent(100.0) } else { Val::Auto },
+                    flex_shrink: 0.0,
+                    ..default()
+                },
+                Pickable::IGNORE,
+            ))
+            .with_children(|row| {
+                for (lacking, run) in f.font.runs(line) {
+                    if lacking {
+                        row.spawn((
+                            Text::new(run),
+                            TextFont { font_size: bevy::text::FontSize::Px(t.size), ..default() },
+                            TextColor(t.color),
+                            TextLayout::new(bevy::text::Justify::Left, bevy::text::LineBreak::NoWrap),
+                            Node { flex_shrink: 0.0, ..default() },
+                            Pickable::IGNORE,
+                        ));
+                        continue;
+                    }
+                    let lay = if crisp {
+                        f.font.layout_physical(&run, unit as u32, None, Align::Left)
+                    } else {
+                        f.font.layout_block(&run, unit, None, Align::Left)
+                    };
+                    row.spawn((
+                        Node {
+                            width: Val::Px(lay.width * inv),
+                            height: Val::Px(line_h * inv),
+                            flex_shrink: 0.0,
+                            ..default()
+                        },
+                        Pickable::IGNORE,
+                    ))
+                    .with_children(|run_node| {
+                        for q in &lay.quads {
+                            let picture = styled && !style.tint_all && f.coloured.contains(&q.code);
+                            untinted.push(picture);
+                            let colour = if picture { Color::WHITE } else { t.color };
+                            if let Some(glyph) = glyph_node(f, q, inv, crisp, colour) {
+                                run_node.spawn(glyph);
+                            }
+                        }
+                    });
+                }
+            });
+        }
+    });
+    commands.entity(e).insert(SpriteLaid { text: t.text.clone(), size: t.size, untinted, mixed: true });
 }
 
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
@@ -861,7 +1030,7 @@ fn resolve_text(
         let only_colour = !all
             && !style.as_ref().is_some_and(|s| s.is_changed())
             && !scalable.as_ref().is_some_and(|s| s.is_added())
-            && laid.is_some_and(|l| l.text == t.text && l.size == t.size);
+            && laid.is_some_and(|l| l.text == t.text && l.size == t.size && !l.mixed);
         if only_colour {
             let laid = laid.unwrap();
             for (i, kid) in children.get(e).into_iter().flat_map(|c| c.iter()).enumerate() {
@@ -893,10 +1062,11 @@ fn resolve_text(
             // label with a readable floor asks for the font that inks as tall as the
             // TTF of that size (`STOCK_INK`), not one of that nominal height.
             let want = t.size * px * if style.min_size { STOCK_INK } else { 1.0 };
-            fonts.crisp(style.role, want).map(|(f, k)| {
-                let below = f.font.height() * (k as f32) < want - 0.5;
-                (f, if style.min_size && below { k + 1 } else { k })
-            })
+            if style.min_size {
+                fonts.crisp_at_least(style.role, want)
+            } else {
+                fonts.crisp(style.role, want)
+            }
         } else {
             None
         };
@@ -942,7 +1112,7 @@ fn resolve_text(
                 };
                 commands.entity(e).insert(node);
             }
-            commands.entity(e).insert(SpriteLaid { text: t.text.clone(), size: t.size, untinted: Vec::new() });
+            commands.entity(e).insert(SpriteLaid { text: t.text.clone(), size: t.size, untinted: Vec::new(), mixed: false });
             if let Some(&child) = existing.first().filter(|child| texts.contains(**child)) {
                 commands.entity(child).insert(label);
                 for &stale in &existing[1..] {
@@ -956,6 +1126,18 @@ fn resolve_text(
             }
             continue;
         };
+        // A character the font lacks is drawn in the TTF, not as `?` (ADR 0007 T4).
+        if t.text.chars().any(|c| f.font.lacks(c)) {
+            let (unit, inv) = if let Some((_, k)) = crisp {
+                (k as f32, 1.0 / px)
+            } else if style.native {
+                (1.0, 1.0)
+            } else {
+                (t.size / f.font.height(), 1.0)
+            };
+            spawn_mixed(&mut commands, e, f, &t, &style, unit, inv, crisp.is_some(), styled);
+            continue;
+        }
         // `inv` turns the layout's units into logical px (physical for crisp text).
         let (lay, inv) = if let Some((_, k)) = crisp {
             (f.font.layout_physical(&t.text, k, style.wrap.map(|w| w * px), style.align), 1.0 / px)
@@ -975,33 +1157,12 @@ fn resolve_text(
         let mut used = 0;
         let mut untinted = Vec::new();
         for q in &lay.quads {
-            let Some((image, tex)) = f.pages.get(q.page) else {
+            let picture = styled && !style.tint_all && f.coloured.contains(&q.code);
+            let colour = if picture { Color::WHITE } else { t.color };
+            let Some(glyph) = glyph_node(f, q, inv, crisp.is_some(), colour) else {
                 continue;
             };
-            let rect = texel_rect(f.font.reference, *tex, q.src);
-            let picture = styled && !style.tint_all && f.coloured.contains(&q.code);
             untinted.push(picture);
-            let colour = if picture { Color::WHITE } else { t.color };
-            let glyph = (
-                ImageNode {
-                    image: image.clone(),
-                    rect: Some(rect),
-                    color: colour,
-                    ..default()
-                },
-                // Crisp glyph offsets and sizes are whole physical pixels already; taffy's
-                // per-node rounding of `cum + w` could move an edge by one at odd scales.
-                bevy::ui::LayoutConfig { use_rounding: crisp.is_none() },
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: Val::Px(q.rect[0] * inv),
-                    top: Val::Px(q.rect[1] * inv),
-                    width: Val::Px(q.rect[2] * inv),
-                    height: Val::Px(q.rect[3] * inv),
-                    ..default()
-                },
-                Pickable::IGNORE,
-            );
             if let Some(&child) = existing.get(used).filter(|child| images.contains(**child)) {
                 commands.entity(child).insert(glyph);
             } else {
@@ -1015,7 +1176,7 @@ fn resolve_text(
         for &stale in existing.iter().skip(used) {
             commands.entity(stale).despawn();
         }
-        commands.entity(e).insert(SpriteLaid { text: t.text.clone(), size: t.size, untinted });
+        commands.entity(e).insert(SpriteLaid { text: t.text.clone(), size: t.size, untinted, mixed: false });
     }
 }
 
@@ -1356,6 +1517,71 @@ mod tests {
         let h = |e| match app.world().get::<Node>(e).unwrap().height { Val::Px(h) => h, _ => panic!("height") };
         assert!(h(a) < 18.0, "{}", h(a));
         assert!(h(b) >= 18.0, "{}", h(b));
+    }
+
+    #[test]
+    fn a_font_lacks_what_it_cannot_draw_and_runs_split_there() {
+        let f = SpriteFont::parse("F", SAMPLE).unwrap();
+        // The sample covers 0x20 to 0x24.
+        for c in [' ', '!', '"', '#', '$', '?', '\n'] {
+            assert!(!f.lacks(c), "{c:?}");
+        }
+        for c in ['A', '\u{e9}', '\u{20ac}', '\u{4e2d}'] {
+            assert!(f.lacks(c), "{c:?}");
+        }
+        assert_eq!(
+            f.runs("!!ab\u{4e2d}!"),
+            vec![(false, "!!".to_owned()), (true, "ab\u{4e2d}".to_owned()), (false, "!".to_owned())]
+        );
+        assert!(f.runs("").is_empty());
+    }
+
+    #[test]
+    fn a_character_the_font_lacks_is_drawn_in_the_ttf_not_as_a_question_mark() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).init_resource::<SpriteFonts>().add_systems(Update, resolve_text);
+        app.world_mut().resource_mut::<SpriteFonts>().fonts.insert("F".into(), test_font());
+        let styled = SpriteTextStyle::default().stock_label();
+        let mixed = app.world_mut().spawn(sprite_text_styled("!A\u{4e2d}!", 18.0, Color::WHITE, styled.clone())).id();
+        let plain = app.world_mut().spawn(sprite_text_styled("!!", 18.0, Color::WHITE, styled)).id();
+        let wrapped = app
+            .world_mut()
+            .spawn(sprite_text_styled("!! A!", 18.0, Color::WHITE, SpriteTextStyle::default().centered().wrapped(40.0)))
+            .id();
+        app.update();
+        // Every descendant: glyph images and TTF texts.
+        let below = |app: &App, root: Entity| {
+            let (mut images, mut texts, mut stack) = (0, Vec::new(), vec![root]);
+            while let Some(e) = stack.pop() {
+                if let Some(kids) = app.world().get::<Children>(e) {
+                    stack.extend(kids.iter());
+                }
+                images += usize::from(app.world().get::<ImageNode>(e).is_some());
+                if let Some(t) = app.world().get::<Text>(e) {
+                    texts.push((t.0.clone(), app.world().get::<TextFont>(e).unwrap().font_size));
+                }
+            }
+            (images, texts)
+        };
+        let (images, texts) = below(&app, mixed);
+        assert_eq!(images, 2, "the two `!` stay sprite glyphs, no `?` quad for the others");
+        assert_eq!(texts, vec![("A\u{4e2d}".to_owned(), bevy::text::FontSize::Px(18.0))]);
+        // Text the font can draw is unchanged: sprite glyphs only.
+        assert_eq!(below(&app, plain), (2, Vec::new()));
+        // Wrapped: rows, the lacking run in the TTF.
+        let (images, texts) = below(&app, wrapped);
+        assert_eq!(images, 4, "three `!` and the space");
+        assert_eq!(texts.len(), 1);
+        assert_eq!(texts[0].0, "A");
+        // A recolour lays the mixed text out again and reaches the TTF run.
+        app.world_mut().get_mut::<SpriteText>(mixed).unwrap().color = Color::BLACK;
+        app.update();
+        let mut found = false;
+        let mut q = app.world_mut().query::<&TextColor>();
+        for c in q.iter(app.world()) {
+            found |= c.0 == Color::BLACK;
+        }
+        assert!(found, "the TTF run took the new colour");
     }
 
     #[test]
@@ -1918,6 +2144,26 @@ mod tests {
         fonts.fonts.insert("fontmedium".into(), font_of_height("fontmedium", 17.0));
         let (f, k) = fonts.crisp(Some(FontRole::Medium), 40.0).unwrap();
         assert_eq!((f.font.name.as_str(), k), ("fontmedium", 2));
+    }
+
+    /// A label with a minimum height takes the next font up rather than a doubled smaller one.
+    #[test]
+    fn a_floored_label_takes_the_next_font_up_not_a_doubled_one_below() {
+        let mut fonts = SpriteFonts::default();
+        for (n, h) in [("a", 15.0), ("b", 19.0), ("c", 23.0)] {
+            fonts.fonts.insert(n.into(), font_of_height(n, h));
+        }
+        let pick = |d: f32| {
+            let (f, k) = fonts.crisp_at_least(None, d).unwrap();
+            (f.font.name.clone(), k)
+        };
+        // 1024x768: 18 px x 0.711 x 1.25 = 16 wanted; the 15 px font is short, 2x of it is 30.
+        assert_eq!(pick(16.0), ("b".into(), 1));
+        // Long enough already: unchanged.
+        assert_eq!(pick(15.0), ("a".into(), 1));
+        assert_eq!(pick(22.5), ("c".into(), 1));
+        // Past the biggest font: the smallest whole-multiple height that reaches it (45 px; 38 is short).
+        assert_eq!(pick(40.0), ("a".into(), 3));
     }
 
     /// Glyph rectangles land on whole physical pixels and each pen position is the running
