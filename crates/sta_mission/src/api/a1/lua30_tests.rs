@@ -222,7 +222,7 @@ fn replace_object_that_cannot_build_keeps_the_old_object() {
 
 #[test]
 fn attack_location_is_the_armada_ii_geometry() {
-    let mut s = scene();
+    let s = scene();
     let toward: (f64, f64, f64) = s.rt.eval("local v = A1.GetAttackLocation(a, b); return v.x, v.y, v.z").unwrap();
     assert_eq!(toward, (0.0, 0.0, 10.0));
     let alone: (f64, f64, f64) = s.rt.eval("local v = A1.GetAttackLocation(a, 0); return v.x, v.y, v.z").unwrap();
