@@ -45,22 +45,18 @@ pub(crate) fn slow_leg(warp: Fixed, impulse: Fixed) -> Option<Fixed> {
 }
 
 impl Sim {
-    /// `Edit::WarpSpeed`: a live craft only. `Some(v)` writes `v` kept between 0 and
-    /// [`MAX_WARP`], `None` the definition's warp speed (rejected when the unit has none).
+    /// `Edit::WarpSpeed`: a live craft with a definition only (the override is kept as
+    /// the difference from it, so a craft without one has nothing to save). `Some(v)` writes `v`
+    /// kept between 0 and [`MAX_WARP`], `None` the definition's warp speed.
     pub(crate) fn edit_warp_speed(&mut self, id: EntityId, to: Option<Fixed>) -> bool {
-        let class = self.class_warp(id);
+        let Some(class) = self.class_warp(id) else { return false };
         let Some(u) = self.units.get_mut(id).filter(|u| {
             u.kind == EntityKind::Craft && u.hull[0] > Fixed::ZERO && !u.flags.contains(UnitFlags::DYING)
         }) else {
             return false;
         };
-        match to.map(|v| v.max(Fixed::ZERO).min(MAX_WARP)).or(class) {
-            Some(v) => {
-                u.stats.warp_speed = v;
-                true
-            }
-            None => false,
-        }
+        u.stats.warp_speed = to.map_or(class, |v| v.max(Fixed::ZERO).min(MAX_WARP));
+        true
     }
 
     fn class_warp(&self, id: EntityId) -> Option<Fixed> {

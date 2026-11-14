@@ -577,10 +577,15 @@ impl Sim {
         if warp_override_rows.windows(2).any(|pair| pair[0].0 >= pair[1].0) {
             return Err(corrupt("warp speed rows"));
         }
+        // Only what the writer produces: a craft with a definition whose value differs from it.
         for (id, v) in warp_override_rows {
             let unit = units.get_mut(id).ok_or_else(|| SnapshotError::Corrupt("warp speed of an unknown entity".into()))?;
             if unit.kind != EntityKind::Craft || v < Fixed::ZERO || v > crate::warp_override::MAX_WARP {
                 return Err(SnapshotError::Corrupt("warp speed of a non-craft or out of range".into()));
+            }
+            let class = content.as_deref().and_then(|db| db.unit(unit.def)).map(|d| d.movement.warp_speed);
+            if class.is_none_or(|c| c == v) {
+                return Err(SnapshotError::Corrupt("warp speed row without a definition or equal to it".into()));
             }
             unit.stats.warp_speed = v;
         }

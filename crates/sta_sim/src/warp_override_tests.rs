@@ -216,6 +216,11 @@ fn only_live_craft_are_accepted_and_only_the_script() {
     let before = warp(&sim, station);
     assert!(!script(&mut sim, Edit::WarpSpeed(station, Some(n(30)))));
     assert!(!script(&mut sim, Edit::WarpSpeed(EntityId(9999), None)));
+    // A craft with no definition has nothing to differ from: refused, so nothing is lost on a save.
+    let bare = sim.spawn(1, at(0, 100), AHEAD, sta_content::MoveStats::STATIC);
+    assert!(!script(&mut sim, Edit::WarpSpeed(bare, Some(n(30)))));
+    assert!(!script(&mut sim, Edit::WarpSpeed(bare, None)));
+    assert_eq!(warp(&sim, bare), Fixed::ZERO);
     assert_eq!(warp(&sim, station), before);
     sim.units.get_mut(s).unwrap().hull[0] = Fixed::ZERO;
     assert!(!script(&mut sim, Edit::WarpSpeed(s, Some(n(30)))));
@@ -266,6 +271,105 @@ fn a_snapshot_keeps_the_override_and_a_restored_sim_steps_like_the_live_one() {
     let (fresh, id) = game();
     let back = Sim::from_snapshot(&fresh.snapshot(), fresh.content().cloned()).unwrap();
     assert_eq!(warp(&back, id), n(100));
+}
+
+/// The aligned far leg of the scout (keys on or off) for a plain move 6000 units ahead, 40 s.
+fn far_leg(keys: bool, edits: &[Edit]) -> (Fixed, bool) {
+    let db = scout_db(keys);
+    let mut sim = approach_tests::sim_with(Arc::clone(&db));
+    let s = sim.spawn_def(db.key("fx_frigate").unwrap(), PlayerId(1), at(0, 0), AHEAD).unwrap();
+    for e in edits {
+        let e = match e {
+            Edit::WarpSpeed(_, to) => Edit::WarpSpeed(s, *to),
+            Edit::MaxSpeed(_, to) => Edit::MaxSpeed(s, *to),
+            other => other.clone(),
+        };
+        assert!(script(&mut sim, e));
+    }
+    order(&mut sim, Order::Move { units: vec![s], to: at(0, 6000), queue: false });
+    let mut top = Fixed::ZERO;
+    let mut phased = false;
+    for _ in 0..40 * HZ {
+        sim.step(&[]);
+        top = top.max(speed(&sim, s));
+        phased |= sim.approach_warp.contains(s);
+    }
+    (top, phased)
+}
+
+#[test]
+fn an_unkeyed_craft_ignores_the_warp_edit() {
+    // Armada II physics have no tooCloseForWarp: a plain move never warps, edit or not.
+    let (top, _) = far_leg(false, &[Edit::WarpSpeed(EntityId(0), Some(n(10)))]);
+    assert!(top > n(15) && top <= n(21), "{top:?}");
+    let (top, _) = far_leg(false, &[Edit::WarpSpeed(EntityId(0), Some(n(300)))]);
+    assert!(top <= n(21), "{top:?}");
+}
+
+#[test]
+fn a_raised_impulse_alone_gives_a_keyed_craft_a_slow_aligned_leg() {
+    // No WarpSpeed edit: impulse 120 over the class warp 100 now leaves a leg at 100 (a plain
+    // move used to stay at impulse because warp <= impulse excluded it).
+    let (top, phased) = far_leg(true, &[Edit::MaxSpeed(EntityId(0), Some(n(120)))]);
+    assert!(top >= n(99) && top <= n(121), "{top:?}");
+    assert!(!phased, "no warp phase for a leg below impulse");
+}
+
+/// The SIM-36 stand-ins (an armed far-seeing destroyer, an unarmed target 5000 units ahead, approach warp enabled from 1100
+/// units), the destroyer slowed to impulse 20 with warp 100 and, with `keys`, the Armada I keys.
+fn attack_game(keys: bool) -> (Sim, EntityId, EntityId) {
+    let base = approach_tests::db(sta_content::Profile::Sta2Classic, Some(1100));
+    let mut b = ContentDb::builder().profile(base.profile()).features(base.features().clone());
+    for w in base.weapons().cloned() {
+        b = b.weapon(w);
+    }
+    for mut u in base.units().cloned() {
+        if u.odf == "st_seer" {
+            u.movement = MoveStats::from_f32(20.0, 1.0, 1.0, 1.0, 1.0);
+            u.movement.combat_speed = n(10);
+            u.movement.warp_speed = n(100);
+            if keys {
+                u.movement.too_close_for_warp = n(10);
+                u.movement.heading_close_for_warp = n(30);
+            }
+        }
+        b = b.unit(u);
+    }
+    let db = Arc::new(b.build().unwrap().with_rules(base.rules().clone()));
+    let mut sim = approach_tests::sim_with(Arc::clone(&db));
+    let a = sim.spawn_def(db.key("st_seer").unwrap(), PlayerId(1), at(0, 0), AHEAD).unwrap();
+    let t = sim.spawn_def(db.key("st_target").unwrap(), PlayerId(2), at(0, 5000), AHEAD).unwrap();
+    (sim, a, t)
+}
+
+#[test]
+fn the_attack_approach_of_a_keyed_craft_flies_the_far_leg_at_a_warp_speed_below_impulse() {
+    // Control: the class warp 100 is a real warp on the far leg (keyed or not, the approach warps).
+    let (mut sim, a, t) = attack_game(true);
+    order(&mut sim, Order::Attack { units: vec![a], target: t });
+    let mut top = Fixed::ZERO;
+    for _ in 0..30 * HZ {
+        sim.step(&[]);
+        top = top.max(speed(&sim, a));
+    }
+    assert!(top > n(90), "control warps: {top:?}");
+    for keys in [true, false] {
+        let (mut sim, a, t) = attack_game(keys);
+        assert!(script(&mut sim, Edit::WarpSpeed(a, Some(n(10)))));
+        order(&mut sim, Order::Attack { units: vec![a], target: t });
+        let (mut top, mut phased) = (Fixed::ZERO, false);
+        for _ in 0..30 * HZ {
+            sim.step(&[]);
+            top = top.max(speed(&sim, a));
+            phased |= sim.approach_warp.contains(a);
+        }
+        assert!(!phased, "keys {keys}: no warp phase");
+        if keys {
+            assert!(top > n(8) && top <= n(11), "keyed: {top:?}");
+        } else {
+            assert!(top > n(15) && top <= n(21), "unkeyed stays at impulse: {top:?}");
+        }
+    }
 }
 
 /// The pinned whole-state digest of a run holding an overridden warp speed; it
