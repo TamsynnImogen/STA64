@@ -337,6 +337,7 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [ ] Wire `SetCameraZoom` and `OVERVIEW_MIN/MAX_HEIGHT` zoom limits to the orbit camera.
 - [ ] Audio lane: play cineractive voice/music so A1 intros keep their original length in the client.
 - [ ] Graphics section in the options screen for `RenderQuality` (shadows, MSAA, nebula steps), persisted in the UI-29 store.
+- [ ] Options -> Graphics on a real desktop: change Windowed size, toggle Fullscreen (monitor resolution), Vertical sync and Show FPS, then restart and confirm the choices persist. Repeat from an in-game Options menu, including a match launched directly, and check returning from fullscreen after manually resizing/maximizing the window. Window-component tests and windowless GPU captures cover these display controls; compositor/HiDPI behavior still needs manual acceptance. Android retains its native window size/mode.
 - [ ] Nebula march at half resolution with depth-aware upsample (RND-31 follow-up); measure with `sta-bench perf ... --variants base,no-nebula`.
 - [ ] Animated sprite materials (stock nebula billboards) rewritten every frame: share or throttle.
 - [ ] Shroud art: original games draw unexplored space black; `Gshroud.tga` is drawn as-is (fog owner).
