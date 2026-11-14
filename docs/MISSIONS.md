@@ -514,6 +514,33 @@ data = read from the install; not measured):
 - Calls with no sim seam stay counted and non-raising (`shared_calls.rs`:
   retained as presentation calls) or raising (`no_data_fn`).
 
+## Ending check and cheat codes (LUA-29)
+
+`sta_mission::cheat` holds the host-side rule of the original's mission-ending cheat codes; `sta_mission::ending`
+and `python3 tools/campaign_readiness.py --converted a1|a2 --ending [--label NAME]` check every converted
+mission's ending from a mid-mission state (headless, stand-in host).
+
+- **Cheat rule** (read from the executable, static; not measured; the strings are in no data file): the exact,
+  case-sensitive whole strings `kobayashimaru` (win, Armada I and II) and `kobayashimaru_lost` (loss, Armada II
+  only) typed into the single-player chat box end the mission at once and are not sent as chat. Refused (the text
+  goes on as chat) in Instant Action, in every network session, and, STA64's own rule, in replay playback.
+  `showmethemoney` and `canofwhoopass` are not mission ends and are left out. An Armada I loss exists only as a
+  test entry (`cheat::force_end`), not from chat.
+- **A forced end** writes the end record a script's `SucceedMission` / `FailMission` writes (`MissionEnd { time:
+  now, failed, blocked: None }`, `MissionRuntime::force_mission_end`). It **overrides a pending scripted end** and
+  **skips the script's own win and lose steps** (victory cineractive, voice lines, objective updates). No sim
+  state, no command, so no snapshot, protocol or replay number; it is a host input of a single-player game.
+- **Left open**: the original's chat box does not open while a script has called `DisableChat(true)`, a script step
+  waits for Enter, or the objectives display is up; STA64 models none of the three for chat. STA64 has no
+  single-player in-game chat input (the chat log is display only), so nothing calls `cheat::try_chat_cheat` in the
+  binary yet; that hook needs a text input and belongs to the UI lane.
+- **Ending check columns**: (1) forced result: a forced win and loss resolve to the right result, nothing new is
+  unbound, raising or unsupported meanwhile, and the campaign transition applies and the next mission becomes
+  available; it does **not** prove the mission's own win condition is reachable. (2) win sequence and (3) lose
+  sequence: the script's own steps that lead to `SucceedMission` / `FailMission` run from the test point and the
+  scripted end completes; it does **not** prove the state those steps expect exists in a real game, and it can
+  reach the end by a path no player can. The selection of the end steps is documented in `ending.rs`.
+
 ## Playing stock Armada II missions (experimental)
 
 Why the menu cannot start them out of the box: a stock mission is a compiled DLL

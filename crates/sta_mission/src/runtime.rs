@@ -542,6 +542,21 @@ impl MissionRuntime {
         state
     }
 
+    /// Host-side forced end (LUA-29, `crate::cheat`): write the same end record a script's
+    /// `SucceedMission` / `FailMission` writes, with the end time at `tick`, so the mission ends on
+    /// the first update after it and everything downstream (the outcome scan, the campaign
+    /// transition) is the scripted path's. It replaces a pending scripted end (also a blocked one)
+    /// and skips whatever the script would have run before calling its own end. No sim state, no
+    /// command. Returns false, and changes nothing, once the mission has already ended.
+    pub fn force_mission_end(&self, tick: u64, won: bool) -> bool {
+        let mut c = self.inner.ctx.borrow_mut();
+        if c.ended.is_some() {
+            return false;
+        }
+        c.mission_end = Some(api::MissionEnd { time: tick as f64 / sta_core::TICK_HZ as f64, failed: !won, blocked: None });
+        true
+    }
+
     /// What the script asked of the AI since the last call, in call order (AI-06, LUA-20): plan
     /// loads (`AI_Team_Load_AIP`, `Player:loadAIP`) and the switches (`DisableAllAITeams`,
     /// `EnableAllAITeams`, `EnableTeam`, `DisableTeam`, `SetIsAITeam`, `ResetStrategyCycle`).
