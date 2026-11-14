@@ -13,7 +13,7 @@
 //! | objectives and briefing (host state, not a `Presentation`) | the modal panel of [`ObjectivesView`], toggled with Alt+O | rectangles of `objectivesPanelArea` and the text areas in A2 stock `gui_glob16x12.cfg`, the A1 `gui_glob.cfg` panel; the completed-line tick **not measured** |
 //! | a message box ([`MessageBox`]) | the same panel with an OK button | the original's message display reuses the objectives keys |
 //! | `Movie`, `StopMovie` | MED-03 | |
-//! | `Sound`, `StopSound` | `PlaySound` on the UI bus (no admission limit) / `StopSounds` (the audio lane resolves the name) | |
+//! | `Sound`, `StopSound` | `PlaySound` on the UI bus (no admission limit) / `StopSounds` (the audio lane resolves the name); the script's `IsAudioMessageDone` turns true when the clip's length has played ([`ScriptReply::SoundDone`], from `audio::SoundStarted`), at once if nothing plays it | clip length from the decoded file; the wait is measured for A1 only, for A2 and Fleet Ops **not measured** |
 //! | `Music`, `StopMusic`, `Effect`, `WaitForKey`, other `Call`s | **not shown** (audio and effects lanes); each kind is listed once in [`Unhandled`] | |
 //!
 //! While a cineractive is on, the HUD and the notices are hidden and the fog layers are not drawn (the cinematic view's render list holds no HUD panel and the terrain pass draws fog and shroud only in the RTS view: Refit, read from the executable, static), and its end clears the fade.
@@ -44,6 +44,22 @@ use crate::ui::theme::{ButtonClicked, Theme, UiButton, button, font_role};
 
 /// A2's layout space (stock `screenWidth` / `screenHeight` of `gui_glob16x12.cfg`).
 pub const A2_CANVAS: Vec2 = Vec2::new(1600.0, 1200.0);
+/// An A1 title fades in over this many seconds when the script's flag is set (all stock titles set it;
+/// read from the executable, static; the unit of the engine's step is inferred, not measured).
+pub const A1_TITLE_FADE_SECS: f32 = 1.0;
+/// A1 titles are drawn in the title font's colour, RGB (0, 0.5, 1) (hard-coded in the executable, static).
+pub const A1_TITLE_COLOUR: [f32; 3] = [0.0, 0.5, 1.0];
+
+/// Where A1's `ShowTitle(x, y, w, h)` puts the text, in 480-unit-high canvas units from the window's
+/// top-left: centred in the rectangle by the width and height the default font would give it
+/// (5 units a letter and one between letters, 10 high; read from the executable, static). The stock title's size and font are not measured (a screenshot suggests about twice this, unconfirmed); ours uses the theme's heading size. The
+/// window's aspect does not enter: the units are fractions of its height, so a wide window shows the
+/// same margins in proportion to its height, with no 4:3 box around it.
+pub fn a1_title_at(rect: [f32; 4], text: &str) -> Vec2 {
+    let measured: f32 = text.chars().map(|c| if c == '\'' { 2.0 } else if c == ' ' { 4.0 } else { 6.0 }).sum();
+    Vec2::new(rect[0] + (rect[2] - 1.0 - measured) * 0.5, rect[1] + (rect[3] - 1.0 - 10.0) * 0.5)
+}
+
 /// A1's layout space.
 pub const A1_CANVAS: Vec2 = Vec2::new(640.0, 480.0);
 /// Where a title with no placement goes (Roots' `addTitle(.., 50, 50, ..)`).
@@ -97,6 +113,28 @@ pub enum ScriptReply {
     /// The cineractive is ended for the script (a cap of [`skip_cineractive`], a script fault,
     /// the mission's end): the camera is the player's again whatever the script does.
     CineractiveReleased,
+    /// A message the mission started with `Presentation::Sound { id, .. }` has played to its end
+    /// (the clip's length, from the audio layer) or could not be played: the script's
+    /// `IsAudioMessageDone(id)` reads true from here on.
+    SoundDone { id: u32 },
+}
+
+/// The mission messages (`Presentation::Sound`) that have not ended yet, oldest first. A message
+/// ends when its clip has played for its length (reported by the audio layer as
+/// [`crate::audio::SoundStarted`]), is stopped by the script, or at once when there is no audio
+/// layer or the clip does not resolve. `left` is the playing time still to run, known once the
+/// audio layer has taken the request.
+#[derive(Resource, Default, Debug)]
+pub struct ScriptSounds {
+    pending: Vec<(u32, String, Option<f32>)>,
+}
+
+impl ScriptSounds {
+    /// The ids of the messages still playing (for tests).
+    #[cfg(test)]
+    pub fn playing(&self) -> Vec<u32> {
+        self.pending.iter().map(|p| p.0).collect()
+    }
 }
 
 /// A message for the player, with an OK button: the host sends it.
@@ -161,6 +199,21 @@ pub struct TitleItem {
     pub place: Place,
     /// Seconds left; `None` until removed.
     pub left: Option<f32>,
+    /// An A1 title's rectangle `[x, y, w, h]` on the 640x480 canvas, and seconds shown.
+    pub a1_rect: Option<[f32; 4]>,
+    /// An A1 title's fade level (RGB scale) when it is held: 0 to 1 over [`A1_TITLE_FADE_SECS`]
+    /// while it fades in (the script's flag), then held; `age` counts seconds into the fade in.
+    pub age: f32,
+    /// Seconds since `RemoveTitle(id, true)` began the fade out, which takes the level down at
+    /// the same rate and drops the title when it reaches 0 (read from the executable, static).
+    pub out: Option<f32>,
+}
+
+impl TitleItem {
+    /// The colour scale of an A1 title now: the fade in's level less what the fade out took.
+    pub fn level(&self) -> f32 {
+        (self.age.min(A1_TITLE_FADE_SECS) / A1_TITLE_FADE_SECS - self.out.unwrap_or(0.0) / A1_TITLE_FADE_SECS).max(0.0)
+    }
 }
 
 /// The titles and subtitles on screen.
@@ -183,6 +236,14 @@ impl Titles {
         self.dirty = true;
     }
 
+    /// `RemoveTitle(id, true)`: fade out, then go. A title already going stays on its course.
+    fn fade_out(&mut self, id: u32) {
+        if let Some(t) = self.items.iter_mut().find(|t| t.id == id && t.out.is_none()) {
+            t.out = Some(0.0);
+            self.dirty = true;
+        }
+    }
+
     fn remove(&mut self, id: u32) {
         let n = self.items.len();
         self.items.retain(|t| t.id != id);
@@ -197,6 +258,18 @@ impl Titles {
             }
         }
         self.items.retain(|t| t.left.is_none_or(|l| l > 0.0));
+        self.dirty |= n != self.items.len();
+        for t in self.items.iter_mut().filter(|t| t.a1_rect.is_some()) {
+            if let Some(o) = &mut t.out {
+                *o += dt;
+                self.dirty = true;
+            } else if t.age < A1_TITLE_FADE_SECS {
+                t.age += dt;
+                self.dirty = true;
+            }
+        }
+        let n = self.items.len();
+        self.items.retain(|t| t.out.is_none() || t.level() > 0.0);
         self.dirty |= n != self.items.len();
     }
 }
@@ -303,6 +376,9 @@ pub(crate) fn consume(
     mut stop: MessageWriter<StopSounds>,
     mut log: Option<ResMut<PresentationLog>>,
     link: Option<Res<crate::sim_link::SimLink>>,
+    mut sounds: ResMut<ScriptSounds>,
+    reports: Option<Res<crate::audio::ReportsSoundLengths>>,
+    mut replies: MessageWriter<ScriptReply>,
 ) {
     for SimMsg(e) in events.read() {
         let SimEvent::Present(p) = e else { continue };
@@ -316,6 +392,9 @@ pub(crate) fn consume(
                 subtitle: *subtitle,
                 place: place_of(*subtitle),
                 left: seconds.map(|s| s.to_f32()),
+                a1_rect: None,
+                age: 0.0,
+                out: None,
             }),
             Presentation::RemoveTitle { id } => titles.remove(*id),
             Presentation::Fade { out, seconds, rgb } => {
@@ -349,7 +428,7 @@ pub(crate) fn consume(
                 if let [Arg::Int(id), Arg::Text(text), x, y, secs, _] = args.as_slice()
                     && let (Some(x), Some(y), Some(secs), Ok(id)) = (num(x), num(y), num(secs), u32::try_from(*id))
                 {
-                    titles.add(TitleItem { id, text: text_of(strings.as_deref(), text), subtitle, place: Place { canvas: A2_CANVAS, at: Vec2::new(x, y) }, left: (secs > 0.0).then_some(secs) });
+                    titles.add(TitleItem { id, text: text_of(strings.as_deref(), text), subtitle, place: Place { canvas: A2_CANVAS, at: Vec2::new(x, y) }, left: (secs > 0.0).then_some(secs), a1_rect: None, age: 0.0, out: None });
                 } else {
                     unhandled.note(name);
                 }
@@ -361,7 +440,21 @@ pub(crate) fn consume(
                     && let Some(t) = titles.items.iter_mut().find(|t| t.id == id)
                 {
                     t.place = Place { canvas: A1_CANVAS, at: Vec2::new(x, y) };
+                    if let [_, _, _, Arg::Int(w), Arg::Int(h), flag] = args.as_slice() {
+                        t.a1_rect = Some([x, y, *w as f32, *h as f32]);
+                        // The flag: fade in over a second (true) or show at once (false).
+                        t.age = if matches!(flag, Arg::Bool(false)) { A1_TITLE_FADE_SECS } else { 0.0 };
+                    }
                     titles.dirty = true;
+                } else {
+                    unhandled.note(name);
+                }
+            }
+            // A1 `RemoveTitle(id, true)` / `RemoveSubtitle(id, true)`: the 1 s fade out (the plain
+            // form is the typed `RemoveTitle`, which goes at once).
+            Presentation::Call { name, args } if name == "A1.RemoveTitleFade" => {
+                if let [Arg::Int(id)] = args.as_slice() && let Ok(id) = u32::try_from(*id) {
+                    titles.fade_out(id);
                 } else {
                     unhandled.note(name);
                 }
@@ -375,14 +468,23 @@ pub(crate) fn consume(
             }
             // A script's voice or message sound goes to the audio layer by name (the resolver
             // finds `Data/sounds/...` by stem, events by name); the host answers the script.
-            Presentation::Sound { name, .. } => {
+            Presentation::Sound { id, name, .. } => {
                 // The UI bus: the voice bus drops a line while another plays (a unit's acknowledgement,
-                // the script's previous message, which the host reports finished at once).
+                // or the script's previous message).
                 play.write(PlaySound { name: name.clone(), at: None, bus: Bus::Ui });
+                // The message ends when its clip does (`sound_replies`); with no audio layer to
+                // say how long it is, at once.
+                if reports.is_some() {
+                    sounds.pending.push((*id, name.clone(), None));
+                } else {
+                    replies.write(ScriptReply::SoundDone { id: *id });
+                }
             }
-            // `Media:stopSounds()` stops every script sound: that bus (not per sound).
-            Presentation::StopSound { .. } => {
+            // `Media:stopSounds()` stops every script sound: that bus (not per sound). A stopped
+            // message is over for the script, which has already forgotten it.
+            Presentation::StopSound { id } => {
                 stop.write(StopSounds { bus: Bus::Ui });
+                sounds.pending.retain(|p| p.0 != *id);
             }
             Presentation::Music { .. } => {
                 unhandled.note("Music");
@@ -401,6 +503,33 @@ pub(crate) fn consume(
             }
         }
     }
+}
+
+/// Ends the mission messages: the audio layer says how long each clip is when it takes the request
+/// ([`crate::audio::SoundStarted`], matched by name in request order), and the message is done
+/// that long after, in real time, as the player hears it. A clip that did not resolve ends at once.
+fn sound_replies(mut started: MessageReader<crate::audio::SoundStarted>, time: Res<Time<Real>>, mut sounds: ResMut<ScriptSounds>, mut out: MessageWriter<ScriptReply>) {
+    let dt = time.delta_secs();
+    for p in &mut sounds.pending {
+        if let Some(left) = p.2.as_mut() {
+            *left -= dt;
+        }
+    }
+    for s in started.read() {
+        if s.bus != Bus::Ui {
+            continue;
+        }
+        if let Some(p) = sounds.pending.iter_mut().find(|p| p.2.is_none() && p.1 == s.name) {
+            p.2 = Some(s.seconds.unwrap_or(0.0));
+        }
+    }
+    sounds.pending.retain(|(id, _, left)| {
+        let done = left.is_some_and(|l| l <= 0.0);
+        if done {
+            out.write(ScriptReply::SoundDone { id: *id });
+        }
+        !done
+    });
 }
 
 /// The notices are hidden over a cutscene (the HUD and radar roots follow the same state in
@@ -528,6 +657,17 @@ fn draw_titles(mut commands: Commands, theme: Res<Theme>, mut titles: ResMut<Tit
     for t in &titles.items {
         let size = if t.subtitle { theme.text_size } else { theme.heading_size };
         let p = t.place;
+        if let Some(rect) = t.a1_rect {
+            let at = a1_title_at(rect, &t.text);
+            let b = t.level();
+            let base = if t.subtitle { [1.0; 3] } else { A1_TITLE_COLOUR };
+            let [r, g, bl] = base.map(|c| c * b);
+            commands.entity(root).with_child((
+                Node { position_type: PositionType::Absolute, left: Val::Vh(at.x / A1_CANVAS.y * 100.0), top: Val::Vh(at.y / A1_CANVAS.y * 100.0), ..default() },
+                children![sprite_text_styled(t.text.clone(), size, Color::srgb(r, g, bl), SpriteTextStyle::role(font_role(&theme, size)).wrap_to_parent())],
+            ));
+            continue;
+        }
         commands.entity(root).with_child((
             Node { position_type: PositionType::Absolute, left: Val::Percent(p.at.x / p.canvas.x * 100.0), top: Val::Percent(p.at.y / p.canvas.y * 100.0), max_width: Val::Percent(80.0), ..default() },
             children![sprite_text_styled(t.text.clone(), size, Color::WHITE, SpriteTextStyle::role(font_role(&theme, size)).wrap_to_parent())],
@@ -563,6 +703,25 @@ fn panel_content(view: &ObjectivesView, queue: &MessageQueue) -> Option<PanelCon
 
 fn fixed(strings: Option<&Strings>, key: &str, fallback: &str) -> String {
     strings.map(|s| s.game_text(key)).filter(|t| *t != key).unwrap_or(fallback).to_owned()
+}
+
+/// A heading as the game's string table defines it. Rule: with a game table loaded, a key the table lacks
+/// means the game has no such heading and none is drawn (a game that does not define
+/// `GUI_OD_BRIEFING_SUMMARY` shows no summary heading). With no game table (an empty or absent one) there is
+/// nothing to say otherwise and `fallback` is used.
+fn heading_text(strings: Option<&Strings>, key: &str, fallback: &str) -> Option<String> {
+    match strings {
+        Some(s) if s.has_game_table() => Some(s.game_text(key)).filter(|t| *t != key).map(str::to_owned),
+        _ => Some(fallback.to_owned()),
+    }
+}
+
+/// Whether the briefing text already closes with `heading` as a line of its own (case and a trailing colon
+/// ignored), so the panel must not draw it a second time.
+fn text_ends_with_heading(body: &str, heading: &str) -> bool {
+    let norm = |t: &str| t.trim().trim_end_matches(':').trim_end().to_lowercase();
+    let want = norm(heading);
+    !want.is_empty() && body.lines().rev().find(|l| !l.trim().is_empty()).is_some_and(|l| norm(l) == want)
 }
 
 /// The panel is A2 stock's `objectivesPanelArea=192 80 1280 1024` of 1600x1200, the
@@ -602,14 +761,24 @@ fn draw_panel(
         if !c.title.is_empty() {
             p.spawn(head(c.title.clone(), theme.title));
         }
-        if c.message.is_none() && !c.body.is_empty() {
-            p.spawn(head(fixed(s, "GUI_OD_BRIEFING_SUMMARY", "BRIEFING SUMMARY:"), summary_colour));
+        if c.message.is_none()
+            && !c.body.is_empty()
+            && let Some(h) = heading_text(s, "GUI_OD_BRIEFING_SUMMARY", "BRIEFING SUMMARY:")
+        {
+            p.spawn(head(h, summary_colour));
         }
         if !c.body.is_empty() {
             p.spawn(line(c.body.clone(), theme.text));
         }
         if c.message.is_none() && !c.lines.is_empty() {
-            p.spawn(head(fixed(s, "GUI_OD_OBJECTIVES", "OBJECTIVES:"), summary_colour));
+            // Objective files may carry the heading themselves as the last line of the briefing text; then it is
+            // not drawn twice. Limit: the comparison is with the table's heading, or the English fallback when
+            // the table has none, so a translated game without the string but with a translated text line can
+            // still show two.
+            let heading = fixed(s, "GUI_OD_OBJECTIVES", "OBJECTIVES:");
+            if !text_ends_with_heading(&c.body, &heading) {
+                p.spawn(head(heading, summary_colour));
+            }
             for l in &c.lines {
                 let (mark, colour) = match l.state {
                     ObjectiveState::Active => ("* ", theme.text),
@@ -655,7 +824,9 @@ fn reset_presentation(
     mut movies: ResMut<PendingMovies>,
     mut view: ResMut<ObjectivesView>,
     mut queue: ResMut<MessageQueue>,
+    mut sounds: ResMut<ScriptSounds>,
 ) {
+    sounds.pending.clear();
     titles.items.clear();
     // `Titles::default()` is not dirty, so the layer would keep what it drew.
     titles.dirty = true;
@@ -674,6 +845,8 @@ impl Plugin for PresentationPlugin {
             .init_resource::<CineractiveClock>()
             .init_resource::<Unhandled>()
             .init_resource::<PendingMovies>()
+            .init_resource::<ScriptSounds>()
+            .add_message::<crate::audio::SoundStarted>()
             .init_resource::<ObjectivesView>()
             .init_resource::<MessageQueue>()
             .add_systems(OnEnter(crate::app::AppState::FrontEnd), reset_presentation)
@@ -688,7 +861,7 @@ impl Plugin for PresentationPlugin {
             .add_systems(Startup, spawn_layers.run_if(resource_exists::<Theme>))
             .add_systems(
                 Update,
-                (consume, hide_notices_in_cineractive, run_clock, movie_replies, skip_cineractive, apply_replies, toggle_objectives, queue_messages, ok_pressed, draw_titles.run_if(resource_exists::<Theme>), draw_fade, draw_panel.run_if(resource_exists::<Theme>)).chain().in_set(GameSet::Ui),
+                (consume, sound_replies, hide_notices_in_cineractive, run_clock, movie_replies, skip_cineractive, apply_replies, toggle_objectives, queue_messages, ok_pressed, draw_titles.run_if(resource_exists::<Theme>), draw_fade, draw_panel.run_if(resource_exists::<Theme>)).chain().in_set(GameSet::Ui),
             );
     }
 }
@@ -704,6 +877,18 @@ mod tests {
         app.add_plugins(MinimalPlugins).init_resource::<ButtonInput<KeyCode>>().add_plugins(PresentationPlugin);
         crate::app::configure_sets(&mut app);
         app
+    }
+
+    /// Time stands still between the test's own steps (`Time<Real>` advances only when a test says so).
+    fn frozen(app: &mut App) {
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::ZERO));
+        app.update();
+    }
+
+    fn step(app: &mut App, seconds: f32) {
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(seconds)));
+        app.update();
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::ZERO));
     }
 
     fn send(app: &mut App, p: Presentation) {
@@ -973,6 +1158,191 @@ mod tests {
         app.world_mut().resource_mut::<ObjectivesView>().visible = false;
         app.update();
         assert!(app.world_mut().query::<&PanelRoot>().iter(app.world()).next().is_none());
+    }
+
+    fn a1_title(app: &mut App) {
+        send(app, Presentation::Title { id: 1, text: "'TITLE TEXT'".into(), subtitle: false, seconds: None });
+        send(app, Presentation::Call { name: "A1.ShowTitle".into(), args: vec![Arg::Int(1), Arg::Int(0), Arg::Int(0), Arg::Int(200), Arg::Int(70), Arg::Bool(true)] });
+    }
+
+    /// An A1 `ShowTitle(0, 0, 200, 70, text, true)`: blue, top-left, placed in
+    /// fractions of the window's height (so a 21:9 window has the same margins in proportion to its
+    /// height, no 4:3 box and no bars), fading in over a second.
+    #[test]
+    fn an_a1_title_is_blue_top_left_anchored_to_the_height_and_fades_in() {
+        let mut app = app();
+        app.insert_resource(Theme::default());
+        app.update();
+        frozen(&mut app);
+        a1_title(&mut app);
+        let at = a1_title_at([0.0, 0.0, 200.0, 70.0], "'TITLE TEXT'");
+        // Measured by the default font: 62 units wide, 10 high, centred in 200 x 70.
+        assert_eq!((at.x, at.y), (68.5, 29.5));
+        let node = |app: &mut App| {
+            let (n, c) = app.world_mut().query_filtered::<(&Node, &Children), Without<TitleLayer>>().iter(app.world()).find(|(n, _)| matches!(n.left, Val::Vh(_))).map(|(n, c)| (n.clone(), c.to_vec())).expect("the title node");
+            (n, c)
+        };
+        let (n, kids) = node(&mut app);
+        // Units of the window's height, never of its width: the same on any aspect ratio.
+        assert_eq!((n.left, n.top), (Val::Vh(at.x / 480.0 * 100.0), Val::Vh(at.y / 480.0 * 100.0)));
+        assert!(n.max_width == Val::Auto, "no width box that would depend on the aspect");
+        let colour = |app: &App, e: Entity| app.world().get::<SpriteText>(e).map(|t| t.color);
+        let first = colour(&app, kids[0]);
+        assert!(first.is_some_and(|c| c.to_srgba().blue < 0.1), "starts dark (fading in): {first:?}");
+        app.world_mut().resource_mut::<Titles>().tick(2.0);
+        app.update();
+        let (_, kids) = node(&mut app);
+        let c = colour(&app, kids[0]).unwrap().to_srgba();
+        assert_eq!((c.red, c.green, c.blue), (0.0, 0.5, 1.0));
+        assert!(app.world_mut().query::<&Node>().iter(app.world()).all(|n| !matches!((n.left, n.right), (Val::Vw(_), Val::Vw(_)))), "no bars");
+    }
+
+    fn title_colours(app: &mut App) -> Vec<Srgba> {
+        app.update();
+        app.world_mut().query::<&SpriteText>().iter(app.world()).map(|t| t.color.to_srgba()).collect()
+    }
+
+    /// `RemoveTitle(id, true)` takes the title down over a second, from the level it has, then it
+    /// is gone; `RemoveTitle(id, false)` takes it down at once (read from the executable, static).
+    #[test]
+    fn an_a1_title_removed_with_the_flag_fades_out_over_a_second() {
+        let mut app = app();
+        app.insert_resource(Theme::default());
+        app.update();
+        frozen(&mut app);
+        a1_title(&mut app);
+        app.world_mut().resource_mut::<Titles>().tick(3.0);
+        assert_eq!(title_colours(&mut app).first().map(|c| (c.red, c.green, c.blue)), Some((0.0, 0.5, 1.0)), "held at full level");
+        send(&mut app, Presentation::Call { name: "A1.RemoveTitleFade".into(), args: vec![Arg::Int(1)] });
+        assert_eq!(app.world().resource::<Titles>().items.len(), 1, "still there");
+        app.world_mut().resource_mut::<Titles>().tick(0.5);
+        let c = title_colours(&mut app)[0];
+        assert!((c.blue - 0.5).abs() < 1e-6 && (c.green - 0.25).abs() < 1e-6, "half way down: {c:?}");
+        app.world_mut().resource_mut::<Titles>().tick(0.6);
+        app.update();
+        assert!(app.world().resource::<Titles>().items.is_empty(), "gone after the second");
+        assert!(title_colours(&mut app).is_empty());
+        // A fade out begun while still fading in goes down from the level reached.
+        a1_title(&mut app);
+        app.world_mut().resource_mut::<Titles>().tick(0.5);
+        send(&mut app, Presentation::Call { name: "A1.RemoveTitleFade".into(), args: vec![Arg::Int(1)] });
+        app.world_mut().resource_mut::<Titles>().tick(0.4);
+        assert!((app.world().resource::<Titles>().items[0].level() - 0.1).abs() < 1e-6);
+        app.world_mut().resource_mut::<Titles>().tick(0.2);
+        assert!(app.world().resource::<Titles>().items.is_empty());
+        // The plain form removes at once.
+        a1_title(&mut app);
+        send(&mut app, Presentation::RemoveTitle { id: 1 });
+        assert!(app.world().resource::<Titles>().items.is_empty());
+        assert_eq!(app.world().resource::<Unhandled>().list(), Vec::<(&str, u32)>::new());
+    }
+
+    /// A1 subtitles (`ShowSubtitle(0, 380, 640, 40, ..)`) are white and centred in their rectangle
+    /// on both axes by the default font's measure, like titles (read from the executable, static);
+    /// a false flag shows them at full level at once.
+    #[test]
+    fn an_a1_subtitle_is_white_and_centred_in_its_rectangle() {
+        let mut app = app();
+        app.insert_resource(Theme::default());
+        app.update();
+        frozen(&mut app);
+        send(&mut app, Presentation::Title { id: 4, text: "Hi".into(), subtitle: true, seconds: None });
+        send(&mut app, Presentation::Call { name: "A1.ShowSubtitle".into(), args: vec![Arg::Int(4), Arg::Int(0), Arg::Int(380), Arg::Int(640), Arg::Int(40), Arg::Bool(false)] });
+        let at = a1_title_at([0.0, 380.0, 640.0, 40.0], "Hi");
+        // Two 6-unit letters: text starts at (639 - 12) / 2 and its 10 units centre on y 399.5.
+        assert_eq!((at.x, at.y + 5.0), (313.5, 399.5));
+        let (n, _) = app.world_mut().query_filtered::<(&Node, &Children), Without<TitleLayer>>().iter(app.world()).find(|(n, _)| matches!(n.left, Val::Vh(_))).map(|(n, c)| (n.clone(), c.to_vec())).expect("the subtitle node");
+        assert_eq!((n.left, n.top), (Val::Vh(at.x / 480.0 * 100.0), Val::Vh(at.y / 480.0 * 100.0)));
+        let c = title_colours(&mut app)[0];
+        assert_eq!((c.red, c.green, c.blue), (1.0, 1.0, 1.0), "white, full level at once");
+    }
+
+    #[test]
+    fn a_mission_message_ends_when_its_clip_has_played_and_not_before() {
+        use crate::audio::{ReportsSoundLengths, SoundStarted};
+        let mut app = app();
+        frozen(&mut app);
+        app.init_resource::<ReportsSoundLengths>().add_message::<SoundStarted>();
+        send(&mut app, Presentation::Sound { id: 7, name: "log.wav".into(), at: None });
+        assert!(replies(&mut app).is_empty(), "not done when it starts");
+        app.world_mut().write_message(SoundStarted { name: "log.wav".into(), bus: Bus::Ui, seconds: Some(0.0) });
+        app.update();
+        assert_eq!(replies(&mut app), [ScriptReply::SoundDone { id: 7 }], "a clip of no length is over at once");
+        // A one-second clip: not done after 0.9 s of playing, done after 1.1 s.
+        send(&mut app, Presentation::Sound { id: 8, name: "log.wav".into(), at: None });
+        app.world_mut().write_message(SoundStarted { name: "log.wav".into(), bus: Bus::Ui, seconds: Some(1.0) });
+        app.update();
+        step(&mut app, 0.9);
+        assert!(replies(&mut app).is_empty() && app.world().resource::<ScriptSounds>().playing() == [8], "still playing at 0.9 s");
+        step(&mut app, 0.2);
+        assert_eq!(replies(&mut app), [ScriptReply::SoundDone { id: 8 }], "done at 1.1 s");
+        send(&mut app, Presentation::Sound { id: 9, name: "log.wav".into(), at: None });
+        app.world_mut().write_message(SoundStarted { name: "log.wav".into(), bus: Bus::Ui, seconds: Some(3600.0) });
+        app.update();
+        assert!(replies(&mut app).is_empty() && app.world().resource::<ScriptSounds>().playing() == [9], "a long clip is still playing");
+        send(&mut app, Presentation::StopSound { id: 9 });
+        assert!(app.world().resource::<ScriptSounds>().playing().is_empty(), "stopped by the script");
+    }
+
+    #[test]
+    fn without_an_audio_layer_a_message_ends_at_once() {
+        let mut app = app();
+        send(&mut app, Presentation::Sound { id: 3, name: "x.wav".into(), at: None });
+        assert_eq!(replies(&mut app), [ScriptReply::SoundDone { id: 3 }]);
+    }
+
+    #[test]
+    fn an_objectives_heading_in_the_briefing_text_is_not_drawn_twice() {
+        assert!(text_ends_with_heading("TITLE TEXT\n\nOBJECTIVES:\n", "OBJECTIVES:"));
+        assert!(text_ends_with_heading("Go.\nobjectives", "OBJECTIVES:"));
+        assert!(!text_ends_with_heading("Go.", "OBJECTIVES:"));
+        assert!(!text_ends_with_heading("OBJECTIVES:\nGo.", "OBJECTIVES:"));
+        assert!(!text_ends_with_heading("", "OBJECTIVES:"));
+
+        let mut app = app();
+        app.insert_resource(Theme::default());
+        app.update();
+        let texts = |app: &mut App| app.world_mut().query::<&SpriteText>().iter(app.world()).map(|t| t.text.clone()).collect::<Vec<_>>();
+        let obj = [Objective { id: 1, title: "Find".into(), description: String::new(), state: ObjectiveState::Active }];
+        // An A1-shaped briefing: the text ends with the heading, then the goals follow.
+        app.world_mut().resource_mut::<ObjectivesView>().fill(&obj, Some(&ObjectiveBriefing { file: "f".into(), title: "Mission 1".into(), text: "Go.\n\nOBJECTIVES:".into(), notes: String::new() }));
+        app.world_mut().resource_mut::<ObjectivesView>().visible = true;
+        app.update();
+        let t = texts(&mut app);
+        assert_eq!(t.iter().filter(|x| x.contains("OBJECTIVES:")).count(), 1, "{t:?}");
+        assert!(t.iter().any(|x| x == "* Find"));
+        // An A2-shaped briefing (no heading in the text): the panel draws it.
+        app.world_mut().resource_mut::<ObjectivesView>().fill(&obj, Some(&ObjectiveBriefing { file: "f".into(), title: "Mission 1".into(), text: "Go.".into(), notes: String::new() }));
+        app.update();
+        let t = texts(&mut app);
+        assert_eq!(t.iter().filter(|x| x.contains("OBJECTIVES:")).count(), 1, "{t:?}");
+    }
+
+    #[test]
+    fn the_briefing_heading_is_drawn_only_when_the_game_has_a_string_for_it() {
+        let a2 = Strings::from_game("en", "\"GUI_OD_BRIEFING_SUMMARY\", \"SUMMARY:\",\n\"GUI_OD_OBJECTIVES\", \"GOALS:\"");
+        let a1 = Strings::from_game("en", "\"GUI_POP_OBJ_BUTTON\", \"Close\"");
+        assert_eq!(heading_text(Some(&a2), "GUI_OD_BRIEFING_SUMMARY", "X"), Some("SUMMARY:".into()));
+        assert_eq!(heading_text(Some(&a1), "GUI_OD_BRIEFING_SUMMARY", "X"), None);
+        assert_eq!(heading_text(None, "GUI_OD_BRIEFING_SUMMARY", "X"), Some("X".into()));
+        assert_eq!(heading_text(Some(&Strings::default()), "GUI_OD_BRIEFING_SUMMARY", "BRIEFING SUMMARY:"), Some("BRIEFING SUMMARY:".into()), "an empty table is no table");
+        let texts = |app: &mut App| app.world_mut().query::<&SpriteText>().iter(app.world()).map(|t| t.text.clone()).collect::<Vec<_>>();
+        let obj = [Objective { id: 1, title: "Find".into(), description: String::new(), state: ObjectiveState::Active }];
+        for (strings, summary) in [(a2, true), (a1, false), (Strings::default(), false)] {
+            let strings_is_empty = !strings.has_game_table();
+            let mut app = app();
+            app.insert_resource(Theme::default());
+            app.insert_resource(strings);
+            app.update();
+            app.world_mut().resource_mut::<ObjectivesView>().fill(&obj, Some(&ObjectiveBriefing { file: "f".into(), title: "M".into(), text: "Go.".into(), notes: String::new() }));
+            app.world_mut().resource_mut::<ObjectivesView>().visible = true;
+            app.update();
+            let t = texts(&mut app);
+            assert!(t.iter().any(|x| x == "Go."), "{t:?}");
+            assert_eq!(t.iter().any(|x| x == "SUMMARY:"), summary, "{t:?}");
+            // An empty table is no table: the English fallback heading shows.
+            assert_eq!(t.iter().any(|x| x == "BRIEFING SUMMARY:"), strings_is_empty, "{t:?}");
+        }
     }
 
     #[test]

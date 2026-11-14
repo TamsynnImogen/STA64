@@ -86,6 +86,7 @@ const DEFERRED_ON_PENDING: &[&str] = &[
     "DisableShieldGenerator",
     "DisableWeapons",
     "ExplodeNow",
+    "FleetOrder",
     "Goto",
     "HideObject",
     "ImmediateCloak",
@@ -812,7 +813,6 @@ fn seams(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()> {
     table.set("SetWormholeDeleteOnTransport", no_data_fn(lua, ctx, "SetWormholeDeleteOnTransport", "the sim has no wormhole transport rules")?)?;
     table.set("LoadCargoShip", no_data_fn(lua, ctx, "LoadCargoShip", "the world view carries no cargo state")?)?;
     table.set("GetNearestShipyard", no_data_fn(lua, ctx, "GetNearestShipyard", "the search's team-bit test and shipyard list are not measured")?)?;
-    table.set("CreateNewSiegeFleet", no_data_fn(lua, ctx, "CreateNewSiegeFleet", "no fleet objects exist in the mission API")?)?;
     Ok(())
 }
 

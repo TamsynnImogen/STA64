@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use sta_content::{ContentDb, MapDef, fake};
 use sta_core::{EntityId, Fixed, PlayerId, TeamId, Vec3};
-use sta_sim::command::{Command, CommandKind, Edit, Subsystem};
+use sta_sim::command::{Command, CommandKind, Edit, Order, Subsystem};
 use sta_sim::setup::{Control, Controller, GameOptions, GameSetup, PlayerSetup};
 use sta_sim::view::WorldView;
 use sta_sim::{Sim, SimEvent, WorldSource};
@@ -391,7 +391,7 @@ fn seam_gaps_raise_with_a_reason_and_are_counted() {
     let mut rt = runtime(&s);
     let names = [
         "SetPlanetCivPop", "StuffIntoWormhole",
-        "LinkWormholes", "SetWormholeDeleteOnTransport", "LoadCargoShip", "GetNearestShipyard", "CreateNewSiegeFleet",
+        "LinkWormholes", "SetWormholeDeleteOnTransport", "LoadCargoShip", "GetNearestShipyard",
     ];
     for name in names {
         let err = rt.eval::<()>(&format!("A2.{name}(a, 1)")).expect_err(name).to_string();
@@ -524,4 +524,38 @@ fn set_name_and_set_race_queue_typed_edits() {
     let edits: Vec<_> = rt.take_commands().into_iter().filter_map(|c| match c.kind { CommandKind::Edit(e) => Some(e), _ => None }).collect();
     assert_eq!(edits, [Edit::Name(s.ids[0], "Relay Station".into()), Edit::UnitRace(s.ids[0], "fx".into())]);
     assert_eq!(unsupported(&rt, "SetName"), 0);
+}
+
+#[test]
+fn a_fleet_member_built_this_tick_is_ordered_after_its_receipt() {
+    // `fleet:AddShip(BuildObject(..))` then `SetFleetDestination` in one step (the stock shape):
+    // the member's order is held with the pending handle and replayed once it is built.
+    let s = scene();
+    let mut sim = Sim::from_setup(&game(&s.db));
+    let cfg = MissionConfig { content: Some(s.db.clone()), view: Some((*sim.view()).clone()), ..MissionConfig::default() };
+    let src = "A2.paths.Q = { {x=40,y=0,z=0}, {x=50,y=0,z=0} }; f = A2.CreateNewSiegeFleet(); \
+               f:AddShip(A2.BuildObject('fx_cruiser', 1, 'Q', 1)); f:SetFleetDestination(Vector(500, 0, 0))";
+    let mut rt = MissionRuntime::from_source_with("fleet.lua", src, 3, cfg);
+    assert!(rt.errors().is_empty(), "{:?}", rt.errors());
+    let commands = rt.take_commands();
+    assert_eq!(commands.len(), 1, "only the spawn request is queued: {commands:?}");
+    let out = sim.step(&commands);
+    let id = out.events.iter().find_map(|e| match e { SimEvent::ScriptSpawned { id, .. } => Some(*id), _ => None }).unwrap();
+    rt.think(&out.view, &out.events, &mut Vec::new());
+    assert!(rt.eval::<bool>("return A2.Exists(f.ships[1])").unwrap());
+    let kinds: Vec<_> = rt.take_commands().into_iter().map(|c| c.kind).collect();
+    assert!(matches!(&kinds[..], [CommandKind::Order(Order::AttackPoint { units, .. })] if units == &vec![id]), "{kinds:?}");
+}
+
+#[test]
+fn a_fleet_member_whose_spawn_failed_is_skipped_without_raising() {
+    let s = scene();
+    let mut sim = Sim::new(3); // no content: the spawn is rejected
+    let cfg = MissionConfig { content: Some(s.db.clone()), view: Some((*sim.view()).clone()), ..MissionConfig::default() };
+    let src = "A2.paths.Q = { {x=40,y=0,z=0} }; f = A2.CreateNewSiegeFleet(); f:AddShip(A2.BuildObject('fx_cruiser', 1, 'Q', 0))";
+    let mut rt = MissionRuntime::from_source_with("failfleet.lua", src, 3, cfg);
+    let out = sim.step(&rt.take_commands());
+    rt.think(&out.view, &out.events, &mut Vec::new());
+    rt.eval::<()>("f:SetFleetDestination(Vector(5, 0, 0)); f:AddShip(f.ships[1])").unwrap();
+    assert!(rt.take_commands().is_empty());
 }

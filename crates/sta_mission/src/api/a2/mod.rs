@@ -27,6 +27,7 @@ mod native_presentation;
 mod native_text;
 mod objectives;
 mod objects;
+mod fleets;
 mod orders;
 mod queries;
 mod random;

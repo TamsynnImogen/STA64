@@ -80,15 +80,16 @@ fn colour(c: [f32; 3]) -> Color {
 pub fn animate(
     clock: Res<crate::clock::AnimClock>,
     tables: Res<SpriteTables>,
-    mut fx: Query<(&SpriteFx, Option<&SpriteFade>, &mut Visibility)>,
+    mut fx: Query<(&SpriteFx, Option<&SpriteFade>, Option<&crate::render::rock::MoonNimbus>, &mut Visibility)>,
     flip: Query<&UvFlipbook>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let t = clock.wall() as f32;
     let table = &tables.0;
-    for (f, fade, mut vis) in &mut fx {
+    for (f, fade, nimbus, mut vis) in &mut fx {
         let mut col = f.colour;
-        let mut shown = true;
+        // A moon's nimbus is drawn under the Stock look only.
+        let mut shown = nimbus.is_none_or(|n| n.on);
         if let Some(a) = f.node_anim.as_deref().and_then(|a| table.animation(a)) {
             match spr_anim::value(a, t, spr_anim::LOOP) {
                 Some(Value::Draw(false)) => shown = false,
