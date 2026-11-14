@@ -596,10 +596,13 @@ pub fn refresh(
         }
     }
     // The camera's footprint: four thin white lines, turned to the sides of the trapezoid.
+    // Children lay out in the padding box: inside the legacy square's 1 unit border, the
+    // stock display area has none. The percent-placed blips and the fog follow the same box.
+    let border = |b: Val| match b { Val::Px(b) => b, _ => 0.0 };
     let side = Vec2::new(
         match square_node.width { Val::Px(w) if w > 0.0 => w, _ => RADAR_SIDE },
         match square_node.height { Val::Px(h) if h > 0.0 => h, _ => RADAR_SIDE },
-    ) - Vec2::splat(2.0);
+    ) - Vec2::new(border(square_node.border.left) + border(square_node.border.right), border(square_node.border.top) + border(square_node.border.bottom));
     let lines: Vec<(Vec2, f32, f32)> = match feed.camera {
         Some(c) => (0..4)
             .map(|i| {
@@ -1092,7 +1095,7 @@ minimapStationFilterButton = \"station_art\"
         let outline = app.world_mut().query::<(&RadarCamera, &Node)>().iter(app.world())
             .find(|(camera, _)| camera.0 == 0).map(|(_, node)| node.clone()).unwrap();
         assert_eq!((outline.left, outline.top, outline.width),
-            (Val::Px(95.5), Val::Px(186.75), Val::Px(191.0)));
+            (Val::Px(96.0), Val::Px(188.25), Val::Px(192.0)));
         let names: Vec<_> = app.world_mut().query::<&GuiImage>().iter(app.world())
             .map(|image| (image.names[0].clone(), image.frame)).collect();
         assert!(names.contains(&("map_panel".to_owned(), 0)));
@@ -1133,5 +1136,81 @@ minimapStationFilterButton = \"station_art\"
         assert_eq!(count::<RadarSquare>(&mut app), 0);
         let chrome = app.world().get::<Children>(root).unwrap()[0];
         assert_eq!(app.world().get::<Node>(chrome).unwrap().display, Display::None);
+    }
+
+    /// Fleet Ops' 16:9 sheet (canvas 2134x1200, display area 320x320 in a 351x383 panel).
+    fn fo_sheet() -> sta_content::GuiLayout {
+        let cfg = "\
+screenWidth = 2134
+screenHeight = 1200
+minimapPanelArea = -1 818 351 383
+minimapBackgroundSprite = \"map_background\"
+minimapDisplayArea = 16 19 320 320
+";
+        let (parsed, warnings) = sta_content::GuiCfg::parse("radar.cfg", cfg);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        parsed.layout((2134, 1200))
+    }
+
+    /// The map layer (blips, camera outline) and the shroud layer share one box and one
+    /// transform at 4:3, 16:9 and 21:9, square and non-square maps: a world point lands on the
+    /// picture texel that holds its sight, and the picture is stretched to the whole box (the
+    /// default `Auto` image mode drew it contained, a square in the middle of a wide box).
+    #[test]
+    fn shroud_and_map_content_share_one_transform_at_any_aspect() {
+        use crate::render::fog::CELL;
+        use crate::ui::radar_fog::{FOG_PIXELS, FogColours, Sight, fog_pixels};
+        use bevy::ui::widget::NodeImageMode;
+        let maps = [
+            (Vec2::ZERO, Vec2::new(120.0 * CELL, 120.0 * CELL)),
+            (Vec2::new(-30.0 * CELL, 10.0 * CELL), Vec2::new(90.0 * CELL, 70.0 * CELL)),
+            (Vec2::new(5.0 * CELL, -40.0 * CELL), Vec2::new(35.0 * CELL, 80.0 * CELL)),
+        ];
+        let colours = FogColours::default();
+        for aspect in [4.0 / 3.0, 16.0 / 9.0, 21.0 / 9.0] {
+            let config = HudConfig { gui: Some(fo_sheet()), aspect, ..default() };
+            for (lo, hi) in maps {
+                let mut app = App::new();
+                app.add_plugins(MinimalPlugins).init_resource::<Assets<Image>>();
+                configure_sets(&mut app);
+                app.insert_resource(UiProfile::FleetOps).insert_resource(config.clone());
+                app.add_plugins(RadarPlugin);
+                let map = RadarMap::of_bounds(lo, hi);
+                {
+                    let mut st = app.world_mut().resource_mut::<RadarState>();
+                    st.map = Some(map);
+                    st.map_fixed = true;
+                }
+                app.insert_resource(FogState { grid: FogGrid::new(lo.to_array(), hi.to_array()), updates: 1 });
+                app.update();
+                let square = app.world_mut().query_filtered::<Entity, With<RadarSquare>>().single(app.world()).unwrap();
+                let fog = app.world().get::<Children>(square).unwrap()[0];
+                let image = app.world().get::<ImageNode>(fog).expect("the fog picture");
+                assert_eq!(image.image_mode, NodeImageMode::Stretch, "{aspect}: Auto would letterbox it");
+                let node = app.world().get::<Node>(fog).unwrap();
+                assert_eq!((node.left, node.top, node.width, node.height),
+                    (Val::Px(0.0), Val::Px(0.0), Val::Percent(100.0), Val::Percent(100.0)));
+                // A 16:9 window makes the display square; any other makes it a rectangle.
+                let sq = app.world().get::<Node>(square).unwrap();
+                let (Val::Px(w), Val::Px(h)) = (sq.width, sq.height) else { panic!("px box") };
+                assert_eq!(w == h, (aspect - 16.0 / 9.0f32).abs() < 1e-3, "{aspect}: box {w}x{h}");
+
+                // Blips and picture both place a world point at `to_square` of the box.
+                let grid_probe = FogGrid::new(lo.to_array(), hi.to_array());
+                let (cols, rows) = (grid_probe.w, grid_probe.h);
+                for (cx, cz) in [(0, 0), (cols - 1, 0), (0, rows - 1), (cols - 1, rows - 1), (cols / 2, rows / 2)] {
+                    let p = Vec2::new(lo.x + (cx as f32 + 0.5) * grid_probe.cell, lo.y + (cz as f32 + 0.5) * grid_probe.cell);
+                    let mut one = FogGrid::new(lo.to_array(), hi.to_array());
+                    one.set_cell_for_test(cx, cz, true, true);
+                    let px = fog_pixels(&one, &map, &colours, FOG_PIXELS);
+                    let uv = map.to_square(p);
+                    let (col, row) = ((uv.x * FOG_PIXELS as f32) as usize, (uv.y * FOG_PIXELS as f32) as usize);
+                    let at = &px[(row * FOG_PIXELS + col) * 4..][..4];
+                    assert_eq!(at, colours.rgba(Sight::Visible), "{aspect} {lo:?}..{hi:?}: cell {cx},{cz} at {uv:?}");
+                    // A blip sits at the same `to_square` fraction of the same box.
+                    assert!(map.to_world(uv).distance(p) < 1e-2);
+                }
+            }
+        }
     }
 }
