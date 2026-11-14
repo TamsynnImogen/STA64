@@ -30,7 +30,7 @@ fn app_with(data: ScreenData, window: Option<(u32, u32)>, scale: f32) -> App {
     let mut app = App::new();
     app.add_plugins((MinimalPlugins, StatesPlugin));
     configure_sets(&mut app);
-    app.add_plugins(crate::ui::display::DisplayPlugin);
+    app.add_plugins((crate::ui::display::DisplayPlugin, crate::ui::graphics::GraphicsPlugin));
     app.add_plugins(crate::ui::profile::UiProfilePlugin);
     app.insert_resource(data)
         .insert_resource(UiScale(scale))
@@ -347,7 +347,7 @@ fn the_preview_shows_the_start_positions_of_the_picked_map() {
     let scroll = *app.world().resource::<crate::frontend::screens::ListScroll>();
     let ctx = crate::frontend::screens::view::Ctx {
         theme: &theme, data: &data, strings: None, draft: &draft, browse: &browse, settings: &settings, selected: &selected, active_mod: &active_mod, scroll: &scroll,
-        layout: ScreenLayout::Stock, stock_box: Vec2::new(1440.0, 1080.0), options_tab: 0, campaigns: None,
+        layout: ScreenLayout::Stock, stock_box: Vec2::new(1440.0, 1080.0), options_tab: 0, graphics: None, campaigns: None,
     };
     let dots = preview_dots(&ctx);
     assert_eq!(dots.len(), data.maps[0].slots());
@@ -544,4 +544,54 @@ fn a_dropdown_keeps_keyboard_focus_through_the_rebuild_its_choice_causes() {
     let now = dropdown_of(&mut app, 0, Col::Race);
     assert_ne!(now, field, "the screen was rebuilt");
     assert_eq!(app.world().resource::<KitFocus>().0, Some(now));
+}
+
+#[cfg(not(target_os = "android"))]
+#[test]
+fn graphics_checkboxes_and_multisampling_apply_in_the_shared_panel() {
+    use crate::frontend::screens::{Settings, SettingKey, view::{MsaaSelect, SettingToggle, WindowedMode}};
+    use crate::render::{quality::RenderQuality, post::PostFx};
+    let mut app = app_with(ScreenData::fake(), Some((1280, 720)), 1.0);
+    app.insert_resource(RenderQuality::default()).insert_resource(PostFx::default());
+    go(&mut app, Screen::Settings);
+    let tab = app.world_mut().query::<(Entity, &Tab)>().iter(app.world()).find(|(_, t)| t.0 == 2).unwrap().0;
+    kit_click(app.world_mut(), tab);
+    settle(&mut app);
+    let windowed = app.world_mut().query_filtered::<Entity, With<WindowedMode>>().single(app.world()).unwrap();
+    kit_click(app.world_mut(), windowed);
+    settle(&mut app);
+    assert!(app.world().resource::<Settings>().fullscreen);
+    let checkbox = |app: &mut App, key| app.world_mut().query::<(Entity, &SettingToggle)>().iter(app.world()).find(|(_, k)| k.0 == key).unwrap().0;
+    let shadows = checkbox(&mut app, SettingKey::Shadows);
+    kit_click(app.world_mut(), shadows);
+    settle(&mut app);
+    assert_eq!(app.world().resource::<Settings>().shadows, Some(false));
+    assert!(!app.world().resource::<RenderQuality>().shadows);
+    let bloom = checkbox(&mut app, SettingKey::Bloom);
+    kit_click(app.world_mut(), bloom);
+    settle(&mut app);
+    assert!(app.world().resource::<PostFx>().bloom);
+    let aa = app.world_mut().query_filtered::<Entity, With<MsaaSelect>>().single(app.world()).unwrap();
+    pick(&mut app, aa, 2);
+    assert_eq!(app.world().resource::<Settings>().msaa, Some(2));
+    assert_eq!(app.world().resource::<RenderQuality>().msaa, 2);
+}
+
+#[test]
+fn bloom_checkbox_shows_live_preset_and_reapplies_an_unchanged_saved_choice() {
+    use crate::frontend::screens::{Settings, SettingKey, view::SettingToggle};
+    use crate::render::post::PostFx;
+    use crate::ui::theme::Checkbox;
+    let mut app = app();
+    app.insert_resource(PostFx::default());
+    app.world_mut().resource_mut::<Settings>().bloom = Some(true);
+    go(&mut app, Screen::Settings);
+    app.world_mut().resource_mut::<PostFx>().bloom = false;
+    settle(&mut app);
+    let bloom = app.world_mut().query::<(Entity, &SettingToggle)>().iter(app.world()).find(|(_, k)| k.0 == SettingKey::Bloom).unwrap().0;
+    assert!(!app.world().get::<Checkbox>(bloom).unwrap().on);
+    kit_click(app.world_mut(), bloom);
+    settle(&mut app);
+    assert_eq!(app.world().resource::<Settings>().bloom, Some(true));
+    assert!(app.world().resource::<PostFx>().bloom);
 }

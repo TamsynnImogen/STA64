@@ -150,6 +150,7 @@ type NotBackground = (With<Camera3d>, Without<BackgroundCamera>);
 /// The commands are the `try_` kind: a camera can be despawned by another
 /// system's commands in the same frame (the menu camera when a match
 /// launches), and a plain `insert` on it would panic.
+#[allow(clippy::too_many_arguments)]
 pub fn apply(
     mut commands: Commands,
     fx: Res<PostFx>,
@@ -158,6 +159,7 @@ pub fn apply(
     marked: Query<(), With<PostFxMsaa>>,
     profile: Option<Res<crate::render::profile::RenderProfile>>,
     effects: Option<Res<crate::render::profile::ProfileEffects>>,
+    quality: Option<Res<crate::render::quality::RenderQuality>>,
 ) {
     // Stock (RND-24): the original draws with no tonemapper unless one is asked for.
     let stock = matches!((profile.as_deref(), effects.as_deref()), (Some(p), Some(e)) if e.implementation(*p, crate::render::profile::Effect::Post) == crate::render::profile::RenderProfile::Stock);
@@ -209,7 +211,13 @@ pub fn apply(
                 cam.try_insert((PostFxMsaa, Msaa::Off));
             }
         } else if marked.contains(e) {
-            cam.try_remove::<PostFxMsaa>().try_insert(Msaa::default());
+            let msaa = match quality.as_deref().map(|q| q.msaa) {
+                Some(1) => Msaa::Off,
+                Some(2) => Msaa::Sample2,
+                Some(_) => Msaa::Sample4,
+                None => Msaa::default(),
+            };
+            cam.try_remove::<PostFxMsaa>().try_insert(msaa);
         }
     }
 }
@@ -265,6 +273,15 @@ mod tests {
         assert!(!has::<PostFxMsaa>(&app, main));
         assert_eq!(app.world().get::<Msaa>(main), Some(&Msaa::default()));
         assert_eq!(app.world().get::<Tonemapping>(main), Some(&Tonemapping::default()));
+    }
+
+    #[test]
+    fn leaving_post_aa_restores_quality_msaa() {
+        let (mut app, main, _) = app(PostFx { aa: Aa::Smaa, ..default() });
+        app.insert_resource(crate::render::quality::RenderQuality { msaa: 2, ..default() });
+        app.world_mut().resource_mut::<PostFx>().aa = Aa::Off;
+        app.update();
+        assert_eq!(app.world().get::<Msaa>(main), Some(&Msaa::Sample2));
     }
 
     #[test]
