@@ -58,18 +58,40 @@ fn only_single_player_accepts() {
 }
 
 #[test]
-fn forced_win_and_loss_resolve_on_the_next_update() {
+fn forced_win_and_loss_are_latched_at_once() {
     for (text, won) in [("kobayashimaru", true), ("kobayashimaru_lost", false)] {
         let r = rt();
         let cheat = if won { Cheat::Win } else { Cheat::Lose };
         assert_eq!(try_chat_cheat(&r, A2, CheatSession::SinglePlayer, 90, text), ChatCheat::Forced(cheat));
-        assert_eq!(r.mission_end(90), MissionEndState::Pending, "ends once mission time is past the end time");
-        assert_eq!(scan_outcome(&r, 90), None);
-        let o = scan_outcome(&r, 91).expect("ended");
-        assert_eq!((o.won, o.tick), (won, 91));
+        let o = scan_outcome(&r, 90).expect("ended");
+        assert_eq!((o.won, o.tick), (won, 90));
         // It stays ended, and a second cheat does nothing.
         assert_eq!(try_chat_cheat(&r, A2, CheatSession::SinglePlayer, 95, "kobayashimaru"), ChatCheat::Refused(Refusal::AlreadyEnded));
         assert_eq!(scan_outcome(&r, 500).map(|o| o.won), Some(won));
+    }
+}
+
+#[test]
+fn a_script_end_after_the_force_cannot_replace_it() {
+    // Armada II: the later end call overwrites the end record, not the latched result.
+    let r = rt();
+    assert!(force_end(&r, 60, true));
+    r.eval::<()>("A2.FailMission(0.0, nil)").unwrap();
+    assert_eq!(scan_outcome(&r, 61).map(|o| o.won), Some(true));
+    // Armada I: the binding marks the mission finished and the hook records an outcome.
+    let r = rt();
+    assert!(force_end(&r, 60, false));
+    r.eval::<()>("A1.SucceedMission(0.0, nil) rawset(_G, '__sta64_outcome', { won = true, delay = 0 })").unwrap();
+    assert_eq!(scan_outcome(&r, 61).map(|o| o.won), Some(false));
+}
+
+#[test]
+fn an_end_the_scan_would_already_report_refuses_the_cheat() {
+    // Armada I end call (finished flag), the hook's recorded outcome, and Mission.finish.
+    for chunk in ["A1.SucceedMission(0.0, nil)", "A1.FailMission(0.0, nil)", "rawset(_G, '__sta64_outcome', { won = true, delay = 0 })", "Mission.finish(true, 0)"] {
+        let r = rt();
+        r.eval::<()>(chunk).unwrap_or_else(|e| panic!("{chunk}: {e}"));
+        assert_eq!(try_chat_cheat(&r, A1, CheatSession::SinglePlayer, 5, "kobayashimaru"), ChatCheat::Refused(Refusal::AlreadyEnded), "{chunk}");
     }
 }
 

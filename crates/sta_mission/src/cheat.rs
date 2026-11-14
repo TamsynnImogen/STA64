@@ -15,13 +15,18 @@
 //!
 //! **What a forced end is.** The same end record a script's `SucceedMission` / `FailMission`
 //! writes ([`crate::runtime::MissionRuntime::force_mission_end`]: `MissionEnd { time: now, failed,
-//! blocked: None }`), so the mission ends on the next update and [`crate::campaign::scan_outcome`]
+//! blocked: None }`), and the result is latched, so the next outcome scan returns it and [`crate::campaign::scan_outcome`]
 //! and [`crate::campaign::CampaignRunner::finish`] take it from there exactly as for a scripted
 //! end. It **overrides a pending scripted end** (and a blocked one) and **skips the script's own
 //! win or lose steps**: no victory cineractive, voice line or objective update the script would
 //! have run before calling its end. It touches no sim state and no command, so it needs no
 //! snapshot, protocol or replay number; it is a host input of a single-player game and must never
 //! be applied in a replay or a network session (that is the [`CheatSession`] check).
+//!
+//! **Not yet as a scripted end in the host:** `sta64`'s mission host applies `blocked::is_blocked` to every
+//! outcome the scan returns, so a forced loss with gaps in the run would be reported blocked, not
+//! lost. "Exactly as for a scripted end" holds for `CampaignRunner::finish`, not yet for that host
+//! check; the chat-hook package carries a forced flag in the outcome to skip it.
 //!
 //! **Left open** (not modelled by STA64, so not honoured here): the Armada II conditions under
 //! which the chat box does not open (a script's `DisableChat(true)`, a script step waiting for
@@ -105,7 +110,9 @@ pub fn session_accepts(session: CheatSession) -> Result<(), Refusal> {
 
 /// Force the end of the mission `runtime` runs, at `tick`: `won` or lost. No chat text and no
 /// session check: this is the test-only entry (an Armada I loss is reachable only here) and the
-/// last step of [`try_chat_cheat`]. False when the mission has already ended.
+/// last step of [`try_chat_cheat`]. False when the mission has already ended (including an Armada I
+/// end call or `Mission.finish` the outcome scan would already report).
+#[doc(hidden)]
 pub fn force_end(runtime: &MissionRuntime, tick: u64, won: bool) -> bool {
     runtime.force_mission_end(tick, won)
 }

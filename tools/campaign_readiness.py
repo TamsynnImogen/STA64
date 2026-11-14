@@ -454,11 +454,12 @@ def ending_columns(r):
         return False, False, (False if r.get("calls_fail") else None)
     fw, fl = r.get("forced_win"), r.get("forced_lose")
     forced = bool(fw and fw["ok"]) and (fl is None or fl["ok"])
-    win = bool(r.get("win_seq")) and all(t["ok"] for t in r["win_seq"])
+    trunc = r.get("truncated") or [0, 0]
+    win = bool(r.get("win_seq")) and not trunc[0] and all(t["ok"] for t in r["win_seq"])
     if not r.get("calls_fail") and not r.get("lose_entries"):
         lose = None
     else:
-        lose = bool(r.get("lose_seq")) and all(t["ok"] for t in r["lose_seq"])
+        lose = bool(r.get("lose_seq")) and not trunc[1] and all(t["ok"] for t in r["lose_seq"])
     return forced, win, lose
 
 

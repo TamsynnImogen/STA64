@@ -33,7 +33,7 @@
 //! terminal action are left out) and the mission's own terminal rule completes the end; with no
 //! flag variable or no setter the **terminal** action is the entry. Each entry runs alone, from
 //! its own fresh mission, by firing that action once as a rule would. One level of lead-in only
-//! (a chain of several levels runs on through the mission's own rules). Over-approximations: a
+//! (a chain of several levels runs on through the mission's own rules). A rule whose action reaches both end calls (a shared helper) is terminal for neither side, and a lead-in is dropped when its reach contains the opposite end. `M.` references are found in the text, comments and strings included. Over-approximations: a
 //! `VarOp` counts as a setter whatever the branch it sits in, and an action that reaches an end
 //! call only on one branch counts as reaching it.
 
@@ -216,9 +216,11 @@ pub fn plan(src: &str) -> Plan {
         }
     }
     let reaches = |name: &str, fail: bool| reach(&funcs, name).iter().any(|g| if fail { funcs[g].fail } else { funcs[g].succeed });
-    let terminal_win: Vec<&RuleRow> = rules.iter().filter(|r| reaches(&r.action, false)).collect();
-    let terminal_lose: Vec<&RuleRow> = rules.iter().filter(|r| reaches(&r.action, true)).collect();
-    let all_terminal: BTreeSet<&str> = terminal_win.iter().chain(&terminal_lose).map(|r| r.action.as_str()).collect();
+    // A rule that reaches both ends (a shared helper) is terminal for neither side: it cannot
+    // be told apart by the text, so it is left out of both and counted nowhere.
+    let terminal_win: Vec<&RuleRow> = rules.iter().filter(|r| reaches(&r.action, false) && !reaches(&r.action, true)).collect();
+    let terminal_lose: Vec<&RuleRow> = rules.iter().filter(|r| reaches(&r.action, true) && !reaches(&r.action, false)).collect();
+    let all_terminal: BTreeSet<&str> = rules.iter().filter(|r| reaches(&r.action, true) || reaches(&r.action, false)).map(|r| r.action.as_str()).collect();
     let side = |terminals: &[&RuleRow]| -> (Vec<Entry>, usize) {
         let mut entries: Vec<Entry> = Vec::new();
         let mut add = |action: &str, kind: EntryKind, rule: &str| {
@@ -330,8 +332,7 @@ pub struct EndingProbe {
     pub first_objective_tick: Option<u64>,
     pub plan: Plan,
     pub forced_win: Option<EndTrial>,
-    /// `None` when the mission has no way to lose (an Armada II script without `FailMission`).
-    pub forced_lose: Option<EndTrial>,
+        pub forced_lose: Option<EndTrial>,
     pub win_seq: Vec<EndTrial>,
     pub lose_seq: Vec<EndTrial>,
     pub notes: Vec<String>,
@@ -342,16 +343,16 @@ impl EndingProbe {
     pub fn forced_ok(&self) -> bool {
         self.forced_win.as_ref().is_some_and(|t| t.ok) && self.forced_lose.as_ref().is_none_or(|t| t.ok)
     }
-    /// Column 2: at least one win entry was found and all pass.
+    /// Column 2: at least one win entry was found, none was left out for the cap, and all pass.
     pub fn win_seq_ok(&self) -> bool {
-        !self.win_seq.is_empty() && self.win_seq.iter().all(|t| t.ok)
+        !self.win_seq.is_empty() && self.plan.truncated.0 == 0 && self.win_seq.iter().all(|t| t.ok)
     }
     /// Column 3: at least one lose entry was found and all pass (`None`: the mission has no loss).
     pub fn lose_seq_ok(&self) -> Option<bool> {
         if !self.plan.calls_fail && self.plan.lose.is_empty() {
             return None;
         }
-        Some(!self.lose_seq.is_empty() && self.lose_seq.iter().all(|t| t.ok))
+        Some(!self.lose_seq.is_empty() && self.plan.truncated.1 == 0 && self.lose_seq.iter().all(|t| t.ok))
     }
 
     pub fn to_json(&self) -> String {
@@ -431,6 +432,12 @@ fn gaps_now(rt: &crate::runtime::MissionRuntime) -> Gaps {
             }
         }
     }
+    for (field, what) in [("conditionErrors", "condition error"), ("notDecoded", "not decoded")] {
+        let keys: Vec<String> = rt.eval(&format!("local t = {{}} for k in pairs(Mission_.{field} or {{}}) do t[#t + 1] = tostring(k) end return t")).unwrap_or_default();
+        for k in keys {
+            g.calls.insert(format!("{k} ({what})"), 1);
+        }
+    }
     for (k, n) in rt.unsupported() {
         g.calls.insert(format!("{} (unsupported)", k.split(':').next().unwrap_or(&k)), n);
     }
@@ -499,15 +506,23 @@ fn warm_up(a: &mut ActiveMission, vfs: Option<&Arc<sta_vfs::Vfs>>, opts: &Ending
     }
 }
 
-/// Fire `action` once, as a satisfied rule would on the next update.
+/// Fire `action` once, as a satisfied rule would on the next update. The rule is trashed by the
+/// first read of its `action` (the engine's fire loop reads `trashed` first, then the action), so a
+/// read of `trashed` by anything else (`TrashRule`) cannot consume the one firing.
 fn inject(a: &ActiveMission, action: &str) -> Result<(), String> {
     let chunk = format!(
         "local m = rawget(_G, 'Mission_') \
-         local r = setmetatable({{ name = '__ending_check', action = '{action}', last = 1 }}, \
-           {{ __index = function(t, k) if k == 'trashed' then if rawget(t, '_once') then return true end rawset(t, '_once', true) return false end end }}) \
+         local r = setmetatable({{ name = '__ending_check', last = 1 }}, \
+           {{ __index = function(t, k) if k == 'action' then rawset(t, 'trashed', true) return '{action}' end end }}) \
          table.insert(m.satisfied, 1, r)"
     );
     a.runtime().eval::<()>(&chunk).map_err(|e| format!("cannot fire {action}: {e}"))
+}
+
+/// Times the named rules have fired so far.
+fn fires(rt: &crate::runtime::MissionRuntime, rules: &[String]) -> u64 {
+    let list = rules.iter().map(|r| format!("'{}'", r.replace(['\\', '\''], ""))).collect::<Vec<_>>().join(",");
+    rt.eval::<u64>(&format!("local n = 0 for _, r in ipairs({{{list}}}) do n = n + (Mission_.fireCount[r] or 0) end return n")).unwrap_or(0)
 }
 
 type Probed<R> = Result<R, String>;
@@ -595,6 +610,7 @@ fn sequence_trial(book: &CampaignBook, host: &dyn MissionHost, vfs: Option<&Arc<
         let a = runner.active_mut().expect("started");
         let at = a.sim().tick;
         let before = gaps_now(a.runtime());
+        let fired_before = fires(a.runtime(), &entry.rules);
         inject(a, &entry.action)?;
         let mut outcome = None;
         for _ in 0..opts.cap {
@@ -609,16 +625,19 @@ fn sequence_trial(book: &CampaignBook, host: &dyn MissionHost, vfs: Option<&Arc<
             _ => None,
         };
         let last = a.runtime().eval::<Option<String>>("return Mission_.lastStep").ok().flatten();
-        Ok((outcome.map(|o| (o.won, o.tick.saturating_sub(at))), gaps, blocked, last))
+        // A lead-in is credited with the end only if the mission's own terminal rule fired after it.
+        let caused = entry.kind == EntryKind::Terminal || fires(a.runtime(), &entry.rules) > fired_before;
+        Ok((outcome.map(|o| (o.won, o.tick.saturating_sub(at))), gaps, blocked, last, caused))
     });
     match res {
         Err(e) | Ok(Err(e)) => t.note = e,
-        Ok(Ok((out, gaps, blocked, last))) => {
+        Ok(Ok((out, gaps, blocked, last, caused))) => {
             t.result = out.map(|(w, _)| w);
             t.ticks = out.map_or(opts.cap, |(_, k)| k);
-            t.ok = out.is_some_and(|(w, _)| w == won) && gaps.is_empty();
+            t.ok = out.is_some_and(|(w, _)| w == won) && gaps.is_empty() && caused;
             t.note = match (out, blocked) {
                 (Some((w, _)), _) if w != won => format!("ended {} instead", if w { "won" } else { "lost" }),
+                (Some(_), _) if !caused => "ended, but the mission's own terminal rule did not fire after the entry (a natural end, not credited)".to_owned(),
                 (None, Some(why)) => format!("end blocked by a gap: {why}"),
                 (None, None) => format!("did not end within {} ticks (last step {})", opts.cap, last.as_deref().unwrap_or("none")),
                 _ => String::new(),
@@ -665,10 +684,8 @@ pub fn probe_mission(host: &dyn MissionHost, vfs: Option<&Arc<sta_vfs::Vfs>>, bo
         }
     }
     p.forced_win = Some(forced_trial(book, host, vfs, campaign, index, opts, true));
-    // A2 where the script calls FailMission; Armada I always (the test-only extension).
-    if opts.game == CheatGame::A1 || p.plan.calls_fail {
-        p.forced_lose = Some(forced_trial(book, host, vfs, campaign, index, opts, false));
-    }
+    // Armada II's loss cheat works in every mission; Armada I's loss is the test-only extension.
+    p.forced_lose = Some(forced_trial(book, host, vfs, campaign, index, opts, false));
     if !opts.forced_only {
         let (win, lose) = (p.plan.win.clone(), p.plan.lose.clone());
         p.win_seq = win.iter().map(|e| sequence_trial(book, host, vfs, campaign, index, opts, e, true)).collect();

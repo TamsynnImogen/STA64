@@ -14,7 +14,7 @@ const LABELS: &str = "single_player {\n\t+ federation_incomplete\t{x}\n\t+ kling
 fn script(extra_funcs: &str, extra_rules: &str, tail: &str) -> String {
     format!(
         r#"
-Mission_ = {{ rules = {{}}, scripts = {{}}, satisfied = {{}}, fired = {{}}, fireCount = {{}}, ran = {{}}, missing = {{}}, failed = {{}}, stepErrors = {{}}, stepCount = 0 }}
+Mission_ = {{ rules = {{}}, scripts = {{}}, satisfied = {{}}, fired = {{}}, fireCount = {{}}, ran = {{}}, missing = {{}}, failed = {{}}, stepErrors = {{}}, notDecoded = {{}}, conditionErrors = {{}}, stepCount = 0 }}
 local Mission = Mission_
 local M = {{}}
 local S = {{}}
@@ -84,8 +84,13 @@ function Mission:update(time)
     for _, rule in ipairs(fire) do
         if not rule.trashed then
             self.fireCount[rule.name] = (self.fireCount[rule.name] or 0) + 1
-            local ok, err = pcall(M[rule.action])
-            if not ok then self.stepErrors[#self.stepErrors + 1] = tostring(err) end
+            local action = M[rule.action]
+            if action then
+                local ok, err = pcall(action)
+                if not ok then self.stepErrors[#self.stepErrors + 1] = tostring(err) end
+            else
+                self.notDecoded[rule.action] = (self.notDecoded[rule.action] or 0) + 1
+            end
         end
     end
     -- the satisfied tiny rules fire once only: drop the ones the script's own rules made
@@ -209,7 +214,7 @@ fn forced_win_and_loss_resolve_and_advance_the_campaign() {
     assert!(p.first_objective_tick.is_some(), "{:?}", p.notes);
     let w = p.forced_win.as_ref().unwrap();
     assert!(w.ok, "{w:?}");
-    assert_eq!((w.result, w.ticks), (Some(true), 1));
+    assert_eq!((w.result, w.ticks), (Some(true), 0), "latched, resolved at the next scan");
     assert_eq!(w.transition.as_deref(), Some("next: federation mission 1"));
     let l = p.forced_lose.as_ref().expect("the script calls FailMission");
     assert!(l.ok, "{l:?}");
@@ -222,16 +227,13 @@ fn forced_win_and_loss_resolve_and_advance_the_campaign() {
 }
 
 #[test]
-fn no_loss_to_force_in_a_script_without_fail_mission() {
+fn the_forced_loss_runs_in_armada_ii_even_without_fail_mission() {
     let no_fail = good().replace("'FailMission'", "'Goto'");
     let (book, host) = book_and_host([no_fail, good(), good()]);
     let p = probe_mission(&host, None, &book, "federation", 0, &EndingOptions { forced_only: true, ..opts() });
-    assert!(p.forced_lose.is_none());
+    assert!(p.forced_lose.as_ref().is_some_and(|t| t.ok), "{:?}", p.forced_lose);
     assert!(p.forced_ok());
-    assert_eq!(p.lose_seq_ok(), None);
-    // Armada I always gets the test-only loss.
-    let a1 = probe_mission(&host, None, &book, "federation", 0, &EndingOptions { game: CheatGame::A1, forced_only: true, ..opts() });
-    assert!(a1.forced_lose.as_ref().is_some_and(|t| t.ok), "{:?}", a1.forced_lose);
+    assert_eq!(p.lose_seq_ok(), None, "no lose sequence to run");
 }
 
 #[test]
@@ -283,4 +285,58 @@ fn a_mission_that_ends_by_itself_before_the_test_point_is_reported() {
     let p = probe_mission(&host, None, &book, "federation", 0, &opts());
     assert!(!p.started);
     assert!(p.start_error.as_deref().is_some_and(|e| e.contains("ended by itself")), "{:?}", p.start_error);
+}
+
+#[test]
+fn a_natural_end_is_not_credited_to_an_entry() {
+    // The lead-in sets a flag the win rule does not read; the mission wins by itself a little later.
+    let dead = good().replace("VarOp('p_WIN', 'set', 1)", "VarOp('p_WIN', 'set', 2)") + "\nMMM.register(function(t) if t >= 0.7 then A2.SucceedMission(0.0, nil) end end)\n";
+    let (book, host) = book_and_host([dead, good(), good()]);
+    let p = probe_mission(&host, None, &book, "federation", 0, &opts());
+    let w = &p.win_seq[0];
+    assert_eq!(w.result, Some(true));
+    assert!(!w.ok);
+    assert!(w.note.contains("not credited"), "{}", w.note);
+}
+
+#[test]
+fn the_fired_rule_survives_reads_of_trashed_before_the_engine_fires_it() {
+    let (book, host) = book_and_host([good(), good(), good()]);
+    let r = at_test_point(&book, &host, None, "federation", 0, &opts(), |runner, mut mid| {
+        let a = runner.active_mut().unwrap();
+        inject(a, "victory_cin").unwrap();
+        // What the converter's TrashRule does on every entry: read `.trashed` of every satisfied rule.
+        a.runtime().eval::<()>("for _, r in ipairs(Mission_.satisfied) do local _ = r.trashed end").unwrap();
+        (0..20).find_map(|_| step(a, &mut mid.standin)).map(|o| o.won)
+    });
+    assert_eq!(r, Ok(Some(true)));
+}
+
+#[test]
+fn an_action_the_script_does_not_define_is_a_gap() {
+    let (book, host) = book_and_host([good(), good(), good()]);
+    let e = Entry { action: "nope".into(), kind: EntryKind::Terminal, rules: vec![] };
+    let t = sequence_trial(&book, &host, None, "federation", 0, &opts(), &e, true);
+    assert!(!t.ok);
+    assert_eq!(t.gaps, ["nope (not decoded)"]);
+}
+
+#[test]
+fn a_helper_reaching_both_ends_is_terminal_for_neither_side() {
+    let src = "-- action: a\nfunction M.a(...)\n    M.helper(...)\nend\n-- helper: helper\nfunction M.helper(...)\n    A('SucceedMission', 0, 0)\n    A('FailMission', 0, 0)\nend\nMission.rules[#Mission.rules + 1] = {\n    name = 'R',\n    action = 'a',\n    deps = { 'p_ALWAYS_EVALUATE' },\n}\n";
+    let p = plan(src);
+    assert!(p.win.is_empty() && p.lose.is_empty());
+    assert!(p.calls_succeed && p.calls_fail);
+}
+
+#[test]
+fn a_column_needs_every_entry_run() {
+    let ok = EndTrial { ok: true, result: Some(true), ..Default::default() };
+    let mut p = EndingProbe { win_seq: vec![ok.clone()], lose_seq: vec![ok], ..Default::default() };
+    p.plan.calls_fail = true;
+    assert!(p.win_seq_ok() && p.lose_seq_ok() == Some(true));
+    p.plan.truncated = (1, 0);
+    assert!(!p.win_seq_ok());
+    p.plan.truncated = (0, 2);
+    assert_eq!(p.lose_seq_ok(), Some(false));
 }
