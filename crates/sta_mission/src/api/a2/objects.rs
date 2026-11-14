@@ -90,7 +90,16 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
         lua.create_function(move |lua, args: MultiValue| {
             let id = handle("GetLocation", &args, 1)?;
             // A handle naming nothing live: the engine's constant zero vector (LUA-21).
-            let pos = c.borrow().alive(id).map_or(crate::api::ABSENT_PATH_LOCATION, |u| pos_f64(u.pos));
+            let pos = {
+                let c = c.borrow();
+                match c.alive(id) {
+                    Some(u) => pos_f64(u.pos),
+                    None => {
+                        c.dead_handle("A2", "GetLocation", id)?;
+                        crate::api::ABSENT_PATH_LOCATION
+                    }
+                }
+            };
             vector(lua, pos)
         })?,
     )?;

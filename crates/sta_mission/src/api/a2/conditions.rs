@@ -244,7 +244,10 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
             let id = handle("GetCrew", &args, 0)?;
             let mut c = c.borrow_mut();
             // A handle naming nothing live answers -1 (LUA-21; read from the executable, static).
-            let Some(unit) = c.alive(id) else { return Ok(crate::api::ABSENT_AMOUNT) };
+            let Some(unit) = c.alive(id) else {
+                c.dead_handle("A2", "GetCrew", id)?;
+                return Ok(crate::api::ABSENT_AMOUNT);
+            };
             match unit.crew {
                 Some(crew) => Ok(f64::from(crew[0].to_f32())),
                 None => {

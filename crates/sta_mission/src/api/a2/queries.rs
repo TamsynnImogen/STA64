@@ -21,7 +21,12 @@ fn health(lua: &Lua, ctx: &Shared, name: &'static str, max: bool) -> mlua::Resul
     lua.create_function(move |_, args: MultiValue| {
         let id = handle(name, &args, 1)?;
         // A handle naming nothing live answers -1 (LUA-21; read from the executable, static).
-        Ok(c.borrow().alive(id).map_or(ABSENT_AMOUNT, |u| u.hull[if max { 1 } else { 0 }].to_f32() as f64))
+        let c = c.borrow();
+        let Some(u) = c.alive(id) else {
+            c.dead_handle("A2", name, id)?;
+            return Ok(ABSENT_AMOUNT);
+        };
+        Ok(u.hull[if max { 1 } else { 0 }].to_f32() as f64)
     })
 }
 
@@ -55,7 +60,14 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
             let second = sta_core::EntityId(integer("GetDistance", &args[1])?);
             let c = c.borrow();
             // Either object naming nothing live: the engine answers 1e30 (LUA-21).
-            let (Some(a), Some(b)) = (c.alive(first), c.alive(second)) else { return Ok(ABSENT_DISTANCE) };
+            let (Some(a), Some(b)) = (c.alive(first), c.alive(second)) else {
+                for id in [first, second] {
+                    if c.alive(id).is_none() {
+                        c.dead_handle("A2", "GetDistance", id)?;
+                    }
+                }
+                return Ok(ABSENT_DISTANCE);
+            };
             Ok(dist(pos_f64(a.pos), pos_f64(b.pos)))
         })?,
     )?;

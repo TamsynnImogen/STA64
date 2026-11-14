@@ -125,6 +125,24 @@ fn recruit_takes_the_first_unflagged_craft_of_that_team_and_odf() {
     assert!(rt.take_commands().is_empty());
 }
 
+/// LUA-21: a `BuildObject` token with no object yet is no dead handle (the original's handle is usable
+/// at once): the changed calls keep raising, and the raise taints the read, so a later end is blocked.
+#[test]
+fn a_pending_build_token_keeps_raising_in_the_dead_handle_calls_and_blocks_an_end() {
+    let s = scene();
+    let sim = Sim::from_setup(&game(&s.db));
+    let cfg = MissionConfig { content: Some(s.db.clone()), view: Some((*sim.view()).clone()), ..MissionConfig::default() };
+    let src = "A2.paths.Q = { {x=40,y=0,z=0}, {x=50,y=0,z=0} }; h = A2.BuildObject('fx_cruiser.odf', 1, 'Q', 1)";
+    let rt = MissionRuntime::from_source_with("pending.lua", src, 3, cfg);
+    assert!(rt.errors().is_empty(), "{:?}", rt.errors());
+    for call in ["GetDistance(h, h)", "GetDistance(0, h)", "GetCrew(h)", "GetCurrentHealth(h)", "GetMaxHealth(h)", "GetLocation(h)"] {
+        let err = rt.eval::<()>(&format!("local _ = A2.{call}")).unwrap_err();
+        assert!(err.to_string().contains("not alive"), "{call}: {err}");
+    }
+    rt.eval::<()>("A2.FailMission(0, 0)").unwrap();
+    assert!(matches!(rt.mission_end(100), crate::runtime::MissionEndState::Blocked(_)));
+}
+
 #[test]
 fn build_object_queues_a_spawn_and_its_handle_resolves_after_the_receipt() {
     let s = scene();

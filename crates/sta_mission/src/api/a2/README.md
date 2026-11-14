@@ -679,4 +679,6 @@ counter reset on mission load, movie `int` (1 in every stock call).
 `GetDistance(a, b)`, `GetCrew`, `GetCurrentHealth`, `GetMaxHealth` and `GetLocation(handle)` answer the
 executable's constants for a handle that names nothing live (1e30, -1.0, the zero vector) instead of
 raising. Read from the executable, static; not measured. `GetDistance(object, path, i)` was not read and
-still raises; `GetRealShieldPercent` and `InQueue` are unbound on A2.
+still raises, as does a pending `BuildObject` token (the original's handle is usable at once). The absent
+branches note a tainted read (LUA-13) for a handle an earlier failed call named or that never existed because of a
+gap; a formerly live, destroyed object answers cleanly. `GetRealShieldPercent` and `InQueue` are unbound on A2.
