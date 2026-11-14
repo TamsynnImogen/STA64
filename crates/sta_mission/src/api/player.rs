@@ -174,7 +174,7 @@ impl UserData for Player {
         });
         m.add_method("loadAIP", |_, p, name: Option<String>| {
             let mut c = p.ctx.borrow_mut();
-            c.loaded_aips.push((p.id, name.unwrap_or_default()));
+            c.ai_requests.push(sta_ai::AiRequest::Load(p.id, name.unwrap_or_default()));
             Ok(())
         });
         m.add_meta_method(MetaMethod::Eq, |_, p, o: UserDataRef<Player>| Ok(p.id == o.id));

@@ -804,12 +804,35 @@ impl SkirmishController {
 
 impl Controller for SkirmishController {
     fn think(&mut self, view: &WorldView, events: &[SimEvent], out: &mut Vec<Command>) {
+        self.think_as(view, events, out, Think::Full);
+    }
+}
+
+/// What a [`SkirmishController`] does on a call (LUA-20: a mission script can switch a seat's
+/// strategic AI off and ask for a prompt replan).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Think {
+    /// Plan and defend on every [`PERIOD`]th tick (what [`Controller::think`] does).
+    Full,
+    /// As [`Think::Full`], and plan this tick even if it is not a period tick.
+    FullNow,
+    /// Only the unit-level part (point defence) on the period tick; no economy, build order,
+    /// defence or waves. Events are still read.
+    UnitsOnly,
+}
+
+impl SkirmishController {
+    /// [`Controller::think`] with the mode a mission script chose for the seat.
+    pub fn think_as(&mut self, view: &WorldView, events: &[SimEvent], out: &mut Vec<Command>, mode: Think) {
         self.absorb(view.tick, events);
         let Some(me) = view.player(self.cfg.player) else { return };
-        if me.eliminated || !view.tick.is_multiple_of(PERIOD) {
+        let due = view.tick.is_multiple_of(PERIOD);
+        if me.eliminated || !(due || mode == Think::FullNow) {
             return;
         }
-        self.plan(view, me, out);
+        if mode != Think::UnitsOnly {
+            self.plan(view, me, out);
+        }
         self.point_defence(view, me, out);
     }
 }

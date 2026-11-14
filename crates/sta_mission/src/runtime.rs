@@ -542,12 +542,15 @@ impl MissionRuntime {
         state
     }
 
-    /// AIP loads (`AI_Team_Load_AIP`, `Player:loadAIP`) asked for since the
-    /// last call, in call order, with the seat they name (AI-06).
-    pub fn take_aip_requests(&self) -> Vec<(sta_core::PlayerId, String)> {
+    /// What the script asked of the AI since the last call, in call order (AI-06, LUA-20): plan
+    /// loads (`AI_Team_Load_AIP`, `Player:loadAIP`) and the switches (`DisableAllAITeams`,
+    /// `EnableAllAITeams`, `EnableTeam`, `DisableTeam`, `SetIsAITeam`, `ResetStrategyCycle`).
+    /// A host hands them to `sta_ai::MissionAiHub::submit_requests` after the script has
+    /// thought and before the seats do.
+    pub fn take_ai_requests(&self) -> Vec<sta_ai::AiRequest> {
         let mut c = self.inner.ctx.borrow_mut();
-        let out = c.loaded_aips[c.aips_taken..].to_vec();
-        c.aips_taken = c.loaded_aips.len();
+        let out = c.ai_requests[c.ai_requests_taken..].to_vec();
+        c.ai_requests_taken = c.ai_requests.len();
         out
     }
 
@@ -563,12 +566,12 @@ impl MissionRuntime {
     /// function-call counts. Lookup keys may be dynamically computed strings;
     /// function arguments are not inspected.
     ///
-    /// AIP loads no host has taken ([`MissionRuntime::take_aip_requests`]) are
+    /// AI requests no host has taken ([`MissionRuntime::take_ai_requests`]) are
     /// listed as `Player.loadAIP`: nothing has applied them.
     pub fn unsupported(&self) -> Vec<(String, u32)> {
         let c = self.inner.ctx.borrow();
         let mut out: Vec<(String, u32)> = c.unsupported.iter().map(|(k, v)| (k.clone(), *v)).collect();
-        let pending = c.loaded_aips.len() - c.aips_taken;
+        let pending = c.ai_requests.len() - c.ai_requests_taken;
         if pending > 0 {
             let at = out.partition_point(|(k, _)| k.as_str() < "Player.loadAIP");
             out.insert(at, ("Player.loadAIP".to_owned(), u32::try_from(pending).unwrap_or(u32::MAX)));

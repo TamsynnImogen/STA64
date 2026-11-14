@@ -111,8 +111,12 @@ AttackMainEnemyBase DestroyCritical Destroy*
 AllowMultipleSpecialWeaponFire SetSpecialForcesFlag TransferFlag LinkWormHoles
 EnableWormholeTravel ObstacleAvoidence PauseSimulation UnpauseSimulation
 EnableLight ReplaceObject RecruitSpecialForces SetRace SetWormholeTeam
-SetOfficers AddOfficers SetTeamCrew AddCrew SetCrew DisableAllAITeams
-EnableAllAITeams DisableTeam EnableTeam SetIsAITeam`.
+SetOfficers AddOfficers SetTeamCrew AddCrew SetCrew`.
+
+The AI switches `DisableAllAITeams EnableAllAITeams DisableTeam EnableTeam SetIsAITeam` are not
+gaps (LUA-20): each queues one request for the host's AI hub (`MissionRuntime::take_ai_requests`,
+`api/ai_switch.rs`; rules and grades in `sta_ai::mission`). `ResetStrategyCycle` is not exported by
+Armada I.
 
 Queries raise an error naming the missing data (also `strength_team_1`, `strength_team_2`, `hot_float_value`): `InStopMode InAttackMode
 OutOfSpecialAttackMode InQueue GetAttackLocation UnderAttack
