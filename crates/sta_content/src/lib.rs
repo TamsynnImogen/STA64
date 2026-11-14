@@ -32,6 +32,7 @@ pub mod legacy;
 pub mod profile;
 pub mod planet;
 pub mod race;
+pub mod random_map;
 pub mod repair_geometry;
 pub mod resources;
 pub mod rules;
