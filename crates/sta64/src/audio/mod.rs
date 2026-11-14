@@ -404,7 +404,7 @@ mod tests {
 
     /// A mono 8 kHz 8-bit wav of `n` samples (authored here, not a game file).
     fn wav(n: usize) -> Vec<u8> {
-        let mut w = format!("RIFF\0\0\0\0WAVEfmt ").into_bytes();
+        let mut w = b"RIFF\0\0\0\0WAVEfmt ".to_vec();
         w.extend([16, 0, 0, 0, 1, 0, 1, 0, 0x40, 0x1f, 0, 0, 0x40, 0x1f, 0, 0, 1, 0, 8, 0]);
         w.extend(b"data");
         w.extend((n as u32).to_le_bytes());

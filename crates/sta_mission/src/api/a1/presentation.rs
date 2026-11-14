@@ -26,8 +26,9 @@
 //! # Titles
 //!
 //! `ShowTitle` / `ShowSubtitle(x, y, width, height, text, flag)`: the
-//! rectangle is in 640x480 screen pixels (measured), the flag is not
-//! measured. The typed `Presentation::Title` (no placement) is queued and the
+//! rectangle is in 640x480 screen pixels (measured), the flag is the 1 s
+//! fade in (read from the executable). `RemoveTitle(id, true)` queues
+//! `A1.RemoveTitleFade [Int id]` (1 s fade out), `false` the typed `RemoveTitle`. The typed `Presentation::Title` (no placement) is queued and the
 //! rectangle is kept in `A1.ShowTitle` / `A1.ShowSubtitle` calls
 //! `[Int id, x, y, width, height, Bool flag]`.
 
@@ -112,7 +113,8 @@ fn title(lua: &Lua, env: &Env, name: &'static str, subtitle: bool) -> mlua::Resu
 }
 
 fn remove_title(lua: &Lua, env: &Env, name: &'static str) -> mlua::Result<Function> {
-    // `RemoveTitle(id, bool)`: the bool is not measured and ignored.
+    // `RemoveTitle(id, bool)`: true fades the title out over a second, then removes it; false
+    // removes it at once (read from the executable, static).
     def(lua, env, name, &["ib"], move |_, e, _, a| {
         // 0 is the zeroed handle of a title the mission never showed (stock missions remove
         // their title handles on every path, shown or not: read from data, LUA-17): nothing to
@@ -124,7 +126,11 @@ fn remove_title(lua: &Lua, env: &Env, name: &'static str) -> mlua::Result<Functi
         let Some(id) = id else {
             return Err(mlua::Error::runtime(format!("A1.{name}: {} is not a title id this mission was given", a[0].int())));
         };
-        e.present(name, Presentation::RemoveTitle { id })?;
+        if a[1].boolean() {
+            e.call("RemoveTitleFade", vec![Arg::Int(i64::from(id))])?;
+        } else {
+            e.present(name, Presentation::RemoveTitle { id })?;
+        }
         Ok(Value::Nil)
     })
 }

@@ -130,7 +130,8 @@ pub struct ScriptSounds {
 }
 
 impl ScriptSounds {
-    /// The ids of the messages still playing (for tests and tools).
+    /// The ids of the messages still playing (for tests).
+    #[cfg(test)]
     pub fn playing(&self) -> Vec<u32> {
         self.pending.iter().map(|p| p.0).collect()
     }
@@ -200,7 +201,19 @@ pub struct TitleItem {
     pub left: Option<f32>,
     /// An A1 title's rectangle `[x, y, w, h]` on the 640x480 canvas, and seconds shown.
     pub a1_rect: Option<[f32; 4]>,
+    /// An A1 title's fade level (RGB scale) when it is held: 0 to 1 over [`A1_TITLE_FADE_SECS`]
+    /// while it fades in (the script's flag), then held; `age` counts seconds into the fade in.
     pub age: f32,
+    /// Seconds since `RemoveTitle(id, true)` began the fade out, which takes the level down at
+    /// the same rate and drops the title when it reaches 0 (read from the executable, static).
+    pub out: Option<f32>,
+}
+
+impl TitleItem {
+    /// The colour scale of an A1 title now: the fade in's level less what the fade out took.
+    pub fn level(&self) -> f32 {
+        (self.age.min(A1_TITLE_FADE_SECS) / A1_TITLE_FADE_SECS - self.out.unwrap_or(0.0) / A1_TITLE_FADE_SECS).max(0.0)
+    }
 }
 
 /// The titles and subtitles on screen.
@@ -223,6 +236,14 @@ impl Titles {
         self.dirty = true;
     }
 
+    /// `RemoveTitle(id, true)`: fade out, then go. A title already going stays on its course.
+    fn fade_out(&mut self, id: u32) {
+        if let Some(t) = self.items.iter_mut().find(|t| t.id == id && t.out.is_none()) {
+            t.out = Some(0.0);
+            self.dirty = true;
+        }
+    }
+
     fn remove(&mut self, id: u32) {
         let n = self.items.len();
         self.items.retain(|t| t.id != id);
@@ -238,10 +259,18 @@ impl Titles {
         }
         self.items.retain(|t| t.left.is_none_or(|l| l > 0.0));
         self.dirty |= n != self.items.len();
-        for t in self.items.iter_mut().filter(|t| t.a1_rect.is_some() && t.age < A1_TITLE_FADE_SECS) {
-            t.age += dt;
-            self.dirty = true;
+        for t in self.items.iter_mut().filter(|t| t.a1_rect.is_some()) {
+            if let Some(o) = &mut t.out {
+                *o += dt;
+                self.dirty = true;
+            } else if t.age < A1_TITLE_FADE_SECS {
+                t.age += dt;
+                self.dirty = true;
+            }
         }
+        let n = self.items.len();
+        self.items.retain(|t| t.out.is_none() || t.level() > 0.0);
+        self.dirty |= n != self.items.len();
     }
 }
 
@@ -365,6 +394,7 @@ pub(crate) fn consume(
                 left: seconds.map(|s| s.to_f32()),
                 a1_rect: None,
                 age: 0.0,
+                out: None,
             }),
             Presentation::RemoveTitle { id } => titles.remove(*id),
             Presentation::Fade { out, seconds, rgb } => {
@@ -398,7 +428,7 @@ pub(crate) fn consume(
                 if let [Arg::Int(id), Arg::Text(text), x, y, secs, _] = args.as_slice()
                     && let (Some(x), Some(y), Some(secs), Ok(id)) = (num(x), num(y), num(secs), u32::try_from(*id))
                 {
-                    titles.add(TitleItem { id, text: text_of(strings.as_deref(), text), subtitle, place: Place { canvas: A2_CANVAS, at: Vec2::new(x, y) }, left: (secs > 0.0).then_some(secs), a1_rect: None, age: 0.0 });
+                    titles.add(TitleItem { id, text: text_of(strings.as_deref(), text), subtitle, place: Place { canvas: A2_CANVAS, at: Vec2::new(x, y) }, left: (secs > 0.0).then_some(secs), a1_rect: None, age: 0.0, out: None });
                 } else {
                     unhandled.note(name);
                 }
@@ -410,10 +440,21 @@ pub(crate) fn consume(
                     && let Some(t) = titles.items.iter_mut().find(|t| t.id == id)
                 {
                     t.place = Place { canvas: A1_CANVAS, at: Vec2::new(x, y) };
-                    if !t.subtitle && let [_, _, _, Arg::Int(w), Arg::Int(h), ..] = args.as_slice() {
+                    if let [_, _, _, Arg::Int(w), Arg::Int(h), flag] = args.as_slice() {
                         t.a1_rect = Some([x, y, *w as f32, *h as f32]);
+                        // The flag: fade in over a second (true) or show at once (false).
+                        t.age = if matches!(flag, Arg::Bool(false)) { A1_TITLE_FADE_SECS } else { 0.0 };
                     }
                     titles.dirty = true;
+                } else {
+                    unhandled.note(name);
+                }
+            }
+            // A1 `RemoveTitle(id, true)` / `RemoveSubtitle(id, true)`: the 1 s fade out (the plain
+            // form is the typed `RemoveTitle`, which goes at once).
+            Presentation::Call { name, args } if name == "A1.RemoveTitleFade" => {
+                if let [Arg::Int(id)] = args.as_slice() && let Ok(id) = u32::try_from(*id) {
+                    titles.fade_out(id);
                 } else {
                     unhandled.note(name);
                 }
@@ -618,8 +659,9 @@ fn draw_titles(mut commands: Commands, theme: Res<Theme>, mut titles: ResMut<Tit
         let p = t.place;
         if let Some(rect) = t.a1_rect {
             let at = a1_title_at(rect, &t.text);
-            let b = t.age.min(A1_TITLE_FADE_SECS) / A1_TITLE_FADE_SECS;
-            let [r, g, bl] = A1_TITLE_COLOUR.map(|c| c * b);
+            let b = t.level();
+            let base = if t.subtitle { [1.0; 3] } else { A1_TITLE_COLOUR };
+            let [r, g, bl] = base.map(|c| c * b);
             commands.entity(root).with_child((
                 Node { position_type: PositionType::Absolute, left: Val::Vh(at.x / A1_CANVAS.y * 100.0), top: Val::Vh(at.y / A1_CANVAS.y * 100.0), ..default() },
                 children![sprite_text_styled(t.text.clone(), size, Color::srgb(r, g, bl), SpriteTextStyle::role(font_role(&theme, size)).wrap_to_parent())],
@@ -1110,6 +1152,64 @@ mod tests {
         let c = colour(&app, kids[0]).unwrap().to_srgba();
         assert_eq!((c.red, c.green, c.blue), (0.0, 0.5, 1.0));
         assert!(app.world_mut().query::<&Node>().iter(app.world()).all(|n| !matches!((n.left, n.right), (Val::Vw(_), Val::Vw(_)))), "no bars");
+    }
+
+    fn title_colours(app: &mut App) -> Vec<Srgba> {
+        app.update();
+        app.world_mut().query::<&SpriteText>().iter(app.world()).map(|t| t.color.to_srgba()).collect()
+    }
+
+    /// `RemoveTitle(id, true)` takes the title down over a second, from the level it has, then it
+    /// is gone; `RemoveTitle(id, false)` takes it down at once (read from the executable, static).
+    #[test]
+    fn an_a1_title_removed_with_the_flag_fades_out_over_a_second() {
+        let mut app = app();
+        app.insert_resource(Theme::default());
+        app.update();
+        a1_title(&mut app);
+        app.world_mut().resource_mut::<Titles>().tick(3.0);
+        assert_eq!(title_colours(&mut app).first().map(|c| (c.red, c.green, c.blue)), Some((0.0, 0.5, 1.0)), "held at full level");
+        send(&mut app, Presentation::Call { name: "A1.RemoveTitleFade".into(), args: vec![Arg::Int(1)] });
+        assert_eq!(app.world().resource::<Titles>().items.len(), 1, "still there");
+        app.world_mut().resource_mut::<Titles>().tick(0.5);
+        let c = title_colours(&mut app)[0];
+        assert!((c.blue - 0.5).abs() < 0.02 && (c.green - 0.25).abs() < 0.02, "half way down: {c:?}");
+        app.world_mut().resource_mut::<Titles>().tick(0.6);
+        app.update();
+        assert!(app.world().resource::<Titles>().items.is_empty(), "gone after the second");
+        assert!(title_colours(&mut app).is_empty());
+        // A fade out begun while still fading in goes down from the level reached.
+        a1_title(&mut app);
+        app.world_mut().resource_mut::<Titles>().tick(0.5);
+        send(&mut app, Presentation::Call { name: "A1.RemoveTitleFade".into(), args: vec![Arg::Int(1)] });
+        app.world_mut().resource_mut::<Titles>().tick(0.4);
+        assert!((app.world().resource::<Titles>().items[0].level() - 0.1).abs() < 0.02);
+        app.world_mut().resource_mut::<Titles>().tick(0.2);
+        assert!(app.world().resource::<Titles>().items.is_empty());
+        // The plain form removes at once.
+        a1_title(&mut app);
+        send(&mut app, Presentation::RemoveTitle { id: 1 });
+        assert!(app.world().resource::<Titles>().items.is_empty());
+        assert_eq!(app.world().resource::<Unhandled>().list(), Vec::<(&str, u32)>::new());
+    }
+
+    /// A1 subtitles (`ShowSubtitle(0, 380, 640, 40, ..)`) are white and centred in their rectangle
+    /// on both axes by the default font's measure, like titles (read from the executable, static);
+    /// a false flag shows them at full level at once.
+    #[test]
+    fn an_a1_subtitle_is_white_and_centred_in_its_rectangle() {
+        let mut app = app();
+        app.insert_resource(Theme::default());
+        app.update();
+        send(&mut app, Presentation::Title { id: 4, text: "Hi".into(), subtitle: true, seconds: None });
+        send(&mut app, Presentation::Call { name: "A1.ShowSubtitle".into(), args: vec![Arg::Int(4), Arg::Int(0), Arg::Int(380), Arg::Int(640), Arg::Int(40), Arg::Bool(false)] });
+        let at = a1_title_at([0.0, 380.0, 640.0, 40.0], "Hi");
+        // Two 6-unit letters: text starts at (639 - 12) / 2 and its 10 units centre on y 399.5.
+        assert_eq!((at.x, at.y + 5.0), (313.5, 399.5));
+        let (n, _) = app.world_mut().query_filtered::<(&Node, &Children), Without<TitleLayer>>().iter(app.world()).find(|(n, _)| matches!(n.left, Val::Vh(_))).map(|(n, c)| (n.clone(), c.to_vec())).expect("the subtitle node");
+        assert_eq!((n.left, n.top), (Val::Vh(at.x / 480.0 * 100.0), Val::Vh(at.y / 480.0 * 100.0)));
+        let c = title_colours(&mut app)[0];
+        assert_eq!((c.red, c.green, c.blue), (1.0, 1.0, 1.0), "white, full level at once");
     }
 
     #[test]

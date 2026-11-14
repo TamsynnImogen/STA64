@@ -507,10 +507,13 @@ fn titles_keep_their_rectangle_and_ids_are_per_mission() {
             call("ShowTitle", vec![Arg::Int(1), Arg::Int(7), Arg::Int(8), Arg::Int(9), Arg::Int(10), Arg::Bool(true)]),
             Presentation::Title { id: 2, text: "Sub A".into(), subtitle: true, seconds: None },
             call("ShowSubtitle", vec![Arg::Int(2), Arg::Int(5), Arg::Int(10), Arg::Int(300), Arg::Int(20), Arg::Bool(true)]),
-            Presentation::RemoveTitle { id: 1 },
-            Presentation::RemoveTitle { id: 2 },
+            call("RemoveTitleFade", vec![Arg::Int(1)]),
+            call("RemoveTitleFade", vec![Arg::Int(2)]),
         ]
     );
+    // The plain form goes at once.
+    let (_, commands) = run(&s, "t = A1.ShowTitle(7, 8, 9, 10, 'Title A', true); A1.RemoveTitle(t, false)");
+    assert_eq!(presented(&commands).last(), Some(&Presentation::RemoveTitle { id: 1 }));
 }
 
 #[test]
