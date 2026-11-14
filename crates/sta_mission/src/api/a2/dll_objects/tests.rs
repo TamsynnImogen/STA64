@@ -169,9 +169,10 @@ fn build_object_edge_cases() {
     assert_eq!(rt.eval::<i64>("return A2.BuildObject('no_such_odf', 0, 'P', 0)").unwrap(), 0);
     assert_eq!(unsupported(&rt, "BuildObject: unknown ODF"), 1);
     assert!(rt.take_commands().is_empty());
-    // An unknown path is host data that is missing: raises and counts.
-    assert!(rt.eval::<()>("A2.BuildObject('fx_cruiser', 0, 'NOPE', 0)").is_err());
-    assert_eq!(unsupported(&rt, "not in A2.paths"), 1);
+    // A path the map does not have: the engine's lookup is null, the call returns 0 (LUA-18).
+    assert_eq!(rt.eval::<i64>("return A2.BuildObject('fx_cruiser', 0, 'NOPE', 0)").unwrap(), 0);
+    assert_eq!(unsupported(&rt, "not in A2.paths"), 0);
+    assert!(rt.take_commands().is_empty());
     // Path names also match without case.
     assert!(rt.eval::<i64>("return A2.BuildObject('fx_cruiser', 0, 'p', 0)").unwrap() >= i64::from(super::TOKEN_BASE));
     // Object form: at the object's position; an offset is not measured.
@@ -271,9 +272,25 @@ fn path_locations_read_the_host_path_table() {
     assert_eq!(rt.eval::<(f64, f64)>("local p = A2.GetLocation('P', 1); return p.x, p.z").unwrap(), (20.0, 0.0));
     // The handle form is unchanged.
     assert_eq!(rt.eval::<f64>("return A2.GetLocation(b).x").unwrap(), 100.0);
-    assert!(rt.eval::<()>("A2.GetLocation('P', 2)").is_err());
-    assert!(rt.eval::<()>("A2.GetLocation('NOPE', 0)").is_err());
-    assert!(unsupported(&rt, "A2.GetLocation") >= 2);
+    // LUA-18: an absent path or point (the engine's lookup or bounds test fails): the default vector.
+    for call in ["A2.GetLocation('P', 2)", "A2.GetLocation('P', -1)", "A2.GetLocation('NOPE', 0)"] {
+        let v: (f64, f64, f64) = rt.eval(&format!("local p = {call}; return p.x, p.y, p.z")).unwrap();
+        assert_eq!(v, (0.0, 0.0, 0.0), "{call}");
+    }
+    assert_eq!(unsupported(&rt, "A2.GetLocation"), 0);
+    let noted: Vec<String> = rt.absent_paths().into_iter().map(|(k, _)| k).collect();
+    assert!(noted.contains(&"absent path 'NOPE' (A2.GetLocation)".to_owned()), "{noted:?}");
+    assert!(noted.contains(&"path 'P' point 2 out of range (A2.GetLocation)".to_owned()), "{noted:?}");
+    // a path of no points is still a host gap
+    rt.eval::<()>("A2.paths.E = {}").unwrap();
+    assert!(rt.eval::<()>("A2.GetLocation('E', 0)").is_err());
+    assert_eq!(unsupported(&rt, "has no points"), 1);
+    // BuildObject treats it like any index out of range: 0, as before LUA-18.
+    assert_eq!(rt.eval::<i64>("return A2.BuildObject('fx_cruiser', 0, 'E', 0)").unwrap(), 0);
+    assert_eq!(unsupported(&rt, "has no points"), 1);
+    // A point entry that is not a table is malformed, not out of range.
+    rt.eval::<()>("A2.paths.M = { 5 }").unwrap();
+    assert!(rt.eval::<()>("A2.GetLocation('M', 0)").is_err());
     assert!(rt.eval::<()>("A2.GetLocation('P', 'x')").is_err());
 }
 

@@ -56,6 +56,9 @@ pub struct ProgressProbe {
     pub first_objective_tick: Option<u64>,
     pub reports: usize,
     pub unsupported: Vec<(String, u32)>,
+    /// Path names the map lacks or points out of range that a call looked up (LUA-18): not
+    /// unsupported, the engine does nothing; listed so a typo or partial map fill shows.
+    pub absent_paths: Vec<(String, u32)>,
     /// Reads of variables the engine writes (team strength, moons, warp tries): the script's
     /// counted `engineReads`, for a host to bind (`A2.EngineVariable`) later.
     pub engine_reads: Vec<(String, u32)>,
@@ -81,7 +84,7 @@ impl ProgressProbe {
         let scripts: Vec<String> =
             self.scripts.iter().map(|(n, left, w)| format!("[{},{},{}]", json_string(n), left, w)).collect();
         format!(
-            "{{\"campaign\":{},\"index\":{},\"bzn\":{},\"started\":{},\"start_error\":{},\"ticks\":{},\"ended\":{},\"end_blocked\":{},\"errors\":{},\"rules\":{},\"rules_held\":{},\"last_rule\":{},\"last_step\":{},\"steps_run\":{},\"distinct_steps\":{},\"problems\":[{}],\"missing\":{},\"failed\":{},\"invalid\":{},\"unresolved\":{},\"handles_resolved\":{},\"blocked\":[{}],\"scripts\":[{}],\"step_errors\":{},\"objectives\":{},\"first_objective_tick\":{},\"reports\":{},\"unsupported\":{},\"engine_reads\":{}}}",
+            "{{\"campaign\":{},\"index\":{},\"bzn\":{},\"started\":{},\"start_error\":{},\"ticks\":{},\"ended\":{},\"end_blocked\":{},\"errors\":{},\"rules\":{},\"rules_held\":{},\"last_rule\":{},\"last_step\":{},\"steps_run\":{},\"distinct_steps\":{},\"problems\":[{}],\"missing\":{},\"failed\":{},\"invalid\":{},\"unresolved\":{},\"handles_resolved\":{},\"blocked\":[{}],\"scripts\":[{}],\"step_errors\":{},\"objectives\":{},\"first_objective_tick\":{},\"reports\":{},\"unsupported\":{},\"engine_reads\":{},\"absent_paths\":{}}}",
             json_string(&self.campaign),
             self.index,
             json_string(&self.bzn),
@@ -115,6 +118,7 @@ impl ProgressProbe {
             self.reports,
             counted(&self.unsupported),
             counted(&self.engine_reads),
+            counted(&self.absent_paths),
         )
     }
 }
@@ -187,6 +191,7 @@ fn read(rt: &crate::runtime::MissionRuntime, p: &mut ProgressProbe) {
     p.step_errors = rt.eval("return Mission_.stepErrors").unwrap_or_default();
     p.unsupported = rt.unsupported();
     p.engine_reads = counts(rt, "engineReads");
+    p.absent_paths = rt.absent_paths();
 }
 
 /// Run one mission up to `ticks` ticks and describe how far it got. `standin`

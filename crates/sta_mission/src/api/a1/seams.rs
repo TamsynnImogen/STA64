@@ -61,7 +61,11 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
         if !e.unit("Patrol", id)?.owner.is_player() {
             return Err(mlua::Error::runtime("A1.Patrol: object has no player owner"));
         }
-        let points = e.path(lua, "Patrol", a[1].text())?;
+        // An absent path name: the lookup is null, so neither the path type nor the order is set.
+        let Some(points) = e.find_path(lua, "Patrol", a[1].text())? else {
+            e.note_absent("Patrol", a[1].text());
+            return Ok(Value::Nil);
+        };
         if !e.ctx.borrow_mut().order(id, |units| sta_sim::command::Order::Patrol { units, points }) {
             return Err(mlua::Error::runtime("A1.Patrol: the order could not be queued"));
         }
@@ -79,7 +83,14 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
     })?)?;
     table.set("PointAt", def(lua, env, "PointAt", &["hh", "hs"], |lua, e, ov, a| {
         let unit = e.unit("PointAt", a[0].id())?;
-        let to = if ov == 0 { let t = e.unit("PointAt", a[1].id())?; e.ctx.borrow().placed(t.id, t.pos) } else { e.path_point(lua, "PointAt", a[1].text(), 0)? };
+        let to = if ov == 0 {
+            let t = e.unit("PointAt", a[1].id())?;
+            e.ctx.borrow().placed(t.id, t.pos)
+        } else {
+            // An absent path name does nothing.
+            let Some(p) = e.find_path_point(lua, "PointAt", a[1].text(), 0)? else { return Ok(Value::Nil) };
+            p
+        };
         let from = e.ctx.borrow().placed(unit.id, unit.pos);
         let dir = (to.x - from.x, to.z - from.z);
         if dir == (sta_core::Fixed::ZERO, sta_core::Fixed::ZERO) {

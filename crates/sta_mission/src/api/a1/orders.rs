@@ -33,7 +33,11 @@ pub(super) fn install(lua: &Lua, env: &Env, table: &Table) -> mlua::Result<()> {
             return Err(mlua::Error::runtime("A1.Goto: object has no player owner"));
         }
         if ov == 0 {
-            let points = e.path(lua, "Goto", a[1].text())?;
+            // An absent path name: the engine's lookup is null and the call does nothing.
+            let Some(points) = e.find_path(lua, "Goto", a[1].text())? else {
+                e.note_absent("Goto", a[1].text());
+                return Ok(Value::Nil);
+            };
             for (n, to) in points.into_iter().enumerate() {
                 send(e, "Goto", id, |units| Order::Move { units, to, queue: n > 0 })?;
             }
