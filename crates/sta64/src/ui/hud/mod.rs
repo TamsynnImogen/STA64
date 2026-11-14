@@ -546,6 +546,7 @@ fn target_mode_available(feed: &HudFeed, mode: TargetMode) -> bool {
         TargetMode::Attack => c.attack,
         TargetMode::Mine => c.mine,
         TargetMode::Rally => c.rally,
+        TargetMode::Colonize => c.colonize,
     }
 }
 
@@ -584,6 +585,15 @@ fn target_order(
             ids = miners.clone();
             vec![Order::Mine { units: miners, node: id }]
         }
+        TargetMode::Colonize => {
+            let planet = target?;
+            if !colonizable_by(feed, planet) { return None; }
+            let ships = commands::colony_ships(feed, &ids);
+            if ships.is_empty() { return None; }
+            // Only the colony ships take part, as with Mine.
+            ids = ships.clone();
+            vec![Order::Colonize { units: ships, planet }]
+        }
         TargetMode::Rally => {
             let at = match target.and_then(|id| feed.view.unit(id).filter(|u| !u.flags.contains(UnitFlags::DYING)).map(|_| id)) {
                 Some(id) => Target::Entity(id),
@@ -593,6 +603,17 @@ fn target_order(
         }
     };
     Some((orders, ids))
+}
+
+/// The sim's `Order::Colonize` gate on the planet, read from the view: a live
+/// colonizable Producer planet, unowned or owned by the player's own seat (a
+/// teammate's, an ally's or an enemy's is refused), with no colonizer yet.
+fn colonizable_by(feed: &HudFeed, planet: EntityId) -> bool {
+    let (Some(db), Some(p)) = (feed.content.as_deref(), feed.view.unit(planet)) else { return false };
+    !p.flags.contains(UnitFlags::DYING)
+        && (p.owner == sta_sim::world::NEUTRAL || p.owner == feed.player)
+        && db.unit(p.def).is_some_and(|d| sta_sim::colony::is_colonizable_planet(db, d))
+        && !feed.view.colonies.iter().any(|c| c.id == planet && c.colonizer.is_some())
 }
 
 fn enemy_target(feed: &HudFeed, owner: sta_sim::PlayerId) -> bool {
@@ -732,3 +753,5 @@ mod target_tests {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod colonize_tests;

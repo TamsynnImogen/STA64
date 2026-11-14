@@ -115,6 +115,22 @@ pub(crate) fn pod_of(db: &ContentDb, def: &sta_content::UnitDef) -> Option<Pod> 
     Some(Pod { party: c.party_size, orbit_range: c.orbit_range, delay: w.refire.max(1) })
 }
 
+/// Whether a unit definition is a pod colony ship the sim takes an
+/// `Order::Colonize` for (the client's COLONIZE command is offered by this).
+pub fn is_pod_ship(db: &ContentDb, def: &sta_content::UnitDef) -> bool {
+    pod_of(db, def).is_some()
+}
+
+/// Whether a planet definition can be colonized at all: a Producer planet with
+/// `isColonizable` and a population cap above zero. Ownership and a colonizer
+/// already at work are checked per planet (the view's owner and
+/// `WorldView.colonies`).
+pub fn is_colonizable_planet(db: &ContentDb, def: &sta_content::UnitDef) -> bool {
+    def.planet_role == Some(PlanetRole::Producer)
+        && def.planet_colonizable
+        && db.rules().population().is_some_and(|r| r.cap(def.planet_max_population) > Fixed::ZERO)
+}
+
 /// All colony state, ascending id.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Colonies {
@@ -423,7 +439,7 @@ impl Sim {
         let Some(db) = self.content.clone() else { return false };
         let Some(rules) = db.rules().population().copied() else { return false };
         let Some(pl) = self.units.get(planet).filter(|p| alive(p)) else { return false };
-        if !db.unit(pl.def).is_some_and(|d| d.planet_role == Some(PlanetRole::Producer) && d.planet_colonizable && rules.cap(d.planet_max_population) > Fixed::ZERO) {
+        if !db.unit(pl.def).is_some_and(|d| is_colonizable_planet(&db, d)) {
             return false;
         }
         if self.colonies.row(planet).is_some_and(|r| r.colonizer.is_some()) {

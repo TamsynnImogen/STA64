@@ -108,7 +108,7 @@ impl NativeCommands {
             warn!("stock HUD: allcommands.odf is missing; using available command ODFs");
         }
         // The shared HUD implements these capabilities even when allcommands omits them.
-        names.extend(["move", "attack", "stop", "rally", "harvest", "cancelbuild"].map(str::to_owned));
+        names.extend(["move", "attack", "stop", "rally", "harvest", "cancelbuild", "colonize"].map(str::to_owned));
         let mut commands = BTreeMap::new();
         let mut groups = BTreeSet::new();
         for name in names {
