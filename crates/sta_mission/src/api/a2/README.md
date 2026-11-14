@@ -671,3 +671,10 @@ Evidence: argument roles, the don't-wait inversion, the fade fields, id
 counters and the mission-over rule read from the executable, static. Not
 measured: release of a stopped sound's wait, the cineractive wait's release,
 counter reset on mission load, movie `int` (1 in every stock call).
+
+## Dead-handle answers (LUA-21)
+
+`GetDistance(a, b)`, `GetCrew`, `GetCurrentHealth`, `GetMaxHealth` and `GetLocation(handle)` answer the
+executable's constants for a handle that names nothing live (1e30, -1.0, the zero vector) instead of
+raising. Read from the executable, static; not measured. `GetDistance(object, path, i)` was not read and
+still raises; `GetRealShieldPercent` and `InQueue` are unbound on A2.

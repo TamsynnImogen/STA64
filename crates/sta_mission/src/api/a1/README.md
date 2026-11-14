@@ -128,3 +128,10 @@ No stock mission was run through this table; the tests use fake content.
 
 `GroupNew`, `GroupDelete` and `Add_Team_To_Group` are runtime bookkeeping only.
 `AddDilithium`/`SetDilithium` chain within a tick (writes are absolute; the view is a snapshot).
+
+## Dead-handle answers (LUA-21)
+
+`GetDistance` (both forms), `GetRealShieldPercent`, `GetCrew` and `GetLocation(handle)` answer the
+executable's constants for a handle that names nothing live (1e30, -33.0, -1.0, the zero vector),
+instead of raising. Read from the executable, static; not measured. A live object of any kind answers
+as before; the unknown-path case of `GetDistance(h, path, i)` and pending `BuildObject` handles still raise.

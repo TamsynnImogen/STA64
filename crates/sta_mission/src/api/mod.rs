@@ -442,6 +442,20 @@ impl Ctx {
 /// was not read from the executable (not measured); the zero vector is used.
 pub(crate) const ABSENT_PATH_LOCATION: (f64, f64, f64) = (0.0, 0.0, 0.0);
 
+/// Dead-handle answers (LUA-21). The engine's object guard (handle to object,
+/// null when absent, then a type bit and the dying byte) makes these calls return
+/// a constant for a handle that names nothing live: 0, a stale or removed
+/// object, a dying object and, in STA64, an object not yet spawned. The
+/// constants are the float literals the executable returns, Armada I and II alike
+/// (read from the executable, static; not measured; which object kinds pass the
+/// guard is not established, so a live station, planet or mine answers as before).
+/// `GetDistance` (both objects, or the object of the path form in Armada I).
+pub(crate) const ABSENT_DISTANCE: f64 = 1.000_000_015_047_466_2e30;
+/// `GetRealShieldPercent`.
+pub(crate) const ABSENT_SHIELD_PERCENT: f64 = -33.0;
+/// `GetCrew`, and `GetCurrentHealth` / `GetMaxHealth` (Armada II).
+pub(crate) const ABSENT_AMOUNT: f64 = -1.0;
+
 pub(crate) fn pos_f64(v: Vec3) -> (f64, f64, f64) {
     (v.x.to_f32() as f64, v.y.to_f32() as f64, v.z.to_f32() as f64)
 }

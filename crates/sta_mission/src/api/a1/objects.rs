@@ -14,7 +14,7 @@ use sta_sim::present::Presentation;
 use sta_sim::view::{Relation, UnitView};
 
 use super::{A, Env, Flag, TOKEN_BASE, alias, def};
-use crate::api::{dist, pos_f64, vector};
+use crate::api::{ABSENT_AMOUNT, ABSENT_DISTANCE, ABSENT_PATH_LOCATION, ABSENT_SHIELD_PERCENT, dist, pos_f64, vector};
 
 pub(super) use crate::api::search::stem;
 use crate::api::search::{Query, near, odf_ok};
@@ -87,7 +87,11 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
     // `GetLocation(handle)` and `GetLocation(path, point)`.
     table.set("GetLocation", def(lua, env, "GetLocation", &["h", "si"], |lua, e, ov, a| {
         let p = if ov == 0 {
-            e.unit("GetLocation", a[0].id())?.pos
+            // A handle naming nothing live: the engine's constant zero vector (LUA-21).
+            match e.ctx.borrow().alive(a[0].id()) {
+                Some(u) => u.pos,
+                None => return Ok(Value::Table(vector(lua, ABSENT_PATH_LOCATION)?)),
+            }
         } else {
             // An absent path or point: the engine returns a fixed default vector.
             match e.find_path_point(lua, "GetLocation", a[0].text(), a[1].int())? {
@@ -100,9 +104,14 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
 
     // `GetDistance(a, b)` and `GetDistance(object, path, point)`.
     table.set("GetDistance", def(lua, env, "GetDistance", &["hh", "hsi"], |lua, e, ov, a| {
-        let from = pos_f64(e.unit("GetDistance", a[0].id())?.pos);
+        // An object naming nothing live, on either side: the engine answers 1e30 (LUA-21).
+        let from = e.ctx.borrow().alive(a[0].id()).map(|u| pos_f64(u.pos));
+        let Some(from) = from else { return Ok(Value::Number(ABSENT_DISTANCE)) };
         let to = if ov == 0 {
-            pos_f64(e.unit("GetDistance", a[1].id())?.pos)
+            match e.ctx.borrow().alive(a[1].id()) {
+                Some(u) => pos_f64(u.pos),
+                None => return Ok(Value::Number(ABSENT_DISTANCE)),
+            }
         } else {
             pos_f64(e.path_point(lua, "GetDistance", a[1].text(), a[2].int())?)
         };
@@ -116,11 +125,14 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
         Ok(Value::Number(shield_fraction(&e.unit("GetShieldPercent", a[0].id())?)))
     })?)?;
     table.set("GetRealShieldPercent", def(lua, env, "GetRealShieldPercent", &["h"], |_, e, _, a| {
-        Ok(Value::Number(shield_fraction(&e.unit("GetRealShieldPercent", a[0].id())?)))
+        // A handle naming nothing live answers -33 (LUA-21; read from the executable, static).
+        let unit = e.ctx.borrow().alive(a[0].id()).cloned();
+        Ok(Value::Number(unit.map_or(ABSENT_SHIELD_PERCENT, |u| shield_fraction(&u))))
     })?)?;
 
     table.set("GetCrew", def(lua, env, "GetCrew", &["h"], |_, e, _, a| {
-        let unit = e.unit("GetCrew", a[0].id())?;
+        // A handle naming nothing live answers -1 (LUA-21; read from the executable, static).
+        let Some(unit) = e.ctx.borrow().alive(a[0].id()).cloned() else { return Ok(Value::Number(ABSENT_AMOUNT)) };
         let crew = unit.crew.ok_or_else(|| e.no_data("GetCrew", "the unit has no initialised crew"))?;
         Ok(Value::Number(f64::from(crew[0].to_f32())))
     })?)?;

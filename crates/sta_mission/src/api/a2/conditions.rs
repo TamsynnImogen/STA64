@@ -243,8 +243,9 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
             arity("GetCrew", &args, 1)?;
             let id = handle("GetCrew", &args, 0)?;
             let mut c = c.borrow_mut();
-            let crew = alive(&c, "GetCrew", id)?.crew;
-            match crew {
+            // A handle naming nothing live answers -1 (LUA-21; read from the executable, static).
+            let Some(unit) = c.alive(id) else { return Ok(crate::api::ABSENT_AMOUNT) };
+            match unit.crew {
                 Some(crew) => Ok(f64::from(crew[0].to_f32())),
                 None => {
                     let why = "A2.GetCrew: the unit has no initialised crew";
