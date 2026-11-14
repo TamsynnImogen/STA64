@@ -12,8 +12,13 @@
 //! - [`recharge`] gives every shield pool its definition's `recharge` per tick
 //!   (capped at `max`), before the tick's hits. No delay after a hit.
 //!
-//! - Crew (SIM-39, `Features::crew_loss_on_hit`): a hit that damages the
-//!   shields kills crew, see [`lose_crew`].
+//! - Planets with a population row (SIM-30): the hull damage of a hit becomes
+//!   population loss (`0.1 x damage`) and the hull is untouched, hit by hit.
+//!
+//! - Crew (SIM-39, `Features::crew_loss_on_hit`): the engine's casualty model
+//!   (damage variance, shield protection, one location roll per hit, system
+//!   hit points, crew loss, life-support drain, derelict latch) is
+//!   [`super::casualty`]; without the feature a hit is shields, then hull.
 //!
 //! - Mission edits (SIM-55): [`Sim::edit_shield_percent`] and
 //!   [`Sim::edit_max_shields`] write the shield pools, [`Subsystems`] keeps the
@@ -41,10 +46,10 @@ use crate::world::{Entities, EntityKind, Fnv, Table};
 use crate::Sim;
 
 /// Recharge every unit's shields by its definition's rate.
-pub(crate) fn recharge(units: &mut Entities, db: &ContentDb, switches: &crate::switches::SwitchTable) {
+pub(crate) fn recharge(units: &mut Entities, db: &ContentDb, switches: &crate::switches::SwitchTable, subsystems: &Subsystems) {
     for u in units.iter_mut() {
         // `CraftCanRepair(false)` (SIM-58) stops the shields coming back too.
-        if u.hull[0] <= Fixed::ZERO || switches.no_repair(u.id) {
+        if u.hull[0] <= Fixed::ZERO || switches.no_repair(u.id) || subsystems.get(u.id).is_some_and(|r| r.derelict) {
             continue;
         }
         let Some(def) = db.unit(u.def) else { continue };
@@ -61,37 +66,6 @@ pub(crate) fn recharge(units: &mut Entities, db: &ContentDb, switches: &crate::s
     }
 }
 
-/// Crew killed by the shield part of one hit (SIM-39).
-///
-/// Rule: `(shield damage - damageThreshold) x shieldCrewModifier` (ordnance
-/// keys), floored at 0. On a unit with `saneCrewLossMethod` that is crew
-/// points; otherwise a percent of the unit's maximum crew. Crew never goes
-/// below 0 and a unit with no crew pool loses nothing. Evidence: measured on
-/// stock Armada II (constant per shield hit, within about 7 percent of the
-/// formula, both loss methods, the shield-breaking hit counted by its shield
-/// part); read from data for the keys. Not applied, not measured: the
-/// `hullCrewModifier` of hull hits (the original's hull hits also kill crew
-/// through random system losses, `*CrewLoss`), the steady drain while life
-/// support is down, boarding, and recovery (`recrewRate`, SIM-41).
-fn lose_crew(t: &mut crate::world::Entity, db: &ContentDb, weapon: sta_core::ContentKey, shield_damage: Fixed) {
-    if shield_damage <= Fixed::ZERO {
-        return;
-    }
-    let (Some(def), Some(w)) = (db.unit(t.def), db.weapon(weapon)) else { return };
-    let Some(c) = w.crew_loss.filter(|_| db.weapon_features(w).crew_loss_on_hit) else { return };
-    let Some([now, max]) = t.crew else { return };
-    let over = (shield_damage - c.threshold).max(Fixed::ZERO);
-    // Saturating: absurd ordnance values must not wrap the product.
-    let sat = |a: Fixed, b: Fixed| Fixed::from_bits(((i128::from(a.to_bits()) * i128::from(b.to_bits())) >> 32).clamp(0, i128::from(i64::MAX)) as i64);
-    let mut points = sat(over, c.shield);
-    if !def.sane_crew_loss {
-        points = Fixed::from_bits(sat(max, points).to_bits() / 100);
-    }
-    if points > Fixed::ZERO {
-        t.crew = Some([(now - points).max(Fixed::ZERO), max]);
-    }
-}
-
 /// Apply the `Hit`s in `events[from..]`; returns `(killed, killer)` in the
 /// order the lethal hits came.
 pub(crate) fn apply(
@@ -99,6 +73,7 @@ pub(crate) fn apply(
     db: &ContentDb,
     events: &mut Vec<SimEvent>,
     from: usize,
+    ctx: &mut super::casualty::Ctx,
 ) -> Vec<(EntityId, Option<EntityId>)> {
     let mut killed = Vec::new();
     let tail = events.split_off(from);
@@ -123,16 +98,36 @@ pub(crate) fn apply(
             } else {
                 0
             };
-            let held = t.shields.now[pool];
-            shield = damage.min(held);
-            t.shields.now[pool] = held - shield;
-            down = shield > Fixed::ZERO && t.shields.now[pool] == Fixed::ZERO;
-            lose_crew(t, db, weapon, shield);
+            // SIM-39: the engine's casualty model for ordnance that has it.
+            let model = db.unit(t.def).zip(db.weapon(weapon)).filter(|(_, w)| db.weapon_features(w).crew_loss_on_hit);
             let floor = if t.flags.contains(UnitFlags::IMMORTAL) { Fixed::ONE } else { Fixed::ZERO };
-            hull = (damage - shield).min((t.hull[0] - floor).max(Fixed::ZERO));
-            t.hull[0] = t.hull[0] - hull;
-            if t.hull[0] <= Fixed::ZERO {
-                killed.push((target, Some(by)));
+            let wanted = match model {
+                Some((def, w)) => {
+                    let (s, h, d) = super::casualty::hit(t, def, w, db, ctx, pool, damage);
+                    (shield, down) = (s, d);
+                    h
+                }
+                None => {
+                    let held = t.shields.now[pool];
+                    shield = damage.min(held);
+                    t.shields.now[pool] = held - shield;
+                    down = shield > Fixed::ZERO && t.shields.now[pool] == Fixed::ZERO;
+                    damage - shield
+                }
+            };
+            if ctx.colonies.has_row(target) {
+                // SIM-30, a planet with a population row: damage that reaches the
+                // hull costs `0.1 x damage` people and the hull stays, so every hit
+                // of the tick counts in full (read from the executable, static).
+                // The event reports what the hull took: nothing; the people lost are the row's.
+                ctx.colonies.lose_population(target, wanted.max(Fixed::ZERO));
+                hull = Fixed::ZERO;
+            } else {
+                hull = wanted.min((t.hull[0] - floor).max(Fixed::ZERO));
+                t.hull[0] = t.hull[0] - hull;
+                if t.hull[0] <= Fixed::ZERO {
+                    killed.push((target, Some(by)));
+                }
             }
         }
         events.push(SimEvent::Hit {
@@ -168,6 +163,8 @@ fn system(sub: Subsystem) -> usize {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct SubsystemRow {
     pub off: u8,
+    /// The derelict latch (SIM-39): crew fell under 1.
+    pub derelict: bool,
     pub damage: [i64; 5],
 }
 
@@ -187,7 +184,7 @@ impl Subsystems {
         self.rows.get(id).copied()
     }
 
-    fn edit(&mut self, id: EntityId, f: impl FnOnce(&mut SubsystemRow)) {
+    pub(super) fn edit(&mut self, id: EntityId, f: impl FnOnce(&mut SubsystemRow)) {
         let mut row = self.get(id).unwrap_or_default();
         f(&mut row);
         if row == SubsystemRow::default() {
@@ -226,7 +223,7 @@ impl Subsystems {
         h.u64(self.rows.len() as u64);
         for (id, r) in self.rows.iter() {
             h.u64(id.0 as u64);
-            h.u64(u64::from(r.off));
+            h.u64(u64::from(r.off) | u64::from(r.derelict) << 8);
             for d in r.damage {
                 h.u64(d as u64);
             }

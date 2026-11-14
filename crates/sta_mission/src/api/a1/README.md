@@ -103,16 +103,20 @@ executables), and the delay of `FailMission` /
 ## Not available until a sim seam exists
 
 Writes are retained as `Call A1.<Name>` and counted in `unsupported()` (also `Load_Rules` and
-`Load_Action_Scripts`, which load nothing and return 0). `SetRelation` sets only the
-mission-local override (provisional 0/1/2 mapping) and is counted too:
+`Load_Action_Scripts`, which load nothing and return 0). `SetRelation(a, b, r)` is not a
+gap: it sends `Edit::SetRelation` (SIM-63; 0 enemy, 1 neutral, 2 ally, a's view of b only). The gaps:
 `SetPosition SetWarpSpeed ResetWarpSpeed PointAt
 Special_Attack Attack(unit, Vector) SetSpecialWeaponAttackInterval
 AttackMainEnemyBase DestroyCritical Destroy*
 AllowMultipleSpecialWeaponFire SetSpecialForcesFlag TransferFlag LinkWormHoles
 EnableWormholeTravel ObstacleAvoidence PauseSimulation UnpauseSimulation
 EnableLight ReplaceObject RecruitSpecialForces SetRace SetWormholeTeam
-SetOfficers AddOfficers SetTeamCrew AddCrew SetCrew DisableAllAITeams
-EnableAllAITeams DisableTeam EnableTeam SetIsAITeam`.
+SetOfficers AddOfficers SetTeamCrew AddCrew SetCrew`.
+
+The AI switches `DisableAllAITeams EnableAllAITeams DisableTeam EnableTeam SetIsAITeam` are not
+gaps (LUA-20): each queues one request for the host's AI hub (`MissionRuntime::take_ai_requests`,
+`api/ai_switch.rs`; rules and grades in `sta_ai::mission`). `ResetStrategyCycle` is not exported by
+Armada I.
 
 Queries raise an error naming the missing data (also `strength_team_1`, `strength_team_2`, `hot_float_value`): `InStopMode InAttackMode
 OutOfSpecialAttackMode InQueue GetAttackLocation UnderAttack

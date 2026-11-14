@@ -72,6 +72,7 @@ impl Sim {
                 sim.labels.insert(id, label.clone());
             }
         }
+        sim.refresh_seat_rules();
         (sim, warnings)
     }
 
@@ -138,6 +139,7 @@ impl Sim {
         self.start_effects.remove(id);
         self.subsystems.remove(id);
         self.attrs.remove(id);
+        self.colonies.remove_entity(id);
         self.scripted.remove(id);
         self.switches.remove(id);
         if let Some(by) = destroyed_by {
@@ -173,6 +175,38 @@ impl Sim {
             Edit::Kill(id) => self.despawn(id, None),
             Edit::Team(id, to) => self.transfer_owner(from, id, to),
             Edit::PerceivedTeam(id, to) => self.set_perceived_owner(id, to),
+            Edit::SetRelation { from, to, relation } => {
+                let seat = |p: PlayerId| self.players.iter().any(|s| s.0 == p);
+                if from == to || !seat(from) || !seat(to) {
+                    return false;
+                }
+                let default = crate::relations::default_view(&self.players, from, to);
+                let before = crate::relations::Diplomacy::new(&self.players, &self.relations).view(from, to);
+                self.relations.set(from, to, relation, default);
+                if before != relation {
+                    // A commanded attack ends when the shooter's view of the
+                    // target's perceived owner changes (read from the executable,
+                    // static); auto fire re-checks the relation every tick anyway.
+                    let dropped: Vec<EntityId> = self
+                        .weapons
+                        .attacks()
+                        .into_iter()
+                        .filter(|&(shooter, target)| {
+                            self.units.get(shooter).is_some_and(|u| u.owner == from)
+                                && self.units.get(target).is_some_and(|t| self.perception.get(t.id).copied().unwrap_or(t.owner) == to)
+                        })
+                        .map(|(shooter, _)| shooter)
+                        .collect();
+                    self.weapons.stop_attack(&self.units, PlayerId::SCRIPT, &dropped);
+                    for id in dropped {
+                        if let Some(u) = self.units.get_mut(id).filter(|u| u.kind == crate::world::EntityKind::Craft) {
+                            u.target = None;
+                        }
+                        self.approach_warp.end(id);
+                    }
+                }
+                true
+            }
             Edit::ForceOntoMap { id, enabled } => self.units.get(id).is_some_and(|u| self.confinement.set(u, enabled)),
             Edit::Damage(id, amount) => {
                 // Straight to the hull, past the shields; lethal unless immortal.
@@ -259,6 +293,13 @@ impl Sim {
                 // Cap: the current maximum crew (read from the executable, static).
                 let _ = now;
                 u.crew = Some([value.max(Fixed::ZERO).min(max), max]);
+                // Then the derelict check, only where the casualty model runs
+                // (`crew_loss_on_hit`): `casualty::step` is what clears the latch.
+                let casualty = self.content.as_deref().is_some_and(|db| db.unit(u.def).is_some_and(|d| db.unit_features(d).crew_loss_on_hit));
+                if casualty {
+                    let mut ctx = crate::combat::casualty::Ctx { subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches, colonies: &mut self.colonies };
+                    crate::combat::casualty::check_derelict(u, &mut ctx);
+                }
                 true
             }
             Edit::MaxHull(id, v) => self.edit_max_hull(id, v),
@@ -267,9 +308,11 @@ impl Sim {
             Edit::MaxShieldsKeep(id, v) => self.edit_max_shields_keep(id, v),
             Edit::UnitRace(id, ref race) => self.edit_unit_race(id, race),
             Edit::PlayerRace(p, ref race) => self.edit_player_race(p, race),
+            Edit::TeamPool(p, op, x) => self.edit_team_pool(p, op, x),
             Edit::Position(id, to) => self.edit_position(id, to),
             Edit::Heading(id, dir) => self.edit_heading(id, dir),
             Edit::AngularVelocity(id, omega) => self.edit_angular_velocity(id, omega),
+            Edit::PlanetPopulation(id, people) => self.edit_planet_population(id, people),
             // The rest land with the package that owns what they change.
             _ => false,
         }

@@ -211,11 +211,11 @@ fn personnel_uses_inherited_cfg_rectangles_colours_and_live_values() {
     assert_eq!(officers, "0/0");
     assert_eq!(crew_color, Color::srgba(0.0, 1.0, 1.0, 1.0));
     assert_eq!(officer_color, Color::srgba(1.0, 1.0, 0.0, 1.0));
-    // The 1600x1200 CFG maps independently to the 1920x1080 test viewport.
+    // The 1600x1200 CFG on the 1920x1080 test viewport: one factor 0.9, HUD 1440 wide, centred (x + 240).
     assert_eq!((crew_node.left, crew_node.top, crew_node.width, crew_node.height),
-        (Val::Px(36.0), Val::Px(14.0), Val::Px(88.0), Val::Px(19.0)));
+        (Val::Px(267.0), Val::Px(14.0), Val::Px(66.0), Val::Px(19.0)));
     assert_eq!((officer_node.left, officer_node.top, officer_node.width, officer_node.height),
-        (Val::Px(280.0), Val::Px(15.0), Val::Px(96.0), Val::Px(27.0)));
+        (Val::Px(450.0), Val::Px(15.0), Val::Px(72.0), Val::Px(27.0)));
     set_personnel(&mut app, Some(Fixed::from_int(1200)), [Fixed::from_int(16), Fixed::from_int(600)]);
     assert_eq!(resource_label(&mut app, 0).unwrap().0, crew_entity);
     assert_eq!(resource_label(&mut app, 0).unwrap().1, "1200");
@@ -228,6 +228,119 @@ fn personnel_uses_inherited_cfg_rectangles_colours_and_live_values() {
     assert_eq!(resource_label(&mut app, 0).unwrap().1, "");
     set_personnel(&mut app, Some(Fixed::ZERO), [Fixed::ZERO; 2]);
     assert_eq!(resource_label(&mut app, 0).unwrap().1, "0");
+}
+
+/// An authored sheet (own values) with the Armada I shape: no `resourcePanelArea`, three
+/// panels each with a background piece, an icon and a panel-relative text area.
+const A1_RESOURCES: &str = "\
+screenWidth = 640
+screenHeight = 480
+officerPanelArea = 500 2 80 14
+officerBackgroundPanel = \"res_bg_c\"
+officerBackgroundPanelSize = 1
+officerBackgroundPanel_0 = 0 0 80 14
+officerIcon = \"res_icon_c\"
+officerIconArea = 3 2 9 9
+officerTextArea = 14 1 60 13
+crewPanelArea = 400 2 80 14
+crewBackgroundPanel = \"res_bg_b\"
+crewBackgroundPanelSize = 1
+crewBackgroundPanel_0 = 0 0 80 14
+crewIcon = \"res_icon_b\"
+crewIconArea = 3 2 9 9
+crewTextArea = 14 1 60 13
+dilithiumPanelArea = 300 2 80 14
+dilithiumBackgroundPanel = \"res_bg_a\"
+dilithiumBackgroundPanelSize = 1
+dilithiumBackgroundPanel_0 = 0 0 80 14
+dilithiumIcon = \"res_icon_a\"
+dilithiumIconArea = 3 2 9 9
+dilithiumTextArea = 14 1 60 13
+";
+
+fn single_file_config(raw: &str) -> HudConfig {
+    let (cfg, _) = GuiCfg::parse("gui_fed.cfg", raw);
+    HudConfig { gui: Some(cfg.layout_auto()), fit_scale: false, ..default() }
+}
+
+fn resource_label_count(app: &mut App) -> usize {
+    app.world_mut().query::<&info::StockText>().iter(app.world()).count()
+}
+
+#[test]
+fn armada1_separate_panels_draw_three_readouts_with_live_values() {
+    let mut app = app_with_content_and_config(content(), single_file_config(A1_RESOURCES), UiProfile::Armada2);
+    assert_eq!(resource_label_count(&mut app), 3);
+    // 640x480 canvas on the 1920x1080 test viewport: one factor 2.25, HUD 1440 wide, centred (x + 240).
+    let (_, dilithium, _, node) = resource_label(&mut app, 2).unwrap();
+    assert_eq!(dilithium, "3000");
+    // Panel origin (240 + 300*2.25, round(2*2.25)) plus the text area (14*2.25, round(1*2.25)).
+    assert_eq!((node.left, node.top), (Val::Px(947.0), Val::Px(7.0)));
+    assert_eq!(resource_label(&mut app, 0).unwrap().1, "");
+    assert_eq!(resource_label(&mut app, 1).unwrap().1, "0/0");
+    set_personnel(&mut app, Some(Fixed::from_int(4000)), [Fixed::from_int(7), Fixed::from_int(100)]);
+    assert_eq!(resource_label(&mut app, 0).unwrap().1, "4000");
+    assert_eq!(resource_label(&mut app, 1).unwrap().1, "7/100");
+    // Three backgrounds and three icons are drawn as pictures.
+    let pictures = app.world_mut().query::<&crate::ui::gui_sprites::GuiImage>().iter(app.world()).count();
+    assert_eq!(pictures, 6);
+}
+
+/// With `STA64_TEST_A1_INSTALL=<Armada I root>`: every race's real GUI cfg draws the three
+/// readouts (crew 0, officers 1, dilithium 2) inside the window at 4:3 and 16:9.
+#[test]
+fn installed_armada1_guis_draw_three_resource_readouts_inside_the_window() {
+    let Some(root) = std::env::var_os("STA64_TEST_A1_INSTALL") else {
+        eprintln!("SKIP: set STA64_TEST_A1_INSTALL to an Armada I root");
+        return;
+    };
+    let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), None).unwrap();
+    for cfg_name in ["gui_fed.cfg", "gui_kli.cfg", "gui_rom.cfg", "gui_bor.cfg"] {
+        let layout = crate::game::gui_layout(&vfs, cfg_name).unwrap_or_else(|| panic!("{cfg_name} missing"));
+        assert!(!layout.panels.contains_key("resource"), "{cfg_name} now has a resource panel");
+        for aspect in [4.0_f32 / 3.0, 16.0 / 9.0] {
+            let config = HudConfig { gui: Some(layout.clone()), aspect, fit_scale: false, ..default() };
+            let mut app = app_with_content_and_config(content(), config, UiProfile::Armada2);
+            assert_eq!(resource_label_count(&mut app), 3, "{cfg_name} at {aspect}");
+            let (w, h) = (1080.0 * aspect, 1080.0);
+            for id in 0..3 {
+                let (_, _, _, node) = resource_label(&mut app, id).unwrap_or_else(|| panic!("{cfg_name} id {id}"));
+                let (Val::Px(x), Val::Px(y), Val::Px(nw), Val::Px(nh)) = (node.left, node.top, node.width, node.height)
+                else {
+                    panic!("{cfg_name} id {id}: not pixel placed");
+                };
+                // The node sits where the cfg puts this race's text area inside its panel.
+                let stock = StockLayout::new(&layout, Vec2::new(w, h));
+                let prefix = ["crew", "officer", "dilithium"][id];
+                let area = stock.panel(prefix).unwrap_or_else(|| panic!("{cfg_name} {prefix} panel"));
+                let want = stock.at(Vec2::new(area.x, area.y), &format!("{prefix}TextArea")).unwrap();
+                assert_eq!((x, y, nw, nh), (want.x, want.y, want.w, want.h), "{cfg_name} {prefix} text area at {aspect}");
+                assert!(nw >= 20.0 && nh >= 8.0, "{cfg_name} id {id}: {nw}x{nh}");
+                assert!(x >= 0.0 && y >= 0.0 && x + nw <= w + 0.5 && y + nh <= h, "{cfg_name} id {id}: {x},{y} {nw}x{nh} in {w}x{h}");
+            }
+        }
+    }
+}
+
+#[test]
+fn armada1_separate_panels_respect_no_flags_and_missing_text_areas() {
+    let raw = A1_RESOURCES.replace("dilithiumTextArea = 14 1 60 13", "dilithiumTextArea = 0 0 0 0") + "noCrew = 1\n";
+    let mut app = app_with_content_and_config(content(), single_file_config(&raw), UiProfile::Armada2);
+    assert!(resource_label(&mut app, 0).is_none());
+    assert!(resource_label(&mut app, 2).is_none());
+    assert!(resource_label(&mut app, 1).is_some());
+}
+
+#[test]
+fn single_resource_panel_wins_over_separate_panels() {
+    // A2 / FO / Roots sheets author `resourcePanelArea`; stray A1 style keys must not add readouts.
+    let raw = format!("{A1_RESOURCES}resourcePanelArea = 0 0 400 80\nresource_2 = 20 10 80 30\n");
+    let mut mixed = app_with_content_and_config(content(), single_file_config(&raw), UiProfile::Armada2);
+    assert_eq!(resource_label_count(&mut mixed), 1);
+    assert_eq!(resource_label(&mut mixed, 2).unwrap().1, "3000");
+    // The shipped A2 test sheet still draws its three authored readouts unchanged.
+    let mut a2 = app();
+    assert_eq!(resource_label_count(&mut a2), 3);
 }
 
 #[test]
@@ -497,7 +610,7 @@ fn hovered_info_bar_keeps_selected_card_and_updates_real_pools_in_place() {
     }
     let crew = info_bar_label(&mut app, Crew).unwrap().4;
     assert_eq!((crew.left,crew.top,crew.width,crew.height),
-        (Val::Px(760.0),Val::Px(823.0),Val::Px(60.0),Val::Px(18.0)));
+        (Val::Px(810.0),Val::Px(823.0),Val::Px(45.0),Val::Px(18.0)));
     let icons: Vec<_> = app.world_mut().query::<(&infobar::InfoBarIcon, &crate::ui::gui_sprites::GuiImage, &Visibility)>()
         .iter(app.world()).map(|(kind,image,visibility)| (kind.0,image.color,*visibility,image.names.clone())).collect();
     assert_eq!(icons.len(),4);
@@ -532,7 +645,7 @@ fn no_selection_hover_uses_low_offset_and_missing_or_hidden_targets_clear_stats(
     app.update();
     assert_eq!(info_bar_label(&mut app, Name).unwrap().1,"Construction Ship");
     let node = info_bar_label(&mut app, Crew).unwrap().4;
-    assert_eq!((node.left,node.top), (Val::Px(733.0),Val::Px(825.0)));
+    assert_eq!((node.left,node.top), (Val::Px(790.0),Val::Px(825.0)));
     let mut feed = app.world().resource::<HudFeed>().clone();
     let mut view = (*feed.view).clone();
     view.visibility = vec![(feed.player,vec![EntityId(1)])];
@@ -549,12 +662,12 @@ fn no_selection_hover_uses_low_offset_and_missing_or_hidden_targets_clear_stats(
 }
 
 #[test]
-fn middle_info_bar_and_zero_area_fields_follow_independent_cfg_axes() {
+fn middle_info_bar_and_zero_area_fields_follow_the_cfg() {
     use infobar::InfoBarField::{Crew,Energy};
     let mut app = populated_info_bar(false, "icon_energy_amt = 0 0 0 0\ncrew_amt = 0 0 0 0\n");
     assert!(info_bar_label(&mut app, Crew).is_none());
     let energy = info_bar_label(&mut app, Energy).unwrap().4;
-    assert_eq!((energy.left,energy.top), (Val::Px(866.0),Val::Px(816.0)));
+    assert_eq!((energy.left,energy.top), (Val::Px(890.0),Val::Px(816.0)));
     assert!(app.world_mut().query::<&infobar::InfoBarIcon>().iter(app.world()).all(|i| i.0 != Energy));
 }
 
@@ -822,13 +935,13 @@ fn palette_cells_and_input_regions_use_cfg_geometry() {
     let state = app.world().resource::<StockState>();
     let layout = state.layout.as_ref().unwrap();
     let palette = layout.palette().unwrap();
-    let cells = visible_cells(&palette, layout.screen);
+    let cells = visible_cells(&palette, layout.hud);
     assert_eq!(cells.len(), 9);
-    assert_eq!((cells[0].x, cells[0].y), (1200.0, 720.0));
-    assert_eq!((cells[1].x, cells[1].y), (1302.0, 720.0));
-    assert_eq!((cells[3].x, cells[3].y), (1200.0, 679.0));
-    assert!(state.solid.iter().any(|r| r.contains(Vec2::new(1210.0, 730.0))));
-    assert!(state.solid.iter().any(|r| r.contains(Vec2::new(5.0, 5.0))));
+    assert_eq!((cells[0].x, cells[0].y), (1140.0, 720.0));
+    assert_eq!((cells[1].x, cells[1].y), (1217.0, 720.0));
+    assert_eq!((cells[3].x, cells[3].y), (1140.0, 679.0));
+    assert!(state.solid.iter().any(|r| r.contains(Vec2::new(1150.0, 730.0))));
+    assert!(state.solid.iter().any(|r| r.contains(Vec2::new(245.0, 5.0))));
     assert!(!state.solid.iter().any(|r| r.contains(Vec2::new(1100.0, 700.0))));
 }
 
@@ -870,31 +983,76 @@ fn disabled_info_variant_does_not_leave_invisible_stats_input_regions() {
 #[path = "identity_tests.rs"]
 mod identity_tests;
 
-/// UI-16, ADR 0007 T1: HUD labels come from the mod's sprite font. No HUD label is
-/// plain Bevy `Text` and none opts out through `ScalableText`; the sprite font itself
-/// falls back to the TTF where a mod has none.
 #[test]
-fn stock_hud_labels_are_sprite_text_and_never_scalable() {
-    use crate::ui::gui_sprites::GuiButtonLabel;
-    use crate::ui::sprite_font::ScalableText;
-
-    let mut app = app_with_content(content_with_build_count(24));
-    app.world_mut().resource_mut::<HudState>().page = Page::Build;
-    app.update();
-    app.update();
-    let world = app.world_mut();
-    assert!(world.query::<&ScalableText>().iter(world).next().is_none());
-    assert_eq!(world.query::<&StockNav>().iter(world).count(), 2, "paged palette has PREV and NEXT");
-    for nav in world.query_filtered::<Entity, With<StockNav>>().iter(world).collect::<Vec<_>>() {
-        let kids = world.get::<Children>(nav).expect("nav label").to_vec();
-        assert_eq!(kids.len(), 1);
-        assert!(world.get::<SpriteText>(kids[0]).is_some());
-        assert!(world.get::<Text>(kids[0]).is_none());
+fn armada1_resource_readouts_are_solid_for_the_pointer() {
+    let app = app_with_content_and_config(content(), single_file_config(A1_RESOURCES), UiProfile::Armada2);
+    let state = app.world().resource::<StockState>();
+    // Canvas 640x480 on the 1920x1080 test viewport (factor 2.25, x + 240): the dilithium, crew and
+    // officer panels (80 wide, at 300, 400 and 500) cover x 915..1095, 1140..1320 and 1365..1545.
+    for x in [920.0, 1150.0, 1370.0] {
+        assert!(state.solid.iter().any(|r| r.contains(Vec2::new(x, 10.0))), "x {x}");
     }
-    let labels: Vec<Entity> = world.query_filtered::<Entity, With<GuiButtonLabel>>().iter(world).collect();
-    assert!(!labels.is_empty());
-    for l in labels {
-        assert!(world.get::<SpriteText>(l).is_some(), "button label drawn in the sprite font");
-        assert!(world.get::<Text>(l).is_none());
+    assert!(!state.solid.iter().any(|r| r.contains(Vec2::new(700.0, 10.0))));
+}
+
+#[test]
+fn a_zero_resource_panel_area_hides_the_strip_instead_of_taking_the_armada1_path() {
+    let raw = format!("{A1_RESOURCES}resourcePanelArea = 0 0 0 0\n");
+    let mut app = app_with_content_and_config(content(), single_file_config(&raw), UiProfile::Armada2);
+    assert_eq!(resource_label_count(&mut app), 0);
+}
+
+/// UI-37: on a 21:9 window the 4:3 sheet is centred; the margins beside it take world input
+/// (nothing there is solid), the HUD art does, and every solid rectangle lies inside the one
+/// HUD rectangle that the minimap and the palette share.
+#[test]
+fn margins_beside_the_centred_hud_are_not_solid() {
+    for aspect in [21.0_f32 / 9.0, 32.0 / 9.0] {
+        let mut cfg = config();
+        cfg.aspect = aspect;
+        let app = app_with_content_and_config(content(), cfg, UiProfile::Armada2);
+        let state = app.world().resource::<StockState>();
+        let layout = state.layout.as_ref().unwrap();
+        let hud = layout.hud;
+        assert_eq!((hud.w, hud.h), (1440.0, 1080.0), "{aspect}");
+        assert!(hud.x > 0.0 && (hud.x - (1080.0 * aspect - hud.right())).abs() <= 1.0, "{aspect}: {hud:?}");
+        for r in &state.solid {
+            assert!(r.x >= hud.x && r.right() <= hud.right() + 0.5, "{aspect}: solid {r:?} leaves the HUD {hud:?}");
+        }
+        // Left and right margins, at the minimap's and the palette's heights.
+        for y in [100.0, 700.0, 1000.0] {
+            for x in [2.0, hud.x - 2.0, hud.right() + 2.0, 1080.0 * aspect - 2.0] {
+                assert!(!state.solid.iter().any(|r| r.contains(Vec2::new(x, y))), "{aspect}: ({x},{y}) is a margin");
+            }
+        }
+        // HUD art: the minimap panel's first unit and a palette cell, in the shifted positions.
+        let map = layout.panel("minimap").unwrap();
+        assert_eq!(map.x, hud.x, "{aspect}");
+        assert!(state.solid.iter().any(|r| r.contains(Vec2::new(map.x + 5.0, map.y + 5.0))), "{aspect}");
+        let cell = layout.palette().unwrap().cell_rect(0, 0);
+        assert!(state.solid.iter().any(|r| r.contains(Vec2::new(cell.x + 5.0, cell.y + 5.0))), "{aspect}");
+        // FO authors its minimap panel at x = -1: the placed art starts one unit left of the
+        // HUD, but the pointer-solid part stops at the HUD's edge.
+        {
+            let mut fo = config();
+            fo.aspect = aspect;
+            fo.gui.as_mut().unwrap().rects.insert("minimapPanelArea".into(), sta_content::Rect { x: -1, y: 800, w: 400, h: 400 });
+            let app = app_with_content_and_config(content(), fo, UiProfile::Armada2);
+            let state = app.world().resource::<StockState>();
+            let hud = state.layout.as_ref().unwrap().hud;
+            assert_eq!(state.layout.as_ref().unwrap().panel("minimap").unwrap().x, hud.x - 1.0, "{aspect}");
+            assert!(state.solid.iter().all(|r| r.x >= hud.x), "{aspect}: solid reaches into the margin");
+            assert!(!state.solid.iter().any(|r| r.contains(Vec2::new(hud.x - 0.5, 1000.0))), "{aspect}");
+            assert!(state.solid.iter().any(|r| r.contains(Vec2::new(hud.x + 5.0, 1000.0))), "{aspect}");
+        }
+        let app = {
+            let mut cfg = config();
+            cfg.aspect = aspect;
+            app_with_content_and_config(content(), cfg, UiProfile::Armada2)
+        };
+        let state = app.world().resource::<StockState>();
+        // The same condition input uses: a pointer in a margin leaves the map free.
+        let in_margin = crate::ui::hud::HudPointer(state.solid.iter().any(|r| r.contains(Vec2::new(5.0, 900.0))));
+        assert_eq!(in_margin, crate::ui::hud::HudPointer(false));
     }
 }

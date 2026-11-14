@@ -47,8 +47,11 @@ fn spawn_cmd(db: &ContentDb, seq: u32, odf: &str, player: u8, at: [f32; 3]) -> C
 }
 
 fn scene_with(db: Arc<ContentDb>, odfs: [&str; 4], at: [[f32; 3]; 4]) -> Scene {
+    scene_owned(db, odfs, at, [0, 1, 0, 1])
+}
+
+fn scene_owned(db: Arc<ContentDb>, odfs: [&str; 4], at: [[f32; 3]; 4], players: [u8; 4]) -> Scene {
     let mut sim = Sim::from_setup(&setup(&db));
-    let players = [0, 1, 0, 1];
     let cmds: Vec<Command> =
         (0..4).map(|i| spawn_cmd(&db, i as u32 + 1, odfs[i], players[i], at[i])).collect();
     let out = sim.step(&cmds);
@@ -165,11 +168,42 @@ fn goto_with_the_warp_flag_is_a_warp_move_on_the_first_leg() {
 }
 
 #[test]
-fn goto_a_path_the_host_did_not_fill_is_counted() {
+fn a_path_the_map_does_not_have_does_nothing_like_the_engines_null_lookup() {
+    // LUA-18: the engine's name lookup is null; Goto, Patrol and PointAt do nothing, uncounted.
     let s = scene();
-    let (rt, err) = fails(&s, "A2.Goto(a, 'NOPE', false, 1)");
+    let (rt, commands) = run(&s, "A2.Goto(a, 'NOPE', false, 1); A2.Patrol(a, 'NOPE'); A2.PointAt(a, 'NOPE')");
+    assert!(commands.is_empty(), "{commands:?}");
+    assert!(rt.unsupported().is_empty(), "{:?}", rt.unsupported());
+    let noted: Vec<String> = rt.absent_paths().into_iter().map(|(k, _)| k).collect();
+    assert_eq!(noted, ["absent path 'NOPE' (A2.Goto)", "absent path 'NOPE' (A2.Patrol)", "absent path 'NOPE' (A2.PointAt)"]);
+    // a missing path table is still a host gap
+    let (rt, err) = fails(&s, "A2.paths = nil; A2.Goto(a, 'P', false, 1)");
     assert!(err.contains("A2.paths"), "{err}");
-    assert!(counted(&rt, "A2.Goto: path 'NOPE'"));
+    assert!(counted(&rt, "A2.Goto"));
+}
+
+#[test]
+fn an_unowned_unit_fails_before_the_path_lookup_as_on_a1() {
+    let s = scene_owned(
+        Arc::new(fake::db()),
+        ["fx_cruiser", "fx_cruiser", "fx_station", "fx_frigate"],
+        [[0.0, 0.0, 0.0], [100.0, 0.0, 0.0], [300.0, 0.0, 0.0], [5000.0, 0.0, 0.0]],
+        [sta_sim::world::NEUTRAL.0, 1, 0, 1],
+    );
+    for script in ["A2.Goto(a, 'NOPE', false, 1)", "A2.Patrol(a, 'NOPE')"] {
+        let (rt, err) = fails(&s, script);
+        assert!(err.contains("no player owner"), "{script}: {err}");
+        assert!(rt.absent_paths().is_empty(), "{script}");
+    }
+}
+
+#[test]
+fn strict_path_calls_leave_no_absent_note() {
+    // SetPosition on an absent path still raises and counts; it is not a no-op, so no note.
+    let s = scene();
+    let (rt, _) = fails(&s, "A2.SetPosition(a, 'Nope')");
+    assert!(counted(&rt, "A2.SetPosition"));
+    assert!(rt.absent_paths().is_empty(), "{:?}", rt.absent_paths());
 }
 
 #[test]
@@ -296,7 +330,6 @@ fn the_sim_rejecting_an_impulse_or_alert_edit_is_reported_and_counted() {
 fn calls_with_no_seam_validate_then_raise_and_are_counted() {
     let s = scene();
     for (script, key) in [
-        ("A2.Colonize(a, s)", "A2.Colonize"),
         ("A2.Special_Attack(a, 'gquanteffect')", "A2.Special_Attack"),
         ("A2.Special_Attack(a, b, 'gtracbm')", "A2.Special_Attack"),
         ("A2.SetCommandMoveAutonomyLow(a)", "A2.SetCommandMoveAutonomyLow"),
@@ -486,7 +519,6 @@ fn placement_and_facing_calls_reject_bad_input_without_queuing() {
     for (script, key) in [
         ("A2.SetPosition(a, 'P', 3)", "A2.SetPosition"),
         ("A2.SetPosition(a, 'Nope')", "A2.SetPosition"),
-        ("A2.PointAt(a, 'Nope')", "A2.PointAt"),
     ] {
         let (rt, err) = fails(&s, script);
         assert!(err.contains("is not available"), "{script}: {err}");
@@ -525,8 +557,62 @@ fn ai_team_load_aip_queues_the_request_for_the_host() {
     let s = scene();
     let (rt, _) = run(&s, "A2.AI_Team_Load_AIP(2, 'x.aip'); A2.AI_Team_Load_AIP(2, 'Y.AIP')");
     assert_eq!(rt.unsupported(), [("Player.loadAIP".to_owned(), 2)], "counted until a host takes them");
-    let got = rt.take_aip_requests();
+    let got = rt.take_ai_requests();
     assert!(rt.unsupported().is_empty());
-    assert_eq!(got.iter().map(|(_, n)| n.as_str()).collect::<Vec<_>>(), ["x.aip", "Y.AIP"]);
-    assert!(rt.take_aip_requests().is_empty(), "taken once");
+    let team = PlayerId(2);
+    assert_eq!(got, [sta_ai::AiRequest::Load(team, "x.aip".into()), sta_ai::AiRequest::Load(team, "Y.AIP".into())]);
+    assert!(rt.take_ai_requests().is_empty(), "taken once");
+}
+
+// ---- script fleets (fleets.rs) ----
+
+#[test]
+fn a_move_fleet_moves_its_members_to_the_destination_and_warps_unless_told_not_to() {
+    let s = scene();
+    let (a, b) = (s.ids[0], s.ids[1]);
+    let (_, commands) = run(
+        &s,
+        "f = A2.CreateNewMoveFleet(); f:AddShip(a); f:AddShip(b); f:SetFleetDestination(Vector(500, 0, 0))",
+    );
+    assert_eq!(
+        orders(&commands),
+        vec![
+            (PlayerId(0), Order::MoveWarp { units: vec![a], to: at(500), queue: false }),
+            (PlayerId(1), Order::MoveWarp { units: vec![b], to: at(500), queue: false }),
+        ]
+    );
+    let (_, commands) = run(&s, "f = A2.CreateNewMoveFleet(); f:TryToWarp(false); f:SetStayInFormationWhileMoving(true); f:SetFormation(2); f:AddShip(a); f:SetFleetDestination(Vector(500, 0, 0))");
+    assert_eq!(orders(&commands), vec![(PlayerId(0), Order::Move { units: vec![a], to: at(500), queue: false })]);
+}
+
+#[test]
+fn a_siege_fleet_sends_members_to_weapon_range_of_the_destination_and_orders_late_members_at_once() {
+    let s = scene();
+    let (a, b) = (s.ids[0], s.ids[1]);
+    let (_, commands) = run(
+        &s,
+        "f = A2.CreateNewSiegeFleet(); f:AddShip(a); f:AddShip(a); f:SetFleetDestination(Vector(500, 0, 0)); f:AddShip(b)",
+    );
+    assert_eq!(
+        orders(&commands),
+        vec![
+            (PlayerId(0), Order::AttackPoint { units: vec![a], at: at(500) }),
+            (PlayerId(1), Order::AttackPoint { units: vec![b], at: at(500) }),
+        ]
+    );
+}
+
+#[test]
+fn a_fleet_without_a_destination_orders_nothing_and_dead_or_bad_members_are_skipped() {
+    let s = scene();
+    let (_, commands) = run(&s, "f = A2.CreateNewSiegeFleet(); f:AddShip(a); f:AddShip(99999); f:SetFleetDestination(Vector(5,0,0))");
+    assert_eq!(orders(&commands).len(), 1);
+    let (_, commands) = run(&s, "f = A2.CreateNewSiegeFleet(); f:AddShip(a)");
+    assert!(commands.is_empty());
+    let (_, err) = fails(&s, "f = A2.CreateNewSiegeFleet(); f:AddShip('x')");
+    assert!(err.contains("requires a handle"), "{err}");
+    let (_, err) = fails(&s, "f = A2.CreateNewMoveFleet(); f:SetFleetDestination(1)");
+    assert!(err.contains("requires a Vector"), "{err}");
+    let (_, err) = fails(&s, "A2.CreateNewMoveFleet(1)");
+    assert!(err.contains("takes no argument"), "{err}");
 }

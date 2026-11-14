@@ -6,10 +6,11 @@
 //!
 //! Whether the site is clear is [`sta_sim::production::site::check_site`], the
 //! rule the sim applies to the order, fed with the same view, so the ghost and
-//! the sim agree; [`site_status`] is the one entry the click uses too.
+//! the sim agree; [`site_status`] is the one entry the click uses too
+//! (both go through [`crate::placement::ghost_site`]).
 
 use bevy::prelude::*;
-use sta_sim::production::site::{self, SiteError};
+use sta_sim::production::site::SiteError;
 use sta_sim::{ContentKey, Vec3 as SimVec3};
 
 use super::model::HudFeed;
@@ -37,11 +38,23 @@ pub struct Ghost {
     own: Vec<(Entity, Handle<StandardMaterial>)>,
 }
 
-/// Whether `armed` may be placed at `at` now: `check_site` over the feed's
-/// view with the builder left out.
-pub fn site_status(feed: &HudFeed, bounds: Option<&(SimVec3, SimVec3)>, armed: &Armed, at: SimVec3) -> Result<(), SiteError> {
-    let Some(db) = feed.content.as_deref() else { return Ok(()) };
-    site::check_site(db, bounds, armed.what, at, site::view_obstacles(db, &feed.view, Some(armed.builder)))
+/// Where `armed` would be built for a cursor at `at`, and whether the site is legal: the same
+/// [`crate::placement::ghost_site`] rule the ghost draws, so the click and the ghost agree (an
+/// orbital station snaps onto a planet's orbit); the order itself carries the raw cursor point, which the
+/// sim snaps the same way. No content loaded: the cursor point, `Ok`.
+pub fn site_status(feed: &HudFeed, bounds: Option<&(SimVec3, SimVec3)>, armed: &Armed, at: SimVec3) -> (SimVec3, Result<(), SiteError>) {
+    let Some(db) = feed.content.as_deref() else { return (at, Ok(())) };
+    let site = crate::placement::ghost_site(db, bounds, &feed.view, armed.what, armed.builder, at);
+    (site.at, site.status)
+}
+
+/// The click's result for a cursor at `at`: the site the ghost shows (for the destination line) and the
+/// Build order to queue, or why the site is refused. The order carries the raw cursor point: the sim snaps
+/// it itself, once (a snapped point snapped again can land on another planet).
+pub fn build_order(feed: &HudFeed, bounds: Option<&(SimVec3, SimVec3)>, armed: &Armed, at: SimVec3) -> Result<(SimVec3, sta_sim::command::Order), SiteError> {
+    let (site_at, status) = site_status(feed, bounds, armed, at);
+    status?;
+    Ok((site_at, sta_sim::command::Order::Build { builder: armed.builder, what: armed.what, at: Some(at) }))
 }
 
 /// Whether the player can pay for `armed` now (the sim refuses a rig's order otherwise).
@@ -99,8 +112,10 @@ pub fn update_ghost(
         let at = aim.as_ref().and_then(|a| a.0).and_then(|a| ground_point(a.ray, y));
         match at {
             Some(at) => {
-                t.translation = to_bevy(at.to_f32());
-                g.status = Some(site_status(&feed, bounds.as_deref().and_then(|b| b.0.as_ref()), armed, at));
+                // The placement rule the sim applies: an orbital station snaps onto a planet's orbit.
+                let (site_at, status) = site_status(&feed, bounds.as_deref().and_then(|b| b.0.as_ref()), armed, at);
+                t.translation = to_bevy(site_at.to_f32());
+                g.status = Some(status);
                 *vis = Visibility::Inherited;
             }
             None => *vis = Visibility::Hidden,
@@ -241,6 +256,75 @@ mod tests {
         assert!(blocked.emissive_texture.is_none());
         assert_eq!(blocked.emissive, LinearRgba::BLACK);
         assert_ne!(source.base_color, blocked.base_color);
+    }
+
+    /// An orbital station's ghost follows the sim's placement rule (it snaps onto the planet's
+    /// orbit and is refused in open space), not the ordinary site rule.
+    #[test]
+    fn an_orbital_ghost_snaps_to_the_planet_and_is_refused_in_open_space() {
+        use crate::input::select::AimState;
+        use sta_content::{ContentDb, MoveStats, UnitDef};
+        use sta_sim::view::UnitView;
+        use sta_sim::view::UnitFlags;
+        use sta_sim::{EntityId, Fixed, PlayerId, WorldView};
+        use std::sync::Arc;
+
+        let fake = sta_content::fake::db();
+        let mut rig = UnitDef::new("fx_rig", "constructionrig");
+        rig.movement = MoveStats::from_f32(140.0, 1.0, 1.0, 1.0, 0.2);
+        let mut orbital = UnitDef::new("fx_orbital", "p_mining");
+        orbital.orbit_time = Some(Fixed::from_int(120));
+        let mut planet = UnitDef::new("fx_world", "planet");
+        planet.radius = Fixed::from_int(200);
+        planet.resource = Some(2);
+        planet.can_have_orbital_station = true;
+        let mut b = ContentDb::builder().profile(fake.profile()).features(fake.features().clone()).unit(rig).unit(orbital).unit(planet);
+        for w in fake.weapons() {
+            b = b.weapon(w.clone());
+        }
+        for u in fake.units() {
+            b = b.unit(u.clone());
+        }
+        let db = b.build().unwrap();
+        let unit = |id, odf: &str, x: i32| UnitView {
+            id: EntityId(id), def: db.key(odf).unwrap(), owner: PlayerId(0),
+            pos: SimVec3 { x: Fixed::from_int(x), y: Fixed::ZERO, z: Fixed::ZERO }, heading: (Fixed::ZERO, Fixed::ONE), speed: Fixed::ZERO,
+            hull: [Fixed::ONE; 2], shields: [[Fixed::ZERO; 2]; 4], crew: None, energy: None, autonomy: None,
+            flags: UnitFlags::SELECTABLE, progress: None,
+        };
+        let what = db.key("fx_orbital").unwrap();
+        let view = WorldView { units: vec![unit(1, "fx_world", 1000), unit(2, "fx_rig", 0)], ..Default::default() };
+        let aim_at = |x: f32, z: f32| Aim(Some(AimState {
+            cursor: Vec2::ZERO,
+            ray: Ray3d::new(Vec3::new(x, 100.0, -z), Dir3::NEG_Y),
+            clip_from_world: Mat4::IDENTITY,
+            size: Vec2::new(800.0, 600.0),
+        }));
+
+        let mut world = World::new();
+        world.insert_resource(HudFeed { view: Arc::new(view), player: PlayerId(0), selected: Vec::new(), content: Some(Arc::new(db)) });
+        let state = HudState { placing: Some(Armed { builder: EntityId(2), what, odf: "fx_orbital".into() }), ..Default::default() };
+        world.insert_resource(state);
+        let ghost = world.spawn((Ghost { def: what, status: None, painted: None, own: Vec::new() }, Transform::default(), Visibility::Hidden)).id();
+
+        world.insert_resource(aim_at(1100.0, 0.0));
+        world.run_system_once(update_ghost).unwrap();
+        assert_eq!(world.get::<Ghost>(ghost).unwrap().status, Some(Ok(())));
+        // Radius 200 + 75 from the planet's centre, on the cursor's bearing.
+        assert_eq!(world.get::<Transform>(ghost).unwrap().translation.x, 1275.0);
+
+        world.insert_resource(aim_at(3000.0, 3000.0));
+        world.run_system_once(update_ghost).unwrap();
+        assert_eq!(world.get::<Ghost>(ghost).unwrap().status, Some(Err(SiteError::Blocked)));
+        assert_eq!(world.get::<Transform>(ghost).unwrap().translation.x, 3000.0);
+
+        // The click asks the same rule: the site the ghost shows OK is accepted, open space refused.
+        let feed = world.resource::<HudFeed>();
+        let armed = world.resource::<HudState>().placing.clone().unwrap();
+        let sv = |x: i32, z: i32| SimVec3 { x: Fixed::from_int(x), y: Fixed::ZERO, z: Fixed::from_int(z) };
+        let (snapped, ok) = site_status(feed, None, &armed, sv(1100, 0));
+        assert_eq!((ok, snapped), (Ok(()), sv(1275, 0)));
+        assert_eq!(site_status(feed, None, &armed, sv(3000, 3000)).1, Err(SiteError::Blocked));
     }
 }
 

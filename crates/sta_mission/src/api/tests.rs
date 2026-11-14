@@ -791,7 +791,7 @@ fn condition_monitor_and_text_input_callbacks_get_a_hook_object_like_installed_s
 
 use crate::runtime::MissionEndState;
 
-/// Ids: 2 hero (p0), 3 wing (p0), 4 foe (p1), 5 far (p1). `Colonize` raises
+/// Ids: 2 hero (p0), 3 wing (p0), 4 foe (p1), 5 far (p1). `Special_Attack` (three-argument form) raises
 /// and is counted unsupported: a gap call that names both handles.
 fn end_state(script: &str) -> MissionEndState {
     let mut g = game(script);
@@ -803,15 +803,15 @@ fn end_state(script: &str) -> MissionEndState {
 fn an_end_with_no_gap_on_its_path_stands_even_with_unsupported_calls_elsewhere() {
     // A gap call on foe (4) and far (5), then a real loss decided on the hero
     // (2) and a count over the hero's team, which has nothing tainted.
-    let s = "pcall(A2.Colonize, 4, 5)\nif A2.IsAlive(2) and A2.CountUnits(A2.GetRealTeam(2), 0) > 0 then A2.FailMission(A2.GetTime(), 0) end";
+    let s = "pcall(A2.Special_Attack, 4, 5, 'gtracbm')\nif A2.IsAlive(2) and A2.CountUnits(A2.GetRealTeam(2), 0) > 0 then A2.FailMission(A2.GetTime(), 0) end";
     assert_eq!(end_state(s), MissionEndState::Ended { won: false });
-    let s = "pcall(A2.Colonize, 3, 5)\nif A2.IsAlive(2) then A2.SucceedMission(0, 0) end";
+    let s = "pcall(A2.Special_Attack, 3, 5, 'gtracbm')\nif A2.IsAlive(2) then A2.SucceedMission(0, 0) end";
     assert_eq!(end_state(s), MissionEndState::Ended { won: true });
 }
 
 #[test]
 fn an_end_read_off_a_tainted_handle_is_blocked_and_not_a_win_or_a_loss() {
-    let s = "pcall(A2.Colonize, 3, 5)\nif A2.IsAlive(3) then A2.SucceedMission(0, 0) end";
+    let s = "pcall(A2.Special_Attack, 3, 5, 'gtracbm')\nif A2.IsAlive(3) then A2.SucceedMission(0, 0) end";
     match end_state(s) {
         MissionEndState::Blocked(why) => assert!(why.contains("SucceedMission") && why.contains("IsAlive") && why.contains("object 3"), "{why}"),
         other => panic!("{other:?}"),
@@ -825,11 +825,11 @@ fn an_end_read_off_a_tainted_handle_is_blocked_and_not_a_win_or_a_loss() {
 fn a_team_count_is_tainted_only_over_a_team_with_a_tainted_object() {
     // Foe (4) belongs to team B: a count over team B or over any team is read
     // off a gap; a count over the hero's team is not.
-    let s = "pcall(A2.Colonize, 4, 5)\nif A2.CountUnits(A2.GetRealTeam(4), 0) > 0 then A2.SucceedMission(0, 0) end";
+    let s = "pcall(A2.Special_Attack, 4, 5, 'gtracbm')\nif A2.CountUnits(A2.GetRealTeam(4), 0) > 0 then A2.SucceedMission(0, 0) end";
     assert!(matches!(end_state(s), MissionEndState::Blocked(_)));
-    let s = "pcall(A2.Colonize, 4, 5)\nif A2.CountUnits(-1, 0) > 0 then A2.SucceedMission(0, 0) end";
+    let s = "pcall(A2.Special_Attack, 4, 5, 'gtracbm')\nif A2.CountUnits(-1, 0) > 0 then A2.SucceedMission(0, 0) end";
     assert!(matches!(end_state(s), MissionEndState::Blocked(_)));
-    let s = "pcall(A2.Colonize, 4, 5)\nif A2.CountUnits(A2.GetRealTeam(2), 0) > 0 then A2.SucceedMission(0, 0) end";
+    let s = "pcall(A2.Special_Attack, 4, 5, 'gtracbm')\nif A2.CountUnits(A2.GetRealTeam(2), 0) > 0 then A2.SucceedMission(0, 0) end";
     assert_eq!(end_state(s), MissionEndState::Ended { won: true });
 }
 
@@ -838,7 +838,7 @@ fn a_handle_that_never_existed_blocks_only_after_a_handle_producing_gap() {
     let s = "if not A2.IsAlive(0) then A2.FailMission(0, 0) end";
     assert_eq!(end_state(s), MissionEndState::Ended { won: false });
     // Some other unsupported call changes nothing for it.
-    let s = "pcall(A2.Colonize, 3, 5)\nif not A2.IsAlive(0) then A2.FailMission(0, 0) end";
+    let s = "pcall(A2.Special_Attack, 3, 5, 'gtracbm')\nif not A2.IsAlive(0) then A2.FailMission(0, 0) end";
     assert_eq!(end_state(s), MissionEndState::Ended { won: false });
     let s = "A2.NoteGap('BuildObject', 'x')\nif not A2.IsAlive(0) then A2.FailMission(0, 0) end";
     assert!(matches!(end_state(s), MissionEndState::Blocked(_)));
@@ -846,10 +846,10 @@ fn a_handle_that_never_existed_blocks_only_after_a_handle_producing_gap() {
 
 #[test]
 fn a_read_after_the_end_call_does_not_block_it_and_the_last_call_wins() {
-    let s = "A2.FailMission(0, 0)\npcall(A2.Colonize, 3, 5)\nlocal _ = A2.IsAlive(3)";
+    let s = "A2.FailMission(0, 0)\npcall(A2.Special_Attack, 3, 5, 'gtracbm')\nlocal _ = A2.IsAlive(3)";
     assert_eq!(end_state(s), MissionEndState::Ended { won: false });
     // Reads never clear: a call after a tainted read is blocked, whatever it is.
-    let s = "pcall(A2.Colonize, 3, 5)\nlocal _ = A2.IsAlive(3)\nA2.FailMission(0, 0)\nA2.SucceedMission(0, 0)";
+    let s = "pcall(A2.Special_Attack, 3, 5, 'gtracbm')\nlocal _ = A2.IsAlive(3)\nA2.FailMission(0, 0)\nA2.SucceedMission(0, 0)";
     match end_state(s) {
         MissionEndState::Blocked(why) => assert!(why.contains("SucceedMission"), "{why}"),
         other => panic!("{other:?}"),
@@ -865,14 +865,21 @@ fn a_raising_read_and_a_non_handle_integer_are_judged_apart() {
     let s = "pcall(A2.IsShipAliveAndOffMap, 3)\nif A2.IsAlive(2) then A2.SucceedMission(0, 0) end";
     assert!(matches!(end_state(s), MissionEndState::Blocked(_)));
     // A failed call whose first integer is no object (an objective index) taints nothing.
-    let s = "pcall(A2.Colonize, 900, 901)\nif A2.CountUnits(A2.GetRealTeam(4), 0) > 0 then A2.SucceedMission(0, 0) end";
+    let s = "pcall(A2.Special_Attack, 900, 901, 'gtracbm')\nif A2.CountUnits(A2.GetRealTeam(4), 0) > 0 then A2.SucceedMission(0, 0) end";
     assert_eq!(end_state(s), MissionEndState::Ended { won: true });
 }
 
 #[test]
 fn a_gap_that_changes_who_fights_taints_every_later_read() {
     // A world-effect gap with no object, then a win decided on a healthy hero.
-    let s = "A2.NoteGap('DisableAllAITeams')\nif A2.IsAlive(2) then A2.SucceedMission(0, 0) end";
+    let s = "A2.NoteGap('SetPerceivedTeam')\nif A2.IsAlive(2) then A2.SucceedMission(0, 0) end";
+    assert!(matches!(end_state(s), MissionEndState::Blocked(_)));
+}
+
+#[test]
+fn a_raised_command_all_ships_is_a_world_effect_gap() {
+    // Orders for many craft that did not go out: later reads are tainted.
+    let s = "pcall(A2.CommandAllShips, 3, 0, nil, true, false)\nif A2.IsAlive(2) then A2.SucceedMission(0, 0) end";
     assert!(matches!(end_state(s), MissionEndState::Blocked(_)));
 }
 
@@ -880,4 +887,62 @@ fn a_gap_that_changes_who_fights_taints_every_later_read() {
 fn a_gap_that_is_not_a_world_effect_taints_no_unrelated_read() {
     let s = "A2.NoteGap('CollisionPrevention', 1)\nif A2.IsAlive(2) then A2.SucceedMission(0, 0) end";
     assert_eq!(end_state(s), MissionEndState::Ended { won: true });
+}
+
+// ---- SIM-54: team crew and officer calls with the engine's clamps ----
+
+fn pooled(g: &mut Game) {
+    let mut view = (*g.view).clone();
+    view.players[0].crew = Some(Fixed::from_int(200));
+    view.players[0].officers = [Fixed::from_int(10), Fixed::from_int(100)];
+    view.attrs.seats[0].crew_capacity = Some(Fixed::from_int(250));
+    view.attrs.seats[0].officer_limit = Some(Fixed::from_int(100));
+    g.view = Arc::new(view);
+}
+
+#[test]
+fn a2_team_calls_return_the_clamped_pool_queue_the_typed_edit_and_stub_the_officer_writes() {
+    use sta_sim::command::TeamOp;
+    let mut g = game("MMM.register(function()
+        POOL = A2.GetTeamCrew(0); ADD = A2.AddCrew(0, 100.0); SET = A2.SetTeamCrew(0, 900.0)
+        AO = A2.AddOfficers(0, 5.0); SO = A2.SetOfficers(0, 5.0)
+        VAC = A2.GetOfficers(0); CAP = A2.GetOfficerCapacity(0)
+        ok, why = pcall(A2.GetMaxCrew, 1)
+        MAXCREW_FAILED = not ok
+    end)");
+    pooled(&mut g);
+    let mut out = Vec::new();
+    g.rt.think(&g.view, &g.events, &mut out);
+    assert!(g.rt.errors().is_empty(), "{:?}", g.rt.errors());
+    assert_eq!(g.global::<f64>("POOL"), 200.0);
+    assert_eq!(g.global::<f64>("ADD"), 250.0, "clamped to the capacity");
+    assert_eq!(g.global::<f64>("SET"), 250.0);
+    assert_eq!((g.global::<f64>("AO"), g.global::<f64>("SO")), (0.0, 0.0), "stubs return 0.0");
+    assert_eq!((g.global::<f64>("VAC"), g.global::<f64>("CAP")), (90.0, 100.0), "GetOfficers is the vacancies");
+    assert!(g.global::<bool>("MAXCREW_FAILED"), "the fake content has no MAX_CREW");
+    let edits: Vec<_> = out.iter().filter_map(|c| match &c.kind { CommandKind::Edit(e) => Some(e.clone()), _ => None }).collect();
+    assert!(edits.contains(&Edit::TeamPool(PlayerId(0), TeamOp::CrewAddA2, Fixed::from_int(100))), "{edits:?}");
+    assert!(edits.contains(&Edit::TeamPool(PlayerId(0), TeamOp::CrewSetA2, Fixed::from_int(900))), "{edits:?}");
+    assert_eq!(edits.iter().filter(|e| matches!(e, Edit::TeamPool(..))).count(), 2, "the officer writes change nothing");
+}
+
+#[test]
+fn roots_max_crew_is_a_raw_capacity_write_and_the_reads_follow_the_view() {
+    use sta_sim::command::TeamOp;
+    let mut g = game("MMM.register(function()
+        Player(0).maxCrew = 400; MAXCREW = Player(0).maxCrew; MAXOFF = Player(0).maxOfficers; CREW = Player(0).resources.crew
+    end)");
+    pooled(&mut g);
+    let mut out = Vec::new();
+    g.rt.think(&g.view, &g.events, &mut out);
+    assert!(g.rt.errors().is_empty(), "{:?}", g.rt.errors());
+    assert_eq!((g.global::<f64>("MAXCREW"), g.global::<f64>("MAXOFF"), g.global::<f64>("CREW")), (250.0, 100.0, 200.0), "reads: capacity, raw limit, pool");
+    let edits: Vec<_> = out.iter().filter_map(|c| match &c.kind { CommandKind::Edit(e) => Some(e.clone()), _ => None }).collect();
+    assert!(edits.contains(&Edit::TeamPool(PlayerId(0), TeamOp::CapacityRaw, Fixed::from_int(400))), "{edits:?}");
+    // Writing the capacity already in force sends nothing.
+    let mut g = game("MMM.register(function() Player(0).maxCrew = 250 end)");
+    pooled(&mut g);
+    let mut out = Vec::new();
+    g.rt.think(&g.view, &g.events, &mut out);
+    assert!(!out.iter().any(|c| matches!(&c.kind, CommandKind::Edit(Edit::TeamPool(..)))));
 }

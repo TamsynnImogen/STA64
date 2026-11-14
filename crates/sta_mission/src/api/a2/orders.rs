@@ -42,7 +42,7 @@ use std::rc::Rc;
 
 use mlua::{Function, Lua, MultiValue, Table, Value};
 use sta_core::{EntityId, Fixed, PlayerId, Vec3};
-use sta_sim::command::{AlertState, Edit, Order};
+use sta_sim::command::{AlertState, CommandKind, Edit, Order};
 use sta_sim::view::{Relation, UnitView};
 
 use super::dll_objects;
@@ -68,13 +68,13 @@ struct State {
 }
 
 #[derive(Clone)]
-struct Env {
-    ctx: Shared,
+pub(super) struct Env {
+    pub(super) ctx: Shared,
     st: Rc<RefCell<State>>,
 }
 
 /// One validated argument.
-enum P {
+pub(super) enum P {
     Handle(EntityId),
     Int(i64),
     Num(f64),
@@ -84,13 +84,13 @@ enum P {
 }
 
 impl P {
-    fn id(&self) -> EntityId {
+    pub(super) fn id(&self) -> EntityId {
         match self {
             P::Handle(id) => *id,
             _ => EntityId::NONE,
         }
     }
-    fn int(&self) -> i64 {
+    pub(super) fn int(&self) -> i64 {
         match self {
             P::Int(n) => *n,
             _ => 0,
@@ -103,7 +103,7 @@ impl P {
             _ => 0.0,
         }
     }
-    fn boolean(&self) -> bool {
+    pub(super) fn boolean(&self) -> bool {
         matches!(self, P::Bool(true))
     }
     fn text(&self) -> &str {
@@ -112,7 +112,7 @@ impl P {
             _ => "",
         }
     }
-    fn vec(&self) -> (f64, f64, f64) {
+    pub(super) fn vec(&self) -> (f64, f64, f64) {
         match self {
             P::Vec(v) => *v,
             _ => (0.0, 0.0, 0.0),
@@ -207,12 +207,12 @@ impl Env {
     }
 
     /// The live unit, or `None` when the handle is absent or dying.
-    fn alive(&self, id: EntityId) -> Option<UnitView> {
+    pub(super) fn alive(&self, id: EntityId) -> Option<UnitView> {
         self.ctx.borrow().alive(id).cloned()
     }
 
     /// Send an order as the unit's owner.
-    fn order(&self, name: &str, id: EntityId, make: impl FnOnce(Vec<EntityId>) -> Order) -> mlua::Result<()> {
+    pub(super) fn order(&self, name: &str, id: EntityId, make: impl FnOnce(Vec<EntityId>) -> Order) -> mlua::Result<()> {
         if self.ctx.borrow_mut().order(id, make) {
             Ok(())
         } else {
@@ -223,7 +223,15 @@ impl Env {
         }
     }
 
-    fn owned(&self, name: &str, unit: &UnitView) -> mlua::Result<()> {
+    /// Queue `order` as the script seat (the sim then applies the mission-only gates).
+    fn script_order(&self, name: &str, order: Order) -> mlua::Result<()> {
+        match self.ctx.borrow_mut().try_push(PlayerId::SCRIPT, CommandKind::Order(order)) {
+            Ok(_) => Ok(()),
+            Err(why) => Err(mlua::Error::runtime(format!("A2.{name}: {why}"))),
+        }
+    }
+
+    pub(super) fn owned(&self, name: &str, unit: &UnitView) -> mlua::Result<()> {
         if unit.owner.is_player() {
             Ok(())
         } else {
@@ -240,8 +248,25 @@ impl Env {
             .ok_or_else(|| mlua::Error::runtime(format!("A2.{name} requires a valid team number")))
     }
 
-    /// The points of `A2.paths[path]`; a missing path is a host gap.
+    /// The uncounted note for a no-op lookup of a path the map lacks (the strict `path()`
+    /// callers raise and count instead).
+    fn note_absent(&self, name: &str, path: &str) {
+        self.ctx.borrow_mut().note_absent_path(format!("absent path '{path}' (A2.{name})"));
+    }
+
+    /// The points of `A2.paths[path]`; an absent name is a host gap.
     fn path(&self, lua: &Lua, name: &str, path: &str) -> mlua::Result<Vec<Vec3>> {
+        match self.find_path(lua, name, path)? {
+            Some(points) => Ok(points),
+            None => Err(self.gap(name, &format!("path '{path}' is not in A2.paths (the host fills it from the map)"))),
+        }
+    }
+
+    /// The points of `A2.paths[path]`; `None` when the map has no path of that
+    /// name (LUA-18). The engine's lookup returns null and `Goto`, `Patrol` and
+    /// `PointAt` do nothing; stock scripts name such paths. A path of no points
+    /// is still a gap.
+    fn find_path(&self, lua: &Lua, name: &str, path: &str) -> mlua::Result<Option<Vec<Vec3>>> {
         let missing = |why: String| self.gap(name, &why);
         let a2: Table = lua.globals().raw_get("A2")?;
         let Value::Table(paths) = a2.raw_get::<Value>("paths")? else {
@@ -249,7 +274,7 @@ impl Env {
         };
         let points = match dll_objects::lookup_path(&paths, path)? {
             Ok(Some(t)) => t,
-            Ok(None) => return Err(missing(format!("path '{path}' is not in A2.paths (the host fills it from the map)"))),
+            Ok(None) => return Ok(None),
             Err(why) => return Err(missing(why)),
         };
         let mut out = Vec::new();
@@ -264,12 +289,12 @@ impl Env {
         if out.is_empty() {
             return Err(missing(format!("path '{path}' has no points")));
         }
-        Ok(out)
+        Ok(Some(out))
     }
 }
 
 /// Bind one DLL-named function.
-fn def(
+pub(super) fn def(
     lua: &Lua,
     env: &Env,
     name: &'static str,
@@ -305,7 +330,7 @@ fn raising(
     def(lua, env, name, specs, move |_, e, _, _| Err(e.gap(name, why)))
 }
 
-fn nothing() -> mlua::Result<Value> {
+pub(super) fn nothing() -> mlua::Result<Value> {
     Ok(Value::Nil)
 }
 
@@ -319,12 +344,20 @@ fn goto(lua: &Lua, env: &Env, overload: usize, a: &[P]) -> mlua::Result<Value> {
         let Some(target) = env.alive(a[1].id()) else { return nothing() };
         Some(target.pos)
     };
+    // Ownership first, as for A1: a unit with no player owner fails before any lookup.
+    env.owned("Goto", &unit)?;
     let points = match dest {
         Some(p) => vec![p],
-        None => env.path(lua, "Goto", a[1].text())?,
+        // An absent path name: the engine's lookup is null and nothing happens.
+        None => match env.find_path(lua, "Goto", a[1].text())? {
+            Some(points) => points,
+            None => {
+                env.note_absent("Goto", a[1].text());
+                return nothing();
+            }
+        },
     };
     let warp = a[2].boolean();
-    env.owned("Goto", &unit)?;
     for (n, to) in points.into_iter().enumerate() {
         // GO_WARP asks for warp on its first leg (SIM-56); the rest are plain legs.
         if warp && n == 0 {
@@ -463,6 +496,8 @@ fn command_arg(name: &str, what: &P) -> mlua::Result<i64> {
 pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()> {
     let env = Env { ctx: ctx.clone(), st: Rc::new(RefCell::new(State::default())) };
 
+    super::fleets::install(lua, &env, table)?;
+
     // Movement and attack orders.
     table.set("Goto", def(lua, &env, "Goto", &["hsbi", "hhbi"], goto)?)?;
     table.set("Stop", def(lua, &env, "Stop", &["hi"], |_, e, _, a| {
@@ -496,8 +531,12 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
     // marks the shared path as a loop; STA64 keeps the loop in the order).
     table.set("Patrol", def(lua, &env, "Patrol", &["hs"], |lua, e, _, a| {
         let Some(unit) = e.alive(a[0].id()) else { return nothing() };
-        let points = e.path(lua, "Patrol", a[1].text())?;
+        // An absent path name sets neither the path type nor the order.
         e.owned("Patrol", &unit)?;
+        let Some(points) = e.find_path(lua, "Patrol", a[1].text())? else {
+            e.note_absent("Patrol", a[1].text());
+            return nothing();
+        };
         e.order("Patrol", unit.id, |units| Order::Patrol { units, points })?;
         nothing()
     })?)?;
@@ -513,7 +552,17 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
         e.order("Scout", unit.id, |units| Order::Scout { units })?;
         nothing()
     })?)?;
-    table.set("Colonize", raising(lua, &env, "Colonize", &["hh"], "no colonize order in the sim seam")?)?;
+    // `Colonize(ship, planet)` (SIM-30): sent as the script, so the sim applies the
+    // original's special-forces gate (read from the executable, static); the sim
+    // drops an order the original drops (not a pod colony ship, planet not
+    // colonizable, owned by another team, already being colonised).
+    table.set("Colonize", def(lua, &env, "Colonize", &["hh"], |_, e, _, a| {
+        let Some(unit) = e.alive(a[0].id()) else { return nothing() };
+        let Some(planet) = e.alive(a[1].id()) else { return nothing() };
+        e.owned("Colonize", &unit)?;
+        e.script_order("Colonize", Order::Colonize { units: vec![unit.id], planet: planet.id })?;
+        nothing()
+    })?)?;
     table.set("Special_Attack", raising(lua, &env, "Special_Attack", &["hs", "hhs"], "the sim orders only cloak and point-defence specials, and its special order carries no target")?)?;
     table.set("SetCommandMoveAutonomyLow", raising(lua, &env, "SetCommandMoveAutonomyLow", &["h"], "no per-unit movement autonomy order in the sim seam")?)?;
     // Placement and facing (SIM-57). Rules, from the executable and the paired
@@ -537,7 +586,11 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
     table.set("PointAt", def(lua, &env, "PointAt", &["hs", "hh"], |lua, e, ov, a| {
         let Some(unit) = e.alive(a[0].id()) else { return nothing() };
         let to = if ov == 0 {
-            e.path(lua, "PointAt", a[1].text())?[0]
+            let Some(points) = e.find_path(lua, "PointAt", a[1].text())? else {
+                e.note_absent("PointAt", a[1].text());
+                return nothing();
+            };
+            points[0]
         } else {
             let Some(target) = e.alive(a[1].id()) else { return nothing() };
             e.ctx.borrow().placed(target.id, target.pos)
@@ -607,10 +660,10 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
     table.set("GetAllyStationAttacks", raising(lua, &env, "GetAllyStationAttacks", &["ii"], "the AI team's attack statistics are not in the world view")?)?;
 
     // AI plan: the request is queued for the host, which gives it to the
-    // seat's AI (`MissionRuntime::take_aip_requests`, `sta_ai::MissionAiHub`).
+    // seat's AI (`MissionRuntime::take_ai_requests`, `sta_ai::MissionAiHub`).
     table.set("AI_Team_Load_AIP", def(lua, &env, "AI_Team_Load_AIP", &["is"], |_, e, _, a| {
         let team = e.team("AI_Team_Load_AIP", a[0].int())?;
-        e.ctx.borrow_mut().loaded_aips.push((team, a[1].text().to_owned()));
+        e.ctx.borrow_mut().ai_requests.push(sta_ai::AiRequest::Load(team, a[1].text().to_owned()));
         nothing()
     })?)?;
 

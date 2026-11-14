@@ -86,6 +86,7 @@ const DEFERRED_ON_PENDING: &[&str] = &[
     "DisableShieldGenerator",
     "DisableWeapons",
     "ExplodeNow",
+    "FleetOrder",
     "Goto",
     "HideObject",
     "ImmediateCloak",
@@ -343,8 +344,11 @@ pub(super) fn lookup_path(paths: &Table, path: &str) -> mlua::Result<Result<Opti
 }
 
 /// Point `index` (0-based) of `A2.paths[path]`, a table the host fills from
-/// the map. `Ok(None)` when the path exists but has no such point.
-fn path_point(lua: &Lua, ctx: &Shared, name: &str, path: &str, index: i64) -> mlua::Result<Option<(f64, f64, f64)>> {
+/// the map. `Ok(None)` when the map has no such path (the engine's lookup is
+/// null: `BuildObject` returns 0, `GetLocation` a default vector) or the path
+/// has no such point. A path of no points is a host gap for `GetLocation`
+/// (`empty_is_gap`); `BuildObject` treats it as any index out of range (returns 0).
+fn path_point(lua: &Lua, ctx: &Shared, name: &str, path: &str, index: i64, empty_is_gap: bool) -> mlua::Result<Option<(f64, f64, f64)>> {
     let a2: Table = lua.globals().raw_get("A2")?;
     let Value::Table(paths) = a2.raw_get::<Value>("paths")? else {
         return Err(path_error(ctx, name, "A2.paths is missing".into()));
@@ -355,10 +359,22 @@ fn path_point(lua: &Lua, ctx: &Shared, name: &str, path: &str, index: i64) -> ml
         Err(why) => return Err(path_error(ctx, name, why)),
     };
     let Value::Table(points) = points else {
-        return Err(path_error(ctx, name, format!("path '{path}' is not in A2.paths (the host fills it from the map)")));
+        ctx.borrow_mut().note_absent_path(format!("absent path '{path}' (A2.{name})"));
+        return Ok(None);
     };
-    let Some(slot) = usize::try_from(index).ok() else { return Ok(None) };
-    let Value::Table(p) = points.raw_get::<Value>(slot + 1)? else { return Ok(None) };
+    if empty_is_gap && points.raw_len() == 0 {
+        return Err(path_error(ctx, name, format!("path '{path}' has no points")));
+    }
+    let slot = usize::try_from(index).ok();
+    let entry = slot.map(|s| points.raw_get::<Value>(s + 1)).transpose()?.unwrap_or(Value::Nil);
+    let p = match entry {
+        Value::Table(p) => p,
+        Value::Nil => {
+            ctx.borrow_mut().note_absent_path(format!("path '{path}' point {index} out of range (A2.{name})"));
+            return Ok(None);
+        }
+        _ => return Err(path_error(ctx, name, format!("path '{path}' has a malformed point"))),
+    };
     let get = |k: &str| p.raw_get::<f64>(k).ok().filter(|v| v.is_finite());
     match (get("x"), get("y"), get("z")) {
         (Some(x), Some(y), Some(z)) => Ok(Some((x, y, z))),
@@ -472,7 +488,7 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
             let pos: Vec3 = if args.len() == 4 {
                 let path = text(name, &args, 2)?.ok_or_else(|| bad(name, 2, "a path name"))?;
                 let index = signed(name, &args, 3)?;
-                match path_point(lua, &c, name, &path, index)? {
+                match path_point(lua, &c, name, &path, index, false)? {
                     Some((x, y, z)) => to_vec3(x, y, z),
                     None => return Ok(Value::Integer(0)),
                 }
@@ -739,10 +755,9 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
             let name = "GetLocation";
             let path = text(name, &args, 0)?.ok_or_else(|| bad(name, 0, "a path name"))?;
             let index = signed(name, &args, 1)?;
-            match path_point(lua, &c, name, &path, index)? {
-                Some(p) => Ok(Value::Table(vector(lua, p)?)),
-                None => Err(path_error(&c, name, format!("path '{path}' has no point {index}"))),
-            }
+            // An absent path or point: the engine returns a fixed default vector (not measured: zero).
+            let p = path_point(lua, &c, name, &path, index, true)?.unwrap_or(crate::api::ABSENT_PATH_LOCATION);
+            Ok(Value::Table(vector(lua, p)?))
         })?,
     )?;
 
@@ -806,13 +821,14 @@ fn seams(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()> {
     table.set("DamageLifeSupport", float_edit(lua, ctx, "DamageLifeSupport", "A2.DamageLifeSupport", |id, v| Edit::SubsystemDamage(id, Subsystem::LifeSupport, v))?)?;
     table.set("DamageShieldGenerator", float_edit(lua, ctx, "DamageShieldGenerator", "A2.DamageShieldGenerator", |id, v| Edit::SubsystemDamage(id, Subsystem::Shields, v))?)?;
     table.set("DamageWeapons", float_edit(lua, ctx, "DamageWeapons", "A2.DamageWeapons", |id, v| Edit::SubsystemDamage(id, Subsystem::Weapons, v))?)?;
-    table.set("SetPlanetCivPop", no_data_fn(lua, ctx, "SetPlanetCivPop", "the sim has no planet population edit")?)?;
+    // SIM-30: the population as given, no clamp (read from the executable, static); the
+    // sim rejects a handle that is not a live producer planet.
+    table.set("SetPlanetCivPop", float_edit(lua, ctx, "SetPlanetCivPop", "A2.SetPlanetCivPop", Edit::PlanetPopulation)?)?;
     table.set("StuffIntoWormhole", no_data_fn(lua, ctx, "StuffIntoWormhole", "the sim has no wormhole transport edit")?)?;
     table.set("LinkWormholes", no_data_fn(lua, ctx, "LinkWormholes", "the sim has no wormhole link edit")?)?;
     table.set("SetWormholeDeleteOnTransport", no_data_fn(lua, ctx, "SetWormholeDeleteOnTransport", "the sim has no wormhole transport rules")?)?;
     table.set("LoadCargoShip", no_data_fn(lua, ctx, "LoadCargoShip", "the world view carries no cargo state")?)?;
     table.set("GetNearestShipyard", no_data_fn(lua, ctx, "GetNearestShipyard", "the search's team-bit test and shipyard list are not measured")?)?;
-    table.set("CreateNewSiegeFleet", no_data_fn(lua, ctx, "CreateNewSiegeFleet", "no fleet objects exist in the mission API")?)?;
     Ok(())
 }
 

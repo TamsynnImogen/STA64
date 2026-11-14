@@ -76,6 +76,23 @@ pub struct AudioTestTones(pub bool);
 #[derive(Resource)]
 pub struct Resolver(pub Box<dyn SoundResolver>);
 
+/// What became of a [`PlaySound`] request: the clip's length once it was resolved and handed to
+/// the backend, `None` when it resolved to nothing or the bus dropped it. A mission waiting for
+/// its message to end (`IsAudioMessageDone`) is answered from this (`ui::presentation`); the
+/// length is the clip's own (frames over sample rate), so it is the time the player hears.
+#[derive(Message, Debug, Clone, PartialEq)]
+pub struct SoundStarted {
+    pub name: String,
+    pub bus: Bus,
+    pub seconds: Option<f32>,
+}
+
+/// Inserted by [`AudioPlugin`]: the audio layer reports [`SoundStarted`] for every request, so a
+/// mission's message ends when its clip does. Without it (a build with no audio layer) a message
+/// ends at once.
+#[derive(Resource, Debug, Default)]
+pub struct ReportsSoundLengths;
+
 /// The real resolver (CON-10): file names and event names through the install's
 /// sound tables, decoded once and cached. Owns its own mount of the install
 /// (the `Vfs` a viewer holds is a resource the resolver trait cannot reach).
@@ -190,6 +207,8 @@ impl Plugin for AudioPlugin {
         app.add_plugins((MusicPlugin, UiSoundPlugin, SfxPlugin, VoicePlugin))
             .add_message::<PlaySound>()
             .add_message::<StopSounds>()
+            .add_message::<SoundStarted>()
+            .init_resource::<ReportsSoundLengths>()
             .init_resource::<Volumes>()
             .insert_resource(Resolver(Box::new(StubResolver::default())))
             .add_message::<crate::frontend::screens::ModChosen>()
@@ -235,17 +254,23 @@ fn sync_listener(cam: Query<&GlobalTransform, crate::map::MainCamera>, mut mixer
     }
 }
 
-fn play_sounds(mut msgs: MessageReader<PlaySound>, mut mixer: NonSendMut<Mixer>, mut resolver: ResMut<Resolver>, tones: Res<AudioTestTones>, time: Option<Res<Time<Real>>>) {
+fn play_sounds(mut msgs: MessageReader<PlaySound>, mut mixer: NonSendMut<Mixer>, mut resolver: ResMut<Resolver>, tones: Res<AudioTestTones>, time: Option<Res<Time<Real>>>, mut started: MessageWriter<SoundStarted>) {
     mixer.backend.advance(time.map_or(0.0, |t| t.delta_secs_f64()));
     for m in msgs.read() {
         // Admission belongs here so advisor, mission and unit lines share the
         // same voice bus. A rejected line is consumed, never queued or decoded.
         if m.bus == Bus::Voice && mixer.backend.bus_busy(Bus::Voice) {
+            started.write(SoundStarted { name: m.name.clone(), bus: m.bus, seconds: None });
             continue;
         }
+        let mut seconds = None;
         if let Some(sound) = tones.0.then(|| builtin(&m.name)).flatten().or_else(|| resolver.0.resolve(&m.name)) {
+            if sound.sample_rate > 0 {
+                seconds = Some(sound.frames.len() as f32 / sound.sample_rate as f32);
+            }
             mixer.backend.play(&sound, m.bus, m.at.map(|p| p.to_f32()));
         }
+        started.write(SoundStarted { name: m.name.clone(), bus: m.bus, seconds });
     }
 }
 
@@ -379,7 +404,7 @@ mod tests {
 
     /// A mono 8 kHz 8-bit wav of `n` samples (authored here, not a game file).
     fn wav(n: usize) -> Vec<u8> {
-        let mut w = format!("RIFF\0\0\0\0WAVEfmt ").into_bytes();
+        let mut w = b"RIFF\0\0\0\0WAVEfmt ".to_vec();
         w.extend([16, 0, 0, 0, 1, 0, 1, 0, 0x40, 0x1f, 0, 0, 0x40, 0x1f, 0, 0, 1, 0, 8, 0]);
         w.extend(b"data");
         w.extend((n as u32).to_le_bytes());

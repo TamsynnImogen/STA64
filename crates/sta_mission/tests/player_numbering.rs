@@ -115,9 +115,13 @@ fn armada_team_numbers_round_trip_find_players_neutral_and_spawn_owner() {
     rt.eval::<()>("h=Entity.add('fx_cruiser',8,Vector(900,0,0)); h:giveOrder(Order.Go,Vector(950,0,0))")
         .unwrap();
     let request = rt.take_commands();
-    assert_eq!(request.len(), 1);
+    assert_eq!(request.len(), 2);
     assert!(matches!(
         &request[0].kind,
+        CommandKind::Edit(Edit::SetRelation { from: PlayerId(0), to: PlayerId(7), .. })
+    ));
+    assert!(matches!(
+        &request[1].kind,
         CommandKind::Edit(Edit::SpawnRequest {
             player: PlayerId(7),
             ..

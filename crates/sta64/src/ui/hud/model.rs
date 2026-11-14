@@ -207,6 +207,8 @@ pub enum TargetMode {
     Attack,
     Mine,
     Rally,
+    /// The stock COLONIZE command: pick a planet for the colony ships.
+    Colonize,
 }
 
 /// How a button looks.
@@ -333,6 +335,7 @@ fn button(cell: usize, label: &str, act: Act, tip: &str) -> Button {
         Act::Stop => (vec!["b_stop".into()], false),
         Act::Back => (vec!["b_back".into()], false),
         Act::Target(TargetMode::Mine) => (vec!["b_harvest".into()], false),
+        Act::Target(TargetMode::Colonize) => (vec!["b_colonize".into()], false),
         Act::Cancel(_) => (vec!["b_cancel".into()], false),
         Act::Formation(_) => (vec!["b_form".into()], true),
         // No verified native ID for these actions; use the existing label.
@@ -460,6 +463,9 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
     }
     if caps.mine {
         out.push(button(4, &tr("Mine"), Act::Target(TargetMode::Mine), &tooltip_key("Mine")));
+    }
+    if caps.colonize {
+        out.push(button(8, &tr("Colonize"), Act::Target(TargetMode::Colonize), &tooltip_key("Colonize")));
     }
     for (i, (slot, _)) in caps.specials.iter().enumerate() {
         if let Some(cell) = [5, 10, 11, 12, 13, 14].get(i) {
@@ -837,8 +843,9 @@ mod tests {
         );
         assert_eq!(grid(&f, Page::Top).iter().find(|b| b.act == Act::Target(TargetMode::Mine)).unwrap().sprite_names, ["b_harvest"]);
         f.selected = vec![EntityId(3), EntityId(4)];
+        // Mine shows when any selected unit can mine; the order goes to the miners only.
         assert!(
-            !grid(&f, Page::Top)
+            grid(&f, Page::Top)
                 .iter()
                 .any(|b| b.act == Act::Target(TargetMode::Mine))
         );

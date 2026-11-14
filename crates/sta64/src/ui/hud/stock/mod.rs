@@ -53,6 +53,26 @@ pub(super) fn enabled(profile: Option<&UiProfile>, config: &HudConfig) -> bool {
     profile.is_some_and(|p| p.is_stock()) && config.gui.is_some()
 }
 
+/// The separate resource panels of a GUI cfg without `resourcePanelArea` (prefix, readout id,
+/// hide flag): dilithium 2, crew 0, officers 1.
+pub(super) const SEPARATE_RESOURCES: [(&str, usize, &str); 3] =
+    [("dilithium", 2, "noDilithium"), ("crew", 0, "noCrew"), ("officer", 1, "noOfficers")];
+
+/// True when the cfg authors no `resourcePanelArea` key at all (a zero rectangle still counts
+/// as authored and hides the strip).
+pub(super) fn separate_resources(layout: &StockLayout) -> bool {
+    layout.raw_rect("resourcePanelArea").is_none()
+}
+
+/// The resource strip's visible panels: the single one, or the separate ones.
+pub(super) fn resource_panels(layout: &StockLayout) -> Vec<R> {
+    if separate_resources(layout) {
+        SEPARATE_RESOURCES.iter().filter_map(|(prefix, ..)| layout.panel(prefix)).collect()
+    } else {
+        layout.panel("resource").into_iter().collect()
+    }
+}
+
 pub(super) fn node(r: R) -> Node {
     Node {
         position_type: PositionType::Absolute,
@@ -70,6 +90,7 @@ fn metadata<'a>(native: &'a NativeCommands, act: &Act) -> Option<&'a NativeComma
         Act::Target(TargetMode::Attack) => "attack",
         Act::Target(TargetMode::Mine) => "harvest",
         Act::Target(TargetMode::Rally) => "rally",
+        Act::Target(TargetMode::Colonize) => "colonize",
         Act::Stop => "stop",
         Act::Cancel(_) => "cancelbuild",
         _ => return None,
@@ -176,7 +197,8 @@ fn command_rank(command: &str) -> u8 {
     }
 }
 
-fn visible_cells(p: &PaletteLayout, screen: Vec2) -> Vec<R> {
+fn visible_cells(p: &PaletteLayout, hud: R) -> Vec<R> {
+    let screen = Vec2::new(hud.right(), hud.bottom());
     // Iterate screen-derived bounds, not arbitrary mod dimensions.
     let cols = p
         .columns
@@ -186,7 +208,7 @@ fn visible_cells(p: &PaletteLayout, screen: Vec2) -> Vec<R> {
         .min(((screen.y / p.cell.y.max(1.0)).ceil() as usize).saturating_add(1));
     (0..rows)
         .flat_map(|row| (0..cols).map(move |col| p.cell_rect(col, row)))
-        .filter(|r| r.x >= 0.0 && r.y >= 0.0 && r.right() <= screen.x + 0.5 && r.bottom() <= screen.y + 0.5)
+        .filter(|r| r.x >= hud.x && r.y >= hud.y && r.right() <= screen.x + 0.5 && r.bottom() <= screen.y + 0.5)
         .collect()
 }
 
@@ -300,7 +322,7 @@ pub(super) fn refresh(
         || state
             .layout
             .as_ref()
-            .is_none_or(|l| (l.screen.x - 1080.0 * config.aspect).abs() > 0.1)
+            .is_none_or(|l| (l.screen.x - super::layout::SCREEN_H * config.aspect).abs() > 0.1)
         || theme.is_changed()
         || mount_changed;
     let replaced = changed || bodies.is_empty();
@@ -313,7 +335,7 @@ pub(super) fn refresh(
         state.layout = config
             .gui
             .as_ref()
-            .map(|cfg| StockLayout::new(cfg, Vec2::new(1080.0 * config.aspect, 1080.0)));
+            .map(|cfg| StockLayout::for_aspect(cfg, config.aspect));
         commands.insert_resource(crate::render::overlays::GaugeStyle::from_cfg(
             state.layout.as_ref().and_then(|layout| layout.number("selectionGaugeHeight")),
             state.layout.as_ref().and_then(|layout| layout.number("selectionGaugeGap")),
@@ -369,14 +391,8 @@ pub(super) fn refresh(
     }
     // Active-state changes patch the existing GuiActive components below.
     let rebuild = changed || structural || state.page != hud.page || state.grid != next || grids.is_empty();
-    state.solid = [
-        layout.panel("resource"),
-        layout.panel("minimap"),
-        layout.info_area(layout::info_variant(&now)),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
+    state.solid = resource_panels(&layout);
+    state.solid.extend([layout.panel("minimap"), layout.info_area(layout::info_variant(&now))].into_iter().flatten());
     if layout.info_area(layout::info_variant(&now)).is_some() {
         let variant = layout::info_variant(&now);
         let origin =
@@ -388,7 +404,7 @@ pub(super) fn refresh(
         );
     }
     if let Some(palette) = layout.palette() {
-        let cells = visible_cells(&palette, layout.screen);
+        let cells = visible_cells(&palette, layout.hud);
         let capacity = cells.len();
         let pinned: Vec<_> = next
             .iter()
@@ -459,6 +475,15 @@ pub(super) fn refresh(
             }
         }
     }
+    // A sheet rectangle may start left of the canvas (FO's minimap panel at x = -1): the
+    // pointer-solid part never reaches into the margin, which belongs to the world. The art
+    // is not clipped.
+    let hud_rect = layout.hud;
+    for r in &mut state.solid {
+        let (left, right) = (r.x.max(hud_rect.x), r.right().min(hud_rect.right()));
+        *r = R::new(left, r.y, (right - left).max(0.0), r.h);
+    }
+    state.solid.retain(|r| r.w > 0.0);
     state.grid = next;
     state.page = hud.page;
     state.layout = Some(layout);

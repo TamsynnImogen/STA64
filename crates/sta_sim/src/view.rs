@@ -40,6 +40,10 @@ pub struct WorldView {
     /// Mission-set names and races (SIM-54); empty when nothing was set.
     #[serde(default)]
     pub attrs: crate::attrs::AttrsView,
+    /// Planets with a population row (SIM-30), ascending id; the owner is
+    /// the planet's [`UnitView::owner`].
+    #[serde(default)]
+    pub colonies: Vec<crate::colony::ColonyView>,
 }
 
 impl WorldView {
@@ -114,6 +118,10 @@ impl UnitFlags {
     pub const CLOAKED: UnitFlags = UnitFlags(1);
     pub const DYING: UnitFlags = UnitFlags(1 << 1);
     pub const BUILDING: UnitFlags = UnitFlags(1 << 2);
+    /// A craft is docked at this unit right now (RND-21): a freighter unloading at
+    /// this station. Set on the facility, not on the craft; derived each tick like
+    /// [`UnitFlags::BUILDING`], so a client that joins or loads mid-dock sees it.
+    /// Repair docks at yards are not modelled yet and do not set it.
     pub const DOCKED: UnitFlags = UnitFlags(1 << 3);
     pub const SELECTABLE: UnitFlags = UnitFlags(1 << 4);
     /// Hull never falls below one (bench `Immortal`).

@@ -164,8 +164,7 @@ fn ticks_of(db: &ContentDb, def: ContentKey) -> u64 {
 fn can_pay(eco: &Economy, db: &ContentDb, p: PlayerId, def: ContentKey) -> bool {
     let Some(d) = db.unit(def) else { return false };
     let have = eco.stock_of(p);
-    !d.build
-        .cost
+    !eco.scaled_cost(p, &d.build.cost)
         .iter()
         .enumerate()
         .any(|(i, &c)| c > Fixed::ZERO && have.get(i).is_none_or(|&h| h < c))
@@ -176,7 +175,7 @@ fn pay(eco: &mut Economy, db: &ContentDb, p: PlayerId, def: ContentKey) -> bool 
     if !can_pay(eco, db, p, def) {
         return false;
     }
-    for (i, &c) in d.build.cost.iter().enumerate() {
+    for (i, c) in eco.scaled_cost(p, &d.build.cost).into_iter().enumerate() {
         if c > Fixed::ZERO {
             let ok = eco.spend(p, i as u8, c);
             debug_assert!(ok);
@@ -187,7 +186,7 @@ fn pay(eco: &mut Economy, db: &ContentDb, p: PlayerId, def: ContentKey) -> bool 
 
 fn refund(eco: &mut Economy, db: &ContentDb, p: PlayerId, def: ContentKey) {
     let Some(d) = db.unit(def) else { return };
-    for (i, &c) in d.build.cost.iter().enumerate() {
+    for (i, c) in eco.scaled_cost(p, &d.build.cost).into_iter().enumerate() {
         if c > Fixed::ZERO {
             let now = eco.stock_of(p).get(i).copied().unwrap_or(Fixed::ZERO);
             eco.apply_edit(PlayerId::BENCH, &Edit::Cargo(p, i as u8, now + c));

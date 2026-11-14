@@ -58,6 +58,8 @@ mod a1;
 mod a2;
 mod entity;
 mod edit_feedback;
+pub(crate) mod set_relation;
+pub(crate) mod ai_switch;
 mod entity_action;
 mod entity_ref;
 mod camera_intent;
@@ -238,9 +240,13 @@ pub(crate) struct Ctx {
     pub log: Vec<String>,
     /// Orders and names the API accepted but could not carry out, by name.
     pub unsupported: BTreeMap<String, u32>,
-    /// AIP loads the script asked for, in call order; the host takes them
-    /// ([`crate::MissionRuntime::take_aip_requests`]).
-    pub loaded_aips: Vec<(PlayerId, String)>,
+    /// Path names a call looked up that the map does not have, or points out of range
+    /// (LUA-18): the engine does nothing, so these are not `unsupported`; kept so a typo
+    /// or a partial map fill stays visible in readiness and playthrough output.
+    pub absent_paths: BTreeMap<String, u32>,
+    /// What the script asked of the AI (plan loads and the enable switches), in call order; the
+    /// host takes them ([`crate::MissionRuntime::take_ai_requests`]).
+    pub ai_requests: Vec<sta_ai::AiRequest>,
     /// The script's pending mission end (`SucceedMission` / `FailMission`).
     pub mission_end: Option<MissionEnd>,
     /// Latched once the end has happened.
@@ -250,7 +256,7 @@ pub(crate) struct Ctx {
     pub seen: BTreeSet<EntityId>,
     /// Which answers may rest on a gap ([`taint`]).
     pub taint: taint::Taint,
-    pub aips_taken: usize,
+    pub ai_requests_taken: usize,
     pub playback: Playback,
     /// The view tick of the last `Hit` each object took (`A2.UnderAttack`).
     pub last_hit: BTreeMap<EntityId, u64>,
@@ -308,12 +314,13 @@ impl Ctx {
             finished: false,
             log: Vec::new(),
             unsupported: BTreeMap::new(),
-            loaded_aips: Vec::new(),
+            absent_paths: BTreeMap::new(),
+            ai_requests: Vec::new(),
             mission_end: None,
             ended: None,
             seen,
             taint: taint::Taint::default(),
-            aips_taken: 0,
+            ai_requests_taken: 0,
             playback: Playback::default(),
             last_hit: BTreeMap::new(),
             last_fired: BTreeMap::new(),
@@ -406,6 +413,12 @@ impl Ctx {
         }
     }
 
+    /// An uncounted note: a path lookup found nothing (`absent path 'x' (A2.Goto)`).
+    pub fn note_absent_path(&mut self, what: String) {
+        let n = self.absent_paths.entry(what).or_default();
+        *n = n.saturating_add(1);
+    }
+
     pub fn unsupported(&mut self, what: &str) {
         *self.unsupported.entry(what.to_owned()).or_default() += 1;
     }
@@ -424,6 +437,11 @@ impl Ctx {
             .unwrap_or(Relation::Neutral)
     }
 }
+
+/// `GetLocation(path, index)` on a path the map does not have, or a point it
+/// does not have: the engine returns a fixed default vector (LUA-18). Its value
+/// was not read from the executable (not measured); the zero vector is used.
+pub(crate) const ABSENT_PATH_LOCATION: (f64, f64, f64) = (0.0, 0.0, 0.0);
 
 pub(crate) fn pos_f64(v: Vec3) -> (f64, f64, f64) {
     (v.x.to_f32() as f64, v.y.to_f32() as f64, v.z.to_f32() as f64)

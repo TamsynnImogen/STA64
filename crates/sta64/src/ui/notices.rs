@@ -248,9 +248,13 @@ fn events_to_notices(
     mut events: MessageReader<SimMsg>,
     link: Option<Res<SimLink>>,
     db: Option<Res<ContentRes>>,
+    cine: Option<Res<crate::ui::presentation::CineractiveState>>,
     mut out: MessageWriter<Notice>,
 ) {
-    let Some(link) = link else {
+    // A cineractive shows no log: what the script does during it (replacing the
+    // fleet, the staged fight of an intro) is not reported, and the lines would
+    // otherwise appear the moment the player gets control back.
+    let Some(link) = link.filter(|_| !cine.is_some_and(|c| c.on)) else {
         events.clear();
         return;
     };
@@ -512,7 +516,7 @@ impl Plugin for NoticePlugin {
             .add_observer(on_over)
             .add_observer(on_out)
             .add_systems(Startup, spawn_roots)
-            .add_systems(Update, (events_to_notices, collect, age, retheme, (draw_notices, draw_chat, draw_tip)).chain().in_set(GameSet::Ui).after(ProfileSync));
+            .add_systems(Update, (events_to_notices.after(crate::ui::presentation::consume), collect, age, retheme, (draw_notices, draw_chat, draw_tip)).chain().in_set(GameSet::Ui).after(ProfileSync));
     }
 }
 
@@ -547,6 +551,19 @@ mod tests {
 
     fn texts(app: &mut App) -> Vec<String> {
         app.world_mut().query::<&SpriteText>().iter(app.world()).map(|t| t.text.clone()).collect()
+    }
+
+    #[test]
+    fn no_notice_is_raised_during_a_cineractive() {
+        let mut app = rig();
+        app.init_resource::<crate::ui::presentation::CineractiveState>();
+        app.world_mut().resource_mut::<crate::ui::presentation::CineractiveState>().on = true;
+        for _ in 0..10 {
+            app.update();
+        }
+        let shown: Vec<_> = texts(&mut app).into_iter().filter(|t| !t.is_empty()).collect();
+        assert!(shown.is_empty(), "{shown:?}");
+        assert!(app.world().resource::<ChatLog>().lines.is_empty());
     }
 
     #[test]

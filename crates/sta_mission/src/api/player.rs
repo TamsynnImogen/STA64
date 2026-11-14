@@ -2,7 +2,7 @@
 
 use mlua::{Lua, MetaMethod, MultiValue, UserData, UserDataFields, UserDataMethods, UserDataRef, Value};
 use sta_core::{Fixed, PlayerId};
-use sta_sim::command::Edit;
+use sta_sim::command::{Edit, TeamOp};
 use sta_sim::view::Relation;
 use sta_sim::TICK_HZ;
 
@@ -45,7 +45,8 @@ fn resources(lua: &Lua, p: &Player) -> mlua::Result<mlua::Table> {
             let c = c.borrow();
             let view = c.view.player(id);
             if k == "crew" {
-                return Ok(Value::Number(view.map_or(0.0, |p| p.officers[0].to_f32() as f64)));
+                // The team's crew stock (SIM-54; this read the officers in use before).
+                return Ok(Value::Number(view.and_then(|p| p.crew).map_or(0.0, |v| v.to_f32() as f64)));
             }
             match RESOURCES.iter().find(|(n, _)| *n == k) {
                 Some((_, i)) => {
@@ -115,32 +116,35 @@ impl UserData for Player {
         f.add_field_method_get("slotType", |_, p| {
             Ok(if p.ctx.borrow().seat == p.id { "Human" } else { "None" })
         });
+        // SIM-54. Both are raw field writes in the Roots engine (read from the executable,
+        // static): `maxOfficers` is the officer limit before the race multiplier (the cap is
+        // `floor(maxOfficerMultiplier * limit)` of the seat's current race), `maxCrew` the crew
+        // capacity, which later capacity changes (stations, planets) then shift by their delta.
+        f.add_field_method_get("maxOfficers", |_, p| {
+            let c = p.ctx.borrow();
+            let limit = c.view.attrs.seats.iter().find(|s| s.player == p.id).and_then(|s| s.officer_limit);
+            Ok(limit.or_else(|| c.view.player(p.id).map(|v| v.officers[1])).map_or(0.0, |v| v.to_f32() as f64))
+        });
+        f.add_field_method_get("maxCrew", |_, p| {
+            let c = p.ctx.borrow();
+            Ok(c.view.attrs.seats.iter().find(|s| s.player == p.id).and_then(|s| s.crew_capacity).map_or(0.0, |v| v.to_f32() as f64))
+        });
         for name in ["maxOfficers", "maxCrew"] {
-            f.add_field_method_get(name, |_, p| {
-                Ok(p.ctx.borrow().view.player(p.id).map_or(0.0, |v| v.officers[1].to_f32() as f64))
-            });
-            // The limit is a typed rule (RTS_CFG.h SINGLE_PLAYER_OFFICER_LIMIT /
-            // MP_OFFICER_LIMIT) held by the economy; the sim has no edit to
-            // change it per player. Assigning the limit already in force changes
-            // nothing (installed missions assign 199999, the unitcap_normal /
-            // SINGLE_PLAYER_OFFICER_LIMIT value); any other value is recorded as
-            // unsupported, never pretended. A headless setup without a chosen
-            // limit reports 0, so there the call is recorded too.
             f.add_field_method_set(name, move |_, p, value: f64| {
                 let mut c = p.ctx.borrow_mut();
-                let current = c.view.player(p.id).map(|v| v.officers[1].to_f32() as f64);
                 if !value.is_finite() {
                     return Err(mlua::Error::runtime(format!("Player.{name} requires a finite number")));
                 }
+                let seat = c.view.attrs.seats.iter().find(|s| s.player == p.id).cloned();
+                let value = Fixed::from_f64(value.clamp(-1.0e9, 1.0e9));
                 if name == "maxOfficers" {
-                    // SIM-54: the officer limit edit; assigning the limit already in
-                    // force changes nothing and is not sent. A seat with no officer
-                    // limit is rejected by the sim and counted by the edit feedback.
-                    if current != Some(value) {
-                        super::edit_feedback::queue(&mut c, "Player.maxOfficers", Edit::MaxOfficers(p.id, Fixed::from_f64(value)))?;
+                    // Assigning the limit already in force changes nothing and is not sent. A seat
+                    // with no officer limit is rejected by the sim and counted by the edit feedback.
+                    if seat.and_then(|s| s.officer_limit) != Some(value) {
+                        super::edit_feedback::queue(&mut c, "Player.maxOfficers", Edit::MaxOfficers(p.id, value))?;
                     }
-                } else if current != Some(value) {
-                    c.unsupported(&format!("Player.{name} = x (differs from the rule; needs a sim officer-limit edit)"));
+                } else if seat.and_then(|s| s.crew_capacity) != Some(value) {
+                    super::edit_feedback::queue(&mut c, "Player.maxCrew", Edit::TeamPool(p.id, TeamOp::CapacityRaw, value))?;
                 }
                 Ok(())
             });
@@ -164,13 +168,13 @@ impl UserData for Player {
                 _ => Relation::Neutral,
             };
             if let Some(o) = player_of(&c, &other) {
-                c.relations.insert((p.id, o), rel);
+                super::set_relation::queue(&mut c, "Player.setRelation", p.id, o, rel)?;
             }
             Ok(())
         });
         m.add_method("loadAIP", |_, p, name: Option<String>| {
             let mut c = p.ctx.borrow_mut();
-            c.loaded_aips.push((p.id, name.unwrap_or_default()));
+            c.ai_requests.push(sta_ai::AiRequest::Load(p.id, name.unwrap_or_default()));
             Ok(())
         });
         m.add_meta_method(MetaMethod::Eq, |_, p, o: UserDataRef<Player>| Ok(p.id == o.id));

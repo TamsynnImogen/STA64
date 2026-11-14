@@ -67,7 +67,7 @@ fn _every_sim_field_is_decided(s: &Sim) {
     let Sim {
         tick: _, rng: _, units: _, labels: _, players: _, ai_seats: _, content: _, starts: _, regions: _,
         bounds: _, confinement: _, perception: _, events: _, weapons: _, movement: _, economy: _,
-        production: _, victory: _, specials: _, autonomy: _, start_effects: _, nav: _, subsystems: _, attrs: _, scripted: _, switches: _, team_changes: _, appearance_factions: _, approach_warp: _, engagement: _, watchdog: _,
+        production: _, victory: _, specials: _, autonomy: _, start_effects: _, nav: _, subsystems: _, attrs: _, scripted: _, switches: _, relations: _, team_changes: _, appearance_factions: _, approach_warp: _, engagement: _, watchdog: _, colonies: _,
     } = s;
 }
 
@@ -216,6 +216,9 @@ impl Sim {
         if !self.switches.is_empty() {
             self.switches.hash_into(&mut h);
         }
+        if !self.relations.is_empty() {
+            self.relations.hash_into(&mut h);
+        }
         if !self.attrs.is_empty() {
             self.attrs.hash_into(&mut h);
         }
@@ -238,6 +241,10 @@ impl Sim {
         }
         if !self.production.is_empty() {
             self.production.hash_into(&mut h);
+        }
+        // SIM-30: population and crew income feed the economy.
+        if !self.colonies.is_empty() {
+            self.colonies.hash_into(&mut h);
         }
         h.0
     }
@@ -352,12 +359,15 @@ impl Sim {
                 if !self.scripted.is_empty() {
                     row(None, "scripted orders (hash)", block("scripted", &|h| self.scripted.hash_into(h)));
                 }
+                if !self.relations.is_empty() {
+                    row(None, "mission relations (hash)", block("relations", &|h| self.relations.hash_into(h)));
+                }
                 if !self.switches.is_empty() {
                     row(None, "per-craft switches (hash)", block("switches", &|h| self.switches.hash_into(h)));
                 }
                 // SIM-55: itemised, one row per unit with a switched-off or damaged system.
                 for (id, r) in self.subsystems.to_rows() {
-                    row(Some(id), "subsystems (off bits, damage)", format!("{:#04x}, {:?}", r.off, r.damage.map(|d| fx(Fixed::from_bits(d)))));
+                    row(Some(id), "subsystems (off bits, damage)", format!("{:#04x}{}, {:?}", r.off, if r.derelict { ", derelict" } else { "" }, r.damage.map(|d| fx(Fixed::from_bits(d)))));
                 }
                 // SIM-54: itemised mission-set names and races.
                 let a = self.attrs.view();
@@ -377,6 +387,9 @@ impl Sim {
                 }
                 if !self.production.is_empty() {
                     row(None, "yards, rigs, rallies (hash)", block("production", &|h| self.production.hash_into(h)));
+                }
+                if !self.colonies.is_empty() {
+                    row(None, "planet population, colony orders (hash)", block("colonies", &|h| self.colonies.hash_into(h)));
                 }
             }
             "rng" => row(None, "generator state", format!("{:#018x}", self.rng.0)),
@@ -427,6 +440,20 @@ mod tests {
     /// Measured once on this scenario; a change here is a change of a section's
     /// meaning and goes with a note in the PR, like the pinned full digest.
     const PINNED: [u64; 5] = [0x152b_54c2_e0ee_8e52, 0xab80_c411_9972_840f, 0x7dce_5ffd_36e3_d6b0, 0xb514_87e8_d035_289e, 0xcc8f_d429_d225_a655];
+
+    /// SIM-30: the layout of the colony hash (a planet row and an active colonizing
+    /// ship) is pinned through the full digest of the sample (colony state is in the full
+    /// digest and in the economy section); PINNED above is
+    /// untouched.
+    #[test]
+    fn a_colony_with_an_active_colonizing_ship_is_pinned() {
+        let mut s = sim();
+        s.colonies = crate::colony::Colonies::sample_for_test();
+        assert_eq!(s.digest(), COLONY_DIGEST, "{:#x}", s.digest());
+        assert_ne!(s.digest(), sim().digest());
+    }
+
+    const COLONY_DIGEST: u64 = 0x3311_80b9_9196_2def;
 
     #[test]
     fn a_set_autonomy_level_changes_the_combat_section_and_the_full_digest() {

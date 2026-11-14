@@ -1072,8 +1072,9 @@ impl ActiveMission {
         let view = self.sim.view();
         let mut commands = std::mem::take(&mut self.pending);
         self.runtime.think(&view, &self.events, &mut commands);
-        // The script runs first, so a plan it loads this tick applies this tick.
-        self.ai_hub.submit(self.runtime.take_aip_requests());
+        // The script runs first, so a plan it loads or a switch it throws applies this tick; the
+        // requests are applied here, once, before any seat thinks (sta_ai::mission docs).
+        self.ai_hub.submit_requests(self.runtime.take_ai_requests());
         for ai in &mut self.ai_seats {
             ai.think(&view, &self.events, &mut commands);
         }

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use sta_content::{ContentDb, MapDef, fake};
 use sta_core::{EntityId, Fixed, PlayerId, TeamId, Vec3};
-use sta_sim::command::{Command, CommandKind, Edit, Subsystem};
+use sta_sim::command::{Command, CommandKind, Edit, Order, Subsystem};
 use sta_sim::setup::{Control, Controller, GameOptions, GameSetup, PlayerSetup};
 use sta_sim::view::WorldView;
 use sta_sim::{Sim, SimEvent, WorldSource};
@@ -169,9 +169,10 @@ fn build_object_edge_cases() {
     assert_eq!(rt.eval::<i64>("return A2.BuildObject('no_such_odf', 0, 'P', 0)").unwrap(), 0);
     assert_eq!(unsupported(&rt, "BuildObject: unknown ODF"), 1);
     assert!(rt.take_commands().is_empty());
-    // An unknown path is host data that is missing: raises and counts.
-    assert!(rt.eval::<()>("A2.BuildObject('fx_cruiser', 0, 'NOPE', 0)").is_err());
-    assert_eq!(unsupported(&rt, "not in A2.paths"), 1);
+    // A path the map does not have: the engine's lookup is null, the call returns 0 (LUA-18).
+    assert_eq!(rt.eval::<i64>("return A2.BuildObject('fx_cruiser', 0, 'NOPE', 0)").unwrap(), 0);
+    assert_eq!(unsupported(&rt, "not in A2.paths"), 0);
+    assert!(rt.take_commands().is_empty());
     // Path names also match without case.
     assert!(rt.eval::<i64>("return A2.BuildObject('fx_cruiser', 0, 'p', 0)").unwrap() >= i64::from(super::TOKEN_BASE));
     // Object form: at the object's position; an offset is not measured.
@@ -271,9 +272,25 @@ fn path_locations_read_the_host_path_table() {
     assert_eq!(rt.eval::<(f64, f64)>("local p = A2.GetLocation('P', 1); return p.x, p.z").unwrap(), (20.0, 0.0));
     // The handle form is unchanged.
     assert_eq!(rt.eval::<f64>("return A2.GetLocation(b).x").unwrap(), 100.0);
-    assert!(rt.eval::<()>("A2.GetLocation('P', 2)").is_err());
-    assert!(rt.eval::<()>("A2.GetLocation('NOPE', 0)").is_err());
-    assert!(unsupported(&rt, "A2.GetLocation") >= 2);
+    // LUA-18: an absent path or point (the engine's lookup or bounds test fails): the default vector.
+    for call in ["A2.GetLocation('P', 2)", "A2.GetLocation('P', -1)", "A2.GetLocation('NOPE', 0)"] {
+        let v: (f64, f64, f64) = rt.eval(&format!("local p = {call}; return p.x, p.y, p.z")).unwrap();
+        assert_eq!(v, (0.0, 0.0, 0.0), "{call}");
+    }
+    assert_eq!(unsupported(&rt, "A2.GetLocation"), 0);
+    let noted: Vec<String> = rt.absent_paths().into_iter().map(|(k, _)| k).collect();
+    assert!(noted.contains(&"absent path 'NOPE' (A2.GetLocation)".to_owned()), "{noted:?}");
+    assert!(noted.contains(&"path 'P' point 2 out of range (A2.GetLocation)".to_owned()), "{noted:?}");
+    // a path of no points is still a host gap
+    rt.eval::<()>("A2.paths.E = {}").unwrap();
+    assert!(rt.eval::<()>("A2.GetLocation('E', 0)").is_err());
+    assert_eq!(unsupported(&rt, "has no points"), 1);
+    // BuildObject treats it like any index out of range: 0, as before LUA-18.
+    assert_eq!(rt.eval::<i64>("return A2.BuildObject('fx_cruiser', 0, 'E', 0)").unwrap(), 0);
+    assert_eq!(unsupported(&rt, "has no points"), 1);
+    // A point entry that is not a table is malformed, not out of range.
+    rt.eval::<()>("A2.paths.M = { 5 }").unwrap();
+    assert!(rt.eval::<()>("A2.GetLocation('M', 0)").is_err());
     assert!(rt.eval::<()>("A2.GetLocation('P', 'x')").is_err());
 }
 
@@ -390,8 +407,8 @@ fn seam_gaps_raise_with_a_reason_and_are_counted() {
     let s = scene();
     let mut rt = runtime(&s);
     let names = [
-        "SetPlanetCivPop", "StuffIntoWormhole",
-        "LinkWormholes", "SetWormholeDeleteOnTransport", "LoadCargoShip", "GetNearestShipyard", "CreateNewSiegeFleet",
+        "StuffIntoWormhole",
+        "LinkWormholes", "SetWormholeDeleteOnTransport", "LoadCargoShip", "GetNearestShipyard",
     ];
     for name in names {
         let err = rt.eval::<()>(&format!("A2.{name}(a, 1)")).expect_err(name).to_string();
@@ -524,4 +541,38 @@ fn set_name_and_set_race_queue_typed_edits() {
     let edits: Vec<_> = rt.take_commands().into_iter().filter_map(|c| match c.kind { CommandKind::Edit(e) => Some(e), _ => None }).collect();
     assert_eq!(edits, [Edit::Name(s.ids[0], "Relay Station".into()), Edit::UnitRace(s.ids[0], "fx".into())]);
     assert_eq!(unsupported(&rt, "SetName"), 0);
+}
+
+#[test]
+fn a_fleet_member_built_this_tick_is_ordered_after_its_receipt() {
+    // `fleet:AddShip(BuildObject(..))` then `SetFleetDestination` in one step (the stock shape):
+    // the member's order is held with the pending handle and replayed once it is built.
+    let s = scene();
+    let mut sim = Sim::from_setup(&game(&s.db));
+    let cfg = MissionConfig { content: Some(s.db.clone()), view: Some((*sim.view()).clone()), ..MissionConfig::default() };
+    let src = "A2.paths.Q = { {x=40,y=0,z=0}, {x=50,y=0,z=0} }; f = A2.CreateNewSiegeFleet(); \
+               f:AddShip(A2.BuildObject('fx_cruiser', 1, 'Q', 1)); f:SetFleetDestination(Vector(500, 0, 0))";
+    let mut rt = MissionRuntime::from_source_with("fleet.lua", src, 3, cfg);
+    assert!(rt.errors().is_empty(), "{:?}", rt.errors());
+    let commands = rt.take_commands();
+    assert_eq!(commands.len(), 1, "only the spawn request is queued: {commands:?}");
+    let out = sim.step(&commands);
+    let id = out.events.iter().find_map(|e| match e { SimEvent::ScriptSpawned { id, .. } => Some(*id), _ => None }).unwrap();
+    rt.think(&out.view, &out.events, &mut Vec::new());
+    assert!(rt.eval::<bool>("return A2.Exists(f.ships[1])").unwrap());
+    let kinds: Vec<_> = rt.take_commands().into_iter().map(|c| c.kind).collect();
+    assert!(matches!(&kinds[..], [CommandKind::Order(Order::AttackPoint { units, .. })] if units == &vec![id]), "{kinds:?}");
+}
+
+#[test]
+fn a_fleet_member_whose_spawn_failed_is_skipped_without_raising() {
+    let s = scene();
+    let mut sim = Sim::new(3); // no content: the spawn is rejected
+    let cfg = MissionConfig { content: Some(s.db.clone()), view: Some((*sim.view()).clone()), ..MissionConfig::default() };
+    let src = "A2.paths.Q = { {x=40,y=0,z=0} }; f = A2.CreateNewSiegeFleet(); f:AddShip(A2.BuildObject('fx_cruiser', 1, 'Q', 0))";
+    let mut rt = MissionRuntime::from_source_with("failfleet.lua", src, 3, cfg);
+    let out = sim.step(&rt.take_commands());
+    rt.think(&out.view, &out.events, &mut Vec::new());
+    rt.eval::<()>("f:SetFleetDestination(Vector(5, 0, 0)); f:AddShip(f.ships[1])").unwrap();
+    assert!(rt.take_commands().is_empty());
 }

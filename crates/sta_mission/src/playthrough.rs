@@ -26,6 +26,7 @@
 //!   per [`CALL_REPEAT_TICKS`]; its problem list keeps the first 60 calls);
 //! - `objective`, `briefing`: objectives issued and changing state, the briefing file;
 //! - `unbound`, `raised`, `unsupported`, `error`, `step-error`: what did not work;
+//! - `absent-path`: a path lookup found no such name or point (the engine does nothing; LUA-18);
 //! - `order`, `plan`, `plan-error`: what the scripted player did and said;
 //! - `spawned`, `destroyed`, `eliminated`: world changes; `end`: the outcome.
 //!
@@ -176,6 +177,7 @@ function attack(u, target) push({ kind = "attack", ids = ids(u), target = type(t
 function stop(u) push({ kind = "stop", ids = ids(u) }) end
 function build(builder, odf, x, z) push({ kind = "build", builder = type(builder) == "table" and builder.id or builder, odf = odf, x = x, z = z }) end
 function mine(u, node) push({ kind = "mine", ids = ids(u), node = type(node) == "table" and node.id or node }) end
+function colonize(u, planet) push({ kind = "colonize", ids = ids(u), planet = type(planet) == "table" and planet.id or planet }) end
 function note(s) push({ kind = "note", text = tostring(s) }) end
 -- units{ owner = n, odf = "exact", like = "substring", mine = true, enemy = true, alive = true (default) }
 function units(f)
@@ -372,6 +374,7 @@ impl Plan {
                 "move" => at(&o).map(|to| Order::Move { units: idl(&o), to, queue: false }),
                 "stop" => Some(Order::Stop { units: idl(&o) }),
                 "attack" => o.get::<u32>("target").ok().map(|t| Order::Attack { units: idl(&o), target: EntityId(t) }),
+                "colonize" => o.get::<u32>("planet").ok().map(|p| Order::Colonize { units: idl(&o), planet: EntityId(p) }),
                 "mine" => o.get::<u32>("node").ok().map(|n| Order::Mine { units: idl(&o), node: EntityId(n) }),
                 "build" => {
                     let odf: String = o.get("odf").unwrap_or_default();
@@ -454,6 +457,7 @@ pub fn play(host: &VfsHost, book: &CampaignBook, campaign: &str, index: usize, c
     let mut counts = (0i64, 0i64, 0i64, 0i64, 0i64);
     let mut errs = 0;
     let mut unsupported: HashMap<String, u32> = HashMap::new();
+    let mut absent: HashMap<String, u32> = HashMap::new();
     let mut objectives: HashMap<u32, String> = HashMap::new();
     let mut briefing: Option<String> = None;
     let mut owners: HashMap<EntityId, String> = HashMap::new();
@@ -582,6 +586,13 @@ pub fn play(host: &VfsHost, book: &CampaignBook, campaign: &str, index: usize, c
             for (k, n) in a.runtime().unsupported() {
                 if unsupported.insert(k.clone(), n).is_none() {
                     ev.push(Event { tick, kind: "unsupported", what: k });
+                }
+            }
+        }
+        if tick % u64::from(TICK_HZ) == 0 || outcome.is_some() {
+            for (k, n) in a.runtime().absent_paths() {
+                if absent.insert(k.clone(), n).is_none() {
+                    ev.push(Event { tick, kind: "absent-path", what: k });
                 }
             }
         }

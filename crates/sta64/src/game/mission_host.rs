@@ -26,15 +26,19 @@
 //! Until then [`deliver_reply_host_side`] is the one function that calls the script for them,
 //! outside the command stream: a replay of a game in which the player answered does not carry the
 //! answer, and the script it drives does not run again at all (D3), so only a *live* game depends
-//! on them. The same function acknowledges audio messages at once (no audio lane plays
-//! `Presentation::Sound` yet), so a script that waits for its message does not stall.
+//! on them. The same function reports an audio message finished when the audio layer has played
+//! its clip to the end ([`ScriptReply::SoundDone`]; at once when nothing plays it), so a script
+//! that waits for its message (A1 `IsAudioMessageDone`, A2 `ScriptWaits`) waits for the voice line.
+//! Grade: STA64 behaviour for the A1 opening, checked headless (without the wait the opening
+//! ended during its voice line). The same wait applies to A2 and Fleet Ops messages, which is
+//! *not measured* against the original games.
 //!
 //! # AI seats and the plans scripts load (AI-06)
 //!
 //! The non-human seats of the mission get a [`sta_ai::MissionAiHub`] controller: passive (no
 //! building, no waves) until the script loads a plan with `Player:loadAIP` / `AI_Team_Load_AIP`.
 //! [`MissionHandle`]'s controller runs the script, hands the loads it took
-//! (`MissionRuntime::take_aip_requests`) to the hub, then thinks the seats, in seat order, over
+//! (`MissionRuntime::take_ai_requests`, which now also carries the AI enable/disable switches, LUA-20) to the hub, then thinks the seats, in seat order, over
 //! the same view and events; their commands join the script's in the same `out` vector and reach
 //! the router like a player's, numbered from `0x4000_0000` so they never collide with the
 //! script's. A load therefore applies on the tick the script asks for it. The files are the
@@ -65,7 +69,6 @@ use sta_mission::api::PlayerNumbering;
 use sta_mission::campaign::{Campaign, CampaignBook, CampaignMission, MissionHost, MissionOutcome, ScriptReader, launch_runtime, map_setup, read_map_paths, resolved_script, scan_outcome};
 use sta_mission::runtime::MissionRuntime;
 use sta_sim::command::Command;
-use sta_sim::present::Presentation;
 use sta_sim::setup::{Control, Controller, GameOptions, GameSetup, PlayerSetup};
 use sta_sim::{SimEvent, Sim, TeamId, WorldView};
 
@@ -216,19 +219,12 @@ struct Shared {
 impl Controller for Shared {
     fn think(&mut self, view: &WorldView, events: &[SimEvent], out: &mut Vec<Command>) {
         let mut rt = self.rt.lock().unwrap_or_else(PoisonError::into_inner);
-        // No audio lane plays `Presentation::Sound` yet: acknowledge each message on the tick it
-        // was raised (tick-exact, not frame-rate dependent), through the host-side reply function.
-        for e in events {
-            if let SimEvent::Present(Presentation::Sound { id, .. }) = e {
-                acknowledge_audio(&rt, *id);
-            }
-        }
         rt.think(view, events, out);
         // The script ran first, so a plan it loads this tick reaches its seat this tick.
-        let loads = rt.take_aip_requests();
+        let loads = rt.take_ai_requests();
         drop(rt);
         let mut seats = self.seats.lock().unwrap_or_else(PoisonError::into_inner);
-        seats.hub.submit(loads);
+        seats.hub.submit_requests(loads);
         for ai in &mut seats.ai {
             ai.think(view, events, out);
         }
@@ -271,7 +267,7 @@ pub fn is_fault(error: &str) -> bool {
 pub fn deliver_reply_host_side(rt: &MissionRuntime, reply: &ScriptReply) {
     let result = match reply {
         ScriptReply::MovieDone { .. } => rt.eval::<()>(REPORT_MOVIE),
-        ScriptReply::MessageDismissed { id } => rt.eval_with::<(), _>(REPORT_AUDIO, *id),
+        ScriptReply::MessageDismissed { id } | ScriptReply::SoundDone { id } => rt.eval_with::<(), _>(REPORT_AUDIO, *id),
         // The skip key: the script reads `isCineractiveCancel` and ends the cineractive (UI-36).
         ScriptReply::CineractiveSkipped => {
             rt.skip_cineractive();
@@ -287,11 +283,6 @@ pub fn deliver_reply_host_side(rt: &MissionRuntime, reply: &ScriptReply) {
     if let Err(e) = result {
         warn!("mission: reply {reply:?} not delivered: {e}");
     }
-}
-
-/// Acknowledge an audio message as played (no audio consumer reports it yet; same caveat).
-fn acknowledge_audio(rt: &MissionRuntime, id: u32) {
-    deliver_reply_host_side(rt, &ScriptReply::MessageDismissed { id });
 }
 
 const REPORT_MOVIE: &str = "for _, n in ipairs({'A1', 'A2'}) do local t = rawget(_G, n) if type(t) == 'table' then local f = rawget(t, 'MovieDone') if f then pcall(f) end end end";

@@ -145,11 +145,11 @@ impl Sim {
         // is not established.) Seatless sims (bench, legacy) are omniscient, as
         // their views are.
         let seats = !self.players.is_empty();
-        let seen = if attacks.is_empty() || !seats { Vec::new() } else { crate::sensors::compute(&self.units, Some(&db), &self.players) };
-        let team = |p: sta_core::PlayerId| self.players.iter().find(|x| x.0 == p).map(|x| x.1);
+        let seen = if attacks.is_empty() || !seats { Vec::new() } else { crate::sensors::compute(&self.units, Some(&db), crate::relations::Diplomacy::new(&self.players, &self.relations)) };
+        let dip = crate::relations::Diplomacy::new(&self.players, &self.relations);
         for (id, tid) in attacks {
             let (Some(u), Some(t)) = (self.units.get(id), self.units.get(tid)) else { continue };
-            let cloaked = t.flags.contains(crate::view::UnitFlags::CLOAKED) && team(t.owner) != team(u.owner);
+            let cloaked = t.flags.contains(crate::view::UnitFlags::CLOAKED) && !dip.confirmed_ally(t.owner, u.owner);
             let visible = !seats || seen.iter().find(|(p, _)| *p == u.owner).is_some_and(|(_, ids)| ids.binary_search(&tid).is_ok());
             if cloaked || !visible {
                 let last = u.target.unwrap_or(t.pos);

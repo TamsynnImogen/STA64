@@ -49,10 +49,10 @@ pub enum SimEvent {
     /// Appended to preserve every existing postcard event tag.
     PointDefenceChanged { id: EntityId, on: bool },
     /// A freighter changed what it is doing in its mining cycle (RND-29): the renderer
-    /// animates the mining phase (the orbit and the beam at the node, the berth at the
-    /// station) from it. Not hashed with the state; a miner is announced when its phase
-    /// changes (the phase it was ordered into is not announced, nor is one a loaded save
-    /// resumes in until the next change).
+    /// draws the beam while `Mining` and the berth while `Unloading` from it (the sim itself
+    /// circles the node). Not hashed with the state; a miner is announced when its phase
+    /// changes and when a stop, move or new order takes it off its work (a phase a loaded save
+    /// resumes in is not announced until the next change).
     /// Appended to preserve every existing postcard event tag.
     /// `dock`: the station it unloads at, when `phase` is `Unloading`.
     MinerPhase { id: EntityId, phase: MinerPhase, node: EntityId, dock: Option<Vec3> },

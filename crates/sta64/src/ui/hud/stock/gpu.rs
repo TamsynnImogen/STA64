@@ -72,7 +72,7 @@ fn resolved_pieces(app: &mut App, pieces: &[super::layout::Piece]) -> usize {
 }
 
 #[derive(Clone, Copy)]
-enum HoverCapture { Selected, Low, Other, BuildPage }
+enum HoverCapture { Selected, Low, Other, ColonyShip }
 
 /// Independent installed-data expectation: current crew is compared with its
 /// actual live capacity, not crewCost. Resolve authored palette/thresholds.
@@ -99,7 +99,7 @@ fn crew_colour(vfs: &sta_vfs::Vfs, feed: &HudFeed, unit: &sta_sim::UnitView, sto
 
 fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, label: &str, options: GameOptions, hover_mode: HoverCapture) {
     let layout = crate::game::gui_layout(&vfs, cfg).unwrap_or_else(|| panic!("installed {cfg} missing"));
-    let stock = StockLayout::new(&layout, Vec2::new(1080.0 * size.x as f32 / size.y as f32, 1080.0));
+    let stock = StockLayout::for_aspect(&layout, size.x as f32 / size.y as f32);
     let resource = stock.pieces("resourcePanel");
     let minimap = stock.pieces("minimapBackgroundPanel");
     let info = stock.pieces("infoMiddleBackgroundPanel");
@@ -112,6 +112,17 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
     let hover = match hover_mode {
         HoverCapture::Selected | HoverCapture::BuildPage => None,
         HoverCapture::Low => { hud_feed.selected.clear(); Some(original) },
+        // UI-38: the start unit's view row (same id, so it stays visible) with a colony ship's definition.
+        HoverCapture::ColonyShip => {
+            let Some(def) = hud_feed.content.as_ref().unwrap().key("fcolony") else {
+                eprintln!("SKIP {label}: the mounted install has no `fcolony` definition");
+                return;
+            };
+            let mut view = (*hud_feed.view).clone();
+            view.units.iter_mut().find(|u| u.id == original).unwrap().def = def;
+            hud_feed.view = Arc::new(view);
+            None
+        }
         HoverCapture::Other => Some(hud_feed.view.units.iter().find(|unit| {
             unit.id != original && unit.def != hud_feed.view.unit(original).unwrap().def
                 && unit.flags.contains(sta_sim::view::UnitFlags::SELECTABLE)
@@ -289,6 +300,14 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         .query::<(&GuiButton, &ImageNode)>()
         .iter(app.world())
         .count();
+    if matches!(hover_mode, HoverCapture::ColonyShip) {
+        // The palette offers COLONIZE (command ODF `colonize.odf`: art `b_colonize`) for the colony ship (read from data).
+        let colonize = app.world_mut().query::<(&super::super::GridCell, &GuiButton)>().iter(app.world())
+            .filter(|(cell, button)| cell.0 == super::super::Act::Target(super::super::model::TargetMode::Colonize)
+                && button.names.iter().any(|n| n.eq_ignore_ascii_case("b_colonize")))
+            .count();
+        assert_eq!(colonize, 1, "{label}: one COLONIZE button with the stock art name");
+    }
     if matches!(hover_mode, HoverCapture::Low) {
         assert_eq!(commands, 0, "{label}: hovering must not enable selection commands");
     } else {
@@ -449,10 +468,11 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
     }
     // A2's first two resource atlas pieces meet at canvas x=256. On a wide
     // viewport Auto letterboxes both pieces and leaves a black gap here; native
-    // independent-axis drawing must fill this authored join.
+    // drawing (one factor, the sheet centred) must fill this authored join.
     if profile == UiProfile::Armada2 && size.x as f32 / size.y as f32 > 1.5 {
-        let x = (256.0 * size.x as f32 / stock.canvas.x).round() as u32;
-        let y = (38.0 * size.y as f32 / stock.canvas.y).round() as u32;
+        let k = size.y as f32 / 1080.0;
+        let x = ((stock.hud.x + 256.0 * stock.scale) * k).round() as u32;
+        let y = ((stock.hud.y + 38.0 * stock.scale) * k).round() as u32;
         for x in x.saturating_sub(3)..=(x + 3).min(size.x - 1) {
             let pixel = rgba.get_pixel(x, y.min(size.y - 1));
             assert!(
@@ -482,10 +502,16 @@ fn installed_stock_hud_renders_on_gpu() {
         Ok("fo") => UiProfile::FleetOps,
         _ => panic!("set STA64_HUD_PROFILE=a2 or fo for the mounted install"),
     };
-    for (size, ratio) in [(UVec2::new(1024, 768), "4x3"), (UVec2::new(1280, 720), "16x9"), (UVec2::new(1920, 1080), "16x9-1080")] {
+    // 21:9 and 32:9 windows (UI-37): the sheet is scaled by one factor and centred.
+    for (size, ratio) in [
+        (UVec2::new(1024, 768), "4x3"),
+        (UVec2::new(1280, 720), "16x9"),
+        (UVec2::new(2560, 1080), "21x9"),
+        (UVec2::new(3840, 1080), "32x9"),
+    ] {
         let cfg = match (profile, ratio) {
             (UiProfile::Armada2, _) => "gui_fed.cfg",
-            (UiProfile::FleetOps, "16x9" | "16x9-1080") => "gui_federation16x9.cfg",
+            (UiProfile::FleetOps, "16x9" | "21x9" | "32x9") => "gui_federation16x9.cfg",
             (UiProfile::FleetOps, _) => "gui_federation.cfg",
             _ => unreachable!(),
         };
@@ -505,9 +531,182 @@ fn installed_stock_hud_renders_on_gpu() {
         options.starting_resources = sta_content::StartingResources::Lots;
         options.officer_limit = 1;
         capture_one(vfs, profile, UVec2::new(1280,720), "gui_fed.cfg", "a2-lots-restricted-16x9", options, HoverCapture::Selected);
+        // UI-38: a colony ship selected (the stock command palette shows COLONIZE).
+        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod.as_deref()).unwrap();
+        capture_one(vfs, profile, UVec2::new(1024, 768), "gui_fed.cfg", "a2-colony-ship-4x3", GameOptions::default(), HoverCapture::ColonyShip);
         for (mode,label) in [(HoverCapture::Low,"a2-hover-low-16x9"),(HoverCapture::Other,"a2-hover-other-16x9")] {
             let vfs=sta_vfs::Vfs::mount_install(std::path::Path::new(&install),active_mod.as_deref()).unwrap();
             capture_one(vfs,profile,UVec2::new(1280,720),"gui_fed.cfg",label,GameOptions::default(),mode);
         }
+    }
+}
+
+/// Armada I: the three separate resource panels (dilithium, crew, officers), from the
+/// install's own `gui_*.cfg` and `gui_<race>.spr`, drawn in a windowless GPU frame.
+/// Set `STA64_GPU_TESTS=1 STA64_TEST_A1_INSTALL=<Armada I root>`; `STA64_HUD_CAPTURE_DIR`
+/// keeps the frames locally (they show game art: never commit them).
+#[test]
+fn installed_armada1_resource_readouts_render_on_gpu() {
+    if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1") {
+        eprintln!("SKIP: set STA64_GPU_TESTS=1 STA64_TEST_A1_INSTALL=<Armada I root>");
+        return;
+    }
+    let Some(install) = std::env::var_os("STA64_TEST_A1_INSTALL") else {
+        eprintln!("SKIP: set STA64_TEST_A1_INSTALL=<Armada I root>");
+        return;
+    };
+    for size in [UVec2::new(1280, 720), UVec2::new(2560, 1080), UVec2::new(3840, 1080)] {
+    for (cfg, spr, label) in [
+        ("gui_fed.cfg", "gui_federation.spr", "a1-fed"),
+        ("gui_kli.cfg", "gui_klingon.spr", "a1-kli"),
+        ("gui_rom.cfg", "gui_romulan.spr", "a1-rom"),
+        ("gui_bor.cfg", "gui_borg.spr", "a1-bor"),
+    ] {
+        let label = &format!("{label}-{}x{}", size.x, size.y);
+        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), None).expect("installed A1 VFS");
+        let layout = crate::game::gui_layout(&vfs, cfg).unwrap_or_else(|| panic!("installed {cfg} missing"));
+        let stock = StockLayout::for_aspect(&layout, size.x as f32 / size.y as f32);
+        assert!(stock.panel("resource").is_none(), "{label}: now has a resource panel");
+        let hud_feed = feed(&vfs, GameOptions::default());
+        let player = hud_feed.view.player(hud_feed.player).expect("capture player");
+        let whole = |value: Fixed| (value.to_bits() / Fixed::ONE.to_bits()).to_string();
+        // Expected values come from the content data, not from the view the HUD reads, so lost
+        // starting values (the legacy RTS_CFG.h start, the officer cap) cannot pass as "" == "".
+        // The feed is one Federation start for every cfg: only the layout differs per race.
+        let rules = hud_feed.content.as_ref().expect("content").rules();
+        let start = rules.legacy_start();
+        let cap = rules.officer_limit(GameOptions::default().officer_limit as usize).expect("officer cap");
+        let used = whole(player.officers[0]);
+        assert!(!used.is_empty());
+        let expected = [
+            (2_usize, start.dilithium.expect("legacy start dilithium").to_string()),
+            (0, start.crew.expect("legacy start crew").to_string()),
+            (1, format!("{used}/{cap}")),
+        ];
+        assert!(expected.iter().all(|(_, v)| !v.is_empty()));
+        eprintln!("{label}: expected readouts {expected:?}");
+        let mut app = App::new();
+        app.add_plugins(
+            DefaultPlugins
+                .set(WindowPlugin { primary_window: None, exit_condition: ExitCondition::DontExit, ..default() })
+                .set(RenderPlugin { synchronous_pipeline_compilation: true, ..default() })
+                .disable::<bevy::winit::WinitPlugin>()
+                .disable::<bevy::log::LogPlugin>(),
+        );
+        configure_sets(&mut app);
+        let selection = hud_feed.selected.clone();
+        app.insert_resource(ClearColor(Color::BLACK))
+            .insert_resource(UiProfile::Armada2)
+            .insert_resource(UiProfile::Armada2.theme())
+            .insert_resource(Mounted(vfs))
+            .insert_resource(GuiSkin { table: Some(spr.into()) })
+            .insert_resource(HudConfig { gui: Some(layout), aspect: size.x as f32 / size.y as f32, fit_scale: false, log: false })
+            .insert_resource(UiScale(size.y as f32 / 1080.0))
+            .insert_resource(hud_feed)
+            .insert_resource(ExternalFeed)
+            .insert_resource(Selection(selection))
+            .init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .add_plugins(HudPlugin)
+            .add_systems(Update, aim_roots_hud.before(GameSet::Ui));
+        let mut image = Image::new_target_texture(size.x, size.y, bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb, None);
+        image.asset_usage = RenderAssetUsages::RENDER_WORLD;
+        let target = app.world_mut().resource_mut::<Assets<Image>>().add(image);
+        let camera = app
+            .world_mut()
+            .spawn((Camera2d, Camera { order: 1, clear_color: ClearColorConfig::Custom(Color::BLACK), ..default() }, RenderTarget::from(target.clone()), Msaa::Off))
+            .id();
+        app.insert_resource(CaptureCamera(camera));
+        app.finish();
+        app.cleanup();
+        for _ in 0..16 {
+            app.update();
+        }
+        let has_adapter = app.world().get_resource::<bevy::render::renderer::RenderAdapterInfo>().cloned().or_else(|| {
+            app.get_sub_app(bevy::render::RenderApp).and_then(|r| r.world().get_resource::<bevy::render::renderer::RenderAdapterInfo>().cloned())
+        });
+        let Some(adapter) = has_adapter else {
+            eprintln!("SKIP {label}: no render adapter");
+            return;
+        };
+        if crate::bench::frames::is_software_adapter(adapter.device_type, &adapter.name) {
+            eprintln!("SKIP {label}: hardware adapter unavailable");
+            return;
+        }
+        // Three readouts with the live values.
+        for (id, want) in &expected {
+            let actual = app
+                .world_mut()
+                .query::<(&super::info::StockText, &crate::ui::sprite_font::SpriteText)>()
+                .iter(app.world())
+                .find_map(|(kind, text)| matches!(kind, super::info::StockText::Resource(n) if n == id).then(|| text.text.clone()));
+            assert_eq!(actual.as_deref(), Some(want.as_str()), "{label}: readout {id}");
+        }
+        // Each panel's background and icon sprite names resolve in the race's table.
+        for prefix in ["officer", "crew", "dilithium"] {
+            for key in [format!("{prefix}BackgroundPanel"), format!("{prefix}Icon")] {
+                let wanted: Vec<String> = if key.ends_with("Icon") {
+                    stock.name(&key).map(str::to_owned).into_iter().collect()
+                } else {
+                    stock.pieces(&key).into_iter().map(|p| p.name).collect()
+                };
+                assert!(!wanted.is_empty(), "{label}: {key} authored");
+                for name in wanted {
+                    let resolved = app
+                        .world_mut()
+                        .query::<(&GuiImage, &ImageNode)>()
+                        .iter(app.world())
+                        .any(|(image, _)| image.names.iter().any(|n| n.eq_ignore_ascii_case(&name)));
+                    assert!(resolved, "{label}: sprite {name:?} ({key}) did not resolve in {spr}");
+                    eprintln!("{label}: sprite {name} resolved");
+                }
+            }
+        }
+        let frames = Arc::new(Mutex::new(Vec::<Image>::new()));
+        let output = Arc::clone(&frames);
+        app.world_mut().spawn(Screenshot::image(target)).observe(move |shot: On<ScreenshotCaptured>| {
+            output.lock().unwrap().push(shot.image.clone());
+        });
+        for _ in 0..60 {
+            app.update();
+            if !frames.lock().unwrap().is_empty() {
+                break;
+            }
+        }
+        let shot = frames.lock().unwrap().first().cloned().unwrap_or_else(|| panic!("{label}: no GPU capture"));
+        let rgba = shot.try_into_dynamic().expect("GPU image conversion").to_rgba8();
+        // The numerals are drawn in the text colour inside each text rectangle (panel art
+        // there is dark or not that colour), so lost text fails.
+        let text_colour = UiProfile::Armada2.theme().text.to_srgba();
+        let want = [text_colour.red, text_colour.green, text_colour.blue].map(|v| (v * 255.0).round() as i16);
+        for prefix in ["officer", "crew", "dilithium"] {
+            let area = stock.panel(prefix).expect("panel");
+            let r = stock.at(Vec2::new(area.x, area.y), &format!("{prefix}TextArea")).expect("text area");
+            let k = size.y as f32 / 1080.0;
+            let (x0, x1) = ((r.x * k).max(0.0) as u32, ((r.x + r.w) * k).min(size.x as f32) as u32);
+            let (y0, y1) = ((r.y * k).max(0.0) as u32, ((r.y + r.h) * k).min(size.y as f32) as u32);
+            let matching = (y0..y1).flat_map(|y| (x0..x1).map(move |x| (x, y))).filter(|&(x, y)| {
+                let p = rgba.get_pixel(x, y);
+                (0..3).all(|c| (p[c] as i16 - want[c]).abs() <= 48)
+            }).count();
+            eprintln!("{label}: {prefix} text rect {x0}..{x1} x {y0}..{y1}: {matching} text-colour pixels");
+            assert!(matching >= 8, "{label}: {prefix} readout shows no text-colour pixels");
+        }
+        if let Ok(dir) = std::env::var("STA64_HUD_CAPTURE_DIR") {
+            std::fs::create_dir_all(&dir).unwrap();
+            rgba.save(std::path::Path::new(&dir).join(format!("stock-{label}.png"))).unwrap();
+        }
+    }
+    }
+}
+
+#[allow(clippy::type_complexity)]
+fn aim_roots_hud(
+    mut commands: Commands,
+    camera: Res<CaptureCamera>,
+    roots: Query<Entity, (With<HudRoot>, Without<UiTargetCamera>)>,
+) {
+    for root in &roots {
+        commands.entity(root).insert(UiTargetCamera(camera.0));
     }
 }

@@ -25,6 +25,7 @@ pub mod autonomy;
 pub mod appearance;
 pub mod boundary;
 pub mod combat;
+pub mod colony;
 pub mod command;
 pub mod context;
 pub mod digest;
@@ -35,6 +36,7 @@ pub mod kinematics;
 pub mod movement;
 mod ownership;
 mod perception;
+pub mod relations;
 #[cfg(test)]
 mod perception_tests;
 #[cfg(test)]
@@ -62,6 +64,9 @@ pub mod spawn;
 pub mod start;
 mod start_effects;
 pub mod attrs;
+pub mod team_pool;
+#[cfg(test)]
+mod rerace_tests;
 pub use start_effects::unsupported as unsupported_start_lifecycle;
 pub mod tech;
 pub mod victory;
@@ -83,7 +88,7 @@ pub use view::{TickOutput, UnitView, WorldView};
 use std::sync::Arc;
 
 use sta_content::{ContentDb, Region, StartPos};
-use view::{PlayerView, Relation};
+use view::PlayerView;
 use world::{Entities, Entity, EntityKind, Fnv, Table};
 
 pub(crate) use kinematics::{MIN_ALIGN, arrive_distance};
@@ -174,12 +179,18 @@ pub struct Sim {
     scripted: orders::Scripted,
     /// Per-craft switches set by missions (SIM-58); in the digest once any exists.
     switches: switches::SwitchTable,
+    /// Mission-set relations between seats (SIM-63); in the digest once any exists.
+    relations: relations::Relations,
     /// Units whose team just changed (SIM-29): `activateOnTeamChange` weapons
     /// engage on the tick's weapon pass. Filled by the tick's commands and
     /// drained by the same tick, so it is empty between ticks and not saved.
     team_changes: Vec<EntityId>,
     /// Cosmetic owning-seat faction labels, recorded from resolved setup.
     appearance_factions: Vec<(PlayerId, String)>,
+    // (Also the setup race of each seat: the base of `Sim::seat_race`, which picks the officer cap
+    // and latinum rules; fixed by the setup, so peers agree.)
+    /// Planet population and colony ship orders (SIM-30); in the digest once any exists.
+    colonies: colony::Colonies,
 }
 
 impl Sim {
@@ -214,8 +225,10 @@ impl Sim {
             attrs: Default::default(),
             scripted: Default::default(),
             switches: Default::default(),
+            relations: Default::default(),
             team_changes: Vec::new(),
             appearance_factions: Vec::new(),
+            colonies: Default::default(),
         }
     }
 
@@ -250,6 +263,14 @@ impl Sim {
     /// and the spawn and kill edits exist; everything else is rejected until
     /// its package lands.
     fn apply(&mut self, c: &command::Command) -> bool {
+        let ok = self.apply_command(c);
+        if ok && let command::CommandKind::Order(o) = &c.kind {
+            self.colonies_after_order(c.player, o);
+        }
+        ok
+    }
+
+    fn apply_command(&mut self, c: &command::Command) -> bool {
         use command::{CommandKind, Order};
         if self.victory.is_eliminated(c.player) {
             return false;
@@ -295,7 +316,11 @@ impl Sim {
                         self.production.cancel(&db, &self.units, &mut self.economy, c.player, &unlocked);
                     }
                 }
-                self.apply_movement(c.player, &Order::Move { units: unlocked, to: *to, queue: *queue })
+                let taken = self.apply_movement(c.player, &Order::Move { units: unlocked.clone(), to: *to, queue: *queue });
+                if taken {
+                    self.auto_warp_moves(c.player, &unlocked);
+                }
+                taken
             }
             Order::Formation { .. } => self.apply_movement(c.player, order),
             Order::Mine { units, node } => {
@@ -383,6 +408,7 @@ impl Sim {
             | Order::AttackAny { .. }
             | Order::AttackPoint { .. }
             | Order::MoveWarp { .. } => self.apply_scripted(c.player, order),
+            Order::Colonize { units, planet } => self.apply_colonize(c.player, units, *planet),
             Order::Rally { builders, at } => {
                 let Some(db) = self.content.as_deref() else { return false };
                 self.production.order_rally(db, &self.units, c.player, builders, *at)
@@ -421,14 +447,14 @@ impl Sim {
         self.separate_units();
         self.push_out_of_fields();
         if let Some(db) = self.content.clone() {
-            combat::damage::recharge(&mut self.units, &db, &self.switches);
+            combat::damage::recharge(&mut self.units, &db, &self.switches, &self.subsystems);
             self.activate_team_change_weapons(&db);
             self.specials.step(&mut self.units, &db, &mut self.events);
             let from = self.events.len();
             let mut held = if db.features().builder_hold_fire { self.production.builders_at_work() } else { Vec::new() };
             held.extend(self.scripted.holding_fire());
             self.weapons.hold_fire(held);
-            self.weapons.step_with_perception(self.tick, &self.units, &db, &self.players, &self.perception, &mut self.specials, &mut self.rng, &self.switches, &mut self.events);
+            self.weapons.step_with_perception(self.tick, &self.units, &db, relations::Diplomacy::new(&self.players, &self.relations), &self.perception, &mut self.specials, &mut self.rng, &self.switches, &mut self.events);
             self.record_engagement(from);
             // An attack whose target is gone leaves no course behind (SIM-36).
             for id in self.weapons.take_ended() {
@@ -438,19 +464,25 @@ impl Sim {
                 self.approach_warp.end(id);
             }
             let mut lost = Vec::new();
-            for (id, by) in combat::damage::apply(&mut self.units, &db, &mut self.events, from) {
+            let mut casualties = combat::casualty::Ctx { subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches, colonies: &mut self.colonies };
+            let killed = combat::damage::apply(&mut self.units, &db, &mut self.events, from, &mut casualties);
+            combat::casualty::step(&mut self.units, &db, &mut casualties);
+            for (id, by) in killed {
                 lost.extend(self.units.get(id).map(|u| u.owner));
                 self.despawn(id, by);
             }
             self.specials.react(&mut self.units, &db, &mut self.events, from);
             self.victory.step(&self.units, &mut lost, &mut self.events);
         }
+        self.step_colonies();
+        let colony_crew = self.content.as_deref().map(|db| self.colony_crew_income(db)).unwrap_or_default();
         if let Some(db) = &self.content {
             self.economy.step(&mut self.units, db, &mut self.events);
             self.economy.step_passive(&self.units, db, &self.players, &self.ai_seats, self.tick);
-            self.economy.step_crew(&self.units, db, self.tick);
+            self.economy.step_crew(&self.units, db, &self.attrs, self.tick, &colony_crew);
             let from = self.events.len();
             self.production.step(&mut self.units, db, &mut self.economy, &mut self.events, &mut self.confinement);
+            self.inherit_builder_races(from);
             let built: Vec<EntityId> = self.events[from..].iter().filter_map(|e| match e { SimEvent::Spawned { id } => Some(*id), _ => None }).collect();
             for id in built {
                 self.default_autonomy(id);
@@ -467,7 +499,8 @@ impl Sim {
     /// (SIM-26, [`production::officers`]).
     fn officer_census(&self, player: PlayerId) -> Fixed {
         let Some(db) = self.content.as_deref() else { return Fixed::ZERO };
-        self.production.officer_census(&self.units, db, player)
+        let census = self.production.officer_census(&self.units, db, player);
+        Fixed::from_bits(census.to_bits().saturating_add(self.economy.officer_adjust(player).to_bits()))
     }
 
     fn build_view(&self) -> WorldView {
@@ -475,6 +508,7 @@ impl Sim {
         // `units` for scripts, but no player sees or picks them (`EntityKind::hidden`).
         // Only the view changes: state and digest do not.
         let mut hidden: Vec<EntityId> = Vec::new();
+        let docked = self.economy.docked_stations(&self.units);
         let units = self.units.iter().map(|entity| {
             let mut view = entity.view();
             if self.content.as_deref().and_then(|db| db.unit(entity.def)).is_some_and(EntityKind::hidden) {
@@ -482,6 +516,7 @@ impl Sim {
                 view.flags = view.flags.with(view::UnitFlags::SELECTABLE, false);
             }
             view.flags = view.flags.with(view::UnitFlags::BUILDING, self.production.is_welding(entity.id));
+            view.flags = view.flags.with(view::UnitFlags::DOCKED, docked.contains(&entity.id));
             if matches!(entity.kind, EntityKind::Craft) {
                 view.autonomy = Some(self.autonomy.levels(entity.id));
             }
@@ -507,11 +542,11 @@ impl Sim {
                     .players
                     .iter()
                     .filter(|o| o.0 != id)
-                    .map(|&(o, t)| (o, if t == team { Relation::Ally } else { Relation::Enemy }))
+                    .map(|&(o, _)| (o, relations::Diplomacy::new(&self.players, &self.relations).view(id, o)))
                     .collect(),
             })
             .collect();
-        let mut visibility = sensors::compute(&self.units, self.content.as_deref(), &self.players);
+        let mut visibility = sensors::compute(&self.units, self.content.as_deref(), relations::Diplomacy::new(&self.players, &self.relations));
         if !hidden.is_empty() {
             // Both lists ascend by id.
             for (_, seen) in &mut visibility {
@@ -519,7 +554,7 @@ impl Sim {
             }
         }
         let perceived_owners = self.perception.iter().map(|(id, &owner)| (id, owner)).collect();
-        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners, appearance: self.appearance_view(), attrs: crate::attrs::AttrsView { names: self.switches.names(), ..self.attrs.view() } }
+        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners, appearance: self.appearance_view(), colonies: self.colony_views(), attrs: crate::attrs::AttrsView { names: self.switches.names(), seats: self.seat_views(), ..self.attrs.view() } }
     }
 
     /// FNV-1a over all simulation state, for desync detection. The content
@@ -601,8 +636,15 @@ impl Sim {
         if !self.switches.is_empty() {
             self.switches.hash_into(&mut h);
         }
+        if !self.relations.is_empty() {
+            self.relations.hash_into(&mut h);
+        }
         if !self.attrs.is_empty() {
             self.attrs.hash_into(&mut h);
+        }
+        // SIM-30: population and colonizing orders (nothing is hashed without colony state).
+        if !self.colonies.is_empty() {
+            self.colonies.hash_into(&mut h);
         }
         let crew_count = self.units.iter().filter(|unit| unit.crew.is_some()).count();
         if crew_count != 0 {

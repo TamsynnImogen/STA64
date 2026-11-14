@@ -352,6 +352,7 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
         def.planet_colonizable = crate::planet::resolve_colonizable(&file, odf, profile, def.planet_role, &mut warnings);
         def.planet_civilian_population_modifier =
             crate::planet::resolve_civilian_population_modifier(&file, odf, profile, def.planet_role, &mut warnings);
+        def.planet_max_population = crate::planet::resolve_max_population(&file, odf, def.planet_role, &mut warnings);
         def.orbit_time = crate::planet::resolve_orbit_time(&file, odf, &def.class.0, &mut warnings);
         def.build.queue_limit = build_queue_limit(&file, odf, &mut warnings);
         def.is_starbase = station_flag(&file, odf, profile, &mut warnings);

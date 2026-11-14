@@ -283,6 +283,32 @@ fn rejected_without_state_change(sim: &mut Sim, id: EntityId) {
     assert_eq!(sim.production.to_rec(), empty_step.production.to_rec());
 }
 
+/// SIM-29, unfinished children. Rules read from the executables (static; one bench run on
+/// stock A2 for the rig): no game lets a unit under construction be captured. The producer's
+/// capture clears its queue and drops the item in progress, and a construction rig's unfinished
+/// station is deleted with it (A2, Fleet Operations, Roots; Armada I has the same shape). What
+/// the old owner gets back is the producer's pay mode: the item in progress was paid when it
+/// started and is forfeited, unless the producer pays on queue (Roots `queueInstantDeduct = 1`,
+/// `Features::pay_on_queue`), where every queued item is refunded to the old owner.
+/// Direct Team on the unfinished child stays rejected: it is not a gameplay path.
+#[test]
+fn a_started_item_is_forfeited_unless_the_producer_pays_on_queue() {
+    for pay_on_queue in [false, true] {
+        let mut sim = game(&[0, 1], pay_on_queue);
+        let yard = spawn(&mut sim, "fx_yard", PlayerId(0), pos(0));
+        fund(&mut sim, 2000);
+        build(&mut sim, yard, "fx_frigate", None);
+        for _ in 0..5 {
+            sim.step(&[]);
+        }
+        accepted(&mut sim, &[team(PlayerId::SCRIPT, 0, yard, PlayerId(1))]);
+        assert!(sim.production.queue(yard).is_empty());
+        let expected = if pay_on_queue { 2000 } else { 1750 };
+        assert_eq!(sim.economy.stock_of(PlayerId(0))[0], Fixed::from_int(expected), "pay_on_queue = {pay_on_queue}");
+        assert!(sim.economy.stock_of(PlayerId(1)).is_empty(), "the captor gets nothing");
+    }
+}
+
 #[test]
 fn active_queue_deploy_and_weld_cleanup_obey_both_pay_modes() {
     for pay_on_queue in [false, true] {
