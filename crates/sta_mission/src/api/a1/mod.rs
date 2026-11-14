@@ -48,10 +48,14 @@ use super::entity_ref::{SpawnHandle, SpawnStatus};
 use super::{Shared, to_vec3};
 
 mod hold;
+#[cfg(test)]
+mod lua30_tests;
 mod objects;
 mod orders;
 mod presentation;
+mod replace_object;
 mod seams;
+mod subsystems;
 mod teams;
 #[cfg(test)]
 mod tests;
@@ -488,6 +492,11 @@ pub(super) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
     teams::install(lua, &env, &a2, &table)?;
     presentation::install(lua, &env, &a2, &table)?;
     seams::install(lua, &env, &a2, &table)?;
+    // LUA-30: replace the seam-gap bindings of the same names (before `hold` wraps the table).
+    subsystems::install(lua, &env, &table)?;
+    // GetAttackLocation: the Armada II geometry (read from the executable, static).
+    table.set("GetAttackLocation", alias(lua, &env, &a2, "GetAttackLocation")?)?;
+    replace_object::install(lua, &env, &table)?;
     hold::install(lua, &env, &table)?;
     lua.globals().raw_set("A1", table)?;
     Ok(())

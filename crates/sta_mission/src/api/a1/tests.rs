@@ -269,7 +269,7 @@ const CASES: &[(&str, &str, Expect)] = &[
     ("CountVisibleUnits", "A1.CountVisibleUnits(0, 1, true, nil)", Fine),
     ("CountVisibleUnitsNearObject", "A1.CountVisibleUnitsNearObject(a, 1000, 1, true, nil)", Fine),
     ("GetNearestObjectNearMe", "assert(A1.GetNearestObjectNearMe(a, 1000, 1, nil, -1, false) == b)", Fine),
-    ("ReplaceObject", "assert(A1.ReplaceObject(a, 'fx_frigate') == 0)", Fine),
+    ("ReplaceObject", "assert(A1.ReplaceObject(a, 'fx_frigate') >= 0x40000000)", Fine),
     ("DestroyEngines", "A1.DestroyEngines(a)", Fine),
     ("DisableShieldGenerator", "A1.DisableShieldGenerator(a, true)", Fine),
     ("RemoveAllObjects", "A1.RemoveAllObjects()", Fine),
