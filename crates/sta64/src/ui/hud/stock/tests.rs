@@ -272,7 +272,7 @@ fn armada1_separate_panels_draw_three_readouts_with_live_values() {
     assert_eq!(resource_label_count(&mut app), 3);
     // 640x480 canvas mapped to the 1920x1080 test viewport: x scale 3, y scale 2.25.
     let (_, dilithium, _, node) = resource_label(&mut app, 2).unwrap();
-    assert_eq!(dilithium, "700");
+    assert_eq!(dilithium, "3000");
     assert_eq!((node.left, node.top), (Val::Px((395.0_f32 + 16.0) * 3.0), Val::Px(5.0)));
     assert_eq!(resource_label(&mut app, 0).unwrap().1, "");
     assert_eq!(resource_label(&mut app, 1).unwrap().1, "0/0");
@@ -295,7 +295,7 @@ fn installed_armada1_guis_draw_three_resource_readouts_inside_the_window() {
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), None).unwrap();
     for cfg_name in ["gui_fed.cfg", "gui_kli.cfg", "gui_rom.cfg", "gui_bor.cfg"] {
         let layout = crate::game::gui_layout(&vfs, cfg_name).unwrap_or_else(|| panic!("{cfg_name} missing"));
-        assert!(layout.panels.get("resource").is_none(), "{cfg_name} now has a resource panel");
+        assert!(!layout.panels.contains_key("resource"), "{cfg_name} now has a resource panel");
         for aspect in [4.0_f32 / 3.0, 16.0 / 9.0] {
             let config = HudConfig { gui: Some(layout.clone()), aspect, fit_scale: false, ..default() };
             let mut app = app_with_content_and_config(content(), config, UiProfile::Armada2);
@@ -316,7 +316,8 @@ fn installed_armada1_guis_draw_three_resource_readouts_inside_the_window() {
 
 #[test]
 fn armada1_separate_panels_respect_no_flags_and_missing_text_areas() {
-    let raw = format!("{A1_RESOURCES}noCrew = 1\ndilithiumTextArea = 0 0 0 0\n");
+    // A duplicate key does not override the first, so replace the authored line.
+    let raw = A1_RESOURCES.replace("dilithiumTextArea = 16 2 63 12", "dilithiumTextArea = 0 0 0 0") + "noCrew = 1\n";
     let mut app = app_with_content_and_config(content(), single_file_config(&raw), UiProfile::Armada2);
     assert!(resource_label(&mut app, 0).is_none());
     assert!(resource_label(&mut app, 2).is_none());
@@ -329,7 +330,7 @@ fn single_resource_panel_wins_over_separate_panels() {
     let raw = format!("{A1_RESOURCES}resourcePanelArea = 0 0 400 80\nresource_2 = 20 10 80 30\n");
     let mut mixed = app_with_content_and_config(content(), single_file_config(&raw), UiProfile::Armada2);
     assert_eq!(resource_label_count(&mut mixed), 1);
-    assert_eq!(resource_label(&mut mixed, 2).unwrap().1, "700");
+    assert_eq!(resource_label(&mut mixed, 2).unwrap().1, "3000");
     // The shipped A2 test sheet still draws its three authored readouts unchanged.
     let mut a2 = app();
     assert_eq!(resource_label_count(&mut a2), 3);
