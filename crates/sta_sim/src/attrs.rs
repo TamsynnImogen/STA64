@@ -38,6 +38,10 @@ pub struct AttrsView {
     /// player (SIM-54).
     #[serde(default)]
     pub seats: Vec<SeatView>,
+    /// Craft whose special-forces flag is set (`Edit::SpecialForces`, LUA-28), ascending id.
+    /// Derived from the switch rows each tick; not saved state.
+    #[serde(default)]
+    pub special_forces: Vec<EntityId>,
 }
 
 /// One seat's derived team numbers.
@@ -96,6 +100,7 @@ impl Attrs {
             races: self.races.iter().map(|(i, s)| (i, s.clone())).collect(),
             player_races: self.player_races.clone(),
             seats: Vec::new(),
+            special_forces: Vec::new(),
         }
     }
 

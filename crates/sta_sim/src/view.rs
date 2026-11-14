@@ -72,6 +72,11 @@ impl WorldView {
         self.units.binary_search_by_key(&id, |u| u.id).ok().map(|i| &self.units[i])
     }
 
+    /// Whether the craft carries the special-forces flag (`Edit::SpecialForces`).
+    pub fn is_special_forces(&self, id: EntityId) -> bool {
+        self.attrs.special_forces.binary_search(&id).is_ok()
+    }
+
     pub fn player(&self, id: PlayerId) -> Option<&PlayerView> {
         self.players.binary_search_by_key(&id, |p| p.id).ok().map(|i| &self.players[i])
     }

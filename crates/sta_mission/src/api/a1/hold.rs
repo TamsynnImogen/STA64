@@ -22,6 +22,7 @@ use std::rc::Rc;
 use mlua::{Function, Lua, MultiValue, Table, Value};
 
 use super::Env;
+use crate::api::special_forces;
 use crate::api::entity_ref::SpawnStatus;
 
 /// Void calls whose first argument is an object, held while it is a pending spawn.
@@ -67,6 +68,9 @@ const HELD: &[&str] = &[
     "Special_Attack",
     "Stop",
 ];
+
+/// Gated calls that `A1` takes from the `A2` binding, which gates them itself.
+const ALIASED: &[&str] = &["AI_Attack", "Cloak", "Decloak", "ImmediateCloak"];
 
 /// Calls that keep their place behind held calls: while anything is held, these are held
 /// too, so a later order or the end of a cineractive does not overtake an earlier held call.
@@ -132,6 +136,17 @@ pub(super) fn install(lua: &Lua, env: &Env, table: &Table) -> mlua::Result<()> {
         })
         .collect();
     for (name, inner) in entries {
+        // Script orders do nothing on a craft without the special-forces flag (LUA-28). Only the
+        // calls bound here: the aliased ones (`AI_Attack`, `Cloak`, `Decloak`) meet the gate in
+        // the `A2` binding they call. The gate sits inside the held-call wrapper, so a held
+        // order meets it when it is replayed.
+        let inner = match special_forces::GATED.iter().find(|g| **g == name && !ALIASED.contains(g)) {
+            Some(gated) => {
+                let resolver = env.clone();
+                special_forces::gate(lua, &env.ctx, gated, move |raw| resolver.token(raw).and_then(Result::ok), inner)?
+            }
+            None => inner,
+        };
         let (env, held) = (env.clone(), held.clone());
         let holds = HELD.contains(&name.as_str());
         let label = name.clone();

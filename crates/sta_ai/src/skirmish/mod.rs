@@ -36,6 +36,16 @@
 //!    AIP's maximum, and each wave's size is drawn from the seeded stream
 //!    between the AIP's minimum and that ceiling (the first is the minimum).
 //!
+//! # Special forces
+//!
+//! A craft with the special-forces flag (`Edit::SpecialForces`, the mission scripts'
+//! `SetSpecialForcesFlag`) is left alone: it is not in any wave, garrison or build
+//! count, and it gets no automatic point-defence toggle. The engine also gives such a
+//! craft no idle jobs, distress response or auto-repair and sets the flag on craft it
+//! hands a job outside the planner (attack waves, scouting, repair trips, recycling, the
+//! two team-wide attack calls); STA64's AI has no idle jobs, distress call or repair
+//! trip, and does not set the flag.
+//!
 //! # Determinism
 //!
 //! Everything it computes is [`Fixed`] or integer. All collections are
@@ -459,6 +469,13 @@ impl SkirmishController {
                 continue;
             }
             if u.owner == seat {
+                // Special forces (LUA-28; read from the executable, static): the strategic AI
+                // does not use a flagged craft (no goal, wave, defence or build-total role,
+                // so it builds replacements) and gives it no automatic jobs. Only the player
+                // or the script orders it.
+                if view.is_special_forces(u.id) {
+                    continue;
+                }
                 own.push(Own {
                     id: u.id,
                     def: u.def,
@@ -837,5 +854,7 @@ impl SkirmishController {
     }
 }
 
+#[cfg(test)]
+mod special_forces_tests;
 #[cfg(test)]
 mod tests;
