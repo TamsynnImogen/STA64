@@ -611,6 +611,7 @@ fn target_order(
 fn colonizable_by(feed: &HudFeed, planet: EntityId) -> bool {
     let (Some(db), Some(p)) = (feed.content.as_deref(), feed.view.unit(planet)) else { return false };
     !p.flags.contains(UnitFlags::DYING)
+        && p.hull[0] > sta_sim::Fixed::ZERO
         && (p.owner == sta_sim::world::NEUTRAL || p.owner == feed.player)
         && db.unit(p.def).is_some_and(|d| sta_sim::colony::is_colonizable_planet(db, d))
         && !feed.view.colonies.iter().any(|c| c.id == planet && c.colonizer.is_some())
