@@ -376,6 +376,18 @@ fn only_a_running_cineractive_sends_the_end_request_that_resets_speeds() {
 }
 
 #[test]
+fn a_set_of_zero_reads_back_as_zero_from_the_view() {
+    let mut s = scene();
+    let a = s.ids[0];
+    let mut rt = runtime(&s);
+    rt.eval::<()>("A2.SetImpulseSpeed(a, 0)").unwrap();
+    driven(&mut s, &mut rt, 4);
+    assert_eq!(s.sim.unit(a).unwrap().stats.max_speed, sta_sim::speed_override::HELD_SPEED);
+    let got: f64 = rt.eval("return A2.GetImpulseSpeed(a)").unwrap();
+    assert_eq!(got, 0.0);
+}
+
+#[test]
 fn the_getter_sees_an_edit_the_host_took_before_the_sim_answered() {
     let mut s = scene();
     let a = s.ids[0];

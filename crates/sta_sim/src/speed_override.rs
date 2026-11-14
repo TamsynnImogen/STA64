@@ -15,9 +15,11 @@
 //! between [`HELD_SPEED`] and [`MAX_OVERRIDE`]. A script that sets 0 holds a
 //! ship; a literal 0 would make the unit unorderable and unsteppable (`orderable`
 //! and `mobile` test `max_speed > 0`), so 0 is stored as the tiny held speed: the
-//! craft brakes to a crawl, still takes orders, and a reset frees it. The
-//! ceiling keeps the fixed-point squares of the movement code from wrapping
-//! (about 46,000 units/s); stock values are 35 to 150. An override above the
+//! craft drops to a crawl, still takes orders, and a reset frees it. The
+//! ceiling keeps the fixed-point products of the movement code (squares of the
+//! speed, `forward_accel * speed * distance` in the braking curve) from wrapping;
+//! stock values are 35 to 150. A held craft (at or below [`HELD_SPEED`]) never
+//! warps, is not watched by the stuck-order timer, and turns at its at-rest rate. An override above the
 //! definition's warp speed disables warp for that craft (movement compares the
 //! two); not checked against the original.
 
@@ -26,7 +28,7 @@ use sta_core::{EntityId, Fixed};
 /// What a script asking for speed 0 gets: a crawl (1/64 unit per second).
 pub const HELD_SPEED: Fixed = Fixed::from_bits(1 << 26);
 /// The highest override (units per second).
-pub const MAX_OVERRIDE: Fixed = Fixed::from_int(10_000);
+pub const MAX_OVERRIDE: Fixed = Fixed::from_int(1_000);
 
 use crate::Sim;
 use crate::view::UnitFlags;

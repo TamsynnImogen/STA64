@@ -196,6 +196,67 @@ fn a_huge_value_is_kept_below_the_ceiling() {
     }
 }
 
+/// A craft with warp: a held one must not take it.
+fn warp_capable(sim: &mut Sim, id: EntityId, keyed: bool) {
+    let u = sim.units.get_mut(id).unwrap();
+    u.stats.warp_speed = Fixed::from_int(1000);
+    if keyed {
+        u.stats.too_close_for_warp = Fixed::from_int(100);
+    }
+}
+
+fn far_attack(held: bool, keyed: bool) -> Fixed {
+    let mut sim = game();
+    let a = spawn(&mut sim, "fx_cruiser", 0, 0);
+    let target = spawn(&mut sim, "fx_cruiser", 1, 30000);
+    warp_capable(&mut sim, a, keyed);
+    if held {
+        assert!(edit(&mut sim, Edit::MaxSpeed(a, Some(Fixed::ZERO))));
+    }
+    if keyed {
+        order(&mut sim, 0, Order::Move { units: vec![a], to: at(30000), queue: false });
+    } else {
+        order(&mut sim, 0, Order::Attack { units: vec![a], target });
+    }
+    peak(&mut sim, a, 600)
+}
+
+#[test]
+fn a_held_craft_never_warps() {
+    for keyed in [false, true] {
+        let free = far_attack(false, keyed);
+        // The A1 long move is the control that warps here; the A2 attack approach needs
+        // the fake content to enable approach warp, so it is only checked while held.
+        if keyed {
+            assert!(free > Fixed::from_int(200), "control warps: {free:?}");
+        }
+        let held = far_attack(true, keyed);
+        assert!(held <= Fixed::ONE, "held craft sped to {held:?} (keyed {keyed})");
+    }
+}
+
+#[test]
+fn the_stuck_order_timer_leaves_a_held_craft_alone() {
+    let mut sim = game();
+    let a = spawn(&mut sim, "fx_cruiser", 0, 0);
+    assert!(edit(&mut sim, Edit::MaxSpeed(a, Some(Fixed::ZERO))));
+    order(&mut sim, 0, Order::Move { units: vec![a], to: at(40000), queue: false });
+    for _ in 0..(30 * 150) {
+        sim.step(&[]);
+    }
+    assert!(sim.unit(a).unwrap().target.is_some(), "the held craft kept its order past the stuck timer");
+}
+
+#[test]
+fn a_held_unit_survives_a_snapshot_round_trip() {
+    let mut sim = game();
+    let a = spawn(&mut sim, "fx_cruiser", 0, 0);
+    assert!(edit(&mut sim, Edit::MaxSpeed(a, Some(Fixed::ZERO))));
+    let loaded = Sim::from_snapshot(&sim.snapshot(), sim.content().cloned()).unwrap();
+    assert_eq!(loaded.digest(), sim.digest());
+    assert_eq!(loaded.view().attrs.impulse, vec![(a, crate::speed_override::HELD_SPEED)]);
+}
+
 /// The pinned whole-state digest of a run holding an overridden unit; it moves
 /// only when the override's effect on the sim or the digest changes.
 #[test]

@@ -571,8 +571,9 @@ constants. Orders are sent as the unit's owner; edits are SCRIPT edits.
   edit today and the rejection is counted as `A2.<Name>: simulation rejected
   edit`. `GetImpulseSpeed` returns the value queued this tick or not yet applied
   by the sim, else the view's override, else the class `impulseSpeed`; 0 for a
-  non-craft. Known limit: a team change the host has taken but the sim has not
-  applied is not seen by the getter.
+  non-craft; a value of 1/64 or less (the sim's crawl for a script's 0) reads back
+  as 0. Known limit: a team change or cineractive end the host has taken but the
+  sim has not applied is not seen by the getter.
 - `BuildObject` lives in `dll_objects.rs` (next section). Its handle is a
   token (`0x40000000 + request`); `dll_objects::finish`, installed last, wraps
   every `A2` function so the token means the built unit once the spawn receipt
