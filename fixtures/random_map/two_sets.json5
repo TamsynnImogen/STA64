@@ -1,0 +1,32 @@
+// A synthetic table for the tests: three resource types, two sets. The names
+// are made up; no install has them.
+{
+  sets: ["normal", { name: "frozen", weight: 2 }],
+  count: [6, 12],
+  resources: [
+    {
+      name: "ore",
+      weight: 2,
+      clearance: 800,
+      start: { inward: [1000, 1000], centred: [-500, -500], sets: { normal: ["fx_ore_a"] } },
+      sets: {
+        normal: ["fx_ore_a", "fx_ore_b", { odf: "fx_ore_rich", weight: 2 }],
+        frozen: ["fx_ore_ice_a", "fx_ore_ice_b"],
+      },
+    },
+    {
+      name: "gas",
+      clearance: 800,
+      start: { inward: [1000, 500], centred: [500, 500] },
+      sets: { normal: ["fx_gas_a", "fx_gas_b"] },
+    },
+    {
+      // Not beside the starts and not in the resource phase: on the map only
+      // because it is required.
+      name: "bio",
+      weight: 0,
+      clearance: 1200,
+      sets: { normal: ["fx_bio_pool"], frozen: ["fx_bio_ice"] },
+    },
+  ],
+}

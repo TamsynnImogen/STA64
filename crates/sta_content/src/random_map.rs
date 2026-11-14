@@ -44,11 +44,28 @@
 //!   it gives up after [`PAIR_TRIES`] placements.
 //! - Sky, starfield, ambient light, the two lights and the map height are the
 //!   stock multiplayer maps' (read from data), as the generator sets none.
+//!
+//! # Tables (CON-50)
+//!
+//! Which resources there are, what each may be and where it sits beside a
+//! start is a [`Table`]: the built-in [`Table::stock`] gives the rules above,
+//! a mod's `random_map.json5` its own ([`Table::load`]). [`generate_with`]
+//! takes the table and the set to use. Two rules are STA64's own:
+//!
+//! - **Sets.** A map uses one set of names for all its resources: the one
+//!   asked for, else one drawn by the sets' weights (no draw when the table
+//!   has one set). Among a set's names one is drawn by weight each time.
+//! - **Every required resource is on the map.** After the resource phase a
+//!   required type with no node gets one more placement.
 
 use sta_bzn::{Map, MapObject, MapPath, StartLoc};
 
 use crate::map::{Conversion, OdfLookup};
 use crate::{ContentDb, MapDef};
+
+pub mod table;
+pub use table::{Table, TableError};
+use table::Variant;
 
 /// The planet classes a resource planet is drawn from.
 pub const PLANETS: [&str; 6] = ["pb_clssd", "pb_clssh", "pb_clssj", "pb_clssk", "pb_clssl", "pb_clssm"];
@@ -100,6 +117,33 @@ impl Sequence {
     /// has 100,001 steps.
     pub fn scaled(&mut self, scale: i32) -> i32 {
         (i64::from(self.below(100_001)) * i64::from(scale) / 100_000) as i32
+    }
+
+    /// An index into `weights`, each drawn in proportion to its weight:
+    /// no draw for one entry, a plain draw for equal weights, else a scaled
+    /// fraction laid over the weights in order.
+    fn weighted(&mut self, weights: &[u32]) -> usize {
+        let total: u64 = weights.iter().map(|&w| u64::from(w)).sum();
+        if weights.len() < 2 || total == 0 {
+            return 0;
+        }
+        if weights.iter().all(|&w| w == weights[0]) {
+            return self.below(weights.len() as u32) as usize;
+        }
+        let mut at = u64::from(self.below(100_001)) * total / 100_000;
+        for (i, &w) in weights.iter().enumerate() {
+            if at < u64::from(w) {
+                return i;
+            }
+            at -= u64::from(w);
+        }
+        // The top of the fraction: the last entry with a share.
+        weights.iter().rposition(|&w| w > 0).unwrap_or(0)
+    }
+
+    fn pick<'v>(&mut self, variants: &'v [Variant]) -> &'v str {
+        let weights: Vec<u32> = variants.iter().map(|v| v.weight).collect();
+        &variants[self.weighted(&weights)].odf
     }
 
     /// A number in `lo..=hi`.
@@ -171,6 +215,11 @@ struct Placed {
 struct Generator<'c> {
     rng: Sequence,
     classes: &'c mut dyn Classes,
+    table: &'c Table,
+    /// The name of the set in use.
+    set: &'c str,
+    /// Nodes on the map per resource of the table.
+    nodes: Vec<usize>,
     extent: i32,
     starts: Vec<P>,
     placed: Vec<Placed>,
@@ -256,32 +305,45 @@ impl Generator<'_> {
                 nebula_type: 1,
             });
         }
-        // An edge start has its moon and latinum either side of it on the
-        // axis it sits in the middle of.
+        // Each resource with a place beside the start: towards the centre on
+        // an axis the start is at the edge of, offset on one it is in the
+        // middle of (so an edge start has its nodes either side of it).
+        let table = self.table;
         for [x, _, z] in self.starts.clone() {
             let side = |v: i32, by: i32, centred: i32| if v == mid { v + centred } else { v + inward(v, by) };
-            self.add(MOON, [side(x, 1000, -500), 0, side(z, 1000, -500)]);
-            self.add(LATINUM, [side(x, 1000, 500), 0, side(z, 500, 500)]);
-            self.add(START_PLANET, [side(x, 1400, 0), 0, side(z, 1400, 0)]);
+            for (i, r) in table.resources.iter().enumerate() {
+                let Some(place) = &r.start else { continue };
+                let odf = self.rng.pick(r.start_variants(self.set));
+                self.add(odf, [side(x, place.inward[0], place.centred[0]), 0, side(z, place.inward[1], place.centred[1])]);
+                self.nodes[i] += 1;
+            }
         }
     }
 
-    fn moon(&mut self) {
-        let odf = if self.rng.chance(20) { MOON_INFINITE } else { MOON };
-        self.spawn(odf, 1000);
+    /// Place one node of resource `i` of the table, when there is room.
+    fn resource(&mut self, i: usize) {
+        let table = self.table;
+        let r = &table.resources[i];
+        let odf = self.rng.pick(r.variants(self.set));
+        let clearance = r.clearance.max(self.classes.radius(odf).saturating_mul(r.clearance_radii));
+        if let Some(p) = self.place(odf, clearance) {
+            self.add(odf, p);
+            self.nodes[i] += 1;
+        }
     }
 
     fn resources(&mut self) {
-        for _ in 0..self.rng.between(RESOURCES) {
-            let choice = self.rng.below(100_001);
-            if choice < 35_000 {
-                let odf = PLANETS[self.rng.below(6) as usize];
-                let clearance = self.classes.radius(odf) * 5;
-                self.spawn(odf, clearance);
-            } else if choice < 65_000 {
-                self.spawn(LATINUM, 1000);
-            } else {
-                self.moon();
+        let weights: Vec<u32> = self.table.resources.iter().map(|r| r.weight).collect();
+        if weights.iter().any(|&w| w > 0) {
+            for _ in 0..self.rng.between(self.table.count) {
+                let i = self.rng.weighted(&weights);
+                self.resource(i);
+            }
+        }
+        // Every required resource is on the map.
+        for i in 0..self.table.resources.len() {
+            if self.table.resources[i].required && self.nodes[i] == 0 {
+                self.resource(i);
             }
         }
     }
@@ -372,12 +434,35 @@ impl Generator<'_> {
 }
 
 /// The random map for `seed` with room for `players` (1 to 8; other values
-/// are clamped).
+/// are clamped), from the stock table.
 pub fn generate(seed: u32, players: u8, classes: &mut dyn Classes) -> Map {
+    generate_with(seed, players, &Table::stock(), None, classes)
+}
+
+/// [`generate`] from `table`, with the resources of `set`: a set of the
+/// table by name, or `None` (or a name the table lacks) to draw one by the
+/// sets' weights.
+pub fn generate_with(seed: u32, players: u8, table: &Table, set: Option<&str>, classes: &mut dyn Classes) -> Map {
     let players = u32::from(players.clamp(1, 8));
     let mut rng = Sequence::new(seed);
     let extent = 10_000 + rng.scaled(5000);
-    let mut g = Generator { rng, classes, extent, starts: Vec::new(), placed: Vec::new(), objects: Vec::new(), paths: Vec::new() };
+    let set = match set.and_then(|name| table.set(name)) {
+        Some(i) => i,
+        None => rng.weighted(&table.sets.iter().map(|s| s.weight).collect::<Vec<_>>()),
+    };
+    let set = table.sets[set].name.as_str();
+    let mut g = Generator {
+        rng,
+        classes,
+        table,
+        set,
+        nodes: vec![0; table.resources.len()],
+        extent,
+        starts: Vec::new(),
+        placed: Vec::new(),
+        objects: Vec::new(),
+        paths: Vec::new(),
+    };
     g.starts(players);
     g.resources();
     g.anomalies();
@@ -411,7 +496,7 @@ pub fn generate(seed: u32, players: u8, classes: &mut dyn Classes) -> Map {
         version: 2167,
         binary: true,
         mission_type: "mp-regular".into(),
-        description: format!("Random map {seed}"),
+        description: format!("Random map {seed} ({set})"),
         file_name: "RandomMap.bzn".into(),
         tech_tree: "tech1.tt".into(),
         scripts: Vec::new(),
@@ -432,7 +517,12 @@ pub fn generate(seed: u32, players: u8, classes: &mut dyn Classes) -> Map {
 
 /// [`generate`] with the sizes of `db`'s content, converted for the sim.
 pub fn generate_def(seed: u32, players: u8, db: &ContentDb, odfs: &mut OdfLookup) -> Conversion {
-    let bzn = generate(seed, players, &mut ContentClasses { db, odfs: &mut *odfs });
+    generate_def_with(seed, players, &Table::stock(), None, db, odfs)
+}
+
+/// [`generate_with`] with the sizes of `db`'s content, converted for the sim.
+pub fn generate_def_with(seed: u32, players: u8, table: &Table, set: Option<&str>, db: &ContentDb, odfs: &mut OdfLookup) -> Conversion {
+    let bzn = generate_with(seed, players, table, set, &mut ContentClasses { db, odfs: &mut *odfs });
     MapDef::convert_bzn(&bzn, db, odfs)
 }
 
@@ -563,6 +653,79 @@ mod tests {
             let bytes = sta_bzn::write::write(&m).unwrap();
             assert_eq!(sta_bzn::parse(&bytes).unwrap(), m, "seed {seed}");
         }
+    }
+
+    fn two_sets() -> Table {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/random_map/two_sets.json5");
+        Table::parse("two_sets.json5", &std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    /// The stock table's draws are CON-49's: the phase's fraction against
+    /// 35% and 65%, six planets by a plain draw, one moon in five inexhaustible.
+    #[test]
+    fn the_stock_table_draws_as_the_original_rules() {
+        let weights = [35, 30, 35];
+        for seed in 1..2000 {
+            let (mut a, mut b) = (Sequence::new(seed), Sequence::new(seed));
+            let choice = a.below(100_001);
+            let expected = if choice < 35_000 { 0 } else if choice < 65_000 { 1 } else { 2 };
+            assert_eq!(b.weighted(&weights), expected, "seed {seed}: fraction {choice}");
+            assert_eq!(a, b);
+            // Equal weights: one plain draw. One entry: none.
+            assert_eq!(b.weighted(&[1; 6]), a.below(6) as usize);
+            assert_eq!(b.weighted(&[7]), 0);
+            assert_eq!(a, b);
+            // The moon: first entry (inexhaustible) below 20%.
+            assert_eq!(b.weighted(&[1, 4]) == 0, a.below(100_001) < 20_000);
+        }
+    }
+
+    #[test]
+    fn a_set_gives_only_its_names() {
+        let t = two_sets();
+        let own = |m: &Map| -> Vec<String> { m.objects.iter().map(|o| o.odf.clone()).filter(|o| o.starts_with("fx_")).collect() };
+        let mut seen = std::collections::BTreeSet::new();
+        for seed in 0..200 {
+            let normal = generate_with(seed, 2, &t, Some("normal"), &mut StockSizes);
+            let frozen = generate_with(seed, 2, &t, Some("frozen"), &mut StockSizes);
+            assert!(normal.description.ends_with("(normal)") && frozen.description.ends_with("(frozen)"));
+            for o in own(&normal) {
+                assert!(!o.contains("ice"), "seed {seed}: {o} on a normal map");
+                seen.insert(o);
+            }
+            for o in own(&frozen) {
+                // Gas has no frozen names and keeps its normal ones.
+                assert!(o.contains("ice") || o.starts_with("fx_gas"), "seed {seed}: {o} on a frozen map");
+                seen.insert(o);
+            }
+            // Every resource type is on both maps; "bio" only because it is
+            // required, so exactly once.
+            for m in [&normal, &frozen] {
+                for kind in ["fx_ore", "fx_gas"] {
+                    assert!(count(m, |o| o.starts_with(kind)) >= m.start_count as usize, "seed {seed}: {kind}");
+                }
+                assert_eq!(count(m, |o| o.starts_with("fx_bio")), 1, "seed {seed}");
+            }
+            // Beside a start the ore is the start list's on a normal map.
+            assert_eq!(normal.objects[0].odf, "fx_ore_a");
+            assert_eq!(generate_with(seed, 2, &t, Some("frozen"), &mut StockSizes), frozen);
+        }
+        // Over the seeds every name of the table came up.
+        assert_eq!(seen.iter().map(String::as_str).collect::<Vec<_>>(), t.odfs());
+    }
+
+    #[test]
+    fn a_set_is_drawn_when_none_is_asked_for() {
+        let t = two_sets();
+        let (mut normal, mut frozen) = (0, 0);
+        for seed in 0..300 {
+            let m = generate_with(seed * 7919 + 1, 2, &t, None, &mut StockSizes);
+            if m.description.ends_with("(frozen)") { frozen += 1 } else { normal += 1 }
+            // A name the table lacks is no choice either.
+            assert_eq!(generate_with(seed * 7919 + 1, 2, &t, Some("lava"), &mut StockSizes), m);
+        }
+        // Frozen has twice the weight.
+        assert!(normal > 60 && frozen > normal, "{normal} normal, {frozen} frozen");
     }
 
     /// The fake database defines none of the stock ODFs, so nothing is placed,
