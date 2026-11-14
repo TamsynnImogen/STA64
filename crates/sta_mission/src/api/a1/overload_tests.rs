@@ -1,7 +1,8 @@
 //! LUA-23: which error a call with several overloads reports when none fits.
 //! The best-matching overload's: the one whose failing argument is furthest
 //! along, and on a tie the one whose argument has the right type but an
-//! unusable value (a handle still being built) rather than the wrong type.
+//! unusable value (out of range, a handle still being built) rather than the
+//! wrong type.
 
 use std::sync::Arc;
 
@@ -66,7 +67,7 @@ fn nil_where_two_overloads_differ_names_both_kinds() {
 
 #[test]
 fn the_overload_that_gets_furthest_names_the_error() {
-    // The string overload accepts arguments 1 and 2 and fails on 3; the handle
+    // The handle overload accepts arguments 1 and 2 and fails on 3; the string
     // overload fails on 2.
     let message = error("A1.Goto(a, a, 'x')");
     assert!(message.contains("A1.Goto argument 3") && message.contains("integer"), "{message}");
@@ -78,6 +79,8 @@ fn a_right_type_with_an_unusable_value_keeps_its_own_error() {
     // 2^40 is an integer, not a handle or string; the handle overload's error is its own.
     let message = error("A1.Goto(a, 1099511627776, 1)");
     assert!(message.contains("A1.Goto argument 2") && !message.contains(" or "), "{message}");
+    assert!(message.contains("unsigned integer handle"), "{message}");
+    assert!(!message.contains("must be a string"), "{message}");
 }
 
 #[test]

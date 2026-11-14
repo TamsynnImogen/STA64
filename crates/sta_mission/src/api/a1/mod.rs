@@ -278,8 +278,8 @@ impl Env {
     /// Parse `args` against the first overload that accepts them. When none
     /// does, the error is the best-matching overload's: the one whose failing
     /// argument is the furthest along, and on a tie the one whose failing
-    /// argument has the right type but an unusable value (a handle still being
-    /// built) over one with the wrong type; then the first declared.
+    /// argument has the right Lua type but an unusable value (out of range, a
+    /// handle still being built) over one with the wrong type; then the first declared.
     pub fn parse(&self, name: &str, specs: &[&str], args: &MultiValue) -> mlua::Result<(usize, Vec<A>)> {
         let mut best: Option<((usize, bool), mlua::Error)> = None;
         for (n, spec) in specs.iter().enumerate() {
