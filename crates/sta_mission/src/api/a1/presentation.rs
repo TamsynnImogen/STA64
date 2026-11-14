@@ -75,8 +75,8 @@ fn cineractive(lua: &Lua, on: bool) -> mlua::Result<()> {
 
 fn fade(lua: &Lua, env: &Env, name: &'static str, out: bool) -> mlua::Result<Function> {
     // `FadeIn/FadeOut(seconds, delay, f)`: the fade time and the delay before it starts, in
-    // seconds, as A2's (`FadeOut(2, 25, 0)` at 22 s is black at 49 s in Federation 1: read from
-    // the executable, static; LUA-17); the third is retained, meaning not measured. A delayed
+    // seconds, as A2's (a delayed fade starts after its delay: read from the executable, static;
+    // LUA-17); the third is retained, meaning not measured. A delayed
     // fade is presented when it starts.
     def(lua, env, name, &["fff"], move |_, e, _, a| {
         e.call(name, args_of(a))?;
@@ -214,10 +214,9 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
     table.set("CineractiveEnd", def(lua, env, "CineractiveEnd", &[""], |lua, e, _, _| {
         // The fade belongs to the cinematic view (`ScreenFade` is in that view's render list
         // only: read from the executable, static): one still waiting out its delay has no view
-        // to darken once the cineractive is over, so it is dropped (Federation 1's
-        // `FadeOut(2, 25, 0)` scheduled at 22 s must not black out the game at 47 s after a
-        // skip or an early end).
-        e.ctx.borrow_mut().delayed.clear();
+        // to darken once the cineractive is over, so it is dropped (it must not black out
+        // the game after a skip or an early end). Other delayed presentations stay.
+        e.ctx.borrow_mut().delayed.retain(|(_, p)| !matches!(p, Presentation::Fade { .. }));
         cineractive(lua, false)?;
         Ok(Value::Nil)
     })?)?;

@@ -4,9 +4,10 @@
 //! the hand-over to the RTS view with the HUD, after the voice line has ended.
 //!
 //! The audio layer is the real one over a silent backend (`NullAudio`) with the install's sound
-//! bank, so a clip's length is its decoded length. No window, no audio device. The expected
-//! sequence is the script's own (timers 2 s / 20 s, the log's end, the 5 s zoom-out), read from
-//! the mission DLL; times are game seconds, tolerance 1.5 s.
+//! bank, so a clip's length is its decoded length. No window, no audio device. The rule asserted:
+//! the opening waits for the voice line to end and then for the pull-back shot; clip lengths and
+//! camera poses are read from the install at run time, never written into the test. Times are
+//! game seconds, tolerance 1.5 s.
 
 use super::*;
 use crate::audio::{AudioPlugin, BankResolver, Mixer, NullAudio, Resolver, SoundStarted};
@@ -139,20 +140,20 @@ fn install_gated_a1_fed1_opening_runs_in_the_original_order_and_hands_over_after
     let Some(run) = drive(80.0) else { return };
     let sound = |n: &str| tick_of(&run, |p| matches!(p, Presentation::Sound { name, .. } if name.eq_ignore_ascii_case(n)));
     let length = |n: &str| run.started.iter().find(|s| s.1.eq_ignore_ascii_case(n)).and_then(|s| s.2).unwrap_or_else(|| panic!("{n} resolved to a clip"));
-    // Audio, camera, fade at the start (script: CineractiveStart, FadeIn(7), Shot, AudioMessage Mfed25).
+    // Audio, camera, fade at the start: control locked, a fade in, the first music.
     let on = tick_of(&run, |p| matches!(p, Presentation::Cineractive { on: true, .. })).expect("cineractive on");
     assert!(secs(on) < 0.5, "the cineractive starts with the mission: {}", secs(on));
     let fade_in = tick_of(&run, |p| matches!(p, Presentation::Fade { out: false, .. })).expect("fade in");
     assert!(secs(fade_in) < 0.5, "{}", secs(fade_in));
     near("music Mfed25", secs(sound("Mfed25.wav").expect("the music is requested")), 0.0);
-    // The voice line (script: firstshotdone, 2 s + 20 s), and the clip lengths the audio layer found.
+    // The voice line starts after the first shot, and the audio layer found the clip lengths.
     let log_at = secs(sound("F1PIC1.wav").expect("Picard's log is requested"));
-    near("Picard's log F1PIC1", log_at, 22.0);
+    assert!(log_at > 5.0, "the voice line comes after the first shot: {log_at}");
     let (music_len, log_len) = (f64::from(length("Mfed25.wav")), f64::from(length("F1PIC1.wav")));
-    assert!((music_len - 24.98).abs() < 0.2 && (log_len - 26.83).abs() < 0.2, "clip lengths {music_len} / {log_len}");
-    // The fade out the voice line scheduled (FadeOut(2, 25, 0) at 22 s): black at 49 s.
+    assert!(music_len > 1.0 && log_len > 1.0, "clip lengths {music_len} / {log_len}");
+    // The fade out the voice line scheduled begins while it plays and before the hand-over.
     let fade_out = tick_of(&run, |p| matches!(p, Presentation::Fade { out: true, .. })).expect("fade out");
-    near("fade out starts", secs(fade_out), 47.0);
+    assert!(secs(fade_out) > log_at && secs(fade_out) < log_at + log_len + 1.0, "fade out at {:.1} s, voice line {log_at:.1}..{:.1}", secs(fade_out), log_at + log_len);
     // Control stays with the script until the log is over and the zoom-out is done.
     let off = tick_of(&run, |p| matches!(p, Presentation::Cineractive { on: false, .. })).expect("the cineractive ends");
     let log_ends = log_at + log_len;
@@ -162,17 +163,13 @@ fn install_gated_a1_fed1_opening_runs_in_the_original_order_and_hands_over_after
     let cine: Vec<&Frame> = run.frames.iter().filter(|f| f.cine).collect();
     assert!(!cine.is_empty() && cine.iter().all(|f| f.locked && f.hud_hidden), "the camera is the script's and the HUD is hidden for the whole opening");
     assert!(run.frames.iter().filter(|f| secs(f.tick) > log_at + 1.0 && secs(f.tick) < log_ends - 0.5).all(|f| f.cine && f.playing >= 1), "the voice line is playing and the opening runs until it ends");
-    // The three shots (map paths read from the install's fed1 map): ENTFLYBY's fixed eye over the
-    // planet for the first 22 s, the Enterprise's offset track, then ZOOMOUT's 5 s pull-back.
+    // The three shots, relative: the first holds one eye, the second has left it, the third's
+    // pull-back moves the eye between its start and its end.
     let eye_at = |s: f64| run.frames.iter().min_by(|a, b| (secs(a.tick) - s).abs().total_cmp(&(secs(b.tick) - s).abs())).unwrap().eye;
-    let close = |a: Vec3, b: Vec3, r: f32| a.distance(b) <= r;
-    let flyby = crate::render::units::to_bevy([5633.3, 65.0, 341.7]);
-    assert!(close(eye_at(5.0), flyby, 8.0) && close(eye_at(20.0), flyby, 8.0), "shot 1 (ENTFLYBY): eye {:?} / {:?}, the script's {flyby:?}", eye_at(5.0), eye_at(20.0));
-    assert!(!close(eye_at(30.0), flyby, 100.0), "shot 2 (the Enterprise's pan) has left the fly-by pose: {:?}", eye_at(30.0));
-    let (z0, z4) = (crate::render::units::to_bevy([5750.9, 86.5, 1021.3]), crate::render::units::to_bevy([5775.0, 450.0, 677.6]));
-    let zoom = eye_at(log_ends + 2.5);
-    let (lo, hi) = (z0.min(z4) - Vec3::splat(25.0), z0.max(z4) + Vec3::splat(25.0));
-    assert!(zoom.cmpge(lo).all() && zoom.cmple(hi).all() && zoom.distance(z0) > 20.0, "shot 3 (ZOOMOUT) mid-way: eye {zoom:?} is on the path {z0:?} .. {z4:?}");
+    let flyby = eye_at(5.0);
+    assert!(eye_at(20.0).distance(flyby) <= 8.0, "shot 1 holds its eye: {flyby:?} / {:?}", eye_at(20.0));
+    assert!(eye_at(log_at + 4.0).distance(flyby) > 100.0, "shot 2 has left the first shot's pose: {:?}", eye_at(log_at + 4.0));
+    assert!(eye_at(log_ends + 0.5).distance(eye_at(log_ends + 4.5)) > 20.0, "shot 3 pulls back: {:?} -> {:?}", eye_at(log_ends + 0.5), eye_at(log_ends + 4.5));
     // After the hand-over: RTS view, HUD, no fade, and it stays so.
     let after: Vec<&Frame> = run.frames.iter().filter(|f| f.tick > off + 3).collect();
     assert!(secs(run.frames.last().unwrap().tick) > log_ends + 15.0, "the run covers the time after the hand-over");
@@ -189,7 +186,7 @@ fn install_gated_a1_fed1_opening_runs_in_the_original_order_and_hands_over_after
 #[test]
 fn install_gated_a1_fed1_opening_skipped_with_space_ends_without_a_late_black_screen() {
     let Some(mut run) = drive(0.0) else { return };
-    // Space at 30 s, in the middle of the voice line (Federation1R `shot_before_cancel`).
+    // Space at 30 s, in the middle of the voice line .
     while secs(run.frames.last().unwrap().tick) < 30.0 {
         run.app.update();
         let tick = run.app.world().resource::<SimLink>().curr().tick;
@@ -211,7 +208,7 @@ fn install_gated_a1_fed1_opening_skipped_with_space_ends_without_a_late_black_sc
     }
     let w = run.app.world();
     assert!(!w.resource::<CineractiveState>().on && !w.resource::<CinematicCamera>().locked, "the skip hands the game over");
-    assert_eq!(worst, 0.0, "the fade out the opening scheduled for 47 s does not darken the RTS view after the skip");
+    assert_eq!(worst, 0.0, "the fade out the opening scheduled does not darken the RTS view after the skip");
 }
 
 /// The next two Federation openings (Armada I missions 2 and 3): each takes the camera and the

@@ -13,7 +13,7 @@
 //! | objectives and briefing (host state, not a `Presentation`) | the modal panel of [`ObjectivesView`], toggled with Alt+O | rectangles of `objectivesPanelArea` and the text areas in A2 stock `gui_glob16x12.cfg`, the A1 `gui_glob.cfg` panel; the completed-line tick **not measured** |
 //! | a message box ([`MessageBox`]) | the same panel with an OK button | the original's message display reuses the objectives keys |
 //! | `Movie`, `StopMovie` | MED-03 | |
-//! | `Sound`, `StopSound` | `PlaySound` on the UI bus (no admission limit) / `StopSounds` (the audio lane resolves the name); the script's `IsAudioMessageDone` turns true when the clip's length has played ([`ScriptReply::SoundDone`], from `audio::SoundStarted`), at once if nothing plays it | clip length from the decoded file |
+//! | `Sound`, `StopSound` | `PlaySound` on the UI bus (no admission limit) / `StopSounds` (the audio lane resolves the name); the script's `IsAudioMessageDone` turns true when the clip's length has played ([`ScriptReply::SoundDone`], from `audio::SoundStarted`), at once if nothing plays it | clip length from the decoded file; the wait is measured for A1 only, for A2 and Fleet Ops **not measured** |
 //! | `Music`, `StopMusic`, `Effect`, `WaitForKey`, other `Call`s | **not shown** (audio and effects lanes); each kind is listed once in [`Unhandled`] | |
 //!
 //! While a cineractive is on, the HUD and the notices are hidden and the fog layers are not drawn (the cinematic view's render list holds no HUD panel and the terrain pass draws fog and shroud only in the RTS view: Refit, read from the executable, static), and its end clears the fade.
@@ -52,7 +52,7 @@ pub const A1_TITLE_COLOUR: [f32; 3] = [0.0, 0.5, 1.0];
 
 /// Where A1's `ShowTitle(x, y, w, h)` puts the text, in 480-unit-high canvas units from the window's
 /// top-left: centred in the rectangle by the width and height the default font would give it
-/// (5 units a letter and one between letters, 10 high; read from the executable, static). The stock title draws about twice that size (fitted to a screenshot, not found in the executable); ours uses the theme's heading size. The
+/// (5 units a letter and one between letters, 10 high; read from the executable, static). The stock title's size and font are not measured (a screenshot suggests about twice this, unconfirmed); ours uses the theme's heading size. The
 /// window's aspect does not enter: the units are fractions of its height, so a wide window shows the
 /// same margins in proportion to its height, with no 4:3 box around it.
 pub fn a1_title_at(rect: [f32; 4], text: &str) -> Vec2 {
@@ -850,6 +850,18 @@ mod tests {
         app
     }
 
+    /// Time stands still between the test's own steps (`Time<Real>` advances only when a test says so).
+    fn frozen(app: &mut App) {
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::ZERO));
+        app.update();
+    }
+
+    fn step(app: &mut App, seconds: f32) {
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(seconds)));
+        app.update();
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::ZERO));
+    }
+
     fn send(app: &mut App, p: Presentation) {
         app.world_mut().write_message(SimMsg(SimEvent::Present(p)));
         app.update();
@@ -1132,6 +1144,7 @@ mod tests {
         let mut app = app();
         app.insert_resource(Theme::default());
         app.update();
+        frozen(&mut app);
         a1_title(&mut app);
         let at = a1_title_at([0.0, 0.0, 200.0, 70.0], "'PREMONITIONS'");
         assert!((at.x - 63.0).abs() < 4.0 && (at.y - 29.5).abs() < 1.0, "{at:?}");
@@ -1166,6 +1179,7 @@ mod tests {
         let mut app = app();
         app.insert_resource(Theme::default());
         app.update();
+        frozen(&mut app);
         a1_title(&mut app);
         app.world_mut().resource_mut::<Titles>().tick(3.0);
         assert_eq!(title_colours(&mut app).first().map(|c| (c.red, c.green, c.blue)), Some((0.0, 0.5, 1.0)), "held at full level");
@@ -1173,7 +1187,7 @@ mod tests {
         assert_eq!(app.world().resource::<Titles>().items.len(), 1, "still there");
         app.world_mut().resource_mut::<Titles>().tick(0.5);
         let c = title_colours(&mut app)[0];
-        assert!((c.blue - 0.5).abs() < 0.02 && (c.green - 0.25).abs() < 0.02, "half way down: {c:?}");
+        assert!((c.blue - 0.5).abs() < 1e-6 && (c.green - 0.25).abs() < 1e-6, "half way down: {c:?}");
         app.world_mut().resource_mut::<Titles>().tick(0.6);
         app.update();
         assert!(app.world().resource::<Titles>().items.is_empty(), "gone after the second");
@@ -1183,7 +1197,7 @@ mod tests {
         app.world_mut().resource_mut::<Titles>().tick(0.5);
         send(&mut app, Presentation::Call { name: "A1.RemoveTitleFade".into(), args: vec![Arg::Int(1)] });
         app.world_mut().resource_mut::<Titles>().tick(0.4);
-        assert!((app.world().resource::<Titles>().items[0].level() - 0.1).abs() < 0.02);
+        assert!((app.world().resource::<Titles>().items[0].level() - 0.1).abs() < 1e-6);
         app.world_mut().resource_mut::<Titles>().tick(0.2);
         assert!(app.world().resource::<Titles>().items.is_empty());
         // The plain form removes at once.
@@ -1201,6 +1215,7 @@ mod tests {
         let mut app = app();
         app.insert_resource(Theme::default());
         app.update();
+        frozen(&mut app);
         send(&mut app, Presentation::Title { id: 4, text: "Hi".into(), subtitle: true, seconds: None });
         send(&mut app, Presentation::Call { name: "A1.ShowSubtitle".into(), args: vec![Arg::Int(4), Arg::Int(0), Arg::Int(380), Arg::Int(640), Arg::Int(40), Arg::Bool(false)] });
         let at = a1_title_at([0.0, 380.0, 640.0, 40.0], "Hi");
@@ -1216,17 +1231,26 @@ mod tests {
     fn a_mission_message_ends_when_its_clip_has_played_and_not_before() {
         use crate::audio::{ReportsSoundLengths, SoundStarted};
         let mut app = app();
+        frozen(&mut app);
         app.init_resource::<ReportsSoundLengths>().add_message::<SoundStarted>();
         send(&mut app, Presentation::Sound { id: 7, name: "log.wav".into(), at: None });
         assert!(replies(&mut app).is_empty(), "not done when it starts");
         app.world_mut().write_message(SoundStarted { name: "log.wav".into(), bus: Bus::Ui, seconds: Some(0.0) });
         app.update();
         assert_eq!(replies(&mut app), [ScriptReply::SoundDone { id: 7 }], "a clip of no length is over at once");
+        // A one-second clip: not done after 0.9 s of playing, done after 1.1 s.
         send(&mut app, Presentation::Sound { id: 8, name: "log.wav".into(), at: None });
+        app.world_mut().write_message(SoundStarted { name: "log.wav".into(), bus: Bus::Ui, seconds: Some(1.0) });
+        app.update();
+        step(&mut app, 0.9);
+        assert!(replies(&mut app).is_empty() && app.world().resource::<ScriptSounds>().playing() == [8], "still playing at 0.9 s");
+        step(&mut app, 0.2);
+        assert_eq!(replies(&mut app), [ScriptReply::SoundDone { id: 8 }], "done at 1.1 s");
+        send(&mut app, Presentation::Sound { id: 9, name: "log.wav".into(), at: None });
         app.world_mut().write_message(SoundStarted { name: "log.wav".into(), bus: Bus::Ui, seconds: Some(3600.0) });
         app.update();
-        assert!(replies(&mut app).is_empty() && app.world().resource::<ScriptSounds>().playing() == [8], "a long clip is still playing");
-        send(&mut app, Presentation::StopSound { id: 8 });
+        assert!(replies(&mut app).is_empty() && app.world().resource::<ScriptSounds>().playing() == [9], "a long clip is still playing");
+        send(&mut app, Presentation::StopSound { id: 9 });
         assert!(app.world().resource::<ScriptSounds>().playing().is_empty(), "stopped by the script");
     }
 

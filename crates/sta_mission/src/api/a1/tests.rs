@@ -462,12 +462,11 @@ fn a_delayed_fade_is_presented_when_it_starts() {
     assert!(!at(base + 1, &mut rt).contains(&fade));
 }
 
-/// An authored opening shaped like Armada I Federation 1's: a voice line followed by a delayed
-/// `FadeOut`, then the cineractive ends when the line is done. The line is not done until the host
-/// reports it; a delayed fade is dropped with the cineractive, so it cannot black out the game
-/// after the hand-over.
+/// An authored opening: a voice line followed by a delayed `FadeOut`, then the cineractive ends.
+/// A delayed fade is dropped with the cineractive, so it cannot black out the game after the
+/// hand-over; the voice line's done flag is the host's to report.
 #[test]
-fn a_delayed_fade_does_not_outlive_its_cineractive_and_the_end_waits_for_the_voice_line() {
+fn a_delayed_fade_does_not_outlive_its_cineractive() {
     use sta_sim::setup::Controller;
     let s = scene();
     let (mut rt, commands) = run(

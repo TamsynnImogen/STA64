@@ -341,6 +341,12 @@ fn the_replies_reach_the_script_through_the_one_host_side_function() {
     deliver_reply_host_side(&rt, &ScriptReply::MessageDismissed { id: 1 });
     assert_eq!(waits(&rt), 0);
     assert!(rt.eval::<bool>("return Cineractive.active").unwrap());
+    // A clip that has played reaches the script like a dismissed message.
+    let sound = MissionRuntime::from_source_with("sound.lua", "script = {}\nA2.AudioMessage(script, 'one', false)\n", 1, sta_mission::api::MissionConfig::default());
+    assert!(sound.errors().is_empty(), "{:?}", sound.errors());
+    assert_eq!(waits(&sound), 1);
+    deliver_reply_host_side(&sound, &ScriptReply::SoundDone { id: 1 });
+    assert_eq!(waits(&sound), 0, "a played clip ends the wait");
     // A skip is the script's cancel; it leaves the mode to the script.
     deliver_reply_host_side(&rt, &ScriptReply::CineractiveSkipped);
     assert!(rt.cineractive().cancel);
