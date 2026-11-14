@@ -655,6 +655,11 @@ fn two_runs_agree_and_colony_state_reaches_the_digest() {
     let planet = *a.colonies().planets.keys().next().unwrap();
     set_pop(&mut c, planet, 1);
     assert_ne!(a.digest(), c.digest());
+    // Same tick, same everything else: only the colony state differs.
+    let mut d = a.clone();
+    assert_eq!(a.digest(), d.digest());
+    d.colonies.planets.get_mut(&planet).unwrap().population = n(1);
+    assert_ne!(a.digest(), d.digest(), "colony state is in the full digest");
     // No colony state, no change to the digest of the same world.
     let plain = game(content(true));
     assert!(plain.colonies().is_empty());
@@ -693,5 +698,90 @@ fn a_snapshot_row_with_a_forged_population_is_refused() {
     let mut bad = sim.colonies().to_rec();
     bad.planets[0].1 = i64::MAX;
     let bytes = crate::snapshot::chain_with_colonies(&sim.snapshot(), &bad);
+    assert!(Sim::from_snapshot(&bytes, Some(db)).is_err());
+}
+
+/// Format review 3: pods landed, then damage took the people to 0 before the order
+/// ended. The row stays (people did leave the ship), so an owned planet is
+/// neutralised by the existing rule instead of staying owned with no row.
+#[test]
+fn landed_pods_then_damage_to_zero_then_the_order_ends_keeps_the_row_and_neutralises() {
+    let db = content(true);
+    let mut sim = game(Arc::clone(&db));
+    let planet = spawn(&mut sim, "fx_pl_h", PlayerId(0), at(0, 0));
+    let s = spawn(&mut sim, "fx_colony", PlayerId(0), at(300, 0));
+    assert!(colonize(&mut sim, 0, s, planet));
+    assert!(sim.colonies().process(s).unwrap().made_row);
+    run(&mut sim, 150);
+    round_trips(&sim, &db);
+    let from = sim.events.len();
+    sim.events.push(SimEvent::Hit { target: planet, by: EntityId(999), weapon: sta_core::ContentKey(0), facing: 0, shield: Fixed::ZERO, hull: n(10_000), at: Vec3::ZERO });
+    apply_hits(&mut sim, from);
+    assert_eq!(pop(&sim, planet), Fixed::ZERO);
+    round_trips(&sim, &db);
+    assert!(run_cmd(&mut sim, PlayerId(0), CommandKind::Order(Order::Move { units: vec![s], to: at(900, 0), queue: false })));
+    assert!(sim.colonies().process(s).is_none());
+    assert_eq!(sim.colonies().row(planet).map(|r| r.population), Some(Fixed::ZERO), "the row stays");
+    round_trips(&sim, &db);
+    run(&mut sim, 2);
+    assert_eq!(owner(&sim, planet), NEUTRAL, "neutralised by the rule");
+    assert!(sim.colonies().row(planet).is_some());
+    round_trips(&sim, &db);
+}
+
+/// A completed order never removes the row it made, whatever the people count.
+#[test]
+fn a_completed_colonization_never_removes_its_row() {
+    let mut c = Colonies::default();
+    let (ship, planet) = (EntityId(2), EntityId(1));
+    c.planets.insert(planet, PlanetRow { population: Fixed::ZERO, colonizer: Some(ship) });
+    let proc = ShipProc { planet, active: true, colonists_left: Fixed::ZERO, colonists_at_start: n(1000), population_at_start: Fixed::ZERO, next_launch: 0, made_row: true };
+    c.ships.insert(ship, proc);
+    c.end_process_keeping(ship, false, true);
+    assert!(c.row(planet).is_some());
+    // Even with nothing launched (a zero payload), completion keeps it.
+    let mut d = Colonies::default();
+    d.planets.insert(planet, PlanetRow { population: Fixed::ZERO, colonizer: Some(ship) });
+    d.ships.insert(ship, ShipProc { colonists_left: n(1000), ..proc });
+    d.end_process_keeping(ship, false, true);
+    assert!(d.row(planet).is_some());
+    // The same state ended by a non-completing order with nobody landed removes it.
+    let mut e = Colonies::default();
+    e.planets.insert(planet, PlanetRow { population: Fixed::ZERO, colonizer: Some(ship) });
+    e.ships.insert(ship, ShipProc { colonists_left: n(1000), ..proc });
+    e.end_process(ship, false);
+    assert!(e.row(planet).is_none());
+}
+
+/// Format review 2: despawning a planet without a row while a ship is on its way
+/// ends the ship's order at once, so a snapshot of the same tick loads.
+#[test]
+fn despawning_a_row_less_planet_ends_the_orders_aimed_at_it() {
+    let db = content(true);
+    let mut sim = game(Arc::clone(&db));
+    let planet = spawn(&mut sim, "fx_pl_h", PlayerId(0), at(0, 0));
+    let s = spawn(&mut sim, "fx_colony", PlayerId(0), at(3000, 0));
+    assert!(colonize(&mut sim, 0, s, planet));
+    assert!(sim.colonies().row(planet).is_none());
+    assert!(!sim.colonies().process(s).unwrap().active, "still on its way");
+    assert!(sim.despawn(planet, None));
+    assert!(sim.colonies().process(s).is_none(), "ended as on a stop");
+    let copy = Sim::from_snapshot(&sim.snapshot(), Some(Arc::clone(&db))).expect("the snapshot of the same tick loads");
+    assert_eq!(copy.digest(), sim.digest());
+    assert!(copy.colonies().process(s).is_none());
+}
+
+/// Format review 3: `made_row` goes with an active order only.
+#[test]
+fn a_snapshot_row_with_made_row_but_not_active_is_refused() {
+    let db = content(true);
+    let mut sim = game(Arc::clone(&db));
+    let planet = spawn(&mut sim, "fx_pl_h", NEUTRAL, at(0, 0));
+    let s = spawn(&mut sim, "fx_colony", PlayerId(0), at(3000, 0));
+    assert!(colonize(&mut sim, 0, s, planet));
+    let mut rec = sim.colonies().to_rec();
+    assert!(!rec.ships[0].2 && !rec.ships[0].7);
+    rec.ships[0].7 = true;
+    let bytes = crate::snapshot::chain_with_colonies(&sim.snapshot(), &rec);
     assert!(Sim::from_snapshot(&bytes, Some(db)).is_err());
 }

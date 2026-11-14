@@ -441,6 +441,20 @@ mod tests {
     /// meaning and goes with a note in the PR, like the pinned full digest.
     const PINNED: [u64; 5] = [0x152b_54c2_e0ee_8e52, 0xab80_c411_9972_840f, 0x7dce_5ffd_36e3_d6b0, 0xb514_87e8_d035_289e, 0xcc8f_d429_d225_a655];
 
+    /// SIM-30: the layout of the colony hash (a planet row and an active colonizing
+    /// ship) is pinned through the full digest of the sample (colony state is in the full
+    /// digest and in the economy section); PINNED above is
+    /// untouched.
+    #[test]
+    fn a_colony_with_an_active_colonizing_ship_is_pinned() {
+        let mut s = sim();
+        s.colonies = crate::colony::Colonies::sample_for_test();
+        assert_eq!(s.digest(), COLONY_DIGEST, "{:#x}", s.digest());
+        assert_ne!(s.digest(), sim().digest());
+    }
+
+    const COLONY_DIGEST: u64 = 0x3311_80b9_9196_2def;
+
     #[test]
     fn a_set_autonomy_level_changes_the_combat_section_and_the_full_digest() {
         let before = sim();

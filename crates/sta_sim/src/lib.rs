@@ -642,6 +642,10 @@ impl Sim {
         if !self.attrs.is_empty() {
             self.attrs.hash_into(&mut h);
         }
+        // SIM-30: population and colonizing orders (nothing is hashed without colony state).
+        if !self.colonies.is_empty() {
+            self.colonies.hash_into(&mut h);
+        }
         let crew_count = self.units.iter().filter(|unit| unit.crew.is_some()).count();
         if crew_count != 0 {
             h.str("unit-crew-v1");

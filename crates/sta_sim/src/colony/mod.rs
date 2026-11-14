@@ -234,16 +234,25 @@ impl Colonies {
     /// A ship's order ends. `cancel`: Stop, which takes back the colonists
     /// launched so far; other endings leave them landed.
     pub(crate) fn end_process(&mut self, ship: EntityId, cancel: bool) {
+        self.end_process_keeping(ship, cancel, false);
+    }
+
+    /// `keep_row`: the order completed, so the row it made stays whatever it holds.
+    fn end_process_keeping(&mut self, ship: EntityId, cancel: bool, keep_row: bool) {
         let Some(p) = self.ships.remove(&ship) else { return };
         let Some(row) = self.planets.get_mut(&p.planet).filter(|r| r.colonizer == Some(ship)) else { return };
         row.colonizer = None;
         if cancel {
             row.population = cancelled_population(p.population_at_start, row.population, p.colonists_at_start - p.colonists_left);
         }
-        // An order that made the row and ends with nobody landed leaves no row behind:
-        // a row would keep the planet's hull from ever being damaged (the damage path
-        // keys on the row) and would neutralise an owned planet that had none.
-        if p.made_row && self.planets.get(&p.planet).is_some_and(|r| r.population <= Fixed::ZERO && r.colonizer.is_none()) {
+        // An order that made the row and ends with nobody landed (no pod left the ship,
+        // or Stop took them all back) leaves no row behind: a row would keep the
+        // planet's hull from ever being damaged (the damage path keys on the row) and
+        // would neutralise an owned planet that had none. Pods that landed and were
+        // later killed by damage are not "nobody landed": the row stays, and a
+        // completed order never removes it.
+        let nobody_landed = cancel || p.colonists_left == p.colonists_at_start;
+        if p.made_row && !keep_row && nobody_landed && self.planets.get(&p.planet).is_some_and(|r| r.population <= Fixed::ZERO && r.colonizer.is_none()) {
             self.planets.remove(&p.planet);
         }
     }
@@ -251,9 +260,9 @@ impl Colonies {
     /// An entity left the world.
     pub(crate) fn remove_entity(&mut self, id: EntityId) {
         self.end_process(id, false);
-        if self.planets.remove(&id).is_some() {
-            self.ships.retain(|_, p| p.planet != id);
-        }
+        self.planets.remove(&id);
+        // Ships on their way to a planet without a row end too, so no order names a dead id.
+        self.ships.retain(|_, p| p.planet != id);
     }
 
     /// One pod, when it is time. True when the ship is done.
@@ -338,6 +347,10 @@ impl Colonies {
                 })
             })
             .collect();
+        // `made_row` only goes with an active order (the row is made when pods start).
+        if ships.values().any(|p| p.made_row && !p.active) {
+            return None;
+        }
         let linked = |ship: EntityId, planet: EntityId| ships.get(&ship).is_some_and(|p| p.active && p.planet == planet);
         let ok = planets.keys().all(|&id| exists(id) && producer(id))
             && planets.iter().all(|(&id, r)| r.colonizer.is_none_or(|s| linked(s, id)))
@@ -345,6 +358,19 @@ impl Colonies {
                 exists(id) && exists(p.planet) && producer(p.planet) && (!p.active || planets.get(&p.planet).is_some_and(|r| r.colonizer == Some(id)))
             });
         ok.then_some(Colonies { planets, ships })
+    }
+
+    /// A sample with a planet row and an active colonizing ship (digest pin).
+    #[cfg(test)]
+    pub(crate) fn sample_for_test() -> Colonies {
+        let (ship, planet) = (EntityId(2), EntityId(1));
+        let mut c = Colonies::default();
+        c.planets.insert(planet, PlanetRow { population: Fixed::from_int(300), colonizer: Some(ship) });
+        c.ships.insert(
+            ship,
+            ShipProc { planet, active: true, colonists_left: Fixed::from_int(700), colonists_at_start: Fixed::from_int(1000), population_at_start: Fixed::ZERO, next_launch: 450, made_row: true },
+        );
+        c
     }
 
     pub(crate) fn hash_into(&self, h: &mut Fnv) {
@@ -555,7 +581,7 @@ impl Sim {
 
     /// The pods are done: the planet is the ship owner's and the ship is consumed.
     fn finish_colonization(&mut self, ship: EntityId, planet: EntityId, owner: PlayerId, planet_owner: PlayerId) {
-        self.colonies.end_process(ship, false);
+        self.colonies.end_process_keeping(ship, false, true);
         // A refused transfer (eliminated seat, unrepresentable owner) keeps the ship.
         if planet_owner != owner && !self.transfer_owner(PlayerId::SCRIPT, planet, owner) {
             return;
