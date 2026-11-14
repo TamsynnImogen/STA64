@@ -660,10 +660,10 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
     table.set("GetAllyStationAttacks", raising(lua, &env, "GetAllyStationAttacks", &["ii"], "the AI team's attack statistics are not in the world view")?)?;
 
     // AI plan: the request is queued for the host, which gives it to the
-    // seat's AI (`MissionRuntime::take_aip_requests`, `sta_ai::MissionAiHub`).
+    // seat's AI (`MissionRuntime::take_ai_requests`, `sta_ai::MissionAiHub`).
     table.set("AI_Team_Load_AIP", def(lua, &env, "AI_Team_Load_AIP", &["is"], |_, e, _, a| {
         let team = e.team("AI_Team_Load_AIP", a[0].int())?;
-        e.ctx.borrow_mut().loaded_aips.push((team, a[1].text().to_owned()));
+        e.ctx.borrow_mut().ai_requests.push(sta_ai::AiRequest::Load(team, a[1].text().to_owned()));
         nothing()
     })?)?;
 

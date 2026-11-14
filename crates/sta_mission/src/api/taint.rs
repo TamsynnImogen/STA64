@@ -31,8 +31,18 @@
 //!   It never reports a win or a loss that rests on a tainted read it saw.
 //!
 //! * A gap call that changes the world with no object to name (`SetRelation`,
-//!   `DisableAllAITeams`, `EnableAllAITeams`, `ResetStrategyCycle`,
 //!   `SetPerceivedTeam`) taints every later read.
+//!
+//!   `DisableAllAITeams`, `EnableAllAITeams` and `ResetStrategyCycle` were on that list
+//!   until LUA-20 and are not any more, one by one (read from the executable, static; the
+//!   AI-seam derivation): none of them touches an object, a relation or a resource, and the
+//!   queries behind the end rules read nothing from the AI. `IsCompromised` looks at an
+//!   object's team and alive/derelict state only; `CountStations` counts objects of a team
+//!   by class flag only. The calls now reach the host's AI hub (`api::ai_switch`) and
+//!   change only what orders the AI gives afterwards, which is not a query answer; they are
+//!   no gap, so they taint nothing. (`EnableTeam`, `DisableTeam` and `SetIsAITeam` were never
+//!   on the list.) A host that takes no AI requests still counts them as unsupported
+//!   (`Player.loadAIP`), as it does plan loads.
 //!
 //! Limits: any other influence that never passes through an argument (the
 //! other global switches, an AI that is not seated) taints nothing; and the
@@ -71,7 +81,7 @@ fn yields_handle(name: &str) -> bool {
 fn world_effect(name: &str) -> bool {
     matches!(
         name,
-        "SetRelation" | "DisableAllAITeams" | "EnableAllAITeams" | "ResetStrategyCycle" | "SetPerceivedTeam"
+        "SetRelation" | "SetPerceivedTeam"
     )
 }
 

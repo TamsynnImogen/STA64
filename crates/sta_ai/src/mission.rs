@@ -18,16 +18,64 @@
 //! Not measured: the engine's default for a value no file set (the skirmish
 //! defaults stand in).
 //!
-//! # Replay
+//! # The AI switches (LUA-20)
 //!
-//! The plan reaches the seat through a shared [`MissionAiHub`], not through
-//! the command stream; the commands the AI issues are recorded as usual, but
-//! the plan is not in a snapshot (WORKPLAN SIM-61 lists it). The script must
-//! run before the seats in a tick for a load to reach the seat in the same
-//! tick; after them it reaches it on the next. Both are deterministic. A seat
-//! with no plan yet sees no events, so it starts with no memory of the past.
-//! Files are found by name only: two files of one name in different folders
-//! collapse to the later one in listing order.
+//! `DisableAllAITeams`, `EnableAllAITeams`, `EnableTeam`, `DisableTeam`,
+//! `SetIsAITeam` and `ResetStrategyCycle` reach the hub in one ordered request
+//! list with the plan loads ([`AiRequest`]), so a load and a switch of the
+//! same tick keep their order. Per seat the hub keeps two flags, as the
+//! original's AI team does (read from the executables, static; nothing
+//! measured on the bench): `ai` (true for every seat with a controller here,
+//! false for the human's, which has none) and `enabled` (false at start; a
+//! plan load that resolves sets it true, in both games). Applied in order:
+//!
+//! - `Enable` / `Disable`: only on an `ai` seat; elsewhere nothing.
+//! - `EnableAll` / `DisableAll`: every `ai` seat; the human seat is untouched.
+//! - `SetAi`: the original forces the flag back to true on the next tick for
+//!   every non-human seat, so on a seat here it changes nothing. On the human
+//!   seat it would hand the player's units to the AI; that is not supported
+//!   (the script binding counts `SetIsAITeam(human seat, true)` as
+//!   unsupported; no stock mission does it).
+//! - `Replan` (`ResetStrategyCycle`): timing only. Each seat plans on its next
+//!   think instead of waiting for the next period tick.
+//!
+//! What a loaded seat does: enabled, as before; disabled, only the unit-level
+//! part (point defence, [`crate::skirmish::Think::UnitsOnly`]) and it still
+//! reads events (the original keeps its strategic maps current while
+//! disabled). It stops building, planning goals, forming and sending waves and
+//! assigning freighters. Orders already given stay with the sim: freighters
+//! keep mining, yards finish what is queued (the latter not established for
+//! the original).
+//!
+//! **Known deviation (read from the executable, static; not measured in
+//! game):** the original's disabled team still answers attacks through
+//! distress calls (they check the AI flag, not the enabled flag) and keeps
+//! already formed fleets running. Here `military` mixes waves and defence, so
+//! a disabled seat drops both. Splitting a defend-only and wave-upkeep subset
+//! out of it is a follow-up once the distress rule (range, selection) is read.
+//!
+//! # Replay and where the requests are applied
+//!
+//! The plan and the flags reach the seat through a shared [`MissionAiHub`],
+//! not through the command stream; the commands the AI issues are recorded as
+//! usual. [`MissionAiHub::submit`] applies the requests at once, in order, and
+//! both hosts call it once per tick right after the script has thought and
+//! before any seat thinks (`ActiveMission::tick`, `mission_host::Shared::think`),
+//! so every seat sees the same flags and the plans of the script's own tick in
+//! that tick's think, whatever the seat order. A request submitted after the
+//! seats have thought reaches them on the next tick. Both are deterministic: the
+//! same script and world give the same requests at the same ticks and the same
+//! commands. A seat with no plan yet sees no events, so it starts with no
+//! memory of the past. Files are found by name only: two files of one name in
+//! different folders collapse to the later one in listing order.
+//!
+//! **Save/restore gap (read from the executable, static):** the original saves
+//! the two flags and the strategy cycle with its saved game. Here they are host
+//! state beside the plan: not in a sim snapshot, not in the command stream, and
+//! there is no mid-mission save yet (WORKPLAN SIM-61 names the plan). No format
+//! number: replays record the AI's commands and never run an AI, and network
+//! peers never run the AI or the script (D3). A future mission save must carry
+//! per seat `ai`, `enabled` and the plan; to be decided with SIM-61.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -39,7 +87,7 @@ use sta_sim::command::Command;
 use sta_sim::setup::{Controller, GameSetup};
 use sta_sim::view::WorldView;
 
-use crate::skirmish::{Params, SkirmishConfig, SkirmishController};
+use crate::skirmish::{Params, SkirmishConfig, SkirmishController, Think};
 
 /// First sequence number of a seat's AI commands.
 const AI_SEQ_BASE: u32 = 0x4000_0000;
@@ -103,14 +151,54 @@ impl AipLibrary {
     }
 }
 
+/// What a mission script asked of the AI, in call order (`take_ai_requests` of the runtime).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AiRequest {
+    /// `AI_Team_Load_AIP`, `Player:loadAIP`: overlay the file on the seat's plan and enable it.
+    Load(PlayerId, String),
+    /// `EnableTeam`.
+    Enable(PlayerId),
+    /// `DisableTeam`.
+    Disable(PlayerId),
+    /// `EnableAllAITeams`.
+    EnableAll,
+    /// `DisableAllAITeams`.
+    DisableAll,
+    /// `SetIsAITeam`.
+    SetAi(PlayerId, bool),
+    /// `ResetStrategyCycle`.
+    Replan,
+}
+
+/// The two flags of a seat's AI team (module docs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Flags {
+    ai: bool,
+    enabled: bool,
+}
+
+/// What the hub holds for one seat between a request and the seat's next think.
+#[derive(Debug, Default)]
+struct Seat {
+    flags: Option<Flags>,
+    /// Plans loaded since the seat last thought, in order.
+    plans: Vec<Arc<Aip>>,
+    replan: bool,
+}
+
 #[derive(Debug, Default)]
 struct Shared {
-    queue: Vec<(PlayerId, String)>,
     /// Requests that changed nothing: no AI seat of that id, or a file that is
     /// not in the library. In the order they were found.
     unresolved: Vec<(PlayerId, String)>,
     /// Seats that have an AI controller.
-    seats: Vec<PlayerId>,
+    seats: BTreeMap<PlayerId, Seat>,
+}
+
+impl Shared {
+    fn flags(&mut self, p: PlayerId) -> Option<&mut Flags> {
+        self.seats.get_mut(&p).and_then(|s| s.flags.as_mut())
+    }
 }
 
 fn lock(s: &Mutex<Shared>) -> std::sync::MutexGuard<'_, Shared> {
@@ -129,16 +217,60 @@ impl MissionAiHub {
         MissionAiHub { library: Arc::new(library), shared: Arc::default() }
     }
 
-    /// Queue plan loads in call order (what the script asked for).
+    /// Apply plan loads in call order (see [`MissionAiHub::submit_requests`]).
     pub fn submit(&self, requests: impl IntoIterator<Item = (PlayerId, String)>) {
+        self.submit_requests(requests.into_iter().map(|(p, n)| AiRequest::Load(p, n)));
+    }
+
+    /// Apply what the script asked for, in call order. This is the one point where requests
+    /// take effect (module docs): the hosts call it after the script thought and before the
+    /// seats do.
+    pub fn submit_requests(&self, requests: impl IntoIterator<Item = AiRequest>) {
         let mut s = lock(&self.shared);
-        for (p, name) in requests {
-            if s.seats.contains(&p) {
-                s.queue.push((p, name));
-            } else {
-                s.unresolved.push((p, name));
+        for r in requests {
+            match r {
+                AiRequest::Load(p, name) => {
+                    let aip = if s.seats.contains_key(&p) { self.library.get(&name).cloned() } else { None };
+                    match aip {
+                        Some(aip) => {
+                            let seat = s.seats.entry(p).or_default();
+                            seat.plans.push(aip);
+                            if let Some(f) = seat.flags.as_mut() {
+                                f.enabled = true;
+                            }
+                        }
+                        None => s.unresolved.push((p, name)),
+                    }
+                }
+                AiRequest::Enable(p) | AiRequest::Disable(p) => {
+                    if let Some(f) = s.flags(p).filter(|f| f.ai) {
+                        f.enabled = matches!(r, AiRequest::Enable(_));
+                    }
+                }
+                AiRequest::EnableAll | AiRequest::DisableAll => {
+                    for f in s.seats.values_mut().filter_map(|seat| seat.flags.as_mut()).filter(|f| f.ai) {
+                        f.enabled = r == AiRequest::EnableAll;
+                    }
+                }
+                // The original forces the flag back for every non-human seat on its next tick.
+                AiRequest::SetAi(..) => {}
+                AiRequest::Replan => {
+                    for seat in s.seats.values_mut() {
+                        seat.replan = true;
+                    }
+                }
             }
         }
+    }
+
+    /// Whether `seat` has an AI team here (`AI::IsAITeam`).
+    pub fn is_ai(&self, seat: PlayerId) -> bool {
+        lock(&self.shared).seats.get(&seat).and_then(|s| s.flags).is_some_and(|f| f.ai)
+    }
+
+    /// Whether the seat's strategic AI is switched on (`AI::IsEnabled`: `ai` and `enabled`).
+    pub fn is_enabled(&self, seat: PlayerId) -> bool {
+        lock(&self.shared).seats.get(&seat).and_then(|s| s.flags).is_some_and(|f| f.ai && f.enabled)
     }
 
     /// Requests that changed nothing: a seat without AI (the human's,
@@ -153,9 +285,7 @@ impl MissionAiHub {
         match SkirmishConfig::from_setup(setup, seat) {
             Some(cfg) => {
                 let mut s = lock(&self.shared);
-                if !s.seats.contains(&seat) {
-                    s.seats.push(seat);
-                }
+                s.seats.entry(seat).or_default().flags = Some(Flags { ai: true, enabled: false });
                 let mut ai = SkirmishController::new(cfg.clone());
                 // Its sequence numbers stay clear of the script's, which counts
                 // up from 1 for the same player, so a rejection is never
@@ -189,33 +319,38 @@ impl ScriptedAi {
         &self.params
     }
 
-    fn take_requests(&mut self) {
+    /// Take what the hub holds for the seat: plans (overlaid in order), the replan flag, and the
+    /// enabled flag as it stands.
+    fn take_requests(&mut self) -> (bool, bool) {
         let mut s = lock(&self.hub.shared);
-        let mut keep = Vec::new();
-        for (p, name) in std::mem::take(&mut s.queue) {
-            if p != self.seat {
-                keep.push((p, name));
-                continue;
+        let Some(seat) = s.seats.get_mut(&self.seat) else { return (false, false) };
+        let plans = std::mem::take(&mut seat.plans);
+        let replan = std::mem::take(&mut seat.replan);
+        let enabled = seat.flags.is_some_and(|f| f.enabled);
+        drop(s);
+        if !plans.is_empty() {
+            for aip in &plans {
+                self.params.overlay(aip);
             }
-            match self.hub.library.get(&name) {
-                Some(aip) => {
-                    self.params.overlay(aip);
-                    self.ai.set_params(self.params.clone());
-                    self.loaded = true;
-                }
-                None => s.unresolved.push((p, name)),
-            }
+            self.ai.set_params(self.params.clone());
+            self.loaded = true;
         }
-        s.queue = keep;
+        (enabled, replan)
     }
 }
 
 impl Controller for ScriptedAi {
     fn think(&mut self, view: &WorldView, events: &[SimEvent], out: &mut Vec<Command>) {
-        self.take_requests();
-        if self.loaded {
-            self.ai.think(view, events, out);
+        let (enabled, replan) = self.take_requests();
+        if !self.loaded {
+            return;
         }
+        let mode = match (enabled, replan) {
+            (false, _) => Think::UnitsOnly,
+            (true, true) => Think::FullNow,
+            (true, false) => Think::Full,
+        };
+        self.ai.think_as(view, events, out, mode);
     }
 }
 

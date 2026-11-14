@@ -872,8 +872,20 @@ fn a_raising_read_and_a_non_handle_integer_are_judged_apart() {
 #[test]
 fn a_gap_that_changes_who_fights_taints_every_later_read() {
     // A world-effect gap with no object, then a win decided on a healthy hero.
-    let s = "A2.NoteGap('DisableAllAITeams')\nif A2.IsAlive(2) then A2.SucceedMission(0, 0) end";
+    let s = "A2.NoteGap('SetPerceivedTeam')\nif A2.IsAlive(2) then A2.SucceedMission(0, 0) end";
     assert!(matches!(end_state(s), MissionEndState::Blocked(_)));
+}
+
+#[test]
+fn the_ai_switches_are_no_world_gap_and_block_no_end() {
+    // LUA-20: bound, they are no gap; the queries behind an end read nothing from the AI.
+    for call in ["DisableAllAITeams()", "EnableAllAITeams()", "ResetStrategyCycle()", "EnableTeam(1)", "DisableTeam(1)"] {
+        let s = format!("A2.{call}\nif A2.IsAlive(2) then A2.SucceedMission(0, 0) end");
+        assert_eq!(end_state(&s), MissionEndState::Ended { won: true }, "{call}");
+    }
+    // A host that does not take them leaves the mission's end as it was with the gap before.
+    let s = "A2.DisableAllAITeams()\nif A2.IsCompromised(2, 3) then A2.FailMission(0, 0) end";
+    assert!(!matches!(end_state(s), MissionEndState::Blocked(_)));
 }
 
 #[test]

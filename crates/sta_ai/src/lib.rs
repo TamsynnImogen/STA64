@@ -11,7 +11,7 @@ pub mod skirmish;
 use std::collections::BTreeMap;
 
 pub use idle::IdleController;
-pub use mission::{AipLibrary, MissionAiHub, ScriptedAi};
+pub use mission::{AiRequest, AipLibrary, MissionAiHub, ScriptedAi};
 use sta_core::PlayerId;
 pub use skirmish::{SKIRMISH, SkirmishConfig, SkirmishController};
 use sta_sim::setup::{Controller, GameSetup};
