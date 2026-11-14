@@ -92,7 +92,7 @@ fn destroy_calls_on_nothing_do_nothing() {
 
 #[test]
 fn destroy_calls_still_validate_their_arguments() {
-    let (mut rt, _, _) = runtime();
+    let (rt, _, _) = runtime();
     assert!(rt.eval::<()>("A1.DestroyCritical()").is_err());
     assert!(rt.eval::<()>("A1.DestroyEngines(a, 1)").is_err());
     assert!(rt.eval::<()>("A1.DestroySensors('x')").is_err());
@@ -136,7 +136,7 @@ fn replace_object_of_nothing_returns_zero_and_unknown_odf_queues_nothing() {
 
 #[test]
 fn attack_location_matches_the_armada_ii_geometry() {
-    let (mut rt, _, _) = runtime();
+    let (rt, _, _) = runtime();
     let same: bool = rt
         .eval(
             "local ok1, v1 = pcall(A1.GetAttackLocation, a, b)

@@ -9,7 +9,7 @@ use mlua::{Lua, Table, Value};
 use sta_core::EntityId;
 use sta_sim::command::Order;
 
-use super::{A, Env, args_of, def};
+use super::{A, Env, def};
 
 fn send(e: &Env, name: &str, id: EntityId, make: impl FnOnce(Vec<EntityId>) -> Order) -> mlua::Result<()> {
     e.unit(name, id)?;
