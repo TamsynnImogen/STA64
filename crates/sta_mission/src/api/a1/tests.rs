@@ -663,12 +663,16 @@ fn absent_path_names_do_nothing_like_the_engines_null_lookup() {
     let (rt, commands) = run(&s, "A1.Goto(a, 'NOPE', 1); A1.Patrol(a, 'NOPE'); A1.PointAt(a, 'NOPE')");
     assert!(commands.is_empty(), "{commands:?}");
     assert!(rt.unsupported().is_empty(), "{:?}", rt.unsupported());
+    // ...but each is noted, uncounted, so a typo or partial map fill stays visible
+    let noted: Vec<String> = rt.absent_paths().into_iter().map(|(k, _)| k).collect();
+    assert_eq!(noted, ["absent path 'NOPE' (A1.Goto)", "absent path 'NOPE' (A1.Patrol)", "absent path 'NOPE' (A1.PointAt)"]);
     let (rt, _) = run(&s, "");
     let v: (f64, f64, f64) = rt.eval("local p = A1.GetLocation('NOPE', 0); return p.x, p.y, p.z").unwrap();
     assert_eq!(v, (0.0, 0.0, 0.0));
     // a point beyond the path is the same default
     let v: f64 = rt.eval("return A1.GetLocation('P', 9).x").unwrap();
     assert_eq!(v, 0.0);
+    assert!(rt.absent_paths().iter().any(|(k, _)| k == "path 'P' point 9 out of range (A1.GetLocation)"), "{:?}", rt.absent_paths());
     let v: f64 = rt.eval("return A1.GetLocation('P', 1).x").unwrap();
     assert_eq!(v, 20.0);
     assert!(rt.unsupported().is_empty(), "{:?}", rt.unsupported());

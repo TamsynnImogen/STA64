@@ -357,9 +357,18 @@ fn path_point(lua: &Lua, ctx: &Shared, name: &str, path: &str, index: i64) -> ml
         Ok(None) => Value::Nil,
         Err(why) => return Err(path_error(ctx, name, why)),
     };
-    let Value::Table(points) = points else { return Ok(None) };
-    let Some(slot) = usize::try_from(index).ok() else { return Ok(None) };
-    let Value::Table(p) = points.raw_get::<Value>(slot + 1)? else { return Ok(None) };
+    let Value::Table(points) = points else {
+        ctx.borrow_mut().note_absent_path(format!("absent path '{path}' (A2.{name})"));
+        return Ok(None);
+    };
+    if points.raw_len() == 0 {
+        return Err(path_error(ctx, name, format!("path '{path}' has no points")));
+    }
+    let slot = usize::try_from(index).ok();
+    let Some(Value::Table(p)) = slot.map(|s| points.raw_get::<Value>(s + 1)).transpose()? else {
+        ctx.borrow_mut().note_absent_path(format!("path '{path}' point {index} out of range (A2.{name})"));
+        return Ok(None);
+    };
     let get = |k: &str| p.raw_get::<f64>(k).ok().filter(|v| v.is_finite());
     match (get("x"), get("y"), get("z")) {
         (Some(x), Some(y), Some(z)) => Ok(Some((x, y, z))),

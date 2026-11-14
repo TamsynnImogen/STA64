@@ -360,7 +360,10 @@ impl Env {
                 }
                 match found.len() {
                     1 => found.remove(0),
-                    0 => return Ok(None),
+                    0 => {
+                        self.ctx.borrow_mut().note_absent_path(format!("absent path '{path}' (A1.{name})"));
+                        return Ok(None);
+                    }
                     _ => return Err(self.no_data(name, &format!("path '{path}' is ambiguous in A1.paths"))),
                 }
             }
@@ -392,7 +395,11 @@ impl Env {
     /// path or the path has no such point (`GetLocation`, LUA-18).
     pub fn find_path_point(&self, lua: &Lua, name: &str, path: &str, index: i64) -> mlua::Result<Option<Vec3>> {
         let Some(points) = self.find_path(lua, name, path)? else { return Ok(None) };
-        Ok(usize::try_from(index).ok().and_then(|i| points.get(i).copied()))
+        let point = usize::try_from(index).ok().and_then(|i| points.get(i).copied());
+        if point.is_none() {
+            self.ctx.borrow_mut().note_absent_path(format!("path '{path}' point {index} out of range (A1.{name})"));
+        }
+        Ok(point)
     }
 }
 

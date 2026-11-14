@@ -239,6 +239,10 @@ pub(crate) struct Ctx {
     pub log: Vec<String>,
     /// Orders and names the API accepted but could not carry out, by name.
     pub unsupported: BTreeMap<String, u32>,
+    /// Path names a call looked up that the map does not have, or points out of range
+    /// (LUA-18): the engine does nothing, so these are not `unsupported`; kept so a typo
+    /// or a partial map fill stays visible in readiness and playthrough output.
+    pub absent_paths: BTreeMap<String, u32>,
     /// AIP loads the script asked for, in call order; the host takes them
     /// ([`crate::MissionRuntime::take_aip_requests`]).
     pub loaded_aips: Vec<(PlayerId, String)>,
@@ -309,6 +313,7 @@ impl Ctx {
             finished: false,
             log: Vec::new(),
             unsupported: BTreeMap::new(),
+            absent_paths: BTreeMap::new(),
             loaded_aips: Vec::new(),
             mission_end: None,
             ended: None,
@@ -405,6 +410,11 @@ impl Ctx {
             Ok(_) => true,
             Err(reason) => { self.unsupported(reason); false }
         }
+    }
+
+    /// An uncounted note: a path lookup found nothing (`absent path 'x' (A2.Goto)`).
+    pub fn note_absent_path(&mut self, what: String) {
+        *self.absent_paths.entry(what).or_default() += 1;
     }
 
     pub fn unsupported(&mut self, what: &str) {

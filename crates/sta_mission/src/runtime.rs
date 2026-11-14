@@ -559,6 +559,11 @@ impl MissionRuntime {
     ///
     /// AIP loads no host has taken ([`MissionRuntime::take_aip_requests`]) are
     /// listed as `Player.loadAIP`: nothing has applied them.
+    pub fn absent_paths(&self) -> Vec<(String, u32)> {
+        self.inner.ctx.borrow().absent_paths.iter().map(|(k, v)| (k.clone(), *v)).collect()
+    }
+
+    /// Calls the sim cannot serve (see above).
     pub fn unsupported(&self) -> Vec<(String, u32)> {
         let c = self.inner.ctx.borrow();
         let mut out: Vec<(String, u32)> = c.unsupported.iter().map(|(k, v)| (k.clone(), *v)).collect();

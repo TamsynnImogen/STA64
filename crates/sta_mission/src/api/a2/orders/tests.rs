@@ -166,11 +166,13 @@ fn goto_with_the_warp_flag_is_a_warp_move_on_the_first_leg() {
 
 #[test]
 fn a_path_the_map_does_not_have_does_nothing_like_the_engines_null_lookup() {
-    // LUA-18: AiPath::Find is null; Goto, Patrol and PointAt do nothing, uncounted.
+    // LUA-18: the engine's name lookup is null; Goto, Patrol and PointAt do nothing, uncounted.
     let s = scene();
     let (rt, commands) = run(&s, "A2.Goto(a, 'NOPE', false, 1); A2.Patrol(a, 'NOPE'); A2.PointAt(a, 'NOPE')");
     assert!(commands.is_empty(), "{commands:?}");
     assert!(rt.unsupported().is_empty(), "{:?}", rt.unsupported());
+    let noted: Vec<String> = rt.absent_paths().into_iter().map(|(k, _)| k).collect();
+    assert_eq!(noted, ["absent path 'NOPE' (A2.Goto)", "absent path 'NOPE' (A2.Patrol)", "absent path 'NOPE' (A2.PointAt)"]);
     // a missing path table is still a host gap
     let (rt, err) = fails(&s, "A2.paths = nil; A2.Goto(a, 'P', false, 1)");
     assert!(err.contains("A2.paths"), "{err}");

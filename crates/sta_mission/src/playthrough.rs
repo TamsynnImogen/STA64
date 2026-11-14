@@ -26,6 +26,7 @@
 //!   per [`CALL_REPEAT_TICKS`]; its problem list keeps the first 60 calls);
 //! - `objective`, `briefing`: objectives issued and changing state, the briefing file;
 //! - `unbound`, `raised`, `unsupported`, `error`, `step-error`: what did not work;
+//! - `absent-path`: a path lookup found no such name or point (the engine does nothing; LUA-18);
 //! - `order`, `plan`, `plan-error`: what the scripted player did and said;
 //! - `spawned`, `destroyed`, `eliminated`: world changes; `end`: the outcome.
 //!
@@ -454,6 +455,7 @@ pub fn play(host: &VfsHost, book: &CampaignBook, campaign: &str, index: usize, c
     let mut counts = (0i64, 0i64, 0i64, 0i64, 0i64);
     let mut errs = 0;
     let mut unsupported: HashMap<String, u32> = HashMap::new();
+    let mut absent: HashMap<String, u32> = HashMap::new();
     let mut objectives: HashMap<u32, String> = HashMap::new();
     let mut briefing: Option<String> = None;
     let mut owners: HashMap<EntityId, String> = HashMap::new();
@@ -582,6 +584,13 @@ pub fn play(host: &VfsHost, book: &CampaignBook, campaign: &str, index: usize, c
             for (k, n) in a.runtime().unsupported() {
                 if unsupported.insert(k.clone(), n).is_none() {
                     ev.push(Event { tick, kind: "unsupported", what: k });
+                }
+            }
+        }
+        if tick % u64::from(TICK_HZ) == 0 || outcome.is_some() {
+            for (k, n) in a.runtime().absent_paths() {
+                if absent.insert(k.clone(), n).is_none() {
+                    ev.push(Event { tick, kind: "absent-path", what: k });
                 }
             }
         }

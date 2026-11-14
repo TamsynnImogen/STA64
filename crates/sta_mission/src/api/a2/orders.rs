@@ -260,7 +260,10 @@ impl Env {
         };
         let points = match dll_objects::lookup_path(&paths, path)? {
             Ok(Some(t)) => t,
-            Ok(None) => return Ok(None),
+            Ok(None) => {
+                self.ctx.borrow_mut().note_absent_path(format!("absent path '{path}' (A2.{name})"));
+                return Ok(None);
+            }
             Err(why) => return Err(missing(why)),
         };
         let mut out = Vec::new();
@@ -330,6 +333,8 @@ fn goto(lua: &Lua, env: &Env, overload: usize, a: &[P]) -> mlua::Result<Value> {
         let Some(target) = env.alive(a[1].id()) else { return nothing() };
         Some(target.pos)
     };
+    // Ownership first, as for A1: a unit with no player owner fails before any lookup.
+    env.owned("Goto", &unit)?;
     let points = match dest {
         Some(p) => vec![p],
         // An absent path name: the engine's lookup is null and nothing happens.
@@ -339,7 +344,6 @@ fn goto(lua: &Lua, env: &Env, overload: usize, a: &[P]) -> mlua::Result<Value> {
         },
     };
     let warp = a[2].boolean();
-    env.owned("Goto", &unit)?;
     for (n, to) in points.into_iter().enumerate() {
         // GO_WARP asks for warp on its first leg (SIM-56); the rest are plain legs.
         if warp && n == 0 {
@@ -514,8 +518,8 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
     table.set("Patrol", def(lua, &env, "Patrol", &["hs"], |lua, e, _, a| {
         let Some(unit) = e.alive(a[0].id()) else { return nothing() };
         // An absent path name sets neither the path type nor the order.
-        let Some(points) = e.find_path(lua, "Patrol", a[1].text())? else { return nothing() };
         e.owned("Patrol", &unit)?;
+        let Some(points) = e.find_path(lua, "Patrol", a[1].text())? else { return nothing() };
         e.order("Patrol", unit.id, |units| Order::Patrol { units, points })?;
         nothing()
     })?)?;

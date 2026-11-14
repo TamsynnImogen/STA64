@@ -278,6 +278,13 @@ fn path_locations_read_the_host_path_table() {
         assert_eq!(v, (0.0, 0.0, 0.0), "{call}");
     }
     assert_eq!(unsupported(&rt, "A2.GetLocation"), 0);
+    let noted: Vec<String> = rt.absent_paths().into_iter().map(|(k, _)| k).collect();
+    assert!(noted.contains(&"absent path 'NOPE' (A2.GetLocation)".to_owned()), "{noted:?}");
+    assert!(noted.contains(&"path 'P' point 2 out of range (A2.GetLocation)".to_owned()), "{noted:?}");
+    // a path of no points is still a host gap
+    rt.eval::<()>("A2.paths.E = {}").unwrap();
+    assert!(rt.eval::<()>("A2.GetLocation('E', 0)").is_err());
+    assert_eq!(unsupported(&rt, "has no points"), 1);
     assert!(rt.eval::<()>("A2.GetLocation('P', 'x')").is_err());
 }
 
