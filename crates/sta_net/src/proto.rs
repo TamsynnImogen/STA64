@@ -2149,7 +2149,7 @@ mod tests {
         let bytes = encode(&Message::Ping { nonce: 0 }).unwrap();
         // Ping is tag 12, nonce 0: two body bytes.
         assert_eq!(bytes, [b'S', b'6', b'4', b'N', 8, 0, 2, 0, 0, 0, 12, 0]);
-        assert_eq!(version_notice(), [b'S', b'6', b'4', b'N', 7, 0, 0, 0, 0, 0]);
+        assert_eq!(version_notice(), [b'S', b'6', b'4', b'N', 8, 0, 0, 0, 0, 0]);
     }
 
     #[test]

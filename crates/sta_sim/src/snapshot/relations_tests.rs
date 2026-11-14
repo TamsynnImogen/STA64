@@ -20,3 +20,19 @@ fn malformed_relation_records_are_rejected_for_the_right_reason() {
     assert_eq!(load(rec(1, vec![(0, 9, 1)])), "relation between seats that do not exist or a seat and itself");
     assert_eq!(load(rec(1, vec![(0, 1, 0)])), "relation row equals the default");
 }
+
+#[test]
+fn relation_rows_out_of_order_are_rejected() {
+    let (sim, _, db) = crate::combat::subsystem_tests::world();
+    let bytes = sim.snapshot();
+    let load = |r: Vec<u8>| chain::corrupt(&chain::with(&bytes, chain::RELATIONS, r), Some(db.clone()));
+    assert_eq!(load(rec(1, vec![(1, 0, 1), (0, 1, 1)])), "relation rows out of order");
+}
+
+#[test]
+fn duplicate_relation_rows_are_rejected() {
+    let (sim, _, db) = crate::combat::subsystem_tests::world();
+    let bytes = sim.snapshot();
+    let load = |r: Vec<u8>| chain::corrupt(&chain::with(&bytes, chain::RELATIONS, r), Some(db.clone()));
+    assert_eq!(load(rec(1, vec![(0, 1, 1), (0, 1, 1)])), "relation rows out of order");
+}
