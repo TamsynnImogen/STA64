@@ -62,7 +62,7 @@ fn text_styled(commands: &mut Commands, root: Entity, r: R, value: String, color
     // SpriteFontPlugin replaces the SpriteText entity's Node while resolving glyphs.
     // Keep authored placement on a separate parent that it never rewrites.
     let wrapper = commands.spawn((node(r), Pickable::IGNORE)).id();
-    let size = if style.native { size } else { size.max(18.0) };
+    let size = if style.min_size { size.max(18.0) } else { size };
     let mut e = commands.spawn(sprite_text_styled(value, size, color, style));
     if let Some(kind) = kind {
         e.insert(kind);
@@ -399,15 +399,24 @@ fn spawn_group(
         {
             wireframe_layers(commands, entity, R::new(0.0, 0.0, r.w, r.h), &def.model);
         }
+        // Normal group tiles have a separate authored name rectangle. Small
+        // tiles retain the icon inset because their CFG has no known name key.
+        let fallback = R::new(2.0, 2.0, (r.w - 4.0).max(0.0), (r.h - 4.0).max(0.0));
+        let name_rect = if small {
+            fallback
+        } else {
+            layout.at(origin, &format!("infoMultiShipName_{i}"))
+                .map_or(fallback, |name| R::new(name.x - r.x, name.y - r.y, name.w, name.h))
+        };
         text_styled(
             commands,
             entity,
-            R::new(2.0, 2.0, (r.w - 4.0).max(0.0), (r.h - 4.0).max(0.0)),
+            name_rect,
             tile.name.clone(),
             theme.text,
             theme.micro_size,
             None,
-            group_label_style(layout, (r.w - 4.0).max(0.0)),
+            group_label_style(layout, name_rect.w),
         );
         let hull_key = if small {
             format!("infoMultiShipHullSm_{i}")
@@ -428,10 +437,10 @@ fn spawn_group(
 }
 
 /// The CFG's information font names a stock role when it matches one of the
-/// mounted sprite fonts. Other names use the small role's native glyph size.
+/// mounted sprite fonts. Compact names honor micro size as the HUD scales.
 fn group_label_style(layout: &StockLayout, width: f32) -> SpriteTextStyle {
     let role = layout.name("InformationFont").and_then(FontRole::from_name).unwrap_or(FontRole::Small);
-    SpriteTextStyle { native: true, tint_all: true, ..SpriteTextStyle::role(role).wrapped(width) }
+    SpriteTextStyle { scaled: true, tint_all: true, ..SpriteTextStyle::role(role).wrapped(width) }
 }
 
 pub(super) fn spawn(commands: &mut Commands, root: Entity, layout: &StockLayout, feed: &HudFeed, theme: &Theme) {
@@ -610,7 +619,8 @@ mod tests {
         assert_eq!(label.1.wrap, Some(96.0));
         assert_eq!(label.0.size, theme.micro_size);
         assert_eq!(label.1.role, Some(FontRole::Small));
-        assert!(label.1.native);
+        assert!(!label.1.native);
+        assert!(label.1.scaled);
         assert!(!label.1.min_size);
         assert_eq!(app.world().get::<Tooltip>(entity).unwrap().short, name);
     }
@@ -623,12 +633,88 @@ mod tests {
         let style = group_label_style(&layout, 76.0);
         assert_eq!(style.role, Some(FontRole::Medium));
         assert_eq!(style.wrap, Some(76.0));
-        assert!(style.native);
+        assert!(!style.native);
         assert!(!style.min_size);
 
         cfg.names.insert("InformationFont".into(), "custom_font_alias".into());
         let layout = StockLayout::new(&cfg, Vec2::new(1600.0, 1200.0));
         assert_eq!(group_label_style(&layout, 76.0).role, Some(FontRole::Small));
+    }
+
+    #[test]
+    fn group_name_uses_authored_rectangle_and_small_tiles_keep_inset() {
+        let mut cfg = GuiLayout { canvas: (1600, 1200), ..Default::default() };
+        cfg.rects.insert("infoMultiShipIcon_0".into(), Rect { x: 70, y: 90, w: 40, h: 40 });
+        cfg.rects.insert("infoMultiShipName_0".into(), Rect { x: 50, y: 77, w: 90, h: 9 });
+        cfg.rects.insert("infoMultiShipIconSm_0".into(), Rect { x: 70, y: 90, w: 40, h: 40 });
+        let layout = StockLayout::new(&cfg, Vec2::new(1600.0, 1200.0));
+        let feed = HudFeed::default();
+        let theme = Theme::default();
+        for (variant, expected) in [(1, R::new(-20.0, -13.0, 90.0, 9.0)), (2, R::new(2.0, 2.0, 36.0, 36.0))] {
+            let mut world = World::new();
+            let root = world.spawn(Node::default()).id();
+            let mut queue = CommandQueue::default();
+            {
+                let mut commands = Commands::new(&mut queue, &world);
+                let tile = model::Tile { id: EntityId(7), name: "USS Dunlop".into(), hull: 1.0 };
+                spawn_group(&mut commands, root, &layout, &feed, &theme, Vec2::ZERO, variant, &[tile]);
+            }
+            queue.apply(&mut world);
+            let (label, parent) = world.query::<(&SpriteText, &ChildOf)>().iter(&world)
+                .find(|(text, _)| text.text == "USS Dunlop").unwrap();
+            assert_eq!(label.size, theme.micro_size);
+            let wrapper = parent.parent();
+            let tile = world.query_filtered::<Entity, With<GroupTile>>().single(&world).unwrap();
+            assert_eq!(world.get::<ChildOf>(wrapper).unwrap().parent(), tile);
+            let rect = world.get::<Node>(wrapper).unwrap();
+            assert_eq!((rect.left, rect.top, rect.width, rect.height),
+                (Val::Px(expected.x), Val::Px(expected.y), Val::Px(expected.w), Val::Px(expected.h)));
+            let style = world.get::<SpriteTextStyle>(world.get::<Children>(wrapper).unwrap()[0]).unwrap();
+            assert_eq!(style.wrap, Some(expected.w));
+            assert!(!style.native && !style.min_size && style.scaled);
+        }
+    }
+
+    /// Uses installed CFG rectangles and parsed sprite font sheets when opted in.
+    #[test]
+    fn installed_group_names_fit_one_line_above_hulls() {
+        let Some(root) = std::env::var_os("STA64_TEST_INSTALL") else { return };
+        let Ok(mode) = std::env::var("STA64_TEST_MOD") else { return };
+        let cfg_name = match mode.as_str() {
+            "STA2 Classic" | "STA2 Classic Mod" => "gui_fed.cfg",
+            "FO4" | "Fleet Ops 4.0" => "gui_federation16x9.cfg",
+            _ => return,
+        };
+        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(&mode)).unwrap();
+        let cfg = crate::game::gui_layout(&vfs, cfg_name).unwrap();
+        let layout = StockLayout::new(&cfg, Vec2::new(1920.0, 1080.0));
+        let origin = layout.info_origin(1);
+        assert!(!crate::ui::sprite_font::read_fonts(&vfs).is_empty(), "{mode}: no parsed sprite fonts");
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(crate::ui::sprite_font::SpriteFontPlugin);
+        app.init_resource::<Assets<Image>>();
+        app.insert_resource(crate::viewer::Mounted(vfs));
+        app.update();
+        assert!(!app.world().resource::<crate::ui::sprite_font::SpriteFonts>().fonts.is_empty(), "{mode}: no supported sprite font sheets");
+        for (i, ship) in ["USS Dunlop", "USS Hayduk"].into_iter().enumerate() {
+            let name = layout.at(origin, &format!("infoMultiShipName_{i}")).unwrap();
+            let hull = layout.at(origin, &format!("infoMultiShipHull_{i}")).unwrap();
+            let label = app.world_mut().spawn(sprite_text_styled(
+                ship, Theme::default().micro_size, Color::WHITE, group_label_style(&layout, name.w),
+            )).id();
+            let unwrapped = app.world_mut().spawn(sprite_text_styled(
+                ship, Theme::default().micro_size, Color::WHITE, group_label_style(&layout, name.w * 10.0),
+            )).id();
+            app.update();
+            let node = app.world().get::<Node>(label).unwrap();
+            let (Val::Px(width), Val::Px(height)) = (node.width, node.height) else { panic!("{mode}: unresolved sprite text") };
+            let Val::Px(single_line_height) = app.world().get::<Node>(unwrapped).unwrap().height else { panic!("{mode}: unresolved baseline") };
+            eprintln!("{mode} {ship}: name={name:?}, hull={hull:?}, resolved={width}x{height}");
+            assert!(width <= name.w, "{mode} {ship}: label width {width} > authored {}", name.w);
+            assert_eq!(height, single_line_height, "{mode} {ship}: wrapped beyond one line");
+            assert!(height <= hull.y - name.y, "{mode} {ship}: label height {height} reaches hull at {}", hull.y);
+        }
     }
 
     #[test]
