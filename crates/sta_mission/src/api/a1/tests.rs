@@ -679,6 +679,15 @@ fn absent_path_names_do_nothing_like_the_engines_null_lookup() {
 }
 
 #[test]
+fn strict_path_calls_leave_no_absent_note() {
+    let s = scene();
+    let rt = runtime(&s);
+    assert!(rt.eval::<()>("A1.SetPosition(a, 'NOPE')").is_err());
+    assert!(rt.unsupported().iter().any(|(k, _)| k.contains("NOPE")));
+    assert!(rt.absent_paths().is_empty(), "{:?}", rt.absent_paths());
+}
+
+#[test]
 fn paths_are_the_maps_and_match_ignoring_case() {
     let s = scene();
     let (rt, _) = run(&s, "");

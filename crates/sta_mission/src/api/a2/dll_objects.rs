@@ -346,8 +346,9 @@ pub(super) fn lookup_path(paths: &Table, path: &str) -> mlua::Result<Result<Opti
 /// Point `index` (0-based) of `A2.paths[path]`, a table the host fills from
 /// the map. `Ok(None)` when the map has no such path (the engine's lookup is
 /// null: `BuildObject` returns 0, `GetLocation` a default vector) or the path
-/// has no such point.
-fn path_point(lua: &Lua, ctx: &Shared, name: &str, path: &str, index: i64) -> mlua::Result<Option<(f64, f64, f64)>> {
+/// has no such point. A path of no points is a host gap for `GetLocation`
+/// (`empty_is_gap`); `BuildObject` treats it as any index out of range (returns 0).
+fn path_point(lua: &Lua, ctx: &Shared, name: &str, path: &str, index: i64, empty_is_gap: bool) -> mlua::Result<Option<(f64, f64, f64)>> {
     let a2: Table = lua.globals().raw_get("A2")?;
     let Value::Table(paths) = a2.raw_get::<Value>("paths")? else {
         return Err(path_error(ctx, name, "A2.paths is missing".into()));
@@ -361,13 +362,18 @@ fn path_point(lua: &Lua, ctx: &Shared, name: &str, path: &str, index: i64) -> ml
         ctx.borrow_mut().note_absent_path(format!("absent path '{path}' (A2.{name})"));
         return Ok(None);
     };
-    if points.raw_len() == 0 {
+    if empty_is_gap && points.raw_len() == 0 {
         return Err(path_error(ctx, name, format!("path '{path}' has no points")));
     }
     let slot = usize::try_from(index).ok();
-    let Some(Value::Table(p)) = slot.map(|s| points.raw_get::<Value>(s + 1)).transpose()? else {
-        ctx.borrow_mut().note_absent_path(format!("path '{path}' point {index} out of range (A2.{name})"));
-        return Ok(None);
+    let entry = slot.map(|s| points.raw_get::<Value>(s + 1)).transpose()?.unwrap_or(Value::Nil);
+    let p = match entry {
+        Value::Table(p) => p,
+        Value::Nil => {
+            ctx.borrow_mut().note_absent_path(format!("path '{path}' point {index} out of range (A2.{name})"));
+            return Ok(None);
+        }
+        _ => return Err(path_error(ctx, name, format!("path '{path}' has a malformed point"))),
     };
     let get = |k: &str| p.raw_get::<f64>(k).ok().filter(|v| v.is_finite());
     match (get("x"), get("y"), get("z")) {
@@ -482,7 +488,7 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
             let pos: Vec3 = if args.len() == 4 {
                 let path = text(name, &args, 2)?.ok_or_else(|| bad(name, 2, "a path name"))?;
                 let index = signed(name, &args, 3)?;
-                match path_point(lua, &c, name, &path, index)? {
+                match path_point(lua, &c, name, &path, index, false)? {
                     Some((x, y, z)) => to_vec3(x, y, z),
                     None => return Ok(Value::Integer(0)),
                 }
@@ -750,7 +756,7 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
             let path = text(name, &args, 0)?.ok_or_else(|| bad(name, 0, "a path name"))?;
             let index = signed(name, &args, 1)?;
             // An absent path or point: the engine returns a fixed default vector (not measured: zero).
-            let p = path_point(lua, &c, name, &path, index)?.unwrap_or(crate::api::ABSENT_PATH_LOCATION);
+            let p = path_point(lua, &c, name, &path, index, true)?.unwrap_or(crate::api::ABSENT_PATH_LOCATION);
             Ok(Value::Table(vector(lua, p)?))
         })?,
     )?;

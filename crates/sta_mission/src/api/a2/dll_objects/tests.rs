@@ -285,6 +285,12 @@ fn path_locations_read_the_host_path_table() {
     rt.eval::<()>("A2.paths.E = {}").unwrap();
     assert!(rt.eval::<()>("A2.GetLocation('E', 0)").is_err());
     assert_eq!(unsupported(&rt, "has no points"), 1);
+    // BuildObject treats it like any index out of range: 0, as before LUA-18.
+    assert_eq!(rt.eval::<i64>("return A2.BuildObject('fx_cruiser', 0, 'E', 0)").unwrap(), 0);
+    assert_eq!(unsupported(&rt, "has no points"), 1);
+    // A point entry that is not a table is malformed, not out of range.
+    rt.eval::<()>("A2.paths.M = { 5 }").unwrap();
+    assert!(rt.eval::<()>("A2.GetLocation('M', 0)").is_err());
     assert!(rt.eval::<()>("A2.GetLocation('P', 'x')").is_err());
 }
 

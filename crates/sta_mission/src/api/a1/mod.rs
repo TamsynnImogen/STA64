@@ -341,6 +341,12 @@ impl Env {
     /// name (LUA-18). The engine's lookup then returns null and the calls that
     /// look a path up do nothing; the stock scripts name such paths (a path of
     /// another map). A path of no points is still a gap.
+    /// The uncounted note for a no-op lookup of a path the map lacks. Only the calls that
+    /// do nothing write it; the strict `path()` callers raise and count instead.
+    pub fn note_absent(&self, name: &str, path: &str) {
+        self.ctx.borrow_mut().note_absent_path(format!("absent path '{path}' (A1.{name})"));
+    }
+
     pub fn find_path(&self, lua: &Lua, name: &str, path: &str) -> mlua::Result<Option<Vec<Vec3>>> {
         let missing = || {
             self.no_data(name, &format!("path '{path}' is not in A1.paths (the host fills it from the map)"))
@@ -360,10 +366,7 @@ impl Env {
                 }
                 match found.len() {
                     1 => found.remove(0),
-                    0 => {
-                        self.ctx.borrow_mut().note_absent_path(format!("absent path '{path}' (A1.{name})"));
-                        return Ok(None);
-                    }
+                    0 => return Ok(None),
                     _ => return Err(self.no_data(name, &format!("path '{path}' is ambiguous in A1.paths"))),
                 }
             }
@@ -394,7 +397,10 @@ impl Env {
     /// Point `index` (0-based) of the path, or `None` when the map has no such
     /// path or the path has no such point (`GetLocation`, LUA-18).
     pub fn find_path_point(&self, lua: &Lua, name: &str, path: &str, index: i64) -> mlua::Result<Option<Vec3>> {
-        let Some(points) = self.find_path(lua, name, path)? else { return Ok(None) };
+        let Some(points) = self.find_path(lua, name, path)? else {
+            self.note_absent(name, path);
+            return Ok(None);
+        };
         let point = usize::try_from(index).ok().and_then(|i| points.get(i).copied());
         if point.is_none() {
             self.ctx.borrow_mut().note_absent_path(format!("path '{path}' point {index} out of range (A1.{name})"));

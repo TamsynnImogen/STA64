@@ -240,6 +240,12 @@ impl Env {
             .ok_or_else(|| mlua::Error::runtime(format!("A2.{name} requires a valid team number")))
     }
 
+    /// The uncounted note for a no-op lookup of a path the map lacks (the strict `path()`
+    /// callers raise and count instead).
+    fn note_absent(&self, name: &str, path: &str) {
+        self.ctx.borrow_mut().note_absent_path(format!("absent path '{path}' (A2.{name})"));
+    }
+
     /// The points of `A2.paths[path]`; an absent name is a host gap.
     fn path(&self, lua: &Lua, name: &str, path: &str) -> mlua::Result<Vec<Vec3>> {
         match self.find_path(lua, name, path)? {
@@ -260,10 +266,7 @@ impl Env {
         };
         let points = match dll_objects::lookup_path(&paths, path)? {
             Ok(Some(t)) => t,
-            Ok(None) => {
-                self.ctx.borrow_mut().note_absent_path(format!("absent path '{path}' (A2.{name})"));
-                return Ok(None);
-            }
+            Ok(None) => return Ok(None),
             Err(why) => return Err(missing(why)),
         };
         let mut out = Vec::new();
@@ -340,7 +343,10 @@ fn goto(lua: &Lua, env: &Env, overload: usize, a: &[P]) -> mlua::Result<Value> {
         // An absent path name: the engine's lookup is null and nothing happens.
         None => match env.find_path(lua, "Goto", a[1].text())? {
             Some(points) => points,
-            None => return nothing(),
+            None => {
+                env.note_absent("Goto", a[1].text());
+                return nothing();
+            }
         },
     };
     let warp = a[2].boolean();
@@ -519,7 +525,10 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
         let Some(unit) = e.alive(a[0].id()) else { return nothing() };
         // An absent path name sets neither the path type nor the order.
         e.owned("Patrol", &unit)?;
-        let Some(points) = e.find_path(lua, "Patrol", a[1].text())? else { return nothing() };
+        let Some(points) = e.find_path(lua, "Patrol", a[1].text())? else {
+            e.note_absent("Patrol", a[1].text());
+            return nothing();
+        };
         e.order("Patrol", unit.id, |units| Order::Patrol { units, points })?;
         nothing()
     })?)?;
@@ -559,7 +568,10 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
     table.set("PointAt", def(lua, &env, "PointAt", &["hs", "hh"], |lua, e, ov, a| {
         let Some(unit) = e.alive(a[0].id()) else { return nothing() };
         let to = if ov == 0 {
-            let Some(points) = e.find_path(lua, "PointAt", a[1].text())? else { return nothing() };
+            let Some(points) = e.find_path(lua, "PointAt", a[1].text())? else {
+                e.note_absent("PointAt", a[1].text());
+                return nothing();
+            };
             points[0]
         } else {
             let Some(target) = e.alive(a[1].id()) else { return nothing() };

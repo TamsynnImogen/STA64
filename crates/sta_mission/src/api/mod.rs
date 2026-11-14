@@ -414,7 +414,8 @@ impl Ctx {
 
     /// An uncounted note: a path lookup found nothing (`absent path 'x' (A2.Goto)`).
     pub fn note_absent_path(&mut self, what: String) {
-        *self.absent_paths.entry(what).or_default() += 1;
+        let n = self.absent_paths.entry(what).or_default();
+        *n = n.saturating_add(1);
     }
 
     pub fn unsupported(&mut self, what: &str) {

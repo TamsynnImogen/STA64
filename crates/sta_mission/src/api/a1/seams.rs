@@ -62,7 +62,10 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
             return Err(mlua::Error::runtime("A1.Patrol: object has no player owner"));
         }
         // An absent path name: the lookup is null, so neither the path type nor the order is set.
-        let Some(points) = e.find_path(lua, "Patrol", a[1].text())? else { return Ok(Value::Nil) };
+        let Some(points) = e.find_path(lua, "Patrol", a[1].text())? else {
+            e.note_absent("Patrol", a[1].text());
+            return Ok(Value::Nil);
+        };
         if !e.ctx.borrow_mut().order(id, |units| sta_sim::command::Order::Patrol { units, points }) {
             return Err(mlua::Error::runtime("A1.Patrol: the order could not be queued"));
         }

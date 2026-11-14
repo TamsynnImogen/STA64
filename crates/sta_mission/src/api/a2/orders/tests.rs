@@ -47,8 +47,11 @@ fn spawn_cmd(db: &ContentDb, seq: u32, odf: &str, player: u8, at: [f32; 3]) -> C
 }
 
 fn scene_with(db: Arc<ContentDb>, odfs: [&str; 4], at: [[f32; 3]; 4]) -> Scene {
+    scene_owned(db, odfs, at, [0, 1, 0, 1])
+}
+
+fn scene_owned(db: Arc<ContentDb>, odfs: [&str; 4], at: [[f32; 3]; 4], players: [u8; 4]) -> Scene {
     let mut sim = Sim::from_setup(&setup(&db));
-    let players = [0, 1, 0, 1];
     let cmds: Vec<Command> =
         (0..4).map(|i| spawn_cmd(&db, i as u32 + 1, odfs[i], players[i], at[i])).collect();
     let out = sim.step(&cmds);
@@ -177,6 +180,30 @@ fn a_path_the_map_does_not_have_does_nothing_like_the_engines_null_lookup() {
     let (rt, err) = fails(&s, "A2.paths = nil; A2.Goto(a, 'P', false, 1)");
     assert!(err.contains("A2.paths"), "{err}");
     assert!(counted(&rt, "A2.Goto"));
+}
+
+#[test]
+fn an_unowned_unit_fails_before_the_path_lookup_as_on_a1() {
+    let s = scene_owned(
+        Arc::new(fake::db()),
+        ["fx_cruiser", "fx_cruiser", "fx_station", "fx_frigate"],
+        [[0.0, 0.0, 0.0], [100.0, 0.0, 0.0], [300.0, 0.0, 0.0], [5000.0, 0.0, 0.0]],
+        [sta_sim::world::NEUTRAL.0, 1, 0, 1],
+    );
+    for script in ["A2.Goto(a, 'NOPE', false, 1)", "A2.Patrol(a, 'NOPE')"] {
+        let (rt, err) = fails(&s, script);
+        assert!(err.contains("no player owner"), "{script}: {err}");
+        assert!(rt.absent_paths().is_empty(), "{script}");
+    }
+}
+
+#[test]
+fn strict_path_calls_leave_no_absent_note() {
+    // SetPosition on an absent path still raises and counts; it is not a no-op, so no note.
+    let s = scene();
+    let (rt, _) = fails(&s, "A2.SetPosition(a, 'Nope')");
+    assert!(counted(&rt, "A2.SetPosition"));
+    assert!(rt.absent_paths().is_empty(), "{:?}", rt.absent_paths());
 }
 
 #[test]
