@@ -2146,8 +2146,7 @@ mod tests {
         assert_eq!((f.font.name.as_str(), k), ("fontmedium", 2));
     }
 
-    /// Glyph rectangles land on whole physical pixels and each pen position is the running
-    /// total of the strips' advances, at every multiple and UI scale.
+    /// A label with a minimum height takes the next font up rather than a doubled smaller one.
     #[test]
     fn a_floored_label_takes_the_next_font_up_not_a_doubled_one_below() {
         let mut fonts = SpriteFonts::default();
@@ -2167,6 +2166,8 @@ mod tests {
         assert_eq!(pick(40.0), ("a".into(), 3));
     }
 
+    /// Glyph rectangles land on whole physical pixels and each pen position is the running
+    /// total of the strips' advances, at every multiple and UI scale.
     #[test]
     fn crisp_layout_is_whole_pixels_with_exact_advances() {
         let h = 19.0;
