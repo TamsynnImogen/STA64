@@ -44,7 +44,7 @@ fn runtime() -> MissionRuntime {
 }
 
 fn error(script: &str) -> String {
-    let mut rt = runtime();
+    let rt = runtime();
     rt.eval::<()>(script).expect_err(script).to_string()
 }
 
