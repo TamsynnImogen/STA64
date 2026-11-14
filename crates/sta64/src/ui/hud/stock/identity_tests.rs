@@ -68,10 +68,10 @@ fn assert_rect(app: &App, node: &Node, x: f32, y: f32, w: f32, h: f32) {
     assert_eq!(
         (node.left, node.top, node.width, node.height),
         (
-            Val::Px(origin.x + round(x * scale.x)),
-            Val::Px(origin.y + round(y * scale.y)),
-            Val::Px(round(w * scale.x)),
-            Val::Px(round(h * scale.y))
+            Val::Px(origin.x + round(x * scale)),
+            Val::Px(origin.y + round(y * scale)),
+            Val::Px(round(w * scale)),
+            Val::Px(round(h * scale))
         )
     );
 }

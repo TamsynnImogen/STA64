@@ -99,7 +99,7 @@ fn crew_colour(vfs: &sta_vfs::Vfs, feed: &HudFeed, unit: &sta_sim::UnitView, sto
 
 fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, label: &str, options: GameOptions, hover_mode: HoverCapture) {
     let layout = crate::game::gui_layout(&vfs, cfg).unwrap_or_else(|| panic!("installed {cfg} missing"));
-    let stock = StockLayout::new(&layout, Vec2::new(1080.0 * size.x as f32 / size.y as f32, 1080.0));
+    let stock = StockLayout::for_aspect(&layout, size.x as f32 / size.y as f32);
     let resource = stock.pieces("resourcePanel");
     let minimap = stock.pieces("minimapBackgroundPanel");
     let info = stock.pieces("infoMiddleBackgroundPanel");
@@ -446,8 +446,9 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
     // viewport Auto letterboxes both pieces and leaves a black gap here; native
     // independent-axis drawing must fill this authored join.
     if profile == UiProfile::Armada2 && size.x as f32 / size.y as f32 > 1.5 {
-        let x = (256.0 * size.x as f32 / stock.canvas.x).round() as u32;
-        let y = (38.0 * size.y as f32 / stock.canvas.y).round() as u32;
+        let k = size.y as f32 / 1080.0;
+        let x = ((stock.hud.x + 256.0 * stock.scale) * k).round() as u32;
+        let y = ((stock.hud.y + 38.0 * stock.scale) * k).round() as u32;
         for x in x.saturating_sub(3)..=(x + 3).min(size.x - 1) {
             let pixel = rgba.get_pixel(x, y.min(size.y - 1));
             assert!(
@@ -477,10 +478,16 @@ fn installed_stock_hud_renders_on_gpu() {
         Ok("fo") => UiProfile::FleetOps,
         _ => panic!("set STA64_HUD_PROFILE=a2 or fo for the mounted install"),
     };
-    for (size, ratio) in [(UVec2::new(1024, 768), "4x3"), (UVec2::new(1280, 720), "16x9")] {
+    // 21:9 and 32:9 windows (UI-37): the sheet is scaled by one factor and centred.
+    for (size, ratio) in [
+        (UVec2::new(1024, 768), "4x3"),
+        (UVec2::new(1280, 720), "16x9"),
+        (UVec2::new(2560, 1080), "21x9"),
+        (UVec2::new(3840, 1080), "32x9"),
+    ] {
         let cfg = match (profile, ratio) {
             (UiProfile::Armada2, _) => "gui_fed.cfg",
-            (UiProfile::FleetOps, "16x9") => "gui_federation16x9.cfg",
+            (UiProfile::FleetOps, "16x9" | "21x9" | "32x9") => "gui_federation16x9.cfg",
             (UiProfile::FleetOps, _) => "gui_federation.cfg",
             _ => unreachable!(),
         };
@@ -516,16 +523,17 @@ fn installed_armada1_resource_readouts_render_on_gpu() {
         eprintln!("SKIP: set STA64_TEST_A1_INSTALL=<Armada I root>");
         return;
     };
-    let size = UVec2::new(1280, 720);
+    for size in [UVec2::new(1280, 720), UVec2::new(2560, 1080), UVec2::new(3840, 1080)] {
     for (cfg, spr, label) in [
         ("gui_fed.cfg", "gui_federation.spr", "a1-fed"),
         ("gui_kli.cfg", "gui_klingon.spr", "a1-kli"),
         ("gui_rom.cfg", "gui_romulan.spr", "a1-rom"),
         ("gui_bor.cfg", "gui_borg.spr", "a1-bor"),
     ] {
+        let label = &format!("{label}-{}x{}", size.x, size.y);
         let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), None).expect("installed A1 VFS");
         let layout = crate::game::gui_layout(&vfs, cfg).unwrap_or_else(|| panic!("installed {cfg} missing"));
-        let stock = StockLayout::new(&layout, Vec2::new(1080.0 * size.x as f32 / size.y as f32, 1080.0));
+        let stock = StockLayout::for_aspect(&layout, size.x as f32 / size.y as f32);
         assert!(stock.panel("resource").is_none(), "{label}: now has a resource panel");
         let hud_feed = feed(&vfs, GameOptions::default());
         let player = hud_feed.view.player(hud_feed.player).expect("capture player");
@@ -656,6 +664,7 @@ fn installed_armada1_resource_readouts_render_on_gpu() {
             std::fs::create_dir_all(&dir).unwrap();
             rgba.save(std::path::Path::new(&dir).join(format!("stock-{label}.png"))).unwrap();
         }
+    }
     }
 }
 

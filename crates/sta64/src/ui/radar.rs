@@ -402,7 +402,7 @@ fn stock_rect(r: crate::ui::hud::layout::R) -> Node {
 
 fn spawn_stock(commands: &mut Commands, root: Entity, theme: &Theme, cfg: &HudConfig) {
     let Some(gui) = cfg.gui.as_ref() else { return };
-    let layout = StockLayout::new(gui, Vec2::new(1080.0 * cfg.aspect, 1080.0));
+    let layout = StockLayout::for_aspect(gui, cfg.aspect);
     let area = layout.panel("minimap");
     let chrome = commands.spawn((
         RadarChrome,
@@ -1086,7 +1086,7 @@ minimapStationFilterButton = \"station_art\"
         let square = app.world_mut().query_filtered::<Entity, With<RadarSquare>>().single(app.world()).unwrap();
         let node = app.world().get::<Node>(square).unwrap();
         assert_eq!((node.left, node.top, node.width, node.height),
-            (Val::Px(12.0), Val::Px(18.0), Val::Px(384.0), Val::Px(252.0)));
+            (Val::Px(9.0), Val::Px(18.0), Val::Px(288.0), Val::Px(252.0)));
         assert_eq!(count::<super::super::theme::Panel>(&mut app), 0);
         assert_eq!(count::<FilterDot>(&mut app), 0);
         assert_eq!(count::<FilterName>(&mut app), 2);
@@ -1095,7 +1095,7 @@ minimapStationFilterButton = \"station_art\"
         let outline = app.world_mut().query::<(&RadarCamera, &Node)>().iter(app.world())
             .find(|(camera, _)| camera.0 == 0).map(|(_, node)| node.clone()).unwrap();
         assert_eq!((outline.left, outline.top, outline.width),
-            (Val::Px(96.0), Val::Px(188.25), Val::Px(192.0)));
+            (Val::Px(72.0), Val::Px(188.25), Val::Px(144.0)));
         let names: Vec<_> = app.world_mut().query::<&GuiImage>().iter(app.world())
             .map(|image| (image.names[0].clone(), image.frame)).collect();
         assert!(names.contains(&("map_panel".to_owned(), 0)));
@@ -1190,10 +1190,15 @@ minimapDisplayArea = 16 19 320 320
                 let node = app.world().get::<Node>(fog).unwrap();
                 assert_eq!((node.left, node.top, node.width, node.height),
                     (Val::Px(0.0), Val::Px(0.0), Val::Percent(100.0), Val::Percent(100.0)));
-                // A 16:9 window makes the display square; any other makes it a rectangle.
+                // One factor for both axes (UI-37): the square display stays square (within the
+                // rounding of its edges) and sits inside the one clamped HUD rectangle.
                 let sq = app.world().get::<Node>(square).unwrap();
                 let (Val::Px(w), Val::Px(h)) = (sq.width, sq.height) else { panic!("px box") };
-                assert_eq!(w == h, (aspect - 16.0 / 9.0f32).abs() < 1e-3, "{aspect}: box {w}x{h}");
+                assert!((w - h).abs() <= 1.0, "{aspect}: box {w}x{h}");
+                let hud = StockLayout::for_aspect(&fo_sheet(), aspect).hud;
+                let chrome = app.world().get::<ChildOf>(square).unwrap().parent();
+                let (Val::Px(cw), Val::Px(ch)) = ({ let n = app.world().get::<Node>(chrome).unwrap(); (n.width, n.height) }) else { panic!("px chrome") };
+                assert!(cw <= hud.w && ch <= hud.h, "{aspect}: chrome {cw}x{ch} in {hud:?}");
 
                 // Blips and picture both place a world point at `to_square` of the box.
                 let grid_probe = FogGrid::new(lo.to_array(), hi.to_array());

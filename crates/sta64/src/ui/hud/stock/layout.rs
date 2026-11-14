@@ -34,13 +34,28 @@ impl PaletteLayout {
     }
 }
 
-/// CFG canvas coordinates mapped independently to the active screen axes.
+/// CFG canvas coordinates mapped to the screen by one factor for both axes. The sheet's
+/// canvas, scaled and centred, is [`StockLayout::hud`]: the one rectangle every consumer
+/// (panels, pointer, minimap, notices) shares; the screen outside it belongs to the world.
 #[derive(Clone, Debug)]
 pub struct StockLayout {
     pub cfg: GuiLayout,
     pub screen: Vec2,
     pub canvas: Vec2,
-    pub scale: Vec2,
+    /// Screen units per canvas unit, the same on both axes.
+    pub scale: f32,
+    /// The scaled canvas, centred in the screen (whole units).
+    pub hud: R,
+}
+
+/// The sheet canvas scaled by one factor (window height over sheet height, or window width
+/// over sheet width when the window is narrower than the sheet) and centred in `screen`.
+/// The origin snaps to whole units, so a window of the sheet's own aspect gets zero margins.
+pub fn fit_canvas(canvas: Vec2, screen: Vec2) -> (f32, R) {
+    let scale = (screen.y / canvas.y).min(screen.x / canvas.x);
+    let size = canvas * scale;
+    let origin = ((screen - size) / 2.0).round().max(Vec2::ZERO);
+    (scale, R::new(origin.x, origin.y, size.x, size.y))
 }
 
 impl StockLayout {
@@ -50,21 +65,37 @@ impl StockLayout {
         } else {
             Vec2::new(1600.0, 1200.0)
         };
-        Self {
-            cfg: cfg.clone(),
-            screen,
-            canvas,
-            scale: screen / canvas,
-        }
+        let (scale, hud) = fit_canvas(canvas, screen);
+        Self { cfg: cfg.clone(), screen, canvas, scale, hud }
     }
 
+    /// The layout for a window of this aspect, in the HUD's 1080-line theme units.
+    pub fn for_aspect(cfg: &GuiLayout, aspect: f32) -> Self {
+        let aspect = if aspect.is_finite() && aspect > 0.0 { aspect } else { 16.0 / 9.0 };
+        Self::new(cfg, Vec2::new(super::super::layout::SCREEN_H * aspect, super::super::layout::SCREEN_H))
+    }
+
+    /// Whether a screen point (theme units) is inside the HUD sheet's rectangle.
+    pub fn in_hud(&self, p: Vec2) -> bool {
+        self.hud.contains(p)
+    }
+
+    /// A canvas rectangle, panel-relative: scaled, not moved by the centring offset.
     fn scaled(&self, r: Rect) -> R {
         R::new(
-            (r.x as f32 * self.scale.x + 0.5).floor(),
-            (r.y as f32 * self.scale.y + 0.5).floor(),
-            (r.w as f32 * self.scale.x + 0.5).floor(),
-            (r.h as f32 * self.scale.y + 0.5).floor(),
+            (r.x as f32 * self.scale + 0.5).floor(),
+            (r.y as f32 * self.scale + 0.5).floor(),
+            (r.w as f32 * self.scale + 0.5).floor(),
+            (r.h as f32 * self.scale + 0.5).floor(),
         )
+    }
+
+    /// A canvas rectangle in screen units: scaled and moved by the centring offset.
+    fn placed(&self, r: Rect) -> R {
+        let mut out = self.scaled(r);
+        out.x += self.hud.x;
+        out.y += self.hud.y;
+        out
     }
 
     /// Includes zero sized rectangles, which can still carry an offset.
@@ -95,7 +126,8 @@ impl StockLayout {
         None
     }
 
-    /// A visible rectangle; authored zero or negative dimensions disable it.
+    /// A visible rectangle, panel-relative (not moved by the centring offset; use `panel`,
+    /// `info_area` or `at` for screen positions); authored zero or negative sizes disable it.
     pub fn rect(&self, key: &str) -> Option<R> {
         self.raw_rect(key)
             .filter(|r| r.w > 0 && r.h > 0)
@@ -104,10 +136,7 @@ impl StockLayout {
 
     pub fn point(&self, key: &str) -> Option<Vec2> {
         self.raw_rect(key).map(|r| {
-            Vec2::new(
-                (r.x as f32 * self.scale.x + 0.5).floor(),
-                (r.y as f32 * self.scale.y + 0.5).floor(),
-            )
+            Vec2::new((r.x as f32 * self.scale + 0.5).floor(), (r.y as f32 * self.scale + 0.5).floor())
         })
     }
 
@@ -146,8 +175,11 @@ impl StockLayout {
             .map(|(_, c)| Color::srgba(c.r, c.g, c.b, c.a))
     }
 
+    /// A panel's rectangle in screen units (the only absolute keys are the panel areas).
     pub fn panel(&self, name: &str) -> Option<R> {
-        self.rect(&format!("{name}PanelArea"))
+        self.raw_rect(&format!("{name}PanelArea"))
+            .filter(|r| r.w > 0 && r.h > 0)
+            .map(|r| self.placed(r))
     }
 
     pub fn info_area(&self, variant: usize) -> Option<R> {
@@ -157,7 +189,7 @@ impl StockLayout {
             .get(&u32::try_from(variant).ok()?)
             .copied()
             .or(panel.area)?;
-        (raw.w > 0 && raw.h > 0).then(|| self.scaled(raw))
+        (raw.w > 0 && raw.h > 0).then(|| self.placed(raw))
     }
 
     pub fn info_origin(&self, variant: usize) -> Vec2 {
@@ -220,22 +252,13 @@ impl StockLayout {
                 _ => None,
             }
         };
-        let mut x = (self.number("popupPaletteXA").unwrap_or(30.0) as f32 * self.scale.x).round();
-        // A window wider than the sheet's canvas (21:9 on the 16:9 variant) stretches the
-        // left panels with the x scale; the palette starts no further left than the
-        // minimap panel's right edge (the 16:9 sheet's 264 sits inside its 351 wide minimap).
-        if self.screen.x * self.canvas.y > self.screen.y * self.canvas.x * 1.001
-            && let Some(map) = self.panel("minimap")
-        {
-            x = x.max(map.x + map.w);
-        }
         Some(PaletteLayout {
             origin: Vec2::new(
-                x,
-                (self.number("popupPaletteYA").unwrap_or(30.0) as f32 * self.scale.y).round(),
+                (self.number("popupPaletteXA").unwrap_or(30.0) as f32 * self.scale).round() + self.hud.x,
+                (self.number("popupPaletteYA").unwrap_or(30.0) as f32 * self.scale).round() + self.hud.y,
             ),
             cell: Vec2::new(cell.w, cell.h),
-            gap: Vec2::new((gap * self.scale.x).round(), (gap * self.scale.y).round()),
+            gap: Vec2::splat((gap * self.scale).round()),
             columns: bounds("staticPaletteWidthA", 3)?,
             rows: bounds("staticPaletteHeightA", 7)?,
         })
@@ -303,17 +326,19 @@ mod tests {
                 a: 0.5,
             },
         );
+        // 800x900 against a 1600x1200 sheet: one factor 0.5 (the width), centred vertically.
         let l = StockLayout::new(&cfg, Vec2::new(800.0, 900.0));
-        assert_eq!(l.scale, Vec2::new(0.5, 0.75));
-        assert_eq!(l.panel("INFO"), Some(R::new(5.0, 15.0, 200.0, 150.0)));
-        assert_eq!(l.info_area(1), Some(R::new(15.0, 30.0, 50.0, 60.0)));
+        assert_eq!(l.scale, 0.5);
+        assert_eq!(l.hud, R::new(0.0, 150.0, 800.0, 600.0));
+        assert_eq!(l.panel("INFO"), Some(R::new(5.0, 160.0, 200.0, 100.0)));
+        assert_eq!(l.info_area(1), Some(R::new(15.0, 170.0, 50.0, 40.0)));
         assert_eq!(l.info_area(2), None);
         assert_eq!(l.raw_rect("INFOPANELAREA_2"), Some(rect(30, 40, 0, 80)));
-        assert_eq!(l.point("infobaroffset_0"), Some(Vec2::new(9.0, -3.0)));
+        assert_eq!(l.point("infobaroffset_0"), Some(Vec2::new(9.0, -2.0)));
         assert_eq!(l.rect("InfoBarOffset_0"), None);
         assert_eq!(
             l.at(Vec2::new(100.0, 200.0), "InfoPanelArea_1"),
-            Some(R::new(115.0, 230.0, 50.0, 60.0))
+            Some(R::new(115.0, 220.0, 50.0, 40.0))
         );
         assert_eq!(l.name("INFORMATIONFONT"), Some("font"));
         assert_eq!(l.name("INFOBACKGROUNDPANEL"), Some("info_sprite"));
@@ -322,7 +347,7 @@ mod tests {
         assert_eq!(
             l.pieces("infoBackgroundPanel"),
             vec![Piece {
-                rect: R::new(0.0, 0.0, 20.0, 15.0),
+                rect: R::new(0.0, 0.0, 20.0, 10.0),
                 name: "info_sprite".into(),
                 frame: 0
             }]
@@ -357,71 +382,117 @@ mod tests {
         assert_eq!(unnamed[0].name, "default_sprite");
     }
 
-    /// Fleet Ops' 16:9 sheet (canvas 2134x1200, minimap panel 351 wide, palette at 264) on
-    /// ultrawide windows: the command cells start right of the minimap panel. Windows the
-    /// sheet fits (4:3, 16:10, 16:9) and Classic's 4:3 sheet place it as before.
+    /// Fleet Ops' 16:9 sheet (canvas 2134x1200, minimap panel 351 wide, palette at 264)
+    /// on a 21:9 window: the HUD is the 16:9 sheet scaled by one factor and centred, so the
+    /// palette sits where it does at 16:9 (inside the authored minimap panel, as stock has
+    /// it) plus the centring offset; nothing is moved relative to the minimap.
     #[test]
-    fn ultrawide_palette_clears_the_minimap_panel() {
+    fn palette_moves_with_the_centred_sheet() {
         let mut cfg = GuiLayout { canvas: (2134, 1200), ..Default::default() };
         cfg.rects.insert("paletteSingleButtonArea".into(), rect(0, 0, 88, 88));
         cfg.rects.insert("minimapPanelArea".into(), rect(-1, 818, 351, 383));
         cfg.numbers.insert("popupPaletteXA".into(), 264.0);
         cfg.numbers.insert("popupPaletteYA".into(), 940.0);
-        cfg.numbers.insert("staticPaletteWidthA".into(), 14.0);
-        cfg.numbers.insert("staticPaletteHeightA".into(), 20.0);
+        let base = StockLayout::new(&cfg, Vec2::new(2134.0, 1200.0));
+        assert_eq!(base.hud, R::new(0.0, 0.0, 2134.0, 1200.0));
         for screen in [Vec2::new(3440.0, 1440.0), Vec2::new(2560.0, 1080.0), Vec2::new(5120.0, 1440.0)] {
             let l = StockLayout::new(&cfg, screen);
-            let map = l.panel("minimap").unwrap();
-            let p = l.palette().unwrap();
-            for row in 0..p.rows {
-                for col in 0..p.columns {
-                    let c = p.cell_rect(col, row);
-                    let inside = c.x < map.x + map.w && c.x + c.w > map.x && c.y < map.y + map.h && c.y + c.h > map.y;
-                    assert!(!inside, "{screen:?}: cell {col},{row} {c:?} overlaps the minimap {map:?}");
-                }
-            }
-        }
-        // Wider than the sheet by any margin (no dead band): 2560x1400 is 1.83 on the 1.78 sheet.
-        {
-            let l = StockLayout::new(&cfg, Vec2::new(2560.0, 1400.0));
-            let map = l.panel("minimap").unwrap();
-            assert!(l.palette().unwrap().origin.x >= map.x + map.w);
-        }
-        // Unchanged where the sheet fits: the authored x, scaled.
-        for screen in [Vec2::new(1920.0, 1080.0), Vec2::new(2134.0, 1200.0), Vec2::new(1600.0, 1200.0), Vec2::new(1920.0, 1200.0), Vec2::new(1280.0, 720.0)] {
-            let x = StockLayout::new(&cfg, screen).palette().unwrap().origin.x;
-            assert_eq!(x, (264.0 * screen.x / 2134.0).round(), "{screen:?}");
-        }
-        // Classic's sheet (4:3 canvas, palette at 355 right of its 350 wide minimap) is not moved.
-        let mut classic = GuiLayout { canvas: (1600, 1200), ..Default::default() };
-        classic.rects.insert("paletteSingleButtonArea".into(), rect(0, 0, 80, 80));
-        classic.rects.insert("minimapPanelArea".into(), rect(0, 816, 350, 384));
-        classic.numbers.insert("popupPaletteXA".into(), 355.0);
-        classic.numbers.insert("popupPaletteYA".into(), 825.0);
-        for screen in [Vec2::new(3440.0, 1440.0), Vec2::new(1920.0, 1080.0), Vec2::new(1600.0, 1200.0)] {
-            let x = StockLayout::new(&classic, screen).palette().unwrap().origin.x;
-            assert_eq!(x, (355.0 * screen.x / 1600.0).round(), "{screen:?}");
+            let (map, p) = (l.panel("minimap").unwrap(), l.palette().unwrap());
+            let (m0, p0) = (base.panel("minimap").unwrap(), base.palette().unwrap());
+            let k = screen.y / 1200.0;
+            assert_eq!(p.origin.x - map.x, (264.0 * k).round() - (-k + 0.5).floor(), "{screen:?}");
+            assert_eq!(p.origin.y - map.y, (940.0 * k).round() - (818.0 * k + 0.5).floor(), "{screen:?}");
+            assert!(p.origin.x >= l.hud.x && p0.origin.x >= m0.x);
         }
     }
 
-    /// Install-gated: Fleet Ops 4.0's own federation 16x9 sheet at 21:9.
+    /// A sheet of the given canvas with a left panel, a minimap panel and a palette.
+    fn sheet(canvas: (i32, i32)) -> GuiLayout {
+        let mut cfg = GuiLayout { canvas, ..Default::default() };
+        cfg.rects.insert("minimapPanelArea".into(), rect(0, canvas.1 * 2 / 3, canvas.1 / 3, canvas.1 / 3));
+        cfg.rects.insert("minimapDisplayArea".into(), rect(20, 20, 200, 200));
+        cfg.rects.insert("paletteSingleButtonArea".into(), rect(0, 0, 80, 80));
+        cfg.numbers.insert("popupPaletteXA".into(), 400.0);
+        cfg.numbers.insert("popupPaletteYA".into(), 900.0);
+        cfg
+    }
+
+    /// UI-37 (ADR 0008 H1 to H3): windows of 4:3, 16:9, 21:9 and 32:9 against a 4:3 and a
+    /// 16:9 sheet: one factor, the sheet's own aspect, centred, never larger than the window.
     #[test]
-    fn installed_fleet_ops_palette_clears_the_minimap_at_21_9() {
-        let roots = std::path::Path::new("/home/cedric/Games/Heroic/Star Trek Armada II Fleet Operations Roots");
-        let Ok(vfs) = sta_vfs::Vfs::mount_install(roots, Some("Fleet Ops 4.0")) else {
-            eprintln!("FO4 not installed: skipped");
-            return;
-        };
-        let Some(cfg) = crate::game::gui_layout(&vfs, "gui_federation16x9.cfg") else { return };
-        for screen in [Vec2::new(3440.0, 1440.0), Vec2::new(2560.0, 1080.0)] {
-            let l = StockLayout::new(&cfg, screen);
-            let (Some(map), Some(p)) = (l.panel("minimap"), l.palette()) else { continue };
-            for row in 0..p.rows {
-                for col in 0..p.columns {
-                    let c = p.cell_rect(col, row);
-                    assert!(c.x >= map.x + map.w, "{screen:?}: {c:?} vs {map:?}");
+    fn one_factor_clamped_to_the_sheet_and_centred() {
+        for canvas in [(1600, 1200), (2134, 1200)] {
+            let cfg = sheet(canvas);
+            let sheet_aspect = canvas.0 as f32 / canvas.1 as f32;
+            for aspect in [4.0 / 3.0, 16.0 / 9.0, 21.0 / 9.0, 32.0 / 9.0] {
+                let l = StockLayout::for_aspect(&cfg, aspect);
+                let h = l.hud;
+                let why = format!("{canvas:?} at {aspect}");
+                assert_eq!(l.screen.y, 1080.0, "{why}");
+                // Uniform: the HUD keeps the sheet's aspect, whatever the window.
+                assert!((h.w / h.h - sheet_aspect).abs() < 2e-3, "{why}: {h:?}");
+                assert!(h.w <= l.screen.x + 0.5 && h.h <= l.screen.y + 0.5, "{why}: {h:?}");
+                // Height-limited unless the window is narrower than the sheet.
+                let want = (1080.0 / canvas.1 as f32).min(l.screen.x / canvas.0 as f32);
+                assert_eq!(l.scale, want, "{why}");
+                // Centred, to whole units, margins equal within rounding.
+                assert!((h.x - (l.screen.x - h.w - h.x)).abs() <= 1.0, "{why}: {h:?}");
+                assert!((h.y - (l.screen.y - h.h - h.y)).abs() <= 1.0, "{why}: {h:?}");
+                // The minimap panel is the canvas rectangle scaled by that one factor,
+                // moved by the centring offset: square stays square.
+                let map = l.panel("minimap").unwrap();
+                assert!((map.w - map.h).abs() <= 1.0, "{why}: {map:?}");
+                assert_eq!(map.x, h.x + (0.0 * l.scale + 0.5).floor(), "{why}");
+                assert_eq!(map.y, h.y + ((canvas.1 * 2 / 3) as f32 * l.scale + 0.5).floor(), "{why}");
+                let display = l.rect("minimapDisplayArea").unwrap();
+                assert!((display.w - display.h).abs() <= 1.0 && display.w > 0.0, "{why}: {display:?}");
+                // Everything lies inside the HUD rectangle.
+                assert!(map.x >= h.x && map.right() <= h.right() + 1.0 && map.bottom() <= h.bottom() + 1.0, "{why}");
+                let cell = l.palette().unwrap().cell_rect(0, 0);
+                assert!(cell.x >= h.x && cell.y >= h.y, "{why}: {cell:?}");
+                // A window wider than the sheet leaves margins left and right only.
+                if aspect > sheet_aspect * 1.01 {
+                    assert!(h.x > 0.0 && h.y == 0.0 && h.h == 1080.0, "{why}: {h:?}");
+                    assert!(!l.in_hud(Vec2::new(h.x - 1.0, 500.0)) && !l.in_hud(Vec2::new(h.right() + 1.0, 500.0)), "{why}");
+                    assert!(l.in_hud(Vec2::new(h.x + 1.0, 500.0)), "{why}");
                 }
             }
+        }
+        // Narrower than the sheet (4:3 window, 16:9 sheet): the width limits, centred vertically.
+        let l = StockLayout::for_aspect(&sheet((2134, 1200)), 4.0 / 3.0);
+        assert_eq!(l.scale, 1440.0 / 2134.0);
+        assert_eq!(l.hud.x, 0.0);
+        assert!(l.hud.y > 0.0 && (l.hud.y - (1080.0 - l.hud.h - l.hud.y)).abs() <= 1.0);
+    }
+
+    /// A window of the sheet's own aspect lays out exactly as the per-axis mapping did:
+    /// no margins, the same rounded rectangles for every key kind.
+    #[test]
+    fn same_aspect_window_is_todays_layout() {
+        for (canvas, screen) in [((1600, 1200), Vec2::new(1440.0, 1080.0)), ((2134, 1200), Vec2::new(2134.0, 1200.0)), ((640, 480), Vec2::new(1440.0, 1080.0))] {
+            let mut cfg = sheet(canvas);
+            cfg.rects.insert("hull".into(), rect(13, 77, 123, 31));
+            let l = StockLayout::new(&cfg, screen);
+            assert_eq!(l.hud, R::new(0.0, 0.0, screen.x, screen.y), "{canvas:?}");
+            let (sx, sy) = (screen.x / canvas.0 as f32, screen.y / canvas.1 as f32);
+            assert_eq!((l.scale - sx).abs() + (l.scale - sy).abs(), 0.0, "{canvas:?}");
+            let old = |r: Rect| R::new(
+                (r.x as f32 * sx + 0.5).floor(), (r.y as f32 * sy + 0.5).floor(),
+                (r.w as f32 * sx + 0.5).floor(), (r.h as f32 * sy + 0.5).floor());
+            for key in ["hull", "minimapDisplayArea", "paletteSingleButtonArea"] {
+                assert_eq!(l.rect(key), Some(old(cfg.rects[key])), "{canvas:?} {key}");
+            }
+            assert_eq!(l.panel("minimap"), Some(old(cfg.rects["minimapPanelArea"])), "{canvas:?}");
+            assert_eq!(l.palette().unwrap().origin, Vec2::new((400.0 * sx).round(), (900.0 * sy).round()), "{canvas:?}");
+        }
+    }
+
+    #[test]
+    fn a_degenerate_screen_or_aspect_cannot_produce_nan() {
+        let cfg = sheet((1600, 1200));
+        for aspect in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            let l = StockLayout::for_aspect(&cfg, aspect);
+            assert!(l.hud.x.is_finite() && l.hud.w.is_finite() && l.scale > 0.0, "{aspect}");
         }
     }
 
@@ -435,8 +506,9 @@ mod tests {
         let l = StockLayout::new(&cfg, Vec2::new(800.0, 900.0));
         let p = l.palette().unwrap();
         assert_eq!((p.columns, p.rows), (3, 7));
-        assert_eq!(p.origin, Vec2::new(15.0, 23.0));
-        assert_eq!(p.cell_rect(2, 1), R::new(95.0, -7.0, 40.0, 30.0));
+        // Width-limited (800 of 1600): factor 0.5, HUD 800x600 centred at y 150.
+        assert_eq!(p.origin, Vec2::new(15.0, 165.0));
+        assert_eq!(p.cell_rect(2, 1), R::new(95.0, 145.0, 40.0, 20.0));
         cfg.numbers.insert("paletteSingleButtonGap".into(), 2.0);
         cfg.numbers.insert("staticPaletteWidthA".into(), 10.0);
         cfg.numbers.insert("staticPaletteHeightA".into(), 3.0);
@@ -444,7 +516,7 @@ mod tests {
         let p = StockLayout::new(&cfg, l.screen).palette().unwrap();
         assert_eq!((p.columns, p.rows), (10, 3));
         assert_eq!(p.origin.x, 0.0);
-        assert_eq!(p.gap, Vec2::new(1.0, 2.0));
+        assert_eq!(p.gap, Vec2::new(1.0, 1.0));
         cfg.numbers.insert("staticPaletteWidthA".into(), 0.0);
         assert!(StockLayout::new(&cfg, l.screen).palette().is_none());
     }

@@ -195,7 +195,8 @@ fn command_rank(command: &str) -> u8 {
     }
 }
 
-fn visible_cells(p: &PaletteLayout, screen: Vec2) -> Vec<R> {
+fn visible_cells(p: &PaletteLayout, hud: R) -> Vec<R> {
+    let screen = Vec2::new(hud.right(), hud.bottom());
     // Iterate screen-derived bounds, not arbitrary mod dimensions.
     let cols = p
         .columns
@@ -205,7 +206,7 @@ fn visible_cells(p: &PaletteLayout, screen: Vec2) -> Vec<R> {
         .min(((screen.y / p.cell.y.max(1.0)).ceil() as usize).saturating_add(1));
     (0..rows)
         .flat_map(|row| (0..cols).map(move |col| p.cell_rect(col, row)))
-        .filter(|r| r.x >= 0.0 && r.y >= 0.0 && r.right() <= screen.x + 0.5 && r.bottom() <= screen.y + 0.5)
+        .filter(|r| r.x >= hud.x && r.y >= hud.y && r.right() <= screen.x + 0.5 && r.bottom() <= screen.y + 0.5)
         .collect()
 }
 
@@ -334,7 +335,7 @@ pub(super) fn refresh(
         state.layout = config
             .gui
             .as_ref()
-            .map(|cfg| StockLayout::new(cfg, Vec2::new(1080.0 * config.aspect, 1080.0)));
+            .map(|cfg| StockLayout::for_aspect(cfg, config.aspect));
         commands.insert_resource(crate::render::overlays::GaugeStyle::from_cfg(
             state.layout.as_ref().and_then(|layout| layout.number("selectionGaugeHeight")),
             state.layout.as_ref().and_then(|layout| layout.number("selectionGaugeGap")),
@@ -403,7 +404,7 @@ pub(super) fn refresh(
         );
     }
     if let Some(palette) = layout.palette() {
-        let cells = visible_cells(&palette, layout.screen);
+        let cells = visible_cells(&palette, layout.hud);
         let capacity = cells.len();
         let pinned: Vec<_> = next
             .iter()
