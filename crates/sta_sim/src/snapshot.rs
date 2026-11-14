@@ -186,7 +186,10 @@ struct AdjustRec {
     rows: Vec<(PlayerId, i64, i64)>,
 }
 
-/// Format 23: cosmetic owning-seat faction labels. No gameplay rules.
+/// Format 23: owning-seat faction labels. They select the seat's officer cap
+/// and latinum rules (SIM-54), so they are gameplay input; they are fixed at
+/// set-up and snapshotted. `digest.rs` does not hash them for that reason: they
+/// cannot change after set-up.
 #[derive(Serialize, Deserialize)]
 struct AppearanceRec {
     version: u8,

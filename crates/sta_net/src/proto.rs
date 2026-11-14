@@ -32,8 +32,10 @@ use sta_sim::setup::{Control, GameOptions, PlayerSetup};
 
 /// First four bytes of every frame.
 pub const MAGIC: [u8; 4] = *b"S64N";
-/// Bumped whenever any message's encoding changes.
-pub const PROTOCOL_VERSION: u16 = 6;
+/// Bumped whenever any message's encoding changes. 6 appended `Edit` tags
+/// 38 to 43 (SIM-54 attributes); 7 appends `Edit::TeamPool`, tag 44 (SIM-54
+/// team pool).
+pub const PROTOCOL_VERSION: u16 = 7;
 /// Magic, version and body length.
 pub const HEADER_LEN: usize = 10;
 /// Largest frame, header included.
@@ -1664,6 +1666,16 @@ mod tests {
         }
     }
 
+    /// `Edit::TeamPool`, Edit tag 44 (protocol 7): the golden covers it.
+    fn team_pool_edit(seq: u32) -> Command {
+        use sta_sim::command::TeamOp;
+        Command {
+            player: PlayerId::SCRIPT,
+            seq,
+            kind: CommandKind::Edit(Edit::TeamPool(PlayerId(1), TeamOp::CrewAddA2, sta_core::Fixed::from_int(5))),
+        }
+    }
+
     fn text(player: u8, seq: u32, t: &str) -> Command {
         Command {
             player: PlayerId(player),
@@ -1728,6 +1740,7 @@ mod tests {
                 cmd(2, 0),
                 edit(0),
                 text(PlayerId::SCRIPT.0, 1, ""),
+                team_pool_edit(2),
             ],
             schedule: vec![
                 Scheduled {
@@ -2017,7 +2030,7 @@ mod tests {
     #[test]
     fn golden_encoding_is_pinned() {
         let all: Vec<u8> = samples().iter().flat_map(|m| encode(m).unwrap()).collect();
-        assert_eq!(PROTOCOL_VERSION, 6);
+        assert_eq!(PROTOCOL_VERSION, 7);
         assert_eq!(
             fnv1a64(&all),
             GOLDEN,
@@ -2025,7 +2038,7 @@ mod tests {
         );
     }
 
-    const GOLDEN: u64 = 2227328615839948453;
+    const GOLDEN: u64 = 10825410957796151308;
 
     /// Tags are positional and never move: NET-04 appended 22 to 28 after
     /// `Sections` (21), the last tag of protocol 2.
@@ -2101,8 +2114,8 @@ mod tests {
     fn header_is_little_endian_and_frozen() {
         let bytes = encode(&Message::Ping { nonce: 0 }).unwrap();
         // Ping is tag 12, nonce 0: two body bytes.
-        assert_eq!(bytes, [b'S', b'6', b'4', b'N', 6, 0, 2, 0, 0, 0, 12, 0]);
-        assert_eq!(version_notice(), [b'S', b'6', b'4', b'N', 6, 0, 0, 0, 0, 0]);
+        assert_eq!(bytes, [b'S', b'6', b'4', b'N', 7, 0, 2, 0, 0, 0, 12, 0]);
+        assert_eq!(version_notice(), [b'S', b'6', b'4', b'N', 7, 0, 0, 0, 0, 0]);
     }
 
     #[test]
@@ -2218,8 +2231,8 @@ mod tests {
         assert_eq!(peek_header(&bytes), Ok((1, bytes.len() - HEADER_LEN)));
         // A version notice from another build reads as its version.
         let mut notice = version_notice();
-        notice[4..6].copy_from_slice(&7u16.to_le_bytes());
-        assert_eq!(decode(&notice), Err(ProtoError::Version { found: 7 }));
+        notice[4..6].copy_from_slice(&8u16.to_le_bytes());
+        assert_eq!(decode(&notice), Err(ProtoError::Version { found: 8 }));
         // Our own version with no body is not a message.
         assert_eq!(decode(&version_notice()), Err(ProtoError::Empty));
         bytes[0] = b'X';

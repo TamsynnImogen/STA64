@@ -383,3 +383,37 @@ fn the_keys_reach_the_content_hash_and_the_state_snapshots_and_replays() {
     set_crew(&mut other, id2, 0.0);
     assert_ne!(other.digest(), s.digest());
 }
+
+#[test]
+fn a_crew_edit_to_zero_latches_derelict_like_a_casualty() {
+    use crate::command::{Command, CommandKind, Edit};
+    let d = db(&Cfg { protection: Some(1.0), crew: 100.0, ..Cfg::default() });
+    let (mut s, id) = sim(&d, 1);
+    let edit = |s: &mut Sim, v: f64| {
+        let out = s.step(&[Command { player: PlayerId::SCRIPT, seq: 0, kind: CommandKind::Edit(Edit::UnitCrew(id, fx(v))) }]);
+        assert!(!out.events.iter().any(|e| matches!(e, SimEvent::Rejected { .. })));
+    };
+    edit(&mut s, 5.0);
+    assert!(s.subsystems.get(id).is_none_or(|r| !r.derelict), "5 crew is not derelict");
+    edit(&mut s, 0.0);
+    let row = s.subsystems.get(id).unwrap();
+    assert!(row.derelict && row.off == 0b1_1100);
+    let u = s.units.get(id).unwrap();
+    assert!(u.flags.contains(UnitFlags::ENGINES_OFF) && u.flags.contains(UnitFlags::WEAPONS_OFF));
+    assert_eq!(crew(&s, id), 0.0);
+    let mut copy = Sim::from_snapshot(&s.snapshot(), Some(Arc::clone(&d))).unwrap();
+    assert_eq!(copy.digest(), s.digest());
+    assert!(copy.subsystems.get(id).unwrap().derelict);
+    s.step(&[]);
+    copy.step(&[]);
+    assert_eq!(copy.digest(), s.digest());
+    // The latch is in the digest: an edit that left the unit crewed differs.
+    let (mut other, _) = sim(&d, 1);
+    edit_other(&mut other, id);
+    assert_ne!(other.digest(), s.digest());
+}
+
+fn edit_other(s: &mut Sim, id: EntityId) {
+    use crate::command::{Command, CommandKind, Edit};
+    s.step(&[Command { player: PlayerId::SCRIPT, seq: 0, kind: CommandKind::Edit(Edit::UnitCrew(id, fx(5.0))) }]);
+}
