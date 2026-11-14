@@ -82,6 +82,43 @@ fn a_script_loading_aips_reaches_the_hosts_library() {
     assert!(a.runtime().unsupported().is_empty());
 }
 
+/// LUA-20: a switch the script throws on a tick applies on that same `ActiveMission::tick`, in call
+/// order with the plan loads of the tick, before the seat thinks; and a mission with only switches
+/// lists nothing as unsupported once the runner has taken them.
+#[test]
+fn ai_switches_apply_on_the_tick_the_script_throws_them() {
+    // Tick 1+: load (enables), disable all, then on a later tick enable team 1 and re-disable.
+    let script = "FIRED = 0\nMMM.register(function(t)\n\
+        if t >= 1 and FIRED == 0 then FIRED = 1 Player(1):loadAIP('MAIN.AIP') A2.DisableAllAITeams() end\n\
+        if t >= 2 and FIRED == 1 then FIRED = 2 A2.EnableTeam(1) end\n\
+        if t >= 3 and FIRED == 2 then FIRED = 3 A2.DisableTeam(1) A2.EnableAllAITeams() A2.DisableTeam(1) A2.ResetStrategyCycle() A2.EnableTeam(0) end\n\
+        if t >= 4 then Mission:finish(true, 0) end\nend)\n";
+    let src = Arc::new(source().with("missions/syn_fed01.lua", script));
+    let book = CampaignBook::load(&*src, ShellLayout::Armada2);
+    let host = FakeHost(src);
+    let mut r = CampaignRunner::new(book);
+    let a = r.start(&host, "federation", 0, 1).unwrap();
+    let p1 = PlayerId(1);
+    assert!(a.ai_is_ai(p1) && !a.ai_is_enabled(p1), "a computer seat starts ai, disabled");
+    let fired = |a: &ActiveMission| a.runtime().eval::<i64>("return FIRED").unwrap();
+    let mut seen = Vec::new();
+    for _ in 0..(10 * TICK_HZ_U64) {
+        let before = fired(a);
+        a.tick();
+        let after = fired(a);
+        if after != before {
+            // The effect of this tick's calls is already in the hub when tick() returns.
+            seen.push((after, a.ai_is_enabled(p1)));
+        }
+        if a.outcome().is_some() {
+            break;
+        }
+    }
+    assert_eq!(seen, [(1, false), (2, true), (3, false)], "load+disable, then enable, then the last of its calls wins");
+    assert!(a.unresolved_aips().is_empty(), "the human seat's EnableTeam(0) is the original's no-op");
+    assert!(a.runtime().unsupported().is_empty(), "{:?}", a.runtime().unsupported());
+}
+
 #[test]
 fn mshell_groups_per_layout() {
     assert_eq!(
