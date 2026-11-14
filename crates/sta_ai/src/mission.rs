@@ -32,12 +32,21 @@
 //! - `Enable` / `Disable`: only on an `ai` seat; elsewhere nothing.
 //! - `EnableAll` / `DisableAll`: every `ai` seat; the human seat is untouched.
 //! - `SetAi`: the original forces the flag back to true on the next tick for
-//!   every non-human seat, so on a seat here it changes nothing. On the human
+//!   every non-human seat, so on a seat here it changes nothing at all (the hub does not even
+//!   record it). The original is not quite as inert: a `SetIsAITeam(computer, false)` followed
+//!   in the same tick by `EnableTeam` / `DisableTeam` would see the flag false and have them
+//!   ignored until the next tick forces it back; here they apply. On the human
 //!   seat it would hand the player's units to the AI; that is not supported
 //!   (the script binding counts `SetIsAITeam(human seat, true)` as
 //!   unsupported; no stock mission does it).
 //! - `Replan` (`ResetStrategyCycle`): timing only. Each seat plans on its next
-//!   think instead of waiting for the next period tick.
+//!   think instead of waiting for the next period tick. The flag is used up by that think
+//!   whatever the seat is: a seat with no plan or a disabled one drops it, and a later load or
+//!   `Enable` does not bring it back. That matches the original, where the call only restarts
+//!   the cycle counter and a team that does not plan has nothing to replan (read from the
+//!   executable, static). Deviation of the AI, not of the call: the original staggers the
+//!   replans (team `t` replans on the `t`-th tick after the call, then every
+//!   `recompute_strategy_period` ticks of the AIP); here every seat replans in the same think.
 //!
 //! What a loaded seat does: enabled, as before; disabled, only the unit-level
 //! part (point defence, [`crate::skirmish::Think::UnitsOnly`]) and it still
@@ -54,6 +63,12 @@
 //! a disabled seat drops both. Splitting a defend-only and wave-upkeep subset
 //! out of it is a follow-up once the distress rule (range, selection) is read.
 //!
+//! The mission end-blocks that LUA-20 cleared (`api/taint.rs`: a2_borg01, a2_borg10, a2_fed05)
+//! rest on this deviation not mattering for the end rule: the end queries (`IsCompromised`,
+//! `CountStations`) read nothing from the AI, so the original's distress responses and
+//! running waves matter only if they change what those queries count. a2_borg01 and a2_borg10
+//! disable all AI teams near their ends, which is where it would show. Not measured.
+//!
 //! # Replay and where the requests are applied
 //!
 //! The plan and the flags reach the seat through a shared [`MissionAiHub`],
@@ -63,9 +78,17 @@
 //! before any seat thinks (`ActiveMission::tick`, `mission_host::Shared::think`),
 //! so every seat sees the same flags and the plans of the script's own tick in
 //! that tick's think, whatever the seat order. A request submitted after the
-//! seats have thought reaches them on the next tick. Both are deterministic: the
-//! same script and world give the same requests at the same ticks and the same
-//! commands. A seat with no plan yet sees no events, so it starts with no
+//! seats have thought reaches them on the next tick. Both are deterministic for what the
+//! script does inside its own `think`: the same script and world give the same requests at
+//! the same ticks and the same commands.
+//!
+//! **Requests raised outside `think` (live client only):** script calls the host makes
+//! itself (`deliver_reply_host_side` for a movie, message or cineractive answer, a host
+//! `eval`) queue their requests in the runtime like any other, but nothing takes them until
+//! the next tick's `take_ai_requests`. They are therefore applied on that tick *before* the
+//! requests of that tick's own script `think`, and which tick that is depends on the frame
+//! the client handled the player's input in, not on the sim tick, so it is not reproducible
+//! from the game alone (the same gap as the replies themselves, WORKPLAN SIM-61). A seat with no plan yet sees no events, so it starts with no
 //! memory of the past. Files are found by name only: two files of one name in
 //! different folders collapse to the later one in listing order.
 //!

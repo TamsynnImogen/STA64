@@ -9,8 +9,16 @@
 //! docs. Grades: read from the executables, static; nothing measured on the original bench.
 //!
 //! * A team number is not range-checked by the original (the call does nothing to a team
-//!   that is not an AI team). A number that names no seat here is therefore a no-op, not an
-//!   error. A1's `team` helper keeps raising on an invalid number as before.
+//!   that is not an AI team). In A2 a number that names no seat here is therefore a no-op,
+//!   not an error. A1's `team` helper keeps raising on an invalid number as before, and A1's
+//!   team 0 (the neutral team) is valid: it queues a request the hub drops. Both are tested.
+//! * Both games retain each call as `Presentation::Call("A1.<name>")` / `("A2.<name>")`,
+//!   as every call of these tables does, so a recorded command stream is the same as before
+//!   LUA-20. A host that takes no requests lists them in `MissionRuntime::unsupported()` as
+//!   `AI.<call>` (plan loads stay `Player.loadAIP`).
+//! * A call that raises (wrong arity or type, a failed submit) queues nothing. The A2 wrapper in
+//!   `taint.rs` treats it as a gap call; none of the switches is a world effect there, so it
+//!   blocks no later mission end by its name.
 //! * `SetIsAITeam` on a computer seat has no lasting effect (the original forces the flag
 //!   back every tick). `SetIsAITeam(<the human's seat>, true)` would hand the player's units
 //!   to the AI: not supported, counted as unsupported; it is not a world gap (no stock

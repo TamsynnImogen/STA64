@@ -595,7 +595,7 @@ GetMainEnemyBaseLocation AttackMainEnemyBase GetAllyStationAttacks`.
 and the host gives it to the seat's AI (`MissionRuntime::take_ai_requests`,
 `sta_ai::MissionAiHub`; AI-06), and so are the AI switches `DisableAllAITeams`, `EnableAllAITeams`,
 `EnableTeam`, `DisableTeam`, `SetIsAITeam` and `ResetStrategyCycle` (LUA-20, `api/ai_switch.rs`):
-not counted as unsupported, no taint. Each reason is in `unsupported()` as `A2.<Name>: <why>`.
+not counted as unsupported once a host takes them (before that `AI.<call>`), no taint. Each reason is in `unsupported()` as `A2.<Name>: <why>`.
 
 
 ## Object creation, searches and flags (step 2)

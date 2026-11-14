@@ -53,7 +53,19 @@ fn a1(script: &str) -> MissionRuntime {
 fn a2_calls_queue_one_request_each_in_call_order_and_count_nothing() {
     let rt = a2("A2.DisableAllAITeams(); A2.AI_Team_Load_AIP(1, 'x.aip'); A2.EnableTeam(1); A2.DisableTeam(1);
                  A2.SetIsAITeam(1, true); A2.ResetStrategyCycle(); A2.EnableAllAITeams()");
-    assert_eq!(rt.unsupported().len(), 1, "until a host takes them, as plan loads are: {:?}", rt.unsupported());
+    // Until a host takes them they are counted, each under its own name (a load as the plan load it is).
+    assert_eq!(
+        rt.unsupported(),
+        [
+            ("AI.DisableAllAITeams".to_owned(), 1),
+            ("AI.DisableTeam".to_owned(), 1),
+            ("AI.EnableAllAITeams".to_owned(), 1),
+            ("AI.EnableTeam".to_owned(), 1),
+            ("AI.ResetStrategyCycle".to_owned(), 1),
+            ("AI.SetIsAITeam".to_owned(), 1),
+            ("Player.loadAIP".to_owned(), 1),
+        ]
+    );
     assert_eq!(
         rt.take_ai_requests(),
         [
@@ -117,9 +129,82 @@ fn the_armada_one_calls_that_do_nothing_do_nothing() {
     assert!(rt.unsupported().is_empty());
 }
 
+fn present_calls(rt: &mut MissionRuntime) -> Vec<(String, Vec<sta_sim::present::Arg>)> {
+    use sta_sim::command::{CommandKind, Edit};
+    rt.take_commands()
+        .into_iter()
+        .map(|c| match c.kind {
+            CommandKind::Edit(Edit::Present(sta_sim::present::Presentation::Call { name, args })) => (name, args),
+            other => panic!("a switch queued more than a retained call: {other:?}"),
+        })
+        .collect()
+}
+
 #[test]
 fn reset_strategy_cycle_and_the_switches_change_no_other_state() {
     let mut rt = a2("A2.ResetStrategyCycle()");
     assert_eq!(rt.take_ai_requests(), [AiRequest::Replan]);
-    assert!(rt.take_commands().iter().all(|c| matches!(c.kind, sta_sim::command::CommandKind::Edit(sta_sim::command::Edit::Present(_)))));
+    assert_eq!(present_calls(&mut rt), [("A2.ResetStrategyCycle".to_owned(), vec![])]);
+}
+
+#[test]
+fn both_games_retain_each_switch_as_a_presentation_call_so_recorded_streams_stay_alike() {
+    use sta_sim::present::Arg;
+    let mut rt = a2("A2.DisableAllAITeams(); A2.EnableAllAITeams(); A2.EnableTeam(1); A2.DisableTeam(1); A2.SetIsAITeam(1, true)");
+    let a2_calls = present_calls(&mut rt);
+    assert_eq!(
+        a2_calls,
+        [
+            ("A2.DisableAllAITeams".to_owned(), vec![]),
+            ("A2.EnableAllAITeams".to_owned(), vec![]),
+            ("A2.EnableTeam".to_owned(), vec![Arg::Int(1)]),
+            ("A2.DisableTeam".to_owned(), vec![Arg::Int(1)]),
+            ("A2.SetIsAITeam".to_owned(), vec![Arg::Int(1), Arg::Bool(true)]),
+        ]
+    );
+    // A1 pushed these before LUA-20 (through its gap path) and keeps doing so: `A1.<name>`, same arguments.
+    let mut rt = a1("A1.DisableAllAITeams(); A1.EnableAllAITeams(); A1.EnableTeam(2); A1.DisableTeam(2); A1.SetIsAITeam(2, true)");
+    let a1_calls = present_calls(&mut rt);
+    let want = [
+        ("A1.DisableAllAITeams".to_owned(), vec![]),
+        ("A1.EnableAllAITeams".to_owned(), vec![]),
+        ("A1.EnableTeam".to_owned(), vec![Arg::Int(2)]),
+        ("A1.DisableTeam".to_owned(), vec![Arg::Int(2)]),
+        ("A1.SetIsAITeam".to_owned(), vec![Arg::Int(2), Arg::Bool(true)]),
+    ];
+    assert_eq!(a1_calls, want);
+    let _ = rt.take_ai_requests();
+    assert!(rt.unsupported().is_empty());
+}
+
+#[test]
+fn an_invalid_team_raises_in_armada_one_and_is_the_originals_silent_no_op_in_armada_two() {
+    // A1: the shared `team` helper raises (team numbers are 0..=8 there), and nothing is queued.
+    let rt = runtime(PlayerNumbering::ArmadaTeams);
+    for call in ["A1.EnableTeam(9)", "A1.DisableTeam(-1)", "A1.SetIsAITeam(200, true)"] {
+        assert!(rt.eval::<()>(call).is_err(), "{call}");
+    }
+    assert!(rt.take_ai_requests().is_empty());
+    // A2: the same numbers do nothing and raise nothing.
+    let rt = runtime(PlayerNumbering::Slots);
+    for call in ["A2.EnableTeam(9)", "A2.DisableTeam(-1)", "A2.SetIsAITeam(200, true)"] {
+        rt.eval::<()>(call).unwrap_or_else(|e| panic!("{call}: {e}"));
+    }
+    assert!(rt.take_ai_requests().is_empty());
+}
+
+#[test]
+fn armada_one_neutral_queues_a_request_the_hub_drops() {
+    let s = setup();
+    let hub = MissionAiHub::new(sta_ai::AipLibrary::new());
+    let _ai = hub.controller(&s, P1);
+    // Team 0 is the neutral team in A1's numbering: a valid number, no AI team behind it.
+    let rt = a1("A1.EnableTeam(0); A1.DisableTeam(0); A1.SetIsAITeam(0, true); A1.SetIsAITeam(0, false)");
+    let requests = rt.take_ai_requests();
+    assert_eq!(requests.len(), 4, "queued: {requests:?}");
+    hub.submit_requests(requests);
+    assert!(!hub.is_ai(sta_sim::world::NEUTRAL) && !hub.is_enabled(sta_sim::world::NEUTRAL));
+    assert!(hub.is_ai(P1) && !hub.is_enabled(P1), "the computer seat is untouched");
+    assert!(hub.unresolved().is_empty());
+    assert!(rt.unsupported().is_empty());
 }

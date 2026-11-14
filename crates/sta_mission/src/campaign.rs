@@ -1062,6 +1062,11 @@ impl ActiveMission {
         self.outcome
     }
 
+    /// The AI hub the mission's seats run on (its flags and unresolved requests).
+    pub fn ai_hub(&self) -> &sta_ai::MissionAiHub {
+        &self.ai_hub
+    }
+
     /// One tick: the script thinks over the last view and events, then the
     /// sim steps its commands. Returns the outcome once the script has ended
     /// the mission.

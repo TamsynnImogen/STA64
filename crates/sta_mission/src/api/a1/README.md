@@ -115,7 +115,10 @@ SetOfficers AddOfficers SetTeamCrew AddCrew SetCrew`.
 
 The AI switches `DisableAllAITeams EnableAllAITeams DisableTeam EnableTeam SetIsAITeam` are not
 gaps (LUA-20): each queues one request for the host's AI hub (`MissionRuntime::take_ai_requests`,
-`api/ai_switch.rs`; rules and grades in `sta_ai::mission`). `ResetStrategyCycle` is not exported by
+`api/ai_switch.rs`; rules and grades in `sta_ai::mission`), and retains `Presentation::Call("A1.<name>")`
+as the A2 calls do. An invalid team number raises, as everywhere in A1 (A2 treats it as the original's no-op);
+`NEUTRAL` is a valid team and queues a request the hub drops. A host that takes no requests lists untaken
+switches in `unsupported()` as `AI.<call>`. `ResetStrategyCycle` is not exported by
 Armada I.
 
 Queries raise an error naming the missing data (also `strength_team_1`, `strength_team_2`, `hot_float_value`): `InStopMode InAttackMode

@@ -178,7 +178,7 @@ fn run_port(with_goals: bool, with_spawns: bool) {
                 |e| matches!(e, SimEvent::Present(Presentation::Movie { name, .. }) if name == "a2_fed05_gate.bik")
             )
         );
-        assert!(rt.unsupported().iter().all(|(name, _)| name == "Player.loadAIP"));
+        assert!(rt.unsupported().iter().all(|(name, _)| name == "Player.loadAIP" || name.starts_with("AI.")));
         eprintln!(
             "external A2 first goal: 4 file goals loaded; discovery trigger completes goal 1 on synthetic actors"
         );
@@ -232,7 +232,7 @@ fn run_port(with_goals: bool, with_spawns: bool) {
     assert!(
         rt.unsupported()
             .iter()
-            .all(|(name, _)| name.starts_with("Objectives.load") || name.starts_with("Player.loadAIP"))
+            .all(|(name, _)| name.starts_with("Objectives.load") || name.starts_with("Player.loadAIP") || name.starts_with("AI."))
     );
 }
 

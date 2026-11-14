@@ -323,21 +323,160 @@ fn the_same_requests_give_the_same_commands_and_game() {
 #[test]
 fn requests_apply_when_submitted_and_the_seat_sees_them_on_its_next_think() {
     // The hosts submit after the script thought and before the seats think. A request made
-    // after the seat's think of a tick is seen from its next think.
+    // after the seat's think of a tick is seen from its next think. The twin run without the
+    // DisableAll shows the seat would have planned at tick 30: the silence is the switch's.
+    let s = setup();
+    let planned_at_30 = |disable: bool| {
+        let hub = MissionAiHub::new(library());
+        let mut ai = hub.controller(&s, P0);
+        let sim = world(&s);
+        let mut view = sim.view();
+        std::sync::Arc::make_mut(&mut view).tick = 15;
+        hub.submit_requests([load("build.aip")]);
+        let mut out = Vec::new();
+        ai.think(&view, &[], &mut out);
+        assert!(!out.is_empty(), "submitted before the think: acts in that think");
+        if disable {
+            hub.submit_requests([AiRequest::DisableAll]);
+            assert!(!hub.is_enabled(P0), "applied at the submit");
+        }
+        std::sync::Arc::make_mut(&mut view).tick = 30;
+        let mut out = Vec::new();
+        ai.think(&view, &[], &mut out);
+        !out.is_empty()
+    };
+    assert!(planned_at_30(false), "without the switch the seat plans again at tick 30");
+    assert!(!planned_at_30(true), "submitted after the think: seen by the next one");
+}
+
+// ---- LUA-20 follow-up ----
+
+/// Every command of the seats in `seats` over `ticks`, thinking them in the given order each tick
+/// and stepping the sim with the commands sorted by (player, seq), as the hosts' routers do.
+fn run_seats(requests: &[(u64, AiRequest)], ticks: u64, seats: [PlayerId; 2]) -> (Vec<(u64, Command)>, u64) {
     let s = setup();
     let hub = MissionAiHub::new(library());
+    let mut ctl: Vec<_> = seats.iter().map(|&p| hub.controller(&s, p)).collect();
+    let mut sim = world(&s);
+    let (mut events, mut sent) = (Vec::<SimEvent>::new(), Vec::new());
+    for t in 0..ticks {
+        hub.submit_requests(requests.iter().filter(|(rt, _)| *rt == t).map(|(_, r)| r.clone()));
+        let view = sim.view();
+        let mut out = Vec::new();
+        for c in &mut ctl {
+            c.think(&view, &events, &mut out);
+        }
+        out.sort_by_key(|c| (c.player, c.seq));
+        sent.extend(out.iter().map(|c| (t, c.clone())));
+        events = sim.step(&out).events;
+    }
+    (sent, sim.digest())
+}
+
+#[test]
+fn two_seats_give_the_same_commands_and_game_in_either_seat_order() {
+    let reqs = [
+        (0, AiRequest::Load(P0, "build.aip".into())),
+        (0, AiRequest::Load(P1, "build.aip".into())),
+        (200, AiRequest::Disable(P0)),
+        (300, AiRequest::DisableAll),
+        (400, AiRequest::Enable(P0)),
+        (450, AiRequest::Replan),
+        (600, AiRequest::EnableAll),
+        (700, AiRequest::Load(P1, "aggressive.aip".into())),
+    ];
+    let a = run_seats(&reqs, 1200, [P0, P1]);
+    let b = run_seats(&reqs, 1200, [P1, P0]);
+    assert!(a.0.iter().any(|(_, c)| c.player == P0) && a.0.iter().any(|(_, c)| c.player == P1), "both seats played");
+    assert_eq!(format!("{:?}", a.0), format!("{:?}", b.0), "the seat order changes no command");
+    assert_eq!(a.1, b.1);
+}
+
+#[test]
+fn a_reset_reaches_every_seat_in_the_same_think() {
+    // The original staggers the replans (team t on the t-th tick after the call); here both seats
+    // plan off-period in the think that follows the reset.
+    let reqs = [(20, AiRequest::Load(P0, "build.aip".into())), (20, AiRequest::Load(P1, "build.aip".into())), (20, AiRequest::Replan)];
+    let (sent, _) = run_seats(&reqs, 28, [P0, P1]);
+    for p in [P0, P1] {
+        let first = sent.iter().find(|(_, c)| c.player == p).map(|(t, _)| *t);
+        assert_eq!(first, Some(20), "seat {p:?}");
+    }
+}
+
+#[test]
+fn a_reset_is_used_up_by_a_seat_that_is_disabled_or_has_no_plan() {
+    // Without a reset the plan after a load at 20 waits for loop tick 29 (see the replan test).
+    // A disabled seat consumes the reset, so the Enable one tick later brings no off-period plan.
+    let (a, _) = run_requests(&[(5, load("build.aip")), (5, AiRequest::Disable(P0)), (20, AiRequest::Replan), (21, AiRequest::Enable(P0))], 60);
+    assert_eq!(a.first().map(|(t, _)| *t), Some(29), "{:?}", a.first());
+    // A seat with no plan consumes it as well: the later load plans on the period tick.
+    let (b, _) = run_requests(&[(20, AiRequest::Replan), (21, load("build.aip"))], 60);
+    assert_eq!(b.first().map(|(t, _)| *t), Some(29), "{:?}", b.first());
+    // The same two with the reset after the enable / load do plan at once.
+    let (c, _) = run_requests(&[(5, load("build.aip")), (5, AiRequest::Disable(P0)), (21, AiRequest::Enable(P0)), (21, AiRequest::Replan)], 60);
+    assert_eq!(c.first().map(|(t, _)| *t), Some(21));
+}
+
+/// The specials fixture with a PD weapon on `fx_cloaker` (as the AI-04 tests have it).
+fn pd_content() -> sta_content::ContentDb {
+    use sta_content::{ContentDb, DefRef, Hardpoint};
+    let base = sta_sim::specials::fixture::db();
+    let mut features = base.features().clone();
+    features.pd_energy = true;
+    let mut b = ContentDb::builder().profile(base.profile()).features(features);
+    for mut w in base.weapons().cloned() {
+        if w.odf == "fx_pd" {
+            w.energy_cost = Fixed::from_int(20);
+        }
+        b = b.weapon(w);
+    }
+    for mut u in base.units().cloned() {
+        if u.odf == "fx_cloaker" {
+            u.hardpoints[0] = Hardpoint { weapon: DefRef::new("fx_pd"), node: "hp01".into(), arc: None };
+        }
+        b = b.unit(u);
+    }
+    b.build().unwrap()
+}
+
+#[test]
+fn a_loaded_but_disabled_seat_still_switches_point_defence_on_when_attacked() {
+    use sta_sim::command::Order;
+    let seat = |id: u8| PlayerSetup { id: PlayerId(id), team: TeamId(id), race: "fx".into(), control: Control::Idle };
+    let s = GameSetup {
+        seed: 9,
+        map: Arc::new(sta_content::fake::two_bases()),
+        content: Arc::new(pd_content()),
+        players: vec![seat(0), seat(1)],
+        options: GameOptions::default(),
+    };
+    let db = Arc::clone(&s.content);
+    let hub = MissionAiHub::new(library());
     let mut ai = hub.controller(&s, P0);
-    let sim = world(&s);
-    let mut view = sim.view();
-    std::sync::Arc::make_mut(&mut view).tick = 15;
-    hub.submit_requests([load("build.aip")]);
-    let mut out = Vec::new();
-    ai.think(&view, &[], &mut out);
-    assert!(!out.is_empty(), "submitted before the think: acts in that think");
-    hub.submit_requests([AiRequest::DisableAll]);
-    assert!(!hub.is_enabled(P0), "applied at the submit");
-    std::sync::Arc::make_mut(&mut view).tick = 30;
-    let mut out = Vec::new();
-    ai.think(&view, &[], &mut out);
-    assert!(out.is_empty(), "submitted after the think: seen by the next one");
+    let mut sim = Sim::from_setup(&s);
+    let v = |x: i32, z: i32| Vec3 { x: Fixed::from_int(x), y: Fixed::ZERO, z: Fixed::from_int(z) };
+    let ahead = (Fixed::ZERO, Fixed::ONE);
+    let ship = sim.spawn_def(db.key("fx_cloaker").unwrap(), P0, v(2000, 2800), ahead).unwrap();
+    let boat = sim.spawn_def(db.key("fx_cruiser").unwrap(), P1, v(2000, 2000), ahead).unwrap();
+    hub.submit_requests([load("build.aip"), AiRequest::Disable(P0)]);
+    assert!(hub.is_ai(P0) && !hub.is_enabled(P0));
+    let (mut events, mut mine) = (Vec::<SimEvent>::new(), Vec::new());
+    for t in 0..120u64 {
+        let view = sim.view();
+        let mut out = Vec::new();
+        ai.think(&view, &events, &mut out);
+        mine.extend(out.iter().filter(|c| c.player == P0).cloned());
+        if t == 0 {
+            out.push(Command { player: PlayerId::BENCH, seq: 9, kind: CommandKind::Edit(Edit::Engines(ship, false)) });
+            out.push(Command { player: P1, seq: 0, kind: CommandKind::Order(Order::Attack { units: vec![boat], target: ship }) });
+        }
+        events = sim.step(&out).events;
+    }
+    let specials = mine.iter().filter(|c| matches!(&c.kind, CommandKind::Order(Order::Special { units, .. }) if units == &[ship])).count();
+    assert!(specials >= 1, "the unit-level AI of a disabled seat still defends itself: {mine:?}");
+    assert!(
+        mine.iter().all(|c| matches!(&c.kind, CommandKind::Order(Order::Special { .. }))),
+        "and nothing else (no build, no wave, no mining): {mine:?}"
+    );
 }

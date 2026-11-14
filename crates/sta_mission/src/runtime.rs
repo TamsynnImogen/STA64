@@ -286,6 +286,20 @@ fn cineractive_engine_update(lua: &Lua, object: &Table, ctx: &ApiShared) -> mlua
     Ok(())
 }
 
+/// The name an AI request nobody took is counted under in [`MissionRuntime::unsupported`].
+fn untaken_name(r: &sta_ai::AiRequest) -> &'static str {
+    use sta_ai::AiRequest as R;
+    match r {
+        R::Load(..) => "Player.loadAIP",
+        R::Enable(_) => "AI.EnableTeam",
+        R::Disable(_) => "AI.DisableTeam",
+        R::EnableAll => "AI.EnableAllAITeams",
+        R::DisableAll => "AI.DisableAllAITeams",
+        R::SetAi(..) => "AI.SetIsAITeam",
+        R::Replan => "AI.ResetStrategyCycle",
+    }
+}
+
 impl MissionRuntime {
     /// The player skipped the running cineractive (the skip key, Space): `isCineractiveCancel`
     /// reads 1 from the next tick, and an MMM mission that made it skippable has it ended with
@@ -566,17 +580,16 @@ impl MissionRuntime {
     /// function-call counts. Lookup keys may be dynamically computed strings;
     /// function arguments are not inspected.
     ///
-    /// AI requests no host has taken ([`MissionRuntime::take_ai_requests`]) are
-    /// listed as `Player.loadAIP`: nothing has applied them.
+    /// AI requests no host has taken ([`MissionRuntime::take_ai_requests`]) are listed too,
+    /// nothing having applied them: a plan load as `Player.loadAIP`, a switch under its own
+    /// name (`AI.DisableAllAITeams`, `AI.EnableTeam`, ...; the A1 and A2 calls share a name).
     pub fn unsupported(&self) -> Vec<(String, u32)> {
         let c = self.inner.ctx.borrow();
-        let mut out: Vec<(String, u32)> = c.unsupported.iter().map(|(k, v)| (k.clone(), *v)).collect();
-        let pending = c.ai_requests.len() - c.ai_requests_taken;
-        if pending > 0 {
-            let at = out.partition_point(|(k, _)| k.as_str() < "Player.loadAIP");
-            out.insert(at, ("Player.loadAIP".to_owned(), u32::try_from(pending).unwrap_or(u32::MAX)));
+        let mut out: std::collections::BTreeMap<String, u32> = c.unsupported.iter().map(|(k, v)| (k.clone(), *v)).collect();
+        for r in &c.ai_requests[c.ai_requests_taken..] {
+            *out.entry(untaken_name(r).to_owned()).or_default() += 1;
         }
-        out
+        out.into_iter().collect()
     }
 
     /// How `from` stands toward `to`, with the script's overrides applied
