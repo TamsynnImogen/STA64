@@ -110,12 +110,12 @@ fn text(s: impl Into<String>, size: f32, color: Color) -> impl Bundle {
 /// A cell's label: small, centred, broken anywhere to fit two lines in the cell.
 fn cell_label(s: String, theme: &Theme) -> impl Bundle {
     (
-        Text::new(s),
-        TextFont { font_size: bevy::text::FontSize::Px(theme.micro_size - 2.0), ..default() },
-        TextColor(theme.text_on),
-        TextLayout::new(bevy::text::Justify::Center, bevy::text::LineBreak::AnyCharacter),
-        Node { width: Val::Px(CELL - 6.0), ..default() },
-        Pickable::IGNORE,
+        crate::ui::sprite_font::sprite_text_styled(
+            s,
+            theme.micro_size - 2.0,
+            theme.text_on,
+            crate::ui::sprite_font::SpriteTextStyle::default().centered().wrapped(CELL - 6.0),
+        ),
     )
 }
 
