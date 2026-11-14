@@ -324,6 +324,10 @@ pub struct UnitDef {
     /// Effective `civilianPopulationModifier` of a Producer planet (CON-37);
     /// zero for other roles.
     pub planet_civilian_population_modifier: Fixed,
+    /// Population level cap of a Producer planet (SIM-30): the planet ODF's
+    /// `maxPopulation` word, 0 unpopulated, 1 sparse, 2 light, 3 medium, 4 heavy
+    /// (read from the executable, static). Zero for other roles.
+    pub planet_max_population: u8,
     /// `canHaveOrbitalStation` of the resource node a planet names (`resource =`,
     /// e.g. `ResourcePlanet.odf`): an orbital station may be built in its orbit
     /// (SIM-62). False for moons, rocks and everything without the key.
@@ -460,6 +464,7 @@ impl UnitDef {
             planet_crew_modifier: None,
             planet_colonizable: false,
             planet_civilian_population_modifier: Fixed::ZERO,
+            planet_max_population: 0,
             can_have_orbital_station: false,
             orbit_time: None,
             race: String::new(),
@@ -573,7 +578,20 @@ pub struct WeaponDef {
     pub resource: Option<ResourceWeaponDef>,
     /// An instant `replaceweapon` (SIM-28); `None` for every other weapon.
     pub replace: Option<crate::lifecycle::ReplaceDef>,
+    /// The colonizer pod this weapon launches (SIM-30): set when the ordnance's
+    /// class is `ColonizerPod`; `None` for every other weapon.
+    pub colonize: Option<ColonizePodDef>,
     pub raw: Arc<sta_odf::Odf>,
+}
+
+/// The keys of a `ColonizerPod` ordnance (SIM-30), read from the ordnance ODF
+/// of a weapon (the launcher's `shotDelay` is the weapon's `refire`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ColonizePodDef {
+    /// `partySize`: colonists one pod carries (default 100).
+    pub party_size: Fixed,
+    /// `orbitRange`: the colonize range of the ship, from the planet surface.
+    pub orbit_range: Fixed,
 }
 
 /// What a hit of this ordnance does to the target's crew (SIM-39): its
@@ -674,6 +692,7 @@ impl WeaponDef {
             features: None,
             resource: None,
             replace: None,
+            colonize: None,
             raw: Arc::new(raw),
         }
     }

@@ -17,6 +17,7 @@
 //! | specials | `effectTimer`, `energyDrainRate`, `specialEnergyCost`, `disableWeapons` (default on), `decloakOnHit` |
 //! | shot timing | `initialShotDelayModifier` (signed; absent stays `None`), `ignoreShotDelayEffects`; `ordnance_defence` is the weapon's own class `ordnancedefenseweapon` |
 //! | `resource` (class `resourceweapon`) | `addDilithium`, `addLatinum`, `addMetal`, `addBiomatter`, `addCrew` (signed), `oneTimeMode`, `alwaysActivePlayer`, `alwaysActiveAI` |
+//! | `colonize` | ordnance class `ColonizerPod`: `partySize` (default 100), `orbitRange` (SIM-30) |
 //! | hardpoint arc | `restrictFireArc = 1` with `fireArc` as the half-width in radians (our reading) |
 
 use sta_core::Fixed;
@@ -117,6 +118,11 @@ pub fn weapon_def(name: &str, odf: &Odf, ordnance: Option<&Odf>, warnings: &mut 
             hull: o.fixed("hullCrewModifier"),
         };
         d.crew_loss = (loss != crate::def::OrdnanceCrewLoss::default()).then_some(loss);
+        if ord_class.as_deref() == Some("colonizerpod") {
+            // SIM-30: read from data (A2 colonizer pod ordnance: 100 and 150).
+            let party_size = o.num("partySize").filter(|n| *n >= 0.0).unwrap_or(100.0);
+            d.colonize = Some(crate::def::ColonizePodDef { party_size: Fixed::from_f64(party_size), orbit_range: o.fixed("orbitRange") });
+        }
         d.damage_variance = o.fixed("damageVariance");
         d.fx = o.text("shotGeometry").or_else(|| o.text("sprite"));
         match kind {

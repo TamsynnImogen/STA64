@@ -443,7 +443,7 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
     // whether the sim reads it (then it is digested below) or not.
     let UnitDef {
         key: _, odf: _, class: _, is_starbase: _, planet_role: _, planet_crew_gain: _, planet_crew_modifier: _,
-        planet_colonizable: _, planet_civilian_population_modifier: _, can_have_orbital_station: _, orbit_time: _, race: _,
+        planet_colonizable: _, planet_civilian_population_modifier: _, planet_max_population: _, can_have_orbital_station: _, orbit_time: _, race: _,
         model: _, scale: _, movement: _, hull: _, shields: _, initial_hull: _, initial_shields: _,
         crew: _, maximum_crew: _, sensor: _, hardpoints: _, build: _, launch: _, radius: _,
         sounds: _, fx: _, special_energy_max: _, special_energy_rate: _, miner: _, miner_off: _,
@@ -567,6 +567,10 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
     if let Some(p) = u.attack_power {
         c.fixed("attack_power", p);
     }
+    // SIM-30: the population level cap of a producer planet, only when set (Native fake hash unchanged).
+    if u.planet_max_population != 0 {
+        c.int("planet_max_population", i32::from(u.planet_max_population));
+    }
     // SIM-62: orbital placement reads both, so they are sim-visible rules; only when set.
     if u.can_have_orbital_station {
         c.flag("can_have_orbital_station", true);
@@ -603,7 +607,7 @@ fn weapon_text(db: &ContentDb, w: &WeaponDef) -> String {
         key: _, odf: _, class: _, kind: _, range: _, damage: _, refire: _, shot_speed: _,
         duration: _, fire_sound: _, fx: _, effect_ticks: _, energy_drain: _, energy_cost: _,
         disable_weapons: _, decloak_on_hit: _, initial_shot_delay_modifier: _,
-        ignore_shot_delay_effects: _, ordnance_defence: _, activate_on_team_change: _, crew_loss: _, damage_variance: _, resource: _, replace: _, features: _, raw: _,
+        ignore_shot_delay_effects: _, ordnance_defence: _, activate_on_team_change: _, crew_loss: _, damage_variance: _, resource: _, replace: _, colonize: _, features: _, raw: _,
     } = w;
     let mut c = Canon::new();
     c
@@ -646,6 +650,10 @@ fn weapon_text(db: &ContentDb, w: &WeaponDef) -> String {
     }
     if w.damage_variance != Fixed::ZERO {
         c.fixed("damage_variance", w.damage_variance);
+    }
+    // SIM-30: a colonizer pod's payload and range, only when the ordnance is one.
+    if let Some(p) = w.colonize {
+        c.raw("colonize", &group(Canon::new().fixed("party_size", p.party_size).fixed("orbit_range", p.orbit_range)));
     }
     c.finish()
 }

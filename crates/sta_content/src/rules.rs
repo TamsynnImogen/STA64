@@ -33,13 +33,15 @@ pub struct Rules {
     autonomy: Option<AutonomyRules>,
     /// `RTS_CFG.h`'s attack warp distance (SIM-36), when the header sets it.
     approach: Option<ApproachRules>,
+    /// Planet population levels and growth (SIM-30), when the header sets all of them.
+    population: Option<PopulationRules>,
     /// The other typed `RTS_CFG.h` keys.
     pub cfg: CfgRules,
     /// Armada I's header-level start (`cfgStarting*`), see [`LegacyStart`].
     legacy_start: LegacyStart,
 }
 
-const TYPED_LEN: usize = 4 + PathingRules::KEYS.len() + AutonomyRules::KEYS.len() + ApproachRules::KEYS.len() + CfgRules::KEYS.len() + LegacyStart::KEYS.len();
+const TYPED_LEN: usize = 4 + PathingRules::KEYS.len() + AutonomyRules::KEYS.len() + ApproachRules::KEYS.len() + CfgRules::KEYS.len() + LegacyStart::KEYS.len() + PopulationRules::KEYS.len();
 
 /// Every `RTS_CFG.h` key [`Rules`] reads.
 pub const TYPED_CFG_KEYS: [&str; TYPED_LEN] = {
@@ -72,6 +74,11 @@ pub const TYPED_CFG_KEYS: [&str; TYPED_LEN] = {
     while l < LegacyStart::KEYS.len() {
         out[4 + i + a + w + j + l] = LegacyStart::KEYS[l];
         l += 1;
+    }
+    let mut p = 0;
+    while p < PopulationRules::KEYS.len() {
+        out[4 + i + a + w + j + l + p] = PopulationRules::KEYS[p];
+        p += 1;
     }
     out
 };
@@ -130,6 +137,51 @@ impl AutonomyRules {
             movement: level(Self::KEYS[0], stock.movement),
             special_weapon: level(Self::KEYS[1], stock.special_weapon),
         })
+    }
+}
+
+/// Planet population rules (SIM-30), from `RTS_CFG.h`: the population a planet
+/// of each level holds (`cfgPOP_SPARSE`, `cfgPOP_LIGHT`, `cfgPOP_MEDIUM`,
+/// `cfgPOP_HEAVY`, people) and `cfgPLANET_CIVILIAN_RATE_MODIFIER`. The engine's
+/// own defaults are overwritten by the header (read from the executable,
+/// static); all five keys must be present, otherwise `None` and the colony
+/// rules are inactive. The A2 family installs set 1000/2000/3000/5000 and 0.20
+/// (read from data); Armada I and the Fleet Ops line have no population system.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PopulationRules {
+    /// People of a planet at level 1..=4 (sparse, light, medium, heavy).
+    pub levels: [Fixed; 4],
+    /// `cfgPLANET_CIVILIAN_RATE_MODIFIER`.
+    pub civilian_rate_modifier: Fixed,
+}
+
+impl PopulationRules {
+    const KEYS: [&'static str; 5] =
+        ["cfgPOP_SPARSE", "cfgPOP_LIGHT", "cfgPOP_MEDIUM", "cfgPOP_HEAVY", "cfgPLANET_CIVILIAN_RATE_MODIFIER"];
+
+    fn from_cfg(cfg: &CfgH, warnings: &mut Vec<Warning>) -> Option<Self> {
+        if !Self::KEYS.iter().any(|k| cfg.raw(k).is_some()) {
+            return None;
+        }
+        let mut vals = [Fixed::ZERO; 5];
+        for (v, key) in vals.iter_mut().zip(Self::KEYS) {
+            match cfg.f32(key).filter(|x| x.is_finite() && *x >= 0.0) {
+                Some(x) => *v = Fixed::from_f64(x.min(1.0e9) as f64),
+                None => {
+                    warnings.push(Warning::new("RTS_CFG.h", format!("{key} is missing or not a non-negative number; the population rules are inactive")));
+                    return None;
+                }
+            }
+        }
+        Some(PopulationRules { levels: [vals[0], vals[1], vals[2], vals[3]], civilian_rate_modifier: vals[4] })
+    }
+
+    /// People a planet of `level` (0..=4) holds at most; level 0 holds none.
+    pub fn cap(&self, level: u8) -> Fixed {
+        match level {
+            1..=4 => self.levels[usize::from(level) - 1],
+            _ => Fixed::ZERO,
+        }
     }
 }
 
@@ -462,6 +514,7 @@ impl Rules {
         if starting.is_some() || max_crew.is_some() {
             rules.crew = Some(CrewRules { starting_capacity: starting, max_crew, races: Vec::new() });
         }
+        rules.population = PopulationRules::from_cfg(&cfg, &mut warnings);
         rules.autonomy = AutonomyRules::from_cfg(&cfg, &mut warnings);
         rules.approach = ApproachRules::from_cfg(&cfg, &mut warnings);
         rules.cfg = CfgRules::from_cfg(&cfg, &mut warnings);
@@ -500,6 +553,17 @@ impl Rules {
     /// Set the crew rules (tests and content built in code).
     pub fn with_crew(mut self, crew: CrewRules) -> Self {
         self.crew = Some(crew);
+        self
+    }
+
+    /// The planet population rules, when the content has them (SIM-30).
+    pub fn population(&self) -> Option<&PopulationRules> {
+        self.population.as_ref()
+    }
+
+    /// Set the population rules (tests and content built in code).
+    pub fn with_population(mut self, population: PopulationRules) -> Self {
+        self.population = Some(population);
         self
     }
 
@@ -604,6 +668,12 @@ impl Rules {
         for (key, value) in [("cfgStartingCrew", self.legacy_start.crew), ("cfgStartingDilithium", self.legacy_start.dilithium)] {
             if let Some(value) = value {
                 out.push(DigestEntry::new(format!("RTS_CFG.h:{key}"), value.to_string()));
+            }
+        }
+        // SIM-30: only when set, so content without the keys keeps its hash.
+        if let Some(p) = &self.population {
+            for (key, value) in PopulationRules::KEYS.iter().zip(p.levels.into_iter().chain([p.civilian_rate_modifier])) {
+                out.push(DigestEntry::new(format!("RTS_CFG.h:{key}"), crate::digest::fixed_text(value)));
             }
         }
         let crew = self.crew.as_ref();
@@ -853,7 +923,8 @@ mod cfg_tests {
         rules.legacy_start = LegacyStart { dilithium: Some(1), crew: Some(2) };
         rules.cfg.facing_weight = Some(Fixed::ONE);
         rules.cfg.facing_constant = Some(3);
-        let d = ContentDigest::from_entries(rules.digest_entries());
+        let pop = PopulationRules { levels: [Fixed::from_int(1000); 4], civilian_rate_modifier: Fixed::ONE };
+        let d = ContentDigest::from_entries(rules.with_population(pop).digest_entries());
         for k in TYPED_CFG_KEYS.iter().filter(|k| !matches!(**k, "MP_OFFICER_LIST_SIZE" | "SINGLE_PLAYER_OFFICER_LIMIT" | "cfgMaxOfficers")) {
             assert!(d.get(&format!("RTS_CFG.h:{k}")).is_some(), "{k}");
         }
@@ -944,5 +1015,38 @@ mod crew_tests {
         let b = rates(vec![("fed".into(), Fixed::from_int(3))]);
         assert_eq!(a.first_difference(&b).unwrap().key, "crew:accumulation");
         assert_eq!(a.get("crew:accumulation"), Some("[\"fed\":2]"));
+    }
+}
+
+#[cfg(test)]
+mod population_tests {
+    use super::*;
+    use crate::digest::ContentDigest;
+
+    const HEADER: &str = "int cfgPOP_SPARSE = 1000;\nint cfgPOP_LIGHT = 2000;\nint cfgPOP_MEDIUM = 3000;\nint cfgPOP_HEAVY = 5000;\nfloat cfgPLANET_CIVILIAN_RATE_MODIFIER = 0.20;\n";
+
+    #[test]
+    fn the_population_keys_are_read_and_digested() {
+        let (rules, w) = Rules::from_header(HEADER);
+        assert!(w.is_empty(), "{w:?}");
+        let p = rules.population().unwrap();
+        assert_eq!([1u8, 2, 3, 4].map(|l| p.cap(l)), [1000, 2000, 3000, 5000].map(Fixed::from_int));
+        assert_eq!(p.cap(0), Fixed::ZERO);
+        assert_eq!(p.civilian_rate_modifier, Fixed::from_f64(0.2f32 as f64));
+        let d = ContentDigest::from_entries(rules.digest_entries());
+        assert_eq!(d.get("RTS_CFG.h:cfgPOP_HEAVY"), Some("5000"));
+        let other = Rules::from_header(&HEADER.replace("5000", "6000")).0;
+        assert_ne!(d, ContentDigest::from_entries(other.digest_entries()));
+    }
+
+    #[test]
+    fn absent_or_partial_keys_leave_the_rules_inactive_and_the_digest_alone() {
+        let (none, w) = Rules::from_header("int SOMETHING_ELSE = 3;\n");
+        assert!(none.population().is_none() && w.is_empty());
+        let d = ContentDigest::from_entries(none.digest_entries());
+        assert!(d.get("RTS_CFG.h:cfgPOP_SPARSE").is_none());
+        let (part, w) = Rules::from_header("int cfgPOP_SPARSE = 1000;\n");
+        assert!(part.population().is_none());
+        assert_eq!(w.len(), 1);
     }
 }

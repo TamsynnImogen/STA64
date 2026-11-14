@@ -49,9 +49,10 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// attributes (SIM-54). Format 23 appends cosmetic seat factions. Format 24
 /// adds crew casualties and the derelict latch to the subsystem rows (#652).
 /// Format 25 appends the team-pool adjustments of scripts (SIM-54). Format 26
-/// appends mission-set relations between seats (SIM-63).
+/// appends mission-set relations between seats (SIM-63). Format 27 appends the
+/// planet population rows and colony ship orders (SIM-30).
 /// Only the current format is read.
-pub const FORMAT_VERSION: u16 = 26;
+pub const FORMAT_VERSION: u16 = 27;
 
 const HEADER: usize = 4 + 2 + 4 + 8;
 
@@ -462,6 +463,7 @@ impl Sim {
         out.extend(postcard::to_allocvec(&AppearanceRec { version: 1, factions: self.appearance_factions.clone() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&AdjustRec { version: 1, rows: self.economy.adjust_rec() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&RelationsRec { version: 1, rows: self.relations.to_rows() }).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&self.colonies.to_rec()).expect("snapshot serialises"));
         out
     }
 
@@ -531,6 +533,7 @@ impl Sim {
         let (record, rest): (RelationsRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         if record.version != 1 { return Err(SnapshotError::Corrupt("unknown relations record version".into())); }
         let relation_rows = record.rows;
+        let (colony_rec, rest): (crate::colony::ColoniesRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         if !rest.is_empty() { return Err(SnapshotError::Corrupt("trailing bytes".into())); }
         if let Some(row) = b.economy.miners.iter().find(|row| row.5 > 4) {
             return Err(SnapshotError::Corrupt(format!("mining phase {} is not supported", row.5)));
@@ -642,6 +645,11 @@ impl Sim {
                 }
             }
         }
+        let colonies = crate::colony::Colonies::from_rec(
+            colony_rec,
+            |id| units.contains(id),
+            |id| content.as_deref().zip(units.get(id)).and_then(|(db, u)| db.unit(u.def)).is_some_and(|d| d.planet_role == Some(sta_content::PlanetRole::Producer)),
+        ).ok_or_else(|| corrupt("colony rows"))?;
         let mut economy = crate::economy::Economy::from_rec(&b.economy);
         economy.restore_personnel(personnel_rows, &b.players).map_err(|why| SnapshotError::Corrupt(why.into()))?;
         economy.restore_adjust(adjust_rows, &b.players).map_err(|why| SnapshotError::Corrupt(why.into()))?;
@@ -678,10 +686,17 @@ impl Sim {
             attrs,
             team_changes: Vec::new(),
             appearance_factions,
+            colonies,
         };
         sim.refresh_seat_rules();
         Ok(sim)
     }
+}
+
+/// Test helper: `bytes` with the colony record replaced.
+#[cfg(test)]
+pub(crate) fn chain_with_colonies(bytes: &[u8], rec: &crate::colony::ColoniesRec) -> Vec<u8> {
+    chain::with(bytes, chain::COLONIES, chain::enc(rec))
 }
 
 #[cfg(test)]

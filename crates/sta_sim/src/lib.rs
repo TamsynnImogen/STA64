@@ -25,6 +25,7 @@ pub mod autonomy;
 pub mod appearance;
 pub mod boundary;
 pub mod combat;
+pub mod colony;
 pub mod command;
 pub mod context;
 pub mod digest;
@@ -188,6 +189,8 @@ pub struct Sim {
     appearance_factions: Vec<(PlayerId, String)>,
     // (Also the setup race of each seat: the base of `Sim::seat_race`, which picks the officer cap
     // and latinum rules; fixed by the setup, so peers agree.)
+    /// Planet population and colony ship orders (SIM-30); in the digest once any exists.
+    colonies: colony::Colonies,
 }
 
 impl Sim {
@@ -225,6 +228,7 @@ impl Sim {
             relations: Default::default(),
             team_changes: Vec::new(),
             appearance_factions: Vec::new(),
+            colonies: Default::default(),
         }
     }
 
@@ -259,6 +263,14 @@ impl Sim {
     /// and the spawn and kill edits exist; everything else is rejected until
     /// its package lands.
     fn apply(&mut self, c: &command::Command) -> bool {
+        let ok = self.apply_command(c);
+        if ok && let command::CommandKind::Order(o) = &c.kind {
+            self.colonies_after_order(c.player, o);
+        }
+        ok
+    }
+
+    fn apply_command(&mut self, c: &command::Command) -> bool {
         use command::{CommandKind, Order};
         if self.victory.is_eliminated(c.player) {
             return false;
@@ -396,6 +408,7 @@ impl Sim {
             | Order::AttackAny { .. }
             | Order::AttackPoint { .. }
             | Order::MoveWarp { .. } => self.apply_scripted(c.player, order),
+            Order::Colonize { units, planet } => self.apply_colonize(c.player, units, *planet),
             Order::Rally { builders, at } => {
                 let Some(db) = self.content.as_deref() else { return false };
                 self.production.order_rally(db, &self.units, c.player, builders, *at)
@@ -451,7 +464,7 @@ impl Sim {
                 self.approach_warp.end(id);
             }
             let mut lost = Vec::new();
-            let mut casualties = combat::casualty::Ctx { subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches };
+            let mut casualties = combat::casualty::Ctx { subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches, colonies: &mut self.colonies };
             let killed = combat::damage::apply(&mut self.units, &db, &mut self.events, from, &mut casualties);
             combat::casualty::step(&mut self.units, &db, &mut casualties);
             for (id, by) in killed {
@@ -461,10 +474,12 @@ impl Sim {
             self.specials.react(&mut self.units, &db, &mut self.events, from);
             self.victory.step(&self.units, &mut lost, &mut self.events);
         }
+        self.step_colonies();
+        let colony_crew = self.content.as_deref().map(|db| self.colony_crew_income(db)).unwrap_or_default();
         if let Some(db) = &self.content {
             self.economy.step(&mut self.units, db, &mut self.events);
             self.economy.step_passive(&self.units, db, &self.players, &self.ai_seats, self.tick);
-            self.economy.step_crew(&self.units, db, &self.attrs, self.tick);
+            self.economy.step_crew(&self.units, db, &self.attrs, self.tick, &colony_crew);
             let from = self.events.len();
             self.production.step(&mut self.units, db, &mut self.economy, &mut self.events, &mut self.confinement);
             self.inherit_builder_races(from);
@@ -539,7 +554,7 @@ impl Sim {
             }
         }
         let perceived_owners = self.perception.iter().map(|(id, &owner)| (id, owner)).collect();
-        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners, appearance: self.appearance_view(), attrs: crate::attrs::AttrsView { names: self.switches.names(), seats: self.seat_views(), ..self.attrs.view() } }
+        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners, appearance: self.appearance_view(), colonies: self.colony_views(), attrs: crate::attrs::AttrsView { names: self.switches.names(), seats: self.seat_views(), ..self.attrs.view() } }
     }
 
     /// FNV-1a over all simulation state, for desync detection. The content
@@ -626,6 +641,10 @@ impl Sim {
         }
         if !self.attrs.is_empty() {
             self.attrs.hash_into(&mut h);
+        }
+        // SIM-30: population and colonizing orders (nothing is hashed without colony state).
+        if !self.colonies.is_empty() {
+            self.colonies.hash_into(&mut h);
         }
         let crew_count = self.units.iter().filter(|unit| unit.crew.is_some()).count();
         if crew_count != 0 {

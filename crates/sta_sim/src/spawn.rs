@@ -139,6 +139,7 @@ impl Sim {
         self.start_effects.remove(id);
         self.subsystems.remove(id);
         self.attrs.remove(id);
+        self.colonies.remove_entity(id);
         self.scripted.remove(id);
         self.switches.remove(id);
         if let Some(by) = destroyed_by {
@@ -296,7 +297,7 @@ impl Sim {
                 // (`crew_loss_on_hit`): `casualty::step` is what clears the latch.
                 let casualty = self.content.as_deref().is_some_and(|db| db.unit(u.def).is_some_and(|d| db.unit_features(d).crew_loss_on_hit));
                 if casualty {
-                    let mut ctx = crate::combat::casualty::Ctx { subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches };
+                    let mut ctx = crate::combat::casualty::Ctx { subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches, colonies: &mut self.colonies };
                     crate::combat::casualty::check_derelict(u, &mut ctx);
                 }
                 true
@@ -311,6 +312,7 @@ impl Sim {
             Edit::Position(id, to) => self.edit_position(id, to),
             Edit::Heading(id, dir) => self.edit_heading(id, dir),
             Edit::AngularVelocity(id, omega) => self.edit_angular_velocity(id, omega),
+            Edit::PlanetPopulation(id, people) => self.edit_planet_population(id, people),
             // The rest land with the package that owns what they change.
             _ => false,
         }

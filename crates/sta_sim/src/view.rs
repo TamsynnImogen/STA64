@@ -40,6 +40,10 @@ pub struct WorldView {
     /// Mission-set names and races (SIM-54); empty when nothing was set.
     #[serde(default)]
     pub attrs: crate::attrs::AttrsView,
+    /// Planets with a population row (SIM-30), ascending id; the owner is
+    /// the planet's [`UnitView::owner`].
+    #[serde(default)]
+    pub colonies: Vec<crate::colony::ColonyView>,
 }
 
 impl WorldView {

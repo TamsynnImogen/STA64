@@ -177,6 +177,7 @@ function attack(u, target) push({ kind = "attack", ids = ids(u), target = type(t
 function stop(u) push({ kind = "stop", ids = ids(u) }) end
 function build(builder, odf, x, z) push({ kind = "build", builder = type(builder) == "table" and builder.id or builder, odf = odf, x = x, z = z }) end
 function mine(u, node) push({ kind = "mine", ids = ids(u), node = type(node) == "table" and node.id or node }) end
+function colonize(u, planet) push({ kind = "colonize", ids = ids(u), planet = type(planet) == "table" and planet.id or planet }) end
 function note(s) push({ kind = "note", text = tostring(s) }) end
 -- units{ owner = n, odf = "exact", like = "substring", mine = true, enemy = true, alive = true (default) }
 function units(f)
@@ -373,6 +374,7 @@ impl Plan {
                 "move" => at(&o).map(|to| Order::Move { units: idl(&o), to, queue: false }),
                 "stop" => Some(Order::Stop { units: idl(&o) }),
                 "attack" => o.get::<u32>("target").ok().map(|t| Order::Attack { units: idl(&o), target: EntityId(t) }),
+                "colonize" => o.get::<u32>("planet").ok().map(|p| Order::Colonize { units: idl(&o), planet: EntityId(p) }),
                 "mine" => o.get::<u32>("node").ok().map(|n| Order::Mine { units: idl(&o), node: EntityId(n) }),
                 "build" => {
                     let odf: String = o.get("odf").unwrap_or_default();

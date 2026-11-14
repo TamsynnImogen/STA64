@@ -143,6 +143,33 @@ pub(crate) fn resolve_colonizable(
     })
 }
 
+/// `maxPopulation` of a Producer planet (SIM-30): the word unpopulated, sparse,
+/// light, medium or heavy (case-insensitive) as a level 0..4; absent is
+/// unpopulated and an unknown word warns and reads as unpopulated (the
+/// executable's own default; read from the executable, static). Other roles
+/// neither read nor diagnose the key.
+pub(crate) fn resolve_max_population(file: &str, odf: &Odf, role: Option<PlanetRole>, warnings: &mut Vec<Warning>) -> u8 {
+    if role != Some(PlanetRole::Producer) {
+        return 0;
+    }
+    let Some(raw) = odf.raw("maxPopulation") else { return 0 };
+    let word = odf.str("maxPopulation").unwrap_or("").trim().to_ascii_lowercase();
+    match word.as_str() {
+        "unpopulated" => 0,
+        "sparse" => 1,
+        "light" => 2,
+        "medium" => 3,
+        "heavy" => 4,
+        _ => {
+            warnings.push(Warning::new(
+                file,
+                format!("maxPopulation = {raw} is not unpopulated, sparse, light, medium or heavy; using unpopulated"),
+            ));
+            0
+        }
+    }
+}
+
 /// `orbitTime` of a class `p_mining` station (SIM-62): seconds per orbit; zero when
 /// the key is absent or not a number. `None` for any other class.
 pub(crate) fn resolve_orbit_time(file: &str, odf: &Odf, class: &str, warnings: &mut Vec<Warning>) -> Option<Fixed> {

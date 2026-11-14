@@ -821,7 +821,9 @@ fn seams(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()> {
     table.set("DamageLifeSupport", float_edit(lua, ctx, "DamageLifeSupport", "A2.DamageLifeSupport", |id, v| Edit::SubsystemDamage(id, Subsystem::LifeSupport, v))?)?;
     table.set("DamageShieldGenerator", float_edit(lua, ctx, "DamageShieldGenerator", "A2.DamageShieldGenerator", |id, v| Edit::SubsystemDamage(id, Subsystem::Shields, v))?)?;
     table.set("DamageWeapons", float_edit(lua, ctx, "DamageWeapons", "A2.DamageWeapons", |id, v| Edit::SubsystemDamage(id, Subsystem::Weapons, v))?)?;
-    table.set("SetPlanetCivPop", no_data_fn(lua, ctx, "SetPlanetCivPop", "the sim has no planet population edit")?)?;
+    // SIM-30: the population as given, no clamp (read from the executable, static); the
+    // sim rejects a handle that is not a live producer planet.
+    table.set("SetPlanetCivPop", float_edit(lua, ctx, "SetPlanetCivPop", "A2.SetPlanetCivPop", Edit::PlanetPopulation)?)?;
     table.set("StuffIntoWormhole", no_data_fn(lua, ctx, "StuffIntoWormhole", "the sim has no wormhole transport edit")?)?;
     table.set("LinkWormholes", no_data_fn(lua, ctx, "LinkWormholes", "the sim has no wormhole link edit")?)?;
     table.set("SetWormholeDeleteOnTransport", no_data_fn(lua, ctx, "SetWormholeDeleteOnTransport", "the sim has no wormhole transport rules")?)?;

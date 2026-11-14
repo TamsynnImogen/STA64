@@ -330,7 +330,6 @@ fn the_sim_rejecting_an_impulse_or_alert_edit_is_reported_and_counted() {
 fn calls_with_no_seam_validate_then_raise_and_are_counted() {
     let s = scene();
     for (script, key) in [
-        ("A2.Colonize(a, s)", "A2.Colonize"),
         ("A2.Special_Attack(a, 'gquanteffect')", "A2.Special_Attack"),
         ("A2.Special_Attack(a, b, 'gtracbm')", "A2.Special_Attack"),
         ("A2.SetCommandMoveAutonomyLow(a)", "A2.SetCommandMoveAutonomyLow"),

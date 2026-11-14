@@ -407,7 +407,7 @@ fn seam_gaps_raise_with_a_reason_and_are_counted() {
     let s = scene();
     let mut rt = runtime(&s);
     let names = [
-        "SetPlanetCivPop", "StuffIntoWormhole",
+        "StuffIntoWormhole",
         "LinkWormholes", "SetWormholeDeleteOnTransport", "LoadCargoShip", "GetNearestShipyard",
     ];
     for name in names {

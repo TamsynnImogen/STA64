@@ -12,8 +12,9 @@
 //!   station takes the rig's race when the station completes (the original
 //!   copies it when the build starts).
 //! - A change of team never re-races a unit. A planet does take the new
-//!   team's race (`Planet::SetTeam`); the sim has no planet race or colony
-//!   state yet (SIM-30), so that case is not implemented.
+//!   team's race (`Planet::SetTeam`); the sim stores no planet race: a colony's
+//!   growth and crew income read its owner's [`Sim::seat_race`] every tick
+//!   (SIM-30, `crate::colony`), so they follow a change of owner or seat race.
 //! - A seat's race ([`Sim::seat_race`]: the script's, else the setup's)
 //!   gives the officer cap multiplier and the latinum factor of the team
 //!   (`sta_content::SeatRaceRule`), re-read whenever the seat race changes.

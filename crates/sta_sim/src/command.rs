@@ -100,6 +100,9 @@ pub enum Order {
     /// Rejected without changing orders until that runtime is integrated.
     /// Appended tag 16 preserves every preceding Order tag and payload.
     Repair { units: Vec<EntityId>, yard: Option<EntityId> },
+    /// Colonize a planet with pod colony ships (SIM-30; mission `Colonize`
+    /// needs the ship's special-forces flag): see [`crate::colony`]. Tag 17.
+    Colonize { units: Vec<EntityId>, planet: EntityId },
 }
 
 /// Which autonomy an [`Order::Autonomy`] sets.
@@ -314,6 +317,13 @@ pub enum Edit {
     /// Neutral, Enemy); a variant index above 2 fails to decode. SCRIPT/BENCH
     /// only. Appended tag 45.
     SetRelation { from: PlayerId, to: PlayerId, relation: crate::view::Relation },
+    /// Mission `SetPlanetCivPop` (SIM-30): a Producer planet's population in
+    /// people, kept as given within +-1e9 (growth cuts a value above the
+    /// planet's cap on the next tick; a value of 0 or less neutralizes an
+    /// owned planet). Creates the planet's population row. Rejected for any
+    /// other target (STA64 policy; the original has no type check).
+    /// SCRIPT/BENCH only. Appended tag 46.
+    PlanetPopulation(EntityId, Fixed),
 }
 
 /// Which team-pool rule an [`Edit::TeamPool`] applies (appended variants only).
@@ -543,6 +553,14 @@ mod tests {
     }
 
     #[test]
+    fn planet_population_edit_appends_tag_46() {
+        let edit = Edit::PlanetPopulation(EntityId(1), Fixed::ONE);
+        let bytes = postcard::to_allocvec(&edit).unwrap();
+        assert_eq!(bytes[0], 46);
+        assert_eq!(postcard::from_bytes::<Edit>(&bytes).unwrap(), edit);
+    }
+
+    #[test]
     fn switch_edits_and_scripted_orders_append_tags() {
         let id = EntityId(1);
         let edits = [
@@ -567,7 +585,8 @@ mod tests {
             (12, Order::Scout { units: u.clone() }),
             (13, Order::AttackAny { units: u.clone() }),
             (14, Order::AttackPoint { units: u.clone(), at }),
-            (15, Order::MoveWarp { units: u, to: at, queue: true }),
+            (15, Order::MoveWarp { units: u.clone(), to: at, queue: true }),
+            (17, Order::Colonize { units: u, planet: id }),
         ];
         for (tag, o) in orders {
             let bytes = postcard::to_allocvec(&o).unwrap();
