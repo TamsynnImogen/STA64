@@ -118,6 +118,7 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
         // UI-29: the player's saved settings, over the resources above (after them).
         app.add_plugins(crate::ui::settings::SettingsPlugin::from_cfg(cfg));
         app.add_plugins(crate::ui::display::DisplayPlugin);
+        app.add_plugins(crate::ui::graphics::GraphicsPlugin);
         if cfg.skirmish {
             // A match: calm and battle music of the local race (set by `game::apply_race`),
             // not the viewer's silence.

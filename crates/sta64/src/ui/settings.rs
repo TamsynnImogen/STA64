@@ -9,6 +9,7 @@
 //! - `ui_profile = lcars | stock` ([`UiPreference`]);
 //! - the options screen's volumes (`master`, `music`, `effects`, `voice`, `0..=100`),
 //!   `scroll_speed`, `window_size`, `fullscreen`, `vsync`, `show_fps` ([`Settings`]);
+//! - optional graphics choices (`msaa`, `graphics_detail`, `shadows`, `bloom`);
 //! - `player_name` and `relay`, the multiplayer name and relay address last used (UI-11);
 //! - `intro = true | false` ([`IntroSettings`]);
 //! - `version = 1`.
@@ -148,6 +149,23 @@ impl Stored {
                 }
                 "window_size" => crate::frontend::screens::WindowSize::from_key(value)
                     .map(|size| s.settings.window_size = size).is_some(),
+                "msaa" => match value {
+                    "auto" => { s.settings.msaa = None; true }
+                    "1" | "2" | "4" => { s.settings.msaa = value.parse().ok(); true }
+                    _ => false,
+                },
+                "graphics_detail" => match value {
+                    "auto" => { s.settings.graphics_detail = None; true }
+                    "0" | "1" | "2" => { s.settings.graphics_detail = value.parse().ok(); true }
+                    _ => false,
+                },
+                "shadows" | "bloom" => {
+                    let parsed = if value == "auto" { Some(None) } else { parse_bool(value).map(Some) };
+                    if let Some(choice) = parsed {
+                        if name == "shadows" { s.settings.shadows = choice; } else { s.settings.bloom = choice; }
+                        true
+                    } else { false }
+                }
                 n if NUMBERS.contains(&n) => match value.parse::<f32>() {
                     Ok(v) if v.is_finite() => {
                         let key = number_key(n);
@@ -187,6 +205,10 @@ impl Stored {
         for (name, v) in [("fullscreen", st.fullscreen), ("vsync", st.vsync), ("show_fps", st.show_fps)] {
             let _ = writeln!(t, "{name} = {v}");
         }
+        let _ = writeln!(t, "msaa = {}", st.msaa.map_or("auto".to_owned(), |v| v.to_string()));
+        let _ = writeln!(t, "graphics_detail = {}", st.graphics_detail.map_or("auto".to_owned(), |v| v.to_string()));
+        let _ = writeln!(t, "shadows = {}", st.shadows.map_or("auto".to_owned(), |v| v.to_string()));
+        let _ = writeln!(t, "bloom = {}", st.bloom.map_or("auto".to_owned(), |v| v.to_string()));
         let _ = writeln!(t, "window_size = {}", st.window_size.key());
         if !st.player_name.is_empty() {
             let _ = writeln!(t, "player_name = {}", st.player_name);
@@ -723,6 +745,23 @@ mod tests {
             assert!(warnings.is_empty(), "{warnings:?}");
             assert_eq!(stored.settings.window_size, size);
         }
+    }
+
+    #[test]
+    fn graphics_choices_round_trip_and_invalid_values_keep_automatic() {
+        let (mut old, warnings) = Stored::parse("fullscreen = true\n");
+        assert!(warnings.is_empty());
+        assert_eq!((old.settings.msaa, old.settings.graphics_detail, old.settings.shadows, old.settings.bloom), (None, None, None, None));
+        old.settings.msaa = Some(2);
+        old.settings.graphics_detail = Some(0);
+        old.settings.shadows = Some(false);
+        old.settings.bloom = Some(true);
+        let (back, warnings) = Stored::parse(&old.to_text());
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(back, old);
+        let (invalid, warnings) = Stored::parse("msaa = 8\ngraphics_detail = 3\nshadows = perhaps\nbloom = maybe\n");
+        assert_eq!(warnings.len(), 4, "{warnings:?}");
+        assert_eq!((invalid.settings.msaa, invalid.settings.graphics_detail, invalid.settings.shadows, invalid.settings.bloom), (None, None, None, None));
     }
 
     #[test]

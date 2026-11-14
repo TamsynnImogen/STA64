@@ -186,7 +186,7 @@ pub fn region(slot: Slot) -> Region {
         Slot::SetupBack => a(24.0, 560.0, 200.0, 34.0),
         Slot::Launch => a(576.0, 560.0, 200.0, 34.0),
         // Options: not measured.
-        Slot::OptionsTitle => a(0.0, 0.0, 800.0, 30.0),
+        Slot::OptionsTitle => a(100.0, 16.0, 600.0, 30.0),
         Slot::OptionsBody => a(100.0, 60.0, 600.0, 470.0),
         Slot::OptionsBack => a(24.0, 560.0, 200.0, 34.0),
     }

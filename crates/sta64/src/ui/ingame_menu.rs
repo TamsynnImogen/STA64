@@ -150,10 +150,10 @@ pub const fn region(slot: MenuSlot) -> Region {
         MenuSlot::Options => a(280.0, 274.0, 240.0, 36.0),
         MenuSlot::Exit => a(280.0, 322.0, 240.0, 36.0),
         MenuSlot::Quit => a(280.0, 370.0, 240.0, 36.0),
-        MenuSlot::OptionsPanel => a(80.0, 40.0, 640.0, 520.0),
-        MenuSlot::OptionsTitle => a(100.0, 54.0, 600.0, 34.0),
-        MenuSlot::OptionsBody => a(100.0, 100.0, 600.0, 360.0),
-        MenuSlot::OptionsBack => a(300.0, 492.0, 200.0, 36.0),
+        MenuSlot::OptionsPanel => a(80.0, 20.0, 640.0, 560.0),
+        MenuSlot::OptionsTitle => a(100.0, 30.0, 600.0, 34.0),
+        MenuSlot::OptionsBody => a(100.0, 84.0, 600.0, 430.0),
+        MenuSlot::OptionsBack => a(300.0, 532.0, 200.0, 36.0),
         MenuSlot::ConfirmPanel => a(220.0, 210.0, 360.0, 190.0),
         MenuSlot::ConfirmTitle => a(240.0, 222.0, 320.0, 34.0),
         MenuSlot::ConfirmLine1 => a(240.0, 262.0, 320.0, 26.0),
@@ -245,6 +245,7 @@ fn panel(p: &mut Box_, theme: &Theme, slot: MenuSlot, b: Vec2) {
 struct Parts<'a> {
     theme: &'a Theme,
     settings: &'a Settings,
+    graphics: Option<&'a stock::GraphicsInfo>,
     strings: Option<&'a Strings>,
     tab: usize,
     mission: bool,
@@ -275,7 +276,7 @@ fn spawn_menu(commands: &mut Commands, page: MenuPage, parts: &Parts, b: Vec2) {
                 MenuPage::Options => {
                     panel(p, t, MenuSlot::OptionsPanel, b);
                     title(p, t, MenuSlot::OptionsTitle, b, &caption(parts.strings, "options", "Options"));
-                    stock::options_body(p, t, parts.settings, parts.tab, rect(MenuSlot::OptionsBody, b), MenuPlaced(MenuSlot::OptionsBody));
+                    stock::options_body(p, t, parts.settings, parts.tab, parts.graphics, rect(MenuSlot::OptionsBody, b), MenuPlaced(MenuSlot::OptionsBody));
                     button(p, t, MenuSlot::OptionsBack, b, &tr("Back"), MenuAct::Back);
                 }
                 MenuPage::ConfirmExit | MenuPage::ConfirmQuit => {
@@ -305,11 +306,12 @@ fn rebuild(
     theme: Res<Theme>,
     stock_box: Res<StockBox>,
     settings: Res<Settings>,
+    graphics: Option<Res<stock::GraphicsInfo>>,
     tab: Res<OptionsTab>,
     strings: Option<Res<Strings>>,
     mission: Option<Res<crate::game::mission_host::MissionRun>>,
 ) {
-    if !(menu.is_changed() || theme.is_changed() || stock_box.is_changed() || strings.as_ref().is_some_and(|s| s.is_changed())) {
+    if !(menu.is_changed() || graphics.as_ref().is_some_and(|g| g.is_changed()) || theme.is_changed() || stock_box.is_changed() || strings.as_ref().is_some_and(|s| s.is_changed())) {
         return;
     }
     for e in &roots {
@@ -318,7 +320,7 @@ fn rebuild(
     if !menu.open {
         return;
     }
-    let parts = Parts { theme: &theme, settings: &settings, strings: strings.as_deref(), tab: tab.0, mission: mission.is_some() };
+    let parts = Parts { theme: &theme, settings: &settings, graphics: graphics.as_deref(), strings: strings.as_deref(), tab: tab.0, mission: mission.is_some() };
     spawn_menu(&mut commands, menu.page, &parts, stock_box.0);
 }
 
