@@ -11,9 +11,11 @@ accepted ADR is binding on agent and human work in the area it covers.
 | [0004](0004-modding-v1.md) | Modding v1, D1 to D13 (formerly `docs/MODDING_DECISIONS.md`) | accepted | 2026-11-11, amended 2026-11-12 |
 | [0005](0005-network-after-net-01.md) | Network model after NET-01, N1 to N6 (formerly `docs/NET_DECISIONS.md`) | accepted | 2026-11-12 |
 | [0006](0006-fo-profile-detection-order.md) | Profile detection order for Fleet Operations installs | accepted | 2026-11-12 |
+| [0007](0007-ui-text-and-icons.md) | UI text, markup and icon formats, T1 to T8 | proposed | 2026-11-13 |
 | [0008](0008-stock-hud-aspect.md) | Stock HUD on windows of another aspect than its layout sheet, H1 to H6 | proposed | 2026-11-14 |
 
-0007 is taken by the UI text, markup and icon proposal (PR #663).
+ADR 0007 was merged as `0001-ui-text-and-icons.md` by mistake (PR #663) and
+renumbered on 2026-11-14; its text is unchanged.
 
 ADRs 0001 to 0006 were moved here on 2026-11-13 from the documents that held
 them. The decision text was moved unchanged; only the form is new. Where the

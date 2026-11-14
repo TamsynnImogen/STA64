@@ -7,8 +7,7 @@
   Tammy handed it off on 2026-11-13). H4 to H6 add mod-facing files and need
   both Tammy and Cedric. Accepted when both approve the PR that merges this
   file; not binding before.
-- **Relates to:** [ADR 0004](0004-modding-v1.md) D1, D3, D6, D7, D11; the UI
-  text ADR (`0001-ui-text-and-icons.md`, to be renumbered 0007) open
+- **Relates to:** [ADR 0004](0004-modding-v1.md) D1, D3, D6, D7, D11; [ADR 0007](0007-ui-text-and-icons.md) open
   question 1; WORKPLAN UI-18, UI-29, UI-33
 
 ## Context
@@ -159,8 +158,8 @@ only the candidate list. H5 is a later package, after open question 3.
    an extra file in `misc/`, is expected but not measured. H4 and H5 are not
    promised to authors before it is.
 4. **HUD scale setting.** Range, and whether it is in the settings screen
-   with the first package. It scales panels and their text together (UI text
-   ADR, open question 1).
+   with the first package. It scales panels and their text together (ADR
+   0007, open question 1).
 
 ## Changing this ADR
 
