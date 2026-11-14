@@ -159,11 +159,9 @@ fn a_non_craft_definition_is_derelict() {
     // The same unit viewed as an asteroid-class definition: not a craft or station.
     let mut rock = UnitDef::new("rock", "asteroid");
     rock.hull = Fixed::from_int(10);
-    let mut features = Profile::Sta2Classic.features();
-    features.crew_loss_on_hit = true;
     let mut ship = UnitDef::new("ship", "craft");
     ship.hull = Fixed::from_int(1000);
-    s.db = Arc::new(ContentDb::builder().profile(Profile::Sta2Classic).features(features).unit(ship).unit(rock).build().unwrap());
+    s.db = Arc::new(ContentDb::builder().profile(Profile::Sta2Classic).features(Profile::Sta2Classic.features()).unit(ship).unit(rock).build().unwrap());
     // Point the first unit's view at the asteroid definition.
     let key = s.db.key("rock").unwrap();
     let ship = s.db.key("ship").unwrap();
@@ -183,8 +181,10 @@ fn a_pending_build_token_raises_and_taints_in_both_bindings() {
     rt.eval::<()>("tok = A1.BuildObject('ship', 0, 0, 1.0, 2.0, 3.0)").unwrap();
     let e = rt.eval::<bool>("return A1.IsDerelict(tok)").expect_err("pending").to_string();
     assert!(e.contains("A1.IsDerelict") && e.contains("still being built"), "{e}");
-    // A2: a raw token no object answers to raises as the other dead-handle answers do.
-    assert!(rt.eval::<bool>("return A2.IsDerelict(0x40000001)").is_err());
+    // A2: a real pending token raises, naming the call.
+    rt.eval::<()>("A2.paths.Q = { {x=40,y=0,z=0}, {x=50,y=0,z=0} }; tok2 = A2.BuildObject('ship', 0, 'Q', 1)").unwrap();
+    let e = rt.eval::<bool>("return A2.IsDerelict(tok2)").expect_err("pending").to_string();
+    assert!(e.contains("A2.IsDerelict"), "{e}");
     // A failed or unknown A1 token stays the lenient "no such object": derelict.
     assert!(truth(&rt, "A1.IsDerelict(0x40000063)"));
 }

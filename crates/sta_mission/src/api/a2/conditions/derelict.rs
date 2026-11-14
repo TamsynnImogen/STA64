@@ -14,17 +14,18 @@
 //! unlatched one has crew of 1 or more, and `Sim::step` clears the latch before it builds the
 //! view, so the two agree in the same tick. Divergences, all pinned or documented here:
 //!
-//! - The whole Armada I profile (`Profile::Sta1Classic`) has no casualty model: the sim never
-//!   calls the check, so combat never latches and `SetCrew(h, 0)` on a `CraftCannotDie` craft
+//! - Where `crew_loss_on_hit` is off (the Armada I profile default, `Profile::Sta1Classic`) there
+//!   is no casualty model: the sim never calls the check, so combat never latches and `SetCrew(h, 0)` on a `CraftCannotDie` craft
 //!   is not topped up. The crew pair then reads derelict where the engine's rule says not.
 //! - A `maxCrew` edit never runs the check: `maxCrew 0` on a latched unit reads not derelict
 //!   while the sim keeps the latch, and a maximum just under 1 reads derelict with no latch.
 //! - A unit spawned with crew under 1 and a positive maximum is not checked at spawn and keeps
-//!   working in the sim, but reads derelict. No Armada II stock ODF (1102 scanned) has such a
-//!   definition; the Armada I archive was not readable by that scan (not measured).
+//!   working in the sim, but reads derelict. No stock definition is known to have one (read from
+//!   data, Armada II; Armada I not measured).
 //!
-//! A pending `BuildObject` token (not yet an object) raises like the other conditions do, so
-//! the gap is tainted: the engine's object exists at once and is crewed, so no constant is right.
+//! A `BuildObject` token that is pending raises, so the gap is tainted: the engine's object
+//! exists at once and is crewed, so no constant is right. In A2 a failed or unknown token raises
+//! too (via `dead_handle`); in A1 a failed or unknown one answers true (the lenient alias).
 
 use mlua::{Lua, Table};
 use sta_core::Fixed;

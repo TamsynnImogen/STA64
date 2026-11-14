@@ -525,8 +525,9 @@ returns to one) where the casualty model runs; divergences are listed in
 takeover (listed on SIM-59; `GetRealTeam` has the same approximation).
 
 `IsDerelict(object)` (LUA-26): true for a missing, dying or non-craft handle,
-else that derelict test. A pending `BuildObject` token raises (tainted), as the
-other dead-handle answers do. Read from the executable, static; not measured.
+else that derelict test. A pending, failed or unknown `BuildObject` token raises
+(tainted) via `dead_handle`, as the other dead-handle answers do; the A1 alias answers
+true for a failed or unknown token and raises only for a pending one. Read from the executable, static; not measured.
 
 Evidence: signatures and argument constants read from the executable and the
 rule DLLs, static. The team / radius / ODF-filter readings follow the `A1`

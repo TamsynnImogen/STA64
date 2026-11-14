@@ -60,6 +60,9 @@ mod tests;
 /// number is `handle - TOKEN_BASE`. Real entity ids stay far below it.
 pub(super) const TOKEN_BASE: u32 = 0x4000_0000;
 
+/// Why a pending `BuildObject` handle cannot be used yet (shared with the lenient alias check).
+const STILL_BEING_BUILT: &str = "is still being built; use it after the next tick";
+
 /// A special-forces flag (`CreateSpecialFlag`): a named hero tied to a unit.
 pub(super) struct Flag {
     pub unit: EntityId,
@@ -177,7 +180,7 @@ impl Env {
                 st.pending.remove(&raw);
                 Err("could not be built (the spawn failed)")
             }
-            SpawnStatus::Queued | SpawnStatus::Submitted(_) => Err("is still being built; use it after the next tick"),
+            SpawnStatus::Queued | SpawnStatus::Submitted(_) => Err(STILL_BEING_BUILT),
         })
     }
 
@@ -447,7 +450,7 @@ fn alias_as(lua: &Lua, env: &Env, a2: &Table, name: &'static str, a2_name: &'sta
             mapped.push(match resolved {
                 Some(Ok(id)) => Value::Integer(i64::from(id.0)),
                 // A pending spawn has an object in the engine (crewed, so not derelict): no constant.
-                Some(Err(why)) if lenient && !(name == "IsDerelict" && why.starts_with("is still being built")) => Value::Integer(0),
+                Some(Err(why)) if lenient && !(name == "IsDerelict" && why == STILL_BEING_BUILT) => Value::Integer(0),
                 Some(Err(why)) => {
                     return Err(mlua::Error::runtime(format!("A1.{name}: object {why}")));
                 }
