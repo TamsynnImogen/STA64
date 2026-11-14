@@ -117,6 +117,7 @@ pub fn weapon_def(name: &str, odf: &Odf, ordnance: Option<&Odf>, warnings: &mut 
             hull: o.fixed("hullCrewModifier"),
         };
         d.crew_loss = (loss != crate::def::OrdnanceCrewLoss::default()).then_some(loss);
+        d.damage_variance = o.fixed("damageVariance");
         d.fx = o.text("shotGeometry").or_else(|| o.text("sprite"));
         match kind {
             WeaponKind::Beam => d.duration = o.ticks("lifespan"),

@@ -357,7 +357,7 @@ impl Sim {
                 }
                 // SIM-55: itemised, one row per unit with a switched-off or damaged system.
                 for (id, r) in self.subsystems.to_rows() {
-                    row(Some(id), "subsystems (off bits, damage)", format!("{:#04x}, {:?}", r.off, r.damage.map(|d| fx(Fixed::from_bits(d)))));
+                    row(Some(id), "subsystems (off bits, damage)", format!("{:#04x}{}, {:?}", r.off, if r.derelict { ", derelict" } else { "" }, r.damage.map(|d| fx(Fixed::from_bits(d)))));
                 }
                 // SIM-54: itemised mission-set names and races.
                 let a = self.attrs.view();

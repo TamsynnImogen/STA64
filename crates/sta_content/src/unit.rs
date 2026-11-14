@@ -147,6 +147,27 @@ pub(crate) fn unit_def_for_profile(name: &str, odf: &Odf, phys: Option<&Odf>, pr
         r.fixed("lifeSupportHitPoints"),
         r.fixed("sensorsHitPoints"),
     ];
+    d.casualty = crate::def::CasualtyDef {
+        shield_protection: r.odf.raw("shieldProtection").map(|_| r.fixed("shieldProtection")),
+        system_hit_percent: [
+            r.fixed("enginesHitPercent"),
+            r.fixed("weaponsHitPercent"),
+            r.fixed("shieldGeneratorHitPercent"),
+            r.fixed("lifeSupportHitPercent"),
+            r.fixed("sensorsHitPercent"),
+        ],
+        crew_hit_percent: r.fixed("crewHitPercent"),
+        hull_hit_percent: r.odf.raw("hullHitPercent").map(|_| r.fixed("hullHitPercent")),
+        system_crew_loss: [
+            r.fixed("enginesCrewLoss"),
+            r.fixed("weaponsCrewLoss"),
+            r.fixed("shieldGeneratorCrewLoss"),
+            r.fixed("lifeSupportCrewLoss"),
+            r.fixed("sensorsCrewLoss"),
+        ],
+        life_support_loss: r.fixed("lifeSupportLoss"),
+        recrew_rate: r.odf.raw("recrewRate").map(|_| r.fixed("recrewRate")),
+    };
     for (slot, key) in [
         "enginesRepairTime", "weaponsRepairTime", "shieldGeneratorRepairTime",
         "lifeSupportRepairTime", "sensorsRepairTime",
