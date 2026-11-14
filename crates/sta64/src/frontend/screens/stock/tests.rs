@@ -14,7 +14,7 @@ use super::layout::{self, Slot, region};
 use super::*;
 use crate::app::{AppState, configure_sets};
 use crate::frontend::screens::{Act, ScreenRoot, ScreensConfig, ScreensPlugin, StartGame};
-use crate::ui::theme::{Dropdown, DropdownOption, Tab, TabBar, Theme, kit_click};
+use crate::ui::theme::{Dropdown, DropdownOption, Tab, TabBar, Theme, WidgetState, kit_click};
 
 /// What the screens sent out.
 #[derive(Resource, Default)]
@@ -184,7 +184,7 @@ fn check_layout(screen: Screen, want: &[Slot]) {
 fn main_menu_layout_in_every_window_and_scale() {
     check_layout(
         Screen::Main,
-        &[Slot::MainSinglePlayer, Slot::MainInstantAction, Slot::MainMultiplayer, Slot::MainOptions, Slot::MainReplayIntro, Slot::MainCredits, Slot::MainExit, Slot::MainMods],
+        &[Slot::MainKicker, Slot::MainTitle, Slot::MainDivider, Slot::MainSinglePlayer, Slot::MainInstantAction, Slot::MainMultiplayer, Slot::MainMapEditor, Slot::MainMods, Slot::MainOptions, Slot::MainReplayIntro, Slot::MainCredits, Slot::MainExit],
     );
 }
 
@@ -212,9 +212,8 @@ fn options_layout_in_every_window_and_scale() {
 fn the_stock_arrangement_holds_in_a_window() {
     // Same controls in the same places as the stock screen, in relative terms: the
     // table's columns left to right, the table left of the map column, the map
-    // preview right of the settings, the bottom row last; main menu: Single Player
-    // top left, Instant Action top right, Multiplayer bottom left, the small
-    // buttons at the right.
+    // Preview right of the settings and the bottom row last. The main menu has
+    // a kicker, title and divider above one left-aligned navigation column.
     let mut app = app_with(four_races(), Some((3440, 1440)), 1.333);
     go(&mut app, Screen::Setup);
     let at = |app: &App, slot: Slot| node_rect(app, placed_one(app, slot));
@@ -229,12 +228,13 @@ fn the_stock_arrangement_holds_in_a_window() {
     assert!(at(&app, Slot::Preview).max.y <= at(&app, Slot::Launch).min.y);
     let b_scale = app.world().resource::<StockBox>().0.y / 1080.0;
     go(&mut app, Screen::Main);
-    let sp = at(&app, Slot::MainSinglePlayer);
-    let ia = at(&app, Slot::MainInstantAction);
-    let mp = at(&app, Slot::MainMultiplayer);
-    assert!(sp.max.x <= ia.min.x && (sp.center().y - ia.center().y).abs() < 40.0 * b_scale);
-    assert!(mp.min.y >= sp.max.y);
-    assert!(at(&app, Slot::MainOptions).min.x > mp.max.x);
+    let order = [Slot::MainKicker, Slot::MainTitle, Slot::MainDivider, Slot::MainSinglePlayer, Slot::MainInstantAction, Slot::MainMultiplayer, Slot::MainMapEditor, Slot::MainMods, Slot::MainOptions, Slot::MainReplayIntro, Slot::MainCredits, Slot::MainExit];
+    for pair in order.windows(2) {
+        assert!(at(&app, pair[0]).max.y <= at(&app, pair[1]).min.y, "{pair:?} overlaps vertically");
+    }
+    let rows = &order[3..];
+    assert!(rows.iter().all(|slot| (at(&app, *slot).min.x - at(&app, rows[0]).min.x).abs() < 0.01));
+    assert!((at(&app, Slot::MainInstantAction).min.y - at(&app, Slot::MainSinglePlayer).min.y - 66.0 * b_scale).abs() < 0.1);
 }
 
 #[test]
@@ -364,6 +364,38 @@ fn main_menu_buttons_go_where_they_say() {
     assert_eq!(*app.world().resource::<State<Screen>>().get(), Screen::Setup);
     press(&mut app, Act::PickMap);
     assert_eq!(*app.world().resource::<State<Screen>>().get(), Screen::MapSelect);
+}
+
+#[test]
+fn main_menu_has_nine_text_rows_with_existing_routes() {
+    use crate::ui::sprite_font::SpriteText;
+    use crate::ui::theme::UiButton;
+
+    let mut app = app();
+    let order = [Slot::MainSinglePlayer, Slot::MainInstantAction, Slot::MainMultiplayer, Slot::MainMapEditor, Slot::MainMods, Slot::MainOptions, Slot::MainReplayIntro, Slot::MainCredits, Slot::MainExit];
+    let labels = ["SINGLE PLAYER", "INSTANT ACTION", "MULTIPLAYER", "MAP EDITOR", "MOD MANAGER", "OPTIONS", "REPLAY INTRO", "CREDITS", "EXIT"];
+    for (slot, want) in order.into_iter().zip(labels) {
+        let entity = placed(&mut app).into_iter().find(|(s, _)| *s == slot).unwrap().1;
+        assert!(app.world().get::<UiButton>(entity).is_some(), "{slot:?}");
+        assert_eq!(app.world().get::<BackgroundColor>(entity).unwrap().0, Color::NONE);
+        let text = app.world().get::<Children>(entity).unwrap().iter().find_map(|e| app.world().get::<SpriteText>(e)).unwrap();
+        assert_eq!(text.text, want, "{slot:?}");
+        let disabled = matches!(slot, Slot::MainMapEditor | Slot::MainReplayIntro | Slot::MainCredits);
+        assert_eq!(*app.world().get::<WidgetState>(entity).unwrap() == WidgetState::Disabled, disabled, "{slot:?}");
+        assert_eq!(app.world().get::<Act>(entity).is_some(), !disabled, "{slot:?}");
+    }
+    let title = placed(&mut app).into_iter().find(|(s, _)| *s == Slot::MainTitle).unwrap().1;
+    let title_row = app.world().get::<Children>(title).unwrap()[0];
+    let parts = app.world().get::<Children>(title_row).unwrap();
+    assert_eq!(app.world().get::<SpriteText>(parts[0]).unwrap().text, "ARMADA");
+    let sixty_four = app.world().get::<Children>(parts[1]).unwrap()[0];
+    assert_eq!(app.world().get::<SpriteText>(sixty_four).unwrap().text, "64");
+
+    press(&mut app, Act::PickMod);
+    assert_eq!(*app.world().resource::<State<Screen>>().get(), Screen::ModSelect);
+    go(&mut app, Screen::Main);
+    press(&mut app, Act::Goto(Screen::Settings));
+    assert_eq!(*app.world().resource::<State<Screen>>().get(), Screen::Settings);
 }
 
 #[test]

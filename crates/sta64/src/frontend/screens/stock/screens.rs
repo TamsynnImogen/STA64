@@ -55,7 +55,7 @@ pub fn spawn(commands: &mut Commands, screen: Screen, ctx: &Ctx, camera: Option<
     let b = ctx.stock_box;
     root.with_children(|p| {
         p.spawn((StockBoxNode, Node { width: Val::Px(b.x), height: Val::Px(b.y), ..default() })).with_children(|p| match screen {
-            Screen::Main => main_menu(p, ctx, b),
+            Screen::Main => super::main_menu::spawn(p, ctx, b),
             Screen::SinglePlayer => single_player(p, ctx, b),
             Screen::Setup => setup(p, ctx, b),
             Screen::Settings => settings(p, ctx, b),
@@ -92,18 +92,6 @@ fn act_button(p: &mut Box_, ctx: &Ctx, b: Vec2, slot: Slot, text: &str, act: Act
 fn off_button(p: &mut Box_, ctx: &Ctx, b: Vec2, slot: Slot, text: &str) {
     let r = region(slot).px(b);
     put(p, slot, r, disabled_button(ctx.theme, text, r.width()));
-}
-
-fn main_menu(p: &mut Box_, ctx: &Ctx, b: Vec2) {
-    act_button(p, ctx, b, Slot::MainSinglePlayer, &cap(ctx, "single_player", "Single player"), Act::Goto(Screen::SinglePlayer));
-    act_button(p, ctx, b, Slot::MainInstantAction, &cap(ctx, "instant_action", "Instant action"), Act::Goto(Screen::Setup));
-    act_button(p, ctx, b, Slot::MainMultiplayer, &cap(ctx, "multiplayer", "Multiplayer"), Act::Goto(Screen::Multiplayer));
-    act_button(p, ctx, b, Slot::MainOptions, &cap(ctx, "options", "Options"), Act::Goto(Screen::Settings));
-    // The intro (MED-05) and the credits have no screen yet.
-    off_button(p, ctx, b, Slot::MainReplayIntro, &cap(ctx, "replay_intro", "Replay intro"));
-    off_button(p, ctx, b, Slot::MainCredits, &cap(ctx, "credits", "Credits"));
-    act_button(p, ctx, b, Slot::MainExit, &cap(ctx, "quit", "Exit"), Act::Exit);
-    act_button(p, ctx, b, Slot::MainMods, &tr("Mods"), Act::PickMod);
 }
 
 fn single_player(p: &mut Box_, ctx: &Ctx, b: Vec2) {
