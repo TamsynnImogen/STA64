@@ -17,9 +17,7 @@ fn db(a1: bool) -> Arc<ContentDb> {
     for u in fake.units().cloned() {
         b = b.unit(u);
     }
-    let mut gate = UnitDef::new("fx_gate", "wormhole_obj");
-    gate.hull = Fixed::from_int(500);
-    b = b.unit(gate);
+    b = b.unit(UnitDef::new("fx_gate", "wormhole_obj"));
     Arc::new(b.build().unwrap())
 }
 
@@ -124,13 +122,15 @@ fn map_gates_are_neutral_props_found_by_label() {
 }
 
 #[test]
-fn an_explicit_attack_does_not_hurt_a_gate_with_hull() {
+fn an_explicit_attack_does_not_hurt_a_stock_shaped_gate() {
+    // Stock wormhole ODFs carry no hull key (read from data), so the gate has hull 0. A gate ODF
+    // with a hull would be destroyable by an explicit attack (tried; not in stock data).
     let d = db(true);
     let (mut sim, ids) = gate_world(&d);
     let cruiser = d.key("fx_cruiser").unwrap();
     let c = sim.spawn_def(cruiser, PlayerId(1), v(1100, 0), (Fixed::ONE, Fixed::ZERO)).unwrap();
     let hull = sim.units.get(ids[0]).unwrap().hull;
-    assert!(hull[0] > Fixed::ZERO);
+    assert_eq!(hull[1], Fixed::ZERO);
     let attack = Command { player: PlayerId(1), seq: 1, kind: CommandKind::Order(Order::Attack { units: vec![c], target: ids[0] }) };
     sim.step(&[attack]);
     for _ in 0..30 * 20 {
