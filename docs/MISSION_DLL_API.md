@@ -17,10 +17,10 @@ user's own executables each time, and none are recorded here.
 | call sites | 11692 | — |
 | DLL-shaped callable (`A2` / `A1` table) | 130 | 172 |
 | missing callable signatures (missing A1 calls) | 2 | 0 |
-| &nbsp;&nbsp;of the A1 callable: working (sim- or view-backed) | — | 80 |
+| &nbsp;&nbsp;of the A1 callable: working (sim- or view-backed) | — | 81 |
 | &nbsp;&nbsp;of the A1 callable: presentation event only, no consumer yet | — | 35 |
 | &nbsp;&nbsp;of the A1 callable: request retained and counted, no effect | — | 42 |
-| &nbsp;&nbsp;of the A1 callable: always raises (no data in the world view) | — | 15 |
+| &nbsp;&nbsp;of the A1 callable: always raises (no data in the world view) | — | 14 |
 | MMM job-equivalent, not A2-shaped | 0 | — |
 | bound in STA64's Lua today | — | 6 |
 | in MMM's API, not yet bound | 2 | 0 |
@@ -586,7 +586,7 @@ import no engine call.
 | `int GetNearestEnemy(int, float)` | 2 | working | `A1.GetNearestEnemy` |
 | `float hot_float::operator float(void)` | 2 | raises | `A1.hot_float_value` |
 | `bool InAttackMode(int)` | 1 | raises | `A1.InAttackMode` |
-| `bool IsDerelict(int)` | 1 | raises | `A1.IsDerelict` |
+| `bool IsDerelict(int)` | 1 | working | `A1.IsDerelict` |
 | `bool IsThereARomulanSpyOnShip(int)` | 1 | raises | `A1.IsThereARomulanSpyOnShip` |
 | `bool IsVisibleToTeam(int, int)` | 1 | working | `A1.IsVisibleToTeam` |
 | `bool RecruitSpecialForces(char *, int, int &)` | 1 | raises | `A1.RecruitSpecialForces` |
