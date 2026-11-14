@@ -24,10 +24,10 @@
 //!   to every craft of the list that is not dying and not a derelict, whose
 //!   real team is `team` (-1: any), whose class is `odf` (null: any), that is
 //!   not a station when `flag_b` is set, and that has an unidentified
-//!   per-craft state byte set when `flag_a` is set. The command is the same
-//!   `SetCommand(command, no target, true, false)` that `Stop(unit)` and
-//!   `AI_Attack(unit)` issue, so only `STOP` (3) and `ATTACK` (6, without a
-//!   target: `Order::AttackAny`) have a seam; any other command raises and is
+//!   per-craft state byte set when `flag_a` is set. The command is given with
+//!   no target, the same way `Stop(unit)` and `AI_Attack(unit)` give theirs
+//!   (read from the executable, static), so only `STOP` (3) and `ATTACK` (6,
+//!   without a target: `Order::AttackAny`) have a seam; any other command raises and is
 //!   counted before anything is queued. `flag_a == true` raises and is
 //!   counted too (the state byte is not identified). The derelict test is the
 //!   crew approximation `IsCompromised` uses. Craft with no player owner (the
@@ -234,10 +234,17 @@ fn command_all_ships(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()>
                     .map(|u| u.id)
                     .collect()
             };
+            // The station filter can raise (an unclassified class), so it
+            // runs here, while the list is built; orders are queued only once
+            // the whole list is known.
+            let mut targets = Vec::with_capacity(candidates.len());
             for id in candidates {
                 if skip_stations && is_station.call::<bool>(i64::from(id.0)).map_err(|e| mlua::Error::runtime(e.to_string()))? {
                     continue;
                 }
+                targets.push(id);
+            }
+            for id in targets {
                 c.borrow_mut().order(id, order);
             }
             Ok(())

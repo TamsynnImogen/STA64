@@ -10,7 +10,7 @@ use sta_sim::setup::{Control, Controller, GameOptions, GameSetup, PlayerSetup};
 use sta_sim::view::WorldView;
 use sta_sim::{Sim, WorldSource};
 
-use crate::api::MissionConfig;
+use crate::api::{MissionConfig, PlayerNumbering};
 use crate::runtime::MissionRuntime;
 
 struct Scene {
@@ -34,12 +34,18 @@ fn game(db: &Arc<ContentDb>) -> GameSetup {
 }
 
 fn scene() -> Scene {
+    scene_with(|_| ())
+}
+
+/// `tweak` edits every unit definition of the content (by `odf`).
+fn scene_with(tweak: impl Fn(&mut sta_content::UnitDef)) -> Scene {
     // The fake station carries the native `is_starbase` flag.
     let fake_db = fake::db();
     let mut builder = ContentDb::builder().profile(fake_db.profile()).features(fake_db.features().clone());
     for unit in fake_db.units() {
         let mut unit = unit.clone();
         unit.is_starbase |= unit.odf == "fx_station";
+        tweak(&mut unit);
         builder = builder.unit(unit);
     }
     for weapon in fake_db.weapons() {
@@ -68,7 +74,16 @@ fn scene() -> Scene {
 }
 
 fn runtime(s: &Scene) -> MissionRuntime {
-    let cfg = MissionConfig { content: Some(s.db.clone()), view: Some(s.view.clone()), ..MissionConfig::default() };
+    runtime_numbered(s, PlayerNumbering::Slots)
+}
+
+fn runtime_numbered(s: &Scene, player_numbering: PlayerNumbering) -> MissionRuntime {
+    let cfg = MissionConfig {
+        content: Some(s.db.clone()),
+        view: Some(s.view.clone()),
+        player_numbering,
+        ..MissionConfig::default()
+    };
     let rt = MissionRuntime::from_source_with("stock_bindings.lua", "", 3, cfg);
     assert!(rt.errors().is_empty(), "{:?}", rt.errors());
     rt.eval::<()>(&format!("a, b, s, far = {}, {}, {}, {}", s.ids[0].0, s.ids[1].0, s.ids[2].0, s.ids[3].0)).unwrap();
@@ -208,4 +223,104 @@ fn command_all_ships_raises_and_counts_what_it_cannot_serve_before_queueing() {
         assert!(rt.eval::<()>(bad).is_err(), "{bad}");
     }
     assert!(rt.take_commands().is_empty());
+}
+
+#[test]
+fn command_all_ships_queues_nothing_when_the_station_filter_raises_for_a_later_craft() {
+    // The last craft (the far frigate) is a starbase of a class the station
+    // classification cannot place: IsStation raises for it, after the cruisers
+    // before it have already passed the filter.
+    let s = scene_with(|u| {
+        if u.odf == "fx_frigate" {
+            u.is_starbase = true;
+            u.class = sta_content::ClassLabel("not_a_known_class".into());
+        }
+    });
+    let mut rt = runtime(&s);
+    assert!(rt.eval::<()>("A2.CommandAllShips(3, -1, nil, false, true)").is_err());
+    assert!(rt.take_commands().is_empty(), "no order may be queued once the call raised");
+    // Without the station filter nothing classifies, so all four are ordered.
+    rt.eval::<()>("A2.CommandAllShips(3, -1, nil, false, false)").unwrap();
+    assert_eq!(rt.take_commands().len(), 4);
+}
+
+/// Armada team numbers: team 1 is seat 0, team 2 is seat 1, team 0 neutral.
+fn armada(s: &Scene) -> MissionRuntime {
+    runtime_numbered(s, PlayerNumbering::ArmadaTeams)
+}
+
+#[test]
+fn command_all_ships_under_armada_teams_orders_the_named_seat_only() {
+    let s = scene();
+    let mut rt = armada(&s);
+    // The stock call: STOP, team 1, nil odf, false, false: seat 0's craft only.
+    rt.eval::<()>("A2.CommandAllShips(3, 1, nil, false, false)").unwrap();
+    assert_eq!(
+        stops(&rt.take_commands()),
+        vec![
+            (PlayerId(0), Order::Stop { units: vec![s.ids[0]] }),
+            (PlayerId(0), Order::Stop { units: vec![s.ids[2]] }),
+        ]
+    );
+    rt.eval::<()>("A2.CommandAllShips(3, 2, nil, false, false)").unwrap();
+    assert_eq!(
+        stops(&rt.take_commands()),
+        vec![
+            (PlayerId(1), Order::Stop { units: vec![s.ids[1]] }),
+            (PlayerId(1), Order::Stop { units: vec![s.ids[3]] }),
+        ]
+    );
+    // Team -1: every non-neutral team, each as its own owner.
+    rt.eval::<()>("A2.CommandAllShips(3, -1, nil, false, false)").unwrap();
+    let all = stops(&rt.take_commands());
+    assert_eq!(all.len(), 4);
+    assert_eq!(all.iter().filter(|(p, _)| *p == PlayerId(0)).count(), 2);
+    assert_eq!(all.iter().filter(|(p, _)| *p == PlayerId(1)).count(), 2);
+    // A team number past the eighth is invalid; the stations filter works too.
+    assert!(rt.eval::<()>("A2.CommandAllShips(3, 9, nil, false, false)").is_err());
+    rt.eval::<()>("A2.CommandAllShips(3, 1, nil, false, true)").unwrap();
+    assert_eq!(stops(&rt.take_commands()), vec![(PlayerId(0), Order::Stop { units: vec![s.ids[0]] })]);
+    assert!(rt.unsupported().is_empty(), "{:?}", rt.unsupported());
+}
+
+fn unit(s: &mut Scene, id: EntityId) -> &mut sta_sim::view::UnitView {
+    s.view.units.iter_mut().find(|u| u.id == id).unwrap()
+}
+
+#[test]
+fn command_all_ships_skips_neutral_derelict_and_dying_or_unfinished_craft_under_armada_teams() {
+    let mut s = scene();
+    let [a, b, st, far] = s.ids;
+    // b: neutral owner; st: derelict crew; far: dying; a stays orderable.
+    unit(&mut s, b).owner = sta_sim::world::NEUTRAL;
+    unit(&mut s, st).crew = Some([Fixed::ZERO, Fixed::from_int(10)]);
+    let u = unit(&mut s, far);
+    u.flags = u.flags.with(sta_sim::view::UnitFlags::DYING, true);
+    let mut rt = armada(&s);
+    // Neutral is team 0 under this numbering: it is a valid team, but cannot be ordered.
+    rt.eval::<()>("A2.CommandAllShips(3, 0, nil, false, false)").unwrap();
+    assert!(rt.take_commands().is_empty());
+    rt.eval::<()>("A2.CommandAllShips(3, -1, nil, false, false)").unwrap();
+    assert_eq!(stops(&rt.take_commands()), vec![(PlayerId(0), Order::Stop { units: vec![a] })]);
+    // An unfinished (construction) object is not in the list either.
+    unit(&mut s, a).progress = Some(Fixed::from_int(1) / Fixed::from_int(2));
+    let mut rt = armada(&s);
+    rt.eval::<()>("A2.CommandAllShips(3, -1, nil, false, false)").unwrap();
+    assert!(rt.take_commands().is_empty());
+}
+
+#[test]
+fn all_stations_destroyed_and_next_craft_under_armada_teams() {
+    let s = scene();
+    let rt = armada(&s);
+    // The station is seat 0's: team 1.
+    assert!(!rt.eval::<bool>("return A2.AllStationsDestroyed(1)").unwrap());
+    assert!(rt.eval::<bool>("return A2.AllStationsDestroyed(2)").unwrap());
+    assert!(rt.eval::<bool>("return A2.AllStationsDestroyed(0)").unwrap(), "neutral has none");
+    // The list walk does not depend on the numbering.
+    let n: i64 = rt
+        .eval("local n = 0; local h = A2.GetFirstCraft(); while h ~= 0 do n = n + 1; h = A2.GetNextCraft() end; return n")
+        .unwrap();
+    assert_eq!(n, 4);
+    assert!(rt.unsupported().is_empty(), "{:?}", rt.unsupported());
 }

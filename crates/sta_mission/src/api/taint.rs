@@ -71,7 +71,7 @@ fn yields_handle(name: &str) -> bool {
 fn world_effect(name: &str) -> bool {
     matches!(
         name,
-        "SetRelation" | "DisableAllAITeams" | "EnableAllAITeams" | "ResetStrategyCycle" | "SetPerceivedTeam"
+        "SetRelation" | "DisableAllAITeams" | "EnableAllAITeams" | "ResetStrategyCycle" | "SetPerceivedTeam" | "CommandAllShips"
     )
 }
 
@@ -104,7 +104,7 @@ impl Ctx {
     pub fn gap(&mut self, name: &str, args: &[Value]) {
         for (i, v) in args.iter().enumerate() {
             let Value::Integer(n) = v else { continue };
-            if *n <= 0 || ((i > 0 || team_first(name)) && *n <= 8) {
+            if *n <= 0 || ((i > 0 || team_first(name)) && *n <= 8) || (i == 0 && name == "CommandAllShips") {
                 continue;
             }
             let Ok(n) = u32::try_from(*n) else { continue };

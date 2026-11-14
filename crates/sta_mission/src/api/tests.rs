@@ -877,6 +877,13 @@ fn a_gap_that_changes_who_fights_taints_every_later_read() {
 }
 
 #[test]
+fn a_raised_command_all_ships_is_a_world_effect_gap() {
+    // Orders for many craft that did not go out: later reads are tainted.
+    let s = "pcall(A2.CommandAllShips, 3, 0, nil, true, false)\nif A2.IsAlive(2) then A2.SucceedMission(0, 0) end";
+    assert!(matches!(end_state(s), MissionEndState::Blocked(_)));
+}
+
+#[test]
 fn a_gap_that_is_not_a_world_effect_taints_no_unrelated_read() {
     let s = "A2.NoteGap('CollisionPrevention', 1)\nif A2.IsAlive(2) then A2.SucceedMission(0, 0) end";
     assert_eq!(end_state(s), MissionEndState::Ended { won: true });
