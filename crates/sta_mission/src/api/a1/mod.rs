@@ -54,6 +54,8 @@ mod presentation;
 mod seams;
 mod teams;
 #[cfg(test)]
+mod overload_tests;
+#[cfg(test)]
 mod tests;
 
 /// Handles at or above this are pending spawns (`BuildObject`): the request
@@ -157,6 +159,19 @@ fn whole(v: &Value) -> Option<i64> {
     }
 }
 
+/// What an argument kind accepts, for the error of a call with several overloads.
+fn kind_name(kind: char) -> &'static str {
+    match kind {
+        'h' | 'H' => "an unsigned integer handle",
+        'i' => "a signed 32-bit integer",
+        'f' | 'n' => "a finite number",
+        'b' => "a boolean",
+        's' => "a string",
+        'S' => "a string or nil",
+        _ => "a Vector",
+    }
+}
+
 fn bad(name: &str, index: usize, want: &str) -> mlua::Error {
     mlua::Error::runtime(format!("A1.{name} argument {} must be {want}", index + 1))
 }
@@ -248,24 +263,55 @@ impl Env {
         }
     }
 
-    /// Parse `args` against the first overload that accepts them.
+    /// Parse `args` against the first overload that accepts them. When none
+    /// does, the error is the best-matching overload's: the one whose failing
+    /// argument is the furthest along, and on a tie the one whose failing
+    /// argument has the right type but an unusable value (a handle still being
+    /// built) over one with the wrong type; then the first declared.
     pub fn parse(&self, name: &str, specs: &[&str], args: &MultiValue) -> mlua::Result<(usize, Vec<A>)> {
-        let mut first_error = None;
+        let mut best: Option<((usize, bool), mlua::Error)> = None;
         for (n, spec) in specs.iter().enumerate() {
             if spec.len() != args.len() {
                 continue;
             }
-            let parsed: mlua::Result<Vec<A>> = spec
-                .chars()
-                .zip(args.iter())
-                .enumerate()
-                .map(|(i, (k, v))| self.parse_one(name, i, k, v))
-                .collect();
-            match parsed {
-                Ok(values) => return Ok((n, values)),
-                Err(e) => first_error = first_error.or(Some(e)),
+            let mut values = Vec::with_capacity(args.len());
+            let mut failure = None;
+            for (i, (k, v)) in spec.chars().zip(args.iter()).enumerate() {
+                match self.parse_one(name, i, k, v) {
+                    Ok(a) => values.push(a),
+                    Err(e) => {
+                        let type_fits = matches!(k, 'h') && whole(v).and_then(|n| u32::try_from(n).ok()).is_some();
+                        failure = Some(((i, type_fits), e));
+                        break;
+                    }
+                }
+            }
+            match failure {
+                None => return Ok((n, values)),
+                Some((rank, e)) => {
+                    if best.as_ref().is_none_or(|(r, _)| rank > *r) {
+                        best = Some((rank, e));
+                    }
+                }
             }
         }
+        let first_error = best.map(|((index, type_fits), e)| {
+            if type_fits {
+                return e;
+            }
+            // Several overloads reject this very argument by type: say what they accept together.
+            let mut wants: Vec<&str> = Vec::new();
+            for spec in specs.iter().filter(|s| s.len() == args.len()) {
+                let first_bad = spec.chars().zip(args.iter()).enumerate().find(|(i, (k, v))| self.parse_one(name, *i, *k, v).is_err());
+                if let Some((i, (k, _))) = first_bad
+                    && i == index
+                    && !wants.contains(&kind_name(k))
+                {
+                    wants.push(kind_name(k));
+                }
+            }
+            if wants.len() > 1 { bad(name, index, &wants.join(" or ")) } else { e }
+        });
         Err(first_error.unwrap_or_else(|| {
             let shapes: Vec<String> = specs.iter().map(|s| s.len().to_string()).collect();
             mlua::Error::runtime(format!("A1.{name} requires exactly {} argument(s)", shapes.join(" or ")))
