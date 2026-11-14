@@ -4,7 +4,7 @@
 //! the content digest ([`Rules::digest_entries`], D10).
 
 use crate::digest::{Canon, DigestEntry, quoted};
-use crate::{Races, SeatRaceRule, Warning};
+use crate::{RaceRepair, Races, SeatRaceRule, Warning};
 use sta_assets::cfg_h::CfgH;
 use sta_core::Fixed;
 
@@ -29,6 +29,8 @@ pub struct Rules {
     /// What a team's race changes about the team (SIM-54): only the races
     /// whose rule is not the identity, lower-case key, first match wins.
     seat_races: Vec<(String, SeatRaceRule)>,
+    /// Authored race repair metadata by ODF stem (SIM-40), absent when unset.
+    race_repairs: Vec<(String, RaceRepair)>,
     /// `RTS_CFG.h`'s default craft autonomy, when the header sets either key.
     autonomy: Option<AutonomyRules>,
     /// `RTS_CFG.h`'s attack warp distance (SIM-36), when the header sets it.
@@ -545,6 +547,25 @@ impl Rules {
         self
     }
 
+    /// Authored repair metadata for an exact race ODF stem, not a unit race key.
+    pub fn race_repair(&self, stem: &str) -> Option<RaceRepair> {
+        let stem = crate::odf::stem(stem);
+        self.race_repairs.iter().find(|(key, _)| *key == stem).map(|(_, repair)| *repair)
+    }
+
+    /// Set synthetic race repair metadata; canonical stems keep the first row.
+    pub fn with_race_repairs(mut self, rows: Vec<(String, RaceRepair)>) -> Self {
+        let mut rows: Vec<_> = rows
+            .into_iter()
+            .map(|(stem, repair)| (crate::odf::stem(&stem), repair))
+            .filter(|(stem, repair)| !stem.is_empty() && *repair != RaceRepair::default())
+            .collect();
+        rows.sort_by(|a, b| a.0.cmp(&b.0));
+        rows.dedup_by(|a, b| a.0 == b.0);
+        self.race_repairs = rows;
+        self
+    }
+
     /// The team crew rules, when the content has any.
     pub fn crew(&self) -> Option<&CrewRules> {
         self.crew.as_ref()
@@ -619,6 +640,7 @@ impl Rules {
             rules.crew.get_or_insert_with(CrewRules::default).races = rates;
         }
         rules.seat_races = races.seat_rules().map(|(k, r)| (k.to_owned(), r)).collect();
+        rules = rules.with_race_repairs(races.repair_rules().map(|(stem, repair)| (stem.to_owned(), repair)).collect());
         Ok((rules, warnings))
     }
 
@@ -694,6 +716,16 @@ impl Rules {
                 .map(|(k, r)| format!("{}:{}:{}", quoted(k), crate::digest::fixed_text(r.officer_multiplier), crate::digest::fixed_text(r.latinum_scale)))
                 .collect::<Vec<_>>();
             out.push(DigestEntry::new("race:seat-rules", format!("[{}]", rows.join(","))));
+        }
+        for (stem, repair) in &self.race_repairs {
+            let value = Canon::new()
+                .opt_fixed("strength", repair.strength)
+                .opt_fixed("yellow", repair.yellow)
+                .opt_fixed("red", repair.red)
+                .opt_fixed("crew_yellow_status", repair.crew_yellow_status)
+                .opt_fixed("crew_red_status", repair.crew_red_status)
+                .finish();
+            out.push(DigestEntry::new(crate::digest::key("race-repair:", stem), value));
         }
         for s in &self.starts {
             let opt = |v: Option<i64>| v.map_or_else(|| "-".to_owned(), |v| v.to_string());

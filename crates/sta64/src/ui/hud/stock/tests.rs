@@ -1056,3 +1056,32 @@ fn margins_beside_the_centred_hud_are_not_solid() {
         assert_eq!(in_margin, crate::ui::hud::HudPointer(false));
     }
 }
+
+/// UI-16, ADR 0007 T1: HUD labels come from the mod's sprite font. No HUD label is
+/// plain Bevy `Text` and none opts out through `ScalableText`; the sprite font itself
+/// falls back to the TTF where a mod has none.
+#[test]
+fn stock_hud_labels_are_sprite_text_and_never_scalable() {
+    use crate::ui::gui_sprites::GuiButtonLabel;
+    use crate::ui::sprite_font::ScalableText;
+
+    let mut app = app_with_content(content_with_build_count(24));
+    app.world_mut().resource_mut::<HudState>().page = Page::Build;
+    app.update();
+    app.update();
+    let world = app.world_mut();
+    assert!(world.query::<&ScalableText>().iter(world).next().is_none());
+    assert_eq!(world.query::<&StockNav>().iter(world).count(), 2, "paged palette has PREV and NEXT");
+    for nav in world.query_filtered::<Entity, With<StockNav>>().iter(world).collect::<Vec<_>>() {
+        let kids = world.get::<Children>(nav).expect("nav label").to_vec();
+        assert_eq!(kids.len(), 1);
+        assert!(world.get::<SpriteText>(kids[0]).is_some());
+        assert!(world.get::<Text>(kids[0]).is_none());
+    }
+    let labels: Vec<Entity> = world.query_filtered::<Entity, With<GuiButtonLabel>>().iter(world).collect();
+    assert!(!labels.is_empty());
+    for l in labels {
+        assert!(world.get::<SpriteText>(l).is_some(), "button label drawn in the sprite font");
+        assert!(world.get::<Text>(l).is_none());
+    }
+}
