@@ -42,6 +42,10 @@ pub struct AttrsView {
     /// Derived from the switch rows each tick; not saved state.
     #[serde(default)]
     pub special_forces: Vec<EntityId>,
+    /// Craft whose impulse speed differs from their definition's (LUA-27 scripted
+    /// override), ascending id; absence means the definition's value.
+    #[serde(default)]
+    pub impulse: Vec<(EntityId, Fixed)>,
 }
 
 /// One seat's derived team numbers.
@@ -101,6 +105,7 @@ impl Attrs {
             player_races: self.player_races.clone(),
             seats: Vec::new(),
             special_forces: Vec::new(),
+            impulse: Vec::new(),
         }
     }
 

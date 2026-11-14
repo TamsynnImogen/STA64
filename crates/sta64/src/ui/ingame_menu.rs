@@ -441,6 +441,9 @@ impl Plugin for InGameMenuPlugin {
         if !app.world().contains_resource::<State<AppState>>() {
             app.init_state::<AppState>();
         }
+        if !app.is_plugin_added::<crate::frontend::screens::SettingsControlsPlugin>() {
+            app.add_plugins(crate::frontend::screens::SettingsControlsPlugin);
+        }
         let ingame = in_state(AppState::InGame);
         app.init_resource::<InGameMenu>()
             .init_resource::<Settings>()

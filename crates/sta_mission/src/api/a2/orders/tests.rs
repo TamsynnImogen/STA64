@@ -313,17 +313,98 @@ fn impulse_speed_is_a_typed_edit_and_the_getter_follows_it() {
 }
 
 #[test]
-fn the_sim_rejecting_an_impulse_or_alert_edit_is_reported_and_counted() {
+fn the_sim_rejecting_an_alert_edit_is_reported_and_counted() {
     let mut s = scene();
     let mut rt = runtime(&s);
-    rt.eval::<()>("A2.SetImpulseSpeed(a, 28); A2.SetRedAlert(a); A2.SetGreenAlert(b)").unwrap();
+    rt.eval::<()>("A2.SetRedAlert(a); A2.SetGreenAlert(b)").unwrap();
     // The host submits them, the sim answers; the runtime reports on a later view.
     driven(&mut s, &mut rt, 5);
     let counted_edits: Vec<_> = rt.unsupported().into_iter().map(|(k, _)| k).collect();
-    for label in ["A2.SetImpulseSpeed", "A2.SetRedAlert", "A2.SetGreenAlert"] {
+    for label in ["A2.SetRedAlert", "A2.SetGreenAlert"] {
         let wanted = format!("{label}: simulation rejected edit");
         assert!(counted_edits.contains(&wanted), "{wanted} in {counted_edits:?}");
     }
+}
+
+#[test]
+fn impulse_speed_is_applied_by_the_sim_and_read_back_from_the_view() {
+    let mut s = scene();
+    let a = s.ids[0];
+    let class = s.db.unit(s.db.key("fx_cruiser").unwrap()).unwrap().movement.max_speed.to_f32();
+    let mut rt = runtime(&s);
+    rt.eval::<()>("A2.SetImpulseSpeed(a, 28)").unwrap();
+    driven(&mut s, &mut rt, 3);
+    assert_eq!(s.sim.unit(a).unwrap().stats.max_speed, Fixed::from_int(28));
+    assert!(!rt.unsupported().iter().any(|(k, _)| k.contains("SetImpulseSpeed")), "{:?}", rt.unsupported());
+    let got: f64 = rt.eval("return A2.GetImpulseSpeed(a)").unwrap();
+    assert_eq!(got, 28.0);
+    // The end of a cineractive resets every craft (the sim's rule); the getter follows the view.
+    let end = Command { player: PlayerId::SCRIPT, seq: 0, kind: CommandKind::Edit(Edit::Present(sta_sim::present::Presentation::Cineractive { on: false, skippable: false })) };
+    s.view = (*s.sim.step(&[end]).view).clone();
+    driven(&mut s, &mut rt, 2);
+    let got: f64 = rt.eval("return A2.GetImpulseSpeed(a)").unwrap();
+    assert_eq!(got, f64::from(class));
+    // Set then Reset in one tick: the queued reset wins.
+    rt.eval::<()>("A2.SetImpulseSpeed(a, 50); A2.ResetImpulseSpeed(a)").unwrap();
+    let got: f64 = rt.eval("return A2.GetImpulseSpeed(a)").unwrap();
+    assert_eq!(got, f64::from(class));
+}
+
+fn presents(commands: &[Command]) -> usize {
+    commands.iter().filter(|c| matches!(c.kind, CommandKind::Edit(Edit::Present(sta_sim::present::Presentation::Cineractive { .. })))).count()
+}
+
+#[test]
+fn only_a_running_cineractive_sends_the_end_request_that_resets_speeds() {
+    let s = scene();
+    // No cineractive runs: neither setter nor the release asks the sim to end one.
+    let (mut rt, commands) = run(&s, "Cineractive.active = false; Cineractive.skippable = true; Cineractive.skippable = false");
+    assert_eq!(presents(&commands), 0, "{commands:?}");
+    rt.release_cineractive();
+    assert_eq!(presents(&rt.take_commands()), 0);
+    // One runs: the skippable setter reports, the end is sent once, a second end is not.
+    let (_rt, commands) = run(&s, "Cineractive.active = true; Cineractive.skippable = false; Cineractive.active = false; Cineractive.active = false");
+    let kinds: Vec<_> = commands.iter().filter_map(|c| match &c.kind {
+        CommandKind::Edit(Edit::Present(sta_sim::present::Presentation::Cineractive { on, .. })) => Some(*on),
+        _ => None,
+    }).collect();
+    assert_eq!(kinds, vec![true, true, false], "{commands:?}");
+    // A fault or the mission's end releases a running one (the end is sent), not an idle one.
+    let (mut rt2, _) = run(&s, "Cineractive.active = true");
+    rt2.release_cineractive();
+    assert_eq!(presents(&rt2.take_commands()), 1);
+}
+
+#[test]
+fn a_set_of_zero_reads_back_as_zero_from_the_view() {
+    let mut s = scene();
+    let a = s.ids[0];
+    let mut rt = runtime(&s);
+    rt.eval::<()>("A2.SetImpulseSpeed(a, 0)").unwrap();
+    driven(&mut s, &mut rt, 4);
+    assert_eq!(s.sim.unit(a).unwrap().stats.max_speed, sta_sim::speed_override::HELD_SPEED);
+    let got: f64 = rt.eval("return A2.GetImpulseSpeed(a)").unwrap();
+    assert_eq!(got, 0.0);
+}
+
+#[test]
+fn the_getter_sees_an_edit_the_host_took_before_the_sim_answered() {
+    let mut s = scene();
+    let a = s.ids[0];
+    let mut rt = runtime(&s);
+    rt.eval::<()>("A2.SetImpulseSpeed(a, 28)").unwrap();
+    driven(&mut s, &mut rt, 1);
+    assert_eq!(s.sim.unit(a).unwrap().stats.max_speed, Fixed::from_int(28));
+    let got: f64 = rt.eval("return A2.GetImpulseSpeed(a)").unwrap();
+    assert_eq!(got, 28.0);
+}
+
+#[test]
+fn impulse_speed_calls_on_a_station_or_an_absent_unit_do_nothing() {
+    let s = scene();
+    let (rt, commands) = run(&s, "A2.SetImpulseSpeed(s, 28); A2.ResetImpulseSpeed(s); A2.SetImpulseSpeed(123456, 28); assert(A2.GetImpulseSpeed(s) == 0.0); assert(A2.GetImpulseSpeed(123456) == 0.0)");
+    assert!(commands.is_empty(), "{commands:?}");
+    assert!(rt.unsupported().is_empty(), "{:?}", rt.unsupported());
 }
 
 #[test]
