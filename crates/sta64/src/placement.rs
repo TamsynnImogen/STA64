@@ -66,6 +66,10 @@ mod tests {
     }
 
     fn world() -> (Sim, Arc<ContentDb>, EntityId) {
+        world_with(&[1000])
+    }
+
+    fn world_with(planets: &[i32]) -> (Sim, Arc<ContentDb>, EntityId) {
         let fake = sta_content::fake::db();
         let mut rig = UnitDef::new("fx_rig", "constructionrig");
         rig.race = "fx".into();
@@ -98,7 +102,9 @@ mod tests {
             sim.step(&[Command { player: PlayerId::BENCH, seq: 0, kind: CommandKind::Edit(e) }]);
             id
         };
-        spawn("fx_world", v(1000, 0));
+        for &x in planets {
+            spawn("fx_world", v(x, 0));
+        }
         let rig = spawn("fx_rig", v(0, 0));
         (sim, db, rig)
     }
@@ -135,6 +141,27 @@ mod tests {
         assert_eq!(built[0].0, g.at);
         assert!((built[0].1.0 - g.heading.0).abs() < Fixed::from_f64(1e-6) && (built[0].1.1 - g.heading.1).abs() < Fixed::from_f64(1e-6));
         assert_eq!(ghost_site(&db, None, &sim.view(), what, rig, cursor).status, Err(SiteError::Blocked), "the planet is taken now");
+    }
+
+    /// The click orders the raw cursor point: with two planets in reach the sim builds where the ghost
+    /// showed, not where a second snap of the snapped point would land.
+    #[test]
+    fn the_raw_cursor_order_builds_where_the_ghost_is_with_two_planets() {
+        use sta_sim::command::Order;
+        let (mut sim, db, rig) = world_with(&[1000, 1520]);
+        let what = db.key("fx_orbital").unwrap();
+        let cursor = v(1230, 0);
+        let g = ghost_site(&db, None, &sim.view(), what, rig, cursor);
+        assert_eq!(g.status, Ok(()));
+        let e = Edit::Cargo(PlayerId(0), 0, Fixed::from_int(9999));
+        sim.step(&[Command { player: PlayerId::BENCH, seq: 1, kind: CommandKind::Edit(e) }]);
+        let o = Order::Build { builder: rig, what, at: Some(cursor) };
+        sim.step(&[Command { player: PlayerId(0), seq: 2, kind: CommandKind::Order(o) }]);
+        for _ in 0..1500 {
+            sim.step(&[]);
+        }
+        let built: Vec<_> = sim.view().units.iter().filter(|u| u.def == what).map(|u| u.pos).collect();
+        assert_eq!(built, [g.at]);
     }
 
     #[test]

@@ -89,6 +89,11 @@ impl Strings {
         }
     }
 
+    /// Whether a game string table (`Dynamic_Localized_Strings.h`) was loaded at all.
+    pub fn has_game_table(&self) -> bool {
+        !self.game.is_empty()
+    }
+
     #[cfg(test)]
     /// A game string table parsed from header text (tests).
     pub fn from_game(language: &str, header: &str) -> Strings {

@@ -565,13 +565,14 @@ fn fixed(strings: Option<&Strings>, key: &str, fallback: &str) -> String {
     strings.map(|s| s.game_text(key)).filter(|t| *t != key).unwrap_or(fallback).to_owned()
 }
 
-/// A heading the game's string table defines: `None` when a table is loaded and has no `key` (Armada I has
-/// no `GUI_OD_*` strings, so it has no "BRIEFING SUMMARY:" heading to draw). With no table loaded at all
-/// there is nothing to say otherwise and `fallback` is used.
+/// A heading as the game's string table defines it. Rule: with a game table loaded, a key the table lacks
+/// means the game has no such heading and none is drawn (a game that does not define
+/// `GUI_OD_BRIEFING_SUMMARY` shows no summary heading). With no game table (an empty or absent one) there is
+/// nothing to say otherwise and `fallback` is used.
 fn heading_text(strings: Option<&Strings>, key: &str, fallback: &str) -> Option<String> {
     match strings {
-        None => Some(fallback.to_owned()),
-        Some(s) => Some(s.game_text(key)).filter(|t| *t != key).map(str::to_owned),
+        Some(s) if s.has_game_table() => Some(s.game_text(key)).filter(|t| *t != key).map(str::to_owned),
+        _ => Some(fallback.to_owned()),
     }
 }
 
@@ -630,8 +631,10 @@ fn draw_panel(
             p.spawn(line(c.body.clone(), theme.text));
         }
         if c.message.is_none() && !c.lines.is_empty() {
-            // Armada I's objective files carry their own `OBJECTIVES:` line just above the goals (it is
-            // the end of the briefing text, and A1 has no `GUI_OD_OBJECTIVES` string); A2's do not.
+            // Objective files may carry the heading themselves as the last line of the briefing text; then it is
+            // not drawn twice. Limit: the comparison is with the table's heading, or the English fallback when
+            // the table has none, so a translated game without the string but with a translated text line can
+            // still show two.
             let heading = fixed(s, "GUI_OD_OBJECTIVES", "OBJECTIVES:");
             if !text_ends_with_heading(&c.body, &heading) {
                 p.spawn(head(heading, summary_colour));
@@ -1035,6 +1038,7 @@ mod tests {
         assert_eq!(heading_text(Some(&a2), "GUI_OD_BRIEFING_SUMMARY", "X"), Some("SUMMARY:".into()));
         assert_eq!(heading_text(Some(&a1), "GUI_OD_BRIEFING_SUMMARY", "X"), None);
         assert_eq!(heading_text(None, "GUI_OD_BRIEFING_SUMMARY", "X"), Some("X".into()));
+        assert_eq!(heading_text(Some(&Strings::default()), "GUI_OD_BRIEFING_SUMMARY", "BRIEFING SUMMARY:"), Some("BRIEFING SUMMARY:".into()), "an empty table is no table");
         let texts = |app: &mut App| app.world_mut().query::<&SpriteText>().iter(app.world()).map(|t| t.text.clone()).collect::<Vec<_>>();
         let obj = [Objective { id: 1, title: "Find".into(), description: String::new(), state: ObjectiveState::Active }];
         for (strings, summary) in [(a2, true), (a1, false)] {

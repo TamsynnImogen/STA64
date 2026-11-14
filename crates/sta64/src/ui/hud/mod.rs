@@ -532,13 +532,15 @@ fn place_on_click(
     }
     // The sim's own rule, as the ghost shows it: a refused site keeps the
     // placement armed so the click can be tried again elsewhere.
-    let (at, status) = ghost::site_status(&feed, bounds.0.as_ref(), &armed, at);
+    let (site_at, status) = ghost::site_status(&feed, bounds.0.as_ref(), &armed, at);
     if let Err(e) = status {
         notices.write(Notice::new(Severity::Warn, tr(ghost::refusal(e))));
         return;
     }
-    // The new order's target replaces the destination line of the last one.
-    targets.0.insert(armed.builder, at);
+    // The new order's target replaces the destination line of the last one: the site the ghost shows.
+    targets.0.insert(armed.builder, site_at);
+    // The order carries the raw cursor point: the sim snaps it itself, once (a snapped point
+    // snapped again can land on another planet).
     queue.0.push(CommandKind::Order(Order::Build {
         builder: armed.builder,
         what: armed.what,
@@ -569,7 +571,7 @@ fn target_order(
     point: Option<SimVec3>,
 ) -> Option<(Vec<Order>, Vec<EntityId>)> {
     if !target_mode_available(feed, mode) { return None; }
-    let ids = feed.own_selection();
+    let mut ids = feed.own_selection();
     let orders = match mode {
         TargetMode::Move => {
             let picked: Vec<(EntityId, Vec3)> = ids.iter().filter_map(|id| feed.view.unit(*id).map(|u| (*id, Vec3::from(u.pos.to_f32())))).collect();
@@ -592,6 +594,8 @@ fn target_order(
             if u.flags.contains(UnitFlags::DYING) || !EntityKind::mineable_def(def) { return None; }
             let miners = commands::miners(feed, &ids);
             if miners.is_empty() { return None; }
+            // Only the miners take part: they are the units the order is reported for and whose targets are cleared.
+            ids = miners.clone();
             vec![Order::Mine { units: miners, node: id }]
         }
         TargetMode::Rally => {
@@ -668,7 +672,7 @@ mod target_tests {
             relations: relation.map(|r| vec![(PlayerId(if id == 1 { 2 } else { 1 }), r)]).unwrap_or_default() }
     }
 
-    fn target_order_available(f: &HudFeed) -> bool { target_mode_available(f, TargetMode::Mine) }
+    fn mine_available(f: &HudFeed) -> bool { target_mode_available(f, TargetMode::Mine) }
 
     #[test]
     fn target_actions_make_supported_orders() {
@@ -683,8 +687,8 @@ mod target_tests {
         assert!(target_order(&f, TargetMode::Mine, Some(EntityId(4)), p).is_none());
         // A mixed selection: Mine is offered and only the miner receives the order.
         let f = feed(&[1, 2]);
-        assert!(target_order_available(&f));
-        assert!(matches!(target_order(&f, TargetMode::Mine, Some(EntityId(5)), p), Some((orders, _)) if matches!(orders.as_slice(), [Order::Mine { units, node: EntityId(5) }] if units == &[EntityId(2)])));
+        assert!(mine_available(&f));
+        assert!(matches!(target_order(&f, TargetMode::Mine, Some(EntityId(5)), p), Some((orders, ids)) if ids == [EntityId(2)] && matches!(orders.as_slice(), [Order::Mine { units, node: EntityId(5) }] if units == &[EntityId(2)])));
         // No miner among the selection: no order.
         assert!(target_order(&feed(&[1]), TargetMode::Mine, Some(EntityId(5)), p).is_none());
         let f = feed(&[3]);

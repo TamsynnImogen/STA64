@@ -40,7 +40,8 @@ pub struct Ghost {
 
 /// Where `armed` would be built for a cursor at `at`, and whether the site is legal: the same
 /// [`crate::placement::ghost_site`] rule the ghost draws, so the click and the ghost agree (an
-/// orbital station snaps onto a planet's orbit). No content loaded: the cursor point, `Ok`.
+/// orbital station snaps onto a planet's orbit); the order itself carries the raw cursor point, which the
+/// sim snaps the same way. No content loaded: the cursor point, `Ok`.
 pub fn site_status(feed: &HudFeed, bounds: Option<&(SimVec3, SimVec3)>, armed: &Armed, at: SimVec3) -> (SimVec3, Result<(), SiteError>) {
     let Some(db) = feed.content.as_deref() else { return (at, Ok(())) };
     let site = crate::placement::ghost_site(db, bounds, &feed.view, armed.what, armed.builder, at);
