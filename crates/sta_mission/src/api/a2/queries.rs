@@ -3,7 +3,7 @@
 use mlua::{Lua, MultiValue, Table, Value};
 
 use super::objects::{handle, integer};
-use crate::api::{Shared, dist, pos_f64};
+use crate::api::{ABSENT_AMOUNT, ABSENT_DISTANCE, Shared, dist, pos_f64};
 
 mod station;
 
@@ -20,10 +20,13 @@ fn health(lua: &Lua, ctx: &Shared, name: &'static str, max: bool) -> mlua::Resul
     let c = ctx.clone();
     lua.create_function(move |_, args: MultiValue| {
         let id = handle(name, &args, 1)?;
-        c.borrow()
-            .alive(id)
-            .map(|u| u.hull[if max { 1 } else { 0 }].to_f32() as f64)
-            .ok_or_else(|| mlua::Error::runtime(format!("A2.{name}: object {} is not alive", id.0)))
+        // A handle naming nothing live answers -1 (LUA-21; read from the executable, static).
+        let c = c.borrow();
+        let Some(u) = c.alive(id) else {
+            c.dead_handle("A2", name, id)?;
+            return Ok(ABSENT_AMOUNT);
+        };
+        Ok(u.hull[if max { 1 } else { 0 }].to_f32() as f64)
     })
 }
 
@@ -55,17 +58,17 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
             }
             let first = handle("GetDistance", &args, 2)?;
             let second = sta_core::EntityId(integer("GetDistance", &args[1])?);
-            let (a, b) = {
-                let c = c.borrow();
-                let a = c
-                    .alive(first)
-                    .ok_or_else(|| mlua::Error::runtime(format!("A2.GetDistance: object {} is not alive", first.0)))?;
-                let b = c
-                    .alive(second)
-                    .ok_or_else(|| mlua::Error::runtime(format!("A2.GetDistance: object {} is not alive", second.0)))?;
-                (pos_f64(a.pos), pos_f64(b.pos))
+            let c = c.borrow();
+            // Either object naming nothing live: the engine answers 1e30 (LUA-21).
+            let (Some(a), Some(b)) = (c.alive(first), c.alive(second)) else {
+                for id in [first, second] {
+                    if c.alive(id).is_none() {
+                        c.dead_handle("A2", "GetDistance", id)?;
+                    }
+                }
+                return Ok(ABSENT_DISTANCE);
             };
-            Ok(dist(a, b))
+            Ok(dist(pos_f64(a.pos), pos_f64(b.pos)))
         })?,
     )?;
     let c = ctx.clone();
