@@ -17,9 +17,11 @@
 //! seconds) and `HasTimeElapsed` (mission time at or past N) are not measured.
 
 use mlua::{Function, Lua, MultiValue, Table, Value};
-use sta_core::{EntityId, Fixed, PlayerId, TICK_HZ};
+use sta_core::{EntityId, PlayerId, TICK_HZ};
 use sta_sim::world::EntityKind;
 use sta_sim::view::UnitFlags;
+
+mod derelict;
 
 use crate::api::search::{Query, near};
 use crate::api::{Ctx, Shared, dist, pos_f64};
@@ -302,10 +304,11 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
         // Craft or station by STA64's class mapping (`EntityKind::of_def`), an
         // approximation of the engine's class test; no content: a craft.
         let fixture = c.def(u).is_some_and(|d| !matches!(EntityKind::of_def(d), EntityKind::Craft | EntityKind::Station));
-        let derelict = u.crew.is_some_and(|[now, max]| now < Fixed::ONE && max > Fixed::ZERO);
+        let derelict = derelict::latched(u);
         let owner = c.player_numbering.encode(u.owner).map(i64::from);
         Ok(fixture || derelict || owner != Some(team))
     })?)?;
+    derelict::install(lua, ctx, table)?;
     table.set("IsShipAliveAndOffMap", no_data_fn(lua, ctx, "IsShipAliveAndOffMap", "the world view carries no off-map state")?)?;
     table.set("IsCargoShipReadyToLoad", no_data_fn(lua, ctx, "IsCargoShipReadyToLoad", "the world view carries no cargo state")?)?;
     table.set("IsCargoShipFullAndReadyToSend", no_data_fn(lua, ctx, "IsCargoShipFullAndReadyToSend", "the world view carries no cargo state")?)?;
