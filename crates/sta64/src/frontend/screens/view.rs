@@ -54,6 +54,14 @@ pub struct SettingToggle(pub SettingKey);
 #[derive(Component, Debug, Clone, Copy)]
 pub struct WindowSizeSelect;
 
+/// The Graphics tab's multisampling choice.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct MsaaSelect;
+
+/// Windowed mode is the inverse of the stored fullscreen preference.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct WindowedMode;
+
 /// Map select's list.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct MapList;
@@ -101,6 +109,7 @@ pub struct Ctx<'a> {
     pub stock_box: Vec2,
     /// The options screen's selected tab.
     pub options_tab: usize,
+    pub graphics: Option<&'a super::stock::GraphicsInfo>,
     /// The installed campaigns (UI-25), for Single Player's cards.
     pub campaigns: Option<&'a crate::frontend::campaign::Campaigns>,
 }
