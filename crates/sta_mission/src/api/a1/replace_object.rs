@@ -9,7 +9,8 @@
 //! event) and the build is a queued spawn, so the result is a pending handle exactly
 //! as `BuildObject` returns (usable once the receipt is in). The spawn is queued
 //! first: when it cannot be (unknown ODF, an owner that cannot hold the new
-//! kind) the call raises and the old object stays. The old heading and the old
+//! kind) the call raises and the old object stays. If the Kill then cannot be queued
+//! (sequence exhausted) the call raises with the new object queued and the old alive. The old heading and the old
 //! map label are not carried over (not read).
 
 use mlua::{Lua, Table, Value};

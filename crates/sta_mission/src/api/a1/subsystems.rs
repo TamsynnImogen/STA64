@@ -9,11 +9,15 @@
 //! hit as Armada II's `DestroyCritical`: a lethal SCRIPT hull `Damage`.
 //! For a system, the sim's `SubsystemDamage` only fills the damage points
 //! (clamped to the system's hit points) and does not switch the system off, so
-//! the call also queues the switch-off a destroyed system gets in combat
-//! (`Edit::Subsystem(.., false)`). A system the unit has no hit points for is
-//! rejected by the sim and counted by the edit feedback.
-//! Not measured: whether the original's damage routine also passes damage beyond
-//! a system's hit points on to the hull (which would make the five calls lethal).
+//! the call also queues the switch (`Edit::Subsystem(.., false)`) that combat sets
+//! on a destroyed system. Both edits are queued only for a unit whose definition
+//! has hit points above 0 for that system (such a system cannot be destroyed in
+//! combat either); otherwise the call does nothing. Differences from combat: the
+//! script switch for engines also zeroes speed, turn rate and target (the craft
+//! stops dead; combat only sets the flag).
+//! Not measured / not applied: whether the original's damage routine also passes
+//! damage beyond a system's hit points on to the hull (which would make the five
+//! calls lethal), and the crew loss of a destroyed system (not read).
 //! Repeated `DestroyCritical` calls on one unit in one tick queue one hit: the
 //! view is a tick old, so a second lethal hit would be rejected and counted.
 
@@ -47,18 +51,30 @@ pub(super) fn install(lua: &Lua, env: &Env, table: &Table) -> mlua::Result<()> {
     let lethal: Lethal = Rc::default();
     for (name, label, system) in calls {
         let lethal = lethal.clone();
-        // "H": a pending or failed spawn is "no object", so the call does nothing.
+        // "H": a failed spawn is "no object", so the call does nothing. A pending token never
+        // reaches here: the hold wrapper (hold.rs) holds the call and replays it after the receipt.
         table.set(
             name,
             def(lua, env, name, &["H"], move |_, e, _, a| {
                 let id = a[0].id();
                 let mut c = e.ctx.borrow_mut();
-                let is_craft = c
-                    .alive(id)
-                    .cloned()
-                    .and_then(|u| c.def(&u).map(EntityKind::of_def))
-                    .is_some_and(|k| k == EntityKind::Craft);
-                if !is_craft {
+                let Some(unit) = c.alive(id).cloned() else { return Ok(Value::Nil) };
+                let Some(def) = c.def(&unit) else { return Ok(Value::Nil) };
+                if EntityKind::of_def(def) != EntityKind::Craft {
+                    return Ok(Value::Nil);
+                }
+                let has_hit_points = system.is_none_or(|sub| {
+                    let n = match sub {
+                        Subsystem::Engines => 0,
+                        Subsystem::Weapons => 1,
+                        Subsystem::Shields => 2,
+                        Subsystem::LifeSupport => 3,
+                        Subsystem::Sensors => 4,
+                        _ => return false,
+                    };
+                    def.system_hit_points[n] > Fixed::ZERO
+                });
+                if !has_hit_points {
                     return Ok(Value::Nil);
                 }
                 let amount = Fixed::from_f64(HIT);

@@ -18,20 +18,20 @@ use crate::runtime::MissionRuntime;
 const HP: i32 = 10;
 
 fn db() -> Arc<ContentDb> {
-    let ship = |odf: &str| {
+    let ship = |odf: &str, sensors: i32| {
         let mut u = UnitDef::new(odf, "craft");
         u.race = "fx".into();
         u.model = odf.into();
         u.hull = Fixed::from_int(100);
         u.radius = Fixed::from_int(10);
-        u.system_hit_points = [Fixed::from_int(HP); 5];
+        u.system_hit_points = [Fixed::from_int(HP), Fixed::from_int(HP), Fixed::from_int(HP), Fixed::from_int(HP), Fixed::from_int(sensors)];
         u
     };
     let mut station = UnitDef::new("t_station", "starbase");
     station.race = "fx".into();
     station.model = "t_station".into();
     station.hull = Fixed::from_int(100);
-    Arc::new(ContentDb::builder().unit(ship("t_ship")).unit(ship("t_other")).unit(station).build().expect("content"))
+    Arc::new(ContentDb::builder().unit(ship("t_ship", HP)).unit(ship("t_other", 0)).unit(station).build().expect("content"))
 }
 
 struct Scene {
@@ -134,9 +134,40 @@ fn destroy_critical_kills_a_craft_in_the_sim() {
 #[test]
 fn repeated_critical_hits_in_one_tick_queue_one_edit() {
     let mut s = scene();
+    let hit = Fixed::from_f64(100_000.0);
     s.rt.eval::<()>("for i = 1, 50 do A1.DestroyCritical(b) end; A1.DestroyCritical(a)").unwrap();
     let got = edits(&s.rt.take_commands());
-    assert_eq!(got.len(), 2, "{got:?}");
+    assert_eq!(got, vec![Edit::Damage(s.ids[1], hit), Edit::Damage(s.ids[0], hit)]);
+    // A new tick (the commands were never stepped, so b is still alive in the view): the set is reset.
+    let out = s.sim.step(&[]);
+    let mut later = Vec::new();
+    s.rt.think(&out.view, &out.events, &mut later);
+    s.rt.eval::<()>("A1.DestroyCritical(b); A1.DestroyCritical(b)").unwrap();
+    assert_eq!(edits(&s.rt.take_commands()), vec![Edit::Damage(s.ids[1], hit)]);
+}
+
+#[test]
+fn a_system_without_hit_points_is_left_alone() {
+    let mut s = scene();
+    // `t_other` has no sensor hit points: nothing is queued, no switch-off either.
+    let spawn = Command {
+        player: PlayerId::SCRIPT,
+        seq: 9,
+        kind: CommandKind::Edit(Edit::Spawn {
+            odf: s.db.key("t_other").unwrap(),
+            player: PlayerId(1),
+            pos: Vec3::from_f32([500.0, 0.0, 0.0]),
+            heading: (Fixed::ZERO, Fixed::ONE),
+        }),
+    };
+    let out = s.sim.step(&[spawn]);
+    let blind = out.view.units.iter().find(|u| u.pos == Vec3::from_f32([500.0, 0.0, 0.0])).expect("unit").id;
+    let mut later = Vec::new();
+    s.rt.think(&out.view, &out.events, &mut later);
+    s.rt.eval::<()>(&format!("A1.DestroySensors({})", blind.0)).unwrap();
+    assert!(s.rt.take_commands().is_empty());
+    s.rt.eval::<()>(&format!("A1.DestroyEngines({})", blind.0)).unwrap();
+    assert_eq!(s.rt.take_commands().len(), 2, "its engines have hit points");
 }
 
 #[test]
