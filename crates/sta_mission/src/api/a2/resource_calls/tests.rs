@@ -10,12 +10,21 @@ use sta_sim::setup::{Control, GameOptions, GameSetup, PlayerSetup};
 use sta_sim::view::WorldView;
 use sta_sim::{Sim, WorldSource};
 
-use crate::api::MissionConfig;
+use crate::api::{MissionConfig, PlayerNumbering};
 use crate::runtime::MissionRuntime;
 
 fn world() -> (Sim, WorldView, Arc<ContentDb>) {
+    world_with(Control::Idle)
+}
+
+fn world_with(second: Control) -> (Sim, WorldView, Arc<ContentDb>) {
     let db = Arc::new(fake::db());
-    let seat = |n| PlayerSetup { id: PlayerId(n), team: TeamId(n), race: "fx".into(), control: Control::Idle };
+    let seat = |n| PlayerSetup {
+        id: PlayerId(n),
+        team: TeamId(n),
+        race: "fx".into(),
+        control: if n == 1 { second.clone() } else { Control::Idle },
+    };
     let setup = GameSetup {
         seed: 3,
         map: Arc::new(MapDef::empty()),
@@ -29,7 +38,11 @@ fn world() -> (Sim, WorldView, Arc<ContentDb>) {
 }
 
 fn runtime(view: &WorldView, db: &Arc<ContentDb>) -> MissionRuntime {
-    let cfg = MissionConfig { content: Some(db.clone()), view: Some(view.clone()), ..MissionConfig::default() };
+    runtime_numbered(view, db, PlayerNumbering::Slots)
+}
+
+fn runtime_numbered(view: &WorldView, db: &Arc<ContentDb>, player_numbering: PlayerNumbering) -> MissionRuntime {
+    let cfg = MissionConfig { content: Some(db.clone()), view: Some(view.clone()), player_numbering, ..MissionConfig::default() };
     let rt = MissionRuntime::from_source_with("res.lua", "", 3, cfg);
     assert!(rt.errors().is_empty(), "{:?}", rt.errors());
     rt
@@ -37,7 +50,11 @@ fn runtime(view: &WorldView, db: &Arc<ContentDb>) -> MissionRuntime {
 
 /// Run `snippet` on the current view, step its commands into the sim, return the new view.
 fn run(sim: &mut Sim, view: &mut WorldView, db: &Arc<ContentDb>, snippet: &str) -> MissionRuntime {
-    let mut rt = runtime(view, db);
+    run_numbered(sim, view, db, snippet, PlayerNumbering::Slots)
+}
+
+fn run_numbered(sim: &mut Sim, view: &mut WorldView, db: &Arc<ContentDb>, snippet: &str, n: PlayerNumbering) -> MissionRuntime {
+    let mut rt = runtime_numbered(view, db, n);
     rt.eval::<()>(snippet).unwrap_or_else(|e| panic!("{snippet}: {e}"));
     let commands: Vec<Command> = rt.take_commands();
     assert!(commands.iter().all(|c| matches!(c.kind, CommandKind::Edit(_))));
@@ -101,4 +118,43 @@ fn arguments_are_checked_and_an_unseated_team_raises() {
         assert!(rt.eval::<()>(bad).is_err(), "{bad}");
     }
     assert!(rt.take_commands().is_empty(), "a rejected call sends nothing");
+}
+
+#[test]
+fn converted_mission_numbering_and_an_ai_seat() {
+    let (mut sim, mut view, db) = world_with(Control::Ai("skirmish".into()));
+    let mut rt = runtime_numbered(&view, &db, PlayerNumbering::ArmadaTeams);
+    assert!(rt.eval::<()>("A2.AddMetal(0, 5)").is_err(), "team 0 is neutral and raises, like AddCrew");
+    assert!(rt.take_commands().is_empty());
+    run_numbered(&mut sim, &mut view, &db, "A2.SetMetal(1, 40); A2.SetLatinum(2, 60)", PlayerNumbering::ArmadaTeams);
+    assert_eq!(stock(&view, 0)[2], 40, "team 1 is slot 0");
+    assert_eq!(stock(&view, 1)[1], 60, "team 2 is slot 1, an AI seat");
+    assert_eq!([stock(&view, 0)[1], stock(&view, 1)[2]], [0, 0]);
+}
+
+#[test]
+fn upper_clamp_fraction_and_add_then_set() {
+    let (mut sim, mut view, db) = world();
+    run(&mut sim, &mut view, &db, "A2.SetMetal(0, 2000000000)");
+    assert_eq!(stock(&view, 0)[2], 1_000_000_000, "a set clamps to 1e9");
+    run(&mut sim, &mut view, &db, "A2.AddMetal(0, 2147483647)");
+    assert_eq!(stock(&view, 0)[2], 1_000_000_000, "an add clamps to 1e9");
+    // A fractional stock survives an add of 0 bit for bit.
+    let fraction = Fixed::from_bits((1234 << 32) + (1 << 31));
+    view = (*sim
+        .step(&[Command {
+            player: PlayerId::SCRIPT,
+            seq: 90,
+            kind: CommandKind::Edit(sta_sim::command::Edit::Cargo(PlayerId(0), 3, fraction)),
+        }])
+        .view)
+        .clone();
+    assert_eq!(view.player(PlayerId(0)).unwrap().resources[3], fraction);
+    run(&mut sim, &mut view, &db, "A2.AddBiomatter(0, 0)");
+    assert_eq!(view.player(PlayerId(0)).unwrap().resources[3], fraction, "no float step");
+    // Add then Set in one tick: the set wins; Set then Add builds on the set.
+    run(&mut sim, &mut view, &db, "A2.AddDilithium(1, 10); A2.SetDilithium(1, 7)");
+    assert_eq!(stock(&view, 1)[0], 7);
+    run(&mut sim, &mut view, &db, "A2.SetDilithium(1, 7); A2.AddDilithium(1, 3)");
+    assert_eq!(stock(&view, 1)[0], 10);
 }

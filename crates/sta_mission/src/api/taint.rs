@@ -109,8 +109,13 @@ fn team_first(name: &str) -> bool {
         || matches!(
             name,
             "SetRelation" | "SetIsAITeam" | "EnableTeam" | "DisableTeam" | "AddMetal" | "SetMetal" | "AddDilithium" | "SetDilithium" | "AddLatinum" | "SetLatinum"
-                | "GetMetal" | "GetDilithium" | "GetLatinum" | "CreateNewSiegeFleet" | "CreateNewMoveFleet"
+                | "AddBiomatter" | "SetBiomatter" | "GetMetal" | "GetDilithium" | "GetLatinum" | "CreateNewSiegeFleet" | "CreateNewMoveFleet"
         )
+}
+
+/// The eight A2 resource writes: argument 2 is an amount, never a handle (LUA-22).
+fn resource_write(name: &str) -> bool {
+    ["AddMetal", "SetMetal", "AddDilithium", "SetDilithium", "AddLatinum", "SetLatinum", "AddBiomatter", "SetBiomatter"].contains(&name)
 }
 
 impl Taint {
@@ -125,7 +130,7 @@ impl Ctx {
     pub fn gap(&mut self, name: &str, args: &[Value]) {
         for (i, v) in args.iter().enumerate() {
             let Value::Integer(n) = v else { continue };
-            if *n <= 0 || ((i > 0 || team_first(name)) && *n <= 8) || (i == 0 && name == "CommandAllShips") {
+            if *n <= 0 || ((i > 0 || team_first(name)) && *n <= 8) || (i == 0 && name == "CommandAllShips") || (i == 1 && resource_write(name)) {
                 continue;
             }
             let Ok(n) = u32::try_from(*n) else { continue };

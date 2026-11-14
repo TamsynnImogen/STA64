@@ -14,6 +14,15 @@
 //! - A team number that no seat holds raises, like the sibling team calls (the original indexes
 //!   a null team there, which is undefined: not established).
 //!
+//! - Team 0 (neutral) raises here, as in the sibling `AddCrew`; the original's team table has an
+//!   entry for it (not established what it does).
+//!
+//! Known deviation (not established, needs a seam change and a format number, so not this
+//! package): `Edit::Cargo` is an absolute write applied after the seats' own commands in a tick
+//! (the script sorts last). If a seat queues or cancels a build in the same tick, whose charge or
+//! refund is applied at once, the script's `view stock + x` overwrites it: the build is free or
+//! the refund lost. The A1 `AddDilithium` binding has the same flaw. A relative edit would fix it.
+//!
 //! The edit is `Edit::Cargo` (an absolute set of one seat's stock; resource ids 0 dilithium,
 //! 1 latinum, 2 metal, 3 biomatter). The view is a snapshot and the edit lands next tick, so an
 //! add builds on the value this binding last wrote for the seat in the same tick.
@@ -41,7 +50,7 @@ const CALLS: [(&str, u8, bool); 8] = [
 ];
 
 /// The most a stored value can hold here (no `MAX_*` accessor, see the module note).
-const LIMIT: f64 = 1.0e9;
+const LIMIT: i32 = 1_000_000_000;
 
 /// What each seat's stock was last set to by these calls, and in which tick.
 type Written = Rc<RefCell<BTreeMap<(PlayerId, u8), (Tick, Fixed)>>>;
@@ -82,11 +91,12 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
                             .and_then(|v| v.resources.get(usize::from(res)).copied())
                             .unwrap_or(Fixed::ZERO),
                     };
-                    f64::from(base.to_f32()) + amount as f64
+                    // Saturating, in fixed point: no float step, no overflow near the clamp.
+                    Fixed::from_bits(base.to_bits().saturating_add(Fixed::from_int(amount as i32).to_bits()))
                 } else {
-                    amount as f64
-                };
-                let new = Fixed::from_f64(new.clamp(0.0, LIMIT));
+                    Fixed::from_int(amount as i32)
+                }
+                .clamp(Fixed::ZERO, Fixed::from_int(LIMIT));
                 edit_feedback::queue(&mut c, name, Edit::Cargo(player, res, new))?;
                 written.borrow_mut().insert((player, res), (tick, new));
                 Ok(())
