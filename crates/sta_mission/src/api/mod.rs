@@ -58,6 +58,7 @@ mod a1;
 mod a2;
 mod entity;
 mod edit_feedback;
+pub(crate) mod set_relation;
 mod entity_action;
 mod entity_ref;
 mod camera_intent;

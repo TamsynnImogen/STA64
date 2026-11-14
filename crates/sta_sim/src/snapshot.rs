@@ -48,9 +48,10 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// orders (SIM-56) and per-craft switches (SIM-58). Format 22 appends mission
 /// attributes (SIM-54). Format 23 appends cosmetic seat factions. Format 24
 /// adds crew casualties and the derelict latch to the subsystem rows (#652).
-/// Format 25 appends the team-pool adjustments of scripts (SIM-54).
+/// Format 25 appends the team-pool adjustments of scripts (SIM-54). Format 26
+/// appends mission-set relations between seats (SIM-63).
 /// Only the current format is read.
-pub const FORMAT_VERSION: u16 = 25;
+pub const FORMAT_VERSION: u16 = 26;
 
 const HEADER: usize = 4 + 2 + 4 + 8;
 
@@ -194,6 +195,15 @@ struct AdjustRec {
 struct AppearanceRec {
     version: u8,
     factions: Vec<(PlayerId, String)>,
+}
+
+/// Format 26: mission-set relations between seats (SIM-63): `(from, to, code)`
+/// with code 0 Enemy, 1 Neutral, 2 Ally, only pairs that differ from the
+/// team default.
+#[derive(Serialize, Deserialize)]
+struct RelationsRec {
+    version: u8,
+    rows: crate::relations::RelationRows,
 }
 
 /// Format 19, changed in 20: the stuck-order watch rows (`watchdog`).
@@ -451,6 +461,7 @@ impl Sim {
         out.extend(postcard::to_allocvec(&self.attrs.to_rec()).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&AppearanceRec { version: 1, factions: self.appearance_factions.clone() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&AdjustRec { version: 1, rows: self.economy.adjust_rec() }).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&RelationsRec { version: 1, rows: self.relations.to_rows() }).expect("snapshot serialises"));
         out
     }
 
@@ -517,6 +528,9 @@ impl Sim {
         let (record, rest): (AdjustRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         if record.version != 1 { return Err(SnapshotError::Corrupt("unknown team adjustment record version".into())); }
         let adjust_rows = record.rows;
+        let (record, rest): (RelationsRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        if record.version != 1 { return Err(SnapshotError::Corrupt("unknown relations record version".into())); }
+        let relation_rows = record.rows;
         if !rest.is_empty() { return Err(SnapshotError::Corrupt("trailing bytes".into())); }
         if let Some(row) = b.economy.miners.iter().find(|row| row.5 > 4) {
             return Err(SnapshotError::Corrupt(format!("mining phase {} is not supported", row.5)));
@@ -602,6 +616,7 @@ impl Sim {
         if scripted.to_rows().iter().any(|(id, j)| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft) || matches!(j, crate::orders::Job::Patrol { points, leg } if points.len() < 2 || *leg >= points.len())) {
             return Err(SnapshotError::Corrupt("scripted order entity is not a craft or a patrol has no loop".into()));
         }
+        let relations = crate::relations::Relations::from_rows(&relation_rows, &b.players).map_err(|why| SnapshotError::Corrupt(why.into()))?;
         let switches = crate::switches::SwitchTable::from_rows(switch_rows).ok_or_else(|| corrupt("switch rows"))?;
         if switches.to_rows().iter().any(|(id, _)| units.get(*id).is_none()) {
             return Err(SnapshotError::Corrupt("switches of an unknown entity".into()));
@@ -659,6 +674,7 @@ impl Sim {
             subsystems,
             scripted,
             switches,
+            relations,
             attrs,
             team_changes: Vec::new(),
             appearance_factions,
@@ -675,6 +691,9 @@ mod subsystem_tests;
 #[cfg(test)]
 #[path = "snapshot/attrs_tests.rs"]
 mod attrs_tests;
+#[cfg(test)]
+#[path = "snapshot/relations_tests.rs"]
+mod relations_tests;
 
 #[cfg(test)]
 #[path = "snapshot/appearance_tests.rs"]

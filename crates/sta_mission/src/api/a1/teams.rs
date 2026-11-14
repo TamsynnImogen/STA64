@@ -4,26 +4,15 @@
 //! use `ArmadaTeams`: 1..8 are slots 0..7, 0 is neutral).
 //!
 //! `SetRelation(a, b, relation)` takes `Team::TeamRelation` as the DLLs pass
-//! it, an int. The meaning of the values is NOT measured; `relation_of` is the
-//! one provisional mapping (0 enemy, 1 ally, 2 neutral) and is easy to change.
-//! It only sets the mission-local override (`Player:setRelation` does the
-//! same); the sim has no relation edit, which `unsupported()` records.
+//! it, an int: 0 enemy, 1 neutral, 2 ally (read from the executable, static).
+//! It sends `Edit::SetRelation` (SIM-63), one direction, as the original does
+//! (see `api::set_relation`).
 
 use mlua::{Lua, Table, Value};
 use sta_sim::command::{Edit, TeamOp};
 use sta_sim::team_pool::{crew_pool_after, officer_count_after};
-use sta_sim::view::Relation;
 
 use super::{Env, args_of, def};
-
-fn relation_of(n: i64) -> Option<Relation> {
-    match n {
-        0 => Some(Relation::Enemy),
-        1 => Some(Relation::Ally),
-        2 => Some(Relation::Neutral),
-        _ => None,
-    }
-}
 
 /// Resource ids in the world view and in `Edit::Cargo`: 0 dilithium.
 const DILITHIUM: u8 = 0;
@@ -62,11 +51,9 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
 
     table.set("SetRelation", def(lua, env, "SetRelation", &["iii"], |_, e, _, a| {
         let (from, to) = (e.team("SetRelation", a[0].int())?, e.team("SetRelation", a[1].int())?);
-        let rel = relation_of(a[2].int())
+        let rel = crate::api::set_relation::from_code(a[2].int())
             .ok_or_else(|| mlua::Error::runtime("A1.SetRelation requires a relation value 0, 1 or 2"))?;
-        let mut c = e.ctx.borrow_mut();
-        c.relations.insert((from, to), rel);
-        c.unsupported("A1.SetRelation: mission-local override only; no relation edit in the sim seam");
+        crate::api::set_relation::queue(&mut e.ctx.borrow_mut(), "A1.SetRelation", from, to, rel)?;
         Ok(Value::Nil)
     })?)?;
 

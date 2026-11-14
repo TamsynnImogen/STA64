@@ -168,7 +168,7 @@ impl UserData for Player {
                 _ => Relation::Neutral,
             };
             if let Some(o) = player_of(&c, &other) {
-                c.relations.insert((p.id, o), rel);
+                super::set_relation::queue(&mut c, "Player.setRelation", p.id, o, rel)?;
             }
             Ok(())
         });

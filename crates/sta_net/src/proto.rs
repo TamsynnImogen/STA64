@@ -34,8 +34,8 @@ use sta_sim::setup::{Control, GameOptions, PlayerSetup};
 pub const MAGIC: [u8; 4] = *b"S64N";
 /// Bumped whenever any message's encoding changes. 6 appended `Edit` tags
 /// 38 to 43 (SIM-54 attributes); 7 appends `Edit::TeamPool`, tag 44 (SIM-54
-/// team pool).
-pub const PROTOCOL_VERSION: u16 = 7;
+/// team pool); 8 appends `Edit::SetRelation`, tag 45 (SIM-63).
+pub const PROTOCOL_VERSION: u16 = 8;
 /// Magic, version and body length.
 pub const HEADER_LEN: usize = 10;
 /// Largest frame, header included.
@@ -1034,6 +1034,10 @@ fn turn(t: &TurnCommands) -> Result<(), ProtoError> {
             match e {
                 Edit::Name(_, s) => short(s, sta_sim::switches::MAX_NAME_BYTES, "unit name")?,
                 Edit::UnitRace(_, s) | Edit::PlayerRace(_, s) => short(s, sta_sim::attrs::MAX_RACE_BYTES, "race name")?,
+                Edit::SetRelation { from, to, .. } => {
+                    seat_id(*from)?;
+                    seat_id(*to)?;
+                }
                 _ => {}
             }
         }
@@ -1676,6 +1680,16 @@ mod tests {
         }
     }
 
+    /// `Edit::SetRelation`, Edit tag 45 (protocol 8): the golden covers it.
+    fn set_relation_sample(seq: u32) -> Command {
+        use sta_sim::view::Relation;
+        Command {
+            player: PlayerId::SCRIPT,
+            seq,
+            kind: CommandKind::Edit(Edit::SetRelation { from: PlayerId(1), to: PlayerId(2), relation: Relation::Ally }),
+        }
+    }
+
     fn text(player: u8, seq: u32, t: &str) -> Command {
         Command {
             player: PlayerId(player),
@@ -1741,6 +1755,7 @@ mod tests {
                 edit(0),
                 text(PlayerId::SCRIPT.0, 1, ""),
                 team_pool_edit(2),
+                set_relation_sample(3),
             ],
             schedule: vec![
                 Scheduled {
@@ -2030,7 +2045,7 @@ mod tests {
     #[test]
     fn golden_encoding_is_pinned() {
         let all: Vec<u8> = samples().iter().flat_map(|m| encode(m).unwrap()).collect();
-        assert_eq!(PROTOCOL_VERSION, 7);
+        assert_eq!(PROTOCOL_VERSION, 8);
         assert_eq!(
             fnv1a64(&all),
             GOLDEN,
@@ -2038,7 +2053,7 @@ mod tests {
         );
     }
 
-    const GOLDEN: u64 = 10825410957796151308;
+    const GOLDEN: u64 = 16004825891240937987;
 
     /// Tags are positional and never move: NET-04 appended 22 to 28 after
     /// `Sections` (21), the last tag of protocol 2.
@@ -2061,6 +2076,25 @@ mod tests {
         assert_eq!(tag(find(|m| matches!(m, Message::RefereeHello(_)))), 29);
         assert_eq!(tag(find(|m| matches!(m, Message::RefereeSeated { .. }))), 30);
         assert_eq!(tag(find(|m| matches!(m, Message::Reference(_)))), 31);
+    }
+
+    #[test]
+    fn set_relation_edit_refuses_seats_out_of_range() {
+        use sta_core::PlayerId;
+        use sta_sim::command::{Command, CommandKind, Edit};
+        use sta_sim::view::Relation;
+        let edit = |from, to| Command {
+            player: PlayerId::SCRIPT,
+            seq: 0,
+            kind: CommandKind::Edit(Edit::SetRelation { from: PlayerId(from), to: PlayerId(to), relation: Relation::Neutral }),
+        };
+        let max = PlayerId::MAX_PLAYERS;
+        for (from, to, ok) in [(1, 2, true), (max - 1, 0, true), (max, 0, false), (0, max, false), (255, 255, false)] {
+            let mut t = turn_msg();
+            t.commands = vec![edit(from, to)];
+            let r = turn(&t);
+            assert_eq!(r.is_ok(), ok, "{from} {to}: {r:?}");
+        }
     }
 
     #[test]
@@ -2114,8 +2148,8 @@ mod tests {
     fn header_is_little_endian_and_frozen() {
         let bytes = encode(&Message::Ping { nonce: 0 }).unwrap();
         // Ping is tag 12, nonce 0: two body bytes.
-        assert_eq!(bytes, [b'S', b'6', b'4', b'N', 7, 0, 2, 0, 0, 0, 12, 0]);
-        assert_eq!(version_notice(), [b'S', b'6', b'4', b'N', 7, 0, 0, 0, 0, 0]);
+        assert_eq!(bytes, [b'S', b'6', b'4', b'N', 8, 0, 2, 0, 0, 0, 12, 0]);
+        assert_eq!(version_notice(), [b'S', b'6', b'4', b'N', 8, 0, 0, 0, 0, 0]);
     }
 
     #[test]
@@ -2231,8 +2265,8 @@ mod tests {
         assert_eq!(peek_header(&bytes), Ok((1, bytes.len() - HEADER_LEN)));
         // A version notice from another build reads as its version.
         let mut notice = version_notice();
-        notice[4..6].copy_from_slice(&8u16.to_le_bytes());
-        assert_eq!(decode(&notice), Err(ProtoError::Version { found: 8 }));
+        notice[4..6].copy_from_slice(&9u16.to_le_bytes());
+        assert_eq!(decode(&notice), Err(ProtoError::Version { found: 9 }));
         // Our own version with no body is not a message.
         assert_eq!(decode(&version_notice()), Err(ProtoError::Empty));
         bytes[0] = b'X';

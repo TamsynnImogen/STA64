@@ -335,7 +335,7 @@ impl Weapons {
         events: &mut Vec<SimEvent>,
     ) {
         let (mut specials, mut rng) = (Specials::default(), Rng::new(1));
-        self.step_with_perception(tick, units, db, teams, &Table::new(), &mut specials, &mut rng, &Default::default(), events);
+        self.step_with_perception(tick, units, db, crate::relations::Diplomacy::plain(teams), &Table::new(), &mut specials, &mut rng, &Default::default(), events);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -344,7 +344,7 @@ impl Weapons {
         tick: u64,
         units: &Entities,
         db: &ContentDb,
-        teams: &[(PlayerId, TeamId)],
+        teams: crate::relations::Diplomacy<'_>,
         perception: &Table<PlayerId>,
         specials: &mut Specials,
         rng: &mut Rng,
@@ -440,7 +440,7 @@ impl Weapons {
                 };
                 // Seatless legacy/bench sources are omniscient, as their views
                 // are. An unknown owner in a configured game sees nothing.
-                let seen = (!teams.is_empty()).then(|| visibility.iter()
+                let seen = (!teams.players.is_empty()).then(|| visibility.iter()
                     .find(|(player, _)| *player == u.owner)
                     .map_or(&[][..], |(_, ids)| ids.as_slice()));
                 let Some(t) = self.pick(db, u, w.range, arc, units, teams, perception, seen, switches) else {
@@ -600,14 +600,13 @@ impl Weapons {
         range: Fixed,
         arc: Option<FireArc>,
         units: &'a Entities,
-        teams: &[(PlayerId, TeamId)],
+        teams: crate::relations::Diplomacy<'_>,
         perception: &Table<PlayerId>,
         seen: Option<&[EntityId]>,
         switches: &crate::switches::SwitchTable,
     ) -> Option<&'a Entity> {
-        let team = |p: PlayerId| teams.iter().find(|x| x.0 == p).map(|x| x.1);
-        // A cloaked unit is only a target for its own team.
-        let unseen = |t: &Entity| t.flags.contains(UnitFlags::CLOAKED) && team(t.owner) != team(u.owner);
+        // A cloaked unit is only a target for mutual allies (SIM-63).
+        let unseen = |t: &Entity| t.flags.contains(UnitFlags::CLOAKED) && !teams.confirmed_ally(t.owner, u.owner);
         let hittable = |t: &Entity| {
             t.id != u.id
                 && seen.is_none_or(|ids| ids.binary_search(&t.id).is_ok())
@@ -624,19 +623,21 @@ impl Weapons {
             }
         }
         let ordered = self.attack.get(u.id).copied();
-        let mine = team(u.owner)?;
+        if !teams.is_seat(u.owner) {
+            return None;
+        }
         // SIM-36 `target_score`: one target per craft, the best-scoring enemy
         // within its longest regular weapon range; this weapon fires at it
         // when it can (see `targeting`).
         if db.unit(u.def).is_some_and(|d| db.unit_features(d).target_score) {
             let reach = db.unit(u.def).and_then(|d| crate::movement::approach::attack_range(db, d)).unwrap_or(range);
-            let candidates = units.iter().filter(|t| Some(t.id) != ordered && super::targeting::candidate(db, u, t, mine, &team, perception, seen, Some(switches)));
+            let candidates = units.iter().filter(|t| Some(t.id) != ordered && super::targeting::candidate(db, u, t, teams, perception, seen, Some(switches)));
             return super::targeting::best(db, u, reach, candidates).filter(|t| hittable(t));
         }
         let mut best: Option<(Fixed, &Entity)> = None;
         for t in units.iter() {
             let perceived = perception.get(t.id).copied().unwrap_or(t.owner);
-            if team(perceived).is_none_or(|x| x == mine) || !hittable(t) || db.unit(t.def).is_some_and(|d| d.invalid_as_target) || switches.blocked_for(t.id, u.owner) {
+            if !teams.is_enemy(u.owner, perceived) || !hittable(t) || db.unit(t.def).is_some_and(|d| d.invalid_as_target) || switches.blocked_for(t.id, u.owner) {
                 continue;
             }
             let d = flat(u.pos, t.pos).1;
