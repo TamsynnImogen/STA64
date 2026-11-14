@@ -89,6 +89,7 @@ fn metadata<'a>(native: &'a NativeCommands, act: &Act) -> Option<&'a NativeComma
         Act::Target(TargetMode::Attack) => "attack",
         Act::Target(TargetMode::Mine) => "harvest",
         Act::Target(TargetMode::Rally) => "rally",
+        Act::Target(TargetMode::Colonize) => "colonize",
         Act::Stop => "stop",
         Act::Cancel(_) => "cancelbuild",
         _ => return None,

@@ -72,7 +72,7 @@ fn resolved_pieces(app: &mut App, pieces: &[super::layout::Piece]) -> usize {
 }
 
 #[derive(Clone, Copy)]
-enum HoverCapture { Selected, Low, Other }
+enum HoverCapture { Selected, Low, Other, ColonyShip }
 
 /// Independent installed-data expectation: current crew is compared with its
 /// actual live capacity, not crewCost. Resolve authored palette/thresholds.
@@ -112,6 +112,17 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
     let hover = match hover_mode {
         HoverCapture::Selected => None,
         HoverCapture::Low => { hud_feed.selected.clear(); Some(original) },
+        // UI-38: the start unit's view row (same id, so it stays visible) with a colony ship's definition.
+        HoverCapture::ColonyShip => {
+            let Some(def) = hud_feed.content.as_ref().unwrap().key("fcolony") else {
+                eprintln!("SKIP {label}: the mounted install has no `fcolony` definition");
+                return;
+            };
+            let mut view = (*hud_feed.view).clone();
+            view.units.iter_mut().find(|u| u.id == original).unwrap().def = def;
+            hud_feed.view = Arc::new(view);
+            None
+        }
         HoverCapture::Other => Some(hud_feed.view.units.iter().find(|unit| {
             unit.id != original && unit.def != hud_feed.view.unit(original).unwrap().def
                 && unit.flags.contains(sta_sim::view::UnitFlags::SELECTABLE)
@@ -285,6 +296,14 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         .query::<(&GuiButton, &ImageNode)>()
         .iter(app.world())
         .count();
+    if matches!(hover_mode, HoverCapture::ColonyShip) {
+        // The palette offers COLONIZE (command ODF `colonize.odf`: art `b_colonize`) for the colony ship (read from data).
+        let colonize = app.world_mut().query::<(&super::super::GridCell, &GuiButton)>().iter(app.world())
+            .filter(|(cell, button)| cell.0 == super::super::Act::Target(super::super::model::TargetMode::Colonize)
+                && button.names.iter().any(|n| n.eq_ignore_ascii_case("b_colonize")))
+            .count();
+        assert_eq!(colonize, 1, "{label}: one COLONIZE button with the stock art name");
+    }
     if matches!(hover_mode, HoverCapture::Low) {
         assert_eq!(commands, 0, "{label}: hovering must not enable selection commands");
     } else {
@@ -495,6 +514,9 @@ fn installed_stock_hud_renders_on_gpu() {
         options.starting_resources = sta_content::StartingResources::Lots;
         options.officer_limit = 1;
         capture_one(vfs, profile, UVec2::new(1280,720), "gui_fed.cfg", "a2-lots-restricted-16x9", options, HoverCapture::Selected);
+        // UI-38: a colony ship selected (the stock command palette shows COLONIZE).
+        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod.as_deref()).unwrap();
+        capture_one(vfs, profile, UVec2::new(1024, 768), "gui_fed.cfg", "a2-colony-ship-4x3", GameOptions::default(), HoverCapture::ColonyShip);
         for (mode,label) in [(HoverCapture::Low,"a2-hover-low-16x9"),(HoverCapture::Other,"a2-hover-other-16x9")] {
             let vfs=sta_vfs::Vfs::mount_install(std::path::Path::new(&install),active_mod.as_deref()).unwrap();
             capture_one(vfs,profile,UVec2::new(1280,720),"gui_fed.cfg",label,GameOptions::default(),mode);
