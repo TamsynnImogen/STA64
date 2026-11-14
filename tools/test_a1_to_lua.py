@@ -243,6 +243,53 @@ class Steps(unittest.TestCase):
         self.assertIn("A('Bar', R.eax)", lua)
         self.assertTrue(luac_ok(lua), lua)
 
+    def test_a_register_proved_zero_by_the_branch_is_a_null_argument(self):
+        # the compiler pushes eax after `test eax,eax; jne` because the edge proved it 0
+        d, _, f = lift({STEP: [
+            f"mov    eax,DWORD PTR ds:{SHIP:#x}",
+            "test   eax,eax",
+            f"jne    {STEP + 28:#x}",
+            "push   eax",
+            "push   0x3",
+            f"call   {iat('Count')}",
+            "add    esp,0x8",
+            "ret",
+        ]}, STEP)
+        self.assertIsNone(f.error, f.error)
+        lua = render(d, f)
+        self.assertIn("A('Count', 3, nil)", lua)
+        self.assertTrue(luac_ok(lua), lua)
+
+    def test_a_register_proved_equal_to_a_constant_by_cmp_je(self):
+        d, _, f = lift({STEP: [
+            f"mov    eax,DWORD PTR ds:{SHIP:#x}",
+            "cmp    eax,0x7",
+            f"jne    {STEP + 24:#x}",
+            "push   eax",
+            f"call   {iat('Bar')}",
+            "add    esp,0x4",
+            "ret",
+        ]}, STEP)
+        self.assertIsNone(f.error, f.error)
+        lua = render(d, f)
+        self.assertIn("A('Bar', 7)", lua)
+
+    def test_the_taken_edge_of_je_proves_the_value(self):
+        d, _, f = lift({STEP: [
+            f"mov    eax,DWORD PTR ds:{SHIP:#x}",
+            "test   eax,eax",
+            f"je     {STEP + 24:#x}",
+            "ret",
+            "ret",
+            "ret",
+            "push   eax",
+            f"call   {iat('Bar')}",
+            "add    esp,0x4",
+            "ret",
+        ]}, STEP)
+        self.assertIsNone(f.error, f.error)
+        self.assertIn("A('Bar', 0)", render(d, f))
+
     def test_a_loop_is_not_decoded_but_its_calls_are_listed(self):
         d, _, f = lift({STEP: [f"call   {iat('Bar')}", f"jmp    {STEP:#x}"]}, STEP)
         self.assertIn("loop", f.error)
