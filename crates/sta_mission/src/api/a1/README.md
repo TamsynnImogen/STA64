@@ -103,7 +103,7 @@ executables), and the delay of `FailMission` /
 
 ## LUA-30 (sim-backed)
 
-`DestroyCritical` and the five `Destroy<System>` calls (a typed hit of 100000 on a live Craft; for a system also
+`DestroyCritical` and the five `Destroy<System>` calls (a typed hit of 100000 on a live Craft or Station (read from data: stock shipyard use); for a system also
 the switch-off), `Attack(unit, Vector)` (`Order::AttackPoint`, the A2 point rule), `GetAttackLocation` (the A2
 geometry) and `ReplaceObject` (kill, then a spawn at the same place and owner; pending handle, no heading or
 label carried). Evidence: read from the executable, static; effects in play not measured. See `subsystems.rs`

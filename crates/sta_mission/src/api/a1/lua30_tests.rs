@@ -36,7 +36,12 @@ fn db() -> Arc<ContentDb> {
     moon.model = "t_moon".into();
     moon.hull = Fixed::from_int(100);
     moon.system_hit_points = [Fixed::from_int(HP); 5];
-    Arc::new(ContentDb::builder().unit(ship("t_ship", HP)).unit(ship("t_other", 0)).unit(station).unit(moon).build().expect("content"))
+    // A fixture: a prop with hull and no resource.
+    let mut prop = UnitDef::new("t_prop", "background_obj");
+    prop.model = "t_prop".into();
+    prop.hull = Fixed::from_int(100);
+    prop.system_hit_points = [Fixed::from_int(HP); 5];
+    Arc::new(ContentDb::builder().unit(ship("t_ship", HP)).unit(ship("t_other", 0)).unit(station).unit(moon).unit(prop).build().expect("content"))
 }
 
 struct Scene {
@@ -176,7 +181,7 @@ fn a_system_without_hit_points_is_left_alone() {
 }
 
 #[test]
-fn destroy_calls_only_touch_live_craft() {
+fn destroy_calls_only_touch_live_craft_or_station() {
     for name in ["DestroyCritical", "DestroyEngines", "DestroyLifeSupport", "DestroyWeapons", "DestroyShieldGenerator", "DestroySensors"] {
         let mut s = scene();
         // Nothing, nothing live: no edit, no error.
@@ -285,23 +290,24 @@ fn a_station_is_hit_like_a_craft_and_a_prop_is_left_alone() {
         edits(&s.rt.take_commands()),
         vec![Edit::SubsystemDamage(s.ids[2], Subsystem::Sensors, hit), Edit::Subsystem(s.ids[2], Subsystem::Sensors, false)]
     );
-    // A resource node with hull is neither Craft nor Station: nothing, for all six calls.
-    let spawn = Command {
+    // A resource node and a prop with hull are neither Craft nor Station: nothing, for all six calls.
+    let spawn = |seq, odf: &str, x: f32| Command {
         player: PlayerId::SCRIPT,
-        seq: 9,
+        seq,
         kind: CommandKind::Edit(Edit::Spawn {
-            odf: s.db.key("t_moon").unwrap(),
+            odf: s.db.key(odf).unwrap(),
             player: NEUTRAL,
-            pos: Vec3::from_f32([700.0, 0.0, 0.0]),
+            pos: Vec3::from_f32([x, 0.0, 0.0]),
             heading: (Fixed::ZERO, Fixed::ONE),
         }),
     };
-    let out = s.sim.step(&[spawn]);
-    let moon = out.view.units.iter().find(|u| u.pos == Vec3::from_f32([700.0, 0.0, 0.0])).expect("moon").id;
+    let out = s.sim.step(&[spawn(9, "t_moon", 700.0), spawn(10, "t_prop", 800.0)]);
+    let find = |x: f32| out.view.units.iter().find(|u| u.pos == Vec3::from_f32([x, 0.0, 0.0])).expect("object").id;
+    let (moon, prop) = (find(700.0), find(800.0));
     let mut later = Vec::new();
     s.rt.think(&out.view, &out.events, &mut later);
     for name in ["DestroyCritical", "DestroyEngines", "DestroyLifeSupport", "DestroyWeapons", "DestroyShieldGenerator", "DestroySensors"] {
-        s.rt.eval::<()>(&format!("A1.{name}({})", moon.0)).unwrap();
+        s.rt.eval::<()>(&format!("A1.{name}({}); A1.{name}({})", moon.0, prop.0)).unwrap();
     }
     assert!(s.rt.take_commands().is_empty());
 }
