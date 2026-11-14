@@ -29,7 +29,7 @@ pub enum LabelKind {
     Region,
     /// `background_obj` (sun, moon, wreck): the load keeps no labelled object.
     Prop,
-    /// A `background_obj` whose ODF name holds `light` (scenery light, cosmetic): the load keeps position and colour only.
+    /// A `background_obj` whose ODF name holds `light`: usually a scenery light (cosmetic; the load keeps position and colour only when it is hidden), named by the ODF name alone, so not proven to be one.
     Light,
     /// `wormhole_obj`: skipped today; LUA-24 makes these entities.
     Wormhole,
@@ -42,7 +42,7 @@ impl LabelKind {
         match self {
             LabelKind::Region => "region",
             LabelKind::Prop => "prop",
-            LabelKind::Light => "scenery light",
+            LabelKind::Light => "prop (light name)",
             LabelKind::Wormhole => "wormhole",
             LabelKind::Other => "object",
         }

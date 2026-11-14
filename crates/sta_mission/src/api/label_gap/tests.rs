@@ -70,7 +70,7 @@ fn a_wormhole_and_a_scenery_light_are_listed_with_their_own_text() {
     rt.eval::<i64>("return A2.GetHandle('Lamp1')").unwrap();
     let l = listed(&rt);
     assert!(l[0].contains("wormhole object, not placed"), "{l:?}");
-    assert!(l[1].contains("scenery light `fx_lamp_light`"), "{l:?}");
+    assert!(l[1].contains("prop (light name) `fx_lamp_light`"), "{l:?}");
 }
 
 #[test]
@@ -93,12 +93,28 @@ fn a_resolved_label_is_no_gap_even_when_the_map_list_names_it() {
 
 #[test]
 fn a_label_carried_by_a_dead_unit_is_no_gap() {
-    // The host lists only labels no sim object carries, so `Hero` is not in the list; its unit is
-    // gone from the view and `GetHandle` answers 0 as the original does, with no record.
-    let (cfg, _, _) = config();
-    let rt = MissionRuntime::from_source_with_gaps("g.lua", "", 1, MissionConfig { view: None, ..cfg }, Vec::new());
+    // The host lists only labels no sim object carries: `Hero` is carried at start, so it is not in the
+    // list built from the map. Its unit then leaves the view: `GetHandle` answers 0 as the original does,
+    // with no record, while a real gap still records.
+    let map = sta_bzn::Map {
+        objects: vec![
+            sta_bzn::MapObject { odf: "fx_ship".into(), label: "Hero".into(), ..Default::default() },
+            sta_bzn::MapObject { odf: "fx_cloud".into(), label: "Cloud1".into(), ..Default::default() },
+        ],
+        ..Default::default()
+    };
+    let carried = ["Hero".to_owned()].into();
+    let gaps = crate::map_labels::find_label_gaps(&map, &carried, &mut |o| if o == "fx_cloud" { "nebula_obj".into() } else { "unit".into() });
+    assert_eq!(gaps.len(), 1);
+    let (cfg, hero, sim) = config();
+    let mut rt = MissionRuntime::from_source_with_gaps("g.lua", "", 1, cfg, gaps);
+    let mut v = (*sim.view()).clone();
+    v.units.retain(|u| u.id != hero);
+    sta_sim::setup::Controller::think(&mut rt, &v, &[], &mut Vec::new());
     assert_eq!(rt.eval::<i64>("return A2.GetHandle('Hero')").unwrap(), 0);
     assert!(listed(&rt).is_empty());
+    rt.eval::<i64>("return A2.GetHandle('Cloud1')").unwrap();
+    assert_eq!(listed(&rt).len(), 1);
 }
 
 #[test]
@@ -125,6 +141,10 @@ fn a_gap_does_not_block_an_end_that_reads_only_live_objects() {
 fn pinned_over_block_a_gap_taints_a_later_read_of_a_sentinel_handle() {
     let (rt, _) = scene(region_gaps());
     rt.eval::<()>("local _ = A2.GetHandle('Cloud1') local h = A2.GetHandle('Sentinel') if not A2.IsAlive(h) then A2.SucceedMission(0, 0) end").unwrap();
+    assert!(matches!(rt.mission_end(5), MissionEndState::Blocked(_)), "{:?}", rt.mission_end(5));
+    // The form is global, not by value: a nonzero handle that never existed is tainted as well.
+    let (rt, _) = scene(region_gaps());
+    rt.eval::<()>("local _ = A2.GetHandle('Cloud1') if not A2.IsAlive(424242) then A2.SucceedMission(0, 0) end").unwrap();
     assert!(matches!(rt.mission_end(5), MissionEndState::Blocked(_)), "{:?}", rt.mission_end(5));
 }
 
