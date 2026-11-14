@@ -295,7 +295,11 @@ impl Sim {
                         self.production.cancel(&db, &self.units, &mut self.economy, c.player, &unlocked);
                     }
                 }
-                self.apply_movement(c.player, &Order::Move { units: unlocked, to: *to, queue: *queue })
+                let taken = self.apply_movement(c.player, &Order::Move { units: unlocked.clone(), to: *to, queue: *queue });
+                if taken {
+                    self.auto_warp_moves(c.player, &unlocked);
+                }
+                taken
             }
             Order::Formation { .. } => self.apply_movement(c.player, order),
             Order::Mine { units, node } => {

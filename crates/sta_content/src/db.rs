@@ -558,6 +558,11 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
     if m.warp_speed != Fixed::ZERO {
         c.fixed("warp_speed", m.warp_speed);
     }
+    // SIM-64: Armada I's warp-on-move keys, only when set (Armada II and Fleet Operations have none).
+    if m.too_close_for_warp != Fixed::ZERO {
+        c.fixed("too_close_for_warp", m.too_close_for_warp);
+        c.fixed("heading_close_for_warp", m.heading_close_for_warp);
+    }
     // `attackPower` (SIM-36), only when set, for the same reason.
     if let Some(p) = u.attack_power {
         c.fixed("attack_power", p);
