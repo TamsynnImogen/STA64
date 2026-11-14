@@ -90,13 +90,23 @@ executables), and the delay of `FailMission` /
   message counts as playing until stopped.
 - **Labels**: `GetHandle(label)` uses the existing label map (`MissionConfig::labels`).
 
+## Held calls, gone objects and order state (LUA-17)
+
+- A void order, setter or camera call given a `BuildObject` handle that is still pending is
+  held and replayed after the spawn receipt, as on `A2` (`hold.rs`).
+- `AI_Attack(unit, target | point)` / `AI_Attack(unit)` is A2's order of the same name: the
+  first argument is a unit handle (read from data, Federation 1).
+- `InQueue(unit)` answers whether the craft is under way (speed above zero) and
+  `InAttackMode(unit)` whether it fired within the last 3 s: the view carries no order
+  queue, so both are approximations (not measured).
+
 ## Not available until a sim seam exists
 
 Writes are retained as `Call A1.<Name>` and counted in `unsupported()` (also `Load_Rules` and
 `Load_Action_Scripts`, which load nothing and return 0). `SetRelation` sets only the
 mission-local override (provisional 0/1/2 mapping) and is counted too:
 `SetPosition SetWarpSpeed ResetWarpSpeed PointAt
-Special_Attack Attack(unit, Vector) SetSpecialWeaponAttackInterval AI_Attack
+Special_Attack Attack(unit, Vector) SetSpecialWeaponAttackInterval
 AttackMainEnemyBase DestroyCritical Destroy*
 AllowMultipleSpecialWeaponFire SetSpecialForcesFlag TransferFlag LinkWormHoles
 EnableWormholeTravel ObstacleAvoidence PauseSimulation UnpauseSimulation

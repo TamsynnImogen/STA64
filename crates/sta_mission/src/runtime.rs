@@ -291,7 +291,11 @@ impl MissionRuntime {
     /// reads 1 from the next tick, and an MMM mission that made it skippable has it ended with
     /// `cineractiveFinish(true)`. Host-side, outside the command stream (SIM-61).
     pub fn skip_cineractive(&self) {
-        self.inner.ctx.borrow_mut().cine.skip();
+        let mut c = self.inner.ctx.borrow_mut();
+        c.cine.skip();
+        // A fade the skipped cineractive scheduled for later is dropped with it (LUA-17;
+        // assumed, not measured).
+        c.delayed.clear();
     }
 
     /// End the running cineractive for the script (a host's cap, a fault, the mission's end):
@@ -629,10 +633,17 @@ impl Controller for MissionRuntime {
             let ids: Vec<_> = view.units.iter().map(|u| u.id).collect();
             c.seen.extend(ids);
             for e in events {
-                if let SimEvent::Hit { target, .. } = e {
-                    c.last_hit.insert(*target, tick);
+                match e {
+                    SimEvent::Hit { target, .. } => {
+                        c.last_hit.insert(*target, tick);
+                    }
+                    SimEvent::Fired { shooter, .. } => {
+                        c.last_fired.insert(*shooter, tick);
+                    }
+                    _ => {}
                 }
             }
+            c.flush_delayed();
             failures = api::process_edit_feedback(&mut c);
             api::process_spawns(&mut c);
         }

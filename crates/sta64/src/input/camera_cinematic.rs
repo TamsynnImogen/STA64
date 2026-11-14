@@ -173,11 +173,21 @@ fn consume(
             }
             Presentation::Call { name, args } if name == "A2.CenterCamera" || name == "Camera.center" => {
                 // An entity (A2 `CenterCamera`, MMM `Camera:center(entity)`) or a place (`Camera:center(Vector)`).
-                let place = args.iter().find_map(|a| match a {
-                    Arg::Entity(id) => spot(&Spot::Entity(*id), link.as_deref(), &paths),
-                    Arg::Position(p) => Some(crate::render::units::to_bevy(p.to_f32())),
+                let path_point = match args.as_slice() {
+                    [Arg::Text(path), Arg::Int(i)] => u32::try_from(*i).ok().map(|index| Spot::PathPoint { path: path.clone(), index }),
                     _ => None,
-                });
+                };
+                let place = path_point.and_then(|s| spot(&s, link.as_deref(), &paths)).or_else(|| args.iter().find_map(|a| match a {
+                    Arg::Entity(id) => spot(&Spot::Entity(*id), link.as_deref(), &paths),
+                    // A place keeps the camera's current height: a script's `Vector(x, 0, z)` names
+                    // the ground point, not a height (MMM's own handling not measured).
+                    Arg::Position(p) => {
+                        let mut at = crate::render::units::to_bevy(p.to_f32());
+                        at.y = cam.saved.as_ref().filter(|_| cam.locked).or(current.as_ref()).map_or(at.y, |c| c.focus.y);
+                        Some(at)
+                    }
+                    _ => None,
+                }));
                 match (place, orbit.iter_mut().next()) {
                     // During a cineractive the strategy camera behind it moves (the original's
                     // RTS camera is not the one the shots drive): it comes back there.

@@ -1,6 +1,6 @@
 //! [`UnitDef`] from a unit's resolved ODF (CON-03). See [`crate::odf`].
 //!
-//! Keys read (all optional; absent means zero or empty):
+//! Keys read (all optional; absent means zero or empty unless noted):
 //!
 //! | field | key |
 //! |---|---|
@@ -14,6 +14,7 @@
 //! | `movement` | the physics ODF named by `physicsFile`, see [`movement`] |
 //! | `hardpoints` | `weapon<n>` with `weaponHardPoints<n>` (first node named); `STA64_fireArc<n>` the slot's own arc half-width in radians |
 //! | `build` | `dilithiumCost`, `latinumCost`, `metalCost`, `biomatterCost`, `buildTime` seconds, `officerCost`, `buildItem<n>` |
+//! | `repair` | authored `enginesRepairTime`, `weaponsRepairTime`, `shieldGeneratorRepairTime`, `lifeSupportRepairTime`, `sensorsRepairTime` seconds per system hit point before runtime modifiers; `repairFacility`, `repairHardpoint`, `repairSide`, `canShipyardRepair` (metadata only; no effective defaults) |
 //! | `sounds` | `eventSelect`, `eventAcknowledge`, `eventAttack`, `ambientSound` (event and file names, resolved by the client) |
 //! | `fx` | `fireball` |
 //! | specials, mining | `maxSpecialEnergy`, `specialEnergyRate`, `miner` (`miner = 0` says not a miner even for class `freighter`: [`UnitDef::mines`]), `maxdilithium`, `miningRate`, `dilithiumTransferRate`, `resource` |
@@ -46,6 +47,11 @@ pub fn movement(phys: Option<&Odf>, file: &str, warnings: &mut Vec<Warning>) -> 
     let mut m = with_smooth_keys(m, |k| r.num(k));
     if let Some(v) = r.num("warpSpeed").filter(|v| *v > 0.0) {
         m.warp_speed = Fixed::from_f64(v);
+    }
+    // Armada I's warp-on-move keys (SIM-64); an ODF without `tooCloseForWarp` never asks.
+    if let Some(v) = r.num("tooCloseForWarp").filter(|v| *v > 0.0) {
+        m.too_close_for_warp = Fixed::from_f64(v);
+        m.heading_close_for_warp = Fixed::from_f64(r.num("headingCloseEnoughForWarp").unwrap_or(0.0).clamp(0.0, 180.0));
     }
     m
 }
@@ -146,6 +152,52 @@ pub(crate) fn unit_def_for_profile(name: &str, odf: &Odf, phys: Option<&Odf>, pr
         r.fixed("lifeSupportHitPoints"),
         r.fixed("sensorsHitPoints"),
     ];
+    d.casualty = crate::def::CasualtyDef {
+        shield_protection: r.odf.raw("shieldProtection").map(|_| r.fixed("shieldProtection")),
+        system_hit_percent: [
+            r.fixed("enginesHitPercent"),
+            r.fixed("weaponsHitPercent"),
+            r.fixed("shieldGeneratorHitPercent"),
+            r.fixed("lifeSupportHitPercent"),
+            r.fixed("sensorsHitPercent"),
+        ],
+        crew_hit_percent: r.fixed("crewHitPercent"),
+        hull_hit_percent: r.odf.raw("hullHitPercent").map(|_| r.fixed("hullHitPercent")),
+        system_crew_loss: [
+            r.fixed("enginesCrewLoss"),
+            r.fixed("weaponsCrewLoss"),
+            r.fixed("shieldGeneratorCrewLoss"),
+            r.fixed("lifeSupportCrewLoss"),
+            r.fixed("sensorsCrewLoss"),
+        ],
+        life_support_loss: r.fixed("lifeSupportLoss"),
+        recrew_rate: r.odf.raw("recrewRate").map(|_| r.fixed("recrewRate")),
+    };
+    for (slot, key) in [
+        "enginesRepairTime", "weaponsRepairTime", "shieldGeneratorRepairTime",
+        "lifeSupportRepairTime", "sensorsRepairTime",
+    ].into_iter().enumerate() {
+        d.repair.system_times[slot] = match r.num(key) {
+            Some(seconds) if seconds >= 0.0 => Some(Fixed::from_f64(seconds)),
+            Some(_) => {
+                r.warnings.push(Warning::new(&file, format!("{key} is negative; ignored")));
+                None
+            }
+            None => None,
+        };
+    }
+    d.repair.repair_facility = r.flag("repairFacility");
+    d.repair.repair_hardpoint = r.text("repairHardpoint");
+    // Parse the authored decimal exactly: Reader::num converts through f32
+    // and clamps large values, which would silently change a side number.
+    d.repair.repair_side = odf.raw("repairSide").and_then(|_| match r.text("repairSide").and_then(|s| s.parse::<i32>().ok()) {
+        Some(side) => Some(side),
+        None => {
+            r.warnings.push(Warning::new(&file, "repairSide is not a signed whole number; ignored"));
+            None
+        }
+    });
+    d.repair.can_shipyard_repair = r.flag("canShipyardRepair");
     d.sensor = r.fixed("rangeScan");
     d.attack_power = odf.raw("attackPower").map(|_| r.fixed("attackPower").max(Fixed::ZERO).min(Fixed::from_int(1_000_000)));
 
@@ -227,6 +279,21 @@ mod tests {
     fn odf(text: &str) -> Odf {
         let text = text.to_owned();
         sta_odf::resolve("p.odf", &mut |_| Some(text.clone())).unwrap()
+    }
+
+    /// Armada I's warp-on-move keys (SIM-64), as `fastphys.odf` writes them
+    /// (trailing `;` included); Armada II's physics files have neither.
+    #[test]
+    fn armada_one_warp_keys_are_read_and_absent_keys_leave_them_zero() {
+        let ph = odf("impulseSpeed = 20\nwarpSpeed = 100\ntooCloseForWarp = 10;\nheadingCloseEnoughForWarp = 30;\n");
+        let m = movement(Some(&ph), "p.odf", &mut Vec::new());
+        assert_eq!((m.too_close_for_warp, m.heading_close_for_warp), (Fixed::from_int(10), Fixed::from_int(30)));
+        assert!(m.warp_speed > m.max_speed);
+        let none = movement(Some(&odf("impulseSpeed = 20\nwarpSpeed = 100\n")), "p.odf", &mut Vec::new());
+        assert_eq!((none.too_close_for_warp, none.heading_close_for_warp), (Fixed::ZERO, Fixed::ZERO));
+        // A heading band without a distance asks for nothing.
+        let band = movement(Some(&odf("impulseSpeed = 20\nheadingCloseEnoughForWarp = 30\n")), "p.odf", &mut Vec::new());
+        assert_eq!(band.heading_close_for_warp, Fixed::ZERO);
     }
 
     /// The smooth-physics keys of a stock-shaped physics ODF (values and the

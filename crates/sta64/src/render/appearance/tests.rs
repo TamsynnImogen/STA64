@@ -2,10 +2,12 @@
 
 use super::*;
 use sta_assets::model::{Group, Maps, Mesh as SourceMesh, Node, NodeKind, SourceFormat};
-use sta_content::UnitDef;
-use sta_core::{EntityId, Fixed, PlayerId};
+use sta_content::{ContentDb, MapDef, UnitDef};
+use sta_core::{EntityId, Fixed, PlayerId, TeamId};
 use sta_sim::{
-    command::{Command, LocalRouter},
+    Sim, SimEvent,
+    command::{Command, CommandKind, Edit, LocalRouter},
+    setup::{Control, GameSetup, PlayerSetup},
     source::WorldSource,
     view::{TickOutput, UnitFlags, UnitView, WorldView},
 };
@@ -139,11 +141,12 @@ fn source_model() -> Arc<Model> {
         version: 2.0,
         materials: Vec::new(),
         nodes: vec![
-            node("root", None, vec![1, 3, 4], NodeKind::Null),
+            node("root", None, vec![1, 3, 4, 5], NodeKind::Null),
             node("engine", Some(0), vec![2], NodeKind::Mesh(mesh)),
             node("engineChild", Some(1), vec![], NodeKind::Null),
             node("sibling", Some(0), vec![], NodeKind::Null),
             node("alphaNode", Some(0), vec![], NodeKind::Null),
+            node("betaNode", Some(0), vec![], NodeKind::Null),
         ],
         channels: Vec::new(),
         flipbooks: Vec::new(),
@@ -236,6 +239,343 @@ fn app(install: &Install, first: WorldView) -> (App, [Entity; 2], [Vec<Entity>; 
         [nodes_by_root.remove(0), nodes_by_root.remove(0)],
         part,
     )
+}
+
+fn texture(app: &App, part: Entity) -> Option<Handle<Image>> {
+    let private = app.world().get::<PrivateMaterial>(part)?;
+    app.world()
+        .resource::<Assets<StandardMaterial>>()
+        .get(&private.handle)
+        .and_then(|material| material.base_color_texture.clone())
+}
+
+fn faction_nodes(app: &App, nodes: &[Entity]) -> (Visibility, Visibility) {
+    (
+        *app.world().get::<Visibility>(nodes[4]).unwrap(),
+        *app.world().get::<Visibility>(nodes[5]).unwrap(),
+    )
+}
+
+#[test]
+fn mission_unit_race_wins_and_survives_capture_until_its_row_is_absent() {
+    let install = Install::new();
+    let baseline = view(0, 1, None);
+    let (mut app, _, nodes, part) = app(&install, baseline.clone());
+    app.update();
+    let alpha_texture = texture(&app, part).unwrap();
+    assert_eq!(
+        faction_nodes(&app, &nodes[0]),
+        (Visibility::Inherited, Visibility::Hidden)
+    );
+
+    let mut override_view = baseline.clone();
+    override_view.attrs.races = vec![(EntityId(1), "beta".into())];
+    override_view.attrs.player_races = vec![(PlayerId(0), "alpha".into())];
+    override_view.digest = 37;
+    let supplied = Arc::new(override_view.clone());
+    app.world_mut()
+        .resource_mut::<SimLink>()
+        .feed(supplied.clone());
+    app.update();
+    let beta_texture = texture(&app, part).unwrap();
+    assert_ne!(beta_texture, alpha_texture);
+    assert_eq!(
+        faction_nodes(&app, &nodes[0]),
+        (Visibility::Hidden, Visibility::Inherited)
+    );
+    assert_eq!(
+        *supplied, override_view,
+        "rendering must not change the supplied view or digest"
+    );
+
+    let mut captured = override_view.clone();
+    captured.units[0].owner = PlayerId(1);
+    captured
+        .attrs
+        .player_races
+        .push((PlayerId(1), "alpha".into()));
+    app.world_mut()
+        .resource_mut::<SimLink>()
+        .feed(Arc::new(captured.clone()));
+    app.update();
+    assert_eq!(texture(&app, part), Some(beta_texture.clone()));
+    assert_eq!(
+        faction_nodes(&app, &nodes[0]),
+        (Visibility::Hidden, Visibility::Inherited)
+    );
+
+    captured.attrs.races.clear();
+    app.world_mut()
+        .resource_mut::<SimLink>()
+        .feed(Arc::new(captured));
+    app.update();
+    assert_eq!(texture(&app, part), Some(alpha_texture.clone()));
+    assert_eq!(
+        faction_nodes(&app, &nodes[0]),
+        (Visibility::Inherited, Visibility::Hidden)
+    );
+}
+
+#[test]
+fn recipient_seat_override_controls_capture_and_aliases_keep_material_stable() {
+    let install = Install::new();
+    let (mut app, _, nodes, part) = app(&install, view(0, 1, None));
+    app.update();
+    let first_private = app
+        .world()
+        .get::<PrivateMaterial>(part)
+        .unwrap()
+        .handle
+        .clone();
+    let alpha_texture = texture(&app, part).unwrap();
+
+    let mut changed = view(0, 1, None);
+    changed.attrs.player_races = vec![(PlayerId(0), "BeTa".into()), (PlayerId(1), "ALPHA".into())];
+    app.world_mut()
+        .resource_mut::<SimLink>()
+        .feed(Arc::new(changed.clone()));
+    app.update();
+    let beta_texture = texture(&app, part).unwrap();
+    assert_ne!(beta_texture, alpha_texture);
+    assert_eq!(
+        faction_nodes(&app, &nodes[0]),
+        (Visibility::Hidden, Visibility::Inherited)
+    );
+
+    changed.attrs.player_races[0].1 = "BETANODE".into();
+    app.world_mut()
+        .resource_mut::<SimLink>()
+        .feed(Arc::new(changed.clone()));
+    app.update();
+    assert_eq!(
+        app.world().get::<PrivateMaterial>(part).unwrap().handle,
+        first_private
+    );
+    assert_eq!(texture(&app, part), Some(beta_texture));
+
+    changed.units[0].owner = PlayerId(1);
+    app.world_mut()
+        .resource_mut::<SimLink>()
+        .feed(Arc::new(changed));
+    app.update();
+    assert_eq!(texture(&app, part), Some(alpha_texture));
+    assert_eq!(
+        faction_nodes(&app, &nodes[0]),
+        (Visibility::Inherited, Visibility::Hidden)
+    );
+}
+
+#[test]
+fn explicit_unknown_or_empty_race_falls_back_and_later_recovers() {
+    let install = Install::new();
+    let (mut app, _, nodes, part) = app(&install, view(0, 1, None));
+    app.update();
+    let alpha_texture = texture(&app, part).unwrap();
+    let mut changed = view(0, 1, None);
+    changed.attrs.player_races = vec![(PlayerId(0), "beta".into())];
+    for race in ["unknown", ""] {
+        changed.attrs.races = vec![(EntityId(1), race.into())];
+        app.world_mut()
+            .resource_mut::<SimLink>()
+            .feed(Arc::new(changed.clone()));
+        app.update();
+        assert_eq!(
+            texture(&app, part),
+            None,
+            "explicit {race:?} must not use the seat"
+        );
+        assert_eq!(
+            faction_nodes(&app, &nodes[0]),
+            (Visibility::Hidden, Visibility::Hidden)
+        );
+    }
+    changed.attrs.races = vec![(EntityId(1), "ALPHANODE".into())];
+    app.world_mut()
+        .resource_mut::<SimLink>()
+        .feed(Arc::new(changed));
+    app.update();
+    assert_eq!(texture(&app, part), Some(alpha_texture));
+    assert_eq!(
+        faction_nodes(&app, &nodes[0]),
+        (Visibility::Inherited, Visibility::Hidden)
+    );
+}
+
+#[test]
+fn missing_faction_texture_uses_base_without_changing_another_instance() {
+    let install = Install::new();
+    std::fs::remove_file(install.0.join("Data/Textures/RGB/paint_b.tga")).unwrap();
+    let (mut app, _, nodes, first_part) = app(&install, view(0, 1, None));
+    let base = app
+        .world()
+        .get::<ModelPart>(first_part)
+        .unwrap()
+        .base
+        .clone();
+    let second_part = app
+        .world_mut()
+        .spawn((
+            ModelPart {
+                node: 1,
+                group: 0,
+                base: base.clone(),
+            },
+            Transform::IDENTITY,
+            ChildOf(nodes[1][1]),
+        ))
+        .id();
+    app.update();
+    let alpha_texture = texture(&app, first_part).unwrap();
+    let second_private = app
+        .world()
+        .get::<PrivateMaterial>(second_part)
+        .unwrap()
+        .handle
+        .clone();
+    assert_eq!(
+        texture(&app, second_part),
+        None,
+        "missing beta variant retains base map"
+    );
+    assert_eq!(
+        faction_nodes(&app, &nodes[1]),
+        (Visibility::Hidden, Visibility::Inherited)
+    );
+    assert!(
+        app.world()
+            .resource::<Assets<StandardMaterial>>()
+            .get(&base)
+            .unwrap()
+            .base_color_texture
+            .is_none()
+    );
+
+    let mut changed = view(0, 1, None);
+    changed.attrs.races = vec![(EntityId(1), "beta".into())];
+    app.world_mut()
+        .resource_mut::<SimLink>()
+        .feed(Arc::new(changed));
+    app.update();
+    assert_eq!(texture(&app, first_part), None);
+    assert_eq!(texture(&app, second_part), None);
+    assert_eq!(
+        app.world()
+            .get::<PrivateMaterial>(second_part)
+            .unwrap()
+            .handle,
+        second_private
+    );
+    assert_eq!(
+        faction_nodes(&app, &nodes[0]),
+        (Visibility::Hidden, Visibility::Inherited)
+    );
+
+    app.world_mut()
+        .resource_mut::<SimLink>()
+        .feed(Arc::new(view(0, 1, None)));
+    app.update();
+    assert_eq!(texture(&app, first_part), Some(alpha_texture));
+    assert_eq!(texture(&app, second_part), None);
+}
+
+#[test]
+fn simulation_race_edits_and_snapshot_feed_the_same_rendered_appearance() {
+    let install = Install::new();
+    let mut alpha = UnitDef::new("alpha_ship", "craft");
+    alpha.hull = Fixed::from_int(100);
+    alpha.race = "alpha".into();
+    let mut beta = UnitDef::new("beta_ship", "craft");
+    beta.hull = Fixed::from_int(100);
+    beta.race = "beta".into();
+    let content = Arc::new(ContentDb::builder().unit(alpha).unit(beta).build().unwrap());
+    let setup = GameSetup {
+        seed: 7,
+        map: Arc::new(MapDef::empty()),
+        content: content.clone(),
+        players: vec![
+            PlayerSetup {
+                id: PlayerId(0),
+                team: TeamId(0),
+                race: "alpha".into(),
+                control: Control::Idle,
+            },
+            PlayerSetup {
+                id: PlayerId(1),
+                team: TeamId(1),
+                race: "beta".into(),
+                control: Control::Idle,
+            },
+        ],
+        options: Default::default(),
+    };
+    let mut sim = Sim::from_setup(&setup);
+    let spawn = |sim: &mut Sim, name: &str, owner| {
+        sim.spawn_def(
+            content.key(name).unwrap(),
+            owner,
+            sta_core::Vec3::ZERO,
+            (Fixed::ZERO, Fixed::ONE),
+        )
+        .unwrap()
+    };
+    let first = spawn(&mut sim, "alpha_ship", PlayerId(0));
+    let second = spawn(&mut sim, "beta_ship", PlayerId(1));
+    assert_eq!((first, second), (EntityId(1), EntityId(2)));
+    let (mut app, _, nodes, part) = app(&install, sim.view().as_ref().clone());
+    app.update();
+    let alpha_texture = texture(&app, part).unwrap();
+
+    let edit = |sim: &mut Sim, edit| {
+        let out = sim.step(&[Command {
+            player: PlayerId::SCRIPT,
+            seq: 0,
+            kind: CommandKind::Edit(edit),
+        }]);
+        assert!(
+            !out.events
+                .iter()
+                .any(|event| matches!(event, SimEvent::Rejected { .. }))
+        );
+    };
+    edit(&mut sim, Edit::PlayerRace(PlayerId(0), "BETA".into()));
+    let seat_view = sim.view();
+    app.world_mut().resource_mut::<SimLink>().feed(seat_view);
+    app.update();
+    let beta_texture = texture(&app, part).unwrap();
+    assert_ne!(beta_texture, alpha_texture);
+    assert_eq!(
+        faction_nodes(&app, &nodes[0]),
+        (Visibility::Hidden, Visibility::Inherited)
+    );
+
+    edit(&mut sim, Edit::UnitRace(first, "ALPHA".into()));
+    let before_render = sim.digest();
+    let live = sim.view();
+    assert_eq!(live.attrs.player_races, vec![(PlayerId(0), "beta".into())]);
+    assert_eq!(live.attrs.races, vec![(first, "alpha".into())]);
+    app.world_mut().resource_mut::<SimLink>().feed(live.clone());
+    app.update();
+    assert_eq!(texture(&app, part), Some(alpha_texture.clone()));
+    assert_eq!(
+        faction_nodes(&app, &nodes[0]),
+        (Visibility::Inherited, Visibility::Hidden)
+    );
+    assert_eq!(sim.digest(), before_render);
+    assert_eq!(live.digest, before_render);
+
+    let saved = sim.snapshot();
+    let restored = Sim::from_snapshot(&saved, Some(content)).unwrap();
+    assert_eq!(restored.digest(), before_render);
+    assert_eq!(restored.view().attrs, live.attrs);
+    app.world_mut()
+        .resource_mut::<SimLink>()
+        .feed(restored.view());
+    app.update();
+    assert_eq!(texture(&app, part), Some(alpha_texture));
+    assert_eq!(
+        faction_nodes(&app, &nodes[0]),
+        (Visibility::Inherited, Visibility::Hidden)
+    );
 }
 
 #[test]

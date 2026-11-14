@@ -387,3 +387,41 @@ fn snapshot_start_continues_the_saved_run() {
     let _ = std::fs::remove_dir_all(&dir);
     assert!(r.passed, "{}", r.summary());
 }
+
+#[test]
+fn shots_are_recorded_at_tier_one_and_a_comparison_needs_both_names() {
+    let r = case(
+        &cfg(),
+        "planet",
+        &[
+            "Take a screenshot called \"first\"",
+            "Run 100 ticks",
+            "Take a screenshot called \"later\"",
+            "Expect shots \"first\" and \"later\" to match within 2",
+        ],
+    );
+    assert!(r.passed, "{}", r.summary());
+    assert!(r.steps.iter().filter(|s| !s.text.starts_with("Run")).all(|s| s.status == Status::Skip), "{}", r.summary());
+    let shots: Vec<_> = r.shots.iter().map(|s| (s.name.as_str(), s.tick)).collect();
+    assert_eq!(shots, [("first", 0), ("later", 100)]);
+    assert_eq!(r.shot_checks.len(), 1);
+    assert_eq!(r.shot_checks[0].within, 2.0);
+
+    let r = fails("planet", &["Take a screenshot called \"a\"", "Expect shots \"a\" and \"b\" to match"]);
+    assert!(r.steps[1].detail.contains("`b`"), "{}", r.summary());
+    fails("planet", &["Take a screenshot called \"a\"", "Take a screenshot called \"a\""]);
+    fails("planet", &["Take a screenshot called \"../x\""]);
+}
+
+/// The example scenario in `bench/scenarios` parses and runs in `sta-bench check`.
+#[test]
+fn the_example_scenario_runs_at_tier_one() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../bench");
+    let mut cfg = RunConfig::fake();
+    cfg.scene_dir = dir.join("scenes");
+    cfg.scenario_dir = dir.join("scenarios");
+    let r = run::run_scenario_file(&Arc::new(cfg), &dir.join("scenarios/shots-planet.md")).expect("loads");
+    assert!(r.passed, "{}", r.summary());
+    assert_eq!(r.shots.len(), 3);
+    assert_eq!(r.shot_checks.len(), 2);
+}

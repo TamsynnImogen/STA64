@@ -159,6 +159,7 @@ const CASES: &[(&str, &str, Expect)] = &[
     ("RemoveTitle", "A1.RemoveTitle(A1.ShowTitle(1, 2, 3, 4, 'T', true), true)", Fine),
     ("ShowSubtitle", "assert(A1.ShowSubtitle(5, 10, 300, 20, 'S', true) == 1)", Fine),
     ("RemoveSubtitle", "A1.RemoveSubtitle(A1.ShowSubtitle(5, 10, 300, 20, 'S', true), true)", Fine),
+    ("RemoveSubtitle", "A1.RemoveSubtitle(0, true)", Fine),
     ("MinimapMessage", "A1.MinimapMessage(1, 2, 3.0)", Fine),
     ("MinimapMessage", "A1.MinimapMessage('m', 1, 2.0, 3)", Fine),
     // Orders and AI.
@@ -187,12 +188,12 @@ const CASES: &[(&str, &str, Expect)] = &[
     ("OutOfSpecialAttackMode", "A1.OutOfSpecialAttackMode(a)", Fail),
     ("Mine", "A1.Mine(a, b)", Fine),
     ("GetAttackLocation", "A1.GetAttackLocation(a, b)", Fail),
-    ("InAttackMode", "A1.InAttackMode(a)", Fail),
+    ("InAttackMode", "assert(A1.InAttackMode(a) == false)", Fine),
     ("UnderAttack", "assert(A1.UnderAttack(a, 5.0) == false)", Fine),
     ("GetAllyShipAttacks", "A1.GetAllyShipAttacks(4, 1)", Fail),
     ("GetAllyStationAttacks", "A1.GetAllyStationAttacks(4, 1)", Fail),
     ("AttackMainEnemyBase", "A1.AttackMainEnemyBase(1, true)", Fine),
-    ("InQueue", "A1.InQueue(a)", Fail),
+    ("InQueue", "assert(A1.InQueue(a) == false)", Fine),
     ("SearchAndDestroy", "A1.SearchAndDestroy(a)", Fine),
     // Resources and crew.
     ("SetDilithium", "assert(A1.SetDilithium(0, 500) == 500)", Fine),
@@ -282,6 +283,8 @@ const CASES: &[(&str, &str, Expect)] = &[
     ("GetTime", "assert(A1.GetTime() >= 0)", Fine),
     ("FailMission", "A1.FailMission(1.0, 'lost')", Fine),
     ("SucceedMission", "A1.SucceedMission(1.0, 'won')", Fine),
+    ("SucceedMission", "A1.SucceedMission(1.0, nil)", Fine),
+    ("FailMission", "A1.FailMission(1.0, nil)", Fine),
     ("IsCompromised", "A1.IsCompromised(a, 1)", Fine),
     ("ObstacleAvoidence", "A1.ObstacleAvoidence(true)", Fine),
     ("PointAt", "A1.PointAt(a, b)", Fine),
@@ -420,7 +423,7 @@ fn bridge_scene_calls_are_presentation_events_in_call_order() {
 #[test]
 fn cineractive_calls_drive_the_shared_mode_and_retain_shots() {
     let s = scene();
-    let (rt, commands) = run(&s, "A1.CineractiveStart(); A1.CineractiveShot('P', 0.5, b); A1.FadeOut(2, 0.5, 0); A1.CineractiveEnd()");
+    let (rt, commands) = run(&s, "A1.CineractiveStart(); A1.CineractiveShot('P', 0.5, b); A1.FadeOut(2, 0, 0); A1.CineractiveEnd()");
     let events = presented(&commands);
     // The skip key always works on an A1 cineractive (static): a start is skippable.
     assert_eq!(events[0], Presentation::Cineractive { on: true, skippable: true });
@@ -430,11 +433,33 @@ fn cineractive_calls_drive_the_shared_mode_and_retain_shots() {
     );
     assert_eq!(
         events[2],
-        call("FadeOut", vec![Arg::Num(Fixed::from_int(2)), Arg::Num(Fixed::from_f64(0.5)), Arg::Num(Fixed::ZERO)])
+        call("FadeOut", vec![Arg::Num(Fixed::from_int(2)), Arg::Num(Fixed::ZERO), Arg::Num(Fixed::ZERO)])
     );
     assert_eq!(events[3], Presentation::Fade { out: true, seconds: Fixed::from_int(2), rgb: [0, 0, 0] });
     assert_eq!(events[4], Presentation::Cineractive { on: false, skippable: true });
     assert!(rt.unsupported().is_empty());
+}
+
+/// `FadeOut(seconds, delay, _)`: a delayed fade is presented when it starts (LUA-17).
+#[test]
+fn a_delayed_fade_is_presented_when_it_starts() {
+    use sta_sim::setup::Controller;
+    let s = scene();
+    let (mut rt, commands) = run(&s, "A1.FadeOut(2, 25, 0)");
+    let now = presented(&commands);
+    assert_eq!(now.len(), 1, "only the retained call at once: {now:?}");
+    let mut view = s.view.clone();
+    let base = view.tick + 25 * 30;
+    let fade = Presentation::Fade { out: true, seconds: Fixed::from_int(2), rgb: [0, 0, 0] };
+    let mut at = |tick: u64, rt: &mut MissionRuntime| {
+        view.tick = tick;
+        let mut out = Vec::new();
+        rt.think(&view, &[], &mut out);
+        presented(&out)
+    };
+    assert!(!at(base - 1, &mut rt).contains(&fade));
+    assert_eq!(at(base, &mut rt), vec![fade.clone()]);
+    assert!(!at(base + 1, &mut rt).contains(&fade));
 }
 
 #[test]
@@ -711,9 +736,11 @@ fn build_object_handles_resolve_after_the_receipt() {
     assert!(rt.errors().is_empty(), "{:?}", rt.errors());
     let token: u32 = rt.eval("return h").unwrap();
     assert!(token >= super::TOKEN_BASE);
-    // Before the receipt the object does not exist and cannot be used.
+    // Before the receipt the object does not exist: queries cannot use it, a void order
+    // is held (LUA-17: the original's handle is usable at once).
     assert!(!rt.eval::<bool>("return A1.Exists(h)").unwrap());
-    assert!(rt.eval::<()>("A1.Stop(h, 1)").is_err());
+    assert!(rt.eval::<()>("A1.GetLocation(h)").is_err());
+    rt.eval::<()>("A1.Stop(h, 1)").expect("held");
     assert!(!rt.eval::<bool>("return A1.IsValid(h)").unwrap());
     let first = rt.take_commands();
     assert!(matches!(&first[0].kind, CommandKind::Edit(Edit::SpawnRequest { player, .. }) if *player == PlayerId(1)));
@@ -729,7 +756,10 @@ fn build_object_handles_resolve_after_the_receipt() {
     let mut later = Vec::new();
     use sta_sim::setup::Controller;
     rt.think(&out.view, &out.events, &mut later);
+    // The first A1 call after the receipt replays the held Stop.
     assert!(rt.eval::<bool>("return A1.IsAlive(h) and A1.Exists(h)").unwrap());
+    let held = rt.take_commands();
+    assert_eq!(held.iter().filter(|c| c.kind == CommandKind::Order(Order::Stop { units: vec![id] })).count(), 1, "{held:?}");
     assert_eq!(rt.eval::<f64>("return A1.GetLocation(h).x").unwrap(), 40.0);
     rt.eval::<()>("A1.Stop(h, 1)").unwrap();
     let commands = rt.take_commands();
@@ -790,4 +820,43 @@ fn immediate_cloak_errors_name_their_own_call() {
     let s = scene();
     let message = fails(&s, "A1.ImmediateCloak(999999)");
     assert!(message.contains("A1.ImmediateCloak") && !message.contains("A1.Cloak"), "{message}");
+}
+
+/// LUA-17: a held call keeps its place: later orders and the end of a cineractive wait
+/// behind it, and all are replayed in call order after the receipt.
+#[test]
+fn held_calls_keep_the_script_order() {
+    use sta_sim::setup::Controller;
+    let s = scene();
+    let mut sim = Sim::from_setup(&game(&s.db));
+    let cfg = MissionConfig { content: Some(s.db.clone()), view: Some((*sim.view()).clone()), ..MissionConfig::default() };
+    let src = format!(
+        "A1.paths.Q = {{ {{x=40,y=0,z=0}} }}; A1.paths.R = {{ {{x=90,y=0,z=0}} }}; \
+         A1.CineractiveStart(); h = A1.BuildObject('fx_cruiser', 1, 'Q', 0); \
+         A1.Attack({a}, h, 1); A1.Goto({a}, 'R', 1); A1.CineractiveEnd()",
+        a = s.ids[0].0
+    );
+    let mut rt = MissionRuntime::from_source_with("order.lua", &src, 3, cfg);
+    assert!(rt.errors().is_empty(), "{:?}", rt.errors());
+    let first = rt.take_commands();
+    assert!(!first.iter().any(|c| matches!(c.kind, CommandKind::Order(_))), "nothing ordered before the receipt: {first:?}");
+    assert!(!presented_any(&first).contains(&Presentation::Cineractive { on: false, skippable: true }), "the end waits too");
+    let out = sim.step(&first);
+    rt.think(&out.view, &out.events, &mut Vec::new());
+    rt.eval::<bool>("return A1.Exists(h)").unwrap();
+    let kinds: Vec<CommandKind> = rt.take_commands().into_iter().map(|c| c.kind).collect();
+    let attack = kinds.iter().position(|k| matches!(k, CommandKind::Order(Order::Attack { .. }))).expect("attack");
+    let goto = kinds.iter().position(|k| matches!(k, CommandKind::Order(Order::Move { .. }))).expect("goto");
+    let end = kinds.iter().position(|k| matches!(k, CommandKind::Edit(Edit::Present(Presentation::Cineractive { on: false, .. })))).expect("end");
+    assert!(attack < goto && goto < end, "{kinds:?}");
+}
+
+fn presented_any(commands: &[Command]) -> Vec<Presentation> {
+    commands
+        .iter()
+        .filter_map(|c| match &c.kind {
+            CommandKind::Edit(Edit::Present(p)) => Some(p.clone()),
+            _ => None,
+        })
+        .collect()
 }

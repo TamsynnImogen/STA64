@@ -46,9 +46,10 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// (crafts in warp). Format 19 appends stuck-order watch rows; format 20
 /// adds their anchor, start distance and birth tick. Format 21 appends scripted
 /// orders (SIM-56) and per-craft switches (SIM-58). Format 22 appends mission
-/// attributes (SIM-54). Format 23 appends cosmetic seat factions.
+/// attributes (SIM-54). Format 23 appends cosmetic seat factions. Format 24
+/// adds the derelict latch to the subsystem rows (SIM-39).
 /// Only the current format is read.
-pub const FORMAT_VERSION: u16 = 23;
+pub const FORMAT_VERSION: u16 = 24;
 
 const HEADER: usize = 4 + 2 + 4 + 8;
 
@@ -350,6 +351,8 @@ impl EntityRec {
                 // Not in the snapshot: `from_snapshot` re-reads it from the
                 // definition once the entities exist.
                 warp_speed: Fixed::ZERO,
+                too_close_for_warp: Fixed::ZERO,
+                heading_close_for_warp: Fixed::ZERO,
             },
             hull: self.hull,
             crew: None,
@@ -519,6 +522,8 @@ impl Sim {
                 let Some(unit) = units.get_mut(id) else { continue };
                 if let Some(def) = db.unit(unit.def) {
                     unit.stats.warp_speed = def.movement.warp_speed;
+                    unit.stats.too_close_for_warp = def.movement.too_close_for_warp;
+                    unit.stats.heading_close_for_warp = def.movement.heading_close_for_warp;
                 }
             }
         }

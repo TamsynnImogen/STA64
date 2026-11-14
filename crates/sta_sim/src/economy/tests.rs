@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 const TICKS_PER_MINUTE: u32 = 30 * 60;
 
-fn v(x: i32, z: i32) -> Vec3 {
+pub(super) fn v(x: i32, z: i32) -> Vec3 {
     Vec3 {
         x: Fixed::from_int(x),
         y: Fixed::ZERO,
@@ -22,7 +22,7 @@ fn game() -> Sim {
     game_with_content(sta_content::fake::db())
 }
 
-fn game_with_content(content: sta_content::ContentDb) -> Sim {
+pub(super) fn game_with_content(content: sta_content::ContentDb) -> Sim {
     let seat = |id, control| PlayerSetup {
         id: PlayerId(id),
         team: TeamId(id),
@@ -59,7 +59,7 @@ fn cmd(player: PlayerId, seq: u32, kind: CommandKind) -> Command {
 }
 
 /// Spawn `odf` through the bench edit; the id it got.
-fn spawn(sim: &mut Sim, odf: &str, player: PlayerId, at: Vec3) -> EntityId {
+pub(super) fn spawn(sim: &mut Sim, odf: &str, player: PlayerId, at: Vec3) -> EntityId {
     let key = sim.content().unwrap().key(odf).unwrap();
     let e = crate::command::Edit::Spawn {
         odf: key,
@@ -73,7 +73,7 @@ fn spawn(sim: &mut Sim, odf: &str, player: PlayerId, at: Vec3) -> EntityId {
     id
 }
 
-fn mine(sim: &mut Sim, player: u8, miner: EntityId, node: EntityId) -> bool {
+pub(super) fn mine(sim: &mut Sim, player: u8, miner: EntityId, node: EntityId) -> bool {
     let o = Order::Mine {
         units: vec![miner],
         node,

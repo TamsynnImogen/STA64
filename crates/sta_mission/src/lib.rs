@@ -43,6 +43,7 @@ pub mod campaign;
 pub mod cineractive;
 pub mod converted;
 pub mod math;
+pub mod playthrough;
 pub mod progress;
 pub mod readiness;
 pub mod runtime;

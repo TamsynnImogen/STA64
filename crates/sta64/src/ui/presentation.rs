@@ -412,12 +412,7 @@ fn hide_notices_in_cineractive(cine: Res<CineractiveState>, mut roots: Query<&mu
     }
 }
 
-fn run_clock(time: Res<Time<Real>>, mut titles: ResMut<Titles>, mut fade: ResMut<FadeState>, state: Option<Res<State<crate::app::AppState>>>) {
-    // Titles and fades the sim raised while the game was still loading start when it is shown
-    // (the sim runs from the loading screen, and the opening's first fade in must be seen).
-    if state.is_some_and(|s| *s.get() == crate::app::AppState::Loading) {
-        return;
-    }
+fn run_clock(time: Res<Time<Real>>, mut titles: ResMut<Titles>, mut fade: ResMut<FadeState>) {
     let dt = time.delta_secs();
     if !titles.items.is_empty() {
         titles.tick(dt);
@@ -570,6 +565,25 @@ fn fixed(strings: Option<&Strings>, key: &str, fallback: &str) -> String {
     strings.map(|s| s.game_text(key)).filter(|t| *t != key).unwrap_or(fallback).to_owned()
 }
 
+/// A heading as the game's string table defines it. Rule: with a game table loaded, a key the table lacks
+/// means the game has no such heading and none is drawn (a game that does not define
+/// `GUI_OD_BRIEFING_SUMMARY` shows no summary heading). With no game table (an empty or absent one) there is
+/// nothing to say otherwise and `fallback` is used.
+fn heading_text(strings: Option<&Strings>, key: &str, fallback: &str) -> Option<String> {
+    match strings {
+        Some(s) if s.has_game_table() => Some(s.game_text(key)).filter(|t| *t != key).map(str::to_owned),
+        _ => Some(fallback.to_owned()),
+    }
+}
+
+/// Whether the briefing text already closes with `heading` as a line of its own (case and a trailing colon
+/// ignored), so the panel must not draw it a second time.
+fn text_ends_with_heading(body: &str, heading: &str) -> bool {
+    let norm = |t: &str| t.trim().trim_end_matches(':').trim_end().to_lowercase();
+    let want = norm(heading);
+    !want.is_empty() && body.lines().rev().find(|l| !l.trim().is_empty()).is_some_and(|l| norm(l) == want)
+}
+
 /// The panel is A2 stock's `objectivesPanelArea=192 80 1280 1024` of 1600x1200, the
 /// title and text 30/50 px in, the OK button at (952, 948) of 252x60 inside it.
 fn draw_panel(
@@ -607,14 +621,24 @@ fn draw_panel(
         if !c.title.is_empty() {
             p.spawn(head(c.title.clone(), theme.title));
         }
-        if c.message.is_none() && !c.body.is_empty() {
-            p.spawn(head(fixed(s, "GUI_OD_BRIEFING_SUMMARY", "BRIEFING SUMMARY:"), summary_colour));
+        if c.message.is_none()
+            && !c.body.is_empty()
+            && let Some(h) = heading_text(s, "GUI_OD_BRIEFING_SUMMARY", "BRIEFING SUMMARY:")
+        {
+            p.spawn(head(h, summary_colour));
         }
         if !c.body.is_empty() {
             p.spawn(line(c.body.clone(), theme.text));
         }
         if c.message.is_none() && !c.lines.is_empty() {
-            p.spawn(head(fixed(s, "GUI_OD_OBJECTIVES", "OBJECTIVES:"), summary_colour));
+            // Objective files may carry the heading themselves as the last line of the briefing text; then it is
+            // not drawn twice. Limit: the comparison is with the table's heading, or the English fallback when
+            // the table has none, so a translated game without the string but with a translated text line can
+            // still show two.
+            let heading = fixed(s, "GUI_OD_OBJECTIVES", "OBJECTIVES:");
+            if !text_ends_with_heading(&c.body, &heading) {
+                p.spawn(head(heading, summary_colour));
+            }
             for l in &c.lines {
                 let (mark, colour) = match l.state {
                     ObjectiveState::Active => ("* ", theme.text),
@@ -978,6 +1002,60 @@ mod tests {
         app.world_mut().resource_mut::<ObjectivesView>().visible = false;
         app.update();
         assert!(app.world_mut().query::<&PanelRoot>().iter(app.world()).next().is_none());
+    }
+
+    #[test]
+    fn an_objectives_heading_in_the_briefing_text_is_not_drawn_twice() {
+        assert!(text_ends_with_heading("TITLE TEXT\n\nOBJECTIVES:\n", "OBJECTIVES:"));
+        assert!(text_ends_with_heading("Go.\nobjectives", "OBJECTIVES:"));
+        assert!(!text_ends_with_heading("Go.", "OBJECTIVES:"));
+        assert!(!text_ends_with_heading("OBJECTIVES:\nGo.", "OBJECTIVES:"));
+        assert!(!text_ends_with_heading("", "OBJECTIVES:"));
+
+        let mut app = app();
+        app.insert_resource(Theme::default());
+        app.update();
+        let texts = |app: &mut App| app.world_mut().query::<&SpriteText>().iter(app.world()).map(|t| t.text.clone()).collect::<Vec<_>>();
+        let obj = [Objective { id: 1, title: "Find".into(), description: String::new(), state: ObjectiveState::Active }];
+        // An A1-shaped briefing: the text ends with the heading, then the goals follow.
+        app.world_mut().resource_mut::<ObjectivesView>().fill(&obj, Some(&ObjectiveBriefing { file: "f".into(), title: "Mission 1".into(), text: "Go.\n\nOBJECTIVES:".into(), notes: String::new() }));
+        app.world_mut().resource_mut::<ObjectivesView>().visible = true;
+        app.update();
+        let t = texts(&mut app);
+        assert_eq!(t.iter().filter(|x| x.contains("OBJECTIVES:")).count(), 1, "{t:?}");
+        assert!(t.iter().any(|x| x == "* Find"));
+        // An A2-shaped briefing (no heading in the text): the panel draws it.
+        app.world_mut().resource_mut::<ObjectivesView>().fill(&obj, Some(&ObjectiveBriefing { file: "f".into(), title: "Mission 1".into(), text: "Go.".into(), notes: String::new() }));
+        app.update();
+        let t = texts(&mut app);
+        assert_eq!(t.iter().filter(|x| x.contains("OBJECTIVES:")).count(), 1, "{t:?}");
+    }
+
+    #[test]
+    fn the_briefing_heading_is_drawn_only_when_the_game_has_a_string_for_it() {
+        let a2 = Strings::from_game("en", "\"GUI_OD_BRIEFING_SUMMARY\", \"SUMMARY:\",\n\"GUI_OD_OBJECTIVES\", \"GOALS:\"");
+        let a1 = Strings::from_game("en", "\"GUI_POP_OBJ_BUTTON\", \"Close\"");
+        assert_eq!(heading_text(Some(&a2), "GUI_OD_BRIEFING_SUMMARY", "X"), Some("SUMMARY:".into()));
+        assert_eq!(heading_text(Some(&a1), "GUI_OD_BRIEFING_SUMMARY", "X"), None);
+        assert_eq!(heading_text(None, "GUI_OD_BRIEFING_SUMMARY", "X"), Some("X".into()));
+        assert_eq!(heading_text(Some(&Strings::default()), "GUI_OD_BRIEFING_SUMMARY", "BRIEFING SUMMARY:"), Some("BRIEFING SUMMARY:".into()), "an empty table is no table");
+        let texts = |app: &mut App| app.world_mut().query::<&SpriteText>().iter(app.world()).map(|t| t.text.clone()).collect::<Vec<_>>();
+        let obj = [Objective { id: 1, title: "Find".into(), description: String::new(), state: ObjectiveState::Active }];
+        for (strings, summary) in [(a2, true), (a1, false), (Strings::default(), false)] {
+            let strings_is_empty = !strings.has_game_table();
+            let mut app = app();
+            app.insert_resource(Theme::default());
+            app.insert_resource(strings);
+            app.update();
+            app.world_mut().resource_mut::<ObjectivesView>().fill(&obj, Some(&ObjectiveBriefing { file: "f".into(), title: "M".into(), text: "Go.".into(), notes: String::new() }));
+            app.world_mut().resource_mut::<ObjectivesView>().visible = true;
+            app.update();
+            let t = texts(&mut app);
+            assert!(t.iter().any(|x| x == "Go."), "{t:?}");
+            assert_eq!(t.iter().any(|x| x == "SUMMARY:"), summary, "{t:?}");
+            // An empty table is no table: the English fallback heading shows.
+            assert_eq!(t.iter().any(|x| x == "BRIEFING SUMMARY:"), strings_is_empty, "{t:?}");
+        }
     }
 
     #[test]

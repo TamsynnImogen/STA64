@@ -172,17 +172,20 @@ fn fade(lua: &Lua, ctx: &Shared, name: &'static str, out: bool) -> mlua::Result<
         let delay = seconds(name, "delay", &args[2])?;
         let white = finite(name, "colour selector", &args[3])? != 0.0;
         let dont_wait = flag(name, &args[4])?;
+        let rgb = if white { [255; 3] } else { [0; 3] };
+        let fade = Presentation::Fade { out, seconds: Fixed::from_f64(duration), rgb };
         if delay == 0.0 {
-            let rgb = if white { [255; 3] } else { [0; 3] };
-            present(&c, name, Presentation::Fade { out, seconds: Fixed::from_f64(duration), rgb })?;
+            present(&c, name, fade)?;
         } else {
-            // The typed fade has no start delay: keep every argument.
+            // The typed fade has no start delay: the request is kept with every argument, and the
+            // fade is presented when it starts (LUA-17).
             let arguments = vec![
                 Arg::Num(Fixed::from_f64(duration)),
                 Arg::Num(Fixed::from_f64(delay)),
                 Arg::Bool(white),
             ];
             submit(&c, name, arguments)?;
+            c.borrow_mut().present_later(delay, fade);
         }
         if !dont_wait {
             let due = c.borrow().view.tick + ((duration + delay) * f64::from(TICK_HZ)).ceil() as u64;

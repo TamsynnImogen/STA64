@@ -1,7 +1,7 @@
 # Modding abstraction: ideas (pre-RFC, 2026-11-11)
 
 > **Background only.** The binding decisions are in
-> [MODDING_DECISIONS.md](MODDING_DECISIONS.md). Where this file disagrees with
+> [ADR 0004](adr/0004-modding-v1.md). Where this file disagrees with
 > it (including the "ADOPTED PLAN" section below), the decisions file wins.
 
 Status: brainstorm, not a decision. Written to be resumed later. The

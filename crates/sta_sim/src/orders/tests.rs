@@ -335,3 +335,97 @@ fn another_players_order_cannot_cancel_a_scripted_order_and_assist_skips_scripte
     run(&mut sim, vec![order(1, 4, Order::Patrol { units: vec![s], points: vec![] })], 1);
     assert!(matches!(sim.scripted.job(s), Some(crate::orders::Job::Scout { .. })));
 }
+
+/// SIM-64: an Armada I scout (impulse 20, warp 100, `tooCloseForWarp` 10,
+/// `headingCloseEnoughForWarp` 30) on a map-wide plain move warps; the same
+/// ship without the keys (Armada II physics) does not.
+mod auto_warp {
+    use super::*;
+    use sta_content::{ContentDb, MoveStats};
+
+    fn scout_game(keys: bool) -> (Sim, EntityId) {
+        let base = sta_content::fake::db();
+        let mut b = ContentDb::builder().profile(base.profile()).features(base.features().clone());
+        for w in base.weapons().cloned() {
+            b = b.weapon(w);
+        }
+        for mut u in base.units().cloned() {
+            if u.odf == "fx_frigate" {
+                u.movement = MoveStats::from_f32(20.0, 1.0, 1.0, 1.0, 1.0);
+                u.movement.warp_speed = n(100);
+                if keys {
+                    u.movement.too_close_for_warp = n(10);
+                    u.movement.heading_close_for_warp = n(30);
+                }
+            }
+            b = b.unit(u);
+        }
+        let db = Arc::new(b.build().unwrap());
+        let mut sim = approach_tests::sim_with(Arc::clone(&db));
+        let s = sim.spawn_def(db.key("fx_frigate").unwrap(), PlayerId(1), v(0, 0), AHEAD).unwrap();
+        (sim, s)
+    }
+
+    /// Top speed and ticks to arrive (within 60) for a plain move of `dist`.
+    fn go(keys: bool, dist: i32, secs: u32) -> (Fixed, Option<u32>) {
+        let (mut sim, s) = scout_game(keys);
+        let to = v(0, dist);
+        let (mut top, mut arrived) = (Fixed::ZERO, None);
+        for i in 0..secs * HZ {
+            WorldSource::step(&mut sim, &if i == 0 { vec![order(1, 0, Order::Move { units: vec![s], to, queue: false })] } else { vec![] });
+            top = top.max(sim.unit(s).unwrap().speed);
+            if arrived.is_none() && flat(pos(&sim, s), to) < n(60) {
+                arrived = Some(i);
+            }
+        }
+        (top, arrived)
+    }
+
+    #[test]
+    fn a_long_plain_move_warps_with_the_keys_and_never_without() {
+        let (top, arrived) = go(true, 3000, 60);
+        assert!(top > n(90), "no warp {top:?}");
+        // 3000 units at warp 100: about 30 s plus the ramp; at impulse 20 it would take 150 s.
+        let secs = arrived.expect("arrives") / HZ;
+        assert!((25..=45).contains(&secs), "{secs} s");
+        let (top, arrived) = go(false, 3000, 60);
+        assert!(top <= n(21) && arrived.is_none(), "{top:?} {arrived:?}");
+    }
+
+    #[test]
+    fn a_short_plain_move_stays_at_impulse() {
+        // Inside the engine's drop-out lead the craft never warps.
+        let (top, _) = go(true, 50, 20);
+        assert!(top <= n(21), "{top:?}");
+    }
+
+    #[test]
+    fn a_goal_off_the_bow_is_reached_not_missed() {
+        let (mut sim, s) = scout_game(true);
+        let to = v(1500, 3000); // about 27 degrees off the bow
+        for i in 0..80 * HZ {
+            WorldSource::step(&mut sim, &if i == 0 { vec![order(1, 0, Order::Move { units: vec![s], to, queue: false })] } else { vec![] });
+        }
+        assert!(flat(pos(&sim, s), to) < n(80), "{:?}", flat(pos(&sim, s), to));
+        assert!(sim.scripted.job(s).is_none(), "warp job outlives the move");
+    }
+
+    #[test]
+    fn a_new_order_ends_the_warp_and_a_snapshot_keeps_it() {
+        let (mut sim, s) = scout_game(true);
+        let cmd = order(1, 0, Order::Move { units: vec![s], to: v(0, 3000), queue: false });
+        for i in 0..10 * HZ {
+            WorldSource::step(&mut sim, &if i == 0 { vec![cmd.clone()] } else { vec![] });
+        }
+        assert!(sim.unit(s).unwrap().speed > n(90));
+        let db = Arc::clone(sim.content.as_ref().unwrap());
+        let mut loaded = Sim::from_snapshot(&sim.snapshot(), Some(db)).unwrap();
+        assert_eq!(loaded.digest(), sim.digest());
+        for _ in 0..HZ {
+            assert_eq!(WorldSource::step(&mut sim, &[]).view.digest, WorldSource::step(&mut loaded, &[]).view.digest);
+        }
+        // A stop leaves warp: the speed falls to nothing and stays there.
+        run(&mut sim, vec![order(1, 1, Order::Stop { units: vec![s] })], 30 * HZ);
+        assert!(sim.unit(s).unwrap().speed < n(1));
+    }
+}

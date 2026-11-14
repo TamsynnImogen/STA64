@@ -210,7 +210,12 @@ Refit's names (`fire.end obj=shooter`, `cloak.done obj=warbird`).
     each other's files; `session stop` exits 1 if the source install changed.
   - `pair <pair> --game a2|roots`: one description on the original game and
     on STA64, compared in sim seconds ("Paired scenes", below).
-  - Not yet: frames from a session, `Take a screenshot`/`Expect shots` steps.
+  - `session start --render [--frame-size WxH]` gives the session a renderer
+    (a GPU; without one the start fails and says so): `drive --session ID
+    "frame NAME"` writes `<session>/frames/NAME.png` and answers `frame NAME
+    tick T <path> pixels <hash>` once the file is there. `NAME` is letters,
+    digits, `-`, `_` and `.`. Without `--render` the command answers
+    `! unsupported: frame`.
 
 - **Frames** (`sta64 --headless --frames 0,100 --frame-dir D --frame-size WxH`,
   `crates/sta64/src/bench/frames.rs`): a windowless render app draws into an
@@ -221,6 +226,41 @@ Refit's names (`fire.end obj=shooter`, `cloak.done obj=warbird`).
   `camera`: the bench has no install to load models from, so the game's own
   renderers join when they can run without one. Without a GPU adapter `sta64`
   exits 77 ("no GPU adapter") and `sta-bench`/the tests skip with a message.
+  **A session frame is the same picture:** `frame NAME` in a session started
+  with `--render` (`sta64 --control stdio --frame-dir D`, no `--frames`) holds
+  the sim, lets the picture settle for the same frames and reads the same
+  offscreen target, so at tick T it is byte for byte the `--frames T` frame of
+  the same scene and camera (`session_frames_equal_the_frames_option`, a GPU
+  test). Both are drawn after the same 5 warm-up and 8 settle frames; a session
+  that ran its ticks in the same frames matches (planet scenes byte for byte,
+  scenes with beams within the usual 1-3 levels); held frames do not advance the
+  animation clock. Two shots taken at the same tick are the same file.
+
+  **Screenshot steps** (tier 2, `sta-bench run NAME --tier 2`):
+
+  ```markdown
+  1. Take a screenshot called "first"
+  2. Run 100 ticks
+  3. Take a screenshot called "later"
+  4. Expect shots "first" and "later" to match within 1
+  ```
+
+  At tier 1 (`check`, `cargo test`) `Take a screenshot` records the name and
+  the tick (names are unique; letters, digits, `-`, `_`, `.`) and
+  `Expect shots` fails only when it names a screenshot not taken before it;
+  both are reported as skipped. With `--tier 2` the in-process run is followed
+  by one `sta64 --headless --frames` run at the recorded ticks (together with
+  `--frames`/the default first and last tick), the frames are saved in the case
+  report as `frames/NAME.png`, and each `Expect shots` is judged: the mean
+  absolute difference over all channels (0..255) of the two frames must be at
+  most `X` (default 0, identical); the report line gives the mean, the largest
+  difference and the share of pixels that differ. Without a GPU adapter the
+  steps stay skipped. The frames are drawn from the scene, not from the steps:
+  orders and edits a scenario gives with `Order`/`Scene "..."` steps are not
+  replayed in the `sta64` process, so put what a frame needs in the scene file.
+  `Dump the frame called` is still skipped. A screenshot is always the in-app
+  offscreen frame, never a capture of the screen. Example:
+  `bench/scenarios/shots-planet.md`.
 
 **Two tiers.** Most checks (orders, combat, economy, AI, missions) are
 **tier 1**: `sta_bench` + `sta_sim` in-process, milliseconds per case, run by
@@ -817,10 +857,10 @@ Cost is attributed **by difference**: `--variants base,no-rocks,no-nebula+no-roc
 while it runs touches every variant alike; the table gives each variant's median of round means, the
 spread (min-max) to read it against, and the difference from `base`. Toggles: `no-rocks`,
 `no-planets`, `no-nebula`, `no-sky`, `no-shadows`, `no-fog`, `std-hulls` (Bevy's PBR instead of the
-hull shader), `msaa-off`, `msaa-2`, `no-prepass`, `neb-steps8`, and the measurement-only
+hull shader), `msaa-off`, `msaa-2`, `no-prepass`, `neb-steps8`, `neb-steps12`, `neb-full` / `neb-half` / `neb-quarter` (the nebula march's resolution, RND-34), and the measurement-only
 `freeze-rocks` / `freeze-hulls` (materials not rewritten when the camera or a rock moves, which
 shows what those writes cost). The quality settings are `render/quality.rs`' `RenderQuality`
-(`STA64_SHADOWS=0`, `STA64_MSAA=1|2|4`, `STA64_NEBULA_STEPS=4..32`). Record the machine with every number:
+(`STA64_SHADOWS=0`, `STA64_MSAA=1|2|4`, `STA64_NEBULA_SCALE=1|2|4`, `STA64_NEBULA_STEPS=4..32`). Record the machine with every number:
 the report carries the load average at the start and end and the competing processes (other `sta64`
 runs, compilers); on a loaded machine trust the differences, not the absolutes, and run again when
 the spread is wide. Two sizes (1920x1080 against 3440x1440) separate fill-rate from CPU cost: a
