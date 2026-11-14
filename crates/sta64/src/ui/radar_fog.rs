@@ -17,6 +17,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::image::ImageSampler;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+use bevy::ui::widget::NodeImageMode;
 use sta_vfs::Vfs;
 
 use super::radar::{RadarMap, RadarSquare, RadarState};
@@ -124,6 +125,14 @@ pub fn fog_pixels(grid: &FogGrid, map: &RadarMap, colours: &FogColours, side: us
 #[derive(Component)]
 pub struct RadarFog;
 
+/// The picture as a UI image. `Stretch`, never the default `Auto`: `Auto` draws the square
+/// 128 x 128 picture contained and centred in its box, so wherever the box is not square
+/// (any window wider or narrower than the HUD sheet's canvas stretches the stock display
+/// area) the shroud no longer lay over the map the blips and the background sprite fill.
+fn fog_image(handle: Handle<Image>) -> ImageNode {
+    ImageNode { image: handle, image_mode: NodeImageMode::Stretch, ..default() }
+}
+
 /// (Re)read the colours when the mounted install changes.
 fn load_colours(vfs: Option<Res<Mounted>>, mut colours: ResMut<FogColours>) {
     if let Some(vfs) = vfs
@@ -171,7 +180,7 @@ fn paint_fog(
             let e = commands
                 .spawn((
                     RadarFog,
-                    ImageNode::new(handle),
+                    fog_image(handle),
                     Node { position_type: PositionType::Absolute, left: Val::Px(0.0), top: Val::Px(0.0), width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
                     bevy::picking::Pickable::IGNORE,
                 ))
