@@ -197,8 +197,7 @@ fn wireframe_layers(commands: &mut Commands, root: Entity, r: R, model: &str) {
 /// Used only when the single resource panel is absent. The stock texts show crew and
 /// dilithium as plain whole numbers and officers as "in use / available" (the
 /// `GUI_RD_OFFICERS_VTOOLTIP` string says so); the number format itself is assumed.
-const SEPARATE_RESOURCES: [(&str, usize, &str); 3] =
-    [("dilithium", 2, "noDilithium"), ("crew", 0, "noCrew"), ("officer", 1, "noOfficers")];
+const SEPARATE_RESOURCES: [(&str, usize, &str); 3] = super::SEPARATE_RESOURCES;
 
 fn spawn_separate_resources(commands: &mut Commands, root: Entity, layout: &StockLayout, feed: &HudFeed, theme: &Theme) {
     for (prefix, id, flag) in SEPARATE_RESOURCES {
@@ -227,8 +226,11 @@ fn spawn_separate_resources(commands: &mut Commands, root: Entity, layout: &Stoc
 }
 
 fn spawn_resource(commands: &mut Commands, root: Entity, layout: &StockLayout, feed: &HudFeed, theme: &Theme) {
-    let Some(area) = layout.panel("resource") else {
+    if super::separate_resources(layout) {
         spawn_separate_resources(commands, root, layout, feed, theme);
+        return;
+    }
+    let Some(area) = layout.panel("resource") else {
         return;
     };
     let origin = Vec2::new(area.x, area.y);

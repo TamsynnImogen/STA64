@@ -230,31 +230,32 @@ fn personnel_uses_inherited_cfg_rectangles_colours_and_live_values() {
     assert_eq!(resource_label(&mut app, 0).unwrap().1, "0");
 }
 
+/// An authored sheet (own values) with the Armada I shape: no `resourcePanelArea`, three
+/// panels each with a background piece, an icon and a panel-relative text area.
 const A1_RESOURCES: &str = "\
 screenWidth = 640
 screenHeight = 480
-officerPanelArea = 559 0 81 16
-officerBackgroundPanel = \"officer_panel\"
-officerBackgroundPanelArea = 0 0 81 16
+officerPanelArea = 500 2 80 14
+officerBackgroundPanel = \"res_bg_c\"
 officerBackgroundPanelSize = 1
-officerBackgroundPanel_0 = 0 0 81 16
-officerIcon = \"officer_icon\"
-officerIconArea = 2 3 10 10
-officerTextArea = 16 2 63 12
-crewPanelArea = 477 0 81 16
-crewBackgroundPanel = \"crew_panel\"
+officerBackgroundPanel_0 = 0 0 80 14
+officerIcon = \"res_icon_c\"
+officerIconArea = 3 2 9 9
+officerTextArea = 14 1 60 13
+crewPanelArea = 400 2 80 14
+crewBackgroundPanel = \"res_bg_b\"
 crewBackgroundPanelSize = 1
-crewBackgroundPanel_0 = 0 0 81 16
-crewIcon = \"crew_icon\"
-crewIconArea = 5 3 4 10
-crewTextArea = 16 2 63 12
-dilithiumPanelArea = 395 0 81 16
-dilithiumBackgroundPanel = \"dilithium_panel\"
+crewBackgroundPanel_0 = 0 0 80 14
+crewIcon = \"res_icon_b\"
+crewIconArea = 3 2 9 9
+crewTextArea = 14 1 60 13
+dilithiumPanelArea = 300 2 80 14
+dilithiumBackgroundPanel = \"res_bg_a\"
 dilithiumBackgroundPanelSize = 1
-dilithiumBackgroundPanel_0 = 0 0 81 16
-dilithiumIcon = \"dilithium_icon\"
-dilithiumIconArea = 2 3 10 10
-dilithiumTextArea = 16 2 63 12
+dilithiumBackgroundPanel_0 = 0 0 80 14
+dilithiumIcon = \"res_icon_a\"
+dilithiumIconArea = 3 2 9 9
+dilithiumTextArea = 14 1 60 13
 ";
 
 fn single_file_config(raw: &str) -> HudConfig {
@@ -273,7 +274,8 @@ fn armada1_separate_panels_draw_three_readouts_with_live_values() {
     // 640x480 canvas mapped to the 1920x1080 test viewport: x scale 3, y scale 2.25.
     let (_, dilithium, _, node) = resource_label(&mut app, 2).unwrap();
     assert_eq!(dilithium, "3000");
-    assert_eq!((node.left, node.top), (Val::Px((395.0_f32 + 16.0) * 3.0), Val::Px(5.0)));
+    // Panel origin (300*3, round(2*2.25)) plus the text area (14*3, round(1*2.25)).
+    assert_eq!((node.left, node.top), (Val::Px(942.0), Val::Px(7.0)));
     assert_eq!(resource_label(&mut app, 0).unwrap().1, "");
     assert_eq!(resource_label(&mut app, 1).unwrap().1, "0/0");
     set_personnel(&mut app, Some(Fixed::from_int(4000)), [Fixed::from_int(7), Fixed::from_int(100)]);
@@ -307,6 +309,12 @@ fn installed_armada1_guis_draw_three_resource_readouts_inside_the_window() {
                 else {
                     panic!("{cfg_name} id {id}: not pixel placed");
                 };
+                // The node sits where the cfg puts this race's text area inside its panel.
+                let stock = StockLayout::new(&layout, Vec2::new(w, h));
+                let prefix = ["crew", "officer", "dilithium"][id];
+                let area = stock.panel(prefix).unwrap_or_else(|| panic!("{cfg_name} {prefix} panel"));
+                let want = stock.at(Vec2::new(area.x, area.y), &format!("{prefix}TextArea")).unwrap();
+                assert_eq!((x, y, nw, nh), (want.x, want.y, want.w, want.h), "{cfg_name} {prefix} text area at {aspect}");
                 assert!(nw >= 20.0 && nh >= 8.0, "{cfg_name} id {id}: {nw}x{nh}");
                 assert!(x >= 0.0 && y >= 0.0 && x + nw <= w + 0.5 && y + nh <= h, "{cfg_name} id {id}: {x},{y} {nw}x{nh} in {w}x{h}");
             }
@@ -316,8 +324,7 @@ fn installed_armada1_guis_draw_three_resource_readouts_inside_the_window() {
 
 #[test]
 fn armada1_separate_panels_respect_no_flags_and_missing_text_areas() {
-    // A duplicate key does not override the first, so replace the authored line.
-    let raw = A1_RESOURCES.replace("dilithiumTextArea = 16 2 63 12", "dilithiumTextArea = 0 0 0 0") + "noCrew = 1\n";
+    let raw = A1_RESOURCES.replace("dilithiumTextArea = 14 1 60 13", "dilithiumTextArea = 0 0 0 0") + "noCrew = 1\n";
     let mut app = app_with_content_and_config(content(), single_file_config(&raw), UiProfile::Armada2);
     assert!(resource_label(&mut app, 0).is_none());
     assert!(resource_label(&mut app, 2).is_none());
@@ -975,3 +982,21 @@ fn disabled_info_variant_does_not_leave_invisible_stats_input_regions() {
 
 #[path = "identity_tests.rs"]
 mod identity_tests;
+
+#[test]
+fn armada1_resource_readouts_are_solid_for_the_pointer() {
+    let app = app_with_content_and_config(content(), single_file_config(A1_RESOURCES), UiProfile::Armada2);
+    let state = app.world().resource::<StockState>();
+    // Canvas 640x480 on the 1920x1080 test viewport: dilithium panel (300,2) 80x14 -> x 900..1140.
+    for x in [910.0, 1250.0, 1590.0] {
+        assert!(state.solid.iter().any(|r| r.contains(Vec2::new(x, 10.0))), "x {x}");
+    }
+    assert!(!state.solid.iter().any(|r| r.contains(Vec2::new(700.0, 10.0))));
+}
+
+#[test]
+fn a_zero_resource_panel_area_hides_the_strip_instead_of_taking_the_armada1_path() {
+    let raw = format!("{A1_RESOURCES}resourcePanelArea = 0 0 0 0\n");
+    let mut app = app_with_content_and_config(content(), single_file_config(&raw), UiProfile::Armada2);
+    assert_eq!(resource_label_count(&mut app), 0);
+}

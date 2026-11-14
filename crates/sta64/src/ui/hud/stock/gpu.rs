@@ -530,11 +530,20 @@ fn installed_armada1_resource_readouts_render_on_gpu() {
         let hud_feed = feed(&vfs, GameOptions::default());
         let player = hud_feed.view.player(hud_feed.player).expect("capture player");
         let whole = |value: Fixed| (value.to_bits() / Fixed::ONE.to_bits()).to_string();
+        // Expected values come from the content data, not from the view the HUD reads, so lost
+        // starting values (the legacy RTS_CFG.h start, the officer cap) cannot pass as "" == "".
+        // The feed is one Federation start for every cfg: only the layout differs per race.
+        let rules = hud_feed.content.as_ref().expect("content").rules();
+        let start = rules.legacy_start();
+        let cap = rules.officer_limit(GameOptions::default().officer_limit as usize).expect("officer cap");
+        let used = whole(player.officers[0]);
+        assert!(!used.is_empty());
         let expected = [
-            (2_usize, player.resources.first().map(|v| whole(*v)).unwrap_or_default()),
-            (0, player.crew.map(whole).unwrap_or_default()),
-            (1, format!("{}/{}", whole(player.officers[0]), whole(player.officers[1]))),
+            (2_usize, start.dilithium.expect("legacy start dilithium").to_string()),
+            (0, start.crew.expect("legacy start crew").to_string()),
+            (1, format!("{used}/{cap}")),
         ];
+        assert!(expected.iter().all(|(_, v)| !v.is_empty()));
         eprintln!("{label}: expected readouts {expected:?}");
         let mut app = App::new();
         app.add_plugins(
@@ -626,19 +635,22 @@ fn installed_armada1_resource_readouts_render_on_gpu() {
         }
         let shot = frames.lock().unwrap().first().cloned().unwrap_or_else(|| panic!("{label}: no GPU capture"));
         let rgba = shot.try_into_dynamic().expect("GPU image conversion").to_rgba8();
-        // Pixels are lit inside each readout's text rectangle.
+        // The numerals are drawn in the text colour inside each text rectangle (panel art
+        // there is dark or not that colour), so lost text fails.
+        let text_colour = UiProfile::Armada2.theme().text.to_srgba();
+        let want = [text_colour.red, text_colour.green, text_colour.blue].map(|v| (v * 255.0).round() as i16);
         for prefix in ["officer", "crew", "dilithium"] {
             let area = stock.panel(prefix).expect("panel");
             let r = stock.at(Vec2::new(area.x, area.y), &format!("{prefix}TextArea")).expect("text area");
             let k = size.y as f32 / 1080.0;
             let (x0, x1) = ((r.x * k).max(0.0) as u32, ((r.x + r.w) * k).min(size.x as f32) as u32);
             let (y0, y1) = ((r.y * k).max(0.0) as u32, ((r.y + r.h) * k).min(size.y as f32) as u32);
-            let lit = (y0..y1).flat_map(|y| (x0..x1).map(move |x| (x, y))).filter(|&(x, y)| {
+            let matching = (y0..y1).flat_map(|y| (x0..x1).map(move |x| (x, y))).filter(|&(x, y)| {
                 let p = rgba.get_pixel(x, y);
-                p[0] > 40 || p[1] > 40 || p[2] > 40
+                (0..3).all(|c| (p[c] as i16 - want[c]).abs() <= 48)
             }).count();
-            eprintln!("{label}: {prefix} text rect {x0}..{x1} x {y0}..{y1}: {lit} lit pixels");
-            assert!(lit >= 2, "{label}: {prefix} readout shows no pixels");
+            eprintln!("{label}: {prefix} text rect {x0}..{x1} x {y0}..{y1}: {matching} text-colour pixels");
+            assert!(matching >= 8, "{label}: {prefix} readout shows no text-colour pixels");
         }
         if let Ok(dir) = std::env::var("STA64_HUD_CAPTURE_DIR") {
             std::fs::create_dir_all(&dir).unwrap();

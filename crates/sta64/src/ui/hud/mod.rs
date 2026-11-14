@@ -328,7 +328,8 @@ fn host(
         }
     }
     for mut n in &mut notices {
-        let top = Val::Px(stock.layout.as_ref().and_then(|l| l.panel("resource")).map_or_else(|| l.notices_top(), |r| r.bottom()+8.0));
+        let strip = stock.layout.as_ref().and_then(|g| stock::resource_panels(g).into_iter().map(|r| r.bottom()).reduce(f32::max));
+        let top = Val::Px(strip.map_or_else(|| l.notices_top(), |bottom| bottom + 8.0));
         if n.top != top {
             n.top = top;
         }
