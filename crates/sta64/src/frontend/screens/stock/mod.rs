@@ -1,6 +1,7 @@
 //! The stock-layout front end (UI-22): main, single player, Instant Action (game
-//! setup) and options, arranged as the stock games arrange them and drawn with the
-//! widget kit (UI-21) in the active profile's look, never the stock art. Replaces
+//! setup) and options. The main menu follows the user's left-column reference;
+//! the other screens follow the stock arrangement and use the widget kit (UI-21)
+//! in the active profile's look, never the stock art. Replaces
 //! UI-07's layouts as the default ([`ScreenLayout::Stock`]); map select and mod
 //! select keep UI-07's list screens, and [`ScreenLayout::Plain`] keeps the old
 //! layouts of every screen.
@@ -18,12 +19,16 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
 pub mod layout;
+mod main_menu;
 mod screens;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod gpu;
 
 pub use layout::{Grade, Region, Slot};
 pub use screens::{Placed, SeatDrop, StockBoxNode, cap, options_body, preview_dots, race_ids, spawn};
+pub(crate) use main_menu::paint as paint_main_menu;
 
 use super::{Col, Screen, ScreenData, SeatControl, SetupDraft};
 use crate::ui::theme::DropdownChanged;

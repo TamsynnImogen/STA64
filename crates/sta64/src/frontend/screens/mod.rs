@@ -189,7 +189,13 @@ impl Plugin for ScreensPlugin {
                     .after(crate::ui::profile::ProfileSync)
                     .after(on_settings)
                     .run_if(in_state(AppState::FrontEnd)),
-            );
+            )
+            .add_systems(Update, stock::paint_main_menu
+                .in_set(GameSet::Ui)
+                .after(rebuild)
+                .after(crate::ui::theme::WidgetPaint)
+                .after(crate::ui::theme::KitSet)
+                .run_if(in_state(AppState::FrontEnd)));
     }
 }
 

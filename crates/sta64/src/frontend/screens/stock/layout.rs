@@ -6,8 +6,8 @@
 //! positions, so nothing here can be read at run time. The numbers marked
 //! [`Grade::Measured`] are the design coordinates Refit (the user's own first-party
 //! mod, `ui/MENUS.md` and its `menus/screens/`) measured on Armada II's running
-//! screens: Game Setup's table, map window and bottom row, the main menu's button
-//! points, the single player cards. Everything marked [`Grade::Arranged`] is a
+//! screens: Game Setup's table, map window and bottom row, and the single player
+//! cards. The main menu is an authored arrangement. Everything marked [`Grade::Arranged`] is a
 //! choice of ours made to fit the controls this front end has (our own look, our own
 //! widgets); it is not measured. Fleet Operations' and Armada I's screens are **not
 //! measured**: the same regions are used for every game until they are.
@@ -84,8 +84,12 @@ pub fn fit_box(avail: Vec2) -> Vec2 {
 pub enum Slot {
     // Main menu.
     MainSinglePlayer,
+    MainKicker,
+    MainTitle,
+    MainDivider,
     MainInstantAction,
     MainMultiplayer,
+    MainMapEditor,
     MainOptions,
     MainReplayIntro,
     MainCredits,
@@ -140,15 +144,20 @@ pub fn region(slot: Slot) -> Region {
         next - COL_X[i] - 10.0
     };
     match slot {
-        // Main menu: Refit measured a point inside each stock button; centring on it and the sizes are ours.
-        Slot::MainSinglePlayer => centred(141.0, 111.0, 230.0, 140.0, Grade::Arranged),
-        Slot::MainInstantAction => centred(641.0, 89.0, 230.0, 140.0, Grade::Arranged),
-        Slot::MainMultiplayer => centred(161.0, 478.0, 230.0, 140.0, Grade::Arranged),
-        Slot::MainOptions => centred(522.0, 433.0, 130.0, 30.0, Grade::Arranged),
-        Slot::MainReplayIntro => centred(528.0, 533.0, 130.0, 30.0, Grade::Arranged),
-        Slot::MainCredits => centred(725.0, 533.0, 130.0, 30.0, Grade::Arranged),
-        Slot::MainExit => centred(725.0, 439.0, 130.0, 30.0, Grade::Arranged),
-        Slot::MainMods => a(24.0, 560.0, 130.0, 30.0),
+        // Main menu: our own left-aligned list. The 1920x1080 reference informs
+        // the arrangement, but these design-space regions are not stock measurements.
+        Slot::MainKicker => a(64.0, 128.0, 250.0, 23.0),
+        Slot::MainTitle => a(63.0, 153.0, 330.0, 37.0),
+        Slot::MainDivider => a(64.0, 190.5, 122.0, 2.0),
+        Slot::MainSinglePlayer => main_row(0),
+        Slot::MainInstantAction => main_row(1),
+        Slot::MainMultiplayer => main_row(2),
+        Slot::MainMapEditor => main_row(3),
+        Slot::MainMods => main_row(4),
+        Slot::MainOptions => main_row(5),
+        Slot::MainReplayIntro => main_row(6),
+        Slot::MainCredits => main_row(7),
+        Slot::MainExit => main_row(8),
         // Single player: four cards in the quadrants the stock panels use (art rectangles
         // measured; clipped above the footer here), the footer below.
         Slot::Card(0) => m(24.0, 16.0, 330.0, 205.0),
@@ -182,8 +191,8 @@ pub fn region(slot: Slot) -> Region {
     }
 }
 
-fn centred(cx: f32, cy: f32, w: f32, h: f32, grade: Grade) -> Region {
-    Region { x: cx - w / 2.0, y: cy - h / 2.0, w, h, grade }
+fn main_row(index: usize) -> Region {
+    a(72.0, 208.0 + index as f32 * (110.0 / 3.0), 285.0, 32.0)
 }
 
 fn row(col: usize, i: usize) -> Region {
