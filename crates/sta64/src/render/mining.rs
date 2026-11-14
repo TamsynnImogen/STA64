@@ -284,10 +284,13 @@ mod tests {
             Hardpoint { weapon: DefRef::new("m_other"), node: "hp01".into(), arc: None },
             Hardpoint { weapon: DefRef::new("m_mine"), node: "hp02".into(), arc: None },
         ];
+        let mut plain = UnitDef::new("m_plain", "freighter");
+        plain.movement = MoveStats::from_f32(60.0, 1.0, 1.0, 1.0, 1.0);
         ContentBuilder::default()
             .weapon(mine)
             .weapon(other)
             .unit(miner)
+            .unit(plain)
             .unit(UnitDef::new("m_moon", "planet"))
             .unit(UnitDef::new("m_station", "starbase"))
             .build()
@@ -338,6 +341,78 @@ mod tests {
             app.world_mut().resource_mut::<SimEntities>().0.insert(EntityId(id), t);
         }
         (app, e)
+    }
+
+    /// One freighter (`def`) that starts unloading at tick 10 at a station at (0, 0, 600).
+    fn unloading(def: &str, rails: &str) -> (App, Entity) {
+        let db = db();
+        let text = format!(
+            "{{ units: [
+                {{ id: 2, def: \"{def}\", owner: 0, hull: 1, rails: [{rails}] }},
+                {{ id: 3, def: \"m_station\", owner: 0, hull: 1, rails: [{{ at: 0, pos: {{ x: 0, y: 0, z: 600 }} }}] }},
+            ], events: [
+                {{ at: 10, event: {{ MinerPhase: {{ id: 2, phase: \"Unloading\", node: 3, dock: {{ x: 0, y: 0, z: 600 }} }} }} }},
+            ] }}"
+        );
+        let src = ScriptedSource::from_json5(&text, &db).unwrap();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / TICK_HZ as f64)))
+            .add_plugins(SimLinkPlugin)
+            .insert_resource(ContentRes(std::sync::Arc::new(db)))
+            .insert_resource(SimLink::new(Box::new(src), Box::new(LocalRouter::new()), PlayerId(0)))
+            .add_plugins(WeaponFxPlugin)
+            .add_systems(Update, crate::render::units::place.in_set(GameSet::Interpolate));
+        configure_sets(&mut app);
+        let e = app.world_mut().spawn((SimEntity(EntityId(2)), Transform::IDENTITY)).id();
+        app.world_mut().resource_mut::<SimEntities>().0.insert(EntityId(2), e);
+        let t = app.world_mut().spawn((SimEntity(EntityId(3)), Transform::from_translation(to_bevy([0.0, 0.0, 600.0])))).id();
+        app.world_mut().resource_mut::<SimEntities>().0.insert(EntityId(3), t);
+        (app, e)
+    }
+
+    /// An armed freighter that starts unloading beyond the glide limit is drawn where the sim has it.
+    #[test]
+    fn an_armed_freighter_far_from_the_berth_is_not_glided() {
+        let (mut app, e) = unloading("m_miner", "{ at: 0, pos: { x: 0, y: 0, z: 300 } }");
+        for frame in 0..90 {
+            app.update();
+            if frame > 15 {
+                let p = xz(&app, e);
+                assert!(p.distance(Vec2::new(0.0, -300.0)) < 1.0, "frame {frame}: drawn at {p:?}");
+            }
+        }
+    }
+
+    /// The glide is decided when unloading starts: a freighter pushed across the limit afterwards
+    /// stays on the berth instead of popping back to the sim position.
+    #[test]
+    fn the_glide_is_not_re_decided_when_the_sim_position_moves() {
+        let rails = "{ at: 0, pos: { x: 0, y: 0, z: 540 } }, { at: 60, pos: { x: 0, y: 0, z: 540 } }, { at: 90, pos: { x: 0, y: 0, z: 400 } }";
+        let (mut app, e) = unloading("m_miner", rails);
+        for frame in 0..130 {
+            app.update();
+            if frame > 50 {
+                let p = xz(&app, e);
+                assert!(p.distance(Vec2::new(0.0, -600.0)) < 1.0, "frame {frame}: drawn at {p:?}");
+            }
+        }
+    }
+
+    /// A freighter without a beam keeps the one-second glide to the berth from any distance.
+    #[test]
+    fn a_beamless_freighter_glides_to_the_berth_in_a_second() {
+        let (mut app, e) = unloading("m_plain", "{ at: 0, pos: { x: 0, y: 0, z: 300 } }");
+        for frame in 0..70 {
+            app.update();
+            let p = xz(&app, e);
+            if frame == 25 {
+                assert!(p.y < -310.0 && p.y > -590.0, "mid-glide at {p:?}");
+            }
+            if frame == 60 {
+                assert!(p.distance(Vec2::new(0.0, -600.0)) < 2.0, "berthed at {p:?}");
+            }
+        }
     }
 
     fn xz(app: &App, e: Entity) -> Vec2 {
