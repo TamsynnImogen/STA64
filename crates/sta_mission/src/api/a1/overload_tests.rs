@@ -36,7 +36,9 @@ fn runtime() -> MissionRuntime {
         }),
     }]);
     let id = out.view.units[0].id;
-    let cfg = MissionConfig { content: Some(db), view: Some((*out.view).clone()), ..MissionConfig::default() };
+    // A script flags the craft it orders (LUA-28): the scene's craft starts flagged.
+    let view = crate::api::special_forces::flagged_view(&out.view, &db);
+    let cfg = MissionConfig { content: Some(db), view: Some(view), ..MissionConfig::default() };
     let mut rt = MissionRuntime::from_source_with("overload.lua", "", 3, cfg);
     assert!(rt.errors().is_empty(), "{:?}", rt.errors());
     rt.eval::<()>(&format!("a = {}; A1.paths.P = {{ {{x=10,y=0,z=0}} }}", id.0)).unwrap();
