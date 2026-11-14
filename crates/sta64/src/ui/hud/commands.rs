@@ -22,6 +22,7 @@ pub struct Capabilities {
     /// A pod colony ship the sim takes `Order::Colonize` for. The stock command
     /// (`colonize.odf`) names `colony_ship` as its source: the ship definition's
     /// `colony_ship` flag, plus the sim's own pod-ship rule (Borg beam ships are refused).
+    /// Evidence: read from data (the game's command and ship definitions).
     pub colonize: bool,
     /// Same supported special kind at the same sim slot on every unit.
     pub specials: Vec<(u8, SpecialKind)>,

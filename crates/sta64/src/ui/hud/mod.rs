@@ -608,6 +608,7 @@ fn target_order(
 /// The sim's `Order::Colonize` gate on the planet, read from the view: a live
 /// colonizable Producer planet, unowned or owned by the player's own seat (a
 /// teammate's, an ally's or an enemy's is refused), with no colonizer yet.
+/// Evidence: the sim's gate (SIM-30), unchanged and shared with the HUD; read from the sim's stated rule.
 fn colonizable_by(feed: &HudFeed, planet: EntityId) -> bool {
     let (Some(db), Some(p)) = (feed.content.as_deref(), feed.view.unit(planet)) else { return false };
     !p.flags.contains(UnitFlags::DYING)

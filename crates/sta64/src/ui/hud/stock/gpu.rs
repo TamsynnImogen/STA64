@@ -114,7 +114,10 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         HoverCapture::Low => { hud_feed.selected.clear(); Some(original) },
         // UI-38: the start unit's view row (same id, so it stays visible) with a colony ship's definition.
         HoverCapture::ColonyShip => {
-            let def = hud_feed.content.as_ref().unwrap().key("fcolony").expect("installed colony ship definition");
+            let Some(def) = hud_feed.content.as_ref().unwrap().key("fcolony") else {
+                eprintln!("SKIP {label}: the mounted install has no `fcolony` definition");
+                return;
+            };
             let mut view = (*hud_feed.view).clone();
             view.units.iter_mut().find(|u| u.id == original).unwrap().def = def;
             hud_feed.view = Arc::new(view);
@@ -294,7 +297,7 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         .iter(app.world())
         .count();
     if matches!(hover_mode, HoverCapture::ColonyShip) {
-        // The palette offers COLONIZE (command ODF `colonize.odf`: art `b_colonize`) for the colony ship.
+        // The palette offers COLONIZE (command ODF `colonize.odf`: art `b_colonize`) for the colony ship (read from data).
         let colonize = app.world_mut().query::<(&super::super::GridCell, &GuiButton)>().iter(app.world())
             .filter(|(cell, button)| cell.0 == super::super::Act::Target(super::super::model::TargetMode::Colonize)
                 && button.names.iter().any(|n| n.eq_ignore_ascii_case("b_colonize")))

@@ -117,6 +117,7 @@ pub(crate) fn pod_of(db: &ContentDb, def: &sta_content::UnitDef) -> Option<Pod> 
 
 /// Whether a unit definition is a pod colony ship the sim takes an
 /// `Order::Colonize` for (the client's COLONIZE command is offered by this).
+/// Unchanged gate, shared with the HUD.
 pub fn is_pod_ship(db: &ContentDb, def: &sta_content::UnitDef) -> bool {
     pod_of(db, def).is_some()
 }
@@ -124,7 +125,7 @@ pub fn is_pod_ship(db: &ContentDb, def: &sta_content::UnitDef) -> bool {
 /// Whether a planet definition can be colonized at all: a Producer planet with
 /// `isColonizable` and a population cap above zero. Ownership and a colonizer
 /// already at work are checked per planet (the view's owner and
-/// `WorldView.colonies`).
+/// `WorldView.colonies`). Unchanged gate, shared with the HUD.
 pub fn is_colonizable_planet(db: &ContentDb, def: &sta_content::UnitDef) -> bool {
     def.planet_role == Some(PlanetRole::Producer)
         && def.planet_colonizable

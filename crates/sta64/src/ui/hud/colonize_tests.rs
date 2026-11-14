@@ -139,6 +139,16 @@ fn target_validity_follows_the_sims_gate() {
 }
 
 #[test]
+fn a_planet_with_no_hull_is_refused_even_when_not_flagged_dying() {
+    let f = feed(&[1], |units, _| {
+        let p = units.iter_mut().find(|u| u.id == EntityId(10)).unwrap();
+        assert!(!p.flags.contains(UnitFlags::DYING));
+        p.hull = [Fixed::ZERO; 2];
+    });
+    assert!(colonize(&f, 10).is_none(), "hull 0 is not alive, as the sim's alive()");
+}
+
+#[test]
 fn issues_order_colonize_for_the_colony_ships_of_the_selection() {
     let f = feed(&[1], |_, _| {});
     let (orders, ids) = colonize(&f, 10).unwrap();
