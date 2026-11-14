@@ -172,6 +172,8 @@ const CASES: &[(&str, &str, Expect)] = &[
     ("BuildObject", "assert(A1.BuildObject('fx_cruiser', 0, 0, 1.0, 2.0, 3.0) >= 0x40000000)", Fine),
     ("SetWarpSpeed", "A1.SetWarpSpeed(a, 30)", Fine),
     ("ResetWarpSpeed", "A1.ResetWarpSpeed(a)", Fine),
+    ("GetWarpSpeed", "assert(A1.GetWarpSpeed(a) >= 0)", Fine),
+    ("GetImpulseSpeed", "assert(A1.GetImpulseSpeed(a) > 0)", Fine),
     ("Stop", "A1.Stop(a, 1)", Fine),
     ("AI_Team_Load_AIP", "A1.AI_Team_Load_AIP(1, 'team.aip')", Fine),
     ("Attack", "A1.Attack(a, b, 1)", Fine),
