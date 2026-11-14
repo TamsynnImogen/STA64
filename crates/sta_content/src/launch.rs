@@ -53,7 +53,7 @@ fn bounding_circle(sod: &Sod) -> f32 {
 pub const FALLBACK_RADIUS: i32 = DEFAULT_CLEAR;
 
 /// What the VFS holds for a model name.
-enum ModelSod {
+pub(crate) enum ModelSod {
     /// A readable SOD (the simulation's geometry).
     Sod(Box<Sod>),
     /// A render replacement exists but no readable SOD does.
@@ -65,7 +65,7 @@ enum ModelSod {
 /// The unit's SOD, read even when a higher layer (or the same one) supplies a
 /// glTF/GLB/M3D that the renderer prefers: the renderer's pick is tried first
 /// when it is a SOD (or an M3D that really holds one), then the best `.sod`.
-fn read_sod(vfs: &sta_vfs::Vfs, key: &str) -> ModelSod {
+pub(crate) fn read_sod(vfs: &sta_vfs::Vfs, key: &str) -> ModelSod {
     use sta_assets::ModelFormat;
     let Some((path, format)) = sta_assets::find_model(vfs, key) else {
         return ModelSod::Missing;

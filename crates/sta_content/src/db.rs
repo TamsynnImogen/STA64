@@ -149,17 +149,18 @@ impl ContentDb {
         }
     }
 
-    /// This database with every builder's [`LaunchPoint`](crate::LaunchPoint)
-    /// read from its model (SIM-16), and the digest recomputed.
+    /// This database with builder launch points, collision radii and authored
+    /// repair attachment geometry read from simulation SODs, then re-digested.
     pub fn with_launch_points(self, vfs: &sta_vfs::Vfs) -> ContentDb {
         self.with_launch_points_warned(vfs).0
     }
 
-    /// [`with_launch_points`](ContentDb::with_launch_points) and the warnings
-    /// for units whose collision radius could not be read from a SOD.
+    /// [`with_launch_points`](ContentDb::with_launch_points) and warnings for
+    /// unreadable collision geometry or authored repair nodes that cannot resolve.
     pub fn with_launch_points_warned(mut self, vfs: &sta_vfs::Vfs) -> (ContentDb, Vec<Warning>) {
         crate::launch::attach(vfs, self.defs.iter_mut().filter_map(|(_, d)| if let Def::Unit(u) = d { Some(u) } else { None }));
-        let warnings = crate::launch::attach_radii(vfs, self.defs.iter_mut().filter_map(|(_, d)| if let Def::Unit(u) = d { Some(u) } else { None }));
+        let mut warnings = crate::launch::attach_radii(vfs, self.defs.iter_mut().filter_map(|(_, d)| if let Def::Unit(u) = d { Some(u) } else { None }));
+        warnings.extend(crate::repair_geometry::attach(vfs, self.defs.iter_mut().filter_map(|(_, d)| if let Def::Unit(u) = d { Some(u) } else { None })));
         self.digest = digest_of(&self);
         (self, warnings)
     }
@@ -449,7 +450,7 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
         sounds: _, fx: _, special_energy_max: _, special_energy_rate: _, miner: _, miner_off: _,
         max_dilithium: _, mining_rate: _, transfer_rate: _, resource: _, features: _,
         confinement: _, nebula_pathing: _, avoid_me: _, hidden: _, invalid_as_target: _, attack_power: _, life: _,
-        crew_gain: _, sane_crew_loss: _, system_hit_points: _, casualty: _, repair: _, raw: _,
+        crew_gain: _, sane_crew_loss: _, system_hit_points: _, casualty: _, repair: _, repair_attachment: _, raw: _,
     } = u;
     let crate::BuildDef { cost: _, ticks: _, officers: _, list: _, queue_limit: _, flagged_slots: _ } = &u.build;
     let name = |r: &crate::DefRef| quoted(&r.odf.to_ascii_lowercase());
@@ -718,6 +719,14 @@ fn digest_entries(db: &ContentDb) -> Vec<DigestEntry> {
                 let value = format!("{};tech={}", unit_text(db, u), tech(name));
                 out.push(DigestEntry::new(digest::key("unit:", name), value));
                 out.push(DigestEntry::new(digest::key("geometry:", name), geometry_text(u)));
+                if let Some(attachment) = u.repair_attachment {
+                    let vector = |v: sta_core::Vec3| format!("[{},{},{}]", fixed_text(v.x), fixed_text(v.y), fixed_text(v.z));
+                    let value = Canon::new()
+                        .raw("origin", &vector(attachment.origin))
+                        .list("axes", attachment.axes.map(vector))
+                        .finish();
+                    out.push(DigestEntry::new(digest::key("repair-geometry:", name), value));
+                }
             }
             Def::Weapon(w) => {
                 let value = format!("{};tech={}", weapon_text(db, w), tech(name));
