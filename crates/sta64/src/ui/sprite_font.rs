@@ -708,7 +708,8 @@ pub struct SpriteText {
 }
 
 /// Opt in to scalable Bevy text even when the mounted install has sprite fonts.
-/// Useful for authored UI slots whose bitmap font would shrink below readable ink size.
+/// For STA64's own screens only: text from a game or mod (HUD, stock menus) uses the mod's
+/// sprite font (ADR 0007 T1) and does not carry this. Useful for authored UI slots whose bitmap font would shrink below readable ink size.
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct ScalableText;
 
@@ -723,6 +724,12 @@ pub fn sprite_text(text: impl Into<String>, size: f32, color: Color) -> impl Bun
         Pickable::IGNORE,
     )
 }
+
+/// Nominal sprite-font height per px of TTF size at equal ink height: 24 px fonts ink as
+/// tall and as wide as the TTF at 18 px (A2 stock, measured on a 1080p frame).
+pub const STOCK_INK: f32 = 1.25;
+/// Baseline lift of a floored label, per px of TTF size.
+pub const STOCK_LIFT: f32 = 1.0 / 6.0;
 
 /// How a [`SpriteText`] is set, beyond its text, size and colour. Optional: without it
 /// text is left aligned, unwrapped, in the font nearest `size`, as before.
@@ -741,6 +748,9 @@ pub struct SpriteTextStyle {
     /// Wrap to the parent's width once the text is wider than it (a notice line in a
     /// box with a maximum width). Kept up to date by `fit_wrap` from the last layout.
     pub wrap_parent: bool,
+    /// Crisp text never draws below `size`: the multiple rounds up instead of down
+    /// (HUD labels with a readable floor).
+    pub min_size: bool,
 }
 
 #[allow(dead_code)]
@@ -759,6 +769,15 @@ impl SpriteTextStyle {
     pub fn wrap_to_parent(mut self) -> Self {
         self.wrap_parent = true;
         self
+    }
+    pub fn at_least_size(mut self) -> Self {
+        self.min_size = true;
+        self
+    }
+    /// How the stock HUD draws its labels (UI-16): crisp, never below the readable size,
+    /// every glyph (resource symbols too) in the label colour like the TTF text it replaces.
+    pub fn stock_label(self) -> Self {
+        SpriteTextStyle { tint_all: true, ..self.at_least_size() }
     }
     pub fn wrapped(mut self, width: f32) -> Self {
         self.wrap = Some(width);
@@ -870,7 +889,14 @@ fn resolve_text(
         // Styled (kit) text is drawn crisp: a font and whole multiple that put glyph texels
         // on whole physical pixels. Plain `sprite_text` keeps its scaled drawing.
         let crisp = if styled && !style.native && scalable.is_none() {
-            fonts.crisp(style.role, t.size * px)
+            // A sprite font's nominal height carries leading above and below its ink; a
+            // label with a readable floor asks for the font that inks as tall as the
+            // TTF of that size (`STOCK_INK`), not one of that nominal height.
+            let want = t.size * px * if style.min_size { STOCK_INK } else { 1.0 };
+            fonts.crisp(style.role, want).map(|(f, k)| {
+                let below = f.font.height() * (k as f32) < want - 0.5;
+                (f, if style.min_size && below { k + 1 } else { k })
+            })
         } else {
             None
         };
@@ -899,7 +925,8 @@ fn resolve_text(
                 TextLayout::new(
                     justify,
                     if style.wrap.is_some() {
-                        bevy::text::LineBreak::WordBoundary
+                        // A word wider than the box breaks, as `wrap_lines` does.
+                        bevy::text::LineBreak::WordOrCharacter
                     } else {
                         bevy::text::LineBreak::NoWrap
                     },
@@ -939,6 +966,9 @@ fn resolve_text(
         commands.entity(e).insert(Node {
             width: Val::Px(if crisp.is_some() { lay.width * inv } else { lay.width.ceil() }),
             height: Val::Px(if crisp.is_some() { lay.height * inv } else { lay.height.ceil() }),
+            // The taller font of a floored label sits on the TTF's baseline (A2 stock,
+            // measured: its ink ends 3 px lower at 18 px without this).
+            top: Val::Px(if crisp.is_some() && style.min_size { -t.size * STOCK_LIFT } else { 0.0 }),
             flex_shrink: 0.0,
             ..default()
         });
@@ -1300,6 +1330,45 @@ mod tests {
         app.update();
         assert_eq!(app.world().get::<Children>(label).unwrap()[0], child);
         assert_eq!(app.world().get::<Text>(child).unwrap().0, "99");
+    }
+
+    #[test]
+    fn hud_label_style_is_crisp_wrapped_inside_its_cell_and_not_below_its_floor() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).init_resource::<SpriteFonts>().add_systems(Update, resolve_text);
+        app.world_mut().resource_mut::<SpriteFonts>().fonts.insert("F".into(), test_font());
+        let cell = 52.0;
+        let style = SpriteTextStyle::default().centered().wrapped(cell);
+        let plain = app.world_mut().spawn(sprite_text_styled("!!!!!!!!!!", 18.0, Color::WHITE, style.clone())).id();
+        let floored = app.world_mut().spawn(sprite_text_styled("!!!!!!!!!!", 18.0, Color::WHITE, style.at_least_size())).id();
+        app.update();
+        let node = |e: Entity| app.world().get::<Node>(e).unwrap().clone();
+        for e in [plain, floored] {
+            let kids = app.world().get::<Children>(e).unwrap();
+            assert!(kids.iter().all(|k| app.world().get::<ImageNode>(k).is_some()), "glyphs, not TTF text");
+            let Val::Px(w) = node(e).width else { panic!("width") };
+            assert!(w <= cell + 0.01, "label wider than the cell: {w}");
+        }
+        // The 12 px font at 1x is under the 18 px asked for; the floor takes 2x.
+        let one = |app: &mut App, s: SpriteTextStyle| app.world_mut().spawn(sprite_text_styled("!", 18.0, Color::WHITE, s)).id();
+        let (a, b) = (one(&mut app, SpriteTextStyle::default()), one(&mut app, SpriteTextStyle::default().at_least_size()));
+        app.update();
+        let h = |e| match app.world().get::<Node>(e).unwrap().height { Val::Px(h) => h, _ => panic!("height") };
+        assert!(h(a) < 18.0, "{}", h(a));
+        assert!(h(b) >= 18.0, "{}", h(b));
+    }
+
+    #[test]
+    fn a_wrapped_ttf_fallback_breaks_a_word_wider_than_the_box() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).init_resource::<SpriteFonts>().add_systems(Update, resolve_text);
+        let e = app
+            .world_mut()
+            .spawn(sprite_text_styled("Constructor", 12.0, Color::WHITE, SpriteTextStyle::default().centered().wrapped(52.0)))
+            .id();
+        app.update();
+        let child = app.world().get::<Children>(e).unwrap()[0];
+        assert_eq!(app.world().get::<TextLayout>(child).unwrap().linebreak, bevy::text::LineBreak::WordOrCharacter);
     }
 
     #[test]

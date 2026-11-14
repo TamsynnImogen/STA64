@@ -136,8 +136,8 @@ The follow-up uses `Stretch` for authored GUI rectangles, matching native
 independent-axis drawing. The installed-data GPU check now inspects pixels at
 a known resource-panel join; the old capture has a black gap at that join.
 
-Stock resource/info/filter labels explicitly use the scalable text fallback at
-a readable minimum size. Their authored position and width remain intact;
+Stock resource/info/filter labels use the mod's sprite font (UI-16, ADR 0007
+T1) with the same readable minimum size (18 px) and no scalable-text override. Their authored position and width remain intact;
 a short legacy text rectangle does not clip the line's font height. Existing
 SPR fonts remain available to other consumers. The inspected Classic/FO4 CFGs
 do not name individual font files, and native font parity is not claimed by

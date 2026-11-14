@@ -491,3 +491,19 @@ fn theme_switch_rebuilds_hud_chrome_but_preserves_selection_and_command_page() {
     assert_eq!(app.world().get::<BorderColor>(strip).unwrap().left, Theme::default().accent2);
     assert_eq!(app.world().resource::<HudState>().page, Page::Build);
 }
+
+/// UI-16, ADR 0007 T1: the Refit grid's cell captions use the mod's sprite font.
+#[test]
+fn grid_cell_captions_are_sprite_text() {
+    use crate::ui::gui_sprites::GuiButtonLabel;
+    use crate::ui::sprite_font::{ScalableText, SpriteText};
+    let mut app = app(content(None), &[1, 3]);
+    let world = app.world_mut();
+    let labels: Vec<Entity> = world.query_filtered::<Entity, With<GuiButtonLabel>>().iter(world).collect();
+    assert!(!labels.is_empty());
+    for l in labels {
+        assert!(world.get::<SpriteText>(l).is_some());
+        assert!(world.get::<Text>(l).is_none());
+    }
+    assert!(world.query::<&ScalableText>().iter(world).next().is_none());
+}
