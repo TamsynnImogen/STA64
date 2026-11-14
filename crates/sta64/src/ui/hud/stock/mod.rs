@@ -85,6 +85,9 @@ pub(super) fn node(r: R) -> Node {
 }
 
 fn metadata<'a>(native: &'a NativeCommands, act: &Act) -> Option<&'a NativeCommand> {
+    if let Act::NativeFormation(odf) = act {
+        return native.commands.get(odf);
+    }
     native.get(match act {
         Act::Target(TargetMode::Move) => "move",
         Act::Target(TargetMode::Attack) => "attack",
@@ -118,6 +121,25 @@ fn menu_button(id: u32, name: &str) -> Button {
 /// never authority to enable a new order backend.
 fn buttons(feed: &HudFeed, page: Page, native: &NativeCommands) -> Vec<Button> {
     let mut buttons = model::grid_with_capacity(feed, page, usize::MAX);
+    if page == Page::Formations && buttons.iter().any(|b| matches!(b.act, Act::Formation(_))) {
+        let formations: Vec<_> = native.formations().collect();
+        if !formations.is_empty() {
+            buttons.retain(|b| !matches!(b.act, Act::Formation(_)));
+            for (cell, record) in formations.into_iter().enumerate() {
+                let stem = record.odf.trim_end_matches(".odf");
+                buttons.push(Button {
+                    cell,
+                    label: stem.to_uppercase(),
+                    act: Act::NativeFormation(stem.to_owned()),
+                    look: Look::Locked,
+                    tip: record.tooltip.clone().unwrap_or_else(|| stem.to_owned()),
+                    verbose: record.verbose.clone(),
+                    sprite_names: record.formation_sprite_names(),
+                    keep_label: false,
+                });
+            }
+        }
+    }
     let mut groups = Vec::new();
     buttons.retain(|button| {
         if matches!(page, Page::Build | Page::Formations) {
@@ -160,7 +182,11 @@ fn buttons(feed: &HudFeed, page: Page, native: &NativeCommands) -> Vec<Button> {
     }
     for button in &mut buttons {
         if let Some(meta) = metadata(native, &button.act) {
-            button.sprite_names = meta.sprite_names();
+            button.sprite_names = if matches!(button.act, Act::NativeFormation(_)) {
+                meta.formation_sprite_names()
+            } else {
+                meta.sprite_names()
+            };
             if let Some(tip) = &meta.tooltip {
                 button.tip = tip.clone();
             }
