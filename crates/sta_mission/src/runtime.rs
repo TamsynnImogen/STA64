@@ -589,7 +589,16 @@ impl MissionRuntime {
         for r in &c.ai_requests[c.ai_requests_taken..] {
             *out.entry(untaken_name(r).to_owned()).or_default() += 1;
         }
+        for (k, n) in c.label_gaps.hits() {
+            *out.entry(k.clone()).or_default() += n;
+        }
         out.into_iter().collect()
+    }
+
+    /// The map labels the load did not create (LUA-25; [`crate::map_labels`]). A `GetHandle`
+    /// that finds nothing and names one is a handle gap. Set before the first step.
+    pub fn set_label_gaps(&self, gaps: Vec<crate::map_labels::LabelGap>) {
+        self.inner.ctx.borrow_mut().label_gaps.set(gaps);
     }
 
     /// How `from` stands toward `to`, with the script's overrides applied

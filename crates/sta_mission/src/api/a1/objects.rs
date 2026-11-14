@@ -63,7 +63,7 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
     table.set("UnderAttack", alias(lua, env, a2, "UnderAttack")?)?;
 
     table.set("GetHandle", def(lua, env, "GetHandle", &["s"], |_, e, _, a| {
-        let c = e.ctx.borrow();
+        let mut c = e.ctx.borrow_mut();
         let wanted = a[0].text();
         let id = c
             .labels
@@ -71,6 +71,10 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
             .find(|(_, l)| l.as_str() == wanted)
             .or_else(|| c.labels.iter().find(|(_, l)| l.eq_ignore_ascii_case(wanted)))
             .map(|(id, _)| *id);
+        if id.is_none() {
+            // LUA-25: a label the map has and the load did not create is a handle gap.
+            c.note_unresolved_label("A1", wanted, true);
+        }
         Ok(handle_value(id))
     })?)?;
 

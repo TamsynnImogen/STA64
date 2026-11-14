@@ -69,6 +69,7 @@ mod search;
 mod condition_monitor;
 mod player;
 mod taint;
+mod label_gap;
 mod timer;
 mod objectives;
 pub(crate) mod objectives_file;
@@ -256,6 +257,8 @@ pub(crate) struct Ctx {
     pub seen: BTreeSet<EntityId>,
     /// Which answers may rest on a gap ([`taint`]).
     pub taint: taint::Taint,
+    /// Map labels the load did not create (LUA-25).
+    pub label_gaps: label_gap::LabelGaps,
     pub ai_requests_taken: usize,
     pub playback: Playback,
     /// The view tick of the last `Hit` each object took (`A2.UnderAttack`).
@@ -320,6 +323,7 @@ impl Ctx {
             ended: None,
             seen,
             taint: taint::Taint::default(),
+            label_gaps: label_gap::LabelGaps::default(),
             ai_requests_taken: 0,
             playback: Playback::default(),
             last_hit: BTreeMap::new(),

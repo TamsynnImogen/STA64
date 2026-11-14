@@ -42,6 +42,7 @@ pub mod blocked;
 pub mod campaign;
 pub mod cineractive;
 pub mod converted;
+pub mod map_labels;
 pub mod math;
 pub mod playthrough;
 pub mod progress;
