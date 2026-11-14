@@ -128,6 +128,7 @@ fn rock_planet_and_nebula_pipelines_build() {
                     albedo: None,
                     relief: None,
                     clouds: None,
+                    city: None,
                     alpha: AlphaMode::Opaque,
                 })),
             ));
