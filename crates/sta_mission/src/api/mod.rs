@@ -438,10 +438,44 @@ impl Ctx {
     }
 }
 
+impl Ctx {
+    /// A dead-handle answer is about to be given for `id` (LUA-21). A `BuildObject` token
+    /// that has no object yet (pending or failed; the original's handle is usable at once)
+    /// keeps raising as before, so the gap is tainted; any other handle is noted as a
+    /// condition query: tainted when an earlier failed call named it or it never existed
+    /// because of a gap, clean when it was alive and is destroyed.
+    pub fn dead_handle(&self, api: &str, call: &'static str, id: EntityId) -> mlua::Result<()> {
+        if id.0 >= PENDING_TOKEN_BASE {
+            return Err(mlua::Error::runtime(format!("{api}.{call}: object {} is not alive", id.0)));
+        }
+        self.note_query(id, call);
+        Ok(())
+    }
+}
+
+/// First value of a `BuildObject` token (both tables); real entity ids stay far below it.
+pub(crate) const PENDING_TOKEN_BASE: u32 = 0x4000_0000;
+
 /// `GetLocation(path, index)` on a path the map does not have, or a point it
 /// does not have: the engine returns a fixed default vector (LUA-18). Its value
 /// was not read from the executable (not measured); the zero vector is used.
 pub(crate) const ABSENT_PATH_LOCATION: (f64, f64, f64) = (0.0, 0.0, 0.0);
+
+/// Dead-handle answers (LUA-21). The engine's object guard (handle to object,
+/// null when absent, then a type bit and the dying byte) makes these calls return
+/// a constant for a handle that names nothing live: 0, a stale or removed
+/// object and a dying object. (A `BuildObject` token whose object STA64 has not
+/// spawned yet is absent in the engine's sense too, but the original's handle is
+/// usable at once, so the constant would be wrong: such a token keeps raising,
+/// see [`Ctx::dead_handle`].) The constants are the float literals the executable returns, Armada I and II alike
+/// (read from the executable, static; not measured; which object kinds pass the
+/// guard is not established, so a live station, planet or mine answers as before).
+/// `GetDistance` (both objects, or the object of the path form in Armada I).
+pub(crate) const ABSENT_DISTANCE: f64 = 1.000_000_015_047_466_2e30;
+/// `GetRealShieldPercent`.
+pub(crate) const ABSENT_SHIELD_PERCENT: f64 = -33.0;
+/// `GetCrew`, and `GetCurrentHealth` / `GetMaxHealth` (Armada II).
+pub(crate) const ABSENT_AMOUNT: f64 = -1.0;
 
 pub(crate) fn pos_f64(v: Vec3) -> (f64, f64, f64) {
     (v.x.to_f32() as f64, v.y.to_f32() as f64, v.z.to_f32() as f64)
