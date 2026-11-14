@@ -51,6 +51,7 @@ pub mod orders;
 mod orders_tests;
 pub mod switches;
 pub mod replay;
+pub mod repair;
 pub mod setup;
 pub mod snapshot;
 pub mod sensors;
@@ -386,6 +387,9 @@ impl Sim {
                 let Some(db) = self.content.as_deref() else { return false };
                 self.production.order_rally(db, &self.units, c.player, builders, *at)
             }
+            // S2 transport is available before the SIM-40 yard runtime.
+            // Refuse the whole request, preserving existing orders/state.
+            Order::Repair { .. } => false,
         }
     }
 

@@ -51,6 +51,8 @@ Usage: sta-bench <command> [options]
       --gpu-jobs N                 tier-2 sta64 processes at once (default 1; they run at low priority)
   check                            run every tier-1 scenario in-process; exit 1 on a failure
   session start --scene <name> [Key=Value...]   start a headless sta64 and print its ID
+      --render [--frame-size WxH]  give the session a renderer: `drive \"frame NAME\"` saves <session>/frames/NAME.png
+                                   (needs a GPU; the frame equals the same tick's `--frames` frame)
       --install <root> [--mod <name>]  mount a private clone of this install (do not write its large linked files; stop checks the source)
   session list | session stop --session ID
   drive --session ID \"<command>\"...  send bench commands to a session, print the answers
@@ -130,6 +132,7 @@ pub(crate) struct Opts {
     pub mod_name: Option<String>,
     pub fake: bool,
     pub no_frames: bool,
+    pub render: bool,
     pub timeout: u64,
     pub jobs: Option<usize>,
     pub gpu_jobs: Option<usize>,
@@ -185,6 +188,7 @@ fn parse(args: Vec<String>) -> Result<Opts, String> {
             "--mod" => o.mod_name = Some(val(&a)?).filter(|m| !m.is_empty()),
             "--fake" => o.fake = true,
             "--no-frames" => o.no_frames = true,
+            "--render" => o.render = true,
             "--frame-size" => o.frame_size = Some(val(&a)?),
             "--repeat" => o.repeat = val(&a)?.parse().map_err(|_| "--repeat: a number")?,
             "--jobs" => o.jobs = Some(val(&a)?.parse().map_err(|_| "--jobs: a number")?),
@@ -338,6 +342,8 @@ fn failed_case(name: &str, error: String) -> CaseResult {
         digests: Vec::new(),
         ticks: 0,
         artifacts: Default::default(),
+        shots: Vec::new(),
+        shot_checks: Vec::new(),
     }
 }
 
