@@ -387,7 +387,7 @@ mod native {
         let cross = u.heading.0 * tz - u.heading.1 * tx;
         let dot = u.heading.0 * tx + u.heading.1 * tz;
 
-        let frac = if st.max_speed > Fixed::ZERO {
+        let frac = if st.max_speed > crate::speed_override::HELD_SPEED {
             clamp(u.speed / st.max_speed, Fixed::ZERO, Fixed::ONE)
         } else {
             Fixed::ZERO
@@ -623,7 +623,7 @@ mod smooth {
     fn limits(u: &Unit) -> Limits {
         let st = u.stats;
         let k = st.combat_speed;
-        let s = if st.max_speed > Fixed::ZERO {
+        let s = if st.max_speed > crate::speed_override::HELD_SPEED {
             clamp(u.speed / st.max_speed, Fixed::ZERO, Fixed::ONE)
         } else {
             Fixed::ZERO
