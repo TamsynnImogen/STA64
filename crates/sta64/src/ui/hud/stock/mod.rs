@@ -98,6 +98,10 @@ fn metadata<'a>(native: &'a NativeCommands, act: &Act) -> Option<&'a NativeComma
 }
 
 fn menu_button(id: u32, name: &str) -> Button {
+    let mut sprite_names = vec![format!("b_{name}"), name.to_owned()];
+    if name.eq_ignore_ascii_case("orders") {
+        sprite_names.insert(0, "b_order".into());
+    }
     Button {
         cell: 0,
         label: name.to_uppercase(),
@@ -105,7 +109,7 @@ fn menu_button(id: u32, name: &str) -> Button {
         look: Look::Ready,
         tip: name.to_owned(),
         verbose: None,
-        sprite_names: vec![format!("b_{name}"), name.to_owned()],
+        sprite_names,
         keep_label: false,
     }
 }
