@@ -462,6 +462,39 @@ fn a_delayed_fade_is_presented_when_it_starts() {
     assert!(!at(base + 1, &mut rt).contains(&fade));
 }
 
+/// An authored opening: a voice line followed by a delayed `FadeOut`, then the cineractive ends.
+/// A delayed fade is dropped with the cineractive, so it cannot black out the game after the
+/// hand-over; the voice line's done flag is the host's to report.
+#[test]
+fn a_delayed_fade_does_not_outlive_its_cineractive() {
+    use sta_sim::setup::Controller;
+    let s = scene();
+    let (mut rt, commands) = run(
+        &s,
+        "A1.CineractiveStart(); A1.FadeIn(3, 0, 0); log = A1.AudioMessage('log.wav'); A1.FadeOut(4, 40, 0); \
+         function done() return A1.IsAudioMessageDone(log) end",
+    );
+    let first = presented(&commands);
+    assert!(first.contains(&Presentation::Sound { id: 1, name: "log.wav".into(), at: None }), "{first:?}");
+    assert!(!rt.eval::<bool>("return done()").unwrap(), "the line is playing until the host says it is done");
+    let mut view = s.view.clone();
+    let tick0 = view.tick;
+    let mut at = |secs: u64, rt: &mut MissionRuntime| {
+        view.tick = tick0 + secs * 30;
+        let mut out = Vec::new();
+        rt.think(&view, &[], &mut out);
+        presented(&out)
+    };
+    assert!(at(20, &mut rt).is_empty() && !rt.eval::<bool>("return done()").unwrap());
+    // The host reports the clip's end; the script's condition turns true and it ends the opening.
+    rt.eval::<()>("A1.AudioMessageDone(1)").unwrap();
+    assert!(rt.eval::<bool>("return done()").unwrap());
+    rt.eval::<()>("A1.CineractiveEnd()").unwrap();
+    // The fade scheduled for 40 s is gone: nothing darkens the game at 40 s or later.
+    assert!(at(41, &mut rt).iter().all(|p| !matches!(p, Presentation::Fade { .. })));
+    assert!(at(60, &mut rt).iter().all(|p| !matches!(p, Presentation::Fade { .. })));
+}
+
 #[test]
 fn titles_keep_their_rectangle_and_ids_are_per_mission() {
     let s = scene();
@@ -473,10 +506,13 @@ fn titles_keep_their_rectangle_and_ids_are_per_mission() {
             call("ShowTitle", vec![Arg::Int(1), Arg::Int(7), Arg::Int(8), Arg::Int(9), Arg::Int(10), Arg::Bool(true)]),
             Presentation::Title { id: 2, text: "Sub A".into(), subtitle: true, seconds: None },
             call("ShowSubtitle", vec![Arg::Int(2), Arg::Int(5), Arg::Int(10), Arg::Int(300), Arg::Int(20), Arg::Bool(true)]),
-            Presentation::RemoveTitle { id: 1 },
-            Presentation::RemoveTitle { id: 2 },
+            call("RemoveTitleFade", vec![Arg::Int(1)]),
+            call("RemoveTitleFade", vec![Arg::Int(2)]),
         ]
     );
+    // The plain form goes at once.
+    let (_, commands) = run(&s, "t = A1.ShowTitle(7, 8, 9, 10, 'Title A', true); A1.RemoveTitle(t, false)");
+    assert_eq!(presented(&commands).last(), Some(&Presentation::RemoveTitle { id: 1 }));
 }
 
 #[test]
