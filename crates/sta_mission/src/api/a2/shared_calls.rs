@@ -1,8 +1,8 @@
 //! A2 calls with no sim seam behind them that converted missions make at
 //! start-up and during intros (LUA-11): global switches, the culling distance,
-//! sound muting, the background geometry, the fade removal, team relations and
-//! resource writes. Each validates its arguments by the DLL's signature (read
-//! from the executable, static: the decorated names), retains the request as a
+//! sound muting, the background geometry, the fade removal and team relations
+//! (the resource writes are in `resource_calls`, LUA-22). Each validates its arguments by
+//! the DLL's signature (read from the executable, static: the decorated names), retains the request as a
 //! `Presentation::Call` for a future consumer and, for the ones that change
 //! game state, is counted in `unsupported()`; none raises. What each does in
 //! the original is not measured; nothing here claims an effect.
@@ -95,9 +95,6 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
         call(lua, ctx, table, name, "b", Some("no global switch in the sim seam"))?;
     }
     ai_switches(lua, ctx, table)?;
-    for name in ["SetDilithium", "AddDilithium", "SetMetal", "AddMetal"] {
-        call(lua, ctx, table, name, "ii", Some("no resource edit for A2 team numbering in the mission API yet"))?;
-    }
     call(lua, ctx, table, "SetClippingDistance", "n", None)?;
     call(lua, ctx, table, "MessageDisplay_Set_Text_From_File", "s", None)?;
     for (name, sig, why) in [
@@ -110,10 +107,6 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
         ("ShowTradesTo", "i", "no trade display in the mission API"),
         ("SetTeamDistressCallRange", "in", "no AI distress range in the sim seam"),
         ("ClearShroud", "", "no shroud edit in the sim seam"),
-        ("SetLatinum", "ii", "no resource edit for A2 team numbering in the mission API yet"),
-        ("AddLatinum", "ii", "no resource edit for A2 team numbering in the mission API yet"),
-        ("SetBiomatter", "ii", "no resource edit for A2 team numbering in the mission API yet"),
-        ("AddBiomatter", "ii", "no resource edit for A2 team numbering in the mission API yet"),
     ] {
         call(lua, ctx, table, name, sig, Some(why))?;
     }
