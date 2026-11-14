@@ -256,6 +256,14 @@ fn lights(lights: impl Iterator<Item = (Vec3, Vec3, f32, Vec3)>) -> ([Vec4; DIRS
     (dvec, dcol, raw)
 }
 
+/// The directional lights a Stock-look surface (hull or planet) is lit by: when the map aimed its own
+/// lights (`MapLightSource`), only those, else every directional light. Hulls and planets share this, so
+/// a light that is not the map's (a viewer or menu light) cannot light one and not the other while both are Stock.
+pub fn stock_light_set<'a>(lights: impl Iterator<Item = (&'a GlobalTransform, &'a DirectionalLight, Option<&'a crate::map::MapLightSource>)> + Clone) -> Vec<(Vec3, &'a DirectionalLight)> {
+    let own = lights.clone().any(|(_, _, s)| s.is_some_and(|s| s.0));
+    lights.filter(|(_, _, s)| !own || s.is_some_and(|s| s.0)).map(|(t, l, _)| (t.back().as_vec3(), l)).collect()
+}
+
 /// Each frame: the eye and the lights, written into the materials when they changed.
 #[allow(clippy::too_many_arguments)]
 fn update_view(
@@ -281,9 +289,9 @@ fn update_view(
     // Stock: the map's own lights, each at its colour (the original sets one D3D light per
     // `dlight`); a scene that has none (the viewer) takes every light as above.
     let own = sun.iter().any(|(_, _, s)| s.is_some_and(|s| s.0));
-    let (sdvec, _, sdcol) = lights(sun.iter().filter(|(_, _, s)| !own || s.is_some_and(|s| s.0)).map(|(t, l, _)| {
+    let (sdvec, _, sdcol) = lights(stock_light_set(sun.iter()).into_iter().map(|(to, l)| {
         let r = l.color.to_srgba();
-        (t.back().as_vec3(), Vec3::ZERO, if own { 1.0 } else { l.illuminance }, Vec3::new(r.red, r.green, r.blue))
+        (to, Vec3::ZERO, if own { 1.0 } else { l.illuminance }, Vec3::new(r.red, r.green, r.blue))
     }));
     let stock = matches!((profile, effects), (Some(p), Some(e)) if e.implementation(*p, crate::render::profile::Effect::Hulls) == crate::render::profile::RenderProfile::Stock);
     let amb = ambient.map_or(Vec3::ZERO, |a| {

@@ -371,10 +371,20 @@ impl Races {
             let units = r.standard_units.iter().filter_map(|s| {
                 db.key(s).filter(|&k| db.unit(k).is_some())
             }).collect();
-            let (stock, crew) = match mode {
+            let (mut stock, mut crew) = match mode {
                 StartingResources::Normal => (r.stock, r.normal_crew),
                 StartingResources::Lots => (r.lots_stock, r.lots_crew),
             };
+            // A race that authors no start for the mode (Armada I's race ODFs
+            // have no `normal*` keys) takes the header's: `cfgStartingDilithium`
+            // and `cfgStartingCrew`, the same for every race and both modes.
+            if stock == [0; RESOURCES] && crew.is_none() {
+                let header = db.rules().legacy_start();
+                if let Some(d) = header.dilithium {
+                    stock[crate::resources::DILITHIUM] = d;
+                }
+                crew = header.crew;
+            }
             return Loadout {
                 units,
                 stock: stock.map(|n| Fixed::from_int(n.clamp(0, 1_000_000_000) as i32)),
@@ -716,6 +726,28 @@ mod tests {
         assert_eq!(lots.stock, [21, 22, 27, 24].map(Fixed::from_int));
         assert_eq!(normal.crew, Some(Fixed::ZERO));
         assert_eq!(lots.crew, Some(Fixed::from_int(37)));
+    }
+
+    #[test]
+    fn a_race_with_no_authored_start_takes_the_headers_in_both_modes() {
+        let (races, _) = Races::load_with(&mut loader(&[
+            ("races", "race0=bare\nrace1=own"),
+            ("bare", "name=bare\ninstantActionSlot=0"),
+            ("own", "name=own\ninstantActionSlot=1\nnormalDilithium=11\nlotsDilithium=21"),
+        ]));
+        let (rules, _) = crate::Rules::from_header("int cfgStartingDilithium = 3500;\nint cfgStartingCrew = 4000;\n");
+        let db = crate::fake::db().with_rules(rules);
+        for mode in [StartingResources::Normal, StartingResources::Lots] {
+            let l = races.loadout_with_mode(&db, "bare", mode);
+            assert_eq!(l.stock, [3500, 0, 0, 0].map(Fixed::from_int));
+            assert_eq!(l.crew, Some(Fixed::from_int(4000)));
+        }
+        // A race that authors a start keeps it; the header does not add to it.
+        let own = races.loadout_with_mode(&db, "own", StartingResources::Normal);
+        assert_eq!((own.stock, own.crew), ([11, 0, 0, 0].map(Fixed::from_int), None));
+        // No header keys: nothing is invented.
+        let plain = races.loadout(&crate::fake::db(), "bare");
+        assert_eq!((plain.stock, plain.crew), ([Fixed::ZERO; 4], None));
     }
 
     #[test]

@@ -5694,6 +5694,14 @@ name = "sta_surface"
 version = "0.1.0"
 
 [[package]]
+name = "sta_tools"
+version = "0.1.0"
+dependencies = [
+ "sta_odf",
+ "sta_vfs",
+]
+
+[[package]]
 name = "sta_vfs"
 version = "0.1.0"
 dependencies = [

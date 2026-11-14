@@ -7,14 +7,14 @@ half is [`crates/sta_net/src/proto.rs`](../crates/sta_net/src/proto.rs): the
 message types, their bounds, the framing, and the tests. Where this document
 and `proto.rs` disagree, that is a bug in one of them.
 
-Decisions made after this draft are in [NET_DECISIONS.md](NET_DECISIONS.md)
+Decisions made after this draft are in [ADR 0005](adr/0005-network-after-net-01.md)
 (N1 to N6): lockstep stays, a desync is repaired by snapshot resync, an
 optional referee, and section digests. They answer open questions 3, 4 and 6
 and are built by NET-04, NET-05, NET-06 and SIM-31. NET-02 and NET-03 build
 this document as written.
 
 Decisions this design relies on:
-[MODDING_DECISIONS.md](MODDING_DECISIONS.md) D10 (peers agree on one digest of
+[ADR 0004](adr/0004-modding-v1.md) D10 (peers agree on one digest of
 resolved rules; pack list informational; refusal names the differing key;
 replays record lineage and packs), and WORKPLAN's assumption D3 (AI and Lua
 run on one machine and send commands like players).
@@ -337,9 +337,9 @@ joiner                         host
   4. stops the match. The host puts a final pause in its record; there is no
      resume, only leaving. As in Armada II, a desynced game is not repaired;
      unlike Armada II, it does not run on in an undefined state. NET-04
-     replaces this step with a resync (NET_DECISIONS N2): see "NET-04 as
+     replaces this step with a resync (ADR 0005 N2): see "NET-04 as
      built" in section 9.
-- **Section digests (NET-06, NET_DECISIONS N6; protocol 2).** Beside each
+- **Section digests (NET-06, ADR 0005 N6; protocol 2).** Beside each
   turn's digest a peer keeps `Sim::section_digests()` (roster, movement,
   combat, economy, rng; `sta_sim::digest`) for the same 64 turns. On a
   mismatch at turn *T* a peer sends `Sections { tick, digests }` once for *T*
@@ -510,7 +510,7 @@ joiner                         host
 
 - **Two paths, one transfer.** A *rejoin* (a seat whose connection was lost
   comes back, section 8) and a *resync* (a peer that desynced is repaired,
-  NET_DECISIONS N2 to N4) share the transfer: `[Start]`, `SnapshotOffer`,
+  ADR 0005 N2 to N4) share the transfer: `[Start]`, `SnapshotOffer`,
   numbered `SnapshotPart`s, the records every seat has queued as `Replayed`,
   `CatchUpDone`, all directed host to peer. They share nothing else. The
   rejoiner has no sim or router and is a `Rejoiner` that ends in a `Peer`; the
@@ -605,7 +605,7 @@ joiner                         host
   drop does not join `ai_seats` on any peer.
 
 *NET-05 as built* (`crates/sta_net/src/referee.rs`, `bin/referee.rs`, protocol version 4;
-NET_DECISIONS N5):
+ADR 0005 N5):
 
 - **A connection without a seat.** The referee takes a relay slot like a joiner
   (so a room holds at most 7 players beside it), passes the joiner's handshake
@@ -715,7 +715,7 @@ Every peer is untrusted, and so is anything relayed.
 - Map download; peers need the same map file.
 - Playing on after a desync, by majority or otherwise (until NET-04, and
   then by resync from the host or a referee, never by majority;
-  NET_DECISIONS N2, N3, N5).
+  ADR 0005 N2, N3, N5).
 - Peer-to-peer paths and NAT hole punching; the relay carries everything.
 - Encryption, accounts, matchmaking, the public game list (Refit's milestone
   3 is the model for later), a ping filter, anti-cheat.
@@ -756,19 +756,19 @@ Every peer is untrusted, and so is anything relayed.
    differences can play together?
 3. **After a desync**, stop the match for everyone (this draft), or do as
    Armada II did and let players carry on at their own risk?
-   **Decided:** neither; resync (NET_DECISIONS N2, N3).
+   **Decided:** neither; resync (ADR 0005 N2, N3).
 4. **Rejoin after a restart** replays the whole game headless. Is that
    acceptable for v1, or should snapshot resync (and the cross-machine
    snapshot determinism proof it needs) come first?
    **Decided:** whole-log replay first, snapshot rejoin with NET-04
-   (NET_DECISIONS N4).
+   (ADR 0005 N4).
 5. **Drops.** Default outcome when a seat leaves or times out with no votes:
    AI takeover (with which AI) or elimination? And is "every connected human
    agrees, else the host decides" the right rule?
 6. **Desync diagnosis.** Should a desync also exchange a full state dump at
    the bad tick (bigger, but names the diverging entity), or are the two
    replays enough for v1?
-   **Decided:** no state dump; section digests (NET_DECISIONS N6).
+   **Decided:** no state dump; section digests (ADR 0005 N6).
 7. **The host leaving ends the game.** Acceptable for v1, given AI and Lua
    run only on the host?
 8. **D10 and the content key table.** Commands carry `ContentKey`s, so peers

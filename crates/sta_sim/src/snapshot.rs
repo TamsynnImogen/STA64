@@ -46,8 +46,9 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// (crafts in warp). Format 19 appends stuck-order watch rows; format 20
 /// adds their anchor, start distance and birth tick. Format 21 appends scripted
 /// orders (SIM-56) and per-craft switches (SIM-58). Format 22 appends mission
-/// attributes (SIM-54). Format 23 appends cosmetic seat factions. Format 25 appends the
-/// team-pool adjustments of scripts (SIM-54); 24 is taken by the derelict latch (SIM-39, open).
+/// attributes (SIM-54). Format 23 appends cosmetic seat factions. Format 24
+/// adds crew casualties and the derelict latch to the subsystem rows (#652).
+/// Format 25 appends the team-pool adjustments of scripts (SIM-54).
 /// Only the current format is read.
 pub const FORMAT_VERSION: u16 = 25;
 

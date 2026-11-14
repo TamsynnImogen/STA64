@@ -339,14 +339,17 @@ pub struct UnitDef {
     pub maximum_crew: Option<Fixed>,
     /// `maxCrewGain` of a station (SIM-25): what it adds to its team's crew capacity.
     pub crew_gain: Fixed,
-    /// `saneCrewLossMethod` (SIM-39): a hit's crew loss is in absolute crew
-    /// points; without it the loss is a percent of the unit's maximum crew.
+    /// `saneCrewLossMethod` (SIM-39): above 100 crew a shield hit's loss is
+    /// in crew points; without it (or at 100 or less) it is a percent of the
+    /// unit's current crew.
     pub sane_crew_loss: bool,
     /// Hit points of the unit's systems (SIM-55), in the order engines,
     /// weapons, shield generator, life support, sensors: `enginesHitPoints`,
     /// `weaponsHitPoints`, `shieldGeneratorHitPoints`, `lifeSupportHitPoints`,
     /// `sensorsHitPoints`. 0 when the key is absent.
     pub system_hit_points: [Fixed; 5],
+    /// The keys of the engine's crew-casualty model (SIM-39).
+    pub casualty: CasualtyDef,
     /// Authored repair metadata only; no profile or runtime policy is implied.
     pub repair: RepairDef,
     /// Sensor range, units.
@@ -461,6 +464,7 @@ impl UnitDef {
             crew_gain: Fixed::ZERO,
             sane_crew_loss: false,
             system_hit_points: [Fixed::ZERO; 5],
+            casualty: CasualtyDef::default(),
             repair: RepairDef::default(),
             sensor: Fixed::ZERO,
             hardpoints: Vec::new(),
@@ -546,6 +550,9 @@ pub struct WeaponDef {
     pub activate_on_team_change: bool,
     /// The ordnance's crew-loss keys (SIM-39); `None` when it has none of them.
     pub crew_loss: Option<OrdnanceCrewLoss>,
+    /// `damageVariance` of the ordnance (SIM-39): each hit does `damageBase`
+    /// plus or minus up to this much, uniformly. 0 when absent.
+    pub damage_variance: Fixed,
     /// Feature switches resolved for this weapon, as [`UnitDef::features`];
     /// `None`: the database-wide set. Read through
     /// `ContentDb::weapon_features`.
@@ -565,10 +572,47 @@ pub struct WeaponDef {
 pub struct OrdnanceCrewLoss {
     /// `damageThreshold`: damage below it costs no crew.
     pub threshold: Fixed,
-    /// `shieldCrewModifier`: crew lost per point of shield damage over the threshold.
+    /// `shieldCrewModifier`: the crew law's factor for the shield part over the threshold.
     pub shield: Fixed,
-    /// `hullCrewModifier`: the same for hull damage (read, not applied: not measured).
+    /// `hullCrewModifier`: crew lost by a hit that lands on the crew location.
     pub hull: Fixed,
+}
+
+/// A unit's crew-casualty keys (SIM-39). Arrays are in the order of
+/// [`UnitDef::system_hit_points`]: engines, weapons, shield generator, life
+/// support, sensors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CasualtyDef {
+    /// `shieldProtection`; `None`: the `RTS_CFG.h` `SHIELD_DAMAGE_PROTECTION`.
+    pub shield_protection: Option<Fixed>,
+    /// `enginesHitPercent`, `weaponsHitPercent`, `shieldGeneratorHitPercent`,
+    /// `lifeSupportHitPercent`, `sensorsHitPercent`: the weight of the hit-location roll.
+    pub system_hit_percent: [Fixed; 5],
+    /// `crewHitPercent`.
+    pub crew_hit_percent: Fixed,
+    /// `hullHitPercent`; `None`: what the others leave of 100.
+    pub hull_hit_percent: Option<Fixed>,
+    /// `enginesCrewLoss`, `weaponsCrewLoss`, `shieldGeneratorCrewLoss`,
+    /// `lifeSupportCrewLoss`, `sensorsCrewLoss`: percent of crew a dead system kills.
+    pub system_crew_loss: [Fixed; 5],
+    /// `lifeSupportLoss`: percent of crew per second lost while life support is down.
+    pub life_support_loss: Fixed,
+    /// `recrewRate`: crew per second a station recrews; `None` is the engine's 10.
+    pub recrew_rate: Option<Fixed>,
+}
+
+impl Default for CasualtyDef {
+    fn default() -> Self {
+        CasualtyDef {
+            shield_protection: None,
+            system_hit_percent: [Fixed::ZERO; 5],
+            crew_hit_percent: Fixed::ZERO,
+            hull_hit_percent: None,
+            system_crew_loss: [Fixed::ZERO; 5],
+            life_support_loss: Fixed::ZERO,
+            recrew_rate: None,
+        }
+    }
 }
 
 /// The keys of a `resourceweapon` (Fleet Operations 3.x and later; stock
@@ -615,6 +659,7 @@ impl WeaponDef {
             ordnance_defence: false,
             activate_on_team_change: false,
             crew_loss: None,
+            damage_variance: Fixed::ZERO,
             features: None,
             resource: None,
             replace: None,

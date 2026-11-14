@@ -918,6 +918,7 @@ impl Bench {
             C::Colonize { .. } | C::Vent { .. } | C::EndMission { .. } => {
                 return Err("unsupported: colonize/vent/succeed/fail".into());
             }
+            C::Frame(_) => return Err("unsupported: frame (no renderer at tier 1; a session started with --render has one)".into()),
             C::Unknown { verb, .. } => return Err(format!("unsupported: {verb}")),
         })
     }
