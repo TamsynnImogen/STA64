@@ -158,10 +158,13 @@ impl Plugin for RockPlugin {
         embedded_asset!(app, "rock.wesl");
         app.add_plugins(MaterialPlugin::<RockMaterial>::default())
             .init_resource::<RockMaterials>()
-            .add_systems(Update, (apply.after(crate::render::surfaces::poll), forget, moon_nimbus))
+            .add_systems(Update, (apply.after(crate::render::surfaces::poll), revert_to_stock, forget, moon_nimbus))
             .add_systems(PostUpdate, update.after(TransformSystems::Propagate));
     }
 }
+
+/// A part waiting for its surface: the part and the material it has now.
+type WaitingPart = (Entity, &'static RockPart, Option<&'static MeshMaterial3d<StandardMaterial>>);
 
 /// Swap waiting parts to their rock material when the surface is ready.
 #[allow(clippy::too_many_arguments)]
@@ -169,21 +172,21 @@ fn apply(
     mut commands: Commands,
     vfs: Res<crate::viewer::Mounted>,
     mut surfaces: ResMut<crate::render::surfaces::Surfaces>,
-    parts: Query<(Entity, &RockPart), Without<RockMat>>,
+    parts: Query<WaitingPart, Without<RockMat>>,
     mut materials: ResMut<Assets<RockMaterial>>,
     mut shared: ResMut<RockMaterials>,
     profile: Option<Res<RenderProfile>>,
     effects: Option<Res<ProfileEffects>>,
 ) {
     let stock = nimbus_drawn(profile.as_deref(), effects.as_deref());
-    for (e, part) in &parts {
+    for (e, part, old) in &parts {
         if stock && !part.moon {
             continue;
         }
         let Some(b) = surfaces.request(&vfs.0, &part.recipe, crate::render::surfaces::ROCK_FACE) else { continue };
         let key = material_key(part);
         if let Some(m) = shared.0.get(&key) {
-            commands.entity(e).insert((RockMat, MeshMaterial3d(m.clone()))).remove::<MeshMaterial3d<StandardMaterial>>();
+            to_rock(&mut commands, e, old, m.clone());
             continue;
         }
         let r = &b.recipe;
@@ -207,7 +210,37 @@ fn apply(
             relief: Some(b.relief.clone()),
         });
         shared.0.insert(key, m.clone());
-        commands.entity(e).insert((RockMat, MeshMaterial3d(m))).remove::<MeshMaterial3d<StandardMaterial>>();
+        to_rock(&mut commands, e, old, m);
+    }
+}
+
+/// The part's original material, kept while it wears a rock material so the Stock look can give it back.
+#[derive(Component)]
+struct StockMaterial(Handle<StandardMaterial>);
+
+fn to_rock(commands: &mut Commands, e: Entity, old: Option<&MeshMaterial3d<StandardMaterial>>, rock: Handle<RockMaterial>) {
+    let mut c = commands.entity(e);
+    c.insert((RockMat, MeshMaterial3d(rock))).remove::<MeshMaterial3d<StandardMaterial>>();
+    if let Some(old) = old {
+        c.insert(StockMaterial(old.0.clone()));
+    }
+}
+
+/// After a switch to the Stock look, rocks that took the recipe surface under Refit's get their own material
+/// back; the moons keep theirs (their lit cracks stand in for the glow shell under both looks).
+fn revert_to_stock(
+    mut commands: Commands,
+    profile: Option<Res<RenderProfile>>,
+    effects: Option<Res<ProfileEffects>>,
+    parts: Query<(Entity, &RockPart, &StockMaterial), With<RockMat>>,
+) {
+    if !nimbus_drawn(profile.as_deref(), effects.as_deref()) {
+        return;
+    }
+    for (e, part, stock) in &parts {
+        if !part.moon {
+            commands.entity(e).insert(MeshMaterial3d(stock.0.clone())).remove::<(RockMat, MeshMaterial3d<RockMaterial>)>();
+        }
     }
 }
 
@@ -332,6 +365,55 @@ mod tests {
         }
         assert!(ready, "the moon's recipe surface was never uploaded under the Stock look");
         assert!(app.world().get::<RockMat>(asteroid).is_none(), "an asteroid kept its stock material under Stock");
+    }
+
+    /// A run-time look switch Stock -> Refit -> Stock: an asteroid takes the recipe surface under Refit and gets
+    /// its own material back under Stock; a moon keeps its surface throughout. (Before this the rock kept the
+    /// recipe surface after the switch back, on main too.)
+    #[test]
+    fn a_look_round_trip_gives_asteroids_their_material_back_and_moons_keep_theirs() {
+        use crate::render::surfaces::Surfaces;
+        let mut app = App::new();
+        let mut effects = ProfileEffects::default();
+        effects.register_stock(Effect::Scenery);
+        app.insert_resource(effects)
+            .insert_resource(RenderProfile::Stock)
+            .insert_resource(crate::viewer::Mounted(sta_vfs::Vfs::default()))
+            .init_resource::<Surfaces>()
+            .init_resource::<RockMaterials>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .init_resource::<Assets<RockMaterial>>()
+            .init_resource::<Assets<crate::render::planet::PlanetMaterial>>()
+            .add_systems(Update, (crate::render::planet::add_surface_systems(), apply, revert_to_stock).chain());
+        let own = app.world_mut().resource_mut::<Assets<StandardMaterial>>().add(StandardMaterial::default());
+        let part = |moon| (RockPart { recipe: "mdmoon".into(), centre: Vec3::ZERO, inv_extent: Vec3::ONE, moon }, MeshMaterial3d(own.clone()));
+        let moon = app.world_mut().spawn(part(true)).id();
+        let asteroid = app.world_mut().spawn(part(false)).id();
+        let run_until = |app: &mut App, done: &dyn Fn(&App) -> bool| {
+            for _ in 0..600 {
+                app.update();
+                if done(app) {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            panic!("the surface never arrived");
+        };
+        // Stock: the moon has its surface, the asteroid its own material.
+        run_until(&mut app, &|a| a.world().get::<RockMat>(moon).is_some());
+        assert!(app.world().get::<RockMat>(asteroid).is_none());
+        // Refit: the asteroid takes the recipe surface too.
+        app.insert_resource(RenderProfile::Refit);
+        run_until(&mut app, &|a| a.world().get::<RockMat>(asteroid).is_some());
+        assert!(app.world().get::<MeshMaterial3d<StandardMaterial>>(asteroid).is_none());
+        // Back to Stock: the asteroid is as it was, the moon keeps its surface.
+        app.insert_resource(RenderProfile::Stock);
+        app.update();
+        assert!(app.world().get::<RockMat>(asteroid).is_none());
+        assert_eq!(app.world().get::<MeshMaterial3d<StandardMaterial>>(asteroid).map(|m| m.0.id()), Some(own.id()));
+        assert!(app.world().get::<MeshMaterial3d<RockMaterial>>(asteroid).is_none());
+        assert!(app.world().get::<RockMat>(moon).is_some() && app.world().get::<MeshMaterial3d<RockMaterial>>(moon).is_some());
     }
 
     #[test]
