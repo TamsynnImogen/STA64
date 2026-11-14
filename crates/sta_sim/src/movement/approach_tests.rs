@@ -58,11 +58,15 @@ pub(crate) fn db(profile: Profile, warp_distance: Option<i32>) -> ContentDb {
 }
 
 pub(crate) fn sim(db: ContentDb) -> Sim {
+    sim_with(Arc::new(db))
+}
+
+pub(crate) fn sim_with(db: Arc<ContentDb>) -> Sim {
     let seat = |id| PlayerSetup { id: PlayerId(id), team: TeamId(id), race: "st".into(), control: Control::Idle };
     Sim::from_setup(&GameSetup {
         seed: 5,
         map: Arc::new(sta_content::MapDef::empty()),
-        content: Arc::new(db),
+        content: db,
         players: vec![seat(1), seat(2)],
         options: GameOptions::default(),
     })

@@ -226,6 +226,9 @@ fn invalid_arity_types_range_strings_and_handles_queue_nothing() {
     let bad = [
         "A2.CenterCamera()".to_owned(),
         format!("A2.CenterCamera({},1)", first.0),
+        "A2.CenterCamera('P', -1)".to_owned(),
+        "A2.CenterCamera('P', 1.5)".to_owned(),
+        "A2.CenterCamera(1, 2, 3)".to_owned(),
         "A2.CenterCamera(-1)".to_owned(),
         "A2.CenterCamera('1')".to_owned(),
         "A2.CenterCamera(4294967296)".to_owned(),
@@ -272,4 +275,17 @@ fn dying_entity_validation_uses_the_current_view() {
         assert!(rt.eval::<()>(&script).is_err(), "{script}");
         assert!(rt.take_commands().is_empty());
     }
+}
+
+#[test]
+fn center_camera_on_a_path_point_keeps_the_path_name_and_point() {
+    let (setup, sim, _, _) = scene();
+    let mut rt = runtime(&sim, &setup);
+    rt.eval::<()>("A2.CenterCamera('Camera_1', 0)").unwrap();
+    let commands = rt.take_commands();
+    assert_eq!(commands.len(), 1);
+    assert!(matches!(
+        &commands[0].kind,
+        CommandKind::Edit(Edit::Present(p)) if *p == call("CenterCamera", vec![Arg::Text("Camera_1".into()), Arg::Int(0)])
+    ));
 }
