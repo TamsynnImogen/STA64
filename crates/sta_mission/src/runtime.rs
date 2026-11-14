@@ -556,6 +556,32 @@ impl MissionRuntime {
         state
     }
 
+    /// Host-side forced end (LUA-29, `crate::cheat`): write the same end record a script's
+    /// `SucceedMission` / `FailMission` writes (end time `tick`) and latch the result, so nothing
+    /// the script calls afterwards (A2 end calls, A1 hook outcome) can replace it, and everything
+    /// downstream (the outcome scan, the campaign transition) is the scripted path's. It replaces
+    /// a pending scripted end (also a blocked one) and skips whatever the script would have run
+    /// before calling its own end. No sim state, no command. Returns false, and changes nothing (except that a due A2 end is latched by the check),
+    /// once the mission has ended or the outcome scan would already return one (an A1 end call,
+    /// `Mission.finish`), or an A2 scripted end is already due (its end time has passed). `tick`
+    /// only stamps the record; the result takes effect at the next outcome scan. Crate-internal:
+    /// the chat hook and the harness reach it through `cheat` and `ending`.
+    pub(crate) fn force_mission_end(&self, tick: u64, won: bool) -> bool {
+        if self.inner.ctx.borrow().ended.is_some() || self.finished() {
+            return false;
+        }
+        if matches!(self.mission_end(tick), MissionEndState::Ended { .. }) {
+            return false;
+        }
+        if self.eval::<bool>("return rawget(_G, '__sta64_outcome') ~= nil").unwrap_or(false) {
+            return false;
+        }
+        let mut c = self.inner.ctx.borrow_mut();
+        c.mission_end = Some(api::MissionEnd { time: tick as f64 / sta_core::TICK_HZ as f64, failed: !won, blocked: None });
+        c.ended = Some(won);
+        true
+    }
+
     /// What the script asked of the AI since the last call, in call order (AI-06, LUA-20): plan
     /// loads (`AI_Team_Load_AIP`, `Player:loadAIP`) and the switches (`DisableAllAITeams`,
     /// `EnableAllAITeams`, `EnableTeam`, `DisableTeam`, `SetIsAITeam`, `ResetStrategyCycle`).

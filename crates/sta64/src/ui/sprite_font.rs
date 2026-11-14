@@ -786,6 +786,9 @@ pub struct SpriteTextStyle {
     pub wrap: Option<f32>,
     /// Draw the font at its own glyph height instead of scaling it to `size`.
     pub native: bool,
+    /// Honor the requested logical size instead of rounding up to a whole glyph multiple.
+    /// Compact HUD captions use this while retaining the mod's bitmap font and sampler.
+    pub scaled: bool,
     /// Tint coloured glyphs (resource symbols) like the rest; they are drawn untinted
     /// by default.
     pub tint_all: bool,
@@ -1057,7 +1060,7 @@ fn resolve_text(
             .unwrap_or_default();
         // Styled (kit) text is drawn crisp: a font and whole multiple that put glyph texels
         // on whole physical pixels. Plain `sprite_text` keeps its scaled drawing.
-        let crisp = if styled && !style.native && scalable.is_none() {
+        let crisp = if styled && !style.native && !style.scaled && scalable.is_none() {
             // A sprite font's nominal height carries leading above and below its ink; a
             // label with a readable floor asks for the font that inks as tall as the
             // TTF of that size (`STOCK_INK`), not one of that nominal height.
@@ -2231,6 +2234,30 @@ mod tests {
         let kid = app.world().get::<Children>(e).unwrap()[0];
         let Val::Px(w) = app.world().get::<Node>(kid).unwrap().width else { panic!() };
         assert!(((w * 2.0) - (w * 2.0).round()).abs() < 1e-3);
+    }
+
+    #[test]
+    fn scaled_sprite_style_keeps_compact_logical_size_at_every_ui_scale() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).init_resource::<SpriteFonts>()
+            .init_resource::<GlyphWords>().add_systems(Update, resolve_text);
+        let mut font = ttf_like(23.0);
+        font.name = "fontsmall".into();
+        let mut loaded = LoadedFont::new(font, vec![(Handle::default(), UVec2::new(256,256))]);
+        loaded.font.reference = None;
+        app.world_mut().resource_mut::<SpriteFonts>().fonts.insert("fontsmall".into(), loaded);
+        let e = app.world_mut().spawn(sprite_text_styled("USS Dunlop", 12.0, Color::WHITE,
+            SpriteTextStyle { scaled: true, ..SpriteTextStyle::role(FontRole::Small).wrapped(86.0) })).id();
+        for scale in [1.0, 2.0 / 3.0, 4.0 / 3.0] {
+            app.insert_resource(UiScale(scale));
+            app.update();
+            let node = app.world().get::<Node>(e).unwrap();
+            let (Val::Px(width), Val::Px(height)) = (node.width,node.height) else { panic!("unresolved sprite text") };
+            assert!(width <= 86.0 && height <= 13.0, "scaled caption {width}x{height} at {scale}");
+            let children = app.world().get::<Children>(e).unwrap();
+            assert!(!children.is_empty());
+            assert!(children.iter().all(|c| app.world().get::<ImageNode>(c).is_some()), "the mod's sprite font must be retained");
+        }
     }
 
     /// Install-gated: the installs' own fonts, at the multiples the menus would use.
