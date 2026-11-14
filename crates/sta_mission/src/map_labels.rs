@@ -27,8 +27,10 @@ use sta_vfs::Vfs;
 pub enum LabelKind {
     /// `asteroidfield`, `nebula_obj`: the load keeps a region with no label.
     Region,
-    /// `background_obj` (sun, moon, wreck, scenery light): the load keeps no labelled object.
+    /// `background_obj` (sun, moon, wreck): the load keeps no labelled object.
     Prop,
+    /// A `background_obj` whose ODF name holds `light` (scenery light, cosmetic): the load keeps position and colour only.
+    Light,
     /// `wormhole_obj`: skipped today; LUA-24 makes these entities.
     Wormhole,
     /// Anything else the load did not label.
@@ -40,6 +42,7 @@ impl LabelKind {
         match self {
             LabelKind::Region => "region",
             LabelKind::Prop => "prop",
+            LabelKind::Light => "scenery light",
             LabelKind::Wormhole => "wormhole",
             LabelKind::Other => "object",
         }
@@ -70,11 +73,15 @@ pub fn find_label_gaps(map: &sta_bzn::Map, carried: &BTreeSet<String>, class_of:
     let mut seen = BTreeSet::new();
     let mut out = Vec::new();
     for o in &map.objects {
-        let label = o.label.trim_end_matches('\0');
+        // `MapDef` trims a label the same way.
+        let label = o.label.trim_matches(|c: char| c == '\0' || c.is_whitespace());
         if label.is_empty() || carried.contains(label) || !seen.insert(label.to_owned()) {
             continue;
         }
-        let kind = LabelKind::of_class(&class_of(&o.odf));
+        let mut kind = LabelKind::of_class(&class_of(&o.odf));
+        if kind == LabelKind::Prop && o.odf.to_ascii_lowercase().contains("light") {
+            kind = LabelKind::Light;
+        }
         out.push(LabelGap { label: label.to_owned(), odf: o.odf.to_ascii_lowercase(), kind });
     }
     out

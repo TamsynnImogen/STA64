@@ -43,7 +43,7 @@ impl Ctx {
         });
         let Some(g) = found else { return };
         let why = match g.kind {
-            LabelKind::Wormhole => "wormhole object, not an entity yet (LUA-24)".to_owned(),
+            LabelKind::Wormhole => "wormhole object, not placed".to_owned(),
             k => format!("{} `{}` is in the map, the load creates no labelled object", k.name(), g.odf),
         };
         let key = format!("{api}.GetHandle: label '{}': {why}", g.label);

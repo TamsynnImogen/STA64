@@ -1003,6 +1003,22 @@ pub fn launch_runtime(
     sim: &Sim,
     paths: Vec<(String, Vec<[f32; 3]>)>,
 ) -> Result<MissionRuntime, StartError> {
+    launch_runtime_with_gaps(path, reader, seed, seat, setup, sim, paths, Vec::new())
+}
+
+/// [`launch_runtime`] with the map's unresolved labels (LUA-25, [`crate::map_labels`]), known before the
+/// script chunk loads so a `GetHandle` at load time records its gap too.
+#[allow(clippy::too_many_arguments)]
+pub fn launch_runtime_with_gaps(
+    path: &str,
+    reader: ScriptReader,
+    seed: u64,
+    seat: (PlayerId, PlayerNumbering),
+    setup: &GameSetup,
+    sim: &Sim,
+    paths: Vec<(String, Vec<[f32; 3]>)>,
+    label_gaps: Vec<crate::map_labels::LabelGap>,
+) -> Result<MissionRuntime, StartError> {
     let cfg = MissionConfig {
         seat: Some(seat.0),
         player_numbering: seat.1,
@@ -1011,7 +1027,7 @@ pub fn launch_runtime(
         paths,
         view: Some((*sim.view()).clone()),
     };
-    let runtime = MissionRuntime::load_with(path, seed, cfg, move |p| reader(p));
+    let runtime = MissionRuntime::load_with_gaps(path, seed, cfg, label_gaps, move |p| reader(p));
     if let Some(e) = runtime.errors().first() {
         return Err(StartError::Blocked(format!("{path} did not load: {e}")));
     }
@@ -1164,9 +1180,9 @@ impl CampaignRunner {
         let (path, reader) = host.script(c, m).map_err(StartError::Blocked)?;
         let setup = host.game_setup(c, m, seed).map_err(StartError::Blocked)?;
         let sim = Sim::from_setup(&setup);
-        let runtime = launch_runtime(&path, reader, seed, host.seat(), &setup, &sim, host.map_paths(c, m))?;
         let carried = sim.labels.iter().map(|(_, l)| l.clone()).collect();
-        runtime.set_label_gaps(host.map_label_gaps(c, m, &carried));
+        let gaps = host.map_label_gaps(c, m, &carried);
+        let runtime = launch_runtime_with_gaps(&path, reader, seed, host.seat(), &setup, &sim, host.map_paths(c, m), gaps)?;
         let ai_hub = sta_ai::MissionAiHub::new(host.aip_library());
         self.active = Some(ActiveMission {
             campaign: campaign.to_owned(),
@@ -1335,3 +1351,5 @@ pub fn map_setup(map: MapDef, content: Arc<ContentDb>, seed: u64) -> GameSetup {
 #[cfg(test)]
 #[path = "campaign/tests.rs"]
 mod tests;
+#[cfg(test)]
+mod label_gap_tests;

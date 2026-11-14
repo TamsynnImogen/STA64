@@ -11,20 +11,27 @@ fn gap(label: &str, odf: &str, kind: LabelKind) -> LabelGap {
     LabelGap { label: label.into(), odf: odf.into(), kind }
 }
 
-/// One live unit labelled `Hero`; the map also has the gaps given.
-fn scene(gaps: Vec<LabelGap>) -> (MissionRuntime, EntityId) {
+fn config() -> (MissionConfig, EntityId, Sim) {
     let mut sim = Sim::new(1);
     let hero = sim.spawn(0, Vec3::from_f32([0.0, 0.0, 0.0]), (Fixed::ZERO, Fixed::ONE), MoveStats::from_f32(10., 1., 1., 1., 0.2));
     let labels: BTreeMap<EntityId, String> = [(hero, "Hero".to_owned())].into();
-    let cfg = MissionConfig { labels, view: Some((*sim.view()).clone()), ..MissionConfig::default() };
-    let rt = MissionRuntime::from_source_with("g.lua", "", 1, cfg);
+    (MissionConfig { labels, view: Some((*sim.view()).clone()), ..MissionConfig::default() }, hero, sim)
+}
+
+/// One live unit labelled `Hero`; the map also has the gaps given.
+fn scene(gaps: Vec<LabelGap>) -> (MissionRuntime, EntityId) {
+    let (cfg, hero, _) = config();
+    let rt = MissionRuntime::from_source_with_gaps("g.lua", "", 1, cfg, gaps);
     assert!(rt.errors().is_empty(), "{:?}", rt.errors());
-    rt.set_label_gaps(gaps);
     (rt, hero)
 }
 
 fn region_gaps() -> Vec<LabelGap> {
-    vec![gap("Nebula1", "mnebula1", LabelKind::Region), gap("Worm1", "mwrmhole", LabelKind::Wormhole)]
+    vec![
+        gap("Cloud1", "fx_cloud", LabelKind::Region),
+        gap("Gate1", "fx_gate", LabelKind::Wormhole),
+        gap("Lamp1", "fx_lamp_light", LabelKind::Light),
+    ]
 }
 
 fn listed(rt: &MissionRuntime) -> Vec<String> {
@@ -34,27 +41,36 @@ fn listed(rt: &MissionRuntime) -> Vec<String> {
 #[test]
 fn a2_a_label_in_the_map_and_unresolved_is_a_handle_gap() {
     let (rt, _) = scene(region_gaps());
-    assert_eq!(rt.eval::<i64>("return A2.GetHandle('Nebula1')").unwrap(), 0);
+    assert_eq!(rt.eval::<i64>("return A2.GetHandle('Cloud1')").unwrap(), 0);
     let l = listed(&rt);
     assert_eq!(l.len(), 1, "{l:?}");
-    assert!(l[0].starts_with("A2.GetHandle: label 'Nebula1': region `mnebula1`"), "{l:?}");
+    assert!(l[0].starts_with("A2.GetHandle: label 'Cloud1': region `fx_cloud`"), "{l:?}");
+}
+
+#[test]
+fn a2_matches_the_label_exactly() {
+    let (rt, _) = scene(region_gaps());
+    assert_eq!(rt.eval::<i64>("return A2.GetHandle('cloud1')").unwrap(), 0);
+    assert!(listed(&rt).is_empty(), "the original compares case-sensitively, so 'cloud1' names nothing in the map");
 }
 
 #[test]
 fn a1_a_label_in_the_map_and_unresolved_is_a_handle_gap_and_matches_without_case() {
     let (rt, _) = scene(region_gaps());
-    assert!(rt.eval::<bool>("return A1.GetHandle('nebula1') == nil or A1.GetHandle('nebula1') == 0").unwrap());
+    assert!(rt.eval::<bool>("local h = A1.GetHandle('cloud1') return h == nil or h == 0").unwrap());
     let l = listed(&rt);
     assert_eq!(l.len(), 1, "{l:?}");
-    assert!(l[0].starts_with("A1.GetHandle: label 'Nebula1'"), "{l:?}");
+    assert!(l[0].starts_with("A1.GetHandle: label 'Cloud1'"), "{l:?}");
 }
 
 #[test]
-fn a_wormhole_label_is_listed_apart_with_its_own_text() {
+fn a_wormhole_and_a_scenery_light_are_listed_with_their_own_text() {
     let (rt, _) = scene(region_gaps());
-    rt.eval::<i64>("return A2.GetHandle('Worm1')").unwrap();
+    rt.eval::<i64>("return A2.GetHandle('Gate1')").unwrap();
+    rt.eval::<i64>("return A2.GetHandle('Lamp1')").unwrap();
     let l = listed(&rt);
-    assert!(l[0].contains("wormhole object, not an entity yet (LUA-24)"), "{l:?}");
+    assert!(l[0].contains("wormhole object, not placed"), "{l:?}");
+    assert!(l[1].contains("scenery light `fx_lamp_light`"), "{l:?}");
 }
 
 #[test]
@@ -70,15 +86,25 @@ fn a_label_in_neither_the_map_nor_the_script_is_no_gap() {
 
 #[test]
 fn a_resolved_label_is_no_gap_even_when_the_map_list_names_it() {
-    let (rt, hero) = scene(vec![gap("Hero", "mship", LabelKind::Other)]);
+    let (rt, hero) = scene(vec![gap("Hero", "fx_ship", LabelKind::Other)]);
     assert_eq!(rt.eval::<i64>("return A2.GetHandle('Hero')").unwrap(), i64::from(hero.0));
+    assert!(listed(&rt).is_empty());
+}
+
+#[test]
+fn a_label_carried_by_a_dead_unit_is_no_gap() {
+    // The host lists only labels no sim object carries, so `Hero` is not in the list; its unit is
+    // gone from the view and `GetHandle` answers 0 as the original does, with no record.
+    let (cfg, _, _) = config();
+    let rt = MissionRuntime::from_source_with_gaps("g.lua", "", 1, MissionConfig { view: None, ..cfg }, Vec::new());
+    assert_eq!(rt.eval::<i64>("return A2.GetHandle('Hero')").unwrap(), 0);
     assert!(listed(&rt).is_empty());
 }
 
 #[test]
 fn a_gap_blocks_an_end_that_reads_the_missing_handle() {
     let (rt, _) = scene(region_gaps());
-    rt.eval::<()>("local h = A2.GetHandle('Nebula1') if not A2.IsAlive(h) then A2.SucceedMission(0, 0) end").unwrap();
+    rt.eval::<()>("local h = A2.GetHandle('Cloud1') if not A2.IsAlive(h) then A2.SucceedMission(0, 0) end").unwrap();
     match rt.mission_end(5) {
         MissionEndState::Blocked(why) => assert!(why.contains("IsAlive") && why.contains("GetHandle"), "{why}"),
         other => panic!("{other:?}"),
@@ -88,6 +114,24 @@ fn a_gap_blocks_an_end_that_reads_the_missing_handle() {
 #[test]
 fn a_gap_does_not_block_an_end_that_reads_only_live_objects() {
     let (rt, hero) = scene(region_gaps());
-    rt.eval::<()>(&format!("local _ = A2.GetHandle('Nebula1') if A2.IsAlive({}) then A2.SucceedMission(0, 0) end", hero.0)).unwrap();
+    rt.eval::<()>(&format!("local _ = A2.GetHandle('Cloud1') if A2.IsAlive({}) then A2.SucceedMission(0, 0) end", hero.0)).unwrap();
     assert_eq!(rt.mission_end(5), MissionEndState::Ended { won: true });
+}
+
+/// Known over-block (the rule is global, `Taint::handle_gap`): once one label gap is recorded, a
+/// read of any handle that never existed is tainted, also the 0 of a label in no map object, which
+/// is not a gap by itself. Pinned so a change of the rule shows; the coordinator decides about it.
+#[test]
+fn pinned_over_block_a_gap_taints_a_later_read_of_a_sentinel_handle() {
+    let (rt, _) = scene(region_gaps());
+    rt.eval::<()>("local _ = A2.GetHandle('Cloud1') local h = A2.GetHandle('Sentinel') if not A2.IsAlive(h) then A2.SucceedMission(0, 0) end").unwrap();
+    assert!(matches!(rt.mission_end(5), MissionEndState::Blocked(_)), "{:?}", rt.mission_end(5));
+}
+
+#[test]
+fn a_get_handle_at_script_chunk_load_records_the_gap() {
+    let (cfg, _, _) = config();
+    let rt = MissionRuntime::from_source_with_gaps("g.lua", "H = A2.GetHandle('Cloud1')", 1, cfg, region_gaps());
+    assert!(rt.errors().is_empty(), "{:?}", rt.errors());
+    assert_eq!(listed(&rt).len(), 1, "{:?}", rt.unsupported());
 }
