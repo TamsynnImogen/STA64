@@ -205,24 +205,31 @@ pub(crate) fn unit_under(cursor: Vec2, ray: Ray3d, units: &Targetable) -> Option
     if let Some((_, id)) = icon {
         return Some(id);
     }
-    let mut best: Option<(f32, EntityId)> = None;
+    // Every sphere the ray crosses: (distance along the ray, radius, centre, id).
+    let mut hits: Vec<(f32, f32, Vec3, EntityId)> = Vec::new();
     for (u, radius, gt, strategic) in units {
         // A symbol replaces this model, so its invisible sphere cannot steal a
         // click (including when the symbol is folded into a fleet leader).
         if strategic.is_some_and(|s| s.symbol) {
             continue;
         }
-        let to = visual_centre(gt, strategic) - ray.origin;
+        let centre = visual_centre(gt, strategic);
+        let to = centre - ray.origin;
         let t = to.dot(*ray.direction);
         if t < 0.0 {
             continue;
         }
         let miss = (to - *ray.direction * t).length();
-        if miss <= radius.0 && best.is_none_or(|(bt, _)| t < bt) {
-            best = Some((t, u.0));
+        if miss <= radius.0 {
+            hits.push((t, radius.0, centre, u.0));
         }
     }
-    best.map(|b| b.1)
+    let nearest = |it: &mut dyn Iterator<Item = &(f32, f32, Vec3, EntityId)>| it.min_by(|a, b| a.0.total_cmp(&b.0)).copied();
+    let first = nearest(&mut hits.iter())?;
+    // A volume (a nebula) holds the things inside it: a smaller sphere whose centre lies
+    // within the picked one is what the player means, wherever along the ray it sits.
+    let inside = nearest(&mut hits.iter().filter(|h| h.3 != first.3 && h.1 < first.1 && h.2.distance(first.2) <= first.1));
+    Some(inside.unwrap_or(first).3)
 }
 
 /// Model pivots can be outside the visible hull. Match the icon's anchor for
