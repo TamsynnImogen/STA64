@@ -939,3 +939,49 @@ fn presented_any(commands: &[Command]) -> Vec<Presentation> {
         })
         .collect()
 }
+
+/// LUA-21: a handle that names nothing live (0, never existed, dying) gets the
+/// executable's constant, Armada I; a live handle is unchanged; a call with no
+/// established answer still raises "not alive" (the converted prelude answers it
+/// 0 as before). A pending `BuildObject` handle keeps raising (not changed).
+#[test]
+fn dead_handles_get_the_graded_answers_and_live_ones_are_unchanged() {
+    use crate::api::{ABSENT_AMOUNT, ABSENT_DISTANCE, ABSENT_SHIELD_PERCENT};
+    let mut s = scene();
+    let dying = s.ids[1];
+    s.view.units.iter_mut().find(|u| u.id == dying).unwrap().flags = sta_sim::view::UnitFlags::DYING;
+    let rt = runtime(&s);
+    for dead in ["0", "99999", "b"] {
+        let d: (f64, f64, f64, f64) = rt
+            .eval(&format!(
+                "return A1.GetDistance(a, {dead}), A1.GetDistance({dead}, a), A1.GetDistance({dead}, 'P', 1), A1.GetDistance({dead}, {dead})"
+            ))
+            .unwrap();
+        assert_eq!(d, (ABSENT_DISTANCE, ABSENT_DISTANCE, ABSENT_DISTANCE, ABSENT_DISTANCE), "{dead}");
+        assert_eq!(ABSENT_DISTANCE as f32, f32::from_bits(0x7149_f2ca));
+        let v: (f64, f64) = rt.eval(&format!("return A1.GetRealShieldPercent({dead}), A1.GetCrew({dead})")).unwrap();
+        assert_eq!(v, (ABSENT_SHIELD_PERCENT, ABSENT_AMOUNT), "{dead}");
+        assert_eq!((ABSENT_SHIELD_PERCENT, ABSENT_AMOUNT), (-33.0, -1.0));
+        let p: (f64, f64, f64) = rt.eval(&format!("local p = A1.GetLocation({dead}); return p.x, p.y, p.z")).unwrap();
+        assert_eq!(p, (0.0, 0.0, 0.0), "{dead}");
+        // A rule "closer than N" no longer holds on a dead handle.
+        assert!(!rt.eval::<bool>(&format!("return A1.GetDistance(a, {dead}) < 1000")).unwrap());
+    }
+    // Live handles answer as before.
+    assert_eq!(rt.eval::<f64>("return A1.GetDistance(a, s)").unwrap(), 300.0);
+    assert_eq!(rt.eval::<f64>("return A1.GetDistance(a, 'P', 1)").unwrap(), 20.0);
+    assert_eq!(rt.eval::<f64>("return A1.GetLocation(s).x").unwrap(), 300.0);
+    assert!(rt.eval::<f64>("return A1.GetRealShieldPercent(a)").unwrap() >= 0.0);
+    // No established answer: still raises (the prelude's swallow answers 0).
+    for call in ["A1.GetShieldPercent(99999)", "A1.GetShieldPercent(b)"] {
+        assert!(rt.eval::<()>(call).is_err(), "{call}");
+    }
+    // A malformed handle is not a dead one.
+    assert!(rt.eval::<f64>("return A1.GetDistance(-1, a)").is_err());
+
+    // A pending `BuildObject` token is no dead handle (the original's handle is usable at once): it raises.
+    rt.eval::<()>("t = A1.BuildObject('fx_cruiser', 0, 'Q', 0)").unwrap();
+    for call in ["GetDistance(a, t)", "GetDistance(t, a)", "GetDistance(0, t)", "GetDistance(99999, t)", "GetRealShieldPercent(t)", "GetCrew(t)", "GetLocation(t)"] {
+        assert!(rt.eval::<()>(&format!("local _ = A1.{call}")).is_err(), "{call}");
+    }
+}

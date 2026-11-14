@@ -154,6 +154,14 @@ impl Placed {
         pop(owner).or_else(|| pop(sta_sim::world::NEUTRAL))
     }
 
+    /// The entity [`Placed::take`] would take, left in place.
+    fn peek(&self, key: ContentKey, o: &sta_bzn::MapObject) -> Option<EntityId> {
+        let p = SimVec3::from_f32([o.transform[9], o.transform[10], o.transform[11]]);
+        let owner = if o.team > 0 { PlayerId((o.team - 1).min(255) as u8) } else { sta_sim::world::NEUTRAL };
+        let first = |o| self.0.get(&(key, [p.x, p.y, p.z], o)).and_then(|q| q.front().copied());
+        first(owner).or_else(|| first(sta_sim::world::NEUTRAL))
+    }
+
     /// Entities no BZN object took (`from_setup` made them from something the
     /// renderer does not draw as a ship).
     #[cfg(test)]
@@ -868,6 +876,8 @@ fn rebuild(
     let map_def = setup.map.clone();
     let mut placed = Placed::of(&sim);
     commands.insert_resource(ContentRes(content.clone()));
+    // The races' city textures, for the colonies' lights (RND-12).
+    commands.insert_resource(crate::render::planet::CityRaces::load(&vfs.0, &index, &races));
     let seat_player = seat.0.map(PlayerId);
     commands.insert_resource(crate::render::units::LocalPlayer(seat_player));
     {
@@ -1046,6 +1056,11 @@ fn rebuild(
             let ground = odf.str("groundTextureName").unwrap_or("").to_owned();
             let atmo = odf.str("atmosphereTextureName").filter(|a| !a.is_empty()).unwrap_or("PA_ECFR0").to_owned();
             let entity = commands.spawn((to_bevy(&Matrix34 { m: o.transform }), Visibility::default(), ChildOf(root))).id();
+            // The sim's planet at this place gives the body its cities (RND-12); the ghost entity that stands for
+            // it (below) stays, as nothing here takes it.
+            if let Some(id) = sim_key.and_then(|k| placed.peek(k, o)) {
+                commands.entity(entity).insert(crate::render::planet::PlanetColony(id));
+            }
             let mut loader = Loader {
                 vfs: &vfs.0,
                 cache: &mut cache,
@@ -1585,6 +1600,25 @@ mod tests {
         assert_eq!(Placed(m.clone()).rest_where(keep_neutral), vec![EntityId(2)]);
         assert_eq!(Placed(m).rest(), vec![EntityId(1), EntityId(2)]);
     }
+    /// The planet's tag is the entity `take` would take, left in place: by definition, place and owner, a neutral
+    /// entity standing in for an owned object, and nothing for another place (RND-12).
+    #[test]
+    fn peek_finds_the_entity_take_would_take_and_leaves_it() {
+        let key = ContentKey::NONE;
+        let at = |x: f32| sta_bzn::MapObject { team: 0, transform: { let mut t = [0.0; 12]; t[9] = x; t }, ..Default::default() };
+        let place = [SimVec3::from_f32([3.0, 0.0, 0.0]).x, Fixed::ZERO, Fixed::ZERO];
+        let mut m = HashMap::new();
+        m.insert((key, place, sta_sim::world::NEUTRAL), std::collections::VecDeque::from([EntityId(7), EntityId(8)]));
+        let mut placed = Placed(m);
+        assert_eq!(placed.peek(key, &at(3.0)), Some(EntityId(7)));
+        assert_eq!(placed.peek(key, &at(3.0)), Some(EntityId(7)), "peeking takes nothing");
+        assert_eq!(placed.peek(key, &at(4.0)), None);
+        let owned = sta_bzn::MapObject { team: 2, ..at(3.0) };
+        assert_eq!(placed.peek(key, &owned), Some(EntityId(7)), "the neutral entity stands in for an owned object");
+        assert_eq!(placed.take(key, &at(3.0)), Some(EntityId(7)));
+        assert_eq!(placed.peek(key, &at(3.0)), Some(EntityId(8)), "after take the next one");
+    }
+
     use sta_sim::command::{Command, CommandKind, Edit, Order};
     use sta_sim::WorldSource;
 
