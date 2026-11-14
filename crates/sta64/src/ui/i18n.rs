@@ -90,6 +90,12 @@ impl Strings {
     }
 
     #[cfg(test)]
+    /// A game string table parsed from header text (tests).
+    pub fn from_game(language: &str, header: &str) -> Strings {
+        Strings { game: StringTable::parse(header), ..Strings::from_pairs(language, &[]) }
+    }
+
+    #[cfg(test)]
     /// A table straight from pairs (tests, mods built in code).
     pub fn from_pairs(language: &str, pairs: &[(&str, &str)]) -> Strings {
         Strings {

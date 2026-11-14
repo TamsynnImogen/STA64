@@ -565,6 +565,16 @@ fn fixed(strings: Option<&Strings>, key: &str, fallback: &str) -> String {
     strings.map(|s| s.game_text(key)).filter(|t| *t != key).unwrap_or(fallback).to_owned()
 }
 
+/// A heading the game's string table defines: `None` when a table is loaded and has no `key` (Armada I has
+/// no `GUI_OD_*` strings, so it has no "BRIEFING SUMMARY:" heading to draw). With no table loaded at all
+/// there is nothing to say otherwise and `fallback` is used.
+fn heading_text(strings: Option<&Strings>, key: &str, fallback: &str) -> Option<String> {
+    match strings {
+        None => Some(fallback.to_owned()),
+        Some(s) => Some(s.game_text(key)).filter(|t| *t != key).map(str::to_owned),
+    }
+}
+
 /// Whether the briefing text already closes with `heading` as a line of its own (case and a trailing colon
 /// ignored), so the panel must not draw it a second time.
 fn text_ends_with_heading(body: &str, heading: &str) -> bool {
@@ -610,8 +620,11 @@ fn draw_panel(
         if !c.title.is_empty() {
             p.spawn(head(c.title.clone(), theme.title));
         }
-        if c.message.is_none() && !c.body.is_empty() {
-            p.spawn(head(fixed(s, "GUI_OD_BRIEFING_SUMMARY", "BRIEFING SUMMARY:"), summary_colour));
+        if c.message.is_none()
+            && !c.body.is_empty()
+            && let Some(h) = heading_text(s, "GUI_OD_BRIEFING_SUMMARY", "BRIEFING SUMMARY:")
+        {
+            p.spawn(head(h, summary_colour));
         }
         if !c.body.is_empty() {
             p.spawn(line(c.body.clone(), theme.text));
@@ -1013,6 +1026,30 @@ mod tests {
         app.update();
         let t = texts(&mut app);
         assert_eq!(t.iter().filter(|x| x.contains("OBJECTIVES:")).count(), 1, "{t:?}");
+    }
+
+    #[test]
+    fn the_briefing_heading_is_drawn_only_when_the_game_has_a_string_for_it() {
+        let a2 = Strings::from_game("en", "\"GUI_OD_BRIEFING_SUMMARY\", \"SUMMARY:\",\n\"GUI_OD_OBJECTIVES\", \"GOALS:\"");
+        let a1 = Strings::from_game("en", "\"GUI_POP_OBJ_BUTTON\", \"Close\"");
+        assert_eq!(heading_text(Some(&a2), "GUI_OD_BRIEFING_SUMMARY", "X"), Some("SUMMARY:".into()));
+        assert_eq!(heading_text(Some(&a1), "GUI_OD_BRIEFING_SUMMARY", "X"), None);
+        assert_eq!(heading_text(None, "GUI_OD_BRIEFING_SUMMARY", "X"), Some("X".into()));
+        let texts = |app: &mut App| app.world_mut().query::<&SpriteText>().iter(app.world()).map(|t| t.text.clone()).collect::<Vec<_>>();
+        let obj = [Objective { id: 1, title: "Find".into(), description: String::new(), state: ObjectiveState::Active }];
+        for (strings, summary) in [(a2, true), (a1, false)] {
+            let mut app = app();
+            app.insert_resource(Theme::default());
+            app.insert_resource(strings);
+            app.update();
+            app.world_mut().resource_mut::<ObjectivesView>().fill(&obj, Some(&ObjectiveBriefing { file: "f".into(), title: "M".into(), text: "Go.".into(), notes: String::new() }));
+            app.world_mut().resource_mut::<ObjectivesView>().visible = true;
+            app.update();
+            let t = texts(&mut app);
+            assert!(t.iter().any(|x| x == "Go."), "{t:?}");
+            assert_eq!(t.iter().any(|x| x == "SUMMARY:"), summary, "{t:?}");
+            assert!(!t.iter().any(|x| x == "BRIEFING SUMMARY:"), "{t:?}");
+        }
     }
 
     #[test]

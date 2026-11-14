@@ -6,10 +6,11 @@
 //!
 //! Whether the site is clear is [`sta_sim::production::site::check_site`], the
 //! rule the sim applies to the order, fed with the same view, so the ghost and
-//! the sim agree; [`site_status`] is the one entry the click uses too.
+//! the sim agree; [`site_status`] is the one entry the click uses too
+//! (both go through [`crate::placement::ghost_site`]).
 
 use bevy::prelude::*;
-use sta_sim::production::site::{self, SiteError};
+use sta_sim::production::site::SiteError;
 use sta_sim::{ContentKey, Vec3 as SimVec3};
 
 use super::model::HudFeed;
@@ -37,11 +38,13 @@ pub struct Ghost {
     own: Vec<(Entity, Handle<StandardMaterial>)>,
 }
 
-/// Whether `armed` may be placed at `at` now: `check_site` over the feed's
-/// view with the builder left out.
-pub fn site_status(feed: &HudFeed, bounds: Option<&(SimVec3, SimVec3)>, armed: &Armed, at: SimVec3) -> Result<(), SiteError> {
-    let Some(db) = feed.content.as_deref() else { return Ok(()) };
-    site::check_site(db, bounds, armed.what, at, site::view_obstacles(db, &feed.view, Some(armed.builder)))
+/// Where `armed` would be built for a cursor at `at`, and whether the site is legal: the same
+/// [`crate::placement::ghost_site`] rule the ghost draws, so the click and the ghost agree (an
+/// orbital station snaps onto a planet's orbit). No content loaded: the cursor point, `Ok`.
+pub fn site_status(feed: &HudFeed, bounds: Option<&(SimVec3, SimVec3)>, armed: &Armed, at: SimVec3) -> (SimVec3, Result<(), SiteError>) {
+    let Some(db) = feed.content.as_deref() else { return (at, Ok(())) };
+    let site = crate::placement::ghost_site(db, bounds, &feed.view, armed.what, armed.builder, at);
+    (site.at, site.status)
 }
 
 /// Whether the player can pay for `armed` now (the sim refuses a rig's order otherwise).
@@ -100,17 +103,9 @@ pub fn update_ghost(
         match at {
             Some(at) => {
                 // The placement rule the sim applies: an orbital station snaps onto a planet's orbit.
-                match feed.content.as_deref() {
-                    Some(db) => {
-                        let site = crate::placement::ghost_site(db, bounds.as_deref().and_then(|b| b.0.as_ref()), &feed.view, armed.what, armed.builder, at);
-                        t.translation = to_bevy(site.at.to_f32());
-                        g.status = Some(site.status);
-                    }
-                    None => {
-                        t.translation = to_bevy(at.to_f32());
-                        g.status = Some(Ok(()));
-                    }
-                }
+                let (site_at, status) = site_status(&feed, bounds.as_deref().and_then(|b| b.0.as_ref()), armed, at);
+                t.translation = to_bevy(site_at.to_f32());
+                g.status = Some(status);
                 *vis = Visibility::Inherited;
             }
             None => *vis = Visibility::Hidden,
@@ -312,6 +307,14 @@ mod tests {
         world.run_system_once(update_ghost).unwrap();
         assert_eq!(world.get::<Ghost>(ghost).unwrap().status, Some(Err(SiteError::Blocked)));
         assert_eq!(world.get::<Transform>(ghost).unwrap().translation.x, 3000.0);
+
+        // The click asks the same rule: the site the ghost shows OK is accepted, open space refused.
+        let feed = world.resource::<HudFeed>();
+        let armed = world.resource::<HudState>().placing.clone().unwrap();
+        let sv = |x: i32, z: i32| SimVec3 { x: Fixed::from_int(x), y: Fixed::ZERO, z: Fixed::from_int(z) };
+        let (snapped, ok) = site_status(feed, None, &armed, sv(1100, 0));
+        assert_eq!((ok, snapped), (Ok(()), sv(1275, 0)));
+        assert_eq!(site_status(feed, None, &armed, sv(3000, 3000)).1, Err(SiteError::Blocked));
     }
 }
 

@@ -532,7 +532,8 @@ fn place_on_click(
     }
     // The sim's own rule, as the ghost shows it: a refused site keeps the
     // placement armed so the click can be tried again elsewhere.
-    if let Err(e) = ghost::site_status(&feed, bounds.0.as_ref(), &armed, at) {
+    let (at, status) = ghost::site_status(&feed, bounds.0.as_ref(), &armed, at);
+    if let Err(e) = status {
         notices.write(Notice::new(Severity::Warn, tr(ghost::refusal(e))));
         return;
     }
