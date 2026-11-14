@@ -352,6 +352,9 @@ pub enum SettingKey {
     Vsync,
     ShowFps,
     LcarsUi,
+    Shadows,
+    Bloom,
+    GraphicsDetail,
 }
 
 /// Window size to request while windowed. Automatic leaves the current size alone.
@@ -421,6 +424,12 @@ pub struct Settings {
     pub fullscreen: bool,
     pub vsync: bool,
     pub show_fps: bool,
+    /// None leaves the renderer's startup choice in control.
+    pub msaa: Option<u8>,
+    /// None leaves the renderer's startup nebula detail in control; 0, 1, 2 are low, default, high.
+    pub graphics_detail: Option<u8>,
+    pub shadows: Option<bool>,
+    pub bloom: Option<bool>,
     /// Explicit LCARS presentation override; false leaves the game/mod default in control.
     pub lcars_ui: bool,
     /// The multiplayer player name last used (UI-11).
@@ -431,7 +440,7 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { master: 80.0, music: 60.0, effects: 80.0, voice: 80.0, scroll_speed: 50.0, window_size: WindowSize::Automatic, fullscreen: false, vsync: true, show_fps: false, lcars_ui: false, player_name: String::new(), relay: String::new() }
+        Settings { master: 80.0, music: 60.0, effects: 80.0, voice: 80.0, scroll_speed: 50.0, window_size: WindowSize::Automatic, fullscreen: false, vsync: true, show_fps: false, msaa: None, graphics_detail: None, shadows: None, bloom: None, lcars_ui: false, player_name: String::new(), relay: String::new() }
     }
 }
 
@@ -443,6 +452,7 @@ impl Settings {
             SettingKey::EffectsVolume => self.effects,
             SettingKey::VoiceVolume => self.voice,
             SettingKey::ScrollSpeed => self.scroll_speed,
+            SettingKey::GraphicsDetail => return self.graphics_detail.map(f32::from),
             _ => return None,
         })
     }
@@ -453,11 +463,18 @@ impl Settings {
             SettingKey::Vsync => self.vsync,
             SettingKey::ShowFps => self.show_fps,
             SettingKey::LcarsUi => self.lcars_ui,
+            SettingKey::Shadows => return self.shadows,
+            SettingKey::Bloom => return self.bloom,
             _ => return None,
         })
     }
 
     pub fn set_number(&mut self, k: SettingKey, v: f32) {
+        if !v.is_finite() { return; }
+        if k == SettingKey::GraphicsDetail {
+            self.graphics_detail = Some(v.round().clamp(0.0, 2.0) as u8);
+            return;
+        }
         let v = v.clamp(0.0, 100.0);
         match k {
             SettingKey::MasterVolume => self.master = v,
@@ -475,7 +492,32 @@ impl Settings {
             SettingKey::Vsync => self.vsync = on,
             SettingKey::ShowFps => self.show_fps = on,
             SettingKey::LcarsUi => self.lcars_ui = on,
+            SettingKey::Shadows => self.shadows = Some(on),
+            SettingKey::Bloom => self.bloom = Some(on),
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod graphics_settings_tests {
+    use super::*;
+
+    #[test]
+    fn optional_controls_start_automatic_and_numeric_detail_is_finite_and_clamped() {
+        let mut settings = Settings::default();
+        assert_eq!(settings.number(SettingKey::GraphicsDetail), None);
+        assert_eq!(settings.flag(SettingKey::Shadows), None);
+        assert_eq!(settings.flag(SettingKey::Bloom), None);
+        settings.set_number(SettingKey::GraphicsDetail, f32::NAN);
+        assert_eq!(settings.graphics_detail, None);
+        settings.set_number(SettingKey::GraphicsDetail, 99.0);
+        assert_eq!(settings.number(SettingKey::GraphicsDetail), Some(2.0));
+        settings.set_number(SettingKey::GraphicsDetail, -3.0);
+        assert_eq!(settings.graphics_detail, Some(0));
+        settings.set_flag(SettingKey::Shadows, false);
+        settings.set_flag(SettingKey::Bloom, true);
+        assert_eq!(settings.flag(SettingKey::Shadows), Some(false));
+        assert_eq!(settings.flag(SettingKey::Bloom), Some(true));
     }
 }
