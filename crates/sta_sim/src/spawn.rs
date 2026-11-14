@@ -72,6 +72,7 @@ impl Sim {
                 sim.labels.insert(id, label.clone());
             }
         }
+        sim.refresh_seat_rules();
         (sim, warnings)
     }
 
@@ -259,6 +260,13 @@ impl Sim {
                 // Cap: the current maximum crew (read from the executable, static).
                 let _ = now;
                 u.crew = Some([value.max(Fixed::ZERO).min(max), max]);
+                // Then the derelict check, only where the casualty model runs
+                // (`crew_loss_on_hit`): `casualty::step` is what clears the latch.
+                let casualty = self.content.as_deref().is_some_and(|db| db.unit(u.def).is_some_and(|d| db.unit_features(d).crew_loss_on_hit));
+                if casualty {
+                    let mut ctx = crate::combat::casualty::Ctx { subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches };
+                    crate::combat::casualty::check_derelict(u, &mut ctx);
+                }
                 true
             }
             Edit::MaxHull(id, v) => self.edit_max_hull(id, v),
@@ -267,6 +275,7 @@ impl Sim {
             Edit::MaxShieldsKeep(id, v) => self.edit_max_shields_keep(id, v),
             Edit::UnitRace(id, ref race) => self.edit_unit_race(id, race),
             Edit::PlayerRace(p, ref race) => self.edit_player_race(p, race),
+            Edit::TeamPool(p, op, x) => self.edit_team_pool(p, op, x),
             Edit::Position(id, to) => self.edit_position(id, to),
             Edit::Heading(id, dir) => self.edit_heading(id, dir),
             Edit::AngularVelocity(id, omega) => self.edit_angular_velocity(id, omega),

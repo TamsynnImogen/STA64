@@ -196,7 +196,7 @@ pub(crate) fn kill_crew(t: &mut Entity, ctx: &mut Ctx, loss: Fixed) {
 
 /// `CheckDerelict`: crew under 1 with a crew capacity latches the unit
 /// derelict (or, when script-immortal and not derelictable, gives 10 crew).
-fn check_derelict(t: &mut Entity, ctx: &mut Ctx) {
+pub(crate) fn check_derelict(t: &mut Entity, ctx: &mut Ctx) {
     let Some([now, max]) = t.crew else { return };
     if max <= Fixed::ZERO || now >= Fixed::ONE {
         return;

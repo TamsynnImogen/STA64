@@ -83,6 +83,31 @@ pub struct RaceCrew {
     pub planet_modifier: Fixed,
 }
 
+/// What a team's race changes about the team itself (SIM-54), read from the
+/// race ODF when it differs from the identity:
+///
+/// - `maxOfficerMultiplier` (float, default 1): the officer cap is
+///   `floor(multiplier * limit)`. Read from the executable (static) and from
+///   data: only `species8472` sets it (0.24) in Armada II stock and Classic.
+/// - `latinumCostModifier` (float, a proposed STA64 key, 1 when neither it
+///   nor the derivation applies): scales the latinum part of what the team
+///   pays for a build. The original compares the team race's name with
+///   `borg` in the engine and charges no latinum; to keep that without a name
+///   in code the loader derives 0 for a race named `borg` when the key is
+///   absent (every profile except Armada I, where it was not traced). An
+///   authored key, including `1`, replaces the derivation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SeatRaceRule {
+    pub officer_multiplier: Fixed,
+    pub latinum_scale: Fixed,
+}
+
+impl Default for SeatRaceRule {
+    fn default() -> Self {
+        SeatRaceRule { officer_multiplier: Fixed::ONE, latinum_scale: Fixed::ONE }
+    }
+}
+
 /// Every race of an install.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Races {
@@ -90,6 +115,8 @@ pub struct Races {
     /// `crewAccumulationRate` / `planetCrewAccumulationModifier` per race
     /// key (SIM-25), filled by the loader only.
     crew: Vec<(String, RaceCrew)>,
+    /// The races whose [`SeatRaceRule`] is not the identity, by key, in race order.
+    seat: Vec<(String, SeatRaceRule)>,
     /// Legacy profiles and loaded catalogues are authoritative. Only a bare
     /// native/fake database may infer its choices from unit definitions.
     authoritative: bool,
@@ -147,13 +174,13 @@ impl Races {
             Ok(o) => o,
             Err(e) => {
                 warnings.push(Warning::new("races.odf", e.to_string()));
-                return (Races { races: Vec::new(), crew: Vec::new(), authoritative }, warnings);
+                return (Races { races: Vec::new(), crew: Vec::new(), seat: Vec::new(), authoritative }, warnings);
             }
         };
         let declared = nonnegative_integer(&list, "numberofraces");
         if list.raw("numberofraces").is_some() && declared.is_none() {
             warnings.push(Warning::new("races.odf", "numberOfRaces must be a nonnegative integer"));
-            return (Races { races: Vec::new(), crew: Vec::new(), authoritative }, warnings);
+            return (Races { races: Vec::new(), crew: Vec::new(), seat: Vec::new(), authoritative }, warnings);
         }
         // Walk authored keys rather than an arbitrary fixed cap or a potentially
         // enormous declared count. Inherited trailing keys are inactive when a
@@ -168,6 +195,7 @@ impl Races {
         let mut races = Vec::new();
         let mut interfaces = Vec::new();
         let mut crew_rates: Vec<(String, RaceCrew)> = Vec::new();
+        let mut seat_rules: Vec<(String, SeatRaceRule)> = Vec::new();
         for i in entries {
             let Some(file) = list.str(&format!("race{i}")) else {
                 continue;
@@ -214,6 +242,18 @@ impl Races {
                                 planet_modifier: Fixed::from_f64(f64::from(num("planetcrewaccumulationmodifier", 1.0)).min(1.0e3)),
                             },
                         ));
+                    }
+                    let factor = |k: &str| o.f32(k).filter(|v| v.is_finite() && *v >= 0.0).map(|v| Fixed::from_f64(f64::from(v).min(1.0e3)));
+                    let rule = SeatRaceRule {
+                        officer_multiplier: factor("maxofficermultiplier").unwrap_or(Fixed::ONE),
+                        latinum_scale: factor("latinumcostmodifier").unwrap_or(if name == "borg" && profile != Profile::Sta1Classic {
+                            Fixed::ZERO
+                        } else {
+                            Fixed::ONE
+                        }),
+                    };
+                    if rule != SeatRaceRule::default() {
+                        seat_rules.push((name.clone(), rule));
                     }
                     races.push(RaceDef {
                         stem: s,
@@ -263,17 +303,22 @@ impl Races {
                 }
             }
         }
-        (Races { races, crew: crew_rates, authoritative }, warnings)
+        (Races { races, crew: crew_rates, seat: seat_rules, authoritative }, warnings)
     }
 
     pub fn from_defs(races: Vec<RaceDef>) -> Races {
-        Races { races, crew: Vec::new(), authoritative: true }
+        Races { races, crew: Vec::new(), seat: Vec::new(), authoritative: true }
     }
 
     /// The crew keys of a race by its key (`unitedfederation`), any case.
     pub fn crew(&self, name: &str) -> Option<RaceCrew> {
         let n = name.trim().to_ascii_lowercase();
         self.crew.iter().find(|(k, _)| *k == n).map(|(_, c)| *c)
+    }
+
+    /// The [`SeatRaceRule`]s that are not the identity, in race order.
+    pub fn seat_rules(&self) -> impl Iterator<Item = (&str, SeatRaceRule)> {
+        self.seat.iter().map(|(k, r)| (k.as_str(), *r))
     }
 
     /// Every race's crew keys, in race order.
@@ -722,5 +767,32 @@ mod tests {
         let db = crate::fake::db();
         assert_eq!(races.loadout(&db, "missing").crew, None);
         assert_eq!(races.loadout_with_mode(&db, "invalid", StartingResources::Lots).crew, None);
+    }
+
+    #[test]
+    fn seat_rules_are_read_and_the_borg_latinum_rule_is_derived_unless_authored() {
+        let files: &[(&str, &str)] = &[
+            ("races", "race0=fed\nrace1=spec\nrace2=borg\nrace3=freeborg\nrace4=paid"),
+            ("fed", "name=federation"),
+            ("spec", "name=species8472\nmaxOfficerMultiplier=0.24f"),
+            ("borg", "name=borg"),
+            ("freeborg", "name=freeborg"),
+            ("paid", "name=borg\nlatinumCostModifier=1"),
+        ];
+        let (races, warnings) = Races::load_with_profile(Profile::Sta2Classic, &mut loader(files));
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let rules: Vec<_> = races.seat_rules().collect();
+        // Only non-identity rules are kept: the default race, the freeborg (a different name) and
+        // the authored `latinumCostModifier = 1` carry none.
+        assert_eq!(
+            rules,
+            vec![
+                ("species8472", SeatRaceRule { officer_multiplier: Fixed::from_f64(0.24f32 as f64), latinum_scale: Fixed::ONE }),
+                ("borg", SeatRaceRule { officer_multiplier: Fixed::ONE, latinum_scale: Fixed::ZERO }),
+            ]
+        );
+        // Armada I was not traced for the name compare: no derivation there.
+        let (a1, _) = Races::load_with_profile(Profile::Sta1Classic, &mut loader(files));
+        assert_eq!(a1.seat_rules().count(), 1);
     }
 }

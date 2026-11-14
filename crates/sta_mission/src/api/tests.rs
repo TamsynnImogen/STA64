@@ -881,3 +881,61 @@ fn a_gap_that_is_not_a_world_effect_taints_no_unrelated_read() {
     let s = "A2.NoteGap('CollisionPrevention', 1)\nif A2.IsAlive(2) then A2.SucceedMission(0, 0) end";
     assert_eq!(end_state(s), MissionEndState::Ended { won: true });
 }
+
+// ---- SIM-54: team crew and officer calls with the engine's clamps ----
+
+fn pooled(g: &mut Game) {
+    let mut view = (*g.view).clone();
+    view.players[0].crew = Some(Fixed::from_int(200));
+    view.players[0].officers = [Fixed::from_int(10), Fixed::from_int(100)];
+    view.attrs.seats[0].crew_capacity = Some(Fixed::from_int(250));
+    view.attrs.seats[0].officer_limit = Some(Fixed::from_int(100));
+    g.view = Arc::new(view);
+}
+
+#[test]
+fn a2_team_calls_return_the_clamped_pool_queue_the_typed_edit_and_stub_the_officer_writes() {
+    use sta_sim::command::TeamOp;
+    let mut g = game("MMM.register(function()
+        POOL = A2.GetTeamCrew(0); ADD = A2.AddCrew(0, 100.0); SET = A2.SetTeamCrew(0, 900.0)
+        AO = A2.AddOfficers(0, 5.0); SO = A2.SetOfficers(0, 5.0)
+        VAC = A2.GetOfficers(0); CAP = A2.GetOfficerCapacity(0)
+        ok, why = pcall(A2.GetMaxCrew, 1)
+        MAXCREW_FAILED = not ok
+    end)");
+    pooled(&mut g);
+    let mut out = Vec::new();
+    g.rt.think(&g.view, &g.events, &mut out);
+    assert!(g.rt.errors().is_empty(), "{:?}", g.rt.errors());
+    assert_eq!(g.global::<f64>("POOL"), 200.0);
+    assert_eq!(g.global::<f64>("ADD"), 250.0, "clamped to the capacity");
+    assert_eq!(g.global::<f64>("SET"), 250.0);
+    assert_eq!((g.global::<f64>("AO"), g.global::<f64>("SO")), (0.0, 0.0), "stubs return 0.0");
+    assert_eq!((g.global::<f64>("VAC"), g.global::<f64>("CAP")), (90.0, 100.0), "GetOfficers is the vacancies");
+    assert!(g.global::<bool>("MAXCREW_FAILED"), "the fake content has no MAX_CREW");
+    let edits: Vec<_> = out.iter().filter_map(|c| match &c.kind { CommandKind::Edit(e) => Some(e.clone()), _ => None }).collect();
+    assert!(edits.contains(&Edit::TeamPool(PlayerId(0), TeamOp::CrewAddA2, Fixed::from_int(100))), "{edits:?}");
+    assert!(edits.contains(&Edit::TeamPool(PlayerId(0), TeamOp::CrewSetA2, Fixed::from_int(900))), "{edits:?}");
+    assert_eq!(edits.iter().filter(|e| matches!(e, Edit::TeamPool(..))).count(), 2, "the officer writes change nothing");
+}
+
+#[test]
+fn roots_max_crew_is_a_raw_capacity_write_and_the_reads_follow_the_view() {
+    use sta_sim::command::TeamOp;
+    let mut g = game("MMM.register(function()
+        Player(0).maxCrew = 400; MAXCREW = Player(0).maxCrew; MAXOFF = Player(0).maxOfficers; CREW = Player(0).resources.crew
+    end)");
+    pooled(&mut g);
+    let mut out = Vec::new();
+    g.rt.think(&g.view, &g.events, &mut out);
+    assert!(g.rt.errors().is_empty(), "{:?}", g.rt.errors());
+    assert_eq!((g.global::<f64>("MAXCREW"), g.global::<f64>("MAXOFF"), g.global::<f64>("CREW")), (250.0, 100.0, 200.0), "reads: capacity, raw limit, pool");
+    let edits: Vec<_> = out.iter().filter_map(|c| match &c.kind { CommandKind::Edit(e) => Some(e.clone()), _ => None }).collect();
+    assert!(edits.contains(&Edit::TeamPool(PlayerId(0), TeamOp::CapacityRaw, Fixed::from_int(400))), "{edits:?}");
+    // Writing the capacity already in force sends nothing.
+    let mut g = game("MMM.register(function() Player(0).maxCrew = 250 end)");
+    pooled(&mut g);
+    let mut out = Vec::new();
+    g.rt.think(&g.view, &g.events, &mut out);
+    assert!(!out.iter().any(|c| matches!(&c.kind, CommandKind::Edit(Edit::TeamPool(..)))));
+}
