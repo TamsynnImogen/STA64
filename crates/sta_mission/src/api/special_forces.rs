@@ -23,7 +23,9 @@
 //! not an `unsupported` call: the engine does exactly this, nothing is missing.
 //!
 //! Deviation: the engine's recruit has no dying check; here a dying craft is skipped,
-//! because the sim rejects a flag edit on it.
+//! because the sim rejects a flag edit on it. For the same reason a flag call (and a recruit) on a
+//! craft the script removed earlier in the same tick is treated as no object (the view still shows
+//! it, the sim has dropped it by the time the edit applies).
 
 use mlua::{Function, Lua, MultiValue, Value};
 use sta_core::EntityId;
@@ -66,6 +68,13 @@ pub(crate) fn flagged(c: &Ctx, id: EntityId) -> bool {
         .unwrap_or_else(|| c.view.is_special_forces(id))
 }
 
+/// Whether the script already removed `id` this tick (`RemoveObject` queues `Edit::Kill`, the
+/// view still shows the unit): the sim rejects a flag edit on a unit that is gone by then, so the
+/// bindings treat it as no object, as for a dying craft.
+pub(crate) fn removed_this_tick(c: &Ctx, id: EntityId) -> bool {
+    c.commands.iter().any(|cmd| matches!(&cmd.kind, CommandKind::Edit(Edit::Kill(who)) if *who == id))
+}
+
 /// A unit with a content definition of the craft kind.
 pub(crate) fn is_craft(c: &Ctx, u: &UnitView) -> bool {
     c.def(u).is_some_and(|d| EntityKind::of_def(d) == EntityKind::Craft)
@@ -99,7 +108,7 @@ pub(crate) fn recruit(
         c.view
             .units
             .iter()
-            .filter(|u| !u.flags.contains(UnitFlags::DYING) && u.progress.is_none())
+            .filter(|u| !u.flags.contains(UnitFlags::DYING) && u.progress.is_none() && !removed_this_tick(&c, u.id))
             .filter(|u| owned(&c, u))
             .filter(|u| super::search::stem(&c.odf_name(u)).eq_ignore_ascii_case(want))
             .filter(|u| c.def(u).is_none_or(|d| EntityKind::of_def(d) == EntityKind::Craft))

@@ -537,7 +537,8 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
             let id = EntityId(raw);
             let valid = {
                 let c = c.borrow();
-                c.alive(id).is_some_and(|u| c.def(u).is_none_or(|d| sta_sim::world::EntityKind::of_def(d) == sta_sim::world::EntityKind::Craft))
+                !special_forces::removed_this_tick(&c, id)
+                    && c.alive(id).is_some_and(|u| c.def(u).is_none_or(|d| sta_sim::world::EntityKind::of_def(d) == sta_sim::world::EntityKind::Craft))
             };
             if !valid {
                 return Ok(0i64);

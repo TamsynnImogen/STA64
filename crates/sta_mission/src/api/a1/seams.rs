@@ -141,7 +141,8 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
         let unit = e.unit("SetSpecialForcesFlag", a[0].id())?;
         let id = unit.id;
         let craft = { let c = e.ctx.borrow(); c.def(&unit).is_none_or(|d| sta_sim::world::EntityKind::of_def(d) == sta_sim::world::EntityKind::Craft) };
-        if craft {
+        let gone = special_forces::removed_this_tick(&e.ctx.borrow(), id);
+        if craft && !gone {
             special_forces::queue_flag(&e.ctx, "A1.SetSpecialForcesFlag", id, a[1].boolean())?;
         }
         Ok(Value::Nil)

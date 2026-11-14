@@ -269,3 +269,26 @@ fn a_built_object_is_flagged_and_ordered_in_call_order_once_it_exists() {
     assert!(orders(&commands).iter().all(|o| matches!(o, Order::Move { .. })) && orders(&commands).len() == 2, "{commands:?}");
     assert!(rt.absent_paths().iter().all(|(k, _)| !k.contains("not special forces")));
 }
+
+#[test]
+fn a_flag_call_or_recruit_on_a_craft_removed_this_tick_is_no_object_on_both_games() {
+    let mut s = scene();
+    let mut rt = runtime(&s);
+    // The view still shows the craft after `RemoveObject` (the kill applies at the next step), and
+    // the sim rejects a flag edit on a unit that is gone by then: the bindings answer as for no
+    // object (A2 returns 0), queue no flag, and recruit skips it.
+    rt.eval::<()>("A2.RemoveObject(b)").unwrap();
+    assert_eq!(rt.eval::<i64>("return A2.SetSpecialForcesFlag(b, true)").unwrap(), 0);
+    rt.eval::<()>("A1.SetSpecialForcesFlag(b, true)").unwrap();
+    let r: (bool, i64) = rt.eval("return A2.RecruitSpecialForces('fx_cruiser', 1, 0)").unwrap();
+    assert_eq!(r, (false, 0));
+    let r: (bool, i64) = rt.eval("return A1.RecruitSpecialForces('fx_cruiser', 1, 0)").unwrap();
+    assert_eq!(r, (false, 0));
+    let commands = rt.take_commands();
+    assert!(commands.iter().all(|c| !matches!(c.kind, CommandKind::Edit(Edit::SpecialForces(..)))), "{commands:?}");
+    // A craft that was not removed still takes the flag, and the sim accepts it (no rejection).
+    assert_eq!(rt.eval::<i64>("return A2.SetSpecialForcesFlag(a, true)").unwrap(), i64::from(s.ids[0].0));
+    let flag = rt.take_commands();
+    let out = s.sim.step(&flag);
+    assert!(!out.events.iter().any(|e| matches!(e, SimEvent::Rejected { .. })), "{:?}", out.events);
+}
