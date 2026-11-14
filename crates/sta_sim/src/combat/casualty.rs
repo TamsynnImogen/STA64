@@ -80,6 +80,8 @@ pub(crate) struct Ctx<'a> {
     pub subsystems: &'a mut Subsystems,
     pub rng: &'a mut Rng,
     pub switches: &'a SwitchTable,
+    /// Planet population rows (SIM-30): a hit's hull damage on one costs people.
+    pub colonies: &'a mut crate::colony::Colonies,
 }
 
 /// System indices follow `UnitDef::system_hit_points`.

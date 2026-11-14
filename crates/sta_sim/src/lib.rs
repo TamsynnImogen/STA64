@@ -464,11 +464,9 @@ impl Sim {
                 self.approach_warp.end(id);
             }
             let mut lost = Vec::new();
-            let mut casualties = combat::casualty::Ctx { subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches };
-            let hulls = self.colonies.hulls(&self.units);
-            let mut killed = combat::damage::apply(&mut self.units, &db, &mut self.events, from, &mut casualties);
+            let mut casualties = combat::casualty::Ctx { subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches, colonies: &mut self.colonies };
+            let killed = combat::damage::apply(&mut self.units, &db, &mut self.events, from, &mut casualties);
             combat::casualty::step(&mut self.units, &db, &mut casualties);
-            self.planet_population_loss(from, hulls, &mut killed);
             for (id, by) in killed {
                 lost.extend(self.units.get(id).map(|u| u.owner));
                 self.despawn(id, by);

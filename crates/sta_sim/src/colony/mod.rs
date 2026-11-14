@@ -56,8 +56,8 @@ use sta_core::{EntityId, Fixed, PlayerId, TICK_HZ, Tick, Vec3};
 
 use crate::command::Order;
 use crate::view::UnitFlags;
-use crate::world::{Entities, Entity, Fnv, NEUTRAL};
-use crate::{Sim, SimEvent};
+use crate::world::{Entity, Fnv, NEUTRAL};
+use crate::Sim;
 
 /// Largest population a script may store (the original does not clamp).
 const SCRIPT_LIMIT: i32 = 1_000_000_000;
@@ -260,9 +260,17 @@ impl Colonies {
         done(row, p)
     }
 
-    /// The planets of `rows` with a population row, with their hulls.
-    pub(crate) fn hulls(&self, units: &Entities) -> Vec<(EntityId, [Fixed; 2])> {
-        self.planets.keys().filter_map(|&id| units.get(id).map(|u| (id, u.hull))).collect()
+    /// Whether the planet has a population row (its hull damage costs people).
+    pub(crate) fn has_row(&self, planet: EntityId) -> bool {
+        self.planets.contains_key(&planet)
+    }
+
+    /// A hit's hull damage reached the planet: `0.1 x damage` people are lost
+    /// (read from the executable, static), never below zero.
+    pub(crate) fn lose_population(&mut self, planet: EntityId, damage: Fixed) {
+        if let Some(row) = self.planets.get_mut(&planet) {
+            row.population = (row.population - Fixed::from_f64(0.1) * damage).max(Fixed::ZERO);
+        }
     }
 
     pub(crate) fn to_rec(&self) -> ColoniesRec {
@@ -582,26 +590,6 @@ impl Sim {
                 ColonyView { id, population: r.population, max_population: rules.map_or(Fixed::ZERO, |p| p.cap(level)), colonizer: r.colonizer }
             })
             .collect()
-    }
-
-    /// After the tick's hit pass: planets with a population row keep their hull
-    /// (`hulls` was taken before it); the hull damage costs `0.1 x damage`
-    /// people instead (read from the executable, static; shield absorption comes first).
-    pub(crate) fn planet_population_loss(&mut self, from: usize, hulls: Vec<(EntityId, [Fixed; 2])>, killed: &mut Vec<(EntityId, Option<EntityId>)>) {
-        let tenth = Fixed::from_f64(0.1);
-        for e in &self.events[from.min(self.events.len())..] {
-            if let SimEvent::Hit { target, hull, .. } = e
-                && let Some(row) = self.colonies.planets.get_mut(target)
-            {
-                row.population = (row.population - tenth * *hull).max(Fixed::ZERO);
-            }
-        }
-        for (id, hull) in hulls {
-            if let Some(u) = self.units.get_mut(id) {
-                u.hull = hull;
-            }
-            killed.retain(|(k, _)| *k != id);
-        }
     }
 }
 

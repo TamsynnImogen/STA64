@@ -12,6 +12,9 @@
 //! - [`recharge`] gives every shield pool its definition's `recharge` per tick
 //!   (capped at `max`), before the tick's hits. No delay after a hit.
 //!
+//! - Planets with a population row (SIM-30): the hull damage of a hit becomes
+//!   population loss (`0.1 x damage`) and the hull is untouched, hit by hit.
+//!
 //! - Crew (SIM-39, `Features::crew_loss_on_hit`): the engine's casualty model
 //!   (damage variance, shield protection, one location roll per hit, system
 //!   hit points, crew loss, life-support drain, derelict latch) is
@@ -112,10 +115,18 @@ pub(crate) fn apply(
                     damage - shield
                 }
             };
-            hull = wanted.min((t.hull[0] - floor).max(Fixed::ZERO));
-            t.hull[0] = t.hull[0] - hull;
-            if t.hull[0] <= Fixed::ZERO {
-                killed.push((target, Some(by)));
+            if ctx.colonies.has_row(target) {
+                // SIM-30, a planet with a population row: damage that reaches the
+                // hull costs `0.1 x damage` people and the hull stays, so every hit
+                // of the tick counts in full (read from the executable, static).
+                hull = wanted.max(Fixed::ZERO);
+                ctx.colonies.lose_population(target, hull);
+            } else {
+                hull = wanted.min((t.hull[0] - floor).max(Fixed::ZERO));
+                t.hull[0] = t.hull[0] - hull;
+                if t.hull[0] <= Fixed::ZERO {
+                    killed.push((target, Some(by)));
+                }
             }
         }
         events.push(SimEvent::Hit {

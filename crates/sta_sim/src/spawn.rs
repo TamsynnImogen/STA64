@@ -297,7 +297,7 @@ impl Sim {
                 // (`crew_loss_on_hit`): `casualty::step` is what clears the latch.
                 let casualty = self.content.as_deref().is_some_and(|db| db.unit(u.def).is_some_and(|d| db.unit_features(d).crew_loss_on_hit));
                 if casualty {
-                    let mut ctx = crate::combat::casualty::Ctx { subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches };
+                    let mut ctx = crate::combat::casualty::Ctx { subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches, colonies: &mut self.colonies };
                     crate::combat::casualty::check_derelict(u, &mut ctx);
                 }
                 true

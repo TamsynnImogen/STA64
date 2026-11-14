@@ -496,11 +496,35 @@ fn weapon_damage_costs_people_and_spares_the_hull_of_a_planet_with_a_row() {
 /// Run the tick's hit pass over the events queued from `from`, as `Sim::step` does.
 fn apply_hits(sim: &mut Sim, from: usize) -> Vec<(EntityId, Option<EntityId>)> {
     let db = sim.content().cloned().unwrap();
-    let hulls = sim.colonies.hulls(&sim.units);
-    let mut ctx = crate::combat::casualty::Ctx { subsystems: &mut sim.subsystems, rng: &mut sim.rng, switches: &sim.switches };
-    let mut killed = crate::combat::damage::apply(&mut sim.units, &db, &mut sim.events, from, &mut ctx);
-    sim.planet_population_loss(from, hulls, &mut killed);
-    killed
+    let mut ctx = crate::combat::casualty::Ctx { subsystems: &mut sim.subsystems, rng: &mut sim.rng, switches: &sim.switches, colonies: &mut sim.colonies };
+    crate::combat::damage::apply(&mut sim.units, &db, &mut sim.events, from, &mut ctx)
+}
+
+/// The review finding of this package: several hits in one tick each cost people
+/// in full (the planet's hull used to cap the total), and the hull is never spent.
+#[test]
+fn many_hits_in_one_tick_each_cost_people_in_full_and_never_kill_the_planet() {
+    let mut sim = game(content(true));
+    let planet = spawn(&mut sim, "fx_pl_m", PlayerId(1), at(0, 0));
+    set_pop(&mut sim, planet, 2000);
+    // 100 hits of 200 = 20 000 damage, twice the planet's 10 000 hull.
+    for _ in 0..100 {
+        sim.events.push(SimEvent::Hit { target: planet, by: EntityId(999), weapon: sta_core::ContentKey(0), facing: 0, shield: Fixed::ZERO, hull: n(200), at: Vec3::ZERO });
+    }
+    let killed = apply_hits(&mut sim, 0);
+    assert!(killed.is_empty());
+    close(pop(&sim, planet), 0.0, 0.05);
+    assert_eq!(sim.unit(planet).unwrap().hull[0], n(10_000), "hull untouched");
+    // 50 hits of 20 = 1 000 damage -> 100 people, not capped by anything.
+    set_pop(&mut sim, planet, 2000);
+    sim.events.clear();
+    for _ in 0..50 {
+        sim.events.push(SimEvent::Hit { target: planet, by: EntityId(999), weapon: sta_core::ContentKey(0), facing: 0, shield: Fixed::ZERO, hull: n(20), at: Vec3::ZERO });
+    }
+    apply_hits(&mut sim, 0);
+    close(pop(&sim, planet), 1900.0, 0.05);
+    let hits = sim.events.iter().filter(|e| matches!(e, SimEvent::Hit { hull, .. } if *hull == n(20))).count();
+    assert_eq!(hits, 50, "every hit reports the hull damage it dealt");
 }
 
 // ---- persistence ----

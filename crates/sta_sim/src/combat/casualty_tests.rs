@@ -92,7 +92,7 @@ fn sim(db: &Arc<ContentDb>, seed: u64) -> (Sim, EntityId) {
 
 fn hit(sim: &mut Sim, db: &ContentDb, target: EntityId, damage: f64) -> SimEvent {
     let mut events = vec![SimEvent::Hit { target, by: EntityId(999), weapon: ContentKey(0), facing: 0, shield: Fixed::ZERO, hull: fx(damage), at: Vec3 { x: Fixed::ZERO, y: Fixed::ZERO, z: Fixed::ZERO } }];
-    let mut ctx = Ctx { subsystems: &mut sim.subsystems, rng: &mut sim.rng, switches: &sim.switches };
+    let mut ctx = Ctx { subsystems: &mut sim.subsystems, rng: &mut sim.rng, switches: &sim.switches, colonies: &mut sim.colonies };
     super::damage::apply(&mut sim.units, db, &mut events, 0, &mut ctx);
     events.remove(0)
 }
