@@ -1041,7 +1041,8 @@ mod tests {
         assert_eq!(heading_text(Some(&Strings::default()), "GUI_OD_BRIEFING_SUMMARY", "BRIEFING SUMMARY:"), Some("BRIEFING SUMMARY:".into()), "an empty table is no table");
         let texts = |app: &mut App| app.world_mut().query::<&SpriteText>().iter(app.world()).map(|t| t.text.clone()).collect::<Vec<_>>();
         let obj = [Objective { id: 1, title: "Find".into(), description: String::new(), state: ObjectiveState::Active }];
-        for (strings, summary) in [(a2, true), (a1, false)] {
+        for (strings, summary) in [(a2, true), (a1, false), (Strings::default(), false)] {
+            let strings_is_empty = !strings.has_game_table();
             let mut app = app();
             app.insert_resource(Theme::default());
             app.insert_resource(strings);
@@ -1052,7 +1053,8 @@ mod tests {
             let t = texts(&mut app);
             assert!(t.iter().any(|x| x == "Go."), "{t:?}");
             assert_eq!(t.iter().any(|x| x == "SUMMARY:"), summary, "{t:?}");
-            assert!(!t.iter().any(|x| x == "BRIEFING SUMMARY:"), "{t:?}");
+            // An empty table is no table: the English fallback heading shows.
+            assert_eq!(t.iter().any(|x| x == "BRIEFING SUMMARY:"), strings_is_empty, "{t:?}");
         }
     }
 

@@ -514,38 +514,23 @@ fn place_on_click(
     let (Some(a), Some(b)) = (aim.0, feed.view.unit(armed.builder)) else {
         return;
     };
-    let y = b.pos.y.to_f32();
-    let dir = *a.ray.direction;
-    if dir.y.abs() < 1e-4 {
-        return;
-    }
-    let t = (y - a.ray.origin.y) / dir.y;
-    if t <= 0.0 {
-        return;
-    }
-    // Render space to the sim's: z runs the other way.
-    let hit = a.ray.origin + dir * t;
-    let at = SimVec3::from_f32([hit.x, y, -hit.z]);
+    let Some(at) = ground_point(a.ray, b.pos.y.to_f32()) else { return };
     if !ghost::affordable(&feed, &armed) {
         notices.write(Notice::new(Severity::Warn, tr("Cannot build: not enough resources")));
         return;
     }
     // The sim's own rule, as the ghost shows it: a refused site keeps the
     // placement armed so the click can be tried again elsewhere.
-    let (site_at, status) = ghost::site_status(&feed, bounds.0.as_ref(), &armed, at);
-    if let Err(e) = status {
-        notices.write(Notice::new(Severity::Warn, tr(ghost::refusal(e))));
-        return;
-    }
+    let (site_at, order) = match ghost::build_order(&feed, bounds.0.as_ref(), &armed, at) {
+        Ok(r) => r,
+        Err(e) => {
+            notices.write(Notice::new(Severity::Warn, tr(ghost::refusal(e))));
+            return;
+        }
+    };
     // The new order's target replaces the destination line of the last one: the site the ghost shows.
     targets.0.insert(armed.builder, site_at);
-    // The order carries the raw cursor point: the sim snaps it itself, once (a snapped point
-    // snapped again can land on another planet).
-    queue.0.push(CommandKind::Order(Order::Build {
-        builder: armed.builder,
-        what: armed.what,
-        at: Some(at),
-    }));
+    queue.0.push(CommandKind::Order(order));
     issued.write(OrderIssued {
         units: vec![armed.builder],
         kind: OrderKind::Build,

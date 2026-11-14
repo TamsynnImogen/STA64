@@ -48,6 +48,15 @@ pub fn site_status(feed: &HudFeed, bounds: Option<&(SimVec3, SimVec3)>, armed: &
     (site.at, site.status)
 }
 
+/// The click's result for a cursor at `at`: the site the ghost shows (for the destination line) and the
+/// Build order to queue, or why the site is refused. The order carries the raw cursor point: the sim snaps
+/// it itself, once (a snapped point snapped again can land on another planet).
+pub fn build_order(feed: &HudFeed, bounds: Option<&(SimVec3, SimVec3)>, armed: &Armed, at: SimVec3) -> Result<(SimVec3, sta_sim::command::Order), SiteError> {
+    let (site_at, status) = site_status(feed, bounds, armed, at);
+    status?;
+    Ok((site_at, sta_sim::command::Order::Build { builder: armed.builder, what: armed.what, at: Some(at) }))
+}
+
 /// Whether the player can pay for `armed` now (the sim refuses a rig's order otherwise).
 pub fn affordable(feed: &HudFeed, armed: &Armed) -> bool {
     let (Some(db), Some(p)) = (feed.content.as_deref(), feed.view.player(feed.player)) else { return true };
