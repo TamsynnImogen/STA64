@@ -166,7 +166,7 @@ fn stations_and_unknown_objects_are_not_gated_and_the_flag_calls_reject_them() {
     // A station is not a craft: the order gate does not read a flag it can never have.
     rt.eval::<()>("A2.Stop(s, 0)").unwrap();
     assert_eq!(orders(&rt.take_commands()).len(), 1);
-    assert_eq!(rt.eval::<i64>("return A2.SetSpecialForcesFlag(s, true)").unwrap(), 0 + i64::from(s.ids[2].0), "the A2 call returns the handle");
+    assert_eq!(rt.eval::<i64>("return A2.SetSpecialForcesFlag(s, true)").unwrap(), i64::from(s.ids[2].0), "the A2 call returns the handle");
     let commands = rt.take_commands();
     // The sim rejects the edit for a station: it is queued and reported, the flag never sets.
     let mut sim = s.sim;
