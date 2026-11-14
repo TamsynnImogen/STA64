@@ -35,6 +35,9 @@ pub mod fake;
 pub mod kinematics;
 pub mod movement;
 mod ownership;
+pub mod speed_override;
+#[cfg(test)]
+mod speed_override_tests;
 mod perception;
 pub mod relations;
 #[cfg(test)]
@@ -554,7 +557,7 @@ impl Sim {
             }
         }
         let perceived_owners = self.perception.iter().map(|(id, &owner)| (id, owner)).collect();
-        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners, appearance: self.appearance_view(), colonies: self.colony_views(), attrs: crate::attrs::AttrsView { names: self.switches.names(), seats: self.seat_views(), ..self.attrs.view() } }
+        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners, appearance: self.appearance_view(), colonies: self.colony_views(), attrs: crate::attrs::AttrsView { names: self.switches.names(), seats: self.seat_views(), impulse: self.impulse_overrides(), ..self.attrs.view() } }
     }
 
     /// FNV-1a over all simulation state, for desync detection. The content
