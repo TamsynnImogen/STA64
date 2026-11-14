@@ -503,10 +503,12 @@ fn alias_as(lua: &Lua, env: &Env, a2: &Table, name: &'static str, a2_name: &'sta
     let env = env.clone();
     lua.create_function(move |_, args: MultiValue| {
         let mut mapped = Vec::with_capacity(args.len());
-        // Every aliased call takes its object handle first; no other argument is one.
+        // Every aliased call takes its object handle first; no other argument is one, except
+        // the second object of `GetAttackLocation`.
         for (position, v) in args.into_iter().enumerate() {
+            let object = position == 0 || (position == 1 && name == "GetAttackLocation");
             let resolved = match &v {
-                Value::Integer(n) if position == 0 => u32::try_from(*n).ok().and_then(|raw| env.token(raw)),
+                Value::Integer(n) if object => u32::try_from(*n).ok().and_then(|raw| env.token(raw)),
                 _ => None,
             };
             mapped.push(match resolved {

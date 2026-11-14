@@ -57,7 +57,9 @@ pub(super) fn install(lua: &Lua, env: &Env, table: &Table) -> mlua::Result<()> {
             let target = e.unit("Attack", a[1].id())?.id;
             send(e, "Attack", a[0].id(), |units| Order::Attack { units, target })?;
         } else {
-            // LUA-30: the same attack command with a point (read from the executable, static): `AttackPoint`.
+            // LUA-30: the same command with a point (read from the executable, static), bound to the Armada II
+            // rule of `AI_Attack(point)`: `AttackPoint` flies to weapon range and fires at nothing on the way;
+            // what the original does at a point is not read.
             let to = match &a[1] {
                 A::Vec(v) => *v,
                 _ => unreachable!("overload 1 is a Vector"),

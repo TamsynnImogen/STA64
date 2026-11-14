@@ -2,18 +2,17 @@
 //!
 //! Rule (read from the Armada I executable, static; not measured in play): for an
 //! object that is present and not dying, the call copies its placement and owner,
-//! removes it silently, builds `odf` for that owner at that place and returns the
-//! new object's handle. A handle that names nothing live returns 0 and does
-//! nothing. Here the removal is `Edit::Kill` (the sim's one destroy edit, as for
-//! `RemoveObject`) and the build is a queued spawn, so the result is a pending
-//! handle exactly as `BuildObject` returns (usable once the receipt is in, held
-//! calls included). The spawn takes the position; the old heading is not
-//! carried over (spawns face the default heading), and the map label of the old
-//! object passes to the new one through the spawn's own label rule.
-//! An unknown ODF is an error, as for `BuildObject`.
+//! removes it, builds `odf` for that owner at that place and returns the new
+//! object's handle. A handle that names nothing live returns 0 and does nothing.
+//! Here the removal is `Edit::Kill` (the sim's one destroy edit, as for
+//! `RemoveObject`; the original removes silently, this one emits the Destroyed
+//! event) and the build is a queued spawn, so the result is a pending handle exactly
+//! as `BuildObject` returns (usable once the receipt is in). The spawn is queued
+//! first: when it cannot be (unknown ODF, an owner that cannot hold the new
+//! kind) the call raises and the old object stays. The old heading and the old
+//! map label are not carried over (not read).
 
 use mlua::{Lua, Table, Value};
-use sta_core::EntityId;
 use sta_sim::command::Edit;
 
 use super::{Env, TOKEN_BASE, def};
@@ -31,9 +30,6 @@ pub(super) fn install(lua: &Lua, env: &Env, table: &Table) -> mlua::Result<()> {
                     None => return Ok(Value::Integer(0)),
                 }
             };
-            if id == EntityId::NONE {
-                return Ok(Value::Integer(0));
-            }
             let odf = a[1].text();
             let handle = {
                 let mut c = e.ctx.borrow_mut();
@@ -42,9 +38,10 @@ pub(super) fn install(lua: &Lua, env: &Env, table: &Table) -> mlua::Result<()> {
                     .as_ref()
                     .and_then(|db| db.key(super::objects::stem(odf)))
                     .ok_or_else(|| mlua::Error::runtime(format!("A1.ReplaceObject: unknown ODF '{odf}'")))?;
-                // The old object goes first, so the new one takes its label.
-                c.edit(Edit::Kill(id));
-                crate::api::spawn::queue_spawn(&mut c, key, owner, pos).map_err(mlua::Error::runtime)?
+                let handle = crate::api::spawn::queue_spawn(&mut c, key, owner, pos).map_err(mlua::Error::runtime)?;
+                c.try_push(sta_core::PlayerId::SCRIPT, sta_sim::command::CommandKind::Edit(Edit::Kill(id)))
+                    .map_err(|reason| mlua::Error::runtime(format!("A1.ReplaceObject: {reason}")))?;
+                handle
             };
             let EntityRef::Spawn(spawn) = handle else {
                 return Err(mlua::Error::runtime("A1.ReplaceObject: spawn was not queued"));
