@@ -50,6 +50,7 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
     table.set("CraftCannotDie", alias(lua, env, a2, "CraftCannotDie")?)?;
     table.set("IsAlive", alias(lua, env, a2, "IsAlive")?)?;
     table.set("IsCompromised", alias(lua, env, a2, "IsCompromised")?)?;
+    table.set("IsDerelict", alias(lua, env, a2, "IsDerelict")?)?;
     table.set("Exists", alias(lua, env, a2, "Exists")?)?;
     table.set("DoesNotExist", alias(lua, env, a2, "DoesNotExist")?)?;
     table.set("Cloak", alias(lua, env, a2, "Cloak")?)?;
@@ -301,9 +302,17 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
 
     table.set("SetImpulseSpeed", def(lua, env, "SetImpulseSpeed", &["hf"], |_, e, _, a| {
         let id = a[0].id();
-        e.unit("SetImpulseSpeed", id)?;
         if a[1].num() < 0.0 {
             return Err(mlua::Error::runtime("A1.SetImpulseSpeed requires a non-negative speed"));
+        }
+        // LUA-27: a live craft only (the engine's ship-bit guard, not dying); anything else,
+        // an absent or dying handle included, does nothing.
+        let craft = {
+            let c = e.ctx.borrow();
+            c.alive(id).and_then(|u| c.def(u)).is_some_and(|d| sta_sim::world::EntityKind::of_def(d) == sta_sim::world::EntityKind::Craft)
+        };
+        if !craft {
+            return Ok(Value::Nil);
         }
         e.edit("SetImpulseSpeed", Edit::MaxSpeed(id, Some(Fixed::from_f64(a[1].num()))))?;
         Ok(Value::Nil)

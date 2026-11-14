@@ -31,11 +31,11 @@ mod tests;
 pub(crate) mod view;
 
 pub use crate::frontend::lobby::{LobbyPlugin, MpFields, Multiplayer, NetGameReady, NetLaunch};
-pub use data::{Browse, MAX_SEATS, MapEntry, ModEntry, SKIRMISH_AI, ScreenData, Seat, SeatControl, SelectedMod, SettingKey, Settings, SetupDraft};
+pub use data::{ActiveMod, Browse, MAX_SEATS, MapEntry, ModEntry, SKIRMISH_AI, ScreenData, Seat, SeatControl, SelectedMod, SettingKey, Settings, SetupDraft, WindowSize};
 pub use view::{Act, ScreenRoot};
 
 use crate::app::{AppState, GameSet};
-use crate::ui::theme::{ButtonClicked, ListSelected, SliderChanged, ThemePlugin, ToggleChanged};
+use crate::ui::theme::{ButtonClicked, DropdownChanged, ListSelected, SliderChanged, ThemePlugin, ToggleChanged};
 use view::{MapList, ModList, ScrollBox, SettingSlider, SettingToggle};
 
 /// The screen shown in `AppState::FrontEnd`.
@@ -143,6 +143,19 @@ pub struct ScreensCamera(pub Entity);
 
 pub struct ScreensPlugin;
 
+/// Shared by the front end and a directly launched match's Options panel.
+pub(crate) struct SettingsControlsPlugin;
+
+impl Plugin for SettingsControlsPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<Settings>()
+            .init_resource::<crate::ui::profile::UiPreference>()
+            .add_systems(Update, on_settings.in_set(GameSet::Ui)
+                .before(crate::ui::profile::ProfileSync)
+                .run_if(in_state(AppState::FrontEnd).xor(in_state(AppState::InGame))));
+    }
+}
+
 impl Plugin for ScreensPlugin {
     fn build(&self, app: &mut App) {
         if !app.is_plugin_added::<ThemePlugin>() {
@@ -155,11 +168,15 @@ impl Plugin for ScreensPlugin {
         if !app.world().contains_resource::<State<AppState>>() {
             app.init_state::<AppState>();
         }
+        if !app.is_plugin_added::<SettingsControlsPlugin>() {
+            app.add_plugins(SettingsControlsPlugin);
+        }
         app.init_state::<Screen>()
             .init_resource::<ScreensConfig>()
             .init_resource::<Settings>()
             .init_resource::<crate::ui::profile::UiPreference>()
             .init_resource::<SelectedMod>()
+            .init_resource::<ActiveMod>()
             .init_resource::<Browse>()
             .init_resource::<MapReturn>()
             .init_resource::<ListScroll>()
@@ -176,11 +193,6 @@ impl Plugin for ScreensPlugin {
             .add_systems(OnEnter(AppState::FrontEnd), enter_front_end)
             .add_systems(OnEnter(Screen::MapSelect), open_list)
             .add_systems(OnEnter(Screen::ModSelect), open_list)
-            .add_systems(
-                Update,
-                // Also in a match: the in-game menu (UI-34) shows this panel over it.
-                on_settings.in_set(GameSet::Ui).before(crate::ui::profile::ProfileSync).run_if(in_state(AppState::FrontEnd).xor(in_state(AppState::InGame))),
-            )
             .add_systems(
                 Update,
                 (fit_scale, stock::track_box, follow_data, on_keys, on_wheel, track_scroll, on_buttons, on_lists, crate::frontend::campaign::on_buttons, stock::on_dropdowns, stock::track_tab, rebuild, crate::frontend::campaign::rebuild, stock::restore_focus, (crate::frontend::lobby::drive, crate::frontend::lobby::on_buttons, crate::frontend::lobby::on_dropdowns, crate::frontend::lobby::on_text, crate::frontend::lobby::sync_map, crate::frontend::lobby::rebuild, crate::frontend::lobby::restore_focus).chain())
@@ -416,11 +428,14 @@ fn on_lists(mut picks: MessageReader<ListSelected>, maps: Query<(), With<MapList
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn on_settings(
     mut sliders: MessageReader<SliderChanged>,
     mut toggles: MessageReader<ToggleChanged>,
+    mut dropdowns: MessageReader<DropdownChanged>,
     slider_keys: Query<&SettingSlider>,
     toggle_keys: Query<&SettingToggle>,
+    window_size_fields: Query<(), With<view::WindowSizeSelect>>,
     mut settings: ResMut<Settings>,
     mut ui_preference: ResMut<crate::ui::profile::UiPreference>,
 ) {
@@ -437,6 +452,13 @@ fn on_settings(
             }
         }
     }
+    for c in dropdowns.read() {
+        if window_size_fields.get(c.entity).is_ok()
+            && let Some(&size) = WindowSize::ALL.get(c.index)
+        {
+            settings.window_size = size;
+        }
+    }
 }
 
 /// Draw the current screen again when the screen or what it shows changed.
@@ -451,7 +473,7 @@ fn rebuild(
     draft: Option<Res<SetupDraft>>,
     browse: Res<Browse>,
     settings: Res<Settings>,
-    selected: Res<SelectedMod>,
+    mod_state: (Res<SelectedMod>, Res<ActiveMod>),
     camera: Option<Res<ScreensCamera>>,
     scroll: Res<ListScroll>,
     config: Res<ScreensConfig>,
@@ -460,13 +482,14 @@ fn rebuild(
     strings: Option<Res<crate::ui::i18n::Strings>>,
     campaigns: Option<Res<crate::frontend::campaign::Campaigns>>,
 ) {
+    let (selected, active_mod) = mod_state;
     let Some(draft) = draft else { return };
-    if !(screen.is_changed() || campaigns.as_ref().is_some_and(|c| c.is_changed()) || draft.is_changed() || browse.is_changed() || selected.is_changed() || data.is_changed() || theme.is_changed() || stock_box.is_changed() || config.is_changed() || strings.as_ref().is_some_and(|s| s.is_changed())) {
+    if !(screen.is_changed() || campaigns.as_ref().is_some_and(|c| c.is_changed()) || draft.is_changed() || browse.is_changed() || selected.is_changed() || active_mod.is_changed() || data.is_changed() || theme.is_changed() || stock_box.is_changed() || config.is_changed() || strings.as_ref().is_some_and(|s| s.is_changed())) {
         return;
     }
     for e in &roots {
         commands.entity(e).despawn();
     }
-    let ctx = view::Ctx { theme: &theme, data: &data, strings: strings.as_deref(), draft: &draft, browse: &browse, settings: &settings, selected: &selected, scroll: &scroll, layout: config.layout, stock_box: stock_box.0, options_tab: options_tab.0, campaigns: campaigns.as_deref() };
+    let ctx = view::Ctx { theme: &theme, data: &data, strings: strings.as_deref(), draft: &draft, browse: &browse, settings: &settings, selected: &selected, active_mod: &active_mod, scroll: &scroll, layout: config.layout, stock_box: stock_box.0, options_tab: options_tab.0, campaigns: campaigns.as_deref() };
     view::spawn(&mut commands, *screen.get(), &ctx, camera.map(|c| c.0));
 }

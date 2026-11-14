@@ -35,6 +35,15 @@ pub(super) fn queue(ctx: &mut Ctx, label: &'static str, edit: Edit) -> mlua::Res
 }
 
 impl Store {
+    /// The latest impulse-speed edit the host has taken but the sim has not settled for `id`:
+    /// `Some(None)` is a reset, `Some(Some(v))` a set.
+    pub(super) fn pending_impulse(&self, id: sta_core::EntityId) -> Option<Option<sta_core::Fixed>> {
+        self.tracked.values().rev().find_map(|t| match &t.edit {
+            Edit::MaxSpeed(who, to) if *who == id && t.submitted.is_some() => Some(*to),
+            _ => None,
+        })
+    }
+
     pub(super) fn submit(&mut self, commands: &[Command], tick: Tick) {
         for command in commands {
             if command.player == PlayerId::SCRIPT
