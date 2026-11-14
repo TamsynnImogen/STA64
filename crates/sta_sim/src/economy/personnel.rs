@@ -12,11 +12,26 @@ impl Economy {
             .and_then(|i| self.personnel[i].1)
     }
 
-    pub fn officer_limit(&self, player: PlayerId) -> Option<Fixed> {
+    /// The limit as the setup or a script wrote it (`Team+0x164`), before the
+    /// seat race's multiplier.
+    pub fn officer_base(&self, player: PlayerId) -> Option<Fixed> {
         self.personnel
             .binary_search_by_key(&player, |r| r.0)
             .ok()
             .and_then(|i| self.personnel[i].2)
+    }
+
+    /// The officer cap: `floor(maxOfficerMultiplier * limit)` of the seat's
+    /// current race (`Team::GetMaxOfficers`, read from the executable, static;
+    /// the multiplier is 1 unless the race ODF sets it), so a re-race takes effect at once.
+    pub fn officer_limit(&self, player: PlayerId) -> Option<Fixed> {
+        let base = self.officer_base(player)?;
+        let m = self.seat_rule(player).officer_multiplier;
+        if m == Fixed::ONE {
+            return Some(base);
+        }
+        let product = (i128::from(base.to_bits()) * i128::from(m.to_bits())) >> 32;
+        Some(Fixed::from_bits(((product >> 32) << 32).clamp(0, i128::from(i64::MAX)) as i64))
     }
 
     /// `Edit::MaxOfficers` for a seat: the original writes the field raw
@@ -88,7 +103,9 @@ impl Economy {
         if rows.iter().any(|(player, crew, limit)| {
             !players.iter().any(|p| p.0 == *player)
                 || (crew.is_none() && limit.is_none())
-                || [crew, limit].into_iter().flatten().any(|v| *v < 0)
+                // The team pool has no floor at 0 (SIM-54), the limit does.
+                || limit.is_some_and(|v| v < 0)
+                || crew.is_some_and(|v| v < -(1_000_000_000i64 << 32))
         }) {
             return Err("invalid personnel player/value");
         }

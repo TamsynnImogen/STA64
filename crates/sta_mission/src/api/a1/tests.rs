@@ -198,10 +198,11 @@ const CASES: &[(&str, &str, Expect)] = &[
     // Resources and crew.
     ("SetDilithium", "assert(A1.SetDilithium(0, 500) == 500)", Fine),
     ("AddDilithium", "assert(A1.AddDilithium(0, 10) >= 10)", Fine),
-    ("SetOfficers", "assert(A1.SetOfficers(0, 100.0) == 100.0)", Fine),
+    // The returned count is clamped to the cap in the view (none in this world).
+    ("SetOfficers", "assert(A1.SetOfficers(0, 100.0) <= 100.0)", Fine),
     ("AddOfficers", "A1.AddOfficers(0, 1.0)", Fine),
     ("SetTeamCrew", "A1.SetTeamCrew(0, 10.0)", Fine),
-    ("AddCrew", "assert(A1.AddCrew(0, 5.0) == 5.0)", Fine),
+    ("AddCrew", "assert(A1.AddCrew(0, 5.0) <= 5.0)", Fine),
     ("GetCrew", "A1.GetCrew(a)", Either),
     ("SetCrew", "A1.SetCrew(a, 5.0)", Fine),
     ("GetDilithiumOnFreighter", "A1.GetDilithiumOnFreighter(a)", Fail),
@@ -462,6 +463,39 @@ fn a_delayed_fade_is_presented_when_it_starts() {
     assert!(!at(base + 1, &mut rt).contains(&fade));
 }
 
+/// An authored opening: a voice line followed by a delayed `FadeOut`, then the cineractive ends.
+/// A delayed fade is dropped with the cineractive, so it cannot black out the game after the
+/// hand-over; the voice line's done flag is the host's to report.
+#[test]
+fn a_delayed_fade_does_not_outlive_its_cineractive() {
+    use sta_sim::setup::Controller;
+    let s = scene();
+    let (mut rt, commands) = run(
+        &s,
+        "A1.CineractiveStart(); A1.FadeIn(3, 0, 0); log = A1.AudioMessage('log.wav'); A1.FadeOut(4, 40, 0); \
+         function done() return A1.IsAudioMessageDone(log) end",
+    );
+    let first = presented(&commands);
+    assert!(first.contains(&Presentation::Sound { id: 1, name: "log.wav".into(), at: None }), "{first:?}");
+    assert!(!rt.eval::<bool>("return done()").unwrap(), "the line is playing until the host says it is done");
+    let mut view = s.view.clone();
+    let tick0 = view.tick;
+    let mut at = |secs: u64, rt: &mut MissionRuntime| {
+        view.tick = tick0 + secs * 30;
+        let mut out = Vec::new();
+        rt.think(&view, &[], &mut out);
+        presented(&out)
+    };
+    assert!(at(20, &mut rt).is_empty() && !rt.eval::<bool>("return done()").unwrap());
+    // The host reports the clip's end; the script's condition turns true and it ends the opening.
+    rt.eval::<()>("A1.AudioMessageDone(1)").unwrap();
+    assert!(rt.eval::<bool>("return done()").unwrap());
+    rt.eval::<()>("A1.CineractiveEnd()").unwrap();
+    // The fade scheduled for 40 s is gone: nothing darkens the game at 40 s or later.
+    assert!(at(41, &mut rt).iter().all(|p| !matches!(p, Presentation::Fade { .. })));
+    assert!(at(60, &mut rt).iter().all(|p| !matches!(p, Presentation::Fade { .. })));
+}
+
 #[test]
 fn titles_keep_their_rectangle_and_ids_are_per_mission() {
     let s = scene();
@@ -473,10 +507,13 @@ fn titles_keep_their_rectangle_and_ids_are_per_mission() {
             call("ShowTitle", vec![Arg::Int(1), Arg::Int(7), Arg::Int(8), Arg::Int(9), Arg::Int(10), Arg::Bool(true)]),
             Presentation::Title { id: 2, text: "Sub A".into(), subtitle: true, seconds: None },
             call("ShowSubtitle", vec![Arg::Int(2), Arg::Int(5), Arg::Int(10), Arg::Int(300), Arg::Int(20), Arg::Bool(true)]),
-            Presentation::RemoveTitle { id: 1 },
-            Presentation::RemoveTitle { id: 2 },
+            call("RemoveTitleFade", vec![Arg::Int(1)]),
+            call("RemoveTitleFade", vec![Arg::Int(2)]),
         ]
     );
+    // The plain form goes at once.
+    let (_, commands) = run(&s, "t = A1.ShowTitle(7, 8, 9, 10, 'Title A', true); A1.RemoveTitle(t, false)");
+    assert_eq!(presented(&commands).last(), Some(&Presentation::RemoveTitle { id: 1 }));
 }
 
 #[test]
@@ -635,11 +672,23 @@ fn paths_are_the_maps_and_match_ignoring_case() {
 }
 
 #[test]
-fn relations_are_a_script_override() {
+fn set_relation_sends_a_one_directional_edit_with_the_engines_codes() {
+    use sta_sim::command::{CommandKind, Edit};
     let s = scene();
-    let (rt, _) = run(&s, "A1.SetRelation(0, 1, 1); A1.SetRelation(1, 0, 0)");
-    assert_eq!(rt.relation(PlayerId(0), PlayerId(1)), Relation::Ally);
-    assert_eq!(rt.relation(PlayerId(1), PlayerId(0)), Relation::Enemy);
+    let (rt, commands) = run(&s, "A1.SetRelation(1, 2, 2); A1.SetRelation(2, 1, 1); A1.SetRelation(1, 2, 0)");
+    let edits: Vec<_> = commands
+        .iter()
+        .filter_map(|c| match &c.kind {
+            CommandKind::Edit(Edit::SetRelation { from, to, relation }) => Some((from.0, to.0, *relation)),
+            _ => None,
+        })
+        .collect();
+    // Codes are the engine's: 2 Ally, 1 Neutral, 0 Enemy.
+    assert_eq!(edits.len(), 3, "{commands:?}");
+    assert_eq!((edits[0].2, edits[1].2, edits[2].2), (Relation::Ally, Relation::Neutral, Relation::Enemy));
+    assert_eq!((edits[0].0, edits[0].1), (edits[2].0, edits[2].1));
+    assert_eq!((edits[1].0, edits[1].1), (edits[0].1, edits[0].0), "the reverse call is its own edit");
+    assert_eq!(rt.relation(PlayerId(edits[1].0), PlayerId(edits[1].1)), Relation::Neutral);
 }
 
 #[test]

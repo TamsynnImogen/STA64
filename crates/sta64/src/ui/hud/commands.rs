@@ -6,7 +6,7 @@ use sta_content::ContentDb;
 use sta_sim::specials::{SpecialKind, specials_of};
 use sta_sim::view::UnitFlags;
 use sta_sim::world::EntityKind;
-use sta_sim::{Fixed, UnitView};
+use sta_sim::{EntityId, Fixed, UnitView};
 
 use super::model::{HudFeed, finished};
 
@@ -61,7 +61,7 @@ fn one(db: &ContentDb, u: &UnitView) -> Capabilities {
         build: !def.build.list.is_empty() && !u.flags.contains(UnitFlags::BUILDING),
         rally: EntityKind::producer_def(def) && def.movement.max_speed == Fixed::ZERO
             && !def.build.list.is_empty() && !u.flags.contains(UnitFlags::BUILDING),
-        mine: mobile && (def.miner || def.class.0 == "freighter"),
+        mine: mobile && def.mines(),
         specials,
     }
 }
@@ -85,10 +85,17 @@ pub fn shared(feed: &HudFeed) -> Capabilities {
         common.attack &= next.attack;
         common.build &= next.build;
         common.rally &= next.rally;
-        common.mine &= next.mine;
+        // Mine shows when any selected unit can mine; the others simply do not get the order (see `miners`).
+        common.mine |= next.mine;
         common.specials.retain(|s| next.specials.contains(s));
     }
     common
+}
+
+/// The members of `ids` that can take a Mine order (the rest of a mixed selection do not receive it).
+pub fn miners(feed: &HudFeed, ids: &[EntityId]) -> Vec<EntityId> {
+    let Some(db) = feed.content.as_deref() else { return Vec::new() };
+    ids.iter().copied().filter(|id| feed.view.unit(*id).is_some_and(|u| one(db, u).mine)).collect()
 }
 
 #[cfg(test)]
@@ -120,6 +127,25 @@ mod tests {
         let welding = one(&db, &unit);
         assert!(welding.stop);
         assert!(!welding.move_order && !welding.mine && !welding.build);
+    }
+
+    #[test]
+    fn a_freighter_with_mining_switched_off_cannot_mine() {
+        let mut data = UnitDef::new("test_data", "freighter");
+        data.movement = sta_content::MoveStats::from_f32(100.0, 1.0, 1.0, 1.0, 0.2);
+        data.miner_off = true;
+        let mut freight = UnitDef::new("test_freight", "freighter");
+        freight.movement = data.movement;
+        let db = ContentDb::builder().unit(data).unit(freight).build().unwrap();
+        let unit = |odf: &str| UnitView {
+            id: EntityId(1), def: db.key(odf).unwrap(), owner: PlayerId(0),
+            pos: Vec3::ZERO, heading: (Fixed::ZERO, Fixed::ONE), speed: Fixed::ZERO,
+            hull: [Fixed::ONE; 2], shields: [[Fixed::ZERO; 2]; 4],
+            crew: None, energy: None, autonomy: None,
+            flags: UnitFlags::SELECTABLE, progress: None,
+        };
+        assert!(!one(&db, &unit("test_data")).mine);
+        assert!(one(&db, &unit("test_freight")).mine);
     }
 
     #[test]

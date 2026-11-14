@@ -4,7 +4,7 @@
 //! the content digest ([`Rules::digest_entries`], D10).
 
 use crate::digest::{Canon, DigestEntry, quoted};
-use crate::{Races, Warning};
+use crate::{Races, SeatRaceRule, Warning};
 use sta_assets::cfg_h::CfgH;
 use sta_core::Fixed;
 
@@ -26,6 +26,9 @@ pub struct Rules {
     pathing: Option<PathingRules>,
     /// Team crew accumulation (SIM-25), when the header or a race has a key.
     crew: Option<CrewRules>,
+    /// What a team's race changes about the team (SIM-54): only the races
+    /// whose rule is not the identity, lower-case key, first match wins.
+    seat_races: Vec<(String, SeatRaceRule)>,
     /// `RTS_CFG.h`'s default craft autonomy, when the header sets either key.
     autonomy: Option<AutonomyRules>,
     /// `RTS_CFG.h`'s attack warp distance (SIM-36), when the header sets it.
@@ -34,9 +37,11 @@ pub struct Rules {
     population: Option<PopulationRules>,
     /// The other typed `RTS_CFG.h` keys.
     pub cfg: CfgRules,
+    /// Armada I's header-level start (`cfgStarting*`), see [`LegacyStart`].
+    legacy_start: LegacyStart,
 }
 
-const TYPED_LEN: usize = 4 + PopulationRules::KEYS.len() + PathingRules::KEYS.len() + AutonomyRules::KEYS.len() + ApproachRules::KEYS.len() + CfgRules::KEYS.len();
+const TYPED_LEN: usize = 4 + PathingRules::KEYS.len() + AutonomyRules::KEYS.len() + ApproachRules::KEYS.len() + CfgRules::KEYS.len() + LegacyStart::KEYS.len() + PopulationRules::KEYS.len();
 
 /// Every `RTS_CFG.h` key [`Rules`] reads.
 pub const TYPED_CFG_KEYS: [&str; TYPED_LEN] = {
@@ -45,30 +50,35 @@ pub const TYPED_CFG_KEYS: [&str; TYPED_LEN] = {
     out[1] = "MP_OFFICER_LIST_SIZE";
     out[2] = "SINGLE_PLAYER_OFFICER_LIMIT";
     out[3] = "STARTING_CREW_CAPACITY";
-    let mut p = 0;
-    while p < PopulationRules::KEYS.len() {
-        out[4 + p] = PopulationRules::KEYS[p];
-        p += 1;
-    }
     let mut i = 0;
     while i < PathingRules::KEYS.len() {
-        out[4 + p + i] = PathingRules::KEYS[i];
+        out[4 + i] = PathingRules::KEYS[i];
         i += 1;
     }
     let mut a = 0;
     while a < AutonomyRules::KEYS.len() {
-        out[4 + p + i + a] = AutonomyRules::KEYS[a];
+        out[4 + i + a] = AutonomyRules::KEYS[a];
         a += 1;
     }
     let mut w = 0;
     while w < ApproachRules::KEYS.len() {
-        out[4 + p + i + a + w] = ApproachRules::KEYS[w];
+        out[4 + i + a + w] = ApproachRules::KEYS[w];
         w += 1;
     }
     let mut j = 0;
     while j < CfgRules::KEYS.len() {
-        out[4 + p + i + a + w + j] = CfgRules::KEYS[j];
+        out[4 + i + a + w + j] = CfgRules::KEYS[j];
         j += 1;
+    }
+    let mut l = 0;
+    while l < LegacyStart::KEYS.len() {
+        out[4 + i + a + w + j + l] = LegacyStart::KEYS[l];
+        l += 1;
+    }
+    let mut p = 0;
+    while p < PopulationRules::KEYS.len() {
+        out[4 + i + a + w + j + l + p] = PopulationRules::KEYS[p];
+        p += 1;
     }
     out
 };
@@ -79,6 +89,9 @@ pub const TYPED_CFG_KEYS: [&str; TYPED_LEN] = {
 pub struct CrewRules {
     /// What a team can hold with no starbase or planet (`STARTING_CREW_CAPACITY`).
     pub starting_capacity: Option<i64>,
+    /// `MAX_CREW`: the most a team's crew capacity can grow to, and what the
+    /// A2 script call `GetMaxCrew` returns for any handle (SIM-54).
+    pub max_crew: Option<i64>,
     /// Race key (lower case, sorted) and its accumulation rate per second.
     pub races: Vec<(String, Fixed)>,
 }
@@ -207,6 +220,38 @@ impl ApproachRules {
     }
 }
 
+/// What a seat starts with when its race ODF authors no start (`normal*`,
+/// `lots*`): Armada I's `RTS_CFG.h` carries one start for every race,
+/// `cfgStartingDilithium` and `cfgStartingCrew`, and its officer maximum,
+/// `cfgMaxOfficers`. Armada I has dilithium and crew only (officers are a cap);
+/// its race ODFs have none of Armada II's `normaldilithium` keys. Keys read
+/// from the stock data (3500, 4000, 100) and named by the executable (static);
+/// that Instant Action grants exactly these is not measured on a running
+/// Armada I. Absent keys leave a field unset; no value is invented.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LegacyStart {
+    /// `cfgStartingDilithium`: the dilithium stock of a seat.
+    pub dilithium: Option<i64>,
+    /// `cfgStartingCrew`: the team crew stock of a seat.
+    pub crew: Option<i64>,
+}
+
+impl LegacyStart {
+    const KEYS: [&'static str; 3] = ["cfgStartingCrew", "cfgStartingDilithium", "cfgMaxOfficers"];
+
+    fn from_cfg(cfg: &CfgH, warnings: &mut Vec<Warning>) -> LegacyStart {
+        let mut read = |key: &str| {
+            cfg.raw(key)?;
+            let v = cfg.i64(key).filter(|v| *v >= 0).map(|v| v.min(1_000_000_000));
+            if v.is_none() {
+                warnings.push(Warning::new("RTS_CFG.h", format!("{key} is not a nonnegative integer; treated as unset")));
+            }
+            v
+        };
+        LegacyStart { crew: read("cfgStartingCrew"), dilithium: read("cfgStartingDilithium") }
+    }
+}
+
 /// The other `RTS_CFG.h` keys STA2 Classic Enhanced Gameplay changes against
 /// STA2 Classic (six of the eight changed lines CON-34's coverage report
 /// finds in the installed headers; the other two are [`AutonomyRules`]),
@@ -220,7 +265,8 @@ pub struct CfgRules {
     pub shield_damage_protection: Option<Fixed>,
     /// `REPAIR_SHIP_DISTANCE` (float; Classic 180, Enhanced 230).
     pub repair_ship_distance: Option<Fixed>,
-    /// `BASE_CREW_PER_SEC` (float; Enhanced only, 30).
+    /// `BASE_CREW_PER_SEC` (float; Enhanced only, 30). See
+    /// [`yard_crew_per_sec`](CfgRules::yard_crew_per_sec).
     pub base_crew_per_sec: Option<Fixed>,
     /// `cfgFREIGHTERS_PER_NEBULA` (int; Classic 1, Enhanced 3).
     pub freighters_per_nebula: Option<i64>,
@@ -228,22 +274,42 @@ pub struct CfgRules {
     pub hard_ai_cost_handicap: Option<Fixed>,
     /// `HARD_AI_SPEED_HANDICAP` (float; Classic 0.7, Enhanced 0.6).
     pub hard_ai_speed_handicap: Option<Fixed>,
+    /// `cfgFACING_WEIGHT` (float; 0.2 in every Armada II family header): the
+    /// share of a hit's system-location weight that comes from the distance of
+    /// the hit point to each system's hardpoints (SIM-39). Read and digested;
+    /// the sim does not apply it (no hardpoint positions in the sim).
+    pub facing_weight: Option<Fixed>,
+    /// `cfgFACING_CONSTANT` (int; 3): the distance falloff of that blend. As above.
+    pub facing_constant: Option<i64>,
 }
 
 impl CfgRules {
+    /// The engine's yard crew refill rate when `RTS_CFG.h` does not set
+    /// `BASE_CREW_PER_SEC` (read from the executable, static).
+    pub const DEFAULT_CREW_PER_SEC: i32 = 20;
+
+    /// Crew per second a yard refills (`BASE_CREW_PER_SEC`, D9): the header's
+    /// value, else 20. A negative value reads as 0. No sim system refills
+    /// crew at a yard yet; this is the rate it will use.
+    pub fn yard_crew_per_sec(&self) -> Fixed {
+        self.base_crew_per_sec.unwrap_or(Fixed::from_int(Self::DEFAULT_CREW_PER_SEC)).max(Fixed::ZERO)
+    }
+
     /// The keys, in the order of [`texts`](CfgRules::texts).
-    pub const KEYS: [&'static str; 6] = [
+    pub const KEYS: [&'static str; 8] = [
         "BASE_CREW_PER_SEC",
         "HARD_AI_COST_HANDICAP",
         "HARD_AI_SPEED_HANDICAP",
         "REPAIR_SHIP_DISTANCE",
         "SHIELD_DAMAGE_PROTECTION",
         "cfgFREIGHTERS_PER_NEBULA",
+        "cfgFACING_WEIGHT",
+        "cfgFACING_CONSTANT",
     ];
 
     /// Each value as the digest renders it (`unset` when absent), in
     /// [`KEYS`](CfgRules::KEYS) order.
-    fn texts(&self) -> [String; 6] {
+    fn texts(&self) -> [String; 8] {
         let real = |v: Option<Fixed>| v.map_or_else(|| "unset".to_owned(), crate::digest::fixed_text);
         let int = |v: Option<i64>| v.map_or_else(|| "unset".to_owned(), |v| v.to_string());
         [
@@ -253,6 +319,8 @@ impl CfgRules {
             real(self.repair_ship_distance),
             real(self.shield_damage_protection),
             int(self.freighters_per_nebula),
+            real(self.facing_weight),
+            int(self.facing_constant),
         ]
     }
 
@@ -272,6 +340,7 @@ impl CfgRules {
         let base_crew_per_sec = real("BASE_CREW_PER_SEC");
         let hard_ai_cost_handicap = real("HARD_AI_COST_HANDICAP");
         let hard_ai_speed_handicap = real("HARD_AI_SPEED_HANDICAP");
+        let facing_weight = real("cfgFACING_WEIGHT");
         let mut int = |key: &str| {
             cfg.raw(key)?;
             let v = cfg.i64(key).map(|v| v.clamp(-1_000_000_000, 1_000_000_000));
@@ -287,6 +356,8 @@ impl CfgRules {
             freighters_per_nebula: int("cfgFREIGHTERS_PER_NEBULA"),
             hard_ai_cost_handicap,
             hard_ai_speed_handicap,
+            facing_weight,
+            facing_constant: int("cfgFACING_CONSTANT"),
         }
     }
 }
@@ -429,9 +500,19 @@ impl Rules {
                 ));
             }
         }
+        rules.legacy_start = LegacyStart::from_cfg(&cfg, &mut warnings);
+        // Armada I has no multiplayer officer list: `cfgMaxOfficers` is the one cap.
+        if rules.officer_limits.is_empty() && cfg.raw("MP_OFFICER_LIMIT").is_none() && cfg.raw("SINGLE_PLAYER_OFFICER_LIMIT").is_none() && cfg.raw("cfgMaxOfficers").is_some() {
+            match cfg.i64("cfgMaxOfficers").and_then(|v| i32::try_from(v).ok()).filter(|v| *v >= 0) {
+                Some(value) => rules.officer_limits.push(OfficerLimit { key: "ol_normal".into(), value }),
+                None => warnings.push(Warning::new("RTS_CFG.h", "invalid cfgMaxOfficers; officer maximum unavailable")),
+            }
+        }
         rules.pathing = PathingRules::from_cfg(&cfg, &mut warnings);
-        if let Some(cap) = cfg.i64("STARTING_CREW_CAPACITY").filter(|c| *c >= 0) {
-            rules.crew = Some(CrewRules { starting_capacity: Some(cap.min(1_000_000_000)), races: Vec::new() });
+        let starting = cfg.i64("STARTING_CREW_CAPACITY").filter(|c| *c >= 0).map(|c| c.min(1_000_000_000));
+        let max_crew = cfg.i64("MAX_CREW").filter(|c| *c >= 0).map(|c| c.min(1_000_000_000));
+        if starting.is_some() || max_crew.is_some() {
+            rules.crew = Some(CrewRules { starting_capacity: starting, max_crew, races: Vec::new() });
         }
         rules.population = PopulationRules::from_cfg(&cfg, &mut warnings);
         rules.autonomy = AutonomyRules::from_cfg(&cfg, &mut warnings);
@@ -448,6 +529,19 @@ impl Rules {
     /// Set the path planner's rules (tests and content built in code).
     pub fn with_pathing(mut self, pathing: PathingRules) -> Self {
         self.pathing = Some(pathing);
+        self
+    }
+
+    /// What a team of `race` (a unit race key, any case) changes about the
+    /// team: the identity for a race with no authored or derived rule.
+    pub fn seat_race(&self, race: &str) -> SeatRaceRule {
+        let race = race.trim();
+        self.seat_races.iter().find(|(k, _)| k.eq_ignore_ascii_case(race)).map_or_else(SeatRaceRule::default, |(_, r)| *r)
+    }
+
+    /// Set the seat race rules (tests and content built in code).
+    pub fn with_seat_races(mut self, rules: Vec<(String, SeatRaceRule)>) -> Self {
+        self.seat_races = rules;
         self
     }
 
@@ -524,7 +618,13 @@ impl Rules {
             rates.dedup_by(|a, b| a.0 == b.0);
             rules.crew.get_or_insert_with(CrewRules::default).races = rates;
         }
+        rules.seat_races = races.seat_rules().map(|(k, r)| (k.to_owned(), r)).collect();
         Ok((rules, warnings))
+    }
+
+    /// Armada I's header-level start, for a race that authors none.
+    pub fn legacy_start(&self) -> LegacyStart {
+        self.legacy_start
     }
 
     pub fn officer_limit(&self, choice: usize) -> Option<i32> {
@@ -557,8 +657,18 @@ impl Rules {
                 crate::digest::fixed_text(self.approach().min_move_warp_distance),
             ));
         }
-        for (key, value) in CfgRules::KEYS.iter().zip(self.cfg.texts()) {
+        // The two facing keys (SIM-39) only when set, so content without them keeps its hash.
+        for (i, (key, value)) in CfgRules::KEYS.iter().zip(self.cfg.texts()).enumerate() {
+            if i >= 6 && value == "unset" {
+                continue;
+            }
             out.push(DigestEntry::new(format!("RTS_CFG.h:{key}"), value));
+        }
+        // Only when set, so content without the keys keeps its hash.
+        for (key, value) in [("cfgStartingCrew", self.legacy_start.crew), ("cfgStartingDilithium", self.legacy_start.dilithium)] {
+            if let Some(value) = value {
+                out.push(DigestEntry::new(format!("RTS_CFG.h:{key}"), value.to_string()));
+            }
         }
         // SIM-30: only when set, so content without the keys keeps its hash.
         if let Some(p) = &self.population {
@@ -573,6 +683,18 @@ impl Rules {
         ));
         let rates = crew.map(|c| c.races.iter().map(|(k, r)| format!("{}:{}", quoted(k), crate::digest::fixed_text(*r))).collect::<Vec<_>>()).unwrap_or_default();
         out.push(DigestEntry::new("crew:accumulation", format!("[{}]", rates.join(","))));
+        // New entries only when set, so content with neither key keeps its digest.
+        if let Some(max) = crew.and_then(|c| c.max_crew) {
+            out.push(DigestEntry::new("RTS_CFG.h:MAX_CREW", max.to_string()));
+        }
+        if !self.seat_races.is_empty() {
+            let rows = self
+                .seat_races
+                .iter()
+                .map(|(k, r)| format!("{}:{}:{}", quoted(k), crate::digest::fixed_text(r.officer_multiplier), crate::digest::fixed_text(r.latinum_scale)))
+                .collect::<Vec<_>>();
+            out.push(DigestEntry::new("race:seat-rules", format!("[{}]", rows.join(","))));
+        }
         for s in &self.starts {
             let opt = |v: Option<i64>| v.map_or_else(|| "-".to_owned(), |v| v.to_string());
             let nums = |v: [i64; 4]| format!("[{}]", v.map(|n| n.to_string()).join(","));
@@ -763,11 +885,15 @@ mod cfg_tests {
         assert_eq!(e.cfg.repair_ship_distance, Some(Fixed::from_int(230)));
         assert_eq!(c.cfg.base_crew_per_sec, None);
         assert_eq!(e.cfg.base_crew_per_sec, Some(Fixed::from_int(30)));
+        assert_eq!(c.cfg.yard_crew_per_sec(), Fixed::from_int(20), "absent key: the engine default");
+        assert_eq!(e.cfg.yard_crew_per_sec(), Fixed::from_int(30));
+        let neg = CfgRules { base_crew_per_sec: Some(Fixed::from_int(-5)), ..CfgRules::default() };
+        assert_eq!(neg.yard_crew_per_sec(), Fixed::ZERO);
         assert_eq!(e.autonomy(), AutonomyRules { movement: 1, special_weapon: 1 });
         // Every changed line is a differing digest key.
         let (dc, de) = (ContentDigest::from_entries(c.digest_entries()), ContentDigest::from_entries(e.digest_entries()));
         let keys: Vec<String> = dc.differences(&de).into_iter().map(|d| d.key).collect();
-        let mut want: Vec<String> = CfgRules::KEYS.iter().chain(&["CRAFT_DEFAULT_SPECIALWEAPON_AUTONOMY"]).map(|k| format!("RTS_CFG.h:{k}")).collect();
+        let mut want: Vec<String> = CfgRules::KEYS[..6].iter().chain(&["CRAFT_DEFAULT_SPECIALWEAPON_AUTONOMY"]).map(|k| format!("RTS_CFG.h:{k}")).collect();
         want.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
         // Movement autonomy: Enhanced sets 1, the engine default.
         assert_eq!(keys, want);
@@ -792,11 +918,55 @@ mod cfg_tests {
         // The digest has one entry per typed key but the two officer keys
         // that resolve into MP_OFFICER_LIMIT, and the attack warp distance,
         // which is digested only when it differs from the engine default.
+        // The two facing keys are digested only when set (SIM-39).
+        let mut rules = Rules::default().with_approach(ApproachRules { min_move_warp_distance: Fixed::from_int(1100) });
+        rules.legacy_start = LegacyStart { dilithium: Some(1), crew: Some(2) };
+        rules.cfg.facing_weight = Some(Fixed::ONE);
+        rules.cfg.facing_constant = Some(3);
         let pop = PopulationRules { levels: [Fixed::from_int(1000); 4], civilian_rate_modifier: Fixed::ONE };
-        let d = ContentDigest::from_entries(Rules::default().with_approach(ApproachRules { min_move_warp_distance: Fixed::from_int(1100) }).with_population(pop).digest_entries());
-        for k in TYPED_CFG_KEYS.iter().filter(|k| !matches!(**k, "MP_OFFICER_LIST_SIZE" | "SINGLE_PLAYER_OFFICER_LIMIT")) {
+        let d = ContentDigest::from_entries(rules.with_population(pop).digest_entries());
+        for k in TYPED_CFG_KEYS.iter().filter(|k| !matches!(**k, "MP_OFFICER_LIST_SIZE" | "SINGLE_PLAYER_OFFICER_LIMIT" | "cfgMaxOfficers")) {
             assert!(d.get(&format!("RTS_CFG.h:{k}")).is_some(), "{k}");
         }
+    }
+}
+
+#[cfg(test)]
+mod legacy_start_tests {
+    use super::*;
+    use crate::digest::ContentDigest;
+
+    const A1: &str = "int cfgMaxDilithium = 999999;\nint cfgMaxOfficers = 100;\nint cfgMaxCrew = 99999;\nint cfgStartingDilithium = 3500;\nint cfgStartingCrew = 4000;\n";
+
+    #[test]
+    fn armada_one_header_start_and_officer_cap_are_typed() {
+        let (r, w) = Rules::from_header(A1);
+        assert!(w.is_empty(), "{w:?}");
+        assert_eq!(r.legacy_start(), LegacyStart { dilithium: Some(3500), crew: Some(4000) });
+        assert_eq!(r.officer_limit(0), Some(100));
+        let d = ContentDigest::from_entries(r.digest_entries());
+        assert_eq!(d.get("RTS_CFG.h:cfgStartingDilithium"), Some("3500"));
+        assert_eq!(d.get("RTS_CFG.h:cfgStartingCrew"), Some("4000"));
+    }
+
+    #[test]
+    fn a_header_without_the_keys_keeps_its_digest_and_an_explicit_officer_list_wins() {
+        let (none, _) = Rules::from_header("int SOMETHING_ELSE = 1;\n");
+        assert_eq!(none.legacy_start(), LegacyStart::default());
+        assert_eq!(none.officer_limit(0), None);
+        let d = ContentDigest::from_entries(none.digest_entries());
+        assert!(d.get("RTS_CFG.h:cfgStartingDilithium").is_none() && d.get("RTS_CFG.h:cfgStartingCrew").is_none());
+        let (r, _) = Rules::from_header("int SINGLE_PLAYER_OFFICER_LIMIT = 7;\nint cfgMaxOfficers = 100;\n");
+        assert_eq!(r.officer_limits.len(), 1);
+        assert_eq!(r.officer_limit(0), Some(7));
+    }
+
+    #[test]
+    fn bad_values_warn_and_stay_unset() {
+        let (r, w) = Rules::from_header("int cfgStartingDilithium = lots;\nint cfgStartingCrew = -5;\nint cfgMaxOfficers = many;\n");
+        assert_eq!(r.legacy_start(), LegacyStart::default());
+        assert_eq!(r.officer_limit(0), None);
+        assert_eq!(w.len(), 3);
     }
 }
 
@@ -807,6 +977,21 @@ mod crew_tests {
 
     fn digest(text: &str) -> ContentDigest {
         ContentDigest::from_entries(Rules::from_header(text).0.digest_entries())
+    }
+
+    #[test]
+    fn max_crew_and_seat_rules_are_read_and_digested_only_when_set() {
+        let d = digest("int STARTING_CREW_CAPACITY = 250;\nint MAX_CREW = 99999;\n");
+        assert_eq!(Rules::from_header("int MAX_CREW = 99999;\n").0.crew().unwrap().max_crew, Some(99999));
+        assert_eq!(d.get("RTS_CFG.h:MAX_CREW"), Some("99999"));
+        let none = ContentDigest::from_entries(Rules::default().digest_entries());
+        assert_eq!(none.get("RTS_CFG.h:MAX_CREW"), None);
+        assert_eq!(none.get("race:seat-rules"), None);
+        let rule = SeatRaceRule { officer_multiplier: Fixed::from_f64(0.5), latinum_scale: Fixed::ONE };
+        let set = Rules::default().with_seat_races(vec![("x".into(), rule)]);
+        assert_eq!(set.seat_race("X"), rule);
+        assert_eq!(set.seat_race("y"), SeatRaceRule::default());
+        assert_eq!(none.first_difference(&ContentDigest::from_entries(set.digest_entries())).unwrap().key, "race:seat-rules");
     }
 
     #[test]
@@ -824,7 +1009,7 @@ mod crew_tests {
     #[test]
     fn race_accumulation_rates_are_digested() {
         let rates = |r: Vec<(String, Fixed)>| ContentDigest::from_entries(
-            Rules::default().with_crew(CrewRules { starting_capacity: None, races: r }).digest_entries(),
+            Rules::default().with_crew(CrewRules { starting_capacity: None, max_crew: None, races: r }).digest_entries(),
         );
         let a = rates(vec![("fed".into(), Fixed::from_int(2))]);
         let b = rates(vec![("fed".into(), Fixed::from_int(3))]);

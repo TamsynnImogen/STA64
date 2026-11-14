@@ -501,3 +501,171 @@ fn installed_stock_hud_renders_on_gpu() {
         }
     }
 }
+
+/// Armada I: the three separate resource panels (dilithium, crew, officers), from the
+/// install's own `gui_*.cfg` and `gui_<race>.spr`, drawn in a windowless GPU frame.
+/// Set `STA64_GPU_TESTS=1 STA64_TEST_A1_INSTALL=<Armada I root>`; `STA64_HUD_CAPTURE_DIR`
+/// keeps the frames locally (they show game art: never commit them).
+#[test]
+fn installed_armada1_resource_readouts_render_on_gpu() {
+    if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1") {
+        eprintln!("SKIP: set STA64_GPU_TESTS=1 STA64_TEST_A1_INSTALL=<Armada I root>");
+        return;
+    }
+    let Some(install) = std::env::var_os("STA64_TEST_A1_INSTALL") else {
+        eprintln!("SKIP: set STA64_TEST_A1_INSTALL=<Armada I root>");
+        return;
+    };
+    let size = UVec2::new(1280, 720);
+    for (cfg, spr, label) in [
+        ("gui_fed.cfg", "gui_federation.spr", "a1-fed"),
+        ("gui_kli.cfg", "gui_klingon.spr", "a1-kli"),
+        ("gui_rom.cfg", "gui_romulan.spr", "a1-rom"),
+        ("gui_bor.cfg", "gui_borg.spr", "a1-bor"),
+    ] {
+        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), None).expect("installed A1 VFS");
+        let layout = crate::game::gui_layout(&vfs, cfg).unwrap_or_else(|| panic!("installed {cfg} missing"));
+        let stock = StockLayout::new(&layout, Vec2::new(1080.0 * size.x as f32 / size.y as f32, 1080.0));
+        assert!(stock.panel("resource").is_none(), "{label}: now has a resource panel");
+        let hud_feed = feed(&vfs, GameOptions::default());
+        let player = hud_feed.view.player(hud_feed.player).expect("capture player");
+        let whole = |value: Fixed| (value.to_bits() / Fixed::ONE.to_bits()).to_string();
+        // Expected values come from the content data, not from the view the HUD reads, so lost
+        // starting values (the legacy RTS_CFG.h start, the officer cap) cannot pass as "" == "".
+        // The feed is one Federation start for every cfg: only the layout differs per race.
+        let rules = hud_feed.content.as_ref().expect("content").rules();
+        let start = rules.legacy_start();
+        let cap = rules.officer_limit(GameOptions::default().officer_limit as usize).expect("officer cap");
+        let used = whole(player.officers[0]);
+        assert!(!used.is_empty());
+        let expected = [
+            (2_usize, start.dilithium.expect("legacy start dilithium").to_string()),
+            (0, start.crew.expect("legacy start crew").to_string()),
+            (1, format!("{used}/{cap}")),
+        ];
+        assert!(expected.iter().all(|(_, v)| !v.is_empty()));
+        eprintln!("{label}: expected readouts {expected:?}");
+        let mut app = App::new();
+        app.add_plugins(
+            DefaultPlugins
+                .set(WindowPlugin { primary_window: None, exit_condition: ExitCondition::DontExit, ..default() })
+                .set(RenderPlugin { synchronous_pipeline_compilation: true, ..default() })
+                .disable::<bevy::winit::WinitPlugin>()
+                .disable::<bevy::log::LogPlugin>(),
+        );
+        configure_sets(&mut app);
+        let selection = hud_feed.selected.clone();
+        app.insert_resource(ClearColor(Color::BLACK))
+            .insert_resource(UiProfile::Armada2)
+            .insert_resource(UiProfile::Armada2.theme())
+            .insert_resource(Mounted(vfs))
+            .insert_resource(GuiSkin { table: Some(spr.into()) })
+            .insert_resource(HudConfig { gui: Some(layout), aspect: size.x as f32 / size.y as f32, fit_scale: false, log: false })
+            .insert_resource(UiScale(size.y as f32 / 1080.0))
+            .insert_resource(hud_feed)
+            .insert_resource(ExternalFeed)
+            .insert_resource(Selection(selection))
+            .init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .add_plugins(HudPlugin)
+            .add_systems(Update, aim_roots_hud.before(GameSet::Ui));
+        let mut image = Image::new_target_texture(size.x, size.y, bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb, None);
+        image.asset_usage = RenderAssetUsages::RENDER_WORLD;
+        let target = app.world_mut().resource_mut::<Assets<Image>>().add(image);
+        let camera = app
+            .world_mut()
+            .spawn((Camera2d, Camera { order: 1, clear_color: ClearColorConfig::Custom(Color::BLACK), ..default() }, RenderTarget::from(target.clone()), Msaa::Off))
+            .id();
+        app.insert_resource(CaptureCamera(camera));
+        app.finish();
+        app.cleanup();
+        for _ in 0..16 {
+            app.update();
+        }
+        let has_adapter = app.world().get_resource::<bevy::render::renderer::RenderAdapterInfo>().cloned().or_else(|| {
+            app.get_sub_app(bevy::render::RenderApp).and_then(|r| r.world().get_resource::<bevy::render::renderer::RenderAdapterInfo>().cloned())
+        });
+        let Some(adapter) = has_adapter else {
+            eprintln!("SKIP {label}: no render adapter");
+            return;
+        };
+        if crate::bench::frames::is_software_adapter(adapter.device_type, &adapter.name) {
+            eprintln!("SKIP {label}: hardware adapter unavailable");
+            return;
+        }
+        // Three readouts with the live values.
+        for (id, want) in &expected {
+            let actual = app
+                .world_mut()
+                .query::<(&super::info::StockText, &crate::ui::sprite_font::SpriteText)>()
+                .iter(app.world())
+                .find_map(|(kind, text)| matches!(kind, super::info::StockText::Resource(n) if n == id).then(|| text.text.clone()));
+            assert_eq!(actual.as_deref(), Some(want.as_str()), "{label}: readout {id}");
+        }
+        // Each panel's background and icon sprite names resolve in the race's table.
+        for prefix in ["officer", "crew", "dilithium"] {
+            for key in [format!("{prefix}BackgroundPanel"), format!("{prefix}Icon")] {
+                let wanted: Vec<String> = if key.ends_with("Icon") {
+                    stock.name(&key).map(str::to_owned).into_iter().collect()
+                } else {
+                    stock.pieces(&key).into_iter().map(|p| p.name).collect()
+                };
+                assert!(!wanted.is_empty(), "{label}: {key} authored");
+                for name in wanted {
+                    let resolved = app
+                        .world_mut()
+                        .query::<(&GuiImage, &ImageNode)>()
+                        .iter(app.world())
+                        .any(|(image, _)| image.names.iter().any(|n| n.eq_ignore_ascii_case(&name)));
+                    assert!(resolved, "{label}: sprite {name:?} ({key}) did not resolve in {spr}");
+                    eprintln!("{label}: sprite {name} resolved");
+                }
+            }
+        }
+        let frames = Arc::new(Mutex::new(Vec::<Image>::new()));
+        let output = Arc::clone(&frames);
+        app.world_mut().spawn(Screenshot::image(target)).observe(move |shot: On<ScreenshotCaptured>| {
+            output.lock().unwrap().push(shot.image.clone());
+        });
+        for _ in 0..60 {
+            app.update();
+            if !frames.lock().unwrap().is_empty() {
+                break;
+            }
+        }
+        let shot = frames.lock().unwrap().first().cloned().unwrap_or_else(|| panic!("{label}: no GPU capture"));
+        let rgba = shot.try_into_dynamic().expect("GPU image conversion").to_rgba8();
+        // The numerals are drawn in the text colour inside each text rectangle (panel art
+        // there is dark or not that colour), so lost text fails.
+        let text_colour = UiProfile::Armada2.theme().text.to_srgba();
+        let want = [text_colour.red, text_colour.green, text_colour.blue].map(|v| (v * 255.0).round() as i16);
+        for prefix in ["officer", "crew", "dilithium"] {
+            let area = stock.panel(prefix).expect("panel");
+            let r = stock.at(Vec2::new(area.x, area.y), &format!("{prefix}TextArea")).expect("text area");
+            let k = size.y as f32 / 1080.0;
+            let (x0, x1) = ((r.x * k).max(0.0) as u32, ((r.x + r.w) * k).min(size.x as f32) as u32);
+            let (y0, y1) = ((r.y * k).max(0.0) as u32, ((r.y + r.h) * k).min(size.y as f32) as u32);
+            let matching = (y0..y1).flat_map(|y| (x0..x1).map(move |x| (x, y))).filter(|&(x, y)| {
+                let p = rgba.get_pixel(x, y);
+                (0..3).all(|c| (p[c] as i16 - want[c]).abs() <= 48)
+            }).count();
+            eprintln!("{label}: {prefix} text rect {x0}..{x1} x {y0}..{y1}: {matching} text-colour pixels");
+            assert!(matching >= 8, "{label}: {prefix} readout shows no text-colour pixels");
+        }
+        if let Ok(dir) = std::env::var("STA64_HUD_CAPTURE_DIR") {
+            std::fs::create_dir_all(&dir).unwrap();
+            rgba.save(std::path::Path::new(&dir).join(format!("stock-{label}.png"))).unwrap();
+        }
+    }
+}
+
+#[allow(clippy::type_complexity)]
+fn aim_roots_hud(
+    mut commands: Commands,
+    camera: Res<CaptureCamera>,
+    roots: Query<Entity, (With<HudRoot>, Without<UiTargetCamera>)>,
+) {
+    for root in &roots {
+        commands.entity(root).insert(UiTargetCamera(camera.0));
+    }
+}

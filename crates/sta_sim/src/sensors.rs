@@ -21,7 +21,9 @@
 //! [`DEFAULT_SENSOR`].
 
 use sta_content::ContentDb;
-use sta_core::{EntityId, Fixed, PlayerId, TeamId, Vec3};
+use sta_core::{EntityId, Fixed, PlayerId, Vec3};
+
+use crate::relations::Diplomacy;
 
 use crate::spatial::{Body, Grid};
 use crate::view::UnitFlags;
@@ -45,12 +47,15 @@ pub fn range(e: &Entity, content: Option<&ContentDb>) -> Fixed {
 }
 
 /// What each seat sees: `(player, entity ids ascending)`, ascending player.
+/// Seats with no mission override share sight with their team; a mission
+/// relation shares it only between mutual allies (SIM-63, read from the
+/// executable: confirmed Ally).
 pub fn compute(
     units: &Entities,
     content: Option<&ContentDb>,
-    players: &[(PlayerId, TeamId)],
+    dip: Diplomacy<'_>,
 ) -> Vec<(PlayerId, Vec<EntityId>)> {
-    let team_of = |p: PlayerId| players.iter().find(|s| s.0 == p).map(|s| s.1);
+    let players = dip.players;
     let bodies: Vec<Body> = units
         .iter()
         .map(|e| Body {
@@ -62,14 +67,12 @@ pub fn compute(
         .collect();
     let grid = Grid::build(&bodies, CELL_LOG2);
 
-    let mut teams: Vec<TeamId> = players.iter().map(|s| s.1).collect();
-    teams.sort();
-    teams.dedup();
-    let seen_by: Vec<(TeamId, Vec<EntityId>)> = teams
-        .into_iter()
-        .map(|team| {
+    // What each seat's own units and their sensors cover.
+    let own: Vec<(PlayerId, Vec<EntityId>)> = players
+        .iter()
+        .map(|&(owner, _)| {
             let mut ids: Vec<EntityId> = Vec::new();
-            for e in units.iter().filter(|e| team_of(e.owner) == Some(team)) {
+            for e in units.iter().filter(|e| e.owner == owner) {
                 ids.push(e.id);
                 let r = range(e, content);
                 if r > Fixed::ZERO {
@@ -93,18 +96,21 @@ pub fn compute(
             }
             ids.sort();
             ids.dedup();
-            (team, ids)
+            (owner, ids)
         })
         .collect();
 
     players
         .iter()
-        .map(|&(p, t)| {
-            let ids = seen_by
-                .iter()
-                .find(|s| s.0 == t)
-                .map(|s| s.1.clone())
-                .unwrap_or_default();
+        .map(|&(p, _)| {
+            let mut ids: Vec<EntityId> = Vec::new();
+            for (q, seen) in &own {
+                if dip.confirmed_ally(p, *q) {
+                    ids.extend_from_slice(seen);
+                }
+            }
+            ids.sort();
+            ids.dedup();
             (p, ids)
         })
         .collect()
@@ -113,6 +119,7 @@ pub fn compute(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sta_core::TeamId;
     use crate::WorldSource;
     use crate::command::{Command, CommandKind, Order};
     use crate::setup::{Control, GameOptions, GameSetup, PlayerSetup};

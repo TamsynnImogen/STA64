@@ -206,9 +206,14 @@ pub enum Edit {
     /// officer limit. SCRIPT/BENCH only. Appended tag 25.
     MaxOfficers(PlayerId, Fixed),
     /// Mission `SetCrew` / `Entity.crew` (SIM-54): a craft's or station's
-    /// current crew, floored at 0 and capped at its maximum crew or what it
-    /// already holds, whichever is higher (the clamp is not measured). Rejected
-    /// for a unit with no crew pool. SCRIPT/BENCH only. Appended tag 26.
+    /// current crew, negative read as 0 and clamped to the unit's own current
+    /// maximum crew (`Craft::SetCrew`, read from the executable, static; it is
+    /// not clamped to the global `MAX_CREW`). Where the casualty model runs
+    /// (the unit's features have `crew_loss_on_hit`) the derelict check of
+    /// SIM-39 follows: crew under 1 latches the unit derelict and a later edit
+    /// to 1 or more clears it by the next tick. Without that feature the edit
+    /// never latches. Rejected for a unit with no crew pool.
+    /// SCRIPT/BENCH only. Appended tag 26.
     UnitCrew(EntityId, Fixed),
     /// Mission `resources.crew` (SIM-54): the player's crew stock, floored at 0
     /// and capped at 1e9 (not clamped to the team capacity, which a stock may
@@ -293,13 +298,53 @@ pub enum Edit {
     /// The sim keeps and shows it; no rule reads it yet. SCRIPT/BENCH only.
     /// Appended tag 43.
     PlayerRace(PlayerId, String),
+    /// A scripted edit of a team's pool (SIM-54), with the rule of the call that
+    /// sent it: crew stock add or set (`AddCrew` / `SetTeamCrew` of A2 and A1,
+    /// clamped to the team's crew capacity, no floor), the raw capacity write
+    /// of Roots `Player.maxCrew`, and A1 `AddOfficers` / `SetOfficers`
+    /// (clamped to the officer cap). Rejected for a seat the sim does not
+    /// have, for a capacity-clamped edit when the content has no crew rules,
+    /// and for an officer edit on a seat with no officer limit. SCRIPT/BENCH
+    /// only. Appended tag 44.
+    TeamPool(PlayerId, TeamOp, Fixed),
+    /// Mission `SetRelation(a, b, r)` / Roots `Player:setRelation` (SIM-63):
+    /// seat `from`'s own view of seat `to` becomes `relation` (directional:
+    /// the reverse view is untouched). Both must be configured, distinct
+    /// seats; anything else is rejected. Takes effect on the next tick: units
+    /// stop or start engaging, shared vision follows mutual Ally. Setting the
+    /// default (same team Ally, other team Enemy) removes the override. Wire
+    /// bounds: seats are bytes and `Relation` has three variants (Ally,
+    /// Neutral, Enemy); a variant index above 2 fails to decode. SCRIPT/BENCH
+    /// only. Appended tag 45.
+    SetRelation { from: PlayerId, to: PlayerId, relation: crate::view::Relation },
     /// Mission `SetPlanetCivPop` (SIM-30): a Producer planet's population in
     /// people, kept as given within +-1e9 (growth cuts a value above the
     /// planet's cap on the next tick; a value of 0 or less neutralizes an
     /// owned planet). Creates the planet's population row. Rejected for any
     /// other target (STA64 policy; the original has no type check).
-    /// SCRIPT/BENCH only. Appended after `PlayerRace`: wire tag 44 on this branch (the tag is the position; it becomes 46 once #659 and #665 are merged ahead of it).
+    /// SCRIPT/BENCH only. Appended tag 46.
     PlanetPopulation(EntityId, Fixed),
+}
+
+/// Which team-pool rule an [`Edit::TeamPool`] applies (appended variants only).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TeamOp {
+    /// A2 `AddCrew(team, x)`: over capacity a positive add is dropped and a
+    /// negative one applied, otherwise the sum clamped to capacity.
+    CrewAddA2,
+    /// A2 `SetTeamCrew(team, v)`: `AddCrew(v - pool)`.
+    CrewSetA2,
+    /// A1 `AddCrew`: `min(pool + x, capacity)`.
+    CrewAddA1,
+    /// A1 `SetTeamCrew`: `min(v, capacity)`.
+    CrewSetA1,
+    /// Roots `Player.maxCrew = v`: the capacity becomes `v` (raw, unclamped);
+    /// later capacity changes shift it by their delta.
+    CapacityRaw,
+    /// A1 `AddOfficers`: the officer count becomes `min(count + trunc(x), cap)`.
+    OfficersAddA1,
+    /// A1 `SetOfficers`: the officer count becomes `min(trunc(v), cap)`.
+    OfficersSetA1,
 }
 
 /// The largest turn rate (radians per second) a script may set.
@@ -469,7 +514,28 @@ mod tests {
     }
 
     #[test]
-    fn attribute_edits_append_tags_38_to_44() {
+    fn team_pool_edit_appends_tag_44() {
+        for op in [TeamOp::CrewAddA2, TeamOp::CrewSetA2, TeamOp::CrewAddA1, TeamOp::CrewSetA1, TeamOp::CapacityRaw, TeamOp::OfficersAddA1, TeamOp::OfficersSetA1] {
+            let edit = Edit::TeamPool(PlayerId(1), op, Fixed::ONE);
+            let bytes = postcard::to_allocvec(&edit).unwrap();
+            assert_eq!(bytes[0], 44, "{edit:?}");
+            assert_eq!(postcard::from_bytes::<Edit>(&bytes).unwrap(), edit);
+        }
+    }
+
+    #[test]
+    fn set_relation_appends_tag_45_and_bounds_the_relation() {
+        let e = Edit::SetRelation { from: PlayerId(1), to: PlayerId(2), relation: crate::view::Relation::Ally };
+        let bytes = postcard::to_allocvec(&e).unwrap();
+        assert_eq!(bytes, [45, 1, 2, 0]);
+        assert_eq!(postcard::from_bytes::<Edit>(&bytes).unwrap(), e);
+        // Neutral and Enemy are 1 and 2; nothing above decodes.
+        assert!(postcard::from_bytes::<Edit>(&[45, 1, 2, 3]).is_err());
+        assert!(postcard::from_bytes::<Edit>(&[45, 1, 2]).is_err());
+    }
+
+    #[test]
+    fn attribute_edits_append_tags_38_to_43() {
         let id = EntityId(1);
         let edits = [
             (38, Edit::MaxHull(id, Fixed::ONE)),
@@ -478,13 +544,20 @@ mod tests {
             (41, Edit::MaxShieldsKeep(id, Fixed::ONE)),
             (42, Edit::UnitRace(id, "x".into())),
             (43, Edit::PlayerRace(PlayerId(0), "x".into())),
-            (44, Edit::PlanetPopulation(id, Fixed::ONE)),
         ];
         for (tag, edit) in edits {
             let bytes = postcard::to_allocvec(&edit).unwrap();
             assert_eq!(bytes[0], tag, "{edit:?}");
             assert_eq!(postcard::from_bytes::<Edit>(&bytes).unwrap(), edit);
         }
+    }
+
+    #[test]
+    fn planet_population_edit_appends_tag_46() {
+        let edit = Edit::PlanetPopulation(EntityId(1), Fixed::ONE);
+        let bytes = postcard::to_allocvec(&edit).unwrap();
+        assert_eq!(bytes[0], 46);
+        assert_eq!(postcard::from_bytes::<Edit>(&bytes).unwrap(), edit);
     }
 
     #[test]

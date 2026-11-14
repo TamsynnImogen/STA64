@@ -123,6 +123,7 @@ pub fn weapon_def(name: &str, odf: &Odf, ordnance: Option<&Odf>, warnings: &mut 
             let party_size = o.num("partySize").filter(|n| *n >= 0.0).unwrap_or(100.0);
             d.colonize = Some(crate::def::ColonizePodDef { party_size: Fixed::from_f64(party_size), orbit_range: o.fixed("orbitRange") });
         }
+        d.damage_variance = o.fixed("damageVariance");
         d.fx = o.text("shotGeometry").or_else(|| o.text("sprite"));
         match kind {
             WeaponKind::Beam => d.duration = o.ticks("lifespan"),

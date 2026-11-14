@@ -67,7 +67,7 @@ fn _every_sim_field_is_decided(s: &Sim) {
     let Sim {
         tick: _, rng: _, units: _, labels: _, players: _, ai_seats: _, content: _, starts: _, regions: _,
         bounds: _, confinement: _, perception: _, events: _, weapons: _, movement: _, economy: _,
-        production: _, victory: _, specials: _, autonomy: _, start_effects: _, nav: _, subsystems: _, attrs: _, scripted: _, switches: _, team_changes: _, appearance_factions: _, approach_warp: _, engagement: _, watchdog: _, colonies: _,
+        production: _, victory: _, specials: _, autonomy: _, start_effects: _, nav: _, subsystems: _, attrs: _, scripted: _, switches: _, relations: _, team_changes: _, appearance_factions: _, approach_warp: _, engagement: _, watchdog: _, colonies: _,
     } = s;
 }
 
@@ -216,6 +216,9 @@ impl Sim {
         if !self.switches.is_empty() {
             self.switches.hash_into(&mut h);
         }
+        if !self.relations.is_empty() {
+            self.relations.hash_into(&mut h);
+        }
         if !self.attrs.is_empty() {
             self.attrs.hash_into(&mut h);
         }
@@ -356,12 +359,15 @@ impl Sim {
                 if !self.scripted.is_empty() {
                     row(None, "scripted orders (hash)", block("scripted", &|h| self.scripted.hash_into(h)));
                 }
+                if !self.relations.is_empty() {
+                    row(None, "mission relations (hash)", block("relations", &|h| self.relations.hash_into(h)));
+                }
                 if !self.switches.is_empty() {
                     row(None, "per-craft switches (hash)", block("switches", &|h| self.switches.hash_into(h)));
                 }
                 // SIM-55: itemised, one row per unit with a switched-off or damaged system.
                 for (id, r) in self.subsystems.to_rows() {
-                    row(Some(id), "subsystems (off bits, damage)", format!("{:#04x}, {:?}", r.off, r.damage.map(|d| fx(Fixed::from_bits(d)))));
+                    row(Some(id), "subsystems (off bits, damage)", format!("{:#04x}{}, {:?}", r.off, if r.derelict { ", derelict" } else { "" }, r.damage.map(|d| fx(Fixed::from_bits(d)))));
                 }
                 // SIM-54: itemised mission-set names and races.
                 let a = self.attrs.view();

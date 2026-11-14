@@ -261,7 +261,7 @@ impl Colonies {
     }
 
     /// The planets of `rows` with a population row, with their hulls.
-    fn hulls(&self, units: &Entities) -> Vec<(EntityId, [Fixed; 2])> {
+    pub(crate) fn hulls(&self, units: &Entities) -> Vec<(EntityId, [Fixed; 2])> {
         self.planets.keys().filter_map(|&id| units.get(id).map(|u| (id, u.hull))).collect()
     }
 
@@ -356,18 +356,9 @@ impl Sim {
         &self.colonies
     }
 
-    /// The seat's race: a script-set one, else the setup's (lower case).
-    fn seat_race(&self, p: PlayerId) -> Option<String> {
-        self.attrs
-            .player_race(p)
-            .map(str::to_owned)
-            .or_else(|| self.appearance_factions.iter().find(|(id, _)| *id == p).map(|(_, r)| r.clone()))
-    }
-
     /// `crewAccumulationRate` of the seat's race; zero when unknown.
     fn seat_crew_rate(&self, db: &ContentDb, p: PlayerId) -> Fixed {
-        let Some(race) = self.seat_race(p) else { return Fixed::ZERO };
-        let race = race.trim().to_owned();
+        let Some(race) = self.seat_race(p).map(|r| r.trim().to_owned()) else { return Fixed::ZERO };
         db.rules()
             .crew()
             .and_then(|c| c.races.iter().find(|(k, _)| k.eq_ignore_ascii_case(&race)))
@@ -593,15 +584,10 @@ impl Sim {
             .collect()
     }
 
-    /// Run `damage` (the tick's hit pass) so that planets with a population
-    /// row keep their hull: the hull damage costs `0.1 x damage` people instead
-    /// (read from the executable, static; shield absorption comes first).
-    pub(crate) fn with_planet_population_loss<R>(&mut self, from: usize, damage: impl FnOnce(&mut Sim) -> Vec<(EntityId, R)>) -> Vec<(EntityId, R)> {
-        if self.colonies.planets.is_empty() {
-            return damage(self);
-        }
-        let hulls = self.colonies.hulls(&self.units);
-        let mut killed = damage(self);
+    /// After the tick's hit pass: planets with a population row keep their hull
+    /// (`hulls` was taken before it); the hull damage costs `0.1 x damage`
+    /// people instead (read from the executable, static; shield absorption comes first).
+    pub(crate) fn planet_population_loss(&mut self, from: usize, hulls: Vec<(EntityId, [Fixed; 2])>, killed: &mut Vec<(EntityId, Option<EntityId>)>) {
         let tenth = Fixed::from_f64(0.1);
         for e in &self.events[from.min(self.events.len())..] {
             if let SimEvent::Hit { target, hull, .. } = e
@@ -616,7 +602,6 @@ impl Sim {
             }
             killed.retain(|(k, _)| *k != id);
         }
-        killed
     }
 }
 

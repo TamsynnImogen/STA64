@@ -34,6 +34,23 @@ pub struct AttrsView {
     pub races: Vec<(EntityId, String)>,
     /// Script-set seat races (the setup's race otherwise), ascending player.
     pub player_races: Vec<(PlayerId, String)>,
+    /// What the sim derives for each seat from its race and stations, ascending
+    /// player (SIM-54).
+    #[serde(default)]
+    pub seats: Vec<SeatView>,
+}
+
+/// One seat's derived team numbers.
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub struct SeatView {
+    pub player: PlayerId,
+    /// The race now in force: the script's, else the setup's.
+    pub race: Option<String>,
+    /// The crew pool's capacity; `None` when the content has no crew rules.
+    pub crew_capacity: Option<Fixed>,
+    /// The officer limit before the race multiplier (what Roots `Player.maxOfficers` reads);
+    /// the cap is `PlayerView::officers[1]`.
+    pub officer_limit: Option<Fixed>,
 }
 
 /// The wire form of [`Attrs`] (snapshot suffix, format 22).
@@ -78,6 +95,7 @@ impl Attrs {
             names: Vec::new(),
             races: self.races.iter().map(|(i, s)| (i, s.clone())).collect(),
             player_races: self.player_races.clone(),
+            seats: Vec::new(),
         }
     }
 
@@ -122,6 +140,22 @@ impl Attrs {
 const CAP: i64 = 1_000_000_000;
 
 impl crate::Sim {
+    /// The seats' derived numbers for the view.
+    pub(crate) fn seat_views(&self) -> Vec<SeatView> {
+        self.players
+            .iter()
+            .map(|&(player, _)| SeatView {
+                player,
+                race: self.seat_race(player).map(str::to_owned),
+                crew_capacity: self.content.as_deref().and_then(|db| {
+                    crate::economy::Economy::derived_crew_capacity(&self.units, db, &self.attrs, player)
+                        .map(|c| Fixed::from_bits(c.to_bits().saturating_add(self.economy.crew_capacity_adjust(player).to_bits())))
+                }),
+                officer_limit: self.economy.officer_base(player),
+            })
+            .collect()
+    }
+
     fn script_unit(&self, id: EntityId) -> Option<&crate::world::Entity> {
         self.units.get(id).filter(|u| {
             u.hull[0] > Fixed::ZERO && matches!(u.kind, crate::world::EntityKind::Craft | crate::world::EntityKind::Station)
@@ -193,6 +227,8 @@ impl crate::Sim {
     pub(crate) fn edit_player_race(&mut self, p: PlayerId, race: &str) -> bool {
         let Some(race) = self.known_race(race).filter(|_| self.players.iter().any(|(id, _)| *id == p)) else { return false };
         self.attrs.set_player_race(p, &race);
+        // The officer cap and the latinum factor follow the seat's race at once.
+        self.refresh_seat_rules();
         true
     }
 }

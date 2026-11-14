@@ -9,7 +9,7 @@ use super::*;
 use crate::command::{Command, CommandKind, Edit, Order};
 use crate::setup::{Control, GameOptions, GameSetup, PlayerSetup};
 use crate::world::NEUTRAL;
-use crate::{Sim, WorldSource};
+use crate::{Sim, SimEvent, WorldSource};
 
 fn n(v: i32) -> Fixed {
     Fixed::from_int(v)
@@ -58,11 +58,15 @@ fn content(with_rules: bool) -> Arc<ContentDb> {
     let mut base = UnitDef::new("fx_starbase", "starbase");
     base.race = "fx".into();
     base.hull = n(500);
+    // A second race the crew rules give no accumulation rate (a seat can be re-raced to it).
+    let mut other = UnitDef::new("fx_zz_base", "starbase");
+    other.race = "zz".into();
+    other.hull = n(500);
     let mut rules = Rules::default();
     if with_rules {
         rules = rules
             .with_population(PopulationRules { levels: [n(1000), n(2000), n(3000), n(5000)], civilian_rate_modifier: Fixed::from_f64(0.2) })
-            .with_crew(CrewRules { starting_capacity: Some(250), races: vec![("fx".into(), n(4))] });
+            .with_crew(CrewRules { starting_capacity: Some(250), max_crew: None, races: vec![("fx".into(), n(4))] });
     }
     let db = b
         .weapon(pod)
@@ -74,6 +78,7 @@ fn content(with_rules: bool) -> Arc<ContentDb> {
         .unit(ship("fx_colony", "fx_pod"))
         .unit(ship("fx_borg_colony", "fx_colbeam"))
         .unit(base)
+        .unit(other)
         .build()
         .unwrap();
     Arc::new(db.with_rules(rules))
@@ -401,6 +406,34 @@ fn people_give_crew_at_the_heavy_proportion() {
     assert_eq!(sim.economy.crew_of(PlayerId(1)).unwrap(), before);
 }
 
+/// #659: a colony keeps its people when the planet changes hands, and growth and
+/// crew income follow the owner and the owner's (possibly re-raced) seat race.
+#[test]
+fn a_colony_follows_its_new_owner_and_a_re_raced_seat() {
+    let mut sim = game(content(true));
+    let planet = spawn(&mut sim, "fx_pl_m", PlayerId(0), at(0, 0));
+    set_pop(&mut sim, planet, 2000);
+    let (a0, b0) = (sim.economy.crew_of(PlayerId(0)).unwrap(), sim.economy.crew_of(PlayerId(1)).unwrap());
+    run(&mut sim, 30 * 5);
+    let (a1, b1) = (sim.economy.crew_of(PlayerId(0)).unwrap(), sim.economy.crew_of(PlayerId(1)).unwrap());
+    assert!(a1 > a0 && b1 == b0, "the owner is paid");
+    // The planet changes hands: the people stay, the income goes to the new owner.
+    let people = pop(&sim, planet);
+    assert!(run_cmd(&mut sim, PlayerId::SCRIPT, CommandKind::Edit(Edit::Team(planet, PlayerId(1)))));
+    assert_eq!(owner(&sim, planet), PlayerId(1));
+    assert!(pop(&sim, planet) >= people);
+    run(&mut sim, 30 * 5);
+    let (a2, b2) = (sim.economy.crew_of(PlayerId(0)).unwrap(), sim.economy.crew_of(PlayerId(1)).unwrap());
+    assert!(b2 > b1, "the new owner is paid");
+    assert!(a2 - a1 <= Fixed::ZERO || a2 == a1, "the old owner is not");
+    // The new owner is re-raced to a race without an accumulation rate: no income, no growth.
+    assert!(run_cmd(&mut sim, PlayerId::SCRIPT, CommandKind::Edit(Edit::PlayerRace(PlayerId(1), "zz".into()))));
+    let (people, before) = (pop(&sim, planet), sim.economy.crew_of(PlayerId(1)).unwrap());
+    run(&mut sim, 30 * 5);
+    assert_eq!(sim.economy.crew_of(PlayerId(1)).unwrap(), before);
+    assert_eq!(pop(&sim, planet), people);
+}
+
 #[test]
 fn an_owned_planet_without_people_goes_neutral_and_keeps_its_row() {
     let mut sim = game(content(true));
@@ -453,12 +486,21 @@ fn weapon_damage_costs_people_and_spares_the_hull_of_a_planet_with_a_row() {
     };
     sim.events.push(hit(planet));
     sim.events.push(hit(bare));
-    let db = sim.content().cloned().unwrap();
-    let killed = sim.with_planet_population_loss(0, |sim| crate::combat::damage::apply(&mut sim.units, &db, &mut sim.events, 0));
+    let killed = apply_hits(&mut sim, 0);
     assert!(killed.is_empty());
     close(pop(&sim, planet), 980.0, 0.05);
     assert_eq!(sim.unit(planet).unwrap().hull[0], n(10_000), "hull untouched");
     assert_eq!(sim.unit(bare).unwrap().hull[0], n(9_800), "a planet without a row takes hull damage as before");
+}
+
+/// Run the tick's hit pass over the events queued from `from`, as `Sim::step` does.
+fn apply_hits(sim: &mut Sim, from: usize) -> Vec<(EntityId, Option<EntityId>)> {
+    let db = sim.content().cloned().unwrap();
+    let hulls = sim.colonies.hulls(&sim.units);
+    let mut ctx = crate::combat::casualty::Ctx { subsystems: &mut sim.subsystems, rng: &mut sim.rng, switches: &sim.switches };
+    let mut killed = crate::combat::damage::apply(&mut sim.units, &db, &mut sim.events, from, &mut ctx);
+    sim.planet_population_loss(from, hulls, &mut killed);
+    killed
 }
 
 // ---- persistence ----

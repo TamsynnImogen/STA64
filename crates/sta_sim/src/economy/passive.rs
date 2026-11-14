@@ -98,8 +98,8 @@ impl Economy {
                 if crew_gain != Fixed::ZERO
                     && let Some(c) = crew_have
                 {
-                    let limit = self.officer_limit(u.owner);
-                    self.set_personnel(u.owner, Some(Fixed::from_bits(c.to_bits().saturating_add(crew_gain.to_bits())).max(Fixed::ZERO)), limit);
+                    let limit = self.officer_base(u.owner);
+                    self.set_personnel(u.owner, Some(Fixed::from_bits(c.to_bits().saturating_add(crew_gain.to_bits()))), limit);
                 }
             }
         }

@@ -160,3 +160,22 @@ fn the_view_shows_who_is_eliminated() {
     let flags: Vec<_> = view.players.iter().map(|p| (p.id, p.eliminated)).collect();
     assert_eq!(flags, vec![(PlayerId(1), false), (PlayerId(2), true)]);
 }
+
+#[test]
+fn mission_allies_on_different_teams_win_together_only_when_mutual() {
+    use crate::command::Edit;
+    use crate::view::Relation;
+    let rel = |from: u8, to: u8| Command {
+        player: PlayerId::SCRIPT,
+        seq: 0,
+        kind: CommandKind::Edit(Edit::SetRelation { from: PlayerId(from), to: PlayerId(to), relation: Relation::Ally }),
+    };
+    // Seats 1 and 3 are on different teams; P2 dies. One-sided Ally: no winners.
+    let (mut sim, a, t) = fixture(&[(1, 1), (2, 2), (3, 3)]);
+    sim.step(&[rel(1, 3)]);
+    run(&mut sim, a, t, 1500);
+    assert!(sim.is_eliminated(PlayerId(2)));
+    assert_eq!(sim.winners(), None);
+    sim.step(&[rel(3, 1)]);
+    assert_eq!(sim.winners(), Some(vec![PlayerId(1), PlayerId(3)]));
+}

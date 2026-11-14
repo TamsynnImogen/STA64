@@ -40,7 +40,7 @@ impl Production {
             }
             let def = db?.unit(deploy.def)?;
             if deploy.paid {
-                plan.credit(&mut balance, unit.owner, &def.build.cost, true)?;
+                plan.credit(&mut balance, unit.owner, &eco.scaled_cost(unit.owner, &def.build.cost), true)?;
             }
         }
         for (child, weld) in self.welds.iter().filter(|(_, w)| w.builder == id) {
@@ -69,7 +69,7 @@ impl Production {
                 return None;
             }
             let prepaid = db?.unit_features(db?.unit(unit.def)?).pay_on_queue;
-            plan.credit(&mut balance, unit.owner, &def.build.cost, prepaid)?;
+            plan.credit(&mut balance, unit.owner, &eco.scaled_cost(unit.owner, &def.build.cost), prepaid)?;
             plan.children.push(child);
         }
         let Some(queue) = self.queues.get(id) else {
@@ -107,7 +107,7 @@ impl Production {
                 // Preserve the unstarted stage's explicit paid-receipt rule.
                 true
             };
-            plan.credit(&mut balance, unit.owner, &def.build.cost, refundable)?;
+            plan.credit(&mut balance, unit.owner, &eco.scaled_cost(unit.owner, &def.build.cost), refundable)?;
         }
         Some(plan)
     }

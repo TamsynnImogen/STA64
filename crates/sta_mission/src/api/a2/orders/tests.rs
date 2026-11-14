@@ -529,3 +529,56 @@ fn ai_team_load_aip_queues_the_request_for_the_host() {
     assert_eq!(got.iter().map(|(_, n)| n.as_str()).collect::<Vec<_>>(), ["x.aip", "Y.AIP"]);
     assert!(rt.take_aip_requests().is_empty(), "taken once");
 }
+
+// ---- script fleets (fleets.rs) ----
+
+#[test]
+fn a_move_fleet_moves_its_members_to_the_destination_and_warps_unless_told_not_to() {
+    let s = scene();
+    let (a, b) = (s.ids[0], s.ids[1]);
+    let (_, commands) = run(
+        &s,
+        "f = A2.CreateNewMoveFleet(); f:AddShip(a); f:AddShip(b); f:SetFleetDestination(Vector(500, 0, 0))",
+    );
+    assert_eq!(
+        orders(&commands),
+        vec![
+            (PlayerId(0), Order::MoveWarp { units: vec![a], to: at(500), queue: false }),
+            (PlayerId(1), Order::MoveWarp { units: vec![b], to: at(500), queue: false }),
+        ]
+    );
+    let (_, commands) = run(&s, "f = A2.CreateNewMoveFleet(); f:TryToWarp(false); f:SetStayInFormationWhileMoving(true); f:SetFormation(2); f:AddShip(a); f:SetFleetDestination(Vector(500, 0, 0))");
+    assert_eq!(orders(&commands), vec![(PlayerId(0), Order::Move { units: vec![a], to: at(500), queue: false })]);
+}
+
+#[test]
+fn a_siege_fleet_sends_members_to_weapon_range_of_the_destination_and_orders_late_members_at_once() {
+    let s = scene();
+    let (a, b) = (s.ids[0], s.ids[1]);
+    let (_, commands) = run(
+        &s,
+        "f = A2.CreateNewSiegeFleet(); f:AddShip(a); f:AddShip(a); f:SetFleetDestination(Vector(500, 0, 0)); f:AddShip(b)",
+    );
+    assert_eq!(
+        orders(&commands),
+        vec![
+            (PlayerId(0), Order::AttackPoint { units: vec![a], at: at(500) }),
+            (PlayerId(1), Order::AttackPoint { units: vec![b], at: at(500) }),
+        ]
+    );
+}
+
+#[test]
+fn a_fleet_without_a_destination_orders_nothing_and_dead_or_bad_members_are_skipped() {
+    let s = scene();
+    let (_, commands) = run(&s, "f = A2.CreateNewSiegeFleet(); f:AddShip(a); f:AddShip(99999); f:SetFleetDestination(Vector(5,0,0))");
+    assert_eq!(orders(&commands).len(), 1);
+    let (_, commands) = run(&s, "f = A2.CreateNewSiegeFleet(); f:AddShip(a)");
+    assert!(commands.is_empty());
+    let (_, err) = fails(&s, "f = A2.CreateNewSiegeFleet(); f:AddShip('x')");
+    assert!(err.contains("requires a handle"), "{err}");
+    let (_, err) = fails(&s, "f = A2.CreateNewMoveFleet(); f:SetFleetDestination(1)");
+    assert!(err.contains("requires a Vector"), "{err}");
+    let (_, err) = fails(&s, "A2.CreateNewMoveFleet(1)");
+    assert!(err.contains("takes no argument"), "{err}");
+}

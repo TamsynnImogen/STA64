@@ -328,7 +328,8 @@ fn host(
         }
     }
     for mut n in &mut notices {
-        let top = Val::Px(stock.layout.as_ref().and_then(|l| l.panel("resource")).map_or_else(|| l.notices_top(), |r| r.bottom()+8.0));
+        let strip = stock.layout.as_ref().and_then(|g| stock::resource_panels(g).into_iter().map(|r| r.bottom()).reduce(f32::max));
+        let top = Val::Px(strip.map_or_else(|| l.notices_top(), |bottom| bottom + 8.0));
         if n.top != top {
             n.top = top;
         }
@@ -514,35 +515,23 @@ fn place_on_click(
     let (Some(a), Some(b)) = (aim.0, feed.view.unit(armed.builder)) else {
         return;
     };
-    let y = b.pos.y.to_f32();
-    let dir = *a.ray.direction;
-    if dir.y.abs() < 1e-4 {
-        return;
-    }
-    let t = (y - a.ray.origin.y) / dir.y;
-    if t <= 0.0 {
-        return;
-    }
-    // Render space to the sim's: z runs the other way.
-    let hit = a.ray.origin + dir * t;
-    let at = SimVec3::from_f32([hit.x, y, -hit.z]);
+    let Some(at) = ground_point(a.ray, b.pos.y.to_f32()) else { return };
     if !ghost::affordable(&feed, &armed) {
         notices.write(Notice::new(Severity::Warn, tr("Cannot build: not enough resources")));
         return;
     }
     // The sim's own rule, as the ghost shows it: a refused site keeps the
     // placement armed so the click can be tried again elsewhere.
-    if let Err(e) = ghost::site_status(&feed, bounds.0.as_ref(), &armed, at) {
-        notices.write(Notice::new(Severity::Warn, tr(ghost::refusal(e))));
-        return;
-    }
-    // The new order's target replaces the destination line of the last one.
-    targets.0.insert(armed.builder, at);
-    queue.0.push(CommandKind::Order(Order::Build {
-        builder: armed.builder,
-        what: armed.what,
-        at: Some(at),
-    }));
+    let (site_at, order) = match ghost::build_order(&feed, bounds.0.as_ref(), &armed, at) {
+        Ok(r) => r,
+        Err(e) => {
+            notices.write(Notice::new(Severity::Warn, tr(ghost::refusal(e))));
+            return;
+        }
+    };
+    // The new order's target replaces the destination line of the last one: the site the ghost shows.
+    targets.0.insert(armed.builder, site_at);
+    queue.0.push(CommandKind::Order(order));
     issued.write(OrderIssued {
         units: vec![armed.builder],
         kind: OrderKind::Build,
@@ -568,7 +557,7 @@ fn target_order(
     point: Option<SimVec3>,
 ) -> Option<(Vec<Order>, Vec<EntityId>)> {
     if !target_mode_available(feed, mode) { return None; }
-    let ids = feed.own_selection();
+    let mut ids = feed.own_selection();
     let orders = match mode {
         TargetMode::Move => {
             let picked: Vec<(EntityId, Vec3)> = ids.iter().filter_map(|id| feed.view.unit(*id).map(|u| (*id, Vec3::from(u.pos.to_f32())))).collect();
@@ -589,7 +578,11 @@ fn target_order(
             let db = feed.content.as_deref()?;
             let def = db.unit(u.def)?;
             if u.flags.contains(UnitFlags::DYING) || !EntityKind::mineable_def(def) { return None; }
-            vec![Order::Mine { units: ids.clone(), node: id }]
+            let miners = commands::miners(feed, &ids);
+            if miners.is_empty() { return None; }
+            // Only the miners take part: they are the units the order is reported for and whose targets are cleared.
+            ids = miners.clone();
+            vec![Order::Mine { units: miners, node: id }]
         }
         TargetMode::Rally => {
             let at = match target.and_then(|id| feed.view.unit(id).filter(|u| !u.flags.contains(UnitFlags::DYING)).map(|_| id)) {
@@ -665,6 +658,8 @@ mod target_tests {
             relations: relation.map(|r| vec![(PlayerId(if id == 1 { 2 } else { 1 }), r)]).unwrap_or_default() }
     }
 
+    fn mine_available(f: &HudFeed) -> bool { target_mode_available(f, TargetMode::Mine) }
+
     #[test]
     fn target_actions_make_supported_orders() {
         let p = Some(SimVec3::from_f32([10.0, 0.0, 20.0]));
@@ -676,6 +671,12 @@ mod target_tests {
         let f = feed(&[2]);
         assert!(matches!(target_order(&f, TargetMode::Mine, Some(EntityId(5)), p), Some((orders, _)) if matches!(orders.as_slice(), [Order::Mine { node: EntityId(5), .. }])));
         assert!(target_order(&f, TargetMode::Mine, Some(EntityId(4)), p).is_none());
+        // A mixed selection: Mine is offered and only the miner receives the order.
+        let f = feed(&[1, 2]);
+        assert!(mine_available(&f));
+        assert!(matches!(target_order(&f, TargetMode::Mine, Some(EntityId(5)), p), Some((orders, ids)) if ids == [EntityId(2)] && matches!(orders.as_slice(), [Order::Mine { units, node: EntityId(5) }] if units == &[EntityId(2)])));
+        // No miner among the selection: no order.
+        assert!(target_order(&feed(&[1]), TargetMode::Mine, Some(EntityId(5)), p).is_none());
         let f = feed(&[3]);
         assert!(matches!(target_order(&f, TargetMode::Rally, None, p), Some((orders, _)) if matches!(orders.as_slice(), [Order::Rally { builders, at: Target::Point(_) }] if builders == &[EntityId(3)])));
         assert!(matches!(target_order(&f, TargetMode::Rally, Some(EntityId(4)), p), Some((orders, _)) if matches!(orders.as_slice(), [Order::Rally { at: Target::Entity(EntityId(4)), .. }])));

@@ -342,10 +342,6 @@ fn spawn_sprite_node(ctx: &mut SpawnCtx, id: &str, parent: Entity, quad: &Handle
     stats: &mut SpawnStats,
 ) {
     let table = ctx.sprites;
-    // The moons' round nimbus: their cracks carry the light instead (RND-05).
-    if id.eq_ignore_ascii_case("oreglow") && !crate::render::rock::MOON_NIMBUS {
-        return;
-    }
     let Some(def) = table.sprite_node(id) else {
         stats.unknown_sprite_nodes.push(id.to_owned());
         return;
@@ -389,6 +385,11 @@ fn spawn_sprite_node(ctx: &mut SpawnCtx, id: &str, parent: Entity, quad: &Handle
     ));
     if billboard {
         e.insert(Billboard);
+    }
+    // The moons' round nimbus is spawned hidden; `rock::moon_nimbus` shows it under the Stock look
+    // (as the original draws it: read from data) and leaves it hidden under Refit's (cracks carry the light, RND-05).
+    if crate::render::rock::is_moon_nimbus(id) {
+        e.insert(crate::render::rock::MoonNimbus::default());
     }
     if let Some(owner) = construction_owner {
         e.insert((
@@ -610,6 +611,8 @@ fn spawn_mesh(
                 recipe: n.to_owned(),
                 centre: Vec3::from(mirror(c)) * ctx.scale,
                 inv_extent: Vec3::from(ext.map(|e| 1.0 / e)),
+                // A dilithium moon: its model has a `glowdmoon` shell (a mesh node of its own).
+                moon: model.nodes.iter().any(|n| matches!(&n.kind, NodeKind::Mesh(m) if m.groups.iter().any(|g| crate::render::rock::is_moon_shell(&g.material)))),
             }
         });
         // A `default` mesh's texture alpha is a cut-out where its group is not
@@ -709,7 +712,7 @@ fn spawn_part(ctx: &mut SpawnCtx, part: &CachedPart, parent: Entity, surface: (u
 }
 
 /// Plays node animation (SOD and M3D): a step flipbook, evenly spaced keys.
-pub fn animate(clock: Res<crate::clock::AnimClock>, mut q: Query<(&NodeAnim, &mut Transform)>) {
+pub fn animate(clock: Res<crate::clock::AnimClock>, mut q: Query<(&NodeAnim, &mut Transform), Without<crate::render::anim::AmbientGate>>) {
     let t = clock.wall() as f32;
     for (anim, mut tf) in &mut q {
         let n = match &anim.keys {

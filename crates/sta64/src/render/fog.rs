@@ -218,10 +218,20 @@ impl FogGrid {
 /// that has a sensor (`UnitDef::sensor`, or [`DEFAULT_SENSOR`] for units with no
 /// definition; not projectiles, which the view marks by not being selectable).
 pub fn sensor_discs(view: &WorldView, player: PlayerId, content: Option<&ContentDb>) -> Vec<(f32, f32, f32)> {
-    let Some(team) = view.player(player).map(|p| p.team) else { return Vec::new() };
+    let Some(me) = view.player(player) else { return Vec::new() };
+    // Sight is shared between mutual allies only (SIM-63: the world view's
+    // per-player relations, which carry mission-set relations).
+    let ally = |from: &sta_sim::view::PlayerView, to: PlayerId| {
+        from.id == to
+            || match from.relations.iter().find(|&&(id, _)| id == to) {
+                Some(&(_, r)) => r == sta_sim::view::Relation::Ally,
+                // A view without relation rows (hand-made, legacy): same team.
+                None => view.player(to).is_some_and(|t| t.team == from.team),
+            }
+    };
     view.units
         .iter()
-        .filter(|u| view.player(u.owner).is_some_and(|o| o.team == team))
+        .filter(|u| view.player(u.owner).is_some_and(|o| ally(me, o.id) && ally(o, player)))
         .filter_map(|u| {
             let r = match content.and_then(|c| c.unit(u.def)) {
                 Some(def) => def.sensor.to_f32(),
@@ -574,6 +584,20 @@ mod tests {
         let mut g = grid();
         g.observe(&v, PlayerId(1), None);
         assert!(g.visible_at(0.0, 0.0));
+    }
+
+    #[test]
+    fn mission_relations_decide_shared_vision_mutual_ally_only() {
+        use sta_sim::view::Relation;
+        let mut v = view(vec![unit(1, 2, 0, 0)]);
+        v.players[0].relations = vec![(PlayerId(2), Relation::Ally)];
+        v.players[1].relations = vec![(PlayerId(1), Relation::Enemy)];
+        let mut g = grid();
+        g.observe(&v, PlayerId(1), None);
+        assert_eq!(g.counts(), (0, 0), "one-sided Ally shares nothing");
+        v.players[1].relations = vec![(PlayerId(1), Relation::Ally)];
+        g.observe(&v, PlayerId(1), None);
+        assert!(g.visible_at(0.0, 0.0), "mutual Ally shares sight across teams");
     }
 
     #[test]

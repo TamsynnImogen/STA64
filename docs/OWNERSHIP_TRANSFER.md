@@ -29,11 +29,16 @@ contract recorded before the completion pass changes Core.
   Precharged active work refunds its full cost; deferred active work forfeits it,
   as in the station contract. Reject arithmetic overflow or unsupported paid slots
   before changing anything. Cleanup uses the normal shared entity-removal path.
-- Direct Team on an unfinished child remains explicitly unsupported. Core's weld
-  child is a future gameplay unit; the native construction object is a separate
-  temporary object deleted before the final product is made. Transferring that
-  effect is not evidence that Core may capture a completed station early. Full
-  construction-effect identity and research attachments need their own model.
+- Direct Team on an unfinished child stays rejected, and that is the rule, not a gap:
+  capturing a unit under construction is not a gameplay path in Armada I, Armada II,
+  Fleet Operations or Roots (read from the executables, static; the rig case was also
+  run once on stock Armada II). The native construction object is a plain object, not
+  a craft: it has no crew, cannot be boarded, and is deleted with its rig when the rig
+  changes owner. Core's weld child is the same unfinished station. What the old owner
+  gets back follows the producer's pay mode (deferred: the item in progress is
+  forfeited; pay on queue, Roots `queueInstantDeduct = 1`: queued items are refunded to
+  the old owner), as the bullets above say. The research attachments (pods that move
+  with a captured station) need a pod entity model and stay out until that exists.
 - An accepted configured-seat loss of a Craft/Station is an elimination candidate at
   the end of the sorted command batch. A seat that regains an asset in that batch
   survives. Same-owner/failed transfers, unconfigured synthetic owners and planet
@@ -61,9 +66,10 @@ they must remain visible limitations rather than fabricated transfer effects.
 The completion implementation follows the contract above: shared ownership,
 station and producer-planet queues, pending rigs and rig-child cancellation,
 planet ownership/mining admission, derived planet crew contribution and
-end-of-batch capture elimination. Direct unfinished-child capture, research
-attachments, colony economy and ownership effects are explicit unsupported
-capabilities; this is not complete native capture parity. The later sections
+end-of-batch capture elimination. Direct unfinished-child capture is rejected by
+rule: it is not a gameplay path in A1, A2, FO or Roots. Research attachments and
+the colony economy are explicit unsupported capabilities; this is not complete
+native capture parity. The later sections
 preserve the incremental design and evidence history; their temporary guards
 are superseded by the completion contract.
 
@@ -116,8 +122,10 @@ engaged, never toggled off; a point-defence weapon is switched on; energy cost
 from the owned module's description above, not measured on a live game: no
 installed ODF carries the key. Existing targets are not retained (a transfer
 clears them).
-Still unsupported, not measured: capture of an unfinished child (weld record,
-rig deploy) and the research attachments of a research station.
+Capture of an unfinished child is not a gameplay path in A1, A2, FO or Roots (the
+rig's child is deleted with it; direct Team on it stays rejected). The research
+attachments of a research station are not modelled yet: they need a pod entity
+model (SIM-29 remainder).
 
 ## Current shared-state dependencies
 
