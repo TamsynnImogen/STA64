@@ -51,7 +51,9 @@ pub use planet::PlanetRole;
 pub use gui_cfg::{Colour, GuiCfg, GuiLayout, GuiValue, Panel, Rect};
 pub use index::{OdfEntry, OdfIndex};
 pub use strings::{LabelMap, StringTable};
-pub use race::{Loadout, RaceCrew, RaceDef, Races, SeatRaceRule, StartingResources, dominant_race};
+pub use race::{
+    Loadout, RaceCrew, RaceDef, RaceRepair, Races, SeatRaceRule, StartingResources, dominant_race,
+};
 pub use repair_geometry::RepairAttachment;
 pub use resources::ResourceModel;
 pub use rules::{ApproachRules, AutonomyRules, CfgRules, CrewRules, LegacyStart, OfficerLimit, PathingRules, PopulationRules, Rules, TYPED_CFG_KEYS};
