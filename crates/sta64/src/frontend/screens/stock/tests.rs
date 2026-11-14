@@ -184,7 +184,7 @@ fn check_layout(screen: Screen, want: &[Slot]) {
 fn main_menu_layout_in_every_window_and_scale() {
     check_layout(
         Screen::Main,
-        &[Slot::MainKicker, Slot::MainTitle, Slot::MainDivider, Slot::MainSinglePlayer, Slot::MainInstantAction, Slot::MainMultiplayer, Slot::MainMapEditor, Slot::MainMods, Slot::MainOptions, Slot::MainReplayIntro, Slot::MainCredits, Slot::MainExit],
+        &[Slot::MainTitle, Slot::MainDivider, Slot::MainSinglePlayer, Slot::MainInstantAction, Slot::MainMultiplayer, Slot::MainMapEditor, Slot::MainMods, Slot::MainOptions, Slot::MainReplayIntro, Slot::MainCredits, Slot::MainExit],
     );
 }
 
@@ -228,11 +228,11 @@ fn the_stock_arrangement_holds_in_a_window() {
     assert!(at(&app, Slot::Preview).max.y <= at(&app, Slot::Launch).min.y);
     let b_scale = app.world().resource::<StockBox>().0.y / 1080.0;
     go(&mut app, Screen::Main);
-    let order = [Slot::MainKicker, Slot::MainTitle, Slot::MainDivider, Slot::MainSinglePlayer, Slot::MainInstantAction, Slot::MainMultiplayer, Slot::MainMapEditor, Slot::MainMods, Slot::MainOptions, Slot::MainReplayIntro, Slot::MainCredits, Slot::MainExit];
+    let order = [Slot::MainTitle, Slot::MainDivider, Slot::MainSinglePlayer, Slot::MainInstantAction, Slot::MainMultiplayer, Slot::MainMapEditor, Slot::MainMods, Slot::MainOptions, Slot::MainReplayIntro, Slot::MainCredits, Slot::MainExit];
     for pair in order.windows(2) {
         assert!(at(&app, pair[0]).max.y <= at(&app, pair[1]).min.y, "{pair:?} overlaps vertically");
     }
-    let rows = &order[3..];
+    let rows = &order[2..];
     assert!(rows.iter().all(|slot| (at(&app, *slot).min.x - at(&app, rows[0]).min.x).abs() < 0.01));
     assert!((at(&app, Slot::MainInstantAction).min.y - at(&app, Slot::MainSinglePlayer).min.y - 66.0 * b_scale).abs() < 0.1);
 }
@@ -342,9 +342,10 @@ fn the_preview_shows_the_start_positions_of_the_picked_map() {
     let browse = app.world().resource::<crate::frontend::screens::Browse>().clone();
     let settings = app.world().resource::<crate::frontend::screens::Settings>().clone();
     let selected = app.world().resource::<crate::frontend::screens::SelectedMod>().clone();
+    let active_mod = app.world().resource::<crate::frontend::screens::ActiveMod>().clone();
     let scroll = *app.world().resource::<crate::frontend::screens::ListScroll>();
     let ctx = crate::frontend::screens::view::Ctx {
-        theme: &theme, data: &data, strings: None, draft: &draft, browse: &browse, settings: &settings, selected: &selected, scroll: &scroll,
+        theme: &theme, data: &data, strings: None, draft: &draft, browse: &browse, settings: &settings, selected: &selected, active_mod: &active_mod, scroll: &scroll,
         layout: ScreenLayout::Stock, stock_box: Vec2::new(1440.0, 1080.0), options_tab: 0, campaigns: None,
     };
     let dots = preview_dots(&ctx);
@@ -385,17 +386,43 @@ fn main_menu_has_nine_text_rows_with_existing_routes() {
         assert_eq!(app.world().get::<Act>(entity).is_some(), !disabled, "{slot:?}");
     }
     let title = placed(&mut app).into_iter().find(|(s, _)| *s == Slot::MainTitle).unwrap().1;
-    let title_row = app.world().get::<Children>(title).unwrap()[0];
-    let parts = app.world().get::<Children>(title_row).unwrap();
-    assert_eq!(app.world().get::<SpriteText>(parts[0]).unwrap().text, "ARMADA");
-    let sixty_four = app.world().get::<Children>(parts[1]).unwrap()[0];
-    assert_eq!(app.world().get::<SpriteText>(sixty_four).unwrap().text, "64");
+    let title_text = app.world().get::<Children>(title).unwrap()[0];
+    assert_eq!(app.world().get::<SpriteText>(title_text).unwrap().text, "STA64");
+    assert!(!placed(&mut app).iter().any(|(s, _)| *s == Slot::MainKicker));
 
     press(&mut app, Act::PickMod);
     assert_eq!(*app.world().resource::<State<Screen>>().get(), Screen::ModSelect);
     go(&mut app, Screen::Main);
     press(&mut app, Act::Goto(Screen::Settings));
     assert_eq!(*app.world().resource::<State<Screen>>().get(), Screen::Settings);
+}
+
+#[test]
+fn main_menu_uses_active_mod_display_name_and_wraps_long_names() {
+    use crate::frontend::screens::{ActiveMod, SelectedMod};
+    use crate::ui::sprite_font::{SpriteText, SpriteTextStyle};
+
+    let mut data = ScreenData::fake();
+    let name = "A Very Long Mod Name With Federation, Klingon, Romulan And More Ships";
+    data.mods[0].name = name.into();
+    let mut app = app_with(data, None, 1.0);
+    app.world_mut().resource_mut::<SelectedMod>().0 = Some("FX_BALANCE".into());
+    settle(&mut app);
+    let title_text = |app: &mut App| {
+        let title = placed(app).into_iter().find(|(s, _)| *s == Slot::MainTitle).unwrap().1;
+        app.world().get::<Children>(title).unwrap()[0]
+    };
+    let text = title_text(&mut app);
+    assert_eq!(app.world().get::<SpriteText>(text).unwrap().text, "STA64", "picker state does not confirm a mount");
+    app.world_mut().resource_mut::<ActiveMod>().0 = Some("FX_BALANCE".into());
+    settle(&mut app);
+    let title = placed(&mut app).into_iter().find(|(s, _)| *s == Slot::MainTitle).unwrap().1;
+    let text = app.world().get::<Children>(title).unwrap()[0];
+    assert_eq!(app.world().get::<SpriteText>(text).unwrap().text, name);
+    let style = app.world().get::<SpriteTextStyle>(text).unwrap();
+    assert_eq!(style.wrap, Some(region(Slot::MainTitle).px(app.world().resource::<StockBox>().0).width()));
+    assert!(app.world().get::<SpriteText>(text).unwrap().size < 68.0);
+    assert_eq!(region(Slot::MainSinglePlayer).rect().min.y, 199.0);
 }
 
 #[test]

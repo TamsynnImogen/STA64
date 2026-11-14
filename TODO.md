@@ -20,9 +20,9 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 - [?] UI-18 display fidelity: use the new optimized display-fidelity launcher on Classic/Federation and FO4. Compare enlarged station/ship wireframes with the supplied stock reference; zoom, pan and rotate while selected and check that thin gauges stay above model bounds without lagging or disappearing. Hover values should use bare numbers and live health/crew tints. Try LCARS switching and report settled FPS. Existing original texture resolution still limits fine detail.
 
 - [?] AI-03 soak: `cargo test -p sta_ai --test soak -- --nocapture` (about 40 s) plays ten seeded skirmish-vs-skirmish games on the fake `two_bases` map. Check the digests repeat across two of your own runs. Finding to judge: no game is decided in 20 sim minutes; all end at tick 64899 (about 36 minutes) with seat 1 the winner, and the seed does not change the course of the game, only the digest.
-- [?] EDT-06 ODF formatter (library half): `cargo run -p sta_odf --example odf_fmt -- <odf folder>` is a dry run that lists the files it would change; try it on a copy of a mod, then `--write`, and diff a few files. It only normalises whitespace; the grouped FO Guide layout is not done. The `sta_tools` bin half waits for EDT-01.
+- [?] EDT-06 `odf_fmt`: `tools/agent-cargo --light run -p sta_tools --bin odf_fmt -- --check --grouped <a copy of a mod's odf folder>` passes; `--grouped` dry run on the copy lists files; try `--write` and diff a few (see docs/ODF_FMT.md). Group order is ours, not the FO guide's.
 - [?] Menu widget kit (UI-21): `sta64 --ui-gallery`, then press the three profile tabs at the top (LCARS, Armada II, Fleet Operations). Click the dropdown (list opens under it, a click on a row chooses, a click elsewhere or Escape closes), scroll the list with the wheel, tick the check boxes, type in the text field (caret shows; Enter leaves it), switch the inner tabs. With the keyboard: Tab / Shift+Tab walk the widgets (a gold ring follows), arrows work in dropdown, list, slider and tabs, Enter or Space press buttons and tick boxes. Check that the stock skins' button labels are light on dark, not black. Frames without a window: `STA64_GPU_TESTS=1 STA64_UI_CAPTURE_DIR=/tmp/ui cargo test -p sta64 gallery_renders_on_gpu` (add `STA64_TEST_INSTALL=<root> STA64_TEST_MOD=<mod>` for the mod's fonts).
-- [?] Stock front end by eye (UI-22, #496): `cargo run -p sta64 -- --help` for the front-end entry, or the bench frame run `STA64_UI_SCREEN=setup|main|single|settings` (`frontend/screens/frame.rs`) at 3440x1440. Check: main menu has STAR TREK / ARMADA with a raised 64, a gold divider and nine left-aligned text choices (Single Player, Instant Action, Multiplayer, Map Editor, Mod Manager, Options, Replay Intro, Credits, Exit); Mod Manager opens the existing picker, and unavailable Map Editor / Replay Intro / Credits entries stay inactive; Instant Action has the player table at the left (player, side, team dropdowns per seat, the side list holds the install's playable factions), the map name above a preview of start positions at the right, Select map / resources / officer limit beside it, Previous menu and Launch along the bottom; no text clipped in a button; a dropdown list opens over the other rows. Layout tests cover 21:9, 16:9, 16:10 and 4:3 at UiScale 1.0, 1.25 and 1.333. The main menu also has inspected windowless GPU captures at 16:9, 4:3 and ultrawide, plus installed A2 fonts; other screen appearance still needs manual review. (#502, #705)
+- [?] Stock front end by eye (UI-22, #496): `cargo run -p sta64 -- --help` for the front-end entry, or the bench frame run `STA64_UI_SCREEN=setup|main|single|settings` (`frontend/screens/frame.rs`) at 3440x1440. Check: main menu shows the successfully mounted mod's display name (STA64 without a mod), a gold divider and nine left-aligned text choices (Single Player, Instant Action, Multiplayer, Map Editor, Mod Manager, Options, Replay Intro, Credits, Exit); Mod Manager opens the existing picker, and unavailable Map Editor / Replay Intro / Credits entries stay inactive; Instant Action has the player table at the left (player, side, team dropdowns per seat, the side list holds the install's playable factions), the map name above a preview of start positions at the right, Select map / resources / officer limit beside it, Previous menu and Launch along the bottom; no text clipped in a button; a dropdown list opens over the other rows. Layout tests cover 21:9, 16:9, 16:10 and 4:3 at UiScale 1.0, 1.25 and 1.333. The main menu also has inspected windowless GPU captures at 16:9, 4:3 and ultrawide, plus installed A2 fonts; other screen appearance still needs manual review. (#502, #705)
 - [?] Sprite fonts everywhere (UI-16): in a skirmish on FO 4 / Classic, notice lines at the top, chat down the left and tooltips (hover a command icon) are drawn in the mod's own font, and the gallery text too once an install is mounted; a tooltip wraps at its box. Resource symbols inside text keep their own colours. The HUD itself is UI-18's (Tammy); the follow-up list is in the UI-16 issue.
 - [?] A2 initial hull/shield pools: in the new optimized initial-pools candidate, start a fresh Classic match and hover a constructor. With no shield strength authored, both health-derived pools should be present; build another constructor/ship and compare. Partial curHealth/curShield values must begin below maximum, explicit zero must remain zero at spawn, and save/load must preserve live values. Check settled FPS; original ODFs remain untouched.
 
@@ -33,7 +33,7 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 - [?] UI-18 resource colour correction: compare Classic resource numbers with original Armada II (crew green, officers white, dilithium pale cyan, latinum yellow, metal grey); explicit `resource_N_color` overrides still win. Check the new candidate launcher and settled FPS; parent #371 remains open.
 
 - [?] Claimed bug #340: with artillery, check that a target inside weapon range but outside all allied sensors receives no new shots. Bring an allied scout into sight: fire should start; remove the scout: new fire should stop. Already launched projectiles continue.
-- [?] Claimed bugs #341/#344: while stock, hull, shields or build progress change, check that the HUD stays continuously visible. Mobile builders have no Rally; yards do. Unarmed, point-defence-only and authored `canAttack=0` actors have no Attack. Open Formations, choose a supported formation and return with Back; selection changes must clear an unavailable page.
+- [?] Claimed bugs #341/#344: while stock, hull, shields or build progress change, check that the HUD stays continuously visible. Mobile builders have no Rally; yards do. Unarmed, point-defence-only and authored `canAttack=0` actors have no Attack. Open Formations: registered SET_FORMATION ODFs use b_<ODF stem> icons without overlaid captions; missing art falls back to the ODF name. Native choices stay disabled until their movement mapping is implemented; Back remains active. Without native metadata, the generic Line/Column/Wedge fallback still works. Selection changes must clear an unavailable page. Multi-selection wireframe tiles have no button fill; full ship names wrap inside the cfg tile rectangle using recognized InformationFont roles (Small fallback), and clicking a tile still narrows selection.
 - [?] Claimed bug #342: watch individual worker bees during a station build. Each welding beam must be off while waiting/travelling/returning and on during its stationary welding phase; check textured beams as well as sparks.
 - [?] Claimed bug #343: trigger selections/orders/advisor alerts while a long voice line plays. Only that line should be audible; conflicting lines are discarded and never played later. A fresh request after completion should play normally; music and effects remain independent.
 - [?] Claimed bug #356: arm a station placement in Classic/FO4 and move over clear and blocked sites. The ghost should remain a readable translucent green/red blueprint, including custom hull-material models. Cancel and check that real units retain their original textures and lighting.
@@ -153,6 +153,13 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 - [?] Persistent shields (RND-32, #589): on a build containing this change, set `alwaysShowShields = 1` in an isolated test mod's ship or station ODF. Confirm the continuous blue outline follows the craft, disappears at zero shields, returns on recharge, and remains separate from hit flashes. Check cloak/uncloak, losing sight of an enemy, death and returning to the menu. Default and explicit zero stay off. Bounds/colour are documented approximations; [scope and automated checks](docs/PERSISTENT_SHIELDS.md).
 
 - [?] Mission-driven faction appearance (RND-35): change a ship's race and its owner's race separately, capture it with and without a unit override, and save/reload. Check textures and faction subtrees under Stock/Refit, unknown/missing variants, and two instances sharing one model. Unit override wins, then current owner's override, then setup faction; team colour and ownership follow the existing simulation.
+- [?] FO 3.2.7 / Dominion War detect as `Fo3` (CON-44, #582): `STA64_TEST_FO327_INSTALL=<FO 3.2.7 dir> STA64_TEST_DW_INSTALL=<Dominion War dir> cargo test -p sta_content --test profile_install --test fo3_install`
+- [?] `sta-bench golden --install <FO 3.2.7 dir> --record g.json` then `--against g.json` matches, exit 0; the same against Dominion War's golden exits 1 (TOOL-12, #584)
+- [?] Freighters (RND-29, #345): in Roots with the Mandril (and Classic/A2 freighters) mining a dilithium moon, the freighter should circle the moon and keep pulsing its beam for the whole harvest, then go to the station.
+- [?] Freighters (RND-29, #345): unloading at a station, a freighter with a mining beam flies in and only slides the last short stretch to the berth; one without a beam (e.g. an A1/Classic freight ship) slides to the berth in about a second, never jumping when pushed by another ship.
+- [?] In game at 21:9 and 32:9 the stock HUD is centred and undistorted, the margins beside it take world clicks (select, order, scroll), and no cutscene is pillarboxed.
+- [?] UI-16 playtest: skirmish on A1, A2, FO 3.2.7, Roots, Classic: stock HUD info panel, mouse-over bar, command and PREV/NEXT buttons, Refit grid captions are in the mod's font and readable; no clipped or doubled text.
+- [?] UI-16 playtest: A2 stock at 1024x768: info panel lines unclipped, minimap filter buttons without captions; FO resource numbers not doubled at 4:3.
 
 ## Checked earlier (morning list)
 
@@ -282,6 +289,142 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [ ] LUA-14 follow-up: model `isCineractiveDone` (camera-shot completion) so A1 openings end (fed1, fed2, finale5) (#591)
 - [ ] LUA-14 follow-up: A1 `BuildObject` "neutral ownership requires a resource definition" (team mapping) (#591)
 - [ ] LUA-14 follow-up: engine behaviour of A1 calls on an invalid or dead handle (read from Armada.exe), as A2's object guard (#591)
+- [ ] SIM-36 follow-up: join SIM-58's per-team targetable mask into `combat::targeting::candidate`.
+- [ ] SIM-36 follow-up: run `sta-bench pair attack-approach` both sides (STA64 side on install content) and set its tolerances from the report.
+- [ ] SIM-36 follow-up: measure the Roots construction ship in transit, and the stock assist through the HUD autonomy buttons.
+- [ ] Referee: run `relay`, `netplay host --referee`, `netplay join` and `referee` as in the recipe on a second machine over a real network.
+- [ ] Referee against real content: wire `Referee::new` into the game's referee entry point once INT has a headless content loader.
+- [ ] Mission Lua across a host resync (`RefereePolicy::resync_host`), then flip the default.
+- [ ] Late referee (needs the relay to keep a room open to `RefereeHello` and a snapshot kind for it).
+- [ ] check: `STA64_TEST_A2_STOCK_INSTALL=... STA64_TEST_A1_INSTALL=... python3 tools/test_mission_oracle.py` passes
+- [ ] check: converted a2_fed02 RaidCargo_step exercised in a running mission (decoded, not run in the campaign runner)
+- [ ] check: a confined craft resting on a map-border field obeys a new move order (`avoid::tests::a_confined_craft_resting_on_a_border_field_leaves_it`).
+- [ ] check: a move order to a point just beyond a map-border field edge ends (no orbit).
+- [ ] INT-M5: rejoin from the Join form: keep token + relay + seat after launch, `NetTransport::rejoin` + `Rejoiner` in the app, `SimLink` from `RejoinDone`, seq from `router().last_seq`; then enable the entry.
+- [ ] INT-M5: a stalled-but-connected seat has no host action yet (drop now / wait / AI takeover vote per NET.md section 8).
+- [ ] INT-M5: decide what happens to a dropped player's forces (NET.md open question 9); `DropChoice::Eliminate` has no sim effect today.
+- [ ] INT-M5: Lua mission in a networked match; install-gated two-process run.
+- [ ] Classic: with a Roots install started without `--mod`, choose STA2 Classic Mod in the front end, start an Instant Action skirmish as Federation, select a ship and move it: voice lines play (also Borg, and after switching back to the base game).
+- [ ] check: a move order that gets no nearer for a minute ends with `OrderBlocked` (`an_order_into_a_wall_is_reported_at_once_even_from_rest_and_ends_after_a_minute`).
+- [ ] Stock A2 menu: start each campaign's first mission from the menu after `tools/convert_install_missions.py` and play 5 minutes
+- [ ] Mod chains: convert/mount per mod chain (D6) if wanted
+- [ ] Front end: select Fleet Ops 4.0 then back to the base, no crash; menu scene shows ships as models, no grid or icons; after switching to Classic the overlay says Classic and `PA_ECFR0` resolves in a match.
+- [ ] Play an Armada I campaign mission from the menu after conversion
+- [ ] check: a slow craft flying round a long wall keeps its order (`a_slow_craft_flying_round_a_long_wall_is_not_cut_off`).
+- [ ] `STA64_TEST_A1_INSTALL=<A1 root> cargo test -p sta_mission --test a1_objective_text` passes (67 texts resolve, 0 unresolved).
+- [ ] Playtest: on STA2 Classic `4alliance`, click each visible dilithium moon, right-click it with a miner selected, and use the Mine command's target click; if one fails, press Ctrl+F12 and read `Click pick` / `Pointer over HUD` in capture.md.
+- [ ] Planet ghosts (Classic tritanium planets) that start in sight are selectable and right-click Mine targets.
+- [ ] RND-24: Borg cube is 1.1-1.2x too bright and its dark faces show detail the original does not; check the engine's vertex normals (smoothing at hard edges).
+- [ ] RND-24: A1, FO 3.2.7 and Dominion War hulls are not measured against the original (the bench has no A1 profile); `alpha`/`atmosphere`/`phong`/`lambert` SOD blends are drawn as `default`.
+- [ ] RND-24: the original's player colour in the A2 bench is white; STA64's pair colour is not read from the install's settings.
+- [ ] Manual (user): with the game running and music playing, switch the PipeWire/default output device (and unplug/replug headphones). Expect at most a short dropout, then sound and music return, and the log shows at most a handful of `audio:` lines, never a flood.
+- [ ] Manual (user): `grep -c rodio` in the log during a play session is 0; `cargo tree -p sta64 -i rodio` finds nothing.
+- [ ] In a real match (windowed, 21:9 and 16:9): Esc opens the menu over the HUD, the match is frozen, Resume continues; Options sliders change the music volume audibly and survive a restart.
+- [ ] Exit to main menu from Instant Action, then Instant Action again, a campaign mission, and a mod switch: no leftover ships, fog, particles or titles.
+- [ ] Multiplayer (after INT-M5 merges): the menu does not pause; Exit leaves the session cleanly.
+- [ ] Armada I, Fleet Operations, Roots: Esc menu captions come from the install's `label.map` (`return`, `options`).
+- [ ] Roots "Politics by Other Means": with `STA64_TEST_ROOTS_INSTALL`, `install_gated_roots_politics_by_other_means_plays_its_intro_and_never_holds_the_camera` passes.
+- [ ] Cineractive hold: Space/Esc skips a skippable one, a non-skippable one after 10 s, any after 180 s; verify in a real client on a Roots intro.
+- [ ] A loss after an unsupported call shows "cannot be finished yet" and changes no progress (debrief "Mission abandoned").
+- [ ] Unify the Roots (this PR) and A2 (LUA-13 #577) blocked-end paths in one outcome type.
+- [ ] RND-23 planets: lock-in pairs `bench/pairs/planet.ini`, `planet-far.ini` (`sta-bench pair bench/pairs/planet.ini --game a2|roots --install ...`), exit 0 needs the original's frames (local).
+- [ ] RND-23 planets: match the original's planet lighting and cloud bands (second PR); compare background `map_planet_*` planets on FO/DW/FO4.
+- [ ] Bench planets hold shield 10000 where the original's hold 0 (hence `hull=10000` in the planet pairs).
+- [ ] After a front-end mod switch the map view's texture cache must not keep misses from the base mount (`TextureCache`).
+- [ ] Bench: measure the original's orbital placement ghost (snap position, bearing source, facing side, `orbitTime`) and implement orbiting (SIM-62 follow-up).
+- [ ] NET: a stopped peer that cannot reach the differing tick (records missing) writes its report after 10 s, but the match then still waits for `RepairOverdue`; consider the host ending the match with a reason when no repair request comes.
+- [ ] Armada I fed1 in a real window: intro plays its shots, Space jumps to the zoom-out, camera control returns, start view at the original's height.
+- [ ] Wire `SetCameraZoom` and `OVERVIEW_MIN/MAX_HEIGHT` zoom limits to the orbit camera.
+- [ ] Audio lane: play cineractive voice/music so A1 intros keep their original length in the client.
+- [ ] Graphics section in the options screen for `RenderQuality` (shadows, MSAA, nebula steps), persisted in the UI-29 store.
+- [ ] Nebula march at half resolution with depth-aware upsample (RND-31 follow-up); measure with `sta-bench perf ... --variants base,no-nebula`.
+- [ ] Animated sprite materials (stock nebula billboards) rewritten every frame: share or throttle.
+- [ ] Shroud art: original games draw unexplored space black; `Gshroud.tga` is drawn as-is (fog owner).
+- [ ] check: a stock A2 mission with `Patrol` on a real path loops it from the first point (needs the A2 path reader).
+- [ ] check: `AllowAsTarget` blocks automatic fire at a unit but not an explicit attack, on the bench (static only today).
+- [ ] check: measure scout and search-and-destroy on stock A2 (Refit `measure/sim57-cmds` has `setpos`/`paths`).
+- [ ] Roots "Politics by Other Means": with `STA64_TEST_ROOTS_INSTALL` the test passes; confirm in a real client that the "N Minutes Remaining" subtitle shows a countdown that drops once a minute.
+- [ ] A mission that renames a unit with `Entity.name` shows it in the HUD (the view carries `attrs.names`; the HUD does not read it yet).
+- [ ] Politics by Other Means (Roots, tutorials 4): the mission opens black and fades in on the Federation fleet (camera on a path, no HUD, no shroud), a voice line plays at 3 s, cuts to the Dominion relay at 26 s, fades out and the game appears with HUD and the objectives panel (never black, never an empty panel)
+- [ ] A1 converter: resolve string arguments held in registers (`CountUnits(team, R.eax)` in rom5/finale4, `CountUnitsNearPoint` in borg3/borg5/rom3)
+- [ ] Carry the LUA-17 converter-runtime guard (`is not alive` answers 0) into the LUA-15 Rust port
+- [ ] View order state (moving / attacking) to replace the A1 `InQueue`/`InAttackMode` approximations
+- [ ] Wormhole links: A2 map pairing and `LinkWormholes`/`LinkWormHoles`, `StuffIntoWormhole`
+- [ ] Playthrough plan and reference for A2 a2_fed01 once SetRelation and Colonize land
+- [ ] Smooth the quarter-size gas (a small blur or temporal accumulation as Refit has) and a graphics-menu choice of nebula resolution.
+- [ ] Skip march steps outside the envelope before the flow/swirl reads (per-step cost, ~20 texture reads).
+- [ ] RND-23 planets: confirm in a real window whether planet lighting/texture still misbehaves (see Not verified).
+- [ ] `bench_cli`: `STA64_GPU_TESTS=1 cargo test -p sta64 --test bench_cli session_frames_equal_the_frames_option shot_steps_run_at_tier_two`
+- [ ] Classic 3peace: hover and click a latinum nebula, right-click it with a freighter (mines).
+- [ ] Check at 3440x1440 in game: minimap shroud edge follows the blips/background across the whole display area, and the camera outline sits on the same box.
+- [ ] A1 Instant Action: with stock A1 the HUD shows dilithium 3500, crew 4000 and officers 0/100 for the player; the build menu is not empty.
+- [ ] A1 player move: ships go to warp on long moves as stock A1 does (measure first).
+- [ ] SIM-39: station RECREW toggle (`recrewRate`, 10 s pause after damage, off when full; needs an order seam) and shipyard recrew 20/s from the team pool (with SIM-40). Not measured on the bench.
+- [ ] SIM-46: boarding strength rules (`BoardingParty`, `boardingStrength`, derelict capture, transporter) per the research notes.
+- [ ] SIM-39: facing-weight hardpoint blend when target hardpoint positions reach the sim.
+- [ ] SIM-39: expose derelict/system state in `UnitView` (view seam) for the HUD.
+- [ ] SIM-39: bench check that Classic inside Roots hits like stock (one scene on Roots with `STA2 Classic Mod`).
+- [ ] SIM-39: yard crew refill consuming `yard_crew_per_sec`; `Uni*` hook weapon effects are separate.
+- [ ] check: stock A2 `CenterCamera(path, point)` centres the strategy camera on the path point in the client.
+- [ ] check: a siege fleet and a move fleet of a stock A2 mission reach their destination on the bench (static only today).
+- [ ] check: A1 `fed1` playthrough still 0 differences against its reference.
+- [ ] A1 playtest: scout across a 2deadzone-size map takes about 30-40 s; battleship about 50 s; a short hop stays slow.
+- [ ] A1 playtest: a ship turning to a far goal turns at impulse first, warps once within 30 degrees of the goal.
+- [ ] Bench: confirm the stock A1 objectives panel shows a single OBJECTIVES heading and no BRIEFING SUMMARY heading; A2 shows both.
+- [ ] In game: placing an orbital station by click snaps to the planet's orbit and is refused in open space.
+- [ ] Refit look: infinite moons (purple nimbus) still get blue cracks; colour them purple (not done here).
+- [ ] Stock look (A2 stock and Classic): dilithium moons show a blue pulsing halo and blue glowing cracks; infinite moons purple.
+- [ ] Refit look: moons unchanged (no round halo, light in the cracks).
+- [ ] Stock look: asteroids look exactly as before (stock texture).
+- [ ] A1 fed1 opening: title 'PREMONITIONS' fades out at 10 s over 1 s; voice line plays out before the zoom-out; control returns after the 5 s zoom-out (playtest with sound).
+- [ ] A1 title font (title.spr) and size: measure on the original-game bench.
+- [ ] Shipyard repair-dock animation (`repairAnimation`, flags 2/4 at `SetRepairDock`) once the sim has a repair dock.
+- [ ] A windowless GPU frame of a stock mining station docked and undocked.
+- [ ] Units with `animation` off that are not transfer stations: the engine rests their ambient tracks; decide after a visual check.
+- [ ] check: repair time, mining rate modifier, recycle fractions and crew-status thresholds read the unit's effective race (`Sim::unit_race`) when those systems land
+- [ ] check: `latinumCostModifier` documented as an STA64 race ODF key in the modding docs
+- [ ] check: research pod attachments (design on #539)
+- [ ] check: refund of a queued item uses the latinum factor paid under; AI and HUD apply the seat's latinum factor
+- [ ] A1 HUD: dilithium, crew and officers (used/cap) readouts appear top right, update live, for all four races.
+- [ ] SIM-63: A1/A2 `SetRelation` and Roots `setRelation` honoured in a playthrough (a2_fed01 opening loses no ship)
+- [ ] SIM-63 follow-up: silent removal vs destroyed for scripted `Entity.remove` / `RemoveObject` (monitors' view unmeasured)
+- [ ] SIM-63 follow-up: point-defence cover, repair, trade and boarding by relation
+- [ ] LUA-18: install-gated check that every path name the converted stock missions pass to Goto/Patrol/PointAt/GetLocation/BuildObject is either in the mission's map or reported as absent (counts), so a map-fill regression is told from an absent name
+- [ ] Armada I `Goto`/`Patrol`/`PointAt`/`GetLocation` on an absent name: read the A1 executable's script functions (now the A2 rule, not measured)
+- [ ] `GetLocation` default vector value (not measured, zero)
+- [ ] `SetPosition`, `GetDistance`, `CountUnitsNearPoint`, A1 `BuildObject` on an absent path: engine behaviour is a no-op / 0 for SetPosition and BuildObject (A2 static); still raise here
+- [ ] A1 `finale6`: transwarp-link query (`GetTranswarpExitWormhole`), and make a failed overload parse report the closest overload
+- [ ] SIM-30: Borg colonizing beam (`colonybm`, `cleansingWeaponIndex`, ion beam on an owned planet, 25 colonists/s, full special energy, ship survives); order is rejected for those ships.
+- [ ] SIM-30: ship crew moves to the planet on finish (planets have no crew pool), planet max crew from population level (1000/2000/3000/5000).
+- [ ] SIM-30: pod flight time and pods in flight on STOP; landing spiral and `Destroyed` event; pod vs planet shields (`ignoreShield`).
+- [ ] SIM-30: shield and crew interaction of the 0.1 x damage rule on planets not measured; planet hull value when no row exists is unchanged (takes hull damage).
+- [ ] SIM-30: planets' shields/atmosphere persistence and orbital links; AI planet choice; SimEvents for colonization start/finish/cancel; map-load owner without population; forced cancel when a script changes the planet owner mid-colonization.
+- [ ] SIM-30: bench scenes of research note (pod timeline, growth curve, Borg beam, stop mid-run, steal attempt, SetPlanetCivPop extremes) to move grades from static to measured.
+- [ ] SIM-30: a derelict (crewless) colony ship can still colonize: main has no derelict gate on orders in general (known gap, no gate added).
+- [ ] SIM-30: a people-lost field on the Hit event for planets (the event now reports hull 0).
+- [ ] SIM-30: populated planets show no hull impact spark because the hit event reports hull 0.
+- [ ] `AllStationsDestroyed`/`CountStations` engine parity: team -1 matches nothing and derelicts are not counted in the engine; STA64's CountStations differs (not hit by stock). Bench-check or fix with the derelict latch.
+- [ ] `CommandAllShips` first bool (per-craft state byte not identified) and commands other than STOP/ATTACK: identify the byte; the others need targets or seams.
+- [ ] `GetNextCraft`/`GetFirstCraft` list membership of dying and unfinished objects: not measured.
+- [ ] LUA-20: a disabled seat in a stock mission (A2 borg07 mid-mission `DisableAllAITeams`) stops building and sending waves but still defends its base; a re-enable or plan load brings it back (game check, original not measured).
+- [ ] LUA-20 follow-up: defend-only / wave-upkeep subset for a disabled seat once the distress-call rule is read (known deviation).
+- [ ] LUA-20 / SIM-61: mission save must carry per seat `ai`, `enabled` and the plan.
+- [ ] UI-38: right-click colonize (default-mode vote, priority 5; refusal red cursor and voice) in `sta_sim::context` and the bench `rclick`.
+- [ ] UI-38: stock command hotkeys from `Input.map` (colonize = GreyInsert, harvest = H, rally = P, ...), none wired in the HUD today.
+- [ ] UI-38: `c_colonize` / `c_nocolonize` sprite cursors while a COLONIZE pick is armed.
+- [ ] UI-38: planet readout of population, cap and colonizer in the info bar (`WorldView.colonies`), after #681.
+- [ ] UI-38: `OrderKind::Colonize` and the colony ship's `eventAcknowledge` voice for the HUD order.
+- [ ] UI-38: COLONIZE for the Borg beam colony ship once the simulation models the beam (stock shows the button).
+- [ ] UI-38: bench check of the original's COLONIZE availability for mixed selections and of which planets the cursor accepts.
+- [ ] Player check: converted A1 rom3 no longer fires the four wormhole-switch rules every tick once wormhole objects exist; A1 fed5's opening survives Worf (currently ends lost at ~45 s in the stand-in run).
+- [ ] `GetDistance` is 2D (x, z) in the original; the binding is 3D.
+- [ ] RND-12: a bench verb for planet population, then a pair of a colonized planet against the original (Stock look, both hemispheres).
+- [ ] RND-12: whether the original keeps drawing a planet's old cities when its owner becomes neutral (not established; they stay drawn here).
+- [ ] RND-12 (see #545): the planet hemisphere meshes face inward, so a planet draws the far wall of its sphere; check the cloud shell and halo against the original.
+- [ ] RND-12: measure the 16x16 alloc picture's filtering, the drawn population at map load and the pass's night-side lighting on the original.
+- [ ] LUA-20: a2_borg01 / a2_borg10 end near a `DisableAllAITeams`; check in the original whether a disabled team's distress responses and running waves change what `IsCompromised`/`CountStations` see there (not measured).
+- [ ] LUA-20: player check in game: a mission with `DisableAllAITeams` in a cineractive (borg01) and its AI waves afterwards.
+- [ ] SIM-61: mission-save blob carries per seat `ai`, `enabled`, plan; host-side requests outside `think` (replies) in the command stream.
 
 ## Done recently
 

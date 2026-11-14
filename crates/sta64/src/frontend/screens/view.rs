@@ -8,7 +8,7 @@ use bevy::prelude::*;
 use bevy::ui::UiTargetCamera;
 use sta_content::StartingResources;
 
-use super::data::{Browse, ScreenData, SelectedMod, SettingKey, SetupDraft, Settings};
+use super::data::{ActiveMod, Browse, ScreenData, SelectedMod, SettingKey, SetupDraft, Settings};
 use super::{Col, ListScroll, Screen};
 use crate::app::AppState;
 use crate::ui::i18n::{tr, trf};
@@ -85,6 +85,7 @@ pub struct Ctx<'a> {
     pub browse: &'a Browse,
     pub settings: &'a Settings,
     pub selected: &'a SelectedMod,
+    pub active_mod: &'a ActiveMod,
     pub scroll: &'a ListScroll,
     pub layout: super::stock::ScreenLayout,
     /// The box the stock screens are laid out in, logical px.

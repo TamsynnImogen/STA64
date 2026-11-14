@@ -31,7 +31,7 @@ mod tests;
 pub(crate) mod view;
 
 pub use crate::frontend::lobby::{LobbyPlugin, MpFields, Multiplayer, NetGameReady, NetLaunch};
-pub use data::{Browse, MAX_SEATS, MapEntry, ModEntry, SKIRMISH_AI, ScreenData, Seat, SeatControl, SelectedMod, SettingKey, Settings, SetupDraft};
+pub use data::{ActiveMod, Browse, MAX_SEATS, MapEntry, ModEntry, SKIRMISH_AI, ScreenData, Seat, SeatControl, SelectedMod, SettingKey, Settings, SetupDraft};
 pub use view::{Act, ScreenRoot};
 
 use crate::app::{AppState, GameSet};
@@ -160,6 +160,7 @@ impl Plugin for ScreensPlugin {
             .init_resource::<Settings>()
             .init_resource::<crate::ui::profile::UiPreference>()
             .init_resource::<SelectedMod>()
+            .init_resource::<ActiveMod>()
             .init_resource::<Browse>()
             .init_resource::<MapReturn>()
             .init_resource::<ListScroll>()
@@ -451,7 +452,7 @@ fn rebuild(
     draft: Option<Res<SetupDraft>>,
     browse: Res<Browse>,
     settings: Res<Settings>,
-    selected: Res<SelectedMod>,
+    mod_state: (Res<SelectedMod>, Res<ActiveMod>),
     camera: Option<Res<ScreensCamera>>,
     scroll: Res<ListScroll>,
     config: Res<ScreensConfig>,
@@ -460,13 +461,14 @@ fn rebuild(
     strings: Option<Res<crate::ui::i18n::Strings>>,
     campaigns: Option<Res<crate::frontend::campaign::Campaigns>>,
 ) {
+    let (selected, active_mod) = mod_state;
     let Some(draft) = draft else { return };
-    if !(screen.is_changed() || campaigns.as_ref().is_some_and(|c| c.is_changed()) || draft.is_changed() || browse.is_changed() || selected.is_changed() || data.is_changed() || theme.is_changed() || stock_box.is_changed() || config.is_changed() || strings.as_ref().is_some_and(|s| s.is_changed())) {
+    if !(screen.is_changed() || campaigns.as_ref().is_some_and(|c| c.is_changed()) || draft.is_changed() || browse.is_changed() || selected.is_changed() || active_mod.is_changed() || data.is_changed() || theme.is_changed() || stock_box.is_changed() || config.is_changed() || strings.as_ref().is_some_and(|s| s.is_changed())) {
         return;
     }
     for e in &roots {
         commands.entity(e).despawn();
     }
-    let ctx = view::Ctx { theme: &theme, data: &data, strings: strings.as_deref(), draft: &draft, browse: &browse, settings: &settings, selected: &selected, scroll: &scroll, layout: config.layout, stock_box: stock_box.0, options_tab: options_tab.0, campaigns: campaigns.as_deref() };
+    let ctx = view::Ctx { theme: &theme, data: &data, strings: strings.as_deref(), draft: &draft, browse: &browse, settings: &settings, selected: &selected, active_mod: &active_mod, scroll: &scroll, layout: config.layout, stock_box: stock_box.0, options_tab: options_tab.0, campaigns: campaigns.as_deref() };
     view::spawn(&mut commands, *screen.get(), &ctx, camera.map(|c| c.0));
 }

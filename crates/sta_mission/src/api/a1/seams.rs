@@ -208,7 +208,6 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
     table.set("hot_float_value", no_data(lua, env, "hot_float_value", &[""], "no team strength metric in the world view")?)?;
 
     // Queries with no data behind them.
-    table.set("IsDerelict", no_data(lua, env, "IsDerelict", &["h"], "the world view carries no derelict state")?)?;
     table.set("IsThereARomulanSpyOnShip", no_data(lua, env, "IsThereARomulanSpyOnShip", &["h"], "the world view carries no boarding or spy state")?)?;
     table.set("GetTranswarpExitWormhole", no_data(lua, env, "GetTranswarpExitWormhole", &["h"], "the world view carries no transwarp links")?)?;
     table.set("GetNearestTranswarpGate", no_data(lua, env, "GetNearestTranswarpGate", &["h"], "no transwarp gate classification in the world view")?)?;
