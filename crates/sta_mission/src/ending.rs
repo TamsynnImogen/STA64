@@ -23,7 +23,9 @@
 //!    credited, whether or not the entry's steps are what reached `SucceedMission` / `FailMission`
 //!    (a rule satisfied by something else in the same ticks cannot be told apart). It does not
 //!    prove the state the steps expect exists in a real game and can reach the end by a path no
-//!    player can.
+//!    player can. A mission whose baseline ends by itself within the cap scores FAIL (not n/a) in
+//!    columns 2 and 3 when the entry is not earlier: the check cannot tell its entry from the
+//!    mission's own end.
 //!
 //! **Selection of the end steps** (read from the converted script's own text; [`plan`]): the
 //! converter output knows which rule calls which action (`action = ` of the rule table), which
@@ -657,6 +659,9 @@ fn sequence_trial(book: &CampaignBook, host: &dyn MissionHost, vfs: Option<&Arc<
             t.ticks = out.map_or(opts.cap, |(_, k)| k);
             t.ok = out.is_some_and(|(w, _)| w == won) && gaps.is_empty() && !natural;
             t.note = match (out, blocked) {
+                (Some((w, _)), _) if w != won && baseline.is_some_and(|(bw, bk)| bw == w && bk <= out.map_or(0, |(_, k)| k)) => {
+                    format!("preempted by the mission's own end at tick {} ({})", baseline.map_or(0, |(_, bk)| bk), if w { "won" } else { "lost" })
+                }
                 (Some((w, _)), _) if w != won => format!("ended {} instead", if w { "won" } else { "lost" }),
                 (Some(_), _) if natural => "the mission ends the same way by itself, as soon, without the entry (a natural end, not credited)".to_owned(),
                 (None, Some(why)) => format!("end blocked by a gap: {why}"),

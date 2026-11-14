@@ -6,7 +6,7 @@
 //! when it matches, is *not* sent as chat. It is accepted only when the session is single player:
 //! the campaign or a command-line mission. Instant Action and every network transport refuse it
 //! (the text then goes on as ordinary chat), and STA64 also refuses it during replay playback.
-//! Armada I has no loss cheat; [`force_end`] can still lose an Armada I mission for tests, but no
+//! Armada I has no loss cheat; `force_end` can still lose an Armada I mission for tests, but no
 //! chat text reaches it. `showmethemoney` and `canofwhoopass` are not mission ends and are left
 //! out. Evidence grade: **read from the executable, static; not measured; the strings are
 //! compiled into the executables and are in no data file** (so they are STA64 constants, not
@@ -14,7 +14,7 @@
 //! original asks a per-replay flag in Armada II and always allows it in Armada I).
 //!
 //! **What a forced end is.** The same end record a script's `SucceedMission` / `FailMission`
-//! writes ([`crate::runtime::MissionRuntime::force_mission_end`]: `MissionEnd { time: now, failed,
+//! writes (`MissionRuntime::force_mission_end`: `MissionEnd { time: now, failed,
 //! blocked: None }`), and the result is latched, so the next outcome scan returns it and [`crate::campaign::scan_outcome`]
 //! and [`crate::campaign::CampaignRunner::finish`] take it from there exactly as for a scripted
 //! end. It **overrides a pending scripted end** (and a blocked one) and **skips the script's own

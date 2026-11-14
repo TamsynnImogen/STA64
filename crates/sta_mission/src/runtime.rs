@@ -561,7 +561,7 @@ impl MissionRuntime {
     /// the script calls afterwards (A2 end calls, A1 hook outcome) can replace it, and everything
     /// downstream (the outcome scan, the campaign transition) is the scripted path's. It replaces
     /// a pending scripted end (also a blocked one) and skips whatever the script would have run
-    /// before calling its own end. No sim state, no command. Returns false, and changes nothing,
+    /// before calling its own end. No sim state, no command. Returns false, and changes nothing (except that a due A2 end is latched by the check),
     /// once the mission has ended or the outcome scan would already return one (an A1 end call,
     /// `Mission.finish`), or an A2 scripted end is already due (its end time has passed). `tick`
     /// only stamps the record; the result takes effect at the next outcome scan. Crate-internal:

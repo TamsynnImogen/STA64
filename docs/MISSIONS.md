@@ -538,8 +538,13 @@ mission's ending from a mid-mission state (headless, stand-in host).
   unbound, raising or unsupported meanwhile, and the campaign transition applies and the next mission becomes
   available; it does **not** prove the mission's own win condition is reachable. (2) win sequence and (3) lose
   sequence: the script's own steps that lead to `SucceedMission` / `FailMission` run from the test point and the
-  scripted end completes; it does **not** prove the state those steps expect exists in a real game, and it can
-  reach the end by a path no player can. The selection of the end steps is documented in `ending.rs`.
+  scripted end completes with the right result and no new gap, and the end is not one the mission reaches by itself:
+  one uninjected baseline run per mission from the same test point gives `(result, ticks)`, and an entry is **not
+  credited when the baseline ends the same way at or before the entry's own end tick**. It **does not prove the
+  entry's own steps reached `SucceedMission` / `FailMission`** (a rule satisfied by something else in the same ticks
+  cannot be told apart), nor that the state those steps expect exists in a real game; it can reach the end by a path
+  no player can. A mission whose baseline ends by itself within the cap scores FAIL (not n/a) in columns 2 and 3 when
+  its entry is not earlier. The selection of the end steps is documented in `ending.rs`.
 
 ## Playing stock Armada II missions (experimental)
 
