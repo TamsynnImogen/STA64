@@ -87,6 +87,10 @@ pub struct PlanetMaterial {
     #[texture(7, dimension = "cube")]
     #[sampler(8)]
     pub clouds: Option<Handle<Image>>,
+    /// The colony's alloc picture (RND-12): alpha says how far each town has filled. Only the city layer binds it.
+    #[texture(9)]
+    #[sampler(10)]
+    pub city: Option<Handle<Image>>,
     pub alpha: AlphaMode,
 }
 
@@ -105,6 +109,11 @@ impl Material for PlanetMaterial {
     fn enable_shadows() -> bool {
         false
     }
+    /// The city layer (mode.z 3) shares its planet's origin with the cloud shell, so the sort would tie: it is
+    /// pushed back so the shell's clouds are drawn over the lights, as the engine draws them after the ground.
+    fn depth_bias(&self) -> f32 {
+        if self.params.mode.z > 2.5 { -4.0 } else { 0.0 }
+    }
 }
 
 /// A planet's materials, updated each frame with the camera and the lights.
@@ -118,6 +127,8 @@ pub struct PlanetBody {
     atmo_name: String,
     /// A recipe surface was applied: (ground has one, atmosphere has one, drift rad/s).
     applied: Option<(bool, bool, f32)>,
+    /// The ground's radius, for the city layer (RND-12).
+    radius: f32,
 }
 
 /// Whether the Stock look is the one drawing planets. Apps without the profile resources (the front end's
@@ -144,7 +155,15 @@ impl Plugin for PlanetPlugin {
         embedded_asset!(app, "planet.wesl");
         app.add_plugins(MaterialPlugin::<PlanetMaterial>::default())
             .init_resource::<crate::render::surfaces::Surfaces>()
+            .init_resource::<CityRaces>()
             .add_systems(Update, (add_surface_systems(), place_glows))
+            .add_systems(
+                Update,
+                update_cities
+                    .run_if(resource_exists::<crate::sim_link::SimLink>)
+                    .run_if(resource_exists::<crate::viewer::Mounted>)
+                    .run_if(resource_exists::<crate::clock::AnimClock>),
+            )
             .add_systems(PostUpdate, update.after(TransformSystems::Propagate));
     }
 }
@@ -225,6 +244,7 @@ pub fn spawn(
                 albedo: None,
                 relief: None,
                 clouds: None,
+                city: None,
                 alpha: AlphaMode::Opaque,
             });
             handles.push(m.clone());
@@ -251,6 +271,7 @@ pub fn spawn(
             albedo: None,
             relief: None,
             clouds: None,
+            city: None,
             alpha: if ground.is_empty() { AlphaMode::Opaque } else { AlphaMode::Blend },
         });
         handles.push(m.clone());
@@ -274,6 +295,7 @@ pub fn spawn(
                 albedo: None,
                 relief: None,
                 clouds: None,
+                city: None,
                 alpha: AlphaMode::Add,
             });
             handles.push(m.clone());
@@ -311,6 +333,7 @@ pub fn spawn(
         ground_name: ground.to_owned(),
         atmo_name: atmosphere.to_owned(),
         applied: None,
+        radius,
     });
     missing
 }
@@ -451,6 +474,308 @@ fn update(
     }
 }
 
+// ---- Cities (RND-12) ----
+//
+// Rule (read from the Armada II executable, static, and from the install's data; research notes outside the
+// repository): a colonized planet gets a second pass on each ground hemisphere, the owner's race's development
+// texture `PD_<cityTextureName><1|2>` times an alloc picture built from `PD_<cityTextureName>alloc<1|2>` (16x16,
+// value = (R+G+B)/765) as alpha = 0.4 x clamp((P - value) k), P = population / cfgPOP_HEAVY + 1 / k, k = the race's
+// `numCities`, blended over the ground and lit as the ground is. The population drawn is not the sim's: it eases
+// toward it at 200 a second and falls to 0 before a new owner's race is drawn (`Planet::Simulate`). Armada I and
+// the Fleet Ops line have no `cityTextureName`, so no layer. Stock shows exactly that; the Refit look adds its own
+// night-side lights over the same layer (the original has none).
+
+/// The people per second the drawn population moves by: `cfgPLANET_POP_MORPH_RATE`, which no `RTS_CFG.h` sets
+/// (read from the executable's data, static).
+pub const POP_MORPH_RATE: f32 = 200.0;
+/// `numCities` when a race ODF lacks the key (the executable's default).
+const DEFAULT_CITY_COUNT: f32 = 10.0;
+/// Where the layer sits: just over the ground, under the cloud shell (1.01).
+const CITY_RADIUS: f32 = 1.0015;
+/// Refit's `CityLights` and `CityLightColour`.
+const CITY_NIGHT: f32 = 0.8;
+const CITY_COLOUR: [f32; 3] = [1.0, 0.72, 0.38];
+
+/// What a race ODF says of its cities.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CityRace {
+    /// `cityTextureName` (`ECFR`): the stem of the race's `PD_` textures.
+    pub texture: String,
+    /// `numCities`: the width of the ramp each town fills over (1 / k of the population share).
+    pub count: f32,
+}
+
+/// The races with cities, by race key (`name`, lower case), read once per mount.
+#[derive(Resource, Debug, Default, Clone)]
+pub struct CityRaces(std::collections::BTreeMap<String, CityRace>);
+
+impl CityRaces {
+    /// From the race ODFs through a layered loader (as `Races::load` reads them).
+    pub fn from_loader(races: &sta_content::Races, load: &mut dyn FnMut(&str, usize) -> Option<String>) -> Self {
+        let mut map = std::collections::BTreeMap::new();
+        for race in races.iter() {
+            let Ok(odf) = sta_odf::resolve_layered(&race.stem, load) else { continue };
+            let texture = odf.str("citytexturename").map(str::trim).unwrap_or("");
+            if texture.is_empty() {
+                continue;
+            }
+            let count = odf.f32("numcities").filter(|c| c.is_finite() && *c > 0.0).unwrap_or(DEFAULT_CITY_COUNT);
+            map.entry(race.name.to_ascii_lowercase()).or_insert(CityRace { texture: texture.to_owned(), count });
+        }
+        CityRaces(map)
+    }
+
+    pub fn load(vfs: &sta_vfs::Vfs, index: &sta_content::OdfIndex, races: &sta_content::Races) -> Self {
+        Self::from_loader(races, &mut |name, version| index.load(vfs, name, version))
+    }
+
+    pub fn get(&self, race: &str) -> Option<&CityRace> {
+        self.0.get(&race.to_ascii_lowercase())
+    }
+}
+
+/// One alloc picture: per texel the population share at which its town is full.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AllocArray {
+    pub width: u32,
+    pub height: u32,
+    pub values: Vec<f32>,
+}
+
+impl AllocArray {
+    /// From decoded RGBA texels: `CityAllocArray`'s value is (R + G + B) / 765.
+    pub fn from_rgba(width: u32, height: u32, pixels: &[u8]) -> Option<AllocArray> {
+        let n = (width as usize).checked_mul(height as usize)?;
+        if n == 0 || n > 1 << 20 || pixels.len() < n * 4 {
+            return None;
+        }
+        let values = pixels.chunks_exact(4).take(n).map(|p| (p[0] as f32 + p[1] as f32 + p[2] as f32) / 765.0).collect();
+        Some(AllocArray { width, height, values })
+    }
+
+    /// The picture's RGBA texels at `pop` people: white, alpha from [`city_alpha`].
+    pub fn paint(&self, pop: f32, heavy: f32, count: f32) -> Vec<u8> {
+        self.values.iter().flat_map(|&v| [255, 255, 255, city_alpha(v, pop, heavy, count)]).collect()
+    }
+}
+
+/// A texel's alpha byte: 0.4 x clamp((P - value) k) with P = pop / heavy + 1 / k, k = `count` (`mSetupHemisphere`).
+pub fn city_alpha(value: f32, pop: f32, heavy: f32, count: f32) -> u8 {
+    let p = pop / heavy.max(1.0) + if count != 0.0 { 1.0 / count } else { 0.0 };
+    let c = ((p - value) * count).clamp(0.0, 1.0);
+    (0.4 * c * 255.9) as u8
+}
+
+/// The race and population a planet's cities are drawn at, which follow the sim's by `Planet::Simulate`'s rule.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Drawn {
+    pub race: Option<String>,
+    pub pop: f32,
+}
+
+impl Drawn {
+    /// One step of `dt` seconds toward the owner's race `team` (None: no owner, nothing moves, as the engine's
+    /// `team == 0` skips it) and the population `actual`.
+    pub fn step(&mut self, team: Option<&str>, actual: f32, dt: f32) {
+        let Some(team) = team else { return };
+        if self.race.is_none() {
+            self.pop = 0.0;
+            self.race = Some(team.to_owned());
+        }
+        let step = POP_MORPH_RATE * dt;
+        if self.race.as_deref().is_some_and(|r| r.eq_ignore_ascii_case(team)) {
+            if actual - self.pop < 0.0 || (actual - self.pop).abs() < step {
+                self.pop = actual;
+            } else {
+                self.pop += step;
+            }
+        } else {
+            self.pop -= step;
+            if self.pop < 0.0 {
+                self.pop = 0.0;
+                self.race = Some(team.to_owned());
+            }
+        }
+    }
+}
+
+/// What the view says of planet `id`: its owner's race (None for a neutral planet or an owner with no race) and its
+/// population (0 without a colony row).
+pub fn colony_state(view: &sta_sim::WorldView, id: sta_sim::EntityId) -> Option<(Option<String>, f32)> {
+    let unit = view.unit(id)?;
+    let race = (unit.owner != sta_sim::world::NEUTRAL)
+        .then(|| {
+            view.attrs
+                .seats
+                .iter()
+                .find(|s| s.player == unit.owner)
+                .and_then(|s| s.race.clone())
+                .or_else(|| view.attrs.player_races.iter().find(|(p, _)| *p == unit.owner).map(|(_, r)| r.clone()))
+        })
+        .flatten();
+    let pop = view.colonies.iter().find(|c| c.id == id).map_or(0.0, |c| c.population.to_f32());
+    Some((race, pop))
+}
+
+/// Marks a planet body as the sim planet `.0`, which gives it cities.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlanetColony(pub sta_sim::EntityId);
+
+struct CityLayer {
+    material: Handle<PlanetMaterial>,
+    entity: Entity,
+    alloc: Option<Handle<Image>>,
+}
+
+/// The city layers of a [`PlanetColony`] planet and what they are drawn at.
+#[derive(Component)]
+pub struct PlanetCities {
+    layers: Vec<CityLayer>,
+    drawn: Drawn,
+    /// What the layers show now: race and the population's bits.
+    painted: Option<(String, u32)>,
+}
+
+/// Alloc arrays by texture name (`PD_ECFRalloc1`), `None` for a miss.
+#[derive(Default)]
+struct AllocCache(std::collections::HashMap<String, Option<AllocArray>>);
+
+impl AllocCache {
+    fn get(&mut self, vfs: &sta_vfs::Vfs, name: &str) -> Option<&AllocArray> {
+        self.0
+            .entry(name.to_ascii_lowercase())
+            .or_insert_with(|| {
+                let (path, fmt) = sta_assets::find_texture(vfs, name)?;
+                let img = sta_assets::decode_rgba(vfs, &path, fmt).map_err(|e| warn!("{path}: {e}")).ok()?;
+                AllocArray::from_rgba(img.width, img.height, &img.pixels)
+            })
+            .as_ref()
+    }
+}
+
+fn alloc_image(a: &AllocArray, data: Vec<u8>) -> Image {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
+    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+    let mut img = Image::new(
+        Extent3d { width: a.width, height: a.height, depth_or_array_layers: 1 },
+        TextureDimension::D2,
+        data,
+        TextureFormat::Rgba8Unorm,
+        RenderAssetUsages::default(),
+    );
+    img.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+        address_mode_u: ImageAddressMode::ClampToEdge,
+        address_mode_v: ImageAddressMode::ClampToEdge,
+        ..ImageSamplerDescriptor::linear()
+    });
+    img
+}
+
+/// Each frame: give a tagged planet its two city layers, step what is drawn toward the colony and paint the layers.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn update_cities(
+    mut commands: Commands,
+    link: Res<crate::sim_link::SimLink>,
+    races: Res<CityRaces>,
+    content: Option<Res<crate::sim_link::ContentRes>>,
+    vfs: Option<Res<crate::viewer::Mounted>>,
+    device: Option<Res<bevy::render::renderer::RenderDevice>>,
+    clock: Res<crate::clock::AnimClock>,
+    mut cache: ResMut<crate::render::textures::TextureCache>,
+    mut images: ResMut<Assets<Image>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<PlanetMaterial>>,
+    mut planets: Query<(Entity, &PlanetColony, &mut PlanetBody, Option<&mut PlanetCities>)>,
+    mut layers: Query<&mut Visibility>,
+    mut allocs: Local<AllocCache>,
+) {
+    let Some(vfs) = vfs else { return };
+    let view = link.curr().clone();
+    let heavy = content.as_ref().and_then(|c| c.0.rules().population()).map_or(5000.0, |p| p.levels[3].to_f32());
+    let formats = device
+        .map(|d| bevy::image::CompressedImageFormats::from_features(d.features()))
+        .unwrap_or(bevy::image::CompressedImageFormats::BC);
+    for (parent, colony, mut body, cities) in &mut planets {
+        let Some((team, actual)) = colony_state(&view, colony.0) else { continue };
+        let Some(mut cities) = cities else {
+            if body.ground.len() == 2 && body.radius > 0.0 {
+                let mut state = PlanetCities { layers: Vec::new(), drawn: Drawn::default(), painted: None };
+                for h in 0..2 {
+                    let params = PlanetParams {
+                        mode: Vec4::new(0.0, 0.0, 3.0, 0.0),
+                        shine: Vec4::new(GLINT, GLINT_POW, CITY_NIGHT, 1.0),
+                        surf_glow: Vec4::new(CITY_COLOUR[0], CITY_COLOUR[1], CITY_COLOUR[2], 0.0),
+                        ..base_params()
+                    };
+                    let material = materials.add(PlanetMaterial {
+                        params,
+                        texture: None,
+                        albedo: None,
+                        relief: None,
+                        clouds: None,
+                        city: None,
+                        alpha: AlphaMode::Blend,
+                    });
+                    body.materials.push(material.clone());
+                    let entity = commands
+                        .spawn((
+                            Mesh3d(meshes.add(space::sphere(2 * h, 2, 2, body.radius * CITY_RADIUS))),
+                            MeshMaterial3d(material.clone()),
+                            Transform::IDENTITY,
+                            Visibility::Hidden,
+                            ChildOf(parent),
+                        ))
+                        .id();
+                    state.layers.push(CityLayer { material, entity, alloc: None });
+                }
+                commands.entity(parent).insert(state);
+            }
+            continue;
+        };
+        cities.drawn.step(team.as_deref(), actual, clock.frame_dt());
+        let want = cities.drawn.race.as_deref().and_then(|r| races.get(r).map(|c| (r.to_owned(), c.clone())));
+        let shown = want.filter(|_| cities.drawn.pop > 0.0);
+        let key = shown.as_ref().map(|(r, _)| (r.clone(), cities.drawn.pop.to_bits()));
+        if key == cities.painted {
+            continue;
+        }
+        cities.painted = key;
+        let mut loader = crate::render::textures::Loader { vfs: &vfs.0, cache: &mut cache, images: &mut images, formats };
+        for h in 0..cities.layers.len() {
+            let mut ready = false;
+            if let Some((_, race)) = &shown {
+                let pd = loader.colour(&format!("PD_{}{}", race.texture, h + 1), false);
+                let alloc = allocs.get(&vfs.0, &format!("PD_{}alloc{}", race.texture, h + 1)).cloned();
+                if let (Some(pd), Some(alloc)) = (pd, alloc) {
+                    let data = alloc.paint(cities.drawn.pop, heavy, race.count);
+                    let handle = match cities.layers[h].alloc.clone() {
+                        Some(handle) => {
+                            if let Some(mut img) = loader.images.get_mut(&handle) {
+                                img.data = Some(data);
+                            }
+                            handle
+                        }
+                        None => {
+                            let handle = loader.images.add(alloc_image(&alloc, data));
+                            cities.layers[h].alloc = Some(handle.clone());
+                            handle
+                        }
+                    };
+                    if let Some(mut m) = materials.get_mut(&cities.layers[h].material) {
+                        m.texture = Some(pd);
+                        m.city = Some(handle);
+                    }
+                    ready = true;
+                }
+            }
+            if let Ok(mut v) = layers.get_mut(cities.layers[h].entity) {
+                *v = if ready { Visibility::Inherited } else { Visibility::Hidden };
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use bevy::prelude::*;
@@ -511,6 +836,7 @@ mod tests {
             albedo: None,
             relief: None,
             clouds: None,
+            city: None,
             alpha: AlphaMode::Opaque,
         });
         app.world_mut().spawn((Camera3d::default(), GlobalTransform::from(Transform::from_translation(eye))));
@@ -527,7 +853,7 @@ mod tests {
         }
         app.world_mut().spawn((
             GlobalTransform::IDENTITY,
-            PlanetBody { materials: vec![handle.clone()], ground: vec![], shell: None, ground_name: String::new(), atmo_name: String::new(), applied: None },
+            PlanetBody { materials: vec![handle.clone()], ground: vec![], shell: None, ground_name: String::new(), atmo_name: String::new(), applied: None, radius: 1.0 },
         ));
         app.update();
         app.world().resource::<Assets<PlanetMaterial>>().get(&handle).unwrap().params
@@ -573,5 +899,152 @@ mod tests {
         assert_eq!(format!("{a:?}"), format!("{b2:?}"));
         let stock = include_str!("planet.wesl").split("fn stock(").nth(1).unwrap().split("\n}\n").next().unwrap();
         assert!(!stock.contains("p.eye"), "the Stock look must not read the camera");
+    }
+
+    // ---- Cities (RND-12) ----
+
+    /// `mSetupHemisphere`: alpha 0.4 x clamp((P - value) k), P = pop / heavy + 1 / k. An empty planet shows nothing
+    /// for the stock alloc values (the smallest is 1/34, above 1/k for k = 35), a full one 0x66 everywhere.
+    #[test]
+    fn city_alpha_follows_the_engines_formula() {
+        let (heavy, k) = (5000.0, 35.0);
+        assert_eq!(super::city_alpha(1.0 / 34.0, 0.0, heavy, k), 0);
+        assert_eq!(super::city_alpha(1.0, heavy, heavy, k), 0x66);
+        assert_eq!(super::city_alpha(1.0, heavy * 3.0, heavy, k), 0x66, "above heavy it clamps");
+        // Half full: a town whose value is 0.5 is fully on, one at 0.6 is off.
+        assert_eq!(super::city_alpha(0.5, 2500.0, heavy, k), 0x66);
+        assert_eq!(super::city_alpha(0.6, 2500.0, heavy, k), 0);
+        // Inside the ramp 1/k wide below the value's share.
+        let mid = super::city_alpha(0.5 + 0.5 / k, 2500.0, heavy, k);
+        assert!(mid > 0 && mid < 0x66, "{mid}");
+    }
+
+    #[test]
+    fn alloc_value_is_the_mean_of_the_channels() {
+        let a = super::AllocArray::from_rgba(2, 1, &[255, 255, 255, 255, 0, 0, 0, 255]).unwrap();
+        assert_eq!(a.values, vec![1.0, 0.0]);
+        assert!(super::AllocArray::from_rgba(0, 1, &[]).is_none());
+        assert!(super::AllocArray::from_rgba(2, 2, &[0; 4]).is_none());
+        let px = a.paint(5000.0, 5000.0, 35.0);
+        assert_eq!(px.len(), 8);
+        assert_eq!(&px[..3], &[255, 255, 255]);
+        assert_eq!(px[3], 0x66, "a full colony shows its town of value 1");
+    }
+
+    /// `Planet::Simulate`: drawn population rises 200 a second, snaps down, and a new owner's race waits for the
+    /// old one to fade out.
+    #[test]
+    fn drawn_population_eases_as_the_engine_does() {
+        let mut d = super::Drawn::default();
+        d.step(None, 1000.0, 1.0);
+        assert_eq!(d, super::Drawn::default(), "a neutral planet draws nothing new");
+        d.step(Some("fx"), 1000.0, 1.0);
+        assert_eq!((d.race.as_deref(), d.pop), (Some("fx"), 200.0));
+        for _ in 0..3 {
+            d.step(Some("fx"), 1000.0, 1.0);
+        }
+        assert_eq!(d.pop, 800.0);
+        d.step(Some("fx"), 1000.0, 1.0);
+        assert_eq!(d.pop, 1000.0);
+        d.step(Some("fx"), 100.0, 0.01);
+        assert_eq!(d.pop, 100.0, "above the real population it snaps down");
+        d.step(Some("other"), 5000.0, 0.25);
+        assert_eq!((d.race.as_deref(), d.pop), (Some("fx"), 50.0), "the old race fades first");
+        d.step(Some("other"), 5000.0, 0.25);
+        assert_eq!((d.race.as_deref(), d.pop), (Some("fx"), 0.0), "the swap needs the population below 0");
+        d.step(Some("other"), 5000.0, 0.25);
+        assert_eq!((d.race.as_deref(), d.pop), (Some("other"), 0.0));
+        d.step(Some("other"), 5000.0, 0.25);
+        assert_eq!(d.pop, 50.0);
+    }
+
+    fn view_with(owner: sta_sim::PlayerId, pop: Option<i32>, race: Option<&str>) -> sta_sim::WorldView {
+        use sta_sim::{EntityId, Fixed};
+        let mut v = sta_sim::WorldView::default();
+        v.units.push(sta_sim::UnitView {
+            id: EntityId(5),
+            def: sta_sim::ContentKey::NONE,
+            owner,
+            pos: sta_sim::Vec3::ZERO,
+            heading: (Fixed::ZERO, Fixed::ONE),
+            speed: Fixed::ZERO,
+            hull: [Fixed::ONE; 2],
+            shields: [[Fixed::ZERO; 2]; 4],
+            crew: None,
+            energy: None,
+            autonomy: None,
+            flags: sta_sim::view::UnitFlags::SELECTABLE,
+            progress: None,
+        });
+        if let Some(p) = pop {
+            v.colonies.push(sta_sim::colony::ColonyView { id: EntityId(5), population: Fixed::from_int(p), max_population: Fixed::from_int(5000), colonizer: None });
+        }
+        if let Some(r) = race {
+            v.attrs.seats.push(sta_sim::attrs::SeatView { player: owner, race: Some(r.into()), ..Default::default() });
+        }
+        v
+    }
+
+    /// The selection logic: an owned, populated planet gives its owner's race and population; an uncolonized one has
+    /// population 0; a neutral one no race; a planet the view does not hold nothing.
+    #[test]
+    fn colony_state_reads_owner_race_and_population() {
+        use sta_sim::{EntityId, PlayerId};
+        let v = view_with(PlayerId(1), Some(1000), Some("fx"));
+        assert_eq!(super::colony_state(&v, EntityId(5)), Some((Some("fx".into()), 1000.0)));
+        let v = view_with(PlayerId(1), None, Some("fx"));
+        assert_eq!(super::colony_state(&v, EntityId(5)), Some((Some("fx".into()), 0.0)));
+        let v = view_with(sta_sim::world::NEUTRAL, None, None);
+        assert_eq!(super::colony_state(&v, EntityId(5)), Some((None, 0.0)));
+        assert_eq!(super::colony_state(&v, EntityId(6)), None);
+    }
+
+    /// The races with cities come from the race ODFs' `cityTextureName` and `numCities`; a race without the key
+    /// (Armada I, the Fleet Ops line) has none; the key's absence of `numCities` means 10.
+    #[test]
+    fn city_races_come_from_the_race_odfs() {
+        let (races, _) = sta_content::Races::load_with(&mut |name, version| {
+            if version != 0 {
+                return None;
+            }
+            match name.trim_end_matches(".odf") {
+                "races" => Some("numberofraces=3\nrace0=a\nrace1=b\nrace2=c".into()),
+                "a" => Some("name=Alpha\ncityTextureName=\"ECFR\"\nnumCities=35.0".into()),
+                "b" => Some("name=beta\ncityTextureName=\"BORG\"".into()),
+                "c" => Some("name=gamma\ncityTextureName=\"\"".into()),
+                _ => None,
+            }
+        });
+        let cities = super::CityRaces::from_loader(&races, &mut |name, version| {
+            if version != 0 {
+                return None;
+            }
+            match name.trim_end_matches(".odf") {
+                "a" => Some("name=Alpha\ncityTextureName=\"ECFR\"\nnumCities=35.0".into()),
+                "b" => Some("name=beta\ncityTextureName=\"BORG\"".into()),
+                "c" => Some("name=gamma\ncityTextureName=\"\"".into()),
+                _ => None,
+            }
+        });
+        assert_eq!(cities.get("ALPHA"), Some(&super::CityRace { texture: "ECFR".into(), count: 35.0 }));
+        assert_eq!(cities.get("beta"), Some(&super::CityRace { texture: "BORG".into(), count: 10.0 }));
+        assert_eq!(cities.get("gamma"), None);
+    }
+
+    /// The city layer is a third mesh per hemisphere (mode.z 3) in both looks, sorted behind the clouds.
+    #[test]
+    fn city_shader_has_both_looks() {
+        let src = include_str!("planet.wesl");
+        assert!(src.contains("fn stock_city") && src.contains("fn city_night") && src.contains("if p.mode.z > 2.5"));
+        let m = super::PlanetMaterial {
+            params: super::PlanetParams { mode: Vec4::new(0.0, 0.0, 3.0, 0.0), ..default() },
+            texture: None,
+            albedo: None,
+            relief: None,
+            clouds: None,
+            city: None,
+            alpha: AlphaMode::Blend,
+        };
+        assert!(<super::PlanetMaterial as bevy::pbr::Material>::depth_bias(&m) < 0.0);
     }
 }
