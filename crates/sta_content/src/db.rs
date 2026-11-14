@@ -116,7 +116,12 @@ impl ContentDb {
     /// (a lobby choice, a test).
     pub fn load_as(vfs: &sta_vfs::Vfs, profile: Profile, index: &OdfIndex) -> Result<(ContentDb, Vec<Warning>)> {
         let (db, mut warnings) = crate::odf::load(vfs, profile, index)?;
-        let (races, _) = crate::Races::load(vfs, index);
+        let (races, race_warnings) = crate::Races::load(vfs, index);
+        // A bare content database has no race catalogue; keep its historical
+        // quiet fallback while reporting malformed authored race metadata.
+        if index.get("races").is_some() {
+            warnings.extend(race_warnings);
+        }
         let (rules, rule_warnings) = crate::Rules::load(vfs, &races)?;
         warnings.extend(rule_warnings);
         let (db, radius_warnings) = db.with_rules(rules).with_launch_points_warned(vfs);
