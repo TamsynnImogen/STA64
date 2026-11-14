@@ -2,7 +2,7 @@
 
 - **Status:** proposed
 - **Date:** 2026-11-14
-- **Deciders:** Cedric decided H1 to H3 on 2026-11-14 (the stock HUD,
+- **Deciders:** Cedric decided H1 to H3 and proposed H7 on 2026-11-14 (the stock HUD,
   `crates/sta64/src/ui/hud/`, has been worked by Cedric's sessions since
   Tammy handed it off on 2026-11-13). H4 to H6 add mod-facing files and need
   both Tammy and Cedric. Accepted when both approve the PR that merges this
@@ -130,6 +130,21 @@ mod's sheets or from where rects lie. A layout file that overlaps two groups
 or names an unknown key is reported (D7) and ignored as a whole, falling
 back to H2.
 
+### Player setting
+
+**H7. The player picks the stock HUD layout.**
+A setting with three values, stored with the other settings (UI-29):
+
+- **Centred** (default): H2.
+- **Anchored**: the layout file of H5, the mod's or one STA64 ships for the
+  profile. Offered only when such a file exists for the running profile;
+  STA64 still invents no anchors of its own (H6).
+- **Stretched**: width and height scaled separately, as the original engines
+  do. The one value that departs from H1, and only at the player's choice.
+
+A mod's layout file may state which of centred and anchored it prefers as
+the default; the player's setting wins.
+
 Done when (H1 to H3): layout tests pin, per profile, that every stock HUD
 rect keeps its sheet aspect at 4:3, 16:10, 16:9, 21:9 and 32:9, that the HUD
 area is centred, and that a window of the sheet's aspect gives the rects it
@@ -139,7 +154,7 @@ gives today; a pointer test pins that the margins reach the world.
 
 - **Keep the per-axis stretch.** Matches the original engines and needs no
   work, but distorts every HUD on the windows people use. Rejected as the
-  default; see open question 1.
+  default; kept as a player setting (H7).
 - **Anchor panels to the window's corners and edges, world between them.**
   Uses the whole width, but separates art that is authored as one piece
   (Armada I's bottom row, the Fleet Operations minimap and selection panel)
@@ -186,14 +201,15 @@ the CON lane (`sta_content`), its placement to the UI lane.
 
 ## Open questions
 
-1. **Roll-out.** Whether the centred layout becomes the default at once and
-   whether "stretched, as the original" stays as a setting.
+1. **Roll-out.** Whether centred becomes the default with the first
+   package or after a playtest at 21:9 (H7 keeps stretched available either
+   way).
 2. **Wide layouts for the stock games.** Cedric considers this defensible
    for Armada II: minimap in the bottom-left corner, selection panel with the
    command bar in the bottom centre, video frame in the bottom-right corner
    (the example under H5). STA64 can ship such a layout file per stock
-   profile, since it holds key names only. Whether it does, and whether it is
-   on by default or a setting, is not decided.
+   profile, since it holds key names only; H7 then offers it as "anchored".
+   Which profiles get one is not decided.
 3. **Do the originals ignore the new files?** That Fleet Operations 3.2.7
    and Roots ignore a sheet they do not name, and that every lineage ignores
    an extra file in `misc/`, is expected but not measured. H4 and H5 are not
@@ -206,4 +222,4 @@ the CON lane (`sta_content`), its placement to the UI lane.
 
 Once accepted, H1 to H3 change through a PR approved by Cedric; H4 to H6
 through one approved by both Tammy and Cedric, with a dated amendment note
-under the decision.
+under the decision. H7 is Cedric's.

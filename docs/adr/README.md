@@ -12,7 +12,7 @@ accepted ADR is binding on agent and human work in the area it covers.
 | [0005](0005-network-after-net-01.md) | Network model after NET-01, N1 to N6 (formerly `docs/NET_DECISIONS.md`) | accepted | 2026-11-12 |
 | [0006](0006-fo-profile-detection-order.md) | Profile detection order for Fleet Operations installs | accepted | 2026-11-12 |
 | [0007](0007-ui-text-and-icons.md) | UI text, markup and icon formats, T1 to T8 | proposed | 2026-11-13 |
-| [0008](0008-stock-hud-aspect.md) | Stock HUD on windows of another aspect than its layout sheet, H1 to H6 | proposed | 2026-11-14 |
+| [0008](0008-stock-hud-aspect.md) | Stock HUD on windows of another aspect than its layout sheet, H1 to H7 | proposed | 2026-11-14 |
 
 ADR 0007 was merged as `0001-ui-text-and-icons.md` by mistake (PR #663) and
 renumbered on 2026-11-14; its text is unchanged.
@@ -27,7 +27,7 @@ recorded" instead of supplying one.
 - **Numbers** are four digits, in order of decision date, never reused. A new
   ADR takes the next free number; check open pull requests for one already
   taken.
-- **Decision ids inside an ADR** (D1 to D13, N1 to N6, T1 to T8, H1 to H6) are stable
+- **Decision ids inside an ADR** (D1 to D13, N1 to N6, T1 to T8, H1 to H7) are stable
   and are what issues, pull requests and code comments cite (`Implements D7`).
 - **Status** is one of: proposed, accepted, superseded by ADR NNNN. A proposed
   ADR binds nothing. Who has to approve is stated in the ADR; decisions on
