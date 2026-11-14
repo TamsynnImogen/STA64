@@ -32,9 +32,11 @@ pub struct Rules {
     approach: Option<ApproachRules>,
     /// The other typed `RTS_CFG.h` keys.
     pub cfg: CfgRules,
+    /// Armada I's header-level start (`cfgStarting*`), see [`LegacyStart`].
+    legacy_start: LegacyStart,
 }
 
-const TYPED_LEN: usize = 4 + PathingRules::KEYS.len() + AutonomyRules::KEYS.len() + ApproachRules::KEYS.len() + CfgRules::KEYS.len();
+const TYPED_LEN: usize = 4 + PathingRules::KEYS.len() + AutonomyRules::KEYS.len() + ApproachRules::KEYS.len() + CfgRules::KEYS.len() + LegacyStart::KEYS.len();
 
 /// Every `RTS_CFG.h` key [`Rules`] reads.
 pub const TYPED_CFG_KEYS: [&str; TYPED_LEN] = {
@@ -62,6 +64,11 @@ pub const TYPED_CFG_KEYS: [&str; TYPED_LEN] = {
     while j < CfgRules::KEYS.len() {
         out[4 + i + a + w + j] = CfgRules::KEYS[j];
         j += 1;
+    }
+    let mut l = 0;
+    while l < LegacyStart::KEYS.len() {
+        out[4 + i + a + w + j + l] = LegacyStart::KEYS[l];
+        l += 1;
     }
     out
 };
@@ -152,6 +159,38 @@ impl ApproachRules {
                 None
             }
         }
+    }
+}
+
+/// What a seat starts with when its race ODF authors no start (`normal*`,
+/// `lots*`): Armada I's `RTS_CFG.h` carries one start for every race,
+/// `cfgStartingDilithium` and `cfgStartingCrew`, and its officer maximum,
+/// `cfgMaxOfficers`. Armada I has dilithium and crew only (officers are a cap);
+/// its race ODFs have none of Armada II's `normaldilithium` keys. Keys read
+/// from the stock data (3500, 4000, 100) and named by the executable (static);
+/// that Instant Action grants exactly these is not measured on a running
+/// Armada I. Absent keys leave a field unset; no value is invented.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LegacyStart {
+    /// `cfgStartingDilithium`: the dilithium stock of a seat.
+    pub dilithium: Option<i64>,
+    /// `cfgStartingCrew`: the team crew stock of a seat.
+    pub crew: Option<i64>,
+}
+
+impl LegacyStart {
+    const KEYS: [&'static str; 3] = ["cfgStartingCrew", "cfgStartingDilithium", "cfgMaxOfficers"];
+
+    fn from_cfg(cfg: &CfgH, warnings: &mut Vec<Warning>) -> LegacyStart {
+        let mut read = |key: &str| {
+            cfg.raw(key)?;
+            let v = cfg.i64(key).filter(|v| *v >= 0).map(|v| v.min(1_000_000_000));
+            if v.is_none() {
+                warnings.push(Warning::new("RTS_CFG.h", format!("{key} is not a nonnegative integer; treated as unset")));
+            }
+            v
+        };
+        LegacyStart { crew: read("cfgStartingCrew"), dilithium: read("cfgStartingDilithium") }
     }
 }
 
@@ -403,6 +442,14 @@ impl Rules {
                 ));
             }
         }
+        rules.legacy_start = LegacyStart::from_cfg(&cfg, &mut warnings);
+        // Armada I has no multiplayer officer list: `cfgMaxOfficers` is the one cap.
+        if rules.officer_limits.is_empty() && cfg.raw("MP_OFFICER_LIMIT").is_none() && cfg.raw("SINGLE_PLAYER_OFFICER_LIMIT").is_none() && cfg.raw("cfgMaxOfficers").is_some() {
+            match cfg.i64("cfgMaxOfficers").and_then(|v| i32::try_from(v).ok()).filter(|v| *v >= 0) {
+                Some(value) => rules.officer_limits.push(OfficerLimit { key: "ol_normal".into(), value }),
+                None => warnings.push(Warning::new("RTS_CFG.h", "invalid cfgMaxOfficers; officer maximum unavailable")),
+            }
+        }
         rules.pathing = PathingRules::from_cfg(&cfg, &mut warnings);
         if let Some(cap) = cfg.i64("STARTING_CREW_CAPACITY").filter(|c| *c >= 0) {
             rules.crew = Some(CrewRules { starting_capacity: Some(cap.min(1_000_000_000)), races: Vec::new() });
@@ -489,6 +536,11 @@ impl Rules {
         Ok((rules, warnings))
     }
 
+    /// Armada I's header-level start, for a race that authors none.
+    pub fn legacy_start(&self) -> LegacyStart {
+        self.legacy_start
+    }
+
     pub fn officer_limit(&self, choice: usize) -> Option<i32> {
         self.officer_limits.get(choice).map(|limit| limit.value)
     }
@@ -525,6 +577,12 @@ impl Rules {
                 continue;
             }
             out.push(DigestEntry::new(format!("RTS_CFG.h:{key}"), value));
+        }
+        // Only when set, so content without the keys keeps its hash.
+        for (key, value) in [("cfgStartingCrew", self.legacy_start.crew), ("cfgStartingDilithium", self.legacy_start.dilithium)] {
+            if let Some(value) = value {
+                out.push(DigestEntry::new(format!("RTS_CFG.h:{key}"), value.to_string()));
+            }
         }
         let crew = self.crew.as_ref();
         out.push(DigestEntry::new(
@@ -757,13 +815,53 @@ mod cfg_tests {
         // that resolve into MP_OFFICER_LIMIT, and the attack warp distance,
         // which is digested only when it differs from the engine default.
         // The two facing keys are digested only when set (SIM-39).
-        let mut set = Rules::default().with_approach(ApproachRules { min_move_warp_distance: Fixed::from_int(1100) });
-        set.cfg.facing_weight = Some(Fixed::ONE);
-        set.cfg.facing_constant = Some(3);
-        let d = ContentDigest::from_entries(set.digest_entries());
-        for k in TYPED_CFG_KEYS.iter().filter(|k| !matches!(**k, "MP_OFFICER_LIST_SIZE" | "SINGLE_PLAYER_OFFICER_LIMIT")) {
+        let mut rules = Rules::default().with_approach(ApproachRules { min_move_warp_distance: Fixed::from_int(1100) });
+        rules.legacy_start = LegacyStart { dilithium: Some(1), crew: Some(2) };
+        rules.cfg.facing_weight = Some(Fixed::ONE);
+        rules.cfg.facing_constant = Some(3);
+        let d = ContentDigest::from_entries(rules.digest_entries());
+        for k in TYPED_CFG_KEYS.iter().filter(|k| !matches!(**k, "MP_OFFICER_LIST_SIZE" | "SINGLE_PLAYER_OFFICER_LIMIT" | "cfgMaxOfficers")) {
             assert!(d.get(&format!("RTS_CFG.h:{k}")).is_some(), "{k}");
         }
+    }
+}
+
+#[cfg(test)]
+mod legacy_start_tests {
+    use super::*;
+    use crate::digest::ContentDigest;
+
+    const A1: &str = "int cfgMaxDilithium = 999999;\nint cfgMaxOfficers = 100;\nint cfgMaxCrew = 99999;\nint cfgStartingDilithium = 3500;\nint cfgStartingCrew = 4000;\n";
+
+    #[test]
+    fn armada_one_header_start_and_officer_cap_are_typed() {
+        let (r, w) = Rules::from_header(A1);
+        assert!(w.is_empty(), "{w:?}");
+        assert_eq!(r.legacy_start(), LegacyStart { dilithium: Some(3500), crew: Some(4000) });
+        assert_eq!(r.officer_limit(0), Some(100));
+        let d = ContentDigest::from_entries(r.digest_entries());
+        assert_eq!(d.get("RTS_CFG.h:cfgStartingDilithium"), Some("3500"));
+        assert_eq!(d.get("RTS_CFG.h:cfgStartingCrew"), Some("4000"));
+    }
+
+    #[test]
+    fn a_header_without_the_keys_keeps_its_digest_and_an_explicit_officer_list_wins() {
+        let (none, _) = Rules::from_header("int SOMETHING_ELSE = 1;\n");
+        assert_eq!(none.legacy_start(), LegacyStart::default());
+        assert_eq!(none.officer_limit(0), None);
+        let d = ContentDigest::from_entries(none.digest_entries());
+        assert!(d.get("RTS_CFG.h:cfgStartingDilithium").is_none() && d.get("RTS_CFG.h:cfgStartingCrew").is_none());
+        let (r, _) = Rules::from_header("int SINGLE_PLAYER_OFFICER_LIMIT = 7;\nint cfgMaxOfficers = 100;\n");
+        assert_eq!(r.officer_limits.len(), 1);
+        assert_eq!(r.officer_limit(0), Some(7));
+    }
+
+    #[test]
+    fn bad_values_warn_and_stay_unset() {
+        let (r, w) = Rules::from_header("int cfgStartingDilithium = lots;\nint cfgStartingCrew = -5;\nint cfgMaxOfficers = many;\n");
+        assert_eq!(r.legacy_start(), LegacyStart::default());
+        assert_eq!(r.officer_limit(0), None);
+        assert_eq!(w.len(), 3);
     }
 }
 

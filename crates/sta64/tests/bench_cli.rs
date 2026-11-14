@@ -266,3 +266,110 @@ fn fog_of_war_draws_changes_the_frame_and_follows_the_sensors() {
     assert_ne!(a[0], a[1], "the fog must move with the scout");
     assert!(max_diff(&a[0], &off[0]) > 40, "fog is a visible dimming, not a speck");
 }
+
+/// A session with a renderer (`--control stdio --frame-dir D`, no `--frames`): runs to
+/// `tick` the way a driver would (`resume`, `pause-at T`), asks `frame shot`, and returns
+/// the PNG it wrote. `commands` go first (a camera, say).
+fn session_frame(scene: &str, tick: u64, commands: &[&str], tag: &str) -> Vec<u8> {
+    use std::io::{BufRead, BufReader, Write};
+    use std::process::Stdio;
+    let dir = tmp(tag);
+    let mut child = Command::new(sta64())
+        .args(["--headless", "--clock", "bench", "--control", "stdio", "--frame-dir"])
+        .arg(&dir)
+        .arg("--scene")
+        .arg(bench().join("scenes").join(scene))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut out = BufReader::new(child.stdout.take().unwrap());
+    let mut ask = |line: &str| -> String {
+        writeln!(stdin, "{line}").unwrap();
+        stdin.flush().unwrap();
+        let mut answer = String::new();
+        out.read_line(&mut answer).unwrap();
+        answer.trim().to_owned()
+    };
+    // As `session start` begins: held until the first drive.
+    ask("pause");
+    for c in commands {
+        assert!(!ask(c).starts_with('!'), "{c}");
+    }
+    if tick > 0 {
+        // (`resume` clears a `pause-at`, so it goes first; the bench stops at the tick exactly.)
+        ask("resume");
+        ask(&format!("pause-at {tick}"));
+        let at = format!("tick {tick}");
+        let started = std::time::Instant::now();
+        while ask("tick") != at {
+            assert!(started.elapsed().as_secs() < 120, "the session never reached tick {tick}");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+    let answer = ask("frame shot");
+    assert!(answer.starts_with(&format!("frame shot tick {tick} ")), "{answer}");
+    drop(stdin);
+    let _ = child.wait();
+    std::fs::read(dir.join("shot.png")).unwrap()
+}
+
+/// A frame taken inside a session is the `--frames` frame of the same scene, tick and
+/// camera, byte for byte (TOOL-11). Opt-in like the other GPU tests.
+#[test]
+fn session_frames_equal_the_frames_option() {
+    if !adapter(&tmp("probe-session")) {
+        return;
+    }
+    // Frames without overlapping effects repeat byte for byte (the first two scenes); with
+    // them two `--frames` runs already differ by a level or two ([`TOLERANCE`], see
+    // `fx_frames`), so a session frame of a firing scene is held to the same bound.
+    for (scene, tick, exact) in [("planet.ini", 0, true), ("planet.ini", 100, true), ("combat-duel.ini", 60, false), ("combat-firing.ini", 6, false)] {
+        let (reference, _) = run_frames(scene, &tick.to_string(), "", &format!("ref-{scene}-{tick}"));
+        let session = session_frame(scene, tick, &[], &format!("sess-{scene}-{tick}"));
+        assert_eq!(reference.len(), 1);
+        if exact {
+            assert!(session == reference[0], "{scene} tick {tick}: the session frame differs from the --frames frame");
+        } else {
+            let d = max_diff(&session, &reference[0]);
+            assert!(d <= TOLERANCE, "{scene} tick {tick}: the session frame differs from the --frames frame by {d}/255");
+        }
+    }
+    // A camera set by command in the session is the scene's `Camera=` of the reference.
+    let (reference, _) = run_frames("planet.ini", "100", "orbit ship 100 30 600\n", "ref-orbit");
+    let session = session_frame("planet.ini", 100, &["orbit ship 100 30 600"], "sess-orbit");
+    assert!(session == reference[0], "orbit: the session frame differs from the --frames frame");
+}
+
+/// `Take a screenshot` / `Expect shots` at tier 2: frames named for the scenario, judged.
+#[test]
+fn shot_steps_run_at_tier_two() {
+    if !adapter(&tmp("probe-shots")) {
+        return;
+    }
+    let out = tmp("shots");
+    let code = cli::main(args(&["run", "shots-planet", "--tier", "2", "--sta64", sta64(), "--out", out.to_str().unwrap()]));
+    assert_eq!(code, 0, "sta-bench run shots-planet --tier 2");
+    let frames = run_dir(&out).join("shots-planet/frames");
+    for n in ["first", "later", "again"] {
+        assert!(frames.join(format!("{n}.png")).is_file(), "{n}.png");
+    }
+    let report = std::fs::read_to_string(run_dir(&out).join("report.md")).unwrap();
+    assert!(!report.contains("FAIL"), "{report}");
+}
+
+/// A session without a renderer says so instead of ignoring `frame`.
+#[cfg(unix)]
+#[test]
+fn frame_without_a_renderer_is_refused() {
+    let base = tmp("session-noframe");
+    let out = base.join("results");
+    let o = out.to_str().unwrap();
+    assert_eq!(cli::main(args(&["session", "start", "--scene", "planet", "--sta64", sta64(), "--out", o])), 0);
+    let sessions = base.join("sessions");
+    let id = std::fs::read_dir(&sessions).unwrap().flatten().next().unwrap().file_name().into_string().unwrap();
+    assert_eq!(cli::main(args(&["drive", "--session", &id, "frame shot", "--out", o])), 1);
+    assert_eq!(cli::main(args(&["session", "stop", "--session", &id, "--out", o])), 0);
+}

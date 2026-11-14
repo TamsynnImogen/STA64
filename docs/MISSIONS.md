@@ -552,7 +552,7 @@ missions) a checklist straight from the installed content.
 ## Lua sandbox
 
 Every mission Lua state is built by `sta_mission::sandbox::new_lua`
-(LUA-09, [MODDING_DECISIONS.md](MODDING_DECISIONS.md) D13); no other code
+(LUA-09, [ADR 0004](adr/0004-modding-v1.md) D13); no other code
 calls `Lua::new()`. Scripts get an explicit set of standard libraries and
 limits:
 

@@ -72,7 +72,7 @@ format bump), CON-35 bumps the replay to STAR format 4 and the snapshot to
 STAS format 15 together (after SIM-27's replay format 3 and SIM-28's snapshot format 14). Format 4 adds, after the content hash, the
 recording peer's content lineage and pack names and a list of the other
 peers' (empty for a local game; NET-02 fills it from `Start`), per
-[MODDING_DECISIONS.md](MODDING_DECISIONS.md) D10. Format 15 adds the same
+[ADR 0004](adr/0004-modding-v1.md) D10. Format 15 adds the same
 lineage and pack names as a record between the fixed header and the body.
 Both are informational and never checked.
 
