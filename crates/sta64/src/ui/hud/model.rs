@@ -189,6 +189,8 @@ pub enum Act {
     Stop,
     /// UI-02's formation on the own selection.
     Formation(u8),
+    /// A loaded stock command ODF whose formation parameter has no verified sim mapping.
+    NativeFormation(String),
     /// Drop a builder's queue: `Stop` on it (SIM-08's cancel).
     Cancel(EntityId),
     /// `Order::Build`; `site`: the builder is a craft and needs a place, so
@@ -232,7 +234,7 @@ pub struct Button {
     pub verbose: Option<String>,
     /// Sprite IDs in priority order; an empty list leaves the text label visible.
     pub sprite_names: Vec<String>,
-    /// Keep the text alongside a resolved icon (formations need distinct labels).
+    /// Keep the text alongside a resolved icon when explicitly requested.
     pub keep_label: bool,
 }
 
@@ -337,9 +339,9 @@ fn button(cell: usize, label: &str, act: Act, tip: &str) -> Button {
         Act::Target(TargetMode::Mine) => (vec!["b_harvest".into()], false),
         Act::Target(TargetMode::Colonize) => (vec!["b_colonize".into()], false),
         Act::Cancel(_) => (vec!["b_cancel".into()], false),
-        Act::Formation(_) => (vec!["b_form".into()], true),
+        Act::Formation(_) => (Vec::new(), false),
         // No verified native ID for these actions; use the existing label.
-        Act::Special(_) | Act::Build { .. } | Act::OpenNativeMenu(_) => (Vec::new(), false),
+        Act::Special(_) | Act::Build { .. } | Act::OpenNativeMenu(_) | Act::NativeFormation(_) => (Vec::new(), false),
     };
     Button { cell, label: label.to_uppercase(), act, look: Look::Ready, tip: tip.to_owned(), verbose: None, sprite_names, keep_label }
 }
@@ -483,7 +485,7 @@ pub fn command(feed: &HudFeed, act: &Act) -> Option<(CommandKind, Vec<EntityId>)
     let own = feed.own_selection();
     let caps = commands::shared(feed);
     match act {
-        Act::OpenBuild | Act::OpenFormations | Act::OpenNativeMenu(_) | Act::Back | Act::Target(_) => None,
+        Act::OpenBuild | Act::OpenFormations | Act::OpenNativeMenu(_) | Act::Back | Act::Target(_) | Act::NativeFormation(_) => None,
         Act::Stop if caps.stop => {
             Some((CommandKind::Order(Order::Stop { units: own.clone() }), own))
         }
@@ -760,8 +762,8 @@ mod tests {
             .iter()
             .find(|b| b.act == Act::Formation(FORM_WEDGE))
             .unwrap();
-        assert_eq!(wedge.sprite_names, ["b_form"]);
-        assert!(wedge.keep_label);
+        assert!(wedge.sprite_names.is_empty());
+        assert!(!wedge.keep_label);
         assert!(matches!(
             command(&f, &wedge.act),
             Some((

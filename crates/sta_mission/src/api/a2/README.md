@@ -517,10 +517,17 @@ trade state in the world view).
 `IsCompromised(object, team)` (LUA-12) is true when the object has been lost
 to `team`: gone or dying, not a craft or station, a derelict (crew under one
 with a positive maximum), or owned by another team than `team` (numbered like
-`GetRealTeam`). Read from the executable, static; not measured. Approximated:
-the engine's derelict latch (the `CraftCannotDie` exemption, clearing only
-when crew returns to one) and the original owner during a temporary takeover
-(listed on SIM-59; `GetRealTeam` has the same approximation).
+`GetRealTeam`). Read from the executable, static; not measured. The derelict
+test is shared with `IsDerelict` (LUA-26): the view's crew pair, which equals
+the sim's latch (including the `CraftCannotDie` top-up and the clear when crew
+returns to one) where the casualty model runs; divergences are listed in
+`conditions/derelict.rs`. Approximated: the original owner during a temporary
+takeover (listed on SIM-59; `GetRealTeam` has the same approximation).
+
+`IsDerelict(object)` (LUA-26): true for a missing, dying or non-craft handle,
+else that derelict test. A pending, failed or unknown `BuildObject` token raises
+(tainted) via `dead_handle`, as the other dead-handle answers do; the A1 alias answers
+true for a failed or unknown token and raises only for a pending one. Read from the executable, static; not measured.
 
 Evidence: signatures and argument constants read from the executable and the
 rule DLLs, static. The team / radius / ODF-filter readings follow the `A1`
@@ -556,12 +563,17 @@ constants. Orders are sent as the unit's owner; edits are SCRIPT edits.
   `Order::Stop` / `Order::Attack`; the extra `int` is never read. `Mine` maps
   to `Order::Mine`; an absent node means "mine without a target" (the nearest
   node in the view, as the omitted-target Mine helper chooses).
-- `SetImpulseSpeed` / `ResetImpulseSpeed` / `SetRedAlert` / `SetGreenAlert`
-  queue `Edit::MaxSpeed` / `Edit::Alert` through the edit-feedback tracker. The
-  sim rejects both edits today (no movement or alert package applies them):
-  the rejection is counted as `A2.<Name>: simulation rejected edit`, so a
-  mission sees the call succeed while the world does not change. `GetImpulseSpeed`
-  returns the value this runtime last set, else the class `impulseSpeed`.
+- `SetImpulseSpeed` / `ResetImpulseSpeed` (LUA-27) queue `Edit::MaxSpeed`, which
+  the sim applies to a live craft's impulse speed (`stats.max_speed`; reset by a
+  change of owner and by the end of a cineractive; see `sta_sim::speed_override`);
+  on anything else they do nothing. `SetRedAlert` / `SetGreenAlert` queue
+  `Edit::Alert` through the edit-feedback tracker; the sim rejects the alert
+  edit today and the rejection is counted as `A2.<Name>: simulation rejected
+  edit`. `GetImpulseSpeed` returns the value queued this tick or not yet applied
+  by the sim, else the view's override, else the class `impulseSpeed`; 0 for a
+  non-craft; a value of 1/64 or less (the sim's crawl for a script's 0) reads back
+  as 0. Known limit: a team change or cineractive end the host has taken but the
+  sim has not applied is not seen by the getter.
 - `BuildObject` lives in `dll_objects.rs` (next section). Its handle is a
   token (`0x40000000 + request`); `dll_objects::finish`, installed last, wraps
   every `A2` function so the token means the built unit once the spawn receipt
@@ -628,7 +640,7 @@ from the stock scripts' constants; not measured otherwise.
   `SetCanBeDecommissioned` the typed edit the sim rejects today (reported and
   counted by the edit feedback); `DisableShieldGenerator`, `SetShieldPercent`,
   `SetMaxShields` and `Damage<System>` are applied by the sim (SIM-55).
-- Calls with no sim seam (position, per-team targeting, hidden/derelict/name/population/wormhole/cargo/fleet state) raise
+- Calls with no sim seam (position, per-team targeting, hidden/name/population/wormhole/cargo/fleet state) raise
   and are counted; see `seams()` for each reason.
 
 

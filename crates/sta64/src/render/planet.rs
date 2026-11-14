@@ -490,11 +490,9 @@ fn update(
 pub const POP_MORPH_RATE: f32 = 200.0;
 /// `numCities` when a race ODF lacks the key (the executable's default).
 const DEFAULT_CITY_COUNT: f32 = 10.0;
-/// Where the layer sits, as a share of the ground's radius. The hemisphere meshes (`space::sphere`) are front-facing
-/// from inside, so under Bevy's back-face culling a planet shows the far wall of its sphere (seen in the RND-12 frame
-/// test: a layer outside the ground is hidden behind the ground's far wall except as a ring at the limb). A layer that
-/// must draw over the ground therefore sits just inside it, nearer the camera on that far wall and mapped like it.
-const CITY_RADIUS: f32 = 0.9985;
+/// Where the layer sits, as a share of the ground's radius: just outside the ground, so it draws over the near
+/// hemisphere (`space::sphere` faces outward, so Bevy's back-face culling keeps the camera's side of each sphere).
+const CITY_RADIUS: f32 = 1.0015;
 /// Refit's `CityLights` and `CityLightColour`.
 const CITY_NIGHT: f32 = 0.8;
 const CITY_COLOUR: [f32; 3] = [1.0, 0.72, 0.38];
@@ -1420,14 +1418,14 @@ mod tests {
         assert!((super::sim_dt(&mut last, 35) - 1.0).abs() < 1e-6);
     }
 
-    /// The hemisphere meshes are front-facing from inside (Bevy culls back faces, so a planet draws the far wall of its
-    /// sphere), which is why the city layer sits just inside the ground (`CITY_RADIUS`). If the winding is ever fixed,
-    /// this test fails: move the layer outside the ground then.
+    /// The sphere meshes are front-facing from outside (counter-clockwise, Bevy's front), so a planet draws the near
+    /// wall of each sphere and the city layer sits just outside the ground. Triangles also wind with their normals.
     #[test]
-    fn hemisphere_meshes_face_inward_and_the_city_layer_sits_inside_the_ground() {
+    fn sphere_meshes_face_outward_and_the_city_layer_sits_outside_the_ground() {
         use bevy::mesh::{Indices, VertexAttributeValues};
         let mesh = crate::render::space::sphere(0, 2, 2, 1.0);
         let Some(VertexAttributeValues::Float32x3(pos)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else { panic!("positions") };
+        let Some(VertexAttributeValues::Float32x3(nrm)) = mesh.attribute(Mesh::ATTRIBUTE_NORMAL) else { panic!("normals") };
         let Some(Indices::U32(idx)) = mesh.indices() else { panic!("indices") };
         let mut inward = 0;
         let mut outward = 0;
@@ -1443,8 +1441,10 @@ mod tests {
             } else {
                 outward += 1;
             }
+            // The stored vertex normals agree with the front.
+            assert!(n.dot(Vec3::from(nrm[t[0] as usize])) > 0.0, "normal against the winding");
         }
-        assert!(inward > 0 && outward == 0, "inward {inward}, outward {outward}");
-        const { assert!(super::CITY_RADIUS < 1.0) };
+        assert!(outward > 0 && inward == 0, "inward {inward}, outward {outward}");
+        const { assert!(super::CITY_RADIUS > 1.0) };
     }
 }

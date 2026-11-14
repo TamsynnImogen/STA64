@@ -316,4 +316,9 @@ impl Sim {
         };
         Some((on, Fixed::from_bits(row.damage[n])))
     }
+
+    /// The derelict latch of a live unit (SIM-39): `None` for a unit that is not in the world.
+    pub fn is_derelict(&self, id: EntityId) -> Option<bool> {
+        self.units.get(id).map(|_| self.subsystems.get(id).is_some_and(|r| r.derelict))
+    }
 }

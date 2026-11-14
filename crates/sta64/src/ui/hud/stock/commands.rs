@@ -32,6 +32,11 @@ pub struct NativeCommand {
 }
 
 impl NativeCommand {
+    /// Formation art is keyed by the command ODF, independent of buttonName.
+    pub fn formation_sprite_names(&self) -> Vec<String> {
+        vec![format!("b_{}", odf_stem(&self.odf))]
+    }
+
     pub fn sprite_names(&self) -> Vec<String> {
         let bare = if self
             .button
@@ -94,6 +99,12 @@ fn colour(odf: &Odf, key: &str) -> Option<Color> {
 }
 
 impl NativeCommands {
+    pub fn formations(&self) -> impl Iterator<Item = &NativeCommand> {
+        self.commands
+            .values()
+            .filter(|record| record.command.eq_ignore_ascii_case("SET_FORMATION"))
+    }
+
     pub fn load(vfs: &Vfs) -> Self {
         let (index, warnings) = OdfIndex::build(vfs);
         for warning in warnings {
@@ -254,5 +265,28 @@ mod tests {
             Some(Color::srgba(0.0, 1.0, 0.0, 1.0))
         );
         assert!(loaded.groups.is_empty());
+    }
+
+    #[test]
+    fn formation_records_follow_registered_odfs_across_mods() {
+        let first = Install::new("formations_first");
+        first.file("Data/odf/commands/allcommands.odf", "commandNames =\n \"zeta.odf\" \"alpha.odf\" \"move.odf\"\n")
+            .file("Data/odf/commands/zeta.odf", "commandName = \"SET_FORMATION\"\nbuttonName = \"unrelated\"\ntooltip = \"ZETA_TIP\"\n")
+            .file("Data/odf/commands/alpha.odf", "commandName = \"set_formation\"\nbuttonName = \"shared\"\nverbose = \"ALPHA_VERBOSE\"\npreferredPosition = 2 1 0 0\n")
+            .file("Data/odf/commands/move.odf", "commandName = \"MOVE\"\n");
+        let first = NativeCommands::load(&first.mount(None));
+        let formations: Vec<_> = first.formations().map(|r| r.odf.as_str()).collect();
+        assert_eq!(formations, ["alpha.odf", "zeta.odf"]);
+        assert_eq!(first.get("alpha").unwrap().formation_sprite_names(), ["b_alpha"]);
+        assert_eq!(first.get("zeta").unwrap().formation_sprite_names(), ["b_zeta"]);
+        assert_eq!(first.get("alpha").unwrap().preferred, Some([2, 1]));
+        assert_eq!(first.get("move").unwrap().command, "MOVE");
+
+        let second = Install::new("formations_second");
+        second.file("Data/odf/commands/allcommands.odf", "commandNames =\n \"arc.odf\"\n")
+            .file("Data/odf/commands/arc.odf", "commandName = \"SET_FORMATION\"\n");
+        let second = NativeCommands::load(&second.mount(None));
+        assert_eq!(second.formations().map(|r| r.odf.as_str()).collect::<Vec<_>>(), ["arc.odf"]);
+        assert_eq!(second.get("arc").unwrap().formation_sprite_names(), ["b_arc"]);
     }
 }

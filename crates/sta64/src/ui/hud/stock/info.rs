@@ -10,7 +10,7 @@ use super::super::panels::GroupTile;
 use super::layout::{StockLayout, info_variant};
 use crate::ui::gui_sprites::{GuiImage, GuiImageSampling};
 use crate::ui::notices::Tooltip;
-use crate::ui::sprite_font::{SpriteText, SpriteTextStyle, sprite_text_styled};
+use crate::ui::sprite_font::{FontRole, SpriteText, SpriteTextStyle, sprite_text_styled};
 use crate::ui::theme::{Theme, UiButton, WidgetState};
 
 #[path = "identity.rs"]
@@ -54,10 +54,16 @@ fn picture(commands: &mut Commands, root: Entity, r: R, name: &str, frame: usize
 }
 
 fn text(commands: &mut Commands, root: Entity, r: R, value: String, color: Color, size: f32, kind: Option<StockText>) -> Entity {
+    text_styled(commands, root, r, value, color, size, kind, SpriteTextStyle::default().stock_label())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn text_styled(commands: &mut Commands, root: Entity, r: R, value: String, color: Color, size: f32, kind: Option<StockText>, style: SpriteTextStyle) -> Entity {
     // SpriteFontPlugin replaces the SpriteText entity's Node while resolving glyphs.
     // Keep authored placement on a separate parent that it never rewrites.
     let wrapper = commands.spawn((node(r), Pickable::IGNORE)).id();
-    let mut e = commands.spawn(sprite_text_styled(value, size.max(18.0), color, SpriteTextStyle::default().stock_label()));
+    let size = if style.native { size } else { size.max(18.0) };
+    let mut e = commands.spawn(sprite_text_styled(value, size, color, style));
     if let Some(kind) = kind {
         e.insert(kind);
     }
@@ -382,23 +388,26 @@ fn spawn_group(
                 WidgetState::Normal,
                 Tooltip::new(tile.name.clone()),
                 node(r),
-                BackgroundColor(theme.button),
             ))
             .id();
+        // Bevy's Node inserts a default BackgroundColor; omit it so the shared
+        // widget painter cannot tint the transparent wireframe hit area.
+        commands.entity(entity).remove::<BackgroundColor>();
         commands.entity(root).add_child(entity);
         if let Some(unit) = feed.view.unit(tile.id)
             && let Some(def) = feed.content.as_deref().and_then(|db| db.unit(unit.def))
         {
             wireframe_layers(commands, entity, R::new(0.0, 0.0, r.w, r.h), &def.model);
         }
-        text(
+        text_styled(
             commands,
             entity,
-            R::new(2.0, 2.0, r.w - 4.0, r.h - 4.0),
-            tile.name.chars().take(8).collect(),
+            R::new(2.0, 2.0, (r.w - 4.0).max(0.0), (r.h - 4.0).max(0.0)),
+            tile.name.clone(),
             theme.text,
             theme.micro_size,
             None,
+            group_label_style(layout, (r.w - 4.0).max(0.0)),
         );
         let hull_key = if small {
             format!("infoMultiShipHullSm_{i}")
@@ -416,6 +425,13 @@ fn spawn_group(
             );
         }
     }
+}
+
+/// The CFG's information font names a stock role when it matches one of the
+/// mounted sprite fonts. Other names use the small role's native glyph size.
+fn group_label_style(layout: &StockLayout, width: f32) -> SpriteTextStyle {
+    let role = layout.name("InformationFont").and_then(FontRole::from_name).unwrap_or(FontRole::Small);
+    SpriteTextStyle { native: true, tint_all: true, ..SpriteTextStyle::role(role).wrapped(width) }
 }
 
 pub(super) fn spawn(commands: &mut Commands, root: Entity, layout: &StockLayout, feed: &HudFeed, theme: &Theme) {
@@ -553,6 +569,66 @@ mod tests {
             assert_eq!((node.left, node.top, node.width, node.height),
                 (Val::Px(12.0), Val::Px(18.0), Val::Px(64.0), Val::Px(64.0)));
         }
+    }
+
+    #[test]
+    fn group_tile_keeps_full_name_and_transparent_hit_area() {
+        let mut cfg = GuiLayout { canvas: (1600, 1200), ..Default::default() };
+        cfg.rects.insert("infoMultiShipIcon_0".into(), Rect { x: 10, y: 20, w: 100, h: 60 });
+        let layout = StockLayout::new(&cfg, Vec2::new(1600.0, 1200.0));
+        let feed = HudFeed::default();
+        let theme = Theme::default();
+        let name = "USS Long Ship Name";
+        let tile = model::Tile { id: EntityId(7), name: name.into(), hull: 1.0 };
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        crate::app::configure_sets(&mut app);
+        app.add_plugins(crate::ui::theme::ThemePlugin);
+        let root = app.world_mut().spawn(Node::default()).id();
+        let mut queue = CommandQueue::default();
+        {
+            let mut commands = Commands::new(&mut queue, app.world());
+            spawn_group(&mut commands, root, &layout, &feed, &theme, Vec2::ZERO, 1, &[tile]);
+        }
+        queue.apply(app.world_mut());
+        let entity = app.world_mut().query_filtered::<Entity, With<GroupTile>>().single(app.world()).unwrap();
+        assert!(app.world().get::<UiButton>(entity).is_some());
+        assert!(app.world().get::<Tooltip>(entity).is_some());
+        assert!(app.world().get::<Node>(entity).is_some());
+        assert!(app.world().get::<BackgroundColor>(entity).is_none());
+        for state in [WidgetState::Normal, WidgetState::Hovered, WidgetState::Pressed, WidgetState::Disabled] {
+            *app.world_mut().get_mut::<WidgetState>(entity).unwrap() = state;
+            app.update();
+            assert!(app.world().get::<BackgroundColor>(entity).is_none(), "painted {state:?} tile");
+        }
+        let mut labels = app.world_mut().query::<(&SpriteText, &SpriteTextStyle, &ChildOf)>();
+        let label = labels
+            .iter(app.world())
+            .find(|(_, _, parent)| app.world().get::<ChildOf>(parent.parent()).is_some_and(|p| p.parent() == entity))
+            .unwrap();
+        assert_eq!(label.0.text, name);
+        assert_eq!(label.1.wrap, Some(96.0));
+        assert_eq!(label.0.size, theme.micro_size);
+        assert_eq!(label.1.role, Some(FontRole::Small));
+        assert!(label.1.native);
+        assert!(!label.1.min_size);
+        assert_eq!(app.world().get::<Tooltip>(entity).unwrap().short, name);
+    }
+
+    #[test]
+    fn group_label_uses_recognized_information_font_role() {
+        let mut cfg = GuiLayout { canvas: (1600, 1200), ..Default::default() };
+        cfg.names.insert("InformationFont".into(), "FontMedium".into());
+        let layout = StockLayout::new(&cfg, Vec2::new(1600.0, 1200.0));
+        let style = group_label_style(&layout, 76.0);
+        assert_eq!(style.role, Some(FontRole::Medium));
+        assert_eq!(style.wrap, Some(76.0));
+        assert!(style.native);
+        assert!(!style.min_size);
+
+        cfg.names.insert("InformationFont".into(), "custom_font_alias".into());
+        let layout = StockLayout::new(&cfg, Vec2::new(1600.0, 1200.0));
+        assert_eq!(group_label_style(&layout, 76.0).role, Some(FontRole::Small));
     }
 
     #[test]
