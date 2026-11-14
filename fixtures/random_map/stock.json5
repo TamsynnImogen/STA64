@@ -1,0 +1,31 @@
+// The built-in random map table (sta_content::random_map::Table::stock), as a
+// file: copy it to `random_map.json5` at the root of a mod and edit it.
+// docs/RANDOM_MAP.md describes every key.
+{
+  sets: ["normal"],
+  count: [10, 30],
+  resources: [
+    {
+      name: "planet",
+      weight: 35,
+      clearance_radii: 5,
+      start: { inward: [1400, 1400], sets: { normal: ["pb_clssk"] } },
+      sets: { normal: ["pb_clssd", "pb_clssh", "pb_clssj", "pb_clssk", "pb_clssl", "pb_clssm"] },
+    },
+    {
+      name: "latinum",
+      weight: 30,
+      clearance: 1000,
+      start: { inward: [1000, 500], centred: [500, 500] },
+      sets: { normal: ["latinum"] },
+    },
+    {
+      name: "dilithium",
+      weight: 35,
+      clearance: 1000,
+      start: { inward: [1000, 1000], centred: [-500, -500], sets: { normal: ["mdmoon"] } },
+      // One moon in five is inexhaustible.
+      sets: { normal: [{ odf: "mmooninf", weight: 1 }, { odf: "mdmoon", weight: 4 }] },
+    },
+  ],
+}
