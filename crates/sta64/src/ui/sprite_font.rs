@@ -725,6 +725,12 @@ pub fn sprite_text(text: impl Into<String>, size: f32, color: Color) -> impl Bun
     )
 }
 
+/// Nominal sprite-font height per px of TTF size at equal ink height: 24 px fonts ink as
+/// tall and as wide as the TTF at 18 px (A2 stock, measured on a 1080p frame).
+pub const STOCK_INK: f32 = 1.25;
+/// Baseline lift of a floored label, per px of TTF size.
+pub const STOCK_LIFT: f32 = 1.0 / 6.0;
+
 /// How a [`SpriteText`] is set, beyond its text, size and colour. Optional: without it
 /// text is left aligned, unwrapped, in the font nearest `size`, as before.
 #[derive(Component, Clone, Debug, Default, PartialEq)]
@@ -767,6 +773,11 @@ impl SpriteTextStyle {
     pub fn at_least_size(mut self) -> Self {
         self.min_size = true;
         self
+    }
+    /// How the stock HUD draws its labels (UI-16): crisp, never below the readable size,
+    /// every glyph (resource symbols too) in the label colour like the TTF text it replaces.
+    pub fn stock_label(self) -> Self {
+        SpriteTextStyle { tint_all: true, ..self.at_least_size() }
     }
     pub fn wrapped(mut self, width: f32) -> Self {
         self.wrap = Some(width);
@@ -878,8 +889,12 @@ fn resolve_text(
         // Styled (kit) text is drawn crisp: a font and whole multiple that put glyph texels
         // on whole physical pixels. Plain `sprite_text` keeps its scaled drawing.
         let crisp = if styled && !style.native && scalable.is_none() {
-            fonts.crisp(style.role, t.size * px).map(|(f, k)| {
-                let below = f.font.height() * (k as f32) < t.size * px - 0.5;
+            // A sprite font's nominal height carries leading above and below its ink; a
+            // label with a readable floor asks for the font that inks as tall as the
+            // TTF of that size (`STOCK_INK`), not one of that nominal height.
+            let want = t.size * px * if style.min_size { STOCK_INK } else { 1.0 };
+            fonts.crisp(style.role, want).map(|(f, k)| {
+                let below = f.font.height() * (k as f32) < want - 0.5;
                 (f, if style.min_size && below { k + 1 } else { k })
             })
         } else {
@@ -951,6 +966,9 @@ fn resolve_text(
         commands.entity(e).insert(Node {
             width: Val::Px(if crisp.is_some() { lay.width * inv } else { lay.width.ceil() }),
             height: Val::Px(if crisp.is_some() { lay.height * inv } else { lay.height.ceil() }),
+            // The taller font of a floored label sits on the TTF's baseline (A2 stock,
+            // measured: its ink ends 3 px lower at 18 px without this).
+            top: Val::Px(if crisp.is_some() && style.min_size { -t.size * STOCK_LIFT } else { 0.0 }),
             flex_shrink: 0.0,
             ..default()
         });

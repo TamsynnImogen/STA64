@@ -72,7 +72,7 @@ fn resolved_pieces(app: &mut App, pieces: &[super::layout::Piece]) -> usize {
 }
 
 #[derive(Clone, Copy)]
-enum HoverCapture { Selected, Low, Other }
+enum HoverCapture { Selected, Low, Other, BuildPage }
 
 /// Independent installed-data expectation: current crew is compared with its
 /// actual live capacity, not crewCost. Resolve authored palette/thresholds.
@@ -110,7 +110,7 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
     let mut hud_feed = feed(&vfs, options);
     let original = hud_feed.selected[0];
     let hover = match hover_mode {
-        HoverCapture::Selected => None,
+        HoverCapture::Selected | HoverCapture::BuildPage => None,
         HoverCapture::Low => { hud_feed.selected.clear(); Some(original) },
         HoverCapture::Other => Some(hud_feed.view.units.iter().find(|unit| {
             unit.id != original && unit.def != hud_feed.view.unit(original).unwrap().def
@@ -222,6 +222,10 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         ))
         .id();
     app.insert_resource(CaptureCamera(camera));
+    if matches!(hover_mode, HoverCapture::BuildPage) {
+        // The builder's build page: command-button labels and PREV/NEXT when it has pages.
+        app.world_mut().resource_mut::<super::super::HudState>().page = super::super::Page::Build;
+    }
     app.finish();
     app.cleanup();
     for _ in 0..16 {
@@ -318,16 +322,17 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         let super::info::StockText::Resource(id) = *kind;
         let expected = stock.colour(&format!("resource_{id}_color")).unwrap_or(defaults[id]);
         assert_eq!(text.color, expected, "{label}: resource_{id} CFG/default tint");
-        let rendered = children.iter().filter_map(|child| app.world().get::<TextColor>(child)).collect::<Vec<_>>();
-        assert!(!rendered.is_empty(), "{label}: resource_{id} has no resolved text");
-        assert!(rendered.iter().all(|colour| colour.0 == expected), "{label}: resource_{id} lost its rendered tint");
+        // Sprite text resolves to glyph images (the TTF fallback to Text); each carries the tint.
+        let glyphs = children.iter().filter_map(|child| app.world().get::<ImageNode>(child)).collect::<Vec<_>>();
+        assert!(!glyphs.is_empty(), "{label}: resource_{id} has no resolved sprite glyphs");
+        assert!(glyphs.iter().all(|g| g.color == expected), "{label}: resource_{id} lost its rendered tint");
         eprintln!("{label}: resource_{id} rendered colour={expected:?}");
     }
 
     for (field,key,expected) in &expected_bar {
-        let actual = app.world_mut().query::<(&super::infobar::InfoBarField,&crate::ui::sprite_font::SpriteText,&Visibility,&Children)>()
+        let actual = app.world_mut().query::<(&super::infobar::InfoBarField,&crate::ui::sprite_font::SpriteText,&Visibility,Option<&Children>)>()
             .iter(app.world()).find(|(kind,_,_,_)| **kind==*field)
-            .map(|(_,text,visibility,children)| (text.text.clone(),text.color,*visibility,children.iter().collect::<Vec<_>>()));
+            .map(|(_,text,visibility,children)| (text.text.clone(),text.color,*visibility,children.map(|c| c.iter().collect::<Vec<_>>()).unwrap_or_default()));
         if stock.rect(key).is_none() {
             assert!(actual.is_none(),"{label}: disabled InfoBar {key}");
             continue;
@@ -341,7 +346,7 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
             } else if *field==super::infobar::InfoBarField::Crew {crew_tint.unwrap()}
             else {stock.colour(&format!("{key}_color")).or_else(|| stock.colour(if *field==super::infobar::InfoBarField::Energy {"specialEnergyIconColor"} else {"systemIconHealthyColor"})).unwrap_or(Color::srgb(0.0,1.0,0.0))};
             assert_eq!(colour,expected_colour,"{label}: InfoBar {key} tint");
-            assert!(children.iter().any(|&child| app.world().get::<TextColor>(child).is_some_and(|t| t.0==expected_colour)),"{label}: resolved InfoBar text tint");
+            assert!(children.iter().any(|&child| app.world().get::<ImageNode>(child).is_some_and(|g| g.color==expected_colour)),"{label}: resolved InfoBar sprite glyph tint");
         }
         eprintln!("{label}: InfoBar {key}={text:?} colour={colour:?} visibility={visibility:?}");
     }
@@ -477,10 +482,10 @@ fn installed_stock_hud_renders_on_gpu() {
         Ok("fo") => UiProfile::FleetOps,
         _ => panic!("set STA64_HUD_PROFILE=a2 or fo for the mounted install"),
     };
-    for (size, ratio) in [(UVec2::new(1024, 768), "4x3"), (UVec2::new(1280, 720), "16x9")] {
+    for (size, ratio) in [(UVec2::new(1024, 768), "4x3"), (UVec2::new(1280, 720), "16x9"), (UVec2::new(1920, 1080), "16x9-1080")] {
         let cfg = match (profile, ratio) {
             (UiProfile::Armada2, _) => "gui_fed.cfg",
-            (UiProfile::FleetOps, "16x9") => "gui_federation16x9.cfg",
+            (UiProfile::FleetOps, "16x9" | "16x9-1080") => "gui_federation16x9.cfg",
             (UiProfile::FleetOps, _) => "gui_federation.cfg",
             _ => unreachable!(),
         };
@@ -488,6 +493,11 @@ fn installed_stock_hud_renders_on_gpu() {
             .expect("installed stock VFS");
         let mode = if profile == UiProfile::FleetOps { "fo4" } else { "a2" };
         capture_one(vfs, profile, size, cfg, &format!("{mode}-{ratio}"), GameOptions::default(), HoverCapture::Selected);
+    }
+    {
+        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod.as_deref()).unwrap();
+        let (cfg, mode) = if profile == UiProfile::FleetOps { ("gui_federation16x9.cfg", "fo4") } else { ("gui_fed.cfg", "a2") };
+        capture_one(vfs, profile, UVec2::new(1920, 1080), cfg, &format!("{mode}-build-page-1080"), GameOptions::default(), HoverCapture::BuildPage);
     }
     if profile == UiProfile::Armada2 {
         let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod.as_deref()).unwrap();

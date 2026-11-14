@@ -12,7 +12,7 @@ use super::{StockState, layout::StockLayout};
 use crate::input::hover::HoveredUnit;
 use crate::ui::gui_sprites::GuiImage;
 use crate::ui::hud::model::HudFeed;
-use crate::ui::sprite_font::{SpriteText, sprite_text};
+use crate::ui::sprite_font::{SpriteText, SpriteTextStyle, sprite_text_styled};
 use crate::ui::theme::Theme;
 
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
@@ -149,8 +149,7 @@ pub(super) fn spawn(
                 .id();
             commands.spawn((
                 field,
-                Node::default(),
-                sprite_text("", theme.small_size.max(18.0), theme.text),
+                sprite_text_styled("", theme.small_size.max(18.0), theme.text, SpriteTextStyle::default().stock_label()),
                 Visibility::Hidden,
                 ChildOf(wrapper),
             ));
