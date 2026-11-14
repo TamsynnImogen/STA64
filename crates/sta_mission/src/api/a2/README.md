@@ -140,7 +140,8 @@ zero-hull unit without the dying flag is alive under this bridge's policy.
 These three queries return booleans and emit no commands. The other calls
 return Lua errors for absent or dying units. These are explicit bridge policies,
 not verified native error or sentinel conventions. `CraftCannotDie` requires
-a boolean. `GetLocation` returns a fresh Vector and `GetRealTeam` returns the
+a boolean, and a nil or 0 handle is a silent no-op (LUA-23; the engine's guard, read from the
+executable, static). `GetLocation` returns a fresh Vector and `GetRealTeam` returns the
 snapshot owner number in the configured player-numbering mode. Writes are queued: `RemoveObject` and
 `CraftCannotDie` use SCRIPT edits, while cloak orders use the unit's current
 player owner and retain normal capability/energy checks in the sim.

@@ -22,7 +22,8 @@ error). Reads see the last world snapshot, as for `A2`.
   Decloak ImmediateCloak DisableWeapons DisableEngines SetSpecialEnergy
   IsVisibleToTeam GetRealTeam SetRealTeam SetPerceivedTeam
   ObjectivesDisplay_Set_Visibility`, and `GetNearestStarbase` uses
-  `A2.IsStation`.
+  `A2.IsStation`. `CraftCannotDie` with a nil or 0 handle is a silent no-op (LUA-23). When no
+  overload of a call fits, the error is the best-matching overload's.
   `ObjectivesDisplay_Set_Text_From_File(file)` calls the A2 loader with
   `resetCompleted = true` (a fresh load).
 - **Sim-backed**: orders as the unit's owner (`Goto Stop Attack(unit, unit)
