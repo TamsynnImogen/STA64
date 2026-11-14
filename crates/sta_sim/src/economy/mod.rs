@@ -371,6 +371,22 @@ impl Economy {
         }
     }
 
+    /// The stations a freighter is unloading at right now (RND-21): the station each
+    /// `Unloading` freighter hands its hold to, as [`Self::step`] chooses it (the nearest
+    /// finished station of its owner, recomputed from the freighter's position, which does not
+    /// change while it unloads).
+    /// Derived from the miner table, so it is the same after a load; not state of its own.
+    pub(crate) fn docked_stations(&self, units: &Entities) -> std::collections::BTreeSet<EntityId> {
+        self.miners
+            .iter()
+            .filter(|(_, m)| m.phase == Phase::Unloading)
+            .filter_map(|(id, _)| {
+                let u = units.get(id)?;
+                nearest_station_id(units, u.owner, u.pos)
+            })
+            .collect()
+    }
+
     /// One tick of every freighter, ascending id.
     pub(crate) fn step(
         &mut self,
@@ -627,6 +643,11 @@ fn steer(units: &mut Entities, id: EntityId, to: Vec3) {
 
 /// The owner's nearest finished station by distance (ties: lowest id).
 fn nearest_station(units: &Entities, owner: PlayerId, from: Vec3) -> Option<Vec3> {
+    nearest_station_id(units, owner, from).and_then(|id| units.get(id)).map(|s| s.pos)
+}
+
+/// The finished station of `owner` nearest to `from` (ties: lowest id): where a freighter unloads.
+fn nearest_station_id(units: &Entities, owner: PlayerId, from: Vec3) -> Option<EntityId> {
     units
         .iter()
         .filter(|s| {
@@ -636,7 +657,7 @@ fn nearest_station(units: &Entities, owner: PlayerId, from: Vec3) -> Option<Vec3
         })
         .map(|s| (dist(from, s.pos), s.id, s.pos))
         .min_by_key(|&(d, id, _)| (d, id))
-        .map(|(_, _, p)| p)
+        .map(|(_, id, _)| id)
 }
 
 #[cfg(test)]

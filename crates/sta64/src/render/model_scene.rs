@@ -712,7 +712,7 @@ fn spawn_part(ctx: &mut SpawnCtx, part: &CachedPart, parent: Entity, surface: (u
 }
 
 /// Plays node animation (SOD and M3D): a step flipbook, evenly spaced keys.
-pub fn animate(clock: Res<crate::clock::AnimClock>, mut q: Query<(&NodeAnim, &mut Transform)>) {
+pub fn animate(clock: Res<crate::clock::AnimClock>, mut q: Query<(&NodeAnim, &mut Transform), Without<crate::render::anim::AmbientGate>>) {
     let t = clock.wall() as f32;
     for (anim, mut tf) in &mut q {
         let n = match &anim.keys {

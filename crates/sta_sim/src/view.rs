@@ -114,6 +114,10 @@ impl UnitFlags {
     pub const CLOAKED: UnitFlags = UnitFlags(1);
     pub const DYING: UnitFlags = UnitFlags(1 << 1);
     pub const BUILDING: UnitFlags = UnitFlags(1 << 2);
+    /// A craft is docked at this unit right now (RND-21): a freighter unloading at
+    /// this station. Set on the facility, not on the craft; derived each tick like
+    /// [`UnitFlags::BUILDING`], so a client that joins or loads mid-dock sees it.
+    /// Repair docks at yards are not modelled yet and do not set it.
     pub const DOCKED: UnitFlags = UnitFlags(1 << 3);
     pub const SELECTABLE: UnitFlags = UnitFlags(1 << 4);
     /// Hull never falls below one (bench `Immortal`).
