@@ -20,6 +20,8 @@ use bevy::window::PrimaryWindow;
 
 pub mod layout;
 mod main_menu;
+mod graphics;
+pub use graphics::{GraphicsInfo, GraphicsPart};
 mod screens;
 #[cfg(test)]
 mod tests;
@@ -138,4 +140,47 @@ pub fn set_control(draft: &mut SetupDraft, row: usize, to: SeatControl) {
         }
     }
     draft.seats[row].control = to;
+}
+
+/// Live display information. Device and backend selection belongs to renderer startup.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn read_graphics_info(
+    adapter: Option<Res<bevy::render::renderer::RenderAdapterInfo>>,
+    windows: Query<&bevy::window::OnMonitor, With<PrimaryWindow>>,
+    monitors: Query<&bevy::window::Monitor>,
+    quality: Option<Res<crate::render::quality::RenderQuality>>,
+    post: Option<Res<crate::render::post::PostFx>>,
+    mut info: ResMut<GraphicsInfo>,
+) {
+    let mut next = GraphicsInfo::default();
+    if let Some(adapter) = adapter {
+        next.adapter = adapter.name.clone();
+        next.renderer = format!("{:?}", adapter.backend);
+    }
+    if let Ok(on_monitor) = windows.single()
+        && let Ok(monitor) = monitors.get(on_monitor.0)
+    {
+            next.monitor = format!("{} - {} x {}", monitor.name.as_deref().unwrap_or("Current display"), monitor.physical_width, monitor.physical_height);
+    }
+    if let Some(q) = quality {
+        next.quality_active = true;
+        next.msaa = q.msaa;
+        next.shadows = q.shadows;
+    }
+    if let Some(fx) = post {
+        next.post_active = true;
+        next.bloom = fx.bloom;
+        next.post_aa = match fx.aa {
+            crate::render::post::Aa::Off => None,
+            crate::render::post::Aa::Fxaa => Some("FXAA".to_owned()),
+            crate::render::post::Aa::Smaa => Some("SMAA".to_owned()),
+        };
+    }
+    if *info != next { *info = next; }
+}
+
+/// The reference uses checkbox marks over the scene, without filled button rows.
+#[allow(clippy::type_complexity)]
+pub(crate) fn paint_graphics_checks(mut checks: Query<&mut BackgroundColor, (With<crate::ui::theme::Checkbox>, Or<(With<crate::frontend::screens::view::SettingToggle>, With<crate::frontend::screens::view::WindowedMode>)>)>) {
+    for mut background in &mut checks { background.0 = Color::NONE; }
 }

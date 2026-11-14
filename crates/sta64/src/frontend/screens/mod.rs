@@ -35,7 +35,7 @@ pub use data::{ActiveMod, Browse, MAX_SEATS, MapEntry, ModEntry, SKIRMISH_AI, Sc
 pub use view::{Act, ScreenRoot};
 
 use crate::app::{AppState, GameSet};
-use crate::ui::theme::{ButtonClicked, DropdownChanged, ListSelected, SliderChanged, ThemePlugin, ToggleChanged};
+use crate::ui::theme::{ButtonClicked, CheckboxChanged, DropdownChanged, ListSelected, SliderChanged, ThemePlugin, ToggleChanged};
 use view::{MapList, ModList, ScrollBox, SettingSlider, SettingToggle};
 
 /// The screen shown in `AppState::FrontEnd`.
@@ -150,6 +150,10 @@ impl Plugin for SettingsControlsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Settings>()
             .init_resource::<crate::ui::profile::UiPreference>()
+            .init_resource::<stock::GraphicsInfo>()
+            .add_message::<crate::ui::graphics::GraphicsEdited>()
+            .add_systems(Update, stock::read_graphics_info.before(on_settings))
+            .add_systems(Update, stock::paint_graphics_checks.after(crate::ui::theme::WidgetPaint))
             .add_systems(Update, on_settings.in_set(GameSet::Ui)
                 .before(crate::ui::profile::ProfileSync)
                 .run_if(in_state(AppState::FrontEnd).xor(in_state(AppState::InGame))));
@@ -433,9 +437,13 @@ fn on_settings(
     mut sliders: MessageReader<SliderChanged>,
     mut toggles: MessageReader<ToggleChanged>,
     mut dropdowns: MessageReader<DropdownChanged>,
+    mut checks: MessageReader<CheckboxChanged>,
+    mut graphics_edits: MessageWriter<crate::ui::graphics::GraphicsEdited>,
     slider_keys: Query<&SettingSlider>,
     toggle_keys: Query<&SettingToggle>,
     window_size_fields: Query<(), With<view::WindowSizeSelect>>,
+    msaa_fields: Query<(), With<view::MsaaSelect>>,
+    windowed_fields: Query<(), With<view::WindowedMode>>,
     mut settings: ResMut<Settings>,
     mut ui_preference: ResMut<crate::ui::profile::UiPreference>,
 ) {
@@ -447,12 +455,27 @@ fn on_settings(
     for c in toggles.read() {
         if let Ok(k) = toggle_keys.get(c.entity) {
             settings.set_flag(k.0, c.on);
+            graphics_edits.write(crate::ui::graphics::GraphicsEdited(k.0));
+            if k.0 == SettingKey::LcarsUi {
+                ui_preference.lcars = c.on;
+            }
+        }
+    }
+    for c in checks.read() {
+        if windowed_fields.contains(c.entity) {
+            settings.fullscreen = !c.on;
+        } else if let Ok(k) = toggle_keys.get(c.entity) {
+            settings.set_flag(k.0, c.on);
+            graphics_edits.write(crate::ui::graphics::GraphicsEdited(k.0));
             if k.0 == SettingKey::LcarsUi {
                 ui_preference.lcars = c.on;
             }
         }
     }
     for c in dropdowns.read() {
+        if msaa_fields.contains(c.entity) && let Some(choice) = [None, Some(1), Some(2), Some(4)].get(c.index) {
+            settings.msaa = *choice;
+        }
         if window_size_fields.get(c.entity).is_ok()
             && let Some(&size) = WindowSize::ALL.get(c.index)
         {
@@ -472,7 +495,7 @@ fn rebuild(
     data: Res<ScreenData>,
     draft: Option<Res<SetupDraft>>,
     browse: Res<Browse>,
-    settings: Res<Settings>,
+    presentation: (Res<Settings>, Option<Res<stock::GraphicsInfo>>),
     mod_state: (Res<SelectedMod>, Res<ActiveMod>),
     camera: Option<Res<ScreensCamera>>,
     scroll: Res<ListScroll>,
@@ -482,14 +505,15 @@ fn rebuild(
     strings: Option<Res<crate::ui::i18n::Strings>>,
     campaigns: Option<Res<crate::frontend::campaign::Campaigns>>,
 ) {
+    let (settings, graphics) = presentation;
     let (selected, active_mod) = mod_state;
     let Some(draft) = draft else { return };
-    if !(screen.is_changed() || campaigns.as_ref().is_some_and(|c| c.is_changed()) || draft.is_changed() || browse.is_changed() || selected.is_changed() || active_mod.is_changed() || data.is_changed() || theme.is_changed() || stock_box.is_changed() || config.is_changed() || strings.as_ref().is_some_and(|s| s.is_changed())) {
+    if !(screen.is_changed() || graphics.as_ref().is_some_and(|g| g.is_changed()) || campaigns.as_ref().is_some_and(|c| c.is_changed()) || draft.is_changed() || browse.is_changed() || selected.is_changed() || active_mod.is_changed() || data.is_changed() || theme.is_changed() || stock_box.is_changed() || config.is_changed() || strings.as_ref().is_some_and(|s| s.is_changed())) {
         return;
     }
     for e in &roots {
         commands.entity(e).despawn();
     }
-    let ctx = view::Ctx { theme: &theme, data: &data, strings: strings.as_deref(), draft: &draft, browse: &browse, settings: &settings, selected: &selected, active_mod: &active_mod, scroll: &scroll, layout: config.layout, stock_box: stock_box.0, options_tab: options_tab.0, campaigns: campaigns.as_deref() };
+    let ctx = view::Ctx { theme: &theme, data: &data, strings: strings.as_deref(), draft: &draft, browse: &browse, settings: &settings, selected: &selected, active_mod: &active_mod, scroll: &scroll, layout: config.layout, stock_box: stock_box.0, options_tab: options_tab.0, graphics: graphics.as_deref(), campaigns: campaigns.as_deref() };
     view::spawn(&mut commands, *screen.get(), &ctx, camera.map(|c| c.0));
 }
