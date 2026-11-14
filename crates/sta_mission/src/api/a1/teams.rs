@@ -13,6 +13,7 @@ use sta_sim::command::{Edit, TeamOp};
 use sta_sim::team_pool::{crew_pool_after, officer_count_after};
 
 use super::{Env, args_of, def};
+use crate::api::ai_switch;
 
 /// Resource ids in the world view and in `Edit::Cargo`: 0 dilithium.
 const DILITHIUM: u8 = 0;
@@ -60,7 +61,7 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
     table.set("AI_Team_Load_AIP", def(lua, env, "AI_Team_Load_AIP", &["is"], |_, e, _, a| {
         let player = e.team("AI_Team_Load_AIP", a[0].int())?;
         let mut c = e.ctx.borrow_mut();
-        c.loaded_aips.push((player, a[1].text().to_owned()));
+        c.ai_requests.push(sta_ai::AiRequest::Load(player, a[1].text().to_owned()));
         Ok(Value::Nil)
     })?)?;
 
@@ -71,28 +72,26 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
         dilithium(e, "AddDilithium", a[0].int(), a[1].int(), true)
     })?)?;
 
-    // Writes with no seam: AI team switches, race change, officers, crew.
-    table.set("DisableAllAITeams", def(lua, env, "DisableAllAITeams", &[""], |_, e, _, a| {
-        e.gap("DisableAllAITeams", "no AI enable seam in the sim", args_of(a))?;
+    // The AI switches (LUA-20): requests for the host's AI hub, in call order (`api::ai_switch`).
+    // `ResetStrategyCycle` is not exported by Armada I.
+    table.set("DisableAllAITeams", def(lua, env, "DisableAllAITeams", &[""], |_, e, _, _| {
+        ai_switch::enable_all(&mut e.ctx.borrow_mut(), false);
         Ok(Value::Nil)
     })?)?;
-    table.set("EnableAllAITeams", def(lua, env, "EnableAllAITeams", &[""], |_, e, _, a| {
-        e.gap("EnableAllAITeams", "no AI enable seam in the sim", args_of(a))?;
+    table.set("EnableAllAITeams", def(lua, env, "EnableAllAITeams", &[""], |_, e, _, _| {
+        ai_switch::enable_all(&mut e.ctx.borrow_mut(), true);
         Ok(Value::Nil)
     })?)?;
-    table.set("DisableTeam", def(lua, env, "DisableTeam", &["i"], |_, e, _, a| {
-        e.team("DisableTeam", a[0].int())?;
-        e.gap("DisableTeam", "no AI enable seam in the sim", args_of(a))?;
-        Ok(Value::Nil)
-    })?)?;
-    table.set("EnableTeam", def(lua, env, "EnableTeam", &["i"], |_, e, _, a| {
-        e.team("EnableTeam", a[0].int())?;
-        e.gap("EnableTeam", "no AI enable seam in the sim", args_of(a))?;
-        Ok(Value::Nil)
-    })?)?;
+    for (name, on) in [("DisableTeam", false), ("EnableTeam", true)] {
+        table.set(name, def(lua, env, name, &["i"], move |_, e, _, a| {
+            let team = e.team(name, a[0].int())?;
+            ai_switch::enable(&mut e.ctx.borrow_mut(), Some(team), on);
+            Ok(Value::Nil)
+        })?)?;
+    }
     table.set("SetIsAITeam", def(lua, env, "SetIsAITeam", &["ib"], |_, e, _, a| {
-        e.team("SetIsAITeam", a[0].int())?;
-        e.gap("SetIsAITeam", "the AI flag of a seat is fixed by the game setup", args_of(a))?;
+        let team = e.team("SetIsAITeam", a[0].int())?;
+        ai_switch::set_is_ai(&mut e.ctx.borrow_mut(), "A1.SetIsAITeam", Some(team), a[1].boolean());
         Ok(Value::Nil)
     })?)?;
     table.set("SetRace", def(lua, env, "SetRace", &["hs"], |_, e, _, a| {

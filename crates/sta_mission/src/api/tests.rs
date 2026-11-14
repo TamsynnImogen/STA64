@@ -872,7 +872,7 @@ fn a_raising_read_and_a_non_handle_integer_are_judged_apart() {
 #[test]
 fn a_gap_that_changes_who_fights_taints_every_later_read() {
     // A world-effect gap with no object, then a win decided on a healthy hero.
-    let s = "A2.NoteGap('DisableAllAITeams')\nif A2.IsAlive(2) then A2.SucceedMission(0, 0) end";
+    let s = "A2.NoteGap('SetPerceivedTeam')\nif A2.IsAlive(2) then A2.SucceedMission(0, 0) end";
     assert!(matches!(end_state(s), MissionEndState::Blocked(_)));
 }
 

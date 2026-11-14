@@ -14,6 +14,7 @@ use crate::ui::{
     gui_sprites::{GuiActive, GuiButton, GuiButtonColors, GuiButtonLabel},
     notices::Tooltip,
     profile::UiProfile,
+    sprite_font::{SpriteTextStyle, sprite_text_styled},
     theme::{ButtonClicked, Theme, UiButton, WidgetState},
 };
 use crate::viewer::Mounted;
@@ -89,6 +90,7 @@ fn metadata<'a>(native: &'a NativeCommands, act: &Act) -> Option<&'a NativeComma
         Act::Target(TargetMode::Attack) => "attack",
         Act::Target(TargetMode::Mine) => "harvest",
         Act::Target(TargetMode::Rally) => "rally",
+        Act::Target(TargetMode::Colonize) => "colonize",
         Act::Stop => "stop",
         Act::Cancel(_) => "cancelbuild",
         _ => return None,
@@ -195,7 +197,8 @@ fn command_rank(command: &str) -> u8 {
     }
 }
 
-fn visible_cells(p: &PaletteLayout, screen: Vec2) -> Vec<R> {
+fn visible_cells(p: &PaletteLayout, hud: R) -> Vec<R> {
+    let screen = Vec2::new(hud.right(), hud.bottom());
     // Iterate screen-derived bounds, not arbitrary mod dimensions.
     let cols = p
         .columns
@@ -205,7 +208,7 @@ fn visible_cells(p: &PaletteLayout, screen: Vec2) -> Vec<R> {
         .min(((screen.y / p.cell.y.max(1.0)).ceil() as usize).saturating_add(1));
     (0..rows)
         .flat_map(|row| (0..cols).map(move |col| p.cell_rect(col, row)))
-        .filter(|r| r.x >= 0.0 && r.y >= 0.0 && r.right() <= screen.x + 0.5 && r.bottom() <= screen.y + 0.5)
+        .filter(|r| r.x >= hud.x && r.y >= hud.y && r.right() <= screen.x + 0.5 && r.bottom() <= screen.y + 0.5)
         .collect()
 }
 
@@ -257,14 +260,12 @@ fn spawn_button(
         ChildOf(parent),
         children![(
             GuiButtonLabel,
-            Text::new(b.label.clone()),
-            TextFont {
-                font_size: (rect.h * 0.22).clamp(18.0, 22.0).into(),
-                ..default()
-            },
-            TextColor(theme.text),
-            TextLayout::new(Justify::Center, LineBreak::WordOrCharacter),
-            Pickable::IGNORE
+            sprite_text_styled(
+                b.label.clone(),
+                (rect.h * 0.22).clamp(18.0, 22.0),
+                theme.text,
+                SpriteTextStyle::default().centered().wrapped(rect.w).stock_label(),
+            ),
         )],
     ));
 }
@@ -321,7 +322,7 @@ pub(super) fn refresh(
         || state
             .layout
             .as_ref()
-            .is_none_or(|l| (l.screen.x - 1080.0 * config.aspect).abs() > 0.1)
+            .is_none_or(|l| (l.screen.x - super::layout::SCREEN_H * config.aspect).abs() > 0.1)
         || theme.is_changed()
         || mount_changed;
     let replaced = changed || bodies.is_empty();
@@ -334,7 +335,7 @@ pub(super) fn refresh(
         state.layout = config
             .gui
             .as_ref()
-            .map(|cfg| StockLayout::new(cfg, Vec2::new(1080.0 * config.aspect, 1080.0)));
+            .map(|cfg| StockLayout::for_aspect(cfg, config.aspect));
         commands.insert_resource(crate::render::overlays::GaugeStyle::from_cfg(
             state.layout.as_ref().and_then(|layout| layout.number("selectionGaugeHeight")),
             state.layout.as_ref().and_then(|layout| layout.number("selectionGaugeGap")),
@@ -403,7 +404,7 @@ pub(super) fn refresh(
         );
     }
     if let Some(palette) = layout.palette() {
-        let cells = visible_cells(&palette, layout.screen);
+        let cells = visible_cells(&palette, layout.hud);
         let capacity = cells.len();
         let pinned: Vec<_> = next
             .iter()
@@ -466,19 +467,23 @@ pub(super) fn refresh(
                         BackgroundColor(theme.button),
                         ChildOf(parent),
                         children![(
-                            Text::new(label),
-                            TextFont {
-                                font_size: 18.0.into(),
-                                ..default()
-                            },
-                            TextColor(theme.text),
-                            Pickable::IGNORE
+                            // Where the TTF label sat before: top left, unwrapped.
+                            sprite_text_styled(label, 18.0, theme.text, SpriteTextStyle::default().stock_label()),
                         )],
                     ));
                 }
             }
         }
     }
+    // A sheet rectangle may start left of the canvas (FO's minimap panel at x = -1): the
+    // pointer-solid part never reaches into the margin, which belongs to the world. The art
+    // is not clipped.
+    let hud_rect = layout.hud;
+    for r in &mut state.solid {
+        let (left, right) = (r.x.max(hud_rect.x), r.right().min(hud_rect.right()));
+        *r = R::new(left, r.y, (right - left).max(0.0), r.h);
+    }
+    state.solid.retain(|r| r.w > 0.0);
     state.grid = next;
     state.page = hud.page;
     state.layout = Some(layout);

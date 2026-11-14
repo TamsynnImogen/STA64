@@ -72,7 +72,7 @@ fn resolved_pieces(app: &mut App, pieces: &[super::layout::Piece]) -> usize {
 }
 
 #[derive(Clone, Copy)]
-enum HoverCapture { Selected, Low, Other }
+enum HoverCapture { Selected, Low, Other, ColonyShip }
 
 /// Independent installed-data expectation: current crew is compared with its
 /// actual live capacity, not crewCost. Resolve authored palette/thresholds.
@@ -99,7 +99,7 @@ fn crew_colour(vfs: &sta_vfs::Vfs, feed: &HudFeed, unit: &sta_sim::UnitView, sto
 
 fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, label: &str, options: GameOptions, hover_mode: HoverCapture) {
     let layout = crate::game::gui_layout(&vfs, cfg).unwrap_or_else(|| panic!("installed {cfg} missing"));
-    let stock = StockLayout::new(&layout, Vec2::new(1080.0 * size.x as f32 / size.y as f32, 1080.0));
+    let stock = StockLayout::for_aspect(&layout, size.x as f32 / size.y as f32);
     let resource = stock.pieces("resourcePanel");
     let minimap = stock.pieces("minimapBackgroundPanel");
     let info = stock.pieces("infoMiddleBackgroundPanel");
@@ -110,8 +110,19 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
     let mut hud_feed = feed(&vfs, options);
     let original = hud_feed.selected[0];
     let hover = match hover_mode {
-        HoverCapture::Selected => None,
+        HoverCapture::Selected | HoverCapture::BuildPage => None,
         HoverCapture::Low => { hud_feed.selected.clear(); Some(original) },
+        // UI-38: the start unit's view row (same id, so it stays visible) with a colony ship's definition.
+        HoverCapture::ColonyShip => {
+            let Some(def) = hud_feed.content.as_ref().unwrap().key("fcolony") else {
+                eprintln!("SKIP {label}: the mounted install has no `fcolony` definition");
+                return;
+            };
+            let mut view = (*hud_feed.view).clone();
+            view.units.iter_mut().find(|u| u.id == original).unwrap().def = def;
+            hud_feed.view = Arc::new(view);
+            None
+        }
         HoverCapture::Other => Some(hud_feed.view.units.iter().find(|unit| {
             unit.id != original && unit.def != hud_feed.view.unit(original).unwrap().def
                 && unit.flags.contains(sta_sim::view::UnitFlags::SELECTABLE)
@@ -222,6 +233,10 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         ))
         .id();
     app.insert_resource(CaptureCamera(camera));
+    if matches!(hover_mode, HoverCapture::BuildPage) {
+        // The builder's build page: command-button labels and PREV/NEXT when it has pages.
+        app.world_mut().resource_mut::<super::super::HudState>().page = super::super::Page::Build;
+    }
     app.finish();
     app.cleanup();
     for _ in 0..16 {
@@ -285,6 +300,14 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         .query::<(&GuiButton, &ImageNode)>()
         .iter(app.world())
         .count();
+    if matches!(hover_mode, HoverCapture::ColonyShip) {
+        // The palette offers COLONIZE (command ODF `colonize.odf`: art `b_colonize`) for the colony ship (read from data).
+        let colonize = app.world_mut().query::<(&super::super::GridCell, &GuiButton)>().iter(app.world())
+            .filter(|(cell, button)| cell.0 == super::super::Act::Target(super::super::model::TargetMode::Colonize)
+                && button.names.iter().any(|n| n.eq_ignore_ascii_case("b_colonize")))
+            .count();
+        assert_eq!(colonize, 1, "{label}: one COLONIZE button with the stock art name");
+    }
     if matches!(hover_mode, HoverCapture::Low) {
         assert_eq!(commands, 0, "{label}: hovering must not enable selection commands");
     } else {
@@ -318,16 +341,17 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         let super::info::StockText::Resource(id) = *kind;
         let expected = stock.colour(&format!("resource_{id}_color")).unwrap_or(defaults[id]);
         assert_eq!(text.color, expected, "{label}: resource_{id} CFG/default tint");
-        let rendered = children.iter().filter_map(|child| app.world().get::<TextColor>(child)).collect::<Vec<_>>();
-        assert!(!rendered.is_empty(), "{label}: resource_{id} has no resolved text");
-        assert!(rendered.iter().all(|colour| colour.0 == expected), "{label}: resource_{id} lost its rendered tint");
+        // Sprite text resolves to glyph images (the TTF fallback to Text); each carries the tint.
+        let glyphs = children.iter().filter_map(|child| app.world().get::<ImageNode>(child)).collect::<Vec<_>>();
+        assert!(!glyphs.is_empty(), "{label}: resource_{id} has no resolved sprite glyphs");
+        assert!(glyphs.iter().all(|g| g.color == expected), "{label}: resource_{id} lost its rendered tint");
         eprintln!("{label}: resource_{id} rendered colour={expected:?}");
     }
 
     for (field,key,expected) in &expected_bar {
-        let actual = app.world_mut().query::<(&super::infobar::InfoBarField,&crate::ui::sprite_font::SpriteText,&Visibility,&Children)>()
+        let actual = app.world_mut().query::<(&super::infobar::InfoBarField,&crate::ui::sprite_font::SpriteText,&Visibility,Option<&Children>)>()
             .iter(app.world()).find(|(kind,_,_,_)| **kind==*field)
-            .map(|(_,text,visibility,children)| (text.text.clone(),text.color,*visibility,children.iter().collect::<Vec<_>>()));
+            .map(|(_,text,visibility,children)| (text.text.clone(),text.color,*visibility,children.map(|c| c.iter().collect::<Vec<_>>()).unwrap_or_default()));
         if stock.rect(key).is_none() {
             assert!(actual.is_none(),"{label}: disabled InfoBar {key}");
             continue;
@@ -341,7 +365,7 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
             } else if *field==super::infobar::InfoBarField::Crew {crew_tint.unwrap()}
             else {stock.colour(&format!("{key}_color")).or_else(|| stock.colour(if *field==super::infobar::InfoBarField::Energy {"specialEnergyIconColor"} else {"systemIconHealthyColor"})).unwrap_or(Color::srgb(0.0,1.0,0.0))};
             assert_eq!(colour,expected_colour,"{label}: InfoBar {key} tint");
-            assert!(children.iter().any(|&child| app.world().get::<TextColor>(child).is_some_and(|t| t.0==expected_colour)),"{label}: resolved InfoBar text tint");
+            assert!(children.iter().any(|&child| app.world().get::<ImageNode>(child).is_some_and(|g| g.color==expected_colour)),"{label}: resolved InfoBar sprite glyph tint");
         }
         eprintln!("{label}: InfoBar {key}={text:?} colour={colour:?} visibility={visibility:?}");
     }
@@ -444,10 +468,11 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
     }
     // A2's first two resource atlas pieces meet at canvas x=256. On a wide
     // viewport Auto letterboxes both pieces and leaves a black gap here; native
-    // independent-axis drawing must fill this authored join.
+    // drawing (one factor, the sheet centred) must fill this authored join.
     if profile == UiProfile::Armada2 && size.x as f32 / size.y as f32 > 1.5 {
-        let x = (256.0 * size.x as f32 / stock.canvas.x).round() as u32;
-        let y = (38.0 * size.y as f32 / stock.canvas.y).round() as u32;
+        let k = size.y as f32 / 1080.0;
+        let x = ((stock.hud.x + 256.0 * stock.scale) * k).round() as u32;
+        let y = ((stock.hud.y + 38.0 * stock.scale) * k).round() as u32;
         for x in x.saturating_sub(3)..=(x + 3).min(size.x - 1) {
             let pixel = rgba.get_pixel(x, y.min(size.y - 1));
             assert!(
@@ -477,10 +502,16 @@ fn installed_stock_hud_renders_on_gpu() {
         Ok("fo") => UiProfile::FleetOps,
         _ => panic!("set STA64_HUD_PROFILE=a2 or fo for the mounted install"),
     };
-    for (size, ratio) in [(UVec2::new(1024, 768), "4x3"), (UVec2::new(1280, 720), "16x9")] {
+    // 21:9 and 32:9 windows (UI-37): the sheet is scaled by one factor and centred.
+    for (size, ratio) in [
+        (UVec2::new(1024, 768), "4x3"),
+        (UVec2::new(1280, 720), "16x9"),
+        (UVec2::new(2560, 1080), "21x9"),
+        (UVec2::new(3840, 1080), "32x9"),
+    ] {
         let cfg = match (profile, ratio) {
             (UiProfile::Armada2, _) => "gui_fed.cfg",
-            (UiProfile::FleetOps, "16x9") => "gui_federation16x9.cfg",
+            (UiProfile::FleetOps, "16x9" | "21x9" | "32x9") => "gui_federation16x9.cfg",
             (UiProfile::FleetOps, _) => "gui_federation.cfg",
             _ => unreachable!(),
         };
@@ -489,12 +520,20 @@ fn installed_stock_hud_renders_on_gpu() {
         let mode = if profile == UiProfile::FleetOps { "fo4" } else { "a2" };
         capture_one(vfs, profile, size, cfg, &format!("{mode}-{ratio}"), GameOptions::default(), HoverCapture::Selected);
     }
+    {
+        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod.as_deref()).unwrap();
+        let (cfg, mode) = if profile == UiProfile::FleetOps { ("gui_federation16x9.cfg", "fo4") } else { ("gui_fed.cfg", "a2") };
+        capture_one(vfs, profile, UVec2::new(1920, 1080), cfg, &format!("{mode}-build-page-1080"), GameOptions::default(), HoverCapture::BuildPage);
+    }
     if profile == UiProfile::Armada2 {
         let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod.as_deref()).unwrap();
         let mut options = GameOptions::default();
         options.starting_resources = sta_content::StartingResources::Lots;
         options.officer_limit = 1;
         capture_one(vfs, profile, UVec2::new(1280,720), "gui_fed.cfg", "a2-lots-restricted-16x9", options, HoverCapture::Selected);
+        // UI-38: a colony ship selected (the stock command palette shows COLONIZE).
+        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod.as_deref()).unwrap();
+        capture_one(vfs, profile, UVec2::new(1024, 768), "gui_fed.cfg", "a2-colony-ship-4x3", GameOptions::default(), HoverCapture::ColonyShip);
         for (mode,label) in [(HoverCapture::Low,"a2-hover-low-16x9"),(HoverCapture::Other,"a2-hover-other-16x9")] {
             let vfs=sta_vfs::Vfs::mount_install(std::path::Path::new(&install),active_mod.as_deref()).unwrap();
             capture_one(vfs,profile,UVec2::new(1280,720),"gui_fed.cfg",label,GameOptions::default(),mode);
@@ -516,16 +555,17 @@ fn installed_armada1_resource_readouts_render_on_gpu() {
         eprintln!("SKIP: set STA64_TEST_A1_INSTALL=<Armada I root>");
         return;
     };
-    let size = UVec2::new(1280, 720);
+    for size in [UVec2::new(1280, 720), UVec2::new(2560, 1080), UVec2::new(3840, 1080)] {
     for (cfg, spr, label) in [
         ("gui_fed.cfg", "gui_federation.spr", "a1-fed"),
         ("gui_kli.cfg", "gui_klingon.spr", "a1-kli"),
         ("gui_rom.cfg", "gui_romulan.spr", "a1-rom"),
         ("gui_bor.cfg", "gui_borg.spr", "a1-bor"),
     ] {
+        let label = &format!("{label}-{}x{}", size.x, size.y);
         let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), None).expect("installed A1 VFS");
         let layout = crate::game::gui_layout(&vfs, cfg).unwrap_or_else(|| panic!("installed {cfg} missing"));
-        let stock = StockLayout::new(&layout, Vec2::new(1080.0 * size.x as f32 / size.y as f32, 1080.0));
+        let stock = StockLayout::for_aspect(&layout, size.x as f32 / size.y as f32);
         assert!(stock.panel("resource").is_none(), "{label}: now has a resource panel");
         let hud_feed = feed(&vfs, GameOptions::default());
         let player = hud_feed.view.player(hud_feed.player).expect("capture player");
@@ -656,6 +696,7 @@ fn installed_armada1_resource_readouts_render_on_gpu() {
             std::fs::create_dir_all(&dir).unwrap();
             rgba.save(std::path::Path::new(&dir).join(format!("stock-{label}.png"))).unwrap();
         }
+    }
     }
 }
 

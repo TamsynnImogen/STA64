@@ -4,6 +4,7 @@
 //! - Armada II: SOD models, TGA textures (`Textures/RGB/`).
 //! - Fleet Operations: adds DDS textures, mostly in `Textures/`.
 //! - A2FOExtensions: adds M3D models (1.93–2.06); Legacy chunk contexts are explicit.
+//!   Legacy textures may also live in `Textures/Index8/` or `Textures/Compressed/`.
 //! - STA64 native: static glTF/GLB models with PNG/JPEG material images.
 //!
 //! Lookup by bare name searches the known folders. A file in a higher-priority
@@ -72,7 +73,14 @@ impl ModelFormat {
     }
 }
 
-const TEXTURE_DIRS: [&str; 2] = ["textures", "textures/rgb"];
+// Static A2FORGBTextures documentation names these folders. Within one VFS layer,
+// find_best uses this order only when texture formats tie.
+const TEXTURE_DIRS: [&str; 4] = [
+    "textures",
+    "textures/rgb",
+    "textures/index8",
+    "textures/compressed",
+];
 const MODEL_DIRS: [&str; 1] = ["sod"];
 
 /// Strip a file extension a reference carries; SODs and ODFs name textures by stem.

@@ -19,6 +19,11 @@ pub struct Capabilities {
     /// Stationary producers may set a launch rally; mobile builders may not.
     pub rally: bool,
     pub mine: bool,
+    /// A pod colony ship the sim takes `Order::Colonize` for. The stock command
+    /// (`colonize.odf`) names `colony_ship` as its source: the ship definition's
+    /// `colony_ship` flag, plus the sim's own pod-ship rule (Borg beam ships are refused).
+    /// Evidence: read from data (the game's command and ship definitions).
+    pub colonize: bool,
     /// Same supported special kind at the same sim slot on every unit.
     pub specials: Vec<(u8, SpecialKind)>,
 }
@@ -62,6 +67,7 @@ fn one(db: &ContentDb, u: &UnitView) -> Capabilities {
         rally: EntityKind::producer_def(def) && def.movement.max_speed == Fixed::ZERO
             && !def.build.list.is_empty() && !u.flags.contains(UnitFlags::BUILDING),
         mine: mobile && def.mines(),
+        colonize: mobile && def.raw.bool("colony_ship").unwrap_or(false) && sta_sim::colony::is_pod_ship(db, def),
         specials,
     }
 }
@@ -87,6 +93,8 @@ pub fn shared(feed: &HudFeed) -> Capabilities {
         common.rally &= next.rally;
         // Mine shows when any selected unit can mine; the others simply do not get the order (see `miners`).
         common.mine |= next.mine;
+        // Likewise: only the colony ships of a mixed selection take a Colonize order (see `colony_ships`).
+        common.colonize |= next.colonize;
         common.specials.retain(|s| next.specials.contains(s));
     }
     common
@@ -96,6 +104,12 @@ pub fn shared(feed: &HudFeed) -> Capabilities {
 pub fn miners(feed: &HudFeed, ids: &[EntityId]) -> Vec<EntityId> {
     let Some(db) = feed.content.as_deref() else { return Vec::new() };
     ids.iter().copied().filter(|id| feed.view.unit(*id).is_some_and(|u| one(db, u).mine)).collect()
+}
+
+/// The members of `ids` that can take a Colonize order (the rest of a mixed selection do not receive it).
+pub fn colony_ships(feed: &HudFeed, ids: &[EntityId]) -> Vec<EntityId> {
+    let Some(db) = feed.content.as_deref() else { return Vec::new() };
+    ids.iter().copied().filter(|id| feed.view.unit(*id).is_some_and(|u| one(db, u).colonize)).collect()
 }
 
 #[cfg(test)]

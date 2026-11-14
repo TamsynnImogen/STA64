@@ -59,6 +59,7 @@ mod a2;
 mod entity;
 mod edit_feedback;
 pub(crate) mod set_relation;
+pub(crate) mod ai_switch;
 mod entity_action;
 mod entity_ref;
 mod camera_intent;
@@ -243,9 +244,9 @@ pub(crate) struct Ctx {
     /// (LUA-18): the engine does nothing, so these are not `unsupported`; kept so a typo
     /// or a partial map fill stays visible in readiness and playthrough output.
     pub absent_paths: BTreeMap<String, u32>,
-    /// AIP loads the script asked for, in call order; the host takes them
-    /// ([`crate::MissionRuntime::take_aip_requests`]).
-    pub loaded_aips: Vec<(PlayerId, String)>,
+    /// What the script asked of the AI (plan loads and the enable switches), in call order; the
+    /// host takes them ([`crate::MissionRuntime::take_ai_requests`]).
+    pub ai_requests: Vec<sta_ai::AiRequest>,
     /// The script's pending mission end (`SucceedMission` / `FailMission`).
     pub mission_end: Option<MissionEnd>,
     /// Latched once the end has happened.
@@ -255,7 +256,7 @@ pub(crate) struct Ctx {
     pub seen: BTreeSet<EntityId>,
     /// Which answers may rest on a gap ([`taint`]).
     pub taint: taint::Taint,
-    pub aips_taken: usize,
+    pub ai_requests_taken: usize,
     pub playback: Playback,
     /// The view tick of the last `Hit` each object took (`A2.UnderAttack`).
     pub last_hit: BTreeMap<EntityId, u64>,
@@ -314,12 +315,12 @@ impl Ctx {
             log: Vec::new(),
             unsupported: BTreeMap::new(),
             absent_paths: BTreeMap::new(),
-            loaded_aips: Vec::new(),
+            ai_requests: Vec::new(),
             mission_end: None,
             ended: None,
             seen,
             taint: taint::Taint::default(),
-            aips_taken: 0,
+            ai_requests_taken: 0,
             playback: Playback::default(),
             last_hit: BTreeMap::new(),
             last_fired: BTreeMap::new(),

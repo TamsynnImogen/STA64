@@ -592,8 +592,10 @@ Raising and counted (no seam): `Colonize
 Special_Attack SetCommandMoveAutonomyLow PointAt SetCrew SetRace
 GetMainEnemyBaseLocation AttackMainEnemyBase GetAllyStationAttacks`.
 `AI_Team_Load_AIP` is accepted like `Player:loadAIP`: the request is queued
-and the host gives it to the seat's AI (`MissionRuntime::take_aip_requests`,
-`sta_ai::MissionAiHub`; AI-06). Each reason is in `unsupported()` as `A2.<Name>: <why>`.
+and the host gives it to the seat's AI (`MissionRuntime::take_ai_requests`,
+`sta_ai::MissionAiHub`; AI-06), and so are the AI switches `DisableAllAITeams`, `EnableAllAITeams`,
+`EnableTeam`, `DisableTeam`, `SetIsAITeam` and `ResetStrategyCycle` (LUA-20, `api/ai_switch.rs`):
+not counted as unsupported, no taint. Each reason is in `unsupported()` as `A2.<Name>: <why>`.
 
 
 ## Object creation, searches and flags (step 2)

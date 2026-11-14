@@ -38,7 +38,7 @@
 //! The non-human seats of the mission get a [`sta_ai::MissionAiHub`] controller: passive (no
 //! building, no waves) until the script loads a plan with `Player:loadAIP` / `AI_Team_Load_AIP`.
 //! [`MissionHandle`]'s controller runs the script, hands the loads it took
-//! (`MissionRuntime::take_aip_requests`) to the hub, then thinks the seats, in seat order, over
+//! (`MissionRuntime::take_ai_requests`, which now also carries the AI enable/disable switches, LUA-20) to the hub, then thinks the seats, in seat order, over
 //! the same view and events; their commands join the script's in the same `out` vector and reach
 //! the router like a player's, numbered from `0x4000_0000` so they never collide with the
 //! script's. A load therefore applies on the tick the script asks for it. The files are the
@@ -221,10 +221,10 @@ impl Controller for Shared {
         let mut rt = self.rt.lock().unwrap_or_else(PoisonError::into_inner);
         rt.think(view, events, out);
         // The script ran first, so a plan it loads this tick reaches its seat this tick.
-        let loads = rt.take_aip_requests();
+        let loads = rt.take_ai_requests();
         drop(rt);
         let mut seats = self.seats.lock().unwrap_or_else(PoisonError::into_inner);
-        seats.hub.submit(loads);
+        seats.hub.submit_requests(loads);
         for ai in &mut seats.ai {
             ai.think(view, events, out);
         }

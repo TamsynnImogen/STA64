@@ -111,7 +111,7 @@ fn a_loaded_file_overlays_and_a_list_replaces_only_when_present() {
         loaded: false,
     };
     let view = world(&s).view();
-    lock(&hub.shared).seats.push(P0);
+    lock(&hub.shared).seats.entry(P0).or_default().flags = Some(Flags { ai: true, enabled: false });
     hub.submit([(P0, "build.aip".into()), (P0, "aggressive.aip".into())]);
     seat.think(&view, &[], &mut Vec::new());
     let p = seat.params().clone();
@@ -188,4 +188,156 @@ fn a_max_below_the_min_does_not_panic_and_seq_stays_clear() {
         }
     }
     assert!(!out.is_empty() && out.iter().all(|c| c.seq >= AI_SEQ_BASE));
+}
+
+// ---- LUA-20: the AI switches ----
+
+const P1: PlayerId = PlayerId(1);
+
+/// Ticks and commands of seat 0 over `ticks`, applying `requests` (tick, request) before the
+/// seat thinks on that tick, as the hosts do (script first, then the seats).
+fn run_requests(requests: &[(u64, AiRequest)], ticks: u64) -> (Vec<(u64, Command)>, u64) {
+    let s = setup();
+    let hub = MissionAiHub::new(library());
+    let mut ai = hub.controller(&s, P0);
+    let mut sim = world(&s);
+    let (mut events, mut sent) = (Vec::<SimEvent>::new(), Vec::new());
+    for t in 0..ticks {
+        hub.submit_requests(requests.iter().filter(|(rt, _)| *rt == t).map(|(_, r)| r.clone()));
+        let view = sim.view();
+        let mut out = Vec::new();
+        ai.think(&view, &events, &mut out);
+        sent.extend(out.iter().map(|c| (t, c.clone())));
+        events = sim.step(&out).events;
+    }
+    (sent, sim.digest())
+}
+
+fn load(file: &str) -> AiRequest {
+    AiRequest::Load(P0, file.to_owned())
+}
+
+#[test]
+fn flags_start_ai_and_disabled_and_a_load_enables() {
+    let s = setup();
+    let hub = MissionAiHub::new(library());
+    let _a = hub.controller(&s, P0);
+    let _b = hub.controller(&s, P1);
+    assert!([P0, P1].iter().all(|&p| hub.is_ai(p) && !hub.is_enabled(p)));
+    hub.submit_requests([load("build.aip")]);
+    assert!(hub.is_enabled(P0) && !hub.is_enabled(P1), "the load enabled its own seat only");
+    hub.submit_requests([AiRequest::Disable(P0), AiRequest::Enable(P1)]);
+    assert!(!hub.is_enabled(P0) && hub.is_enabled(P1), "per seat; Enable needs no plan");
+    hub.submit_requests([AiRequest::EnableAll]);
+    assert!(hub.is_enabled(P0) && hub.is_enabled(P1));
+    hub.submit_requests([AiRequest::DisableAll]);
+    assert!(!hub.is_enabled(P0) && !hub.is_enabled(P1));
+    assert!(hub.unresolved().is_empty());
+}
+
+#[test]
+fn the_human_seat_is_never_touched_by_a_switch() {
+    let s = setup();
+    let hub = MissionAiHub::new(library());
+    let _ai = hub.controller(&s, P0); // seat 1 is the human's: no controller
+    hub.submit_requests([AiRequest::Enable(P1), AiRequest::EnableAll, AiRequest::SetAi(P1, true), AiRequest::Replan]);
+    assert!(!hub.is_ai(P1) && !hub.is_enabled(P1), "no AI flag appears on the human seat");
+    assert!(hub.is_enabled(P0), "EnableAll reached the computer seat");
+    hub.submit_requests([AiRequest::Disable(P1), AiRequest::DisableAll, AiRequest::SetAi(P1, false)]);
+    assert!(!hub.is_ai(P1) && !hub.is_enabled(P1));
+    assert!(hub.unresolved().is_empty(), "switches on it are the original's no-ops, not unresolved loads");
+    // A plan load for it is still reported, as before.
+    hub.submit_requests([AiRequest::Load(P1, "build.aip".into())]);
+    assert_eq!(hub.unresolved().len(), 1);
+}
+
+#[test]
+fn set_ai_on_a_computer_seat_is_forced_back() {
+    let s = setup();
+    let hub = MissionAiHub::new(library());
+    let _ai = hub.controller(&s, P0);
+    hub.submit_requests([load("build.aip"), AiRequest::SetAi(P0, false)]);
+    assert!(hub.is_ai(P0) && hub.is_enabled(P0));
+    let plain = run_requests(&[(0, load("build.aip"))], 600);
+    let forced = run_requests(&[(0, load("build.aip")), (0, AiRequest::SetAi(P0, false)), (300, AiRequest::SetAi(P0, true))], 600);
+    assert!(!plain.0.is_empty());
+    assert_eq!(format!("{:?}", plain.0), format!("{:?}", forced.0));
+    assert_eq!(plain.1, forced.1);
+}
+
+#[test]
+fn load_then_disable_idles_the_seat_and_disable_then_load_does_not() {
+    let (a, _) = run_requests(&[(0, load("build.aip")), (0, AiRequest::Disable(P0))], 900);
+    assert!(a.is_empty(), "loaded but disabled: no building, no waves: {a:?}");
+    let (b, _) = run_requests(&[(0, AiRequest::Disable(P0)), (0, load("build.aip"))], 900);
+    assert!(!b.is_empty(), "a load re-enables, so the later load wins");
+    // The same through DisableAll, and a later Enable brings the plan back.
+    let (c, _) = run_requests(&[(0, AiRequest::DisableAll), (0, load("build.aip")), (0, AiRequest::DisableAll), (450, AiRequest::EnableAll)], 900);
+    assert!(!c.is_empty() && c.iter().all(|(t, _)| *t >= 450), "idle until the Enable at 450: {:?}", c.first());
+}
+
+#[test]
+fn a_load_before_any_switch_keeps_its_old_behaviour() {
+    let a = run(&[(0, "build.aip")], 600);
+    let (b, digest) = run_requests(&[(0, load("build.aip"))], 600);
+    assert_eq!(format!("{:?}", a.0), format!("{:?}", b.iter().map(|(_, c)| c.clone()).collect::<Vec<_>>()));
+    assert_eq!(a.1, digest);
+}
+
+#[test]
+fn replan_only_moves_the_next_plan_earlier() {
+    // Loop tick 20 is not a period tick (the world's own first step puts the view one ahead, so
+    // the 15th-tick plans are on loop ticks 14, 29, ...): the load at 20 plans at 29 without a
+    // reset and at 20 with one.
+    let (slow, _) = run_requests(&[(20, load("build.aip"))], 400);
+    let (fast, _) = run_requests(&[(20, load("build.aip")), (20, AiRequest::Replan)], 400);
+    assert_eq!(slow.first().map(|(t, _)| *t), Some(29));
+    assert_eq!(fast.first().map(|(t, _)| *t), Some(20));
+    // A reset with nothing to plan changes nothing, and it is used up by one think.
+    let (none, _) = run_requests(&[(0, AiRequest::Replan)], 100);
+    assert!(none.is_empty());
+    let (once, _) = run_requests(&[(20, load("build.aip")), (20, AiRequest::Replan)], 21);
+    let (again, _) = run_requests(&[(20, load("build.aip")), (20, AiRequest::Replan)], 29);
+    assert_eq!(once.len(), again.len(), "no further off-period plan after the reset's own");
+}
+
+#[test]
+fn the_same_requests_give_the_same_commands_and_game() {
+    let reqs = [
+        (0, AiRequest::DisableAll),
+        (10, load("build.aip")),
+        (40, AiRequest::DisableAll),
+        (200, AiRequest::EnableAll),
+        (201, AiRequest::Replan),
+        (300, load("aggressive.aip")),
+        (500, AiRequest::Disable(P0)),
+        (700, AiRequest::Enable(P0)),
+    ];
+    let a = run_requests(&reqs, 1500);
+    let b = run_requests(&reqs, 1500);
+    assert!(!a.0.is_empty());
+    assert_eq!(format!("{:?}", a.0), format!("{:?}", b.0));
+    assert_eq!(a.1, b.1);
+}
+
+#[test]
+fn requests_apply_when_submitted_and_the_seat_sees_them_on_its_next_think() {
+    // The hosts submit after the script thought and before the seats think. A request made
+    // after the seat's think of a tick is seen from its next think.
+    let s = setup();
+    let hub = MissionAiHub::new(library());
+    let mut ai = hub.controller(&s, P0);
+    let sim = world(&s);
+    let mut view = sim.view();
+    std::sync::Arc::make_mut(&mut view).tick = 15;
+    hub.submit_requests([load("build.aip")]);
+    let mut out = Vec::new();
+    ai.think(&view, &[], &mut out);
+    assert!(!out.is_empty(), "submitted before the think: acts in that think");
+    hub.submit_requests([AiRequest::DisableAll]);
+    assert!(!hub.is_enabled(P0), "applied at the submit");
+    std::sync::Arc::make_mut(&mut view).tick = 30;
+    let mut out = Vec::new();
+    ai.think(&view, &[], &mut out);
+    assert!(out.is_empty(), "submitted after the think: seen by the next one");
 }

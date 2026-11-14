@@ -26,7 +26,7 @@ recorded" instead of supplying one.
 - **Numbers** are four digits, in order of decision date, never reused. A new
   ADR takes the next free number; check open pull requests for one already
   taken.
-- **Decision ids inside an ADR** (D1 to D13, N1 to N6, T1 to T8) are stable
+- **Decision ids inside an ADR** (D1 to D13, N1 to N6, T1 to T8, H1 to H7) are stable
   and are what issues, pull requests and code comments cite (`Implements D7`).
 - **Status** is one of: proposed, accepted, superseded by ADR NNNN. A proposed
   ADR binds nothing. Who has to approve is stated in the ADR; decisions on

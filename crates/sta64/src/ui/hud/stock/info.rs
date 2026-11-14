@@ -10,7 +10,7 @@ use super::super::panels::GroupTile;
 use super::layout::{StockLayout, info_variant};
 use crate::ui::gui_sprites::{GuiImage, GuiImageSampling};
 use crate::ui::notices::Tooltip;
-use crate::ui::sprite_font::{ScalableText, SpriteText, sprite_text};
+use crate::ui::sprite_font::{SpriteText, SpriteTextStyle, sprite_text_styled};
 use crate::ui::theme::{Theme, UiButton, WidgetState};
 
 #[path = "identity.rs"]
@@ -57,7 +57,7 @@ fn text(commands: &mut Commands, root: Entity, r: R, value: String, color: Color
     // SpriteFontPlugin replaces the SpriteText entity's Node while resolving glyphs.
     // Keep authored placement on a separate parent that it never rewrites.
     let wrapper = commands.spawn((node(r), Pickable::IGNORE)).id();
-    let mut e = commands.spawn((Node::default(), sprite_text(value, size.max(18.0), color), ScalableText));
+    let mut e = commands.spawn(sprite_text_styled(value, size.max(18.0), color, SpriteTextStyle::default().stock_label()));
     if let Some(kind) = kind {
         e.insert(kind);
     }
@@ -612,7 +612,8 @@ mod tests {
             .single(&world)
             .unwrap();
         assert_eq!(world.get::<SpriteText>(inner).unwrap().size, 18.0);
-        assert!(world.get::<ScalableText>(inner).is_some());
+        // UI-16 / ADR 0007 T1: the mod's sprite font, never the scalable TTF override.
+        assert!(world.get::<crate::ui::sprite_font::ScalableText>(inner).is_none());
         assert!(world.get::<Node>(inner).is_some());
         let wrapper = world.get::<ChildOf>(inner).unwrap().parent();
         assert_eq!(world.get::<ChildOf>(wrapper).unwrap().parent(), root);

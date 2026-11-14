@@ -11,7 +11,7 @@ use mlua::{Lua, MultiValue, ObjectLike, Table, Value};
 use sta_sim::present::Arg;
 
 use super::native_camera::{arity, boolean, number, submit, text};
-use crate::api::Shared;
+use crate::api::{Shared, ai_switch};
 
 /// One argument by its signature letter: `n` float, `b` bool, `s` string,
 /// `i` signed 32-bit integer.
@@ -46,6 +46,45 @@ fn call(lua: &Lua, ctx: &Shared, table: &Table, name: &'static str, sig: &'stati
     )
 }
 
+/// The AI switches (LUA-20): validated by the DLL's signature and retained as a presentation call
+/// like the others here, and queued as one request each for the host's AI hub
+/// (`api::ai_switch`; unlike the calls above they are not counted as unsupported).
+fn ai_switches(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()> {
+    type Effect = fn(&mut crate::api::Ctx, &[Arg]);
+    let switches: [(&'static str, &'static str, Effect); 6] = [
+        ("DisableAllAITeams", "", |c, _| ai_switch::enable_all(c, false)),
+        ("EnableAllAITeams", "", |c, _| ai_switch::enable_all(c, true)),
+        ("EnableTeam", "i", |c, a| ai_switch::enable(c, team_arg(c, a), true)),
+        ("DisableTeam", "i", |c, a| ai_switch::enable(c, team_arg(c, a), false)),
+        ("SetIsAITeam", "ib", |c, a| {
+            let team = team_arg(c, a);
+            ai_switch::set_is_ai(c, "A2.SetIsAITeam", team, matches!(a.get(1), Some(Arg::Bool(true))));
+        }),
+        ("ResetStrategyCycle", "", |c, _| ai_switch::replan(c)),
+    ];
+    for (name, sig, effect) in switches {
+        let c = ctx.clone();
+        table.set(
+            name,
+            lua.create_function(move |_, args: MultiValue| {
+                arity(name, &args, sig.len())?;
+                let args = sig.chars().zip(args.iter()).map(|(k, v)| arg(name, k, v)).collect::<mlua::Result<Vec<_>>>()?;
+                submit(&c, name, args.clone())?;
+                effect(&mut c.borrow_mut(), &args);
+                Ok(())
+            })?,
+        )?;
+    }
+    Ok(())
+}
+
+fn team_arg(c: &crate::api::Ctx, a: &[Arg]) -> Option<sta_core::PlayerId> {
+    match a.first() {
+        Some(Arg::Int(n)) => ai_switch::seat(c, *n),
+        _ => None,
+    }
+}
+
 pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()> {
     call(lua, ctx, table, "MuteSounds", "n", None)?;
     call(lua, ctx, table, "FadeRemove", "", None)?;
@@ -55,8 +94,7 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
     for name in ["ObstacleAvoidance", "PathPlanning", "CollisionPrevention", "FerengiCanSteal", "FerengiCanTrade"] {
         call(lua, ctx, table, name, "b", Some("no global switch in the sim seam"))?;
     }
-    call(lua, ctx, table, "DisableAllAITeams", "", Some("no AI enable seam in the sim"))?;
-    call(lua, ctx, table, "EnableAllAITeams", "", Some("no AI enable seam in the sim"))?;
+    ai_switches(lua, ctx, table)?;
     for name in ["SetDilithium", "AddDilithium", "SetMetal", "AddMetal"] {
         call(lua, ctx, table, name, "ii", Some("no resource edit for A2 team numbering in the mission API yet"))?;
     }
@@ -67,12 +105,10 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
         ("DisableChat", "b", "chat is not a sim feature"),
         ("DisableSave", "", "no save lock in the mission API"),
         ("EnableSave", "", "no save lock in the mission API"),
-        ("EnableTeam", "i", "no AI enable seam in the sim"),
         ("EnableWormholeTravel", "ib", "no wormhole travel switch in the sim seam"),
         ("AllowMultipleSpecialWeaponFire", "ib", "no special-weapon switch in the sim seam"),
         ("ShowTradesTo", "i", "no trade display in the mission API"),
         ("SetTeamDistressCallRange", "in", "no AI distress range in the sim seam"),
-        ("ResetStrategyCycle", "", "no AI strategy cycle in the sim"),
         ("ClearShroud", "", "no shroud edit in the sim seam"),
         ("SetLatinum", "ii", "no resource edit for A2 team numbering in the mission API yet"),
         ("AddLatinum", "ii", "no resource edit for A2 team numbering in the mission API yet"),

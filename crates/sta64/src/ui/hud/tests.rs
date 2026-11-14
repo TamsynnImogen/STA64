@@ -302,6 +302,29 @@ fn the_radar_and_the_notices_are_hosted_at_their_places() {
     assert_eq!(count::<HudRoot>(&mut app), 1);
 }
 
+/// UI-37: with a stock layout the radar root sits at the minimap panel, which on a 21:9
+/// window is the centred HUD's panel, not the window's left edge.
+#[test]
+fn the_stock_radar_is_hosted_at_the_centred_minimap_panel() {
+    let (cfg, _) = sta_content::GuiCfg::parse("g.cfg", "screenWidth = 1600\nscreenHeight = 1200\nminimapPanelArea = 0 800 400 400\n");
+    let gui = cfg.layout_auto();
+    let mut app = app(content(None), &[]);
+    let layout = stock::layout::StockLayout::for_aspect(&gui, 21.0 / 9.0);
+    app.insert_resource(crate::ui::profile::UiProfile::Armada2);
+    {
+        let mut config = app.world_mut().resource_mut::<HudConfig>();
+        config.gui = Some(gui);
+        config.aspect = 21.0 / 9.0;
+    }
+    app.update();
+    app.update();
+    let want = layout.panel("minimap").unwrap();
+    assert!(want.x > 0.0);
+    let radar = one::<RadarRoot>(&mut app);
+    let n = node(&mut app, radar);
+    assert_eq!((n.left, n.top), (Val::Px(want.x), Val::Px(want.y)));
+}
+
 #[test]
 fn a_cfg_resizes_the_panels() {
     let (cfg, _) = sta_content::GuiCfg::parse(
@@ -467,4 +490,20 @@ fn theme_switch_rebuilds_hud_chrome_but_preserves_selection_and_command_page() {
     let strip = one::<ResourceStrip>(&mut app);
     assert_eq!(app.world().get::<BorderColor>(strip).unwrap().left, Theme::default().accent2);
     assert_eq!(app.world().resource::<HudState>().page, Page::Build);
+}
+
+/// UI-16, ADR 0007 T1: the Refit grid's cell captions use the mod's sprite font.
+#[test]
+fn grid_cell_captions_are_sprite_text() {
+    use crate::ui::gui_sprites::GuiButtonLabel;
+    use crate::ui::sprite_font::{ScalableText, SpriteText};
+    let mut app = app(content(None), &[1, 3]);
+    let world = app.world_mut();
+    let labels: Vec<Entity> = world.query_filtered::<Entity, With<GuiButtonLabel>>().iter(world).collect();
+    assert!(!labels.is_empty());
+    for l in labels {
+        assert!(world.get::<SpriteText>(l).is_some());
+        assert!(world.get::<Text>(l).is_none());
+    }
+    assert!(world.query::<&ScalableText>().iter(world).next().is_none());
 }
