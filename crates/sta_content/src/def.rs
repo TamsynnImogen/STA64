@@ -367,6 +367,8 @@ pub struct UnitDef {
     pub casualty: CasualtyDef,
     /// Authored repair metadata only; no profile or runtime policy is implied.
     pub repair: RepairDef,
+    /// Raw composed SOD transform of the authored repair node, when readable.
+    pub repair_attachment: Option<crate::repair_geometry::RepairAttachment>,
     /// Sensor range, units.
     pub sensor: Fixed,
     pub hardpoints: Vec<Hardpoint>,
@@ -482,6 +484,7 @@ impl UnitDef {
             system_hit_points: [Fixed::ZERO; 5],
             casualty: CasualtyDef::default(),
             repair: RepairDef::default(),
+            repair_attachment: None,
             sensor: Fixed::ZERO,
             hardpoints: Vec::new(),
             build: BuildDef::default(),
