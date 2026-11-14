@@ -910,6 +910,10 @@ fn a_raised_ai_switch_is_a_gap_call_but_blocks_no_end_by_its_name() {
     // switches is a world effect, so no later read is tainted; and a team number taints no handle
     // (these three take a team first).
     for call in ["pcall(A2.DisableAllAITeams, 1)", "pcall(A2.EnableTeam, 'x')", "pcall(A2.DisableTeam, 3, 3)", "pcall(A2.SetIsAITeam, 3, 1)", "pcall(A2.ResetStrategyCycle, true)"] {
+        // The call must really raise: the script ends only through the `not ok` branch, and a
+        // call that returned normally leaves the mission running.
+        let raised = format!("local ok, err = {call}\nif not ok and string.find(tostring(err), 'requires', 1, true) and A2.IsAlive(3) then A2.SucceedMission(0, 0) end");
+        assert_eq!(end_state(&raised), MissionEndState::Ended { won: true }, "{call} raises, and a raise blocks no end");
         let s = format!("{call}\nif A2.IsAlive(3) then A2.SucceedMission(0, 0) end");
         assert_eq!(end_state(&s), MissionEndState::Ended { won: true }, "{call}");
     }

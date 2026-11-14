@@ -99,7 +99,7 @@ fn ai_switches_apply_on_the_tick_the_script_throws_them() {
     let mut r = CampaignRunner::new(book);
     let a = r.start(&host, "federation", 0, 1).unwrap();
     let p1 = PlayerId(1);
-    assert!(a.ai_hub().is_ai(p1) && !a.ai_hub().is_enabled(p1), "a computer seat starts ai, disabled");
+    assert!(a.ai_is_ai(p1) && !a.ai_is_enabled(p1), "a computer seat starts ai, disabled");
     let fired = |a: &ActiveMission| a.runtime().eval::<i64>("return FIRED").unwrap();
     let mut seen = Vec::new();
     for _ in 0..(10 * TICK_HZ_U64) {
@@ -108,14 +108,14 @@ fn ai_switches_apply_on_the_tick_the_script_throws_them() {
         let after = fired(a);
         if after != before {
             // The effect of this tick's calls is already in the hub when tick() returns.
-            seen.push((after, a.ai_hub().is_enabled(p1)));
+            seen.push((after, a.ai_is_enabled(p1)));
         }
         if a.outcome().is_some() {
             break;
         }
     }
     assert_eq!(seen, [(1, false), (2, true), (3, false)], "load+disable, then enable, then the last of its calls wins");
-    assert!(a.ai_hub().unresolved().is_empty(), "the human seat's EnableTeam(0) is the original's no-op");
+    assert!(a.unresolved_aips().is_empty(), "the human seat's EnableTeam(0) is the original's no-op");
     assert!(a.runtime().unsupported().is_empty(), "{:?}", a.runtime().unsupported());
 }
 

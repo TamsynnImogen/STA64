@@ -47,7 +47,7 @@
 //! install's `AI/AIPs/*.aip` ([`MissionHost::aip_library`]); a plan load that names none, or
 //! names a seat with no AI, changes nothing and is listed by [`MissionHandle::unresolved_aips`]. A
 //! switch never is: on a seat with no AI (the human's) it is the original's no-op, and a number
-//! that names no seat is dropped by the binding.
+//! that names no seat is dropped by the Armada II binding (the Armada I binding raises).
 //!
 //! **Not replay-safe: the plan and the flags.** The plan and the per-seat `ai` / `enabled` flags
 //! (LUA-20) reach the seat through the hub, outside the command stream, and are not in a snapshot:
