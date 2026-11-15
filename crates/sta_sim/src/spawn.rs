@@ -70,6 +70,10 @@ impl Sim {
             sim.confinement.map_loaded(sim.units.get_mut(id).expect("spawned"));
             if let Some(label) = &o.label {
                 sim.labels.insert(id, label.clone());
+            } else if s.content.unit(key).is_some_and(|d| d.class.0.eq_ignore_ascii_case("wormhole_obj")) {
+                // A map gate with no label still counts as one the map made (wormhole travel counts
+                // the map's gates by this table): an empty label.
+                sim.labels.insert(id, String::new());
             }
         }
         sim.refresh_seat_rules();

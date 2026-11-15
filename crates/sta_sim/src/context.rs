@@ -123,7 +123,7 @@ pub fn context_order(db: Option<&ContentDb>, view: &WorldView, me: PlayerId, own
         return Some(Order::Rally { builders: own.to_vec(), at: Target::Entity(target) });
     }
     if let Some(db) = db
-        && db.unit(t.def).is_some_and(|d| d.class.0 == "wormhole_obj")
+        && db.unit(t.def).is_some_and(|d| d.class.0.eq_ignore_ascii_case("wormhole_obj"))
     {
         let movers: Vec<EntityId> = own
             .iter()

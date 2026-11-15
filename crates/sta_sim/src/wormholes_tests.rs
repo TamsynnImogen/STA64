@@ -1,4 +1,5 @@
-//! LUA-17: a craft ordered onto a gate comes out of its partner (Armada I pairing).
+//! LUA-17: a craft ordered onto a gate comes out of its partner (Armada I pairing); the Armada II
+//! family's interim step travels on maps with exactly two gates.
 
 use crate::command::{Command, CommandKind, Order};
 use crate::setup::{Control, GameOptions, GameSetup, PlayerSetup};
@@ -6,11 +7,16 @@ use crate::{EntityId, Fixed, PlayerId, Sim, TeamId, Vec3, WorldSource};
 use sta_content::{ContentDb, UnitDef};
 use std::sync::Arc;
 
+/// `a1`: Armada I pairing; otherwise the Armada II family (the Fo4 profile).
 fn db(a1: bool) -> Arc<ContentDb> {
+    db_of(if a1 { sta_content::Profile::Native } else { sta_content::Profile::Fo4 }, a1)
+}
+
+fn db_of(profile: sta_content::Profile, a1: bool) -> Arc<ContentDb> {
     let fake = sta_content::fake::db();
     let mut features = fake.features().clone();
     features.a1_compat = a1;
-    let mut b = ContentDb::builder().profile(fake.profile()).features(features);
+    let mut b = ContentDb::builder().profile(profile).features(features);
     for w in fake.weapons().cloned() {
         b = b.weapon(w);
     }
@@ -106,7 +112,8 @@ fn a_craft_ordered_onto_a_gate_in_the_armada_ii_family_emerges_at_the_partner_ce
     let (mut sim, a, b) = world2(&d);
     run(&mut sim, a, b);
     let (x, z) = pos(&sim, a);
-    assert!((x - 5000.0).abs() < 1.0 && (z - 5000.0).abs() < 1.0, "a at ({x}, {z})");
+    assert!((x - 5000.0).abs() <= 61.0 && (z - 5000.0).abs() <= 61.0, "a at ({x}, {z})");
+    assert!((x - 5000.0).abs() + (z - 5000.0).abs() > 1.0, "never on the exact centre: ({x}, {z})");
     let u = sim.units.get(a).unwrap();
     assert!(u.target.is_none() && u.speed == Fixed::ZERO, "order consumed");
     assert!(pos(&sim, b).0 > 1500.0, "a craft only passing the gate does not travel");
@@ -121,14 +128,14 @@ fn an_emerged_craft_stays_until_ordered_onto_the_gate_again() {
         sim.step(&[]);
     }
     let (x, z) = pos(&sim, a);
-    assert!((x - 5000.0).abs() < 1.0 && (z - 5000.0).abs() < 1.0, "no travel back by itself: ({x}, {z})");
+    assert!((x - 5000.0).abs() <= 61.0 && (z - 5000.0).abs() <= 61.0, "no travel back by itself: ({x}, {z})");
     let back = Command { player: PlayerId(1), seq: 9, kind: CommandKind::Order(Order::Move { units: vec![a], to: v(5000, 5000), queue: false }) };
     sim.step(&[back]);
     for _ in 0..30 * 5 {
         sim.step(&[]);
     }
     let (x, z) = pos(&sim, a);
-    assert!((x - 1000.0).abs() < 1.0 && z.abs() < 1.0, "an explicit order sends it back: ({x}, {z})");
+    assert!((x - 1000.0).abs() <= 61.0 && z.abs() <= 61.0, "an explicit order sends it back: ({x}, {z})");
 }
 
 #[test]
@@ -179,7 +186,7 @@ fn a_script_added_third_gate_neither_joins_nor_breaks_the_pair() {
     // The map's pair still works...
     let (mut sim, a, _) = world_of(&d, &[(1000, 0), (5000, 5000)], &[(-3000, 0)]);
     let (x, z) = send_a_onto(&mut sim, a, 1000, 0);
-    assert!((x - 5000.0).abs() < 1.0 && (z - 5000.0).abs() < 1.0, "the pair works: ({x}, {z})");
+    assert!((x - 5000.0).abs() <= 61.0 && (z - 5000.0).abs() <= 61.0, "the pair works: ({x}, {z})");
     // ...and the script's gate goes nowhere.
     let (mut sim, a, _) = world_of(&d, &[(1000, 0), (5000, 5000)], &[(-3000, 0)]);
     let (x, z) = send_a_onto(&mut sim, a, -3000, 0);
@@ -205,7 +212,7 @@ fn a_travelling_craft_is_pinned_in_the_whole_state_digest() {
     run(&mut sim, a, b);
     assert_eq!(sim.digest(), PINNED_TRAVEL_DIGEST, "{:#x}", sim.digest());
 }
-const PINNED_TRAVEL_DIGEST: u64 = 0x8422_6030_5bce_e23c;
+const PINNED_TRAVEL_DIGEST: u64 = 0x951b_5fd7_0836_057b;
 
 #[test]
 fn the_same_run_gives_the_same_digest() {
@@ -280,4 +287,54 @@ fn a_right_click_on_a_gate_moves_the_mobile_units_onto_its_centre() {
     assert_eq!(order, Some(Order::Move { units: vec![c], to: v(1000, 0), queue: false }));
     // Not a gate, not this rule.
     assert_eq!(crate::context::context_order(Some(&d), &view, PlayerId(1), &[c], c), None);
+}
+
+#[test]
+fn nothing_travels_under_the_native_profile() {
+    let d = db_of(sta_content::Profile::Native, false);
+    let (mut sim, a, _) = world_of(&d, &[(1000, 0), (5000, 5000)], &[]);
+    let (x, z) = send_a_onto(&mut sim, a, 1000, 0);
+    assert!((x - 1000.0).abs() < 200.0 && z.abs() < 200.0, "gates move nothing under Native: ({x}, {z})");
+}
+
+#[test]
+fn a_move_onto_an_emerged_craft_does_not_travel() {
+    // A scripted goto onto a unit is the same move onto its position.
+    let d = db(false);
+    let (mut sim, a, b) = world2(&d);
+    let (ax, az) = send_a_onto(&mut sim, a, 1000, 0);
+    assert!((ax - 5000.0).abs() <= 61.0, "a emerged: ({ax}, {az})");
+    let to = sim.units.get(a).unwrap().pos;
+    let go = Command { player: PlayerId(1), seq: 5, kind: CommandKind::Order(Order::Move { units: vec![b], to, queue: false }) };
+    sim.step(&[go]);
+    for _ in 0..30 * 90 {
+        sim.step(&[]);
+    }
+    let (bx, bz) = pos(&sim, b);
+    assert!((bx - 5000.0).abs() < 400.0 && (bz - 5000.0).abs() < 400.0, "b went to a and did not pass a gate: ({bx}, {bz})");
+}
+
+#[test]
+fn a_map_gate_without_a_label_still_counts_and_pairs() {
+    let d = db(false);
+    let mut map = sta_content::MapDef::empty();
+    let h = (Fixed::ONE, Fixed::ZERO);
+    for (x, z, label) in [(1000, 0, Some("G0".to_string())), (5000, 5000, None)] {
+        map.objects.push(sta_content::MapObject { odf: "fx_gate".into(), owner: None, pos: v(x, z), heading: h, label });
+    }
+    let seat = PlayerSetup { id: PlayerId(1), team: TeamId(1), race: "fx".into(), control: Control::Idle };
+    let mut sim = Sim::from_setup(&GameSetup { seed: 3, map: Arc::new(map), content: Arc::clone(&d), players: vec![seat], options: GameOptions::default() });
+    let a = sim.spawn_def(d.key("fx_cruiser").unwrap(), PlayerId(1), v(0, 0), h).unwrap();
+    let (x, z) = send_a_onto(&mut sim, a, 1000, 0);
+    assert!((x - 5000.0).abs() <= 61.0 && (z - 5000.0).abs() <= 61.0, "{x} {z}");
+}
+
+#[test]
+fn a_craft_is_never_set_down_outside_the_map() {
+    let d = db(false);
+    // The partner gate sits at the map's corner: the ring spots on its far side are outside.
+    let (mut sim, a, _) = world_of(&d, &[(1000, 0), (8190, 8190)], &[]);
+    let (x, z) = send_a_onto(&mut sim, a, 1000, 0);
+    assert!(x <= 8192.0 && z <= 8192.0, "inside the bounds: ({x}, {z})");
+    assert!((x - 8190.0).abs() <= 150.0 && (z - 8190.0).abs() <= 150.0, "next to the gate (the map edge may push it in): ({x}, {z})");
 }

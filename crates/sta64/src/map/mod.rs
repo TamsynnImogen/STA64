@@ -185,8 +185,8 @@ pub(crate) fn ghost_pick_radius(def: &sta_content::UnitDef) -> Option<f32> {
     if def.resource.is_some() {
         return Some(resource_pick_radius(r));
     }
-    // A map wormhole (a gate) can be hovered, inspected and selected; a right-click on it stays a
-    // plain move until the wormhole travel order exists (PR #763). Content loading fills `radius`
+    // A map wormhole (a gate) can be hovered, inspected and selected; a right-click on it is a move
+    // onto its centre (`sta_sim::context`), which the sim takes as a go-through where gates travel. Content loading fills `radius`
     // from the model, so a gate has this body today; one seen again after leaving sight is drawn by
     // the units view, which gives it no model radius, so this keeps its body.
     if def.class.0.eq_ignore_ascii_case("wormhole_obj") && r > 0.0 {
@@ -1112,7 +1112,7 @@ fn rebuild(
             commands.entity(entity).insert(SimEntity(id));
             // A resource (a moon) is neutral and never moves but is clicked for its info and
             // as a mining target.
-            if def.movement.max_speed > Fixed::ZERO || o.team > 0 || def.resource.is_some() || def.class.0 == "wormhole_obj" {
+            if def.movement.max_speed > Fixed::ZERO || o.team > 0 || def.resource.is_some() || def.class.0.eq_ignore_ascii_case("wormhole_obj") {
                 let radius = model
                     .bounds()
                     .map(|(lo, hi)| (Vec3::from(hi) - Vec3::from(lo)).length() * 0.5)

@@ -1,13 +1,18 @@
-//! Wormhole gates (`classLabel = "wormhole_obj"`): a craft sent into a gate comes out of
-//! its partner (LUA-17; Armada II and Fleet Operations since the stateless step, on two-gate maps).
+//! Wormhole gates (`classLabel = "wormhole_obj"`): a craft sent onto a gate comes out of its
+//! partner (LUA-17 for Armada I; the stateless interim step for the Armada II family).
 //!
 //! Rules (read from the Armada I and Armada II executables, static; not measured on the
 //! original):
-//! - **Partners (Armada II family).** Only when the map file placed exactly two gates (labelled
-//!   entities) are they a pair, in file order; with any other number nothing travels, and a
-//!   gate a script adds joins no pair, until LUA-33 reads the maps' partner pointers. Read from
-//!   the stock, Roots and mod maps' data: every pointer pair of a two-gate map is mutual (see the
-//!   LUA-24 travel PR); not measured in the original.
+//! - **Who has it.** Armada I (`a1_compat`): as before, unchanged. The Armada II family (the Fo4,
+//!   Fo3 and Sta2Classic profiles: stock Armada II, STA2 Classic, Fleet Operations 3.x, and 4.0
+//!   with Roots): the rule below. Native and any other profile: no gate moves anything, as before.
+//! - **Partners (Armada II family).** Only when the map file placed exactly two gates, counted by
+//!   class (`wormhole_obj`, any case) among the entities the map made, are they a pair, in file
+//!   order; with any other number nothing travels, and a gate a script adds joins no pair, until
+//!   LUA-33 reads the maps' partner pointers (file order is not the partner pointers on every
+//!   map). A destroyed or removed map gate ends travel for the rest of the game (the count is
+//!   taken every tick). Grade: pointers read from data; not measured in the original.
+//!   A random map places its gates in linked pairs: one pair travels, several do not.
 //! - **Partners (Armada I).** Armada I pairs gates by creation order: each new gate pairs with the
 //!   one left unpaired, so the 1st pairs with the 2nd, the 3rd with the 4th. Here the
 //!   live gates, in id (creation) order, pair in twos; this matches the original until a
@@ -16,21 +21,25 @@
 //!   [`ON_GATE`] of the centre and no further legs queued: a move ordered onto the gate
 //!   entity) enters it; craft passing by, or on an earlier leg of a longer course, do not.
 //!   Any team, any craft. Asked before routing and avoidance replace the target with a detour.
+//!   Only an unqueued last leg travels: queued legs, patrol, escort and follow orders aimed near
+//!   a gate are not carried through, and nothing continues on the far side.
 //! - **Transport.** Once it is within its `tooCloseToTurn` plus [`GATE_REACH`] of the
 //!   centre (the original queues it there and flies it along an entry spline into the
 //!   centre; the spline is not modelled), it is moved to its partner at rest with no
 //!   course (an order onto the gate ends idle on the far side, as the original's). The
 //!   Armada I profile sets it down [`GATE_REACH`] ahead of the partner along the partner's
-//!   facing (not measured); the Armada II family sets it at the partner's centre, which is
-//!   where the original's transport puts it before the exit queue carries it out (read from
-//!   the executable, static; the exit spline is not modelled). The Roots gameplay tutorial
-//!   tests a box 71 units around its gate, which the 75 offset would miss.
+//!   facing (not measured). The Armada II family sets it beside the partner's centre, on the
+//!   first free ring spot (the original's transport puts it at the centre, then its exit queue
+//!   carries it out; read from the executable, static; the spline is not modelled). Never on the
+//!   exact centre: a craft parked there would make every later move onto that craft a move onto
+//!   the gate. Never outside the map bounds.
 //!   Gate opening and closing (`AnimationTime`, `ClosedScale`, `OpenScale`, sounds) is
 //!   presentation and not modelled; `DisableTimer` is never armed in either game.
 //!
 //! Nothing here is kept between ticks: the pairing and the gate goers are derived from
 //! the entities and courses, so snapshots and the digest are unchanged.
 
+use sta_content::Profile;
 use sta_core::{EntityId, Fixed, Vec3};
 
 use crate::Sim;
@@ -42,8 +51,14 @@ const ON_GATE: i32 = 5;
 /// ahead of the exit gate it comes out (the gate's reach; not measured).
 const GATE_REACH: i32 = 75;
 
-/// The least space, in units, between craft set down at one gate (not measured).
+/// The least step, in units, between craft set down at one gate (STA64's own choice, not
+/// measured); a craft's step is twice its body radius, not less than this.
 const MIN_SPACING: i32 = 30;
+/// The largest ring step (STA64's own choice, not measured), so a set-down stays close to the gate.
+const MAX_RING_STEP: i32 = 60;
+/// How many candidate exit spots are tried per craft: the ring spots 1 to this (STA64's own
+/// choice, not measured). With none free and inside the map, the craft does not travel.
+const EXIT_SPOTS: i32 = 64;
 
 const WORMHOLE_CLASS: &str = "wormhole_obj";
 
@@ -53,23 +68,29 @@ fn flat_distance(a: Vec3, b: Vec3) -> Fixed {
 }
 
 impl Sim {
-    /// Live gates in id order, each with its partner (Armada I pairing), as `(gate, partner)`.
+    /// Live gates in id order, each with its partner, as `(gate, partner)`: Armada I pairs every
+    /// gate in creation order; the Armada II family pairs exactly two map gates; nothing else does.
     fn gate_pairs(&self) -> Vec<(EntityId, EntityId)> {
         let Some(db) = self.content.as_deref() else { return Vec::new() };
         let a1 = db.features().a1_compat;
+        let family = matches!(db.profile(), Profile::Fo4 | Profile::Fo3 | Profile::Sta2Classic);
+        if !a1 && !family {
+            return Vec::new();
+        }
+        let is_gate = |e: &crate::world::Entity| {
+            db.unit(e.def).is_some_and(|d| if a1 { d.class.0 == WORMHOLE_CLASS } else { d.class.0.eq_ignore_ascii_case(WORMHOLE_CLASS) })
+        };
         let gates: Vec<EntityId> = self
             .units
             .iter()
-            .filter(|e| e.kind == crate::world::EntityKind::Prop && !e.flags.contains(UnitFlags::DYING))
-            .filter(|e| db.unit(e.def).is_some_and(|d| d.class.0 == WORMHOLE_CLASS))
-            // The Armada II family pairs only the gates the map file placed (the only labelled
-            // entities); a gate a script adds is not paired.
+            .filter(|e| !e.flags.contains(UnitFlags::DYING) && is_gate(e))
+            // The Armada II family pairs only the gates the map made (the spawn gives each a
+            // label, empty when the file has none); a gate a script adds is not paired.
             .filter(|e| a1 || self.labels.get(e.id).is_some())
             .map(|e| e.id)
             .collect();
         // Armada II family: exactly two map gates are a pair; any other number is not paired
-        // (file order is not the pointers there, e.g. Roots `nirvana6`, A2 `fed05`, `fed06`,
-        // `borg10`) until LUA-33 carries the partner pointers.
+        // until LUA-33 carries the partner pointers.
         if !a1 && gates.len() != 2 {
             return Vec::new();
         }
@@ -106,7 +127,8 @@ impl Sim {
     /// Move each goer that has reached its gate to the gate's partner.
     pub(crate) fn step_wormholes(&mut self, goers: &[(EntityId, EntityId, EntityId)]) {
         let reach = Fixed::from_int(GATE_REACH);
-        let out = if self.content.as_deref().is_some_and(|db| db.features().a1_compat) { reach } else { Fixed::ZERO };
+        let a1 = self.content.as_deref().is_some_and(|db| db.features().a1_compat);
+        let out = if a1 { reach } else { Fixed::ZERO };
         for &(id, gate, partner) in goers {
             let (Some(g), Some(p)) = (self.units.get(gate), self.units.get(partner)) else { continue };
             let (gate_pos, exit) = (g.pos, p.pos);
@@ -116,8 +138,11 @@ impl Sim {
                 continue;
             }
             let mut to = Vec3 { x: exit.x + ahead.0 * out, y: exit.y, z: exit.z + ahead.1 * out };
-            if out == Fixed::ZERO {
-                to = self.free_exit_spot(id, to);
+            if !a1 {
+                match self.free_exit_spot(id, exit) {
+                    Some(spot) => to = spot,
+                    None => continue,
+                }
             }
             if let Some(u) = self.units.get_mut(id) {
                 u.pos = to;
@@ -129,35 +154,34 @@ impl Sim {
         }
     }
 
-    /// The nearest free spot to `centre` for `id` to be set down: the centre itself, else the
-    /// first of eight directions per ring, rings one spacing apart (the original queues craft out
-    /// one at a time; STA64 sets each down at once, so a craft that finds the mouth held stands
-    /// beside it). Free is no other craft within the spacing.
-    fn free_exit_spot(&self, id: EntityId, centre: Vec3) -> Vec3 {
-        let spacing = (self.units.get(id).map_or(Fixed::ZERO, |u| self.body_radius(u.def)) * Fixed::from_int(2)).max(Fixed::from_int(MIN_SPACING));
+    /// The nearest free spot beside `centre` for `id` to be set down, never `centre` itself: the
+    /// first of eight directions per ring, rings one step apart (the original queues craft out one
+    /// at a time; STA64 sets each down at once, so a craft that finds the mouth held stands beside
+    /// it). Free is no other craft within the step and inside the map bounds. `None` when no
+    /// candidate qualifies.
+    fn free_exit_spot(&self, id: EntityId, centre: Vec3) -> Option<Vec3> {
+        let radius2 = self.units.get(id).map_or(Fixed::ZERO, |u| self.body_radius(u.def) * Fixed::from_int(2));
+        let step = radius2.max(Fixed::from_int(MIN_SPACING)).min(Fixed::from_int(MAX_RING_STEP));
         // Unit vectors of eight directions, in thousandths.
         const DIRS: [(i32, i32); 8] = [(1000, 0), (707, 707), (0, 1000), (-707, 707), (-1000, 0), (-707, -707), (0, -1000), (707, -707)];
+        let inside = |p: Vec3| self.bounds.is_none_or(|(lo, hi)| p.x >= lo.x && p.x <= hi.x && p.z >= lo.z && p.z <= hi.z);
         let held = |p: Vec3| {
             self.units
                 .iter()
-                .any(|o| o.id != id && o.kind == crate::world::EntityKind::Craft && !o.flags.contains(UnitFlags::DYING) && flat_distance(o.pos, p) < spacing)
+                .any(|o| o.id != id && o.kind == crate::world::EntityKind::Craft && !o.flags.contains(UnitFlags::DYING) && flat_distance(o.pos, p) < step)
         };
-        for k in 0..64i32 {
-            let p = if k == 0 {
-                centre
-            } else {
-                let (ring, dir) = (Fixed::from_int((k - 1) / 8 + 1), DIRS[((k - 1) % 8) as usize]);
-                Vec3 {
-                    x: centre.x + Fixed::from_int(dir.0) / Fixed::from_int(1000) * ring * spacing,
-                    y: centre.y,
-                    z: centre.z + Fixed::from_int(dir.1) / Fixed::from_int(1000) * ring * spacing,
-                }
+        for k in 1..=EXIT_SPOTS {
+            let (ring, dir) = (Fixed::from_int((k - 1) / 8 + 1), DIRS[((k - 1) % 8) as usize]);
+            let p = Vec3 {
+                x: centre.x + Fixed::from_int(dir.0) / Fixed::from_int(1000) * ring * step,
+                y: centre.y,
+                z: centre.z + Fixed::from_int(dir.1) / Fixed::from_int(1000) * ring * step,
             };
-            if !held(p) {
-                return p;
+            if inside(p) && !held(p) {
+                return Some(p);
             }
         }
-        centre
+        None
     }
 }
 
