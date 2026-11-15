@@ -15,6 +15,7 @@
 //! without any install. [`legacy`] still serves the map view's scenery ODFs.
 
 pub mod aip;
+pub mod button_slots;
 pub mod confinement;
 pub mod db;
 pub mod def;
@@ -43,6 +44,7 @@ pub mod strings;
 pub mod unit;
 pub mod weapon;
 
+pub use button_slots::{ButtonSlots, SlotCommand};
 pub use aip::{Aip, AipList, AipValue, AipVar, BuildItem};
 pub use confinement::{ConfinementInitial, ConfinementOverrides, ConfinementRules, ConfinementSpatial};
 pub use db::{ContentBuilder, ContentDb, DEFAULT_TECH_TREE};

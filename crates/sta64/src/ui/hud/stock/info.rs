@@ -32,7 +32,7 @@ pub(in crate::ui::hud) enum StockBar {
     Group(EntityId, f32),
 }
 
-fn node(r: R) -> Node {
+pub(super) fn node(r: R) -> Node {
     Node {
         position_type: PositionType::Absolute,
         left: Val::Px(r.x),
@@ -43,17 +43,17 @@ fn node(r: R) -> Node {
     }
 }
 
-fn place(origin: Vec2, r: R) -> R {
+pub(super) fn place(origin: Vec2, r: R) -> R {
     R::new(origin.x + r.x, origin.y + r.y, r.w, r.h)
 }
 
-fn picture(commands: &mut Commands, root: Entity, r: R, name: &str, frame: usize) {
+pub(super) fn picture(commands: &mut Commands, root: Entity, r: R, name: &str, frame: usize) {
     commands
         .entity(root)
         .with_child((node(r), Pickable::IGNORE, GuiImage::new(name).with_frame(frame)));
 }
 
-fn text(commands: &mut Commands, root: Entity, r: R, value: String, color: Color, size: f32, kind: Option<StockText>) -> Entity {
+pub(super) fn text(commands: &mut Commands, root: Entity, r: R, value: String, color: Color, size: f32, kind: Option<StockText>) -> Entity {
     text_styled(commands, root, r, value, color, size, kind, SpriteTextStyle::default().stock_label())
 }
 
@@ -73,7 +73,7 @@ fn text_styled(commands: &mut Commands, root: Entity, r: R, value: String, color
     child
 }
 
-fn bar(commands: &mut Commands, root: Entity, r: R, value: f32, color: Color, kind: StockBar) {
+pub(super) fn bar(commands: &mut Commands, root: Entity, r: R, value: f32, color: Color, kind: StockBar) {
     commands.entity(root).with_child((
         node(r),
         BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.5)),
@@ -153,7 +153,7 @@ fn chosen_rect(layout: &StockLayout, origin: Vec2, builder: bool, builder_key: &
     }
 }
 
-fn wireframe_rect(layout: &StockLayout, origin: Vec2, builder: bool) -> Option<R> {
+pub(super) fn wireframe_rect(layout: &StockLayout, origin: Vec2, builder: bool) -> Option<R> {
     if builder {
         for key in ["infoBuildWireframeIconArea", "infoBuildWireframe"] {
             if layout.raw_rect(key).is_some() {
@@ -185,7 +185,7 @@ fn wireframe_names(model: &str, layer: usize) -> Vec<String> {
 }
 
 /// Native Wireframe::Render draws five independent GUI SPR layers in one square.
-fn wireframe_layers(commands: &mut Commands, root: Entity, r: R, model: &str) {
+pub(super) fn wireframe_layers(commands: &mut Commands, root: Entity, r: R, model: &str) {
     let stem = model_stem(model);
     if stem.is_empty() {
         return;
@@ -231,7 +231,7 @@ fn spawn_separate_resources(commands: &mut Commands, root: Entity, layout: &Stoc
     }
 }
 
-fn spawn_resource(commands: &mut Commands, root: Entity, layout: &StockLayout, feed: &HudFeed, theme: &Theme) {
+pub(super) fn spawn_resource(commands: &mut Commands, root: Entity, layout: &StockLayout, feed: &HudFeed, theme: &Theme) {
     if super::separate_resources(layout) {
         spawn_separate_resources(commands, root, layout, feed, theme);
         return;
