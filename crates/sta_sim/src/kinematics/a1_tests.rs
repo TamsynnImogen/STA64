@@ -900,7 +900,7 @@ mod through_the_sim {
 mod from_content {
     use super::*;
     use sta_content::{ContentDb, Overrides, Profile};
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     const FILES: [(&str, &str); 6] = [
         ("fastphys.odf", "classLabel = \"physics\"\nimpulseSpeed = 20\nfrontBackInertia = 8\nmaxReverseSpeed = 0.5\nturnRadius = 9\nvelocCoeffStill = 0.25\nvelocWhenCoeffHalf = 0.6\nbraccelControlStiffness = 2\nsy_yawAngleCoeff = 1.2\nsy_yawVelocCoeff = 0.2\nrollRotationSpeed = 0.6\n"),
@@ -912,7 +912,7 @@ mod from_content {
     ];
 
     fn db(profile: Profile) -> ContentDb {
-        let map: HashMap<String, &str> = FILES.iter().map(|(n, t)| ((*n).to_owned(), *t)).collect();
+        let map: BTreeMap<String, &str> = FILES.iter().map(|(n, t)| ((*n).to_owned(), *t)).collect();
         let stems: Vec<String> = ["ship", "drone", "yard"].iter().map(|s| (*s).to_owned()).collect();
         sta_content::odf::load_with(profile, &Overrides::default(), &stems, &mut |n, v| {
             let n = if n.ends_with(".odf") { n.to_owned() } else { format!("{n}.odf") };

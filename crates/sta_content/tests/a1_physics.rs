@@ -77,6 +77,11 @@ fn absent_keys_take_the_executable_defaults() {
     let p = db.a1_play_physics().expect("play block with defaults");
     assert!(near(p.front_back_inertia, 2.0) && near(p.max_reverse_speed, 15.0) && near(p.turn_radius, 25.0));
     assert!(near(p.braccel_control_stiffness, 10.0) && near(p.veloc_when_coeff_half, 7.5));
+    let warned = |w: &[Warning]| w.iter().any(|w| w.file == "fastphys.odf" && w.message.contains("rollRotationSpeed"));
+    let (_, w) = load(Profile::Sta1Classic, &fixtures(bare), &UNITS);
+    assert!(warned(&w), "an absent roll key says there is no lag: {w:?}");
+    let (_, w) = load(Profile::Sta1Classic, &fixtures(PLAY), &UNITS);
+    assert!(!warned(&w), "{w:?}");
     let b = db.unit(db.key("drone2").unwrap()).unwrap().a1_borg.expect("borg");
     assert!(near(b.max_rotation_speed, 0.25) && near(b.rotation_acceleration, 2.0));
     assert!(near(b.rotation_stiffness, 1.0) && near(b.too_slow_to_turn, 1.0));

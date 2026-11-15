@@ -7,8 +7,8 @@
 //! `#include` chain, so craft that share a base ODF share a physics file); the
 //! play file is read from the same layered ODF set, so a mod overrides it by
 //! shipping a file of that name, and a unit's own file by the usual layering.
-//! Keys absent from a file take the executable's defaults (key names and
-//! grade only: read from the executable, static). A play block that is not
+//! Keys absent from a file take the executable's loader defaults (values
+//! read from the executable, static). A play block that is not
 //! usable (a non-positive `impulseSpeed`,
 //! `frontBackInertia`, `turnRadius`, `velocWhenCoeffHalf` or
 //! `braccelControlStiffness`) is dropped with a warning (a missing file quietly)
@@ -64,7 +64,7 @@ pub struct A1Borg {
 }
 
 
-/// The executable's defaults for an absent key (key names only; read from the
+/// The executable's loader defaults for an absent key (values read from the
 /// executable, static).
 const DEFAULTS: [(&str, f64); 14] = [
     ("frontBackInertia", 2.0),
@@ -104,6 +104,10 @@ pub(crate) fn play_dynamics(odf: &Odf, file: &str, warnings: &mut Vec<Warning>) 
         yaw_veloc_coeff: key(&mut r, "sy_yawVelocCoeff"),
         roll_rotation_speed: key(&mut r, "rollRotationSpeed"),
     };
+    if d.roll_rotation_speed <= Fixed::ZERO {
+        // The loader's default is negative: the model then applies no turn-rate lag.
+        warnings.push(Warning::new(file, "rollRotationSpeed is absent or not positive; the turn rate follows the command without lag"));
+    }
     let must_be_positive = [
         ("impulseSpeed", d.impulse_speed),
         ("frontBackInertia", d.front_back_inertia),
