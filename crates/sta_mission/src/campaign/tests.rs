@@ -485,12 +485,12 @@ mod header_start {
         let db = Arc::new(sta_content::fake::db().with_rules(Rules::from_header(header).0));
         let setup = map_setup(MapDef::empty(), db, 3);
         let mut sim = Sim::from_setup(&setup);
-        let reader: ScriptReader = Arc::new(|p| (p == "m.lua").then(|| Vec::new()));
+        let reader: ScriptReader = Arc::new(|p| (p == "m.lua").then(Vec::new));
         let mut rt = launch_runtime_with_start("m.lua", reader, 3, (PlayerId(0), PlayerNumbering::ArmadaTeams), &setup, &sim, Vec::new(), Vec::new(), start).unwrap();
         let mut view = (*sim.view()).clone();
         for _ in 0..3 {
             let mut out = Vec::new();
-            rt.think(&mut view, &[], &mut out);
+            rt.think(&view, &[], &mut out);
             view = (*sim.step(&out).view).clone();
         }
         [0u8, 1, 7]
