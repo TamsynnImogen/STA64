@@ -123,20 +123,23 @@ fn nothing_is_paid_without_a_reason_to() {
 #[test]
 fn a_station_with_its_weapons_off_earns_nothing() {
     use crate::command::{Command, CommandKind, Edit};
+    let metal = |sim: &crate::Sim| sim.view().players.iter().find(|p| p.id == PlayerId(0)).unwrap().resources.get(2).copied().unwrap_or(Fixed::ZERO);
     let mut sim = game_with_content(db(&case(), true, true));
     spawn(&mut sim, "o_world", NEUTRAL, v(0, 0));
     let station = spawn(&mut sim, "o_station", PlayerId(0), v(RING, 0));
     sim.step(&[Command { player: PlayerId::BENCH, seq: 1, kind: CommandKind::Edit(Edit::Weapons(station, false)) }]);
+    // The ticks before the switch-off may have paid; none after it do.
+    let before = metal(&sim);
     for _ in 0..PERIOD * 4 {
         sim.step(&[]);
     }
-    assert_eq!(sim.view().players.iter().find(|p| p.id == PlayerId(0)).unwrap().resources.get(2).copied().unwrap_or(Fixed::ZERO), Fixed::ZERO);
+    assert_eq!(metal(&sim), before);
     // Switched back on, it earns again.
     sim.step(&[Command { player: PlayerId::BENCH, seq: 2, kind: CommandKind::Edit(Edit::Weapons(station, true)) }]);
     for _ in 0..PERIOD * 4 {
         sim.step(&[]);
     }
-    assert!(sim.view().players.iter().find(|p| p.id == PlayerId(0)).unwrap().resources[2] > Fixed::ZERO);
+    assert!(metal(&sim) > before);
 }
 
 #[test]
