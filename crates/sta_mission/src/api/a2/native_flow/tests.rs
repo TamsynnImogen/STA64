@@ -66,15 +66,15 @@ fn a_delayed_fade_out_clears_only_after_a_fade_out() {
     for first in ["", "A2.FadeIn(script, 2, 0, 0, true);"] {
         let mut rt = runtime();
         rt.eval::<()>(&format!("{first} A2.FadeOut(script, 2, 4, 0, true)")).unwrap();
-        let events = events(&mut rt);
-        assert!(!events.contains(&clear), "{first:?}: {events:?}");
-        assert_eq!(delayed(events), 1);
+        let got = events(&mut rt);
+        assert!(!got.contains(&clear), "{first:?}: {got:?}");
+        assert_eq!(delayed(got), 1);
     }
     // After a fade out the clear comes right before the delayed request; one clear for the chain.
     let mut rt = runtime();
     rt.eval::<()>("A2.FadeOut(script, 2, 0, 0, true); A2.FadeOut(script, 2, 4, 0, true); A2.FadeOut(script, 2, 4, 0, true)").unwrap();
-    let events = events(&mut rt);
-    assert_eq!(events.iter().filter(|p| **p == clear).count(), 2, "{events:?}");
+    let got = events(&mut rt);
+    assert_eq!(got.iter().filter(|p| **p == clear).count(), 2, "{got:?}");
     // A delayed fade in does not clear and leaves the next delayed fade out without one.
     let mut rt = runtime();
     rt.eval::<()>("A2.FadeOut(script, 2, 0, 0, true); A2.FadeIn(script, 2, 3, 0, true); A2.FadeOut(script, 2, 4, 0, true)").unwrap();
