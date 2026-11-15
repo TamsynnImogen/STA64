@@ -41,6 +41,8 @@ pub struct SeatStart {
     pub dilithium: i32,
     pub latinum: i32,
     pub metal: i32,
+    /// Biomatter (supply).
+    pub biomatter: i32,
     /// `None` when the table gives 0.
     pub crew: Option<i32>,
     /// `None` when the table gives 0.
@@ -83,6 +85,7 @@ pub fn from_table(table: &[sta_bzn::TeamStart]) -> Vec<SeatStart> {
             dilithium: whole(t.dilithium),
             latinum: whole(t.latinum),
             metal: whole(t.metal),
+            biomatter: whole(t.biomatter),
             crew: Some(whole(t.crew)).filter(|&c| c > 0),
             officers: Some(t.officers.clamp(0, LIMIT as i32)).filter(|&o| o > 0),
         })
@@ -99,8 +102,8 @@ impl SeatStart {
             return Vec::new();
         }
         let mut out = Vec::new();
-        // Resource ids: 0 dilithium, 1 latinum, 2 metal.
-        for (res, v) in [(0u8, self.dilithium), (1, self.latinum), (2, self.metal)] {
+        // Resource ids: 0 dilithium, 1 latinum, 2 metal, 3 biomatter.
+        for (res, v) in [(0u8, self.dilithium), (1, self.latinum), (2, self.metal), (3, self.biomatter)] {
             out.push(Edit::Cargo(self.seat, res, Fixed::from_int(v)));
         }
         if let Some(c) = self.crew {

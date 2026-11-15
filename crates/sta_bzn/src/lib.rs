@@ -333,6 +333,8 @@ pub struct TeamStart {
     pub dilithium: f32,
     pub latinum: f32,
     pub metal: f32,
+    /// The biomatter ("supply" in Fleet Operations) stock.
+    pub biomatter: f32,
     /// The team's crew stock.
     pub crew: f32,
     /// The team's officer limit.
@@ -379,38 +381,63 @@ pub fn team_table(data: &[u8]) -> TeamTable {
     }
     let Some(start) = binary_start(data) else { return TeamTable::Absent };
     let Ok(recs) = records(data, start) else { return TeamTable::Absent };
-    const SHAPE: [u32; 13] = [4, 4, 5, 5, 5, 5, 5, 5, 5, 4, 5, 5, 5];
-    let zero = |r: &Rec| r.data == [0u8; 4];
-    let block_at = |i: usize| {
-        i + 13 <= recs.len()
-            && SHAPE.iter().enumerate().all(|(j, &kind)| recs[i + j].kind == kind && recs[i + j].data.len() == 4)
-            && [3, 5, 7].iter().all(|&j| zero(&recs[i + j]))
+    // A block is two i32 (not read), an optional extra bool record (the newer shape; a true bool is followed by
+    // an i16 and a string record, a team name), then eleven records: dilithium, pad, latinum, pad, metal, pad,
+    // biomatter ("supply"), officer limit (i32), crew capacity, crew, one more float. Returns the index of
+    // those eleven records and the index after the block. The two shapes cannot be confused: the third record
+    // is an f32 in one and a one-byte bool in the other.
+    const TAIL: [u32; 11] = [5, 5, 5, 5, 5, 5, 5, 4, 5, 5, 5];
+    let block_at = |i: usize| -> Option<(usize, usize)> {
+        let is = |k: usize, kind: u32, len: usize| recs.get(k).is_some_and(|r| r.kind == kind && r.data.len() == len);
+        if !(is(i, 4, 4) && is(i + 1, 4, 4)) {
+            return None;
+        }
+        let mut t = i + 2;
+        if is(t, 1, 1) {
+            let named = recs[t].data[0];
+            t += 1;
+            match named {
+                0 => {}
+                1 if recs.get(t).is_some_and(|r| r.kind == 3 && r.data.len() == 2) && recs.get(t + 1).is_some_and(|r| r.kind == 2) => t += 2,
+                _ => return None,
+            }
+        }
+        let tail_ok = t + 11 <= recs.len()
+            && TAIL.iter().enumerate().all(|(j, &kind)| recs[t + j].kind == kind && recs[t + j].data.len() == 4)
+            && [1, 3, 5].iter().all(|&j| recs[t + j].data == [0u8; 4]);
+        tail_ok.then_some((t, t + 11))
     };
     // Maximal runs of consecutive blocks: the table is the one run of exactly eight. A ninth block-shaped
     // record before or after (a run of 9 or more) would shift every seat, so such a map reads as empty.
     let mut runs = Vec::new();
     let mut i = 0;
     while i < recs.len() {
-        let len = (0..).take_while(|&b| block_at(i + 13 * b)).count();
-        if len > 0 {
-            runs.push((i, len));
-            i += 13 * len;
-        } else {
+        let mut tails = Vec::new();
+        let mut at = i;
+        while let Some((t, end)) = block_at(at) {
+            tails.push(t);
+            at = end;
+        }
+        if tails.is_empty() {
             i += 1;
+        } else {
+            i = at;
+            runs.push(tails);
         }
     }
     if runs.is_empty() {
         return TeamTable::Absent;
     }
-    let [(first, 8)] = runs[..] else { return TeamTable::Refused(runs.iter().map(|r| r.1).collect()) };
+    let [tails] = &runs[..] else { return TeamTable::Refused(runs.iter().map(Vec::len).collect()) };
+    if tails.len() != 8 {
+        return TeamTable::Refused(runs.iter().map(Vec::len).collect());
+    }
     let f = |i: usize| f32::from_le_bytes(recs[i].data.try_into().unwrap());
     let n = |i: usize| i32::from_le_bytes(recs[i].data.try_into().unwrap());
     TeamTable::Found(
-        (0..8)
-            .map(|b| {
-                let at = first + 13 * b;
-                TeamStart { dilithium: f(at + 2), latinum: f(at + 4), metal: f(at + 6), officers: n(at + 9), crew: f(at + 11) }
-            })
+        tails
+            .iter()
+            .map(|&t| TeamStart { dilithium: f(t), latinum: f(t + 2), metal: f(t + 4), biomatter: f(t + 6), officers: n(t + 7), crew: f(t + 9) })
             .collect(),
     )
 }
@@ -659,8 +686,55 @@ PrjID = 4d62616b7500\r\nEntityID [1] =\r\n7\r\nteam [1] =\r\n2\r\nlabel = Baku\r
         teams[0] = [1234.0, 56.0, 789.0];
         let got = team_starts(&team_map(&teams));
         assert_eq!(got.len(), 8);
-        assert_eq!(got[0], TeamStart { dilithium: 1234.0, latinum: 56.0, metal: 789.0, crew: 1717.0, officers: 321 });
-        assert_eq!(got[7], TeamStart { dilithium: 4321.0, latinum: 65.0, metal: 987.0, crew: 1717.0, officers: 321 });
+        assert_eq!(got[0], TeamStart { dilithium: 1234.0, latinum: 56.0, metal: 789.0, biomatter: 8888.0, crew: 1717.0, officers: 321 });
+        assert_eq!(got[7], TeamStart { dilithium: 4321.0, latinum: 65.0, metal: 987.0, biomatter: 8888.0, crew: 1717.0, officers: 321 });
+    }
+
+    /// The newer block shape, own-authored: one extra bool record after the two i32, and when it is true an
+    /// i16 and a string record (a team name) before the floats. `named[n]` says whether block `n` has a name.
+    fn team_map_v2(teams: &[[f32; 3]], named: &[bool]) -> Vec<u8> {
+        let rec = |out: &mut Vec<u8>, kind: u32, data: &[u8]| {
+            out.extend_from_slice(&kind.to_le_bytes());
+            out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+            out.extend_from_slice(data);
+        };
+        let mut out = b"version [1] =\r\n3013\r\nBinaryMode [1] =\r\ntrue\r\n".to_vec();
+        rec(&mut out, 4, &7i32.to_le_bytes());
+        for (n, t) in teams.iter().enumerate() {
+            rec(&mut out, 4, &0i32.to_le_bytes());
+            rec(&mut out, 4, &0i32.to_le_bytes());
+            rec(&mut out, 1, &[u8::from(named[n])]);
+            if named[n] {
+                rec(&mut out, 3, &6i16.to_le_bytes());
+                rec(&mut out, 2, b"team_x\0");
+            }
+            for v in t {
+                rec(&mut out, 5, &v.to_le_bytes());
+                rec(&mut out, 5, &0f32.to_le_bytes());
+            }
+            rec(&mut out, 5, &(8888.0 + n as f32).to_le_bytes());
+            rec(&mut out, 4, &321i32.to_le_bytes());
+            for v in [5.0f32, 1717.0, 0.0] {
+                rec(&mut out, 5, &v.to_le_bytes());
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn team_starts_reads_the_newer_block_shape() {
+        let mut teams = vec![[4321.0, 65.0, 987.0]; 8];
+        teams[0] = [1234.0, 56.0, 789.0];
+        for named in [[false; 8], [true, false, false, false, false, false, false, false], [true; 8]] {
+            let got = team_starts(&team_map_v2(&teams, &named));
+            assert_eq!(got.len(), 8, "{named:?}");
+            assert_eq!(got[0], TeamStart { dilithium: 1234.0, latinum: 56.0, metal: 789.0, biomatter: 8888.0, crew: 1717.0, officers: 321 });
+            assert_eq!(got[7].biomatter, 8895.0);
+            assert_eq!((got[7].dilithium, got[7].crew), (4321.0, 1717.0));
+        }
+        assert!(team_starts(&team_map_v2(&teams[..7], &[false; 7])).is_empty(), "seven newer blocks");
+        assert_eq!(team_table(&team_map_v2(&[[1.0, 2.0, 3.0]; 9], &[false; 9])), TeamTable::Refused(vec![9]));
+        assert_eq!(team_table(&team_map_v2(&[], &[])), TeamTable::Absent);
     }
 
     #[test]
