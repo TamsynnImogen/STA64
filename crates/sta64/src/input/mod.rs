@@ -49,6 +49,8 @@ impl Plugin for InputPlugin {
             .init_resource::<orders::OrderTargets>()
             .init_resource::<orders::Aim>()
             .add_systems(Startup, select::spawn_select_box)
+            // On the start edge of a cutscene: cancel a drag and an armed placement (it is not in the chain below: it needs no link).
+            .add_systems(Update, select::cancel_on_cutscene_start.in_set(crate::app::GameSet::Input))
             .add_systems(
                 Update,
                 (

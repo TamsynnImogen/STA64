@@ -36,7 +36,7 @@ use sta_sim::{EntityId, Fixed, PlayerId};
 use super::{Resolver, play_sounds};
 use crate::app::GameSet;
 use crate::render::units::LocalPlayer;
-use crate::sim_link::{Bus, ContentRes, OrderIssued, OrderKind, PlaySound, Selection, SelectionChanged, SimLink, SimMsg};
+use crate::sim_link::{Bus, ContentRes, OrderIssued, OrderKind, PlaySound, Selection, SelectionChanged, SimLink, SimMsg, StopSounds};
 
 /// Event names for alerts, which no ODF carries.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -157,6 +157,7 @@ impl Plugin for VoicePlugin {
             .add_message::<OrderIssued>()
             .add_message::<SelectionChanged>()
             .add_message::<PlaySound>()
+            .add_message::<StopSounds>()
             .init_resource::<VoiceConfig>()
             .init_resource::<VoiceState>()
             .init_resource::<Selection>()
@@ -205,15 +206,25 @@ fn run_voices(
     mut orders: MessageReader<OrderIssued>,
     mut sim: MessageReader<SimMsg>,
     cine: Option<Res<crate::ui::presentation::CineractiveState>>,
+    mut was_cutscene: Local<bool>,
     mut st: ResMut<VoiceState>,
     mut out: MessageWriter<PlaySound>,
+    mut stop: MessageWriter<StopSounds>,
 ) {
+    let cutscene = crate::ui::presentation::cutscene_running(cine);
+    // A line of ours still playing when the cutscene starts is cut. Only `Bus::Voice`'s static
+    // sounds stop (alerts and acknowledgements): scripted lines are on `Bus::Ui` and a movie's
+    // sound is a stream the mixer does not list, so neither is touched.
+    if cutscene && !*was_cutscene {
+        stop.write(StopSounds { bus: Bus::Voice });
+    }
+    *was_cutscene = cutscene;
     // The menu scene's ships are scenery: no unit speaks in the front end. Nor during a script's
     // cineractive: its alerts and acknowledgements clash with the narration, and what happens
     // meanwhile is dropped, not queued for afterwards (the script's own lines go through
     // `ui::presentation`, not here). Evidence: Cedric's playtest of the stock behaviour; which
     // categories the original silences, and whether it queues, is not measured.
-    let (Some(link), Some(content), None, false) = (link, content, scene, crate::ui::presentation::cutscene_running(cine)) else {
+    let (Some(link), Some(content), None, false) = (link, content, scene, cutscene) else {
         selected.clear();
         orders.clear();
         sim.clear();
@@ -450,6 +461,10 @@ mod tests {
         );
         let mut r = rig(&tl);
         r.app.world_mut().insert_resource(crate::ui::presentation::CineractiveState { on: true, skippable: false });
+        // The start edge cuts a speech line still playing: one stop of the voice bus, once.
+        r.app.update();
+        let stops = r.log.drain().into_iter().filter(|c| matches!(c, Call::StopBus { bus: Bus::Voice })).count();
+        assert_eq!(stops, 1, "the voice bus is cut once when the cutscene starts");
         // An order and a selection during the cutscene are as silent as the hit at tick 20.
         r.order(&[1], OrderKind::Move);
         r.select(&[1]);
