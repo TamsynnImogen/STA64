@@ -6,6 +6,8 @@
 
 #[path = "mission_intro_tests.rs"]
 mod intro;
+#[path = "mission_a2_opening_tests.rs"]
+mod a2_opening;
 #[path = "mission_a1_opening_tests.rs"]
 mod a1_opening;
 
