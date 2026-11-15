@@ -473,3 +473,55 @@ fn a2_end_calls_carry_no_host_delay_at_any_mission_time() {
     assert!(o.won);
     assert_eq!(o.delay, 0.0);
 }
+
+mod header_start {
+    //! A mission launched without a map team table takes its seats' start from the install header,
+    //! through the launch path every host uses (own-authored header values, `fake::db()`).
+    use super::*;
+    use sta_content::Rules;
+    use sta_core::Fixed;
+
+    fn launch(header: &str, start: crate::start_stock::StartStock) -> Vec<(Option<Fixed>, Fixed, Fixed)> {
+        let db = Arc::new(sta_content::fake::db().with_rules(Rules::from_header(header).0));
+        let setup = map_setup(MapDef::empty(), db, 3);
+        let mut sim = Sim::from_setup(&setup);
+        let reader: ScriptReader = Arc::new(|p| (p == "m.lua").then(|| Vec::new()));
+        let mut rt = launch_runtime_with_start("m.lua", reader, 3, (PlayerId(0), PlayerNumbering::ArmadaTeams), &setup, &sim, Vec::new(), Vec::new(), start).unwrap();
+        let mut view = (*sim.view()).clone();
+        for _ in 0..3 {
+            let mut out = Vec::new();
+            rt.think(&mut view, &[], &mut out);
+            view = (*sim.step(&out).view).clone();
+        }
+        [0u8, 1, 7]
+            .iter()
+            .map(|&s| {
+                let p = view.player(PlayerId(s)).unwrap();
+                (p.crew, p.officers[1], p.resources.first().copied().unwrap_or(Fixed::ZERO))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_launch_without_a_table_starts_every_seat_from_the_header() {
+        let got = launch("int cfgStartingDilithium = 1313;\nint cfgStartingCrew = 777;\nint cfgMaxOfficers = 41;\n", Default::default());
+        for g in got {
+            assert_eq!(g, (Some(Fixed::from_int(777)), Fixed::from_int(41), Fixed::from_int(1313)));
+        }
+    }
+
+    #[test]
+    fn a_launch_with_a_header_lacking_the_keys_leaves_the_seats_bare() {
+        for g in launch("int SOMETHING_ELSE = 1;\n", Default::default()) {
+            assert_eq!(g, (None, Fixed::ZERO, Fixed::ZERO));
+        }
+    }
+
+    #[test]
+    fn a_launch_with_a_refused_table_gets_nothing() {
+        let refused = crate::start_stock::StartStock { seats: Vec::new(), refused: Some("refused".into()) };
+        for g in launch("int cfgStartingCrew = 777;\n", refused) {
+            assert_eq!(g.0, None);
+        }
+    }
+}
