@@ -80,7 +80,7 @@ fn scene() -> Scene {
     ]);
     let at = |x: f32, z: f32| out.view.units.iter().find(|u| u.pos == Vec3::from_f32([x, 0.0, z])).expect("unit").id;
     let ids = [at(0.0, 0.0), at(0.0, 100.0), at(-100.0, 0.0), at(300.0, 0.0)];
-    let cfg = MissionConfig { content: Some(db.clone()), view: Some((*out.view).clone()), ..MissionConfig::default() };
+    let cfg = MissionConfig { content: Some(db.clone()), view: Some(crate::api::special_forces::flagged_view(&out.view, &db)), ..MissionConfig::default() };
     let mut rt = MissionRuntime::from_source_with("a1.lua", "", 3, cfg);
     assert!(rt.errors().is_empty(), "{:?}", rt.errors());
     rt.eval::<()>(&format!("a, b, s, n = {}, {}, {}, {}", ids[0].0, ids[1].0, ids[2].0, ids[3].0)).unwrap();
