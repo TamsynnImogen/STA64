@@ -3,8 +3,7 @@
 //! Rule, read from the executable, static (Armada II 1.1 stock): a negative mask does not
 //! filter. A non-negative mask is a bit index (`1 << (mask & 31)`, the processor's shift
 //! count) into the word that `IsVisibleToTeam(object, team)` tests, so the candidate must be
-//! visible to team number `mask`. A stock call passes 4 (a2_fed02), and no stock call a mask
-//! of 32 or more. A mask naming no seated team (neutral, unseated) matches nothing: the bit is
+//! visible to team number `mask`. A mask naming no seated team (neutral, unseated) matches nothing: the bit is
 //! never set for it (not established for a team with no seat). What fills the word is not read
 //! further; it is taken to be what `A2.IsVisibleToTeam` already answers from the view.
 
