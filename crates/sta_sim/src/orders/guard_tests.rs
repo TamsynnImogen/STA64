@@ -129,7 +129,7 @@ fn the_order_is_validated_and_replaced_like_the_other_orders() {
 
 #[test]
 fn a_guard_order_survives_a_snapshot_byte_for_byte_and_the_loader_refuses_forged_rows() {
-    let (mut sim, _db, guard, ward) = pair();
+    let (mut sim, cdb, guard, ward) = pair();
     run(&mut sim, vec![order(1, 0, Order::Guard { units: vec![guard], ward })], 2);
     run(&mut sim, vec![order(1, 1, Order::Move { units: vec![ward], to: v(0, 700), queue: false })], 5 * HZ);
     let db = sim.content.clone();
@@ -141,8 +141,11 @@ fn a_guard_order_survives_a_snapshot_byte_for_byte_and_the_loader_refuses_forged
     }
     assert_eq!(loaded.snapshot(), sim.snapshot());
     // Self-guard, an unknown ward and a ward that is no craft are refused on load.
-    let station = sim.units.iter().find(|u| u.kind != crate::world::EntityKind::Craft).map(|u| u.id);
-    for bad in [guard, EntityId(9999)].into_iter().chain(station) {
+    // A third unit that is no craft: the ward may not be one.
+    let other = sim.spawn_def(cdb.key("st_target").unwrap(), PlayerId(1), v(900, 0), AHEAD).unwrap();
+    sim.unit_mut(other).unwrap().kind = crate::world::EntityKind::Station;
+    assert_ne!(sim.unit(other).unwrap().kind, crate::world::EntityKind::Craft);
+    for bad in [guard, EntityId(9999), other] {
         let mut forged = Sim::from_snapshot(&sim.snapshot(), db.clone()).unwrap();
         forged.scripted.rows.insert(guard, Job::Guard { ward: bad });
         assert!(Sim::from_snapshot(&forged.snapshot(), db.clone()).is_err(), "ward {bad:?} accepted");
@@ -150,7 +153,7 @@ fn a_guard_order_survives_a_snapshot_byte_for_byte_and_the_loader_refuses_forged
 }
 
 #[test]
-fn the_digest_of_a_run_without_guards_is_unchanged_and_a_guard_changes_it() {
+fn a_guard_changes_the_digest_and_ending_it_leaves_no_row() {
     let (mut a, _db, guard, ward) = pair();
     let (mut b, ..) = pair();
     run(&mut a, vec![], 30);

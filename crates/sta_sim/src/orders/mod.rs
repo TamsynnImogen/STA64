@@ -49,7 +49,7 @@
 //!   drop-out uses the lead above (the engine stops at `tooCloseToTurn` and
 //!   coasts: not measured). A unit without the key never warps on a plain move.
 //!
-//! State is in snapshots (format 21) and in the digest once any exists.
+//! State is in snapshots (format 21; the guard order, appended to the job rows, from format 33) and in the digest once any exists.
 
 mod guard;
 #[cfg(test)]

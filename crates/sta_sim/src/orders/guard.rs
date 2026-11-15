@@ -1,17 +1,12 @@
-//! The guard order (LUA-39, `Order::Guard`, tag 19): a craft keeps station beside a
+//! The guard order (LUA-39, `Order::Guard`, tag 20): a craft keeps station beside a
 //! ward, fights what attacks the ward and stops when the ward is gone.
 //!
-//! Rule (Armada II GUARD, command 23; read from the executable, static; the
-//! stock script call is `SetCommandWhatWhoParamVO(unit, 23, ward, param, voice)`):
-//! the ward is the command's target object; the call needs both to be live
-//! craft and tests no owner and no special-forces flag; the parameter is not
-//! read by the guard behaviour. Each tick the original takes the ward's last
-//! attacker (the ward hit within a second, the attacker a live enemy it can
-//! hit) as its fire target, else the best enemy in range like any idle or
-//! moving craft, and flies to a point beside the ward, on the enemy's side
-//! when it has a target; a ward that is no longer a live craft stops the
-//! guard. Not modelled: formation keeping behind a fleet leader, going through
-//! a wormhole after the ward, special weapons, the voice flag.
+//! Rule (Armada II GUARD, command 23; read from the executable, static): the ward is the
+//! command's target object; the script call needs both objects to be live craft and tests
+//! no owner and no special-forces flag; its parameter and voice flag are not applied. The
+//! guard fires at the ward's attacker, else at targets of opportunity, keeps a station
+//! beside the ward and stops when the ward is no live craft. Not modelled: fleet-leader
+//! formation, following the ward through a wormhole, special weapons.
 //!
 //! STA64's reading (the numbers are authored, **not measured**): the order is
 //! [`Job::Guard`]. The craft keeps a station at `spacing` from the ward on the
