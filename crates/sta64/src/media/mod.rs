@@ -216,6 +216,14 @@ pub struct Movies {
 }
 
 impl Movies {
+    /// A movie waiting for the screen, as a test of another module needs one without a file.
+    #[cfg(test)]
+    pub(crate) fn busy_for_test() -> Self {
+        let mut m = Self::default();
+        m.pending.push_back(PlayMovie { id: MovieId(1), name: String::new(), target: MovieTarget::Fullscreen, skippable: true });
+        m
+    }
+
     /// A movie is on screen or waiting for the screen.
     pub fn busy(&self) -> bool {
         self.fullscreen.is_some() || !self.pending.is_empty() || !self.panels.is_empty()

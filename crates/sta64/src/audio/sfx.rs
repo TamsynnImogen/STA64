@@ -151,11 +151,14 @@ fn run_sfx(
     mut msgs: MessageReader<SimMsg>,
     mut st: ResMut<SfxState>,
     cine: Option<Res<crate::ui::presentation::CineractiveState>>,
+    script_sounds: Option<Res<crate::ui::presentation::ScriptSounds>>,
+    movies: Option<Res<crate::media::Movies>>,
     mut out: MessageWriter<PlaySound>,
 ) {
     // The advisor lines ("construction complete") are speech: dropped, not replayed, while a
-    // cutscene runs. Weapons, hits and explosions are sound effects and play on.
-    let cutscene = crate::ui::presentation::cutscene_running(cine);
+    // cutscene runs, a script's message or music plays or a movie plays. Weapons, hits and
+    // explosions are sound effects and play on.
+    let cutscene = crate::ui::presentation::event_voices_silenced(crate::ui::presentation::cutscene_running(cine), script_sounds.as_deref(), movies.as_deref());
     let (Some(link), Some(content)) = (link, content) else {
         msgs.clear();
         return;
