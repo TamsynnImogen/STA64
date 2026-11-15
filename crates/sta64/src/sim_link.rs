@@ -170,6 +170,11 @@ impl ScriptRemovals {
     }
 }
 
+/// A mission or match starting or ending: the list belonged to the last sim, whose ids the next one reuses.
+fn forget_removals(mut commands: Commands) {
+    commands.remove_resource::<ScriptRemovals>();
+}
+
 /// Marks a link the bench feeds itself: `step_sim` leaves it alone.
 #[derive(Resource)]
 pub struct BenchDriven;
@@ -288,6 +293,8 @@ impl Plugin for SimLinkPlugin {
             .init_resource::<CommandQueue>()
             .init_resource::<Selection>()
             .init_resource::<SimEntities>()
+            .add_systems(OnEnter(crate::app::AppState::Loading), forget_removals)
+            .add_systems(OnExit(crate::app::AppState::InGame), forget_removals)
             .add_systems(Update, step_sim.in_set(GameSet::SimLink).run_if(resource_exists::<SimLink>).run_if(not(resource_exists::<BenchDriven>)).run_if(not(resource_exists::<SimHeld>)));
     }
 }
@@ -322,6 +329,7 @@ fn step_sim(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::ecs::system::RunSystemOnce;
     use bevy::time::TimeUpdateStrategy;
     use sta_sim::command::LocalRouter;
     use sta_sim::{Fixed, MoveStats, Sim};
@@ -449,6 +457,16 @@ mod tests {
         let (mut app, ids, _) = killer_app(1, |ids| vec![(1, ids[0], false)], true);
         run(&mut app, 6);
         assert_eq!(app.world().resource::<Died>().0, [(4, ids[0])], "delivered in the first frame, which ran the opening ticks");
+    }
+
+    #[test]
+    fn a_new_sim_does_not_inherit_the_last_ones_removals() {
+        let (mut app, ids, removals) = killer_app(1, |ids| vec![(3, ids[0], false)], false);
+        removals.add([ids[0]]); // left over from a mission that ended
+        app.world_mut().run_system_once(forget_removals).unwrap();
+        app.update();
+        run(&mut app, 8);
+        assert_eq!(app.world().resource::<Died>().0, [(4, ids[0])], "the same id in a new sim shows its death");
     }
 
     #[test]

@@ -102,7 +102,17 @@ pub(super) fn pending_spawns(c: &Ctx) -> Vec<Rc<SpawnHandle>> {
 }
 
 /// Lists `id` as a scripted removal (a call the original performs silently), next to `Entity.remove`'s.
+///
+/// Only a unit alive at the call is listed: one that died on this very tick keeps its real death
+/// effect. The list is bounded for a host that never takes it.
 pub(crate) fn note_removed(c: &mut Ctx, id: EntityId) {
+    const BOUND: usize = 4096;
+    if c.alive(id).is_none() {
+        return;
+    }
+    if c.spawns.removed_log.len() >= BOUND {
+        c.spawns.removed_log.remove(0);
+    }
     c.spawns.removed_log.push(id);
 }
 
@@ -368,7 +378,7 @@ fn dispatch(c: &mut Ctx, actor: EntityRef, action: EntityAction) -> bool {
             let queued = edit(c, Edit::Kill(id));
             if queued {
                 c.spawns.killed.insert(id);
-                c.spawns.removed_log.push(id);
+                note_removed(c, id);
                 c.spawns.removed.extend(row);
             }
             queued
