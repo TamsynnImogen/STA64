@@ -218,7 +218,7 @@ pub(crate) fn check_derelict(t: &mut Entity, ctx: &mut Ctx) {
 
 /// Crew back to 1 or more clears the latch and switches the systems on again,
 /// except those that are dead.
-fn clear_derelict(t: &mut Entity, def: &UnitDef, ctx: &mut Ctx) {
+pub(crate) fn clear_derelict(t: &mut Entity, def: &UnitDef, ctx: &mut Ctx) {
     let row = ctx.subsystems.get(t.id).unwrap_or_default();
     let dead = |n| system_dead(def, &row, n);
     t.flags = t.flags.with(UnitFlags::ENGINES_OFF, dead(ENGINES)).with(UnitFlags::WEAPONS_OFF, dead(WEAPONS));
