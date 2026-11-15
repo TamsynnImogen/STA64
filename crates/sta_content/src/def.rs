@@ -363,6 +363,8 @@ pub struct UnitDef {
     pub has_crew: Option<bool>,
     /// `maxCrewGain` of a station (SIM-25): what it adds to its team's crew capacity.
     pub crew_gain: Fixed,
+    /// The unit's transporter and boarding keys (SIM-46 P0); typed, not read by the sim yet.
+    pub transport: TransportDef,
     /// `saneCrewLossMethod` (SIM-39): above 100 crew a shield hit's loss is
     /// in crew points; without it (or at 100 or less) it is a percent of the
     /// unit's current crew.
@@ -492,6 +494,7 @@ impl UnitDef {
             facility: None,
             has_crew: None,
             crew_gain: Fixed::ZERO,
+            transport: TransportDef::default(),
             sane_crew_loss: false,
             system_hit_points: [Fixed::ZERO; 5],
             casualty: CasualtyDef::default(),
@@ -620,6 +623,48 @@ pub struct OrdnanceCrewLoss {
     pub shield: Fixed,
     /// `hullCrewModifier`: crew lost by a hit that lands on the crew location.
     pub hull: Fixed,
+}
+
+/// A unit's transporter and boarding keys (SIM-46 P0). Read, typed and
+/// exposed only: no simulation system applies them yet and they are not in
+/// the content digest until one does. Absent keys keep the engine's default
+/// (read from the executable, static); `None` marks a key the ODF does not
+/// carry where its absence means something other than a default.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransportDef {
+    /// `transporter`: the unit can transport. `None` when no ODF in its
+    /// include chain has the key (Armada I has none).
+    pub transporter: Option<bool>,
+    /// `assault`: the unit may be ordered to capture (stock and Fleet Operations).
+    pub assault: bool,
+    /// `boardingPartyStrength`: multiplier on the carrier's boarding parties;
+    /// 1.0 when absent, an explicit zero is kept.
+    pub boarding_party_strength: Fixed,
+    /// `disableShieldsOnTransport`: the carrier's own shields drop while it
+    /// transports; true when absent, an explicit zero is kept.
+    pub disable_shields_on_transport: bool,
+    /// `weldingAnimSpeed` (Roots): only zero against non-zero matters to the
+    /// transport-attack rule; `None` when absent.
+    pub welding_anim_speed: Option<Fixed>,
+    /// `shieldDelay`, seconds: how long a unit's shields stay down after a
+    /// hit; `None` when absent.
+    pub shield_delay: Option<Fixed>,
+    /// `eventTransport`: the event a transport plays (presentation).
+    pub event_transport: Option<String>,
+}
+
+impl Default for TransportDef {
+    fn default() -> Self {
+        TransportDef {
+            transporter: None,
+            assault: false,
+            boarding_party_strength: Fixed::ONE,
+            disable_shields_on_transport: true,
+            welding_anim_speed: None,
+            shield_delay: None,
+            event_transport: None,
+        }
+    }
 }
 
 /// A unit's crew-casualty keys (SIM-39). Arrays are in the order of

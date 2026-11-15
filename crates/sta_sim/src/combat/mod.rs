@@ -16,6 +16,8 @@ mod damage_tests;
 #[cfg(test)]
 pub(crate) mod subsystem_tests;
 #[cfg(test)]
+mod pool_regen_tests;
+#[cfg(test)]
 pub(crate) mod pd_tests;
 #[cfg(test)]
 mod weapons_tests;

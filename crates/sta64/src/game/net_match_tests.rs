@@ -100,7 +100,7 @@ fn race(name: &str, slot: i64) -> RaceDef {
         interface: None,
         interface_sprites: None,
         single_player_music: None,
-        multiplayer_music: None,
+        multiplayer_music: None, music_tracks: Vec::new(),
         standard_units: vec!["fx_yard".into(), "fx_cruiser".into(), "fx_cruiser".into(), "fx_frigate".into()],
         minimal_units: Vec::new(),
         stock: [5000, 0, 0, 0],

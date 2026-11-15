@@ -235,7 +235,7 @@ impl Transports {
     }
 
     /// Hold `id` of `kind` until `until`, keeping a later end if there is one.
-    fn hold(&mut self, id: EntityId, kind: u8, until: Tick) {
+    pub(super) fn hold(&mut self, id: EntityId, kind: u8, until: Tick) {
         let held = self.holds.entry((id, kind)).or_insert(until);
         *held = (*held).max(until);
     }
