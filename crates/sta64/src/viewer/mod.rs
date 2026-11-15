@@ -11,6 +11,7 @@ use bevy::image::CompressedImageFormats;
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::prelude::*;
 use bevy::render::renderer::RenderDevice;
+use sta_sim::PlayerId;
 
 #[derive(Resource)]
 pub struct Mounted(pub sta_vfs::Vfs);
@@ -89,6 +90,28 @@ impl TeamColours {
             .map(|b| Self::parse(&String::from_utf8_lossy(&b)))
             .find(|t| !t.is_empty());
         TeamColours(parsed.unwrap_or_else(|| Self::parse(STOCK_TEAMCOLOR)))
+    }
+
+    /// The palette entry of a sim owner (seat). The file numbers its entries 0 = neutral,
+    /// 1 to 8 = teams (entries 9 and up are spare and race colours, not teams), and a seat
+    /// is the BZN team minus one (`MapDef::convert_bzn`), so seat `n` takes entry `n + 1`.
+    /// An owner that is not a player seat takes the neutral entry (the first), and so does
+    /// a seat whose entry a shorter mod palette lacks. `None` only when the palette is empty.
+    ///
+    /// The unit view (`sync_units`) does not use this for the unowned owner: unowned units
+    /// keep plain white there, as before; the map view uses the neutral entry for them.
+    pub fn owner_colour(&self, owner: PlayerId) -> Option<Color> {
+        if !owner.is_player() {
+            return self.0.first().map(|t| t.1);
+        }
+        self.team_colour(u32::from(owner.0) + 1)
+    }
+
+    /// The palette entry of a 1-based BZN team; team 0, a team above `MAX_PLAYERS` and a
+    /// team beyond a shorter mod palette are neutral.
+    pub fn team_colour(&self, team: u32) -> Option<Color> {
+        let i = if team == 0 || team > u32::from(PlayerId::MAX_PLAYERS) { 0 } else { team as usize };
+        self.0.get(i).or_else(|| self.0.first()).map(|t| t.1)
     }
 
     /// The viewer's starting colour: `white`, the first real team after the neutral
@@ -469,5 +492,30 @@ mod team_colour_tests {
         assert_eq!(t.0[t.default_index()].0, "white");
         let fed = t.0.iter().find(|(n, _)| n == "federation").unwrap().1.to_srgba();
         assert!((fed.red - 0.9).abs() < 1e-6 && fed.red == fed.green && fed.green == fed.blue);
+    }
+
+    #[test]
+    fn a_seat_takes_the_entry_after_the_neutral_one() {
+        let t = TeamColours(vec![
+            ("empty".into(), Color::srgb(0.5, 0.5, 0.5)),
+            ("first".into(), Color::srgb(1.0, 0.0, 0.0)),
+            ("second".into(), Color::srgb(0.0, 1.0, 0.0)),
+        ]);
+        assert_eq!(t.owner_colour(PlayerId(0)), Some(Color::srgb(1.0, 0.0, 0.0)));
+        assert_eq!(t.owner_colour(PlayerId(1)), Some(Color::srgb(0.0, 1.0, 0.0)));
+        // Beyond the palette and unowned: the neutral entry.
+        assert_eq!(t.owner_colour(PlayerId(2)), Some(Color::srgb(0.5, 0.5, 0.5)), "a shorter palette: neutral");
+        assert_eq!(t.owner_colour(sta_sim::world::NEUTRAL), Some(Color::srgb(0.5, 0.5, 0.5)));
+        // The map view's BZN team (1-based) agrees with the seat it becomes.
+        assert_eq!(t.team_colour(1), t.owner_colour(PlayerId(0)));
+        assert_eq!(t.team_colour(0), t.owner_colour(sta_sim::world::NEUTRAL));
+        // Spare and race entries (9 and up) are not teams.
+        let long = TeamColours((0..14).map(|i| (format!("e{i}"), Color::srgb(i as f32 / 20.0, 0.0, 0.0))).collect());
+        assert_eq!(long.owner_colour(PlayerId(7)), Some(Color::srgb(0.4, 0.0, 0.0)));
+        assert_eq!(long.owner_colour(PlayerId(8)), Some(Color::srgb(0.0, 0.0, 0.0)));
+        assert_eq!(long.owner_colour(PlayerId(100)), Some(Color::srgb(0.0, 0.0, 0.0)));
+        assert_eq!(long.team_colour(8), Some(Color::srgb(0.4, 0.0, 0.0)));
+        assert_eq!(long.team_colour(9), Some(Color::srgb(0.0, 0.0, 0.0)));
+        assert_eq!(TeamColours(Vec::new()).owner_colour(PlayerId(0)), None);
     }
 }
