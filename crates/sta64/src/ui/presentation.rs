@@ -498,10 +498,13 @@ pub(crate) fn consume(
                 // the stock openings call `fadeIn` at their first tick and begin black, so nothing of
                 // the RTS view shows before the first shot (the original's start colour is inferred:
                 // not measured; a fade in on a screen already faded out runs from there as before).
-                if !*out && cineractive.on && !fade.touched && fade.alpha == 0.0 {
+                // An instant fade in on a clear screen (a script clearing a held fade) is neither a
+                // first fade nor a start from black.
+                let instant_clear = !*out && seconds.to_f32() <= 0.0 && fade.alpha == 0.0;
+                if !*out && cineractive.on && !fade.touched && fade.alpha == 0.0 && !instant_clear {
                     fade.alpha = 1.0;
                 }
-                fade.touched = true;
+                fade.touched |= !instant_clear;
                 fade.start(*out, seconds.to_f32(), *rgb);
             }
             Presentation::Cineractive { on, skippable } => {
@@ -547,9 +550,9 @@ pub(crate) fn consume(
                 }
             }
             // A2 `ShowTitle(id, x, y, fade)` / `ShowSubtitle`, queued after the typed title with its id:
-            // the canvas place; a negative x is centred (the stock intro captions pass -1). The
-            // fade flag, the title font and colour are not applied (read from the executable,
-            // static; not measured).
+            // the canvas place; a negative x is centred (read from the executable, static). The
+            // fade flag, the title font and colour are not applied (not measured); wrapped lines
+            // of a centred title are not re-centred; the title layer is under the fade overlay.
             Presentation::Call { name, args } if name == "A2.ShowTitle" || name == "A2.ShowSubtitle" => {
                 if let [Arg::Int(id), x, y, ..] = args.as_slice()
                     && let (Some(x), Some(y), Ok(id)) = (num(x), num(y), u32::try_from(*id))
@@ -1098,6 +1101,22 @@ mod tests {
 
     fn replies(app: &mut App) -> Vec<ScriptReply> {
         app.world_mut().resource_mut::<Messages<ScriptReply>>().drain().collect()
+    }
+
+    #[test]
+    fn an_instant_clear_on_a_clear_screen_is_not_a_cineractives_first_fade() {
+        let mut app = app();
+        send(&mut app, Presentation::Cineractive { on: true, skippable: true });
+        send(&mut app, Presentation::Fade { out: false, seconds: Fixed::ZERO, rgb: [0; 3] });
+        assert_eq!(app.world().resource::<FadeState>().alpha, 0.0);
+        // The first real fade in still opens from black.
+        send(&mut app, Presentation::Fade { out: false, seconds: secs(2), rgb: [0; 3] });
+        assert!(app.world().resource::<FadeState>().alpha > 0.99);
+        // A clear of a held black does clear it.
+        send(&mut app, Presentation::Fade { out: true, seconds: Fixed::ZERO, rgb: [0; 3] });
+        assert_eq!(app.world().resource::<FadeState>().alpha, 1.0);
+        send(&mut app, Presentation::Fade { out: false, seconds: Fixed::ZERO, rgb: [0; 3] });
+        assert_eq!(app.world().resource::<FadeState>().alpha, 0.0);
     }
 
     #[test]
