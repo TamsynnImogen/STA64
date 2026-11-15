@@ -332,6 +332,12 @@ pub enum Edit {
     /// other target (STA64 policy; the original has no type check).
     /// SCRIPT/BENCH only. Appended tag 46.
     PlanetPopulation(EntityId, Fixed),
+    /// Armada I `SetWarpSpeed` / `ResetWarpSpeed` (LUA-31): a live craft's
+    /// absolute warp speed in units per second, kept between 0 and
+    /// [`crate::warp_override::MAX_WARP`]; `None` restores the definition's.
+    /// Saved per unit. The end of a cineractive resets every craft's. Rejected
+    /// for anything but a live craft. SCRIPT/BENCH only. Appended tag 47.
+    WarpSpeed(EntityId, Option<Fixed>),
 }
 
 /// Which team-pool rule an [`Edit::TeamPool`] applies (appended variants only).
@@ -558,6 +564,17 @@ mod tests {
             assert_eq!(bytes[0], tag, "{edit:?}");
             assert_eq!(postcard::from_bytes::<Edit>(&bytes).unwrap(), edit);
         }
+    }
+
+    #[test]
+    fn warp_speed_edit_appends_tag_47() {
+        for to in [None, Some(Fixed::from_int(30))] {
+            let edit = Edit::WarpSpeed(EntityId(1), to);
+            let bytes = postcard::to_allocvec(&edit).unwrap();
+            assert_eq!(bytes[0], 47, "{edit:?}");
+            assert_eq!(postcard::from_bytes::<Edit>(&bytes).unwrap(), edit);
+        }
+        assert_eq!(postcard::to_allocvec(&Edit::WarpSpeed(EntityId(1), None)).unwrap(), [47, 1, 0]);
     }
 
     #[test]

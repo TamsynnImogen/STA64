@@ -36,6 +36,9 @@ pub mod kinematics;
 pub mod movement;
 mod ownership;
 pub mod speed_override;
+pub mod warp_override;
+#[cfg(test)]
+mod warp_override_tests;
 #[cfg(test)]
 mod speed_override_tests;
 mod perception;
@@ -566,7 +569,7 @@ impl Sim {
             }
         }
         let perceived_owners = self.perception.iter().map(|(id, &owner)| (id, owner)).collect();
-        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners, appearance: self.appearance_view(), colonies: self.colony_views(), attrs: crate::attrs::AttrsView { names: self.switches.names(), seats: self.seat_views(), impulse: self.impulse_overrides(), ..self.attrs.view() } }
+        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners, appearance: self.appearance_view(), colonies: self.colony_views(), attrs: crate::attrs::AttrsView { names: self.switches.names(), seats: self.seat_views(), impulse: self.impulse_overrides(), warp: self.warp_overrides(), ..self.attrs.view() } }
     }
 
     /// FNV-1a over all simulation state, for desync detection. The content
@@ -658,6 +661,8 @@ impl Sim {
         if !self.colonies.is_empty() {
             self.colonies.hash_into(&mut h);
         }
+        // LUA-31: scripted warp speeds (nothing is hashed without an override).
+        self.hash_warp_overrides(&mut h);
         // SIM-46: transporter orders, parties in flight, shield holds (nothing is hashed without them).
         if !self.transports.is_empty() {
             self.transports.hash_into(&mut h);

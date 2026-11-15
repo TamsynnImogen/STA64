@@ -50,9 +50,11 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// adds crew casualties and the derelict latch to the subsystem rows (#652).
 /// Format 25 appends the team-pool adjustments of scripts (SIM-54). Format 26
 /// appends mission-set relations between seats (SIM-63). Format 27 appends the
-/// planet population rows and colony ship orders (SIM-30).
+/// planet population rows and colony ship orders (SIM-30). Format 28 appends the
+/// scripted warp speeds (LUA-31). Format 29 appends the transporter orders,
+/// parties in flight and shield holds (SIM-46).
 /// Only the current format is read.
-pub const FORMAT_VERSION: u16 = 27;
+pub const FORMAT_VERSION: u16 = 29;
 
 const HEADER: usize = 4 + 2 + 4 + 8;
 
@@ -205,6 +207,14 @@ struct AppearanceRec {
 struct RelationsRec {
     version: u8,
     rows: crate::relations::RelationRows,
+}
+
+/// Format 28 (LUA-31): the craft whose warp speed a script changed from their
+/// definition's (`warp_override`), ascending id.
+#[derive(Serialize, Deserialize)]
+struct WarpRec {
+    version: u8,
+    rows: Vec<(EntityId, Fixed)>,
 }
 
 /// Format 19, changed in 20: the stuck-order watch rows (`watchdog`).
@@ -464,6 +474,7 @@ impl Sim {
         out.extend(postcard::to_allocvec(&AdjustRec { version: 1, rows: self.economy.adjust_rec() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&RelationsRec { version: 1, rows: self.relations.to_rows() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&self.colonies.to_rec()).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&WarpRec { version: 1, rows: self.warp_overrides() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&self.transports.to_rec()).expect("snapshot serialises"));
         out
     }
@@ -535,6 +546,9 @@ impl Sim {
         if record.version != 1 { return Err(SnapshotError::Corrupt("unknown relations record version".into())); }
         let relation_rows = record.rows;
         let (colony_rec, rest): (crate::colony::ColoniesRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        let (record, rest): (WarpRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        if record.version != 1 { return Err(SnapshotError::Corrupt("unknown warp speed record version".into())); }
+        let warp_override_rows = record.rows;
         let (transport_rec, rest): (crate::combat::boarding::TransportsRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         if !rest.is_empty() { return Err(SnapshotError::Corrupt("trailing bytes".into())); }
         if let Some(row) = b.economy.miners.iter().find(|row| row.5 > 4) {
@@ -561,6 +575,22 @@ impl Sim {
                     unit.stats.heading_close_for_warp = def.movement.heading_close_for_warp;
                 }
             }
+        }
+        // LUA-31: the scripted warp speeds over the definitions' values.
+        if warp_override_rows.windows(2).any(|pair| pair[0].0 >= pair[1].0) {
+            return Err(corrupt("warp speed rows"));
+        }
+        // Only what the writer produces: a craft with a definition whose value differs from it.
+        for (id, v) in warp_override_rows {
+            let unit = units.get_mut(id).ok_or_else(|| SnapshotError::Corrupt("warp speed of an unknown entity".into()))?;
+            if unit.kind != EntityKind::Craft || v < Fixed::ZERO || v > crate::warp_override::MAX_WARP {
+                return Err(SnapshotError::Corrupt("warp speed of a non-craft or out of range".into()));
+            }
+            let class = content.as_deref().and_then(|db| db.unit(unit.def)).map(|d| d.movement.warp_speed);
+            if class.is_none_or(|c| c == v) {
+                return Err(SnapshotError::Corrupt("warp speed row without a definition or equal to it".into()));
+            }
+            unit.stats.warp_speed = v;
         }
         if crew_rows.windows(2).any(|pair| pair[0].0 >= pair[1].0) {
             return Err(corrupt("unit crew rows"));
@@ -742,6 +772,10 @@ mod confinement_tests;
 #[cfg(test)]
 #[path = "snapshot/perception_tests.rs"]
 mod perception_tests;
+
+#[cfg(test)]
+#[path = "snapshot/warp_tests.rs"]
+mod warp_tests;
 
 #[cfg(test)]
 mod tests {
