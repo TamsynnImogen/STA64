@@ -30,12 +30,16 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
                 return Err(mlua::Error::runtime("A2.GetHandle requires exactly one label string"));
             };
             let label = label.to_str()?;
-            let c = c.borrow();
+            let mut c = c.borrow_mut();
             let id = c
                 .labels
                 .iter()
                 .find(|(id, l)| l.as_str() == &*label && c.unit(**id).is_some())
                 .map_or(0, |(id, _)| i64::from(id.0));
+            if id == 0 {
+                // LUA-25: a label the map has and the load did not create is a handle gap.
+                c.note_unresolved_label("A2", &label, false);
+            }
             Ok(id)
         })?,
     )?;

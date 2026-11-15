@@ -187,6 +187,8 @@ pub enum Act {
     Special(u8),
     /// UI-02's stop on the own selection.
     Stop,
+    /// UI-only station command. There is no sim order or refill implementation yet.
+    Recrew,
     /// UI-02's formation on the own selection.
     Formation(u8),
     /// A loaded stock command ODF whose formation parameter has no verified sim mapping.
@@ -335,6 +337,7 @@ fn button(cell: usize, label: &str, act: Act, tip: &str) -> Button {
         Act::Target(TargetMode::Attack) => (vec!["b_attack".into()], false),
         Act::Target(TargetMode::Rally) => (vec!["b_rally".into()], false),
         Act::Stop => (vec!["b_stop".into()], false),
+        Act::Recrew => (vec!["b_recrew".into()], false),
         Act::Back => (vec!["b_back".into()], false),
         Act::Target(TargetMode::Mine) => (vec!["b_harvest".into()], false),
         Act::Target(TargetMode::Colonize) => (vec!["b_colonize".into()], false),
@@ -469,6 +472,11 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
     if caps.colonize {
         out.push(button(8, &tr("Colonize"), Act::Target(TargetMode::Colonize), &tooltip_key("Colonize")));
     }
+    if caps.recrew {
+        let mut b = button(9, &tr("Recrew"), Act::Recrew, &tooltip_key("Recrew"));
+        if !caps.recrew_ready { b.look = Look::Locked; }
+        out.push(b);
+    }
     for (i, (slot, _)) in caps.specials.iter().enumerate() {
         if let Some(cell) = [5, 10, 11, 12, 13, 14].get(i) {
             out.push(button(*cell, &tr("Cloak"), Act::Special(*slot), &tooltip_key("Toggle cloak")));
@@ -485,7 +493,7 @@ pub fn command(feed: &HudFeed, act: &Act) -> Option<(CommandKind, Vec<EntityId>)
     let own = feed.own_selection();
     let caps = commands::shared(feed);
     match act {
-        Act::OpenBuild | Act::OpenFormations | Act::OpenNativeMenu(_) | Act::Back | Act::Target(_) | Act::NativeFormation(_) => None,
+        Act::OpenBuild | Act::OpenFormations | Act::OpenNativeMenu(_) | Act::Back | Act::Target(_) | Act::NativeFormation(_) | Act::Recrew => None,
         Act::Stop if caps.stop => {
             Some((CommandKind::Order(Order::Stop { units: own.clone() }), own))
         }
