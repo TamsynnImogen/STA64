@@ -13,6 +13,9 @@ pub enum Call {
     Play { name: String, bus: Bus, at: Option<[f32; 3]> },
     /// A movie's audio stream was attached (`PlayStream` of `sample_rate` Hz).
     PlayStream { sample_rate: u32, bus: Bus },
+    /// A script's stream, stoppable by its `tag` ([`Call::StopTag`]).
+    PlayTagged { tag: u32, name: String, bus: Bus },
+    StopTag { tag: u32 },
     BusVolume { bus: MixBus, volume: f32 },
     StopAll,
     StopBus { bus: Bus },
@@ -59,6 +62,12 @@ impl AudioBackend for NullAudio {
             self.voice_remaining = if sound.sample_rate == 0 { 0.0 } else { sound.frames.len() as f64 / sound.sample_rate as f64 };
         }
         self.push(Call::Play { name: sound.name.clone(), bus, at });
+    }
+    fn play_tagged(&mut self, tag: u32, sound: &Sound, bus: Bus, _at: Option<[f32; 3]>) {
+        self.push(Call::PlayTagged { tag, name: sound.name.clone(), bus });
+    }
+    fn stop_tag(&mut self, tag: u32) {
+        self.push(Call::StopTag { tag });
     }
     fn play_stream(&mut self, stream: &PcmStream, bus: Bus) {
         stream.mark_attached();

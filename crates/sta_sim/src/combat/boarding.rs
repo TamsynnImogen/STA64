@@ -30,12 +30,14 @@
 //!   step a fixed time after the last (M); the target's recharge delay is set to 3.0 s on every
 //!   pulse (M).
 //!
-//! **Content seam.** The transporter and boarding keys (`TRANSPORTER_*`,
-//! `boardingPartyStrength`, race `boardingStrength`, `shieldDelay`,
-//! `disableShieldsOnTransport`, `transporter`, `canCommandeer`...) are not
-//! typed in `sta_content` yet (SIM-46 P0). [`TransportRules`] and the four
-//! small functions below hold the stock values until they are; the only race
-//! key read from content is `crewRedStatus` (with its exe default).
+//! **Content seam (SIM-69).** The numbers come from content: the header's
+//! `TRANSPORTER_*` ([`TransportRules`]), the unit's `transporter`,
+//! `boardingPartyStrength`, `disableShieldsOnTransport` and `shieldDelay`, the
+//! race's `boardingStrength`, `canCommandeer` and `canBeCommandeered` (through
+//! `Rules::race_boarding`). Absent keys take the documented defaults of
+//! `sta_content`. All of them are in the content digest when set. The
+//! executable constants (crew floor 9, the 1.5 defence factor, the carrier's
+//! 3.3 s shield return) and the race `crewRedStatus` stay as before.
 
 use std::collections::BTreeMap;
 
@@ -56,33 +58,41 @@ pub(crate) const DEFENCE_FACTOR: Fixed = Fixed::from_bits(6_442_450_944);
 /// 0.25, the executable's default `crewRedStatus`.
 const DEFAULT_CREW_RED: Fixed = Fixed::from_bits(1 << 30);
 
-/// The stock transporter numbers, until P0's content keys carry them.
+/// The transporter numbers of the content: `RTS_CFG.h`'s `TRANSPORTER_*`
+/// (the engine's defaults for a key the header leaves out) and the executable's
+/// constants (SIM-69).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct TransportRules {
-    /// `TRANSPORTER_RANGE`, surface to surface (stock A2 500).
+    /// `TRANSPORTER_RANGE`, surface to surface.
     pub range: Fixed,
-    /// `TRANSPORTER_MAX`: the party size and the carrier's loss per pulse (5).
+    /// `TRANSPORTER_MAX`: the party size and the carrier's loss per pulse.
     pub party: Fixed,
-    /// `TRANSPORTER_DELAY` in ticks (1.0 s).
+    /// `TRANSPORTER_DELAY` in ticks.
     pub delay: Tick,
-    /// `TRANSPORTER_ACTION_DELAY` in ticks: an enemy party's flight (1.0 s).
+    /// `TRANSPORTER_ACTION_DELAY` in ticks: an enemy party's flight.
     pub action_delay: Tick,
     /// The carrier needs more crew than this to start (9, exe constant, S).
     pub min_crew: Fixed,
-    /// The target's shield recharge delay set per pulse: `shieldDelay` (3.0 s, M).
+    /// The target's shield recharge delay set per pulse when its ODF has no
+    /// `shieldDelay` (3.0 s, M); [`shield_hold`] reads the key.
     pub target_shield_hold: Tick,
-    /// How long after a pulse the carrier's shields stay off (3.3 s, M).
+    /// How long after a pulse the carrier's shields stay off (3.3 s, M; not a data key).
     pub carrier_shield_return: Tick,
 }
 
+/// Seconds as ticks, rounded to the nearest; negative reads as zero.
+fn ticks(seconds: Fixed) -> Tick {
+    ((i128::from(seconds.to_bits().max(0)) * i128::from(TICK_HZ) + (1 << 31)) >> 32) as Tick
+}
+
 impl TransportRules {
-    /// STUB: stock Armada II values; P0 replaces this with the rules read from the content.
-    pub(crate) fn of(_db: &ContentDb) -> TransportRules {
+    pub(crate) fn of(db: &ContentDb) -> TransportRules {
+        let t = db.rules().transporter();
         TransportRules {
-            range: Fixed::from_int(500),
-            party: Fixed::from_int(5),
-            delay: TICK_HZ as Tick,
-            action_delay: TICK_HZ as Tick,
+            range: t.range,
+            party: Fixed::from_int(t.max.clamp(0, 1_000_000) as i32),
+            delay: ticks(t.delay),
+            action_delay: ticks(t.action_delay),
             min_crew: Fixed::from_int(9),
             target_shield_hold: 3 * TICK_HZ as Tick,
             carrier_shield_return: 99,
@@ -90,46 +100,55 @@ impl TransportRules {
     }
 }
 
-/// The carrier's crew floors, `[min_crew, party]`: a carrier needs more live crew than both to take
-/// `Order::Transport`. Read-only, no behaviour: lets the HUD grey its button from the rule's own numbers (UI-40).
-pub fn carrier_crew_floors(db: &ContentDb) -> [Fixed; 2] {
+/// Whether the unit's game family and its own keys allow `Order::Transport` at all, whatever its
+/// crew: the profile family (`crew_loss_on_hit`, see the module docs), the unit's `transporter` key
+/// (absent: a crewed ship or station, as the stub did) and no planets. Read-only; a client shows
+/// its button from this and from [`can_transport`] and does not repeat the rule.
+pub fn transport_allowed(db: &ContentDb, def: &UnitDef, crew_max: Fixed) -> bool {
+    def.planet_role.is_none() && db.unit_features(def).crew_loss_on_hit && def.transport.transporter.unwrap_or(crew_max > Fixed::ZERO)
+}
+
+/// The sim's own answer to "may this unit be ordered to transport now?": [`transport_allowed`] and
+/// the crew floors (`crew` is current and maximum crew: the carrier needs more than the
+/// executable's 9 and more than one party). Read-only; the order validation uses it.
+pub fn can_transport(db: &ContentDb, def: &UnitDef, crew: [Fixed; 2]) -> bool {
     let rules = TransportRules::of(db);
-    [rules.min_crew, rules.party]
+    transport_allowed(db, def, crew[1]) && crew[0] > rules.min_crew && crew[0] > rules.party
 }
 
-/// STUB (`transporter`, default true on `craft.odf`): crewed ships and stations.
-fn can_transport(def: &UnitDef, crew_max: Fixed) -> bool {
-    def.planet_role.is_none() && crew_max > Fixed::ZERO
+/// `boardingPartyStrength` (1.0 when absent).
+fn boarding_multiplier(def: &UnitDef) -> Fixed {
+    def.transport.boarding_party_strength
 }
 
-/// STUB (`boardingPartyStrength`, default 1.0).
-fn boarding_multiplier(_def: &UnitDef) -> Fixed {
-    Fixed::ONE
+/// The race's `boardingStrength` (1.0 when absent).
+fn race_strength(db: &ContentDb, race: &str) -> Fixed {
+    db.rules().race_boarding(race).boarding_strength
 }
 
-/// STUB (race `boardingStrength`, default 1.0).
-fn race_strength(_db: &ContentDb, _race: &str) -> Fixed {
-    Fixed::ONE
+/// Race `canBeCommandeered` (true when absent).
+fn can_be_commandeered(db: &ContentDb, race: &str) -> bool {
+    db.rules().race_boarding(race).can_be_commandeered
 }
 
-/// STUB (race `canBeCommandeered`, default true; stock A2 sets 0 on one race).
-fn can_be_commandeered(_db: &ContentDb, _race: &str) -> bool {
-    true
+/// Race `canCommandeer` (true when absent).
+fn can_commandeer(db: &ContentDb, race: &str) -> bool {
+    db.rules().race_boarding(race).can_commandeer
 }
 
-/// STUB (race `canCommandeer`, default true; stock A2 sets 0 on one race).
-fn can_commandeer(_db: &ContentDb, _race: &str) -> bool {
-    true
+/// `disableShieldsOnTransport` (true when absent).
+fn drops_shields(def: &UnitDef) -> bool {
+    def.transport.disable_shields_on_transport
 }
 
-/// STUB (`disableShieldsOnTransport`, default true).
-fn drops_shields(_def: &UnitDef) -> bool {
-    true
+/// The recharge hold set on a boarded target: its `shieldDelay`, else the default.
+fn shield_hold(def: &UnitDef, rules: &TransportRules) -> Tick {
+    def.transport.shield_delay.map_or(rules.target_shield_hold, ticks)
 }
 
 /// The carrier race's `crewRedStatus` (data), the executable's 0.25 when absent.
 fn crew_red_status(db: &ContentDb, race: &str) -> Fixed {
-    db.rules().race_repair(race).and_then(|r| r.crew_red_status).unwrap_or(DEFAULT_CREW_RED)
+    db.rules().race_repair_of(race).and_then(|r| r.crew_red_status).unwrap_or(DEFAULT_CREW_RED)
 }
 
 /// One carrier's transport.
@@ -386,7 +405,6 @@ impl Sim {
         if attack {
             return false; // P3: transport attack (Roots, assault ships).
         }
-        let rules = TransportRules::of(&db);
         let Some(t) = self.units.get(target).filter(|t| alive(t)) else { return false };
         let target_ok = matches!(t.kind, EntityKind::Craft | EntityKind::Station)
             && t.crew.is_some_and(|c| c[1] >= Fixed::ONE)
@@ -407,8 +425,7 @@ impl Sim {
                             // The carrier's race must be allowed to take units of another team.
                             && (self.same_team(u.owner, target_owner) || can_commandeer(&db, self.unit_race(id).unwrap_or("")))
                             && (!player.is_player() || u.owner == player)
-                            && def.is_some_and(|d| db.unit_features(d).crew_loss_on_hit && can_transport(d, u.crew.map_or(Fixed::ZERO, |c| c[1])))
-                            && u.crew.is_some_and(|c| c[0] > rules.min_crew && c[0] > rules.party)
+                            && def.is_some_and(|d| u.crew.is_some_and(|c| can_transport(&db, d, c)))
                     })
             })
             .collect();
@@ -509,7 +526,7 @@ impl Sim {
         let drops = drops_shields(cdef);
         let tick = self.tick;
         if enemy {
-            self.transports.hold(target, TARGET_HOLD, tick + rules.target_shield_hold);
+            self.transports.hold(target, TARGET_HOLD, tick + shield_hold(tdef, rules));
         }
         let Some(c) = self.units.get_mut(carrier) else { return false };
         c.crew = Some([cnow - size, cmax]);

@@ -409,6 +409,7 @@ fn press(
         match act {
             Act::OpenBuild => state.page = Page::Build,
             Act::OpenNativeMenu(id) => state.page = Page::Native(*id),
+            Act::OpenOrders => state.page = Page::Orders,
             Act::OpenFormations if commands::shared(&feed).move_order => state.page = Page::Formations,
             Act::Back => {
                 state.page = Page::Top;
