@@ -2411,13 +2411,15 @@ local function NewVar(kind, name)
 end
 -- Variables the engine owns (ALWAYS_EVALUATE, isCineractiveCancel/Done and
 -- the per-team AI values): one per game, with the engine's start values; the
--- engine's own writes to them (cineractive cancel, team strength) are not
--- reproduced here.
+-- engine's writes to them are pushed by the host (cineractive flags, team strength).
 local function EngineVar(name, kind)
     local var = Mission.engineVars[name]
     if not var then
         var = NewVar(kind or 'hot_int', name)
         var.engine = true
+        -- The AI's team strengths read 0.0 from the mission's creation (-1.0 is the engine's
+        -- value before any mission exists, never visible during one).
+        if name:match('^strength_team_%d$') then var.value = 0.0 end
         Mission.engineVars[name] = var
     end
     return var
