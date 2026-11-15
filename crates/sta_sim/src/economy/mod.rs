@@ -149,12 +149,10 @@ const MINING_BEAM_CLASS: &str = "minebm";
 /// this far ahead of the freighter. cos and sin of it.
 const PURSUIT_COS: Fixed = Fixed::from_bits(3_719_550_787);
 const PURSUIT_SIN: Fixed = Fixed::from_bits(2_147_483_648);
-/// Chord of that 30 degree step as a share of the radius: 2 sin(15 degrees).
-const PURSUIT_CHORD: Fixed = Fixed::from_bits(2_223_238_668);
 /// How far beyond the miner's `tooCloseToTurn` the pursuit point must lie. Inside that distance the
-/// smooth movement model stops a slow craft instead of steering it, so a miner whose own
-/// `tooCloseToTurn` exceeds the 30 degree chord (Fleet Operations 4.0: 120 against a 150 beam) would
-/// park at its first stop with the beam on.
+/// smooth movement model stops a slow craft and stops it turning, so a miner whose own
+/// `tooCloseToTurn` exceeds its distance to the 30 degree point (Fleet Operations 4.0: 120 against a
+/// 150 beam) would park with the beam on.
 const PURSUIT_MARGIN: i32 = 10;
 /// Height layer constants: 7.5, 2/15, k 5/6 (moons, planets) and 1/2 (latinum nebula).
 const LAYER_MID: Fixed = Fixed::from_bits(32_212_254_720);
@@ -194,31 +192,36 @@ fn work_distance(db: &ContentDb, miner: ContentKey, node: ContentKey) -> Fixed {
 /// round the resource, `ANCHOR_PURSUIT_POINT_ANGLE` ahead of it (clockwise seen from above), on the
 /// freighter's own height layer (`handle & 15`; `k` 5/6, a latinum nebula 1/2). Read from the
 /// executable, static; the on-screen direction and speed are not measured.
+///
+/// Exception: when that point is closer to the miner than its ODF `tooCloseToTurn` plus
+/// [`PURSUIT_MARGIN`], it is pushed outward along the miner-to-point line to that distance. Stock
+/// miners (`tooCloseToTurn` 50) never meet it, so they keep the point bit for bit. The push-out is
+/// STA64's adaptation to the movement model, not measured.
 fn orbit_point(db: &ContentDb, id: EntityId, miner: ContentKey, pos: Vec3, node_def: ContentKey, node: Vec3, range: Fixed) -> Option<Vec3> {
     let (dx, dz) = (pos.x - node.x, pos.z - node.z);
     let len = (dx * dx + dz * dz).sqrt();
     if len < Fixed::ONE {
         return None;
     }
-    // The step round the circle is the original's 30 degrees, widened only as far as it takes for the
-    // pursuit point to lie beyond the miner's `tooCloseToTurn` (ODF key `tooCloseToTurn`; stock
-    // miners keep exactly 30 degrees).
-    let need = db.unit(miner).map_or(Fixed::ZERO, |d| d.movement.too_close_to_turn) + Fixed::from_int(PURSUIT_MARGIN);
-    let (c, s) = if need > PURSUIT_CHORD * range {
-        let chord = need.min(range * Fixed::from_bits(7_730_941_133)); // at most 1.8 radii
-        let c = Fixed::ONE - chord * chord / (range * range * Fixed::from_int(2));
-        (c, (Fixed::ONE - c * c).sqrt())
-    } else {
-        (PURSUIT_COS, PURSUIT_SIN)
-    };
+    let (c, s) = (PURSUIT_COS, PURSUIT_SIN);
     let (rx, rz) = (dx * c + dz * s, dz * c - dx * s);
     let k = range / len;
+    let mut point = (node.x + rx * k, node.z + rz * k);
+    // Closer to the miner than its `tooCloseToTurn` (+ margin) the smooth model stops a slow craft and
+    // stops it turning: push the point outward along the miner -> point line until it is that far off.
+    let need = db.unit(miner).map_or(Fixed::ZERO, |d| d.movement.too_close_to_turn) + Fixed::from_int(PURSUIT_MARGIN);
+    let (px, pz) = (point.0 - pos.x, point.1 - pos.z);
+    let away = (px * px + pz * pz).sqrt();
+    if away > Fixed::ZERO && away < need {
+        let f = need / away;
+        point = (pos.x + px * f, pos.z + pz * f);
+    }
     let nd = db.unit(node_def);
     let radius = nd.map_or(Fixed::ZERO, |d| d.radius);
     let kk = if nd.is_some_and(|d| d.class.0 == "latinum") { K_NEBULA } else { K_MOON };
     let layer = Fixed::from_int((id.0 & 15) as i32) - LAYER_MID;
     let y = node.y + layer * LAYER_STEP * radius * kk;
-    Some(Vec3 { x: node.x + rx * k, y, z: node.z + rz * k })
+    Some(Vec3 { x: point.0, y, z: point.1 })
 }
 
 fn dist(a: Vec3, b: Vec3) -> Fixed {
