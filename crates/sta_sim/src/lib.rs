@@ -552,6 +552,11 @@ impl Sim {
         Fixed::from_bits(census.to_bits().saturating_add(self.economy.officer_adjust(player).to_bits()))
     }
 
+    /// Production presentation at the current tick, derived from saved state.
+    pub fn production_view(&self) -> Vec<production::view::ProductionView> {
+        self.content.as_deref().map_or_else(Vec::new, |db| self.production.view(db, &self.units))
+    }
+
     fn build_view(&self) -> WorldView {
         // `hidden = 1` objects (start pods, faction objects, map markers) stay in
         // `units` for scripts, but no player sees or picks them (`EntityKind::hidden`).
@@ -753,6 +758,10 @@ impl WorldSource for Sim {
 
     fn snapshot(&self) -> Option<Vec<u8>> {
         Some(Sim::snapshot(self))
+    }
+
+    fn production_view(&self) -> Vec<production::view::ProductionView> {
+        Sim::production_view(self)
     }
 }
 
