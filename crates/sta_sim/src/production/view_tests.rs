@@ -144,3 +144,49 @@ fn sorted_independent_yards_reset_heads_and_clear_on_destruction() {
         vec![b]
     );
 }
+
+#[test]
+fn welding_site_remains_after_constructor_death_until_the_station_finishes() {
+    let mut sim = game(true);
+    let rig = spawn(&mut sim, "fx_rig", v(0, 0));
+    fund(&mut sim, 2000);
+    assert!(build(&mut sim, rig, "fx_station", Some(v(300, 0))));
+    let child = loop {
+        let active = row(&sim, rig);
+        if let Some(child) = active.site.unwrap().entity {
+            break child;
+        }
+        sim.step(&[]);
+        assert!(sim.tick < 3000);
+    };
+    let before = row(&sim, rig).jobs[0].progress;
+    sim.step(&[cmd(
+        PlayerId::BENCH,
+        101,
+        CommandKind::Edit(Edit::Kill(rig)),
+    )]);
+    assert!(sim.unit(rig).is_none());
+    let active = row(&sim, rig);
+    assert_eq!(active.site.as_ref().unwrap().entity, Some(child));
+    assert!(active.jobs[0].progress > before);
+    assert_eq!(
+        active.jobs[0].progress,
+        sim.unit(child).unwrap().progress.unwrap()
+    );
+    let bound = sim
+        .content()
+        .unwrap()
+        .unit(key(&sim, "fx_station"))
+        .unwrap()
+        .build
+        .ticks
+        + 1;
+    for _ in 0..bound {
+        sim.step(&[]);
+        if sim.production_view().is_empty() {
+            break;
+        }
+    }
+    assert!(sim.production_view().is_empty());
+    assert!(sim.unit(child).is_some_and(|unit| unit.progress.is_none()));
+}
