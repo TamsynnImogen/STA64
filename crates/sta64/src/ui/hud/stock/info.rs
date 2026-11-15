@@ -62,7 +62,7 @@ fn text_styled(commands: &mut Commands, root: Entity, r: R, value: String, color
     // SpriteFontPlugin replaces the SpriteText entity's Node while resolving glyphs.
     // Keep authored placement on a separate parent that it never rewrites.
     let wrapper = commands.spawn((node(r), Pickable::IGNORE)).id();
-    let size = if style.native { size } else { size.max(18.0) };
+    let size = if style.min_size { size.max(18.0) } else { size };
     let mut e = commands.spawn(sprite_text_styled(value, size, color, style));
     if let Some(kind) = kind {
         e.insert(kind);
@@ -394,21 +394,39 @@ fn spawn_group(
         // widget painter cannot tint the transparent wireframe hit area.
         commands.entity(entity).remove::<BackgroundColor>();
         commands.entity(root).add_child(entity);
-        if let Some(unit) = feed.view.unit(tile.id)
+        let wireframe_key = if small {
+            format!("infoMultiShipWireframeSm_{i}")
+        } else {
+            format!("infoMultiShipWireframe_{i}")
+        };
+        let wireframe = if layout.raw_rect(&wireframe_key).is_some() {
+            layout.at(origin, &wireframe_key)
+                .map(|area| R::new(area.x - r.x, area.y - r.y, area.w, area.h))
+        } else {
+            Some(R::new(0.0, 0.0, r.w, r.h))
+        };
+        if let Some(wireframe) = wireframe
+            && let Some(unit) = feed.view.unit(tile.id)
             && let Some(def) = feed.content.as_deref().and_then(|db| db.unit(unit.def))
         {
-            wireframe_layers(commands, entity, R::new(0.0, 0.0, r.w, r.h), &def.model);
+            wireframe_layers(commands, entity, wireframe, &def.model);
         }
-        text_styled(
-            commands,
-            entity,
-            R::new(2.0, 2.0, (r.w - 4.0).max(0.0), (r.h - 4.0).max(0.0)),
-            tile.name.clone(),
-            theme.text,
-            theme.micro_size,
-            None,
-            group_label_style(layout, (r.w - 4.0).max(0.0)),
-        );
+        if !small {
+            // Existing incomplete CFGs retain the icon inset when no name key exists.
+            let fallback = R::new(2.0, 2.0, (r.w - 4.0).max(0.0), (r.h - 4.0).max(0.0));
+            let name_rect = layout.at(origin, &format!("infoMultiShipName_{i}"))
+                .map_or(fallback, |name| R::new(name.x - r.x, name.y - r.y, name.w, name.h));
+            text_styled(
+                commands,
+                entity,
+                name_rect,
+                tile.name.clone(),
+                theme.text,
+                theme.micro_size,
+                None,
+                group_label_style(layout, name_rect.w),
+            );
+        }
         let hull_key = if small {
             format!("infoMultiShipHullSm_{i}")
         } else {
@@ -428,10 +446,10 @@ fn spawn_group(
 }
 
 /// The CFG's information font names a stock role when it matches one of the
-/// mounted sprite fonts. Other names use the small role's native glyph size.
+/// mounted sprite fonts. Compact names honor micro size as the HUD scales.
 fn group_label_style(layout: &StockLayout, width: f32) -> SpriteTextStyle {
     let role = layout.name("InformationFont").and_then(FontRole::from_name).unwrap_or(FontRole::Small);
-    SpriteTextStyle { native: true, tint_all: true, ..SpriteTextStyle::role(role).wrapped(width) }
+    SpriteTextStyle { scaled: true, tint_all: true, ..SpriteTextStyle::role(role).wrapped(width) }
 }
 
 pub(super) fn spawn(commands: &mut Commands, root: Entity, layout: &StockLayout, feed: &HudFeed, theme: &Theme) {
@@ -488,8 +506,9 @@ mod tests {
     use super::*;
     use bevy::ecs::world::CommandQueue;
     use sta_content::gui_cfg::{GuiLayout, Rect};
+    use sta_sim::fake::ScriptedSource;
     use sta_sim::{
-        Fixed, PlayerId, TeamId,
+        Fixed, PlayerId, TeamId, WorldSource,
         view::{PlayerView, WorldView},
     };
     use std::sync::Arc;
@@ -610,7 +629,8 @@ mod tests {
         assert_eq!(label.1.wrap, Some(96.0));
         assert_eq!(label.0.size, theme.micro_size);
         assert_eq!(label.1.role, Some(FontRole::Small));
-        assert!(label.1.native);
+        assert!(!label.1.native);
+        assert!(label.1.scaled);
         assert!(!label.1.min_size);
         assert_eq!(app.world().get::<Tooltip>(entity).unwrap().short, name);
     }
@@ -623,12 +643,162 @@ mod tests {
         let style = group_label_style(&layout, 76.0);
         assert_eq!(style.role, Some(FontRole::Medium));
         assert_eq!(style.wrap, Some(76.0));
-        assert!(style.native);
+        assert!(!style.native);
         assert!(!style.min_size);
 
         cfg.names.insert("InformationFont".into(), "custom_font_alias".into());
         let layout = StockLayout::new(&cfg, Vec2::new(1600.0, 1200.0));
         assert_eq!(group_label_style(&layout, 76.0).role, Some(FontRole::Small));
+    }
+
+    #[test]
+    fn group_name_uses_authored_rectangle_and_small_tiles_have_no_caption() {
+        let mut cfg = GuiLayout { canvas: (1600, 1200), ..Default::default() };
+        cfg.rects.insert("infoMultiShipIcon_0".into(), Rect { x: 70, y: 90, w: 40, h: 40 });
+        cfg.rects.insert("infoMultiShipName_0".into(), Rect { x: 50, y: 77, w: 90, h: 9 });
+        cfg.rects.insert("infoMultiShipIconSm_0".into(), Rect { x: 70, y: 90, w: 40, h: 40 });
+        let layout = StockLayout::new(&cfg, Vec2::new(1600.0, 1200.0));
+        let feed = HudFeed::default();
+        let theme = Theme::default();
+        for variant in [1, 2] {
+            let mut world = World::new();
+            let root = world.spawn(Node::default()).id();
+            let mut queue = CommandQueue::default();
+            {
+                let mut commands = Commands::new(&mut queue, &world);
+                let tile = model::Tile { id: EntityId(7), name: "USS Dunlop".into(), hull: 1.0 };
+                spawn_group(&mut commands, root, &layout, &feed, &theme, Vec2::ZERO, variant, &[tile]);
+            }
+            queue.apply(&mut world);
+            let label = world.query::<(&SpriteText, &ChildOf)>().iter(&world)
+                .find(|(text, _)| text.text == "USS Dunlop");
+            if variant == 2 {
+                assert!(label.is_none());
+                continue;
+            }
+            let (label, parent) = label.unwrap();
+            assert_eq!(label.size, theme.micro_size);
+            let wrapper = parent.parent();
+            let tile = world.query_filtered::<Entity, With<GroupTile>>().single(&world).unwrap();
+            assert_eq!(world.get::<ChildOf>(wrapper).unwrap().parent(), tile);
+            let rect = world.get::<Node>(wrapper).unwrap();
+            let expected = R::new(-20.0, -13.0, 90.0, 9.0);
+            assert_eq!((rect.left, rect.top, rect.width, rect.height),
+                (Val::Px(expected.x), Val::Px(expected.y), Val::Px(expected.w), Val::Px(expected.h)));
+            let style = world.get::<SpriteTextStyle>(world.get::<Children>(wrapper).unwrap()[0]).unwrap();
+            assert_eq!(style.wrap, Some(expected.w));
+            assert!(!style.native && !style.min_size && style.scaled);
+        }
+    }
+
+    #[test]
+    fn seeded_group_tiers_use_authored_wireframes_and_only_normal_names() {
+        let db = Arc::new(sta_content::fake::db());
+        let units = (1..=30)
+            .map(|id| format!("{{ id: {id}, def: 'fx_cruiser', owner: 1, hull: 100, rails: [{{ at: 0, pos: {{ x: 0, y: 0, z: 0 }} }}] }}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let mut source = ScriptedSource::from_json5(&format!("{{ units: [{units}] }}"), &db).unwrap();
+        let feed = HudFeed {
+            view: source.step(&[]).view,
+            content: Some(db),
+            ..default()
+        };
+        let tiles = (1..=30)
+            .map(|id| model::Tile { id: EntityId(id), name: format!("Ship {id} full name"), hull: 1.0 })
+            .collect::<Vec<_>>();
+        let mut cfg = GuiLayout { canvas: (1600, 1200), ..Default::default() };
+        for i in 0..30 {
+            // The normal CFG has 16 slots; the compact CFG has 30.
+            for suffix in if i < 16 { &["", "Sm"][..] } else { &["Sm"][..] } {
+                cfg.rects.insert(format!("infoMultiShipIcon{suffix}_{i}"), Rect { x: 10 + i as i32 * 50, y: 20, w: 40, h: 40 });
+                cfg.rects.insert(format!("infoMultiShipWireframe{suffix}_{i}"), Rect { x: 14 + i as i32 * 50, y: 26, w: 25, h: 25 });
+            }
+            if i < 16 {
+                cfg.rects.insert(format!("infoMultiShipName_{i}"), Rect { x: 10 + i as i32 * 50, y: 61, w: 40, h: 9 });
+            }
+        }
+        // An explicit disabled wireframe stays disabled; an absent key uses the icon.
+        cfg.rects.insert("infoMultiShipWireframeSm_1".into(), Rect { x: 0, y: 0, w: 0, h: 0 });
+        cfg.rects.remove("infoMultiShipWireframeSm_2");
+        let layout = StockLayout::new(&cfg, Vec2::new(1600.0, 1200.0));
+        let theme = Theme::default();
+        for (variant, count) in [(1, 16), (2, 30)] {
+            let mut world = World::new();
+            let root = world.spawn(Node::default()).id();
+            let mut queue = CommandQueue::default();
+            {
+                let mut commands = Commands::new(&mut queue, &world);
+                spawn_group(&mut commands, root, &layout, &feed, &theme, Vec2::ZERO, variant, &tiles[..count]);
+            }
+            queue.apply(&mut world);
+            let mut tile_query = world.query::<(&GroupTile, &Node, &Tooltip, Option<&BackgroundColor>, Option<&Children>)>();
+            let rendered = tile_query.iter(&world).collect::<Vec<_>>();
+            assert_eq!(rendered.len(), count);
+            for (group, hit, tooltip, background, children) in rendered {
+                let i = group.0.0 as usize - 1;
+                assert_eq!(tooltip.short, tiles[i].name);
+                assert!(background.is_none());
+                assert_eq!((hit.width, hit.height), (Val::Px(40.0), Val::Px(40.0)));
+                let frames = children.into_iter().flat_map(|c| c.iter()).filter_map(|child| world.get::<GuiImage>(child).map(|_| child)).collect::<Vec<_>>();
+                if variant == 2 && i == 1 {
+                    assert!(frames.is_empty());
+                } else {
+                    assert_eq!(frames.len(), 5);
+                    let image_node = world.get::<Node>(frames[0]).unwrap();
+                    let expected = if variant == 2 && i == 2 {
+                        (Val::Px(0.0), Val::Px(0.0), Val::Px(40.0), Val::Px(40.0))
+                    } else {
+                        (Val::Px(4.0), Val::Px(6.0), Val::Px(25.0), Val::Px(25.0))
+                    };
+                    assert_eq!((image_node.left, image_node.top, image_node.width, image_node.height), expected);
+                }
+            }
+            let labels = world.query::<&SpriteText>().iter(&world).count();
+            assert_eq!(labels, if variant == 1 { 16 } else { 0 });
+        }
+    }
+
+    /// Uses installed CFG rectangles and parsed sprite font sheets when opted in.
+    #[test]
+    fn installed_group_names_fit_one_line_above_hulls() {
+        let Some(root) = std::env::var_os("STA64_TEST_INSTALL") else { return };
+        let Ok(mode) = std::env::var("STA64_TEST_MOD") else { return };
+        let cfg_name = match mode.as_str() {
+            "STA2 Classic" | "STA2 Classic Mod" => "gui_fed.cfg",
+            "FO4" | "Fleet Ops 4.0" => "gui_federation16x9.cfg",
+            _ => return,
+        };
+        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(&mode)).unwrap();
+        let cfg = crate::game::gui_layout(&vfs, cfg_name).unwrap();
+        let layout = StockLayout::new(&cfg, Vec2::new(1920.0, 1080.0));
+        let origin = layout.info_origin(1);
+        assert!(!crate::ui::sprite_font::read_fonts(&vfs).is_empty(), "{mode}: no parsed sprite fonts");
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(crate::ui::sprite_font::SpriteFontPlugin);
+        app.init_resource::<Assets<Image>>();
+        app.insert_resource(crate::viewer::Mounted(vfs));
+        app.update();
+        assert!(!app.world().resource::<crate::ui::sprite_font::SpriteFonts>().fonts.is_empty(), "{mode}: no supported sprite font sheets");
+        for (i, ship) in ["USS Dunlop", "USS Hayduk"].into_iter().enumerate() {
+            let name = layout.at(origin, &format!("infoMultiShipName_{i}")).unwrap();
+            let hull = layout.at(origin, &format!("infoMultiShipHull_{i}")).unwrap();
+            let label = app.world_mut().spawn(sprite_text_styled(
+                ship, Theme::default().micro_size, Color::WHITE, group_label_style(&layout, name.w),
+            )).id();
+            let unwrapped = app.world_mut().spawn(sprite_text_styled(
+                ship, Theme::default().micro_size, Color::WHITE, group_label_style(&layout, name.w * 10.0),
+            )).id();
+            app.update();
+            let node = app.world().get::<Node>(label).unwrap();
+            let (Val::Px(width), Val::Px(height)) = (node.width, node.height) else { panic!("{mode}: unresolved sprite text") };
+            let Val::Px(single_line_height) = app.world().get::<Node>(unwrapped).unwrap().height else { panic!("{mode}: unresolved baseline") };
+            eprintln!("{mode} {ship}: name={name:?}, hull={hull:?}, resolved={width}x{height}");
+            assert!(width <= name.w, "{mode} {ship}: label width {width} > authored {}", name.w);
+            assert_eq!(height, single_line_height, "{mode} {ship}: wrapped beyond one line");
+            assert!(height <= hull.y - name.y, "{mode} {ship}: label height {height} reaches hull at {}", hull.y);
+        }
     }
 
     #[test]

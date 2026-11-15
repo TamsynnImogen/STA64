@@ -108,5 +108,41 @@ class ReadinessTests(unittest.TestCase):
         self.assertIn("`stub global Foo`", md)
 
 
+def trial(ok=True, result=True, ticks=5, gaps=(), action="", note=""):
+    return {"action": action, "kind": "", "ok": ok, "result": result, "ticks": ticks, "gaps": list(gaps),
+            "transition": None, "note": note}
+
+
+def ending_row(**kw):
+    base = {"campaign": "c", "index": 0, "bzn": "m.bzn", "started": True, "start_error": None, "test_tick": 300,
+            "first_objective_tick": 1, "win_entries": [], "lose_entries": [{}], "truncated": [0, 0], "calls_fail": True,
+            "forced_win": trial(), "forced_lose": trial(result=False), "win_seq": [trial(action="a")],
+            "lose_seq": [trial(result=False, action="b")], "notes": []}
+    base.update(kw)
+    return base
+
+
+class EndingTests(unittest.TestCase):
+    def test_columns(self):
+        self.assertEqual(cr.ending_columns(ending_row()), (True, True, True))
+        self.assertEqual(cr.ending_columns(ending_row(forced_lose=trial(ok=False))), (False, True, True))
+        self.assertEqual(cr.ending_columns(ending_row(win_seq=[])), (True, False, True))
+        self.assertEqual(cr.ending_columns(ending_row(win_seq=[trial(), trial(ok=False)]))[1], False)
+        # a script that cannot lose has no loss column and no forced loss
+        r = ending_row(calls_fail=False, lose_entries=[], forced_lose=None, lose_seq=[])
+        self.assertEqual(cr.ending_columns(r), (True, True, None))
+        self.assertEqual(cr.ending_columns(ending_row(started=False))[0], False)
+
+    def test_funnel_and_render(self):
+        rows = [ending_row(), ending_row(bzn="n.bzn", win_seq=[trial(ok=False, gaps=["Foo (unbound)"], action="x")]),
+                ending_row(bzn="o.bzn", calls_fail=False, lose_entries=[], forced_lose=None, lose_seq=[])]
+        n = cr.ending_funnel(rows)
+        self.assertEqual((n["missions"], n["forced"], n["win"], n["lose"], n["lose_na"], n["all"]), (3, 3, 2, 2, 1, 2))
+        md = cr.render_ending(rows, "a2")
+        self.assertIn("`Foo (unbound)`", md)
+        self.assertIn("| n | 300 | pass | pass | FAIL | 1 | 5 | pass |", md)
+        self.assertIn("n/a", md)
+
+
 if __name__ == "__main__":
     unittest.main()
