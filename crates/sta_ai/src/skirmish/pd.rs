@@ -63,6 +63,10 @@ impl SkirmishController {
         let mut live: Vec<EntityId> = Vec::new();
         for u in view.units.iter().filter(|u| u.owner == seat) {
             live.push(u.id);
+            // A special-forces craft gets no automatic special-weapon use (LUA-28).
+            if view.is_special_forces(u.id) {
+                continue;
+            }
             let Some(def) = db.unit(u.def) else { continue };
             let Some(slot) = point_defence_slot(&db, def) else { continue };
             let cost = def
