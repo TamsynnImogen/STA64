@@ -26,6 +26,7 @@
 // Wired into the game by INT-M3; until then only the frame runs and tests use it.
 #![allow(dead_code)]
 
+mod cinematic;
 pub mod frame;
 pub mod ghost;
 pub mod layout;
@@ -145,6 +146,7 @@ impl Plugin for HudPlugin {
             .init_resource::<HudPointer>()
             .init_resource::<crate::input::hover::HoveredUnit>()
             .init_resource::<stock::StockState>()
+            .init_resource::<cinematic::CinematicState>()
             .init_resource::<super::gui_sprites::GuiSkin>()
             .init_resource::<super::gui_sprites::GuiSprites>()
             .init_resource::<ghost::PlacementBounds>()
@@ -181,6 +183,14 @@ impl Plugin for HudPlugin {
                     .in_set(GameSet::Ui)
                     .after(crate::ui::profile::ProfileSync)
                     .after(crate::ui::radar::RadarUi),
+            )
+            .add_systems(
+                Update,
+                (cinematic::build, cinematic::show)
+                    .chain()
+                    .in_set(GameSet::Ui)
+                    .after(stock::refresh)
+                    .after(super::gui_sprites::paint),
             );
     }
 }
@@ -399,6 +409,7 @@ fn press(
         match act {
             Act::OpenBuild => state.page = Page::Build,
             Act::OpenNativeMenu(id) => state.page = Page::Native(*id),
+            Act::OpenOrders => state.page = Page::Orders,
             Act::OpenFormations if commands::shared(&feed).move_order => state.page = Page::Formations,
             Act::Back => {
                 state.page = Page::Top;

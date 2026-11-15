@@ -225,6 +225,7 @@ mod tests {
         let font = SpriteFont {
             name: "fontsmall".into(),
             reference,
+            spacing: 0.0,
             pages: vec![Page {
                 texture: "synthetic".into(),
                 height: 1.0,
@@ -279,6 +280,7 @@ mod tests {
         let font = SpriteFont {
             name: "f".into(),
             reference: None,
+            spacing: 0.0,
             pages: vec![Page {
                 texture: "p".into(),
                 height: 1.0,

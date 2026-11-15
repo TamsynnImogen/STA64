@@ -28,6 +28,33 @@ struct PathRef {
 impl UserData for PathRef {
     fn add_fields<F: UserDataFields<Self>>(f: &mut F) {
         f.add_field_method_get("name", |_, p| Ok(p.name.clone()));
+        f.add_field_method_get("count", |_, p| {
+            Ok(p.ctx
+                .borrow()
+                .paths
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(&p.name))
+                .map_or(0, |(_, points)| points.len()))
+        });
+        f.add_field_method_get("points", |lua, p| {
+            // Copy before constructing Lua values: no context borrow crosses a Lua call.
+            let points = p
+                .ctx
+                .borrow()
+                .paths
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(&p.name))
+                .map(|(_, points)| points.clone())
+                .unwrap_or_default();
+            let out = lua.create_table()?;
+            for (i, [x, y, z]) in points.into_iter().enumerate() {
+                out.raw_set(
+                    i + 1,
+                    crate::api::vector(lua, (f64::from(x), f64::from(y), f64::from(z)))?,
+                )?;
+            }
+            Ok(out)
+        });
     }
 
     fn add_methods<M: UserDataMethods<Self>>(m: &mut M) {
@@ -283,6 +310,27 @@ pub(super) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
         })?,
     )?;
     let path = lua.create_table()?;
+    let c = ctx.clone();
+    path.raw_set(
+        "exists",
+        lua.create_function(move |_, args: Variadic<Value>| {
+            let [Value::String(name)] = args.as_slice() else {
+                return Err(mlua::Error::runtime(
+                    "Path.exists requires exactly one nonempty string",
+                ));
+            };
+            let name = name.to_str()?;
+            if name.is_empty() {
+                return Err(mlua::Error::runtime(
+                    "Path.exists requires exactly one nonempty string",
+                ));
+            }
+            Ok(c.borrow()
+                .paths
+                .iter()
+                .any(|(label, _)| label.eq_ignore_ascii_case(&name)))
+        })?,
+    )?;
     let mt = lua.create_table()?;
     let c = ctx.clone();
     mt.set(
@@ -291,6 +339,10 @@ pub(super) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
             if name.is_empty() {
                 return Err(mlua::Error::runtime("Path requires a name"));
             }
+            // Camera playback resolves exact authored labels; carry the resolved name.
+            let name = c.borrow().paths.iter()
+                .find(|(label, _)| label.eq_ignore_ascii_case(&name))
+                .map(|(label, _)| label.clone()).unwrap_or(name);
             Ok(PathRef { name, ctx: c.clone() })
         })?,
     )?;
@@ -502,11 +554,11 @@ mod tests {
             local path = Path('opening')
             assert(path.name == 'opening')
             path:remove()
-            Path.exists('opening')
+            assert(not Path.exists('opening'))
         "#,
             1,
         );
         assert!(rt.errors().is_empty(), "{:?}", rt.errors());
-        assert_eq!(rt.unsupported(), [("Path.exists".into(), 1), ("Path.remove".into(), 1)]);
+        assert_eq!(rt.unsupported(), [("Path.remove".into(), 1)]);
     }
 }

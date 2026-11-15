@@ -1,4 +1,5 @@
 //! CFG/SPR presentation of the shared HUD actions. No simulation policy lives here.
+mod a1;
 mod commands;
 mod info;
 pub(super) mod infobar;
@@ -21,7 +22,7 @@ use crate::viewer::Mounted;
 use bevy::{picking::Pickable, prelude::*};
 use commands::{NativeCommand, NativeCommands};
 use layout::{PaletteLayout, StockLayout};
-use sta_content::GuiLayout;
+use sta_content::{ButtonSlots, GuiLayout};
 
 #[derive(Component)]
 pub(super) struct StockBody;
@@ -43,6 +44,9 @@ pub(super) struct StockState {
     native: NativeCommands,
     info_style: infobar::InfoStyle,
     info: Option<Info>,
+    /// Armada I: the `game_cfg.h` slot map and the extra info values drawn (UI-19).
+    slots: Option<ButtonSlots>,
+    a1_shape: Option<a1::info::Shape>,
     grid: Vec<Button>,
     page: Page,
     build_page: usize,
@@ -353,6 +357,25 @@ pub(super) fn refresh(
             .map_or_else(NativeCommands::default, |m| NativeCommands::load(&m.0));
         state.loaded = true;
     }
+    if mount_changed {
+        state.slots = None;
+    }
+    let a1 = a1::is_a1(profile.as_deref());
+    if a1 && state.slots.is_none() && let Some(m) = mounted.as_ref() {
+        // UI-19: `game_cfg.h` as the mod chain inherits it (ADR 0004 D9, D11).
+        state.slots = Some(match ButtonSlots::load(&m.0) {
+            Ok((slots, warnings)) => {
+                for w in &warnings {
+                    warn!("hud: {}: {}", w.file, w.message);
+                }
+                slots
+            }
+            Err(error) => {
+                warn!("hud: game_cfg.h: {error}");
+                ButtonSlots::default()
+            }
+        });
+    }
     let changed = (config.is_changed() && state.cfg.as_ref() != config.gui.as_ref())
         || state.profile != profile.as_deref().copied()
         || state
@@ -395,11 +418,16 @@ pub(super) fn refresh(
         bodies.single().unwrap()
     };
     let layout = state.layout.take().unwrap();
+    if a1 && replaced {
+        a1::spawn_frames(&mut commands, body, &layout);
+    }
     let now = model::info(&feed);
+    let a1_shape = a1.then(|| a1::info::extra(&feed).map(|e| e.shape(&state.info_style))).flatten();
     let structural = state
         .info
         .as_ref()
-        .is_none_or(|old| !super::panels::same_info(old, &now));
+        .is_none_or(|old| !super::panels::same_info(old, &now))
+        || state.a1_shape != a1_shape;
     if structural {
         if !replaced {
             for entity in &infos {
@@ -412,13 +440,28 @@ pub(super) fn refresh(
         let parent = commands
             .spawn((StockInfo, Pickable::IGNORE, Node::default(), ChildOf(body)))
             .id();
-        info::spawn(&mut commands, parent, &layout, &feed, &theme);
         let bar = commands.spawn((StockInfoBar, Pickable::IGNORE, Node::default(), ChildOf(body))).id();
-        infobar::spawn(&mut commands, bar, &layout, &theme, layout::info_variant(&now));
+        if a1 {
+            a1::info::spawn(&mut commands, parent, &layout, &feed, &theme, &state.info_style);
+        } else {
+            info::spawn(&mut commands, parent, &layout, &feed, &theme);
+            infobar::spawn(&mut commands, bar, &layout, &theme, layout::info_variant(&now));
+        }
     }
     state.info = Some(now.clone());
-    let mut next = buttons(&feed, hud.page, &state.native);
-    if matches!(hud.page, Page::Native(_)) && next.iter().all(|b| b.act == Act::Back) {
+    state.a1_shape = a1_shape;
+    if a1 {
+        let settled = a1::control::settle_page(&feed, hud.page);
+        if settled != hud.page {
+            hud.page = settled;
+        }
+    }
+    let mut next = if a1 {
+        state.slots.as_ref().map_or_else(Vec::new, |slots| a1::control::buttons(&feed, hud.page, slots))
+    } else {
+        buttons(&feed, hud.page, &state.native)
+    };
+    if !a1 && matches!(hud.page, Page::Native(_)) && next.iter().all(|b| b.act == Act::Back) {
         hud.page = Page::Top;
         next = buttons(&feed, hud.page, &state.native);
     }
@@ -439,7 +482,18 @@ pub(super) fn refresh(
                 .filter_map(|key| layout.at(origin, key)),
         );
     }
-    if let Some(palette) = layout.palette() {
+    if a1 {
+        if rebuild {
+            if !replaced {
+                for entity in &grids {
+                    commands.entity(entity).despawn();
+                }
+            }
+            let parent = commands.spawn((StockGrid, Pickable::IGNORE, Node::default(), ChildOf(body))).id();
+            a1::control::spawn_grid(&mut commands, parent, &theme, &layout, &next, &state, &hud);
+        }
+        state.solid.extend(a1::solid(&layout));
+    } else if let Some(palette) = layout.palette() {
         let cells = visible_cells(&palette, layout.hud);
         let capacity = cells.len();
         let pinned: Vec<_> = next

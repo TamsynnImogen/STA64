@@ -793,3 +793,123 @@ fn installed_group_names_render_on_gpu() {
         capture_one(vfs, profile, size, cfg, &label, GameOptions::default(), HoverCapture::Group(count));
     }
 }
+
+/// UI-19: the Armada I stock HUD (`UiProfile::Armada1`) on the install's own content: the four
+/// races at 4:3, 16:9 and 21:9, Centred and Stretched, in windowless GPU frames, plus a slot click
+/// that must queue an order. The sim is the install's real starting state (a headless start).
+/// Set `STA64_GPU_TESTS=1 STA64_TEST_A1_INSTALL=<Armada I root>`; `STA64_HUD_CAPTURE_DIR` keeps
+/// the frames locally (they show game art: never commit them).
+#[test]
+fn installed_armada1_stock_hud_renders_on_gpu() {
+    if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1") {
+        eprintln!("SKIP: set STA64_GPU_TESTS=1 STA64_TEST_A1_INSTALL=<Armada I root>");
+        return;
+    }
+    let Some(install) = std::env::var_os("STA64_TEST_A1_INSTALL") else {
+        eprintln!("SKIP: set STA64_TEST_A1_INSTALL=<Armada I root>");
+        return;
+    };
+    for fit in super::layout::HudFit::ALL {
+    for size in [UVec2::new(1024, 768), UVec2::new(1920, 1080), UVec2::new(2560, 1080)] {
+    for (cfg, spr, label) in [
+        ("gui_fed.cfg", "gui_federation.spr", "a1-fed"),
+        ("gui_kli.cfg", "gui_klingon.spr", "a1-kli"),
+        ("gui_rom.cfg", "gui_romulan.spr", "a1-rom"),
+        ("gui_bor.cfg", "gui_borg.spr", "a1-bor"),
+    ] {
+        let label = &format!("{label}-{}x{}-{}", size.x, size.y, fit.key());
+        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), None).expect("installed A1 VFS");
+        let layout = crate::game::gui_layout(&vfs, cfg).unwrap_or_else(|| panic!("installed {cfg} missing"));
+        let stock = StockLayout::for_aspect_fit(&layout, size.x as f32 / size.y as f32, fit);
+        assert_eq!(stock.canvas, Vec2::new(640.0, 480.0), "{label}: one 640 x 480 sheet");
+        let hud_feed = feed(&vfs, GameOptions::default(), 0);
+        let mut app = App::new();
+        app.add_plugins(
+            DefaultPlugins
+                .set(WindowPlugin { primary_window: None, exit_condition: ExitCondition::DontExit, ..default() })
+                .set(RenderPlugin { synchronous_pipeline_compilation: true, ..default() })
+                .disable::<bevy::winit::WinitPlugin>()
+                .disable::<bevy::log::LogPlugin>(),
+        );
+        configure_sets(&mut app);
+        let selection = hud_feed.selected.clone();
+        app.insert_resource(ClearColor(Color::BLACK))
+            .insert_resource(UiProfile::Armada1)
+            .insert_resource(UiProfile::Armada1.theme())
+            .insert_resource(Mounted(vfs))
+            .insert_resource(GuiSkin { table: Some(spr.into()) })
+            .insert_resource(HudConfig { gui: Some(layout), aspect: size.x as f32 / size.y as f32, fit, fit_scale: false, log: false })
+            .insert_resource(UiScale(size.y as f32 / 1080.0))
+            .insert_resource(hud_feed)
+            .insert_resource(ExternalFeed)
+            .insert_resource(Selection(selection))
+            .init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .add_plugins(HudPlugin)
+            .add_systems(Update, aim_roots_hud.before(GameSet::Ui));
+        let mut image = Image::new_target_texture(size.x, size.y, bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb, None);
+        image.asset_usage = RenderAssetUsages::RENDER_WORLD;
+        let target = app.world_mut().resource_mut::<Assets<Image>>().add(image);
+        let camera = app
+            .world_mut()
+            .spawn((Camera2d, Camera { order: 1, clear_color: ClearColorConfig::Custom(Color::BLACK), ..default() }, RenderTarget::from(target.clone()), Msaa::Off))
+            .id();
+        app.insert_resource(CaptureCamera(camera));
+        app.finish();
+        app.cleanup();
+        for _ in 0..16 {
+            app.update();
+        }
+        let adapter = app.world().get_resource::<bevy::render::renderer::RenderAdapterInfo>().cloned().or_else(|| {
+            app.get_sub_app(bevy::render::RenderApp).and_then(|r| r.world().get_resource::<bevy::render::renderer::RenderAdapterInfo>().cloned())
+        });
+        let Some(adapter) = adapter else {
+            eprintln!("SKIP {label}: no render adapter");
+            return;
+        };
+        if crate::bench::frames::is_software_adapter(adapter.device_type, &adapter.name) {
+            eprintln!("SKIP {label}: hardware adapter unavailable");
+            return;
+        }
+        // The slot map came from the install's game_cfg.h and the grid is built from it.
+        let slots = app.world().resource::<super::StockState>().slots.clone().expect("slot map loaded");
+        assert!(!slots.is_empty(), "{label}: game_cfg.h gave no slots");
+        let cells = app.world_mut().query::<&super::super::panels::GridCell>().iter(app.world()).count();
+        assert!(cells > 0, "{label}: no control buttons");
+        // A click on a Stop slot (or the first ready order slot) queues an order.
+        let slot_button = app
+            .world_mut()
+            .query::<(Entity, &super::super::panels::GridCell)>()
+            .iter(app.world())
+            .find(|(_, c)| matches!(c.0, super::super::Act::Stop | super::super::Act::Order(super::super::model::UnitOrder::Scout)))
+            .map(|(e, _)| e);
+        if let Some(e) = slot_button {
+            crate::ui::theme::click(app.world_mut(), e);
+            app.update();
+            assert!(!app.world().resource::<crate::sim_link::CommandQueue>().0.is_empty(), "{label}: the slot click queued no order");
+            app.world_mut().resource_mut::<crate::sim_link::CommandQueue>().0.clear();
+        }
+        let frames = Arc::new(Mutex::new(Vec::<Image>::new()));
+        let output = Arc::clone(&frames);
+        app.world_mut().spawn(Screenshot::image(target)).observe(move |shot: On<ScreenshotCaptured>| {
+            output.lock().unwrap().push(shot.image.clone());
+        });
+        for _ in 0..60 {
+            app.update();
+            if !frames.lock().unwrap().is_empty() {
+                break;
+            }
+        }
+        let shot = frames.lock().unwrap().first().cloned().unwrap_or_else(|| panic!("{label}: no GPU capture"));
+        let rgba = shot.try_into_dynamic().expect("GPU image conversion").to_rgba8();
+        let coloured = rgba.pixels().filter(|p| p[0] > 20 || p[1] > 20 || p[2] > 20).count();
+        eprintln!("{label}: {cells} control buttons, {coloured} nonblack pixels");
+        assert!(coloured > 500, "{label}: HUD did not visibly render");
+        if let Ok(dir) = std::env::var("STA64_HUD_CAPTURE_DIR") {
+            std::fs::create_dir_all(&dir).unwrap();
+            rgba.save(std::path::Path::new(&dir).join(format!("stock-{label}.png"))).unwrap();
+        }
+    }
+    }
+    }
+}

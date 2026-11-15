@@ -80,7 +80,7 @@ impl InfoStyle {
         Self { races, thresholds }
     }
 
-    fn color(&self, race: &str, ratio: Option<f32>) -> Color {
+    pub(super) fn color(&self, race: &str, ratio: Option<f32>) -> Color {
         if ratio.is_none_or(|ratio| ratio < 0.0) {
             return Color::srgb(0.2, 0.2, 0.2);
         }
@@ -416,7 +416,7 @@ mod tests {
             interface: None,
             interface_sprites: None,
             single_player_music: None,
-            multiplayer_music: None,
+            multiplayer_music: None, music_tracks: Vec::new(),
             standard_units: Vec::new(),
             minimal_units: Vec::new(),
             stock: [0; 4],

@@ -15,6 +15,7 @@
 //! without any install. [`legacy`] still serves the map view's scenery ODFs.
 
 pub mod aip;
+pub mod button_slots;
 pub mod confinement;
 pub mod db;
 pub mod def;
@@ -43,21 +44,22 @@ pub mod strings;
 pub mod unit;
 pub mod weapon;
 
+pub use button_slots::{ButtonSlots, SlotCommand};
 pub use aip::{Aip, AipList, AipValue, AipVar, BuildItem};
 pub use confinement::{ConfinementInitial, ConfinementOverrides, ConfinementRules, ConfinementSpatial};
 pub use db::{ContentBuilder, ContentDb, DEFAULT_TECH_TREE};
-pub use def::{BuildDef, CasualtyDef, ClassLabel, ColonizePodDef, DefRef, FireArc, FxRefs, Hardpoint, LaunchPoint, MoveStats, NebulaPathing, OrdnanceCrewLoss, RepairDef, ResourceWeaponDef, ShieldDef, SoundRefs, UnitDef, WeaponDef, WeaponKind};
+pub use def::{BuildDef, CasualtyDef, ClassLabel, ColonizePodDef, DefRef, FireArc, FxRefs, Hardpoint, LaunchPoint, MoveStats, NebulaPathing, OrdnanceCrewLoss, RepairDef, ResourceWeaponDef, ShieldDef, SoundRefs, TransportDef, UnitDef, WeaponDef, WeaponKind};
 pub use features::{Features, Profile};
 pub use planet::PlanetRole;
 pub use gui_cfg::{Colour, GuiCfg, GuiLayout, GuiValue, Panel, Rect};
 pub use index::{OdfEntry, OdfIndex};
 pub use strings::{LabelMap, StringTable};
 pub use race::{
-    Loadout, RaceCrew, RaceDef, RaceRepair, Races, SeatRaceRule, StartingResources, dominant_race,
+    Loadout, RaceBoarding, RaceCrew, RaceDef, RaceRepair, Races, SeatRaceRule, StartingResources, dominant_race,
 };
 pub use repair_geometry::RepairAttachment;
 pub use resources::ResourceModel;
-pub use rules::{ApproachRules, AutonomyRules, CfgRules, CrewRules, LegacyStart, OfficerLimit, PathingRules, PopulationRules, Rules, TYPED_CFG_KEYS};
+pub use rules::{ApproachRules, AutonomyRules, CfgRules, CrewRules, LegacyStart, OfficerLimit, PathingRules, PopulationRules, Rules, TransporterRules, TYPED_CFG_KEYS};
 pub use digest::{ContentDigest, DigestEntry, EntryDiff};
 pub use profile::{resolve_features, DetectStep, Detection, Overrides, ROOTS_ASSET_VERSION, FEATURE_NAMES, ODF_KEY_PREFIX};
 pub use techtree::{Availability, BuildOption, CapacityList, Condition, Owned, Requirement, TechEntry, TechState, TechTree, TtSource, Unmet};

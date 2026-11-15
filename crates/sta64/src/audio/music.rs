@@ -10,7 +10,7 @@
 //!   `borg.mp3` ...), and `sounds/music/` holds `Shell.ogg` (front end) and
 //!   `Loading.mp3`. Again no battle data.
 //!
-//! So the playlist comes from the data ([`playlist_from_odf`]) and the
+//! So the playlist comes from the data (`sta_content::RaceDef::playlist`) and the
 //! calm/battle split is STA64's own: [`MusicConfig::battle`] is an optional second
 //! list, and with none configured the calm list simply keeps playing. The logic
 //! lives in [`Director`], a pure state machine fed seconds and engagement weights,
@@ -77,22 +77,6 @@ impl Default for MusicConfig {
             retry: 10.0,
         }
     }
-}
-
-/// The playlist an ODF names: `track0`, `track1`, ... (Armada I), else the
-/// single `singleplayermusic` / `multiplayermusic` file (Armada II), else empty.
-/// `get` looks a key up (case-insensitively is the caller's business).
-pub fn playlist_from_odf(multiplayer: bool, get: impl Fn(&str) -> Option<String>) -> Vec<String> {
-    let clean = |s: String| {
-        let s = s.trim().trim_matches('"').trim().to_string();
-        (!s.is_empty()).then_some(s)
-    };
-    let tracks: Vec<String> = (0..).map_while(|i| get(&format!("track{i}")).and_then(clean)).collect();
-    if !tracks.is_empty() {
-        return tracks;
-    }
-    let key = if multiplayer { "multiplayermusic" } else { "singleplayermusic" };
-    get(key).and_then(clean).into_iter().collect()
 }
 
 /// What the director asks the backend to do.
@@ -167,6 +151,13 @@ impl Director {
     }
 
     pub fn set_config(&mut self, cfg: MusicConfig) {
+        // A new play list starts at its first track.
+        if self.cfg.calm != cfg.calm {
+            self.cursors[Mode::Calm as usize] = Cursor::default();
+        }
+        if self.cfg.battle != cfg.battle {
+            self.cursors[Mode::Battle as usize] = Cursor::default();
+        }
         self.cfg = cfg;
     }
 
@@ -175,6 +166,8 @@ impl Director {
         if ctx != self.ctx {
             self.ctx = ctx;
             if ctx == Context::Game {
+                // Each match starts at the first track of its lists.
+                self.cursors = Default::default();
                 self.threat = 0.0;
                 self.last_engagement = f32::NEG_INFINITY;
             }
@@ -420,6 +413,27 @@ mod tests {
     }
 
     #[test]
+    fn a_new_match_starts_at_the_first_track() {
+        let mut d = Director::new(cfg());
+        d.set_context(Context::Game);
+        assert_eq!(step(&mut d, 0.1), vec![play("calm1", Mode::Calm)]);
+        assert_eq!(step(&mut d, 60.0), vec![play("calm2", Mode::Calm)]);
+        // Back to the menu and into the next match: the cursor starts over.
+        d.set_context(Context::Menu);
+        step(&mut d, 0.1);
+        d.set_context(Context::Game);
+        let out = step(&mut d, 0.1);
+        assert_eq!(out.last(), Some(&play("calm1", Mode::Calm)), "{out:?}");
+        // A different play list in the same context also starts at its first track.
+        step(&mut d, 60.0);
+        let mut c = cfg();
+        c.calm = list(&["calm4", "calm5"]);
+        d.set_config(c);
+        let out = step(&mut d, 60.0);
+        assert_eq!(out, vec![play("calm4", Mode::Calm)]);
+    }
+
+    #[test]
     fn calm_playlist_goes_round_robin() {
         let mut d = Director::new(cfg());
         d.set_context(Context::Game);
@@ -536,23 +550,6 @@ mod tests {
         d.set_context(Context::Silent);
         assert_eq!(step(&mut d, 0.1), vec![Out::Stop]);
         assert_eq!(d.now_playing(), None);
-    }
-
-    #[test]
-    fn playlists_come_from_odf_keys() {
-        let a1: HashMap<&str, &str> =
-            [("track0", "\"mfed300.wav\""), ("track1", "mfed115.wav"), ("track2", "mfed100.wav")].into();
-        fn get(m: &HashMap<&str, &str>) -> impl Fn(&str) -> Option<String> {
-            let m: HashMap<String, String> = m.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
-            move |k: &str| m.get(k).cloned()
-        }
-        assert_eq!(playlist_from_odf(false, get(&a1)), ["mfed300.wav", "mfed115.wav", "mfed100.wav"]);
-        let a2: HashMap<&str, &str> =
-            [("singleplayermusic", "Federation.mp3"), ("multiplayermusic", "borg.mp3")].into();
-        assert_eq!(playlist_from_odf(false, get(&a2)), ["Federation.mp3"]);
-        assert_eq!(playlist_from_odf(true, get(&a2)), ["borg.mp3"]);
-        let blank: HashMap<&str, &str> = [("singleplayermusic", "\"\"")].into();
-        assert!(playlist_from_odf(false, get(&blank)).is_empty());
     }
 
     fn id(n: u32) -> EntityId {
