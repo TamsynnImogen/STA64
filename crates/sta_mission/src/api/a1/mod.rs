@@ -57,6 +57,7 @@ mod replace_object;
 mod seams;
 mod subsystems;
 mod teams;
+mod warp;
 #[cfg(test)]
 mod overload_tests;
 #[cfg(test)]
@@ -561,6 +562,7 @@ pub(super) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
     // GetAttackLocation: the Armada II geometry (read from the executable, static).
     table.set("GetAttackLocation", alias(lua, &env, &a2, "GetAttackLocation")?)?;
     replace_object::install(lua, &env, &table)?;
+    warp::install(lua, &env, &a2, &table)?;
     hold::install(lua, &env, &table)?;
     lua.globals().raw_set("A1", table)?;
     Ok(())

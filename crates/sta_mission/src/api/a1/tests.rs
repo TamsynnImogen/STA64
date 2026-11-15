@@ -16,6 +16,9 @@ use sta_sim::{Sim, SimEvent, WorldSource};
 use crate::api::MissionConfig;
 use crate::runtime::MissionRuntime;
 
+#[path = "warp_tests.rs"]
+mod warp_tests;
+
 struct Scene {
     view: WorldView,
     db: Arc<ContentDb>,
@@ -169,6 +172,8 @@ const CASES: &[(&str, &str, Expect)] = &[
     ("BuildObject", "assert(A1.BuildObject('fx_cruiser', 0, 0, 1.0, 2.0, 3.0) >= 0x40000000)", Fine),
     ("SetWarpSpeed", "A1.SetWarpSpeed(a, 30)", Fine),
     ("ResetWarpSpeed", "A1.ResetWarpSpeed(a)", Fine),
+    ("GetWarpSpeed", "assert(A1.GetWarpSpeed(a) >= 0)", Fine),
+    ("GetImpulseSpeed", "assert(A1.GetImpulseSpeed(a) > 0)", Fine),
     ("Stop", "A1.Stop(a, 1)", Fine),
     ("AI_Team_Load_AIP", "A1.AI_Team_Load_AIP(1, 'team.aip')", Fine),
     ("Attack", "A1.Attack(a, b, 1)", Fine),
@@ -739,10 +744,10 @@ fn set_relation_sends_a_one_directional_edit_with_the_engines_codes() {
 #[test]
 fn seam_gap_writes_are_retained_and_counted_without_other_effect() {
     let s = scene();
-    let (rt, commands) = run(&s, "A1.SetWarpSpeed(a, 30)");
-    assert_eq!(presented(&commands), vec![call("SetWarpSpeed", vec![Arg::Entity(s.ids[0]), Arg::Num(Fixed::from_int(30))])]);
+    let (rt, commands) = run(&s, "A1.DestroyCritical(a)");
+    assert_eq!(presented(&commands), vec![call("DestroyCritical", vec![Arg::Entity(s.ids[0])])]);
     let unsupported: BTreeSet<String> = rt.unsupported().into_iter().map(|(k, _)| k).collect();
-    assert!(unsupported.iter().any(|k| k.starts_with("A1.SetWarpSpeed")));
+    assert!(unsupported.iter().any(|k| k.starts_with("A1.DestroyCritical")));
     // A dead target is an error, not a silent request.
     fails(&s, "A1.SetShieldPercent(999999, 0.5)");
 }
