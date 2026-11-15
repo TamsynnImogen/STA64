@@ -146,7 +146,7 @@ pub(crate) fn unit_def_for_profile(name: &str, odf: &Odf, phys: Option<&Odf>, pr
         d.crew_gain = r.fixed("maxCrewGain").min(Fixed::from_int(1_000_000_000));
     }
     d.sane_crew_loss = r.flag("saneCrewLossMethod").unwrap_or(false);
-    // SIM-46 P0: typed, not read by the sim yet. A key with a bad value warns and keeps the default.
+    // SIM-46 P0: typed, not read by the sim yet. A non-number warns and keeps the default; negatives read as zero.
     d.transport = crate::def::TransportDef {
         transporter: r.flag("transporter"),
         has_crew: r.flag("has_crew"),

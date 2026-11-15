@@ -93,7 +93,7 @@ fn race_keys_are_read_with_their_defaults() {
     std::fs::create_dir_all(dir.join("odf")).unwrap();
     let write = |name: &str, text: &str| std::fs::write(dir.join("odf").join(name), text).unwrap();
     write("races.odf", "numberOfRaces = 3\nrace0 = \"RaceA.odf\"\nrace1 = \"RaceB.odf\"\nrace2 = \"RaceC.odf\"\n");
-    write("RaceA.odf", "name = \"Alpha\"\nboardingStrength = 1.75f\ncrewRetreatRatio = 0.2f //crew percentage\ntransportSprite = \"btransport\"\ntransportToFriendsOnNotEasy = 1\ntransportToEnemyOnHard = 1\n");
+    write("RaceA.odf", "name = \"Alpha\"\nboardingStrength = 1.75f\ncrewRetreatRatio = 0.2f // trailing comment\ntransportSprite = \"btransport\"\ntransportToFriendsOnNotEasy = 1\ntransportToEnemyOnHard = 1\n");
     write("RaceB.odf", "name = \"Beta\"\nboardingStrength = 0.0f\ncanCommandeer = 0\ncanBeCommandeered = 0\ntransportToFriendsOnNotEasy = 0\n");
     write("RaceC.odf", "name = \"Gamma\"\n");
     let mut vfs = Vfs::default();

@@ -1,8 +1,8 @@
 //! The typed rules of `RTS_CFG.h` (D9): officer limits, the path planner,
 //! the keys Classic Enhanced changes, and each race's starting forces. No
-//! raw header value reaches the simulation; every value the sim reads is an
-//! entry of the content digest ([`Rules::digest_entries`], D10). The one
-//! exception is [`TransporterRules`] (SIM-46 P0), typed ahead of the sim.
+//! raw header value reaches the simulation; every value here is an
+//! entry of the content digest ([`Rules::digest_entries`], D10), except
+//! [`TransporterRules`] (SIM-46 P0), which the sim does not read yet.
 
 use crate::digest::{Canon, DigestEntry, quoted};
 use crate::{RaceRepair, Races, SeatRaceRule, Warning};
@@ -257,7 +257,7 @@ impl Default for TransporterRules {
 
 impl TransporterRules {
     /// The header keys, in field order.
-    pub const KEYS: [&'static str; 4] = ["TRANSPORTER_RANGE", "TRANSPORTER_DELAY", "TRANSPORTER_ACTION_DELAY", "TRANSPORTER_MAX"];
+    const KEYS: [&'static str; 4] = ["TRANSPORTER_RANGE", "TRANSPORTER_DELAY", "TRANSPORTER_ACTION_DELAY", "TRANSPORTER_MAX"];
 
     fn from_cfg(cfg: &CfgH, warnings: &mut Vec<Warning>) -> Option<Self> {
         if !Self::KEYS.iter().any(|k| cfg.raw(k).is_some()) {
