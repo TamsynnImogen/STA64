@@ -6,6 +6,7 @@ this file is what's being worked on now and what needs checking by eye.
 Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your check in game/viewer
 
 ## Needs your check
+- [?] LUA-40 read-only MMM paths: check an external converted mission's optional camera-path lookup with populated and absent paths. Headless tests cover `Path.exists`, `.count`, copied `.points` and authored-label camera handoff; full cinematic playback and mission fidelity still need acceptance.
 - [?] CFG multi-selection tiers: check selections of 2, 16, 17 and 30 units in Classic and FO4. The normal wireframe slots show names through 16; the compact wireframe slots show no captions from 17. Wireframes follow their cfg rectangles and retain full hover tooltips. This supersedes the earlier over-eight small-tile fallback note.
 - [?] Multi-selection names: select two construction ships in Classic and FO4 (build them first if needed). Captions should use a compact sprite font in their cfg name areas, with full names retained and clear of the hull bars. Check at 1080p and 720p, resize, and compare a selection of more than eight ships (small tiles retain their existing icon-area fallback).
 - [?] Graphics Options layout: compare the display-device/resolution/anti-aliasing row, renderer and monitor rows, checkbox columns and detail row against the supplied reference. Check compact and ultrawide windows and the in-game panel; MSAA, shadows, bloom and nebula detail should apply and persist. F8 effects changes must appear in Bloom and remain intact when changing MSAA. GPU/backend/monitor fields report the active setup; gamma stays a system display setting.
@@ -165,6 +166,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 - [?] UI-16 playtest: A2 stock at 1024x768: info panel lines unclipped, minimap filter buttons without captions; FO resource numbers not doubled at 4:3.
 
 - [?] SIM-70 station Recrew: in a fresh match, reduce an owned station's crew, activate Recrew and check that station crew rises while the player pool pays the same amount. Check full/empty pool, toggle/Stop, damage pause, owner changes and save/reload. Native timing is backed by static rules and headless checks; graphical acceptance remains manual. Yard recrewing remains separate.
+
+- [?] FO4 AI startup (#806): start a fresh Federation versus Klingon skirmish. The computer's avatar starter should change into its authored productive station, then begin building. Check that the human starter remains available for manual avatar selection. The automatic AI owner gate is backed by static original-hook evidence and headless tests; graphical acceptance remains manual.
 
 ## Checked earlier (morning list)
 

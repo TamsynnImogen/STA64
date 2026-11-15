@@ -3,15 +3,17 @@
 //!
 //! Rules, read from the typed content (`sta_content::lifecycle`; ODF keys
 //! `autoExpireTime`, `lifeTimer`, `replacementInstant*`, `replacementMode`,
-//! `replacement<i>class<j>`, `requiredOfficers`) and applied to `hidden = 1`
-//! objects only (the only ones measured):
+//! `replacement<i>class<j>`, `requiredOfficers`). Hidden-only expiry and
+//! player/derelict replacement behavior is retained; visible AI instant
+//! replacement is read from the original hook (static, not measured in game):
 //!
-//! - **Expiry.** An object with `autoExpireTime` (else `lifeTimer`) removes
+//! - **Expiry.** A hidden object with `autoExpireTime` (else `lifeTimer`) removes
 //!   itself that many seconds after it appears.
 //! - **Instant replacement.** A hardpoint weapon of class `replaceweapon` with
 //!   `replacementInstantPlayer` / `AI` / `Derelict` set for the owner's kind
-//!   fires `replacementInstantDelay` seconds after the object appears (every
-//!   such weapon is scheduled in hardpoint order; once one has spawned the
+//!   fires `replacementInstantDelay` seconds after a hidden object appears;
+//!   a visible object fires only for an AI owner with `replacementInstantAI`.
+//!   Every such weapon is scheduled in hardpoint order; once one has spawned the
 //!   source is gone and the rest find nothing; with equal ticks expiry runs
 //!   first).
 //!   Entries whose `replacement<i>condition` is absent or names the source
@@ -138,13 +140,15 @@ impl Sim {
     pub(crate) fn register_lifecycle(&mut self, id: EntityId) {
         let Some(db) = self.content.clone() else { return };
         let Some(u) = self.units.get(id) else { return };
-        let Some(def) = db.unit(u.def).filter(|d| d.hidden) else { return };
+        let Some(def) = db.unit(u.def) else { return };
         let kind = self.owner_kind(u.owner);
-        if let Some(life) = def.life {
+        if def.hidden && let Some(life) = def.life {
             self.start_effects.add(Row { at: self.tick + life, id, act: Act::Expire });
         }
         for (i, hp) in def.hardpoints.iter().enumerate().take(256) {
-            if let Some(r) = db.weapon(hp.weapon.key).and_then(|w| w.replace.as_ref()).filter(|r| r.fires_for(kind) && r.required_officers.is_none()) {
+            if let Some(r) = db.weapon(hp.weapon.key).and_then(|w| w.replace.as_ref()).filter(|r| {
+                r.required_officers.is_none() && r.fires_for(kind) && (def.hidden || kind == Owner::Ai)
+            }) {
                 self.start_effects.add(Row { at: self.tick + r.delay, id, act: Act::Replace(i as u8) });
             }
         }
@@ -171,6 +175,11 @@ impl Sim {
         let Some(def) = db.unit(source.def) else { return };
         let Some(weapon) = def.hardpoints.get(hardpoint as usize).and_then(|hp| db.weapon(hp.weapon.key)) else { return };
         let Some(r) = weapon.replace.as_ref() else { return };
+        // A visible delayed source may have changed owner since registration.
+        // Its AI-only admission must still hold at fire time.
+        if !def.hidden && (self.owner_kind(source.owner) != Owner::Ai || !r.fires_for(Owner::Ai) || r.required_officers.is_some()) {
+            return;
+        }
         let (owner, pos, heading, source_odf) = (source.owner, source.pos, source.heading, def.odf.clone());
         let picks = self.pick_replacements(r, &source_odf);
         let mut spawned = false;
@@ -310,6 +319,22 @@ mod tests {
         let mut plain = UnitDef::new("plain", "craft");
         plain.hull = Fixed::from_int(10);
         plain.life = Some(3); // not hidden: no lifecycle
+        let mut visible = UnitDef::new("visible_start", "shipyard");
+        visible.hull = Fixed::from_int(100);
+        visible.life = Some(3); // visible expiry remains unsupported
+        visible.hardpoints.push(Hardpoint { weapon: DefRef::new("visible_ai"), node: "root".into(), arc: None });
+        let mut delayed = UnitDef::new("visible_delayed", "shipyard");
+        delayed.hull = Fixed::from_int(100);
+        delayed.hardpoints.push(Hardpoint { weapon: DefRef::new("visible_late"), node: "root".into(), arc: None });
+        let mut other_owner = UnitDef::new("visible_other_owner", "shipyard");
+        other_owner.hull = Fixed::from_int(100);
+        other_owner.hardpoints.push(Hardpoint { weapon: DefRef::new("other_owner"), node: "root".into(), arc: None });
+        let mut gated_visible = UnitDef::new("visible_gated", "shipyard");
+        gated_visible.hull = Fixed::from_int(100);
+        gated_visible.hardpoints.push(Hardpoint { weapon: DefRef::new("need_officers"), node: "root".into(), arc: None });
+        let mut productive = UnitDef::new("productive_yard", "shipyard");
+        productive.hull = Fixed::from_int(100);
+        productive.build.list.push(DefRef::new("fresh_a"));
         ContentDb::builder()
             .unit(pod("src", None, &["to_ai", "to_player", "late"]))
             .unit(pod("fresh_ai", Some(30), &[]))
@@ -319,6 +344,14 @@ mod tests {
             .unit(pod("gated", None, &["need_officers"]))
             .unit(pod("unitcap", None, &[]))
             .unit(plain)
+            .unit(visible)
+            .unit(delayed)
+            .unit(other_owner)
+            .unit(gated_visible)
+            .unit(productive)
+            .weapon(replace("visible_ai", [false, true, false], 0, 2, None, vec![entry(None, vec![class("productive_yard", 0, 0)])]))
+            .weapon(replace("visible_late", [false, true, false], 6, 2, None, vec![entry(None, vec![class("productive_yard", 0, 0)])]))
+            .weapon(replace("other_owner", [true, false, true], 0, 2, None, vec![entry(None, vec![class("productive_yard", 0, 0)])]))
             .weapon(replace("to_ai", [false, true, false], 0, 2, None, vec![entry(Some("src"), vec![class("fresh_ai", 0, 0)])]))
             .weapon(replace(
                 "to_player", [true, false, false], 6, 0, None,
@@ -364,6 +397,59 @@ mod tests {
         let out = sim.step(&[]);
         assert_eq!(names(&sim, &db), ["plain"]);
         assert!(!out.events.iter().any(|e| matches!(e, crate::SimEvent::Destroyed { .. })), "expiry is not a death");
+    }
+
+    #[test]
+    fn visible_ai_opt_in_replaces_with_a_productive_yard_only_for_ai() {
+        let (mut sim, db) = game(&[(0, Control::Human), (1, Control::Ai("x".into()))]);
+        let ai = put(&mut sim, &db, "visible_start", PlayerId(1));
+        let human = put(&mut sim, &db, "visible_start", PlayerId(0));
+        let neutral = put(&mut sim, &db, "visible_start", NEUTRAL);
+        let human_opt_in = put(&mut sim, &db, "visible_other_owner", PlayerId(0));
+        let neutral_opt_in = put(&mut sim, &db, "visible_other_owner", NEUTRAL);
+        let ai_without_opt_in = put(&mut sim, &db, "visible_other_owner", PlayerId(1));
+        let gated = put(&mut sim, &db, "visible_gated", PlayerId(1));
+        sim.step(&[]);
+        assert!(sim.unit(ai).is_none());
+        assert!(sim.unit(human).is_some());
+        assert!(sim.unit(neutral).is_some());
+        assert!(sim.unit(human_opt_in).is_some(), "visible human opt-in remains outside this rule");
+        assert!(sim.unit(neutral_opt_in).is_some(), "visible derelict opt-in remains outside this rule");
+        assert!(sim.unit(ai_without_opt_in).is_some(), "visible AI needs its own opt-in");
+        assert!(sim.unit(gated).is_some(), "requiredOfficers still prevents instant replacement");
+        let yard = sim.units.iter().find(|u| db.unit(u.def).is_some_and(|d| d.odf == "productive_yard")).unwrap();
+        assert_eq!(yard.owner, PlayerId(1));
+        assert!(!db.unit(yard.def).unwrap().build.list.is_empty());
+        for _ in 0..4 { sim.step(&[]); }
+        assert!(sim.unit(human).is_some(), "visible human expiry remains disabled");
+    }
+
+    #[test]
+    fn delayed_visible_ai_replacement_survives_snapshot_with_equal_digests() {
+        let (mut sim, db) = game(&[(0, Control::Human), (1, Control::Ai("x".into()))]);
+        let source = put(&mut sim, &db, "visible_delayed", PlayerId(1));
+        for _ in 0..2 { sim.step(&[]); }
+        let mut restored = Sim::from_snapshot(&sim.snapshot(), Some(db.clone())).unwrap();
+        assert_eq!(sim.digest(), restored.digest());
+        for _ in 0..8 {
+            sim.step(&[]);
+            restored.step(&[]);
+            assert_eq!(sim.digest(), restored.digest());
+        }
+        assert!(sim.unit(source).is_none());
+        assert_eq!(names(&sim, &db), ["productive_yard"]);
+        assert_eq!(names(&restored, &db), names(&sim, &db));
+    }
+
+    #[test]
+    fn captured_visible_ai_source_does_not_fire_its_pending_replacement() {
+        let (mut sim, db) = game(&[(0, Control::Human), (1, Control::Ai("x".into()))]);
+        let source = put(&mut sim, &db, "visible_delayed", PlayerId(1));
+        assert!(sim.apply_edit(PlayerId::SCRIPT, &crate::command::Edit::Team(source, PlayerId(0))));
+        for _ in 0..8 { sim.step(&[]); }
+        assert_eq!(sim.unit(source).unwrap().owner, PlayerId(0));
+        assert_eq!(names(&sim, &db), ["visible_delayed"]);
+        assert!(sim.start_effects.is_empty());
     }
 
     #[test]
