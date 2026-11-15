@@ -140,3 +140,39 @@ fn a_refused_table_is_listed_once_and_grants_nothing() {
     let listed: Vec<_> = rt.unsupported().into_iter().filter(|(n, _)| n.contains("team table")).collect();
     assert_eq!(listed.len(), 1, "{listed:?}");
 }
+
+// A header that carries one start for every team (own-authored values, not any install's).
+const HEADER: &str = "int cfgMaxOfficers = 41;\nint cfgMaxCrew = 9000;\nint cfgStartingDilithium = 1313;\nint cfgStartingCrew = 777;\n";
+
+fn header_db() -> Arc<ContentDb> {
+    Arc::new(fake::db().with_rules(sta_content::Rules::from_header(HEADER).0))
+}
+
+#[test]
+fn a_map_without_a_table_gives_every_seat_the_headers_start_and_the_script_overrides_it() {
+    let (mut sim, mut view, _) = bare([Control::Human, Control::Idle]);
+    let db = header_db();
+    let start = StartStock::default().or_header(db.rules(), [PlayerId(0), PlayerId(1)]);
+    let script = "A2.SetDilithium(1, 555)";
+    let mut rt = runtime(script, &view, &db, start.seats);
+    play(&mut rt, &mut sim, &mut view, 3);
+    assert_eq!(stock(&view, 0)[0], 555, "the script's own call wins over the header start");
+    assert_eq!(stock(&view, 1)[0], 1313, "a seat the script does not touch keeps the header's dilithium");
+    for seat in [0, 1] {
+        let p = view.player(PlayerId(seat)).unwrap();
+        assert_eq!(p.crew, Some(Fixed::from_int(777)));
+        assert_eq!(p.officers[1], Fixed::from_int(41));
+    }
+    assert_eq!(view.player(PlayerId(0)).unwrap().resources.get(1).copied().unwrap_or(Fixed::ZERO), Fixed::ZERO, "latinum is not in the header");
+}
+
+#[test]
+fn a_header_without_the_keys_and_a_table_or_refused_map_are_unchanged() {
+    let plain = Arc::new(fake::db().with_rules(sta_content::Rules::from_header("int SINGLE_PLAYER_OFFICER_LIMIT = 600;\nint STARTING_CREW_CAPACITY = 250;\n").0));
+    assert!(StartStock::default().or_header(plain.rules(), [PlayerId(0)]).seats.is_empty(), "no cfgStarting*/cfgMaxOfficers: nothing is invented");
+    let db = header_db();
+    let with_table = StartStock { seats: from_table(&table([1.0, 2.0, 3.0], [4.0, 5.0, 6.0])), refused: None };
+    assert_eq!(with_table.clone().or_header(db.rules(), [PlayerId(0)]), with_table, "a map's own table wins");
+    let refused = StartStock { seats: Vec::new(), refused: Some("x".into()) };
+    assert_eq!(refused.clone().or_header(db.rules(), [PlayerId(0)]), refused, "a refused table grants nothing");
+}

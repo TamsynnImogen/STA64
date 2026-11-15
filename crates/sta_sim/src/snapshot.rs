@@ -55,13 +55,20 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// parties in flight and shield holds (SIM-46). Format 31 appends station
 /// recrew activation and damage-pause rows (SIM-70). Format 32 appends the alert levels, last
 /// enemy hits and ally attack counters (LUA-32), and the decommission bit of the
-/// switch rows; 33 is reserved by the guard order. Format 34 appends the mission switches (LUA-41).
+/// switch rows. Format 33 adds the guard order to the scripted-order rows (LUA-39):
+/// a build without it would refuse such a row as a corrupt record, but could not
+/// tell the file from a valid one by version.
+/// Format 34 appends the mission switches (LUA-41).
 /// Only the current format is read.
 pub const FORMAT_VERSION: u16 = 34;
 
 #[cfg(test)]
 #[path = "snapshot/recrew_tests.rs"]
 mod recrew_tests;
+
+#[cfg(test)]
+#[path = "snapshot/guard_tests.rs"]
+mod guard_tests;
 
 const HEADER: usize = 4 + 2 + 4 + 8;
 
@@ -664,6 +671,10 @@ impl Sim {
         let scripted = crate::orders::Scripted::from_rows(scripted_rows).ok_or_else(|| corrupt("scripted order rows"))?;
         if scripted.to_rows().iter().any(|(id, j)| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft) || matches!(j, crate::orders::Job::Patrol { points, leg } if points.len() < 2 || *leg >= points.len())) {
             return Err(SnapshotError::Corrupt("scripted order entity is not a craft or a patrol has no loop".into()));
+        }
+        // A guard's ward is another craft of the snapshot (LUA-39).
+        if scripted.to_rows().iter().any(|(id, j)| matches!(j, crate::orders::Job::Guard { ward } if ward == id || units.get(*ward).is_none_or(|u| u.kind != EntityKind::Craft))) {
+            return Err(SnapshotError::Corrupt("guard order of a craft that is its own ward or whose ward is no craft".into()));
         }
         let relations = crate::relations::Relations::from_rows(&relation_rows, &b.players).map_err(|why| SnapshotError::Corrupt(why.into()))?;
         let switches = crate::switches::SwitchTable::from_rows(switch_rows).ok_or_else(|| corrupt("switch rows"))?;

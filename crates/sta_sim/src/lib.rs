@@ -444,7 +444,8 @@ impl Sim {
             | Order::Scout { .. }
             | Order::AttackAny { .. }
             | Order::AttackPoint { .. }
-            | Order::MoveWarp { .. } => self.apply_scripted(c.player, order),
+            | Order::MoveWarp { .. }
+            | Order::Guard { .. } => self.apply_scripted(c.player, order),
             Order::Colonize { units, planet } => self.apply_colonize(c.player, units, *planet),
             Order::Transport { units, target, attack } => self.apply_transport(c.player, units, *target, *attack),
             Order::Rally { builders, at } => {

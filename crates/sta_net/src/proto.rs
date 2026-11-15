@@ -37,8 +37,8 @@ pub const MAGIC: [u8; 4] = *b"S64N";
 /// team pool); 8 appends `Edit::SetRelation`, tag 45 (SIM-63); 9 appends
 /// `Order::Colonize`, tag 17, and `Edit::PlanetPopulation`, tag 46 (SIM-30); 10
 /// appends `Edit::WarpSpeed`, tag 47 (LUA-31); 11 appends `Order::Transport`, tag 18
-/// (SIM-46); 12 appends `Order::Recrew`, tag 19 (SIM-70); 14 appends
-/// `Edit::MissionSwitch`, tag 48 (LUA-41; 13 is reserved by the guard order).
+/// (SIM-46); 12 appends `Order::Recrew`, tag 19 (SIM-70); 13 appends `Order::Guard`, tag 20 (LUA-39);
+/// 14 appends `Edit::MissionSwitch`, tag 48 (LUA-41).
 pub const PROTOCOL_VERSION: u16 = 14;
 /// Magic, version and body length.
 pub const HEADER_LEN: usize = 10;
@@ -1748,6 +1748,15 @@ mod tests {
         }
     }
 
+    /// `Order::Guard`, Order tag 20 (protocol 13): the golden covers it.
+    fn guard_sample(player: u8, seq: u32) -> Command {
+        Command {
+            player: PlayerId(player),
+            seq,
+            kind: CommandKind::Order(Order::Guard { units: vec![EntityId(4)], ward: EntityId(9) }),
+        }
+    }
+
     fn text(player: u8, seq: u32, t: &str) -> Command {
         Command {
             player: PlayerId(player),
@@ -1813,6 +1822,7 @@ mod tests {
                 colonize_sample(2, 1),
                 transport_sample(2, 2),
                 recrew_sample(2, 3),
+                guard_sample(2, 4),
                 edit(0),
                 text(PlayerId::SCRIPT.0, 1, ""),
                 team_pool_edit(2),
@@ -2337,8 +2347,8 @@ mod tests {
         assert_eq!(peek_header(&bytes), Ok((1, bytes.len() - HEADER_LEN)));
         // A version notice from another build reads as its version.
         let mut notice = version_notice();
-        notice[4..6].copy_from_slice(&13u16.to_le_bytes());
-        assert_eq!(decode(&notice), Err(ProtoError::Version { found: 13 }));
+        notice[4..6].copy_from_slice(&14u16.to_le_bytes());
+        assert_eq!(decode(&notice), Err(ProtoError::Version { found: 14 }));
         // Our own version with no body is not a message.
         assert_eq!(decode(&version_notice()), Err(ProtoError::Empty));
         bytes[0] = b'X';

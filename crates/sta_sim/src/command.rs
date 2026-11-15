@@ -113,6 +113,11 @@ pub enum Order {
     /// Recovery consumes the owning player's live crew pool; see [`crate::recrew`].
     /// Appended tag 19 preserves every preceding Order tag and payload.
     Recrew { units: Vec<EntityId>, on: Option<bool> },
+    /// Guard a ward (LUA-39; mission `SetCommandWhat*VO` with GUARD, 23): each
+    /// craft keeps station beside `ward`, fights what attacks it and stops when
+    /// it is gone: see [`crate::orders`]. A ward that is no live craft, or is
+    /// the unit itself, is refused. Tag 20.
+    Guard { units: Vec<EntityId>, ward: EntityId },
 }
 
 /// Which autonomy an [`Order::Autonomy`] sets.
@@ -643,7 +648,8 @@ mod tests {
             (15, Order::MoveWarp { units: u.clone(), to: at, queue: true }),
             (17, Order::Colonize { units: u.clone(), planet: id }),
             (18, Order::Transport { units: u.clone(), target: id, attack: false }),
-            (19, Order::Recrew { units: u, on: None }),
+            (19, Order::Recrew { units: u.clone(), on: None }),
+            (20, Order::Guard { units: u, ward: id }),
         ];
         for (tag, o) in orders {
             let bytes = postcard::to_allocvec(&o).unwrap();
