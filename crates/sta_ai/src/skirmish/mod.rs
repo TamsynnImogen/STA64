@@ -458,6 +458,9 @@ impl SkirmishController {
         let db = Arc::clone(&self.cfg.content);
         let seat = self.cfg.player;
         let mut own: Vec<Own> = Vec::new();
+        // Flagged own craft and buildings: (class, finished). They count as tech-tree
+        // prerequisites but not toward build totals or any planning list.
+        let mut flagged: Vec<(ContentKey, bool)> = Vec::new();
         let mut foes: Vec<Foe> = Vec::new();
         // Its own units from `units`: the view leaves `hidden = 1` objects out of
         // every visible set, but a seat's hidden pods (Roots' `fed_effectsS`, FO's
@@ -472,8 +475,10 @@ impl SkirmishController {
                 // Special forces (LUA-28; read from the executable, static): the strategic AI
                 // does not use a flagged craft (no goal, wave, defence or build-total role,
                 // so it builds replacements) and gives it no automatic jobs. Only the player
-                // or the script orders it.
+                // or the script orders it. It still counts for tech-tree prerequisites (the
+                // rule names build totals only).
                 if view.is_special_forces(u.id) {
+                    flagged.push((u.def, finished(u)));
                     continue;
                 }
                 own.push(Own {
@@ -515,13 +520,13 @@ impl SkirmishController {
             Vec3 { x: sum.x / n, y: sum.y / n, z: sum.z / n }
         };
 
-        self.economy(view, me, &own, out);
+        self.economy(view, me, &own, &flagged, out);
         self.mine(view.tick, me, &own, home, out);
         self.military(view.tick, &own, &foes, &stations, home, out);
     }
 
     /// Orders for the builders: yards queue units, rigs deploy stations.
-    fn economy(&mut self, view: &WorldView, me: &PlayerView, own: &[Own], out: &mut Vec<Command>) {
+    fn economy(&mut self, view: &WorldView, me: &PlayerView, own: &[Own], flagged: &[(ContentKey, bool)], out: &mut Vec<Command>) {
         let tick = view.tick;
         let db = Arc::clone(&self.cfg.content);
         let rows = self.cfg.params.build_list.clone();
@@ -532,6 +537,11 @@ impl SkirmishController {
             *total.entry(o.def).or_default() += 1;
             if o.finished {
                 *done.entry(o.def).or_default() += 1;
+            }
+        }
+        for &(k, finished) in flagged {
+            if finished {
+                *done.entry(k).or_default() += 1;
             }
         }
         for (&k, &n) in &done {

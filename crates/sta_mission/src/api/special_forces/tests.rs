@@ -292,3 +292,153 @@ fn a_flag_call_or_recruit_on_a_craft_removed_this_tick_is_no_object_on_both_game
     let out = s.sim.step(&flag);
     assert!(!out.events.iter().any(|e| matches!(e, SimEvent::Rejected { .. })), "{:?}", out.events);
 }
+
+#[test]
+fn a_team_number_equal_to_a_live_unflagged_crafts_id_is_not_an_order_refusal_on_a1_attack_main_enemy_base() {
+    let s = scene();
+    let rt = runtime(&s);
+    // A1's `AttackMainEnemyBase(team, bool)` takes a team number first, not a craft: the gate
+    // must not read it as the unflagged craft `a` whose id happens to be the same number.
+    rt.eval::<()>(&format!("A1.AttackMainEnemyBase({}, true)", s.ids[0].0)).unwrap();
+    assert_eq!(gated(&rt, "AttackMainEnemyBase"), 0, "not an order refusal");
+    // A2's version is per craft and stays gated.
+    rt.eval::<()>("A2.AttackMainEnemyBase(a, true)").unwrap();
+    assert_eq!(gated(&rt, "AttackMainEnemyBase"), 1);
+}
+
+#[test]
+fn a_team_change_queued_after_the_flag_in_the_same_tick_closes_the_gate_again() {
+    let s = scene();
+    let mut rt = runtime(&s);
+    rt.eval::<()>("A2.SetSpecialForcesFlag(a, true); A2.Stop(a, 0)").unwrap();
+    assert_eq!(orders(&rt.take_commands()).len(), 1, "flagged: the order goes");
+    // The sim applies the edits in order and a team change clears the flag.
+    rt.eval::<()>("A2.SetSpecialForcesFlag(a, true); A2.SetRealTeam(a, 1); A2.Stop(a, 0)").unwrap();
+    assert!(orders(&rt.take_commands()).is_empty());
+    assert_eq!(gated(&rt, "Stop"), 1);
+    // A flag set after the team change counts again.
+    rt.eval::<()>("A2.SetRealTeam(a, 1); A2.SetSpecialForcesFlag(a, true); A2.Stop(a, 0)").unwrap();
+    assert_eq!(orders(&rt.take_commands()).len(), 1);
+}
+
+#[test]
+fn a1_flag_call_on_an_absent_or_dead_craft_does_nothing_without_raising() {
+    let mut s = scene();
+    let mut rt = runtime(&s);
+    rt.eval::<()>("A1.SetSpecialForcesFlag(987654, true)").unwrap();
+    assert!(rt.take_commands().is_empty());
+    // A craft the sim has destroyed.
+    let kill = Command { player: PlayerId::SCRIPT, seq: 20, kind: CommandKind::Edit(Edit::Kill(s.ids[1])) };
+    let out = s.sim.step(&[kill]);
+    for _ in 0..5 {
+        s.sim.step(&[]);
+    }
+    let view = s.sim.view();
+    assert!(view.unit(s.ids[1]).is_none_or(|u| u.flags.contains(sta_sim::view::UnitFlags::DYING)), "gone or dying");
+    rt.think(&s.sim.view(), &out.events, &mut Vec::new());
+    rt.eval::<()>("A1.SetSpecialForcesFlag(b, true)").unwrap();
+    assert!(rt.take_commands().is_empty());
+}
+
+#[test]
+fn recruit_skips_a_craft_still_in_production() {
+    let s = scene();
+    let mut view = (*s.sim.view()).clone();
+    for u in &mut view.units {
+        if u.id == s.ids[1] {
+            u.progress = Some(Fixed::from_f64(0.5));
+        }
+    }
+    let cfg = MissionConfig { content: Some(s.db.clone()), view: Some(view), ..MissionConfig::default() };
+    let mut rt = MissionRuntime::from_source_with("sf.lua", "", 3, cfg);
+    rt.eval::<()>(&format!("b = {}", s.ids[1].0)).unwrap();
+    for call in ["A2.RecruitSpecialForces('fx_cruiser', 1, 0)", "A1.RecruitSpecialForces('fx_cruiser', 1, 0)"] {
+        let r: (bool, i64) = rt.eval(&format!("return {call}")).unwrap();
+        assert_eq!(r, (false, 0), "{call}: the only cruiser of team 1 is not finished");
+    }
+    assert!(rt.take_commands().is_empty());
+}
+
+mod colonize {
+    use super::*;
+    use sta_content::{ColonizePodDef, CrewRules, DefRef, Hardpoint, MoveStats, PlanetRole, PopulationRules, Rules, UnitDef, WeaponDef, WeaponKind};
+
+    fn n(v: i32) -> Fixed {
+        Fixed::from_int(v)
+    }
+
+    fn content() -> Arc<ContentDb> {
+        let fake = fake::db();
+        let mut b = ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
+        for w in fake.weapons().cloned() {
+            b = b.weapon(w);
+        }
+        for u in fake.units().cloned() {
+            b = b.unit(u);
+        }
+        let mut pod = WeaponDef::new("fx_pod", "colonizerpod", WeaponKind::Projectile);
+        pod.refire = 150;
+        pod.colonize = Some(ColonizePodDef { party_size: n(100), orbit_range: n(150) });
+        let mut planet = UnitDef::new("fx_pl", "planet");
+        planet.planet_role = Some(PlanetRole::Producer);
+        planet.planet_colonizable = true;
+        planet.planet_max_population = 1;
+        planet.planet_civilian_population_modifier = Fixed::ONE;
+        planet.planet_crew_gain = 1000;
+        planet.hull = n(10_000);
+        planet.radius = n(100);
+        let mut ship = UnitDef::new("fx_colony", "colony");
+        ship.race = "fx".into();
+        ship.movement = MoveStats::from_f32(140.0, 1.0, 1.0, 1.0, 0.2);
+        ship.hull = n(250);
+        ship.radius = n(10);
+        ship.hardpoints = vec![Hardpoint { weapon: DefRef::new("fx_pod"), node: "hp01".into(), arc: None }];
+        let rules = Rules::default()
+            .with_population(PopulationRules { levels: [n(1000), n(2000), n(3000), n(5000)], civilian_rate_modifier: Fixed::from_f64(0.2) })
+            .with_crew(CrewRules { starting_capacity: Some(250), max_crew: None, races: vec![("fx".into(), n(4))] });
+        Arc::new(b.weapon(pod).unit(planet).unit(ship).build().unwrap().with_rules(rules))
+    }
+
+    #[test]
+    fn a_flagged_a2_colonize_reaches_the_sim_and_is_accepted_and_an_unflagged_one_is_refused_by_the_gate() {
+        let db = content();
+        let seat = |n| PlayerSetup { id: PlayerId(n), team: TeamId(n), race: "fx".into(), control: Control::Human };
+        let mut sim = Sim::from_setup(&GameSetup {
+            seed: 1,
+            map: Arc::new(MapDef::empty()),
+            content: db.clone(),
+            players: vec![seat(0), seat(1)],
+            options: GameOptions::default(),
+        });
+        let spawn = |seq, odf: &str, x: f32| Command {
+            player: PlayerId::BENCH,
+            seq,
+            kind: CommandKind::Edit(Edit::Spawn {
+                odf: db.key(odf).unwrap(),
+                player: PlayerId(0),
+                pos: Vec3::from_f32([x, 0.0, 0.0]),
+                heading: (Fixed::ZERO, Fixed::ONE),
+            }),
+        };
+        let out = sim.step(&[spawn(1, "fx_pl", 0.0), spawn(2, "fx_colony", 300.0)]);
+        let at = |x: f32| out.view.units.iter().find(|u| u.pos == Vec3::from_f32([x, 0.0, 0.0])).unwrap().id;
+        let (planet, ship) = (at(0.0), at(300.0));
+        let cfg = MissionConfig { content: Some(db.clone()), view: Some((*out.view).clone()), ..MissionConfig::default() };
+        let mut rt = MissionRuntime::from_source_with("sf.lua", "", 3, cfg);
+        rt.eval::<()>(&format!("p, c = {}, {}", planet.0, ship.0)).unwrap();
+        // Unflagged: the gate swallows it.
+        rt.eval::<()>("A2.Colonize(c, p)").unwrap();
+        assert!(rt.take_commands().is_empty());
+        assert_eq!(gated(&rt, "Colonize"), 1);
+        // Flagged in the same tick: the order and the flag edit reach the sim, which accepts both.
+        rt.eval::<()>("A2.SetSpecialForcesFlag(c, true); A2.Colonize(c, p)").unwrap();
+        let commands = rt.take_commands();
+        assert!(commands.iter().any(|c| matches!(&c.kind, CommandKind::Order(Order::Colonize { planet: p, .. }) if *p == planet)), "{commands:?}");
+        let out = sim.step(&commands);
+        assert!(!out.events.iter().any(|e| matches!(e, SimEvent::Rejected { .. })), "{:?}", out.events);
+        for _ in 0..10 {
+            sim.step(&[]);
+        }
+        assert!(sim.colonies().process(ship).is_some(), "the ship is colonizing the planet");
+    }
+}

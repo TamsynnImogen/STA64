@@ -61,7 +61,7 @@ fn the_flag_survives_a_snapshot_with_the_same_digest_and_the_view_lists_it() {
 }
 
 #[test]
-fn the_view_list_follows_set_clear_and_death_of_the_row() {
+fn the_view_list_follows_set_and_clear() {
     let (mut sim, a) = flagged_sample();
     assert_eq!(sim.view().attrs.special_forces, vec![a]);
     sim.step(&[Command { player: PlayerId::SCRIPT, seq: 2, kind: CommandKind::Edit(Edit::SpecialForces(a, false)) }]);

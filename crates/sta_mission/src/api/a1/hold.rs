@@ -72,6 +72,10 @@ const HELD: &[&str] = &[
 /// Gated calls that `A1` takes from the `A2` binding, which gates them itself.
 const ALIASED: &[&str] = &["AI_Attack", "Cloak", "Decloak", "ImmediateCloak"];
 
+/// Gated calls whose A1 version is not a per-craft order: `AttackMainEnemyBase(team, bool)` takes a
+/// team number first (A2's `AttackMainEnemyBase(craft, bool)` stays gated in the A2 binding).
+const A1_UNGATED: &[&str] = &["AttackMainEnemyBase"];
+
 /// Calls that keep their place behind held calls: while anything is held, these are held
 /// too, so a later order or the end of a cineractive does not overtake an earlier held call.
 const KEEP_ORDER: &[&str] = &["CineractiveStart", "CineractiveEnd", "CineractiveCameraOffset"];
@@ -137,10 +141,10 @@ pub(super) fn install(lua: &Lua, env: &Env, table: &Table) -> mlua::Result<()> {
         .collect();
     for (name, inner) in entries {
         // Script orders do nothing on a craft without the special-forces flag (LUA-28). Only the
-        // calls bound here: the aliased ones (`AI_Attack`, `Cloak`, `Decloak`) meet the gate in
+        // calls bound here: the aliased ones (`AI_Attack`, `Cloak`, `Decloak`, `ImmediateCloak`) meet the gate in
         // the `A2` binding they call. The gate sits inside the held-call wrapper, so a held
         // order meets it when it is replayed.
-        let inner = match special_forces::GATED.iter().find(|g| **g == name && !ALIASED.contains(g)) {
+        let inner = match special_forces::GATED.iter().find(|g| **g == name && !ALIASED.contains(g) && !A1_UNGATED.contains(g)) {
             Some(gated) => {
                 let resolver = env.clone();
                 special_forces::gate(lua, &env.ctx, gated, move |raw| resolver.token(raw).and_then(Result::ok), inner)?

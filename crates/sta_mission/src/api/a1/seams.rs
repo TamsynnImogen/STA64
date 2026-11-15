@@ -138,7 +138,8 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
     // Read from the Armada I executable, static: a live craft takes the flag, anything else is left
     // alone.
     table.set("SetSpecialForcesFlag", def(lua, env, "SetSpecialForcesFlag", &["hb"], |_, e, _, a| {
-        let unit = e.unit("SetSpecialForcesFlag", a[0].id())?;
+        // A craft that is dying, dead or removed this tick does nothing (as for no object).
+        let Some(unit) = e.ctx.borrow().alive(a[0].id()).cloned() else { return Ok(Value::Nil) };
         let id = unit.id;
         let craft = { let c = e.ctx.borrow(); c.def(&unit).is_none_or(|d| sta_sim::world::EntityKind::of_def(d) == sta_sim::world::EntityKind::Craft) };
         let gone = special_forces::removed_this_tick(&e.ctx.borrow(), id);

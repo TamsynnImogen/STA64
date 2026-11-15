@@ -11,6 +11,9 @@
 //! production and not yet flagged, flags it and returns its handle. The player's own
 //! orders, selection and targeting do not read the flag.
 //!
+//! A2 `Patrol(h, path)` is gated too: the executable's `Patrol` is a path type plus a call of the
+//! `Goto(h, path, false, 1)` overload, which tests the flag (read from the executable, static).
+//!
 //! The state is the sim's `Switches.special_forces` (`Edit::SpecialForces`, tag 37,
 //! already in the snapshot and the digest). The mission reads it from the view
 //! (`AttrsView::special_forces`) plus the flag edits it queued itself this tick, so a
@@ -56,13 +59,16 @@ pub(crate) const GATED: &[&str] = &[
     "Stop",
 ];
 
-/// Whether the craft carries the flag now: the latest flag edit queued this tick, else the view.
+/// Whether the craft carries the flag now: the latest flag or team edit queued this tick, else the
+/// view. The sim applies the edits in order and a team change clears the flag, so a team change
+/// queued after the last flag edit leaves the flag off.
 pub(crate) fn flagged(c: &Ctx, id: EntityId) -> bool {
     c.commands
         .iter()
         .rev()
         .find_map(|cmd| match &cmd.kind {
             CommandKind::Edit(Edit::SpecialForces(who, on)) if *who == id => Some(*on),
+            CommandKind::Edit(Edit::Team(who, _)) if *who == id => Some(false),
             _ => None,
         })
         .unwrap_or_else(|| c.view.is_special_forces(id))

@@ -91,3 +91,93 @@ fn flagged_craft_get_no_orders_from_the_strategic_ai_and_unflagged_ones_do() {
     let (seen, cruisers) = ordered(true, 6);
     assert!(cruisers.iter().all(|c| !seen.contains(c)), "no order named a flagged craft: {seen:?}");
 }
+
+/// Plan once from a hand-built view: its own yard plus `crafts` (def name, flagged), the AIP
+/// list asking for `count` of `want`; returns what the yard was told to build.
+fn builds(tree: Option<&str>, want: &str, count: i32, crafts: &[(&str, bool)]) -> Vec<sta_core::ContentKey> {
+    use sta_sim::view::{UnitFlags, UnitView, WorldView};
+    let db = Arc::new(super::tests::rebuilt_for_flags(tree));
+    let key = |n: &str| db.key(n).unwrap();
+    let mut cfg = super::SkirmishConfig {
+        player: PlayerId(0),
+        race: "fx".into(),
+        content: Arc::clone(&db),
+        home: Vec3::ZERO,
+        enemy_starts: Vec::new(),
+        nodes: Vec::new(),
+        seed: 1,
+        params: super::Params::default(),
+    };
+    cfg.params.build_list = vec![sta_content::BuildItem {
+        unit: want.into(),
+        count: Fixed::from_int(count),
+        base: None,
+        max: None,
+        tech_level: None,
+    }];
+    let me = sta_sim::view::PlayerView {
+        crew: None,
+        id: PlayerId(0),
+        team: TeamId(0),
+        resources: vec![Fixed::from_int(100_000); 4],
+        officers: [Fixed::ZERO; 2],
+        eliminated: false,
+        relations: Vec::new(),
+    };
+    let unit = |id: u32, def: &str| UnitView {
+        id: EntityId(id),
+        def: key(def),
+        owner: PlayerId(0),
+        pos: Vec3::ZERO,
+        heading: (Fixed::ONE, Fixed::ZERO),
+        speed: Fixed::ZERO,
+        hull: [Fixed::ONE; 2],
+        shields: [[Fixed::ZERO; 2]; 4],
+        crew: None,
+        energy: None,
+        autonomy: None,
+        flags: UnitFlags::SELECTABLE,
+        progress: None,
+    };
+    let mut units = vec![unit(1, "fx_yard"), unit(2, "fx_station")];
+    let mut flagged = Vec::new();
+    for (n, (def, on)) in crafts.iter().enumerate() {
+        let id = 10 + n as u32;
+        units.push(unit(id, def));
+        if *on {
+            flagged.push(EntityId(id));
+        }
+    }
+    let mut view = WorldView { units, ..WorldView::default() };
+    view.attrs.special_forces = flagged;
+    let mut ai = super::SkirmishController::new(cfg);
+    let mut out = Vec::new();
+    ai.plan(&view, &me, &mut out);
+    out.iter()
+        .filter_map(|c| match &c.kind {
+            CommandKind::Order(Order::Build { what, .. }) => Some(*what),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn build_totals_leave_flagged_craft_out_so_the_ai_builds_replacements() {
+    let frigate = sta_content::fake::db().key("fx_frigate").unwrap();
+    // Control: two unflagged frigates meet a list asking for two.
+    assert!(builds(None, "fx_frigate", 2, &[("fx_frigate", false), ("fx_frigate", false)]).is_empty());
+    // One of them flagged: the total is one, so it builds a replacement.
+    assert_eq!(builds(None, "fx_frigate", 2, &[("fx_frigate", false), ("fx_frigate", true)]), [frigate]);
+}
+
+#[test]
+fn a_flagged_craft_still_counts_as_a_tech_prerequisite() {
+    // The cruiser needs a frigate. Prerequisites count flagged craft (the rule names build totals).
+    let tree = "fx_frigate 0\nfx_miner 0\nfx_yard 0\nfx_station 0\nfx_cruiser 1 fx_frigate\n";
+    let cruiser = sta_content::fake::db().key("fx_cruiser").unwrap();
+    assert!(builds(Some(tree), "fx_cruiser", 1, &[]).is_empty(), "control: no frigate, no cruiser");
+    assert_eq!(builds(Some(tree), "fx_cruiser", 1, &[("fx_frigate", false)]), [cruiser], "control: an unflagged frigate");
+    assert_eq!(builds(Some(tree), "fx_cruiser", 1, &[("fx_frigate", true)]), [cruiser], "a flagged frigate counts for the prerequisite");
+    // And a flagged cruiser does not count toward the total of one cruiser.
+    assert_eq!(builds(Some(tree), "fx_cruiser", 1, &[("fx_frigate", false), ("fx_cruiser", true)]), [cruiser]);
+}
