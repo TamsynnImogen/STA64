@@ -47,6 +47,10 @@ use crate::world::EntityKind;
 
 /// Grid cell width, `2^7` units.
 const CELL_LOG2: u32 = 7;
+/// A craft's displacement in X and Z.
+type Shift = (EntityId, (Fixed, Fixed));
+/// A craft's gain in height.
+type Lift = (EntityId, Fixed);
 /// Extra room kept round a solid when steering, units.
 const MARGIN: i32 = 12;
 
@@ -323,7 +327,7 @@ impl Sim {
     /// Armada II family (SIM-67): 3D, shared by speed, vertical bias; see
     /// [`separate_3d`]. Every other model keeps the XZ half-and-half rule
     /// ([`separate`]), bit for bit.
-    fn craft_shifts(&self, bodies: &[Body]) -> (Vec<(EntityId, (Fixed, Fixed))>, Vec<(EntityId, Fixed)>) {
+    fn craft_shifts(&self, bodies: &[Body]) -> (Vec<Shift>, Vec<Lift>) {
         let profile = self.content.as_ref().map(|c| c.profile()).unwrap_or_default();
         if Model::of(profile) != Model::Smooth {
             return (separate(&Grid::build(bodies, CELL_LOG2)), Vec::new());

@@ -61,8 +61,8 @@ pub(crate) fn go(sim: &mut Sim, ids: &[EntityId], to: Vec3) {
 }
 
 fn dist3(a: Vec3, b: Vec3) -> f64 {
-    let (x, y, z) = ((a.x - b.x).to_f32() as f64, (a.y - b.y).to_f32() as f64, (a.z - b.z).to_f32() as f64);
-    (x * x + y * y + z * z).sqrt()
+    let (x, y, z) = (a.x - b.x, a.y - b.y, a.z - b.z);
+    fl((x * x + y * y + z * z).sqrt())
 }
 
 fn fl(x: Fixed) -> f64 {
@@ -118,9 +118,9 @@ fn fly(
         go(&mut sim, &[id], b.1);
     }
     let route = |s: Vec3, e: Vec3| {
-        let (dx, dz) = (fl(e.x - s.x), fl(e.z - s.z));
-        let l = (dx * dx + dz * dz).sqrt();
-        ((fl(s.x), fl(s.z)), (dx / l, dz / l))
+        let (dx, dz) = (e.x - s.x, e.z - s.z);
+        let l = fl((dx * dx + dz * dz).sqrt());
+        ((fl(s.x), fl(s.z)), (fl(dx) / l, fl(dz) / l))
     };
     let (ra, rb) = (route(a.0, a.1), b.map_or(((0.0, 0.0), (1.0, 0.0)), |b| route(b.0, b.1)));
     let mut run = Run { a: Peaks::default(), b: Peaks::default(), closest: 1e9, parked_moved: 0.0, end_a: a.0, end_b: a.0 };
@@ -177,8 +177,8 @@ fn head_on_over_a_parked_craft_moves_only_the_movers_and_only_vertically() {
 }
 
 fn gap_xz(a: Vec3, b: Vec3) -> f64 {
-    let (x, z) = (fl(a.x - b.x), fl(a.z - b.z));
-    (x * x + z * z).sqrt()
+    let (x, z) = (a.x - b.x, a.z - b.z);
+    fl((x * x + z * z).sqrt())
 }
 
 #[test]
