@@ -293,6 +293,11 @@ impl Sim {
     /// scripted order or an attack keep it; Armada II and Fleet Operations
     /// physics have no such key, so their plain moves never warp.
     pub(crate) fn auto_warp_moves(&mut self, player: PlayerId, ids: &[EntityId]) {
+        // Armada I's model (SIM-66) has no warp phase: the throttle multiplier
+        // is part of the plain move, so there is no job to start.
+        if self.content.as_deref().is_some_and(|db| crate::kinematics::Model::for_content(db) == crate::kinematics::Model::A1) {
+            return;
+        }
         for &id in ids {
             let Some(u) = self.units.get(id) else { continue };
             if (player.is_player() && u.owner != player)
