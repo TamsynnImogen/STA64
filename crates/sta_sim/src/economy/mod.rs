@@ -18,7 +18,7 @@
 //!   ODF `resource` key, which content resolves to a slot when it loads: the
 //!   `amt<slot>` of the resource ODF (Fleet Operations 4.0's tritanium moon
 //!   holds `amtlatinum`, so it fills the slot the game calls Tritanium), else
-//!   the game's word for the slot in the text, else dilithium. Nodes hold [`RICHNESS`] and run dry.
+//!   the game's word for the slot in the text, else dilithium. Nodes hold [`RICHNESS`] (a planet: its data's `amt<slot>`, CON-51) and run dry.
 //!   Typed Background planets reject mining; typed Producer planets need an
 //!   explicit resource slot. This does not implement orbital/multi-resource mining.
 //! - A freighter whose ODF has a mining beam (ordnance class `minebm`) works once the surface gap
@@ -48,6 +48,7 @@ use crate::world::{Entities, EntityKind, Fnv, Table};
 /// Resource ids: dilithium, latinum, metal, biomatter.
 pub const RESOURCES: usize = 4;
 
+mod orbital;
 mod passive;
 mod crew;
 mod personnel;
@@ -141,6 +142,30 @@ fn node_resource(db: &ContentDb, def: ContentKey) -> u8 {
         return 1;
     }
     d.resource.unwrap_or(0)
+}
+
+/// What a fresh node holds (CON-51): a planet follows its resource node's `amt<slot>` for the slot
+/// it gives, when the data names one (an Armada II family planet); every other node, and a planet
+/// without the key, holds [`RICHNESS`] as before. A node with `infinite` never falls: it is
+/// not reduced.
+fn start_amount(db: &ContentDb, def: ContentKey) -> Fixed {
+    db.unit(def)
+        .filter(|d| d.class.0 == "planet")
+        .and_then(|d| d.node_income)
+        .and_then(|n| n.amounts[usize::from(node_resource(db, def)).min(RESOURCES - 1)])
+        .unwrap_or(Fixed::from_int(RICHNESS))
+}
+
+/// `(trickleAmount, trickleMiningRateFraction)` of a planet whose data names both and a positive floor.
+fn planet_trickle(db: &ContentDb, def: ContentKey) -> Option<(Fixed, Fixed)> {
+    let n = db.unit(def).filter(|d| d.class.0 == "planet")?.node_income?;
+    let (floor, fraction) = (n.trickle_amount?, n.trickle_fraction?);
+    (floor > Fixed::ZERO).then_some((floor, fraction))
+}
+
+/// Whether the node's data says it never depletes (`infinite`).
+fn is_infinite(db: &ContentDb, def: ContentKey) -> bool {
+    db.unit(def).and_then(|d| d.node_income).and_then(|n| n.infinite) == Some(true)
 }
 
 /// Ordnance class of a mining beam (`classLabel = "minebm"`).
@@ -475,7 +500,7 @@ impl Economy {
                             .nodes
                             .get(m.node)
                             .copied()
-                            .unwrap_or(Fixed::from_int(RICHNESS));
+                            .unwrap_or_else(|| start_amount(db, node_def));
                         if m.cargo >= cfg.capacity || (left == Fixed::ZERO && m.cargo > Fixed::ZERO)
                         {
                             m.phase = Phase::ToDock;
@@ -485,9 +510,18 @@ impl Economy {
                         if let (Some(range), Some(np)) = (mining_range(db, def), node_pos) {
                             set_target(units, id, orbit_point(db, id, def, pos, node_def, np, range));
                         }
-                        let take = cfg.rate.min(cfg.capacity - m.cargo).min(left);
+                        // CON-51: a planet's node at or below its `trickleAmount` is held there and
+                        // yields `trickleMiningRateFraction` of the miner's rate (read from the
+                        // executable, static). A node with data for only one of the two depletes as before.
+                        let trickle = planet_trickle(db, node_def).filter(|(floor, _)| left <= *floor);
+                        let rate = trickle.map_or(cfg.rate, |(_, fraction)| cfg.rate * fraction);
+                        let take = rate.min(cfg.capacity - m.cargo).min(if trickle.is_some() { cfg.capacity } else { left });
                         m.cargo = m.cargo + take;
-                        self.nodes.insert(m.node, left - take);
+                        if !is_infinite(db, node_def) && trickle.is_none() {
+                            // Taking a planet's node below its trickle amount leaves it at the amount.
+                            let floor = planet_trickle(db, node_def).map_or(Fixed::ZERO, |(floor, _)| floor);
+                            self.nodes.insert(m.node, (left - take).max(floor));
+                        }
                         if m.cargo >= cfg.capacity {
                             m.phase = Phase::ToDock;
                         }
@@ -694,3 +728,7 @@ pub(crate) mod tests;
 
 #[cfg(test)]
 mod orbit_tests;
+#[cfg(test)]
+mod node_tests;
+#[cfg(test)]
+mod income_tests;
