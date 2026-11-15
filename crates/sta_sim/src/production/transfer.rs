@@ -125,6 +125,22 @@ impl Production {
     }
 }
 
+/// A yard's queue taken out for a capture (SIM-46): the boarders' capture loses
+/// it with no refund (measured); put back when the transfer is refused.
+pub(crate) struct ForfeitedQueue(Option<Vec<super::Item>>);
+
+impl Production {
+    pub(crate) fn take_queue_for_capture(&mut self, id: EntityId) -> ForfeitedQueue {
+        ForfeitedQueue(self.queues.remove(id))
+    }
+
+    pub(crate) fn restore_queue_after_refused_capture(&mut self, id: EntityId, queue: ForfeitedQueue) {
+        if let Some(q) = queue.0 {
+            self.queues.insert(id, q);
+        }
+    }
+}
+
 impl TransferPlan {
     fn credit(
         &mut self,

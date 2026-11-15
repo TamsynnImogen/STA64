@@ -67,7 +67,7 @@ fn _every_sim_field_is_decided(s: &Sim) {
     let Sim {
         tick: _, rng: _, units: _, labels: _, players: _, ai_seats: _, content: _, starts: _, regions: _,
         bounds: _, confinement: _, perception: _, events: _, weapons: _, movement: _, economy: _,
-        production: _, victory: _, specials: _, autonomy: _, start_effects: _, nav: _, subsystems: _, attrs: _, scripted: _, switches: _, relations: _, team_changes: _, appearance_factions: _, approach_warp: _, engagement: _, watchdog: _, colonies: _,
+        production: _, victory: _, specials: _, autonomy: _, start_effects: _, nav: _, subsystems: _, attrs: _, scripted: _, switches: _, relations: _, team_changes: _, appearance_factions: _, approach_warp: _, engagement: _, watchdog: _, colonies: _, transports: _,
     } = s;
 }
 
@@ -216,6 +216,10 @@ impl Sim {
         if !self.switches.is_empty() {
             self.switches.hash_into(&mut h);
         }
+        // SIM-46: transport orders, parties in flight, shield holds.
+        if !self.transports.is_empty() {
+            self.transports.hash_into(&mut h);
+        }
         if !self.relations.is_empty() {
             self.relations.hash_into(&mut h);
         }
@@ -359,6 +363,9 @@ impl Sim {
                 if !self.scripted.is_empty() {
                     row(None, "scripted orders (hash)", block("scripted", &|h| self.scripted.hash_into(h)));
                 }
+                if !self.transports.is_empty() {
+                    row(None, "transports, parties in flight, shield holds (hash)", block("transports", &|h| self.transports.hash_into(h)));
+                }
                 if !self.relations.is_empty() {
                     row(None, "mission relations (hash)", block("relations", &|h| self.relations.hash_into(h)));
                 }
@@ -454,6 +461,21 @@ mod tests {
     }
 
     const COLONY_DIGEST: u64 = 0x3311_80b9_9196_2def;
+
+    /// SIM-46: the layout of the transporter hash (a transport, a party in flight and
+    /// two shield holds) is pinned through the full digest of the sample, which is
+    /// also in the combat section; PINNED and COLONY_DIGEST above are untouched
+    /// (a sim that never transports hashes nothing new).
+    #[test]
+    fn live_transport_state_is_pinned() {
+        let mut s = sim();
+        s.transports = crate::combat::boarding::Transports::sample_for_test();
+        assert_eq!(s.digest(), TRANSPORT_DIGEST, "{:#x}", s.digest());
+        assert_ne!(s.digest(), sim().digest());
+        assert_eq!(sim().section_digests().differing(&s.section_digests()), ["combat"]);
+    }
+
+    const TRANSPORT_DIGEST: u64 = 0x490d_d40f_03ac_fb71;
 
     #[test]
     fn a_set_autonomy_level_changes_the_combat_section_and_the_full_digest() {

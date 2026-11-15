@@ -464,6 +464,7 @@ impl Sim {
         out.extend(postcard::to_allocvec(&AdjustRec { version: 1, rows: self.economy.adjust_rec() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&RelationsRec { version: 1, rows: self.relations.to_rows() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&self.colonies.to_rec()).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&self.transports.to_rec()).expect("snapshot serialises"));
         out
     }
 
@@ -534,6 +535,7 @@ impl Sim {
         if record.version != 1 { return Err(SnapshotError::Corrupt("unknown relations record version".into())); }
         let relation_rows = record.rows;
         let (colony_rec, rest): (crate::colony::ColoniesRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        let (transport_rec, rest): (crate::combat::boarding::TransportsRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         if !rest.is_empty() { return Err(SnapshotError::Corrupt("trailing bytes".into())); }
         if let Some(row) = b.economy.miners.iter().find(|row| row.5 > 4) {
             return Err(SnapshotError::Corrupt(format!("mining phase {} is not supported", row.5)));
@@ -650,6 +652,7 @@ impl Sim {
             |id| units.contains(id),
             |id| content.as_deref().zip(units.get(id)).and_then(|(db, u)| db.unit(u.def)).is_some_and(|d| d.planet_role == Some(sta_content::PlanetRole::Producer)),
         ).ok_or_else(|| corrupt("colony rows"))?;
+        let transports = crate::combat::boarding::Transports::from_rec(transport_rec, |id| units.contains(id)).ok_or_else(|| corrupt("transport rows"))?;
         let mut economy = crate::economy::Economy::from_rec(&b.economy);
         economy.restore_personnel(personnel_rows, &b.players).map_err(|why| SnapshotError::Corrupt(why.into()))?;
         economy.restore_adjust(adjust_rows, &b.players).map_err(|why| SnapshotError::Corrupt(why.into()))?;
@@ -687,6 +690,7 @@ impl Sim {
             team_changes: Vec::new(),
             appearance_factions,
             colonies,
+            transports,
         };
         sim.refresh_seat_rules();
         Ok(sim)
@@ -703,6 +707,9 @@ pub(crate) fn chain_with_colonies(bytes: &[u8], rec: &crate::colony::ColoniesRec
 #[path = "snapshot/subsystem_tests.rs"]
 mod subsystem_tests;
 
+#[cfg(test)]
+#[path = "snapshot/transport_tests.rs"]
+mod transport_tests;
 #[cfg(test)]
 #[path = "snapshot/attrs_tests.rs"]
 mod attrs_tests;

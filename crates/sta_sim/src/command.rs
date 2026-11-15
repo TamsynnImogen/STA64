@@ -103,6 +103,11 @@ pub enum Order {
     /// Colonize a planet with pod colony ships (SIM-30; mission `Colonize`
     /// needs the ship's special-forces flag): see [`crate::colony`]. Tag 17.
     Colonize { units: Vec<EntityId>, planet: EntityId },
+    /// The transporter (SIM-46 P1): each unit beams crew to `target` (a friendly
+    /// transfer, a derelict re-crew or capture, or a boarding of an enemy whose
+    /// shields are down): see [`crate::combat::boarding`]. `attack` (approach and
+    /// fire, then beam: assault ships, Roots) is refused until SIM-46 P3. Tag 18.
+    Transport { units: Vec<EntityId>, target: EntityId, attack: bool },
 }
 
 /// Which autonomy an [`Order::Autonomy`] sets.
@@ -589,7 +594,8 @@ mod tests {
             (13, Order::AttackAny { units: u.clone() }),
             (14, Order::AttackPoint { units: u.clone(), at }),
             (15, Order::MoveWarp { units: u.clone(), to: at, queue: true }),
-            (17, Order::Colonize { units: u, planet: id }),
+            (17, Order::Colonize { units: u.clone(), planet: id }),
+            (18, Order::Transport { units: u, target: id, attack: false }),
         ];
         for (tag, o) in orders {
             let bytes = postcard::to_allocvec(&o).unwrap();
