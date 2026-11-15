@@ -442,6 +442,7 @@ impl Sim {
             | Order::Scout { units }
             | Order::AttackAny { units }
             | Order::AttackPoint { units, .. }
+            | Order::Guard { units, .. }
             | Order::Colonize { units, .. } => units,
             Order::Build { builder, .. } => std::slice::from_ref(builder),
             _ => return,

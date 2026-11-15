@@ -37,8 +37,8 @@ pub const MAGIC: [u8; 4] = *b"S64N";
 /// team pool); 8 appends `Edit::SetRelation`, tag 45 (SIM-63); 9 appends
 /// `Order::Colonize`, tag 17, and `Edit::PlanetPopulation`, tag 46 (SIM-30); 10
 /// appends `Edit::WarpSpeed`, tag 47 (LUA-31); 11 appends `Order::Transport`, tag 18
-/// (SIM-46).
-pub const PROTOCOL_VERSION: u16 = 11;
+/// (SIM-46); 12 appends `Order::Guard`, tag 19 (LUA-39).
+pub const PROTOCOL_VERSION: u16 = 12;
 /// Magic, version and body length.
 pub const HEADER_LEN: usize = 10;
 /// Largest frame, header included.
@@ -1729,6 +1729,15 @@ mod tests {
         }
     }
 
+    /// `Order::Guard`, Order tag 19 (protocol 12): the golden covers it.
+    fn guard_sample(player: u8, seq: u32) -> Command {
+        Command {
+            player: PlayerId(player),
+            seq,
+            kind: CommandKind::Order(Order::Guard { units: vec![EntityId(4)], ward: EntityId(9) }),
+        }
+    }
+
     fn text(player: u8, seq: u32, t: &str) -> Command {
         Command {
             player: PlayerId(player),
@@ -1793,6 +1802,7 @@ mod tests {
                 cmd(2, 0),
                 colonize_sample(2, 1),
                 transport_sample(2, 2),
+                guard_sample(2, 3),
                 edit(0),
                 text(PlayerId::SCRIPT.0, 1, ""),
                 team_pool_edit(2),
@@ -2088,7 +2098,7 @@ mod tests {
     #[test]
     fn golden_encoding_is_pinned() {
         let all: Vec<u8> = samples().iter().flat_map(|m| encode(m).unwrap()).collect();
-        assert_eq!(PROTOCOL_VERSION, 11);
+        assert_eq!(PROTOCOL_VERSION, 12);
         assert_eq!(
             fnv1a64(&all),
             GOLDEN,

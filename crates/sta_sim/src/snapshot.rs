@@ -651,6 +651,10 @@ impl Sim {
         if scripted.to_rows().iter().any(|(id, j)| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft) || matches!(j, crate::orders::Job::Patrol { points, leg } if points.len() < 2 || *leg >= points.len())) {
             return Err(SnapshotError::Corrupt("scripted order entity is not a craft or a patrol has no loop".into()));
         }
+        // A guard's ward is another craft of the snapshot (LUA-39).
+        if scripted.to_rows().iter().any(|(id, j)| matches!(j, crate::orders::Job::Guard { ward } if ward == id || units.get(*ward).is_none_or(|u| u.kind != EntityKind::Craft))) {
+            return Err(SnapshotError::Corrupt("guard order of a craft that is its own ward or whose ward is no craft".into()));
+        }
         let relations = crate::relations::Relations::from_rows(&relation_rows, &b.players).map_err(|why| SnapshotError::Corrupt(why.into()))?;
         let switches = crate::switches::SwitchTable::from_rows(switch_rows).ok_or_else(|| corrupt("switch rows"))?;
         if switches.to_rows().iter().any(|(id, _)| units.get(*id).is_none()) {

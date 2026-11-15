@@ -56,6 +56,7 @@ const CMD_STOP: i64 = 3;
 const CMD_GO: i64 = 4;
 const CMD_ATTACK: i64 = 6;
 const CMD_MINE: i64 = 21;
+const CMD_GUARD: i64 = 23;
 const CMD_BUILD: i64 = 25;
 /// Highest `AiCommand` value.
 const CMD_LAST: i64 = 56;
@@ -477,6 +478,18 @@ fn nearest_enemy(env: &Env, a: &[P]) -> mlua::Result<Value> {
     Ok(Value::Integer(best.map_or(0, |(_, id)| i64::from(id.0))))
 }
 
+/// `SetCommandWhat...VO(unit, GUARD, ward[, param], voice)` (LUA-39): both objects must be live
+/// craft (the engine's ship-bit guard; anything else does nothing); no owner and no
+/// special-forces test, so the order goes in as the script seat. The parameter is not read by the
+/// guard behaviour and the voice flag is not applied (read from the executable, static). A ward
+/// that is the unit itself does nothing.
+fn guard(e: &Env, name: &str, unit: EntityId, ward: EntityId) -> mlua::Result<Value> {
+    if unit != ward && e.alive_craft(unit).is_some() && e.alive_craft(ward).is_some() {
+        e.script_order(name, Order::Guard { units: vec![unit], ward })?;
+    }
+    nothing()
+}
+
 /// The commands the `SetCommandWhat...VO` calls can map onto the sim's orders.
 fn command_name(what: i64) -> String {
     match what {
@@ -713,6 +726,7 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
                 e.order("SetCommandWhatWhoVO", unit.id, |units| Order::Move { units, to: target.pos, queue: false })?;
             }
             CMD_ATTACK => return attack(e, "SetCommandWhatWhoVO", unit.id, target.id),
+            CMD_GUARD => return guard(e, "SetCommandWhatWhoVO", unit.id, target.id),
             CMD_MINE => {
                 e.owned("SetCommandWhatWhoVO", &unit)?;
                 e.order("SetCommandWhatWhoVO", unit.id, |units| Order::Mine { units, node: target.id })?;
@@ -728,6 +742,9 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
         let what = command_arg("SetCommandWhatWhoParamVO", &a[1])?;
         if e.alive(a[0].id()).is_none() || e.alive(a[2].id()).is_none() {
             return nothing();
+        }
+        if what == CMD_GUARD {
+            return guard(e, "SetCommandWhatWhoParamVO", a[0].id(), a[2].id());
         }
         let why = format!("{} with a parameter has no order in the sim seam", command_name(what));
         Err(e.gap("SetCommandWhatWhoParamVO", &why))

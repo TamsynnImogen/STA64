@@ -108,6 +108,11 @@ pub enum Order {
     /// shields are down): see [`crate::combat::boarding`]. `attack` (approach and
     /// fire, then beam: assault ships, Roots) is refused until SIM-46 P3. Tag 18.
     Transport { units: Vec<EntityId>, target: EntityId, attack: bool },
+    /// Guard a ward (LUA-39; mission `SetCommandWhat*VO` with GUARD, 23): each
+    /// craft keeps station beside `ward`, fights what attacks it and stops when
+    /// it is gone: see [`crate::orders`]. A ward that is no live craft, or is
+    /// the unit itself, is refused. Tag 19.
+    Guard { units: Vec<EntityId>, ward: EntityId },
 }
 
 /// Which autonomy an [`Order::Autonomy`] sets.
@@ -612,7 +617,8 @@ mod tests {
             (14, Order::AttackPoint { units: u.clone(), at }),
             (15, Order::MoveWarp { units: u.clone(), to: at, queue: true }),
             (17, Order::Colonize { units: u.clone(), planet: id }),
-            (18, Order::Transport { units: u, target: id, attack: false }),
+            (18, Order::Transport { units: u.clone(), target: id, attack: false }),
+            (19, Order::Guard { units: u, ward: id }),
         ];
         for (tag, o) in orders {
             let bytes = postcard::to_allocvec(&o).unwrap();

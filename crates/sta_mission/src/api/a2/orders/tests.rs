@@ -701,3 +701,5 @@ fn a_fleet_without_a_destination_orders_nothing_and_dead_or_bad_members_are_skip
     let (_, err) = fails(&s, "A2.CreateNewMoveFleet(1)");
     assert!(err.contains("takes no argument"), "{err}");
 }
+
+mod guard_tests;
