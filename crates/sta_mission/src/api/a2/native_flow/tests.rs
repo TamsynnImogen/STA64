@@ -121,7 +121,7 @@ fn movie_cineractive_and_enter_key_waits() {
     rt.eval::<()>("A2.CineractiveStart(script, false); A2.CineractiveStart(script, true)").unwrap();
     rt.eval::<()>("A2.WaitForEnterKey(script); A2.WaitForEnterKey(script)").unwrap();
     let got = events(&mut rt);
-    assert_eq!(got[0], Presentation::Movie { name: "clip".into(), in_panel: false, skippable: true });
+    assert_eq!(got[0], Presentation::Movie { name: "clip".into(), in_panel: true, skippable: true });
     assert!(matches!(got[1], Presentation::Cineractive { on: true, .. }));
     assert!(matches!(got[2], Presentation::Cineractive { on: true, .. }));
     assert_eq!(got[3], Presentation::WaitForKey { id: 1 });

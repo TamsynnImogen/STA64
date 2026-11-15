@@ -327,7 +327,7 @@ impl UserData for Entity {
             let c = e.ctx.borrow();
             let Some(p) = player_of(&c, &p) else { return Ok(false) };
             let Some(id) = e.key.id() else { return Ok(false) };
-            Ok(c.view.visible_to(p).iter().any(|u| u.id == id))
+            Ok(c.sees(p, id))
         });
         m.add_method("remove", |_, e, _: MultiValue| {
             e.remove();
